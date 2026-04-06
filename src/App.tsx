@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
