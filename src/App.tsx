@@ -331,13 +331,17 @@ const CustomChartTooltip = ({ active, payload, total }) => {
   return null;
 };
 
-const Header = ({ title, setTitle, isLoading, customLinks, setCustomLinks, onRefresh, onSave, onLoad, onPaste, onAddStock, onImportHistory, isLinkSettingsOpen, setIsLinkSettingsOpen, fileInputRef, historyInputRef }) => (
+const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCustomLinks, onRefresh, onSave, onLoad, onPaste, onAddStock, onImportHistory, isLinkSettingsOpen, setIsLinkSettingsOpen, fileInputRef, historyInputRef }) => (
   <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full mt-2 relative">
     <div className="p-4 md:p-5 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center bg-[#1e293b] gap-4">
       <div className="absolute top-3 right-4 text-[10px] text-gray-500 font-mono md:hidden"><span className="text-gray-400">{UI_CONFIG.VERSION}</span></div>
       <div className="flex items-center gap-3 flex-1 min-w-[250px] w-full md:w-auto mt-2 md:mt-0">
         <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="text-2xl md:text-3xl font-bold bg-transparent outline-none hover:border-b hover:border-gray-500 focus:border-b focus:border-blue-500 w-full max-w-xl text-white truncate transition-colors" />
         {isLoading && <span className="text-xs text-yellow-400 font-bold animate-pulse whitespace-nowrap">🔄 갱신중...</span>}
+        {gsheetStatus === 'saving' && <span className="text-xs text-yellow-400 animate-pulse whitespace-nowrap">☁️ 저장중...</span>}
+        {gsheetStatus === 'saved' && <span className="text-xs text-green-400 whitespace-nowrap">☁️ 동기화됨</span>}
+        {gsheetStatus === 'error' && <span className="text-xs text-red-400 whitespace-nowrap">☁️ 동기화 실패</span>}
+        {gsheetStatus === 'loading' && <span className="text-xs text-blue-400 animate-pulse whitespace-nowrap">☁️ 불러오는 중...</span>}
       </div>
       <div className="flex flex-col items-end gap-2.5 w-full md:w-auto">
         <div className="hidden md:block text-[10px] text-gray-500 font-mono w-full text-right pr-1"><span className="text-gray-400">{UI_CONFIG.VERSION}</span></div>
@@ -490,6 +494,9 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   );
 };
 
+// ── Google Sheets 연동 ──
+const GSHEET_URL = 'https://script.google.com/macros/s/AKfycbyAgM3MQRJyX3WtWOeqmUjgHw9DGNOarI8MUK5e1pI5fDyWu06dS6bpILzVZeKwZfzu/exec';
+
 export default function App() {
   const fileInputRef = useRef(null);
   const historyInputRef = useRef(null);
@@ -566,6 +573,75 @@ export default function App() {
   const [indicatorLoading, setIndicatorLoading] = useState(false);
   const [indicatorFetchStatus, setIndicatorFetchStatus] = useState({});
   const [showIndicatorVerify, setShowIndicatorVerify] = useState(false);
+
+  // ── Google Sheets 자동 동기화 ──
+  const [gsheetStatus, setGsheetStatus] = useState('');
+  const gsheetTimer = useRef(null);
+  const isInitialLoad = useRef(true);
+
+  const loadFromGSheet = async () => {
+    try {
+      setGsheetStatus('loading');
+      const res = await fetch(GSHEET_URL);
+      const result = await res.json();
+      if (result.success && result.data) {
+        const data = result.data;
+        setTitle(data.title || "포트폴리오");
+        setPortfolio(data.portfolio || []);
+        setPrincipal(cleanNum(data.principal));
+        setHistory(data.history || []);
+        setDepositHistory(data.depositHistory || []);
+        if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
+        setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
+        setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
+        setLookupRows(data.lookupRows || []);
+        setStockHistoryMap(data.stockHistoryMap || {});
+        setCompStocks(data.compStocks || defaultCompStocks);
+        if (data.marketIndices) {
+          setMarketIndices(data.marketIndices);
+          setIndexFetchStatus({
+            kospi: data.marketIndices.kospi ? buildIndexStatus(data.marketIndices.kospi, 'GSheet') : null,
+            sp500: data.marketIndices.sp500 ? buildIndexStatus(data.marketIndices.sp500, 'GSheet') : null,
+            nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, 'GSheet') : null,
+          });
+        }
+        if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
+        if (data.chartPrefs) {
+          if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
+          if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
+          if (data.chartPrefs.showNasdaq !== undefined) setShowNasdaq(data.chartPrefs.showNasdaq);
+          if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
+          if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
+          if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
+        }
+        if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
+        setGsheetStatus('saved');
+        showToast('☁️ Google Sheets에서 데이터 불러옴');
+        return true;
+      }
+      setGsheetStatus('');
+      return false;
+    } catch (err) {
+      console.error('GSheet 불러오기 실패:', err);
+      setGsheetStatus('error');
+      return false;
+    }
+  };
+
+  const saveToGSheet = async (state) => {
+    try {
+      setGsheetStatus('saving');
+      await fetch(GSHEET_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ label: '자동저장', data: state }),
+      });
+      setGsheetStatus('saved');
+    } catch (err) {
+      console.error('GSheet 저장 실패:', err);
+      setGsheetStatus('error');
+    }
+  };
 
   // 개별 패치 함수들을 밖으로 빼서 재사용 가능하도록 구성 (Retry 용도)
   const fetchersMap = {
@@ -1524,37 +1600,45 @@ export default function App() {
   };
 
   useEffect(() => {
-    const saved = localStorage.getItem('portfolioState_v5');
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        setTitle(data.title || "포트폴리오"); setPortfolio(data.portfolio || []); setPrincipal(cleanNum(data.principal));
-        setHistory(data.history || []); setDepositHistory(data.depositHistory || []);
-        if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
-        setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS); setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
-        setLookupRows(data.lookupRows || []); setStockHistoryMap(data.stockHistoryMap || {});
-        setCompStocks(data.compStocks || defaultCompStocks);
-        if (data.marketIndices) {
-          setMarketIndices(data.marketIndices);
-          setIndexFetchStatus({
-            kospi: data.marketIndices.kospi ? buildIndexStatus(data.marketIndices.kospi, 'localStorage') : null,
-            sp500: data.marketIndices.sp500 ? buildIndexStatus(data.marketIndices.sp500, 'localStorage') : null,
-            nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, 'localStorage') : null,
-          });
+    const init = async () => {
+      const loaded = await loadFromGSheet();
+      if (!loaded) {
+        const saved = localStorage.getItem('portfolioState_v5');
+        if (saved) {
+          try {
+            const data = JSON.parse(saved);
+            setTitle(data.title || "포트폴리오"); setPortfolio(data.portfolio || []); setPrincipal(cleanNum(data.principal));
+            setHistory(data.history || []); setDepositHistory(data.depositHistory || []);
+            if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
+            setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS); setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
+            setLookupRows(data.lookupRows || []); setStockHistoryMap(data.stockHistoryMap || {});
+            setCompStocks(data.compStocks || defaultCompStocks);
+            if (data.marketIndices) {
+              setMarketIndices(data.marketIndices);
+              setIndexFetchStatus({
+                kospi: data.marketIndices.kospi ? buildIndexStatus(data.marketIndices.kospi, 'localStorage') : null,
+                sp500: data.marketIndices.sp500 ? buildIndexStatus(data.marketIndices.sp500, 'localStorage') : null,
+                nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, 'localStorage') : null,
+              });
+            }
+            if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
+            else if (data.history?.length > 0) setPortfolioStartDate(data.history[0].date);
+            if (data.chartPrefs) {
+              if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
+              if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
+              if (data.chartPrefs.showNasdaq !== undefined) setShowNasdaq(data.chartPrefs.showNasdaq);
+              if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
+              if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
+              if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
+            }
+            if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
+            showToast('📦 로컬 데이터에서 복원');
+          } catch (e) {}
         }
-        if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
-        else if (data.history?.length > 0) setPortfolioStartDate(data.history[0].date);
-        if (data.chartPrefs) {
-          if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
-          if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
-          if (data.chartPrefs.showNasdaq !== undefined) setShowNasdaq(data.chartPrefs.showNasdaq);
-          if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
-          if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
-          if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
-        }
-        if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
-      } catch (e) {}
-    }
+      }
+      setTimeout(() => { isInitialLoad.current = false; }, 3000);
+    };
+    init();
   }, []);
 
   useEffect(() => {
@@ -1598,6 +1682,12 @@ export default function App() {
     if (portfolio.length === 0) return;
     const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
     localStorage.setItem('portfolioState_v5', JSON.stringify(state));
+
+    // Google Sheets 자동저장 (5초 디바운스)
+    if (!isInitialLoad.current) {
+      if (gsheetTimer.current) clearTimeout(gsheetTimer.current);
+      gsheetTimer.current = setTimeout(() => saveToGSheet(state), 5000);
+    }
   }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate]);
 
   useEffect(() => {
@@ -1678,7 +1768,7 @@ export default function App() {
       )}
 
       <div className="w-full max-w-[2560px] mx-auto flex flex-col gap-6 px-2">
-        <Header title={title} setTitle={setTitle} isLoading={isLoading} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onAddStock={handleAddStock} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} />
+        <Header title={title} setTitle={setTitle} isLoading={isLoading} gsheetStatus={gsheetStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onAddStock={handleAddStock} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} />
 
         <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
 
