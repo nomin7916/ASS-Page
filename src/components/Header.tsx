@@ -12,10 +12,13 @@ const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCust
       <div className="absolute top-3 right-4 text-[10px] text-gray-500 font-mono md:hidden"><span className="text-gray-400">{UI_CONFIG.VERSION}</span></div>
       <div className="flex items-center gap-3 flex-1 min-w-[250px] w-full md:w-auto mt-2 md:mt-0">
         <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="text-2xl md:text-3xl font-bold bg-transparent outline-none hover:border-b hover:border-gray-500 focus:border-b focus:border-blue-500 w-full max-w-xl text-white truncate transition-colors" />
-        {isLoading && <span className="text-xs text-yellow-400 font-bold animate-pulse whitespace-nowrap">🔄 갱신중...</span>}
       </div>
       <div className="flex flex-col items-end gap-2.5 w-full md:w-auto">
-        <div className="hidden md:block text-[10px] text-gray-500 font-mono w-full text-right pr-1"><span className="text-gray-400">{UI_CONFIG.VERSION}</span></div>
+        <div className="hidden md:flex text-[10px] text-gray-500 font-mono w-full justify-end items-center gap-2 pr-1">
+          <span className="text-gray-400">{UI_CONFIG.VERSION}</span>
+          {isLoading && <span className="text-[10px] text-yellow-400 font-bold animate-pulse whitespace-nowrap">🔄 갱신중...</span>}
+          {!isLoading && gsheetStatus === 'loading' && <span className="text-[10px] text-blue-400 font-bold animate-pulse whitespace-nowrap">☁️ 불러오는 중...</span>}
+        </div>
         <div className="flex items-center gap-1.5 w-full justify-end pr-1">
           {customLinks.map((link, i) => (
             <button key={i} onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')} className="bg-gray-800 hover:bg-gray-700 text-blue-300 w-[34px] h-[34px] rounded shadow transition border border-gray-600 flex items-center justify-center text-xs font-bold" title={link.url ? `[버튼 ${i + 1}]\n${link.url}` : `버튼 ${i + 1} 설정 필요`}>{i + 1}</button>
