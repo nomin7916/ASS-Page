@@ -1243,8 +1243,7 @@ export default function App() {
       setTimeout(() => { isInitialLoad.current = false; }, 3000);
       // 초기 로드 후 시장지표 자동 수집 (Apps Script 프록시 우선)
       fetchMarketIndicators();
-      // GSheet/localStorage에서 종목을 불러온 후 자동으로 현재가 새로고침
-      // 약간의 딜레이를 주어 상태 업데이트가 반영된 후 실행
+      // 종목 데이터를 불러온 후 자동으로 현재가 새로고침 (상태 반영 대기 후 실행)
       setTimeout(() => { refreshPrices(); }, 1500);
     };
     init();
