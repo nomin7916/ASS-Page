@@ -2,7 +2,7 @@
 import React from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
-  X, Download, FolderOpen, FileUp
+  X, Download, FolderOpen, FileUp, Cloud
 } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 
@@ -28,7 +28,14 @@ const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCust
           <button onClick={onSave} className="bg-gray-800 hover:bg-gray-700 text-blue-400 w-[34px] h-[34px] rounded shadow transition border border-gray-600 flex items-center justify-center" title="JSON 파일로 다운로드 (백업)"><Download size={16} /></button>
         </div>
         <div className="flex gap-2.5 flex-wrap justify-end items-center w-full mt-0.5">
-          <button onClick={onRefresh} title="새로고침 (종목가격 + 지수 데이터 수집)" className="bg-teal-600 hover:bg-teal-500 text-white p-2 rounded shadow transition border border-teal-500/30 flex items-center justify-center"><RefreshCw size={16} /></button>
+          <button onClick={onRefresh} title="새로고침 (종목가격 + 지수 데이터 수집)" className="relative bg-teal-600 hover:bg-teal-500 text-white p-2 rounded shadow transition border border-teal-500/30 flex items-center justify-center">
+            {(isLoading || gsheetStatus === 'saving' || gsheetStatus === 'saved') && (
+              <span className={`absolute -top-3.5 left-1/2 -translate-x-1/2 text-[16px] ${isLoading || gsheetStatus === 'saving' ? 'animate-pulse' : ''}`} title={isLoading ? '갱신 중...' : gsheetStatus === 'saving' ? '저장 중...' : '동기화 완료'}>
+                {isLoading || gsheetStatus === 'saving' ? '☁️' : '☁️'}
+              </span>
+            )}
+            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+          </button>
           <button onClick={() => historyInputRef.current.click()} title="지수/종목 히스토리 주입 (JSON 또는 CSV)" className="bg-orange-600 hover:bg-orange-500 text-white p-2 rounded shadow transition border border-orange-500/30 flex items-center justify-center"><FileUp size={16} /></button>
           <input type="file" ref={historyInputRef} onChange={onImportHistory} className="hidden" accept=".json,.csv" multiple />
           <button onClick={() => fileInputRef.current.click()} title="전체 데이터 불러오기" className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded shadow transition border border-gray-500/30 flex items-center justify-center"><FolderOpen size={16} /></button>
