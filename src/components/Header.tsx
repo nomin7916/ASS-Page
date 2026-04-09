@@ -2,7 +2,7 @@
 import React from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
-  X, Download, FolderOpen, FileUp, Cloud
+  X, Download, FolderOpen, FileUp
 } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 
@@ -13,10 +13,6 @@ const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCust
       <div className="flex items-center gap-3 flex-1 min-w-[250px] w-full md:w-auto mt-2 md:mt-0">
         <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="text-2xl md:text-3xl font-bold bg-transparent outline-none hover:border-b hover:border-gray-500 focus:border-b focus:border-blue-500 w-full max-w-xl text-white truncate transition-colors" />
         {isLoading && <span className="text-xs text-yellow-400 font-bold animate-pulse whitespace-nowrap">🔄 갱신중...</span>}
-        {gsheetStatus === 'saving' && <span className="text-xs text-yellow-400 animate-pulse whitespace-nowrap">☁️ 저장중...</span>}
-        {gsheetStatus === 'saved' && <span className="text-xs text-green-400 whitespace-nowrap">☁️ 동기화됨</span>}
-        {gsheetStatus === 'error' && <span className="text-xs text-red-400 whitespace-nowrap">☁️ 동기화 실패</span>}
-        {gsheetStatus === 'loading' && <span className="text-xs text-blue-400 animate-pulse whitespace-nowrap">☁️ 불러오는 중...</span>}
       </div>
       <div className="flex flex-col items-end gap-2.5 w-full md:w-auto">
         <div className="hidden md:block text-[10px] text-gray-500 font-mono w-full text-right pr-1"><span className="text-gray-400">{UI_CONFIG.VERSION}</span></div>
@@ -28,14 +24,20 @@ const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCust
           <button onClick={onSave} className="bg-gray-800 hover:bg-gray-700 text-blue-400 w-[34px] h-[34px] rounded shadow transition border border-gray-600 flex items-center justify-center" title="JSON 파일로 다운로드 (백업)"><Download size={16} /></button>
         </div>
         <div className="flex gap-2.5 flex-wrap justify-end items-center w-full mt-0.5">
-          <button onClick={onRefresh} title="새로고침 (종목가격 + 지수 데이터 수집)" className="relative bg-teal-600 hover:bg-teal-500 text-white p-2 rounded shadow transition border border-teal-500/30 flex items-center justify-center">
-            {(isLoading || gsheetStatus === 'saving' || gsheetStatus === 'saved') && (
-              <span className={`absolute -top-3.5 left-1/2 -translate-x-1/2 text-[16px] ${isLoading || gsheetStatus === 'saving' ? 'animate-pulse' : ''}`} title={isLoading ? '갱신 중...' : gsheetStatus === 'saving' ? '저장 중...' : '동기화 완료'}>
-                {isLoading || gsheetStatus === 'saving' ? '☁️' : '☁️'}
-              </span>
+          <div className="relative">
+            {(gsheetStatus === 'saving' || gsheetStatus === 'loading' || isLoading) && (
+              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] animate-pulse pointer-events-none select-none z-10" title={gsheetStatus === 'saving' ? '저장 중...' : gsheetStatus === 'loading' ? '불러오는 중...' : '갱신 중...'}>☁️</span>
             )}
-            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
-          </button>
+            {gsheetStatus === 'saved' && !isLoading && gsheetStatus !== 'saving' && (
+              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="동기화 완료">☁️</span>
+            )}
+            {gsheetStatus === 'error' && !isLoading && (
+              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="동기화 실패">❌</span>
+            )}
+            <button onClick={onRefresh} title="새로고침 (종목가격 + 지수 데이터 수집)" className="bg-teal-600 hover:bg-teal-500 text-white p-2 rounded shadow transition border border-teal-500/30 flex items-center justify-center">
+              <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+            </button>
+          </div>
           <button onClick={() => historyInputRef.current.click()} title="지수/종목 히스토리 주입 (JSON 또는 CSV)" className="bg-orange-600 hover:bg-orange-500 text-white p-2 rounded shadow transition border border-orange-500/30 flex items-center justify-center"><FileUp size={16} /></button>
           <input type="file" ref={historyInputRef} onChange={onImportHistory} className="hidden" accept=".json,.csv" multiple />
           <button onClick={() => fileInputRef.current.click()} title="전체 데이터 불러오기" className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded shadow transition border border-gray-500/30 flex items-center justify-center"><FolderOpen size={16} /></button>
