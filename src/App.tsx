@@ -140,6 +140,7 @@ export default function App() {
   const [gsheetStatus, setGsheetStatus] = useState('');
   const gsheetTimer = useRef(null);
   const isInitialLoad = useRef(true);
+  const needsAutoRefresh = useRef(false);
 
   const loadFromGSheet = async () => {
     try {
@@ -1243,8 +1244,8 @@ export default function App() {
       setTimeout(() => { isInitialLoad.current = false; }, 3000);
       // 초기 로드 후 시장지표 자동 수집 (Apps Script 프록시 우선)
       fetchMarketIndicators();
-      // 종목 데이터를 불러온 후 자동으로 현재가 새로고침 (상태 반영 대기 후 실행)
-      setTimeout(() => { refreshPrices(); }, 1500);
+      // 종목 데이터를 불러온 후 자동으로 현재가 새로고침 (portfolio 상태 반영 후 useEffect에서 실행)
+      needsAutoRefresh.current = true;
     };
     init();
   }, []);
@@ -1285,6 +1286,14 @@ export default function App() {
     };
     loadIndices();
   }, []);
+
+  // GSheet/localStorage에서 포트폴리오를 불러온 후 자동으로 현재가 새로고침
+  useEffect(() => {
+    if (needsAutoRefresh.current && portfolio.length > 0 && portfolio.some(p => p.type === 'stock' && p.code)) {
+      needsAutoRefresh.current = false;
+      refreshPrices();
+    }
+  }, [portfolio]);
 
   useEffect(() => {
     if (portfolio.length === 0) return;
