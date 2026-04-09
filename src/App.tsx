@@ -141,6 +141,7 @@ export default function App() {
   const gsheetTimer = useRef(null);
   const isInitialLoad = useRef(true);
   const needsAutoRefresh = useRef(false);
+  const portfolioRef = useRef([]);
 
   const loadFromGSheet = async () => {
     try {
@@ -541,6 +542,9 @@ export default function App() {
     }
   };
 
+  // portfolioRef를 항상 최신 portfolio로 동기화 (클로저 문제 해결용)
+  useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
+
   const totals = useMemo(() => {
     let tInv = 0, tEvl = 0, tPrf = 0, cats = {}, stks = [];
     const calc = portfolio.map(item => {
@@ -826,12 +830,8 @@ export default function App() {
       nasdaq: { status: 'loading' }
     });
 
-    // 현재 portfolio 스냅샷을 함수형 업데이트로 안전하게 가져오기
-    let currentPortfolio = [];
-    setPortfolio(prev => { currentPortfolio = prev; return prev; });
-    // React 배치로 인해 위 setPortfolio가 즉시 실행되지 않을 수 있으므로 한 틱 대기
-    await new Promise(r => setTimeout(r, 0));
-    setPortfolio(prev => { currentPortfolio = prev; return prev; });
+    // portfolioRef로 항상 최신 portfolio를 안전하게 읽기
+    const currentPortfolio = portfolioRef.current;
 
     const stockCodes = currentPortfolio.filter(p => p.type === 'stock' && p.code).map(p => p.code);
     const loadingStatus = {};
@@ -1313,6 +1313,20 @@ export default function App() {
       refreshPrices();
     }
   }, [portfolio]);
+
+  // 20분(1,200,000ms)마다 자동으로 현재가 + 시장지표 갱신 후 GSheet 백업
+  useEffect(() => {
+    const AUTO_REFRESH_INTERVAL = 20 * 60 * 1000; // 20분
+    const intervalId = setInterval(() => {
+      // portfolio가 있을 때만 실행
+      if (portfolioRef.current.length > 0 && portfolioRef.current.some(p => p.type === 'stock' && p.code)) {
+        console.log('[자동갱신] 20분 주기 현재가 + 시장지표 갱신 시작');
+        refreshPrices();
+        fetchMarketIndicators();
+      }
+    }, AUTO_REFRESH_INTERVAL);
+    return () => clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     if (portfolio.length === 0) return;
