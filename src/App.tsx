@@ -825,27 +825,43 @@ export default function App() {
       sp500: { status: 'loading' },
       nasdaq: { status: 'loading' }
     });
-    const stockCodes = portfolio.filter(p => p.type === 'stock' && p.code).map(p => p.code);
+
+    // 현재 portfolio 스냅샷을 함수형 업데이트로 안전하게 가져오기
+    let currentPortfolio = [];
+    setPortfolio(prev => { currentPortfolio = prev; return prev; });
+    // React 배치로 인해 위 setPortfolio가 즉시 실행되지 않을 수 있으므로 한 틱 대기
+    await new Promise(r => setTimeout(r, 0));
+    setPortfolio(prev => { currentPortfolio = prev; return prev; });
+
+    const stockCodes = currentPortfolio.filter(p => p.type === 'stock' && p.code).map(p => p.code);
     const loadingStatus = {};
     stockCodes.forEach(c => { loadingStatus[c] = 'loading'; });
     setStockFetchStatus(prev => ({ ...prev, ...loadingStatus }));
 
     try {
       const today = new Date().toISOString().split('T')[0];
-      const updated = await Promise.all(portfolio.map(async (item) => {
-        if (item.type === 'stock' && item.code) {
-          const d = await fetchStockInfo(item.code);
-          if (d) {
-            setStockFetchStatus(prev => ({ ...prev, [item.code]: 'success' }));
-            setStockHistoryMap(prev => ({ ...prev, [item.code]: { ...(prev[item.code] || {}), [today]: d.price } }));
-            return { ...item, name: d.name, currentPrice: d.price, changeRate: d.changeRate };
-          } else {
-            setStockFetchStatus(prev => ({ ...prev, [item.code]: 'fail' }));
-          }
+      
+      // 종목별 현재가 조회 결과를 Map으로 수집
+      const priceResults = {};
+      await Promise.all(stockCodes.map(async (code) => {
+        const d = await fetchStockInfo(code);
+        if (d) {
+          setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
+          setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+          priceResults[code] = d;
+        } else {
+          setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
+        }
+      }));
+
+      // 함수형 업데이트로 portfolio를 안전하게 갱신 (클로저 문제 완전 해결)
+      setPortfolio(prev => prev.map(item => {
+        if (item.type === 'stock' && item.code && priceResults[item.code]) {
+          const d = priceResults[item.code];
+          return { ...item, name: d.name, currentPrice: d.price, changeRate: d.changeRate };
         }
         return item;
       }));
-      setPortfolio(updated);
 
       const [kRes, sRes, nRes] = await Promise.allSettled([
         fetchIndexData('^KS11'),
@@ -868,59 +884,62 @@ export default function App() {
         return { data: null, status: { status: 'fail', source: '접속 불가', latestDate: '-', latestValue: 0, count: 0, gapDays: null, updatedAt: now } };
       };
 
-      let kResult, sResult, nResult;
-
-      if (newK) {
-        const merged = { ...(marketIndices.kospi || {}), ...newK.data };
-        kResult = { data: merged, status: buildIndexStatus(merged, newK.source) };
-      } else {
+      // KOSPI 네이버 폴백 (비동기라 setMarketIndices 밖에서 처리)
+      if (!newK) {
         const naverPrice = await fetchNaverKospi();
         if (naverPrice) {
-          const merged = { ...(marketIndices.kospi || {}), [today]: naverPrice };
-          const st = buildIndexStatus(merged, '네이버(당일) + 백업데이터');
-          kResult = { data: merged, status: st };
-        } else {
-          kResult = resolveFailure(marketIndices.kospi);
+          newK = { data: { [today]: naverPrice }, source: '네이버(당일) + 백업데이터' };
         }
       }
 
-      if (newS) {
-        const merged = { ...(marketIndices.sp500 || {}), ...newS.data };
-        sResult = { data: merged, status: buildIndexStatus(merged, newS.source) };
-      } else {
-        sResult = resolveFailure(marketIndices.sp500);
-      }
+      setMarketIndices(prev => {
+        let kResult, sResult, nResult;
 
-      if (newN) {
-        const merged = { ...(marketIndices.nasdaq || {}), ...newN.data };
-        nResult = { data: merged, status: buildIndexStatus(merged, newN.source) };
-      } else {
-        nResult = resolveFailure(marketIndices.nasdaq);
-      }
+        if (newK) {
+          const merged = { ...(prev.kospi || {}), ...newK.data };
+          kResult = { data: merged, status: buildIndexStatus(merged, newK.source) };
+        } else {
+          kResult = resolveFailure(prev.kospi);
+        }
 
-      setIndexFetchStatus({ kospi: kResult.status, sp500: sResult.status, nasdaq: nResult.status });
+        if (newS) {
+          const merged = { ...(prev.sp500 || {}), ...newS.data };
+          sResult = { data: merged, status: buildIndexStatus(merged, newS.source) };
+        } else {
+          sResult = resolveFailure(prev.sp500);
+        }
 
-      setMarketIndices({
-        kospi: kResult.data || marketIndices.kospi,
-        sp500: sResult.data || marketIndices.sp500,
-        nasdaq: nResult.data || marketIndices.nasdaq
-      });
+        if (newN) {
+          const merged = { ...(prev.nasdaq || {}), ...newN.data };
+          nResult = { data: merged, status: buildIndexStatus(merged, newN.source) };
+        } else {
+          nResult = resolveFailure(prev.nasdaq);
+        }
 
-      const hasFail = [kResult.status, sResult.status, nResult.status].some(s => s?.status === 'fail');
+        setIndexFetchStatus({ kospi: kResult.status, sp500: sResult.status, nasdaq: nResult.status });
+
+        const hasFail = [kResult.status, sResult.status, nResult.status].some(s => s?.status === 'fail');
       
-      if (hasFail) {
-        let errDetails = [];
-        if(kResult.status?.status === 'fail') errDetails.push("KOSPI 데이터 응답 지연");
-        if(sResult.status?.status === 'fail') errDetails.push("S&P500 데이터 응답 지연");
-        if(nResult.status?.status === 'fail') errDetails.push("NASDAQ 데이터 응답 지연");
+        if (hasFail) {
+          let errDetails = [];
+          if(kResult.status?.status === 'fail') errDetails.push("KOSPI 데이터 응답 지연");
+          if(sResult.status?.status === 'fail') errDetails.push("S&P500 데이터 응답 지연");
+          if(nResult.status?.status === 'fail') errDetails.push("NASDAQ 데이터 응답 지연");
         
-        setErrorModalContent({
-           title: "데이터 갱신 일부 실패",
-           message: `다음 지표의 데이터를 불러오는데 실패했습니다:\n\n${errDetails.join('\n')}\n\n* 외부 통신(네이버/Yahoo API) 지연일 수 있습니다.\n* 잠시 후 새로고침 버튼을 다시 눌러주세요.`
-        });
-      } else {
-        showToast(`전체 종목 및 지수 갱신 완료`);
-      }
+          setErrorModalContent({
+             title: "데이터 갱신 일부 실패",
+             message: `다음 지표의 데이터를 불러오는데 실패했습니다:\n\n${errDetails.join('\n')}\n\n* 외부 통신(네이버/Yahoo API) 지연일 수 있습니다.\n* 잠시 후 새로고침 버튼을 다시 눌러주세요.`
+          });
+        } else {
+          showToast(`전체 종목 및 지수 갱신 완료`);
+        }
+
+        return {
+          kospi: kResult.data || prev.kospi,
+          sp500: sResult.data || prev.sp500,
+          nasdaq: nResult.data || prev.nasdaq
+        };
+      });
 
     } catch (err) {
       setErrorModalContent({
