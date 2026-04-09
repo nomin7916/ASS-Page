@@ -1,5 +1,5 @@
 export const UI_CONFIG = {
-  VERSION: "v3.1.4 Professional (Modular)",
+  VERSION: "v3.1.5 Professional (Modular)",
   COLORS: {
     CHART_PALETTE: ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#06B6D4', '#A3E635', '#64748B'],
     CATEGORIES: {
