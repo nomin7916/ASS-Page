@@ -140,7 +140,6 @@ export default function App() {
   const [gsheetStatus, setGsheetStatus] = useState('');
   const gsheetTimer = useRef(null);
   const isInitialLoad = useRef(true);
-  const needsAutoRefresh = useRef(false);
   const portfolioRef = useRef([]);
 
   const loadFromGSheet = async () => {
@@ -181,14 +180,14 @@ export default function App() {
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         setGsheetStatus('saved');
         showToast('☁️ Google Sheets에서 데이터 불러옴');
-        return true;
+        return data.portfolio || [];
       }
       setGsheetStatus('');
-      return false;
+      return null;
     } catch (err) {
       console.error('GSheet 불러오기 실패:', err);
       setGsheetStatus('error');
-      return false;
+      return null;
     }
   };
 
@@ -1223,10 +1222,51 @@ export default function App() {
     setIsAiLoading(false);
   };
 
+  // 초기 로드 후 종목 현재가를 직접 조회하는 함수 (React 상태 클로저 무관)
+  const autoRefreshStockPrices = async (loadedPortfolio) => {
+    const stocks = loadedPortfolio.filter(p => p.type === 'stock' && p.code);
+    if (stocks.length === 0) return;
+    
+    setIsLoading(true);
+    const loadingStatus = {};
+    stocks.forEach(p => { loadingStatus[p.code] = 'loading'; });
+    setStockFetchStatus(prev => ({ ...prev, ...loadingStatus }));
+
+    const today = new Date().toISOString().split('T')[0];
+    const priceResults = {};
+
+    await Promise.all(stocks.map(async (item) => {
+      const d = await fetchStockInfo(item.code);
+      if (d) {
+        setStockFetchStatus(prev => ({ ...prev, [item.code]: 'success' }));
+        setStockHistoryMap(prev => ({ ...prev, [item.code]: { ...(prev[item.code] || {}), [today]: d.price } }));
+        priceResults[item.code] = d;
+      } else {
+        setStockFetchStatus(prev => ({ ...prev, [item.code]: 'fail' }));
+      }
+    }));
+
+    // 함수형 업데이트로 안전하게 portfolio 갱신
+    if (Object.keys(priceResults).length > 0) {
+      setPortfolio(prev => prev.map(item => {
+        if (item.type === 'stock' && item.code && priceResults[item.code]) {
+          const d = priceResults[item.code];
+          return { ...item, name: d.name, currentPrice: d.price, changeRate: d.changeRate };
+        }
+        return item;
+      }));
+      showToast(`전체 종목 현재가 갱신 완료 (${Object.keys(priceResults).length}건)`);
+    }
+    setIsLoading(false);
+  };
+
   useEffect(() => {
     const init = async () => {
-      const loaded = await loadFromGSheet();
-      if (!loaded) {
+      // 1단계: GSheet에서 종목 데이터 로드
+      let loadedPortfolio = await loadFromGSheet();
+      
+      // GSheet 실패 시 localStorage 폴백
+      if (!loadedPortfolio) {
         const saved = localStorage.getItem('portfolioState_v5');
         if (saved) {
           try {
@@ -1256,15 +1296,21 @@ export default function App() {
               if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
             }
             if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
+            loadedPortfolio = data.portfolio || [];
             showToast('📦 로컬 데이터에서 복원');
           } catch (e) {}
         }
       }
-      setTimeout(() => { isInitialLoad.current = false; }, 3000);
-      // 초기 로드 후 시장지표 자동 수집 (Apps Script 프록시 우선)
+
+      setTimeout(() => { isInitialLoad.current = false; }, 15000);
+
+      // 2단계: 시장지표 자동 수집 (Apps Script 프록시 우선)
       fetchMarketIndicators();
-      // 종목 데이터를 불러온 후 자동으로 현재가 새로고침 (portfolio 상태 반영 후 useEffect에서 실행)
-      needsAutoRefresh.current = true;
+
+      // 3단계: 로드된 portfolio를 직접 전달하여 종목 현재가 자동 조회
+      if (loadedPortfolio && loadedPortfolio.length > 0) {
+        autoRefreshStockPrices(loadedPortfolio);
+      }
     };
     init();
   }, []);
@@ -1305,14 +1351,6 @@ export default function App() {
     };
     loadIndices();
   }, []);
-
-  // GSheet/localStorage에서 포트폴리오를 불러온 후 자동으로 현재가 새로고침
-  useEffect(() => {
-    if (needsAutoRefresh.current && portfolio.length > 0 && portfolio.some(p => p.type === 'stock' && p.code)) {
-      needsAutoRefresh.current = false;
-      refreshPrices();
-    }
-  }, [portfolio]);
 
   // 20분(1,200,000ms)마다 자동으로 현재가 + 시장지표 갱신 후 GSheet 백업
   useEffect(() => {
