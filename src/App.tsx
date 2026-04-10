@@ -13,6 +13,7 @@ import { UI_CONFIG, GSHEET_URL } from './config';
 import { fetchIndexData, fetchStockInfo, fetchNaverKospi } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
+import MarketIndicators from './components/MarketIndicators';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -110,6 +111,7 @@ export default function App() {
   const [showNasdaq, setShowNasdaq] = useState(false);
   
   const [marketIndices, setMarketIndices] = useState({ kospi: null, sp500: null, nasdaq: null });
+  const [indicatorHistoryMap, setIndicatorHistoryMap] = useState({});
   const [stockHistoryMap, setStockHistoryMap] = useState({});
   const [compStocks, setCompStocks] = useState(defaultCompStocks);
   const [portfolioStartDate, setPortfolioStartDate] = useState(() => {
@@ -178,6 +180,7 @@ export default function App() {
           if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
+        if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
         setGsheetStatus('saved');
         showToast('☁️ Google Sheets에서 데이터 불러옴');
         return data.portfolio || [];
@@ -1060,18 +1063,22 @@ export default function App() {
               } else if (cu === 'GOLD_INTL') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, goldIntl: latest, goldIntlChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, goldIntl: formattedData }));
                 showToast(`[시장지표] 국제금 데이터 주입 완료 (${count}건, 최신: $${latest?.toFixed(2)})`);
               } else if (cu === 'USD_KRW') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, usdkrw: latest, usdkrwChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, usdkrw: formattedData }));
                 showToast(`[시장지표] USD/KRW 환율 주입 완료 (${count}건, 최신: ${latest?.toFixed(2)})`);
               } else if (cu === 'US_10Y_BOND') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, us10y: latest, us10yChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, us10y: formattedData }));
                 showToast(`[시장지표] 미국10년 금리 주입 완료 (${count}건, 최신: ${latest?.toFixed(3)}%)`);
               } else if (cu === 'FED_RATE') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, fedRate: latest, fedRateChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, fedRate: formattedData }));
                 showToast(`[시장지표] 미국 기준금리 주입 완료 (${count}건, 최신: ${latest?.toFixed(2)}%)`);
               } else {
                 setStockHistoryMap(prev => ({ ...prev, [code]: formattedData }));
@@ -1087,7 +1094,7 @@ export default function App() {
   };
 
   const handleSave = () => {
-    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
+    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -1129,6 +1136,7 @@ export default function App() {
             if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
           }
           if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
+        if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
           setStockFetchStatus({});
           showToast("데이터 복원 완료");
         }
@@ -1296,6 +1304,7 @@ export default function App() {
               if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
             }
             if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
+        if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
             loadedPortfolio = data.portfolio || [];
             showToast('📦 로컬 데이터에서 복원');
           } catch (e) {}
@@ -1368,7 +1377,7 @@ export default function App() {
 
   useEffect(() => {
     if (portfolio.length === 0) return;
-    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
+    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
     localStorage.setItem('portfolioState_v5', JSON.stringify(state));
 
     // Google Sheets 자동저장 (5초 디바운스)
@@ -1682,106 +1691,23 @@ export default function App() {
 
         {/* 차트 영역 + 시장 지표 */}
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">
-          {/* [수정1] 시장 지표 카드 */}
-          <div className="w-full xl:w-[200px] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg flex flex-col overflow-hidden shrink-0">
-            <div className="p-2 bg-[#0f172a] text-white font-bold flex justify-between items-center text-[11px] border-b border-gray-700">
-              <span>📊 시장 지표</span>
-              <div className="flex items-center gap-1">
-                <button onClick={() => setShowIndicatorVerify(!showIndicatorVerify)} className={`p-1 rounded transition ${showIndicatorVerify ? 'text-blue-300 bg-blue-900/50' : 'text-gray-600 hover:text-gray-400 hover:bg-gray-800'}`} title="시장 지표 데이터 검증">
-                  <Search size={10} />
-                </button>
-                <button onClick={fetchMarketIndicators} disabled={indicatorLoading} className="p-1 hover:bg-gray-800 rounded transition text-teal-400 hover:text-white" title="시장 지표 새로고침">
-                  <RefreshCw size={12} className={indicatorLoading ? 'animate-spin' : ''} />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 flex flex-col text-[10px] overflow-y-auto">
-              {[
-                { label: 'KOSPI', key: 'kospi', val: marketIndicators.kospiPrice ?? getIndexLatest(marketIndices.kospi).val, chg: marketIndicators.kospiChg ?? getIndexLatest(marketIndices.kospi).chg, fmt: (v) => v?.toFixed(2), color: 'text-yellow-400', isToggle: true, isActive: showKospi, onToggle: () => setShowKospi(!showKospi) },
-                { label: 'S&P500', key: 'sp500', val: marketIndicators.sp500Price ?? getIndexLatest(marketIndices.sp500).val, chg: marketIndicators.sp500Chg ?? getIndexLatest(marketIndices.sp500).chg, fmt: (v) => v?.toLocaleString('en-US', { maximumFractionDigits: 2 }), color: 'text-purple-400', isToggle: true, isActive: showSp500, onToggle: () => setShowSp500(!showSp500) },
-                { label: 'Nasdaq100', key: 'nasdaq', val: marketIndicators.nasdaqPrice ?? getIndexLatest(marketIndices.nasdaq).val, chg: marketIndicators.nasdaqChg ?? getIndexLatest(marketIndices.nasdaq).chg, fmt: (v) => v?.toLocaleString('en-US', { maximumFractionDigits: 2 }), color: 'text-teal-400', isToggle: true, isActive: showNasdaq, onToggle: () => setShowNasdaq(!showNasdaq) },
-                { label: '미국 기준금리', key: 'fedRate', val: marketIndicators.fedRate, chg: marketIndicators.fedRateChg, fmt: (v) => v?.toFixed(2) + '%', color: 'text-pink-400', url: 'https://tradingeconomics.com/united-states/interest-rate', sep: true },
-                { label: 'US 10Y', key: 'us10y', val: marketIndicators.us10y, chg: marketIndicators.us10yChg, fmt: (v) => v?.toFixed(3) + '%', color: 'text-gray-300', url: 'https://tradingeconomics.com/united-states/government-bond-yield', sep: true },
-                { label: 'KR 10Y', key: 'kr10y', val: marketIndicators.kr10y, chg: marketIndicators.kr10yChg, fmt: (v) => v?.toFixed(3) + '%', color: 'text-gray-300', url: 'https://tradingeconomics.com/south-korea/government-bond-yield' },
-                { label: 'Gold', key: 'goldIntl', val: marketIndicators.goldIntl, chg: marketIndicators.goldIntlChg, fmt: (v) => v?.toLocaleString('en-US', { maximumFractionDigits: 2 }), color: 'text-yellow-500', url: 'https://tradingeconomics.com/commodity/gold', sep: true },
-                { label: '국내 금', key: 'goldKr', val: marketIndicators.goldKr, chg: marketIndicators.goldKrChg, fmt: (v) => formatNumber(v), color: 'text-yellow-600', url: 'https://m.stock.naver.com/marketindex/metals/M04020000' },
-                { label: 'USDKRW', key: 'usdkrw', val: marketIndicators.usdkrw, chg: marketIndicators.usdkrwChg, fmt: (v) => v?.toFixed(2), color: 'text-blue-400', url: 'https://tradingeconomics.com/south-korea/currency', sep: true },
-                { label: 'DXY', key: 'dxy', val: marketIndicators.dxy, chg: marketIndicators.dxyChg, fmt: (v) => v?.toFixed(3), color: 'text-cyan-400', url: 'https://tradingeconomics.com/united-states/currency' },
-              ].map((item, idx) => {
-                const st = indicatorFetchStatus[item.key];
-                return (
-                  <div key={idx} className={`px-2.5 py-1.5 flex items-center justify-between hover:bg-gray-800/50 transition-colors ${item.sep ? 'border-t border-gray-600' : 'border-t border-gray-700/30'}`}>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span 
-                         className={`${item.color} font-bold cursor-pointer hover:underline ${item.isToggle && item.isActive ? 'bg-white/20 px-1.5 py-0.5 rounded-md shadow-sm' : item.isToggle ? 'px-1.5 py-0.5' : ''}`} 
-                         onClick={() => item.isToggle ? item.onToggle() : window.open(item.url, '_blank')}
-                         title={item.isToggle ? "클릭하여 그래프 표시/숨김" : "새 창에서 열기"}
-                      >
-                         {item.label}
-                      </span>
-                      {indicatorLoading ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" title="수집중" /> :
-                        st?.status === 'success' ? <span className="w-1.5 h-1.5 rounded-full bg-green-400 cursor-pointer" onClick={() => item.url && window.open(item.url, '_blank')} title={`${st.source} | ${st.updatedAt} (클릭 시 사이트 이동)`} /> :
-                        st?.status === 'fail' && item.val !== null ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 cursor-pointer" onClick={() => item.url && window.open(item.url, '_blank')} title="백업데이터 (클릭 시 사이트 이동)" /> :
-                        st?.status === 'fail' ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 cursor-pointer" onClick={() => item.url && window.open(item.url, '_blank')} title="접속 불가 (클릭 시 사이트 이동)" /> :
-                        item.val !== null ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 cursor-pointer" onClick={() => item.url && window.open(item.url, '_blank')} title="백업데이터 (클릭 시 사이트 이동)" /> :
-                        <span className="w-1.5 h-1.5 rounded-full bg-gray-600" title="미수집" />}
-                    </div>
-                    <div className="flex flex-col items-end ml-1 min-w-0">
-                      <span className="text-white font-bold font-mono text-[11px] truncate">{item.val !== null ? item.fmt(item.val) : '-'}</span>
-                      {item.chg !== null && <span className={`font-bold font-mono text-[9px] ${item.chg > 0 ? 'text-red-400' : item.chg < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.chg > 0 ? '▲' : item.chg < 0 ? '▼' : ''}{Math.abs(item.chg).toFixed(2)}%</span>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {showIndicatorVerify && (
-              <div className="border-t border-gray-600 bg-[#0f172a] p-2 text-[9px] overflow-y-auto max-h-[200px]">
-                <div className="text-blue-300 font-bold mb-1 flex justify-between items-center">
-                   <span>📋 시장 지표 수집 검증</span>
-                   <button onClick={() => setShowIndicatorVerify(false)} className="text-gray-500 hover:text-white"><X size={10} /></button>
-                </div>
-                <table className="w-full text-[9px]">
-                  <thead><tr className="text-gray-500 border-b border-gray-700"><th className="py-0.5 text-left">지표</th><th className="py-0.5 text-center">상태</th><th className="py-0.5 text-left">출처 (클릭이동)</th></tr></thead>
-                  <tbody>
-                    {[
-                      { label: 'KOSPI', key: 'kospi', val: marketIndicators.kospiPrice, url: 'https://m.stock.naver.com/domestic/index/KOSPI/total' },
-                      { label: 'S&P500', key: 'sp500', val: marketIndicators.sp500Price, url: 'https://m.stock.naver.com/worldstock/index/.INX/total' },
-                      { label: 'Nasdaq', key: 'nasdaq', val: marketIndicators.nasdaqPrice, url: 'https://m.stock.naver.com/worldstock/index/.IXIC/total' },
-                      { label: '미국 기준금리', key: 'fedRate', val: marketIndicators.fedRate, url: 'https://tradingeconomics.com/united-states/interest-rate' },
-                      { label: 'US 10Y', key: 'us10y', val: marketIndicators.us10y, url: 'https://tradingeconomics.com/united-states/government-bond-yield' },
-                      { label: 'KR 10Y', key: 'kr10y', val: marketIndicators.kr10y, url: 'https://tradingeconomics.com/south-korea/government-bond-yield' },
-                      { label: 'Gold', key: 'goldIntl', val: marketIndicators.goldIntl, url: 'https://tradingeconomics.com/commodity/gold' },
-                      { label: '국내 금', key: 'goldKr', val: marketIndicators.goldKr, url: 'https://m.stock.naver.com/marketindex/metals/M04020000' },
-                      { label: 'USDKRW', key: 'usdkrw', val: marketIndicators.usdkrw, url: 'https://tradingeconomics.com/south-korea/currency' },
-                      { label: 'DXY', key: 'dxy', val: marketIndicators.dxy, url: 'https://tradingeconomics.com/united-states/currency' },
-                    ].map((item, i) => {
-                      const st = indicatorFetchStatus[item.key];
-                      const hasBackup = item.val !== null && item.val !== undefined;
-                      let badge, sourceText;
-                      if (!st) {
-                        badge = hasBackup ? <span className="text-yellow-400">🟡</span> : <span className="text-gray-500">⚪</span>;
-                        sourceText = hasBackup ? '백업데이터' : '-';
-                      } else if (st.status === 'success') {
-                        badge = <span className="text-green-400">🟢</span>;
-                        sourceText = st.source;
-                      } else {
-                        badge = hasBackup ? <span className="text-yellow-400">🟡</span> : <span className="text-red-400">🔴</span>;
-                        sourceText = hasBackup ? '백업데이터' : '접속 불가';
-                      }
-                      return (
-                        <tr key={i} className="border-b border-gray-800">
-                          <td className="py-0.5 text-gray-300 font-bold">{item.label}</td>
-                          <td className="py-0.5 text-center">{badge}</td>
-                          <td className="py-0.5 text-blue-400 cursor-pointer hover:underline" onClick={() => window.open(item.url, '_blank')}>{sourceText}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <div className="mt-1 text-gray-600">🔄 새로고침 버튼으로 수집 | 🟢 접속 성공 🟡 백업데이터 🔴 접속 불가</div>
-              </div>
-            )}
-          </div>
+          {/* 시장 지표 카드 */}
+          <MarketIndicators
+            marketIndicators={marketIndicators}
+            marketIndices={marketIndices}
+            indicatorHistoryMap={indicatorHistoryMap}
+            indicatorLoading={indicatorLoading}
+            indicatorFetchStatus={indicatorFetchStatus}
+            showIndicatorVerify={showIndicatorVerify}
+            setShowIndicatorVerify={setShowIndicatorVerify}
+            fetchMarketIndicators={fetchMarketIndicators}
+            showKospi={showKospi}
+            setShowKospi={setShowKospi}
+            showSp500={showSp500}
+            setShowSp500={setShowSp500}
+            showNasdaq={showNasdaq}
+            setShowNasdaq={setShowNasdaq}
+          />
 
           {/* 차트 본체 */}
           <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg flex-1 min-w-0">
@@ -1834,6 +1760,10 @@ export default function App() {
                 <div className="flex items-center gap-1.5">
                   <button onClick={() => setShowTotalEval(!showTotalEval)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showTotalEval ? 'bg-gray-700 text-white shadow-inner border border-gray-500' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showTotalEval ? 'bg-gray-400 shadow-[0_0_4px_#9ca3af]' : 'bg-gray-600'}`}></div>자산</button>
                   <button onClick={() => setShowReturnRate(!showReturnRate)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showReturnRate ? 'bg-red-900/50 text-red-400 border border-red-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showReturnRate ? 'bg-red-500 shadow-[0_0_4px_#ef4444]' : 'bg-gray-600'}`}></div>%</button>
+                  <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
+                  <button onClick={() => setShowKospi(!showKospi)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showKospi ? 'bg-yellow-900/40 text-yellow-400 border border-yellow-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="KOSPI 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showKospi ? 'bg-yellow-400 shadow-[0_0_4px_#facc15]' : 'bg-gray-600'}`}></div>K</button>
+                  <button onClick={() => setShowSp500(!showSp500)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showSp500 ? 'bg-purple-900/40 text-purple-400 border border-purple-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="S&P500 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showSp500 ? 'bg-purple-400 shadow-[0_0_4px_#a78bfa]' : 'bg-gray-600'}`}></div>S</button>
+                  <button onClick={() => setShowNasdaq(!showNasdaq)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showNasdaq ? 'bg-teal-900/40 text-teal-400 border border-teal-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="Nasdaq100 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showNasdaq ? 'bg-teal-400 shadow-[0_0_4px_#2dd4bf]' : 'bg-gray-600'}`}></div>N</button>
                   <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
                   <button onClick={() => setIsZeroBaseMode(!isZeroBaseMode)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${isZeroBaseMode ? 'bg-green-900/50 text-green-400 border border-green-500/50 shadow-inner' : 'bg-transparent text-gray-500 hover:bg-gray-800 border border-gray-700'}`} title="조회 시작일을 0% 기준으로 차트 재정렬"><Activity size={14} className={isZeroBaseMode ? 'text-green-400' : 'text-gray-500'} /></button>
                 </div>
