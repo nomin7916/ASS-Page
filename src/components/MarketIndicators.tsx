@@ -1,9 +1,6 @@
 // @ts-nocheck
-import React, { useState, useMemo } from 'react';
+import React from 'react';
 import { RefreshCw, X, Search } from 'lucide-react';
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine
-} from 'recharts';
 import { formatNumber, getIndexLatest } from '../utils';
 
 const INDICATOR_COLORS = {
@@ -19,21 +16,6 @@ const INDICATOR_COLORS = {
   dxy: '#22d3ee',
 };
 
-const CustomChartTooltip = ({ active, payload, label }) => {
-  if (!active || !payload || payload.length === 0) return null;
-  return (
-    <div style={{ backgroundColor: 'rgba(15,23,42,0.95)', border: '1px solid #4b5563', borderRadius: 8, padding: '8px 12px' }}>
-      <div className="text-gray-400 text-[10px] mb-1">{label}</div>
-      {payload.map((p) => (
-        <div key={p.dataKey} className="flex items-center gap-1.5 text-[11px] font-bold" style={{ color: p.color }}>
-          <span>{p.name}</span>
-          <span>{p.value > 0 ? '+' : ''}{p.value?.toFixed(2)}%</span>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 export default function MarketIndicators({
   marketIndicators,
   marketIndices,
@@ -46,30 +28,46 @@ export default function MarketIndicators({
   showKospi, setShowKospi,
   showSp500, setShowSp500,
   showNasdaq, setShowNasdaq,
+  // 메인 차트 지표 토글
+  showIndicatorsInChart,
+  setShowIndicatorsInChart,
+  indicatorHistoryLoading,
+  fetchIndicatorHistory,
 }) {
-  const [selectedIndicators, setSelectedIndicators] = useState([]);
+  // 지표 이름 클릭 → 메인 차트 토글 (데이터 없으면 자동 수집)
+  const handleIndicatorClick = async (key) => {
+    const isShown = showIndicatorsInChart[key];
+    if (!isShown && !indicatorHistoryMap[key]) {
+      // 데이터 없음 → 자동 수집 시도
+      await fetchIndicatorHistory(key);
+    }
+    setShowIndicatorsInChart(prev => ({ ...prev, [key]: !isShown }));
+  };
 
   const indicators = [
     {
       label: 'KOSPI', key: 'kospi',
-      val: marketIndicators.kospiPrice ?? getIndexLatest(marketIndices?.kospi).val, chg: marketIndicators.kospiChg ?? getIndexLatest(marketIndices?.kospi).chg,
+      val: marketIndicators.kospiPrice ?? getIndexLatest(marketIndices?.kospi).val,
+      chg: marketIndicators.kospiChg ?? getIndexLatest(marketIndices?.kospi).chg,
       fmt: (v) => v?.toFixed(2), color: 'text-yellow-400',
       url: 'https://m.stock.naver.com/domestic/index/KOSPI/total',
-      isMainChartToggle: true, mainChartActive: showKospi, onMainToggle: () => setShowKospi(!showKospi),
+      isIndexToggle: true, indexActive: showKospi, onIndexToggle: () => setShowKospi(!showKospi),
     },
     {
       label: 'S&P500', key: 'sp500',
-      val: marketIndicators.sp500Price ?? getIndexLatest(marketIndices?.sp500).val, chg: marketIndicators.sp500Chg ?? getIndexLatest(marketIndices?.sp500).chg,
+      val: marketIndicators.sp500Price ?? getIndexLatest(marketIndices?.sp500).val,
+      chg: marketIndicators.sp500Chg ?? getIndexLatest(marketIndices?.sp500).chg,
       fmt: (v) => v?.toLocaleString('en-US', { maximumFractionDigits: 2 }), color: 'text-purple-400',
       url: 'https://m.stock.naver.com/worldstock/index/.INX/total',
-      isMainChartToggle: true, mainChartActive: showSp500, onMainToggle: () => setShowSp500(!showSp500),
+      isIndexToggle: true, indexActive: showSp500, onIndexToggle: () => setShowSp500(!showSp500),
     },
     {
       label: 'Nasdaq100', key: 'nasdaq',
-      val: marketIndicators.nasdaqPrice ?? getIndexLatest(marketIndices?.nasdaq).val, chg: marketIndicators.nasdaqChg ?? getIndexLatest(marketIndices?.nasdaq).chg,
+      val: marketIndicators.nasdaqPrice ?? getIndexLatest(marketIndices?.nasdaq).val,
+      chg: marketIndicators.nasdaqChg ?? getIndexLatest(marketIndices?.nasdaq).chg,
       fmt: (v) => v?.toLocaleString('en-US', { maximumFractionDigits: 2 }), color: 'text-teal-400',
       url: 'https://m.stock.naver.com/worldstock/index/.IXIC/total',
-      isMainChartToggle: true, mainChartActive: showNasdaq, onMainToggle: () => setShowNasdaq(!showNasdaq),
+      isIndexToggle: true, indexActive: showNasdaq, onIndexToggle: () => setShowNasdaq(!showNasdaq),
     },
     {
       label: '미국 기준금리', key: 'fedRate',
@@ -115,67 +113,14 @@ export default function MarketIndicators({
     },
   ];
 
-  const getHistory = (key) => {
-    if (key === 'kospi') return marketIndices?.kospi ?? null;
-    if (key === 'sp500') return marketIndices?.sp500 ?? null;
-    if (key === 'nasdaq') return marketIndices?.nasdaq ?? null;
-    return indicatorHistoryMap?.[key] ?? null;
+  // index indicators (KOSPI/SP500/Nasdaq) = 별도 토글로 이미 주 차트에 있음
+  // 나머지 indicators = showIndicatorsInChart로 주 차트 토글
+  const isIndicatorInChart = (key) => {
+    if (key === 'kospi') return showKospi;
+    if (key === 'sp500') return showSp500;
+    if (key === 'nasdaq') return showNasdaq;
+    return showIndicatorsInChart?.[key] ?? false;
   };
-
-  const toggleIndicator = (key) => {
-    setSelectedIndicators(prev =>
-      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-    );
-  };
-
-  // Build normalized % change chart data from selected indicators that have history
-  const chartData = useMemo(() => {
-    const activeWithData = selectedIndicators.filter(k => {
-      const h = getHistory(k);
-      return h && Object.keys(h).length > 0;
-    });
-    if (activeWithData.length === 0) return [];
-
-    const allDates = new Set();
-    activeWithData.forEach(k => {
-      const h = getHistory(k);
-      if (h) Object.keys(h).forEach(d => allDates.add(d));
-    });
-    const sortedDates = Array.from(allDates).sort();
-
-    const baseValues = {};
-    activeWithData.forEach(k => {
-      const h = getHistory(k);
-      if (h) {
-        const firstDate = Object.keys(h).sort()[0];
-        if (firstDate) baseValues[k] = h[firstDate];
-      }
-    });
-
-    return sortedDates
-      .map(date => {
-        const point = { date, label: date.substring(5).replace('-', '/') };
-        activeWithData.forEach(k => {
-          const h = getHistory(k);
-          if (h && h[date] !== undefined && baseValues[k]) {
-            point[k] = parseFloat(((h[date] / baseValues[k] - 1) * 100).toFixed(2));
-          }
-        });
-        return point;
-      })
-      .filter(p => activeWithData.some(k => p[k] !== undefined));
-  }, [selectedIndicators, marketIndices, indicatorHistoryMap]);
-
-  const activeWithData = selectedIndicators.filter(k => {
-    const h = getHistory(k);
-    return h && Object.keys(h).length > 0;
-  });
-  const activeWithoutData = selectedIndicators.filter(k => {
-    const h = getHistory(k);
-    return !h || Object.keys(h).length === 0;
-  });
-
-  const labelFor = (key) => indicators.find(i => i.key === key)?.label ?? key;
 
   return (
     <div className="w-full xl:w-[200px] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg flex flex-col overflow-hidden shrink-0">
@@ -202,55 +147,63 @@ export default function MarketIndicators({
       </div>
 
       {/* 지표 리스트 */}
-      <div className="flex flex-col text-[10px] overflow-y-auto">
+      <div className="flex-1 flex flex-col text-[10px] overflow-y-auto">
         {indicators.map((item, idx) => {
           const st = indicatorFetchStatus[item.key];
-          const isSelected = selectedIndicators.includes(item.key);
+          const inChart = isIndicatorInChart(item.key);
           const color = INDICATOR_COLORS[item.key] ?? '#9ca3af';
+          const isLoading = indicatorHistoryLoading?.[item.key];
+          const hasHistory = item.isIndexToggle
+            ? (marketIndices?.[item.key] && Object.keys(marketIndices[item.key]).length > 0)
+            : (indicatorHistoryMap?.[item.key] && Object.keys(indicatorHistoryMap[item.key]).length > 0);
+
           return (
             <div
               key={idx}
-              className={`px-2.5 py-1.5 flex items-center justify-between transition-colors ${item.sep ? 'border-t border-gray-600' : 'border-t border-gray-700/30'} ${isSelected ? 'bg-gray-700/60' : 'hover:bg-gray-800/50'}`}
+              className={`px-2.5 py-1.5 flex items-center justify-between transition-colors ${item.sep ? 'border-t border-gray-600' : 'border-t border-gray-700/30'} ${inChart ? 'bg-gray-700/50' : 'hover:bg-gray-800/40'}`}
             >
-              <div className="flex items-center gap-1 shrink-0">
-                {/* 이름 클릭 → 지표 차트 토글 */}
-                <span
-                  className={`font-bold cursor-pointer select-none transition-all ${isSelected ? 'underline underline-offset-2' : 'hover:opacity-80'}`}
-                  style={{ color: isSelected ? color : undefined }}
-                  onClick={() => toggleIndicator(item.key)}
-                  title="클릭하여 차트에 표시/숨김"
+              <div className="flex items-center gap-1 shrink-0 min-w-0">
+                {/* 지표 이름 클릭 → 메인 차트 토글 */}
+                <button
+                  className={`font-bold text-left leading-none transition-all select-none truncate max-w-[110px] ${inChart ? 'underline underline-offset-2' : 'hover:opacity-80'}`}
+                  style={{ color: inChart ? color : '#9ca3af' }}
+                  onClick={() => item.isIndexToggle ? item.onIndexToggle() : handleIndicatorClick(item.key)}
+                  title={inChart ? '클릭하여 차트에서 숨김' : hasHistory ? '클릭하여 차트에 표시' : '클릭하여 데이터 수집 후 차트에 표시'}
+                  disabled={isLoading}
                 >
-                  {item.label}
-                </span>
-                {/* 상태 점 (클릭 → 외부 링크) */}
+                  {isLoading ? (
+                    <span className="flex items-center gap-1">
+                      <RefreshCw size={8} className="animate-spin" />
+                      {item.label}
+                    </span>
+                  ) : item.label}
+                </button>
+
+                {/* 상태 점 */}
                 {indicatorLoading
-                  ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" title="수집중" />
+                  ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse shrink-0" title="수집중" />
                   : st?.status === 'success'
-                    ? <span className="w-1.5 h-1.5 rounded-full bg-green-400 cursor-pointer" onClick={() => item.url && window.open(item.url, '_blank')} title={`${st.source} | ${st.updatedAt}`} />
+                    ? <span className="w-1.5 h-1.5 rounded-full bg-green-400 cursor-pointer shrink-0" onClick={() => item.url && window.open(item.url, '_blank')} title={`${st.source} | ${st.updatedAt}`} />
                     : st?.status === 'fail' && item.val !== null
-                      ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 cursor-pointer" onClick={() => item.url && window.open(item.url, '_blank')} title="백업데이터" />
+                      ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 cursor-pointer shrink-0" onClick={() => item.url && window.open(item.url, '_blank')} title="백업데이터" />
                       : st?.status === 'fail'
-                        ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 cursor-pointer" onClick={() => item.url && window.open(item.url, '_blank')} title="접속 불가" />
+                        ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 cursor-pointer shrink-0" onClick={() => item.url && window.open(item.url, '_blank')} title="접속 불가" />
                         : item.val !== null
-                          ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 cursor-pointer" onClick={() => item.url && window.open(item.url, '_blank')} title="백업데이터" />
-                          : <span className="w-1.5 h-1.5 rounded-full bg-gray-600" title="미수집" />
+                          ? <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 cursor-pointer shrink-0" onClick={() => item.url && window.open(item.url, '_blank')} title="백업데이터" />
+                          : <span className="w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0" title="미수집" />
                 }
-                {/* 주 차트 토글 (KOSPI/SP500/Nasdaq만) */}
-                {item.isMainChartToggle && (
-                  <button
-                    onClick={() => item.onMainToggle()}
-                    className={`text-[8px] px-0.5 rounded transition-colors leading-none ${item.mainChartActive ? 'text-white opacity-80' : 'text-gray-600 hover:text-gray-400'}`}
-                    title={`주 차트 ${item.mainChartActive ? '숨김' : '표시'}`}
-                  >
-                    {item.mainChartActive ? '◉' : '○'}
-                  </button>
+
+                {/* 히스토리 데이터 있음 표시 (index 제외) */}
+                {!item.isIndexToggle && hasHistory && (
+                  <span className="w-1 h-1 rounded-full bg-blue-400 shrink-0" title="히스토리 데이터 있음 (차트 표시 가능)" />
                 )}
               </div>
+
               {/* 수치 클릭 → 외부 링크 */}
               <div
                 className="flex flex-col items-end ml-1 min-w-0 cursor-pointer hover:opacity-70 transition-opacity"
                 onClick={() => item.url && window.open(item.url, '_blank')}
-                title="새 창에서 열기"
+                title={item.url ? '클릭하여 사이트 이동' : undefined}
               >
                 <span className="text-white font-bold font-mono text-[11px] truncate">
                   {item.val !== null && item.val !== undefined ? item.fmt(item.val) : '-'}
@@ -265,85 +218,14 @@ export default function MarketIndicators({
             </div>
           );
         })}
-      </div>
 
-      {/* 지표 차트 */}
-      {selectedIndicators.length > 0 && (
-        <div className="border-t border-gray-600 bg-[#0f172a] flex flex-col">
-          {/* 선택된 지표 태그 */}
-          <div className="px-2 pt-1.5 flex flex-wrap gap-1">
-            {selectedIndicators.map(key => {
-              const color = INDICATOR_COLORS[key] ?? '#9ca3af';
-              const hasData = activeWithData.includes(key);
-              return (
-                <button
-                  key={key}
-                  onClick={() => toggleIndicator(key)}
-                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold border transition-all hover:opacity-80"
-                  style={{ borderColor: color, color, backgroundColor: `${color}20` }}
-                  title={hasData ? '클릭하여 제거' : '데이터 없음 - CSV 업로드 필요'}
-                >
-                  {labelFor(key)}
-                  {!hasData && <span className="text-gray-500 ml-0.5">?</span>}
-                  <X size={8} className="ml-0.5" />
-                </button>
-              );
-            })}
-          </div>
-
-          {/* 데이터 없음 안내 */}
-          {activeWithoutData.length > 0 && (
-            <div className="px-2 pt-1 text-[9px] text-gray-500">
-              {activeWithoutData.map(k => labelFor(k)).join(', ')}: CSV 업로드 필요
-            </div>
-          )}
-
-          {/* recharts LineChart */}
-          {chartData.length > 0 ? (
-            <div className="px-1 pb-2 pt-1">
-              <ResponsiveContainer width="100%" height={130}>
-                <LineChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fill: '#6b7280', fontSize: 8 }}
-                    interval="preserveStartEnd"
-                    tickLine={false}
-                    axisLine={{ stroke: '#374151' }}
-                  />
-                  <YAxis
-                    tick={{ fill: '#6b7280', fontSize: 8 }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}%`}
-                  />
-                  <ReferenceLine y={0} stroke="#4b5563" strokeDasharray="3 3" />
-                  <Tooltip content={<CustomChartTooltip />} />
-                  {activeWithData.map(key => (
-                    <Line
-                      key={key}
-                      type="monotone"
-                      dataKey={key}
-                      name={labelFor(key)}
-                      stroke={INDICATOR_COLORS[key] ?? '#9ca3af'}
-                      strokeWidth={2}
-                      dot={false}
-                      connectNulls
-                      activeDot={{ r: 3, strokeWidth: 0 }}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-              <div className="text-center text-[8px] text-gray-600 mt-0.5">기준 시점 대비 % 변화</div>
-            </div>
-          ) : activeWithData.length === 0 && (
-            <div className="text-center text-[9px] text-gray-500 py-3 px-2">
-              히스토리 데이터 없음<br />
-              <span className="text-gray-600">📤 JSON/CSV 파일 업로드</span>
-            </div>
-          )}
+        {/* 안내 문구 */}
+        <div className="px-2.5 py-2 text-[8.5px] text-gray-600 border-t border-gray-700/30 leading-relaxed">
+          이름 클릭 → 차트 표시<br />
+          수치 클릭 → 사이트 이동<br />
+          <span className="text-blue-600">●</span> 히스토리 보유 (자동수집)
         </div>
-      )}
+      </div>
 
       {/* 데이터 검증 패널 */}
       {showIndicatorVerify && (
@@ -358,47 +240,58 @@ export default function MarketIndicators({
             <thead>
               <tr className="text-gray-500 border-b border-gray-700">
                 <th className="py-0.5 text-left">지표</th>
-                <th className="py-0.5 text-center">상태</th>
-                <th className="py-0.5 text-left">출처 (클릭이동)</th>
+                <th className="py-0.5 text-center">현재</th>
+                <th className="py-0.5 text-center">히스토리</th>
+                <th className="py-0.5 text-left">출처</th>
               </tr>
             </thead>
             <tbody>
               {[
-                { label: 'KOSPI', key: 'kospi', val: marketIndicators.kospiPrice, url: 'https://m.stock.naver.com/domestic/index/KOSPI/total' },
-                { label: 'S&P500', key: 'sp500', val: marketIndicators.sp500Price, url: 'https://m.stock.naver.com/worldstock/index/.INX/total' },
-                { label: 'Nasdaq', key: 'nasdaq', val: marketIndicators.nasdaqPrice, url: 'https://m.stock.naver.com/worldstock/index/.IXIC/total' },
-                { label: '미국 기준금리', key: 'fedRate', val: marketIndicators.fedRate, url: 'https://tradingeconomics.com/united-states/interest-rate' },
-                { label: 'US 10Y', key: 'us10y', val: marketIndicators.us10y, url: 'https://tradingeconomics.com/united-states/government-bond-yield' },
-                { label: 'KR 10Y', key: 'kr10y', val: marketIndicators.kr10y, url: 'https://tradingeconomics.com/south-korea/government-bond-yield' },
-                { label: 'Gold', key: 'goldIntl', val: marketIndicators.goldIntl, url: 'https://tradingeconomics.com/commodity/gold' },
-                { label: '국내 금', key: 'goldKr', val: marketIndicators.goldKr, url: 'https://m.stock.naver.com/marketindex/metals/M04020000' },
-                { label: 'USDKRW', key: 'usdkrw', val: marketIndicators.usdkrw, url: 'https://tradingeconomics.com/south-korea/currency' },
-                { label: 'DXY', key: 'dxy', val: marketIndicators.dxy, url: 'https://tradingeconomics.com/united-states/currency' },
+                { label: 'KOSPI', key: 'kospi', val: marketIndicators.kospiPrice, url: 'https://m.stock.naver.com/domestic/index/KOSPI/total', histKey: null },
+                { label: 'S&P500', key: 'sp500', val: marketIndicators.sp500Price, url: 'https://m.stock.naver.com/worldstock/index/.INX/total', histKey: null },
+                { label: 'Nasdaq', key: 'nasdaq', val: marketIndicators.nasdaqPrice, url: 'https://m.stock.naver.com/worldstock/index/.IXIC/total', histKey: null },
+                { label: '기준금리', key: 'fedRate', val: marketIndicators.fedRate, url: 'https://tradingeconomics.com/united-states/interest-rate', histKey: 'fedRate' },
+                { label: 'US 10Y', key: 'us10y', val: marketIndicators.us10y, url: 'https://tradingeconomics.com/united-states/government-bond-yield', histKey: 'us10y' },
+                { label: 'KR 10Y', key: 'kr10y', val: marketIndicators.kr10y, url: 'https://tradingeconomics.com/south-korea/government-bond-yield', histKey: 'kr10y' },
+                { label: 'Gold', key: 'goldIntl', val: marketIndicators.goldIntl, url: 'https://tradingeconomics.com/commodity/gold', histKey: 'goldIntl' },
+                { label: '국내 금', key: 'goldKr', val: marketIndicators.goldKr, url: 'https://m.stock.naver.com/marketindex/metals/M04020000', histKey: null },
+                { label: 'USDKRW', key: 'usdkrw', val: marketIndicators.usdkrw, url: 'https://tradingeconomics.com/south-korea/currency', histKey: 'usdkrw' },
+                { label: 'DXY', key: 'dxy', val: marketIndicators.dxy, url: 'https://tradingeconomics.com/united-states/currency', histKey: 'dxy' },
               ].map((item, i) => {
                 const st = indicatorFetchStatus[item.key];
                 const hasBackup = item.val !== null && item.val !== undefined;
+                const histCount = item.histKey && indicatorHistoryMap?.[item.histKey]
+                  ? Object.keys(indicatorHistoryMap[item.histKey]).length : 0;
                 let badge, sourceText;
                 if (!st) {
                   badge = hasBackup ? <span className="text-yellow-400">🟡</span> : <span className="text-gray-500">⚪</span>;
-                  sourceText = hasBackup ? '백업데이터' : '-';
+                  sourceText = hasBackup ? '백업' : '-';
                 } else if (st.status === 'success') {
                   badge = <span className="text-green-400">🟢</span>;
                   sourceText = st.source;
                 } else {
                   badge = hasBackup ? <span className="text-yellow-400">🟡</span> : <span className="text-red-400">🔴</span>;
-                  sourceText = hasBackup ? '백업데이터' : '접속 불가';
+                  sourceText = hasBackup ? '백업' : '실패';
                 }
                 return (
                   <tr key={i} className="border-b border-gray-800">
                     <td className="py-0.5 text-gray-300 font-bold">{item.label}</td>
                     <td className="py-0.5 text-center">{badge}</td>
+                    <td className="py-0.5 text-center text-[8px]">
+                      {histCount > 0
+                        ? <span className="text-blue-400">{histCount}건</span>
+                        : item.histKey
+                          ? <span className="text-gray-600">없음</span>
+                          : <span className="text-gray-700">-</span>
+                      }
+                    </td>
                     <td className="py-0.5 text-blue-400 cursor-pointer hover:underline" onClick={() => window.open(item.url, '_blank')}>{sourceText}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          <div className="mt-1 text-gray-600">🔄 새로고침으로 수집 | 🟢 성공 🟡 백업 🔴 실패</div>
+          <div className="mt-1 text-gray-600">🟢 성공 🟡 백업 🔴 실패 | 이름 클릭 시 히스토리 자동수집</div>
         </div>
       )}
     </div>

@@ -109,6 +109,10 @@ export default function App() {
   const [showKospi, setShowKospi] = useState(true);
   const [showSp500, setShowSp500] = useState(false);
   const [showNasdaq, setShowNasdaq] = useState(false);
+  const [showIndicatorsInChart, setShowIndicatorsInChart] = useState({
+    us10y: false, kr10y: false, goldIntl: false, usdkrw: false, dxy: false, fedRate: false
+  });
+  const [indicatorHistoryLoading, setIndicatorHistoryLoading] = useState({});
   
   const [marketIndices, setMarketIndices] = useState({ kospi: null, sp500: null, nasdaq: null });
   const [indicatorHistoryMap, setIndicatorHistoryMap] = useState({});
@@ -461,6 +465,74 @@ export default function App() {
     }
   };
 
+  // stooq symbol 매핑
+  const STOOQ_SYMBOLS = {
+    us10y: 'tnx.us',
+    goldIntl: 'xauusd.oanda',
+    usdkrw: 'usdkrw.fx',
+    dxy: 'dxy.f',
+    kr10y: null,   // 무료 소스 없음
+    fedRate: null, // 계단식 데이터 - 무료 소스 없음
+  };
+
+  const INDICATOR_LABELS = {
+    us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold',
+    usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리',
+  };
+
+  // stooq에서 과거 데이터 CSV 가져오기
+  const fetchIndicatorHistory = async (key, startDate, endDate) => {
+    const symbol = STOOQ_SYMBOLS[key];
+    if (!symbol) {
+      showToast(`${INDICATOR_LABELS[key] || key}: 자동 수집 미지원 (CSV 파일 업로드 필요)`, true);
+      return null;
+    }
+
+    setIndicatorHistoryLoading(prev => ({ ...prev, [key]: true }));
+
+    const d1 = (startDate || appliedRange.start || (() => {
+      const d = new Date(); d.setFullYear(d.getFullYear() - 3); return d.toISOString().split('T')[0];
+    })()).replace(/-/g, '');
+    const d2 = (endDate || appliedRange.end || new Date().toISOString().split('T')[0]).replace(/-/g, '');
+    const stooqUrl = `https://stooq.com/q/d/l/?s=${symbol}&d1=${d1}&d2=${d2}&i=d`;
+    const proxies = [
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(stooqUrl)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${stooqUrl}`,
+    ];
+
+    let parsedData = null;
+    for (const proxy of proxies) {
+      try {
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
+        if (!res.ok) continue;
+        const csv = await res.text();
+        if (!csv || csv.includes('No data') || csv.length < 50) continue;
+        parsedData = parseIndexCSV(csv, `${key}.csv`);
+        if (parsedData && Object.keys(parsedData).length > 5) break;
+      } catch (e) { continue; }
+    }
+
+    setIndicatorHistoryLoading(prev => ({ ...prev, [key]: false }));
+
+    if (!parsedData || Object.keys(parsedData).length === 0) {
+      showToast(`${INDICATOR_LABELS[key] || key} 과거 데이터 수집 실패 - CSV 직접 업로드 필요`, true);
+      return null;
+    }
+
+    setIndicatorHistoryMap(prev => ({ ...prev, [key]: parsedData }));
+    showToast(`${INDICATOR_LABELS[key] || key} 과거 데이터 ${Object.keys(parsedData).length}건 수집 완료`);
+
+    // Google Sheets 백업
+    try {
+      await fetch(GSHEET_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'saveIndicatorHistory', key, data: parsedData }),
+      });
+    } catch (e) { console.warn('GSheet 지표 히스토리 백업 실패:', e); }
+
+    return parsedData;
+  };
+
   const fetchMarketIndicators = async () => {
     setIndicatorLoading(true);
     const statusMap = {};
@@ -584,20 +656,24 @@ export default function App() {
     if (marketIndices.sp500) Object.keys(marketIndices.sp500).forEach(d => dates.add(d));
     if (marketIndices.nasdaq) Object.keys(marketIndices.nasdaq).forEach(d => dates.add(d));
     Object.values(stockHistoryMap).forEach(stock => Object.keys(stock).forEach(d => dates.add(d)));
+    Object.values(indicatorHistoryMap).forEach(h => Object.keys(h).forEach(d => dates.add(d)));
     if (portfolioStartDate) dates.add(portfolioStartDate);
     return Array.from(dates).sort((a, b) => new Date(a) - new Date(b));
-  }, [history, marketIndices, stockHistoryMap, portfolioStartDate]);
+  }, [history, marketIndices, stockHistoryMap, indicatorHistoryMap, portfolioStartDate]);
 
   const filteredDates = useMemo(() => {
     if (!appliedRange.start || !appliedRange.end) return unifiedDates;
     return unifiedDates.filter(d => d >= appliedRange.start && d <= appliedRange.end);
   }, [unifiedDates, appliedRange]);
 
+  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'fedRate'];
+
   const indexDataMap = useMemo(() => {
     const map = {};
     if (unifiedDates.length === 0) return map;
     let baseK = null, baseS = null, baseN = null;
     let baseComps = [null, null, null];
+    const baseIndicators = {};
     unifiedDates.forEach((dateStr, i) => {
       const currK = getClosestValue(marketIndices.kospi, dateStr);
       const currS = getClosestValue(marketIndices.sp500, dateStr);
@@ -609,6 +685,20 @@ export default function App() {
       if (compStocks[0]?.active && compStocks[0].code) c1 = getClosestValue(stockHistoryMap[compStocks[0].code], dateStr);
       if (compStocks[1]?.active && compStocks[1].code) c2 = getClosestValue(stockHistoryMap[compStocks[1].code], dateStr);
       if (compStocks[2]?.active && compStocks[2].code) c3 = getClosestValue(stockHistoryMap[compStocks[2].code], dateStr);
+
+      // 시장 지표 히스토리
+      const indPoints = {};
+      INDICATOR_CHART_KEYS.forEach(k => {
+        const h = indicatorHistoryMap[k];
+        if (!h) return;
+        const v = getClosestValue(h, dateStr);
+        if (v !== null) {
+          indPoints[`${k}Point`] = v;
+          if (i === 0 || baseIndicators[k] == null) baseIndicators[k] = v;
+          indPoints[`${k}Rate`] = baseIndicators[k] > 0 ? ((v / baseIndicators[k]) - 1) * 100 : 0;
+        }
+      });
+
       if (i === 0) { baseK = kPoint; baseS = sPoint; baseN = nPoint; baseComps = [c1, c2, c3]; }
       map[dateStr] = {
         kospiPoint: kPoint, sp500Point: sPoint, nasdaqPoint: nPoint,
@@ -618,11 +708,12 @@ export default function App() {
         nasdaqRate: baseN ? ((nPoint / baseN) - 1) * 100 : 0,
         comp1Rate: (baseComps[0] && c1) ? ((c1 / baseComps[0]) - 1) * 100 : 0,
         comp2Rate: (baseComps[1] && c2) ? ((c2 / baseComps[1]) - 1) * 100 : 0,
-        comp3Rate: (baseComps[2] && c3) ? ((c3 / baseComps[2]) - 1) * 100 : 0
+        comp3Rate: (baseComps[2] && c3) ? ((c3 / baseComps[2]) - 1) * 100 : 0,
+        ...indPoints,
       };
     });
     return map;
-  }, [unifiedDates, marketIndices, compStocks, stockHistoryMap]);
+  }, [unifiedDates, marketIndices, compStocks, stockHistoryMap, indicatorHistoryMap]);
 
   const finalChartData = useMemo(() => {
     const localSortedHist = [...history].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -648,16 +739,27 @@ export default function App() {
     });
     if (!isZeroBaseMode || rawData.length === 0) return rawData;
     const baseItem = rawData[0];
-    return rawData.map(item => ({
-      ...item,
-      returnRate: baseItem.evalAmount > 0 ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : 0,
-      kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
-      sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
-      nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
-      comp1Rate: baseItem.comp1Point > 0 ? ((item.comp1Point / baseItem.comp1Point) - 1) * 100 : 0,
-      comp2Rate: baseItem.comp2Point > 0 ? ((item.comp2Point / baseItem.comp2Point) - 1) * 100 : 0,
-      comp3Rate: baseItem.comp3Point > 0 ? ((item.comp3Point / baseItem.comp3Point) - 1) * 100 : 0,
-    }));
+    return rawData.map(item => {
+      const indRates = {};
+      INDICATOR_CHART_KEYS.forEach(k => {
+        const basePoint = baseItem[`${k}Point`];
+        const curPoint = item[`${k}Point`];
+        if (basePoint > 0 && curPoint != null) {
+          indRates[`${k}Rate`] = ((curPoint / basePoint) - 1) * 100;
+        }
+      });
+      return {
+        ...item,
+        returnRate: baseItem.evalAmount > 0 ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : 0,
+        kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
+        sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
+        nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
+        comp1Rate: baseItem.comp1Point > 0 ? ((item.comp1Point / baseItem.comp1Point) - 1) * 100 : 0,
+        comp2Rate: baseItem.comp2Point > 0 ? ((item.comp2Point / baseItem.comp2Point) - 1) * 100 : 0,
+        comp3Rate: baseItem.comp3Point > 0 ? ((item.comp3Point / baseItem.comp3Point) - 1) * 100 : 0,
+        ...indRates,
+      };
+    });
   }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode]);
 
   const rebalanceData = useMemo(() => {
@@ -1707,6 +1809,10 @@ export default function App() {
             setShowSp500={setShowSp500}
             showNasdaq={showNasdaq}
             setShowNasdaq={setShowNasdaq}
+            showIndicatorsInChart={showIndicatorsInChart}
+            setShowIndicatorsInChart={setShowIndicatorsInChart}
+            indicatorHistoryLoading={indicatorHistoryLoading}
+            fetchIndicatorHistory={fetchIndicatorHistory}
           />
 
           {/* 차트 본체 */}
@@ -1911,12 +2017,18 @@ export default function App() {
                   <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="left" stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
                   {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
-                  <RechartsTooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#4b5563', color: '#ffffff', borderRadius: '8px' }} labelFormatter={formatShortDate} formatter={(value, name) => { if (name === '총자산') return [formatNumber(value), name]; if (['수익률', 'KOSPI', 'S&P500', 'NASDAQ', compStocks[0].name, compStocks[1].name, compStocks[2].name].includes(name)) return [Number(value).toFixed(2) + '%', name]; return [value, name]; }} />
+                  <RechartsTooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#4b5563', color: '#ffffff', borderRadius: '8px' }} labelFormatter={formatShortDate} formatter={(value, name) => { if (name === '총자산') return [formatNumber(value), name]; return [Number(value).toFixed(2) + '%', name]; }} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#facc15" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
                   {showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#c084fc" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
                   {showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#2dd4bf" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
+                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRate" name="US 10Y" stroke="#d1d5db" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRate" name="Gold" stroke="#eab308" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRate" name="USDKRW" stroke="#60a5fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRate" name="DXY" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRate" name="기준금리" stroke="#f472b6" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="left" type="monotone" dataKey="kr10yRate" name="KR 10Y" stroke="#9ca3af" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke="#10B981" strokeWidth={1.5} dot={false} />}
                   {compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke="#06B6D4" strokeWidth={1.5} dot={false} />}
                   {compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke="#FB923C" strokeWidth={1.5} dot={false} />}
