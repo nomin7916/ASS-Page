@@ -533,6 +533,16 @@ export default function App() {
     return parsedData;
   };
 
+  // stooq 지원 지표 전체 일괄 수집 + GSheet 저장
+  const fetchAllIndicatorHistory = async () => {
+    const keys = ['us10y', 'goldIntl', 'usdkrw', 'dxy'];
+    showToast('시장지표 일괄 수집 시작...');
+    for (const key of keys) {
+      await fetchIndicatorHistory(key, appliedRange?.start, appliedRange?.end);
+    }
+    showToast('✅ 시장지표 일괄 수집 완료 (GSheet 저장됨)');
+  };
+
   // CSV / JSON 파일 직접 업로드로 지표 히스토리 주입 (stooq 미지원 지표용)
   const handleIndicatorUpload = (key, file) => {
     if (!file) return;
@@ -1864,6 +1874,7 @@ export default function App() {
             fetchIndicatorHistory={fetchIndicatorHistory}
             appliedRange={appliedRange}
             onUploadIndicator={handleIndicatorUpload}
+            onFetchAll={fetchAllIndicatorHistory}
           />
 
           {/* 차트 본체 */}
@@ -1918,7 +1929,7 @@ export default function App() {
                   <button onClick={() => setShowTotalEval(!showTotalEval)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showTotalEval ? 'bg-gray-700 text-white shadow-inner border border-gray-500' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showTotalEval ? 'bg-gray-400 shadow-[0_0_4px_#9ca3af]' : 'bg-gray-600'}`}></div>자산</button>
                   <button onClick={() => setShowReturnRate(!showReturnRate)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showReturnRate ? 'bg-red-900/50 text-red-400 border border-red-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showReturnRate ? 'bg-red-500 shadow-[0_0_4px_#ef4444]' : 'bg-gray-600'}`}></div>%</button>
                   <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
-                  <button onClick={() => setShowKospi(!showKospi)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showKospi ? 'bg-yellow-900/40 text-yellow-400 border border-yellow-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="KOSPI 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showKospi ? 'bg-yellow-400 shadow-[0_0_4px_#facc15]' : 'bg-gray-600'}`}></div>K</button>
+                  <button onClick={() => setShowKospi(!showKospi)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showKospi ? 'bg-orange-900/40 text-orange-400 border border-orange-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="KOSPI 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showKospi ? 'bg-orange-400 shadow-[0_0_4px_#f97316]' : 'bg-gray-600'}`}></div>K</button>
                   <button onClick={() => setShowSp500(!showSp500)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showSp500 ? 'bg-purple-900/40 text-purple-400 border border-purple-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="S&P500 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showSp500 ? 'bg-purple-400 shadow-[0_0_4px_#a78bfa]' : 'bg-gray-600'}`}></div>S</button>
                   <button onClick={() => setShowNasdaq(!showNasdaq)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showNasdaq ? 'bg-teal-900/40 text-teal-400 border border-teal-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="Nasdaq100 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showNasdaq ? 'bg-teal-400 shadow-[0_0_4px_#2dd4bf]' : 'bg-gray-600'}`}></div>N</button>
                   <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
@@ -1958,7 +1969,7 @@ export default function App() {
                       </thead>
                       <tbody>
                         {[
-                          { label: 'KOSPI', key: 'kospi', color: 'text-yellow-400' },
+                          { label: 'KOSPI', key: 'kospi', color: 'text-orange-400' },
                           { label: 'S&P500', key: 'sp500', color: 'text-purple-400' },
                           { label: 'NASDAQ', key: 'nasdaq', color: 'text-teal-400' }
                         ].map(({ label, key, color }) => {
@@ -2071,7 +2082,7 @@ export default function App() {
                   <RechartsTooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#4b5563', color: '#ffffff', borderRadius: '8px' }} labelFormatter={formatShortDate} formatter={(value, name) => { if (name === '총자산') return [formatNumber(value), name]; return [Number(value).toFixed(2) + '%', name]; }} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
-                  {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#facc15" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
+                  {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#f97316" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
                   {showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#c084fc" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
                   {showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#2dd4bf" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
                   {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRate" name="US 10Y" stroke="#d1d5db" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}

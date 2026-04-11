@@ -1,10 +1,10 @@
 // @ts-nocheck
 import React, { useRef } from 'react';
-import { RefreshCw, X, Search, Download, FileUp } from 'lucide-react';
+import { RefreshCw, X, Search, Download, FileUp, DownloadCloud } from 'lucide-react';
 import { formatNumber, getIndexLatest } from '../utils';
 
 const INDICATOR_COLORS = {
-  kospi: '#ee9dee', sp500: '#a78bfa', nasdaq: '#2dd4bf',
+  kospi: '#f97316', sp500: '#a78bfa', nasdaq: '#2dd4bf',
   fedRate: '#f472b6', us10y: '#d1d5db', kr10y: '#9ca3af',
   goldIntl: '#eab308', goldKr: '#d97706', usdkrw: '#60a5fa', dxy: '#22d3ee',
 };
@@ -32,6 +32,7 @@ export default function MarketIndicators({
   fetchIndicatorHistory,
   appliedRange,
   onUploadIndicator,
+  onFetchAll,
 }) {
   // stooq 미지원 지표용 파일 업로드 input refs
   const fileInputRefs = useRef({});
@@ -145,6 +146,18 @@ export default function MarketIndicators({
             title="시장 지표 데이터 검증"
           >
             <Search size={10} />
+          </button>
+          {/* 조회기간 전체 지표 일괄 수집 버튼 */}
+          <button
+            onClick={onFetchAll}
+            disabled={Object.values(indicatorHistoryLoading || {}).some(Boolean)}
+            className="p-1 hover:bg-blue-900/50 rounded transition text-blue-400 hover:text-blue-200 disabled:opacity-40 disabled:cursor-not-allowed"
+            title={`조회기간 시장지표 일괄 수집 (stooq API)\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}\nUS 10Y · Gold · USDKRW · DXY → GSheet 저장`}
+          >
+            {Object.values(indicatorHistoryLoading || {}).some(Boolean)
+              ? <RefreshCw size={11} className="animate-spin" />
+              : <DownloadCloud size={11} />
+            }
           </button>
           <button
             onClick={fetchMarketIndicators}
