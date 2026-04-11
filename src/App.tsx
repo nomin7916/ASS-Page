@@ -113,11 +113,25 @@ function MainChartCustomTooltip({ active, payload, label, selectionResult, forma
           displayVal = formatNumberFn ? formatNumberFn(value) : value;
         } else {
           const pointKey = CHART_NAME_TO_POINT_KEY[name];
-          const pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
+          let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
+          // comp 종목: dataKey 기준으로 가격 조회
+          if (pointVal == null && entry.payload) {
+            const dk = entry.dataKey;
+            if (dk === 'comp1Rate') pointVal = entry.payload.comp1Point;
+            else if (dk === 'comp2Rate') pointVal = entry.payload.comp2Point;
+            else if (dk === 'comp3Rate') pointVal = entry.payload.comp3Point;
+          }
           const rateStr = Number(value).toFixed(2) + '%';
-          displayVal = pointVal != null
-            ? `${rateStr} (${Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
-            : rateStr;
+          if (pointVal != null) {
+            // 시장 지표는 소수점 2자리, 종목 가격은 정수 포맷
+            const isCompStock = ['comp1Rate','comp2Rate','comp3Rate'].includes(entry.dataKey);
+            const priceStr = isCompStock
+              ? Number(pointVal).toLocaleString()
+              : Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            displayVal = `${rateStr} (${priceStr})`;
+          } else {
+            displayVal = rateStr;
+          }
         }
 
         // 드래그 구간 수익률
