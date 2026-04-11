@@ -7,12 +7,13 @@ const INDICATOR_COLORS = {
   kospi: '#f97316', sp500: '#a78bfa', nasdaq: '#2dd4bf',
   fedRate: '#f472b6', us10y: '#d1d5db', kr10y: '#9ca3af',
   goldIntl: '#eab308', goldKr: '#d97706', usdkrw: '#60a5fa', dxy: '#22d3ee',
+  vix: '#ff6b6b',
 };
 
 // stooq 자동수집 가능한 키
-const STOOQ_SUPPORTED = ['us10y', 'goldIntl', 'usdkrw', 'dxy'];
+const STOOQ_SUPPORTED = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix'];
 // 차트에 표시 가능한 키 (goldKr 제외)
-const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'fedRate'];
+const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'fedRate', 'vix'];
 
 export default function MarketIndicators({
   marketIndicators,
@@ -123,6 +124,12 @@ export default function MarketIndicators({
       val: marketIndicators.dxy, chg: marketIndicators.dxyChg,
       fmt: (v) => v?.toFixed(3), color: 'text-cyan-400',
       url: 'https://tradingeconomics.com/united-states/currency',
+    },
+    {
+      label: 'VIX', key: 'vix',
+      val: marketIndicators.vix, chg: marketIndicators.vixChg,
+      fmt: (v) => v?.toFixed(2), color: 'text-red-400',
+      url: 'https://finance.yahoo.com/quote/%5EVIX/', sep: true,
     },
   ];
 
@@ -337,6 +344,7 @@ export default function MarketIndicators({
                 { label: '국내 금', key: 'goldKr',  val: marketIndicators.goldKr,     url: 'https://m.stock.naver.com/marketindex/metals/M04020000',                  histKey: null },
                 { label: 'USDKRW', key: 'usdkrw',  val: marketIndicators.usdkrw,     url: 'https://tradingeconomics.com/south-korea/currency',                       histKey: 'usdkrw' },
                 { label: 'DXY',    key: 'dxy',      val: marketIndicators.dxy,        url: 'https://tradingeconomics.com/united-states/currency',                     histKey: 'dxy' },
+                { label: 'VIX',    key: 'vix',      val: marketIndicators.vix,        url: 'https://finance.yahoo.com/quote/%5EVIX/',                                 histKey: 'vix' },
               ].map((item, i) => {
                 const st = indicatorFetchStatus[item.key];
                 const hasBackup = item.val !== null && item.val !== undefined;

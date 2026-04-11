@@ -110,7 +110,7 @@ export default function App() {
   const [showSp500, setShowSp500] = useState(false);
   const [showNasdaq, setShowNasdaq] = useState(false);
   const [showIndicatorsInChart, setShowIndicatorsInChart] = useState({
-    us10y: false, kr10y: false, goldIntl: false, usdkrw: false, dxy: false, fedRate: false
+    us10y: false, kr10y: false, goldIntl: false, usdkrw: false, dxy: false, fedRate: false, vix: false
   });
   const [indicatorHistoryLoading, setIndicatorHistoryLoading] = useState({});
   
@@ -136,7 +136,8 @@ export default function App() {
     kospiPrice: null, sp500Price: null, nasdaqPrice: null,
     us10yChg: null, kr10yChg: null, usdkrwChg: null, dxyChg: null, goldIntlChg: null, goldKrChg: null,
     kospiChg: null, sp500Chg: null, nasdaqChg: null,
-    fedRate: null, fedRateChg: null
+    fedRate: null, fedRateChg: null,
+    vix: null, vixChg: null
   });
   const [indicatorLoading, setIndicatorLoading] = useState(false);
   const [indicatorFetchStatus, setIndicatorFetchStatus] = useState({});
@@ -382,6 +383,26 @@ export default function App() {
         } catch(e) {}
       }
       statusMap['fedRate'] = { status: 'fail', source: 'TE 실패', updatedAt: now }; return { price: null, change: null };
+    },
+    vix: async (now, statusMap) => {
+      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?range=1d&interval=1d`;
+      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
+      for (const proxy of proxies) {
+        try {
+          const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+          if (!res.ok) continue;
+          const json = await res.json();
+          const meta = json?.chart?.result?.[0]?.meta;
+          if (meta?.regularMarketPrice) {
+            const price = meta.regularMarketPrice;
+            const prevClose = meta.chartPreviousClose || meta.previousClose;
+            const change = prevClose ? ((price / prevClose) - 1) * 100 : null;
+            statusMap['vix'] = { status: 'success', source: 'Yahoo', updatedAt: now };
+            return { price, change };
+          }
+        } catch(e) {}
+      }
+      statusMap['vix'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
     }
   };
 
@@ -473,11 +494,12 @@ export default function App() {
     dxy: 'dxy.f',
     kr10y: null,   // 무료 소스 없음
     fedRate: null, // 계단식 데이터 - 무료 소스 없음
+    vix: '^vix',
   };
 
   const INDICATOR_LABELS = {
     us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold',
-    usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리',
+    usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리', vix: 'VIX',
   };
 
   // stooq에서 과거 데이터 CSV 가져오기
@@ -729,7 +751,7 @@ export default function App() {
     return unifiedDates.filter(d => d >= appliedRange.start && d <= appliedRange.end);
   }, [unifiedDates, appliedRange]);
 
-  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'fedRate'];
+  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'fedRate', 'vix'];
 
   const indexDataMap = useMemo(() => {
     const map = {};
@@ -1168,6 +1190,7 @@ export default function App() {
               if (fn.includes('NASDAQ100') || fn.includes('NASDAQ')) return 'NASDAQ100';
               if (fn.includes('SP500') || fn.includes('S&P500')) return 'SP500';
               if (fn.includes('KOSPI')) return 'KOSPI';
+              if (fn.includes('VIX')) return 'VIX_INDEX';
               return null;
             };
             const marketKey = detectMarketKey(upperFN);
@@ -1249,6 +1272,11 @@ export default function App() {
                 setMarketIndicators(prev => ({ ...prev, fedRate: latest, fedRateChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, fedRate: formattedData }));
                 showToast(`[시장지표] 미국 기준금리 주입 완료 (${count}건, 최신: ${latest?.toFixed(2)}%)`);
+              } else if (cu === 'VIX_INDEX') {
+                const { latest, chg, count } = getLatestChg(formattedData);
+                setMarketIndicators(prev => ({ ...prev, vix: latest, vixChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, vix: formattedData }));
+                showToast(`[시장지표] VIX 주입 완료 (${count}건, 최신: ${latest?.toFixed(2)})`);
               } else {
                 setStockHistoryMap(prev => ({ ...prev, [code]: formattedData }));
                 showToast(`[종목] ${code || fileName} 데이터 주입 완료`);
@@ -2099,6 +2127,7 @@ export default function App() {
                   {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRate" name="DXY" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRate" name="기준금리" stroke="#f472b6" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="left" type="monotone" dataKey="kr10yRate" name="KR 10Y" stroke="#9ca3af" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Line yAxisId="left" type="monotone" dataKey="vixRate" name="VIX" stroke="#ff6b6b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke="#10B981" strokeWidth={1.5} dot={false} />}
                   {compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke="#06B6D4" strokeWidth={1.5} dot={false} />}
                   {compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke="#FB923C" strokeWidth={1.5} dot={false} />}
