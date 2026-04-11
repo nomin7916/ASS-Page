@@ -784,7 +784,10 @@ export default function App() {
         }
       });
 
-      if (i === 0) { baseK = kPoint; baseS = sPoint; baseN = nPoint; baseComps = [c1, c2, c3]; }
+      if (i === 0) { baseK = kPoint; baseS = sPoint; baseN = nPoint; }
+      if (baseComps[0] === null && c1 != null) baseComps[0] = c1;
+      if (baseComps[1] === null && c2 != null) baseComps[1] = c2;
+      if (baseComps[2] === null && c3 != null) baseComps[2] = c3;
       map[dateStr] = {
         kospiPoint: kPoint, sp500Point: sPoint, nasdaqPoint: nPoint,
         comp1Point: c1, comp2Point: c2, comp3Point: c3,
@@ -1201,7 +1204,7 @@ export default function App() {
             } else {
               const exactMatch = fileName.match(/STOCK_([a-zA-Z0-9]+)_/i);
               if (exactMatch?.[1]) code = exactMatch[1];
-              else { const fm = fileName.match(/[a-zA-Z0-9]{4,6}/); code = fm ? fm[0] : ""; }
+              else { const fm = fileName.match(/[0-9]{5}[A-Za-z0-9]|[0-9]{6}/); code = fm ? fm[0] : (fileName.match(/[a-zA-Z0-9]{4,6}/)?.[0] ?? ""); }
             }
 
             const formattedData = {};
@@ -2094,19 +2097,20 @@ export default function App() {
                   <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="left" stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
                   {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
-                  <RechartsTooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#4b5563', color: '#ffffff', borderRadius: '8px' }} labelFormatter={formatShortDate} formatter={(value, name) => { if (name === '총자산') return [formatNumber(value), name]; return [Number(value).toFixed(2) + '%', name]; }} />
+                  <YAxis yAxisId="indicatorRight" orientation="right" stroke="#a1a1aa" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+                  <RechartsTooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#4b5563', color: '#ffffff', borderRadius: '8px' }} labelFormatter={formatShortDate} formatter={(value, name, item) => { if (name === '총자산') return [formatNumber(value), name]; if (item?.dataKey?.endsWith('Point')) return [Number(value).toFixed(2), name]; return [Number(value).toFixed(2) + '%', name]; }} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#ff9500" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
                   {showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
                   {showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
-                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRate" name="US 10Y" stroke="#8e8e93" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRate" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRate" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRate" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRate" name="기준금리" stroke="#ff375f" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="left" type="monotone" dataKey="kr10yRate" name="KR 10Y" stroke="#636366" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Area yAxisId="left" type="monotone" dataKey="vixRate" name="VIX" stroke="#ff453a" strokeWidth={1.5} fill="url(#vixGradient)" strokeDasharray="4 2" connectNulls dot={false} />}
+                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="indicatorRight" type="monotone" dataKey="us10yPoint" name="US 10Y" stroke="#8e8e93" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="indicatorRight" type="monotone" dataKey="goldIntlPoint" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="indicatorRight" type="monotone" dataKey="usdkrwPoint" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="indicatorRight" type="monotone" dataKey="dxyPoint" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="indicatorRight" type="monotone" dataKey="fedRatePoint" name="기준금리" stroke="#ff375f" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="indicatorRight" type="monotone" dataKey="kr10yPoint" name="KR 10Y" stroke="#636366" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Area yAxisId="indicatorRight" type="monotone" dataKey="vixPoint" name="VIX" stroke="#ff453a" strokeWidth={1.5} fill="url(#vixGradient)" strokeDasharray="4 2" connectNulls dot={false} />}
                   {compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke="#32d74b" strokeWidth={1.5} dot={false} />}
                   {compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke="#64d2ff" strokeWidth={1.5} dot={false} />}
                   {compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke="#ff9f0a" strokeWidth={1.5} dot={false} />}
