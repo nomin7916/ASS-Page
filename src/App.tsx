@@ -104,19 +104,23 @@ function MainChartCustomTooltip({ active, payload, label, selectionResult, forma
       )}
       {payload.map((entry, i) => {
         const name = entry.name;
-        const value = entry.value;
-        if (value == null) return null;
+        const rawValue = entry.value;
+        if (rawValue == null) return null;
+        // scaled dataKey면 원본 Rate 값으로 복원해 표시
+        const dk = entry.dataKey;
+        const value = dk?.endsWith('RateScaled')
+          ? (entry.payload?.[dk.replace('RateScaled', 'Rate')] ?? rawValue)
+          : rawValue;
 
         // 현재값 포맷
         let displayVal;
         if (name === '총자산') {
-          displayVal = formatNumberFn ? formatNumberFn(value) : value;
+          displayVal = formatNumberFn ? formatNumberFn(rawValue) : rawValue;
         } else {
           const pointKey = CHART_NAME_TO_POINT_KEY[name];
           let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
           // comp 종목: dataKey 기준으로 가격 조회
           if (pointVal == null && entry.payload) {
-            const dk = entry.dataKey;
             if (dk === 'comp1Rate') pointVal = entry.payload.comp1Point;
             else if (dk === 'comp2Rate') pointVal = entry.payload.comp2Point;
             else if (dk === 'comp3Rate') pointVal = entry.payload.comp3Point;
@@ -145,7 +149,6 @@ function MainChartCustomTooltip({ active, payload, label, selectionResult, forma
             periodRate = selectionResult.rate;
           } else if (entry.payload) {
             // comp 종목: name이 compStocks의 이름과 매칭 → dataKey로 판별
-            const dk = entry.dataKey;
             if (dk === 'comp1Rate' && selectionResult.comp1PeriodRate != null) periodRate = selectionResult.comp1PeriodRate;
             else if (dk === 'comp2Rate' && selectionResult.comp2PeriodRate != null) periodRate = selectionResult.comp2PeriodRate;
             else if (dk === 'comp3Rate' && selectionResult.comp3PeriodRate != null) periodRate = selectionResult.comp3PeriodRate;
@@ -352,16 +355,7 @@ export default function App() {
   const [showIndicatorsInChart, setShowIndicatorsInChart] = useState({
     us10y: false, kr10y: false, goldIntl: false, usdkrw: false, dxy: false, fedRate: false, vix: false
   });
-  const [isYAxisSettingOpen, setIsYAxisSettingOpen] = useState(false);
-  const [customYAxisDomains, setCustomYAxisDomains] = useState({
-    us10y:   { min: '', max: '' },
-    goldIntl: { min: '', max: '' },
-    usdkrw:  { min: '', max: '' },
-    dxy:     { min: '', max: '' },
-    fedRate: { min: '', max: '' },
-    kr10y:   { min: '', max: '' },
-    vix:     { min: '', max: '' },
-  });
+  const [indicatorScale, setIndicatorScale] = useState(1);
   const [indicatorHistoryLoading, setIndicatorHistoryLoading] = useState({});
   
   const [marketIndices, setMarketIndices] = useState({ kospi: null, sp500: null, nasdaq: null });
@@ -1075,30 +1069,39 @@ export default function App() {
       }
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate };
     });
-    if (!isZeroBaseMode || rawData.length === 0) return rawData;
-    const baseItem = rawData[0];
-    return rawData.map(item => {
-      const indRates = {};
-      INDICATOR_CHART_KEYS.forEach(k => {
-        const basePoint = baseItem[`${k}Point`];
-        const curPoint = item[`${k}Point`];
-        if (basePoint > 0 && curPoint != null) {
-          indRates[`${k}Rate`] = ((curPoint / basePoint) - 1) * 100;
-        }
+    const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
+      const baseItem = rawData[0];
+      return rawData.map(item => {
+        const indRates = {};
+        INDICATOR_CHART_KEYS.forEach(k => {
+          const basePoint = baseItem[`${k}Point`];
+          const curPoint = item[`${k}Point`];
+          if (basePoint > 0 && curPoint != null) {
+            indRates[`${k}Rate`] = ((curPoint / basePoint) - 1) * 100;
+          }
+        });
+        return {
+          ...item,
+          returnRate: baseItem.evalAmount > 0 ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : 0,
+          kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
+          sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
+          nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
+          comp1Rate: baseItem.comp1Point > 0 ? ((item.comp1Point / baseItem.comp1Point) - 1) * 100 : 0,
+          comp2Rate: baseItem.comp2Point > 0 ? ((item.comp2Point / baseItem.comp2Point) - 1) * 100 : 0,
+          comp3Rate: baseItem.comp3Point > 0 ? ((item.comp3Point / baseItem.comp3Point) - 1) * 100 : 0,
+          ...indRates,
+        };
       });
-      return {
-        ...item,
-        returnRate: baseItem.evalAmount > 0 ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : 0,
-        kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
-        sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
-        nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
-        comp1Rate: baseItem.comp1Point > 0 ? ((item.comp1Point / baseItem.comp1Point) - 1) * 100 : 0,
-        comp2Rate: baseItem.comp2Point > 0 ? ((item.comp2Point / baseItem.comp2Point) - 1) * 100 : 0,
-        comp3Rate: baseItem.comp3Point > 0 ? ((item.comp3Point / baseItem.comp3Point) - 1) * 100 : 0,
-        ...indRates,
-      };
+    })();
+    return zeroBasedData.map(item => {
+      const scaled = {};
+      INDICATOR_CHART_KEYS.forEach(k => {
+        const r = item[`${k}Rate`];
+        if (r != null) scaled[`${k}RateScaled`] = r * indicatorScale;
+      });
+      return { ...item, ...scaled };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScale]);
 
   const rebalanceData = useMemo(() => {
     const overallExp = cleanNum(totals.totalEval) + cleanNum(settings.amount);
@@ -2238,16 +2241,23 @@ export default function App() {
                   <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
                   <button onClick={() => setIsZeroBaseMode(!isZeroBaseMode)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${isZeroBaseMode ? 'bg-green-900/50 text-green-400 border border-green-500/50 shadow-inner' : 'bg-transparent text-gray-500 hover:bg-gray-800 border border-gray-700'}`} title="조회 시작일을 0% 기준으로 차트 재정렬"><Activity size={14} className={isZeroBaseMode ? 'text-green-400' : 'text-gray-500'} /></button>
                 </div>
-                {/* Y축 설정 버튼 */}
-                <div>
-                  <button
-                    onClick={() => setIsYAxisSettingOpen(v => !v)}
-                    className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${isYAxisSettingOpen ? 'bg-indigo-900/50 text-indigo-300 border border-indigo-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}
-                    title="우Y축 범위 직접 설정"
-                  >
-                    <Settings size={12} />
-                    <span>Y축</span>
-                  </button>
+                {/* 지표 변동폭 배율 슬라이더 */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-500 shrink-0">지표 배율</span>
+                  <input
+                    type="range"
+                    min="1"
+                    max="20"
+                    step="1"
+                    value={indicatorScale}
+                    onChange={e => setIndicatorScale(Number(e.target.value))}
+                    className="w-20 accent-indigo-500 cursor-pointer"
+                    title="시장 지표 변동폭 배율 조정"
+                  />
+                  <span className="text-[10px] font-bold text-indigo-300 w-6 text-right shrink-0">x{indicatorScale}</span>
+                  {indicatorScale !== 1 && (
+                    <button onClick={() => setIndicatorScale(1)} className="text-gray-600 hover:text-gray-300 transition" title="초기화"><X size={10} /></button>
+                  )}
                 </div>
               </div>
 
@@ -2366,32 +2376,32 @@ export default function App() {
                   <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="left" stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
                   {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
-                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={[customYAxisDomains.us10y.min !== '' ? Number(customYAxisDomains.us10y.min) : 'dataMin', customYAxisDomains.us10y.max !== '' ? Number(customYAxisDomains.us10y.max) : 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke="#ffd60a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={[customYAxisDomains.goldIntl.min !== '' ? Number(customYAxisDomains.goldIntl.min) : 'dataMin', customYAxisDomains.goldIntl.max !== '' ? Number(customYAxisDomains.goldIntl.max) : 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ffd60a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <YAxis yAxisId="right-usdkrw" orientation="right" stroke="#0a84ff" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={[customYAxisDomains.usdkrw.min !== '' ? Number(customYAxisDomains.usdkrw.min) : 'dataMin', customYAxisDomains.usdkrw.max !== '' ? Number(customYAxisDomains.usdkrw.max) : 'dataMax']}><Label value="USD/KRW" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#0a84ff', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <YAxis yAxisId="right-dxy" orientation="right" stroke="#5ac8fa" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={52} domain={[customYAxisDomains.dxy.min !== '' ? Number(customYAxisDomains.dxy.min) : 'dataMin', customYAxisDomains.dxy.max !== '' ? Number(customYAxisDomains.dxy.max) : 'dataMax']}><Label value="DXY" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#5ac8fa', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <YAxis yAxisId="right-fedRate" orientation="right" stroke="#ff375f" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={54} domain={[customYAxisDomains.fedRate.min !== '' ? Number(customYAxisDomains.fedRate.min) : 'dataMin', customYAxisDomains.fedRate.max !== '' ? Number(customYAxisDomains.fedRate.max) : 'dataMax']}><Label value="기준금리" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff375f', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <YAxis yAxisId="right-kr10y" orientation="right" stroke="#636366" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={52} domain={[customYAxisDomains.kr10y.min !== '' ? Number(customYAxisDomains.kr10y.min) : 'dataMin', customYAxisDomains.kr10y.max !== '' ? Number(customYAxisDomains.kr10y.max) : 'dataMax']}><Label value="KR 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#636366', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <YAxis yAxisId="right-vix" orientation="right" stroke="#ff453a" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={48} domain={[customYAxisDomains.vix.min !== '' ? Number(customYAxisDomains.vix.min) : 'dataMin', customYAxisDomains.vix.max !== '' ? Number(customYAxisDomains.vix.max) : 'dataMax']}><Label value="VIX" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff453a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={['dataMin', 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke="#ffd60a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ffd60a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <YAxis yAxisId="right-usdkrw" orientation="right" stroke="#0a84ff" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="USD/KRW" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#0a84ff', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <YAxis yAxisId="right-dxy" orientation="right" stroke="#5ac8fa" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={52} domain={['dataMin', 'dataMax']}><Label value="DXY" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#5ac8fa', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <YAxis yAxisId="right-fedRate" orientation="right" stroke="#ff375f" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={54} domain={['dataMin', 'dataMax']}><Label value="기준금리" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff375f', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <YAxis yAxisId="right-kr10y" orientation="right" stroke="#636366" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={52} domain={['dataMin', 'dataMax']}><Label value="KR 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#636366', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <YAxis yAxisId="right-vix" orientation="right" stroke="#ff453a" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={48} domain={['dataMin', 'dataMax']}><Label value="VIX" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff453a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   <RechartsTooltip content={<MainChartCustomTooltip selectionResult={selectionResult} formatShortDateFn={formatShortDate} formatNumberFn={formatNumber} />} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#00f3ff" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
                   {showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
                   {showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
-                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRate" name="US 10Y" stroke="#8e8e93" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRateScaled" name="US 10Y" stroke="#8e8e93" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="right-us10y" dataKey="us10yPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
-                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRate" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRateScaled" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="right-goldIntl" dataKey="goldIntlPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
-                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRate" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRateScaled" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="right-usdkrw" dataKey="usdkrwPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
-                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRate" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRateScaled" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="right-dxy" dataKey="dxyPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
-                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRate" name="기준금리" stroke="#ff375f" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRateScaled" name="기준금리" stroke="#ff375f" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="right-fedRate" dataKey="fedRatePoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
-                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="left" type="monotone" dataKey="kr10yRate" name="KR 10Y" stroke="#636366" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="left" type="monotone" dataKey="kr10yRateScaled" name="KR 10Y" stroke="#636366" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="right-kr10y" dataKey="kr10yPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
-                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Area yAxisId="left" type="monotone" dataKey="vixRate" name="VIX" stroke="#ff453a" strokeWidth={1.5} fill="url(#vixGradient)" strokeDasharray="4 2" connectNulls dot={false} />}
+                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Area yAxisId="left" type="monotone" dataKey="vixRateScaled" name="VIX" stroke="#ff453a" strokeWidth={1.5} fill="url(#vixGradient)" strokeDasharray="4 2" connectNulls dot={false} />}
                   {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Line yAxisId="right-vix" dataKey="vixPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
                   {compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke={compStocks[0].color || '#10b981'} strokeWidth={1.5} dot={false} />}
                   {compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke={compStocks[1].color || '#0ea5e9'} strokeWidth={1.5} dot={false} />}
@@ -2450,77 +2460,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Y축 범위 설정 모달 */}
-      {isYAxisSettingOpen && (() => {
-        const dataKeyMap = { us10y: 'us10yPoint', goldIntl: 'goldIntlPoint', usdkrw: 'usdkrwPoint', dxy: 'dxyPoint', fedRate: 'fedRatePoint', kr10y: 'kr10yPoint', vix: 'vixPoint' };
-        const indicators = [
-          { key: 'us10y',    label: 'US 10Y',  color: '#8e8e93', show: showIndicatorsInChart.us10y   && !!indicatorHistoryMap.us10y },
-          { key: 'goldIntl', label: 'Gold',    color: '#ffd60a', show: showIndicatorsInChart.goldIntl && !!indicatorHistoryMap.goldIntl },
-          { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff', show: showIndicatorsInChart.usdkrw  && !!indicatorHistoryMap.usdkrw },
-          { key: 'dxy',     label: 'DXY',     color: '#5ac8fa', show: showIndicatorsInChart.dxy     && !!indicatorHistoryMap.dxy },
-          { key: 'fedRate', label: '기준금리', color: '#ff375f', show: showIndicatorsInChart.fedRate && !!indicatorHistoryMap.fedRate },
-          { key: 'kr10y',   label: 'KR 10Y',  color: '#636366', show: showIndicatorsInChart.kr10y   && !!indicatorHistoryMap.kr10y },
-          { key: 'vix',     label: 'VIX',     color: '#ff453a', show: showIndicatorsInChart.vix     && !!indicatorHistoryMap.vix },
-        ].filter(item => item.show).map(item => {
-          const vals = finalChartData.map(d => d[dataKeyMap[item.key]]).filter(v => v != null && !isNaN(v));
-          return { ...item, dataMin: vals.length ? Math.min(...vals) : null, dataMax: vals.length ? Math.max(...vals) : null };
-        });
-        return (
-          <div className="fixed inset-0 flex items-center justify-center z-[400] bg-black/50 backdrop-blur-sm" onClick={() => setIsYAxisSettingOpen(false)}>
-            <div className="w-80 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-5 animate-in fade-in zoom-in-95" onClick={e => e.stopPropagation()}>
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-[12px] font-bold text-indigo-300 flex items-center gap-1.5"><Settings size={12} />우Y축 범위 설정</span>
-                <button onClick={() => setIsYAxisSettingOpen(false)} className="text-gray-500 hover:text-white transition"><X size={14} /></button>
-              </div>
-              <p className="text-[10px] text-gray-500 mb-4">빈칸으로 두면 데이터 범위(자동)로 표시됩니다.</p>
-              {indicators.length === 0 ? (
-                <p className="text-[10px] text-gray-600 text-center py-4">활성화된 지표가 없습니다.</p>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  <div className="grid grid-cols-[4rem_1fr_0.3rem_1fr_1rem] gap-x-1.5 items-center mb-1">
-                    <span className="text-[9px] text-gray-600"></span>
-                    <span className="text-[9px] text-gray-500 text-center">Min</span>
-                    <span></span>
-                    <span className="text-[9px] text-gray-500 text-center">Max</span>
-                    <span></span>
-                  </div>
-                  {indicators.map(({ key, label, color, dataMin, dataMax }) => (
-                    <div key={key} className="grid grid-cols-[4rem_1fr_0.3rem_1fr_1rem] gap-x-1.5 items-center">
-                      <span className="text-[10px] font-bold truncate" style={{ color }}>{label}</span>
-                      <input
-                        type="number"
-                        placeholder={dataMin != null ? String(+dataMin.toFixed(4)) : 'Min'}
-                        value={customYAxisDomains[key].min}
-                        onChange={e => setCustomYAxisDomains(prev => ({ ...prev, [key]: { ...prev[key], min: e.target.value } }))}
-                        className="bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-indigo-500 transition text-center w-full"
-                      />
-                      <span className="text-gray-600 text-[9px] text-center">~</span>
-                      <input
-                        type="number"
-                        placeholder={dataMax != null ? String(+dataMax.toFixed(4)) : 'Max'}
-                        value={customYAxisDomains[key].max}
-                        onChange={e => setCustomYAxisDomains(prev => ({ ...prev, [key]: { ...prev[key], max: e.target.value } }))}
-                        className="bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-indigo-500 transition text-center w-full"
-                      />
-                      <button
-                        onClick={() => setCustomYAxisDomains(prev => ({ ...prev, [key]: { min: '', max: '' } }))}
-                        className="text-gray-600 hover:text-red-400 transition flex items-center justify-center"
-                        title="초기화"
-                      ><X size={10} /></button>
-                    </div>
-                  ))}
-                  <div className="border-t border-gray-800 mt-1 pt-2 flex justify-end">
-                    <button
-                      onClick={() => setCustomYAxisDomains({ us10y: { min: '', max: '' }, goldIntl: { min: '', max: '' }, usdkrw: { min: '', max: '' }, dxy: { min: '', max: '' }, fedRate: { min: '', max: '' }, kr10y: { min: '', max: '' }, vix: { min: '', max: '' } })}
-                      className="text-[10px] text-gray-500 hover:text-red-400 transition"
-                    >전체 초기화</button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })()}
 
       {isPasteModalOpen && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[300] animate-in fade-in backdrop-blur-sm">
