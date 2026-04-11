@@ -533,55 +533,6 @@ export default function App() {
     return parsedData;
   };
 
-  // CSV / JSON 파일 직접 업로드로 지표 히스토리 주입 (stooq 미지원 지표용)
-  const handleIndicatorUpload = (key, file) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const content = e.target?.result;
-      if (typeof content !== 'string') return;
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      let parsedData = null;
-
-      try {
-        if (ext === 'csv') {
-          parsedData = parseIndexCSV(content, file.name);
-        } else if (ext === 'json') {
-          const raw = JSON.parse(content);
-          const arr = raw.data ?? raw;
-          if (Array.isArray(arr)) {
-            parsedData = {};
-            arr.forEach(item => {
-              const d = (item.Date ?? item.date ?? item.index ?? '').substring(0, 10);
-              const v = item.Close ?? item.Value ?? item.close ?? item.value;
-              if (d && v != null && d !== '1970-01-01') parsedData[d] = Number(v);
-            });
-          }
-        }
-      } catch (err) {
-        showToast(`${file.name} 파싱 실패`, true);
-        return;
-      }
-
-      if (!parsedData || Object.keys(parsedData).length === 0) {
-        showToast(`${file.name}: 유효 데이터 없음`, true);
-        return;
-      }
-
-      setIndicatorHistoryMap(prev => ({ ...prev, [key]: { ...(prev[key] || {}), ...parsedData } }));
-      showToast(`${INDICATOR_LABELS[key] || key} 히스토리 ${Object.keys(parsedData).length}건 업로드 완료`);
-
-      // Google Sheets 백업
-      try {
-        await fetch(GSHEET_URL, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'saveIndicatorHistory', key, data: parsedData }),
-        });
-      } catch (err) { console.warn('GSheet 지표 히스토리 백업 실패:', err); }
-    };
-    reader.readAsText(file);
-  };
-
   const fetchMarketIndicators = async () => {
     setIndicatorLoading(true);
     const statusMap = {};
@@ -1536,7 +1487,7 @@ export default function App() {
       if (gsheetTimer.current) clearTimeout(gsheetTimer.current);
       gsheetTimer.current = setTimeout(() => saveToGSheet(state), 5000);
     }
-  }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate]);
+  }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
@@ -1862,8 +1813,6 @@ export default function App() {
             setShowIndicatorsInChart={setShowIndicatorsInChart}
             indicatorHistoryLoading={indicatorHistoryLoading}
             fetchIndicatorHistory={fetchIndicatorHistory}
-            appliedRange={appliedRange}
-            onUploadIndicator={handleIndicatorUpload}
           />
 
           {/* 차트 본체 */}

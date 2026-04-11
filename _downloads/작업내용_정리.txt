@@ -1,0 +1,143 @@
+================================================================================
+  ASS-Page 시장 지표 (MarketIndicators) 개선 작업 정리
+  작업일: 2026-04-11
+================================================================================
+
+■ 작업 개요
+────────────────────────────────────────────────────────────────────────────────
+기존에 인라인으로 작성된 시장 지표 패널을 독립 컴포넌트로 분리하고,
+아래 3가지 기능을 추가/변경하였습니다.
+
+
+■ 수정 1 │ 지표 이름 클릭 → 메인 차트에 라인 표시
+────────────────────────────────────────────────────────────────────────────────
+[변경 전]
+  - KOSPI / S&P500 / Nasdaq 이름 클릭 → 주 차트 토글 (이 3개만)
+  - 나머지 지표(US10Y, Gold 등)는 클릭해도 아무 반응 없었음
+
+[변경 후]
+  - 모든 지표 이름 클릭 → 우측 메인 차트에 % 변화율 라인으로 표시
+  - 히스토리 데이터가 없는 경우 → 자동으로 stooq.com API에서 수집 후 표시
+  - 차트에 표시 중인 지표는 이름에 색상 강조 + 밑줄 표시
+  - KOSPI / S&P500 / Nasdaq 기존 토글은 그대로 유지 (이름 클릭으로 동작)
+
+[지원 지표 및 데이터 소스]
+  지표명       | 자동수집 여부 | stooq 심볼
+  -------------|---------------|------------------
+  KOSPI        | 기존 방식     | -
+  S&P500       | 기존 방식     | -
+  Nasdaq100    | 기존 방식     | -
+  US 10Y       | 자동수집 O    | tnx.us
+  Gold (국제)  | 자동수집 O    | xauusd.oanda
+  USDKRW       | 자동수집 O    | usdkrw.fx
+  DXY          | 자동수집 O    | dxy.f
+  KR 10Y       | 자동수집 X    | 무료 소스 없음 → CSV 업로드
+  미국 기준금리 | 자동수집 X   | 무료 소스 없음 → CSV 업로드
+  국내 금      | 자동수집 X    | - (현재가만 제공)
+
+[차트 표시 방식]
+  - 모든 지표는 "기준 시점 대비 % 변화율"로 정규화하여 표시
+  - 서로 다른 단위(%, $, ₩)를 하나의 차트에서 비교 가능
+  - 라인 스타일: 점선(strokeDasharray 4 2), 두께 1.5px
+
+
+■ 수정 2 │ 지표 수치 클릭 → 해당 사이트 링크 이동
+────────────────────────────────────────────────────────────────────────────────
+[변경 전]
+  - 지표 이름 클릭 → 외부 사이트 이동 (KOSPI 등 일부 제외)
+
+[변경 후]
+  - 지표 이름 클릭 → 차트 토글 (수정1)
+  - 지표 수치(오른쪽 숫자) 클릭 → 해당 외부 사이트 이동
+  - 상태 점(●) 클릭 → 해당 외부 사이트 이동 (기존 유지)
+
+[연결 URL 목록]
+  KOSPI        → https://m.stock.naver.com/domestic/index/KOSPI/total
+  S&P500       → https://m.stock.naver.com/worldstock/index/.INX/total
+  Nasdaq100    → https://m.stock.naver.com/worldstock/index/.IXIC/total
+  미국 기준금리 → https://tradingeconomics.com/united-states/interest-rate
+  US 10Y       → https://tradingeconomics.com/united-states/government-bond-yield
+  KR 10Y       → https://tradingeconomics.com/south-korea/government-bond-yield
+  Gold         → https://tradingeconomics.com/commodity/gold
+  국내 금      → https://m.stock.naver.com/marketindex/metals/M04020000
+  USDKRW       → https://tradingeconomics.com/south-korea/currency
+  DXY          → https://tradingeconomics.com/united-states/currency
+
+
+■ 수정 3 │ 과거 데이터 자동 수집 + Google Sheets 백업
+────────────────────────────────────────────────────────────────────────────────
+[흐름]
+  1. 지표 이름 클릭
+  2. indicatorHistoryMap에 해당 지표 데이터 없음 확인
+  3. stooq.com API에서 CSV 자동 수집 (CORS 프록시 경유)
+     - 1차: api.allorigins.win 프록시
+     - 2차: api.codetabs.com 프록시 (폴백)
+  4. 수집된 데이터를 indicatorHistoryMap 상태에 저장
+  5. Google Sheets Apps Script로 POST 전송하여 백업
+  6. 이후 페이지 로드 시 GSheet에서 자동 복원
+
+[수집 기간]
+  - 기본: 현재 설정된 appliedRange (조회 기간)
+  - 기간 미설정 시: 최근 3년치 자동 수집
+
+[로딩 표시]
+  - 수집 중인 지표 이름 옆에 스피너(회전 아이콘) 표시
+
+[Google Sheets 수정 필요]
+  → _downloads/AppScript_추가코드.js 파일 참고
+
+
+■ 변경된 파일 목록
+────────────────────────────────────────────────────────────────────────────────
+1. src/components/MarketIndicators.tsx  ← 신규 생성 (기존 인라인 → 컴포넌트 분리)
+2. src/App.tsx                          ← 아래 항목 수정
+
+   [App.tsx 주요 변경 내용]
+   - import MarketIndicators 추가
+   - 상태(state) 추가:
+       showIndicatorsInChart  : { us10y, kr10y, goldIntl, usdkrw, dxy, fedRate }
+       indicatorHistoryMap    : { [key]: { [date]: value } }
+       indicatorHistoryLoading: { [key]: boolean }
+   - INDICATOR_CHART_KEYS 상수 추가
+   - fetchIndicatorHistory() 함수 추가 (stooq + GSheet 백업)
+   - unifiedDates useMemo: indicatorHistoryMap 날짜도 포함
+   - indexDataMap useMemo: 지표별 Point/Rate 계산 추가
+   - finalChartData useMemo: isZeroBaseMode 시 지표 Rate 정규화 추가
+   - ComposedChart: 지표별 Line 컴포넌트 6개 추가
+   - 저장/복원(handleSave, loadFromGSheet 등): indicatorHistoryMap 포함
+   - 파일 업로드 핸들러: Gold/USDKRW/US10Y/FedRate 업로드 시 indicatorHistoryMap도 저장
+   - 차트 툴바: K/S/N 버튼 추가 (KOSPI/S&P500/Nasdaq 주 차트 단독 토글)
+   - <MarketIndicators> 컴포넌트에 새 props 전달
+
+
+■ Google Sheets 수정 안내
+────────────────────────────────────────────────────────────────────────────────
+→ _downloads/AppScript_추가코드.js 파일을 Google Apps Script 편집기에서
+  기존 doGet / doPost 함수 안에 병합하여 붙여넣으면 됩니다.
+
+  추가 후 반드시 [배포 → 새 버전으로 업데이트] 하세요.
+
+
+■ 사용 방법
+────────────────────────────────────────────────────────────────────────────────
+  1. 시장 지표 패널에서 지표 이름(예: US 10Y) 클릭
+     → 히스토리 데이터 없으면 자동 수집 (수집 중 스피너 표시)
+     → 수집 완료 후 메인 차트에 % 변화율 라인으로 표시
+
+  2. 지표 수치(오른쪽 숫자, 예: 4.285%) 클릭
+     → 해당 사이트(tradingeconomics.com 등) 새 탭으로 이동
+
+  3. 차트 툴바의 K / S / N 버튼
+     → KOSPI / S&P500 / Nasdaq 주 차트 라인 단독 토글
+
+  4. CSV 파일 직접 업로드로도 히스토리 데이터 주입 가능
+     (KR 10Y, 기준금리 등 자동수집 미지원 지표)
+
+
+================================================================================
+  파일 목록 (_downloads 폴더)
+================================================================================
+  작업내용_정리.txt          ← 이 파일 (전체 작업 요약)
+  MarketIndicators_완성본.tsx ← 완성된 MarketIndicators 컴포넌트
+  AppScript_추가코드.js       ← Google Apps Script에 추가할 코드
+================================================================================
