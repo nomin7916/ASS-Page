@@ -982,9 +982,6 @@ export default function App() {
   const handleToggleComp = async (index) => {
     const comp = compStocks[index];
     if (!comp.code) return;
-    
-    // 비교 종목 데이터 호출 시 검증 패널 강제 오픈
-    setShowIndexVerify(true);
 
     if (comp.active) { setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: false }; return n; }); return; }
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
@@ -1965,10 +1962,6 @@ export default function App() {
                   <button onClick={() => setShowTotalEval(!showTotalEval)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showTotalEval ? 'bg-gray-700 text-white shadow-inner border border-gray-500' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showTotalEval ? 'bg-gray-400 shadow-[0_0_4px_#9ca3af]' : 'bg-gray-600'}`}></div>자산</button>
                   <button onClick={() => setShowReturnRate(!showReturnRate)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showReturnRate ? 'bg-red-900/50 text-red-400 border border-red-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showReturnRate ? 'bg-red-500 shadow-[0_0_4px_#ef4444]' : 'bg-gray-600'}`}></div>%</button>
                   <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
-                  <button onClick={() => setShowKospi(!showKospi)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showKospi ? 'bg-orange-900/40 text-orange-400 border border-orange-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="KOSPI 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showKospi ? 'bg-orange-400 shadow-[0_0_4px_#f97316]' : 'bg-gray-600'}`}></div>K</button>
-                  <button onClick={() => setShowSp500(!showSp500)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showSp500 ? 'bg-purple-900/40 text-purple-400 border border-purple-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="S&P500 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showSp500 ? 'bg-purple-400 shadow-[0_0_4px_#a78bfa]' : 'bg-gray-600'}`}></div>S</button>
-                  <button onClick={() => setShowNasdaq(!showNasdaq)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showNasdaq ? 'bg-teal-900/40 text-teal-400 border border-teal-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`} title="Nasdaq100 주 차트 표시/숨김"><div className={`w-2 h-2 rounded-sm ${showNasdaq ? 'bg-teal-400 shadow-[0_0_4px_#2dd4bf]' : 'bg-gray-600'}`}></div>N</button>
-                  <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
                   <button onClick={() => setIsZeroBaseMode(!isZeroBaseMode)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${isZeroBaseMode ? 'bg-green-900/50 text-green-400 border border-green-500/50 shadow-inner' : 'bg-transparent text-gray-500 hover:bg-gray-800 border border-gray-700'}`} title="조회 시작일을 0% 기준으로 차트 재정렬"><Activity size={14} className={isZeroBaseMode ? 'text-green-400' : 'text-gray-500'} /></button>
                 </div>
               </div>
@@ -1977,7 +1970,7 @@ export default function App() {
                 <div className="mt-2 border-t border-gray-700/50 pt-3 animate-in fade-in slide-in-from-top-1">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                       <span className="text-[11px] text-blue-300 font-bold">📊 지수 및 종목 데이터 검증</span>
+                       <span className="text-[11px] text-blue-300 font-bold">📊 종목 데이터 검증</span>
                        <span className="text-[10px] text-gray-500">새로고침(🔄) 버튼으로 최신 데이터 수집 | 🟢 정상 🟡 부분/구형 🔴 실패 ⚪ 미수집</span>
                     </div>
                     <button onClick={() => setShowIndexVerify(false)} className="text-gray-500 hover:text-white p-1"><X size={12} /></button>
@@ -2004,47 +1997,6 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {[
-                          { label: 'KOSPI', key: 'kospi', color: 'text-orange-400' },
-                          { label: 'S&P500', key: 'sp500', color: 'text-purple-400' },
-                          { label: 'NASDAQ', key: 'nasdaq', color: 'text-teal-400' }
-                        ].map(({ label, key, color }) => {
-                          const st = indexFetchStatus[key];
-                          const hasData = marketIndices[key] && Object.keys(marketIndices[key]).length > 0;
-                          const actualStatus = st || (hasData ? buildIndexStatus(marketIndices[key], '저장됨') : null);
-                          const statusBadge = !actualStatus ? (
-                            <span className="text-gray-500">⚪ 미수집</span>
-                          ) : actualStatus.status === 'loading' ? (
-                            <span className="text-yellow-400 animate-pulse">🔄 수집중</span>
-                          ) : actualStatus.status === 'success' ? (
-                            <span className="text-green-400">🟢 정상</span>
-                          ) : actualStatus.status === 'partial' ? (
-                            <span className="text-yellow-400">{actualStatus.source === '백업데이터' ? '🟡 백업데이터' : '🟡 부분'}</span>
-                          ) : (
-                            <span className="text-red-400">🔴 실패</span>
-                          );
-                          const gapText = actualStatus?.gapDays != null
-                            ? (actualStatus.gapDays === 0 ? '오늘' : actualStatus.gapDays <= 3 ? `${actualStatus.gapDays}일 전 (정상)` : actualStatus.gapDays <= 7 ? `${actualStatus.gapDays}일 전 ⚠️` : `${actualStatus.gapDays}일 전 ❌`)
-                            : '-';
-                          const gapColor = actualStatus?.gapDays != null
-                            ? (actualStatus.gapDays <= 3 ? 'text-green-400' : actualStatus.gapDays <= 7 ? 'text-yellow-400' : 'text-red-400')
-                            : 'text-gray-500';
-                          return (
-                            <tr key={key} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                              <td className={`py-2 px-3 font-bold ${color}`}>{label}</td>
-                              <td className="py-2 px-3 text-center">{statusBadge}</td>
-                              <td className="py-2 px-3 text-center text-gray-400">{actualStatus?.source || '-'}</td>
-                              <td className="py-2 px-3 text-right text-gray-300 font-mono">{actualStatus?.count ? `${actualStatus.count.toLocaleString()}건` : (hasData ? `${Object.keys(marketIndices[key]).length.toLocaleString()}건` : '-')}</td>
-                              <td className="py-2 px-3 text-center text-gray-300 font-mono">{actualStatus?.latestDate || (hasData ? Object.keys(marketIndices[key]).sort().pop() : '-')}</td>
-                              <td className="py-2 px-3 text-right text-white font-bold font-mono">
-                                {actualStatus?.latestValue ? actualStatus.latestValue.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : (hasData ? (() => { const dates = Object.keys(marketIndices[key]).sort(); const v = marketIndices[key][dates[dates.length-1]]; return v ? v.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '-'; })() : '-')}
-                              </td>
-                              <td className={`py-2 px-3 text-center font-bold ${gapColor}`}>{gapText}</td>
-                              <td className="py-2 px-3 text-center text-gray-500">{actualStatus?.updatedAt || '-'}</td>
-                            </tr>
-                          );
-                        })}
-                        
                         {/* 비교 종목 검증 데이터 추가 */}
                         {compStocks.filter(c => c.code && c.active).map((comp, idx) => {
                            const hist = stockHistoryMap[comp.code];
@@ -2102,15 +2054,29 @@ export default function App() {
                   <span className={`text-xs font-bold mt-1 ${selectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{selectionResult.profit >= 0 ? '+' : '-'}{formatCurrency(Math.abs(selectionResult.profit))}</span>
                   {(showKospi || showSp500 || showNasdaq) && (
                     <div className="mt-2 w-full pt-1.5 border-t border-gray-700 flex flex-col gap-0.5">
-                      {showKospi && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="text-yellow-500 font-bold">KOSPI</span><span className={`font-bold ${selectionResult.kospiPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.kospiPeriodRate > 0 ? '+' : ''}{selectionResult.kospiPeriodRate.toFixed(2)}%</span></div>}
-                      {showSp500 && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="text-purple-400 font-bold">S&P500</span><span className={`font-bold ${selectionResult.sp500PeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.sp500PeriodRate > 0 ? '+' : ''}{selectionResult.sp500PeriodRate.toFixed(2)}%</span></div>}
-                      {showNasdaq && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="text-teal-400 font-bold">NASDAQ</span><span className={`font-bold ${selectionResult.nasdaqPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.nasdaqPeriodRate > 0 ? '+' : ''}{selectionResult.nasdaqPeriodRate.toFixed(2)}%</span></div>}
+                      {showKospi && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#ff9500' }}>KOSPI</span><span className={`font-bold ${selectionResult.kospiPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.kospiPeriodRate > 0 ? '+' : ''}{selectionResult.kospiPeriodRate.toFixed(2)}%</span></div>}
+                      {showSp500 && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#bf5af2' }}>S&P500</span><span className={`font-bold ${selectionResult.sp500PeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.sp500PeriodRate > 0 ? '+' : ''}{selectionResult.sp500PeriodRate.toFixed(2)}%</span></div>}
+                      {showNasdaq && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#30d158' }}>NASDAQ</span><span className={`font-bold ${selectionResult.nasdaqPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.nasdaqPeriodRate > 0 ? '+' : ''}{selectionResult.nasdaqPeriodRate.toFixed(2)}%</span></div>}
                     </div>
                   )}
                 </div>
               )}
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseUp}>
+                  <defs>
+                    <filter id="neonGlow">
+                      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                      <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                      </feMerge>
+                    </filter>
+                    <linearGradient id="vixGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#ff453a" stopOpacity={0.3}/>
+                      <stop offset="50%" stopColor="#ff453a" stopOpacity={0.1}/>
+                      <stop offset="100%" stopColor="#ff453a" stopOpacity={0.02}/>
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
                   <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="left" stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
@@ -2118,19 +2084,19 @@ export default function App() {
                   <RechartsTooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#4b5563', color: '#ffffff', borderRadius: '8px' }} labelFormatter={formatShortDate} formatter={(value, name) => { if (name === '총자산') return [formatNumber(value), name]; return [Number(value).toFixed(2) + '%', name]; }} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
-                  {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#f97316" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
-                  {showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#c084fc" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
-                  {showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#2dd4bf" strokeWidth={1.5} dot={false} strokeDasharray="3 3" />}
-                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRate" name="US 10Y" stroke="#d1d5db" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRate" name="Gold" stroke="#eab308" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRate" name="USDKRW" stroke="#60a5fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRate" name="DXY" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRate" name="기준금리" stroke="#f472b6" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="left" type="monotone" dataKey="kr10yRate" name="KR 10Y" stroke="#9ca3af" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Line yAxisId="left" type="monotone" dataKey="vixRate" name="VIX" stroke="#ff6b6b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
-                  {compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke="#10B981" strokeWidth={1.5} dot={false} />}
-                  {compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke="#06B6D4" strokeWidth={1.5} dot={false} />}
-                  {compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke="#FB923C" strokeWidth={1.5} dot={false} />}
+                  {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#ff9500" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
+                  {showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
+                  {showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
+                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRate" name="US 10Y" stroke="#8e8e93" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRate" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRate" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRate" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRate" name="기준금리" stroke="#ff375f" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="left" type="monotone" dataKey="kr10yRate" name="KR 10Y" stroke="#636366" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Area yAxisId="left" type="monotone" dataKey="vixRate" name="VIX" stroke="#ff453a" strokeWidth={1.5} fill="url(#vixGradient)" strokeDasharray="4 2" connectNulls dot={false} />}
+                  {compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke="#32d74b" strokeWidth={1.5} dot={false} />}
+                  {compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke="#64d2ff" strokeWidth={1.5} dot={false} />}
+                  {compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke="#ff9f0a" strokeWidth={1.5} dot={false} />}
                   {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
                 </ComposedChart>
               </ResponsiveContainer>

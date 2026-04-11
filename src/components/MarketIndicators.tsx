@@ -4,10 +4,10 @@ import { RefreshCw, X, Search, Download, FileUp, DownloadCloud } from 'lucide-re
 import { formatNumber, getIndexLatest } from '../utils';
 
 const INDICATOR_COLORS = {
-  kospi: '#f97316', sp500: '#a78bfa', nasdaq: '#2dd4bf',
-  fedRate: '#f472b6', us10y: '#d1d5db', kr10y: '#9ca3af',
-  goldIntl: '#eab308', goldKr: '#d97706', usdkrw: '#60a5fa', dxy: '#22d3ee',
-  vix: '#ff6b6b',
+  kospi: '#ff9500', sp500: '#bf5af2', nasdaq: '#30d158',
+  fedRate: '#ff375f', us10y: '#8e8e93', kr10y: '#636366',
+  goldIntl: '#ffd60a', goldKr: '#d97706', usdkrw: '#0a84ff', dxy: '#5ac8fa',
+  vix: '#ff453a',
 };
 
 // stooq 자동수집 가능한 키
