@@ -90,11 +90,18 @@ function MainChartCustomTooltip({ active, payload, label, selectionResult, forma
     return `${sign}${r.toFixed(2)}%`;
   };
 
+  const fmt = (d) => formatShortDateFn ? formatShortDateFn(d) : d;
+
   return (
     <div style={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', border: '1px solid #4b5563', borderRadius: '8px', color: '#ffffff', padding: '10px 14px', minWidth: 180, maxWidth: 280 }}>
-      <p style={{ fontSize: 11, color: '#9ca3af', marginBottom: 6, fontWeight: 700 }}>
-        {formatShortDateFn ? formatShortDateFn(label) : label}
+      <p style={{ fontSize: 11, color: '#9ca3af', marginBottom: selectionResult ? 2 : 6, fontWeight: 700 }}>
+        {fmt(label)}
       </p>
+      {selectionResult && (
+        <p style={{ fontSize: 10, color: '#93c5fd', marginBottom: 6, fontWeight: 600 }}>
+          선택 기간: {fmt(selectionResult.startDate)} ~ {fmt(selectionResult.endDate)}
+        </p>
+      )}
       {payload.map((entry, i) => {
         const name = entry.name;
         const value = entry.value;
