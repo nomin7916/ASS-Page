@@ -12,8 +12,8 @@ const INDICATOR_COLORS = {
 
 // stooq 자동수집 가능한 키
 const STOOQ_SUPPORTED = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix'];
-// 차트에 표시 가능한 키 (goldKr 제외)
-const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'fedRate', 'vix'];
+// 차트에 표시 가능한 키
+const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix'];
 
 export default function MarketIndicators({
   marketIndicators,
@@ -341,7 +341,7 @@ export default function MarketIndicators({
                 { label: 'US 10Y', key: 'us10y',   val: marketIndicators.us10y,       url: 'https://tradingeconomics.com/united-states/government-bond-yield',        histKey: 'us10y' },
                 { label: 'KR 10Y', key: 'kr10y',   val: marketIndicators.kr10y,       url: 'https://tradingeconomics.com/south-korea/government-bond-yield',          histKey: 'kr10y' },
                 { label: 'Gold',   key: 'goldIntl', val: marketIndicators.goldIntl,   url: 'https://tradingeconomics.com/commodity/gold',                             histKey: 'goldIntl' },
-                { label: '국내 금', key: 'goldKr',  val: marketIndicators.goldKr,     url: 'https://m.stock.naver.com/marketindex/metals/M04020000',                  histKey: null },
+                { label: '국내 금', key: 'goldKr',  val: marketIndicators.goldKr,     url: 'https://m.stock.naver.com/marketindex/metals/M04020000',                  histKey: 'goldKr' },
                 { label: 'USDKRW', key: 'usdkrw',  val: marketIndicators.usdkrw,     url: 'https://tradingeconomics.com/south-korea/currency',                       histKey: 'usdkrw' },
                 { label: 'DXY',    key: 'dxy',      val: marketIndicators.dxy,        url: 'https://tradingeconomics.com/united-states/currency',                     histKey: 'dxy' },
                 { label: 'VIX',    key: 'vix',      val: marketIndicators.vix,        url: 'https://finance.yahoo.com/quote/%5EVIX/',                                 histKey: 'vix' },

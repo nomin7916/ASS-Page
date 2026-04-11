@@ -69,6 +69,7 @@ const CHART_NAME_TO_PERIOD_KEY = {
   'NASDAQ':  'nasdaqPeriodRate',
   'US 10Y':  'us10yPeriodRate',
   'Gold':    'goldIntlPeriodRate',
+  '국내금':   'goldKrPeriodRate',
   'USDKRW':  'usdkrwPeriodRate',
   'DXY':     'dxyPeriodRate',
   '기준금리': 'fedRatePeriodRate',
@@ -77,7 +78,7 @@ const CHART_NAME_TO_PERIOD_KEY = {
 };
 const CHART_NAME_TO_POINT_KEY = {
   'KOSPI':   'kospiPoint',  'S&P500': 'sp500Point', 'NASDAQ': 'nasdaqPoint',
-  'US 10Y':  'us10yPoint',  'Gold': 'goldIntlPoint', 'USDKRW': 'usdkrwPoint',
+  'US 10Y':  'us10yPoint',  'Gold': 'goldIntlPoint', '국내금': 'goldKrPoint', 'USDKRW': 'usdkrwPoint',
   'DXY':     'dxyPoint',    '기준금리': 'fedRatePoint', 'KR 10Y': 'kr10yPoint', 'VIX': 'vixPoint',
 };
 
@@ -353,9 +354,9 @@ export default function App() {
   const [showSp500, setShowSp500] = useState(false);
   const [showNasdaq, setShowNasdaq] = useState(false);
   const [showIndicatorsInChart, setShowIndicatorsInChart] = useState({
-    us10y: false, kr10y: false, goldIntl: false, usdkrw: false, dxy: false, fedRate: false, vix: false
+    us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false
   });
-  const [indicatorScales, setIndicatorScales] = useState({ us10y: 1, goldIntl: 1, usdkrw: 1, dxy: 1, fedRate: 1, kr10y: 1, vix: 1 });
+  const [indicatorScales, setIndicatorScales] = useState({ us10y: 1, goldIntl: 1, goldKr: 1, usdkrw: 1, dxy: 1, fedRate: 1, kr10y: 1, vix: 1 });
   const [isScaleSettingOpen, setIsScaleSettingOpen] = useState(false);
   const [indicatorHistoryLoading, setIndicatorHistoryLoading] = useState({});
   
@@ -738,12 +739,13 @@ export default function App() {
     usdkrw: 'usdkrw.fx',
     dxy: 'dxy.f',
     kr10y: null,   // 무료 소스 없음
+    goldKr: null,  // KRX 금현물 - JSON 파일 업로드 필요
     fedRate: null, // 계단식 데이터 - 무료 소스 없음
     vix: '^vix',
   };
 
   const INDICATOR_LABELS = {
-    us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold',
+    us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold', goldKr: '국내금',
     usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리', vix: 'VIX',
   };
 
@@ -996,7 +998,7 @@ export default function App() {
     return unifiedDates.filter(d => d >= appliedRange.start && d <= appliedRange.end);
   }, [unifiedDates, appliedRange]);
 
-  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'fedRate', 'vix'];
+  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix'];
 
   const indexDataMap = useMemo(() => {
     const map = {};
@@ -1439,6 +1441,7 @@ export default function App() {
             const upperFN = fileName.toUpperCase();
             const detectMarketKey = (fn) => {
               if (fn.includes('GOLD_INTL')) return 'GOLD_INTL';
+              if (fn.includes('GOLD_KRX') || fn.includes('GOLD_KR')) return 'GOLD_KR';
               if (fn.includes('FED_RATE')) return 'FED_RATE';
               if (fn.includes('USD_KRW')) return 'USD_KRW';
               if (fn.includes('US_10Y_BOND') || fn.includes('US10Y')) return 'US_10Y_BOND';
@@ -1514,6 +1517,11 @@ export default function App() {
                 setMarketIndicators(prev => ({ ...prev, goldIntl: latest, goldIntlChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, goldIntl: formattedData }));
                 showToast(`[시장지표] 국제금 데이터 주입 완료 (${count}건, 최신: $${latest?.toFixed(2)})`);
+              } else if (cu === 'GOLD_KR' || cu === 'GOLD_KRX') {
+                const { latest, chg, count } = getLatestChg(formattedData);
+                setMarketIndicators(prev => ({ ...prev, goldKr: latest, goldKrChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, goldKr: formattedData }));
+                showToast(`[시장지표] 국내금 주입 완료 (${count}건, 최신: ${latest?.toLocaleString()}원/g)`);
               } else if (cu === 'USD_KRW') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, usdkrw: latest, usdkrwChg: chg }));
@@ -1917,7 +1925,7 @@ export default function App() {
       {/* 지표 배율 설정 모달 */}
       {isScaleSettingOpen && (() => {
         const INDICATOR_LABELS = {
-          us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold',
+          us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold', goldKr: '국내금',
           usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '기준금리', vix: 'VIX'
         };
         const activeKeys = Object.keys(showIndicatorsInChart).filter(k => showIndicatorsInChart[k]);
@@ -2429,6 +2437,7 @@ export default function App() {
                   {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
                   {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={['dataMin', 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke="#ffd60a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ffd60a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.goldKr && indicatorHistoryMap.goldKr && <YAxis yAxisId="right-goldKr" orientation="right" stroke="#ff9f0a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={62} domain={['dataMin', 'dataMax']}><Label value="국내금" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff9f0a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <YAxis yAxisId="right-usdkrw" orientation="right" stroke="#0a84ff" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="USD/KRW" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#0a84ff', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <YAxis yAxisId="right-dxy" orientation="right" stroke="#5ac8fa" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={52} domain={['dataMin', 'dataMax']}><Label value="DXY" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#5ac8fa', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <YAxis yAxisId="right-fedRate" orientation="right" stroke="#ff375f" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={54} domain={['dataMin', 'dataMax']}><Label value="기준금리" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff375f', fontSize: 11, fontWeight: 500 }} /></YAxis>}
@@ -2444,6 +2453,8 @@ export default function App() {
                   {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="right-us10y" dataKey="us10yPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
                   {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRateScaled" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="right-goldIntl" dataKey="goldIntlPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
+                  {showIndicatorsInChart.goldKr && indicatorHistoryMap.goldKr && <Line yAxisId="left" type="monotone" dataKey="goldKrRateScaled" name="국내금" stroke="#ff9f0a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {showIndicatorsInChart.goldKr && indicatorHistoryMap.goldKr && <Line yAxisId="right-goldKr" dataKey="goldKrPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
                   {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRateScaled" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="right-usdkrw" dataKey="usdkrwPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
                   {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRateScaled" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
