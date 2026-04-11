@@ -60,6 +60,137 @@ const CustomChartTooltip = ({ active, payload, total }) => {
 };
 
 
+// ─── CustomDatePicker ───────────────────────────────────────────────────────
+const DAYS = ['일','월','화','수','목','금','토'];
+const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+
+function CustomDatePicker({ value, onChange, placeholder = '--/--/--' }) {
+  const [open, setOpen] = React.useState(false);
+  const [viewYear, setViewYear] = React.useState(() => value ? parseInt(value.slice(0,4)) : new Date().getFullYear());
+  const [viewMonth, setViewMonth] = React.useState(() => value ? parseInt(value.slice(5,7)) - 1 : new Date().getMonth());
+  const [yearPickMode, setYearPickMode] = React.useState(false);
+  const [yearRangeStart, setYearRangeStart] = React.useState(() => {
+    const y = value ? parseInt(value.slice(0,4)) : new Date().getFullYear();
+    return Math.floor(y / 12) * 12;
+  });
+  const ref = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const openPicker = () => {
+    const y = value ? parseInt(value.slice(0,4)) : new Date().getFullYear();
+    const m = value ? parseInt(value.slice(5,7)) - 1 : new Date().getMonth();
+    setViewYear(y); setViewMonth(m);
+    setYearRangeStart(Math.floor(y / 12) * 12);
+    setYearPickMode(false);
+    setOpen(true);
+  };
+
+  const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+  const firstDow = (y, m) => new Date(y, m, 1).getDay();
+
+  const selectDay = (d) => {
+    const mm = String(viewMonth + 1).padStart(2,'0');
+    const dd = String(d).padStart(2,'0');
+    onChange(`${viewYear}-${mm}-${dd}`);
+    setOpen(false);
+  };
+
+  const prevMonth = () => { if (viewMonth === 0) { setViewYear(y => y-1); setViewMonth(11); } else setViewMonth(m => m-1); };
+  const nextMonth = () => { if (viewMonth === 11) { setViewYear(y => y+1); setViewMonth(0); } else setViewMonth(m => m+1); };
+
+  const selDay = value ? parseInt(value.slice(8,10)) : null;
+  const selMonth = value ? parseInt(value.slice(5,7)) - 1 : null;
+  const selYear = value ? parseInt(value.slice(0,4)) : null;
+
+  const totalCells = Math.ceil((firstDow(viewYear, viewMonth) + daysInMonth(viewYear, viewMonth)) / 7) * 7;
+
+  const displayText = value ? value.substring(2).replace(/-/g, '/') : placeholder;
+
+  return (
+    <div className="relative" ref={ref}>
+      <span
+        onClick={openPicker}
+        className="text-gray-300 text-xs font-bold font-mono px-1 w-[68px] text-center cursor-pointer hover:text-white select-none block"
+      >
+        {displayText}
+      </span>
+      {open && (
+        <div className="absolute top-7 left-1/2 -translate-x-1/2 z-50 bg-gray-900 border border-gray-600 rounded-lg shadow-2xl p-3 w-[220px]"
+          onMouseDown={e => e.stopPropagation()}>
+          {/* Header */}
+          <div className="flex items-center justify-between mb-2">
+            <button onClick={yearPickMode ? () => setYearRangeStart(s => s - 12) : prevMonth}
+              className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">‹</button>
+            <div className="flex items-center gap-1">
+              {/* 년도 클릭 → year pick mode */}
+              <button
+                onClick={() => { setYearPickMode(m => !m); setYearRangeStart(Math.floor(viewYear/12)*12); }}
+                className="text-blue-300 hover:text-blue-100 font-bold text-sm px-1.5 py-0.5 rounded hover:bg-gray-700 transition-colors"
+              >{viewYear}년</button>
+              {!yearPickMode && (
+                <span className="text-gray-300 text-xs font-bold">{MONTHS[viewMonth]}</span>
+              )}
+            </div>
+            <button onClick={yearPickMode ? () => setYearRangeStart(s => s + 12) : nextMonth}
+              className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">›</button>
+          </div>
+
+          {yearPickMode ? (
+            /* Year grid */
+            <div className="grid grid-cols-3 gap-1">
+              {Array.from({length:12}, (_,i) => yearRangeStart + i).map(y => (
+                <button key={y}
+                  onClick={() => { setViewYear(y); setYearPickMode(false); }}
+                  className={`py-1.5 rounded text-xs font-bold transition-colors
+                    ${y === viewYear ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}>
+                  {y}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <>
+              {/* Day-of-week header */}
+              <div className="grid grid-cols-7 mb-1">
+                {DAYS.map((d,i) => (
+                  <span key={d} className={`text-center text-[10px] font-bold py-0.5
+                    ${i===0?'text-red-400':i===6?'text-blue-400':'text-gray-500'}`}>{d}</span>
+                ))}
+              </div>
+              {/* Day cells */}
+              <div className="grid grid-cols-7 gap-y-0.5">
+                {Array.from({length: totalCells}, (_,i) => {
+                  const dayNum = i - firstDow(viewYear, viewMonth) + 1;
+                  const valid = dayNum >= 1 && dayNum <= daysInMonth(viewYear, viewMonth);
+                  const isSelected = valid && dayNum === selDay && viewMonth === selMonth && viewYear === selYear;
+                  const dow = i % 7;
+                  return (
+                    <button key={i}
+                      onClick={() => valid && selectDay(dayNum)}
+                      className={`text-center text-[11px] py-1 rounded transition-colors
+                        ${!valid ? 'invisible' : ''}
+                        ${isSelected ? 'bg-blue-600 text-white font-bold' : ''}
+                        ${valid && !isSelected ? (dow===0?'text-red-400':dow===6?'text-blue-400':'text-gray-300') : ''}
+                        ${valid && !isSelected ? 'hover:bg-gray-700' : ''}`}>
+                      {valid ? dayNum : ''}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 export default function App() {
   const fileInputRef = useRef(null);
   const historyInputRef = useRef(null);
@@ -1619,6 +1750,11 @@ export default function App() {
     else if (chartPeriod === '3m') { const d = new Date(latest); d.setMonth(d.getMonth() - 3); newStart = d.toISOString().split('T')[0]; }
     else if (chartPeriod === '6m') { const d = new Date(latest); d.setMonth(d.getMonth() - 6); newStart = d.toISOString().split('T')[0]; }
     else if (chartPeriod === '1y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 1); newStart = d.toISOString().split('T')[0]; }
+    else if (chartPeriod === '2y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 2); newStart = d.toISOString().split('T')[0]; }
+    else if (chartPeriod === '3y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 3); newStart = d.toISOString().split('T')[0]; }
+    else if (chartPeriod === '4y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 4); newStart = d.toISOString().split('T')[0]; }
+    else if (chartPeriod === '5y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 5); newStart = d.toISOString().split('T')[0]; }
+    else if (chartPeriod === '10y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 10); newStart = d.toISOString().split('T')[0]; }
     else if (chartPeriod === 'all') { newStart = earliest; }
     if (chartPeriod !== 'custom') {
       if (new Date(newStart) < new Date(earliest)) newStart = earliest;
@@ -1952,25 +2088,21 @@ export default function App() {
                 </div>
                 <div className="flex items-center justify-end gap-3 w-full xl:w-auto">
                   <div className="flex items-center bg-gray-800 border border-gray-600 rounded shadow-sm px-1.5 py-1 relative z-30">
-                    <div className="relative flex items-center">
-                      <span className="text-gray-300 text-xs font-bold font-mono pointer-events-none px-1 w-[68px] text-center">
-                        {dateRange.start ? dateRange.start.substring(2).replace(/-/g, '/') : '--/--/--'}
-                      </span>
-                      <input type="date" value={dateRange.start} onChange={e => { setDateRange(p => ({ ...p, start: e.target.value })); setChartPeriod('custom'); }} className="absolute inset-0 opacity-0 cursor-pointer w-full" />
-                    </div>
+                    <CustomDatePicker
+                      value={dateRange.start}
+                      onChange={v => { setDateRange(p => ({ ...p, start: v })); setChartPeriod('custom'); }}
+                    />
                     <span className="text-gray-500 mx-0.5">~</span>
-                    <div className="relative flex items-center">
-                      <span className="text-gray-300 text-xs font-bold font-mono pointer-events-none px-1 w-[68px] text-center">
-                        {dateRange.end ? dateRange.end.substring(2).replace(/-/g, '/') : '--/--/--'}
-                      </span>
-                      <input type="date" value={dateRange.end} onChange={e => { setDateRange(p => ({ ...p, end: e.target.value })); setChartPeriod('custom'); }} className="absolute inset-0 opacity-0 cursor-pointer w-full" />
-                    </div>
+                    <CustomDatePicker
+                      value={dateRange.end}
+                      onChange={v => { setDateRange(p => ({ ...p, end: v })); setChartPeriod('custom'); }}
+                    />
                     <div className="w-[1px] h-4 bg-gray-600 mx-1.5"></div>
                     <button onClick={handleSearchClick} className="text-blue-400 hover:text-blue-300 hover:bg-gray-700 rounded p-1.5 transition-colors" title="조회">
                       <Search size={14} />
                     </button>
                   </div>
-                  <select value={chartPeriod} onChange={e => setChartPeriod(e.target.value)} className="bg-gray-800 text-gray-300 text-xs font-bold border border-gray-600 rounded px-2 py-1.5 outline-none cursor-pointer hover:bg-gray-700 transition-colors shadow-sm"><option value="1w">1주일</option><option value="1m">1개월</option><option value="3m">3개월</option><option value="6m">6개월</option><option value="1y">1년</option><option value="all">전체</option><option value="custom" hidden>직접입력</option></select>
+                  <select value={chartPeriod} onChange={e => setChartPeriod(e.target.value)} className="bg-gray-800 text-gray-300 text-xs font-bold border border-gray-600 rounded px-2 py-1.5 outline-none cursor-pointer hover:bg-gray-700 transition-colors shadow-sm"><option value="1w">1주일</option><option value="1m">1개월</option><option value="3m">3개월</option><option value="6m">6개월</option><option value="1y">1년</option><option value="2y">2년</option><option value="3y">3년</option><option value="4y">4년</option><option value="5y">5년</option><option value="10y">10년</option><option value="all">전체</option><option value="custom" hidden>직접입력</option></select>
                 </div>
               </div>
               <div className="flex justify-end pt-2 border-t border-gray-700/50">
