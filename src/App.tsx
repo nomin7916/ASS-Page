@@ -562,8 +562,12 @@ export default function App() {
           if (Array.isArray(arr)) {
             parsedData = {};
             arr.forEach(item => {
-              const d = (item.Date ?? item.date ?? item.index ?? '').substring(0, 10);
-              const v = item.Close ?? item.Value ?? item.close ?? item.value;
+              const d = (item.Date ?? item.date ?? item.index ?? item.INDEX ?? '').substring(0, 10);
+              const v = item.Close ?? item.Value ?? item.close ?? item.value ?? (() => {
+                const skip = ['Date', 'date', 'index', 'INDEX'];
+                const key = Object.keys(item).find(k => !skip.includes(k) && typeof item[k] === 'number');
+                return key ? item[key] : undefined;
+              })();
               if (d && v != null && d !== '1970-01-01') parsedData[d] = Number(v);
             });
           }
@@ -1179,8 +1183,12 @@ export default function App() {
 
             const formattedData = {};
             raw.data.forEach(item => {
-              const dateStr = item.Date ?? item.index;
-              const v = item.Close ?? item.Value;
+              const dateStr = item.Date ?? item.date ?? item.index ?? item.INDEX;
+              const v = item.Close ?? item.Value ?? item.close ?? item.value ?? (() => {
+                const skip = ['Date', 'date', 'index', 'INDEX'];
+                const key = Object.keys(item).find(k => !skip.includes(k) && typeof item[k] === 'number');
+                return key ? item[key] : undefined;
+              })();
               if (dateStr && v != null && v > 0) {
                 const d = dateStr.substring(0, 10);
                 if (d !== '1970-01-01') formattedData[d] = v;
