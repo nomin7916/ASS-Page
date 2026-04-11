@@ -2239,7 +2239,7 @@ export default function App() {
                   <button onClick={() => setIsZeroBaseMode(!isZeroBaseMode)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${isZeroBaseMode ? 'bg-green-900/50 text-green-400 border border-green-500/50 shadow-inner' : 'bg-transparent text-gray-500 hover:bg-gray-800 border border-gray-700'}`} title="조회 시작일을 0% 기준으로 차트 재정렬"><Activity size={14} className={isZeroBaseMode ? 'text-green-400' : 'text-gray-500'} /></button>
                 </div>
                 {/* Y축 설정 버튼 */}
-                <div className="relative">
+                <div>
                   <button
                     onClick={() => setIsYAxisSettingOpen(v => !v)}
                     className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${isYAxisSettingOpen ? 'bg-indigo-900/50 text-indigo-300 border border-indigo-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}
@@ -2248,66 +2248,6 @@ export default function App() {
                     <Settings size={12} />
                     <span>Y축</span>
                   </button>
-                  {isYAxisSettingOpen && (
-                    <div className="absolute right-0 top-8 z-50 w-72 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4 animate-in fade-in slide-in-from-top-2">
-                      <div className="flex justify-between items-center mb-3">
-                        <span className="text-[11px] font-bold text-indigo-300 flex items-center gap-1.5"><Settings size={11} />우Y축 범위 설정</span>
-                        <button onClick={() => setIsYAxisSettingOpen(false)} className="text-gray-500 hover:text-white transition"><X size={13} /></button>
-                      </div>
-                      <p className="text-[10px] text-gray-500 mb-3">빈칸으로 두면 데이터 범위(자동)로 표시됩니다.</p>
-                      {[
-                        { key: 'us10y',   label: 'US 10Y',  color: '#8e8e93', show: showIndicatorsInChart.us10y   && !!indicatorHistoryMap.us10y },
-                        { key: 'goldIntl', label: 'Gold',   color: '#ffd60a', show: showIndicatorsInChart.goldIntl && !!indicatorHistoryMap.goldIntl },
-                        { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff', show: showIndicatorsInChart.usdkrw  && !!indicatorHistoryMap.usdkrw },
-                        { key: 'dxy',     label: 'DXY',     color: '#5ac8fa', show: showIndicatorsInChart.dxy     && !!indicatorHistoryMap.dxy },
-                        { key: 'fedRate', label: '기준금리', color: '#ff375f', show: showIndicatorsInChart.fedRate && !!indicatorHistoryMap.fedRate },
-                        { key: 'kr10y',   label: 'KR 10Y',  color: '#636366', show: showIndicatorsInChart.kr10y   && !!indicatorHistoryMap.kr10y },
-                        { key: 'vix',     label: 'VIX',     color: '#ff453a', show: showIndicatorsInChart.vix     && !!indicatorHistoryMap.vix },
-                      ].filter(item => item.show).length === 0 ? (
-                        <p className="text-[10px] text-gray-600 text-center py-2">활성화된 지표가 없습니다.</p>
-                      ) : (
-                        <div className="flex flex-col gap-2">
-                          {[
-                            { key: 'us10y',   label: 'US 10Y',  color: '#8e8e93', show: showIndicatorsInChart.us10y   && !!indicatorHistoryMap.us10y },
-                            { key: 'goldIntl', label: 'Gold',   color: '#ffd60a', show: showIndicatorsInChart.goldIntl && !!indicatorHistoryMap.goldIntl },
-                            { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff', show: showIndicatorsInChart.usdkrw  && !!indicatorHistoryMap.usdkrw },
-                            { key: 'dxy',     label: 'DXY',     color: '#5ac8fa', show: showIndicatorsInChart.dxy     && !!indicatorHistoryMap.dxy },
-                            { key: 'fedRate', label: '기준금리', color: '#ff375f', show: showIndicatorsInChart.fedRate && !!indicatorHistoryMap.fedRate },
-                            { key: 'kr10y',   label: 'KR 10Y',  color: '#636366', show: showIndicatorsInChart.kr10y   && !!indicatorHistoryMap.kr10y },
-                            { key: 'vix',     label: 'VIX',     color: '#ff453a', show: showIndicatorsInChart.vix     && !!indicatorHistoryMap.vix },
-                          ].filter(item => item.show).map(({ key, label, color }) => (
-                            <div key={key} className="flex items-center gap-2">
-                              <span className="text-[10px] font-bold w-16 shrink-0" style={{ color }}>{label}</span>
-                              <input
-                                type="number"
-                                placeholder="Min"
-                                value={customYAxisDomains[key].min}
-                                onChange={e => setCustomYAxisDomains(prev => ({ ...prev, [key]: { ...prev[key], min: e.target.value } }))}
-                                className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none focus:border-indigo-500 transition text-center"
-                              />
-                              <span className="text-gray-600 text-[10px]">~</span>
-                              <input
-                                type="number"
-                                placeholder="Max"
-                                value={customYAxisDomains[key].max}
-                                onChange={e => setCustomYAxisDomains(prev => ({ ...prev, [key]: { ...prev[key], max: e.target.value } }))}
-                                className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none focus:border-indigo-500 transition text-center"
-                              />
-                              <button
-                                onClick={() => setCustomYAxisDomains(prev => ({ ...prev, [key]: { min: '', max: '' } }))}
-                                className="text-gray-600 hover:text-red-400 transition shrink-0"
-                                title="초기화"
-                              ><X size={11} /></button>
-                            </div>
-                          ))}
-                          <button
-                            onClick={() => setCustomYAxisDomains({ us10y: { min: '', max: '' }, goldIntl: { min: '', max: '' }, usdkrw: { min: '', max: '' }, dxy: { min: '', max: '' }, fedRate: { min: '', max: '' }, kr10y: { min: '', max: '' }, vix: { min: '', max: '' } })}
-                            className="mt-1 text-[10px] text-gray-500 hover:text-red-400 transition text-right"
-                          >전체 초기화</button>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -2509,6 +2449,78 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* Y축 범위 설정 모달 */}
+      {isYAxisSettingOpen && (() => {
+        const dataKeyMap = { us10y: 'us10yPoint', goldIntl: 'goldIntlPoint', usdkrw: 'usdkrwPoint', dxy: 'dxyPoint', fedRate: 'fedRatePoint', kr10y: 'kr10yPoint', vix: 'vixPoint' };
+        const indicators = [
+          { key: 'us10y',    label: 'US 10Y',  color: '#8e8e93', show: showIndicatorsInChart.us10y   && !!indicatorHistoryMap.us10y },
+          { key: 'goldIntl', label: 'Gold',    color: '#ffd60a', show: showIndicatorsInChart.goldIntl && !!indicatorHistoryMap.goldIntl },
+          { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff', show: showIndicatorsInChart.usdkrw  && !!indicatorHistoryMap.usdkrw },
+          { key: 'dxy',     label: 'DXY',     color: '#5ac8fa', show: showIndicatorsInChart.dxy     && !!indicatorHistoryMap.dxy },
+          { key: 'fedRate', label: '기준금리', color: '#ff375f', show: showIndicatorsInChart.fedRate && !!indicatorHistoryMap.fedRate },
+          { key: 'kr10y',   label: 'KR 10Y',  color: '#636366', show: showIndicatorsInChart.kr10y   && !!indicatorHistoryMap.kr10y },
+          { key: 'vix',     label: 'VIX',     color: '#ff453a', show: showIndicatorsInChart.vix     && !!indicatorHistoryMap.vix },
+        ].filter(item => item.show).map(item => {
+          const vals = finalChartData.map(d => d[dataKeyMap[item.key]]).filter(v => v != null && !isNaN(v));
+          return { ...item, dataMin: vals.length ? Math.min(...vals) : null, dataMax: vals.length ? Math.max(...vals) : null };
+        });
+        return (
+          <div className="fixed inset-0 flex items-center justify-center z-[400] bg-black/50 backdrop-blur-sm" onClick={() => setIsYAxisSettingOpen(false)}>
+            <div className="w-80 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-5 animate-in fade-in zoom-in-95" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[12px] font-bold text-indigo-300 flex items-center gap-1.5"><Settings size={12} />우Y축 범위 설정</span>
+                <button onClick={() => setIsYAxisSettingOpen(false)} className="text-gray-500 hover:text-white transition"><X size={14} /></button>
+              </div>
+              <p className="text-[10px] text-gray-500 mb-4">빈칸으로 두면 데이터 범위(자동)로 표시됩니다.</p>
+              {indicators.length === 0 ? (
+                <p className="text-[10px] text-gray-600 text-center py-4">활성화된 지표가 없습니다.</p>
+              ) : (
+                <div className="flex flex-col gap-2.5">
+                  <div className="grid grid-cols-[4rem_1fr_0.3rem_1fr_1rem] gap-x-1.5 items-center mb-1">
+                    <span className="text-[9px] text-gray-600"></span>
+                    <span className="text-[9px] text-gray-500 text-center">Min</span>
+                    <span></span>
+                    <span className="text-[9px] text-gray-500 text-center">Max</span>
+                    <span></span>
+                  </div>
+                  {indicators.map(({ key, label, color, dataMin, dataMax }) => (
+                    <div key={key} className="grid grid-cols-[4rem_1fr_0.3rem_1fr_1rem] gap-x-1.5 items-center">
+                      <span className="text-[10px] font-bold truncate" style={{ color }}>{label}</span>
+                      <input
+                        type="number"
+                        placeholder={dataMin != null ? String(+dataMin.toFixed(4)) : 'Min'}
+                        value={customYAxisDomains[key].min}
+                        onChange={e => setCustomYAxisDomains(prev => ({ ...prev, [key]: { ...prev[key], min: e.target.value } }))}
+                        className="bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-indigo-500 transition text-center w-full"
+                      />
+                      <span className="text-gray-600 text-[9px] text-center">~</span>
+                      <input
+                        type="number"
+                        placeholder={dataMax != null ? String(+dataMax.toFixed(4)) : 'Max'}
+                        value={customYAxisDomains[key].max}
+                        onChange={e => setCustomYAxisDomains(prev => ({ ...prev, [key]: { ...prev[key], max: e.target.value } }))}
+                        className="bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-indigo-500 transition text-center w-full"
+                      />
+                      <button
+                        onClick={() => setCustomYAxisDomains(prev => ({ ...prev, [key]: { min: '', max: '' } }))}
+                        className="text-gray-600 hover:text-red-400 transition flex items-center justify-center"
+                        title="초기화"
+                      ><X size={10} /></button>
+                    </div>
+                  ))}
+                  <div className="border-t border-gray-800 mt-1 pt-2 flex justify-end">
+                    <button
+                      onClick={() => setCustomYAxisDomains({ us10y: { min: '', max: '' }, goldIntl: { min: '', max: '' }, usdkrw: { min: '', max: '' }, dxy: { min: '', max: '' }, fedRate: { min: '', max: '' }, kr10y: { min: '', max: '' }, vix: { min: '', max: '' } })}
+                      className="text-[10px] text-gray-500 hover:text-red-400 transition"
+                    >전체 초기화</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {isPasteModalOpen && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[300] animate-in fade-in backdrop-blur-sm">
