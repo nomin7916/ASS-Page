@@ -352,6 +352,16 @@ export default function App() {
   const [showIndicatorsInChart, setShowIndicatorsInChart] = useState({
     us10y: false, kr10y: false, goldIntl: false, usdkrw: false, dxy: false, fedRate: false, vix: false
   });
+  const [isYAxisSettingOpen, setIsYAxisSettingOpen] = useState(false);
+  const [customYAxisDomains, setCustomYAxisDomains] = useState({
+    us10y:   { min: '', max: '' },
+    goldIntl: { min: '', max: '' },
+    usdkrw:  { min: '', max: '' },
+    dxy:     { min: '', max: '' },
+    fedRate: { min: '', max: '' },
+    kr10y:   { min: '', max: '' },
+    vix:     { min: '', max: '' },
+  });
   const [indicatorHistoryLoading, setIndicatorHistoryLoading] = useState({});
   
   const [marketIndices, setMarketIndices] = useState({ kospi: null, sp500: null, nasdaq: null });
@@ -2221,12 +2231,83 @@ export default function App() {
                   <select value={chartPeriod} onChange={e => setChartPeriod(e.target.value)} className="bg-gray-800 text-gray-300 text-xs font-bold border border-gray-600 rounded px-2 py-1.5 outline-none cursor-pointer hover:bg-gray-700 transition-colors shadow-sm"><option value="1w">1주일</option><option value="1m">1개월</option><option value="3m">3개월</option><option value="6m">6개월</option><option value="1y">1년</option><option value="2y">2년</option><option value="3y">3년</option><option value="4y">4년</option><option value="5y">5년</option><option value="10y">10년</option><option value="all">전체</option><option value="custom" hidden>직접입력</option></select>
                 </div>
               </div>
-              <div className="flex justify-end pt-2 border-t border-gray-700/50">
+              <div className="flex justify-between items-center pt-2 border-t border-gray-700/50">
                 <div className="flex items-center gap-1.5">
                   <button onClick={() => setShowTotalEval(!showTotalEval)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showTotalEval ? 'bg-gray-700 text-white shadow-inner border border-gray-500' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showTotalEval ? 'bg-gray-400 shadow-[0_0_4px_#9ca3af]' : 'bg-gray-600'}`}></div>자산</button>
                   <button onClick={() => setShowReturnRate(!showReturnRate)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showReturnRate ? 'bg-red-900/50 text-red-400 border border-red-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showReturnRate ? 'bg-red-500 shadow-[0_0_4px_#ef4444]' : 'bg-gray-600'}`}></div>%</button>
                   <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
                   <button onClick={() => setIsZeroBaseMode(!isZeroBaseMode)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${isZeroBaseMode ? 'bg-green-900/50 text-green-400 border border-green-500/50 shadow-inner' : 'bg-transparent text-gray-500 hover:bg-gray-800 border border-gray-700'}`} title="조회 시작일을 0% 기준으로 차트 재정렬"><Activity size={14} className={isZeroBaseMode ? 'text-green-400' : 'text-gray-500'} /></button>
+                </div>
+                {/* Y축 설정 버튼 */}
+                <div className="relative">
+                  <button
+                    onClick={() => setIsYAxisSettingOpen(v => !v)}
+                    className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${isYAxisSettingOpen ? 'bg-indigo-900/50 text-indigo-300 border border-indigo-500/50' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}
+                    title="우Y축 범위 직접 설정"
+                  >
+                    <Settings size={12} />
+                    <span>Y축</span>
+                  </button>
+                  {isYAxisSettingOpen && (
+                    <div className="absolute right-0 top-8 z-50 w-72 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4 animate-in fade-in slide-in-from-top-2">
+                      <div className="flex justify-between items-center mb-3">
+                        <span className="text-[11px] font-bold text-indigo-300 flex items-center gap-1.5"><Settings size={11} />우Y축 범위 설정</span>
+                        <button onClick={() => setIsYAxisSettingOpen(false)} className="text-gray-500 hover:text-white transition"><X size={13} /></button>
+                      </div>
+                      <p className="text-[10px] text-gray-500 mb-3">빈칸으로 두면 데이터 범위(자동)로 표시됩니다.</p>
+                      {[
+                        { key: 'us10y',   label: 'US 10Y',  color: '#8e8e93', show: showIndicatorsInChart.us10y   && !!indicatorHistoryMap.us10y },
+                        { key: 'goldIntl', label: 'Gold',   color: '#ffd60a', show: showIndicatorsInChart.goldIntl && !!indicatorHistoryMap.goldIntl },
+                        { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff', show: showIndicatorsInChart.usdkrw  && !!indicatorHistoryMap.usdkrw },
+                        { key: 'dxy',     label: 'DXY',     color: '#5ac8fa', show: showIndicatorsInChart.dxy     && !!indicatorHistoryMap.dxy },
+                        { key: 'fedRate', label: '기준금리', color: '#ff375f', show: showIndicatorsInChart.fedRate && !!indicatorHistoryMap.fedRate },
+                        { key: 'kr10y',   label: 'KR 10Y',  color: '#636366', show: showIndicatorsInChart.kr10y   && !!indicatorHistoryMap.kr10y },
+                        { key: 'vix',     label: 'VIX',     color: '#ff453a', show: showIndicatorsInChart.vix     && !!indicatorHistoryMap.vix },
+                      ].filter(item => item.show).length === 0 ? (
+                        <p className="text-[10px] text-gray-600 text-center py-2">활성화된 지표가 없습니다.</p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          {[
+                            { key: 'us10y',   label: 'US 10Y',  color: '#8e8e93', show: showIndicatorsInChart.us10y   && !!indicatorHistoryMap.us10y },
+                            { key: 'goldIntl', label: 'Gold',   color: '#ffd60a', show: showIndicatorsInChart.goldIntl && !!indicatorHistoryMap.goldIntl },
+                            { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff', show: showIndicatorsInChart.usdkrw  && !!indicatorHistoryMap.usdkrw },
+                            { key: 'dxy',     label: 'DXY',     color: '#5ac8fa', show: showIndicatorsInChart.dxy     && !!indicatorHistoryMap.dxy },
+                            { key: 'fedRate', label: '기준금리', color: '#ff375f', show: showIndicatorsInChart.fedRate && !!indicatorHistoryMap.fedRate },
+                            { key: 'kr10y',   label: 'KR 10Y',  color: '#636366', show: showIndicatorsInChart.kr10y   && !!indicatorHistoryMap.kr10y },
+                            { key: 'vix',     label: 'VIX',     color: '#ff453a', show: showIndicatorsInChart.vix     && !!indicatorHistoryMap.vix },
+                          ].filter(item => item.show).map(({ key, label, color }) => (
+                            <div key={key} className="flex items-center gap-2">
+                              <span className="text-[10px] font-bold w-16 shrink-0" style={{ color }}>{label}</span>
+                              <input
+                                type="number"
+                                placeholder="Min"
+                                value={customYAxisDomains[key].min}
+                                onChange={e => setCustomYAxisDomains(prev => ({ ...prev, [key]: { ...prev[key], min: e.target.value } }))}
+                                className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none focus:border-indigo-500 transition text-center"
+                              />
+                              <span className="text-gray-600 text-[10px]">~</span>
+                              <input
+                                type="number"
+                                placeholder="Max"
+                                value={customYAxisDomains[key].max}
+                                onChange={e => setCustomYAxisDomains(prev => ({ ...prev, [key]: { ...prev[key], max: e.target.value } }))}
+                                className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] text-white outline-none focus:border-indigo-500 transition text-center"
+                              />
+                              <button
+                                onClick={() => setCustomYAxisDomains(prev => ({ ...prev, [key]: { min: '', max: '' } }))}
+                                className="text-gray-600 hover:text-red-400 transition shrink-0"
+                                title="초기화"
+                              ><X size={11} /></button>
+                            </div>
+                          ))}
+                          <button
+                            onClick={() => setCustomYAxisDomains({ us10y: { min: '', max: '' }, goldIntl: { min: '', max: '' }, usdkrw: { min: '', max: '' }, dxy: { min: '', max: '' }, fedRate: { min: '', max: '' }, kr10y: { min: '', max: '' }, vix: { min: '', max: '' } })}
+                            className="mt-1 text-[10px] text-gray-500 hover:text-red-400 transition text-right"
+                          >전체 초기화</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2345,13 +2426,13 @@ export default function App() {
                   <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="left" stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
                   {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
-                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={['dataMin', 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke="#ffd60a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ffd60a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <YAxis yAxisId="right-usdkrw" orientation="right" stroke="#0a84ff" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="USD/KRW" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#0a84ff', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <YAxis yAxisId="right-dxy" orientation="right" stroke="#5ac8fa" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={52} domain={['dataMin', 'dataMax']}><Label value="DXY" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#5ac8fa', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <YAxis yAxisId="right-fedRate" orientation="right" stroke="#ff375f" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={54} domain={['dataMin', 'dataMax']}><Label value="기준금리" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff375f', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <YAxis yAxisId="right-kr10y" orientation="right" stroke="#636366" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={52} domain={['dataMin', 'dataMax']}><Label value="KR 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#636366', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <YAxis yAxisId="right-vix" orientation="right" stroke="#ff453a" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={48} domain={['dataMin', 'dataMax']}><Label value="VIX" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff453a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={[customYAxisDomains.us10y.min !== '' ? Number(customYAxisDomains.us10y.min) : 'dataMin', customYAxisDomains.us10y.max !== '' ? Number(customYAxisDomains.us10y.max) : 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke="#ffd60a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={[customYAxisDomains.goldIntl.min !== '' ? Number(customYAxisDomains.goldIntl.min) : 'dataMin', customYAxisDomains.goldIntl.max !== '' ? Number(customYAxisDomains.goldIntl.max) : 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ffd60a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.usdkrw && indicatorHistoryMap.usdkrw && <YAxis yAxisId="right-usdkrw" orientation="right" stroke="#0a84ff" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={[customYAxisDomains.usdkrw.min !== '' ? Number(customYAxisDomains.usdkrw.min) : 'dataMin', customYAxisDomains.usdkrw.max !== '' ? Number(customYAxisDomains.usdkrw.max) : 'dataMax']}><Label value="USD/KRW" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#0a84ff', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.dxy && indicatorHistoryMap.dxy && <YAxis yAxisId="right-dxy" orientation="right" stroke="#5ac8fa" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={52} domain={[customYAxisDomains.dxy.min !== '' ? Number(customYAxisDomains.dxy.min) : 'dataMin', customYAxisDomains.dxy.max !== '' ? Number(customYAxisDomains.dxy.max) : 'dataMax']}><Label value="DXY" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#5ac8fa', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <YAxis yAxisId="right-fedRate" orientation="right" stroke="#ff375f" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={54} domain={[customYAxisDomains.fedRate.min !== '' ? Number(customYAxisDomains.fedRate.min) : 'dataMin', customYAxisDomains.fedRate.max !== '' ? Number(customYAxisDomains.fedRate.max) : 'dataMax']}><Label value="기준금리" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff375f', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <YAxis yAxisId="right-kr10y" orientation="right" stroke="#636366" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={52} domain={[customYAxisDomains.kr10y.min !== '' ? Number(customYAxisDomains.kr10y.min) : 'dataMin', customYAxisDomains.kr10y.max !== '' ? Number(customYAxisDomains.kr10y.max) : 'dataMax']}><Label value="KR 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#636366', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <YAxis yAxisId="right-vix" orientation="right" stroke="#ff453a" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={48} domain={[customYAxisDomains.vix.min !== '' ? Number(customYAxisDomains.vix.min) : 'dataMin', customYAxisDomains.vix.max !== '' ? Number(customYAxisDomains.vix.max) : 'dataMax']}><Label value="VIX" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff453a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   <RechartsTooltip content={<MainChartCustomTooltip selectionResult={selectionResult} formatShortDateFn={formatShortDate} formatNumberFn={formatNumber} />} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
