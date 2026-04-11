@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
-  X, Trash2, BookOpen, Bot, Download, Calendar, FolderOpen,
+  X, Trash2, Download, Calendar, FolderOpen,
   Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search
 } from 'lucide-react';
 import {
@@ -334,10 +334,6 @@ export default function App() {
   // 에러 모달 상태 분리 (토스트는 유지)
   const [globalToast, setGlobalToast] = useState({ text: "", isError: false });
   const [errorModalContent, setErrorModalContent] = useState(null);
-
-  const [aiQuery, setAiQuery] = useState("");
-  const [aiResponse, setAiResponse] = useState("");
-  const [isAiLoading, setIsAiLoading] = useState(false);
 
   const [chartPeriod, setChartPeriod] = useState('3m');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -1682,16 +1678,6 @@ export default function App() {
   const handleChartMouseUp = () => { setIsDragging(false); if (refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight) setSelectionResult(calculateSelection(refAreaLeft, refAreaRight)); else { setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null); } };
   const handleSearchClick = () => { setChartPeriod('custom'); setAppliedRange({ start: dateRange.start, end: dateRange.end }); };
 
-  const handleAskAI = async () => {
-    if (!aiQuery.trim()) return;
-    setIsAiLoading(true); setAiResponse("");
-    try {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: "투자 비서로서 답변하세요: " + aiQuery }] }] }) });
-      const data = await res.json();
-      setAiResponse(data.candidates?.[0]?.content?.parts?.[0]?.text || "답변을 가져올 수 없습니다.");
-    } catch (e) { setAiResponse("통신 오류 발생"); }
-    setIsAiLoading(false);
-  };
 
   // 초기 로드 후 종목 현재가를 직접 조회하는 함수 (React 상태 클로저 무관)
   const autoRefreshStockPrices = async (loadedPortfolio) => {
@@ -2440,18 +2426,6 @@ export default function App() {
               </tbody>
             </table>
           </div>
-        </div>
-
-        {/* AI Bot */}
-        <div className="fixed bottom-6 right-6 z-[200] group">
-          <button onClick={() => setAiResponse(aiResponse ? "" : "질문 대기 중...")} className="bg-blue-600 text-white p-4 rounded-full shadow-2xl transition-all scale-110 active:scale-95 border border-blue-400"><BookOpen size={28} /></button>
-          {aiResponse && (
-            <div className="absolute bottom-20 right-0 w-[420px] bg-[#1e293b] border border-gray-700 rounded-2xl shadow-2xl p-5 animate-in fade-in slide-in-from-bottom-5">
-              <div className="flex justify-between items-center mb-4"><span className="font-bold text-blue-400 flex items-center gap-2"><Bot size={18} /> AI 포트폴리오 비서</span><button onClick={() => setAiResponse("")} className="text-gray-500 hover:text-white transition"><X size={20} /></button></div>
-              <div className="flex gap-2 mb-4"><input type="text" value={aiQuery} onChange={e => setAiQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAskAI()} className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-blue-500 transition shadow-inner outline-none" placeholder="분석 요청..." /><button onClick={handleAskAI} disabled={isAiLoading} className="bg-blue-600 px-4 py-2 rounded-xl text-sm font-bold border border-blue-500 hover:bg-blue-500 transition">{isAiLoading ? '...' : '질문'}</button></div>
-              <div className="max-h-[350px] overflow-y-auto p-4 bg-gray-900/50 rounded-xl text-xs leading-relaxed text-gray-300 border border-gray-700 whitespace-pre-wrap shadow-inner font-light">{aiResponse}</div>
-            </div>
-          )}
         </div>
       </div>
 
