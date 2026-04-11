@@ -60,6 +60,98 @@ const CustomChartTooltip = ({ active, payload, total }) => {
 };
 
 
+// ─── MainChartCustomTooltip ─────────────────────────────────────────────────
+const CHART_NAME_TO_PERIOD_KEY = {
+  '수익률':  null,
+  '총자산':  null,
+  'KOSPI':   'kospiPeriodRate',
+  'S&P500':  'sp500PeriodRate',
+  'NASDAQ':  'nasdaqPeriodRate',
+  'US 10Y':  'us10yPeriodRate',
+  'Gold':    'goldIntlPeriodRate',
+  'USDKRW':  'usdkrwPeriodRate',
+  'DXY':     'dxyPeriodRate',
+  '기준금리': 'fedRatePeriodRate',
+  'KR 10Y':  'kr10yPeriodRate',
+  'VIX':     'vixPeriodRate',
+};
+const CHART_NAME_TO_POINT_KEY = {
+  'KOSPI':   'kospiPoint',  'S&P500': 'sp500Point', 'NASDAQ': 'nasdaqPoint',
+  'US 10Y':  'us10yPoint',  'Gold': 'goldIntlPoint', 'USDKRW': 'usdkrwPoint',
+  'DXY':     'dxyPoint',    '기준금리': 'fedRatePoint', 'KR 10Y': 'kr10yPoint', 'VIX': 'vixPoint',
+};
+
+function MainChartCustomTooltip({ active, payload, label, selectionResult, formatShortDateFn, formatNumberFn }) {
+  if (!active || !payload || !payload.length) return null;
+
+  const fmtRate = (r) => {
+    if (r == null) return null;
+    const sign = r >= 0 ? '+' : '';
+    return `${sign}${r.toFixed(2)}%`;
+  };
+
+  return (
+    <div style={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', border: '1px solid #4b5563', borderRadius: '8px', color: '#ffffff', padding: '10px 14px', minWidth: 180, maxWidth: 280 }}>
+      <p style={{ fontSize: 11, color: '#9ca3af', marginBottom: 6, fontWeight: 700 }}>
+        {formatShortDateFn ? formatShortDateFn(label) : label}
+      </p>
+      {payload.map((entry, i) => {
+        const name = entry.name;
+        const value = entry.value;
+        if (value == null) return null;
+
+        // 현재값 포맷
+        let displayVal;
+        if (name === '총자산') {
+          displayVal = formatNumberFn ? formatNumberFn(value) : value;
+        } else {
+          const pointKey = CHART_NAME_TO_POINT_KEY[name];
+          const pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
+          const rateStr = Number(value).toFixed(2) + '%';
+          displayVal = pointVal != null
+            ? `${rateStr} (${Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+            : rateStr;
+        }
+
+        // 드래그 구간 수익률
+        let periodTag = null;
+        if (selectionResult) {
+          let periodRate = null;
+          const periodKey = CHART_NAME_TO_PERIOD_KEY[name];
+          if (periodKey && selectionResult[periodKey] != null) {
+            periodRate = selectionResult[periodKey];
+          } else if (name === '수익률' && selectionResult.rate != null) {
+            periodRate = selectionResult.rate;
+          } else if (entry.payload) {
+            // comp 종목: name이 compStocks의 이름과 매칭 → dataKey로 판별
+            const dk = entry.dataKey;
+            if (dk === 'comp1Rate' && selectionResult.comp1PeriodRate != null) periodRate = selectionResult.comp1PeriodRate;
+            else if (dk === 'comp2Rate' && selectionResult.comp2PeriodRate != null) periodRate = selectionResult.comp2PeriodRate;
+            else if (dk === 'comp3Rate' && selectionResult.comp3PeriodRate != null) periodRate = selectionResult.comp3PeriodRate;
+          }
+          if (periodRate != null) {
+            const color = periodRate >= 0 ? '#f87171' : '#60a5fa';
+            periodTag = <span style={{ color, fontWeight: 700, fontSize: 10, marginLeft: 6, whiteSpace: 'nowrap' }}>[구간: {fmtRate(periodRate)}]</span>;
+          }
+        }
+
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: entry.color || '#e5e7eb', fontWeight: 600 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: entry.color || '#e5e7eb', display: 'inline-block', flexShrink: 0 }} />
+              {name}
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', fontSize: 11, color: '#e5e7eb', marginLeft: 10 }}>
+              {displayVal}{periodTag}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 // ─── CustomDatePicker ───────────────────────────────────────────────────────
 const DAYS = ['일','월','화','수','목','금','토'];
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
@@ -1547,11 +1639,20 @@ export default function App() {
     const eData = finalChartData[Math.max(idx1, idx2)];
     const profit = eData.evalAmount - sData.evalAmount;
     const rate = sData.evalAmount > 0 ? (profit / sData.evalAmount) * 100 : 0;
+    const indPeriodRates = {};
+    INDICATOR_CHART_KEYS.forEach(k => {
+      const sp = sData[`${k}Point`]; const ep = eData[`${k}Point`];
+      indPeriodRates[`${k}PeriodRate`] = (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
+    });
     return {
       startDate: sData.date, endDate: eData.date, profit, rate,
-      kospiPeriodRate: ((1 + eData.kospiRate / 100) / (1 + sData.kospiRate / 100) - 1) * 100,
-      sp500PeriodRate: ((1 + eData.sp500Rate / 100) / (1 + sData.sp500Rate / 100) - 1) * 100,
-      nasdaqPeriodRate: ((1 + eData.nasdaqRate / 100) / (1 + sData.nasdaqRate / 100) - 1) * 100
+      kospiPeriodRate: sData.kospiPoint > 0 ? ((eData.kospiPoint / sData.kospiPoint) - 1) * 100 : null,
+      sp500PeriodRate: sData.sp500Point > 0 ? ((eData.sp500Point / sData.sp500Point) - 1) * 100 : null,
+      nasdaqPeriodRate: sData.nasdaqPoint > 0 ? ((eData.nasdaqPoint / sData.nasdaqPoint) - 1) * 100 : null,
+      comp1PeriodRate: (sData.comp1Point > 0 && eData.comp1Point != null) ? ((eData.comp1Point / sData.comp1Point) - 1) * 100 : null,
+      comp2PeriodRate: (sData.comp2Point > 0 && eData.comp2Point != null) ? ((eData.comp2Point / sData.comp2Point) - 1) * 100 : null,
+      comp3PeriodRate: (sData.comp3Point > 0 && eData.comp3Point != null) ? ((eData.comp3Point / sData.comp3Point) - 1) * 100 : null,
+      ...indPeriodRates
     };
   };
 
@@ -2202,9 +2303,9 @@ export default function App() {
                   <span className={`text-xs font-bold mt-1 ${selectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{selectionResult.profit >= 0 ? '+' : '-'}{formatCurrency(Math.abs(selectionResult.profit))}</span>
                   {(showKospi || showSp500 || showNasdaq) && (
                     <div className="mt-2 w-full pt-1.5 border-t border-gray-700 flex flex-col gap-0.5">
-                      {showKospi && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#ff9500' }}>KOSPI</span><span className={`font-bold ${selectionResult.kospiPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.kospiPeriodRate > 0 ? '+' : ''}{selectionResult.kospiPeriodRate.toFixed(2)}%</span></div>}
-                      {showSp500 && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#bf5af2' }}>S&P500</span><span className={`font-bold ${selectionResult.sp500PeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.sp500PeriodRate > 0 ? '+' : ''}{selectionResult.sp500PeriodRate.toFixed(2)}%</span></div>}
-                      {showNasdaq && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#30d158' }}>NASDAQ</span><span className={`font-bold ${selectionResult.nasdaqPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.nasdaqPeriodRate > 0 ? '+' : ''}{selectionResult.nasdaqPeriodRate.toFixed(2)}%</span></div>}
+                      {showKospi && selectionResult.kospiPeriodRate != null && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#ff9500' }}>KOSPI</span><span className={`font-bold ${selectionResult.kospiPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.kospiPeriodRate > 0 ? '+' : ''}{selectionResult.kospiPeriodRate.toFixed(2)}%</span></div>}
+                      {showSp500 && selectionResult.sp500PeriodRate != null && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#bf5af2' }}>S&P500</span><span className={`font-bold ${selectionResult.sp500PeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.sp500PeriodRate > 0 ? '+' : ''}{selectionResult.sp500PeriodRate.toFixed(2)}%</span></div>}
+                      {showNasdaq && selectionResult.nasdaqPeriodRate != null && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#30d158' }}>NASDAQ</span><span className={`font-bold ${selectionResult.nasdaqPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.nasdaqPeriodRate > 0 ? '+' : ''}{selectionResult.nasdaqPeriodRate.toFixed(2)}%</span></div>}
                     </div>
                   )}
                 </div>
@@ -2236,7 +2337,7 @@ export default function App() {
                   {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <YAxis yAxisId="right-fedRate" orientation="right" stroke="#ff375f" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={54} domain={(() => { const vs = finalChartData.map(d => d.fedRatePoint).filter(v => v != null); if (!vs.length) return ['auto','auto']; const mn=Math.min(...vs),mx=Math.max(...vs),p=Math.abs(mx-mn)*0.05||0.1; return [mn-p,mx+p]; })()}><Label value="기준금리" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff375f', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <YAxis yAxisId="right-kr10y" orientation="right" stroke="#636366" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={52} domain={(() => { const vs = finalChartData.map(d => d.kr10yPoint).filter(v => v != null); if (!vs.length) return ['auto','auto']; const mn=Math.min(...vs),mx=Math.max(...vs),p=Math.abs(mx-mn)*0.05||0.1; return [mn-p,mx+p]; })()}><Label value="KR 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#636366', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <YAxis yAxisId="right-vix" orientation="right" stroke="#ff453a" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={48} domain={(() => { const vs = finalChartData.map(d => d.vixPoint).filter(v => v != null); if (!vs.length) return ['auto','auto']; const mn=Math.min(...vs),mx=Math.max(...vs),p=Math.abs(mx-mn)*0.05||1; return [mn-p,mx+p]; })()}><Label value="VIX" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff453a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  <RechartsTooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#4b5563', color: '#ffffff', borderRadius: '8px' }} labelFormatter={formatShortDate} formatter={(value, name, item) => { if (name === '총자산') return [formatNumber(value), name]; const nameToPointKey = { 'KOSPI': 'kospiPoint', 'S&P500': 'sp500Point', 'NASDAQ': 'nasdaqPoint', 'US 10Y': 'us10yPoint', 'Gold': 'goldIntlPoint', 'USDKRW': 'usdkrwPoint', 'DXY': 'dxyPoint', '기준금리': 'fedRatePoint', 'KR 10Y': 'kr10yPoint', 'VIX': 'vixPoint' }; const pointKey = nameToPointKey[name]; const pointVal = pointKey && item?.payload ? item.payload[pointKey] : null; const rateStr = Number(value).toFixed(2) + '%'; if (pointVal != null) return [rateStr + ' (' + Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ')', name]; return [rateStr, name]; }} />
+                  <RechartsTooltip content={<MainChartCustomTooltip selectionResult={selectionResult} formatShortDateFn={formatShortDate} formatNumberFn={formatNumber} />} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#ff9500" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
