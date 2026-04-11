@@ -2255,15 +2255,18 @@ export default function App() {
                       const bgColor = comp.active ? (isFallback ? 'rgba(249,115,22,0.1)' : `${color}22`) : '#1f2937';
                       const textColor = comp.active ? (isFallback ? '#fb923c' : color) : '#6b7280';
                       return (
-                        <div key={idx} className="flex items-center gap-0 rounded-md shadow-inner overflow-hidden shrink-0 transition-colors border" style={{ borderColor, backgroundColor: bgColor }}>
-                          <input
-                            type="color"
-                            value={color}
-                            onChange={e => { const n = [...compStocks]; n[idx] = { ...n[idx], color: e.target.value }; setCompStocks(n); }}
-                            style={{ width: '18px', height: '18px', minWidth: '18px', padding: 0, border: 'none', background: 'none', cursor: 'pointer', display: 'block' }}
-                            title="선 색상 변경"
-                          />
-                          <input type="text" className="bg-transparent text-[10px] px-2 py-1.5 outline-none text-center font-mono placeholder-gray-500 border-r border-l transition-colors" style={{ width: '50px', borderColor, color: comp.active ? textColor : '#93c5fd' }} placeholder="코드" value={comp.code} onChange={e => { const n = [...compStocks]; n[idx] = { ...n[idx], code: e.target.value }; setCompStocks(n); }} onBlur={e => handleCompStockBlur(idx, e.target.value)} />
+                        <div key={idx} className="flex items-center gap-0 rounded-md overflow-hidden shrink-0 transition-colors border" style={{ borderColor, backgroundColor: bgColor }}>
+                          {/* 컬러 인디케이터 + 숨겨진 color picker */}
+                          <div className="relative flex items-center justify-center w-5 self-stretch border-r border-gray-700/50 hover:bg-gray-700/30 transition-colors" title="선 색상 변경">
+                            <div className="w-2.5 h-2.5 rounded-full shadow-sm pointer-events-none" style={{ backgroundColor: color }} />
+                            <input
+                              type="color"
+                              value={color}
+                              onChange={e => { const n = [...compStocks]; n[idx] = { ...n[idx], color: e.target.value }; setCompStocks(n); }}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                          </div>
+                          <input type="text" className="bg-transparent text-[10px] px-2 py-1.5 outline-none text-center font-mono placeholder-gray-500 border-r transition-colors" style={{ width: '50px', borderColor, color: comp.active ? textColor : '#93c5fd' }} placeholder="코드" value={comp.code} onChange={e => { const n = [...compStocks]; n[idx] = { ...n[idx], code: e.target.value }; setCompStocks(n); }} onBlur={e => handleCompStockBlur(idx, e.target.value)} />
                           <button onClick={() => handleToggleComp(idx)} className="px-3 py-1.5 text-[10px] font-bold transition-colors min-w-[65px] max-w-[100px] truncate flex justify-center items-center gap-0.5" style={{ color: comp.loading ? '#9ca3af' : textColor, backgroundColor: comp.loading ? '#374151' : 'transparent', cursor: comp.loading ? 'wait' : 'pointer' }}>{comp.loading ? '...' : (comp.name || `종목${idx + 1}`)}<CompStockDot code={comp.code} /></button>
                         </div>
                       );
@@ -2434,7 +2437,7 @@ export default function App() {
                   <RechartsTooltip content={<MainChartCustomTooltip selectionResult={selectionResult} formatShortDateFn={formatShortDate} formatNumberFn={formatNumber} />} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
-                  {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#00f3ff" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
+                  {showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#38bdf8" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
                   {showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
                   {showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
                   {showIndicatorsInChart.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRateScaled" name="US 10Y" stroke="#8e8e93" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}

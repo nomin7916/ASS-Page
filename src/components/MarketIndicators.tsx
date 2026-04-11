@@ -4,7 +4,7 @@ import { RefreshCw, X, Search, Download, FileUp, DownloadCloud } from 'lucide-re
 import { formatNumber, getIndexLatest } from '../utils';
 
 const INDICATOR_COLORS = {
-  kospi: '#ff9500', sp500: '#bf5af2', nasdaq: '#30d158',
+  kospi: '#38bdf8', sp500: '#bf5af2', nasdaq: '#30d158',
   fedRate: '#ff375f', us10y: '#8e8e93', kr10y: '#636366',
   goldIntl: '#ffd60a', goldKr: '#d97706', usdkrw: '#0a84ff', dxy: '#5ac8fa',
   vix: '#ff453a',
@@ -63,7 +63,7 @@ export default function MarketIndicators({
       label: 'KOSPI', key: 'kospi',
       val: marketIndicators.kospiPrice ?? getIndexLatest(marketIndices?.kospi).val,
       chg: marketIndicators.kospiChg ?? getIndexLatest(marketIndices?.kospi).chg,
-      fmt: (v) => v?.toFixed(2), color: 'text-yellow-400',
+      fmt: (v) => v?.toFixed(2), color: 'text-sky-400',
       url: 'https://m.stock.naver.com/domestic/index/KOSPI/total',
       isIndexToggle: true, indexActive: showKospi, onIndexToggle: () => setShowKospi(!showKospi),
     },
