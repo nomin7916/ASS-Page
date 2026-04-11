@@ -1177,7 +1177,8 @@ export default function App() {
 
         try {
           const raw = JSON.parse(content);
-          if (raw.data && Array.isArray(raw.data)) {
+          const rawArr = Array.isArray(raw) ? raw : (raw.data && Array.isArray(raw.data) ? raw.data : null);
+          if (rawArr) {
             const upperFN = fileName.toUpperCase();
             const detectMarketKey = (fn) => {
               if (fn.includes('GOLD_INTL')) return 'GOLD_INTL';
@@ -1188,6 +1189,8 @@ export default function App() {
               if (fn.includes('SP500') || fn.includes('S&P500')) return 'SP500';
               if (fn.includes('KOSPI')) return 'KOSPI';
               if (fn.includes('VIX')) return 'VIX_INDEX';
+              if (fn.includes('DXY')) return 'DXY';
+              if (fn.includes('KR10Y') || fn.includes('KR_10Y')) return 'KR10Y';
               return null;
             };
             const marketKey = detectMarketKey(upperFN);
@@ -1202,7 +1205,7 @@ export default function App() {
             }
 
             const formattedData = {};
-            raw.data.forEach(item => {
+            rawArr.forEach(item => {
               const dateStr = item.Date ?? item.date ?? item.index ?? item.INDEX;
               const v = item.Close ?? item.Value ?? item.close ?? item.value ?? (() => {
                 const skip = ['Date', 'date', 'index', 'INDEX'];
@@ -1274,6 +1277,16 @@ export default function App() {
                 setMarketIndicators(prev => ({ ...prev, vix: latest, vixChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, vix: formattedData }));
                 showToast(`[시장지표] VIX 주입 완료 (${count}건, 최신: ${latest?.toFixed(2)})`);
+              } else if (cu === 'DXY') {
+                const { latest, chg, count } = getLatestChg(formattedData);
+                setMarketIndicators(prev => ({ ...prev, dxy: latest, dxyChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, dxy: formattedData }));
+                showToast(`[시장지표] DXY 주입 완료 (${count}건, 최신: ${latest?.toFixed(3)})`);
+              } else if (cu === 'KR10Y') {
+                const { latest, chg, count } = getLatestChg(formattedData);
+                setMarketIndicators(prev => ({ ...prev, kr10y: latest, kr10yChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, kr10y: formattedData }));
+                showToast(`[시장지표] KR 10Y 주입 완료 (${count}건, 최신: ${latest?.toFixed(3)}%)`);
               } else {
                 setStockHistoryMap(prev => ({ ...prev, [code]: formattedData }));
                 showToast(`[종목] ${code || fileName} 데이터 주입 완료`);
