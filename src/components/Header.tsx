@@ -2,7 +2,7 @@
 import React from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
-  X, Download, FolderOpen, FileUp
+  X, Download, FolderOpen, FileUp, Cloud
 } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 
@@ -17,7 +17,7 @@ const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCust
         <div className="hidden md:flex text-[10px] text-gray-500 font-mono w-full justify-end items-center gap-2 pr-1">
           <span className="text-gray-400">{UI_CONFIG.VERSION}</span>
           {isLoading && <span className="text-[10px] text-yellow-400 font-bold animate-pulse whitespace-nowrap">🔄 갱신중...</span>}
-          {!isLoading && gsheetStatus === 'loading' && <span className="text-[10px] text-blue-400 font-bold animate-pulse whitespace-nowrap">☁️ 불러오는 중...</span>}
+          {!isLoading && gsheetStatus === 'loading' && <span className="text-[10px] text-blue-400 font-bold animate-pulse whitespace-nowrap flex items-center gap-1"><Cloud size={11} /> 불러오는 중...</span>}
         </div>
         <div className="flex items-center gap-1.5 w-full justify-end pr-1">
           {customLinks.map((link, i) => (
@@ -28,15 +28,26 @@ const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCust
         </div>
         <div className="flex gap-2.5 flex-wrap justify-end items-center w-full mt-0.5">
           <div className="relative">
-            {(gsheetStatus === 'saving' || gsheetStatus === 'loading' || isLoading) && (
-              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] animate-pulse pointer-events-none select-none z-10" title={gsheetStatus === 'saving' ? '저장 중...' : gsheetStatus === 'loading' ? '불러오는 중...' : '갱신 중...'}>☁️</span>
-            )}
-            {gsheetStatus === 'saved' && !isLoading && gsheetStatus !== 'saving' && (
-              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="동기화 완료">☁️</span>
-            )}
-            {gsheetStatus === 'error' && !isLoading && (
-              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="동기화 실패">❌</span>
-            )}
+            <span
+              className={`absolute -top-5 left-1/2 -translate-x-1/2 pointer-events-none select-none z-10 transition-colors duration-500 ${
+                (gsheetStatus === 'saving' || gsheetStatus === 'loading' || isLoading)
+                  ? 'text-sky-400 animate-pulse'
+                  : gsheetStatus === 'error'
+                    ? 'text-slate-600'
+                    : gsheetStatus === 'saved'
+                      ? 'text-sky-200'
+                      : 'text-slate-500'
+              }`}
+              title={
+                gsheetStatus === 'saving' ? '저장 중...' :
+                gsheetStatus === 'loading' ? '불러오는 중...' :
+                isLoading ? '갱신 중...' :
+                gsheetStatus === 'error' ? '동기화 실패' :
+                gsheetStatus === 'saved' ? '동기화 완료' : 'Google Sheets'
+              }
+            >
+              <Cloud size={14} />
+            </span>
             <button onClick={onRefresh} title="새로고침 (종목가격 + 지수 데이터 수집)" className="bg-teal-600 hover:bg-teal-500 text-white p-2 rounded shadow transition border border-teal-500/30 flex items-center justify-center">
               <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
             </button>
