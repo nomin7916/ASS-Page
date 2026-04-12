@@ -1075,9 +1075,9 @@ export default function App() {
         kospiRate: baseK ? ((kPoint / baseK) - 1) * 100 : 0,
         sp500Rate: baseS ? ((sPoint / baseS) - 1) * 100 : 0,
         nasdaqRate: baseN ? ((nPoint / baseN) - 1) * 100 : 0,
-        comp1Rate: (baseComps[0] && c1) ? ((c1 / baseComps[0]) - 1) * 100 : 0,
-        comp2Rate: (baseComps[1] && c2) ? ((c2 / baseComps[1]) - 1) * 100 : 0,
-        comp3Rate: (baseComps[2] && c3) ? ((c3 / baseComps[2]) - 1) * 100 : 0,
+        comp1Rate: (baseComps[0] && c1) ? ((c1 / baseComps[0]) - 1) * 100 : null,
+        comp2Rate: (baseComps[1] && c2) ? ((c2 / baseComps[1]) - 1) * 100 : null,
+        comp3Rate: (baseComps[2] && c3) ? ((c3 / baseComps[2]) - 1) * 100 : null,
         ...indPoints,
       };
     });
@@ -1123,9 +1123,9 @@ export default function App() {
           kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
           sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
           nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
-          comp1Rate: baseItem.comp1Point > 0 ? ((item.comp1Point / baseItem.comp1Point) - 1) * 100 : 0,
-          comp2Rate: baseItem.comp2Point > 0 ? ((item.comp2Point / baseItem.comp2Point) - 1) * 100 : 0,
-          comp3Rate: baseItem.comp3Point > 0 ? ((item.comp3Point / baseItem.comp3Point) - 1) * 100 : 0,
+          comp1Rate: (baseItem.comp1Point > 0 && item.comp1Point != null) ? ((item.comp1Point / baseItem.comp1Point) - 1) * 100 : null,
+          comp2Rate: (baseItem.comp2Point > 0 && item.comp2Point != null) ? ((item.comp2Point / baseItem.comp2Point) - 1) * 100 : null,
+          comp3Rate: (baseItem.comp3Point > 0 && item.comp3Point != null) ? ((item.comp3Point / baseItem.comp3Point) - 1) * 100 : null,
           ...indRates,
         };
       });
@@ -1279,7 +1279,9 @@ export default function App() {
     if (comp.active) { setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: false }; return n; }); return; }
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
     let hist = stockHistoryMap[comp.code];
-    if (!hist) {
+    // 단순 현재가 캐시(1~3건)는 무시하고 과거 데이터 재조회
+    const hasRichHistory = hist && Object.keys(hist).length > 3;
+    if (!hasRichHistory) {
       // 1순위: KIS OpenAPI (상장 이후 전체 데이터, 수정주가 기준)
       const rKIS = await fetchKISStockHistory(comp.code);
       if (rKIS) hist = rKIS.data;
@@ -1395,7 +1397,7 @@ export default function App() {
         }
       }));
 
-      // 함수형 업데이트로 portfolio를 안전하게 갱신 (클로저 문제 완전 해결)
+      // ① 포트폴리오 테이블 최신가 즉시 반영 (상단 표시값 - 과거 데이터 조회 전에 먼저 업데이트)
       setPortfolio(prev => prev.map(item => {
         if (item.type === 'stock' && item.code && priceResults[item.code]) {
           const d = priceResults[item.code];
@@ -1403,6 +1405,26 @@ export default function App() {
         }
         return item;
       }));
+
+      // ② 그래프용 과거 데이터: 충분한 이력이 없는 종목만 백그라운드로 조회 (상단 값에 영향 없음)
+      const codesNeedingHistory = stockCodes.filter(code => {
+        const existing = stockHistoryMap[code];
+        return !existing || Object.keys(existing).length <= 3;
+      });
+      if (codesNeedingHistory.length > 0) {
+        Promise.all(codesNeedingHistory.map(async (code) => {
+          let hist: Record<string, number> | null = null;
+          const rKIS = await fetchKISStockHistory(code);
+          if (rKIS) hist = rKIS.data;
+          if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
+          if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
+          if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
+          if (hist) {
+            setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+          }
+        }));
+        // await 없이 fire-and-forget: 과거 데이터는 백그라운드에서 로드되며 완료 시 그래프 자동 갱신
+      }
 
       const [kRes, sRes, nRes] = await Promise.allSettled([
         fetchIndexData('^KS11'),
@@ -2579,9 +2601,9 @@ export default function App() {
                   {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="right-kr10y" dataKey="kr10yPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
                   {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Area yAxisId="left" type="monotone" dataKey="vixRateScaled" name="VIX" stroke="#ff453a" strokeWidth={1.5} fill="url(#vixGradient)" strokeDasharray="4 2" connectNulls dot={false} />}
                   {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Line yAxisId="right-vix" dataKey="vixPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
-                  {compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke={compStocks[0].color || '#10b981'} strokeWidth={1.5} dot={false} />}
-                  {compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke={compStocks[1].color || '#0ea5e9'} strokeWidth={1.5} dot={false} />}
-                  {compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke={compStocks[2].color || '#ec4899'} strokeWidth={1.5} dot={false} />}
+                  {compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke={compStocks[0].color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} />}
+                  {compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke={compStocks[1].color || '#0ea5e9'} strokeWidth={1.5} dot={false} connectNulls={false} />}
+                  {compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke={compStocks[2].color || '#ec4899'} strokeWidth={1.5} dot={false} connectNulls={false} />}
                   {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
                 </ComposedChart>
               </ResponsiveContainer>
