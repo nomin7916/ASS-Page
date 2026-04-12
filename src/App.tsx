@@ -394,6 +394,7 @@ export default function App() {
   const gsheetTimer = useRef(null);
   const isInitialLoad = useRef(true);
   const portfolioRef = useRef([]);
+  const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
 
   const loadFromGSheet = async () => {
     try {
@@ -1671,6 +1672,9 @@ export default function App() {
     const mi = String(now.getMinutes()).padStart(2, '0');
     const ss = String(now.getSeconds()).padStart(2, '0');
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `백업_ ${yy}-${mo}-${dd}_${hh},${mi},${ss}.json`; a.click();
+    // PC 다운로드와 동시에 Google Sheets에도 백업
+    saveAllToGSheet(state);
+    showToast('☁️ PC 파일 + Google Sheets 동시 백업 완료');
   };
 
   const handleLoad = (e) => {
@@ -1874,21 +1878,24 @@ export default function App() {
       } catch (e) {}
     }
 
-    // 2단계: 1초 후 백그라운드에서 GSheet + 시장지표 + 현재가 순차 갱신
+    // 2단계: 1초 후 로컬 데이터 기반으로 바로 조회 시작 (GSheet 로드 없이)
     const bgTimer = setTimeout(async () => {
-      // GSheet 최신 백업 반영 (다른 기기에서 저장된 변경사항 병합)
-      const gsheetPortfolio = await loadFromGSheet();
+      const portfolioToRefresh = portfolioRef.current;
 
-      // 시장지표 최신화
+      // 시장지표는 백그라운드 병렬, 종목 현재가는 await (주요 조회)
       fetchMarketIndicators();
-
-      // 종목 현재가 실시간 최신화
-      const portfolioToRefresh = gsheetPortfolio || portfolioRef.current;
-      if (portfolioToRefresh && portfolioToRefresh.length > 0) {
-        autoRefreshStockPrices(portfolioToRefresh);
+      if (portfolioToRefresh.length > 0) {
+        await autoRefreshStockPrices(portfolioToRefresh);
       }
 
-      setTimeout(() => { isInitialLoad.current = false; }, 15000);
+      // 조회 완료 후 1초 뒤 GSheet 백업 + 자동저장 활성화
+      setTimeout(() => {
+        isInitialLoad.current = false;
+        const snap = saveStateRef.current;
+        if (snap && snap.portfolio?.length > 0) {
+          saveAllToGSheet(snap);
+        }
+      }, 1000);
     }, 1000);
 
     return () => clearTimeout(bgTimer);
@@ -1934,12 +1941,20 @@ export default function App() {
   // 20분(1,200,000ms)마다 자동으로 현재가 + 시장지표 갱신 후 GSheet 백업
   useEffect(() => {
     const AUTO_REFRESH_INTERVAL = 20 * 60 * 1000; // 20분
-    const intervalId = setInterval(() => {
+    const intervalId = setInterval(async () => {
       // portfolio가 있을 때만 실행
       if (portfolioRef.current.length > 0 && portfolioRef.current.some(p => p.type === 'stock' && p.code)) {
         console.log('[자동갱신] 20분 주기 현재가 + 시장지표 갱신 시작');
-        refreshPrices();
         fetchMarketIndicators();
+        await refreshPrices();
+        // 갱신 완료 후 3초 대기 (React 상태 업데이트 반영) → GSheet 자동저장
+        setTimeout(() => {
+          const snap = saveStateRef.current;
+          if (snap && snap.portfolio?.length > 0) {
+            console.log('[자동저장] 20분 주기 GSheet 백업');
+            saveAllToGSheet(snap);
+          }
+        }, 3000);
       }
     }, AUTO_REFRESH_INTERVAL);
     return () => clearInterval(intervalId);
@@ -1949,12 +1964,7 @@ export default function App() {
     if (portfolio.length === 0) return;
     const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
     localStorage.setItem('portfolioState_v5', JSON.stringify(state));
-
-    // Google Sheets 자동저장 (5초 디바운스, 3개 시트 분리 저장)
-    if (!isInitialLoad.current) {
-      if (gsheetTimer.current) clearTimeout(gsheetTimer.current);
-      gsheetTimer.current = setTimeout(() => saveAllToGSheet(state), 5000);
-    }
+    saveStateRef.current = state; // 항상 최신 상태 유지 (GSheet 저장에 사용)
   }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate]);
 
   useEffect(() => {
