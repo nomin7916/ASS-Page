@@ -398,46 +398,64 @@ export default function App() {
   const loadFromGSheet = async () => {
     try {
       setGsheetStatus('loading');
-      const res = await fetch(GSHEET_URL);
-      const result = await res.json();
-      if (result.success && result.data) {
-        const data = result.data;
-        setTitle(data.title || "포트폴리오");
-        setPortfolio(data.portfolio || []);
-        setPrincipal(cleanNum(data.principal));
-        setHistory(data.history || []);
-        setDepositHistory(data.depositHistory || []);
-        if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
-        setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
-        setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
-        setLookupRows(data.lookupRows || []);
-        setStockHistoryMap(data.stockHistoryMap || {});
-        setCompStocks(data.compStocks || defaultCompStocks);
-        if (data.marketIndices) {
-          setMarketIndices(data.marketIndices);
-          setIndexFetchStatus({
-            kospi: data.marketIndices.kospi ? buildIndexStatus(data.marketIndices.kospi, 'GSheet') : null,
-            sp500: data.marketIndices.sp500 ? buildIndexStatus(data.marketIndices.sp500, 'GSheet') : null,
-            nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, 'GSheet') : null,
-          });
-        }
-        if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
-        if (data.chartPrefs) {
-          if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
-          if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
-          if (data.chartPrefs.showNasdaq !== undefined) setShowNasdaq(data.chartPrefs.showNasdaq);
-          if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
-          if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
-          if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
-        }
-        if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
-        if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
-        setGsheetStatus('saved');
-        showToast('☁️ Google Sheets에서 데이터 불러옴');
-        return data.portfolio || [];
+
+      // 3개 시트 병렬 로드
+      const [stateRes, stockRes, marketRes] = await Promise.allSettled([
+        fetch(`${GSHEET_URL}?action=loadState`).then(r => r.json()),
+        fetch(`${GSHEET_URL}?action=loadStockData`).then(r => r.json()),
+        fetch(`${GSHEET_URL}?action=loadMarketData`).then(r => r.json()),
+      ]);
+
+      const stateData = stateRes.status === 'fulfilled' && stateRes.value?.success ? stateRes.value.data : null;
+      const stockData = stockRes.status === 'fulfilled' && stockRes.value?.success ? stockRes.value.data : null;
+      const marketData = marketRes.status === 'fulfilled' && marketRes.value?.success ? marketRes.value.data : null;
+
+      if (!stateData) { setGsheetStatus(''); return null; }
+
+      // 기본 상태 복원 (data 시트)
+      setTitle(stateData.title || "포트폴리오");
+      setPortfolio(stateData.portfolio || []);
+      setPrincipal(cleanNum(stateData.principal));
+      setHistory(stateData.history || []);
+      setDepositHistory(stateData.depositHistory || []);
+      if (stateData.depositHistory2) setDepositHistory2(stateData.depositHistory2);
+      setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
+      setSettings(stateData.settings || { mode: 'rebalance', amount: 1000000 });
+      setLookupRows(stateData.lookupRows || []);
+      setCompStocks(stateData.compStocks || defaultCompStocks);
+      if (stateData.portfolioStartDate) setPortfolioStartDate(stateData.portfolioStartDate);
+      if (stateData.chartPrefs) {
+        if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
+        if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
+        if (stateData.chartPrefs.showNasdaq !== undefined) setShowNasdaq(stateData.chartPrefs.showNasdaq);
+        if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
+        if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
+        if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
       }
-      setGsheetStatus('');
-      return null;
+
+      // 종목 히스토리: StockData 시트 우선, 없으면 data 시트 폴백
+      const resolvedStockHistoryMap = stockData?.stockHistoryMap || stateData.stockHistoryMap || {};
+      setStockHistoryMap(resolvedStockHistoryMap);
+
+      // 시장 데이터: MarketData 시트 우선, 없으면 data 시트 폴백
+      const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
+      const resolvedIndicatorHistoryMap = marketData?.indicatorHistoryMap || stateData.indicatorHistoryMap || {};
+      const resolvedMarketIndicators = marketData?.marketIndicators || stateData.marketIndicators;
+
+      if (resolvedMarketIndices) {
+        setMarketIndices(resolvedMarketIndices);
+        setIndexFetchStatus({
+          kospi: resolvedMarketIndices.kospi ? buildIndexStatus(resolvedMarketIndices.kospi, 'GSheet') : null,
+          sp500: resolvedMarketIndices.sp500 ? buildIndexStatus(resolvedMarketIndices.sp500, 'GSheet') : null,
+          nasdaq: resolvedMarketIndices.nasdaq ? buildIndexStatus(resolvedMarketIndices.nasdaq, 'GSheet') : null,
+        });
+      }
+      if (resolvedMarketIndicators) setMarketIndicators(resolvedMarketIndicators);
+      if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
+
+      setGsheetStatus('saved');
+      showToast('☁️ Google Sheets에서 데이터 불러옴');
+      return stateData.portfolio || [];
     } catch (err) {
       console.error('GSheet 불러오기 실패:', err);
       setGsheetStatus('error');
@@ -445,14 +463,27 @@ export default function App() {
     }
   };
 
-  const saveToGSheet = async (state) => {
+  // 단일 시트 저장 (저수준) - action: 'saveState' | 'saveStockData' | 'saveMarketData'
+  const saveToGSheet = async (data, action = 'saveState', label = '자동저장') => {
+    await fetch(GSHEET_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ action, label, data }),
+    });
+  };
+
+  // 3개 시트 동시 저장 래퍼
+  const saveAllToGSheet = async (state) => {
     try {
       setGsheetStatus('saving');
-      await fetch(GSHEET_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ label: '자동저장', data: state }),
-      });
+      const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
+      await Promise.all([
+        saveToGSheet(state, 'saveState', '자동저장'),
+        Object.keys(shm || {}).length > 0
+          ? saveToGSheet({ stockHistoryMap: shm }, 'saveStockData', '종목 히스토리')
+          : Promise.resolve(),
+        saveToGSheet({ marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }, 'saveMarketData', '시장 히스토리'),
+      ]);
       setGsheetStatus('saved');
     } catch (err) {
       console.error('GSheet 저장 실패:', err);
@@ -1855,10 +1886,10 @@ export default function App() {
     const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
     localStorage.setItem('portfolioState_v5', JSON.stringify(state));
 
-    // Google Sheets 자동저장 (5초 디바운스)
+    // Google Sheets 자동저장 (5초 디바운스, 3개 시트 분리 저장)
     if (!isInitialLoad.current) {
       if (gsheetTimer.current) clearTimeout(gsheetTimer.current);
-      gsheetTimer.current = setTimeout(() => saveToGSheet(state), 5000);
+      gsheetTimer.current = setTimeout(() => saveAllToGSheet(state), 5000);
     }
   }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate]);
 
