@@ -40,14 +40,14 @@ export const fetchKISToken = async (): Promise<string | null> => {
   return null;
 };
 
-export const fetchKISStockHistory = async (code: string): Promise<{ data: Record<string, number>; source: string } | null> => {
+export const fetchKISStockHistory = async (code: string, fromYear: number = 2000): Promise<{ data: Record<string, number>; source: string } | null> => {
   const token = await fetchKISToken();
   if (!token) return null;
 
   const result: Record<string, number> = {};
   const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
   // 연도별 청크로 요청 (KIS API는 한 번에 약 100건 반환)
-  const startYear = 2000;
+  const startYear = fromYear;
   const endYear = new Date().getFullYear();
 
   for (let year = startYear; year <= endYear; year += 2) {
@@ -98,7 +98,7 @@ export const fetchKISStockHistory = async (code: string): Promise<{ data: Record
 };
 // ─────────────────────────────────────────────────────────────────
 
-export const fetchIndexData = async (symbol) => {
+export const fetchIndexData = async (symbol, startDate?: string) => {
   const stooqMap = { '^KS11': '^kospi', '^GSPC': '^spx' };
   const stooqSymbol = stooqMap[symbol];
 
@@ -137,7 +137,10 @@ export const fetchIndexData = async (symbol) => {
     } catch (e) {}
   }
 
-  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=2y&interval=1d`;
+  const yahooQuery = startDate
+    ? `period1=${Math.floor(new Date(startDate).getTime() / 1000)}&period2=${Math.floor(Date.now() / 1000)}&interval=1d`
+    : `range=2y&interval=1d`;
+  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?${yahooQuery}`;
   const proxies = [
     { url: `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`, name: 'corsproxy.io' },
     { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, name: 'allorigins' },
