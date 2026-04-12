@@ -364,6 +364,8 @@ export default function App() {
   const [indicatorHistoryMap, setIndicatorHistoryMap] = useState({});
   const [stockHistoryMap, setStockHistoryMap] = useState({});
   const [compStocks, setCompStocks] = useState(defaultCompStocks);
+  // 세션 내 자동 전체이력 재조회 완료된 종목 코드 추적 (중복 API 호출 방지)
+  const autoFetchedCodes = useRef<Set<string>>(new Set());
   const [portfolioStartDate, setPortfolioStartDate] = useState(() => {
     const today = new Date();
     today.setFullYear(today.getFullYear() - 1);
@@ -1325,18 +1327,17 @@ export default function App() {
       startDate = now.toISOString().split('T')[0];
     }
 
-    // 기존 단일-포인트 캐시 초기화 (강제 재조회)
+    // 기존 캐시 초기화 (강제 재조회)
     setStockHistoryMap(prev => { const n = { ...prev }; delete n[comp.code]; return n; });
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
 
-    // Naver count: 조회 시작일부터 오늘까지 거래일 추정 (~72% + 여유분)
-    const daysDiff = Math.ceil((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24));
-    const naverCount = Math.min(Math.ceil(daysDiff * 0.72) + 30, 2000);
-    const startYear = new Date(startDate).getFullYear();
+    // 상장일부터 전체 이력 조회: 한 번 받으면 어떤 기간으로 바꿔도 재조회 불필요
+    const naverCount = 2000; // 최대 거래일 수
+    const startYear = 2000;  // 상장일 전체 이력 (KIS: 2000년부터)
 
     let hist: Record<string, number> | null = null;
 
-    // 1순위: KIS (조회기간 시작 연도부터)
+    // 1순위: KIS (상장 이후 전체, 2000년부터)
     const rKIS = await fetchKISStockHistory(comp.code, startYear);
     if (rKIS) hist = rKIS.data;
     // 2순위: 네이버 fchart (계산된 count로)
@@ -1348,9 +1349,12 @@ export default function App() {
     if (hist && Object.keys(hist).length > 1) {
       setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
       setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
-      showToast(`${comp.name || comp.code} 데이터 ${Object.keys(hist).length}건 로드 완료`);
+      autoFetchedCodes.current.add(comp.code); // 전체 이력 조회 완료 표시
+      const earliest = Object.keys(hist).sort()[0];
+      showToast(`${comp.name || comp.code} 데이터 ${Object.keys(hist).length}건 로드 완료 (${earliest}~)`);
     } else {
-      // 현재가 폴백
+      // 현재가 폴백 (API 실패 시) - 더 이상 재시도 방지
+      autoFetchedCodes.current.add(comp.code);
       const info = await fetchStockInfo(comp.code);
       if (info) {
         const todayStr = new Date().toISOString().split('T')[0];
@@ -2023,6 +2027,23 @@ export default function App() {
     }
   }, [chartPeriod, unifiedDates]);
 
+  // 조회기간 변경 시 활성 비교종목 데이터가 범위를 커버하지 못하면 자동 전체 이력 재조회
+  useEffect(() => {
+    if (!appliedRange.start) return;
+    compStocks.forEach((comp, idx) => {
+      if (!comp.active || !comp.code || comp.loading) return;
+      if (autoFetchedCodes.current.has(comp.code)) return; // 이미 이번 세션에서 전체 조회 완료
+      const hist = stockHistoryMap[comp.code];
+      if (!hist || Object.keys(hist).length <= 1) return; // 단일포인트(폴백) 데이터는 별도 처리
+      const earliestFetched = Object.keys(hist).sort()[0];
+      if (earliestFetched > appliedRange.start) {
+        // 조회기간이 보유 데이터 범위보다 앞으로 확장됨 → 자동 전체 이력 재조회
+        autoFetchedCodes.current.add(comp.code); // 중복 트리거 방지 (비동기 중 재진입 막기)
+        handleFetchCompHistory(idx);
+      }
+    });
+  }, [appliedRange.start]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     const handler = (e) => { if (!e.target.closest('.chart-container-for-drag')) { setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null); } };
     window.addEventListener('mousedown', handler);
@@ -2388,11 +2409,16 @@ export default function App() {
                   {/* [수정5] 종목비교 컴포넌트를 좌측(대표지수 위치)으로 이동 */}
                   <div className="flex flex-wrap items-center gap-2">
                     {compStocks.map((comp, idx) => {
-                      const isFallback = comp.active && stockHistoryMap[comp.code] && Object.keys(stockHistoryMap[comp.code]).length === 1;
+                      const histKeys = comp.active && stockHistoryMap[comp.code] ? Object.keys(stockHistoryMap[comp.code]).sort() : [];
+                      const isFallback = comp.active && histKeys.length === 1;
+                      // 데이터가 있지만 조회 시작일보다 늦게 시작 → 재조회 필요
+                      const needsCoverage = comp.active && histKeys.length > 1 && !!appliedRange.start && histKeys[0] > appliedRange.start;
+                      const showRefresh = isFallback || needsCoverage;
                       const color = comp.color || '#10b981';
-                      const borderColor = comp.active ? (isFallback ? '#f97316' : color) : '#4b5563';
-                      const bgColor = comp.active ? (isFallback ? 'rgba(249,115,22,0.1)' : `${color}22`) : '#1f2937';
-                      const textColor = comp.active ? (isFallback ? '#fb923c' : color) : '#6b7280';
+                      const borderColor = comp.active ? (showRefresh ? '#f97316' : color) : '#4b5563';
+                      const bgColor = comp.active ? (showRefresh ? 'rgba(249,115,22,0.1)' : `${color}22`) : '#1f2937';
+                      const textColor = comp.active ? (showRefresh ? '#fb923c' : color) : '#6b7280';
+                      const refreshTitle = isFallback ? '조회기간 전체 이력 불러오기' : needsCoverage ? `조회기간(${appliedRange.start}) 이전 데이터 없음 — 전체 이력 재조회` : '전체 이력 재조회';
                       return (
                         <div key={idx} className="flex items-center gap-0 rounded-md overflow-hidden shrink-0 transition-colors border" style={{ borderColor, backgroundColor: bgColor }}>
                           {/* 컬러 인디케이터 + 숨겨진 color picker */}
@@ -2407,8 +2433,8 @@ export default function App() {
                           </div>
                           <input type="text" className="bg-transparent text-[10px] px-2 py-1.5 outline-none text-center font-mono placeholder-gray-500 border-r transition-colors" style={{ width: '50px', borderColor, color: comp.active ? textColor : '#93c5fd' }} placeholder="코드" value={comp.code} onChange={e => { const n = [...compStocks]; n[idx] = { ...n[idx], code: e.target.value }; setCompStocks(n); }} onBlur={e => handleCompStockBlur(idx, e.target.value)} />
                           <button onClick={() => handleToggleComp(idx)} className="px-3 py-1.5 text-[10px] font-bold transition-colors min-w-[65px] max-w-[100px] truncate flex justify-center items-center gap-0.5" style={{ color: comp.loading ? '#9ca3af' : textColor, backgroundColor: comp.loading ? '#374151' : 'transparent', cursor: comp.loading ? 'wait' : 'pointer' }}>{comp.loading ? <RefreshCw size={12} className="animate-spin" /> : (comp.name || `종목${idx + 1}`)}<CompStockDot code={comp.code} /></button>
-                          {isFallback && (
-                            <button onClick={() => handleFetchCompHistory(idx)} className="px-1.5 py-1.5 text-orange-400 hover:text-orange-200 hover:bg-orange-900/30 transition-colors border-l border-orange-700/40" title="조회기간 데이터 불러오기" style={{ cursor: 'pointer' }}>
+                          {showRefresh && (
+                            <button onClick={() => { autoFetchedCodes.current.delete(comp.code); handleFetchCompHistory(idx); }} className="px-1.5 py-1.5 text-orange-400 hover:text-orange-200 hover:bg-orange-900/30 transition-colors border-l border-orange-700/40" title={refreshTitle} style={{ cursor: 'pointer' }}>
                               <RefreshCw size={10} />
                             </button>
                           )}
