@@ -477,8 +477,10 @@ export default function App() {
     try {
       setGsheetStatus('saving');
       const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
+      // data 시트에는 stateCore만 저장 (히스토리 제외) → 셀 50,000자 제한 초과 방지
+      // StockData/MarketData 시트는 순차 저장으로 data 시트 race condition 방지
+      await saveToGSheet(stateCore, 'saveState', '자동저장');
       await Promise.all([
-        saveToGSheet(state, 'saveState', '자동저장'),
         Object.keys(shm || {}).length > 0
           ? saveToGSheet({ stockHistoryMap: shm }, 'saveStockData', '종목 히스토리')
           : Promise.resolve(),
