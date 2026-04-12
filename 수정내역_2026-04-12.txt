@@ -1,0 +1,155 @@
+================================================================
+  ASS-Page 수정 내역 — 2026-04-12
+  커밋: 95ff5cd "비교 종목 데이터 처리 개선: null 값 처리 및 과거 데이터 재조회 로직 추가"
+  수정 파일: src/App.tsx
+================================================================
+
+----------------------------------------------------------------
+수정 배경
+----------------------------------------------------------------
+대시보드 그래프에서 비교 종목 및 포트폴리오 종목의 과거 데이터를
+KIS OpenAPI / 네이버 fchart / Yahoo Finance API를 통해 불러오도록
+이전에 추가했으나 그래프에 데이터가 반영되지 않는 문제 발생.
+
+요구사항 3가지:
+  1) 그래프 분석 시 기간별 장기 과거 데이터 필요
+  2) 대시보드 현재값 갱신 시 최신가 반영
+  3) 상단 포트폴리오 테이블은 항상 최신값만 표시 (과거값 불필요)
+
+----------------------------------------------------------------
+버그 1 — handleToggleComp: 현재가 1건만 있어도 과거 조회 건너뜀
+----------------------------------------------------------------
+위치: App.tsx ~1281행
+
+[문제]
+  stockHistoryMap[comp.code]에 오늘 현재가 1건만 있어도 truthy 판정 →
+  if (!hist) 조건 불충족 → 과거 이력 API 호출 완전 건너뜀 →
+  그래프에 오늘 날짜 단 1개 데이터포인트만 존재
+
+[수정 전]
+  let hist = stockHistoryMap[comp.code];
+  if (!hist) {
+    // KIS → 네이버 → Yahoo 조회
+  }
+
+[수정 후]
+  let hist = stockHistoryMap[comp.code];
+  // 단순 현재가 캐시(1~3건)는 무시하고 과거 데이터 재조회
+  const hasRichHistory = hist && Object.keys(hist).length > 3;
+  if (!hasRichHistory) {
+    // KIS → 네이버 → Yahoo 조회
+  }
+
+[효과]
+  저장된 데이터가 3건 이하이면 과거 이력을 항상 재조회.
+  4건 이상이면 캐시된 이력 재사용 (불필요한 API 중복 호출 방지).
+
+----------------------------------------------------------------
+버그 2 — refreshPrices: 포트폴리오 종목 과거 데이터 미조회
+----------------------------------------------------------------
+위치: App.tsx ~1400행 (신규 추가)
+
+[문제]
+  refreshPrices()는 fetchStockInfo()로 현재가만 수집하고
+  stockHistoryMap에 오늘 날짜 가격 1건만 저장.
+  finalChartData가 stockHistoryMap[item.code]를 이용해
+  과거 포트폴리오 평가액을 계산하지만 데이터가 없어
+  그래프 포트폴리오 라인이 오늘 이외 구간에서 추정값으로만 표시됨.
+
+[수정 전]
+  // 현재가 수집 후 바로 setPortfolio 호출
+  // 과거 데이터 조회 없음
+
+[수정 후]
+  // ① 포트폴리오 테이블 최신가 즉시 반영 (상단 표시값)
+  setPortfolio(prev => prev.map(item => { ... }));
+
+  // ② 그래프용 과거 데이터: 이력이 3건 이하인 종목만 백그라운드 조회
+  const codesNeedingHistory = stockCodes.filter(code => {
+    const existing = stockHistoryMap[code];
+    return !existing || Object.keys(existing).length <= 3;
+  });
+  if (codesNeedingHistory.length > 0) {
+    Promise.all(codesNeedingHistory.map(async (code) => {
+      // KIS → 네이버 fchart → Yahoo(.KS) → Yahoo(.KQ) 순 시도
+      if (hist) setStockHistoryMap(prev => ({ ...prev, [code]: { ...prev[code], ...hist } }));
+    }));
+    // await 없이 fire-and-forget
+  }
+
+[효과]
+  - 상단 포트폴리오 테이블: 현재가 즉시 갱신 (과거 조회 대기 없음)
+  - 과거 데이터 조회는 백그라운드에서 진행
+  - 조회 완료 시 stockHistoryMap state 업데이트 → 그래프 자동 리렌더링
+  - 이미 충분한 이력(4건↑)이 있는 종목은 재조회 하지 않음
+
+----------------------------------------------------------------
+버그 3 — comp1/2/3Rate: 데이터 없는 날 0% 표시로 그래프 오표시
+----------------------------------------------------------------
+위치: App.tsx ~1075행 (indexDataMap), ~1123행 (finalChartData zeroBase),
+       ~2601행 (차트 Line 컴포넌트)
+
+[문제]
+  비교 종목 데이터가 없는 날짜에 comp1Rate = 0으로 저장 →
+  그래프에 해당 날짜 전체가 0% 평선으로 그려져
+  마치 "데이터가 없다"처럼 보임
+
+[수정 전] — indexDataMap
+  comp1Rate: (baseComps[0] && c1) ? ((c1 / baseComps[0]) - 1) * 100 : 0,
+  comp2Rate: (baseComps[1] && c2) ? ((c2 / baseComps[1]) - 1) * 100 : 0,
+  comp3Rate: (baseComps[2] && c3) ? ((c3 / baseComps[2]) - 1) * 100 : 0,
+
+[수정 후] — indexDataMap
+  comp1Rate: (baseComps[0] && c1) ? ((c1 / baseComps[0]) - 1) * 100 : null,
+  comp2Rate: (baseComps[1] && c2) ? ((c2 / baseComps[1]) - 1) * 100 : null,
+  comp3Rate: (baseComps[2] && c3) ? ((c3 / baseComps[2]) - 1) * 100 : null,
+
+[수정 전] — finalChartData (zero base 모드)
+  comp1Rate: baseItem.comp1Point > 0 ? ((item.comp1Point / baseItem.comp1Point) - 1) * 100 : 0,
+  comp2Rate: baseItem.comp2Point > 0 ? ((item.comp2Point / baseItem.comp2Point) - 1) * 100 : 0,
+  comp3Rate: baseItem.comp3Point > 0 ? ((item.comp3Point / baseItem.comp3Point) - 1) * 100 : 0,
+
+[수정 후] — finalChartData (zero base 모드)
+  comp1Rate: (baseItem.comp1Point > 0 && item.comp1Point != null) ? (...) : null,
+  comp2Rate: (baseItem.comp2Point > 0 && item.comp2Point != null) ? (...) : null,
+  comp3Rate: (baseItem.comp3Point > 0 && item.comp3Point != null) ? (...) : null,
+
+[수정 전] — 차트 Line 컴포넌트
+  <Line ... dataKey="comp1Rate" ... />   (connectNulls 없음)
+  <Line ... dataKey="comp2Rate" ... />
+  <Line ... dataKey="comp3Rate" ... />
+
+[수정 후] — 차트 Line 컴포넌트
+  <Line ... dataKey="comp1Rate" ... connectNulls={false} />
+  <Line ... dataKey="comp2Rate" ... connectNulls={false} />
+  <Line ... dataKey="comp3Rate" ... connectNulls={false} />
+
+[효과]
+  데이터가 없는 날짜는 null → 그래프에서 해당 구간 선 미표시.
+  실제 데이터가 있는 구간만 선으로 표시되어 정확한 비교 가능.
+
+----------------------------------------------------------------
+수정 후 동작 정리
+----------------------------------------------------------------
+
+  [refreshPrices 호출 시 흐름]
+  1. fetchStockInfo() 병렬 호출 → 각 종목 최신가 수집
+  2. stockHistoryMap[code][오늘] = 최신가  (오늘 값 즉시 저장)
+  3. setPortfolio() → 상단 테이블 최신가 즉시 반영  ← 지연 없음
+  4. 이력 3건↓ 종목만 백그라운드로 과거 API 조회 (fire-and-forget)
+     KIS OpenAPI → 네이버 fchart → Yahoo(.KS) → Yahoo(.KQ) 순
+  5. 조회 완료 시 stockHistoryMap 업데이트 → 그래프 자동 갱신
+
+  [handleToggleComp 호출 시 흐름]
+  1. 이미 active이면 비활성화 후 종료
+  2. stockHistoryMap[comp.code] 이력이 3건 이하이면 재조회
+     KIS OpenAPI → 네이버 fchart → Yahoo(.KS) → Yahoo(.KQ) 순
+  3. 모두 실패 시 fetchStockInfo()로 현재가 단일 포인트 저장 + 경고 toast
+  4. setCompStocks active: true → 그래프에 비교 종목 라인 표시
+
+  [요구사항 충족 여부]
+  ✅ 그래프 분석: 포트폴리오·비교 종목 모두 장기 과거 데이터 로드
+  ✅ 대시보드 현재값: 갱신 시 stockHistoryMap[오늘] 에 최신가 저장
+  ✅ 상단 포트폴리오 테이블: 과거 조회와 무관하게 최신가 즉시 표시
+
+================================================================
