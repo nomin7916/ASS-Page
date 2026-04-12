@@ -49,7 +49,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                       <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-gray-300`} value={item.name} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
                       {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
                       {fStatus === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />}
-                      {fStatus === 'loading' && <span className="w-2 h-2 rounded-full bg-yellow-400 shrink-0 animate-pulse" title="갱신 중..." />}
+                      {fStatus === 'loading' && <RefreshCw size={10} className="animate-spin text-yellow-400 shrink-0" title="갱신 중..." />}
                       {!fStatus && item.code && <span className="w-2 h-2 rounded-full bg-gray-600 shrink-0" title="미갱신" />}
                     </div>
                   </td>
