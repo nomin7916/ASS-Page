@@ -1740,59 +1740,63 @@ export default function App() {
   };
 
   useEffect(() => {
-    const init = async () => {
-      // 1단계: GSheet에서 종목 데이터 로드
-      let loadedPortfolio = await loadFromGSheet();
-      
-      // GSheet 실패 시 localStorage 폴백
-      if (!loadedPortfolio) {
-        const saved = localStorage.getItem('portfolioState_v5');
-        if (saved) {
-          try {
-            const data = JSON.parse(saved);
-            setTitle(data.title || "포트폴리오"); setPortfolio(data.portfolio || []); setPrincipal(cleanNum(data.principal));
-            setHistory(data.history || []); setDepositHistory(data.depositHistory || []);
-            if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
-            setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS); setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
-            setLookupRows(data.lookupRows || []); setStockHistoryMap(data.stockHistoryMap || {});
-            setCompStocks(data.compStocks || defaultCompStocks);
-            if (data.marketIndices) {
-              setMarketIndices(data.marketIndices);
-              setIndexFetchStatus({
-                kospi: data.marketIndices.kospi ? buildIndexStatus(data.marketIndices.kospi, 'localStorage') : null,
-                sp500: data.marketIndices.sp500 ? buildIndexStatus(data.marketIndices.sp500, 'localStorage') : null,
-                nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, 'localStorage') : null,
-              });
-            }
-            if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
-            else if (data.history?.length > 0) setPortfolioStartDate(data.history[0].date);
-            if (data.chartPrefs) {
-              if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
-              if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
-              if (data.chartPrefs.showNasdaq !== undefined) setShowNasdaq(data.chartPrefs.showNasdaq);
-              if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
-              if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
-              if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
-            }
-            if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
-        if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
-            loadedPortfolio = data.portfolio || [];
-            showToast('📦 로컬 데이터에서 복원');
-          } catch (e) {}
+    // 1단계: localStorage에서 즉시 복원 (동기) → 화면 지연 없이 이전 상태 표시
+    const saved = localStorage.getItem('portfolioState_v5');
+    if (saved) {
+      try {
+        const data = JSON.parse(saved);
+        setTitle(data.title || "포트폴리오");
+        setPortfolio(data.portfolio || []);
+        setPrincipal(cleanNum(data.principal));
+        setHistory(data.history || []);
+        setDepositHistory(data.depositHistory || []);
+        if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
+        setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
+        setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
+        setLookupRows(data.lookupRows || []);
+        setStockHistoryMap(data.stockHistoryMap || {});
+        setCompStocks(data.compStocks || defaultCompStocks);
+        if (data.marketIndices) {
+          setMarketIndices(data.marketIndices);
+          setIndexFetchStatus({
+            kospi: data.marketIndices.kospi ? buildIndexStatus(data.marketIndices.kospi, 'localStorage') : null,
+            sp500: data.marketIndices.sp500 ? buildIndexStatus(data.marketIndices.sp500, 'localStorage') : null,
+            nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, 'localStorage') : null,
+          });
         }
+        if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
+        else if (data.history?.length > 0) setPortfolioStartDate(data.history[0].date);
+        if (data.chartPrefs) {
+          if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
+          if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
+          if (data.chartPrefs.showNasdaq !== undefined) setShowNasdaq(data.chartPrefs.showNasdaq);
+          if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
+          if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
+          if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
+        }
+        if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
+        if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
+      } catch (e) {}
+    }
+
+    // 2단계: 1초 후 백그라운드에서 GSheet + 시장지표 + 현재가 순차 갱신
+    const bgTimer = setTimeout(async () => {
+      // GSheet 최신 백업 반영 (다른 기기에서 저장된 변경사항 병합)
+      const gsheetPortfolio = await loadFromGSheet();
+
+      // 시장지표 최신화
+      fetchMarketIndicators();
+
+      // 종목 현재가 실시간 최신화
+      const portfolioToRefresh = gsheetPortfolio || portfolioRef.current;
+      if (portfolioToRefresh && portfolioToRefresh.length > 0) {
+        autoRefreshStockPrices(portfolioToRefresh);
       }
 
       setTimeout(() => { isInitialLoad.current = false; }, 15000);
+    }, 1000);
 
-      // 2단계: 시장지표 자동 수집 (Apps Script 프록시 우선)
-      fetchMarketIndicators();
-
-      // 3단계: 로드된 portfolio를 직접 전달하여 종목 현재가 자동 조회
-      if (loadedPortfolio && loadedPortfolio.length > 0) {
-        autoRefreshStockPrices(loadedPortfolio);
-      }
-    };
-    init();
+    return () => clearTimeout(bgTimer);
   }, []);
 
   useEffect(() => {
