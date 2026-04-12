@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# 환경 변수 (API 키 등 민감 정보 — 절대 커밋 금지)
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

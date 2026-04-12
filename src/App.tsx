@@ -10,7 +10,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GSHEET_URL } from './config';
-import { fetchIndexData, fetchStockInfo, fetchNaverKospi } from './api';
+import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import MarketIndicators from './components/MarketIndicators';
@@ -1277,8 +1277,13 @@ export default function App() {
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
     let hist = stockHistoryMap[comp.code];
     if (!hist) {
-      const r1 = await fetchIndexData(`${comp.code}.KS`);
-      if (r1) hist = r1.data;
+      // 1순위: KIS OpenAPI (상장 이후 전체 데이터, 수정주가 기준)
+      const rKIS = await fetchKISStockHistory(comp.code);
+      if (rKIS) hist = rKIS.data;
+      // 2순위: 네이버 fchart (KIS 실패 시 폴백)
+      if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code); if (rNaver) hist = rNaver.data; }
+      // 3순위: Yahoo Finance (.KS / .KQ)
+      if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`); if (r1) hist = r1.data; }
       if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`); if (r2) hist = r2.data; }
       if (hist) { setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist })); }
       else {
