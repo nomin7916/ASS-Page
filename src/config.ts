@@ -19,4 +19,4 @@ export const UI_CONFIG = {
 };
 
 // ── Google Sheets 연동 ──
-export const GSHEET_URL = 'https://script.google.com/macros/s/AKfycbzoOrtbldzegIWQdioIFyg-khNphscLgPkt2VnBWPeEk3vgi6_xDd8XolTEI1N7J3aE/exec';
+export const GSHEET_URL = 'https://script.google.com/macros/s/AKfycbxoZV7RPnPZge4ugq_cecX_kqbfIL0Dhi8kb3B-YUtmhDrx0ybaTgBV_H9IfKtaUM4k/exec';
