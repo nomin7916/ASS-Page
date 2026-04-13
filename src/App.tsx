@@ -398,6 +398,7 @@ export default function App() {
   const driveTokenRef = useRef('');
   const driveFolderIdRef = useRef('');
   const tokenClientRef = useRef(null);
+  const pendingTokenResolveRef = useRef<((token: string | null) => void) | null>(null);
   const isInitialLoad = useRef(true);
   const portfolioRef = useRef([]);
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
@@ -1708,11 +1709,32 @@ export default function App() {
   };
 
   const handleDriveLoadOnly = async () => {
-    const token = driveTokenRef.current;
-    if (!token) {
-      showToast('☁️ Drive 미연결 — 먼저 Drive를 연결해 주세요', true);
+    // CLIENT_ID 미설정
+    if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
+      showToast('config.ts에 Google Client ID를 설정해 주세요', true);
       return;
     }
+
+    let token = driveTokenRef.current;
+
+    // 토큰 없음 → 로그인 팝업 띄우고 토큰 대기
+    if (!token) {
+      if (!tokenClientRef.current) {
+        showToast('Drive 클라이언트 초기화 실패. 페이지를 새로고침해 주세요.', true);
+        return;
+      }
+      showToast('Google Drive 로그인 팝업을 확인해 주세요...');
+      token = await new Promise<string | null>((resolve) => {
+        pendingTokenResolveRef.current = resolve;
+        tokenClientRef.current.requestToken({ prompt: 'select_account' });
+      });
+    }
+
+    if (!token) {
+      showToast('Drive 로그인이 취소되었거나 실패했습니다.', true);
+      return;
+    }
+
     const result = await loadFromDrive(token);
     if (result === null) {
       showToast('Drive에서 데이터를 불러오지 못했습니다.', true);
@@ -1934,21 +1956,38 @@ export default function App() {
       let token: string | null = null;
 
       if ((window as any).google?.accounts?.oauth2 && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
-        // OAuth 토큰 무음 요청 (이미 동의한 경우 자동, 처음이면 팝업 표시)
+        // 영속 콜백: 초기 자동 인증 및 이후 수동 재인증 모두 driveTokenRef 업데이트
         token = await new Promise<string | null>((resolve) => {
+          pendingTokenResolveRef.current = resolve;
           const client = (window as any).google.accounts.oauth2.initTokenClient({
             client_id: GOOGLE_CLIENT_ID,
             scope: 'https://www.googleapis.com/auth/drive.file',
-            callback: (resp: any) => resolve(resp.error ? null : resp.access_token),
+            callback: (resp: any) => {
+              const t: string | null = resp.error ? null : resp.access_token;
+              if (t) {
+                driveTokenRef.current = t;
+                setDriveToken(t);
+                setDriveStatus('');
+              } else {
+                setDriveStatus('auth_needed');
+              }
+              // 대기 중인 Promise가 있으면 resolve
+              if (pendingTokenResolveRef.current) {
+                pendingTokenResolveRef.current(t);
+                pendingTokenResolveRef.current = null;
+              }
+            },
           });
           tokenClientRef.current = client;
           client.requestToken({ prompt: '' });
         });
+      } else if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
+        // CLIENT_ID 미설정 상태 — 콘솔에 경고만 출력 (driveStatus는 건드리지 않음)
+        console.warn('[Drive] GOOGLE_CLIENT_ID가 설정되지 않았습니다. config.ts를 확인해 주세요.');
       }
 
       if (token) {
-        driveTokenRef.current = token;
-        setDriveToken(token);
+        // 영속 콜백에서 이미 driveTokenRef/setDriveToken 처리됨
       } else if (GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
         setDriveStatus('auth_needed');
       }
