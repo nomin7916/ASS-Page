@@ -21,4 +21,4 @@ export const UI_CONFIG = {
 // ── Google Drive 연동 ──
 // Google Cloud Console에서 발급한 OAuth 2.0 클라이언트 ID를 입력하세요.
 // https://console.cloud.google.com → API 및 서비스 → 사용자 인증 정보 → OAuth 2.0 클라이언트 ID
-export const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID_HERE';
+export const GOOGLE_CLIENT_ID = '972766008827-am47e7998m6o299d15gkul2p2r5btkff.apps.googleusercontent.com';
