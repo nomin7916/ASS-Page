@@ -1,0 +1,323 @@
+================================================================================
+  ASS-Page 다중 사용자 전환 계획
+  작성일: 2026-04-13
+  대상 규모: 100명 × 10계좌 = 1,000개 계좌
+================================================================================
+
+
+■ 1. 현재 상태 분석
+────────────────────────────────────────────────────────────────────────────────
+
+[기술 스택]
+  - Frontend : React 18 + TypeScript + Vite
+  - 스타일링  : Tailwind CSS
+  - 차트      : Recharts
+  - 상태관리  : useState 50+ 개 (App.tsx 2,714줄)
+  - 데이터    : localStorage + Google Sheets (Apps Script)
+
+[현재 저장 구조]
+  상태 변경    → localStorage('portfolioState_v5')
+  20분 자동    → Google Sheets (Apps Script 단일 URL)
+               └── 3개 시트: State / StockData / MarketData
+  수동 저장    → JSON 파일 다운로드 + Google Sheets 동시 백업
+
+[현재 Google Sheets 데이터 구조]
+  State 시트      : title, portfolio, principal, history, depositHistory,
+                    settings, compStocks, chartPrefs, customLinks 등 핵심 상태
+  StockData 시트  : stockHistoryMap (종목코드별 날짜-가격 히스토리)
+  MarketData 시트 : marketIndices, marketIndicators, indicatorHistoryMap
+
+[현재 문제점]
+  - 단일 Google Sheets URL = 모든 사용자가 동일한 데이터 공유
+  - 인증 시스템 없음 (누구든 URL 알면 접근 가능)
+  - 계좌 개념 없음 (포트폴리오 1개만 존재)
+
+
+■ 2. 목표 아키텍처
+────────────────────────────────────────────────────────────────────────────────
+
+[선택 방식: Google Drive API + Google OAuth]
+
+  이유:
+  - 별도 서버/DB 불필요 (Google 인프라만 활용)
+  - 유저 자신의 Google Drive에 데이터 저장 (완전 격리)
+  - Google 계정으로 인증 (별도 회원가입 없음)
+  - Google Drive 15GB 무료 용량 활용
+  - 100명 규모 비용 $0
+
+[전환 후 저장 흐름]
+  유저 A:  브라우저 → Google 로그인 → 유저A의 Drive → ASS-Portfolio 폴더
+  유저 B:  브라우저 → Google 로그인 → 유저B의 Drive → ASS-Portfolio 폴더
+  (완전히 분리된 각자의 저장소)
+
+[Drive 파일 구조 (유저별)]
+  Google Drive (유저 개인 공간)
+    └── appDataFolder/            ← 앱 전용 숨김 폴더 (앱만 접근 가능)
+         ├── accounts.json        ← 계좌 목록 [ {id, name, createdAt}, ... ]
+         ├── state_{계좌ID}.json       ← 기존 State 시트 내용
+         ├── stockdata_{계좌ID}.json   ← 기존 StockData 시트 내용
+         ├── marketdata.json      ← 시장 지표 (계좌 간 공유)
+         ├── state_{계좌ID2}.json
+         └── stockdata_{계좌ID2}.json
+
+
+■ 3. 변경 파일 목록
+────────────────────────────────────────────────────────────────────────────────
+
+  파일                              작업      설명
+  ────────────────────────────────────────────────────────────────────
+  src/auth/useGoogleAuth.ts        신규      OAuth 토큰 관리 hook
+  src/auth/GoogleAuth.tsx          신규      로그인/로그아웃 UI 컴포넌트
+  src/driveStorage.ts              신규      Drive API 저장/불러오기 함수
+  src/components/AccountSwitcher.tsx 신규    계좌 전환 드롭다운 UI
+  src/config.ts                    수정      GSHEET_URL 제거, GOOGLE_CLIENT_ID 추가
+  src/App.tsx                      수정      GSheet 함수 교체, accountId 상태 추가
+  index.html                       수정      Google Identity Services 스크립트 추가
+
+
+■ 4. 단계별 구현 계획
+────────────────────────────────────────────────────────────────────────────────
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 1. Google Cloud 설정 (1회성 작업)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  난이도: 쉬움 | 코드 변경: 없음
+
+  1) console.cloud.google.com → 새 프로젝트 생성
+  2) API 및 서비스 → Google Drive API 활성화
+  3) OAuth 동의 화면 구성 (앱 이름, 로고, 범위)
+  4) OAuth 2.0 클라이언트 ID 생성
+       유형: 웹 애플리케이션
+       승인된 출처: https://도메인.com (배포 후 추가)
+  5) Client ID → src/config.ts의 GOOGLE_CLIENT_ID에 저장
+
+  필요 OAuth Scope:
+    https://www.googleapis.com/auth/drive.appdata
+    (앱 전용 숨김 폴더만 접근, 유저 Drive 전체 접근 불가)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 2. Google OAuth 인증 구현
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  난이도: 중간 | 코드: ~130줄 신규
+
+  [index.html 추가]
+    <script src="https://accounts.google.com/gsi/client" async></script>
+
+  [useGoogleAuth.ts 주요 기능]
+    - Google Identity Services(GIS) tokenClient 초기화
+    - login()  : google.accounts.oauth2.initTokenClient() → accessToken 획득
+    - logout() : google.accounts.oauth2.revoke() → 토큰 폐기, 상태 초기화
+    - 토큰 만료(1시간) 시 자동 갱신
+    - 반환값: { user, token, login, logout }
+      - user  : { name, email, picture }
+      - token : accessToken (Drive API 호출에 사용)
+
+  [GoogleAuth.tsx 화면]
+    ┌─────────────────────────────────────┐
+    │       포트폴리오 트래커             │
+    │                                     │
+    │   [G] Google 계정으로 시작하기     │
+    │                                     │
+    │   개인 Google Drive에 저장됩니다.  │
+    │   다른 사람은 접근할 수 없습니다.  │
+    └─────────────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 3. Drive 저장소 레이어 구현
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  난이도: 중간 | 코드: ~150줄 신규
+
+  [driveStorage.ts 주요 함수]
+
+  // 파일 저장 (기존 saveToGSheet 대체)
+  saveFile(token, fileName, data)
+    → Drive appDataFolder에 JSON 업로드
+    → 기존 파일 있으면 update, 없으면 create
+
+  // 파일 불러오기 (기존 loadFromGSheet 대체)
+  loadFile(token, fileName)
+    → Drive에서 JSON 파일 다운로드 후 파싱
+
+  // 계좌 목록 관리
+  listAccounts(token)
+    → accounts.json 읽어서 계좌 배열 반환
+  createAccount(token, name)
+    → accounts.json에 새 계좌 추가
+  deleteAccount(token, accountId)
+    → accounts.json에서 제거 + 관련 파일 삭제
+
+  [API 엔드포인트]
+    GET  https://www.googleapis.com/drive/v3/files
+         ?spaces=appDataFolder
+         Authorization: Bearer {token}
+
+    POST https://www.googleapis.com/upload/drive/v3/files
+         ?uploadType=multipart&spaces=appDataFolder
+         Authorization: Bearer {token}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 4. App.tsx 함수 교체 (최소 수정)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  난이도: 중간 | 코드: ~40줄 수정
+
+  [현재 → 변경 대응표]
+  ──────────────────────────────────────────────────────────────────
+  현재 함수/코드                          변경 후
+  ──────────────────────────────────────────────────────────────────
+  loadFromGSheet()                     loadFromDrive(token, accountId)
+  saveAllToGSheet(state)               saveToDrive(token, accountId, state)
+  saveToGSheet(data, action, label)    saveFile(token, fileName, data)
+  localStorage('portfolioState_v5')    localStorage(`state_${accountId}`)
+  GSHEET_URL (config.ts)               GOOGLE_CLIENT_ID (config.ts)
+  ──────────────────────────────────────────────────────────────────
+
+  [추가될 상태 변수 (3개)]
+    const { user, token } = useGoogleAuth()
+    const [accounts, setAccounts] = useState([])
+    const [currentAccountId, setCurrentAccountId] = useState(null)
+
+  [계좌 전환 함수]
+    async function switchAccount(newAccountId) {
+      // 1. 현재 계좌 Drive에 저장
+      await saveToDrive(token, currentAccountId, saveStateRef.current)
+      // 2. 새 계좌 데이터 Drive에서 로드
+      setCurrentAccountId(newAccountId)
+      await loadFromDrive(token, newAccountId)
+    }
+
+  [20분 자동저장 - 변경 최소]
+    현재: saveAllToGSheet(snap)
+    변경: saveToDrive(token, currentAccountId, snap)
+    → 로직은 동일, 저장 대상만 교체
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 5. 계좌 전환 UI 구현
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  난이도: 쉬움 | 코드: ~60줄 신규
+
+  [Header 상단 UI 변경]
+    [유저 프로필 사진] 홍길동 ▼     [계좌 선택 ▼] 삼성증권 ISA
+                                      ┌────────────────────────┐
+                                      │ ✓ 삼성증권 ISA         │
+                                      │   키움 일반계좌         │
+                                      │   NH 연금저축           │
+                                      │   ─────────────────     │
+                                      │   + 새 계좌 추가        │
+                                      │   ─────────────────     │
+                                      │   [로그아웃]            │
+                                      └────────────────────────┘
+
+  [계좌 관리 기능]
+    - 계좌 추가: 이름 입력 → Drive에 빈 state 파일 생성
+    - 계좌 이름 변경: accounts.json 업데이트
+    - 계좌 삭제: 확인 후 관련 파일 전체 삭제
+
+
+■ 5. 시장 데이터 처리 전략
+────────────────────────────────────────────────────────────────────────────────
+
+[현재 문제]
+  100명이 각자 Yahoo Finance / Naver API를 개별 호출
+  → 동시 접속 시 IP 기반 차단 가능성
+
+[Drive 방식 해결책]
+  각 유저가 자신의 marketdata.json에 시장 데이터 캐싱
+  20분 자동갱신 로직 그대로 유지 → 각자 1번씩만 호출
+  실질적 문제: 동시 접속자가 많지 않으면 차단 위험 낮음
+
+[향후 확장 시 (사용자 대폭 증가)]
+  Vercel Edge Function / Cloudflare Worker (무료)
+    → 서버에서 1회 fetch → 모든 유저에게 캐시 제공
+    → 필요 시 추가 (현재는 불필요)
+
+
+■ 6. 기존 데이터 마이그레이션
+────────────────────────────────────────────────────────────────────────────────
+
+[기존 사용자 전환 절차]
+  1. 기존 앱에서 JSON 백업 파일 다운로드 (현재 기능 유지)
+  2. 새 앱에서 Google 로그인
+  3. "백업 파일 불러오기" → 기존 JSON 파일 업로드
+  4. Drive에 자동 저장
+
+  → 기존 handleLoad() 함수 그대로 재사용 가능
+  → 추가 마이그레이션 도구 불필요
+
+
+■ 7. 작업 규모 및 난이도 요약
+────────────────────────────────────────────────────────────────────────────────
+
+  순서  작업                          난이도    신규/수정    예상 코드량
+  ────────────────────────────────────────────────────────────────────────
+  1     Google Cloud 설정             쉬움      설정만      0줄
+  2     useGoogleAuth.ts 작성         중간      신규        ~80줄
+  3     driveStorage.ts 작성          중간      신규        ~150줄
+  4     GoogleAuth.tsx 로그인 화면    쉬움      신규        ~50줄
+  5     App.tsx GSheet 함수 교체      중간      수정        ~40줄
+  6     AccountSwitcher.tsx           쉬움      신규        ~60줄
+  7     localStorage 키 accountId화  쉬움      수정        ~5줄
+  ────────────────────────────────────────────────────────────────────────
+  합계                                          신규 ~340줄 / 수정 ~45줄
+
+  App.tsx 변경량 최소화 원칙:
+    - 기존 상태 관리 구조 유지
+    - 저장소 레이어(GSheet → Drive)만 교체
+    - 비즈니스 로직(포트폴리오 계산, 차트 등) 변경 없음
+
+
+■ 8. 비용 분석
+────────────────────────────────────────────────────────────────────────────────
+
+  구성                비용
+  ──────────────────────────────────────────
+  Google Drive API    무료 (Drive API 자체는 무료)
+  유저 Drive 용량     유저 개인 15GB (무료)
+  Vercel 배포         무료 (Hobby 플랜)
+  Google Cloud        무료 (Drive API 사용량 기준 무료 구간 충분)
+  ──────────────────────────────────────────
+  100명 규모 실질 비용 = $0/월
+
+
+■ 9. 보안 고려사항
+────────────────────────────────────────────────────────────────────────────────
+
+  [데이터 격리]
+    - appDataFolder scope 사용 시 앱만 접근 가능
+    - 다른 앱이나 Drive 웹에서 파일 보이지 않음
+    - 유저 간 데이터 접근 물리적으로 불가능
+
+  [토큰 보안]
+    - accessToken 메모리에만 보관 (localStorage 저장 금지)
+    - 1시간 만료 후 재로그인 또는 자동 갱신
+
+  [환경변수]
+    - GOOGLE_CLIENT_ID는 공개 가능 (Client Secret 없음)
+    - KIS API Key는 .env에 유지 (현재와 동일)
+
+
+■ 10. 전환 후 최종 데이터 흐름
+────────────────────────────────────────────────────────────────────────────────
+
+  앱 시작
+    └─ Google 로그인 확인
+         ├─ 미로그인 → GoogleAuth.tsx 로그인 화면
+         └─ 로그인됨
+               ├─ localStorage에서 마지막 계좌 ID 로드
+               ├─ Drive에서 accounts.json 로드 (계좌 목록)
+               └─ Drive에서 state_{accountId}.json 로드 (포트폴리오)
+
+  상태 변경
+    └─ localStorage(`state_${accountId}`) 즉시 저장
+
+  20분 자동 갱신
+    └─ 가격/지표 갱신 → Drive에 자동 백업
+
+  계좌 전환
+    └─ 현재 계좌 Drive 저장 → 새 계좌 Drive 로드
+
+  수동 저장
+    └─ JSON 다운로드 + Drive 저장 (현재와 동일)
+
+================================================================================
+  끝
+================================================================================
