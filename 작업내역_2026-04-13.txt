@@ -1,0 +1,100 @@
+================================================================================
+  ASS-Page 작업 내역
+  작성일: 2026-04-13
+================================================================================
+
+
+■ 이번 대화에서 진행한 작업 목록
+────────────────────────────────────────────────────────────────────────────────
+
+1. 헤더 폴더 버튼(📁) 동작 분석
+   ─────────────────────────────
+   분석 결과: 기존 FolderOpen 버튼은 하이브리드 버튼으로 동작함
+   - Drive 연결됨  → Google Drive에서 데이터 불러오기 시도
+   - Drive 미연결 or 불러오기 실패 → PC 파일 선택창(파일피커)으로 폴백
+   관련 파일: src/App.tsx (handleDriveLoad 함수, 1700번 라인 부근)
+
+
+2. Google Drive 전용 불러오기 버튼 추가
+   ──────────────────────────────────────
+   - 아이콘: CloudDownload (파란색 배경)
+   - 위치: 헤더의 기존 FolderOpen 버튼 바로 왼쪽
+   - 동작: Drive에서만 불러오기 (PC 파일 선택창으로 폴백 없음)
+   수정 파일:
+     · src/components/Header.tsx — CloudDownload 아이콘 import 및 버튼 추가
+     · src/App.tsx — handleDriveLoadOnly 함수 추가, Header props 전달
+
+
+3. Drive 인증 구조적 버그 수정
+   ─────────────────────────────
+   발견된 버그:
+   - initTokenClient 콜백이 앱 시작 시 딱 한 번만 쓰이는 Promise.resolve를 참조함
+   - 이후 "Drive 연결 필요" 버튼을 눌러도 driveTokenRef가 절대 업데이트되지 않는
+     구조적 결함 (재인증이 실제로는 동작하지 않았음)
+
+   수정 내용:
+   - pendingTokenResolveRef 추가 (비동기 인증 대기용 ref)
+   - initTokenClient 콜백을 영속 콜백으로 재작성
+     → 초기 자동 인증 및 이후 수동 재인증 모두 driveTokenRef 업데이트
+   - handleDriveLoadOnly 개선:
+     · CLIENT_ID 플레이스홀더 상태 → 명확한 오류 토스트 출력
+     · Drive 미연결 상태 → 자동으로 Google 로그인 팝업 띄운 후 불러오기
+     · 로그인 취소/실패 → 실패 토스트 출력
+   수정 파일: src/App.tsx
+
+
+4. Google Client ID 설정
+   ──────────────────────
+   - 기존: 'YOUR_GOOGLE_CLIENT_ID_HERE' (플레이스홀더, Drive 기능 전체 비활성)
+   - 변경: 972766008827-am47e7998m6o299d15gkul2p2r5btkff.apps.googleusercontent.com
+   수정 파일: src/config.ts
+
+
+■ 버튼 정리 (헤더 상단 기준, 왼쪽 → 오른쪽)
+────────────────────────────────────────────────────────────────────────────────
+
+  [초록]  RefreshCw       새로고침 (종목가격 + 지수 데이터 수집)
+  [주황]  FileUp          지수/종목 히스토리 주입 (JSON 또는 CSV)
+  [파랑]  CloudDownload   Google Drive에서만 데이터 불러오기  ← 이번에 추가
+  [회색]  FolderOpen      Drive 시도 후 실패 시 PC 파일 선택으로 폴백
+  [인디고] Save           Google Drive에만 백업 저장
+
+
+■ Google Drive 연동 필수 체크리스트
+────────────────────────────────────────────────────────────────────────────────
+
+  [완료] index.html — Google Identity Services 스크립트 추가됨
+         <script src="https://accounts.google.com/gsi/client" async></script>
+
+  [완료] src/config.ts — GOOGLE_CLIENT_ID 설정 완료
+
+  [필수] Google Cloud Console 설정 확인 사항
+         URL: https://console.cloud.google.com
+         경로: API 및 서비스 → 사용자 인증 정보 → OAuth 클라이언트 ID 편집
+         → 승인된 JavaScript 원본에 아래 주소 등록 필요:
+              http://localhost:5173
+              http://localhost:3000
+              (배포 URL이 있으면 해당 URL도 추가)
+         ※ 미등록 시 Google 로그인 팝업이 열리지 않음
+
+
+■ 다른 PC/장소에서 접속 시 동작 방식
+────────────────────────────────────────────────────────────────────────────────
+
+  새 PC, 로컬 데이터 없음  → 로그인 → 자동으로 Drive 데이터 복원
+  새 PC, 로컬 데이터 있음  → 로그인 → 수동으로 ☁ 버튼(CloudDownload) 클릭
+  같은 PC, 이미 로그인됨   → 자동 복원 (팝업 없음)
+  다른 Google 계정 로그인  → 해당 계정 Drive에 데이터 없으므로 복원 불가
+  ※ 반드시 백업 저장한 동일한 Google 계정으로 로그인해야 함
+
+
+■ 수정된 파일 목록
+────────────────────────────────────────────────────────────────────────────────
+
+  src/config.ts              GOOGLE_CLIENT_ID 플레이스홀더 → 실제 Client ID 설정
+  src/App.tsx                pendingTokenResolveRef 추가, initTokenClient 영속 콜백
+                             개선, handleDriveLoadOnly 추가, Header props 추가
+  src/components/Header.tsx  CloudDownload import 추가, Drive 전용 버튼 추가,
+                             onDriveLoadOnly prop 추가
+
+================================================================================
