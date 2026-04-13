@@ -9,7 +9,8 @@ import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
-import { UI_CONFIG, GSHEET_URL } from './config';
+import { UI_CONFIG, GOOGLE_CLIENT_ID } from './config';
+import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile } from './driveStorage';
 import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
@@ -391,31 +392,39 @@ export default function App() {
   const [indicatorFetchStatus, setIndicatorFetchStatus] = useState({});
   const [showIndicatorVerify, setShowIndicatorVerify] = useState(false);
 
-  // ── Google Sheets 자동 동기화 ──
-  const [gsheetStatus, setGsheetStatus] = useState('');
-  const gsheetTimer = useRef(null);
+  // ── Google Drive 자동 동기화 ──
+  const [driveStatus, setDriveStatus] = useState(''); // '' | 'auth_needed' | 'loading' | 'saving' | 'saved' | 'error'
+  const [driveToken, setDriveToken] = useState('');
+  const driveTokenRef = useRef('');
+  const driveFolderIdRef = useRef('');
+  const tokenClientRef = useRef(null);
   const isInitialLoad = useRef(true);
   const portfolioRef = useRef([]);
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
 
-  const loadFromGSheet = async () => {
-    try {
-      setGsheetStatus('loading');
+  // Drive 폴더 ID 캐시 확보 (없으면 생성)
+  const ensureDriveFolder = async (token: string): Promise<string> => {
+    if (driveFolderIdRef.current) return driveFolderIdRef.current;
+    const id = await getOrCreateIndexFolder(token);
+    driveFolderIdRef.current = id;
+    return id;
+  };
 
-      // 3개 시트 병렬 로드
-      const [stateRes, stockRes, marketRes] = await Promise.allSettled([
-        fetch(`${GSHEET_URL}?action=loadState`).then(r => r.json()),
-        fetch(`${GSHEET_URL}?action=loadStockData`).then(r => r.json()),
-        fetch(`${GSHEET_URL}?action=loadMarketData`).then(r => r.json()),
+  // Google Drive Index_Data 폴더에서 데이터 불러오기
+  const loadFromDrive = async (token: string) => {
+    try {
+      setDriveStatus('loading');
+      const folderId = await ensureDriveFolder(token);
+
+      // 3개 파일 병렬 로드
+      const [stateData, stockData, marketData] = await Promise.all([
+        loadDriveFile(token, folderId, DRIVE_FILES.STATE),
+        loadDriveFile(token, folderId, DRIVE_FILES.STOCK),
+        loadDriveFile(token, folderId, DRIVE_FILES.MARKET),
       ]);
 
-      const stateData = stateRes.status === 'fulfilled' && stateRes.value?.success ? stateRes.value.data : null;
-      const stockData = stockRes.status === 'fulfilled' && stockRes.value?.success ? stockRes.value.data : null;
-      const marketData = marketRes.status === 'fulfilled' && marketRes.value?.success ? marketRes.value.data : null;
+      if (!stateData) { setDriveStatus(''); return null; }
 
-      if (!stateData) { setGsheetStatus(''); return null; }
-
-      // 기본 상태 복원 (data 시트)
       setTitle(stateData.title || "포트폴리오");
       setPortfolio(stateData.portfolio || []);
       setPrincipal(cleanNum(stateData.principal));
@@ -436,11 +445,11 @@ export default function App() {
         if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
       }
 
-      // 종목 히스토리: StockData 시트 우선, 없으면 data 시트 폴백
+      // 종목 히스토리: stockdata 파일 우선, 없으면 state 파일 폴백
       const resolvedStockHistoryMap = stockData?.stockHistoryMap || stateData.stockHistoryMap || {};
       setStockHistoryMap(resolvedStockHistoryMap);
 
-      // 시장 데이터: MarketData 시트 우선, 없으면 data 시트 폴백
+      // 시장 데이터: marketdata 파일 우선, 없으면 state 파일 폴백
       const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
       const resolvedIndicatorHistoryMap = marketData?.indicatorHistoryMap || stateData.indicatorHistoryMap || {};
       const resolvedMarketIndicators = marketData?.marketIndicators || stateData.marketIndicators;
@@ -448,52 +457,51 @@ export default function App() {
       if (resolvedMarketIndices) {
         setMarketIndices(resolvedMarketIndices);
         setIndexFetchStatus({
-          kospi: resolvedMarketIndices.kospi ? buildIndexStatus(resolvedMarketIndices.kospi, 'GSheet') : null,
-          sp500: resolvedMarketIndices.sp500 ? buildIndexStatus(resolvedMarketIndices.sp500, 'GSheet') : null,
-          nasdaq: resolvedMarketIndices.nasdaq ? buildIndexStatus(resolvedMarketIndices.nasdaq, 'GSheet') : null,
+          kospi: resolvedMarketIndices.kospi ? buildIndexStatus(resolvedMarketIndices.kospi, 'Drive') : null,
+          sp500: resolvedMarketIndices.sp500 ? buildIndexStatus(resolvedMarketIndices.sp500, 'Drive') : null,
+          nasdaq: resolvedMarketIndices.nasdaq ? buildIndexStatus(resolvedMarketIndices.nasdaq, 'Drive') : null,
         });
       }
       if (resolvedMarketIndicators) setMarketIndicators(resolvedMarketIndicators);
       if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
 
-      setGsheetStatus('saved');
-      showToast('☁️ Google Sheets에서 데이터 불러옴');
+      setDriveStatus('saved');
+      showToast('☁️ Google Drive에서 데이터 불러옴');
       return stateData.portfolio || [];
     } catch (err) {
-      console.error('GSheet 불러오기 실패:', err);
-      setGsheetStatus('error');
+      console.error('Drive 불러오기 실패:', err);
+      setDriveStatus('error');
       return null;
     }
   };
 
-  // 단일 시트 저장 (저수준) - action: 'saveState' | 'saveStockData' | 'saveMarketData'
-  const saveToGSheet = async (data, action = 'saveState', label = '자동저장') => {
-    await fetch(GSHEET_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ action, label, data }),
-    });
-  };
-
-  // 3개 시트 동시 저장 래퍼
-  const saveAllToGSheet = async (state) => {
+  // Google Drive Index_Data 폴더에 3개 파일로 저장
+  const saveAllToDrive = async (state) => {
+    const token = driveTokenRef.current;
+    if (!token) { setDriveStatus('auth_needed'); return; }
     try {
-      setGsheetStatus('saving');
+      setDriveStatus('saving');
+      const folderId = await ensureDriveFolder(token);
       const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
-      // data 시트에는 stateCore만 저장 (히스토리 제외) → 셀 50,000자 제한 초과 방지
-      // StockData/MarketData 시트는 순차 저장으로 data 시트 race condition 방지
-      await saveToGSheet(stateCore, 'saveState', '자동저장');
+      // state 파일 먼저 저장 후 stock/market 병렬 저장
+      await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
       await Promise.all([
         Object.keys(shm || {}).length > 0
-          ? saveToGSheet({ stockHistoryMap: shm }, 'saveStockData', '종목 히스토리')
+          ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm })
           : Promise.resolve(),
-        saveToGSheet({ marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }, 'saveMarketData', '시장 히스토리'),
+        saveDriveFile(token, folderId, DRIVE_FILES.MARKET, { marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }),
       ]);
-      setGsheetStatus('saved');
+      setDriveStatus('saved');
     } catch (err) {
-      console.error('GSheet 저장 실패:', err);
-      setGsheetStatus('error');
+      console.error('Drive 저장 실패:', err);
+      setDriveStatus('error');
     }
+  };
+
+  // OAuth 토큰 요청 (팝업 또는 무음)
+  const requestDriveToken = (prompt = '') => {
+    if (!tokenClientRef.current) return;
+    tokenClientRef.current.requestToken({ prompt });
   };
 
   // 개별 패치 함수들을 밖으로 빼서 재사용 가능하도록 구성 (Retry 용도)
@@ -754,19 +762,8 @@ export default function App() {
     }
   };
 
-  // Apps Script 프록시를 통한 시장지표 수집 (CORS 우회)
-  const fetchIndicatorsViaProxy = async () => {
-    try {
-      const res = await fetch(`${GSHEET_URL}?action=indicators`, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) return null;
-      const json = await res.json();
-      if (json.success && json.data) return json.data;
-      return null;
-    } catch (e) {
-      console.error('Apps Script 시장지표 프록시 실패:', e);
-      return null;
-    }
-  };
+  // Apps Script 프록시 제거 — 직접 fetchersMap 경로만 사용
+  const fetchIndicatorsViaProxy = async () => null;
 
   // stooq symbol 매핑
   const STOOQ_SYMBOLS = {
@@ -826,15 +823,6 @@ export default function App() {
 
     setIndicatorHistoryMap(prev => ({ ...prev, [key]: parsedData }));
     showToast(`${INDICATOR_LABELS[key] || key} 과거 데이터 ${Object.keys(parsedData).length}건 수집 완료`);
-
-    // Google Sheets 백업
-    try {
-      await fetch(GSHEET_URL, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'saveIndicatorHistory', key, data: parsedData }),
-      });
-    } catch (e) { console.warn('GSheet 지표 히스토리 백업 실패:', e); }
-
     return parsedData;
   };
 
@@ -845,7 +833,7 @@ export default function App() {
     for (const key of keys) {
       await fetchIndicatorHistory(key, appliedRange?.start, appliedRange?.end);
     }
-    showToast('✅ 시장지표 일괄 수집 완료 (GSheet 저장됨)');
+    showToast('✅ 시장지표 일괄 수집 완료');
   };
 
   // CSV / JSON 파일 직접 업로드로 지표 히스토리 주입 (stooq 미지원 지표용)
@@ -889,14 +877,6 @@ export default function App() {
 
       setIndicatorHistoryMap(prev => ({ ...prev, [key]: { ...(prev[key] || {}), ...parsedData } }));
       showToast(`${INDICATOR_LABELS[key] || key} 히스토리 ${Object.keys(parsedData).length}건 업로드 완료`);
-
-      // Google Sheets 백업
-      try {
-        await fetch(GSHEET_URL, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'saveIndicatorHistory', key, data: parsedData }),
-        });
-      } catch (err) { console.warn('GSheet 지표 히스토리 백업 실패:', err); }
     };
     reader.readAsText(file);
   };
@@ -1698,9 +1678,13 @@ export default function App() {
     const mi = String(now.getMinutes()).padStart(2, '0');
     const ss = String(now.getSeconds()).padStart(2, '0');
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `백업_ ${yy}-${mo}-${dd}_${hh},${mi},${ss}.json`; a.click();
-    // PC 다운로드와 동시에 Google Sheets에도 백업
-    saveAllToGSheet(state);
-    showToast('☁️ PC 파일 + Google Sheets 동시 백업 완료');
+    // PC 다운로드와 동시에 Google Drive에도 백업
+    if (driveTokenRef.current) {
+      saveAllToDrive(state);
+      showToast('☁️ PC 파일 + Google Drive 동시 백업 완료');
+    } else {
+      showToast('💾 PC 파일 백업 완료 (Drive 미연결)');
+    }
   };
 
   const handleLoad = (e) => {
@@ -1867,6 +1851,7 @@ export default function App() {
   useEffect(() => {
     // 1단계: localStorage에서 즉시 복원 (동기) → 화면 지연 없이 이전 상태 표시
     const saved = localStorage.getItem('portfolioState_v5');
+    let hasLocalData = false;
     if (saved) {
       try {
         const data = JSON.parse(saved);
@@ -1901,28 +1886,66 @@ export default function App() {
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
+        hasLocalData = (data.portfolio?.length > 0);
       } catch (e) {}
     }
 
-    // 2단계: 1초 후 로컬 데이터 기반으로 바로 조회 시작 (GSheet 로드 없이)
+    // 2단계: Drive 인증 초기화 후 시작 로직 실행
     const bgTimer = setTimeout(async () => {
-      const portfolioToRefresh = portfolioRef.current;
+      // GIS 스크립트 로드 대기 (최대 8초)
+      let waited = 0;
+      while (!(window as any).google?.accounts?.oauth2 && waited < 8000) {
+        await new Promise(r => setTimeout(r, 200));
+        waited += 200;
+      }
 
-      // 시장지표는 백그라운드 병렬, 종목 현재가는 await (주요 조회)
+      let token: string | null = null;
+
+      if ((window as any).google?.accounts?.oauth2 && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
+        // OAuth 토큰 무음 요청 (이미 동의한 경우 자동, 처음이면 팝업 표시)
+        token = await new Promise<string | null>((resolve) => {
+          const client = (window as any).google.accounts.oauth2.initTokenClient({
+            client_id: GOOGLE_CLIENT_ID,
+            scope: 'https://www.googleapis.com/auth/drive.file',
+            callback: (resp: any) => resolve(resp.error ? null : resp.access_token),
+          });
+          tokenClientRef.current = client;
+          client.requestToken({ prompt: '' });
+        });
+      }
+
+      if (token) {
+        driveTokenRef.current = token;
+        setDriveToken(token);
+      } else if (GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
+        setDriveStatus('auth_needed');
+      }
+
+      // localStorage에 데이터가 없으면 Drive에서 복원
+      if (!hasLocalData && token) {
+        const drivePortfolio = await loadFromDrive(token);
+        // Drive에서 불러온 후 상태 반영 대기
+        if (drivePortfolio?.length > 0) {
+          await new Promise(r => setTimeout(r, 600));
+        }
+      }
+
+      // 시장지표 백그라운드 수집, 종목 현재가 await
       fetchMarketIndicators();
+      const portfolioToRefresh = portfolioRef.current;
       if (portfolioToRefresh.length > 0) {
         await autoRefreshStockPrices(portfolioToRefresh);
       }
 
-      // 조회 완료 후 1초 뒤 GSheet 백업 + 자동저장 활성화
+      // 조회 완료 후 Drive 백업 + 자동저장 활성화
       setTimeout(() => {
         isInitialLoad.current = false;
         const snap = saveStateRef.current;
-        if (snap && snap.portfolio?.length > 0) {
-          saveAllToGSheet(snap);
+        if (snap && snap.portfolio?.length > 0 && driveTokenRef.current) {
+          saveAllToDrive(snap);
         }
       }, 1000);
-    }, 1000);
+    }, 800);
 
     return () => clearTimeout(bgTimer);
   }, []);
@@ -1964,7 +1987,7 @@ export default function App() {
     loadIndices();
   }, []);
 
-  // 20분(1,200,000ms)마다 자동으로 현재가 + 시장지표 갱신 후 GSheet 백업
+  // 20분(1,200,000ms)마다 자동으로 현재가 + 시장지표 갱신 후 Drive 백업
   useEffect(() => {
     const AUTO_REFRESH_INTERVAL = 20 * 60 * 1000; // 20분
     const intervalId = setInterval(async () => {
@@ -1973,12 +1996,12 @@ export default function App() {
         console.log('[자동갱신] 20분 주기 현재가 + 시장지표 갱신 시작');
         fetchMarketIndicators();
         await refreshPrices();
-        // 갱신 완료 후 3초 대기 (React 상태 업데이트 반영) → GSheet 자동저장
+        // 갱신 완료 후 3초 대기 (React 상태 업데이트 반영) → Drive 자동저장
         setTimeout(() => {
           const snap = saveStateRef.current;
           if (snap && snap.portfolio?.length > 0) {
-            console.log('[자동저장] 20분 주기 GSheet 백업');
-            saveAllToGSheet(snap);
+            console.log('[자동저장] 20분 주기 Drive 백업');
+            saveAllToDrive(snap);
           }
         }, 3000);
       }
@@ -2150,7 +2173,7 @@ export default function App() {
       )}
 
       <div className="w-full max-w-[2560px] mx-auto flex flex-col gap-6 px-2">
-        <Header title={title} setTitle={setTitle} isLoading={isLoading} gsheetStatus={gsheetStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onAddStock={handleAddStock} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} />
+        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onAddStock={handleAddStock} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} />
 
         <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
 

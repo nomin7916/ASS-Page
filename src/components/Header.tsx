@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 
-const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCustomLinks, onRefresh, onSave, onLoad, onPaste, onAddStock, onImportHistory, isLinkSettingsOpen, setIsLinkSettingsOpen, fileInputRef, historyInputRef }) => (
+const Header = ({ title, setTitle, isLoading, driveStatus, customLinks, setCustomLinks, onRefresh, onSave, onLoad, onPaste, onAddStock, onImportHistory, isLinkSettingsOpen, setIsLinkSettingsOpen, fileInputRef, historyInputRef, onDriveConnect }) => (
   <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full mt-2 relative">
     <div className="p-4 md:p-5 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center bg-[#1e293b] gap-4">
       <div className="absolute top-3 right-4 text-[10px] text-gray-500 font-mono md:hidden"><span className="text-gray-400">{UI_CONFIG.VERSION}</span></div>
@@ -17,7 +17,10 @@ const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCust
         <div className="hidden md:flex text-[10px] text-gray-500 font-mono w-full justify-end items-center gap-2 pr-1">
           <span className="text-gray-400">{UI_CONFIG.VERSION}</span>
           {isLoading && <span className="text-[10px] text-yellow-400 font-bold animate-pulse whitespace-nowrap">🔄 갱신중...</span>}
-          {!isLoading && gsheetStatus === 'loading' && <span className="text-[10px] text-blue-400 font-bold animate-cloud-glow whitespace-nowrap">☁️ 불러오는 중...</span>}
+          {!isLoading && driveStatus === 'loading' && <span className="text-[10px] text-blue-400 font-bold animate-cloud-glow whitespace-nowrap">☁️ Drive 불러오는 중...</span>}
+          {!isLoading && driveStatus === 'auth_needed' && (
+            <button onClick={onDriveConnect} className="text-[10px] text-orange-400 font-bold whitespace-nowrap hover:text-orange-200 transition-colors">☁️ Drive 연결 필요 — 클릭하여 로그인</button>
+          )}
         </div>
         <div className="flex items-center gap-1.5 w-full justify-end pr-1">
           {customLinks.map((link, i) => (
@@ -28,14 +31,17 @@ const Header = ({ title, setTitle, isLoading, gsheetStatus, customLinks, setCust
         </div>
         <div className="flex gap-2.5 flex-wrap justify-end items-center w-full mt-0.5">
           <div className="relative">
-            {(gsheetStatus === 'saving' || gsheetStatus === 'loading' || isLoading) && (
-              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] animate-cloud-glow pointer-events-none select-none z-10" title={gsheetStatus === 'saving' ? '저장 중...' : gsheetStatus === 'loading' ? '불러오는 중...' : '갱신 중...'}>☁️</span>
+            {(driveStatus === 'saving' || driveStatus === 'loading' || isLoading) && (
+              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] animate-cloud-glow pointer-events-none select-none z-10" title={driveStatus === 'saving' ? 'Drive 저장 중...' : driveStatus === 'loading' ? 'Drive 불러오는 중...' : '갱신 중...'}>☁️</span>
             )}
-            {gsheetStatus === 'saved' && !isLoading && (
-              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="동기화 완료">⛅</span>
+            {driveStatus === 'saved' && !isLoading && (
+              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="Drive 동기화 완료">⛅</span>
             )}
-            {gsheetStatus === 'error' && !isLoading && (
-              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="동기화 실패" style={{ filter: 'brightness(0.45) grayscale(0.6)' }}>☁️</span>
+            {driveStatus === 'error' && !isLoading && (
+              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="Drive 동기화 실패" style={{ filter: 'brightness(0.45) grayscale(0.6)' }}>☁️</span>
+            )}
+            {driveStatus === 'auth_needed' && !isLoading && (
+              <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[14px] pointer-events-none select-none z-10" title="Drive 로그인 필요">🔐</span>
             )}
             <button onClick={onRefresh} title="새로고침 (종목가격 + 지수 데이터 수집)" className="bg-teal-600 hover:bg-teal-500 text-white p-2 rounded shadow transition border border-teal-500/30 flex items-center justify-center">
               <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />

@@ -18,5 +18,7 @@ export const UI_CONFIG = {
   DEFAULTS: { HISTORY_LIMIT: 3, DEPOSIT_LIMIT: 5, PRINCIPAL: 80000000 }
 };
 
-// ── Google Sheets 연동 ──
-export const GSHEET_URL = 'https://script.google.com/macros/s/AKfycbxoZV7RPnPZge4ugq_cecX_kqbfIL0Dhi8kb3B-YUtmhDrx0ybaTgBV_H9IfKtaUM4k/exec';
+// ── Google Drive 연동 ──
+// Google Cloud Console에서 발급한 OAuth 2.0 클라이언트 ID를 입력하세요.
+// https://console.cloud.google.com → API 및 서비스 → 사용자 인증 정보 → OAuth 2.0 클라이언트 ID
+export const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID_HERE';
