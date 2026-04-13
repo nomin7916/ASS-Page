@@ -1,13 +1,13 @@
 // @ts-nocheck
 import React from 'react';
-import { Trash2, RefreshCw } from 'lucide-react';
+import { Trash2, RefreshCw, Plus } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, handleTableKeyDown
 } from '../utils';
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, stockFetchStatus, onSingleRefresh }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, stockFetchStatus, onSingleRefresh }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
   if (!totals) return null;
@@ -30,7 +30,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               <th className="py-3 w-[5%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50" onClick={() => onSort('evalRatio')}>비중</th>
               <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('returnRate')}>수익률</th>
               <th className="py-3 w-[7%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('profit')}>차익</th>
-              <th className="py-3 w-[3%] text-center">삭제</th>
+              <th className="py-3 w-[3%] text-center"><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
             </tr>
           </thead>
           <tbody>

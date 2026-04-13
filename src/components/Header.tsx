@@ -1,12 +1,12 @@
 // @ts-nocheck
 import React from 'react';
 import {
-  Settings, RefreshCw, Save, ClipboardPaste, Plus,
+  Settings, RefreshCw, Save, ClipboardPaste,
   X, Download, FolderOpen, FileUp
 } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 
-const Header = ({ title, setTitle, isLoading, driveStatus, customLinks, setCustomLinks, onRefresh, onSave, onLoad, onPaste, onAddStock, onImportHistory, isLinkSettingsOpen, setIsLinkSettingsOpen, fileInputRef, historyInputRef, onDriveConnect }) => (
+const Header = ({ title, setTitle, isLoading, driveStatus, customLinks, setCustomLinks, onRefresh, onSave, onLoad, onPaste, onImportHistory, isLinkSettingsOpen, setIsLinkSettingsOpen, fileInputRef, historyInputRef, onDriveConnect, onDriveLoad }) => (
   <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full mt-2 relative">
     <div className="p-4 md:p-5 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center bg-[#1e293b] gap-4">
       <div className="absolute top-3 right-4 text-[10px] text-gray-500 font-mono md:hidden"><span className="text-gray-400">{UI_CONFIG.VERSION}</span></div>
@@ -49,12 +49,11 @@ const Header = ({ title, setTitle, isLoading, driveStatus, customLinks, setCusto
           </div>
           <button onClick={() => historyInputRef.current.click()} title="지수/종목 히스토리 주입 (JSON 또는 CSV)" className="bg-orange-600 hover:bg-orange-500 text-white p-2 rounded shadow transition border border-orange-500/30 flex items-center justify-center"><FileUp size={16} /></button>
           <input type="file" ref={historyInputRef} onChange={onImportHistory} className="hidden" accept=".json,.csv" multiple />
-          <button onClick={() => fileInputRef.current.click()} title="전체 데이터 불러오기" className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded shadow transition border border-gray-500/30 flex items-center justify-center"><FolderOpen size={16} /></button>
+          <button onClick={onDriveLoad} title="Drive에서 최신 데이터 불러오기 (미연결 시 PC 파일 선택)" className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded shadow transition border border-gray-500/30 flex items-center justify-center"><FolderOpen size={16} /></button>
           <input type="file" ref={fileInputRef} onChange={onLoad} className="hidden" accept=".json" />
           <button onClick={onSave} title="파일 백업 (지수 데이터 포함 저장)" className="bg-indigo-600 hover:bg-indigo-500 text-white p-2 rounded shadow transition border border-indigo-500/30 flex items-center justify-center"><Save size={16} /></button>
           <div className="w-[1px] h-5 bg-gray-600 mx-0.5"></div>
           <button onClick={onPaste} title="엑셀 붙여넣기" className="bg-green-600 hover:bg-green-500 text-white p-2 rounded shadow transition border border-green-500/30 flex items-center justify-center"><ClipboardPaste size={16} /></button>
-          <button onClick={onAddStock} title="종목 추가" className="bg-purple-600 hover:bg-purple-500 text-white p-2 rounded shadow transition border border-purple-500/30 flex items-center justify-center"><Plus size={16} /></button>
           <div className="w-[1px] h-5 bg-gray-600 mx-1"></div>
           <button onClick={() => window.open('https://colab.research.google.com/drive/1hjCwtVjyKzooWly4AU_ufrMSV87FApzi#scrollTo=fe7b764e', '_blank')} title="Colab 데이터 추출기 열기" className="bg-[#2d333b] hover:bg-[#3d4450] text-gray-200 p-2 rounded shadow-md transition-all border border-gray-600 flex items-center justify-center group">
             <svg width="16" height="16" viewBox="0 0 42 42" xmlns="http://www.w3.org/2000/svg" className="group-hover:scale-110 transition-transform">

@@ -1687,6 +1687,16 @@ export default function App() {
     }
   };
 
+  const handleDriveLoad = async () => {
+    const token = driveTokenRef.current;
+    if (token) {
+      const result = await loadFromDrive(token);
+      if (result !== null) return;
+    }
+    // Drive 미연결 또는 불러오기 실패 → PC 파일 선택으로 폴백
+    fileInputRef.current?.click();
+  };
+
   const handleLoad = (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -2173,9 +2183,9 @@ export default function App() {
       )}
 
       <div className="w-full max-w-[2560px] mx-auto flex flex-col gap-6 px-2">
-        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onAddStock={handleAddStock} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} />
+        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoad={handleDriveLoad} />
 
-        <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
+        <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
 
         <div className="grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-6 w-full items-stretch">
           <div className="xl:col-span-4 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full">
