@@ -502,15 +502,17 @@ export default function App() {
   // OAuth 토큰 요청 (팝업 또는 무음)
   const requestDriveToken = (prompt = '') => {
     if (!tokenClientRef.current) return;
-    tokenClientRef.current.requestToken({ prompt });
+    tokenClientRef.current.requestAccessToken({ prompt });
   };
 
   // 개별 패치 함수들을 밖으로 빼서 재사용 가능하도록 구성 (Retry 용도)
   const fetchersMap = {
     us10y: async (now, statusMap) => {
+      const _us10yTarget = 'https://tradingeconomics.com/united-states/government-bond-yield';
       const proxies = [
-        `https://api.allorigins.win/raw?url=${encodeURIComponent('https://tradingeconomics.com/united-states/government-bond-yield')}`,
-        `https://api.codetabs.com/v1/proxy?quest=${'https://tradingeconomics.com/united-states/government-bond-yield'}`
+        `/api/proxy?url=${encodeURIComponent(_us10yTarget)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(_us10yTarget)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${_us10yTarget}`
       ];
       for (const proxy of proxies) {
         try {
@@ -522,7 +524,7 @@ export default function App() {
             const price = parseFloat(match[1].replace(/,/g, ''));
             const chgMatch = html.match(/id="pch"[^>]*>\s*([+-]?[\d,]*\.?\d+)%?/) || html.match(/"percentageChange":\s*"?([+-]?[\d.]+)/);
             const change = chgMatch ? parseFloat(chgMatch[1].replace(/,/g, '')) : null;
-            if (price > 0) { statusMap['us10y'] = { status: 'success', source: proxy.includes('allorigins') ? 'TE(allorigins)' : 'TE(codetabs)', updatedAt: now }; return { price, change }; }
+            if (price > 0) { statusMap['us10y'] = { status: 'success', source: proxy.startsWith('/api/proxy') ? 'TE(vercel)' : proxy.includes('allorigins') ? 'TE(allorigins)' : 'TE(codetabs)', updatedAt: now }; return { price, change }; }
           }
         } catch(e) {}
       }
@@ -530,7 +532,7 @@ export default function App() {
     },
     kr10y: async (now, statusMap) => {
       const targetUrl = 'https://m.stock.naver.com/api/marketIndex/bond/KR10YT=RR';
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -545,7 +547,7 @@ export default function App() {
     },
     usdkrw: async (now, statusMap) => {
       const targetUrl = 'https://m.stock.naver.com/api/marketIndex/exchange/FX_USDKRW';
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -560,7 +562,7 @@ export default function App() {
     },
     dxy: async (now, statusMap) => {
       const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?range=1d&interval=1d`;
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -579,7 +581,7 @@ export default function App() {
     },
     goldIntl: async (now, statusMap) => {
       const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=1d&interval=1d`;
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -598,7 +600,7 @@ export default function App() {
     },
     goldKr: async (now, statusMap) => {
       const targetUrl = 'https://m.stock.naver.com/api/marketIndex/metals/M04020000';
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -613,7 +615,7 @@ export default function App() {
     },
     kospi: async (now, statusMap) => {
       const targetUrl = 'https://m.stock.naver.com/api/index/KOSPI/basic';
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -628,7 +630,7 @@ export default function App() {
     },
     sp500: async (now, statusMap) => {
       const targetUrl = 'https://m.stock.naver.com/api/index/SPI@SPX/basic';
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -643,7 +645,7 @@ export default function App() {
     },
     nasdaq: async (now, statusMap) => {
       const targetUrl = 'https://m.stock.naver.com/api/index/NAS@NDX/basic';
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -658,7 +660,7 @@ export default function App() {
     },
     fedRate: async (now, statusMap) => {
       const url = 'https://tradingeconomics.com/united-states/interest-rate';
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, `https://api.codetabs.com/v1/proxy?quest=${url}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(url)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, `https://api.codetabs.com/v1/proxy?quest=${url}`];
       for (const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -677,7 +679,7 @@ export default function App() {
     },
     vix: async (now, statusMap) => {
       const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?range=1d&interval=1d`;
-      const proxies = [`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
       for (const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -799,6 +801,7 @@ export default function App() {
     const d2 = (endDate || appliedRange.end || new Date().toISOString().split('T')[0]).replace(/-/g, '');
     const stooqUrl = `https://stooq.com/q/d/l/?s=${symbol}&d1=${d1}&d2=${d2}&i=d`;
     const proxies = [
+      `/api/proxy?url=${encodeURIComponent(stooqUrl)}`,
       `https://api.allorigins.win/raw?url=${encodeURIComponent(stooqUrl)}`,
       `https://api.codetabs.com/v1/proxy?quest=${stooqUrl}`,
     ];
@@ -1726,7 +1729,7 @@ export default function App() {
       showToast('Google Drive 로그인 팝업을 확인해 주세요...');
       token = await new Promise<string | null>((resolve) => {
         pendingTokenResolveRef.current = resolve;
-        tokenClientRef.current.requestToken({ prompt: 'select_account' });
+        tokenClientRef.current.requestAccessToken({ prompt: 'select_account' });
       });
     }
 
@@ -1979,7 +1982,7 @@ export default function App() {
             },
           });
           tokenClientRef.current = client;
-          client.requestToken({ prompt: '' });
+          client.requestAccessToken({ prompt: '' });
         });
       } else if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
         // CLIENT_ID 미설정 상태 — 콘솔에 경고만 출력 (driveStatus는 건드리지 않음)
