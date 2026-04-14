@@ -1915,9 +1915,18 @@ export default function App() {
     setIsLoading(false);
   };
 
-  // 1단계: localStorage에서 즉시 복원 (로그인 여부와 무관하게 실행)
+  // 1단계: 로그인 후 사용자별 localStorage에서 복원 (step 2 내부에서 처리)
+
+  // 2단계: 로그인 완료 후 사용자별 localStorage 복원 + Drive 초기화 + 시장 데이터 수집
   useEffect(() => {
-    const saved = localStorage.getItem('portfolioState_v5');
+    if (!authUser) return;
+
+    const token = authUser.token;
+    const userKey = `portfolioState_v5_${authUser.email}`;
+
+    // 사용자별 localStorage에서 복원
+    let hasLocalData = false;
+    const saved = localStorage.getItem(userKey);
     if (saved) {
       try {
         const data = JSON.parse(saved);
@@ -1952,16 +1961,9 @@ export default function App() {
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
+        hasLocalData = true;
       } catch (e) {}
     }
-  }, []);
-
-  // 2단계: 로그인 완료 후 Drive 초기화 + 시장 데이터 수집
-  useEffect(() => {
-    if (!authUser) return;
-
-    const token = authUser.token;
-    const hasLocalData = portfolioRef.current.length > 0;
 
     // Drive 토큰 설정
     driveTokenRef.current = token;
@@ -2085,8 +2087,9 @@ export default function App() {
 
   useEffect(() => {
     if (portfolio.length === 0) return;
+    if (!authUser?.email) return;
     const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
-    localStorage.setItem('portfolioState_v5', JSON.stringify(state));
+    localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(state));
     saveStateRef.current = state; // 항상 최신 상태 유지 (GSheet 저장에 사용)
   }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate]);
 
