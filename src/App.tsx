@@ -480,8 +480,18 @@ export default function App() {
       showToast('☁️ Google Drive에서 데이터 불러옴');
       return stateData.portfolio || [];
     } catch (err) {
-      console.error('Drive 불러오기 실패:', err);
-      setDriveStatus('error');
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('Drive 불러오기 실패:', msg);
+      // 401/403은 권한 문제 안내
+      if (msg.includes('401')) {
+        console.warn('[Drive] 토큰 만료 또는 Drive 권한 없음 → 재로그인 필요');
+        setDriveStatus('auth_needed');
+      } else if (msg.includes('403')) {
+        console.warn('[Drive] 403 Forbidden: Google Cloud Console에서 drive.file 권한 또는 테스트 사용자 설정 확인 필요');
+        setDriveStatus('error');
+      } else {
+        setDriveStatus('error');
+      }
       return null;
     }
   };

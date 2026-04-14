@@ -19,6 +19,10 @@ export async function getOrCreateIndexFolder(token: string): Promise<string> {
     `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name)`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`[Drive] 폴더 검색 실패 ${res.status}: ${err?.error?.message || res.statusText}`);
+  }
   const data = await res.json();
   if (data.files?.length > 0) return data.files[0].id;
 
@@ -31,6 +35,10 @@ export async function getOrCreateIndexFolder(token: string): Promise<string> {
       mimeType: 'application/vnd.google-apps.folder',
     }),
   });
+  if (!createRes.ok) {
+    const err = await createRes.json().catch(() => ({}));
+    throw new Error(`[Drive] 폴더 생성 실패 ${createRes.status}: ${err?.error?.message || createRes.statusText}`);
+  }
   const created = await createRes.json();
   return created.id;
 }
@@ -44,6 +52,10 @@ async function findFileId(token: string, folderId: string, fileName: string): Pr
     `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`[Drive] 파일 검색 실패 ${res.status}: ${err?.error?.message || res.statusText}`);
+  }
   const data = await res.json();
   return data.files?.[0]?.id ?? null;
 }
@@ -108,6 +120,9 @@ export async function loadDriveFile(
   const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`[Drive] 파일 읽기 실패 ${res.status}: ${err?.error?.message || res.statusText}`);
+  }
   return await res.json();
 }
