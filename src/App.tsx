@@ -9,12 +9,14 @@ import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
-import { UI_CONFIG, GOOGLE_CLIENT_ID } from './config';
+import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
 import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile } from './driveStorage';
 import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import MarketIndicators from './components/MarketIndicators';
+import LoginGate from './components/LoginGate';
+import AdminPage from './components/AdminPage';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -312,6 +314,14 @@ function CustomDatePicker({ value, onChange, placeholder = '--/--/--' }) {
 export default function App() {
   const fileInputRef = useRef(null);
   const historyInputRef = useRef(null);
+
+  // ── 인증 상태 ──
+  const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
+  const [showAdminPage, setShowAdminPage] = useState(false);
+
+  const handleLoginApproved = (email: string, token: string) => {
+    setAuthUser({ email, token });
+  };
 
   const defaultCompStocks = [
     { id: 1, code: '', name: '비교종목1', active: false, loading: false, color: '#10b981' },
@@ -1905,10 +1915,9 @@ export default function App() {
     setIsLoading(false);
   };
 
+  // 1단계: localStorage에서 즉시 복원 (로그인 여부와 무관하게 실행)
   useEffect(() => {
-    // 1단계: localStorage에서 즉시 복원 (동기) → 화면 지연 없이 이전 상태 표시
     const saved = localStorage.getItem('portfolioState_v5');
-    let hasLocalData = false;
     if (saved) {
       try {
         const data = JSON.parse(saved);
@@ -1943,68 +1952,59 @@ export default function App() {
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
-        hasLocalData = (data.portfolio?.length > 0);
       } catch (e) {}
     }
+  }, []);
 
-    // 2단계: Drive 인증 초기화 후 시작 로직 실행
-    const bgTimer = setTimeout(async () => {
-      // GIS 스크립트 로드 대기 (최대 8초)
-      let waited = 0;
-      while (!(window as any).google?.accounts?.oauth2 && waited < 8000) {
-        await new Promise(r => setTimeout(r, 200));
-        waited += 200;
-      }
+  // 2단계: 로그인 완료 후 Drive 초기화 + 시장 데이터 수집
+  useEffect(() => {
+    if (!authUser) return;
 
-      let token: string | null = null;
+    const token = authUser.token;
+    const hasLocalData = portfolioRef.current.length > 0;
 
-      if ((window as any).google?.accounts?.oauth2 && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
-        // 영속 콜백: 초기 자동 인증 및 이후 수동 재인증 모두 driveTokenRef 업데이트
-        token = await new Promise<string | null>((resolve) => {
-          pendingTokenResolveRef.current = resolve;
-          const client = (window as any).google.accounts.oauth2.initTokenClient({
-            client_id: GOOGLE_CLIENT_ID,
-            scope: 'https://www.googleapis.com/auth/drive.file',
-            callback: (resp: any) => {
-              const t: string | null = resp.error ? null : resp.access_token;
-              if (t) {
-                driveTokenRef.current = t;
-                setDriveToken(t);
-                setDriveStatus('');
-              } else {
-                setDriveStatus('auth_needed');
-              }
-              // 대기 중인 Promise가 있으면 resolve
-              if (pendingTokenResolveRef.current) {
-                pendingTokenResolveRef.current(t);
-                pendingTokenResolveRef.current = null;
-              }
-            },
-          });
-          tokenClientRef.current = client;
-          client.requestAccessToken({ prompt: '' });
+    // Drive 토큰 설정
+    driveTokenRef.current = token;
+    setDriveToken(token);
+    setDriveStatus('');
+
+    // GIS 토큰 클라이언트 초기화 (토큰 갱신용, 팝업 없이)
+    const initClient = () => {
+      if ((window as any).google?.accounts?.oauth2) {
+        const client = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
+          callback: (resp: any) => {
+            const t: string | null = resp.error ? null : resp.access_token;
+            if (t) {
+              driveTokenRef.current = t;
+              setDriveToken(t);
+              setDriveStatus('');
+            } else {
+              setDriveStatus('auth_needed');
+            }
+            if (pendingTokenResolveRef.current) {
+              pendingTokenResolveRef.current(t);
+              pendingTokenResolveRef.current = null;
+            }
+          },
         });
-      } else if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
-        // CLIENT_ID 미설정 상태 — 콘솔에 경고만 출력 (driveStatus는 건드리지 않음)
-        console.warn('[Drive] GOOGLE_CLIENT_ID가 설정되지 않았습니다. config.ts를 확인해 주세요.');
+        tokenClientRef.current = client;
       }
+    };
 
-      if (token) {
-        // 영속 콜백에서 이미 driveTokenRef/setDriveToken 처리됨
-      } else if (GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
-        setDriveStatus('auth_needed');
-      }
+    const bgTimer = setTimeout(async () => {
+      initClient();
 
       // localStorage에 데이터가 없으면 Drive에서 복원
-      if (!hasLocalData && token) {
+      if (!hasLocalData) {
         const drivePortfolio = await loadFromDrive(token);
-        // Drive에서 불러온 후 상태 반영 대기
         if (drivePortfolio?.length > 0) {
           await new Promise(r => setTimeout(r, 600));
         }
       }
 
-      // 시장지표 백그라운드 수집, 종목 현재가 await
+      // 시장지표 백그라운드 수집, 종목 현재가 갱신
       fetchMarketIndicators();
       const portfolioToRefresh = portfolioRef.current;
       if (portfolioToRefresh.length > 0) {
@@ -2019,10 +2019,10 @@ export default function App() {
           saveAllToDrive(snap);
         }
       }, 1000);
-    }, 800);
+    }, 400);
 
     return () => clearTimeout(bgTimer);
-  }, []);
+  }, [authUser]);
 
   useEffect(() => {
     const loadIndices = async () => {
@@ -2164,6 +2164,16 @@ export default function App() {
     return null;
   };
 
+  // 로그인 전: LoginGate 표시
+  if (!authUser) {
+    return <LoginGate onApproved={handleLoginApproved} />;
+  }
+
+  // 관리자 페이지
+  if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+    return <AdminPage adminEmail={authUser.email} onClose={() => setShowAdminPage(false)} />;
+  }
+
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 p-2 md:p-6 lg:p-8 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
@@ -2247,6 +2257,27 @@ export default function App() {
       )}
 
       <div className="w-full max-w-[2560px] mx-auto flex flex-col gap-6 px-2">
+        {/* 로그인 사용자 정보 바 */}
+        <div className="flex items-center justify-between text-xs text-gray-500 px-1">
+          <span>{authUser.email}</span>
+          <div className="flex items-center gap-3">
+            {authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && (
+              <button
+                onClick={() => setShowAdminPage(true)}
+                className="bg-blue-900/50 hover:bg-blue-800/70 text-blue-300 px-3 py-1 rounded-lg transition-colors font-semibold"
+              >
+                관리자 페이지
+              </button>
+            )}
+            <button
+              onClick={() => { setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
+              className="hover:text-gray-300 transition-colors"
+            >
+              로그아웃
+            </button>
+          </div>
+        </div>
+
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoad={handleDriveLoad} onDriveLoadOnly={handleDriveLoadOnly} />
 
         <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />

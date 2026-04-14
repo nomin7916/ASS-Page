@@ -22,3 +22,9 @@ export const UI_CONFIG = {
 // Google Cloud Console에서 발급한 OAuth 2.0 클라이언트 ID를 입력하세요.
 // https://console.cloud.google.com → API 및 서비스 → 사용자 인증 정보 → OAuth 2.0 클라이언트 ID
 export const GOOGLE_CLIENT_ID = '972766008827-am47e7998m6o299d15gkul2p2r5btkff.apps.googleusercontent.com';
+
+// ── 사용자 승인 시스템 ──
+export const ADMIN_EMAIL = 'nomin1fi@gmail.com';
+export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz9-_-T81lEWuKDSiVLrBfkdOfDOAdovP7dOa-KFNn-s8fxicSH6_kQWIeY-k5iBnQX/exec';
+export const APPROVED_SHEET_ID = '17vPohQCrZbZgbutokZ2H92go5ByHNnyZ-IB9ipAr26c';
+export const APPROVED_SHEET_NAME = 'approved_users';
