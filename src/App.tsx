@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar, FolderOpen,
-  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search
+  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -15,7 +15,7 @@ import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import MarketIndicators from './components/MarketIndicators';
-import LoginGate, { verifyPin, savePin, PIN_KEY } from './components/LoginGate';
+import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
@@ -319,7 +319,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showPinChange, setShowPinChange] = useState(false);
-  const [pinChangeStep, setPinChangeStep] = useState<'current' | 'new' | 'confirm'>('current');
+  const [pinChangeSaving, setPinChangeSaving] = useState(false);
   const [pinCurrent, setPinCurrent] = useState(['', '', '', '']);
   const [pinNew, setPinNew] = useState(['', '', '', '']);
   const [pinConfirm, setPinConfirm] = useState(['', '', '', '']);
@@ -2278,32 +2278,34 @@ export default function App() {
       <div className="w-full max-w-[2560px] mx-auto flex flex-col gap-6 px-2">
         {/* 로그인 사용자 정보 바 */}
         <div className="flex items-center justify-between text-xs text-gray-500 px-1">
-          <span>{authUser.email}</span>
-          <div className="flex items-center gap-3">
+          <span className="font-mono">{authUser.email}</span>
+          <div className="flex items-center gap-2">
             {authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && (
               <button
                 onClick={() => setShowAdminPage(true)}
-                className="bg-blue-900/50 hover:bg-blue-800/70 text-blue-300 px-3 py-1 rounded-lg transition-colors font-semibold"
+                className="bg-blue-900/40 hover:bg-blue-800/60 text-blue-400 hover:text-blue-300 px-2.5 py-1 rounded-md transition-colors text-[11px] font-medium"
               >
-                관리자 페이지
+                관리자
               </button>
             )}
             <button
               onClick={() => {
-                setPinChangeStep('current');
                 setPinCurrent(['', '', '', '']);
                 setPinNew(['', '', '', '']);
                 setPinConfirm(['', '', '', '']);
                 setPinChangeError('');
                 setShowPinChange(true);
               }}
-              className="hover:text-gray-300 transition-colors"
+              className="flex items-center gap-1.5 text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60"
+              title="비밀번호 변경"
             >
-              비밀번호 변경
+              <Lock size={11} />
+              <span>비번 변경</span>
             </button>
+            <div className="w-px h-3 bg-gray-700" />
             <button
               onClick={() => { setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
-              className="hover:text-gray-300 transition-colors"
+              className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60"
             >
               로그아웃
             </button>
@@ -2312,21 +2314,28 @@ export default function App() {
 
         {/* 비밀번호 변경 모달 */}
         {showPinChange && (
-          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-            <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-2xl">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-white font-bold text-lg">비밀번호 변경</h3>
-                <button onClick={() => setShowPinChange(false)} className="text-gray-500 hover:text-white transition-colors">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-[#0f172a] border border-gray-700/60 rounded-2xl w-full max-w-xs shadow-2xl overflow-hidden">
+              {/* 헤더 */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+                <div className="flex items-center gap-2 text-gray-200">
+                  <Lock size={14} className="text-gray-400" />
+                  <span className="font-semibold text-sm">비밀번호 변경</span>
+                </div>
+                <button
+                  onClick={() => setShowPinChange(false)}
+                  className="text-gray-600 hover:text-gray-300 transition-colors p-1 rounded"
+                >
+                  <X size={16} />
                 </button>
               </div>
 
-              {pinChangeStep === 'current' && (
-                <div className="flex flex-col items-center gap-5">
-                  <p className="text-gray-400 text-sm text-center">현재 비밀번호를 입력하세요</p>
-                  <div className="flex gap-3 justify-center">
+              {/* 입력 영역 */}
+              <div className="px-5 py-5 space-y-5">
+                {/* 현재 비밀번호 */}
+                <div className="space-y-2.5">
+                  <p className="text-[11px] text-gray-500 uppercase tracking-wider font-medium">현재 비밀번호</p>
+                  <div className="flex gap-2.5 justify-center">
                     {[0,1,2,3].map(i => (
                       <input key={i} id={`pc-cur-${i}`} type="password" inputMode="numeric" maxLength={1}
                         value={pinCurrent[i] || ''}
@@ -2337,26 +2346,19 @@ export default function App() {
                           if (e.target.value && i < 3) document.getElementById(`pc-cur-${i+1}`)?.focus();
                         }}
                         onKeyDown={e => { if (e.key==='Backspace' && !pinCurrent[i] && i>0) document.getElementById(`pc-cur-${i-1}`)?.focus(); }}
-                        className="w-12 h-12 text-center text-xl font-bold bg-gray-800 border-2 border-gray-600 focus:border-blue-500 rounded-xl text-white outline-none transition-colors"
+                        className="w-11 h-11 text-center text-lg font-bold bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg text-white outline-none transition-colors"
                       />
                     ))}
                   </div>
-                  {pinChangeError && <p className="text-red-400 text-sm">{pinChangeError}</p>}
-                  <button onClick={() => {
-                    const pin = pinCurrent.join('');
-                    if (pin.length < 4) { setPinChangeError('4자리를 모두 입력하세요.'); return; }
-                    if (!verifyPin(pin, authUser.email)) { setPinChangeError('현재 비밀번호가 틀렸습니다.'); setPinCurrent(['','','','']); return; }
-                    setPinChangeStep('new');
-                  }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-xl transition-colors">
-                    다음
-                  </button>
                 </div>
-              )}
 
-              {pinChangeStep === 'new' && (
-                <div className="flex flex-col items-center gap-5">
-                  <p className="text-gray-400 text-sm text-center">새 비밀번호를 입력하세요</p>
-                  <div className="flex gap-3 justify-center">
+                {/* 구분선 */}
+                <div className="border-t border-gray-800" />
+
+                {/* 새 비밀번호 */}
+                <div className="space-y-2.5">
+                  <p className="text-[11px] text-gray-500 uppercase tracking-wider font-medium">새 비밀번호</p>
+                  <div className="flex gap-2.5 justify-center">
                     {[0,1,2,3].map(i => (
                       <input key={i} id={`pc-new-${i}`} type="password" inputMode="numeric" maxLength={1}
                         value={pinNew[i] || ''}
@@ -2367,23 +2369,16 @@ export default function App() {
                           if (e.target.value && i < 3) document.getElementById(`pc-new-${i+1}`)?.focus();
                         }}
                         onKeyDown={e => { if (e.key==='Backspace' && !pinNew[i] && i>0) document.getElementById(`pc-new-${i-1}`)?.focus(); }}
-                        className="w-12 h-12 text-center text-xl font-bold bg-gray-800 border-2 border-gray-600 focus:border-blue-500 rounded-xl text-white outline-none transition-colors"
+                        className="w-11 h-11 text-center text-lg font-bold bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg text-white outline-none transition-colors"
                       />
                     ))}
                   </div>
-                  <button onClick={() => {
-                    if (pinNew.join('').length < 4) { setPinChangeError('4자리를 모두 입력하세요.'); return; }
-                    setPinChangeStep('confirm');
-                  }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-xl transition-colors">
-                    다음
-                  </button>
                 </div>
-              )}
 
-              {pinChangeStep === 'confirm' && (
-                <div className="flex flex-col items-center gap-5">
-                  <p className="text-gray-400 text-sm text-center">새 비밀번호를 다시 입력하세요</p>
-                  <div className="flex gap-3 justify-center">
+                {/* 새 비밀번호 확인 */}
+                <div className="space-y-2.5">
+                  <p className="text-[11px] text-gray-500 uppercase tracking-wider font-medium">새 비밀번호 확인</p>
+                  <div className="flex gap-2.5 justify-center">
                     {[0,1,2,3].map(i => (
                       <input key={i} id={`pc-cfm-${i}`} type="password" inputMode="numeric" maxLength={1}
                         value={pinConfirm[i] || ''}
@@ -2394,23 +2389,43 @@ export default function App() {
                           if (e.target.value && i < 3) document.getElementById(`pc-cfm-${i+1}`)?.focus();
                         }}
                         onKeyDown={e => { if (e.key==='Backspace' && !pinConfirm[i] && i>0) document.getElementById(`pc-cfm-${i-1}`)?.focus(); }}
-                        className="w-12 h-12 text-center text-xl font-bold bg-gray-800 border-2 border-gray-600 focus:border-blue-500 rounded-xl text-white outline-none transition-colors"
+                        className="w-11 h-11 text-center text-lg font-bold bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg text-white outline-none transition-colors"
                       />
                     ))}
                   </div>
-                  {pinChangeError && <p className="text-red-400 text-sm">{pinChangeError}</p>}
-                  <button onClick={() => {
-                    const np = pinNew.join(''); const cp = pinConfirm.join('');
-                    if (cp.length < 4) { setPinChangeError('4자리를 모두 입력하세요.'); return; }
-                    if (np !== cp) { setPinChangeError('비밀번호가 일치하지 않습니다.'); setPinConfirm(['','','','']); return; }
+                </div>
+
+                {pinChangeError && (
+                  <p className="text-red-400 text-xs text-center">{pinChangeError}</p>
+                )}
+              </div>
+
+              {/* 푸터 */}
+              <div className="px-5 pb-5">
+                <button
+                  disabled={pinChangeSaving}
+                  onClick={async () => {
+                    const cur = pinCurrent.join('');
+                    const np = pinNew.join('');
+                    const cp = pinConfirm.join('');
+                    if (cur.length < 4) { setPinChangeError('현재 비밀번호를 입력하세요.'); return; }
+                    if (!verifyPin(cur, authUser.email)) { setPinChangeError('현재 비밀번호가 틀렸습니다.'); setPinCurrent(['','','','']); return; }
+                    if (np.length < 4) { setPinChangeError('새 비밀번호를 입력하세요.'); return; }
+                    if (np !== cp) { setPinChangeError('새 비밀번호가 일치하지 않습니다.'); setPinConfirm(['','','','']); return; }
+                    setPinChangeSaving(true);
                     savePin(np, authUser.email);
+                    await savePinToDrive(hashPin(np), authUser.token);
+                    setPinChangeSaving(false);
                     setShowPinChange(false);
                     showToast('비밀번호가 변경되었습니다.');
-                  }} className="w-full bg-green-700 hover:bg-green-600 text-white font-semibold py-2.5 rounded-xl transition-colors">
-                    변경 완료
-                  </button>
-                </div>
-              )}
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-xl transition-colors text-sm flex items-center justify-center gap-2"
+                >
+                  {pinChangeSaving ? (
+                    <><div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />저장 중...</>
+                  ) : '변경 완료'}
+                </button>
+              </div>
             </div>
           </div>
         )}

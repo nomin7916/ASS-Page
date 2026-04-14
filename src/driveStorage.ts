@@ -8,6 +8,7 @@ export const DRIVE_FILES = {
   STATE:  'portfolio_state.json',
   STOCK:  'portfolio_stockdata.json',
   MARKET: 'portfolio_marketdata.json',
+  PIN:    'portfolio_pin.json',
 };
 
 // Index_Data 폴더 찾기 또는 없으면 생성

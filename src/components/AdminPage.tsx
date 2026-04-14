@@ -154,24 +154,29 @@ export default function AdminPage({ adminEmail, onClose }: Props) {
           <div className="text-gray-400 text-xs leading-relaxed space-y-2">
             <p>
               <span className="text-gray-200 font-medium">초기 비밀번호:</span>{' '}
-              신규 사용자 최초 로그인 시 <span className="text-yellow-300 font-bold">0000</span> 설정 화면이 표시됩니다.
+              모든 사용자의 기본 비밀번호는 <span className="text-yellow-300 font-bold font-mono">0000</span>입니다.
+              로그인 후 상단 <span className="text-blue-300">비번 변경</span> 버튼으로 언제든지 변경할 수 있습니다.
             </p>
             <p>
-              <span className="text-gray-200 font-medium">비밀번호 초기화:</span>{' '}
+              <span className="text-gray-200 font-medium">PIN 저장 위치:</span>{' '}
+              각 사용자의 PIN은 <span className="text-green-400">본인의 구글 드라이브</span>{' '}
+              (Index_Data/portfolio_pin.json)에 저장됩니다.
+              어느 기기/브라우저에서 로그인해도 동일한 PIN이 적용됩니다.
+            </p>
+            <p>
+              <span className="text-gray-200 font-medium">비밀번호 초기화 (요청 시):</span>{' '}
               구글 시트 <span className="text-green-400">B열</span>에{' '}
-              <span className="text-yellow-300 font-mono">RESET</span> 입력 →
-              해당 사용자 다음 로그인 시 PIN이 <span className="text-yellow-300 font-bold">0000</span>으로 자동 초기화됩니다.
-            </p>
-            <p>
-              <span className="text-gray-200 font-medium">초기화 확인 후:</span>{' '}
-              사용자가 0000으로 로그인하면 B열의 RESET을 지워주세요.
+              <span className="text-yellow-300 font-mono">RESET</span>{' '}입력 →
+              해당 사용자 다음 로그인 시 <span className="text-yellow-300 font-bold">0000</span>으로 초기화됩니다.
+              특정 비밀번호로 초기화하려면 <span className="text-yellow-300 font-mono">RESET:1234</span> 형식으로 입력하세요.
             </p>
           </div>
           <div className="bg-gray-800 rounded-lg p-3 font-mono text-xs text-gray-400">
-            <div className="text-gray-500 mb-1">시트 구조 예시</div>
-            <div><span className="text-blue-400">A열(이메일)</span>{'        '}<span className="text-green-400">B열(초기화)</span></div>
+            <div className="text-gray-500 mb-1">시트 B열 사용 예시</div>
+            <div><span className="text-blue-400">A열(이메일)</span>{'            '}<span className="text-green-400">B열(초기화)</span></div>
             <div>nomin1fi@gmail.com</div>
-            <div>arui114501@gmail.com{'  '}<span className="text-yellow-300">RESET</span></div>
+            <div>arui114501@gmail.com{'  '}<span className="text-yellow-300">RESET</span><span className="text-gray-600">{'       '}← 0000으로 초기화</span></div>
+            <div>user@gmail.com{'        '}<span className="text-yellow-300">RESET:5678</span><span className="text-gray-600">{'  '}← 5678로 초기화</span></div>
           </div>
         </div>
 

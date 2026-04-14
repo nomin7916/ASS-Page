@@ -1,9 +1,9 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL, APPROVED_SHEET_ID, APPROVED_SHEET_NAME } from '../config';
+import { getOrCreateIndexFolder, saveDriveFile, loadDriveFile, DRIVE_FILES } from '../driveStorage';
 
-type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'error'
-              | 'pin_entry' | 'pin_setup';
+type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'error' | 'pin_entry';
 
 interface Props {
   onApproved: (email: string, token: string) => void;
@@ -11,8 +11,9 @@ interface Props {
 
 // ── PIN 유틸리티 ────────────────────────────────────────────────
 export const PIN_KEY = (email: string) => `portfolio_pin_v1_${email}`;
+const DEFAULT_PIN = '0000';
 
-function hashPin(pin: string): string {
+export function hashPin(pin: string): string {
   return btoa(`${pin}::portfolio_secure_2024`);
 }
 export function isPinSet(email: string): boolean {
@@ -25,26 +26,57 @@ export function savePin(pin: string, email: string): void {
   localStorage.setItem(PIN_KEY(email), hashPin(pin));
 }
 
+// ── Google Drive PIN 저장/불러오기 ──────────────────────────────
+export async function loadPinFromDrive(token: string): Promise<string | null> {
+  try {
+    const folderId = await getOrCreateIndexFolder(token);
+    const data = await loadDriveFile(token, folderId, DRIVE_FILES.PIN) as { pinHash?: string } | null;
+    return data?.pinHash ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function savePinToDrive(pinHash: string, token: string): Promise<void> {
+  try {
+    const folderId = await getOrCreateIndexFolder(token);
+    await saveDriveFile(token, folderId, DRIVE_FILES.PIN, { pinHash });
+  } catch { /* fire and forget */ }
+}
+
 // ── 구글 시트에서 승인 여부 + RESET 플래그 확인 ─────────────────
-async function checkApproval(email: string): Promise<{ approved: boolean; needsReset: boolean }> {
+// B열: 비어있음 = 정상, "RESET" = 초기화(0000), "RESET:1234" = 초기화(1234)
+async function checkApproval(email: string): Promise<{ approved: boolean; needsReset: boolean; adminPin: string }> {
   try {
     const url = `https://docs.google.com/spreadsheets/d/${APPROVED_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${APPROVED_SHEET_NAME}&cacheBust=${Date.now()}`;
     const res = await fetch(url);
-    if (!res.ok) return { approved: false, needsReset: false };
+    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN };
     const text = await res.text();
-    const lines = text.split('\n').slice(1); // 헤더 제거
+    const lines = text.split('\n').slice(1);
     for (const line of lines) {
-      // CSV: "email","RESET" 또는 "email",""
       const cols = line.split(',').map(c => c.replace(/"/g, '').trim());
       if (cols[0].toLowerCase() === email.toLowerCase().trim()) {
-        const needsReset = cols[1]?.toUpperCase() === 'RESET';
-        return { approved: true, needsReset };
+        const b = cols[1]?.trim() || '';
+        const needsReset = b.toUpperCase().startsWith('RESET');
+        const adminPin = needsReset && b.includes(':') ? b.split(':')[1].trim() : DEFAULT_PIN;
+        return { approved: true, needsReset, adminPin };
       }
     }
-    return { approved: false, needsReset: false };
+    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN };
   } catch {
-    return { approved: false, needsReset: false };
+    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN };
   }
+}
+
+async function clearResetFlag(email: string): Promise<void> {
+  try {
+    await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'clear_reset', email }),
+    });
+  } catch { /* fire and forget */ }
 }
 
 async function fetchUserEmail(token: string): Promise<string | null> {
@@ -97,9 +129,7 @@ function PinInput({ value, onChange, onComplete, autoFocus = false }: {
   };
 
   const handleKeyDown = (i: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !value[i] && i > 0) {
-      refs.current[i - 1]?.focus();
-    }
+    if (e.key === 'Backspace' && !value[i] && i > 0) refs.current[i - 1]?.focus();
     if (e.key === 'Enter' && value.every(d => d !== '') && onComplete) onComplete();
   };
 
@@ -131,8 +161,6 @@ export default function LoginGate({ onApproved }: Props) {
   const [resetNotice, setResetNotice] = useState(false);
 
   const [pinDigits, setPinDigits] = useState<string[]>(['', '', '', '']);
-  const [newPinDigits, setNewPinDigits] = useState<string[]>(['', '', '', '']);
-  const [confirmPinDigits, setConfirmPinDigits] = useState<string[]>(['', '', '', '']);
   const [pinError, setPinError] = useState('');
 
   const tokenClientRef = useRef<any>(null);
@@ -162,25 +190,36 @@ export default function LoginGate({ onApproved }: Props) {
             setUserEmail(email);
             setUserToken(token);
 
-            const { approved, needsReset } = await checkApproval(email);
+            const { approved, needsReset, adminPin } = await checkApproval(email);
             if (!approved) {
               setStep('pending');
               return;
             }
 
-            // 관리자가 RESET 설정한 경우 → PIN을 0000으로 초기화
             if (needsReset) {
-              savePin('0000', email);
+              // 관리자가 RESET 설정 → adminPin 사용 (기본 0000)
+              const adminHash = hashPin(adminPin);
+              localStorage.setItem(PIN_KEY(email), adminHash);
+              // Drive에도 동기화 + RESET 플래그 해제
+              savePinToDrive(adminHash, token);
+              clearResetFlag(email);
               setResetNotice(true);
-              setPinDigits(['', '', '', '']);
-              setStep('pin_entry');
-              return;
-            }
-
-            // 최초 로그인 (PIN 미설정)
-            if (!isPinSet(email)) {
-              setStep('pin_setup');
-              return;
+            } else {
+              // Drive에서 PIN 불러오기 → localStorage 동기화
+              const drivePinHash = await loadPinFromDrive(token);
+              if (drivePinHash) {
+                // Drive PIN을 localStorage에 동기화
+                localStorage.setItem(PIN_KEY(email), drivePinHash);
+              } else if (!isPinSet(email)) {
+                // Drive에도 없고 localStorage에도 없음 → 기본 0000
+                const defaultHash = hashPin(DEFAULT_PIN);
+                localStorage.setItem(PIN_KEY(email), defaultHash);
+                savePinToDrive(defaultHash, token);
+              }
+              // localStorage에만 있고 Drive에 없는 경우 → Drive에 동기화
+              else if (!drivePinHash && isPinSet(email)) {
+                savePinToDrive(localStorage.getItem(PIN_KEY(email))!, token);
+              }
             }
 
             setPinDigits(['', '', '', '']);
@@ -211,19 +250,6 @@ export default function LoginGate({ onApproved }: Props) {
     }
   };
 
-  const handlePinSetup = () => {
-    const newPin = newPinDigits.join('');
-    const confirmPin = confirmPinDigits.join('');
-    if (newPin.length < 4) { setPinError('새 비밀번호를 입력하세요.'); return; }
-    if (newPin !== confirmPin) {
-      setPinError('비밀번호가 일치하지 않습니다.');
-      setConfirmPinDigits(['', '', '', '']);
-      return;
-    }
-    savePin(newPin, userEmail);
-    onApproved(userEmail, userToken);
-  };
-
   const handleRequestAccess = async () => {
     setStep('requesting');
     await sendApprovalRequest(userEmail);
@@ -236,8 +262,6 @@ export default function LoginGate({ onApproved }: Props) {
     setUserToken('');
     setErrorMsg('');
     setPinDigits(['', '', '', '']);
-    setNewPinDigits(['', '', '', '']);
-    setConfirmPinDigits(['', '', '', '']);
     setPinError('');
     setResetNotice(false);
   };
@@ -245,7 +269,6 @@ export default function LoginGate({ onApproved }: Props) {
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        {/* 타이틀 */}
         <div className="text-center mb-10">
           <div className="text-4xl font-black text-white tracking-tight mb-2">포트폴리오 대시보드</div>
           <div className="text-gray-400 text-sm">투자 포트폴리오 관리 시스템</div>
@@ -256,11 +279,9 @@ export default function LoginGate({ onApproved }: Props) {
           {/* 구글 로그인 */}
           {(step === 'idle' || step === 'loading') && (
             <div className="flex flex-col items-center gap-6">
-              <div className="text-center">
-                <p className="text-gray-300 text-sm leading-relaxed">
-                  구글 계정으로 로그인하면<br />관리자가 승인 후 이용 가능합니다.
-                </p>
-              </div>
+              <p className="text-gray-300 text-sm text-center leading-relaxed">
+                구글 계정으로 로그인하면<br />관리자가 승인 후 이용 가능합니다.
+              </p>
               <button
                 onClick={handleLogin}
                 disabled={step === 'loading'}
@@ -291,12 +312,13 @@ export default function LoginGate({ onApproved }: Props) {
             </div>
           )}
 
-          {/* PIN 입력 (로그인) */}
+          {/* PIN 입력 */}
           {step === 'pin_entry' && (
             <div className="flex flex-col items-center gap-5">
               {resetNotice && (
-                <div className="w-full bg-yellow-900/30 border border-yellow-700/60 rounded-lg px-4 py-2.5 text-yellow-300 text-sm text-center">
-                  관리자가 비밀번호를 <span className="font-bold text-yellow-200">0000</span>으로 초기화했습니다.
+                <div className="w-full bg-blue-950/50 border border-blue-800/60 rounded-lg px-4 py-2.5 text-blue-300 text-xs text-center">
+                  관리자가 비밀번호를 초기화했습니다.<br />
+                  로그인 후 대시보드에서 비밀번호를 변경하세요.
                 </div>
               )}
               <div className="text-center">
@@ -327,47 +349,6 @@ export default function LoginGate({ onApproved }: Props) {
             </div>
           )}
 
-          {/* PIN 최초 설정 */}
-          {step === 'pin_setup' && (
-            <div className="flex flex-col items-center gap-5">
-              <div className="text-center">
-                <div className="w-12 h-12 bg-green-600/20 rounded-full flex items-center justify-center mx-auto mb-3">
-                  <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                  </svg>
-                </div>
-                <p className="text-white font-semibold mb-1">비밀번호 설정</p>
-                <p className="text-gray-500 text-sm">4자리 숫자 비밀번호를 설정하세요</p>
-                <p className="text-yellow-500 text-xs mt-1">관리자 초기 비밀번호: <span className="font-bold">0000</span></p>
-              </div>
-              <div className="w-full space-y-5">
-                <div>
-                  <p className="text-gray-400 text-xs mb-2 text-center uppercase tracking-wider">새 비밀번호</p>
-                  <PinInput
-                    value={newPinDigits}
-                    onChange={v => { setNewPinDigits(v); setPinError(''); }}
-                    autoFocus
-                  />
-                </div>
-                <div>
-                  <p className="text-gray-400 text-xs mb-2 text-center uppercase tracking-wider">비밀번호 확인</p>
-                  <PinInput
-                    value={confirmPinDigits}
-                    onChange={v => { setConfirmPinDigits(v); setPinError(''); }}
-                    onComplete={handlePinSetup}
-                  />
-                </div>
-              </div>
-              {pinError && <p className="text-red-400 text-sm text-center">{pinError}</p>}
-              <button
-                onClick={handlePinSetup}
-                className="w-full bg-green-700 hover:bg-green-600 text-white font-semibold py-3 rounded-xl transition-colors"
-              >
-                설정 완료
-              </button>
-            </div>
-          )}
-
           {/* 승인 대기 */}
           {step === 'pending' && (
             <div className="flex flex-col items-center gap-5 text-center">
@@ -382,10 +363,7 @@ export default function LoginGate({ onApproved }: Props) {
                   <span className="text-blue-400">{userEmail}</span> 계정은<br />아직 승인되지 않았습니다.
                 </p>
               </div>
-              <button
-                onClick={handleRequestAccess}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
-              >
+              <button onClick={handleRequestAccess} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200">
                 관리자에게 승인 요청
               </button>
               <button onClick={handleRetry} className="text-gray-500 hover:text-gray-300 text-sm transition-colors">
@@ -416,10 +394,7 @@ export default function LoginGate({ onApproved }: Props) {
                   관리자에게 요청이 전달되었습니다.<br />승인 후 다시 로그인해 주세요.
                 </p>
               </div>
-              <button
-                onClick={handleRetry}
-                className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
-              >
+              <button onClick={handleRetry} className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200">
                 다시 로그인
               </button>
             </div>
@@ -437,10 +412,7 @@ export default function LoginGate({ onApproved }: Props) {
                 <p className="text-white font-semibold mb-1">오류가 발생했습니다</p>
                 <p className="text-gray-400 text-sm">{errorMsg}</p>
               </div>
-              <button
-                onClick={handleRetry}
-                className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
-              >
+              <button onClick={handleRetry} className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200">
                 다시 시도
               </button>
             </div>
