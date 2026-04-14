@@ -15,7 +15,7 @@ import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import MarketIndicators from './components/MarketIndicators';
-import LoginGate from './components/LoginGate';
+import LoginGate, { verifyPin, savePin, PIN_KEY } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
@@ -318,6 +318,12 @@ export default function App() {
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
   const [showAdminPage, setShowAdminPage] = useState(false);
+  const [showPinChange, setShowPinChange] = useState(false);
+  const [pinChangeStep, setPinChangeStep] = useState<'current' | 'new' | 'confirm'>('current');
+  const [pinCurrent, setPinCurrent] = useState(['', '', '', '']);
+  const [pinNew, setPinNew] = useState(['', '', '', '']);
+  const [pinConfirm, setPinConfirm] = useState(['', '', '', '']);
+  const [pinChangeError, setPinChangeError] = useState('');
 
   const handleLoginApproved = (email: string, token: string) => {
     setAuthUser({ email, token });
@@ -2283,6 +2289,19 @@ export default function App() {
               </button>
             )}
             <button
+              onClick={() => {
+                setPinChangeStep('current');
+                setPinCurrent(['', '', '', '']);
+                setPinNew(['', '', '', '']);
+                setPinConfirm(['', '', '', '']);
+                setPinChangeError('');
+                setShowPinChange(true);
+              }}
+              className="hover:text-gray-300 transition-colors"
+            >
+              비밀번호 변경
+            </button>
+            <button
               onClick={() => { setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
               className="hover:text-gray-300 transition-colors"
             >
@@ -2290,6 +2309,111 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {/* 비밀번호 변경 모달 */}
+        {showPinChange && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-sm shadow-2xl">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-white font-bold text-lg">비밀번호 변경</h3>
+                <button onClick={() => setShowPinChange(false)} className="text-gray-500 hover:text-white transition-colors">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {pinChangeStep === 'current' && (
+                <div className="flex flex-col items-center gap-5">
+                  <p className="text-gray-400 text-sm text-center">현재 비밀번호를 입력하세요</p>
+                  <div className="flex gap-3 justify-center">
+                    {[0,1,2,3].map(i => (
+                      <input key={i} id={`pc-cur-${i}`} type="password" inputMode="numeric" maxLength={1}
+                        value={pinCurrent[i] || ''}
+                        onChange={e => {
+                          if (!/^\d*$/.test(e.target.value)) return;
+                          const n = [...pinCurrent]; n[i] = e.target.value.slice(-1); setPinCurrent(n);
+                          setPinChangeError('');
+                          if (e.target.value && i < 3) document.getElementById(`pc-cur-${i+1}`)?.focus();
+                        }}
+                        onKeyDown={e => { if (e.key==='Backspace' && !pinCurrent[i] && i>0) document.getElementById(`pc-cur-${i-1}`)?.focus(); }}
+                        className="w-12 h-12 text-center text-xl font-bold bg-gray-800 border-2 border-gray-600 focus:border-blue-500 rounded-xl text-white outline-none transition-colors"
+                      />
+                    ))}
+                  </div>
+                  {pinChangeError && <p className="text-red-400 text-sm">{pinChangeError}</p>}
+                  <button onClick={() => {
+                    const pin = pinCurrent.join('');
+                    if (pin.length < 4) { setPinChangeError('4자리를 모두 입력하세요.'); return; }
+                    if (!verifyPin(pin, authUser.email)) { setPinChangeError('현재 비밀번호가 틀렸습니다.'); setPinCurrent(['','','','']); return; }
+                    setPinChangeStep('new');
+                  }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-xl transition-colors">
+                    다음
+                  </button>
+                </div>
+              )}
+
+              {pinChangeStep === 'new' && (
+                <div className="flex flex-col items-center gap-5">
+                  <p className="text-gray-400 text-sm text-center">새 비밀번호를 입력하세요</p>
+                  <div className="flex gap-3 justify-center">
+                    {[0,1,2,3].map(i => (
+                      <input key={i} id={`pc-new-${i}`} type="password" inputMode="numeric" maxLength={1}
+                        value={pinNew[i] || ''}
+                        onChange={e => {
+                          if (!/^\d*$/.test(e.target.value)) return;
+                          const n = [...pinNew]; n[i] = e.target.value.slice(-1); setPinNew(n);
+                          setPinChangeError('');
+                          if (e.target.value && i < 3) document.getElementById(`pc-new-${i+1}`)?.focus();
+                        }}
+                        onKeyDown={e => { if (e.key==='Backspace' && !pinNew[i] && i>0) document.getElementById(`pc-new-${i-1}`)?.focus(); }}
+                        className="w-12 h-12 text-center text-xl font-bold bg-gray-800 border-2 border-gray-600 focus:border-blue-500 rounded-xl text-white outline-none transition-colors"
+                      />
+                    ))}
+                  </div>
+                  <button onClick={() => {
+                    if (pinNew.join('').length < 4) { setPinChangeError('4자리를 모두 입력하세요.'); return; }
+                    setPinChangeStep('confirm');
+                  }} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-xl transition-colors">
+                    다음
+                  </button>
+                </div>
+              )}
+
+              {pinChangeStep === 'confirm' && (
+                <div className="flex flex-col items-center gap-5">
+                  <p className="text-gray-400 text-sm text-center">새 비밀번호를 다시 입력하세요</p>
+                  <div className="flex gap-3 justify-center">
+                    {[0,1,2,3].map(i => (
+                      <input key={i} id={`pc-cfm-${i}`} type="password" inputMode="numeric" maxLength={1}
+                        value={pinConfirm[i] || ''}
+                        onChange={e => {
+                          if (!/^\d*$/.test(e.target.value)) return;
+                          const n = [...pinConfirm]; n[i] = e.target.value.slice(-1); setPinConfirm(n);
+                          setPinChangeError('');
+                          if (e.target.value && i < 3) document.getElementById(`pc-cfm-${i+1}`)?.focus();
+                        }}
+                        onKeyDown={e => { if (e.key==='Backspace' && !pinConfirm[i] && i>0) document.getElementById(`pc-cfm-${i-1}`)?.focus(); }}
+                        className="w-12 h-12 text-center text-xl font-bold bg-gray-800 border-2 border-gray-600 focus:border-blue-500 rounded-xl text-white outline-none transition-colors"
+                      />
+                    ))}
+                  </div>
+                  {pinChangeError && <p className="text-red-400 text-sm">{pinChangeError}</p>}
+                  <button onClick={() => {
+                    const np = pinNew.join(''); const cp = pinConfirm.join('');
+                    if (cp.length < 4) { setPinChangeError('4자리를 모두 입력하세요.'); return; }
+                    if (np !== cp) { setPinChangeError('비밀번호가 일치하지 않습니다.'); setPinConfirm(['','','','']); return; }
+                    savePin(np, authUser.email);
+                    setShowPinChange(false);
+                    showToast('비밀번호가 변경되었습니다.');
+                  }} className="w-full bg-green-700 hover:bg-green-600 text-white font-semibold py-2.5 rounded-xl transition-colors">
+                    변경 완료
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoad={handleDriveLoad} onDriveLoadOnly={handleDriveLoadOnly} />
 

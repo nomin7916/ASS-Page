@@ -2,12 +2,17 @@
 import React, { useState, useEffect } from 'react';
 import { APPROVED_SHEET_ID, APPROVED_SHEET_NAME, ADMIN_EMAIL } from '../config';
 
+interface ApprovedUser {
+  email: string;
+  resetFlag: boolean; // 구글 시트 B열 = 'RESET'이면 true
+}
+
 interface Props {
   adminEmail: string;
   onClose: () => void;
 }
 
-async function fetchApprovedEmails(): Promise<string[]> {
+async function fetchApprovedUsers(): Promise<ApprovedUser[]> {
   try {
     const url = `https://docs.google.com/spreadsheets/d/${APPROVED_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${APPROVED_SHEET_NAME}&cacheBust=${Date.now()}`;
     const res = await fetch(url);
@@ -15,37 +20,37 @@ async function fetchApprovedEmails(): Promise<string[]> {
     const text = await res.text();
     return text
       .split('\n')
-      .slice(1)
-      .map(line => line.replace(/"/g, '').trim())
-      .filter(Boolean);
+      .slice(1) // 헤더 제거
+      .map(line => {
+        const cols = line.split(',').map(c => c.replace(/"/g, '').trim());
+        return { email: cols[0], resetFlag: cols[1]?.toUpperCase() === 'RESET' };
+      })
+      .filter(u => u.email);
   } catch {
     return [];
   }
 }
 
 export default function AdminPage({ adminEmail, onClose }: Props) {
-  const [approvedEmails, setApprovedEmails] = useState<string[]>([]);
+  const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchApprovedEmails().then(emails => {
-      setApprovedEmails(emails);
+    fetchApprovedUsers().then(u => {
+      setUsers(u);
       setLoading(false);
     });
   }, []);
 
   const handleRefresh = async () => {
     setLoading(true);
-    const emails = await fetchApprovedEmails();
-    setApprovedEmails(emails);
+    const u = await fetchApprovedUsers();
+    setUsers(u);
     setLoading(false);
   };
 
   const handleOpenSheet = () => {
-    window.open(
-      `https://docs.google.com/spreadsheets/d/${APPROVED_SHEET_ID}/edit`,
-      '_blank'
-    );
+    window.open(`https://docs.google.com/spreadsheets/d/${APPROVED_SHEET_ID}/edit`, '_blank');
   };
 
   return (
@@ -71,7 +76,7 @@ export default function AdminPage({ adminEmail, onClose }: Props) {
             <h2 className="text-white font-semibold">
               승인된 사용자
               <span className="ml-2 text-gray-500 text-sm font-normal">
-                {!loading && `(${approvedEmails.length}명)`}
+                {!loading && `(${users.length}명)`}
               </span>
             </h2>
             <button
@@ -88,23 +93,30 @@ export default function AdminPage({ adminEmail, onClose }: Props) {
               <div className="w-4 h-4 border-2 border-gray-600 border-t-gray-300 rounded-full animate-spin" />
               <span className="text-sm">불러오는 중...</span>
             </div>
-          ) : approvedEmails.length === 0 ? (
+          ) : users.length === 0 ? (
             <p className="text-gray-600 text-sm text-center py-6">승인된 사용자가 없습니다.</p>
           ) : (
             <ul className="space-y-2 max-h-64 overflow-y-auto">
-              {approvedEmails.map((email, i) => (
+              {users.map((u, i) => (
                 <li key={i} className="flex items-center gap-3 bg-gray-800 rounded-lg px-4 py-2.5">
-                  <div className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
-                  <span className="text-gray-200 text-sm">{email}</span>
-                  {email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && (
-                    <span className="ml-auto text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded-full">관리자</span>
-                  )}
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${u.resetFlag ? 'bg-yellow-400' : 'bg-green-400'}`} />
+                  <span className="text-gray-200 text-sm flex-1">{u.email}</span>
+                  <div className="flex items-center gap-2 ml-auto">
+                    {u.resetFlag && (
+                      <span className="text-xs bg-yellow-900/60 text-yellow-300 border border-yellow-700/50 px-2 py-0.5 rounded-full">
+                        PIN 초기화됨
+                      </span>
+                    )}
+                    {u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && (
+                      <span className="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded-full">관리자</span>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
           )}
 
-          {/* 사용자 추가 안내 */}
+          {/* 사용자 추가/시트 버튼 */}
           <div className="mt-5 pt-5 border-t border-gray-800">
             <p className="text-gray-500 text-sm mb-3">
               사용자 추가/제거는 구글 시트에서 직접 관리합니다.
@@ -121,6 +133,7 @@ export default function AdminPage({ adminEmail, onClose }: Props) {
             <p className="text-gray-600 text-xs mt-2 text-center">
               A열에 이메일 주소를 한 줄씩 입력하세요
             </p>
+
             <a
               href="https://console.cloud.google.com/auth/audience?project=useful-maxim-493212-r8"
               target="_blank"
@@ -135,7 +148,34 @@ export default function AdminPage({ adminEmail, onClose }: Props) {
           </div>
         </div>
 
-        {/* 안내 */}
+        {/* PIN 관리 안내 */}
+        <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+          <p className="text-yellow-400 text-xs font-semibold uppercase tracking-wider">비밀번호(PIN) 관리</p>
+          <div className="text-gray-400 text-xs leading-relaxed space-y-2">
+            <p>
+              <span className="text-gray-200 font-medium">초기 비밀번호:</span>{' '}
+              신규 사용자 최초 로그인 시 <span className="text-yellow-300 font-bold">0000</span> 설정 화면이 표시됩니다.
+            </p>
+            <p>
+              <span className="text-gray-200 font-medium">비밀번호 초기화:</span>{' '}
+              구글 시트 <span className="text-green-400">B열</span>에{' '}
+              <span className="text-yellow-300 font-mono">RESET</span> 입력 →
+              해당 사용자 다음 로그인 시 PIN이 <span className="text-yellow-300 font-bold">0000</span>으로 자동 초기화됩니다.
+            </p>
+            <p>
+              <span className="text-gray-200 font-medium">초기화 확인 후:</span>{' '}
+              사용자가 0000으로 로그인하면 B열의 RESET을 지워주세요.
+            </p>
+          </div>
+          <div className="bg-gray-800 rounded-lg p-3 font-mono text-xs text-gray-400">
+            <div className="text-gray-500 mb-1">시트 구조 예시</div>
+            <div><span className="text-blue-400">A열(이메일)</span>{'        '}<span className="text-green-400">B열(초기화)</span></div>
+            <div>nomin1fi@gmail.com</div>
+            <div>arui114501@gmail.com{'  '}<span className="text-yellow-300">RESET</span></div>
+          </div>
+        </div>
+
+        {/* 승인 요청 안내 */}
         <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4">
           <p className="text-gray-500 text-xs leading-relaxed">
             <span className="text-yellow-400 font-semibold">승인 요청 수신:</span>{' '}
