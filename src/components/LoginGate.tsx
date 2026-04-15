@@ -107,7 +107,7 @@ async function sendApprovalRequest(email: string): Promise<boolean> {
 function PinInput({ value, onChange, onComplete, autoFocus = false }: {
   value: string[];
   onChange: (v: string[]) => void;
-  onComplete?: () => void;
+  onComplete?: (pin: string) => void;
   autoFocus?: boolean;
 }) {
   const refs = useRef<(HTMLInputElement | null)[]>([]);
@@ -122,12 +122,13 @@ function PinInput({ value, onChange, onComplete, autoFocus = false }: {
     next[i] = raw.slice(-1);
     onChange(next);
     if (raw && i < 3) refs.current[i + 1]?.focus();
-    if (next.every(d => d !== '') && onComplete) setTimeout(onComplete, 80);
+    // 4자리 완성 시 pin 값을 직접 전달 (stale closure 방지)
+    if (next.every(d => d !== '') && onComplete) setTimeout(() => onComplete(next.join('')), 80);
   };
 
   const handleKeyDown = (i: number, e: React.KeyboardEvent) => {
     if (e.key === 'Backspace' && !value[i] && i > 0) refs.current[i - 1]?.focus();
-    if (e.key === 'Enter' && value.every(d => d !== '') && onComplete) onComplete();
+    if (e.key === 'Enter' && value.every(d => d !== '') && onComplete) onComplete(value.join(''));
   };
 
   return (
@@ -265,12 +266,11 @@ export default function LoginGate({ onApproved }: Props) {
     });
   };
 
-  const handlePinSubmit = () => {
-    const pin = pinDigits.join('');
-    if (pin.length < 4) { setPinError('4자리 비밀번호를 입력하세요.'); return; }
-    if (verifyPin(pin, userEmail)) {
+  const handlePinSubmit = (pin?: string) => {
+    const finalPin = pin ?? pinDigits.join('');
+    if (finalPin.length < 4) return;
+    if (verifyPin(finalPin, userEmail)) {
       setPinError('');
-      // 세션 저장 → 새로고침 시 PIN 재입력 불필요
       sessionStorage.setItem(SESSION_KEY, userEmail);
       onApproved(userEmail, userToken);
     } else {
@@ -375,12 +375,6 @@ export default function LoginGate({ onApproved }: Props) {
                 autoFocus
               />
               {pinError && <p className="text-red-400 text-sm">{pinError}</p>}
-              <button
-                onClick={handlePinSubmit}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition-colors"
-              >
-                확인
-              </button>
               <button onClick={handleRetry} className="text-gray-500 hover:text-gray-300 text-sm transition-colors">
                 다른 계정으로 로그인
               </button>

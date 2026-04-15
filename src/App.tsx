@@ -418,6 +418,7 @@ export default function App() {
   const isInitialLoad = useRef(true);
   const portfolioRef = useRef([]);
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
+  const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
 
   // Drive 폴더 ID 캐시 확보 (없으면 생성)
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -815,7 +816,60 @@ export default function App() {
   const fetchIndicatorHistory = async (key, startDate, endDate) => {
     const symbol = STOOQ_SYMBOLS[key];
     if (!symbol) {
-      showToast(`${INDICATOR_LABELS[key] || key}: 자동 수집 미지원 (CSV 파일 업로드 필요)`, true);
+      // 국내금(goldKr): 네이버 fchart에서 장기 데이터 크롤링
+      if (key === 'goldKr') {
+        setIndicatorHistoryLoading(prev => ({ ...prev, goldKr: true }));
+        const naverUrl = `https://fchart.stock.naver.com/sise.nhn?symbol=M04020000&timeframe=day&count=2000&requestType=0`;
+        const proxies = [
+          `/api/proxy?url=${encodeURIComponent(naverUrl)}`,
+          `https://api.allorigins.win/raw?url=${encodeURIComponent(naverUrl)}`,
+          `https://api.codetabs.com/v1/proxy?quest=${naverUrl}`,
+          `https://corsproxy.io/?url=${encodeURIComponent(naverUrl)}`,
+        ];
+        let goldData: Record<string, number> | null = null;
+        for (const proxy of proxies) {
+          try {
+            const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
+            if (!res.ok) continue;
+            const text = await res.text();
+            if (!text || text.length < 100) continue;
+            const result: Record<string, number> = {};
+            const lines = text.split('<item data="');
+            for (let i = 1; i < lines.length; i++) {
+              const raw = lines[i].split('"')[0];
+              const parts = raw.split('|');
+              if (parts.length >= 5) {
+                const d = parts[0];
+                const close = parseInt(parts[4]);
+                if (d.length === 8 && !isNaN(close) && close > 0) {
+                  result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
+                }
+              }
+            }
+            if (Object.keys(result).length > 10) { goldData = result; break; }
+          } catch (e) { continue; }
+        }
+        setIndicatorHistoryLoading(prev => ({ ...prev, goldKr: false }));
+        if (!goldData || Object.keys(goldData).length === 0) {
+          return null;
+        }
+        const mergedGoldKr = { ...(indicatorHistoryMap.goldKr || {}), ...goldData };
+        setIndicatorHistoryMap(prev => ({ ...prev, goldKr: mergedGoldKr }));
+        const count = Object.keys(goldData).length;
+        showToast(`국내금 과거 데이터 ${count}건 수집 완료`);
+        // Drive 백업 저장
+        if (driveTokenRef.current) {
+          try {
+            const folderId = await ensureDriveFolder(driveTokenRef.current);
+            const mergedIhm = { ...indicatorHistoryMap, goldKr: mergedGoldKr };
+            await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.MARKET, {
+              marketIndices, marketIndicators, indicatorHistoryMap: mergedIhm,
+            });
+            showToast('☁️ 국내금 데이터 Drive 백업 완료');
+          } catch (e) { /* Drive 저장 실패는 무시 */ }
+        }
+        return goldData;
+      }
       return null;
     }
 
@@ -847,7 +901,6 @@ export default function App() {
     setIndicatorHistoryLoading(prev => ({ ...prev, [key]: false }));
 
     if (!parsedData || Object.keys(parsedData).length === 0) {
-      showToast(`${INDICATOR_LABELS[key] || key} 과거 데이터 수집 실패 - CSV 직접 업로드 필요`, true);
       return null;
     }
 
@@ -996,6 +1049,19 @@ export default function App() {
 
   // portfolioRef를 항상 최신 portfolio로 동기화 (클로저 문제 해결용)
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
+
+  // 국내금 장기 데이터 자동 크롤링: Drive 데이터 로드/저장 완료 후 데이터가 부족하면 네이버에서 자동 수집
+  useEffect(() => {
+    if (goldKrAutoCrawledRef.current) return;
+    if (driveStatus !== 'saved') return; // Drive 로드/저장 완료 후에만 실행
+    if (!driveTokenRef.current) return;
+    const goldKrCount = Object.keys(indicatorHistoryMap.goldKr || {}).length;
+    if (goldKrCount < 200) {
+      goldKrAutoCrawledRef.current = true;
+      fetchIndicatorHistory('goldKr', null, null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveStatus]);
 
   const totals = useMemo(() => {
     let tInv = 0, tEvl = 0, tPrf = 0, cats = {}, stks = [];
@@ -1573,7 +1639,7 @@ export default function App() {
             const upperFN = fileName.toUpperCase();
             const detectMarketKey = (fn) => {
               if (fn.includes('GOLD_INTL')) return 'GOLD_INTL';
-              if (fn.includes('GOLD_KRX') || fn.includes('GOLD_KR')) return 'GOLD_KR';
+              if (fn.includes('GOLD_KRX') || fn.includes('GOLD_KR') || fn.includes('KRX_GOLD')) return 'GOLD_KR';
               if (fn.includes('FED_RATE')) return 'FED_RATE';
               if (fn.includes('USD_KRW')) return 'USD_KRW';
               if (fn.includes('US_10Y_BOND') || fn.includes('US10Y')) return 'US_10Y_BOND';
