@@ -15,7 +15,7 @@ import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import MarketIndicators from './components/MarketIndicators';
-import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY } from './components/LoginGate';
+import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
@@ -2304,7 +2304,7 @@ export default function App() {
             </button>
             <div className="w-px h-3 bg-gray-700" />
             <button
-              onClick={() => { setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
+              onClick={() => { sessionStorage.removeItem(SESSION_KEY); setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
               className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60"
             >
               로그아웃

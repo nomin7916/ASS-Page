@@ -3,7 +3,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from '../config';
 import { getOrCreateIndexFolder, saveDriveFile, loadDriveFile, DRIVE_FILES } from '../driveStorage';
 
-type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'error' | 'pin_entry';
+type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'error' | 'pin_entry' | 'silent_auth';
+
+export const SESSION_KEY = 'portfolio_session_email_v1';
 
 interface Props {
   onApproved: (email: string, token: string) => void;
@@ -160,77 +162,107 @@ export default function LoginGate({ onApproved }: Props) {
 
   const tokenClientRef = useRef<any>(null);
 
-  const handleLogin = () => {
-    setStep('loading');
-    setErrorMsg('');
-
+  // ── 구글 토큰 요청 공통 함수 ────────────────────────────────────
+  const requestGoogleToken = (opts: { prompt: string; hint?: string; onSuccess: (email: string, token: string) => void; onFail: () => void }) => {
     const tryInit = (retries = 20) => {
       if ((window as any).google?.accounts?.oauth2) {
         const client = (window as any).google.accounts.oauth2.initTokenClient({
           client_id: GOOGLE_CLIENT_ID,
           scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
+          hint: opts.hint,
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {
-              setStep('error');
-              setErrorMsg('로그인이 취소되었습니다. 다시 시도해 주세요.');
+              opts.onFail();
               return;
             }
             const token = resp.access_token;
             const email = await fetchUserEmail(token);
-            if (!email) {
-              setStep('error');
-              setErrorMsg('이메일 정보를 가져오지 못했습니다.');
-              return;
-            }
-            setUserEmail(email);
-            setUserToken(token);
-
-            const { approved, needsReset, adminPin } = await checkApproval(email);
-            if (!approved) {
-              setStep('pending');
-              return;
-            }
-
-            if (needsReset) {
-              // 관리자가 RESET 설정 → adminPin 사용 (기본 0000)
-              const adminHash = hashPin(adminPin);
-              localStorage.setItem(PIN_KEY(email), adminHash);
-              // Drive에도 동기화 + RESET 플래그 해제
-              savePinToDrive(adminHash, token);
-              clearResetFlag(email);
-              setResetNotice(true);
-            } else {
-              // Drive에서 PIN 불러오기 → localStorage 동기화
-              const drivePinHash = await loadPinFromDrive(token);
-              if (drivePinHash) {
-                // Drive PIN을 localStorage에 동기화
-                localStorage.setItem(PIN_KEY(email), drivePinHash);
-              } else if (!isPinSet(email)) {
-                // Drive에도 없고 localStorage에도 없음 → 기본 0000
-                const defaultHash = hashPin(DEFAULT_PIN);
-                localStorage.setItem(PIN_KEY(email), defaultHash);
-                savePinToDrive(defaultHash, token);
-              }
-              // localStorage에만 있고 Drive에 없는 경우 → Drive에 동기화
-              else if (!drivePinHash && isPinSet(email)) {
-                savePinToDrive(localStorage.getItem(PIN_KEY(email))!, token);
-              }
-            }
-
-            setPinDigits(['', '', '', '']);
-            setStep('pin_entry');
+            if (!email) { opts.onFail(); return; }
+            opts.onSuccess(email, token);
           },
         });
         tokenClientRef.current = client;
-        client.requestAccessToken({ prompt: 'select_account' });
+        client.requestAccessToken({ prompt: opts.prompt });
       } else if (retries > 0) {
         setTimeout(() => tryInit(retries - 1), 300);
       } else {
-        setStep('error');
-        setErrorMsg('구글 로그인 스크립트를 불러오지 못했습니다. 페이지를 새로고침해 주세요.');
+        opts.onFail();
       }
     };
     tryInit();
+  };
+
+  // ── 새로고침 시 자동 재인증 ─────────────────────────────────────
+  useEffect(() => {
+    const savedEmail = sessionStorage.getItem(SESSION_KEY);
+    if (!savedEmail) return;
+
+    setStep('silent_auth');
+
+    requestGoogleToken({
+      prompt: '',
+      hint: savedEmail,
+      onSuccess: (email, token) => {
+        if (email.toLowerCase() !== savedEmail.toLowerCase()) {
+          // 이메일 불일치 → 정상 로그인으로
+          sessionStorage.removeItem(SESSION_KEY);
+          setStep('idle');
+          return;
+        }
+        // 세션 내 재인증 성공 → PIN 없이 바로 진입
+        onApproved(email, token);
+      },
+      onFail: () => {
+        sessionStorage.removeItem(SESSION_KEY);
+        setStep('idle');
+      },
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleLogin = () => {
+    setStep('loading');
+    setErrorMsg('');
+
+    requestGoogleToken({
+      prompt: 'select_account',
+      onSuccess: async (email, token) => {
+        setUserEmail(email);
+        setUserToken(token);
+
+        const { approved, needsReset, adminPin } = await checkApproval(email);
+        if (!approved) {
+          setStep('pending');
+          return;
+        }
+
+        if (needsReset) {
+          const adminHash = hashPin(adminPin);
+          localStorage.setItem(PIN_KEY(email), adminHash);
+          savePinToDrive(adminHash, token);
+          clearResetFlag(email);
+          setResetNotice(true);
+        } else {
+          const drivePinHash = await loadPinFromDrive(token);
+          if (drivePinHash) {
+            localStorage.setItem(PIN_KEY(email), drivePinHash);
+          } else if (!isPinSet(email)) {
+            const defaultHash = hashPin(DEFAULT_PIN);
+            localStorage.setItem(PIN_KEY(email), defaultHash);
+            savePinToDrive(defaultHash, token);
+          } else if (!drivePinHash && isPinSet(email)) {
+            savePinToDrive(localStorage.getItem(PIN_KEY(email))!, token);
+          }
+        }
+
+        setPinDigits(['', '', '', '']);
+        setStep('pin_entry');
+      },
+      onFail: () => {
+        setStep('error');
+        setErrorMsg('로그인이 취소되었습니다. 다시 시도해 주세요.');
+      },
+    });
   };
 
   const handlePinSubmit = () => {
@@ -238,6 +270,8 @@ export default function LoginGate({ onApproved }: Props) {
     if (pin.length < 4) { setPinError('4자리 비밀번호를 입력하세요.'); return; }
     if (verifyPin(pin, userEmail)) {
       setPinError('');
+      // 세션 저장 → 새로고침 시 PIN 재입력 불필요
+      sessionStorage.setItem(SESSION_KEY, userEmail);
       onApproved(userEmail, userToken);
     } else {
       setPinError('비밀번호가 틀렸습니다.');
@@ -252,6 +286,7 @@ export default function LoginGate({ onApproved }: Props) {
   };
 
   const handleRetry = () => {
+    sessionStorage.removeItem(SESSION_KEY);
     setStep('idle');
     setUserEmail('');
     setUserToken('');
@@ -270,6 +305,14 @@ export default function LoginGate({ onApproved }: Props) {
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
+
+          {/* 자동 재인증 (새로고침) */}
+          {step === 'silent_auth' && (
+            <div className="flex flex-col items-center gap-4 text-center py-4">
+              <div className="w-8 h-8 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+              <p className="text-gray-300 text-sm">세션을 복원하는 중...</p>
+            </div>
+          )}
 
           {/* 구글 로그인 */}
           {(step === 'idle' || step === 'loading') && (
