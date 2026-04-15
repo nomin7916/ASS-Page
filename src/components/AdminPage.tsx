@@ -174,8 +174,8 @@ export default function AdminPage({ adminEmail, onClose }: Props) {
           <div className="bg-gray-800 rounded-lg p-3 font-mono text-xs text-gray-400">
             <div className="text-gray-500 mb-1">시트 B열 사용 예시</div>
             <div><span className="text-blue-400">A열(이메일)</span>{'            '}<span className="text-green-400">B열(초기화)</span></div>
-            <div>nomin1fi@gmail.com</div>
-            <div>arui114501@gmail.com{'  '}<span className="text-yellow-300">RESET</span><span className="text-gray-600">{'       '}← 0000으로 초기화</span></div>
+            <div>arui114501@gmail.com</div>
+            <div>nomin1fi@gmail.com{'    '}<span className="text-yellow-300">RESET</span><span className="text-gray-600">{'       '}← 0000으로 초기화</span></div>
             <div>user@gmail.com{'        '}<span className="text-yellow-300">RESET:5678</span><span className="text-gray-600">{'  '}← 5678로 초기화</span></div>
           </div>
         </div>

@@ -24,7 +24,7 @@ export const UI_CONFIG = {
 export const GOOGLE_CLIENT_ID = '972766008827-am47e7998m6o299d15gkul2p2r5btkff.apps.googleusercontent.com';
 
 // ── 사용자 승인 시스템 ──
-export const ADMIN_EMAIL = 'nomin1fi@gmail.com';
+export const ADMIN_EMAIL = 'arui114501@gmail.com';
 export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz9-_-T81lEWuKDSiVLrBfkdOfDOAdovP7dOa-KFNn-s8fxicSH6_kQWIeY-k5iBnQX/exec';
 export const APPROVED_SHEET_ID = '17vPohQCrZbZgbutokZ2H92go5ByHNnyZ-IB9ipAr26c';
 export const APPROVED_SHEET_NAME = 'approved_users';
