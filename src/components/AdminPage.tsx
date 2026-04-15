@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { APPROVED_SHEET_ID, APPROVED_SHEET_NAME, ADMIN_EMAIL } from '../config';
+import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
 
 interface ApprovedUser {
   email: string;
@@ -12,20 +12,14 @@ interface Props {
   onClose: () => void;
 }
 
+// Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
 async function fetchApprovedUsers(): Promise<ApprovedUser[]> {
   try {
-    const url = `https://docs.google.com/spreadsheets/d/${APPROVED_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${APPROVED_SHEET_NAME}&cacheBust=${Date.now()}`;
+    const url = `${APPS_SCRIPT_URL}?action=listUsers&cacheBust=${Date.now()}`;
     const res = await fetch(url);
     if (!res.ok) return [];
-    const text = await res.text();
-    return text
-      .split('\n')
-      .slice(1) // 헤더 제거
-      .map(line => {
-        const cols = line.split(',').map(c => c.replace(/"/g, '').trim());
-        return { email: cols[0], resetFlag: cols[1]?.toUpperCase() === 'RESET' };
-      })
-      .filter(u => u.email);
+    const data = await res.json();
+    return (data.users || []).filter((u: ApprovedUser) => u.email);
   } catch {
     return [];
   }

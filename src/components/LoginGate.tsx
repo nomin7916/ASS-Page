@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL, APPROVED_SHEET_ID, APPROVED_SHEET_NAME } from '../config';
+import { GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from '../config';
 import { getOrCreateIndexFolder, saveDriveFile, loadDriveFile, DRIVE_FILES } from '../driveStorage';
 
 type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'error' | 'pin_entry';
@@ -44,25 +44,20 @@ export async function savePinToDrive(pinHash: string, token: string): Promise<vo
   } catch { /* fire and forget */ }
 }
 
-// ── 구글 시트에서 승인 여부 + RESET 플래그 확인 ─────────────────
+// ── Apps Script를 통해 승인 여부 + RESET 플래그 확인 ────────────
+// 구글 시트를 비공개로 유지하고 Apps Script가 대신 조회 (보안 정책 준수)
 // B열: 비어있음 = 정상, "RESET" = 초기화(0000), "RESET:1234" = 초기화(1234)
 async function checkApproval(email: string): Promise<{ approved: boolean; needsReset: boolean; adminPin: string }> {
   try {
-    const url = `https://docs.google.com/spreadsheets/d/${APPROVED_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${APPROVED_SHEET_NAME}&cacheBust=${Date.now()}`;
+    const url = `${APPS_SCRIPT_URL}?action=check&email=${encodeURIComponent(email)}&cacheBust=${Date.now()}`;
     const res = await fetch(url);
     if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN };
-    const text = await res.text();
-    const lines = text.split('\n').slice(1);
-    for (const line of lines) {
-      const cols = line.split(',').map(c => c.replace(/"/g, '').trim());
-      if (cols[0].toLowerCase() === email.toLowerCase().trim()) {
-        const b = cols[1]?.trim() || '';
-        const needsReset = b.toUpperCase().startsWith('RESET');
-        const adminPin = needsReset && b.includes(':') ? b.split(':')[1].trim() : DEFAULT_PIN;
-        return { approved: true, needsReset, adminPin };
-      }
-    }
-    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN };
+    const data = await res.json();
+    return {
+      approved: data.approved ?? false,
+      needsReset: data.needsReset ?? false,
+      adminPin: data.adminPin ?? DEFAULT_PIN,
+    };
   } catch {
     return { approved: false, needsReset: false, adminPin: DEFAULT_PIN };
   }
