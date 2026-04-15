@@ -14,7 +14,7 @@
 //  4. [저장] → [배포] → [기존 배포 관리] → [새 버전으로 업데이트]
 // ============================================================
 
-const SHEET_ID = '1Fy_LEhXkSNkv1lIihKdoFWu6mopEM0OEdpadmTXGeds';
+const SHEET_ID = '1Fy_LEhXkSNkv1lIihKdoFWu6mopEM00EdpadmTXGeds';
 const SHEET_NAME = 'approved_users';
 const ADMIN_EMAIL = 'arui114501@gmail.com';
 
