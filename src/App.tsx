@@ -352,9 +352,7 @@ export default function App() {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
   const [rebalanceSortConfig, setRebalanceSortConfig] = useState({ key: null, direction: 1 });
   
-  // 에러 모달 상태 분리 (토스트는 유지)
   const [globalToast, setGlobalToast] = useState({ text: "", isError: false });
-  const [errorModalContent, setErrorModalContent] = useState(null);
 
   const [chartPeriod, setChartPeriod] = useState('3m');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -785,11 +783,6 @@ export default function App() {
       pendingKeys = stillFailed;
     }
 
-    // 10회 재시도 후에도 실패한 항목이 있으면 에러 팝업 표시
-    if (pendingKeys.length > 0) {
-      const errorMsg = `다음 시장 지표의 연결이 지연되거나 실패했습니다. (10회 재시도 실패)\n\n[실패 항목]\n${pendingKeys.join(', ')}\n\n* 외부 API 제공 서버(네이버/Yahoo/TE)의 응답 지연일 수 있습니다. 잠시 후 다시 시도해 주세요.`;
-      setErrorModalContent({ title: "시장 지표 갱신 오류", message: errorMsg });
-    }
   };
 
   // Apps Script 프록시 제거 — 직접 fetchersMap 경로만 사용
@@ -1563,17 +1556,7 @@ export default function App() {
 
         const hasFail = [kResult.status, sResult.status, nResult.status].some(s => s?.status === 'fail');
       
-        if (hasFail) {
-          let errDetails = [];
-          if(kResult.status?.status === 'fail') errDetails.push("KOSPI 데이터 응답 지연");
-          if(sResult.status?.status === 'fail') errDetails.push("S&P500 데이터 응답 지연");
-          if(nResult.status?.status === 'fail') errDetails.push("NASDAQ 데이터 응답 지연");
-        
-          setErrorModalContent({
-             title: "데이터 갱신 일부 실패",
-             message: `다음 지표의 데이터를 불러오는데 실패했습니다:\n\n${errDetails.join('\n')}\n\n* 외부 통신(네이버/Yahoo API) 지연일 수 있습니다.\n* 잠시 후 새로고침 버튼을 다시 눌러주세요.`
-          });
-        } else {
+        if (!hasFail) {
           showToast(`전체 종목 및 지수 갱신 완료`);
         }
 
@@ -1585,10 +1568,7 @@ export default function App() {
       });
 
     } catch (err) {
-      setErrorModalContent({
-        title: "데이터 갱신 치명적 오류",
-        message: `데이터 갱신 중 네트워크 단절 등 심각한 오류가 발생했습니다.\n\n오류 내용: ${err.message}`
-      });
+      console.error('데이터 갱신 오류:', err);
     } finally {
       setIsLoading(false);
     }
@@ -2322,24 +2302,6 @@ export default function App() {
           </div>
         );
       })()}
-
-      {/* 에러 팝업 모달 */}
-      {errorModalContent && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[300] animate-in fade-in backdrop-blur-sm">
-          <div className="bg-[#1e293b] rounded-xl w-full max-w-md border border-red-900/50 shadow-2xl overflow-hidden flex flex-col">
-            <div className="bg-red-950/50 p-4 border-b border-red-900 flex justify-between items-center">
-              <span className="text-red-400 font-extrabold flex items-center gap-2">⚠️ {errorModalContent.title}</span>
-              <button onClick={() => setErrorModalContent(null)} className="text-gray-400 hover:text-white transition-colors p-1"><X size={18} /></button>
-            </div>
-            <div className="p-6 text-gray-300 text-sm whitespace-pre-wrap leading-relaxed">
-              {errorModalContent.message}
-            </div>
-            <div className="p-4 bg-gray-900/50 border-t border-gray-700 flex justify-end">
-              <button onClick={() => setErrorModalContent(null)} className="px-5 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold transition-colors">닫기</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="w-full max-w-[2560px] mx-auto flex flex-col gap-6 px-2">
         {/* 로그인 사용자 정보 바 */}
