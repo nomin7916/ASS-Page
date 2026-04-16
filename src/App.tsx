@@ -900,9 +900,9 @@ export default function App() {
     return parsedData;
   };
 
-  // stooq 지원 지표 전체 일괄 수집 + GSheet 저장
+  // stooq 지원 지표 전체 일괄 수집 + 국내금(goldKr) 포함
   const fetchAllIndicatorHistory = async () => {
-    const keys = ['us10y', 'goldIntl', 'usdkrw', 'dxy'];
+    const keys = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'goldKr'];
     for (const key of keys) {
       await fetchIndicatorHistory(key, appliedRange?.start, appliedRange?.end);
     }
@@ -1037,13 +1037,18 @@ export default function App() {
   // portfolioRef를 항상 최신 portfolio로 동기화 (클로저 문제 해결용)
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
 
-  // 국내금 장기 데이터 자동 크롤링: Drive 데이터 로드/저장 완료 후 데이터가 부족하면 네이버에서 자동 수집
+  // 국내금 장기 데이터 자동 크롤링: Drive 데이터 로드/저장 완료 후 데이터가 부족하거나 오래된 경우 자동 수집
   useEffect(() => {
     if (goldKrAutoCrawledRef.current) return;
-    if (driveStatus !== 'saved') return; // Drive 로드/저장 완료 후에만 실행
+    if (driveStatus !== 'saved') return;
     if (!driveTokenRef.current) return;
-    const goldKrCount = Object.keys(indicatorHistoryMap.goldKr || {}).length;
-    if (goldKrCount < 200) {
+    const goldKrData = indicatorHistoryMap.goldKr || {};
+    const goldKrCount = Object.keys(goldKrData).length;
+    const latestDate = goldKrCount > 0 ? Object.keys(goldKrData).sort().pop() : null;
+    const daysSinceLatest = latestDate
+      ? Math.floor((Date.now() - new Date(latestDate).getTime()) / (1000 * 60 * 60 * 24))
+      : Infinity;
+    if (goldKrCount < 200 || daysSinceLatest > 3) {
       goldKrAutoCrawledRef.current = true;
       fetchIndicatorHistory('goldKr', null, null);
     }

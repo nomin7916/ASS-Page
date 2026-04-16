@@ -159,7 +159,7 @@ export default function MarketIndicators({
             onClick={onFetchAll}
             disabled={Object.values(indicatorHistoryLoading || {}).some(Boolean)}
             className="p-1 hover:bg-blue-900/50 rounded transition text-blue-400 hover:text-blue-200 disabled:opacity-40 disabled:cursor-not-allowed"
-            title={`조회기간 시장지표 일괄 수집 (stooq API)\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}\nUS 10Y · Gold · USDKRW · DXY → GSheet 저장`}
+            title={`조회기간 시장지표 일괄 수집\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}\nUS 10Y · Gold · USDKRW · DXY · 국내금`}
           >
             {Object.values(indicatorHistoryLoading || {}).some(Boolean)
               ? <RefreshCw size={11} className="animate-spin" />
