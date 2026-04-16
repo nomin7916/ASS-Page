@@ -849,7 +849,6 @@ export default function App() {
         const mergedGoldKr = { ...(indicatorHistoryMap.goldKr || {}), ...goldData };
         setIndicatorHistoryMap(prev => ({ ...prev, goldKr: mergedGoldKr }));
         const count = Object.keys(goldData).length;
-        showToast(`국내금 과거 데이터 ${count}건 수집 완료`);
         // Drive 백업 저장
         if (driveTokenRef.current) {
           try {
@@ -898,18 +897,15 @@ export default function App() {
     }
 
     setIndicatorHistoryMap(prev => ({ ...prev, [key]: parsedData }));
-    showToast(`${INDICATOR_LABELS[key] || key} 과거 데이터 ${Object.keys(parsedData).length}건 수집 완료`);
     return parsedData;
   };
 
   // stooq 지원 지표 전체 일괄 수집 + GSheet 저장
   const fetchAllIndicatorHistory = async () => {
     const keys = ['us10y', 'goldIntl', 'usdkrw', 'dxy'];
-    showToast('시장지표 일괄 수집 시작...');
     for (const key of keys) {
       await fetchIndicatorHistory(key, appliedRange?.start, appliedRange?.end);
     }
-    showToast('✅ 시장지표 일괄 수집 완료');
   };
 
   // CSV / JSON 파일 직접 업로드로 지표 히스토리 주입 (stooq 미지원 지표용)
@@ -952,7 +948,6 @@ export default function App() {
       }
 
       setIndicatorHistoryMap(prev => ({ ...prev, [key]: { ...(prev[key] || {}), ...parsedData } }));
-      showToast(`${INDICATOR_LABELS[key] || key} 히스토리 ${Object.keys(parsedData).length}건 업로드 완료`);
     };
     reader.readAsText(file);
   };
@@ -1036,7 +1031,6 @@ export default function App() {
        retryFailedIndicators(finalFailedKeys, statusMap, 10);
     } else {
        const proxyCount = proxyData ? Object.keys(resultsMap).filter(k => statusMap[k]?.source?.includes('프록시') || statusMap[k]?.source?.includes('Apps Script')).length : 0;
-       showToast(`시장 지표 ${keys.length}건 수집 완료${proxyCount > 0 ? ` (프록시 ${proxyCount}건)` : ''}`);
     }
   };
 
@@ -1330,7 +1324,6 @@ export default function App() {
       setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
       const today = new Date().toISOString().split('T')[0];
       setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
-      showToast(`${d.name} 현재가 갱신 완료: ${formatNumber(d.price)}`);
     } else {
       setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
       showToast(`${code} 현재가 갱신 실패`, true);
@@ -1426,7 +1419,6 @@ export default function App() {
       setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
       autoFetchedCodes.current.add(comp.code); // 전체 이력 조회 완료 표시
       const earliest = Object.keys(hist).sort()[0];
-      showToast(`${comp.name || comp.code} 데이터 ${Object.keys(hist).length}건 로드 완료 (${earliest}~)`);
       // 과거 데이터 수집 직후 Drive 즉시 백업 (페이지 재시작 시 재수집 방지)
       setTimeout(() => {
         const snap = saveStateRef.current;
@@ -1574,7 +1566,6 @@ export default function App() {
         const hasFail = [kResult.status, sResult.status, nResult.status].some(s => s?.status === 'fail');
       
         if (!hasFail) {
-          showToast(`전체 종목 및 지수 갱신 완료`);
         }
 
         return {
@@ -1611,20 +1602,16 @@ export default function App() {
           if (detectedIndex === 'kospi') {
             setMarketIndices(prev => ({ ...prev, kospi: { ...(prev.kospi || {}), ...parsedData } }));
             setIndexFetchStatus(prev => ({ ...prev, kospi: buildIndexStatus({ ...(marketIndices.kospi || {}), ...parsedData }, 'CSV 업로드') }));
-            showToast(`[지수] KOSPI CSV 업로드 완료 (${Object.keys(parsedData).length}건)`);
           } else if (detectedIndex === 'sp500') {
             setMarketIndices(prev => ({ ...prev, sp500: { ...(prev.sp500 || {}), ...parsedData } }));
             setIndexFetchStatus(prev => ({ ...prev, sp500: buildIndexStatus({ ...(marketIndices.sp500 || {}), ...parsedData }, 'CSV 업로드') }));
-            showToast(`[지수] S&P500 CSV 업로드 완료 (${Object.keys(parsedData).length}건)`);
           } else if (detectedIndex === 'nasdaq') {
             setMarketIndices(prev => ({ ...prev, nasdaq: { ...(prev.nasdaq || {}), ...parsedData } }));
             setIndexFetchStatus(prev => ({ ...prev, nasdaq: buildIndexStatus({ ...(marketIndices.nasdaq || {}), ...parsedData }, 'CSV 업로드') }));
-            showToast(`[지수] NASDAQ CSV 업로드 완료 (${Object.keys(parsedData).length}건)`);
           } else {
             const codeMatch = fileName.match(/([A-Z0-9]{4,6})/);
             const code = codeMatch ? codeMatch[1] : fileName.replace('.csv', '');
             setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...parsedData } }));
-            showToast(`[종목] ${code} CSV 업로드 완료 (${Object.keys(parsedData).length}건)\n※ 지수 CSV는 파일명에 KOSPI/SP500/NASDAQ 포함 필요`);
           }
           return;
         }
@@ -1694,62 +1681,50 @@ export default function App() {
                 setIndexFetchStatus(prev => ({ ...prev, kospi: buildIndexStatus(formattedData, 'JSON 수동주입') }));
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, kospiPrice: latest, kospiChg: chg }));
-                showToast(`[지수] KOSPI 데이터 수동 연동 완료 (${count}건)`);
               } else if (['US500', 'GSPC', 'SPX', 'S&P500', 'SP500'].includes(cu)) {
                 setMarketIndices(prev => ({ ...prev, sp500: formattedData }));
                 setIndexFetchStatus(prev => ({ ...prev, sp500: buildIndexStatus(formattedData, 'JSON 수동주입') }));
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, sp500Price: latest, sp500Chg: chg }));
-                showToast(`[지수] S&P500 데이터 수동 연동 완료 (${count}건)`);
               } else if (['NDX', 'IXIC', 'NASDAQ', 'NASDAQ100'].includes(cu)) {
                 setMarketIndices(prev => ({ ...prev, nasdaq: formattedData }));
                 setIndexFetchStatus(prev => ({ ...prev, nasdaq: buildIndexStatus(formattedData, 'JSON 수동주입') }));
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, nasdaqPrice: latest, nasdaqChg: chg }));
-                showToast(`[지수] NASDAQ 데이터 수동 연동 완료 (${count}건)`);
               } else if (cu === 'GOLD_INTL') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, goldIntl: latest, goldIntlChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, goldIntl: formattedData }));
-                showToast(`[시장지표] 국제금 데이터 주입 완료 (${count}건, 최신: $${latest?.toFixed(2)})`);
               } else if (cu === 'GOLD_KR' || cu === 'GOLD_KRX') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, goldKr: latest, goldKrChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, goldKr: formattedData }));
-                showToast(`[시장지표] 국내금 주입 완료 (${count}건, 최신: ${latest?.toLocaleString()}원/g)`);
               } else if (cu === 'USD_KRW') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, usdkrw: latest, usdkrwChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, usdkrw: formattedData }));
-                showToast(`[시장지표] USD/KRW 환율 주입 완료 (${count}건, 최신: ${latest?.toFixed(2)})`);
               } else if (cu === 'US_10Y_BOND') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, us10y: latest, us10yChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, us10y: formattedData }));
-                showToast(`[시장지표] 미국10년 금리 주입 완료 (${count}건, 최신: ${latest?.toFixed(3)}%)`);
               } else if (cu === 'FED_RATE') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, fedRate: latest, fedRateChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, fedRate: formattedData }));
-                showToast(`[시장지표] 미국 기준금리 주입 완료 (${count}건, 최신: ${latest?.toFixed(2)}%)`);
               } else if (cu === 'VIX_INDEX') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, vix: latest, vixChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, vix: formattedData }));
-                showToast(`[시장지표] VIX 주입 완료 (${count}건, 최신: ${latest?.toFixed(2)})`);
               } else if (cu === 'DXY') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, dxy: latest, dxyChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, dxy: formattedData }));
-                showToast(`[시장지표] DXY 주입 완료 (${count}건, 최신: ${latest?.toFixed(3)})`);
               } else if (cu === 'KR10Y') {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, kr10y: latest, kr10yChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, kr10y: formattedData }));
-                showToast(`[시장지표] KR 10Y 주입 완료 (${count}건, 최신: ${latest?.toFixed(3)}%)`);
               } else {
                 setStockHistoryMap(prev => ({ ...prev, [code]: formattedData }));
-                showToast(`[종목] ${code || fileName} 데이터 주입 완료`);
               }
             }
           }
@@ -1989,7 +1964,6 @@ export default function App() {
         }
         return item;
       }));
-      showToast(`전체 종목 현재가 갱신 완료 (${Object.keys(priceResults).length}건)`);
     }
     setIsLoading(false);
   };
