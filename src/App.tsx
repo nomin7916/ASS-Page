@@ -1361,8 +1361,14 @@ export default function App() {
       // 3순위: Yahoo Finance (.KS / .KQ)
       if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`); if (r1) hist = r1.data; }
       if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`); if (r2) hist = r2.data; }
-      if (hist) { setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist })); }
-      else {
+      if (hist) {
+        setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+        // 과거 데이터 수집 직후 Drive 즉시 백업 (페이지 재시작 시 재수집 방지)
+        setTimeout(() => {
+          const snap = saveStateRef.current;
+          if (snap && driveTokenRef.current) saveAllToDrive(snap);
+        }, 600);
+      } else {
         const info = await fetchStockInfo(comp.code);
         if (info) {
           const todayStr = new Date().toISOString().split('T')[0];
@@ -1421,6 +1427,11 @@ export default function App() {
       autoFetchedCodes.current.add(comp.code); // 전체 이력 조회 완료 표시
       const earliest = Object.keys(hist).sort()[0];
       showToast(`${comp.name || comp.code} 데이터 ${Object.keys(hist).length}건 로드 완료 (${earliest}~)`);
+      // 과거 데이터 수집 직후 Drive 즉시 백업 (페이지 재시작 시 재수집 방지)
+      setTimeout(() => {
+        const snap = saveStateRef.current;
+        if (snap && driveTokenRef.current) saveAllToDrive(snap);
+      }, 600);
     } else {
       // 현재가 폴백 (API 실패 시) - 더 이상 재시도 방지
       autoFetchedCodes.current.add(comp.code);
@@ -1495,7 +1506,13 @@ export default function App() {
           if (hist) {
             setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
           }
-        }));
+        })).then(() => {
+          // 백그라운드 과거 데이터 수집 완료 후 Drive 백업 (페이지 재시작 시 재수집 방지)
+          setTimeout(() => {
+            const snap = saveStateRef.current;
+            if (snap && driveTokenRef.current) saveAllToDrive(snap);
+          }, 600);
+        });
         // await 없이 fire-and-forget: 과거 데이터는 백그라운드에서 로드되며 완료 시 그래프 자동 갱신
       }
 
