@@ -417,6 +417,7 @@ export default function App() {
   const portfolioRef = useRef([]);
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
   const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
+  const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
 
   // Drive 폴더 ID 캐시 확보 (없으면 생성)
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -1051,6 +1052,31 @@ export default function App() {
     if (goldKrCount < 200 || daysSinceLatest > 3) {
       goldKrAutoCrawledRef.current = true;
       fetchIndicatorHistory('goldKr', null, null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveStatus]);
+
+  // stooq 지원 지표 자동 크롤링: Drive 저장 완료 후 데이터가 없거나 3일 이상 오래된 경우 자동 수집
+  useEffect(() => {
+    if (stooqAutoCrawledRef.current) return;
+    if (driveStatus !== 'saved') return;
+    if (!driveTokenRef.current) return;
+    const STOOQ_KEYS = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix'];
+    const staleKeys = STOOQ_KEYS.filter(key => {
+      const hist = indicatorHistoryMap[key] || {};
+      const count = Object.keys(hist).length;
+      if (count === 0) return true;
+      const latestDate = Object.keys(hist).sort().pop();
+      const daysSince = Math.floor((Date.now() - new Date(latestDate).getTime()) / (1000 * 60 * 60 * 24));
+      return daysSince > 3;
+    });
+    if (staleKeys.length > 0) {
+      stooqAutoCrawledRef.current = true;
+      (async () => {
+        for (const key of staleKeys) {
+          await fetchIndicatorHistory(key, null, null);
+        }
+      })();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveStatus]);
