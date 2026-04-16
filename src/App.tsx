@@ -2147,8 +2147,18 @@ export default function App() {
     if (portfolio.length === 0) return;
     if (!authUser?.email) return;
     const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
-    localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(state));
     saveStateRef.current = state; // 항상 최신 상태 유지 (GSheet 저장에 사용)
+    try {
+      localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(state));
+    } catch (e) {
+      // localStorage 용량 초과 시 indicatorHistoryMap 제외 후 재시도
+      try {
+        const { indicatorHistoryMap: _ihm, stockHistoryMap: _shm, ...stateLight } = state;
+        localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(stateLight));
+      } catch {
+        // 그래도 실패하면 무시 (Drive 백업에 의존)
+      }
+    }
   }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate]);
 
   useEffect(() => {
