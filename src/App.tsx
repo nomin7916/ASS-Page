@@ -2762,15 +2762,18 @@ export default function App() {
         </div>
 
         {/* 뷰 전환 탭 */}
-        <div className="flex gap-1 border-b border-gray-700/50">
-          <button
-            onClick={() => setShowIntegratedDashboard(false)}
-            className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${!showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
-          >📊 포트폴리오</button>
+        <div className="flex gap-1 border-b border-gray-700/50 flex-wrap">
           <button
             onClick={() => setShowIntegratedDashboard(true)}
             className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
           >🏦 통합 대시보드</button>
+          {portfolios.map(p => (
+            <button
+              key={p.id}
+              onClick={() => switchToPortfolio(p.id)}
+              className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${!showIntegratedDashboard && activePortfolioId === p.id ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+            >📊 {(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
+          ))}
         </div>
 
         {/* 비밀번호 변경 모달 */}
@@ -3470,7 +3473,7 @@ export default function App() {
               <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
                 <button onClick={addPortfolio} className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded">
-                  <Plus size={12} /> 포트폴리오 추가
+                  <Plus size={12} /> 계좌 추가
                 </button>
               </div>
               <div className="overflow-x-auto">
@@ -3553,7 +3556,7 @@ export default function App() {
                       );
                     })}
                     {portfolioSummaries.length === 0 && (
-                      <tr><td colSpan={12} className="py-8 text-center text-gray-500 text-xs">포트폴리오가 없습니다. <span className="text-blue-400 font-bold">+ 포트폴리오 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                      <tr><td colSpan={12} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
                     )}
                   </tbody>
                   <tfoot className="border-t-2 border-red-700 bg-red-900/20">
