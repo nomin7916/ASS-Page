@@ -2003,22 +2003,43 @@ export default function App() {
     reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target.result);
-        if (data.portfolio) {
-          setTitle(data.title || "복구된 계좌"); setPortfolio(data.portfolio); setPrincipal(cleanNum(data.principal));
-          setHistory(data.history || []); setDepositHistory(data.depositHistory || []);
-          if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
-          setLookupRows(data.lookupRows || []); setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
-          setStockHistoryMap(data.stockHistoryMap || {}); setCompStocks(data.compStocks || defaultCompStocks);
+        // 새 형식 (portfolios 배열) 또는 구 형식 (portfolio) 모두 지원
+        if (data.portfolios?.length > 0 || data.portfolio) {
+          setStockHistoryMap(data.stockHistoryMap || {});
+          setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
+          setLookupRows(data.lookupRows || []);
+          setCompStocks(data.compStocks || defaultCompStocks);
+
           if (data.portfolios?.length > 0) {
+            // 새 형식
             setPortfolios(data.portfolios);
             const activeId = data.activePortfolioId || data.portfolios[0].id;
             setActivePortfolioId(activeId);
+            const active = data.portfolios.find(p => p.id === activeId) || data.portfolios[0];
+            setTitle(active.name || '복구된 계좌');
+            setPortfolio(active.portfolio || []);
+            setPrincipal(active.principal || 0);
+            setHistory(active.history || []);
+            setDepositHistory(active.depositHistory || []);
+            if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
+            setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
+            setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
           } else {
+            // 구 형식 마이그레이션
             const newId = generateId();
             const sd = data.portfolioStartDate || data.history?.[0]?.date || '';
-            setPortfolios([{ id: newId, name: data.title || 'DC', startDate: sd, portfolioStartDate: sd, portfolio: data.portfolio || [], principal: cleanNum(data.principal), history: data.history || [], depositHistory: data.depositHistory || [], depositHistory2: data.depositHistory2 || [], settings: data.settings || { mode: 'rebalance', amount: 1000000 } }]);
+            const migrated = { id: newId, name: data.title || 'DC', startDate: sd, portfolioStartDate: sd, portfolio: data.portfolio || [], principal: cleanNum(data.principal), history: data.history || [], depositHistory: data.depositHistory || [], depositHistory2: data.depositHistory2 || [], settings: data.settings || { mode: 'rebalance', amount: 1000000 } };
+            setPortfolios([migrated]);
             setActivePortfolioId(newId);
+            setTitle(data.title || '복구된 계좌');
+            setPortfolio(data.portfolio || []);
+            setPrincipal(cleanNum(data.principal));
+            setHistory(data.history || []);
+            setDepositHistory(data.depositHistory || []);
+            if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
+            if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
           }
+
           if (data.intHistory) setIntHistory(data.intHistory);
           if (data.marketIndices) {
             setMarketIndices(data.marketIndices);
@@ -2028,7 +2049,6 @@ export default function App() {
               nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, '백업파일') : null,
             });
           }
-          if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
           if (data.chartPrefs) {
             if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
             if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
@@ -2038,7 +2058,7 @@ export default function App() {
             if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
           }
           if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
-        if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
+          if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
           setStockFetchStatus({});
           showToast("데이터 복원 완료");
         }
