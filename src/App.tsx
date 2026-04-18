@@ -24,6 +24,8 @@ import {
   parseIndexCSV, detectIndexFromFileName
 } from './utils';
 
+const INT_CATEGORIES = ['주식', '주식-a', '금', '채권', '현금', '리츠', '배당주식', '예수금'];
+
 const sortArrow = (config, key) =>
   config.key === key
     ? (config.direction === 1 ? <span className="ml-0.5 text-blue-400 text-[8px]">▲</span> : <span className="ml-0.5 text-blue-400 text-[8px]">▼</span>)
@@ -419,6 +421,20 @@ export default function App() {
   const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
 
+  // ── 통합 대시보드 ──
+  const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(false);
+  const [intAccounts, setIntAccounts] = useState([]);
+  const [intHistory, setIntHistory] = useState([]);
+  const [intChartPeriod, setIntChartPeriod] = useState('1y');
+  const [intDateRange, setIntDateRange] = useState({ start: '', end: '' });
+  const [intAppliedRange, setIntAppliedRange] = useState({ start: '', end: '' });
+  const [intRefAreaLeft, setIntRefAreaLeft] = useState('');
+  const [intRefAreaRight, setIntRefAreaRight] = useState('');
+  const [intSelectionResult, setIntSelectionResult] = useState(null);
+  const [intIsDragging, setIntIsDragging] = useState(false);
+  const [intIsZeroBaseMode, setIntIsZeroBaseMode] = useState(true);
+  const [intExpandedCat, setIntExpandedCat] = useState(null);
+
   // Drive 폴더 ID 캐시 확보 (없으면 생성)
   const ensureDriveFolder = async (token: string): Promise<string> => {
     if (driveFolderIdRef.current) return driveFolderIdRef.current;
@@ -481,6 +497,8 @@ export default function App() {
       }
       if (resolvedMarketIndicators) setMarketIndicators(resolvedMarketIndicators);
       if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
+      if (stateData.intAccounts) setIntAccounts(stateData.intAccounts);
+      if (stateData.intHistory) setIntHistory(stateData.intHistory);
 
       setDriveStatus('saved');
       showToast('☁️ Google Drive에서 데이터 불러옴');
@@ -1257,6 +1275,73 @@ export default function App() {
     return data;
   }, [portfolio, totals.totalEval, settings, rebalanceSortConfig]);
 
+  // ── 통합 대시보드 계산 ──
+  const intTotals = useMemo(() => {
+    let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
+    const cats = {};
+    intAccounts.forEach(acc => {
+      totalEval += cleanNum(acc.currentEval);
+      totalPrincipal += cleanNum(acc.principal);
+      totalDeposit += cleanNum(acc.depositAmount);
+      Object.entries(acc.categories || {}).forEach(([cat, val]) => {
+        cats[cat] = (cats[cat] || 0) + cleanNum(val);
+      });
+    });
+    const returnRate = totalPrincipal > 0 ? (totalEval - totalPrincipal) / totalPrincipal * 100 : 0;
+    return { totalEval, totalPrincipal, totalDeposit, cats, returnRate };
+  }, [intAccounts]);
+
+  const intSortedHistory = useMemo(() =>
+    [...intHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
+    [intHistory]);
+
+  const intUnifiedDates = useMemo(() =>
+    Array.from(new Set(intHistory.map(h => h.date))).sort(),
+    [intHistory]);
+
+  const intFilteredDates = useMemo(() => {
+    if (!intAppliedRange.start || !intAppliedRange.end) return intUnifiedDates;
+    return intUnifiedDates.filter(d => d >= intAppliedRange.start && d <= intAppliedRange.end);
+  }, [intUnifiedDates, intAppliedRange]);
+
+  const intChartData = useMemo(() => {
+    if (intSortedHistory.length === 0) return [];
+    const filtered = intFilteredDates.length > 0
+      ? intSortedHistory.filter(h => intFilteredDates.includes(h.date))
+      : intSortedHistory;
+    if (filtered.length === 0) return [];
+    const baseEval = filtered[0].evalAmount;
+    const totalPrincipal = intTotals.totalPrincipal;
+    return filtered.map(h => ({
+      date: h.date,
+      evalAmount: h.evalAmount,
+      returnRate: intIsZeroBaseMode
+        ? (baseEval > 0 ? ((h.evalAmount / baseEval) - 1) * 100 : 0)
+        : (totalPrincipal > 0 ? ((h.evalAmount - totalPrincipal) / totalPrincipal * 100) : 0),
+    }));
+  }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode, intTotals.totalPrincipal]);
+
+  const intMonthlyHistory = useMemo(() => {
+    const sortedDesc = [...intHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
+    return sortedDesc.map((h, i) => {
+      const month = h.date.substring(0, 7);
+      const monthRecords = intHistory.filter(r => r.date.startsWith(month));
+      const monthStartRecord = monthRecords.length > 0 ? monthRecords.reduce((min, r) => r.date < min.date ? r : min) : null;
+      const monthlyChange = (monthStartRecord && monthStartRecord.evalAmount > 0 && monthStartRecord.id !== h.id)
+        ? ((h.evalAmount / monthStartRecord.evalAmount) - 1) * 100 : 0;
+      const prevRecord = sortedDesc[i + 1];
+      const dodChange = (prevRecord && prevRecord.evalAmount > 0)
+        ? ((h.evalAmount / prevRecord.evalAmount) - 1) * 100 : 0;
+      return { ...h, monthlyChange, dodChange };
+    });
+  }, [intHistory]);
+
+  const intCatDonutData = useMemo(() =>
+    Object.entries(intTotals.cats)
+      .map(([name, value]) => ({ name, value }))
+      .filter(x => x.value > 0),
+    [intTotals.cats]);
+
   const displayHistSliced = useMemo(() => sortedHistoryDesc.slice(0, historyLimit), [sortedHistoryDesc, historyLimit]);
 
   const depositWithSum = useMemo(() => {
@@ -1767,7 +1852,7 @@ export default function App() {
   };
 
   const handleSave = () => {
-    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
+    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intAccounts, intHistory };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -1787,7 +1872,7 @@ export default function App() {
   };
 
   const handleDriveSave = () => {
-    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
+    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intAccounts, intHistory };
     if (driveTokenRef.current) {
       saveAllToDrive(state);
       showToast('☁️ Google Drive 백업 완료');
@@ -1851,6 +1936,8 @@ export default function App() {
           if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
           setLookupRows(data.lookupRows || []); setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
           setStockHistoryMap(data.stockHistoryMap || {}); setCompStocks(data.compStocks || defaultCompStocks);
+          if (data.intAccounts) setIntAccounts(data.intAccounts);
+          if (data.intHistory) setIntHistory(data.intHistory);
           if (data.marketIndices) {
             setMarketIndices(data.marketIndices);
             setIndexFetchStatus({
@@ -2045,6 +2132,8 @@ export default function App() {
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
+        if (data.intAccounts) setIntAccounts(data.intAccounts);
+        if (data.intHistory) setIntHistory(data.intHistory);
         hasLocalData = true;
       } catch (e) {}
     }
@@ -2172,7 +2261,7 @@ export default function App() {
   useEffect(() => {
     if (portfolio.length === 0) return;
     if (!authUser?.email) return;
-    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate } };
+    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intAccounts, intHistory };
     saveStateRef.current = state; // 항상 최신 상태 유지 (GSheet 저장에 사용)
     try {
       localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(state));
@@ -2185,7 +2274,7 @@ export default function App() {
         // 그래도 실패하면 무시 (Drive 백업에 의존)
       }
     }
-  }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate]);
+  }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intAccounts, intHistory]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
@@ -2220,6 +2309,43 @@ export default function App() {
       setDateRange({ start: newStart, end: latest }); setAppliedRange({ start: newStart, end: latest });
     }
   }, [chartPeriod, unifiedDates]);
+
+  // 통합 대시보드 - 총 평가액 변경 시 오늘 기록 자동 업데이트
+  useEffect(() => {
+    if (intTotals.totalEval === 0) return;
+    const today = new Date().toISOString().split('T')[0];
+    setIntHistory(prev => {
+      const idx = prev.findIndex(h => h.date === today);
+      if (idx >= 0) {
+        if (prev[idx].evalAmount === intTotals.totalEval) return prev;
+        const newHist = [...prev];
+        newHist[idx] = { ...newHist[idx], evalAmount: intTotals.totalEval };
+        return newHist;
+      }
+      return [...prev, { id: generateId(), date: today, evalAmount: intTotals.totalEval }];
+    });
+  }, [intTotals.totalEval]);
+
+  // 통합 대시보드 - 기간 버튼 변경 시 차트 범위 업데이트
+  useEffect(() => {
+    if (intUnifiedDates.length === 0) return;
+    const latest = intUnifiedDates[intUnifiedDates.length - 1];
+    const earliest = intUnifiedDates[0];
+    let newStart = latest;
+    if (intChartPeriod === '1m') { const d = new Date(latest); d.setMonth(d.getMonth() - 1); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '3m') { const d = new Date(latest); d.setMonth(d.getMonth() - 3); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '6m') { const d = new Date(latest); d.setMonth(d.getMonth() - 6); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '1y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 1); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '2y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 2); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '3y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 3); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '5y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 5); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === 'all') { newStart = earliest; }
+    if (intChartPeriod !== 'custom') {
+      if (new Date(newStart) < new Date(earliest)) newStart = earliest;
+      setIntDateRange({ start: newStart, end: latest });
+      setIntAppliedRange({ start: newStart, end: latest });
+    }
+  }, [intChartPeriod, intUnifiedDates]);
 
   // 조회기간 변경 시 활성 비교종목 데이터가 범위를 커버하지 못하면 자동 전체 이력 재조회
   useEffect(() => {
@@ -2259,6 +2385,64 @@ export default function App() {
     if (st === 'fail') return <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block ml-0.5" title="갱신 실패" />;
     if (st === 'loading') return <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block ml-0.5 animate-pulse" title="갱신 중" />;
     return null;
+  };
+
+  // ── 통합 대시보드 핸들러 ──
+  const addIntAccount = () => {
+    setIntAccounts(prev => [...prev, {
+      id: generateId(),
+      name: '새 계좌',
+      startDate: new Date().toISOString().split('T')[0],
+      principal: 0,
+      currentEval: 0,
+      depositAmount: 0,
+      categories: {},
+    }]);
+  };
+
+  const updateIntAccount = (id, field, value) => {
+    setIntAccounts(prev => prev.map(a => a.id === id ? { ...a, [field]: value } : a));
+  };
+
+  const updateIntAccountCategory = (id, cat, rawValue) => {
+    setIntAccounts(prev => prev.map(a => {
+      if (a.id !== id) return a;
+      return { ...a, categories: { ...a.categories, [cat]: cleanNum(rawValue) } };
+    }));
+  };
+
+  const deleteIntAccount = (id) => {
+    setIntAccounts(prev => prev.filter(a => a.id !== id));
+  };
+
+  const handleIntChartMouseDown = (e) => {
+    if (e && e.activeLabel) {
+      setIntIsDragging(true);
+      setIntRefAreaLeft(e.activeLabel);
+      setIntRefAreaRight('');
+      setIntSelectionResult(null);
+    }
+  };
+
+  const handleIntChartMouseMove = (e) => {
+    if (intIsDragging && e && e.activeLabel) setIntRefAreaRight(e.activeLabel);
+  };
+
+  const handleIntChartMouseUp = () => {
+    if (!intIsDragging) return;
+    setIntIsDragging(false);
+    if (!intRefAreaLeft || !intRefAreaRight || intRefAreaLeft === intRefAreaRight) {
+      setIntRefAreaLeft(''); setIntRefAreaRight(''); return;
+    }
+    const [l, r] = [intRefAreaLeft, intRefAreaRight].sort();
+    const startEntry = intChartData.find(d => d.date >= l);
+    const endEntry = [...intChartData].reverse().find(d => d.date <= r);
+    if (startEntry && endEntry) {
+      const profit = endEntry.evalAmount - startEntry.evalAmount;
+      const rate = startEntry.evalAmount > 0 ? ((endEntry.evalAmount / startEntry.evalAmount) - 1) * 100 : 0;
+      setIntSelectionResult({ startDate: startEntry.date, endDate: endEntry.date, profit, rate });
+    }
+    setIntRefAreaLeft(''); setIntRefAreaRight('');
   };
 
   // 로그인 전: LoginGate 표시
@@ -2370,6 +2554,18 @@ export default function App() {
               로그아웃
             </button>
           </div>
+        </div>
+
+        {/* 뷰 전환 탭 */}
+        <div className="flex gap-1 border-b border-gray-700/50">
+          <button
+            onClick={() => setShowIntegratedDashboard(false)}
+            className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${!showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+          >📊 포트폴리오</button>
+          <button
+            onClick={() => setShowIntegratedDashboard(true)}
+            className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+          >🏦 통합 대시보드</button>
         </div>
 
         {/* 비밀번호 변경 모달 */}
@@ -2490,6 +2686,7 @@ export default function App() {
           </div>
         )}
 
+        {!showIntegratedDashboard && (<>
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoad={handleDriveLoad} onDriveLoadOnly={handleDriveLoadOnly} />
 
         <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
@@ -3022,6 +3219,266 @@ export default function App() {
             </table>
           </div>
         </div>
+        </>)}
+
+        {showIntegratedDashboard && (
+          <div className="flex flex-col gap-6 w-full">
+
+            {/* 통합 계좌 현황 */}
+            <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg">
+              <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
+                <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
+                <button onClick={addIntAccount} className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded">
+                  <Plus size={12} /> 계좌 추가
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs whitespace-nowrap">
+                  <thead className="bg-[#0f172a] text-gray-400 border-b border-gray-700">
+                    <tr>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">시작일</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">계좌</th>
+                      <th className="py-2 px-3 text-right border-r border-gray-700">총 자산(평가금액)</th>
+                      <th className="py-2 px-3 text-right border-r border-gray-700">원금 대비 수익율</th>
+                      <th className="py-2 px-3 text-right border-r border-gray-700">연수익율(CAGR)</th>
+                      <th className="py-2 px-3 text-right border-r border-gray-700">투자비율</th>
+                      <th className="py-2 px-3 text-right border-r border-gray-700">투자원금</th>
+                      <th className="py-2 px-3 text-right border-r border-gray-700">예수금</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">현재 수익율</th>
+                      <th className="py-2 px-2 text-center border-r border-gray-700">카테고리</th>
+                      <th className="py-2 px-2 text-center">삭제</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {intAccounts.map(acc => {
+                      const retRate = cleanNum(acc.principal) > 0 ? (cleanNum(acc.currentEval) - cleanNum(acc.principal)) / cleanNum(acc.principal) * 100 : 0;
+                      const days = acc.startDate ? (new Date() - new Date(acc.startDate)) / (1000 * 60 * 60 * 24) : 0;
+                      const accCagr = cleanNum(acc.principal) > 0 && cleanNum(acc.currentEval) > 0 && days > 0
+                        ? (Math.pow(cleanNum(acc.currentEval) / cleanNum(acc.principal), 365.25 / Math.max(days, 1)) - 1) * 100 : 0;
+                      const allocRatio = intTotals.totalEval > 0 ? cleanNum(acc.currentEval) / intTotals.totalEval * 100 : 0;
+                      const isCatOpen = intExpandedCat === acc.id;
+                      return (
+                        <React.Fragment key={acc.id}>
+                          <tr className="border-b border-gray-700 hover:bg-gray-800/40 transition-colors">
+                            <td className="py-1.5 px-3 text-center border-r border-gray-700">
+                              <CustomDatePicker value={acc.startDate} onChange={v => updateIntAccount(acc.id, 'startDate', v)} />
+                            </td>
+                            <td className="py-1.5 px-3 border-r border-gray-700">
+                              <input type="text" className="w-full min-w-[70px] bg-transparent text-blue-300 font-bold outline-none text-center" value={acc.name} onChange={e => updateIntAccount(acc.id, 'name', e.target.value)} />
+                            </td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right">
+                              <input type="text" className="w-full min-w-[100px] bg-transparent text-white font-bold outline-none text-right" value={formatNumber(acc.currentEval)} onFocus={e => e.target.select()} onChange={e => updateIntAccount(acc.id, 'currentEval', cleanNum(e.target.value))} />
+                            </td>
+                            <td className={`py-1.5 px-3 border-r border-gray-700 text-right font-bold ${retRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(retRate)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-blue-300 font-bold">{formatPercent(accCagr)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-300">{allocRatio.toFixed(2)}%</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right">
+                              <input type="text" className="w-full min-w-[90px] bg-transparent text-gray-200 font-bold outline-none text-right" value={formatNumber(acc.principal)} onFocus={e => e.target.select()} onChange={e => updateIntAccount(acc.id, 'principal', cleanNum(e.target.value))} />
+                            </td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right">
+                              <input type="text" className="w-full min-w-[70px] bg-transparent text-gray-400 font-bold outline-none text-right" value={formatNumber(acc.depositAmount)} onFocus={e => e.target.select()} onChange={e => updateIntAccount(acc.id, 'depositAmount', cleanNum(e.target.value))} />
+                            </td>
+                            <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                              <span className={`inline-block px-2 py-0.5 rounded font-bold ${retRate > 0 ? 'bg-red-900/40 text-red-300' : retRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{retRate.toFixed(1)}%</span>
+                            </td>
+                            <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                              <button onClick={() => setIntExpandedCat(isCatOpen ? null : acc.id)} className={`text-sm p-0.5 rounded transition-colors ${isCatOpen ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`} title="카테고리 편집">▸</button>
+                            </td>
+                            <td className="py-1.5 px-2 text-center">
+                              <button onClick={() => deleteIntAccount(acc.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
+                            </td>
+                          </tr>
+                          {isCatOpen && (
+                            <tr className="bg-gray-800/30 border-b border-gray-700">
+                              <td colSpan={11} className="py-3 px-4">
+                                <div className="flex flex-wrap gap-3 items-center">
+                                  <span className="text-[11px] text-gray-400 font-bold shrink-0">카테고리별 평가금액 :</span>
+                                  {INT_CATEGORIES.map(cat => (
+                                    <div key={cat} className="flex items-center gap-1.5">
+                                      <span className={`text-[11px] font-bold ${UI_CONFIG.COLORS.CATEGORIES[cat] || 'text-gray-300'}`}>{cat}</span>
+                                      <input type="text" className="w-[80px] bg-gray-900 border border-gray-700 rounded px-2 py-0.5 text-[11px] text-gray-200 outline-none focus:border-blue-500 text-right" value={formatNumber(acc.categories?.[cat] || 0)} onFocus={e => e.target.select()} onChange={e => updateIntAccountCategory(acc.id, cat, e.target.value)} />
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    {intAccounts.length === 0 && (
+                      <tr><td colSpan={11} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. 위의 <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                    )}
+                  </tbody>
+                  <tfoot className="border-t-2 border-red-700 bg-red-900/20">
+                    <tr>
+                      <td className="py-2 px-3 border-r border-gray-700"></td>
+                      <td className="py-2 px-3 text-center text-red-400 font-extrabold border-r border-gray-700">소 계</td>
+                      <td className="py-2 px-3 text-right text-yellow-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalEval)}</td>
+                      <td className={`py-2 px-3 text-right font-bold border-r border-gray-700 ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(intTotals.returnRate)}</td>
+                      <td className="py-2 px-3 border-r border-gray-700"></td>
+                      <td className="py-2 px-3 text-right text-gray-300 border-r border-gray-700">100%</td>
+                      <td className="py-2 px-3 text-right text-gray-200 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalPrincipal)}</td>
+                      <td className="py-2 px-3 text-right text-gray-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalDeposit)}</td>
+                      <td colSpan={3}></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* 월별 평가 추이 + 기간별 수익 차트 */}
+            <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
+
+              {/* 평가액 추이 테이블 */}
+              <div className="w-full xl:w-[280px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
+                <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700 shrink-0">
+                  <span className="text-white font-bold text-sm">📅 평가액 추이</span>
+                  <button
+                    onClick={() => {
+                      const today = new Date().toISOString().split('T')[0];
+                      setIntHistory(prev => {
+                        const todayEntry = prev.find(h => h.date === today);
+                        return todayEntry ? [todayEntry] : (intTotals.totalEval > 0 ? [{ id: generateId(), date: today, evalAmount: intTotals.totalEval }] : []);
+                      });
+                    }}
+                    className="text-orange-400 hover:text-white p-1 hover:bg-gray-800 rounded transition" title="기록 리셋"
+                  ><Trash2 size={14} /></button>
+                </div>
+                <div className="overflow-x-auto overflow-y-auto flex-1">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 z-10">
+                      <tr>
+                        <th className="py-2 px-2 text-center border-r border-gray-700">일자</th>
+                        <th className="py-2 px-2 text-right border-r border-gray-700">총 평가금액</th>
+                        <th className="py-2 px-2 text-center border-r border-gray-700">전일대비</th>
+                        <th className="py-2 px-2 text-center">월간수익</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {intMonthlyHistory.map((h, i) => (
+                        <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
+                          <td className="py-1.5 px-2 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
+                          <td className="py-1.5 px-2 font-bold text-white text-right border-r border-gray-700">{formatCurrency(h.evalAmount)}</td>
+                          <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                            <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
+                          </td>
+                          <td className="py-1.5 px-2 text-center">
+                            <span className={`font-bold ${h.monthlyChange > 0 ? 'text-red-400' : h.monthlyChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.monthlyChange)}</span>
+                          </td>
+                        </tr>
+                      ))}
+                      {intMonthlyHistory.length === 0 && (
+                        <tr><td colSpan={4} className="py-6 text-center text-gray-500">데이터 없음<br/><span className="text-[10px] text-gray-600">계좌 평가금액을 입력하면 자동으로 기록됩니다.</span></td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 기간별 수익 차트 */}
+              <div className="flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col min-h-[420px]">
+                <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-wrap gap-2 items-center shrink-0">
+                  <span className="text-white font-bold text-sm">📈 기간별 수익 차트 (통합)</span>
+                  <div className="flex flex-wrap gap-1 ml-2">
+                    {['1m','3m','6m','1y','2y','3y','5y','all'].map(p => (
+                      <button key={p} onClick={() => setIntChartPeriod(p)} className={`px-2 py-0.5 rounded text-xs font-bold transition-colors ${intChartPeriod === p ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>{p}</button>
+                    ))}
+                  </div>
+                  <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`ml-auto text-xs px-2 py-0.5 rounded font-bold transition-colors ${intIsZeroBaseMode ? 'bg-indigo-800/60 text-indigo-300 border border-indigo-700' : 'text-gray-500 hover:text-gray-300 border border-gray-700'}`} title="기간 시작 기준 / 원금 기준 전환">{intIsZeroBaseMode ? '기간기준' : '원금기준'}</button>
+                </div>
+                <div className="chart-container-for-drag p-4 flex-1 relative select-none" style={{ minHeight: 360 }}>
+                  {intSelectionResult && (
+                    <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none">
+                      <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(intSelectionResult.startDate)} ~ {formatShortDate(intSelectionResult.endDate)}</span>
+                      <span className={`text-xl font-black ${intSelectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{intSelectionResult.profit > 0 ? '▲' : '▼'} {Math.abs(intSelectionResult.rate).toFixed(2)}%</span>
+                      <span className={`text-xs font-bold mt-1 ${intSelectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{intSelectionResult.profit >= 0 ? '+' : ''}{formatCurrency(intSelectionResult.profit)}</span>
+                    </div>
+                  )}
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={intChartData} onMouseDown={handleIntChartMouseDown} onMouseMove={handleIntChartMouseMove} onMouseUp={handleIntChartMouseUp} onMouseLeave={handleIntChartMouseUp}>
+                      <defs>
+                        <linearGradient id="intReturnGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
+                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.5} />
+                      <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatVeryShortDate} minTickGap={30} />
+                      <YAxis yAxisId="left" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => `${v.toFixed(1)}%`} width={48} />
+                      <YAxis yAxisId="right" orientation="right" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => (v >= 1e8 ? (v/1e8).toFixed(1)+'억' : (v/1e4).toFixed(0)+'만')} width={55} />
+                      <RechartsTooltip content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        return (
+                          <div style={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #4b5563', borderRadius: 8, padding: '10px 14px', minWidth: 160 }}>
+                            <p style={{ color: '#9ca3af', fontSize: 11, fontWeight: 700, marginBottom: 6 }}>{formatShortDate(label)}</p>
+                            {payload.map((entry, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 3 }}>
+                                <span style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, display: 'inline-block', flexShrink: 0 }} />
+                                <span style={{ fontSize: 11, color: '#e5e7eb', fontWeight: 600 }}>
+                                  {entry.name === '총자산' ? formatCurrency(entry.value) : `${Number(entry.value).toFixed(2)}%`}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      }} />
+                      <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={{ r: 4 }} />
+                      <Line yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="4 3" />
+                      {intRefAreaLeft && intRefAreaRight && <ReferenceArea yAxisId="left" x1={intRefAreaLeft} x2={intRefAreaRight} fill="rgba(255,255,255,0.08)" strokeOpacity={0.3} />}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            {/* 자산 카테고리 비중 (도넛 차트) */}
+            <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-8">
+              <div className="p-3 bg-[#0f172a] border-b border-gray-700">
+                <span className="text-white font-bold text-sm">🍩 자산 카테고리 비중 (통합)</span>
+              </div>
+              {intCatDonutData.length === 0 ? (
+                <div className="py-12 text-center text-gray-500 text-xs">카테고리 데이터가 없습니다.<br/><span className="text-gray-600">계좌 행의 ▸ 버튼을 눌러 카테고리별 평가금액을 입력하세요.</span></div>
+              ) : (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 p-4">
+                  <div style={{ height: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
+                          {intCatDonutData.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                        </Pie>
+                        <RechartsTooltip content={<CustomChartTooltip total={intTotals.totalEval} />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="flex flex-col justify-center">
+                    <table className="w-full text-xs">
+                      <thead className="text-gray-400 border-b border-gray-700">
+                        <tr className="text-center">
+                          <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                          <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                          <th className="pb-2 px-3">비중</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {intCatDonutData.map(({ name, value }, i) => (
+                          <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                            <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
+                              <span style={{ color: UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
+                            </td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(value)}</td>
+                            <td className="py-1.5 px-3 text-gray-400 text-right">{intTotals.totalEval > 0 ? ((value / intTotals.totalEval) * 100).toFixed(1) : 0}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
       </div>
 
 
