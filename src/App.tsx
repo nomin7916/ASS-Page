@@ -422,8 +422,9 @@ export default function App() {
   const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
 
   // ── 통합 대시보드 ──
-  const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(false);
-  const [intAccounts, setIntAccounts] = useState([]);
+  const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(true);
+  const [portfolios, setPortfolios] = useState([]); // multi-portfolio accounts
+  const [activePortfolioId, setActivePortfolioId] = useState(null);
   const [intHistory, setIntHistory] = useState([]);
   const [intChartPeriod, setIntChartPeriod] = useState('1y');
   const [intDateRange, setIntDateRange] = useState({ start: '', end: '' });
@@ -458,17 +459,54 @@ export default function App() {
 
       if (!stateData) { setDriveStatus(''); return null; }
 
-      setTitle(stateData.title || "포트폴리오");
-      setPortfolio(stateData.portfolio || []);
-      setPrincipal(cleanNum(stateData.principal));
-      setHistory(stateData.history || []);
-      setDepositHistory(stateData.depositHistory || []);
-      if (stateData.depositHistory2) setDepositHistory2(stateData.depositHistory2);
+      // 포트폴리오 데이터 로드 (새 형식 우선, 구 형식 마이그레이션)
+      const resolvedStockHistoryMap = stockData?.stockHistoryMap || stateData.stockHistoryMap || {};
+      setStockHistoryMap(resolvedStockHistoryMap);
+
+      if (stateData.portfolios?.length > 0) {
+        // 새 형식: portfolios 배열
+        setPortfolios(stateData.portfolios);
+        const activeId = stateData.activePortfolioId || stateData.portfolios[0].id;
+        setActivePortfolioId(activeId);
+        const active = stateData.portfolios.find(p => p.id === activeId) || stateData.portfolios[0];
+        setTitle(active.name || '포트폴리오');
+        setPortfolio(active.portfolio || []);
+        setPrincipal(active.principal || 0);
+        setHistory(active.history || []);
+        setDepositHistory(active.depositHistory || []);
+        if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
+        setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
+        setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
+      } else if (stateData.portfolio) {
+        // 구 형식 마이그레이션: 현재 포트폴리오를 portfolios[0]으로
+        const newId = generateId();
+        const migrated = {
+          id: newId,
+          name: stateData.title || 'DC',
+          startDate: stateData.portfolioStartDate || stateData.history?.[0]?.date || '',
+          portfolioStartDate: stateData.portfolioStartDate || '',
+          portfolio: stateData.portfolio || [],
+          principal: cleanNum(stateData.principal),
+          history: stateData.history || [],
+          depositHistory: stateData.depositHistory || [],
+          depositHistory2: stateData.depositHistory2 || [],
+          settings: stateData.settings || { mode: 'rebalance', amount: 1000000 },
+        };
+        setPortfolios([migrated]);
+        setActivePortfolioId(newId);
+        setTitle(stateData.title || '포트폴리오');
+        setPortfolio(stateData.portfolio || []);
+        setPrincipal(cleanNum(stateData.principal));
+        setHistory(stateData.history || []);
+        setDepositHistory(stateData.depositHistory || []);
+        if (stateData.depositHistory2) setDepositHistory2(stateData.depositHistory2);
+        setSettings(stateData.settings || { mode: 'rebalance', amount: 1000000 });
+        if (stateData.portfolioStartDate) setPortfolioStartDate(stateData.portfolioStartDate);
+      }
+
       setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
-      setSettings(stateData.settings || { mode: 'rebalance', amount: 1000000 });
       setLookupRows(stateData.lookupRows || []);
       setCompStocks(stateData.compStocks || defaultCompStocks);
-      if (stateData.portfolioStartDate) setPortfolioStartDate(stateData.portfolioStartDate);
       if (stateData.chartPrefs) {
         if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
         if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
@@ -477,10 +515,6 @@ export default function App() {
         if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
         if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
       }
-
-      // 종목 히스토리: stockdata 파일 우선, 없으면 state 파일 폴백
-      const resolvedStockHistoryMap = stockData?.stockHistoryMap || stateData.stockHistoryMap || {};
-      setStockHistoryMap(resolvedStockHistoryMap);
 
       // 시장 데이터: marketdata 파일 우선, 없으면 state 파일 폴백
       const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
@@ -497,12 +531,11 @@ export default function App() {
       }
       if (resolvedMarketIndicators) setMarketIndicators(resolvedMarketIndicators);
       if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
-      if (stateData.intAccounts) setIntAccounts(stateData.intAccounts);
       if (stateData.intHistory) setIntHistory(stateData.intHistory);
 
       setDriveStatus('saved');
       showToast('☁️ Google Drive에서 데이터 불러옴');
-      return stateData.portfolio || [];
+      return stateData.portfolios?.[0]?.portfolio || stateData.portfolio || [];
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('Drive 불러오기 실패:', msg);
@@ -1276,20 +1309,50 @@ export default function App() {
   }, [portfolio, totals.totalEval, settings, rebalanceSortConfig]);
 
   // ── 통합 대시보드 계산 ──
+  // 각 포트폴리오의 요약 계산 (active는 현재 state, 나머지는 저장된 데이터 사용)
+  const portfolioSummaries = useMemo(() => {
+    return portfolios.map(p => {
+      const isActive = p.id === activePortfolioId;
+      const items = isActive ? portfolio : (p.portfolio || []);
+      const prin = isActive ? principal : (p.principal || 0);
+      const startDate = isActive ? portfolioStartDate : (p.startDate || p.portfolioStartDate || '');
+      const name = isActive ? title : p.name;
+      let totalEval = 0, depositAmt = 0;
+      const cats = {};
+      items.forEach(item => {
+        if (item.type === 'deposit') {
+          totalEval += cleanNum(item.depositAmount);
+          depositAmt += cleanNum(item.depositAmount);
+          cats['예수금'] = (cats['예수금'] || 0) + cleanNum(item.depositAmount);
+        } else {
+          const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity);
+          totalEval += evl;
+          const cat = item.category || '미지정';
+          cats[cat] = (cats[cat] || 0) + evl;
+        }
+      });
+      const returnRate = prin > 0 ? (totalEval - prin) / prin * 100 : 0;
+      const days = startDate ? (Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24) : 0;
+      const cagr = prin > 0 && totalEval > 0 && days > 0
+        ? (Math.pow(totalEval / prin, 365.25 / Math.max(days, 1)) - 1) * 100 : 0;
+      return { id: p.id, name, startDate, currentEval: totalEval, principal: prin, depositAmount: depositAmt, returnRate, cagr, cats, isActive };
+    });
+  }, [portfolios, activePortfolioId, portfolio, principal, portfolioStartDate, title]);
+
   const intTotals = useMemo(() => {
     let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
     const cats = {};
-    intAccounts.forEach(acc => {
-      totalEval += cleanNum(acc.currentEval);
-      totalPrincipal += cleanNum(acc.principal);
-      totalDeposit += cleanNum(acc.depositAmount);
-      Object.entries(acc.categories || {}).forEach(([cat, val]) => {
-        cats[cat] = (cats[cat] || 0) + cleanNum(val);
+    portfolioSummaries.forEach(s => {
+      totalEval += s.currentEval;
+      totalPrincipal += s.principal;
+      totalDeposit += s.depositAmount;
+      Object.entries(s.cats).forEach(([cat, val]) => {
+        cats[cat] = (cats[cat] || 0) + val;
       });
     });
     const returnRate = totalPrincipal > 0 ? (totalEval - totalPrincipal) / totalPrincipal * 100 : 0;
     return { totalEval, totalPrincipal, totalDeposit, cats, returnRate };
-  }, [intAccounts]);
+  }, [portfolioSummaries]);
 
   const intSortedHistory = useMemo(() =>
     [...intHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
@@ -1851,8 +1914,17 @@ export default function App() {
     e.target.value = '';
   };
 
+  // 현재 활성 포트폴리오 state를 portfolios 배열에 반영하여 반환
+  const buildPortfoliosState = () =>
+    portfolios.map(p =>
+      p.id === activePortfolioId
+        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        : p
+    );
+
   const handleSave = () => {
-    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intAccounts, intHistory };
+    const currentPortfolios = buildPortfoliosState();
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -1872,7 +1944,8 @@ export default function App() {
   };
 
   const handleDriveSave = () => {
-    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intAccounts, intHistory };
+    const currentPortfolios = buildPortfoliosState();
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
     if (driveTokenRef.current) {
       saveAllToDrive(state);
       showToast('☁️ Google Drive 백업 완료');
@@ -1936,7 +2009,16 @@ export default function App() {
           if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
           setLookupRows(data.lookupRows || []); setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
           setStockHistoryMap(data.stockHistoryMap || {}); setCompStocks(data.compStocks || defaultCompStocks);
-          if (data.intAccounts) setIntAccounts(data.intAccounts);
+          if (data.portfolios?.length > 0) {
+            setPortfolios(data.portfolios);
+            const activeId = data.activePortfolioId || data.portfolios[0].id;
+            setActivePortfolioId(activeId);
+          } else {
+            const newId = generateId();
+            const sd = data.portfolioStartDate || data.history?.[0]?.date || '';
+            setPortfolios([{ id: newId, name: data.title || 'DC', startDate: sd, portfolioStartDate: sd, portfolio: data.portfolio || [], principal: cleanNum(data.principal), history: data.history || [], depositHistory: data.depositHistory || [], depositHistory2: data.depositHistory2 || [], settings: data.settings || { mode: 'rebalance', amount: 1000000 } }]);
+            setActivePortfolioId(newId);
+          }
           if (data.intHistory) setIntHistory(data.intHistory);
           if (data.marketIndices) {
             setMarketIndices(data.marketIndices);
@@ -2101,16 +2183,52 @@ export default function App() {
     if (saved) {
       try {
         const data = JSON.parse(saved);
-        setTitle(data.title || "포트폴리오");
-        setPortfolio(data.portfolio || []);
-        setPrincipal(cleanNum(data.principal));
-        setHistory(data.history || []);
-        setDepositHistory(data.depositHistory || []);
-        if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
-        setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
-        setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
-        setLookupRows(data.lookupRows || []);
+
+        // 포트폴리오 데이터 로드 (새 형식 우선, 구 형식 마이그레이션)
         setStockHistoryMap(data.stockHistoryMap || {});
+        if (data.portfolios?.length > 0) {
+          setPortfolios(data.portfolios);
+          const activeId = data.activePortfolioId || data.portfolios[0].id;
+          setActivePortfolioId(activeId);
+          const active = data.portfolios.find(p => p.id === activeId) || data.portfolios[0];
+          setTitle(active.name || '포트폴리오');
+          setPortfolio(active.portfolio || []);
+          setPrincipal(active.principal || 0);
+          setHistory(active.history || []);
+          setDepositHistory(active.depositHistory || []);
+          if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
+          setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
+          setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
+        } else if (data.portfolio) {
+          // 구 형식 마이그레이션
+          const newId = generateId();
+          const startDate = data.portfolioStartDate || data.history?.[0]?.date || '';
+          const migrated = {
+            id: newId,
+            name: data.title || 'DC',
+            startDate,
+            portfolioStartDate: startDate,
+            portfolio: data.portfolio || [],
+            principal: cleanNum(data.principal),
+            history: data.history || [],
+            depositHistory: data.depositHistory || [],
+            depositHistory2: data.depositHistory2 || [],
+            settings: data.settings || { mode: 'rebalance', amount: 1000000 },
+          };
+          setPortfolios([migrated]);
+          setActivePortfolioId(newId);
+          setTitle(data.title || '포트폴리오');
+          setPortfolio(data.portfolio || []);
+          setPrincipal(cleanNum(data.principal));
+          setHistory(data.history || []);
+          setDepositHistory(data.depositHistory || []);
+          if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
+          setPortfolioStartDate(startDate);
+          setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
+        }
+
+        setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
+        setLookupRows(data.lookupRows || []);
         setCompStocks(data.compStocks || defaultCompStocks);
         if (data.marketIndices) {
           setMarketIndices(data.marketIndices);
@@ -2120,8 +2238,6 @@ export default function App() {
             nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, 'localStorage') : null,
           });
         }
-        if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
-        else if (data.history?.length > 0) setPortfolioStartDate(data.history[0].date);
         if (data.chartPrefs) {
           if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
           if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
@@ -2132,7 +2248,6 @@ export default function App() {
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
-        if (data.intAccounts) setIntAccounts(data.intAccounts);
         if (data.intHistory) setIntHistory(data.intHistory);
         hasLocalData = true;
       } catch (e) {}
@@ -2176,6 +2291,17 @@ export default function App() {
         const drivePortfolio = await loadFromDrive(token);
         if (drivePortfolio?.length > 0) {
           await new Promise(r => setTimeout(r, 600));
+        } else {
+          // 완전 신규 사용자: 초기 포트폴리오 생성
+          const newId = generateId();
+          const today = new Date().toISOString().split('T')[0];
+          const initP = { id: newId, name: '내 포트폴리오', startDate: today, portfolioStartDate: today, portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }], principal: 0, history: [], depositHistory: [], depositHistory2: [], settings: { mode: 'rebalance', amount: 1000000 } };
+          setPortfolios([initP]);
+          setActivePortfolioId(newId);
+          setTitle(initP.name);
+          setPortfolio(initP.portfolio);
+          setPrincipal(0);
+          setPortfolioStartDate(today);
         }
       }
 
@@ -2190,7 +2316,7 @@ export default function App() {
       setTimeout(() => {
         isInitialLoad.current = false;
         const snap = saveStateRef.current;
-        if (snap && snap.portfolio?.length > 0 && driveTokenRef.current) {
+        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
           saveAllToDrive(snap);
         }
       }, 1000);
@@ -2248,7 +2374,7 @@ export default function App() {
         // 갱신 완료 후 3초 대기 (React 상태 업데이트 반영) → Drive 자동저장
         setTimeout(() => {
           const snap = saveStateRef.current;
-          if (snap && snap.portfolio?.length > 0) {
+          if (snap && snap.portfolios?.length > 0) {
             console.log('[자동저장] 20분 주기 Drive 백업');
             saveAllToDrive(snap);
           }
@@ -2259,14 +2385,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (portfolio.length === 0) return;
+    if (portfolios.length === 0) return;
     if (!authUser?.email) return;
-    const state = { title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intAccounts, intHistory };
-    saveStateRef.current = state; // 항상 최신 상태 유지 (GSheet 저장에 사용)
+    const currentPortfolios = portfolios.map(p =>
+      p.id === activePortfolioId
+        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        : p
+    );
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+    saveStateRef.current = state;
     try {
       localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(state));
     } catch (e) {
-      // localStorage 용량 초과 시 indicatorHistoryMap 제외 후 재시도
       try {
         const { indicatorHistoryMap: _ihm, stockHistoryMap: _shm, ...stateLight } = state;
         localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(stateLight));
@@ -2274,7 +2404,7 @@ export default function App() {
         // 그래도 실패하면 무시 (Drive 백업에 의존)
       }
     }
-  }, [title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intAccounts, intHistory]);
+  }, [portfolios, activePortfolioId, title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
@@ -2387,32 +2517,87 @@ export default function App() {
     return null;
   };
 
-  // ── 통합 대시보드 핸들러 ──
-  const addIntAccount = () => {
-    setIntAccounts(prev => [...prev, {
-      id: generateId(),
-      name: '새 계좌',
-      startDate: new Date().toISOString().split('T')[0],
-      principal: 0,
-      currentEval: 0,
-      depositAmount: 0,
-      categories: {},
-    }]);
+  // ── 멀티 포트폴리오 관리 ──
+  const switchToPortfolio = (id) => {
+    const updated = portfolios.map(p =>
+      p.id === activePortfolioId
+        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        : p
+    );
+    setPortfolios(updated);
+    const target = updated.find(p => p.id === id);
+    if (!target) return;
+    setActivePortfolioId(id);
+    setTitle(target.name);
+    setPortfolio(target.portfolio || []);
+    setPrincipal(target.principal || 0);
+    setHistory(target.history || []);
+    setDepositHistory(target.depositHistory || []);
+    setDepositHistory2(target.depositHistory2 || []);
+    setPortfolioStartDate(target.startDate || target.portfolioStartDate || '');
+    setSettings(target.settings || { mode: 'rebalance', amount: 1000000 });
+    setShowIntegratedDashboard(false);
   };
 
-  const updateIntAccount = (id, field, value) => {
-    setIntAccounts(prev => prev.map(a => a.id === id ? { ...a, [field]: value } : a));
+  const addPortfolio = () => {
+    const updated = portfolios.map(p =>
+      p.id === activePortfolioId
+        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        : p
+    );
+    const newId = generateId();
+    const today = new Date().toISOString().split('T')[0];
+    const newP = {
+      id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
+      portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
+      principal: 0, history: [], depositHistory: [], depositHistory2: [],
+      settings: { mode: 'rebalance', amount: 1000000 },
+    };
+    setPortfolios([...updated, newP]);
+    setActivePortfolioId(newId);
+    setTitle(newP.name);
+    setPortfolio(newP.portfolio);
+    setPrincipal(0);
+    setHistory([]);
+    setDepositHistory([]);
+    setDepositHistory2([]);
+    setPortfolioStartDate(today);
+    setSettings({ mode: 'rebalance', amount: 1000000 });
+    setShowIntegratedDashboard(false);
   };
 
-  const updateIntAccountCategory = (id, cat, rawValue) => {
-    setIntAccounts(prev => prev.map(a => {
-      if (a.id !== id) return a;
-      return { ...a, categories: { ...a.categories, [cat]: cleanNum(rawValue) } };
-    }));
+  const deletePortfolio = (id) => {
+    if (portfolios.length <= 1) { showToast('마지막 계좌는 삭제할 수 없습니다.'); return; }
+    if (!window.confirm('이 포트폴리오 계좌를 삭제하시겠습니까?')) return;
+    const updated = portfolios.map(p =>
+      p.id === activePortfolioId
+        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        : p
+    );
+    const remaining = updated.filter(p => p.id !== id);
+    setPortfolios(remaining);
+    if (activePortfolioId === id) {
+      const first = remaining[0];
+      setActivePortfolioId(first.id);
+      setTitle(first.name);
+      setPortfolio(first.portfolio || []);
+      setPrincipal(first.principal || 0);
+      setHistory(first.history || []);
+      setDepositHistory(first.depositHistory || []);
+      setDepositHistory2(first.depositHistory2 || []);
+      setPortfolioStartDate(first.startDate || first.portfolioStartDate || '');
+      setSettings(first.settings || { mode: 'rebalance', amount: 1000000 });
+    }
   };
 
-  const deleteIntAccount = (id) => {
-    setIntAccounts(prev => prev.filter(a => a.id !== id));
+  const updatePortfolioStartDate = (id, date) => {
+    if (id === activePortfolioId) setPortfolioStartDate(date);
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, startDate: date, portfolioStartDate: date } : p));
+  };
+
+  const updatePortfolioName = (id, name) => {
+    if (id === activePortfolioId) setTitle(name);
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, name } : p));
   };
 
   const handleIntChartMouseDown = (e) => {
@@ -3224,12 +3409,48 @@ export default function App() {
         {showIntegratedDashboard && (
           <div className="flex flex-col gap-6 w-full">
 
+            {/* 통합 요약 카드 */}
+            {(() => {
+              const sortedIntHist = [...intHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
+              const todayRec = sortedIntHist[0];
+              const prevRec = sortedIntHist[1];
+              const todayProfit = todayRec && prevRec ? todayRec.evalAmount - prevRec.evalAmount : 0;
+              const todayRate = prevRec?.evalAmount > 0 ? todayProfit / prevRec.evalAmount * 100 : 0;
+              return (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
+                    <span className="text-gray-400 text-[11px] font-bold">총 자산</span>
+                    <span className="text-white text-lg font-extrabold">{formatCurrency(intTotals.totalEval)}</span>
+                  </div>
+                  <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
+                    <span className="text-gray-400 text-[11px] font-bold">오늘 수익 ({todayRec?.date || '-'})</span>
+                    <span className={`text-lg font-extrabold ${todayProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {todayProfit >= 0 ? '+' : ''}{formatCurrency(todayProfit)}
+                    </span>
+                    <span className={`text-[11px] font-bold ${todayRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {todayRate >= 0 ? '+' : ''}{todayRate.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
+                    <span className="text-gray-400 text-[11px] font-bold">전체 수익율</span>
+                    <span className={`text-lg font-extrabold ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {intTotals.returnRate >= 0 ? '+' : ''}{intTotals.returnRate.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
+                    <span className="text-gray-400 text-[11px] font-bold">총 투자원금</span>
+                    <span className="text-white text-lg font-extrabold">{formatCurrency(intTotals.totalPrincipal)}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* 통합 계좌 현황 */}
             <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg">
               <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
-                <button onClick={addIntAccount} className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded">
-                  <Plus size={12} /> 계좌 추가
+                <button onClick={addPortfolio} className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded">
+                  <Plus size={12} /> 포트폴리오 추가
                 </button>
               </div>
               <div className="overflow-x-auto">
@@ -3245,58 +3466,63 @@ export default function App() {
                       <th className="py-2 px-3 text-right border-r border-gray-700">투자원금</th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">예수금</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">현재 수익율</th>
-                      <th className="py-2 px-2 text-center border-r border-gray-700">카테고리</th>
+                      <th className="py-2 px-2 text-center border-r border-gray-700">구분</th>
+                      <th className="py-2 px-2 text-center border-r border-gray-700">편집</th>
                       <th className="py-2 px-2 text-center">삭제</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {intAccounts.map(acc => {
-                      const retRate = cleanNum(acc.principal) > 0 ? (cleanNum(acc.currentEval) - cleanNum(acc.principal)) / cleanNum(acc.principal) * 100 : 0;
-                      const days = acc.startDate ? (new Date() - new Date(acc.startDate)) / (1000 * 60 * 60 * 24) : 0;
-                      const accCagr = cleanNum(acc.principal) > 0 && cleanNum(acc.currentEval) > 0 && days > 0
-                        ? (Math.pow(cleanNum(acc.currentEval) / cleanNum(acc.principal), 365.25 / Math.max(days, 1)) - 1) * 100 : 0;
-                      const allocRatio = intTotals.totalEval > 0 ? cleanNum(acc.currentEval) / intTotals.totalEval * 100 : 0;
-                      const isCatOpen = intExpandedCat === acc.id;
+                    {portfolioSummaries.map(s => {
+                      const allocRatio = intTotals.totalEval > 0 ? s.currentEval / intTotals.totalEval * 100 : 0;
+                      const isCatOpen = intExpandedCat === s.id;
                       return (
-                        <React.Fragment key={acc.id}>
-                          <tr className="border-b border-gray-700 hover:bg-gray-800/40 transition-colors">
+                        <React.Fragment key={s.id}>
+                          <tr className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : 'hover:bg-gray-800/40'}`}>
                             <td className="py-1.5 px-3 text-center border-r border-gray-700">
-                              <CustomDatePicker value={acc.startDate} onChange={v => updateIntAccount(acc.id, 'startDate', v)} />
+                              <CustomDatePicker value={s.startDate} onChange={v => updatePortfolioStartDate(s.id, v)} />
                             </td>
                             <td className="py-1.5 px-3 border-r border-gray-700">
-                              <input type="text" className="w-full min-w-[70px] bg-transparent text-blue-300 font-bold outline-none text-center" value={acc.name} onChange={e => updateIntAccount(acc.id, 'name', e.target.value)} />
+                              <input
+                                type="text"
+                                className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-blue-300"
+                                value={s.name}
+                                onChange={e => updatePortfolioName(s.id, e.target.value)}
+                              />
+                              {s.isActive && <span className="ml-1 text-[9px] text-blue-500 font-bold">●활성</span>}
                             </td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right">
-                              <input type="text" className="w-full min-w-[100px] bg-transparent text-white font-bold outline-none text-right" value={formatNumber(acc.currentEval)} onFocus={e => e.target.select()} onChange={e => updateIntAccount(acc.id, 'currentEval', cleanNum(e.target.value))} />
-                            </td>
-                            <td className={`py-1.5 px-3 border-r border-gray-700 text-right font-bold ${retRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(retRate)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-blue-300 font-bold">{formatPercent(accCagr)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right font-bold text-white">{formatCurrency(s.currentEval)}</td>
+                            <td className={`py-1.5 px-3 border-r border-gray-700 text-right font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-blue-300 font-bold">{formatPercent(s.cagr)}</td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-300">{allocRatio.toFixed(2)}%</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right">
-                              <input type="text" className="w-full min-w-[90px] bg-transparent text-gray-200 font-bold outline-none text-right" value={formatNumber(acc.principal)} onFocus={e => e.target.select()} onChange={e => updateIntAccount(acc.id, 'principal', cleanNum(e.target.value))} />
-                            </td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right">
-                              <input type="text" className="w-full min-w-[70px] bg-transparent text-gray-400 font-bold outline-none text-right" value={formatNumber(acc.depositAmount)} onFocus={e => e.target.select()} onChange={e => updateIntAccount(acc.id, 'depositAmount', cleanNum(e.target.value))} />
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-200 font-bold">{formatCurrency(s.principal)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-400 font-bold">{formatCurrency(s.depositAmount)}</td>
+                            <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                              <span className={`inline-block px-2 py-0.5 rounded font-bold ${s.returnRate > 0 ? 'bg-red-900/40 text-red-300' : s.returnRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{s.returnRate.toFixed(1)}%</span>
                             </td>
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                              <span className={`inline-block px-2 py-0.5 rounded font-bold ${retRate > 0 ? 'bg-red-900/40 text-red-300' : retRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{retRate.toFixed(1)}%</span>
+                              <button onClick={() => setIntExpandedCat(isCatOpen ? null : s.id)} className={`text-sm p-0.5 rounded transition-colors ${isCatOpen ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`} title="구분별 현황">▸</button>
                             </td>
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                              <button onClick={() => setIntExpandedCat(isCatOpen ? null : acc.id)} className={`text-sm p-0.5 rounded transition-colors ${isCatOpen ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`} title="카테고리 편집">▸</button>
+                              <button
+                                onClick={() => switchToPortfolio(s.id)}
+                                className="text-gray-500 hover:text-blue-400 transition-colors text-[11px] font-bold px-1"
+                                title="포트폴리오 편집"
+                              >✏️</button>
                             </td>
                             <td className="py-1.5 px-2 text-center">
-                              <button onClick={() => deleteIntAccount(acc.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
+                              <button onClick={() => deletePortfolio(s.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                             </td>
                           </tr>
-                          {isCatOpen && (
+                          {isCatOpen && Object.keys(s.cats).length > 0 && (
                             <tr className="bg-gray-800/30 border-b border-gray-700">
-                              <td colSpan={11} className="py-3 px-4">
-                                <div className="flex flex-wrap gap-3 items-center">
-                                  <span className="text-[11px] text-gray-400 font-bold shrink-0">카테고리별 평가금액 :</span>
-                                  {INT_CATEGORIES.map(cat => (
-                                    <div key={cat} className="flex items-center gap-1.5">
+                              <td colSpan={12} className="py-3 px-4">
+                                <div className="text-[11px] text-gray-400 font-bold mb-2">📊 {s.name} - 구분별 평가금액</div>
+                                <div className="flex flex-wrap gap-x-6 gap-y-2">
+                                  {Object.entries(s.cats).filter(([,v]) => v > 0).map(([cat, val]) => (
+                                    <div key={cat} className="flex items-center gap-2">
                                       <span className={`text-[11px] font-bold ${UI_CONFIG.COLORS.CATEGORIES[cat] || 'text-gray-300'}`}>{cat}</span>
-                                      <input type="text" className="w-[80px] bg-gray-900 border border-gray-700 rounded px-2 py-0.5 text-[11px] text-gray-200 outline-none focus:border-blue-500 text-right" value={formatNumber(acc.categories?.[cat] || 0)} onFocus={e => e.target.select()} onChange={e => updateIntAccountCategory(acc.id, cat, e.target.value)} />
+                                      <span className="text-[11px] text-gray-200 font-bold">{formatCurrency(val)}</span>
+                                      <span className="text-[10px] text-gray-500">{s.currentEval > 0 ? ((val / s.currentEval) * 100).toFixed(1) : 0}%</span>
                                     </div>
                                   ))}
                                 </div>
@@ -3306,8 +3532,8 @@ export default function App() {
                         </React.Fragment>
                       );
                     })}
-                    {intAccounts.length === 0 && (
-                      <tr><td colSpan={11} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. 위의 <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                    {portfolioSummaries.length === 0 && (
+                      <tr><td colSpan={12} className="py-8 text-center text-gray-500 text-xs">포트폴리오가 없습니다. <span className="text-blue-400 font-bold">+ 포트폴리오 추가</span> 버튼을 눌러 추가하세요.</td></tr>
                     )}
                   </tbody>
                   <tfoot className="border-t-2 border-red-700 bg-red-900/20">
@@ -3320,7 +3546,7 @@ export default function App() {
                       <td className="py-2 px-3 text-right text-gray-300 border-r border-gray-700">100%</td>
                       <td className="py-2 px-3 text-right text-gray-200 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalPrincipal)}</td>
                       <td className="py-2 px-3 text-right text-gray-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalDeposit)}</td>
-                      <td colSpan={3}></td>
+                      <td colSpan={4}></td>
                     </tr>
                   </tfoot>
                 </table>
@@ -3438,7 +3664,7 @@ export default function App() {
                 <span className="text-white font-bold text-sm">🍩 자산 카테고리 비중 (통합)</span>
               </div>
               {intCatDonutData.length === 0 ? (
-                <div className="py-12 text-center text-gray-500 text-xs">카테고리 데이터가 없습니다.<br/><span className="text-gray-600">계좌 행의 ▸ 버튼을 눌러 카테고리별 평가금액을 입력하세요.</span></div>
+                <div className="py-12 text-center text-gray-500 text-xs">카테고리 데이터가 없습니다.<br/><span className="text-gray-600">포트폴리오에 종목(카테고리 지정)을 추가하면 자동으로 표시됩니다.</span></div>
               ) : (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 p-4">
                   <div style={{ height: 300 }}>
