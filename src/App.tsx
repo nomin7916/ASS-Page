@@ -2754,15 +2754,17 @@ export default function App() {
     <div className="bg-gray-900 min-h-screen text-gray-200 p-2 md:p-6 lg:p-8 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
       {adminViewingAs && (
-        <div className="fixed top-0 left-0 right-0 z-[200] bg-orange-900/95 border-b border-orange-600 px-4 py-2 flex items-center justify-between">
-          <span className="text-orange-200 text-xs font-semibold">
-            관리자 뷰: <span className="text-white font-bold">{adminViewingAs}</span>
+        <div className="fixed top-0 left-0 right-0 z-[200] bg-gray-900/98 border-b border-gray-700 px-4 py-2 flex items-center justify-between backdrop-blur-sm">
+          <span className="text-gray-400 text-xs">
+            <span className="text-gray-500 mr-1">관리자 뷰</span>
+            <span className="text-gray-200 font-medium">{adminViewingAs}</span>
+            <span className="ml-2 text-gray-600 text-[10px] uppercase tracking-wider">읽기 전용</span>
           </span>
           <button
             onClick={handleReturnToAdminPage}
-            className="bg-orange-700 hover:bg-orange-600 text-white text-xs font-semibold px-3 py-1 rounded-lg transition-colors"
+            className="text-gray-400 hover:text-gray-100 text-xs font-medium px-3 py-1 rounded border border-gray-700 hover:border-gray-500 transition-colors bg-gray-800 hover:bg-gray-750"
           >
-            관리자 페이지로 돌아가기
+            ← 관리자 페이지
           </button>
         </div>
       )}
