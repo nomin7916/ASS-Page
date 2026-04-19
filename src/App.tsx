@@ -366,6 +366,18 @@ export default function App() {
               setShowAdminPage(true);
               return;
             }
+            // 접속 허용 여부 확인 (사용자 Drive state 파일에서 adminAccessAllowed 체크)
+            try {
+              const checkFolderId = await getOrCreateIndexFolder(token);
+              const stateData = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
+              if (stateData && stateData.adminAccessAllowed === false) {
+                showToast(`${targetEmail} 사용자가 관리자 접속을 허용하지 않았습니다.`, true);
+                setShowAdminPage(true);
+                return;
+              }
+            } catch {
+              // 파일 없거나 오류 시 허용 (신규 사용자)
+            }
             adminOwnDriveTokenRef.current = driveTokenRef.current;
             adminViewingAsRef.current = targetEmail;
             setAdminViewingAs(targetEmail);
@@ -452,6 +464,7 @@ export default function App() {
   const [indicatorHistoryMap, setIndicatorHistoryMap] = useState({});
   const [stockHistoryMap, setStockHistoryMap] = useState({});
   const [compStocks, setCompStocks] = useState(defaultCompStocks);
+  const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
   // 세션 내 자동 전체이력 재조회 완료된 종목 코드 추적 (중복 API 호출 방지)
   const autoFetchedCodes = useRef<Set<string>>(new Set());
   const [portfolioStartDate, setPortfolioStartDate] = useState(() => {
@@ -578,6 +591,7 @@ export default function App() {
       setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
       setLookupRows(stateData.lookupRows || []);
       setCompStocks(stateData.compStocks || defaultCompStocks);
+      if (stateData.adminAccessAllowed !== undefined) setAdminAccessAllowed(stateData.adminAccessAllowed);
       if (stateData.chartPrefs) {
         if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
         if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
@@ -1996,7 +2010,7 @@ export default function App() {
 
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -2017,7 +2031,7 @@ export default function App() {
 
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
     if (driveTokenRef.current) {
       saveAllToDrive(state);
       showToast('☁️ Google Drive 백업 완료');
@@ -2322,6 +2336,7 @@ export default function App() {
         setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
         setLookupRows(data.lookupRows || []);
         setCompStocks(data.compStocks || defaultCompStocks);
+        if (data.adminAccessAllowed !== undefined) setAdminAccessAllowed(data.adminAccessAllowed);
         if (data.marketIndices) {
           setMarketIndices(data.marketIndices);
           setIndexFetchStatus({
@@ -2484,7 +2499,7 @@ export default function App() {
         ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
     saveStateRef.current = state;
     try {
       localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(state));
@@ -2836,6 +2851,26 @@ export default function App() {
             >
               <Lock size={11} />
               <span>비번 변경</span>
+            </button>
+            <button
+              onClick={() => setAdminAccessAllowed(v => !v)}
+              title={adminAccessAllowed ? '관리자 접속 허용 중 — 클릭하여 차단' : '관리자 접속 차단 중 — 클릭하여 허용'}
+              className={`relative px-2 py-1 rounded-md transition-all duration-200 group ${
+                adminAccessAllowed
+                  ? 'text-emerald-400 bg-emerald-950/50 hover:bg-emerald-900/50 ring-1 ring-emerald-700/60 shadow-[0_0_8px_rgba(52,211,153,0.15)]'
+                  : 'text-gray-600 hover:text-gray-400 hover:bg-gray-800/60'
+              }`}
+            >
+              <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" width="12" height="12">
+                <circle cx="14" cy="4" r="2"/>
+                <circle cx="4" cy="9" r="2"/>
+                <circle cx="14" cy="14" r="2"/>
+                <line x1="5.9" y1="10.1" x2="12.1" y2="13.1"/>
+                <line x1="12.1" y1="4.9" x2="5.9" y2="7.9"/>
+              </svg>
+              {adminAccessAllowed && (
+                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.8)]" />
+              )}
             </button>
             <div className="w-px h-3 bg-gray-700" />
             <button
