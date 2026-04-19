@@ -62,10 +62,11 @@ async function checkApproval(email: string): Promise<{ approved: boolean; needsR
     const res = await fetch(url);
     if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false };
     const data = await res.json();
+    // Apps Script returns { status: 'approved'/'not_approved', resetPassword: string|null, name, feature1, ... }
     return {
-      approved: data.approved ?? false,
-      needsReset: data.needsReset ?? false,
-      adminPin: data.adminPin ?? DEFAULT_PIN,
+      approved: data.status === 'approved',
+      needsReset: data.resetPassword != null,
+      adminPin: data.resetPassword ?? DEFAULT_PIN,
       name: data.name ?? '',
       feature1: data.feature1 ?? false,
       feature2: data.feature2 ?? false,

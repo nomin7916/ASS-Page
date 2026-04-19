@@ -4,7 +4,7 @@ import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
 
 interface ApprovedUser {
   email: string;
-  resetFlag: boolean;
+  resetFlag: string; // Apps Script returns raw A열 value: '', 'RESET', 'RESET:1234'
   name?: string;
   feature1?: boolean;
   feature2?: boolean;
