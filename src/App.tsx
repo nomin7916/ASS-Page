@@ -321,6 +321,9 @@ export default function App() {
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
   const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
+  const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
+  const adminOwnDriveTokenRef = useRef<string>('');
+  const adminViewingAsRef = useRef<string | null>(null);
   const [showPinChange, setShowPinChange] = useState(false);
   const [pinChangeSaving, setPinChangeSaving] = useState(false);
   const [pinCurrent, setPinCurrent] = useState(['', '', '', '']);
@@ -331,6 +334,72 @@ export default function App() {
   const handleLoginApproved = (email: string, token: string, features: UserFeatures) => {
     setAuthUser({ email, token });
     setUserFeatures(features);
+  };
+
+  const handleAdminViewUser = (targetEmail: string) => {
+    setShowAdminPage(false);
+    const tryInit = (retries = 20) => {
+      if ((window as any).google?.accounts?.oauth2) {
+        const client = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
+          hint: targetEmail,
+          callback: async (resp: any) => {
+            if (resp.error || !resp.access_token) {
+              showToast(`${targetEmail} 계정 접속 실패. 해당 계정이 이 브라우저에 로그인되어 있지 않을 수 있습니다.`, true);
+              setShowAdminPage(true);
+              return;
+            }
+            const token = resp.access_token;
+            try {
+              const infoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              const infoData = await infoRes.json();
+              if (infoData.email?.toLowerCase() !== targetEmail.toLowerCase()) {
+                showToast('다른 계정으로 로그인되었습니다.', true);
+                setShowAdminPage(true);
+                return;
+              }
+            } catch {
+              showToast('계정 확인 실패', true);
+              setShowAdminPage(true);
+              return;
+            }
+            adminOwnDriveTokenRef.current = driveTokenRef.current;
+            adminViewingAsRef.current = targetEmail;
+            setAdminViewingAs(targetEmail);
+            isInitialLoad.current = true;
+            driveTokenRef.current = token;
+            setDriveToken(token);
+            driveFolderIdRef.current = '';
+            await loadFromDrive(token);
+            isInitialLoad.current = false;
+          },
+        });
+        client.requestAccessToken({ prompt: '' });
+      } else if (retries > 0) {
+        setTimeout(() => tryInit(retries - 1), 300);
+      } else {
+        showToast('Google 인증 초기화 실패', true);
+        setShowAdminPage(true);
+      }
+    };
+    tryInit();
+  };
+
+  const handleReturnToAdminPage = async () => {
+    const ownToken = adminOwnDriveTokenRef.current;
+    adminOwnDriveTokenRef.current = '';
+    adminViewingAsRef.current = null;
+    setAdminViewingAs(null);
+    isInitialLoad.current = true;
+    driveTokenRef.current = ownToken;
+    setDriveToken(ownToken);
+    driveFolderIdRef.current = '';
+    await loadFromDrive(ownToken);
+    isInitialLoad.current = false;
+    setShowAdminPage(true);
   };
 
   const defaultCompStocks = [
@@ -557,6 +626,7 @@ export default function App() {
 
   // Google Drive Index_Data 폴더에 3개 파일로 저장
   const saveAllToDrive = async (state) => {
+    if (adminViewingAsRef.current) return; // 관리자 뷰 중에는 저장 차단
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     try {
@@ -2659,14 +2729,28 @@ export default function App() {
 
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return <AdminPage adminEmail={authUser.email} onClose={() => setShowAdminPage(false)} />;
+    return <AdminPage adminEmail={authUser.email} onClose={() => setShowAdminPage(false)} onViewUser={handleAdminViewUser} />;
   }
 
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 p-2 md:p-6 lg:p-8 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
+      {adminViewingAs && (
+        <div className="fixed top-0 left-0 right-0 z-[200] bg-orange-900/95 border-b border-orange-600 px-4 py-2 flex items-center justify-between">
+          <span className="text-orange-200 text-xs font-semibold">
+            관리자 뷰: <span className="text-white font-bold">{adminViewingAs}</span>
+            <span className="text-orange-400 ml-2">(읽기 전용 — 저장 차단됨)</span>
+          </span>
+          <button
+            onClick={handleReturnToAdminPage}
+            className="bg-orange-700 hover:bg-orange-600 text-white text-xs font-semibold px-3 py-1 rounded-lg transition-colors"
+          >
+            관리자 페이지로 돌아가기
+          </button>
+        </div>
+      )}
       {globalToast.text && (
-        <div className={`fixed top-6 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-xl shadow-2xl z-[100] font-bold text-white border transition-all duration-300 max-w-lg text-center ${globalToast.isError ? 'bg-red-900/90 border-red-500' : 'bg-blue-600/90 border-blue-400'}`}>{globalToast.text}</div>
+        <div className={`fixed ${adminViewingAs ? 'top-14' : 'top-6'} left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-xl shadow-2xl z-[100] font-bold text-white border transition-all duration-300 max-w-lg text-center ${globalToast.isError ? 'bg-red-900/90 border-red-500' : 'bg-blue-600/90 border-blue-400'}`}>{globalToast.text}</div>
       )}
       
       {/* 지표 배율 설정 모달 */}
