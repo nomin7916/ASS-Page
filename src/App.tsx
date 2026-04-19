@@ -370,13 +370,16 @@ export default function App() {
             try {
               const checkFolderId = await getOrCreateIndexFolder(token);
               const stateData = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
-              if (stateData && stateData.adminAccessAllowed === false) {
+              const isAllowed = !stateData || stateData.adminAccessAllowed !== false;
+              setUserAccessStatus(prev => ({ ...prev, [targetEmail]: isAllowed }));
+              if (!isAllowed) {
                 showToast(`${targetEmail} 사용자가 관리자 접속을 허용하지 않았습니다.`, true);
                 setShowAdminPage(true);
                 return;
               }
             } catch {
               // 파일 없거나 오류 시 허용 (신규 사용자)
+              setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
             }
             adminOwnDriveTokenRef.current = driveTokenRef.current;
             adminViewingAsRef.current = targetEmail;
@@ -465,6 +468,7 @@ export default function App() {
   const [stockHistoryMap, setStockHistoryMap] = useState({});
   const [compStocks, setCompStocks] = useState(defaultCompStocks);
   const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
+  const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
   // 세션 내 자동 전체이력 재조회 완료된 종목 코드 추적 (중복 API 호출 방지)
   const autoFetchedCodes = useRef<Set<string>>(new Set());
   const [portfolioStartDate, setPortfolioStartDate] = useState(() => {
@@ -2744,7 +2748,7 @@ export default function App() {
 
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return <AdminPage adminEmail={authUser.email} onClose={() => setShowAdminPage(false)} onViewUser={handleAdminViewUser} />;
+    return <AdminPage adminEmail={authUser.email} onClose={() => setShowAdminPage(false)} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} />;
   }
 
   return (
@@ -2853,7 +2857,15 @@ export default function App() {
               <span>비번 변경</span>
             </button>
             <button
-              onClick={() => setAdminAccessAllowed(v => !v)}
+              onClick={() => {
+                const newVal = !adminAccessAllowed;
+                setAdminAccessAllowed(newVal);
+                if (driveTokenRef.current) {
+                  const currentPortfolios = buildPortfoliosState();
+                  const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed: newVal, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+                  saveAllToDrive(state);
+                }
+              }}
               title={adminAccessAllowed ? '관리자 접속 허용 중 — 클릭하여 차단' : '관리자 접속 차단 중 — 클릭하여 허용'}
               className={`relative px-2 py-1 rounded-md transition-all duration-200 group ${
                 adminAccessAllowed

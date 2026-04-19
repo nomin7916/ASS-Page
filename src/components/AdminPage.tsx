@@ -15,6 +15,7 @@ interface Props {
   adminEmail: string;
   onClose: () => void;
   onViewUser?: (email: string) => void;
+  userAccessStatus?: Record<string, boolean>;
 }
 
 // Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
@@ -30,7 +31,7 @@ async function fetchApprovedUsers(): Promise<ApprovedUser[]> {
   }
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessStatus = {} }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -117,14 +118,22 @@ export default function AdminPage({ adminEmail, onClose, onViewUser }: Props) {
                     {u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? (
                       <span className="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded-full">관리자</span>
                     ) : (
-                      onViewUser && (
-                        <button
-                          onClick={() => onViewUser(u.email)}
-                          className="text-xs bg-green-900/60 hover:bg-green-800/80 text-green-300 border border-green-700/50 px-2 py-0.5 rounded-full transition-colors"
-                        >
-                          접속
-                        </button>
-                      )
+                      <>
+                        {userAccessStatus[u.email] === true && (
+                          <span className="text-xs bg-emerald-900/60 text-emerald-300 border border-emerald-700/50 px-2 py-0.5 rounded-full">허용</span>
+                        )}
+                        {userAccessStatus[u.email] === false && (
+                          <span className="text-xs bg-red-900/60 text-red-300 border border-red-700/50 px-2 py-0.5 rounded-full">차단</span>
+                        )}
+                        {onViewUser && (
+                          <button
+                            onClick={() => onViewUser(u.email)}
+                            className="text-xs bg-green-900/60 hover:bg-green-800/80 text-green-300 border border-green-700/50 px-2 py-0.5 rounded-full transition-colors"
+                          >
+                            접속
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </li>
