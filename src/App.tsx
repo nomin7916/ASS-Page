@@ -506,6 +506,7 @@ export default function App() {
   const isInitialLoad = useRef(true);
   const portfolioRef = useRef([]);
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
+  const driveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
 
@@ -2504,15 +2505,24 @@ export default function App() {
     );
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
     saveStateRef.current = state;
+    // 관리자가 사용자 뷰를 보고 있을 때는 해당 사용자의 키로 localStorage 저장
+    const stateEmail = adminViewingAsRef.current || authUser.email;
     try {
-      localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(state));
+      localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(state));
     } catch (e) {
       try {
         const { indicatorHistoryMap: _ihm, stockHistoryMap: _shm, ...stateLight } = state;
-        localStorage.setItem(`portfolioState_v5_${authUser.email}`, JSON.stringify(stateLight));
+        localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateLight));
       } catch {
         // 그래도 실패하면 무시 (Drive 백업에 의존)
       }
+    }
+    // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스)
+    if (!isInitialLoad.current && driveTokenRef.current) {
+      if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
+      driveSaveTimerRef.current = setTimeout(() => {
+        saveAllToDrive(state);
+      }, 2000);
     }
   }, [portfolios, activePortfolioId, title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory]);
 
