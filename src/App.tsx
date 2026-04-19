@@ -644,7 +644,6 @@ export default function App() {
 
   // Google Drive Index_Data 폴더에 3개 파일로 저장
   const saveAllToDrive = async (state) => {
-    if (adminViewingAsRef.current) return; // 관리자 뷰 중에는 저장 차단
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     try {
@@ -2758,7 +2757,6 @@ export default function App() {
         <div className="fixed top-0 left-0 right-0 z-[200] bg-orange-900/95 border-b border-orange-600 px-4 py-2 flex items-center justify-between">
           <span className="text-orange-200 text-xs font-semibold">
             관리자 뷰: <span className="text-white font-bold">{adminViewingAs}</span>
-            <span className="text-orange-400 ml-2">(읽기 전용 — 저장 차단됨)</span>
           </span>
           <button
             onClick={handleReturnToAdminPage}
