@@ -4,7 +4,11 @@ import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
 
 interface ApprovedUser {
   email: string;
-  resetFlag: boolean; // 구글 시트 B열 = 'RESET'이면 true
+  resetFlag: boolean;
+  name?: string;
+  feature1?: boolean;
+  feature2?: boolean;
+  feature3?: boolean;
 }
 
 interface Props {
@@ -94,8 +98,16 @@ export default function AdminPage({ adminEmail, onClose }: Props) {
               {users.map((u, i) => (
                 <li key={i} className="flex items-center gap-3 bg-gray-800 rounded-lg px-4 py-2.5">
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${u.resetFlag ? 'bg-yellow-400' : 'bg-green-400'}`} />
-                  <span className="text-gray-200 text-sm flex-1">{u.email}</span>
-                  <div className="flex items-center gap-2 ml-auto">
+                  <div className="flex-1 min-w-0">
+                    {u.name && <div className="text-gray-100 text-xs font-semibold truncate">{u.name}</div>}
+                    <span className="text-gray-400 text-sm truncate">{u.email}</span>
+                  </div>
+                  <div className="flex items-center gap-2 ml-auto flex-shrink-0">
+                    {u.feature1 && (
+                      <span className="text-xs bg-orange-900/60 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded-full">
+                        기능1
+                      </span>
+                    )}
                     {u.resetFlag && (
                       <span className="text-xs bg-yellow-900/60 text-yellow-300 border border-yellow-700/50 px-2 py-0.5 rounded-full">
                         PIN 초기화됨
@@ -125,7 +137,7 @@ export default function AdminPage({ adminEmail, onClose }: Props) {
               구글 시트에서 사용자 관리
             </button>
             <p className="text-gray-600 text-xs mt-2 text-center">
-              A열에 이메일 주소를 한 줄씩 입력하세요
+              A열: RESET / B열: 이메일 / C열: 이름 / D열: 기능1(ON/OFF)
             </p>
 
             <a

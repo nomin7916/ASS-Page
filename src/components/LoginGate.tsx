@@ -7,8 +7,15 @@ type AuthStep = 'idle' | 'loading' | 'pending' | 'requesting' | 'requested' | 'e
 
 export const SESSION_KEY = 'portfolio_session_email_v1';
 
+export interface UserFeatures {
+  name: string;
+  feature1: boolean;
+  feature2: boolean;
+  feature3: boolean;
+}
+
 interface Props {
-  onApproved: (email: string, token: string) => void;
+  onApproved: (email: string, token: string, features: UserFeatures) => void;
 }
 
 // ── PIN 유틸리티 ────────────────────────────────────────────────
@@ -49,19 +56,23 @@ export async function savePinToDrive(pinHash: string, token: string): Promise<vo
 // ── Apps Script를 통해 승인 여부 + RESET 플래그 확인 ────────────
 // 구글 시트를 비공개로 유지하고 Apps Script가 대신 조회 (보안 정책 준수)
 // B열: 비어있음 = 정상, "RESET" = 초기화(0000), "RESET:1234" = 초기화(1234)
-async function checkApproval(email: string): Promise<{ approved: boolean; needsReset: boolean; adminPin: string }> {
+async function checkApproval(email: string): Promise<{ approved: boolean; needsReset: boolean; adminPin: string } & UserFeatures> {
   try {
     const url = `${APPS_SCRIPT_URL}?action=check&email=${encodeURIComponent(email)}&cacheBust=${Date.now()}`;
     const res = await fetch(url);
-    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN };
+    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false };
     const data = await res.json();
     return {
       approved: data.approved ?? false,
       needsReset: data.needsReset ?? false,
       adminPin: data.adminPin ?? DEFAULT_PIN,
+      name: data.name ?? '',
+      feature1: data.feature1 ?? false,
+      feature2: data.feature2 ?? false,
+      feature3: data.feature3 ?? false,
     };
   } catch {
-    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN };
+    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false };
   }
 }
 
@@ -162,6 +173,7 @@ export default function LoginGate({ onApproved }: Props) {
   const [pinError, setPinError] = useState('');
 
   const tokenClientRef = useRef<any>(null);
+  const featuresRef = useRef<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
 
   // ── 구글 토큰 요청 공통 함수 ────────────────────────────────────
   const requestGoogleToken = (opts: { prompt: string; hint?: string; onSuccess: (email: string, token: string) => void; onFail: () => void }) => {
@@ -203,15 +215,14 @@ export default function LoginGate({ onApproved }: Props) {
     requestGoogleToken({
       prompt: '',
       hint: savedEmail,
-      onSuccess: (email, token) => {
+      onSuccess: async (email, token) => {
         if (email.toLowerCase() !== savedEmail.toLowerCase()) {
-          // 이메일 불일치 → 정상 로그인으로
           sessionStorage.removeItem(SESSION_KEY);
           setStep('idle');
           return;
         }
-        // 세션 내 재인증 성공 → PIN 없이 바로 진입
-        onApproved(email, token);
+        const { name, feature1, feature2, feature3 } = await checkApproval(email);
+        onApproved(email, token, { name, feature1, feature2, feature3 });
       },
       onFail: () => {
         sessionStorage.removeItem(SESSION_KEY);
@@ -231,11 +242,12 @@ export default function LoginGate({ onApproved }: Props) {
         setUserEmail(email);
         setUserToken(token);
 
-        const { approved, needsReset, adminPin } = await checkApproval(email);
+        const { approved, needsReset, adminPin, name, feature1, feature2, feature3 } = await checkApproval(email);
         if (!approved) {
           setStep('pending');
           return;
         }
+        featuresRef.current = { name, feature1, feature2, feature3 };
 
         if (needsReset) {
           const adminHash = hashPin(adminPin);
@@ -272,7 +284,7 @@ export default function LoginGate({ onApproved }: Props) {
     if (verifyPin(finalPin, userEmail)) {
       setPinError('');
       sessionStorage.setItem(SESSION_KEY, userEmail);
-      onApproved(userEmail, userToken);
+      onApproved(userEmail, userToken, featuresRef.current);
     } else {
       setPinError('비밀번호가 틀렸습니다.');
       setPinDigits(['', '', '', '']);
