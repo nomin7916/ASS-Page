@@ -2720,6 +2720,18 @@ export default function App() {
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, name } : p));
   };
 
+  const movePortfolio = (id, direction) => {
+    setPortfolios(prev => {
+      const idx = prev.findIndex(p => p.id === id);
+      if (idx === -1) return prev;
+      const newIdx = idx + direction;
+      if (newIdx < 0 || newIdx >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
+  };
+
   const handleIntChartMouseDown = (e) => {
     if (e && e.activeLabel) {
       setIntIsDragging(true);
@@ -3625,6 +3637,7 @@ export default function App() {
                 <table className="w-full text-xs whitespace-nowrap">
                   <thead className="bg-[#0f172a] text-gray-400 border-b border-gray-700">
                     <tr>
+                      <th className="py-2 px-2 text-center border-r border-gray-700">순서</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">시작일</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">계좌</th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">총 자산(평가금액)</th>
@@ -3640,12 +3653,18 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {portfolioSummaries.map(s => {
+                    {portfolioSummaries.map((s, sIdx) => {
                       const allocRatio = intTotals.totalEval > 0 ? s.currentEval / intTotals.totalEval * 100 : 0;
                       const isCatOpen = intExpandedCat === s.id;
                       return (
                         <React.Fragment key={s.id}>
                           <tr className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : 'hover:bg-gray-800/40'}`}>
+                            <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                              <div className="flex flex-col items-center gap-0.5">
+                                <button onClick={() => movePortfolio(s.id, -1)} disabled={sIdx === 0} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="위로">▲</button>
+                                <button onClick={() => movePortfolio(s.id, 1)} disabled={sIdx === portfolioSummaries.length - 1} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="아래로">▼</button>
+                              </div>
+                            </td>
                             <td className="py-1.5 px-3 text-center border-r border-gray-700">
                               <CustomDatePicker value={s.startDate} onChange={v => updatePortfolioStartDate(s.id, v)} />
                             </td>
@@ -3683,7 +3702,7 @@ export default function App() {
                           </tr>
                           {isCatOpen && Object.keys(s.cats).length > 0 && (
                             <tr className="bg-gray-800/30 border-b border-gray-700">
-                              <td colSpan={12} className="py-3 px-4">
+                              <td colSpan={13} className="py-3 px-4">
                                 <div className="text-[11px] text-gray-400 font-bold mb-2">📊 {s.name} - 구분별 평가금액</div>
                                 <div className="flex flex-wrap gap-x-6 gap-y-2">
                                   {Object.entries(s.cats).filter(([,v]) => v > 0).map(([cat, val]) => (
@@ -3701,11 +3720,12 @@ export default function App() {
                       );
                     })}
                     {portfolioSummaries.length === 0 && (
-                      <tr><td colSpan={12} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                      <tr><td colSpan={13} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
                     )}
                   </tbody>
                   <tfoot className="border-t-2 border-red-700 bg-red-900/20">
                     <tr>
+                      <td className="py-2 px-2 border-r border-gray-700"></td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
                       <td className="py-2 px-3 text-center text-red-400 font-extrabold border-r border-gray-700">소 계</td>
                       <td className="py-2 px-3 text-right text-yellow-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalEval)}</td>

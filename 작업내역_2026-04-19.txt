@@ -1,0 +1,64 @@
+================================================================================
+  ASS-Page 작업 내역
+  작성일: 2026-04-19
+================================================================================
+
+
+■ 이번 대화에서 진행한 작업 목록
+────────────────────────────────────────────────────────────────────────────────
+
+1. 관리자 뷰 UI 디자인 개선
+   ──────────────────────────
+   변경 전:
+   - 상단 고정 배너: 강렬한 주황색 (bg-orange-900/95, border-orange-600)
+   - 버튼: bg-orange-700 solid 스타일
+   - 전체적으로 눈에 너무 튀는 배너 디자인
+
+   변경 후:
+   - 배경: bg-gray-900/98 + backdrop-blur-sm (다크 테마에 자연스럽게 녹아듦)
+   - 테두리: 미세한 border-gray-700
+   - 텍스트: 색상 계층 분리
+     · 레이블("관리자 뷰"): text-gray-500 (흐리게)
+     · 이메일: text-gray-200 font-medium (강조)
+     · "읽기 전용": 작은 대문자 힌트 (text-[10px] uppercase tracking-wider)
+   - 버튼: outlined 스타일 (border-gray-700, bg-gray-800) → "← 관리자 페이지"
+
+   수정 파일: src/App.tsx (adminViewingAs 배너 렌더링 영역)
+
+
+2. 관리자 뷰에서 데이터 저장 경로 버그 수정
+   ──────────────────────────────────────────
+   문제 현상:
+   - 관리자가 사용자의 대시보드에 접속하여 포트폴리오를 수정하면
+     사용자의 Google Drive가 아닌 관리자 계정에 데이터가 저장되는 문제
+
+   원인 분석:
+   [버그 1] localStorage 키 오류
+   - 기존: localStorage.setItem(`portfolioState_v5_${authUser.email}`, ...)
+     → authUser는 항상 관리자 이메일 → 관리자의 localStorage에 덮어쓰기
+   - 수정: const stateEmail = adminViewingAsRef.current || authUser.email
+     → 관리자 뷰 중에는 해당 사용자 이메일 키로 저장
+
+   [버그 2] Drive 자동저장 미구현
+   - 기존: 포트폴리오 편집 시 saveStateRef.current만 업데이트
+     Drive 저장은 20분 타이머 / 수동 백업 버튼 클릭 시에만 발생
+     → 새 계좌 추가, 종목 수정 등의 변경사항이 Drive에 즉시 반영되지 않음
+   - 수정: 상태 변경 useEffect 내에 2초 디바운스 Drive 자동저장 추가
+     · isInitialLoad.current === false (초기 로드 완료 후)일 때만 동작
+     · driveSaveTimerRef로 빠른 연속 변경 시 불필요한 저장 방지
+     · driveTokenRef.current = 사용자 토큰이므로 사용자 Drive에 정상 저장
+
+   수정 파일: src/App.tsx
+   - driveSaveTimerRef useRef 추가 (line ~509)
+   - 상태 스냅샷 useEffect 수정 (localStorage 키, Drive 자동저장 로직 추가)
+
+
+■ 수정된 파일 목록
+────────────────────────────────────────────────────────────────────────────────
+
+  src/App.tsx      관리자 뷰 배너 UI 개선 (주황 → 다크 미니멀 스타일)
+                   localStorage 저장 키 오류 수정 (관리자→사용자 이메일 키)
+                   포트폴리오 편집 시 Drive 자동저장 추가 (2초 디바운스)
+                   driveSaveTimerRef 추가
+
+================================================================================
