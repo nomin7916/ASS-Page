@@ -2921,7 +2921,7 @@ export default function App() {
           <button
             onClick={() => setShowIntegratedDashboard(true)}
             className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
-          >🏦 통합 대시보드</button>
+          >🏦 총 자산 현황</button>
           {portfolios.map(p => (
             <button
               key={p.id}
@@ -3675,7 +3675,6 @@ export default function App() {
                                 value={s.name}
                                 onChange={e => updatePortfolioName(s.id, e.target.value)}
                               />
-                              {s.isActive && <span className="ml-1 text-[9px] text-blue-500 font-bold">●활성</span>}
                             </td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-right font-bold text-white">{formatCurrency(s.currentEval)}</td>
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-right font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
