@@ -269,24 +269,30 @@ const GoldPortfolioTable = ({
                       </td>
                       <td className="p-0 border-r border-gray-600 bg-blue-900/10">
                         <input
-                          type="text"
+                          type="number"
                           className="w-full bg-transparent outline-none text-right text-blue-200 font-bold text-[12px] py-2 px-3 focus:bg-blue-800/40"
-                          value={getEditValue(item.id, 'purchasePrice', formatNumber(item.purchasePrice))}
-                          onFocus={e => { setEditValues(prev => ({ ...prev, [`${item.id}-purchasePrice`]: String(cleanNum(item.purchasePrice) || '') })); e.target.select(); }}
+                          value={getEditValue(item.id, 'purchasePrice', cleanNum(item.purchasePrice) || '')}
+                          onFocus={e => e.target.select()}
                           onChange={e => handleEditChange(item.id, 'purchasePrice', e.target.value)}
                           onBlur={e => handleEditBlur(item.id, 'purchasePrice', e.target.value)}
                           onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')}
+                          placeholder="0"
+                          min="0"
+                          step="any"
                         />
                       </td>
                       <td className="p-0 border-r border-gray-600 bg-blue-900/10">
                         <input
-                          type="text"
+                          type="number"
                           className="w-full bg-transparent outline-none text-center text-blue-200 font-bold text-[12px] py-2 px-2 focus:bg-blue-800/40"
-                          value={getEditValue(item.id, 'quantity', formatNumber(item.quantity))}
-                          onFocus={e => { setEditValues(prev => ({ ...prev, [`${item.id}-quantity`]: String(cleanNum(item.quantity) || '') })); e.target.select(); }}
+                          value={getEditValue(item.id, 'quantity', cleanNum(item.quantity) || '')}
+                          onFocus={e => e.target.select()}
                           onChange={e => handleEditChange(item.id, 'quantity', e.target.value)}
                           onBlur={e => handleEditBlur(item.id, 'quantity', e.target.value)}
                           onKeyDown={e => handleTableKeyDown(e, 'quantity')}
+                          placeholder="0"
+                          min="0"
+                          step="any"
                         />
                       </td>
                       <td className="py-2 px-3 border-r border-gray-600 bg-blue-900/10 text-right text-blue-200 font-bold text-[12px]">
