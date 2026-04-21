@@ -40,7 +40,13 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               return (
                 <tr key={item.id} className="hover:bg-gray-800/40 transition-colors border-b border-gray-700">
                   <td className="p-0 border-r border-gray-600">
-                    <select className={`w-full h-full bg-transparent text-center text-xs outline-none font-bold cursor-pointer ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'}`} value={item.category} onChange={e => onUpdate(item.id, 'category', e.target.value)}>
+                    <select className={`w-full h-full bg-transparent text-center text-xs outline-none font-bold cursor-pointer ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'}`} value={item.category} onChange={e => onUpdate(item.id, 'category', e.target.value)} onPaste={e => {
+                      e.preventDefault();
+                      const pasted = e.clipboardData.getData('text').trim().replace(/\s/g, '');
+                      const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
+                      const match = validCats.find(c => c.replace(/\s/g, '') === pasted) || validCats.find(c => pasted.includes(c.replace(/\s/g, '')));
+                      if (match) onUpdate(item.id, 'category', match);
+                    }}>
                       {Object.keys(UI_CONFIG.COLORS.CATEGORIES).map(c => <option key={c} value={c} className="bg-gray-800 text-white">{c}</option>)}
                     </select>
                   </td>

@@ -1247,7 +1247,8 @@ export default function App() {
     if (!portfolioStartDate || principal <= 0 || totals.totalEval <= 0) return 0;
     const days = (new Date() - new Date(portfolioStartDate)) / (1000 * 60 * 60 * 24);
     if (days <= 0) return 0;
-    return (Math.pow(totals.totalEval / principal, 1 / Math.max(days / 365.25, 1)) - 1) * 100;
+    if (days < 365) return (totals.totalEval / principal - 1) * 100;
+    return (Math.pow(totals.totalEval / principal, 1 / (days / 365.25)) - 1) * 100;
   }, [portfolioStartDate, principal, totals.totalEval]);
 
   const sortedHistoryDesc = useMemo(() => [...history].sort((a, b) => new Date(b.date) - new Date(a.date)), [history]);
@@ -1424,7 +1425,10 @@ export default function App() {
       const returnRate = prin > 0 ? (totalEval - prin) / prin * 100 : 0;
       const days = startDate ? (Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24) : 0;
       const cagr = prin > 0 && totalEval > 0 && days > 0
-        ? (Math.pow(totalEval / prin, 365.25 / Math.max(days, 1)) - 1) * 100 : 0;
+        ? days < 365
+          ? (totalEval / prin - 1) * 100
+          : (Math.pow(totalEval / prin, 365.25 / days) - 1) * 100
+        : 0;
       return { id: p.id, name, startDate, currentEval: totalEval, principal: prin, depositAmount: depositAmt, returnRate, cagr, cats, isActive };
     });
   }, [portfolios, activePortfolioId, portfolio, principal, portfolioStartDate, title]);
@@ -3081,7 +3085,7 @@ export default function App() {
               <div className="flex h-auto py-1.5 border-b border-gray-700"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold">시작일</span></div><div className="flex-1 p-2 flex items-center bg-gray-800/20"><input type="date" value={portfolioStartDate} onChange={e => setPortfolioStartDate(e.target.value)} className="bg-transparent text-gray-200 font-bold outline-none cursor-text text-right w-full text-xs" /></div></div>
               <div className="flex h-auto py-1.5 border-b border-gray-700"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold">입금액</span></div><div className="flex-1 p-2 flex items-center bg-gray-800/20"><input type="text" className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-gray-400 font-bold outline-none px-2 py-1.5 text-xs" placeholder="Enter to apply" onKeyDown={e => { if (e.key === 'Enter') { const v = cleanNum(e.target.value); setPrincipal(p => p + v); setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: v, memo: "수동입금" }, ...depositHistory]); e.target.value = ""; } }} /></div></div>
               <div className="flex h-[50px] border-b border-gray-700 shrink-0"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold">투자 원금</span></div><div className="flex-1 p-2 flex items-center bg-gray-800/20"><input type="text" className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-white font-bold outline-none px-2 py-1 text-xs" value={formatNumber(principal)} onChange={e => setPrincipal(cleanNum(e.target.value))} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></div></div>
-              <div className="flex h-auto py-1.5 border-b border-gray-700"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold" title="연평균 성장률(CAGR)">CAGR</span></div><div className="flex-1 p-2 flex items-center justify-end bg-gray-800/20"><span className="font-bold text-blue-300 text-sm">{formatPercent(cagr)}</span></div></div>
+              <div className="flex h-auto py-1.5 border-b border-gray-700"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold" title="1년 미만: 총수익율 / 1년 이상: CAGR(연평균 성장률)">CAGR</span></div><div className="flex-1 p-2 flex items-center justify-end bg-gray-800/20"><span className="font-bold text-blue-300 text-sm">{formatPercent(cagr)}</span></div></div>
               <div className="flex flex-1 min-h-[80px]"><div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 gap-2 shrink-0"><span className="text-[11px] text-gray-400 font-bold">수익률</span><span className="text-[11px] text-gray-400 font-bold">수익금</span></div><div className="flex-1 flex flex-col items-center justify-center bg-gray-900/40 gap-1 p-2 overflow-hidden"><span className={`text-[24px] font-extrabold leading-none tracking-wide whitespace-nowrap ${totals.totalEval - principal >= 0 ? 'text-red-500' : 'text-blue-500'}`}>{formatPercent(principal > 0 ? (totals.totalEval - principal) / principal * 100 : 0)}</span><span className={`text-[14px] font-bold tracking-wide whitespace-nowrap ${totals.totalEval - principal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(totals.totalEval - principal)}</span></div></div>
             </div>
           </div>
@@ -3642,7 +3646,7 @@ export default function App() {
                       <th className="py-2 px-3 text-center border-r border-gray-700">계좌</th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">총 자산(평가금액)</th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">원금 대비 수익율</th>
-                      <th className="py-2 px-3 text-right border-r border-gray-700">연수익율(CAGR)</th>
+                      <th className="py-2 px-3 text-right border-r border-gray-700">수익율<br/><span className="text-[9px] text-gray-500 font-normal">1년미만:총수익율/이상:CAGR</span></th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">투자비율</th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">투자원금</th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">예수금</th>
