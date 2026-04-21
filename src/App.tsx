@@ -1417,7 +1417,7 @@ export default function App() {
         const cagr = prin > 0 && evalAmount > 0 && days > 0
           ? days < 365 ? (evalAmount / prin - 1) * 100 : (Math.pow(evalAmount / prin, 365.25 / days) - 1) * 100
           : 0;
-        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: 0, returnRate, cagr, cats: {}, isActive: false, accountType: 'simple' };
+        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: 0, returnRate, cagr, cats: {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '' };
       }
 
       const items = isActive ? portfolio : (p.portfolio || []);
@@ -1442,7 +1442,7 @@ export default function App() {
           ? (totalEval / prin - 1) * 100
           : (Math.pow(totalEval / prin, 365.25 / days) - 1) * 100
         : 0;
-      return { id: p.id, name, startDate, currentEval: totalEval, principal: prin, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio' };
+      return { id: p.id, name, startDate, currentEval: totalEval, principal: prin, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '' };
     });
   }, [portfolios, activePortfolioId, portfolio, principal, portfolioStartDate, title]);
 
@@ -2701,7 +2701,6 @@ export default function App() {
     setDepositHistory2([]);
     setPortfolioStartDate(today);
     setSettings({ mode: 'rebalance', amount: 1000000 });
-    setShowIntegratedDashboard(false);
   };
 
   const addSimpleAccount = () => {
@@ -2769,6 +2768,14 @@ export default function App() {
   const updatePortfolioName = (id, name) => {
     if (id === activePortfolioId) setTitle(name);
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, name } : p));
+  };
+
+  const updatePortfolioColor = (id, rowColor) => {
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, rowColor } : p));
+  };
+
+  const updatePortfolioMemo = (id, memo) => {
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, memo } : p));
   };
 
   const movePortfolio = (id, direction) => {
@@ -2983,30 +2990,20 @@ export default function App() {
             ))}
           </div>
           {showIntegratedDashboard && (
-            <div className="flex items-center gap-1.5 pr-1 pb-0.5">
+            <div className="flex items-center gap-1 pr-1 pb-0.5">
               <button
                 onClick={refreshPrices}
                 title="새로고침 — 모든 계좌 종목가격·지수 데이터 갱신"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-700/80 hover:bg-teal-600 text-white text-xs font-bold rounded transition-colors border border-teal-600/40"
+                className="p-1.5 hover:bg-gray-800 rounded transition text-teal-400 hover:text-teal-300"
               >
-                <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
-                새로고침
+                <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
               </button>
               <button
                 onClick={handleDriveSave}
                 title="Google Drive에 전체 데이터 백업"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-700/80 hover:bg-indigo-600 text-white text-xs font-bold rounded transition-colors border border-indigo-600/40"
+                className="p-1.5 hover:bg-gray-800 rounded transition text-indigo-400 hover:text-indigo-300"
               >
-                <Save size={12} />
-                Drive 백업
-              </button>
-              <button
-                onClick={handleSave}
-                title="PC 파일(JSON)로 전체 데이터 백업 다운로드"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700/80 hover:bg-gray-600 text-white text-xs font-bold rounded transition-colors border border-gray-600/40"
-              >
-                <Download size={12} />
-                PC 백업
+                <Save size={14} />
               </button>
             </div>
           )}
@@ -3712,7 +3709,7 @@ export default function App() {
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
                 <div className="flex gap-1">
                   <button onClick={addPortfolio} className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded" title="포트폴리오를 구성해서 관리하는 계좌 추가">
-                    <Plus size={12} /> 포트폴리오
+                    <Plus size={12} /> 새 계좌
                   </button>
                   <button onClick={addSimpleAccount} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded" title="날짜·계좌·자산을 직접 입력하는 간단 계좌 추가">
                     <Plus size={12} /> 직접입력
@@ -3733,6 +3730,7 @@ export default function App() {
                       <th className="py-2 px-3 text-right border-r border-gray-700">투자원금</th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">예수금</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">현재 수익율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">비고</th>
                       <th className="py-2 px-2 text-center">삭제</th>
                     </tr>
                   </thead>
@@ -3743,23 +3741,35 @@ export default function App() {
                       const isSimple = s.accountType === 'simple';
                       return (
                         <React.Fragment key={s.id}>
-                          <tr className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40'}`}>
+                          <tr
+                            className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40'}`}
+                            style={s.rowColor ? { backgroundColor: s.rowColor + '33' } : undefined}
+                          >
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               <div className="flex flex-col items-center gap-0.5">
                                 <button onClick={() => movePortfolio(s.id, -1)} disabled={sIdx === 0} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="위로">▲</button>
                                 <button onClick={() => movePortfolio(s.id, 1)} disabled={sIdx === portfolioSummaries.length - 1} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="아래로">▼</button>
+                                <label title="행 색상 변경" className="cursor-pointer leading-none" style={{ color: s.rowColor || '#4b5563' }}>
+                                  <span className="text-[10px]">●</span>
+                                  <input type="color" className="sr-only" value={s.rowColor || '#1e293b'} onChange={e => updatePortfolioColor(s.id, e.target.value)} />
+                                </label>
                               </div>
                             </td>
                             <td className="py-1.5 px-3 text-center border-r border-gray-700">
                               <CustomDatePicker value={s.startDate} onChange={v => updatePortfolioStartDate(s.id, v)} />
                             </td>
                             <td className="py-1.5 px-3 border-r border-gray-700">
-                              <input
-                                type="text"
-                                className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center ${isSimple ? 'text-green-300' : 'text-blue-300'}`}
-                                value={s.name}
-                                onChange={e => updatePortfolioName(s.id, e.target.value)}
-                              />
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center ${isSimple ? 'text-green-300' : 'text-blue-300'}`}
+                                  value={s.name}
+                                  onChange={e => updatePortfolioName(s.id, e.target.value)}
+                                />
+                                {!isSimple && (
+                                  <button onClick={() => switchToPortfolio(s.id)} title="이 계좌 페이지로 이동" className="text-gray-500 hover:text-blue-400 transition-colors shrink-0 text-xs">→</button>
+                                )}
+                              </div>
                             </td>
                             {/* 직접입력형: 평가금액 직접 수정 가능 */}
                             <td className="py-1.5 px-3 border-r border-gray-700 text-right font-bold text-white">
@@ -3802,13 +3812,22 @@ export default function App() {
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               <span className={`inline-block px-2 py-0.5 rounded font-bold ${s.returnRate > 0 ? 'bg-red-900/40 text-red-300' : s.returnRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{s.returnRate.toFixed(1)}%</span>
                             </td>
+                            <td className="py-1.5 px-2 border-r border-gray-700">
+                              <input
+                                type="text"
+                                className="w-full min-w-[80px] bg-transparent outline-none text-gray-400 text-xs placeholder-gray-600"
+                                value={s.memo}
+                                onChange={e => updatePortfolioMemo(s.id, e.target.value)}
+                                placeholder="메모..."
+                              />
+                            </td>
                             <td className="py-1.5 px-2 text-center">
                               <button onClick={() => deletePortfolio(s.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                             </td>
                           </tr>
                           {isCatOpen && Object.keys(s.cats).length > 0 && (
                             <tr className="bg-gray-800/30 border-b border-gray-700">
-                              <td colSpan={11} className="py-3 px-4">
+                              <td colSpan={12} className="py-3 px-4">
                                 <div className="text-[11px] text-gray-400 font-bold mb-2">📊 {s.name} - 구분별 평가금액</div>
                                 <div className="flex flex-wrap gap-x-6 gap-y-2">
                                   {Object.entries(s.cats).filter(([,v]) => v > 0).map(([cat, val]) => (
@@ -3826,7 +3845,7 @@ export default function App() {
                       );
                     })}
                     {portfolioSummaries.length === 0 && (
-                      <tr><td colSpan={11} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                      <tr><td colSpan={12} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
                     )}
                   </tbody>
                   <tfoot className="border-t-2 border-red-700 bg-red-900/20">
@@ -3840,7 +3859,7 @@ export default function App() {
                       <td className="py-2 px-3 text-right text-gray-300 border-r border-gray-700">100%</td>
                       <td className="py-2 px-3 text-right text-gray-200 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalPrincipal)}</td>
                       <td className="py-2 px-3 text-right text-gray-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalDeposit)}</td>
-                      <td colSpan={2}></td>
+                      <td colSpan={3}></td>
                     </tr>
                   </tfoot>
                 </table>
