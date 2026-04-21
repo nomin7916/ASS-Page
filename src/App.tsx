@@ -1404,10 +1404,23 @@ export default function App() {
   const portfolioSummaries = useMemo(() => {
     return portfolios.map(p => {
       const isActive = p.id === activePortfolioId;
-      const items = isActive ? portfolio : (p.portfolio || []);
-      const prin = isActive ? principal : (p.principal || 0);
       const startDate = isActive ? portfolioStartDate : (p.startDate || p.portfolioStartDate || '');
       const name = isActive ? title : p.name;
+      const days = startDate ? (Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24) : 0;
+
+      // 직접입력형 계좌: evalAmount와 principal을 직접 사용
+      if (p.accountType === 'simple') {
+        const evalAmount = cleanNum(p.evalAmount) || 0;
+        const prin = cleanNum(p.principal) || 0;
+        const returnRate = prin > 0 ? (evalAmount - prin) / prin * 100 : 0;
+        const cagr = prin > 0 && evalAmount > 0 && days > 0
+          ? days < 365 ? (evalAmount / prin - 1) * 100 : (Math.pow(evalAmount / prin, 365.25 / days) - 1) * 100
+          : 0;
+        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: 0, returnRate, cagr, cats: {}, isActive: false, accountType: 'simple' };
+      }
+
+      const items = isActive ? portfolio : (p.portfolio || []);
+      const prin = isActive ? principal : (p.principal || 0);
       let totalEval = 0, depositAmt = 0;
       const cats = {};
       items.forEach(item => {
@@ -1423,13 +1436,12 @@ export default function App() {
         }
       });
       const returnRate = prin > 0 ? (totalEval - prin) / prin * 100 : 0;
-      const days = startDate ? (Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24) : 0;
       const cagr = prin > 0 && totalEval > 0 && days > 0
         ? days < 365
           ? (totalEval / prin - 1) * 100
           : (Math.pow(totalEval / prin, 365.25 / days) - 1) * 100
         : 0;
-      return { id: p.id, name, startDate, currentEval: totalEval, principal: prin, depositAmount: depositAmt, returnRate, cagr, cats, isActive };
+      return { id: p.id, name, startDate, currentEval: totalEval, principal: prin, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio' };
     });
   }, [portfolios, activePortfolioId, portfolio, principal, portfolioStartDate, title]);
 
@@ -2673,6 +2685,7 @@ export default function App() {
     const today = new Date().toISOString().split('T')[0];
     const newP = {
       id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
+      accountType: 'portfolio',
       portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
       principal: 0, history: [], depositHistory: [], depositHistory2: [],
       settings: { mode: 'rebalance', amount: 1000000 },
@@ -2688,6 +2701,29 @@ export default function App() {
     setPortfolioStartDate(today);
     setSettings({ mode: 'rebalance', amount: 1000000 });
     setShowIntegratedDashboard(false);
+  };
+
+  const addSimpleAccount = () => {
+    const updated = portfolios.map(p =>
+      p.id === activePortfolioId
+        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        : p
+    );
+    const newId = generateId();
+    const today = new Date().toISOString().split('T')[0];
+    const newP = {
+      id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
+      accountType: 'simple',
+      evalAmount: 0,
+      portfolio: [], principal: 0, history: [], depositHistory: [], depositHistory2: [],
+      settings: { mode: 'rebalance', amount: 1000000 },
+    };
+    setPortfolios([...updated, newP]);
+    // 통합 대시보드에 머물기
+  };
+
+  const updateSimpleAccountField = (id, field, val) => {
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, [field]: cleanNum(val) } : p));
   };
 
   const deletePortfolio = (id) => {
@@ -2926,7 +2962,7 @@ export default function App() {
             onClick={() => setShowIntegratedDashboard(true)}
             className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
           >🏦 총 자산 현황</button>
-          {portfolios.map(p => (
+          {portfolios.filter(p => p.accountType !== 'simple').map(p => (
             <button
               key={p.id}
               onClick={() => switchToPortfolio(p.id)}
@@ -3633,9 +3669,14 @@ export default function App() {
             <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg">
               <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
-                <button onClick={addPortfolio} className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded">
-                  <Plus size={12} /> 계좌 추가
-                </button>
+                <div className="flex gap-1">
+                  <button onClick={addPortfolio} className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded" title="포트폴리오를 구성해서 관리하는 계좌 추가">
+                    <Plus size={12} /> 포트폴리오
+                  </button>
+                  <button onClick={addSimpleAccount} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded" title="날짜·계좌·자산을 직접 입력하는 간단 계좌 추가">
+                    <Plus size={12} /> 직접입력
+                  </button>
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs whitespace-nowrap">
@@ -3660,9 +3701,10 @@ export default function App() {
                     {portfolioSummaries.map((s, sIdx) => {
                       const allocRatio = intTotals.totalEval > 0 ? s.currentEval / intTotals.totalEval * 100 : 0;
                       const isCatOpen = intExpandedCat === s.id;
+                      const isSimple = s.accountType === 'simple';
                       return (
                         <React.Fragment key={s.id}>
-                          <tr className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : 'hover:bg-gray-800/40'}`}>
+                          <tr className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40'}`}>
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               <div className="flex flex-col items-center gap-0.5">
                                 <button onClick={() => movePortfolio(s.id, -1)} disabled={sIdx === 0} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="위로">▲</button>
@@ -3675,29 +3717,59 @@ export default function App() {
                             <td className="py-1.5 px-3 border-r border-gray-700">
                               <input
                                 type="text"
-                                className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-blue-300"
+                                className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center ${isSimple ? 'text-green-300' : 'text-blue-300'}`}
                                 value={s.name}
                                 onChange={e => updatePortfolioName(s.id, e.target.value)}
                               />
                             </td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right font-bold text-white">{formatCurrency(s.currentEval)}</td>
+                            {/* 직접입력형: 평가금액 직접 수정 가능 */}
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right font-bold text-white">
+                              {isSimple ? (
+                                <input
+                                  type="number"
+                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-right text-white border-b border-dashed border-gray-600 focus:border-green-400"
+                                  value={s.currentEval || ''}
+                                  placeholder="0"
+                                  onChange={e => updateSimpleAccountField(s.id, 'evalAmount', e.target.value)}
+                                />
+                              ) : formatCurrency(s.currentEval)}
+                            </td>
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-right font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-right text-blue-300 font-bold">{formatPercent(s.cagr)}</td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-300">{allocRatio.toFixed(2)}%</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-200 font-bold">{formatCurrency(s.principal)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-400 font-bold">{formatCurrency(s.depositAmount)}</td>
+                            {/* 직접입력형: 투자원금 직접 수정 가능 */}
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-200 font-bold">
+                              {isSimple ? (
+                                <input
+                                  type="number"
+                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-right text-gray-200 border-b border-dashed border-gray-600 focus:border-green-400"
+                                  value={s.principal || ''}
+                                  placeholder="0"
+                                  onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value)}
+                                />
+                              ) : formatCurrency(s.principal)}
+                            </td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-400 font-bold">{isSimple ? '-' : formatCurrency(s.depositAmount)}</td>
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               <span className={`inline-block px-2 py-0.5 rounded font-bold ${s.returnRate > 0 ? 'bg-red-900/40 text-red-300' : s.returnRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{s.returnRate.toFixed(1)}%</span>
                             </td>
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                              <button onClick={() => setIntExpandedCat(isCatOpen ? null : s.id)} className={`text-sm p-0.5 rounded transition-colors ${isCatOpen ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`} title="구분별 현황">▸</button>
+                              {isSimple ? (
+                                <span className="text-[10px] text-green-600 font-bold px-1" title="직접입력형 계좌">직접</span>
+                              ) : (
+                                <button onClick={() => setIntExpandedCat(isCatOpen ? null : s.id)} className={`text-sm p-0.5 rounded transition-colors ${isCatOpen ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`} title="구분별 현황">▸</button>
+                              )}
                             </td>
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                              <button
-                                onClick={() => switchToPortfolio(s.id)}
-                                className="text-gray-500 hover:text-blue-400 transition-colors text-[11px] font-bold px-1"
-                                title="포트폴리오 편집"
-                              >✏️</button>
+                              {isSimple ? (
+                                <span className="text-gray-600 text-[10px]">—</span>
+                              ) : (
+                                <button
+                                  onClick={() => switchToPortfolio(s.id)}
+                                  className="text-gray-500 hover:text-blue-400 transition-colors text-[11px] font-bold px-1"
+                                  title="포트폴리오 편집"
+                                >✏️</button>
+                              )}
                             </td>
                             <td className="py-1.5 px-2 text-center">
                               <button onClick={() => deletePortfolio(s.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
