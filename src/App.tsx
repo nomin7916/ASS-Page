@@ -525,6 +525,7 @@ export default function App() {
   const [intIsZeroBaseMode, setIntIsZeroBaseMode] = useState(true);
   const [intExpandedCat, setIntExpandedCat] = useState(null);
   const [simpleEditField, setSimpleEditField] = useState<{id: string, field: string} | null>(null);
+  const [showNewAccountMenu, setShowNewAccountMenu] = useState(false);
 
   // Drive 폴더 ID 캐시 확보 (없으면 생성)
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -2676,7 +2677,7 @@ export default function App() {
     setShowIntegratedDashboard(false);
   };
 
-  const addPortfolio = () => {
+  const addPortfolio = (accountType = 'portfolio') => {
     const updated = portfolios.map(p =>
       p.id === activePortfolioId
         ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
@@ -2684,9 +2685,13 @@ export default function App() {
     );
     const newId = generateId();
     const today = new Date().toISOString().split('T')[0];
+    const ACCOUNT_TYPE_NAMES = {
+      'portfolio': '일반 증권', 'isa': 'ISA', 'dc-irp': '퇴직연금',
+      'gold': '금현물', 'pension': '연금저축', 'dividend': '배당형', 'crypto': 'CRYPTO',
+    };
     const newP = {
-      id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
-      accountType: 'portfolio',
+      id: newId, name: ACCOUNT_TYPE_NAMES[accountType] || '새 계좌', startDate: today, portfolioStartDate: today,
+      accountType,
       portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
       principal: 0, history: [], depositHistory: [], depositHistory2: [],
       settings: { mode: 'rebalance', amount: 1000000 },
@@ -3719,10 +3724,39 @@ export default function App() {
             <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg">
               <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
-                <div className="flex gap-1">
-                  <button onClick={addPortfolio} className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded" title="포트폴리오를 구성해서 관리하는 계좌 추가">
-                    <Plus size={12} /> 새 계좌
-                  </button>
+                <div className="flex gap-1 items-center">
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowNewAccountMenu(v => !v)}
+                      className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded"
+                    >
+                      <Plus size={12} /> 새 계좌 <span className="text-[9px] opacity-60">▼</span>
+                    </button>
+                    {showNewAccountMenu && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowNewAccountMenu(false)} />
+                        <div className="absolute right-0 top-full mt-1 z-50 bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl py-1 min-w-[160px]">
+                          {[
+                            { type: 'portfolio', icon: '📊', label: '일반 증권 계좌' },
+                            { type: 'isa',       icon: '🏛️', label: 'ISA 계좌' },
+                            { type: 'dc-irp',    icon: '🏢', label: '퇴직연금 (DC/IRP)' },
+                            { type: 'gold',      icon: '🥇', label: '금현물 계좌' },
+                            { type: 'pension',   icon: '💰', label: '연금저축 계좌' },
+                            { type: 'dividend',  icon: '💸', label: '배당형 계좌' },
+                            { type: 'crypto',    icon: '₿',  label: 'CRYPTO 계좌' },
+                          ].map(({ type, icon, label }) => (
+                            <button
+                              key={type}
+                              onClick={() => { addPortfolio(type); setShowNewAccountMenu(false); }}
+                              className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-blue-900/30 hover:text-white transition-colors flex items-center gap-2"
+                            >
+                              <span>{icon}</span> {label}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
                   <button onClick={addSimpleAccount} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded" title="날짜·계좌·자산을 직접 입력하는 간단 계좌 추가">
                     <Plus size={12} /> 직접입력
                   </button>
