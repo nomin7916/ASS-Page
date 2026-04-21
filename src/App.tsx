@@ -2968,18 +2968,48 @@ export default function App() {
         </div>
 
         {/* 뷰 전환 탭 */}
-        <div className="flex gap-1 border-b border-gray-700/50 flex-wrap">
-          <button
-            onClick={() => setShowIntegratedDashboard(true)}
-            className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
-          >🏦 총 자산 현황</button>
-          {portfolios.filter(p => p.accountType !== 'simple').map(p => (
+        <div className="flex items-center justify-between border-b border-gray-700/50 flex-wrap gap-y-1">
+          <div className="flex gap-1 flex-wrap">
             <button
-              key={p.id}
-              onClick={() => switchToPortfolio(p.id)}
-              className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${!showIntegratedDashboard && activePortfolioId === p.id ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
-            >📊 {(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
-          ))}
+              onClick={() => setShowIntegratedDashboard(true)}
+              className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+            >🏦 총 자산 현황</button>
+            {portfolios.filter(p => p.accountType !== 'simple').map(p => (
+              <button
+                key={p.id}
+                onClick={() => switchToPortfolio(p.id)}
+                className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${!showIntegratedDashboard && activePortfolioId === p.id ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+              >📊 {(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
+            ))}
+          </div>
+          {showIntegratedDashboard && (
+            <div className="flex items-center gap-1.5 pr-1 pb-0.5">
+              <button
+                onClick={refreshPrices}
+                title="새로고침 — 모든 계좌 종목가격·지수 데이터 갱신"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-700/80 hover:bg-teal-600 text-white text-xs font-bold rounded transition-colors border border-teal-600/40"
+              >
+                <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+                새로고침
+              </button>
+              <button
+                onClick={handleDriveSave}
+                title="Google Drive에 전체 데이터 백업"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-700/80 hover:bg-indigo-600 text-white text-xs font-bold rounded transition-colors border border-indigo-600/40"
+              >
+                <Save size={12} />
+                Drive 백업
+              </button>
+              <button
+                onClick={handleSave}
+                title="PC 파일(JSON)로 전체 데이터 백업 다운로드"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700/80 hover:bg-gray-600 text-white text-xs font-bold rounded transition-colors border border-gray-600/40"
+              >
+                <Download size={12} />
+                PC 백업
+              </button>
+            </div>
+          )}
         </div>
 
         {/* 비밀번호 변경 모달 */}
