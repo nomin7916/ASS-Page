@@ -14,6 +14,7 @@ import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile } fro
 import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
+import GoldPortfolioTable from './components/GoldPortfolioTable';
 import MarketIndicators from './components/MarketIndicators';
 import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
@@ -3142,7 +3143,20 @@ export default function App() {
         {!showIntegratedDashboard && (<>
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoad={handleDriveLoad} onDriveLoadOnly={handleDriveLoadOnly} />
 
-        <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
+        {title.toUpperCase().includes('GOLD')
+          ? <GoldPortfolioTable
+              portfolio={totals.calcPortfolio}
+              marketIndicators={marketIndicators}
+              principal={principal}
+              onUpdate={handleUpdate}
+              onBlur={handleStockBlur}
+              onDelete={handleDeleteStock}
+              onAddStock={handleAddStock}
+              stockFetchStatus={stockFetchStatus}
+              onSingleRefresh={handleSingleStockRefresh}
+            />
+          : <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
+        }
 
         <div className="grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-6 w-full items-stretch">
           <div className="xl:col-span-4 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full">
