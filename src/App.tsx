@@ -2774,6 +2774,18 @@ export default function App() {
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, rowColor } : p));
   };
 
+  const resetAllPortfolioColors = () => {
+    setPortfolios(prev => prev.map(p => ({ ...p, rowColor: '' })));
+  };
+
+  const hexToRgba = (hex, alpha) => {
+    if (!hex || hex.length < 7) return null;
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
   const updatePortfolioMemo = (id, memo) => {
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, memo } : p));
   };
@@ -3720,13 +3732,13 @@ export default function App() {
                 <table className="w-full text-xs whitespace-nowrap">
                   <thead className="bg-[#0f172a] text-gray-400 border-b border-gray-700">
                     <tr>
-                      <th className="border-r border-gray-700" style={{width:'10px',minWidth:'10px'}}></th>
+                      <th className="border-r border-gray-700 cursor-pointer hover:bg-red-900/30 transition-colors" style={{width:'10px',minWidth:'10px'}} onClick={resetAllPortfolioColors} title="클릭하여 모든 행 색상 초기화"></th>
                       <th className="py-2 px-2 text-center border-r border-gray-700">순서</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">시작일</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">계좌</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">총 자산(평가금액)</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">원금 대비 수익율</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">수익율<br/><span className="text-[9px] text-gray-500 font-normal">1년미만:총수익율/이상:CAGR</span></th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">수익율 (CAGR)</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">투자비율</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">투자원금</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">예수금</th>
@@ -3742,12 +3754,24 @@ export default function App() {
                       const isSimple = s.accountType === 'simple';
                       return (
                         <React.Fragment key={s.id}>
-                          <tr className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40'}`}>
-                            {/* 색상 스트립 — 클릭하면 컬러피커 */}
+                          <tr
+                            className={`border-b border-gray-700 transition-colors ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40') : ''}`}
+                            style={s.rowColor ? { backgroundColor: hexToRgba(s.rowColor, 0.18) } : {}}
+                          >
+                            {/* 색상 스트립 — 색 없으면 클릭 시 피커 열기, 색 있으면 클릭 시 색상 제거 */}
                             <td className="p-0 border-r border-gray-700" style={{width:'10px',minWidth:'10px'}}>
-                              <label title="클릭하여 행 색상 변경" className="block w-full cursor-pointer" style={{minHeight:'32px', backgroundColor: s.rowColor || '#1e293b'}}>
-                                <input type="color" className="sr-only" value={s.rowColor || '#1e293b'} onChange={e => updatePortfolioColor(s.id, e.target.value)} />
-                              </label>
+                              {s.rowColor ? (
+                                <button
+                                  title="클릭하여 행 색상 제거"
+                                  className="block w-full cursor-pointer border-0 outline-none"
+                                  style={{minHeight:'32px', backgroundColor: s.rowColor}}
+                                  onClick={() => updatePortfolioColor(s.id, '')}
+                                />
+                              ) : (
+                                <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer" style={{minHeight:'32px', backgroundColor: '#334155'}}>
+                                  <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => updatePortfolioColor(s.id, e.target.value)} />
+                                </label>
+                              )}
                             </td>
                             {/* 순서 화살표 */}
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
