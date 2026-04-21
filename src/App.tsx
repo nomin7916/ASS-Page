@@ -3720,17 +3720,18 @@ export default function App() {
                 <table className="w-full text-xs whitespace-nowrap">
                   <thead className="bg-[#0f172a] text-gray-400 border-b border-gray-700">
                     <tr>
+                      <th className="border-r border-gray-700" style={{width:'10px',minWidth:'10px'}}></th>
                       <th className="py-2 px-2 text-center border-r border-gray-700">순서</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">시작일</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">계좌</th>
-                      <th className="py-2 px-3 text-right border-r border-gray-700">총 자산(평가금액)</th>
-                      <th className="py-2 px-3 text-right border-r border-gray-700">원금 대비 수익율</th>
-                      <th className="py-2 px-3 text-right border-r border-gray-700">수익율<br/><span className="text-[9px] text-gray-500 font-normal">1년미만:총수익율/이상:CAGR</span></th>
-                      <th className="py-2 px-3 text-right border-r border-gray-700">투자비율</th>
-                      <th className="py-2 px-3 text-right border-r border-gray-700">투자원금</th>
-                      <th className="py-2 px-3 text-right border-r border-gray-700">예수금</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">총 자산(평가금액)</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">원금 대비 수익율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">수익율<br/><span className="text-[9px] text-gray-500 font-normal">1년미만:총수익율/이상:CAGR</span></th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">투자비율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">투자원금</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">예수금</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">현재 수익율</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">비고</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700 min-w-[180px]">비고</th>
                       <th className="py-2 px-2 text-center">삭제</th>
                     </tr>
                   </thead>
@@ -3741,43 +3742,46 @@ export default function App() {
                       const isSimple = s.accountType === 'simple';
                       return (
                         <React.Fragment key={s.id}>
-                          <tr
-                            className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40'}`}
-                            style={s.rowColor ? { backgroundColor: s.rowColor + '33' } : undefined}
-                          >
+                          <tr className={`border-b border-gray-700 transition-colors ${s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40'}`}>
+                            {/* 색상 스트립 — 클릭하면 컬러피커 */}
+                            <td className="p-0 border-r border-gray-700" style={{width:'10px',minWidth:'10px'}}>
+                              <label title="클릭하여 행 색상 변경" className="block w-full cursor-pointer" style={{minHeight:'32px', backgroundColor: s.rowColor || '#1e293b'}}>
+                                <input type="color" className="sr-only" value={s.rowColor || '#1e293b'} onChange={e => updatePortfolioColor(s.id, e.target.value)} />
+                              </label>
+                            </td>
+                            {/* 순서 화살표 */}
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               <div className="flex flex-col items-center gap-0.5">
                                 <button onClick={() => movePortfolio(s.id, -1)} disabled={sIdx === 0} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="위로">▲</button>
                                 <button onClick={() => movePortfolio(s.id, 1)} disabled={sIdx === portfolioSummaries.length - 1} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="아래로">▼</button>
-                                <label title="행 색상 변경" className="cursor-pointer leading-none" style={{ color: s.rowColor || '#4b5563' }}>
-                                  <span className="text-[10px]">●</span>
-                                  <input type="color" className="sr-only" value={s.rowColor || '#1e293b'} onChange={e => updatePortfolioColor(s.id, e.target.value)} />
-                                </label>
                               </div>
                             </td>
                             <td className="py-1.5 px-3 text-center border-r border-gray-700">
                               <CustomDatePicker value={s.startDate} onChange={v => updatePortfolioStartDate(s.id, v)} />
                             </td>
-                            <td className="py-1.5 px-3 border-r border-gray-700">
-                              <div className="flex items-center gap-1">
+                            {/* 계좌 — 포트폴리오는 클릭 시 해당 페이지 이동 */}
+                            <td
+                              className={`py-1.5 px-3 text-center border-r border-gray-700 ${!isSimple ? 'cursor-pointer hover:bg-blue-900/20' : ''}`}
+                              onClick={!isSimple ? () => switchToPortfolio(s.id) : undefined}
+                            >
+                              {isSimple ? (
                                 <input
                                   type="text"
-                                  className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center ${isSimple ? 'text-green-300' : 'text-blue-300'}`}
+                                  className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300"
                                   value={s.name}
                                   onChange={e => updatePortfolioName(s.id, e.target.value)}
                                 />
-                                {!isSimple && (
-                                  <button onClick={() => switchToPortfolio(s.id)} title="이 계좌 페이지로 이동" className="text-gray-500 hover:text-blue-400 transition-colors shrink-0 text-xs">→</button>
-                                )}
-                              </div>
+                              ) : (
+                                <span className="font-bold text-blue-300 select-none">{s.name}</span>
+                              )}
                             </td>
                             {/* 직접입력형: 평가금액 직접 수정 가능 */}
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right font-bold text-white">
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center font-bold text-white">
                               {isSimple ? (
                                 <input
                                   type="text"
                                   inputMode="numeric"
-                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-right text-white border-b border-dashed border-gray-600 focus:border-green-400"
+                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-center text-white border-b border-dashed border-gray-600 focus:border-green-400"
                                   value={simpleEditField?.id === s.id && simpleEditField?.field === 'eval'
                                     ? (s.currentEval || '')
                                     : s.currentEval ? formatCurrency(s.currentEval) : ''}
@@ -3788,16 +3792,16 @@ export default function App() {
                                 />
                               ) : formatCurrency(s.currentEval)}
                             </td>
-                            <td className={`py-1.5 px-3 border-r border-gray-700 text-right font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-blue-300 font-bold">{formatPercent(s.cagr)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-300">{allocRatio.toFixed(2)}%</td>
+                            <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-blue-300 font-bold">{formatPercent(s.cagr)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300">{allocRatio.toFixed(2)}%</td>
                             {/* 직접입력형: 투자원금 직접 수정 가능 */}
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-200 font-bold">
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold">
                               {isSimple ? (
                                 <input
                                   type="text"
                                   inputMode="numeric"
-                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-right text-gray-200 border-b border-dashed border-gray-600 focus:border-green-400"
+                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-center text-gray-200 border-b border-dashed border-gray-600 focus:border-green-400"
                                   value={simpleEditField?.id === s.id && simpleEditField?.field === 'principal'
                                     ? (s.principal || '')
                                     : s.principal ? formatCurrency(s.principal) : ''}
@@ -3808,14 +3812,14 @@ export default function App() {
                                 />
                               ) : formatCurrency(s.principal)}
                             </td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-400 font-bold">{isSimple ? '-' : formatCurrency(s.depositAmount)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isSimple ? '-' : formatCurrency(s.depositAmount)}</td>
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               <span className={`inline-block px-2 py-0.5 rounded font-bold ${s.returnRate > 0 ? 'bg-red-900/40 text-red-300' : s.returnRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{s.returnRate.toFixed(1)}%</span>
                             </td>
                             <td className="py-1.5 px-2 border-r border-gray-700">
                               <input
                                 type="text"
-                                className="w-full min-w-[80px] bg-transparent outline-none text-gray-400 text-xs placeholder-gray-600"
+                                className="w-full bg-transparent outline-none text-gray-400 text-xs placeholder-gray-600"
                                 value={s.memo}
                                 onChange={e => updatePortfolioMemo(s.id, e.target.value)}
                                 placeholder="메모..."
@@ -3827,7 +3831,7 @@ export default function App() {
                           </tr>
                           {isCatOpen && Object.keys(s.cats).length > 0 && (
                             <tr className="bg-gray-800/30 border-b border-gray-700">
-                              <td colSpan={12} className="py-3 px-4">
+                              <td colSpan={13} className="py-3 px-4">
                                 <div className="text-[11px] text-gray-400 font-bold mb-2">📊 {s.name} - 구분별 평가금액</div>
                                 <div className="flex flex-wrap gap-x-6 gap-y-2">
                                   {Object.entries(s.cats).filter(([,v]) => v > 0).map(([cat, val]) => (
@@ -3845,21 +3849,22 @@ export default function App() {
                       );
                     })}
                     {portfolioSummaries.length === 0 && (
-                      <tr><td colSpan={12} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                      <tr><td colSpan={13} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
                     )}
                   </tbody>
                   <tfoot className="border-t-2 border-red-700 bg-red-900/20">
                     <tr>
+                      <td className="border-r border-gray-700"></td>
                       <td className="py-2 px-2 border-r border-gray-700"></td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
                       <td className="py-2 px-3 text-center text-red-400 font-extrabold border-r border-gray-700">소 계</td>
-                      <td className="py-2 px-3 text-right text-yellow-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalEval)}</td>
-                      <td className={`py-2 px-3 text-right font-bold border-r border-gray-700 ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(intTotals.returnRate)}</td>
+                      <td className="py-2 px-3 text-center text-yellow-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalEval)}</td>
+                      <td className={`py-2 px-3 text-center font-bold border-r border-gray-700 ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(intTotals.returnRate)}</td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
-                      <td className="py-2 px-3 text-right text-gray-300 border-r border-gray-700">100%</td>
-                      <td className="py-2 px-3 text-right text-gray-200 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalPrincipal)}</td>
-                      <td className="py-2 px-3 text-right text-gray-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalDeposit)}</td>
-                      <td colSpan={3}></td>
+                      <td className="py-2 px-3 text-center text-gray-300 border-r border-gray-700">100%</td>
+                      <td className="py-2 px-3 text-center text-gray-200 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalPrincipal)}</td>
+                      <td className="py-2 px-3 text-center text-gray-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalDeposit)}</td>
+                      <td colSpan={4}></td>
                     </tr>
                   </tfoot>
                 </table>
