@@ -94,13 +94,25 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     </div>
                   </td>
                   <td className="p-0 border-r border-gray-600">
-                    <input type="text" data-col="purchasePrice" className={`${inp} text-right px-3 text-gray-400`} value={formatNumber(item.purchasePrice)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'purchasePrice', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')} />
+                    <div className="w-full h-full py-3 px-3 text-right text-gray-400 font-bold text-[13px]">
+                      {formatNumber(cleanNum(item.quantity) > 0 ? Math.round(cleanNum(item.investAmount) / cleanNum(item.quantity)) : 0)}
+                    </div>
                   </td>
                   <td className="p-0 border-r border-gray-600 bg-blue-900/10">
-                    <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200`} value={formatNumber(item.quantity)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'quantity', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
+                    <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200`} value={formatNumber(item.quantity)} onFocus={e => e.target.select()} onChange={e => {
+                      const newQty = cleanNum(e.target.value);
+                      const invest = cleanNum(item.investAmount);
+                      onUpdate(item.id, 'quantity', e.target.value);
+                      onUpdate(item.id, 'purchasePrice', newQty > 0 ? Math.round(invest / newQty) : 0);
+                    }} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
                   </td>
                   <td className="p-0 border-r border-gray-600 bg-blue-900/10">
-                    <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
+                    <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => {
+                      const newInvest = cleanNum(e.target.value);
+                      const qty = cleanNum(item.quantity);
+                      onUpdate(item.id, 'investAmount', e.target.value);
+                      onUpdate(item.id, 'purchasePrice', qty > 0 ? Math.round(newInvest / qty) : 0);
+                    }} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
                   </td>
                   <td className={`${td} text-blue-300 bg-blue-900/10 text-center`}>{formatPercent(item.investRatio)}</td>
                   <td className={`${td} text-white font-bold text-right bg-[rgba(113,63,18,0.2)]`}>{formatCurrency(item.evalAmount)}</td>
