@@ -14,7 +14,6 @@ import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile } fro
 import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
-import GoldPortfolioTable from './components/GoldPortfolioTable';
 import MarketIndicators from './components/MarketIndicators';
 import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
@@ -749,53 +748,11 @@ export default function App() {
       statusMap['dxy'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
     },
     goldIntl: async (now, statusMap) => {
-      // 1차: stooq XAU/USD - 최근 7일 히스토리에서 최신값 추출 (CSV: Date,Open,High,Low,Close,Volume)
-      const stooqLatestFn = async (symbol: string, sourceName: string) => {
-        const d1 = (() => { const d = new Date(); d.setDate(d.getDate() - 10); return d.toISOString().split('T')[0].replace(/-/g, ''); })();
-        const d2 = new Date().toISOString().split('T')[0].replace(/-/g, '');
-        const url = `https://stooq.com/q/d/l/?s=${symbol}&d1=${d1}&d2=${d2}&i=d`;
-        for (const proxy of [
-          `/api/proxy?url=${encodeURIComponent(url)}`,
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-          `https://api.codetabs.com/v1/proxy?quest=${url}`,
-          `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-        ]) {
-          try {
-            const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-            if (!res.ok) continue;
-            const text = await res.text();
-            if (!text || text.includes('No data') || text.length < 30) continue;
-            const lines = text.trim().split('\n');
-            if (lines.length < 2) continue;
-            // 마지막 데이터 행 (가장 최신)
-            const lastLine = lines[lines.length - 1];
-            const cols = lastLine.split(',');
-            // Date(0),Open(1),High(2),Low(3),Close(4),Volume(5)
-            const close = parseFloat(cols[4]?.trim());
-            const open = parseFloat(cols[1]?.trim());
-            if (!isNaN(close) && close > 500) {
-              const change = (!isNaN(open) && open > 0) ? ((close - open) / open) * 100 : null;
-              statusMap['goldIntl'] = { status: 'success', source: sourceName, updatedAt: now };
-              return { price: close, change };
-            }
-          } catch(e) {}
-        }
-        return null;
-      };
-      const stooqXau = await stooqLatestFn('xauusd.oanda', 'stooq(XAU)');
-      if (stooqXau) return stooqXau;
-      const stooqGc = await stooqLatestFn('gc.f', 'stooq(GC)');
-      if (stooqGc) return stooqGc;
-      // 3차: Yahoo Finance GC=F (range=5d로 주말/휴일 대응)
-      const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=5d&interval=1d`;
-      for (const proxy of [
-        `/api/proxy?url=${encodeURIComponent(yahooUrl)}`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
-        `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
-        `https://api.codetabs.com/v1/proxy?quest=${yahooUrl}`,
-      ]) {
+      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=1d&interval=1d`;
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
+      for(const proxy of proxies) {
         try {
-          const res = await fetch(proxy, { signal: AbortSignal.timeout(10000) });
+          const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
           if(!res.ok) continue;
           const json = await res.json();
           const meta = json?.chart?.result?.[0]?.meta;
@@ -805,80 +762,21 @@ export default function App() {
             const change = prevClose ? ((price / prevClose) - 1) * 100 : null;
             statusMap['goldIntl'] = { status: 'success', source: 'Yahoo', updatedAt: now }; return { price, change };
           }
-          // Yahoo 히스토리 배열에서 최신값 추출
-          const result = json?.chart?.result?.[0];
-          if (result?.timestamp && result?.indicators?.quote?.[0]?.close) {
-            const closes = result.indicators.quote[0].close;
-            for (let i = closes.length - 1; i >= 0; i--) {
-              if (closes[i] != null) {
-                const prevClose = i > 0 ? closes[i - 1] : null;
-                const change = prevClose ? ((closes[i] / prevClose) - 1) * 100 : null;
-                statusMap['goldIntl'] = { status: 'success', source: 'Yahoo', updatedAt: now };
-                return { price: closes[i], change };
-              }
-            }
-          }
         } catch(e) {}
       }
-      statusMap['goldIntl'] = { status: 'fail', source: '수집 실패', updatedAt: now }; return { price: null, change: null };
+      statusMap['goldIntl'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
     },
     goldKr: async (now, statusMap) => {
-      // 네이버 금시세 API - 여러 endpoint 시도
-      const naverEndpoints = [
-        'https://m.stock.naver.com/api/marketIndex/metals/M04020000',
-        'https://m.stock.naver.com/api/marketIndex/M04020000',
-        'https://m.stock.naver.com/api/marketindex/M04020000',
-      ];
-      for (const targetUrl of naverEndpoints) {
-        for (const proxy of [
-          `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-          `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
-          `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
-        ]) {
-          try {
-            const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-            if(!res.ok) continue;
-            const data = await res.json();
-            const price = parseFloat(String(
-              data?.closePrice || data?.price || data?.current || data?.lastPrice || '0'
-            ).replace(/,/g, ''));
-            const change = data?.fluctuationsRatio
-              ? parseFloat(String(data.fluctuationsRatio).replace('%', ''))
-              : (data?.changeRate ? parseFloat(data.changeRate) : null);
-            if(price > 50000) { // 국내 금시세는 최소 50,000원 이상
-              statusMap['goldKr'] = { status: 'success', source: '네이버금시세', updatedAt: now };
-              return { price, change };
-            }
-          } catch(e) {}
-        }
-      }
-      // fallback: fchart 최신 데이터 (5일치 중 최근값)
-      const fchartUrl = `https://fchart.stock.naver.com/sise.nhn?symbol=M04020000&timeframe=day&count=5&requestType=0`;
-      for (const proxy of [
-        `/api/proxy?url=${encodeURIComponent(fchartUrl)}`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(fchartUrl)}`,
-        `https://api.codetabs.com/v1/proxy?quest=${fchartUrl}`,
-        `https://corsproxy.io/?url=${encodeURIComponent(fchartUrl)}`,
-      ]) {
+      const targetUrl = 'https://m.stock.naver.com/api/marketIndex/metals/M04020000';
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
+      for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
           if(!res.ok) continue;
-          const text = await res.text();
-          const items = text.split('<item data="');
-          if (items.length >= 2) {
-            const lastRaw = items[items.length - 1].split('"')[0];
-            const parts = lastRaw.split('|');
-            if (parts.length >= 5) {
-              const close = parseInt(parts[4]);
-              const open = parseInt(parts[1]);
-              if (!isNaN(close) && close > 50000) {
-                const change = (!isNaN(open) && open > 0) ? ((close - open) / open) * 100 : null;
-                statusMap['goldKr'] = { status: 'success', source: '네이버fchart', updatedAt: now };
-                return { price: close, change };
-              }
-            }
-          }
+          const data = await res.json();
+          const price = parseFloat(String(data?.closePrice || data?.price || '0').replace(/,/g, ''));
+          const change = data?.fluctuationsRatio ? parseFloat(data.fluctuationsRatio) : null;
+          if(price > 0) { statusMap['goldKr'] = { status: 'success', source: '네이버금시세', updatedAt: now }; return { price, change }; }
         } catch(e) {}
       }
       statusMap['goldKr'] = { status: 'fail', source: '네이버금시세 실패', updatedAt: now }; return { price: null, change: null };
@@ -1701,21 +1599,6 @@ export default function App() {
         setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
       }
     }
-  };
-
-  const handleGoldMarketRefresh = async (key: 'goldKr' | 'goldIntl' | 'usdkrw') => {
-    const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-    setIndicatorFetchStatus(prev => ({ ...prev, [key]: { status: 'loading', source: '새로고침 중...', updatedAt: now } }));
-    const tempStatusMap = {};
-    const fetcher = fetchersMap[key];
-    if (!fetcher) return;
-    const res = await fetcher(now, tempStatusMap);
-    if (res.price !== null && res.price !== undefined) {
-      setMarketIndicators(prev => ({ ...prev, [key]: res.price, [`${key}Chg`]: res.change }));
-    } else {
-      showToast(`${key} 가격 갱신 실패`, true);
-    }
-    setIndicatorFetchStatus(prev => ({ ...prev, ...tempStatusMap }));
   };
 
   const handleSingleStockRefresh = async (id, code) => {
@@ -3259,24 +3142,8 @@ export default function App() {
         {!showIntegratedDashboard && (<>
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoad={handleDriveLoad} onDriveLoadOnly={handleDriveLoadOnly} />
 
-        {title.toUpperCase().includes('GOLD')
-          ? <GoldPortfolioTable
-              portfolio={totals.calcPortfolio}
-              marketIndicators={marketIndicators}
-              principal={principal}
-              onUpdate={handleUpdate}
-              onBlur={handleStockBlur}
-              onDelete={handleDeleteStock}
-              onAddStock={handleAddStock}
-              stockFetchStatus={stockFetchStatus}
-              onSingleRefresh={handleSingleStockRefresh}
-              onRefreshMarketPrice={handleGoldMarketRefresh}
-              marketFetchStatus={indicatorFetchStatus}
-            />
-          : <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
-        }
+        <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
 
-        {!title.toUpperCase().includes('GOLD') && (
         <div className="grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-6 w-full items-stretch">
           <div className="xl:col-span-4 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full">
             <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700">📊 자산 비중</div>
@@ -3292,7 +3159,6 @@ export default function App() {
             <div className="p-4 flex-1 flex flex-col sm:flex-row items-center gap-4"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={Object.entries(totals.cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)} innerRadius="40%" outerRadius="70%" dataKey="value" label={PieLabelOutside}>{Object.entries(totals.cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} />} /></PieChart></ResponsiveContainer><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={totals.stks.filter(x => x.eval > 0)} innerRadius="40%" outerRadius="70%" dataKey="eval" label={PieLabelOutside}>{totals.stks.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[(i + 3) % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} />} /></PieChart></ResponsiveContainer></div>
           </div>
         </div>
-        )}
 
         <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
           <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden shrink-0">

@@ -5,7 +5,7 @@ export const config = { runtime: 'edge' };
 
 const ALLOWED_DOMAINS = [
   'tradingeconomics.com',
-  'stock.naver.com',
+  'm.stock.naver.com',
   'query1.finance.yahoo.com',
   'stooq.com',
 ];
