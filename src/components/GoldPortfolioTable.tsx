@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { Trash2, Plus } from 'lucide-react';
+import { Trash2, Plus, RefreshCw } from 'lucide-react';
 import { cleanNum, formatCurrency, formatPercent, formatNumber, handleTableKeyDown } from '../utils';
 
 // 금은 항상 troy ounce(트로이 온스) 기준 = 31.1035g
@@ -17,6 +17,8 @@ const GoldPortfolioTable = ({
   onAddStock,
   onSingleRefresh,
   stockFetchStatus,
+  onRefreshMarketPrice,
+  marketFetchStatus,
 }) => {
   const goldKr = marketIndicators?.goldKr || 0;       // KRX 금현물 (₩/g)
   const goldIntl = marketIndicators?.goldIntl || 0;   // 국제 금 ($/troy oz)
@@ -81,10 +83,22 @@ const GoldPortfolioTable = ({
               <tr className="border-b border-gray-700 bg-[rgba(20,60,30,0.4)]">
                 <td className="py-3 px-2 border-r border-gray-600 text-center text-gray-300 text-[13px] font-bold">1g</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-center text-green-300 font-bold text-[14px]">
-                  KRX 금현물
+                  <div className="flex items-center justify-center gap-1">
+                    <span>KRX 금현물</span>
+                    {marketFetchStatus?.goldKr?.status === 'success' && <span className="w-2 h-2 rounded-full bg-teal-400 inline-block" title={`${marketFetchStatus.goldKr.source} ${marketFetchStatus.goldKr.updatedAt}`} />}
+                    {marketFetchStatus?.goldKr?.status === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 inline-block" title="수집 실패" />}
+                    {marketFetchStatus?.goldKr?.status === 'loading' && <RefreshCw size={10} className="animate-spin text-teal-400" />}
+                  </div>
                 </td>
-                <td className="py-3 px-3 border-r border-gray-600 text-right text-white font-bold text-[14px]">
-                  {goldKr > 0 ? `₩${Math.round(goldKr).toLocaleString()}` : '-'}
+                <td
+                  className="py-3 px-3 border-r border-gray-600 text-right text-white font-bold text-[14px] cursor-pointer hover:text-teal-300 transition-colors"
+                  onClick={() => onRefreshMarketPrice?.('goldKr')}
+                  title="클릭하여 KRX 금현물 현재가 새로고침"
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    {marketFetchStatus?.goldKr?.status === 'loading' && <RefreshCw size={11} className="animate-spin text-teal-400" />}
+                    <span>{goldKr > 0 ? `₩${Math.round(goldKr).toLocaleString()}` : '-'}</span>
+                  </div>
                 </td>
                 {/* 구매단가 - 편집 가능 (평균) */}
                 <td className="py-1 px-1 border-r border-gray-600 bg-blue-900/10 text-[13px]">
@@ -119,15 +133,27 @@ const GoldPortfolioTable = ({
               <tr className="border-b border-gray-700 bg-[rgba(20,60,30,0.25)]">
                 <td className="py-3 px-2 border-r border-gray-600 text-center text-gray-300 text-[13px] font-bold">1g</td>
                 <td className="py-2 px-3 border-r border-gray-600 text-center font-bold text-[13px]">
-                  <div className="text-green-200">국제 금시세</div>
+                  <div className="flex items-center justify-center gap-1">
+                    <span className="text-green-200">국제 금시세</span>
+                    {marketFetchStatus?.goldIntl?.status === 'success' && <span className="w-2 h-2 rounded-full bg-teal-400 inline-block" title={`${marketFetchStatus.goldIntl.source} ${marketFetchStatus.goldIntl.updatedAt}`} />}
+                    {marketFetchStatus?.goldIntl?.status === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 inline-block" title="수집 실패" />}
+                    {marketFetchStatus?.goldIntl?.status === 'loading' && <RefreshCw size={10} className="animate-spin text-teal-400" />}
+                  </div>
                   {goldIntl > 0 && usdkrw > 0 && (
                     <div className="text-gray-500 text-[9px] font-normal mt-0.5">
                       ${goldIntl.toLocaleString('en-US', {maximumFractionDigits: 2})}/oz ÷ {TROY_OZ_TO_GRAM}g × {usdkrw.toFixed(0)}
                     </div>
                   )}
                 </td>
-                <td className="py-3 px-3 border-r border-gray-600 text-right text-white font-bold text-[13px]">
-                  {goldIntlKrwPerGram > 0 ? `₩${Math.round(goldIntlKrwPerGram).toLocaleString()}` : '-'}
+                <td
+                  className="py-3 px-3 border-r border-gray-600 text-right text-white font-bold text-[13px] cursor-pointer hover:text-teal-300 transition-colors"
+                  onClick={() => onRefreshMarketPrice?.('goldIntl')}
+                  title="클릭하여 국제 금시세 현재가 새로고침"
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    {marketFetchStatus?.goldIntl?.status === 'loading' && <RefreshCw size={11} className="animate-spin text-teal-400" />}
+                    <span>{goldIntlKrwPerGram > 0 ? `₩${Math.round(goldIntlKrwPerGram).toLocaleString()}` : '-'}</span>
+                  </div>
                 </td>
                 <td className="border-r border-gray-600 bg-blue-900/10" colSpan={3}></td>
                 <td className="border-r border-gray-600 bg-[rgba(113,63,18,0.1)]"></td>

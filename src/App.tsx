@@ -1703,6 +1703,21 @@ export default function App() {
     }
   };
 
+  const handleGoldMarketRefresh = async (key: 'goldKr' | 'goldIntl' | 'usdkrw') => {
+    const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    setIndicatorFetchStatus(prev => ({ ...prev, [key]: { status: 'loading', source: '새로고침 중...', updatedAt: now } }));
+    const tempStatusMap = {};
+    const fetcher = fetchersMap[key];
+    if (!fetcher) return;
+    const res = await fetcher(now, tempStatusMap);
+    if (res.price !== null && res.price !== undefined) {
+      setMarketIndicators(prev => ({ ...prev, [key]: res.price, [`${key}Chg`]: res.change }));
+    } else {
+      showToast(`${key} 가격 갱신 실패`, true);
+    }
+    setIndicatorFetchStatus(prev => ({ ...prev, ...tempStatusMap }));
+  };
+
   const handleSingleStockRefresh = async (id, code) => {
     if (!code || code.length < 5) return;
     setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
@@ -3255,10 +3270,13 @@ export default function App() {
               onAddStock={handleAddStock}
               stockFetchStatus={stockFetchStatus}
               onSingleRefresh={handleSingleStockRefresh}
+              onRefreshMarketPrice={handleGoldMarketRefresh}
+              marketFetchStatus={indicatorFetchStatus}
             />
           : <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
         }
 
+        {!title.toUpperCase().includes('GOLD') && (
         <div className="grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-6 w-full items-stretch">
           <div className="xl:col-span-4 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full">
             <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700">📊 자산 비중</div>
@@ -3274,6 +3292,7 @@ export default function App() {
             <div className="p-4 flex-1 flex flex-col sm:flex-row items-center gap-4"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={Object.entries(totals.cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)} innerRadius="40%" outerRadius="70%" dataKey="value" label={PieLabelOutside}>{Object.entries(totals.cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} />} /></PieChart></ResponsiveContainer><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={totals.stks.filter(x => x.eval > 0)} innerRadius="40%" outerRadius="70%" dataKey="eval" label={PieLabelOutside}>{totals.stks.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[(i + 3) % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} />} /></PieChart></ResponsiveContainer></div>
           </div>
         </div>
+        )}
 
         <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
           <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden shrink-0">
