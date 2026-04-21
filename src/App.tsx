@@ -524,6 +524,7 @@ export default function App() {
   const [intIsDragging, setIntIsDragging] = useState(false);
   const [intIsZeroBaseMode, setIntIsZeroBaseMode] = useState(true);
   const [intExpandedCat, setIntExpandedCat] = useState(null);
+  const [simpleEditField, setSimpleEditField] = useState<{id: string, field: string} | null>(null);
 
   // Drive 폴더 ID 캐시 확보 (없으면 생성)
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -2723,7 +2724,17 @@ export default function App() {
   };
 
   const updateSimpleAccountField = (id, field, val) => {
-    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, [field]: cleanNum(val) } : p));
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      if (field === 'evalAmount') {
+        const num = cleanNum(val);
+        return { ...p, evalAmount: num, ...(!p.principalManual ? { principal: num } : {}) };
+      }
+      if (field === 'principal') {
+        return { ...p, principal: cleanNum(val), principalManual: true };
+      }
+      return { ...p, [field]: cleanNum(val) };
+    }));
   };
 
   const deletePortfolio = (id) => {
@@ -3724,11 +3735,16 @@ export default function App() {
                             <td className="py-1.5 px-3 border-r border-gray-700 text-right font-bold text-white">
                               {isSimple ? (
                                 <input
-                                  type="number"
+                                  type="text"
+                                  inputMode="numeric"
                                   className="w-full min-w-[90px] bg-transparent font-bold outline-none text-right text-white border-b border-dashed border-gray-600 focus:border-green-400"
-                                  value={s.currentEval || ''}
-                                  placeholder="0"
-                                  onChange={e => updateSimpleAccountField(s.id, 'evalAmount', e.target.value)}
+                                  value={simpleEditField?.id === s.id && simpleEditField?.field === 'eval'
+                                    ? (s.currentEval || '')
+                                    : s.currentEval ? formatCurrency(s.currentEval) : ''}
+                                  placeholder="₩0"
+                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'eval'}); e.target.select(); }}
+                                  onBlur={() => setSimpleEditField(null)}
+                                  onChange={e => updateSimpleAccountField(s.id, 'evalAmount', e.target.value.replace(/[^0-9]/g, ''))}
                                 />
                               ) : formatCurrency(s.currentEval)}
                             </td>
@@ -3739,11 +3755,16 @@ export default function App() {
                             <td className="py-1.5 px-3 border-r border-gray-700 text-right text-gray-200 font-bold">
                               {isSimple ? (
                                 <input
-                                  type="number"
+                                  type="text"
+                                  inputMode="numeric"
                                   className="w-full min-w-[90px] bg-transparent font-bold outline-none text-right text-gray-200 border-b border-dashed border-gray-600 focus:border-green-400"
-                                  value={s.principal || ''}
-                                  placeholder="0"
-                                  onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value)}
+                                  value={simpleEditField?.id === s.id && simpleEditField?.field === 'principal'
+                                    ? (s.principal || '')
+                                    : s.principal ? formatCurrency(s.principal) : ''}
+                                  placeholder={s.currentEval ? formatCurrency(s.currentEval) : '₩0'}
+                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'principal'}); e.target.select(); }}
+                                  onBlur={() => setSimpleEditField(null)}
+                                  onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value.replace(/[^0-9]/g, ''))}
                                 />
                               ) : formatCurrency(s.principal)}
                             </td>
