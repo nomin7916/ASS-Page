@@ -3775,7 +3775,7 @@ export default function App() {
                       );
                     })}
                     {portfolioSummaries.length === 0 && (
-                      <tr><td colSpan={13} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                      <tr><td colSpan={11} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
                     )}
                   </tbody>
                   <tfoot className="border-t-2 border-red-700 bg-red-900/20">
@@ -3789,7 +3789,7 @@ export default function App() {
                       <td className="py-2 px-3 text-right text-gray-300 border-r border-gray-700">100%</td>
                       <td className="py-2 px-3 text-right text-gray-200 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalPrincipal)}</td>
                       <td className="py-2 px-3 text-right text-gray-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalDeposit)}</td>
-                      <td colSpan={4}></td>
+                      <td colSpan={2}></td>
                     </tr>
                   </tfoot>
                 </table>

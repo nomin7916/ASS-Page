@@ -40,15 +40,37 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               return (
                 <tr key={item.id} className="hover:bg-gray-800/40 transition-colors border-b border-gray-700">
                   <td className="p-0 border-r border-gray-600">
-                    <select className={`w-full h-full bg-transparent text-center text-xs outline-none font-bold cursor-pointer ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'}`} value={item.category} onChange={e => onUpdate(item.id, 'category', e.target.value)} onPaste={e => {
-                      e.preventDefault();
-                      const pasted = e.clipboardData.getData('text').trim().replace(/\s/g, '');
-                      const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
-                      const match = validCats.find(c => c.replace(/\s/g, '') === pasted) || validCats.find(c => pasted.includes(c.replace(/\s/g, '')));
-                      if (match) onUpdate(item.id, 'category', match);
-                    }}>
-                      {Object.keys(UI_CONFIG.COLORS.CATEGORIES).map(c => <option key={c} value={c} className="bg-gray-800 text-white">{c}</option>)}
-                    </select>
+                    <input
+                      list={`cat-list-${item.id}`}
+                      className={`w-full h-full bg-transparent text-center text-xs outline-none font-bold cursor-pointer py-3 px-1 ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'}`}
+                      value={item.category}
+                      onChange={e => {
+                        const val = e.target.value;
+                        const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
+                        const match = validCats.find(c => c === val);
+                        onUpdate(item.id, 'category', match || val);
+                      }}
+                      onPaste={e => {
+                        e.preventDefault();
+                        const pasted = e.clipboardData.getData('text').trim().replace(/[-\s]/g, c => c === '-' ? '-' : '');
+                        const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
+                        const normalize = s => s.replace(/\s/g, '').replace('α', 'a').replace('A', 'a');
+                        const match = validCats.find(c => normalize(c) === normalize(pasted)) || validCats.find(c => normalize(pasted).includes(normalize(c)));
+                        if (match) onUpdate(item.id, 'category', match);
+                      }}
+                      onBlur={e => {
+                        const val = e.target.value;
+                        const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
+                        if (!validCats.includes(val)) {
+                          const normalize = s => s.replace(/\s/g, '').toLowerCase().replace('α', 'a');
+                          const match = validCats.find(c => normalize(c) === normalize(val));
+                          if (match) onUpdate(item.id, 'category', match);
+                        }
+                      }}
+                    />
+                    <datalist id={`cat-list-${item.id}`}>
+                      {Object.keys(UI_CONFIG.COLORS.CATEGORIES).map(c => <option key={c} value={c} />)}
+                    </datalist>
                   </td>
                   <td className="p-0 border-r border-gray-600">
                     <div className="flex items-center gap-1 px-1">
