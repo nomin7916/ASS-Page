@@ -749,11 +749,53 @@ export default function App() {
       statusMap['dxy'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
     },
     goldIntl: async (now, statusMap) => {
-      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=1d&interval=1d`;
-      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
-      for(const proxy of proxies) {
+      // 1차: stooq XAU/USD - 최근 7일 히스토리에서 최신값 추출 (CSV: Date,Open,High,Low,Close,Volume)
+      const stooqLatestFn = async (symbol: string, sourceName: string) => {
+        const d1 = (() => { const d = new Date(); d.setDate(d.getDate() - 10); return d.toISOString().split('T')[0].replace(/-/g, ''); })();
+        const d2 = new Date().toISOString().split('T')[0].replace(/-/g, '');
+        const url = `https://stooq.com/q/d/l/?s=${symbol}&d1=${d1}&d2=${d2}&i=d`;
+        for (const proxy of [
+          `/api/proxy?url=${encodeURIComponent(url)}`,
+          `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+          `https://api.codetabs.com/v1/proxy?quest=${url}`,
+          `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+        ]) {
+          try {
+            const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+            if (!res.ok) continue;
+            const text = await res.text();
+            if (!text || text.includes('No data') || text.length < 30) continue;
+            const lines = text.trim().split('\n');
+            if (lines.length < 2) continue;
+            // 마지막 데이터 행 (가장 최신)
+            const lastLine = lines[lines.length - 1];
+            const cols = lastLine.split(',');
+            // Date(0),Open(1),High(2),Low(3),Close(4),Volume(5)
+            const close = parseFloat(cols[4]?.trim());
+            const open = parseFloat(cols[1]?.trim());
+            if (!isNaN(close) && close > 500) {
+              const change = (!isNaN(open) && open > 0) ? ((close - open) / open) * 100 : null;
+              statusMap['goldIntl'] = { status: 'success', source: sourceName, updatedAt: now };
+              return { price: close, change };
+            }
+          } catch(e) {}
+        }
+        return null;
+      };
+      const stooqXau = await stooqLatestFn('xauusd.oanda', 'stooq(XAU)');
+      if (stooqXau) return stooqXau;
+      const stooqGc = await stooqLatestFn('gc.f', 'stooq(GC)');
+      if (stooqGc) return stooqGc;
+      // 3차: Yahoo Finance GC=F (range=5d로 주말/휴일 대응)
+      const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=5d&interval=1d`;
+      for (const proxy of [
+        `/api/proxy?url=${encodeURIComponent(yahooUrl)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+        `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${yahooUrl}`,
+      ]) {
         try {
-          const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+          const res = await fetch(proxy, { signal: AbortSignal.timeout(10000) });
           if(!res.ok) continue;
           const json = await res.json();
           const meta = json?.chart?.result?.[0]?.meta;
@@ -763,21 +805,80 @@ export default function App() {
             const change = prevClose ? ((price / prevClose) - 1) * 100 : null;
             statusMap['goldIntl'] = { status: 'success', source: 'Yahoo', updatedAt: now }; return { price, change };
           }
+          // Yahoo 히스토리 배열에서 최신값 추출
+          const result = json?.chart?.result?.[0];
+          if (result?.timestamp && result?.indicators?.quote?.[0]?.close) {
+            const closes = result.indicators.quote[0].close;
+            for (let i = closes.length - 1; i >= 0; i--) {
+              if (closes[i] != null) {
+                const prevClose = i > 0 ? closes[i - 1] : null;
+                const change = prevClose ? ((closes[i] / prevClose) - 1) * 100 : null;
+                statusMap['goldIntl'] = { status: 'success', source: 'Yahoo', updatedAt: now };
+                return { price: closes[i], change };
+              }
+            }
+          }
         } catch(e) {}
       }
-      statusMap['goldIntl'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
+      statusMap['goldIntl'] = { status: 'fail', source: '수집 실패', updatedAt: now }; return { price: null, change: null };
     },
     goldKr: async (now, statusMap) => {
-      const targetUrl = 'https://m.stock.naver.com/api/marketIndex/metals/M04020000';
-      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
-      for(const proxy of proxies) {
+      // 네이버 금시세 API - 여러 endpoint 시도
+      const naverEndpoints = [
+        'https://m.stock.naver.com/api/marketIndex/metals/M04020000',
+        'https://m.stock.naver.com/api/marketIndex/M04020000',
+        'https://m.stock.naver.com/api/marketindex/M04020000',
+      ];
+      for (const targetUrl of naverEndpoints) {
+        for (const proxy of [
+          `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+          `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+          `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+          `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
+        ]) {
+          try {
+            const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+            if(!res.ok) continue;
+            const data = await res.json();
+            const price = parseFloat(String(
+              data?.closePrice || data?.price || data?.current || data?.lastPrice || '0'
+            ).replace(/,/g, ''));
+            const change = data?.fluctuationsRatio
+              ? parseFloat(String(data.fluctuationsRatio).replace('%', ''))
+              : (data?.changeRate ? parseFloat(data.changeRate) : null);
+            if(price > 50000) { // 국내 금시세는 최소 50,000원 이상
+              statusMap['goldKr'] = { status: 'success', source: '네이버금시세', updatedAt: now };
+              return { price, change };
+            }
+          } catch(e) {}
+        }
+      }
+      // fallback: fchart 최신 데이터 (5일치 중 최근값)
+      const fchartUrl = `https://fchart.stock.naver.com/sise.nhn?symbol=M04020000&timeframe=day&count=5&requestType=0`;
+      for (const proxy of [
+        `/api/proxy?url=${encodeURIComponent(fchartUrl)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(fchartUrl)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${fchartUrl}`,
+        `https://corsproxy.io/?url=${encodeURIComponent(fchartUrl)}`,
+      ]) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
           if(!res.ok) continue;
-          const data = await res.json();
-          const price = parseFloat(String(data?.closePrice || data?.price || '0').replace(/,/g, ''));
-          const change = data?.fluctuationsRatio ? parseFloat(data.fluctuationsRatio) : null;
-          if(price > 0) { statusMap['goldKr'] = { status: 'success', source: '네이버금시세', updatedAt: now }; return { price, change }; }
+          const text = await res.text();
+          const items = text.split('<item data="');
+          if (items.length >= 2) {
+            const lastRaw = items[items.length - 1].split('"')[0];
+            const parts = lastRaw.split('|');
+            if (parts.length >= 5) {
+              const close = parseInt(parts[4]);
+              const open = parseInt(parts[1]);
+              if (!isNaN(close) && close > 50000) {
+                const change = (!isNaN(open) && open > 0) ? ((close - open) / open) * 100 : null;
+                statusMap['goldKr'] = { status: 'success', source: '네이버fchart', updatedAt: now };
+                return { price: close, change };
+              }
+            }
+          }
         } catch(e) {}
       }
       statusMap['goldKr'] = { status: 'fail', source: '네이버금시세 실패', updatedAt: now }; return { price: null, change: null };

@@ -3,6 +3,8 @@ import React from 'react';
 import { Trash2, Plus } from 'lucide-react';
 import { cleanNum, formatCurrency, formatPercent, formatNumber, handleTableKeyDown } from '../utils';
 
+// 금은 항상 troy ounce(트로이 온스) 기준 = 31.1035g
+// 일반 온스(avoirdupois)는 28.3495g이지만 귀금속에는 사용하지 않음
 const TROY_OZ_TO_GRAM = 31.1035;
 
 const GoldPortfolioTable = ({
@@ -20,7 +22,7 @@ const GoldPortfolioTable = ({
   const goldIntl = marketIndicators?.goldIntl || 0;   // 국제 금 ($/troy oz)
   const usdkrw = marketIndicators?.usdkrw || 0;       // USD/KRW
 
-  // 국제 금시세 → ₩/g
+  // 국제 금시세 → ₩/g (troy oz 기준: $/oz ÷ 31.1035 × USD/KRW)
   const goldIntlKrwPerGram = goldIntl > 0 && usdkrw > 0
     ? goldIntl * usdkrw / TROY_OZ_TO_GRAM
     : 0;
@@ -116,7 +118,14 @@ const GoldPortfolioTable = ({
               {/* 국제 금시세 행 */}
               <tr className="border-b border-gray-700 bg-[rgba(20,60,30,0.25)]">
                 <td className="py-3 px-2 border-r border-gray-600 text-center text-gray-300 text-[13px] font-bold">1g</td>
-                <td className="py-3 px-3 border-r border-gray-600 text-center text-green-200 font-bold text-[13px]">국제 금시세</td>
+                <td className="py-2 px-3 border-r border-gray-600 text-center font-bold text-[13px]">
+                  <div className="text-green-200">국제 금시세</div>
+                  {goldIntl > 0 && usdkrw > 0 && (
+                    <div className="text-gray-500 text-[9px] font-normal mt-0.5">
+                      ${goldIntl.toLocaleString('en-US', {maximumFractionDigits: 2})}/oz ÷ {TROY_OZ_TO_GRAM}g × {usdkrw.toFixed(0)}
+                    </div>
+                  )}
+                </td>
                 <td className="py-3 px-3 border-r border-gray-600 text-right text-white font-bold text-[13px]">
                   {goldIntlKrwPerGram > 0 ? `₩${Math.round(goldIntlKrwPerGram).toLocaleString()}` : '-'}
                 </td>
