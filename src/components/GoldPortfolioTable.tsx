@@ -1,27 +1,34 @@
 // @ts-nocheck
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Trash2, Plus, RefreshCw } from 'lucide-react';
 import { cleanNum, formatCurrency, formatPercent, formatNumber, handleTableKeyDown } from '../utils';
 
 const EditableCell = ({ value, onUpdate, onKeyDown, className }) => {
-  const [localValue, setLocalValue] = useState(value === 0 ? '' : String(value ?? ''));
+  const ref = useRef(null);
 
   useEffect(() => {
-    setLocalValue(value === 0 ? '' : String(value ?? ''));
+    if (ref.current && document.activeElement !== ref.current) {
+      ref.current.value = value === 0 ? '' : String(value);
+    }
   }, [value]);
 
   return (
     <input
+      ref={ref}
       type="text"
       className={className}
-      value={localValue}
+      defaultValue={value === 0 ? '' : String(value)}
       onFocus={e => e.target.select()}
       onChange={e => {
+        const pos = e.target.selectionStart;
         const filtered = e.target.value.replace(/[^0-9.]/g, '');
-        setLocalValue(filtered);
+        if (e.target.value !== filtered) {
+          e.target.value = filtered;
+          e.target.setSelectionRange(pos - 1, pos - 1);
+        }
       }}
-      onBlur={() => {
-        const num = parseFloat(localValue);
+      onBlur={e => {
+        const num = parseFloat(e.target.value);
         onUpdate(isNaN(num) ? 0 : num);
       }}
       onKeyDown={onKeyDown}
