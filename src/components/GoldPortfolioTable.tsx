@@ -1,7 +1,34 @@
 // @ts-nocheck
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trash2, Plus, RefreshCw } from 'lucide-react';
 import { cleanNum, formatCurrency, formatPercent, formatNumber, handleTableKeyDown } from '../utils';
+
+const EditableCell = ({ value, onUpdate, onKeyDown, className }) => {
+  const [localValue, setLocalValue] = useState(value === 0 ? '' : String(value ?? ''));
+
+  useEffect(() => {
+    setLocalValue(value === 0 ? '' : String(value ?? ''));
+  }, [value]);
+
+  return (
+    <input
+      type="text"
+      className={className}
+      value={localValue}
+      onFocus={e => e.target.select()}
+      onChange={e => {
+        const filtered = e.target.value.replace(/[^0-9.]/g, '');
+        setLocalValue(filtered);
+      }}
+      onBlur={() => {
+        const num = parseFloat(localValue);
+        onUpdate(isNaN(num) ? 0 : num);
+      }}
+      onKeyDown={onKeyDown}
+      placeholder="0"
+    />
+  );
+};
 
 // 금은 항상 troy ounce(트로이 온스) 기준 = 31.1035g
 // 일반 온스(avoirdupois)는 28.3495g이지만 귀금속에는 사용하지 않음
@@ -51,26 +78,6 @@ const GoldPortfolioTable = ({
   const totalEval = goldEval + depositAmount;
   const totalProfit = totalEval - principal;
   const totalReturnRate = principal > 0 ? (totalProfit / principal) * 100 : 0;
-
-  const [editValues, setEditValues] = useState({});
-
-  const getEditValue = (id, field, fallback) => {
-    const key = `${id}-${field}`;
-    return key in editValues ? editValues[key] : fallback;
-  };
-
-  const handleEditChange = (id, field, raw) => {
-    setEditValues(prev => ({ ...prev, [`${id}-${field}`]: raw }));
-  };
-
-  const handleEditBlur = (id, field, raw) => {
-    onUpdate(id, field, raw);
-    setEditValues(prev => {
-      const next = { ...prev };
-      delete next[`${id}-${field}`];
-      return next;
-    });
-  };
 
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors text-center";
 
@@ -268,31 +275,19 @@ const GoldPortfolioTable = ({
                         />
                       </td>
                       <td className="p-0 border-r border-gray-600 bg-blue-900/10">
-                        <input
-                          type="number"
-                          className="w-full bg-transparent outline-none text-right text-blue-200 font-bold text-[12px] py-2 px-3 focus:bg-blue-800/40"
-                          value={getEditValue(item.id, 'purchasePrice', cleanNum(item.purchasePrice) || '')}
-                          onFocus={e => e.target.select()}
-                          onChange={e => handleEditChange(item.id, 'purchasePrice', e.target.value)}
-                          onBlur={e => handleEditBlur(item.id, 'purchasePrice', e.target.value)}
+                        <EditableCell
+                          value={cleanNum(item.purchasePrice)}
+                          onUpdate={val => onUpdate(item.id, 'purchasePrice', val)}
                           onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')}
-                          placeholder="0"
-                          min="0"
-                          step="any"
+                          className="w-full bg-transparent outline-none text-right text-blue-200 font-bold text-[12px] py-2 px-3 focus:bg-blue-800/40"
                         />
                       </td>
                       <td className="p-0 border-r border-gray-600 bg-blue-900/10">
-                        <input
-                          type="number"
-                          className="w-full bg-transparent outline-none text-center text-blue-200 font-bold text-[12px] py-2 px-2 focus:bg-blue-800/40"
-                          value={getEditValue(item.id, 'quantity', cleanNum(item.quantity) || '')}
-                          onFocus={e => e.target.select()}
-                          onChange={e => handleEditChange(item.id, 'quantity', e.target.value)}
-                          onBlur={e => handleEditBlur(item.id, 'quantity', e.target.value)}
+                        <EditableCell
+                          value={cleanNum(item.quantity)}
+                          onUpdate={val => onUpdate(item.id, 'quantity', val)}
                           onKeyDown={e => handleTableKeyDown(e, 'quantity')}
-                          placeholder="0"
-                          min="0"
-                          step="any"
+                          className="w-full bg-transparent outline-none text-center text-blue-200 font-bold text-[12px] py-2 px-2 focus:bg-blue-800/40"
                         />
                       </td>
                       <td className="py-2 px-3 border-r border-gray-600 bg-blue-900/10 text-right text-blue-200 font-bold text-[12px]">
