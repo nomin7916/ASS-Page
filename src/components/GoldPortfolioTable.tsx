@@ -1,41 +1,7 @@
 // @ts-nocheck
-import React, { useRef, useEffect } from 'react';
+import React from 'react';
 import { Trash2, Plus, RefreshCw } from 'lucide-react';
 import { cleanNum, formatCurrency, formatPercent, formatNumber, handleTableKeyDown } from '../utils';
-
-const EditableCell = ({ value, onUpdate, onKeyDown, className }) => {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    if (ref.current && document.activeElement !== ref.current) {
-      ref.current.value = value === 0 ? '' : String(value);
-    }
-  }, [value]);
-
-  return (
-    <input
-      ref={ref}
-      type="text"
-      className={className}
-      defaultValue={value === 0 ? '' : String(value)}
-      onFocus={e => e.target.select()}
-      onChange={e => {
-        const pos = e.target.selectionStart;
-        const filtered = e.target.value.replace(/[^0-9.]/g, '');
-        if (e.target.value !== filtered) {
-          e.target.value = filtered;
-          e.target.setSelectionRange(pos - 1, pos - 1);
-        }
-      }}
-      onBlur={e => {
-        const num = parseFloat(e.target.value);
-        onUpdate(isNaN(num) ? 0 : num);
-      }}
-      onKeyDown={onKeyDown}
-      placeholder="0"
-    />
-  );
-};
 
 // 금은 항상 troy ounce(트로이 온스) 기준 = 31.1035g
 // 일반 온스(avoirdupois)는 28.3495g이지만 귀금속에는 사용하지 않음
@@ -282,19 +248,27 @@ const GoldPortfolioTable = ({
                         />
                       </td>
                       <td className="p-0 border-r border-gray-600 bg-blue-900/10">
-                        <EditableCell
-                          value={cleanNum(item.purchasePrice)}
-                          onUpdate={val => onUpdate(item.id, 'purchasePrice', val)}
-                          onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')}
+                        <input
+                          type="text"
+                          data-col="purchasePrice"
                           className="w-full bg-transparent outline-none text-right text-blue-200 font-bold text-[12px] py-2 px-3 focus:bg-blue-800/40"
+                          value={item.purchasePrice === 0 ? '' : formatNumber(item.purchasePrice)}
+                          onFocus={e => e.target.select()}
+                          onChange={e => onUpdate(item.id, 'purchasePrice', e.target.value)}
+                          onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')}
+                          placeholder="0"
                         />
                       </td>
                       <td className="p-0 border-r border-gray-600 bg-blue-900/10">
-                        <EditableCell
-                          value={cleanNum(item.quantity)}
-                          onUpdate={val => onUpdate(item.id, 'quantity', val)}
-                          onKeyDown={e => handleTableKeyDown(e, 'quantity')}
+                        <input
+                          type="text"
+                          data-col="quantity"
                           className="w-full bg-transparent outline-none text-center text-blue-200 font-bold text-[12px] py-2 px-2 focus:bg-blue-800/40"
+                          value={item.quantity === 0 ? '' : formatNumber(item.quantity)}
+                          onFocus={e => e.target.select()}
+                          onChange={e => onUpdate(item.id, 'quantity', e.target.value)}
+                          onKeyDown={e => handleTableKeyDown(e, 'quantity')}
+                          placeholder="0"
                         />
                       </td>
                       <td className="py-2 px-3 border-r border-gray-600 bg-blue-900/10 text-right text-blue-200 font-bold text-[12px]">
