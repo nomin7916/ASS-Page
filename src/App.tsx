@@ -3692,8 +3692,6 @@ export default function App() {
                       <th className="py-2 px-3 text-right border-r border-gray-700">투자원금</th>
                       <th className="py-2 px-3 text-right border-r border-gray-700">예수금</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">현재 수익율</th>
-                      <th className="py-2 px-2 text-center border-r border-gray-700">구분</th>
-                      <th className="py-2 px-2 text-center border-r border-gray-700">편집</th>
                       <th className="py-2 px-2 text-center">삭제</th>
                     </tr>
                   </thead>
@@ -3753,31 +3751,13 @@ export default function App() {
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               <span className={`inline-block px-2 py-0.5 rounded font-bold ${s.returnRate > 0 ? 'bg-red-900/40 text-red-300' : s.returnRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{s.returnRate.toFixed(1)}%</span>
                             </td>
-                            <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                              {isSimple ? (
-                                <span className="text-[10px] text-green-600 font-bold px-1" title="직접입력형 계좌">직접</span>
-                              ) : (
-                                <button onClick={() => setIntExpandedCat(isCatOpen ? null : s.id)} className={`text-sm p-0.5 rounded transition-colors ${isCatOpen ? 'text-yellow-400' : 'text-gray-500 hover:text-yellow-400'}`} title="구분별 현황">▸</button>
-                              )}
-                            </td>
-                            <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                              {isSimple ? (
-                                <span className="text-gray-600 text-[10px]">—</span>
-                              ) : (
-                                <button
-                                  onClick={() => switchToPortfolio(s.id)}
-                                  className="text-gray-500 hover:text-blue-400 transition-colors text-[11px] font-bold px-1"
-                                  title="포트폴리오 편집"
-                                >✏️</button>
-                              )}
-                            </td>
                             <td className="py-1.5 px-2 text-center">
                               <button onClick={() => deletePortfolio(s.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                             </td>
                           </tr>
                           {isCatOpen && Object.keys(s.cats).length > 0 && (
                             <tr className="bg-gray-800/30 border-b border-gray-700">
-                              <td colSpan={13} className="py-3 px-4">
+                              <td colSpan={11} className="py-3 px-4">
                                 <div className="text-[11px] text-gray-400 font-bold mb-2">📊 {s.name} - 구분별 평가금액</div>
                                 <div className="flex flex-wrap gap-x-6 gap-y-2">
                                   {Object.entries(s.cats).filter(([,v]) => v > 0).map(([cat, val]) => (
