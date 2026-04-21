@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React from 'react';
+import React, { useState } from 'react';
 import { Trash2, Plus, RefreshCw } from 'lucide-react';
 import { cleanNum, formatCurrency, formatPercent, formatNumber, handleTableKeyDown } from '../utils';
 
@@ -52,6 +52,26 @@ const GoldPortfolioTable = ({
   const totalProfit = totalEval - principal;
   const totalReturnRate = principal > 0 ? (totalProfit / principal) * 100 : 0;
 
+  const [editValues, setEditValues] = useState({});
+
+  const getEditValue = (id, field, fallback) => {
+    const key = `${id}-${field}`;
+    return key in editValues ? editValues[key] : fallback;
+  };
+
+  const handleEditChange = (id, field, raw) => {
+    setEditValues(prev => ({ ...prev, [`${id}-${field}`]: raw }));
+  };
+
+  const handleEditBlur = (id, field, raw) => {
+    onUpdate(id, field, raw);
+    setEditValues(prev => {
+      const next = { ...prev };
+      delete next[`${id}-${field}`];
+      return next;
+    });
+  };
+
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors text-center";
 
   return (
@@ -64,7 +84,7 @@ const GoldPortfolioTable = ({
               <tr className="text-center">
                 <th className="py-3 w-[8%]">단위</th>
                 <th className="py-3 w-[20%]">종목</th>
-                <th className="py-3 w-[12%]">현재금액</th>
+                <th className="py-3 w-[12%]">현재가격</th>
                 <th className="py-3 w-[12%] text-blue-200 bg-blue-900/20">구매 단가</th>
                 <th className="py-3 w-[10%] text-blue-200 bg-blue-900/20">수량</th>
                 <th className="py-3 w-[12%] text-blue-200 bg-blue-900/20">구매가격</th>
@@ -251,9 +271,10 @@ const GoldPortfolioTable = ({
                         <input
                           type="text"
                           className="w-full bg-transparent outline-none text-right text-blue-200 font-bold text-[12px] py-2 px-3 focus:bg-blue-800/40"
-                          value={formatNumber(item.purchasePrice)}
-                          onFocus={e => e.target.select()}
-                          onChange={e => onUpdate(item.id, 'purchasePrice', e.target.value)}
+                          value={getEditValue(item.id, 'purchasePrice', formatNumber(item.purchasePrice))}
+                          onFocus={e => { setEditValues(prev => ({ ...prev, [`${item.id}-purchasePrice`]: String(cleanNum(item.purchasePrice) || '') })); e.target.select(); }}
+                          onChange={e => handleEditChange(item.id, 'purchasePrice', e.target.value)}
+                          onBlur={e => handleEditBlur(item.id, 'purchasePrice', e.target.value)}
                           onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')}
                         />
                       </td>
@@ -261,9 +282,10 @@ const GoldPortfolioTable = ({
                         <input
                           type="text"
                           className="w-full bg-transparent outline-none text-center text-blue-200 font-bold text-[12px] py-2 px-2 focus:bg-blue-800/40"
-                          value={formatNumber(item.quantity)}
-                          onFocus={e => e.target.select()}
-                          onChange={e => onUpdate(item.id, 'quantity', e.target.value)}
+                          value={getEditValue(item.id, 'quantity', formatNumber(item.quantity))}
+                          onFocus={e => { setEditValues(prev => ({ ...prev, [`${item.id}-quantity`]: String(cleanNum(item.quantity) || '') })); e.target.select(); }}
+                          onChange={e => handleEditChange(item.id, 'quantity', e.target.value)}
+                          onBlur={e => handleEditBlur(item.id, 'quantity', e.target.value)}
                           onKeyDown={e => handleTableKeyDown(e, 'quantity')}
                         />
                       </td>
