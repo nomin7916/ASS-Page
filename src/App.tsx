@@ -762,33 +762,50 @@ export default function App() {
       statusMap['dxy'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
     },
     goldIntl: async (now, statusMap) => {
-      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=1d&interval=1d`;
-      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
-      for(const proxy of proxies) {
-        try {
-          const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-          if(!res.ok) continue;
-          const json = await res.json();
-          const meta = json?.chart?.result?.[0]?.meta;
-          if (meta?.regularMarketPrice) {
-            const price = meta.regularMarketPrice;
-            const prevClose = meta.chartPreviousClose || meta.previousClose;
-            const change = prevClose ? ((price / prevClose) - 1) * 100 : null;
-            statusMap['goldIntl'] = { status: 'success', source: 'Yahoo', updatedAt: now }; return { price, change };
-          }
-        } catch(e) {}
+      const tryYahooGold = async (symbol: string) => {
+        const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1d&interval=1d`;
+        const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
+        for (const proxy of proxies) {
+          try {
+            const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+            if (!res.ok) continue;
+            const json = await res.json();
+            const meta = json?.chart?.result?.[0]?.meta;
+            if (meta?.regularMarketPrice) {
+              const price = meta.regularMarketPrice;
+              const prevClose = meta.chartPreviousClose || meta.previousClose;
+              const change = prevClose ? ((price / prevClose) - 1) * 100 : null;
+              return { price, change, src: `Yahoo(${symbol})` };
+            }
+          } catch(e) {}
+        }
+        return null;
+      };
+      // GC=F(선물) 시도 후 실패 시 XAUUSD=X(현물)로 폴백
+      for (const symbol of ['GC=F', 'XAUUSD=X']) {
+        const result = await tryYahooGold(symbol);
+        if (result) {
+          statusMap['goldIntl'] = { status: 'success', source: result.src, updatedAt: now };
+          return { price: result.price, change: result.change };
+        }
       }
       statusMap['goldIntl'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
     },
     goldKr: async (now, statusMap) => {
-      const targetUrl = 'https://m.stock.naver.com/api/marketIndex/metals/M04020000';
-      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`];
+      // /api/stock/{code}/basic 엔드포인트 사용 (fchart와 동일한 M04020000 코드)
+      const targetUrl = 'https://m.stock.naver.com/api/stock/M04020000/basic';
+      const proxies = [
+        `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+      ];
       for(const proxy of proxies) {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
           if(!res.ok) continue;
           const data = await res.json();
-          const price = parseFloat(String(data?.closePrice || data?.price || '0').replace(/,/g, ''));
+          const rawPrice = data?.closePrice || data?.price || data?.nv || '0';
+          const price = parseFloat(String(rawPrice).replace(/,/g, ''));
           const change = data?.fluctuationsRatio ? parseFloat(data.fluctuationsRatio) : null;
           if(price > 0) { statusMap['goldKr'] = { status: 'success', source: '네이버금시세', updatedAt: now }; return { price, change }; }
         } catch(e) {}
