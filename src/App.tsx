@@ -1031,36 +1031,30 @@ export default function App() {
       // 국내금(goldKr): 네이버 fchart에서 장기 데이터 크롤링
       if (key === 'goldKr') {
         setIndicatorHistoryLoading(prev => ({ ...prev, goldKr: true }));
-        const naverUrl = `https://fchart.stock.naver.com/sise.nhn?symbol=M04020000&timeframe=day&count=2000&requestType=0`;
-        const proxies = [
-          `/api/proxy?url=${encodeURIComponent(naverUrl)}`,
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(naverUrl)}`,
-          `https://api.codetabs.com/v1/proxy?quest=${naverUrl}`,
-          `https://corsproxy.io/?url=${encodeURIComponent(naverUrl)}`,
-        ];
+        // /api/history: 서버사이드에서 Naver fchart 직접 수집
         let goldData: Record<string, number> | null = null;
-        for (const proxy of proxies) {
-          try {
-            const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
-            if (!res.ok) continue;
+        try {
+          const res = await fetch('/api/history?key=goldKr', { signal: AbortSignal.timeout(15000) });
+          if (res.ok) {
             const text = await res.text();
-            if (!text || text.length < 100) continue;
-            const result: Record<string, number> = {};
-            const lines = text.split('<item data="');
-            for (let i = 1; i < lines.length; i++) {
-              const raw = lines[i].split('"')[0];
-              const parts = raw.split('|');
-              if (parts.length >= 5) {
-                const d = parts[0];
-                const close = parseInt(parts[4]);
-                if (d.length === 8 && !isNaN(close) && close > 0) {
-                  result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
+            if (text && text.length > 100) {
+              const result: Record<string, number> = {};
+              const lines = text.split('<item data="');
+              for (let i = 1; i < lines.length; i++) {
+                const raw   = lines[i].split('"')[0];
+                const parts = raw.split('|');
+                if (parts.length >= 5) {
+                  const d     = parts[0];
+                  const close = parseInt(parts[4]);
+                  if (d.length === 8 && !isNaN(close) && close > 0) {
+                    result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
+                  }
                 }
               }
+              if (Object.keys(result).length > 10) goldData = result;
             }
-            if (Object.keys(result).length > 10) { goldData = result; break; }
-          } catch (e) { continue; }
-        }
+          }
+        } catch (e) { /* 수집 실패 */ }
         setIndicatorHistoryLoading(prev => ({ ...prev, goldKr: false }));
         if (!goldData || Object.keys(goldData).length === 0) {
           return null;
@@ -1090,24 +1084,17 @@ export default function App() {
       const d = new Date(); d.setFullYear(d.getFullYear() - 3); return d.toISOString().split('T')[0];
     })()).replace(/-/g, '');
     const d2 = (endDate || appliedRange.end || new Date().toISOString().split('T')[0]).replace(/-/g, '');
-    const stooqUrl = `https://stooq.com/q/d/l/?s=${symbol}&d1=${d1}&d2=${d2}&i=d`;
-    const proxies = [
-      `/api/proxy?url=${encodeURIComponent(stooqUrl)}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(stooqUrl)}`,
-      `https://api.codetabs.com/v1/proxy?quest=${stooqUrl}`,
-    ];
-
+    // /api/history: 서버사이드에서 stooq CSV 직접 수집
     let parsedData = null;
-    for (const proxy of proxies) {
-      try {
-        const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
-        if (!res.ok) continue;
+    try {
+      const res = await fetch(`/api/history?key=${key}&start=${d1}&end=${d2}`, { signal: AbortSignal.timeout(15000) });
+      if (res.ok) {
         const csv = await res.text();
-        if (!csv || csv.includes('No data') || csv.length < 50) continue;
-        parsedData = parseIndexCSV(csv, `${key}.csv`);
-        if (parsedData && Object.keys(parsedData).length > 5) break;
-      } catch (e) { continue; }
-    }
+        if (csv && !csv.includes('No data') && csv.length >= 50) {
+          parsedData = parseIndexCSV(csv, `${key}.csv`);
+        }
+      }
+    } catch (e) { /* 수집 실패 */ }
 
     setIndicatorHistoryLoading(prev => ({ ...prev, [key]: false }));
 
@@ -1174,83 +1161,52 @@ export default function App() {
 
   const fetchMarketIndicators = async () => {
     setIndicatorLoading(true);
-    const statusMap = {};
     const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-    
-    const resultsMap = {
-      us10y: null, kr10y: null, usdkrw: null, dxy: null, goldIntl: null, goldKr: null,
-      kospi: null, sp500: null, nasdaq: null, fedRate: null, btc: null, eth: null
-    };
+    const statusMap = {};
 
-    // 1차: Apps Script 프록시 통합 호출 (CORS 무관, 안정적)
-    const proxyData = await fetchIndicatorsViaProxy();
-    
-    if (proxyData) {
-      // 프록시 성공 시 매핑
-      const keyMap = {
-        kospi: 'kospi', sp500: 'sp500', nasdaq: 'nasdaq',
-        us10y: 'us10y', kr10y: 'kr10y', usdkrw: 'usdkrw',
-        dxy: 'dxy', goldIntl: 'goldIntl', goldKr: 'goldKr', fedRate: 'fedRate'
-      };
-      Object.keys(keyMap).forEach(k => {
-        const d = proxyData[k];
-        if (d && d.price !== null && d.price !== undefined) {
-          resultsMap[k] = { price: d.price, change: d.change ?? null };
-          statusMap[k] = { status: 'success', source: d.source || 'Apps Script 프록시', updatedAt: now };
-        }
-      });
-    }
+    try {
+      // /api/indicators: 서버사이드에서 FRED / Naver / Yahoo 직접 수집
+      const res = await fetch('/api/indicators', { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
 
-    // 2차: 프록시에서 실패한 항목만 기존 fetchersMap으로 폴백
-    const failedAfterProxy = Object.keys(resultsMap).filter(k => resultsMap[k] === null);
-    
-    if (failedAfterProxy.length > 0) {
-      console.log(`Apps Script 프록시 미수집 항목 (${failedAfterProxy.length}건), 직접 호출 폴백:`, failedAfterProxy);
-      await Promise.all(failedAfterProxy.map(async (key) => {
-        const fetcher = fetchersMap[key];
-        if (fetcher) {
-          const res = await fetcher(now, statusMap);
-          resultsMap[key] = res;
-        }
-      }));
-    }
+      const keys = ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
+                    'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth'];
 
-    // 상태 업데이트
-    const keys = Object.keys(resultsMap);
-    setMarketIndicators(prev => {
-      const merged = { ...prev };
-      keys.forEach(k => {
-        if (resultsMap[k]?.price !== null && resultsMap[k]?.price !== undefined) {
-          if (k === 'kospi' || k === 'sp500' || k === 'nasdaq') {
-            merged[`${k}Price`] = resultsMap[k].price;
-            merged[`${k}Chg`] = resultsMap[k].change;
+      setMarketIndicators(prev => {
+        const merged = { ...prev };
+        keys.forEach(k => {
+          const d = data[k];
+          if (d?.price != null) {
+            statusMap[k] = { status: 'success', source: d.source ?? 'API', updatedAt: now };
+            if (k === 'kospi' || k === 'sp500' || k === 'nasdaq') {
+              merged[`${k}Price`] = d.price;
+              merged[`${k}Chg`]   = d.change;
+            } else {
+              merged[k]           = d.price;
+              merged[`${k}Chg`]   = d.change;
+            }
           } else {
-            merged[k] = resultsMap[k].price;
-            merged[`${k}Chg`] = resultsMap[k].change;
+            statusMap[k] = { status: 'fail', source: 'API', updatedAt: now };
           }
-        }
+        });
+        return merged;
       });
-      return merged;
-    });
 
-    const todayMI = new Date().toISOString().split("T")[0];
-    setMarketIndices(prev => ({
-      kospi:  resultsMap.kospi?.price  ? { ...(prev.kospi  || {}), [todayMI]: resultsMap.kospi.price  } : prev.kospi,
-      sp500:  resultsMap.sp500?.price  ? { ...(prev.sp500  || {}), [todayMI]: resultsMap.sp500.price  } : prev.sp500,
-      nasdaq: resultsMap.nasdaq?.price ? { ...(prev.nasdaq || {}), [todayMI]: resultsMap.nasdaq.price } : prev.nasdaq,
-    }));
-
-    setIndicatorFetchStatus(statusMap);
-    setIndicatorLoading(false);
-    
-    // 실패한 키 추출
-    const finalFailedKeys = keys.filter(k => !resultsMap[k] || resultsMap[k].price === null);
-    
-    if (finalFailedKeys.length > 0) {
-       // 백그라운드 재시도 큐 진입
-       retryFailedIndicators(finalFailedKeys, statusMap, 10);
-    } else {
-       const proxyCount = proxyData ? Object.keys(resultsMap).filter(k => statusMap[k]?.source?.includes('프록시') || statusMap[k]?.source?.includes('Apps Script')).length : 0;
+      const todayMI = new Date().toISOString().split('T')[0];
+      setMarketIndices(prev => ({
+        kospi:  data.kospi?.price  ? { ...(prev.kospi  || {}), [todayMI]: data.kospi.price  } : prev.kospi,
+        sp500:  data.sp500?.price  ? { ...(prev.sp500  || {}), [todayMI]: data.sp500.price  } : prev.sp500,
+        nasdaq: data.nasdaq?.price ? { ...(prev.nasdaq || {}), [todayMI]: data.nasdaq.price } : prev.nasdaq,
+      }));
+    } catch (e) {
+      console.error('시장 지표 수집 오류:', e);
+      ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
+       'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth']
+        .forEach(k => { statusMap[k] = { status: 'fail', source: 'API 오류', updatedAt: now }; });
+    } finally {
+      setIndicatorFetchStatus(statusMap);
+      setIndicatorLoading(false);
     }
   };
 
