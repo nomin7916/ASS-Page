@@ -469,9 +469,9 @@ export default function App() {
   const [showSp500, setShowSp500] = useState(false);
   const [showNasdaq, setShowNasdaq] = useState(false);
   const [showIndicatorsInChart, setShowIndicatorsInChart] = useState({
-    us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false
+    us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false
   });
-  const [indicatorScales, setIndicatorScales] = useState({ us10y: 1, goldIntl: 1, goldKr: 1, usdkrw: 1, dxy: 1, fedRate: 1, kr10y: 1, vix: 1 });
+  const [indicatorScales, setIndicatorScales] = useState({ us10y: 1, goldIntl: 1, goldKr: 1, usdkrw: 1, dxy: 1, fedRate: 1, kr10y: 1, vix: 1, btc: 1, eth: 1 });
   const [isScaleSettingOpen, setIsScaleSettingOpen] = useState(false);
   const [indicatorHistoryLoading, setIndicatorHistoryLoading] = useState({});
   
@@ -503,7 +503,9 @@ export default function App() {
     us10yChg: null, kr10yChg: null, usdkrwChg: null, dxyChg: null, goldIntlChg: null, goldKrChg: null,
     kospiChg: null, sp500Chg: null, nasdaqChg: null,
     fedRate: null, fedRateChg: null,
-    vix: null, vixChg: null
+    vix: null, vixChg: null,
+    btc: null, btcChg: null,
+    eth: null, ethChg: null,
   });
   const [indicatorLoading, setIndicatorLoading] = useState(false);
   const [indicatorFetchStatus, setIndicatorFetchStatus] = useState({});
@@ -895,7 +897,47 @@ export default function App() {
         } catch(e) {}
       }
       statusMap['vix'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
-    }
+    },
+    btc: async (now, statusMap) => {
+      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/BTC-USD?range=1d&interval=1d`;
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
+      for (const proxy of proxies) {
+        try {
+          const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+          if (!res.ok) continue;
+          const json = await res.json();
+          const meta = json?.chart?.result?.[0]?.meta;
+          if (meta?.regularMarketPrice) {
+            const price = meta.regularMarketPrice;
+            const prevClose = meta.chartPreviousClose || meta.previousClose;
+            const change = prevClose ? ((price / prevClose) - 1) * 100 : null;
+            statusMap['btc'] = { status: 'success', source: 'Yahoo', updatedAt: now };
+            return { price, change };
+          }
+        } catch(e) {}
+      }
+      statusMap['btc'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
+    },
+    eth: async (now, statusMap) => {
+      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/ETH-USD?range=1d&interval=1d`;
+      const proxies = [`/api/proxy?url=${encodeURIComponent(targetUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`];
+      for (const proxy of proxies) {
+        try {
+          const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+          if (!res.ok) continue;
+          const json = await res.json();
+          const meta = json?.chart?.result?.[0]?.meta;
+          if (meta?.regularMarketPrice) {
+            const price = meta.regularMarketPrice;
+            const prevClose = meta.chartPreviousClose || meta.previousClose;
+            const change = prevClose ? ((price / prevClose) - 1) * 100 : null;
+            statusMap['eth'] = { status: 'success', source: 'Yahoo', updatedAt: now };
+            return { price, change };
+          }
+        } catch(e) {}
+      }
+      statusMap['eth'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
+    },
   };
 
   // 재시도 큐 매니저
@@ -972,11 +1014,14 @@ export default function App() {
     goldKr: null,  // KRX 금현물 - JSON 파일 업로드 필요
     fedRate: null, // 계단식 데이터 - 무료 소스 없음
     vix: '^vix',
+    btc: 'btcusd.cf',
+    eth: 'ethusd.cf',
   };
 
   const INDICATOR_LABELS = {
     us10y: 'US 10Y', kr10y: 'KR 10Y', goldIntl: 'Gold', goldKr: '국내금',
     usdkrw: 'USDKRW', dxy: 'DXY', fedRate: '미국 기준금리', vix: 'VIX',
+    btc: 'Bitcoin', eth: 'Ethereum',
   };
 
   // stooq에서 과거 데이터 CSV 가져오기
@@ -1076,7 +1121,7 @@ export default function App() {
 
   // stooq 지원 지표 전체 일괄 수집 + 국내금(goldKr) 포함
   const fetchAllIndicatorHistory = async () => {
-    const keys = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'goldKr'];
+    const keys = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'goldKr', 'btc', 'eth'];
     for (const key of keys) {
       await fetchIndicatorHistory(key, appliedRange?.start, appliedRange?.end);
     }
@@ -1133,7 +1178,7 @@ export default function App() {
     
     const resultsMap = {
       us10y: null, kr10y: null, usdkrw: null, dxy: null, goldIntl: null, goldKr: null,
-      kospi: null, sp500: null, nasdaq: null, fedRate: null
+      kospi: null, sp500: null, nasdaq: null, fedRate: null, btc: null, eth: null
     };
 
     // 1차: Apps Script 프록시 통합 호출 (CORS 무관, 안정적)
@@ -1234,7 +1279,7 @@ export default function App() {
     if (stooqAutoCrawledRef.current) return;
     if (driveStatus !== 'saved') return;
     if (!driveTokenRef.current) return;
-    const STOOQ_KEYS = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix'];
+    const STOOQ_KEYS = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth'];
     const staleKeys = STOOQ_KEYS.filter(key => {
       const hist = indicatorHistoryMap[key] || {};
       const count = Object.keys(hist).length;
@@ -1302,7 +1347,7 @@ export default function App() {
     return unifiedDates.filter(d => d >= appliedRange.start && d <= appliedRange.end);
   }, [unifiedDates, appliedRange]);
 
-  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix'];
+  const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth'];
 
   const indexDataMap = useMemo(() => {
     const map = {};
@@ -3749,6 +3794,8 @@ export default function App() {
                   {showIndicatorsInChart.fedRate && indicatorHistoryMap.fedRate && <YAxis yAxisId="right-fedRate" orientation="right" stroke="#ff375f" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={54} domain={['dataMin', 'dataMax']}><Label value="기준금리" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff375f', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <YAxis yAxisId="right-kr10y" orientation="right" stroke="#636366" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={52} domain={['dataMin', 'dataMax']}><Label value="KR 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#636366', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {showIndicatorsInChart.vix && indicatorHistoryMap.vix && <YAxis yAxisId="right-vix" orientation="right" stroke="#ff453a" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={48} domain={['dataMin', 'dataMax']}><Label value="VIX" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff453a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.btc && indicatorHistoryMap.btc && <YAxis yAxisId="right-btc" orientation="right" stroke="#f7931a" tick={{ fontSize: 9 }} tickFormatter={v => '$' + Math.round(v).toLocaleString()} width={72} domain={['dataMin', 'dataMax']}><Label value="BTC" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#f7931a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+                  {showIndicatorsInChart.eth && indicatorHistoryMap.eth && <YAxis yAxisId="right-eth" orientation="right" stroke="#627eea" tick={{ fontSize: 9 }} tickFormatter={v => '$' + Math.round(v).toLocaleString()} width={72} domain={['dataMin', 'dataMax']}><Label value="ETH" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#627eea', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   <RechartsTooltip content={<MainChartCustomTooltip selectionResult={selectionResult} formatShortDateFn={formatShortDate} formatNumberFn={formatNumber} />} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
@@ -3771,6 +3818,10 @@ export default function App() {
                   {!userFeatures.feature1 && showIndicatorsInChart.kr10y && indicatorHistoryMap.kr10y && <Line yAxisId="right-kr10y" dataKey="kr10yPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
                   {!userFeatures.feature1 && showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Area yAxisId="left" type="monotone" dataKey="vixRateScaled" name="VIX" stroke="#ff453a" strokeWidth={1.5} fill="url(#vixGradient)" strokeDasharray="4 2" connectNulls dot={false} />}
                   {!userFeatures.feature1 && showIndicatorsInChart.vix && indicatorHistoryMap.vix && <Line yAxisId="right-vix" dataKey="vixPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
+                  {!userFeatures.feature1 && showIndicatorsInChart.btc && indicatorHistoryMap.btc && <Line yAxisId="left" type="monotone" dataKey="btcRateScaled" name="Bitcoin" stroke="#f7931a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {!userFeatures.feature1 && showIndicatorsInChart.btc && indicatorHistoryMap.btc && <Line yAxisId="right-btc" dataKey="btcPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
+                  {!userFeatures.feature1 && showIndicatorsInChart.eth && indicatorHistoryMap.eth && <Line yAxisId="left" type="monotone" dataKey="ethRateScaled" name="Ethereum" stroke="#627eea" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+                  {!userFeatures.feature1 && showIndicatorsInChart.eth && indicatorHistoryMap.eth && <Line yAxisId="right-eth" dataKey="ethPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
                   {!userFeatures.feature1 && compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke={compStocks[0].color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} />}
                   {!userFeatures.feature1 && compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke={compStocks[1].color || '#0ea5e9'} strokeWidth={1.5} dot={false} connectNulls={false} />}
                   {!userFeatures.feature1 && compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke={compStocks[2].color || '#ec4899'} strokeWidth={1.5} dot={false} connectNulls={false} />}

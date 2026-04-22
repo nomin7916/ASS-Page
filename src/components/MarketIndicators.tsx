@@ -7,13 +7,13 @@ const INDICATOR_COLORS = {
   kospi: '#38bdf8', sp500: '#bf5af2', nasdaq: '#30d158',
   fedRate: '#ff375f', us10y: '#8e8e93', kr10y: '#636366',
   goldIntl: '#ffd60a', goldKr: '#d97706', usdkrw: '#0a84ff', dxy: '#5ac8fa',
-  vix: '#ff453a',
+  vix: '#ff453a', btc: '#f7931a', eth: '#627eea',
 };
 
 // stooq 자동수집 가능한 키
-const STOOQ_SUPPORTED = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix'];
+const STOOQ_SUPPORTED = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth'];
 // 차트에 표시 가능한 키
-const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix'];
+const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth'];
 
 export default function MarketIndicators({
   marketIndicators,
@@ -131,6 +131,18 @@ export default function MarketIndicators({
       fmt: (v) => v?.toFixed(2), color: 'text-red-400',
       url: 'https://finance.yahoo.com/quote/%5EVIX/', sep: true,
     },
+    {
+      label: 'Bitcoin', key: 'btc',
+      val: marketIndicators.btc, chg: marketIndicators.btcChg,
+      fmt: (v) => '$' + v?.toLocaleString('en-US', { maximumFractionDigits: 0 }), color: 'text-orange-400',
+      url: 'https://finance.yahoo.com/quote/BTC-USD/', sep: true,
+    },
+    {
+      label: 'Ethereum', key: 'eth',
+      val: marketIndicators.eth, chg: marketIndicators.ethChg,
+      fmt: (v) => '$' + v?.toLocaleString('en-US', { maximumFractionDigits: 2 }), color: 'text-indigo-400',
+      url: 'https://finance.yahoo.com/quote/ETH-USD/',
+    },
   ];
 
   const isIndicatorInChart = (key) => {
@@ -159,7 +171,7 @@ export default function MarketIndicators({
             onClick={onFetchAll}
             disabled={Object.values(indicatorHistoryLoading || {}).some(Boolean)}
             className="p-1 hover:bg-blue-900/50 rounded transition text-blue-400 hover:text-blue-200 disabled:opacity-40 disabled:cursor-not-allowed"
-            title={`조회기간 시장지표 일괄 수집\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}\nUS 10Y · Gold · USDKRW · DXY · 국내금`}
+            title={`조회기간 시장지표 일괄 수집\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}\nUS 10Y · Gold · USDKRW · DXY · 국내금 · BTC · ETH`}
           >
             {Object.values(indicatorHistoryLoading || {}).some(Boolean)
               ? <RefreshCw size={11} className="animate-spin" />
@@ -345,6 +357,8 @@ export default function MarketIndicators({
                 { label: 'USDKRW', key: 'usdkrw',  val: marketIndicators.usdkrw,     url: 'https://tradingeconomics.com/south-korea/currency',                       histKey: 'usdkrw' },
                 { label: 'DXY',    key: 'dxy',      val: marketIndicators.dxy,        url: 'https://tradingeconomics.com/united-states/currency',                     histKey: 'dxy' },
                 { label: 'VIX',    key: 'vix',      val: marketIndicators.vix,        url: 'https://finance.yahoo.com/quote/%5EVIX/',                                 histKey: 'vix' },
+                { label: 'Bitcoin', key: 'btc',     val: marketIndicators.btc,        url: 'https://finance.yahoo.com/quote/BTC-USD/',                                histKey: 'btc' },
+                { label: 'Ethereum', key: 'eth',    val: marketIndicators.eth,        url: 'https://finance.yahoo.com/quote/ETH-USD/',                                histKey: 'eth' },
               ].map((item, i) => {
                 const st = indicatorFetchStatus[item.key];
                 const hasBackup = item.val !== null && item.val !== undefined;
