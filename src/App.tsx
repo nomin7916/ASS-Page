@@ -2307,6 +2307,7 @@ export default function App() {
 
     // 사용자별 localStorage에서 복원
     let hasLocalData = false;
+    let localUpdatedAt = 0;
     const saved = localStorage.getItem(userKey);
     if (saved) {
       try {
@@ -2378,6 +2379,7 @@ export default function App() {
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
         if (data.intHistory) setIntHistory(data.intHistory);
+        localUpdatedAt = data.updatedAt || 0;
         hasLocalData = true;
       } catch (e) {}
     }
@@ -2415,10 +2417,13 @@ export default function App() {
     const bgTimer = setTimeout(async () => {
       initClient();
 
-      // localStorage에 데이터가 없으면 Drive에서 복원
+      let usedDriveData = false;
+
       if (!hasLocalData) {
+        // localStorage 없음 → Drive에서 불러오거나 신규 생성
         const drivePortfolio = await loadFromDrive(token);
         if (drivePortfolio?.length > 0) {
+          usedDriveData = true;
           await new Promise(r => setTimeout(r, 600));
         } else {
           // 완전 신규 사용자: 초기 포트폴리오 생성
@@ -2432,6 +2437,19 @@ export default function App() {
           setPrincipal(0);
           setPortfolioStartDate(today);
         }
+      } else {
+        // localStorage 있어도 Drive 타임스탬프와 비교 → 다른 기기에서 더 최신 데이터가 있으면 Drive 사용
+        try {
+          const checkFolderId = await ensureDriveFolder(token);
+          const driveRaw = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
+          if (driveRaw?.updatedAt && driveRaw.updatedAt > localUpdatedAt) {
+            // Drive가 더 최신 → Drive 전체 데이터 적용 (다른 기기 변경사항 반영)
+            await loadFromDrive(token);
+            usedDriveData = true;
+          }
+        } catch {
+          // Drive 접근 실패 → localStorage 유지
+        }
       }
 
       // 시장지표 백그라운드 수집, 종목 현재가 갱신
@@ -2441,12 +2459,15 @@ export default function App() {
         await autoRefreshStockPrices(portfolioToRefresh);
       }
 
-      // 조회 완료 후 Drive 백업 + 자동저장 활성화
+      // 조회 완료 후 자동저장 활성화
+      // Drive에서 이미 로드했으면 현재 상태 그대로 유지, localStorage 기준이면 Drive에 백업
       setTimeout(() => {
         isInitialLoad.current = false;
-        const snap = saveStateRef.current;
-        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
-          saveAllToDrive(snap);
+        if (!usedDriveData) {
+          const snap = saveStateRef.current;
+          if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
+            saveAllToDrive(snap);
+          }
         }
       }, 1000);
     }, 400);
@@ -2521,7 +2542,7 @@ export default function App() {
         ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory, updatedAt: Date.now() };
     saveStateRef.current = state;
     // 관리자가 사용자 뷰를 보고 있을 때는 해당 사용자의 키로 localStorage 저장
     const stateEmail = adminViewingAsRef.current || authUser.email;
