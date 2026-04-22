@@ -30,9 +30,10 @@ const ACCOUNT_TYPE_CONFIG: Record<string, { emoji: string; activeColor: string; 
   'dc-irp':    { emoji: '🏦', activeColor: 'text-amber-400',   activeBorder: 'border-amber-500',   inactiveColor: 'text-amber-600/70',   label: '퇴직연금' },
   'isa':       { emoji: '🌱', activeColor: 'text-emerald-400', activeBorder: 'border-emerald-500', inactiveColor: 'text-emerald-600/70', label: 'ISA' },
   'portfolio': { emoji: '📈', activeColor: 'text-blue-400',    activeBorder: 'border-blue-500',    inactiveColor: 'text-blue-600/70',    label: '일반증권' },
-  'pension':   { emoji: '🎯', activeColor: 'text-purple-400',  activeBorder: 'border-purple-500',  inactiveColor: 'text-purple-600/70',  label: '개인연금' },
-  'gold':      { emoji: '🥇', activeColor: 'text-yellow-400',  activeBorder: 'border-yellow-500',  inactiveColor: 'text-yellow-600/70',  label: '금현물' },
   'dividend':  { emoji: '💰', activeColor: 'text-green-400',   activeBorder: 'border-green-500',   inactiveColor: 'text-green-600/70',   label: '배당형' },
+  'pension':   { emoji: '🎯', activeColor: 'text-purple-400',  activeBorder: 'border-purple-500',  inactiveColor: 'text-purple-600/70',  label: '개인연금' },
+  'gold':      { emoji: '🥇', activeColor: 'text-yellow-400',  activeBorder: 'border-yellow-500',  inactiveColor: 'text-yellow-600/70',  label: 'KRX 금현물' },
+  'overseas':  { emoji: '🌐', activeColor: 'text-sky-400',     activeBorder: 'border-sky-500',     inactiveColor: 'text-sky-600/70',     label: '해외계좌' },
   'crypto':    { emoji: '₿',  activeColor: 'text-orange-400',  activeBorder: 'border-orange-500',  inactiveColor: 'text-orange-600/70',  label: 'CRYPTO' },
   'simple':    { emoji: '📋', activeColor: 'text-gray-400',    activeBorder: 'border-gray-500',    inactiveColor: 'text-gray-600/70',    label: '직접입력' },
 };
@@ -2728,7 +2729,7 @@ export default function App() {
     const today = new Date().toISOString().split('T')[0];
     const ACCOUNT_TYPE_NAMES = {
       'portfolio': '일반 증권', 'isa': 'ISA', 'dc-irp': '퇴직연금',
-      'gold': '금현물', 'pension': '연금저축', 'dividend': '배당형', 'crypto': 'CRYPTO',
+      'gold': 'KRX 금현물', 'pension': '연금저축', 'dividend': '배당형', 'crypto': 'CRYPTO', 'overseas': '해외계좌',
     };
     const existingTypeAccount = portfolios.find(p => p.accountType === accountType);
     const inheritedSettings = existingTypeAccount?.settings || { mode: 'rebalance', amount: 1000000 };
@@ -3827,12 +3828,13 @@ export default function App() {
                         <div className="fixed inset-0 z-40" onClick={() => setShowNewAccountMenu(false)} />
                         <div className="absolute right-0 top-full mt-1 z-50 bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl py-1 min-w-[160px]">
                           {[
-                            { type: 'portfolio', icon: '📊', label: '일반 증권 계좌' },
-                            { type: 'isa',       icon: '🏛️', label: 'ISA 계좌' },
-                            { type: 'dc-irp',    icon: '🏢', label: '퇴직연금 (DC/IRP)' },
-                            { type: 'gold',      icon: '🥇', label: '금현물 계좌' },
-                            { type: 'pension',   icon: '💰', label: '연금저축 계좌' },
-                            { type: 'dividend',  icon: '💸', label: '배당형 계좌' },
+                            { type: 'dc-irp',    icon: '🏦', label: '퇴직연금 계좌' },
+                            { type: 'isa',       icon: '🌱', label: 'ISA 계좌' },
+                            { type: 'portfolio', icon: '📈', label: '일반증권 계좌' },
+                            { type: 'dividend',  icon: '💰', label: '배당형 계좌' },
+                            { type: 'pension',   icon: '🎯', label: '연금저축 계좌' },
+                            { type: 'gold',      icon: '🥇', label: 'KRX 금현물 계좌' },
+                            { type: 'overseas',  icon: '🌐', label: '해외계좌' },
                             { type: 'crypto',    icon: '₿',  label: 'CRYPTO 계좌' },
                           ].map(({ type, icon, label }) => (
                             <button
