@@ -18,6 +18,38 @@ export default async function handler(request: Request): Promise<Response> {
   const start = (searchParams.get('start') ?? '').replace(/-/g, '');
   const end   = (searchParams.get('end')   ?? '').replace(/-/g, '');
 
+  // ── 개별 종목 히스토리: Naver fchart XML (key=stock&code=XXXXX) ─────────
+  if (key === 'stock') {
+    const code  = searchParams.get('code') ?? '';
+    const count = searchParams.get('count') ?? '2000';
+    if (!code || code.length < 5) {
+      return new Response('code 파라미터 필요', { status: 400 });
+    }
+    try {
+      const res = await fetch(
+        `https://fchart.stock.naver.com/sise.nhn?symbol=${encodeURIComponent(code)}&timeframe=day&count=${count}&requestType=0`,
+        {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+            'Referer':    'https://m.stock.naver.com/',
+          },
+          signal: AbortSignal.timeout(12000),
+        }
+      );
+      if (!res.ok) return new Response(`Naver fchart ${res.status}`, { status: 502 });
+      const body = await res.text();
+      return new Response(body, {
+        headers: {
+          'Content-Type':                'text/plain; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+        },
+      });
+    } catch (e) {
+      return new Response(`Naver fchart error: ${e}`, { status: 502 });
+    }
+  }
+
   // ── 국내금(goldKr): Naver fchart XML ──────────────────────────────────
   if (key === 'goldKr') {
     try {

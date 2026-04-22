@@ -16,6 +16,7 @@ async function safeJson(url: string, init?: RequestInit) {
 
 // FRED API (미연준 공식): DGS10(US10Y), DFEDTARU(기준금리 상단)
 async function fetchFred(seriesId: string) {
+  if (!FRED_KEY) return { price: null, change: null, source: 'FRED' };
   const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5`;
   const data = await safeJson(url);
   const obs: { value: string }[] = (data?.observations ?? []).filter((o: any) => o.value !== '.');
@@ -78,8 +79,13 @@ async function fetchCoinGecko(coinId: string) {
 export default async function handler(_req: Request): Promise<Response> {
   // 모든 지표를 병렬 수집 — 개별 실패가 전체에 영향 없음
   const [
-    us10y, fedRate, kr10y, usdkrw, goldKr,
-    kospi, sp500, nasdaq,
+    us10y, fedRate,
+    kr10y,
+    kospi,
+    sp500Yahoo, sp500Naver,
+    nasdaqYahoo, nasdaqNaver,
+    usdkrwYahoo, usdkrwNaver,
+    goldKrNaver,
     dxy, goldIntlMain, goldIntlFallback,
     vix,
     btcYahoo, ethYahoo,
@@ -88,15 +94,18 @@ export default async function handler(_req: Request): Promise<Response> {
     fetchFred('DGS10'),                                                // US 10Y
     fetchFred('DFEDTARU'),                                             // 미국 기준금리 상단
     fetchNaver('/api/marketIndex/bond/KR10YT=RR',      'Naver채권'),  // KR 10Y
-    fetchNaver('/api/marketIndex/exchange/FX_USDKRW',  'Naver환율'),  // USDKRW
-    fetchNaver('/api/stock/M04020000/basic',            'Naver금'),    // 국내금(KRX)
     fetchNaver('/api/index/KOSPI/basic',                'Naver'),      // KOSPI
-    fetchNaver('/api/index/SPI@SPX/basic',              'Naver'),      // S&P500
-    fetchNaver('/api/index/NAS@NDX/basic',              'Naver'),      // Nasdaq100
+    fetchYahoo('^GSPC'),                                               // S&P500 (Yahoo primary)
+    fetchNaver('/api/index/SPI@SPX/basic',              'Naver'),      // S&P500 (Naver fallback)
+    fetchYahoo('^NDX'),                                                // Nasdaq100 (Yahoo primary)
+    fetchNaver('/api/index/NAS@NDX/basic',              'Naver'),      // Nasdaq100 (Naver fallback)
+    fetchYahoo('KRW=X'),                                               // USDKRW (Yahoo primary)
+    fetchNaver('/api/marketIndex/exchange/FX_USDKRW',  'Naver환율'),  // USDKRW (Naver fallback)
+    fetchNaver('/api/stock/M04020000/basic',            'Naver금'),    // 국내금(KRX) primary
     fetchYahoo('DX-Y.NYB'),                                            // DXY
     fetchYahoo('GC=F'),                                                // 금 선물(primary)
     fetchYahoo('XAUUSD=X'),                                            // 금 현물(fallback)
-    fetchYahoo('%5EVIX'),                                              // VIX
+    fetchYahoo('^VIX'),                                                // VIX
     fetchYahoo('BTC-USD'),                                             // BTC (Yahoo)
     fetchYahoo('ETH-USD'),                                             // ETH (Yahoo)
     fetchCoinGecko('bitcoin'),                                         // BTC (fallback)
@@ -111,16 +120,27 @@ export default async function handler(_req: Request): Promise<Response> {
   // Yahoo 실패 시 CoinGecko 사용
   const btc = ok(btcYahoo)?.price ? ok(btcYahoo) : ok(btcCg);
   const eth = ok(ethYahoo)?.price ? ok(ethYahoo) : ok(ethCg);
+  // Yahoo primary, Naver fallback
+  const sp500  = ok(sp500Yahoo)?.price  ? ok(sp500Yahoo)  : ok(sp500Naver);
+  const nasdaq = ok(nasdaqYahoo)?.price ? ok(nasdaqYahoo) : ok(nasdaqNaver);
+  const usdkrw = ok(usdkrwYahoo)?.price ? ok(usdkrwYahoo) : ok(usdkrwNaver);
+
+  // 국내금: Naver 실패 시 국제금(USD/oz) × USDKRW ÷ 31.1035(g/oz) 환산
+  let goldKr = ok(goldKrNaver);
+  if (!goldKr?.price && goldIntl?.price && usdkrw?.price) {
+    const computed = Math.round(goldIntl.price * usdkrw.price / 31.1035);
+    goldKr = { price: computed, change: goldIntl.change, source: '계산(Gold×KRW)' };
+  }
 
   const body = {
     us10y:   ok(us10y),
     fedRate: ok(fedRate),
     kr10y:   ok(kr10y),
-    usdkrw:  ok(usdkrw),
-    goldKr:  ok(goldKr),
+    usdkrw,
+    goldKr,
     kospi:   ok(kospi),
-    sp500:   ok(sp500),
-    nasdaq:  ok(nasdaq),
+    sp500,
+    nasdaq,
     dxy:     ok(dxy),
     goldIntl,
     vix:     ok(vix),
