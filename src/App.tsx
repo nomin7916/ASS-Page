@@ -793,8 +793,8 @@ export default function App() {
       statusMap['goldIntl'] = { status: 'fail', source: 'Yahoo 실패', updatedAt: now }; return { price: null, change: null };
     },
     goldKr: async (now, statusMap) => {
-      // /api/stock/{code}/basic 엔드포인트 사용 (fchart와 동일한 M04020000 코드)
-      const targetUrl = 'https://m.stock.naver.com/api/stock/M04020000/basic';
+      // finance.naver.com/marketindex/goldDetail.naver: DEAL_VAL(현재가) + 변동률 span 파싱
+      const targetUrl = 'https://finance.naver.com/marketindex/goldDetail.naver';
       const proxies = [
         `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
@@ -804,11 +804,22 @@ export default function App() {
         try {
           const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
           if(!res.ok) continue;
-          const data = await res.json();
-          const rawPrice = data?.closePrice || data?.price || data?.nv || '0';
-          const price = parseFloat(String(rawPrice).replace(/,/g, ''));
-          const change = data?.fluctuationsRatio ? parseFloat(data.fluctuationsRatio) : null;
-          if(price > 0) { statusMap['goldKr'] = { status: 'success', source: '네이버금시세', updatedAt: now }; return { price, change }; }
+          const html = await res.text();
+          const priceMatch = html.match(/var DEAL_VAL\s*=\s*([\d.]+)/);
+          if(!priceMatch) continue;
+          const price = parseFloat(priceMatch[1]);
+          if(!(price > 0)) continue;
+          // 변동률: parenthesis1~per 구간에서 no{digit}/jum 클래스로 조합
+          const pctSection = html.match(/class="parenthesis1">([\s\S]*?)class="per">/)?.[0] || '';
+          let pctStr = '';
+          const tokenRe = /class="(no\d|jum)"/g;
+          let tm: RegExpExecArray | null;
+          while ((tm = tokenRe.exec(pctSection)) !== null) {
+            pctStr += tm[1] === 'jum' ? '.' : tm[1].replace('no', '');
+          }
+          let change = parseFloat(pctStr) || null;
+          if(change !== null && pctSection.includes('class="ico minus"')) change = -change;
+          statusMap['goldKr'] = { status: 'success', source: '네이버금시세', updatedAt: now }; return { price, change };
         } catch(e) {}
       }
       statusMap['goldKr'] = { status: 'fail', source: '네이버금시세 실패', updatedAt: now }; return { price: null, change: null };
