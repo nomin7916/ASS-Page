@@ -341,29 +341,31 @@ export default function MarketIndicators({
                 <th className="py-0.5 text-left">지표</th>
                 <th className="py-0.5 text-center">현재</th>
                 <th className="py-0.5 text-center">히스토리</th>
-                <th className="py-0.5 text-left">출처</th>
+                <th className="py-0.5 text-left">수집</th>
               </tr>
             </thead>
             <tbody>
               {[
-                { label: 'KOSPI',  key: 'kospi',   val: marketIndicators.kospiPrice,  url: 'https://m.stock.naver.com/domestic/index/KOSPI/total',                    histKey: null },
-                { label: 'S&P500', key: 'sp500',   val: marketIndicators.sp500Price,  url: 'https://m.stock.naver.com/worldstock/index/.INX/total',                   histKey: null },
-                { label: 'Nasdaq', key: 'nasdaq',  val: marketIndicators.nasdaqPrice, url: 'https://m.stock.naver.com/worldstock/index/.IXIC/total',                  histKey: null },
-                { label: '기준금리', key: 'fedRate', val: marketIndicators.fedRate,   url: 'https://tradingeconomics.com/united-states/interest-rate',                histKey: 'fedRate' },
-                { label: 'US 10Y', key: 'us10y',   val: marketIndicators.us10y,       url: 'https://tradingeconomics.com/united-states/government-bond-yield',        histKey: 'us10y' },
-                { label: 'KR 10Y', key: 'kr10y',   val: marketIndicators.kr10y,       url: 'https://tradingeconomics.com/south-korea/government-bond-yield',          histKey: 'kr10y' },
-                { label: 'Gold',   key: 'goldIntl', val: marketIndicators.goldIntl,   url: 'https://tradingeconomics.com/commodity/gold',                             histKey: 'goldIntl' },
-                { label: '국내 금', key: 'goldKr',  val: marketIndicators.goldKr,     url: 'https://m.stock.naver.com/marketindex/metals/M04020000',                  histKey: 'goldKr' },
-                { label: 'USDKRW', key: 'usdkrw',  val: marketIndicators.usdkrw,     url: 'https://tradingeconomics.com/south-korea/currency',                       histKey: 'usdkrw' },
-                { label: 'DXY',    key: 'dxy',      val: marketIndicators.dxy,        url: 'https://tradingeconomics.com/united-states/currency',                     histKey: 'dxy' },
-                { label: 'VIX',    key: 'vix',      val: marketIndicators.vix,        url: 'https://finance.yahoo.com/quote/%5EVIX/',                                 histKey: 'vix' },
-                { label: 'Bitcoin', key: 'btc',     val: marketIndicators.btc,        url: 'https://finance.yahoo.com/quote/BTC-USD/',                                histKey: 'btc' },
-                { label: 'Ethereum', key: 'eth',    val: marketIndicators.eth,        url: 'https://finance.yahoo.com/quote/ETH-USD/',                                histKey: 'eth' },
+                { label: 'KOSPI',    key: 'kospi',   val: marketIndicators.kospiPrice,  histKey: null },
+                { label: 'S&P500',   key: 'sp500',   val: marketIndicators.sp500Price,  histKey: null },
+                { label: 'Nasdaq',   key: 'nasdaq',  val: marketIndicators.nasdaqPrice, histKey: null },
+                { label: '기준금리',  key: 'fedRate', val: marketIndicators.fedRate,     histKey: 'fedRate' },
+                { label: 'US 10Y',   key: 'us10y',   val: marketIndicators.us10y,       histKey: 'us10y' },
+                { label: 'KR 10Y',   key: 'kr10y',   val: marketIndicators.kr10y,       histKey: 'kr10y' },
+                { label: 'Gold',     key: 'goldIntl', val: marketIndicators.goldIntl,   histKey: 'goldIntl' },
+                { label: '국내 금',  key: 'goldKr',  val: marketIndicators.goldKr,      histKey: 'goldKr' },
+                { label: 'USDKRW',   key: 'usdkrw',  val: marketIndicators.usdkrw,     histKey: 'usdkrw' },
+                { label: 'DXY',      key: 'dxy',      val: marketIndicators.dxy,        histKey: 'dxy' },
+                { label: 'VIX',      key: 'vix',      val: marketIndicators.vix,        histKey: 'vix' },
+                { label: 'Bitcoin',  key: 'btc',      val: marketIndicators.btc,        histKey: 'btc' },
+                { label: 'Ethereum', key: 'eth',      val: marketIndicators.eth,        histKey: 'eth' },
               ].map((item, i) => {
                 const st = indicatorFetchStatus[item.key];
                 const hasBackup = item.val !== null && item.val !== undefined;
-                const histCount = item.histKey && indicatorHistoryMap?.[item.histKey]
-                  ? Object.keys(indicatorHistoryMap[item.histKey]).length : 0;
+                const hist = item.histKey ? (indicatorHistoryMap?.[item.histKey] || {}) : {};
+                const histCount = Object.keys(hist).length;
+                const latestDate = histCount > 0 ? Object.keys(hist).sort().pop() : null;
+
                 let badge, sourceText;
                 if (!st) {
                   badge = hasBackup ? <span className="text-yellow-400">🟡</span> : <span className="text-gray-500">⚪</span>;
@@ -375,26 +377,69 @@ export default function MarketIndicators({
                   badge = hasBackup ? <span className="text-yellow-400">🟡</span> : <span className="text-red-400">🔴</span>;
                   sourceText = hasBackup ? '백업' : '실패';
                 }
+
+                // 자동수집 가능 여부
+                const isAutoCollectable = item.histKey && (STOOQ_SUPPORTED.includes(item.histKey) || item.histKey === 'goldKr');
+                const isUploadOnly = item.histKey && !isAutoCollectable;
+                const isHistLoading = indicatorHistoryLoading?.[item.histKey];
+
+                // 증분 수집 시작일: 최신 날짜 다음날부터
+                const today = new Date().toISOString().split('T')[0];
+                const incrementalStart = latestDate
+                  ? (() => { const d = new Date(latestDate); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })()
+                  : null;
+                const isUpToDate = latestDate && latestDate >= today;
+
                 return (
                   <tr key={i} className="border-b border-gray-800">
                     <td className="py-0.5 text-gray-300 font-bold">{item.label}</td>
                     <td className="py-0.5 text-center">{badge}</td>
                     <td className="py-0.5 text-center text-[8px]">
                       {histCount > 0
-                        ? <span className="text-blue-400">{histCount}건</span>
+                        ? <span className="text-blue-400" title={latestDate ? `최신: ${latestDate}` : ''}>{histCount}건</span>
                         : item.histKey
                           ? <span className="text-gray-600">없음</span>
                           : <span className="text-gray-700">-</span>
                       }
                     </td>
-                    <td className="py-0.5 text-blue-400 cursor-pointer hover:underline"
-                      onClick={() => window.open(item.url, '_blank')}>{sourceText}</td>
+                    <td className="py-0.5">
+                      {isHistLoading ? (
+                        <span className="text-blue-300 animate-pulse">수집중...</span>
+                      ) : isAutoCollectable ? (
+                        isUpToDate ? (
+                          <span className="text-green-600 text-[8px]">최신</span>
+                        ) : (
+                          <button
+                            className="text-blue-400 hover:text-blue-200 transition-colors"
+                            onClick={() => {
+                              fetchIndicatorHistory(item.histKey, incrementalStart, today);
+                              setShowIndicatorsInChart(prev => ({ ...prev, [item.histKey]: true }));
+                            }}
+                            title={latestDate
+                              ? `${item.label} 증분 수집\n보유: ${latestDate} 이후 ~ 오늘\n클릭하여 누락 데이터만 수집`
+                              : `${item.label} 전체 수집 (데이터 없음)`}
+                          >
+                            {sourceText} ↓
+                          </button>
+                        )
+                      ) : isUploadOnly ? (
+                        <button
+                          className="text-orange-400 hover:text-orange-300 transition-colors"
+                          onClick={() => fileInputRefs.current[item.histKey]?.click()}
+                          title={`${item.label} CSV/JSON 파일 업로드`}
+                        >
+                          <FileUp size={9} className="inline" />
+                        </button>
+                      ) : (
+                        <span className="text-gray-600 text-[8px]">{sourceText}</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          <div className="mt-1 text-gray-600">🟢 성공 🟡 백업 🔴 실패 | 이름 클릭 시 히스토리 자동수집</div>
+          <div className="mt-1 text-gray-600">🟢 성공 🟡 백업 🔴 실패 | 수집 클릭 시 최신 날짜 이후만 증분 수집</div>
         </div>
       )}
     </div>

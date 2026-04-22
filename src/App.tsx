@@ -1115,7 +1115,8 @@ export default function App() {
       return null;
     }
 
-    setIndicatorHistoryMap(prev => ({ ...prev, [key]: parsedData }));
+    // 기존 데이터 보존 + 새 데이터 병합 (최신 날짜 이후 데이터만 추가됨)
+    setIndicatorHistoryMap(prev => ({ ...prev, [key]: { ...(prev[key] || {}), ...parsedData } }));
     return parsedData;
   };
 
