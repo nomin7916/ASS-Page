@@ -78,6 +78,25 @@ async function fetchNaver(path: string, source: string) {
   return price > 0 ? { price, change, source } : { price: null, change: null, source };
 }
 
+// Naver front-api/marketIndex/productDetail (채권 현재가 — /api/marketIndex/bond/ 경로 deprecated 대체)
+async function fetchNaverBond(reutersCode: string, source: string) {
+  const data = await safeJson(
+    `https://m.stock.naver.com/front-api/marketIndex/productDetail?category=bond&reutersCode=${encodeURIComponent(reutersCode)}`,
+    {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+        'Referer':    'https://m.stock.naver.com/',
+        'Accept':     'application/json',
+      },
+    }
+  );
+  if (!data?.isSuccess) return { price: null, change: null, source };
+  const result = data.result;
+  const price  = parseFloat(String(result?.closePrice ?? '0').replace(/,/g, ''));
+  const change = result?.fluctuationsRatio != null ? parseFloat(String(result.fluctuationsRatio)) : null;
+  return price > 0 ? { price, change, source } : { price: null, change: null, source };
+}
+
 // Yahoo Finance v8 chart API (서버사이드 직접 호출)
 async function fetchYahoo(symbol: string) {
   const data = await safeJson(
@@ -156,9 +175,9 @@ export default async function handler(_req: Request): Promise<Response> {
   ] = await Promise.allSettled([
     fetchFred('DGS10'),                                                // US 10Y (FRED — 영업일 종가 기준)
     fetchYahoo('^TNX'),                                                // US 10Y (Yahoo — 장중 실시간 fallback)
-    fetchNaver('/api/marketIndex/bond/US10YT=RR', 'Naver채권US'),     // US 10Y (Naver — 3rd fallback)
+    fetchNaverBond('US10YT=RR', 'Naver채권US'),                        // US 10Y (Naver — 3rd fallback)
     fetchFred('DFEDTARU'),                                             // 미국 기준금리 상단 (FRED)
-    fetchNaver('/api/marketIndex/bond/KR10YT=RR',      'Naver채권'),  // KR 10Y (Naver primary)
+    fetchNaverBond('KR10YT=RR', 'Naver채권'),                         // KR 10Y (Naver primary)
     fetchYahoo('^KR10YT=RR'),                                          // KR 10Y (Yahoo fallback)
     fetchNaver('/api/index/KOSPI/basic',                'Naver'),      // KOSPI
     fetchYahoo('^GSPC'),                                               // S&P500 (Yahoo primary)
