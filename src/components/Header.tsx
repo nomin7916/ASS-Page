@@ -2,14 +2,14 @@
 import React from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste,
-  X, Download, FolderOpen, FileUp, CloudDownload
+  Download, FileUp, CloudDownload
 } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 
 const COLAB_URL = 'https://colab.research.google.com/drive/1hjCwtVjyKzooWly4AU_ufrMSV87FApzi#scrollTo=fe7b764e';
 const COLAB_PASSWORD = '0000';
 
-const Header = ({ title, setTitle, isLoading, driveStatus, customLinks, setCustomLinks, onRefresh, onSave, onDriveSave, onLoad, onPaste, onImportHistory, isLinkSettingsOpen, setIsLinkSettingsOpen, fileInputRef, historyInputRef, onDriveConnect, onDriveLoad, onDriveLoadOnly }) => (
+const Header = ({ title, setTitle, isLoading, driveStatus, customLinks, setCustomLinks, onRefresh, onSave, onDriveSave, onPaste, onImportHistory, isLinkSettingsOpen, setIsLinkSettingsOpen, historyInputRef, onDriveConnect, onDriveLoadOnly }) => (
   <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full mt-2 relative">
     <div className="p-4 md:p-5 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center bg-[#1e293b] gap-4">
       <div className="absolute top-3 right-4 text-[10px] text-gray-500 font-mono md:hidden"><span className="text-gray-400">{UI_CONFIG.VERSION}</span></div>
@@ -48,9 +48,7 @@ const Header = ({ title, setTitle, isLoading, driveStatus, customLinks, setCusto
           </div>
           <button onClick={() => historyInputRef.current.click()} title="지수/종목 히스토리 주입 (JSON 또는 CSV)" className="bg-orange-600 hover:bg-orange-500 text-white p-2 rounded shadow transition border border-orange-500/30 flex items-center justify-center"><FileUp size={16} /></button>
           <input type="file" ref={historyInputRef} onChange={onImportHistory} className="hidden" accept=".json,.csv" multiple />
-          <button onClick={onDriveLoadOnly} title="Google Drive에서만 데이터 불러오기" className="bg-blue-700 hover:bg-blue-600 text-white p-2 rounded shadow transition border border-blue-500/30 flex items-center justify-center"><CloudDownload size={16} /></button>
-          <button onClick={onDriveLoad} title="Drive에서 최신 데이터 불러오기 (미연결 시 PC 파일 선택)" className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded shadow transition border border-gray-500/30 flex items-center justify-center"><FolderOpen size={16} /></button>
-          <input type="file" ref={fileInputRef} onChange={onLoad} className="hidden" accept=".json" />
+          <button onClick={onDriveLoadOnly} title="Google Drive에서 최신 데이터 불러오기" className="bg-blue-700 hover:bg-blue-600 text-white p-2 rounded shadow transition border border-blue-500/30 flex items-center justify-center"><CloudDownload size={16} /></button>
           {/* 디스크 버튼: Drive에만 백업 */}
           <button onClick={onDriveSave} title="Google Drive에만 백업 저장" className="bg-indigo-600 hover:bg-indigo-500 text-white p-2 rounded shadow transition border border-indigo-500/30 flex items-center justify-center"><Save size={16} /></button>
           <div className="w-[1px] h-5 bg-gray-600 mx-0.5"></div>

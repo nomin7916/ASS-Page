@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
-  X, Trash2, Download, Calendar, FolderOpen,
+  X, Trash2, Download, Calendar,
   Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload
 } from 'lucide-react';
 import {
@@ -326,7 +326,6 @@ function CustomDatePicker({ value, onChange, placeholder = '--/--/--' }) {
 // ────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const fileInputRef = useRef(null);
   const historyInputRef = useRef(null);
 
   // ── 인증 상태 ──
@@ -2135,16 +2134,6 @@ export default function App() {
     }
   };
 
-  const handleDriveLoad = async () => {
-    const token = driveTokenRef.current;
-    if (token) {
-      const result = await loadFromDrive(token);
-      if (result !== null) return;
-    }
-    // Drive 미연결 또는 불러오기 실패 → PC 파일 선택으로 폴백
-    fileInputRef.current?.click();
-  };
-
   const handleDriveLoadOnly = async () => {
     // CLIENT_ID 미설정
     if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
@@ -2176,76 +2165,6 @@ export default function App() {
     if (result === null) {
       showToast('Drive에서 데이터를 불러오지 못했습니다.', true);
     }
-  };
-
-  const handleLoad = (e) => {
-    const file = e.target.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = JSON.parse(event.target.result);
-        // 새 형식 (portfolios 배열) 또는 구 형식 (portfolio) 모두 지원
-        if (data.portfolios?.length > 0 || data.portfolio) {
-          setStockHistoryMap(data.stockHistoryMap || {});
-          setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
-          setLookupRows(data.lookupRows || []);
-          setCompStocks(data.compStocks || defaultCompStocks);
-
-          if (data.portfolios?.length > 0) {
-            // 새 형식
-            setPortfolios(data.portfolios);
-            const activeId = data.activePortfolioId || data.portfolios[0].id;
-            setActivePortfolioId(activeId);
-            const active = data.portfolios.find(p => p.id === activeId) || data.portfolios[0];
-            setTitle(active.name || '복구된 계좌');
-            setPortfolio(active.portfolio || []);
-            setPrincipal(active.principal || 0);
-            setHistory(active.history || []);
-            setDepositHistory(active.depositHistory || []);
-            if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
-            setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
-            setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
-          } else {
-            // 구 형식 마이그레이션
-            const newId = generateId();
-            const sd = data.portfolioStartDate || data.history?.[0]?.date || '';
-            const migrated = { id: newId, name: data.title || 'DC', startDate: sd, portfolioStartDate: sd, portfolio: data.portfolio || [], principal: cleanNum(data.principal), history: data.history || [], depositHistory: data.depositHistory || [], depositHistory2: data.depositHistory2 || [], settings: data.settings || { mode: 'rebalance', amount: 1000000 } };
-            setPortfolios([migrated]);
-            setActivePortfolioId(newId);
-            setTitle(data.title || '복구된 계좌');
-            setPortfolio(data.portfolio || []);
-            setPrincipal(cleanNum(data.principal));
-            setHistory(data.history || []);
-            setDepositHistory(data.depositHistory || []);
-            if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
-            if (data.portfolioStartDate) setPortfolioStartDate(data.portfolioStartDate);
-          }
-
-          if (data.intHistory) setIntHistory(data.intHistory);
-          if (data.marketIndices) {
-            setMarketIndices(data.marketIndices);
-            setIndexFetchStatus({
-              kospi: data.marketIndices.kospi ? buildIndexStatus(data.marketIndices.kospi, '백업파일') : null,
-              sp500: data.marketIndices.sp500 ? buildIndexStatus(data.marketIndices.sp500, '백업파일') : null,
-              nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, '백업파일') : null,
-            });
-          }
-          if (data.chartPrefs) {
-            if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
-            if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
-            if (data.chartPrefs.showNasdaq !== undefined) setShowNasdaq(data.chartPrefs.showNasdaq);
-            if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
-            if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
-            if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
-          }
-          if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
-          if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
-          setStockFetchStatus({});
-          showToast("데이터 복원 완료");
-        }
-      } catch (err) { showToast("파일 형식이 올바르지 않습니다.", true); }
-    };
-    reader.readAsText(file); e.target.value = '';
   };
 
   const handleDownloadCSV = () => {
@@ -2377,8 +2296,10 @@ export default function App() {
 
     const token = authUser.token;
     const userKey = `portfolioState_v5_${authUser.email}`;
+    const stockKey = `portfolioStockData_v5_${authUser.email}`;
+    const marketKey = `portfolioMarketData_v5_${authUser.email}`;
 
-    // 사용자별 localStorage에서 복원
+    // 사용자별 localStorage에서 복원 (Drive와 동일하게 3개 키로 분리)
     let hasLocalData = false;
     let localUpdatedAt = 0;
     let localPortfoliosCount = 0;
@@ -2388,6 +2309,7 @@ export default function App() {
         const data = JSON.parse(saved);
 
         // 포트폴리오 데이터 로드 (새 형식 우선, 구 형식 마이그레이션)
+        // 구버전 호환: 통합 키에 stockHistoryMap이 있으면 사용 (신버전은 별도 키 사용)
         setStockHistoryMap(data.stockHistoryMap || {});
         if (data.portfolios?.length > 0) {
           setPortfolios(data.portfolios);
@@ -2457,6 +2379,34 @@ export default function App() {
         localPortfoliosCount = data.portfolios?.length || 0;
         hasLocalData = true;
       } catch (e) {}
+    }
+
+    // 분리 저장된 종목 이력 로드 (신버전 별도 키, 통합 키보다 우선)
+    const savedStock = localStorage.getItem(stockKey);
+    if (savedStock) {
+      try {
+        const stockData = JSON.parse(savedStock);
+        if (stockData.stockHistoryMap && Object.keys(stockData.stockHistoryMap).length > 0)
+          setStockHistoryMap(stockData.stockHistoryMap);
+      } catch {}
+    }
+
+    // 분리 저장된 시장 데이터 로드 (신버전 별도 키, 통합 키보다 우선)
+    const savedMarket = localStorage.getItem(marketKey);
+    if (savedMarket) {
+      try {
+        const marketData = JSON.parse(savedMarket);
+        if (marketData.marketIndices) {
+          setMarketIndices(marketData.marketIndices);
+          setIndexFetchStatus({
+            kospi: marketData.marketIndices.kospi ? buildIndexStatus(marketData.marketIndices.kospi, 'localStorage') : null,
+            sp500: marketData.marketIndices.sp500 ? buildIndexStatus(marketData.marketIndices.sp500, 'localStorage') : null,
+            nasdaq: marketData.marketIndices.nasdaq ? buildIndexStatus(marketData.marketIndices.nasdaq, 'localStorage') : null,
+          });
+        }
+        if (marketData.marketIndicators) setMarketIndicators(marketData.marketIndicators);
+        if (marketData.indicatorHistoryMap) setIndicatorHistoryMap(marketData.indicatorHistoryMap);
+      } catch {}
     }
 
     // Drive 토큰 설정
@@ -2626,18 +2576,17 @@ export default function App() {
     );
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory, updatedAt: Date.now() };
     saveStateRef.current = state;
-    // 관리자가 사용자 뷰를 보고 있을 때는 해당 사용자의 키로 localStorage 저장
+    // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
     const stateEmail = adminViewingAsRef.current || authUser.email;
+    const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
+    try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch {}
     try {
-      localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(state));
-    } catch (e) {
-      try {
-        const { indicatorHistoryMap: _ihm, stockHistoryMap: _shm, ...stateLight } = state;
-        localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateLight));
-      } catch {
-        // 그래도 실패하면 무시 (Drive 백업에 의존)
-      }
-    }
+      if (Object.keys(shm || {}).length > 0)
+        localStorage.setItem(`portfolioStockData_v5_${stateEmail}`, JSON.stringify({ stockHistoryMap: shm }));
+    } catch {}
+    try {
+      localStorage.setItem(`portfolioMarketData_v5_${stateEmail}`, JSON.stringify({ marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }));
+    } catch {}
     // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스)
     if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
@@ -3299,7 +3248,7 @@ export default function App() {
         )}
 
         {!showIntegratedDashboard && (<>
-        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onLoad={handleLoad} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} fileInputRef={fileInputRef} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoad={handleDriveLoad} onDriveLoadOnly={handleDriveLoadOnly} />
+        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
 
         <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
 
