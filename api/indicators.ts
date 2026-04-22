@@ -125,12 +125,8 @@ export default async function handler(_req: Request): Promise<Response> {
   const nasdaq = ok(nasdaqYahoo)?.price ? ok(nasdaqYahoo) : ok(nasdaqNaver);
   const usdkrw = ok(usdkrwYahoo)?.price ? ok(usdkrwYahoo) : ok(usdkrwNaver);
 
-  // 국내금: Naver 실패 시 국제금(USD/oz) × USDKRW ÷ 31.1035(g/oz) 환산
-  let goldKr = ok(goldKrNaver);
-  if (!goldKr?.price && goldIntl?.price && usdkrw?.price) {
-    const computed = Math.round(goldIntl.price * usdkrw.price / 31.1035);
-    goldKr = { price: computed, change: goldIntl.change, source: '계산(Gold×KRW)' };
-  }
+  // 국내금: Naver 실시간 시세만 사용, 실패 시 null 반환 (환산 계산 불사용)
+  const goldKr = ok(goldKrNaver)?.price ? ok(goldKrNaver) : null;
 
   const body = {
     us10y:   ok(us10y),
