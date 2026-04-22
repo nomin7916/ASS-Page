@@ -3076,8 +3076,8 @@ export default function App() {
           <div className="flex gap-2 flex-wrap items-center">
             <button
               onClick={() => setShowIntegratedDashboard(true)}
-              style={{ boxShadow: `inset 3px 0 0 0 #60a5fa${showIntegratedDashboard ? 'DD' : '55'}` }}
-              className={`px-4 py-2 text-sm font-bold rounded-md transition-all duration-200 ${showIntegratedDashboard ? 'bg-slate-800 text-white' : 'text-gray-400 hover:bg-slate-800 hover:text-white'}`}
+              style={{ boxShadow: `inset 3px 0 0 0 #60a5fa${showIntegratedDashboard ? 'CC' : '66'}` }}
+              className={`px-4 py-2 text-sm font-bold rounded-md border transition-all duration-200 ${showIntegratedDashboard ? 'bg-slate-800 text-white border-slate-500' : 'text-gray-400 border-slate-700 hover:bg-slate-800 hover:text-white hover:border-slate-500'}`}
             >총 자산 현황</button>
             {portfolios.filter(p => p.accountType !== 'simple').map(p => {
               const typeConf = ACCOUNT_TYPE_CONFIG[p.accountType] || ACCOUNT_TYPE_CONFIG['portfolio'];
@@ -3086,8 +3086,8 @@ export default function App() {
                 <button
                   key={p.id}
                   onClick={() => switchToPortfolio(p.id)}
-                  style={{ boxShadow: `inset 3px 0 0 0 ${typeConf.color}${isActive ? 'DD' : '55'}` }}
-                  className={`px-4 py-2 text-sm font-bold rounded-md transition-all duration-200 ${isActive ? 'bg-slate-800 text-white' : 'text-gray-400 hover:bg-slate-800 hover:text-white'}`}
+                  style={{ boxShadow: `inset 3px 0 0 0 ${typeConf.color}${isActive ? 'CC' : '66'}` }}
+                  className={`px-4 py-2 text-sm font-bold rounded-md border transition-all duration-200 ${isActive ? 'bg-slate-800 text-white border-slate-500' : 'text-gray-400 border-slate-700 hover:bg-slate-800 hover:text-white hover:border-slate-500'}`}
                 >{(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
               );
             })}
