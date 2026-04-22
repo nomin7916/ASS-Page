@@ -2308,6 +2308,7 @@ export default function App() {
     // 사용자별 localStorage에서 복원
     let hasLocalData = false;
     let localUpdatedAt = 0;
+    let localPortfoliosCount = 0;
     const saved = localStorage.getItem(userKey);
     if (saved) {
       try {
@@ -2380,6 +2381,7 @@ export default function App() {
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
         if (data.intHistory) setIntHistory(data.intHistory);
         localUpdatedAt = data.updatedAt || 0;
+        localPortfoliosCount = data.portfolios?.length || 0;
         hasLocalData = true;
       } catch (e) {}
     }
@@ -2422,7 +2424,8 @@ export default function App() {
       if (!hasLocalData) {
         // localStorage 없음 → Drive에서 불러오거나 신규 생성
         const drivePortfolio = await loadFromDrive(token);
-        if (drivePortfolio?.length > 0) {
+        if (drivePortfolio !== null) {
+          // Drive에 데이터가 존재 (빈 포트폴리오, simple 계좌 포함 모두 처리)
           usedDriveData = true;
           await new Promise(r => setTimeout(r, 600));
         } else {
@@ -2438,14 +2441,20 @@ export default function App() {
           setPortfolioStartDate(today);
         }
       } else {
-        // localStorage 있어도 Drive 타임스탬프와 비교 → 다른 기기에서 더 최신 데이터가 있으면 Drive 사용
+        // localStorage 있어도 Drive와 비교 → 다른 기기에서 더 최신 데이터가 있으면 Drive 사용
         try {
           const checkFolderId = await ensureDriveFolder(token);
           const driveRaw = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
-          if (driveRaw?.updatedAt && driveRaw.updatedAt > localUpdatedAt) {
-            // Drive가 더 최신 → Drive 전체 데이터 적용 (다른 기기 변경사항 반영)
-            await loadFromDrive(token);
-            usedDriveData = true;
+          if (driveRaw) {
+            const driveTs = driveRaw.updatedAt || 0;
+            const driveCount = driveRaw.portfolios?.length || 0;
+            // Drive가 더 최신이거나, 둘 다 updatedAt 없을 때 Drive 계좌 수가 더 많으면 Drive 우선
+            const driveIsNewer = driveTs > localUpdatedAt;
+            const driveHasMore = !driveTs && !localUpdatedAt && driveCount > localPortfoliosCount;
+            if (driveIsNewer || driveHasMore) {
+              await loadFromDrive(token);
+              usedDriveData = true;
+            }
           }
         } catch {
           // Drive 접근 실패 → localStorage 유지
