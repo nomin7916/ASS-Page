@@ -26,6 +26,17 @@ import {
 
 const INT_CATEGORIES = ['주식', '주식-a', '금', '채권', '현금', '리츠', '배당주식', '예수금'];
 
+const ACCOUNT_TYPE_CONFIG: Record<string, { emoji: string; activeColor: string; activeBorder: string; inactiveColor: string; label: string }> = {
+  'dc-irp':    { emoji: '🏦', activeColor: 'text-amber-400',   activeBorder: 'border-amber-500',   inactiveColor: 'text-amber-600/70',   label: '퇴직연금' },
+  'isa':       { emoji: '🌱', activeColor: 'text-emerald-400', activeBorder: 'border-emerald-500', inactiveColor: 'text-emerald-600/70', label: 'ISA' },
+  'portfolio': { emoji: '📈', activeColor: 'text-blue-400',    activeBorder: 'border-blue-500',    inactiveColor: 'text-blue-600/70',    label: '일반증권' },
+  'pension':   { emoji: '🎯', activeColor: 'text-purple-400',  activeBorder: 'border-purple-500',  inactiveColor: 'text-purple-600/70',  label: '개인연금' },
+  'gold':      { emoji: '🥇', activeColor: 'text-yellow-400',  activeBorder: 'border-yellow-500',  inactiveColor: 'text-yellow-600/70',  label: '금현물' },
+  'dividend':  { emoji: '💰', activeColor: 'text-green-400',   activeBorder: 'border-green-500',   inactiveColor: 'text-green-600/70',   label: '배당형' },
+  'crypto':    { emoji: '₿',  activeColor: 'text-orange-400',  activeBorder: 'border-orange-500',  inactiveColor: 'text-orange-600/70',  label: 'CRYPTO' },
+  'simple':    { emoji: '📋', activeColor: 'text-gray-400',    activeBorder: 'border-gray-500',    inactiveColor: 'text-gray-600/70',    label: '직접입력' },
+};
+
 const sortArrow = (config, key) =>
   config.key === key
     ? (config.direction === 1 ? <span className="ml-0.5 text-blue-400 text-[8px]">▲</span> : <span className="ml-0.5 text-blue-400 text-[8px]">▼</span>)
@@ -2719,12 +2730,14 @@ export default function App() {
       'portfolio': '일반 증권', 'isa': 'ISA', 'dc-irp': '퇴직연금',
       'gold': '금현물', 'pension': '연금저축', 'dividend': '배당형', 'crypto': 'CRYPTO',
     };
+    const existingTypeAccount = portfolios.find(p => p.accountType === accountType);
+    const inheritedSettings = existingTypeAccount?.settings || { mode: 'rebalance', amount: 1000000 };
     const newP = {
       id: newId, name: ACCOUNT_TYPE_NAMES[accountType] || '새 계좌', startDate: today, portfolioStartDate: today,
       accountType,
       portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
       principal: 0, history: [], depositHistory: [], depositHistory2: [],
-      settings: { mode: 'rebalance', amount: 1000000 },
+      settings: inheritedSettings,
     };
     setPortfolios([...updated, newP]);
     setActivePortfolioId(newId);
@@ -2772,14 +2785,40 @@ export default function App() {
   };
 
   const deletePortfolio = (id) => {
-    if (portfolios.length <= 1) { showToast('마지막 계좌는 삭제할 수 없습니다.'); return; }
-    if (!window.confirm('이 포트폴리오 계좌를 삭제하시겠습니까?')) return;
+    const isLast = portfolios.length <= 1;
+    const confirmMsg = isLast
+      ? '마지막 계좌입니다. 삭제하면 새 빈 계좌가 자동으로 생성됩니다. 삭제하시겠습니까?'
+      : '이 포트폴리오 계좌를 삭제하시겠습니까?';
+    if (!window.confirm(confirmMsg)) return;
     const updated = portfolios.map(p =>
       p.id === activePortfolioId
         ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
     const remaining = updated.filter(p => p.id !== id);
+    if (remaining.length === 0) {
+      const newId = generateId();
+      const today = new Date().toISOString().split('T')[0];
+      const blank = {
+        id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
+        accountType: 'portfolio',
+        portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
+        principal: 0, history: [], depositHistory: [], depositHistory2: [],
+        settings: { mode: 'rebalance', amount: 1000000 },
+      };
+      setPortfolios([blank]);
+      setActivePortfolioId(blank.id);
+      setTitle(blank.name);
+      setPortfolio(blank.portfolio);
+      setPrincipal(0);
+      setHistory([]);
+      setDepositHistory([]);
+      setDepositHistory2([]);
+      setPortfolioStartDate(today);
+      setSettings(blank.settings);
+      setShowIntegratedDashboard(false);
+      return;
+    }
     setPortfolios(remaining);
     if (activePortfolioId === id) {
       const first = remaining[0];
@@ -2811,6 +2850,16 @@ export default function App() {
 
   const resetAllPortfolioColors = () => {
     setPortfolios(prev => prev.map(p => ({ ...p, rowColor: '' })));
+  };
+
+  // 같은 accountType의 모든 계좌에 settings를 동기화
+  const updateSettingsForType = (newSettings) => {
+    setSettings(newSettings);
+    const activePortfolio = portfolios.find(p => p.id === activePortfolioId);
+    if (!activePortfolio) return;
+    setPortfolios(prev => prev.map(p =>
+      p.accountType === activePortfolio.accountType ? { ...p, settings: newSettings } : p
+    ));
   };
 
   const hexToRgba = (hex, alpha) => {
@@ -3028,13 +3077,17 @@ export default function App() {
               onClick={() => setShowIntegratedDashboard(true)}
               className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
             >🏦 총 자산 현황</button>
-            {portfolios.filter(p => p.accountType !== 'simple').map(p => (
-              <button
-                key={p.id}
-                onClick={() => switchToPortfolio(p.id)}
-                className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${!showIntegratedDashboard && activePortfolioId === p.id ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
-              >📊 {(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
-            ))}
+            {portfolios.filter(p => p.accountType !== 'simple').map(p => {
+              const typeConf = ACCOUNT_TYPE_CONFIG[p.accountType] || ACCOUNT_TYPE_CONFIG['portfolio'];
+              const isActive = !showIntegratedDashboard && activePortfolioId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => switchToPortfolio(p.id)}
+                  className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${isActive ? `${typeConf.activeBorder} ${typeConf.activeColor}` : `border-transparent ${typeConf.inactiveColor} hover:${typeConf.activeColor}`}`}
+                >{typeConf.emoji} {(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
+              );
+            })}
           </div>
           {showIntegratedDashboard && (
             <div className="flex items-center gap-1 pr-1 pb-0.5">
@@ -3678,8 +3731,8 @@ export default function App() {
             <div className="flex flex-col gap-3 w-full xl:w-[600px]">
               <div className="flex items-center justify-between bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{formatCurrency(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0)}</span></div>
               <div className="flex items-stretch bg-gray-900 border border-gray-600 rounded-lg overflow-hidden h-12 shadow-sm">
-                <select className="bg-gray-800 text-gray-200 text-sm font-bold px-3 border-r border-gray-600 outline-none cursor-pointer" value={settings.mode} onChange={e => setSettings({ ...settings, mode: e.target.value })}><option value="rebalance">리밸런싱 (비중 기반)</option><option value="accumulate">적립 (신규 자금 분할)</option></select>
-                <input type="text" className="flex-1 bg-transparent text-right text-white font-bold px-4 outline-none text-lg" value={formatNumber(settings.amount)} onChange={e => setSettings({ ...settings, amount: cleanNum(e.target.value) })} onFocus={e => e.target.select()} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} />
+                <select className="bg-gray-800 text-gray-200 text-sm font-bold px-3 border-r border-gray-600 outline-none cursor-pointer" value={settings.mode} onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}><option value="rebalance">리밸런싱 (비중 기반)</option><option value="accumulate">적립 (신규 자금 분할)</option></select>
+                <input type="text" className="flex-1 bg-transparent text-right text-white font-bold px-4 outline-none text-lg" value={formatNumber(settings.amount)} onChange={e => updateSettingsForType({ ...settings, amount: cleanNum(e.target.value) })} onFocus={e => e.target.select()} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} />
               </div>
             </div>
           </div>
