@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar, FolderOpen,
-  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock
+  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -3044,6 +3044,13 @@ export default function App() {
                 className="p-1.5 hover:bg-gray-800 rounded transition text-teal-400 hover:text-teal-300"
               >
                 <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+              </button>
+              <button
+                onClick={handleDriveLoadOnly}
+                title="Google Drive에서 최신 데이터 불러오기"
+                className="p-1.5 hover:bg-gray-800 rounded transition text-blue-400 hover:text-blue-300"
+              >
+                <CloudDownload size={14} />
               </button>
               <button
                 onClick={handleDriveSave}
