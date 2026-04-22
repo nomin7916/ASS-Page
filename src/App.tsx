@@ -478,6 +478,7 @@ export default function App() {
   const [marketIndices, setMarketIndices] = useState({ kospi: null, sp500: null, nasdaq: null });
   const [indicatorHistoryMap, setIndicatorHistoryMap] = useState({});
   const [stockHistoryMap, setStockHistoryMap] = useState({});
+  const [stockListingDates, setStockListingDates] = useState<Record<string, string>>({});
   const [compStocks, setCompStocks] = useState(defaultCompStocks);
   const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
@@ -1666,13 +1667,16 @@ export default function App() {
           const todayStr = new Date().toISOString().split('T')[0];
           hist = { [todayStr]: info.price };
           setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
-          showToast(`⚠️ ${comp.name || comp.code} 과거 데이터가 없어 현재가만 표시됩니다.`, true);
         } else {
-          showToast(`${comp.code} 데이터를 찾을 수 없습니다.`, true);
           setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: false }; return n; });
           return;
         }
       }
+    }
+    // 캐시·API 모두 포함: 2건 이상이면 가장 이른 날짜를 상장일로 저장 (재조회 버튼 억제용)
+    if (hist && Object.keys(hist).length > 1) {
+      const earliest = Object.keys(hist).sort()[0];
+      if (earliest) setStockListingDates(prev => ({ ...prev, [comp.code]: earliest }));
     }
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
   };
@@ -1718,6 +1722,7 @@ export default function App() {
       setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
       autoFetchedCodes.current.add(comp.code); // 전체 이력 조회 완료 표시
       const earliest = Object.keys(hist).sort()[0];
+      if (earliest) setStockListingDates(prev => ({ ...prev, [comp.code]: earliest }));
       // 과거 데이터 수집 직후 Drive 즉시 백업 (페이지 재시작 시 재수집 방지)
       setTimeout(() => {
         const snap = saveStateRef.current;
@@ -1732,9 +1737,7 @@ export default function App() {
         const fallbackHist = { [todayStr]: info.price };
         setStockHistoryMap(prev => ({ ...prev, [comp.code]: fallbackHist }));
         setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
-        showToast(`⚠️ ${comp.name || comp.code} 과거 데이터를 찾을 수 없어 현재가만 표시됩니다.`, true);
       } else {
-        showToast(`${comp.code} 데이터를 찾을 수 없습니다.`, true);
         setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: false }; return n; });
       }
     }
@@ -3077,7 +3080,7 @@ export default function App() {
             <button
               onClick={() => setShowIntegratedDashboard(true)}
               style={{ boxShadow: `inset 3px 0 0 0 #60a5fa${showIntegratedDashboard ? 'CC' : '66'}` }}
-              className={`px-4 py-2 text-sm font-bold rounded-md border transition-all duration-200 ${showIntegratedDashboard ? 'bg-slate-800 text-white border-slate-500' : 'text-gray-400 border-slate-700 hover:bg-slate-800 hover:text-white hover:border-slate-500'}`}
+              className={`w-[96px] py-2 text-xs font-bold rounded-md border transition-all duration-200 truncate ${showIntegratedDashboard ? 'bg-slate-800 text-white border-slate-500' : 'text-gray-400 border-slate-700 hover:bg-slate-800 hover:text-white hover:border-slate-500'}`}
             >총 자산 현황</button>
             {portfolios.filter(p => p.accountType !== 'simple').map(p => {
               const typeConf = ACCOUNT_TYPE_CONFIG[p.accountType] || ACCOUNT_TYPE_CONFIG['portfolio'];
@@ -3087,7 +3090,7 @@ export default function App() {
                   key={p.id}
                   onClick={() => switchToPortfolio(p.id)}
                   style={{ boxShadow: `inset 3px 0 0 0 ${typeConf.color}${isActive ? 'CC' : '66'}` }}
-                  className={`px-4 py-2 text-sm font-bold rounded-md border transition-all duration-200 ${isActive ? 'bg-slate-800 text-white border-slate-500' : 'text-gray-400 border-slate-700 hover:bg-slate-800 hover:text-white hover:border-slate-500'}`}
+                  className={`w-[96px] py-2 text-xs font-bold rounded-md border transition-all duration-200 truncate ${isActive ? 'bg-slate-800 text-white border-slate-500' : 'text-gray-400 border-slate-700 hover:bg-slate-800 hover:text-white hover:border-slate-500'}`}
                 >{(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
               );
             })}
@@ -3501,14 +3504,15 @@ export default function App() {
                     {compStocks.map((comp, idx) => {
                       const histKeys = comp.active && stockHistoryMap[comp.code] ? Object.keys(stockHistoryMap[comp.code]).sort() : [];
                       const isFallback = comp.active && histKeys.length === 1;
-                      // 데이터가 있지만 조회 시작일보다 늦게 시작 → 재조회 필요
-                      const needsCoverage = comp.active && histKeys.length > 1 && !!appliedRange.start && histKeys[0] > appliedRange.start;
-                      const showRefresh = isFallback || needsCoverage;
+                      // 데이터가 있지만 조회 시작일보다 늦게 시작 → 재조회 필요 (단, 상장일까지 이미 조회된 경우 제외)
+                      const listingDate = stockListingDates[comp.code];
+                      const needsCoverage = comp.active && histKeys.length > 1 && !!appliedRange.start && histKeys[0] > appliedRange.start && !listingDate;
+                      const hasIssue = isFallback || needsCoverage;
                       const color = comp.color || '#10b981';
-                      const borderColor = comp.active ? (showRefresh ? '#f97316' : color) : '#4b5563';
-                      const bgColor = comp.active ? (showRefresh ? 'rgba(249,115,22,0.1)' : `${color}22`) : '#1f2937';
-                      const textColor = comp.active ? (showRefresh ? '#fb923c' : color) : '#6b7280';
-                      const refreshTitle = isFallback ? '조회기간 전체 이력 불러오기' : needsCoverage ? `조회기간(${appliedRange.start}) 이전 데이터 없음 — 전체 이력 재조회` : '전체 이력 재조회';
+                      const borderColor = comp.active ? (hasIssue ? '#f97316' : color) : '#4b5563';
+                      const bgColor = comp.active ? (hasIssue ? 'rgba(249,115,22,0.1)' : `${color}22`) : '#1f2937';
+                      const textColor = comp.active ? (hasIssue ? '#fb923c' : color) : '#6b7280';
+                      const refreshTitle = isFallback ? '조회기간 전체 이력 불러오기' : needsCoverage ? `조회기간(${appliedRange.start}) 이전 데이터 없음 — 전체 이력 재조회` : '데이터 장애 시 강제 재조회';
                       return (
                         <div key={idx} className="flex items-center gap-0 rounded-md overflow-hidden shrink-0 transition-colors border" style={{ borderColor, backgroundColor: bgColor }}>
                           {/* 컬러 인디케이터 + 숨겨진 color picker */}
@@ -3523,8 +3527,12 @@ export default function App() {
                           </div>
                           <input type="text" className="bg-transparent text-[10px] px-2 py-1.5 outline-none text-center font-mono placeholder-gray-500 border-r transition-colors" style={{ width: '50px', borderColor, color: comp.active ? textColor : '#93c5fd' }} placeholder="코드" value={comp.code} onChange={e => { const n = [...compStocks]; n[idx] = { ...n[idx], code: e.target.value }; setCompStocks(n); }} onBlur={e => handleCompStockBlur(idx, e.target.value)} />
                           <button onClick={() => handleToggleComp(idx)} className="px-3 py-1.5 text-[10px] font-bold transition-colors min-w-[65px] max-w-[100px] truncate flex justify-center items-center gap-0.5" style={{ color: comp.loading ? '#9ca3af' : textColor, backgroundColor: comp.loading ? '#374151' : 'transparent', cursor: comp.loading ? 'wait' : 'pointer' }}>{comp.loading ? <RefreshCw size={12} className="animate-spin" /> : (comp.name || `종목${idx + 1}`)}<CompStockDot code={comp.code} /></button>
-                          {showRefresh && (
-                            <button onClick={() => { autoFetchedCodes.current.delete(comp.code); handleFetchCompHistory(idx); }} className="px-1.5 py-1.5 text-orange-400 hover:text-orange-200 hover:bg-orange-900/30 transition-colors border-l border-orange-700/40" title={refreshTitle} style={{ cursor: 'pointer' }}>
+                          {comp.active && (
+                            <button
+                              onClick={() => { autoFetchedCodes.current.delete(comp.code); setStockListingDates(prev => { const n = { ...prev }; delete n[comp.code]; return n; }); handleFetchCompHistory(idx); }}
+                              className={`px-1.5 py-1.5 transition-colors border-l ${hasIssue ? 'text-orange-400 hover:text-orange-200 hover:bg-orange-900/30 border-orange-700/40' : 'text-gray-600 hover:text-gray-300 hover:bg-gray-700/40 border-gray-700/40'}`}
+                              title={refreshTitle}
+                            >
                               <RefreshCw size={10} />
                             </button>
                           )}
