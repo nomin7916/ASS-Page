@@ -97,6 +97,36 @@ async function fetchYahoo(symbol: string) {
   return { price, change: prev ? ((price / prev) - 1) * 100 : null, source: 'Yahoo' };
 }
 
+// Naver m.stock front-api (국제금 GCcv1 실시간 — CORS 없는 서버사이드 전용)
+async function fetchNaverGoldIntl(): Promise<{ price: number | null; change: number | null; source: string }> {
+  try {
+    const res = await fetch(
+      'https://m.stock.naver.com/front-api/realTime/marketIndex/metals',
+      {
+        method: 'POST',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+          'Content-Type': 'application/json',
+          'Accept':       'application/json, text/plain, */*',
+          'Referer':      'https://m.stock.naver.com/marketindex/metals/GCcv1',
+        },
+        body: JSON.stringify({ reutersCodes: ['GCcv1'] }),
+        signal: AbortSignal.timeout(9000),
+      }
+    );
+    if (!res.ok) return { price: null, change: null, source: 'NaverGold' };
+    const data = await res.json();
+    if (!data?.isSuccess) return { price: null, change: null, source: 'NaverGold' };
+    const item = data?.result?.metals?.GCcv1;
+    if (!item) return { price: null, change: null, source: 'NaverGold' };
+    const price  = parseFloat(String(item.closePrice).replace(/,/g, ''));
+    const change = item.fluctuationsRatio != null ? parseFloat(String(item.fluctuationsRatio)) : null;
+    return price > 0 ? { price, change, source: 'NaverGold' } : { price: null, change: null, source: 'NaverGold' };
+  } catch {
+    return { price: null, change: null, source: 'NaverGold' };
+  }
+}
+
 // CoinGecko (무료 공개 API — 암호화폐 fallback)
 async function fetchCoinGecko(coinId: string) {
   const data = await safeJson(
@@ -119,7 +149,7 @@ export default async function handler(_req: Request): Promise<Response> {
     nasdaqYahoo, nasdaqNaver,
     usdkrwYahoo, usdkrwNaver,
     goldKrNaver,
-    dxy, goldIntlMain, goldIntlFallback,
+    dxy, goldIntlMain, goldIntlFallback, goldIntlNaver,
     vix,
     btcYahoo, ethYahoo,
     btcCg, ethCg,
@@ -139,8 +169,9 @@ export default async function handler(_req: Request): Promise<Response> {
     fetchNaver('/api/marketIndex/exchange/FX_USDKRW',  'Naver환율'),  // USDKRW (Naver fallback)
     fetchGoldKrFinanceNaver(),                                         // 국내금(KRX) — finance.naver.com 기준가
     fetchYahoo('DX-Y.NYB'),                                            // DXY
-    fetchYahoo('GC=F'),                                                // 금 선물(primary)
-    fetchYahoo('XAUUSD=X'),                                            // 금 현물(fallback)
+    fetchYahoo('GC=F'),                                                // 국제금 선물(Yahoo primary)
+    fetchYahoo('XAUUSD=X'),                                            // 국제금 현물(Yahoo fallback)
+    fetchNaverGoldIntl(),                                              // 국제금 GCcv1(Naver — 3rd fallback)
     fetchYahoo('^VIX'),                                                // VIX
     fetchYahoo('BTC-USD'),                                             // BTC (Yahoo)
     fetchYahoo('ETH-USD'),                                             // ETH (Yahoo)
@@ -151,8 +182,10 @@ export default async function handler(_req: Request): Promise<Response> {
   const ok = <T>(r: PromiseSettledResult<T>) =>
     r.status === 'fulfilled' ? r.value : null;
 
-  // GC=F 실패 시 XAUUSD=X 사용
-  const goldIntl = ok(goldIntlMain)?.price ? ok(goldIntlMain) : ok(goldIntlFallback);
+  // GC=F → XAUUSD=X → Naver GCcv1 순으로 fallback
+  const goldIntl = ok(goldIntlMain)?.price ? ok(goldIntlMain)
+    : ok(goldIntlFallback)?.price ? ok(goldIntlFallback)
+    : ok(goldIntlNaver);
   // Yahoo 실패 시 CoinGecko 사용
   const btc = ok(btcYahoo)?.price ? ok(btcYahoo) : ok(btcCg);
   const eth = ok(ethYahoo)?.price ? ok(ethYahoo) : ok(ethCg);

@@ -1,0 +1,83 @@
+작업내역 2026-04-22
+====================
+
+[커밋 목록 - 시간순]
+
+1. Drive 데이터 동기화 개선
+   - localStorage와 Drive 타임스탬프 비교 후 최신 데이터 적용 로직 추가
+   - 포트폴리오 수 카운트 추가 및 Drive와 localStorage 비교 로직 수정
+
+2. Google Drive 데이터 불러오기 버튼 추가
+   - 최신 데이터 로드 기능 구현
+
+3. 계좌 유형 추가 및 설정 개선
+   - 해외계좌 추가 및 금현물 라벨 수정
+   - 계좌 유형 구성에 색상 속성 추가
+   - 계좌 유형에 따른 설정 동기화 기능 추가
+   - 삭제 시 사용자 안내 메시지 수정
+
+4. 버튼 스타일 개선
+   - 그림자 효과 및 테두리 스타일 수정
+
+5. 상장일 관리 기능 추가
+   - 주식 데이터 조회 시 가장 이른 상장일 저장
+   - 재조회 버튼 동작 개선
+
+6. 증분 조회 기능 추가
+   - 캐시 최신 날짜 이후 데이터만 조회하여 병합하는 로직 구현
+   - 기존 데이터 보존 및 최신 날짜 이후 데이터만 병합하도록 로직 수정
+
+7. 지표 추가: Bitcoin 및 Ethereum
+   - BTC / ETH 가격 표시 기능 추가 및 관련 로직 수정
+
+8. 서버사이드 데이터 수집 기능 추가
+   - Naver fchart 및 stooq API를 통한 시장 지표 수집 로직 구현
+   - 헤더 컴포넌트에서 불필요한 파일 입력 및 드라이브 로드 버튼 제거, 코드 정리
+
+9. 서버사이드 KIS OpenAPI 종목 히스토리 수집 기능 추가
+   - 관련 API 수정
+
+10. 국내금 수집 방식 개선
+    - 국내금 시세 처리: Naver 실시간 시세만 사용하고 실패 시 null 반환으로 변경
+    - 국내금 데이터 수집: Naver fchart에서 finance.naver.com으로 전환
+      → 금일별시세 다중 페이지 HTML 스크래핑 구현
+
+11. 서버사이드 수집 실패 시 클라이언트 fallback 재시도 로직 추가
+    - 서버 API 실패 항목을 클라이언트에서 재시도하는 retryFailedIndicators 연결
+
+12. 지표 히스토리 수집 방식 변경
+    - stooq API 차단 이후 Yahoo Finance 및 FRED API로 전환
+    - 국내금(goldKr), 기준금리(fedRate), KR 10Y(kr10y) 히스토리 신규 지원
+
+13. 채권/US 10Y 수집 개선
+    - Naver m.stock 채권 가격 API 추가 및 FRED API로의 fallback 로직 구현
+    - US 10Y 수집: FRED → Yahoo → Naver 3단계 fallback 체계 구축
+
+14. 국내금 finance.naver.com HTML 파싱 개선
+    - class="num" td 기준 숫자 추출 방식으로 수정
+    - img 태그로 시작하는 등락 칸 제외 처리
+
+[금일 세션 작업 (미커밋)]
+
+15. Naver 국제금(GCcv1) API 탐색 및 테스트
+    - m.stock.naver.com JS 번들 분석으로 실제 API 엔드포인트 발굴
+    - POST https://m.stock.naver.com/front-api/realTime/marketIndex/metals
+      body: { reutersCodes: ["GCcv1"] }
+    - closePrice, fluctuationsRatio, name, unit 등 필드 정상 응답 확인 (HTTP 200)
+
+16. 국제금(goldIntl) fallback에 Naver GCcv1 API 추가
+    - api/indicators.ts에 fetchNaverGoldIntl() 함수 추가
+    - goldIntl 수집 우선순위: GC=F(Yahoo) → XAUUSD=X(Yahoo) → GCcv1(Naver)
+
+[주요 변경사항 요약]
+- 서버사이드 지표 수집 아키텍처: stooq 차단 대응 → Yahoo Finance + FRED API 체계로 전환
+- 국내금 수집: Naver fchart → finance.naver.com 금일별시세 HTML 파싱 방식으로 교체
+- 국제금 수집: Yahoo Finance GC=F / XAUUSD=X + Naver GCcv1 3단계 fallback 구축
+- US 10Y 수집: FRED → Yahoo → Naver 3단계 fallback 체계 구축
+- KR 10Y / 기준금리(fedRate) 히스토리 수집 신규 지원
+- BTC / ETH 지표 추가
+- 증분 수집: 캐시 최신 날짜 이후 데이터만 병합하여 불필요한 재수집 방지
+- KIS OpenAPI 서버사이드 종목 히스토리 수집 기능 추가
+- Google Drive 동기화 개선: 타임스탬프 비교 후 최신 데이터 자동 적용
+- 계좌 유형에 해외계좌 추가, 색상 속성 추가
+- 버튼 스타일 개선 (그림자 효과)
