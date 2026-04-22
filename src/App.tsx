@@ -1003,18 +1003,18 @@ export default function App() {
   // Apps Script 프록시 제거 — 직접 fetchersMap 경로만 사용
   const fetchIndicatorsViaProxy = async () => null;
 
-  // stooq symbol 매핑
+  // 히스토리 자동수집 가능 여부 매핑 (non-null = /api/history 자동수집 지원)
   const STOOQ_SYMBOLS = {
-    us10y: 'tnx.us',
-    goldIntl: 'xauusd.oanda',
-    usdkrw: 'usdkrw.fx',
-    dxy: 'dxy.f',
-    kr10y: null,   // 무료 소스 없음
-    goldKr: null,  // KRX 금현물 - JSON 파일 업로드 필요
-    fedRate: null, // 계단식 데이터 - 무료 소스 없음
-    vix: '^vix',
-    btc: 'btcusd.cf',
-    eth: 'ethusd.cf',
+    us10y:    'yahoo:^TNX',        // FRED DGS10 primary → Yahoo fallback
+    goldIntl: 'yahoo:GC=F',
+    usdkrw:   'yahoo:KRW=X',
+    dxy:      'yahoo:DX-Y.NYB',
+    kr10y:    'yahoo:^KR10YT=RR', // Yahoo fallback
+    fedRate:  'fred:DFEDTARU',    // FRED 기준금리 히스토리
+    goldKr:   null,               // Naver 스크래핑 (별도 처리)
+    vix:      'yahoo:^VIX',
+    btc:      'yahoo:BTC-USD',
+    eth:      'yahoo:ETH-USD',
   };
 
   const INDICATOR_LABELS = {
@@ -1070,14 +1070,22 @@ export default function App() {
       const d = new Date(); d.setFullYear(d.getFullYear() - 3); return d.toISOString().split('T')[0];
     })()).replace(/-/g, '');
     const d2 = (endDate || appliedRange.end || new Date().toISOString().split('T')[0]).replace(/-/g, '');
-    // /api/history: 서버사이드에서 stooq CSV 직접 수집
+    // /api/history: 서버사이드에서 Yahoo Finance / FRED CSV 수집
     let parsedData = null;
     try {
-      const res = await fetch(`/api/history?key=${key}&start=${d1}&end=${d2}`, { signal: AbortSignal.timeout(15000) });
+      const res = await fetch(`/api/history?key=${key}&start=${d1}&end=${d2}`, { signal: AbortSignal.timeout(20000) });
       if (res.ok) {
-        const csv = await res.text();
-        if (csv && !csv.includes('No data') && csv.length >= 50) {
-          parsedData = parseIndexCSV(csv, `${key}.csv`);
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          // goldKr 등 JSON 응답
+          const json = await res.json();
+          if (json && typeof json === 'object' && Object.keys(json).length > 0) parsedData = json;
+        } else {
+          // Yahoo/FRED CSV 응답 (Date,Close 형식)
+          const csv = await res.text();
+          if (csv && !csv.includes('No data') && csv.length >= 30) {
+            parsedData = parseIndexCSV(csv, `${key}.csv`);
+          }
         }
       }
     } catch (e) { /* 수집 실패 */ }
@@ -1093,9 +1101,9 @@ export default function App() {
     return parsedData;
   };
 
-  // stooq 지원 지표 전체 일괄 수집 + 국내금(goldKr) 포함
+  // 지표 전체 일괄 수집 (Yahoo Finance / FRED / Naver)
   const fetchAllIndicatorHistory = async () => {
-    const keys = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'goldKr', 'btc', 'eth'];
+    const keys = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'goldKr', 'vix', 'btc', 'eth'];
     for (const key of keys) {
       await fetchIndicatorHistory(key, appliedRange?.start, appliedRange?.end);
     }
@@ -1226,12 +1234,12 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveStatus]);
 
-  // stooq 지원 지표 자동 크롤링: Drive 저장 완료 후 데이터가 없거나 3일 이상 오래된 경우 자동 수집
+  // 지표 자동 크롤링: Drive 저장 완료 후 데이터가 없거나 3일 이상 오래된 경우 자동 수집
   useEffect(() => {
     if (stooqAutoCrawledRef.current) return;
     if (driveStatus !== 'saved') return;
     if (!driveTokenRef.current) return;
-    const STOOQ_KEYS = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth'];
+    const STOOQ_KEYS = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth'];
     const staleKeys = STOOQ_KEYS.filter(key => {
       const hist = indicatorHistoryMap[key] || {};
       const count = Object.keys(hist).length;

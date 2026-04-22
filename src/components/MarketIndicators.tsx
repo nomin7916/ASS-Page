@@ -10,8 +10,8 @@ const INDICATOR_COLORS = {
   vix: '#ff453a', btc: '#f7931a', eth: '#627eea',
 };
 
-// stooq 자동수집 가능한 키
-const STOOQ_SUPPORTED = ['us10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth'];
+// Yahoo Finance / FRED 자동수집 가능한 키
+const STOOQ_SUPPORTED = ['us10y', 'fedRate', 'kr10y', 'goldIntl', 'usdkrw', 'dxy', 'vix', 'btc', 'eth'];
 // 차트에 표시 가능한 키
 const CHART_INDICATOR_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth'];
 
@@ -171,7 +171,7 @@ export default function MarketIndicators({
             onClick={onFetchAll}
             disabled={Object.values(indicatorHistoryLoading || {}).some(Boolean)}
             className="p-1 hover:bg-blue-900/50 rounded transition text-blue-400 hover:text-blue-200 disabled:opacity-40 disabled:cursor-not-allowed"
-            title={`조회기간 시장지표 일괄 수집\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}\nUS 10Y · Gold · USDKRW · DXY · 국내금 · BTC · ETH`}
+            title={`조회기간 시장지표 일괄 수집\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}\nUS 10Y · 기준금리 · KR 10Y · Gold · USDKRW · DXY · 국내금 · VIX · BTC · ETH`}
           >
             {Object.values(indicatorHistoryLoading || {}).some(Boolean)
               ? <RefreshCw size={11} className="animate-spin" />
@@ -257,7 +257,7 @@ export default function MarketIndicators({
                         setShowIndicatorsInChart(prev => ({ ...prev, [item.key]: true }));
                       }}
                       className="shrink-0 p-0.5 rounded hover:bg-blue-900/50 text-blue-400 hover:text-blue-300 transition-colors"
-                      title={`${item.label} 과거 데이터 자동 수집 (stooq.com)\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}`}
+                      title={`${item.label} 과거 데이터 자동 수집 (Yahoo Finance / FRED)\n기간: ${appliedRange?.start || '최근3년'} ~ ${appliedRange?.end || '오늘'}`}
                     >
                       <Download size={9} />
                     </button>
@@ -267,7 +267,7 @@ export default function MarketIndicators({
                       <button
                         onClick={() => fileInputRefs.current[item.key]?.click()}
                         className="shrink-0 p-0.5 rounded hover:bg-orange-900/50 text-orange-400 hover:text-orange-300 transition-colors"
-                        title={`${item.label} CSV/JSON 파일 업로드\n(stooq 미지원 - 직접 업로드 필요)`}
+                        title={`${item.label} CSV/JSON 파일 업로드\n(자동수집 미지원 - 직접 업로드 필요)`}
                       >
                         <FileUp size={9} />
                       </button>
