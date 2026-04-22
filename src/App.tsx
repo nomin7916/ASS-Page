@@ -26,16 +26,16 @@ import {
 
 const INT_CATEGORIES = ['주식', '주식-a', '금', '채권', '현금', '리츠', '배당주식', '예수금'];
 
-const ACCOUNT_TYPE_CONFIG: Record<string, { emoji: string; activeColor: string; activeBorder: string; inactiveColor: string; label: string }> = {
-  'dc-irp':    { emoji: '🏦', activeColor: 'text-amber-400',   activeBorder: 'border-amber-500',   inactiveColor: 'text-amber-600/70',   label: '퇴직연금' },
-  'isa':       { emoji: '🌱', activeColor: 'text-emerald-400', activeBorder: 'border-emerald-500', inactiveColor: 'text-emerald-600/70', label: 'ISA' },
-  'portfolio': { emoji: '📈', activeColor: 'text-blue-400',    activeBorder: 'border-blue-500',    inactiveColor: 'text-blue-600/70',    label: '일반증권' },
-  'dividend':  { emoji: '💰', activeColor: 'text-green-400',   activeBorder: 'border-green-500',   inactiveColor: 'text-green-600/70',   label: '배당형' },
-  'pension':   { emoji: '🎯', activeColor: 'text-purple-400',  activeBorder: 'border-purple-500',  inactiveColor: 'text-purple-600/70',  label: '개인연금' },
-  'gold':      { emoji: '🥇', activeColor: 'text-yellow-400',  activeBorder: 'border-yellow-500',  inactiveColor: 'text-yellow-600/70',  label: 'KRX 금현물' },
-  'overseas':  { emoji: '🌐', activeColor: 'text-sky-400',     activeBorder: 'border-sky-500',     inactiveColor: 'text-sky-600/70',     label: '해외계좌' },
-  'crypto':    { emoji: '₿',  activeColor: 'text-orange-400',  activeBorder: 'border-orange-500',  inactiveColor: 'text-orange-600/70',  label: 'CRYPTO' },
-  'simple':    { emoji: '📋', activeColor: 'text-gray-400',    activeBorder: 'border-gray-500',    inactiveColor: 'text-gray-600/70',    label: '직접입력' },
+const ACCOUNT_TYPE_CONFIG: Record<string, { emoji: string; activeColor: string; activeBorder: string; inactiveColor: string; label: string; color: string }> = {
+  'dc-irp':    { emoji: '🏦', activeColor: 'text-amber-400',   activeBorder: 'border-amber-500',   inactiveColor: 'text-amber-600/70',   label: '퇴직연금', color: '#f59e0b' },
+  'isa':       { emoji: '🌱', activeColor: 'text-emerald-400', activeBorder: 'border-emerald-500', inactiveColor: 'text-emerald-600/70', label: 'ISA',      color: '#34d399' },
+  'portfolio': { emoji: '📈', activeColor: 'text-blue-400',    activeBorder: 'border-blue-500',    inactiveColor: 'text-blue-600/70',    label: '일반증권', color: '#60a5fa' },
+  'dividend':  { emoji: '💰', activeColor: 'text-green-400',   activeBorder: 'border-green-500',   inactiveColor: 'text-green-600/70',   label: '배당형',   color: '#4ade80' },
+  'pension':   { emoji: '🎯', activeColor: 'text-purple-400',  activeBorder: 'border-purple-500',  inactiveColor: 'text-purple-600/70',  label: '개인연금', color: '#c084fc' },
+  'gold':      { emoji: '🥇', activeColor: 'text-yellow-400',  activeBorder: 'border-yellow-500',  inactiveColor: 'text-yellow-600/70',  label: 'KRX 금현물', color: '#facc15' },
+  'overseas':  { emoji: '🌐', activeColor: 'text-sky-400',     activeBorder: 'border-sky-500',     inactiveColor: 'text-sky-600/70',     label: '해외계좌', color: '#38bdf8' },
+  'crypto':    { emoji: '₿',  activeColor: 'text-orange-400',  activeBorder: 'border-orange-500',  inactiveColor: 'text-orange-600/70',  label: 'CRYPTO',   color: '#fb923c' },
+  'simple':    { emoji: '📋', activeColor: 'text-gray-400',    activeBorder: 'border-gray-500',    inactiveColor: 'text-gray-600/70',    label: '직접입력', color: '#9ca3af' },
 };
 
 const sortArrow = (config, key) =>
@@ -3072,12 +3072,13 @@ export default function App() {
         </div>
 
         {/* 뷰 전환 탭 */}
-        <div className="flex items-center justify-between border-b border-gray-700/50 flex-wrap gap-y-1">
-          <div className="flex gap-1 flex-wrap">
+        <div className="flex items-center justify-between border-b border-gray-700/50 flex-wrap gap-y-1 py-1.5">
+          <div className="flex gap-2 flex-wrap items-center">
             <button
               onClick={() => setShowIntegratedDashboard(true)}
-              className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${showIntegratedDashboard ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
-            >🏦 총 자산 현황</button>
+              style={{ borderLeft: '3px solid #60a5fa' }}
+              className={`px-4 py-2 text-sm font-bold rounded-r-md transition-all duration-200 ${showIntegratedDashboard ? 'bg-slate-800 text-white' : 'text-gray-400 hover:bg-slate-800 hover:text-white'}`}
+            >총 자산 현황</button>
             {portfolios.filter(p => p.accountType !== 'simple').map(p => {
               const typeConf = ACCOUNT_TYPE_CONFIG[p.accountType] || ACCOUNT_TYPE_CONFIG['portfolio'];
               const isActive = !showIntegratedDashboard && activePortfolioId === p.id;
@@ -3085,13 +3086,14 @@ export default function App() {
                 <button
                   key={p.id}
                   onClick={() => switchToPortfolio(p.id)}
-                  className={`px-4 py-1.5 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${isActive ? `${typeConf.activeBorder} ${typeConf.activeColor}` : `border-transparent ${typeConf.inactiveColor} hover:${typeConf.activeColor}`}`}
-                >{typeConf.emoji} {(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
+                  style={{ borderLeft: `3px solid ${typeConf.color}` }}
+                  className={`px-4 py-2 text-sm font-bold rounded-r-md transition-all duration-200 ${isActive ? 'bg-slate-800 text-white' : 'text-gray-400 hover:bg-slate-800 hover:text-white'}`}
+                >{(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
               );
             })}
           </div>
           {showIntegratedDashboard && (
-            <div className="flex items-center gap-1 pr-1 pb-0.5">
+            <div className="flex items-center gap-1 pr-1">
               <button
                 onClick={refreshPrices}
                 title="새로고침 — 모든 계좌 종목가격·지수 데이터 갱신"
