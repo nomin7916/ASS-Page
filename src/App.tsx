@@ -2027,6 +2027,8 @@ export default function App() {
               if (fn.includes('VIX')) return 'VIX_INDEX';
               if (fn.includes('DXY')) return 'DXY';
               if (fn.includes('KR10Y') || fn.includes('KR_10Y')) return 'KR10Y';
+              if (fn.includes('BTC')) return 'BTC';
+              if (fn.includes('ETH')) return 'ETH';
               return null;
             };
             const marketKey = detectMarketKey(upperFN);
@@ -2117,6 +2119,14 @@ export default function App() {
                 const { latest, chg, count } = getLatestChg(formattedData);
                 setMarketIndicators(prev => ({ ...prev, kr10y: latest, kr10yChg: chg }));
                 setIndicatorHistoryMap(prev => ({ ...prev, kr10y: formattedData }));
+              } else if (cu === 'BTC') {
+                const { latest, chg } = getLatestChg(formattedData);
+                setMarketIndicators(prev => ({ ...prev, btc: latest, btcChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, btc: { ...(prev.btc || {}), ...formattedData } }));
+              } else if (cu === 'ETH') {
+                const { latest, chg } = getLatestChg(formattedData);
+                setMarketIndicators(prev => ({ ...prev, eth: latest, ethChg: chg }));
+                setIndicatorHistoryMap(prev => ({ ...prev, eth: { ...(prev.eth || {}), ...formattedData } }));
               } else {
                 setStockHistoryMap(prev => ({ ...prev, [code]: formattedData }));
               }
