@@ -112,7 +112,7 @@ async function fetchCoinGecko(coinId: string) {
 export default async function handler(_req: Request): Promise<Response> {
   // 모든 지표를 병렬 수집 — 개별 실패가 전체에 영향 없음
   const [
-    us10yFred, us10yYahoo, fedRate,
+    us10yFred, us10yYahoo, us10yNaver, fedRate,
     kr10yNaver, kr10yYahoo,
     kospi,
     sp500Yahoo, sp500Naver,
@@ -126,6 +126,7 @@ export default async function handler(_req: Request): Promise<Response> {
   ] = await Promise.allSettled([
     fetchFred('DGS10'),                                                // US 10Y (FRED — 영업일 종가 기준)
     fetchYahoo('^TNX'),                                                // US 10Y (Yahoo — 장중 실시간 fallback)
+    fetchNaver('/api/marketIndex/bond/US10YT=RR', 'Naver채권US'),     // US 10Y (Naver — 3rd fallback)
     fetchFred('DFEDTARU'),                                             // 미국 기준금리 상단 (FRED)
     fetchNaver('/api/marketIndex/bond/KR10YT=RR',      'Naver채권'),  // KR 10Y (Naver primary)
     fetchYahoo('^KR10YT=RR'),                                          // KR 10Y (Yahoo fallback)
@@ -159,8 +160,8 @@ export default async function handler(_req: Request): Promise<Response> {
   const sp500  = ok(sp500Yahoo)?.price  ? ok(sp500Yahoo)  : ok(sp500Naver);
   const nasdaq = ok(nasdaqYahoo)?.price ? ok(nasdaqYahoo) : ok(nasdaqNaver);
   const usdkrw = ok(usdkrwYahoo)?.price ? ok(usdkrwYahoo) : ok(usdkrwNaver);
-  // US 10Y: FRED(영업일 종가) primary → Yahoo ^TNX(장중 실시간) fallback
-  const us10y = ok(us10yFred)?.price ? ok(us10yFred) : ok(us10yYahoo);
+  // US 10Y: FRED → Yahoo → Naver 3단계 fallback
+  const us10y = ok(us10yFred)?.price ? ok(us10yFred) : ok(us10yYahoo)?.price ? ok(us10yYahoo) : ok(us10yNaver);
   // KR 10Y: Naver primary → Yahoo fallback
   const kr10y = ok(kr10yNaver)?.price ? ok(kr10yNaver) : ok(kr10yYahoo);
   // 국내금: Naver 실시간 시세만 사용, 실패 시 null 반환

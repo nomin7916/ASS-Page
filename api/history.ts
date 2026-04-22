@@ -255,9 +255,12 @@ export default async function handler(request: Request): Promise<Response> {
   const d1 = start || defStart;
   const d2 = end   || defEnd;
 
-  // us10y: FRED DGS10 primary → Yahoo ^TNX fallback (정확한 채권 수익률)
+  // us10y: FRED DGS10 → Naver daily → Yahoo ^TNX (3단계 fallback)
   if (key === 'us10y') {
     let data = await fetchFredHistory('DGS10', d1, d2);
+    if (Object.keys(data).length < 10) {
+      data = await fetchNaverBondHistory('US10YT=RR', d1, d2);
+    }
     if (Object.keys(data).length < 10) {
       data = await fetchYahooHistory('^TNX', d1, d2);
     }
