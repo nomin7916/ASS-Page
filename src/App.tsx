@@ -1672,6 +1672,30 @@ export default function App() {
           return;
         }
       }
+    } else {
+      // 증분 조회: 캐시 최신 날짜 이후 데이터만 조회해서 병합
+      const sortedDates = Object.keys(hist).sort();
+      const latestDate = sortedDates[sortedDates.length - 1];
+      const today = new Date().toISOString().split('T')[0];
+      if (latestDate && latestDate < today) {
+        const fromYear = parseInt(latestDate.split('-')[0]);
+        const daysDiff = Math.ceil((Date.now() - new Date(latestDate).getTime()) / 86400000);
+        const naverCount = Math.ceil(daysDiff * 5 / 7) + 30;
+        let newData: Record<string, number> | null = null;
+        const rKIS = await fetchKISStockHistory(comp.code, fromYear);
+        if (rKIS) newData = rKIS.data;
+        if (!newData) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) newData = rNaver.data; }
+        if (!newData) { const r1 = await fetchIndexData(`${comp.code}.KS`, latestDate); if (r1) newData = r1.data; }
+        if (!newData) { const r2 = await fetchIndexData(`${comp.code}.KQ`, latestDate); if (r2) newData = r2.data; }
+        if (newData) {
+          hist = { ...hist, ...newData };
+          setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+          setTimeout(() => {
+            const snap = saveStateRef.current;
+            if (snap && driveTokenRef.current) saveAllToDrive(snap);
+          }, 600);
+        }
+      }
     }
     // 캐시·API 모두 포함: 2건 이상이면 가장 이른 날짜를 상장일로 저장 (재조회 버튼 억제용)
     if (hist && Object.keys(hist).length > 1) {
@@ -1698,30 +1722,35 @@ export default function App() {
       startDate = now.toISOString().split('T')[0];
     }
 
-    // 기존 캐시 초기화 (강제 재조회)
-    setStockHistoryMap(prev => { const n = { ...prev }; delete n[comp.code]; return n; });
+    // 기존 캐시 유지: 마지막 날짜 이후만 조회 (캐시 없으면 전체 조회)
+    const existingHist = stockHistoryMap[comp.code];
+    const existingSortedDates = existingHist ? Object.keys(existingHist).sort() : [];
+    const lastCachedDate = existingSortedDates.length > 3 ? existingSortedDates[existingSortedDates.length - 1] : null;
+
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
 
-    // 상장일부터 전체 이력 조회: 한 번 받으면 어떤 기간으로 바꿔도 재조회 불필요
-    const naverCount = 2000; // 최대 거래일 수
-    const startYear = 2000;  // 상장일 전체 이력 (KIS: 2000년부터)
+    const startYear = lastCachedDate ? parseInt(lastCachedDate.split('-')[0]) : 2000;
+    const daysDiff = lastCachedDate ? Math.ceil((Date.now() - new Date(lastCachedDate).getTime()) / 86400000) : null;
+    const naverCount = daysDiff ? Math.ceil(daysDiff * 5 / 7) + 30 : 2000;
+    const yahooStartDate = lastCachedDate ?? startDate;
 
     let hist: Record<string, number> | null = null;
 
-    // 1순위: KIS (상장 이후 전체, 2000년부터)
+    // 1순위: KIS (캐시 있으면 마지막 연도부터, 없으면 2000년부터)
     const rKIS = await fetchKISStockHistory(comp.code, startYear);
     if (rKIS) hist = rKIS.data;
     // 2순위: 네이버 fchart (계산된 count로)
     if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) hist = rNaver.data; }
-    // 3순위: Yahoo (.KS / .KQ, 조회기간 지정)
-    if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`, startDate); if (r1) hist = r1.data; }
-    if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`, startDate); if (r2) hist = r2.data; }
+    // 3순위: Yahoo (.KS / .KQ, 마지막 캐시 날짜 또는 조회기간 지정)
+    if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`, yahooStartDate); if (r1) hist = r1.data; }
+    if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`, yahooStartDate); if (r2) hist = r2.data; }
 
     if (hist && Object.keys(hist).length > 1) {
-      setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+      const mergedHist = existingHist ? { ...existingHist, ...hist } : hist;
+      setStockHistoryMap(prev => ({ ...prev, [comp.code]: mergedHist }));
       setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
       autoFetchedCodes.current.add(comp.code); // 전체 이력 조회 완료 표시
-      const earliest = Object.keys(hist).sort()[0];
+      const earliest = Object.keys(mergedHist).sort()[0];
       if (earliest) setStockListingDates(prev => ({ ...prev, [comp.code]: earliest }));
       // 과거 데이터 수집 직후 Drive 즉시 백업 (페이지 재시작 시 재수집 방지)
       setTimeout(() => {
