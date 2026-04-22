@@ -1030,27 +1030,14 @@ export default function App() {
       // 국내금(goldKr): 네이버 fchart에서 장기 데이터 크롤링
       if (key === 'goldKr') {
         setIndicatorHistoryLoading(prev => ({ ...prev, goldKr: true }));
-        // /api/history: 서버사이드에서 Naver fchart 직접 수집
+        // /api/history: 서버사이드 finance.naver.com 다중 페이지 수집 → JSON 응답
         let goldData: Record<string, number> | null = null;
         try {
-          const res = await fetch('/api/history?key=goldKr', { signal: AbortSignal.timeout(15000) });
+          const res = await fetch('/api/history?key=goldKr', { signal: AbortSignal.timeout(30000) });
           if (res.ok) {
-            const text = await res.text();
-            if (text && text.length > 100) {
-              const result: Record<string, number> = {};
-              const lines = text.split('<item data="');
-              for (let i = 1; i < lines.length; i++) {
-                const raw   = lines[i].split('"')[0];
-                const parts = raw.split('|');
-                if (parts.length >= 5) {
-                  const d     = parts[0];
-                  const close = parseInt(parts[4]);
-                  if (d.length === 8 && !isNaN(close) && close > 0) {
-                    result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
-                  }
-                }
-              }
-              if (Object.keys(result).length > 10) goldData = result;
+            const json = await res.json();
+            if (json && typeof json === 'object' && Object.keys(json).length > 10) {
+              goldData = json;
             }
           }
         } catch (e) { /* 수집 실패 */ }

@@ -30,6 +30,39 @@ async function fetchFred(seriesId: string) {
   };
 }
 
+// finance.naver.com 금일별시세 HTML 파싱 (국내금 실시간 현재가)
+async function fetchGoldKrFinanceNaver(): Promise<{ price: number | null; change: number | null; source: string }> {
+  try {
+    const res = await fetch(
+      'https://finance.naver.com/marketindex/goldDailyQuote.naver?page=1',
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+          'Referer':    'https://finance.naver.com/marketindex/',
+        },
+        signal: AbortSignal.timeout(9000),
+      }
+    );
+    if (!res.ok) return { price: null, change: null, source: 'Naver금' };
+    const html  = await res.text();
+    // td.num 중 숫자로 시작하는 것만 (img 태그로 시작하는 등락 칸 제외)
+    const prices: number[] = [];
+    const re = /class="num">([\d,]+\.?\d*)</g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      const v = parseFloat(m[1].replace(/,/g, ''));
+      if (v > 1000) prices.push(v); // 국내금 KRW/g 가격은 항상 > 1000
+    }
+    if (prices.length < 2) return { price: null, change: null, source: 'Naver금' };
+    const price  = prices[0];           // 오늘 기준가
+    const prev   = prices[1];           // 전일 기준가
+    const change = prev > 0 ? ((price - prev) / prev) * 100 : null;
+    return { price: Math.round(price), change, source: 'Naver금' };
+  } catch {
+    return { price: null, change: null, source: 'Naver금' };
+  }
+}
+
 // Naver Mobile API (서버사이드 직접 호출 — CORS 없음)
 async function fetchNaver(path: string, source: string) {
   const data = await safeJson(`https://m.stock.naver.com${path}`, {
@@ -101,7 +134,7 @@ export default async function handler(_req: Request): Promise<Response> {
     fetchNaver('/api/index/NAS@NDX/basic',              'Naver'),      // Nasdaq100 (Naver fallback)
     fetchYahoo('KRW=X'),                                               // USDKRW (Yahoo primary)
     fetchNaver('/api/marketIndex/exchange/FX_USDKRW',  'Naver환율'),  // USDKRW (Naver fallback)
-    fetchNaver('/api/stock/M04020000/basic',            'Naver금'),    // 국내금(KRX) primary
+    fetchGoldKrFinanceNaver(),                                         // 국내금(KRX) — finance.naver.com 기준가
     fetchYahoo('DX-Y.NYB'),                                            // DXY
     fetchYahoo('GC=F'),                                                // 금 선물(primary)
     fetchYahoo('XAUUSD=X'),                                            // 금 현물(fallback)
