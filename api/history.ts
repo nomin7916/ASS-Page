@@ -89,6 +89,49 @@ async function fetchFredHistory(seriesId: string, d1: string, d2: string): Promi
   }
 }
 
+// Naver m.stock 채권 prices API (일별 데이터 — FRED 월별보다 정밀)
+async function fetchNaverBondHistory(reutersCode: string, d1: string, d2: string): Promise<Record<string, number>> {
+  // d1/d2: YYYYMMDD → YYYYMMDDHHMMSS
+  const toNaverDt = (d: string, end = false) =>
+    `${d.slice(0,4)}${d.slice(4,6)}${d.slice(6,8)}${end ? '235959' : '000000'}`;
+
+  const defStart = new Date(Date.now() - 3 * 365.25 * 24 * 3600 * 1000)
+    .toISOString().split('T')[0].replace(/-/g, '');
+  const defEnd = new Date().toISOString().split('T')[0].replace(/-/g, '');
+
+  const start = toNaverDt(d1 || defStart, false);
+  const end   = toNaverDt(d2 || defEnd,   true);
+
+  const url = `https://m.stock.naver.com/api/marketIndex/bond/prices`
+    + `?category=bond&reutersCode=${encodeURIComponent(reutersCode)}`
+    + `&startDateTime=${start}&endDateTime=${end}&timeframe=day`;
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+        'Referer':    'https://m.stock.naver.com/',
+        'Accept':     'application/json',
+      },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return {};
+    const data: any = await res.json();
+    if (!data?.isSuccess || !Array.isArray(data?.result)) return {};
+
+    const record: Record<string, number> = {};
+    for (const item of data.result as any[]) {
+      if (!item.localTradedAt || !item.closePrice) continue;
+      const date  = String(item.localTradedAt).split('T')[0]; // "YYYY-MM-DD"
+      const price = parseFloat(String(item.closePrice));
+      if (!isNaN(price) && price > 0) record[date] = price;
+    }
+    return record;
+  } catch {
+    return {};
+  }
+}
+
 // { date: price } → "Date,Close\n..." CSV 변환 (기존 parseIndexCSV 호환)
 function toCSV(data: Record<string, number>): string {
   const lines = ['Date,Close'];
@@ -229,9 +272,12 @@ export default async function handler(request: Request): Promise<Response> {
     return csvResponse(data);
   }
 
-  // kr10y: FRED IRLTLT01KRM156N (한국 10년 국채 — OECD 월별)
+  // kr10y: Naver 일별 primary → FRED IRLTLT01KRM156N 월별 fallback
   if (key === 'kr10y') {
-    const data = await fetchFredHistory('IRLTLT01KRM156N', d1, d2);
+    let data = await fetchNaverBondHistory('KR10YT=RR', d1, d2);
+    if (Object.keys(data).length < 10) {
+      data = await fetchFredHistory('IRLTLT01KRM156N', d1, d2);
+    }
     if (Object.keys(data).length === 0) return new Response('kr10y 수집 실패', { status: 502 });
     return csvResponse(data);
   }
