@@ -1185,11 +1185,20 @@ export default function App() {
         sp500:  data.sp500?.price  ? { ...(prev.sp500  || {}), [todayMI]: data.sp500.price  } : prev.sp500,
         nasdaq: data.nasdaq?.price ? { ...(prev.nasdaq || {}), [todayMI]: data.nasdaq.price } : prev.nasdaq,
       }));
+
+      // 서버사이드 수집 실패 항목을 클라이언트 fallback으로 재시도
+      const failedKeys = Object.keys(statusMap).filter(k => statusMap[k]?.status === 'fail');
+      if (failedKeys.length > 0) {
+        retryFailedIndicators(failedKeys, { ...statusMap });
+      }
     } catch (e) {
       console.error('시장 지표 수집 오류:', e);
       ['us10y', 'fedRate', 'kr10y', 'usdkrw', 'goldIntl', 'goldKr',
        'kospi', 'sp500', 'nasdaq', 'dxy', 'vix', 'btc', 'eth']
         .forEach(k => { statusMap[k] = { status: 'fail', source: 'API 오류', updatedAt: now }; });
+      // 서버 API 전체 실패 시 fetchersMap에 있는 항목들로 클라이언트 fallback 시도
+      const clientKeys = Object.keys(fetchersMap);
+      retryFailedIndicators(clientKeys, { ...statusMap });
     } finally {
       setIndicatorFetchStatus(statusMap);
       setIndicatorLoading(false);

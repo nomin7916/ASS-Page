@@ -112,8 +112,8 @@ async function fetchCoinGecko(coinId: string) {
 export default async function handler(_req: Request): Promise<Response> {
   // 모든 지표를 병렬 수집 — 개별 실패가 전체에 영향 없음
   const [
-    us10y, fedRate,
-    kr10y,
+    us10yFred, us10yYahoo, fedRate,
+    kr10yNaver, kr10yYahoo,
     kospi,
     sp500Yahoo, sp500Naver,
     nasdaqYahoo, nasdaqNaver,
@@ -124,9 +124,11 @@ export default async function handler(_req: Request): Promise<Response> {
     btcYahoo, ethYahoo,
     btcCg, ethCg,
   ] = await Promise.allSettled([
-    fetchFred('DGS10'),                                                // US 10Y
-    fetchFred('DFEDTARU'),                                             // 미국 기준금리 상단
-    fetchNaver('/api/marketIndex/bond/KR10YT=RR',      'Naver채권'),  // KR 10Y
+    fetchFred('DGS10'),                                                // US 10Y (FRED — 영업일 종가 기준)
+    fetchYahoo('^TNX'),                                                // US 10Y (Yahoo — 장중 실시간 fallback)
+    fetchFred('DFEDTARU'),                                             // 미국 기준금리 상단 (FRED)
+    fetchNaver('/api/marketIndex/bond/KR10YT=RR',      'Naver채권'),  // KR 10Y (Naver primary)
+    fetchYahoo('^KR10YT=RR'),                                          // KR 10Y (Yahoo fallback)
     fetchNaver('/api/index/KOSPI/basic',                'Naver'),      // KOSPI
     fetchYahoo('^GSPC'),                                               // S&P500 (Yahoo primary)
     fetchNaver('/api/index/SPI@SPX/basic',              'Naver'),      // S&P500 (Naver fallback)
@@ -157,14 +159,17 @@ export default async function handler(_req: Request): Promise<Response> {
   const sp500  = ok(sp500Yahoo)?.price  ? ok(sp500Yahoo)  : ok(sp500Naver);
   const nasdaq = ok(nasdaqYahoo)?.price ? ok(nasdaqYahoo) : ok(nasdaqNaver);
   const usdkrw = ok(usdkrwYahoo)?.price ? ok(usdkrwYahoo) : ok(usdkrwNaver);
-
-  // 국내금: Naver 실시간 시세만 사용, 실패 시 null 반환 (환산 계산 불사용)
+  // US 10Y: FRED(영업일 종가) primary → Yahoo ^TNX(장중 실시간) fallback
+  const us10y = ok(us10yFred)?.price ? ok(us10yFred) : ok(us10yYahoo);
+  // KR 10Y: Naver primary → Yahoo fallback
+  const kr10y = ok(kr10yNaver)?.price ? ok(kr10yNaver) : ok(kr10yYahoo);
+  // 국내금: Naver 실시간 시세만 사용, 실패 시 null 반환
   const goldKr = ok(goldKrNaver)?.price ? ok(goldKrNaver) : null;
 
   const body = {
-    us10y:   ok(us10y),
+    us10y,
     fedRate: ok(fedRate),
-    kr10y:   ok(kr10y),
+    kr10y,
     usdkrw,
     goldKr,
     kospi:   ok(kospi),
@@ -181,7 +186,7 @@ export default async function handler(_req: Request): Promise<Response> {
     headers: {
       'Content-Type':                 'application/json',
       'Access-Control-Allow-Origin':  '*',
-      'Cache-Control':                's-maxage=600, stale-while-revalidate=60',
+      'Cache-Control':                's-maxage=300, stale-while-revalidate=60',
     },
   });
 }
