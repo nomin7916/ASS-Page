@@ -143,6 +143,68 @@ export const fetchStockInfo = async (code) => {
   return null;
 };
 
+// 해외(미국) 주식/ETF 현재가 조회: Naver worldstock → Yahoo Finance fallback
+export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; price: number; changeRate: number } | null> => {
+  if (!ticker || ticker.trim().length < 1) return null;
+  const upper = ticker.trim().toUpperCase();
+
+  // Naver Reuters 코드 후보: NASDAQ(.O), NYSE(.K/.N), NYSE Arca(.P)
+  const naverCodes = [`${upper}.O`, `${upper}.K`, `${upper}.N`, upper, `${upper}.P`];
+  const mkProxy = (url: string) => [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${url}`,
+  ];
+
+  for (const code of naverCodes) {
+    const targetUrl = `https://m.stock.naver.com/api/stock/${code}/basic`;
+    for (const proxy of mkProxy(targetUrl)) {
+      try {
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const rawName = data?.stockName || data?.name;
+        if (!rawName) continue;
+        const rawPrice = String(data.closePrice ?? data.currentPrice ?? data.price ?? '0').replace(/,/g, '');
+        const price = parseFloat(rawPrice);
+        if (price > 0) {
+          return {
+            name: rawName,
+            price,
+            changeRate: parseFloat(String(data.fluctuationsRatio ?? data.fluctuations ?? '0')),
+          };
+        }
+      } catch { continue; }
+    }
+  }
+
+  // Yahoo Finance fallback
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${upper}?range=1d&interval=1d`;
+  const yahooProxies = [
+    `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${yahooUrl}`,
+  ];
+  for (const proxy of yahooProxies) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const json = await res.json();
+      if (json.chart?.result?.[0]) {
+        const meta = json.chart.result[0].meta;
+        const closes: (number | null)[] = json.chart.result[0].indicators?.quote?.[0]?.close ?? [];
+        const price = (closes as (number | null)[]).filter(p => p !== null).pop() ?? meta?.regularMarketPrice;
+        if (price && price > 0) {
+          const prev = meta?.chartPreviousClose || meta?.previousClose;
+          const changeRate = prev && prev > 0 ? ((price - prev) / prev) * 100 : (meta?.regularMarketChangePercent ?? 0);
+          return { name: meta?.shortName || meta?.symbol || upper, price, changeRate };
+        }
+      }
+    } catch { continue; }
+  }
+
+  return null;
+};
+
 export const fetchNaverKospi = async () => {
   const targetUrl = `https://m.stock.naver.com/api/index/KOSPI/basic`;
   const proxies = [

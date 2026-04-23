@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
 import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, loadVersionTimestamp, saveVersionFile } from './driveStorage';
-import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
+import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
@@ -1311,11 +1311,12 @@ export default function App() {
   }, [marketIndicators.goldKr, activePortfolioAccountType]);
 
   const totals = useMemo(() => {
+    const fxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
     let tInv = 0, tEvl = 0, tPrf = 0, cats = {}, stks = [];
     const calc = portfolio.map(item => {
       let inv = 0, evl = 0;
-      if (item.type === 'deposit') { inv = evl = cleanNum(item.depositAmount); }
-      else { inv = cleanNum(item.purchasePrice) * cleanNum(item.quantity); evl = cleanNum(item.currentPrice) * cleanNum(item.quantity); }
+      if (item.type === 'deposit') { inv = evl = cleanNum(item.depositAmount) * fxRate; }
+      else { inv = cleanNum(item.purchasePrice) * cleanNum(item.quantity) * fxRate; evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate; }
       const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;
       const c = item.category || '미지정';
       if (!cats[c]) cats[c] = { invest: 0, eval: 0, profit: 0 };
@@ -1329,7 +1330,8 @@ export default function App() {
       returnRate: item.investAmount > 0 ? (item.profit / item.investAmount) * 100 : 0
     }));
     return { calcPortfolio: calc, totalInvest: tInv, totalEval: tEvl, totalProfit: tPrf, cats, stks };
-  }, [portfolio]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolio, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const cagr = useMemo(() => {
     if (!portfolioStartDate || principal <= 0 || totals.totalEval <= 0) return 0;
@@ -1509,15 +1511,16 @@ export default function App() {
 
       const items = isActive ? portfolio : (p.portfolio || []);
       const prin = isActive ? principal : (p.principal || 0);
+      const summaryFxRate = p.accountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
       let totalEval = 0, depositAmt = 0;
       const cats = {};
       items.forEach(item => {
         if (item.type === 'deposit') {
-          totalEval += cleanNum(item.depositAmount);
-          depositAmt += cleanNum(item.depositAmount);
-          cats['예수금'] = (cats['예수금'] || 0) + cleanNum(item.depositAmount);
+          const v = cleanNum(item.depositAmount) * summaryFxRate;
+          totalEval += v; depositAmt += v;
+          cats['예수금'] = (cats['예수금'] || 0) + v;
         } else {
-          const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity);
+          const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * summaryFxRate;
           totalEval += evl;
           const cat = item.category || '미지정';
           cats[cat] = (cats[cat] || 0) + evl;
@@ -1531,7 +1534,8 @@ export default function App() {
         : 0;
       return { id: p.id, name, startDate, currentEval: totalEval, principal: prin, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '' };
     });
-  }, [portfolios, activePortfolioId, portfolio, principal, portfolioStartDate, title]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolios, activePortfolioId, portfolio, principal, portfolioStartDate, title, marketIndicators.usdkrw]);
 
   const intTotals = useMemo(() => {
     let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
@@ -1675,24 +1679,25 @@ export default function App() {
   const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
 
   const handleStockBlur = async (id, code) => {
-    if (code && code.length >= 5) {
-      setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
-      const d = await fetchStockInfo(code);
-      if (d) {
-        setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
-        setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
-        const today = new Date().toISOString().split('T')[0];
-        setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
-      } else {
-        setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
-      }
+    const isOverseas = activePortfolioAccountType === 'overseas';
+    if (!code || (!isOverseas && code.length < 5)) return;
+    setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
+    const d = isOverseas ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
+    if (d) {
+      setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
+      setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
+      const today = new Date().toISOString().split('T')[0];
+      setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+    } else {
+      setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
     }
   };
 
   const handleSingleStockRefresh = async (id, code) => {
-    if (!code || code.length < 5) return;
+    const isOverseas = activePortfolioAccountType === 'overseas';
+    if (!code || (!isOverseas && code.length < 5)) return;
     setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
-    const d = await fetchStockInfo(code);
+    const d = isOverseas ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
     if (d) {
       setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
       setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
@@ -2304,10 +2309,11 @@ export default function App() {
 
 
   // 초기 로드 후 종목 현재가를 직접 조회하는 함수 (React 상태 클로저 무관)
-  const autoRefreshStockPrices = async (loadedPortfolio) => {
+  const autoRefreshStockPrices = async (loadedPortfolio, accountType = activePortfolioAccountType) => {
     const stocks = loadedPortfolio.filter(p => p.type === 'stock' && p.code);
     if (stocks.length === 0) return;
-    
+    const isOverseas = accountType === 'overseas';
+
     setIsLoading(true);
     const loadingStatus = {};
     stocks.forEach(p => { loadingStatus[p.code] = 'loading'; });
@@ -2317,7 +2323,7 @@ export default function App() {
     const priceResults = {};
 
     await Promise.all(stocks.map(async (item) => {
-      const d = await fetchStockInfo(item.code);
+      const d = isOverseas ? await fetchUsStockInfo(item.code) : await fetchStockInfo(item.code);
       if (d) {
         setStockFetchStatus(prev => ({ ...prev, [item.code]: 'success' }));
         setStockHistoryMap(prev => ({ ...prev, [item.code]: { ...(prev[item.code] || {}), [today]: d.price } }));
@@ -3374,9 +3380,10 @@ export default function App() {
             isRefreshing={indicatorLoading}
           />
         ) : (
-          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
+          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} />
         )}
 
+        {activePortfolioAccountType !== 'gold' && (
         <div className="grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-6 w-full items-stretch">
           <div className="xl:col-span-4 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full">
             <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700">📊 자산 비중</div>
@@ -3392,6 +3399,7 @@ export default function App() {
             <div className="p-4 flex-1 flex flex-col sm:flex-row items-center gap-4"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={Object.entries(totals.cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)} innerRadius="40%" outerRadius="70%" dataKey="value" label={PieLabelOutside}>{Object.entries(totals.cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} />} /></PieChart></ResponsiveContainer><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={totals.stks.filter(x => x.eval > 0)} innerRadius="40%" outerRadius="70%" dataKey="eval" label={PieLabelOutside}>{totals.stks.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[(i + 3) % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} />} /></PieChart></ResponsiveContainer></div>
           </div>
         </div>
+        )}
 
         <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
           <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden shrink-0">
@@ -3874,6 +3882,7 @@ export default function App() {
         </div>
 
         {/* 리밸런싱 시뮬레이터 */}
+        {activePortfolioAccountType !== 'gold' && (
         <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-20">
           <div className="p-5 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:justify-between xl:items-start gap-4">
             <span className="text-green-400 text-xl font-bold flex items-center gap-2">⚖️ 리밸런싱 & 적립 시뮬레이터</span>

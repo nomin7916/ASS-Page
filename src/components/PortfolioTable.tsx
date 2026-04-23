@@ -7,7 +7,13 @@ import {
   formatChangeRate, handleTableKeyDown
 } from '../utils';
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, stockFetchStatus, onSingleRefresh }) => {
+const formatUSD = (n) => {
+  const v = cleanNum(n);
+  if (v === 0) return '$0.00';
+  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1 }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
   if (!totals) return null;
@@ -21,8 +27,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               <th className="py-3 w-[15%] text-center px-4 text-gray-300 cursor-pointer hover:bg-gray-700" onClick={() => onSort('name')}>종목명</th>
               <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('code')}>코드</th>
               <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('changeRate')}>등락률</th>
-              <th className="py-3 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('currentPrice')}>현재가</th>
-              <th className="py-3 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('purchasePrice')}>구매단가</th>
+              <th className="py-3 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('currentPrice')}>{isOverseas ? '현재가(USD)' : '현재가'}</th>
+              <th className="py-3 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('purchasePrice')}>{isOverseas ? '구매단가(USD)' : '구매단가'}</th>
               <th className="py-3 w-[7%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('quantity')}>보유수량</th>
               <th className="py-3 w-[9%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('investAmount')}>투자금액</th>
               <th className="py-3 w-[5%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('investRatio')}>비중</th>
@@ -85,22 +91,25 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     <input type="text" data-col="code" className={`${inp} text-center text-gray-400 text-xs font-mono`} value={item.code} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => onBlur(item.id, e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'code')} />
                   </td>
                   <td className="p-0 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap">
-                    <div className={`w-full h-full py-3 px-3 flex items-center justify-center cursor-pointer hover:bg-gray-700/50 transition-colors font-bold ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`} onClick={() => item.code && window.open(`https://m.stock.naver.com/domestic/stock/${item.code.toUpperCase()}/total`, '_blank')} title="상세">{formatChangeRate(item.changeRate)}</div>
+                    <div className={`w-full h-full py-3 px-3 flex items-center justify-center cursor-pointer hover:bg-gray-700/50 transition-colors font-bold ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`} onClick={() => item.code && window.open(isOverseas ? `https://finance.yahoo.com/quote/${item.code.toUpperCase()}` : `https://m.stock.naver.com/domestic/stock/${item.code.toUpperCase()}/total`, '_blank')} title="상세">{formatChangeRate(item.changeRate)}</div>
                   </td>
                   <td className="p-0 border-r border-gray-600">
-                    <div className={`w-full h-full py-3 px-3 text-right text-gray-300 font-bold cursor-pointer hover:bg-teal-900/30 transition-colors flex items-center justify-end gap-1 ${isRefreshing ? 'animate-pulse' : ''}`} onClick={() => item.code && onSingleRefresh(item.id, item.code)} title={item.code ? "클릭하여 현재가 새로고침" : "종목코드를 먼저 입력하세요"}>
+                    <div className={`w-full h-full py-3 px-3 text-right text-gray-300 font-bold cursor-pointer hover:bg-teal-900/30 transition-colors flex items-center justify-end gap-1 ${isRefreshing ? 'animate-pulse' : ''}`} onClick={() => item.code && onSingleRefresh(item.id, item.code)} title={item.code ? (isOverseas ? `클릭하여 현재가 새로고침 (≈${formatNumber(Math.round(cleanNum(item.currentPrice) * usdkrw))}원)` : "클릭하여 현재가 새로고침") : "종목코드를 먼저 입력하세요"}>
                       {isRefreshing && <RefreshCw size={11} className="text-teal-400 animate-spin shrink-0" />}
-                      <span>{formatNumber(item.currentPrice)}</span>
+                      <span>{isOverseas ? formatUSD(item.currentPrice) : formatNumber(item.currentPrice)}</span>
                     </div>
                   </td>
                   <td className="p-0 border-r border-gray-600">
-                    <input type="text" data-col="purchasePrice" className={`${inp} text-right px-3 text-gray-400`} value={formatNumber(item.purchasePrice)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'purchasePrice', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')} />
+                    <input type="text" data-col="purchasePrice" className={`${inp} text-right px-3 text-gray-400`} value={isOverseas ? formatUSD(item.purchasePrice) : formatNumber(item.purchasePrice)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'purchasePrice', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')} />
                   </td>
                   <td className="p-0 border-r border-gray-600 bg-blue-900/10">
                     <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200`} value={formatNumber(item.quantity)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'quantity', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
                   </td>
                   <td className="p-0 border-r border-gray-600 bg-blue-900/10">
-                    <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
+                    {isOverseas
+                      ? <div className="w-full h-full py-3 px-3 text-right text-blue-200 font-bold text-[13px]">{formatCurrency(item.investAmount)}</div>
+                      : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
+                    }
                   </td>
                   <td className={`${td} text-blue-300 bg-blue-900/10 text-center`}>{formatPercent(item.investRatio)}</td>
                   <td className={`${td} text-white font-bold text-right bg-[rgba(113,63,18,0.2)]`}>{formatCurrency(item.evalAmount)}</td>
@@ -113,8 +122,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             })}
             {portfolio.filter(p => p.type === 'deposit').map((item) => (
               <tr key={item.id} className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
-                <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={7}>예수금 (CASH)</td>
-                <td className="p-0 border-r border-gray-600 bg-blue-900/20"><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px]" value={formatNumber(item.depositAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'depositAmount', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
+                <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={7}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
+                <td className="p-0 border-r border-gray-600 bg-blue-900/20"><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px]" value={isOverseas ? formatUSD(item.depositAmount) : formatNumber(item.depositAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'depositAmount', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
                 <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(item.investRatio)}</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{formatCurrency(item.evalAmount)}</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-yellow-500 bg-yellow-900/20 text-right">{formatPercent(item.evalRatio)}</td>

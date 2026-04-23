@@ -54,7 +54,7 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
                   title="클릭하여 현재 금 시세 새로고침"
                 >
                   {isRefreshing && <RefreshCw size={11} className="text-teal-400 animate-spin shrink-0" />}
-                  <span>{goldKr ? formatNumber(goldKr) : '-'}</span>
+                  <span>{goldKr ? formatCurrency(goldKr) : '-'}</span>
                 </div>
               </td>
               <td className="p-0 border-r border-gray-600">
@@ -90,8 +90,15 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
             <tr className="border-b border-gray-700 hover:bg-gray-800/40 transition-colors">
               <td className={`${td} text-center text-gray-400 font-bold`}>1g</td>
               <td className={`${td} text-center font-bold text-gray-300`}>국제 금시세</td>
-              <td className={`${td} text-right font-bold text-gray-300`}>
-                {intlPriceKrw ? formatCurrency(intlPriceKrw) : '-'}
+              <td className={`${td} text-right`}>
+                <div
+                  className={`flex items-center justify-end gap-1 cursor-pointer hover:bg-teal-900/30 rounded px-1 py-0.5 font-bold text-gray-300 transition-colors ${isRefreshing ? 'animate-pulse' : ''}`}
+                  onClick={onRefresh}
+                  title="클릭하여 현재 금 시세 새로고침"
+                >
+                  {isRefreshing && <RefreshCw size={11} className="text-teal-400 animate-spin shrink-0" />}
+                  <span>{intlPriceKrw ? formatCurrency(intlPriceKrw) : '-'}</span>
+                </div>
               </td>
               <td className={td} colSpan={5}></td>
               <td className="py-3 px-3 align-middle text-[13px] text-right text-gray-500">0.00%</td>
