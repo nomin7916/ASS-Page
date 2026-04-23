@@ -14,6 +14,7 @@ import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, load
 import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
+import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
 import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
@@ -1278,6 +1279,36 @@ export default function App() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveStatus]);
+
+  const activePortfolioAccountType = useMemo(() =>
+    portfolios.find(p => p.id === activePortfolioId)?.accountType || 'portfolio',
+    [portfolios, activePortfolioId]
+  );
+
+  // KRX 금현물 포트폴리오: 주식 항목이 없으면 자동 초기화
+  useEffect(() => {
+    if (activePortfolioAccountType !== 'gold') return;
+    setPortfolio(prev => {
+      if (prev.some(p => p.type === 'stock')) return prev;
+      return [
+        { id: generateId(), type: 'stock', category: '금', code: '', name: 'KRX 금현물', currentPrice: 0, changeRate: 0, purchasePrice: 0, quantity: 0, targetRatio: 0, isManual: true },
+        ...prev,
+      ];
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePortfolioAccountType, activePortfolioId]);
+
+  // KRX 금현물 포트폴리오: goldKr 시세를 주식 항목의 currentPrice에 자동 동기화
+  useEffect(() => {
+    if (activePortfolioAccountType !== 'gold') return;
+    if (!marketIndicators.goldKr) return;
+    setPortfolio(prev => prev.map(item =>
+      item.type === 'stock'
+        ? { ...item, currentPrice: marketIndicators.goldKr, changeRate: marketIndicators.goldKrChg ?? item.changeRate }
+        : item
+    ));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marketIndicators.goldKr, activePortfolioAccountType]);
 
   const totals = useMemo(() => {
     let tInv = 0, tEvl = 0, tPrf = 0, cats = {}, stks = [];
@@ -3332,7 +3363,19 @@ export default function App() {
         {!showIntegratedDashboard && (<>
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
 
-        <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
+        {activePortfolioAccountType === 'gold' ? (
+          <KrxGoldTable
+            portfolio={portfolio}
+            goldKr={marketIndicators.goldKr}
+            goldIntl={marketIndicators.goldIntl}
+            usdkrw={marketIndicators.usdkrw}
+            onUpdate={handleUpdate}
+            onRefresh={fetchMarketIndicators}
+            isRefreshing={indicatorLoading}
+          />
+        ) : (
+          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} />
+        )}
 
         <div className="grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-6 w-full items-stretch">
           <div className="xl:col-span-4 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full">
