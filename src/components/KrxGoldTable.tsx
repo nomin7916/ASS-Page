@@ -3,7 +3,7 @@ import React from 'react';
 import { RefreshCw } from 'lucide-react';
 import { cleanNum, formatCurrency, formatPercent, formatNumber } from '../utils';
 
-const TROY_TROY_OZ_TO_GRAM = 31.1035;
+const TROY_OZ_TO_GRAM = 31.1035;
 
 const fmtUsdOz = (v) =>
   v != null ? `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}` : null;
