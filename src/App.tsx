@@ -1077,7 +1077,6 @@ export default function App() {
             await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.MARKET, {
               marketIndices, marketIndicators, indicatorHistoryMap: mergedIhm,
             });
-            showToast('☁️ 국내금 데이터 Drive 백업 완료');
           } catch (e) { /* Drive 저장 실패는 무시 */ }
         }
         return goldData;
@@ -2142,9 +2141,6 @@ export default function App() {
     // PC 다운로드와 동시에 Google Drive에도 백업
     if (driveTokenRef.current) {
       saveAllToDrive(state);
-      showToast('☁️ PC 파일 + Google Drive 동시 백업 완료');
-    } else {
-      showToast('💾 PC 파일 백업 완료 (Drive 미연결)');
     }
   };
 
@@ -2153,7 +2149,6 @@ export default function App() {
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
     if (driveTokenRef.current) {
       saveAllToDrive(state);
-      showToast('☁️ Google Drive 백업 완료');
     } else {
       showToast('☁️ Drive 미연결 — 먼저 Drive를 연결해 주세요', true);
     }
@@ -2673,12 +2668,12 @@ export default function App() {
     try {
       localStorage.setItem(`portfolioMarketData_v5_${stateEmail}`, JSON.stringify({ marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }));
     } catch {}
-    // 초기 로드 완료 후 Drive 자동저장 (60초 디바운스 — 포트폴리오 구조 변경 시 1분 이내 백업)
+    // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스 — 포트폴리오 테이블 변경 시 2초 이내 백업)
     if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
       driveSaveTimerRef.current = setTimeout(() => {
         saveAllToDrive(state);
-      }, 60 * 1000);
+      }, 2000);
     }
   }, [portfolios, activePortfolioId, title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory]);
 
