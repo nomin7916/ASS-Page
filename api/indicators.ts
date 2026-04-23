@@ -231,8 +231,8 @@ export default async function handler(_req: Request): Promise<Response> {
   const sp500  = ok(sp500Yahoo)?.price  ? ok(sp500Yahoo)  : ok(sp500Naver);
   const nasdaq = ok(nasdaqYahoo)?.price ? ok(nasdaqYahoo) : ok(nasdaqNaver);
   const usdkrw = ok(usdkrwYahoo)?.price ? ok(usdkrwYahoo) : ok(usdkrwNaver);
-  // US 10Y: FRED → Yahoo → Naver 3단계 fallback
-  const us10y = ok(us10yFred)?.price ? ok(us10yFred) : ok(us10yYahoo)?.price ? ok(us10yYahoo) : ok(us10yNaver);
+  // US 10Y: Naver(실시간) → Yahoo → FRED(전일 종가 fallback)
+  const us10y = ok(us10yNaver)?.price ? ok(us10yNaver) : ok(us10yYahoo)?.price ? ok(us10yYahoo) : ok(us10yFred);
   // KR 10Y: Naver primary → Yahoo fallback
   const kr10y = ok(kr10yNaver)?.price ? ok(kr10yNaver) : ok(kr10yYahoo);
   // 국내금: Naver front-api(M04020000) → HTML 기준가 순으로 fallback
