@@ -1541,6 +1541,7 @@ export default function App() {
     return filtered.map(h => ({
       date: h.date,
       evalAmount: h.evalAmount,
+      costAmount: totalPrincipal,
       returnRate: intIsZeroBaseMode
         ? (baseEval > 0 ? ((h.evalAmount / baseEval) - 1) * 100 : 0)
         : (totalPrincipal > 0 ? ((h.evalAmount - totalPrincipal) / totalPrincipal * 100) : 0),
@@ -4129,7 +4130,7 @@ export default function App() {
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
 
               {/* 평가액 추이 테이블 */}
-              <div className="w-full xl:w-[280px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
+              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
                 <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700 shrink-0">
                   <span className="text-white font-bold text-sm">📅 평가액 추이</span>
                   <button
@@ -4147,22 +4148,22 @@ export default function App() {
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 z-10">
                       <tr>
-                        <th className="py-2 px-2 text-center border-r border-gray-700">일자</th>
-                        <th className="py-2 px-2 text-right border-r border-gray-700">총 평가금액</th>
-                        <th className="py-2 px-2 text-center border-r border-gray-700">전일대비</th>
-                        <th className="py-2 px-2 text-center">월간수익</th>
+                        <th className="py-2.5 px-3 text-center border-r border-gray-700">일자</th>
+                        <th className="py-2.5 px-3 text-right border-r border-gray-700">총 평가금액</th>
+                        <th className="py-2.5 px-3 text-center border-r border-gray-700 whitespace-nowrap">전일대비(%)</th>
+                        <th className="py-2.5 px-3 text-center whitespace-nowrap">월간수익률(%)</th>
                       </tr>
                     </thead>
                     <tbody>
                       {intMonthlyHistory.map((h, i) => (
                         <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
-                          <td className="py-1.5 px-2 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
-                          <td className="py-1.5 px-2 font-bold text-white text-right border-r border-gray-700">{formatCurrency(h.evalAmount)}</td>
-                          <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                            <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
+                          <td className="py-2 px-3 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
+                          <td className="py-2 px-3 font-bold text-white text-right border-r border-gray-700">{formatCurrency(h.evalAmount)}</td>
+                          <td className="py-2 px-3 text-center border-r border-gray-700">
+                            <span className={`text-sm font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
                           </td>
-                          <td className="py-1.5 px-2 text-center">
-                            <span className={`font-bold ${h.monthlyChange > 0 ? 'text-red-400' : h.monthlyChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.monthlyChange)}</span>
+                          <td className="py-2 px-3 text-center">
+                            <span className={`text-sm font-bold ${h.monthlyChange > 0 ? 'text-red-400' : h.monthlyChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.monthlyChange)}</span>
                           </td>
                         </tr>
                       ))}
@@ -4200,6 +4201,10 @@ export default function App() {
                           <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
                           <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
                         </linearGradient>
+                        <linearGradient id="intCostGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#6b7280" stopOpacity={0.35} />
+                          <stop offset="95%" stopColor="#6b7280" stopOpacity={0.05} />
+                        </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.5} />
                       <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatVeryShortDate} minTickGap={30} />
@@ -4208,21 +4213,23 @@ export default function App() {
                       <RechartsTooltip content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
                         return (
-                          <div style={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #4b5563', borderRadius: 8, padding: '10px 14px', minWidth: 160 }}>
+                          <div style={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #4b5563', borderRadius: 8, padding: '10px 14px', minWidth: 180 }}>
                             <p style={{ color: '#9ca3af', fontSize: 11, fontWeight: 700, marginBottom: 6 }}>{formatShortDate(label)}</p>
-                            {payload.map((entry, i) => (
+                            {payload.filter(e => e.dataKey !== 'costAmount' || e.value > 0).map((entry, i) => (
                               <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 3 }}>
                                 <span style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, display: 'inline-block', flexShrink: 0 }} />
-                                <span style={{ fontSize: 11, color: '#e5e7eb', fontWeight: 600 }}>
-                                  {entry.name === '총자산' ? formatCurrency(entry.value) : `${Number(entry.value).toFixed(2)}%`}
+                                <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 600, marginRight: 4 }}>{entry.name}</span>
+                                <span style={{ fontSize: 11, color: '#e5e7eb', fontWeight: 700, marginLeft: 'auto' }}>
+                                  {entry.name === '수익률' ? `${Number(entry.value).toFixed(2)}%` : formatCurrency(entry.value)}
                                 </span>
                               </div>
                             ))}
                           </div>
                         );
                       }} />
+                      <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={{ r: 3 }} />
                       <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={{ r: 4 }} />
-                      <Line yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" stroke="#6b7280" strokeWidth={1.5} dot={false} strokeDasharray="4 3" />
+                      <Line yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} dot={false} />
                       {intRefAreaLeft && intRefAreaRight && <ReferenceArea yAxisId="left" x1={intRefAreaLeft} x2={intRefAreaRight} fill="rgba(255,255,255,0.08)" strokeOpacity={0.3} />}
                     </ComposedChart>
                   </ResponsiveContainer>
