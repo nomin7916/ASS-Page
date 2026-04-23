@@ -131,7 +131,23 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
               <td className={`${td} text-right font-bold ${priceDiff != null ? (priceDiff >= 0 ? 'text-red-400' : 'text-blue-400') : 'text-gray-500'}`}>
                 {priceDiff != null ? formatCurrency(priceDiff) : '-'}
               </td>
-              <td colSpan={6} className={`${td} bg-gray-800/20`}></td>
+              <td colSpan={6} className={`${td} bg-gray-800/20 text-left`}>
+                {(goldIntl != null && usdkrw != null && intlPriceKrw != null && goldKr != null) && (
+                  <span className="text-[11px] text-gray-400 font-mono">
+                    <span className="text-yellow-500/80">${goldIntl.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}/oz</span>
+                    <span className="text-gray-500"> ÷ 31.1035 × </span>
+                    <span className="text-teal-400">{formatNumber(Math.round(usdkrw))}</span>
+                    <span className="text-gray-500"> = </span>
+                    <span className="text-gray-300">{formatCurrency(intlPriceKrw)}</span>
+                    <span className="text-gray-600 mx-2">→</span>
+                    <span className="text-gray-300">{formatCurrency(goldKr)}</span>
+                    <span className="text-gray-500"> − </span>
+                    <span className="text-gray-300">{formatCurrency(intlPriceKrw)}</span>
+                    <span className="text-gray-500"> = </span>
+                    <span className={priceDiff >= 0 ? 'text-red-400' : 'text-blue-400'}>{formatCurrency(priceDiff)}</span>
+                  </span>
+                )}
+              </td>
             </tr>
 
             {/* 예수금 row */}
