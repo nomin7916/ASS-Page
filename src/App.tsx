@@ -10,7 +10,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
-import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile } from './driveStorage';
+import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, loadVersionTimestamp, saveVersionFile } from './driveStorage';
 import { fetchIndexData, fetchStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
@@ -523,6 +523,9 @@ export default function App() {
   const driveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const portfolioUpdatedAtRef = useRef<number>(0); // 계좌/종목 구조 변경 시에만 갱신 (시장가격 갱신과 구분)
   const prevPortfolioStructureRef = useRef<string>(''); // 직전 포트폴리오 구조 해시
+  const lastDriveSavedPortfolioUpdatedAtRef = useRef<number>(0); // Drive STATE 파일에 마지막으로 저장한 portfolioUpdatedAt
+  const driveCheckInProgressRef = useRef(false); // Drive 확인 중복 실행 방지 (polling·visibilitychange 공유)
+  const lastDriveCheckAtRef = useRef<number>(0); // 마지막 Drive 확인 시각 (중복 확인 최소화)
   const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
 
@@ -669,8 +672,14 @@ export default function App() {
       setDriveStatus('saving');
       const folderId = await ensureDriveFolder(token);
       const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
-      // state 파일 먼저 저장 후 stock/market 병렬 저장
-      await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
+      // STATE(계좌/종목 구조)는 portfolioUpdatedAt이 실제로 변경됐을 때만 저장
+      // → 시장가격·지표 갱신으로 인해 다른 기기의 최신 계좌 데이터를 덮어쓰는 것을 방지
+      if ((state.portfolioUpdatedAt || 0) > lastDriveSavedPortfolioUpdatedAtRef.current) {
+        await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
+        // 폴링용 경량 version 파일도 동시에 갱신 (다른 기기가 50바이트 파일로 변경 감지)
+        await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
+        lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
+      }
       await Promise.all([
         Object.keys(shm || {}).length > 0
           ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm })
@@ -2582,6 +2591,51 @@ export default function App() {
     }, AUTO_REFRESH_INTERVAL);
     return () => clearInterval(intervalId);
   }, []);
+
+  // Drive 버전 파일을 확인하고 최신 데이터가 있으면 불러오는 공통 함수
+  // version 파일(~50바이트)만 읽어 변경 여부를 먼저 확인 → 변경 시에만 전체 STATE 로드
+  const checkAndSyncFromDrive = async () => {
+    if (!driveTokenRef.current || isInitialLoad.current) return;
+    if (driveCheckInProgressRef.current) return;
+    driveCheckInProgressRef.current = true;
+    lastDriveCheckAtRef.current = Date.now();
+    try {
+      const folderId = await ensureDriveFolder(driveTokenRef.current);
+      const driveTs = await loadVersionTimestamp(driveTokenRef.current, folderId);
+      if (driveTs !== null && driveTs > portfolioUpdatedAtRef.current) {
+        await loadFromDrive(driveTokenRef.current);
+      }
+    } catch {
+      // 오프라인·토큰 만료 등 조용히 무시
+    } finally {
+      driveCheckInProgressRef.current = false;
+    }
+  };
+
+  // 탭·앱이 다시 활성화(화면 복귀)됐을 때 즉시 Drive 확인
+  useEffect(() => {
+    if (!authUser) return;
+    const handleVisibilityChange = () => {
+      if (document.hidden) return;
+      checkAndSyncFromDrive();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [authUser]);
+
+  // 15초마다 Drive version 파일을 polling → 다른 기기의 변경을 자동 반영
+  // version 파일은 50바이트이므로 API 비용이 매우 낮음
+  useEffect(() => {
+    if (!authUser) return;
+    const POLL_INTERVAL = 15 * 1000;
+    const intervalId = setInterval(() => {
+      if (document.hidden) return; // 탭이 숨겨진 상태면 불필요한 API 호출 생략
+      // visibilitychange나 직전 poll과 10초 이내 중복 실행 방지
+      if (Date.now() - lastDriveCheckAtRef.current < 10_000) return;
+      checkAndSyncFromDrive();
+    }, POLL_INTERVAL);
+    return () => clearInterval(intervalId);
+  }, [authUser]);
 
   useEffect(() => {
     if (portfolios.length === 0) return;

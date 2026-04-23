@@ -5,10 +5,11 @@ const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 
 export const DRIVE_FILES = {
-  STATE:  'portfolio_state.json',
-  STOCK:  'portfolio_stockdata.json',
-  MARKET: 'portfolio_marketdata.json',
-  PIN:    'portfolio_pin.json',
+  STATE:   'portfolio_state.json',
+  STOCK:   'portfolio_stockdata.json',
+  MARKET:  'portfolio_marketdata.json',
+  PIN:     'portfolio_pin.json',
+  VERSION: 'portfolio_version.json', // 폴링용 경량 버전 파일 (~50 bytes)
 };
 
 // Index_Data 폴더 찾기 또는 없으면 생성
@@ -126,4 +127,26 @@ export async function loadDriveFile(
     throw new Error(`[Drive] 파일 읽기 실패 ${res.status}: ${err?.error?.message || res.statusText}`);
   }
   return await res.json();
+}
+
+// 폴링 전용: portfolio_version.json에서 portfolioUpdatedAt만 읽기 (파일이 ~50바이트로 매우 가볍다)
+export async function loadVersionTimestamp(
+  token: string,
+  folderId: string
+): Promise<number | null> {
+  try {
+    const data = await loadDriveFile(token, folderId, DRIVE_FILES.VERSION) as any;
+    return data?.portfolioUpdatedAt ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// 계좌/종목 구조가 변경될 때 portfolioUpdatedAt을 version 파일에 기록
+export async function saveVersionFile(
+  token: string,
+  folderId: string,
+  portfolioUpdatedAt: number
+): Promise<void> {
+  await saveDriveFile(token, folderId, DRIVE_FILES.VERSION, { portfolioUpdatedAt });
 }
