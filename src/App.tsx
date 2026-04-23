@@ -645,7 +645,6 @@ export default function App() {
       if (stateData.intHistory) setIntHistory(stateData.intHistory);
 
       setDriveStatus('saved');
-      showToast('☁️ Google Drive에서 데이터 불러옴');
       return stateData.portfolios?.[0]?.portfolio || stateData.portfolio || [];
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2623,15 +2622,15 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [authUser]);
 
-  // 15초마다 Drive version 파일을 polling → 다른 기기의 변경을 자동 반영
+  // 10분마다 Drive version 파일을 polling → 다른 기기의 변경을 자동 반영
   // version 파일은 50바이트이므로 API 비용이 매우 낮음
   useEffect(() => {
     if (!authUser) return;
-    const POLL_INTERVAL = 15 * 1000;
+    const POLL_INTERVAL = 10 * 60 * 1000; // 10분
     const intervalId = setInterval(() => {
       if (document.hidden) return; // 탭이 숨겨진 상태면 불필요한 API 호출 생략
-      // visibilitychange나 직전 poll과 10초 이내 중복 실행 방지
-      if (Date.now() - lastDriveCheckAtRef.current < 10_000) return;
+      // visibilitychange나 직전 poll과 9분 이내 중복 실행 방지
+      if (Date.now() - lastDriveCheckAtRef.current < 9 * 60 * 1000) return;
       checkAndSyncFromDrive();
     }, POLL_INTERVAL);
     return () => clearInterval(intervalId);
@@ -2674,12 +2673,12 @@ export default function App() {
     try {
       localStorage.setItem(`portfolioMarketData_v5_${stateEmail}`, JSON.stringify({ marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }));
     } catch {}
-    // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스)
+    // 초기 로드 완료 후 Drive 자동저장 (60초 디바운스 — 포트폴리오 구조 변경 시 1분 이내 백업)
     if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
       driveSaveTimerRef.current = setTimeout(() => {
         saveAllToDrive(state);
-      }, 2000);
+      }, 60 * 1000);
     }
   }, [portfolios, activePortfolioId, title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory]);
 
