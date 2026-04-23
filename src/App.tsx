@@ -521,6 +521,8 @@ export default function App() {
   const portfolioRef = useRef([]);
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
   const driveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const portfolioUpdatedAtRef = useRef<number>(0); // 계좌/종목 구조 변경 시에만 갱신 (시장가격 갱신과 구분)
+  const prevPortfolioStructureRef = useRef<string>(''); // 직전 포트폴리오 구조 해시
   const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
 
@@ -2390,7 +2392,7 @@ export default function App() {
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
         if (data.intHistory) setIntHistory(data.intHistory);
-        localUpdatedAt = data.updatedAt || 0;
+        localUpdatedAt = data.portfolioUpdatedAt || data.updatedAt || 0;
         localPortfoliosCount = data.portfolios?.length || 0;
         hasLocalData = true;
       } catch (e) {}
@@ -2484,7 +2486,7 @@ export default function App() {
           const checkFolderId = await ensureDriveFolder(token);
           const driveRaw = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
           if (driveRaw) {
-            const driveTs = driveRaw.updatedAt || 0;
+            const driveTs = driveRaw.portfolioUpdatedAt || driveRaw.updatedAt || 0;
             const driveCount = driveRaw.portfolios?.length || 0;
             // Drive가 더 최신이거나, 둘 다 updatedAt 없을 때 Drive 계좌 수가 더 많으면 Drive 우선
             const driveIsNewer = driveTs > localUpdatedAt;
@@ -2589,7 +2591,23 @@ export default function App() {
         ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory, updatedAt: Date.now() };
+    // 계좌/종목 구조만 비교 — history(일일 평가액)·시장 데이터는 제외하여
+    // 시장가격 갱신이 portfolioUpdatedAt을 덮어쓰지 않도록 방지
+    const portfolioStructureKey = JSON.stringify([
+      currentPortfolios.map(p => ({
+        id: p.id, name: p.name,
+        startDate: p.startDate || p.portfolioStartDate,
+        portfolio: p.portfolio, principal: p.principal,
+        depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
+        settings: p.settings,
+      })),
+      activePortfolioId, customLinks, lookupRows,
+    ]);
+    if (portfolioStructureKey !== prevPortfolioStructureRef.current) {
+      prevPortfolioStructureRef.current = portfolioStructureKey;
+      portfolioUpdatedAtRef.current = Date.now();
+    }
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
     // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
     const stateEmail = adminViewingAsRef.current || authUser.email;
