@@ -1,3 +1,21 @@
+// ── 해외주식 히스토리: 서버사이드 Edge Function 경유 (Naver worldstock → Yahoo Finance) ──
+export const fetchUsStockHistory = async (
+  code: string,
+  fromDate?: string
+): Promise<{ data: Record<string, number>; source: string } | null> => {
+  try {
+    const params = new URLSearchParams({ key: 'worldstock', code });
+    if (fromDate) params.set('start', fromDate.replace(/-/g, ''));
+    const res = await fetch(`/api/history?${params}`, {
+      signal: AbortSignal.timeout(90000), // 청크 다중 수집 시 최대 90초
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+};
+
 // ── KIS 종목 히스토리: 서버사이드 Edge Function 경유 ─────────────────────
 // (인증 정보는 서버 env에만 보관 — 브라우저 번들에 미포함)
 
@@ -52,8 +70,8 @@ export const fetchNaverStockHistory = async (
 };
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const fetchIndexData = async (symbol, startDate?: string) => {
-  const stooqMap = { '^KS11': '^kospi', '^GSPC': '^spx' };
+export const fetchIndexData = async (symbol: string, startDate?: string) => {
+  const stooqMap: Record<string, string> = { '^KS11': '^kospi', '^GSPC': '^spx' };
   const stooqSymbol = stooqMap[symbol];
 
   if (stooqSymbol) {
@@ -72,7 +90,7 @@ export const fetchIndexData = async (symbol, startDate?: string) => {
           if (!text || text.includes('No data') || text.trim().length < 30) continue;
           const lines = text.trim().split('\n');
           if (lines.length < 2) continue;
-          const result = {};
+          const result: Record<string, number> = {};
           for (let i = 1; i < lines.length; i++) {
             const cols = lines[i].split(',');
             if (cols.length >= 5 && cols[0] && cols[4]) {
@@ -106,14 +124,14 @@ export const fetchIndexData = async (symbol, startDate?: string) => {
       const res = await fetch(proxy.url);
       if (!res.ok) continue;
       const json = await res.json();
-      const result = {};
+      const result: Record<string, number> = {};
       if (json.chart?.result?.[0]) {
-        const timestamps = json.chart.result[0].timestamp;
-        const closePrices = json.chart.result[0].indicators.quote[0].close;
+        const timestamps: number[] = json.chart.result[0].timestamp;
+        const closePrices: (number | null)[] = json.chart.result[0].indicators.quote[0].close;
         if (timestamps && closePrices) {
-          timestamps.forEach((ts, idx) => {
+          timestamps.forEach((ts: number, idx: number) => {
             const dateStr = new Date(ts * 1000).toISOString().split('T')[0];
-            if (closePrices[idx] !== null) result[dateStr] = closePrices[idx];
+            if (closePrices[idx] !== null) result[dateStr] = closePrices[idx] as number;
           });
         }
         if (Object.keys(result).length > 0) return { data: result, source: `Yahoo(${proxy.name})` };
@@ -123,7 +141,7 @@ export const fetchIndexData = async (symbol, startDate?: string) => {
   return null;
 };
 
-export const fetchStockInfo = async (code) => {
+export const fetchStockInfo = async (code: string) => {
   if (!code || code.length < 5) return null;
   const targetUrl = `https://m.stock.naver.com/api/stock/${code}/basic`;
   const proxies = [
@@ -148,18 +166,23 @@ export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; 
   if (!ticker || ticker.trim().length < 1) return null;
   const upper = ticker.trim().toUpperCase();
 
-  // Naver Reuters 코드 후보: NASDAQ(.O), NYSE(.K/.N), NYSE Arca(.P)
-  const naverCodes = [`${upper}.O`, `${upper}.K`, `${upper}.N`, upper, `${upper}.P`];
-  const mkProxy = (url: string) => [
+  const mkNaverProxies = (url: string) => [
+    `/api/proxy?url=${encodeURIComponent(url)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     `https://api.codetabs.com/v1/proxy?quest=${url}`,
   ];
 
+  // 이미 거래소 코드 포함(.O/.K/.N/.P/.Q 등)된 경우 그 코드 먼저 시도, 아니면 후보 코드 순서로 시도
+  const hasExchangeSuffix = /\.[A-Z]{1,2}$/.test(upper);
+  const naverCodes = hasExchangeSuffix
+    ? [upper, ...['O','K','N','P','Q'].filter(s => !upper.endsWith(`.${s}`)).map(s => `${upper.split('.')[0]}.${s}`)]
+    : [`${upper}.O`, `${upper}.K`, `${upper}.N`, `${upper}.P`, `${upper}.Q`, upper];
+
   for (const code of naverCodes) {
     const targetUrl = `https://m.stock.naver.com/api/stock/${code}/basic`;
-    for (const proxy of mkProxy(targetUrl)) {
+    for (const proxy of mkNaverProxies(targetUrl)) {
       try {
-        const res = await fetch(proxy, { signal: AbortSignal.timeout(5000) });
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(6000) });
         if (!res.ok) continue;
         const data = await res.json();
         const rawName = data?.stockName || data?.name;
@@ -178,8 +201,10 @@ export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; 
   }
 
   // Yahoo Finance fallback
-  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${upper}?range=1d&interval=1d`;
+  const yahooTicker = upper.includes('.') ? upper.split('.')[0] : upper;
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?range=1d&interval=1d`;
   const yahooProxies = [
+    `/api/proxy?url=${encodeURIComponent(yahooUrl)}`,
     `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
     `https://api.codetabs.com/v1/proxy?quest=${yahooUrl}`,
@@ -196,7 +221,7 @@ export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; 
         if (price && price > 0) {
           const prev = meta?.chartPreviousClose || meta?.previousClose;
           const changeRate = prev && prev > 0 ? ((price - prev) / prev) * 100 : (meta?.regularMarketChangePercent ?? 0);
-          return { name: meta?.shortName || meta?.symbol || upper, price, changeRate };
+          return { name: meta?.shortName || meta?.symbol || yahooTicker, price, changeRate };
         }
       }
     } catch { continue; }

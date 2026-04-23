@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
 import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, loadVersionTimestamp, saveVersionFile } from './driveStorage';
-import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
+import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
@@ -1869,11 +1869,12 @@ export default function App() {
 
     try {
       const today = new Date().toISOString().split('T')[0];
-      
+      const isOverseasRefresh = activePortfolioAccountType === 'overseas';
+
       // 종목별 현재가 조회 결과를 Map으로 수집
       const priceResults = {};
       await Promise.all(stockCodes.map(async (code) => {
-        const d = await fetchStockInfo(code);
+        const d = isOverseasRefresh ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
         if (d) {
           setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
           setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
@@ -1899,14 +1900,21 @@ export default function App() {
       });
       if (codesNeedingHistory.length > 0) {
         Promise.all(codesNeedingHistory.map(async (code) => {
-          let hist: Record<string, number> | null = null;
-          const rKIS = await fetchKISStockHistory(code);
-          if (rKIS) hist = rKIS.data;
-          if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
-          if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
-          if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
-          if (hist) {
-            setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+          if (isOverseasRefresh) {
+            const r = await fetchUsStockHistory(code);
+            if (r?.data && Object.keys(r.data).length > 1) {
+              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
+            }
+          } else {
+            let hist: Record<string, number> | null = null;
+            const rKIS = await fetchKISStockHistory(code);
+            if (rKIS) hist = rKIS.data;
+            if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
+            if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
+            if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
+            if (hist) {
+              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+            }
           }
         })).then(() => {
           // 백그라운드 과거 데이터 수집 완료 후 Drive 백업 (페이지 재시작 시 재수집 방지)
@@ -2344,6 +2352,29 @@ export default function App() {
       }));
     }
     setIsLoading(false);
+
+    // 해외계좌: 그래프용 과거 데이터 백그라운드 수집 (충분한 이력 없는 종목만)
+    if (isOverseas) {
+      const codesNeedingHistory = stocks
+        .map(s => s.code)
+        .filter(code => {
+          const existing = stockHistoryMap[code];
+          return !existing || Object.keys(existing).length <= 3;
+        });
+      if (codesNeedingHistory.length > 0) {
+        Promise.all(codesNeedingHistory.map(async (code) => {
+          const r = await fetchUsStockHistory(code);
+          if (r?.data && Object.keys(r.data).length > 1) {
+            setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
+          }
+        })).then(() => {
+          setTimeout(() => {
+            const snap = saveStateRef.current;
+            if (snap && driveTokenRef.current) saveAllToDrive(snap);
+          }, 800);
+        });
+      }
+    }
   };
 
   // 1단계: 로그인 후 사용자별 localStorage에서 복원 (step 2 내부에서 처리)

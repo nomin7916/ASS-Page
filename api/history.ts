@@ -157,11 +157,111 @@ function defaultDateRange() {
   return { start, end };
 }
 
+// Naver worldstock 해외주식 일별 히스토리 (다중 청크 수집)
+async function fetchNaverWorldstockHistory(code: string, d1: string, d2: string): Promise<Record<string, number>> {
+  const HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    'Referer':    'https://m.stock.naver.com/',
+    'Accept':     'application/json',
+  };
+
+  const defStart = new Date(Date.now() - 12 * 365.25 * 24 * 3600 * 1000)
+    .toISOString().split('T')[0].replace(/-/g, '');
+  const limitStart = (d1 || defStart).slice(0, 8);
+
+  const toNaverDt = (yyyymmdd: string, end = false) =>
+    `${yyyymmdd}${end ? '235959' : '000000'}`;
+
+  const allData: Record<string, number> = {};
+
+  // 오늘부터 역순으로 청크 수집 (한 청크 = API가 반환하는 최대 건수)
+  let chunkEnd = (d2 || new Date().toISOString().split('T')[0].replace(/-/g, '')).slice(0, 8);
+
+  for (let iter = 0; iter < 25; iter++) {
+    const url = `https://m.stock.naver.com/api/stock/${encodeURIComponent(code)}/day`
+      + `?startDateTime=${toNaverDt(limitStart)}&endDateTime=${toNaverDt(chunkEnd, true)}&timeframe=day`;
+
+    try {
+      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(12000) });
+      if (!res.ok) break;
+
+      const raw: any = await res.json();
+      // API는 배열 또는 { isSuccess, result } 형태 반환
+      const items: any[] = Array.isArray(raw) ? raw : (raw?.result ?? raw?.prices ?? []);
+      if (items.length === 0) break;
+
+      let earliestInChunk = chunkEnd;
+      for (const item of items) {
+        const ld = String(item.localDate ?? item.localTradedAt ?? '').replace(/T.*/, '').replace(/-/g, '');
+        const price = parseFloat(String(item.closePrice ?? item.close ?? 0));
+        if (ld.length === 8 && price > 0) {
+          const fmt = `${ld.slice(0,4)}-${ld.slice(4,6)}-${ld.slice(6,8)}`;
+          allData[fmt] = price;
+          if (ld < earliestInChunk) earliestInChunk = ld;
+        }
+      }
+
+      // 더 이상 수집할 범위가 없으면 중단
+      if (earliestInChunk <= limitStart) break;
+
+      // 다음 청크: 이번 청크 최초일 하루 전까지
+      const prevDay = new Date(
+        parseInt(earliestInChunk.slice(0,4)),
+        parseInt(earliestInChunk.slice(4,6)) - 1,
+        parseInt(earliestInChunk.slice(6,8)) - 1
+      );
+      if (isNaN(prevDay.getTime())) break;
+      chunkEnd = prevDay.toISOString().split('T')[0].replace(/-/g, '');
+      if (chunkEnd <= limitStart) break;
+    } catch {
+      break;
+    }
+  }
+
+  return allData;
+}
+
 export default async function handler(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const key   = searchParams.get('key') ?? '';
   const start = (searchParams.get('start') ?? '').replace(/-/g, '');
   const end   = (searchParams.get('end')   ?? '').replace(/-/g, '');
+
+  // ── 해외주식 히스토리: Naver worldstock day API → Yahoo Finance fallback ──
+  if (key === 'worldstock') {
+    const code = searchParams.get('code') ?? '';
+    if (!code) return new Response('code 파라미터 필요', { status: 400 });
+
+    const { start: defStart, end: defEnd } = defaultDateRange();
+    const d1 = start || defStart;
+    const d2 = end   || defEnd;
+
+    let data = await fetchNaverWorldstockHistory(code, d1, d2);
+
+    if (Object.keys(data).length < 5) {
+      // Naver 실패 시 Yahoo Finance fallback (거래소 코드 제거: NVDA.O → NVDA)
+      const yahooTicker = code.includes('.') ? code.split('.')[0] : code;
+      data = await fetchYahooHistory(yahooTicker, d1, d2);
+      if (Object.keys(data).length === 0) {
+        return new Response('해외주식 히스토리 수집 실패', { status: 502 });
+      }
+      return new Response(JSON.stringify({ data, source: 'Yahoo Finance' }), {
+        headers: {
+          'Content-Type':                'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+        },
+      });
+    }
+
+    return new Response(JSON.stringify({ data, source: 'Naver worldstock' }), {
+      headers: {
+        'Content-Type':                'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+      },
+    });
+  }
 
   // ── 개별 종목 히스토리: Naver fchart XML (key=stock&code=XXXXX) ──────────
   if (key === 'stock') {
