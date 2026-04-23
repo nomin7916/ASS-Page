@@ -30,7 +30,26 @@ async function fetchFred(seriesId: string) {
   };
 }
 
-// finance.naver.com 금일별시세 HTML 파싱 (국내금 실시간 현재가)
+// Naver m.stock front-api (국내금 M04020000 실시간 현재가 — fetchNaverBond와 동일 패턴)
+async function fetchGoldKrNaverMetal(): Promise<{ price: number | null; change: number | null; source: string }> {
+  const data = await safeJson(
+    'https://m.stock.naver.com/front-api/marketIndex/productDetail?category=metals&reutersCode=M04020000',
+    {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+        'Referer':    'https://m.stock.naver.com/',
+        'Accept':     'application/json',
+      },
+    }
+  );
+  if (!data?.isSuccess) return { price: null, change: null, source: 'NaverGoldKr' };
+  const result = data.result;
+  const price  = parseFloat(String(result?.closePrice ?? '0').replace(/,/g, ''));
+  const change = result?.fluctuationsRatio != null ? parseFloat(String(result.fluctuationsRatio)) : null;
+  return price > 0 ? { price: Math.round(price), change, source: 'NaverGoldKr' } : { price: null, change: null, source: 'NaverGoldKr' };
+}
+
+// finance.naver.com 금일별시세 HTML 파싱 (국내금 fallback — 기준가 기반)
 async function fetchGoldKrFinanceNaver(): Promise<{ price: number | null; change: number | null; source: string }> {
   try {
     const res = await fetch(
@@ -45,17 +64,16 @@ async function fetchGoldKrFinanceNaver(): Promise<{ price: number | null; change
     );
     if (!res.ok) return { price: null, change: null, source: 'Naver금' };
     const html  = await res.text();
-    // td.num 중 숫자로 시작하는 것만 (img 태그로 시작하는 등락 칸 제외)
     const prices: number[] = [];
     const re = /class="num">([\d,]+\.?\d*)</g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(html)) !== null) {
       const v = parseFloat(m[1].replace(/,/g, ''));
-      if (v > 1000) prices.push(v); // 국내금 KRW/g 가격은 항상 > 1000
+      if (v > 1000) prices.push(v);
     }
     if (prices.length < 2) return { price: null, change: null, source: 'Naver금' };
-    const price  = prices[0];           // 오늘 기준가
-    const prev   = prices[1];           // 전일 기준가
+    const price  = prices[0];
+    const prev   = prices[1];
     const change = prev > 0 ? ((price - prev) / prev) * 100 : null;
     return { price: Math.round(price), change, source: 'Naver금' };
   } catch {
@@ -167,7 +185,7 @@ export default async function handler(_req: Request): Promise<Response> {
     sp500Yahoo, sp500Naver,
     nasdaqYahoo, nasdaqNaver,
     usdkrwYahoo, usdkrwNaver,
-    goldKrNaver,
+    goldKrMetal, goldKrHtml,
     dxy, goldIntlMain, goldIntlFallback, goldIntlNaver,
     vix,
     btcYahoo, ethYahoo,
@@ -186,7 +204,8 @@ export default async function handler(_req: Request): Promise<Response> {
     fetchNaver('/api/index/NAS@NDX/basic',              'Naver'),      // Nasdaq100 (Naver fallback)
     fetchYahoo('KRW=X'),                                               // USDKRW (Yahoo primary)
     fetchNaver('/api/marketIndex/exchange/FX_USDKRW',  'Naver환율'),  // USDKRW (Naver fallback)
-    fetchGoldKrFinanceNaver(),                                         // 국내금(KRX) — finance.naver.com 기준가
+    fetchGoldKrNaverMetal(),                                           // 국내금 M04020000 실시간 (primary)
+    fetchGoldKrFinanceNaver(),                                         // 국내금 HTML 기준가 (fallback)
     fetchYahoo('DX-Y.NYB'),                                            // DXY
     fetchYahoo('GC=F'),                                                // 국제금 선물(Yahoo primary)
     fetchYahoo('XAUUSD=X'),                                            // 국제금 현물(Yahoo fallback)
@@ -216,8 +235,8 @@ export default async function handler(_req: Request): Promise<Response> {
   const us10y = ok(us10yFred)?.price ? ok(us10yFred) : ok(us10yYahoo)?.price ? ok(us10yYahoo) : ok(us10yNaver);
   // KR 10Y: Naver primary → Yahoo fallback
   const kr10y = ok(kr10yNaver)?.price ? ok(kr10yNaver) : ok(kr10yYahoo);
-  // 국내금: Naver 실시간 시세만 사용, 실패 시 null 반환
-  const goldKr = ok(goldKrNaver)?.price ? ok(goldKrNaver) : null;
+  // 국내금: Naver front-api(M04020000) → HTML 기준가 순으로 fallback
+  const goldKr = ok(goldKrMetal)?.price ? ok(goldKrMetal) : ok(goldKrHtml)?.price ? ok(goldKrHtml) : null;
 
   const body = {
     us10y,
