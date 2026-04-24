@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
-  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload
+  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload, Eye, EyeOff
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -551,6 +551,7 @@ export default function App() {
   const [intExpandedCat, setIntExpandedCat] = useState(null);
   const [simpleEditField, setSimpleEditField] = useState<{id: string, field: string} | null>(null);
   const [showNewAccountMenu, setShowNewAccountMenu] = useState(false);
+  const [hideAmounts, setHideAmounts] = useState(false);
 
   // Drive 폴더 ID 캐시 확보 (없으면 생성)
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -3367,6 +3368,13 @@ export default function App() {
           {showIntegratedDashboard && (
             <div className="flex items-center gap-1 pr-1">
               <button
+                onClick={() => setHideAmounts(v => !v)}
+                title={hideAmounts ? '금액 보이기' : '금액 숨기기'}
+                className={`p-1.5 hover:bg-gray-800 rounded transition ${hideAmounts ? 'text-yellow-400 hover:text-yellow-300' : 'text-gray-400 hover:text-gray-200'}`}
+              >
+                {hideAmounts ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+              <button
                 onClick={refreshPrices}
                 title="새로고침 — 모든 계좌 종목가격·지수 데이터 갱신"
                 className="p-1.5 hover:bg-gray-800 rounded transition text-teal-400 hover:text-teal-300"
@@ -4114,13 +4122,13 @@ export default function App() {
               return (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
-                    <span className="text-gray-400 text-[11px] font-bold">총 자산</span>
-                    <span className="text-white text-lg font-extrabold">{formatCurrency(intTotals.totalEval)}</span>
+                    <span className="text-gray-400 text-[11px] font-bold">총 자산 (평가금)</span>
+                    <span className="text-white text-lg font-extrabold">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalEval)}</span>
                   </div>
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
                     <span className="text-gray-400 text-[11px] font-bold">오늘 수익 ({todayRec?.date || '-'})</span>
                     <span className={`text-lg font-extrabold ${todayProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                      {todayProfit >= 0 ? '+' : ''}{formatCurrency(todayProfit)}
+                      {hideAmounts ? '••••••' : `${todayProfit >= 0 ? '+' : ''}${formatCurrency(todayProfit)}`}
                     </span>
                     <span className={`text-[11px] font-bold ${todayRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                       {todayRate >= 0 ? '+' : ''}{todayRate.toFixed(2)}%
@@ -4134,7 +4142,7 @@ export default function App() {
                   </div>
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
                     <span className="text-gray-400 text-[11px] font-bold">총 투자원금</span>
-                    <span className="text-white text-lg font-extrabold">{formatCurrency(intTotals.totalPrincipal)}</span>
+                    <span className="text-white text-lg font-extrabold">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalPrincipal)}</span>
                   </div>
                 </div>
               );
@@ -4269,7 +4277,7 @@ export default function App() {
                                   onBlur={() => setSimpleEditField(null)}
                                   onChange={e => updateSimpleAccountField(s.id, 'evalAmount', e.target.value.replace(/[^0-9]/g, ''))}
                                 />
-                              ) : formatCurrency(s.currentEval)}
+                              ) : (hideAmounts ? '••••••' : formatCurrency(s.currentEval))}
                             </td>
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-blue-300 font-bold">{formatPercent(s.cagr)}</td>
@@ -4277,6 +4285,7 @@ export default function App() {
                             {/* 직접입력형: 투자원금 직접 수정 가능 */}
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold">
                               {isSimple ? (
+                                hideAmounts ? '••••••' : (
                                 <input
                                   type="text"
                                   inputMode="numeric"
@@ -4288,10 +4297,10 @@ export default function App() {
                                   onFocus={e => { setSimpleEditField({id: s.id, field: 'principal'}); e.target.select(); }}
                                   onBlur={() => setSimpleEditField(null)}
                                   onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value.replace(/[^0-9]/g, ''))}
-                                />
-                              ) : formatCurrency(s.principal)}
+                                />)
+                              ) : (hideAmounts ? '••••••' : formatCurrency(s.principal))}
                             </td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isSimple ? '-' : formatCurrency(s.depositAmount)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isSimple ? '-' : (hideAmounts ? '••••••' : formatCurrency(s.depositAmount))}</td>
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
                               <span className={`inline-block px-2 py-0.5 rounded font-bold ${s.returnRate > 0 ? 'bg-red-900/40 text-red-300' : s.returnRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{s.returnRate.toFixed(1)}%</span>
                             </td>
@@ -4316,7 +4325,7 @@ export default function App() {
                                   {Object.entries(s.cats).filter(([,v]) => v > 0).map(([cat, val]) => (
                                     <div key={cat} className="flex items-center gap-2">
                                       <span className={`text-[11px] font-bold ${UI_CONFIG.COLORS.CATEGORIES[cat] || 'text-gray-300'}`}>{cat}</span>
-                                      <span className="text-[11px] text-gray-200 font-bold">{formatCurrency(val)}</span>
+                                      <span className="text-[11px] text-gray-200 font-bold">{hideAmounts ? '••••••' : formatCurrency(val)}</span>
                                       <span className="text-[10px] text-gray-500">{s.currentEval > 0 ? ((val / s.currentEval) * 100).toFixed(1) : 0}%</span>
                                     </div>
                                   ))}
@@ -4337,12 +4346,12 @@ export default function App() {
                       <td className="py-2 px-2 border-r border-gray-700"></td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
                       <td className="py-2 px-3 text-center text-red-400 font-extrabold border-r border-gray-700">소 계</td>
-                      <td className="py-2 px-3 text-center text-yellow-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalEval)}</td>
+                      <td className="py-2 px-3 text-center text-yellow-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalEval)}</td>
                       <td className={`py-2 px-3 text-center font-bold border-r border-gray-700 ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(intTotals.returnRate)}</td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
                       <td className="py-2 px-3 text-center text-gray-300 border-r border-gray-700">100%</td>
-                      <td className="py-2 px-3 text-center text-gray-200 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalPrincipal)}</td>
-                      <td className="py-2 px-3 text-center text-gray-400 font-bold border-r border-gray-700">{formatCurrency(intTotals.totalDeposit)}</td>
+                      <td className="py-2 px-3 text-center text-gray-200 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalPrincipal)}</td>
+                      <td className="py-2 px-3 text-center text-gray-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalDeposit)}</td>
                       <td colSpan={4}></td>
                     </tr>
                   </tfoot>
@@ -4498,7 +4507,7 @@ export default function App() {
                               <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
                                 <span style={{ color: UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
                               </td>
-                              <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(value)}</td>
+                              <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(value)}</td>
                               <td className="py-1.5 px-3 text-gray-400 text-right">{intTotals.totalEval > 0 ? ((value / intTotals.totalEval) * 100).toFixed(1) : 0}%</td>
                             </tr>
                           ))}
@@ -4615,14 +4624,14 @@ export default function App() {
                                     {j === 0 && (
                                       <td rowSpan={items.length} className="py-1.5 px-2 text-center font-bold border-r border-gray-700 border-b border-gray-700 align-middle">
                                         <div style={{ color: catColor }}>{cat}</div>
-                                        <div className="text-gray-500 font-normal mt-0.5">{formatCurrency(catDisplayValue)}</div>
+                                        <div className="text-gray-500 font-normal mt-0.5">{hideAmounts ? '••••••' : formatCurrency(catDisplayValue)}</div>
                                         <div className="text-gray-500 font-normal">{totalDenom > 0 ? ((catDisplayValue / totalDenom) * 100).toFixed(1) : 0}%</div>
                                       </td>
                                     )}
                                     <td className="py-1.5 px-2 text-center border-r border-gray-700">
                                       <span style={{ color: itemColor }}>{num}. {item.name}</span>
                                     </td>
-                                    <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(item.value)}</td>
+                                    <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(item.value)}</td>
                                     <td className="py-1.5 px-3 border-r border-gray-700 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
                                     {isLastCat ? (
                                       <>
@@ -4631,8 +4640,12 @@ export default function App() {
                                       </>
                                     ) : (
                                       <>
-                                        <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>{profit >= 0 ? '+' : ''}{formatCurrency(profit)}</td>
-                                        <td className={`py-1.5 px-3 font-bold text-right ${profitColor}`}>{profitRate !== null ? `${profitRate >= 0 ? '+' : ''}${profitRate.toFixed(2)}%` : '-'}</td>
+                                        <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>
+                                          {hideAmounts ? '••••••' : (<><span className="text-[9px] mr-0.5">{profit >= 0 ? '▲' : '▼'}</span>{formatCurrency(Math.abs(profit))}</>)}
+                                        </td>
+                                        <td className={`py-1.5 px-3 font-bold text-right ${profitColor}`}>
+                                          {profitRate !== null ? (<><span className="text-[9px] mr-0.5">{profitRate >= 0 ? '▲' : '▼'}</span>{Math.abs(profitRate).toFixed(2)}%</>) : '-'}
+                                        </td>
                                       </>
                                     )}
                                   </tr>
