@@ -4501,72 +4501,110 @@ export default function App() {
                     <div className="py-8 text-center text-gray-500 text-xs">종목 데이터가 없습니다.</div>
                   ) : (() => {
                     const holdingsTotal = intHoldingsDonutData.reduce((s, x) => s + x.value, 0);
+                    const catOrder = intCatDonutData.map(x => x.name);
+                    const catValueMap: Record<string, number> = {};
+                    intCatDonutData.forEach(x => { catValueMap[x.name] = x.value; });
+                    const grouped: Record<string, typeof intHoldingsDonutData> = {};
+                    intHoldingsDonutData.forEach(item => {
+                      if (!grouped[item.category]) grouped[item.category] = [];
+                      grouped[item.category].push(item);
+                    });
+                    const groupEntries = Object.entries(grouped).sort(([catA, itemsA], [catB, itemsB]) => {
+                      const idxA = catOrder.indexOf(catA);
+                      const idxB = catOrder.indexOf(catB);
+                      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                      if (idxA !== -1) return -1;
+                      if (idxB !== -1) return 1;
+                      return itemsB.reduce((s, x) => s + x.value, 0) - itemsA.reduce((s, x) => s + x.value, 0);
+                    });
+                    const parseHex = (hex: string): [number, number, number] | null => {
+                      if (!hex || !hex.startsWith('#') || hex.length < 7) return null;
+                      const r = parseInt(hex.slice(1, 3), 16) / 255;
+                      const g = parseInt(hex.slice(3, 5), 16) / 255;
+                      const b = parseInt(hex.slice(5, 7), 16) / 255;
+                      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+                      const l = (max + min) / 2;
+                      if (max === min) return [0, 0, l * 100];
+                      const d = max - min;
+                      const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                      let h: number;
+                      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+                      else if (max === g) h = ((b - r) / d + 2) / 6;
+                      else h = ((r - g) / d + 4) / 6;
+                      return [h * 360, s * 100, l * 100];
+                    };
+                    const genShades = (baseHex: string, count: number): string[] => {
+                      const hsl = parseHex(baseHex);
+                      if (!hsl || count === 1) return Array(count).fill(baseHex);
+                      const [h, s, l] = hsl;
+                      return Array.from({ length: count }, (_, i) => {
+                        const t = i / (count - 1);
+                        const shade = Math.min(78, Math.max(28, l + 18 - t * 36));
+                        return `hsl(${h.toFixed(0)},${Math.min(100, s + 5).toFixed(0)}%,${shade.toFixed(0)}%)`;
+                      });
+                    };
+                    const itemColorMap: Record<string, string> = {};
+                    const catBaseColorMap: Record<string, string> = {};
+                    groupEntries.forEach(([cat, items], gi) => {
+                      const catIdx = catOrder.indexOf(cat);
+                      const baseHex = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || UI_CONFIG.COLORS.CHART_PALETTE[catIdx !== -1 ? catIdx % 8 : gi % 8];
+                      catBaseColorMap[cat] = baseHex;
+                      const shades = genShades(baseHex, items.length);
+                      items.forEach((item, j) => { itemColorMap[`${cat}::${item.name}`] = shades[j]; });
+                    });
+                    const totalDenom = intTotals.totalEval > 0 ? intTotals.totalEval : holdingsTotal;
+                    let rowNum = 0;
                     return (
                       <>
                         <div style={{ height: 240 }}>
                           <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
                               <Pie data={intHoldingsDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
-                                {intHoldingsDonutData.map((entry, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[entry.category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                                {intHoldingsDonutData.map((entry, i) => (
+                                  <Cell key={i} fill={itemColorMap[`${entry.category}::${entry.name}`] || catBaseColorMap[entry.category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />
+                                ))}
                               </Pie>
                               <RechartsTooltip content={<CustomChartTooltip total={holdingsTotal} />} />
                             </PieChart>
                           </ResponsiveContainer>
                         </div>
-                        {(() => {
-                          const catOrder = intCatDonutData.map(x => x.name);
-                          const catValueMap: Record<string, number> = {};
-                          intCatDonutData.forEach(x => { catValueMap[x.name] = x.value; });
-                          const grouped: Record<string, typeof intHoldingsDonutData> = {};
-                          intHoldingsDonutData.forEach(item => {
-                            if (!grouped[item.category]) grouped[item.category] = [];
-                            grouped[item.category].push(item);
-                          });
-                          const groupEntries = Object.entries(grouped).sort(([catA, itemsA], [catB, itemsB]) => {
-                            const idxA = catOrder.indexOf(catA);
-                            const idxB = catOrder.indexOf(catB);
-                            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-                            if (idxA !== -1) return -1;
-                            if (idxB !== -1) return 1;
-                            return itemsB.reduce((s, x) => s + x.value, 0) - itemsA.reduce((s, x) => s + x.value, 0);
-                          });
-                          const totalDenom = intTotals.totalEval > 0 ? intTotals.totalEval : holdingsTotal;
-                          return (
-                            <table className="w-full text-xs mt-3">
-                              <thead className="text-gray-400 border-b border-gray-700">
-                                <tr className="text-center">
-                                  <th className="pb-2 px-2 border-r border-gray-700">구분</th>
-                                  <th className="pb-2 px-2 border-r border-gray-700">종목</th>
-                                  <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
-                                  <th className="pb-2 px-3">비중</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {groupEntries.flatMap(([cat, items], gi) => {
-                                  const catIdx = catOrder.indexOf(cat);
-                                  const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || UI_CONFIG.COLORS.CHART_PALETTE[catIdx !== -1 ? catIdx % 8 : gi % 8];
-                                  const catDisplayValue = catValueMap[cat] ?? items.reduce((s, x) => s + x.value, 0);
-                                  return items.map((item, j) => (
-                                    <tr key={`${cat}-${item.name}`} className={`hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
-                                      {j === 0 && (
-                                        <td rowSpan={items.length} className="py-1.5 px-2 text-center font-bold border-r border-gray-700 border-b border-gray-700 align-middle">
-                                          <div style={{ color: catColor }}>{cat}</div>
-                                          <div className="text-gray-500 font-normal mt-0.5">{formatCurrency(catDisplayValue)}</div>
-                                          <div className="text-gray-500 font-normal">{totalDenom > 0 ? ((catDisplayValue / totalDenom) * 100).toFixed(1) : 0}%</div>
-                                        </td>
-                                      )}
-                                      <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                                        <span style={{ color: catColor }}>{item.name}</span>
+                        <table className="w-full text-xs mt-3">
+                          <thead className="text-gray-400 border-b border-gray-700">
+                            <tr className="text-center">
+                              <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                              <th className="pb-2 px-2 border-r border-gray-700">종목</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                              <th className="pb-2 px-3">비중</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {groupEntries.flatMap(([cat, items], gi) => {
+                              const catColor = catBaseColorMap[cat];
+                              const catDisplayValue = catValueMap[cat] ?? items.reduce((s, x) => s + x.value, 0);
+                              return items.map((item, j) => {
+                                rowNum += 1;
+                                const num = rowNum;
+                                const itemColor = itemColorMap[`${cat}::${item.name}`] || catColor;
+                                return (
+                                  <tr key={`${cat}-${item.name}`} className={`hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
+                                    {j === 0 && (
+                                      <td rowSpan={items.length} className="py-1.5 px-2 text-center font-bold border-r border-gray-700 border-b border-gray-700 align-middle">
+                                        <div style={{ color: catColor }}>{cat}</div>
+                                        <div className="text-gray-500 font-normal mt-0.5">{formatCurrency(catDisplayValue)}</div>
+                                        <div className="text-gray-500 font-normal">{totalDenom > 0 ? ((catDisplayValue / totalDenom) * 100).toFixed(1) : 0}%</div>
                                       </td>
-                                      <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(item.value)}</td>
-                                      <td className="py-1.5 px-3 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
-                                    </tr>
-                                  ));
-                                })}
-                              </tbody>
-                            </table>
-                          );
-                        })()}
+                                    )}
+                                    <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                                      <span style={{ color: itemColor }}>{num}. {item.name}</span>
+                                    </td>
+                                    <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(item.value)}</td>
+                                    <td className="py-1.5 px-3 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
+                                  </tr>
+                                );
+                              });
+                            })}
+                          </tbody>
+                        </table>
                       </>
                     );
                   })()}
