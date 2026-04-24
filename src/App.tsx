@@ -3204,7 +3204,7 @@ export default function App() {
   }
 
   return (
-    <div className="bg-gray-900 min-h-screen text-gray-200 p-2 md:p-6 lg:p-8 font-sans text-sm relative">
+    <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
       {adminViewingAs && (
         <div className="fixed top-0 left-0 right-0 z-[200] bg-gray-900/98 border-b border-gray-700 px-4 py-2 flex items-center justify-between backdrop-blur-sm">
@@ -3282,7 +3282,16 @@ export default function App() {
         );
       })()}
 
-      <div className="w-full max-w-[2560px] mx-auto flex flex-col gap-6 px-2">
+      <div className="flex min-h-screen">
+        {/* 좌측 광고 패널 */}
+        <div className="hidden min-[1800px]:flex w-[160px] shrink-0 flex-col items-center pt-16 border-r border-gray-800/50">
+          <div className="sticky top-16 w-[140px] min-h-[600px] rounded-lg border border-dashed border-gray-700/40 flex items-center justify-center bg-gray-800/10">
+            <span className="text-gray-700 text-[10px] [writing-mode:vertical-rl] tracking-widest">광고 공간</span>
+          </div>
+        </div>
+        {/* 메인 컨텐츠 */}
+        <div className="flex-1 min-w-0 py-4 px-3 md:px-5 md:py-5">
+        <div className="w-full max-w-[1440px] mx-auto flex flex-col gap-6">
         {/* 로그인 사용자 정보 바 */}
         <div className="flex items-center justify-between text-xs text-gray-500 px-1">
           <span className="font-mono">{authUser.email}</span>
@@ -4753,6 +4762,14 @@ export default function App() {
 
           </div>
         )}
+        </div>
+        </div>
+        {/* 우측 광고 패널 */}
+        <div className="hidden min-[1800px]:flex w-[160px] shrink-0 flex-col items-center pt-16 border-l border-gray-800/50">
+          <div className="sticky top-16 w-[140px] min-h-[600px] rounded-lg border border-dashed border-gray-700/40 flex items-center justify-center bg-gray-800/10">
+            <span className="text-gray-700 text-[10px] [writing-mode:vertical-rl] tracking-widest">광고 공간</span>
+          </div>
+        </div>
       </div>
 
 
