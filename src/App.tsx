@@ -3147,6 +3147,18 @@ export default function App() {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   };
 
+  // 스티키 셀용: 반투명 색상 대신 dark bg와 블렌드한 불투명 색상 반환 (스크롤 시 뒤 내용이 비치는 현상 방지)
+  const blendWithDarkBg = (hex: string, alpha: number, bgHex = '#1e293b'): string => {
+    if (!hex || hex.length < 7) return bgHex;
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const bgR = parseInt(bgHex.slice(1, 3), 16);
+    const bgG = parseInt(bgHex.slice(3, 5), 16);
+    const bgB = parseInt(bgHex.slice(5, 7), 16);
+    return `rgb(${Math.round(bgR*(1-alpha)+r*alpha)}, ${Math.round(bgG*(1-alpha)+g*alpha)}, ${Math.round(bgB*(1-alpha)+b*alpha)})`;
+  };
+
   const updatePortfolioMemo = (id, memo) => {
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, memo } : p));
   };
@@ -4342,7 +4354,7 @@ export default function App() {
                             {/* 계좌 — 포트폴리오는 클릭 시 해당 페이지 이동 */}
                             <td
                               className={`py-1.5 px-3 text-center border-r border-gray-700 sticky left-0 z-[5] bg-[#1e293b] ${!isSimple ? 'cursor-pointer hover:bg-blue-900/20' : ''}`}
-                              style={s.rowColor ? { backgroundColor: hexToRgba(s.rowColor, 0.3) } : {}}
+                              style={s.rowColor ? { backgroundColor: blendWithDarkBg(s.rowColor, 0.35) } : {}}
                               onClick={!isSimple ? () => switchToPortfolio(s.id) : undefined}
                             >
                               {isSimple ? (
