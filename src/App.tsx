@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
-  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload, Eye, EyeOff
+  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -3383,7 +3383,7 @@ export default function App() {
                 title={hideAmounts ? '금액 보이기' : '금액 숨기기'}
                 className={`p-1.5 hover:bg-gray-800 rounded transition ${hideAmounts ? 'text-gray-300 hover:text-white' : 'text-gray-500 hover:text-gray-200'}`}
               >
-                {hideAmounts ? <EyeOff size={14} /> : <Eye size={14} />}
+                <span className="text-[13px] font-bold leading-none">₩</span>
               </button>
               <button
                 onClick={refreshPrices}
@@ -3534,7 +3534,7 @@ export default function App() {
             <div className="bg-[#0f172a] border border-gray-700/60 rounded-2xl w-full max-w-xs shadow-2xl overflow-hidden">
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
                 <div className="flex items-center gap-2 text-gray-200">
-                  <Eye size={14} className="text-gray-400" />
+                  <span className="text-[13px] font-bold text-gray-400 leading-none">₩</span>
                   <span className="font-semibold text-sm">금액 보기</span>
                 </div>
                 <button
