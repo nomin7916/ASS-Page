@@ -1671,7 +1671,7 @@ export default function App() {
     [intTotals.cats]);
 
   const intHoldingsDonutData = useMemo(() => {
-    const holdingsMap: Record<string, { value: number; category: string }> = {};
+    const holdingsMap: Record<string, { value: number; cost: number; category: string }> = {};
     portfolios.forEach(p => {
       if (p.accountType === 'simple') return;
       const isActive = p.id === activePortfolioId;
@@ -1683,20 +1683,24 @@ export default function App() {
           const v = cleanNum(item.depositAmount) * fxRate;
           if (v <= 0) return;
           const key = '예수금';
-          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, category: '예수금' };
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금' };
           holdingsMap[key].value += v;
+          holdingsMap[key].cost += v;
         } else {
-          const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
+          const qty = cleanNum(item.quantity);
+          const evl = cleanNum(item.currentPrice) * qty * fxRate;
           if (evl <= 0) return;
+          const cost = cleanNum(item.purchasePrice) * qty * fxRate;
           const key = isGold ? 'KRX 금현물' : (item.name || item.code || '기타');
           const category = isGold ? '금' : (item.category || '미지정');
-          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, category };
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category };
           holdingsMap[key].value += evl;
+          holdingsMap[key].cost += cost;
         }
       });
     });
     return Object.entries(holdingsMap)
-      .map(([name, { value, category }]) => ({ name, value, category }))
+      .map(([name, { value, cost, category }]) => ({ name, value, cost, category }))
       .filter(x => x.value > 0)
       .sort((a, b) => b.value - a.value);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4453,8 +4457,8 @@ export default function App() {
               <div className="p-3 bg-[#0f172a] border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🍩 자산 카테고리 비중 (통합)</span>
               </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-0 divide-y xl:divide-y-0 xl:divide-x divide-gray-700">
-                {/* 왼쪽: 카테고리 도넛 + 카테고리 표 */}
+              <div className="divide-y divide-gray-700">
+                {/* 위: 카테고리 도넛 + 카테고리 표 */}
                 <div className="p-4">
                   <div className="text-gray-400 text-xs text-center mb-2 font-semibold">자산 카테고리</div>
                   {intCatDonutData.length === 0 ? (
@@ -4494,7 +4498,7 @@ export default function App() {
                     </>
                   )}
                 </div>
-                {/* 오른쪽: 종목 도넛 + 종목 표 */}
+                {/* 아래: 종목 도넛 + 종목 표 */}
                 <div className="p-4">
                   <div className="text-gray-400 text-xs text-center mb-2 font-semibold">종목별 비중</div>
                   {intHoldingsDonutData.length === 0 ? (
@@ -4580,17 +4584,23 @@ export default function App() {
                               <th className="pb-2 px-2 border-r border-gray-700">구분</th>
                               <th className="pb-2 px-2 border-r border-gray-700">종목</th>
                               <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
-                              <th className="pb-2 px-3">비중</th>
+                              <th className="pb-2 px-3 border-r border-gray-700">비중</th>
+                              <th className="pb-2 px-3 border-r border-gray-700">수익</th>
+                              <th className="pb-2 px-3">수익률</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {groupEntries.flatMap(([cat, items], gi) => {
+                            {groupEntries.flatMap(([cat, items]) => {
                               const catColor = catBaseColorMap[cat];
                               const catDisplayValue = catValueMap[cat] ?? items.reduce((s, x) => s + x.value, 0);
+                              const isLastCat = LAST_CATS.includes(cat);
                               return items.map((item, j) => {
                                 rowNum += 1;
                                 const num = rowNum;
                                 const itemColor = itemColorMap[`${cat}::${item.name}`] || catColor;
+                                const profit = item.value - item.cost;
+                                const profitRate = item.cost > 0 ? (profit / item.cost) * 100 : null;
+                                const profitColor = profit > 0 ? 'text-red-400' : profit < 0 ? 'text-blue-400' : 'text-gray-400';
                                 return (
                                   <tr key={`${cat}-${item.name}`} className={`hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
                                     {j === 0 && (
@@ -4604,7 +4614,18 @@ export default function App() {
                                       <span style={{ color: itemColor }}>{num}. {item.name}</span>
                                     </td>
                                     <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(item.value)}</td>
-                                    <td className="py-1.5 px-3 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
+                                    <td className="py-1.5 px-3 border-r border-gray-700 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
+                                    {isLastCat ? (
+                                      <>
+                                        <td className="py-1.5 px-3 border-r border-gray-700 text-gray-600 text-right">-</td>
+                                        <td className="py-1.5 px-3 text-gray-600 text-right">-</td>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>{profit >= 0 ? '+' : ''}{formatCurrency(profit)}</td>
+                                        <td className={`py-1.5 px-3 font-bold text-right ${profitColor}`}>{profitRate !== null ? `${profitRate >= 0 ? '+' : ''}${profitRate.toFixed(2)}%` : '-'}</td>
+                                      </>
+                                    )}
                                   </tr>
                                 );
                               });
