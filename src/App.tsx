@@ -552,6 +552,9 @@ export default function App() {
   const [simpleEditField, setSimpleEditField] = useState<{id: string, field: string} | null>(null);
   const [showNewAccountMenu, setShowNewAccountMenu] = useState(false);
   const [hideAmounts, setHideAmounts] = useState(false);
+  const [showUnlockPinModal, setShowUnlockPinModal] = useState(false);
+  const [unlockPinDigits, setUnlockPinDigits] = useState(['', '', '', '']);
+  const [unlockPinError, setUnlockPinError] = useState('');
 
   // Drive 폴더 ID 캐시 확보 (없으면 생성)
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -3368,7 +3371,15 @@ export default function App() {
           {showIntegratedDashboard && (
             <div className="flex items-center gap-1 pr-1">
               <button
-                onClick={() => setHideAmounts(v => !v)}
+                onClick={() => {
+                  if (hideAmounts) {
+                    setUnlockPinDigits(['', '', '', '']);
+                    setUnlockPinError('');
+                    setShowUnlockPinModal(true);
+                  } else {
+                    setHideAmounts(true);
+                  }
+                }}
                 title={hideAmounts ? '금액 보이기' : '금액 숨기기'}
                 className={`p-1.5 hover:bg-gray-800 rounded transition ${hideAmounts ? 'text-gray-300 hover:text-white' : 'text-gray-500 hover:text-gray-200'}`}
               >
@@ -3512,6 +3523,85 @@ export default function App() {
                     <><div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />저장 중...</>
                   ) : '변경 완료'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 금액 보기 잠금 해제 모달 */}
+        {showUnlockPinModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[500] p-4">
+            <div className="bg-[#0f172a] border border-gray-700/60 rounded-2xl w-full max-w-xs shadow-2xl overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+                <div className="flex items-center gap-2 text-gray-200">
+                  <Eye size={14} className="text-gray-400" />
+                  <span className="font-semibold text-sm">금액 보기</span>
+                </div>
+                <button
+                  onClick={() => setShowUnlockPinModal(false)}
+                  className="text-gray-600 hover:text-gray-300 transition-colors p-1 rounded"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="px-5 py-5 space-y-4">
+                <p className="text-[11px] text-gray-500 uppercase tracking-wider font-medium text-center">비밀번호를 입력하세요</p>
+                <div className="flex gap-2.5 justify-center">
+                  {[0,1,2,3].map(i => (
+                    <input
+                      key={i}
+                      id={`ul-pin-${i}`}
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={1}
+                      value={unlockPinDigits[i] || ''}
+                      autoFocus={i === 0}
+                      onChange={e => {
+                        if (!/^\d*$/.test(e.target.value)) return;
+                        const next = [...unlockPinDigits];
+                        next[i] = e.target.value.slice(-1);
+                        setUnlockPinDigits(next);
+                        setUnlockPinError('');
+                        if (e.target.value && i < 3) {
+                          document.getElementById(`ul-pin-${i+1}`)?.focus();
+                        } else if (e.target.value && i === 3) {
+                          const pin = [...next].join('');
+                          if (pin.length === 4) {
+                            if (verifyPin(pin, authUser.email)) {
+                              setHideAmounts(false);
+                              setShowUnlockPinModal(false);
+                            } else {
+                              setUnlockPinError('비밀번호가 틀렸습니다.');
+                              setUnlockPinDigits(['', '', '', '']);
+                              setTimeout(() => document.getElementById('ul-pin-0')?.focus(), 50);
+                            }
+                          }
+                        }
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Backspace' && !unlockPinDigits[i] && i > 0)
+                          document.getElementById(`ul-pin-${i-1}`)?.focus();
+                        if (e.key === 'Enter') {
+                          const pin = unlockPinDigits.join('');
+                          if (pin.length === 4) {
+                            if (verifyPin(pin, authUser.email)) {
+                              setHideAmounts(false);
+                              setShowUnlockPinModal(false);
+                            } else {
+                              setUnlockPinError('비밀번호가 틀렸습니다.');
+                              setUnlockPinDigits(['', '', '', '']);
+                              setTimeout(() => document.getElementById('ul-pin-0')?.focus(), 50);
+                            }
+                          }
+                        }
+                      }}
+                      className="w-11 h-11 text-center text-lg font-bold bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg text-white outline-none transition-colors"
+                    />
+                  ))}
+                </div>
+                {unlockPinError && (
+                  <p className="text-red-400 text-xs text-center">{unlockPinError}</p>
+                )}
               </div>
             </div>
           </div>
