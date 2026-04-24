@@ -530,6 +530,10 @@ export default function App() {
   const lastDriveCheckAtRef = useRef<number>(0); // 마지막 Drive 확인 시각 (중복 확인 최소화)
   const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
+  // 계좌별 차트 상태 독립 관리
+  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, compStocks: [] });
+  const accountChartStatesRef = useRef<Record<string, any>>({});
+  const prevActivePortfolioIdRef = useRef<string | null>(null);
 
   // ── 통합 대시보드 ──
   const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(true);
@@ -627,6 +631,7 @@ export default function App() {
         if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
         if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
         if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
+        if (stateData.chartPrefs.accountChartStates) accountChartStatesRef.current = stateData.chartPrefs.accountChartStates;
       }
 
       // 시장 데이터: marketdata 파일 우선, 없으면 state 파일 폴백
@@ -1302,6 +1307,49 @@ export default function App() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePortfolioAccountType]);
+
+  // 최신 차트 상태를 ref에 동기화 (계좌 전환 시 저장용)
+  useEffect(() => {
+    currentChartStateRef.current = {
+      showKospi, showSp500, showNasdaq,
+      showIndicatorsInChart,
+      goldIndicators,
+      compStocks: compStocks.map(({ loading, ...rest }) => rest),
+    };
+  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, compStocks]);
+
+  // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립)
+  useEffect(() => {
+    const prevId = prevActivePortfolioIdRef.current;
+    if (prevId !== null && prevId !== activePortfolioId) {
+      // 이전 계좌 상태 저장
+      accountChartStatesRef.current[prevId] = { ...currentChartStateRef.current };
+      // 새 계좌 상태 복원
+      const saved = accountChartStatesRef.current[activePortfolioId];
+      if (saved) {
+        setShowKospi(saved.showKospi);
+        setShowSp500(saved.showSp500);
+        setShowNasdaq(saved.showNasdaq);
+        setShowIndicatorsInChart(saved.showIndicatorsInChart);
+        setGoldIndicators(saved.goldIndicators || { goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
+        setCompStocks((saved.compStocks || defaultCompStocks).map((s: any) => ({ ...s, loading: false })));
+      } else {
+        // 처음 방문하는 계좌 — 계좌 타입별 기본값
+        const accountType = portfolios.find(p => p.id === activePortfolioId)?.accountType;
+        setShowIndicatorsInChart({ us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false });
+        if (accountType === 'gold') {
+          setShowKospi(false); setShowSp500(false); setShowNasdaq(false);
+          setGoldIndicators({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
+          setCompStocks(defaultCompStocks);
+        } else {
+          setShowKospi(true); setShowSp500(false); setShowNasdaq(false);
+          setCompStocks(defaultCompStocks);
+        }
+      }
+    }
+    prevActivePortfolioIdRef.current = activePortfolioId;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePortfolioId]);
 
   // KRX 금현물 포트폴리오: 주식 항목이 없으면 자동 초기화
   useEffect(() => {
@@ -2222,7 +2270,7 @@ export default function App() {
 
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -2240,7 +2288,7 @@ export default function App() {
 
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory };
     if (driveTokenRef.current) {
       saveAllToDrive(state);
     } else {
@@ -2509,6 +2557,7 @@ export default function App() {
           if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
           if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
           if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
+          if (data.chartPrefs.accountChartStates) accountChartStatesRef.current = data.chartPrefs.accountChartStates;
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
@@ -2773,7 +2822,7 @@ export default function App() {
       prevPortfolioStructureRef.current = portfolioStructureKey;
       portfolioUpdatedAtRef.current = Date.now();
     }
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
     // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
     const stateEmail = adminViewingAsRef.current || authUser.email;
@@ -3248,7 +3297,7 @@ export default function App() {
                 setAdminAccessAllowed(newVal);
                 if (driveTokenRef.current) {
                   const currentPortfolios = buildPortfoliosState();
-                  const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed: newVal, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate }, intHistory };
+                  const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed: newVal, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory };
                   saveAllToDrive(state);
                 }
               }}
