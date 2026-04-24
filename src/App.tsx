@@ -1665,15 +1665,16 @@ export default function App() {
   }, [intHistory]);
 
   const intCatDonutData = useMemo(() => {
-    const LAST_CATS = ['현금', '예수금'];
+    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금'];
     return Object.entries(intTotals.cats)
       .map(([name, value]) => ({ name, value }))
       .filter(x => x.value > 0)
       .sort((a, b) => {
-        const aLast = LAST_CATS.includes(a.name);
-        const bLast = LAST_CATS.includes(b.name);
-        if (aLast !== bLast) return aLast ? 1 : -1;
-        if (aLast && bLast) return LAST_CATS.indexOf(a.name) - LAST_CATS.indexOf(b.name);
+        const ia = ORDER.indexOf(a.name);
+        const ib = ORDER.indexOf(b.name);
+        if (ia !== -1 && ib !== -1) return ia - ib;
+        if (ia !== -1) return -1;
+        if (ib !== -1) return 1;
         return b.value - a.value;
       });
   }, [intTotals.cats]);
