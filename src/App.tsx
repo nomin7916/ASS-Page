@@ -4513,26 +4513,60 @@ export default function App() {
                             </PieChart>
                           </ResponsiveContainer>
                         </div>
-                        <table className="w-full text-xs mt-3">
-                          <thead className="text-gray-400 border-b border-gray-700">
-                            <tr className="text-center">
-                              <th className="pb-2 px-2 border-r border-gray-700">종목</th>
-                              <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
-                              <th className="pb-2 px-3">비중</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {intHoldingsDonutData.map(({ name, value, category }, i) => (
-                              <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                                <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
-                                  <span style={{ color: UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
-                                </td>
-                                <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(value)}</td>
-                                <td className="py-1.5 px-3 text-gray-400 text-right">{holdingsTotal > 0 ? ((value / holdingsTotal) * 100).toFixed(1) : 0}%</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                        {(() => {
+                          const catOrder = intCatDonutData.map(x => x.name);
+                          const catValueMap: Record<string, number> = {};
+                          intCatDonutData.forEach(x => { catValueMap[x.name] = x.value; });
+                          const grouped: Record<string, typeof intHoldingsDonutData> = {};
+                          intHoldingsDonutData.forEach(item => {
+                            if (!grouped[item.category]) grouped[item.category] = [];
+                            grouped[item.category].push(item);
+                          });
+                          const groupEntries = Object.entries(grouped).sort(([catA, itemsA], [catB, itemsB]) => {
+                            const idxA = catOrder.indexOf(catA);
+                            const idxB = catOrder.indexOf(catB);
+                            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                            if (idxA !== -1) return -1;
+                            if (idxB !== -1) return 1;
+                            return itemsB.reduce((s, x) => s + x.value, 0) - itemsA.reduce((s, x) => s + x.value, 0);
+                          });
+                          const totalDenom = intTotals.totalEval > 0 ? intTotals.totalEval : holdingsTotal;
+                          return (
+                            <table className="w-full text-xs mt-3">
+                              <thead className="text-gray-400 border-b border-gray-700">
+                                <tr className="text-center">
+                                  <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                                  <th className="pb-2 px-2 border-r border-gray-700">종목</th>
+                                  <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                                  <th className="pb-2 px-3">비중</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {groupEntries.flatMap(([cat, items], gi) => {
+                                  const catIdx = catOrder.indexOf(cat);
+                                  const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || UI_CONFIG.COLORS.CHART_PALETTE[catIdx !== -1 ? catIdx % 8 : gi % 8];
+                                  const catDisplayValue = catValueMap[cat] ?? items.reduce((s, x) => s + x.value, 0);
+                                  return items.map((item, j) => (
+                                    <tr key={`${cat}-${item.name}`} className={`hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
+                                      {j === 0 && (
+                                        <td rowSpan={items.length} className="py-1.5 px-2 text-center font-bold border-r border-gray-700 border-b border-gray-700 align-middle">
+                                          <div style={{ color: catColor }}>{cat}</div>
+                                          <div className="text-gray-500 font-normal mt-0.5">{formatCurrency(catDisplayValue)}</div>
+                                          <div className="text-gray-500 font-normal">{totalDenom > 0 ? ((catDisplayValue / totalDenom) * 100).toFixed(1) : 0}%</div>
+                                        </td>
+                                      )}
+                                      <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                                        <span style={{ color: catColor }}>{item.name}</span>
+                                      </td>
+                                      <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(item.value)}</td>
+                                      <td className="py-1.5 px-3 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
+                                    </tr>
+                                  ));
+                                })}
+                              </tbody>
+                            </table>
+                          );
+                        })()}
                       </>
                     );
                   })()}
