@@ -4509,7 +4509,12 @@ export default function App() {
                       if (!grouped[item.category]) grouped[item.category] = [];
                       grouped[item.category].push(item);
                     });
+                    const LAST_CATS = ['현금', '예수금'];
                     const groupEntries = Object.entries(grouped).sort(([catA, itemsA], [catB, itemsB]) => {
+                      const aLast = LAST_CATS.includes(catA);
+                      const bLast = LAST_CATS.includes(catB);
+                      if (aLast !== bLast) return aLast ? 1 : -1;
+                      if (aLast && bLast) return LAST_CATS.indexOf(catA) - LAST_CATS.indexOf(catB);
                       const idxA = catOrder.indexOf(catA);
                       const idxB = catOrder.indexOf(catB);
                       if (idxA !== -1 && idxB !== -1) return idxA - idxB;
