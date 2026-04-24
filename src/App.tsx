@@ -4690,11 +4690,12 @@ export default function App() {
                             </PieChart>
                           </ResponsiveContainer>
                         </div>
-                        <table className="w-full text-xs mt-3">
+                        <div className="overflow-x-auto mt-3">
+                        <table className="w-full text-xs min-w-[480px]">
                           <thead className="text-gray-400 border-b border-gray-700">
                             <tr className="text-center">
                               <th className="pb-2 px-2 border-r border-gray-700">구분</th>
-                              <th className="pb-2 px-2 border-r border-gray-700">종목</th>
+                              <th className="pb-2 px-2 border-r border-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">종목</th>
                               <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
                               <th className="pb-2 px-3 border-r border-gray-700">비중</th>
                               <th className="pb-2 px-3 border-r border-gray-700">수익</th>
@@ -4714,7 +4715,7 @@ export default function App() {
                                 const profitRate = item.cost > 0 ? (profit / item.cost) * 100 : null;
                                 const profitColor = profit > 0 ? 'text-red-400' : profit < 0 ? 'text-blue-400' : 'text-gray-400';
                                 return (
-                                  <tr key={`${cat}-${item.name}`} className={`hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
+                                  <tr key={`${cat}-${item.name}`} className={`group hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
                                     {j === 0 && (
                                       <td rowSpan={items.length} className="py-1.5 px-2 text-center font-bold border-r border-gray-700 border-b border-gray-700 align-middle">
                                         <div style={{ color: catColor }}>{cat}</div>
@@ -4722,7 +4723,7 @@ export default function App() {
                                         <div className="text-gray-500 font-normal">{totalDenom > 0 ? ((catDisplayValue / totalDenom) * 100).toFixed(1) : 0}%</div>
                                       </td>
                                     )}
-                                    <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                                    <td className="py-1.5 px-2 text-center border-r border-gray-700 sticky left-0 z-10 bg-[#1e293b] group-hover:bg-[#1d2d40] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">
                                       <span style={{ color: itemColor }}>{num}. {item.name}</span>
                                     </td>
                                     <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(item.value)}</td>
@@ -4748,6 +4749,7 @@ export default function App() {
                             })}
                           </tbody>
                         </table>
+                        </div>
                       </>
                     );
                   })()}
