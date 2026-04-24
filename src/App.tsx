@@ -1622,6 +1622,37 @@ export default function App() {
       .filter(x => x.value > 0),
     [intTotals.cats]);
 
+  const intHoldingsDonutData = useMemo(() => {
+    const holdingsMap: Record<string, number> = {};
+    portfolios.forEach(p => {
+      if (p.accountType === 'simple') return;
+      const isActive = p.id === activePortfolioId;
+      const items = isActive ? portfolio : (p.portfolio || []);
+      const fxRate = p.accountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
+      const isGold = p.accountType === 'gold';
+      const isCrypto = p.accountType === 'crypto';
+      items.forEach(item => {
+        if (item.type === 'deposit') {
+          if (!isCrypto) return; // crypto 계좌만 현금 포함
+          const v = cleanNum(item.depositAmount) * fxRate;
+          if (v <= 0) return;
+          const key = '현금';
+          holdingsMap[key] = (holdingsMap[key] || 0) + v;
+        } else {
+          const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
+          if (evl <= 0) return;
+          const key = isGold ? 'KRX 금현물' : (item.name || item.code || '기타');
+          holdingsMap[key] = (holdingsMap[key] || 0) + evl;
+        }
+      });
+    });
+    return Object.entries(holdingsMap)
+      .map(([name, value]) => ({ name, value }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolios, activePortfolioId, portfolio, marketIndicators.usdkrw]);
+
   const displayHistSliced = useMemo(() => sortedHistoryDesc.slice(0, historyLimit), [sortedHistoryDesc, historyLimit]);
 
   const depositWithSum = useMemo(() => {
@@ -4372,44 +4403,91 @@ export default function App() {
               <div className="p-3 bg-[#0f172a] border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🍩 자산 카테고리 비중 (통합)</span>
               </div>
-              {intCatDonutData.length === 0 ? (
-                <div className="py-12 text-center text-gray-500 text-xs">카테고리 데이터가 없습니다.<br/><span className="text-gray-600">포트폴리오에 종목(카테고리 지정)을 추가하면 자동으로 표시됩니다.</span></div>
-              ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 p-4">
-                  <div style={{ height: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
-                          {intCatDonutData.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
-                        </Pie>
-                        <RechartsTooltip content={<CustomChartTooltip total={intTotals.totalEval} />} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="flex flex-col justify-center">
-                    <table className="w-full text-xs">
-                      <thead className="text-gray-400 border-b border-gray-700">
-                        <tr className="text-center">
-                          <th className="pb-2 px-2 border-r border-gray-700">구분</th>
-                          <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
-                          <th className="pb-2 px-3">비중</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {intCatDonutData.map(({ name, value }, i) => (
-                          <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                            <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
-                              <span style={{ color: UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
-                            </td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(value)}</td>
-                            <td className="py-1.5 px-3 text-gray-400 text-right">{intTotals.totalEval > 0 ? ((value / intTotals.totalEval) * 100).toFixed(1) : 0}%</td>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-0 divide-y xl:divide-y-0 xl:divide-x divide-gray-700">
+                {/* 왼쪽: 카테고리 도넛 + 카테고리 표 */}
+                <div className="p-4">
+                  <div className="text-gray-400 text-xs text-center mb-2 font-semibold">자산 카테고리</div>
+                  {intCatDonutData.length === 0 ? (
+                    <div className="py-8 text-center text-gray-500 text-xs">카테고리 데이터가 없습니다.</div>
+                  ) : (
+                    <>
+                      <div style={{ height: 240 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
+                              {intCatDonutData.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                            </Pie>
+                            <RechartsTooltip content={<CustomChartTooltip total={intTotals.totalEval} />} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <table className="w-full text-xs mt-3">
+                        <thead className="text-gray-400 border-b border-gray-700">
+                          <tr className="text-center">
+                            <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                            <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                            <th className="pb-2 px-3">비중</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {intCatDonutData.map(({ name, value }, i) => (
+                            <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                              <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
+                                <span style={{ color: UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
+                              </td>
+                              <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(value)}</td>
+                              <td className="py-1.5 px-3 text-gray-400 text-right">{intTotals.totalEval > 0 ? ((value / intTotals.totalEval) * 100).toFixed(1) : 0}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
                 </div>
-              )}
+                {/* 오른쪽: 종목 도넛 + 종목 표 */}
+                <div className="p-4">
+                  <div className="text-gray-400 text-xs text-center mb-2 font-semibold">종목별 비중</div>
+                  {intHoldingsDonutData.length === 0 ? (
+                    <div className="py-8 text-center text-gray-500 text-xs">종목 데이터가 없습니다.</div>
+                  ) : (() => {
+                    const holdingsTotal = intHoldingsDonutData.reduce((s, x) => s + x.value, 0);
+                    return (
+                      <>
+                        <div style={{ height: 240 }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie data={intHoldingsDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
+                                {intHoldingsDonutData.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                              </Pie>
+                              <RechartsTooltip content={<CustomChartTooltip total={holdingsTotal} />} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <table className="w-full text-xs mt-3">
+                          <thead className="text-gray-400 border-b border-gray-700">
+                            <tr className="text-center">
+                              <th className="pb-2 px-2 border-r border-gray-700">종목</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                              <th className="pb-2 px-3">비중</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {intHoldingsDonutData.map(({ name, value }, i) => (
+                              <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                                <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
+                                  <span style={{ color: UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
+                                </td>
+                                <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(value)}</td>
+                                <td className="py-1.5 px-3 text-gray-400 text-right">{holdingsTotal > 0 ? ((value / holdingsTotal) * 100).toFixed(1) : 0}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
             </div>
 
           </div>
