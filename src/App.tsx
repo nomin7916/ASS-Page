@@ -3298,9 +3298,10 @@ export default function App() {
             {authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && (
               <button
                 onClick={() => setShowAdminPage(true)}
-                className="bg-blue-900/40 hover:bg-blue-800/60 text-blue-400 hover:text-blue-300 px-2.5 py-1 rounded-md transition-colors text-[11px] font-medium"
+                className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60 text-base leading-none"
+                title="관리자"
               >
-                관리자
+                ⚙️
               </button>
             )}
             <button
@@ -3311,11 +3312,10 @@ export default function App() {
                 setPinChangeError('');
                 setShowPinChange(true);
               }}
-              className="flex items-center gap-1.5 text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60"
+              className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60 text-base leading-none"
               title="비밀번호 변경"
             >
-              <Lock size={11} />
-              <span>비번 변경</span>
+              🔒
             </button>
             <button
               onClick={() => {
@@ -3328,29 +3328,24 @@ export default function App() {
                 }
               }}
               title={adminAccessAllowed ? '관리자 접속 허용 중 — 클릭하여 차단' : '관리자 접속 차단 중 — 클릭하여 허용'}
-              className={`relative px-2 py-1 rounded-md transition-all duration-200 group ${
+              className={`relative px-2 py-1 rounded-md transition-colors text-base leading-none ${
                 adminAccessAllowed
-                  ? 'text-emerald-400 bg-emerald-950/50 hover:bg-emerald-900/50 ring-1 ring-emerald-700/60 shadow-[0_0_8px_rgba(52,211,153,0.15)]'
+                  ? 'text-emerald-400/80 hover:text-emerald-300 hover:bg-gray-800/60'
                   : 'text-gray-600 hover:text-gray-400 hover:bg-gray-800/60'
               }`}
             >
-              <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" width="12" height="12">
-                <circle cx="14" cy="4" r="2"/>
-                <circle cx="4" cy="9" r="2"/>
-                <circle cx="14" cy="14" r="2"/>
-                <line x1="5.9" y1="10.1" x2="12.1" y2="13.1"/>
-                <line x1="12.1" y1="4.9" x2="5.9" y2="7.9"/>
-              </svg>
+              🔗
               {adminAccessAllowed && (
-                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.8)]" />
+                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400" />
               )}
             </button>
-            <div className="w-px h-3 bg-gray-700" />
+            <div className="w-px h-3 bg-gray-700/60" />
             <button
               onClick={() => { sessionStorage.removeItem(SESSION_KEY); setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
-              className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60"
+              className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60 text-base leading-none"
+              title="로그아웃"
             >
-              로그아웃
+              🚪
             </button>
           </div>
         </div>
@@ -4296,7 +4291,7 @@ export default function App() {
                       <th className="border-r border-gray-700 cursor-pointer hover:bg-red-900/30 transition-colors" style={{width:'10px',minWidth:'10px'}} onClick={resetAllPortfolioColors} title="클릭하여 모든 행 색상 초기화"></th>
                       <th className="py-2 px-2 text-center border-r border-gray-700">순서</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">시작일</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">계좌</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700 sticky left-0 z-20 bg-[#0f172a]">계좌</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">총 자산(평가금액)</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">원금 대비 수익율</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">수익율 (CAGR)</th>
@@ -4346,7 +4341,8 @@ export default function App() {
                             </td>
                             {/* 계좌 — 포트폴리오는 클릭 시 해당 페이지 이동 */}
                             <td
-                              className={`py-1.5 px-3 text-center border-r border-gray-700 ${!isSimple ? 'cursor-pointer hover:bg-blue-900/20' : ''}`}
+                              className={`py-1.5 px-3 text-center border-r border-gray-700 sticky left-0 z-[5] bg-[#1e293b] ${!isSimple ? 'cursor-pointer hover:bg-blue-900/20' : ''}`}
+                              style={s.rowColor ? { backgroundColor: hexToRgba(s.rowColor, 0.3) } : {}}
                               onClick={!isSimple ? () => switchToPortfolio(s.id) : undefined}
                             >
                               {isSimple ? (
@@ -4443,7 +4439,7 @@ export default function App() {
                       <td className="border-r border-gray-700"></td>
                       <td className="py-2 px-2 border-r border-gray-700"></td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
-                      <td className="py-2 px-3 text-center text-red-400 font-extrabold border-r border-gray-700">소 계</td>
+                      <td className="py-2 px-3 text-center text-red-400 font-extrabold border-r border-gray-700 sticky left-0 z-[5] bg-[#2d1a1e]">소 계</td>
                       <td className="py-2 px-3 text-center text-yellow-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalEval)}</td>
                       <td className={`py-2 px-3 text-center font-bold border-r border-gray-700 ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(intTotals.returnRate)}</td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
