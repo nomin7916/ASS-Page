@@ -1671,31 +1671,32 @@ export default function App() {
     [intTotals.cats]);
 
   const intHoldingsDonutData = useMemo(() => {
-    const holdingsMap: Record<string, number> = {};
+    const holdingsMap: Record<string, { value: number; category: string }> = {};
     portfolios.forEach(p => {
       if (p.accountType === 'simple') return;
       const isActive = p.id === activePortfolioId;
       const items = isActive ? portfolio : (p.portfolio || []);
       const fxRate = p.accountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
       const isGold = p.accountType === 'gold';
-      const isCrypto = p.accountType === 'crypto';
       items.forEach(item => {
         if (item.type === 'deposit') {
-          if (!isCrypto) return; // crypto 계좌만 현금 포함
           const v = cleanNum(item.depositAmount) * fxRate;
           if (v <= 0) return;
-          const key = '현금';
-          holdingsMap[key] = (holdingsMap[key] || 0) + v;
+          const key = '예수금';
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, category: '예수금' };
+          holdingsMap[key].value += v;
         } else {
           const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
           if (evl <= 0) return;
           const key = isGold ? 'KRX 금현물' : (item.name || item.code || '기타');
-          holdingsMap[key] = (holdingsMap[key] || 0) + evl;
+          const category = isGold ? '금' : (item.category || '미지정');
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, category };
+          holdingsMap[key].value += evl;
         }
       });
     });
     return Object.entries(holdingsMap)
-      .map(([name, value]) => ({ name, value }))
+      .map(([name, { value, category }]) => ({ name, value, category }))
       .filter(x => x.value > 0)
       .sort((a, b) => b.value - a.value);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4464,7 +4465,7 @@ export default function App() {
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
                             <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
-                              {intCatDonutData.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                              {intCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                             </Pie>
                             <RechartsTooltip content={<CustomChartTooltip total={intTotals.totalEval} />} />
                           </PieChart>
@@ -4482,7 +4483,7 @@ export default function App() {
                           {intCatDonutData.map(({ name, value }, i) => (
                             <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                               <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
-                                <span style={{ color: UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
+                                <span style={{ color: UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
                               </td>
                               <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(value)}</td>
                               <td className="py-1.5 px-3 text-gray-400 text-right">{intTotals.totalEval > 0 ? ((value / intTotals.totalEval) * 100).toFixed(1) : 0}%</td>
@@ -4506,7 +4507,7 @@ export default function App() {
                           <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
                               <Pie data={intHoldingsDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
-                                {intHoldingsDonutData.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                                {intHoldingsDonutData.map((entry, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[entry.category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                               </Pie>
                               <RechartsTooltip content={<CustomChartTooltip total={holdingsTotal} />} />
                             </PieChart>
@@ -4521,10 +4522,10 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {intHoldingsDonutData.map(({ name, value }, i) => (
+                            {intHoldingsDonutData.map(({ name, value, category }, i) => (
                               <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                                 <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
-                                  <span style={{ color: UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
+                                  <span style={{ color: UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
                                 </td>
                                 <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{formatCurrency(value)}</td>
                                 <td className="py-1.5 px-3 text-gray-400 text-right">{holdingsTotal > 0 ? ((value / holdingsTotal) * 100).toFixed(1) : 0}%</td>
