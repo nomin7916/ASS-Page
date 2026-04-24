@@ -4553,14 +4553,15 @@ export default function App() {
                       items.forEach((item, j) => { itemColorMap[`${cat}::${item.name}`] = shades[j]; });
                     });
                     const totalDenom = intTotals.totalEval > 0 ? intTotals.totalEval : holdingsTotal;
+                    const groupedDonutData = groupEntries.flatMap(([, items]) => items);
                     let rowNum = 0;
                     return (
                       <>
                         <div style={{ height: 240 }}>
                           <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
-                              <Pie data={intHoldingsDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
-                                {intHoldingsDonutData.map((entry, i) => (
+                              <Pie data={groupedDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
+                                {groupedDonutData.map((entry, i) => (
                                   <Cell key={i} fill={itemColorMap[`${entry.category}::${entry.name}`] || catBaseColorMap[entry.category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />
                                 ))}
                               </Pie>
