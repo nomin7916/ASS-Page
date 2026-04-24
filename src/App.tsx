@@ -3285,8 +3285,7 @@ export default function App() {
       <div className="flex min-h-screen">
         {/* 좌측 광고 패널 */}
         <div className="hidden min-[1800px]:flex w-[160px] shrink-0 flex-col items-center pt-16 border-r border-gray-800/50">
-          <div className="sticky top-16 w-[140px] min-h-[600px] rounded-lg border border-dashed border-gray-700/40 flex items-center justify-center bg-gray-800/10">
-            <span className="text-gray-700 text-[10px] [writing-mode:vertical-rl] tracking-widest">광고 공간</span>
+          <div className="sticky top-16 w-[140px] min-h-[600px] rounded-lg bg-gray-800/10">
           </div>
         </div>
         {/* 메인 컨텐츠 */}
@@ -4766,8 +4765,7 @@ export default function App() {
         </div>
         {/* 우측 광고 패널 */}
         <div className="hidden min-[1800px]:flex w-[160px] shrink-0 flex-col items-center pt-16 border-l border-gray-800/50">
-          <div className="sticky top-16 w-[140px] min-h-[600px] rounded-lg border border-dashed border-gray-700/40 flex items-center justify-center bg-gray-800/10">
-            <span className="text-gray-700 text-[10px] [writing-mode:vertical-rl] tracking-widest">광고 공간</span>
+          <div className="sticky top-16 w-[140px] min-h-[600px] rounded-lg bg-gray-800/10">
           </div>
         </div>
       </div>
