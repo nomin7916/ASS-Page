@@ -3421,6 +3421,14 @@ export default function App() {
               >
                 <Save size={14} />
               </button>
+              <button
+                onClick={() => historyInputRef.current?.click()}
+                title="지수/종목 히스토리 주입 (JSON 또는 CSV)"
+                className="p-1.5 hover:bg-gray-800 rounded transition text-orange-400 hover:text-orange-300"
+              >
+                <FileUp size={14} />
+              </button>
+              <input type="file" ref={historyInputRef} onChange={handleImportHistoryJSON} className="hidden" accept=".json,.csv" multiple />
             </div>
           )}
         </div>
@@ -3623,7 +3631,7 @@ export default function App() {
         )}
 
         {!showIntegratedDashboard && (<>
-        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onImportHistory={handleImportHistoryJSON} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} historyInputRef={historyInputRef} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
+        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
 
         {activePortfolioAccountType === 'gold' ? (
           <KrxGoldTable

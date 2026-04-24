@@ -2,6 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
 
+const COLAB_URL = 'https://colab.research.google.com/drive/1hjCwtVjyKzooWly4AU_ufrMSV87FApzi#scrollTo=fe7b764e';
+const COLAB_PASSWORD = '0000';
+
 interface ApprovedUser {
   email: string;
   resetFlag: string; // Apps Script returns raw A열 value: '', 'RESET', 'RESET:1234'
@@ -170,6 +173,19 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
               </svg>
               Google Cloud Console (테스트 사용자 관리)
             </a>
+
+            <button
+              onClick={() => {
+                const pw = window.prompt('비밀번호를 입력하세요');
+                if (pw === COLAB_PASSWORD) window.open(COLAB_URL, '_blank');
+              }}
+              className="mt-3 w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold py-2.5 px-4 rounded-xl transition-colors"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2c5.523 0 10 4.477 10 10S17.523 22 12 22 2 17.523 2 12 6.477 2 12 2zm-1 5v10l7-5-7-5z"/>
+              </svg>
+              Google Colab 열기
+            </button>
           </div>
         </div>
 
