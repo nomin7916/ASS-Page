@@ -4469,7 +4469,7 @@ export default function App() {
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
 
               {/* 평가액 추이 테이블 */}
-              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
+              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[320px] xl:max-h-none">
                 <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700 shrink-0">
                   <span className="text-white font-bold text-sm">📅 평가액 추이</span>
                   <button
@@ -4515,7 +4515,7 @@ export default function App() {
               </div>
 
               {/* 기간별 수익 차트 */}
-              <div className="flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col min-h-[420px]">
+              <div className="w-full xl:flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
                 <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-wrap gap-2 items-center shrink-0">
                   <span className="text-white font-bold text-sm">📈 기간별 수익 차트 (통합)</span>
                   <div className="flex flex-wrap gap-1 ml-2">
@@ -4525,7 +4525,7 @@ export default function App() {
                   </div>
                   <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`ml-auto text-xs px-2 py-0.5 rounded font-bold transition-colors ${intIsZeroBaseMode ? 'bg-indigo-800/60 text-indigo-300 border border-indigo-700' : 'text-gray-500 hover:text-gray-300 border border-gray-700'}`} title="기간 시작 기준 / 원금 기준 전환">{intIsZeroBaseMode ? '기간기준' : '원금기준'}</button>
                 </div>
-                <div className="chart-container-for-drag p-4 flex-1 relative select-none" style={{ minHeight: 360 }}>
+                <div className="chart-container-for-drag p-3 sm:p-4 relative select-none h-[300px] sm:h-[340px] md:h-[380px] xl:h-[420px]">
                   {intSelectionResult && (
                     <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none">
                       <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(intSelectionResult.startDate)} ~ {formatShortDate(intSelectionResult.endDate)}</span>
@@ -4533,7 +4533,7 @@ export default function App() {
                       <span className={`text-xs font-bold mt-1 ${intSelectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{hideAmounts ? '••••••' : `${intSelectionResult.profit >= 0 ? '+' : ''}${formatCurrency(intSelectionResult.profit)}`}</span>
                     </div>
                   )}
-                  <ResponsiveContainer width="100%" height="100%">
+                  <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                     <ComposedChart data={intChartData} onMouseDown={handleIntChartMouseDown} onMouseMove={handleIntChartMouseMove} onMouseUp={handleIntChartMouseUp} onMouseLeave={handleIntChartMouseUp}>
                       <defs>
                         <linearGradient id="intReturnGrad" x1="0" y1="0" x2="0" y2="1">
