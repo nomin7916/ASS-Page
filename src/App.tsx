@@ -58,7 +58,7 @@ const PieLabelOutside = ({ cx, cy, midAngle, outerRadius, percent, name }) => {
   );
 };
 
-const CustomChartTooltip = ({ active, payload, total }) => {
+const CustomChartTooltip = ({ active, payload, total, hideAmounts = false }) => {
   if (active && payload && payload.length) {
     const data = payload[0];
     const itemColor = data.payload?.fill || data.color || data.fill || '#f8fafc';
@@ -70,7 +70,7 @@ const CustomChartTooltip = ({ active, payload, total }) => {
     return (
       <div style={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', border: '1px solid #4b5563', borderRadius: '10px', padding: '12px 16px' }} className="shadow-2xl flex flex-col items-center justify-center gap-1">
         <span style={{ color: itemColor, fontWeight: '900', fontSize: '20px' }}>{data.name} : {percentStr}</span>
-        <span style={{ color: itemColor, fontWeight: 'bold', fontSize: '14px', opacity: 0.9 }}>{formatCurrency(data.value)}</span>
+        <span style={{ color: itemColor, fontWeight: 'bold', fontSize: '14px', opacity: 0.9 }}>{hideAmounts ? '••••••' : formatCurrency(data.value)}</span>
       </div>
     );
   }
@@ -3370,7 +3370,7 @@ export default function App() {
               <button
                 onClick={() => setHideAmounts(v => !v)}
                 title={hideAmounts ? '금액 보이기' : '금액 숨기기'}
-                className={`p-1.5 hover:bg-gray-800 rounded transition ${hideAmounts ? 'text-yellow-400 hover:text-yellow-300' : 'text-gray-400 hover:text-gray-200'}`}
+                className={`p-1.5 hover:bg-gray-800 rounded transition ${hideAmounts ? 'text-gray-300 hover:text-white' : 'text-gray-500 hover:text-gray-200'}`}
               >
                 {hideAmounts ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
@@ -3547,7 +3547,7 @@ export default function App() {
           </div>
           <div className="xl:col-span-8 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full min-h-[400px]">
             <div className="flex bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 divide-x divide-gray-700"><div className="p-3 flex-1 text-center">📊 자산 비중</div><div className="p-3 flex-1 text-center text-blue-400">📈 종목별 비중</div></div>
-            <div className="p-4 flex-1 flex flex-col sm:flex-row items-center gap-4"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={Object.entries(totals.cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)} innerRadius="40%" outerRadius="70%" dataKey="value" label={PieLabelOutside}>{Object.entries(totals.cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} />} /></PieChart></ResponsiveContainer><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={totals.stks.filter(x => x.eval > 0)} innerRadius="40%" outerRadius="70%" dataKey="eval" label={PieLabelOutside}>{totals.stks.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[(i + 3) % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} />} /></PieChart></ResponsiveContainer></div>
+            <div className="p-4 flex-1 flex flex-col sm:flex-row items-center gap-4"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={Object.entries(totals.cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)} innerRadius="40%" outerRadius="70%" dataKey="value" label={PieLabelOutside}>{Object.entries(totals.cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} hideAmounts={hideAmounts} />} /></PieChart></ResponsiveContainer><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={totals.stks.filter(x => x.eval > 0)} innerRadius="40%" outerRadius="70%" dataKey="eval" label={PieLabelOutside}>{totals.stks.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[(i + 3) % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} hideAmounts={hideAmounts} />} /></PieChart></ResponsiveContainer></div>
           </div>
         </div>
         )}
@@ -4391,7 +4391,7 @@ export default function App() {
                       {intMonthlyHistory.map((h, i) => (
                         <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
                           <td className="py-2 px-3 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
-                          <td className="py-2 px-3 font-bold text-white text-right border-r border-gray-700">{formatCurrency(h.evalAmount)}</td>
+                          <td className="py-2 px-3 font-bold text-white text-right border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
                           <td className="py-2 px-3 text-center border-r border-gray-700">
                             <span className={`text-sm font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
                           </td>
@@ -4424,7 +4424,7 @@ export default function App() {
                     <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none">
                       <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(intSelectionResult.startDate)} ~ {formatShortDate(intSelectionResult.endDate)}</span>
                       <span className={`text-xl font-black ${intSelectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{intSelectionResult.profit > 0 ? '▲' : '▼'} {Math.abs(intSelectionResult.rate).toFixed(2)}%</span>
-                      <span className={`text-xs font-bold mt-1 ${intSelectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{intSelectionResult.profit >= 0 ? '+' : ''}{formatCurrency(intSelectionResult.profit)}</span>
+                      <span className={`text-xs font-bold mt-1 ${intSelectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{hideAmounts ? '••••••' : `${intSelectionResult.profit >= 0 ? '+' : ''}${formatCurrency(intSelectionResult.profit)}`}</span>
                     </div>
                   )}
                   <ResponsiveContainer width="100%" height="100%">
@@ -4453,7 +4453,7 @@ export default function App() {
                                 <span style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, display: 'inline-block', flexShrink: 0 }} />
                                 <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 600, marginRight: 4 }}>{entry.name}</span>
                                 <span style={{ fontSize: 11, color: '#e5e7eb', fontWeight: 700, marginLeft: 'auto' }}>
-                                  {entry.name === '수익률' ? `${Number(entry.value).toFixed(2)}%` : formatCurrency(entry.value)}
+                                  {entry.name === '수익률' ? `${Number(entry.value).toFixed(2)}%` : (hideAmounts ? '••••••' : formatCurrency(entry.value))}
                                 </span>
                               </div>
                             ))}
@@ -4489,7 +4489,7 @@ export default function App() {
                             <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
                               {intCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                             </Pie>
-                            <RechartsTooltip content={<CustomChartTooltip total={intTotals.totalEval} />} />
+                            <RechartsTooltip content={<CustomChartTooltip total={intTotals.totalEval} hideAmounts={hideAmounts} />} />
                           </PieChart>
                         </ResponsiveContainer>
                       </div>
@@ -4592,7 +4592,7 @@ export default function App() {
                                   <Cell key={i} fill={itemColorMap[`${entry.category}::${entry.name}`] || catBaseColorMap[entry.category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />
                                 ))}
                               </Pie>
-                              <RechartsTooltip content={<CustomChartTooltip total={holdingsTotal} />} />
+                              <RechartsTooltip content={<CustomChartTooltip total={holdingsTotal} hideAmounts={hideAmounts} />} />
                             </PieChart>
                           </ResponsiveContainer>
                         </div>
