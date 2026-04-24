@@ -37,7 +37,7 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
           <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600">
             <tr className="text-center">
               <th className={`${th} w-[5%]`}>단위</th>
-              <th className={`${th} w-[16%]`}>종목명</th>
+              <th className={`${th} w-[16%] sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]`}>종목명</th>
               <th className={`${th} w-[11%]`}>현재금액</th>
               <th className={`${th} w-[11%]`}>구매 단가</th>
               <th className={`${th} w-[9%] bg-blue-900/20 text-blue-200`}>수량</th>
@@ -49,9 +49,9 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
           </thead>
           <tbody>
             {/* KRX 금현물 row */}
-            <tr className="border-b border-gray-700 hover:bg-gray-800/40 transition-colors">
+            <tr className="group border-b border-gray-700 hover:bg-gray-800/40 transition-colors">
               <td className={`${td} text-center text-gray-400 font-bold`}>1g</td>
-              <td className={`${td} text-center font-bold text-gray-100`}>KRX 금현물</td>
+              <td className={`${td} text-center font-bold text-gray-100 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]`}>KRX 금현물</td>
               <td className={`${td} text-right`}>
                 <div className={refreshCls} onClick={onRefresh} title="클릭하여 현재 금 시세 새로고침">
                   {isRefreshing && <RefreshCw size={11} className="text-teal-400 animate-spin shrink-0" />}
@@ -88,9 +88,9 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
             </tr>
 
             {/* 국제 금시세 row */}
-            <tr className="border-b border-gray-700 hover:bg-gray-800/40 transition-colors">
+            <tr className="group border-b border-gray-700 hover:bg-gray-800/40 transition-colors">
               <td className={`${td} text-center text-gray-400 font-bold`}>1g</td>
-              <td className={`${td} text-center font-bold text-gray-300`}>
+              <td className={`${td} text-center font-bold text-gray-300 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]`}>
                 <div className="flex flex-col items-center gap-0.5">
                   <span>국제 금시세</span>
                   {goldIntl != null && (
@@ -114,7 +114,7 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
             </tr>
 
             {/* 국내-국제 차이 row */}
-            <tr className="border-b border-gray-700 hover:bg-gray-800/40 transition-colors bg-gray-900/30">
+            <tr className="group border-b border-gray-700 hover:bg-gray-800/40 transition-colors bg-gray-900/30">
               <td className={`${td} text-center`}>
                 {usdkrw != null && (
                   <div
@@ -127,7 +127,7 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
                   </div>
                 )}
               </td>
-              <td className={`${td} text-center font-bold text-gray-400 text-[12px]`}>국내 금시세-국제 금시세</td>
+              <td className={`${td} text-center font-bold text-gray-400 text-[12px] sticky left-0 z-10 bg-[#0d1523] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]`}>국내 금시세-국제 금시세</td>
               <td className={`${td} text-right font-bold ${priceDiff != null ? (priceDiff >= 0 ? 'text-red-400' : 'text-blue-400') : 'text-gray-500'}`}>
                 {priceDiff != null ? formatCurrency(priceDiff) : '-'}
               </td>

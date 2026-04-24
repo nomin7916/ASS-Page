@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
-  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload
+  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload, LogOut, Link2
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -3294,14 +3294,14 @@ export default function App() {
         {/* 로그인 사용자 정보 바 */}
         <div className="flex items-center justify-between text-xs text-gray-500 px-1">
           <span className="font-mono">{authUser.email}</span>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             {authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && (
               <button
                 onClick={() => setShowAdminPage(true)}
-                className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60 text-base leading-none"
+                className="text-gray-500 hover:text-violet-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
                 title="관리자"
               >
-                ⚙️
+                <Settings size={14} />
               </button>
             )}
             <button
@@ -3312,10 +3312,10 @@ export default function App() {
                 setPinChangeError('');
                 setShowPinChange(true);
               }}
-              className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60 text-base leading-none"
+              className="text-gray-500 hover:text-amber-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
               title="비밀번호 변경"
             >
-              🔒
+              <Lock size={14} />
             </button>
             <button
               onClick={() => {
@@ -3328,24 +3328,24 @@ export default function App() {
                 }
               }}
               title={adminAccessAllowed ? '관리자 접속 허용 중 — 클릭하여 차단' : '관리자 접속 차단 중 — 클릭하여 허용'}
-              className={`relative px-2 py-1 rounded-md transition-colors text-base leading-none ${
+              className={`relative p-1.5 rounded border transition-colors flex items-center justify-center ${
                 adminAccessAllowed
-                  ? 'text-emerald-400/80 hover:text-emerald-300 hover:bg-gray-800/60'
-                  : 'text-gray-600 hover:text-gray-400 hover:bg-gray-800/60'
+                  ? 'text-emerald-400 hover:text-emerald-300 bg-emerald-900/20 border-emerald-700/40 hover:bg-emerald-900/30'
+                  : 'text-gray-600 hover:text-gray-400 hover:bg-gray-800 border-transparent hover:border-gray-700'
               }`}
             >
-              🔗
+              <Link2 size={14} />
               {adminAccessAllowed && (
                 <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400" />
               )}
             </button>
-            <div className="w-px h-3 bg-gray-700/60" />
+            <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
             <button
               onClick={() => { sessionStorage.removeItem(SESSION_KEY); setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
-              className="text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded-md hover:bg-gray-800/60 text-base leading-none"
+              className="text-gray-500 hover:text-red-400 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
               title="로그아웃"
             >
-              🚪
+              <LogOut size={14} />
             </button>
           </div>
         </div>
