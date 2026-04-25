@@ -4454,23 +4454,23 @@ export default function App() {
             </div>
           </div>
           <div className="overflow-x-auto bg-[#0f172a]">
-            <table className="w-full text-right text-[13px] table-fixed">
+            <table className="text-right text-[13px]">
               <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold text-center">
                 <tr>
-                  <th className="py-3 px-3 w-[16%] text-center text-gray-300 cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('name')}>종목명</th>
-                  <th className="py-3 w-[10%] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curEval')}>현재평가금</th>
-                  <th className="py-3 w-[9%] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('currentPrice')}>현재가</th>
-                  <th className="py-3 w-[9%] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%)</th>
-                  <th className="py-3 w-[9%] text-blue-300 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('action')}>매수/매도(주)</th>
-                  <th className="py-3 w-[10%] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('cost')}>실 구매비용</th>
-                  <th className="py-3 w-[11%] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expEval')}>예상평가금</th>
-                  <th className="py-3 w-[9%] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expRatio')}>예상비중</th>
+                  <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-10 bg-[#1e293b]" onClick={() => handleRebalanceSort('name')}>종목명</th>
+                  <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curEval')}>평가금</th>
+                  <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('currentPrice')}>현재가</th>
+                  <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%)</th>
+                  <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('action')}>수량</th>
+                  <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('cost')}>실 구매비용</th>
+                  <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expEval')}>예상평가금</th>
+                  <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expRatio')}>예상비중</th>
                 </tr>
               </thead>
               <tbody>
                 {rebalanceData.map(item => (
-                  <tr key={item.id} className="border-b border-gray-700 hover:bg-gray-800 transition-colors">
-                    <td className="py-3 px-4 text-center text-gray-300 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.name}</td>
+                  <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
+                    <td className="py-3 px-4 text-center text-gray-300 font-bold sticky left-0 z-10 bg-[#0f172a] group-hover:bg-gray-800 transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.name}</td>
                     <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.curEval)}</td>
                     <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(item.currentPrice)}</td>
                     <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
