@@ -54,6 +54,14 @@ export const getIndexLatest = (histObj) => {
   return { val: latest, chg };
 };
 
+const getRowFocusables = (el) => {
+  const tr = el.closest('tr');
+  if (!tr) return [];
+  return Array.from(tr.querySelectorAll(
+    'input:not([type="hidden"]):not([disabled]), select:not([disabled]), td[tabindex="0"]'
+  ));
+};
+
 export const handleTableKeyDown = (e, colKey) => {
   if (e.key === 'Enter') {
     e.preventDefault();
@@ -65,8 +73,49 @@ export const handleTableKeyDown = (e, colKey) => {
     const inputs = Array.from(tbody.querySelectorAll(`[data-col="${colKey}"]`));
     const idx = inputs.indexOf(e.target);
     const next = e.key === 'ArrowDown' ? inputs[idx + 1] : inputs[idx - 1];
-    if (next) next.focus();
+    if (next) { next.focus(); next.select?.(); }
+  } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    e.preventDefault();
+    const focusables = getRowFocusables(e.target);
+    const idx = focusables.indexOf(e.target);
+    const next = e.key === 'ArrowRight' ? focusables[idx + 1] : focusables[idx - 1];
+    if (next) { next.focus(); next.select?.(); }
   }
+};
+
+export const handleReadonlyCellNav = (e) => {
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+  e.preventDefault();
+  const tr = e.target.closest('tr');
+  const tbody = e.target.closest('tbody');
+  if (!tr || !tbody) return;
+  const focusables = getRowFocusables(e.target);
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    const idx = focusables.indexOf(e.target);
+    const next = e.key === 'ArrowRight' ? focusables[idx + 1] : focusables[idx - 1];
+    if (next) { next.focus(); next.select?.(); }
+  } else {
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const rowIdx = rows.indexOf(tr);
+    const cellIdx = focusables.indexOf(e.target);
+    const nextRow = e.key === 'ArrowDown' ? rows[rowIdx + 1] : rows[rowIdx - 1];
+    if (nextRow) {
+      const nf = Array.from(nextRow.querySelectorAll(
+        'input:not([type="hidden"]):not([disabled]), select:not([disabled]), td[tabindex="0"]'
+      ));
+      const target = nf[cellIdx] ?? nf[nf.length - 1];
+      if (target) { target.focus(); target.select?.(); }
+    }
+  }
+};
+
+export const handleRowArrowNav = (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  const focusables = getRowFocusables(e.target);
+  const idx = focusables.indexOf(e.target);
+  const next = e.key === 'ArrowRight' ? focusables[idx + 1] : focusables[idx - 1];
+  if (next) { next.focus(); next.select?.(); }
 };
 
 export const buildIndexStatus = (data, source) => {

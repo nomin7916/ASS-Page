@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React from 'react';
 import { RefreshCw } from 'lucide-react';
-import { cleanNum, formatCurrency, formatPercent, formatNumber } from '../utils';
+import { cleanNum, formatCurrency, formatPercent, formatNumber, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 
 const TROY_OZ_TO_GRAM = 31.1035;
 
@@ -27,7 +27,9 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
 
   const th = "py-3 px-3 text-center text-gray-300 font-bold text-[13px] border-r border-gray-600";
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
+  const roTd = `${td} focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`;
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors text-[13px]";
+  const CELL_FOCUS = 'focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500';
   const refreshCls = `flex items-center justify-end gap-1 cursor-pointer hover:bg-teal-900/30 rounded px-1 py-0.5 font-bold text-gray-300 transition-colors ${isRefreshing ? 'animate-pulse' : ''}`;
 
   return (
@@ -58,31 +60,35 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
                   <span>{goldKr ? formatCurrency(goldKr) : '-'}</span>
                 </div>
               </td>
-              <td className="p-0 border-r border-gray-600">
+              <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                 <input
                   type="text"
-                  className={`${inp} text-right px-3 py-3 text-gray-400`}
+                  data-col="purchasePrice"
+                  className={`${inp} text-right px-3 py-3 text-gray-400 caret-blue-400`}
                   value={goldItem ? formatNumber(goldItem.purchasePrice) : '0'}
                   onFocus={e => e.target.select()}
                   onChange={e => goldItem && onUpdate(goldItem.id, 'purchasePrice', e.target.value)}
+                  onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')}
                 />
               </td>
-              <td className="p-0 border-r border-gray-600 bg-blue-900/10">
+              <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
                 <div className="flex items-center px-3 py-3 gap-1">
                   <input
                     type="text"
-                    className={`${inp} text-center text-blue-200 flex-1 min-w-0`}
+                    data-col="quantity"
+                    className={`${inp} text-center text-blue-200 flex-1 min-w-0 caret-blue-400`}
                     value={goldItem ? formatNumber(goldItem.quantity) : '0'}
                     onFocus={e => e.target.select()}
                     onChange={e => goldItem && onUpdate(goldItem.id, 'quantity', e.target.value)}
+                    onKeyDown={e => handleTableKeyDown(e, 'quantity')}
                   />
                   <span className="text-gray-500 text-[11px] shrink-0">g</span>
                 </div>
               </td>
-              <td className={`${td} bg-blue-900/10 text-blue-200 font-bold`}>{formatCurrency(investAmount)}</td>
-              <td className={`${td} bg-yellow-900/10 text-yellow-400 font-bold`}>{formatCurrency(evalAmount)}</td>
-              <td className={`${td} font-bold ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(profit)}</td>
-              <td className={`py-3 px-3 align-middle text-[13px] whitespace-nowrap text-right font-bold ${returnRate >= 0 ? 'text-red-500 bg-red-900/20' : 'text-blue-500 bg-blue-900/20'}`}>
+              <td className={`${roTd} bg-blue-900/10 text-blue-200 font-bold`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(investAmount)}</td>
+              <td className={`${roTd} bg-yellow-900/10 text-yellow-400 font-bold`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(evalAmount)}</td>
+              <td className={`${roTd} font-bold ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(profit)}</td>
+              <td className={`py-3 px-3 align-middle text-[13px] whitespace-nowrap text-right font-bold ${returnRate >= 0 ? 'text-red-500 bg-red-900/20' : 'text-blue-500 bg-blue-900/20'} focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                 {formatPercent(returnRate)}
               </td>
             </tr>
