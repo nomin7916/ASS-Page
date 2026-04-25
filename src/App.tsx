@@ -4150,23 +4150,27 @@ export default function App() {
                     className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
                     title="수익률(%) 표시"
                   ><Percent size={14} /></button>
-                  {/* 백테스트 색상 — 좌측 컬러 스트라이프 직사각형 칩 */}
+                  {/* 백테스트: 좌측=색상선택 / 우측=토글 — 하나의 통합 버튼 */}
                   <div
-                    className="relative flex items-stretch rounded border border-gray-700 overflow-hidden cursor-pointer hover:border-gray-500 transition-colors"
-                    style={{ height: '29px', width: '34px' }}
-                    title="백테스트 선 색상 변경"
+                    className="flex items-stretch rounded border overflow-hidden transition-colors"
+                    style={{ borderColor: showBacktest ? backtestColor + '80' : '#374151', height: '29px' }}
                   >
-                    <div className="w-[4px] shrink-0" style={{ backgroundColor: backtestColor }} />
-                    <div className="flex-1 bg-gray-800/80" />
-                    <input type="color" value={backtestColor} onChange={e => setBacktestColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    {/* 좌측: 색상 스트라이프 — 클릭 시 색상 선택 */}
+                    <div
+                      className="relative w-[10px] shrink-0 cursor-pointer hover:opacity-75 transition-opacity"
+                      style={{ backgroundColor: backtestColor }}
+                      title="백테스트 선 색상 변경"
+                    >
+                      <input type="color" value={backtestColor} onChange={e => setBacktestColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    </div>
+                    {/* 우측: 아이콘 — 클릭 시 백테스트 토글 */}
+                    <button
+                      onClick={() => setShowBacktest(!showBacktest)}
+                      className="px-2 flex items-center justify-center transition-colors hover:opacity-80"
+                      style={{ color: showBacktest ? backtestColor : '#6b7280', backgroundColor: showBacktest ? backtestColor + '18' : '#1e293b' }}
+                      title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률 (백테스트)"
+                    ><RotateCcw size={13} /></button>
                   </div>
-                  {/* 백테스트 토글 */}
-                  <button
-                    onClick={() => setShowBacktest(!showBacktest)}
-                    className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showBacktest ? '' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
-                    style={{ color: showBacktest ? backtestColor : undefined, backgroundColor: showBacktest ? backtestColor + '18' : undefined, borderColor: showBacktest ? backtestColor + '60' : undefined }}
-                    title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률 (백테스트)"
-                  ><RotateCcw size={14} /></button>
                   <div className="w-px h-3 bg-gray-700 mx-0.5" />
                   {/* 기준점 모드 */}
                   <button
