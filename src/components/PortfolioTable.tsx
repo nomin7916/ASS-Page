@@ -135,13 +135,14 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                         <>
                           <div className="w-px bg-gray-600/60 self-stretch" />
                           <select
-                            className="w-7 shrink-0 text-center text-[11px] font-bold bg-transparent outline-none cursor-pointer text-gray-500"
+                            className="w-4 shrink-0 bg-transparent outline-none cursor-pointer appearance-none"
+                            style={{ color: 'transparent' }}
                             value={assetClass}
                             onChange={e => onUpdate(item.id, 'assetClass', e.target.value)}
                             onKeyDown={handleRowArrowNav}
                           >
-                            <option value="D" style={{ background: '#0f172a' }}>D</option>
-                            <option value="S" style={{ background: '#0f172a' }}>S</option>
+                            <option value="D" style={{ background: '#0f172a', color: '#9ca3af' }}>D</option>
+                            <option value="S" style={{ background: '#0f172a', color: '#9ca3af' }}>S</option>
                           </select>
                         </>
                       )}
@@ -273,13 +274,14 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                       </a>
                       <div className="w-px bg-gray-600/60 self-stretch" />
                       <select
-                        className="w-7 shrink-0 text-center text-[11px] font-bold bg-transparent outline-none cursor-pointer text-gray-500"
+                        className="w-4 shrink-0 bg-transparent outline-none cursor-pointer appearance-none"
+                        style={{ color: 'transparent' }}
                         value={assetClass}
                         onChange={e => onUpdate(item.id, 'assetClass', e.target.value)}
                         onKeyDown={handleRowArrowNav}
                       >
-                        <option value="D" style={{ background: '#0f172a' }}>D</option>
-                        <option value="S" style={{ background: '#0f172a' }}>S</option>
+                        <option value="D" style={{ background: '#0f172a', color: '#9ca3af' }}>D</option>
+                        <option value="S" style={{ background: '#0f172a', color: '#9ca3af' }}>S</option>
                       </select>
                     </div>
                   </td>
