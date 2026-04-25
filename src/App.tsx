@@ -101,6 +101,19 @@ const CHART_NAME_TO_POINT_KEY = {
   'DXY':     'dxyPoint',    '기준금리': 'fedRatePoint', 'KR 10Y': 'kr10yPoint', 'VIX': 'vixPoint',
 };
 
+function extractLinkLabel(url, maxLen = 7) {
+  if (!url) return null;
+  try {
+    const withProto = url.startsWith('http') ? url : 'https://' + url;
+    const hostname = new URL(withProto).hostname;
+    let name = hostname.replace(/^(www\.|m\.)/, '');
+    name = name.replace(/\.com$/, '');
+    return name.slice(0, maxLen) || null;
+  } catch {
+    return null;
+  }
+}
+
 function MainChartCustomTooltip({ active, payload, label, selectionResult, formatShortDateFn, formatNumberFn }) {
   if (!active || !payload || !payload.length) return null;
 
@@ -4004,9 +4017,12 @@ export default function App() {
             <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 flex flex-col shrink-0 gap-3">
               {/* 사이트 링크 버튼 */}
               <div className="flex items-center gap-1.5">
-                {customLinks.slice(0, 3).map((link, i) => (
-                  <button key={i} onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')} className="bg-gray-800 hover:bg-gray-700 text-blue-300 w-[30px] h-[30px] rounded shadow transition border border-gray-600 flex items-center justify-center text-xs font-bold" title={link.url ? `[버튼 ${i + 1}]\n${link.url}` : `버튼 ${i + 1} 설정 필요`}>{i + 1}</button>
-                ))}
+                {customLinks.slice(0, 3).map((link, i) => {
+                  const label = extractLinkLabel(link.url);
+                  return (
+                    <button key={i} onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')} className={`bg-gray-800 hover:bg-gray-700 text-blue-300 h-[28px] rounded shadow transition border border-gray-600 flex items-center justify-center font-bold tracking-tight ${label ? 'px-2 text-[11px] min-w-[28px]' : 'w-[28px] text-xs'}`} title={link.url || `버튼 ${i + 1} 설정 필요`}>{label ?? (i + 1)}</button>
+                  );
+                })}
                 <button onClick={() => setIsLinkSettingsOpen(!isLinkSettingsOpen)} className="bg-gray-800 hover:bg-gray-700 text-gray-400 w-[30px] h-[30px] rounded shadow transition border border-gray-600 flex items-center justify-center" title="퀵 링크 설정"><Settings size={14} /></button>
               </div>
               {isLinkSettingsOpen && (
@@ -4128,24 +4144,20 @@ export default function App() {
                     className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
                     title="수익률(%) 표시"
                   ><Percent size={14} /></button>
-                  {/* 백테스트 + 색상 */}
+                  {/* 백테스트 토글 */}
+                  <button
+                    onClick={() => setShowBacktest(!showBacktest)}
+                    className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showBacktest ? '' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
+                    style={{ color: showBacktest ? backtestColor : undefined, backgroundColor: showBacktest ? backtestColor + '18' : undefined, borderColor: showBacktest ? backtestColor + '60' : undefined }}
+                    title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률 (백테스트)"
+                  ><RotateCcw size={14} /></button>
+                  {/* 백테스트 색상 — 계좌탭 스타일 솔리드 칩 */}
                   <div
-                    className={`flex items-center rounded border overflow-hidden transition-colors ${showBacktest ? '' : 'border-transparent hover:border-gray-700'}`}
-                    style={{ borderColor: showBacktest ? backtestColor + '60' : undefined }}
+                    className="relative p-1.5 rounded border flex items-center justify-center cursor-pointer transition-opacity hover:opacity-75"
+                    style={{ backgroundColor: backtestColor, borderColor: backtestColor }}
+                    title="백테스트 선 색상 변경"
                   >
-                    <button
-                      onClick={() => setShowBacktest(!showBacktest)}
-                      className={`p-1.5 flex items-center justify-center transition-colors ${showBacktest ? '' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}
-                      style={{ color: showBacktest ? backtestColor : undefined, backgroundColor: showBacktest ? backtestColor + '18' : undefined }}
-                      title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률 (백테스트)"
-                    ><RotateCcw size={14} /></button>
-                    <div
-                      className="relative self-stretch flex items-center justify-center px-1 border-l transition-colors"
-                      style={{ borderColor: showBacktest ? backtestColor + '40' : '#374151', backgroundColor: showBacktest ? backtestColor + '10' : undefined }}
-                    >
-                      <div className="w-2.5 h-2.5 rounded-sm pointer-events-none" style={{ backgroundColor: backtestColor }} />
-                      <input type="color" value={backtestColor} onChange={e => setBacktestColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" title="백테스트 선 색상 변경" />
-                    </div>
+                    <input type="color" value={backtestColor} onChange={e => setBacktestColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                   </div>
                   <div className="w-px h-3 bg-gray-700 mx-0.5" />
                   {/* 기준점 모드 */}
