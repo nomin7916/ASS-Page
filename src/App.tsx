@@ -531,7 +531,7 @@ export default function App() {
   const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
   // 계좌별 차트 상태 독립 관리
-  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, compStocks: [] });
+  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' } });
   const accountChartStatesRef = useRef<Record<string, any>>({});
   const prevActivePortfolioIdRef = useRef<string | null>(null);
 
@@ -1319,10 +1319,13 @@ export default function App() {
       showIndicatorsInChart,
       goldIndicators,
       compStocks: compStocks.map(({ loading, ...rest }) => rest),
+      chartPeriod,
+      dateRange,
+      appliedRange,
     };
-  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, compStocks]);
+  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, compStocks, chartPeriod, dateRange, appliedRange]);
 
-  // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립)
+  // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
     const prevId = prevActivePortfolioIdRef.current;
     if (prevId !== null && prevId !== activePortfolioId) {
@@ -1337,10 +1340,19 @@ export default function App() {
         setShowIndicatorsInChart(saved.showIndicatorsInChart);
         setGoldIndicators(saved.goldIndicators || { goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
         setCompStocks((saved.compStocks || defaultCompStocks).map((s: any) => ({ ...s, loading: false })));
+        // 조회기간 복원
+        if (saved.chartPeriod) setChartPeriod(saved.chartPeriod);
+        setDateRange(saved.dateRange || { start: '', end: '' });
+        setAppliedRange(saved.appliedRange || { start: '', end: '' });
       } else {
         // 처음 방문하는 계좌 — 계좌 타입별 기본값
         const accountType = portfolios.find(p => p.id === activePortfolioId)?.accountType;
         setShowIndicatorsInChart({ us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false });
+        // 조회기간 기본값: ISA는 1주일, 나머지는 3개월
+        const defaultPeriod = accountType === 'isa' ? '1w' : '3m';
+        setChartPeriod(defaultPeriod);
+        setDateRange({ start: '', end: '' });
+        setAppliedRange({ start: '', end: '' });
         if (accountType === 'gold') {
           setShowKospi(false); setShowSp500(false); setShowNasdaq(false);
           setGoldIndicators({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
