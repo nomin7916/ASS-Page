@@ -58,11 +58,24 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                       }}
                       onPaste={e => {
                         e.preventDefault();
-                        const pasted = e.clipboardData.getData('text').trim().replace(/[-\s]/g, c => c === '-' ? '-' : '');
+                        const text = e.clipboardData.getData('text');
+                        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
                         const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
                         const normalize = s => s.replace(/\s/g, '').replace('α', 'a').replace('A', 'a');
-                        const match = validCats.find(c => normalize(c) === normalize(pasted)) || validCats.find(c => normalize(pasted).includes(normalize(c)));
-                        if (match) onUpdate(item.id, 'category', match);
+                        const matchCat = s => validCats.find(c => normalize(c) === normalize(s)) || validCats.find(c => normalize(s).includes(normalize(c)));
+                        if (lines.length <= 1) {
+                          const match = matchCat(lines[0] || '');
+                          if (match) onUpdate(item.id, 'category', match);
+                        } else {
+                          const stockItems = portfolio.filter(p => p.type === 'stock');
+                          const startIdx = stockItems.findIndex(p => p.id === item.id);
+                          lines.forEach((line, i) => {
+                            const target = stockItems[startIdx + i];
+                            if (!target) return;
+                            const match = matchCat(line);
+                            if (match) onUpdate(target.id, 'category', match);
+                          });
+                        }
                       }}
                       onBlur={e => {
                         const val = e.target.value;
