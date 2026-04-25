@@ -4,7 +4,7 @@ import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
   Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload, LogOut, Link2,
-  BarChart2, Percent, History
+  BarChart2, Percent, History, PanelLeft, PanelLeftClose
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -532,6 +532,7 @@ export default function App() {
   const [indicatorLoading, setIndicatorLoading] = useState(false);
   const [indicatorFetchStatus, setIndicatorFetchStatus] = useState({});
   const [showIndicatorVerify, setShowIndicatorVerify] = useState(false);
+  const [showMarketPanel, setShowMarketPanel] = useState(true);
 
   // ── Google Drive 자동 동기화 ──
   const [driveStatus, setDriveStatus] = useState(''); // '' | 'auth_needed' | 'loading' | 'saving' | 'saved' | 'error'
@@ -4010,8 +4011,8 @@ export default function App() {
 
         {/* 차트 영역 + 시장 지표 */}
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">
-          {/* 시장 지표 카드 — gold 계좌에서는 숨김 */}
-          {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && (
+          {/* 시장 지표 카드 — gold 계좌 또는 패널 숨김 시 비표시 */}
+          {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && showMarketPanel && (
             <MarketIndicators
               marketIndicators={marketIndicators}
               marketIndices={marketIndices}
@@ -4203,6 +4204,15 @@ export default function App() {
                     className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isZeroBaseMode ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
                     title="조회 시작일을 0% 기준으로 차트 재정렬"
                   ><Activity size={14} /></button>
+                  {/* 시장 지표 패널 토글 */}
+                  {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && (<>
+                    <div className="w-px h-3 bg-gray-700 mx-0.5" />
+                    <button
+                      onClick={() => setShowMarketPanel(p => !p)}
+                      className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showMarketPanel ? 'text-blue-400 bg-blue-900/20 border-blue-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
+                      title={showMarketPanel ? '시장 지표 숨기기' : '시장 지표 표시'}
+                    >{showMarketPanel ? <PanelLeftClose size={14} /> : <PanelLeft size={14} />}</button>
+                  </>)}
                 </div>
                 {/* 지표 배율 설정 버튼 */}
                 <button
