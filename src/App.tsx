@@ -463,6 +463,7 @@ export default function App() {
   const [selectionResult, setSelectionResult] = useState(null);
   const [showTotalEval, setShowTotalEval] = useState(true);
   const [showReturnRate, setShowReturnRate] = useState(true);
+  const [showBacktest, setShowBacktest] = useState(false);
   const [isZeroBaseMode, setIsZeroBaseMode] = useState(true);
   
   const [showKospi, setShowKospi] = useState(true);
@@ -1546,13 +1547,38 @@ export default function App() {
         };
       });
     })();
+    // 백테스트: 현재 종목·비중을 조회기간 시작일부터 투자했을 경우 수익률
+    const backtestItems = portfolio.filter(item => item.type === 'stock' && item.code && stockHistoryMap[item.code]);
+    const backtestTotalEval = backtestItems.reduce((s, item) => s + cleanNum(item.currentPrice) * cleanNum(item.quantity), 0);
+    const backtestBasePrices: Record<string, number | null> = {};
+    if (filteredDates.length > 0 && backtestTotalEval > 0) {
+      const firstDate = filteredDates[0];
+      backtestItems.forEach(item => {
+        backtestBasePrices[item.code] = getClosestValue(stockHistoryMap[item.code], firstDate);
+      });
+    }
     return zeroBasedData.map(item => {
       const scaled = {};
       INDICATOR_CHART_KEYS.forEach(k => {
         const r = item[`${k}Rate`];
         if (r != null) scaled[`${k}RateScaled`] = r * (indicatorScales[k] || 1);
       });
-      return { ...item, ...scaled };
+      let backtestRate: number | null = null;
+      if (backtestItems.length > 0 && backtestTotalEval > 0) {
+        let weightedReturn = 0;
+        let coveredWeight = 0;
+        backtestItems.forEach(btItem => {
+          const basePrice = backtestBasePrices[btItem.code];
+          const curPrice = getClosestValue(stockHistoryMap[btItem.code], item.date);
+          const w = (cleanNum(btItem.currentPrice) * cleanNum(btItem.quantity)) / backtestTotalEval;
+          if (basePrice && basePrice > 0 && curPrice) {
+            weightedReturn += w * ((curPrice / basePrice) - 1) * 100;
+            coveredWeight += w;
+          }
+        });
+        if (coveredWeight > 0.01) backtestRate = weightedReturn / coveredWeight;
+      }
+      return { ...item, ...scaled, backtestRate };
     });
   }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales]);
 
@@ -3967,7 +3993,7 @@ export default function App() {
           )}
 
           {/* 차트 본체 */}
-          <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg flex-1 min-w-0">
+          <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg flex-1 min-w-0 flex flex-col">
             <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 flex flex-col shrink-0 gap-3">
               {/* 사이트 링크 버튼 */}
               <div className="flex items-center gap-1.5">
@@ -4085,6 +4111,7 @@ export default function App() {
                 <div className="flex items-center gap-1.5">
                   <button onClick={() => setShowTotalEval(!showTotalEval)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showTotalEval ? 'bg-gray-700 text-white shadow-inner border border-gray-500' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showTotalEval ? 'bg-gray-400 shadow-[0_0_4px_#9ca3af]' : 'bg-gray-600'}`}></div>자산</button>
                   <button onClick={() => setShowReturnRate(!showReturnRate)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showReturnRate ? 'bg-red-900/50 text-red-400 border border-red-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showReturnRate ? 'bg-red-500 shadow-[0_0_4px_#ef4444]' : 'bg-gray-600'}`}></div>%</button>
+                  <button onClick={() => setShowBacktest(!showBacktest)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showBacktest ? 'bg-orange-900/50 text-orange-400 border border-orange-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`} title="현재 종목과 비중을 조회기간 시작일부터 투자했을 때의 수익률"><div className={`w-2 h-2 rounded-sm ${showBacktest ? 'bg-orange-500 shadow-[0_0_4px_#f97316]' : 'bg-gray-600'}`}></div>백테스트</button>
                   <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
                   <button onClick={() => setIsZeroBaseMode(!isZeroBaseMode)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${isZeroBaseMode ? 'bg-green-900/50 text-green-400 border border-green-500/50 shadow-inner' : 'bg-transparent text-gray-500 hover:bg-gray-800 border border-gray-700'}`} title="조회 시작일을 0% 기준으로 차트 재정렬"><Activity size={14} className={isZeroBaseMode ? 'text-green-400' : 'text-gray-500'} /></button>
                 </div>
@@ -4178,7 +4205,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="chart-container-for-drag p-4 h-[400px] relative select-none">
+            <div className="chart-container-for-drag p-4 flex-1 min-h-[300px] relative select-none">
               {selectionResult && (
                 <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none transition-all">
                   <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(selectionResult.startDate)} ~ {formatShortDate(selectionResult.endDate)}</span>
@@ -4252,6 +4279,7 @@ export default function App() {
                   {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke={compStocks[0].color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} />}
                   {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke={compStocks[1].color || '#0ea5e9'} strokeWidth={1.5} dot={false} connectNulls={false} />}
                   {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke={compStocks[2].color || '#ec4899'} strokeWidth={1.5} dot={false} connectNulls={false} />}
+                  {showBacktest && <Line yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke="#f97316" strokeWidth={2} dot={false} strokeDasharray="6 3" connectNulls />}
                   {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
                 </ComposedChart>
               </ResponsiveContainer>
