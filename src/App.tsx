@@ -4,7 +4,7 @@ import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
   Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload, LogOut, Link2,
-  BarChart2, Percent, RotateCcw
+  BarChart2, Percent, History
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -4169,7 +4169,7 @@ export default function App() {
                       className="px-2 flex items-center justify-center transition-colors hover:opacity-80"
                       style={{ color: showBacktest ? backtestColor : '#6b7280', backgroundColor: showBacktest ? backtestColor + '18' : '#1e293b' }}
                       title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률 (백테스트)"
-                    ><RotateCcw size={13} /></button>
+                    ><History size={13} /></button>
                   </div>
                   <div className="w-px h-3 bg-gray-700 mx-0.5" />
                   {/* 기준점 모드 */}
