@@ -4344,7 +4344,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="chart-container-for-drag p-4 flex-1 min-h-[400px] relative select-none" style={{ height: 1 }}>
+            <div className="chart-container-for-drag p-4 h-[400px] xl:flex-1 xl:h-auto relative select-none">
               {selectionResult && (
                 <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none transition-all">
                   <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(selectionResult.startDate)} ~ {formatShortDate(selectionResult.endDate)}</span>
