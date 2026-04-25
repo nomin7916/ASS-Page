@@ -464,6 +464,7 @@ export default function App() {
   const [showTotalEval, setShowTotalEval] = useState(true);
   const [showReturnRate, setShowReturnRate] = useState(true);
   const [showBacktest, setShowBacktest] = useState(false);
+  const [backtestColor, setBacktestColor] = useState('#f97316');
   const [isZeroBaseMode, setIsZeroBaseMode] = useState(true);
   const [hoveredPoint, setHoveredPoint] = useState<{label: string, payload: any[]} | null>(null);
   
@@ -4114,9 +4115,15 @@ export default function App() {
               </div>
               <div className="flex justify-between items-center pt-2 border-t border-gray-700/50">
                 <div className="flex items-center gap-1.5">
-                  <button onClick={() => setShowTotalEval(!showTotalEval)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showTotalEval ? 'bg-gray-700 text-white shadow-inner border border-gray-500' : 'bg-transparent text-gray-500 border border-gray-700 hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showTotalEval ? 'bg-gray-400 shadow-[0_0_4px_#9ca3af]' : 'bg-gray-600'}`}></div>자산</button>
+                  <button onClick={() => setShowTotalEval(!showTotalEval)} className={`px-2 py-1.5 rounded-md text-[13px] transition-all ${showTotalEval ? 'bg-gray-700 shadow-inner border border-gray-500' : 'bg-transparent border border-gray-700 opacity-40 hover:opacity-70 hover:bg-gray-800'}`} title="자산 총액 표시">💰</button>
                   <button onClick={() => setShowReturnRate(!showReturnRate)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showReturnRate ? 'bg-red-900/50 text-red-400 border border-red-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showReturnRate ? 'bg-red-500 shadow-[0_0_4px_#ef4444]' : 'bg-gray-600'}`}></div>%</button>
-                  <button onClick={() => setShowBacktest(!showBacktest)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showBacktest ? 'bg-orange-900/50 text-orange-400 border border-orange-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`} title="현재 종목과 비중을 조회기간 시작일부터 투자했을 때의 수익률"><div className={`w-2 h-2 rounded-sm ${showBacktest ? 'bg-orange-500 shadow-[0_0_4px_#f97316]' : 'bg-gray-600'}`}></div>백테스트</button>
+                  <div className={`flex items-center rounded-md overflow-hidden border transition-all ${showBacktest ? 'shadow-sm' : 'border-gray-700'}`} style={{ borderColor: showBacktest ? backtestColor + '90' : undefined }}>
+                    <button onClick={() => setShowBacktest(!showBacktest)} className={`px-2 py-1.5 text-[13px] transition-all ${showBacktest ? '' : 'opacity-40 hover:opacity-70'}`} style={{ backgroundColor: showBacktest ? backtestColor + '22' : 'transparent' }} title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률">🔬</button>
+                    <div className="relative self-stretch flex items-center px-1 border-l border-gray-700/40" style={{ backgroundColor: showBacktest ? backtestColor + '11' : 'transparent' }}>
+                      <div className="w-3 h-3 rounded-sm pointer-events-none" style={{ backgroundColor: backtestColor }} />
+                      <input type="color" value={backtestColor} onChange={e => setBacktestColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" title="백테스트 선 색상 변경" />
+                    </div>
+                  </div>
                   <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
                   <button onClick={() => setIsZeroBaseMode(!isZeroBaseMode)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${isZeroBaseMode ? 'bg-green-900/50 text-green-400 border border-green-500/50 shadow-inner' : 'bg-transparent text-gray-500 hover:bg-gray-800 border border-gray-700'}`} title="조회 시작일을 0% 기준으로 차트 재정렬"><Activity size={14} className={isZeroBaseMode ? 'text-green-400' : 'text-gray-500'} /></button>
                 </div>
@@ -4290,6 +4297,10 @@ export default function App() {
                       <stop offset="50%" stopColor="#ff453a" stopOpacity={0.1}/>
                       <stop offset="100%" stopColor="#ff453a" stopOpacity={0.02}/>
                     </linearGradient>
+                    <linearGradient id="backtestGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={backtestColor} stopOpacity={0.35}/>
+                      <stop offset="95%" stopColor={backtestColor} stopOpacity={0.02}/>
+                    </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
                   <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
@@ -4334,7 +4345,7 @@ export default function App() {
                   {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke={compStocks[0].color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} />}
                   {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke={compStocks[1].color || '#0ea5e9'} strokeWidth={1.5} dot={false} connectNulls={false} />}
                   {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke={compStocks[2].color || '#ec4899'} strokeWidth={1.5} dot={false} connectNulls={false} />}
-                  {showBacktest && <Line yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke="#f97316" strokeWidth={2} dot={false} strokeDasharray="6 3" connectNulls />}
+                  {showBacktest && <Area yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke={backtestColor} strokeWidth={2} fill="url(#backtestGradient)" strokeDasharray="6 3" dot={false} connectNulls />}
                   {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
                 </ComposedChart>
               </ResponsiveContainer>
