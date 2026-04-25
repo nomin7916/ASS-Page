@@ -3687,7 +3687,7 @@ export default function App() {
         )}
 
         {!showIntegratedDashboard && (<>
-        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} customLinks={customLinks} setCustomLinks={setCustomLinks} onRefresh={refreshPrices} onSave={handleSave} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
+        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
 
         {activePortfolioAccountType === 'gold' ? (
           <KrxGoldTable
@@ -3957,6 +3957,24 @@ export default function App() {
           {/* 차트 본체 */}
           <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg flex-1 min-w-0">
             <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 flex flex-col shrink-0 gap-3">
+              {/* 사이트 링크 버튼 */}
+              <div className="flex items-center gap-1.5">
+                {customLinks.slice(0, 3).map((link, i) => (
+                  <button key={i} onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')} className="bg-gray-800 hover:bg-gray-700 text-blue-300 w-[30px] h-[30px] rounded shadow transition border border-gray-600 flex items-center justify-center text-xs font-bold" title={link.url ? `[버튼 ${i + 1}]\n${link.url}` : `버튼 ${i + 1} 설정 필요`}>{i + 1}</button>
+                ))}
+                <button onClick={() => setIsLinkSettingsOpen(!isLinkSettingsOpen)} className="bg-gray-800 hover:bg-gray-700 text-gray-400 w-[30px] h-[30px] rounded shadow transition border border-gray-600 flex items-center justify-center" title="퀵 링크 설정"><Settings size={14} /></button>
+              </div>
+              {isLinkSettingsOpen && (
+                <div className="flex flex-wrap gap-3 pb-1 border-b border-gray-700/50">
+                  {customLinks.slice(0, 3).map((l, i) => (
+                    <div key={i} className="flex flex-col gap-1 flex-1 min-w-[160px] max-w-[240px]">
+                      <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 연결 (URL)</span>
+                      <input type="text" className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-500 shadow-inner font-normal" value={l.url} onChange={(e) => { const n = [...customLinks]; n[i].url = e.target.value; setCustomLinks(n); }} placeholder="https://..." />
+                    </div>
+                  ))}
+                  <button onClick={() => setIsLinkSettingsOpen(false)} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded text-xs font-bold shadow transition">완료</button>
+                </div>
+              )}
               <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3">
                   {/* gold 계좌: 고정 지표 4개 칩 / 그 외: 비교종목 칩 */}
@@ -4357,6 +4375,10 @@ export default function App() {
                   </div>
                   <button onClick={addSimpleAccount} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded" title="날짜·계좌·자산을 직접 입력하는 간단 계좌 추가">
                     <Plus size={12} /> 직접입력
+                  </button>
+                  <div className="w-[1px] h-4 bg-gray-700 mx-1" />
+                  <button onClick={handleSave} className="flex items-center gap-1 text-orange-400 hover:text-orange-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-orange-900/20 rounded" title="JSON 파일로 다운로드 (PC 백업)">
+                    <Download size={12} /> PC 백업
                   </button>
                 </div>
               </div>

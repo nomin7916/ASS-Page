@@ -24,8 +24,6 @@ export const UI_CONFIG = {
     { name: "네이버 증권", url: "https://m.stock.naver.com/marketindex/home/metals" },
     { name: "ETFCHECK", url: "https://www.etfcheck.co.kr/mobile/main" },
     { name: "트레이딩 이코노미", url: "https://tradingeconomics.com" },
-    { name: "인베스팅닷컴", url: "https://kr.investing.com" },
-    { name: "야후 파이낸스", url: "https://finance.yahoo.com" }
   ],
   DEFAULTS: { HISTORY_LIMIT: 3, DEPOSIT_LIMIT: 5, PRINCIPAL: 80000000 }
 };
