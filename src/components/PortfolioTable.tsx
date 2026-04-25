@@ -19,13 +19,14 @@ const getAssetClass = (cat) => SAFE_CATEGORIES.includes(cat) ? 'S' : 'D';
 const CELL_FOCUS = 'focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500';
 const RO_FOCUS = 'focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none';
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
   if (!totals) return null;
 
   const stockItems = portfolio.filter(p => p.type === 'stock');
   const depositItems = portfolio.filter(p => p.type === 'deposit');
+  const fundItems = portfolio.filter(p => p.type === 'fund');
 
   const retirementStats = isRetirement ? (() => {
     const dangerEval = stockItems
@@ -35,9 +36,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
       .filter(p => (p.assetClass ?? getAssetClass(p.category)) === 'S')
       .reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
     const depositEval = depositItems.reduce((sum, p) => sum + (cleanNum(p.evalAmount) || cleanNum(p.depositAmount) || 0), 0);
-    const totalEval = dangerEval + safeStockEval + depositEval;
-    const dRatio = totalEval > 0 ? dangerEval / totalEval * 100 : 0;
-    const sRatio = totalEval > 0 ? (safeStockEval + depositEval) / totalEval * 100 : 0;
+    const fundDangerEval = fundItems.filter(p => (p.assetClass ?? 'S') === 'D').reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
+    const fundSafeEval = fundItems.filter(p => (p.assetClass ?? 'S') === 'S').reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
+    const totalEval = dangerEval + fundDangerEval + safeStockEval + fundSafeEval + depositEval;
+    const dRatio = totalEval > 0 ? (dangerEval + fundDangerEval) / totalEval * 100 : 0;
+    const sRatio = totalEval > 0 ? (safeStockEval + fundSafeEval + depositEval) / totalEval * 100 : 0;
     return { dRatio, sRatio, totalEval };
   })() : null;
 
@@ -254,6 +257,97 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                 <td className="text-center py-2.5 bg-gray-800/50">🔒</td>
               </tr>
             ))}
+            {isRetirement && fundItems.map((item) => {
+              const fStatus = stockFetchStatus?.[item.code];
+              const isRefreshing = fStatus === 'loading';
+              const assetClass = item.assetClass ?? 'S';
+              const computedQty = item.currentPrice > 0 ? item.evalAmount / item.currentPrice : 0;
+              return (
+                <tr key={item.id} className="group bg-indigo-950/30 hover:bg-indigo-900/20 transition-colors border-b border-indigo-800/30">
+                  {/* 구분: FUND 링크 + S/D 선택 */}
+                  <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                    <div className="flex flex-row h-full items-stretch">
+                      <a href="https://www.funetf.co.kr/" target="_blank" rel="noopener noreferrer"
+                         className="flex-1 py-3 px-1 text-center text-xs font-bold text-indigo-300 hover:text-indigo-100 hover:underline transition-colors">
+                        FUND
+                      </a>
+                      <div className="w-px bg-gray-600/60 self-stretch" />
+                      <select
+                        className="w-7 shrink-0 text-center text-[11px] font-bold bg-transparent outline-none cursor-pointer text-gray-500"
+                        value={assetClass}
+                        onChange={e => onUpdate(item.id, 'assetClass', e.target.value)}
+                        onKeyDown={handleRowArrowNav}
+                      >
+                        <option value="D" style={{ background: '#0f172a' }}>D</option>
+                        <option value="S" style={{ background: '#0f172a' }}>S</option>
+                      </select>
+                    </div>
+                  </td>
+                  {/* 종목명 */}
+                  <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-indigo-950/60 group-hover:bg-indigo-900/30 [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`}>
+                    <div className="flex items-center gap-1 px-1">
+                      <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-indigo-200 caret-blue-400`} value={item.name} placeholder="펀드명" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
+                      {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
+                      {fStatus === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />}
+                      {fStatus === 'loading' && <RefreshCw size={10} className="animate-spin text-yellow-400 shrink-0" title="갱신 중..." />}
+                    </div>
+                  </td>
+                  {/* 코드 */}
+                  <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                    <input type="text" data-col="code" className={`${inp} text-center text-indigo-400 text-[11px] font-mono caret-blue-400`} value={item.code} placeholder="K55301DW8222" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => onBlur(item.id, e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'code')} />
+                  </td>
+                  {/* 등락률 */}
+                  <td className={`p-0 border-r border-gray-600 align-middle ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                    <div className={`w-full h-full py-3 px-3 flex items-center justify-center font-bold text-[13px] cursor-pointer hover:bg-indigo-900/30 transition-colors ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`}
+                         onClick={() => item.code && window.open(`https://www.funetf.co.kr/product/fund/view/${item.code}`, '_blank')}
+                         title={item.code ? 'funetf에서 상세보기' : ''}>
+                      {formatChangeRate(item.changeRate)}
+                    </div>
+                  </td>
+                  {/* 현재가(기준가) */}
+                  <td className={`p-0 border-r border-gray-600 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                    <div className={`w-full h-full py-3 px-3 text-right text-indigo-200 font-bold cursor-pointer hover:bg-indigo-900/30 transition-colors flex items-center justify-end gap-1 ${isRefreshing ? 'animate-pulse' : ''}`}
+                         onClick={() => item.code && onSingleRefresh(item.id, item.code)}
+                         title={item.code ? '클릭하여 기준가 새로고침' : '펀드코드를 먼저 입력하세요'}>
+                      {isRefreshing && <RefreshCw size={11} className="text-indigo-400 animate-spin shrink-0" />}
+                      <span>{formatNumber(item.currentPrice)}</span>
+                    </div>
+                  </td>
+                  {/* 구매단가 - 해당없음 */}
+                  <td className="py-3 px-3 border-r border-gray-600 text-center text-gray-600 text-xs">-</td>
+                  {/* 보유수량 - 자동계산 */}
+                  <td className={`${td} text-center text-indigo-300 bg-blue-900/10 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                    {computedQty > 0 ? computedQty.toFixed(3) : '-'}
+                  </td>
+                  {/* 투자금액 - 직접입력 */}
+                  <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
+                    <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
+                  </td>
+                  {/* 비중(투자) */}
+                  <td className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.investRatio)}</td>
+                  {/* 평가금액 - 직접입력 */}
+                  <td className={`p-0 border-r border-gray-600 bg-yellow-900/20 ${CELL_FOCUS}`}>
+                    <input type="text" data-col="evalAmount" className={`${inp} text-right text-white font-bold px-3 caret-blue-400`} value={formatNumber(item.evalAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'evalAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'evalAmount')} />
+                  </td>
+                  {/* 비중(평가) */}
+                  <td className={`${td} text-yellow-600 bg-yellow-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.evalRatio)}</td>
+                  {/* 수익률 */}
+                  <td className={`${td} text-center font-bold ${item.returnRate > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.returnRate)}</td>
+                  {/* 차익 */}
+                  <td className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.profit)}</td>
+                  <td className="text-center py-2.5"><button onClick={() => onDelete(item.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1"><Trash2 size={14} /></button></td>
+                </tr>
+              );
+            })}
+            {isRetirement && (
+              <tr className="border-b border-indigo-800/20 bg-indigo-950/10">
+                <td colSpan={14} className="py-1.5 text-center">
+                  <button onClick={onAddFund} className="text-indigo-500 hover:text-indigo-300 text-xs flex items-center gap-1 mx-auto transition-colors px-3 py-1 rounded hover:bg-indigo-900/30">
+                    <Plus size={12} /> 펀드 추가
+                  </button>
+                </td>
+              </tr>
+            )}
           </tbody>
           <tfoot className="bg-[#1e293b] font-bold border-t-2 border-gray-500">
             {isRetirement && retirementStats && (

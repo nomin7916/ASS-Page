@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
 import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, loadVersionTimestamp, saveVersionFile } from './driveStorage';
-import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory } from './api';
+import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
@@ -1386,6 +1386,7 @@ export default function App() {
     const calc = portfolio.map(item => {
       let inv = 0, evl = 0;
       if (item.type === 'deposit') { inv = evl = cleanNum(item.depositAmount) * fxRate; }
+      else if (item.type === 'fund') { inv = cleanNum(item.investAmount) * fxRate; evl = cleanNum(item.evalAmount) * fxRate; }
       else { inv = cleanNum(item.purchasePrice) * cleanNum(item.quantity) * fxRate; evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate; }
       const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;
       const c = item.category || '미지정';
@@ -1791,9 +1792,29 @@ export default function App() {
   const handleUpdate = (id, field, value) => setPortfolio(prev => prev.map(p => p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass'].includes(field) ? value : cleanNum(value) } : p));
   const handleDeleteStock = (id) => setPortfolio(prev => prev.filter(p => p.id !== id));
   const handleAddStock = () => setPortfolio([{ id: generateId(), type: 'stock', category: "주식", assetClass: 'D', code: "", name: "", currentPrice: 0, changeRate: 0, purchasePrice: 0, quantity: 0, targetRatio: 0, isManual: true }, ...portfolio]);
+  const handleAddFund = () => setPortfolio(prev => {
+    const lastFundIdx = prev.reduceRight((acc, p, i) => acc === -1 && p.type === 'fund' ? i : acc, -1);
+    const depositIdx = prev.findIndex(p => p.type === 'deposit');
+    const insertIdx = lastFundIdx >= 0 ? lastFundIdx + 1 : (depositIdx >= 0 ? depositIdx + 1 : prev.length);
+    const newFund = { id: generateId(), type: 'fund', category: 'FUND', assetClass: 'S', code: '', name: '', currentPrice: 0, changeRate: 0, investAmount: 0, evalAmount: 0, isManual: true };
+    return [...prev.slice(0, insertIdx), newFund, ...prev.slice(insertIdx)];
+  });
   const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
 
   const handleStockBlur = async (id, code) => {
+    const item = portfolio.find(p => p.id === id);
+    if (item?.type === 'fund') {
+      if (!code || code.trim().length < 8) return;
+      setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
+      const d = await fetchFundInfo(code);
+      if (d) {
+        setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
+        setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
+      } else {
+        setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
+      }
+      return;
+    }
     const isOverseas = activePortfolioAccountType === 'overseas';
     if (!code || (!isOverseas && code.length < 5)) return;
     setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
@@ -1809,6 +1830,20 @@ export default function App() {
   };
 
   const handleSingleStockRefresh = async (id, code) => {
+    const item = portfolio.find(p => p.id === id);
+    if (item?.type === 'fund') {
+      if (!code || code.trim().length < 8) return;
+      setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
+      const d = await fetchFundInfo(code);
+      if (d) {
+        setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
+        setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
+      } else {
+        setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
+        showToast(`${code} 기준가 갱신 실패`, true);
+      }
+      return;
+    }
     const isOverseas = activePortfolioAccountType === 'overseas';
     if (!code || (!isOverseas && code.length < 5)) return;
     setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
@@ -3644,7 +3679,7 @@ export default function App() {
             isRefreshing={indicatorLoading}
           />
         ) : (
-          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
+          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
         )}
 
         {activePortfolioAccountType !== 'gold' && (

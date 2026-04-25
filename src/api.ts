@@ -230,6 +230,78 @@ export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; 
   return null;
 };
 
+// ── funetf.co.kr 펀드 기준가 조회 ─────────────────────────────────────────
+export const fetchFundInfo = async (code: string): Promise<{ name: string; price: number; changeRate: number } | null> => {
+  if (!code || code.trim().length < 8) return null;
+  const c = code.trim();
+
+  const targetUrl = `https://www.funetf.co.kr/product/fund/view/${c}`;
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  ];
+
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) continue;
+      const html = await res.text();
+      if (!html || html.length < 500) continue;
+
+      // Next.js __NEXT_DATA__ 내장 JSON 파싱 시도
+      const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (nextDataMatch) {
+        try {
+          const nd = JSON.parse(nextDataMatch[1]);
+          const pp = nd?.props?.pageProps;
+          if (pp) {
+            const rawPrice = pp.nav ?? pp.price ?? pp.basicPrice ?? pp.fundInfo?.nav ?? pp.fundInfo?.price;
+            const rawName  = pp.fundName ?? pp.name ?? pp.fundInfo?.fundName ?? pp.fundInfo?.name;
+            const rawRate  = pp.changeRate ?? pp.changeRatio ?? pp.fundInfo?.changeRate;
+            if (rawPrice && rawName) {
+              const price = parseFloat(String(rawPrice).replace(/,/g, ''));
+              if (price > 0) return { name: String(rawName), price, changeRate: parseFloat(String(rawRate ?? 0)) };
+            }
+          }
+        } catch { /* HTML 파싱으로 폴백 */ }
+      }
+
+      // HTML 파싱 폴백
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/);
+      let name = titleMatch ? titleMatch[1].split('|')[0].split('-')[0].split('·')[0].trim() : '';
+
+      let price = 0;
+      for (const pat of [
+        /기준가[^\d]*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)/,
+        /기준가격[^\d]*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)/,
+        /현재가[^\d]*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)/,
+        /"nav"\s*:\s*"?([0-9.]+)"?/,
+        /"price"\s*:\s*"?([0-9.]+)"?/,
+      ]) {
+        const m = html.match(pat);
+        if (m) {
+          const v = parseFloat(m[1].replace(/,/g, ''));
+          if (v > 100) { price = v; break; }
+        }
+      }
+
+      let changeRate = 0;
+      for (const pat of [
+        /등락률[^0-9+\-]*([+\-]?[0-9]+(?:\.[0-9]+)?)/,
+        /전일대비[^0-9+\-]*([+\-]?[0-9]+(?:\.[0-9]+)?)/,
+        /"changeRate"\s*:\s*"?([+\-]?[0-9.]+)"?/,
+      ]) {
+        const m = html.match(pat);
+        if (m) { changeRate = parseFloat(m[1]); break; }
+      }
+
+      if (price > 0) return { name: name || c, price, changeRate };
+    } catch { continue; }
+  }
+  return null;
+};
+
 export const fetchNaverKospi = async () => {
   const targetUrl = `https://m.stock.naver.com/api/index/KOSPI/basic`;
   const proxies = [
