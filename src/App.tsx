@@ -481,6 +481,10 @@ export default function App() {
   const [backtestColor, setBacktestColor] = useState('#f97316');
   const [isZeroBaseMode, setIsZeroBaseMode] = useState(true);
   const [hoveredPoint, setHoveredPoint] = useState<{label: string, payload: any[]} | null>(null);
+  const [hoveredPortCatSlice, setHoveredPortCatSlice] = useState<any>(null);
+  const [hoveredPortStkSlice, setHoveredPortStkSlice] = useState<any>(null);
+  const [hoveredIntCatSlice, setHoveredIntCatSlice] = useState<any>(null);
+  const [hoveredIntHoldSlice, setHoveredIntHoldSlice] = useState<any>(null);
   
   const [showKospi, setShowKospi] = useState(true);
   const [showSp500, setShowSp500] = useState(false);
@@ -3774,7 +3778,28 @@ export default function App() {
           </div>
           <div className="xl:col-span-8 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full min-h-[400px]">
             <div className="flex bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 divide-x divide-gray-700"><div className="p-3 flex-1 text-center">📊 자산 비중</div><div className="p-3 flex-1 text-center text-blue-400">📈 종목별 비중</div></div>
-            <div className="p-4 flex-1 flex flex-col sm:flex-row items-center gap-4"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={Object.entries(totals.cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)} innerRadius="40%" outerRadius="70%" dataKey="value" label={PieLabelOutside}>{Object.entries(totals.cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} hideAmounts={hideAmounts} />} /></PieChart></ResponsiveContainer><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={totals.stks.filter(x => x.eval > 0)} innerRadius="40%" outerRadius="70%" dataKey="eval" label={PieLabelOutside}>{totals.stks.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[(i + 3) % 8]} />)}</Pie><RechartsTooltip content={<CustomChartTooltip total={totals.totalEval} hideAmounts={hideAmounts} />} /></PieChart></ResponsiveContainer></div>
+            <div className="p-4 flex-1 flex flex-col sm:flex-row items-stretch gap-4">
+              <div className="flex-1 flex flex-col min-h-0">
+                <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                  {hoveredPortCatSlice ? (
+                    <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredPortCatSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredPortCatSlice.fill }}>{hoveredPortCatSlice.name} {(hoveredPortCatSlice.percent * 100).toFixed(1)}%</span>{!hideAmounts && <span className="text-[11px] text-gray-300 shrink-0 ml-1">{formatCurrency(hoveredPortCatSlice.value)}</span>}</>
+                  ) : (
+                    <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                  )}
+                </div>
+                <div className="flex-1 min-h-[180px]"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={Object.entries(totals.cats).map(([n, d]) => ({ name: n, value: d.eval })).filter(x => x.value > 0)} innerRadius="40%" outerRadius="70%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredPortCatSlice(data)} onMouseLeave={() => setHoveredPortCatSlice(null)}>{Object.entries(totals.cats).map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}</Pie></PieChart></ResponsiveContainer></div>
+              </div>
+              <div className="flex-1 flex flex-col min-h-0">
+                <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                  {hoveredPortStkSlice ? (
+                    <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredPortStkSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredPortStkSlice.fill }}>{hoveredPortStkSlice.payload?.name ?? hoveredPortStkSlice.name} {(hoveredPortStkSlice.percent * 100).toFixed(1)}%</span>{!hideAmounts && <span className="text-[11px] text-gray-300 shrink-0 ml-1">{formatCurrency(hoveredPortStkSlice.value)}</span>}</>
+                  ) : (
+                    <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                  )}
+                </div>
+                <div className="flex-1 min-h-[180px]"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={totals.stks.filter(x => x.eval > 0)} innerRadius="40%" outerRadius="70%" dataKey="eval" label={PieLabelOutside} onMouseEnter={(data) => setHoveredPortStkSlice(data)} onMouseLeave={() => setHoveredPortStkSlice(null)}>{totals.stks.map((_, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CHART_PALETTE[(i + 3) % 8]} />)}</Pie></PieChart></ResponsiveContainer></div>
+              </div>
+            </div>
           </div>
         </div>
         )}
@@ -4319,7 +4344,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="chart-container-for-drag p-4 flex-1 min-h-[300px] relative select-none">
+            <div className="chart-container-for-drag p-4 flex-1 min-h-[400px] relative select-none">
               {selectionResult && (
                 <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none transition-all">
                   <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(selectionResult.startDate)} ~ {formatShortDate(selectionResult.endDate)}</span>
@@ -4835,13 +4860,19 @@ export default function App() {
                     <div className="py-8 text-center text-gray-500 text-xs">카테고리 데이터가 없습니다.</div>
                   ) : (
                     <>
+                      <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                        {hoveredIntCatSlice ? (
+                          <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredIntCatSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredIntCatSlice.fill }}>{hoveredIntCatSlice.name} {(hoveredIntCatSlice.percent * 100).toFixed(1)}%</span>{!hideAmounts && <span className="text-[11px] text-gray-300 shrink-0 ml-1">{formatCurrency(hoveredIntCatSlice.value)}</span>}</>
+                        ) : (
+                          <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                        )}
+                      </div>
                       <div style={{ height: 240 }}>
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
-                            <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
+                            <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredIntCatSlice(data)} onMouseLeave={() => setHoveredIntCatSlice(null)}>
                               {intCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                             </Pie>
-                            <RechartsTooltip content={<CustomChartTooltip total={intTotals.totalEval} hideAmounts={hideAmounts} />} />
                           </PieChart>
                         </ResponsiveContainer>
                       </div>
@@ -4936,15 +4967,21 @@ export default function App() {
                     let rowNum = 0;
                     return (
                       <>
+                        <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                          {hoveredIntHoldSlice ? (
+                            <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredIntHoldSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredIntHoldSlice.fill }}>{hoveredIntHoldSlice.name} {(hoveredIntHoldSlice.percent * 100).toFixed(1)}%</span>{!hideAmounts && <span className="text-[11px] text-gray-300 shrink-0 ml-1">{formatCurrency(hoveredIntHoldSlice.value)}</span>}</>
+                          ) : (
+                            <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                          )}
+                        </div>
                         <div style={{ height: 240 }}>
                           <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
-                              <Pie data={groupedDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside}>
+                              <Pie data={groupedDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredIntHoldSlice(data)} onMouseLeave={() => setHoveredIntHoldSlice(null)}>
                                 {groupedDonutData.map((entry, i) => (
                                   <Cell key={i} fill={itemColorMap[`${entry.category}::${entry.name}`] || catBaseColorMap[entry.category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />
                                 ))}
                               </Pie>
-                              <RechartsTooltip content={<CustomChartTooltip total={holdingsTotal} hideAmounts={hideAmounts} />} />
                             </PieChart>
                           </ResponsiveContainer>
                         </div>
