@@ -1386,7 +1386,12 @@ export default function App() {
     const calc = portfolio.map(item => {
       let inv = 0, evl = 0;
       if (item.type === 'deposit') { inv = evl = cleanNum(item.depositAmount) * fxRate; }
-      else if (item.type === 'fund') { inv = cleanNum(item.investAmount) * fxRate; evl = cleanNum(item.evalAmount) * fxRate; }
+      else if (item.type === 'fund') {
+        inv = cleanNum(item.investAmount) * fxRate;
+        const qty = cleanNum(item.quantity);
+        const price = cleanNum(item.currentPrice);
+        evl = qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
+      }
       else { inv = cleanNum(item.purchasePrice) * cleanNum(item.quantity) * fxRate; evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate; }
       const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;
       const c = item.category || '미지정';

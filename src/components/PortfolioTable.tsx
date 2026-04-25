@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React from 'react';
+import React, { useState } from 'react';
 import { Trash2, RefreshCw, Plus } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import {
@@ -22,6 +22,11 @@ const RO_FOCUS = 'focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outlin
 const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
+
+  const [fundModal, setFundModal] = useState(null);
+  const [modalAddInvest, setModalAddInvest] = useState('');
+  const [modalEvalAfter, setModalEvalAfter] = useState('');
+
   if (!totals) return null;
 
   const stockItems = portfolio.filter(p => p.type === 'stock');
@@ -44,7 +49,59 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
     return { dRatio, sRatio, totalEval };
   })() : null;
 
+  const modalAddInvestNum = cleanNum(modalAddInvest);
+  const modalEvalAfterNum = cleanNum(modalEvalAfter);
+  const modalAddQty = fundModal && fundModal.currentPrice > 0 && modalEvalAfterNum > 0
+    ? modalEvalAfterNum / fundModal.currentPrice : 0;
+  const modalNewQty = fundModal ? fundModal.currentQty + modalAddQty : 0;
+  const modalNewInvest = fundModal ? fundModal.currentInvest + modalAddInvestNum : 0;
+  const modalAvgPrice = modalNewQty > 0 ? modalNewInvest / modalNewQty : 0;
+
   return (
+    <>
+    {fundModal && (
+      <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center" onClick={() => setFundModal(null)}>
+        <div className="bg-[#1e293b] rounded-xl border border-indigo-600/50 shadow-2xl p-5 w-[360px] max-w-[92vw]" onClick={e => e.stopPropagation()}>
+          <h3 className="text-indigo-300 font-bold text-sm mb-3 flex items-center gap-2">
+            📊 펀드 매수 수량 계산
+            {fundModal.currentQty > 0 && <span className="text-[11px] text-gray-500 font-normal">(추가 적립)</span>}
+          </h3>
+          <div className="text-[12px] text-gray-400 bg-gray-900/60 rounded-lg px-3 py-2.5 mb-3 space-y-1">
+            <div className="flex justify-between"><span>현재 기준가</span><span className="text-indigo-200 font-bold">{formatNumber(fundModal.currentPrice)}원</span></div>
+            {fundModal.currentQty > 0 && <>
+              <div className="flex justify-between"><span>현재 보유수량</span><span className="text-indigo-300">{fundModal.currentQty.toFixed(3)}</span></div>
+              <div className="flex justify-between"><span>현재 투자금액</span><span className="text-blue-300">{formatCurrency(fundModal.currentInvest)}</span></div>
+            </>}
+          </div>
+          <div className="space-y-2.5 mb-3">
+            <div>
+              <label className="text-[11px] text-gray-400 mb-1 block">{fundModal.currentQty > 0 ? '추가' : ''}투자금액</label>
+              <input type="text" className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-blue-200 font-bold text-sm outline-none focus:border-indigo-500 caret-blue-400" value={modalAddInvest} placeholder="예: 1,000,000" onFocus={e => e.target.select()} onChange={e => setModalAddInvest(e.target.value)} autoFocus />
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-400 mb-1 block">매수 후 평가금액 <span className="text-gray-600">(결제 후 계좌에서 확인)</span></label>
+              <input type="text" className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white font-bold text-sm outline-none focus:border-indigo-500 caret-blue-400" value={modalEvalAfter} placeholder="예: 1,005,000" onFocus={e => e.target.select()} onChange={e => setModalEvalAfter(e.target.value)} />
+            </div>
+          </div>
+          {modalNewQty > 0 && (
+            <div className="text-[12px] bg-indigo-950/60 border border-indigo-800/40 rounded-lg px-3 py-2.5 space-y-1.5 mb-3">
+              {modalAddQty > 0 && <div className="flex justify-between"><span className="text-gray-400">추가 수량</span><span className="text-indigo-300 font-bold">+{modalAddQty.toFixed(3)}</span></div>}
+              <div className="flex justify-between border-t border-indigo-800/30 pt-1.5"><span className="text-gray-300 font-bold">총 보유수량</span><span className="text-indigo-200 font-bold">{modalNewQty.toFixed(3)}</span></div>
+              {modalNewInvest > 0 && <div className="flex justify-between"><span className="text-gray-400">총 투자금액</span><span className="text-blue-300 font-bold">{formatCurrency(modalNewInvest)}</span></div>}
+              {modalAvgPrice > 0 && <div className="flex justify-between"><span className="text-gray-400">평균 구매단가</span><span className="text-yellow-300 font-bold">{formatNumber(Math.round(modalAvgPrice))}원</span></div>}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button onClick={() => { setFundModal(null); setModalAddInvest(''); setModalEvalAfter(''); }} className="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">취소</button>
+            <button disabled={modalNewQty <= 0} onClick={() => {
+              onUpdate(fundModal.id, 'quantity', modalNewQty);
+              onUpdate(fundModal.id, 'investAmount', modalNewInvest);
+              setFundModal(null); setModalAddInvest(''); setModalEvalAfter('');
+            }} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-bold transition-colors">적용</button>
+          </div>
+        </div>
+      </div>
+    )}
     <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full">
       <div className="overflow-x-auto w-full">
         <table className="w-full text-right table-fixed min-w-[1200px]">
@@ -134,16 +191,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                       {isRetirement && (
                         <>
                           <div className="w-px bg-gray-600/60 self-stretch" />
-                          <select
-                            className="w-4 shrink-0 bg-transparent outline-none cursor-pointer appearance-none"
-                            style={{ color: 'transparent' }}
-                            value={assetClass}
-                            onChange={e => onUpdate(item.id, 'assetClass', e.target.value)}
-                            onKeyDown={handleRowArrowNav}
-                          >
-                            <option value="D" style={{ background: '#0f172a', color: '#9ca3af' }}>D</option>
-                            <option value="S" style={{ background: '#0f172a', color: '#9ca3af' }}>S</option>
-                          </select>
+                          <span
+                            className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
+                            onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                            title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
+                          >{assetClass}</span>
                         </>
                       )}
                     </div>
@@ -262,10 +314,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const fStatus = stockFetchStatus?.[item.code];
               const isRefreshing = fStatus === 'loading';
               const assetClass = item.assetClass ?? 'S';
-              const computedQty = item.currentPrice > 0 ? item.evalAmount / item.currentPrice : 0;
+              const storedQty = cleanNum(item.quantity);
+              const purchasePriceCalc = storedQty > 0 ? Math.round(cleanNum(item.investAmount) / storedQty) : 0;
               return (
                 <tr key={item.id} className="group bg-indigo-950/30 hover:bg-indigo-900/20 transition-colors border-b border-indigo-800/30">
-                  {/* 구분: FUND 링크 + S/D 선택 */}
+                  {/* 구분: FUND 링크 + S/D 텍스트 토글 */}
                   <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                     <div className="flex flex-row h-full items-stretch">
                       <a href="https://www.funetf.co.kr/" target="_blank" rel="noopener noreferrer"
@@ -273,16 +326,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                         FUND
                       </a>
                       <div className="w-px bg-gray-600/60 self-stretch" />
-                      <select
-                        className="w-4 shrink-0 bg-transparent outline-none cursor-pointer appearance-none"
-                        style={{ color: 'transparent' }}
-                        value={assetClass}
-                        onChange={e => onUpdate(item.id, 'assetClass', e.target.value)}
-                        onKeyDown={handleRowArrowNav}
-                      >
-                        <option value="D" style={{ background: '#0f172a', color: '#9ca3af' }}>D</option>
-                        <option value="S" style={{ background: '#0f172a', color: '#9ca3af' }}>S</option>
-                      </select>
+                      <span
+                        className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
+                        onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                        title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
+                      >{assetClass}</span>
                     </div>
                   </td>
                   {/* 종목명 */}
@@ -315,11 +363,16 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                       <span>{formatNumber(item.currentPrice)}</span>
                     </div>
                   </td>
-                  {/* 구매단가 - 해당없음 */}
-                  <td className="py-3 px-3 border-r border-gray-600 text-center text-gray-600 text-xs">-</td>
-                  {/* 보유수량 - 자동계산 */}
-                  <td className={`${td} text-center text-indigo-300 bg-blue-900/10 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                    {computedQty > 0 ? computedQty.toFixed(3) : '-'}
+                  {/* 구매단가 - 자동계산 (투자금/수량) */}
+                  <td className={`${td} text-right text-gray-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                    {purchasePriceCalc > 0 ? formatNumber(purchasePriceCalc) : <span className="text-gray-600">-</span>}
+                  </td>
+                  {/* 보유수량 - 저장된 값, 미설정시 버튼 유도 */}
+                  <td className={`${td} text-center bg-blue-900/10 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                    {storedQty > 0
+                      ? <span className="text-indigo-300 font-bold">{storedQty.toFixed(3)}</span>
+                      : <span className="text-orange-400 text-[11px] cursor-pointer hover:text-orange-300" onClick={() => { setFundModal({ id: item.id, currentPrice: cleanNum(item.currentPrice), currentQty: 0, currentInvest: 0 }); setModalAddInvest(''); setModalEvalAfter(''); }} title="클릭하여 수량 설정">미설정</span>
+                    }
                   </td>
                   {/* 투자금액 - 직접입력 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
@@ -327,9 +380,9 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   </td>
                   {/* 비중(투자) */}
                   <td className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.investRatio)}</td>
-                  {/* 평가금액 - 직접입력 */}
-                  <td className={`p-0 border-r border-gray-600 bg-yellow-900/20 ${CELL_FOCUS}`}>
-                    <input type="text" data-col="evalAmount" className={`${inp} text-right text-white font-bold px-3 caret-blue-400`} value={formatNumber(item.evalAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'evalAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'evalAmount')} />
+                  {/* 평가금액 - 자동계산 (수량 × 기준가) */}
+                  <td className={`${td} text-white font-bold text-right bg-yellow-900/20 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                    {formatCurrency(item.evalAmount)}
                   </td>
                   {/* 비중(평가) */}
                   <td className={`${td} text-yellow-600 bg-yellow-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.evalRatio)}</td>
@@ -337,7 +390,12 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   <td className={`${td} text-center font-bold ${item.returnRate > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.returnRate)}</td>
                   {/* 차익 */}
                   <td className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.profit)}</td>
-                  <td className="text-center py-2.5"><button onClick={() => onDelete(item.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1"><Trash2 size={14} /></button></td>
+                  <td className="text-center py-2.5">
+                    <div className="flex items-center justify-center gap-0.5">
+                      <button onClick={() => { setFundModal({ id: item.id, currentPrice: cleanNum(item.currentPrice), currentQty: storedQty, currentInvest: cleanNum(item.investAmount) }); setModalAddInvest(''); setModalEvalAfter(''); }} className="text-indigo-500 hover:text-indigo-300 transition-colors p-1" title="매수/적립 수량 계산"><Plus size={13} /></button>
+                      <button onClick={() => onDelete(item.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1"><Trash2 size={13} /></button>
+                    </div>
+                  </td>
                 </tr>
               );
             })}
@@ -408,6 +466,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
         </table>
       </div>
     </div>
+    </>
   );
 };
 
