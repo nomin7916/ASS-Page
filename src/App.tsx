@@ -4368,13 +4368,13 @@ export default function App() {
                       <th className="py-2 px-2 text-center border-r border-gray-700">순서</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">시작일</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700 sticky left-0 z-20 bg-[#0f172a]">계좌</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">총 자산(평가금액)</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">원금 대비 수익율</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">수익율 (CAGR)</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">투자비율</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">투자원금</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">투자비율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">총자산</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">수익율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">CAGR</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">예수금</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">현재 수익율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">수익</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700 min-w-[180px]">비고</th>
                       <th className="py-2 px-2 text-center">삭제</th>
                     </tr>
@@ -4432,6 +4432,25 @@ export default function App() {
                                 <span className="font-bold text-blue-300 select-none">{s.name}</span>
                               )}
                             </td>
+                            {/* 직접입력형: 투자원금 직접 수정 가능 */}
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold">
+                              {isSimple ? (
+                                hideAmounts ? '••••••' : (
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-center text-gray-200 border-b border-dashed border-gray-600 focus:border-green-400"
+                                  value={simpleEditField?.id === s.id && simpleEditField?.field === 'principal'
+                                    ? (s.principal || '')
+                                    : s.principal ? formatCurrency(s.principal) : ''}
+                                  placeholder={s.currentEval ? formatCurrency(s.currentEval) : '₩0'}
+                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'principal'}); e.target.select(); }}
+                                  onBlur={() => setSimpleEditField(null)}
+                                  onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value.replace(/[^0-9]/g, ''))}
+                                />)
+                              ) : (hideAmounts ? '••••••' : formatCurrency(s.principal))}
+                            </td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300">{allocRatio.toFixed(2)}%</td>
                             {/* 직접입력형: 평가금액 직접 수정 가능 */}
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center font-bold text-white">
                               {isSimple ? (
@@ -4451,28 +4470,10 @@ export default function App() {
                             </td>
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-blue-300 font-bold">{formatPercent(s.cagr)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300">{allocRatio.toFixed(2)}%</td>
-                            {/* 직접입력형: 투자원금 직접 수정 가능 */}
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold">
-                              {isSimple ? (
-                                hideAmounts ? '••••••' : (
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-center text-gray-200 border-b border-dashed border-gray-600 focus:border-green-400"
-                                  value={simpleEditField?.id === s.id && simpleEditField?.field === 'principal'
-                                    ? (s.principal || '')
-                                    : s.principal ? formatCurrency(s.principal) : ''}
-                                  placeholder={s.currentEval ? formatCurrency(s.currentEval) : '₩0'}
-                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'principal'}); e.target.select(); }}
-                                  onBlur={() => setSimpleEditField(null)}
-                                  onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value.replace(/[^0-9]/g, ''))}
-                                />)
-                              ) : (hideAmounts ? '••••••' : formatCurrency(s.principal))}
-                            </td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isSimple ? '-' : (hideAmounts ? '••••••' : formatCurrency(s.depositAmount))}</td>
-                            <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                              <span className={`inline-block px-2 py-0.5 rounded font-bold ${s.returnRate > 0 ? 'bg-red-900/40 text-red-300' : s.returnRate < 0 ? 'bg-blue-900/40 text-blue-300' : 'text-gray-500'}`}>{s.returnRate.toFixed(1)}%</span>
+                            {/* 수익 = 총자산 - 투자원금 */}
+                            <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.currentEval - s.principal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                              {hideAmounts ? '••••••' : formatCurrency(s.currentEval - s.principal)}
                             </td>
                             <td className="py-1.5 px-2 border-r border-gray-700">
                               <input
@@ -4516,13 +4517,14 @@ export default function App() {
                       <td className="py-2 px-2 border-r border-gray-700"></td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
                       <td className="py-2 px-3 text-center text-red-400 font-extrabold border-r border-gray-700 sticky left-0 z-[5] bg-[#2d1a1e]">소 계</td>
+                      <td className="py-2 px-3 text-center text-gray-200 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalPrincipal)}</td>
+                      <td className="py-2 px-3 text-center text-gray-300 border-r border-gray-700">100%</td>
                       <td className="py-2 px-3 text-center text-yellow-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalEval)}</td>
                       <td className={`py-2 px-3 text-center font-bold border-r border-gray-700 ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(intTotals.returnRate)}</td>
                       <td className="py-2 px-3 border-r border-gray-700"></td>
-                      <td className="py-2 px-3 text-center text-gray-300 border-r border-gray-700">100%</td>
-                      <td className="py-2 px-3 text-center text-gray-200 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalPrincipal)}</td>
                       <td className="py-2 px-3 text-center text-gray-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalDeposit)}</td>
-                      <td colSpan={4}></td>
+                      <td className={`py-2 px-3 text-center font-bold border-r border-gray-700 ${intTotals.totalEval - intTotals.totalPrincipal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{hideAmounts ? '••••••' : formatCurrency(intTotals.totalEval - intTotals.totalPrincipal)}</td>
+                      <td colSpan={2}></td>
                     </tr>
                   </tfoot>
                 </table>
