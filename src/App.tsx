@@ -465,6 +465,7 @@ export default function App() {
   const [showReturnRate, setShowReturnRate] = useState(true);
   const [showBacktest, setShowBacktest] = useState(false);
   const [isZeroBaseMode, setIsZeroBaseMode] = useState(true);
+  const [hoveredPoint, setHoveredPoint] = useState<{label: string, payload: any[]} | null>(null);
   
   const [showKospi, setShowKospi] = useState(true);
   const [showSp500, setShowSp500] = useState(false);
@@ -2520,8 +2521,12 @@ export default function App() {
   };
 
   const handleChartMouseDown = (e) => { if (e?.activeLabel) { setIsDragging(true); setRefAreaLeft(e.activeLabel); setRefAreaRight(''); setSelectionResult(null); } };
-  const handleChartMouseMove = (e) => { if (isDragging && refAreaLeft && e?.activeLabel) { setRefAreaRight(e.activeLabel); setSelectionResult(calculateSelection(refAreaLeft, e.activeLabel)); } };
+  const handleChartMouseMove = (e) => {
+    if (isDragging && refAreaLeft && e?.activeLabel) { setRefAreaRight(e.activeLabel); setSelectionResult(calculateSelection(refAreaLeft, e.activeLabel)); }
+    if (e?.activeLabel && e?.activePayload?.length) setHoveredPoint({ label: e.activeLabel, payload: e.activePayload });
+  };
   const handleChartMouseUp = () => { setIsDragging(false); if (refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight) setSelectionResult(calculateSelection(refAreaLeft, refAreaRight)); else { setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null); } };
+  const handleChartMouseLeave = () => { handleChartMouseUp(); setHoveredPoint(null); };
   const handleSearchClick = () => { setChartPeriod('custom'); setAppliedRange({ start: dateRange.start, end: dateRange.end }); };
 
 
@@ -4205,6 +4210,56 @@ export default function App() {
               )}
             </div>
 
+            {/* 호버 정보 패널 */}
+            <div className="px-4 py-2 border-t border-gray-700/40 bg-[#0a1628]/60 min-h-[36px] flex items-center gap-3 overflow-x-auto shrink-0">
+              {hoveredPoint ? (
+                <>
+                  <span className="text-gray-400 text-[11px] font-bold shrink-0 mr-1">{formatShortDate(hoveredPoint.label)}</span>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
+                    {hoveredPoint.payload
+                      .filter(entry => entry.dataKey && !String(entry.dataKey).endsWith('Point') && entry.value != null)
+                      .map((entry, i) => {
+                        const dk = entry.dataKey as string;
+                        const rawValue = entry.value;
+                        const value = dk?.endsWith('RateScaled')
+                          ? (entry.payload?.[dk.replace('RateScaled', 'Rate')] ?? rawValue)
+                          : rawValue;
+                        let displayVal: string;
+                        if (entry.name === '총자산') {
+                          displayVal = formatNumber(rawValue);
+                        } else {
+                          const pointKey = CHART_NAME_TO_POINT_KEY[entry.name];
+                          let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
+                          if (pointVal == null && entry.payload) {
+                            if (dk === 'comp1Rate') pointVal = entry.payload.comp1Point;
+                            else if (dk === 'comp2Rate') pointVal = entry.payload.comp2Point;
+                            else if (dk === 'comp3Rate') pointVal = entry.payload.comp3Point;
+                          }
+                          const sign = Number(value) >= 0 ? '+' : '';
+                          const rateStr = `${sign}${Number(value).toFixed(2)}%`;
+                          if (pointVal != null) {
+                            const isComp = ['comp1Rate','comp2Rate','comp3Rate'].includes(dk);
+                            const priceStr = isComp ? Number(pointVal).toLocaleString() : Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                            displayVal = `${rateStr} (${priceStr})`;
+                          } else {
+                            displayVal = rateStr;
+                          }
+                        }
+                        return (
+                          <div key={i} className="flex items-center gap-1.5 shrink-0">
+                            <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
+                            <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
+                            <span className="text-[11px] text-gray-300">{displayVal}</span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </>
+              ) : (
+                <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
+              )}
+            </div>
+
             <div className="chart-container-for-drag p-4 flex-1 min-h-[300px] relative select-none">
               {selectionResult && (
                 <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none transition-all">
@@ -4221,7 +4276,7 @@ export default function App() {
                 </div>
               )}
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseUp}>
+                <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
                   <defs>
                     <filter id="neonGlow">
                       <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
@@ -4250,7 +4305,7 @@ export default function App() {
                   {effectiveShowIndicators.vix && indicatorHistoryMap.vix && <YAxis yAxisId="right-vix" orientation="right" stroke="#ff453a" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={48} domain={['dataMin', 'dataMax']}><Label value="VIX" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff453a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {effectiveShowIndicators.btc && indicatorHistoryMap.btc && <YAxis yAxisId="right-btc" orientation="right" stroke="#f7931a" tick={{ fontSize: 9 }} tickFormatter={v => '$' + Math.round(v).toLocaleString()} width={72} domain={['dataMin', 'dataMax']}><Label value="BTC" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#f7931a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
                   {effectiveShowIndicators.eth && indicatorHistoryMap.eth && <YAxis yAxisId="right-eth" orientation="right" stroke="#627eea" tick={{ fontSize: 9 }} tickFormatter={v => '$' + Math.round(v).toLocaleString()} width={72} domain={['dataMin', 'dataMax']}><Label value="ETH" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#627eea', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-                  <RechartsTooltip content={<MainChartCustomTooltip selectionResult={selectionResult} formatShortDateFn={formatShortDate} formatNumberFn={formatNumber} />} />
+                  <RechartsTooltip content={() => null} />
                   {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
                   {!userFeatures.feature1 && showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#38bdf8" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
