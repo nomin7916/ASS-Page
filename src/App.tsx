@@ -4471,18 +4471,24 @@ export default function App() {
           <div className="overflow-x-auto bg-[#0f172a]">
             <table className="text-right text-[13px]">
               <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold text-center">
-                <tr>
-                  <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600" onClick={() => handleRebalanceSort('category')}>구분{rebalanceSortConfig.key === 'category' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-10 bg-[#1e293b]" onClick={() => handleRebalanceSort('name')}>종목명{rebalanceSortConfig.key === 'name' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[90px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('code')}>코드{rebalanceSortConfig.key === 'code' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curEval')}>평가금{rebalanceSortConfig.key === 'curEval' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('currentPrice')}>현재가{rebalanceSortConfig.key === 'currentPrice' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){rebalanceSortConfig.key === 'targetRatio' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('action')}>수량{rebalanceSortConfig.key === 'action' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('cost')}>실 구매비용{rebalanceSortConfig.key === 'cost' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expEval')}>예상평가금{rebalanceSortConfig.key === 'expEval' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expRatio')}>예상비중{rebalanceSortConfig.key === 'expRatio' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
-                </tr>
+                {(() => {
+                  const sk = rebalanceSortConfig.key, sd = rebalanceSortConfig.direction;
+                  const arr = (k) => <span className={`ml-0.5 text-[9px] ${sk === k ? 'text-gray-300' : 'invisible'}`}>{sk === k && sd === -1 ? '▼' : '▲'}</span>;
+                  return (
+                    <tr>
+                      <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600" onClick={() => handleRebalanceSort('category')}>구분{arr('category')}</th>
+                      <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-10 bg-[#1e293b]" onClick={() => handleRebalanceSort('name')}>종목명{arr('name')}</th>
+                      <th className="py-3 px-3 min-w-[90px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('code')}>코드{arr('code')}</th>
+                      <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curEval')}>평가금{arr('curEval')}</th>
+                      <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('currentPrice')}>현재가{arr('currentPrice')}</th>
+                      <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</th>
+                      <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('action')}>수량{arr('action')}</th>
+                      <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('cost')}>실 구매비용{arr('cost')}</th>
+                      <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expEval')}>예상평가금{arr('expEval')}</th>
+                      <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expRatio')}>예상비중{arr('expRatio')}</th>
+                    </tr>
+                  );
+                })()}
               </thead>
               <tbody>
                 {(() => {
