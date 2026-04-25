@@ -366,7 +366,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {/* 보유수량 - 저장된 값, 미설정시 버튼 유도 */}
                   <td className={`${td} text-center bg-blue-900/10 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                     {storedQty > 0
-                      ? <span className="text-indigo-300 font-bold">{storedQty.toFixed(3)}</span>
+                      ? <span className="text-indigo-300 font-bold">{formatNumber(Math.round(storedQty))}</span>
                       : <span className="text-orange-400 text-[11px] cursor-pointer hover:text-orange-300" onClick={() => { setFundModal({ id: item.id, currentPrice: cleanNum(item.currentPrice), currentQty: 0, currentInvest: 0 }); setModalAddInvest(''); setModalEvalAfter(''); }} title="클릭하여 수량 설정">미설정</span>
                     }
                   </td>
