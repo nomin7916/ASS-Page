@@ -4018,7 +4018,7 @@ export default function App() {
               {/* 사이트 링크 버튼 */}
               <div className="flex items-center gap-1.5">
                 {customLinks.slice(0, 3).map((link, i) => {
-                  const label = extractLinkLabel(link.url);
+                  const label = link.name?.trim() ? link.name.trim().slice(0, 7) : extractLinkLabel(link.url);
                   return (
                     <button key={i} onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')} className={`bg-gray-800 hover:bg-gray-700 text-blue-300 h-[28px] rounded shadow transition border border-gray-600 flex items-center justify-center font-bold tracking-tight ${label ? 'px-2 text-[11px] min-w-[28px]' : 'w-[28px] text-xs'}`} title={link.url || `버튼 ${i + 1} 설정 필요`}>{label ?? (i + 1)}</button>
                   );
@@ -4028,9 +4028,15 @@ export default function App() {
               {isLinkSettingsOpen && (
                 <div className="flex flex-wrap gap-3 pb-1 border-b border-gray-700/50">
                   {customLinks.slice(0, 3).map((l, i) => (
-                    <div key={i} className="flex flex-col gap-1 flex-1 min-w-[160px] max-w-[240px]">
-                      <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 연결 (URL)</span>
-                      <input type="text" className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-500 shadow-inner font-normal" value={l.url} onChange={(e) => { const n = [...customLinks]; n[i].url = e.target.value; setCustomLinks(n); }} placeholder="https://..." />
+                    <div key={i} className="flex flex-col gap-1.5 flex-1 min-w-[160px] max-w-[240px]">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 이름 <span className="text-gray-600 font-normal">(직접 입력, 최대 7자)</span></span>
+                        <input type="text" maxLength={7} className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-400 shadow-inner font-normal" value={l.name || ''} onChange={(e) => { const n = [...customLinks]; n[i] = { ...n[i], name: e.target.value }; setCustomLinks(n); }} placeholder="비워두면 URL에서 자동 추출" />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 연결 (URL)</span>
+                        <input type="text" className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-500 shadow-inner font-normal" value={l.url} onChange={(e) => { const n = [...customLinks]; n[i] = { ...n[i], url: e.target.value }; setCustomLinks(n); }} placeholder="https://..." />
+                      </div>
                     </div>
                   ))}
                   <button onClick={() => setIsLinkSettingsOpen(false)} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded text-xs font-bold shadow transition">완료</button>
