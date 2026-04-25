@@ -4344,7 +4344,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="chart-container-for-drag p-4 flex-1 min-h-[400px] relative select-none">
+            <div className="chart-container-for-drag p-4 flex-1 min-h-[400px] relative select-none" style={{ height: 1 }}>
               {selectionResult && (
                 <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none transition-all">
                   <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(selectionResult.startDate)} ~ {formatShortDate(selectionResult.endDate)}</span>
@@ -4867,7 +4867,7 @@ export default function App() {
                           <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
                         )}
                       </div>
-                      <div style={{ height: 240 }}>
+                      <div style={{ height: 480 }}>
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
                             <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredIntCatSlice(data)} onMouseLeave={() => setHoveredIntCatSlice(null)}>
@@ -4974,7 +4974,7 @@ export default function App() {
                             <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
                           )}
                         </div>
-                        <div style={{ height: 240 }}>
+                        <div style={{ height: 480 }}>
                           <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
                               <Pie data={groupedDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredIntHoldSlice(data)} onMouseLeave={() => setHoveredIntHoldSlice(null)}>
