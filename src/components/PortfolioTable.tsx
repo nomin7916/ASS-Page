@@ -72,10 +72,10 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                 <tr key={item.id} className="group hover:bg-gray-800/40 transition-colors border-b border-gray-700">
                   {/* 구분 */}
                   <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
-                    <div className="flex flex-col">
+                    <div className="flex flex-row h-full">
                       <input
                         list={`cat-list-${item.id}`}
-                        className={`w-full bg-transparent text-center text-xs outline-none font-bold cursor-pointer px-1 ${isRetirement ? 'pt-2 pb-1' : 'py-3'} ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'} caret-transparent`}
+                        className={`${isRetirement ? 'flex-1 min-w-0' : 'w-full'} bg-transparent text-center text-xs outline-none font-bold cursor-pointer px-1 py-3 ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'} caret-transparent`}
                         value={item.category}
                         onFocus={e => e.target.select()}
                         onChange={e => {
@@ -129,15 +129,18 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                         }}
                       />
                       {isRetirement && (
-                        <select
-                          className={`w-full text-center text-[11px] font-bold bg-transparent outline-none cursor-pointer border-t border-gray-700/60 pb-2 pt-0.5 ${assetClass === 'D' ? 'text-red-400' : 'text-emerald-400'}`}
-                          value={assetClass}
-                          onChange={e => onUpdate(item.id, 'assetClass', e.target.value)}
-                          onKeyDown={handleRowArrowNav}
-                        >
-                          <option value="D" style={{ color: '#f87171', background: '#0f172a' }}>▲ D 위험</option>
-                          <option value="S" style={{ color: '#34d399', background: '#0f172a' }}>▼ S 안전</option>
-                        </select>
+                        <>
+                          <div className="w-px bg-gray-600/60 self-stretch" />
+                          <select
+                            className="w-7 shrink-0 text-center text-[11px] font-bold bg-transparent outline-none cursor-pointer text-gray-500"
+                            value={assetClass}
+                            onChange={e => onUpdate(item.id, 'assetClass', e.target.value)}
+                            onKeyDown={handleRowArrowNav}
+                          >
+                            <option value="D" style={{ background: '#0f172a' }}>D</option>
+                            <option value="S" style={{ background: '#0f172a' }}>S</option>
+                          </select>
+                        </>
                       )}
                     </div>
                     <datalist id={`cat-list-${item.id}`}>
