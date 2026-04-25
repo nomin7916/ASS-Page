@@ -13,10 +13,31 @@ const formatUSD = (n) => {
   return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1 }) => {
+const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
+const getAssetClass = (cat) => SAFE_CATEGORIES.includes(cat) ? 'S' : 'D';
+
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
   if (!totals) return null;
+
+  const stockItems = portfolio.filter(p => p.type === 'stock');
+  const depositItems = portfolio.filter(p => p.type === 'deposit');
+
+  const retirementStats = isRetirement ? (() => {
+    const dangerEval = stockItems
+      .filter(p => (p.assetClass ?? getAssetClass(p.category)) === 'D')
+      .reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
+    const safeStockEval = stockItems
+      .filter(p => (p.assetClass ?? getAssetClass(p.category)) === 'S')
+      .reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
+    const depositEval = depositItems.reduce((sum, p) => sum + (cleanNum(p.evalAmount) || cleanNum(p.depositAmount) || 0), 0);
+    const totalEval = dangerEval + safeStockEval + depositEval;
+    const dRatio = totalEval > 0 ? dangerEval / totalEval * 100 : 0;
+    const sRatio = totalEval > 0 ? (safeStockEval + depositEval) / totalEval * 100 : 0;
+    return { dRatio, sRatio, totalEval };
+  })() : null;
+
   return (
     <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full">
       <div className="overflow-x-auto w-full">
@@ -40,53 +61,78 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             </tr>
           </thead>
           <tbody>
-            {portfolio.filter(p => p.type === 'stock').map((item) => {
+            {stockItems.map((item) => {
               const fStatus = stockFetchStatus?.[item.code];
               const isRefreshing = fStatus === 'loading';
+              const assetClass = item.assetClass ?? getAssetClass(item.category);
               return (
                 <tr key={item.id} className="group hover:bg-gray-800/40 transition-colors border-b border-gray-700">
                   <td className="p-0 border-r border-gray-600">
-                    <input
-                      list={`cat-list-${item.id}`}
-                      className={`w-full h-full bg-transparent text-center text-xs outline-none font-bold cursor-pointer py-3 px-1 ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'}`}
-                      value={item.category}
-                      onChange={e => {
-                        const val = e.target.value;
-                        const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
-                        const match = validCats.find(c => c === val);
-                        onUpdate(item.id, 'category', match || val);
-                      }}
-                      onPaste={e => {
-                        e.preventDefault();
-                        const text = e.clipboardData.getData('text');
-                        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-                        const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
-                        const normalize = s => s.replace(/\s/g, '').replace('α', 'a').replace('A', 'a');
-                        const matchCat = s => validCats.find(c => normalize(c) === normalize(s)) || validCats.find(c => normalize(s).includes(normalize(c)));
-                        if (lines.length <= 1) {
-                          const match = matchCat(lines[0] || '');
-                          if (match) onUpdate(item.id, 'category', match);
-                        } else {
-                          const stockItems = portfolio.filter(p => p.type === 'stock');
-                          const startIdx = stockItems.findIndex(p => p.id === item.id);
-                          lines.forEach((line, i) => {
-                            const target = stockItems[startIdx + i];
-                            if (!target) return;
-                            const match = matchCat(line);
-                            if (match) onUpdate(target.id, 'category', match);
-                          });
-                        }
-                      }}
-                      onBlur={e => {
-                        const val = e.target.value;
-                        const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
-                        if (!validCats.includes(val)) {
-                          const normalize = s => s.replace(/\s/g, '').toLowerCase().replace('α', 'a');
-                          const match = validCats.find(c => normalize(c) === normalize(val));
-                          if (match) onUpdate(item.id, 'category', match);
-                        }
-                      }}
-                    />
+                    <div className="flex flex-col">
+                      <input
+                        list={`cat-list-${item.id}`}
+                        className={`w-full bg-transparent text-center text-xs outline-none font-bold cursor-pointer px-1 ${isRetirement ? 'pt-2 pb-1' : 'py-3'} ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'}`}
+                        value={item.category}
+                        onChange={e => {
+                          const val = e.target.value;
+                          const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
+                          const match = validCats.find(c => c === val);
+                          onUpdate(item.id, 'category', match || val);
+                          if (isRetirement && match) onUpdate(item.id, 'assetClass', getAssetClass(match));
+                        }}
+                        onPaste={e => {
+                          e.preventDefault();
+                          const text = e.clipboardData.getData('text');
+                          const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+                          const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
+                          const normalize = s => s.replace(/\s/g, '').replace('α', 'a').replace('A', 'a');
+                          const matchCat = s => validCats.find(c => normalize(c) === normalize(s)) || validCats.find(c => normalize(s).includes(normalize(c)));
+                          if (lines.length <= 1) {
+                            const match = matchCat(lines[0] || '');
+                            if (match) {
+                              onUpdate(item.id, 'category', match);
+                              if (isRetirement) onUpdate(item.id, 'assetClass', getAssetClass(match));
+                            }
+                          } else {
+                            const allStockItems = portfolio.filter(p => p.type === 'stock');
+                            const startIdx = allStockItems.findIndex(p => p.id === item.id);
+                            lines.forEach((line, i) => {
+                              const target = allStockItems[startIdx + i];
+                              if (!target) return;
+                              const match = matchCat(line);
+                              if (match) {
+                                onUpdate(target.id, 'category', match);
+                                if (isRetirement) onUpdate(target.id, 'assetClass', getAssetClass(match));
+                              }
+                            });
+                          }
+                        }}
+                        onBlur={e => {
+                          const val = e.target.value;
+                          const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
+                          if (!validCats.includes(val)) {
+                            const normalize = s => s.replace(/\s/g, '').toLowerCase().replace('α', 'a');
+                            const match = validCats.find(c => normalize(c) === normalize(val));
+                            if (match) {
+                              onUpdate(item.id, 'category', match);
+                              if (isRetirement) onUpdate(item.id, 'assetClass', getAssetClass(match));
+                            }
+                          } else if (isRetirement) {
+                            onUpdate(item.id, 'assetClass', getAssetClass(val));
+                          }
+                        }}
+                      />
+                      {isRetirement && (
+                        <select
+                          className={`w-full text-center text-[11px] font-bold bg-transparent outline-none cursor-pointer border-t border-gray-700/60 pb-2 pt-0.5 ${assetClass === 'D' ? 'text-red-400' : 'text-emerald-400'}`}
+                          value={assetClass}
+                          onChange={e => onUpdate(item.id, 'assetClass', e.target.value)}
+                        >
+                          <option value="D" style={{ color: '#f87171', background: '#0f172a' }}>▲ D 위험</option>
+                          <option value="S" style={{ color: '#34d399', background: '#0f172a' }}>▼ S 안전</option>
+                        </select>
+                      )}
+                    </div>
                     <datalist id={`cat-list-${item.id}`}>
                       {Object.keys(UI_CONFIG.COLORS.CATEGORIES).map(c => <option key={c} value={c} />)}
                     </datalist>
@@ -147,6 +193,48 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             ))}
           </tbody>
           <tfoot className="bg-[#1e293b] font-bold border-t-2 border-gray-500">
+            {isRetirement && retirementStats && (
+              <tr className="border-b border-amber-600/30 bg-amber-950/20">
+                <td colSpan={14} className="py-2.5 px-4">
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <span className="text-amber-400 font-bold text-xs tracking-wide">퇴직연금 자산 비율</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-red-400 font-bold text-xs">위험 D</span>
+                      <span className={`font-bold text-sm ${Math.abs(retirementStats.dRatio - 70) <= 5 ? 'text-red-400' : 'text-red-300'}`}>
+                        {retirementStats.dRatio.toFixed(1)}%
+                      </span>
+                      <span className="text-gray-600 text-[11px]">(목표 70%)</span>
+                      {Math.abs(retirementStats.dRatio - 70) > 5 && (
+                        <span className="text-orange-400 text-[11px]">
+                          {retirementStats.dRatio > 70 ? `+${(retirementStats.dRatio - 70).toFixed(1)}%` : `${(retirementStats.dRatio - 70).toFixed(1)}%`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-emerald-400 font-bold text-xs">안전 S</span>
+                      <span className={`font-bold text-sm ${Math.abs(retirementStats.sRatio - 30) <= 5 ? 'text-emerald-400' : 'text-emerald-300'}`}>
+                        {retirementStats.sRatio.toFixed(1)}%
+                      </span>
+                      <span className="text-gray-600 text-[11px]">(목표 30%)</span>
+                    </div>
+                    <div className="flex-1 flex items-center gap-1 min-w-[120px]">
+                      <div className="flex-1 h-2.5 bg-gray-700 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(retirementStats.dRatio, 100)}%`,
+                            background: Math.abs(retirementStats.dRatio - 70) <= 5
+                              ? 'linear-gradient(90deg, #ef4444 0%, #f97316 100%)'
+                              : 'linear-gradient(90deg, #dc2626 0%, #ea580c 100%)',
+                          }}
+                        />
+                      </div>
+                      <span className="text-[10px] text-gray-500 shrink-0">D70/S30</span>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            )}
             <tr>
               <td colSpan={7} className="py-3 text-center border-r border-gray-600 uppercase tracking-widest text-gray-500">Total Calculation</td>
               <td className="py-3 px-2 text-blue-200 bg-blue-900/10 border-r border-gray-600">{formatCurrency(totals.totalInvest)}</td>

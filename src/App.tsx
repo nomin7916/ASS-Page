@@ -1788,9 +1788,9 @@ export default function App() {
   const handleRebalanceSort = (key) => setRebalanceSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort = (key) => setDepositSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort2 = (key) => setDepositSortConfig2(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
-  const handleUpdate = (id, field, value) => setPortfolio(prev => prev.map(p => p.id === id ? { ...p, [field]: ['category', 'name', 'code'].includes(field) ? value : cleanNum(value) } : p));
+  const handleUpdate = (id, field, value) => setPortfolio(prev => prev.map(p => p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass'].includes(field) ? value : cleanNum(value) } : p));
   const handleDeleteStock = (id) => setPortfolio(prev => prev.filter(p => p.id !== id));
-  const handleAddStock = () => setPortfolio([{ id: generateId(), type: 'stock', category: "주식", code: "", name: "", currentPrice: 0, changeRate: 0, purchasePrice: 0, quantity: 0, targetRatio: 0, isManual: true }, ...portfolio]);
+  const handleAddStock = () => setPortfolio([{ id: generateId(), type: 'stock', category: "주식", assetClass: 'D', code: "", name: "", currentPrice: 0, changeRate: 0, purchasePrice: 0, quantity: 0, targetRatio: 0, isManual: true }, ...portfolio]);
   const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
 
   const handleStockBlur = async (id, code) => {
@@ -3644,7 +3644,7 @@ export default function App() {
             isRefreshing={indicatorLoading}
           />
         ) : (
-          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} />
+          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
         )}
 
         {activePortfolioAccountType !== 'gold' && (
