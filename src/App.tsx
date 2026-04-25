@@ -3,7 +3,8 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Settings, RefreshCw, Save, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
-  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload, LogOut, Link2
+  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload, LogOut, Link2,
+  BarChart2, Percent, RotateCcw
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -4114,18 +4115,45 @@ export default function App() {
                 </div>
               </div>
               <div className="flex justify-between items-center pt-2 border-t border-gray-700/50">
-                <div className="flex items-center gap-1.5">
-                  <button onClick={() => setShowTotalEval(!showTotalEval)} className={`px-2 py-1.5 rounded-md text-[13px] transition-all ${showTotalEval ? 'bg-gray-700 shadow-inner border border-gray-500' : 'bg-transparent border border-gray-700 opacity-40 hover:opacity-70 hover:bg-gray-800'}`} title="자산 총액 표시">💰</button>
-                  <button onClick={() => setShowReturnRate(!showReturnRate)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 ${showReturnRate ? 'bg-red-900/50 text-red-400 border border-red-500/50' : 'bg-transparent text-gray-500 border border-transparent hover:bg-gray-800'}`}><div className={`w-2 h-2 rounded-sm ${showReturnRate ? 'bg-red-500 shadow-[0_0_4px_#ef4444]' : 'bg-gray-600'}`}></div>%</button>
-                  <div className={`flex items-center rounded-md overflow-hidden border transition-all ${showBacktest ? 'shadow-sm' : 'border-gray-700'}`} style={{ borderColor: showBacktest ? backtestColor + '90' : undefined }}>
-                    <button onClick={() => setShowBacktest(!showBacktest)} className={`px-2 py-1.5 text-[13px] transition-all ${showBacktest ? '' : 'opacity-40 hover:opacity-70'}`} style={{ backgroundColor: showBacktest ? backtestColor + '22' : 'transparent' }} title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률">🔬</button>
-                    <div className="relative self-stretch flex items-center px-1 border-l border-gray-700/40" style={{ backgroundColor: showBacktest ? backtestColor + '11' : 'transparent' }}>
-                      <div className="w-3 h-3 rounded-sm pointer-events-none" style={{ backgroundColor: backtestColor }} />
+                <div className="flex items-center gap-1">
+                  {/* 자산 총액 */}
+                  <button
+                    onClick={() => setShowTotalEval(!showTotalEval)}
+                    className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showTotalEval ? 'text-gray-300 bg-gray-800 border-gray-600' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
+                    title="자산 총액 표시"
+                  ><BarChart2 size={14} /></button>
+                  {/* 수익률 % */}
+                  <button
+                    onClick={() => setShowReturnRate(!showReturnRate)}
+                    className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
+                    title="수익률(%) 표시"
+                  ><Percent size={14} /></button>
+                  {/* 백테스트 + 색상 */}
+                  <div
+                    className={`flex items-center rounded border overflow-hidden transition-colors ${showBacktest ? '' : 'border-transparent hover:border-gray-700'}`}
+                    style={{ borderColor: showBacktest ? backtestColor + '60' : undefined }}
+                  >
+                    <button
+                      onClick={() => setShowBacktest(!showBacktest)}
+                      className={`p-1.5 flex items-center justify-center transition-colors ${showBacktest ? '' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'}`}
+                      style={{ color: showBacktest ? backtestColor : undefined, backgroundColor: showBacktest ? backtestColor + '18' : undefined }}
+                      title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률 (백테스트)"
+                    ><RotateCcw size={14} /></button>
+                    <div
+                      className="relative self-stretch flex items-center justify-center px-1 border-l transition-colors"
+                      style={{ borderColor: showBacktest ? backtestColor + '40' : '#374151', backgroundColor: showBacktest ? backtestColor + '10' : undefined }}
+                    >
+                      <div className="w-2.5 h-2.5 rounded-sm pointer-events-none" style={{ backgroundColor: backtestColor }} />
                       <input type="color" value={backtestColor} onChange={e => setBacktestColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" title="백테스트 선 색상 변경" />
                     </div>
                   </div>
-                  <div className="w-[1px] h-3 bg-gray-600 mx-1"></div>
-                  <button onClick={() => setIsZeroBaseMode(!isZeroBaseMode)} className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${isZeroBaseMode ? 'bg-green-900/50 text-green-400 border border-green-500/50 shadow-inner' : 'bg-transparent text-gray-500 hover:bg-gray-800 border border-gray-700'}`} title="조회 시작일을 0% 기준으로 차트 재정렬"><Activity size={14} className={isZeroBaseMode ? 'text-green-400' : 'text-gray-500'} /></button>
+                  <div className="w-px h-3 bg-gray-700 mx-0.5" />
+                  {/* 기준점 모드 */}
+                  <button
+                    onClick={() => setIsZeroBaseMode(!isZeroBaseMode)}
+                    className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isZeroBaseMode ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
+                    title="조회 시작일을 0% 기준으로 차트 재정렬"
+                  ><Activity size={14} /></button>
                 </div>
                 {/* 지표 배율 설정 버튼 */}
                 <button
