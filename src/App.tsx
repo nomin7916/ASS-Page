@@ -1614,11 +1614,26 @@ export default function App() {
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
       return { ...item, curEval, action, cost, expEval, expRatio };
     });
-    if (rebalanceSortConfig.key) {
+    if (rebalanceSortConfig.key && rebalanceSortConfig.key !== 'category') {
+      const catOrder: string[] = [];
+      const grouped: Record<string, typeof data> = {};
+      data.forEach(item => {
+        const cat = (item.category as string) || '기타';
+        if (!grouped[cat]) { grouped[cat] = []; catOrder.push(cat); }
+        grouped[cat].push(item);
+      });
+      Object.values(grouped).forEach(items => {
+        items.sort((a, b) => {
+          const vA = a[rebalanceSortConfig.key], vB = b[rebalanceSortConfig.key];
+          if (typeof vA === 'string') return vA.localeCompare(vB) * rebalanceSortConfig.direction;
+          return (vA - vB) * rebalanceSortConfig.direction;
+        });
+      });
+      data = catOrder.flatMap(cat => grouped[cat]);
+    } else if (rebalanceSortConfig.key === 'category') {
       data.sort((a, b) => {
-        let vA = a[rebalanceSortConfig.key], vB = b[rebalanceSortConfig.key];
-        if (typeof vA === 'string') return vA.localeCompare(vB) * rebalanceSortConfig.direction;
-        return (vA - vB) * rebalanceSortConfig.direction;
+        const catA = (a.category as string) || '기타', catB = (b.category as string) || '기타';
+        return catA.localeCompare(catB) * rebalanceSortConfig.direction;
       });
     }
     return data;
@@ -4457,31 +4472,52 @@ export default function App() {
             <table className="text-right text-[13px]">
               <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold text-center">
                 <tr>
-                  <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-10 bg-[#1e293b]" onClick={() => handleRebalanceSort('name')}>종목명</th>
-                  <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curEval')}>평가금</th>
-                  <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('currentPrice')}>현재가</th>
-                  <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%)</th>
-                  <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('action')}>수량</th>
-                  <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('cost')}>실 구매비용</th>
-                  <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expEval')}>예상평가금</th>
-                  <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expRatio')}>예상비중</th>
+                  <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600" onClick={() => handleRebalanceSort('category')}>구분{rebalanceSortConfig.key === 'category' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-10 bg-[#1e293b]" onClick={() => handleRebalanceSort('name')}>종목명{rebalanceSortConfig.key === 'name' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[90px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('code')}>코드{rebalanceSortConfig.key === 'code' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curEval')}>평가금{rebalanceSortConfig.key === 'curEval' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('currentPrice')}>현재가{rebalanceSortConfig.key === 'currentPrice' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){rebalanceSortConfig.key === 'targetRatio' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('action')}>수량{rebalanceSortConfig.key === 'action' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('cost')}>실 구매비용{rebalanceSortConfig.key === 'cost' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expEval')}>예상평가금{rebalanceSortConfig.key === 'expEval' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
+                  <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expRatio')}>예상비중{rebalanceSortConfig.key === 'expRatio' ? (rebalanceSortConfig.direction === 1 ? ' ▲' : ' ▼') : ''}</th>
                 </tr>
               </thead>
               <tbody>
-                {rebalanceData.map(item => (
-                  <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
-                    <td className="py-3 px-4 text-center text-gray-300 font-bold sticky left-0 z-10 bg-[#0f172a] group-hover:bg-gray-800 transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.name}</td>
-                    <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.curEval)}</td>
-                    <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(item.currentPrice)}</td>
-                    <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                      <input type="text" data-col="targetRatio" className="w-full h-full bg-transparent text-center text-green-400 font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400" value={item.targetRatio || 0} onChange={e => handleUpdate(item.id, 'targetRatio', e.target.value)} onFocus={e => e.target.select()} onKeyDown={e => handleTableKeyDown(e, 'targetRatio')} />
-                    </td>
-                    <td className="py-3 px-3 text-center font-bold text-blue-300 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(item.action > 0 ? '+' : '') + item.action}</td>
-                    <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${item.cost > 0 ? 'text-red-400' : item.cost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.cost)}</td>
-                    <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.expEval)}</td>
-                    <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(1)}%</td>
-                  </tr>
-                ))}
+                {(() => {
+                  const catOrder: string[] = [];
+                  const grouped: Record<string, typeof rebalanceData> = {};
+                  rebalanceData.forEach(item => {
+                    const cat = (item.category as string) || '기타';
+                    if (!grouped[cat]) { grouped[cat] = []; catOrder.push(cat); }
+                    grouped[cat].push(item);
+                  });
+                  return catOrder.flatMap(cat => {
+                    const items = grouped[cat];
+                    const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                    return items.map((item, j) => (
+                      <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
+                        {j === 0 && (
+                          <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a]" style={{ color: catColor }}>
+                            {cat}
+                          </td>
+                        )}
+                        <td className="py-3 px-4 text-center text-gray-300 font-bold sticky left-0 z-10 bg-[#0f172a] group-hover:bg-gray-800 transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.name}</td>
+                        <td className="py-3 px-3 text-center text-gray-500 font-mono text-xs focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.code}</td>
+                        <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.curEval)}</td>
+                        <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(item.currentPrice)}</td>
+                        <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
+                          <input type="text" data-col="targetRatio" className="w-full h-full bg-transparent text-center text-green-400 font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400" value={item.targetRatio || 0} onChange={e => handleUpdate(item.id, 'targetRatio', e.target.value)} onFocus={e => e.target.select()} onKeyDown={e => handleTableKeyDown(e, 'targetRatio')} />
+                        </td>
+                        <td className="py-3 px-3 text-center font-bold text-blue-300 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(item.action > 0 ? '+' : '') + item.action}</td>
+                        <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${item.cost > 0 ? 'text-red-400' : item.cost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.cost)}</td>
+                        <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.expEval)}</td>
+                        <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(1)}%</td>
+                      </tr>
+                    ));
+                  });
+                })()}
               </tbody>
             </table>
           </div>
