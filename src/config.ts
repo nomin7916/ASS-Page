@@ -16,6 +16,7 @@ export const UI_CONFIG = {
       '리츠': '#FB923C',
       '배당주식': '#F472B6',
       '예수금': '#9CA3AF',
+      'FUND': '#818CF8',
       '미지정': '#64748B',
     } as Record<string, string>,
   },

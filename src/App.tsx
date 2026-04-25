@@ -1394,7 +1394,7 @@ export default function App() {
       }
       else { inv = cleanNum(item.purchasePrice) * cleanNum(item.quantity) * fxRate; evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate; }
       const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;
-      const c = item.category || '미지정';
+      const c = item.type === 'deposit' ? '예수금' : (item.category || '미지정');
       if (!cats[c]) cats[c] = { invest: 0, eval: 0, profit: 0 };
       cats[c].invest += inv; cats[c].eval += evl; cats[c].profit += prf;
       if (item.type === 'stock') stks.push({ name: item.name, eval: evl });
@@ -1595,6 +1595,12 @@ export default function App() {
           const v = cleanNum(item.depositAmount) * summaryFxRate;
           totalEval += v; depositAmt += v;
           cats['예수금'] = (cats['예수금'] || 0) + v;
+        } else if (item.type === 'fund') {
+          const qty = cleanNum(item.quantity);
+          const price = cleanNum(item.currentPrice);
+          const evl = qty > 0 && price > 0 ? qty * price * summaryFxRate : cleanNum(item.evalAmount) * summaryFxRate;
+          totalEval += evl;
+          cats['FUND'] = (cats['FUND'] || 0) + evl;
         } else {
           const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * summaryFxRate;
           totalEval += evl;
@@ -1675,7 +1681,7 @@ export default function App() {
   }, [intHistory]);
 
   const intCatDonutData = useMemo(() => {
-    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금'];
+    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
     return Object.entries(intTotals.cats)
       .map(([name, value]) => ({ name, value }))
       .filter(x => x.value > 0)
@@ -1705,6 +1711,16 @@ export default function App() {
           if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금' };
           holdingsMap[key].value += v;
           holdingsMap[key].cost += v;
+        } else if (item.type === 'fund') {
+          const qty = cleanNum(item.quantity);
+          const price = cleanNum(item.currentPrice);
+          const evl = qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
+          if (evl <= 0) return;
+          const cost = cleanNum(item.investAmount) * fxRate;
+          const key = item.name || item.code || 'FUND';
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: 'FUND' };
+          holdingsMap[key].value += evl;
+          holdingsMap[key].cost += cost;
         } else {
           const qty = cleanNum(item.quantity);
           const evl = cleanNum(item.currentPrice) * qty * fxRate;

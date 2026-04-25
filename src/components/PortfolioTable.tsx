@@ -134,7 +134,6 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                     <div className="flex flex-row h-full">
                       <input
-                        list={`cat-list-${item.id}`}
                         className={`${isRetirement ? 'flex-1 min-w-0' : 'w-full'} bg-transparent text-center text-xs outline-none font-bold cursor-pointer px-1 py-3 ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'} caret-transparent`}
                         value={item.category}
                         onFocus={e => e.target.select()}
@@ -192,16 +191,13 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                         <>
                           <div className="w-px bg-gray-600/60 self-stretch" />
                           <span
-                            className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
+                            className="w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none text-gray-500 hover:text-gray-400 transition-colors"
                             onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
                             title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
                           >{assetClass}</span>
                         </>
                       )}
                     </div>
-                    <datalist id={`cat-list-${item.id}`}>
-                      {Object.keys(UI_CONFIG.COLORS.CATEGORIES).map(c => <option key={c} value={c} />)}
-                    </datalist>
                   </td>
 
                   {/* 종목명 */}
