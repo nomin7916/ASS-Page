@@ -1670,14 +1670,16 @@ export default function App() {
 
   const rebalCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
-    const catMap: Record<string, number> = {};
+    const catMap: Record<string, { value: number; ratio: number }> = {};
     rebalanceData.forEach(item => {
       const cat = (item.category as string) || '기타';
-      catMap[cat] = (catMap[cat] || 0) + item.expEval;
+      if (!catMap[cat]) catMap[cat] = { value: 0, ratio: 0 };
+      catMap[cat].value += item.expEval;
+      catMap[cat].ratio += item.expRatio;
     });
     return Object.entries(catMap)
-      .map(([name, value]) => ({ name, value }))
-      .filter(x => x.value > 0)
+      .map(([name, { value, ratio }]) => ({ name, value, ratio }))
+      .filter(x => x.value > 0 && x.ratio >= 0.05)
       .sort((a, b) => {
         const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
         if (ia !== -1 && ib !== -1) return ia - ib;
