@@ -1905,17 +1905,26 @@ export default function App() {
   });
   const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
 
+  const extractFundCode = (input: string): string => {
+    const m = input.match(/funetf\.co\.kr\/product\/fund\/view\/([A-Za-z0-9]+)/);
+    return m ? m[1] : input.trim();
+  };
+
   const handleStockBlur = async (id, code) => {
     const item = portfolio.find(p => p.id === id);
     if (item?.type === 'fund') {
       if (!code || code.trim().length < 8) return;
-      setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
-      const d = await fetchFundInfo(code);
+      const fundCode = extractFundCode(code);
+      if (fundCode !== code.trim()) {
+        setPortfolio(prev => prev.map(p => p.id === id ? { ...p, code: fundCode } : p));
+      }
+      setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'loading' }));
+      const d = await fetchFundInfo(fundCode);
       if (d) {
         setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
-        setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
+        setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
       } else {
-        setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
+        setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'fail' }));
       }
       return;
     }
@@ -1937,14 +1946,18 @@ export default function App() {
     const item = portfolio.find(p => p.id === id);
     if (item?.type === 'fund') {
       if (!code || code.trim().length < 8) return;
-      setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
-      const d = await fetchFundInfo(code);
+      const fundCode = extractFundCode(code);
+      if (fundCode !== code.trim()) {
+        setPortfolio(prev => prev.map(p => p.id === id ? { ...p, code: fundCode } : p));
+      }
+      setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'loading' }));
+      const d = await fetchFundInfo(fundCode);
       if (d) {
         setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
-        setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
+        setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
       } else {
-        setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
-        showToast(`${code} 기준가 갱신 실패`, true);
+        setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'fail' }));
+        showToast(`${fundCode} 기준가 갱신 실패`, true);
       }
       return;
     }
