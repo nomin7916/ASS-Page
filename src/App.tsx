@@ -4820,7 +4820,26 @@ export default function App() {
                       <th className="py-3 px-3 min-w-[90px] text-gray-500 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('code')}>코드{arr('code')}</th>
                       <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('curEval')}>평가금{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('currentPrice')}>현재가{arr('currentPrice')}</th>
-                      <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</th>
+                      <th className="py-2 px-3 min-w-[100px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b]">
+                        <div className="flex flex-col items-center gap-1">
+                          <button
+                            onClick={e => {
+                              e.stopPropagation();
+                              if (totals.totalEval <= 0) return;
+                              setPortfolio(prev => prev.map(p => {
+                                if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                const qty = cleanNum(p.quantity);
+                                const price = cleanNum(p.currentPrice);
+                                const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
+                                return { ...p, targetRatio: parseFloat((curEval / totals.totalEval * 100).toFixed(1)) };
+                              }));
+                            }}
+                            className="px-2 py-0.5 text-[10px] font-bold rounded-md border border-green-500/70 text-green-300 bg-green-900/20 hover:bg-green-700/50 hover:border-green-400 active:scale-95 transition-all whitespace-nowrap"
+                            title="현재 비중을 목표 비중으로 일괄 설정"
+                          >현재→목표</button>
+                          <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</span>
+                        </div>
+                      </th>
                       <th className="py-3 px-3 min-w-[80px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('curEval')}>현재비중{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('action')}>수량{arr('action')}</th>
                       <th className="py-3 px-3 min-w-[65px] text-orange-300 text-center sticky top-0 z-20 bg-[#1e293b]">추가</th>
