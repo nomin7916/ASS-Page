@@ -1476,7 +1476,7 @@ export default function App() {
     const map = {};
     if (unifiedDates.length === 0) return map;
     let baseK = null, baseS = null, baseN = null;
-    let baseComps = [null, null, null];
+    let baseComps = new Array(compStocks.length).fill(null);
     const baseIndicators = {};
     unifiedDates.forEach((dateStr, i) => {
       const currK = getClosestValue(marketIndices.kospi, dateStr);
@@ -1485,10 +1485,9 @@ export default function App() {
       let kPoint = currK || (baseK ? baseK * (1 + (getSeededRandom(dateStr + 'k') - 0.49) * 0.015) : 2600);
       let sPoint = currS || (baseS ? baseS * (1 + (getSeededRandom(dateStr + 's') - 0.48) * 0.015) : 5000);
       let nPoint = currN || (baseN ? baseN * (1 + (getSeededRandom(dateStr + 'n') - 0.47) * 0.02) : 17000);
-      let c1 = null, c2 = null, c3 = null;
-      if (compStocks[0]?.active && compStocks[0].code) c1 = getClosestValue(stockHistoryMap[compStocks[0].code], dateStr);
-      if (compStocks[1]?.active && compStocks[1].code) c2 = getClosestValue(stockHistoryMap[compStocks[1].code], dateStr);
-      if (compStocks[2]?.active && compStocks[2].code) c3 = getClosestValue(stockHistoryMap[compStocks[2].code], dateStr);
+      const compValues = compStocks.map(comp =>
+        comp.active && comp.code ? getClosestValue(stockHistoryMap[comp.code], dateStr) : null
+      );
 
       // 시장 지표 히스토리
       const indPoints = {};
@@ -1504,18 +1503,20 @@ export default function App() {
       });
 
       if (i === 0) { baseK = kPoint; baseS = sPoint; baseN = nPoint; }
-      if (baseComps[0] === null && c1 != null) baseComps[0] = c1;
-      if (baseComps[1] === null && c2 != null) baseComps[1] = c2;
-      if (baseComps[2] === null && c3 != null) baseComps[2] = c3;
+      compStocks.forEach((_, ci) => {
+        if (baseComps[ci] === null && compValues[ci] != null) baseComps[ci] = compValues[ci];
+      });
+      const compData: Record<string, number | null> = {};
+      compStocks.forEach((_, ci) => {
+        compData[`comp${ci + 1}Point`] = compValues[ci];
+        compData[`comp${ci + 1}Rate`] = (baseComps[ci] && compValues[ci]) ? ((compValues[ci] / baseComps[ci]) - 1) * 100 : null;
+      });
       map[dateStr] = {
         kospiPoint: kPoint, sp500Point: sPoint, nasdaqPoint: nPoint,
-        comp1Point: c1, comp2Point: c2, comp3Point: c3,
         kospiRate: baseK ? ((kPoint / baseK) - 1) * 100 : 0,
         sp500Rate: baseS ? ((sPoint / baseS) - 1) * 100 : 0,
         nasdaqRate: baseN ? ((nPoint / baseN) - 1) * 100 : 0,
-        comp1Rate: (baseComps[0] && c1) ? ((c1 / baseComps[0]) - 1) * 100 : null,
-        comp2Rate: (baseComps[1] && c2) ? ((c2 / baseComps[1]) - 1) * 100 : null,
-        comp3Rate: (baseComps[2] && c3) ? ((c3 / baseComps[2]) - 1) * 100 : null,
+        ...compData,
         ...indPoints,
       };
     });
@@ -1952,6 +1953,20 @@ export default function App() {
       setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
       showToast(`${code} 현재가 갱신 실패`, true);
     }
+  };
+
+  const COMP_STOCK_EXTRA_COLORS = ['#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#f97316', '#64748b', '#e11d48'];
+
+  const handleAddCompStock = () => {
+    const nextId = Math.max(...compStocks.map(s => s.id)) + 1;
+    const colorIdx = compStocks.length % (COMP_STOCK_EXTRA_COLORS.length + 3);
+    const allColors = ['#10b981', '#0ea5e9', '#ec4899', ...COMP_STOCK_EXTRA_COLORS];
+    const color = allColors[colorIdx] || COMP_STOCK_EXTRA_COLORS[colorIdx % COMP_STOCK_EXTRA_COLORS.length];
+    setCompStocks(prev => [...prev, { id: nextId, code: '', name: `비교종목${nextId}`, active: false, loading: false, color }]);
+  };
+
+  const handleRemoveCompStock = (index) => {
+    setCompStocks(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleCompStockBlur = async (index, code) => {
@@ -4150,9 +4165,28 @@ export default function App() {
                               <RefreshCw size={10} />
                             </button>
                           )}
+                          {compStocks.length > 1 && (
+                            <button
+                              onClick={() => handleRemoveCompStock(idx)}
+                              className="px-1.5 py-1.5 text-gray-600 hover:text-red-400 hover:bg-red-900/20 transition-colors border-l border-gray-700/40"
+                              title="종목 제거"
+                            >
+                              <X size={10} />
+                            </button>
+                          )}
                         </div>
                       );
                     })}
+                    {compStocks.length < 8 && (
+                      <button
+                        onClick={handleAddCompStock}
+                        className="flex items-center gap-1 px-2 py-1.5 rounded text-[10px] font-bold text-gray-500 hover:text-green-400 hover:bg-green-900/20 border border-gray-700 hover:border-green-700/50 transition-colors"
+                        title="비교 종목 추가"
+                      >
+                        <Plus size={11} />
+                        <span>추가</span>
+                      </button>
+                    )}
                     <button onClick={() => setShowIndexVerify(!showIndexVerify)} className={`px-2 py-1.5 rounded text-[11px] font-bold transition-colors flex items-center gap-1 ml-1 ${showIndexVerify ? 'bg-blue-900/50 text-blue-300 border border-blue-500/50' : 'bg-transparent text-gray-500 hover:bg-gray-700 border border-gray-700'}`} title="지수 데이터 검증">
                       <Search size={12} />
                     </button>
@@ -4444,9 +4478,9 @@ export default function App() {
                   {!userFeatures.feature1 && effectiveShowIndicators.btc && indicatorHistoryMap.btc && <Line yAxisId="right-btc" dataKey="btcPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
                   {!userFeatures.feature1 && effectiveShowIndicators.eth && indicatorHistoryMap.eth && <Line yAxisId="left" type="monotone" dataKey="ethRateScaled" name="Ethereum" stroke="#627eea" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
                   {!userFeatures.feature1 && effectiveShowIndicators.eth && indicatorHistoryMap.eth && <Line yAxisId="right-eth" dataKey="ethPoint" stroke="transparent" dot={false} legendType="none" tooltipType="none" connectNulls />}
-                  {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[0]?.active && <Line yAxisId="left" type="monotone" dataKey="comp1Rate" name={compStocks[0].name} stroke={compStocks[0].color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} />}
-                  {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[1]?.active && <Line yAxisId="left" type="monotone" dataKey="comp2Rate" name={compStocks[1].name} stroke={compStocks[1].color || '#0ea5e9'} strokeWidth={1.5} dot={false} connectNulls={false} />}
-                  {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks[2]?.active && <Line yAxisId="left" type="monotone" dataKey="comp3Rate" name={compStocks[2].name} stroke={compStocks[2].color || '#ec4899'} strokeWidth={1.5} dot={false} connectNulls={false} />}
+                  {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && compStocks.map((comp, idx) =>
+                    comp.active ? <Line key={comp.id} yAxisId="left" type="monotone" dataKey={`comp${idx + 1}Rate`} name={comp.name} stroke={comp.color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} /> : null
+                  )}
                   {showBacktest && <Area yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke={backtestColor} strokeWidth={2} fill="url(#backtestGradient)" strokeDasharray="6 3" dot={false} connectNulls />}
                   {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
                 </ComposedChart>
