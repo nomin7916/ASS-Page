@@ -482,6 +482,8 @@ export default function App() {
   const [hoveredPortStkSlice, setHoveredPortStkSlice] = useState<any>(null);
   const [hoveredIntCatSlice, setHoveredIntCatSlice] = useState<any>(null);
   const [hoveredIntHoldSlice, setHoveredIntHoldSlice] = useState<any>(null);
+  const [hoveredRebalCatSlice, setHoveredRebalCatSlice] = useState<any>(null);
+  const [hoveredCurCatSlice, setHoveredCurCatSlice] = useState<any>(null);
   
   const [showKospi, setShowKospi] = useState(true);
   const [showSp500, setShowSp500] = useState(false);
@@ -1656,6 +1658,39 @@ export default function App() {
     }
     return data;
   }, [portfolio, totals.totalEval, settings, rebalanceSortConfig]);
+
+  const rebalCatDonutData = useMemo(() => {
+    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
+    const catMap: Record<string, number> = {};
+    rebalanceData.forEach(item => {
+      const cat = (item.category as string) || '기타';
+      catMap[cat] = (catMap[cat] || 0) + item.expEval;
+    });
+    return Object.entries(catMap)
+      .map(([name, value]) => ({ name, value }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => {
+        const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
+        if (ia !== -1 && ib !== -1) return ia - ib;
+        if (ia !== -1) return -1;
+        if (ib !== -1) return 1;
+        return b.value - a.value;
+      });
+  }, [rebalanceData]);
+
+  const curCatDonutData = useMemo(() => {
+    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
+    return Object.entries(totals.cats)
+      .map(([name, val]: [string, any]) => ({ name, value: val.eval }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => {
+        const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
+        if (ia !== -1 && ib !== -1) return ia - ib;
+        if (ia !== -1) return -1;
+        if (ib !== -1) return 1;
+        return b.value - a.value;
+      });
+  }, [totals.cats]);
 
   // ── 통합 대시보드 계산 ──
   // 각 포트폴리오의 요약 계산 (active는 현재 state, 나머지는 저장된 데이터 사용)
@@ -4741,7 +4776,8 @@ export default function App() {
 
         {/* 리밸런싱 시뮬레이터 */}
         {activePortfolioAccountType !== 'gold' && (
-        <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-20">
+        <>
+        <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-6">
           <div className="p-5 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:justify-between xl:items-start gap-4">
             <span className="text-green-400 text-xl font-bold flex items-center gap-2">⚖️ 리밸런싱 & 적립 시뮬레이터</span>
             <div className="flex flex-col gap-3 w-full xl:w-[600px]">
@@ -4853,6 +4889,111 @@ export default function App() {
             </table>
           </div>
         </div>
+
+        {/* 리밸런싱 자산 비중 도넛 차트 */}
+        <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-20">
+          <div className="p-3 bg-[#0f172a] border-b border-gray-700">
+            <span className="text-white font-bold text-sm">🍩 자산 비중 비교</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-700">
+            {/* 왼쪽: 리밸런싱 후 예상 자산 비중 */}
+            <div className="p-4">
+              <div className="text-gray-400 text-xs text-center mb-2 font-semibold">리밸런싱 후 예상 자산 비중</div>
+              {rebalCatDonutData.length === 0 ? (
+                <div className="py-8 text-center text-gray-500 text-xs">데이터가 없습니다.</div>
+              ) : (
+                <>
+                  <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                    {hoveredRebalCatSlice ? (
+                      <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredRebalCatSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredRebalCatSlice.fill }}>{hoveredRebalCatSlice.name} {(hoveredRebalCatSlice.percent * 100).toFixed(1)}%</span>{!hideAmounts && <span className="text-[11px] text-gray-300 shrink-0 ml-1">{formatCurrency(hoveredRebalCatSlice.value)}</span>}</>
+                    ) : (
+                      <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                    )}
+                  </div>
+                  <div style={{ height: 280 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={rebalCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
+                          {rebalCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <table className="w-full text-xs mt-3">
+                    <thead className="text-gray-400 border-b border-gray-700">
+                      <tr className="text-center">
+                        <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                        <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">예상평가금</th>
+                        <th className="pb-2 px-3">비중</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const total = rebalCatDonutData.reduce((s, x) => s + x.value, 0);
+                        return rebalCatDonutData.map(({ name, value }, i) => (
+                          <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                            <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
+                              <span style={{ color: UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
+                            </td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(value)}</td>
+                            <td className="py-1.5 px-3 text-gray-400 text-right">{total > 0 ? ((value / total) * 100).toFixed(1) : 0}%</td>
+                          </tr>
+                        ));
+                      })()}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+            {/* 오른쪽: 현재 포트폴리오 자산 비중 */}
+            <div className="p-4">
+              <div className="text-gray-400 text-xs text-center mb-2 font-semibold">현재 자산 비중</div>
+              {curCatDonutData.length === 0 ? (
+                <div className="py-8 text-center text-gray-500 text-xs">데이터가 없습니다.</div>
+              ) : (
+                <>
+                  <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                    {hoveredCurCatSlice ? (
+                      <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredCurCatSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredCurCatSlice.fill }}>{hoveredCurCatSlice.name} {(hoveredCurCatSlice.percent * 100).toFixed(1)}%</span>{!hideAmounts && <span className="text-[11px] text-gray-300 shrink-0 ml-1">{formatCurrency(hoveredCurCatSlice.value)}</span>}</>
+                    ) : (
+                      <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                    )}
+                  </div>
+                  <div style={{ height: 280 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={curCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
+                          {curCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <table className="w-full text-xs mt-3">
+                    <thead className="text-gray-400 border-b border-gray-700">
+                      <tr className="text-center">
+                        <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                        <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                        <th className="pb-2 px-3">비중</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {curCatDonutData.map(({ name, value }, i) => (
+                        <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                          <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
+                            <span style={{ color: UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(value)}</td>
+                          <td className="py-1.5 px-3 text-gray-400 text-right">{totals.totalEval > 0 ? ((value / totals.totalEval) * 100).toFixed(1) : 0}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        </>
         )}
         </>)}
 
