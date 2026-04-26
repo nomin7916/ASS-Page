@@ -4776,12 +4776,10 @@ export default function App() {
                     return items.map((item, j) => (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {j === 0 && (
-                          <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]" style={{ color: catColor }}>
-                            <div className="flex flex-col items-center gap-0.5">
-                              <span>{cat}</span>
-                              <span className="text-[10px] font-normal text-gray-400 mt-0.5">{formatCurrency(catTotalEval)}</span>
-                              <span className="text-[10px] font-normal text-gray-400">{catRatio.toFixed(1)}%</span>
-                            </div>
+                          <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle sticky left-0 z-[5]" style={{ color: catColor, backgroundColor: catColor + '18', borderLeft: `3px solid ${catColor}` }}>
+                            <div style={{ color: catColor }}>{cat}</div>
+                            <div className="text-gray-400 text-[10px] font-normal mt-0.5">{formatCurrency(catTotalEval)}</div>
+                            <div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div>
                           </td>
                         )}
                         <td className="py-3 px-4 text-center text-gray-300 font-bold sticky left-[80px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.name}</td>
