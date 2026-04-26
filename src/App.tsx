@@ -1614,12 +1614,16 @@ export default function App() {
 
   const rebalanceData = useMemo(() => {
     const overallExp = cleanNum(totals.totalEval) + cleanNum(settings.amount);
-    let data = portfolio.filter(p => p.type === 'stock').map(item => {
+    let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
       const tRatio = cleanNum(item.targetRatio) / 100;
-      const curEval = cleanNum(item.currentPrice) * cleanNum(item.quantity);
-      let action = item.currentPrice > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / item.currentPrice) : Math.trunc((cleanNum(settings.amount) * tRatio) / item.currentPrice)) : 0;
-      const expEval = (cleanNum(item.quantity) + action) * cleanNum(item.currentPrice);
-      const cost = action * item.currentPrice;
+      const qty = cleanNum(item.quantity);
+      const price = cleanNum(item.currentPrice);
+      const curEval = item.type === 'fund' && !(qty > 0 && price > 0)
+        ? cleanNum(item.evalAmount)
+        : price * qty;
+      let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((cleanNum(settings.amount) * tRatio) / price)) : 0;
+      const expEval = (qty + action) * price;
+      const cost = action * price;
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
       return { ...item, curEval, action, cost, expEval, expRatio };
     });
@@ -1900,7 +1904,7 @@ export default function App() {
     const lastFundIdx = prev.reduceRight((acc, p, i) => acc === -1 && p.type === 'fund' ? i : acc, -1);
     const depositIdx = prev.findIndex(p => p.type === 'deposit');
     const insertIdx = lastFundIdx >= 0 ? lastFundIdx + 1 : (depositIdx >= 0 ? depositIdx + 1 : prev.length);
-    const newFund = { id: generateId(), type: 'fund', category: 'FUND', assetClass: 'S', code: '', name: '', currentPrice: 0, changeRate: 0, investAmount: 0, evalAmount: 0, isManual: true };
+    const newFund = { id: generateId(), type: 'fund', category: 'FUND', assetClass: 'S', code: '', name: '', currentPrice: 0, changeRate: 0, investAmount: 0, evalAmount: 0, targetRatio: 0, isManual: true };
     return [...prev.slice(0, insertIdx), newFund, ...prev.slice(insertIdx)];
   });
   const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
