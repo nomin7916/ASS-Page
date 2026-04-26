@@ -1631,7 +1631,9 @@ export default function App() {
   }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks]);
 
   const rebalanceData = useMemo(() => {
+    const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
     const overallExp = cleanNum(totals.totalEval) + cleanNum(settings.amount);
+    const accumulateBase = cleanNum(settings.amount) + depositAmount;
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
       const tRatio = cleanNum(item.targetRatio) / 100;
       const qty = cleanNum(item.quantity);
@@ -1639,7 +1641,7 @@ export default function App() {
       const curEval = item.type === 'fund' && !(qty > 0 && price > 0)
         ? cleanNum(item.evalAmount)
         : price * qty;
-      let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((cleanNum(settings.amount) * tRatio) / price)) : 0;
+      let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((accumulateBase * tRatio) / price)) : 0;
       const expEval = (qty + action) * price;
       const cost = action * price;
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
@@ -4832,10 +4834,9 @@ export default function App() {
               </thead>
               <tbody>
                 {(() => {
+                  const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
                   const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
-                  const baseRemaining = settings.mode === 'accumulate'
-                    ? Math.max(0, cleanNum(settings.amount) - baseTotalCost)
-                    : (baseTotalCost < 0 ? -baseTotalCost : 0);
+                  const baseRemaining = Math.max(0, depositAmount + cleanNum(settings.amount) - baseTotalCost);
                   const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
                   const effectiveRemaining = baseRemaining - totalExtraAllocated;
                   const catOrder: string[] = [];
