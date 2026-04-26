@@ -4745,8 +4745,8 @@ export default function App() {
                   const arr = (k) => <span className={`ml-0.5 text-[9px] ${sk === k ? 'text-gray-300' : 'invisible'}`}>{sk === k && sd === -1 ? '▼' : '▲'}</span>;
                   return (
                     <tr>
-                      <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600" onClick={() => handleRebalanceSort('category')}>구분{arr('category')}</th>
-                      <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-10 bg-[#1e293b]" onClick={() => handleRebalanceSort('name')}>종목명{arr('name')}</th>
+                      <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600 sticky left-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('category')}>구분{arr('category')}</th>
+                      <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-[80px] z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]" onClick={() => handleRebalanceSort('name')}>종목명{arr('name')}</th>
                       <th className="py-3 px-3 min-w-[90px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('code')}>코드{arr('code')}</th>
                       <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curEval')}>평가금{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('currentPrice')}>현재가{arr('currentPrice')}</th>
@@ -4771,14 +4771,20 @@ export default function App() {
                   return catOrder.flatMap(cat => {
                     const items = grouped[cat];
                     const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                    const catTotalEval = items.reduce((sum, item) => sum + item.curEval, 0);
+                    const catRatio = totals.totalEval > 0 ? catTotalEval / totals.totalEval * 100 : 0;
                     return items.map((item, j) => (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {j === 0 && (
-                          <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a]" style={{ color: catColor }}>
-                            {cat}
+                          <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]" style={{ color: catColor }}>
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span>{cat}</span>
+                              <span className="text-[10px] font-normal text-gray-400 mt-0.5">{formatCurrency(catTotalEval)}</span>
+                              <span className="text-[10px] font-normal text-gray-400">{catRatio.toFixed(1)}%</span>
+                            </div>
                           </td>
                         )}
-                        <td className="py-3 px-4 text-center text-gray-300 font-bold sticky left-0 z-10 bg-[#0f172a] group-hover:bg-gray-800 transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.name}</td>
+                        <td className="py-3 px-4 text-center text-gray-300 font-bold sticky left-[80px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.name}</td>
                         <td className="py-3 px-3 text-center text-gray-500 font-mono text-xs focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.code}</td>
                         <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.curEval)}</td>
                         <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(item.currentPrice)}</td>
