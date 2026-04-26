@@ -4836,7 +4836,9 @@ export default function App() {
                 {(() => {
                   const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
                   const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
-                  const rawRemaining = depositAmount + cleanNum(settings.amount) - baseTotalCost;
+                  const rawRemaining = settings.mode === 'accumulate'
+                    ? depositAmount + cleanNum(settings.amount) - baseTotalCost
+                    : depositAmount - baseTotalCost;
                   const baseRemaining = settings.mode === 'accumulate' ? Math.max(0, rawRemaining) : rawRemaining;
                   const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
                   const effectiveRemaining = baseRemaining - totalExtraAllocated;
@@ -4891,6 +4893,7 @@ export default function App() {
                       const extraQty = rebalExtraQty[item.id] || 0;
                       const totalAction = item.action + extraQty;
                       const itemPrice = cleanNum(item.currentPrice);
+                      const adjustedCost = totalAction * itemPrice;
                       const maxAdd = itemPrice > 0
                         ? (settings.mode === 'accumulate'
                             ? Math.max(0, Math.floor(effectiveRemaining / itemPrice))
@@ -4918,7 +4921,7 @@ export default function App() {
                           <input type="text" className="w-full h-full bg-transparent text-center text-orange-300 font-bold outline-none py-3 focus:bg-orange-900/20 caret-orange-400 min-w-[65px]" value={extraQty !== 0 ? extraQty : ''} placeholder="0" onChange={e => { const val = parseInt(e.target.value.replace(/[^\-\d]/g, '')) || 0; setRebalExtraQty(prev => ({ ...prev, [item.id]: val })); }} onFocus={e => e.target.select()} />
                         </td>
                         <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd > 0 ? '+' + maxAdd : maxAdd < 0 ? maxAdd : '0'}</td>
-                        <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${item.cost > 0 ? 'text-red-400' : item.cost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.cost)}</td>
+                        <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${adjustedCost > 0 ? 'text-red-400' : adjustedCost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(adjustedCost)}</td>
                         <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.expEval)}</td>
                         <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(1)}%</td>
                       </tr>
@@ -4938,7 +4941,7 @@ export default function App() {
                   <td className="py-3 px-3"></td>
                   <td className="py-3 px-3"></td>
                   <td className="py-3 px-3"></td>
-                  <td className={`py-3 px-3 font-bold text-right ${rebalanceData.reduce((s, d) => s + d.cost, 0) > 0 ? 'text-red-400' : rebalanceData.reduce((s, d) => s + d.cost, 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatCurrency(rebalanceData.reduce((s, d) => s + d.cost, 0))}</td>
+                  {(() => { const adjTotal = rebalanceData.reduce((s, d) => s + (d.action + (rebalExtraQty[d.id] || 0)) * cleanNum(d.currentPrice), 0); return <td className={`py-3 px-3 font-bold text-right ${adjTotal > 0 ? 'text-red-400' : adjTotal < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatCurrency(adjTotal)}</td>; })()}
                   <td className="py-3 px-3 font-bold text-yellow-400 text-right">{formatCurrency(rebalanceData.reduce((s, d) => s + d.expEval, 0))}</td>
                   <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>
                 </tr>
