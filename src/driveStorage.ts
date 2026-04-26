@@ -161,17 +161,15 @@ export async function saveVersionFile(
 }
 
 // 타임스탬프 이름의 백업 파일 저장 후 오래된 것 정리
-// type: 'manual' = 수동 저장, 'auto' = 20분 자동저장
 export async function saveVersionedBackup(
   token: string,
   folderId: string,
-  data: unknown,
-  type: 'manual' | 'auto' = 'auto'
+  data: unknown
 ): Promise<void> {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
   const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  await saveDriveFile(token, folderId, `${BACKUP_PREFIX}${ts}_${type}.json`, data);
+  await saveDriveFile(token, folderId, `${BACKUP_PREFIX}${ts}.json`, data);
   await cleanupOldBackups(token, folderId);
 }
 

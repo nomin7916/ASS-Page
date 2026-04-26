@@ -5,13 +5,7 @@
       "Bash(npm run *)",
       "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"C:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; node --version; npx tsc --noEmit 2>&1 | Select-Object -Last 30)",
       "PowerShell(Get-Command node -ErrorAction SilentlyContinue)",
-      "PowerShell(Get-Command npm -ErrorAction SilentlyContinue)",
-      "Bash(npx tsc *)",
-      "PowerShell(Set-Location \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; $env:PATH = $env:PATH + \";C:\\\\Program Files\\\\nodejs\"; npx tsc --noEmit 2>&1 | Select-Object -First 40)",
-      "Bash(xargs basename *)",
-      "Bash(xargs grep *)",
-      "Bash(./node_modules/.bin/tsc --noEmit)",
-      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; node --version; npx tsc --noEmit 2>&1 | Select-Object -Last 20)"
+      "PowerShell(Get-Command npm -ErrorAction SilentlyContinue)"
     ]
   }
 }
