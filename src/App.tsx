@@ -4817,6 +4817,7 @@ export default function App() {
                       <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('curEval')}>평가금{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('currentPrice')}>현재가{arr('currentPrice')}</th>
                       <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</th>
+                      <th className="py-3 px-3 min-w-[80px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('curEval')}>현재비중{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('action')}>수량{arr('action')}</th>
                       <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('cost')}>실 구매비용{arr('cost')}</th>
                       <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('expEval')}>예상평가금{arr('expEval')}</th>
@@ -4891,6 +4892,7 @@ export default function App() {
                         <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                           <input type="text" data-col="targetRatio" className="w-full h-full bg-transparent text-center text-green-400 font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400" value={item.targetRatio || 0} onChange={e => handleUpdate(item.id, 'targetRatio', e.target.value)} onFocus={e => e.target.select()} onKeyDown={e => handleTableKeyDown(e, 'targetRatio')} />
                         </td>
+                        <td className="py-3 px-3 text-center text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totals.totalEval > 0 ? (item.curEval / totals.totalEval * 100) : 0).toFixed(1)}%</td>
                         <td className="py-3 px-3 text-center font-bold text-blue-300 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(item.action > 0 ? '+' : '') + item.action}</td>
                         <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${item.cost > 0 ? 'text-red-400' : item.cost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.cost)}</td>
                         <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.expEval)}</td>
@@ -4908,6 +4910,7 @@ export default function App() {
                   <td className="py-3 px-3 text-gray-300 font-bold text-right">{formatCurrency(rebalanceData.reduce((s, d) => s + d.curEval, 0))}</td>
                   <td className="py-3 px-3"></td>
                   <td className="py-3 px-3 text-center font-bold text-green-400">{rebalanceData.reduce((s, d) => s + (d.targetRatio || 0), 0).toFixed(1)}%</td>
+                  <td className="py-3 px-3 text-center font-bold text-gray-400">100%</td>
                   <td className="py-3 px-3"></td>
                   <td className={`py-3 px-3 font-bold text-right ${rebalanceData.reduce((s, d) => s + d.cost, 0) > 0 ? 'text-red-400' : rebalanceData.reduce((s, d) => s + d.cost, 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatCurrency(rebalanceData.reduce((s, d) => s + d.cost, 0))}</td>
                   <td className="py-3 px-3 font-bold text-yellow-400 text-right">{formatCurrency(rebalanceData.reduce((s, d) => s + d.expEval, 0))}</td>
