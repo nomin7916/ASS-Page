@@ -698,8 +698,8 @@ export default function App() {
   };
 
   // Google Drive Index_Data 폴더에 3개 파일로 저장
-  // versioned=true 이면 타임스탬프 백업 파일도 추가 저장 (수동 저장·20분 주기)
-  const saveAllToDrive = async (state, versioned = false) => {
+  // versioned: 'manual'=수동 저장, 'auto'=20분 자동저장, false=백업 이력 불필요한 저장
+  const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false) => {
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     try {
@@ -713,10 +713,10 @@ export default function App() {
         // 폴링용 경량 version 파일도 동시에 갱신 (다른 기기가 50바이트 파일로 변경 감지)
         await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
         lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
-        // 수동 저장·20분 주기 타이머에서만 타임스탬프 버전 백업 저장
-        if (versioned) {
-          saveVersionedBackup(token, folderId, stateCore).catch(() => {});
-        }
+      }
+      // 수동 저장·20분 주기 타이머이면 portfolioUpdatedAt 변경 여부와 무관하게 항상 백업 생성
+      if (versioned) {
+        saveVersionedBackup(token, folderId, stateCore, versioned).catch(() => {});
       }
       await Promise.all([
         Object.keys(shm || {}).length > 0
@@ -2466,7 +2466,7 @@ export default function App() {
     const currentPortfolios = buildPortfoliosState();
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory };
     if (driveTokenRef.current) {
-      saveAllToDrive(state, true); // 수동 저장 → 타임스탬프 백업 포함
+      saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
       showToast('☁️ Drive 미연결 — 먼저 Drive를 연결해 주세요', true);
     }
@@ -2994,7 +2994,7 @@ export default function App() {
           const snap = saveStateRef.current;
           if (snap && snap.portfolios?.length > 0) {
             console.log('[자동저장] 20분 주기 Drive 백업');
-            saveAllToDrive(snap, true); // 타임스탬프 버전 백업 포함
+            saveAllToDrive(snap, 'auto'); // 20분 자동저장 백업
           }
         }, 3000);
       }
@@ -3727,10 +3727,16 @@ export default function App() {
                     {backupList.map((backup) => {
                       const m = backup.name.match(/portfolio_backup_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
                       const displayTime = m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : backup.name;
+                      const isManual = backup.name.includes('_manual');
                       const isApplying = applyingBackupId === backup.id;
                       return (
                         <div key={backup.id} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-slate-800/70 border border-gray-700/40 hover:border-purple-700/40 transition">
-                          <span className="text-[11px] text-gray-300 font-mono">{displayTime}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] text-gray-300 font-mono">{displayTime}</span>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${isManual ? 'bg-blue-700/60 text-blue-200' : 'bg-gray-700/60 text-gray-400'}`}>
+                              {isManual ? '수동' : '자동'}
+                            </span>
+                          </div>
                           <button
                             onClick={() => handleApplyBackup(backup.id, displayTime)}
                             disabled={!!applyingBackupId}
