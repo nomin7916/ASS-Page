@@ -1631,19 +1631,23 @@ export default function App() {
   }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks]);
 
   const rebalanceData = useMemo(() => {
-    const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-    const overallExp = cleanNum(totals.totalEval) + cleanNum(settings.amount);
-    const accumulateBase = cleanNum(settings.amount) + depositAmount;
+    const isOverseas = activePortfolioAccountType === 'overseas';
+    const fxRate = isOverseas ? (marketIndicators.usdkrw || 1) : 1;
+    const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0) * fxRate;
+    const overallExp = cleanNum(totals.totalEval) + cleanNum(settings.amount) * fxRate;
+    const accumulateBase = cleanNum(settings.amount) * fxRate + depositAmount;
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
       const tRatio = cleanNum(item.targetRatio) / 100;
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
-      const curEval = item.type === 'fund' && !(qty > 0 && price > 0)
+      const priceKrw = price * fxRate;
+      const curEvalNative = item.type === 'fund' && !(qty > 0 && price > 0)
         ? cleanNum(item.evalAmount)
         : price * qty;
-      let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((accumulateBase * tRatio) / price)) : 0;
-      const expEval = (qty + action) * price;
-      const cost = action * price;
+      const curEval = curEvalNative * fxRate;
+      let action = priceKrw > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / priceKrw) : Math.trunc((accumulateBase * tRatio) / priceKrw)) : 0;
+      const expEval = (qty + action) * priceKrw;
+      const cost = action * priceKrw;
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
       const curRatio = overallExp > 0 ? (curEval / overallExp * 100) : 0;
       return { ...item, curEval, curRatio, action, cost, expEval, expRatio };
@@ -1671,7 +1675,7 @@ export default function App() {
       });
     }
     return data;
-  }, [portfolio, totals.totalEval, settings, rebalanceSortConfig]);
+  }, [portfolio, totals.totalEval, settings, rebalanceSortConfig, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const rebalCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
@@ -4801,7 +4805,7 @@ export default function App() {
           <div className="p-5 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:justify-between xl:items-start gap-4">
             <span className="text-green-400 text-xl font-bold flex items-center gap-2">⚖️ 리밸런싱 & 적립 시뮬레이터</span>
             <div className="flex flex-col gap-3 w-full xl:w-[600px]">
-              <div className="flex items-center justify-between bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{formatCurrency(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0)}</span></div>
+              <div className="flex items-center justify-between bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType !== 'overseas' || !marketIndicators.usdkrw) return formatCurrency(dep); return `$${dep.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${formatCurrency(dep * marketIndicators.usdkrw)})`; })()}</span></div>
               <div className="flex items-stretch bg-gray-900 border border-gray-600 rounded-lg overflow-hidden h-12 shadow-sm">
                 <select className="bg-gray-800 text-gray-200 text-sm font-bold px-3 border-r border-gray-600 outline-none cursor-pointer" value={settings.mode} onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}><option value="rebalance">리밸런싱 (비중 기반)</option><option value="accumulate">적립 (신규 자금 분할)</option></select>
                 <input type="text" className="flex-1 bg-transparent text-right text-white font-bold px-4 outline-none text-lg" value={formatNumber(settings.amount)} onChange={e => updateSettingsForType({ ...settings, amount: cleanNum(e.target.value) })} onFocus={e => e.target.select()} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} />
@@ -4822,9 +4826,10 @@ export default function App() {
                       <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curEval')}>평가금{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('currentPrice')}>현재가{arr('currentPrice')}</th>
                       <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</th>
+                      <th className="py-3 px-3 min-w-[80px] text-gray-400 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('curRatio')}>현재비중{arr('curRatio')}</th>
                       <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('action')}>수량{arr('action')}</th>
-                      <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('cost')}>실 구매비용{arr('cost')}</th>
-                      <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expEval')}>예상평가금{arr('expEval')}</th>
+                      <th className="py-3 px-3 min-w-[150px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('cost')}>실 구매비용{arr('cost')}</th>
+                      <th className="py-3 px-3 min-w-[150px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expEval')}>예상평가금{arr('expEval')}</th>
                       <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('expRatio')}>예상비중{arr('expRatio')}</th>
                     </tr>
                   );
@@ -4832,13 +4837,24 @@ export default function App() {
               </thead>
               <tbody>
                 {(() => {
-                  const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+                  const isOverseas = activePortfolioAccountType === 'overseas';
+                  const fxRate = isOverseas ? (marketIndicators.usdkrw || 1) : 1;
+                  const fmtAmt = (krwVal: number) => {
+                    if (!isOverseas || fxRate <= 1) return formatCurrency(krwVal);
+                    const usd = krwVal / fxRate;
+                    return `$${usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${formatCurrency(krwVal)})`;
+                  };
+                  const fmtPrice = (priceNative: number) => {
+                    if (!isOverseas) return formatNumber(priceNative);
+                    return `$${priceNative.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                  };
+                  const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0) * fxRate;
                   const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
                   const rawRemaining = settings.mode === 'accumulate'
-                    ? depositAmount + cleanNum(settings.amount) - baseTotalCost
+                    ? depositAmount + cleanNum(settings.amount) * fxRate - baseTotalCost
                     : depositAmount - baseTotalCost;
                   const baseRemaining = settings.mode === 'accumulate' ? Math.max(0, rawRemaining) : rawRemaining;
-                  const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
+                  const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice) * fxRate, 0);
                   const effectiveRemaining = baseRemaining - totalExtraAllocated;
                   const catOrder: string[] = [];
                   const grouped: Record<string, typeof rebalanceData> = {};
@@ -4891,31 +4907,33 @@ export default function App() {
                       const extraQty = rebalExtraQty[item.id] || 0;
                       const totalAction = item.action + extraQty;
                       const itemPrice = cleanNum(item.currentPrice);
-                      const adjustedCost = totalAction * itemPrice;
-                      const maxAdd = itemPrice > 0
+                      const itemPriceKrw = itemPrice * fxRate;
+                      const adjustedCost = totalAction * itemPriceKrw;
+                      const maxAdd = itemPriceKrw > 0
                         ? (settings.mode === 'accumulate'
-                            ? Math.max(0, Math.floor(effectiveRemaining / itemPrice))
-                            : Math.floor(effectiveRemaining / itemPrice))
+                            ? Math.max(0, Math.floor(effectiveRemaining / itemPriceKrw))
+                            : Math.floor(effectiveRemaining / itemPriceKrw))
                         : 0;
                       return (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {j === 0 && (
                           <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]">
                             <div style={{ color: catColor }}>{cat}</div>
-                            <div className="text-gray-400 text-[10px] font-normal mt-0.5">{formatCurrency(catTotalEval)}</div>
+                            <div className="text-gray-400 text-[10px] font-normal mt-0.5">{fmtAmt(catTotalEval)}</div>
                             <div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div>
                           </td>
                         )}
                         <td className="py-3 px-4 text-center font-bold sticky left-[80px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav} style={{ color: itemColor }}><div className="line-clamp-2">{num}. {item.name}</div></td>
                         <td className="py-3 px-3 text-center text-gray-500 font-mono text-xs focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.code}</td>
-                        <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.curEval)}</td>
-                        <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(item.currentPrice)}</td>
+                        <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{fmtAmt(item.curEval)}</td>
+                        <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{fmtPrice(item.currentPrice)}</td>
                         <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                           <input type="text" data-col="targetRatio" className="w-full h-full bg-transparent text-center text-green-400 font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400" value={item.targetRatio || 0} onChange={e => handleUpdate(item.id, 'targetRatio', e.target.value)} onFocus={e => e.target.select()} onKeyDown={e => handleTableKeyDown(e, 'targetRatio')} />
                         </td>
+                        <td className="py-3 px-3 text-center text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.curRatio.toFixed(2)}%</td>
                         <td className="py-3 px-3 text-center font-bold text-blue-300 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(item.action > 0 ? '+' : '') + item.action}</td>
-                        <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${item.cost > 0 ? 'text-red-400' : item.cost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.cost)}</td>
-                        <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.expEval)}</td>
+                        <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${item.cost > 0 ? 'text-red-400' : item.cost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{fmtAmt(item.cost)}</td>
+                        <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{fmtAmt(item.expEval)}</td>
                         <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(2)}%</td>
                       </tr>
                     );
@@ -4924,20 +4942,30 @@ export default function App() {
                 })()}
               </tbody>
               <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
-                <tr>
-                  <td colSpan={2} className="py-3 px-3 text-center uppercase tracking-widest text-gray-500 text-xs sticky left-0 z-[5] bg-[#1e293b]">TOTAL</td>
-                  <td className="py-3 px-3"></td>
-                  <td className="py-3 px-3 text-gray-300 font-bold text-right">{formatCurrency(rebalanceData.reduce((s, d) => s + d.curEval, 0))}</td>
-                  <td className="py-3 px-3"></td>
-                  <td className="py-3 px-3 text-center font-bold text-green-400">{rebalanceData.reduce((s, d) => s + (d.targetRatio || 0), 0).toFixed(1)}%</td>
-                  <td className="py-3 px-3 text-center font-bold text-gray-400">100%</td>
-                  <td className="py-3 px-3"></td>
-                  <td className="py-3 px-3"></td>
-                  <td className="py-3 px-3"></td>
-                  {(() => { const adjTotal = rebalanceData.reduce((s, d) => s + (d.action + (rebalExtraQty[d.id] || 0)) * cleanNum(d.currentPrice), 0); return <td className={`py-3 px-3 font-bold text-right ${adjTotal > 0 ? 'text-red-400' : adjTotal < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatCurrency(adjTotal)}</td>; })()}
-                  <td className="py-3 px-3 font-bold text-yellow-400 text-right">{formatCurrency(rebalanceData.reduce((s, d) => s + d.expEval, 0))}</td>
-                  <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>
-                </tr>
+                {(() => {
+                  const isOv = activePortfolioAccountType === 'overseas';
+                  const fx = isOv ? (marketIndicators.usdkrw || 1) : 1;
+                  const fmtT = (krwVal: number) => {
+                    if (!isOv || fx <= 1) return formatCurrency(krwVal);
+                    const usd = krwVal / fx;
+                    return `$${usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${formatCurrency(krwVal)})`;
+                  };
+                  const adjTotal = rebalanceData.reduce((s, d) => s + (d.action + (rebalExtraQty[d.id] || 0)) * cleanNum(d.currentPrice) * fx, 0);
+                  return (
+                  <tr>
+                    <td colSpan={2} className="py-3 px-3 text-center uppercase tracking-widest text-gray-500 text-xs sticky left-0 z-[5] bg-[#1e293b]">TOTAL</td>
+                    <td className="py-3 px-3"></td>
+                    <td className="py-3 px-3 text-gray-300 font-bold text-right">{fmtT(rebalanceData.reduce((s, d) => s + d.curEval, 0))}</td>
+                    <td className="py-3 px-3"></td>
+                    <td className="py-3 px-3 text-center font-bold text-green-400">{rebalanceData.reduce((s, d) => s + (d.targetRatio || 0), 0).toFixed(1)}%</td>
+                    <td className="py-3 px-3 text-center font-bold text-gray-400">100%</td>
+                    <td className="py-3 px-3"></td>
+                    <td className={`py-3 px-3 font-bold text-right ${adjTotal > 0 ? 'text-red-400' : adjTotal < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{fmtT(adjTotal)}</td>
+                    <td className="py-3 px-3 font-bold text-yellow-400 text-right">{fmtT(rebalanceData.reduce((s, d) => s + d.expEval, 0))}</td>
+                    <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>
+                  </tr>
+                  );
+                })()}
               </tfoot>
             </table>
           </div>
