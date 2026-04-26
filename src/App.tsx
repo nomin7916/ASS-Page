@@ -4768,21 +4768,57 @@ export default function App() {
                     if (!grouped[cat]) { grouped[cat] = []; catOrder.push(cat); }
                     grouped[cat].push(item);
                   });
+                  const parseHex = (hex: string): [number, number, number] | null => {
+                    const m = hex.replace('#', '').match(/.{2}/g);
+                    if (!m) return null;
+                    const [r, g, b] = m.map(x => parseInt(x, 16) / 255);
+                    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+                    const l = (max + min) / 2;
+                    if (max === min) return [0, 0, l * 100];
+                    const d = max - min;
+                    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                    let h: number;
+                    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+                    else if (max === g) h = ((b - r) / d + 2) / 6;
+                    else h = ((r - g) / d + 4) / 6;
+                    return [h * 360, s * 100, l * 100];
+                  };
+                  const genShades = (baseHex: string, count: number): string[] => {
+                    const hsl = parseHex(baseHex);
+                    if (!hsl || count === 1) return Array(count).fill(baseHex);
+                    const [h, s, l] = hsl;
+                    return Array.from({ length: count }, (_, i) => {
+                      const t = i / (count - 1);
+                      const shade = Math.min(78, Math.max(28, l + 18 - t * 36));
+                      return `hsl(${h.toFixed(0)},${Math.min(100, s + 5).toFixed(0)}%,${shade.toFixed(0)}%)`;
+                    });
+                  };
+                  const itemColorMap: Record<string, string> = {};
+                  catOrder.forEach(cat => {
+                    const baseHex = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                    const shades = genShades(baseHex, grouped[cat].length);
+                    grouped[cat].forEach((item, j) => { itemColorMap[`${cat}::${item.id}`] = shades[j]; });
+                  });
+                  let rowNum = 0;
                   return catOrder.flatMap(cat => {
                     const items = grouped[cat];
                     const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
                     const catTotalEval = items.reduce((sum, item) => sum + item.curEval, 0);
                     const catRatio = totals.totalEval > 0 ? catTotalEval / totals.totalEval * 100 : 0;
-                    return items.map((item, j) => (
+                    return items.map((item, j) => {
+                      rowNum += 1;
+                      const num = rowNum;
+                      const itemColor = itemColorMap[`${cat}::${item.id}`] || catColor;
+                      return (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {j === 0 && (
-                          <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle sticky left-0 z-[5]" style={{ color: catColor, backgroundColor: catColor + '18', borderLeft: `3px solid ${catColor}` }}>
+                          <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]">
                             <div style={{ color: catColor }}>{cat}</div>
                             <div className="text-gray-400 text-[10px] font-normal mt-0.5">{formatCurrency(catTotalEval)}</div>
                             <div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div>
                           </td>
                         )}
-                        <td className="py-3 px-4 text-center text-gray-300 font-bold sticky left-[80px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.name}</td>
+                        <td className="py-3 px-4 text-center font-bold sticky left-[80px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav} style={{ color: itemColor }}>{num}. {item.name}</td>
                         <td className="py-3 px-3 text-center text-gray-500 font-mono text-xs focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.code}</td>
                         <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.curEval)}</td>
                         <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(item.currentPrice)}</td>
@@ -4794,7 +4830,8 @@ export default function App() {
                         <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.expEval)}</td>
                         <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(1)}%</td>
                       </tr>
-                    ));
+                    );
+                    });
                   });
                 })()}
               </tbody>
