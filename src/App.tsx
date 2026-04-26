@@ -11,7 +11,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
-import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, loadVersionTimestamp, saveVersionFile } from './driveStorage';
+import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, loadVersionTimestamp, saveVersionFile, saveVersionedBackup, listBackups, loadBackupById, MAX_BACKUPS, DriveBackupEntry } from './driveStorage';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
@@ -534,6 +534,10 @@ export default function App() {
   // ── Google Drive 자동 동기화 ──
   const [driveStatus, setDriveStatus] = useState(''); // '' | 'auth_needed' | 'loading' | 'saving' | 'saved' | 'error'
   const [driveToken, setDriveToken] = useState('');
+  const [showBackupModal, setShowBackupModal] = useState(false);
+  const [backupList, setBackupList] = useState<DriveBackupEntry[]>([]);
+  const [backupListLoading, setBackupListLoading] = useState(false);
+  const [applyingBackupId, setApplyingBackupId] = useState<string | null>(null);
   const driveTokenRef = useRef('');
   const driveFolderIdRef = useRef('');
   const tokenClientRef = useRef(null);
@@ -694,7 +698,8 @@ export default function App() {
   };
 
   // Google Drive Index_Data 폴더에 3개 파일로 저장
-  const saveAllToDrive = async (state) => {
+  // versioned=true 이면 타임스탬프 백업 파일도 추가 저장 (수동 저장·20분 주기)
+  const saveAllToDrive = async (state, versioned = false) => {
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     try {
@@ -708,6 +713,10 @@ export default function App() {
         // 폴링용 경량 version 파일도 동시에 갱신 (다른 기기가 50바이트 파일로 변경 감지)
         await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
         lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
+        // 수동 저장·20분 주기 타이머에서만 타임스탬프 버전 백업 저장
+        if (versioned) {
+          saveVersionedBackup(token, folderId, stateCore).catch(() => {});
+        }
       }
       await Promise.all([
         Object.keys(shm || {}).length > 0
@@ -2457,7 +2466,7 @@ export default function App() {
     const currentPortfolios = buildPortfoliosState();
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory };
     if (driveTokenRef.current) {
-      saveAllToDrive(state);
+      saveAllToDrive(state, true); // 수동 저장 → 타임스탬프 백업 포함
     } else {
       showToast('☁️ Drive 미연결 — 먼저 Drive를 연결해 주세요', true);
     }
@@ -2493,6 +2502,68 @@ export default function App() {
     const result = await loadFromDrive(token);
     if (result === null) {
       showToast('Drive에서 데이터를 불러오지 못했습니다.', true);
+    }
+  };
+
+  const handleOpenBackupModal = async () => {
+    const token = driveTokenRef.current;
+    if (!token) { showToast('Drive 연결 필요 — 먼저 Drive를 연결해 주세요', true); return; }
+    setShowBackupModal(true);
+    setBackupListLoading(true);
+    try {
+      const folderId = await ensureDriveFolder(token);
+      const backups = await listBackups(token, folderId);
+      setBackupList(backups);
+    } catch {
+      showToast('백업 목록을 불러오지 못했습니다.', true);
+    } finally {
+      setBackupListLoading(false);
+    }
+  };
+
+  const handleApplyBackup = async (fileId: string, displayTime: string) => {
+    if (!window.confirm(`"${displayTime}" 시점의 백업을 현재 데이터에 적용하시겠습니까?\n(현재 계좌·종목 구성이 백업 시점으로 교체됩니다)`)) return;
+    setApplyingBackupId(fileId);
+    setDriveStatus('loading');
+    try {
+      const stateData = await loadBackupById(driveTokenRef.current, fileId) as any;
+      if (!stateData) throw new Error('empty');
+      // 포트폴리오 구조 복원
+      if (stateData.portfolios?.length > 0) {
+        setPortfolios(stateData.portfolios);
+        const activeId = stateData.activePortfolioId || stateData.portfolios[0].id;
+        setActivePortfolioId(activeId);
+        const active = stateData.portfolios.find(p => p.id === activeId) || stateData.portfolios[0];
+        setTitle(active.name || '포트폴리오');
+        setPortfolio(active.portfolio || []);
+        setPrincipal(active.principal || 0);
+        setHistory(active.history || []);
+        setDepositHistory(active.depositHistory || []);
+        if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
+        setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
+        setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
+      }
+      if (stateData.customLinks) setCustomLinks(stateData.customLinks);
+      if (stateData.lookupRows) setLookupRows(stateData.lookupRows);
+      if (stateData.compStocks) setCompStocks(stateData.compStocks);
+      if (stateData.intHistory) setIntHistory(stateData.intHistory);
+      if (stateData.chartPrefs) {
+        if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
+        if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
+        if (stateData.chartPrefs.showNasdaq !== undefined) setShowNasdaq(stateData.chartPrefs.showNasdaq);
+        if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
+        if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
+        if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
+        if (stateData.chartPrefs.accountChartStates) accountChartStatesRef.current = stateData.chartPrefs.accountChartStates;
+      }
+      setDriveStatus('saved');
+      setShowBackupModal(false);
+      showToast(`${displayTime} 백업이 적용되었습니다.`);
+    } catch {
+      showToast('백업 적용에 실패했습니다.', true);
+      setDriveStatus('error');
+    } finally {
+      setApplyingBackupId(null);
     }
   };
 
@@ -2664,6 +2735,7 @@ export default function App() {
     // 사용자별 localStorage에서 복원 (Drive와 동일하게 3개 키로 분리)
     let hasLocalData = false;
     let localUpdatedAt = 0;
+    let localPortfolioUpdatedAt = 0; // 가격갱신과 구분된 계좌구조 변경 시각
     let localPortfoliosCount = 0;
     const saved = localStorage.getItem(userKey);
     if (saved) {
@@ -2739,6 +2811,7 @@ export default function App() {
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
         if (data.intHistory) setIntHistory(data.intHistory);
         localUpdatedAt = data.portfolioUpdatedAt || data.updatedAt || 0;
+        localPortfolioUpdatedAt = data.portfolioUpdatedAt || 0;
         localPortfoliosCount = data.portfolios?.length || 0;
         hasLocalData = true;
       } catch (e) {}
@@ -2827,17 +2900,17 @@ export default function App() {
           setPortfolioStartDate(today);
         }
       } else {
-        // localStorage 있어도 Drive와 비교 → 다른 기기에서 더 최신 데이터가 있으면 Drive 사용
+        // localStorage가 있어도 Drive를 우선 확인 → 다른 기기의 최신 계좌 구조를 항상 반영
+        // 핵심: portfolioUpdatedAt(계좌 구조 변경 시각)만 비교 — updatedAt(가격 갱신 포함)은 사용 안함
+        // 로컬의 portfolioUpdatedAt이 명확히 더 최신일 때만 로컬 유지 (그 외 모두 Drive 우선)
         try {
           const checkFolderId = await ensureDriveFolder(token);
           const driveRaw = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
           if (driveRaw) {
-            const driveTs = driveRaw.portfolioUpdatedAt || driveRaw.updatedAt || 0;
-            const driveCount = driveRaw.portfolios?.length || 0;
-            // Drive가 더 최신이거나, 둘 다 updatedAt 없을 때 Drive 계좌 수가 더 많으면 Drive 우선
-            const driveIsNewer = driveTs > localUpdatedAt;
-            const driveHasMore = !driveTs && !localUpdatedAt && driveCount > localPortfoliosCount;
-            if (driveIsNewer || driveHasMore) {
+            const drivePortfolioTs = driveRaw.portfolioUpdatedAt || 0;
+            // 로컬이 명확히 최신인 경우: 둘 다 0이 아니고 로컬이 더 큰 값
+            const keepLocal = localPortfolioUpdatedAt > 0 && drivePortfolioTs > 0 && localPortfolioUpdatedAt > drivePortfolioTs;
+            if (!keepLocal) {
               await loadFromDrive(token);
               usedDriveData = true;
             }
@@ -2921,7 +2994,7 @@ export default function App() {
           const snap = saveStateRef.current;
           if (snap && snap.portfolios?.length > 0) {
             console.log('[자동저장] 20분 주기 Drive 백업');
-            saveAllToDrive(snap);
+            saveAllToDrive(snap, true); // 타임스탬프 버전 백업 포함
           }
         }, 3000);
       }
@@ -2949,11 +3022,19 @@ export default function App() {
     }
   };
 
-  // 탭·앱이 다시 활성화(화면 복귀)됐을 때 즉시 Drive 확인
+  // 탭·앱 활성화 시 Drive 동기화 확인, 숨김(닫힘) 시 즉시 Drive 저장
   useEffect(() => {
     if (!authUser) return;
     const handleVisibilityChange = () => {
-      if (document.hidden) return;
+      if (document.hidden) {
+        // 탭이 숨겨지거나 닫힐 때 즉시 Drive 백업
+        const snap = saveStateRef.current;
+        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
+          if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
+          saveAllToDrive(snap);
+        }
+        return;
+      }
       checkAndSyncFromDrive();
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -3573,17 +3654,40 @@ export default function App() {
               </button>
               <button
                 onClick={handleDriveLoadOnly}
-                title="Google Drive에서 최신 데이터 불러오기"
-                className="p-1.5 hover:bg-gray-800 rounded transition text-blue-400 hover:text-blue-300"
+                title={driveStatus === 'loading' ? 'Drive 불러오는 중...' : driveStatus === 'saved' ? 'Drive 동기화 완료 — 다시 불러오기' : driveStatus === 'auth_needed' ? 'Drive 로그인 필요' : 'Google Drive에서 최신 데이터 불러오기'}
+                className={`p-1.5 hover:bg-gray-800 rounded transition ${
+                  driveStatus === 'loading'
+                    ? 'text-blue-300 animate-pulse'
+                    : driveStatus === 'saved'
+                    ? 'text-blue-400 hover:text-blue-300'
+                    : driveStatus === 'error' || driveStatus === 'auth_needed'
+                    ? 'text-blue-800/60 hover:text-blue-500'
+                    : 'text-blue-500/70 hover:text-blue-400'
+                }`}
               >
                 <CloudDownload size={14} />
               </button>
               <button
                 onClick={handleDriveSave}
-                title="Google Drive에 전체 데이터 백업"
-                className="p-1.5 hover:bg-gray-800 rounded transition text-indigo-400 hover:text-indigo-300"
+                title={driveStatus === 'saving' ? 'Drive 저장 중...' : driveStatus === 'saved' ? 'Drive 저장 완료 — 다시 저장' : driveStatus === 'auth_needed' ? 'Drive 로그인 필요' : 'Google Drive에 전체 데이터 백업'}
+                className={`p-1.5 hover:bg-gray-800 rounded transition ${
+                  driveStatus === 'saving'
+                    ? 'text-indigo-300 animate-pulse'
+                    : driveStatus === 'saved'
+                    ? 'text-indigo-400 hover:text-indigo-300'
+                    : driveStatus === 'error' || driveStatus === 'auth_needed'
+                    ? 'text-indigo-800/60 hover:text-indigo-500'
+                    : 'text-indigo-500/70 hover:text-indigo-400'
+                }`}
               >
                 <Save size={14} />
+              </button>
+              <button
+                onClick={handleOpenBackupModal}
+                title="Drive 백업 이력 보기 — 시간대별 백업 선택 적용"
+                className="p-1.5 hover:bg-gray-800 rounded transition text-purple-500/70 hover:text-purple-400"
+              >
+                <History size={14} />
               </button>
               <button
                 onClick={() => historyInputRef.current?.click()}
@@ -3596,6 +3700,54 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {/* Drive 백업 이력 모달 */}
+        {showBackupModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-[#0f172a] border border-gray-700/60 rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+                <div className="flex items-center gap-2 text-gray-200">
+                  <History size={14} className="text-purple-400" />
+                  <span className="font-semibold text-sm">Drive 백업 이력</span>
+                </div>
+                <button onClick={() => setShowBackupModal(false)} className="text-gray-500 hover:text-white transition-colors p-1 rounded hover:bg-gray-800">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="p-4">
+                {backupListLoading ? (
+                  <div className="flex items-center justify-center py-10 text-gray-500 gap-2">
+                    <RefreshCw size={16} className="animate-spin" />
+                    <span className="text-xs">백업 목록 불러오는 중...</span>
+                  </div>
+                ) : backupList.length === 0 ? (
+                  <div className="text-center py-10 text-gray-500 text-xs">저장된 백업이 없습니다<br /><span className="text-gray-600">Save 버튼 또는 20분 자동저장 시 백업이 생성됩니다</span></div>
+                ) : (
+                  <div className="space-y-2">
+                    {backupList.map((backup) => {
+                      const m = backup.name.match(/portfolio_backup_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
+                      const displayTime = m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : backup.name;
+                      const isApplying = applyingBackupId === backup.id;
+                      return (
+                        <div key={backup.id} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-slate-800/70 border border-gray-700/40 hover:border-purple-700/40 transition">
+                          <span className="text-[11px] text-gray-300 font-mono">{displayTime}</span>
+                          <button
+                            onClick={() => handleApplyBackup(backup.id, displayTime)}
+                            disabled={!!applyingBackupId}
+                            className="text-[11px] px-3 py-1 rounded bg-purple-700 hover:bg-purple-600 text-white font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {isApplying ? '적용중...' : '적용'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="mt-3 text-[10px] text-gray-600 text-center">최대 {MAX_BACKUPS}개 저장 · 수동 Save 및 20분 자동저장 시 생성</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 비밀번호 변경 모달 */}
         {showPinChange && (
