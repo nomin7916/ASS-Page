@@ -4899,6 +4899,19 @@ export default function App() {
                   });
                 })()}
               </tbody>
+              <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
+                <tr>
+                  <td colSpan={2} className="py-3 px-3 text-center uppercase tracking-widest text-gray-500 text-xs sticky left-0 z-[5] bg-[#1e293b]">TOTAL</td>
+                  <td className="py-3 px-3"></td>
+                  <td className="py-3 px-3 text-gray-300 font-bold text-right">{formatCurrency(rebalanceData.reduce((s, d) => s + d.curEval, 0))}</td>
+                  <td className="py-3 px-3"></td>
+                  <td className="py-3 px-3 text-center font-bold text-green-400">{rebalanceData.reduce((s, d) => s + (d.targetRatio || 0), 0).toFixed(1)}%</td>
+                  <td className="py-3 px-3"></td>
+                  <td className={`py-3 px-3 font-bold text-right ${rebalanceData.reduce((s, d) => s + d.cost, 0) > 0 ? 'text-red-400' : rebalanceData.reduce((s, d) => s + d.cost, 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatCurrency(rebalanceData.reduce((s, d) => s + d.cost, 0))}</td>
+                  <td className="py-3 px-3 font-bold text-yellow-400 text-right">{formatCurrency(rebalanceData.reduce((s, d) => s + d.expEval, 0))}</td>
+                  <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </div>
