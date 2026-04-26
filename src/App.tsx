@@ -2098,14 +2098,19 @@ export default function App() {
     } else {
       // 현재가 폴백 (API 실패 시) - 더 이상 재시도 방지
       autoFetchedCodes.current.add(comp.code);
-      const info = await fetchStockInfo(comp.code);
-      if (info) {
-        const todayStr = new Date().toISOString().split('T')[0];
-        const fallbackHist = { [todayStr]: info.price };
-        setStockHistoryMap(prev => ({ ...prev, [comp.code]: fallbackHist }));
+      // 기존 이력이 있으면 단일 포인트로 덮어쓰지 않음 — 이력 손실 방지
+      if (existingHist && Object.keys(existingHist).length > 1) {
         setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
       } else {
-        setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: false }; return n; });
+        const info = await fetchStockInfo(comp.code);
+        if (info) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          const fallbackHist = { ...(existingHist || {}), [todayStr]: info.price };
+          setStockHistoryMap(prev => ({ ...prev, [comp.code]: fallbackHist }));
+          setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
+        } else {
+          setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: false }; return n; });
+        }
       }
     }
   };
