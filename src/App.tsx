@@ -556,7 +556,7 @@ export default function App() {
   const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
   // 계좌별 차트 상태 독립 관리
-  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' } });
+  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
   const accountChartStatesRef = useRef<Record<string, any>>({});
   const prevActivePortfolioIdRef = useRef<string | null>(null);
 
@@ -666,6 +666,8 @@ export default function App() {
         if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
         if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
         if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
+        if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
+        if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
       }
 
       // 시장 데이터: marketdata 파일 우선, 없으면 state 파일 폴백
@@ -1357,8 +1359,10 @@ export default function App() {
       chartPeriod,
       dateRange,
       appliedRange,
+      backtestColor,
+      showBacktest,
     };
-  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, compStocks, chartPeriod, dateRange, appliedRange]);
+  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, compStocks, chartPeriod, dateRange, appliedRange, backtestColor, showBacktest]);
 
   // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
@@ -1379,6 +1383,9 @@ export default function App() {
         if (saved.chartPeriod) setChartPeriod(saved.chartPeriod);
         setDateRange(saved.dateRange || { start: '', end: '' });
         setAppliedRange(saved.appliedRange || { start: '', end: '' });
+        // 백테스트 색상 복원
+        if (saved.backtestColor) setBacktestColor(saved.backtestColor);
+        if (saved.showBacktest !== undefined) setShowBacktest(saved.showBacktest);
       } else {
         // 처음 방문하는 계좌 — 계좌 타입별 기본값
         const accountType = portfolios.find(p => p.id === activePortfolioId)?.accountType;
@@ -1388,6 +1395,8 @@ export default function App() {
         setChartPeriod(defaultPeriod);
         setDateRange({ start: '', end: '' });
         setAppliedRange({ start: '', end: '' });
+        setBacktestColor('#f97316');
+        setShowBacktest(false);
         if (accountType === 'gold') {
           setShowKospi(false); setShowSp500(false); setShowNasdaq(false);
           setGoldIndicators({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
@@ -2503,7 +2512,7 @@ export default function App() {
 
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -2521,7 +2530,7 @@ export default function App() {
 
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory };
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
@@ -2617,6 +2626,8 @@ export default function App() {
         if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
         if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
         if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
+        if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
+        if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
       }
       setDriveStatus('saved');
       setShowBackupModal(false);
@@ -2873,6 +2884,8 @@ export default function App() {
           if (data.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(data.chartPrefs.showIndicatorsInChart);
           if (data.chartPrefs.goldIndicators) setGoldIndicators(data.chartPrefs.goldIndicators);
           if (data.chartPrefs.indicatorScales) setIndicatorScales(data.chartPrefs.indicatorScales);
+          if (data.chartPrefs.backtestColor) setBacktestColor(data.chartPrefs.backtestColor);
+          if (data.chartPrefs.showBacktest !== undefined) setShowBacktest(data.chartPrefs.showBacktest);
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
@@ -3152,7 +3165,7 @@ export default function App() {
     if (activePortfolioId) {
       accountChartStatesRef.current[activePortfolioId] = { ...currentChartStateRef.current };
     }
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
     // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
     const stateEmail = adminViewingAsRef.current || authUser.email;
@@ -3172,7 +3185,7 @@ export default function App() {
         saveAllToDrive(state);
       }, 2000);
     }
-  }, [portfolios, activePortfolioId, title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales]);
+  }, [portfolios, activePortfolioId, title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;

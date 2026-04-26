@@ -9,7 +9,8 @@
       "Bash(npx tsc *)",
       "PowerShell(Set-Location \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; $env:PATH = $env:PATH + \";C:\\\\Program Files\\\\nodejs\"; npx tsc --noEmit 2>&1 | Select-Object -First 40)",
       "Bash(xargs basename *)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "Bash(./node_modules/.bin/tsc --noEmit)"
     ]
   }
 }
