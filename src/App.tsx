@@ -2562,11 +2562,15 @@ export default function App() {
       const sp = sData[`${k}Point`]; const ep = eData[`${k}Point`];
       indPeriodRates[`${k}PeriodRate`] = (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
     });
+    const backtestPeriodRate = (sData.backtestRate != null && eData.backtestRate != null)
+      ? ((100 + eData.backtestRate) / (100 + sData.backtestRate) - 1) * 100
+      : null;
     return {
       startDate: sData.date, endDate: eData.date, profit, rate,
       kospiPeriodRate: sData.kospiPoint > 0 ? ((eData.kospiPoint / sData.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: sData.sp500Point > 0 ? ((eData.sp500Point / sData.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: sData.nasdaqPoint > 0 ? ((eData.nasdaqPoint / sData.nasdaqPoint) - 1) * 100 : null,
+      backtestPeriodRate,
       ...Object.fromEntries(compStocks.map((_, ci) => {
         const pk = `comp${ci + 1}Point`;
         return [`comp${ci + 1}PeriodRate`, (sData[pk] > 0 && eData[pk] != null) ? ((eData[pk] / sData[pk]) - 1) * 100 : null];
@@ -4413,21 +4417,67 @@ export default function App() {
               )}
             </div>
 
-            <div className="chart-container-for-drag p-4 h-[400px] xl:flex-1 xl:h-auto relative select-none">
-              {selectionResult && (
-                <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none transition-all">
-                  <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(selectionResult.startDate)} ~ {formatShortDate(selectionResult.endDate)}</span>
-                  <span className={`text-xl font-black tracking-wide leading-none ${selectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.profit > 0 ? '▲' : selectionResult.profit < 0 ? '▼' : ''} {Math.abs(selectionResult.rate).toFixed(2)}%</span>
-                  <span className={`text-xs font-bold mt-1 ${selectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{selectionResult.profit >= 0 ? '+' : '-'}{formatCurrency(Math.abs(selectionResult.profit))}</span>
-                  {(showKospi || showSp500 || showNasdaq) && (
-                    <div className="mt-2 w-full pt-1.5 border-t border-gray-700 flex flex-col gap-0.5">
-                      {showKospi && selectionResult.kospiPeriodRate != null && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#ff9500' }}>KOSPI</span><span className={`font-bold ${selectionResult.kospiPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.kospiPeriodRate > 0 ? '+' : ''}{selectionResult.kospiPeriodRate.toFixed(2)}%</span></div>}
-                      {showSp500 && selectionResult.sp500PeriodRate != null && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#bf5af2' }}>S&P500</span><span className={`font-bold ${selectionResult.sp500PeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.sp500PeriodRate > 0 ? '+' : ''}{selectionResult.sp500PeriodRate.toFixed(2)}%</span></div>}
-                      {showNasdaq && selectionResult.nasdaqPeriodRate != null && <div className="flex justify-between items-center gap-4 text-[10px]"><span className="font-bold" style={{ color: '#30d158' }}>NASDAQ</span><span className={`font-bold ${selectionResult.nasdaqPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{selectionResult.nasdaqPeriodRate > 0 ? '+' : ''}{selectionResult.nasdaqPeriodRate.toFixed(2)}%</span></div>}
+            {/* 드래그 기간 선택 결과 패널 */}
+            <div className="px-4 py-2 border-t border-gray-700/40 bg-[#060f1e]/70 min-h-[36px] shrink-0">
+              {selectionResult ? (
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-500 text-[10px] font-bold shrink-0">선택 기간</span>
+                    <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(selectionResult.startDate)} ~ {formatShortDate(selectionResult.endDate)}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
+                      <span className="text-[11px] font-bold text-gray-300">나의 수익</span>
+                      <span className={`text-[12px] font-black ${selectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {selectionResult.rate > 0 ? '+' : selectionResult.rate < 0 ? '' : ''}{selectionResult.rate.toFixed(2)}%
+                      </span>
+                      <span className={`text-[10px] font-bold ${selectionResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
+                        ({selectionResult.profit >= 0 ? '+' : ''}{formatCurrency(selectionResult.profit)})
+                      </span>
+                    </div>
+                    {showBacktest && selectionResult.backtestPeriodRate != null && (
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />
+                        <span className="text-[11px] font-bold text-gray-300">백테스트</span>
+                        <span className={`text-[12px] font-black ${selectionResult.backtestPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                          {selectionResult.backtestPeriodRate > 0 ? '+' : ''}{selectionResult.backtestPeriodRate.toFixed(2)}%
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {compStocks.some(c => c.active && c.code) && (
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                      {compStocks.map((comp, ci) => {
+                        if (!comp.active || !comp.code) return null;
+                        const rate = selectionResult[`comp${ci + 1}PeriodRate`];
+                        if (rate == null) return null;
+                        const startPt = finalChartData.find(d => d.date === selectionResult.startDate)?.[`comp${ci + 1}Point`];
+                        const endPt = finalChartData.find(d => d.date === selectionResult.endDate)?.[`comp${ci + 1}Point`];
+                        return (
+                          <div key={comp.id} className="flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: comp.color || '#10b981' }} />
+                            <span className="text-[11px] font-bold" style={{ color: comp.color || '#10b981' }}>{comp.name}</span>
+                            <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                              {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
+                            </span>
+                            {startPt != null && endPt != null && (
+                              <span className="text-[10px] text-gray-500 font-mono">
+                                ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
+              ) : (
+                <span className="text-gray-600 text-[10px]">차트를 드래그하면 기간별 수익이 표시됩니다</span>
               )}
+            </div>
+
+            <div className="chart-container-for-drag p-4 h-[400px] xl:flex-1 xl:h-auto relative select-none">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
                   <defs>
