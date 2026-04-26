@@ -152,16 +152,15 @@ function MainChartCustomTooltip({ active, payload, label, selectionResult, forma
         } else {
           const pointKey = CHART_NAME_TO_POINT_KEY[name];
           let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
-          // comp 종목: dataKey 기준으로 가격 조회
-          if (pointVal == null && entry.payload) {
-            if (dk === 'comp1Rate') pointVal = entry.payload.comp1Point;
-            else if (dk === 'comp2Rate') pointVal = entry.payload.comp2Point;
-            else if (dk === 'comp3Rate') pointVal = entry.payload.comp3Point;
+          // comp 종목: dataKey 패턴(compNRate)으로 가격 조회
+          const compRateMatch = dk?.match(/^comp(\d+)Rate$/);
+          if (pointVal == null && compRateMatch && entry.payload) {
+            pointVal = entry.payload[`comp${compRateMatch[1]}Point`];
           }
           const rateStr = Number(value).toFixed(2) + '%';
           if (pointVal != null) {
             // 시장 지표는 소수점 2자리, 종목 가격은 정수 포맷
-            const isCompStock = ['comp1Rate','comp2Rate','comp3Rate'].includes(entry.dataKey);
+            const isCompStock = !!compRateMatch;
             const priceStr = isCompStock
               ? Number(pointVal).toLocaleString()
               : Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -180,11 +179,9 @@ function MainChartCustomTooltip({ active, payload, label, selectionResult, forma
             periodRate = selectionResult[periodKey];
           } else if (name === '수익률' && selectionResult.rate != null) {
             periodRate = selectionResult.rate;
-          } else if (entry.payload) {
-            // comp 종목: name이 compStocks의 이름과 매칭 → dataKey로 판별
-            if (dk === 'comp1Rate' && selectionResult.comp1PeriodRate != null) periodRate = selectionResult.comp1PeriodRate;
-            else if (dk === 'comp2Rate' && selectionResult.comp2PeriodRate != null) periodRate = selectionResult.comp2PeriodRate;
-            else if (dk === 'comp3Rate' && selectionResult.comp3PeriodRate != null) periodRate = selectionResult.comp3PeriodRate;
+          } else if (compRateMatch) {
+            const dragPeriodKey = `comp${compRateMatch[1]}PeriodRate`;
+            if (selectionResult[dragPeriodKey] != null) periodRate = selectionResult[dragPeriodKey];
           }
           if (periodRate != null) {
             const color = periodRate >= 0 ? '#f87171' : '#60a5fa';
@@ -1562,9 +1559,11 @@ export default function App() {
           kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
           sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
           nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
-          comp1Rate: (baseItem.comp1Point > 0 && item.comp1Point != null) ? ((item.comp1Point / baseItem.comp1Point) - 1) * 100 : null,
-          comp2Rate: (baseItem.comp2Point > 0 && item.comp2Point != null) ? ((item.comp2Point / baseItem.comp2Point) - 1) * 100 : null,
-          comp3Rate: (baseItem.comp3Point > 0 && item.comp3Point != null) ? ((item.comp3Point / baseItem.comp3Point) - 1) * 100 : null,
+          ...Object.fromEntries(compStocks.map((_, ci) => {
+            const pk = `comp${ci + 1}Point`;
+            const rk = `comp${ci + 1}Rate`;
+            return [rk, (baseItem[pk] > 0 && item[pk] != null) ? ((item[pk] / baseItem[pk]) - 1) * 100 : null];
+          })),
           ...indRates,
         };
       });
@@ -1602,7 +1601,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks]);
 
   const rebalanceData = useMemo(() => {
     const overallExp = cleanNum(totals.totalEval) + cleanNum(settings.amount);
@@ -2563,9 +2562,10 @@ export default function App() {
       kospiPeriodRate: sData.kospiPoint > 0 ? ((eData.kospiPoint / sData.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: sData.sp500Point > 0 ? ((eData.sp500Point / sData.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: sData.nasdaqPoint > 0 ? ((eData.nasdaqPoint / sData.nasdaqPoint) - 1) * 100 : null,
-      comp1PeriodRate: (sData.comp1Point > 0 && eData.comp1Point != null) ? ((eData.comp1Point / sData.comp1Point) - 1) * 100 : null,
-      comp2PeriodRate: (sData.comp2Point > 0 && eData.comp2Point != null) ? ((eData.comp2Point / sData.comp2Point) - 1) * 100 : null,
-      comp3PeriodRate: (sData.comp3Point > 0 && eData.comp3Point != null) ? ((eData.comp3Point / sData.comp3Point) - 1) * 100 : null,
+      ...Object.fromEntries(compStocks.map((_, ci) => {
+        const pk = `comp${ci + 1}Point`;
+        return [`comp${ci + 1}PeriodRate`, (sData[pk] > 0 && eData[pk] != null) ? ((eData[pk] / sData[pk]) - 1) * 100 : null];
+      })),
       ...indPeriodRates
     };
   };
@@ -4373,15 +4373,14 @@ export default function App() {
                         } else {
                           const pointKey = CHART_NAME_TO_POINT_KEY[entry.name];
                           let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
-                          if (pointVal == null && entry.payload) {
-                            if (dk === 'comp1Rate') pointVal = entry.payload.comp1Point;
-                            else if (dk === 'comp2Rate') pointVal = entry.payload.comp2Point;
-                            else if (dk === 'comp3Rate') pointVal = entry.payload.comp3Point;
+                          const inlineCompMatch = dk?.match(/^comp(\d+)Rate$/);
+                          if (pointVal == null && inlineCompMatch && entry.payload) {
+                            pointVal = entry.payload[`comp${inlineCompMatch[1]}Point`];
                           }
                           const sign = Number(value) >= 0 ? '+' : '';
                           const rateStr = `${sign}${Number(value).toFixed(2)}%`;
                           if (pointVal != null) {
-                            const isComp = ['comp1Rate','comp2Rate','comp3Rate'].includes(dk);
+                            const isComp = !!inlineCompMatch;
                             const priceStr = isComp ? Number(pointVal).toLocaleString() : Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                             displayVal = `${rateStr} (${priceStr})`;
                           } else {
