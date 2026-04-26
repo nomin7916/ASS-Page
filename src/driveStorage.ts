@@ -4,6 +4,15 @@ const FOLDER_NAME = 'Index_Data';
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 
+const BACKUP_PREFIX = 'portfolio_backup_';
+export const MAX_BACKUPS = 6; // 20분 간격으로 최대 6개 = 약 2시간치 백업
+
+export interface DriveBackupEntry {
+  id: string;
+  name: string;
+  createdTime: string;
+}
+
 export const DRIVE_FILES = {
   STATE:   'portfolio_state.json',
   STOCK:   'portfolio_stockdata.json',
@@ -149,4 +158,65 @@ export async function saveVersionFile(
   portfolioUpdatedAt: number
 ): Promise<void> {
   await saveDriveFile(token, folderId, DRIVE_FILES.VERSION, { portfolioUpdatedAt });
+}
+
+// 타임스탬프 이름의 백업 파일 저장 후 오래된 것 정리
+// type: 'manual' = 수동 저장, 'auto' = 20분 자동저장
+export async function saveVersionedBackup(
+  token: string,
+  folderId: string,
+  data: unknown,
+  type: 'manual' | 'auto' = 'auto'
+): Promise<void> {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  await saveDriveFile(token, folderId, `${BACKUP_PREFIX}${ts}_${type}.json`, data);
+  await cleanupOldBackups(token, folderId);
+}
+
+// 백업 목록 최신순으로 조회
+export async function listBackups(
+  token: string,
+  folderId: string
+): Promise<DriveBackupEntry[]> {
+  const q = encodeURIComponent(
+    `name contains '${BACKUP_PREFIX}' and '${folderId}' in parents and trashed=false`
+  );
+  const res = await fetch(
+    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,createdTime)&orderBy=createdTime desc&pageSize=20`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) throw new Error(`[Drive] 백업 목록 조회 실패 ${res.status}`);
+  const data = await res.json();
+  return (data.files || []) as DriveBackupEntry[];
+}
+
+// 특정 백업 파일 ID로 데이터 로드
+export async function loadBackupById(
+  token: string,
+  fileId: string
+): Promise<unknown | null> {
+  const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`[Drive] 백업 읽기 실패 ${res.status}`);
+  return await res.json();
+}
+
+async function cleanupOldBackups(token: string, folderId: string): Promise<void> {
+  try {
+    const backups = await listBackups(token, folderId);
+    if (backups.length <= MAX_BACKUPS) return;
+    await Promise.all(
+      backups.slice(MAX_BACKUPS).map(b =>
+        fetch(`${DRIVE_API}/files/${b.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      )
+    );
+  } catch {
+    // 정리 실패 무시 — 다음 저장 시 재시도
+  }
 }
