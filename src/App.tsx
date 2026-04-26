@@ -4836,7 +4836,8 @@ export default function App() {
                 {(() => {
                   const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
                   const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
-                  const baseRemaining = Math.max(0, depositAmount + cleanNum(settings.amount) - baseTotalCost);
+                  const rawRemaining = depositAmount + cleanNum(settings.amount) - baseTotalCost;
+                  const baseRemaining = settings.mode === 'accumulate' ? Math.max(0, rawRemaining) : rawRemaining;
                   const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
                   const effectiveRemaining = baseRemaining - totalExtraAllocated;
                   const catOrder: string[] = [];
@@ -4890,7 +4891,11 @@ export default function App() {
                       const extraQty = rebalExtraQty[item.id] || 0;
                       const totalAction = item.action + extraQty;
                       const itemPrice = cleanNum(item.currentPrice);
-                      const maxAdd = itemPrice > 0 ? Math.max(0, Math.floor(effectiveRemaining / itemPrice)) : 0;
+                      const maxAdd = itemPrice > 0
+                        ? (settings.mode === 'accumulate'
+                            ? Math.max(0, Math.floor(effectiveRemaining / itemPrice))
+                            : Math.floor(effectiveRemaining / itemPrice))
+                        : 0;
                       return (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {j === 0 && (
@@ -4912,7 +4917,7 @@ export default function App() {
                         <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500">
                           <input type="text" className="w-full h-full bg-transparent text-center text-orange-300 font-bold outline-none py-3 focus:bg-orange-900/20 caret-orange-400 min-w-[65px]" value={extraQty !== 0 ? extraQty : ''} placeholder="0" onChange={e => { const val = parseInt(e.target.value.replace(/[^\-\d]/g, '')) || 0; setRebalExtraQty(prev => ({ ...prev, [item.id]: val })); }} onFocus={e => e.target.select()} />
                         </td>
-                        <td className="py-3 px-3 text-center text-cyan-400 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd > 0 ? '+' + maxAdd : '0'}</td>
+                        <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd > 0 ? '+' + maxAdd : maxAdd < 0 ? maxAdd : '0'}</td>
                         <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${item.cost > 0 ? 'text-red-400' : item.cost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.cost)}</td>
                         <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.expEval)}</td>
                         <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(1)}%</td>
