@@ -462,6 +462,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
   const [rebalanceSortConfig, setRebalanceSortConfig] = useState({ key: null, direction: 1 });
+  const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
   const [globalToast, setGlobalToast] = useState({ text: "", isError: false });
 
@@ -1368,6 +1369,7 @@ export default function App() {
   useEffect(() => {
     const prevId = prevActivePortfolioIdRef.current;
     if (prevId !== null && prevId !== activePortfolioId) {
+      setRebalExtraQty({});
       // 이전 계좌 상태 저장
       accountChartStatesRef.current[prevId] = { ...currentChartStateRef.current };
       // 새 계좌 상태 복원
@@ -4819,6 +4821,8 @@ export default function App() {
                       <th className="py-3 px-3 min-w-[90px] text-green-400 font-bold text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</th>
                       <th className="py-3 px-3 min-w-[80px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('curEval')}>현재비중{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('action')}>수량{arr('action')}</th>
+                      <th className="py-3 px-3 min-w-[65px] text-orange-300 text-center sticky top-0 z-20 bg-[#1e293b]">추가</th>
+                      <th className="py-3 px-3 min-w-[85px] text-cyan-400 text-center sticky top-0 z-20 bg-[#1e293b]">추가 가능</th>
                       <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('cost')}>실 구매비용{arr('cost')}</th>
                       <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('expEval')}>예상평가금{arr('expEval')}</th>
                       <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('expRatio')}>예상비중{arr('expRatio')}</th>
@@ -4828,6 +4832,12 @@ export default function App() {
               </thead>
               <tbody>
                 {(() => {
+                  const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
+                  const baseRemaining = settings.mode === 'accumulate'
+                    ? Math.max(0, cleanNum(settings.amount) - baseTotalCost)
+                    : (baseTotalCost < 0 ? -baseTotalCost : 0);
+                  const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
+                  const effectiveRemaining = baseRemaining - totalExtraAllocated;
                   const catOrder: string[] = [];
                   const grouped: Record<string, typeof rebalanceData> = {};
                   rebalanceData.forEach(item => {
@@ -4876,6 +4886,10 @@ export default function App() {
                       rowNum += 1;
                       const num = rowNum;
                       const itemColor = itemColorMap[`${cat}::${item.id}`] || catColor;
+                      const extraQty = rebalExtraQty[item.id] || 0;
+                      const totalAction = item.action + extraQty;
+                      const itemPrice = cleanNum(item.currentPrice);
+                      const maxAdd = itemPrice > 0 ? Math.max(0, Math.floor(effectiveRemaining / itemPrice)) : 0;
                       return (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {j === 0 && (
@@ -4893,7 +4907,11 @@ export default function App() {
                           <input type="text" data-col="targetRatio" className="w-full h-full bg-transparent text-center text-green-400 font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400" value={item.targetRatio || 0} onChange={e => handleUpdate(item.id, 'targetRatio', e.target.value)} onFocus={e => e.target.select()} onKeyDown={e => handleTableKeyDown(e, 'targetRatio')} />
                         </td>
                         <td className="py-3 px-3 text-center text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totals.totalEval > 0 ? (item.curEval / totals.totalEval * 100) : 0).toFixed(1)}%</td>
-                        <td className="py-3 px-3 text-center font-bold text-blue-300 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(item.action > 0 ? '+' : '') + item.action}</td>
+                        <td className="py-3 px-3 text-center font-bold text-blue-300 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totalAction > 0 ? '+' : '') + totalAction}</td>
+                        <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500">
+                          <input type="text" className="w-full h-full bg-transparent text-center text-orange-300 font-bold outline-none py-3 focus:bg-orange-900/20 caret-orange-400 min-w-[65px]" value={extraQty !== 0 ? extraQty : ''} placeholder="0" onChange={e => { const val = parseInt(e.target.value.replace(/[^\-\d]/g, '')) || 0; setRebalExtraQty(prev => ({ ...prev, [item.id]: val })); }} onFocus={e => e.target.select()} />
+                        </td>
+                        <td className="py-3 px-3 text-center text-cyan-400 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd > 0 ? '+' + maxAdd : '0'}</td>
                         <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${item.cost > 0 ? 'text-red-400' : item.cost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.cost)}</td>
                         <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.expEval)}</td>
                         <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(1)}%</td>
@@ -4911,6 +4929,8 @@ export default function App() {
                   <td className="py-3 px-3"></td>
                   <td className="py-3 px-3 text-center font-bold text-green-400">{rebalanceData.reduce((s, d) => s + (d.targetRatio || 0), 0).toFixed(1)}%</td>
                   <td className="py-3 px-3 text-center font-bold text-gray-400">100%</td>
+                  <td className="py-3 px-3"></td>
+                  <td className="py-3 px-3"></td>
                   <td className="py-3 px-3"></td>
                   <td className={`py-3 px-3 font-bold text-right ${rebalanceData.reduce((s, d) => s + d.cost, 0) > 0 ? 'text-red-400' : rebalanceData.reduce((s, d) => s + d.cost, 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatCurrency(rebalanceData.reduce((s, d) => s + d.cost, 0))}</td>
                   <td className="py-3 px-3 font-bold text-yellow-400 text-right">{formatCurrency(rebalanceData.reduce((s, d) => s + d.expEval, 0))}</td>
