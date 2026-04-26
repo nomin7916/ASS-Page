@@ -2975,6 +2975,7 @@ export default function App() {
     );
     // 계좌/종목 구조만 비교 — history(일일 평가액)·시장 데이터는 제외하여
     // 시장가격 갱신이 portfolioUpdatedAt을 덮어쓰지 않도록 방지
+    // compStocks(비교종목 추가/활성화)도 구조 변경으로 간주 → Drive STATE 즉시 반영
     const portfolioStructureKey = JSON.stringify([
       currentPortfolios.map(p => ({
         id: p.id, name: p.name,
@@ -2984,10 +2985,15 @@ export default function App() {
         settings: p.settings,
       })),
       activePortfolioId, customLinks, lookupRows,
+      compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
     ]);
     if (portfolioStructureKey !== prevPortfolioStructureRef.current) {
       prevPortfolioStructureRef.current = portfolioStructureKey;
       portfolioUpdatedAtRef.current = Date.now();
+    }
+    // 활성 포트폴리오의 차트 상태(비교종목 포함)를 항상 최신으로 유지
+    if (activePortfolioId) {
+      accountChartStatesRef.current[activePortfolioId] = { ...currentChartStateRef.current };
     }
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
