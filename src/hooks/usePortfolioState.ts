@@ -270,6 +270,15 @@ export function usePortfolioState({
     }));
   };
 
+  const updatePortfolioActualDividend = (portfolioId, code, yearMonth, amount) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const existing = p.actualDividend || {};
+      const codeData = { ...(existing[code] || {}), [yearMonth]: amount };
+      return { ...p, actualDividend: { ...existing, [code]: codeData } };
+    }));
+  };
+
   // ── 포트폴리오 항목 CRUD ──
   const handleUpdate = (id, field, value) =>
     setPortfolio(prev => prev.map(p =>
@@ -359,5 +368,6 @@ export function usePortfolioState({
     handleAddFund,
     updateDividendHistory,
     updatePortfolioDividendHistory,
+    updatePortfolioActualDividend,
   };
 }

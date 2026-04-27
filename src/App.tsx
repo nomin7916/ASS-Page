@@ -320,6 +320,7 @@ export default function App() {
     handleAddFund,
     updateDividendHistory,
     updatePortfolioDividendHistory,
+    updatePortfolioActualDividend,
   } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
@@ -1587,6 +1588,7 @@ export default function App() {
         portfolio: p.portfolio, principal: p.principal,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
+        actualDividend: p.actualDividend,
       })),
       activePortfolioId, customLinks, lookupRows,
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
@@ -1932,6 +1934,7 @@ export default function App() {
           <DividendSummaryTable
             portfolios={allPortfoliosForDividend.filter(p => p.id === activePortfolioId)}
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
+            updatePortfolioActualDividend={updatePortfolioActualDividend}
           />
         )}
 
@@ -2104,7 +2107,7 @@ export default function App() {
           />
         )}
 
-        <DividendSummaryTable portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} />
+        <DividendSummaryTable portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} />
 
         </div>
         </div>
