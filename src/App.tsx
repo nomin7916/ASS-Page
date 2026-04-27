@@ -50,6 +50,31 @@ import {
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
 
 
+const SectionToggle = ({ label, collapsed, onToggle }) => (
+  <div
+    className={`flex items-center gap-2 px-3 h-8 w-full rounded-lg cursor-pointer select-none transition-all duration-150 group ${
+      collapsed
+        ? 'bg-gray-800/60 border border-gray-700/40 hover:bg-gray-700/50'
+        : 'hover:bg-gray-800/20'
+    }`}
+    onClick={onToggle}
+  >
+    <svg
+      className={`w-2.5 h-2.5 flex-shrink-0 transition-transform duration-200 ${
+        collapsed ? 'text-gray-400 -rotate-90' : 'text-gray-600 group-hover:text-gray-400'
+      }`}
+      fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+    </svg>
+    <span className={`text-[11px] font-medium tracking-wide transition-colors ${
+      collapsed ? 'text-gray-400' : 'text-gray-600 group-hover:text-gray-400'
+    }`}>
+      {label}
+    </span>
+  </div>
+);
+
 export default function App() {
   const historyInputRef = useRef(null);
 
@@ -1854,42 +1879,23 @@ export default function App() {
         {!showIntegratedDashboard && (<>
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
 
-        <div className="flex items-center gap-2 px-2 py-1 cursor-pointer select-none group" onClick={() => toggleSection('table')}>
-          <div className="flex-1 h-px bg-gray-700/40" />
-          <span className="text-[11px] text-gray-500 group-hover:text-gray-400 flex items-center gap-1">
-            <span>{sectionCollapsed.table ? '▶' : '▼'}</span>
-            <span>보유 종목</span>
-          </span>
-          <div className="flex-1 h-px bg-gray-700/40" />
-        </div>
-        {!sectionCollapsed.table && (
-          <>
-            {activePortfolioAccountType === 'gold' ? (
-              <KrxGoldTable
-                portfolio={portfolio}
-                goldKr={marketIndicators.goldKr}
-                goldIntl={marketIndicators.goldIntl}
-                usdkrw={marketIndicators.usdkrw}
-                onUpdate={handleUpdate}
-                onRefresh={fetchMarketIndicators}
-                isRefreshing={indicatorLoading}
-              />
-            ) : (
-              <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
-            )}
-          </>
+        {activePortfolioAccountType === 'gold' ? (
+          <KrxGoldTable
+            portfolio={portfolio}
+            goldKr={marketIndicators.goldKr}
+            goldIntl={marketIndicators.goldIntl}
+            usdkrw={marketIndicators.usdkrw}
+            onUpdate={handleUpdate}
+            onRefresh={fetchMarketIndicators}
+            isRefreshing={indicatorLoading}
+          />
+        ) : (
+          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
         )}
 
         {activePortfolioAccountType !== 'gold' && (
           <>
-            <div className="flex items-center gap-2 px-2 py-1 cursor-pointer select-none group" onClick={() => toggleSection('summary')}>
-              <div className="flex-1 h-px bg-gray-700/40" />
-              <span className="text-[11px] text-gray-500 group-hover:text-gray-400 flex items-center gap-1">
-                <span>{sectionCollapsed.summary ? '▶' : '▼'}</span>
-                <span>포트폴리오 요약</span>
-              </span>
-              <div className="flex-1 h-px bg-gray-700/40" />
-            </div>
+            <SectionToggle label="포트폴리오 요약" collapsed={sectionCollapsed.summary} onToggle={() => toggleSection('summary')} />
             {!sectionCollapsed.summary && (
               <PortfolioSummaryPanel
                 totals={totals}
@@ -1903,14 +1909,7 @@ export default function App() {
           </>
         )}
 
-        <div className="flex items-center gap-2 px-2 py-1 cursor-pointer select-none group" onClick={() => toggleSection('stats')}>
-          <div className="flex-1 h-px bg-gray-700/40" />
-          <span className="text-[11px] text-gray-500 group-hover:text-gray-400 flex items-center gap-1">
-            <span>{sectionCollapsed.stats ? '▶' : '▼'}</span>
-            <span>통계 / 히스토리 / 입출금</span>
-          </span>
-          <div className="flex-1 h-px bg-gray-700/40" />
-        </div>
+        <SectionToggle label="통계 / 히스토리 / 입출금" collapsed={sectionCollapsed.stats} onToggle={() => toggleSection('stats')} />
         {!sectionCollapsed.stats && (
         <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
           <PortfolioStatsPanel
@@ -1968,14 +1967,7 @@ export default function App() {
 
         {activePortfolioAccountType !== 'gold' && (
           <>
-            <div className="flex items-center gap-2 px-2 py-1 cursor-pointer select-none group" onClick={() => toggleSection('dividend')}>
-              <div className="flex-1 h-px bg-gray-700/40" />
-              <span className="text-[11px] text-gray-500 group-hover:text-gray-400 flex items-center gap-1">
-                <span>{sectionCollapsed.dividend ? '▶' : '▼'}</span>
-                <span>분배금 현황</span>
-              </span>
-              <div className="flex-1 h-px bg-gray-700/40" />
-            </div>
+            <SectionToggle label="분배금 현황" collapsed={sectionCollapsed.dividend} onToggle={() => toggleSection('dividend')} />
             {!sectionCollapsed.dividend && (
               <DividendSummaryTable
                 portfolios={allPortfoliosForDividend.filter(p => p.id === activePortfolioId)}
@@ -1987,14 +1979,7 @@ export default function App() {
         )}
 
         {/* 차트 영역 + 시장 지표 */}
-        <div className="flex items-center gap-2 px-2 py-1 cursor-pointer select-none group" onClick={() => toggleSection('chart')}>
-          <div className="flex-1 h-px bg-gray-700/40" />
-          <span className="text-[11px] text-gray-500 group-hover:text-gray-400 flex items-center gap-1">
-            <span>{sectionCollapsed.chart ? '▶' : '▼'}</span>
-            <span>수익률 차트</span>
-          </span>
-          <div className="flex-1 h-px bg-gray-700/40" />
-        </div>
+        <SectionToggle label="수익률 차트" collapsed={sectionCollapsed.chart} onToggle={() => toggleSection('chart')} />
         {!sectionCollapsed.chart && (
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">
           {/* 시장 지표 카드 — gold 계좌 또는 패널 숨김 시 비표시 */}
@@ -2093,14 +2078,7 @@ export default function App() {
         {/* 리밸런싱 시뮬레이터 */}
         {activePortfolioAccountType !== 'gold' && (
           <>
-            <div className="flex items-center gap-2 px-2 py-1 cursor-pointer select-none group" onClick={() => toggleSection('rebalancing')}>
-              <div className="flex-1 h-px bg-gray-700/40" />
-              <span className="text-[11px] text-gray-500 group-hover:text-gray-400 flex items-center gap-1">
-                <span>{sectionCollapsed.rebalancing ? '▶' : '▼'}</span>
-                <span>리밸런싱</span>
-              </span>
-              <div className="flex-1 h-px bg-gray-700/40" />
-            </div>
+            <SectionToggle label="리밸런싱" collapsed={sectionCollapsed.rebalancing} onToggle={() => toggleSection('rebalancing')} />
             {!sectionCollapsed.rebalancing && (
               <RebalancingPanel
                 activePortfolioAccountType={activePortfolioAccountType}
