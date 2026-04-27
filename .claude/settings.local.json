@@ -33,7 +33,14 @@
       "PowerShell(Get-Command node, npm -ErrorAction SilentlyContinue)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(cat .gitmodules)",
+      "Bash(git submodule *)",
+      "Bash(gh api *)",
+      "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(r['name'], r['conclusion'], r.get\\('output',{}\\).get\\('summary',''\\)\\) for r in data.get\\('check_runs',[]\\)]\")",
+      "PowerShell($result = Invoke-RestMethod -Uri \"https://api.github.com/repos/nomin7916/ASS-Page/commits/86e4b91/check-runs\" -Headers @{Accept=\"application/vnd.github.v3+json\"} -ErrorAction SilentlyContinue; if \\($result\\) { $result.check_runs | Select-Object name, conclusion, @{n='summary';e={$_.output.summary}} | Format-List } else { \"No result\" })",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://api.github.com/repos/nomin7916/ASS-Page/commits/86e4b91/check-runs\" -Headers @{Accept=\"application/vnd.github.v3+json\"} -UseBasicParsing; $r.Content | Select-String -Pattern '\"name\"|\"conclusion\"|\"details_url\"' | Select-Object -First 20)",
+      "WebFetch(domain:vercel.com)"
     ]
   }
 }
