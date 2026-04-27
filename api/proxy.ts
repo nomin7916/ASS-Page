@@ -9,6 +9,7 @@ const ALLOWED_DOMAINS = [
   'finance.naver.com',
   'query1.finance.yahoo.com',
   'stooq.com',
+  'funetf.co.kr',
 ];
 
 export default async function handler(request: Request): Promise<Response> {

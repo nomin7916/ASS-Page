@@ -548,6 +548,8 @@ export default function App() {
   const pendingTokenResolveRef = useRef<((token: string | null) => void) | null>(null);
   const isInitialLoad = useRef(true);
   const portfolioRef = useRef([]);
+  const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
+  const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
   const driveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const portfolioUpdatedAtRef = useRef<number>(0); // 계좌/종목 구조 변경 시에만 갱신 (시장가격 갱신과 구분)
@@ -1284,8 +1286,10 @@ export default function App() {
     }
   };
 
-  // portfolioRef를 항상 최신 portfolio로 동기화 (클로저 문제 해결용)
+  // *Ref를 항상 최신 상태로 동기화 (클로저 문제 해결용 — 20분 인터벌 등 stale closure 방지)
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
+  useEffect(() => { activePortfolioAccountTypeRef.current = activePortfolioAccountType; }, [activePortfolioAccountType]);
+  useEffect(() => { stockHistoryMapRef.current = stockHistoryMap; }, [stockHistoryMap]);
 
   // 국내금 장기 데이터 자동 크롤링: Drive 데이터 로드/저장 완료 후 데이터가 부족하거나 오래된 경우 자동 수집
   useEffect(() => {
@@ -2239,7 +2243,7 @@ export default function App() {
 
     try {
       const today = new Date().toISOString().split('T')[0];
-      const isOverseasRefresh = activePortfolioAccountType === 'overseas';
+      const isOverseasRefresh = activePortfolioAccountTypeRef.current === 'overseas';
 
       // 종목별 현재가 조회 결과를 Map으로 수집
       const priceResults = {};
@@ -2265,7 +2269,7 @@ export default function App() {
 
       // ② 그래프용 과거 데이터: 충분한 이력이 없는 종목만 백그라운드로 조회 (상단 값에 영향 없음)
       const codesNeedingHistory = stockCodes.filter(code => {
-        const existing = stockHistoryMap[code];
+        const existing = stockHistoryMapRef.current[code];
         return !existing || Object.keys(existing).length <= 3;
       });
       if (codesNeedingHistory.length > 0) {

@@ -145,12 +145,13 @@ export const fetchStockInfo = async (code: string) => {
   if (!code || code.length < 5) return null;
   const targetUrl = `https://m.stock.naver.com/api/stock/${code}/basic`;
   const proxies = [
+    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
     `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`
   ];
   for (const proxy of proxies) {
     try {
-      const res = await fetch(proxy);
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
       const data = await res.json();
       if (data?.stockName) {
@@ -237,6 +238,7 @@ export const fetchFundInfo = async (code: string): Promise<{ name: string; price
 
   const targetUrl = `https://www.funetf.co.kr/product/fund/view/${c}`;
   const proxies = [
+    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
     `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
     `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
@@ -305,12 +307,13 @@ export const fetchFundInfo = async (code: string): Promise<{ name: string; price
 export const fetchNaverKospi = async () => {
   const targetUrl = `https://m.stock.naver.com/api/index/KOSPI/basic`;
   const proxies = [
+    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
     `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`
   ];
   for (const proxy of proxies) {
     try {
-      const res = await fetch(proxy);
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
       const data = await res.json();
       if (data && (data.closePrice || data.price)) {
