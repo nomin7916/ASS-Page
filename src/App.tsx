@@ -1877,7 +1877,7 @@ export default function App() {
 
         <div className="flex items-start gap-0 w-full">
           {/* 섹션 콘텐츠 */}
-          <div className="flex-1 flex flex-col gap-4 min-w-0">
+          <div className="flex-1 flex flex-col gap-6 min-w-0 pb-12">
 
         {activePortfolioAccountType !== 'gold' && !sectionCollapsed.summary && (
           <PortfolioSummaryPanel
@@ -1891,7 +1891,7 @@ export default function App() {
         )}
 
         {!sectionCollapsed.stats && (
-        <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
+        <div className="flex flex-col xl:flex-row gap-6 w-full items-stretch">
           <PortfolioStatsPanel
             totals={totals}
             marketIndicators={marketIndicators}

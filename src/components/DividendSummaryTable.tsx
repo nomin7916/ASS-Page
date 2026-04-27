@@ -273,7 +273,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     const totalAnnual = compactAnnualTotal;
     return (
       <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden w-full">
-        <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex items-center gap-2 flex-wrap">
+        <div className="p-4 bg-[#0f172a] border-b border-gray-700 flex items-center gap-2 flex-wrap">
           <span className="text-white font-bold text-sm">💰 분배금 현황</span>
           <span className="text-gray-600 text-[10px]">gold 계좌 제외</span>
           <div className="flex rounded-lg overflow-hidden border border-gray-700 ml-2">
@@ -308,9 +308,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             <table className="w-full text-[11px] text-center">
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                 <tr>
-                  <th className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">계좌</th>
+                  <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">계좌</th>
                   {MONTHS.map(m => (
-                    <th key={m} className="py-2 px-1 min-w-[68px]">{m}</th>
+                    <th key={m} className="py-2.5 px-1 min-w-[68px]">{m}</th>
                   ))}
                   <th className={`py-2 px-2 min-w-[88px] font-bold ${activeTab === 'expected' ? 'text-yellow-500' : 'text-emerald-500'}`}>연간합계</th>
                 </tr>
@@ -318,7 +318,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <tbody>
                 {rows.map(row => (
                   <tr key={row.portfolioId} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                    <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold">
+                    <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold">
                       <div
                         className="line-clamp-1"
                         style={row.rowColor ? {
@@ -330,7 +330,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       >{row.portfolioTitle}</div>
                     </td>
                     {row.monthData.map((d, i) => (
-                      <td key={i} className={`py-2 px-1 text-right text-[10px] ${d.amount > 0 ? (activeTab === 'expected' ? 'text-blue-300/70' : 'text-emerald-300') : 'text-gray-700'}`}>
+                      <td key={i} className={`py-2.5 px-1 text-right text-[10px] ${d.amount > 0 ? (activeTab === 'expected' ? 'text-blue-300/70' : 'text-emerald-300') : 'text-gray-700'}`}>
                         {d.amount > 0 ? formatCurrency(d.amount) : '-'}
                       </td>
                     ))}
@@ -342,9 +342,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               </tbody>
               <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
                 <tr>
-                  <td className="py-2 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
+                  <td className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
                   {compactMonthlyTotals.map((total, i) => (
-                    <td key={i} className={`py-2 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
+                    <td key={i} className={`py-2.5 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
                       {total > 0 ? formatCurrency(total) : '-'}
                     </td>
                   ))}
@@ -405,11 +405,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             <table className="w-full text-[11px] text-center">
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                 <tr>
-                  <th className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
+                  <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
                   <th className="py-2 px-2 text-gray-500 min-w-[55px]">계좌</th>
                   <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
                   {MONTHS.map(m => (
-                    <th key={m} className="py-2 px-1 min-w-[68px]">{m}</th>
+                    <th key={m} className="py-2.5 px-1 min-w-[68px]">{m}</th>
                   ))}
                   <th className="py-2 px-2 min-w-[88px] text-yellow-500 font-bold">연간합계</th>
                 </tr>
@@ -417,13 +417,13 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <tbody>
                 {expectedRows.map((row) => (
                   <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                    <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-green-400">
+                    <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-green-400">
                       <div className="line-clamp-1">{row.name}</div>
                     </td>
                     <td className="py-2 px-2 text-gray-500 text-[10px] truncate max-w-[55px]">{row.portfolioTitle}</td>
                     <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
                     {row.monthData.map((d, i) => (
-                      <td key={i} className={`py-2 px-1 text-right text-[10px] ${
+                      <td key={i} className={`py-2.5 px-1 text-right text-[10px] ${
                         d.amount > 0
                           ? d.isActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/70'
                           : 'text-gray-700'
@@ -439,9 +439,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               </tbody>
               <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
                 <tr>
-                  <td colSpan={3} className="py-2 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
+                  <td colSpan={3} className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
                   {monthlyTotals.map((total, i) => (
-                    <td key={i} className={`py-2 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
+                    <td key={i} className={`py-2.5 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
                       {total > 0 ? formatCurrency(total) : '-'}
                     </td>
                   ))}
@@ -469,11 +469,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             <table className="w-full text-[11px] text-center">
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                 <tr>
-                  <th className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
+                  <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
                   <th className="py-2 px-2 text-gray-500 min-w-[55px]">계좌</th>
                   <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
                   {MONTHS.map(m => (
-                    <th key={m} className="py-2 px-1 min-w-[68px]">{m}</th>
+                    <th key={m} className="py-2.5 px-1 min-w-[68px]">{m}</th>
                   ))}
                   <th className="py-2 px-2 min-w-[88px] text-emerald-500 font-bold">연간합계</th>
                 </tr>
@@ -481,7 +481,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <tbody>
                 {actualRows.map((row) => (
                   <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                    <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-green-400">
+                    <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-green-400">
                       <div className="line-clamp-1">{row.name}</div>
                     </td>
                     <td className="py-2 px-2 text-gray-500 text-[10px] truncate max-w-[55px]">{row.portfolioTitle}</td>
@@ -529,9 +529,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               </tbody>
               <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
                 <tr>
-                  <td colSpan={3} className="py-2 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
+                  <td colSpan={3} className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
                   {actualMonthlyTotals.map((total, i) => (
-                    <td key={i} className={`py-2 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
+                    <td key={i} className={`py-2.5 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
                       {total > 0 ? formatCurrency(total) : '-'}
                     </td>
                   ))}
