@@ -244,6 +244,20 @@ export function usePortfolioState({
     });
   };
 
+  // ── 분배금 이력 저장 (계좌별, Drive 백업 자동 포함) ──
+  const updateDividendHistory = (mergeMap) => {
+    // mergeMap: { [code]: { [YYYY-MM]: perShareAmount } }
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== activePortfolioId) return p;
+      const existing = p.dividendHistory || {};
+      const updated = { ...existing };
+      Object.entries(mergeMap).forEach(([code, monthData]) => {
+        updated[code] = { ...(existing[code] || {}), ...monthData };
+      });
+      return { ...p, dividendHistory: updated, dividendHistoryUpdatedAt: Date.now() };
+    }));
+  };
+
   // ── 포트폴리오 항목 CRUD ──
   const handleUpdate = (id, field, value) =>
     setPortfolio(prev => prev.map(p =>
@@ -331,5 +345,6 @@ export function usePortfolioState({
     handleDeleteStock,
     handleAddStock,
     handleAddFund,
+    updateDividendHistory,
   };
 }

@@ -18,7 +18,13 @@
       "Bash(awk 'NR>=1226 && NR<=1230 {print NR\": \"$0}' c:/Users/arui1/Documents/Github/ASS-Page/src/App.tsx)",
       "Bash(awk 'NR>=1385 && NR<=1395 {print NR\": \"$0}' c:/Users/arui1/Documents/Github/ASS-Page/src/App.tsx)",
       "Bash(awk 'NR>=1220 && NR<=1226 {print NR\": \"$0}' c:/Users/arui1/Documents/Github/ASS-Page/src/App.tsx)",
-      "Bash(awk 'NR>=1389 && NR<=1475 {print NR\": \"$0}' c:/Users/arui1/Documents/Github/ASS-Page/src/App.tsx)"
+      "Bash(awk 'NR>=1389 && NR<=1475 {print NR\": \"$0}' c:/Users/arui1/Documents/Github/ASS-Page/src/App.tsx)",
+      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; node --version; npx --version)",
+      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-ChildItem \"C:\\\\Program Files\\\\nodejs\\\\\", \"$env:APPDATA\\\\npm\" -ErrorAction SilentlyContinue | Select-Object FullName -First 5)",
+      "PowerShell(Get-ChildItem \"C:\\\\\" -Directory | Where-Object { $_.Name -match \"node|nvm\" } | Select-Object FullName)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\\" -Directory | Select-Object Name; Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\\\\\" -Directory | Where-Object { $_.Name -match \"node|nvm|pnpm\" } | Select-Object Name)",
+      "PowerShell(cmd /c \"where node 2>&1\")",
+      "PowerShell(cmd /c \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\\\\Programs\\\\node\\\\node.exe --version 2>&1\")"
     ]
   }
 }

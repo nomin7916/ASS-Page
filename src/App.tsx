@@ -317,6 +317,7 @@ export default function App() {
     handleDeleteStock,
     handleAddStock,
     handleAddFund,
+    updateDividendHistory,
   } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
@@ -756,6 +757,15 @@ export default function App() {
     }
     return data;
   }, [portfolio, totals.totalEval, settings, rebalanceSortConfig, activePortfolioAccountType, marketIndicators.usdkrw]);
+
+  const activeDividendHistory = useMemo(
+    () => portfolios.find(p => p.id === activePortfolioId)?.dividendHistory || {},
+    [portfolios, activePortfolioId]
+  );
+  const activeDividendHistoryUpdatedAt = useMemo(
+    () => portfolios.find(p => p.id === activePortfolioId)?.dividendHistoryUpdatedAt || null,
+    [portfolios, activePortfolioId]
+  );
 
   const rebalCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
@@ -2029,6 +2039,9 @@ export default function App() {
             totals={totals}
             handleUpdate={handleUpdate}
             setPortfolio={setPortfolio}
+            dividendHistory={activeDividendHistory}
+            dividendHistoryUpdatedAt={activeDividendHistoryUpdatedAt}
+            updateDividendHistory={updateDividendHistory}
           />
         )}
         </>)}
