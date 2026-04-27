@@ -364,7 +364,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           {isEditing ? (
                             <input
                               ref={inputRef}
-                              type="number"
+                              type="text"
+                              inputMode="numeric"
                               value={editingCell.value}
                               onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
                               onBlur={commitEdit}
