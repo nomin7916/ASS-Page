@@ -2,11 +2,7 @@
 import React from 'react';
 import { Plus, Download, Trash2, Calendar } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
-
-const sortArrow = (config, key) =>
-  config.key === key
-    ? (config.direction === 1 ? <span className="ml-0.5 text-blue-400 text-[8px]">▲</span> : <span className="ml-0.5 text-blue-400 text-[8px]">▼</span>)
-    : <span className="ml-0.5 text-gray-600 text-[8px]">⇅</span>;
+import { sortArrow } from '../chartUtils';
 
 export default function DepositPanel({
   depositHistory,

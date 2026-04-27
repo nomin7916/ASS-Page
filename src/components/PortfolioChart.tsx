@@ -4,25 +4,8 @@ import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
-
-const CHART_NAME_TO_POINT_KEY = {
-  'KOSPI':   'kospiPoint',  'S&P500': 'sp500Point', 'NASDAQ': 'nasdaqPoint',
-  'US 10Y':  'us10yPoint',  'Gold': 'goldIntlPoint', '국내금': 'goldKrPoint', 'USDKRW': 'usdkrwPoint',
-  'DXY':     'dxyPoint',    '기준금리': 'fedRatePoint', 'KR 10Y': 'kr10yPoint', 'VIX': 'vixPoint',
-};
-
-function extractLinkLabel(url, maxLen = 7) {
-  if (!url) return null;
-  try {
-    const withProto = url.startsWith('http') ? url : 'https://' + url;
-    const hostname = new URL(withProto).hostname;
-    let name = hostname.replace(/^(www\.|m\.)/, '');
-    name = name.replace(/\.com$/, '');
-    return name.slice(0, maxLen) || null;
-  } catch {
-    return null;
-  }
-}
+import { extractLinkLabel } from '../chartUtils';
+import { CHART_NAME_TO_POINT_KEY } from '../constants';
 
 export default function PortfolioChart({
   activePortfolioAccountType,

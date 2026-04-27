@@ -9,20 +9,7 @@ import { UI_CONFIG } from '../config';
 import { generateId, formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum } from '../utils';
 
 import CustomDatePicker from './CustomDatePicker';
-
-const PieLabelOutside = ({ cx, cy, midAngle, outerRadius, percent, name }) => {
-  const safePercent = cleanNum(percent);
-  if (safePercent < 0.03) return null;
-  const RADIAN = Math.PI / 180;
-  const radius = outerRadius + 20;
-  const x = cx + radius * Math.cos(-midAngle * RADIAN);
-  const y = cy + radius * Math.sin(-midAngle * RADIAN);
-  return (
-    <text x={x} y={y} fill="#9ca3af" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={11} fontWeight="bold">
-      {name} ({(safePercent * 100).toFixed(1)}%)
-    </text>
-  );
-};
+import { PieLabelOutside } from '../chartUtils';
 
 
 const hexToRgba = (hex, alpha) => {
