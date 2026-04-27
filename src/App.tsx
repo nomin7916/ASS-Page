@@ -1816,7 +1816,6 @@ export default function App() {
           applyingBackupId={applyingBackupId}
           handleApplyBackup={handleApplyBackup}
         />
-        )}
 
 
         {/* 비밀번호 변경 모달 */}
@@ -1847,7 +1846,6 @@ export default function App() {
           authUser={authUser}
           setHideAmounts={setHideAmounts}
         />
-        )}
 
         {!showIntegratedDashboard && (<>
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
@@ -1875,7 +1873,6 @@ export default function App() {
             setHoveredPortStkSlice={setHoveredPortStkSlice}
             hideAmounts={hideAmounts}
           />
-        )}
         )}
 
         <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
@@ -1930,8 +1927,6 @@ export default function App() {
             marketIndicators={marketIndicators}
           />
         </div>
-
-        <DividendSummaryTable portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} />
 
         {/* 차트 영역 + 시장 지표 */}
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">
@@ -2056,6 +2051,8 @@ export default function App() {
           />
         )}
         </>)}
+
+        <DividendSummaryTable portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} />
 
         {showIntegratedDashboard && (
           <IntegratedDashboard
