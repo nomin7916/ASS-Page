@@ -1928,6 +1928,13 @@ export default function App() {
           />
         </div>
 
+        {activePortfolioAccountType !== 'gold' && (
+          <DividendSummaryTable
+            portfolios={allPortfoliosForDividend.filter(p => p.id === activePortfolioId)}
+            updatePortfolioDividendHistory={updatePortfolioDividendHistory}
+          />
+        )}
+
         {/* 차트 영역 + 시장 지표 */}
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">
           {/* 시장 지표 카드 — gold 계좌 또는 패널 숨김 시 비표시 */}
@@ -2052,8 +2059,6 @@ export default function App() {
         )}
         </>)}
 
-        <DividendSummaryTable portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} />
-
         {showIntegratedDashboard && (
           <IntegratedDashboard
             intHistory={intHistory}
@@ -2098,6 +2103,9 @@ export default function App() {
             handleSave={handleSave}
           />
         )}
+
+        <DividendSummaryTable portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} />
+
         </div>
         </div>
         {/* 우측 광고 패널 */}
