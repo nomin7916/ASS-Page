@@ -65,6 +65,7 @@ export default function MarketIndicators({
   setShowIndicatorsInChart,
   indicatorHistoryLoading,
   fetchIndicatorHistory,
+  fetchSingleIndexHistory,
   appliedRange,
   onUploadIndicator,
   onFetchAll,
@@ -391,23 +392,26 @@ export default function MarketIndicators({
             </thead>
             <tbody>
               {[
-                { label: 'KOSPI',    key: 'kospi',   val: marketIndicators.kospiPrice,  histKey: null },
-                { label: 'S&P500',   key: 'sp500',   val: marketIndicators.sp500Price,  histKey: null },
-                { label: 'Nasdaq',   key: 'nasdaq',  val: marketIndicators.nasdaqPrice, histKey: null },
-                { label: 'Gold',     key: 'goldIntl', val: marketIndicators.goldIntl,   histKey: 'goldIntl' },
-                { label: '국내 금',  key: 'goldKr',  val: marketIndicators.goldKr,      histKey: 'goldKr' },
-                { label: 'US 10Y',   key: 'us10y',   val: marketIndicators.us10y,       histKey: 'us10y' },
-                { label: 'KR 10Y',   key: 'kr10y',   val: marketIndicators.kr10y,       histKey: 'kr10y' },
-                { label: '기준금리',  key: 'fedRate', val: marketIndicators.fedRate,     histKey: 'fedRate' },
-                { label: 'USDKRW',   key: 'usdkrw',  val: marketIndicators.usdkrw,     histKey: 'usdkrw' },
-                { label: 'DXY',      key: 'dxy',      val: marketIndicators.dxy,        histKey: 'dxy' },
-                { label: 'VIX',      key: 'vix',      val: marketIndicators.vix,        histKey: 'vix' },
-                { label: 'Bitcoin',  key: 'btc',      val: marketIndicators.btc,        histKey: 'btc' },
-                { label: 'Ethereum', key: 'eth',      val: marketIndicators.eth,        histKey: 'eth' },
+                { label: 'KOSPI',    key: 'kospi',   val: marketIndicators.kospiPrice,  histKey: null, marketIndexKey: 'kospi' },
+                { label: 'S&P500',   key: 'sp500',   val: marketIndicators.sp500Price,  histKey: null, marketIndexKey: 'sp500' },
+                { label: 'Nasdaq',   key: 'nasdaq',  val: marketIndicators.nasdaqPrice, histKey: null, marketIndexKey: 'nasdaq' },
+                { label: 'Gold',     key: 'goldIntl', val: marketIndicators.goldIntl,   histKey: 'goldIntl', marketIndexKey: null },
+                { label: '국내 금',  key: 'goldKr',  val: marketIndicators.goldKr,      histKey: 'goldKr', marketIndexKey: null },
+                { label: 'US 10Y',   key: 'us10y',   val: marketIndicators.us10y,       histKey: 'us10y', marketIndexKey: null },
+                { label: 'KR 10Y',   key: 'kr10y',   val: marketIndicators.kr10y,       histKey: 'kr10y', marketIndexKey: null },
+                { label: '기준금리',  key: 'fedRate', val: marketIndicators.fedRate,     histKey: 'fedRate', marketIndexKey: null },
+                { label: 'USDKRW',   key: 'usdkrw',  val: marketIndicators.usdkrw,     histKey: 'usdkrw', marketIndexKey: null },
+                { label: 'DXY',      key: 'dxy',      val: marketIndicators.dxy,        histKey: 'dxy', marketIndexKey: null },
+                { label: 'VIX',      key: 'vix',      val: marketIndicators.vix,        histKey: 'vix', marketIndexKey: null },
+                { label: 'Bitcoin',  key: 'btc',      val: marketIndicators.btc,        histKey: 'btc', marketIndexKey: null },
+                { label: 'Ethereum', key: 'eth',      val: marketIndicators.eth,        histKey: 'eth', marketIndexKey: null },
               ].map((item, i) => {
                 const st = indicatorFetchStatus[item.key];
                 const hasBackup = item.val !== null && item.val !== undefined;
-                const hist = item.histKey ? (indicatorHistoryMap?.[item.histKey] || {}) : {};
+                // 지수(KOSPI/SP500/Nasdaq)는 marketIndices에서, 나머지는 indicatorHistoryMap에서 히스토리 읽기
+                const hist = item.marketIndexKey
+                  ? (marketIndices?.[item.marketIndexKey] || {})
+                  : item.histKey ? (indicatorHistoryMap?.[item.histKey] || {}) : {};
                 const histCount = Object.keys(hist).length;
                 const latestDate = histCount > 0 ? Object.keys(hist).sort().pop() : null;
 
@@ -417,15 +421,23 @@ export default function MarketIndicators({
                   sourceText = hasBackup ? '백업' : '-';
                 } else if (st.status === 'success') {
                   badge = <span className="text-green-400">🟢</span>;
-                  sourceText = st.source;
+                  sourceText = st.source ?? 'API';
+                } else if (st.status === 'partial') {
+                  badge = <span className="text-yellow-400">🟡</span>;
+                  sourceText = st.source ?? '백업';
                 } else {
                   badge = hasBackup ? <span className="text-yellow-400">🟡</span> : <span className="text-red-400">🔴</span>;
                   sourceText = hasBackup ? '백업' : '실패';
                 }
 
-                const isAutoCollectable = item.histKey && (STOOQ_SUPPORTED.includes(item.histKey) || item.histKey === 'goldKr');
-                const isUploadOnly = item.histKey && !isAutoCollectable;
-                const isHistLoading = indicatorHistoryLoading?.[item.histKey];
+                // 지수(KOSPI/SP500/Nasdaq): fetchSingleIndexHistory로 수집
+                const isIndexItem = !!item.marketIndexKey;
+                const isAutoCollectable = !isIndexItem && item.histKey && (STOOQ_SUPPORTED.includes(item.histKey) || item.histKey === 'goldKr');
+                const isUploadOnly = !isIndexItem && item.histKey && !isAutoCollectable;
+                // 지수 로딩 상태: indicatorHistoryLoading[key] 공유
+                const isHistLoading = isIndexItem
+                  ? indicatorHistoryLoading?.[item.key]
+                  : indicatorHistoryLoading?.[item.histKey];
 
                 const today = new Date().toISOString().split('T')[0];
                 const incrementalStart = latestDate
@@ -433,7 +445,7 @@ export default function MarketIndicators({
                   : null;
                 const isUpToDate = latestDate && latestDate >= today;
 
-                // 수집 출처 URL (검증 패널에서 source 텍스트 클릭 시 이동)
+                // 수집 출처 URL
                 const sourceUrl = (() => {
                   if (!st?.source) return null;
                   return SOURCE_URLS[item.key]?.[st.source] ?? DEFAULT_URLS[item.key] ?? null;
@@ -446,7 +458,7 @@ export default function MarketIndicators({
                     <td className="py-0.5 text-center text-[8px]">
                       {histCount > 0
                         ? <span className="text-blue-400" title={latestDate ? `최신: ${latestDate}` : ''}>{histCount}건</span>
-                        : item.histKey
+                        : (item.histKey || item.marketIndexKey)
                           ? <span className="text-gray-600">없음</span>
                           : <span className="text-gray-700">-</span>
                       }
@@ -454,6 +466,26 @@ export default function MarketIndicators({
                     <td className="py-0.5">
                       {isHistLoading ? (
                         <span className="text-blue-300 animate-pulse">수집중...</span>
+                      ) : isIndexItem ? (
+                        isUpToDate ? (
+                          <span
+                            className={`text-[8px] ${sourceUrl ? 'text-green-500 cursor-pointer hover:text-green-300' : 'text-green-600'}`}
+                            onClick={() => sourceUrl && window.open(sourceUrl, '_blank')}
+                            title={sourceUrl ? `출처: ${sourceText}` : undefined}
+                          >
+                            최신
+                          </span>
+                        ) : (
+                          <button
+                            className="text-blue-400 hover:text-blue-200 transition-colors"
+                            onClick={() => fetchSingleIndexHistory?.(item.marketIndexKey)}
+                            title={latestDate
+                              ? `${item.label} 히스토리 수집\n보유: ~${latestDate}\n클릭하여 전체 갱신`
+                              : `${item.label} 히스토리 수집 (데이터 없음)`}
+                          >
+                            {sourceText || 'stooq'} ↓
+                          </button>
+                        )
                       ) : isAutoCollectable ? (
                         isUpToDate ? (
                           <span
@@ -464,14 +496,13 @@ export default function MarketIndicators({
                             최신
                           </span>
                         ) : (
-                          /* 수집 버튼: 데이터만 수집, 차트 자동 표시 안 함 */
                           <button
                             className="text-blue-400 hover:text-blue-200 transition-colors"
                             onClick={() => {
                               fetchIndicatorHistory(item.histKey, incrementalStart, today);
                             }}
                             title={latestDate
-                              ? `${item.label} 증분 수집\n보유: ${latestDate} 이후 ~ 오늘\n클릭하여 누락 데이터만 수집`
+                              ? `${item.label} 증분 수집\n보유: ${latestDate} 이후 ~ 오늘`
                               : `${item.label} 전체 수집 (데이터 없음)`}
                           >
                             {sourceText} ↓

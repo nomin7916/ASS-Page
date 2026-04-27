@@ -1286,6 +1286,27 @@ export default function App() {
     }
   };
 
+  // KOSPI / S&P500 / Nasdaq 히스토리 단독 수집 (검증 패널 수집 버튼용)
+  const fetchSingleIndexHistory = async (key: 'kospi' | 'sp500' | 'nasdaq') => {
+    const symbolMap: Record<string, string> = { kospi: '^KS11', sp500: '^GSPC', nasdaq: '^NDX' };
+    const symbol = symbolMap[key];
+    if (!symbol) return;
+    setIndicatorHistoryLoading(prev => ({ ...prev, [key]: true }));
+    try {
+      const result = await fetchIndexData(symbol);
+      if (result?.data && Object.keys(result.data).length > 0) {
+        setMarketIndices(prev => {
+          const merged = { ...(prev[key] || {}), ...result.data };
+          const status = buildIndexStatus(merged, result.source);
+          setIndexFetchStatus(p => ({ ...p, [key]: status }));
+          return { ...prev, [key]: merged };
+        });
+      }
+    } finally {
+      setIndicatorHistoryLoading(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
   // *Ref를 항상 최신 상태로 동기화 (클로저 문제 해결용 — 20분 인터벌 등 stale closure 방지)
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
   useEffect(() => { activePortfolioAccountTypeRef.current = activePortfolioAccountType; }, [activePortfolioAccountType]);
@@ -4354,7 +4375,7 @@ export default function App() {
               marketIndices={marketIndices}
               indicatorHistoryMap={indicatorHistoryMap}
               indicatorLoading={indicatorLoading}
-              indicatorFetchStatus={indicatorFetchStatus}
+              indicatorFetchStatus={{ ...indicatorFetchStatus, ...indexFetchStatus }}
               showIndicatorVerify={showIndicatorVerify}
               setShowIndicatorVerify={setShowIndicatorVerify}
               fetchMarketIndicators={fetchMarketIndicators}
@@ -4368,6 +4389,7 @@ export default function App() {
               setShowIndicatorsInChart={setShowIndicatorsInChart}
               indicatorHistoryLoading={indicatorHistoryLoading}
               fetchIndicatorHistory={fetchIndicatorHistory}
+              fetchSingleIndexHistory={fetchSingleIndexHistory}
               appliedRange={appliedRange}
               onUploadIndicator={handleIndicatorUpload}
               onFetchAll={fetchAllIndicatorHistory}
