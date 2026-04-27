@@ -26,7 +26,10 @@
       "PowerShell(cmd /c \"where node 2>&1\")",
       "PowerShell(cmd /c \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\\\\Programs\\\\node\\\\node.exe --version 2>&1\")",
       "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\('Path', 'Machine'\\) + ';' + [System.Environment]::GetEnvironmentVariable\\('Path', 'User'\\); cd \"C:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 25)",
-      "PowerShell($nvmPath = \"$env:APPDATA\\\\nvm\"; if \\(Test-Path $nvmPath\\) { ls $nvmPath } else { \"No nvm\" }; ls \"C:\\\\Users\\\\arui1\\\\.nvm\" -ErrorAction SilentlyContinue | Select-Object -First 5)"
+      "PowerShell($nvmPath = \"$env:APPDATA\\\\nvm\"; if \\(Test-Path $nvmPath\\) { ls $nvmPath } else { \"No nvm\" }; ls \"C:\\\\Users\\\\arui1\\\\.nvm\" -ErrorAction SilentlyContinue | Select-Object -First 5)",
+      "WebFetch(domain:14ass-page-eea5.vercel.app)",
+      "Bash(awk 'NR>=1852 && NR<=1885' /c/Users/arui1/Documents/Github/ASS-Page/src/App.tsx)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }
