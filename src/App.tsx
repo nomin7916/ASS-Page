@@ -22,6 +22,7 @@ import AdminPage from './components/AdminPage';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
+import { useHistoryChart } from './hooks/useHistoryChart';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -455,38 +456,7 @@ export default function App() {
   const [globalToast, setGlobalToast] = useState({ text: "", isError: false });
   const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
 
-  const [chartPeriod, setChartPeriod] = useState('3m');
-  const [dateRange, setDateRange] = useState({ start: '', end: '' });
-  const [appliedRange, setAppliedRange] = useState({ start: '', end: '' });
-  const [isDragging, setIsDragging] = useState(false);
-  const [refAreaLeft, setRefAreaLeft] = useState('');
-  const [refAreaRight, setRefAreaRight] = useState('');
-  const [selectionResult, setSelectionResult] = useState(null);
-  const [showTotalEval, setShowTotalEval] = useState(true);
-  const [showReturnRate, setShowReturnRate] = useState(true);
-  const [showBacktest, setShowBacktest] = useState(false);
-  const [backtestColor, setBacktestColor] = useState('#f97316');
-  const [isZeroBaseMode, setIsZeroBaseMode] = useState(true);
-  const [hoveredPoint, setHoveredPoint] = useState<{label: string, payload: any[]} | null>(null);
-  const [hoveredPortCatSlice, setHoveredPortCatSlice] = useState<any>(null);
-  const [hoveredPortStkSlice, setHoveredPortStkSlice] = useState<any>(null);
-  const [hoveredIntCatSlice, setHoveredIntCatSlice] = useState<any>(null);
-  const [hoveredIntHoldSlice, setHoveredIntHoldSlice] = useState<any>(null);
-  const [hoveredRebalCatSlice, setHoveredRebalCatSlice] = useState<any>(null);
-  const [hoveredCurCatSlice, setHoveredCurCatSlice] = useState<any>(null);
-  
-  const [showKospi, setShowKospi] = useState(true);
-  const [showSp500, setShowSp500] = useState(false);
-  const [showNasdaq, setShowNasdaq] = useState(false);
-  const [showIndicatorsInChart, setShowIndicatorsInChart] = useState({
-    us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false
-  });
-  const [goldIndicators, setGoldIndicators] = useState({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
-  const [indicatorScales, setIndicatorScales] = useState({ us10y: 1, goldIntl: 1, goldKr: 1, usdkrw: 1, dxy: 1, fedRate: 1, kr10y: 1, vix: 1, btc: 1, eth: 1 });
-  const [isScaleSettingOpen, setIsScaleSettingOpen] = useState(false);
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
-
-  const [showMarketPanel, setShowMarketPanel] = useState(true);
 
   const portfolioRef = useRef([]);
   const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
@@ -502,21 +472,52 @@ export default function App() {
 
   // ── 통합 대시보드 ──
   const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(true);
-  const [intChartPeriod, setIntChartPeriod] = useState('1y');
-  const [intDateRange, setIntDateRange] = useState({ start: '', end: '' });
-  const [intAppliedRange, setIntAppliedRange] = useState({ start: '', end: '' });
-  const [intRefAreaLeft, setIntRefAreaLeft] = useState('');
-  const [intRefAreaRight, setIntRefAreaRight] = useState('');
-  const [intSelectionResult, setIntSelectionResult] = useState(null);
-  const [intIsDragging, setIntIsDragging] = useState(false);
-  const [intIsZeroBaseMode, setIntIsZeroBaseMode] = useState(true);
   const [intExpandedCat, setIntExpandedCat] = useState(null);
   const [simpleEditField, setSimpleEditField] = useState<{id: string, field: string} | null>(null);
   const [showNewAccountMenu, setShowNewAccountMenu] = useState(false);
-  const [hideAmounts, setHideAmounts] = useState(false);
   const [showUnlockPinModal, setShowUnlockPinModal] = useState(false);
   const [unlockPinDigits, setUnlockPinDigits] = useState(['', '', '', '']);
   const [unlockPinError, setUnlockPinError] = useState('');
+
+  // ── useHistoryChart 훅 ──
+  const {
+    chartPeriod, setChartPeriod,
+    dateRange, setDateRange,
+    appliedRange, setAppliedRange,
+    isDragging, setIsDragging,
+    refAreaLeft, setRefAreaLeft,
+    refAreaRight, setRefAreaRight,
+    selectionResult, setSelectionResult,
+    showTotalEval, setShowTotalEval,
+    showReturnRate, setShowReturnRate,
+    showBacktest, setShowBacktest,
+    backtestColor, setBacktestColor,
+    isZeroBaseMode, setIsZeroBaseMode,
+    hoveredPoint, setHoveredPoint,
+    hoveredPortCatSlice, setHoveredPortCatSlice,
+    hoveredPortStkSlice, setHoveredPortStkSlice,
+    hoveredIntCatSlice, setHoveredIntCatSlice,
+    hoveredIntHoldSlice, setHoveredIntHoldSlice,
+    hoveredRebalCatSlice, setHoveredRebalCatSlice,
+    hoveredCurCatSlice, setHoveredCurCatSlice,
+    showKospi, setShowKospi,
+    showSp500, setShowSp500,
+    showNasdaq, setShowNasdaq,
+    showIndicatorsInChart, setShowIndicatorsInChart,
+    goldIndicators, setGoldIndicators,
+    indicatorScales, setIndicatorScales,
+    isScaleSettingOpen, setIsScaleSettingOpen,
+    showMarketPanel, setShowMarketPanel,
+    hideAmounts, setHideAmounts,
+    intChartPeriod, setIntChartPeriod,
+    intDateRange, setIntDateRange,
+    intAppliedRange, setIntAppliedRange,
+    intRefAreaLeft, setIntRefAreaLeft,
+    intRefAreaRight, setIntRefAreaRight,
+    intSelectionResult, setIntSelectionResult,
+    intIsDragging, setIntIsDragging,
+    intIsZeroBaseMode, setIntIsZeroBaseMode,
+  } = useHistoryChart();
 
   // ── useDriveSync 훅 ──
   const {
