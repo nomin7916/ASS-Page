@@ -50,31 +50,6 @@ import {
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
 
 
-const SectionToggle = ({ label, collapsed, onToggle }) => (
-  <div
-    className={`flex items-center gap-2 px-3 h-8 w-full rounded-lg cursor-pointer select-none transition-all duration-150 group ${
-      collapsed
-        ? 'bg-gray-800/60 border border-gray-700/40 hover:bg-gray-700/50'
-        : 'hover:bg-gray-800/20'
-    }`}
-    onClick={onToggle}
-  >
-    <svg
-      className={`w-2.5 h-2.5 flex-shrink-0 transition-transform duration-200 ${
-        collapsed ? 'text-gray-400 -rotate-90' : 'text-gray-600 group-hover:text-gray-400'
-      }`}
-      fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-    </svg>
-    <span className={`text-[11px] font-medium tracking-wide transition-colors ${
-      collapsed ? 'text-gray-400' : 'text-gray-600 group-hover:text-gray-400'
-    }`}>
-      {label}
-    </span>
-  </div>
-);
-
 export default function App() {
   const historyInputRef = useRef(null);
 
@@ -1893,23 +1868,31 @@ export default function App() {
           <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
         )}
 
-        {activePortfolioAccountType !== 'gold' && (
-          <>
-            <SectionToggle label="포트폴리오 요약" collapsed={sectionCollapsed.summary} onToggle={() => toggleSection('summary')} />
-            {!sectionCollapsed.summary && (
-              <PortfolioSummaryPanel
-                totals={totals}
-                hoveredPortCatSlice={hoveredPortCatSlice}
-                setHoveredPortCatSlice={setHoveredPortCatSlice}
-                hoveredPortStkSlice={hoveredPortStkSlice}
-                setHoveredPortStkSlice={setHoveredPortStkSlice}
-                hideAmounts={hideAmounts}
-              />
-            )}
-          </>
+        <div className="flex flex-wrap items-center gap-1.5 py-1.5">
+          {activePortfolioAccountType !== 'gold' && (
+            <button onClick={() => toggleSection('summary')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.summary ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>포트폴리오 요약</button>
+          )}
+          <button onClick={() => toggleSection('stats')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.stats ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>통계 / 히스토리 / 입출금</button>
+          {activePortfolioAccountType !== 'gold' && (
+            <button onClick={() => toggleSection('dividend')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.dividend ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>분배금 현황</button>
+          )}
+          <button onClick={() => toggleSection('chart')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.chart ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>수익률 차트</button>
+          {activePortfolioAccountType !== 'gold' && (
+            <button onClick={() => toggleSection('rebalancing')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.rebalancing ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>리밸런싱</button>
+          )}
+        </div>
+
+        {activePortfolioAccountType !== 'gold' && !sectionCollapsed.summary && (
+          <PortfolioSummaryPanel
+            totals={totals}
+            hoveredPortCatSlice={hoveredPortCatSlice}
+            setHoveredPortCatSlice={setHoveredPortCatSlice}
+            hoveredPortStkSlice={hoveredPortStkSlice}
+            setHoveredPortStkSlice={setHoveredPortStkSlice}
+            hideAmounts={hideAmounts}
+          />
         )}
 
-        <SectionToggle label="통계 / 히스토리 / 입출금" collapsed={sectionCollapsed.stats} onToggle={() => toggleSection('stats')} />
         {!sectionCollapsed.stats && (
         <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
           <PortfolioStatsPanel
@@ -1965,21 +1948,15 @@ export default function App() {
         </div>
         )}
 
-        {activePortfolioAccountType !== 'gold' && (
-          <>
-            <SectionToggle label="분배금 현황" collapsed={sectionCollapsed.dividend} onToggle={() => toggleSection('dividend')} />
-            {!sectionCollapsed.dividend && (
-              <DividendSummaryTable
-                portfolios={allPortfoliosForDividend.filter(p => p.id === activePortfolioId)}
-                updatePortfolioDividendHistory={updatePortfolioDividendHistory}
-                updatePortfolioActualDividend={updatePortfolioActualDividend}
-              />
-            )}
-          </>
+        {activePortfolioAccountType !== 'gold' && !sectionCollapsed.dividend && (
+          <DividendSummaryTable
+            portfolios={allPortfoliosForDividend.filter(p => p.id === activePortfolioId)}
+            updatePortfolioDividendHistory={updatePortfolioDividendHistory}
+            updatePortfolioActualDividend={updatePortfolioActualDividend}
+          />
         )}
 
         {/* 차트 영역 + 시장 지표 */}
-        <SectionToggle label="수익률 차트" collapsed={sectionCollapsed.chart} onToggle={() => toggleSection('chart')} />
         {!sectionCollapsed.chart && (
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">
           {/* 시장 지표 카드 — gold 계좌 또는 패널 숨김 시 비표시 */}
@@ -2076,34 +2053,29 @@ export default function App() {
         )}
 
         {/* 리밸런싱 시뮬레이터 */}
-        {activePortfolioAccountType !== 'gold' && (
-          <>
-            <SectionToggle label="리밸런싱" collapsed={sectionCollapsed.rebalancing} onToggle={() => toggleSection('rebalancing')} />
-            {!sectionCollapsed.rebalancing && (
-              <RebalancingPanel
-                activePortfolioAccountType={activePortfolioAccountType}
-                portfolio={portfolio}
-                settings={settings}
-                updateSettingsForType={updateSettingsForType}
-                rebalanceData={rebalanceData}
-                rebalanceSortConfig={rebalanceSortConfig}
-                handleRebalanceSort={handleRebalanceSort}
-                rebalExtraQty={rebalExtraQty}
-                setRebalExtraQty={setRebalExtraQty}
-                rebalCatDonutData={rebalCatDonutData}
-                curCatDonutData={curCatDonutData}
-                marketIndicators={marketIndicators}
-                hideAmounts={hideAmounts}
-                hoveredRebalCatSlice={hoveredRebalCatSlice}
-                setHoveredRebalCatSlice={setHoveredRebalCatSlice}
-                hoveredCurCatSlice={hoveredCurCatSlice}
-                setHoveredCurCatSlice={setHoveredCurCatSlice}
-                totals={totals}
-                handleUpdate={handleUpdate}
-                setPortfolio={setPortfolio}
-              />
-            )}
-          </>
+        {activePortfolioAccountType !== 'gold' && !sectionCollapsed.rebalancing && (
+          <RebalancingPanel
+            activePortfolioAccountType={activePortfolioAccountType}
+            portfolio={portfolio}
+            settings={settings}
+            updateSettingsForType={updateSettingsForType}
+            rebalanceData={rebalanceData}
+            rebalanceSortConfig={rebalanceSortConfig}
+            handleRebalanceSort={handleRebalanceSort}
+            rebalExtraQty={rebalExtraQty}
+            setRebalExtraQty={setRebalExtraQty}
+            rebalCatDonutData={rebalCatDonutData}
+            curCatDonutData={curCatDonutData}
+            marketIndicators={marketIndicators}
+            hideAmounts={hideAmounts}
+            hoveredRebalCatSlice={hoveredRebalCatSlice}
+            setHoveredRebalCatSlice={setHoveredRebalCatSlice}
+            hoveredCurCatSlice={hoveredCurCatSlice}
+            setHoveredCurCatSlice={setHoveredCurCatSlice}
+            totals={totals}
+            handleUpdate={handleUpdate}
+            setPortfolio={setPortfolio}
+          />
         )}
         </>)}
 
