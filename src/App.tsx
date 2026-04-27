@@ -32,6 +32,7 @@ import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
 import PortfolioStatsPanel from './components/PortfolioStatsPanel';
 import AccountTabBar from './components/AccountTabBar';
 import UserInfoBar from './components/UserInfoBar';
+import DividendSummaryTable from './components/DividendSummaryTable';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -765,6 +766,13 @@ export default function App() {
   const activeDividendHistoryUpdatedAt = useMemo(
     () => portfolios.find(p => p.id === activePortfolioId)?.dividendHistoryUpdatedAt || null,
     [portfolios, activePortfolioId]
+  );
+
+  const allPortfoliosForDividend = useMemo(() =>
+    portfolios.map(p =>
+      p.id === activePortfolioId ? { ...p, portfolio } : p
+    ),
+    [portfolios, activePortfolioId, portfolio]
   );
 
   const rebalCatDonutData = useMemo(() => {
@@ -1921,6 +1929,8 @@ export default function App() {
             marketIndicators={marketIndicators}
           />
         </div>
+
+        <DividendSummaryTable portfolios={allPortfoliosForDividend} />
 
         {/* 차트 영역 + 시장 지표 */}
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">

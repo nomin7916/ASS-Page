@@ -24,7 +24,9 @@
       "PowerShell(Get-ChildItem \"C:\\\\\" -Directory | Where-Object { $_.Name -match \"node|nvm\" } | Select-Object FullName)",
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\\" -Directory | Select-Object Name; Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\\\\\" -Directory | Where-Object { $_.Name -match \"node|nvm|pnpm\" } | Select-Object Name)",
       "PowerShell(cmd /c \"where node 2>&1\")",
-      "PowerShell(cmd /c \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\\\\Programs\\\\node\\\\node.exe --version 2>&1\")"
+      "PowerShell(cmd /c \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\\\\Programs\\\\node\\\\node.exe --version 2>&1\")",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\('Path', 'Machine'\\) + ';' + [System.Environment]::GetEnvironmentVariable\\('Path', 'User'\\); cd \"C:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 25)",
+      "PowerShell($nvmPath = \"$env:APPDATA\\\\nvm\"; if \\(Test-Path $nvmPath\\) { ls $nvmPath } else { \"No nvm\" }; ls \"C:\\\\Users\\\\arui1\\\\.nvm\" -ErrorAction SilentlyContinue | Select-Object -First 5)"
     ]
   }
 }
