@@ -452,6 +452,7 @@ export default function App() {
   const [depositHistory, setDepositHistory] = useState([]);
   const [depositHistory2, setDepositHistory2] = useState([]);
   const [customLinks, setCustomLinks] = useState(UI_CONFIG.DEFAULT_LINKS);
+  const [overseasLinks, setOverseasLinks] = useState(UI_CONFIG.OVERSEAS_DEFAULT_LINKS);
   const [history, setHistory] = useState([]);
   const [settings, setSettings] = useState({ mode: 'rebalance', amount: 1000000 });
   const [historyLimit, setHistoryLimit] = useState(UI_CONFIG.DEFAULTS.HISTORY_LIMIT);
@@ -651,6 +652,7 @@ export default function App() {
       }
 
       setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
+      if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
       setLookupRows(stateData.lookupRows || []);
       setCompStocks(stateData.compStocks || defaultCompStocks);
       if (stateData.adminAccessAllowed !== undefined) setAdminAccessAllowed(stateData.adminAccessAllowed);
@@ -2052,8 +2054,10 @@ export default function App() {
   };
 
   const handleCompStockBlur = async (index, code) => {
-    if (!code || code.length < 5) return;
-    const d = await fetchStockInfo(code);
+    if (!code) return;
+    const isOverseasComp = activePortfolioAccountType === 'overseas';
+    if (!isOverseasComp && code.length < 5) return;
+    const d = isOverseasComp ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
     if (d) setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], name: d.name }; return n; });
   };
 
@@ -2063,18 +2067,25 @@ export default function App() {
 
     if (comp.active) { setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: false }; return n; }); return; }
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
+    const isOverseasComp = activePortfolioAccountType === 'overseas';
     let hist = stockHistoryMap[comp.code];
     // 단순 현재가 캐시(1~3건)는 무시하고 과거 데이터 재조회
     const hasRichHistory = hist && Object.keys(hist).length > 3;
     if (!hasRichHistory) {
-      // 1순위: KIS OpenAPI (상장 이후 전체 데이터, 수정주가 기준)
-      const rKIS = await fetchKISStockHistory(comp.code);
-      if (rKIS) hist = rKIS.data;
-      // 2순위: 네이버 fchart (KIS 실패 시 폴백)
-      if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code); if (rNaver) hist = rNaver.data; }
-      // 3순위: Yahoo Finance (.KS / .KQ)
-      if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`); if (r1) hist = r1.data; }
-      if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`); if (r2) hist = r2.data; }
+      if (isOverseasComp) {
+        // 해외주식: fetchUsStockHistory (Naver worldstock → Yahoo Finance)
+        const rUS = await fetchUsStockHistory(comp.code);
+        if (rUS) hist = rUS.data;
+      } else {
+        // 1순위: KIS OpenAPI (상장 이후 전체 데이터, 수정주가 기준)
+        const rKIS = await fetchKISStockHistory(comp.code);
+        if (rKIS) hist = rKIS.data;
+        // 2순위: 네이버 fchart (KIS 실패 시 폴백)
+        if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code); if (rNaver) hist = rNaver.data; }
+        // 3순위: Yahoo Finance (.KS / .KQ)
+        if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`); if (r1) hist = r1.data; }
+        if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`); if (r2) hist = r2.data; }
+      }
       if (hist) {
         setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
         // 과거 데이터 수집 직후 Drive 즉시 백업 (페이지 재시작 시 재수집 방지)
@@ -2083,7 +2094,7 @@ export default function App() {
           if (snap && driveTokenRef.current) saveAllToDrive(snap);
         }, 600);
       } else {
-        const info = await fetchStockInfo(comp.code);
+        const info = isOverseasComp ? await fetchUsStockInfo(comp.code) : await fetchStockInfo(comp.code);
         if (info) {
           const todayStr = new Date().toISOString().split('T')[0];
           hist = { [todayStr]: info.price };
@@ -2099,15 +2110,20 @@ export default function App() {
       const latestDate = sortedDates[sortedDates.length - 1];
       const today = new Date().toISOString().split('T')[0];
       if (latestDate && latestDate < today) {
-        const fromYear = parseInt(latestDate.split('-')[0]);
-        const daysDiff = Math.ceil((Date.now() - new Date(latestDate).getTime()) / 86400000);
-        const naverCount = Math.ceil(daysDiff * 5 / 7) + 30;
         let newData: Record<string, number> | null = null;
-        const rKIS = await fetchKISStockHistory(comp.code, fromYear);
-        if (rKIS) newData = rKIS.data;
-        if (!newData) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) newData = rNaver.data; }
-        if (!newData) { const r1 = await fetchIndexData(`${comp.code}.KS`, latestDate); if (r1) newData = r1.data; }
-        if (!newData) { const r2 = await fetchIndexData(`${comp.code}.KQ`, latestDate); if (r2) newData = r2.data; }
+        if (isOverseasComp) {
+          const rUS = await fetchUsStockHistory(comp.code, latestDate);
+          if (rUS) newData = rUS.data;
+        } else {
+          const fromYear = parseInt(latestDate.split('-')[0]);
+          const daysDiff = Math.ceil((Date.now() - new Date(latestDate).getTime()) / 86400000);
+          const naverCount = Math.ceil(daysDiff * 5 / 7) + 30;
+          const rKIS = await fetchKISStockHistory(comp.code, fromYear);
+          if (rKIS) newData = rKIS.data;
+          if (!newData) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) newData = rNaver.data; }
+          if (!newData) { const r1 = await fetchIndexData(`${comp.code}.KS`, latestDate); if (r1) newData = r1.data; }
+          if (!newData) { const r2 = await fetchIndexData(`${comp.code}.KQ`, latestDate); if (r2) newData = r2.data; }
+        }
         if (newData) {
           hist = { ...hist, ...newData };
           setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
@@ -2150,21 +2166,28 @@ export default function App() {
 
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
 
-    const startYear = lastCachedDate ? parseInt(lastCachedDate.split('-')[0]) : 2000;
-    const daysDiff = lastCachedDate ? Math.ceil((Date.now() - new Date(lastCachedDate).getTime()) / 86400000) : null;
-    const naverCount = daysDiff ? Math.ceil(daysDiff * 5 / 7) + 30 : 2000;
-    const yahooStartDate = lastCachedDate ?? startDate;
-
+    const isOverseasFetch = activePortfolioAccountType === 'overseas';
     let hist: Record<string, number> | null = null;
 
-    // 1순위: KIS (캐시 있으면 마지막 연도부터, 없으면 2000년부터)
-    const rKIS = await fetchKISStockHistory(comp.code, startYear);
-    if (rKIS) hist = rKIS.data;
-    // 2순위: 네이버 fchart (계산된 count로)
-    if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) hist = rNaver.data; }
-    // 3순위: Yahoo (.KS / .KQ, 마지막 캐시 날짜 또는 조회기간 지정)
-    if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`, yahooStartDate); if (r1) hist = r1.data; }
-    if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`, yahooStartDate); if (r2) hist = r2.data; }
+    if (isOverseasFetch) {
+      // 해외주식: fetchUsStockHistory (Naver worldstock → Yahoo Finance)
+      const fromDate = lastCachedDate ?? startDate;
+      const rUS = await fetchUsStockHistory(comp.code, fromDate);
+      if (rUS) hist = rUS.data;
+    } else {
+      const startYear = lastCachedDate ? parseInt(lastCachedDate.split('-')[0]) : 2000;
+      const daysDiff = lastCachedDate ? Math.ceil((Date.now() - new Date(lastCachedDate).getTime()) / 86400000) : null;
+      const naverCount = daysDiff ? Math.ceil(daysDiff * 5 / 7) + 30 : 2000;
+      const yahooStartDate = lastCachedDate ?? startDate;
+      // 1순위: KIS (캐시 있으면 마지막 연도부터, 없으면 2000년부터)
+      const rKIS = await fetchKISStockHistory(comp.code, startYear);
+      if (rKIS) hist = rKIS.data;
+      // 2순위: 네이버 fchart (계산된 count로)
+      if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) hist = rNaver.data; }
+      // 3순위: Yahoo (.KS / .KQ, 마지막 캐시 날짜 또는 조회기간 지정)
+      if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`, yahooStartDate); if (r1) hist = r1.data; }
+      if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`, yahooStartDate); if (r2) hist = r2.data; }
+    }
 
     if (hist && Object.keys(hist).length > 1) {
       const mergedHist = existingHist ? { ...existingHist, ...hist } : hist;
@@ -2185,7 +2208,7 @@ export default function App() {
       if (existingHist && Object.keys(existingHist).length > 1) {
         setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
       } else {
-        const info = await fetchStockInfo(comp.code);
+        const info = isOverseasFetch ? await fetchUsStockInfo(comp.code) : await fetchStockInfo(comp.code);
         if (info) {
           const todayStr = new Date().toISOString().split('T')[0];
           const fallbackHist = { ...(existingHist || {}), [todayStr]: info.price };
@@ -2520,7 +2543,7 @@ export default function App() {
 
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -2538,7 +2561,7 @@ export default function App() {
 
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory };
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
@@ -2618,6 +2641,7 @@ export default function App() {
         setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
       }
       if (stateData.customLinks) setCustomLinks(stateData.customLinks);
+      if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
       if (stateData.lookupRows) setLookupRows(stateData.lookupRows);
       if (stateData.compStocks) setCompStocks(stateData.compStocks);
       if (stateData.intHistory) setIntHistory(stateData.intHistory);
@@ -2868,6 +2892,7 @@ export default function App() {
         }
 
         setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
+        if (data.overseasLinks) setOverseasLinks(data.overseasLinks);
         setLookupRows(data.lookupRows || []);
         setCompStocks(data.compStocks || defaultCompStocks);
         if (data.adminAccessAllowed !== undefined) setAdminAccessAllowed(data.adminAccessAllowed);
@@ -3173,7 +3198,7 @@ export default function App() {
     if (activePortfolioId) {
       accountChartStatesRef.current[activePortfolioId] = { ...currentChartStateRef.current };
     }
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
     // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
     const stateEmail = adminViewingAsRef.current || authUser.email;
@@ -3193,7 +3218,7 @@ export default function App() {
         saveAllToDrive(state);
       }, 2000);
     }
-  }, [portfolios, activePortfolioId, title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest]);
+  }, [portfolios, activePortfolioId, title, portfolio, principal, history, depositHistory, depositHistory2, customLinks, overseasLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
@@ -4217,7 +4242,10 @@ export default function App() {
 
           {/* 입금 내역 */}
           <div className="flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden">
-            <div className="p-2 bg-[#0f172a] text-white font-bold flex items-center text-xs border-b border-gray-700 shrink-0"><span>💰 입금 내역</span></div>
+            <div className="p-2 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
+              <span>💰 입금 내역</span>
+              {activePortfolioAccountType === 'overseas' && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">$1 = ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+            </div>
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed">
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
@@ -4264,7 +4292,10 @@ export default function App() {
 
           {/* 출금 내역 */}
           <div className="flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden">
-            <div className="p-2 bg-[#0f172a] text-white font-bold flex items-center text-xs border-b border-gray-700 shrink-0"><span>💰 출금 내역</span></div>
+            <div className="p-2 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
+              <span>💰 출금 내역</span>
+              {activePortfolioAccountType === 'overseas' && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">$1 = ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+            </div>
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed">
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
@@ -4343,32 +4374,42 @@ export default function App() {
           <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg flex-1 min-w-0 flex flex-col">
             <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 flex flex-col shrink-0 gap-3">
               {/* 사이트 링크 버튼 */}
-              <div className="flex items-center gap-1.5">
-                {customLinks.slice(0, 3).map((link, i) => {
-                  const label = link.name?.trim() ? link.name.trim().slice(0, 7) : extractLinkLabel(link.url);
-                  return (
-                    <button key={i} onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')} className={`bg-gray-800 hover:bg-gray-700 text-blue-300 h-[28px] rounded shadow transition border border-gray-600 flex items-center justify-center font-bold tracking-tight ${label ? 'px-2 text-[11px] min-w-[28px]' : 'w-[28px] text-xs'}`} title={link.url || `버튼 ${i + 1} 설정 필요`}>{label ?? (i + 1)}</button>
-                  );
-                })}
-                <button onClick={() => setIsLinkSettingsOpen(!isLinkSettingsOpen)} className="bg-gray-800 hover:bg-gray-700 text-gray-400 w-[30px] h-[30px] rounded shadow transition border border-gray-600 flex items-center justify-center" title="퀵 링크 설정"><Settings size={14} /></button>
-              </div>
-              {isLinkSettingsOpen && (
-                <div className="flex flex-wrap gap-3 pb-1 border-b border-gray-700/50">
-                  {customLinks.slice(0, 3).map((l, i) => (
-                    <div key={i} className="flex flex-col gap-1.5 flex-1 min-w-[160px] max-w-[240px]">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 이름 <span className="text-gray-600 font-normal">(직접 입력, 최대 7자)</span></span>
-                        <input type="text" maxLength={7} className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-400 shadow-inner font-normal" value={l.name || ''} onChange={(e) => { const n = [...customLinks]; n[i] = { ...n[i], name: e.target.value }; setCustomLinks(n); }} placeholder="비워두면 URL에서 자동 추출" />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 연결 (URL)</span>
-                        <input type="text" className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-500 shadow-inner font-normal" value={l.url} onChange={(e) => { const n = [...customLinks]; n[i] = { ...n[i], url: e.target.value }; setCustomLinks(n); }} placeholder="https://..." />
-                      </div>
+              {(() => {
+                const isOverseasChart = activePortfolioAccountType === 'overseas';
+                const activeLinks = isOverseasChart ? overseasLinks : customLinks;
+                const setActiveLinks = isOverseasChart ? setOverseasLinks : setCustomLinks;
+                return (
+                  <>
+                    <div className="flex items-center gap-1.5">
+                      {activeLinks.slice(0, 3).map((link, i) => {
+                        const label = link.name?.trim() ? link.name.trim().slice(0, 7) : extractLinkLabel(link.url);
+                        return (
+                          <button key={i} onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')} className={`bg-gray-800 hover:bg-gray-700 text-blue-300 h-[28px] rounded shadow transition border border-gray-600 flex items-center justify-center font-bold tracking-tight ${label ? 'px-2 text-[11px] min-w-[28px]' : 'w-[28px] text-xs'}`} title={link.url || `버튼 ${i + 1} 설정 필요`}>{label ?? (i + 1)}</button>
+                        );
+                      })}
+                      <button onClick={() => setIsLinkSettingsOpen(!isLinkSettingsOpen)} className="bg-gray-800 hover:bg-gray-700 text-gray-400 w-[30px] h-[30px] rounded shadow transition border border-gray-600 flex items-center justify-center" title="퀵 링크 설정"><Settings size={14} /></button>
                     </div>
-                  ))}
-                  <button onClick={() => setIsLinkSettingsOpen(false)} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded text-xs font-bold shadow transition">완료</button>
-                </div>
-              )}
+                    {isLinkSettingsOpen && (
+                      <div className="flex flex-wrap gap-3 pb-1 border-b border-gray-700/50">
+                        {isOverseasChart && <div className="w-full text-[10px] text-sky-400/70 font-bold">🌐 해외계좌 전용 링크 (다른 계좌에 영향 없음)</div>}
+                        {activeLinks.slice(0, 3).map((l, i) => (
+                          <div key={i} className="flex flex-col gap-1.5 flex-1 min-w-[160px] max-w-[240px]">
+                            <div className="flex flex-col gap-1">
+                              <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 이름 <span className="text-gray-600 font-normal">(직접 입력, 최대 7자)</span></span>
+                              <input type="text" maxLength={7} className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-400 shadow-inner font-normal" value={l.name || ''} onChange={(e) => { const n = [...activeLinks]; n[i] = { ...n[i], name: e.target.value }; setActiveLinks(n); }} placeholder="비워두면 URL에서 자동 추출" />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 연결 (URL)</span>
+                              <input type="text" className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-500 shadow-inner font-normal" value={l.url} onChange={(e) => { const n = [...activeLinks]; n[i] = { ...n[i], url: e.target.value }; setActiveLinks(n); }} placeholder="https://..." />
+                            </div>
+                          </div>
+                        ))}
+                        <button onClick={() => setIsLinkSettingsOpen(false)} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded text-xs font-bold shadow transition">완료</button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3">
                   {/* gold 계좌: 고정 지표 4개 칩 / 그 외: 비교종목 칩 */}
@@ -4838,12 +4879,13 @@ export default function App() {
                             onClick={e => {
                               e.stopPropagation();
                               if (totals.totalEval <= 0) return;
+                              const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
                               setPortfolio(prev => prev.map(p => {
                                 if (p.type !== 'stock' && p.type !== 'fund') return p;
                                 const qty = cleanNum(p.quantity);
                                 const price = cleanNum(p.currentPrice);
                                 const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
-                                return { ...p, targetRatio: parseFloat((curEval / totals.totalEval * 100).toFixed(1)) };
+                                return { ...p, targetRatio: parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(1)) };
                               }));
                             }}
                             className="px-2 py-0.5 text-[10px] font-bold rounded-md border border-green-500/70 text-green-300 bg-green-900/20 hover:bg-green-700/50 hover:border-green-400 active:scale-95 transition-all whitespace-nowrap"

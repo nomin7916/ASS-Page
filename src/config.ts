@@ -25,6 +25,11 @@ export const UI_CONFIG = {
     { name: "ETFCHECK", url: "https://www.etfcheck.co.kr/mobile/main" },
     { name: "트레이딩 이코노미", url: "https://tradingeconomics.com" },
   ],
+  OVERSEAS_DEFAULT_LINKS: [
+    { name: "네이버 증권", url: "https://m.stock.naver.com/worldstock/home" },
+    { name: "ETFCHEC", url: "https://www.etfcheck.co.kr/mobile/main" },
+    { name: "yahoo", url: "https://finance.yahoo.com" },
+  ],
   DEFAULTS: { HISTORY_LIMIT: 3, DEPOSIT_LIMIT: 5, PRINCIPAL: 80000000 }
 };
 
