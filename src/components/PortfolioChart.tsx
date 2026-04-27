@@ -454,7 +454,7 @@ export default function PortfolioChart({
         )}
       </div>
 
-      <div className="chart-container-for-drag p-4 h-[400px] xl:flex-1 xl:h-auto relative select-none">
+      <div className="chart-container-for-drag p-4 min-h-[400px] xl:flex-1 relative select-none">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
             <defs>
