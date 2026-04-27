@@ -308,7 +308,7 @@ export const fetchDividendHistory = async (code: string): Promise<{
   totalCount: number;
   result: Array<{ dividendAmount: number; exDividendAt: string; dividendYield: number }>;
 } | null> => {
-  if (!code || !/^\d{5,6}$/.test(code)) return null;
+  if (!code || !/^[A-Z0-9]{5,6}$/i.test(code)) return null;
   const targetUrl = `https://m.stock.naver.com/api/dividend/history?itemCode=${code}&page=1&pageSize=100`;
   const proxies = [
     `/api/proxy?url=${encodeURIComponent(targetUrl)}`,

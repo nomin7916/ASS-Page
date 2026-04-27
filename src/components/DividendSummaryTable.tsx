@@ -6,6 +6,9 @@ import { fetchDividendHistory } from '../api';
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
 
+// 한국 주식/ETF 코드: 5~6자리 숫자 또는 혼합 영숫자 (예: 441640, 0022T0)
+const isKrCode = (code) => /^[A-Z0-9]{5,6}$/i.test(String(code || ''));
+
 function buildMonthPrediction(codeHistory) {
   const pred = {};
   for (let m = 1; m <= 12; m++) {
@@ -31,19 +34,19 @@ function parseDividendApiResult(result) {
 export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
-  const fetchedRef = useRef(new Set()); // "portfolioId:code" 쌍 추적
+  const fetchedRef = useRef(new Set());
 
   const nonGoldPortfolios = useMemo(() =>
     (portfolios || []).filter(p => p.accountType !== 'gold'),
     [portfolios]
   );
 
-  // 종목 집합이 바뀔 때만 useEffect를 재실행하기 위한 안정적인 key
+  // 5~6자리 코드 종목 집합 (한국 주식/ETF)
   const stockKeys = useMemo(() =>
     nonGoldPortfolios
       .flatMap(pf =>
         (pf.portfolio || [])
-          .filter(item => /^\d{5,6}$/.test(String(item.code || '')))
+          .filter(item => isKrCode(item.code))
           .map(item => `${pf.id}:${item.code}`)
       )
       .sort()
@@ -51,7 +54,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     [nonGoldPortfolios]
   );
 
-  // 아직 조회하지 않은 종목만 자동 fetch
+  // 데이터 없는 종목 자동 fetch
   useEffect(() => {
     if (!stockKeys) return;
     const fetchMissing = async () => {
@@ -59,7 +62,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       nonGoldPortfolios.forEach(pf => {
         const divHistory = pf.dividendHistory || {};
         (pf.portfolio || []).forEach(item => {
-          if (!/^\d{5,6}$/.test(String(item.code || ''))) return;
+          if (!isKrCode(item.code)) return;
           const key = `${pf.id}:${item.code}`;
           if (fetchedRef.current.has(key) || divHistory[item.code]) return;
           fetchedRef.current.add(key);
@@ -92,9 +95,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     setLoading(true);
     await Promise.all(
       nonGoldPortfolios.map(async pf => {
-        const stocks = (pf.portfolio || []).filter(item =>
-          /^\d{5,6}$/.test(String(item.code || ''))
-        );
+        const stocks = (pf.portfolio || []).filter(item => isKrCode(item.code));
         if (!stocks.length) return;
         const mergeMap = {};
         await Promise.all(stocks.map(async item => {
@@ -114,15 +115,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     const result = [];
     nonGoldPortfolios.forEach(pf => {
       const divHistory = pf.dividendHistory || {};
-      const stocks = (pf.portfolio || []).filter(item =>
-        /^\d{5,6}$/.test(String(item.code || ''))
-      );
-      stocks.forEach(item => {
-        if (!divHistory[item.code]) return;
+      (pf.portfolio || []).forEach(item => {
+        if (!isKrCode(item.code)) return;
         const qty = cleanNum(item.quantity);
         if (!qty) return;
-        const pred = buildMonthPrediction(divHistory[item.code]);
-        if (!Object.keys(pred).length) return;
+        const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
         const monthData = Array.from({ length: 12 }, (_, i) => {
           const mo = String(i + 1).padStart(2, '0');
           const isActual = !!divHistory[item.code]?.[`${CURRENT_YEAR}-${mo}`];
@@ -135,6 +132,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           code: item.code,
           name: item.name,
           qty,
+          hasDivData: Object.keys(pred).length > 0,
           monthData,
           annual: monthData.reduce((s, d) => s + d.amount, 0),
         });
@@ -147,11 +145,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     const monthMap = {};
     nonGoldPortfolios.forEach(pf => {
       const divHistory = pf.dividendHistory || {};
-      const stocks = (pf.portfolio || []).filter(item =>
-        /^\d{5,6}$/.test(String(item.code || ''))
-      );
-      stocks.forEach(item => {
-        if (!divHistory[item.code]) return;
+      (pf.portfolio || []).forEach(item => {
+        if (!isKrCode(item.code) || !divHistory[item.code]) return;
         const qty = cleanNum(item.quantity);
         if (!qty) return;
         Object.entries(divHistory[item.code]).forEach(([yearMonth, perUnit]) => {
@@ -178,10 +173,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
   }, [nonGoldPortfolios]);
 
-  // 비gold 계좌 자체가 없으면 표시 안 함
+  // 비gold 계좌 없으면 숨김
   if (!nonGoldPortfolios.length) return null;
 
-  const hasDividendData = expectedRows.length > 0;
   const monthlyTotals = Array.from({ length: 12 }, (_, i) =>
     expectedRows.reduce((sum, row) => sum + row.monthData[i].amount, 0)
   );
@@ -222,86 +216,78 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         </button>
       </div>
 
-      {/* 초기 로딩 (데이터 없는 상태) */}
-      {loading && !hasDividendData && (
-        <div className="py-8 text-center text-blue-400 text-xs animate-pulse">분배금 데이터 조회 중...</div>
-      )}
-
-      {/* 한국 주식 코드 종목 없음 */}
-      {!loading && !stockKeys && (
-        <div className="py-6 text-center text-gray-500 text-xs">
-          분배금 조회 대상 종목이 없습니다.<br />
-          <span className="text-gray-600">한국 주식·ETF (6자리 숫자 코드) 종목이 있는 계좌에서 표시됩니다.</span>
-        </div>
-      )}
-
-      {/* 조회 완료 후 분배금 데이터 없음 */}
-      {!loading && !!stockKeys && !hasDividendData && (
-        <div className="py-8 text-center text-gray-500 text-xs">분배금 지급 이력이 있는 종목이 없습니다.</div>
-      )}
-
       {/* 월 예상 분배금 탭 */}
-      {hasDividendData && activeTab === 'expected' && (
+      {activeTab === 'expected' && (
         <div className="overflow-x-auto">
-          <table className="w-full text-[11px] text-center">
-            <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
-              <tr>
-                <th className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
-                <th className="py-2 px-2 text-gray-500 min-w-[55px]">계좌</th>
-                <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
-                {MONTHS.map(m => (
-                  <th key={m} className="py-2 px-1 min-w-[68px]">{m}</th>
+          {loading && expectedRows.every(r => !r.hasDivData) ? (
+            <div className="py-8 text-center text-blue-400 text-xs animate-pulse">분배금 데이터 조회 중...</div>
+          ) : expectedRows.length === 0 ? (
+            <div className="py-8 text-center text-gray-500 text-xs">한국 주식·ETF 종목이 없습니다.</div>
+          ) : (
+            <table className="w-full text-[11px] text-center">
+              <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
+                <tr>
+                  <th className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
+                  <th className="py-2 px-2 text-gray-500 min-w-[55px]">계좌</th>
+                  <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
+                  {MONTHS.map(m => (
+                    <th key={m} className="py-2 px-1 min-w-[68px]">{m}</th>
+                  ))}
+                  <th className="py-2 px-2 min-w-[88px] text-yellow-500 font-bold">연간합계</th>
+                </tr>
+              </thead>
+              <tbody>
+                {expectedRows.map((row) => (
+                  <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                    <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-green-400">
+                      <div className="line-clamp-1">{row.name}</div>
+                    </td>
+                    <td className="py-2 px-2 text-gray-500 text-[10px] truncate max-w-[55px]">{row.portfolioTitle}</td>
+                    <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
+                    {row.monthData.map((d, i) => (
+                      <td key={i} className={`py-2 px-1 text-right text-[10px] ${
+                        d.amount > 0
+                          ? d.isActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/70'
+                          : 'text-gray-700'
+                      }`}>
+                        {d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}
+                      </td>
+                    ))}
+                    <td className={`py-2 px-2 text-right font-bold ${row.annual > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>
+                      {row.annual > 0 ? formatCurrency(row.annual) : loading && !row.hasDivData ? '...' : '-'}
+                    </td>
+                  </tr>
                 ))}
-                <th className="py-2 px-2 min-w-[88px] text-yellow-500 font-bold">연간합계</th>
-              </tr>
-            </thead>
-            <tbody>
-              {expectedRows.map((row) => (
-                <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                  <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-green-400">
-                    <div className="line-clamp-1">{row.name}</div>
-                  </td>
-                  <td className="py-2 px-2 text-gray-500 text-[10px] truncate max-w-[55px]">{row.portfolioTitle}</td>
-                  <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
-                  {row.monthData.map((d, i) => (
-                    <td key={i} className={`py-2 px-1 text-right text-[10px] ${
-                      d.amount > 0
-                        ? d.isActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/70'
-                        : 'text-gray-700'
-                    }`}>
-                      {d.amount > 0 ? formatCurrency(d.amount) : '-'}
+              </tbody>
+              <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
+                <tr>
+                  <td colSpan={3} className="py-2 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
+                  {monthlyTotals.map((total, i) => (
+                    <td key={i} className={`py-2 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
+                      {total > 0 ? formatCurrency(total) : '-'}
                     </td>
                   ))}
-                  <td className={`py-2 px-2 text-right font-bold ${row.annual > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>
-                    {row.annual > 0 ? formatCurrency(row.annual) : '-'}
+                  <td className="py-2 px-2 text-right font-bold text-yellow-300">
+                    {annualTotal > 0 ? formatCurrency(annualTotal) : '-'}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
-              <tr>
-                <td colSpan={3} className="py-2 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
-                {monthlyTotals.map((total, i) => (
-                  <td key={i} className={`py-2 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
-                    {total > 0 ? formatCurrency(total) : '-'}
-                  </td>
-                ))}
-                <td className="py-2 px-2 text-right font-bold text-yellow-300">
-                  {annualTotal > 0 ? formatCurrency(annualTotal) : '-'}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-          <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-            초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측
-          </div>
+              </tfoot>
+            </table>
+          )}
+          {!loading && expectedRows.length > 0 && (
+            <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
+              초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측
+            </div>
+          )}
         </div>
       )}
 
       {/* 월 입금 내역 탭 */}
-      {hasDividendData && activeTab === 'actual' && (
+      {activeTab === 'actual' && (
         <div className="overflow-x-auto">
-          {actualByMonth.length === 0 ? (
+          {loading && actualByMonth.length === 0 ? (
+            <div className="py-8 text-center text-blue-400 text-xs animate-pulse">분배금 데이터 조회 중...</div>
+          ) : actualByMonth.length === 0 ? (
             <div className="py-8 text-center text-gray-500 text-xs">{CURRENT_YEAR}년 실제 입금 분배금 데이터가 없습니다.</div>
           ) : (
             <table className="w-full text-[11px]">
