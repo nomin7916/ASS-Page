@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useState, useEffect, useMemo } from 'react';
 import { UI_CONFIG } from '../config';
-import { generateId } from '../utils';
+import { generateId, cleanNum } from '../utils';
 
 interface UsePortfolioStateParams {
   marketIndicators: { goldKr?: number; goldKrChg?: number; [key: string]: any };
@@ -138,6 +138,135 @@ export function usePortfolioState({
     }
   };
 
+  // ── 포트폴리오 탭 전환 ──
+  const switchToPortfolio = (id) => {
+    const updated = portfolios.map(p =>
+      p.id === activePortfolioId
+        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        : p
+    );
+    setPortfolios(updated);
+    const target = updated.find(p => p.id === id);
+    if (!target) return;
+    setActivePortfolioId(id);
+    setTitle(target.name);
+    setPortfolio(target.portfolio || []);
+    setPrincipal(target.principal || 0);
+    setHistory(target.history || []);
+    setDepositHistory(target.depositHistory || []);
+    setDepositHistory2(target.depositHistory2 || []);
+    setPortfolioStartDate(target.startDate || target.portfolioStartDate || '');
+    setSettings(target.settings || { mode: 'rebalance', amount: 1000000 });
+    setShowIntegratedDashboard(false);
+  };
+
+  // ── 직접입력 계좌 추가 ──
+  const addSimpleAccount = () => {
+    const updated = portfolios.map(p =>
+      p.id === activePortfolioId
+        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        : p
+    );
+    const newId = generateId();
+    const today = new Date().toISOString().split('T')[0];
+    const newP = {
+      id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
+      accountType: 'simple',
+      evalAmount: 0,
+      portfolio: [], principal: 0, history: [], depositHistory: [], depositHistory2: [],
+      settings: { mode: 'rebalance', amount: 1000000 },
+    };
+    setPortfolios([...updated, newP]);
+  };
+
+  // ── 직접입력 계좌 필드 수정 ──
+  const updateSimpleAccountField = (id, field, val) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      if (field === 'evalAmount') {
+        const num = cleanNum(val);
+        return { ...p, evalAmount: num, ...(!p.principalManual ? { principal: num } : {}) };
+      }
+      if (field === 'principal') {
+        return { ...p, principal: cleanNum(val), principalManual: true };
+      }
+      return { ...p, [field]: cleanNum(val) };
+    }));
+  };
+
+  // ── 시작일 변경 ──
+  const updatePortfolioStartDate = (id, date) => {
+    if (id === activePortfolioId) setPortfolioStartDate(date);
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, startDate: date, portfolioStartDate: date } : p));
+  };
+
+  // ── 계좌명 변경 ──
+  const updatePortfolioName = (id, name) => {
+    if (id === activePortfolioId) setTitle(name);
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, name } : p));
+  };
+
+  // ── 계좌 색상 변경 ──
+  const updatePortfolioColor = (id, rowColor) => {
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, rowColor } : p));
+  };
+
+  // ── 전체 색상 초기화 ──
+  const resetAllPortfolioColors = () => {
+    setPortfolios(prev => prev.map(p => ({ ...p, rowColor: '' })));
+  };
+
+  // ── 같은 accountType 계좌에 settings 동기화 ──
+  const updateSettingsForType = (newSettings) => {
+    setSettings(newSettings);
+    const activePortfolio = portfolios.find(p => p.id === activePortfolioId);
+    if (!activePortfolio) return;
+    setPortfolios(prev => prev.map(p =>
+      p.accountType === activePortfolio.accountType ? { ...p, settings: newSettings } : p
+    ));
+  };
+
+  // ── 메모 변경 ──
+  const updatePortfolioMemo = (id, memo) => {
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, memo } : p));
+  };
+
+  // ── 계좌 순서 이동 ──
+  const movePortfolio = (id, direction) => {
+    setPortfolios(prev => {
+      const idx = prev.findIndex(p => p.id === id);
+      if (idx === -1) return prev;
+      const newIdx = idx + direction;
+      if (newIdx < 0 || newIdx >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
+  };
+
+  // ── 포트폴리오 항목 CRUD ──
+  const handleUpdate = (id, field, value) =>
+    setPortfolio(prev => prev.map(p =>
+      p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass'].includes(field) ? value : cleanNum(value) } : p
+    ));
+
+  const handleDeleteStock = (id) => setPortfolio(prev => prev.filter(p => p.id !== id));
+
+  const handleAddStock = () =>
+    setPortfolio(prev => [
+      { id: generateId(), type: 'stock', category: "주식", assetClass: 'D', code: "", name: "", currentPrice: 0, changeRate: 0, purchasePrice: 0, quantity: 0, targetRatio: 0, isManual: true },
+      ...prev,
+    ]);
+
+  const handleAddFund = () =>
+    setPortfolio(prev => {
+      const lastFundIdx = prev.reduceRight((acc, p, i) => acc === -1 && p.type === 'fund' ? i : acc, -1);
+      const depositIdx = prev.findIndex(p => p.type === 'deposit');
+      const insertIdx = lastFundIdx >= 0 ? lastFundIdx + 1 : (depositIdx >= 0 ? depositIdx + 1 : prev.length);
+      const newFund = { id: generateId(), type: 'fund', category: 'FUND', assetClass: 'S', code: '', name: '', currentPrice: 0, changeRate: 0, investAmount: 0, evalAmount: 0, targetRatio: 0, isManual: true };
+      return [...prev.slice(0, insertIdx), newFund, ...prev.slice(insertIdx)];
+    });
+
   // ── KRX 금현물 포트폴리오: 주식 항목이 없으면 자동 초기화 ──
   useEffect(() => {
     if (activePortfolioAccountType !== 'gold') return;
@@ -188,5 +317,19 @@ export function usePortfolioState({
     buildPortfoliosState,
     addPortfolio,
     deletePortfolio,
+    switchToPortfolio,
+    addSimpleAccount,
+    updateSimpleAccountField,
+    updatePortfolioStartDate,
+    updatePortfolioName,
+    updatePortfolioColor,
+    resetAllPortfolioColors,
+    updateSettingsForType,
+    updatePortfolioMemo,
+    movePortfolio,
+    handleUpdate,
+    handleDeleteStock,
+    handleAddStock,
+    handleAddFund,
   };
 }

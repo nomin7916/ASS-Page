@@ -1,5 +1,24 @@
 export const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
 
+export const hexToRgba = (hex: string, alpha: number): string | null => {
+  if (!hex || hex.length < 7) return null;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+export const blendWithDarkBg = (hex: string, alpha: number, bgHex = '#1e293b'): string => {
+  if (!hex || hex.length < 7) return bgHex;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const bgR = parseInt(bgHex.slice(1, 3), 16);
+  const bgG = parseInt(bgHex.slice(3, 5), 16);
+  const bgB = parseInt(bgHex.slice(5, 7), 16);
+  return `rgb(${Math.round(bgR*(1-alpha)+r*alpha)}, ${Math.round(bgG*(1-alpha)+g*alpha)}, ${Math.round(bgB*(1-alpha)+b*alpha)})`;
+};
+
 export const cleanNum = (val) => {
   if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return val;

@@ -41,7 +41,7 @@ import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
   getClosestValue, getIndexLatest, handleTableKeyDown, handleReadonlyCellNav, buildIndexStatus,
-  parseIndexCSV, detectIndexFromFileName
+  parseIndexCSV, detectIndexFromFileName, hexToRgba, blendWithDarkBg
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
@@ -298,6 +298,20 @@ export default function App() {
     buildPortfoliosState,
     addPortfolio,
     deletePortfolio,
+    switchToPortfolio,
+    addSimpleAccount,
+    updateSimpleAccountField,
+    updatePortfolioStartDate,
+    updatePortfolioName,
+    updatePortfolioColor,
+    resetAllPortfolioColors,
+    updateSettingsForType,
+    updatePortfolioMemo,
+    movePortfolio,
+    handleUpdate,
+    handleDeleteStock,
+    handleAddStock,
+    handleAddFund,
   } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
@@ -1055,16 +1069,6 @@ export default function App() {
   const handleRebalanceSort = (key) => setRebalanceSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort = (key) => setDepositSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort2 = (key) => setDepositSortConfig2(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
-  const handleUpdate = (id, field, value) => setPortfolio(prev => prev.map(p => p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass'].includes(field) ? value : cleanNum(value) } : p));
-  const handleDeleteStock = (id) => setPortfolio(prev => prev.filter(p => p.id !== id));
-  const handleAddStock = () => setPortfolio([{ id: generateId(), type: 'stock', category: "주식", assetClass: 'D', code: "", name: "", currentPrice: 0, changeRate: 0, purchasePrice: 0, quantity: 0, targetRatio: 0, isManual: true }, ...portfolio]);
-  const handleAddFund = () => setPortfolio(prev => {
-    const lastFundIdx = prev.reduceRight((acc, p, i) => acc === -1 && p.type === 'fund' ? i : acc, -1);
-    const depositIdx = prev.findIndex(p => p.type === 'deposit');
-    const insertIdx = lastFundIdx >= 0 ? lastFundIdx + 1 : (depositIdx >= 0 ? depositIdx + 1 : prev.length);
-    const newFund = { id: generateId(), type: 'fund', category: 'FUND', assetClass: 'S', code: '', name: '', currentPrice: 0, changeRate: 0, investAmount: 0, evalAmount: 0, targetRatio: 0, isManual: true };
-    return [...prev.slice(0, insertIdx), newFund, ...prev.slice(insertIdx)];
-  });
   const refreshPrices = async () => {
     setIsLoading(true);
     setIndexFetchStatus({
@@ -1848,125 +1852,6 @@ export default function App() {
     if (st === 'fail') return <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block ml-0.5" title="갱신 실패" />;
     if (st === 'loading') return <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block ml-0.5 animate-pulse" title="갱신 중" />;
     return null;
-  };
-
-  // ── 멀티 포트폴리오 관리 ──
-  const switchToPortfolio = (id) => {
-    const updated = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
-    setPortfolios(updated);
-    const target = updated.find(p => p.id === id);
-    if (!target) return;
-    setActivePortfolioId(id);
-    setTitle(target.name);
-    setPortfolio(target.portfolio || []);
-    setPrincipal(target.principal || 0);
-    setHistory(target.history || []);
-    setDepositHistory(target.depositHistory || []);
-    setDepositHistory2(target.depositHistory2 || []);
-    setPortfolioStartDate(target.startDate || target.portfolioStartDate || '');
-    setSettings(target.settings || { mode: 'rebalance', amount: 1000000 });
-    setShowIntegratedDashboard(false);
-  };
-
-  const addSimpleAccount = () => {
-    const updated = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
-    const newId = generateId();
-    const today = new Date().toISOString().split('T')[0];
-    const newP = {
-      id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
-      accountType: 'simple',
-      evalAmount: 0,
-      portfolio: [], principal: 0, history: [], depositHistory: [], depositHistory2: [],
-      settings: { mode: 'rebalance', amount: 1000000 },
-    };
-    setPortfolios([...updated, newP]);
-    // 통합 대시보드에 머물기
-  };
-
-  const updateSimpleAccountField = (id, field, val) => {
-    setPortfolios(prev => prev.map(p => {
-      if (p.id !== id) return p;
-      if (field === 'evalAmount') {
-        const num = cleanNum(val);
-        return { ...p, evalAmount: num, ...(!p.principalManual ? { principal: num } : {}) };
-      }
-      if (field === 'principal') {
-        return { ...p, principal: cleanNum(val), principalManual: true };
-      }
-      return { ...p, [field]: cleanNum(val) };
-    }));
-  };
-
-  const updatePortfolioStartDate = (id, date) => {
-    if (id === activePortfolioId) setPortfolioStartDate(date);
-    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, startDate: date, portfolioStartDate: date } : p));
-  };
-
-  const updatePortfolioName = (id, name) => {
-    if (id === activePortfolioId) setTitle(name);
-    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, name } : p));
-  };
-
-  const updatePortfolioColor = (id, rowColor) => {
-    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, rowColor } : p));
-  };
-
-  const resetAllPortfolioColors = () => {
-    setPortfolios(prev => prev.map(p => ({ ...p, rowColor: '' })));
-  };
-
-  // 같은 accountType의 모든 계좌에 settings를 동기화
-  const updateSettingsForType = (newSettings) => {
-    setSettings(newSettings);
-    const activePortfolio = portfolios.find(p => p.id === activePortfolioId);
-    if (!activePortfolio) return;
-    setPortfolios(prev => prev.map(p =>
-      p.accountType === activePortfolio.accountType ? { ...p, settings: newSettings } : p
-    ));
-  };
-
-  const hexToRgba = (hex, alpha) => {
-    if (!hex || hex.length < 7) return null;
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  };
-
-  // 스티키 셀용: 반투명 색상 대신 dark bg와 블렌드한 불투명 색상 반환 (스크롤 시 뒤 내용이 비치는 현상 방지)
-  const blendWithDarkBg = (hex: string, alpha: number, bgHex = '#1e293b'): string => {
-    if (!hex || hex.length < 7) return bgHex;
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    const bgR = parseInt(bgHex.slice(1, 3), 16);
-    const bgG = parseInt(bgHex.slice(3, 5), 16);
-    const bgB = parseInt(bgHex.slice(5, 7), 16);
-    return `rgb(${Math.round(bgR*(1-alpha)+r*alpha)}, ${Math.round(bgG*(1-alpha)+g*alpha)}, ${Math.round(bgB*(1-alpha)+b*alpha)})`;
-  };
-
-  const updatePortfolioMemo = (id, memo) => {
-    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, memo } : p));
-  };
-
-  const movePortfolio = (id, direction) => {
-    setPortfolios(prev => {
-      const idx = prev.findIndex(p => p.id === id);
-      if (idx === -1) return prev;
-      const newIdx = idx + direction;
-      if (newIdx < 0 || newIdx >= prev.length) return prev;
-      const next = [...prev];
-      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
-      return next;
-    });
   };
 
   // 로그인 전: LoginGate 표시
