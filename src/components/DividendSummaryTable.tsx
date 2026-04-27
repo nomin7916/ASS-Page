@@ -30,7 +30,7 @@ function parseDividendApiResult(result) {
   return monthData;
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, compact = false }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null); // { portfolioId, code, monthIdx, value }
@@ -182,6 +182,50 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     return result;
   }, [nonGoldPortfolios]);
 
+  // compact 모드 — 계좌별 월 합계
+  const compactExpectedRows = useMemo(() => {
+    if (!compact) return [];
+    return nonGoldPortfolios.map(pf => {
+      const divHistory = pf.dividendHistory || {};
+      const monthData = Array.from({ length: 12 }, (_, i) => {
+        const amount = (pf.portfolio || []).reduce((sum, item) => {
+          if (!isKrCode(item.code)) return sum;
+          const qty = cleanNum(item.quantity);
+          if (!qty) return sum;
+          const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
+          return sum + (pred[i + 1] || 0) * qty;
+        }, 0);
+        return { amount };
+      });
+      const annual = monthData.reduce((s, d) => s + d.amount, 0);
+      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', monthData, annual };
+    }).filter(row => row.annual > 0);
+  }, [compact, nonGoldPortfolios]);
+
+  const compactActualRows = useMemo(() => {
+    if (!compact) return [];
+    return nonGoldPortfolios.map(pf => {
+      const divHistory = pf.dividendHistory || {};
+      const actualDividend = pf.actualDividend || {};
+      const monthData = Array.from({ length: 12 }, (_, i) => {
+        const mo = String(i + 1).padStart(2, '0');
+        const yearMonth = `${CURRENT_YEAR}-${mo}`;
+        const amount = (pf.portfolio || []).reduce((sum, item) => {
+          if (!isKrCode(item.code)) return sum;
+          const qty = cleanNum(item.quantity);
+          if (!qty) return sum;
+          const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
+          const codeActual = actualDividend[item.code] || {};
+          const predicted = (pred[i + 1] || 0) * qty;
+          return sum + (yearMonth in codeActual ? codeActual[yearMonth] : predicted);
+        }, 0);
+        return { amount, yearMonth };
+      });
+      const annual = monthData.reduce((s, d) => s + d.amount, 0);
+      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', monthData, annual };
+    }).filter(row => row.annual > 0);
+  }, [compact, nonGoldPortfolios]);
+
   const commitEdit = () => {
     if (!editingCell) return;
     const { portfolioId, code, monthIdx, value, yearMonth } = editingCell;
@@ -216,6 +260,97 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     actualRows.reduce((sum, row) => sum + row.monthData[i].amount, 0)
   );
   const actualAnnualTotal = actualMonthlyTotals.reduce((s, v) => s + v, 0);
+
+  const compactAnnualTotal = (activeTab === 'expected' ? compactExpectedRows : compactActualRows)
+    .reduce((s, r) => s + r.annual, 0);
+  const compactMonthlyTotals = Array.from({ length: 12 }, (_, i) =>
+    (activeTab === 'expected' ? compactExpectedRows : compactActualRows)
+      .reduce((sum, row) => sum + row.monthData[i].amount, 0)
+  );
+
+  if (compact) {
+    const rows = activeTab === 'expected' ? compactExpectedRows : compactActualRows;
+    const totalAnnual = compactAnnualTotal;
+    return (
+      <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden w-full">
+        <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex items-center gap-2 flex-wrap">
+          <span className="text-white font-bold text-sm">💰 분배금 현황</span>
+          <span className="text-gray-600 text-[10px]">gold 계좌 제외</span>
+          <div className="flex rounded-lg overflow-hidden border border-gray-700 ml-2">
+            <button
+              onClick={() => setActiveTab('expected')}
+              className={`px-3 py-1 text-xs font-bold transition-colors ${activeTab === 'expected' ? 'bg-blue-700/80 text-white' : 'bg-transparent text-gray-400 hover:bg-gray-700/50'}`}
+            >월 예상 분배금</button>
+            <button
+              onClick={() => setActiveTab('actual')}
+              className={`px-3 py-1 text-xs font-bold transition-colors border-l border-gray-700 ${activeTab === 'actual' ? 'bg-emerald-700/80 text-white' : 'bg-transparent text-gray-400 hover:bg-gray-700/50'}`}
+            >월 입금 내역</button>
+          </div>
+          {totalAnnual > 0 && (
+            <span className={`font-bold text-xs ${activeTab === 'expected' ? 'text-yellow-400' : 'text-emerald-400'}`}>
+              {activeTab === 'expected' ? '연간 예상 ' : `${CURRENT_YEAR}년 누계 `}{formatCurrency(totalAnnual)}
+            </span>
+          )}
+          <button
+            onClick={handleRefreshAll}
+            disabled={loading}
+            className="ml-auto px-3 py-1 text-xs font-bold rounded-md border border-gray-600 text-gray-400 hover:bg-gray-700/50 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {loading ? '조회 중...' : '🔄 새로고침'}
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          {rows.length === 0 ? (
+            <div className="py-8 text-center text-gray-500 text-xs">
+              {loading ? '분배금 데이터 조회 중...' : '분배금 데이터가 없습니다.'}
+            </div>
+          ) : (
+            <table className="w-full text-[11px] text-center">
+              <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
+                <tr>
+                  <th className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">계좌</th>
+                  {MONTHS.map(m => (
+                    <th key={m} className="py-2 px-1 min-w-[68px]">{m}</th>
+                  ))}
+                  <th className={`py-2 px-2 min-w-[88px] font-bold ${activeTab === 'expected' ? 'text-yellow-500' : 'text-emerald-500'}`}>연간합계</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(row => (
+                  <tr key={row.portfolioId} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                    <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-green-400">
+                      <div className="line-clamp-1">{row.portfolioTitle}</div>
+                    </td>
+                    {row.monthData.map((d, i) => (
+                      <td key={i} className={`py-2 px-1 text-right text-[10px] ${d.amount > 0 ? (activeTab === 'expected' ? 'text-blue-300/70' : 'text-emerald-300') : 'text-gray-700'}`}>
+                        {d.amount > 0 ? formatCurrency(d.amount) : '-'}
+                      </td>
+                    ))}
+                    <td className={`py-2 px-2 text-right font-bold ${row.annual > 0 ? (activeTab === 'expected' ? 'text-yellow-400' : 'text-emerald-400') : 'text-gray-600'}`}>
+                      {row.annual > 0 ? formatCurrency(row.annual) : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
+                <tr>
+                  <td className="py-2 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
+                  {compactMonthlyTotals.map((total, i) => (
+                    <td key={i} className={`py-2 px-1 text-right font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
+                      {total > 0 ? formatCurrency(total) : '-'}
+                    </td>
+                  ))}
+                  <td className={`py-2 px-2 text-right font-bold ${activeTab === 'expected' ? 'text-yellow-300' : 'text-emerald-300'}`}>
+                    {totalAnnual > 0 ? formatCurrency(totalAnnual) : '-'}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden w-full">
