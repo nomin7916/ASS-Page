@@ -1,5 +1,5 @@
 ﻿// @ts-nocheck
-import React from 'react';
+import React, { useState } from 'react';
 import { Plus, Download, Trash2 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -73,6 +73,9 @@ export default function IntegratedDashboard({
   handleIntChartMouseUp,
   handleSave,
 }) {
+  const [sec, setSec] = useState({ accounts: false, history: false, donut: false });
+  const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
+
   return (
           <div className="flex flex-col gap-6 w-full">
 
@@ -112,7 +115,9 @@ export default function IntegratedDashboard({
               );
             })()}
 
-            {/* 통합 계좌 현황 */}
+            <div className="flex items-start gap-0 w-full">
+              <div className="flex-1 flex flex-col gap-6 min-w-0">
+            {!sec.accounts && (
             <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg">
               <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
@@ -313,8 +318,8 @@ export default function IntegratedDashboard({
                 </table>
               </div>
             </div>
-
-            {/* 월별 평가 추이 + 기간별 수익 차트 */}
+            )}
+            {!sec.history && (
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
 
               {/* 평가액 추이 테이블 */}
@@ -424,8 +429,8 @@ export default function IntegratedDashboard({
                 </div>
               </div>
             </div>
-
-            {/* 자산 카테고리 비중 (도넛 차트) */}
+            )}
+            {!sec.donut && (
             <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-8">
               <div className="p-3 bg-[#0f172a] border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🍩 자산 카테고리 비중 (통합)</span>
@@ -627,6 +632,23 @@ export default function IntegratedDashboard({
                     );
                   })()}
                 </div>
+              </div>
+            </div>
+            )}
+              </div>
+              <div className="sticky top-14 self-start flex flex-col gap-px flex-shrink-0 z-10 pt-3">
+                <button onClick={() => toggleSec('accounts')} style={{ writingMode: 'vertical-lr' }}
+                  className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sec.accounts ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>
+                  통합계좌현황
+                </button>
+                <button onClick={() => toggleSec('history')} style={{ writingMode: 'vertical-lr' }}
+                  className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sec.history ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>
+                  추이·차트
+                </button>
+                <button onClick={() => toggleSec('donut')} style={{ writingMode: 'vertical-lr' }}
+                  className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sec.donut ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>
+                  자산카테고리
+                </button>
               </div>
             </div>
 
