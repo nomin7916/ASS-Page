@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useRef } from 'react';
-import { RefreshCw, X, Search, Download, FileUp, DownloadCloud } from 'lucide-react';
+import { RefreshCw, X, Search, Download, FileUp, CloudDownload } from 'lucide-react';
 import { formatNumber, getIndexLatest } from '../utils';
 
 const INDICATOR_COLORS = {
@@ -336,7 +336,7 @@ export default function MarketIndicators({
           >
             {Object.values(indicatorHistoryLoading || {}).some(Boolean)
               ? <RefreshCw size={11} className="animate-spin" />
-              : <DownloadCloud size={11} />
+              : <CloudDownload size={11} />
             }
           </button>
           <button
