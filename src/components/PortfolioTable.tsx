@@ -29,6 +29,13 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
 
   if (!totals) return null;
 
+  const fmtDual = (krwAmount: number) => (
+    <div className="flex flex-col items-end gap-0.5">
+      <span>{formatUSD(krwAmount / usdkrw)}</span>
+      <span className="text-[11px] text-gray-500">{formatCurrency(krwAmount)}</span>
+    </div>
+  );
+
   const stockItems = portfolio.filter(p => p.type === 'stock');
   const depositItems = portfolio.filter(p => p.type === 'deposit');
   const fundItems = portfolio.filter(p => p.type === 'fund');
@@ -250,7 +257,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {/* 투자금액 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
                     {isOverseas
-                      ? <div className="w-full h-full py-3 px-3 text-right text-blue-200 font-bold text-[13px]">{formatCurrency(item.investAmount)}</div>
+                      ? <div className="w-full h-full py-3 px-3 text-right text-blue-200 font-bold text-[13px]">{fmtDual(item.investAmount)}</div>
                       : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
                     }
                   </td>
@@ -267,7 +274,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     className={`${td} text-white font-bold text-right bg-[rgba(113,63,18,0.2)] ${RO_FOCUS}`}
                     tabIndex={0}
                     onKeyDown={handleReadonlyCellNav}
-                  >{formatCurrency(item.evalAmount)}</td>
+                  >{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
 
                   {/* 비중(평가) — 읽기전용 */}
                   <td
@@ -288,7 +295,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`}
                     tabIndex={0}
                     onKeyDown={handleReadonlyCellNav}
-                  >{formatCurrency(item.profit)}</td>
+                  >{isOverseas ? fmtDual(item.profit) : formatCurrency(item.profit)}</td>
 
                   <td className="text-center py-2.5"><button onClick={() => onDelete(item.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1"><Trash2 size={14} /></button></td>
                 </tr>
@@ -299,10 +306,10 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                 <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={7}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
                 <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={isOverseas ? formatUSD(item.depositAmount) : formatNumber(item.depositAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'depositAmount', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
                 <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(item.investRatio)}</td>
-                <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{formatCurrency(item.evalAmount)}</td>
+                <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-yellow-500 bg-yellow-900/20 text-right">{formatPercent(item.evalRatio)}</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-center text-gray-500">-</td>
-                <td className="py-3 px-3 border-r border-gray-600 text-right text-gray-500">₩0</td>
+                <td className="py-3 px-3 border-r border-gray-600 text-right text-gray-500">{isOverseas ? '$0.00' : '₩0'}</td>
                 <td className="text-center py-2.5 bg-gray-800/50">🔒</td>
               </tr>
             ))}
@@ -450,12 +457,12 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             )}
             <tr>
               <td colSpan={7} className="py-3 text-center border-r border-gray-600 uppercase tracking-widest text-gray-500">Total Calculation</td>
-              <td className="py-3 px-2 text-blue-200 bg-blue-900/10 border-r border-gray-600">{formatCurrency(totals.totalInvest)}</td>
+              <td className="py-3 px-2 text-blue-200 bg-blue-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalInvest) : formatCurrency(totals.totalInvest)}</td>
               <td className="py-3 text-center text-gray-400 bg-blue-900/10 border-r border-gray-600">100%</td>
-              <td className="py-3 px-2 text-white bg-yellow-900/10 border-r border-gray-600">{formatCurrency(totals.totalEval)}</td>
+              <td className="py-3 px-2 text-white bg-yellow-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalEval) : formatCurrency(totals.totalEval)}</td>
               <td className="py-3 text-center text-yellow-500 bg-yellow-900/10 border-r border-gray-600">100%</td>
               <td className={`py-3 text-center border-r border-gray-600 ${totals.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(totals.totalInvest > 0 ? totals.totalProfit / totals.totalInvest * 100 : 0)}</td>
-              <td className={`py-3 px-2 border-r border-gray-600 ${totals.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(totals.totalProfit)}</td>
+              <td className={`py-3 px-2 border-r border-gray-600 ${totals.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{isOverseas ? fmtDual(totals.totalProfit) : formatCurrency(totals.totalProfit)}</td>
               <td></td>
             </tr>
           </tfoot>
