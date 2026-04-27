@@ -35,6 +35,7 @@ import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
 import { useHistoryChart } from './hooks/useHistoryChart';
+import { useChartInteraction } from './hooks/useChartInteraction';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -871,6 +872,17 @@ export default function App() {
     }));
   }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode, intTotals.totalPrincipal]);
 
+  const {
+    handleChartMouseDown, handleChartMouseMove, handleChartMouseUp, handleChartMouseLeave,
+    handleIntChartMouseDown, handleIntChartMouseMove, handleIntChartMouseUp,
+  } = useChartInteraction({
+    finalChartData, intChartData, compStocks, INDICATOR_CHART_KEYS,
+    isDragging, setIsDragging, refAreaLeft, setRefAreaLeft, refAreaRight, setRefAreaRight,
+    setSelectionResult, setHoveredPoint,
+    intIsDragging, setIntIsDragging, intRefAreaLeft, setIntRefAreaLeft, intRefAreaRight, setIntRefAreaRight,
+    setIntSelectionResult,
+  });
+
   const intMonthlyHistory = useMemo(() => {
     const sortedDesc = [...intHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
     return sortedDesc.map((h, i) => {
@@ -1671,44 +1683,6 @@ export default function App() {
     link.download = `출금내역_${new Date().toISOString().split('T')[0]}.csv`; link.click();
   };
 
-  const calculateSelection = (left, right) => {
-    if (!left || !right) return null;
-    const idx1 = finalChartData.findIndex(d => d.date === left);
-    const idx2 = finalChartData.findIndex(d => d.date === right);
-    if (idx1 === -1 || idx2 === -1 || idx1 === idx2) return null;
-    const sData = finalChartData[Math.min(idx1, idx2)];
-    const eData = finalChartData[Math.max(idx1, idx2)];
-    const profit = eData.evalAmount - sData.evalAmount;
-    const rate = sData.evalAmount > 0 ? (profit / sData.evalAmount) * 100 : 0;
-    const indPeriodRates = {};
-    INDICATOR_CHART_KEYS.forEach(k => {
-      const sp = sData[`${k}Point`]; const ep = eData[`${k}Point`];
-      indPeriodRates[`${k}PeriodRate`] = (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
-    });
-    const backtestPeriodRate = (sData.backtestRate != null && eData.backtestRate != null)
-      ? ((100 + eData.backtestRate) / (100 + sData.backtestRate) - 1) * 100
-      : null;
-    return {
-      startDate: sData.date, endDate: eData.date, profit, rate,
-      kospiPeriodRate: sData.kospiPoint > 0 ? ((eData.kospiPoint / sData.kospiPoint) - 1) * 100 : null,
-      sp500PeriodRate: sData.sp500Point > 0 ? ((eData.sp500Point / sData.sp500Point) - 1) * 100 : null,
-      nasdaqPeriodRate: sData.nasdaqPoint > 0 ? ((eData.nasdaqPoint / sData.nasdaqPoint) - 1) * 100 : null,
-      backtestPeriodRate,
-      ...Object.fromEntries(compStocks.map((_, ci) => {
-        const pk = `comp${ci + 1}Point`;
-        return [`comp${ci + 1}PeriodRate`, (sData[pk] > 0 && eData[pk] != null) ? ((eData[pk] / sData[pk]) - 1) * 100 : null];
-      })),
-      ...indPeriodRates
-    };
-  };
-
-  const handleChartMouseDown = (e) => { if (e?.activeLabel) { setIsDragging(true); setRefAreaLeft(e.activeLabel); setRefAreaRight(''); setSelectionResult(null); } };
-  const handleChartMouseMove = (e) => {
-    if (isDragging && refAreaLeft && e?.activeLabel) { setRefAreaRight(e.activeLabel); setSelectionResult(calculateSelection(refAreaLeft, e.activeLabel)); }
-    if (e?.activeLabel && e?.activePayload?.length) setHoveredPoint({ label: e.activeLabel, payload: e.activePayload });
-  };
-  const handleChartMouseUp = () => { setIsDragging(false); if (refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight) setSelectionResult(calculateSelection(refAreaLeft, refAreaRight)); else { setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null); } };
-  const handleChartMouseLeave = () => { handleChartMouseUp(); setHoveredPoint(null); };
   const handleSearchClick = () => { setChartPeriod('custom'); setAppliedRange({ start: dateRange.start, end: dateRange.end }); };
 
 
@@ -2280,36 +2254,6 @@ export default function App() {
       [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
       return next;
     });
-  };
-
-  const handleIntChartMouseDown = (e) => {
-    if (e && e.activeLabel) {
-      setIntIsDragging(true);
-      setIntRefAreaLeft(e.activeLabel);
-      setIntRefAreaRight('');
-      setIntSelectionResult(null);
-    }
-  };
-
-  const handleIntChartMouseMove = (e) => {
-    if (intIsDragging && e && e.activeLabel) setIntRefAreaRight(e.activeLabel);
-  };
-
-  const handleIntChartMouseUp = () => {
-    if (!intIsDragging) return;
-    setIntIsDragging(false);
-    if (!intRefAreaLeft || !intRefAreaRight || intRefAreaLeft === intRefAreaRight) {
-      setIntRefAreaLeft(''); setIntRefAreaRight(''); return;
-    }
-    const [l, r] = [intRefAreaLeft, intRefAreaRight].sort();
-    const startEntry = intChartData.find(d => d.date >= l);
-    const endEntry = [...intChartData].reverse().find(d => d.date <= r);
-    if (startEntry && endEntry) {
-      const profit = endEntry.evalAmount - startEntry.evalAmount;
-      const rate = startEntry.evalAmount > 0 ? ((endEntry.evalAmount / startEntry.evalAmount) - 1) * 100 : 0;
-      setIntSelectionResult({ startDate: startEntry.date, endDate: endEntry.date, profit, rate });
-    }
-    setIntRefAreaLeft(''); setIntRefAreaRight('');
   };
 
   // 로그인 전: LoginGate 표시
