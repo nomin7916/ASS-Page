@@ -1,9 +1,9 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Settings, ClipboardPaste, Plus,
+  ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
-  Minus, ArrowDownToLine, Triangle, Activity, Search, Lock, LogOut, Link2,
+  Minus, ArrowDownToLine, Triangle, Activity, Search,
   BarChart2, Percent, PanelLeft, PanelLeftClose
 } from 'lucide-react';
 import {
@@ -12,7 +12,6 @@ import {
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
 import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, MAX_BACKUPS } from './driveStorage';
-import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
@@ -32,6 +31,7 @@ import PasteModal from './components/PasteModal';
 import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
 import PortfolioStatsPanel from './components/PortfolioStatsPanel';
 import AccountTabBar from './components/AccountTabBar';
+import UserInfoBar from './components/UserInfoBar';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -913,6 +913,7 @@ export default function App() {
     handleToggleComp,
     handleFetchCompHistory,
     autoRefreshStockPrices,
+    refreshPrices,
   } = useStockData({
     portfolio, setPortfolio,
     activePortfolioAccountType,
@@ -927,6 +928,7 @@ export default function App() {
     saveStateRef, driveTokenRef, saveAllToDrive,
     chartPeriod, appliedRange,
     setIsLoading, showToast,
+    setMarketIndices, setIndexFetchStatus,
   });
 
   const intMonthlyHistory = useMemo(() => {
@@ -1074,154 +1076,6 @@ export default function App() {
   const handleRebalanceSort = (key) => setRebalanceSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort = (key) => setDepositSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort2 = (key) => setDepositSortConfig2(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
-  const refreshPrices = async () => {
-    setIsLoading(true);
-    setIndexFetchStatus({
-      kospi: { status: 'loading' },
-      sp500: { status: 'loading' },
-      nasdaq: { status: 'loading' }
-    });
-
-    // portfolioRef로 항상 최신 portfolio를 안전하게 읽기
-    const currentPortfolio = portfolioRef.current;
-
-    const stockCodes = currentPortfolio.filter(p => p.type === 'stock' && p.code).map(p => p.code);
-    const loadingStatus = {};
-    stockCodes.forEach(c => { loadingStatus[c] = 'loading'; });
-    setStockFetchStatus(prev => ({ ...prev, ...loadingStatus }));
-
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const isOverseasRefresh = activePortfolioAccountTypeRef.current === 'overseas';
-
-      // 종목별 현재가 조회 결과를 Map으로 수집
-      const priceResults = {};
-      await Promise.all(stockCodes.map(async (code) => {
-        const d = isOverseasRefresh ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
-        if (d) {
-          setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
-          setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
-          priceResults[code] = d;
-        } else {
-          setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
-        }
-      }));
-
-      // ① 포트폴리오 테이블 최신가 즉시 반영 (상단 표시값 - 과거 데이터 조회 전에 먼저 업데이트)
-      setPortfolio(prev => prev.map(item => {
-        if (item.type === 'stock' && item.code && priceResults[item.code]) {
-          const d = priceResults[item.code];
-          return { ...item, name: d.name, currentPrice: d.price, changeRate: d.changeRate };
-        }
-        return item;
-      }));
-
-      // ② 그래프용 과거 데이터: 충분한 이력이 없는 종목만 백그라운드로 조회 (상단 값에 영향 없음)
-      const codesNeedingHistory = stockCodes.filter(code => {
-        const existing = stockHistoryMapRef.current[code];
-        return !existing || Object.keys(existing).length <= 3;
-      });
-      if (codesNeedingHistory.length > 0) {
-        Promise.all(codesNeedingHistory.map(async (code) => {
-          if (isOverseasRefresh) {
-            const r = await fetchUsStockHistory(code);
-            if (r?.data && Object.keys(r.data).length > 1) {
-              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
-            }
-          } else {
-            let hist: Record<string, number> | null = null;
-            const rKIS = await fetchKISStockHistory(code);
-            if (rKIS) hist = rKIS.data;
-            if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
-            if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
-            if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
-            if (hist) {
-              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
-            }
-          }
-        })).then(() => {
-          // 백그라운드 과거 데이터 수집 완료 후 Drive 백업 (페이지 재시작 시 재수집 방지)
-          setTimeout(() => {
-            const snap = saveStateRef.current;
-            if (snap && driveTokenRef.current) saveAllToDrive(snap);
-          }, 600);
-        });
-        // await 없이 fire-and-forget: 과거 데이터는 백그라운드에서 로드되며 완료 시 그래프 자동 갱신
-      }
-
-      const [kRes, sRes, nRes] = await Promise.allSettled([
-        fetchIndexData('^KS11'),
-        fetchIndexData('^GSPC'),
-        fetchIndexData('^NDX')
-      ]);
-
-      let newK = (kRes.status === 'fulfilled' && kRes.value) ? kRes.value : null;
-      let newS = (sRes.status === 'fulfilled' && sRes.value) ? sRes.value : null;
-      let newN = (nRes.status === 'fulfilled' && nRes.value) ? nRes.value : null;
-
-      const resolveFailure = (prevData) => {
-        const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-        const hasPrev = prevData && Object.keys(prevData).length > 0;
-        if (hasPrev) {
-          const st = buildIndexStatus(prevData, '백업데이터');
-          st.status = 'partial';
-          return { data: prevData, status: st };
-        }
-        return { data: null, status: { status: 'fail', source: '접속 불가', latestDate: '-', latestValue: 0, count: 0, gapDays: null, updatedAt: now } };
-      };
-
-      // KOSPI 네이버 폴백 (비동기라 setMarketIndices 밖에서 처리)
-      if (!newK) {
-        const naverPrice = await fetchNaverKospi();
-        if (naverPrice) {
-          newK = { data: { [today]: naverPrice }, source: '네이버(당일) + 백업데이터' };
-        }
-      }
-
-      setMarketIndices(prev => {
-        let kResult, sResult, nResult;
-
-        if (newK) {
-          const merged = { ...(prev.kospi || {}), ...newK.data };
-          kResult = { data: merged, status: buildIndexStatus(merged, newK.source) };
-        } else {
-          kResult = resolveFailure(prev.kospi);
-        }
-
-        if (newS) {
-          const merged = { ...(prev.sp500 || {}), ...newS.data };
-          sResult = { data: merged, status: buildIndexStatus(merged, newS.source) };
-        } else {
-          sResult = resolveFailure(prev.sp500);
-        }
-
-        if (newN) {
-          const merged = { ...(prev.nasdaq || {}), ...newN.data };
-          nResult = { data: merged, status: buildIndexStatus(merged, newN.source) };
-        } else {
-          nResult = resolveFailure(prev.nasdaq);
-        }
-
-        setIndexFetchStatus({ kospi: kResult.status, sp500: sResult.status, nasdaq: nResult.status });
-
-        const hasFail = [kResult.status, sResult.status, nResult.status].some(s => s?.status === 'fail');
-      
-        if (!hasFail) {
-        }
-
-        return {
-          kospi: kResult.data || prev.kospi,
-          sp500: sResult.data || prev.sp500,
-          nasdaq: nResult.data || prev.nasdaq
-        };
-      });
-
-    } catch (err) {
-      console.error('데이터 갱신 오류:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleImportHistoryJSON = (e) => {
     const files = Array.from(e.target.files);
@@ -1894,57 +1748,22 @@ export default function App() {
         <div className="flex-1 min-w-0 py-4 px-3 md:px-5 md:py-5">
         <div className="w-full max-w-[1440px] mx-auto flex flex-col gap-6">
         {/* 로그인 사용자 정보 바 */}
-        <div className="flex items-center justify-between text-xs text-gray-500 px-1">
-          <span className="font-mono">{authUser.email}</span>
-          <div className="flex items-center gap-1">
-            {authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && (
-              <button
-                onClick={() => setShowAdminPage(true)}
-                className="text-gray-500 hover:text-violet-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
-                title="관리자"
-              >
-                <Settings size={14} />
-              </button>
-            )}
-            <button
-              onClick={openPinChange}
-              className="text-gray-500 hover:text-amber-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
-              title="비밀번호 변경"
-            >
-              <Lock size={14} />
-            </button>
-            <button
-              onClick={() => {
-                const newVal = !adminAccessAllowed;
-                setAdminAccessAllowed(newVal);
-                if (driveTokenRef.current) {
-                  const currentPortfolios = buildPortfoliosState();
-                  const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed: newVal, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory };
-                  saveAllToDrive(state);
-                }
-              }}
-              title={adminAccessAllowed ? '관리자 접속 허용 중 — 클릭하여 차단' : '관리자 접속 차단 중 — 클릭하여 허용'}
-              className={`relative p-1.5 rounded border transition-colors flex items-center justify-center ${
-                adminAccessAllowed
-                  ? 'text-emerald-400 hover:text-emerald-300 bg-emerald-900/20 border-emerald-700/40 hover:bg-emerald-900/30'
-                  : 'text-gray-600 hover:text-gray-400 hover:bg-gray-800 border-transparent hover:border-gray-700'
-              }`}
-            >
-              <Link2 size={14} />
-              {adminAccessAllowed && (
-                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              )}
-            </button>
-            <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
-            <button
-              onClick={() => { sessionStorage.removeItem(SESSION_KEY); setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
-              className="text-gray-500 hover:text-red-400 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
-              title="로그아웃"
-            >
-              <LogOut size={14} />
-            </button>
-          </div>
-        </div>
+        <UserInfoBar
+          email={authUser.email}
+          adminAccessAllowed={adminAccessAllowed}
+          onOpenAdmin={() => setShowAdminPage(true)}
+          onOpenPinChange={openPinChange}
+          onToggleAdminAccess={() => {
+            const newVal = !adminAccessAllowed;
+            setAdminAccessAllowed(newVal);
+            if (driveTokenRef.current) {
+              const currentPortfolios = buildPortfoliosState();
+              const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed: newVal, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory };
+              saveAllToDrive(state);
+            }
+          }}
+          onLogout={() => { sessionStorage.removeItem(SESSION_KEY); setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
+        />
 
         {/* 뷰 전환 탭 */}
         <AccountTabBar

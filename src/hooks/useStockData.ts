@@ -1,5 +1,6 @@
 // @ts-nocheck
-import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo } from '../api';
+import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchNaverKospi } from '../api';
+import { buildIndexStatus } from '../utils';
 
 interface UseStockDataParams {
   portfolio: any[];
@@ -24,6 +25,8 @@ interface UseStockDataParams {
   appliedRange: { start: string; end: string };
   setIsLoading: (v: boolean) => void;
   showToast: (text: string, isError?: boolean) => void;
+  setMarketIndices: (fn: any) => void;
+  setIndexFetchStatus: (fn: any) => void;
 }
 
 const COMP_STOCK_EXTRA_COLORS = ['#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#f97316', '#64748b', '#e11d48'];
@@ -42,6 +45,7 @@ export function useStockData({
   saveStateRef, driveTokenRef, saveAllToDrive,
   chartPeriod, appliedRange,
   setIsLoading, showToast,
+  setMarketIndices, setIndexFetchStatus,
 }: UseStockDataParams) {
 
   const extractFundCode = (input: string): string => {
@@ -356,6 +360,142 @@ export function useStockData({
     }
   };
 
+  const refreshPrices = async () => {
+    setIsLoading(true);
+    setIndexFetchStatus({
+      kospi: { status: 'loading' },
+      sp500: { status: 'loading' },
+      nasdaq: { status: 'loading' }
+    });
+
+    const currentPortfolio = portfolioRef.current;
+    const stockCodes = currentPortfolio.filter(p => p.type === 'stock' && p.code).map(p => p.code);
+    const loadingStatus = {};
+    stockCodes.forEach(c => { loadingStatus[c] = 'loading'; });
+    setStockFetchStatus(prev => ({ ...prev, ...loadingStatus }));
+
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const isOverseasRefresh = activePortfolioAccountTypeRef.current === 'overseas';
+
+      const priceResults = {};
+      await Promise.all(stockCodes.map(async (code) => {
+        const d = isOverseasRefresh ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
+        if (d) {
+          setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
+          setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+          priceResults[code] = d;
+        } else {
+          setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
+        }
+      }));
+
+      setPortfolio(prev => prev.map(item => {
+        if (item.type === 'stock' && item.code && priceResults[item.code]) {
+          const d = priceResults[item.code];
+          return { ...item, name: d.name, currentPrice: d.price, changeRate: d.changeRate };
+        }
+        return item;
+      }));
+
+      const codesNeedingHistory = stockCodes.filter(code => {
+        const existing = stockHistoryMapRef.current[code];
+        return !existing || Object.keys(existing).length <= 3;
+      });
+      if (codesNeedingHistory.length > 0) {
+        Promise.all(codesNeedingHistory.map(async (code) => {
+          if (isOverseasRefresh) {
+            const r = await fetchUsStockHistory(code);
+            if (r?.data && Object.keys(r.data).length > 1) {
+              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
+            }
+          } else {
+            let hist: Record<string, number> | null = null;
+            const rKIS = await fetchKISStockHistory(code);
+            if (rKIS) hist = rKIS.data;
+            if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
+            if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
+            if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
+            if (hist) {
+              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+            }
+          }
+        })).then(() => {
+          setTimeout(() => {
+            const snap = saveStateRef.current;
+            if (snap && driveTokenRef.current) saveAllToDrive(snap);
+          }, 600);
+        });
+      }
+
+      const [kRes, sRes, nRes] = await Promise.allSettled([
+        fetchIndexData('^KS11'),
+        fetchIndexData('^GSPC'),
+        fetchIndexData('^NDX')
+      ]);
+
+      let newK = (kRes.status === 'fulfilled' && kRes.value) ? kRes.value : null;
+      let newS = (sRes.status === 'fulfilled' && sRes.value) ? sRes.value : null;
+      let newN = (nRes.status === 'fulfilled' && nRes.value) ? nRes.value : null;
+
+      const resolveFailure = (prevData) => {
+        const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+        const hasPrev = prevData && Object.keys(prevData).length > 0;
+        if (hasPrev) {
+          const st = buildIndexStatus(prevData, '백업데이터');
+          st.status = 'partial';
+          return { data: prevData, status: st };
+        }
+        return { data: null, status: { status: 'fail', source: '접속 불가', latestDate: '-', latestValue: 0, count: 0, gapDays: null, updatedAt: now } };
+      };
+
+      if (!newK) {
+        const naverPrice = await fetchNaverKospi();
+        if (naverPrice) {
+          newK = { data: { [today]: naverPrice }, source: '네이버(당일) + 백업데이터' };
+        }
+      }
+
+      setMarketIndices(prev => {
+        let kResult, sResult, nResult;
+
+        if (newK) {
+          const merged = { ...(prev.kospi || {}), ...newK.data };
+          kResult = { data: merged, status: buildIndexStatus(merged, newK.source) };
+        } else {
+          kResult = resolveFailure(prev.kospi);
+        }
+
+        if (newS) {
+          const merged = { ...(prev.sp500 || {}), ...newS.data };
+          sResult = { data: merged, status: buildIndexStatus(merged, newS.source) };
+        } else {
+          sResult = resolveFailure(prev.sp500);
+        }
+
+        if (newN) {
+          const merged = { ...(prev.nasdaq || {}), ...newN.data };
+          nResult = { data: merged, status: buildIndexStatus(merged, newN.source) };
+        } else {
+          nResult = resolveFailure(prev.nasdaq);
+        }
+
+        setIndexFetchStatus({ kospi: kResult.status, sp500: sResult.status, nasdaq: nResult.status });
+
+        return {
+          kospi: kResult.data || prev.kospi,
+          sp500: sResult.data || prev.sp500,
+          nasdaq: nResult.data || prev.nasdaq
+        };
+      });
+
+    } catch (err) {
+      console.error('데이터 갱신 오류:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return {
     handleStockBlur,
     handleSingleStockRefresh,
@@ -365,5 +505,6 @@ export function useStockData({
     handleToggleComp,
     handleFetchCompHistory,
     autoRefreshStockPrices,
+    refreshPrices,
   };
 }
