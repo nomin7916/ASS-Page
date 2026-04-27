@@ -1,10 +1,10 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Settings, RefreshCw, Save, ClipboardPaste, Plus,
+  Settings, ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
-  Minus, ArrowDownToLine, Triangle, FileUp, Activity, Search, Lock, CloudDownload, LogOut, Link2,
-  BarChart2, Percent, History, PanelLeft, PanelLeftClose
+  Minus, ArrowDownToLine, Triangle, Activity, Search, Lock, LogOut, Link2,
+  BarChart2, Percent, PanelLeft, PanelLeftClose
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
