@@ -21,6 +21,7 @@ import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSIO
 import AdminPage from './components/AdminPage';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
+import { usePortfolioState } from './hooks/usePortfolioState';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -442,17 +443,7 @@ export default function App() {
     setShowAdminPage(true);
   };
 
-  const [title, setTitle] = useState("주식/ETF 포트폴리오");
-  const [portfolio, setPortfolio] = useState([]);
-  const [principal, setPrincipal] = useState(UI_CONFIG.DEFAULTS.PRINCIPAL);
-  const [depositHistory, setDepositHistory] = useState([]);
-  const [depositHistory2, setDepositHistory2] = useState([]);
-  const [customLinks, setCustomLinks] = useState(UI_CONFIG.DEFAULT_LINKS);
-  const [overseasLinks, setOverseasLinks] = useState(UI_CONFIG.OVERSEAS_DEFAULT_LINKS);
-  const [history, setHistory] = useState([]);
-  const [settings, setSettings] = useState({ mode: 'rebalance', amount: 1000000 });
   const [historyLimit, setHistoryLimit] = useState(UI_CONFIG.DEFAULTS.HISTORY_LIMIT);
-  const [lookupRows, setLookupRows] = useState([]);
   const [comparisonMode, setComparisonMode] = useState('latestOverPast');
   const [isLinkSettingsOpen, setIsLinkSettingsOpen] = useState(false);
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
@@ -493,15 +484,7 @@ export default function App() {
   const [goldIndicators, setGoldIndicators] = useState({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
   const [indicatorScales, setIndicatorScales] = useState({ us10y: 1, goldIntl: 1, goldKr: 1, usdkrw: 1, dxy: 1, fedRate: 1, kr10y: 1, vix: 1, btc: 1, eth: 1 });
   const [isScaleSettingOpen, setIsScaleSettingOpen] = useState(false);
-  const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
-  const [portfolioStartDate, setPortfolioStartDate] = useState(() => {
-    const today = new Date();
-    today.setFullYear(today.getFullYear() - 1);
-    return today.toISOString().split('T')[0];
-  });
-  const [depositSortConfig, setDepositSortConfig] = useState({ key: null, direction: 1 });
-  const [depositSortConfig2, setDepositSortConfig2] = useState({ key: null, direction: 1 });
 
   const [showMarketPanel, setShowMarketPanel] = useState(true);
 
@@ -519,9 +502,6 @@ export default function App() {
 
   // ── 통합 대시보드 ──
   const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(true);
-  const [portfolios, setPortfolios] = useState([]); // multi-portfolio accounts
-  const [activePortfolioId, setActivePortfolioId] = useState(null);
-  const [intHistory, setIntHistory] = useState([]);
   const [intChartPeriod, setIntChartPeriod] = useState('1y');
   const [intDateRange, setIntDateRange] = useState({ start: '', end: '' });
   const [intAppliedRange, setIntAppliedRange] = useState({ start: '', end: '' });
@@ -587,6 +567,31 @@ export default function App() {
     fetchMarketIndicators,
     fetchSingleIndexHistory,
   } = useMarketData({ driveStatus, driveTokenRef, ensureDriveFolder, appliedRange, showToast, goldKrAutoCrawledRef, stooqAutoCrawledRef });
+
+  // ── usePortfolioState 훅 ──
+  const {
+    title, setTitle,
+    portfolio, setPortfolio,
+    principal, setPrincipal,
+    depositHistory, setDepositHistory,
+    depositHistory2, setDepositHistory2,
+    history, setHistory,
+    settings, setSettings,
+    portfolios, setPortfolios,
+    activePortfolioId, setActivePortfolioId,
+    intHistory, setIntHistory,
+    portfolioStartDate, setPortfolioStartDate,
+    depositSortConfig, setDepositSortConfig,
+    depositSortConfig2, setDepositSortConfig2,
+    customLinks, setCustomLinks,
+    overseasLinks, setOverseasLinks,
+    lookupRows, setLookupRows,
+    adminAccessAllowed, setAdminAccessAllowed,
+    activePortfolioAccountType,
+    buildPortfoliosState,
+    addPortfolio,
+    deletePortfolio,
+  } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
   const applyStateData = (stateData, stockData, marketData) => {
@@ -705,11 +710,6 @@ export default function App() {
   };
   applyBackupDataRef.current = applyBackupData;
 
-  const activePortfolioAccountType = useMemo(() =>
-    portfolios.find(p => p.id === activePortfolioId)?.accountType || 'portfolio',
-    [portfolios, activePortfolioId]
-  );
-
   // *Ref를 항상 최신 상태로 동기화 (클로저 문제 해결용 — 20분 인터벌 등 stale closure 방지)
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
   useEffect(() => { activePortfolioAccountTypeRef.current = activePortfolioAccountType; }, [activePortfolioAccountType]);
@@ -794,31 +794,6 @@ export default function App() {
     prevActivePortfolioIdRef.current = activePortfolioId;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePortfolioId]);
-
-  // KRX 금현물 포트폴리오: 주식 항목이 없으면 자동 초기화
-  useEffect(() => {
-    if (activePortfolioAccountType !== 'gold') return;
-    setPortfolio(prev => {
-      if (prev.some(p => p.type === 'stock')) return prev;
-      return [
-        { id: generateId(), type: 'stock', category: '금', code: '', name: 'KRX 금현물', currentPrice: 0, changeRate: 0, purchasePrice: 0, quantity: 0, targetRatio: 0, isManual: true },
-        ...prev,
-      ];
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePortfolioAccountType, activePortfolioId]);
-
-  // KRX 금현물 포트폴리오: goldKr 시세를 주식 항목의 currentPrice에 자동 동기화
-  useEffect(() => {
-    if (activePortfolioAccountType !== 'gold') return;
-    if (!marketIndicators.goldKr) return;
-    setPortfolio(prev => prev.map(item =>
-      item.type === 'stock'
-        ? { ...item, currentPrice: marketIndicators.goldKr, changeRate: marketIndicators.goldKrChg ?? item.changeRate }
-        : item
-    ));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marketIndicators.goldKr, activePortfolioAccountType]);
 
   const totals = useMemo(() => {
     const fxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
@@ -1911,14 +1886,6 @@ export default function App() {
     e.target.value = '';
   };
 
-  // 현재 활성 포트폴리오 state를 portfolios 배열에 반영하여 반환
-  const buildPortfoliosState = () =>
-    portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
-
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest }, intHistory };
@@ -2513,39 +2480,6 @@ export default function App() {
     setShowIntegratedDashboard(false);
   };
 
-  const addPortfolio = (accountType = 'portfolio') => {
-    const updated = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
-    const newId = generateId();
-    const today = new Date().toISOString().split('T')[0];
-    const ACCOUNT_TYPE_NAMES = {
-      'portfolio': '일반 증권', 'isa': 'ISA', 'dc-irp': '퇴직연금',
-      'gold': 'KRX 금현물', 'pension': '연금저축', 'dividend': '배당형', 'crypto': 'CRYPTO', 'overseas': '해외계좌',
-    };
-    const existingTypeAccount = portfolios.find(p => p.accountType === accountType);
-    const inheritedSettings = existingTypeAccount?.settings || { mode: 'rebalance', amount: 1000000 };
-    const newP = {
-      id: newId, name: ACCOUNT_TYPE_NAMES[accountType] || '새 계좌', startDate: today, portfolioStartDate: today,
-      accountType,
-      portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
-      principal: 0, history: [], depositHistory: [], depositHistory2: [],
-      settings: inheritedSettings,
-    };
-    setPortfolios([...updated, newP]);
-    setActivePortfolioId(newId);
-    setTitle(newP.name);
-    setPortfolio(newP.portfolio);
-    setPrincipal(0);
-    setHistory([]);
-    setDepositHistory([]);
-    setDepositHistory2([]);
-    setPortfolioStartDate(today);
-    setSettings({ mode: 'rebalance', amount: 1000000 });
-  };
-
   const addSimpleAccount = () => {
     const updated = portfolios.map(p =>
       p.id === activePortfolioId
@@ -2577,56 +2511,6 @@ export default function App() {
       }
       return { ...p, [field]: cleanNum(val) };
     }));
-  };
-
-  const deletePortfolio = (id) => {
-    const isLast = portfolios.length <= 1;
-    const confirmMsg = isLast
-      ? '마지막 계좌입니다. 삭제하면 새 빈 계좌가 자동으로 생성됩니다. 삭제하시겠습니까?'
-      : '이 포트폴리오 계좌를 삭제하시겠습니까?';
-    if (!window.confirm(confirmMsg)) return;
-    const updated = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
-    const remaining = updated.filter(p => p.id !== id);
-    if (remaining.length === 0) {
-      const newId = generateId();
-      const today = new Date().toISOString().split('T')[0];
-      const blank = {
-        id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
-        accountType: 'portfolio',
-        portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
-        principal: 0, history: [], depositHistory: [], depositHistory2: [],
-        settings: { mode: 'rebalance', amount: 1000000 },
-      };
-      setPortfolios([blank]);
-      setActivePortfolioId(blank.id);
-      setTitle(blank.name);
-      setPortfolio(blank.portfolio);
-      setPrincipal(0);
-      setHistory([]);
-      setDepositHistory([]);
-      setDepositHistory2([]);
-      setPortfolioStartDate(today);
-      setSettings(blank.settings);
-      setShowIntegratedDashboard(false);
-      return;
-    }
-    setPortfolios(remaining);
-    if (activePortfolioId === id) {
-      const first = remaining[0];
-      setActivePortfolioId(first.id);
-      setTitle(first.name);
-      setPortfolio(first.portfolio || []);
-      setPrincipal(first.principal || 0);
-      setHistory(first.history || []);
-      setDepositHistory(first.depositHistory || []);
-      setDepositHistory2(first.depositHistory2 || []);
-      setPortfolioStartDate(first.startDate || first.portfolioStartDate || '');
-      setSettings(first.settings || { mode: 'rebalance', amount: 1000000 });
-    }
   };
 
   const updatePortfolioStartDate = (id, date) => {
