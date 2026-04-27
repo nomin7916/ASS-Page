@@ -2114,7 +2114,6 @@ export default function App() {
         portfolio={portfolio}
         setPortfolio={setPortfolio}
       />
-      )}
     </div>
   );
 }
