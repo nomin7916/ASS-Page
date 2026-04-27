@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState } from 'react';
+import React from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { cleanNum, formatCurrency, formatNumber, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
@@ -26,20 +26,14 @@ export default function RebalancingPanel({
   totals,
   handleUpdate,
   setPortfolio,
+  showTable = true,
+  showDonut = true,
 }) {
-  const [tableOpen, setTableOpen] = useState(true);
-  const [donutOpen, setDonutOpen] = useState(true);
-
   return (
     <>
-        <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-6">
+        {showTable && <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-6">
           <div className="p-5 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:justify-between xl:items-start gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-green-400 text-xl font-bold flex items-center gap-2">⚖️ 리밸런싱 & 적립 시뮬레이터</span>
-              <button onClick={() => setTableOpen(v => !v)} className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded text-gray-500 hover:text-gray-300 hover:bg-gray-700/50 transition-all ml-1">
-                <svg className={`w-3.5 h-3.5 transition-transform duration-200 ${tableOpen ? '' : '-rotate-90'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
-              </button>
-            </div>
+            <span className="text-green-400 text-xl font-bold flex items-center gap-2">⚖️ 리밸런싱 & 적립 시뮬레이터</span>
             <div className="flex flex-col gap-3 w-full xl:w-[600px]">
               <div className="flex items-center justify-between bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType === 'overseas') { const fx = marketIndicators.usdkrw || 1; return <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(dep)}</span><span className="text-sm text-green-600">{formatCurrency(dep * fx)}</span></div>; } return formatCurrency(dep); })()}</span></div>
               <div className="flex flex-col gap-1">
@@ -60,7 +54,7 @@ export default function RebalancingPanel({
               </div>
             </div>
           </div>
-          {tableOpen && <div className="overflow-x-auto bg-[#0f172a]">
+          <div className="overflow-x-auto bg-[#0f172a]">
             <table className="text-right text-[13px]">
               <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold text-center">
                 {(() => {
@@ -223,18 +217,15 @@ export default function RebalancingPanel({
                 </tr>
               </tfoot>
             </table>
-          </div>}
-        </div>
+          </div>
+        </div>}
 
         {/* 리밸런싱 자산 비중 도넛 차트 */}
-        <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-6">
-          <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex items-center justify-between cursor-pointer select-none" onClick={() => setDonutOpen(v => !v)}>
+        {showDonut && <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-6">
+          <div className="p-3 bg-[#0f172a] border-b border-gray-700">
             <span className="text-white font-bold text-sm">🍩 자산 비중 비교</span>
-            <button className="w-6 h-6 flex items-center justify-center rounded text-gray-500 hover:text-gray-300 hover:bg-gray-700/50 transition-all">
-              <svg className={`w-3.5 h-3.5 transition-transform duration-200 ${donutOpen ? '' : '-rotate-90'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
-            </button>
           </div>
-          {donutOpen && <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-700">
+          <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-700">
             {/* 왼쪽: 리밸런싱 후 예상 자산 비중 */}
             <div className="p-4">
               <div className="text-gray-400 text-xs text-center mb-2 font-semibold">리밸런싱 후 예상 자산 비중</div>
@@ -330,8 +321,8 @@ export default function RebalancingPanel({
                 </>
               )}
             </div>
-          </div>}
-        </div>
+          </div>
+        </div>}
     </>
   );
 }

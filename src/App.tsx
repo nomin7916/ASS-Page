@@ -190,8 +190,7 @@ export default function App() {
   const [showUnlockPinModal, setShowUnlockPinModal] = useState(false);
   const [unlockPinDigits, setUnlockPinDigits] = useState(['', '', '', '']);
   const [unlockPinError, setUnlockPinError] = useState('');
-  const [sectionCollapsed, setSectionCollapsed] = useState({ summary: false, stats: false, dividend: false, chart: false, rebalancing: false });
-  const toggleSection = (key) => setSectionCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
+  const [sectionCollapsedMap, setSectionCollapsedMap] = useState({});
 
   // ── useHistoryChart 훅 ──
   const {
@@ -324,6 +323,14 @@ export default function App() {
     updatePortfolioDividendHistory,
     updatePortfolioActualDividend,
   } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
+
+  // ── 섹션 접기/펼치기 (계좌별 독립) ──
+  const _SEC_DEFAULT = { summary: false, stats: false, dividend: false, chart: false, rebalancing: false, donut: false };
+  const sectionCollapsed = { ..._SEC_DEFAULT, ...(sectionCollapsedMap[activePortfolioId] || {}) };
+  const toggleSection = (key) => setSectionCollapsedMap(prev => {
+    const cur = prev[activePortfolioId] || {};
+    return { ...prev, [activePortfolioId]: { ..._SEC_DEFAULT, ...cur, [key]: !(cur[key] ?? false) } };
+  });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
   const applyStateData = (stateData, stockData, marketData) => {
@@ -1882,6 +1889,9 @@ export default function App() {
             {activePortfolioAccountType !== 'gold' && (
               <button onClick={() => toggleSection('rebalancing')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-l-md border-l border-t border-b ${!sectionCollapsed.rebalancing ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>리밸런싱</button>
             )}
+            {activePortfolioAccountType !== 'gold' && (
+              <button onClick={() => toggleSection('donut')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-l-md border-l border-t border-b ${!sectionCollapsed.donut ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>자산비중비교</button>
+            )}
           </div>
 
           {/* 섹션 콘텐츠 */}
@@ -2058,7 +2068,7 @@ export default function App() {
         )}
 
         {/* 리밸런싱 시뮬레이터 */}
-        {activePortfolioAccountType !== 'gold' && !sectionCollapsed.rebalancing && (
+        {activePortfolioAccountType !== 'gold' && (!sectionCollapsed.rebalancing || !sectionCollapsed.donut) && (
           <RebalancingPanel
             activePortfolioAccountType={activePortfolioAccountType}
             portfolio={portfolio}
@@ -2080,6 +2090,8 @@ export default function App() {
             totals={totals}
             handleUpdate={handleUpdate}
             setPortfolio={setPortfolio}
+            showTable={!sectionCollapsed.rebalancing}
+            showDonut={!sectionCollapsed.donut}
           />
         )}
           </div>
