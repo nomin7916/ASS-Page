@@ -2107,7 +2107,9 @@ export default function App() {
           />
         )}
 
-        <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} />
+        {showIntegratedDashboard && (
+          <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} />
+        )}
 
         </div>
         </div>
