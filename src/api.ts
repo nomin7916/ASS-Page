@@ -309,19 +309,25 @@ export const fetchDividendHistory = async (code: string): Promise<{
   result: Array<{ dividendAmount: number; exDividendAt: string; dividendYield: number }>;
 } | null> => {
   if (!code || !/^[A-Z0-9]{5,6}$/i.test(code)) return null;
-  const targetUrl = `https://m.stock.naver.com/api/dividend/history?itemCode=${code}&page=1&pageSize=100`;
-  const proxies = [
-    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  const targetUrls = [
+    `https://m.stock.naver.com/api/etf/${code}/dividend/history?page=1&pageSize=100&firstPageSize=100`,
+    `https://m.stock.naver.com/api/domestic/stock/${code}/dividend/history?page=1&pageSize=100&firstPageSize=100`,
+    `https://m.stock.naver.com/api/dividend/history?itemCode=${code}&page=1&pageSize=100`,
   ];
-  for (const proxy of proxies) {
-    try {
-      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data?.result && Array.isArray(data.result) && data.result.length > 0) return data;
-    } catch { continue; }
+  const proxyFns = [
+    (u: string) => `/api/proxy?url=${encodeURIComponent(u)}`,
+    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    (u: string) => `https://api.codetabs.com/v1/proxy?quest=${u}`,
+  ];
+  for (const targetUrl of targetUrls) {
+    for (const makeProxy of proxyFns) {
+      try {
+        const res = await fetch(makeProxy(targetUrl), { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data?.result && Array.isArray(data.result) && data.result.length > 0) return data;
+      } catch { continue; }
+    }
   }
   return null;
 };
