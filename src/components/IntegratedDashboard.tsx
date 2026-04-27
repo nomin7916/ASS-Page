@@ -1,0 +1,741 @@
+// @ts-nocheck
+import React from 'react';
+import { Plus, Download, Trash2 } from 'lucide-react';
+import {
+  PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
+  YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea,
+} from 'recharts';
+import { UI_CONFIG } from '../config';
+import { generateId, formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum } from '../utils';
+
+const DAYS = ['일','월','화','수','목','금','토'];
+const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+
+const PieLabelOutside = ({ cx, cy, midAngle, outerRadius, percent, name }) => {
+  const safePercent = cleanNum(percent);
+  if (safePercent < 0.03) return null;
+  const RADIAN = Math.PI / 180;
+  const radius = outerRadius + 20;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  return (
+    <text x={x} y={y} fill="#9ca3af" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={11} fontWeight="bold">
+      {name} ({(safePercent * 100).toFixed(1)}%)
+    </text>
+  );
+};
+
+function CustomDatePicker({ value, onChange, placeholder = '--/--/--' }) {
+  const [open, setOpen] = React.useState(false);
+  const [viewYear, setViewYear] = React.useState(() => value ? parseInt(value.slice(0,4)) : new Date().getFullYear());
+  const [viewMonth, setViewMonth] = React.useState(() => value ? parseInt(value.slice(5,7)) - 1 : new Date().getMonth());
+  const [yearPickMode, setYearPickMode] = React.useState(false);
+  const [yearRangeStart, setYearRangeStart] = React.useState(() => {
+    const y = value ? parseInt(value.slice(0,4)) : new Date().getFullYear();
+    return Math.floor(y / 12) * 12;
+  });
+  const ref = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const openPicker = () => {
+    const y = value ? parseInt(value.slice(0,4)) : new Date().getFullYear();
+    const m = value ? parseInt(value.slice(5,7)) - 1 : new Date().getMonth();
+    setViewYear(y); setViewMonth(m);
+    setYearRangeStart(Math.floor(y / 12) * 12);
+    setYearPickMode(false);
+    setOpen(true);
+  };
+
+  const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+  const firstDow = (y, m) => new Date(y, m, 1).getDay();
+
+  const selectDay = (d) => {
+    const mm = String(viewMonth + 1).padStart(2,'0');
+    const dd = String(d).padStart(2,'0');
+    onChange(`${viewYear}-${mm}-${dd}`);
+    setOpen(false);
+  };
+
+  const prevMonth = () => { if (viewMonth === 0) { setViewYear(y => y-1); setViewMonth(11); } else setViewMonth(m => m-1); };
+  const nextMonth = () => { if (viewMonth === 11) { setViewYear(y => y+1); setViewMonth(0); } else setViewMonth(m => m+1); };
+
+  const selDay = value ? parseInt(value.slice(8,10)) : null;
+  const selMonth = value ? parseInt(value.slice(5,7)) - 1 : null;
+  const selYear = value ? parseInt(value.slice(0,4)) : null;
+  const totalCells = Math.ceil((firstDow(viewYear, viewMonth) + daysInMonth(viewYear, viewMonth)) / 7) * 7;
+  const displayText = value ? value.substring(2).replace(/-/g, '/') : placeholder;
+
+  return (
+    <div className="relative" ref={ref}>
+      <span onClick={openPicker} className="text-gray-300 text-xs font-bold font-mono px-1 w-[68px] text-center cursor-pointer hover:text-white select-none block">
+        {displayText}
+      </span>
+      {open && (
+        <div className="absolute top-7 left-1/2 -translate-x-1/2 z-50 bg-gray-900 border border-gray-600 rounded-lg shadow-2xl p-3 w-[220px]" onMouseDown={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between mb-2">
+            <button onClick={yearPickMode ? () => setYearRangeStart(s => s - 12) : prevMonth} className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">‹</button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => { setYearPickMode(m => !m); setYearRangeStart(Math.floor(viewYear/12)*12); }} className="text-blue-300 hover:text-blue-100 font-bold text-sm px-1.5 py-0.5 rounded hover:bg-gray-700 transition-colors">{viewYear}년</button>
+              {!yearPickMode && <span className="text-gray-300 text-xs font-bold">{MONTHS[viewMonth]}</span>}
+            </div>
+            <button onClick={yearPickMode ? () => setYearRangeStart(s => s + 12) : nextMonth} className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">›</button>
+          </div>
+          {yearPickMode ? (
+            <div className="grid grid-cols-3 gap-1">
+              {Array.from({length:12}, (_,i) => yearRangeStart + i).map(y => (
+                <button key={y} onClick={() => { setViewYear(y); setYearPickMode(false); }} className={`py-1.5 rounded text-xs font-bold transition-colors ${y === viewYear ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}>{y}</button>
+              ))}
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-7 mb-1">
+                {DAYS.map((d,i) => <span key={d} className={`text-center text-[10px] font-bold py-0.5 ${i===0?'text-red-400':i===6?'text-blue-400':'text-gray-500'}`}>{d}</span>)}
+              </div>
+              <div className="grid grid-cols-7 gap-y-0.5">
+                {Array.from({length: totalCells}, (_,i) => {
+                  const dayNum = i - firstDow(viewYear, viewMonth) + 1;
+                  const valid = dayNum >= 1 && dayNum <= daysInMonth(viewYear, viewMonth);
+                  const isSelected = valid && dayNum === selDay && viewMonth === selMonth && viewYear === selYear;
+                  const dow = i % 7;
+                  return (
+                    <button key={i} onClick={() => valid && selectDay(dayNum)} className={`text-center text-[11px] py-1 rounded transition-colors ${!valid ? 'invisible' : ''} ${isSelected ? 'bg-blue-600 text-white font-bold' : ''} ${valid && !isSelected ? (dow===0?'text-red-400':dow===6?'text-blue-400':'text-gray-300') : ''} ${valid && !isSelected ? 'hover:bg-gray-700' : ''}`}>
+                      {valid ? dayNum : ''}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const hexToRgba = (hex, alpha) => {
+  if (!hex || hex.length < 7) return null;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+const blendWithDarkBg = (hex, alpha, bgHex = '#1e293b') => {
+  if (!hex || hex.length < 7) return bgHex;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const bgR = parseInt(bgHex.slice(1, 3), 16);
+  const bgG = parseInt(bgHex.slice(3, 5), 16);
+  const bgB = parseInt(bgHex.slice(5, 7), 16);
+  return `rgb(${Math.round(bgR*(1-alpha)+r*alpha)}, ${Math.round(bgG*(1-alpha)+g*alpha)}, ${Math.round(bgB*(1-alpha)+b*alpha)})`;
+};
+
+export default function IntegratedDashboard({
+  intHistory,
+  intTotals,
+  intMonthlyHistory,
+  intChartData,
+  intChartPeriod,
+  intSelectionResult,
+  intIsZeroBaseMode,
+  intRefAreaLeft,
+  intRefAreaRight,
+  intCatDonutData,
+  intHoldingsDonutData,
+  hoveredIntCatSlice,
+  hoveredIntHoldSlice,
+  portfolioSummaries,
+  intExpandedCat,
+  simpleEditField,
+  showNewAccountMenu,
+  hideAmounts,
+  setIntHistory,
+  setIntChartPeriod,
+  setIntIsZeroBaseMode,
+  setHoveredIntCatSlice,
+  setHoveredIntHoldSlice,
+  setShowNewAccountMenu,
+  setSimpleEditField,
+  addPortfolio,
+  addSimpleAccount,
+  deletePortfolio,
+  switchToPortfolio,
+  movePortfolio,
+  updatePortfolioColor,
+  updatePortfolioStartDate,
+  updatePortfolioName,
+  updatePortfolioMemo,
+  updateSimpleAccountField,
+  resetAllPortfolioColors,
+  handleIntChartMouseDown,
+  handleIntChartMouseMove,
+  handleIntChartMouseUp,
+  handleSave,
+}) {
+  return (
+          <div className="flex flex-col gap-6 w-full">
+
+            {/* 통합 요약 카드 */}
+            {(() => {
+              const sortedIntHist = [...intHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
+              const todayRec = sortedIntHist[0];
+              const prevRec = sortedIntHist[1];
+              const todayProfit = todayRec && prevRec ? todayRec.evalAmount - prevRec.evalAmount : 0;
+              const todayRate = prevRec?.evalAmount > 0 ? todayProfit / prevRec.evalAmount * 100 : 0;
+              return (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
+                    <span className="text-gray-400 text-[11px] font-bold">총 자산 (평가금)</span>
+                    <span className="text-white text-lg font-extrabold">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalEval)}</span>
+                  </div>
+                  <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
+                    <span className="text-gray-400 text-[11px] font-bold">오늘 수익 ({todayRec?.date || '-'})</span>
+                    <span className={`text-lg font-extrabold ${todayProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {hideAmounts ? '••••••' : `${todayProfit >= 0 ? '+' : ''}${formatCurrency(todayProfit)}`}
+                    </span>
+                    <span className={`text-[11px] font-bold ${todayRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {todayRate >= 0 ? '+' : ''}{todayRate.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
+                    <span className="text-gray-400 text-[11px] font-bold">전체 수익율</span>
+                    <span className={`text-lg font-extrabold ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {intTotals.returnRate >= 0 ? '+' : ''}{intTotals.returnRate.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
+                    <span className="text-gray-400 text-[11px] font-bold">총 투자원금</span>
+                    <span className="text-white text-lg font-extrabold">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalPrincipal)}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* 통합 계좌 현황 */}
+            <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg">
+              <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
+                <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
+                <div className="flex gap-1 items-center">
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowNewAccountMenu(v => !v)}
+                      className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded"
+                    >
+                      <Plus size={12} /> 새 계좌 <span className="text-[9px] opacity-60">▼</span>
+                    </button>
+                    {showNewAccountMenu && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowNewAccountMenu(false)} />
+                        <div className="absolute right-0 top-full mt-1 z-50 bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl py-1 min-w-[160px]">
+                          {[
+                            { type: 'dc-irp',    icon: '🏦', label: '퇴직연금 계좌' },
+                            { type: 'isa',       icon: '🌱', label: 'ISA 계좌' },
+                            { type: 'portfolio', icon: '📈', label: '일반증권 계좌' },
+                            { type: 'dividend',  icon: '💰', label: '배당형 계좌' },
+                            { type: 'pension',   icon: '🎯', label: '연금저축 계좌' },
+                            { type: 'gold',      icon: '🥇', label: 'KRX 금현물 계좌' },
+                            { type: 'overseas',  icon: '🌐', label: '해외계좌' },
+                            { type: 'crypto',    icon: '₿',  label: 'CRYPTO 계좌' },
+                          ].map(({ type, icon, label }) => (
+                            <button
+                              key={type}
+                              onClick={() => { addPortfolio(type); setShowNewAccountMenu(false); }}
+                              className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-blue-900/30 hover:text-white transition-colors flex items-center gap-2"
+                            >
+                              <span>{icon}</span> {label}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <button onClick={addSimpleAccount} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded" title="날짜·계좌·자산을 직접 입력하는 간단 계좌 추가">
+                    <Plus size={12} /> 직접입력
+                  </button>
+                  <div className="w-[1px] h-4 bg-gray-700 mx-1" />
+                  <button onClick={handleSave} className="flex items-center gap-1 text-orange-400 hover:text-orange-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-orange-900/20 rounded" title="JSON 파일로 다운로드 (PC 백업)">
+                    <Download size={12} /> PC 백업
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs whitespace-nowrap">
+                  <thead className="bg-[#0f172a] text-gray-400 border-b border-gray-700">
+                    <tr>
+                      <th className="border-r border-gray-700 cursor-pointer hover:bg-red-900/30 transition-colors" style={{width:'10px',minWidth:'10px'}} onClick={resetAllPortfolioColors} title="클릭하여 모든 행 색상 초기화"></th>
+                      <th className="py-2 px-2 text-center border-r border-gray-700">순서</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">시작일</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700 sticky left-0 z-20 bg-[#0f172a]">계좌</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">투자원금</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">투자비율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">총자산</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">수익율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">CAGR</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">예수금</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">수익</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700 min-w-[180px]">비고</th>
+                      <th className="py-2 px-2 text-center">삭제</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {portfolioSummaries.map((s, sIdx) => {
+                      const allocRatio = intTotals.totalEval > 0 ? s.currentEval / intTotals.totalEval * 100 : 0;
+                      const isCatOpen = intExpandedCat === s.id;
+                      const isSimple = s.accountType === 'simple';
+                      return (
+                        <React.Fragment key={s.id}>
+                          <tr
+                            className={`border-b border-gray-700 transition-colors ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40') : ''}`}
+                            style={s.rowColor ? { backgroundColor: hexToRgba(s.rowColor, 0.18) } : {}}
+                          >
+                            {/* 색상 스트립 */}
+                            <td className="p-0 border-r border-gray-700" style={{width:'10px',minWidth:'10px'}}>
+                              {s.rowColor ? (
+                                <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none" style={{minHeight:'32px', backgroundColor: s.rowColor}} onClick={() => updatePortfolioColor(s.id, '')} />
+                              ) : (
+                                <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer" style={{minHeight:'32px', backgroundColor: '#334155'}}>
+                                  <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => updatePortfolioColor(s.id, e.target.value)} />
+                                </label>
+                              )}
+                            </td>
+                            {/* 순서 화살표 */}
+                            <td className="py-1.5 px-2 text-center border-r border-gray-700">
+                              <div className="flex flex-col items-center gap-0.5">
+                                <button onClick={() => movePortfolio(s.id, -1)} disabled={sIdx === 0} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="위로">▲</button>
+                                <button onClick={() => movePortfolio(s.id, 1)} disabled={sIdx === portfolioSummaries.length - 1} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="아래로">▼</button>
+                              </div>
+                            </td>
+                            <td className="py-1.5 px-3 text-center border-r border-gray-700">
+                              <CustomDatePicker value={s.startDate} onChange={v => updatePortfolioStartDate(s.id, v)} />
+                            </td>
+                            {/* 계좌 */}
+                            <td
+                              className={`py-1.5 px-3 text-center border-r border-gray-700 sticky left-0 z-[5] bg-[#1e293b] ${!isSimple ? 'cursor-pointer hover:bg-blue-900/20' : ''}`}
+                              style={s.rowColor ? { backgroundColor: blendWithDarkBg(s.rowColor, 0.35) } : {}}
+                              onClick={!isSimple ? () => switchToPortfolio(s.id) : undefined}
+                            >
+                              {isSimple ? (
+                                <input type="text" className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300" value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
+                              ) : (
+                                <span className="font-bold text-blue-300 select-none">{s.name}</span>
+                              )}
+                            </td>
+                            {/* 투자원금 */}
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold">
+                              {isSimple ? (
+                                hideAmounts ? '••••••' : (
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-center text-gray-200 border-b border-dashed border-gray-600 focus:border-green-400"
+                                  value={simpleEditField?.id === s.id && simpleEditField?.field === 'principal'
+                                    ? (s.principal || '')
+                                    : s.principal ? formatCurrency(s.principal) : ''}
+                                  placeholder={s.currentEval ? formatCurrency(s.currentEval) : '₩0'}
+                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'principal'}); e.target.select(); }}
+                                  onBlur={() => setSimpleEditField(null)}
+                                  onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value.replace(/[^0-9]/g, ''))}
+                                />)
+                              ) : (hideAmounts ? '••••••' : formatCurrency(s.principal))}
+                            </td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300">{allocRatio.toFixed(2)}%</td>
+                            {/* 총자산 */}
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center font-bold text-white">
+                              {isSimple ? (
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  className="w-full min-w-[90px] bg-transparent font-bold outline-none text-center text-white border-b border-dashed border-gray-600 focus:border-green-400"
+                                  value={simpleEditField?.id === s.id && simpleEditField?.field === 'eval'
+                                    ? (s.currentEval || '')
+                                    : s.currentEval ? formatCurrency(s.currentEval) : ''}
+                                  placeholder="₩0"
+                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'eval'}); e.target.select(); }}
+                                  onBlur={() => setSimpleEditField(null)}
+                                  onChange={e => updateSimpleAccountField(s.id, 'evalAmount', e.target.value.replace(/[^0-9]/g, ''))}
+                                />
+                              ) : (hideAmounts ? '••••••' : formatCurrency(s.currentEval))}
+                            </td>
+                            <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-blue-300 font-bold">{formatPercent(s.cagr)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isSimple ? '-' : (hideAmounts ? '••••••' : formatCurrency(s.depositAmount))}</td>
+                            {/* 수익 */}
+                            <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.currentEval - s.principal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                              {hideAmounts ? '••••••' : formatCurrency(s.currentEval - s.principal)}
+                            </td>
+                            <td className="py-1.5 px-2 border-r border-gray-700">
+                              <input type="text" className="w-full bg-transparent outline-none text-gray-400 text-xs placeholder-gray-600" value={s.memo} onChange={e => updatePortfolioMemo(s.id, e.target.value)} placeholder="메모..." />
+                            </td>
+                            <td className="py-1.5 px-2 text-center">
+                              <button onClick={() => deletePortfolio(s.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
+                            </td>
+                          </tr>
+                          {isCatOpen && Object.keys(s.cats).length > 0 && (
+                            <tr className="bg-gray-800/30 border-b border-gray-700">
+                              <td colSpan={13} className="py-3 px-4">
+                                <div className="text-[11px] text-gray-400 font-bold mb-2">📊 {s.name} - 구분별 평가금액</div>
+                                <div className="flex flex-wrap gap-x-6 gap-y-2">
+                                  {Object.entries(s.cats).filter(([,v]) => v > 0).map(([cat, val]) => (
+                                    <div key={cat} className="flex items-center gap-2">
+                                      <span className={`text-[11px] font-bold ${UI_CONFIG.COLORS.CATEGORIES[cat] || 'text-gray-300'}`}>{cat}</span>
+                                      <span className="text-[11px] text-gray-200 font-bold">{hideAmounts ? '••••••' : formatCurrency(val)}</span>
+                                      <span className="text-[10px] text-gray-500">{s.currentEval > 0 ? ((val / s.currentEval) * 100).toFixed(1) : 0}%</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    {portfolioSummaries.length === 0 && (
+                      <tr><td colSpan={13} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
+                    )}
+                  </tbody>
+                  <tfoot className="border-t-2 border-red-700 bg-red-900/20">
+                    <tr>
+                      <td className="border-r border-gray-700"></td>
+                      <td className="py-2 px-2 border-r border-gray-700"></td>
+                      <td className="py-2 px-3 border-r border-gray-700"></td>
+                      <td className="py-2 px-3 text-center text-red-400 font-extrabold border-r border-gray-700 sticky left-0 z-[5] bg-[#2d1a1e]">소 계</td>
+                      <td className="py-2 px-3 text-center text-gray-200 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalPrincipal)}</td>
+                      <td className="py-2 px-3 text-center text-gray-300 border-r border-gray-700">100%</td>
+                      <td className="py-2 px-3 text-center text-yellow-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalEval)}</td>
+                      <td className={`py-2 px-3 text-center font-bold border-r border-gray-700 ${intTotals.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(intTotals.returnRate)}</td>
+                      <td className="py-2 px-3 border-r border-gray-700"></td>
+                      <td className="py-2 px-3 text-center text-gray-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(intTotals.totalDeposit)}</td>
+                      <td className={`py-2 px-3 text-center font-bold border-r border-gray-700 ${intTotals.totalEval - intTotals.totalPrincipal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{hideAmounts ? '••••••' : formatCurrency(intTotals.totalEval - intTotals.totalPrincipal)}</td>
+                      <td colSpan={2}></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* 월별 평가 추이 + 기간별 수익 차트 */}
+            <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
+
+              {/* 평가액 추이 테이블 */}
+              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[320px] xl:max-h-none">
+                <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700 shrink-0">
+                  <span className="text-white font-bold text-sm">📅 평가액 추이</span>
+                  <button
+                    onClick={() => {
+                      const today = new Date().toISOString().split('T')[0];
+                      setIntHistory(prev => {
+                        const todayEntry = prev.find(h => h.date === today);
+                        return todayEntry ? [todayEntry] : (intTotals.totalEval > 0 ? [{ id: generateId(), date: today, evalAmount: intTotals.totalEval }] : []);
+                      });
+                    }}
+                    className="text-orange-400 hover:text-white p-1 hover:bg-gray-800 rounded transition" title="기록 리셋"
+                  ><Trash2 size={14} /></button>
+                </div>
+                <div className="overflow-x-auto overflow-y-auto flex-1">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 z-10">
+                      <tr>
+                        <th className="py-2.5 px-3 text-center border-r border-gray-700">일자</th>
+                        <th className="py-2.5 px-3 text-right border-r border-gray-700">총 평가금액</th>
+                        <th className="py-2.5 px-3 text-center border-r border-gray-700 whitespace-nowrap">전일대비(%)</th>
+                        <th className="py-2.5 px-3 text-center whitespace-nowrap">월간수익률(%)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {intMonthlyHistory.map((h, i) => (
+                        <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
+                          <td className="py-2 px-3 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
+                          <td className="py-2 px-3 font-bold text-white text-right border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
+                          <td className="py-2 px-3 text-center border-r border-gray-700">
+                            <span className={`text-sm font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
+                          </td>
+                          <td className="py-2 px-3 text-center">
+                            <span className={`text-sm font-bold ${h.monthlyChange > 0 ? 'text-red-400' : h.monthlyChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.monthlyChange)}</span>
+                          </td>
+                        </tr>
+                      ))}
+                      {intMonthlyHistory.length === 0 && (
+                        <tr><td colSpan={4} className="py-6 text-center text-gray-500">데이터 없음<br/><span className="text-[10px] text-gray-600">계좌 평가금액을 입력하면 자동으로 기록됩니다.</span></td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 기간별 수익 차트 */}
+              <div className="w-full xl:flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
+                <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-wrap gap-2 items-center shrink-0">
+                  <span className="text-white font-bold text-sm">📈 기간별 수익 차트 (통합)</span>
+                  <div className="flex flex-wrap gap-1 ml-2">
+                    {['1m','3m','6m','1y','2y','3y','5y','all'].map(p => (
+                      <button key={p} onClick={() => setIntChartPeriod(p)} className={`px-2 py-0.5 rounded text-xs font-bold transition-colors ${intChartPeriod === p ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>{p}</button>
+                    ))}
+                  </div>
+                  <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`ml-auto text-xs px-2 py-0.5 rounded font-bold transition-colors ${intIsZeroBaseMode ? 'bg-indigo-800/60 text-indigo-300 border border-indigo-700' : 'text-gray-500 hover:text-gray-300 border border-gray-700'}`} title="기간 시작 기준 / 원금 기준 전환">{intIsZeroBaseMode ? '기간기준' : '원금기준'}</button>
+                </div>
+                <div className="chart-container-for-drag p-3 sm:p-4 relative select-none h-[300px] sm:h-[340px] md:h-[380px] xl:h-[420px]">
+                  {intSelectionResult && (
+                    <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none">
+                      <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(intSelectionResult.startDate)} ~ {formatShortDate(intSelectionResult.endDate)}</span>
+                      <span className={`text-xl font-black ${intSelectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{intSelectionResult.profit > 0 ? '▲' : '▼'} {Math.abs(intSelectionResult.rate).toFixed(2)}%</span>
+                      <span className={`text-xs font-bold mt-1 ${intSelectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{hideAmounts ? '••••••' : `${intSelectionResult.profit >= 0 ? '+' : ''}${formatCurrency(intSelectionResult.profit)}`}</span>
+                    </div>
+                  )}
+                  <ResponsiveContainer width="100%" height="100%" minHeight={200}>
+                    <ComposedChart data={intChartData} onMouseDown={handleIntChartMouseDown} onMouseMove={handleIntChartMouseMove} onMouseUp={handleIntChartMouseUp} onMouseLeave={handleIntChartMouseUp}>
+                      <defs>
+                        <linearGradient id="intReturnGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
+                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="intCostGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#6b7280" stopOpacity={0.35} />
+                          <stop offset="95%" stopColor="#6b7280" stopOpacity={0.05} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.5} />
+                      <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatVeryShortDate} minTickGap={30} />
+                      <YAxis yAxisId="left" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => `${v.toFixed(1)}%`} width={48} />
+                      <YAxis yAxisId="right" orientation="right" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => (v >= 1e8 ? (v/1e8).toFixed(1)+'억' : (v/1e4).toFixed(0)+'만')} width={55} />
+                      <RechartsTooltip content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        return (
+                          <div style={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #4b5563', borderRadius: 8, padding: '10px 14px', minWidth: 180 }}>
+                            <p style={{ color: '#9ca3af', fontSize: 11, fontWeight: 700, marginBottom: 6 }}>{formatShortDate(label)}</p>
+                            {payload.filter(e => e.dataKey !== 'costAmount' || e.value > 0).map((entry, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 3 }}>
+                                <span style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, display: 'inline-block', flexShrink: 0 }} />
+                                <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 600, marginRight: 4 }}>{entry.name}</span>
+                                <span style={{ fontSize: 11, color: '#e5e7eb', fontWeight: 700, marginLeft: 'auto' }}>
+                                  {entry.name === '수익률' ? `${Number(entry.value).toFixed(2)}%` : (hideAmounts ? '••••••' : formatCurrency(entry.value))}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      }} />
+                      <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={{ r: 3 }} />
+                      <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={{ r: 4 }} />
+                      <Line yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} dot={false} />
+                      {intRefAreaLeft && intRefAreaRight && <ReferenceArea yAxisId="left" x1={intRefAreaLeft} x2={intRefAreaRight} fill="rgba(255,255,255,0.08)" strokeOpacity={0.3} />}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            {/* 자산 카테고리 비중 (도넛 차트) */}
+            <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-8">
+              <div className="p-3 bg-[#0f172a] border-b border-gray-700">
+                <span className="text-white font-bold text-sm">🍩 자산 카테고리 비중 (통합)</span>
+              </div>
+              <div className="divide-y divide-gray-700">
+                {/* 위: 카테고리 도넛 + 카테고리 표 */}
+                <div className="p-4">
+                  <div className="text-gray-400 text-xs text-center mb-2 font-semibold">자산 카테고리</div>
+                  {intCatDonutData.length === 0 ? (
+                    <div className="py-8 text-center text-gray-500 text-xs">카테고리 데이터가 없습니다.</div>
+                  ) : (
+                    <>
+                      <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                        {hoveredIntCatSlice ? (
+                          <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredIntCatSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredIntCatSlice.fill }}>{hoveredIntCatSlice.name} {(hoveredIntCatSlice.percent * 100).toFixed(1)}%</span>{!hideAmounts && <span className="text-[11px] text-gray-300 shrink-0 ml-1">{formatCurrency(hoveredIntCatSlice.value)}</span>}</>
+                        ) : (
+                          <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                        )}
+                      </div>
+                      <div style={{ height: 480 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie data={intCatDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredIntCatSlice(data)} onMouseLeave={() => setHoveredIntCatSlice(null)}>
+                              {intCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <table className="w-full text-xs mt-3">
+                        <thead className="text-gray-400 border-b border-gray-700">
+                          <tr className="text-center">
+                            <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                            <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                            <th className="pb-2 px-3">비중</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {intCatDonutData.map(({ name, value }, i) => (
+                            <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                              <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700">
+                                <span style={{ color: UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8] }}>{name}</span>
+                              </td>
+                              <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(value)}</td>
+                              <td className="py-1.5 px-3 text-gray-400 text-right">{intTotals.totalEval > 0 ? ((value / intTotals.totalEval) * 100).toFixed(1) : 0}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
+                </div>
+                {/* 아래: 종목 도넛 + 종목 표 */}
+                <div className="p-4">
+                  <div className="text-gray-400 text-xs text-center mb-2 font-semibold">종목별 비중</div>
+                  {intHoldingsDonutData.length === 0 ? (
+                    <div className="py-8 text-center text-gray-500 text-xs">종목 데이터가 없습니다.</div>
+                  ) : (() => {
+                    const holdingsTotal = intHoldingsDonutData.reduce((s, x) => s + x.value, 0);
+                    const catOrder = intCatDonutData.map(x => x.name);
+                    const catValueMap = {};
+                    intCatDonutData.forEach(x => { catValueMap[x.name] = x.value; });
+                    const grouped = {};
+                    intHoldingsDonutData.forEach(item => {
+                      if (!grouped[item.category]) grouped[item.category] = [];
+                      grouped[item.category].push(item);
+                    });
+                    const LAST_CATS = ['현금', '예수금'];
+                    const groupEntries = Object.entries(grouped).sort(([catA, itemsA], [catB, itemsB]) => {
+                      const aLast = LAST_CATS.includes(catA);
+                      const bLast = LAST_CATS.includes(catB);
+                      if (aLast !== bLast) return aLast ? 1 : -1;
+                      if (aLast && bLast) return LAST_CATS.indexOf(catA) - LAST_CATS.indexOf(catB);
+                      const idxA = catOrder.indexOf(catA);
+                      const idxB = catOrder.indexOf(catB);
+                      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                      if (idxA !== -1) return -1;
+                      if (idxB !== -1) return 1;
+                      return itemsB.reduce((s, x) => s + x.value, 0) - itemsA.reduce((s, x) => s + x.value, 0);
+                    });
+                    const parseHex = (hex) => {
+                      if (!hex || !hex.startsWith('#') || hex.length < 7) return null;
+                      const r = parseInt(hex.slice(1, 3), 16) / 255;
+                      const g = parseInt(hex.slice(3, 5), 16) / 255;
+                      const b = parseInt(hex.slice(5, 7), 16) / 255;
+                      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+                      const l = (max + min) / 2;
+                      if (max === min) return [0, 0, l * 100];
+                      const d = max - min;
+                      const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                      let h;
+                      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+                      else if (max === g) h = ((b - r) / d + 2) / 6;
+                      else h = ((r - g) / d + 4) / 6;
+                      return [h * 360, s * 100, l * 100];
+                    };
+                    const genShades = (baseHex, count) => {
+                      const hsl = parseHex(baseHex);
+                      if (!hsl || count === 1) return Array(count).fill(baseHex);
+                      const [h, s, l] = hsl;
+                      return Array.from({ length: count }, (_, i) => {
+                        const t = i / (count - 1);
+                        const shade = Math.min(78, Math.max(28, l + 18 - t * 36));
+                        return `hsl(${h.toFixed(0)},${Math.min(100, s + 5).toFixed(0)}%,${shade.toFixed(0)}%)`;
+                      });
+                    };
+                    const itemColorMap = {};
+                    const catBaseColorMap = {};
+                    groupEntries.forEach(([cat, items], gi) => {
+                      const catIdx = catOrder.indexOf(cat);
+                      const baseHex = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || UI_CONFIG.COLORS.CHART_PALETTE[catIdx !== -1 ? catIdx % 8 : gi % 8];
+                      catBaseColorMap[cat] = baseHex;
+                      const shades = genShades(baseHex, items.length);
+                      items.forEach((item, j) => { itemColorMap[`${cat}::${item.name}`] = shades[j]; });
+                    });
+                    const totalDenom = intTotals.totalEval > 0 ? intTotals.totalEval : holdingsTotal;
+                    const groupedDonutData = groupEntries.flatMap(([, items]) => items);
+                    let rowNum = 0;
+                    return (
+                      <>
+                        <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                          {hoveredIntHoldSlice ? (
+                            <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredIntHoldSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredIntHoldSlice.fill }}>{hoveredIntHoldSlice.name} {(hoveredIntHoldSlice.percent * 100).toFixed(1)}%</span>{!hideAmounts && <span className="text-[11px] text-gray-300 shrink-0 ml-1">{formatCurrency(hoveredIntHoldSlice.value)}</span>}</>
+                          ) : (
+                            <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                          )}
+                        </div>
+                        <div style={{ height: 480 }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie data={groupedDonutData} innerRadius="38%" outerRadius="65%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredIntHoldSlice(data)} onMouseLeave={() => setHoveredIntHoldSlice(null)}>
+                                {groupedDonutData.map((entry, i) => (
+                                  <Cell key={i} fill={itemColorMap[`${entry.category}::${entry.name}`] || catBaseColorMap[entry.category] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />
+                                ))}
+                              </Pie>
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="overflow-x-auto mt-3">
+                        <table className="w-full text-xs min-w-[480px]">
+                          <thead className="text-gray-400 border-b border-gray-700">
+                            <tr className="text-center">
+                              <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                              <th className="pb-2 px-2 border-r border-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">종목</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                              <th className="pb-2 px-3 border-r border-gray-700">비중</th>
+                              <th className="pb-2 px-3 border-r border-gray-700">수익</th>
+                              <th className="pb-2 px-3">수익률</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {groupEntries.flatMap(([cat, items]) => {
+                              const catColor = catBaseColorMap[cat];
+                              const catDisplayValue = catValueMap[cat] ?? items.reduce((s, x) => s + x.value, 0);
+                              const isLastCat = LAST_CATS.includes(cat);
+                              return items.map((item, j) => {
+                                rowNum += 1;
+                                const num = rowNum;
+                                const itemColor = itemColorMap[`${cat}::${item.name}`] || catColor;
+                                const profit = item.value - item.cost;
+                                const profitRate = item.cost > 0 ? (profit / item.cost) * 100 : null;
+                                const profitColor = profit > 0 ? 'text-red-400' : profit < 0 ? 'text-blue-400' : 'text-gray-400';
+                                return (
+                                  <tr key={`${cat}-${item.name}`} className={`group hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
+                                    {j === 0 && (
+                                      <td rowSpan={items.length} className="py-1.5 px-2 text-center font-bold border-r border-gray-700 border-b border-gray-700 align-middle">
+                                        <div style={{ color: catColor }}>{cat}</div>
+                                        <div className="text-gray-500 font-normal mt-0.5">{hideAmounts ? '••••••' : formatCurrency(catDisplayValue)}</div>
+                                        <div className="text-gray-500 font-normal">{totalDenom > 0 ? ((catDisplayValue / totalDenom) * 100).toFixed(1) : 0}%</div>
+                                      </td>
+                                    )}
+                                    <td className="py-1.5 px-2 text-center border-r border-gray-700 sticky left-0 z-10 bg-[#1e293b] group-hover:bg-[#1d2d40] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">
+                                      <span style={{ color: itemColor }}>{num}. {item.name}</span>
+                                    </td>
+                                    <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(item.value)}</td>
+                                    <td className="py-1.5 px-3 border-r border-gray-700 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
+                                    {isLastCat ? (
+                                      <>
+                                        <td className="py-1.5 px-3 border-r border-gray-700 text-gray-600 text-right">-</td>
+                                        <td className="py-1.5 px-3 text-gray-600 text-right">-</td>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>
+                                          {hideAmounts ? '••••••' : (<><span className="text-[9px] mr-0.5">{profit >= 0 ? '▲' : '▼'}</span>{formatCurrency(Math.abs(profit))}</>)}
+                                        </td>
+                                        <td className={`py-1.5 px-3 font-bold text-right ${profitColor}`}>
+                                          {profitRate !== null ? (<><span className="text-[9px] mr-0.5">{profitRate >= 0 ? '▲' : '▼'}</span>{Math.abs(profitRate).toFixed(2)}%</>) : '-'}
+                                        </td>
+                                      </>
+                                    )}
+                                  </tr>
+                                );
+                              });
+                            })}
+                          </tbody>
+                        </table>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+
+          </div>
+  );
+}
