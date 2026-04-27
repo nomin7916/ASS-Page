@@ -319,6 +319,7 @@ export default function App() {
     handleAddStock,
     handleAddFund,
     updateDividendHistory,
+    updatePortfolioDividendHistory,
   } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
@@ -1930,7 +1931,7 @@ export default function App() {
           />
         </div>
 
-        <DividendSummaryTable portfolios={allPortfoliosForDividend} />
+        <DividendSummaryTable portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} />
 
         {/* 차트 영역 + 시장 지표 */}
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">
