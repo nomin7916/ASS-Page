@@ -1631,8 +1631,10 @@ export default function App() {
   }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks]);
 
   const rebalanceData = useMemo(() => {
+    const rebalFxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
     const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-    const overallExp = cleanNum(totals.totalEval) + cleanNum(settings.amount);
+    const nativeTotalEval = rebalFxRate > 1 ? totals.totalEval / rebalFxRate : totals.totalEval;
+    const overallExp = nativeTotalEval + cleanNum(settings.amount);
     const accumulateBase = cleanNum(settings.amount) + depositAmount;
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
       const tRatio = cleanNum(item.targetRatio) / 100;
@@ -1670,7 +1672,7 @@ export default function App() {
       });
     }
     return data;
-  }, [portfolio, totals.totalEval, settings, rebalanceSortConfig]);
+  }, [portfolio, totals.totalEval, settings, rebalanceSortConfig, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const rebalCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
@@ -4097,16 +4099,14 @@ export default function App() {
         <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
           <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden shrink-0">
             <div className="p-3 bg-black space-y-2 shrink-0 border-b border-gray-700 text-gray-400 text-xs">
-              <div className="flex justify-between"><span className="shrink-0">투자금액</span><span className="font-bold text-gray-200 whitespace-nowrap pl-1">{formatCurrency(totals.totalInvest)}</span></div>
-              <div className="flex justify-between"><span className="shrink-0">평가금액</span><span className="font-bold text-yellow-400 text-[13px] whitespace-nowrap pl-1">{formatCurrency(totals.totalEval)}</span></div>
-              <div className="flex justify-between"><span className="shrink-0">수익률</span><span className="font-bold text-white text-[13px] whitespace-nowrap pl-1">{formatPercent(totals.totalInvest > 0 ? (totals.totalProfit / totals.totalInvest) * 100 : 0)}</span></div>
+              {(() => { const isOv = activePortfolioAccountType === 'overseas'; const fx = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n); const dualKRW = (krwVal, cls='text-gray-200') => isOv ? <div className="flex flex-col items-end leading-tight"><span className={`font-bold ${cls}`}>{fmtUS(krwVal/fx)}</span><span className="text-[10px] text-gray-500">{formatCurrency(krwVal)}</span></div> : <span className={`font-bold ${cls} whitespace-nowrap pl-1`}>{formatCurrency(krwVal)}</span>; return (<><div className="flex justify-between items-start"><span className="shrink-0">투자금액</span>{dualKRW(totals.totalInvest)}</div><div className="flex justify-between items-start"><span className="shrink-0">평가금액</span>{dualKRW(totals.totalEval, 'text-yellow-400 text-[13px]')}</div><div className="flex justify-between"><span className="shrink-0">수익률</span><span className="font-bold text-white text-[13px] whitespace-nowrap pl-1">{formatPercent(totals.totalInvest > 0 ? (totals.totalProfit / totals.totalInvest) * 100 : 0)}</span></div></>); })()}
             </div>
             <div className="flex-1 flex flex-col">
               <div className="flex h-auto py-1.5 border-b border-gray-700"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold">시작일</span></div><div className="flex-1 p-2 flex items-center bg-gray-800/20"><input type="date" value={portfolioStartDate} onChange={e => setPortfolioStartDate(e.target.value)} className="bg-transparent text-gray-200 font-bold outline-none cursor-text text-right w-full text-xs" /></div></div>
               <div className="flex h-auto py-1.5 border-b border-gray-700"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold">입금액</span></div><div className="flex-1 p-2 flex items-center bg-gray-800/20"><input type="text" className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-gray-400 font-bold outline-none px-2 py-1.5 text-xs" placeholder="Enter to apply" onKeyDown={e => { if (e.key === 'Enter') { const v = cleanNum(e.target.value); setPrincipal(p => p + v); setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: v, memo: "수동입금" }, ...depositHistory]); e.target.value = ""; } }} /></div></div>
               <div className="flex h-[50px] border-b border-gray-700 shrink-0"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold">투자 원금</span></div><div className="flex-1 p-2 flex items-center bg-gray-800/20"><input type="text" className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-white font-bold outline-none px-2 py-1 text-xs" value={formatNumber(principal)} onChange={e => setPrincipal(cleanNum(e.target.value))} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></div></div>
               <div className="flex h-auto py-1.5 border-b border-gray-700"><div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0"><span className="text-[11px] text-gray-400 font-bold" title="1년 미만: 총수익율 / 1년 이상: CAGR(연평균 성장률)">CAGR</span></div><div className="flex-1 p-2 flex items-center justify-end bg-gray-800/20"><span className="font-bold text-blue-300 text-sm">{formatPercent(cagr)}</span></div></div>
-              <div className="flex flex-1 min-h-[80px]"><div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 gap-2 shrink-0"><span className="text-[11px] text-gray-400 font-bold">수익률</span><span className="text-[11px] text-gray-400 font-bold">수익금</span></div><div className="flex-1 flex flex-col items-center justify-center bg-gray-900/40 gap-1 p-2 overflow-hidden"><span className={`text-[24px] font-extrabold leading-none tracking-wide whitespace-nowrap ${totals.totalEval - principal >= 0 ? 'text-red-500' : 'text-blue-500'}`}>{formatPercent(principal > 0 ? (totals.totalEval - principal) / principal * 100 : 0)}</span><span className={`text-[14px] font-bold tracking-wide whitespace-nowrap ${totals.totalEval - principal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatCurrency(totals.totalEval - principal)}</span></div></div>
+              <div className="flex flex-1 min-h-[80px]"><div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 gap-2 shrink-0"><span className="text-[11px] text-gray-400 font-bold">수익률</span><span className="text-[11px] text-gray-400 font-bold">수익금</span></div><div className="flex-1 flex flex-col items-center justify-center bg-gray-900/40 gap-1 p-2 overflow-hidden"><span className={`text-[24px] font-extrabold leading-none tracking-wide whitespace-nowrap ${totals.totalEval - principal >= 0 ? 'text-red-500' : 'text-blue-500'}`}>{formatPercent(principal > 0 ? (totals.totalEval - principal) / principal * 100 : 0)}</span>{(() => { const profit = totals.totalEval - principal; const isOv = activePortfolioAccountType === 'overseas'; const fx = marketIndicators.usdkrw || 1; const cls = `text-[14px] font-bold tracking-wide ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`; return isOv ? <div className="flex flex-col items-center leading-tight"><span className={cls}>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(profit/fx)}</span><span className="text-[11px] text-gray-500">{formatCurrency(profit)}</span></div> : <span className={`${cls} whitespace-nowrap`}>{formatCurrency(profit)}</span>; })()}</div></div>
             </div>
           </div>
 
@@ -4140,7 +4140,7 @@ export default function App() {
                     return (
                       <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
                         <td className="py-2 px-3 text-center border-r border-gray-600 font-bold text-gray-400">{formatShortDate(h.date)}</td>
-                        <td className="py-2 px-3 border-r border-gray-600 font-bold text-white text-right">{formatCurrency(h.evalAmount)}</td>
+                        <td className="py-2 px-3 border-r border-gray-600 font-bold text-white text-right">{activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(h.evalAmount/(marketIndicators.usdkrw||1))}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div> : formatCurrency(h.evalAmount)}</td>
                         <td className="py-2 px-3 border-r border-gray-600 text-center font-bold"><span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span></td>
                         <td className="py-2 px-2 text-center"><button onClick={() => { setLookupRows([{ id: generateId(), date: h.date }, ...lookupRows]); showToast("조회 목록 복사"); }} className="text-blue-400"><ArrowDownToLine size={12} /></button></td>
                       </tr>
@@ -4223,12 +4223,13 @@ export default function App() {
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
                   <tr>
                     <th className="py-2.5 w-[70px] text-center border-r border-gray-600 font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleDepositSort('date')}>일자{sortArrow(depositSortConfig, 'date')}</th>
-                    <th className="py-2.5 border-r border-gray-600 px-1 w-[80px] text-blue-300 font-normal text-center cursor-pointer hover:bg-gray-700" onClick={() => handleDepositSort('amount')}>금액{sortArrow(depositSortConfig, 'amount')}</th>
-                    <th className="py-2.5 border-r border-gray-600 px-1 w-[90px] text-yellow-400 font-normal text-center">합계</th>
+                    <th className="py-2.5 border-r border-gray-600 px-1 w-[80px] text-blue-300 font-normal text-center cursor-pointer hover:bg-gray-700" onClick={() => handleDepositSort('amount')}>{activePortfolioAccountType === 'overseas' ? '금액($)' : '금액'}{sortArrow(depositSortConfig, 'amount')}</th>
+                    {activePortfolioAccountType === 'overseas' && <th className="py-2.5 border-r border-gray-600 px-1 w-[70px] text-sky-400 font-normal text-center">환율</th>}
+                    <th className="py-2.5 border-r border-gray-600 px-1 w-[90px] text-yellow-400 font-normal text-center">{activePortfolioAccountType === 'overseas' ? '합계($)' : '합계'}</th>
                     <th className="py-2.5 border-r border-gray-600 text-center px-2 font-normal">메모</th>
                     <th className="py-2.5 w-[45px] text-center font-normal">
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, memo: "" }, ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                        <button onClick={() => setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: marketIndicators.usdkrw || 1, memo: "" }, ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
                         <button onClick={handleDepositDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="입금 내역 CSV 다운로드"><Download size={12} /></button>
                       </div>
                     </th>
@@ -4242,9 +4243,14 @@ export default function App() {
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" value={h.date} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].date = e.target.value; setDepositHistory(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={formatNumber(h.amount)} onFocus={e => e.target.select()} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].amount = cleanNum(e.target.value); setDepositHistory(n); }} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
+                        <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={activePortfolioAccountType === 'overseas' ? cleanNum(h.amount).toFixed(2) : formatNumber(h.amount)} onFocus={e => e.target.select()} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].amount = cleanNum(e.target.value); setDepositHistory(n); }} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
                       </td>
-                      <td className="py-2 px-1 border-r border-gray-600 text-yellow-400 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(h.cumulative)}</td>
+                      {activePortfolioAccountType === 'overseas' && (
+                        <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sky-500">
+                          <input type="text" data-col="d1fxRate" className="w-full bg-transparent text-right outline-none font-bold px-1 py-2 text-sky-400 caret-sky-400" value={h.fxRate || ''} placeholder={(marketIndicators.usdkrw || 1400).toFixed(0)} onFocus={e => e.target.select()} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].fxRate = cleanNum(e.target.value); setDepositHistory(n); }} onKeyDown={e => handleTableKeyDown(e, 'd1fxRate')} />
+                        </td>
+                      )}
+                      <td className="py-2 px-1 border-r border-gray-600 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end leading-tight"><span className="text-yellow-400">${cleanNum(h.cumulative).toFixed(2)}</span><span className="text-[10px] text-gray-500">{formatCurrency(cleanNum(h.cumulative) * (marketIndicators.usdkrw || 1))}</span></div> : <span className="text-yellow-400">{formatCurrency(h.cumulative)}</span>}</td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                         <input type="text" data-col="d1memo" className="w-full bg-transparent outline-none px-2 py-2 text-gray-300 text-[11px] caret-blue-400" value={h.memo} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].memo = e.target.value; setDepositHistory(n); }} onKeyDown={e => handleTableKeyDown(e, 'd1memo')} />
                       </td>
@@ -4264,12 +4270,13 @@ export default function App() {
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
                   <tr>
                     <th className="py-2.5 w-[70px] text-center border-r border-gray-600 font-normal cursor-pointer hover:bg-gray-700" onClick={() => handleDepositSort2('date')}>일자{sortArrow(depositSortConfig2, 'date')}</th>
-                    <th className="py-2.5 border-r border-gray-600 px-1 w-[80px] text-blue-300 font-normal text-center cursor-pointer hover:bg-gray-700" onClick={() => handleDepositSort2('amount')}>금액{sortArrow(depositSortConfig2, 'amount')}</th>
-                    <th className="py-2.5 border-r border-gray-600 px-1 w-[90px] text-yellow-400 font-normal text-center">합계</th>
+                    <th className="py-2.5 border-r border-gray-600 px-1 w-[80px] text-blue-300 font-normal text-center cursor-pointer hover:bg-gray-700" onClick={() => handleDepositSort2('amount')}>{activePortfolioAccountType === 'overseas' ? '금액($)' : '금액'}{sortArrow(depositSortConfig2, 'amount')}</th>
+                    {activePortfolioAccountType === 'overseas' && <th className="py-2.5 border-r border-gray-600 px-1 w-[70px] text-sky-400 font-normal text-center">환율</th>}
+                    <th className="py-2.5 border-r border-gray-600 px-1 w-[90px] text-yellow-400 font-normal text-center">{activePortfolioAccountType === 'overseas' ? '합계($)' : '합계'}</th>
                     <th className="py-2.5 border-r border-gray-600 text-center px-2 font-normal">메모</th>
                     <th className="py-2.5 w-[45px] text-center font-normal">
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setDepositHistory2([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, memo: "" }, ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                        <button onClick={() => setDepositHistory2([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: marketIndicators.usdkrw || 1, memo: "" }, ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
                         <button onClick={handleWithdrawDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="출금 내역 CSV 다운로드"><Download size={12} /></button>
                       </div>
                     </th>
@@ -4283,9 +4290,14 @@ export default function App() {
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" value={h.date} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].date = e.target.value; setDepositHistory2(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={formatNumber(h.amount)} onFocus={e => e.target.select()} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].amount = cleanNum(e.target.value); setDepositHistory2(n); }} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
+                        <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={activePortfolioAccountType === 'overseas' ? cleanNum(h.amount).toFixed(2) : formatNumber(h.amount)} onFocus={e => e.target.select()} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].amount = cleanNum(e.target.value); setDepositHistory2(n); }} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
                       </td>
-                      <td className="py-2 px-1 border-r border-gray-600 text-yellow-400 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(h.cumulative)}</td>
+                      {activePortfolioAccountType === 'overseas' && (
+                        <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sky-500">
+                          <input type="text" data-col="d2fxRate" className="w-full bg-transparent text-right outline-none font-bold px-1 py-2 text-sky-400 caret-sky-400" value={h.fxRate || ''} placeholder={(marketIndicators.usdkrw || 1400).toFixed(0)} onFocus={e => e.target.select()} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].fxRate = cleanNum(e.target.value); setDepositHistory2(n); }} onKeyDown={e => handleTableKeyDown(e, 'd2fxRate')} />
+                        </td>
+                      )}
+                      <td className="py-2 px-1 border-r border-gray-600 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end leading-tight"><span className="text-yellow-400">${cleanNum(h.cumulative).toFixed(2)}</span><span className="text-[10px] text-gray-500">{formatCurrency(cleanNum(h.cumulative) * (marketIndicators.usdkrw || 1))}</span></div> : <span className="text-yellow-400">{formatCurrency(h.cumulative)}</span>}</td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                         <input type="text" data-col="d2memo" className="w-full bg-transparent outline-none px-2 py-2 text-gray-300 text-[11px] caret-blue-400" value={h.memo} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].memo = e.target.value; setDepositHistory2(n); }} onKeyDown={e => handleTableKeyDown(e, 'd2memo')} />
                       </td>
@@ -4800,7 +4812,7 @@ export default function App() {
           <div className="p-5 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:justify-between xl:items-start gap-4">
             <span className="text-green-400 text-xl font-bold flex items-center gap-2">⚖️ 리밸런싱 & 적립 시뮬레이터</span>
             <div className="flex flex-col gap-3 w-full xl:w-[600px]">
-              <div className="flex items-center justify-between bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{formatCurrency(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0)}</span></div>
+              <div className="flex items-center justify-between bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType === 'overseas') { const fx = marketIndicators.usdkrw || 1; return <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(dep)}</span><span className="text-sm text-green-600">{formatCurrency(dep * fx)}</span></div>; } return formatCurrency(dep); })()}</span></div>
               <div className="flex items-stretch bg-gray-900 border border-gray-600 rounded-lg overflow-hidden h-12 shadow-sm">
                 <select className="bg-gray-800 text-gray-200 text-sm font-bold px-3 border-r border-gray-600 outline-none cursor-pointer" value={settings.mode} onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}><option value="rebalance">리밸런싱 (비중 기반)</option><option value="accumulate">적립 (신규 자금 분할)</option></select>
                 <input type="text" className="flex-1 bg-transparent text-right text-white font-bold px-4 outline-none text-lg" value={formatNumber(settings.amount)} onChange={e => updateSettingsForType({ ...settings, amount: cleanNum(e.target.value) })} onFocus={e => e.target.select()} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} />
@@ -4937,7 +4949,7 @@ export default function App() {
                         <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                           <input type="text" data-col="targetRatio" className="w-full h-full bg-transparent text-center text-green-400 font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400" value={item.targetRatio || 0} onChange={e => handleUpdate(item.id, 'targetRatio', e.target.value)} onFocus={e => e.target.select()} onKeyDown={e => handleTableKeyDown(e, 'targetRatio')} />
                         </td>
-                        <td className="py-3 px-3 text-center text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totals.totalEval > 0 ? (item.curEval / totals.totalEval * 100) : 0).toFixed(isOverseas ? 2 : 1)}%</td>
+                        <td className="py-3 px-3 text-center text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0).toFixed(isOverseas ? 2 : 1)}%</td>
                         <td className="py-3 px-3 text-center font-bold text-blue-300 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totalAction > 0 ? '+' : '') + totalAction}</td>
                         <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500">
                           <input type="text" className="w-full h-full bg-transparent text-center text-orange-300 font-bold outline-none py-3 focus:bg-orange-900/20 caret-orange-400 min-w-[65px]" value={extraQty !== 0 ? extraQty : ''} placeholder="0" onChange={e => { const val = parseInt(e.target.value.replace(/[^\-\d]/g, '')) || 0; setRebalExtraQty(prev => ({ ...prev, [item.id]: val })); }} onFocus={e => e.target.select()} />
