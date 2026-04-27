@@ -198,7 +198,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         return { amount };
       });
       const annual = monthData.reduce((s, d) => s + d.amount, 0);
-      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', monthData, annual };
+      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', monthData, annual };
     }).filter(row => row.annual > 0);
   }, [compact, nonGoldPortfolios]);
 
@@ -222,7 +222,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         return { amount, yearMonth };
       });
       const annual = monthData.reduce((s, d) => s + d.amount, 0);
-      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', monthData, annual };
+      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', monthData, annual };
     }).filter(row => row.annual > 0);
   }, [compact, nonGoldPortfolios]);
 
@@ -318,8 +318,16 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <tbody>
                 {rows.map(row => (
                   <tr key={row.portfolioId} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                    <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-green-400">
-                      <div className="line-clamp-1">{row.portfolioTitle}</div>
+                    <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold">
+                      <div
+                        className="line-clamp-1"
+                        style={row.rowColor ? {
+                          backgroundImage: `linear-gradient(90deg, ${row.rowColor}, ${row.rowColor}99)`,
+                          WebkitBackgroundClip: 'text',
+                          WebkitTextFillColor: 'transparent',
+                          backgroundClip: 'text',
+                        } : { color: '#4ade80' }}
+                      >{row.portfolioTitle}</div>
                     </td>
                     {row.monthData.map((d, i) => (
                       <td key={i} className={`py-2 px-1 text-right text-[10px] ${d.amount > 0 ? (activeTab === 'expected' ? 'text-blue-300/70' : 'text-emerald-300') : 'text-gray-700'}`}>
