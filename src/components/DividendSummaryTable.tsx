@@ -178,8 +178,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
   }, [nonGoldPortfolios]);
 
-  // 숫자 코드 종목 자체가 없으면 표시 안 함
-  if (!stockKeys) return null;
+  // 비gold 계좌 자체가 없으면 표시 안 함
+  if (!nonGoldPortfolios.length) return null;
 
   const hasDividendData = expectedRows.length > 0;
   const monthlyTotals = Array.from({ length: 12 }, (_, i) =>
@@ -227,8 +227,16 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         <div className="py-8 text-center text-blue-400 text-xs animate-pulse">분배금 데이터 조회 중...</div>
       )}
 
-      {/* 조회 완료 후 분배금 없음 */}
-      {!loading && !hasDividendData && (
+      {/* 한국 주식 코드 종목 없음 */}
+      {!loading && !stockKeys && (
+        <div className="py-6 text-center text-gray-500 text-xs">
+          분배금 조회 대상 종목이 없습니다.<br />
+          <span className="text-gray-600">한국 주식·ETF (6자리 숫자 코드) 종목이 있는 계좌에서 표시됩니다.</span>
+        </div>
+      )}
+
+      {/* 조회 완료 후 분배금 데이터 없음 */}
+      {!loading && !!stockKeys && !hasDividendData && (
         <div className="py-8 text-center text-gray-500 text-xs">분배금 지급 이력이 있는 종목이 없습니다.</div>
       )}
 
