@@ -190,7 +190,7 @@ export default function App() {
   const [showUnlockPinModal, setShowUnlockPinModal] = useState(false);
   const [unlockPinDigits, setUnlockPinDigits] = useState(['', '', '', '']);
   const [unlockPinError, setUnlockPinError] = useState('');
-  const [sectionCollapsed, setSectionCollapsed] = useState({ table: false, summary: false, stats: false, dividend: false, chart: false, rebalancing: false });
+  const [sectionCollapsed, setSectionCollapsed] = useState({ summary: false, stats: false, dividend: false, chart: false, rebalancing: false });
   const toggleSection = (key) => setSectionCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
 
   // ── useHistoryChart 훅 ──
@@ -1868,19 +1868,24 @@ export default function App() {
           <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
         )}
 
-        <div className="flex flex-wrap items-center gap-1.5 py-1.5">
-          {activePortfolioAccountType !== 'gold' && (
-            <button onClick={() => toggleSection('summary')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.summary ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>포트폴리오 요약</button>
-          )}
-          <button onClick={() => toggleSection('stats')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.stats ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>통계 / 히스토리 / 입출금</button>
-          {activePortfolioAccountType !== 'gold' && (
-            <button onClick={() => toggleSection('dividend')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.dividend ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>분배금 현황</button>
-          )}
-          <button onClick={() => toggleSection('chart')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.chart ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>수익률 차트</button>
-          {activePortfolioAccountType !== 'gold' && (
-            <button onClick={() => toggleSection('rebalancing')} className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border ${sectionCollapsed.rebalancing ? 'bg-transparent border-gray-700/50 text-gray-600 hover:text-gray-400 hover:border-gray-600' : 'bg-gray-700/50 border-gray-600/50 text-gray-300'}`}>리밸런싱</button>
-          )}
-        </div>
+        <div className="flex items-start gap-0 w-full">
+          {/* 좌측 바인더 탭 */}
+          <div className="sticky top-14 self-start flex flex-col gap-px flex-shrink-0 z-10 pt-3">
+            {activePortfolioAccountType !== 'gold' && (
+              <button onClick={() => toggleSection('summary')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-l-md border-l border-t border-b ${!sectionCollapsed.summary ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>포트폴리오 요약</button>
+            )}
+            <button onClick={() => toggleSection('stats')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-l-md border-l border-t border-b ${!sectionCollapsed.stats ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>통계·히스토리</button>
+            {activePortfolioAccountType !== 'gold' && (
+              <button onClick={() => toggleSection('dividend')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-l-md border-l border-t border-b ${!sectionCollapsed.dividend ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>분배금 현황</button>
+            )}
+            <button onClick={() => toggleSection('chart')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-l-md border-l border-t border-b ${!sectionCollapsed.chart ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>수익률 차트</button>
+            {activePortfolioAccountType !== 'gold' && (
+              <button onClick={() => toggleSection('rebalancing')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-l-md border-l border-t border-b ${!sectionCollapsed.rebalancing ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>리밸런싱</button>
+            )}
+          </div>
+
+          {/* 섹션 콘텐츠 */}
+          <div className="flex-1 flex flex-col gap-4 min-w-0">
 
         {activePortfolioAccountType !== 'gold' && !sectionCollapsed.summary && (
           <PortfolioSummaryPanel
@@ -2077,6 +2082,8 @@ export default function App() {
             setPortfolio={setPortfolio}
           />
         )}
+          </div>
+        </div>
         </>)}
 
         {showIntegratedDashboard && (
