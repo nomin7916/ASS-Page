@@ -29,7 +29,11 @@
       "PowerShell($nvmPath = \"$env:APPDATA\\\\nvm\"; if \\(Test-Path $nvmPath\\) { ls $nvmPath } else { \"No nvm\" }; ls \"C:\\\\Users\\\\arui1\\\\.nvm\" -ErrorAction SilentlyContinue | Select-Object -First 5)",
       "WebFetch(domain:14ass-page-eea5.vercel.app)",
       "Bash(awk 'NR>=1852 && NR<=1885' /c/Users/arui1/Documents/Github/ASS-Page/src/App.tsx)",
-      "WebFetch(domain:api.github.com)"
+      "WebFetch(domain:api.github.com)",
+      "PowerShell(Get-Command node, npm -ErrorAction SilentlyContinue)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
