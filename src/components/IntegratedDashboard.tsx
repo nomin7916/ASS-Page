@@ -10,6 +10,7 @@ import { generateId, formatCurrency, formatPercent, formatShortDate, formatVeryS
 
 import CustomDatePicker from './CustomDatePicker';
 import { PieLabelOutside } from '../chartUtils';
+import DividendSummaryTable from './DividendSummaryTable';
 
 
 const hexToRgba = (hex, alpha) => {
@@ -72,8 +73,11 @@ export default function IntegratedDashboard({
   handleIntChartMouseMove,
   handleIntChartMouseUp,
   handleSave,
+  allPortfoliosForDividend,
+  updatePortfolioDividendHistory,
+  updatePortfolioActualDividend,
 }) {
-  const [sec, setSec] = useState({ accounts: false, history: false, donut: false });
+  const [sec, setSec] = useState({ dividend: false, history: false, donut: false });
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
 
   return (
@@ -117,7 +121,6 @@ export default function IntegratedDashboard({
 
             <div className="flex items-start gap-0 w-full">
               <div className="flex-1 flex flex-col gap-6 min-w-0">
-            {!sec.accounts && (
             <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg">
               <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
@@ -318,6 +321,8 @@ export default function IntegratedDashboard({
                 </table>
               </div>
             </div>
+            {!sec.dividend && (
+              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} />
             )}
             {!sec.history && (
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
@@ -637,9 +642,9 @@ export default function IntegratedDashboard({
             )}
               </div>
               <div className="sticky top-14 self-start flex flex-col gap-px flex-shrink-0 z-10 pt-3">
-                <button onClick={() => toggleSec('accounts')} style={{ writingMode: 'vertical-lr' }}
-                  className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sec.accounts ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>
-                  통합계좌현황
+                <button onClick={() => toggleSec('dividend')} style={{ writingMode: 'vertical-lr' }}
+                  className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sec.dividend ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>
+                  분배금 현황
                 </button>
                 <button onClick={() => toggleSec('history')} style={{ writingMode: 'vertical-lr' }}
                   className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sec.history ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>

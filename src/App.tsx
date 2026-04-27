@@ -2139,11 +2139,10 @@ export default function App() {
             handleIntChartMouseMove={handleIntChartMouseMove}
             handleIntChartMouseUp={handleIntChartMouseUp}
             handleSave={handleSave}
+            allPortfoliosForDividend={allPortfoliosForDividend}
+            updatePortfolioDividendHistory={updatePortfolioDividendHistory}
+            updatePortfolioActualDividend={updatePortfolioActualDividend}
           />
-        )}
-
-        {showIntegratedDashboard && (
-          <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} />
         )}
 
         </div>
