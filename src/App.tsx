@@ -11,7 +11,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
-import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, loadVersionTimestamp, saveVersionFile, saveVersionedBackup, listBackups, loadBackupById, MAX_BACKUPS, DriveBackupEntry } from './driveStorage';
+import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, MAX_BACKUPS } from './driveStorage';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverKospi, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo } from './api';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
@@ -19,6 +19,7 @@ import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
 import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
+import { useDriveSync } from './hooks/useDriveSync';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -466,6 +467,7 @@ export default function App() {
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
   const [globalToast, setGlobalToast] = useState({ text: "", isError: false });
+  const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
 
   const [chartPeriod, setChartPeriod] = useState('3m');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -535,30 +537,10 @@ export default function App() {
   const [showIndicatorVerify, setShowIndicatorVerify] = useState(false);
   const [showMarketPanel, setShowMarketPanel] = useState(true);
 
-  // ── Google Drive 자동 동기화 ──
-  const [driveStatus, setDriveStatus] = useState(''); // '' | 'auth_needed' | 'loading' | 'saving' | 'saved' | 'error'
-  const [driveToken, setDriveToken] = useState('');
-  const [showBackupModal, setShowBackupModal] = useState(false);
-  const [backupList, setBackupList] = useState<DriveBackupEntry[]>([]);
-  const [backupListLoading, setBackupListLoading] = useState(false);
-  const [applyingBackupId, setApplyingBackupId] = useState<string | null>(null);
-  const driveTokenRef = useRef('');
-  const driveFolderIdRef = useRef('');
-  const tokenClientRef = useRef(null);
-  const pendingTokenResolveRef = useRef<((token: string | null) => void) | null>(null);
-  const isInitialLoad = useRef(true);
   const portfolioRef = useRef([]);
   const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
-  const driveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const portfolioUpdatedAtRef = useRef<number>(0); // 계좌/종목 구조 변경 시에만 갱신 (시장가격 갱신과 구분)
-  const prevPortfolioStructureRef = useRef<string>(''); // 직전 포트폴리오 구조 해시
-  const lastDriveSavedPortfolioUpdatedAtRef = useRef<number>(0); // Drive STATE 파일에 마지막으로 저장한 portfolioUpdatedAt
-  const driveCheckInProgressRef = useRef(false); // Drive 확인 중복 실행 방지 (polling·visibilitychange 공유)
-  const lastDriveCheckAtRef = useRef<number>(0); // 마지막 Drive 확인 시각 (중복 확인 최소화)
-  const goldKrAutoCrawledRef = useRef(false); // 세션 당 한 번만 국내금 자동 크롤링
-  const stooqAutoCrawledRef = useRef(false);  // 세션 당 한 번만 stooq 지표 자동 크롤링
   // 계좌별 차트 상태 독립 관리
   const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
   const accountChartStatesRef = useRef<Record<string, any>>({});
@@ -585,171 +567,137 @@ export default function App() {
   const [unlockPinDigits, setUnlockPinDigits] = useState(['', '', '', '']);
   const [unlockPinError, setUnlockPinError] = useState('');
 
-  // Drive 폴더 ID 캐시 확보 (없으면 생성)
-  const ensureDriveFolder = async (token: string): Promise<string> => {
-    if (driveFolderIdRef.current) return driveFolderIdRef.current;
-    const id = await getOrCreateIndexFolder(token);
-    driveFolderIdRef.current = id;
-    return id;
+  // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
+  const applyStateData = (stateData, stockData, marketData) => {
+    const resolvedStockHistoryMap = stockData?.stockHistoryMap || stateData.stockHistoryMap || {};
+    setStockHistoryMap(resolvedStockHistoryMap);
+
+    if (stateData.portfolios?.length > 0) {
+      setPortfolios(stateData.portfolios);
+      const activeId = stateData.activePortfolioId || stateData.portfolios[0].id;
+      setActivePortfolioId(activeId);
+      const active = stateData.portfolios.find(p => p.id === activeId) || stateData.portfolios[0];
+      setTitle(active.name || '포트폴리오');
+      setPortfolio(active.portfolio || []);
+      setPrincipal(active.principal || 0);
+      setHistory(active.history || []);
+      setDepositHistory(active.depositHistory || []);
+      if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
+      setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
+      setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
+    } else if (stateData.portfolio) {
+      const newId = generateId();
+      const migrated = {
+        id: newId, name: stateData.title || 'DC',
+        startDate: stateData.portfolioStartDate || stateData.history?.[0]?.date || '',
+        portfolioStartDate: stateData.portfolioStartDate || '',
+        portfolio: stateData.portfolio || [], principal: cleanNum(stateData.principal),
+        history: stateData.history || [], depositHistory: stateData.depositHistory || [],
+        depositHistory2: stateData.depositHistory2 || [],
+        settings: stateData.settings || { mode: 'rebalance', amount: 1000000 },
+      };
+      setPortfolios([migrated]);
+      setActivePortfolioId(newId);
+      setTitle(stateData.title || '포트폴리오');
+      setPortfolio(stateData.portfolio || []);
+      setPrincipal(cleanNum(stateData.principal));
+      setHistory(stateData.history || []);
+      setDepositHistory(stateData.depositHistory || []);
+      if (stateData.depositHistory2) setDepositHistory2(stateData.depositHistory2);
+      setSettings(stateData.settings || { mode: 'rebalance', amount: 1000000 });
+      if (stateData.portfolioStartDate) setPortfolioStartDate(stateData.portfolioStartDate);
+    }
+    setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
+    if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
+    setLookupRows(stateData.lookupRows || []);
+    setCompStocks(stateData.compStocks || defaultCompStocks);
+    if (stateData.adminAccessAllowed !== undefined) setAdminAccessAllowed(stateData.adminAccessAllowed);
+    if (stateData.chartPrefs) {
+      if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
+      if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
+      if (stateData.chartPrefs.showNasdaq !== undefined) setShowNasdaq(stateData.chartPrefs.showNasdaq);
+      if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
+      if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
+      if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
+      if (stateData.chartPrefs.accountChartStates) accountChartStatesRef.current = stateData.chartPrefs.accountChartStates;
+      if (stateData.chartPrefs.showMarketPanel !== undefined) setShowMarketPanel(stateData.chartPrefs.showMarketPanel);
+      if (stateData.chartPrefs.hideAmounts !== undefined) setHideAmounts(stateData.chartPrefs.hideAmounts);
+      if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
+      if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
+      if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
+      if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
+      if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
+    }
+    const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
+    const resolvedIndicatorHistoryMap = marketData?.indicatorHistoryMap || stateData.indicatorHistoryMap || {};
+    const resolvedMarketIndicators = marketData?.marketIndicators || stateData.marketIndicators;
+    if (resolvedMarketIndices) {
+      setMarketIndices(resolvedMarketIndices);
+      setIndexFetchStatus({
+        kospi:  resolvedMarketIndices.kospi  ? buildIndexStatus(resolvedMarketIndices.kospi,  'Drive') : null,
+        sp500:  resolvedMarketIndices.sp500  ? buildIndexStatus(resolvedMarketIndices.sp500,  'Drive') : null,
+        nasdaq: resolvedMarketIndices.nasdaq ? buildIndexStatus(resolvedMarketIndices.nasdaq, 'Drive') : null,
+      });
+    }
+    if (resolvedMarketIndicators) setMarketIndicators(resolvedMarketIndicators);
+    if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
+    if (stateData.intHistory) setIntHistory(stateData.intHistory);
   };
 
-  // Google Drive Index_Data 폴더에서 데이터 불러오기
-  const loadFromDrive = async (token: string) => {
-    try {
-      setDriveStatus('loading');
-      const folderId = await ensureDriveFolder(token);
-
-      // 3개 파일 병렬 로드
-      const [stateData, stockData, marketData] = await Promise.all([
-        loadDriveFile(token, folderId, DRIVE_FILES.STATE),
-        loadDriveFile(token, folderId, DRIVE_FILES.STOCK),
-        loadDriveFile(token, folderId, DRIVE_FILES.MARKET),
-      ]);
-
-      if (!stateData) { setDriveStatus(''); return null; }
-
-      // 포트폴리오 데이터 로드 (새 형식 우선, 구 형식 마이그레이션)
-      const resolvedStockHistoryMap = stockData?.stockHistoryMap || stateData.stockHistoryMap || {};
-      setStockHistoryMap(resolvedStockHistoryMap);
-
-      if (stateData.portfolios?.length > 0) {
-        // 새 형식: portfolios 배열
-        setPortfolios(stateData.portfolios);
-        const activeId = stateData.activePortfolioId || stateData.portfolios[0].id;
-        setActivePortfolioId(activeId);
-        const active = stateData.portfolios.find(p => p.id === activeId) || stateData.portfolios[0];
-        setTitle(active.name || '포트폴리오');
-        setPortfolio(active.portfolio || []);
-        setPrincipal(active.principal || 0);
-        setHistory(active.history || []);
-        setDepositHistory(active.depositHistory || []);
-        if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
-        setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
-        setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
-      } else if (stateData.portfolio) {
-        // 구 형식 마이그레이션: 현재 포트폴리오를 portfolios[0]으로
-        const newId = generateId();
-        const migrated = {
-          id: newId,
-          name: stateData.title || 'DC',
-          startDate: stateData.portfolioStartDate || stateData.history?.[0]?.date || '',
-          portfolioStartDate: stateData.portfolioStartDate || '',
-          portfolio: stateData.portfolio || [],
-          principal: cleanNum(stateData.principal),
-          history: stateData.history || [],
-          depositHistory: stateData.depositHistory || [],
-          depositHistory2: stateData.depositHistory2 || [],
-          settings: stateData.settings || { mode: 'rebalance', amount: 1000000 },
-        };
-        setPortfolios([migrated]);
-        setActivePortfolioId(newId);
-        setTitle(stateData.title || '포트폴리오');
-        setPortfolio(stateData.portfolio || []);
-        setPrincipal(cleanNum(stateData.principal));
-        setHistory(stateData.history || []);
-        setDepositHistory(stateData.depositHistory || []);
-        if (stateData.depositHistory2) setDepositHistory2(stateData.depositHistory2);
-        setSettings(stateData.settings || { mode: 'rebalance', amount: 1000000 });
-        if (stateData.portfolioStartDate) setPortfolioStartDate(stateData.portfolioStartDate);
-      }
-
-      setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
-      if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
-      setLookupRows(stateData.lookupRows || []);
-      setCompStocks(stateData.compStocks || defaultCompStocks);
-      if (stateData.adminAccessAllowed !== undefined) setAdminAccessAllowed(stateData.adminAccessAllowed);
-      if (stateData.chartPrefs) {
-        if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
-        if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
-        if (stateData.chartPrefs.showNasdaq !== undefined) setShowNasdaq(stateData.chartPrefs.showNasdaq);
-        if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
-        if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
-        if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
-        if (stateData.chartPrefs.accountChartStates) accountChartStatesRef.current = stateData.chartPrefs.accountChartStates;
-        if (stateData.chartPrefs.showMarketPanel !== undefined) setShowMarketPanel(stateData.chartPrefs.showMarketPanel);
-        if (stateData.chartPrefs.hideAmounts !== undefined) setHideAmounts(stateData.chartPrefs.hideAmounts);
-        if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
-        if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
-        if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
-        if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
-        if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
-      }
-
-      // 시장 데이터: marketdata 파일 우선, 없으면 state 파일 폴백
-      const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
-      const resolvedIndicatorHistoryMap = marketData?.indicatorHistoryMap || stateData.indicatorHistoryMap || {};
-      const resolvedMarketIndicators = marketData?.marketIndicators || stateData.marketIndicators;
-
-      if (resolvedMarketIndices) {
-        setMarketIndices(resolvedMarketIndices);
-        setIndexFetchStatus({
-          kospi: resolvedMarketIndices.kospi ? buildIndexStatus(resolvedMarketIndices.kospi, 'Drive') : null,
-          sp500: resolvedMarketIndices.sp500 ? buildIndexStatus(resolvedMarketIndices.sp500, 'Drive') : null,
-          nasdaq: resolvedMarketIndices.nasdaq ? buildIndexStatus(resolvedMarketIndices.nasdaq, 'Drive') : null,
-        });
-      }
-      if (resolvedMarketIndicators) setMarketIndicators(resolvedMarketIndicators);
-      if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
-      if (stateData.intHistory) setIntHistory(stateData.intHistory);
-
-      setDriveStatus('saved');
-      return stateData.portfolios?.[0]?.portfolio || stateData.portfolio || [];
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('Drive 불러오기 실패:', msg);
-      // 401/403은 권한 문제 안내
-      if (msg.includes('401')) {
-        console.warn('[Drive] 토큰 만료 또는 Drive 권한 없음 → 재로그인 필요');
-        setDriveStatus('auth_needed');
-      } else if (msg.includes('403')) {
-        console.warn('[Drive] 403 Forbidden: Google Cloud Console에서 drive.file 권한 또는 테스트 사용자 설정 확인 필요');
-        setDriveStatus('error');
-      } else {
-        setDriveStatus('error');
-      }
-      return null;
+  const applyBackupData = (stateData, acRef) => {
+    if (stateData.portfolios?.length > 0) {
+      setPortfolios(stateData.portfolios);
+      const activeId = stateData.activePortfolioId || stateData.portfolios[0].id;
+      setActivePortfolioId(activeId);
+      const active = stateData.portfolios.find(p => p.id === activeId) || stateData.portfolios[0];
+      setTitle(active.name || '포트폴리오');
+      setPortfolio(active.portfolio || []);
+      setPrincipal(active.principal || 0);
+      setHistory(active.history || []);
+      setDepositHistory(active.depositHistory || []);
+      if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
+      setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
+      setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
+    }
+    if (stateData.customLinks) setCustomLinks(stateData.customLinks);
+    if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
+    if (stateData.lookupRows) setLookupRows(stateData.lookupRows);
+    if (stateData.compStocks) setCompStocks(stateData.compStocks);
+    if (stateData.intHistory) setIntHistory(stateData.intHistory);
+    if (stateData.chartPrefs) {
+      if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
+      if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
+      if (stateData.chartPrefs.showNasdaq !== undefined) setShowNasdaq(stateData.chartPrefs.showNasdaq);
+      if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
+      if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
+      if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
+      if (stateData.chartPrefs.accountChartStates) acRef.current = stateData.chartPrefs.accountChartStates;
+      if (stateData.chartPrefs.showMarketPanel !== undefined) setShowMarketPanel(stateData.chartPrefs.showMarketPanel);
+      if (stateData.chartPrefs.hideAmounts !== undefined) setHideAmounts(stateData.chartPrefs.hideAmounts);
+      if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
+      if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
+      if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
+      if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
+      if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
     }
   };
 
-  // Google Drive Index_Data 폴더에 3개 파일로 저장
-  // versioned: 'manual'=수동 저장, 'auto'=20분 자동저장, false=백업 이력 불필요한 저장
-  const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false) => {
-    const token = driveTokenRef.current;
-    if (!token) { setDriveStatus('auth_needed'); return; }
-    try {
-      setDriveStatus('saving');
-      const folderId = await ensureDriveFolder(token);
-      const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
-      // STATE(계좌/종목 구조)는 portfolioUpdatedAt이 실제로 변경됐을 때만 저장
-      // → 시장가격·지표 갱신으로 인해 다른 기기의 최신 계좌 데이터를 덮어쓰는 것을 방지
-      if ((state.portfolioUpdatedAt || 0) > lastDriveSavedPortfolioUpdatedAtRef.current) {
-        await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
-        // 폴링용 경량 version 파일도 동시에 갱신 (다른 기기가 50바이트 파일로 변경 감지)
-        await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
-        lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
-      }
-      // 수동 저장·20분 주기 타이머이면 portfolioUpdatedAt 변경 여부와 무관하게 항상 백업 생성
-      if (versioned) {
-        saveVersionedBackup(token, folderId, stateCore, versioned).catch(() => {});
-      }
-      await Promise.all([
-        Object.keys(shm || {}).length > 0
-          ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm })
-          : Promise.resolve(),
-        saveDriveFile(token, folderId, DRIVE_FILES.MARKET, { marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }),
-      ]);
-      setDriveStatus('saved');
-    } catch (err) {
-      console.error('Drive 저장 실패:', err);
-      setDriveStatus('error');
-    }
-  };
-
-  // OAuth 토큰 요청 (팝업 또는 무음)
-  const requestDriveToken = (prompt = '') => {
-    if (!tokenClientRef.current) return;
-    tokenClientRef.current.requestAccessToken({ prompt });
-  };
+  // ── useDriveSync 훅 ──
+  const {
+    driveStatus, setDriveStatus,
+    driveToken, setDriveToken,
+    showBackupModal, setShowBackupModal,
+    backupList, setBackupList,
+    backupListLoading, setBackupListLoading,
+    applyingBackupId, setApplyingBackupId,
+    driveTokenRef, driveFolderIdRef, tokenClientRef, pendingTokenResolveRef,
+    isInitialLoad, driveSaveTimerRef, portfolioUpdatedAtRef, prevPortfolioStructureRef,
+    lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
+    goldKrAutoCrawledRef, stooqAutoCrawledRef,
+    ensureDriveFolder, loadFromDrive, saveAllToDrive, requestDriveToken,
+    initTokenClient, checkAndSyncFromDrive,
+    handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup,
+  } = useDriveSync({ authUser, applyStateData, applyBackupData, accountChartStatesRef, saveStateRef, showToast });
 
   // 개별 패치 함수들을 밖으로 빼서 재사용 가능하도록 구성 (Retry 용도)
   const fetchersMap = {
@@ -1991,8 +1939,6 @@ export default function App() {
     const newFund = { id: generateId(), type: 'fund', category: 'FUND', assetClass: 'S', code: '', name: '', currentPrice: 0, changeRate: 0, investAmount: 0, evalAmount: 0, targetRatio: 0, isManual: true };
     return [...prev.slice(0, insertIdx), newFund, ...prev.slice(insertIdx)];
   });
-  const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
-
   const extractFundCode = (input: string): string => {
     const m = input.match(/funetf\.co\.kr\/product\/fund\/view\/([A-Za-z0-9]+)/);
     return m ? m[1] : input.trim();
@@ -2594,109 +2540,6 @@ export default function App() {
     }
   };
 
-  const handleDriveLoadOnly = async () => {
-    // CLIENT_ID 미설정
-    if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
-      showToast('config.ts에 Google Client ID를 설정해 주세요', true);
-      return;
-    }
-
-    let token = driveTokenRef.current;
-
-    // 토큰 없음 → 로그인 팝업 띄우고 토큰 대기
-    if (!token) {
-      if (!tokenClientRef.current) {
-        showToast('Drive 클라이언트 초기화 실패. 페이지를 새로고침해 주세요.', true);
-        return;
-      }
-      showToast('Google Drive 로그인 팝업을 확인해 주세요...');
-      token = await new Promise<string | null>((resolve) => {
-        pendingTokenResolveRef.current = resolve;
-        tokenClientRef.current.requestAccessToken({ prompt: 'select_account' });
-      });
-    }
-
-    if (!token) {
-      showToast('Drive 로그인이 취소되었거나 실패했습니다.', true);
-      return;
-    }
-
-    const result = await loadFromDrive(token);
-    if (result === null) {
-      showToast('Drive에서 데이터를 불러오지 못했습니다.', true);
-    }
-  };
-
-  const handleOpenBackupModal = async () => {
-    const token = driveTokenRef.current;
-    if (!token) { showToast('Drive 연결 필요 — 먼저 Drive를 연결해 주세요', true); return; }
-    setShowBackupModal(true);
-    setBackupListLoading(true);
-    try {
-      const folderId = await ensureDriveFolder(token);
-      const backups = await listBackups(token, folderId);
-      setBackupList(backups);
-    } catch {
-      showToast('백업 목록을 불러오지 못했습니다.', true);
-    } finally {
-      setBackupListLoading(false);
-    }
-  };
-
-  const handleApplyBackup = async (fileId: string, displayTime: string) => {
-    if (!window.confirm(`"${displayTime}" 시점의 백업을 현재 데이터에 적용하시겠습니까?\n(현재 계좌·종목 구성이 백업 시점으로 교체됩니다)`)) return;
-    setApplyingBackupId(fileId);
-    setDriveStatus('loading');
-    try {
-      const stateData = await loadBackupById(driveTokenRef.current, fileId) as any;
-      if (!stateData) throw new Error('empty');
-      // 포트폴리오 구조 복원
-      if (stateData.portfolios?.length > 0) {
-        setPortfolios(stateData.portfolios);
-        const activeId = stateData.activePortfolioId || stateData.portfolios[0].id;
-        setActivePortfolioId(activeId);
-        const active = stateData.portfolios.find(p => p.id === activeId) || stateData.portfolios[0];
-        setTitle(active.name || '포트폴리오');
-        setPortfolio(active.portfolio || []);
-        setPrincipal(active.principal || 0);
-        setHistory(active.history || []);
-        setDepositHistory(active.depositHistory || []);
-        if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
-        setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
-        setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
-      }
-      if (stateData.customLinks) setCustomLinks(stateData.customLinks);
-      if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
-      if (stateData.lookupRows) setLookupRows(stateData.lookupRows);
-      if (stateData.compStocks) setCompStocks(stateData.compStocks);
-      if (stateData.intHistory) setIntHistory(stateData.intHistory);
-      if (stateData.chartPrefs) {
-        if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
-        if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
-        if (stateData.chartPrefs.showNasdaq !== undefined) setShowNasdaq(stateData.chartPrefs.showNasdaq);
-        if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
-        if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
-        if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
-        if (stateData.chartPrefs.accountChartStates) accountChartStatesRef.current = stateData.chartPrefs.accountChartStates;
-        if (stateData.chartPrefs.showMarketPanel !== undefined) setShowMarketPanel(stateData.chartPrefs.showMarketPanel);
-        if (stateData.chartPrefs.hideAmounts !== undefined) setHideAmounts(stateData.chartPrefs.hideAmounts);
-        if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
-        if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
-        if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
-        if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
-        if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
-      }
-      setDriveStatus('saved');
-      setShowBackupModal(false);
-      showToast(`${displayTime} 백업이 적용되었습니다.`);
-    } catch {
-      showToast('백업 적용에 실패했습니다.', true);
-      setDriveStatus('error');
-    } finally {
-      setApplyingBackupId(null);
-    }
-  };
-
   const handleDownloadCSV = () => {
     let csv = '\uFEFF일자,평가자산,전일대비 수익금,전일대비 수익률\n';
     const sh = [...history].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -2988,33 +2831,8 @@ export default function App() {
     setDriveToken(token);
     setDriveStatus('');
 
-    // GIS 토큰 클라이언트 초기화 (토큰 갱신용, 팝업 없이)
-    const initClient = () => {
-      if ((window as any).google?.accounts?.oauth2) {
-        const client = (window as any).google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
-          scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
-          callback: (resp: any) => {
-            const t: string | null = resp.error ? null : resp.access_token;
-            if (t) {
-              driveTokenRef.current = t;
-              setDriveToken(t);
-              setDriveStatus('');
-            } else {
-              setDriveStatus('auth_needed');
-            }
-            if (pendingTokenResolveRef.current) {
-              pendingTokenResolveRef.current(t);
-              pendingTokenResolveRef.current = null;
-            }
-          },
-        });
-        tokenClientRef.current = client;
-      }
-    };
-
     const bgTimer = setTimeout(async () => {
-      initClient();
+      initTokenClient();
 
       let usedDriveData = false;
 
@@ -3139,59 +2957,6 @@ export default function App() {
     }, AUTO_REFRESH_INTERVAL);
     return () => clearInterval(intervalId);
   }, []);
-
-  // Drive 버전 파일을 확인하고 최신 데이터가 있으면 불러오는 공통 함수
-  // version 파일(~50바이트)만 읽어 변경 여부를 먼저 확인 → 변경 시에만 전체 STATE 로드
-  const checkAndSyncFromDrive = async () => {
-    if (!driveTokenRef.current || isInitialLoad.current) return;
-    if (driveCheckInProgressRef.current) return;
-    driveCheckInProgressRef.current = true;
-    lastDriveCheckAtRef.current = Date.now();
-    try {
-      const folderId = await ensureDriveFolder(driveTokenRef.current);
-      const driveTs = await loadVersionTimestamp(driveTokenRef.current, folderId);
-      if (driveTs !== null && driveTs > portfolioUpdatedAtRef.current) {
-        await loadFromDrive(driveTokenRef.current);
-      }
-    } catch {
-      // 오프라인·토큰 만료 등 조용히 무시
-    } finally {
-      driveCheckInProgressRef.current = false;
-    }
-  };
-
-  // 탭·앱 활성화 시 Drive 동기화 확인, 숨김(닫힘) 시 즉시 Drive 저장
-  useEffect(() => {
-    if (!authUser) return;
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        // 탭이 숨겨지거나 닫힐 때 즉시 Drive 백업
-        const snap = saveStateRef.current;
-        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
-          if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
-          saveAllToDrive(snap);
-        }
-        return;
-      }
-      checkAndSyncFromDrive();
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [authUser]);
-
-  // 10분마다 Drive version 파일을 polling → 다른 기기의 변경을 자동 반영
-  // version 파일은 50바이트이므로 API 비용이 매우 낮음
-  useEffect(() => {
-    if (!authUser) return;
-    const POLL_INTERVAL = 10 * 60 * 1000; // 10분
-    const intervalId = setInterval(() => {
-      if (document.hidden) return; // 탭이 숨겨진 상태면 불필요한 API 호출 생략
-      // visibilitychange나 직전 poll과 9분 이내 중복 실행 방지
-      if (Date.now() - lastDriveCheckAtRef.current < 9 * 60 * 1000) return;
-      checkAndSyncFromDrive();
-    }, POLL_INTERVAL);
-    return () => clearInterval(intervalId);
-  }, [authUser]);
 
   useEffect(() => {
     if (portfolios.length === 0) return;
