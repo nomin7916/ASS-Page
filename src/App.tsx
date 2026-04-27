@@ -2055,9 +2055,6 @@ export default function App() {
             totals={totals}
             handleUpdate={handleUpdate}
             setPortfolio={setPortfolio}
-            dividendHistory={activeDividendHistory}
-            dividendHistoryUpdatedAt={activeDividendHistoryUpdatedAt}
-            updateDividendHistory={updateDividendHistory}
           />
         )}
         </>)}

@@ -1,10 +1,9 @@
 // @ts-nocheck
-import React, { useState, useCallback } from 'react';
+import React from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { cleanNum, formatCurrency, formatNumber, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
-import { fetchDividendHistory } from '../api';
 
 export default function RebalancingPanel({
   activePortfolioAccountType,
@@ -27,42 +26,7 @@ export default function RebalancingPanel({
   totals,
   handleUpdate,
   setPortfolio,
-  dividendHistory,
-  dividendHistoryUpdatedAt,
-  updateDividendHistory,
 }) {
-  const [dividendLoading, setDividendLoading] = useState(false);
-
-  const handleFetchDividends = useCallback(async () => {
-    setDividendLoading(true);
-    const stocks = rebalanceData.filter(item => /^\d{5,6}$/.test(String(item.code || '')));
-    const mergeMap = {};
-    await Promise.all(stocks.map(async item => {
-      const data = await fetchDividendHistory(String(item.code));
-      if (!data?.result?.length) return;
-      const monthData = {};
-      data.result.forEach(({ dividendAmount, exDividendAt }) => {
-        const parts = exDividendAt.split('.');
-        const key = `${parts[0]}-${parts[1].padStart(2, '0')}`;
-        monthData[key] = (monthData[key] || 0) + dividendAmount;
-      });
-      mergeMap[item.code] = monthData;
-    }));
-    updateDividendHistory(mergeMap);
-    setDividendLoading(false);
-  }, [rebalanceData, updateDividendHistory]);
-
-  const buildMonthPrediction = useCallback((codeHistory) => {
-    const pred = {};
-    for (let m = 1; m <= 12; m++) {
-      const mo = String(m).padStart(2, '0');
-      const entries = Object.entries(codeHistory || {})
-        .filter(([key]) => key.endsWith(`-${mo}`))
-        .sort(([a], [b]) => b.localeCompare(a));
-      if (entries.length > 0) pred[m] = entries[0][1];
-    }
-    return pred;
-  }, []);
 
   return (
     <>
@@ -358,107 +322,6 @@ export default function RebalancingPanel({
             </div>
           </div>
         </div>
-
-        {/* 월별 예상 분배금 테이블 */}
-        {(() => {
-          const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
-          const divStocks = rebalanceData.filter(item => /^\d{5,6}$/.test(String(item.code || '')));
-          const hasSavedData = Object.keys(dividendHistory).length > 0;
-          const updatedAt = dividendHistoryUpdatedAt;
-          const monthlyTotals = Array.from({ length: 12 }, (_, i) =>
-            divStocks.reduce((sum, item) => {
-              const pred = buildMonthPrediction(dividendHistory[item.code]);
-              return sum + (pred[i + 1] || 0) * cleanNum(item.quantity);
-            }, 0)
-          );
-          const annualTotal = monthlyTotals.reduce((s, v) => s + v, 0);
-          return (
-            <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-20">
-              <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="text-white font-bold text-sm">📅 월별 예상 분배금</span>
-                  {updatedAt && !dividendLoading && (
-                    <span className="text-gray-600 text-[10px]">
-                      최종 조회: {new Date(updatedAt).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={handleFetchDividends}
-                  disabled={dividendLoading}
-                  className="px-3 py-1 text-xs font-bold rounded-md border border-blue-500/70 text-blue-300 bg-blue-900/20 hover:bg-blue-700/50 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {dividendLoading ? '조회 중...' : hasSavedData ? '🔄 업데이트' : '분배금 조회'}
-                </button>
-              </div>
-              {!hasSavedData && !dividendLoading && (
-                <div className="py-8 text-center text-gray-500 text-xs">분배금 조회 버튼을 눌러 월별 예상 분배금을 확인하세요.</div>
-              )}
-              {dividendLoading && (
-                <div className="py-8 text-center text-blue-400 text-xs animate-pulse">분배금 데이터 조회 중...</div>
-              )}
-              {hasSavedData && !dividendLoading && (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-[11px] text-center">
-                    <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
-                      <tr>
-                        <th className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[120px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
-                        <th className="py-2 px-2 text-gray-500 min-w-[60px]">코드</th>
-                        <th className="py-2 px-2 text-gray-500 min-w-[50px]">수량</th>
-                        {MONTHS.map(m => (
-                          <th key={m} className="py-2 px-2 min-w-[72px] text-gray-400">{m}</th>
-                        ))}
-                        <th className="py-2 px-2 min-w-[90px] text-yellow-500 font-bold">연간합계</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {divStocks.map(item => {
-                        const qty = cleanNum(item.quantity);
-                        const pred = buildMonthPrediction(dividendHistory[item.code]);
-                        const rowAnnual = Object.values(pred).reduce((s, v) => s + v * qty, 0);
-                        const hasDividend = Object.keys(pred).length > 0;
-                        const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[item.category] || '#64748B';
-                        return (
-                          <tr key={item.id} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                            <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold" style={{ color: catColor }}>
-                              <div className="line-clamp-1">{item.name}</div>
-                            </td>
-                            <td className="py-2 px-2 text-gray-500 font-mono">{item.code}</td>
-                            <td className="py-2 px-2 text-gray-400">{qty.toLocaleString()}</td>
-                            {Array.from({ length: 12 }, (_, i) => {
-                              const amount = (pred[i + 1] || 0) * qty;
-                              return (
-                                <td key={i} className={`py-2 px-2 text-right ${amount > 0 ? 'text-green-400 font-bold' : 'text-gray-600'}`}>
-                                  {amount > 0 ? formatCurrency(amount) : '-'}
-                                </td>
-                              );
-                            })}
-                            <td className={`py-2 px-2 text-right font-bold ${hasDividend ? 'text-yellow-400' : 'text-gray-600'}`}>
-                              {hasDividend ? formatCurrency(rowAnnual) : '-'}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
-                      <tr>
-                        <td colSpan={3} className="py-2 px-3 text-left text-gray-400 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
-                        {monthlyTotals.map((total, i) => (
-                          <td key={i} className={`py-2 px-2 text-right font-bold ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
-                            {total > 0 ? formatCurrency(total) : '-'}
-                          </td>
-                        ))}
-                        <td className="py-2 px-2 text-right font-bold text-yellow-300">
-                          {annualTotal > 0 ? formatCurrency(annualTotal) : '-'}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
-            </div>
-          );
-        })()}
     </>
   );
 }
