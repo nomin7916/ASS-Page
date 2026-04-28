@@ -1,11 +1,14 @@
 ﻿// @ts-nocheck
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, Plus } from 'lucide-react';
-import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, Tooltip as RechartsTooltip, Label } from 'recharts';
+import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
 import { extractLinkLabel } from '../chartUtils';
 import { CHART_NAME_TO_POINT_KEY } from '../constants';
+
+const MA_PERIODS = [20, 60, 120, 240];
+const MA_COLORS = ['#30d158', '#ffd60a', '#ff9f0a', '#bf5af2'];
 
 export default function PortfolioChart({
   activePortfolioAccountType,
@@ -52,6 +55,26 @@ export default function PortfolioChart({
   handleFetchCompHistory,
   handleRemoveCompStock,
 }) {
+  const [showMA, setShowMA] = useState([false, false, false, false]);
+
+  const chartDataWithMA = useMemo(() => {
+    if (!showMA.some(Boolean)) return finalChartData;
+    return finalChartData.map((point, i) => {
+      const extra = {};
+      MA_PERIODS.forEach((period, pi) => {
+        if (!showMA[pi]) return;
+        if (i < period - 1) { extra[`ma${pi + 1}`] = null; return; }
+        const slice = finalChartData.slice(i - period + 1, i + 1);
+        const rates = slice.map(p => p.returnRate).filter(v => v != null);
+        extra[`ma${pi + 1}`] = rates.length >= Math.ceil(period / 2) ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+      });
+      return { ...point, ...extra };
+    });
+  }, [finalChartData, showMA]);
+
+  const hoveredData = hoveredPoint ? finalChartData.find(d => d.date === hoveredPoint.label) : null;
+  const hoveredReturnRate = hoveredData?.returnRate ?? null;
+
   const CompStockDot = ({ code }) => {
     const st = stockFetchStatus?.[code];
     if (!st) return null;
@@ -248,6 +271,16 @@ export default function PortfolioChart({
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isZeroBaseMode ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
               title="조회 시작일을 0% 기준으로 차트 재정렬"
             ><Activity size={14} /></button>
+            <div className="w-px h-3 bg-gray-700 mx-0.5" />
+            {MA_PERIODS.map((period, pi) => (
+              <button
+                key={pi}
+                onClick={() => setShowMA(prev => { const n = [...prev]; n[pi] = !n[pi]; return n; })}
+                className="px-1.5 py-1 rounded border text-[9px] font-bold transition-colors"
+                style={showMA[pi] ? { color: MA_COLORS[pi], borderColor: MA_COLORS[pi] + '80', backgroundColor: MA_COLORS[pi] + '15' } : { color: '#6b7280', borderColor: 'transparent' }}
+                title={`MA${period} 이동평균선`}
+              >{period}</button>
+            ))}
             {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && (<>
               <div className="w-px h-3 bg-gray-700 mx-0.5" />
               <button
@@ -456,7 +489,7 @@ export default function PortfolioChart({
 
       <div className="chart-container-for-drag p-4 min-h-[400px] xl:flex-1 relative select-none">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
+          <ComposedChart data={chartDataWithMA} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
             <defs>
               <filter id="neonGlow">
                 <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
@@ -520,6 +553,9 @@ export default function PortfolioChart({
             )}
             {showBacktest && <Area yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke={backtestColor} strokeWidth={2} fill="url(#backtestGradient)" strokeDasharray="6 3" dot={false} connectNulls />}
             {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
+            {showMA.map((active, pi) => active ? <Line key={`ma${pi + 1}`} yAxisId="left" type="monotone" dataKey={`ma${pi + 1}`} name={`MA${MA_PERIODS[pi]}`} stroke={MA_COLORS[pi]} strokeWidth={1.5} dot={false} connectNulls /> : null)}
+            {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />}
+            {hoveredPoint && hoveredReturnRate != null && !refAreaLeft && <ReferenceLine yAxisId="left" y={hoveredReturnRate} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

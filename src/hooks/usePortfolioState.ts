@@ -274,7 +274,8 @@ export function usePortfolioState({
     setPortfolios(prev => prev.map(p => {
       if (p.id !== portfolioId) return p;
       const existing = p.actualDividend || {};
-      const codeData = { ...(existing[code] || {}), [yearMonth]: amount };
+      const codeData = { ...(existing[code] || {}) };
+      if (amount === null) delete codeData[yearMonth]; else codeData[yearMonth] = amount;
       return { ...p, actualDividend: { ...existing, [code]: codeData } };
     }));
   };
@@ -284,8 +285,7 @@ export function usePortfolioState({
       if (p.id !== portfolioId) return p;
       const existing = p.actualDividendUsd || {};
       const codeData = { ...(existing[code] || {}) };
-      if (amount > 0) codeData[yearMonth] = amount;
-      else delete codeData[yearMonth];
+      if (amount === null) delete codeData[yearMonth]; else codeData[yearMonth] = amount;
       return { ...p, actualDividendUsd: { ...existing, [code]: codeData } };
     }));
   };
@@ -313,8 +313,7 @@ export function usePortfolioState({
       if (p.id !== portfolioId) return p;
       const existing = p.actualAfterTaxUsd || {};
       const codeData = { ...(existing[code] || {}) };
-      if (amount > 0) codeData[yearMonth] = amount;
-      else delete codeData[yearMonth];
+      if (amount === null) delete codeData[yearMonth]; else codeData[yearMonth] = amount;
       return { ...p, actualAfterTaxUsd: { ...existing, [code]: codeData } };
     }));
   };
@@ -324,8 +323,7 @@ export function usePortfolioState({
       if (p.id !== portfolioId) return p;
       const existing = p.actualAfterTaxKrw || {};
       const codeData = { ...(existing[code] || {}) };
-      if (amount > 0) codeData[yearMonth] = amount;
-      else delete codeData[yearMonth];
+      if (amount === null) delete codeData[yearMonth]; else codeData[yearMonth] = amount;
       return { ...p, actualAfterTaxKrw: { ...existing, [code]: codeData } };
     }));
   };

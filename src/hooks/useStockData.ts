@@ -136,7 +136,8 @@ export function useStockData({
     const isOverseasComp = activePortfolioAccountType === 'overseas';
     if (!isOverseasComp && code.length < 5) return;
     const d = isOverseasComp ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
-    if (d) setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], name: d.name }; return n; });
+    const resolvedName = d?.name || code;
+    setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], name: resolvedName }; return n; });
   };
 
   const handleToggleComp = async (index) => {

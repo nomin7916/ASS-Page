@@ -375,15 +375,19 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       return;
     }
     if (field === 'gross' && isOverseas) {
-      const num = parseFloat(String(editingCell.value).replace(/,/g, '')) || 0;
+      const raw = String(editingCell.value).trim();
+      const num = raw === '' ? null : (parseFloat(raw.replace(/,/g, '')) || 0);
       updatePortfolioActualDividendUsd(portfolioId, code, yearMonth, num);
     } else if (field === 'afterTax') {
-      const usdNum = parseFloat(String(editingCell.usdValue || '').replace(/,/g, '')) || 0;
-      const krwNum = parseFloat(String(editingCell.krwValue || '').replace(/,/g, '')) || 0;
+      const usdRaw = String(editingCell.usdValue || '').trim();
+      const krwRaw = String(editingCell.krwValue || '').trim();
+      const usdNum = usdRaw === '' ? null : (parseFloat(usdRaw.replace(/,/g, '')) || 0);
+      const krwNum = krwRaw === '' ? null : (parseFloat(krwRaw.replace(/,/g, '')) || 0);
       updatePortfolioActualAfterTaxUsd(portfolioId, code, yearMonth, usdNum);
       updatePortfolioActualAfterTaxKrw(portfolioId, code, yearMonth, krwNum);
     } else if (!isOverseas) {
-      const num = parseFloat(String(editingCell.value).replace(/,/g, '')) || 0;
+      const raw = String(editingCell.value).trim();
+      const num = raw === '' ? null : (parseFloat(raw.replace(/,/g, '')) || 0);
       updatePortfolioActualDividend(portfolioId, code, yearMonth, num);
     }
     setEditingCell(null);
@@ -403,8 +407,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     setEditingCell({
       portfolioId: row.portfolioId, code: row.code, monthIdx,
       yearMonth: d.yearMonth, isOverseas: true, field: 'afterTax',
-      usdValue: d.afterTaxUsd > 0 ? String(Number(d.afterTaxUsd.toFixed(4))) : '',
-      krwValue: d.afterTaxKrw > 0 ? String(d.afterTaxKrw) : '',
+      usdValue: d.hasManualAfterTax ? String(Number(d.afterTaxUsd.toFixed(4))) : '',
+      krwValue: d.hasManualAfterTax ? String(d.afterTaxKrw) : '',
     });
   };
 
@@ -413,7 +417,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     setEditingCell({
       portfolioId: row.portfolioId, code: row.code, monthIdx,
       yearMonth: d.yearMonth, isOverseas: false, field: 'krw',
-      value: d.amount > 0 ? String(d.amount) : '',
+      value: d.hasManual ? String(d.amount) : '',
     });
   };
 
@@ -1252,8 +1256,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 </div>
                               ) : (
                                 <div className="flex flex-col items-center gap-0">
-                                  <span>{d.grossUsd > 0 ? formatUsd(d.grossUsd) : '-'}</span>
-                                  {d.grossKrw > 0 && <span className="text-gray-500 text-[9px]">{formatCurrency(d.grossKrw)}</span>}
+                                  <span>{(d.hasManualGross || d.grossUsd > 0) ? formatUsd(d.grossUsd) : '-'}</span>
+                                  {(d.hasManualGross || d.grossKrw > 0) && <span className="text-gray-500 text-[9px]">{formatCurrency(d.grossKrw)}</span>}
                                 </div>
                               )}
                             </td>
@@ -1300,8 +1304,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 </div>
                               ) : (
                                 <div className="flex flex-col items-center gap-0">
-                                  <span>{d.afterTaxUsd > 0 ? formatUsd(d.afterTaxUsd) : '-'}</span>
-                                  {d.afterTaxKrw > 0 && <span className="text-gray-500 text-[9px]">{formatCurrency(d.afterTaxKrw)}</span>}
+                                  <span>{(d.hasManualAfterTax || d.afterTaxUsd > 0) ? formatUsd(d.afterTaxUsd) : '-'}</span>
+                                  {(d.hasManualAfterTax || d.afterTaxKrw > 0) && <span className="text-gray-500 text-[9px]">{formatCurrency(d.afterTaxKrw)}</span>}
                                 </div>
                               )}
                             </td>
@@ -1335,7 +1339,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                               />
                             ) : (
                               <div className="flex flex-col items-center gap-0.5">
-                                <span>{d.amount > 0 ? formatCurrency(d.amount) : '-'}</span>
+                                <span>{(d.hasManual || d.amount > 0) ? formatCurrency(d.amount) : '-'}</span>
                                 <input
                                   type="text" inputMode="numeric"
                                   placeholder={getTaxRate(row.portfolioId) > 0 && d.amount > 0 ? '' : '과세금액'}
