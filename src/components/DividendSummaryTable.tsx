@@ -35,6 +35,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null); // { portfolioId, code, monthIdx, value }
   const [taxAmounts, setTaxAmounts] = useState({});
+  const [taxRate, setTaxRate] = useState(15.4);
   const fetchedRef = useRef(new Set());
   const inputRef = useRef(null);
 
@@ -255,12 +256,26 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
 
   const handleTaxChange = (portfolioId, code, yearMonth, value) => {
     const num = parseFloat(String(value).replace(/,/g, '')) || 0;
-    setTaxAmounts(prev => ({ ...prev, [getTaxKey(portfolioId, code, yearMonth)]: num }));
+    setTaxAmounts(prev => {
+      if (num > 0) return { ...prev, [getTaxKey(portfolioId, code, yearMonth)]: num };
+      const next = { ...prev };
+      delete next[getTaxKey(portfolioId, code, yearMonth)];
+      return next;
+    });
+  };
+
+  const getEffectiveTax = (amount, key) => {
+    const manual = taxAmounts[key];
+    if (manual > 0) return manual;
+    if (taxRate > 0 && amount > 0) return Math.round(amount * taxRate / 100);
+    return 0;
   };
 
   if (!nonGoldPortfolios.length) return null;
 
-  const totalTax = Object.values(taxAmounts).reduce((sum, v) => sum + (v || 0), 0);
+  const totalTax = actualRows.reduce((sum, row) =>
+    sum + row.monthData.reduce((s, d) => s + getEffectiveTax(d.amount, getTaxKey(row.portfolioId, row.code, d.yearMonth)), 0)
+  , 0);
 
   const monthlyTotals = Array.from({ length: 12 }, (_, i) =>
     expectedRows.reduce((sum, row) => sum + row.monthData[i].amount, 0)
@@ -383,7 +398,23 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </button>
         </div>
         {activeTab === 'expected' && annualTotal > 0 && (
-          <span className="text-yellow-400 font-bold text-xs">연간 예상 {formatCurrency(annualTotal)}</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-yellow-400 font-bold text-xs">연간 예상 {formatCurrency(annualTotal)}</span>
+            <div className="flex items-center gap-1">
+              <span className="text-gray-500 text-[10px]">과세율</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={taxRate}
+                onChange={e => { const v = parseFloat(e.target.value); setTaxRate(isNaN(v) ? 0 : v); }}
+                className="w-10 bg-[#1e293b] text-orange-300 text-[10px] text-center border border-gray-600 rounded px-1 py-0.5 outline-none"
+              />
+              <span className="text-gray-500 text-[10px]">%</span>
+            </div>
+            {taxRate > 0 && (
+              <span className="text-orange-300/70 text-[10px]">예상 과세 {formatCurrency(Math.round(annualTotal * taxRate / 100))}</span>
+            )}
+          </div>
         )}
         {activeTab === 'actual' && actualAnnualTotal > 0 && (
           <div className="flex flex-col leading-tight">
@@ -427,12 +458,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </td>
                     <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
                     {row.monthData.map((d, i) => (
-                      <td key={i} className={`py-2.5 px-1 text-center text-[10px] ${
+                      <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${
                         d.amount > 0
                           ? d.isActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/70'
                           : 'text-gray-700'
                       }`}>
-                        {d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}
+                        <div className="flex flex-col items-center gap-0">
+                          <span>{d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}</span>
+                          {taxRate > 0 && d.amount > 0 && (
+                            <span className="text-orange-300/55 text-[9px]">{formatCurrency(Math.round(d.amount * taxRate / 100))}</span>
+                          )}
+                        </div>
                       </td>
                     ))}
                     <td className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>
@@ -453,6 +489,21 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     {annualTotal > 0 ? formatCurrency(annualTotal) : '-'}
                   </td>
                 </tr>
+                {taxRate > 0 && annualTotal > 0 && (
+                  <tr className="text-orange-300/60">
+                    <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+                      예상과세({taxRate}%)
+                    </td>
+                    {monthlyTotals.map((total, i) => (
+                      <td key={i} className="py-1 px-1 text-center text-[9px]">
+                        {total > 0 ? formatCurrency(Math.round(total * taxRate / 100)) : '-'}
+                      </td>
+                    ))}
+                    <td className="py-1 px-2 text-center text-[10px]">
+                      {annualTotal > 0 ? formatCurrency(Math.round(annualTotal * taxRate / 100)) : '-'}
+                    </td>
+                  </tr>
+                )}
               </tfoot>
             </table>
           )}
@@ -493,7 +544,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         && editingCell?.code === row.code
                         && editingCell?.monthIdx === i;
                       const taxKey = getTaxKey(row.portfolioId, row.code, d.yearMonth);
-                      const taxVal = taxAmounts[taxKey] || 0;
+                      const isManualTax = taxAmounts[taxKey] > 0;
+                      const effectiveTax = getEffectiveTax(d.amount, taxKey);
                       return (
                         <td
                           key={i}
@@ -525,11 +577,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                               <input
                                 type="text"
                                 inputMode="numeric"
-                                placeholder="과세금액"
-                                value={taxVal > 0 ? taxVal.toLocaleString() : ''}
+                                placeholder={taxRate > 0 && d.amount > 0 ? '' : '과세금액'}
+                                value={effectiveTax > 0 ? effectiveTax.toLocaleString() : ''}
                                 onChange={e => handleTaxChange(row.portfolioId, row.code, d.yearMonth, e.target.value)}
                                 onClick={e => e.stopPropagation()}
-                                className="w-full bg-transparent text-orange-300/70 text-center text-[9px] border-b border-gray-700/40 outline-none placeholder-gray-700"
+                                className={`w-full bg-transparent text-center text-[9px] border-b outline-none placeholder-gray-700 ${isManualTax ? 'text-orange-400 border-orange-700/40' : 'text-orange-300/55 border-gray-700/30'}`}
                               />
                             </div>
                           )}
