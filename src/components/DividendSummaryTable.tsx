@@ -35,12 +35,10 @@ function parseDividendApiResult(result) {
   return monthData;
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, compact = false, usdkrw = 1300 }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioDividendTaxRate, updatePortfolioDividendTaxAmount, compact = false, usdkrw = 1300 }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null); // { portfolioId, code, monthIdx, value }
-  const [taxAmounts, setTaxAmounts] = useState({});
-  const [taxRates, setTaxRates] = useState({});
   const fetchedRef = useRef(new Set());
   const inputRef = useRef(null);
 
@@ -271,24 +269,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     if (e.key === 'Escape') setEditingCell(null);
   };
 
-  const getTaxKey = (portfolioId, code, yearMonth) => `${portfolioId}:${code}:${yearMonth}`;
-
   const handleTaxChange = (portfolioId, code, yearMonth, value) => {
     const num = parseFloat(String(value).replace(/,/g, '')) || 0;
-    setTaxAmounts(prev => {
-      if (num > 0) return { ...prev, [getTaxKey(portfolioId, code, yearMonth)]: num };
-      const next = { ...prev };
-      delete next[getTaxKey(portfolioId, code, yearMonth)];
-      return next;
-    });
+    updatePortfolioDividendTaxAmount(portfolioId, code, yearMonth, num);
   };
 
-  const getTaxRate = (portfolioId) => taxRates[portfolioId] ?? 15.4;
-  const setTaxRateForPortfolio = (portfolioId, value) => {
-    setTaxRates(prev => ({ ...prev, [portfolioId]: value }));
+  const getTaxRate = (portfolioId) => {
+    const pf = nonGoldPortfolios.find(p => p.id === portfolioId);
+    return pf?.dividendTaxRate ?? 15.4;
   };
-  const getEffectiveTax = (amount, key, portfolioId) => {
-    const manual = taxAmounts[key];
+  const getEffectiveTax = (amount, portfolioId, code, yearMonth) => {
+    const pf = nonGoldPortfolios.find(p => p.id === portfolioId);
+    const manual = pf?.dividendTaxAmounts?.[code]?.[yearMonth] || 0;
     if (manual > 0) return manual;
     const rate = getTaxRate(portfolioId);
     if (rate > 0 && amount > 0) return Math.round(amount * rate / 100);
@@ -308,14 +300,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const codeActual = actualDividend[item.code] || {};
       const predicted = (pred[monthIdx + 1] || 0) * qty * fxRate;
       const amount = yearMonth in codeActual ? codeActual[yearMonth] : predicted;
-      return sum + getEffectiveTax(amount, getTaxKey(pf.id, item.code, yearMonth), pf.id);
+      return sum + getEffectiveTax(amount, pf.id, item.code, yearMonth);
     }, 0);
   };
 
   if (!nonGoldPortfolios.length) return null;
 
   const totalTax = actualRows.reduce((sum, row) =>
-    sum + row.monthData.reduce((s, d) => s + getEffectiveTax(d.amount, getTaxKey(row.portfolioId, row.code, d.yearMonth), row.portfolioId), 0)
+    sum + row.monthData.reduce((s, d) => s + getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth), 0)
   , 0);
 
   const monthlyTotals = Array.from({ length: 12 }, (_, i) =>
@@ -336,7 +328,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const actualMonthlyTaxTotals = Array.from({ length: 12 }, (_, i) =>
     actualRows.reduce((sum, row) => {
       const d = row.monthData[i];
-      return sum + getEffectiveTax(d.amount, getTaxKey(row.portfolioId, row.code, d.yearMonth), row.portfolioId);
+      return sum + getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth);
     }, 0)
   );
   const actualAnnualTaxTotal = actualMonthlyTaxTotals.reduce((s, v) => s + v, 0);
@@ -431,7 +423,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             type="text"
                             inputMode="decimal"
                             value={rowTaxRate}
-                            onChange={e => { const v = parseFloat(e.target.value); setTaxRateForPortfolio(row.portfolioId, isNaN(v) ? 0 : v); }}
+                            onChange={e => { const v = parseFloat(e.target.value); updatePortfolioDividendTaxRate(row.portfolioId, isNaN(v) ? 0 : v); }}
                             onClick={e => e.stopPropagation()}
                             className="w-8 bg-transparent text-orange-300/70 text-[9px] text-center border-b border-gray-700/40 outline-none"
                           />
@@ -537,7 +529,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 type="text"
                 inputMode="decimal"
                 value={getTaxRate(nonGoldPortfolios[0]?.id)}
-                onChange={e => { const v = parseFloat(e.target.value); setTaxRateForPortfolio(nonGoldPortfolios[0]?.id, isNaN(v) ? 0 : v); }}
+                onChange={e => { const v = parseFloat(e.target.value); updatePortfolioDividendTaxRate(nonGoldPortfolios[0]?.id, isNaN(v) ? 0 : v); }}
                 className="w-10 bg-[#1e293b] text-orange-300 text-[10px] text-center border border-gray-600 rounded px-1 py-0.5 outline-none"
               />
               <span className="text-gray-500 text-[10px]">%</span>
@@ -674,9 +666,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       const isEditing = editingCell?.portfolioId === row.portfolioId
                         && editingCell?.code === row.code
                         && editingCell?.monthIdx === i;
-                      const taxKey = getTaxKey(row.portfolioId, row.code, d.yearMonth);
-                      const isManualTax = taxAmounts[taxKey] > 0;
-                      const effectiveTax = getEffectiveTax(d.amount, taxKey, row.portfolioId);
+                      const pfForTax = nonGoldPortfolios.find(p => p.id === row.portfolioId);
+                      const isManualTax = (pfForTax?.dividendTaxAmounts?.[row.code]?.[d.yearMonth] || 0) > 0;
+                      const effectiveTax = getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth);
                       return (
                         <td
                           key={i}

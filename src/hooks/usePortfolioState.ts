@@ -279,6 +279,24 @@ export function usePortfolioState({
     }));
   };
 
+  const updatePortfolioDividendTaxRate = (portfolioId, rate) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      return { ...p, dividendTaxRate: rate };
+    }));
+  };
+
+  const updatePortfolioDividendTaxAmount = (portfolioId, code, yearMonth, amount) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const existing = p.dividendTaxAmounts || {};
+      const codeData = { ...(existing[code] || {}) };
+      if (amount > 0) codeData[yearMonth] = amount;
+      else delete codeData[yearMonth];
+      return { ...p, dividendTaxAmounts: { ...existing, [code]: codeData } };
+    }));
+  };
+
   // ── 포트폴리오 항목 CRUD ──
   const handleUpdate = (id, field, value) =>
     setPortfolio(prev => prev.map(p =>
@@ -369,5 +387,7 @@ export function usePortfolioState({
     updateDividendHistory,
     updatePortfolioDividendHistory,
     updatePortfolioActualDividend,
+    updatePortfolioDividendTaxRate,
+    updatePortfolioDividendTaxAmount,
   };
 }

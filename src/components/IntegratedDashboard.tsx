@@ -76,6 +76,8 @@ export default function IntegratedDashboard({
   allPortfoliosForDividend,
   updatePortfolioDividendHistory,
   updatePortfolioActualDividend,
+  updatePortfolioDividendTaxRate,
+  updatePortfolioDividendTaxAmount,
   usdkrw = 1300,
 }) {
   const [sec, setSec] = useState({ dividend: false, history: false, donut: false });
@@ -323,7 +325,7 @@ export default function IntegratedDashboard({
               </div>
             </div>
             {!sec.dividend && (
-              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} usdkrw={usdkrw} />
+              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate} updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount} usdkrw={usdkrw} />
             )}
             {!sec.history && (
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
