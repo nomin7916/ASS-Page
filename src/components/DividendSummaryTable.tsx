@@ -730,35 +730,35 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             <div className="text-[10px] leading-[1.65]">
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-500 w-12 shrink-0">세전합계</span>
-                {annualUsdTotal > 0 && <span className="text-blue-300/60 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTotal)}</span>}
+                {annualUsdTotal > 0 && <span className="text-blue-300 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTotal)}</span>}
                 {annualUsdTotal > 0 && <span className="text-gray-700">|</span>}
-                <span className="text-blue-300/80 font-bold tabular-nums">{formatCurrency(annualTotal)}</span>
+                <span className="text-blue-300/45 text-[9px] tabular-nums">{formatCurrency(annualTotal)}</span>
               </div>
               {annualTaxTotal > 0 && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-gray-500 w-12 shrink-0">세후(예상)</span>
-                  {annualUsdTaxTotal > 0 && <span className="text-emerald-400/70 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTotal - annualUsdTaxTotal)}</span>}
+                  {annualUsdTaxTotal > 0 && <span className="text-emerald-400 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTotal - annualUsdTaxTotal)}</span>}
                   {annualUsdTaxTotal > 0 && <span className="text-gray-700">|</span>}
-                  <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(annualTotal - annualTaxTotal)}</span>
+                  <span className="text-emerald-400/45 text-[9px] tabular-nums">{formatCurrency(annualTotal - annualTaxTotal)}</span>
                 </div>
               )}
               {annualTaxTotal > 0 && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-gray-500 w-12 shrink-0">과세</span>
-                  {annualUsdTaxTotal > 0 && <span className="text-orange-300/50 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTaxTotal)}</span>}
+                  {annualUsdTaxTotal > 0 && <span className="text-orange-300/80 font-semibold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTaxTotal)}</span>}
                   {annualUsdTaxTotal > 0 && <span className="text-gray-700">|</span>}
-                  <span className="text-orange-300/70 tabular-nums">{formatCurrency(annualTaxTotal)}</span>
+                  <span className="text-orange-300/40 text-[9px] tabular-nums">{formatCurrency(annualTaxTotal)}</span>
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-1 self-center">
+            <div className="flex items-center gap-0.5 self-center">
               <span className="text-gray-500 text-[10px]">과세율</span>
               <input
                 type="text"
                 inputMode="decimal"
                 value={getTaxRate(nonGoldPortfolios[0]?.id)}
                 onChange={e => { const v = parseFloat(e.target.value); updatePortfolioDividendTaxRate(nonGoldPortfolios[0]?.id, isNaN(v) ? 0 : v); }}
-                className="w-10 bg-[#1e293b] text-orange-300 text-[10px] text-center border border-gray-600 rounded px-1 py-0.5 outline-none"
+                className="w-10 bg-transparent text-orange-300 text-[10px] text-center border-b border-gray-600/50 outline-none"
               />
               <span className="text-gray-500 text-[10px]">%</span>
             </div>
@@ -768,45 +768,52 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           <div className="text-[10px] leading-[1.65] self-center">
             <div className="flex items-center gap-1.5">
               <span className="text-gray-500 w-12 shrink-0">세전합계</span>
-              {actualAnnualGrossUsd > 0 && <span className="text-blue-300/60 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualGrossUsd)}</span>}
+              {actualAnnualGrossUsd > 0 && <span className="text-blue-300 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualGrossUsd)}</span>}
               {actualAnnualGrossUsd > 0 && <span className="text-gray-700">|</span>}
-              <span className="text-blue-300/80 font-bold tabular-nums">{formatCurrency(actualAnnualGrossKrw)}</span>
+              <span className="text-blue-300/45 text-[9px] tabular-nums">{formatCurrency(actualAnnualGrossKrw)}</span>
             </div>
             {actualAnnualAfterKrw > 0 && (
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-500 w-12 shrink-0">세후</span>
-                {actualAnnualAfterUsd > 0 && <span className="text-emerald-400/70 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualAfterUsd)}</span>}
+                {actualAnnualAfterUsd > 0 && <span className="text-emerald-400 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualAfterUsd)}</span>}
                 {actualAnnualAfterUsd > 0 && <span className="text-gray-700">|</span>}
-                <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(actualAnnualAfterKrw)}</span>
+                <span className="text-emerald-400/45 text-[9px] tabular-nums">{formatCurrency(actualAnnualAfterKrw)}</span>
               </div>
             )}
             {(actualAnnualGrossKrw - actualAnnualAfterKrw) > 0 && (
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-500 w-12 shrink-0">과세</span>
-                {actualAnnualGrossUsd > 0 && <span className="text-orange-300/50 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualGrossUsd - actualAnnualAfterUsd)}</span>}
+                {actualAnnualGrossUsd > 0 && <span className="text-orange-300/80 font-semibold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualGrossUsd - actualAnnualAfterUsd)}</span>}
                 {actualAnnualGrossUsd > 0 && <span className="text-gray-700">|</span>}
-                <span className="text-orange-300/70 tabular-nums">{formatCurrency(actualAnnualGrossKrw - actualAnnualAfterKrw)}</span>
+                <span className="text-orange-300/40 text-[9px] tabular-nums">{formatCurrency(actualAnnualGrossKrw - actualAnnualAfterKrw)}</span>
               </div>
             )}
           </div>
         )}
-        <div className="ml-auto flex flex-col items-end gap-1 shrink-0">
-          <button
-            onClick={handleRefreshAll}
-            disabled={loading}
-            className="px-3 py-1 text-xs font-bold rounded-md border border-gray-600 text-gray-400 hover:bg-gray-700/50 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {loading ? '조회 중...' : '🔄 새로고침'}
-          </button>
+        <div className="ml-auto flex items-center gap-1.5 shrink-0 self-center">
           {activeTab === 'actual' && addPortfolioExtraRow && (
             <button
               onClick={() => addPortfolioExtraRow(nonGoldPortfolios[0]?.id)}
-              className="px-3 py-1 text-xs font-bold rounded-md border border-emerald-700/60 text-emerald-400 hover:bg-emerald-900/20 active:scale-95 transition-all"
               title="과거 종목 배당금 행 추가"
+              className="w-7 h-7 flex items-center justify-center rounded border border-emerald-700/50 text-emerald-400/80 hover:bg-emerald-900/30 hover:text-emerald-300 hover:border-emerald-600 active:scale-95 transition-all"
             >
-              + 행 추가
+              <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="8" y1="3" x2="8" y2="13"/>
+                <line x1="3" y1="8" x2="13" y2="8"/>
+              </svg>
             </button>
           )}
+          <button
+            onClick={handleRefreshAll}
+            disabled={loading}
+            title={loading ? '조회 중...' : '새로고침'}
+            className="w-7 h-7 flex items-center justify-center rounded border border-gray-600/70 text-gray-400 hover:bg-gray-700/50 hover:text-gray-200 hover:border-gray-500 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg viewBox="0 0 16 16" className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M13.5 8A5.5 5.5 0 1 1 10 3.07"/>
+              <polyline points="10 1 10 4 13 4"/>
+            </svg>
+          </button>
         </div>
       </div>
 
