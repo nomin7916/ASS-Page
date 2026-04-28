@@ -726,9 +726,32 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </button>
         </div>
         {activeTab === 'expected' && annualTotal > 0 && (
-          <div className="flex items-center gap-2 flex-wrap self-center">
-            <span className="text-yellow-400 font-bold text-xs">연간 예상 {formatCurrency(annualTotal)}</span>
-            <div className="flex items-center gap-1">
+          <div className="flex items-start gap-3 self-center">
+            <div className="text-[10px] leading-[1.65]">
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500 w-12 shrink-0">세전합계</span>
+                {annualUsdTotal > 0 && <span className="text-blue-300/60 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTotal)}</span>}
+                {annualUsdTotal > 0 && <span className="text-gray-700">|</span>}
+                <span className="text-blue-300/80 font-bold tabular-nums">{formatCurrency(annualTotal)}</span>
+              </div>
+              {annualTaxTotal > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-gray-500 w-12 shrink-0">세후(예상)</span>
+                  {annualUsdTaxTotal > 0 && <span className="text-emerald-400/70 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTotal - annualUsdTaxTotal)}</span>}
+                  {annualUsdTaxTotal > 0 && <span className="text-gray-700">|</span>}
+                  <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(annualTotal - annualTaxTotal)}</span>
+                </div>
+              )}
+              {annualTaxTotal > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-gray-500 w-12 shrink-0">과세</span>
+                  {annualUsdTaxTotal > 0 && <span className="text-orange-300/50 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTaxTotal)}</span>}
+                  {annualUsdTaxTotal > 0 && <span className="text-gray-700">|</span>}
+                  <span className="text-orange-300/70 tabular-nums">{formatCurrency(annualTaxTotal)}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-1 self-center">
               <span className="text-gray-500 text-[10px]">과세율</span>
               <input
                 type="text"
@@ -739,12 +762,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               />
               <span className="text-gray-500 text-[10px]">%</span>
             </div>
-            {annualTaxTotal > 0 && (
-              <span className="text-orange-300/70 text-[10px]">예상 과세 {formatCurrency(annualTaxTotal)}</span>
-            )}
-            {annualTaxTotal > 0 && (
-              <span className="text-green-400/80 text-[10px] font-bold">실 분배금(예상) {formatCurrency(annualTotal - annualTaxTotal)}</span>
-            )}
           </div>
         )}
         {activeTab === 'actual' && actualAnnualGrossKrw > 0 && (
@@ -794,145 +811,198 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       </div>
 
       {/* 월 예상 분배금 탭 */}
-      {activeTab === 'expected' && (
-        <div className="overflow-x-auto">
-          {loading && expectedRows.every(r => !r.hasDivData) ? (
-            <div className="py-8 text-center text-blue-400 text-xs animate-pulse">분배금 데이터 조회 중...</div>
-          ) : expectedRows.length === 0 ? (
-            <div className="py-8 text-center text-gray-500 text-xs">주식·ETF 종목이 없습니다.</div>
-          ) : (
-            <table className="w-full text-[11px] text-center">
-              <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
-                <tr>
-                  <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">코드</th>
-                  <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
-                  {MONTHS.map(m => (
-                    <th key={m} className="py-2.5 px-1 min-w-[68px]">{m}</th>
-                  ))}
-                  <th className="py-2 px-2 min-w-[88px] text-yellow-500 font-bold">연간합계</th>
-                </tr>
-              </thead>
-              <tbody>
-                {expectedRows.map((row) => (
-                  <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
-                    <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
-                      <div className="line-clamp-1">{row.code}</div>
-                    </td>
-                    <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
-                    {row.monthData.map((d, i) => (
-                      <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${
-                        d.amount > 0
-                          ? d.isActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/70'
-                          : 'text-gray-700'
-                      }`}>
-                        <div className="flex flex-col items-center gap-0">
-                          {row.isOverseas && d.amountUsd > 0 && (
-                            <span className="text-gray-400 text-[9px]">{formatUsd(d.amountUsd)}</span>
-                          )}
-                          <span>{d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}</span>
-                          {row.isOverseas && d.amountUsd > 0 && getTaxRate(row.portfolioId) > 0 ? (() => {
-                            const taxUsd = d.amountUsd * getTaxRate(row.portfolioId) / 100;
-                            const taxKrw = Math.round(taxUsd * usdkrw);
-                            return (<>
-                              <span className="text-orange-300/55 text-[9px]">{formatUsd(taxUsd)} / {formatCurrency(taxKrw)}</span>
-                              <span className="text-green-400/60 text-[9px]">실 $ {formatUsd(d.amountUsd - taxUsd)}</span>
-                            </>);
-                          })() : (
-                            getTaxRate(row.portfolioId) > 0 && d.amount > 0 && (() => {
-                              const taxAmt = Math.round(d.amount * getTaxRate(row.portfolioId) / 100);
-                              return (<>
-                                <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxAmt)}</span>
-                                <span className="text-green-400/60 text-[9px]">{formatCurrency(d.amount - taxAmt)}</span>
-                              </>);
-                            })()
-                          )}
-                        </div>
-                      </td>
+      {activeTab === 'expected' && (() => {
+        const expectedHasOverseas = expectedRows.some(r => r.isOverseas);
+        return (
+          <div className="overflow-x-auto">
+            {loading && expectedRows.every(r => !r.hasDivData) ? (
+              <div className="py-8 text-center text-blue-400 text-xs animate-pulse">분배금 데이터 조회 중...</div>
+            ) : expectedRows.length === 0 ? (
+              <div className="py-8 text-center text-gray-500 text-xs">주식·ETF 종목이 없습니다.</div>
+            ) : (
+              <table className="w-full text-[11px] text-center">
+                <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
+                  <tr>
+                    <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">코드</th>
+                    <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
+                    {MONTHS.map(m => (
+                      <th key={m} colSpan={expectedHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[68px]">{m}</th>
                     ))}
-                    <td className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>
-                      <div className="flex flex-col items-center gap-0">
-                        {row.isOverseas && row.annualUsd > 0 && (
-                          <span className="text-gray-400 text-[9px] font-normal">{formatUsd(row.annualUsd)}</span>
+                    <th colSpan={expectedHasOverseas ? 2 : 1} className="py-2 px-2 min-w-[88px] text-yellow-500 font-bold">연간합계</th>
+                  </tr>
+                  {expectedHasOverseas && (
+                    <tr className="text-[9px] border-b border-gray-700/50">
+                      <th className="sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]"></th>
+                      <th></th>
+                      {MONTHS.map(m => (
+                        <React.Fragment key={m}>
+                          <th className="py-1 text-blue-400 font-normal min-w-[62px]">세전</th>
+                          <th className="py-1 text-emerald-400 font-normal min-w-[62px]">세후</th>
+                        </React.Fragment>
+                      ))}
+                      <th className="py-1 text-blue-400 font-normal min-w-[62px]">세전</th>
+                      <th className="py-1 text-emerald-400 font-normal min-w-[62px]">세후</th>
+                    </tr>
+                  )}
+                </thead>
+                <tbody>
+                  {expectedRows.map((row) => {
+                    const taxRate = getTaxRate(row.portfolioId);
+                    return (
+                      <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                        <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
+                          <div className="line-clamp-1">{row.code}</div>
+                        </td>
+                        <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
+                        {row.isOverseas && expectedHasOverseas ? (
+                          row.monthData.map((d, i) => {
+                            const afterTaxUsd = d.amountUsd * (1 - taxRate / 100);
+                            const afterTaxKrw = Math.round(afterTaxUsd * usdkrw);
+                            const isLastCol = i === 11;
+                            return (
+                              <React.Fragment key={i}>
+                                <td className={`py-0.5 px-1 text-center text-[10px] border-r border-gray-700/20 ${
+                                  d.amountUsd > 0
+                                    ? d.isActual ? 'text-blue-300 font-bold bg-blue-900/10' : 'text-blue-300/60'
+                                    : 'text-gray-700'
+                                }`}>
+                                  <div className="flex flex-col items-center gap-0">
+                                    <span>{d.amountUsd > 0 ? formatUsd(d.amountUsd) : loading && !row.hasDivData ? '...' : '-'}</span>
+                                    {d.amount > 0 && <span className="text-gray-500 text-[9px]">{formatCurrency(d.amount)}</span>}
+                                  </div>
+                                </td>
+                                <td className={`py-0.5 px-1 text-center text-[10px] ${isLastCol ? '' : 'border-r border-gray-600/40'} ${
+                                  afterTaxUsd > 0
+                                    ? d.isActual ? 'text-emerald-300 font-bold bg-emerald-900/10' : 'text-emerald-300/70'
+                                    : 'text-gray-700'
+                                }`}>
+                                  <div className="flex flex-col items-center gap-0">
+                                    <span>{afterTaxUsd > 0 ? formatUsd(afterTaxUsd) : '-'}</span>
+                                    {afterTaxKrw > 0 && <span className="text-gray-500 text-[9px]">{formatCurrency(afterTaxKrw)}</span>}
+                                  </div>
+                                </td>
+                              </React.Fragment>
+                            );
+                          })
+                        ) : (
+                          row.monthData.map((d, i) => (
+                            <td key={i} colSpan={expectedHasOverseas ? 2 : 1} className={`py-1.5 px-1 text-center text-[10px] ${
+                              d.amount > 0
+                                ? d.isActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/70'
+                                : 'text-gray-700'
+                            }`}>
+                              <div className="flex flex-col items-center gap-0">
+                                <span>{d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}</span>
+                                {taxRate > 0 && d.amount > 0 && (() => {
+                                  const taxAmt = Math.round(d.amount * taxRate / 100);
+                                  return (<>
+                                    <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxAmt)}</span>
+                                    <span className="text-green-400/60 text-[9px]">{formatCurrency(d.amount - taxAmt)}</span>
+                                  </>);
+                                })()}
+                              </div>
+                            </td>
+                          ))
                         )}
-                        <span>{row.annual > 0 ? formatCurrency(row.annual) : loading && !row.hasDivData ? '...' : '-'}</span>
-                        {getTaxRate(row.portfolioId) > 0 && row.annual > 0 && (() => {
-                          const tax = Math.round(row.annual * getTaxRate(row.portfolioId) / 100);
-                          return (<>
-                            <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(tax)}</span>
-                            <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - tax)}</span>
-                          </>);
-                        })()}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
-                <tr>
-                  <td colSpan={2} className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
-                  {monthlyTotals.map((total, i) => (
-                    <td key={i} className={`py-2.5 px-1 text-center font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
-                      <div className="flex flex-col items-center">
-                        {monthlyUsdTotals[i] > 0 && <span className="text-gray-400 text-[9px]">{formatUsd(monthlyUsdTotals[i])}</span>}
-                        {total > 0 ? formatCurrency(total) : '-'}
-                      </div>
-                    </td>
-                  ))}
-                  <td className="py-2 px-2 text-center font-bold text-yellow-300">
-                    <div className="flex flex-col items-center">
-                      {annualUsdTotal > 0 && <span className="text-gray-400 text-[9px] font-normal">{formatUsd(annualUsdTotal)}</span>}
-                      {annualTotal > 0 ? formatCurrency(annualTotal) : '-'}
-                    </div>
-                  </td>
-                </tr>
-                {annualTaxTotal > 0 && (<>
-                  <tr className="text-orange-300/60">
-                    <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
-                      예상과세({getTaxRate(nonGoldPortfolios[0]?.id)}%)
-                    </td>
-                    {monthlyTaxTotals.map((tax, i) => (
-                      <td key={i} className="py-1 px-1 text-center text-[9px]">
+                        {row.isOverseas && expectedHasOverseas ? (() => {
+                          const annualAfterUsd = row.annualUsd * (1 - taxRate / 100);
+                          const annualAfterKrw = Math.round(annualAfterUsd * usdkrw);
+                          return (
+                            <React.Fragment key="annual">
+                              <td className={`py-2 px-2 text-center font-bold border-r border-gray-700/20 ${row.annualUsd > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>
+                                <div className="flex flex-col items-center gap-0">
+                                  <span>{row.annualUsd > 0 ? formatUsd(row.annualUsd) : loading && !row.hasDivData ? '...' : '-'}</span>
+                                  {row.annual > 0 && <span className="text-gray-400 text-[9px] font-normal">{formatCurrency(row.annual)}</span>}
+                                </div>
+                              </td>
+                              <td className={`py-2 px-2 text-center font-bold ${annualAfterUsd > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
+                                <div className="flex flex-col items-center gap-0">
+                                  <span>{annualAfterUsd > 0 ? formatUsd(annualAfterUsd) : '-'}</span>
+                                  {annualAfterKrw > 0 && <span className="text-gray-400 text-[9px] font-normal">{formatCurrency(annualAfterKrw)}</span>}
+                                </div>
+                              </td>
+                            </React.Fragment>
+                          );
+                        })() : (
+                          <td colSpan={expectedHasOverseas ? 2 : 1} className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>
+                            <div className="flex flex-col items-center gap-0">
+                              <span>{row.annual > 0 ? formatCurrency(row.annual) : loading && !row.hasDivData ? '...' : '-'}</span>
+                              {taxRate > 0 && row.annual > 0 && (() => {
+                                const tax = Math.round(row.annual * taxRate / 100);
+                                return (<>
+                                  <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(tax)}</span>
+                                  <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - tax)}</span>
+                                </>);
+                              })()}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
+                  <tr>
+                    <td colSpan={2} className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
+                    {expectedHasOverseas ? (
+                      MONTHS.map((_, i) => (
+                        <React.Fragment key={i}>
+                          <td className={`py-2.5 px-1 text-center font-bold text-[10px] border-r border-gray-700/20 ${monthlyUsdTotals[i] > 0 ? 'text-blue-300/70' : 'text-gray-600'}`}>
+                            <div className="flex flex-col items-center">
+                              {monthlyUsdTotals[i] > 0 && <span>{formatUsd(monthlyUsdTotals[i])}</span>}
+                              {monthlyTotals[i] > 0 ? formatCurrency(monthlyTotals[i]) : '-'}
+                            </div>
+                          </td>
+                          <td className={`py-2.5 px-1 text-center font-bold text-[10px] ${i < 11 ? 'border-r border-gray-600/40' : ''} ${(monthlyUsdTotals[i] - monthlyUsdTaxTotals[i]) > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
+                            <div className="flex flex-col items-center">
+                              {monthlyUsdTotals[i] > 0 && <span>{formatUsd(monthlyUsdTotals[i] - monthlyUsdTaxTotals[i])}</span>}
+                              {monthlyTotals[i] > 0 ? formatCurrency(monthlyTotals[i] - (monthlyTaxTotals[i] || 0)) : '-'}
+                            </div>
+                          </td>
+                        </React.Fragment>
+                      ))
+                    ) : (
+                      monthlyTotals.map((total, i) => (
+                        <td key={i} className={`py-2.5 px-1 text-center font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
+                          {total > 0 ? formatCurrency(total) : '-'}
+                        </td>
+                      ))
+                    )}
+                    {expectedHasOverseas ? (
+                      <>
+                        <td className="py-2 px-2 text-center font-bold text-blue-300 border-r border-gray-700/20">
+                          <div className="flex flex-col items-center">
+                            {annualUsdTotal > 0 && <span className="text-[9px] font-normal">{formatUsd(annualUsdTotal)}</span>}
+                            {annualTotal > 0 ? formatCurrency(annualTotal) : '-'}
+                          </div>
+                        </td>
+                        <td className="py-2 px-2 text-center font-bold text-emerald-300">
+                          <div className="flex flex-col items-center">
+                            {annualUsdTotal > 0 && <span className="text-[9px] font-normal">{formatUsd(annualUsdTotal - annualUsdTaxTotal)}</span>}
+                            {annualTotal > 0 ? formatCurrency(annualTotal - annualTaxTotal) : '-'}
+                          </div>
+                        </td>
+                      </>
+                    ) : (
+                      <td className="py-2 px-2 text-center font-bold text-yellow-300">
                         <div className="flex flex-col items-center">
-                          {monthlyUsdTaxTotals[i] > 0 && <span>{formatUsd(monthlyUsdTaxTotals[i])}</span>}
-                          {tax > 0 ? formatCurrency(tax) : '-'}
+                          {annualUsdTotal > 0 && <span className="text-gray-400 text-[9px] font-normal">{formatUsd(annualUsdTotal)}</span>}
+                          {annualTotal > 0 ? formatCurrency(annualTotal) : '-'}
                         </div>
                       </td>
-                    ))}
-                    <td className="py-1 px-2 text-center text-[10px]">
-                      <div className="flex flex-col items-center">
-                        {annualUsdTaxTotal > 0 && <span>{formatUsd(annualUsdTaxTotal)}</span>}
-                        {annualTaxTotal > 0 ? formatCurrency(annualTaxTotal) : '-'}
-                      </div>
-                    </td>
+                    )}
                   </tr>
-                  <tr className="text-green-400/70">
-                    <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">실 분배금(세후)</td>
-                    {monthlyTotals.map((total, i) => (
-                      <td key={i} className="py-1 px-1 text-center text-[9px]">
-                        <div className="flex flex-col items-center">
-                          {monthlyUsdTotals[i] > 0 && <span>{formatUsd(monthlyUsdTotals[i] - monthlyUsdTaxTotals[i])}</span>}
-                          {total > 0 ? formatCurrency(total - (monthlyTaxTotals[i] || 0)) : '-'}
-                        </div>
-                      </td>
-                    ))}
-                    <td className="py-1 px-2 text-center text-[10px] font-bold">
-                      <div className="flex flex-col items-center">
-                        {annualUsdTotal > 0 && <span>{formatUsd(annualUsdTotal - annualUsdTaxTotal)}</span>}
-                        {formatCurrency(annualTotal - annualTaxTotal)}
-                      </div>
-                    </td>
-                  </tr>
-                </>)}
-              </tfoot>
-            </table>
-          )}
-          {!loading && expectedRows.length > 0 && (
-            <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-              초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측
-            </div>
-          )}
-        </div>
-      )}
+                </tfoot>
+              </table>
+            )}
+            {!loading && expectedRows.length > 0 && (
+              <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
+                초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* 월 입금 내역 탭 */}
       {activeTab === 'actual' && (
