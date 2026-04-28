@@ -326,7 +326,8 @@ export default function App() {
     updatePortfolioActualDividendUsd,
     updatePortfolioDividendTaxRate,
     updatePortfolioDividendTaxAmount,
-    updatePortfolioDividendTaxAmountUsd,
+    updatePortfolioActualAfterTaxUsd,
+    updatePortfolioActualAfterTaxKrw,
   } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
 
   // ── 섹션 접기/펼치기 (계좌별 독립) ──
@@ -1964,7 +1965,8 @@ export default function App() {
             updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd}
             updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate}
             updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
-            updatePortfolioDividendTaxAmountUsd={updatePortfolioDividendTaxAmountUsd}
+            updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd}
+            updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw}
             usdkrw={marketIndicators.usdkrw || 1300}
           />
         )}
@@ -2161,7 +2163,8 @@ export default function App() {
             updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd}
             updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate}
             updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
-            updatePortfolioDividendTaxAmountUsd={updatePortfolioDividendTaxAmountUsd}
+            updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd}
+            updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw}
             usdkrw={marketIndicators.usdkrw || 1300}
           />
         )}

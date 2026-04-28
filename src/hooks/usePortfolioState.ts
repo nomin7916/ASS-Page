@@ -308,14 +308,25 @@ export function usePortfolioState({
     }));
   };
 
-  const updatePortfolioDividendTaxAmountUsd = (portfolioId, code, yearMonth, amount) => {
+  const updatePortfolioActualAfterTaxUsd = (portfolioId, code, yearMonth, amount) => {
     setPortfolios(prev => prev.map(p => {
       if (p.id !== portfolioId) return p;
-      const existing = p.dividendTaxAmountsUsd || {};
+      const existing = p.actualAfterTaxUsd || {};
       const codeData = { ...(existing[code] || {}) };
       if (amount > 0) codeData[yearMonth] = amount;
       else delete codeData[yearMonth];
-      return { ...p, dividendTaxAmountsUsd: { ...existing, [code]: codeData } };
+      return { ...p, actualAfterTaxUsd: { ...existing, [code]: codeData } };
+    }));
+  };
+
+  const updatePortfolioActualAfterTaxKrw = (portfolioId, code, yearMonth, amount) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const existing = p.actualAfterTaxKrw || {};
+      const codeData = { ...(existing[code] || {}) };
+      if (amount > 0) codeData[yearMonth] = amount;
+      else delete codeData[yearMonth];
+      return { ...p, actualAfterTaxKrw: { ...existing, [code]: codeData } };
     }));
   };
 
@@ -411,7 +422,8 @@ export function usePortfolioState({
     updatePortfolioActualDividend,
     updatePortfolioDividendTaxRate,
     updatePortfolioDividendTaxAmount,
-    updatePortfolioDividendTaxAmountUsd,
     updatePortfolioActualDividendUsd,
+    updatePortfolioActualAfterTaxUsd,
+    updatePortfolioActualAfterTaxKrw,
   };
 }
