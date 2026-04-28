@@ -385,7 +385,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           {totalAnnual > 0 && (
             <div className="flex flex-col leading-tight">
               <span className={`font-bold text-xs ${activeTab === 'expected' ? 'text-yellow-400' : 'text-emerald-400'}`}>
-                {activeTab === 'expected' ? '연간 예상 ' : `${CURRENT_YEAR}년 누계 `}{formatCurrency(totalAnnual)}
+                {activeTab === 'expected' ? '연간 예상 ' : '분배금 합계 (세후) '}{formatCurrency(totalAnnual)}
               </span>
               {activeTab === 'expected' && compactAnnualTax > 0 && (
                 <span className="text-orange-300/70 text-[10px]">연간 과세 {formatCurrency(compactAnnualTax)}</span>
@@ -395,9 +395,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               )}
               {activeTab === 'actual' && compactActualAnnualTax > 0 && (
                 <span className="text-orange-300/70 text-[10px]">연간 과세 {formatCurrency(compactActualAnnualTax)}</span>
-              )}
-              {activeTab === 'actual' && compactActualAnnualTax > 0 && (
-                <span className="text-green-400/80 text-[10px]">실 수령(세후) {formatCurrency(totalAnnual - compactActualAnnualTax)}</span>
               )}
             </div>
           )}
@@ -520,7 +517,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </tr>
                   </>);
                 })()}
-                {activeTab === 'actual' && compactActualAnnualTax > 0 && (<>
+                {activeTab === 'actual' && compactActualAnnualTax > 0 && (
                   <tr className="text-orange-300/60">
                     <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">과세합계</td>
                     {compactActualTotalMonthlyTax.map((tax, i) => (
@@ -528,14 +525,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     ))}
                     <td className="py-1 px-2 text-center text-[10px]">{formatCurrency(compactActualAnnualTax)}</td>
                   </tr>
-                  <tr className="text-green-400/70">
-                    <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">실 수령(세후)</td>
-                    {compactMonthlyTotals.map((total, i) => (
-                      <td key={i} className="py-1 px-1 text-center text-[9px]">{total > 0 ? formatCurrency(total - (compactActualTotalMonthlyTax[i] || 0)) : '-'}</td>
-                    ))}
-                    <td className="py-1 px-2 text-center text-[10px] font-bold">{formatCurrency(compactAnnualTotal - compactActualAnnualTax)}</td>
-                  </tr>
-                </>)}
+                )}
               </tfoot>
             </table>
           )}
