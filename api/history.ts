@@ -227,7 +227,7 @@ export default async function handler(request: Request): Promise<Response> {
   const start = (searchParams.get('start') ?? '').replace(/-/g, '');
   const end   = (searchParams.get('end')   ?? '').replace(/-/g, '');
 
-  // ── 해외주식 히스토리: Naver worldstock day API → Yahoo Finance fallback ──
+  // ── 해외주식 히스토리: Yahoo Finance (1순위) → Naver worldstock (2순위) ──
   if (key === 'worldstock') {
     const code = searchParams.get('code') ?? '';
     if (!code) return new Response('code 파라미터 필요', { status: 400 });
@@ -236,25 +236,25 @@ export default async function handler(request: Request): Promise<Response> {
     const d1 = start || defStart;
     const d2 = end   || defEnd;
 
-    let data = await fetchNaverWorldstockHistory(code, d1, d2);
+    // 1순위: Yahoo Finance — 단일 호출로 수년치 데이터 (Edge Function 타임아웃 없음)
+    const yahooTicker = code.includes('.') ? code.split('.')[0] : code;
+    let data = await fetchYahooHistory(yahooTicker, d1, d2);
+    let source = 'Yahoo Finance';
 
+    // 2순위: Naver worldstock — Yahoo 실패 시 청크 수집으로 보완
     if (Object.keys(data).length < 5) {
-      // Naver 실패 시 Yahoo Finance fallback (거래소 코드 제거: NVDA.O → NVDA)
-      const yahooTicker = code.includes('.') ? code.split('.')[0] : code;
-      data = await fetchYahooHistory(yahooTicker, d1, d2);
-      if (Object.keys(data).length === 0) {
-        return new Response('해외주식 히스토리 수집 실패', { status: 502 });
+      const naverData = await fetchNaverWorldstockHistory(code, d1, d2);
+      if (Object.keys(naverData).length > 0) {
+        data = naverData;
+        source = 'Naver worldstock';
       }
-      return new Response(JSON.stringify({ data, source: 'Yahoo Finance' }), {
-        headers: {
-          'Content-Type':                'application/json; charset=utf-8',
-          'Access-Control-Allow-Origin': '*',
-          'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
-        },
-      });
     }
 
-    return new Response(JSON.stringify({ data, source: 'Naver worldstock' }), {
+    if (Object.keys(data).length === 0) {
+      return new Response('해외주식 히스토리 수집 실패', { status: 502 });
+    }
+
+    return new Response(JSON.stringify({ data, source }), {
       headers: {
         'Content-Type':                'application/json; charset=utf-8',
         'Access-Control-Allow-Origin': '*',

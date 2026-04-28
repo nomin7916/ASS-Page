@@ -162,7 +162,7 @@ export const fetchStockInfo = async (code: string) => {
   return null;
 };
 
-// 해외(미국) 주식/ETF 현재가 조회: Naver worldstock → Yahoo Finance fallback
+// 해외(미국) 주식/ETF 현재가 조회: Naver polling → Naver worldstock → Yahoo Finance fallback
 export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; price: number; changeRate: number } | null> => {
   if (!ticker || ticker.trim().length < 1) return null;
   const upper = ticker.trim().toUpperCase();
@@ -175,10 +175,34 @@ export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; 
 
   // 이미 거래소 코드 포함(.O/.K/.N/.P/.Q 등)된 경우 그 코드 먼저 시도, 아니면 후보 코드 순서로 시도
   const hasExchangeSuffix = /\.[A-Z]{1,2}$/.test(upper);
+  const baseTicker = hasExchangeSuffix ? upper.split('.')[0] : upper;
   const naverCodes = hasExchangeSuffix
-    ? [upper, ...['O','K','N','P','Q'].filter(s => !upper.endsWith(`.${s}`)).map(s => `${upper.split('.')[0]}.${s}`)]
+    ? [upper, ...['O','K','N','P','Q'].filter(s => !upper.endsWith(`.${s}`)).map(s => `${baseTicker}.${s}`)]
     : [`${upper}.O`, `${upper}.K`, `${upper}.N`, `${upper}.P`, `${upper}.Q`, upper];
 
+  // 1순위: Naver polling realtime API (해외주식 전용, 종목명+현재가 포함)
+  for (const code of naverCodes) {
+    const pollingUrl = `https://polling.finance.naver.com/api/realtime/worldstock/stock/${code}`;
+    for (const proxy of mkNaverProxies(pollingUrl)) {
+      try {
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(6000) });
+        if (!res.ok) continue;
+        const json = await res.json();
+        const datas = json?.datas;
+        if (!Array.isArray(datas) || datas.length === 0) continue;
+        const d = datas[0];
+        const rawName = d?.stockName;
+        if (!rawName) continue;
+        const rawPrice = String(d.closePrice ?? '0').replace(/,/g, '');
+        const price = parseFloat(rawPrice);
+        if (price > 0) {
+          return { name: rawName, price, changeRate: parseFloat(String(d.fluctuationsRatio ?? '0')) };
+        }
+      } catch { continue; }
+    }
+  }
+
+  // 2순위: Naver m.stock basic API
   for (const code of naverCodes) {
     const targetUrl = `https://m.stock.naver.com/api/stock/${code}/basic`;
     for (const proxy of mkNaverProxies(targetUrl)) {
