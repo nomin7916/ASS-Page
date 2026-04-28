@@ -323,8 +323,10 @@ export default function App() {
     updateDividendHistory,
     updatePortfolioDividendHistory,
     updatePortfolioActualDividend,
+    updatePortfolioActualDividendUsd,
     updatePortfolioDividendTaxRate,
     updatePortfolioDividendTaxAmount,
+    updatePortfolioDividendTaxAmountUsd,
   } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
 
   // ── 섹션 접기/펼치기 (계좌별 독립) ──
