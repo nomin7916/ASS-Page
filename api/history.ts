@@ -153,7 +153,7 @@ function csvResponse(data: Record<string, number>): Response {
 
 function defaultDateRange() {
   const end   = new Date().toISOString().split('T')[0].replace(/-/g, '');
-  const start = new Date(Date.now() - 3 * 365.25 * 24 * 3600 * 1000).toISOString().split('T')[0].replace(/-/g, '');
+  const start = new Date(Date.now() - 10 * 365.25 * 24 * 3600 * 1000).toISOString().split('T')[0].replace(/-/g, '');
   return { start, end };
 }
 

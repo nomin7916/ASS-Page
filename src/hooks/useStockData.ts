@@ -248,8 +248,11 @@ export function useStockData({
     let hist: Record<string, number> | null = null;
 
     if (isOverseasFetch) {
-      // 해외주식: fromDate 없이 최대 이력(3년) 전체 수집 후 기존 캐시와 병합
-      const rUS = await fetchUsStockHistory(comp.code);
+      // 캐시 최초 날짜가 startDate 이전이면 증분 수집, 아니면 startDate부터 기간별 전체 수집
+      const firstCachedDate = existingSortedDates.length > 0 ? existingSortedDates[0] : null;
+      const needsExtension = !firstCachedDate || firstCachedDate > startDate;
+      const fromDate = needsExtension ? startDate : (lastCachedDate ?? undefined);
+      const rUS = await fetchUsStockHistory(comp.code, fromDate);
       if (rUS) hist = rUS.data;
     } else {
       const startYear = lastCachedDate ? parseInt(lastCachedDate.split('-')[0]) : 2000;
