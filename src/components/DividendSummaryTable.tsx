@@ -5,6 +5,7 @@ import { fetchDividendHistory, fetchYahooDividendHistory } from '../api';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
+const formatUsd = (v) => v > 0 ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
 
 const isKrCode = (code) => /^[A-Z0-9]{5,6}$/i.test(String(code || ''));
 const isUsCode = (code) => /^[A-Z]{1,5}$/i.test(String(code || ''));
@@ -136,7 +137,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     const result = [];
     nonGoldPortfolios.forEach(pf => {
       const divHistory = pf.dividendHistory || {};
-      const fxRate = pf.accountType === 'overseas' ? usdkrw : 1;
+      const isOverseas = pf.accountType === 'overseas';
+      const fxRate = isOverseas ? usdkrw : 1;
       (pf.portfolio || []).forEach(item => {
         if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);
@@ -145,8 +147,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const monthData = Array.from({ length: 12 }, (_, i) => {
           const mo = String(i + 1).padStart(2, '0');
           const isActual = !!divHistory[item.code]?.[`${CURRENT_YEAR}-${mo}`];
-          const amount = (pred[i + 1] || 0) * qty * fxRate;
-          return { amount, isActual };
+          const perShare = pred[i + 1] || 0;
+          const amountUsd = perShare * qty;
+          const amount = amountUsd * fxRate;
+          return { amount, amountUsd: isOverseas ? amountUsd : 0, isActual };
         });
         result.push({
           portfolioTitle: pf.title || pf.name || '계좌',
@@ -154,9 +158,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           code: item.code,
           name: item.name,
           qty,
+          isOverseas,
           hasDivData: Object.keys(pred).length > 0,
           monthData,
           annual: monthData.reduce((s, d) => s + d.amount, 0),
+          annualUsd: isOverseas ? monthData.reduce((s, d) => s + d.amountUsd, 0) : 0,
         });
       });
     });
@@ -169,7 +175,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     nonGoldPortfolios.forEach(pf => {
       const divHistory = pf.dividendHistory || {};
       const actualDividend = pf.actualDividend || {};
-      const fxRate = pf.accountType === 'overseas' ? usdkrw : 1;
+      const isOverseas = pf.accountType === 'overseas';
+      const fxRate = isOverseas ? usdkrw : 1;
       (pf.portfolio || []).forEach(item => {
         if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);
@@ -182,7 +189,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           const predicted = (pred[i + 1] || 0) * qty * fxRate;
           const hasManual = yearMonth in codeActual;
           const amount = hasManual ? codeActual[yearMonth] : predicted;
-          return { amount, predicted, hasManual, yearMonth };
+          const amountUsd = isOverseas ? amount / usdkrw : 0;
+          return { amount, amountUsd, predicted, hasManual, yearMonth };
         });
         result.push({
           portfolioTitle: pf.title || pf.name || '계좌',
@@ -190,9 +198,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           code: item.code,
           name: item.name,
           qty,
+          isOverseas,
           hasDivData: Object.keys(pred).length > 0,
           monthData,
           annual: monthData.reduce((s, d) => s + d.amount, 0),
+          annualUsd: isOverseas ? monthData.reduce((s, d) => s + d.amountUsd, 0) : 0,
         });
       });
     });
@@ -587,15 +597,26 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           : 'text-gray-700'
                       }`}>
                         <div className="flex flex-col items-center gap-0">
+                          {row.isOverseas && d.amountUsd > 0 && (
+                            <span className="text-gray-400 text-[9px]">{formatUsd(d.amountUsd)}</span>
+                          )}
                           <span>{d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}</span>
                           {getTaxRate(row.portfolioId) > 0 && d.amount > 0 && (
-                            <span className="text-orange-300/55 text-[9px]">{formatCurrency(Math.round(d.amount * getTaxRate(row.portfolioId) / 100))}</span>
+                            <span className="text-orange-300/55 text-[9px]">
+                              {row.isOverseas ? `${formatUsd(d.amountUsd * getTaxRate(row.portfolioId) / 100)} ` : ''}
+                              {formatCurrency(Math.round(d.amount * getTaxRate(row.portfolioId) / 100))}
+                            </span>
                           )}
                         </div>
                       </td>
                     ))}
                     <td className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>
-                      {row.annual > 0 ? formatCurrency(row.annual) : loading && !row.hasDivData ? '...' : '-'}
+                      <div className="flex flex-col items-center gap-0">
+                        {row.isOverseas && row.annualUsd > 0 && (
+                          <span className="text-gray-400 text-[9px] font-normal">{formatUsd(row.annualUsd)}</span>
+                        )}
+                        <span>{row.annual > 0 ? formatCurrency(row.annual) : loading && !row.hasDivData ? '...' : '-'}</span>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -696,23 +717,36 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             />
                           ) : (
                             <div className="flex flex-col items-center gap-0.5">
+                              {row.isOverseas && d.amountUsd > 0 && (
+                                <span className="text-gray-400 text-[9px]">{formatUsd(d.amountUsd)}</span>
+                              )}
                               <span>{d.amount > 0 ? formatCurrency(d.amount) : '-'}</span>
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                placeholder={getTaxRate(row.portfolioId) > 0 && d.amount > 0 ? '' : '과세금액'}
-                                value={effectiveTax > 0 ? effectiveTax.toLocaleString() : ''}
-                                onChange={e => handleTaxChange(row.portfolioId, row.code, d.yearMonth, e.target.value)}
-                                onClick={e => e.stopPropagation()}
-                                className={`w-full bg-transparent text-center text-[9px] border-b outline-none placeholder-gray-700 ${isManualTax ? 'text-orange-400 border-orange-700/40' : 'text-orange-300/55 border-gray-700/30'}`}
-                              />
+                              <div className="flex flex-col items-center w-full">
+                                {row.isOverseas && effectiveTax > 0 && (
+                                  <span className="text-orange-300/55 text-[9px]">{formatUsd(effectiveTax / usdkrw)}</span>
+                                )}
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  placeholder={getTaxRate(row.portfolioId) > 0 && d.amount > 0 ? '' : '과세금액'}
+                                  value={effectiveTax > 0 ? effectiveTax.toLocaleString() : ''}
+                                  onChange={e => handleTaxChange(row.portfolioId, row.code, d.yearMonth, e.target.value)}
+                                  onClick={e => e.stopPropagation()}
+                                  className={`w-full bg-transparent text-center text-[9px] border-b outline-none placeholder-gray-700 ${isManualTax ? 'text-orange-400 border-orange-700/40' : 'text-orange-300/55 border-gray-700/30'}`}
+                                />
+                              </div>
                             </div>
                           )}
                         </td>
                       );
                     })}
                     <td className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
-                      {row.annual > 0 ? formatCurrency(row.annual) : '-'}
+                      <div className="flex flex-col items-center gap-0">
+                        {row.isOverseas && row.annualUsd > 0 && (
+                          <span className="text-gray-400 text-[9px] font-normal">{formatUsd(row.annualUsd)}</span>
+                        )}
+                        <span>{row.annual > 0 ? formatCurrency(row.annual) : '-'}</span>
+                      </div>
                     </td>
                   </tr>
                 ))}
