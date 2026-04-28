@@ -36,7 +36,7 @@ function parseDividendApiResult(result) {
   return monthData;
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300 }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300 }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -605,12 +605,19 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     const compactActualMonthlyUsd = Array.from({ length: 12 }, (_, i) =>
       compactActualRows.filter(r => r.isOverseas).reduce((s, r) => s + (r.monthData[i].amountUsd || 0), 0)
     );
+    const isSeparateTax = (portfolioId) => {
+      const pf = nonGoldPortfolios.find(p => p.id === portfolioId);
+      return !!pf?.dividendSeparateTax;
+    };
     const compactActualMonthlyOverseasTaxKrw = Array.from({ length: 12 }, (_, i) =>
-      compactActualRows.filter(r => r.isOverseas).reduce((s, r) => s + (r.monthData[i].taxKrw || 0), 0)
+      compactActualRows.filter(r => r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.monthData[i].taxKrw || 0), 0)
     );
-    const compactActualMonthlyTaxCombined = Array.from({ length: 12 }, (_, i) =>
-      compactActualTotalMonthlyTax[i] + compactActualMonthlyOverseasTaxKrw[i]
-    );
+    const compactActualMonthlyTaxCombined = Array.from({ length: 12 }, (_, i) => {
+      const nonSeparateDomesticTax = compactActualRows
+        .filter(r => !r.isOverseas && !isSeparateTax(r.portfolioId))
+        .reduce((s, r) => s + (compactActualTaxMap[r.portfolioId]?.monthlyTax[i] || 0), 0);
+      return nonSeparateDomesticTax + compactActualMonthlyOverseasTaxKrw[i];
+    });
     const compactActualAnnualTaxCombined = compactActualMonthlyTaxCombined.reduce((s, v) => s + v, 0);
     const compactActualMonthlyDomesticKrw = Array.from({ length: 12 }, (_, i) =>
       compactActualRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.monthData[i].amount, 0)
@@ -712,7 +719,16 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                   return (
                     <tr key={row.portfolioId} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                       <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold">
-                        <div className="line-clamp-1" style={{ color: row.rowColor || '#93c5fd' }}>{row.portfolioTitle}</div>
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="line-clamp-1" style={{ color: row.rowColor || '#93c5fd' }}>{row.portfolioTitle}</div>
+                          {rowTaxRate > 0 && (
+                            <button
+                              onClick={() => updatePortfolioDividendSeparateTax(row.portfolioId, !isSeparateTax(row.portfolioId))}
+                              title={isSeparateTax(row.portfolioId) ? '분리과세 ON (과세합계 제외)' : '분리과세 OFF (과세합계 포함)'}
+                              className={`text-[10px] font-bold tracking-wide transition-colors shrink-0 ${isSeparateTax(row.portfolioId) ? 'text-amber-400' : 'text-gray-600 hover:text-gray-400'}`}
+                            >TAX</button>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1 mt-0.5">
                           <span className="text-gray-600 text-[9px]">과세율</span>
                           <input

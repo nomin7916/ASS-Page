@@ -297,6 +297,13 @@ export function usePortfolioState({
     }));
   };
 
+  const updatePortfolioDividendSeparateTax = (portfolioId, value) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      return { ...p, dividendSeparateTax: value };
+    }));
+  };
+
   const updatePortfolioDividendTaxAmount = (portfolioId, code, yearMonth, amount) => {
     setPortfolios(prev => prev.map(p => {
       if (p.id !== portfolioId) return p;
@@ -457,6 +464,7 @@ export function usePortfolioState({
     updatePortfolioDividendHistory,
     updatePortfolioActualDividend,
     updatePortfolioDividendTaxRate,
+    updatePortfolioDividendSeparateTax,
     updatePortfolioDividendTaxAmount,
     updatePortfolioActualDividendUsd,
     updatePortfolioActualAfterTaxUsd,
