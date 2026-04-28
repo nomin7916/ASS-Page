@@ -173,6 +173,7 @@ export default function App() {
   const portfolioRef = useRef([]);
   const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
+  const didSwitchPortfolioRef = useRef(false); // 탭 전환 시 최초 마운트 skip용
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
   // applyStateData/applyBackupData 콜백 ref (useDriveSync → useMarketData 순환 의존 해소)
   const applyStateDataRef = useRef<Function | null>(null);
@@ -961,6 +962,12 @@ export default function App() {
     setIsLoading, showToast,
     setMarketIndices, setIndexFetchStatus,
   });
+
+  // 계좌 탭 전환 시 현재가 자동 갱신
+  useEffect(() => {
+    if (!didSwitchPortfolioRef.current) { didSwitchPortfolioRef.current = true; return; }
+    refreshPrices();
+  }, [activePortfolioId]);
 
   const intMonthlyHistory = useMemo(() => {
     const sortedDesc = [...intHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
