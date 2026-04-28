@@ -268,19 +268,24 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     if (!compact) return [];
     return nonGoldPortfolios.map(pf => {
       const divHistory = pf.dividendHistory || {};
-      const fxRate = pf.accountType === 'overseas' ? usdkrw : 1;
+      const isOverseas = pf.accountType === 'overseas';
+      const fxRate = isOverseas ? usdkrw : 1;
       const monthData = Array.from({ length: 12 }, (_, i) => {
+        let amountUsd = 0;
         const amount = (pf.portfolio || []).reduce((sum, item) => {
           if (!getCodeType(item.code, pf)) return sum;
           const qty = cleanNum(item.quantity);
           if (!qty) return sum;
           const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
-          return sum + (pred[i + 1] || 0) * qty * fxRate;
+          const perShareUsd = pred[i + 1] || 0;
+          if (isOverseas) amountUsd += perShareUsd * qty;
+          return sum + perShareUsd * qty * fxRate;
         }, 0);
-        return { amount };
+        return { amount, amountUsd: isOverseas ? amountUsd : 0 };
       });
       const annual = monthData.reduce((s, d) => s + d.amount, 0);
-      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', monthData, annual };
+      const annualUsd = isOverseas ? monthData.reduce((s, d) => s + d.amountUsd, 0) : 0;
+      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd };
     }).filter(row => row.annual > 0);
   }, [compact, nonGoldPortfolios]);
 
@@ -572,6 +577,15 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   if (compact) {
     const rows = activeTab === 'expected' ? compactExpectedRows : compactActualRows;
     const totalAnnual = compactAnnualTotal;
+    const compactExpectedHasOverseas = compactExpectedRows.some(r => r.isOverseas);
+    const compactExpectedMonthlyUsd = Array.from({ length: 12 }, (_, i) =>
+      compactExpectedRows.filter(r => r.isOverseas).reduce((s, r) => s + (r.monthData[i].amountUsd || 0), 0)
+    );
+    const compactExpectedAnnualUsd = compactExpectedRows.reduce((s, r) => s + (r.annualUsd || 0), 0);
+    const compactExpectedMonthlyDomesticKrw = Array.from({ length: 12 }, (_, i) =>
+      compactExpectedRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.monthData[i].amount, 0)
+    );
+    const compactExpectedDomesticAnnual = compactExpectedRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.annual, 0);
     const compactActualHasOverseas = compactActualRows.some(r => r.isOverseas);
     const compactActualAnnualUsd = compactActualRows.reduce((s, r) => s + (r.annualUsd || 0), 0);
     const compactActualMonthlyUsd = Array.from({ length: 12 }, (_, i) =>
@@ -608,7 +622,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 <>
                   <div className="flex items-center gap-1.5">
                     <span className="text-gray-500 w-14 shrink-0">연간 예상</span>
-                    <span className="text-yellow-400 font-bold tabular-nums">{formatCurrency(totalAnnual)}</span>
+                    {compactExpectedHasOverseas && compactExpectedAnnualUsd > 0 && <span className="text-yellow-400 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(compactExpectedAnnualUsd)}</span>}
+                    {compactExpectedHasOverseas && compactExpectedDomesticAnnual > 0 && <span className="text-gray-700">|</span>}
+                    {compactExpectedHasOverseas
+                      ? compactExpectedDomesticAnnual > 0 && <span className="text-yellow-400/45 text-[9px] tabular-nums">{formatCurrency(compactExpectedDomesticAnnual)}</span>
+                      : <span className="text-yellow-400 font-bold tabular-nums">{formatCurrency(totalAnnual)}</span>
+                    }
                   </div>
                   {compactAnnualTax > 0 && (
                     <div className="flex items-center gap-1.5">
@@ -705,6 +724,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             </td>
                           );
                         }
+                        if (activeTab === 'expected' && row.isOverseas) {
+                          const taxKrw = rowTaxRate > 0 && d.amount > 0 ? Math.round(d.amount * rowTaxRate / 100) : 0;
+                          return (
+                            <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${d.amountUsd > 0 ? 'text-blue-300/80' : 'text-gray-700'}`}>
+                              <div className="flex flex-col items-center justify-center gap-0">
+                                <span className="font-semibold">{d.amountUsd > 0 ? formatUsd(d.amountUsd) : '-'}</span>
+                                {d.amount > 0 && <span className="text-blue-300/40 text-[9px]">{formatCurrency(d.amount)}</span>}
+                                {taxKrw > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxKrw)}</span>}
+                              </div>
+                            </td>
+                          );
+                        }
                         const taxAmt = activeTab === 'expected'
                           ? (rowTaxRate > 0 && d.amount > 0 ? Math.round(d.amount * rowTaxRate / 100) : 0)
                           : (actualTax?.monthlyTax[i] || 0);
@@ -728,6 +759,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             <span>{row.annualUsd > 0 ? formatUsd(row.annualUsd) : '-'}</span>
                             {row.annual > 0 && <span className="text-emerald-400/40 text-[9px] font-normal">{formatCurrency(row.annual)}</span>}
                             {row.annualTaxKrw > 0 && <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(row.annualTaxKrw)}</span>}
+                          </div>
+                        </td>
+                      ) : activeTab === 'expected' && row.isOverseas ? (
+                        <td className={`py-2 px-2 text-center font-bold ${row.annualUsd > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
+                          <div className="flex flex-col items-center justify-center gap-0">
+                            <span>{row.annualUsd > 0 ? formatUsd(row.annualUsd) : '-'}</span>
+                            {row.annual > 0 && <span className="text-blue-300/40 text-[9px] font-normal">{formatCurrency(row.annual)}</span>}
+                            {rowTaxRate > 0 && row.annual > 0 && <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(Math.round(row.annual * rowTaxRate / 100))}</span>}
                           </div>
                         </td>
                       ) : (
@@ -764,6 +803,15 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         </div>
                       </td>
                     ))
+                  ) : activeTab === 'expected' && compactExpectedHasOverseas ? (
+                    compactExpectedMonthlyUsd.map((usdTotal, i) => (
+                      <td key={i} className="py-2.5 px-1 text-center font-bold text-[10px]">
+                        <div className="flex flex-col items-center">
+                          {usdTotal > 0 ? <span className="text-yellow-300">{formatUsd(usdTotal)}</span> : null}
+                          {compactExpectedMonthlyDomesticKrw[i] > 0 ? <span className="text-yellow-300/40 text-[9px]">{formatCurrency(compactExpectedMonthlyDomesticKrw[i])}</span> : (!usdTotal ? <span className="text-gray-600">-</span> : null)}
+                        </div>
+                      </td>
+                    ))
                   ) : (
                     compactMonthlyTotals.map((total, i) => (
                       <td key={i} className={`py-2.5 px-1 text-center font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
@@ -776,6 +824,13 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       <div className="flex flex-col items-center">
                         {compactActualAnnualUsd > 0 && <span>{formatUsd(compactActualAnnualUsd)}</span>}
                         {compactActualDomesticAnnual > 0 && <span className="text-emerald-300/40 text-[9px] font-normal">{formatCurrency(compactActualDomesticAnnual)}</span>}
+                      </div>
+                    </td>
+                  ) : activeTab === 'expected' && compactExpectedHasOverseas ? (
+                    <td className="py-2 px-2 text-center font-bold text-yellow-300">
+                      <div className="flex flex-col items-center">
+                        {compactExpectedAnnualUsd > 0 && <span>{formatUsd(compactExpectedAnnualUsd)}</span>}
+                        {compactExpectedDomesticAnnual > 0 && <span className="text-yellow-300/40 text-[9px] font-normal">{formatCurrency(compactExpectedDomesticAnnual)}</span>}
                       </div>
                     </td>
                   ) : (
