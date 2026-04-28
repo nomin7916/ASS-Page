@@ -709,9 +709,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
 
   return (
     <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden w-full">
-      <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex items-center gap-2 flex-wrap">
-        <span className="text-white font-bold text-sm">💰 분배금 현황</span>
-        <div className="flex rounded-lg overflow-hidden border border-gray-700 ml-2">
+      <div className="px-3 py-2.5 bg-[#0f172a] border-b border-gray-700 flex items-start gap-3">
+        <span className="text-white font-bold text-sm shrink-0 self-center">💰 분배금 현황</span>
+        <div className="flex rounded-lg overflow-hidden border border-gray-700 shrink-0 self-center">
           <button
             onClick={() => setActiveTab('expected')}
             className={`px-3 py-1 text-xs font-bold transition-colors ${activeTab === 'expected' ? 'bg-blue-700/80 text-white' : 'bg-transparent text-gray-400 hover:bg-gray-700/50'}`}
@@ -726,7 +726,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </button>
         </div>
         {activeTab === 'expected' && annualTotal > 0 && (
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap self-center">
             <span className="text-yellow-400 font-bold text-xs">연간 예상 {formatCurrency(annualTotal)}</span>
             <div className="flex items-center gap-1">
               <span className="text-gray-500 text-[10px]">과세율</span>
@@ -748,40 +748,49 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </div>
         )}
         {activeTab === 'actual' && actualAnnualGrossKrw > 0 && (
-          <div className="flex flex-col leading-tight">
-            <span className="text-blue-300/80 font-bold text-xs">
-              {actualAnnualGrossUsd > 0 && <span className="text-gray-400 mr-1">{formatUsd(actualAnnualGrossUsd)}</span>}
-              세전 합계 {formatCurrency(actualAnnualGrossKrw)}
-            </span>
+          <div className="text-[10px] leading-[1.65] self-center">
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500 w-12 shrink-0">세전합계</span>
+              {actualAnnualGrossUsd > 0 && <span className="text-blue-300/60 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualGrossUsd)}</span>}
+              {actualAnnualGrossUsd > 0 && <span className="text-gray-700">|</span>}
+              <span className="text-blue-300/80 font-bold tabular-nums">{formatCurrency(actualAnnualGrossKrw)}</span>
+            </div>
             {actualAnnualAfterKrw > 0 && (
-              <span className="text-emerald-400 text-[10px] font-bold">
-                {actualAnnualAfterUsd > 0 && <span className="text-gray-400 mr-1">{formatUsd(actualAnnualAfterUsd)}</span>}
-                세후(실 수령) {formatCurrency(actualAnnualAfterKrw)}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500 w-12 shrink-0">세후</span>
+                {actualAnnualAfterUsd > 0 && <span className="text-emerald-400/70 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualAfterUsd)}</span>}
+                {actualAnnualAfterUsd > 0 && <span className="text-gray-700">|</span>}
+                <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(actualAnnualAfterKrw)}</span>
+              </div>
             )}
             {(actualAnnualGrossKrw - actualAnnualAfterKrw) > 0 && (
-              <span className="text-orange-300/70 text-[10px]">
-                과세 {actualAnnualGrossUsd > 0 ? `${formatUsd(actualAnnualGrossUsd - actualAnnualAfterUsd)} ` : ''}{formatCurrency(actualAnnualGrossKrw - actualAnnualAfterKrw)}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500 w-12 shrink-0">과세</span>
+                {actualAnnualGrossUsd > 0 && <span className="text-orange-300/50 w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualGrossUsd - actualAnnualAfterUsd)}</span>}
+                {actualAnnualGrossUsd > 0 && <span className="text-gray-700">|</span>}
+                <span className="text-orange-300/70 tabular-nums">{formatCurrency(actualAnnualGrossKrw - actualAnnualAfterKrw)}</span>
+              </div>
             )}
           </div>
         )}
-        {activeTab === 'actual' && addPortfolioExtraRow && (
+        <div className="ml-auto flex flex-col items-end gap-1 shrink-0">
           <button
-            onClick={() => addPortfolioExtraRow(nonGoldPortfolios[0]?.id)}
-            className="px-2.5 py-1 text-xs font-bold rounded-md border border-emerald-700/60 text-emerald-400 hover:bg-emerald-900/20 active:scale-95 transition-all"
-            title="과거 종목 배당금 행 추가"
+            onClick={handleRefreshAll}
+            disabled={loading}
+            className="px-3 py-1 text-xs font-bold rounded-md border border-gray-600 text-gray-400 hover:bg-gray-700/50 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            + 행 추가
+            {loading ? '조회 중...' : '🔄 새로고침'}
           </button>
-        )}
-        <button
-          onClick={handleRefreshAll}
-          disabled={loading}
-          className="ml-auto px-3 py-1 text-xs font-bold rounded-md border border-gray-600 text-gray-400 hover:bg-gray-700/50 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {loading ? '조회 중...' : '🔄 새로고침'}
-        </button>
+          {activeTab === 'actual' && addPortfolioExtraRow && (
+            <button
+              onClick={() => addPortfolioExtraRow(nonGoldPortfolios[0]?.id)}
+              className="px-3 py-1 text-xs font-bold rounded-md border border-emerald-700/60 text-emerald-400 hover:bg-emerald-900/20 active:scale-95 transition-all"
+              title="과거 종목 배당금 행 추가"
+            >
+              + 행 추가
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 월 예상 분배금 탭 */}
