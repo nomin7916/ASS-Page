@@ -349,8 +349,8 @@ export default function App() {
       setPortfolio(active.portfolio || []);
       setPrincipal(active.principal || 0);
       setHistory(active.history || []);
-      setDepositHistory(active.depositHistory || []);
-      if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
+      setDepositHistory((active.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })));
+      setDepositHistory2((active.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })));
       setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
       setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
     } else if (stateData.portfolio) {
@@ -423,8 +423,8 @@ export default function App() {
       setPortfolio(active.portfolio || []);
       setPrincipal(active.principal || 0);
       setHistory(active.history || []);
-      setDepositHistory(active.depositHistory || []);
-      if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
+      setDepositHistory((active.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })));
+      setDepositHistory2((active.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })));
       setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
       setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
     }
@@ -1531,8 +1531,8 @@ export default function App() {
           const driveRaw = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
           if (driveRaw) {
             const drivePortfolioTs = driveRaw.portfolioUpdatedAt || 0;
-            // 로컬이 명확히 최신인 경우: 둘 다 0이 아니고 로컬이 더 큰 값
-            const keepLocal = localPortfolioUpdatedAt > 0 && drivePortfolioTs > 0 && localPortfolioUpdatedAt > drivePortfolioTs;
+            // 로컬이 최신인 경우: 로컬 타임스탬프가 Drive보다 크면 유지 (Drive T=0인 구버전 데이터도 로컬 우선)
+            const keepLocal = localPortfolioUpdatedAt > 0 && localPortfolioUpdatedAt > drivePortfolioTs;
             if (!keepLocal) {
               await loadFromDrive(token);
               usedDriveData = true;
