@@ -279,6 +279,17 @@ export function usePortfolioState({
     }));
   };
 
+  const updatePortfolioActualDividendUsd = (portfolioId, code, yearMonth, amount) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const existing = p.actualDividendUsd || {};
+      const codeData = { ...(existing[code] || {}) };
+      if (amount > 0) codeData[yearMonth] = amount;
+      else delete codeData[yearMonth];
+      return { ...p, actualDividendUsd: { ...existing, [code]: codeData } };
+    }));
+  };
+
   const updatePortfolioDividendTaxRate = (portfolioId, rate) => {
     setPortfolios(prev => prev.map(p => {
       if (p.id !== portfolioId) return p;
@@ -294,6 +305,17 @@ export function usePortfolioState({
       if (amount > 0) codeData[yearMonth] = amount;
       else delete codeData[yearMonth];
       return { ...p, dividendTaxAmounts: { ...existing, [code]: codeData } };
+    }));
+  };
+
+  const updatePortfolioDividendTaxAmountUsd = (portfolioId, code, yearMonth, amount) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const existing = p.dividendTaxAmountsUsd || {};
+      const codeData = { ...(existing[code] || {}) };
+      if (amount > 0) codeData[yearMonth] = amount;
+      else delete codeData[yearMonth];
+      return { ...p, dividendTaxAmountsUsd: { ...existing, [code]: codeData } };
     }));
   };
 
@@ -389,5 +411,7 @@ export function usePortfolioState({
     updatePortfolioActualDividend,
     updatePortfolioDividendTaxRate,
     updatePortfolioDividendTaxAmount,
+    updatePortfolioDividendTaxAmountUsd,
+    updatePortfolioActualDividendUsd,
   };
 }
