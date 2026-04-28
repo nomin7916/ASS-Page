@@ -858,7 +858,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     return (
                       <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                         <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
-                          <div className="line-clamp-1">{row.code}</div>
+                          <div className="line-clamp-1">{row.name || row.code}</div>
+                          {row.name && <div className="text-gray-500 text-[9px] font-normal">({row.code})</div>}
                         </td>
                         <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
                         {row.isOverseas && expectedHasOverseas ? (
