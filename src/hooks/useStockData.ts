@@ -147,8 +147,8 @@ export function useStockData({
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
     const isOverseasComp = activePortfolioAccountType === 'overseas';
     let hist = stockHistoryMap[comp.code];
-    // 단순 현재가 캐시(1~3건)는 무시하고 과거 데이터 재조회
-    const hasRichHistory = hist && Object.keys(hist).length > 3;
+    // 해외: 252건(약 1년) 미만이면 전체 재조회 / 국내: 3건 이상이면 증분 조회
+    const hasRichHistory = hist && (isOverseasComp ? Object.keys(hist).length > 252 : Object.keys(hist).length > 3);
     if (!hasRichHistory) {
       if (isOverseasComp) {
         // 해외주식: fetchUsStockHistory (Naver worldstock → Yahoo Finance)
@@ -248,9 +248,8 @@ export function useStockData({
     let hist: Record<string, number> | null = null;
 
     if (isOverseasFetch) {
-      // 해외주식: fetchUsStockHistory (Naver worldstock → Yahoo Finance)
-      const fromDate = lastCachedDate ?? startDate;
-      const rUS = await fetchUsStockHistory(comp.code, fromDate);
+      // 해외주식: fromDate 없이 최대 이력(3년) 전체 수집 후 기존 캐시와 병합
+      const rUS = await fetchUsStockHistory(comp.code);
       if (rUS) hist = rUS.data;
     } else {
       const startYear = lastCachedDate ? parseInt(lastCachedDate.split('-')[0]) : 2000;
@@ -336,13 +335,13 @@ export function useStockData({
     }
     setIsLoading(false);
 
-    // 해외계좌: 그래프용 과거 데이터 백그라운드 수집 (충분한 이력 없는 종목만)
+    // 해외계좌: 그래프용 과거 데이터 백그라운드 수집 (252건 미만이면 전체 재수집)
     if (isOverseas) {
       const codesNeedingHistory = stocks
         .map(s => s.code)
         .filter(code => {
           const existing = stockHistoryMap[code];
-          return !existing || Object.keys(existing).length <= 3;
+          return !existing || Object.keys(existing).length <= 252;
         });
       if (codesNeedingHistory.length > 0) {
         Promise.all(codesNeedingHistory.map(async (code) => {
@@ -400,7 +399,7 @@ export function useStockData({
 
       const codesNeedingHistory = stockCodes.filter(code => {
         const existing = stockHistoryMapRef.current[code];
-        return !existing || Object.keys(existing).length <= 3;
+        return !existing || Object.keys(existing).length <= (isOverseasRefresh ? 252 : 3);
       });
       if (codesNeedingHistory.length > 0) {
         Promise.all(codesNeedingHistory.map(async (code) => {
