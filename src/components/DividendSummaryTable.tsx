@@ -399,6 +399,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   );
   const actualAnnualUsdTaxTotal = actualMonthlyUsdTaxTotals.reduce((s, v) => s + v, 0);
 
+  const actualHasOverseas = actualRows.some(r => r.isOverseas);
+
   const monthlyUsdTotals = Array.from({ length: 12 }, (_, i) =>
     expectedRows.filter(r => r.isOverseas).reduce((sum, row) => sum + row.monthData[i].amountUsd, 0)
   );
@@ -820,10 +822,24 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                   <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
                   <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
                   {MONTHS.map(m => (
-                    <th key={m} className="py-2.5 px-1 min-w-[68px]">{m}</th>
+                    <th key={m} colSpan={actualHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[68px]">{m}</th>
                   ))}
-                  <th className="py-2 px-2 min-w-[88px] text-emerald-500 font-bold">연간합계</th>
+                  <th colSpan={actualHasOverseas ? 2 : 1} className="py-2 px-2 min-w-[88px] text-emerald-500 font-bold">연간합계</th>
                 </tr>
+                {actualHasOverseas && (
+                  <tr className="text-[9px] border-b border-gray-700/50">
+                    <th className="sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]"></th>
+                    <th></th>
+                    {MONTHS.map(m => (
+                      <React.Fragment key={m}>
+                        <th className="py-1 text-blue-400 font-normal min-w-[62px]">세전</th>
+                        <th className="py-1 text-emerald-400 font-normal min-w-[62px]">세후</th>
+                      </React.Fragment>
+                    ))}
+                    <th className="py-1 text-blue-400 font-normal min-w-[62px]">세전</th>
+                    <th className="py-1 text-emerald-400 font-normal min-w-[62px]">세후</th>
+                  </tr>
+                )}
               </thead>
               <tbody>
                 {actualRows.map((row) => (
@@ -837,41 +853,90 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         && editingCell?.code === row.code
                         && editingCell?.monthIdx === i;
                       const pfForTax = nonGoldPortfolios.find(p => p.id === row.portfolioId);
-                      const isManualTax = row.isOverseas
-                        ? ((pfForTax?.dividendTaxAmountsUsd?.[row.code]?.[d.yearMonth] || 0) > 0 || (pfForTax?.dividendTaxAmounts?.[row.code]?.[d.yearMonth] || 0) > 0)
-                        : (pfForTax?.dividendTaxAmounts?.[row.code]?.[d.yearMonth] || 0) > 0;
                       const effectiveTax = getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth);
-                      return (
-                        <td
-                          key={i}
-                          onClick={() => !isEditing && handleCellClick(row, i)}
-                          className={`py-0.5 px-0.5 text-center text-[10px] cursor-pointer transition-colors ${
-                            isEditing
-                              ? 'bg-blue-900/40'
-                              : d.hasManual
-                                ? d.amount > 0 ? 'text-emerald-300 font-bold bg-emerald-900/20 hover:bg-emerald-900/40' : 'text-gray-500 hover:bg-gray-700/30'
-                                : d.amount > 0
-                                  ? 'text-blue-300/60 hover:bg-gray-700/30'
-                                  : 'text-gray-700 hover:bg-gray-700/30'
-                          }`}
-                        >
-                          {isEditing ? (
-                            row.isOverseas ? (
-                              <div className="flex items-center gap-0.5 justify-center px-1">
-                                <span className="text-gray-400 text-[9px]">$</span>
-                                <input
-                                  ref={inputRef}
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={editingCell.value}
-                                  onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
-                                  onBlur={commitEdit}
-                                  onKeyDown={handleCellKeyDown}
-                                  className="w-full bg-transparent text-emerald-300 text-right text-[10px] outline-none border-b border-blue-400"
-                                  placeholder="세후 $"
-                                />
+
+                      if (row.isOverseas) {
+                        const taxUsd = effectiveTax / usdkrw;
+                        const netUsd = Math.max(0, d.amountUsd - taxUsd);
+                        const netKrw = Math.max(0, d.amount - effectiveTax);
+                        return (
+                          <React.Fragment key={i}>
+                            <td
+                              onClick={() => !isEditing && handleCellClick(row, i)}
+                              className={`py-0.5 px-0.5 text-center text-[10px] cursor-pointer transition-colors border-r border-gray-700/30 ${
+                                isEditing ? 'bg-blue-900/40' :
+                                d.hasManual ? 'text-blue-300 font-bold bg-blue-900/10 hover:bg-blue-900/30' :
+                                d.amountUsd > 0 ? 'text-blue-300/60 hover:bg-gray-700/30' : 'text-gray-700 hover:bg-gray-700/30'
+                              }`}
+                            >
+                              {isEditing ? (
+                                <div className="flex items-center gap-0.5 justify-center px-1">
+                                  <span className="text-gray-400 text-[9px]">$</span>
+                                  <input
+                                    ref={inputRef}
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={editingCell.value}
+                                    onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
+                                    onBlur={commitEdit}
+                                    onKeyDown={handleCellKeyDown}
+                                    className="w-full bg-transparent text-blue-300 text-right text-[10px] outline-none border-b border-blue-400"
+                                    placeholder="세전 $"
+                                  />
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center gap-0">
+                                  <span>{d.amountUsd > 0 ? formatUsd(d.amountUsd) : '-'}</span>
+                                  {d.amount > 0 && <span className="text-gray-500 text-[9px]">{formatCurrency(d.amount)}</span>}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-0.5 px-0.5 text-center text-[10px]">
+                              <div className="flex flex-col items-center gap-0">
+                                {netUsd > 0 ? (
+                                  <span className="text-emerald-300 font-bold">{formatUsd(netUsd)}</span>
+                                ) : <span className="text-gray-700">-</span>}
+                                {netKrw > 0 && <span className="text-gray-500 text-[9px]">{formatCurrency(netKrw)}</span>}
+                                <div className="flex items-center gap-0.5 mt-0.5">
+                                  <input
+                                    type="text" inputMode="decimal"
+                                    value={(pfForTax?.dividendTaxAmountsUsd?.[row.code]?.[d.yearMonth] || 0) > 0 ? pfForTax.dividendTaxAmountsUsd[row.code][d.yearMonth] : ''}
+                                    onChange={e => {
+                                      const v = parseFloat(String(e.target.value).replace(/,/g, '')) || 0;
+                                      updatePortfolioDividendTaxAmountUsd(row.portfolioId, row.code, d.yearMonth, v);
+                                    }}
+                                    onClick={e => e.stopPropagation()}
+                                    className="w-10 bg-transparent text-center text-[9px] border-b outline-none text-orange-400 border-orange-700/40 placeholder-gray-700"
+                                    placeholder="$과세"
+                                  />
+                                  <span className="text-gray-700 text-[8px]">/</span>
+                                  <input
+                                    type="text" inputMode="numeric"
+                                    value={(pfForTax?.dividendTaxAmounts?.[row.code]?.[d.yearMonth] || 0) > 0 ? (pfForTax.dividendTaxAmounts[row.code][d.yearMonth]).toLocaleString() : ''}
+                                    onChange={e => handleTaxChange(row.portfolioId, row.code, d.yearMonth, e.target.value)}
+                                    onClick={e => e.stopPropagation()}
+                                    className="w-10 bg-transparent text-center text-[9px] border-b outline-none text-orange-300/55 border-gray-700/30 placeholder-gray-700"
+                                    placeholder="₩과세"
+                                  />
+                                </div>
                               </div>
-                            ) : (
+                            </td>
+                          </React.Fragment>
+                        );
+                      } else {
+                        const isManualTax = (pfForTax?.dividendTaxAmounts?.[row.code]?.[d.yearMonth] || 0) > 0;
+                        return (
+                          <td
+                            key={i}
+                            colSpan={actualHasOverseas ? 2 : 1}
+                            onClick={() => !isEditing && handleCellClick(row, i)}
+                            className={`py-0.5 px-0.5 text-center text-[10px] cursor-pointer transition-colors ${
+                              isEditing ? 'bg-blue-900/40' :
+                              d.hasManual ? d.amount > 0 ? 'text-emerald-300 font-bold bg-emerald-900/20 hover:bg-emerald-900/40' : 'text-gray-500 hover:bg-gray-700/30' :
+                              d.amount > 0 ? 'text-blue-300/60 hover:bg-gray-700/30' : 'text-gray-700 hover:bg-gray-700/30'
+                            }`}
+                          >
+                            {isEditing ? (
                               <input
                                 ref={inputRef}
                                 type="text"
@@ -882,135 +947,140 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 onKeyDown={handleCellKeyDown}
                                 className="w-full bg-transparent text-white text-right text-[10px] outline-none border-b border-blue-400 px-1"
                               />
-                            )
-                          ) : row.isOverseas ? (
-                            <div className="flex flex-col items-center gap-0">
-                              {/* 실 세후 달러 분배금 (클릭 편집) */}
-                              <span className={d.hasManual ? 'text-emerald-300 font-bold text-[10px]' : 'text-blue-300/60 text-[10px]'}>
-                                {d.amountUsd > 0 ? formatUsd(d.amountUsd) : '-'}
-                              </span>
-                              {/* KRW 자동환산 */}
-                              {d.amount > 0 && (
-                                <span className="text-gray-500 text-[9px]">{formatCurrency(d.amount)}</span>
-                              )}
-                              {/* 과세 $: 수기입력 */}
-                              <div className="flex items-center gap-0.5 mt-0.5">
+                            ) : (
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span>{d.amount > 0 ? formatCurrency(d.amount) : '-'}</span>
                                 <input
-                                  type="text" inputMode="decimal"
-                                  value={(pfForTax?.dividendTaxAmountsUsd?.[row.code]?.[d.yearMonth] || 0) > 0 ? pfForTax.dividendTaxAmountsUsd[row.code][d.yearMonth] : ''}
-                                  onChange={e => {
-                                    const v = parseFloat(String(e.target.value).replace(/,/g, '')) || 0;
-                                    updatePortfolioDividendTaxAmountUsd(row.portfolioId, row.code, d.yearMonth, v);
-                                  }}
-                                  onClick={e => e.stopPropagation()}
-                                  className="w-10 bg-transparent text-center text-[9px] border-b outline-none text-orange-400 border-orange-700/40 placeholder-gray-700"
-                                  placeholder="$과세"
-                                />
-                                <span className="text-gray-700 text-[8px]">/</span>
-                                {/* 과세 ₩: 수기입력 */}
-                                <input
-                                  type="text" inputMode="numeric"
-                                  value={(pfForTax?.dividendTaxAmounts?.[row.code]?.[d.yearMonth] || 0) > 0 ? (pfForTax.dividendTaxAmounts[row.code][d.yearMonth]).toLocaleString() : ''}
+                                  type="text"
+                                  inputMode="numeric"
+                                  placeholder={getTaxRate(row.portfolioId) > 0 && d.amount > 0 ? '' : '과세금액'}
+                                  value={effectiveTax > 0 ? effectiveTax.toLocaleString() : ''}
                                   onChange={e => handleTaxChange(row.portfolioId, row.code, d.yearMonth, e.target.value)}
                                   onClick={e => e.stopPropagation()}
-                                  className="w-10 bg-transparent text-center text-[9px] border-b outline-none text-orange-300/55 border-gray-700/30 placeholder-gray-700"
-                                  placeholder="₩과세"
+                                  className={`w-full bg-transparent text-center text-[9px] border-b outline-none placeholder-gray-700 ${isManualTax ? 'text-orange-400 border-orange-700/40' : 'text-orange-300/55 border-gray-700/30'}`}
                                 />
+                                {effectiveTax > 0 && d.amount > 0 && (
+                                  <span className="text-green-400/60 text-[9px]">{formatCurrency(d.amount - effectiveTax)}</span>
+                                )}
                               </div>
-                            </div>
-                          ) : (
-                            <div className="flex flex-col items-center gap-0.5">
-                              <span>{d.amount > 0 ? formatCurrency(d.amount) : '-'}</span>
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                placeholder={getTaxRate(row.portfolioId) > 0 && d.amount > 0 ? '' : '과세금액'}
-                                value={effectiveTax > 0 ? effectiveTax.toLocaleString() : ''}
-                                onChange={e => handleTaxChange(row.portfolioId, row.code, d.yearMonth, e.target.value)}
-                                onClick={e => e.stopPropagation()}
-                                className={`w-full bg-transparent text-center text-[9px] border-b outline-none placeholder-gray-700 ${isManualTax ? 'text-orange-400 border-orange-700/40' : 'text-orange-300/55 border-gray-700/30'}`}
-                              />
-                              {effectiveTax > 0 && d.amount > 0 && (
-                                <span className="text-green-400/60 text-[9px]">{formatCurrency(d.amount - effectiveTax)}</span>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      );
+                            )}
+                          </td>
+                        );
+                      }
                     })}
-                    <td className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
-                      <div className="flex flex-col items-center gap-0">
-                        {row.isOverseas && row.annualUsd > 0 && (
-                          <span className="text-gray-400 text-[9px] font-normal">{formatUsd(row.annualUsd)}</span>
-                        )}
-                        <span>{row.annual > 0 ? formatCurrency(row.annual) : '-'}</span>
-                        {!row.isOverseas && (() => {
-                          const rowAnnualTax = row.monthData.reduce((s, d) =>
-                            s + getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth)
-                          , 0);
-                          return rowAnnualTax > 0 && row.annual > 0 ? (<>
-                            <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(rowAnnualTax)}</span>
-                            <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - rowAnnualTax)}</span>
-                          </>) : null;
-                        })()}
-                      </div>
-                    </td>
+                    {row.isOverseas ? (() => {
+                      const rowAnnualTax = row.monthData.reduce((s, d) => s + getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth), 0);
+                      const rowAnnualTaxUsd = rowAnnualTax / usdkrw;
+                      const netAnnualUsd = Math.max(0, row.annualUsd - rowAnnualTaxUsd);
+                      const netAnnualKrw = Math.max(0, row.annual - rowAnnualTax);
+                      return (<React.Fragment key="annual">
+                        <td className={`py-2 px-2 text-center font-bold border-r border-gray-700/30 ${row.annual > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
+                          <div className="flex flex-col items-center gap-0">
+                            {row.annualUsd > 0 && <span className="text-[9px] font-normal">{formatUsd(row.annualUsd)}</span>}
+                            <span>{row.annual > 0 ? formatCurrency(row.annual) : '-'}</span>
+                          </div>
+                        </td>
+                        <td className={`py-2 px-2 text-center font-bold ${netAnnualKrw > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
+                          <div className="flex flex-col items-center gap-0">
+                            {netAnnualUsd > 0 && <span className="text-[9px] font-normal">{formatUsd(netAnnualUsd)}</span>}
+                            <span>{netAnnualKrw > 0 ? formatCurrency(netAnnualKrw) : '-'}</span>
+                          </div>
+                        </td>
+                      </React.Fragment>);
+                    })() : (
+                      <td colSpan={actualHasOverseas ? 2 : 1} className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
+                        <div className="flex flex-col items-center gap-0">
+                          <span>{row.annual > 0 ? formatCurrency(row.annual) : '-'}</span>
+                          {(() => {
+                            const rowAnnualTax = row.monthData.reduce((s, d) =>
+                              s + getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth)
+                            , 0);
+                            return rowAnnualTax > 0 && row.annual > 0 ? (<>
+                              <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(rowAnnualTax)}</span>
+                              <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - rowAnnualTax)}</span>
+                            </>) : null;
+                          })()}
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
               <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
                 <tr>
                   <td colSpan={2} className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
-                  {actualMonthlyTotals.map((total, i) => (
-                    <td key={i} className={`py-2.5 px-1 text-center font-bold text-[10px] ${total > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
+                  {actualHasOverseas ? (
+                    MONTHS.map((_, i) => (
+                      <React.Fragment key={i}>
+                        <td className={`py-2.5 px-1 text-center font-bold text-[10px] border-r border-gray-700/30 ${actualMonthlyTotals[i] > 0 ? 'text-blue-300/70' : 'text-gray-600'}`}>
+                          <div className="flex flex-col items-center">
+                            {actualMonthlyUsdTotals[i] > 0 && <span className="text-[9px]">{formatUsd(actualMonthlyUsdTotals[i])}</span>}
+                            {actualMonthlyTotals[i] > 0 ? formatCurrency(actualMonthlyTotals[i]) : '-'}
+                          </div>
+                        </td>
+                        <td className={`py-2.5 px-1 text-center font-bold text-[10px] ${(actualMonthlyTotals[i] - actualMonthlyTaxTotals[i]) > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
+                          <div className="flex flex-col items-center">
+                            {(actualMonthlyUsdTotals[i] - actualMonthlyUsdTaxTotals[i]) > 0 && <span className="text-[9px]">{formatUsd(actualMonthlyUsdTotals[i] - actualMonthlyUsdTaxTotals[i])}</span>}
+                            {actualMonthlyTotals[i] > 0 ? formatCurrency(actualMonthlyTotals[i] - actualMonthlyTaxTotals[i]) : '-'}
+                          </div>
+                        </td>
+                      </React.Fragment>
+                    ))
+                  ) : (
+                    actualMonthlyTotals.map((total, i) => (
+                      <td key={i} className={`py-2.5 px-1 text-center font-bold text-[10px] ${total > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
+                        <div className="flex flex-col items-center">
+                          {actualMonthlyUsdTotals[i] > 0 && <span className="text-gray-400 text-[9px]">{formatUsd(actualMonthlyUsdTotals[i])}</span>}
+                          {total > 0 ? formatCurrency(total) : '-'}
+                        </div>
+                      </td>
+                    ))
+                  )}
+                  {actualHasOverseas ? (
+                    <>
+                      <td className="py-2 px-2 text-center font-bold text-blue-300 border-r border-gray-700/30">
+                        <div className="flex flex-col items-center">
+                          {actualAnnualUsdTotal > 0 && <span className="text-[9px] font-normal">{formatUsd(actualAnnualUsdTotal)}</span>}
+                          {actualAnnualTotal > 0 ? formatCurrency(actualAnnualTotal) : '-'}
+                        </div>
+                      </td>
+                      <td className="py-2 px-2 text-center font-bold text-emerald-300">
+                        <div className="flex flex-col items-center">
+                          {(actualAnnualUsdTotal - actualAnnualUsdTaxTotal) > 0 && <span className="text-[9px] font-normal">{formatUsd(actualAnnualUsdTotal - actualAnnualUsdTaxTotal)}</span>}
+                          {(actualAnnualTotal - actualAnnualTaxTotal) > 0 ? formatCurrency(actualAnnualTotal - actualAnnualTaxTotal) : '-'}
+                        </div>
+                      </td>
+                    </>
+                  ) : (
+                    <td className="py-2 px-2 text-center font-bold text-emerald-300">
                       <div className="flex flex-col items-center">
-                        {actualMonthlyUsdTotals[i] > 0 && <span className="text-gray-400 text-[9px]">{formatUsd(actualMonthlyUsdTotals[i])}</span>}
-                        {total > 0 ? formatCurrency(total) : '-'}
+                        {actualAnnualUsdTotal > 0 && <span className="text-gray-400 text-[9px] font-normal">{formatUsd(actualAnnualUsdTotal)}</span>}
+                        {actualAnnualTotal > 0 ? formatCurrency(actualAnnualTotal) : '-'}
                       </div>
                     </td>
-                  ))}
-                  <td className="py-2 px-2 text-center font-bold text-emerald-300">
-                    <div className="flex flex-col items-center">
-                      {actualAnnualUsdTotal > 0 && <span className="text-gray-400 text-[9px] font-normal">{formatUsd(actualAnnualUsdTotal)}</span>}
-                      {actualAnnualTotal > 0 ? formatCurrency(actualAnnualTotal) : '-'}
-                    </div>
-                  </td>
+                  )}
                 </tr>
-                {actualAnnualTaxTotal > 0 && (<>
+                {!actualHasOverseas && actualAnnualTaxTotal > 0 && (<>
                   <tr className="text-orange-300/60">
                     <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
                       과세합계({getTaxRate(nonGoldPortfolios[0]?.id)}%)
                     </td>
                     {actualMonthlyTaxTotals.map((tax, i) => (
                       <td key={i} className="py-1 px-1 text-center text-[9px]">
-                        <div className="flex flex-col items-center">
-                          {actualMonthlyUsdTaxTotals[i] > 0 && <span>{formatUsd(actualMonthlyUsdTaxTotals[i])}</span>}
-                          {tax > 0 ? formatCurrency(tax) : '-'}
-                        </div>
+                        {tax > 0 ? formatCurrency(tax) : '-'}
                       </td>
                     ))}
-                    <td className="py-1 px-2 text-center text-[10px]">
-                      <div className="flex flex-col items-center">
-                        {actualAnnualUsdTaxTotal > 0 && <span>{formatUsd(actualAnnualUsdTaxTotal)}</span>}
-                        {formatCurrency(actualAnnualTaxTotal)}
-                      </div>
-                    </td>
+                    <td className="py-1 px-2 text-center text-[10px]">{formatCurrency(actualAnnualTaxTotal)}</td>
                   </tr>
                   <tr className="text-green-400/70">
                     <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">실 수령(세후)</td>
                     {actualMonthlyTotals.map((total, i) => (
                       <td key={i} className="py-1 px-1 text-center text-[9px]">
-                        <div className="flex flex-col items-center">
-                          {actualMonthlyUsdTotals[i] > 0 && <span>{formatUsd(actualMonthlyUsdTotals[i] - actualMonthlyUsdTaxTotals[i])}</span>}
-                          {total > 0 ? formatCurrency(total - (actualMonthlyTaxTotals[i] || 0)) : '-'}
-                        </div>
+                        {total > 0 ? formatCurrency(total - (actualMonthlyTaxTotals[i] || 0)) : '-'}
                       </td>
                     ))}
                     <td className="py-1 px-2 text-center text-[10px] font-bold">
-                      <div className="flex flex-col items-center">
-                        {actualAnnualUsdTotal > 0 && <span>{formatUsd(actualAnnualUsdTotal - actualAnnualUsdTaxTotal)}</span>}
-                        {formatCurrency(actualAnnualTotal - actualAnnualTaxTotal)}
-                      </div>
+                      {formatCurrency(actualAnnualTotal - actualAnnualTaxTotal)}
                     </td>
                   </tr>
                 </>)}
