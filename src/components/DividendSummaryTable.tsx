@@ -296,7 +296,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const mo = String(i + 1).padStart(2, '0');
         const yearMonth = `${CURRENT_YEAR}-${mo}`;
         if (isOverseas) {
-          let afterTaxUsdSum = 0, afterTaxKrwSum = 0, grossKrwSum = 0;
+          let pfAfterUsd = 0, pfAfterKrw = 0, pfGrossKrw = 0;
           (pf.portfolio || []).forEach(item => {
             if (!getCodeType(item.code, pf)) return;
             const qty = cleanNum(item.quantity);
@@ -308,18 +308,33 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const grossUsd = yearMonth in codeActualUsd ? codeActualUsd[yearMonth] : (pred[i + 1] || 0) * qty;
             const storedAfterUsd = codeAfterTaxUsd[yearMonth];
             const storedAfterKrw = codeAfterTaxKrw[yearMonth];
-            const afterUsd = storedAfterUsd != null ? storedAfterUsd : grossUsd * (1 - taxRate / 100);
-            const afterKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterUsd * usdkrw);
-            afterTaxUsdSum += afterUsd;
-            afterTaxKrwSum += afterKrw;
-            grossKrwSum += Math.round(grossUsd * usdkrw);
+            let afterUsd, afterKrw;
+            if (storedAfterUsd != null) {
+              afterUsd = storedAfterUsd;
+              afterKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterUsd * usdkrw);
+            } else if (storedAfterKrw != null && usdkrw > 0) {
+              afterKrw = storedAfterKrw;
+              afterUsd = afterKrw / usdkrw;
+            } else {
+              afterUsd = grossUsd * (1 - taxRate / 100);
+              afterKrw = Math.round(afterUsd * usdkrw);
+            }
+            pfAfterUsd += afterUsd;
+            pfAfterKrw += afterKrw;
+            pfGrossKrw += Math.round(grossUsd * usdkrw);
           });
+          let extraAfterUsd = 0, extraAfterKrw = 0;
           (pf.extraDividendRows || []).forEach(row => {
             const entry = row.monthData?.[yearMonth] || {};
-            afterTaxUsdSum += entry.afterTaxUsd || 0;
-            afterTaxKrwSum += entry.afterTaxKrw || 0;
+            extraAfterUsd += entry.afterTaxUsd || 0;
+            extraAfterKrw += entry.afterTaxKrw || 0;
           });
-          return { amount: afterTaxKrwSum, amountUsd: afterTaxUsdSum, taxKrw: Math.max(0, grossKrwSum - afterTaxKrwSum), yearMonth };
+          return {
+            amount: pfAfterKrw + extraAfterKrw,
+            amountUsd: pfAfterUsd + extraAfterUsd,
+            taxKrw: Math.max(0, pfGrossKrw - pfAfterKrw),
+            yearMonth,
+          };
         } else {
           let amount = (pf.portfolio || []).reduce((sum, item) => {
             if (!getCodeType(item.code, pf)) return sum;
@@ -569,6 +584,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       compactActualTotalMonthlyTax[i] + compactActualMonthlyOverseasTaxKrw[i]
     );
     const compactActualAnnualTaxCombined = compactActualMonthlyTaxCombined.reduce((s, v) => s + v, 0);
+    const compactActualMonthlyDomesticKrw = Array.from({ length: 12 }, (_, i) =>
+      compactActualRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.monthData[i].amount, 0)
+    );
+    const compactActualDomesticAnnual = compactActualRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.annual, 0);
     return (
       <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden w-full">
         <div className="p-4 bg-[#0f172a] border-b border-gray-700 flex items-center gap-2 flex-wrap">
@@ -609,8 +628,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                   <div className="flex items-center gap-1.5">
                     <span className="text-gray-500 w-14 shrink-0">세후합계</span>
                     {compactActualHasOverseas && compactActualAnnualUsd > 0 && <span className="text-emerald-400 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(compactActualAnnualUsd)}</span>}
-                    {compactActualHasOverseas && compactActualAnnualUsd > 0 && <span className="text-gray-700">|</span>}
-                    <span className={`${compactActualHasOverseas ? 'text-emerald-400/45 text-[9px]' : 'text-emerald-400 font-bold'} tabular-nums`}>{formatCurrency(totalAnnual)}</span>
+                    {compactActualHasOverseas && compactActualDomesticAnnual > 0 && <span className="text-gray-700">|</span>}
+                    {compactActualHasOverseas
+                      ? compactActualDomesticAnnual > 0 && <span className="text-emerald-400/45 text-[9px] tabular-nums">{formatCurrency(compactActualDomesticAnnual)}</span>
+                      : <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(totalAnnual)}</span>
+                    }
                   </div>
                   {compactActualAnnualTaxCombined > 0 && (
                     <div className="flex items-center gap-1.5">
@@ -738,7 +760,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       <td key={i} className="py-2.5 px-1 text-center font-bold text-[10px]">
                         <div className="flex flex-col items-center">
                           {usdTotal > 0 ? <span className="text-emerald-300">{formatUsd(usdTotal)}</span> : null}
-                          {compactMonthlyTotals[i] > 0 ? <span className="text-emerald-300/40 text-[9px]">{formatCurrency(compactMonthlyTotals[i])}</span> : (!usdTotal ? <span className="text-gray-600">-</span> : null)}
+                          {compactActualMonthlyDomesticKrw[i] > 0 ? <span className="text-emerald-300/40 text-[9px]">{formatCurrency(compactActualMonthlyDomesticKrw[i])}</span> : (!usdTotal ? <span className="text-gray-600">-</span> : null)}
                         </div>
                       </td>
                     ))
@@ -753,7 +775,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     <td className="py-2 px-2 text-center font-bold text-emerald-300">
                       <div className="flex flex-col items-center">
                         {compactActualAnnualUsd > 0 && <span>{formatUsd(compactActualAnnualUsd)}</span>}
-                        {totalAnnual > 0 && <span className="text-emerald-300/40 text-[9px] font-normal">{formatCurrency(totalAnnual)}</span>}
+                        {compactActualDomesticAnnual > 0 && <span className="text-emerald-300/40 text-[9px] font-normal">{formatCurrency(compactActualDomesticAnnual)}</span>}
                       </div>
                     </td>
                   ) : (
@@ -769,7 +791,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       return sum + Math.round((row.monthData[i]?.amount || 0) * rate / 100);
                     }, 0)
                   );
-                  return (<>
+                  return (
                     <tr className="text-orange-300/60">
                       <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">과세합계</td>
                       {monthlyTaxArr.map((tax, i) => (
@@ -777,14 +799,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       ))}
                       <td className="py-1 px-2 text-center text-[10px]">{formatCurrency(compactAnnualTax)}</td>
                     </tr>
-                    <tr className="text-green-400/70">
-                      <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">실 분배금(세후)</td>
-                      {compactMonthlyTotals.map((total, i) => (
-                        <td key={i} className="py-1 px-1 text-center text-[9px]">{total > 0 ? formatCurrency(total - monthlyTaxArr[i]) : '-'}</td>
-                      ))}
-                      <td className="py-1 px-2 text-center text-[10px] font-bold">{formatCurrency(compactAnnualTotal - compactAnnualTax)}</td>
-                    </tr>
-                  </>);
+                  );
                 })()}
                 {activeTab === 'actual' && compactActualAnnualTaxCombined > 0 && (
                   <tr className="text-orange-300/60">
