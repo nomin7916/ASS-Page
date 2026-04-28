@@ -1950,6 +1950,7 @@ export default function App() {
             portfolios={allPortfoliosForDividend.filter(p => p.id === activePortfolioId)}
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
             updatePortfolioActualDividend={updatePortfolioActualDividend}
+            usdkrw={marketIndicators.usdkrw || 1300}
           />
         )}
 
@@ -2142,6 +2143,7 @@ export default function App() {
             allPortfoliosForDividend={allPortfoliosForDividend}
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
             updatePortfolioActualDividend={updatePortfolioActualDividend}
+            usdkrw={marketIndicators.usdkrw || 1300}
           />
         )}
 

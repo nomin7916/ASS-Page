@@ -1,12 +1,17 @@
 // @ts-nocheck
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { cleanNum, formatCurrency } from '../utils';
-import { fetchDividendHistory } from '../api';
+import { fetchDividendHistory, fetchYahooDividendHistory } from '../api';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
 
 const isKrCode = (code) => /^[A-Z0-9]{5,6}$/i.test(String(code || ''));
+const isUsCode = (code) => /^[A-Z]{1,5}$/i.test(String(code || ''));
+const getCodeType = (code, pf) => {
+  if (pf.accountType === 'overseas') return isUsCode(code) ? 'us' : null;
+  return isKrCode(code) ? 'kr' : null;
+};
 
 function buildMonthPrediction(codeHistory) {
   const pred = {};
@@ -30,7 +35,7 @@ function parseDividendApiResult(result) {
   return monthData;
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, compact = false }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, compact = false, usdkrw = 1300 }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null); // { portfolioId, code, monthIdx, value }
@@ -48,7 +53,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     nonGoldPortfolios
       .flatMap(pf =>
         (pf.portfolio || [])
-          .filter(item => isKrCode(item.code))
+          .filter(item => getCodeType(item.code, pf) !== null)
           .map(item => `${pf.id}:${item.code}`)
       )
       .sort()
@@ -63,24 +68,29 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       nonGoldPortfolios.forEach(pf => {
         const divHistory = pf.dividendHistory || {};
         (pf.portfolio || []).forEach(item => {
-          if (!isKrCode(item.code)) return;
+          const codeType = getCodeType(item.code, pf);
+          if (!codeType) return;
           const key = `${pf.id}:${item.code}`;
           if (fetchedRef.current.has(key) || divHistory[item.code]) return;
           fetchedRef.current.add(key);
           if (!byPortfolio[pf.id]) byPortfolio[pf.id] = [];
-          byPortfolio[pf.id].push(item.code);
+          byPortfolio[pf.id].push({ code: item.code, codeType });
         });
       });
       if (!Object.keys(byPortfolio).length) return;
       setLoading(true);
       await Promise.all(
-        Object.entries(byPortfolio).map(async ([portfolioId, codes]) => {
+        Object.entries(byPortfolio).map(async ([portfolioId, items]) => {
           const mergeMap = {};
-          await Promise.all(codes.map(async code => {
-            const data = await fetchDividendHistory(code);
-            if (!data?.result?.length) return;
-            const monthData = parseDividendApiResult(data.result);
-            if (Object.keys(monthData).length) mergeMap[code] = monthData;
+          await Promise.all(items.map(async ({ code, codeType }) => {
+            let monthData;
+            if (codeType === 'us') {
+              monthData = await fetchYahooDividendHistory(code);
+            } else {
+              const data = await fetchDividendHistory(code);
+              if (data?.result?.length) monthData = parseDividendApiResult(data.result);
+            }
+            if (monthData && Object.keys(monthData).length) mergeMap[code] = monthData;
           }));
           if (Object.keys(mergeMap).length) updatePortfolioDividendHistory(portfolioId, mergeMap);
         })
@@ -102,15 +112,20 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     setLoading(true);
     await Promise.all(
       nonGoldPortfolios.map(async pf => {
-        const stocks = (pf.portfolio || []).filter(item => isKrCode(item.code));
+        const stocks = (pf.portfolio || []).filter(item => getCodeType(item.code, pf) !== null);
         if (!stocks.length) return;
         const mergeMap = {};
         await Promise.all(stocks.map(async item => {
           fetchedRef.current.add(`${pf.id}:${item.code}`);
-          const data = await fetchDividendHistory(String(item.code));
-          if (!data?.result?.length) return;
-          const monthData = parseDividendApiResult(data.result);
-          if (Object.keys(monthData).length) mergeMap[item.code] = monthData;
+          const codeType = getCodeType(item.code, pf);
+          let monthData;
+          if (codeType === 'us') {
+            monthData = await fetchYahooDividendHistory(String(item.code));
+          } else {
+            const data = await fetchDividendHistory(String(item.code));
+            if (data?.result?.length) monthData = parseDividendApiResult(data.result);
+          }
+          if (monthData && Object.keys(monthData).length) mergeMap[item.code] = monthData;
         }));
         if (Object.keys(mergeMap).length) updatePortfolioDividendHistory(pf.id, mergeMap);
       })
@@ -123,15 +138,16 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     const result = [];
     nonGoldPortfolios.forEach(pf => {
       const divHistory = pf.dividendHistory || {};
+      const fxRate = pf.accountType === 'overseas' ? usdkrw : 1;
       (pf.portfolio || []).forEach(item => {
-        if (!isKrCode(item.code)) return;
+        if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);
         if (!qty) return;
         const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
         const monthData = Array.from({ length: 12 }, (_, i) => {
           const mo = String(i + 1).padStart(2, '0');
           const isActual = !!divHistory[item.code]?.[`${CURRENT_YEAR}-${mo}`];
-          const amount = (pred[i + 1] || 0) * qty;
+          const amount = (pred[i + 1] || 0) * qty * fxRate;
           return { amount, isActual };
         });
         result.push({
@@ -155,8 +171,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     nonGoldPortfolios.forEach(pf => {
       const divHistory = pf.dividendHistory || {};
       const actualDividend = pf.actualDividend || {};
+      const fxRate = pf.accountType === 'overseas' ? usdkrw : 1;
       (pf.portfolio || []).forEach(item => {
-        if (!isKrCode(item.code)) return;
+        if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);
         if (!qty) return;
         const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
@@ -164,7 +181,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const monthData = Array.from({ length: 12 }, (_, i) => {
           const mo = String(i + 1).padStart(2, '0');
           const yearMonth = `${CURRENT_YEAR}-${mo}`;
-          const predicted = (pred[i + 1] || 0) * qty;
+          const predicted = (pred[i + 1] || 0) * qty * fxRate;
           const hasManual = yearMonth in codeActual;
           const amount = hasManual ? codeActual[yearMonth] : predicted;
           return { amount, predicted, hasManual, yearMonth };
@@ -189,13 +206,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     if (!compact) return [];
     return nonGoldPortfolios.map(pf => {
       const divHistory = pf.dividendHistory || {};
+      const fxRate = pf.accountType === 'overseas' ? usdkrw : 1;
       const monthData = Array.from({ length: 12 }, (_, i) => {
         const amount = (pf.portfolio || []).reduce((sum, item) => {
-          if (!isKrCode(item.code)) return sum;
+          if (!getCodeType(item.code, pf)) return sum;
           const qty = cleanNum(item.quantity);
           if (!qty) return sum;
           const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
-          return sum + (pred[i + 1] || 0) * qty;
+          return sum + (pred[i + 1] || 0) * qty * fxRate;
         }, 0);
         return { amount };
       });
@@ -209,16 +227,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     return nonGoldPortfolios.map(pf => {
       const divHistory = pf.dividendHistory || {};
       const actualDividend = pf.actualDividend || {};
+      const fxRate = pf.accountType === 'overseas' ? usdkrw : 1;
       const monthData = Array.from({ length: 12 }, (_, i) => {
         const mo = String(i + 1).padStart(2, '0');
         const yearMonth = `${CURRENT_YEAR}-${mo}`;
         const amount = (pf.portfolio || []).reduce((sum, item) => {
-          if (!isKrCode(item.code)) return sum;
+          if (!getCodeType(item.code, pf)) return sum;
           const qty = cleanNum(item.quantity);
           if (!qty) return sum;
           const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
           const codeActual = actualDividend[item.code] || {};
-          const predicted = (pred[i + 1] || 0) * qty;
+          const predicted = (pred[i + 1] || 0) * qty * fxRate;
           return sum + (yearMonth in codeActual ? codeActual[yearMonth] : predicted);
         }, 0);
         return { amount, yearMonth };
@@ -297,6 +316,13 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     actualRows.reduce((sum, row) => sum + row.monthData[i].amount, 0)
   );
   const actualAnnualTotal = actualMonthlyTotals.reduce((s, v) => s + v, 0);
+  const actualMonthlyTaxTotals = Array.from({ length: 12 }, (_, i) =>
+    actualRows.reduce((sum, row) => {
+      const d = row.monthData[i];
+      return sum + getEffectiveTax(d.amount, getTaxKey(row.portfolioId, row.code, d.yearMonth), row.portfolioId);
+    }, 0)
+  );
+  const actualAnnualTaxTotal = actualMonthlyTaxTotals.reduce((s, v) => s + v, 0);
 
   const compactAnnualTotal = (activeTab === 'expected' ? compactExpectedRows : compactActualRows)
     .reduce((s, r) => s + r.annual, 0);
@@ -490,7 +516,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           {loading && expectedRows.every(r => !r.hasDivData) ? (
             <div className="py-8 text-center text-blue-400 text-xs animate-pulse">분배금 데이터 조회 중...</div>
           ) : expectedRows.length === 0 ? (
-            <div className="py-8 text-center text-gray-500 text-xs">한국 주식·ETF 종목이 없습니다.</div>
+            <div className="py-8 text-center text-gray-500 text-xs">주식·ETF 종목이 없습니다.</div>
           ) : (
             <table className="w-full text-[11px] text-center">
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
@@ -572,7 +598,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       {activeTab === 'actual' && (
         <div className="overflow-x-auto">
           {actualRows.length === 0 ? (
-            <div className="py-8 text-center text-gray-500 text-xs">한국 주식·ETF 종목이 없습니다.</div>
+            <div className="py-8 text-center text-gray-500 text-xs">주식·ETF 종목이 없습니다.</div>
           ) : (
             <table className="w-full text-[11px] text-center">
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
@@ -659,6 +685,21 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     {actualAnnualTotal > 0 ? formatCurrency(actualAnnualTotal) : '-'}
                   </td>
                 </tr>
+                {actualAnnualTaxTotal > 0 && (
+                  <tr className="text-orange-300/60">
+                    <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+                      과세합계({getTaxRate(nonGoldPortfolios[0]?.id)}%)
+                    </td>
+                    {actualMonthlyTaxTotals.map((tax, i) => (
+                      <td key={i} className="py-1 px-1 text-center text-[9px]">
+                        {tax > 0 ? formatCurrency(tax) : '-'}
+                      </td>
+                    ))}
+                    <td className="py-1 px-2 text-center text-[10px]">
+                      {formatCurrency(actualAnnualTaxTotal)}
+                    </td>
+                  </tr>
+                )}
               </tfoot>
             </table>
           )}

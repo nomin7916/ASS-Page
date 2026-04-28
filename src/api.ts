@@ -332,6 +332,35 @@ export const fetchDividendHistory = async (code: string): Promise<{
   return null;
 };
 
+export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [yearMonth: string]: number } | null> => {
+  if (!ticker || !/^[A-Z]{1,5}$/i.test(ticker)) return null;
+  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker.toUpperCase()}?events=div&interval=1d&range=10y`;
+  const proxyFns = [
+    (u: string) => `/api/proxy?url=${encodeURIComponent(u)}`,
+    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    (u: string) => `https://api.codetabs.com/v1/proxy?quest=${u}`,
+  ];
+  for (const makeProxy of proxyFns) {
+    try {
+      const res = await fetch(makeProxy(targetUrl), { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const dividends = data?.chart?.result?.[0]?.events?.dividends;
+      if (!dividends) continue;
+      const entries = Object.values(dividends) as Array<{ amount: number; date: number }>;
+      if (!entries.length) continue;
+      const monthData: { [yearMonth: string]: number } = {};
+      entries.forEach(({ amount, date }) => {
+        const d = new Date(date * 1000);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        monthData[key] = (monthData[key] || 0) + amount;
+      });
+      return Object.keys(monthData).length > 0 ? monthData : null;
+    } catch { continue; }
+  }
+  return null;
+};
+
 export const fetchNaverKospi = async () => {
   const targetUrl = `https://m.stock.naver.com/api/index/KOSPI/basic`;
   const proxies = [
