@@ -36,10 +36,9 @@ function parseDividendApiResult(result) {
   return monthData;
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, compact = false, usdkrw = 1300 }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300 }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
-  // field: 'gross' | 'afterTax'  — 세전/세후 셀 구분
   const [editingCell, setEditingCell] = useState(null);
   const fetchedRef = useRef(new Set());
   const inputRef = useRef(null);
@@ -102,16 +101,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     fetchMissing();
   }, [stockKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fix: 셀 identity(code+monthIdx+field)가 바뀔 때만 focus/select 실행
+  const editingCellKey = editingCell
+    ? `${editingCell.portfolioId}-${editingCell.code ?? editingCell.rowId}-${editingCell.monthIdx}-${editingCell.field}`
+    : null;
+
   useEffect(() => {
-    if (editingCell && inputRef.current && editingCell.field !== 'afterTax') {
+    if (editingCell && inputRef.current) {
       inputRef.current.focus();
       inputRef.current.select();
     }
-    if (editingCell?.field === 'afterTax' && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editingCell]);
+  }, [editingCellKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRefreshAll = useCallback(async () => {
     fetchedRef.current.clear();
@@ -236,6 +236,33 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     return result;
   }, [nonGoldPortfolios]);
 
+  // 수동 추가 행 (포트폴리오에서 제거된 종목의 과거 배당금 기록용)
+  const extraActualRows = useMemo(() => {
+    const result = [];
+    nonGoldPortfolios.forEach(pf => {
+      const isOverseas = pf.accountType === 'overseas';
+      (pf.extraDividendRows || []).forEach(row => {
+        const monthData = Array.from({ length: 12 }, (_, i) => {
+          const mo = String(i + 1).padStart(2, '0');
+          const yearMonth = `${CURRENT_YEAR}-${mo}`;
+          const entry = row.monthData?.[yearMonth] || {};
+          return { yearMonth, afterTaxUsd: entry.afterTaxUsd || 0, afterTaxKrw: entry.afterTaxKrw || 0 };
+        });
+        result.push({
+          portfolioId: pf.id,
+          rowId: row.id,
+          code: row.code || '',
+          isOverseas,
+          isExtra: true,
+          monthData,
+          annualAfterKrw: monthData.reduce((s, d) => s + d.afterTaxKrw, 0),
+          annualAfterUsd: isOverseas ? monthData.reduce((s, d) => s + d.afterTaxUsd, 0) : 0,
+        });
+      });
+    });
+    return result;
+  }, [nonGoldPortfolios]);
+
   // compact 모드 — 계좌별 월 합계
   const compactExpectedRows = useMemo(() => {
     if (!compact) return [];
@@ -268,7 +295,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const monthData = Array.from({ length: 12 }, (_, i) => {
         const mo = String(i + 1).padStart(2, '0');
         const yearMonth = `${CURRENT_YEAR}-${mo}`;
-        const amount = (pf.portfolio || []).reduce((sum, item) => {
+        let amount = (pf.portfolio || []).reduce((sum, item) => {
           if (!getCodeType(item.code, pf)) return sum;
           const qty = cleanNum(item.quantity);
           if (!qty) return sum;
@@ -289,6 +316,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             return sum + (yearMonth in codeActual ? codeActual[yearMonth] : predicted);
           }
         }, 0);
+        // 수동 추가 행 포함
+        amount += (pf.extraDividendRows || []).reduce((s, row) => {
+          const entry = row.monthData?.[yearMonth] || {};
+          return s + (entry.afterTaxKrw || 0);
+        }, 0);
         return { amount, yearMonth };
       });
       const annual = monthData.reduce((s, d) => s + d.amount, 0);
@@ -298,7 +330,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
 
   const commitEdit = () => {
     if (!editingCell) return;
-    const { portfolioId, code, yearMonth, field, isOverseas } = editingCell;
+    const { portfolioId, code, yearMonth, field, isOverseas, isExtra, rowId } = editingCell;
+    if (isExtra) {
+      const usdNum = isOverseas ? (parseFloat(String(editingCell.usdValue || '').replace(/,/g, '')) || 0) : 0;
+      const krwNum = parseFloat(String(isOverseas ? (editingCell.krwValue || '') : (editingCell.value || '')).replace(/,/g, '')) || 0;
+      updatePortfolioExtraRowMonth(portfolioId, rowId, yearMonth, usdNum, krwNum);
+      setEditingCell(null);
+      return;
+    }
     if (field === 'gross' && isOverseas) {
       const num = parseFloat(String(editingCell.value).replace(/,/g, '')) || 0;
       updatePortfolioActualDividendUsd(portfolioId, code, yearMonth, num);
@@ -339,6 +378,25 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       portfolioId: row.portfolioId, code: row.code, monthIdx,
       yearMonth: d.yearMonth, isOverseas: false, field: 'krw',
       value: d.amount > 0 ? String(d.amount) : '',
+    });
+  };
+
+  const handleExtraOverseasCellClick = (row, monthIdx) => {
+    const d = row.monthData[monthIdx];
+    setEditingCell({
+      portfolioId: row.portfolioId, rowId: row.rowId, monthIdx,
+      yearMonth: d.yearMonth, isOverseas: true, field: 'afterTax', isExtra: true,
+      usdValue: d.afterTaxUsd > 0 ? String(Number(d.afterTaxUsd.toFixed(4))) : '',
+      krwValue: d.afterTaxKrw > 0 ? String(d.afterTaxKrw) : '',
+    });
+  };
+
+  const handleExtraKrwCellClick = (row, monthIdx) => {
+    const d = row.monthData[monthIdx];
+    setEditingCell({
+      portfolioId: row.portfolioId, rowId: row.rowId, monthIdx,
+      yearMonth: d.yearMonth, isOverseas: false, field: 'krw', isExtra: true,
+      value: d.afterTaxKrw > 0 ? String(d.afterTaxKrw) : '',
     });
   };
 
@@ -419,33 +477,33 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   );
   const annualUsdTaxTotal = monthlyUsdTaxTotals.reduce((s, v) => s + v, 0);
 
-  // ── 월 입금 내역 탭 totals ──
-  const actualHasOverseas = actualRows.some(r => r.isOverseas);
+  // ── 월 입금 내역 탭 totals (수동 추가 행 포함) ──
+  const actualHasOverseas = actualRows.some(r => r.isOverseas) || extraActualRows.some(r => r.isOverseas);
 
-  // 세전(gross) 월별 합계
   const actualMonthlyGrossKrw = Array.from({ length: 12 }, (_, i) =>
-    actualRows.reduce((s, r) => s + (r.isOverseas ? r.monthData[i].grossKrw : r.monthData[i].amount), 0)
+    actualRows.reduce((s, r) => s + (r.isOverseas ? r.monthData[i].grossKrw : r.monthData[i].amount), 0) +
+    extraActualRows.reduce((s, r) => s + r.monthData[i].afterTaxKrw, 0)
   );
   const actualMonthlyGrossUsd = Array.from({ length: 12 }, (_, i) =>
-    actualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].grossUsd, 0)
+    actualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].grossUsd, 0) +
+    extraActualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].afterTaxUsd, 0)
   );
-  // 세후(after-tax) 월별 합계
   const actualMonthlyAfterKrw = Array.from({ length: 12 }, (_, i) =>
     actualRows.reduce((s, r) => {
       if (r.isOverseas) return s + r.monthData[i].afterTaxKrw;
       const d = r.monthData[i];
       return s + Math.max(0, d.amount - getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth));
-    }, 0)
+    }, 0) +
+    extraActualRows.reduce((s, r) => s + r.monthData[i].afterTaxKrw, 0)
   );
   const actualMonthlyAfterUsd = Array.from({ length: 12 }, (_, i) =>
-    actualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].afterTaxUsd, 0)
+    actualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].afterTaxUsd, 0) +
+    extraActualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].afterTaxUsd, 0)
   );
-  // 연간 합계
   const actualAnnualGrossKrw = actualMonthlyGrossKrw.reduce((s, v) => s + v, 0);
   const actualAnnualGrossUsd = actualMonthlyGrossUsd.reduce((s, v) => s + v, 0);
   const actualAnnualAfterKrw = actualMonthlyAfterKrw.reduce((s, v) => s + v, 0);
   const actualAnnualAfterUsd = actualMonthlyAfterUsd.reduce((s, v) => s + v, 0);
-  // 비해외 월별 세금 (과세합계 행용 — !actualHasOverseas 시만 표시)
   const actualMonthlyTaxTotals = Array.from({ length: 12 }, (_, i) =>
     actualRows.filter(r => !r.isOverseas).reduce((s, r) => {
       const d = r.monthData[i];
@@ -468,7 +526,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const compactActualTaxMap = {};
   compactActualRows.forEach(row => {
     const pf = nonGoldPortfolios.find(p => p.id === row.portfolioId);
-    // 해외 계좌는 이미 세후 금액이므로 세금 행 불필요
     if (!pf || pf.accountType === 'overseas') {
       compactActualTaxMap[row.portfolioId] = { monthlyTax: Array(12).fill(0), annualTax: 0 };
       return;
@@ -709,6 +766,15 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             )}
           </div>
         )}
+        {activeTab === 'actual' && addPortfolioExtraRow && (
+          <button
+            onClick={() => addPortfolioExtraRow(nonGoldPortfolios[0]?.id)}
+            className="px-2.5 py-1 text-xs font-bold rounded-md border border-emerald-700/60 text-emerald-400 hover:bg-emerald-900/20 active:scale-95 transition-all"
+            title="과거 종목 배당금 행 추가"
+          >
+            + 행 추가
+          </button>
+        )}
         <button
           onClick={handleRefreshAll}
           disabled={loading}
@@ -729,7 +795,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             <table className="w-full text-[11px] text-center">
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                 <tr>
-                  <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
+                  <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">코드</th>
                   <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
                   {MONTHS.map(m => (
                     <th key={m} className="py-2.5 px-1 min-w-[68px]">{m}</th>
@@ -741,7 +807,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 {expectedRows.map((row) => (
                   <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                     <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
-                      <div className="line-clamp-1">{row.name}</div>
+                      <div className="line-clamp-1">{row.code}</div>
                     </td>
                     <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
                     {row.monthData.map((d, i) => (
@@ -862,13 +928,13 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       {/* 월 입금 내역 탭 */}
       {activeTab === 'actual' && (
         <div className="overflow-x-auto">
-          {actualRows.length === 0 ? (
+          {actualRows.length === 0 && extraActualRows.length === 0 ? (
             <div className="py-8 text-center text-gray-500 text-xs">주식·ETF 종목이 없습니다.</div>
           ) : (
             <table className="w-full text-[11px] text-center">
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                 <tr>
-                  <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목명</th>
+                  <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">코드</th>
                   <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
                   {MONTHS.map(m => (
                     <th key={m} colSpan={actualHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[68px]">{m}</th>
@@ -894,13 +960,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 {actualRows.map((row) => (
                   <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                     <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
-                      <div className="line-clamp-1">{row.name}</div>
+                      <div className="line-clamp-1">{row.code}</div>
                     </td>
                     <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
                     {row.monthData.map((d, i) => {
                       const isEditingCell = editingCell?.portfolioId === row.portfolioId
                         && editingCell?.code === row.code
-                        && editingCell?.monthIdx === i;
+                        && editingCell?.monthIdx === i
+                        && !editingCell?.isExtra;
                       const isEditingGross = isEditingCell && editingCell?.field === 'gross';
                       const isEditingAfterTax = isEditingCell && editingCell?.field === 'afterTax';
                       const isLastMonthCol = i === 11;
@@ -908,7 +975,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       if (row.isOverseas) {
                         return (
                           <React.Fragment key={i}>
-                            {/* 세전 셀 — 클릭 시 세전 USD 편집 */}
                             <td
                               onClick={() => !isEditingCell && handleGrossCellClick(row, i)}
                               className={`py-0.5 px-1 text-center text-[10px] cursor-pointer transition-colors border-r border-gray-700/20 ${
@@ -938,7 +1004,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 </div>
                               )}
                             </td>
-                            {/* 세후 셀 — 클릭 시 세후 USD/KRW 편집 */}
                             <td
                               onClick={() => !isEditingCell && handleAfterTaxCellClick(row, i)}
                               className={`py-0.5 px-1 text-center text-[10px] cursor-pointer transition-colors ${
@@ -1035,7 +1100,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         );
                       }
                     })}
-                    {/* 연간합계 열 */}
                     {row.isOverseas ? (
                       <React.Fragment key="annual">
                         <td className={`py-2 px-2 text-center font-bold border-r border-gray-700/20 ${row.annual > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
@@ -1068,6 +1132,132 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     )}
                   </tr>
                 ))}
+                {/* 수동 추가 행 */}
+                {extraActualRows.map((row) => {
+                  return (
+                    <tr key={`extra-${row.portfolioId}-${row.rowId}`} className="border-b border-gray-700/40 hover:bg-gray-800/30 bg-gray-900/10">
+                      <td className="py-2 px-2 text-left sticky left-0 z-[5] bg-[#0a1120] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={row.code}
+                            onChange={e => updatePortfolioExtraRowCode(row.portfolioId, row.rowId, e.target.value)}
+                            placeholder="코드/종목명"
+                            className="w-20 bg-transparent text-blue-300/80 text-[10px] border-b border-gray-700/40 outline-none placeholder-gray-700"
+                          />
+                          <button
+                            onClick={() => deletePortfolioExtraRow(row.portfolioId, row.rowId)}
+                            className="text-gray-600 hover:text-red-400 transition-colors text-[10px] ml-0.5"
+                            title="행 삭제"
+                          >✕</button>
+                        </div>
+                      </td>
+                      <td className="py-2 px-2 text-gray-600 text-[10px]">-</td>
+                      {row.monthData.map((d, i) => {
+                        const isEditingCell = editingCell?.isExtra && editingCell?.rowId === row.rowId && editingCell?.monthIdx === i;
+                        const isEditingAfterTax = isEditingCell && editingCell?.field === 'afterTax';
+                        const isEditingKrw = isEditingCell && editingCell?.field === 'krw';
+                        const isLastMonthCol = i === 11;
+
+                        if (row.isOverseas) {
+                          return (
+                            <React.Fragment key={i}>
+                              <td className="py-0.5 px-1 text-center text-[10px] text-gray-700 border-r border-gray-700/20">-</td>
+                              <td
+                                onClick={() => !isEditingCell && handleExtraOverseasCellClick(row, i)}
+                                className={`py-0.5 px-1 text-center text-[10px] cursor-pointer transition-colors ${isLastMonthCol ? '' : 'border-r border-gray-600/40'} ${
+                                  isEditingAfterTax ? 'bg-emerald-900/30' :
+                                  d.afterTaxUsd > 0 || d.afterTaxKrw > 0 ? 'text-emerald-300 font-bold bg-emerald-900/10 hover:bg-emerald-900/30' :
+                                  'text-gray-700 hover:bg-gray-700/20'
+                                }`}
+                              >
+                                {isEditingAfterTax ? (
+                                  <div className="flex flex-col gap-0.5 py-0.5">
+                                    <div className="flex items-center gap-0.5 justify-center">
+                                      <span className="text-[8px] text-gray-500">$</span>
+                                      <input
+                                        ref={inputRef}
+                                        type="text" inputMode="decimal"
+                                        value={editingCell.usdValue}
+                                        onChange={e => setEditingCell(prev => ({ ...prev, usdValue: e.target.value }))}
+                                        onBlur={handleAfterTaxBlur}
+                                        onFocus={handleAfterTaxFocus}
+                                        onKeyDown={handleCellKeyDown}
+                                        className="w-14 bg-transparent text-emerald-300 text-right text-[10px] outline-none border-b border-emerald-500/60"
+                                        placeholder="세후 $"
+                                      />
+                                    </div>
+                                    <div className="flex items-center gap-0.5 justify-center">
+                                      <span className="text-[8px] text-gray-500">₩</span>
+                                      <input
+                                        ref={krwInputRef}
+                                        type="text" inputMode="numeric"
+                                        value={editingCell.krwValue}
+                                        onChange={e => setEditingCell(prev => ({ ...prev, krwValue: e.target.value }))}
+                                        onBlur={handleAfterTaxBlur}
+                                        onFocus={handleAfterTaxFocus}
+                                        onKeyDown={handleCellKeyDown}
+                                        className="w-14 bg-transparent text-emerald-300/80 text-right text-[10px] outline-none border-b border-emerald-500/40"
+                                        placeholder="세후 ₩"
+                                      />
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-col items-center gap-0">
+                                    <span>{d.afterTaxUsd > 0 ? formatUsd(d.afterTaxUsd) : '-'}</span>
+                                    {d.afterTaxKrw > 0 && <span className="text-gray-500 text-[9px]">{formatCurrency(d.afterTaxKrw)}</span>}
+                                  </div>
+                                )}
+                              </td>
+                            </React.Fragment>
+                          );
+                        } else {
+                          return (
+                            <td
+                              key={i}
+                              colSpan={actualHasOverseas ? 2 : 1}
+                              onClick={() => !isEditingCell && handleExtraKrwCellClick(row, i)}
+                              className={`py-0.5 px-0.5 text-center text-[10px] cursor-pointer transition-colors ${isLastMonthCol ? '' : 'border-r border-gray-600/40'} ${
+                                isEditingKrw ? 'bg-blue-900/40' :
+                                d.afterTaxKrw > 0 ? 'text-emerald-300 font-bold bg-emerald-900/20 hover:bg-emerald-900/40' :
+                                'text-gray-700 hover:bg-gray-700/30'
+                              }`}
+                            >
+                              {isEditingKrw ? (
+                                <input
+                                  ref={inputRef}
+                                  type="text" inputMode="numeric"
+                                  value={editingCell.value}
+                                  onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
+                                  onBlur={commitEdit}
+                                  onKeyDown={handleCellKeyDown}
+                                  className="w-full bg-transparent text-white text-right text-[10px] outline-none border-b border-blue-400 px-1"
+                                />
+                              ) : (
+                                <span>{d.afterTaxKrw > 0 ? formatCurrency(d.afterTaxKrw) : '-'}</span>
+                              )}
+                            </td>
+                          );
+                        }
+                      })}
+                      {row.isOverseas ? (
+                        <React.Fragment key="annual">
+                          <td className="py-2 px-2 text-center font-bold text-gray-600 border-r border-gray-700/20">-</td>
+                          <td className={`py-2 px-2 text-center font-bold ${row.annualAfterKrw > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
+                            <div className="flex flex-col items-center gap-0">
+                              {row.annualAfterUsd > 0 && <span className="text-[9px] font-normal">{formatUsd(row.annualAfterUsd)}</span>}
+                              <span>{row.annualAfterKrw > 0 ? formatCurrency(row.annualAfterKrw) : '-'}</span>
+                            </div>
+                          </td>
+                        </React.Fragment>
+                      ) : (
+                        <td colSpan={actualHasOverseas ? 2 : 1} className={`py-2 px-2 text-center font-bold ${row.annualAfterKrw > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
+                          {row.annualAfterKrw > 0 ? formatCurrency(row.annualAfterKrw) : '-'}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
               <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
                 <tr>

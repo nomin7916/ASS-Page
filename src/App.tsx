@@ -328,6 +328,10 @@ export default function App() {
     updatePortfolioDividendTaxAmount,
     updatePortfolioActualAfterTaxUsd,
     updatePortfolioActualAfterTaxKrw,
+    addPortfolioExtraRow,
+    updatePortfolioExtraRowCode,
+    deletePortfolioExtraRow,
+    updatePortfolioExtraRowMonth,
   } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
 
   // ── 섹션 접기/펼치기 (계좌별 독립) ──
@@ -1967,6 +1971,10 @@ export default function App() {
             updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
             updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd}
             updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw}
+            addPortfolioExtraRow={addPortfolioExtraRow}
+            updatePortfolioExtraRowCode={updatePortfolioExtraRowCode}
+            deletePortfolioExtraRow={deletePortfolioExtraRow}
+            updatePortfolioExtraRowMonth={updatePortfolioExtraRowMonth}
             usdkrw={marketIndicators.usdkrw || 1300}
           />
         )}

@@ -330,6 +330,44 @@ export function usePortfolioState({
     }));
   };
 
+  // ── 수동 추가 배당금 행 (포트폴리오에서 제거된 종목 기록용) ──
+  const addPortfolioExtraRow = (portfolioId) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const existing = p.extraDividendRows || [];
+      return { ...p, extraDividendRows: [...existing, { id: generateId(), code: '', monthData: {} }] };
+    }));
+  };
+
+  const updatePortfolioExtraRowCode = (portfolioId, rowId, code) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const rows = (p.extraDividendRows || []).map(r => r.id === rowId ? { ...r, code } : r);
+      return { ...p, extraDividendRows: rows };
+    }));
+  };
+
+  const deletePortfolioExtraRow = (portfolioId, rowId) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      return { ...p, extraDividendRows: (p.extraDividendRows || []).filter(r => r.id !== rowId) };
+    }));
+  };
+
+  const updatePortfolioExtraRowMonth = (portfolioId, rowId, yearMonth, afterTaxUsd, afterTaxKrw) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const rows = (p.extraDividendRows || []).map(r => {
+        if (r.id !== rowId) return r;
+        const monthData = { ...r.monthData };
+        if (afterTaxKrw > 0 || afterTaxUsd > 0) monthData[yearMonth] = { afterTaxUsd, afterTaxKrw };
+        else delete monthData[yearMonth];
+        return { ...r, monthData };
+      });
+      return { ...p, extraDividendRows: rows };
+    }));
+  };
+
   // ── 포트폴리오 항목 CRUD ──
   const handleUpdate = (id, field, value) =>
     setPortfolio(prev => prev.map(p =>
@@ -425,5 +463,9 @@ export function usePortfolioState({
     updatePortfolioActualDividendUsd,
     updatePortfolioActualAfterTaxUsd,
     updatePortfolioActualAfterTaxKrw,
+    addPortfolioExtraRow,
+    updatePortfolioExtraRowCode,
+    deletePortfolioExtraRow,
+    updatePortfolioExtraRowMonth,
   };
 }
