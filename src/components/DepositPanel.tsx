@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState } from 'react';
-import { Plus, Download, Trash2, Calendar } from 'lucide-react';
+import { Plus, Download, Trash2, Calendar, Maximize2 } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { sortArrow } from '../chartUtils';
 
@@ -23,6 +23,23 @@ export default function DepositPanel({
   const isOverseas = activePortfolioAccountType === 'overseas';
   const [editField, setEditField] = useState(null);
   const [editVal, setEditVal] = useState('');
+  const [memoModal, setMemoModal] = useState(null); // { id, originalIndex, type: 'd1'|'d2', val }
+
+  const openMemoModal = (h, type) => setMemoModal({ id: h.id, originalIndex: h.originalIndex, type, val: h.memo ?? '' });
+
+  const saveMemoModal = () => {
+    if (!memoModal) return;
+    if (memoModal.type === 'd1') {
+      const n = [...depositHistory];
+      n[memoModal.originalIndex] = { ...n[memoModal.originalIndex], memo: memoModal.val };
+      setDepositHistory(n);
+    } else {
+      const n = [...depositHistory2];
+      n[memoModal.originalIndex] = { ...n[memoModal.originalIndex], memo: memoModal.val };
+      setDepositHistory2(n);
+    }
+    setMemoModal(null);
+  };
 
   const amountDisplay = (h, prefix) =>
     editField === `${prefix}-${h.id}` ? editVal
@@ -83,7 +100,10 @@ export default function DepositPanel({
                       )}
                       <td className="py-2 px-1 border-r border-gray-600 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end leading-tight"><span className="text-yellow-400">${cleanNum(h.cumulative).toFixed(2)}</span><span className="text-[10px] text-gray-500">{formatCurrency(cleanNum(h.cumulative) * (marketIndicators.usdkrw || 1))}</span></div> : <span className="text-yellow-400">{formatCurrency(h.cumulative)}</span>}</td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d1memo" className="w-full bg-transparent outline-none px-2 py-2 text-gray-300 text-[11px] caret-blue-400" value={h.memo ?? ''} onChange={e => { const n = [...depositHistory]; n[h.originalIndex] = { ...n[h.originalIndex], memo: e.target.value }; setDepositHistory(n); }} onKeyDown={e => handleTableKeyDown(e, 'd1memo')} />
+                        <div className="flex items-center">
+                          <input type="text" data-col="d1memo" className="flex-1 min-w-0 bg-transparent outline-none px-2 py-2 text-gray-300 text-[11px] caret-blue-400 overflow-hidden" value={h.memo ?? ''} onChange={e => { const n = [...depositHistory]; n[h.originalIndex] = { ...n[h.originalIndex], memo: e.target.value }; setDepositHistory(n); }} onKeyDown={e => handleTableKeyDown(e, 'd1memo')} />
+                          <button onClick={() => openMemoModal(h, 'd1')} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
+                        </div>
                       </td>
                       <td className="py-2 text-center"><button onClick={() => setDepositHistory(depositHistory.filter(x => x.id !== h.id))} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
                     </tr>
@@ -133,7 +153,10 @@ export default function DepositPanel({
                       )}
                       <td className="py-2 px-1 border-r border-gray-600 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end leading-tight"><span className="text-yellow-400">${cleanNum(h.cumulative).toFixed(2)}</span><span className="text-[10px] text-gray-500">{formatCurrency(cleanNum(h.cumulative) * (marketIndicators.usdkrw || 1))}</span></div> : <span className="text-yellow-400">{formatCurrency(h.cumulative)}</span>}</td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d2memo" className="w-full bg-transparent outline-none px-2 py-2 text-gray-300 text-[11px] caret-blue-400" value={h.memo ?? ''} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex] = { ...n[h.originalIndex], memo: e.target.value }; setDepositHistory2(n); }} onKeyDown={e => handleTableKeyDown(e, 'd2memo')} />
+                        <div className="flex items-center">
+                          <input type="text" data-col="d2memo" className="flex-1 min-w-0 bg-transparent outline-none px-2 py-2 text-gray-300 text-[11px] caret-blue-400 overflow-hidden" value={h.memo ?? ''} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex] = { ...n[h.originalIndex], memo: e.target.value }; setDepositHistory2(n); }} onKeyDown={e => handleTableKeyDown(e, 'd2memo')} />
+                          <button onClick={() => openMemoModal(h, 'd2')} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
+                        </div>
                       </td>
                       <td className="py-2 text-center"><button onClick={() => setDepositHistory2(depositHistory2.filter(x => x.id !== h.id))} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
                     </tr>
@@ -142,6 +165,25 @@ export default function DepositPanel({
               </table>
             </div>
           </div>
+      {memoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setMemoModal(null)}>
+          <div className="bg-[#1e293b] border border-gray-600 rounded-xl p-4 w-80 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="text-white text-xs font-bold mb-2">메모</div>
+            <textarea
+              className="w-full bg-[#0f172a] border border-gray-600 rounded text-gray-200 text-[12px] p-2 outline-none resize-none caret-blue-400 focus:border-blue-500 leading-relaxed"
+              rows={6}
+              autoFocus
+              value={memoModal.val}
+              onChange={e => setMemoModal(prev => ({ ...prev, val: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Escape') setMemoModal(null); }}
+            />
+            <div className="flex justify-end gap-2 mt-2">
+              <button onClick={() => setMemoModal(null)} className="text-gray-400 hover:text-white text-xs px-3 py-1 rounded border border-gray-600 hover:border-gray-400 transition-colors">취소</button>
+              <button onClick={saveMemoModal} className="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1 rounded transition-colors">저장</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
