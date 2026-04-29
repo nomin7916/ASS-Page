@@ -26,6 +26,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const [fundModal, setFundModal] = useState(null);
   const [modalAddInvest, setModalAddInvest] = useState('');
   const [modalEvalAfter, setModalEvalAfter] = useState('');
+  const [editingInvestId, setEditingInvestId] = useState(null);
+  const [editingInvestVal, setEditingInvestVal] = useState('');
 
   if (!totals) return null;
 
@@ -262,7 +264,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {/* 투자금액 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
                     {isOverseas
-                      ? <input type="text" data-col="investAmountUSD" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => e.target.select()} onChange={e => { const usd = cleanNum(e.target.value); const qty = cleanNum(item.quantity); onUpdate(item.id, 'purchasePrice', qty > 0 ? usd / qty : 0); }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
+                      ? <input type="text" data-col="investAmountUSD" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={editingInvestId === item.id ? editingInvestVal : formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => { const usd = cleanNum(item.purchasePrice) * cleanNum(item.quantity); setEditingInvestId(item.id); setEditingInvestVal(usd > 0 ? String(usd) : ''); e.target.select(); }} onChange={e => setEditingInvestVal(e.target.value)} onBlur={() => { const usd = cleanNum(editingInvestVal); const qty = cleanNum(item.quantity); onUpdate(item.id, 'purchasePrice', qty > 0 ? usd / qty : 0); setEditingInvestId(null); }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
                       : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
                     }
                   </td>
