@@ -725,7 +725,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             <button
                               onClick={() => updatePortfolioDividendSeparateTax(row.portfolioId, !isSeparateTax(row.portfolioId))}
                               title={isSeparateTax(row.portfolioId) ? '분리과세 ON (과세합계 제외)' : '분리과세 OFF (과세합계 포함)'}
-                              className={`text-[10px] font-bold tracking-wide transition-colors shrink-0 ${isSeparateTax(row.portfolioId) ? 'text-amber-400' : 'text-gray-600 hover:text-gray-400'}`}
+                              className={`text-[10px] font-bold tracking-wide transition-colors shrink-0 ${isSeparateTax(row.portfolioId) ? 'text-sky-300' : 'text-gray-600 hover:text-gray-400'}`}
                             >TAX</button>
                           )}
                         </div>
