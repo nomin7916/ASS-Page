@@ -389,9 +389,15 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const entry = row.monthData?.[yearMonth] || {};
             return (entry.afterTaxKrw || 0) > 0;
           });
-          const taxKrw = (amount > 0 && taxRate > 0 && taxRate < 100)
-            ? Math.round(amount * taxRate / (100 - taxRate))
-            : 0;
+          const taxKrw = (pf.portfolio || []).reduce((sum, item) => {
+            if (!getCodeType(item.code, pf)) return sum;
+            const codeActual = actualDividend[item.code] || {};
+            if (!(yearMonth in codeActual)) return sum;
+            return sum + ((pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] || 0);
+          }, 0) + (pf.extraDividendRows || []).reduce((s, row) => {
+            const entry = row.monthData?.[yearMonth] || {};
+            return s + (entry.taxKrw || 0);
+          }, 0);
           return { amount, amountUsd: 0, taxKrw, yearMonth, hasManual };
         }
       });
@@ -624,8 +630,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const actualMonthlyTaxTotals = Array.from({ length: 12 }, (_, i) =>
     actualRows.filter(r => !r.isOverseas).reduce((s, r) => {
       const d = r.monthData[i];
-      return s + getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual, r.qty);
-    }, 0)
+      if (!d.hasManual) return s;
+      return s + (d.taxAmount || 0);
+    }, 0) +
+    extraActualRows.filter(r => !r.isOverseas).reduce((s, r) => s + (r.monthData[i].taxKrw || 0), 0)
   );
   const actualAnnualTaxTotal = actualMonthlyTaxTotals.reduce((s, v) => s + v, 0);
 
@@ -1701,7 +1709,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 {!actualHasOverseas && actualAnnualTaxTotal > 0 && (<>
                   <tr className="text-orange-300/60">
                     <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
-                      과세합계({getTaxRate(nonGoldPortfolios[0]?.id)}%)
+                      과세합계
                     </td>
                     {actualMonthlyTaxTotals.map((tax, i) => (
                       <td key={i} className="py-1 px-1 text-center text-[9px]">
