@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Plus, Download, Trash2, Calendar, Maximize2, X, Check } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { sortArrow } from '../chartUtils';
@@ -24,8 +24,30 @@ export default function DepositPanel({
   const [editField, setEditField] = useState(null);
   const [editVal, setEditVal] = useState('');
   const [memoModal, setMemoModal] = useState(null); // { id, originalIndex, type: 'd1'|'d2', val }
+  const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
+  const memoDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
 
-  const openMemoModal = (h, type) => setMemoModal({ id: h.id, originalIndex: h.originalIndex, type, val: h.memo ?? '' });
+  const openMemoModal = (h, type) => {
+    setMemoPos({ x: window.innerWidth / 2 - 128, y: window.innerHeight / 2 - 180 });
+    setMemoModal({ id: h.id, originalIndex: h.originalIndex, type, val: h.memo ?? '' });
+  };
+
+  const handleMemoDragStart = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    memoDrag.current = { active: true, offsetX: e.clientX - memoPos.x, offsetY: e.clientY - memoPos.y };
+    const onMove = (e) => {
+      if (!memoDrag.current.active) return;
+      setMemoPos({ x: e.clientX - memoDrag.current.offsetX, y: e.clientY - memoDrag.current.offsetY });
+    };
+    const onUp = () => {
+      memoDrag.current.active = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   const saveMemoModal = () => {
     if (!memoModal) return;
@@ -166,24 +188,24 @@ export default function DepositPanel({
             </div>
           </div>
       {memoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setMemoModal(null)}>
-          <div className="w-64 shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-            {/* 헤더 */}
-            <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setMemoModal(null)}>
+          <div className="absolute w-64 shadow-2xl overflow-hidden" style={{ left: memoPos.x, top: memoPos.y }} onClick={e => e.stopPropagation()}>
+            {/* 헤더 — 드래그 핸들 */}
+            <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleMemoDragStart}>
               <div className="flex items-center gap-2.5">
                 <button
                   onClick={() => setMemoModal(null)}
-                  className="w-3 h-3 rounded-full bg-gray-800 hover:bg-pink-600 flex items-center justify-center group transition-all"
+                  className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center group transition-all"
                   title="취소 (Esc)"
                 >
-                  <X size={7} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <X size={7} className="text-white" />
                 </button>
                 <button
                   onClick={saveMemoModal}
-                  className="w-3 h-3 rounded-full bg-gray-800 hover:bg-purple-600 flex items-center justify-center group transition-all"
+                  className="w-3 h-3 rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center group transition-all"
                   title="저장 (Ctrl+Enter)"
                 >
-                  <Check size={7} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <Check size={7} className="text-white" />
                 </button>
               </div>
               <span className="text-[11px] font-bold tracking-[0.25em] bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 bg-clip-text text-transparent select-none">MEMO</span>
