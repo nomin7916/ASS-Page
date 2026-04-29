@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { cleanNum, formatCurrency } from '../utils';
-import { fetchDividendHistory, fetchYahooDividendHistory } from '../api';
+import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -259,16 +259,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           const mo = String(i + 1).padStart(2, '0');
           const yearMonth = `${CURRENT_YEAR}-${mo}`;
           const entry = row.monthData?.[yearMonth] || {};
-          return { yearMonth, afterTaxUsd: entry.afterTaxUsd || 0, afterTaxKrw: entry.afterTaxKrw || 0 };
+          return { yearMonth, afterTaxUsd: entry.afterTaxUsd || 0, afterTaxKrw: entry.afterTaxKrw || 0, taxKrw: entry.taxKrw || 0 };
         });
         result.push({
           portfolioId: pf.id,
           rowId: row.id,
           code: row.code || '',
+          name: row.name || '',
           isOverseas,
           isExtra: true,
           monthData,
           annualAfterKrw: monthData.reduce((s, d) => s + d.afterTaxKrw, 0),
+          annualTaxKrw: monthData.reduce((s, d) => s + d.taxKrw, 0),
           annualAfterUsd: isOverseas ? monthData.reduce((s, d) => s + d.afterTaxUsd, 0) : 0,
         });
       });
@@ -408,9 +410,15 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     if (!editingCell) return;
     const { portfolioId, code, yearMonth, field, isOverseas, isExtra, rowId } = editingCell;
     if (isExtra) {
-      const usdNum = isOverseas ? (parseFloat(String(editingCell.usdValue || '').replace(/,/g, '')) || 0) : 0;
-      const krwNum = parseFloat(String(isOverseas ? (editingCell.krwValue || '') : (editingCell.value || '')).replace(/,/g, '')) || 0;
-      updatePortfolioExtraRowMonth(portfolioId, rowId, yearMonth, usdNum, krwNum);
+      if (isOverseas) {
+        const usdNum = parseFloat(String(editingCell.usdValue || '').replace(/,/g, '')) || 0;
+        const krwNum = parseFloat(String(editingCell.krwValue || '').replace(/,/g, '')) || 0;
+        updatePortfolioExtraRowMonth(portfolioId, rowId, yearMonth, usdNum, krwNum, 0);
+      } else {
+        const krwNum = parseFloat(String(editingCell.value || '').replace(/,/g, '')) || 0;
+        const taxNum = parseFloat(String(editingCell.taxValue || '').replace(/,/g, '')) || 0;
+        updatePortfolioExtraRowMonth(portfolioId, rowId, yearMonth, 0, krwNum, taxNum);
+      }
       setEditingCell(null);
       return;
     }
@@ -473,8 +481,19 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       portfolioId: row.portfolioId, rowId: row.rowId, monthIdx,
       yearMonth: d.yearMonth, isOverseas: false, field: 'krw', isExtra: true,
       value: d.afterTaxKrw > 0 ? String(d.afterTaxKrw) : '',
+      taxValue: d.taxKrw > 0 ? String(d.taxKrw) : '',
     });
   };
+
+  const handleExtraRowCodeBlur = useCallback(async (portfolioId, rowId, code, isOverseas) => {
+    if (!code || code.trim().length < 2) return;
+    const info = isOverseas
+      ? await fetchUsStockInfo(code.trim())
+      : await fetchStockInfo(code.trim());
+    if (info?.name) {
+      updatePortfolioExtraRowCode(portfolioId, rowId, code.trim(), info.name);
+    }
+  }, [updatePortfolioExtraRowCode]);
 
   const handleCellKeyDown = (e) => {
     if (e.key === 'Enter') commitEdit();
@@ -580,7 +599,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const d = r.monthData[i];
       return s + (d.hasManual ? d.amount + (d.taxAmount || 0) : 0);
     }, 0) +
-    extraActualRows.reduce((s, r) => s + r.monthData[i].afterTaxKrw, 0)
+    extraActualRows.reduce((s, r) => s + r.monthData[i].afterTaxKrw + (r.monthData[i].taxKrw || 0), 0)
   );
   const actualMonthlyGrossUsd = Array.from({ length: 12 }, (_, i) =>
     actualRows.filter(r => r.isOverseas).reduce((s, r) => s + (r.monthData[i].hasManual ? r.monthData[i].grossUsd : 0), 0) +
@@ -1470,17 +1489,21 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                   return (
                     <tr key={`extra-${row.portfolioId}-${row.rowId}`} className="border-b border-gray-700/40 hover:bg-gray-800/30 bg-gray-900/10">
                       <td className="py-2 px-2 text-left sticky left-0 z-[5] bg-[#0a1120] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="text"
-                            value={row.code}
-                            onChange={e => updatePortfolioExtraRowCode(row.portfolioId, row.rowId, e.target.value)}
-                            placeholder="코드/종목명"
-                            className="w-20 bg-transparent text-blue-300/80 text-[10px] border-b border-gray-700/40 outline-none placeholder-gray-700"
-                          />
+                        <div className="flex items-start gap-1">
+                          <div className="flex-1 min-w-0">
+                            <input
+                              type="text"
+                              value={row.code}
+                              onChange={e => updatePortfolioExtraRowCode(row.portfolioId, row.rowId, e.target.value)}
+                              onBlur={e => handleExtraRowCodeBlur(row.portfolioId, row.rowId, e.target.value, row.isOverseas)}
+                              placeholder="코드/종목명"
+                              className="w-full bg-transparent text-blue-300/80 text-[10px] border-b border-gray-700/40 outline-none placeholder-gray-700"
+                            />
+                            {row.name && <div className="text-gray-400 text-[9px] mt-0.5 line-clamp-1">{row.name}</div>}
+                          </div>
                           <button
                             onClick={() => deletePortfolioExtraRow(row.portfolioId, row.rowId)}
-                            className="text-gray-600 hover:text-red-400 transition-colors text-[10px] ml-0.5"
+                            className="text-gray-600 hover:text-red-400 transition-colors text-[10px] shrink-0 mt-0.5"
                             title="행 삭제"
                           >✕</button>
                         </div>
@@ -1545,29 +1568,54 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             </React.Fragment>
                           );
                         } else {
+                          const grossKrw = d.afterTaxKrw + (d.taxKrw || 0);
                           return (
                             <td
                               key={i}
                               colSpan={actualHasOverseas ? 2 : 1}
                               onClick={() => !isEditingCell && handleExtraKrwCellClick(row, i)}
                               className={`py-0.5 px-0.5 text-center text-[10px] cursor-pointer transition-colors ${isLastMonthCol ? '' : 'border-r border-gray-600/40'} ${
-                                isEditingKrw ? 'bg-blue-900/40' :
+                                isEditingKrw ? 'bg-emerald-900/30' :
                                 d.afterTaxKrw > 0 ? 'text-emerald-300 font-bold bg-emerald-900/20 hover:bg-emerald-900/40' :
                                 'text-gray-700 hover:bg-gray-700/30'
                               }`}
                             >
                               {isEditingKrw ? (
-                                <input
-                                  ref={inputRef}
-                                  type="text" inputMode="numeric"
-                                  value={editingCell.value}
-                                  onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
-                                  onBlur={commitEdit}
-                                  onKeyDown={handleCellKeyDown}
-                                  className="w-full bg-transparent text-white text-right text-[10px] outline-none border-b border-blue-400 px-1"
-                                />
+                                <div className="flex flex-col gap-0.5 py-0.5">
+                                  <div className="flex items-center gap-0.5 justify-center">
+                                    <span className="text-[8px] text-emerald-500/70">세후</span>
+                                    <input
+                                      ref={inputRef}
+                                      type="text" inputMode="numeric"
+                                      value={editingCell.value}
+                                      onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
+                                      onBlur={handleAfterTaxBlur}
+                                      onFocus={handleAfterTaxFocus}
+                                      onKeyDown={handleCellKeyDown}
+                                      className="w-14 bg-transparent text-emerald-300 text-right text-[10px] outline-none border-b border-emerald-500/60"
+                                      placeholder="세후 ₩"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-0.5 justify-center">
+                                    <span className="text-[8px] text-orange-400/70">과세</span>
+                                    <input
+                                      type="text" inputMode="numeric"
+                                      value={editingCell.taxValue || ''}
+                                      onChange={e => setEditingCell(prev => ({ ...prev, taxValue: e.target.value }))}
+                                      onBlur={handleAfterTaxBlur}
+                                      onFocus={handleAfterTaxFocus}
+                                      onKeyDown={handleCellKeyDown}
+                                      className="w-14 bg-transparent text-orange-300 text-right text-[10px] outline-none border-b border-orange-500/40"
+                                      placeholder="과세금 ₩"
+                                    />
+                                  </div>
+                                </div>
                               ) : (
-                                <span>{d.afterTaxKrw > 0 ? formatCurrency(d.afterTaxKrw) : '-'}</span>
+                                <div className="flex flex-col items-center gap-0">
+                                  {grossKrw > d.afterTaxKrw && <span className="text-blue-300/70 text-[9px]">{formatCurrency(grossKrw)}</span>}
+                                  {d.taxKrw > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(d.taxKrw)}</span>}
+                                  <span>{d.afterTaxKrw > 0 ? formatCurrency(d.afterTaxKrw) : '-'}</span>
+                                </div>
                               )}
                             </td>
                           );
@@ -1585,7 +1633,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         </React.Fragment>
                       ) : (
                         <td colSpan={actualHasOverseas ? 2 : 1} className={`py-2 px-2 text-center font-bold ${row.annualAfterKrw > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
-                          {row.annualAfterKrw > 0 ? formatCurrency(row.annualAfterKrw) : '-'}
+                          {row.annualAfterKrw > 0 ? (
+                            <div className="flex flex-col items-center gap-0">
+                              {(row.annualAfterKrw + (row.annualTaxKrw || 0)) > row.annualAfterKrw && (
+                                <span className="text-blue-300/70 text-[9px] font-normal">{formatCurrency(row.annualAfterKrw + row.annualTaxKrw)}</span>
+                              )}
+                              {(row.annualTaxKrw || 0) > 0 && (
+                                <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(row.annualTaxKrw)}</span>
+                              )}
+                              <span>{formatCurrency(row.annualAfterKrw)}</span>
+                            </div>
+                          ) : '-'}
                         </td>
                       )}
                     </tr>

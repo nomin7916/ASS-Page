@@ -344,10 +344,13 @@ export function usePortfolioState({
     }));
   };
 
-  const updatePortfolioExtraRowCode = (portfolioId, rowId, code) => {
+  const updatePortfolioExtraRowCode = (portfolioId, rowId, code, name = undefined) => {
     setPortfolios(prev => prev.map(p => {
       if (p.id !== portfolioId) return p;
-      const rows = (p.extraDividendRows || []).map(r => r.id === rowId ? { ...r, code } : r);
+      const rows = (p.extraDividendRows || []).map(r => {
+        if (r.id !== rowId) return r;
+        return name !== undefined ? { ...r, code, name } : { ...r, code };
+      });
       return { ...p, extraDividendRows: rows };
     }));
   };
@@ -359,14 +362,17 @@ export function usePortfolioState({
     }));
   };
 
-  const updatePortfolioExtraRowMonth = (portfolioId, rowId, yearMonth, afterTaxUsd, afterTaxKrw) => {
+  const updatePortfolioExtraRowMonth = (portfolioId, rowId, yearMonth, afterTaxUsd, afterTaxKrw, taxKrw = 0) => {
     setPortfolios(prev => prev.map(p => {
       if (p.id !== portfolioId) return p;
       const rows = (p.extraDividendRows || []).map(r => {
         if (r.id !== rowId) return r;
         const monthData = { ...r.monthData };
-        if (afterTaxKrw > 0 || afterTaxUsd > 0) monthData[yearMonth] = { afterTaxUsd, afterTaxKrw };
-        else delete monthData[yearMonth];
+        if (afterTaxKrw > 0 || afterTaxUsd > 0) {
+          const entry = { afterTaxUsd, afterTaxKrw };
+          if (taxKrw > 0) entry.taxKrw = taxKrw;
+          monthData[yearMonth] = entry;
+        } else delete monthData[yearMonth];
         return { ...r, monthData };
       });
       return { ...p, extraDividendRows: rows };
