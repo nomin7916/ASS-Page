@@ -1781,6 +1781,7 @@ export default function App() {
         onClose={() => setShowDividendTaxPage(false)}
         showToast={showToast}
         isAdmin={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()}
+        onUpdate={setDividendTaxHistory}
       />
     );
   }

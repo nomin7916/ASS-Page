@@ -1120,7 +1120,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                               <div className="flex flex-col items-center gap-0">
                                 <span>{d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}</span>
                                 {taxRate > 0 && d.amount > 0 && (() => {
-                                  const taxAmt = Math.round(d.amount * taxRate / 100);
+                                  const mo = String(i + 1).padStart(2, '0');
+                                  const ym = `${CURRENT_YEAR}-${mo}`;
+                                  const taxRec = dividendTaxHistory?.[row.code]?.records?.[ym];
+                                  const taxAmt = taxRec && row.qty > 0
+                                    ? Math.round(taxRec.perShareTaxableBase * row.qty * taxRate / 100)
+                                    : Math.round(d.amount * taxRate / 100);
                                   return (<>
                                     <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxAmt)}</span>
                                     <span className="text-green-400/60 text-[9px]">{formatCurrency(d.amount - taxAmt)}</span>
@@ -1154,7 +1159,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             <div className="flex flex-col items-center gap-0">
                               <span>{row.annual > 0 ? formatCurrency(row.annual) : loading && !row.hasDivData ? '...' : '-'}</span>
                               {taxRate > 0 && row.annual > 0 && (() => {
-                                const tax = Math.round(row.annual * taxRate / 100);
+                                const tax = row.monthData.reduce((s, d, i) => {
+                                  const mo = String(i + 1).padStart(2, '0');
+                                  const ym = `${CURRENT_YEAR}-${mo}`;
+                                  const taxRec = dividendTaxHistory?.[row.code]?.records?.[ym];
+                                  return s + (taxRec && row.qty > 0
+                                    ? Math.round(taxRec.perShareTaxableBase * row.qty * taxRate / 100)
+                                    : Math.round(d.amount * taxRate / 100));
+                                }, 0);
                                 return (<>
                                   <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(tax)}</span>
                                   <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - tax)}</span>

@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Upload, Trash2, Save, Plus } from 'lucide-react';
 import { parseSamsungFundCSV } from '../utils';
 
-export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, isAdmin }) {
+export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, isAdmin, onUpdate }) {
   const [taxHistory, setTaxHistory] = useState({});
   const [selectedCode, setSelectedCode] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -26,6 +26,11 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
       })
       .catch(() => setIsLoading(false));
   }, []);
+
+  // taxHistory가 바뀔 때마다 App 전역 상태에 즉시 반영 (DividendSummaryTable 실시간 연동)
+  useEffect(() => {
+    if (!isLoading && onUpdate) onUpdate(taxHistory);
+  }, [taxHistory, isLoading]);
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -56,7 +61,7 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
       setTaxHistory(prev => ({
         ...prev,
         [selectedCode]: {
-          name: prev[selectedCode]?.name || rawFundName || selectedCode,
+          name: rawFundName || prev[selectedCode]?.name || selectedCode,
           lastUpdated: new Date().toISOString().slice(0, 10),
           records: { ...(prev[selectedCode]?.records || {}), ...records },
         },
@@ -137,11 +142,11 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
                     onChange={e => setSelectedCode(e.target.value)}
                     className="bg-gray-700 border border-gray-600 text-gray-200 rounded px-3 py-1.5 text-sm"
                   >
-                    {codes.map(c => (
-                      <option key={c} value={c}>
-                        {taxHistory[c]?.name || c} ({c})
-                      </option>
-                    ))}
+                    {codes.map(c => {
+                      const n = taxHistory[c]?.name;
+                      const label = n && n !== c ? `${n} (${c})` : c;
+                      return <option key={c} value={c}>{label}</option>;
+                    })}
                   </select>
                 ) : (
                   <span className="text-gray-600 text-xs">등록된 종목 없음</span>
@@ -217,8 +222,10 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
               <div className="bg-gray-800/50 rounded-lg overflow-hidden border border-gray-700/50">
                 <div className="px-4 py-2.5 border-b border-gray-700 flex items-center justify-between">
                   <span className="text-xs text-gray-300">
-                    {selectedStock.name}
-                    <span className="text-gray-600 ml-1.5">({selectedCode})</span>
+                    {selectedStock.name && selectedStock.name !== selectedCode ? selectedStock.name : selectedCode}
+                    {selectedStock.name && selectedStock.name !== selectedCode && (
+                      <span className="text-gray-600 ml-1.5">({selectedCode})</span>
+                    )}
                     {selectedStock.lastUpdated && (
                       <span className="text-gray-600 ml-2">최종 업데이트: {selectedStock.lastUpdated}</span>
                     )}
