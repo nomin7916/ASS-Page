@@ -790,7 +790,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           );
                         }
                         const taxAmt = activeTab === 'expected'
-                          ? (rowTaxRate > 0 && d.amount > 0 ? Math.round(d.amount * rowTaxRate / 100) : 0)
+                          ? (d.taxKrw || 0)
                           : (actualTax?.monthlyTax[i] || 0);
                         const isActual = activeTab === 'actual';
                         const line1 = isActual ? d.amount + taxAmt : d.amount;
@@ -829,8 +829,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         <td className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? (activeTab === 'expected' ? 'text-yellow-400' : 'text-emerald-400') : 'text-gray-600'}`}>
                           <div className="flex flex-col items-center justify-center gap-0">
                             <span>{row.annual > 0 ? formatCurrency(row.annual) : '-'}</span>
-                            {activeTab === 'expected' && rowTaxRate > 0 && row.annual > 0 && (() => {
-                              const annualTax = Math.round(row.annual * rowTaxRate / 100);
+                            {activeTab === 'expected' && (row.annualTax || 0) > 0 && (() => {
+                              const annualTax = row.annualTax || 0;
                               return (<>
                                 <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(annualTax)}</span>
                                 <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - annualTax)}</span>
