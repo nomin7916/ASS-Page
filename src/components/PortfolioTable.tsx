@@ -245,9 +245,14 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   </td>
 
                   {/* 구매단가 */}
-                  <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
-                    <input type="text" data-col="purchasePrice" className={`${inp} text-right px-3 text-gray-400 caret-blue-400`} value={isOverseas ? formatUSD(item.purchasePrice) : formatNumber(item.purchasePrice)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'purchasePrice', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')} />
-                  </td>
+                  {isOverseas
+                    ? <td className={`${td} text-right text-gray-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                        {cleanNum(item.purchasePrice) > 0 ? formatUSD(item.purchasePrice) : <span className="text-gray-600">-</span>}
+                      </td>
+                    : <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                        <input type="text" data-col="purchasePrice" className={`${inp} text-right px-3 text-gray-400 caret-blue-400`} value={formatNumber(item.purchasePrice)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'purchasePrice', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')} />
+                      </td>
+                  }
 
                   {/* 보유수량 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
@@ -257,7 +262,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {/* 투자금액 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
                     {isOverseas
-                      ? <div className="w-full h-full py-3 px-3 text-right text-blue-200 font-bold text-[13px]">{fmtDual(item.investAmount)}</div>
+                      ? <input type="text" data-col="investAmountUSD" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => e.target.select()} onChange={e => { const usd = cleanNum(e.target.value); const qty = cleanNum(item.quantity); onUpdate(item.id, 'purchasePrice', qty > 0 ? usd / qty : 0); }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
                       : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
                     }
                   </td>
