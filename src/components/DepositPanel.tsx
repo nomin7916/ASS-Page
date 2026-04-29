@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React from 'react';
+import React, { useState } from 'react';
 import { Plus, Download, Trash2, Calendar } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { sortArrow } from '../chartUtils';
@@ -21,6 +21,26 @@ export default function DepositPanel({
   marketIndicators,
 }) {
   const isOverseas = activePortfolioAccountType === 'overseas';
+  const [editField, setEditField] = useState(null);
+  const [editVal, setEditVal] = useState('');
+
+  const amountDisplay = (h, prefix) =>
+    editField === `${prefix}-${h.id}` ? editVal
+      : isOverseas ? (h.amount !== 0 ? String(h.amount) : '') : formatNumber(h.amount);
+
+  const amountFocus = (h, prefix, e) => {
+    setEditField(`${prefix}-${h.id}`);
+    setEditVal(h.amount !== 0 ? String(h.amount) : '');
+    e.target.select();
+  };
+
+  const amountBlur = (h, prefix, history, setHistory) => {
+    const n = [...history];
+    n[h.originalIndex].amount = cleanNum(editVal);
+    setHistory(n);
+    setEditField(null);
+  };
+
   return (
     <>
           {/* 입금 내역 */}
@@ -54,7 +74,7 @@ export default function DepositPanel({
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" value={h.date} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].date = e.target.value; setDepositHistory(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={isOverseas ? cleanNum(h.amount).toFixed(2) : formatNumber(h.amount)} onFocus={e => e.target.select()} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].amount = cleanNum(e.target.value); setDepositHistory(n); }} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
+                        <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd1')} onFocus={e => amountFocus(h, 'd1', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd1', depositHistory, setDepositHistory)} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
                       </td>
                       {isOverseas && (
                         <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sky-500">
@@ -104,7 +124,7 @@ export default function DepositPanel({
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" value={h.date} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].date = e.target.value; setDepositHistory2(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={isOverseas ? cleanNum(h.amount).toFixed(2) : formatNumber(h.amount)} onFocus={e => e.target.select()} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].amount = cleanNum(e.target.value); setDepositHistory2(n); }} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
+                        <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd2')} onFocus={e => amountFocus(h, 'd2', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd2', depositHistory2, setDepositHistory2)} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
                       </td>
                       {isOverseas && (
                         <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sky-500">
