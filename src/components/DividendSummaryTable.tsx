@@ -36,7 +36,7 @@ function parseDividendApiResult(result) {
   return monthData;
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300 }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -465,12 +465,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   // 비해외 계좌 전용 세금 계산
   // hasManual=true → 입력값이 세후이므로 역산: 세후 × 세율/(100-세율)
   // hasManual=false → 입력값이 세전 예측값이므로 직접: 세전 × 세율/100
-  const getEffectiveTax = (amount, portfolioId, code, yearMonth, hasManual = false) => {
+  // qty > 0 이고 dividendTaxHistory[code][yearMonth] 있으면 주당과세표준 × qty × 세율 우선 적용
+  const getEffectiveTax = (amount, portfolioId, code, yearMonth, hasManual = false, qty = 0) => {
     const pf = nonGoldPortfolios.find(p => p.id === portfolioId);
     const manualKrw = pf?.dividendTaxAmounts?.[code]?.[yearMonth] || 0;
     if (manualKrw > 0) return manualKrw;
     const rate = getTaxRate(portfolioId);
     if (rate <= 0 || amount <= 0) return 0;
+    // 주당 과세 표준액이 있으면 우선 적용 (수동 세금 없을 때만)
+    const taxRec = dividendTaxHistory?.[code]?.records?.[yearMonth];
+    if (taxRec && qty > 0) {
+      return Math.round(taxRec.perShareTaxableBase * qty * rate / 100);
+    }
     return hasManual
       ? Math.round(amount * rate / (100 - rate))
       : Math.round(amount * rate / 100);
@@ -491,7 +497,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const hasManual = yearMonth in codeActual;
       const predicted = (pred[monthIdx + 1] || 0) * qty;
       const amount = hasManual ? codeActual[yearMonth] : predicted;
-      return sum + getEffectiveTax(amount, pf.id, item.code, yearMonth, hasManual);
+      return sum + getEffectiveTax(amount, pf.id, item.code, yearMonth, hasManual, qty);
     }, 0);
   };
 
@@ -507,12 +513,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     expectedRows.reduce((sum, row) => sum + row.monthData[i].amount, 0)
   );
   const annualTotal = monthlyTotals.reduce((s, v) => s + v, 0);
-  const monthlyTaxTotals = Array.from({ length: 12 }, (_, i) =>
-    expectedRows.reduce((sum, row) => {
+  const monthlyTaxTotals = Array.from({ length: 12 }, (_, i) => {
+    const mo = String(i + 1).padStart(2, '0');
+    const yearMonth = `${CURRENT_YEAR}-${mo}`;
+    return expectedRows.reduce((sum, row) => {
       const rate = getTaxRate(row.portfolioId);
+      const taxRec = dividendTaxHistory?.[row.code]?.records?.[yearMonth];
+      if (taxRec && row.qty > 0) {
+        return sum + Math.round(taxRec.perShareTaxableBase * row.qty * rate / 100);
+      }
       return sum + Math.round(row.monthData[i].amount * rate / 100);
-    }, 0)
-  );
+    }, 0);
+  });
   const annualTaxTotal = monthlyTaxTotals.reduce((s, v) => s + v, 0);
   const monthlyUsdTotals = Array.from({ length: 12 }, (_, i) =>
     expectedRows.filter(r => r.isOverseas).reduce((sum, row) => sum + row.monthData[i].amountUsd, 0)
@@ -533,7 +545,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     actualRows.reduce((s, r) => {
       if (r.isOverseas) return s + r.monthData[i].grossKrw;
       const d = r.monthData[i];
-      const tax = getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual);
+      const tax = getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual, r.qty);
       return s + (d.hasManual ? d.amount + tax : d.amount);
     }, 0) +
     extraActualRows.reduce((s, r) => s + r.monthData[i].afterTaxKrw, 0)
@@ -546,7 +558,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     actualRows.reduce((s, r) => {
       if (r.isOverseas) return s + r.monthData[i].afterTaxKrw;
       const d = r.monthData[i];
-      const tax = getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual);
+      const tax = getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual, r.qty);
       return s + (d.hasManual ? d.amount : Math.max(0, d.amount - tax));
     }, 0) +
     extraActualRows.reduce((s, r) => s + r.monthData[i].afterTaxKrw, 0)
@@ -562,7 +574,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const actualMonthlyTaxTotals = Array.from({ length: 12 }, (_, i) =>
     actualRows.filter(r => !r.isOverseas).reduce((s, r) => {
       const d = r.monthData[i];
-      return s + getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual);
+      return s + getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual, r.qty);
     }, 0)
   );
   const actualAnnualTaxTotal = actualMonthlyTaxTotals.reduce((s, v) => s + v, 0);
@@ -1349,7 +1361,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         );
                       } else {
                         const rate = getTaxRate(row.portfolioId);
-                        const effectiveTax = getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual);
+                        const effectiveTax = getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual, row.qty);
                         const beforeTax = d.hasManual ? d.amount + effectiveTax : d.amount;
                         const afterTax = d.hasManual ? d.amount : Math.max(0, d.amount - effectiveTax);
                         return (
@@ -1412,9 +1424,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             const rowRate = getTaxRate(row.portfolioId);
                             if (rowRate <= 0) return <span>{row.annual > 0 ? formatCurrency(row.annual) : '-'}</span>;
                             const rowAnnualTax = row.monthData.reduce((s, d) =>
-                              s + getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual), 0);
+                              s + getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual, row.qty), 0);
                             const rowAnnualAfter = row.monthData.reduce((s, d) => {
-                              const tax = getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual);
+                              const tax = getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual, row.qty);
                               return s + (d.hasManual ? d.amount : Math.max(0, d.amount - tax));
                             }, 0);
                             const rowAnnualBefore = rowAnnualAfter + rowAnnualTax;

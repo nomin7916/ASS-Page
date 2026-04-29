@@ -59,6 +59,7 @@ export default function App() {
   const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
+  const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const adminOwnDriveTokenRef = useRef<string>('');
   const adminViewingAsRef = useRef<string | null>(null);
@@ -1508,6 +1509,15 @@ export default function App() {
     setDriveToken(token);
     setDriveStatus('');
 
+    // 배당 과세 이력 로드 (백그라운드, 실패해도 무시)
+    (async () => {
+      try {
+        const folderId = await ensureDriveFolder(token);
+        const taxData = await loadDriveFile(token, folderId, DRIVE_FILES.DIVIDEND_TAX);
+        if (taxData && typeof taxData === 'object') setDividendTaxHistory(taxData as Record<string, any>);
+      } catch { /* 파일 없거나 오류 시 빈 상태 유지 */ }
+    })();
+
     const bgTimer = setTimeout(async () => {
       initTokenClient();
 
@@ -2002,6 +2012,8 @@ export default function App() {
             deletePortfolioExtraRow={deletePortfolioExtraRow}
             updatePortfolioExtraRowMonth={updatePortfolioExtraRowMonth}
             usdkrw={marketIndicators.usdkrw || 1300}
+            dividendTaxHistory={dividendTaxHistory}
+            onDividendTaxHistoryUpdate={setDividendTaxHistory}
           />
         )}
 
@@ -2201,6 +2213,7 @@ export default function App() {
             updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd}
             updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw}
             usdkrw={marketIndicators.usdkrw || 1300}
+            dividendTaxHistory={dividendTaxHistory}
           />
         )}
 
