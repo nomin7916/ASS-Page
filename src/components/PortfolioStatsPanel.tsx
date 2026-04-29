@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React from 'react';
+import React, { useState } from 'react';
 import { generateId, formatCurrency, formatNumber, formatPercent, cleanNum } from '../utils';
 
 export default function PortfolioStatsPanel({
@@ -16,6 +16,8 @@ export default function PortfolioStatsPanel({
 }) {
   const isOv = activePortfolioAccountType === 'overseas';
   const fx = marketIndicators.usdkrw || 1;
+  const [principalEditing, setPrincipalEditing] = useState(false);
+  const [principalRaw, setPrincipalRaw] = useState('');
   const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
   const dualKRW = (krwVal, cls = 'text-gray-200') =>
     isOv ? (
@@ -93,8 +95,10 @@ export default function PortfolioStatsPanel({
             <input
               type="text"
               className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-white font-bold outline-none px-2 py-1 text-xs"
-              value={formatNumber(principal)}
-              onChange={e => setPrincipal(cleanNum(e.target.value))}
+              value={principalEditing ? principalRaw : formatNumber(principal)}
+              onFocus={e => { setPrincipalEditing(true); setPrincipalRaw(principal > 0 ? String(principal) : ''); e.target.select(); }}
+              onChange={e => setPrincipalRaw(e.target.value)}
+              onBlur={() => { setPrincipal(cleanNum(principalRaw)); setPrincipalEditing(false); }}
               onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
             />
           </div>
