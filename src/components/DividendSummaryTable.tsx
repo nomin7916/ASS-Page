@@ -327,7 +327,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const mo = String(i + 1).padStart(2, '0');
         const yearMonth = `${CURRENT_YEAR}-${mo}`;
         if (isOverseas) {
-          let pfAfterUsd = 0, pfAfterKrw = 0, pfTaxKrw = 0, pfHasActual = false;
+          let pfAfterUsd = 0, pfAfterKrw = 0, pfHasActual = false;
           (pf.portfolio || []).forEach(item => {
             if (!getCodeType(item.code, pf)) return;
             const qty = cleanNum(item.quantity);
@@ -341,37 +341,32 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const hasManualAfterTax = storedAfterUsd != null || storedAfterKrw != null;
             if (!hasManualGross && !hasManualAfterTax) return;
             pfHasActual = true;
-            const taxKrwManual = (pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] || 0;
-            let afterUsd, afterKrw, grossKrw;
+            let afterUsd, afterKrw;
             if (hasManualAfterTax) {
               afterUsd = storedAfterUsd != null ? storedAfterUsd : (storedAfterKrw != null && usdkrw > 0 ? storedAfterKrw / usdkrw : 0);
               afterKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterUsd * usdkrw);
-              grossKrw = taxKrwManual > 0 ? afterKrw + taxKrwManual : (taxRate < 100 ? Math.round(afterKrw * 100 / (100 - taxRate)) : afterKrw);
             } else {
               const grossUsd = codeActualUsd[yearMonth];
               afterUsd = grossUsd * (1 - taxRate / 100);
               afterKrw = Math.round(afterUsd * usdkrw);
-              grossKrw = Math.round(grossUsd * usdkrw);
             }
             pfAfterUsd += afterUsd;
             pfAfterKrw += afterKrw;
-            pfTaxKrw += taxKrwManual > 0 ? taxKrwManual : (grossKrw - afterKrw);
           });
           let extraAfterUsd = 0, extraAfterKrw = 0, extraHasActual = false;
           (pf.extraDividendRows || []).forEach(row => {
             const entry = row.monthData?.[yearMonth] || {};
+            const atKrw = entry.afterTaxKrw || 0;
             extraAfterUsd += entry.afterTaxUsd || 0;
-            extraAfterKrw += entry.afterTaxKrw || 0;
-            if ((entry.afterTaxUsd || 0) > 0 || (entry.afterTaxKrw || 0) > 0) extraHasActual = true;
+            extraAfterKrw += atKrw;
+            if ((entry.afterTaxUsd || 0) > 0 || atKrw > 0) extraHasActual = true;
           });
           const totalAfterKrw = pfAfterKrw + extraAfterKrw;
-          return {
-            amount: totalAfterKrw,
-            amountUsd: pfAfterUsd + extraAfterUsd,
-            taxKrw: pfTaxKrw,
-            yearMonth,
-            hasActual: pfHasActual || extraHasActual,
-          };
+          const hasActual = pfHasActual || extraHasActual;
+          const taxKrw = (hasActual && taxRate > 0 && taxRate < 100)
+            ? Math.round(totalAfterKrw * taxRate / (100 - taxRate))
+            : 0;
+          return { amount: totalAfterKrw, amountUsd: pfAfterUsd + extraAfterUsd, taxKrw, yearMonth, hasActual };
         } else {
           let amount = (pf.portfolio || []).reduce((sum, item) => {
             if (!getCodeType(item.code, pf)) return sum;
@@ -392,15 +387,20 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const entry = row.monthData?.[yearMonth] || {};
             return (entry.afterTaxKrw || 0) > 0;
           });
-          return { amount, amountUsd: 0, taxKrw: 0, yearMonth, hasManual };
+          const taxKrw = (amount > 0 && taxRate > 0 && taxRate < 100)
+            ? Math.round(amount * taxRate / (100 - taxRate))
+            : 0;
+          return { amount, amountUsd: 0, taxKrw, yearMonth, hasManual };
         }
       });
       const annual = isOverseas
         ? monthData.reduce((s, d) => s + (d.hasActual ? d.amount : 0), 0)
         : monthData.reduce((s, d) => s + (d.hasManual ? d.amount : 0), 0);
       const annualUsd = isOverseas ? monthData.reduce((s, d) => s + (d.hasActual ? d.amountUsd : 0), 0) : 0;
-      const annualTaxKrw = isOverseas ? monthData.reduce((s, d) => s + (d.hasActual ? d.taxKrw : 0), 0) : 0;
-      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTaxKrw };
+      const annualTax = isOverseas
+        ? monthData.reduce((s, d) => s + (d.hasActual ? (d.taxKrw || 0) : 0), 0)
+        : monthData.reduce((s, d) => s + (d.hasManual ? (d.taxKrw || 0) : 0), 0);
+      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTax };
     }).filter(row => row.annual > 0);
   }, [compact, nonGoldPortfolios]);
 
@@ -622,20 +622,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       .filter(r => !isSeparateTax(r.portfolioId))
       .reduce((sum, row) => sum + row.monthData[i].amount, 0)
   );
-  const compactActualTaxMap = {};
-  compactActualRows.forEach(row => {
-    const pf = nonGoldPortfolios.find(p => p.id === row.portfolioId);
-    if (!pf || pf.accountType === 'overseas') {
-      compactActualTaxMap[row.portfolioId] = { monthlyTax: Array(12).fill(0), annualTax: 0 };
-      return;
-    }
-    const monthlyTax = Array.from({ length: 12 }, (_, i) => getPortfolioMonthTax(pf, i));
-    compactActualTaxMap[row.portfolioId] = { monthlyTax, annualTax: monthlyTax.reduce((s, v) => s + v, 0) };
-  });
-  const compactActualTotalMonthlyTax = Array.from({ length: 12 }, (_, i) =>
-    compactActualRows.reduce((sum, row) => sum + (compactActualTaxMap[row.portfolioId]?.monthlyTax[i] || 0), 0)
-  );
-  const compactActualAnnualTax = compactActualTotalMonthlyTax.reduce((s, v) => s + v, 0);
 
   if (compact) {
     const rows = activeTab === 'expected' ? compactExpectedRows : compactActualRows;
@@ -654,15 +640,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     const compactActualMonthlyUsd = Array.from({ length: 12 }, (_, i) =>
       compactActualRows.filter(r => r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.monthData[i].amountUsd || 0), 0)
     );
-    const compactActualMonthlyOverseasTaxKrw = Array.from({ length: 12 }, (_, i) =>
-      compactActualRows.filter(r => r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.monthData[i].taxKrw || 0), 0)
+    const compactActualMonthlyTaxCombined = Array.from({ length: 12 }, (_, i) =>
+      compactActualRows.filter(r => !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.monthData[i].taxKrw || 0), 0)
     );
-    const compactActualMonthlyTaxCombined = Array.from({ length: 12 }, (_, i) => {
-      const nonSeparateDomesticTax = compactActualRows
-        .filter(r => !r.isOverseas && !isSeparateTax(r.portfolioId))
-        .reduce((s, r) => s + (compactActualTaxMap[r.portfolioId]?.monthlyTax[i] || 0), 0);
-      return nonSeparateDomesticTax + compactActualMonthlyOverseasTaxKrw[i];
-    });
     const compactActualAnnualTaxCombined = compactActualMonthlyTaxCombined.reduce((s, v) => s + v, 0);
     const compactActualMonthlyDomesticKrw = Array.from({ length: 12 }, (_, i) =>
       compactActualRows.filter(r => !r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + r.monthData[i].amount, 0)
@@ -754,7 +734,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <tbody>
                 {rows.map(row => {
                   const rowTaxRate = getTaxRate(row.portfolioId);
-                  const actualTax = activeTab === 'actual' ? compactActualTaxMap[row.portfolioId] : null;
                   return (
                     <tr key={row.portfolioId} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                       <td className="py-2 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold">
@@ -806,9 +785,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           );
                         }
                         const isActualTab = activeTab === 'actual';
-                        const taxAmt = !isActualTab
-                          ? (d.taxKrw || 0)
-                          : (actualTax?.monthlyTax[i] || 0);
+                        const taxAmt = d.taxKrw || 0;
                         if (isActualTab && !d.hasManual) {
                           return <td key={i} className="py-1.5 px-1 text-center text-[10px] text-gray-700">-</td>;
                         }
@@ -839,7 +816,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           <div className="flex flex-col items-center justify-center gap-0">
                             <span>{row.annualUsd > 0 ? formatUsd(row.annualUsd) : '-'}</span>
                             {row.annual > 0 && <span className="text-emerald-400/40 text-[9px] font-normal">{formatCurrency(row.annual)}</span>}
-                            {row.annualTaxKrw > 0 && <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(row.annualTaxKrw)}</span>}
+                            {(row.annualTax || 0) > 0 && <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(row.annualTax)}</span>}
                           </div>
                         </td>
                       ) : activeTab === 'expected' && row.isOverseas ? (
@@ -861,9 +838,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - annualTax)}</span>
                               </>);
                             })()}
-                            {activeTab === 'actual' && (actualTax?.annualTax || 0) > 0 && (<>
-                              <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(actualTax.annualTax)}</span>
-                              <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - actualTax.annualTax)}</span>
+                            {activeTab === 'actual' && (row.annualTax || 0) > 0 && (<>
+                              <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(row.annualTax)}</span>
+                              <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(row.annual - row.annualTax)}</span>
                             </>)}
                           </div>
                         </td>
