@@ -28,8 +28,6 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const [modalEvalAfter, setModalEvalAfter] = useState('');
   const [editingInvestId, setEditingInvestId] = useState(null);
   const [editingInvestVal, setEditingInvestVal] = useState('');
-  const [editingDepositId, setEditingDepositId] = useState(null);
-  const [editingDepositVal, setEditingDepositVal] = useState('');
 
   if (!totals) return null;
 
@@ -313,7 +311,16 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             {depositItems.map((item) => (
               <tr key={item.id} className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
                 <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={7}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
-                <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={isOverseas ? (editingDepositId === item.id ? editingDepositVal : formatUSD(item.depositAmount)) : formatNumber(item.depositAmount)} onFocus={e => { if (isOverseas) { const v = cleanNum(item.depositAmount); setEditingDepositId(item.id); setEditingDepositVal(v > 0 ? String(v) : ''); } e.target.select(); }} onChange={e => { if (isOverseas) { setEditingDepositVal(e.target.value); } else { onUpdate(item.id, 'depositAmount', e.target.value); } }} onBlur={() => { if (isOverseas) { onUpdate(item.id, 'depositAmount', cleanNum(editingDepositVal)); setEditingDepositId(null); } }} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
+                <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}>
+                  {isOverseas ? (
+                    <div className="flex items-center h-full px-2">
+                      <span className="text-blue-300 font-bold text-[14px] shrink-0 mr-0.5">$</span>
+                      <input type="text" className="flex-1 bg-transparent outline-none font-bold text-right text-blue-300 py-3 focus:bg-blue-800/30 transition-colors text-[14px] caret-blue-400" value={formatNumber(item.depositAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'depositAmount', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} />
+                    </div>
+                  ) : (
+                    <input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={formatNumber(item.depositAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'depositAmount', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} />
+                  )}
+                </td>
                 <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(item.investRatio)}</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-yellow-500 bg-yellow-900/20 text-right">{formatPercent(item.evalRatio)}</td>
