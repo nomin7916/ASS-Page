@@ -33,6 +33,7 @@ import PortfolioStatsPanel from './components/PortfolioStatsPanel';
 import AccountTabBar from './components/AccountTabBar';
 import UserInfoBar from './components/UserInfoBar';
 import DividendSummaryTable from './components/DividendSummaryTable';
+import DividendTaxPage from './components/DividendTaxPage';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -57,6 +58,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
   const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
+  const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const adminOwnDriveTokenRef = useRef<string>('');
   const adminViewingAsRef = useRef<string | null>(null);
@@ -1753,6 +1755,26 @@ export default function App() {
     return <AdminPage adminEmail={authUser.email} onClose={() => setShowAdminPage(false)} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} />;
   }
 
+  // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)
+  const canAccessDividendTax = authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.feature2;
+  if (showDividendTaxPage && canAccessDividendTax) {
+    return (
+      <DividendTaxPage
+        onLoad={async () => {
+          const folderId = driveFolderIdRef.current || await ensureDriveFolder(driveTokenRef.current);
+          return loadDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.DIVIDEND_TAX);
+        }}
+        onSave={async (data) => {
+          const folderId = driveFolderIdRef.current || await ensureDriveFolder(driveTokenRef.current);
+          return saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.DIVIDEND_TAX, data);
+        }}
+        onClose={() => setShowDividendTaxPage(false)}
+        showToast={showToast}
+        isAdmin={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()}
+      />
+    );
+  }
+
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
@@ -1810,6 +1832,8 @@ export default function App() {
             }
           }}
           onLogout={() => { sessionStorage.removeItem(SESSION_KEY); setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
+          canAccessDividendTax={canAccessDividendTax}
+          onOpenDividendTax={() => setShowDividendTaxPage(true)}
         />
 
         {/* 뷰 전환 탭 */}

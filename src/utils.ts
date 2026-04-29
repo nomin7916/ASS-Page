@@ -220,3 +220,25 @@ export const detectIndexFromFileName = (fileName) => {
   if (upper.includes('NASDAQ') || upper.includes('NDQ') || upper.includes('IXIC') || upper.includes('나스닥')) return 'nasdaq';
   return null;
 };
+
+// 삼성운용 ETF 배당 과세 CSV 파싱
+// 포맷: 1행=펀드명, 2행=기준일, 3행=헤더, 4행~=데이터(지급기준일,실지급일,분배율,분배금액,주당과세표준)
+export const parseSamsungFundCSV = (text) => {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const records = {};
+  for (let i = 3; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    if (cols.length < 5) continue;
+    const refDate = cols[0].trim();
+    if (!/^\d{8}$/.test(refDate)) continue;
+    const yearMonth = `${refDate.slice(0, 4)}-${refDate.slice(4, 6)}`;
+    records[yearMonth] = {
+      referenceDate: refDate,
+      paymentDate: cols[1].trim(),
+      distributionRate: parseFloat(cols[2]) || 0,
+      perShareAmount: parseInt(cols[3], 10) || 0,
+      perShareTaxableBase: parseInt(cols[4], 10) || 0,
+    };
+  }
+  return records;
+};

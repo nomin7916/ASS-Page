@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { Settings, Lock, Link2, LogOut } from 'lucide-react';
+import { Settings, Lock, Link2, LogOut, FileSpreadsheet } from 'lucide-react';
 import { ADMIN_EMAIL } from '../config';
 
 export default function UserInfoBar({
@@ -10,6 +10,8 @@ export default function UserInfoBar({
   onOpenPinChange,
   onToggleAdminAccess,
   onLogout,
+  canAccessDividendTax,
+  onOpenDividendTax,
 }) {
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
@@ -24,6 +26,15 @@ export default function UserInfoBar({
             title="관리자"
           >
             <Settings size={14} />
+          </button>
+        )}
+        {canAccessDividendTax && (
+          <button
+            onClick={onOpenDividendTax}
+            className="text-gray-500 hover:text-green-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+            title="배당 과세 이력 관리"
+          >
+            <FileSpreadsheet size={14} />
           </button>
         )}
         <button
