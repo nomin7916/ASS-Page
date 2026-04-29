@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState } from 'react';
-import { Plus, Download, Trash2, Calendar, Maximize2 } from 'lucide-react';
+import { Plus, Download, Trash2, Calendar, Maximize2, X, Check } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { sortArrow } from '../chartUtils';
 
@@ -166,21 +166,42 @@ export default function DepositPanel({
             </div>
           </div>
       {memoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={() => setMemoModal(null)}>
-          <div className="bg-black border border-gray-800 rounded-2xl p-5 w-80 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="text-white text-sm font-bold mb-3">메모</div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setMemoModal(null)}>
+          <div className="bg-black w-80 shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            {/* 타이틀 바 — 윈도우 컨트롤 스타일 */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-900">
+              <div className="flex items-center gap-2.5">
+                <button
+                  onClick={() => setMemoModal(null)}
+                  className="w-3 h-3 flex items-center justify-center rounded-full bg-gray-800 hover:bg-pink-600 text-gray-600 hover:text-white transition-all group"
+                  title="취소 (Esc)"
+                >
+                  <X size={7} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                </button>
+                <button
+                  onClick={saveMemoModal}
+                  className="w-3 h-3 flex items-center justify-center rounded-full bg-gray-800 hover:bg-purple-600 text-gray-600 hover:text-white transition-all group"
+                  title="저장 (Ctrl+Enter)"
+                >
+                  <Check size={7} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                </button>
+              </div>
+              <span className="text-[11px] font-bold tracking-[0.2em] bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 bg-clip-text text-transparent select-none">MEMO</span>
+              <div className="w-10" />
+            </div>
+            {/* 입력 영역 */}
             <textarea
-              className="w-full bg-[#111] border border-gray-800 rounded-xl text-gray-200 text-[12px] p-3 outline-none resize-none caret-blue-400 focus:border-gray-600 leading-relaxed"
-              rows={6}
+              className="w-full bg-black text-gray-200 text-[12px] px-4 py-4 outline-none resize-none caret-purple-400 leading-relaxed placeholder-gray-700"
+              rows={7}
               autoFocus
+              placeholder="메모를 입력하세요..."
               value={memoModal.val}
               onChange={e => setMemoModal(prev => ({ ...prev, val: e.target.value }))}
-              onKeyDown={e => { if (e.key === 'Escape') setMemoModal(null); }}
+              onKeyDown={e => {
+                if (e.key === 'Escape') setMemoModal(null);
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') saveMemoModal();
+              }}
             />
-            <div className="flex items-center justify-between mt-4">
-              <button onClick={() => setMemoModal(null)} className="text-sky-400 hover:text-sky-300 text-xs font-medium transition-colors">취소</button>
-              <button onClick={saveMemoModal} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-5 py-1.5 rounded-lg transition-colors">저장</button>
-            </div>
           </div>
         </div>
       )}
