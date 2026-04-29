@@ -495,6 +495,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     }, 0);
   };
 
+  const isSeparateTax = (portfolioId) => {
+    const pf = nonGoldPortfolios.find(p => p.id === portfolioId);
+    return !!pf?.dividendSeparateTax;
+  };
+
   if (!nonGoldPortfolios.length) return null;
 
   // ── 월 예상 분배금 탭 totals ──
@@ -564,13 +569,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
 
   // ── compact 모드 totals ──
   const compactAnnualTotal = (activeTab === 'expected' ? compactExpectedRows : compactActualRows)
+    .filter(r => !isSeparateTax(r.portfolioId))
     .reduce((s, r) => s + r.annual, 0);
-  const compactAnnualTax = compactExpectedRows.reduce((sum, row) => {
-    const rate = getTaxRate(row.portfolioId);
-    return sum + Math.round(row.annual * rate / 100);
-  }, 0);
+  const compactAnnualTax = compactExpectedRows
+    .filter(r => !isSeparateTax(r.portfolioId))
+    .reduce((sum, row) => {
+      const rate = getTaxRate(row.portfolioId);
+      return sum + Math.round(row.annual * rate / 100);
+    }, 0);
   const compactMonthlyTotals = Array.from({ length: 12 }, (_, i) =>
     (activeTab === 'expected' ? compactExpectedRows : compactActualRows)
+      .filter(r => !isSeparateTax(r.portfolioId))
       .reduce((sum, row) => sum + row.monthData[i].amount, 0)
   );
   const compactActualTaxMap = {};
@@ -591,24 +600,20 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   if (compact) {
     const rows = activeTab === 'expected' ? compactExpectedRows : compactActualRows;
     const totalAnnual = compactAnnualTotal;
-    const compactExpectedHasOverseas = compactExpectedRows.some(r => r.isOverseas);
+    const compactExpectedHasOverseas = compactExpectedRows.filter(r => !isSeparateTax(r.portfolioId)).some(r => r.isOverseas);
     const compactExpectedMonthlyUsd = Array.from({ length: 12 }, (_, i) =>
-      compactExpectedRows.filter(r => r.isOverseas).reduce((s, r) => s + (r.monthData[i].amountUsd || 0), 0)
+      compactExpectedRows.filter(r => r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.monthData[i].amountUsd || 0), 0)
     );
-    const compactExpectedAnnualUsd = compactExpectedRows.reduce((s, r) => s + (r.annualUsd || 0), 0);
+    const compactExpectedAnnualUsd = compactExpectedRows.filter(r => !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.annualUsd || 0), 0);
     const compactExpectedMonthlyDomesticKrw = Array.from({ length: 12 }, (_, i) =>
-      compactExpectedRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.monthData[i].amount, 0)
+      compactExpectedRows.filter(r => !r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + r.monthData[i].amount, 0)
     );
-    const compactExpectedDomesticAnnual = compactExpectedRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.annual, 0);
-    const compactActualHasOverseas = compactActualRows.some(r => r.isOverseas);
-    const compactActualAnnualUsd = compactActualRows.reduce((s, r) => s + (r.annualUsd || 0), 0);
+    const compactExpectedDomesticAnnual = compactExpectedRows.filter(r => !r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + r.annual, 0);
+    const compactActualHasOverseas = compactActualRows.filter(r => !isSeparateTax(r.portfolioId)).some(r => r.isOverseas);
+    const compactActualAnnualUsd = compactActualRows.filter(r => !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.annualUsd || 0), 0);
     const compactActualMonthlyUsd = Array.from({ length: 12 }, (_, i) =>
-      compactActualRows.filter(r => r.isOverseas).reduce((s, r) => s + (r.monthData[i].amountUsd || 0), 0)
+      compactActualRows.filter(r => r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.monthData[i].amountUsd || 0), 0)
     );
-    const isSeparateTax = (portfolioId) => {
-      const pf = nonGoldPortfolios.find(p => p.id === portfolioId);
-      return !!pf?.dividendSeparateTax;
-    };
     const compactActualMonthlyOverseasTaxKrw = Array.from({ length: 12 }, (_, i) =>
       compactActualRows.filter(r => r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + (r.monthData[i].taxKrw || 0), 0)
     );
@@ -620,9 +625,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     });
     const compactActualAnnualTaxCombined = compactActualMonthlyTaxCombined.reduce((s, v) => s + v, 0);
     const compactActualMonthlyDomesticKrw = Array.from({ length: 12 }, (_, i) =>
-      compactActualRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.monthData[i].amount, 0)
+      compactActualRows.filter(r => !r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + r.monthData[i].amount, 0)
     );
-    const compactActualDomesticAnnual = compactActualRows.filter(r => !r.isOverseas).reduce((s, r) => s + r.annual, 0);
+    const compactActualDomesticAnnual = compactActualRows.filter(r => !r.isOverseas && !isSeparateTax(r.portfolioId)).reduce((s, r) => s + r.annual, 0);
     return (
       <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden w-full">
         <div className="p-4 bg-[#0f172a] border-b border-gray-700 flex items-center gap-2 flex-wrap">
@@ -874,10 +879,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 </tr>
                 {activeTab === 'expected' && compactAnnualTax > 0 && (() => {
                   const monthlyTaxArr = Array.from({ length: 12 }, (_, i) =>
-                    compactExpectedRows.reduce((sum, row) => {
-                      const rate = getTaxRate(row.portfolioId);
-                      return sum + Math.round((row.monthData[i]?.amount || 0) * rate / 100);
-                    }, 0)
+                    compactExpectedRows
+                      .filter(r => !isSeparateTax(r.portfolioId))
+                      .reduce((sum, row) => {
+                        const rate = getTaxRate(row.portfolioId);
+                        return sum + Math.round((row.monthData[i]?.amount || 0) * rate / 100);
+                      }, 0)
                   );
                   return (
                     <tr className="text-orange-300/60">
