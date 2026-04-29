@@ -86,9 +86,9 @@ export default function DepositPanel({
                 <tbody>
                   {depositWithSumSorted.map((h) => (
                     <tr key={h.id} className="border-b border-gray-700 hover:bg-gray-800/50 transition-colors">
-                      <td className="py-2 border-r border-gray-600 align-middle relative">
+                      <td className="py-2 border-r border-gray-600 align-middle relative cursor-pointer" onClick={e => e.currentTarget.querySelector('input[type="date"]')?.showPicker()}>
                         <div className="flex items-center justify-center font-mono text-[10px] text-gray-300 gap-1 pointer-events-none">{formatVeryShortDate(h.date)}<Calendar size={10} className="text-gray-500" /></div>
-                        <input type="date" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" value={h.date} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].date = e.target.value; setDepositHistory(n); }} />
+                        <input type="date" className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" value={h.date} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].date = e.target.value; setDepositHistory(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                         <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd1')} onFocus={e => amountFocus(h, 'd1', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd1', depositHistory, setDepositHistory)} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
@@ -139,9 +139,9 @@ export default function DepositPanel({
                 <tbody>
                   {depositWithSum2Sorted.map((h) => (
                     <tr key={h.id} className="border-b border-gray-700 hover:bg-gray-800/50 transition-colors">
-                      <td className="py-2 border-r border-gray-600 align-middle relative">
+                      <td className="py-2 border-r border-gray-600 align-middle relative cursor-pointer" onClick={e => e.currentTarget.querySelector('input[type="date"]')?.showPicker()}>
                         <div className="flex items-center justify-center font-mono text-[10px] text-gray-300 gap-1 pointer-events-none">{formatVeryShortDate(h.date)}<Calendar size={10} className="text-gray-500" /></div>
-                        <input type="date" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" value={h.date} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].date = e.target.value; setDepositHistory2(n); }} />
+                        <input type="date" className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" value={h.date} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].date = e.target.value; setDepositHistory2(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                         <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd2')} onFocus={e => amountFocus(h, 'd2', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd2', depositHistory2, setDepositHistory2)} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
