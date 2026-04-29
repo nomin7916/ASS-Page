@@ -49,7 +49,10 @@
       "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:APPDATA\\\\npm\\\\npm.cmd\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:ProgramFiles\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object Name -First 5)",
       "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue; Get-ChildItem \"C:\\\\Program Files \\(x86\\)\\\\nodejs\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:LOCALAPPDATA\\\\Programs\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object Name -First 5)",
       "PowerShell($nodePaths = @\\(\"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\",\"C:\\\\nvm4w\\\\nodejs\\\\npm.cmd\",\"C:\\\\tools\\\\nodejs\\\\npm.cmd\"\\); foreach\\($p in $nodePaths\\) { if \\(Test-Path $p\\) { Write-Host \"Found: $p\" } }; Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Roaming\\\\npm\" -ErrorAction SilentlyContinue | Select-Object Name -First 5)",
-      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 20)"
+      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 20)",
+      "Read(//usr/local/bin/**)",
+      "Read(//c/Users/arui1/.nvm/versions/**)",
+      "PowerShell($env:Path += \";C:\\\\Program Files\\\\nodejs\"; npm run build 2>&1 | Select-Object -Last 20)"
     ]
   }
 }

@@ -225,11 +225,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           hasDivData: Object.keys(pred).length > 0,
           monthData,
           annual: isOverseas
-            ? monthData.reduce((s, d) => s + d.grossKrw, 0)
-            : monthData.reduce((s, d) => s + d.amount, 0),
-          annualUsd: isOverseas ? monthData.reduce((s, d) => s + d.grossUsd, 0) : 0,
-          annualAfterKrw: isOverseas ? monthData.reduce((s, d) => s + d.afterTaxKrw, 0) : 0,
-          annualAfterUsd: isOverseas ? monthData.reduce((s, d) => s + d.afterTaxUsd, 0) : 0,
+            ? monthData.reduce((s, d) => s + (d.hasManualGross ? d.grossKrw : 0), 0)
+            : monthData.reduce((s, d) => s + (d.hasManual ? d.amount : 0), 0),
+          annualUsd: isOverseas ? monthData.reduce((s, d) => s + (d.hasManualGross ? d.grossUsd : 0), 0) : 0,
+          annualAfterKrw: isOverseas ? monthData.reduce((s, d) => s + (d.hasManualAfterTax ? d.afterTaxKrw : 0), 0) : 0,
+          annualAfterUsd: isOverseas ? monthData.reduce((s, d) => s + (d.hasManualAfterTax ? d.afterTaxUsd : 0), 0) : 0,
         });
       });
     });
