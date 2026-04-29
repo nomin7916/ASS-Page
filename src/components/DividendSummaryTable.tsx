@@ -272,6 +272,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const fxRate = isOverseas ? usdkrw : 1;
       const taxRate = pf.dividendTaxRate ?? 15.4;
       const monthData = Array.from({ length: 12 }, (_, i) => {
+        const yearMonth = `${CURRENT_YEAR}-${String(i + 1).padStart(2, '0')}`;
         let amountUsd = 0;
         let taxKrw = 0;
         const amount = (pf.portfolio || []).reduce((sum, item) => {
@@ -282,14 +283,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           const perShareUsd = pred[i + 1] || 0;
           if (isOverseas) amountUsd += perShareUsd * qty;
           const grossKrw = perShareUsd * qty * fxRate;
-          const yearMonth = `${CURRENT_YEAR}-${String(i + 1).padStart(2, '0')}`;
           const taxRec = !isOverseas && dividendTaxHistory?.[item.code]?.records?.[yearMonth];
           taxKrw += taxRec && qty > 0
             ? Math.round(taxRec.perShareTaxableBase * qty * taxRate / 100)
             : Math.round(grossKrw * taxRate / 100);
           return sum + grossKrw;
         }, 0);
-        return { amount, amountUsd: isOverseas ? amountUsd : 0, taxKrw };
+        const hasActual = !isOverseas && (pf.portfolio || []).some(item => {
+          if (!getCodeType(item.code, pf) || !cleanNum(item.quantity)) return false;
+          return !!divHistory[item.code]?.[yearMonth];
+        });
+        return { amount, amountUsd: isOverseas ? amountUsd : 0, taxKrw, hasActual };
       });
       const annual = monthData.reduce((s, d) => s + d.amount, 0);
       const annualUsd = isOverseas ? monthData.reduce((s, d) => s + d.amountUsd, 0) : 0;
@@ -362,7 +366,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const entry = row.monthData?.[yearMonth] || {};
             return s + (entry.afterTaxKrw || 0);
           }, 0);
-          return { amount, amountUsd: 0, taxKrw: 0, yearMonth };
+          const hasManual = (pf.portfolio || []).some(item => {
+            if (!getCodeType(item.code, pf)) return false;
+            return yearMonth in (actualDividend[item.code] || {});
+          }) || (pf.extraDividendRows || []).some(row => {
+            const entry = row.monthData?.[yearMonth] || {};
+            return (entry.afterTaxKrw || 0) > 0;
+          });
+          return { amount, amountUsd: 0, taxKrw: 0, yearMonth, hasManual };
         }
       });
       const annual = monthData.reduce((s, d) => s + d.amount, 0);
@@ -789,14 +800,23 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             </td>
                           );
                         }
-                        const taxAmt = activeTab === 'expected'
+                        const isActualTab = activeTab === 'actual';
+                        const taxAmt = !isActualTab
                           ? (d.taxKrw || 0)
                           : (actualTax?.monthlyTax[i] || 0);
-                        const isActual = activeTab === 'actual';
-                        const line1 = isActual ? d.amount + taxAmt : d.amount;
-                        const line3 = isActual ? d.amount : Math.max(0, d.amount - taxAmt);
+                        if (isActualTab && !d.hasManual) {
+                          return <td key={i} className="py-1.5 px-1 text-center text-[10px] text-gray-700">-</td>;
+                        }
+                        const line1 = isActualTab ? d.amount + taxAmt : d.amount;
+                        const line3 = isActualTab ? d.amount : Math.max(0, d.amount - taxAmt);
                         return (
-                          <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${d.amount > 0 ? (isActual ? 'text-emerald-300' : 'text-blue-300/70') : 'text-gray-700'}`}>
+                          <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${
+                            d.amount > 0
+                              ? isActualTab
+                                ? 'text-emerald-300 bg-emerald-900/20'
+                                : d.hasActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/70'
+                              : 'text-gray-700'
+                          }`}>
                             <div className="flex flex-col items-center justify-center gap-0">
                               <span>{d.amount > 0 ? formatCurrency(line1) : '-'}</span>
                               {taxAmt > 0 && (
@@ -1280,7 +1300,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 {actualRows.map((row) => (
                   <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                     <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
-                      <div className="line-clamp-1">{row.code}</div>
+                      <div className="line-clamp-1">{row.name || row.code}</div>
+                      {row.name && <div className="text-gray-500 text-[9px] font-normal">({row.code})</div>}
                     </td>
                     <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
                     {row.monthData.map((d, i) => {
