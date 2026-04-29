@@ -319,11 +319,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             if (!getCodeType(item.code, pf)) return;
             const qty = cleanNum(item.quantity);
             if (!qty) return;
-            const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
             const codeActualUsd = actualDividendUsd[item.code] || {};
+            if (!(yearMonth in codeActualUsd)) return;
+            pfHasActual = true;
+            const grossUsd = codeActualUsd[yearMonth];
             const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[item.code] || {};
             const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[item.code] || {};
-            const grossUsd = yearMonth in codeActualUsd ? codeActualUsd[yearMonth] : (pred[i + 1] || 0) * qty;
             const storedAfterUsd = codeAfterTaxUsd[yearMonth];
             const storedAfterKrw = codeAfterTaxKrw[yearMonth];
             let afterUsd, afterKrw;
@@ -337,7 +338,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               afterUsd = grossUsd * (1 - taxRate / 100);
               afterKrw = Math.round(afterUsd * usdkrw);
             }
-            if (yearMonth in codeActualUsd) pfHasActual = true;
             pfAfterUsd += afterUsd;
             pfAfterKrw += afterKrw;
           });
