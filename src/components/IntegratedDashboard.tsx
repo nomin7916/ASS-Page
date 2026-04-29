@@ -128,7 +128,7 @@ export default function IntegratedDashboard({
             })()}
 
             <div className="flex items-start gap-0 w-full">
-              <div className="flex-1 flex flex-col gap-6 min-w-0">
+              <div className="flex-1 flex flex-col gap-6 min-w-0" style={{ paddingBottom: '40vh' }}>
             <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg">
               <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
