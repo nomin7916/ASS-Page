@@ -270,8 +270,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const divHistory = pf.dividendHistory || {};
       const isOverseas = pf.accountType === 'overseas';
       const fxRate = isOverseas ? usdkrw : 1;
+      const taxRate = pf.dividendTaxRate ?? 15.4;
       const monthData = Array.from({ length: 12 }, (_, i) => {
         let amountUsd = 0;
+        let taxKrw = 0;
         const amount = (pf.portfolio || []).reduce((sum, item) => {
           if (!getCodeType(item.code, pf)) return sum;
           const qty = cleanNum(item.quantity);
@@ -279,15 +281,22 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
           const perShareUsd = pred[i + 1] || 0;
           if (isOverseas) amountUsd += perShareUsd * qty;
-          return sum + perShareUsd * qty * fxRate;
+          const grossKrw = perShareUsd * qty * fxRate;
+          const yearMonth = `${CURRENT_YEAR}-${String(i + 1).padStart(2, '0')}`;
+          const taxRec = !isOverseas && dividendTaxHistory?.[item.code]?.records?.[yearMonth];
+          taxKrw += taxRec && qty > 0
+            ? Math.round(taxRec.perShareTaxableBase * qty * taxRate / 100)
+            : Math.round(grossKrw * taxRate / 100);
+          return sum + grossKrw;
         }, 0);
-        return { amount, amountUsd: isOverseas ? amountUsd : 0 };
+        return { amount, amountUsd: isOverseas ? amountUsd : 0, taxKrw };
       });
       const annual = monthData.reduce((s, d) => s + d.amount, 0);
       const annualUsd = isOverseas ? monthData.reduce((s, d) => s + d.amountUsd, 0) : 0;
-      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd };
+      const annualTax = monthData.reduce((s, d) => s + d.taxKrw, 0);
+      return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTax };
     }).filter(row => row.annual > 0);
-  }, [compact, nonGoldPortfolios]);
+  }, [compact, nonGoldPortfolios, dividendTaxHistory]);
 
   const compactActualRows = useMemo(() => {
     if (!compact) return [];
@@ -585,10 +594,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     .reduce((s, r) => s + r.annual, 0);
   const compactAnnualTax = compactExpectedRows
     .filter(r => !isSeparateTax(r.portfolioId))
-    .reduce((sum, row) => {
-      const rate = getTaxRate(row.portfolioId);
-      return sum + Math.round(row.annual * rate / 100);
-    }, 0);
+    .reduce((sum, row) => sum + (row.annualTax || 0), 0);
   const compactMonthlyTotals = Array.from({ length: 12 }, (_, i) =>
     (activeTab === 'expected' ? compactExpectedRows : compactActualRows)
       .filter(r => !isSeparateTax(r.portfolioId))
@@ -893,10 +899,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                   const monthlyTaxArr = Array.from({ length: 12 }, (_, i) =>
                     compactExpectedRows
                       .filter(r => !isSeparateTax(r.portfolioId))
-                      .reduce((sum, row) => {
-                        const rate = getTaxRate(row.portfolioId);
-                        return sum + Math.round((row.monthData[i]?.amount || 0) * rate / 100);
-                      }, 0)
+                      .reduce((sum, row) => sum + (row.monthData[i]?.taxKrw || 0), 0)
                   );
                   return (
                     <tr className="text-orange-300/60">
