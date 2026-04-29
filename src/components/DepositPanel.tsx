@@ -189,28 +189,27 @@ export default function DepositPanel({
               <span className="text-[11px] font-bold tracking-[0.25em] bg-gradient-to-r from-pink-300 via-fuchsia-200 to-purple-300 bg-clip-text text-transparent select-none">MEMO</span>
               <div className="w-10" />
             </div>
-            {/* 옥스퍼드 메모장 스타일 입력 영역 */}
+            {/* 줄선 메모 입력 영역 */}
             <textarea
-              className="w-full text-gray-700 text-[13px] outline-none resize-none caret-blue-600 placeholder-blue-200"
+              className="w-full text-gray-200 text-[12px] outline-none resize-none caret-purple-400 placeholder-gray-700"
               style={{
                 background: `
-                  linear-gradient(90deg, transparent 44px, rgba(252,165,165,0.6) 44px, rgba(252,165,165,0.6) 45px, transparent 45px),
                   repeating-linear-gradient(
                     180deg,
                     transparent 0px,
                     transparent 27px,
-                    rgba(147,197,253,0.55) 27px,
-                    rgba(147,197,253,0.55) 28px
+                    rgba(99,130,255,0.25) 27px,
+                    rgba(99,130,255,0.25) 28px
                   ),
-                  linear-gradient(160deg, #fefce8 0%, #fef9c3 50%, #fef3c7 100%)
+                  #000
                 `,
                 lineHeight: '28px',
-                paddingLeft: '52px',
-                paddingRight: '12px',
+                paddingLeft: '10px',
+                paddingRight: '10px',
                 paddingTop: '8px',
                 paddingBottom: '8px',
               }}
-              rows={13}
+              rows={10}
               autoFocus
               placeholder="메모를 입력하세요..."
               value={memoModal.val}
