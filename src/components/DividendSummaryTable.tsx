@@ -677,23 +677,20 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 <>
                   <div className="flex items-center gap-1.5">
                     <span className="text-gray-500 w-14 shrink-0">연간 예상</span>
-                    {compactExpectedHasOverseas && compactExpectedAnnualUsd > 0 && <span className="text-yellow-400 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(compactExpectedAnnualUsd)}</span>}
-                    {compactExpectedHasOverseas && compactExpectedDomesticAnnual > 0 && <span className="text-gray-700">|</span>}
-                    {compactExpectedHasOverseas
-                      ? compactExpectedDomesticAnnual > 0 && <span className="text-yellow-400/45 text-[9px] tabular-nums">{formatCurrency(compactExpectedDomesticAnnual)}</span>
-                      : <span className="text-yellow-400 font-bold tabular-nums">{formatCurrency(totalAnnual)}</span>
-                    }
+                    <span className="text-yellow-400 font-bold tabular-nums">{formatCurrency(totalAnnual)}</span>
+                    {compactExpectedHasOverseas && compactExpectedAnnualUsd > 0 && <span className="text-gray-700">|</span>}
+                    {compactExpectedHasOverseas && compactExpectedAnnualUsd > 0 && <span className="text-yellow-400/60 text-[9px] tabular-nums">{formatUsd(compactExpectedAnnualUsd)}</span>}
                   </div>
                   {compactAnnualTax > 0 && (
                     <div className="flex items-center gap-1.5">
                       <span className="text-gray-500 w-14 shrink-0">세후(예상)</span>
-                      <span className="text-emerald-400/45 text-[9px] tabular-nums">{formatCurrency(totalAnnual - compactAnnualTax)}</span>
+                      <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(totalAnnual - compactAnnualTax)}</span>
                     </div>
                   )}
                   {compactAnnualTax > 0 && (
                     <div className="flex items-center gap-1.5">
                       <span className="text-gray-500 w-14 shrink-0">과세</span>
-                      <span className="text-orange-300/40 text-[9px] tabular-nums">{formatCurrency(compactAnnualTax)}</span>
+                      <span className="text-orange-300/70 font-semibold tabular-nums">{formatCurrency(compactAnnualTax)}</span>
                     </div>
                   )}
                 </>
@@ -701,17 +698,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 <>
                   <div className="flex items-center gap-1.5">
                     <span className="text-gray-500 w-14 shrink-0">세후합계</span>
-                    {compactActualHasOverseas && compactActualAnnualUsd > 0 && <span className="text-emerald-400 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(compactActualAnnualUsd)}</span>}
-                    {compactActualHasOverseas && compactActualDomesticAnnual > 0 && <span className="text-gray-700">|</span>}
-                    {compactActualHasOverseas
-                      ? compactActualDomesticAnnual > 0 && <span className="text-emerald-400/45 text-[9px] tabular-nums">{formatCurrency(compactActualDomesticAnnual)}</span>
-                      : <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(totalAnnual)}</span>
-                    }
+                    <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(totalAnnual)}</span>
+                    {compactActualHasOverseas && compactActualAnnualUsd > 0 && <span className="text-gray-700">|</span>}
+                    {compactActualHasOverseas && compactActualAnnualUsd > 0 && <span className="text-emerald-400/60 text-[9px] tabular-nums">{formatUsd(compactActualAnnualUsd)}</span>}
                   </div>
                   {compactActualAnnualTaxCombined > 0 && (
                     <div className="flex items-center gap-1.5">
                       <span className="text-gray-500 w-14 shrink-0">과세합계</span>
-                      <span className="text-orange-300/40 text-[9px] tabular-nums">{formatCurrency(compactActualAnnualTaxCombined)}</span>
+                      <span className="text-orange-300/70 font-semibold tabular-nums">{formatCurrency(compactActualAnnualTaxCombined)}</span>
                     </div>
                   )}
                 </>
@@ -971,24 +965,24 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             <div className="text-[10px] leading-[1.65]">
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-500 w-12 shrink-0">세전합계</span>
-                {annualUsdTotal > 0 && <span className="text-blue-300 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTotal)}</span>}
+                <span className="text-blue-300 font-bold tabular-nums">{formatCurrency(annualTotal)}</span>
                 {annualUsdTotal > 0 && <span className="text-gray-700">|</span>}
-                <span className="text-blue-300/45 text-[9px] tabular-nums">{formatCurrency(annualTotal)}</span>
+                {annualUsdTotal > 0 && <span className="text-blue-300/60 text-[9px] tabular-nums">{formatUsd(annualUsdTotal)}</span>}
               </div>
               {annualTaxTotal > 0 && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-gray-500 w-12 shrink-0">세후(예상)</span>
-                  {annualUsdTaxTotal > 0 && <span className="text-emerald-400 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTotal - annualUsdTaxTotal)}</span>}
+                  <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(annualTotal - annualTaxTotal)}</span>
                   {annualUsdTaxTotal > 0 && <span className="text-gray-700">|</span>}
-                  <span className="text-emerald-400/45 text-[9px] tabular-nums">{formatCurrency(annualTotal - annualTaxTotal)}</span>
+                  {annualUsdTaxTotal > 0 && <span className="text-emerald-400/60 text-[9px] tabular-nums">{formatUsd(annualUsdTotal - annualUsdTaxTotal)}</span>}
                 </div>
               )}
               {annualTaxTotal > 0 && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-gray-500 w-12 shrink-0">과세</span>
-                  {annualUsdTaxTotal > 0 && <span className="text-orange-300/80 font-semibold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(annualUsdTaxTotal)}</span>}
+                  <span className="text-orange-300/70 font-semibold tabular-nums">{formatCurrency(annualTaxTotal)}</span>
                   {annualUsdTaxTotal > 0 && <span className="text-gray-700">|</span>}
-                  <span className="text-orange-300/40 text-[9px] tabular-nums">{formatCurrency(annualTaxTotal)}</span>
+                  {annualUsdTaxTotal > 0 && <span className="text-orange-300/50 text-[9px] tabular-nums">{formatUsd(annualUsdTaxTotal)}</span>}
                 </div>
               )}
             </div>
@@ -1009,24 +1003,24 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           <div className="text-[10px] leading-[1.65] self-center">
             <div className="flex items-center gap-1.5">
               <span className="text-gray-500 w-12 shrink-0">세전합계</span>
-              {actualAnnualGrossUsd > 0 && <span className="text-blue-300 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualGrossUsd)}</span>}
+              <span className="text-blue-300 font-bold tabular-nums">{formatCurrency(actualAnnualGrossKrw)}</span>
               {actualAnnualGrossUsd > 0 && <span className="text-gray-700">|</span>}
-              <span className="text-blue-300/45 text-[9px] tabular-nums">{formatCurrency(actualAnnualGrossKrw)}</span>
+              {actualAnnualGrossUsd > 0 && <span className="text-blue-300/60 text-[9px] tabular-nums">{formatUsd(actualAnnualGrossUsd)}</span>}
             </div>
             {actualAnnualAfterKrw > 0 && (
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-500 w-12 shrink-0">세후</span>
-                {actualAnnualAfterUsd > 0 && <span className="text-emerald-400 font-bold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualAfterUsd)}</span>}
+                <span className="text-emerald-400 font-bold tabular-nums">{formatCurrency(actualAnnualAfterKrw)}</span>
                 {actualAnnualAfterUsd > 0 && <span className="text-gray-700">|</span>}
-                <span className="text-emerald-400/45 text-[9px] tabular-nums">{formatCurrency(actualAnnualAfterKrw)}</span>
+                {actualAnnualAfterUsd > 0 && <span className="text-emerald-400/60 text-[9px] tabular-nums">{formatUsd(actualAnnualAfterUsd)}</span>}
               </div>
             )}
             {(actualAnnualGrossKrw - actualAnnualAfterKrw) > 0 && (
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-500 w-12 shrink-0">과세</span>
-                {actualAnnualGrossUsd > 0 && <span className="text-orange-300/80 font-semibold text-xs w-[4.8rem] text-right tabular-nums shrink-0">{formatUsd(actualAnnualGrossUsd - actualAnnualAfterUsd)}</span>}
+                <span className="text-orange-300/70 font-semibold tabular-nums">{formatCurrency(actualAnnualGrossKrw - actualAnnualAfterKrw)}</span>
                 {actualAnnualGrossUsd > 0 && <span className="text-gray-700">|</span>}
-                <span className="text-orange-300/40 text-[9px] tabular-nums">{formatCurrency(actualAnnualGrossKrw - actualAnnualAfterKrw)}</span>
+                {actualAnnualGrossUsd > 0 && <span className="text-orange-300/50 text-[9px] tabular-nums">{formatUsd(actualAnnualGrossUsd - actualAnnualAfterUsd)}</span>}
               </div>
             )}
           </div>
