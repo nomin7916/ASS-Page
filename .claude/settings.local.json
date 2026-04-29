@@ -57,7 +57,15 @@
       "PowerShell(Get-ChildItem \"$env:USERPROFILE\" -Filter \".nvm\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:LOCALAPPDATA\" -Filter \"nvm\" -ErrorAction SilentlyContinue)",
       "Read(//c/Users/arui1/AppData/Local/**)",
       "Read(//c/Users/arui1/**)",
-      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [System.Environment]::GetEnvironmentVariable\\('Path','User'\\); cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 15)"
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [System.Environment]::GetEnvironmentVariable\\('Path','User'\\); cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 15)",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page && npm run build 2>&1\")",
+      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; node --version; npm --version)",
+      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-Command npm -ErrorAction SilentlyContinue; $env:PATH -split ';' | Where-Object { $_ -match 'node' })",
+      "PowerShell(& \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" --version 2>&1)",
+      "PowerShell(& \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\\\\fnm\\\\node.exe\" --version 2>&1)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'node|npm|nvm|fnm' } | Select-Object Name)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'node|nvm|fnm' } | Select-Object Name, FullName)",
+      "PowerShell(Get-ChildItem \"C:\\\\\" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'node|nvm' } | Select-Object Name, FullName)"
     ]
   }
 }
