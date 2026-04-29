@@ -27,7 +27,8 @@ export default function PortfolioStatsPanel({
       <span className={`font-bold ${cls} whitespace-nowrap pl-1`}>{formatCurrency(krwVal)}</span>
     );
 
-  const profit = totals.totalEval - principal;
+  const principalKRW = isOv ? principal * fx : principal;
+  const profit = totals.totalEval - principalKRW;
 
   return (
     <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden shrink-0">
@@ -86,7 +87,7 @@ export default function PortfolioStatsPanel({
         </div>
         <div className="flex h-auto py-2.5 border-b border-gray-700 shrink-0">
           <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
-            <span className="text-[11px] text-gray-400 font-bold">투자 원금</span>
+            <span className="text-[11px] text-gray-400 font-bold">{isOv ? '투자 원금(USD)' : '투자 원금'}</span>
           </div>
           <div className="flex-1 p-3 flex items-center bg-gray-800/20">
             <input
@@ -113,7 +114,7 @@ export default function PortfolioStatsPanel({
           </div>
           <div className="flex-1 flex flex-col items-center justify-center bg-gray-900/40 gap-1 p-2 overflow-hidden">
             <span className={`text-[24px] font-extrabold leading-none tracking-wide whitespace-nowrap ${profit >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-              {formatPercent(principal > 0 ? (profit / principal) * 100 : 0)}
+              {formatPercent(principalKRW > 0 ? (profit / principalKRW) * 100 : 0)}
             </span>
             {isOv ? (
               <div className="flex flex-col items-center leading-tight">

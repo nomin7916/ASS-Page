@@ -578,12 +578,15 @@ export default function App() {
   }, [portfolio, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const cagr = useMemo(() => {
-    if (!portfolioStartDate || principal <= 0 || totals.totalEval <= 0) return 0;
+    const principalKRW = activePortfolioAccountType === 'overseas'
+      ? principal * (marketIndicators.usdkrw || 1)
+      : principal;
+    if (!portfolioStartDate || principalKRW <= 0 || totals.totalEval <= 0) return 0;
     const days = (new Date() - new Date(portfolioStartDate)) / (1000 * 60 * 60 * 24);
     if (days <= 0) return 0;
-    if (days < 365) return (totals.totalEval / principal - 1) * 100;
-    return (Math.pow(totals.totalEval / principal, 1 / (days / 365.25)) - 1) * 100;
-  }, [portfolioStartDate, principal, totals.totalEval]);
+    if (days < 365) return (totals.totalEval / principalKRW - 1) * 100;
+    return (Math.pow(totals.totalEval / principalKRW, 1 / (days / 365.25)) - 1) * 100;
+  }, [portfolioStartDate, principal, totals.totalEval, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const sortedHistoryDesc = useMemo(() => [...history].sort((a, b) => new Date(b.date) - new Date(a.date)), [history]);
 
