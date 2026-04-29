@@ -197,22 +197,35 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const codeActualUsd = actualDividendUsd[item.code] || {};
             const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[item.code] || {};
             const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[item.code] || {};
+            const taxKrwManual = (pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] || 0;
             const hasManualGross = yearMonth in codeActualUsd;
-            const grossUsd = hasManualGross ? codeActualUsd[yearMonth] : (pred[i + 1] || 0) * qty;
-            const grossKrw = Math.round(grossUsd * usdkrw);
             const storedAfterUsd = codeAfterTaxUsd[yearMonth];
             const storedAfterKrw = codeAfterTaxKrw[yearMonth];
+            const hasManualAfterTax = storedAfterUsd != null || storedAfterKrw != null;
+            const hasManual = hasManualGross || hasManualAfterTax;
+            let grossUsd, grossKrw;
+            if (hasManualAfterTax) {
+              const atKrw = storedAfterKrw != null ? storedAfterKrw : Math.round((storedAfterUsd || 0) * usdkrw);
+              grossKrw = atKrw + taxKrwManual;
+              grossUsd = grossKrw / (usdkrw || 1);
+            } else if (hasManualGross) {
+              grossUsd = codeActualUsd[yearMonth];
+              grossKrw = Math.round(grossUsd * usdkrw);
+            } else {
+              grossUsd = (pred[i + 1] || 0) * qty;
+              grossKrw = Math.round(grossUsd * usdkrw);
+            }
             const autoAfterUsd = grossUsd * (1 - taxRate / 100);
             const afterTaxUsd = storedAfterUsd != null ? storedAfterUsd : autoAfterUsd;
             const afterTaxKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterTaxUsd * usdkrw);
-            const hasManualAfterTax = storedAfterUsd != null || storedAfterKrw != null;
-            return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, yearMonth };
+            return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, hasManual, taxKrwManual, yearMonth };
           } else {
             const codeActual = actualDividend[item.code] || {};
             const hasManual = yearMonth in codeActual;
             const predicted = (pred[i + 1] || 0) * qty;
             const amount = hasManual ? codeActual[yearMonth] : predicted;
-            return { amount, amountUsd: 0, predicted, hasManual, yearMonth };
+            const taxAmount = (pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] ?? null;
+            return { amount, amountUsd: 0, predicted, hasManual, yearMonth, taxAmount };
           }
         });
         result.push({
@@ -225,11 +238,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           hasDivData: Object.keys(pred).length > 0,
           monthData,
           annual: isOverseas
-            ? monthData.reduce((s, d) => s + (d.hasManualGross ? d.grossKrw : 0), 0)
+            ? monthData.reduce((s, d) => s + (d.hasManual ? d.grossKrw : 0), 0)
             : monthData.reduce((s, d) => s + (d.hasManual ? d.amount : 0), 0),
-          annualUsd: isOverseas ? monthData.reduce((s, d) => s + (d.hasManualGross ? d.grossUsd : 0), 0) : 0,
-          annualAfterKrw: isOverseas ? monthData.reduce((s, d) => s + (d.hasManualAfterTax ? d.afterTaxKrw : 0), 0) : 0,
-          annualAfterUsd: isOverseas ? monthData.reduce((s, d) => s + (d.hasManualAfterTax ? d.afterTaxUsd : 0), 0) : 0,
+          annualUsd: isOverseas ? monthData.reduce((s, d) => s + (d.hasManual ? d.grossUsd : 0), 0) : 0,
+          annualAfterKrw: isOverseas ? monthData.reduce((s, d) => s + (d.hasManual ? d.afterTaxKrw : 0), 0) : 0,
+          annualAfterUsd: isOverseas ? monthData.reduce((s, d) => s + (d.hasManual ? d.afterTaxUsd : 0), 0) : 0,
         });
       });
     });
@@ -314,27 +327,28 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const mo = String(i + 1).padStart(2, '0');
         const yearMonth = `${CURRENT_YEAR}-${mo}`;
         if (isOverseas) {
-          let pfAfterUsd = 0, pfAfterKrw = 0, pfHasActual = false;
+          let pfAfterUsd = 0, pfAfterKrw = 0, pfTaxKrw = 0, pfHasActual = false;
           (pf.portfolio || []).forEach(item => {
             if (!getCodeType(item.code, pf)) return;
             const qty = cleanNum(item.quantity);
             if (!qty) return;
             const codeActualUsd = actualDividendUsd[item.code] || {};
-            if (!(yearMonth in codeActualUsd)) return;
-            pfHasActual = true;
-            const grossUsd = codeActualUsd[yearMonth];
             const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[item.code] || {};
             const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[item.code] || {};
+            const hasManualGross = yearMonth in codeActualUsd;
             const storedAfterUsd = codeAfterTaxUsd[yearMonth];
             const storedAfterKrw = codeAfterTaxKrw[yearMonth];
+            const hasManualAfterTax = storedAfterUsd != null || storedAfterKrw != null;
+            if (!hasManualGross && !hasManualAfterTax) return;
+            pfHasActual = true;
+            const taxKrwManual = (pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] || 0;
+            pfTaxKrw += taxKrwManual;
             let afterUsd, afterKrw;
-            if (storedAfterUsd != null) {
-              afterUsd = storedAfterUsd;
+            if (hasManualAfterTax) {
+              afterUsd = storedAfterUsd != null ? storedAfterUsd : (storedAfterKrw != null && usdkrw > 0 ? storedAfterKrw / usdkrw : 0);
               afterKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterUsd * usdkrw);
-            } else if (storedAfterKrw != null && usdkrw > 0) {
-              afterKrw = storedAfterKrw;
-              afterUsd = afterKrw / usdkrw;
             } else {
+              const grossUsd = codeActualUsd[yearMonth];
               afterUsd = grossUsd * (1 - taxRate / 100);
               afterKrw = Math.round(afterUsd * usdkrw);
             }
@@ -352,7 +366,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           return {
             amount: totalAfterKrw,
             amountUsd: pfAfterUsd + extraAfterUsd,
-            taxKrw: taxRate > 0 && totalAfterKrw > 0 ? Math.round(totalAfterKrw * taxRate / (100 - taxRate)) : 0,
+            taxKrw: pfTaxKrw,
             yearMonth,
             hasActual: pfHasActual || extraHasActual,
           };
@@ -398,33 +412,27 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       setEditingCell(null);
       return;
     }
-    if (field === 'gross' && isOverseas) {
-      const raw = String(editingCell.value).trim();
-      const num = raw === '' ? null : (parseFloat(raw.replace(/,/g, '')) || 0);
-      updatePortfolioActualDividendUsd(portfolioId, code, yearMonth, num);
-    } else if (field === 'afterTax') {
+    if (field === 'afterTax' && isOverseas) {
       const usdRaw = String(editingCell.usdValue || '').trim();
       const krwRaw = String(editingCell.krwValue || '').trim();
+      const taxRaw = String(editingCell.taxKrwValue || '').trim();
       const usdNum = usdRaw === '' ? null : (parseFloat(usdRaw.replace(/,/g, '')) || 0);
       const krwNum = krwRaw === '' ? null : (parseFloat(krwRaw.replace(/,/g, '')) || 0);
+      const taxNum = taxRaw === '' ? 0 : (parseFloat(taxRaw.replace(/,/g, '')) || 0);
       updatePortfolioActualAfterTaxUsd(portfolioId, code, yearMonth, usdNum);
       updatePortfolioActualAfterTaxKrw(portfolioId, code, yearMonth, krwNum);
+      updatePortfolioDividendTaxAmount(portfolioId, code, yearMonth, taxNum);
     } else if (!isOverseas) {
       const raw = String(editingCell.value).trim();
       const num = raw === '' ? null : (parseFloat(raw.replace(/,/g, '')) || 0);
+      const taxRaw = String(editingCell.taxValue || '').trim();
+      const taxNum = taxRaw === '' ? 0 : (parseFloat(taxRaw.replace(/,/g, '')) || 0);
       updatePortfolioActualDividend(portfolioId, code, yearMonth, num);
+      updatePortfolioDividendTaxAmount(portfolioId, code, yearMonth, taxNum);
     }
     setEditingCell(null);
   };
 
-  const handleGrossCellClick = (row, monthIdx) => {
-    const d = row.monthData[monthIdx];
-    setEditingCell({
-      portfolioId: row.portfolioId, code: row.code, monthIdx,
-      yearMonth: d.yearMonth, isOverseas: true, field: 'gross',
-      value: d.hasManualGross ? String(d.grossUsd) : '',
-    });
-  };
 
   const handleAfterTaxCellClick = (row, monthIdx) => {
     const d = row.monthData[monthIdx];
@@ -433,6 +441,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       yearMonth: d.yearMonth, isOverseas: true, field: 'afterTax',
       usdValue: d.hasManualAfterTax ? String(Number(d.afterTaxUsd.toFixed(4))) : '',
       krwValue: d.hasManualAfterTax ? String(d.afterTaxKrw) : '',
+      taxKrwValue: d.taxKrwManual > 0 ? String(d.taxKrwManual) : '',
     });
   };
 
@@ -442,6 +451,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       portfolioId: row.portfolioId, code: row.code, monthIdx,
       yearMonth: d.yearMonth, isOverseas: false, field: 'krw',
       value: d.hasManual ? String(d.amount) : '',
+      taxValue: d.taxAmount != null ? String(d.taxAmount) : '',
     });
   };
 
@@ -564,28 +574,26 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
 
   const actualMonthlyGrossKrw = Array.from({ length: 12 }, (_, i) =>
     actualRows.reduce((s, r) => {
-      if (r.isOverseas) return s + r.monthData[i].grossKrw;
+      if (r.isOverseas) return s + (r.monthData[i].hasManual ? r.monthData[i].grossKrw : 0);
       const d = r.monthData[i];
-      const tax = getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual, r.qty);
-      return s + (d.hasManual ? d.amount + tax : d.amount);
+      return s + (d.hasManual ? d.amount + (d.taxAmount || 0) : 0);
     }, 0) +
     extraActualRows.reduce((s, r) => s + r.monthData[i].afterTaxKrw, 0)
   );
   const actualMonthlyGrossUsd = Array.from({ length: 12 }, (_, i) =>
-    actualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].grossUsd, 0) +
+    actualRows.filter(r => r.isOverseas).reduce((s, r) => s + (r.monthData[i].hasManual ? r.monthData[i].grossUsd : 0), 0) +
     extraActualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].afterTaxUsd, 0)
   );
   const actualMonthlyAfterKrw = Array.from({ length: 12 }, (_, i) =>
     actualRows.reduce((s, r) => {
-      if (r.isOverseas) return s + r.monthData[i].afterTaxKrw;
+      if (r.isOverseas) return s + (r.monthData[i].hasManual ? r.monthData[i].afterTaxKrw : 0);
       const d = r.monthData[i];
-      const tax = getEffectiveTax(d.amount, r.portfolioId, r.code, d.yearMonth, d.hasManual, r.qty);
-      return s + (d.hasManual ? d.amount : Math.max(0, d.amount - tax));
+      return s + (d.hasManual ? d.amount : 0);
     }, 0) +
     extraActualRows.reduce((s, r) => s + r.monthData[i].afterTaxKrw, 0)
   );
   const actualMonthlyAfterUsd = Array.from({ length: 12 }, (_, i) =>
-    actualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].afterTaxUsd, 0) +
+    actualRows.filter(r => r.isOverseas).reduce((s, r) => s + (r.monthData[i].hasManual ? r.monthData[i].afterTaxUsd : 0), 0) +
     extraActualRows.filter(r => r.isOverseas).reduce((s, r) => s + r.monthData[i].afterTaxUsd, 0)
   );
   const actualAnnualGrossKrw = actualMonthlyGrossKrw.reduce((s, v) => s + v, 0);
@@ -1304,56 +1312,36 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         && editingCell?.code === row.code
                         && editingCell?.monthIdx === i
                         && !editingCell?.isExtra;
-                      const isEditingGross = isEditingCell && editingCell?.field === 'gross';
                       const isEditingAfterTax = isEditingCell && editingCell?.field === 'afterTax';
                       const isLastMonthCol = i === 11;
 
                       if (row.isOverseas) {
                         return (
                           <React.Fragment key={i}>
-                            <td
-                              onClick={() => !isEditingCell && handleGrossCellClick(row, i)}
-                              className={`py-0.5 px-1 text-center text-[10px] cursor-pointer transition-colors border-r border-gray-700/20 ${
-                                isEditingGross ? 'bg-blue-900/40' :
-                                d.hasManualGross ? 'text-blue-300 font-bold bg-blue-900/10 hover:bg-blue-900/30' :
-                                d.grossUsd > 0 ? 'text-blue-300/60 hover:bg-gray-700/20' : 'text-gray-700 hover:bg-gray-700/20'
-                              }`}
-                            >
-                              {isEditingGross ? (
-                                <div className="flex items-center gap-0.5 justify-center">
-                                  <span className="text-gray-400 text-[9px]">$</span>
-                                  <input
-                                    ref={inputRef}
-                                    type="text" inputMode="decimal"
-                                    value={editingCell.value}
-                                    onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
-                                    onBlur={commitEdit}
-                                    onKeyDown={handleCellKeyDown}
-                                    className="w-14 bg-transparent text-blue-300 text-right text-[10px] outline-none border-b border-blue-400"
-                                    placeholder="세전 $"
-                                  />
-                                </div>
-                              ) : (
+                            {/* 세전 열: 계산값 표시만 (읽기전용) */}
+                            <td className={`py-0.5 px-1 text-center text-[10px] border-r border-gray-700/20 ${d.hasManual ? 'text-blue-300/70' : 'text-gray-700'}`}>
+                              {d.hasManual ? (
                                 <div className="flex flex-col items-center gap-0">
-                                  <span>{(d.hasManualGross || d.grossUsd > 0) ? formatUsd(d.grossUsd) : '-'}</span>
-                                  {(d.hasManualGross || d.grossKrw > 0) && <span className="text-gray-500 text-[9px]">{formatCurrency(d.grossKrw)}</span>}
+                                  <span>{formatUsd(d.grossUsd)}</span>
+                                  <span className="text-gray-600 text-[9px]">{formatCurrency(d.grossKrw)}</span>
                                 </div>
-                              )}
+                              ) : '-'}
                             </td>
+                            {/* 세후 + 과세금 입력 열 */}
                             <td
                               onClick={() => !isEditingCell && handleAfterTaxCellClick(row, i)}
                               className={`py-0.5 px-1 text-center text-[10px] cursor-pointer transition-colors ${
                                 isLastMonthCol ? '' : 'border-r border-gray-600/40'
                               } ${
                                 isEditingAfterTax ? 'bg-emerald-900/30' :
-                                d.hasManualAfterTax ? 'text-emerald-300 font-bold bg-emerald-900/10 hover:bg-emerald-900/30' :
-                                d.afterTaxUsd > 0 ? 'text-emerald-300/70 hover:bg-gray-700/20' : 'text-gray-700 hover:bg-gray-700/20'
+                                d.hasManual ? 'text-emerald-300 font-bold bg-emerald-900/10 hover:bg-emerald-900/30' :
+                                'text-gray-700 hover:bg-gray-700/20'
                               }`}
                             >
                               {isEditingAfterTax ? (
                                 <div className="flex flex-col gap-0.5 py-0.5">
                                   <div className="flex items-center gap-0.5 justify-center">
-                                    <span className="text-[8px] text-gray-500">$</span>
+                                    <span className="text-[8px] text-emerald-500/70">세후$</span>
                                     <input
                                       ref={inputRef}
                                       type="text" inputMode="decimal"
@@ -1367,7 +1355,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                     />
                                   </div>
                                   <div className="flex items-center gap-0.5 justify-center">
-                                    <span className="text-[8px] text-gray-500">₩</span>
+                                    <span className="text-[8px] text-emerald-500/50">세후₩</span>
                                     <input
                                       ref={krwInputRef}
                                       type="text" inputMode="numeric"
@@ -1380,21 +1368,33 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                       placeholder="세후 ₩"
                                     />
                                   </div>
+                                  <div className="flex items-center gap-0.5 justify-center">
+                                    <span className="text-[8px] text-orange-400/70">과세₩</span>
+                                    <input
+                                      type="text" inputMode="numeric"
+                                      value={editingCell.taxKrwValue || ''}
+                                      onChange={e => setEditingCell(prev => ({ ...prev, taxKrwValue: e.target.value }))}
+                                      onBlur={handleAfterTaxBlur}
+                                      onFocus={handleAfterTaxFocus}
+                                      onKeyDown={handleCellKeyDown}
+                                      className="w-14 bg-transparent text-orange-300 text-right text-[10px] outline-none border-b border-orange-500/40"
+                                      placeholder="과세금 ₩"
+                                    />
+                                  </div>
                                 </div>
-                              ) : (
+                              ) : d.hasManual ? (
                                 <div className="flex flex-col items-center gap-0">
-                                  <span>{(d.hasManualAfterTax || d.afterTaxUsd > 0) ? formatUsd(d.afterTaxUsd) : '-'}</span>
-                                  {(d.hasManualAfterTax || d.afterTaxKrw > 0) && <span className="text-gray-500 text-[9px]">{formatCurrency(d.afterTaxKrw)}</span>}
+                                  <span>{formatUsd(d.afterTaxUsd)}</span>
+                                  {d.afterTaxKrw > 0 && <span className="text-emerald-300/50 text-[9px]">{formatCurrency(d.afterTaxKrw)}</span>}
+                                  {d.taxKrwManual > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(d.taxKrwManual)}</span>}
                                 </div>
-                              )}
+                              ) : '-'}
                             </td>
                           </React.Fragment>
                         );
                       } else {
-                        const rate = getTaxRate(row.portfolioId);
-                        const effectiveTax = getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual, row.qty);
-                        const beforeTax = d.hasManual ? d.amount + effectiveTax : d.amount;
-                        const afterTax = d.hasManual ? d.amount : Math.max(0, d.amount - effectiveTax);
+                        const taxAmt = d.taxAmount != null ? d.taxAmount : 0;
+                        const beforeTax = d.amount + taxAmt;
                         return (
                           <td
                             key={i}
@@ -1403,31 +1403,50 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             className={`py-0.5 px-0.5 text-center text-[10px] cursor-pointer transition-colors ${
                               isLastMonthCol ? '' : 'border-r border-gray-600/40'
                             } ${
-                              isEditingCell ? 'bg-blue-900/40' :
-                              d.hasManual ? d.amount > 0 ? 'text-emerald-300 font-bold bg-emerald-900/20 hover:bg-emerald-900/40' : 'text-gray-500 hover:bg-gray-700/30' :
-                              d.amount > 0 ? 'text-blue-300/60 hover:bg-gray-700/30' : 'text-gray-700 hover:bg-gray-700/30'
+                              isEditingCell ? 'bg-emerald-900/30' :
+                              d.hasManual ? 'text-emerald-300 font-bold bg-emerald-900/20 hover:bg-emerald-900/40' :
+                              'text-gray-700 hover:bg-gray-700/30'
                             }`}
                           >
                             {isEditingCell ? (
-                              <input
-                                ref={inputRef}
-                                type="text" inputMode="numeric"
-                                value={editingCell.value}
-                                onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
-                                onBlur={commitEdit}
-                                onKeyDown={handleCellKeyDown}
-                                className="w-full bg-transparent text-white text-right text-[10px] outline-none border-b border-blue-400 px-1"
-                              />
-                            ) : rate > 0 ? (
+                              <div className="flex flex-col gap-0.5 py-0.5">
+                                <div className="flex items-center gap-0.5 justify-center">
+                                  <span className="text-[8px] text-emerald-500/70">세후</span>
+                                  <input
+                                    ref={inputRef}
+                                    type="text" inputMode="numeric"
+                                    value={editingCell.value}
+                                    onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
+                                    onBlur={handleAfterTaxBlur}
+                                    onFocus={handleAfterTaxFocus}
+                                    onKeyDown={handleCellKeyDown}
+                                    className="w-14 bg-transparent text-emerald-300 text-right text-[10px] outline-none border-b border-emerald-500/60"
+                                    placeholder="세후 ₩"
+                                  />
+                                </div>
+                                <div className="flex items-center gap-0.5 justify-center">
+                                  <span className="text-[8px] text-orange-400/70">과세</span>
+                                  <input
+                                    ref={krwInputRef}
+                                    type="text" inputMode="numeric"
+                                    value={editingCell.taxValue || ''}
+                                    onChange={e => setEditingCell(prev => ({ ...prev, taxValue: e.target.value }))}
+                                    onBlur={handleAfterTaxBlur}
+                                    onFocus={handleAfterTaxFocus}
+                                    onKeyDown={handleCellKeyDown}
+                                    className="w-14 bg-transparent text-orange-300 text-right text-[10px] outline-none border-b border-orange-500/40"
+                                    placeholder="과세금 ₩"
+                                  />
+                                </div>
+                              </div>
+                            ) : d.hasManual ? (
                               <div className="flex flex-col items-center gap-0">
-                                <span>{(d.hasManual || d.amount > 0) ? formatCurrency(beforeTax) : '-'}</span>
-                                {effectiveTax > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(effectiveTax)}</span>}
-                                {(d.hasManual || d.amount > 0) && afterTax > 0 && <span className="text-green-400/60 text-[9px]">{formatCurrency(afterTax)}</span>}
+                                {beforeTax > 0 && <span className="text-blue-300/70 text-[9px]">{formatCurrency(beforeTax)}</span>}
+                                {taxAmt > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxAmt)}</span>}
+                                <span>{d.amount > 0 ? formatCurrency(d.amount) : '₩0'}</span>
                               </div>
                             ) : (
-                              <div className="flex flex-col items-center gap-0">
-                                <span>{(d.hasManual || d.amount > 0) ? formatCurrency(d.amount) : '-'}</span>
-                              </div>
+                              <span>-</span>
                             )}
                           </td>
                         );
@@ -1452,20 +1471,15 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       <td colSpan={actualHasOverseas ? 2 : 1} className={`py-2 px-2 text-center font-bold ${row.annual > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
                         <div className="flex flex-col items-center gap-0">
                           {(() => {
-                            const rowRate = getTaxRate(row.portfolioId);
-                            if (rowRate <= 0) return <span>{row.annual > 0 ? formatCurrency(row.annual) : '-'}</span>;
-                            const rowAnnualTax = row.monthData.reduce((s, d) =>
-                              s + getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual, row.qty), 0);
-                            const rowAnnualAfter = row.monthData.reduce((s, d) => {
-                              const tax = getEffectiveTax(d.amount, row.portfolioId, row.code, d.yearMonth, d.hasManual, row.qty);
-                              return s + (d.hasManual ? d.amount : Math.max(0, d.amount - tax));
-                            }, 0);
-                            const rowAnnualBefore = rowAnnualAfter + rowAnnualTax;
-                            return rowAnnualBefore > 0 ? (<>
-                              <span>{formatCurrency(rowAnnualBefore)}</span>
-                              {rowAnnualTax > 0 && <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(rowAnnualTax)}</span>}
-                              {rowAnnualAfter > 0 && <span className="text-green-400/70 text-[9px] font-normal">{formatCurrency(rowAnnualAfter)}</span>}
-                            </>) : <span className="text-gray-600">-</span>;
+                            const annualTax = row.monthData.reduce((s, d) => s + (d.taxAmount || 0), 0);
+                            const annualAfter = row.annual; // row.annual = 세후 합계
+                            const annualBefore = annualAfter + annualTax;
+                            if (annualBefore <= 0) return <span className="text-gray-600">-</span>;
+                            return (<>
+                              {annualBefore > annualAfter && <span className="text-blue-300/70 text-[9px] font-normal">{formatCurrency(annualBefore)}</span>}
+                              {annualTax > 0 && <span className="text-orange-300/55 text-[9px] font-normal">{formatCurrency(annualTax)}</span>}
+                              <span>{formatCurrency(annualAfter)}</span>
+                            </>);
                           })()}
                         </div>
                       </td>
