@@ -203,22 +203,25 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const storedAfterKrw = codeAfterTaxKrw[yearMonth];
             const hasManualAfterTax = storedAfterUsd != null || storedAfterKrw != null;
             const hasManual = hasManualGross || hasManualAfterTax;
-            let grossUsd, grossKrw;
+            let grossUsd, grossKrw, effectiveTaxKrw;
             if (hasManualAfterTax) {
               const atKrw = storedAfterKrw != null ? storedAfterKrw : Math.round((storedAfterUsd || 0) * usdkrw);
-              grossKrw = atKrw + taxKrwManual;
+              effectiveTaxKrw = taxKrwManual > 0 ? taxKrwManual : (taxRate > 0 && taxRate < 100 ? Math.round(atKrw * taxRate / (100 - taxRate)) : 0);
+              grossKrw = atKrw + effectiveTaxKrw;
               grossUsd = grossKrw / (usdkrw || 1);
             } else if (hasManualGross) {
               grossUsd = codeActualUsd[yearMonth];
               grossKrw = Math.round(grossUsd * usdkrw);
+              effectiveTaxKrw = taxKrwManual > 0 ? taxKrwManual : (taxRate > 0 ? Math.round(grossKrw * taxRate / 100) : 0);
             } else {
               grossUsd = (pred[i + 1] || 0) * qty;
               grossKrw = Math.round(grossUsd * usdkrw);
+              effectiveTaxKrw = 0;
             }
             const autoAfterUsd = grossUsd * (1 - taxRate / 100);
             const afterTaxUsd = storedAfterUsd != null ? storedAfterUsd : autoAfterUsd;
             const afterTaxKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterTaxUsd * usdkrw);
-            return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, hasManual, taxKrwManual, yearMonth };
+            return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, hasManual, taxKrwManual, effectiveTaxKrw, yearMonth };
           } else {
             const codeActual = actualDividend[item.code] || {};
             const hasManual = yearMonth in codeActual;
@@ -636,6 +639,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     extraActualRows.filter(r => !r.isOverseas).reduce((s, r) => s + (r.monthData[i].taxKrw || 0), 0)
   );
   const actualAnnualTaxTotal = actualMonthlyTaxTotals.reduce((s, v) => s + v, 0);
+
+  const actualMonthlyOverseasTaxKrw = Array.from({ length: 12 }, (_, i) =>
+    actualRows.filter(r => r.isOverseas).reduce((s, r) => {
+      const d = r.monthData[i];
+      return s + (d.hasManual ? (d.effectiveTaxKrw || 0) : 0);
+    }, 0)
+  );
+  const actualAnnualOverseasTaxKrw = actualMonthlyOverseasTaxKrw.reduce((s, v) => s + v, 0);
 
   // ── compact 모드 totals ──
   const compactAnnualTotal = (activeTab === 'expected' ? compactExpectedRows : compactActualRows)
@@ -1392,7 +1403,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 <div className="flex flex-col items-center gap-0">
                                   <span>{formatUsd(d.afterTaxUsd)}</span>
                                   {d.afterTaxKrw > 0 && <span className="text-emerald-300/50 text-[9px]">{formatCurrency(d.afterTaxKrw)}</span>}
-                                  {d.taxKrwManual > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(d.taxKrwManual)}</span>}
+                                  {(d.effectiveTaxKrw || 0) > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(d.effectiveTaxKrw)}</span>}
                                 </div>
                               ) : '-'}
                             </td>
@@ -1730,6 +1741,19 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </td>
                   </tr>
                 </>)}
+                {actualHasOverseas && actualAnnualOverseasTaxKrw > 0 && (
+                  <tr className="text-orange-300/60">
+                    <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">과세합계</td>
+                    {actualMonthlyOverseasTaxKrw.map((tax, i) => (
+                      <React.Fragment key={i}>
+                        <td className="py-1 px-1 text-center text-[9px] text-gray-700">-</td>
+                        <td className="py-1 px-1 text-center text-[9px]">{tax > 0 ? formatCurrency(tax) : '-'}</td>
+                      </React.Fragment>
+                    ))}
+                    <td className="py-1 px-2 text-center text-[10px] text-gray-700">-</td>
+                    <td className="py-1 px-2 text-center text-[10px]">{formatCurrency(actualAnnualOverseasTaxKrw)}</td>
+                  </tr>
+                )}
               </tfoot>
             </table>
           )}
