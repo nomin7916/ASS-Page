@@ -342,18 +342,20 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             if (!hasManualGross && !hasManualAfterTax) return;
             pfHasActual = true;
             const taxKrwManual = (pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] || 0;
-            pfTaxKrw += taxKrwManual;
-            let afterUsd, afterKrw;
+            let afterUsd, afterKrw, grossKrw;
             if (hasManualAfterTax) {
               afterUsd = storedAfterUsd != null ? storedAfterUsd : (storedAfterKrw != null && usdkrw > 0 ? storedAfterKrw / usdkrw : 0);
               afterKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterUsd * usdkrw);
+              grossKrw = taxKrwManual > 0 ? afterKrw + taxKrwManual : (taxRate < 100 ? Math.round(afterKrw * 100 / (100 - taxRate)) : afterKrw);
             } else {
               const grossUsd = codeActualUsd[yearMonth];
               afterUsd = grossUsd * (1 - taxRate / 100);
               afterKrw = Math.round(afterUsd * usdkrw);
+              grossKrw = Math.round(grossUsd * usdkrw);
             }
             pfAfterUsd += afterUsd;
             pfAfterKrw += afterKrw;
+            pfTaxKrw += taxKrwManual > 0 ? taxKrwManual : (grossKrw - afterKrw);
           });
           let extraAfterUsd = 0, extraAfterKrw = 0, extraHasActual = false;
           (pf.extraDividendRows || []).forEach(row => {
