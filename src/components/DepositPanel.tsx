@@ -168,42 +168,41 @@ export default function DepositPanel({
       {memoModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setMemoModal(null)}>
           <div className="w-64 shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-            {/* Oxford 스타일 헤더 */}
-            <div className="bg-[#1a237e] px-3 py-2 flex items-center justify-between">
+            {/* 헤더 */}
+            <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <button
                   onClick={() => setMemoModal(null)}
-                  className="w-3 h-3 rounded-full bg-[#283593] hover:bg-pink-500 flex items-center justify-center group transition-all"
+                  className="w-3 h-3 rounded-full bg-gray-800 hover:bg-pink-600 flex items-center justify-center group transition-all"
                   title="취소 (Esc)"
                 >
                   <X size={7} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                 </button>
                 <button
                   onClick={saveMemoModal}
-                  className="w-3 h-3 rounded-full bg-[#283593] hover:bg-violet-400 flex items-center justify-center group transition-all"
+                  className="w-3 h-3 rounded-full bg-gray-800 hover:bg-purple-600 flex items-center justify-center group transition-all"
                   title="저장 (Ctrl+Enter)"
                 >
                   <Check size={7} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                 </button>
               </div>
-              <span className="text-[11px] font-bold tracking-[0.25em] bg-gradient-to-r from-pink-300 via-fuchsia-200 to-purple-300 bg-clip-text text-transparent select-none">MEMO</span>
+              <span className="text-[11px] font-bold tracking-[0.25em] bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 bg-clip-text text-transparent select-none">MEMO</span>
               <div className="w-10" />
             </div>
             {/* 줄선 메모 입력 영역 */}
             <textarea
               className="w-full text-gray-200 text-[12px] outline-none resize-none caret-purple-400 placeholder-gray-700"
               style={{
-                background: `
-                  repeating-linear-gradient(
-                    180deg,
-                    transparent 0px,
-                    transparent 27px,
-                    rgba(99,130,255,0.25) 27px,
-                    rgba(99,130,255,0.25) 28px
-                  ),
-                  #000
-                `,
-                lineHeight: '28px',
+                backgroundColor: '#000',
+                backgroundImage: `repeating-linear-gradient(
+                  transparent 0px,
+                  transparent 23px,
+                  rgba(99,130,255,0.3) 23px,
+                  rgba(99,130,255,0.3) 24px
+                )`,
+                backgroundSize: '100% 24px',
+                backgroundPosition: '0 8px',
+                lineHeight: '24px',
                 paddingLeft: '10px',
                 paddingRight: '10px',
                 paddingTop: '8px',
