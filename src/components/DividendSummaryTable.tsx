@@ -361,10 +361,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             if (!getCodeType(item.code, pf)) return sum;
             const qty = cleanNum(item.quantity);
             if (!qty) return sum;
-            const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
             const codeActual = actualDividend[item.code] || {};
-            const predicted = (pred[i + 1] || 0) * qty;
-            return sum + (yearMonth in codeActual ? codeActual[yearMonth] : predicted);
+            if (!(yearMonth in codeActual)) return sum;
+            return sum + codeActual[yearMonth];
           }, 0);
           amount += (pf.extraDividendRows || []).reduce((s, row) => {
             const entry = row.monthData?.[yearMonth] || {};
@@ -512,18 +511,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const getPortfolioMonthTax = (pf, monthIdx) => {
     const mo = String(monthIdx + 1).padStart(2, '0');
     const yearMonth = `${CURRENT_YEAR}-${mo}`;
-    const divHistory = pf.dividendHistory || {};
     const actualDividend = pf.actualDividend || {};
     return (pf.portfolio || []).reduce((sum, item) => {
       if (!getCodeType(item.code, pf)) return sum;
       const qty = cleanNum(item.quantity);
       if (!qty) return sum;
-      const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
       const codeActual = actualDividend[item.code] || {};
-      const hasManual = yearMonth in codeActual;
-      const predicted = (pred[monthIdx + 1] || 0) * qty;
-      const amount = hasManual ? codeActual[yearMonth] : predicted;
-      return sum + getEffectiveTax(amount, pf.id, item.code, yearMonth, hasManual, qty);
+      if (!(yearMonth in codeActual)) return sum;
+      return sum + getEffectiveTax(codeActual[yearMonth], pf.id, item.code, yearMonth, true, qty);
     }, 0);
   };
 
