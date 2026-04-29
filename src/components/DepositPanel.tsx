@@ -188,7 +188,7 @@ export default function DepositPanel({
             </div>
           </div>
       {memoModal && (
-        <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setMemoModal(null)}>
+        <div className="fixed inset-0 z-50 bg-black/40">
           <div className="absolute w-64 shadow-2xl overflow-hidden" style={{ left: memoPos.x, top: memoPos.y }} onClick={e => e.stopPropagation()}>
             {/* 헤더 — 드래그 핸들 */}
             <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleMemoDragStart}>
