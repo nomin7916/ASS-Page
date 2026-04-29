@@ -314,7 +314,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const mo = String(i + 1).padStart(2, '0');
         const yearMonth = `${CURRENT_YEAR}-${mo}`;
         if (isOverseas) {
-          let pfAfterUsd = 0, pfAfterKrw = 0;
+          let pfAfterUsd = 0, pfAfterKrw = 0, pfHasActual = false;
           (pf.portfolio || []).forEach(item => {
             if (!getCodeType(item.code, pf)) return;
             const qty = cleanNum(item.quantity);
@@ -337,20 +337,24 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               afterUsd = grossUsd * (1 - taxRate / 100);
               afterKrw = Math.round(afterUsd * usdkrw);
             }
+            if (yearMonth in codeActualUsd) pfHasActual = true;
             pfAfterUsd += afterUsd;
             pfAfterKrw += afterKrw;
           });
-          let extraAfterUsd = 0, extraAfterKrw = 0;
+          let extraAfterUsd = 0, extraAfterKrw = 0, extraHasActual = false;
           (pf.extraDividendRows || []).forEach(row => {
             const entry = row.monthData?.[yearMonth] || {};
             extraAfterUsd += entry.afterTaxUsd || 0;
             extraAfterKrw += entry.afterTaxKrw || 0;
+            if ((entry.afterTaxUsd || 0) > 0 || (entry.afterTaxKrw || 0) > 0) extraHasActual = true;
           });
+          const totalAfterKrw = pfAfterKrw + extraAfterKrw;
           return {
-            amount: pfAfterKrw + extraAfterKrw,
+            amount: totalAfterKrw,
             amountUsd: pfAfterUsd + extraAfterUsd,
-            taxKrw: taxRate > 0 && pfAfterKrw > 0 ? Math.round(pfAfterKrw * taxRate / (100 - taxRate)) : 0,
+            taxKrw: taxRate > 0 && totalAfterKrw > 0 ? Math.round(totalAfterKrw * taxRate / (100 - taxRate)) : 0,
             yearMonth,
+            hasActual: pfHasActual || extraHasActual,
           };
         } else {
           let amount = (pf.portfolio || []).reduce((sum, item) => {
@@ -376,9 +380,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           return { amount, amountUsd: 0, taxKrw: 0, yearMonth, hasManual };
         }
       });
-      const annual = monthData.reduce((s, d) => s + d.amount, 0);
-      const annualUsd = isOverseas ? monthData.reduce((s, d) => s + d.amountUsd, 0) : 0;
-      const annualTaxKrw = isOverseas ? monthData.reduce((s, d) => s + d.taxKrw, 0) : 0;
+      const annual = isOverseas
+        ? monthData.reduce((s, d) => s + (d.hasActual ? d.amount : 0), 0)
+        : monthData.reduce((s, d) => s + (d.hasManual ? d.amount : 0), 0);
+      const annualUsd = isOverseas ? monthData.reduce((s, d) => s + (d.hasActual ? d.amountUsd : 0), 0) : 0;
+      const annualTaxKrw = isOverseas ? monthData.reduce((s, d) => s + (d.hasActual ? d.taxKrw : 0), 0) : 0;
       return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTaxKrw };
     }).filter(row => row.annual > 0);
   }, [compact, nonGoldPortfolios]);
