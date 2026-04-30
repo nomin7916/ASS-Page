@@ -554,8 +554,8 @@ export default function PortfolioChart({
             {showBacktest && <Area yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke={backtestColor} strokeWidth={2} fill="url(#backtestGradient)" strokeDasharray="6 3" dot={false} connectNulls />}
             {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
             {showMA.map((active, pi) => active ? <Line key={`ma${pi + 1}`} yAxisId="left" type="monotone" dataKey={`ma${pi + 1}`} name={`MA${MA_PERIODS[pi]}`} stroke={MA_COLORS[pi]} strokeWidth={1.5} dot={false} connectNulls /> : null)}
-            {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />}
-            {hoveredPoint && hoveredReturnRate != null && !refAreaLeft && <ReferenceLine yAxisId="left" y={hoveredReturnRate} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />}
+            {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
+            {hoveredPoint && hoveredReturnRate != null && !refAreaLeft && <ReferenceLine yAxisId="left" y={hoveredReturnRate} stroke="rgba(239,68,68,0.55)" strokeWidth={1} strokeDasharray="4 3" label={{ value: `${hoveredReturnRate >= 0 ? '+' : ''}${Number(hoveredReturnRate).toFixed(2)}%`, position: 'insideBottomLeft', fill: '#ef4444', fontSize: 10, fontWeight: 'bold', dx: 4, dy: -3 }} />}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
