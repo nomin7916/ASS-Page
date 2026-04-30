@@ -62,7 +62,7 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
                   ) : goldFetchStatus === 'fail' ? (
                     <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />
                   ) : null}
-                  <span>KRX 금현물</span>
+                  <a href="https://m.stock.naver.com/marketindex/home/metals" target="_blank" rel="noopener noreferrer" className="hover:text-yellow-300 transition-colors">KRX 금현물</a>
                 </div>
               </td>
               <td className={`${td} text-right`}>
@@ -109,7 +109,7 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
               <td className={`${td} text-center text-gray-400 font-bold`}>1g</td>
               <td className={`${td} text-center font-bold text-gray-300 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]`}>
                 <div className="flex flex-col items-center gap-0.5">
-                  <span>국제 금시세</span>
+                  <a href="https://finance.yahoo.com/quote/GC%3DF" target="_blank" rel="noopener noreferrer" className="hover:text-yellow-300 transition-colors">국제 금시세</a>
                   {goldIntl != null && (
                     <span className="text-[11px] text-yellow-500/80 font-normal tracking-wide">
                       {fmtUsdOz(goldIntl)}/oz
