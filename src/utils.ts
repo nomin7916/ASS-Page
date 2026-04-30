@@ -137,6 +137,40 @@ export const handleRowArrowNav = (e) => {
   if (next) { next.focus(); next.select?.(); }
 };
 
+export const calcPortfolioEvalForDate = (
+  items: any[],
+  accountType: string,
+  date: string,
+  stockHistoryMap: Record<string, Record<string, number>>,
+  indicatorHistoryMap: Record<string, any>,
+  currentFxRate = 1
+): number => {
+  const isGold = accountType === 'gold';
+  const isOverseas = accountType === 'overseas';
+  const fxRate = isOverseas
+    ? (getClosestValue(indicatorHistoryMap?.usdkrw, date) || currentFxRate || 1)
+    : 1;
+  let totalEval = 0;
+  let hasAnyPrice = false;
+  items.forEach(item => {
+    if (item.type === 'deposit') {
+      totalEval += cleanNum(item.depositAmount) * fxRate;
+      hasAnyPrice = true;
+      return;
+    }
+    const qty = cleanNum(item.quantity);
+    if (!qty || qty <= 0) return;
+    let price = 0;
+    if (isGold) {
+      price = getClosestValue(indicatorHistoryMap?.goldKr, date) || 0;
+    } else if (item.code) {
+      price = getClosestValue(stockHistoryMap?.[item.code], date) || 0;
+    }
+    if (price > 0) { totalEval += qty * price * fxRate; hasAnyPrice = true; }
+  });
+  return hasAnyPrice ? totalEval : 0;
+};
+
 export const buildIndexStatus = (data, source) => {
   const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   if (!data || Object.keys(data).length === 0) {
