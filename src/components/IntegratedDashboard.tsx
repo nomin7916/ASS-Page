@@ -1,6 +1,6 @@
-﻿// @ts-nocheck
-import React, { useState } from 'react';
-import { Plus, Download, Trash2 } from 'lucide-react';
+﻿﻿// @ts-nocheck
+import React, { useState, useRef } from 'react';
+import { Plus, Download, Trash2, Maximize2, X, Check } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea,
@@ -88,7 +88,40 @@ export default function IntegratedDashboard({
   const [sec, setSec] = useState({ dividend: false, history: false, donut: false });
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
 
+  const [memoModal, setMemoModal] = useState(null);
+  const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
+  const memoDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
+
+  const openMemoModal = (id, memo) => {
+    setMemoPos({ x: window.innerWidth / 2 - 128, y: window.innerHeight / 2 - 180 });
+    setMemoModal({ id, val: memo ?? '' });
+  };
+
+  const handleMemoDragStart = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    memoDrag.current = { active: true, offsetX: e.clientX - memoPos.x, offsetY: e.clientY - memoPos.y };
+    const onMove = (e) => {
+      if (!memoDrag.current.active) return;
+      setMemoPos({ x: e.clientX - memoDrag.current.offsetX, y: e.clientY - memoDrag.current.offsetY });
+    };
+    const onUp = () => {
+      memoDrag.current.active = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  const saveMemoModal = () => {
+    if (!memoModal) return;
+    updatePortfolioMemo(memoModal.id, memoModal.val);
+    setMemoModal(null);
+  };
+
   return (
+    <>
           <div className="flex flex-col gap-6 w-full">
 
             {/* 통합 요약 카드 */}
@@ -280,8 +313,11 @@ export default function IntegratedDashboard({
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.currentEval - s.principal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                               {hideAmounts ? '••••••' : formatCurrency(s.currentEval - s.principal)}
                             </td>
-                            <td className="py-1.5 px-2 border-r border-gray-700">
-                              <input type="text" className="w-full bg-transparent outline-none text-gray-400 text-xs placeholder-gray-600" value={s.memo} onChange={e => updatePortfolioMemo(s.id, e.target.value)} placeholder="메모..." />
+                            <td className="p-0 border-r border-gray-700 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
+                              <div className="flex items-center">
+                                <input type="text" className="flex-1 min-w-0 bg-transparent outline-none px-2 py-1.5 text-gray-300 text-xs caret-blue-400 overflow-hidden placeholder-gray-600" value={s.memo ?? ''} onChange={e => updatePortfolioMemo(s.id, e.target.value)} placeholder="메모..." />
+                                <button onClick={() => openMemoModal(s.id, s.memo)} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
+                              </div>
                             </td>
                             <td className="py-1.5 px-2 text-center">
                               <button onClick={() => deletePortfolio(s.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
@@ -666,5 +702,47 @@ export default function IntegratedDashboard({
             </div>
 
           </div>
+      {memoModal && (
+        <div className="fixed inset-0 z-50 bg-black/40">
+          <div className="absolute w-64 shadow-2xl overflow-hidden" style={{ left: memoPos.x, top: memoPos.y }} onClick={e => e.stopPropagation()}>
+            <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleMemoDragStart}>
+              <div className="flex items-center gap-2.5">
+                <button onClick={() => setMemoModal(null)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center group transition-all" title="취소 (Esc)">
+                  <X size={7} className="text-white" />
+                </button>
+                <button onClick={saveMemoModal} className="w-3 h-3 rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center group transition-all" title="저장 (Ctrl+Enter)">
+                  <Check size={7} className="text-white" />
+                </button>
+              </div>
+              <span className="text-[11px] font-bold tracking-[0.25em] bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 bg-clip-text text-transparent select-none">MEMO</span>
+              <div className="w-10" />
+            </div>
+            <textarea
+              className="w-full text-gray-200 text-[12px] outline-none resize-none caret-purple-400 placeholder-gray-700"
+              style={{
+                backgroundColor: '#000',
+                backgroundImage: `repeating-linear-gradient(transparent 0px, transparent 23px, rgba(99,130,255,0.3) 23px, rgba(99,130,255,0.3) 24px)`,
+                backgroundSize: '100% 24px',
+                backgroundPosition: '0 8px',
+                lineHeight: '24px',
+                paddingLeft: '10px',
+                paddingRight: '10px',
+                paddingTop: '8px',
+                paddingBottom: '8px',
+              }}
+              rows={10}
+              autoFocus
+              placeholder="메모를 입력하세요..."
+              value={memoModal.val}
+              onChange={e => setMemoModal(prev => ({ ...prev, val: e.target.value }))}
+              onKeyDown={e => {
+                if (e.key === 'Escape') setMemoModal(null);
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') saveMemoModal();
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
