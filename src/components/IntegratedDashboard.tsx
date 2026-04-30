@@ -372,7 +372,7 @@ export default function IntegratedDashboard({
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
 
               {/* 평가액 추이 테이블 */}
-              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
+              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[344px] sm:max-h-[384px] md:max-h-[424px] xl:max-h-[464px]">
                 <div className="p-3 bg-[#0f172a] flex flex-col gap-2 border-b border-gray-700 shrink-0">
                   <div className="flex justify-between items-center">
                     <span className="text-white font-bold text-sm">📅 평가액 추이</span>
