@@ -84,8 +84,9 @@ export default function IntegratedDashboard({
   updatePortfolioActualAfterTaxKrw,
   usdkrw = 1300,
   dividendTaxHistory = {},
+  sec = { dividend: false, history: false, donut: false },
+  setSec,
 }) {
-  const [sec, setSec] = useState({ dividend: false, history: false, donut: false });
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
 
   const [memoModal, setMemoModal] = useState(null);
