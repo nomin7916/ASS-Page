@@ -1309,6 +1309,89 @@ export default function App() {
     e.target.value = '';
   };
 
+  // 수동 백필: 지정 날짜부터 어제까지 모든 계좌의 누락 평가액 기록 채우기
+  const handleManualBackfill = (fromDate: string) => {
+    if (!fromDate) return;
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
+    if (fromDate >= today) { showToast('시작일은 오늘 이전이어야 합니다.'); return; }
+
+    const calcEval = (items, accountType, date) => {
+      const isGold = accountType === 'gold';
+      const isOverseas = accountType === 'overseas';
+      const fxRate = isOverseas
+        ? (getClosestValue(indicatorHistoryMap.usdkrw, date) || marketIndicators.usdkrw || 1)
+        : 1;
+      let totalEval = 0;
+      let hasAnyPrice = false;
+      items.forEach(item => {
+        if (item.type === 'deposit') {
+          totalEval += cleanNum(item.depositAmount) * fxRate;
+          hasAnyPrice = true;
+          return;
+        }
+        const qty = cleanNum(item.quantity);
+        if (!qty || qty <= 0) return;
+        let price = 0;
+        if (isGold) {
+          price = getClosestValue(indicatorHistoryMap.goldKr, date) || 0;
+        } else if (item.code) {
+          price = getClosestValue(stockHistoryMap[item.code], date) || 0;
+        }
+        if (price > 0) { totalEval += qty * price * fxRate; hasAnyPrice = true; }
+      });
+      return hasAnyPrice ? totalEval : 0;
+    };
+
+    const fillMissing = (portfolioId, items, accountType, prin, hist) => {
+      if (accountType === 'simple' || !items.length) return null;
+      const isGold = accountType === 'gold';
+      const existingDates = new Set(hist.map(h => h.date));
+
+      const availDates = new Set<string>();
+      if (isGold) {
+        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= fromDate && d <= yesterday) availDates.add(d); });
+      } else {
+        items.forEach(item => {
+          if ((item.type === 'stock' || item.type === 'fund') && item.code && stockHistoryMap[item.code]) {
+            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d >= fromDate && d <= yesterday) availDates.add(d); });
+          }
+        });
+      }
+
+      const newRecords: { date: string; evalAmount: number; principal: number; isFixed: boolean }[] = [];
+      [...availDates].sort().forEach(date => {
+        if (existingDates.has(date)) return;
+        const evalAmt = calcEval(items, accountType, date);
+        if (evalAmt > 0) newRecords.push({ date, evalAmount: evalAmt, principal: prin, isFixed: false });
+      });
+      return newRecords.length > 0 ? newRecords : null;
+    };
+
+    let totalAdded = 0;
+
+    // 활성 계좌
+    const activeRecords = fillMissing(activePortfolioId, portfolio, activePortfolioAccountType, principal, history);
+    if (activeRecords) {
+      totalAdded += activeRecords.length;
+      setHistory(prev => [...prev, ...activeRecords]);
+    }
+
+    // 비활성 계좌
+    let portfoliosChanged = false;
+    const nextPortfolios = portfolios.map(p => {
+      if (p.id === activePortfolioId) return p;
+      const records = fillMissing(p.id, p.portfolio || [], p.accountType, p.principal || 0, p.history || []);
+      if (!records) return p;
+      totalAdded += records.length;
+      portfoliosChanged = true;
+      return { ...p, history: [...(p.history || []), ...records] };
+    });
+    if (portfoliosChanged) setPortfolios(nextPortfolios);
+
+    showToast(totalAdded > 0 ? `${totalAdded}건의 누락 기록을 채웠습니다.` : '채울 누락 기록이 없습니다.');
+  };
+
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory };
@@ -1771,20 +1854,22 @@ export default function App() {
     };
 
     // 누락 날짜 + 전날 교정 대상 계산
-    const computeUpdates = (portfolioId, items, accountType, prin, hist) => {
+    const computeUpdates = (portfolioId, items, accountType, prin, hist, startDate) => {
       if (accountType === 'simple' || !items.length) return null;
       const isGold = accountType === 'gold';
-      const sortedLastDate = hist.map(h => h.date).sort().slice(-1)[0] || null;
-      if (!sortedLastDate) return null;
+      // 기준일: 계좌 시작일 > 첫 기록일 > 없으면 스킵
+      const sortedDates = hist.map(h => h.date).sort();
+      const baseDate = startDate || sortedDates[0] || null;
+      if (!baseDate) return null;
 
-      // 데이터가 있는 날짜 수집 (lastDate 초과 ~ 오늘 미만)
+      // 데이터가 있는 날짜 수집 (시작일 이후 ~ 오늘 미만, 전체 구간)
       const availDates = new Set();
       if (isGold) {
-        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d > sortedLastDate && d < today) availDates.add(d); });
+        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= baseDate && d < today) availDates.add(d); });
       } else {
         items.forEach(item => {
           if ((item.type === 'stock' || item.type === 'fund') && item.code && stockHistoryMap[item.code]) {
-            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d > sortedLastDate && d < today) availDates.add(d); });
+            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d >= baseDate && d < today) availDates.add(d); });
           }
         });
       }
@@ -1830,14 +1915,14 @@ export default function App() {
     };
 
     // 활성 계좌
-    const activeRes = computeUpdates(activePortfolioId, portfolio, activePortfolioAccountType, principal, history);
+    const activeRes = computeUpdates(activePortfolioId, portfolio, activePortfolioAccountType, principal, history, portfolioStartDate);
     if (activeRes) setHistory(prev => applyUpdates(prev, activeRes.updates, activeRes.prin));
 
     // 비활성 계좌
     let portfoliosChanged = false;
     const nextPortfolios = portfolios.map(p => {
       if (p.id === activePortfolioId) return p;
-      const res = computeUpdates(p.id, p.portfolio || [], p.accountType, p.principal || 0, p.history || []);
+      const res = computeUpdates(p.id, p.portfolio || [], p.accountType, p.principal || 0, p.history || [], p.startDate || p.portfolioStartDate || '');
       if (!res) return p;
       portfoliosChanged = true;
       return { ...p, history: applyUpdates(p.history || [], res.updates, res.prin) };
@@ -2393,6 +2478,7 @@ export default function App() {
             updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw}
             usdkrw={marketIndicators.usdkrw || 1300}
             dividendTaxHistory={dividendTaxHistory}
+            onManualBackfill={handleManualBackfill}
           />
         )}
 

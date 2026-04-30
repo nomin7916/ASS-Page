@@ -84,10 +84,12 @@ export default function IntegratedDashboard({
   updatePortfolioActualAfterTaxKrw,
   usdkrw = 1300,
   dividendTaxHistory = {},
+  onManualBackfill,
   sec = { dividend: false, history: false, donut: false },
   setSec,
 }) {
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
+  const [backfillDate, setBackfillDate] = useState('');
 
   const [memoModal, setMemoModal] = useState(null);
   const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
@@ -370,19 +372,37 @@ export default function IntegratedDashboard({
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
 
               {/* 평가액 추이 테이블 */}
-              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[320px]">
-                <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700 shrink-0">
-                  <span className="text-white font-bold text-sm">📅 평가액 추이</span>
-                  <button
-                    onClick={() => {
-                      const today = new Date().toISOString().split('T')[0];
-                      setIntHistory(prev => {
-                        const todayEntry = prev.find(h => h.date === today);
-                        return todayEntry ? [todayEntry] : (intTotals.totalEval > 0 ? [{ id: generateId(), date: today, evalAmount: intTotals.totalEval }] : []);
-                      });
-                    }}
-                    className="text-orange-400 hover:text-white p-1 hover:bg-gray-800 rounded transition" title="기록 리셋"
-                  ><Trash2 size={14} /></button>
+              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[380px]">
+                <div className="p-3 bg-[#0f172a] flex flex-col gap-2 border-b border-gray-700 shrink-0">
+                  <div className="flex justify-between items-center">
+                    <span className="text-white font-bold text-sm">📅 평가액 추이</span>
+                    <button
+                      onClick={() => {
+                        const today = new Date().toISOString().split('T')[0];
+                        setIntHistory(prev => {
+                          const todayEntry = prev.find(h => h.date === today);
+                          return todayEntry ? [todayEntry] : (intTotals.totalEval > 0 ? [{ id: generateId(), date: today, evalAmount: intTotals.totalEval }] : []);
+                        });
+                      }}
+                      className="text-orange-400 hover:text-white p-1 hover:bg-gray-800 rounded transition" title="기록 리셋"
+                    ><Trash2 size={14} /></button>
+                  </div>
+                  {onManualBackfill && (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="date"
+                        value={backfillDate}
+                        onChange={e => setBackfillDate(e.target.value)}
+                        className="flex-1 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                      <button
+                        onClick={() => { if (backfillDate) onManualBackfill(backfillDate); }}
+                        disabled={!backfillDate}
+                        className="px-2 py-1 text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded transition whitespace-nowrap"
+                        title="선택한 날짜부터 누락된 평가액 기록을 모든 계좌에 채웁니다"
+                      >누락 채우기</button>
+                    </div>
+                  )}
                 </div>
                 <div className="overflow-x-auto overflow-y-auto flex-1">
                   <table className="w-full text-xs">
