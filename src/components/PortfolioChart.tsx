@@ -568,7 +568,13 @@ export default function PortfolioChart({
             {showMA.map((active, pi) => active ? <Line key={`ma${pi + 1}`} yAxisId="left" type="monotone" dataKey={`ma${pi + 1}`} name={`MA${MA_PERIODS[pi]}`} stroke={MA_COLORS[pi]} strokeWidth={1.5} dot={false} connectNulls /> : null)}
             {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
             {hoveredPoint && !refAreaLeft && hoveredPoint.payload
-              .filter(p => p.yAxisId === 'left' && p.value != null && typeof p.value === 'number')
+              .filter(p =>
+                p.value != null &&
+                typeof p.value === 'number' &&
+                !String(p.dataKey ?? '').endsWith('Point') &&
+                p.dataKey !== 'evalAmount' &&
+                (!p.yAxisId || p.yAxisId === 'left')
+              )
               .map((entry, i) => {
                 const yVal = entry.value;
                 const labelText = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
