@@ -1,5 +1,5 @@
 ﻿// @ts-nocheck
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, Plus } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
@@ -75,7 +75,6 @@ export default function PortfolioChart({
   const hoveredData = hoveredPoint ? finalChartData.find(d => d.date === hoveredPoint.label) : null;
   const hoveredReturnRate = hoveredData?.returnRate ?? null;
 
-  const chartContainerRef = useRef(null);
   const yDomainLeft = useMemo(() => {
     const rates = finalChartData.flatMap(d => {
       const vals = [d.returnRate, d.kospiRate, d.sp500Rate, d.nasdaqRate, d.backtestRate];
@@ -499,35 +498,8 @@ export default function PortfolioChart({
       </div>
 
       <div
-        ref={chartContainerRef}
         className="chart-container-for-drag p-4 min-h-[400px] xl:flex-1 relative select-none"
       >
-        {hoveredPoint && !refAreaLeft && (() => {
-          const PAD = 16;
-          const MARGIN_TOP = 5;
-          const XAXIS_H = 30;
-          const h = chartContainerRef.current?.offsetHeight ?? 400;
-          const plotH = h - PAD * 2 - MARGIN_TOP - XAXIS_H - 5;
-          const entry = hoveredPoint.payload.find(p => p.yAxisId === 'left' && p.value != null && typeof p.value === 'number')
-            ?? hoveredPoint.payload.find(p => ['returnRate', 'backtestRate', 'kospiRate', 'sp500Rate', 'nasdaqRate'].includes(p.dataKey) && p.value != null);
-          if (!entry) return null;
-          const yVal = entry.value;
-          const [yMin, yMax] = yDomainLeft;
-          const topPx = PAD + MARGIN_TOP + (yMax - yVal) / (yMax - yMin) * plotH;
-          if (topPx < PAD + MARGIN_TOP || topPx > PAD + MARGIN_TOP + plotH) return null;
-          const label = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
-          return (
-            <div
-              className="absolute left-4 right-4 flex items-center pointer-events-none"
-              style={{ top: topPx - 0.5, zIndex: 10 }}
-            >
-              <div className="flex items-center justify-end shrink-0 pr-1" style={{ width: 52 }}>
-                <span className="text-[10px] font-bold text-red-400">{label}</span>
-              </div>
-              <div className="flex-1 h-px bg-red-500/55" />
-            </div>
-          );
-        })()}
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={chartDataWithMA} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
             <defs>
@@ -550,7 +522,7 @@ export default function PortfolioChart({
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
             <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
-            <YAxis yAxisId="left" width={52} stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
+            <YAxis yAxisId="left" stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
             {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
             {effectiveShowIndicators.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={['dataMin', 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
             {effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke="#ffd60a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ffd60a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
@@ -595,6 +567,29 @@ export default function PortfolioChart({
             {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
             {showMA.map((active, pi) => active ? <Line key={`ma${pi + 1}`} yAxisId="left" type="monotone" dataKey={`ma${pi + 1}`} name={`MA${MA_PERIODS[pi]}`} stroke={MA_COLORS[pi]} strokeWidth={1.5} dot={false} connectNulls /> : null)}
             {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
+            {hoveredPoint && !refAreaLeft && (() => {
+              const entry = hoveredPoint.payload.find(p => p.yAxisId === 'left' && p.value != null && typeof p.value === 'number')
+                ?? hoveredPoint.payload.find(p => ['returnRate', 'backtestRate', 'kospiRate', 'sp500Rate', 'nasdaqRate'].includes(p.dataKey) && p.value != null);
+              if (!entry) return null;
+              const yVal = entry.value;
+              const labelText = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
+              return (
+                <ReferenceLine
+                  yAxisId="left"
+                  y={yVal}
+                  stroke="rgba(239,68,68,0.55)"
+                  strokeWidth={1}
+                  label={({ viewBox }) => {
+                    const { x, y } = viewBox;
+                    return (
+                      <text x={x - 4} y={y + 3.5} textAnchor="end" fill="#ef4444" fontSize={10} fontWeight={700}>
+                        {labelText}
+                      </text>
+                    );
+                  }}
+                />
+              );
+            })()}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
