@@ -23,7 +23,7 @@ export default function HistoryPanel({
   showToast,
 }) {
   return (
-          <div className="w-full xl:w-[26%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden shrink-0">
+          <div className="w-full xl:w-[26%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
             <div className="p-4 bg-[#0f172a] text-white font-bold flex justify-between items-center text-sm border-b border-gray-700 shrink-0">
               <span>📈 자산 평가액 추이</span>
               <div className="flex items-center gap-1">
@@ -31,7 +31,7 @@ export default function HistoryPanel({
                 <button onClick={handleDownloadCSV} className="p-1 hover:bg-gray-800 rounded transition text-blue-400 hover:text-white" title="전체 엑셀 다운로드"><Download size={14} /></button>
               </div>
             </div>
-            <div className="shrink-0 h-[140px] overflow-x-auto overflow-y-auto">
+            <div className="shrink-0 h-[215px] overflow-x-auto overflow-y-auto">
               <table className="w-full min-w-max text-right text-[13px] table-auto border-collapse whitespace-nowrap">
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
                   <tr>

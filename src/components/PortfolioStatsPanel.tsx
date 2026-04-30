@@ -33,7 +33,7 @@ export default function PortfolioStatsPanel({
   const profit = totals.totalEval - principalKRW;
 
   return (
-    <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[480px] flex flex-col overflow-hidden shrink-0">
+    <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
       <div className="p-4 bg-black space-y-3 shrink-0 border-b border-gray-700 text-gray-400 text-xs">
         <div className="flex justify-between items-start">
           <span className="shrink-0">투자금액</span>

@@ -30,7 +30,7 @@ export const UI_CONFIG = {
     { name: "ETFCHEC", url: "https://www.etfcheck.co.kr/mobile/main" },
     { name: "yahoo", url: "https://finance.yahoo.com" },
   ],
-  DEFAULTS: { HISTORY_LIMIT: 3, DEPOSIT_LIMIT: 5, PRINCIPAL: 80000000 }
+  DEFAULTS: { HISTORY_LIMIT: 5, DEPOSIT_LIMIT: 5, PRINCIPAL: 80000000 }
 };
 
 // ── Google Drive 연동 ──
