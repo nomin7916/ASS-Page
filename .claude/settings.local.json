@@ -66,7 +66,8 @@
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'node|npm|nvm|fnm' } | Select-Object Name)",
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'node|nvm|fnm' } | Select-Object Name, FullName)",
       "PowerShell(Get-ChildItem \"C:\\\\\" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'node|nvm' } | Select-Object Name, FullName)",
-      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; node --version)"
+      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; node --version)",
+      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; node --version; npx tsc --noEmit 2>&1 | Select-Object -Last 15)"
     ]
   }
 }

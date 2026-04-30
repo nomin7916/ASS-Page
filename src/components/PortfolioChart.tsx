@@ -76,7 +76,6 @@ export default function PortfolioChart({
   const hoveredReturnRate = hoveredData?.returnRate ?? null;
 
   const chartContainerRef = useRef(null);
-  const [mouseYPx, setMouseYPx] = useState(null);
   const yDomainLeft = useMemo(() => {
     const rates = finalChartData.flatMap(d => {
       const vals = [d.returnRate, d.kospiRate, d.sp500Rate, d.nasdaqRate, d.backtestRate];
@@ -502,30 +501,27 @@ export default function PortfolioChart({
       <div
         ref={chartContainerRef}
         className="chart-container-for-drag p-4 min-h-[400px] xl:flex-1 relative select-none"
-        onMouseMove={e => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          setMouseYPx(e.clientY - rect.top);
-        }}
-        onMouseLeave={() => setMouseYPx(null)}
       >
-        {mouseYPx != null && hoveredPoint && !refAreaLeft && (() => {
+        {hoveredPoint && !refAreaLeft && (() => {
           const PAD = 16;
           const MARGIN_TOP = 5;
           const XAXIS_H = 30;
           const h = chartContainerRef.current?.offsetHeight ?? 400;
           const plotH = h - PAD * 2 - MARGIN_TOP - XAXIS_H - 5;
-          const relY = mouseYPx - PAD - MARGIN_TOP;
-          if (relY < 0 || relY > plotH) return null;
+          const returnRateEntry = hoveredPoint.payload.find(p => p.dataKey === 'returnRate');
+          if (!returnRateEntry) return null;
+          const yVal = returnRateEntry.value;
           const [yMin, yMax] = yDomainLeft;
-          const yVal = yMax - (relY / plotH) * (yMax - yMin);
+          const topPx = PAD + MARGIN_TOP + (yMax - yVal) / (yMax - yMin) * plotH;
+          if (topPx < PAD + MARGIN_TOP || topPx > PAD + MARGIN_TOP + plotH) return null;
           const label = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
           return (
             <div
               className="absolute left-4 right-4 flex items-center pointer-events-none"
-              style={{ top: mouseYPx - 0.5, zIndex: 10 }}
+              style={{ top: topPx - 0.5, zIndex: 10 }}
             >
-              <div className="flex-1 h-px bg-red-500/55" />
-              <span className="ml-1 px-1.5 py-px text-[10px] font-bold text-red-400 bg-[#1e293b] border border-red-500/25 rounded shrink-0">{label}</span>
+              <span className="text-[10px] font-bold text-red-400 shrink-0">{label}</span>
+              <div className="flex-1 h-px bg-red-500/55 ml-1" />
             </div>
           );
         })()}
