@@ -1953,6 +1953,8 @@ export default function App() {
             onRefresh={fetchMarketIndicators}
             isRefreshing={indicatorLoading}
             goldFetchStatus={indicatorFetchStatus?.goldKr?.status}
+            goldIntlFetchStatus={indicatorFetchStatus?.goldIntl?.status}
+            usdkrwFetchStatus={indicatorFetchStatus?.usdkrw?.status}
           />
         ) : (
           <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
