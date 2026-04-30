@@ -929,7 +929,7 @@ export default function App() {
     portfolioSummaries, portfolios, setPortfolios,
     activePortfolioId, activePortfolioAccountType,
     portfolio, principal, history, setHistory,
-    portfolioStartDate, showToast,
+    portfolioStartDate, showToast, setIntHistory,
   });
 
   const { handleImportHistoryJSON } = useIndexImport({

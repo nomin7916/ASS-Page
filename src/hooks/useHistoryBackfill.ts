@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useRef, useEffect } from 'react';
-import { calcPortfolioEvalForDate } from '../utils';
+import { calcPortfolioEvalForDate, generateId } from '../utils';
 
 export const useHistoryBackfill = ({
   stockHistoryMap,
@@ -17,6 +17,7 @@ export const useHistoryBackfill = ({
   setHistory,
   portfolioStartDate,
   showToast,
+  setIntHistory,
 }) => {
   const nonActiveHistRecordedRef = useRef({});
   const backfillDoneRef = useRef({});
@@ -182,6 +183,44 @@ export const useHistoryBackfill = ({
       return { ...p, history: [...(p.history || []), ...records] };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
+
+    // 백필된 날짜들을 intHistory에도 반영 (전체 계좌 합산)
+    if (setIntHistory && totalAdded > 0) {
+      const backfilledDates = new Set();
+      if (activeRecords) activeRecords.forEach(r => backfilledDates.add(r.date));
+      nextPortfolios.forEach(p => {
+        if (p.id === activePortfolioId) return;
+        const origP = portfolios.find(op => op.id === p.id);
+        const origDates = new Set((origP?.history || []).map(h => h.date));
+        (p.history || []).forEach(h => { if (!origDates.has(h.date)) backfilledDates.add(h.date); });
+      });
+
+      const newIntRecords = [];
+      [...backfilledDates].sort().forEach(date => {
+        let totalForDate = 0;
+        const activeRec = activeRecords?.find(r => r.date === date);
+        if (activeRec) {
+          totalForDate += activeRec.evalAmount;
+        } else {
+          const existingRec = history.find(h => h.date === date);
+          if (existingRec) totalForDate += existingRec.evalAmount;
+        }
+        nextPortfolios.forEach(p => {
+          if (p.id === activePortfolioId) return;
+          const rec = (p.history || []).find(h => h.date === date);
+          if (rec) totalForDate += rec.evalAmount;
+        });
+        if (totalForDate > 0) newIntRecords.push({ id: generateId(), date, evalAmount: totalForDate });
+      });
+
+      if (newIntRecords.length > 0) {
+        setIntHistory(prev => {
+          const existingDates = new Set(prev.map(h => h.date));
+          const additions = newIntRecords.filter(r => !existingDates.has(r.date));
+          return additions.length > 0 ? [...prev, ...additions] : prev;
+        });
+      }
+    }
 
     showToast(totalAdded > 0 ? `${totalAdded}건의 누락 기록을 채웠습니다.` : '채울 누락 기록이 없습니다.');
   };
