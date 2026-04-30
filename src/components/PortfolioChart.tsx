@@ -508,9 +508,10 @@ export default function PortfolioChart({
           const XAXIS_H = 30;
           const h = chartContainerRef.current?.offsetHeight ?? 400;
           const plotH = h - PAD * 2 - MARGIN_TOP - XAXIS_H - 5;
-          const returnRateEntry = hoveredPoint.payload.find(p => p.dataKey === 'returnRate');
-          if (!returnRateEntry) return null;
-          const yVal = returnRateEntry.value;
+          const entry = hoveredPoint.payload.find(p => p.yAxisId === 'left' && p.value != null && typeof p.value === 'number')
+            ?? hoveredPoint.payload.find(p => ['returnRate', 'backtestRate', 'kospiRate', 'sp500Rate', 'nasdaqRate'].includes(p.dataKey) && p.value != null);
+          if (!entry) return null;
+          const yVal = entry.value;
           const [yMin, yMax] = yDomainLeft;
           const topPx = PAD + MARGIN_TOP + (yMax - yVal) / (yMax - yMin) * plotH;
           if (topPx < PAD + MARGIN_TOP || topPx > PAD + MARGIN_TOP + plotH) return null;
