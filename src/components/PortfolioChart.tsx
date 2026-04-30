@@ -521,8 +521,10 @@ export default function PortfolioChart({
               className="absolute left-4 right-4 flex items-center pointer-events-none"
               style={{ top: topPx - 0.5, zIndex: 10 }}
             >
-              <span className="text-[10px] font-bold text-red-400 shrink-0">{label}</span>
-              <div className="flex-1 h-px bg-red-500/55 ml-1" />
+              <div className="flex items-center justify-end shrink-0 pr-1" style={{ width: 52 }}>
+                <span className="text-[10px] font-bold text-red-400">{label}</span>
+              </div>
+              <div className="flex-1 h-px bg-red-500/55" />
             </div>
           );
         })()}
@@ -548,7 +550,7 @@ export default function PortfolioChart({
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
             <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
-            <YAxis yAxisId="left" stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
+            <YAxis yAxisId="left" width={52} stroke="#ef4444" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
             {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
             {effectiveShowIndicators.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={['dataMin', 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
             {effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke="#ffd60a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ffd60a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
