@@ -41,6 +41,7 @@ import { useHistoryChart } from './hooks/useHistoryChart';
 import { useChartInteraction } from './hooks/useChartInteraction';
 import { useStockData } from './hooks/useStockData';
 import { usePinManager } from './hooks/usePinManager';
+import { useToast } from './hooks/useToast';
 import { useHistoryBackfill } from './hooks/useHistoryBackfill';
 import { useIndexImport } from './hooks/useIndexImport';
 import {
@@ -170,8 +171,7 @@ export default function App() {
   const [rebalanceSortConfig, setRebalanceSortConfig] = useState({ key: null, direction: 1 });
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
-  const [globalToast, setGlobalToast] = useState({ text: "", isError: false });
-  const showToast = (text, isError = false) => { setGlobalToast({ text, isError }); setTimeout(() => setGlobalToast({ text: "", isError: false }), 4000); };
+  const { globalToast, showToast } = useToast();
 
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
 
