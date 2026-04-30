@@ -435,7 +435,10 @@ export default function PortfolioChart({
                     const rateStr = `${sign}${Number(value).toFixed(2)}%`;
                     if (pointVal != null) {
                       const isComp = !!inlineCompMatch;
-                      const priceStr = isComp ? Number(pointVal).toLocaleString() : Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      const isKrwPoint = ['국내금', 'USDKRW', 'KOSPI'].includes(entry.name);
+                      const priceStr = (isComp || isKrwPoint)
+                        ? Number(pointVal).toLocaleString('ko-KR', { maximumFractionDigits: 0 })
+                        : Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                       displayVal = `${rateStr} (${priceStr})`;
                     } else {
                       displayVal = rateStr;
