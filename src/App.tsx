@@ -1929,6 +1929,9 @@ export default function App() {
         {!showIntegratedDashboard && (<>
         <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
 
+        <div className="flex items-start gap-0 w-full">
+          {/* 섹션 콘텐츠 */}
+          <div className="flex-1 flex flex-col gap-6 min-w-0" style={{ paddingBottom: '40vh' }}>
         {activePortfolioAccountType === 'gold' ? (
           <KrxGoldTable
             portfolio={portfolio}
@@ -1942,10 +1945,6 @@ export default function App() {
         ) : (
           <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} />
         )}
-
-        <div className="flex items-start gap-0 w-full">
-          {/* 섹션 콘텐츠 */}
-          <div className="flex-1 flex flex-col gap-6 min-w-0" style={{ paddingBottom: '40vh' }}>
 
         {activePortfolioAccountType !== 'gold' && !sectionCollapsed.summary && (
           <PortfolioSummaryPanel
