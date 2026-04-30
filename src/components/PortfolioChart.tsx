@@ -1,5 +1,5 @@
 ﻿// @ts-nocheck
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, Plus } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
@@ -74,6 +74,18 @@ export default function PortfolioChart({
 
   const hoveredData = hoveredPoint ? finalChartData.find(d => d.date === hoveredPoint.label) : null;
   const hoveredReturnRate = hoveredData?.returnRate ?? null;
+
+  const chartContainerRef = useRef(null);
+  const [mouseYPx, setMouseYPx] = useState(null);
+  const yDomainLeft = useMemo(() => {
+    const rates = finalChartData.flatMap(d => {
+      const vals = [d.returnRate, d.kospiRate, d.sp500Rate, d.nasdaqRate, d.backtestRate];
+      compStocks.forEach((_, ci) => vals.push(d[`comp${ci + 1}Rate`]));
+      return vals;
+    }).filter(v => v != null && isFinite(v));
+    if (rates.length === 0) return [-10, 10];
+    return [Math.min(...rates), Math.max(...rates)];
+  }, [finalChartData, compStocks]);
 
   const CompStockDot = ({ code }) => {
     const st = stockFetchStatus?.[code];
@@ -487,7 +499,36 @@ export default function PortfolioChart({
         )}
       </div>
 
-      <div className="chart-container-for-drag p-4 min-h-[400px] xl:flex-1 relative select-none">
+      <div
+        ref={chartContainerRef}
+        className="chart-container-for-drag p-4 min-h-[400px] xl:flex-1 relative select-none"
+        onMouseMove={e => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          setMouseYPx(e.clientY - rect.top);
+        }}
+        onMouseLeave={() => setMouseYPx(null)}
+      >
+        {mouseYPx != null && hoveredPoint && !refAreaLeft && (() => {
+          const PAD = 16;
+          const MARGIN_TOP = 5;
+          const XAXIS_H = 30;
+          const h = chartContainerRef.current?.offsetHeight ?? 400;
+          const plotH = h - PAD * 2 - MARGIN_TOP - XAXIS_H - 5;
+          const relY = mouseYPx - PAD - MARGIN_TOP;
+          if (relY < 0 || relY > plotH) return null;
+          const [yMin, yMax] = yDomainLeft;
+          const yVal = yMax - (relY / plotH) * (yMax - yMin);
+          const label = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
+          return (
+            <div
+              className="absolute left-4 right-4 flex items-center pointer-events-none"
+              style={{ top: mouseYPx - 0.5, zIndex: 10 }}
+            >
+              <div className="flex-1 h-px bg-red-500/55" />
+              <span className="ml-1 px-1.5 py-px text-[10px] font-bold text-red-400 bg-[#1e293b] border border-red-500/25 rounded shrink-0">{label}</span>
+            </div>
+          );
+        })()}
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={chartDataWithMA} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
             <defs>
@@ -555,7 +596,6 @@ export default function PortfolioChart({
             {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
             {showMA.map((active, pi) => active ? <Line key={`ma${pi + 1}`} yAxisId="left" type="monotone" dataKey={`ma${pi + 1}`} name={`MA${MA_PERIODS[pi]}`} stroke={MA_COLORS[pi]} strokeWidth={1.5} dot={false} connectNulls /> : null)}
             {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
-            {hoveredPoint && hoveredReturnRate != null && !refAreaLeft && <ReferenceLine yAxisId="left" y={hoveredReturnRate} stroke="rgba(239,68,68,0.55)" strokeWidth={1} strokeDasharray="4 3" label={{ value: `${hoveredReturnRate >= 0 ? '+' : ''}${Number(hoveredReturnRate).toFixed(2)}%`, position: 'insideBottomLeft', fill: '#ef4444', fontSize: 10, fontWeight: 'bold', dx: 4, dy: -3 }} />}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
