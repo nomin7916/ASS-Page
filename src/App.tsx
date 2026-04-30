@@ -175,6 +175,7 @@ export default function App() {
 
   const portfolioRef = useRef([]);
   const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
+  const nonActiveHistRecordedRef = useRef<Record<string, number>>({});
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
   const didSwitchPortfolioRef = useRef(false); // 탭 전환 시 최초 마운트 skip용
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
@@ -1699,6 +1700,35 @@ export default function App() {
       return newHist;
     });
   }, [totals.totalEval, principal]);
+
+  // 비활성 계좌 평가액 자동 기록 (탭하지 않아도 portfolioSummaries 기반으로 저장)
+  useEffect(() => {
+    const today = new Date().toISOString().split('T')[0];
+    let needsUpdate = false;
+    portfolioSummaries.forEach(s => {
+      if (s.id === activePortfolioId || s.currentEval === 0) return;
+      const key = `${s.id}_${today}`;
+      if (nonActiveHistRecordedRef.current[key] !== s.currentEval) needsUpdate = true;
+    });
+    if (!needsUpdate) return;
+    setPortfolios(prev => prev.map(p => {
+      if (p.id === activePortfolioId) return p;
+      const summary = portfolioSummaries.find(s => s.id === p.id);
+      if (!summary || summary.currentEval === 0) return p;
+      const key = `${p.id}_${today}`;
+      if (nonActiveHistRecordedRef.current[key] === summary.currentEval) return p;
+      nonActiveHistRecordedRef.current[key] = summary.currentEval;
+      const hist = p.history || [];
+      const idx = hist.findIndex(h => h.date === today);
+      if (idx >= 0) {
+        if (hist[idx].evalAmount === summary.currentEval) return p;
+        const newHist = [...hist];
+        newHist[idx] = { ...newHist[idx], evalAmount: summary.currentEval, principal: summary.principal };
+        return { ...p, history: newHist };
+      }
+      return { ...p, history: [...hist, { date: today, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
+    }));
+  }, [portfolioSummaries, activePortfolioId]);
 
   useEffect(() => {
     if (unifiedDates.length === 0) return;
