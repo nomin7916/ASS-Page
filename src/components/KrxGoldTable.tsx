@@ -8,7 +8,7 @@ const TROY_OZ_TO_GRAM = 31.1035;
 const fmtUsdOz = (v) =>
   v != null ? `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}` : null;
 
-const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh, isRefreshing }) => {
+const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh, isRefreshing, goldFetchStatus }) => {
   const goldItem = portfolio.find(p => p.type === 'stock');
   const depositItem = portfolio.find(p => p.type === 'deposit');
   const purchasePrice = goldItem ? cleanNum(goldItem.purchasePrice) : 0;
@@ -53,7 +53,18 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
             {/* KRX 금현물 row */}
             <tr className="group border-b border-gray-700 hover:bg-gray-800/40 transition-colors">
               <td className={`${td} text-center text-gray-400 font-bold`}>1g</td>
-              <td className={`${td} text-center font-bold text-gray-100 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]`}>KRX 금현물</td>
+              <td className={`${td} text-center font-bold text-gray-100 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]`}>
+                <div className="flex items-center justify-center gap-1.5">
+                  {isRefreshing ? (
+                    <RefreshCw size={10} className="text-yellow-400 animate-spin shrink-0" />
+                  ) : goldFetchStatus === 'success' ? (
+                    <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />
+                  ) : goldFetchStatus === 'fail' ? (
+                    <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />
+                  ) : null}
+                  <span>KRX 금현물</span>
+                </div>
+              </td>
               <td className={`${td} text-right`}>
                 <div className={refreshCls} onClick={onRefresh} title="클릭하여 현재 금 시세 새로고침">
                   {isRefreshing && <RefreshCw size={11} className="text-teal-400 animate-spin shrink-0" />}
