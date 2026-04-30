@@ -255,6 +255,51 @@ export const detectIndexFromFileName = (fileName) => {
   return null;
 };
 
+export const downloadCSV = (filename, csvString) => {
+  const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+};
+
+export const buildHistoryCSV = (history) => {
+  let csv = '﻿일자,평가자산,전일대비 수익금,전일대비 수익률\n';
+  const sh = [...history].sort((a, b) => new Date(b.date) - new Date(a.date));
+  sh.forEach((h, i) => {
+    const prev = sh[i + 1];
+    const dodProfit = prev ? h.evalAmount - prev.evalAmount : 0;
+    const dodRate = (prev && prev.evalAmount > 0) ? ((h.evalAmount / prev.evalAmount) - 1) * 100 : 0;
+    csv += `${h.date},${h.evalAmount},${dodProfit},${dodRate.toFixed(2)}%\n`;
+  });
+  return csv;
+};
+
+export const buildLookupCSV = (lookupRows, history, comparisonMode, currentTotalEval) => {
+  const modeText = comparisonMode === 'latestOverPast' ? '(현재/과거)-1 (%)' : '1- (과거/현재) (%)';
+  let csv = `﻿일자,평가자산,${modeText}\n`;
+  const validRecords = lookupRows.map(r => history.find(h => h.date === r.date)).filter(Boolean);
+  let oldestEval = 0;
+  if (validRecords.length > 0) oldestEval = validRecords.reduce((min, curr) => new Date(curr.date) < new Date(min.date) ? curr : min).evalAmount;
+  [...lookupRows].sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(row => {
+    const rec = history.find(h => h.date === row.date);
+    if (rec) {
+      const pastEval = rec.evalAmount;
+      const compareRate = comparisonMode === 'latestOverPast'
+        ? (oldestEval > 0 ? ((pastEval / oldestEval) - 1) * 100 : 0)
+        : (currentTotalEval > 0 ? (1 - (pastEval / currentTotalEval)) * 100 : 0);
+      csv += `${row.date},${pastEval},${compareRate.toFixed(2)}%\n`;
+    } else { csv += `${row.date},기록 없음,-\n`; }
+  });
+  return csv;
+};
+
+export const buildDepositCSV = (rows) => {
+  let csv = '﻿일자,금액,합계,메모\n';
+  rows.forEach(h => { csv += `${h.date},${cleanNum(h.amount)},${cleanNum(h.cumulative)},${h.memo || ''}\n`; });
+  return csv;
+};
+
 // 삼성운용 ETF 배당 과세 CSV 파싱
 // 포맷: 1행=펀드명, 2행=기준일, 3행=헤더, 4행~=데이터(지급기준일,실지급일,분배율,분배금액,주당과세표준)
 export const parseSamsungFundCSV = (text) => {

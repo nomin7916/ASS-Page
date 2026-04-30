@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ClipboardPaste, Plus,
@@ -47,7 +47,7 @@ import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
   getClosestValue, getIndexLatest, handleTableKeyDown, handleReadonlyCellNav, buildIndexStatus,
-  hexToRgba, blendWithDarkBg
+  hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
@@ -1187,57 +1187,11 @@ export default function App() {
     }
   };
 
-  const handleDownloadCSV = () => {
-    let csv = '\uFEFF일자,평가자산,전일대비 수익금,전일대비 수익률\n';
-    const sh = [...history].sort((a, b) => new Date(b.date) - new Date(a.date));
-    sh.forEach((h, i) => {
-      const prev = sh[i + 1];
-      const dodProfit = prev ? h.evalAmount - prev.evalAmount : 0;
-      const dodRate = (prev && prev.evalAmount > 0) ? ((h.evalAmount / prev.evalAmount) - 1) * 100 : 0;
-      csv += `${h.date},${h.evalAmount},${dodProfit},${dodRate.toFixed(2)}%\n`;
-    });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a"); link.href = URL.createObjectURL(blob);
-    link.download = `ISA_자산추이_${new Date().toISOString().split('T')[0]}.csv`; link.click();
-  };
-
-  const handleLookupDownloadCSV = () => {
-    const modeText = comparisonMode === 'latestOverPast' ? '(현재/과거)-1 (%)' : '1- (과거/현재) (%)';
-    let csv = `\uFEFF일자,평가자산,${modeText}\n`;
-    const currentTotalEval = totals.totalEval;
-    const validRecords = lookupRows.map(r => history.find(h => h.date === r.date)).filter(Boolean);
-    let oldestEval = 0;
-    if (validRecords.length > 0) oldestEval = validRecords.reduce((min, curr) => new Date(curr.date) < new Date(min.date) ? curr : min).evalAmount;
-    [...lookupRows].sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(row => {
-      const rec = history.find(h => h.date === row.date);
-      if (rec) {
-        const pastEval = rec.evalAmount;
-        let compareRate = comparisonMode === 'latestOverPast'
-          ? (oldestEval > 0 ? ((pastEval / oldestEval) - 1) * 100 : 0)
-          : (currentTotalEval > 0 ? (1 - (pastEval / currentTotalEval)) * 100 : 0);
-        csv += `${row.date},${pastEval},${compareRate.toFixed(2)}%\n`;
-      } else { csv += `${row.date},기록 없음,-\n`; }
-    });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a"); link.href = URL.createObjectURL(blob);
-    link.download = `ISA_지정일비교_${new Date().toISOString().split('T')[0]}.csv`; link.click();
-  };
-
-  const handleDepositDownloadCSV = () => {
-    let csv = '\uFEFF일자,금액,합계,메모\n';
-    depositWithSum.forEach(h => { csv += `${h.date},${cleanNum(h.amount)},${cleanNum(h.cumulative)},${h.memo || ''}\n`; });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a"); link.href = URL.createObjectURL(blob);
-    link.download = `입금내역_${new Date().toISOString().split('T')[0]}.csv`; link.click();
-  };
-
-  const handleWithdrawDownloadCSV = () => {
-    let csv = '\uFEFF일자,금액,합계,메모\n';
-    depositWithSum2.forEach(h => { csv += `${h.date},${cleanNum(h.amount)},${cleanNum(h.cumulative)},${h.memo || ''}\n`; });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a"); link.href = URL.createObjectURL(blob);
-    link.download = `출금내역_${new Date().toISOString().split('T')[0]}.csv`; link.click();
-  };
+  const today = new Date().toISOString().split('T')[0];
+  const handleDownloadCSV = () => downloadCSV(`ISA_자산추이_${today}.csv`, buildHistoryCSV(history));
+  const handleLookupDownloadCSV = () => downloadCSV(`ISA_지정일비교_${today}.csv`, buildLookupCSV(lookupRows, history, comparisonMode, totals.totalEval));
+  const handleDepositDownloadCSV = () => downloadCSV(`입금내역_${today}.csv`, buildDepositCSV(depositWithSum));
+  const handleWithdrawDownloadCSV = () => downloadCSV(`출금내역_${today}.csv`, buildDepositCSV(depositWithSum2));
 
   const handleSearchClick = () => { setChartPeriod('custom'); setAppliedRange({ start: dateRange.start, end: dateRange.end }); };
 
