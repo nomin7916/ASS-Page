@@ -549,6 +549,10 @@ export default function PortfolioChart({
                 <stop offset="5%" stopColor={backtestColor} stopOpacity={0.35}/>
                 <stop offset="95%" stopColor={backtestColor} stopOpacity={0.02}/>
               </linearGradient>
+              <linearGradient id="goldKrGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#ff9f0a" stopOpacity={0.4}/>
+                <stop offset="95%" stopColor="#ff9f0a" stopOpacity={0.02}/>
+              </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
             <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
@@ -572,13 +576,17 @@ export default function PortfolioChart({
             {!userFeatures.feature1 && showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && effectiveShowIndicators.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRateScaled" name="US 10Y" stroke="#8e8e93" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.us10y && indicatorHistoryMap.us10y && <Line yAxisId="right-us10y" dataKey="us10yPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
-            {!userFeatures.feature1 && effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRateScaled" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+            {!userFeatures.feature1 && effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRateScaled" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="right-goldIntl" dataKey="goldIntlPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
-            {!userFeatures.feature1 && effectiveShowIndicators.goldKr && indicatorHistoryMap.goldKr && <Line yAxisId="left" type="monotone" dataKey="goldKrRateScaled" name="국내금" stroke="#ff9f0a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+            {!userFeatures.feature1 && effectiveShowIndicators.goldKr && indicatorHistoryMap.goldKr && (
+              activePortfolioAccountType === 'gold'
+                ? <Area yAxisId="left" type="monotone" dataKey="goldKrRateScaled" name="국내금" stroke="#ff9f0a" strokeWidth={2} fill="url(#goldKrGradient)" dot={false} connectNulls />
+                : <Line yAxisId="left" type="monotone" dataKey="goldKrRateScaled" name="국내금" stroke="#ff9f0a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />
+            )}
             {!userFeatures.feature1 && effectiveShowIndicators.goldKr && indicatorHistoryMap.goldKr && <Line yAxisId="right-goldKr" dataKey="goldKrPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
-            {!userFeatures.feature1 && effectiveShowIndicators.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRateScaled" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+            {!userFeatures.feature1 && effectiveShowIndicators.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRateScaled" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="right-usdkrw" dataKey="usdkrwPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
-            {!userFeatures.feature1 && effectiveShowIndicators.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRateScaled" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
+            {!userFeatures.feature1 && effectiveShowIndicators.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRateScaled" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.dxy && indicatorHistoryMap.dxy && <Line yAxisId="right-dxy" dataKey="dxyPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRateScaled" name="기준금리" stroke="#ff375f" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="right-fedRate" dataKey="fedRatePoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
