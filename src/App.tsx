@@ -481,6 +481,11 @@ export default function App() {
     return showIndicatorsInChart;
   }, [activePortfolioAccountType, goldIndicators, showIndicatorsInChart]);
 
+  // gold 계좌에서 KOSPI/SP500/NASDAQ 추세선을 완전히 차단 — effectiveShowIndicators와 동일한 패턴
+  const effectiveShowKospi = activePortfolioAccountType === 'gold' ? false : showKospi;
+  const effectiveShowSp500 = activePortfolioAccountType === 'gold' ? false : showSp500;
+  const effectiveShowNasdaq = activePortfolioAccountType === 'gold' ? false : showNasdaq;
+
   // gold 계좌 진입 시 4개 지표 히스토리 자동 로드
   useEffect(() => {
     if (activePortfolioAccountType !== 'gold') return;
@@ -540,7 +545,6 @@ export default function App() {
         setBacktestColor('#f97316');
         setShowBacktest(false);
         if (accountType === 'gold') {
-          setShowKospi(false); setShowSp500(false); setShowNasdaq(false);
           setGoldIndicators({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
           setCompStocks(defaultCompStocks);
         } else {
@@ -2093,9 +2097,9 @@ export default function App() {
             setIsScaleSettingOpen={setIsScaleSettingOpen}
             showIndexVerify={showIndexVerify}
             setShowIndexVerify={setShowIndexVerify}
-            showKospi={showKospi}
-            showSp500={showSp500}
-            showNasdaq={showNasdaq}
+            showKospi={effectiveShowKospi}
+            showSp500={effectiveShowSp500}
+            showNasdaq={effectiveShowNasdaq}
             goldIndicators={goldIndicators}
             setGoldIndicators={setGoldIndicators}
             compStocks={compStocks}
