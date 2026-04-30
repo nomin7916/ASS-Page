@@ -176,6 +176,7 @@ export default function App() {
   const portfolioRef = useRef([]);
   const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
   const nonActiveHistRecordedRef = useRef<Record<string, number>>({});
+  const backfillDoneRef = useRef<Record<string, boolean>>({});
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
   const didSwitchPortfolioRef = useRef(false); // 탭 전환 시 최초 마운트 skip용
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
@@ -1729,6 +1730,120 @@ export default function App() {
       return { ...p, history: [...hist, { date: today, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
     }));
   }, [portfolioSummaries, activePortfolioId]);
+
+  // 히스토리 백필: 앱 미실행 기간의 종가 기반으로 누락 날짜 자동 기록 + 전날 종가 교정
+  useEffect(() => {
+    if (Object.keys(stockHistoryMap).length === 0) return;
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
+
+    // 히스토리 데이터(오늘 이전)가 실제로 존재하는지 확인
+    const hasHistData = Object.values(stockHistoryMap).some(m => Object.keys(m).some(d => d < today));
+    const hasGoldHistData = Object.keys(indicatorHistoryMap.goldKr || {}).some(d => d < today);
+    if (!hasHistData && !hasGoldHistData) return;
+
+    // 특정 날짜의 계좌 평가액 계산
+    const calcEval = (items, accountType, date) => {
+      const isGold = accountType === 'gold';
+      const isOverseas = accountType === 'overseas';
+      const fxRate = isOverseas
+        ? (getClosestValue(indicatorHistoryMap.usdkrw, date) || marketIndicators.usdkrw || 1)
+        : 1;
+      let totalEval = 0;
+      let hasAnyPrice = false;
+      items.forEach(item => {
+        if (item.type === 'deposit') {
+          totalEval += cleanNum(item.depositAmount) * fxRate;
+          hasAnyPrice = true;
+          return;
+        }
+        const qty = cleanNum(item.quantity);
+        if (!qty || qty <= 0) return;
+        let price = 0;
+        if (isGold) {
+          price = getClosestValue(indicatorHistoryMap.goldKr, date) || 0;
+        } else if (item.code) {
+          price = getClosestValue(stockHistoryMap[item.code], date) || 0;
+        }
+        if (price > 0) { totalEval += qty * price * fxRate; hasAnyPrice = true; }
+      });
+      return hasAnyPrice ? totalEval : 0;
+    };
+
+    // 누락 날짜 + 전날 교정 대상 계산
+    const computeUpdates = (portfolioId, items, accountType, prin, hist) => {
+      if (accountType === 'simple' || !items.length) return null;
+      const isGold = accountType === 'gold';
+      const sortedLastDate = hist.map(h => h.date).sort().slice(-1)[0] || null;
+      if (!sortedLastDate) return null;
+
+      // 데이터가 있는 날짜 수집 (lastDate 초과 ~ 오늘 미만)
+      const availDates = new Set();
+      if (isGold) {
+        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d > sortedLastDate && d < today) availDates.add(d); });
+      } else {
+        items.forEach(item => {
+          if ((item.type === 'stock' || item.type === 'fund') && item.code && stockHistoryMap[item.code]) {
+            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d > sortedLastDate && d < today) availDates.add(d); });
+          }
+        });
+      }
+
+      const updates = [];
+      const existingDates = new Set(hist.map(h => h.date));
+
+      // 누락 날짜 백필
+      [...availDates].sort().forEach(date => {
+        if (existingDates.has(date)) return;
+        const key = `${portfolioId}_fill_${date}`;
+        if (backfillDoneRef.current[key]) return;
+        const evalAmt = calcEval(items, accountType, date);
+        if (evalAmt > 0) { backfillDoneRef.current[key] = true; updates.push({ date, evalAmt }); }
+      });
+
+      // 전날 종가 교정 (isFixed=false인 경우만)
+      const yRec = hist.find(h => h.date === yesterday && !h.isFixed);
+      if (yRec) {
+        const key = `${portfolioId}_correct_${yesterday}`;
+        if (!backfillDoneRef.current[key]) {
+          backfillDoneRef.current[key] = true;
+          const evalAmt = calcEval(items, accountType, yesterday);
+          if (evalAmt > 0 && Math.abs(evalAmt - yRec.evalAmount) > 1) updates.push({ date: yesterday, evalAmt });
+        }
+      }
+
+      return updates.length > 0 ? { updates, prin } : null;
+    };
+
+    // 히스토리 배열에 업데이트 적용
+    const applyUpdates = (hist, updates, prin) => {
+      const newHist = [...hist];
+      updates.forEach(({ date, evalAmt }) => {
+        const idx = newHist.findIndex(h => h.date === date);
+        if (idx >= 0) {
+          if (!newHist[idx].isFixed) newHist[idx] = { ...newHist[idx], evalAmount: evalAmt, principal: prin };
+        } else {
+          newHist.push({ date, evalAmount: evalAmt, principal: prin, isFixed: false });
+        }
+      });
+      return newHist;
+    };
+
+    // 활성 계좌
+    const activeRes = computeUpdates(activePortfolioId, portfolio, activePortfolioAccountType, principal, history);
+    if (activeRes) setHistory(prev => applyUpdates(prev, activeRes.updates, activeRes.prin));
+
+    // 비활성 계좌
+    let portfoliosChanged = false;
+    const nextPortfolios = portfolios.map(p => {
+      if (p.id === activePortfolioId) return p;
+      const res = computeUpdates(p.id, p.portfolio || [], p.accountType, p.principal || 0, p.history || []);
+      if (!res) return p;
+      portfoliosChanged = true;
+      return { ...p, history: applyUpdates(p.history || [], res.updates, res.prin) };
+    });
+    if (portfoliosChanged) setPortfolios(nextPortfolios);
+  }, [stockHistoryMap, indicatorHistoryMap]);
 
   useEffect(() => {
     if (unifiedDates.length === 0) return;
