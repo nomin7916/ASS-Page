@@ -567,29 +567,32 @@ export default function PortfolioChart({
             {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
             {showMA.map((active, pi) => active ? <Line key={`ma${pi + 1}`} yAxisId="left" type="monotone" dataKey={`ma${pi + 1}`} name={`MA${MA_PERIODS[pi]}`} stroke={MA_COLORS[pi]} strokeWidth={1.5} dot={false} connectNulls /> : null)}
             {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
-            {hoveredPoint && !refAreaLeft && (() => {
-              const entry = hoveredPoint.payload.find(p => p.yAxisId === 'left' && p.value != null && typeof p.value === 'number')
-                ?? hoveredPoint.payload.find(p => ['returnRate', 'backtestRate', 'kospiRate', 'sp500Rate', 'nasdaqRate'].includes(p.dataKey) && p.value != null);
-              if (!entry) return null;
-              const yVal = entry.value;
-              const labelText = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
-              return (
-                <ReferenceLine
-                  yAxisId="left"
-                  y={yVal}
-                  stroke="rgba(239,68,68,0.55)"
-                  strokeWidth={1}
-                  label={({ viewBox }) => {
-                    const { x, y } = viewBox;
-                    return (
-                      <text x={x - 4} y={y + 3.5} textAnchor="end" fill="#ef4444" fontSize={10} fontWeight={700}>
-                        {labelText}
-                      </text>
-                    );
-                  }}
-                />
-              );
-            })()}
+            {hoveredPoint && !refAreaLeft && hoveredPoint.payload
+              .filter(p => p.yAxisId === 'left' && p.value != null && typeof p.value === 'number')
+              .map((entry, i) => {
+                const yVal = entry.value;
+                const labelText = `${yVal >= 0 ? '+' : ''}${yVal.toFixed(2)}%`;
+                const color = entry.stroke || entry.color || '#ef4444';
+                return (
+                  <ReferenceLine
+                    key={i}
+                    yAxisId="left"
+                    y={yVal}
+                    stroke={color}
+                    strokeOpacity={0.6}
+                    strokeWidth={1}
+                    label={({ viewBox }) => {
+                      const { x, y } = viewBox;
+                      return (
+                        <text x={x - 4} y={y + 3.5} textAnchor="end" fill={color} fontSize={10} fontWeight={700}>
+                          {labelText}
+                        </text>
+                      );
+                    }}
+                  />
+                );
+              })
+            }
           </ComposedChart>
         </ResponsiveContainer>
       </div>
