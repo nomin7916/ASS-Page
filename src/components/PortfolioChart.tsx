@@ -491,6 +491,36 @@ export default function PortfolioChart({
                 })}
               </div>
             )}
+            {activePortfolioAccountType === 'gold' && (
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                {([
+                  { key: 'goldIntl', label: 'Gold(국제)', color: '#ffd60a' },
+                  { key: 'goldKr',   label: '국내금(KRX)', color: '#ff9f0a' },
+                  { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff' },
+                  { key: 'dxy',     label: 'DXY', color: '#5ac8fa' },
+                ] as const).map(({ key, label, color }) => {
+                  if (!goldIndicators[key]) return null;
+                  const rate = selectionResult[`${key}PeriodRate`];
+                  if (rate == null) return null;
+                  const startPt = finalChartData.find(d => d.date === selectionResult.startDate)?.[`${key}Point`];
+                  const endPt = finalChartData.find(d => d.date === selectionResult.endDate)?.[`${key}Point`];
+                  return (
+                    <div key={key} className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: color }} />
+                      <span className="text-[11px] font-bold" style={{ color }}>{label}</span>
+                      <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
+                      </span>
+                      {startPt != null && endPt != null && (
+                        <span className="text-[10px] text-gray-500 font-mono">
+                          ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         ) : (
           <span className="text-gray-600 text-[10px]">차트를 드래그하면 기간별 수익이 표시됩니다</span>
