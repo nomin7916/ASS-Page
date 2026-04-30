@@ -29,6 +29,7 @@ export default function PortfolioChart({
   showSp500,
   showNasdaq,
   goldIndicators, setGoldIndicators,
+  goldIndicatorColors, setGoldIndicatorColors,
   compStocks, setCompStocks,
   userFeatures,
   finalChartData,
@@ -140,26 +141,44 @@ export default function PortfolioChart({
             {!userFeatures.feature1 && activePortfolioAccountType === 'gold' && (
               <div className="flex flex-wrap items-center gap-2">
                 {([
-                  { key: 'goldIntl', label: 'Gold(국제)', color: '#ffd60a' },
-                  { key: 'goldKr',   label: '국내금(KRX)', color: '#ff9f0a' },
-                  { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff' },
-                  { key: 'dxy',     label: 'DXY', color: '#5ac8fa' },
-                ]).map(({ key, label, color }) => {
+                  { key: 'goldIntl', label: 'Gold(국제)' },
+                  { key: 'goldKr',   label: '국내금(KRX)' },
+                  { key: 'usdkrw',  label: 'USD/KRW' },
+                  { key: 'dxy',     label: 'DXY' },
+                ] as const).map(({ key, label }) => {
                   const active = goldIndicators[key];
+                  const color = goldIndicatorColors[key];
                   const loading = indicatorHistoryLoading[key];
                   return (
                     <div
                       key={key}
-                      className="flex items-center gap-0 rounded-md overflow-hidden shrink-0 border cursor-pointer transition-colors select-none"
+                      className="flex items-center gap-0 rounded-md overflow-hidden shrink-0 border transition-colors select-none"
                       style={{ borderColor: active ? color : '#4b5563', backgroundColor: active ? `${color}22` : '#1f2937' }}
-                      onClick={() => {
-                        if (!indicatorHistoryMap[key]) fetchIndicatorHistory(key, null, null);
-                        setGoldIndicators(p => ({ ...p, [key]: !p[key] }));
-                      }}
                     >
-                      <div className="w-2 h-2 rounded-full mx-2 shrink-0" style={{ backgroundColor: color }} />
-                      <span className="pr-2.5 py-1.5 text-[10px] font-bold" style={{ color: active ? color : '#6b7280' }}>{label}</span>
-                      {loading && <RefreshCw size={10} className="animate-spin mr-1.5 text-gray-400" />}
+                      <div
+                        className="relative flex items-center justify-center w-5 self-stretch border-r border-gray-700/50 hover:bg-gray-700/30 transition-colors cursor-pointer"
+                        title="선 색상 변경"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <div className="w-2.5 h-2.5 rounded-full shadow-sm pointer-events-none" style={{ backgroundColor: color }} />
+                        <input
+                          type="color"
+                          value={color}
+                          onChange={e => setGoldIndicatorColors(p => ({ ...p, [key]: e.target.value }))}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        />
+                      </div>
+                      <button
+                        className="pr-2.5 pl-2 py-1.5 text-[10px] font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                        style={{ color: active ? color : '#6b7280', backgroundColor: 'transparent' }}
+                        onClick={() => {
+                          if (!indicatorHistoryMap[key]) fetchIndicatorHistory(key, null, null);
+                          setGoldIndicators(p => ({ ...p, [key]: !p[key] }));
+                        }}
+                      >
+                        {label}
+                        {loading && <RefreshCw size={10} className="animate-spin text-gray-400" />}
+                      </button>
                     </div>
                   );
                 })}
@@ -494,11 +513,12 @@ export default function PortfolioChart({
             {activePortfolioAccountType === 'gold' && (
               <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
                 {([
-                  { key: 'goldIntl', label: 'Gold(국제)', color: '#ffd60a' },
-                  { key: 'goldKr',   label: '국내금(KRX)', color: '#ff9f0a' },
-                  { key: 'usdkrw',  label: 'USD/KRW', color: '#0a84ff' },
-                  { key: 'dxy',     label: 'DXY', color: '#5ac8fa' },
-                ] as const).map(({ key, label, color }) => {
+                  { key: 'goldIntl', label: 'Gold(국제)' },
+                  { key: 'goldKr',   label: '국내금(KRX)' },
+                  { key: 'usdkrw',  label: 'USD/KRW' },
+                  { key: 'dxy',     label: 'DXY' },
+                ] as const).map(({ key, label }) => {
+                  const color = goldIndicatorColors[key];
                   if (!goldIndicators[key]) return null;
                   const rate = selectionResult[`${key}PeriodRate`];
                   if (rate == null) return null;
@@ -550,8 +570,8 @@ export default function PortfolioChart({
                 <stop offset="95%" stopColor={backtestColor} stopOpacity={0.02}/>
               </linearGradient>
               <linearGradient id="goldKrGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#ff9f0a" stopOpacity={0.4}/>
-                <stop offset="95%" stopColor="#ff9f0a" stopOpacity={0.02}/>
+                <stop offset="5%" stopColor={goldIndicatorColors.goldKr} stopOpacity={0.4}/>
+                <stop offset="95%" stopColor={goldIndicatorColors.goldKr} stopOpacity={0.02}/>
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
@@ -559,10 +579,10 @@ export default function PortfolioChart({
             <YAxis yAxisId="left" stroke="#9ca3af" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
             {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
             {effectiveShowIndicators.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={['dataMin', 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-            {effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke="#ffd60a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ffd60a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-            {effectiveShowIndicators.goldKr && indicatorHistoryMap.goldKr && <YAxis yAxisId="right-goldKr" orientation="right" stroke="#ff9f0a" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={62} domain={['dataMin', 'dataMax']}><Label value="국내금" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff9f0a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-            {effectiveShowIndicators.usdkrw && indicatorHistoryMap.usdkrw && <YAxis yAxisId="right-usdkrw" orientation="right" stroke="#0a84ff" tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="USD/KRW" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#0a84ff', fontSize: 11, fontWeight: 500 }} /></YAxis>}
-            {effectiveShowIndicators.dxy && indicatorHistoryMap.dxy && <YAxis yAxisId="right-dxy" orientation="right" stroke="#5ac8fa" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={52} domain={['dataMin', 'dataMax']}><Label value="DXY" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#5ac8fa', fontSize: 11, fontWeight: 500 }} /></YAxis>}
+            {effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke={goldIndicatorColors.goldIntl} tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: goldIndicatorColors.goldIntl, fontSize: 11, fontWeight: 500 }} /></YAxis>}
+            {effectiveShowIndicators.goldKr && indicatorHistoryMap.goldKr && <YAxis yAxisId="right-goldKr" orientation="right" stroke={goldIndicatorColors.goldKr} tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={62} domain={['dataMin', 'dataMax']}><Label value="국내금" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: goldIndicatorColors.goldKr, fontSize: 11, fontWeight: 500 }} /></YAxis>}
+            {effectiveShowIndicators.usdkrw && indicatorHistoryMap.usdkrw && <YAxis yAxisId="right-usdkrw" orientation="right" stroke={goldIndicatorColors.usdkrw} tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="USD/KRW" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: goldIndicatorColors.usdkrw, fontSize: 11, fontWeight: 500 }} /></YAxis>}
+            {effectiveShowIndicators.dxy && indicatorHistoryMap.dxy && <YAxis yAxisId="right-dxy" orientation="right" stroke={goldIndicatorColors.dxy} tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={52} domain={['dataMin', 'dataMax']}><Label value="DXY" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: goldIndicatorColors.dxy, fontSize: 11, fontWeight: 500 }} /></YAxis>}
             {effectiveShowIndicators.fedRate && indicatorHistoryMap.fedRate && <YAxis yAxisId="right-fedRate" orientation="right" stroke="#ff375f" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={54} domain={['dataMin', 'dataMax']}><Label value="기준금리" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff375f', fontSize: 11, fontWeight: 500 }} /></YAxis>}
             {effectiveShowIndicators.kr10y && indicatorHistoryMap.kr10y && <YAxis yAxisId="right-kr10y" orientation="right" stroke="#636366" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)+'%'} width={52} domain={['dataMin', 'dataMax']}><Label value="KR 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#636366', fontSize: 11, fontWeight: 500 }} /></YAxis>}
             {effectiveShowIndicators.vix && indicatorHistoryMap.vix && <YAxis yAxisId="right-vix" orientation="right" stroke="#ff453a" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(1)} width={48} domain={['dataMin', 'dataMax']}><Label value="VIX" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#ff453a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
@@ -576,17 +596,17 @@ export default function PortfolioChart({
             {!userFeatures.feature1 && showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && effectiveShowIndicators.us10y && indicatorHistoryMap.us10y && <Line yAxisId="left" type="monotone" dataKey="us10yRateScaled" name="US 10Y" stroke="#8e8e93" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.us10y && indicatorHistoryMap.us10y && <Line yAxisId="right-us10y" dataKey="us10yPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
-            {!userFeatures.feature1 && effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRateScaled" name="Gold" stroke="#ffd60a" strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
+            {!userFeatures.feature1 && effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="left" type="monotone" dataKey="goldIntlRateScaled" name="Gold" stroke={goldIndicatorColors.goldIntl} strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <Line yAxisId="right-goldIntl" dataKey="goldIntlPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.goldKr && indicatorHistoryMap.goldKr && (
               activePortfolioAccountType === 'gold'
-                ? <Area yAxisId="left" type="monotone" dataKey="goldKrRateScaled" name="국내금" stroke="#ff9f0a" strokeWidth={2} fill="url(#goldKrGradient)" dot={false} connectNulls />
-                : <Line yAxisId="left" type="monotone" dataKey="goldKrRateScaled" name="국내금" stroke="#ff9f0a" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />
+                ? <Area yAxisId="left" type="monotone" dataKey="goldKrRateScaled" name="국내금" stroke={goldIndicatorColors.goldKr} strokeWidth={2} fill="url(#goldKrGradient)" dot={false} connectNulls />
+                : <Line yAxisId="left" type="monotone" dataKey="goldKrRateScaled" name="국내금" stroke={goldIndicatorColors.goldKr} strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />
             )}
             {!userFeatures.feature1 && effectiveShowIndicators.goldKr && indicatorHistoryMap.goldKr && <Line yAxisId="right-goldKr" dataKey="goldKrPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
-            {!userFeatures.feature1 && effectiveShowIndicators.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRateScaled" name="USDKRW" stroke="#0a84ff" strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
+            {!userFeatures.feature1 && effectiveShowIndicators.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="left" type="monotone" dataKey="usdkrwRateScaled" name="USDKRW" stroke={goldIndicatorColors.usdkrw} strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.usdkrw && indicatorHistoryMap.usdkrw && <Line yAxisId="right-usdkrw" dataKey="usdkrwPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
-            {!userFeatures.feature1 && effectiveShowIndicators.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRateScaled" name="DXY" stroke="#5ac8fa" strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
+            {!userFeatures.feature1 && effectiveShowIndicators.dxy && indicatorHistoryMap.dxy && <Line yAxisId="left" type="monotone" dataKey="dxyRateScaled" name="DXY" stroke={goldIndicatorColors.dxy} strokeWidth={1.5} dot={false} strokeDasharray={activePortfolioAccountType === 'gold' ? undefined : "4 2"} connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.dxy && indicatorHistoryMap.dxy && <Line yAxisId="right-dxy" dataKey="dxyPoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="left" type="monotone" dataKey="fedRateRateScaled" name="기준금리" stroke="#ff375f" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />}
             {!userFeatures.feature1 && effectiveShowIndicators.fedRate && indicatorHistoryMap.fedRate && <Line yAxisId="right-fedRate" dataKey="fedRatePoint" stroke="transparent" dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls />}

@@ -182,7 +182,7 @@ export default function App() {
   const applyStateDataRef = useRef<Function | null>(null);
   const applyBackupDataRef = useRef<Function | null>(null);
   // 계좌별 차트 상태 독립 관리
-  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
+  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
   const accountChartStatesRef = useRef<Record<string, any>>({});
   const prevActivePortfolioIdRef = useRef<string | null>(null);
 
@@ -223,6 +223,7 @@ export default function App() {
     showNasdaq, setShowNasdaq,
     showIndicatorsInChart, setShowIndicatorsInChart,
     goldIndicators, setGoldIndicators,
+    goldIndicatorColors, setGoldIndicatorColors,
     indicatorScales, setIndicatorScales,
     isScaleSettingOpen, setIsScaleSettingOpen,
     showMarketPanel, setShowMarketPanel,
@@ -404,6 +405,7 @@ export default function App() {
       if (stateData.chartPrefs.hideAmounts !== undefined) setHideAmounts(stateData.chartPrefs.hideAmounts);
       if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
       if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
+      if (stateData.chartPrefs.goldIndicatorColors) setGoldIndicatorColors(stateData.chartPrefs.goldIndicatorColors);
       if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
       if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
       if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
@@ -459,6 +461,7 @@ export default function App() {
       if (stateData.chartPrefs.hideAmounts !== undefined) setHideAmounts(stateData.chartPrefs.hideAmounts);
       if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
       if (stateData.chartPrefs.goldIndicators) setGoldIndicators(stateData.chartPrefs.goldIndicators);
+      if (stateData.chartPrefs.goldIndicatorColors) setGoldIndicatorColors(stateData.chartPrefs.goldIndicatorColors);
       if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
       if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
       if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
@@ -501,6 +504,7 @@ export default function App() {
       showKospi, showSp500, showNasdaq,
       showIndicatorsInChart,
       goldIndicators,
+      goldIndicatorColors,
       compStocks: compStocks.map(({ loading, ...rest }) => rest),
       chartPeriod,
       dateRange,
@@ -508,7 +512,7 @@ export default function App() {
       backtestColor,
       showBacktest,
     };
-  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, compStocks, chartPeriod, dateRange, appliedRange, backtestColor, showBacktest]);
+  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, compStocks, chartPeriod, dateRange, appliedRange, backtestColor, showBacktest]);
 
   // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
@@ -525,6 +529,7 @@ export default function App() {
         setShowNasdaq(saved.showNasdaq);
         setShowIndicatorsInChart(saved.showIndicatorsInChart);
         setGoldIndicators(saved.goldIndicators || { goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
+        setGoldIndicatorColors(saved.goldIndicatorColors || { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' });
         setCompStocks((saved.compStocks || defaultCompStocks).map((s: any) => ({ ...s, loading: false })));
         // 조회기간 복원
         if (saved.chartPeriod) setChartPeriod(saved.chartPeriod);
@@ -546,6 +551,7 @@ export default function App() {
         setShowBacktest(false);
         if (accountType === 'gold') {
           setGoldIndicators({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
+          setGoldIndicatorColors({ goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' });
           setCompStocks(defaultCompStocks);
         } else {
           setShowKospi(true); setShowSp500(false); setShowNasdaq(false);
@@ -1303,7 +1309,7 @@ export default function App() {
 
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -1321,7 +1327,7 @@ export default function App() {
 
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory };
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
@@ -1474,6 +1480,7 @@ export default function App() {
           if (data.chartPrefs.hideAmounts !== undefined) setHideAmounts(data.chartPrefs.hideAmounts);
           if (data.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(data.chartPrefs.showIndicatorsInChart);
           if (data.chartPrefs.goldIndicators) setGoldIndicators(data.chartPrefs.goldIndicators);
+          if (data.chartPrefs.goldIndicatorColors) setGoldIndicatorColors(data.chartPrefs.goldIndicatorColors);
           if (data.chartPrefs.indicatorScales) setIndicatorScales(data.chartPrefs.indicatorScales);
           if (data.chartPrefs.backtestColor) setBacktestColor(data.chartPrefs.backtestColor);
           if (data.chartPrefs.showBacktest !== undefined) setShowBacktest(data.chartPrefs.showBacktest);
@@ -1659,7 +1666,7 @@ export default function App() {
     if (activePortfolioId) {
       accountChartStatesRef.current[activePortfolioId] = { ...currentChartStateRef.current };
     }
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
     // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
     const stateEmail = adminViewingAsRef.current || authUser.email;
@@ -2102,6 +2109,8 @@ export default function App() {
             showNasdaq={effectiveShowNasdaq}
             goldIndicators={goldIndicators}
             setGoldIndicators={setGoldIndicators}
+            goldIndicatorColors={goldIndicatorColors}
+            setGoldIndicatorColors={setGoldIndicatorColors}
             compStocks={compStocks}
             setCompStocks={setCompStocks}
             userFeatures={userFeatures}
