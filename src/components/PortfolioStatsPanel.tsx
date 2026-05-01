@@ -42,8 +42,8 @@ export default function PortfolioStatsPanel({
   const contentP = isOv ? 'p-2' : 'p-3';
 
   return (
-    <div className={`w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full ${isOv ? 'min-h-[440px]' : 'min-h-[520px]'} flex flex-col overflow-hidden shrink-0`}>
-      <div className={`${isOv ? 'p-3 space-y-2' : 'p-4 space-y-3'} bg-black shrink-0 border-b border-gray-700 text-gray-400 text-xs`}>
+    <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
+      <div className={`${isOv ? 'p-5 space-y-4' : 'p-4 space-y-3'} bg-black shrink-0 border-b border-gray-700 text-gray-400 text-xs`}>
         <div className="flex justify-between items-start">
           <span className="shrink-0">투자금액</span>
           {dualKRW(totals.totalInvest)}
