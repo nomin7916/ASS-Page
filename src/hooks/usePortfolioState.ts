@@ -14,63 +14,70 @@ export function usePortfolioState({
   showToast,
   setShowIntegratedDashboard,
 }: UsePortfolioStateParams) {
-  // ── 포트폴리오 핵심 상태 ──
-  const [title, setTitle] = useState("주식/ETF 포트폴리오");
-  const [portfolio, setPortfolio] = useState([]);
-  const [principal, setPrincipal] = useState(UI_CONFIG.DEFAULTS.PRINCIPAL);
-  const [avgExchangeRate, setAvgExchangeRate] = useState(0);
-  const [depositHistory, setDepositHistory] = useState([]);
-  const [depositHistory2, setDepositHistory2] = useState([]);
-  const [customLinks, setCustomLinks] = useState(UI_CONFIG.DEFAULT_LINKS);
-  const [overseasLinks, setOverseasLinks] = useState(UI_CONFIG.OVERSEAS_DEFAULT_LINKS);
-  const [history, setHistory] = useState([]);
-  const [settings, setSettings] = useState({ mode: 'rebalance', amount: 1000000 });
-  const [lookupRows, setLookupRows] = useState([]);
-  const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
-  const [portfolioStartDate, setPortfolioStartDate] = useState(() => {
-    const today = new Date();
-    today.setFullYear(today.getFullYear() - 1);
-    return today.toISOString().split('T')[0];
-  });
-  const [depositSortConfig, setDepositSortConfig] = useState({ key: null, direction: 1 });
-  const [depositSortConfig2, setDepositSortConfig2] = useState({ key: null, direction: 1 });
-
-  // ── 통합 대시보드 ──
+  // ── 포트폴리오 목록 (단일 소스) ──
   const [portfolios, setPortfolios] = useState([]);
   const [activePortfolioId, setActivePortfolioId] = useState(null);
   const [intHistory, setIntHistory] = useState([]);
+  const [customLinks, setCustomLinks] = useState(UI_CONFIG.DEFAULT_LINKS);
+  const [overseasLinks, setOverseasLinks] = useState(UI_CONFIG.OVERSEAS_DEFAULT_LINKS);
+  const [lookupRows, setLookupRows] = useState([]);
+  const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
+  const [depositSortConfig, setDepositSortConfig] = useState({ key: null, direction: 1 });
+  const [depositSortConfig2, setDepositSortConfig2] = useState({ key: null, direction: 1 });
 
-  // ── 활성 포트폴리오 계좌 타입 ──
-  const activePortfolioAccountType = useMemo(() =>
-    portfolios.find(p => p.id === activePortfolioId)?.accountType || 'portfolio',
+  // ── 활성 포트폴리오 (파생) ──
+  const activePortfolio = useMemo(
+    () => portfolios.find(p => p.id === activePortfolioId) ?? null,
     [portfolios, activePortfolioId]
   );
 
-  // ── 현재 활성 포트폴리오 state를 portfolios 배열에 반영 ──
-  const buildPortfoliosState = () =>
-    portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
+  // ── 활성 계좌 타입 (파생) ──
+  const activePortfolioAccountType = activePortfolio?.accountType || 'portfolio';
 
-  // ── avgExchangeRate 상태를 portfolios 배열에 즉시 동기화 ──
-  useEffect(() => {
-    if (!activePortfolioId) return;
-    setPortfolios(prev => {
-      const active = prev.find(p => p.id === activePortfolioId);
-      if (!active || active.avgExchangeRate === avgExchangeRate) return prev;
-      return prev.map(p => p.id === activePortfolioId ? { ...p, avgExchangeRate } : p);
-    });
-  }, [avgExchangeRate, activePortfolioId]);
+  // ── 개별 필드 파생값 (하위 호환) ──
+  const _defaultStartDate = useMemo(() => {
+    const d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().split('T')[0];
+  }, []);
+  const title = activePortfolio?.name ?? '주식/ETF 포트폴리오';
+  const portfolio = activePortfolio?.portfolio ?? [];
+  const principal = activePortfolio?.principal ?? UI_CONFIG.DEFAULTS.PRINCIPAL;
+  const avgExchangeRate = activePortfolio?.avgExchangeRate ?? 0;
+  const depositHistory = activePortfolio?.depositHistory ?? [];
+  const depositHistory2 = activePortfolio?.depositHistory2 ?? [];
+  const history = activePortfolio?.history ?? [];
+  const settings = activePortfolio?.settings ?? { mode: 'rebalance', amount: 1000000 };
+  const portfolioStartDate = activePortfolio?.portfolioStartDate || activePortfolio?.startDate || _defaultStartDate;
+
+  // ── 활성 포트폴리오만 갱신하는 헬퍼 ──
+  const patchActive = (patch) =>
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== activePortfolioId) return p;
+      const resolved = typeof patch === 'function' ? patch(p) : patch;
+      return { ...p, ...resolved };
+    }));
+
+  // ── 하위 호환 세터 ──
+  const setTitle = (v) => patchActive({ name: v });
+  const setPrincipal = (v) => patchActive(p => ({ principal: typeof v === 'function' ? v(p.principal ?? 0) : v }));
+  const setAvgExchangeRate = (v) => patchActive({ avgExchangeRate: v });
+  const setPortfolio = (v) => patchActive(p => ({ portfolio: typeof v === 'function' ? v(p.portfolio ?? []) : v }));
+  const setHistory = (v) => patchActive(p => ({ history: typeof v === 'function' ? v(p.history ?? []) : v }));
+  const setDepositHistory = (v) => patchActive(p => ({ depositHistory: typeof v === 'function' ? v(p.depositHistory ?? []) : v }));
+  const setDepositHistory2 = (v) => patchActive(p => ({ depositHistory2: typeof v === 'function' ? v(p.depositHistory2 ?? []) : v }));
+  const setSettings = (v) => patchActive({ settings: v });
+  const setPortfolioStartDate = (v) => patchActive({ portfolioStartDate: v, startDate: v });
+
+  // ── buildPortfoliosState (portfolios가 단일 소스) ──
+  const buildPortfoliosState = () => portfolios;
+
+  // ── 포트폴리오 탭 전환 ──
+  const switchToPortfolio = (id) => {
+    setActivePortfolioId(id);
+    setShowIntegratedDashboard(false);
+  };
 
   // ── 포트폴리오 추가 ──
   const addPortfolio = (accountType = 'portfolio') => {
-    const updated = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
     const newId = generateId();
     const today = new Date().toISOString().split('T')[0];
     const ACCOUNT_TYPE_NAMES = {
@@ -86,17 +93,8 @@ export function usePortfolioState({
       principal: 0, avgExchangeRate: 0, history: [], depositHistory: [], depositHistory2: [],
       settings: inheritedSettings,
     };
-    setPortfolios([...updated, newP]);
+    setPortfolios(prev => [...prev, newP]);
     setActivePortfolioId(newId);
-    setTitle(newP.name);
-    setPortfolio(newP.portfolio);
-    setPrincipal(0);
-    setAvgExchangeRate(0);
-    setHistory([]);
-    setDepositHistory([]);
-    setDepositHistory2([]);
-    setPortfolioStartDate(today);
-    setSettings({ mode: 'rebalance', amount: 1000000 });
   };
 
   // ── 포트폴리오 삭제 ──
@@ -106,12 +104,7 @@ export function usePortfolioState({
       ? '마지막 계좌입니다. 삭제하면 새 빈 계좌가 자동으로 생성됩니다. 삭제하시겠습니까?'
       : '이 포트폴리오 계좌를 삭제하시겠습니까?';
     if (!window.confirm(confirmMsg)) return;
-    const updated = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
-    const remaining = updated.filter(p => p.id !== id);
+    const remaining = portfolios.filter(p => p.id !== id);
     if (remaining.length === 0) {
       const newId = generateId();
       const today = new Date().toISOString().split('T')[0];
@@ -124,64 +117,15 @@ export function usePortfolioState({
       };
       setPortfolios([blank]);
       setActivePortfolioId(blank.id);
-      setTitle(blank.name);
-      setPortfolio(blank.portfolio);
-      setPrincipal(0);
-      setAvgExchangeRate(0);
-      setHistory([]);
-      setDepositHistory([]);
-      setDepositHistory2([]);
-      setPortfolioStartDate(today);
-      setSettings(blank.settings);
       setShowIntegratedDashboard(false);
       return;
     }
     setPortfolios(remaining);
-    if (activePortfolioId === id) {
-      const first = remaining[0];
-      setActivePortfolioId(first.id);
-      setTitle(first.name);
-      setPortfolio(first.portfolio || []);
-      setPrincipal(first.principal || 0);
-      setAvgExchangeRate(first.avgExchangeRate || 0);
-      setHistory(first.history || []);
-      setDepositHistory(first.depositHistory || []);
-      setDepositHistory2(first.depositHistory2 || []);
-      setPortfolioStartDate(first.startDate || first.portfolioStartDate || '');
-      setSettings(first.settings || { mode: 'rebalance', amount: 1000000 });
-    }
-  };
-
-  // ── 포트폴리오 탭 전환 ──
-  const switchToPortfolio = (id) => {
-    const updated = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
-    setPortfolios(updated);
-    const target = updated.find(p => p.id === id);
-    if (!target) return;
-    setActivePortfolioId(id);
-    setTitle(target.name);
-    setPortfolio(target.portfolio || []);
-    setPrincipal(target.principal || 0);
-    setAvgExchangeRate(target.avgExchangeRate || 0);
-    setHistory(target.history || []);
-    setDepositHistory(target.depositHistory || []);
-    setDepositHistory2(target.depositHistory2 || []);
-    setPortfolioStartDate(target.startDate || target.portfolioStartDate || '');
-    setSettings(target.settings || { mode: 'rebalance', amount: 1000000 });
-    setShowIntegratedDashboard(false);
+    if (activePortfolioId === id) setActivePortfolioId(remaining[0].id);
   };
 
   // ── 직접입력 계좌 추가 ──
   const addSimpleAccount = () => {
-    const updated = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
     const newId = generateId();
     const today = new Date().toISOString().split('T')[0];
     const newP = {
@@ -191,7 +135,7 @@ export function usePortfolioState({
       portfolio: [], principal: 0, history: [], depositHistory: [], depositHistory2: [],
       settings: { mode: 'rebalance', amount: 1000000 },
     };
-    setPortfolios([...updated, newP]);
+    setPortfolios(prev => [...prev, newP]);
   };
 
   // ── 직접입력 계좌 필드 수정 ──
@@ -211,13 +155,11 @@ export function usePortfolioState({
 
   // ── 시작일 변경 ──
   const updatePortfolioStartDate = (id, date) => {
-    if (id === activePortfolioId) setPortfolioStartDate(date);
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, startDate: date, portfolioStartDate: date } : p));
   };
 
   // ── 계좌명 변경 ──
   const updatePortfolioName = (id, name) => {
-    if (id === activePortfolioId) setTitle(name);
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, name } : p));
   };
 
@@ -233,8 +175,6 @@ export function usePortfolioState({
 
   // ── 같은 accountType 계좌에 settings 동기화 ──
   const updateSettingsForType = (newSettings) => {
-    setSettings(newSettings);
-    const activePortfolio = portfolios.find(p => p.id === activePortfolioId);
     if (!activePortfolio) return;
     setPortfolios(prev => prev.map(p =>
       p.accountType === activePortfolio.accountType ? { ...p, settings: newSettings } : p
@@ -259,9 +199,8 @@ export function usePortfolioState({
     });
   };
 
-  // ── 분배금 이력 저장 (계좌별, Drive 백업 자동 포함) ──
+  // ── 분배금 이력 저장 ──
   const updateDividendHistory = (mergeMap) => {
-    // mergeMap: { [code]: { [YYYY-MM]: perShareAmount } }
     setPortfolios(prev => prev.map(p => {
       if (p.id !== activePortfolioId) return p;
       const existing = p.dividendHistory || {};
@@ -350,7 +289,7 @@ export function usePortfolioState({
     }));
   };
 
-  // ── 수동 추가 배당금 행 (포트폴리오에서 제거된 종목 기록용) ──
+  // ── 수동 추가 배당금 행 ──
   const addPortfolioExtraRow = (portfolioId) => {
     setPortfolios(prev => prev.map(p => {
       if (p.id !== portfolioId) return p;
@@ -443,19 +382,30 @@ export function usePortfolioState({
   }, [marketIndicators.goldKr, activePortfolioAccountType]);
 
   return {
-    // 상태 + 세터
-    title, setTitle,
-    portfolio, setPortfolio,
-    principal, setPrincipal,
-    avgExchangeRate, setAvgExchangeRate,
-    depositHistory, setDepositHistory,
-    depositHistory2, setDepositHistory2,
-    history, setHistory,
-    settings, setSettings,
+    // 파생 상태 (읽기 전용)
+    title,
+    portfolio,
+    principal,
+    avgExchangeRate,
+    depositHistory,
+    depositHistory2,
+    history,
+    settings,
+    portfolioStartDate,
+    // 하위 호환 세터
+    setTitle,
+    setPrincipal,
+    setAvgExchangeRate,
+    setPortfolio,
+    setHistory,
+    setDepositHistory,
+    setDepositHistory2,
+    setSettings,
+    setPortfolioStartDate,
+    // 공유 상태 + 세터
     portfolios, setPortfolios,
     activePortfolioId, setActivePortfolioId,
     intHistory, setIntHistory,
-    portfolioStartDate, setPortfolioStartDate,
     depositSortConfig, setDepositSortConfig,
     depositSortConfig2, setDepositSortConfig2,
     customLinks, setCustomLinks,

@@ -358,19 +358,13 @@ export default function App() {
     setStockHistoryMap(resolvedStockHistoryMap);
 
     if (stateData.portfolios?.length > 0) {
-      setPortfolios(stateData.portfolios);
-      const activeId = stateData.activePortfolioId || stateData.portfolios[0].id;
-      setActivePortfolioId(activeId);
-      const active = stateData.portfolios.find(p => p.id === activeId) || stateData.portfolios[0];
-      setTitle(active.name || '포트폴리오');
-      setPortfolio(active.portfolio || []);
-      setPrincipal(active.principal || 0);
-      setAvgExchangeRate(active.avgExchangeRate || 0);
-      setHistory(active.history || []);
-      setDepositHistory((active.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })));
-      setDepositHistory2((active.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })));
-      setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
-      setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
+      const normalizedPortfolios = stateData.portfolios.map(p => ({
+        ...p,
+        depositHistory: (p.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })),
+        depositHistory2: (p.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })),
+      }));
+      setPortfolios(normalizedPortfolios);
+      setActivePortfolioId(stateData.activePortfolioId || stateData.portfolios[0].id);
     } else if (stateData.portfolio) {
       const newId = generateId();
       const migrated = {
@@ -384,14 +378,6 @@ export default function App() {
       };
       setPortfolios([migrated]);
       setActivePortfolioId(newId);
-      setTitle(stateData.title || '포트폴리오');
-      setPortfolio(stateData.portfolio || []);
-      setPrincipal(cleanNum(stateData.principal));
-      setHistory(stateData.history || []);
-      setDepositHistory(stateData.depositHistory || []);
-      if (stateData.depositHistory2) setDepositHistory2(stateData.depositHistory2);
-      setSettings(stateData.settings || { mode: 'rebalance', amount: 1000000 });
-      if (stateData.portfolioStartDate) setPortfolioStartDate(stateData.portfolioStartDate);
     }
     setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
@@ -436,19 +422,13 @@ export default function App() {
 
   const applyBackupData = (stateData, acRef) => {
     if (stateData.portfolios?.length > 0) {
-      setPortfolios(stateData.portfolios);
-      const activeId = stateData.activePortfolioId || stateData.portfolios[0].id;
-      setActivePortfolioId(activeId);
-      const active = stateData.portfolios.find(p => p.id === activeId) || stateData.portfolios[0];
-      setTitle(active.name || '포트폴리오');
-      setPortfolio(active.portfolio || []);
-      setPrincipal(active.principal || 0);
-      setAvgExchangeRate(active.avgExchangeRate || 0);
-      setHistory(active.history || []);
-      setDepositHistory((active.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })));
-      setDepositHistory2((active.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })));
-      setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
-      setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
+      const normalizedPortfolios = stateData.portfolios.map(p => ({
+        ...p,
+        depositHistory: (p.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })),
+        depositHistory2: (p.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })),
+      }));
+      setPortfolios(normalizedPortfolios);
+      setActivePortfolioId(stateData.activePortfolioId || stateData.portfolios[0].id);
     }
     if (stateData.customLinks) setCustomLinks(stateData.customLinks);
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
@@ -1254,18 +1234,7 @@ export default function App() {
         setStockHistoryMap(data.stockHistoryMap || {});
         if (data.portfolios?.length > 0) {
           setPortfolios(data.portfolios);
-          const activeId = data.activePortfolioId || data.portfolios[0].id;
-          setActivePortfolioId(activeId);
-          const active = data.portfolios.find(p => p.id === activeId) || data.portfolios[0];
-          setTitle(active.name || '포트폴리오');
-          setPortfolio(active.portfolio || []);
-          setPrincipal(active.principal || 0);
-          setAvgExchangeRate(active.avgExchangeRate || 0);
-          setHistory(active.history || []);
-          setDepositHistory(active.depositHistory || []);
-          if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
-          setPortfolioStartDate(active.startDate || active.portfolioStartDate || '');
-          setSettings(active.settings || { mode: 'rebalance', amount: 1000000 });
+          setActivePortfolioId(data.activePortfolioId || data.portfolios[0].id);
         } else if (data.portfolio) {
           // 구 형식 마이그레이션
           const newId = generateId();
@@ -1284,14 +1253,6 @@ export default function App() {
           };
           setPortfolios([migrated]);
           setActivePortfolioId(newId);
-          setTitle(data.title || '포트폴리오');
-          setPortfolio(data.portfolio || []);
-          setPrincipal(cleanNum(data.principal));
-          setHistory(data.history || []);
-          setDepositHistory(data.depositHistory || []);
-          if (data.depositHistory2) setDepositHistory2(data.depositHistory2);
-          setPortfolioStartDate(startDate);
-          setSettings(data.settings || { mode: 'rebalance', amount: 1000000 });
         }
 
         setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
@@ -1397,10 +1358,6 @@ export default function App() {
           const initP = { id: newId, name: '내 포트폴리오', startDate: today, portfolioStartDate: today, portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }], principal: 0, history: [], depositHistory: [], depositHistory2: [], settings: { mode: 'rebalance', amount: 1000000 } };
           setPortfolios([initP]);
           setActivePortfolioId(newId);
-          setTitle(initP.name);
-          setPortfolio(initP.portfolio);
-          setPrincipal(0);
-          setPortfolioStartDate(today);
         }
       } else {
         // localStorage가 있어도 Drive를 우선 확인 → 다른 기기의 최신 계좌 구조를 항상 반영
@@ -1480,11 +1437,7 @@ export default function App() {
   useEffect(() => {
     if (portfolios.length === 0) return;
     if (!authUser?.email) return;
-    const currentPortfolios = portfolios.map(p =>
-      p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
-        : p
-    );
+    const currentPortfolios = portfolios;
     // 계좌/종목 구조만 비교 — history(일일 평가액)·시장 데이터는 제외하여
     // 시장가격 갱신이 portfolioUpdatedAt을 덮어쓰지 않도록 방지
     // compStocks(비교종목 추가/활성화)도 구조 변경으로 간주 → Drive STATE 즉시 반영
@@ -1534,7 +1487,7 @@ export default function App() {
         saveAllToDrive(state);
       }, 2000);
     }
-  }, [portfolios, activePortfolioId, title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, customLinks, overseasLinks, settings, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, portfolioStartDate, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
