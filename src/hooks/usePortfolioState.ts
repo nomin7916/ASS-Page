@@ -54,11 +54,21 @@ export function usePortfolioState({
         : p
     );
 
+  // ── avgExchangeRate 상태를 portfolios 배열에 즉시 동기화 ──
+  useEffect(() => {
+    if (!activePortfolioId) return;
+    setPortfolios(prev => {
+      const active = prev.find(p => p.id === activePortfolioId);
+      if (!active || active.avgExchangeRate === avgExchangeRate) return prev;
+      return prev.map(p => p.id === activePortfolioId ? { ...p, avgExchangeRate } : p);
+    });
+  }, [avgExchangeRate, activePortfolioId]);
+
   // ── 포트폴리오 추가 ──
   const addPortfolio = (accountType = 'portfolio') => {
     const updated = portfolios.map(p =>
       p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
     const newId = generateId();
@@ -98,7 +108,7 @@ export function usePortfolioState({
     if (!window.confirm(confirmMsg)) return;
     const updated = portfolios.map(p =>
       p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
     const remaining = updated.filter(p => p.id !== id);
