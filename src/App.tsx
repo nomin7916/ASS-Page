@@ -1400,6 +1400,15 @@ export default function App() {
           const driveRaw = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
           if (driveRaw) {
             const drivePortfolioTs = driveRaw.portfolioUpdatedAt || 0;
+            // Drive 비교 직전 localStorage를 다시 읽어 최신 타임스탬프 사용
+            // (Drive 조회 중 사용자가 데이터 변경 → save useEffect가 localStorage를 갱신했을 수 있음)
+            try {
+              const freshSaved = localStorage.getItem(userKey);
+              if (freshSaved) {
+                const freshTs = JSON.parse(freshSaved).portfolioUpdatedAt || 0;
+                if (freshTs > localPortfolioUpdatedAt) localPortfolioUpdatedAt = freshTs;
+              }
+            } catch {}
             // 로컬이 최신인 경우: 로컬 타임스탬프가 Drive보다 크면 유지 (Drive T=0인 구버전 데이터도 로컬 우선)
             const keepLocal = localPortfolioUpdatedAt > 0 && localPortfolioUpdatedAt > drivePortfolioTs;
             if (!keepLocal) {
