@@ -96,7 +96,13 @@ export default function HistoryPanel({
                         const tB = b.date ? new Date(b.date).getTime() : Number.MAX_SAFE_INTEGER;
                         return tB - tA;
                       }).map((row) => {
-                        const lookupRecord = history.find(h => h.date === row.date);
+                        const exactRecord = history.find(h => h.date === row.date);
+                        const prevRecord = !exactRecord && row.date
+                          ? [...history].filter(h => h.date < row.date).sort((a, b) => b.date.localeCompare(a.date))[0]
+                          : null;
+                        const prevGap = prevRecord ? Math.round((new Date(row.date).getTime() - new Date(prevRecord.date).getTime()) / 86400000) : 99;
+                        const lookupRecord = exactRecord || (prevGap <= 5 ? prevRecord : null);
+                        const isCarryForward = !!lookupRecord && !exactRecord;
                         return (
                           <tr key={row.id} className="bg-gray-800/60 border-b border-gray-700/50 hover:bg-gray-700/50 transition-colors">
                             <td className="py-1 px-2 text-center border-r border-gray-700 align-middle">
@@ -112,7 +118,10 @@ export default function HistoryPanel({
                                 : (currentTotalEval > 0 ? (1 - (pastEval / currentTotalEval)) * 100 : 0);
                               return (
                                 <>
-                                  <td className="py-1.5 px-3 border-r border-gray-600 font-bold text-white text-right">{formatCurrency(pastEval)}</td>
+                                  <td className="py-1.5 px-3 border-r border-gray-600 font-bold text-white text-right">
+                                    {formatCurrency(pastEval)}
+                                    {isCarryForward && <span className="block text-[9px] text-gray-500 font-normal leading-none">{lookupRecord.date} 기준</span>}
+                                  </td>
                                   <td className="py-1.5 px-3 border-r border-gray-600 text-center font-bold"><span className={compareRate >= 0 ? 'text-red-400' : 'text-blue-400'}>{formatPercent(compareRate)}</span></td>
                                 </>
                               );

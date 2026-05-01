@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useRef, useEffect } from 'react';
-import { calcPortfolioEvalForDate, generateId } from '../utils';
+import { calcPortfolioEvalForDate, generateId, isWeekend } from '../utils';
 
 export const useHistoryBackfill = ({
   stockHistoryMap,
@@ -92,6 +92,30 @@ export const useHistoryBackfill = ({
         const evalAmt = calcEval(items, accountType, date);
         if (evalAmt > 0) { backfillDoneRef.current[key] = true; updates.push({ date, evalAmt }); }
       });
+
+      // 기존 기록 사이의 주말/연휴 gap 채우기 (2~5일 gap = 주말 or 공휴일)
+      const sortedHist = [...hist].sort((a, b) => a.date.localeCompare(b.date));
+      for (let i = 0; i < sortedHist.length - 1; i++) {
+        const from = sortedHist[i];
+        const to = sortedHist[i + 1];
+        const gapMs = new Date(to.date + 'T12:00:00') - new Date(from.date + 'T12:00:00');
+        const gapDays = Math.round(gapMs / 86400000);
+        if (gapDays < 2 || gapDays > 5) continue;
+        const d = new Date(from.date + 'T12:00:00');
+        d.setDate(d.getDate() + 1);
+        while (d.toISOString().split('T')[0] < to.date) {
+          const ds = d.toISOString().split('T')[0];
+          if (!existingDates.has(ds) && !availDates.has(ds) && (isWeekend(ds) || gapDays <= 3)) {
+            const key = `${portfolioId}_gap_${ds}`;
+            if (!backfillDoneRef.current[key]) {
+              backfillDoneRef.current[key] = true;
+              updates.push({ date: ds, evalAmt: from.evalAmount });
+              existingDates.add(ds);
+            }
+          }
+          d.setDate(d.getDate() + 1);
+        }
+      }
 
       const yRec = hist.find(h => h.date === yesterday && !h.isFixed);
       if (yRec) {

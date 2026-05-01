@@ -19,6 +19,38 @@ export const blendWithDarkBg = (hex: string, alpha: number, bgHex = '#1e293b'): 
   return `rgb(${Math.round(bgR*(1-alpha)+r*alpha)}, ${Math.round(bgG*(1-alpha)+g*alpha)}, ${Math.round(bgB*(1-alpha)+b*alpha)})`;
 };
 
+export const isWeekend = (dateStr) => {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.getDay() === 0 || d.getDay() === 6;
+};
+
+// 최근 7일 범위 내 주말 날짜를 이전 기록값으로 채워서 반환 (저장용)
+export const fillWeekendGaps = (history, today) => {
+  const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length < 2) return [];
+  const dateSet = new Set(sorted.map(h => h.date));
+  const cutoff = new Date(today + 'T12:00:00');
+  cutoff.setDate(cutoff.getDate() - 7);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+  const fills = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const curr = sorted[i];
+    if (curr.date < cutoffStr) continue;
+    const nextDate = sorted[i + 1].date;
+    const d = new Date(curr.date + 'T12:00:00');
+    d.setDate(d.getDate() + 1);
+    while (d.toISOString().split('T')[0] < nextDate) {
+      const ds = d.toISOString().split('T')[0];
+      if (!dateSet.has(ds) && isWeekend(ds)) {
+        fills.push({ date: ds, evalAmount: curr.evalAmount, principal: curr.principal, isFixed: false });
+        dateSet.add(ds);
+      }
+      d.setDate(d.getDate() + 1);
+    }
+  }
+  return fills;
+};
+
 export const cleanNum = (val) => {
   if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return val;

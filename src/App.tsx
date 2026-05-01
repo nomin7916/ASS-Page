@@ -48,7 +48,8 @@ import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
   getClosestValue, getIndexLatest, handleTableKeyDown, handleReadonlyCellNav, buildIndexStatus,
-  hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV
+  hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
+  fillWeekendGaps
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
@@ -1502,7 +1503,8 @@ export default function App() {
       const idx = newHist.findIndex(h => h.date === today);
       if (idx >= 0) { if (newHist[idx].evalAmount === totals.totalEval) return prev; newHist[idx] = { ...newHist[idx], evalAmount: totals.totalEval, principal }; }
       else { newHist.push({ date: today, evalAmount: totals.totalEval, principal, isFixed: false }); }
-      return newHist;
+      const wFills = fillWeekendGaps(newHist, today);
+      return wFills.length > 0 ? [...newHist, ...wFills] : newHist;
     });
   }, [totals.totalEval, principal]);
 
@@ -1533,14 +1535,16 @@ export default function App() {
     if (intTotals.totalEval === 0) return;
     const today = new Date().toISOString().split('T')[0];
     setIntHistory(prev => {
-      const idx = prev.findIndex(h => h.date === today);
+      let newHist = [...prev];
+      const idx = newHist.findIndex(h => h.date === today);
       if (idx >= 0) {
-        if (prev[idx].evalAmount === intTotals.totalEval) return prev;
-        const newHist = [...prev];
+        if (newHist[idx].evalAmount === intTotals.totalEval) return prev;
         newHist[idx] = { ...newHist[idx], evalAmount: intTotals.totalEval };
-        return newHist;
+      } else {
+        newHist = [...newHist, { id: generateId(), date: today, evalAmount: intTotals.totalEval }];
       }
-      return [...prev, { id: generateId(), date: today, evalAmount: intTotals.totalEval }];
+      const wFills = fillWeekendGaps(newHist, today).map(f => ({ id: generateId(), date: f.date, evalAmount: f.evalAmount }));
+      return wFills.length > 0 ? [...newHist, ...wFills] : newHist;
     });
   }, [intTotals.totalEval]);
 
