@@ -18,6 +18,7 @@ export function usePortfolioState({
   const [title, setTitle] = useState("주식/ETF 포트폴리오");
   const [portfolio, setPortfolio] = useState([]);
   const [principal, setPrincipal] = useState(UI_CONFIG.DEFAULTS.PRINCIPAL);
+  const [avgExchangeRate, setAvgExchangeRate] = useState(0);
   const [depositHistory, setDepositHistory] = useState([]);
   const [depositHistory2, setDepositHistory2] = useState([]);
   const [customLinks, setCustomLinks] = useState(UI_CONFIG.DEFAULT_LINKS);
@@ -49,7 +50,7 @@ export function usePortfolioState({
   const buildPortfoliosState = () =>
     portfolios.map(p =>
       p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
 
@@ -72,7 +73,7 @@ export function usePortfolioState({
       id: newId, name: ACCOUNT_TYPE_NAMES[accountType] || '새 계좌', startDate: today, portfolioStartDate: today,
       accountType,
       portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
-      principal: 0, history: [], depositHistory: [], depositHistory2: [],
+      principal: 0, avgExchangeRate: 0, history: [], depositHistory: [], depositHistory2: [],
       settings: inheritedSettings,
     };
     setPortfolios([...updated, newP]);
@@ -80,6 +81,7 @@ export function usePortfolioState({
     setTitle(newP.name);
     setPortfolio(newP.portfolio);
     setPrincipal(0);
+    setAvgExchangeRate(0);
     setHistory([]);
     setDepositHistory([]);
     setDepositHistory2([]);
@@ -115,6 +117,7 @@ export function usePortfolioState({
       setTitle(blank.name);
       setPortfolio(blank.portfolio);
       setPrincipal(0);
+      setAvgExchangeRate(0);
       setHistory([]);
       setDepositHistory([]);
       setDepositHistory2([]);
@@ -130,6 +133,7 @@ export function usePortfolioState({
       setTitle(first.name);
       setPortfolio(first.portfolio || []);
       setPrincipal(first.principal || 0);
+      setAvgExchangeRate(first.avgExchangeRate || 0);
       setHistory(first.history || []);
       setDepositHistory(first.depositHistory || []);
       setDepositHistory2(first.depositHistory2 || []);
@@ -142,7 +146,7 @@ export function usePortfolioState({
   const switchToPortfolio = (id) => {
     const updated = portfolios.map(p =>
       p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
     setPortfolios(updated);
@@ -152,6 +156,7 @@ export function usePortfolioState({
     setTitle(target.name);
     setPortfolio(target.portfolio || []);
     setPrincipal(target.principal || 0);
+    setAvgExchangeRate(target.avgExchangeRate || 0);
     setHistory(target.history || []);
     setDepositHistory(target.depositHistory || []);
     setDepositHistory2(target.depositHistory2 || []);
@@ -432,6 +437,7 @@ export function usePortfolioState({
     title, setTitle,
     portfolio, setPortfolio,
     principal, setPrincipal,
+    avgExchangeRate, setAvgExchangeRate,
     depositHistory, setDepositHistory,
     depositHistory2, setDepositHistory2,
     history, setHistory,

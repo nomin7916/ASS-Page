@@ -296,6 +296,7 @@ export default function App() {
     title, setTitle,
     portfolio, setPortfolio,
     principal, setPrincipal,
+    avgExchangeRate, setAvgExchangeRate,
     depositHistory, setDepositHistory,
     depositHistory2, setDepositHistory2,
     history, setHistory,
@@ -364,6 +365,7 @@ export default function App() {
       setTitle(active.name || '포트폴리오');
       setPortfolio(active.portfolio || []);
       setPrincipal(active.principal || 0);
+      setAvgExchangeRate(active.avgExchangeRate || 0);
       setHistory(active.history || []);
       setDepositHistory((active.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })));
       setDepositHistory2((active.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })));
@@ -441,6 +443,7 @@ export default function App() {
       setTitle(active.name || '포트폴리오');
       setPortfolio(active.portfolio || []);
       setPrincipal(active.principal || 0);
+      setAvgExchangeRate(active.avgExchangeRate || 0);
       setHistory(active.history || []);
       setDepositHistory((active.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })));
       setDepositHistory2((active.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })));
