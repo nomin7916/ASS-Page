@@ -101,7 +101,7 @@ export default function PortfolioStatsPanel({
             <input
               type="text"
               className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-white font-bold outline-none px-2 py-1 text-xs"
-              value={principalEditing ? principalRaw : formatNumber(principal)}
+              value={principalEditing ? principalRaw : (isOv ? '$' + formatNumber(principal) : formatNumber(principal))}
               onFocus={e => { setPrincipalEditing(true); setPrincipalRaw(principal > 0 ? String(principal) : ''); e.target.select(); }}
               onChange={e => setPrincipalRaw(e.target.value)}
               onBlur={() => { setPrincipal(cleanNum(principalRaw)); setPrincipalEditing(false); }}
@@ -131,7 +131,7 @@ export default function PortfolioStatsPanel({
                 onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
               />
               <span className="text-[10px] text-gray-600 pr-1">
-                {avgExchangeRate > 0 ? `현재 ₩${Math.round(fx).toLocaleString()}` : '미입력 시 현재환율 사용'}
+                현재 ₩{Math.round(fx).toLocaleString()}
               </span>
             </div>
           </div>
