@@ -969,16 +969,17 @@ export default function App() {
 
   const intChartData = useMemo(() => {
     if (intSortedHistory.length === 0) return [];
-    const filtered = intFilteredDates.length > 0
+    const all = intFilteredDates.length > 0
       ? intSortedHistory.filter(h => intFilteredDates.includes(h.date))
       : intSortedHistory;
-    if (filtered.length === 0) return [];
+    if (all.length === 0) return [];
     const totalPrincipal = intTotals.totalPrincipal;
-    // 기간기준: 일부 계좌만 있던 초기 기간 왜곡 방지 — 원금의 70% 이상인 첫 날을 기준점으로 사용
-    const baseEntry = intIsZeroBaseMode && totalPrincipal > 0
-      ? (filtered.find(h => h.evalAmount >= totalPrincipal * 0.7) || filtered[0])
-      : filtered[0];
-    const baseEval = baseEntry.evalAmount;
+    // 기간기준: 일부 계좌만 있던 날짜를 완전히 제외 (원금 70% 미만 = 계좌 미완성 기간)
+    // 제외하지 않으면 미래 날짜가 기준점이 되어 과거 날짜가 음수 수익률로 표시되는 왜곡 발생
+    const filtered = intIsZeroBaseMode && totalPrincipal > 0
+      ? (() => { const valid = all.filter(h => h.evalAmount >= totalPrincipal * 0.7); return valid.length > 0 ? valid : all; })()
+      : all;
+    const baseEval = filtered[0].evalAmount;
     return filtered.map(h => ({
       date: h.date,
       evalAmount: h.evalAmount,
