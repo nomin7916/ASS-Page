@@ -21,6 +21,7 @@ export const useHistoryBackfill = ({
 }) => {
   const nonActiveHistRecordedRef = useRef({});
   const backfillDoneRef = useRef({});
+  const intSyncDoneRef = useRef(false);
 
   // 비활성 계좌 오늘 평가액 자동 기록
   useEffect(() => {
@@ -155,7 +156,64 @@ export const useHistoryBackfill = ({
       return { ...p, history: applyUpdates(p.history || [], res.updates, res.prin) };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
+
+    // 새로 백필된 날짜를 intHistory에도 반영 (개별 계좌 합산)
+    if (setIntHistory && (activeRes || portfoliosChanged)) {
+      const newDates = new Set();
+      if (activeRes) activeRes.updates.forEach(u => newDates.add(u.date));
+      portfolios.forEach(p => {
+        if (p.id === activePortfolioId) return;
+        const nextP = nextPortfolios.find(np => np.id === p.id);
+        if (!nextP || nextP === p) return;
+        const origDates = new Set((p.history || []).map(h => h.date));
+        (nextP.history || []).forEach(h => { if (!origDates.has(h.date)) newDates.add(h.date); });
+      });
+      if (newDates.size > 0) {
+        const activeFullHist = activeRes ? applyUpdates(history, activeRes.updates, activeRes.prin) : history;
+        const intRecords = [];
+        [...newDates].sort().forEach(date => {
+          let total = 0;
+          const ar = activeFullHist.find(h => h.date === date);
+          if (ar) total += ar.evalAmount;
+          nextPortfolios.forEach(p => {
+            if (p.id === activePortfolioId) return;
+            const r = (p.history || []).find(h => h.date === date);
+            if (r) total += r.evalAmount;
+          });
+          if (total > 0) intRecords.push({ id: generateId(), date, evalAmount: total });
+        });
+        if (intRecords.length > 0) {
+          setIntHistory(prev => {
+            const existingDates = new Set(prev.map(h => h.date));
+            const additions = intRecords.filter(r => !existingDates.has(r.date));
+            return additions.length > 0 ? [...prev, ...additions] : prev;
+          });
+        }
+      }
+    }
   }, [stockHistoryMap, indicatorHistoryMap]);
+
+  // 초기 1회: 개별 계좌 history에 있지만 intHistory에 누락된 날짜 보완
+  useEffect(() => {
+    if (intSyncDoneRef.current || !setIntHistory) return;
+    const hasData = history.length > 0 || portfolios.some(p => (p.history || []).length > 0);
+    if (!hasData) return;
+    intSyncDoneRef.current = true;
+    const dateToTotal = new Map();
+    portfolios.forEach(p => {
+      const hist = p.id === activePortfolioId ? history : (p.history || []);
+      hist.forEach(h => {
+        if (h.evalAmount > 0) dateToTotal.set(h.date, (dateToTotal.get(h.date) || 0) + h.evalAmount);
+      });
+    });
+    setIntHistory(prev => {
+      const existingDates = new Set(prev.map(h => h.date));
+      const additions = [...dateToTotal.entries()]
+        .filter(([date]) => !existingDates.has(date))
+        .map(([date, total]) => ({ id: generateId(), date, evalAmount: total }));
+      return additions.length > 0 ? [...prev, ...additions] : prev;
+    });
+  }, [portfolios, history]);
 
   // 수동 백필: 지정 날짜부터 어제까지 모든 계좌의 누락 평가액 채우기
   const handleManualBackfill = (fromDate) => {
