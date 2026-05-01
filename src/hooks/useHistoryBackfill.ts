@@ -193,11 +193,12 @@ export const useHistoryBackfill = ({
     }
   }, [stockHistoryMap, indicatorHistoryMap]);
 
-  // 초기 1회: 개별 계좌 history에 있지만 intHistory에 누락된 날짜 보완
+  // 초기 1회: 개별 계좌 history와 intHistory 동기화 (누락 추가 + 부분합산 오류값 교정)
   useEffect(() => {
     if (intSyncDoneRef.current || !setIntHistory) return;
-    const hasData = history.length > 0 || portfolios.some(p => (p.history || []).length > 0);
-    if (!hasData) return;
+    // 활성 계좌 + 비활성 계좌 모두 충분한 데이터가 로드된 후 실행
+    const totalHistoryRows = history.length + portfolios.reduce((s, p) => s + (p.id !== activePortfolioId ? (p.history || []).length : 0), 0);
+    if (totalHistoryRows === 0) return;
     intSyncDoneRef.current = true;
     const dateToTotal = new Map();
     portfolios.forEach(p => {
@@ -207,11 +208,21 @@ export const useHistoryBackfill = ({
       });
     });
     setIntHistory(prev => {
-      const existingDates = new Set(prev.map(h => h.date));
-      const additions = [...dateToTotal.entries()]
-        .filter(([date]) => !existingDates.has(date))
-        .map(([date, total]) => ({ id: generateId(), date, evalAmount: total }));
-      return additions.length > 0 ? [...prev, ...additions] : prev;
+      const existingMap = new Map(prev.map(h => [h.date, h]));
+      const result = [...prev];
+      let changed = false;
+      dateToTotal.forEach((total, date) => {
+        const existing = existingMap.get(date);
+        if (!existing) {
+          result.push({ id: generateId(), date, evalAmount: total });
+          changed = true;
+        } else if (total > 0 && existing.evalAmount < total * 0.9) {
+          // intHistory 값이 개별 계좌 합산의 90% 미만 = 일부 계좌만 반영된 오류값 → 교정
+          const idx = result.findIndex(h => h.date === date);
+          if (idx >= 0) { result[idx] = { ...existing, evalAmount: total }; changed = true; }
+        }
+      });
+      return changed ? result : prev;
     });
   }, [portfolios, history]);
 
