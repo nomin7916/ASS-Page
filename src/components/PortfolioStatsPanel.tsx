@@ -38,9 +38,12 @@ export default function PortfolioStatsPanel({
   const principalKRW = isOv ? principal * effectiveFx : principal;
   const profit = totals.totalEval - principalKRW;
 
+  const rowPy = isOv ? 'py-1.5' : 'py-2.5';
+  const contentP = isOv ? 'p-2' : 'p-3';
+
   return (
-    <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
-      <div className="p-4 bg-black space-y-3 shrink-0 border-b border-gray-700 text-gray-400 text-xs">
+    <div className={`w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full ${isOv ? 'min-h-[440px]' : 'min-h-[520px]'} flex flex-col overflow-hidden shrink-0`}>
+      <div className={`${isOv ? 'p-3 space-y-2' : 'p-4 space-y-3'} bg-black shrink-0 border-b border-gray-700 text-gray-400 text-xs`}>
         <div className="flex justify-between items-start">
           <span className="shrink-0">투자금액</span>
           {dualKRW(totals.totalInvest)}
@@ -57,11 +60,11 @@ export default function PortfolioStatsPanel({
         </div>
       </div>
       <div className="flex-1 flex flex-col">
-        <div className="flex h-auto py-2.5 border-b border-gray-700">
+        <div className={`flex h-auto ${rowPy} border-b border-gray-700`}>
           <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
             <span className="text-[11px] text-gray-400 font-bold">시작일</span>
           </div>
-          <div className="flex-1 p-3 flex items-center bg-gray-800/20">
+          <div className={`flex-1 ${contentP} flex items-center bg-gray-800/20`}>
             <input
               type="date"
               value={portfolioStartDate}
@@ -70,14 +73,14 @@ export default function PortfolioStatsPanel({
             />
           </div>
         </div>
-        <div className="flex h-auto py-2.5 border-b border-gray-700">
+        <div className={`flex h-auto ${rowPy} border-b border-gray-700`}>
           <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
             <span className="text-[11px] text-gray-400 font-bold">입금액</span>
           </div>
-          <div className="flex-1 p-3 flex items-center bg-gray-800/20">
+          <div className={`flex-1 ${contentP} flex items-center bg-gray-800/20`}>
             <input
               type="text"
-              className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-gray-400 font-bold outline-none px-2 py-1.5 text-xs"
+              className={`w-full text-right text-gray-400 font-bold outline-none text-xs ${isOv ? 'bg-transparent' : 'bg-gray-900/60 border border-gray-700/60 rounded px-2 py-1.5'}`}
               placeholder="Enter to apply"
               onKeyDown={e => {
                 if (e.key === 'Enter') {
@@ -93,14 +96,14 @@ export default function PortfolioStatsPanel({
             />
           </div>
         </div>
-        <div className="flex h-auto py-2.5 border-b border-gray-700 shrink-0">
+        <div className={`flex h-auto ${rowPy} border-b border-gray-700 shrink-0`}>
           <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
             <span className="text-[11px] text-gray-400 font-bold">{isOv ? '투자 원금(USD)' : '투자 원금'}</span>
           </div>
-          <div className="flex-1 p-3 flex flex-col items-end justify-center bg-gray-800/20 gap-0.5">
+          <div className={`flex-1 ${contentP} flex flex-col items-end justify-center bg-gray-800/20 gap-0.5`}>
             <input
               type="text"
-              className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-white font-bold outline-none px-2 py-1 text-xs"
+              className={`w-full text-right text-white font-bold outline-none text-xs ${isOv ? 'bg-transparent border-b border-gray-600/60' : 'bg-gray-900/60 border border-gray-700/60 rounded px-2 py-1'}`}
               value={principalEditing ? principalRaw : (isOv ? '$' + formatNumber(principal) : formatNumber(principal))}
               onFocus={e => { setPrincipalEditing(true); setPrincipalRaw(principal > 0 ? String(principal) : ''); e.target.select(); }}
               onChange={e => setPrincipalRaw(e.target.value)}
@@ -115,14 +118,14 @@ export default function PortfolioStatsPanel({
           </div>
         </div>
         {isOv && (
-          <div className="flex h-auto py-2.5 border-b border-gray-700 shrink-0">
+          <div className={`flex h-auto ${rowPy} border-b border-gray-700 shrink-0`}>
             <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
               <span className="text-[11px] text-gray-400 font-bold text-center leading-tight">평균<br/>매입환율</span>
             </div>
-            <div className="flex-1 p-3 flex flex-col items-end justify-center bg-gray-800/20 gap-0.5">
+            <div className={`flex-1 ${contentP} flex flex-col items-end justify-center bg-gray-800/20 gap-0.5`}>
               <input
                 type="text"
-                className="w-full bg-gray-900/60 border border-sky-800/60 rounded text-right text-sky-300 font-bold outline-none px-2 py-1 text-xs"
+                className="w-full bg-transparent border-b border-sky-800/60 text-right text-sky-300 font-bold outline-none text-xs"
                 value={avgFxEditing ? avgFxRaw : (avgExchangeRate > 0 ? String(avgExchangeRate) : '')}
                 placeholder={String(Math.round(fx))}
                 onFocus={e => { setAvgFxEditing(true); setAvgFxRaw(avgExchangeRate > 0 ? String(avgExchangeRate) : ''); e.target.select(); }}
@@ -136,11 +139,11 @@ export default function PortfolioStatsPanel({
             </div>
           </div>
         )}
-        <div className="flex h-auto py-2.5 border-b border-gray-700">
+        <div className={`flex h-auto ${rowPy} border-b border-gray-700`}>
           <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
             <span className="text-[11px] text-gray-400 font-bold" title="1년 미만: 총수익율 / 1년 이상: CAGR(연평균 성장률)">CAGR</span>
           </div>
-          <div className="flex-1 p-3 flex items-center justify-end bg-gray-800/20">
+          <div className={`flex-1 ${contentP} flex items-center justify-end bg-gray-800/20`}>
             <span className="font-bold text-blue-300 text-sm">{formatPercent(cagr)}</span>
           </div>
         </div>
