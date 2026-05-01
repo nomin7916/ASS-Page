@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+import { X } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatPercent, cleanNum } from '../utils';
 
 export default function PortfolioStatsPanel({
@@ -24,6 +25,10 @@ export default function PortfolioStatsPanel({
   const [principalRaw, setPrincipalRaw] = useState('');
   const [avgFxEditing, setAvgFxEditing] = useState(false);
   const [avgFxRaw, setAvgFxRaw] = useState('');
+  const [showCalcPopup, setShowCalcPopup] = useState(false);
+  const [popupPos, setPopupPos] = useState({ x: 80, y: 120 });
+  const dragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
+
   const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
   const dualKRW = (krwVal, cls = 'text-gray-200') =>
     isOv ? (
@@ -38,10 +43,42 @@ export default function PortfolioStatsPanel({
   const principalKRW = isOv ? principal * effectiveFx : principal;
   const profit = totals.totalEval - principalKRW;
 
+  // 달러 기준 계산
+  const usdEval = isOv ? totals.totalEval / fx : 0;
+  const usdProfit = isOv ? usdEval - principal : 0;
+  const daysFromStart = portfolioStartDate
+    ? (Date.now() - new Date(portfolioStartDate).getTime()) / (1000 * 60 * 60 * 24)
+    : 0;
+  const usdCagr =
+    isOv && daysFromStart > 0 && principal > 0 && usdEval > 0
+      ? daysFromStart < 365
+        ? (usdEval / principal - 1) * 100
+        : (Math.pow(usdEval / principal, 365.25 / daysFromStart) - 1) * 100
+      : 0;
+  const fxGain = isOv ? (fx - effectiveFx) * principal : 0;
+
+  const handleDragStart = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragRef.current = { active: true, offsetX: e.clientX - popupPos.x, offsetY: e.clientY - popupPos.y };
+    const onMove = (e) => {
+      if (!dragRef.current.active) return;
+      setPopupPos({ x: e.clientX - dragRef.current.offsetX, y: e.clientY - dragRef.current.offsetY });
+    };
+    const onUp = () => {
+      dragRef.current.active = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   const rowPy = isOv ? 'py-1.5' : 'py-2.5';
   const contentP = isOv ? 'p-2' : 'p-3';
 
   return (
+    <>
     <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
       <div className={`${isOv ? 'p-5 space-y-4' : 'p-4 space-y-3'} bg-black shrink-0 border-b border-gray-700 text-gray-400 text-xs`}>
         <div className="flex justify-between items-start">
@@ -147,30 +184,123 @@ export default function PortfolioStatsPanel({
             <span className="font-bold text-blue-300 text-sm">{formatPercent(cagr)}</span>
           </div>
         </div>
-        <div className="flex flex-1 min-h-[80px]">
-          <div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 gap-2 shrink-0">
-            <span className="text-[11px] text-gray-400 font-bold">수익률</span>
-            <span className="text-[11px] text-gray-400 font-bold">수익금</span>
-          </div>
-          <div className="flex-1 flex flex-col items-center justify-center bg-gray-900/40 gap-1 p-2 overflow-hidden">
-            <span className={`text-[24px] font-extrabold leading-none tracking-wide whitespace-nowrap ${profit >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-              {formatPercent(principalKRW > 0 ? (profit / principalKRW) * 100 : 0)}
-            </span>
-            {isOv ? (
-              <div className="flex flex-col items-center leading-tight">
-                <span className={`text-[14px] font-bold tracking-wide ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+
+        {isOv ? (
+          <div className="flex flex-col flex-1">
+            {/* 달러 기준 / 환 평가 두 컬럼 */}
+            <div className="flex flex-1 min-h-[80px]">
+              <div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 gap-1.5 shrink-0">
+                <span className="text-[11px] text-gray-400 font-bold">수익률</span>
+                <span className="text-[11px] text-gray-400 font-bold">수익금</span>
+              </div>
+              {/* 달러 기준 */}
+              <div className="flex-1 flex flex-col items-center justify-center border-r border-gray-700 bg-gray-900/40 gap-0.5 p-1.5 overflow-hidden">
+                <span className="text-[9px] text-gray-500 font-bold mb-0.5">달러 기준</span>
+                <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${usdCagr >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                  {formatPercent(usdCagr)}
+                </span>
+                <span className={`text-[11px] font-bold tracking-wide ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  {fmtUS(usdProfit)}
+                </span>
+                <span className="text-[10px] text-gray-500">{formatCurrency(usdProfit * fx)}</span>
+              </div>
+              {/* 환 평가 */}
+              <div className="flex-1 flex flex-col items-center justify-center bg-gray-900/40 gap-0.5 p-1.5 overflow-hidden">
+                <span className="text-[9px] text-gray-500 font-bold mb-0.5">환 평가</span>
+                <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${cagr >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                  {formatPercent(cagr)}
+                </span>
+                <span className={`text-[11px] font-bold tracking-wide ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                   {fmtUS(profit / fx)}
                 </span>
-                <span className="text-[11px] text-gray-500">{formatCurrency(profit)}</span>
+                <span className="text-[10px] text-gray-500">{formatCurrency(profit)}</span>
               </div>
-            ) : (
+            </div>
+            {/* 수익율 계산 버튼 */}
+            <div className="border-t border-gray-700 shrink-0">
+              <button
+                className="w-full py-1.5 text-[11px] text-gray-500 hover:text-sky-400 hover:bg-gray-800/40 transition-colors font-bold tracking-wide"
+                onClick={() => {
+                  setPopupPos({ x: Math.max(20, window.innerWidth / 2 - 160), y: Math.max(20, window.innerHeight / 2 - 220) });
+                  setShowCalcPopup(true);
+                }}
+              >
+                수익율 계산
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-1 min-h-[80px]">
+            <div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 gap-2 shrink-0">
+              <span className="text-[11px] text-gray-400 font-bold">수익률</span>
+              <span className="text-[11px] text-gray-400 font-bold">수익금</span>
+            </div>
+            <div className="flex-1 flex flex-col items-center justify-center bg-gray-900/40 gap-1 p-2 overflow-hidden">
+              <span className={`text-[24px] font-extrabold leading-none tracking-wide whitespace-nowrap ${profit >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                {formatPercent(principalKRW > 0 ? (profit / principalKRW) * 100 : 0)}
+              </span>
               <span className={`text-[14px] font-bold tracking-wide whitespace-nowrap ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                 {formatCurrency(profit)}
               </span>
-            )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+
+    {/* 수익율 계산 팝업 */}
+    {showCalcPopup && (
+      <div className="fixed inset-0 z-50" onMouseDown={() => setShowCalcPopup(false)}>
+        <div
+          className="fixed bg-[#0f172a] border border-gray-600 rounded-xl shadow-2xl flex flex-col"
+          style={{ width: 320, top: popupPos.y, left: popupPos.x }}
+          onMouseDown={e => e.stopPropagation()}
+        >
+          <div
+            className="flex items-center justify-between px-3 py-2 border-b border-gray-700 cursor-move select-none"
+            onMouseDown={handleDragStart}
+          >
+            <button onClick={() => setShowCalcPopup(false)} className="text-pink-500 hover:text-pink-300">
+              <X size={14} />
+            </button>
+            <span className="text-xs text-gray-300 font-bold">수익율 계산</span>
+            <div style={{ width: 14 }} />
+          </div>
+
+          <div className="p-4 space-y-4 text-[11px]">
+            {/* 환 평가 수익률 */}
+            <div className="space-y-1.5">
+              <div className="text-sky-400 font-bold border-b border-gray-700/60 pb-1">환 평가 수익률</div>
+              <div className="text-gray-500">수익률 = CAGR(평가KRW ÷ 원금KRW)</div>
+              <div className="text-gray-400">= CAGR({formatCurrency(totals.totalEval)} ÷ {formatCurrency(principalKRW)})</div>
+              <div className={`font-bold ${cagr >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {formatPercent(cagr)}</div>
+              <div className="text-gray-500 pt-0.5">
+                원화수익금 = ({fmtUS(usdEval)} × ₩{Math.round(fx).toLocaleString()}) − ({fmtUS(principal)} × ₩{Math.round(effectiveFx).toLocaleString()})
+              </div>
+              <div className="text-gray-500">= {formatCurrency(totals.totalEval)} − {formatCurrency(principalKRW)}</div>
+              <div className={`font-bold ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {formatCurrency(profit)} ({fmtUS(profit / fx)})</div>
+            </div>
+
+            {/* 달러 기준 수익률 */}
+            <div className="space-y-1.5">
+              <div className="text-emerald-400 font-bold border-b border-gray-700/60 pb-1">달러 기준 수익률</div>
+              <div className="text-gray-500">수익률 = CAGR({fmtUS(usdEval)} ÷ {fmtUS(principal)})</div>
+              <div className={`font-bold ${usdCagr >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {formatPercent(usdCagr)}</div>
+              <div className="text-gray-500 pt-0.5">달러수익금 = {fmtUS(usdEval)} − {fmtUS(principal)}</div>
+              <div className={`font-bold ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {fmtUS(usdProfit)} (₩환산 {formatCurrency(usdProfit * fx)})</div>
+            </div>
+
+            {/* 환차익 */}
+            <div className="space-y-1.5">
+              <div className="text-yellow-400 font-bold border-b border-gray-700/60 pb-1">환차익</div>
+              <div className="text-gray-500">= (현재환율 − 매입환율) × 원금</div>
+              <div className="text-gray-500">= (₩{Math.round(fx).toLocaleString()} − ₩{Math.round(effectiveFx).toLocaleString()}) × {fmtUS(principal)}</div>
+              <div className={`font-bold ${fxGain >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {formatCurrency(fxGain)}</div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    )}
+    </>
   );
 }
