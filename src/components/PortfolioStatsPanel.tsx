@@ -189,32 +189,51 @@ export default function PortfolioStatsPanel({
         {isOv ? (
           <div className="flex flex-col flex-1">
             {/* 달러 기준 / 환 평가 두 컬럼 */}
-            <div className="flex flex-1 min-h-[80px]">
-              <div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 gap-1.5 shrink-0">
+            <div className="flex flex-1 min-h-[90px]">
+              <div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 shrink-0 gap-0 py-2">
                 <span className="text-[11px] text-gray-400 font-bold">수익률</span>
-                <span className="text-[11px] text-gray-400 font-bold">수익금</span>
+                <div className="flex-1" />
+                <span className="text-[10px] text-gray-500">수익금</span>
+                <div className="flex-1" />
+                <span className="text-[10px] text-gray-500">원화환산</span>
               </div>
               {/* 달러 기준 */}
-              <div className="flex-1 flex flex-col items-center justify-center border-r border-gray-700 bg-gray-900/40 gap-0.5 p-1.5 overflow-hidden">
-                <span className="text-[9px] text-gray-500 font-bold mb-0.5">달러 기준</span>
-                <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${usdCagr >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-                  {formatPercent(usdCagr)}
-                </span>
-                <span className={`text-[11px] font-bold tracking-wide ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                  {fmtUS(usdProfit)}
-                </span>
-                <span className="text-[10px] text-gray-500">{formatCurrency(usdProfit * fx)}</span>
+              <div className="flex-1 flex flex-col items-center justify-around border-r border-gray-700 bg-gray-900/40 p-1.5 overflow-hidden">
+                <div className="flex flex-col items-center gap-0">
+                  <span className="text-[9px] text-gray-500 font-bold">달러 기준</span>
+                  <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${usdCagr >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                    {formatPercent(usdCagr)}
+                  </span>
+                </div>
+                <div className="flex flex-col items-center gap-0">
+                  <span className="text-[9px] text-gray-600">($)</span>
+                  <span className={`text-[11px] font-bold tracking-wide whitespace-nowrap ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                    {fmtUS(usdProfit)}
+                  </span>
+                </div>
+                <div className="flex flex-col items-center gap-0">
+                  <span className="text-[9px] text-gray-600">(₩)</span>
+                  <span className="text-[10px] text-gray-400 whitespace-nowrap">{formatCurrency(usdProfit * fx)}</span>
+                </div>
               </div>
               {/* 환 평가 */}
-              <div className="flex-1 flex flex-col items-center justify-center bg-gray-900/40 gap-0.5 p-1.5 overflow-hidden">
-                <span className="text-[9px] text-gray-500 font-bold mb-0.5">환 평가</span>
-                <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${cagr >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-                  {formatPercent(cagr)}
-                </span>
-                <span className={`text-[11px] font-bold tracking-wide ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                  {fmtUS(profit / fx)}
-                </span>
-                <span className="text-[10px] text-gray-500">{formatCurrency(profit)}</span>
+              <div className="flex-1 flex flex-col items-center justify-around bg-gray-900/40 p-1.5 overflow-hidden">
+                <div className="flex flex-col items-center gap-0">
+                  <span className="text-[9px] text-gray-500 font-bold">환 평가</span>
+                  <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${cagr >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                    {formatPercent(cagr)}
+                  </span>
+                </div>
+                <div className="flex flex-col items-center gap-0">
+                  <span className="text-[9px] text-gray-600">(₩)</span>
+                  <span className={`text-[11px] font-bold tracking-wide whitespace-nowrap ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                    {formatCurrency(profit)}
+                  </span>
+                </div>
+                <div className="flex flex-col items-center gap-0">
+                  <span className="text-[9px] text-gray-600 invisible">-</span>
+                  <span className="text-[10px] text-gray-600">—</span>
+                </div>
               </div>
             </div>
             {/* 수익율 계산 버튼 */}
@@ -318,9 +337,6 @@ export default function PortfolioStatsPanel({
                 <div className="text-gray-400">= {formatCurrency(totals.totalEval)}  −  {formatCurrency(principalKRW)}</div>
                 <div className={`font-bold pt-0.5 ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                   =  {formatCurrency(profit)}
-                </div>
-                <div className={`pl-2 text-[10px] ${profit >= 0 ? 'text-red-400/70' : 'text-blue-400/70'}`}>
-                  ( 달러 환산  {fmtUS(profit / fx)} )
                 </div>
               </div>
             </div>
