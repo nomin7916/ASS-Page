@@ -1027,18 +1027,15 @@ export default function App() {
 
   const intMonthlyHistory = useMemo(() => {
     const sortedDesc = [...computedIntHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const totalPrincipal = intTotals.totalPrincipal;
     return sortedDesc.map((h, i) => {
-      const month = h.date.substring(0, 7);
-      const monthRecords = computedIntHistory.filter(r => r.date.startsWith(month));
-      const monthStartRecord = monthRecords.length > 0 ? monthRecords.reduce((min, r) => r.date < min.date ? r : min) : null;
-      const monthlyChange = (monthStartRecord && monthStartRecord.evalAmount > 0 && monthStartRecord.id !== h.id)
-        ? ((h.evalAmount / monthStartRecord.evalAmount) - 1) * 100 : 0;
+      const monthlyChange = totalPrincipal > 0 ? ((h.evalAmount - totalPrincipal) / totalPrincipal) * 100 : 0;
       const prevRecord = sortedDesc[i + 1];
       const dodChange = (prevRecord && prevRecord.evalAmount > 0)
         ? ((h.evalAmount / prevRecord.evalAmount) - 1) * 100 : 0;
       return { ...h, monthlyChange, dodChange };
     });
-  }, [computedIntHistory]);
+  }, [computedIntHistory, intTotals.totalPrincipal]);
 
   const intCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];

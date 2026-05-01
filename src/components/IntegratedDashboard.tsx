@@ -400,7 +400,7 @@ export default function IntegratedDashboard({
                         <th className="py-2.5 px-3 text-center border-r border-gray-700">일자</th>
                         <th className="py-2.5 px-3 text-right border-r border-gray-700">총 평가금액</th>
                         <th className="py-2.5 px-3 text-center border-r border-gray-700 whitespace-nowrap">전일대비(%)</th>
-                        <th className="py-2.5 px-3 text-center whitespace-nowrap">월간수익률(%)</th>
+                        <th className="py-2.5 px-3 text-center whitespace-nowrap">원금대비수익률(%)</th>
                       </tr>
                     </thead>
                     <tbody>
