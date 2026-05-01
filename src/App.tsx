@@ -930,7 +930,7 @@ export default function App() {
     portfolioSummaries, portfolios, setPortfolios,
     activePortfolioId, activePortfolioAccountType,
     portfolio, principal, history, setHistory,
-    portfolioStartDate, showToast, setIntHistory,
+    portfolioStartDate, showToast,
   });
 
   const { handleImportHistoryJSON } = useIndexImport({
@@ -938,13 +938,26 @@ export default function App() {
     setStockHistoryMap, setMarketIndicators, setIndicatorHistoryMap, showToast,
   });
 
+  const computedIntHistory = useMemo(() => {
+    const dateToTotal = new Map();
+    portfolios.forEach(p => {
+      const hist = p.id === activePortfolioId ? history : (p.history || []);
+      hist.forEach(h => {
+        if (h.evalAmount > 0) dateToTotal.set(h.date, (dateToTotal.get(h.date) || 0) + h.evalAmount);
+      });
+    });
+    return [...dateToTotal.entries()]
+      .map(([date, evalAmount]) => ({ id: date, date, evalAmount }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [portfolios, history, activePortfolioId]);
+
   const intSortedHistory = useMemo(() =>
-    [...intHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
-    [intHistory]);
+    [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
+    [computedIntHistory]);
 
   const intUnifiedDates = useMemo(() =>
-    Array.from(new Set(intHistory.map(h => h.date))).sort(),
-    [intHistory]);
+    Array.from(new Set(computedIntHistory.map(h => h.date))).sort(),
+    [computedIntHistory]);
 
   const intFilteredDates = useMemo(() => {
     if (!intAppliedRange.start || !intAppliedRange.end) return intUnifiedDates;
@@ -1015,10 +1028,10 @@ export default function App() {
   }, [activePortfolioId]);
 
   const intMonthlyHistory = useMemo(() => {
-    const sortedDesc = [...intHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const sortedDesc = [...computedIntHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
     return sortedDesc.map((h, i) => {
       const month = h.date.substring(0, 7);
-      const monthRecords = intHistory.filter(r => r.date.startsWith(month));
+      const monthRecords = computedIntHistory.filter(r => r.date.startsWith(month));
       const monthStartRecord = monthRecords.length > 0 ? monthRecords.reduce((min, r) => r.date < min.date ? r : min) : null;
       const monthlyChange = (monthStartRecord && monthStartRecord.evalAmount > 0 && monthStartRecord.id !== h.id)
         ? ((h.evalAmount / monthStartRecord.evalAmount) - 1) * 100 : 0;
@@ -1027,7 +1040,7 @@ export default function App() {
         ? ((h.evalAmount / prevRecord.evalAmount) - 1) * 100 : 0;
       return { ...h, monthlyChange, dodChange };
     });
-  }, [intHistory]);
+  }, [computedIntHistory]);
 
   const intCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
@@ -1530,23 +1543,6 @@ export default function App() {
     }
   }, [chartPeriod, unifiedDates]);
 
-  // 통합 대시보드 - 총 평가액 변경 시 오늘 기록 자동 업데이트
-  useEffect(() => {
-    if (intTotals.totalEval === 0) return;
-    const today = new Date().toISOString().split('T')[0];
-    setIntHistory(prev => {
-      let newHist = [...prev];
-      const idx = newHist.findIndex(h => h.date === today);
-      if (idx >= 0) {
-        if (newHist[idx].evalAmount === intTotals.totalEval) return prev;
-        newHist[idx] = { ...newHist[idx], evalAmount: intTotals.totalEval };
-      } else {
-        newHist = [...newHist, { id: generateId(), date: today, evalAmount: intTotals.totalEval }];
-      }
-      const wFills = fillWeekendGaps(newHist, today).map(f => ({ id: generateId(), date: f.date, evalAmount: f.evalAmount }));
-      return wFills.length > 0 ? [...newHist, ...wFills] : newHist;
-    });
-  }, [intTotals.totalEval]);
 
   // 통합 대시보드 - 기간 버튼 변경 시 차트 범위 업데이트
   useEffect(() => {
@@ -2005,7 +2001,7 @@ export default function App() {
 
         {showIntegratedDashboard && (
           <IntegratedDashboard
-            intHistory={intHistory}
+            intHistory={computedIntHistory}
             intTotals={intTotals}
             intMonthlyHistory={intMonthlyHistory}
             intChartData={intChartData}
@@ -2025,7 +2021,6 @@ export default function App() {
             hideAmounts={hideAmounts}
             sec={intSec}
             setSec={setIntSec}
-            setIntHistory={setIntHistory}
             setIntChartPeriod={setIntChartPeriod}
             setIntIsZeroBaseMode={setIntIsZeroBaseMode}
             setHoveredIntCatSlice={setHoveredIntCatSlice}

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useRef, useEffect } from 'react';
-import { calcPortfolioEvalForDate, generateId, isWeekend } from '../utils';
+import { calcPortfolioEvalForDate, isWeekend } from '../utils';
 
 export const useHistoryBackfill = ({
   stockHistoryMap,
@@ -17,11 +17,9 @@ export const useHistoryBackfill = ({
   setHistory,
   portfolioStartDate,
   showToast,
-  setIntHistory,
 }) => {
   const nonActiveHistRecordedRef = useRef({});
   const backfillDoneRef = useRef({});
-  const intSyncDoneRef = useRef(false);
 
   // 비활성 계좌 오늘 평가액 자동 기록
   useEffect(() => {
@@ -156,75 +154,7 @@ export const useHistoryBackfill = ({
       return { ...p, history: applyUpdates(p.history || [], res.updates, res.prin) };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
-
-    // 새로 백필된 날짜를 intHistory에도 반영 (개별 계좌 합산)
-    if (setIntHistory && (activeRes || portfoliosChanged)) {
-      const newDates = new Set();
-      if (activeRes) activeRes.updates.forEach(u => newDates.add(u.date));
-      portfolios.forEach(p => {
-        if (p.id === activePortfolioId) return;
-        const nextP = nextPortfolios.find(np => np.id === p.id);
-        if (!nextP || nextP === p) return;
-        const origDates = new Set((p.history || []).map(h => h.date));
-        (nextP.history || []).forEach(h => { if (!origDates.has(h.date)) newDates.add(h.date); });
-      });
-      if (newDates.size > 0) {
-        const activeFullHist = activeRes ? applyUpdates(history, activeRes.updates, activeRes.prin) : history;
-        const intRecords = [];
-        [...newDates].sort().forEach(date => {
-          let total = 0;
-          const ar = activeFullHist.find(h => h.date === date);
-          if (ar) total += ar.evalAmount;
-          nextPortfolios.forEach(p => {
-            if (p.id === activePortfolioId) return;
-            const r = (p.history || []).find(h => h.date === date);
-            if (r) total += r.evalAmount;
-          });
-          if (total > 0) intRecords.push({ id: generateId(), date, evalAmount: total });
-        });
-        if (intRecords.length > 0) {
-          setIntHistory(prev => {
-            const existingDates = new Set(prev.map(h => h.date));
-            const additions = intRecords.filter(r => !existingDates.has(r.date));
-            return additions.length > 0 ? [...prev, ...additions] : prev;
-          });
-        }
-      }
-    }
   }, [stockHistoryMap, indicatorHistoryMap]);
-
-  // 초기 1회: 개별 계좌 history와 intHistory 동기화 (누락 추가 + 부분합산 오류값 교정)
-  useEffect(() => {
-    if (intSyncDoneRef.current || !setIntHistory) return;
-    // 활성 계좌 + 비활성 계좌 모두 충분한 데이터가 로드된 후 실행
-    const totalHistoryRows = history.length + portfolios.reduce((s, p) => s + (p.id !== activePortfolioId ? (p.history || []).length : 0), 0);
-    if (totalHistoryRows === 0) return;
-    intSyncDoneRef.current = true;
-    const dateToTotal = new Map();
-    portfolios.forEach(p => {
-      const hist = p.id === activePortfolioId ? history : (p.history || []);
-      hist.forEach(h => {
-        if (h.evalAmount > 0) dateToTotal.set(h.date, (dateToTotal.get(h.date) || 0) + h.evalAmount);
-      });
-    });
-    setIntHistory(prev => {
-      const existingMap = new Map(prev.map(h => [h.date, h]));
-      const result = [...prev];
-      let changed = false;
-      dateToTotal.forEach((total, date) => {
-        const existing = existingMap.get(date);
-        if (!existing) {
-          result.push({ id: generateId(), date, evalAmount: total });
-          changed = true;
-        } else if (total > 0 && existing.evalAmount < total * 0.9) {
-          // intHistory 값이 개별 계좌 합산의 90% 미만 = 일부 계좌만 반영된 오류값 → 교정
-          const idx = result.findIndex(h => h.date === date);
-          if (idx >= 0) { result[idx] = { ...existing, evalAmount: total }; changed = true; }
-        }
-      });
-      return changed ? result : prev;
-    });
-  }, [portfolios, history]);
 
   // 수동 백필: 지정 날짜부터 어제까지 모든 계좌의 누락 평가액 채우기
   const handleManualBackfill = (fromDate) => {
@@ -276,44 +206,6 @@ export const useHistoryBackfill = ({
       return { ...p, history: [...(p.history || []), ...records] };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
-
-    // 백필된 날짜들을 intHistory에도 반영 (전체 계좌 합산)
-    if (setIntHistory && totalAdded > 0) {
-      const backfilledDates = new Set();
-      if (activeRecords) activeRecords.forEach(r => backfilledDates.add(r.date));
-      nextPortfolios.forEach(p => {
-        if (p.id === activePortfolioId) return;
-        const origP = portfolios.find(op => op.id === p.id);
-        const origDates = new Set((origP?.history || []).map(h => h.date));
-        (p.history || []).forEach(h => { if (!origDates.has(h.date)) backfilledDates.add(h.date); });
-      });
-
-      const newIntRecords = [];
-      [...backfilledDates].sort().forEach(date => {
-        let totalForDate = 0;
-        const activeRec = activeRecords?.find(r => r.date === date);
-        if (activeRec) {
-          totalForDate += activeRec.evalAmount;
-        } else {
-          const existingRec = history.find(h => h.date === date);
-          if (existingRec) totalForDate += existingRec.evalAmount;
-        }
-        nextPortfolios.forEach(p => {
-          if (p.id === activePortfolioId) return;
-          const rec = (p.history || []).find(h => h.date === date);
-          if (rec) totalForDate += rec.evalAmount;
-        });
-        if (totalForDate > 0) newIntRecords.push({ id: generateId(), date, evalAmount: totalForDate });
-      });
-
-      if (newIntRecords.length > 0) {
-        setIntHistory(prev => {
-          const existingDates = new Set(prev.map(h => h.date));
-          const additions = newIntRecords.filter(r => !existingDates.has(r.date));
-          return additions.length > 0 ? [...prev, ...additions] : prev;
-        });
-      }
-    }
 
     showToast(totalAdded > 0 ? `${totalAdded}건의 누락 기록을 채웠습니다.` : '채울 누락 기록이 없습니다.');
   };

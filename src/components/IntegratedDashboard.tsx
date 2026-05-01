@@ -6,7 +6,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea,
 } from 'recharts';
 import { UI_CONFIG } from '../config';
-import { generateId, formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum } from '../utils';
 
 import CustomDatePicker from './CustomDatePicker';
 import { PieLabelOutside } from '../chartUtils';
@@ -51,7 +51,6 @@ export default function IntegratedDashboard({
   simpleEditField,
   showNewAccountMenu,
   hideAmounts,
-  setIntHistory,
   setIntChartPeriod,
   setIntIsZeroBaseMode,
   setHoveredIntCatSlice,
@@ -376,16 +375,6 @@ export default function IntegratedDashboard({
                 <div className="p-3 bg-[#0f172a] flex flex-col gap-2 border-b border-gray-700 shrink-0">
                   <div className="flex justify-between items-center">
                     <span className="text-white font-bold text-sm">📅 평가액 추이</span>
-                    <button
-                      onClick={() => {
-                        const today = new Date().toISOString().split('T')[0];
-                        setIntHistory(prev => {
-                          const todayEntry = prev.find(h => h.date === today);
-                          return todayEntry ? [todayEntry] : (intTotals.totalEval > 0 ? [{ id: generateId(), date: today, evalAmount: intTotals.totalEval }] : []);
-                        });
-                      }}
-                      className="text-orange-400 hover:text-white p-1 hover:bg-gray-800 rounded transition" title="기록 리셋"
-                    ><Trash2 size={14} /></button>
                   </div>
                   {onManualBackfill && (
                     <div className="flex items-center gap-1.5">
