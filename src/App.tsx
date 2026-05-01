@@ -940,16 +940,19 @@ export default function App() {
 
   const computedIntHistory = useMemo(() => {
     const dateToTotal = new Map();
+    const today = new Date().toISOString().split('T')[0];
     portfolios.forEach(p => {
       const hist = p.id === activePortfolioId ? history : (p.history || []);
       hist.forEach(h => {
         if (h.evalAmount > 0) dateToTotal.set(h.date, (dateToTotal.get(h.date) || 0) + h.evalAmount);
       });
     });
+    // 오늘은 항상 현재 총합으로 덮어씀 (일부 계좌만 오늘 기록된 경우 보정)
+    if (intTotals.totalEval > 0) dateToTotal.set(today, intTotals.totalEval);
     return [...dateToTotal.entries()]
       .map(([date, evalAmount]) => ({ id: date, date, evalAmount }))
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, history, activePortfolioId]);
+  }, [portfolios, history, activePortfolioId, intTotals.totalEval]);
 
   const intSortedHistory = useMemo(() =>
     [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
@@ -970,8 +973,12 @@ export default function App() {
       ? intSortedHistory.filter(h => intFilteredDates.includes(h.date))
       : intSortedHistory;
     if (filtered.length === 0) return [];
-    const baseEval = filtered[0].evalAmount;
     const totalPrincipal = intTotals.totalPrincipal;
+    // 기간기준: 일부 계좌만 있던 초기 기간 왜곡 방지 — 원금의 70% 이상인 첫 날을 기준점으로 사용
+    const baseEntry = intIsZeroBaseMode && totalPrincipal > 0
+      ? (filtered.find(h => h.evalAmount >= totalPrincipal * 0.7) || filtered[0])
+      : filtered[0];
+    const baseEval = baseEntry.evalAmount;
     return filtered.map(h => ({
       date: h.date,
       evalAmount: h.evalAmount,
