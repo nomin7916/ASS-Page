@@ -56,6 +56,7 @@ export default function PortfolioStatsPanel({
         : (Math.pow(usdEval / principal, 365.25 / daysFromStart) - 1) * 100
       : 0;
   const fxGain = isOv ? (fx - effectiveFx) * principal : 0;
+  const years = daysFromStart / 365.25;
 
   const handleDragStart = (e) => {
     if (e.button !== 0) return;
@@ -267,36 +268,141 @@ export default function PortfolioStatsPanel({
             <div style={{ width: 14 }} />
           </div>
 
-          <div className="p-4 space-y-4 text-[11px]">
+          <div className="p-4 space-y-5 text-[11px] leading-relaxed overflow-y-auto max-h-[70vh]">
+
             {/* 환 평가 수익률 */}
-            <div className="space-y-1.5">
-              <div className="text-sky-400 font-bold border-b border-gray-700/60 pb-1">환 평가 수익률</div>
-              <div className="text-gray-500">수익률 = CAGR(평가KRW ÷ 원금KRW)</div>
-              <div className="text-gray-400">= CAGR({formatCurrency(totals.totalEval)} ÷ {formatCurrency(principalKRW)})</div>
-              <div className={`font-bold ${cagr >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {formatPercent(cagr)}</div>
-              <div className="text-gray-500 pt-0.5">
-                원화수익금 = ({fmtUS(usdEval)} × ₩{Math.round(fx).toLocaleString()}) − ({fmtUS(principal)} × ₩{Math.round(effectiveFx).toLocaleString()})
+            <div className="space-y-2">
+              <div className="text-sky-400 font-bold border-b border-gray-700/60 pb-1 text-[12px]">환 평가 수익률</div>
+
+              {/* 공식 */}
+              <div className="bg-gray-800/50 rounded px-3 py-2 space-y-1">
+                <div className="text-gray-500 text-[10px] font-bold mb-1">공식</div>
+                {daysFromStart < 365 ? (
+                  <>
+                    <div className="text-gray-300">수익률  =  ( 평가 KRW  ÷  원금 KRW )  −  1</div>
+                    <div className="text-gray-600 text-[10px]">※ 투자기간 1년 미만 → 단순 수익률 적용</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-gray-300">CAGR  =  ( 평가 KRW  ÷  원금 KRW ) <sup className="text-[9px]">( 1 ÷ n )</sup>  −  1</div>
+                    <div className="text-gray-500 pl-2">n  =  투자일수  ÷  365.25  <span className="text-gray-600">(단위: 년)</span></div>
+                  </>
+                )}
               </div>
-              <div className="text-gray-500">= {formatCurrency(totals.totalEval)} − {formatCurrency(principalKRW)}</div>
-              <div className={`font-bold ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {formatCurrency(profit)} ({fmtUS(profit / fx)})</div>
+
+              {/* 계산 */}
+              <div className="space-y-0.5 pl-1">
+                <div className="text-gray-500 text-[10px] font-bold mb-1">계산</div>
+                <div className="text-gray-400">투자일수  =  {Math.round(daysFromStart)} 일
+                  {daysFromStart >= 365 && <span className="text-gray-600">  →  n  =  {years.toFixed(2)} 년</span>}
+                </div>
+                <div className="text-gray-400">평가 KRW  =  {formatCurrency(totals.totalEval)}</div>
+                <div className="text-gray-400">원금 KRW  =  {formatCurrency(principalKRW)}</div>
+                <div className="text-gray-400 pt-0.5">
+                  {daysFromStart < 365
+                    ? <>= ( {formatCurrency(totals.totalEval)}  ÷  {formatCurrency(principalKRW)} )  −  1</>
+                    : <>= ( {formatCurrency(totals.totalEval)}  ÷  {formatCurrency(principalKRW)} ) <sup className="text-[9px]">( 1 ÷ {years.toFixed(2)} )</sup>  −  1</>
+                  }
+                </div>
+                <div className={`font-bold text-[13px] pt-0.5 ${cagr >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  =  {formatPercent(cagr)}
+                </div>
+              </div>
+
+              {/* 원화 수익금 */}
+              <div className="space-y-0.5 pl-1 pt-1 border-t border-gray-700/40">
+                <div className="text-gray-500 text-[10px] font-bold mb-1">원화 수익금</div>
+                <div className="text-gray-400">= ( 평가$  ×  현재환율 )  −  ( 원금$  ×  매입환율 )</div>
+                <div className="text-gray-400 pl-2">= ( {fmtUS(usdEval)}  ×  ₩{Math.round(fx).toLocaleString()} )</div>
+                <div className="text-gray-400 pl-4">−  ( {fmtUS(principal)}  ×  ₩{Math.round(effectiveFx).toLocaleString()} )</div>
+                <div className="text-gray-400">= {formatCurrency(totals.totalEval)}  −  {formatCurrency(principalKRW)}</div>
+                <div className={`font-bold pt-0.5 ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  =  {formatCurrency(profit)}
+                </div>
+                <div className={`pl-2 text-[10px] ${profit >= 0 ? 'text-red-400/70' : 'text-blue-400/70'}`}>
+                  ( 달러 환산  {fmtUS(profit / fx)} )
+                </div>
+              </div>
             </div>
 
             {/* 달러 기준 수익률 */}
-            <div className="space-y-1.5">
-              <div className="text-emerald-400 font-bold border-b border-gray-700/60 pb-1">달러 기준 수익률</div>
-              <div className="text-gray-500">수익률 = CAGR({fmtUS(usdEval)} ÷ {fmtUS(principal)})</div>
-              <div className={`font-bold ${usdCagr >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {formatPercent(usdCagr)}</div>
-              <div className="text-gray-500 pt-0.5">달러수익금 = {fmtUS(usdEval)} − {fmtUS(principal)}</div>
-              <div className={`font-bold ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {fmtUS(usdProfit)} (₩환산 {formatCurrency(usdProfit * fx)})</div>
+            <div className="space-y-2">
+              <div className="text-emerald-400 font-bold border-b border-gray-700/60 pb-1 text-[12px]">달러 기준 수익률</div>
+
+              {/* 공식 */}
+              <div className="bg-gray-800/50 rounded px-3 py-2 space-y-1">
+                <div className="text-gray-500 text-[10px] font-bold mb-1">공식</div>
+                {daysFromStart < 365 ? (
+                  <>
+                    <div className="text-gray-300">수익률  =  ( 평가$  ÷  원금$ )  −  1</div>
+                    <div className="text-gray-600 text-[10px]">※ 투자기간 1년 미만 → 단순 수익률 적용</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-gray-300">CAGR  =  ( 평가$  ÷  원금$ ) <sup className="text-[9px]">( 1 ÷ n )</sup>  −  1</div>
+                    <div className="text-gray-500 pl-2">n  =  투자일수  ÷  365.25  <span className="text-gray-600">(단위: 년)</span></div>
+                  </>
+                )}
+              </div>
+
+              {/* 계산 */}
+              <div className="space-y-0.5 pl-1">
+                <div className="text-gray-500 text-[10px] font-bold mb-1">계산</div>
+                <div className="text-gray-400">투자일수  =  {Math.round(daysFromStart)} 일
+                  {daysFromStart >= 365 && <span className="text-gray-600">  →  n  =  {years.toFixed(2)} 년</span>}
+                </div>
+                <div className="text-gray-400">평가$  =  {fmtUS(usdEval)}</div>
+                <div className="text-gray-400">원금$  =  {fmtUS(principal)}</div>
+                <div className="text-gray-400 pt-0.5">
+                  {daysFromStart < 365
+                    ? <>= ( {fmtUS(usdEval)}  ÷  {fmtUS(principal)} )  −  1</>
+                    : <>= ( {fmtUS(usdEval)}  ÷  {fmtUS(principal)} ) <sup className="text-[9px]">( 1 ÷ {years.toFixed(2)} )</sup>  −  1</>
+                  }
+                </div>
+                <div className={`font-bold text-[13px] pt-0.5 ${usdCagr >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  =  {formatPercent(usdCagr)}
+                </div>
+              </div>
+
+              {/* 달러 수익금 */}
+              <div className="space-y-0.5 pl-1 pt-1 border-t border-gray-700/40">
+                <div className="text-gray-500 text-[10px] font-bold mb-1">달러 수익금</div>
+                <div className="text-gray-400">= 평가$  −  원금$</div>
+                <div className="text-gray-400">= {fmtUS(usdEval)}  −  {fmtUS(principal)}</div>
+                <div className={`font-bold pt-0.5 ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  =  {fmtUS(usdProfit)}
+                </div>
+                <div className={`pl-2 text-[10px] ${usdProfit >= 0 ? 'text-red-400/70' : 'text-blue-400/70'}`}>
+                  ( ₩ 환산  {formatCurrency(usdProfit * fx)} )
+                </div>
+              </div>
             </div>
 
             {/* 환차익 */}
-            <div className="space-y-1.5">
-              <div className="text-yellow-400 font-bold border-b border-gray-700/60 pb-1">환차익</div>
-              <div className="text-gray-500">= (현재환율 − 매입환율) × 원금</div>
-              <div className="text-gray-500">= (₩{Math.round(fx).toLocaleString()} − ₩{Math.round(effectiveFx).toLocaleString()}) × {fmtUS(principal)}</div>
-              <div className={`font-bold ${fxGain >= 0 ? 'text-red-400' : 'text-blue-400'}`}>= {formatCurrency(fxGain)}</div>
+            <div className="space-y-2">
+              <div className="text-yellow-400 font-bold border-b border-gray-700/60 pb-1 text-[12px]">환차익</div>
+
+              {/* 공식 */}
+              <div className="bg-gray-800/50 rounded px-3 py-2 space-y-1">
+                <div className="text-gray-500 text-[10px] font-bold mb-1">공식</div>
+                <div className="text-gray-300">환차익  =  ( 현재환율  −  매입환율 )  ×  원금$</div>
+              </div>
+
+              {/* 계산 */}
+              <div className="space-y-0.5 pl-1">
+                <div className="text-gray-500 text-[10px] font-bold mb-1">계산</div>
+                <div className="text-gray-400">현재환율  =  ₩{Math.round(fx).toLocaleString()}</div>
+                <div className="text-gray-400">매입환율  =  ₩{Math.round(effectiveFx).toLocaleString()}</div>
+                <div className="text-gray-400">원금$  =  {fmtUS(principal)}</div>
+                <div className="text-gray-400 pt-0.5">
+                  = ( ₩{Math.round(fx).toLocaleString()}  −  ₩{Math.round(effectiveFx).toLocaleString()} )  ×  {fmtUS(principal)}
+                </div>
+                <div className={`font-bold pt-0.5 ${fxGain >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  =  {formatCurrency(fxGain)}
+                </div>
+              </div>
             </div>
+
           </div>
         </div>
       </div>
