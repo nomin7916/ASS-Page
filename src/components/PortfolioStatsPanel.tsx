@@ -75,13 +75,13 @@ export default function PortfolioStatsPanel({
     document.addEventListener('mouseup', onUp);
   };
 
-  const rowPy = isOv ? 'py-1.5' : 'py-2.5';
-  const contentP = isOv ? 'p-2' : 'p-3';
+  const rowPy = isOv ? 'py-1' : 'py-2.5';
+  const contentP = isOv ? 'p-1.5' : 'p-3';
 
   return (
     <>
     <div className="w-full xl:w-[18%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
-      <div className={`${isOv ? 'p-5 space-y-4' : 'p-4 space-y-3'} bg-black shrink-0 border-b border-gray-700 text-gray-400 text-xs`}>
+      <div className="p-4 space-y-3 bg-black shrink-0 border-b border-gray-700 text-gray-400 text-xs">
         <div className="flex justify-between items-start">
           <span className="shrink-0">투자금액</span>
           {dualKRW(totals.totalInvest)}
@@ -189,7 +189,7 @@ export default function PortfolioStatsPanel({
         {isOv ? (
           <div className="flex flex-col flex-1">
             {/* 달러 기준 / 환 평가 두 컬럼 */}
-            <div className="flex flex-1 min-h-[90px]">
+            <div className="flex flex-1 min-h-[70px]">
               <div className="w-[70px] bg-gray-800/50 flex flex-col items-center justify-center border-r border-gray-700 shrink-0 gap-0 py-2">
                 <span className="text-[11px] text-gray-400 font-bold">수익률</span>
                 <div className="flex-1" />
@@ -205,16 +205,10 @@ export default function PortfolioStatsPanel({
                     {formatPercent(usdCagr)}
                   </span>
                 </div>
-                <div className="flex flex-col items-center gap-0">
-                  <span className="text-[9px] text-gray-600">($)</span>
-                  <span className={`text-[11px] font-bold tracking-wide whitespace-nowrap ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                    {fmtUS(usdProfit)}
-                  </span>
-                </div>
-                <div className="flex flex-col items-center gap-0">
-                  <span className="text-[9px] text-gray-600">(₩)</span>
-                  <span className="text-[10px] text-gray-400 whitespace-nowrap">{formatCurrency(usdProfit * fx)}</span>
-                </div>
+                <span className={`text-[11px] font-bold tracking-wide whitespace-nowrap ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  {fmtUS(usdProfit)}
+                </span>
+                <span className="text-[10px] text-gray-400 whitespace-nowrap">{formatCurrency(usdProfit * fx)}</span>
               </div>
               {/* 환 평가 */}
               <div className="flex-1 flex flex-col items-center justify-around bg-gray-900/40 p-1.5 overflow-hidden">
@@ -224,16 +218,10 @@ export default function PortfolioStatsPanel({
                     {formatPercent(cagr)}
                   </span>
                 </div>
-                <div className="flex flex-col items-center gap-0">
-                  <span className="text-[9px] text-gray-600">(₩)</span>
-                  <span className={`text-[11px] font-bold tracking-wide whitespace-nowrap ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                    {formatCurrency(profit)}
-                  </span>
-                </div>
-                <div className="flex flex-col items-center gap-0">
-                  <span className="text-[9px] text-gray-600 invisible">-</span>
-                  <span className="text-[10px] text-gray-600">—</span>
-                </div>
+                <span className={`text-[11px] font-bold tracking-wide whitespace-nowrap ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  {formatCurrency(profit)}
+                </span>
+                <span className="text-[10px] text-gray-600">—</span>
               </div>
             </div>
             {/* 수익율 계산 버튼 */}
