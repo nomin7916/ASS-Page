@@ -21,6 +21,16 @@ export default function DepositPanel({
   marketIndicators,
 }) {
   const isOverseas = activePortfolioAccountType === 'overseas';
+
+  const calcWeightedAvgFx = (hist) => {
+    const entries = (hist || []).filter(h => h.fxRate > 0 && Math.abs(h.amount) > 0);
+    if (!entries.length) return 0;
+    const totalAmt = entries.reduce((s, h) => s + Math.abs(h.amount), 0);
+    return totalAmt > 0 ? entries.reduce((s, h) => s + Math.abs(h.amount) * h.fxRate, 0) / totalAmt : 0;
+  };
+
+  const depositAvgFx = isOverseas ? calcWeightedAvgFx(depositHistory) : 0;
+  const withdrawAvgFx = isOverseas ? calcWeightedAvgFx(depositHistory2) : 0;
   const [editField, setEditField] = useState(null);
   const [editVal, setEditVal] = useState('');
   const [memoModal, setMemoModal] = useState(null); // { id, originalIndex, type: 'd1'|'d2', val }
@@ -86,7 +96,12 @@ export default function DepositPanel({
           <div className="flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden">
             <div className="p-2 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 입금 내역</span>
-              {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">$1 = ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+              {isOverseas && (
+                <div className="flex items-center gap-2">
+                  {depositAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(depositAvgFx).toLocaleString()}</span>}
+                  {marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+                </div>
+              )}
             </div>
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed">
@@ -139,7 +154,12 @@ export default function DepositPanel({
           <div className="flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden">
             <div className="p-2 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 출금 내역</span>
-              {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">$1 = ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+              {isOverseas && (
+                <div className="flex items-center gap-2">
+                  {withdrawAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(withdrawAvgFx).toLocaleString()}</span>}
+                  {marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+                </div>
+              )}
             </div>
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed">

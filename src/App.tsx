@@ -599,15 +599,18 @@ export default function App() {
   }, [portfolio, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const cagr = useMemo(() => {
+    const effectiveFx = activePortfolioAccountType === 'overseas'
+      ? (avgExchangeRate || marketIndicators.usdkrw || 1)
+      : 1;
     const principalKRW = activePortfolioAccountType === 'overseas'
-      ? principal * (marketIndicators.usdkrw || 1)
+      ? principal * effectiveFx
       : principal;
     if (!portfolioStartDate || principalKRW <= 0 || totals.totalEval <= 0) return 0;
     const days = (new Date() - new Date(portfolioStartDate)) / (1000 * 60 * 60 * 24);
     if (days <= 0) return 0;
     if (days < 365) return (totals.totalEval / principalKRW - 1) * 100;
     return (Math.pow(totals.totalEval / principalKRW, 1 / (days / 365.25)) - 1) * 100;
-  }, [portfolioStartDate, principal, totals.totalEval, activePortfolioAccountType, marketIndicators.usdkrw]);
+  }, [portfolioStartDate, principal, avgExchangeRate, totals.totalEval, activePortfolioAccountType, marketIndicators.usdkrw]);
 
   const sortedHistoryDesc = useMemo(() => [...history].sort((a, b) => new Date(b.date) - new Date(a.date)), [history]);
 
@@ -882,6 +885,10 @@ export default function App() {
       const items = isActive ? portfolio : (p.portfolio || []);
       const prin = isActive ? principal : (p.principal || 0);
       const summaryFxRate = p.accountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
+      const summaryAvgFx = p.accountType === 'overseas'
+        ? ((isActive ? avgExchangeRate : (p.avgExchangeRate || 0)) || summaryFxRate)
+        : 1;
+      const principalKRW = prin * summaryAvgFx;
       let totalEval = 0, depositAmt = 0;
       const cats = {};
       items.forEach(item => {
@@ -902,16 +909,16 @@ export default function App() {
           cats[cat] = (cats[cat] || 0) + evl;
         }
       });
-      const returnRate = prin > 0 ? (totalEval - prin) / prin * 100 : 0;
-      const cagr = prin > 0 && totalEval > 0 && days > 0
+      const returnRate = principalKRW > 0 ? (totalEval - principalKRW) / principalKRW * 100 : 0;
+      const cagr = principalKRW > 0 && totalEval > 0 && days > 0
         ? days < 365
-          ? (totalEval / prin - 1) * 100
-          : (Math.pow(totalEval / prin, 365.25 / days) - 1) * 100
+          ? (totalEval / principalKRW - 1) * 100
+          : (Math.pow(totalEval / principalKRW, 365.25 / days) - 1) * 100
         : 0;
-      return { id: p.id, name, startDate, currentEval: totalEval, principal: prin, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '' };
+      return { id: p.id, name, startDate, currentEval: totalEval, principal: principalKRW, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '' };
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portfolios, activePortfolioId, portfolio, principal, portfolioStartDate, title, marketIndicators.usdkrw]);
+  }, [portfolios, activePortfolioId, portfolio, principal, avgExchangeRate, portfolioStartDate, title, marketIndicators.usdkrw]);
 
   const intTotals = useMemo(() => {
     let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
@@ -1253,6 +1260,7 @@ export default function App() {
           setTitle(active.name || '포트폴리오');
           setPortfolio(active.portfolio || []);
           setPrincipal(active.principal || 0);
+          setAvgExchangeRate(active.avgExchangeRate || 0);
           setHistory(active.history || []);
           setDepositHistory(active.depositHistory || []);
           if (active.depositHistory2) setDepositHistory2(active.depositHistory2);
@@ -1474,7 +1482,7 @@ export default function App() {
     if (!authUser?.email) return;
     const currentPortfolios = portfolios.map(p =>
       p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
     // 계좌/종목 구조만 비교 — history(일일 평가액)·시장 데이터는 제외하여
@@ -1484,7 +1492,7 @@ export default function App() {
       currentPortfolios.map(p => ({
         id: p.id, name: p.name,
         startDate: p.startDate || p.portfolioStartDate,
-        portfolio: p.portfolio, principal: p.principal,
+        portfolio: p.portfolio, principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
         actualDividend: p.actualDividend,
@@ -1807,8 +1815,11 @@ export default function App() {
             setPortfolioStartDate={setPortfolioStartDate}
             principal={principal}
             setPrincipal={setPrincipal}
+            avgExchangeRate={avgExchangeRate}
+            setAvgExchangeRate={setAvgExchangeRate}
             depositHistory={depositHistory}
             setDepositHistory={setDepositHistory}
+            depositHistory2={depositHistory2}
             cagr={cagr}
           />
 

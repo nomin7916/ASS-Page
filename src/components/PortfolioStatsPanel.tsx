@@ -10,14 +10,20 @@ export default function PortfolioStatsPanel({
   setPortfolioStartDate,
   principal,
   setPrincipal,
+  avgExchangeRate,
+  setAvgExchangeRate,
   depositHistory,
   setDepositHistory,
+  depositHistory2,
   cagr,
 }) {
   const isOv = activePortfolioAccountType === 'overseas';
   const fx = marketIndicators.usdkrw || 1;
+  const effectiveFx = isOv ? (avgExchangeRate || fx) : fx;
   const [principalEditing, setPrincipalEditing] = useState(false);
   const [principalRaw, setPrincipalRaw] = useState('');
+  const [avgFxEditing, setAvgFxEditing] = useState(false);
+  const [avgFxRaw, setAvgFxRaw] = useState('');
   const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
   const dualKRW = (krwVal, cls = 'text-gray-200') =>
     isOv ? (
@@ -29,7 +35,7 @@ export default function PortfolioStatsPanel({
       <span className={`font-bold ${cls} whitespace-nowrap pl-1`}>{formatCurrency(krwVal)}</span>
     );
 
-  const principalKRW = isOv ? principal * fx : principal;
+  const principalKRW = isOv ? principal * effectiveFx : principal;
   const profit = totals.totalEval - principalKRW;
 
   return (
@@ -91,7 +97,7 @@ export default function PortfolioStatsPanel({
           <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
             <span className="text-[11px] text-gray-400 font-bold">{isOv ? '투자 원금(USD)' : '투자 원금'}</span>
           </div>
-          <div className="flex-1 p-3 flex items-center bg-gray-800/20">
+          <div className="flex-1 p-3 flex flex-col items-end justify-center bg-gray-800/20 gap-0.5">
             <input
               type="text"
               className="w-full bg-gray-900/60 border border-gray-700/60 rounded text-right text-white font-bold outline-none px-2 py-1 text-xs"
@@ -101,8 +107,35 @@ export default function PortfolioStatsPanel({
               onBlur={() => { setPrincipal(cleanNum(principalRaw)); setPrincipalEditing(false); }}
               onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
             />
+            {isOv && (
+              <span className="text-[10px] text-gray-500 pr-1">
+                {formatCurrency(principal * effectiveFx)}
+              </span>
+            )}
           </div>
         </div>
+        {isOv && (
+          <div className="flex h-auto py-2.5 border-b border-gray-700 shrink-0">
+            <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
+              <span className="text-[11px] text-gray-400 font-bold text-center leading-tight">평균<br/>매입환율</span>
+            </div>
+            <div className="flex-1 p-3 flex flex-col items-end justify-center bg-gray-800/20 gap-0.5">
+              <input
+                type="text"
+                className="w-full bg-gray-900/60 border border-sky-800/60 rounded text-right text-sky-300 font-bold outline-none px-2 py-1 text-xs"
+                value={avgFxEditing ? avgFxRaw : (avgExchangeRate > 0 ? String(avgExchangeRate) : '')}
+                placeholder={String(Math.round(fx))}
+                onFocus={e => { setAvgFxEditing(true); setAvgFxRaw(avgExchangeRate > 0 ? String(avgExchangeRate) : ''); e.target.select(); }}
+                onChange={e => setAvgFxRaw(e.target.value)}
+                onBlur={() => { setAvgExchangeRate(cleanNum(avgFxRaw) || 0); setAvgFxEditing(false); }}
+                onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+              />
+              <span className="text-[10px] text-gray-600 pr-1">
+                {avgExchangeRate > 0 ? `현재 ₩${Math.round(fx).toLocaleString()}` : '미입력 시 현재환율 사용'}
+              </span>
+            </div>
+          </div>
+        )}
         <div className="flex h-auto py-2.5 border-b border-gray-700">
           <div className="w-[70px] bg-gray-800/50 flex items-center justify-center border-r border-gray-700 shrink-0">
             <span className="text-[11px] text-gray-400 font-bold" title="1년 미만: 총수익율 / 1년 이상: CAGR(연평균 성장률)">CAGR</span>

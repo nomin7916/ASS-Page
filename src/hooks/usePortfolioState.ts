@@ -169,7 +169,7 @@ export function usePortfolioState({
   const addSimpleAccount = () => {
     const updated = portfolios.map(p =>
       p.id === activePortfolioId
-        ? { ...p, name: title, portfolio, principal, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
+        ? { ...p, name: title, portfolio, principal, avgExchangeRate, history, depositHistory, depositHistory2, startDate: portfolioStartDate, portfolioStartDate, settings }
         : p
     );
     const newId = generateId();
