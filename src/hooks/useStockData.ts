@@ -31,6 +31,8 @@ interface UseStockDataParams {
 
 const COMP_STOCK_EXTRA_COLORS = ['#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#f97316', '#64748b', '#e11d48'];
 
+const isKoreanCode = (code: string) => /^\d{6}$/.test(code);
+
 export function useStockData({
   portfolio, setPortfolio,
   activePortfolioAccountType,
@@ -133,9 +135,7 @@ export function useStockData({
 
   const handleCompStockBlur = async (index, code) => {
     if (!code) return;
-    const isOverseasComp = activePortfolioAccountType === 'overseas';
-    if (!isOverseasComp && code.length < 5) return;
-    const d = isOverseasComp ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
+    const d = isKoreanCode(code) ? await fetchStockInfo(code) : await fetchUsStockInfo(code);
     const resolvedName = d?.name || code;
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], name: resolvedName }; return n; });
   };
@@ -146,7 +146,7 @@ export function useStockData({
 
     if (comp.active) { setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: false }; return n; }); return; }
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
-    const isOverseasComp = activePortfolioAccountType === 'overseas';
+    const isOverseasComp = !isKoreanCode(comp.code);
     let hist = stockHistoryMap[comp.code];
     // 해외: 252건(약 1년) 미만이면 전체 재조회 / 국내: 3건 이상이면 증분 조회
     const hasRichHistory = hist && (isOverseasComp ? Object.keys(hist).length > 252 : Object.keys(hist).length > 3);
@@ -245,7 +245,7 @@ export function useStockData({
 
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
 
-    const isOverseasFetch = activePortfolioAccountType === 'overseas';
+    const isOverseasFetch = !isKoreanCode(comp.code);
     let hist: Record<string, number> | null = null;
 
     if (isOverseasFetch) {
