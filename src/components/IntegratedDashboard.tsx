@@ -109,8 +109,9 @@ export default function IntegratedDashboard({
   const newAccBtnRef = useRef(null);
   const [newAccMenuPos, setNewAccMenuPos] = useState({ top: 0, right: 0 });
 
-  // ETF 구성종목 + PER 데이터 (itemName → { h1, h2, h3 } | null | 'loading')
+  // ETF 구성종목 + PER 데이터 (itemName → holdings[] | { isStock, per, fper } | 'loading')
   const [etfInfoMap, setEtfInfoMap] = useState({});
+  const fetchingRef = useRef(new Set());
 
   useEffect(() => {
     const isKr6 = (c) => /^\d{6}$/.test(c || '');
@@ -119,23 +120,25 @@ export default function IntegratedDashboard({
 
     const fetchOne = async (item) => {
       const { name, code } = item;
-      if (etfInfoMap[name] !== undefined) return;
-      setEtfInfoMap(prev => ({ ...prev, [name]: 'loading' }));
+      if (fetchingRef.current.has(name)) return;
+      fetchingRef.current.add(name);
+      setEtfInfoMap(prev => {
+        if (prev[name] !== undefined) { fetchingRef.current.delete(name); return prev; }
+        return { ...prev, [name]: 'loading' };
+      });
 
       const holdings = await fetchEtfTopHoldings(code);
       if (!holdings || holdings.length === 0) {
-        // ETF 아님 → 종목 자체 PER 조회
         const perData = await fetchStockPer(code);
         setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: perData?.per ?? null, fper: perData?.fper ?? null } }));
-        return;
+      } else {
+        const perResults = await Promise.all(
+          holdings.map(h => isKr6(h.code) ? fetchStockPer(h.code) : Promise.resolve(null))
+        );
+        const enriched = holdings.map((h, i) => ({ ...h, per: perResults[i]?.per ?? null, fper: perResults[i]?.fper ?? null }));
+        setEtfInfoMap(prev => ({ ...prev, [name]: enriched }));
       }
-
-      // ETF → 구성종목 PER 병렬 조회
-      const perResults = await Promise.all(
-        holdings.map(h => isKr6(h.code) ? fetchStockPer(h.code) : Promise.resolve(null))
-      );
-      const enriched = holdings.map((h, i) => ({ ...h, per: perResults[i]?.per ?? null, fper: perResults[i]?.fper ?? null }));
-      setEtfInfoMap(prev => ({ ...prev, [name]: enriched }));
+      fetchingRef.current.delete(name);
     };
 
     candidates.forEach(item => fetchOne(item));

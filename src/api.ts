@@ -388,36 +388,48 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
 // ── ETF 구성종목 Top3 조회 (네이버 증권) ────────────────────────────────────
 const _etfHoldingsCache = new Map<string, { data: Array<{ name: string; code: string; ratio: number }> | null; ts: number }>();
 
+const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio: number }> | null => {
+  const list = data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? data?.data ?? [];
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const result = list.slice(0, 3).map((x: any) => ({
+    name: x.itemName ?? x.stockName ?? x.name ?? x.stockName ?? '',
+    code: x.itemCode ?? x.stockCode ?? x.code ?? '',
+    ratio: parseFloat(String(x.holdingRatio ?? x.ratio ?? x.weight ?? 0)),
+  })).filter((x: any) => x.name);
+  return result.length > 0 ? result : null;
+};
+
 export const fetchEtfTopHoldings = async (
   code: string
 ): Promise<Array<{ name: string; code: string; ratio: number }> | null> => {
   const cached = _etfHoldingsCache.get(code);
   if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.data;
 
-  const targetUrl = `https://m.stock.naver.com/api/etf/${code}/holding`;
-  const proxies = [
-    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  const targetUrls = [
+    `https://m.stock.naver.com/api/etf/${code}/holding`,
+    `https://m.stock.naver.com/api/domestic/stock/${code}/etfHolding`,
+    `https://m.stock.naver.com/api/stock/${code}/etfHolding`,
   ];
-  for (const proxy of proxies) {
-    try {
-      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const list = data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? [];
-      if (Array.isArray(list) && list.length > 0) {
-        const result = list.slice(0, 3).map((x: any) => ({
-          name: x.itemName ?? x.stockName ?? x.name ?? '',
-          code: x.itemCode ?? x.stockCode ?? x.code ?? '',
-          ratio: parseFloat(String(x.holdingRatio ?? x.ratio ?? 0)),
-        })).filter((x: any) => x.name);
-        if (result.length > 0) {
+  const makeProxies = (url: string) => [
+    url,
+    `/api/proxy?url=${encodeURIComponent(url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${url}`,
+  ];
+
+  for (const targetUrl of targetUrls) {
+    for (const proxy of makeProxies(targetUrl)) {
+      try {
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const result = _parseHoldingList(data);
+        if (result) {
           _etfHoldingsCache.set(code, { data: result, ts: Date.now() });
           return result;
         }
-      }
-    } catch { continue; }
+      } catch { continue; }
+    }
   }
   _etfHoldingsCache.set(code, { data: null, ts: Date.now() });
   return null;
@@ -440,6 +452,7 @@ export const fetchStockPer = async (
 
   const targetUrl = `https://m.stock.naver.com/api/stock/${code}/basic`;
   const proxies = [
+    targetUrl,
     `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
     `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
@@ -449,10 +462,11 @@ export const fetchStockPer = async (
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
       const data = await res.json();
-      if (data?.stockName) {
+      const hasName = data?.stockName ?? data?.itemName ?? data?.name;
+      if (hasName) {
         const result = {
-          per: parse(data.per ?? data.PER),
-          fper: parse(data.forwardPer ?? data.estimatedPer ?? data.consPer ?? data.fwdPer),
+          per: parse(data.per ?? data.PER ?? data.perRatio),
+          fper: parse(data.forwardPer ?? data.estimatedPer ?? data.consPer ?? data.fwdPer ?? data.forecastPer),
         };
         _stockPerCache.set(code, { data: result, ts: Date.now() });
         return result;
