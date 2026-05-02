@@ -12,8 +12,11 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
   const [newCode, setNewCode] = useState('');
   const [newName, setNewName] = useState('');
   const [historyPopupCode, setHistoryPopupCode] = useState(null);
+  const [editingNameCode, setEditingNameCode] = useState(null);
+  const [editingNameValue, setEditingNameValue] = useState('');
   const fileInputRef = useRef(null);
   const uploadTargetRef = useRef('');
+  const nameInputRef = useRef(null);
   const didLoadRef = useRef(false);
 
   useEffect(() => {
@@ -69,7 +72,7 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
       setTaxHistory(prev => ({
         ...prev,
         [code]: {
-          name: rawFundName || prev[code]?.name || code,
+          name: rawFundName || (prev[code]?.name !== code ? prev[code]?.name : '') || '',
           lastUpdated: new Date().toISOString().slice(0, 10),
           records: { ...(prev[code]?.records || {}), ...records },
         },
@@ -85,11 +88,30 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
     if (!code) return;
     setTaxHistory(prev => {
       if (prev[code]) return prev;
-      return { ...prev, [code]: { name: newName.trim() || code, lastUpdated: '', records: {} } };
+      return { ...prev, [code]: { name: newName.trim(), lastUpdated: '', records: {} } };
     });
     setNewCode('');
     setNewName('');
     setShowAddForm(false);
+  };
+
+  const startEditName = (code) => {
+    const current = taxHistory[code]?.name || '';
+    const effective = current === code ? '' : current;
+    setEditingNameCode(code);
+    setEditingNameValue(effective);
+    setTimeout(() => nameInputRef.current?.focus(), 0);
+  };
+
+  const commitEditName = () => {
+    if (!editingNameCode) return;
+    const val = editingNameValue.trim();
+    setTaxHistory(prev => ({
+      ...prev,
+      [editingNameCode]: { ...prev[editingNameCode], name: val },
+    }));
+    setEditingNameCode(null);
+    setEditingNameValue('');
   };
 
   const handleDeleteStock = (code) => {
@@ -198,10 +220,35 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
                     {codes.map(code => {
                       const stock = taxHistory[code];
                       const count = Object.keys(stock?.records || {}).length;
-                      const displayName = stock?.name && stock.name !== code ? stock.name : '-';
+                      const rawName = stock?.name && stock.name !== code ? stock.name : '';
+                      const isEditingName = editingNameCode === code;
                       return (
                         <tr key={code} className="border-b border-gray-700/40 hover:bg-gray-700/20 transition-colors">
-                          <td className="px-4 py-2.5 text-gray-200">{displayName}</td>
+                          <td className="px-4 py-2.5">
+                            {isEditingName ? (
+                              <input
+                                ref={nameInputRef}
+                                value={editingNameValue}
+                                onChange={e => setEditingNameValue(e.target.value)}
+                                onBlur={commitEditName}
+                                onKeyDown={e => { if (e.key === 'Enter') commitEditName(); if (e.key === 'Escape') { setEditingNameCode(null); setEditingNameValue(''); } }}
+                                placeholder="종목명 입력"
+                                className="bg-gray-700 border border-blue-500 rounded px-2 py-0.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none w-full max-w-[180px]"
+                              />
+                            ) : (
+                              <button
+                                onClick={() => startEditName(code)}
+                                className="text-left group flex items-center gap-1.5 min-w-[80px]"
+                                title="클릭하여 종목명 편집"
+                              >
+                                {rawName
+                                  ? <span className="text-gray-200">{rawName}</span>
+                                  : <span className="text-gray-600 italic">이름 없음</span>
+                                }
+                                <span className="text-gray-700 group-hover:text-gray-400 text-[10px] transition-colors">✎</span>
+                              </button>
+                            )}
+                          </td>
                           <td className="px-3 py-2.5 text-gray-400 font-mono">{code}</td>
                           <td className="px-3 py-2.5 text-center text-gray-300">
                             {count > 0 ? <span className="text-blue-400">{count}건</span> : <span className="text-gray-600">-</span>}
@@ -280,13 +327,11 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
           <div className="bg-gray-900 rounded-lg border border-gray-700 w-full max-w-3xl max-h-[80vh] flex flex-col shadow-2xl">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 shrink-0">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-100">
-                  {popupStock.name && popupStock.name !== historyPopupCode ? popupStock.name : historyPopupCode}
-                </span>
                 {popupStock.name && popupStock.name !== historyPopupCode && (
-                  <span className="text-xs text-gray-500 font-mono">{historyPopupCode}</span>
+                  <span className="text-sm font-medium text-gray-100">{popupStock.name}</span>
                 )}
-                <span className="text-xs text-gray-600 ml-1">({popupRecords.length}건)</span>
+                <span className="text-xs text-gray-400 font-mono">{historyPopupCode}</span>
+                <span className="text-xs text-gray-600">({popupRecords.length}건)</span>
               </div>
               <button
                 onClick={() => setHistoryPopupCode(null)}
