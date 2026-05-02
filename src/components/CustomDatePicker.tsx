@@ -9,6 +9,7 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
   const [viewYear, setViewYear] = React.useState(() => value ? parseInt(value.slice(0,4)) : new Date().getFullYear());
   const [viewMonth, setViewMonth] = React.useState(() => value ? parseInt(value.slice(5,7)) - 1 : new Date().getMonth());
   const [yearPickMode, setYearPickMode] = React.useState(false);
+  const [monthPickMode, setMonthPickMode] = React.useState(false);
   const [yearRangeStart, setYearRangeStart] = React.useState(() => {
     const y = value ? parseInt(value.slice(0,4)) : new Date().getFullYear();
     return Math.floor(y / 12) * 12;
@@ -28,6 +29,7 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
     setViewYear(y); setViewMonth(m);
     setYearRangeStart(Math.floor(y / 12) * 12);
     setYearPickMode(false);
+    setMonthPickMode(false);
     setOpen(true);
   };
 
@@ -52,6 +54,18 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
 
   const displayText = value ? value.substring(2).replace(/-/g, '/') : placeholder;
 
+  const handleLeftArrow = () => {
+    if (yearPickMode) setYearRangeStart(s => s - 12);
+    else if (monthPickMode) setViewYear(y => y - 1);
+    else prevMonth();
+  };
+
+  const handleRightArrow = () => {
+    if (yearPickMode) setYearRangeStart(s => s + 12);
+    else if (monthPickMode) setViewYear(y => y + 1);
+    else nextMonth();
+  };
+
   return (
     <div className="relative" ref={ref}>
       <span
@@ -65,18 +79,37 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
           onMouseDown={e => e.stopPropagation()}>
           {/* Header */}
           <div className="flex items-center justify-between mb-2">
-            <button onClick={yearPickMode ? () => setYearRangeStart(s => s - 12) : prevMonth}
+            <button onClick={handleLeftArrow}
               className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">‹</button>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => { setYearPickMode(m => !m); setYearRangeStart(Math.floor(viewYear/12)*12); }}
+                onClick={() => {
+                  if (yearPickMode) {
+                    setYearPickMode(false);
+                    setMonthPickMode(false);
+                  } else {
+                    setYearPickMode(true);
+                    setMonthPickMode(false);
+                    setYearRangeStart(Math.floor(viewYear/12)*12);
+                  }
+                }}
                 className="text-blue-300 hover:text-blue-100 font-bold text-sm px-1.5 py-0.5 rounded hover:bg-gray-700 transition-colors"
               >{viewYear}년</button>
               {!yearPickMode && (
-                <span className="text-gray-300 text-xs font-bold">{MONTHS[viewMonth]}</span>
+                <button
+                  onClick={() => {
+                    if (monthPickMode) {
+                      setMonthPickMode(false);
+                    } else {
+                      setMonthPickMode(true);
+                      setYearPickMode(false);
+                    }
+                  }}
+                  className="text-gray-300 hover:text-white text-xs font-bold px-1 py-0.5 rounded hover:bg-gray-700 transition-colors"
+                >{MONTHS[viewMonth]}</button>
               )}
             </div>
-            <button onClick={yearPickMode ? () => setYearRangeStart(s => s + 12) : nextMonth}
+            <button onClick={handleRightArrow}
               className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">›</button>
           </div>
 
@@ -84,10 +117,21 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
             <div className="grid grid-cols-3 gap-1">
               {Array.from({length:12}, (_,i) => yearRangeStart + i).map(y => (
                 <button key={y}
-                  onClick={() => { setViewYear(y); setYearPickMode(false); }}
+                  onClick={() => { setViewYear(y); setYearPickMode(false); setMonthPickMode(true); }}
                   className={`py-1.5 rounded text-xs font-bold transition-colors
                     ${y === viewYear ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}>
                   {y}
+                </button>
+              ))}
+            </div>
+          ) : monthPickMode ? (
+            <div className="grid grid-cols-3 gap-1">
+              {MONTHS.map((name, mi) => (
+                <button key={mi}
+                  onClick={() => { setViewMonth(mi); setMonthPickMode(false); }}
+                  className={`py-1.5 rounded text-xs font-bold transition-colors
+                    ${mi === viewMonth && viewYear === selYear ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}>
+                  {name}
                 </button>
               ))}
             </div>
