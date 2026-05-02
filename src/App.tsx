@@ -1523,6 +1523,40 @@ export default function App() {
     if (newStart !== null) { setIntDateRange({ start: newStart, end: latest }); setIntAppliedRange({ start: newStart, end: latest }); }
   }, [intChartPeriod, intUnifiedDates]);
 
+  // ── 기본 선택기간 자동 계산 ──
+  const [defaultSelectionResult, setDefaultSelectionResult] = React.useState(null);
+  const [intDefaultSelectionResult, setIntDefaultSelectionResult] = React.useState(null);
+
+  // 개별 계좌: 조회기간 변경 시 드래그 선택 초기화 + 전체 기간 기본값 계산
+  useEffect(() => {
+    setSelectionResult(null);
+    setRefAreaLeft('');
+    setRefAreaRight('');
+  }, [appliedRange]);
+
+  useEffect(() => {
+    if (finalChartData.length < 2) { setDefaultSelectionResult(null); return; }
+    const s = finalChartData[0];
+    const e = finalChartData[finalChartData.length - 1];
+    const profit = e.evalAmount - s.evalAmount;
+    setDefaultSelectionResult({ startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? (profit / s.evalAmount) * 100 : 0 });
+  }, [finalChartData]);
+
+  // 통합 대시보드: 조회기간 변경 시 드래그 선택 초기화 + 전체 기간 기본값 계산
+  useEffect(() => {
+    setIntSelectionResult(null);
+    setIntRefAreaLeft('');
+    setIntRefAreaRight('');
+  }, [intAppliedRange]);
+
+  useEffect(() => {
+    if (intChartData.length < 2) { setIntDefaultSelectionResult(null); return; }
+    const s = intChartData[0];
+    const e = intChartData[intChartData.length - 1];
+    const profit = e.evalAmount - s.evalAmount;
+    setIntDefaultSelectionResult({ startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? ((e.evalAmount / s.evalAmount) - 1) * 100 : 0 });
+  }, [intChartData]);
+
   // 조회기간 변경 시 활성 비교종목 데이터가 범위를 커버하지 못하면 자동 전체 이력 재조회
   useEffect(() => {
     if (!appliedRange.start) return;
@@ -1886,6 +1920,7 @@ export default function App() {
             finalChartData={finalChartData}
             effectiveShowIndicators={effectiveShowIndicators}
             selectionResult={selectionResult}
+            defaultSelectionResult={defaultSelectionResult}
             refAreaLeft={refAreaLeft}
             refAreaRight={refAreaRight}
             hoveredPoint={hoveredPoint}
@@ -1968,6 +2003,7 @@ export default function App() {
             intChartData={intChartData}
             intChartPeriod={intChartPeriod}
             intSelectionResult={intSelectionResult}
+            intDefaultSelectionResult={intDefaultSelectionResult}
             intIsZeroBaseMode={intIsZeroBaseMode}
             intRefAreaLeft={intRefAreaLeft}
             intRefAreaRight={intRefAreaRight}

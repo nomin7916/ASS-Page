@@ -93,6 +93,7 @@ export default function IntegratedDashboard({
   onManualBackfill,
   sec = { dividend: false, history: false, donut: false },
   setSec,
+  intDefaultSelectionResult,
 }) {
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -462,26 +463,31 @@ export default function IntegratedDashboard({
                   </div>
                 </div>
                 {/* 드래그 기간 선택 결과 패널 */}
-                <div className="px-4 py-2 border-b border-gray-700/40 bg-[#060f1e]/70 min-h-[34px] shrink-0 flex items-center">
-                  {intSelectionResult ? (
-                    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 w-full">
-                      <span className="text-gray-500 text-[10px] font-bold shrink-0">선택 기간</span>
-                      <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(intSelectionResult.startDate)} ~ {formatShortDate(intSelectionResult.endDate)}</span>
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
-                        <span className="text-[11px] font-bold text-gray-300">수익</span>
-                        <span className={`text-[12px] font-black ${intSelectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                          {intSelectionResult.rate > 0 ? '+' : ''}{intSelectionResult.rate.toFixed(2)}%
-                        </span>
-                        <span className={`text-[10px] font-bold ${intSelectionResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
-                          ({intSelectionResult.profit >= 0 ? '+' : ''}{hideAmounts ? '••••••' : formatCurrency(intSelectionResult.profit)})
-                        </span>
-                      </div>
+                {(() => {
+                  const displayResult = intSelectionResult ?? intDefaultSelectionResult;
+                  return (
+                    <div className="px-4 py-2 border-b border-gray-700/40 bg-[#060f1e]/70 min-h-[34px] shrink-0 flex items-center">
+                      {displayResult ? (
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 w-full">
+                          <span className="text-gray-500 text-[10px] font-bold shrink-0">선택 기간</span>
+                          <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
+                            <span className="text-[11px] font-bold text-gray-300">수익</span>
+                            <span className={`text-[12px] font-black ${displayResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                              {displayResult.rate > 0 ? '+' : ''}{displayResult.rate.toFixed(2)}%
+                            </span>
+                            <span className={`text-[10px] font-bold ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
+                              ({displayResult.profit >= 0 ? '+' : ''}{hideAmounts ? '••••••' : formatCurrency(displayResult.profit)})
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
+                      )}
                     </div>
-                  ) : (
-                    <span className="text-gray-600 text-[10px]">차트를 드래그하면 기간별 수익이 표시됩니다</span>
-                  )}
-                </div>
+                  );
+                })()}
                 {/* 호버 정보 패널 */}
                 <div className="px-4 py-2 border-b border-gray-700/40 bg-[#0a1628]/60 min-h-[34px] flex items-center gap-3 overflow-x-auto shrink-0">
                   {intHoveredPoint ? (

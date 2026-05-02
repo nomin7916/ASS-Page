@@ -56,6 +56,7 @@ export default function PortfolioChart({
   handleToggleComp,
   handleFetchCompHistory,
   handleRemoveCompStock,
+  defaultSelectionResult,
 }) {
   const [showMA, setShowMA] = useState([false, false, false, false]);
 
@@ -452,95 +453,100 @@ export default function PortfolioChart({
       </div>
 
       {/* 드래그 기간 선택 결과 패널 */}
-      <div className="px-4 py-2 border-t border-gray-700/40 bg-[#060f1e]/70 min-h-[36px] shrink-0">
-        {selectionResult ? (
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <span className="text-gray-500 text-[10px] font-bold shrink-0">선택 기간</span>
-              <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(selectionResult.startDate)} ~ {formatShortDate(selectionResult.endDate)}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
-                <span className="text-[11px] font-bold text-gray-300">나의 수익</span>
-                <span className={`text-[12px] font-black ${selectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                  {selectionResult.rate > 0 ? '+' : selectionResult.rate < 0 ? '' : ''}{selectionResult.rate.toFixed(2)}%
-                </span>
-                <span className={`text-[10px] font-bold ${selectionResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
-                  ({selectionResult.profit >= 0 ? '+' : ''}{formatCurrency(selectionResult.profit)})
-                </span>
-              </div>
-              {showBacktest && selectionResult.backtestPeriodRate != null && (
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />
-                  <span className="text-[11px] font-bold text-gray-300">백테스트</span>
-                  <span className={`text-[12px] font-black ${selectionResult.backtestPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                    {selectionResult.backtestPeriodRate > 0 ? '+' : ''}{selectionResult.backtestPeriodRate.toFixed(2)}%
-                  </span>
+      {(() => {
+        const displayResult = selectionResult ?? defaultSelectionResult;
+        return (
+          <div className="px-4 py-2 border-t border-gray-700/40 bg-[#060f1e]/70 min-h-[36px] shrink-0">
+            {displayResult ? (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-500 text-[10px] font-bold shrink-0">선택 기간</span>
+                  <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
                 </div>
-              )}
-            </div>
-            {compStocks.some(c => c.active && c.code) && (
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
-                {compStocks.map((comp, ci) => {
-                  if (!comp.active || !comp.code) return null;
-                  const rate = selectionResult[`comp${ci + 1}PeriodRate`];
-                  if (rate == null) return null;
-                  const startPt = finalChartData.find(d => d.date === selectionResult.startDate)?.[`comp${ci + 1}Point`];
-                  const endPt = finalChartData.find(d => d.date === selectionResult.endDate)?.[`comp${ci + 1}Point`];
-                  return (
-                    <div key={comp.id} className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: comp.color || '#10b981' }} />
-                      <span className="text-[11px] font-bold" style={{ color: comp.color || '#10b981' }}>{comp.name}</span>
-                      <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                        {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
+                    <span className="text-[11px] font-bold text-gray-300">나의 수익</span>
+                    <span className={`text-[12px] font-black ${displayResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {displayResult.rate > 0 ? '+' : displayResult.rate < 0 ? '' : ''}{displayResult.rate.toFixed(2)}%
+                    </span>
+                    <span className={`text-[10px] font-bold ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
+                      ({displayResult.profit >= 0 ? '+' : ''}{formatCurrency(displayResult.profit)})
+                    </span>
+                  </div>
+                  {showBacktest && displayResult.backtestPeriodRate != null && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />
+                      <span className="text-[11px] font-bold text-gray-300">백테스트</span>
+                      <span className={`text-[12px] font-black ${displayResult.backtestPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {displayResult.backtestPeriodRate > 0 ? '+' : ''}{displayResult.backtestPeriodRate.toFixed(2)}%
                       </span>
-                      {startPt != null && endPt != null && (
-                        <span className="text-[10px] text-gray-500 font-mono">
-                          ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
-                        </span>
-                      )}
                     </div>
-                  );
-                })}
+                  )}
+                </div>
+                {compStocks.some(c => c.active && c.code) && (
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                    {compStocks.map((comp, ci) => {
+                      if (!comp.active || !comp.code) return null;
+                      const rate = displayResult[`comp${ci + 1}PeriodRate`];
+                      if (rate == null) return null;
+                      const startPt = finalChartData.find(d => d.date === displayResult.startDate)?.[`comp${ci + 1}Point`];
+                      const endPt = finalChartData.find(d => d.date === displayResult.endDate)?.[`comp${ci + 1}Point`];
+                      return (
+                        <div key={comp.id} className="flex items-center gap-1.5">
+                          <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: comp.color || '#10b981' }} />
+                          <span className="text-[11px] font-bold" style={{ color: comp.color || '#10b981' }}>{comp.name}</span>
+                          <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                            {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
+                          </span>
+                          {startPt != null && endPt != null && (
+                            <span className="text-[10px] text-gray-500 font-mono">
+                              ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {activePortfolioAccountType === 'gold' && (
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                    {([
+                      { key: 'goldIntl', label: 'Gold(국제)' },
+                      { key: 'goldKr',   label: '국내금(KRX)' },
+                      { key: 'usdkrw',  label: 'USD/KRW' },
+                      { key: 'dxy',     label: 'DXY' },
+                    ] as const).map(({ key, label }) => {
+                      const color = goldIndicatorColors[key];
+                      if (!goldIndicators[key]) return null;
+                      const rate = displayResult[`${key}PeriodRate`];
+                      if (rate == null) return null;
+                      const startPt = finalChartData.find(d => d.date === displayResult.startDate)?.[`${key}Point`];
+                      const endPt = finalChartData.find(d => d.date === displayResult.endDate)?.[`${key}Point`];
+                      return (
+                        <div key={key} className="flex items-center gap-1.5">
+                          <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: color }} />
+                          <span className="text-[11px] font-bold" style={{ color }}>{label}</span>
+                          <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                            {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
+                          </span>
+                          {startPt != null && endPt != null && (
+                            <span className="text-[10px] text-gray-500 font-mono">
+                              ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-            {activePortfolioAccountType === 'gold' && (
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
-                {([
-                  { key: 'goldIntl', label: 'Gold(국제)' },
-                  { key: 'goldKr',   label: '국내금(KRX)' },
-                  { key: 'usdkrw',  label: 'USD/KRW' },
-                  { key: 'dxy',     label: 'DXY' },
-                ] as const).map(({ key, label }) => {
-                  const color = goldIndicatorColors[key];
-                  if (!goldIndicators[key]) return null;
-                  const rate = selectionResult[`${key}PeriodRate`];
-                  if (rate == null) return null;
-                  const startPt = finalChartData.find(d => d.date === selectionResult.startDate)?.[`${key}Point`];
-                  const endPt = finalChartData.find(d => d.date === selectionResult.endDate)?.[`${key}Point`];
-                  return (
-                    <div key={key} className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: color }} />
-                      <span className="text-[11px] font-bold" style={{ color }}>{label}</span>
-                      <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                        {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
-                      </span>
-                      {startPt != null && endPt != null && (
-                        <span className="text-[10px] text-gray-500 font-mono">
-                          ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+            ) : (
+              <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
             )}
           </div>
-        ) : (
-          <span className="text-gray-600 text-[10px]">차트를 드래그하면 기간별 수익이 표시됩니다</span>
-        )}
-      </div>
+        );
+      })()}
 
       <div
         className="chart-container-for-drag p-4 min-h-[400px] xl:flex-1 relative select-none"
