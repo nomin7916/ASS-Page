@@ -941,9 +941,17 @@ export default function App() {
     // 오늘은 항상 현재 총합으로 덮어씀 (일부 계좌만 오늘 기록된 경우 보정)
     if (intTotals.totalEval > 0) dateToTotal.set(today, intTotals.totalEval);
     return [...dateToTotal.entries()]
-      .map(([date, evalAmount]) => ({ id: date, date, evalAmount }))
+      .map(([date, evalAmount]) => {
+        // 해당 날짜에 이미 시작된 계좌의 원금만 합산 (날짜별 유효 원금)
+        const effectivePrincipal = portfolios.reduce((sum, p) => {
+          const sd = p.portfolioStartDate || p.startDate || '';
+          const pr = p.id === activePortfolioId ? principal : (p.principal || 0);
+          return sum + (sd && sd <= date ? pr : 0);
+        }, 0);
+        return { id: date, date, evalAmount, effectivePrincipal };
+      })
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, history, activePortfolioId, intTotals.totalEval]);
+  }, [portfolios, history, activePortfolioId, intTotals.totalEval, principal]);
 
   const intSortedHistory = useMemo(() =>
     [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
@@ -964,22 +972,20 @@ export default function App() {
       ? intSortedHistory.filter(h => intFilteredDates.includes(h.date))
       : intSortedHistory;
     if (all.length === 0) return [];
-    const totalPrincipal = intTotals.totalPrincipal;
-    // 기간기준: 일부 계좌만 있던 날짜를 완전히 제외 (원금 70% 미만 = 계좌 미완성 기간)
-    // 제외하지 않으면 미래 날짜가 기준점이 되어 과거 날짜가 음수 수익률로 표시되는 왜곡 발생
-    const filtered = intIsZeroBaseMode && totalPrincipal > 0
-      ? (() => { const valid = all.filter(h => h.evalAmount >= totalPrincipal * 0.7); return valid.length > 0 ? valid : all; })()
+    // 날짜별 유효 원금(effectivePrincipal) 기반으로 필터링: 해당 날짜 유효 원금의 70% 미만인 경우 제외
+    const filtered = intIsZeroBaseMode
+      ? (() => { const valid = all.filter(h => h.effectivePrincipal > 0 && h.evalAmount >= h.effectivePrincipal * 0.7); return valid.length > 0 ? valid : all; })()
       : all;
     const baseEval = filtered[0].evalAmount;
     return filtered.map(h => ({
       date: h.date,
       evalAmount: h.evalAmount,
-      costAmount: totalPrincipal,
+      costAmount: h.effectivePrincipal,
       returnRate: intIsZeroBaseMode
         ? (baseEval > 0 ? ((h.evalAmount / baseEval) - 1) * 100 : 0)
-        : (totalPrincipal > 0 ? ((h.evalAmount - totalPrincipal) / totalPrincipal * 100) : 0),
+        : (h.effectivePrincipal > 0 ? ((h.evalAmount - h.effectivePrincipal) / h.effectivePrincipal * 100) : 0),
     }));
-  }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode, intTotals.totalPrincipal]);
+  }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode]);
 
   const {
     handleChartMouseDown, handleChartMouseMove, handleChartMouseUp, handleChartMouseLeave,
@@ -1028,9 +1034,9 @@ export default function App() {
 
   const intMonthlyHistory = useMemo(() => {
     const sortedDesc = [...computedIntHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const totalPrincipal = intTotals.totalPrincipal;
     return sortedDesc.map((h, i) => {
-      const monthlyChange = totalPrincipal > 0 ? ((h.evalAmount - totalPrincipal) / totalPrincipal) * 100 : 0;
+      const ep = h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal;
+      const monthlyChange = ep > 0 ? ((h.evalAmount - ep) / ep) * 100 : 0;
       const prevRecord = sortedDesc[i + 1];
       const dodChange = (prevRecord && prevRecord.evalAmount > 0)
         ? ((h.evalAmount / prevRecord.evalAmount) - 1) * 100 : 0;
