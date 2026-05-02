@@ -239,6 +239,7 @@ export default function App() {
     intSelectionResult, setIntSelectionResult,
     intIsDragging, setIntIsDragging,
     intIsZeroBaseMode, setIntIsZeroBaseMode,
+    intHoveredPoint, setIntHoveredPoint,
   } = useHistoryChart();
 
   // ── useDriveSync 훅 ──
@@ -982,13 +983,13 @@ export default function App() {
 
   const {
     handleChartMouseDown, handleChartMouseMove, handleChartMouseUp, handleChartMouseLeave,
-    handleIntChartMouseDown, handleIntChartMouseMove, handleIntChartMouseUp,
+    handleIntChartMouseDown, handleIntChartMouseMove, handleIntChartMouseUp, handleIntChartMouseLeave,
   } = useChartInteraction({
     finalChartData, intChartData, compStocks, INDICATOR_CHART_KEYS,
     isDragging, setIsDragging, refAreaLeft, setRefAreaLeft, refAreaRight, setRefAreaRight,
     setSelectionResult, setHoveredPoint,
     intIsDragging, setIntIsDragging, intRefAreaLeft, setIntRefAreaLeft, intRefAreaRight, setIntRefAreaRight,
-    setIntSelectionResult,
+    setIntSelectionResult, setIntHoveredPoint,
   });
 
   // ── useStockData 훅 ──
@@ -1520,19 +1521,29 @@ export default function App() {
   }, [chartPeriod, unifiedDates]);
 
 
+  const handleIntSearchClick = () => {
+    if (intDateRange.start && intDateRange.end) {
+      setIntAppliedRange({ start: intDateRange.start, end: intDateRange.end });
+      setIntChartPeriod('custom');
+    }
+  };
+
   // 통합 대시보드 - 기간 버튼 변경 시 차트 범위 업데이트
   useEffect(() => {
     if (intUnifiedDates.length === 0) return;
     const latest = intUnifiedDates[intUnifiedDates.length - 1];
     const earliest = intUnifiedDates[0];
     let newStart = latest;
-    if (intChartPeriod === '1m') { const d = new Date(latest); d.setMonth(d.getMonth() - 1); newStart = d.toISOString().split('T')[0]; }
+    if (intChartPeriod === '1w') { const d = new Date(latest); d.setDate(d.getDate() - 7); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '1m') { const d = new Date(latest); d.setMonth(d.getMonth() - 1); newStart = d.toISOString().split('T')[0]; }
     else if (intChartPeriod === '3m') { const d = new Date(latest); d.setMonth(d.getMonth() - 3); newStart = d.toISOString().split('T')[0]; }
     else if (intChartPeriod === '6m') { const d = new Date(latest); d.setMonth(d.getMonth() - 6); newStart = d.toISOString().split('T')[0]; }
     else if (intChartPeriod === '1y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 1); newStart = d.toISOString().split('T')[0]; }
     else if (intChartPeriod === '2y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 2); newStart = d.toISOString().split('T')[0]; }
     else if (intChartPeriod === '3y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 3); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '4y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 4); newStart = d.toISOString().split('T')[0]; }
     else if (intChartPeriod === '5y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 5); newStart = d.toISOString().split('T')[0]; }
+    else if (intChartPeriod === '10y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 10); newStart = d.toISOString().split('T')[0]; }
     else if (intChartPeriod === 'all') { newStart = earliest; }
     if (intChartPeriod !== 'custom') {
       if (new Date(newStart) < new Date(earliest)) newStart = earliest;
@@ -2001,6 +2012,10 @@ export default function App() {
             sec={intSec}
             setSec={setIntSec}
             setIntChartPeriod={setIntChartPeriod}
+            intDateRange={intDateRange}
+            setIntDateRange={setIntDateRange}
+            setIntAppliedRange={setIntAppliedRange}
+            handleIntSearchClick={handleIntSearchClick}
             setIntIsZeroBaseMode={setIntIsZeroBaseMode}
             setHoveredIntCatSlice={setHoveredIntCatSlice}
             setHoveredIntHoldSlice={setHoveredIntHoldSlice}
@@ -2020,6 +2035,8 @@ export default function App() {
             handleIntChartMouseDown={handleIntChartMouseDown}
             handleIntChartMouseMove={handleIntChartMouseMove}
             handleIntChartMouseUp={handleIntChartMouseUp}
+            handleIntChartMouseLeave={handleIntChartMouseLeave}
+            intHoveredPoint={intHoveredPoint}
             handleSave={handleSave}
             allPortfoliosForDividend={allPortfoliosForDividend}
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}

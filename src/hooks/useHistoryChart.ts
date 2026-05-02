@@ -48,6 +48,7 @@ export function useHistoryChart() {
   const [intSelectionResult, setIntSelectionResult] = useState(null);
   const [intIsDragging, setIntIsDragging] = useState(false);
   const [intIsZeroBaseMode, setIntIsZeroBaseMode] = useState(true);
+  const [intHoveredPoint, setIntHoveredPoint] = useState(null);
 
   return {
     // 개별 계좌 차트
@@ -91,5 +92,6 @@ export function useHistoryChart() {
     intSelectionResult, setIntSelectionResult,
     intIsDragging, setIntIsDragging,
     intIsZeroBaseMode, setIntIsZeroBaseMode,
+    intHoveredPoint, setIntHoveredPoint,
   };
 }

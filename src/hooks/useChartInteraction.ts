@@ -12,6 +12,7 @@ export function useChartInteraction({
   intRefAreaLeft, setIntRefAreaLeft,
   intRefAreaRight, setIntRefAreaRight,
   setIntSelectionResult,
+  setIntHoveredPoint,
 }: {
   finalChartData: any[];
   intChartData: any[];
@@ -26,6 +27,7 @@ export function useChartInteraction({
   intRefAreaLeft: string; setIntRefAreaLeft: (v: string) => void;
   intRefAreaRight: string; setIntRefAreaRight: (v: string) => void;
   setIntSelectionResult: (v: any) => void;
+  setIntHoveredPoint: (v: any) => void;
 }) {
   const calculateSelection = (left: string, right: string) => {
     if (!left || !right) return null;
@@ -86,6 +88,7 @@ export function useChartInteraction({
 
   const handleIntChartMouseMove = (e: any) => {
     if (intIsDragging && e && e.activeLabel) setIntRefAreaRight(e.activeLabel);
+    if (e?.activeLabel && e?.activePayload?.length) setIntHoveredPoint({ label: e.activeLabel, payload: e.activePayload });
   };
 
   const handleIntChartMouseUp = () => {
@@ -105,8 +108,10 @@ export function useChartInteraction({
     setIntRefAreaLeft(''); setIntRefAreaRight('');
   };
 
+  const handleIntChartMouseLeave = () => { setIntHoveredPoint(null); handleIntChartMouseUp(); };
+
   return {
     handleChartMouseDown, handleChartMouseMove, handleChartMouseUp, handleChartMouseLeave,
-    handleIntChartMouseDown, handleIntChartMouseMove, handleIntChartMouseUp,
+    handleIntChartMouseDown, handleIntChartMouseMove, handleIntChartMouseUp, handleIntChartMouseLeave,
   };
 }

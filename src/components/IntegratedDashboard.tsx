@@ -1,9 +1,9 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback } from 'react';
-import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus } from 'lucide-react';
+import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus, Search } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
-  YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea,
+  YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, ReferenceLine,
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum } from '../utils';
@@ -52,6 +52,10 @@ export default function IntegratedDashboard({
   showNewAccountMenu,
   hideAmounts,
   setIntChartPeriod,
+  intDateRange,
+  setIntDateRange,
+  setIntAppliedRange,
+  handleIntSearchClick,
   setIntIsZeroBaseMode,
   setHoveredIntCatSlice,
   setHoveredIntHoldSlice,
@@ -71,6 +75,8 @@ export default function IntegratedDashboard({
   handleIntChartMouseDown,
   handleIntChartMouseMove,
   handleIntChartMouseUp,
+  handleIntChartMouseLeave,
+  intHoveredPoint,
   handleSave,
   allPortfoliosForDividend,
   updatePortfolioDividendHistory,
@@ -437,25 +443,77 @@ export default function IntegratedDashboard({
 
               {/* 기간별 수익 차트 */}
               <div className="w-full xl:flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
+                {/* 헤더: 제목 + 날짜범위 + 드롭다운 */}
                 <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-wrap gap-2 items-center shrink-0">
-                  <span className="text-white font-bold text-sm">📈 기간별 수익 차트 (통합)</span>
-                  <div className="flex flex-wrap gap-1 ml-2">
-                    {['1m','3m','6m','1y','2y','3y','5y','all'].map(p => (
-                      <button key={p} onClick={() => setIntChartPeriod(p)} className={`px-2 py-0.5 rounded text-xs font-bold transition-colors ${intChartPeriod === p ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>{p}</button>
-                    ))}
-                  </div>
-                  <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`ml-auto text-xs px-2 py-0.5 rounded font-bold transition-colors ${intIsZeroBaseMode ? 'bg-indigo-800/60 text-indigo-300 border border-indigo-700' : 'text-gray-500 hover:text-gray-300 border border-gray-700'}`} title="기간 시작 기준 / 원금 기준 전환">{intIsZeroBaseMode ? '기간기준' : '원금기준'}</button>
-                </div>
-                <div className="chart-container-for-drag p-3 sm:p-4 relative select-none h-[300px] sm:h-[340px] md:h-[380px] xl:h-[420px]">
-                  {intSelectionResult && (
-                    <div className="absolute top-4 left-4 bg-gray-900/95 border border-gray-600 rounded-xl px-4 py-2.5 shadow-lg z-20 flex flex-col items-start pointer-events-none">
-                      <span className="text-gray-400 text-[11px] mb-1 font-bold">{formatShortDate(intSelectionResult.startDate)} ~ {formatShortDate(intSelectionResult.endDate)}</span>
-                      <span className={`text-xl font-black ${intSelectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{intSelectionResult.profit > 0 ? '▲' : '▼'} {Math.abs(intSelectionResult.rate).toFixed(2)}%</span>
-                      <span className={`text-xs font-bold mt-1 ${intSelectionResult.profit >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{hideAmounts ? '••••••' : `${intSelectionResult.profit >= 0 ? '+' : ''}${formatCurrency(intSelectionResult.profit)}`}</span>
+                  <span className="text-white font-bold text-sm shrink-0">📈 기간별 수익 차트 (통합)</span>
+                  <div className="flex items-center gap-2 ml-auto flex-wrap justify-end">
+                    <div className="flex items-center bg-gray-800 border border-gray-600 rounded shadow-sm px-1.5 py-1 relative z-30">
+                      <CustomDatePicker
+                        value={intDateRange.start}
+                        onChange={v => { setIntDateRange(p => ({ ...p, start: v })); setIntChartPeriod('custom'); }}
+                      />
+                      <span className="text-gray-500 mx-0.5">~</span>
+                      <CustomDatePicker
+                        value={intDateRange.end}
+                        onChange={v => { setIntDateRange(p => ({ ...p, end: v })); setIntChartPeriod('custom'); }}
+                      />
+                      <div className="w-[1px] h-4 bg-gray-600 mx-1.5" />
+                      <button onClick={handleIntSearchClick} className="text-blue-400 hover:text-blue-300 hover:bg-gray-700 rounded p-1.5 transition-colors" title="조회">
+                        <Search size={14} />
+                      </button>
                     </div>
+                    <select
+                      value={intChartPeriod}
+                      onChange={e => setIntChartPeriod(e.target.value)}
+                      className="bg-gray-800 text-gray-300 text-xs font-bold border border-gray-600 rounded px-2 py-1.5 outline-none cursor-pointer hover:bg-gray-700 transition-colors shadow-sm"
+                    >
+                      <option value="1w">1주일</option>
+                      <option value="1m">1개월</option>
+                      <option value="3m">3개월</option>
+                      <option value="6m">6개월</option>
+                      <option value="1y">1년</option>
+                      <option value="2y">2년</option>
+                      <option value="3y">3년</option>
+                      <option value="4y">4년</option>
+                      <option value="5y">5년</option>
+                      <option value="10y">10년</option>
+                      <option value="all">전체</option>
+                      <option value="custom" hidden>직접입력</option>
+                    </select>
+                    <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`text-xs px-2 py-1.5 rounded font-bold transition-colors ${intIsZeroBaseMode ? 'bg-indigo-800/60 text-indigo-300 border border-indigo-700' : 'text-gray-500 hover:text-gray-300 border border-gray-700'}`} title="기간 시작 기준 / 원금 기준 전환">{intIsZeroBaseMode ? '기간기준' : '원금기준'}</button>
+                  </div>
+                </div>
+                {/* 호버 정보 패널 */}
+                <div className="px-4 py-2 border-b border-gray-700/40 bg-[#0a1628]/60 min-h-[34px] flex items-center gap-3 overflow-x-auto shrink-0">
+                  {intHoveredPoint ? (
+                    <>
+                      <span className="text-gray-400 text-[11px] font-bold shrink-0 mr-1">{formatShortDate(intHoveredPoint.label)}</span>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
+                        {intHoveredPoint.payload
+                          .filter(entry => entry.dataKey && entry.value != null)
+                          .map((entry, i) => {
+                            const isRate = entry.dataKey === 'returnRate';
+                            const displayVal = isRate
+                              ? `${Number(entry.value) >= 0 ? '+' : ''}${Number(entry.value).toFixed(2)}%`
+                              : (hideAmounts ? '••••••' : formatCurrency(entry.value));
+                            return (
+                              <div key={i} className="flex items-center gap-1.5 shrink-0">
+                                <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
+                                <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
+                                <span className={`text-[11px] ${isRate ? (Number(entry.value) >= 0 ? 'text-red-400' : 'text-blue-400') : 'text-gray-300'}`}>{displayVal}</span>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-gray-600 text-[10px]">차트를 드래그하면 기간별 수익이 표시됩니다</span>
                   )}
+                </div>
+                {/* 차트 영역 */}
+                <div className="chart-container-for-drag px-2 pt-2 pb-1 relative select-none h-[260px] sm:h-[300px] md:h-[340px] xl:h-[370px]">
                   <ResponsiveContainer width="100%" height="100%" minHeight={200}>
-                    <ComposedChart data={intChartData} onMouseDown={handleIntChartMouseDown} onMouseMove={handleIntChartMouseMove} onMouseUp={handleIntChartMouseUp} onMouseLeave={handleIntChartMouseUp}>
+                    <ComposedChart data={intChartData} onMouseDown={handleIntChartMouseDown} onMouseMove={handleIntChartMouseMove} onMouseUp={handleIntChartMouseUp} onMouseLeave={handleIntChartMouseLeave}>
                       <defs>
                         <linearGradient id="intReturnGrad" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
@@ -465,34 +523,46 @@ export default function IntegratedDashboard({
                           <stop offset="5%" stopColor="#6b7280" stopOpacity={0.35} />
                           <stop offset="95%" stopColor="#6b7280" stopOpacity={0.05} />
                         </linearGradient>
+                        <linearGradient id="intEvalGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#60a5fa" stopOpacity={0.15} />
+                          <stop offset="95%" stopColor="#60a5fa" stopOpacity={0} />
+                        </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.5} />
                       <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatVeryShortDate} minTickGap={30} />
                       <YAxis yAxisId="left" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => `${v.toFixed(1)}%`} width={48} />
                       <YAxis yAxisId="right" orientation="right" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => (v >= 1e8 ? (v/1e8).toFixed(1)+'억' : (v/1e4).toFixed(0)+'만')} width={55} />
-                      <RechartsTooltip content={({ active, payload, label }) => {
-                        if (!active || !payload?.length) return null;
-                        return (
-                          <div style={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #4b5563', borderRadius: 8, padding: '10px 14px', minWidth: 180 }}>
-                            <p style={{ color: '#9ca3af', fontSize: 11, fontWeight: 700, marginBottom: 6 }}>{formatShortDate(label)}</p>
-                            {payload.filter(e => e.dataKey !== 'costAmount' || e.value > 0).map((entry, i) => (
-                              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 3 }}>
-                                <span style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, display: 'inline-block', flexShrink: 0 }} />
-                                <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 600, marginRight: 4 }}>{entry.name}</span>
-                                <span style={{ fontSize: 11, color: '#e5e7eb', fontWeight: 700, marginLeft: 'auto' }}>
-                                  {entry.name === '수익률' ? `${Number(entry.value).toFixed(2)}%` : (hideAmounts ? '••••••' : formatCurrency(entry.value))}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      }} />
-                      <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={{ r: 3 }} />
-                      <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={{ r: 4 }} />
-                      <Line yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} dot={false} />
+                      <RechartsTooltip content={() => null} />
+                      <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={false} />
+                      <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={false} />
+                      <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} fill="url(#intEvalGrad)" dot={false} activeDot={false} />
+                      {intHoveredPoint && !intRefAreaLeft && (
+                        <ReferenceLine yAxisId="left" x={intHoveredPoint.label} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />
+                      )}
                       {intRefAreaLeft && intRefAreaRight && <ReferenceArea yAxisId="left" x1={intRefAreaLeft} x2={intRefAreaRight} fill="rgba(255,255,255,0.08)" strokeOpacity={0.3} />}
                     </ComposedChart>
                   </ResponsiveContainer>
+                </div>
+                {/* 드래그 기간 선택 결과 패널 */}
+                <div className="px-4 py-2 border-t border-gray-700/40 bg-[#060f1e]/70 min-h-[34px] shrink-0 flex items-center">
+                  {intSelectionResult ? (
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 w-full">
+                      <span className="text-gray-500 text-[10px] font-bold shrink-0">선택 기간</span>
+                      <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(intSelectionResult.startDate)} ~ {formatShortDate(intSelectionResult.endDate)}</span>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
+                        <span className="text-[11px] font-bold text-gray-300">수익</span>
+                        <span className={`text-[12px] font-black ${intSelectionResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                          {intSelectionResult.rate > 0 ? '+' : ''}{intSelectionResult.rate.toFixed(2)}%
+                        </span>
+                        <span className={`text-[10px] font-bold ${intSelectionResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
+                          ({intSelectionResult.profit >= 0 ? '+' : ''}{hideAmounts ? '••••••' : formatCurrency(intSelectionResult.profit)})
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-gray-600 text-[10px]">차트를 드래그하면 기간별 수익이 표시됩니다</span>
+                  )}
                 </div>
               </div>
             </div>
