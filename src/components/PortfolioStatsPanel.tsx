@@ -49,14 +49,12 @@ export default function PortfolioStatsPanel({
   const daysFromStart = portfolioStartDate
     ? (Date.now() - new Date(portfolioStartDate).getTime()) / (1000 * 60 * 60 * 24)
     : 0;
-  const usdCagr =
-    isOv && daysFromStart > 0 && principal > 0 && usdEval > 0
-      ? daysFromStart < 365
-        ? (usdEval / principal - 1) * 100
-        : (Math.pow(usdEval / principal, 365.25 / daysFromStart) - 1) * 100
+  const usdSimpleReturn =
+    isOv && principal > 0 && usdEval > 0
+      ? (usdEval / principal - 1) * 100
       : 0;
+  const krwSimpleReturn = principalKRW > 0 ? (totals.totalEval / principalKRW - 1) * 100 : 0;
   const fxGain = isOv ? (fx - effectiveFx) * principal : 0;
-  const years = daysFromStart / 365.25;
 
   const handleDragStart = (e) => {
     if (e.button !== 0) return;
@@ -201,8 +199,8 @@ export default function PortfolioStatsPanel({
               <div className="flex-1 flex flex-col items-center justify-around border-r border-gray-700 bg-gray-900/40 p-1.5 overflow-hidden">
                 <div className="flex flex-col items-center gap-0">
                   <span className="text-[9px] text-gray-500 font-bold">달러 기준</span>
-                  <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${usdCagr >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-                    {formatPercent(usdCagr)}
+                  <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${usdSimpleReturn >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                    {formatPercent(usdSimpleReturn)}
                   </span>
                 </div>
                 <span className={`text-[11px] font-bold tracking-wide whitespace-nowrap ${usdProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
@@ -214,8 +212,8 @@ export default function PortfolioStatsPanel({
               <div className="flex-1 flex flex-col items-center justify-around bg-gray-900/40 p-1.5 overflow-hidden">
                 <div className="flex flex-col items-center gap-0">
                   <span className="text-[9px] text-gray-500 font-bold">환 평가</span>
-                  <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${cagr >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-                    {formatPercent(cagr)}
+                  <span className={`text-[17px] font-extrabold leading-none tracking-wide whitespace-nowrap ${krwSimpleReturn >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                    {formatPercent(krwSimpleReturn)}
                   </span>
                 </div>
                 <span className={`text-[11px] font-bold tracking-wide whitespace-nowrap ${profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
@@ -284,35 +282,17 @@ export default function PortfolioStatsPanel({
               {/* 공식 */}
               <div className="bg-gray-800/50 rounded px-3 py-2 space-y-1">
                 <div className="text-gray-500 text-[10px] font-bold mb-1">공식</div>
-                {daysFromStart < 365 ? (
-                  <>
-                    <div className="text-gray-300">수익률  =  ( 평가 KRW  ÷  원금 KRW )  −  1</div>
-                    <div className="text-gray-600 text-[10px]">※ 투자기간 1년 미만 → 단순 수익률 적용</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-gray-300">CAGR  =  ( 평가 KRW  ÷  원금 KRW ) <sup className="text-[9px]">( 1 ÷ n )</sup>  −  1</div>
-                    <div className="text-gray-500 pl-2">n  =  투자일수  ÷  365.25  <span className="text-gray-600">(단위: 년)</span></div>
-                  </>
-                )}
+                <div className="text-gray-300">수익률  =  ( 평가 KRW  ÷  원금 KRW )  −  1</div>
               </div>
 
               {/* 계산 */}
               <div className="space-y-0.5 pl-1">
                 <div className="text-gray-500 text-[10px] font-bold mb-1">계산</div>
-                <div className="text-gray-400">투자일수  =  {Math.round(daysFromStart)} 일
-                  {daysFromStart >= 365 && <span className="text-gray-600">  →  n  =  {years.toFixed(2)} 년</span>}
-                </div>
                 <div className="text-gray-400">평가 KRW  =  {formatCurrency(totals.totalEval)}</div>
                 <div className="text-gray-400">원금 KRW  =  {formatCurrency(principalKRW)}</div>
-                <div className="text-gray-400 pt-0.5">
-                  {daysFromStart < 365
-                    ? <>= ( {formatCurrency(totals.totalEval)}  ÷  {formatCurrency(principalKRW)} )  −  1</>
-                    : <>= ( {formatCurrency(totals.totalEval)}  ÷  {formatCurrency(principalKRW)} ) <sup className="text-[9px]">( 1 ÷ {years.toFixed(2)} )</sup>  −  1</>
-                  }
-                </div>
-                <div className={`font-bold text-[13px] pt-0.5 ${cagr >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                  =  {formatPercent(cagr)}
+                <div className="text-gray-400 pt-0.5">= ( {formatCurrency(totals.totalEval)}  ÷  {formatCurrency(principalKRW)} )  −  1</div>
+                <div className={`font-bold text-[13px] pt-0.5 ${krwSimpleReturn >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  =  {formatPercent(krwSimpleReturn)}
                 </div>
               </div>
 
@@ -336,35 +316,17 @@ export default function PortfolioStatsPanel({
               {/* 공식 */}
               <div className="bg-gray-800/50 rounded px-3 py-2 space-y-1">
                 <div className="text-gray-500 text-[10px] font-bold mb-1">공식</div>
-                {daysFromStart < 365 ? (
-                  <>
-                    <div className="text-gray-300">수익률  =  ( 평가$  ÷  원금$ )  −  1</div>
-                    <div className="text-gray-600 text-[10px]">※ 투자기간 1년 미만 → 단순 수익률 적용</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-gray-300">CAGR  =  ( 평가$  ÷  원금$ ) <sup className="text-[9px]">( 1 ÷ n )</sup>  −  1</div>
-                    <div className="text-gray-500 pl-2">n  =  투자일수  ÷  365.25  <span className="text-gray-600">(단위: 년)</span></div>
-                  </>
-                )}
+                <div className="text-gray-300">수익률  =  ( 평가$  ÷  원금$ )  −  1</div>
               </div>
 
               {/* 계산 */}
               <div className="space-y-0.5 pl-1">
                 <div className="text-gray-500 text-[10px] font-bold mb-1">계산</div>
-                <div className="text-gray-400">투자일수  =  {Math.round(daysFromStart)} 일
-                  {daysFromStart >= 365 && <span className="text-gray-600">  →  n  =  {years.toFixed(2)} 년</span>}
-                </div>
                 <div className="text-gray-400">평가$  =  {fmtUS(usdEval)}</div>
                 <div className="text-gray-400">원금$  =  {fmtUS(principal)}</div>
-                <div className="text-gray-400 pt-0.5">
-                  {daysFromStart < 365
-                    ? <>= ( {fmtUS(usdEval)}  ÷  {fmtUS(principal)} )  −  1</>
-                    : <>= ( {fmtUS(usdEval)}  ÷  {fmtUS(principal)} ) <sup className="text-[9px]">( 1 ÷ {years.toFixed(2)} )</sup>  −  1</>
-                  }
-                </div>
-                <div className={`font-bold text-[13px] pt-0.5 ${usdCagr >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                  =  {formatPercent(usdCagr)}
+                <div className="text-gray-400 pt-0.5">= ( {fmtUS(usdEval)}  ÷  {fmtUS(principal)} )  −  1</div>
+                <div className={`font-bold text-[13px] pt-0.5 ${usdSimpleReturn >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                  =  {formatPercent(usdSimpleReturn)}
                 </div>
               </div>
 
