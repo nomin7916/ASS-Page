@@ -14,6 +14,7 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
     const y = value ? parseInt(value.slice(0,4)) : new Date().getFullYear();
     return Math.floor(y / 12) * 12;
   });
+  const [popupPos, setPopupPos] = React.useState({ top: 0, left: 0 });
   const ref = React.useRef(null);
 
   React.useEffect(() => {
@@ -30,6 +31,22 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
     setYearRangeStart(Math.floor(y / 12) * 12);
     setYearPickMode(false);
     setMonthPickMode(false);
+
+    if (ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      const popupW = 220;
+      let left;
+      if (align === 'right') {
+        left = rect.right - popupW;
+      } else if (align === 'left') {
+        left = rect.left;
+      } else {
+        left = rect.left + rect.width / 2 - popupW / 2;
+      }
+      left = Math.max(4, Math.min(left, window.innerWidth - popupW - 4));
+      setPopupPos({ top: rect.bottom + 4, left });
+    }
+
     setOpen(true);
   };
 
@@ -66,8 +83,6 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
     else nextMonth();
   };
 
-  const popupAlign = align === 'right' ? 'right-0' : align === 'left' ? 'left-0' : 'left-1/2 -translate-x-1/2';
-
   return (
     <div className="relative" ref={ref}>
       {trigger
@@ -82,96 +97,102 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
         )
       }
       {open && (
-        <div className={`absolute top-8 z-50 bg-gray-900 border border-gray-600 rounded-lg shadow-2xl p-3 w-[220px] ${popupAlign}`}
-          onMouseDown={e => e.stopPropagation()}>
-          {/* Header */}
-          <div className="flex items-center justify-between mb-2">
-            <button onClick={handleLeftArrow}
-              className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">‹</button>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => {
-                  if (yearPickMode) {
-                    setYearPickMode(false);
-                    setMonthPickMode(false);
-                  } else {
-                    setYearPickMode(true);
-                    setMonthPickMode(false);
-                    setYearRangeStart(Math.floor(viewYear/12)*12);
-                  }
-                }}
-                className="text-blue-300 hover:text-blue-100 font-bold text-sm px-1.5 py-0.5 rounded hover:bg-gray-700 transition-colors"
-              >{viewYear}년</button>
-              {!yearPickMode && (
+        <>
+          <div className="fixed inset-0 z-[998]" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-[999] bg-gray-900 border border-gray-600 rounded-lg shadow-2xl p-3 w-[220px]"
+            style={{ top: popupPos.top, left: popupPos.left }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between mb-2">
+              <button onClick={handleLeftArrow}
+                className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">‹</button>
+              <div className="flex items-center gap-1">
                 <button
                   onClick={() => {
-                    if (monthPickMode) {
+                    if (yearPickMode) {
+                      setYearPickMode(false);
                       setMonthPickMode(false);
                     } else {
-                      setMonthPickMode(true);
-                      setYearPickMode(false);
+                      setYearPickMode(true);
+                      setMonthPickMode(false);
+                      setYearRangeStart(Math.floor(viewYear/12)*12);
                     }
                   }}
-                  className="text-gray-300 hover:text-white text-xs font-bold px-1 py-0.5 rounded hover:bg-gray-700 transition-colors"
-                >{MONTHS[viewMonth]}</button>
-              )}
+                  className="text-blue-300 hover:text-blue-100 font-bold text-sm px-1.5 py-0.5 rounded hover:bg-gray-700 transition-colors"
+                >{viewYear}년</button>
+                {!yearPickMode && (
+                  <button
+                    onClick={() => {
+                      if (monthPickMode) {
+                        setMonthPickMode(false);
+                      } else {
+                        setMonthPickMode(true);
+                        setYearPickMode(false);
+                      }
+                    }}
+                    className="text-gray-300 hover:text-white text-xs font-bold px-1 py-0.5 rounded hover:bg-gray-700 transition-colors"
+                  >{MONTHS[viewMonth]}</button>
+                )}
+              </div>
+              <button onClick={handleRightArrow}
+                className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">›</button>
             </div>
-            <button onClick={handleRightArrow}
-              className="text-gray-400 hover:text-white hover:bg-gray-700 rounded px-1.5 py-0.5 text-sm transition-colors">›</button>
-          </div>
 
-          {yearPickMode ? (
-            <div className="grid grid-cols-3 gap-1">
-              {Array.from({length:12}, (_,i) => yearRangeStart + i).map(y => (
-                <button key={y}
-                  onClick={() => { setViewYear(y); setYearPickMode(false); setMonthPickMode(true); }}
-                  className={`py-1.5 rounded text-xs font-bold transition-colors
-                    ${y === viewYear ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}>
-                  {y}
-                </button>
-              ))}
-            </div>
-          ) : monthPickMode ? (
-            <div className="grid grid-cols-3 gap-1">
-              {MONTHS.map((name, mi) => (
-                <button key={mi}
-                  onClick={() => { setViewMonth(mi); setMonthPickMode(false); }}
-                  className={`py-1.5 rounded text-xs font-bold transition-colors
-                    ${mi === viewMonth && viewYear === selYear ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}>
-                  {name}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-7 mb-1">
-                {DAYS.map((d,i) => (
-                  <span key={d} className={`text-center text-[10px] font-bold py-0.5
-                    ${i===0?'text-red-400':i===6?'text-blue-400':'text-gray-500'}`}>{d}</span>
+            {yearPickMode ? (
+              <div className="grid grid-cols-3 gap-1">
+                {Array.from({length:12}, (_,i) => yearRangeStart + i).map(y => (
+                  <button key={y}
+                    onClick={() => { setViewYear(y); setYearPickMode(false); setMonthPickMode(true); }}
+                    className={`py-1.5 rounded text-xs font-bold transition-colors
+                      ${y === viewYear ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}>
+                    {y}
+                  </button>
                 ))}
               </div>
-              <div className="grid grid-cols-7 gap-y-0.5">
-                {Array.from({length: totalCells}, (_,i) => {
-                  const dayNum = i - firstDow(viewYear, viewMonth) + 1;
-                  const valid = dayNum >= 1 && dayNum <= daysInMonth(viewYear, viewMonth);
-                  const isSelected = valid && dayNum === selDay && viewMonth === selMonth && viewYear === selYear;
-                  const dow = i % 7;
-                  return (
-                    <button key={i}
-                      onClick={() => valid && selectDay(dayNum)}
-                      className={`text-center text-[11px] py-1 rounded transition-colors
-                        ${!valid ? 'invisible' : ''}
-                        ${isSelected ? 'bg-blue-600 text-white font-bold' : ''}
-                        ${valid && !isSelected ? (dow===0?'text-red-400':dow===6?'text-blue-400':'text-gray-300') : ''}
-                        ${valid && !isSelected ? 'hover:bg-gray-700' : ''}`}>
-                      {valid ? dayNum : ''}
-                    </button>
-                  );
-                })}
+            ) : monthPickMode ? (
+              <div className="grid grid-cols-3 gap-1">
+                {MONTHS.map((name, mi) => (
+                  <button key={mi}
+                    onClick={() => { setViewMonth(mi); setMonthPickMode(false); }}
+                    className={`py-1.5 rounded text-xs font-bold transition-colors
+                      ${mi === viewMonth && viewYear === selYear ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}>
+                    {name}
+                  </button>
+                ))}
               </div>
-            </>
-          )}
-        </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-7 mb-1">
+                  {DAYS.map((d,i) => (
+                    <span key={d} className={`text-center text-[10px] font-bold py-0.5
+                      ${i===0?'text-red-400':i===6?'text-blue-400':'text-gray-500'}`}>{d}</span>
+                  ))}
+                </div>
+                <div className="grid grid-cols-7 gap-y-0.5">
+                  {Array.from({length: totalCells}, (_,i) => {
+                    const dayNum = i - firstDow(viewYear, viewMonth) + 1;
+                    const valid = dayNum >= 1 && dayNum <= daysInMonth(viewYear, viewMonth);
+                    const isSelected = valid && dayNum === selDay && viewMonth === selMonth && viewYear === selYear;
+                    const dow = i % 7;
+                    return (
+                      <button key={i}
+                        onClick={() => valid && selectDay(dayNum)}
+                        className={`text-center text-[11px] py-1 rounded transition-colors
+                          ${!valid ? 'invisible' : ''}
+                          ${isSelected ? 'bg-blue-600 text-white font-bold' : ''}
+                          ${valid && !isSelected ? (dow===0?'text-red-400':dow===6?'text-blue-400':'text-gray-300') : ''}
+                          ${valid && !isSelected ? 'hover:bg-gray-700' : ''}`}>
+                        {valid ? dayNum : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
