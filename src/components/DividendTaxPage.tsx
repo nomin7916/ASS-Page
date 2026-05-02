@@ -1,19 +1,20 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Upload, Trash2, Save, Plus } from 'lucide-react';
+import { X, Upload, Trash2, Save, Plus, FileText } from 'lucide-react';
 import { parseSamsungFundCSV } from '../utils';
 
 export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, isAdmin, onUpdate }) {
   const [taxHistory, setTaxHistory] = useState({});
-  const [selectedCode, setSelectedCode] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [lastSynced, setLastSynced] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [newCode, setNewCode] = useState('');
   const [newName, setNewName] = useState('');
+  const [historyPopupCode, setHistoryPopupCode] = useState(null);
   const fileInputRef = useRef(null);
-  const didLoadRef = useRef(false); // 로드 성공 여부 — 실패 시 빈 {} 로 App 상태를 덮어쓰지 않기 위해
+  const uploadTargetRef = useRef('');
+  const didLoadRef = useRef(false);
 
   useEffect(() => {
     onLoad()
@@ -21,16 +22,12 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
         if (data && typeof data === 'object') {
           setTaxHistory(data);
           didLoadRef.current = true;
-          const codes = Object.keys(data);
-          if (codes.length > 0) setSelectedCode(codes[0]);
         }
         setIsLoading(false);
       })
       .catch(() => setIsLoading(false));
   }, []);
 
-  // taxHistory가 바뀔 때마다 App 전역 상태에 즉시 반영 (DividendSummaryTable 실시간 연동)
-  // 로드 실패(파일 없음·오류) 시에는 빈 {} 로 App 의 dividendTaxHistory 를 덮어쓰지 않는다
   useEffect(() => {
     if (!isLoading && onUpdate && (didLoadRef.current || Object.keys(taxHistory).length > 0)) {
       onUpdate(taxHistory);
@@ -49,9 +46,15 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
     setIsSaving(false);
   };
 
+  const triggerUpload = (code) => {
+    uploadTargetRef.current = code;
+    fileInputRef.current?.click();
+  };
+
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
-    if (!file || !selectedCode) return;
+    const code = uploadTargetRef.current;
+    if (!file || !code) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target.result;
@@ -65,10 +68,10 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
       }
       setTaxHistory(prev => ({
         ...prev,
-        [selectedCode]: {
-          name: rawFundName || prev[selectedCode]?.name || selectedCode,
+        [code]: {
+          name: rawFundName || prev[code]?.name || code,
           lastUpdated: new Date().toISOString().slice(0, 10),
-          records: { ...(prev[selectedCode]?.records || {}), ...records },
+          records: { ...(prev[code]?.records || {}), ...records },
         },
       }));
       showToast(`${count}개월 데이터가 추가되었습니다.`);
@@ -80,44 +83,34 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
   const handleAddStock = () => {
     const code = newCode.trim();
     if (!code) return;
-    if (taxHistory[code]) {
-      setSelectedCode(code);
-      setShowAddForm(false);
-      setNewCode('');
-      setNewName('');
-      return;
-    }
-    setTaxHistory(prev => ({
-      ...prev,
-      [code]: { name: newName.trim() || code, lastUpdated: '', records: {} },
-    }));
-    setSelectedCode(code);
+    setTaxHistory(prev => {
+      if (prev[code]) return prev;
+      return { ...prev, [code]: { name: newName.trim() || code, lastUpdated: '', records: {} } };
+    });
     setNewCode('');
     setNewName('');
     setShowAddForm(false);
   };
 
-  const handleDeleteStock = () => {
-    if (!selectedCode) return;
-    const name = taxHistory[selectedCode]?.name || selectedCode;
+  const handleDeleteStock = (code) => {
+    const name = taxHistory[code]?.name || code;
     if (!window.confirm(`"${name}" 이력을 모두 삭제할까요?`)) return;
     setTaxHistory(prev => {
       const next = { ...prev };
-      delete next[selectedCode];
+      delete next[code];
       return next;
     });
-    const remaining = Object.keys(taxHistory).filter(c => c !== selectedCode);
-    setSelectedCode(remaining[0] || '');
+    if (historyPopupCode === code) setHistoryPopupCode(null);
   };
-
-  const selectedStock = taxHistory[selectedCode];
-  const sortedRecords = selectedStock
-    ? Object.entries(selectedStock.records || {}).sort((a, b) => b[0].localeCompare(a[0]))
-    : [];
-  const codes = Object.keys(taxHistory);
 
   const fmtDate8 = (d) =>
     d?.length === 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : d || '-';
+
+  const codes = Object.keys(taxHistory);
+  const popupStock = historyPopupCode ? taxHistory[historyPopupCode] : null;
+  const popupRecords = popupStock
+    ? Object.entries(popupStock.records || {}).sort((a, b) => b[0].localeCompare(a[0]))
+    : [];
 
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm">
@@ -138,25 +131,9 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
           <div className="text-gray-500 text-center py-16">불러오는 중...</div>
         ) : (
           <>
-            {/* 종목 선택 + 조작 */}
+            {/* 종목 추가 버튼 + 폼 */}
             <div className="bg-gray-800/50 rounded-lg p-4 flex flex-col gap-3 border border-gray-700/50">
-              <div className="flex items-center gap-2 flex-wrap">
-                {codes.length > 0 ? (
-                  <select
-                    value={selectedCode}
-                    onChange={e => setSelectedCode(e.target.value)}
-                    className="bg-gray-700 border border-gray-600 text-gray-200 rounded px-3 py-1.5 text-sm"
-                  >
-                    {codes.map(c => {
-                      const n = taxHistory[c]?.name;
-                      const label = n && n !== c ? `${n} (${c})` : c;
-                      return <option key={c} value={c}>{label}</option>;
-                    })}
-                  </select>
-                ) : (
-                  <span className="text-gray-600 text-xs">등록된 종목 없음</span>
-                )}
-
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowAddForm(v => !v)}
                   className="flex items-center gap-1 text-xs px-3 py-1.5 rounded border border-gray-600 text-gray-400 hover:text-gray-200 hover:border-gray-400 transition-colors"
@@ -164,29 +141,6 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
                   <Plus size={11} />
                   종목 추가
                 </button>
-
-                {selectedCode && (
-                  <>
-                    <label className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-blue-700 text-blue-400 hover:text-blue-300 hover:border-blue-500 cursor-pointer transition-colors">
-                      <Upload size={12} />
-                      CSV 업로드
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".csv"
-                        className="hidden"
-                        onChange={handleFileUpload}
-                      />
-                    </label>
-                    <button
-                      onClick={handleDeleteStock}
-                      className="flex items-center gap-1 text-xs px-3 py-1.5 rounded border border-gray-700 text-gray-600 hover:text-red-400 hover:border-red-700 transition-colors"
-                    >
-                      <Trash2 size={11} />
-                      종목 삭제
-                    </button>
-                  </>
-                )}
               </div>
 
               {showAddForm && (
@@ -222,66 +176,72 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
               )}
             </div>
 
-            {/* 이력 테이블 */}
-            {selectedStock ? (
-              <div className="bg-gray-800/50 rounded-lg overflow-hidden border border-gray-700/50">
-                <div className="px-4 py-2.5 border-b border-gray-700 flex items-center justify-between">
-                  <span className="text-xs text-gray-300">
-                    {selectedStock.name && selectedStock.name !== selectedCode ? selectedStock.name : selectedCode}
-                    {selectedStock.name && selectedStock.name !== selectedCode && (
-                      <span className="text-gray-600 ml-1.5">({selectedCode})</span>
-                    )}
-                    {selectedStock.lastUpdated && (
-                      <span className="text-gray-600 ml-2">최종 업데이트: {selectedStock.lastUpdated}</span>
-                    )}
-                  </span>
-                  <span className="text-xs text-gray-600">{sortedRecords.length}개월</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-gray-500 border-b border-gray-700 bg-gray-800/40">
-                        <th className="text-left px-4 py-2 font-medium">지급기준일</th>
-                        <th className="text-left px-3 py-2 font-medium">실지급일</th>
-                        <th className="text-right px-3 py-2 font-medium">분배율(%)</th>
-                        <th className="text-right px-3 py-2 font-medium">분배금액(원)</th>
-                        <th className="text-right px-3 py-2 font-medium">주당과세표준(원)</th>
-                        <th className="text-right px-4 py-2 font-medium">과세비율(%)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedRecords.length === 0 ? (
-                        <tr>
-                          <td colSpan={6} className="text-center py-10 text-gray-600">
-                            데이터 없음 — CSV를 업로드해주세요
-                          </td>
-                        </tr>
-                      ) : (
-                        sortedRecords.map(([ym, rec]) => {
-                          const ratio = rec.perShareAmount > 0
-                            ? (rec.perShareTaxableBase / rec.perShareAmount * 100)
-                            : 0;
-                          return (
-                            <tr key={ym} className="border-b border-gray-700/40 hover:bg-gray-700/20 transition-colors">
-                              <td className="px-4 py-2 text-gray-200 font-mono">{ym}</td>
-                              <td className="px-3 py-2 text-gray-400 font-mono">{fmtDate8(rec.paymentDate)}</td>
-                              <td className="px-3 py-2 text-right text-gray-300">{rec.distributionRate.toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right text-gray-200">{rec.perShareAmount.toLocaleString()}</td>
-                              <td className="px-3 py-2 text-right text-amber-400 font-medium">{rec.perShareTaxableBase.toLocaleString()}</td>
-                              <td className="px-4 py-2 text-right text-gray-400">{ratio.toFixed(1)}</td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : codes.length === 0 ? (
+            {/* 종목 목록 테이블 */}
+            {codes.length === 0 ? (
               <div className="text-center text-gray-600 py-16 border border-gray-700/40 rounded-lg">
                 종목을 추가하고 CSV를 업로드하세요.
               </div>
-            ) : null}
+            ) : (
+              <div className="bg-gray-800/50 rounded-lg overflow-hidden border border-gray-700/50">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-gray-500 border-b border-gray-700 bg-gray-800/40">
+                      <th className="text-left px-4 py-2.5 font-medium">종목명</th>
+                      <th className="text-left px-3 py-2.5 font-medium">종목코드</th>
+                      <th className="text-center px-3 py-2.5 font-medium">저장 건수</th>
+                      <th className="text-center px-3 py-2.5 font-medium">이력</th>
+                      <th className="text-center px-3 py-2.5 font-medium">CSV 업로드</th>
+                      <th className="px-3 py-2.5"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {codes.map(code => {
+                      const stock = taxHistory[code];
+                      const count = Object.keys(stock?.records || {}).length;
+                      const displayName = stock?.name && stock.name !== code ? stock.name : '-';
+                      return (
+                        <tr key={code} className="border-b border-gray-700/40 hover:bg-gray-700/20 transition-colors">
+                          <td className="px-4 py-2.5 text-gray-200">{displayName}</td>
+                          <td className="px-3 py-2.5 text-gray-400 font-mono">{code}</td>
+                          <td className="px-3 py-2.5 text-center text-gray-300">
+                            {count > 0 ? <span className="text-blue-400">{count}건</span> : <span className="text-gray-600">-</span>}
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <button
+                              onClick={() => setHistoryPopupCode(code)}
+                              disabled={count === 0}
+                              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-gray-600 text-gray-400 hover:text-blue-300 hover:border-blue-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                            >
+                              <FileText size={10} />
+                              이력
+                            </button>
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <button
+                              onClick={() => triggerUpload(code)}
+                              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-blue-700/60 text-blue-400 hover:text-blue-300 hover:border-blue-500 transition-colors"
+                            >
+                              <Upload size={10} />
+                              CSV
+                            </button>
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <button
+                              onClick={() => handleDeleteStock(code)}
+                              className="text-gray-600 hover:text-red-400 transition-colors p-1"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
 
             {/* 저장 푸터 */}
             <div className="flex items-center justify-between">
@@ -298,7 +258,6 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
               </button>
             </div>
 
-            {/* 관리자 안내 */}
             {isAdmin && (
               <div className="bg-gray-800/30 rounded-lg px-4 py-3 border border-gray-700/40">
                 <p className="text-xs text-gray-500">
@@ -311,6 +270,70 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
           </>
         )}
       </div>
+
+      {/* 이력 팝업 */}
+      {historyPopupCode && popupStock && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setHistoryPopupCode(null); }}
+        >
+          <div className="bg-gray-900 rounded-lg border border-gray-700 w-full max-w-3xl max-h-[80vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-100">
+                  {popupStock.name && popupStock.name !== historyPopupCode ? popupStock.name : historyPopupCode}
+                </span>
+                {popupStock.name && popupStock.name !== historyPopupCode && (
+                  <span className="text-xs text-gray-500 font-mono">{historyPopupCode}</span>
+                )}
+                <span className="text-xs text-gray-600 ml-1">({popupRecords.length}건)</span>
+              </div>
+              <button
+                onClick={() => setHistoryPopupCode(null)}
+                className="text-gray-500 hover:text-gray-200 p-1 rounded hover:bg-gray-800 transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="overflow-auto flex-1">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-gray-900">
+                  <tr className="text-gray-500 border-b border-gray-700 bg-gray-800/60">
+                    <th className="text-left px-4 py-2 font-medium">지급기준일</th>
+                    <th className="text-left px-3 py-2 font-medium">실지급일</th>
+                    <th className="text-right px-3 py-2 font-medium">분배율(%)</th>
+                    <th className="text-right px-3 py-2 font-medium">분배금액(원)</th>
+                    <th className="text-right px-3 py-2 font-medium">주당과세표준(원)</th>
+                    <th className="text-right px-4 py-2 font-medium">과세비율(%)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {popupRecords.map(([ym, rec]) => {
+                    const ratio = rec.perShareAmount > 0
+                      ? (rec.perShareTaxableBase / rec.perShareAmount * 100)
+                      : 0;
+                    return (
+                      <tr key={ym} className="border-b border-gray-700/40 hover:bg-gray-700/20 transition-colors">
+                        <td className="px-4 py-2 text-gray-200 font-mono">{ym}</td>
+                        <td className="px-3 py-2 text-gray-400 font-mono">{fmtDate8(rec.paymentDate)}</td>
+                        <td className="px-3 py-2 text-right text-gray-300">{rec.distributionRate.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right text-gray-200">{rec.perShareAmount.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right text-amber-400 font-medium">{rec.perShareTaxableBase.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right text-gray-400">{ratio.toFixed(1)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {popupStock.lastUpdated && (
+              <div className="px-4 py-2 border-t border-gray-700/60 shrink-0">
+                <span className="text-xs text-gray-600">최종 업데이트: {popupStock.lastUpdated}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
