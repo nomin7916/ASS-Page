@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Upload, Trash2, Save, Plus, FileText } from 'lucide-react';
 import { parseSamsungFundCSV } from '../utils';
+import { fetchStockInfo } from '../api';
 
 export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, isAdmin, onUpdate }) {
   const [taxHistory, setTaxHistory] = useState({});
@@ -14,6 +15,7 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
   const [historyPopupCode, setHistoryPopupCode] = useState(null);
   const [editingNameCode, setEditingNameCode] = useState(null);
   const [editingNameValue, setEditingNameValue] = useState('');
+  const [fetchingNames, setFetchingNames] = useState(new Set());
   const fileInputRef = useRef(null);
   const uploadTargetRef = useRef('');
   const nameInputRef = useRef(null);
@@ -83,16 +85,33 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
     e.target.value = '';
   };
 
+  const autoFetchName = async (code) => {
+    setFetchingNames(prev => new Set(prev).add(code));
+    try {
+      const info = await fetchStockInfo(code);
+      if (info?.name) {
+        setTaxHistory(prev => ({
+          ...prev,
+          [code]: { ...prev[code], name: info.name },
+        }));
+        didLoadRef.current = true;
+      }
+    } catch {}
+    setFetchingNames(prev => { const n = new Set(prev); n.delete(code); return n; });
+  };
+
   const handleAddStock = () => {
     const code = newCode.trim();
     if (!code) return;
+    const name = newName.trim();
     setTaxHistory(prev => {
       if (prev[code]) return prev;
-      return { ...prev, [code]: { name: newName.trim(), lastUpdated: '', records: {} } };
+      return { ...prev, [code]: { name, lastUpdated: '', records: {} } };
     });
     setNewCode('');
     setNewName('');
     setShowAddForm(false);
+    if (!name) autoFetchName(code);
   };
 
   const startEditName = (code) => {
@@ -235,18 +254,35 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
                                 placeholder="종목명 입력"
                                 className="bg-gray-700 border border-blue-500 rounded px-2 py-0.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none w-full max-w-[180px]"
                               />
-                            ) : (
+                            ) : fetchingNames.has(code) ? (
+                              <span className="text-gray-500 text-[10px] animate-pulse">조회 중...</span>
+                            ) : rawName ? (
                               <button
                                 onClick={() => startEditName(code)}
-                                className="text-left group flex items-center gap-1.5 min-w-[80px]"
+                                className="text-left group flex items-center gap-1.5"
                                 title="클릭하여 종목명 편집"
                               >
-                                {rawName
-                                  ? <span className="text-gray-200">{rawName}</span>
-                                  : <span className="text-gray-600 italic">이름 없음</span>
-                                }
+                                <span className="text-gray-200">{rawName}</span>
                                 <span className="text-gray-700 group-hover:text-gray-400 text-[10px] transition-colors">✎</span>
                               </button>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => startEditName(code)}
+                                  className="text-left group flex items-center gap-1"
+                                  title="클릭하여 종목명 편집"
+                                >
+                                  <span className="text-gray-600 italic text-[11px]">이름 없음</span>
+                                  <span className="text-gray-700 group-hover:text-gray-400 text-[10px] transition-colors">✎</span>
+                                </button>
+                                <button
+                                  onClick={() => autoFetchName(code)}
+                                  className="text-[10px] px-1.5 py-0.5 rounded border border-blue-800/60 text-blue-500 hover:text-blue-300 hover:border-blue-600 transition-colors"
+                                  title="네이버 증권에서 종목명 자동 조회"
+                                >
+                                  자동조회
+                                </button>
+                              </div>
                             )}
                           </td>
                           <td className="px-3 py-2.5 text-gray-400 font-mono">{code}</td>
