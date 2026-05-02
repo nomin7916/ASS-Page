@@ -103,8 +103,11 @@ export function useChartInteraction({
     if (!intIsDragging) return;
     setIntIsDragging(false);
     const result = calculateIntSelection(intRefAreaLeft, intRefAreaRight);
-    if (result) setIntSelectionResult(result);
-    setIntRefAreaLeft(''); setIntRefAreaRight('');
+    if (result) {
+      setIntSelectionResult(result);
+    } else {
+      setIntRefAreaLeft(''); setIntRefAreaRight('');
+    }
   };
 
   const handleIntChartMouseLeave = () => { setIntHoveredPoint(null); handleIntChartMouseUp(); };

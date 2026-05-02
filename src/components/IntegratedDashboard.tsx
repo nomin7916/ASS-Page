@@ -392,7 +392,7 @@ export default function IntegratedDashboard({
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
 
               {/* 평가액 추이 테이블 */}
-              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[344px] sm:max-h-[384px] md:max-h-[424px] xl:max-h-[464px]">
+              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col">
                 <div className="p-3 bg-[#0f172a] flex items-center justify-between border-b border-gray-700 shrink-0">
                   <span className="text-white font-bold text-sm">📅 평가액 추이</span>
                   {onManualBackfill && (
@@ -448,7 +448,7 @@ export default function IntegratedDashboard({
                 <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-wrap gap-2 items-center shrink-0">
                   <div className="flex items-center gap-1.5 shrink-0">
                     <TrendingUp size={14} className="text-red-400" />
-                    <span className="text-white font-bold text-sm">기간별 수익 차트 (통합)</span>
+                    <span className="text-white font-bold text-sm">총자산현황 수익율</span>
                   </div>
                   <div className="flex items-center gap-2 ml-auto flex-wrap justify-end">
                     <ChartRangeControls
@@ -510,7 +510,7 @@ export default function IntegratedDashboard({
                   )}
                 </div>
                 {/* 차트 영역 */}
-                <div className="chart-container-for-drag px-2 pt-2 pb-1 relative select-none h-[260px] sm:h-[300px] md:h-[340px] xl:h-[370px]">
+                <div className="chart-container-for-drag px-2 pt-2 pb-1 relative select-none h-[260px] sm:h-[300px] md:h-[340px] xl:h-[348px]">
                   <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                     <ComposedChart data={intChartData} onMouseDown={handleIntChartMouseDown} onMouseMove={handleIntChartMouseMove} onMouseUp={handleIntChartMouseUp} onMouseLeave={handleIntChartMouseLeave}>
                       <defs>
