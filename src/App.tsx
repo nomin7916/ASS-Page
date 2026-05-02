@@ -403,6 +403,9 @@ export default function App() {
       if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
       if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(stateData.chartPrefs.sectionCollapsedMap);
       if (stateData.chartPrefs.intSec) setIntSec(stateData.chartPrefs.intSec);
+      if (stateData.chartPrefs.intChartPeriod) setIntChartPeriod(stateData.chartPrefs.intChartPeriod);
+      if (stateData.chartPrefs.intDateRange) setIntDateRange(stateData.chartPrefs.intDateRange);
+      if (stateData.chartPrefs.intAppliedRange) setIntAppliedRange(stateData.chartPrefs.intAppliedRange);
     }
     const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
     const resolvedIndicatorHistoryMap = marketData?.indicatorHistoryMap || stateData.indicatorHistoryMap || {};
@@ -1292,6 +1295,9 @@ export default function App() {
           if (data.chartPrefs.showBacktest !== undefined) setShowBacktest(data.chartPrefs.showBacktest);
           if (data.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(data.chartPrefs.sectionCollapsedMap);
           if (data.chartPrefs.intSec) setIntSec(data.chartPrefs.intSec);
+          if (data.chartPrefs.intChartPeriod) setIntChartPeriod(data.chartPrefs.intChartPeriod);
+          if (data.chartPrefs.intDateRange) setIntDateRange(data.chartPrefs.intDateRange);
+          if (data.chartPrefs.intAppliedRange) setIntAppliedRange(data.chartPrefs.intAppliedRange);
         }
         if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
         if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
@@ -1473,7 +1479,7 @@ export default function App() {
     if (activePortfolioId) {
       accountChartStatesRef.current[activePortfolioId] = { ...currentChartStateRef.current };
     }
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
     // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
     const stateEmail = adminViewingAsRef.current || authUser.email;
@@ -1493,7 +1499,7 @@ export default function App() {
         saveAllToDrive(state);
       }, 2000);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, lookupRows, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
