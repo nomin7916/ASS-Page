@@ -1,6 +1,6 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback } from 'react';
-import { Plus, Download, Trash2, Maximize2, X, Check } from 'lucide-react';
+import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea,
@@ -88,7 +88,6 @@ export default function IntegratedDashboard({
   setSec,
 }) {
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
-  const [backfillDate, setBackfillDate] = useState('');
 
   const [memoModal, setMemoModal] = useState(null);
   const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
@@ -387,25 +386,22 @@ export default function IntegratedDashboard({
 
               {/* 평가액 추이 테이블 */}
               <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[344px] sm:max-h-[384px] md:max-h-[424px] xl:max-h-[464px]">
-                <div className="p-3 bg-[#0f172a] flex flex-col gap-2 border-b border-gray-700 shrink-0">
-                  <div className="flex justify-between items-center">
-                    <span className="text-white font-bold text-sm">📅 평가액 추이</span>
-                  </div>
+                <div className="p-3 bg-[#0f172a] flex items-center justify-between border-b border-gray-700 shrink-0">
+                  <span className="text-white font-bold text-sm">📅 평가액 추이</span>
                   {onManualBackfill && (
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        type="date"
-                        value={backfillDate}
-                        onChange={e => setBackfillDate(e.target.value)}
-                        className="flex-1 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
-                      />
-                      <button
-                        onClick={() => { if (backfillDate) onManualBackfill(backfillDate); }}
-                        disabled={!backfillDate}
-                        className="px-2 py-1 text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded transition whitespace-nowrap"
-                        title="선택한 날짜부터 누락된 평가액 기록을 모든 계좌에 채웁니다"
-                      >누락 채우기</button>
-                    </div>
+                    <CustomDatePicker
+                      value=""
+                      onChange={(date) => { onManualBackfill(date); }}
+                      align="right"
+                      trigger={
+                        <button
+                          className="p-1.5 rounded hover:bg-orange-900/30 transition-colors text-orange-400 hover:text-orange-300"
+                          title="선택한 날짜부터 누락된 평가액 기록을 모든 계좌에 채웁니다"
+                        >
+                          <CalendarPlus size={15} />
+                        </button>
+                      }
+                    />
                   )}
                 </div>
                 <div className="overflow-x-auto overflow-y-auto flex-1">

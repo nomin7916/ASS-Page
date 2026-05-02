@@ -4,7 +4,7 @@ import React from 'react';
 const DAYS = ['일','월','화','수','목','금','토'];
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 
-export default function CustomDatePicker({ value, onChange, placeholder = '--/--/--' }) {
+export default function CustomDatePicker({ value, onChange, placeholder = '--/--/--', trigger = null, align = 'center' }) {
   const [open, setOpen] = React.useState(false);
   const [viewYear, setViewYear] = React.useState(() => value ? parseInt(value.slice(0,4)) : new Date().getFullYear());
   const [viewMonth, setViewMonth] = React.useState(() => value ? parseInt(value.slice(5,7)) - 1 : new Date().getMonth());
@@ -66,16 +66,23 @@ export default function CustomDatePicker({ value, onChange, placeholder = '--/--
     else nextMonth();
   };
 
+  const popupAlign = align === 'right' ? 'right-0' : align === 'left' ? 'left-0' : 'left-1/2 -translate-x-1/2';
+
   return (
     <div className="relative" ref={ref}>
-      <span
-        onClick={openPicker}
-        className="text-gray-300 text-xs font-bold font-mono px-1 w-[68px] text-center cursor-pointer hover:text-white select-none block"
-      >
-        {displayText}
-      </span>
+      {trigger
+        ? React.cloneElement(trigger, { onClick: openPicker })
+        : (
+          <span
+            onClick={openPicker}
+            className="text-gray-300 text-xs font-bold font-mono px-1 w-[68px] text-center cursor-pointer hover:text-white select-none block"
+          >
+            {displayText}
+          </span>
+        )
+      }
       {open && (
-        <div className="absolute top-7 left-1/2 -translate-x-1/2 z-50 bg-gray-900 border border-gray-600 rounded-lg shadow-2xl p-3 w-[220px]"
+        <div className={`absolute top-8 z-50 bg-gray-900 border border-gray-600 rounded-lg shadow-2xl p-3 w-[220px] ${popupAlign}`}
           onMouseDown={e => e.stopPropagation()}>
           {/* Header */}
           <div className="flex items-center justify-between mb-2">
