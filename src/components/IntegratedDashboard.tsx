@@ -178,7 +178,7 @@ export default function IntegratedDashboard({
                     {showNewAccountMenu && (
                       <>
                         <div className="fixed inset-0 z-40" onClick={() => setShowNewAccountMenu(false)} />
-                        <div className="absolute right-0 top-full mt-1 z-50 bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl py-1 min-w-[160px]">
+                        <div className="absolute right-0 top-full mt-1 z-50 bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl py-1 min-w-[160px] max-h-[60vh] overflow-y-auto">
                           {[
                             { type: 'dc-irp',    icon: '🏦', label: '퇴직연금 계좌' },
                             { type: 'isa',       icon: '🌱', label: 'ISA 계좌' },
