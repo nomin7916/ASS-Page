@@ -20,7 +20,6 @@ export function usePortfolioState({
   const [intHistory, setIntHistory] = useState([]);
   const [customLinks, setCustomLinks] = useState(UI_CONFIG.DEFAULT_LINKS);
   const [overseasLinks, setOverseasLinks] = useState(UI_CONFIG.OVERSEAS_DEFAULT_LINKS);
-  const [lookupRows, setLookupRows] = useState([]);
   const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
   const [depositSortConfig, setDepositSortConfig] = useState({ key: null, direction: 1 });
   const [depositSortConfig2, setDepositSortConfig2] = useState({ key: null, direction: 1 });
@@ -47,6 +46,8 @@ export function usePortfolioState({
   const history = activePortfolio?.history ?? [];
   const settings = activePortfolio?.settings ?? { mode: 'rebalance', amount: 1000000 };
   const portfolioStartDate = activePortfolio?.portfolioStartDate || activePortfolio?.startDate || _defaultStartDate;
+  const lookupRows = activePortfolio?.lookupRows ?? [];
+  const setLookupRows = (v) => patchActive(p => ({ lookupRows: typeof v === 'function' ? v(p.lookupRows ?? []) : v }));
 
   // ── 활성 포트폴리오만 갱신하는 헬퍼 ──
   const patchActive = (patch) =>
