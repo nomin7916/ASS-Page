@@ -1,5 +1,5 @@
 ﻿﻿// @ts-nocheck
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { Plus, Download, Trash2, Maximize2, X, Check } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
@@ -94,6 +94,17 @@ export default function IntegratedDashboard({
   const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
   const memoDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
 
+  const newAccBtnRef = useRef(null);
+  const [newAccMenuPos, setNewAccMenuPos] = useState({ top: 0, right: 0 });
+
+  const handleNewAccToggle = useCallback(() => {
+    if (newAccBtnRef.current) {
+      const rect = newAccBtnRef.current.getBoundingClientRect();
+      setNewAccMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    }
+    setShowNewAccountMenu(v => !v);
+  }, [setShowNewAccountMenu]);
+
   const openMemoModal = (id, memo) => {
     setMemoPos({ x: window.innerWidth / 2 - 128, y: window.innerHeight / 2 - 180 });
     setMemoModal({ id, val: memo ?? '' });
@@ -168,9 +179,10 @@ export default function IntegratedDashboard({
               <div className="p-3 bg-[#0f172a] flex justify-between items-center border-b border-gray-700">
                 <span className="text-white font-bold text-sm">🏦 통합 계좌 현황</span>
                 <div className="flex gap-1 items-center">
-                  <div className="relative">
+                  <div>
                     <button
-                      onClick={() => setShowNewAccountMenu(v => !v)}
+                      ref={newAccBtnRef}
+                      onClick={handleNewAccToggle}
                       className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-blue-900/20 rounded"
                     >
                       <Plus size={12} /> 새 계좌 <span className="text-[9px] opacity-60">▼</span>
@@ -178,7 +190,10 @@ export default function IntegratedDashboard({
                     {showNewAccountMenu && (
                       <>
                         <div className="fixed inset-0 z-40" onClick={() => setShowNewAccountMenu(false)} />
-                        <div className="absolute right-0 top-full mt-1 z-50 bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl py-1 min-w-[160px] max-h-[60vh] overflow-y-auto">
+                        <div
+                          className="fixed z-50 bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl py-1 min-w-[160px]"
+                          style={{ top: newAccMenuPos.top, right: newAccMenuPos.right }}
+                        >
                           {[
                             { type: 'dc-irp',    icon: '🏦', label: '퇴직연금 계좌' },
                             { type: 'isa',       icon: '🌱', label: 'ISA 계좌' },
