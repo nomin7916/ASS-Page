@@ -490,6 +490,10 @@ export default function IntegratedDashboard({
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
                         {intHoveredPoint.payload
                           .filter(entry => entry.dataKey && entry.value != null)
+                          .sort((a, b) => {
+                            const order = { evalAmount: 0, returnRate: 1, costAmount: 2 };
+                            return (order[a.dataKey] ?? 99) - (order[b.dataKey] ?? 99);
+                          })
                           .map((entry, i) => {
                             const isRate = entry.dataKey === 'returnRate';
                             const displayVal = isRate
