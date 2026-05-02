@@ -13,12 +13,14 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
   const [newCode, setNewCode] = useState('');
   const [newName, setNewName] = useState('');
   const fileInputRef = useRef(null);
+  const didLoadRef = useRef(false); // 로드 성공 여부 — 실패 시 빈 {} 로 App 상태를 덮어쓰지 않기 위해
 
   useEffect(() => {
     onLoad()
       .then(data => {
         if (data && typeof data === 'object') {
           setTaxHistory(data);
+          didLoadRef.current = true;
           const codes = Object.keys(data);
           if (codes.length > 0) setSelectedCode(codes[0]);
         }
@@ -28,8 +30,11 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
   }, []);
 
   // taxHistory가 바뀔 때마다 App 전역 상태에 즉시 반영 (DividendSummaryTable 실시간 연동)
+  // 로드 실패(파일 없음·오류) 시에는 빈 {} 로 App 의 dividendTaxHistory 를 덮어쓰지 않는다
   useEffect(() => {
-    if (!isLoading && onUpdate) onUpdate(taxHistory);
+    if (!isLoading && onUpdate && (didLoadRef.current || Object.keys(taxHistory).length > 0)) {
+      onUpdate(taxHistory);
+    }
   }, [taxHistory, isLoading]);
 
   const handleSave = async () => {

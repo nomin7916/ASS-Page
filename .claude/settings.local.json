@@ -78,7 +78,9 @@
       "PowerShell($userPath = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); $userPath -split \";\")",
       "PowerShell($machinePath = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\); $machinePath -split \";\")",
       "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 20)",
-      "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:APPDATA\\\\npm\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:LOCALAPPDATA\\\\Programs\\\\node\" -ErrorAction SilentlyContinue)"
+      "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:APPDATA\\\\npm\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:LOCALAPPDATA\\\\Programs\\\\node\" -ErrorAction SilentlyContinue)",
+      "Read(//c//**)",
+      "Read(//c/ProgramData//**)"
     ]
   }
 }
