@@ -49,7 +49,7 @@ import {
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
   getClosestValue, getIndexLatest, handleTableKeyDown, handleReadonlyCellNav, buildIndexStatus,
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
-  fillWeekendGaps
+  fillWeekendGaps, calcPeriodStart
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
@@ -1203,7 +1203,9 @@ export default function App() {
   const handleDepositDownloadCSV = () => downloadCSV(`입금내역_${today}.csv`, buildDepositCSV(depositWithSum));
   const handleWithdrawDownloadCSV = () => downloadCSV(`출금내역_${today}.csv`, buildDepositCSV(depositWithSum2));
 
-  const handleSearchClick = () => { setChartPeriod('custom'); setAppliedRange({ start: dateRange.start, end: dateRange.end }); };
+  const handleSearchClick = () => {
+    if (dateRange.start && dateRange.end) { setAppliedRange({ start: dateRange.start, end: dateRange.end }); setChartPeriod('custom'); }
+  };
 
 
   // 1단계: 로그인 후 사용자별 localStorage에서 복원 (step 2 내부에서 처리)
@@ -1501,23 +1503,8 @@ export default function App() {
   useEffect(() => {
     if (unifiedDates.length === 0) return;
     const latest = unifiedDates[unifiedDates.length - 1];
-    const earliest = unifiedDates[0];
-    let newStart = latest;
-    if (chartPeriod === '1w') { const d = new Date(latest); d.setDate(d.getDate() - 7); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '1m') { const d = new Date(latest); d.setMonth(d.getMonth() - 1); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '3m') { const d = new Date(latest); d.setMonth(d.getMonth() - 3); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '6m') { const d = new Date(latest); d.setMonth(d.getMonth() - 6); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '1y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 1); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '2y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 2); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '3y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 3); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '4y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 4); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '5y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 5); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === '10y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 10); newStart = d.toISOString().split('T')[0]; }
-    else if (chartPeriod === 'all') { newStart = earliest; }
-    if (chartPeriod !== 'custom') {
-      if (new Date(newStart) < new Date(earliest)) newStart = earliest;
-      setDateRange({ start: newStart, end: latest }); setAppliedRange({ start: newStart, end: latest });
-    }
+    const newStart = calcPeriodStart(chartPeriod, latest, unifiedDates[0]);
+    if (newStart !== null) { setDateRange({ start: newStart, end: latest }); setAppliedRange({ start: newStart, end: latest }); }
   }, [chartPeriod, unifiedDates]);
 
 
@@ -1528,28 +1515,12 @@ export default function App() {
     }
   };
 
-  // 통합 대시보드 - 기간 버튼 변경 시 차트 범위 업데이트
+  // 통합 대시보드 - 기간 변경 시 차트 범위 업데이트
   useEffect(() => {
     if (intUnifiedDates.length === 0) return;
     const latest = intUnifiedDates[intUnifiedDates.length - 1];
-    const earliest = intUnifiedDates[0];
-    let newStart = latest;
-    if (intChartPeriod === '1w') { const d = new Date(latest); d.setDate(d.getDate() - 7); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '1m') { const d = new Date(latest); d.setMonth(d.getMonth() - 1); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '3m') { const d = new Date(latest); d.setMonth(d.getMonth() - 3); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '6m') { const d = new Date(latest); d.setMonth(d.getMonth() - 6); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '1y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 1); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '2y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 2); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '3y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 3); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '4y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 4); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '5y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 5); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === '10y') { const d = new Date(latest); d.setFullYear(d.getFullYear() - 10); newStart = d.toISOString().split('T')[0]; }
-    else if (intChartPeriod === 'all') { newStart = earliest; }
-    if (intChartPeriod !== 'custom') {
-      if (new Date(newStart) < new Date(earliest)) newStart = earliest;
-      setIntDateRange({ start: newStart, end: latest });
-      setIntAppliedRange({ start: newStart, end: latest });
-    }
+    const newStart = calcPeriodStart(intChartPeriod, latest, intUnifiedDates[0]);
+    if (newStart !== null) { setIntDateRange({ start: newStart, end: latest }); setIntAppliedRange({ start: newStart, end: latest }); }
   }, [intChartPeriod, intUnifiedDates]);
 
   // 조회기간 변경 시 활성 비교종목 데이터가 범위를 커버하지 못하면 자동 전체 이력 재조회

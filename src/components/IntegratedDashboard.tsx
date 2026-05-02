@@ -1,6 +1,7 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback } from 'react';
-import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus, Search } from 'lucide-react';
+import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus } from 'lucide-react';
+import ChartRangeControls from './ChartRangeControls';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, ReferenceLine,
@@ -447,39 +448,13 @@ export default function IntegratedDashboard({
                 <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-wrap gap-2 items-center shrink-0">
                   <span className="text-white font-bold text-sm shrink-0">📈 기간별 수익 차트 (통합)</span>
                   <div className="flex items-center gap-2 ml-auto flex-wrap justify-end">
-                    <div className="flex items-center bg-gray-800 border border-gray-600 rounded shadow-sm px-1.5 py-1 relative z-30">
-                      <CustomDatePicker
-                        value={intDateRange.start}
-                        onChange={v => { setIntDateRange(p => ({ ...p, start: v })); setIntChartPeriod('custom'); }}
-                      />
-                      <span className="text-gray-500 mx-0.5">~</span>
-                      <CustomDatePicker
-                        value={intDateRange.end}
-                        onChange={v => { setIntDateRange(p => ({ ...p, end: v })); setIntChartPeriod('custom'); }}
-                      />
-                      <div className="w-[1px] h-4 bg-gray-600 mx-1.5" />
-                      <button onClick={handleIntSearchClick} className="text-blue-400 hover:text-blue-300 hover:bg-gray-700 rounded p-1.5 transition-colors" title="조회">
-                        <Search size={14} />
-                      </button>
-                    </div>
-                    <select
-                      value={intChartPeriod}
-                      onChange={e => setIntChartPeriod(e.target.value)}
-                      className="bg-gray-800 text-gray-300 text-xs font-bold border border-gray-600 rounded px-2 py-1.5 outline-none cursor-pointer hover:bg-gray-700 transition-colors shadow-sm"
-                    >
-                      <option value="1w">1주일</option>
-                      <option value="1m">1개월</option>
-                      <option value="3m">3개월</option>
-                      <option value="6m">6개월</option>
-                      <option value="1y">1년</option>
-                      <option value="2y">2년</option>
-                      <option value="3y">3년</option>
-                      <option value="4y">4년</option>
-                      <option value="5y">5년</option>
-                      <option value="10y">10년</option>
-                      <option value="all">전체</option>
-                      <option value="custom" hidden>직접입력</option>
-                    </select>
+                    <ChartRangeControls
+                      dateRange={intDateRange}
+                      setDateRange={setIntDateRange}
+                      period={intChartPeriod}
+                      setPeriod={setIntChartPeriod}
+                      onSearch={handleIntSearchClick}
+                    />
                     <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`text-xs px-2 py-1.5 rounded font-bold transition-colors ${intIsZeroBaseMode ? 'bg-indigo-800/60 text-indigo-300 border border-indigo-700' : 'text-gray-500 hover:text-gray-300 border border-gray-700'}`} title="기간 시작 기준 / 원금 기준 전환">{intIsZeroBaseMode ? '기간기준' : '원금기준'}</button>
                   </div>
                 </div>

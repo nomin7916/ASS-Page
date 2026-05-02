@@ -4,6 +4,7 @@ import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
+import ChartRangeControls from './ChartRangeControls';
 import { extractLinkLabel } from '../chartUtils';
 import { CHART_NAME_TO_POINT_KEY } from '../constants';
 
@@ -246,22 +247,13 @@ export default function PortfolioChart({
             </div>}
           </div>
           <div className="flex items-center justify-end gap-3 w-full xl:w-auto">
-            <div className="flex items-center bg-gray-800 border border-gray-600 rounded shadow-sm px-1.5 py-1 relative z-30">
-              <CustomDatePicker
-                value={dateRange.start}
-                onChange={v => { setDateRange(p => ({ ...p, start: v })); setChartPeriod('custom'); }}
-              />
-              <span className="text-gray-500 mx-0.5">~</span>
-              <CustomDatePicker
-                value={dateRange.end}
-                onChange={v => { setDateRange(p => ({ ...p, end: v })); setChartPeriod('custom'); }}
-              />
-              <div className="w-[1px] h-4 bg-gray-600 mx-1.5"></div>
-              <button onClick={handleSearchClick} className="text-blue-400 hover:text-blue-300 hover:bg-gray-700 rounded p-1.5 transition-colors" title="조회">
-                <Search size={14} />
-              </button>
-            </div>
-            <select value={chartPeriod} onChange={e => setChartPeriod(e.target.value)} className="bg-gray-800 text-gray-300 text-xs font-bold border border-gray-600 rounded px-2 py-1.5 outline-none cursor-pointer hover:bg-gray-700 transition-colors shadow-sm"><option value="1w">1주일</option><option value="1m">1개월</option><option value="3m">3개월</option><option value="6m">6개월</option><option value="1y">1년</option><option value="2y">2년</option><option value="3y">3년</option><option value="4y">4년</option><option value="5y">5년</option><option value="10y">10년</option><option value="all">전체</option><option value="custom" hidden>직접입력</option></select>
+            <ChartRangeControls
+              dateRange={dateRange}
+              setDateRange={setDateRange}
+              period={chartPeriod}
+              setPeriod={setChartPeriod}
+              onSearch={handleSearchClick}
+            />
           </div>
         </div>
         <div className="flex justify-between items-center pt-2 border-t border-gray-700/50">

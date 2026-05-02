@@ -1,5 +1,24 @@
 export const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
 
+export const calcPeriodStart = (period: string, latest: string, earliest: string): string | null => {
+  if (period === 'custom') return null;
+  if (period === 'all') return earliest;
+  const d = new Date(latest);
+  if      (period === '1w')  d.setDate(d.getDate() - 7);
+  else if (period === '1m')  d.setMonth(d.getMonth() - 1);
+  else if (period === '3m')  d.setMonth(d.getMonth() - 3);
+  else if (period === '6m')  d.setMonth(d.getMonth() - 6);
+  else if (period === '1y')  d.setFullYear(d.getFullYear() - 1);
+  else if (period === '2y')  d.setFullYear(d.getFullYear() - 2);
+  else if (period === '3y')  d.setFullYear(d.getFullYear() - 3);
+  else if (period === '4y')  d.setFullYear(d.getFullYear() - 4);
+  else if (period === '5y')  d.setFullYear(d.getFullYear() - 5);
+  else if (period === '10y') d.setFullYear(d.getFullYear() - 10);
+  else return null;
+  const start = d.toISOString().split('T')[0];
+  return start < earliest ? earliest : start;
+};
+
 export const hexToRgba = (hex: string, alpha: number): string | null => {
   if (!hex || hex.length < 7) return null;
   const r = parseInt(hex.slice(1, 3), 16);
