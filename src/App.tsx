@@ -1061,7 +1061,7 @@ export default function App() {
   }, [intTotals.cats]);
 
   const intHoldingsDonutData = useMemo(() => {
-    const holdingsMap: Record<string, { value: number; cost: number; category: string }> = {};
+    const holdingsMap: Record<string, { value: number; cost: number; category: string; code: string }> = {};
     portfolios.forEach(p => {
       if (p.accountType === 'simple') return;
       const isActive = p.id === activePortfolioId;
@@ -1073,7 +1073,7 @@ export default function App() {
           const v = cleanNum(item.depositAmount) * fxRate;
           if (v <= 0) return;
           const key = '예수금';
-          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금' };
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금', code: '' };
           holdingsMap[key].value += v;
           holdingsMap[key].cost += v;
         } else if (item.type === 'fund') {
@@ -1083,7 +1083,7 @@ export default function App() {
           if (evl <= 0) return;
           const cost = cleanNum(item.investAmount) * fxRate;
           const key = item.name || item.code || 'FUND';
-          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: 'FUND' };
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: 'FUND', code: item.code || '' };
           holdingsMap[key].value += evl;
           holdingsMap[key].cost += cost;
         } else {
@@ -1093,14 +1093,14 @@ export default function App() {
           const cost = cleanNum(item.purchasePrice) * qty * fxRate;
           const key = isGold ? 'KRX 금현물' : (item.name || item.code || '기타');
           const category = isGold ? '금' : (item.category || '미지정');
-          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category };
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category, code: isGold ? '' : (item.code || '') };
           holdingsMap[key].value += evl;
           holdingsMap[key].cost += cost;
         }
       });
     });
     return Object.entries(holdingsMap)
-      .map(([name, { value, cost, category }]) => ({ name, value, cost, category }))
+      .map(([name, { value, cost, category, code }]) => ({ name, value, cost, category, code }))
       .filter(x => x.value > 0)
       .sort((a, b) => b.value - a.value);
   // eslint-disable-next-line react-hooks/exhaustive-deps

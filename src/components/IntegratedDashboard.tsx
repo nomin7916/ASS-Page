@@ -1,5 +1,5 @@
 ﻿﻿// @ts-nocheck
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus, Activity, TrendingUp } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import {
@@ -12,6 +12,11 @@ import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cl
 import CustomDatePicker from './CustomDatePicker';
 import { PieLabelOutside } from '../chartUtils';
 import DividendSummaryTable from './DividendSummaryTable';
+import { fetchEtfTopHoldings, fetchStockPer } from '../api';
+
+// 세션 캐시 (컴포넌트 재마운트 간 유지)
+const _etfInfoCache = new Map(); // itemCode → { holdings: [...] | null, ts }
+const _perCache = new Map();     // stockCode → { per, fper } | null
 
 
 const hexToRgba = (hex, alpha) => {
@@ -103,6 +108,38 @@ export default function IntegratedDashboard({
 
   const newAccBtnRef = useRef(null);
   const [newAccMenuPos, setNewAccMenuPos] = useState({ top: 0, right: 0 });
+
+  // ETF 구성종목 + PER 데이터 (itemName → { h1, h2, h3 } | null | 'loading')
+  const [etfInfoMap, setEtfInfoMap] = useState({});
+
+  useEffect(() => {
+    const isKr6 = (c) => /^\d{6}$/.test(c || '');
+    const candidates = intHoldingsDonutData.filter(item => isKr6(item.code));
+    if (candidates.length === 0) return;
+
+    const fetchOne = async (item) => {
+      const { name, code } = item;
+      if (etfInfoMap[name] !== undefined) return;
+      setEtfInfoMap(prev => ({ ...prev, [name]: 'loading' }));
+
+      const holdings = await fetchEtfTopHoldings(code);
+      if (!holdings || holdings.length === 0) {
+        // ETF 아님 → 종목 자체 PER 조회
+        const perData = await fetchStockPer(code);
+        setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: perData?.per ?? null, fper: perData?.fper ?? null } }));
+        return;
+      }
+
+      // ETF → 구성종목 PER 병렬 조회
+      const perResults = await Promise.all(
+        holdings.map(h => isKr6(h.code) ? fetchStockPer(h.code) : Promise.resolve(null))
+      );
+      const enriched = holdings.map((h, i) => ({ ...h, per: perResults[i]?.per ?? null, fper: perResults[i]?.fper ?? null }));
+      setEtfInfoMap(prev => ({ ...prev, [name]: enriched }));
+    };
+
+    candidates.forEach(item => fetchOne(item));
+  }, [intHoldingsDonutData]);
 
   const handleNewAccToggle = useCallback(() => {
     if (newAccBtnRef.current) {
@@ -694,7 +731,7 @@ export default function IntegratedDashboard({
                           </ResponsiveContainer>
                         </div>
                         <div className="overflow-x-auto mt-3">
-                        <table className="w-full text-xs min-w-[480px]">
+                        <table className="w-full text-xs min-w-[780px]">
                           <thead className="text-gray-400 border-b border-gray-700">
                             <tr className="text-center">
                               <th className="pb-2 px-2 border-r border-gray-700">구분</th>
@@ -702,7 +739,10 @@ export default function IntegratedDashboard({
                               <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
                               <th className="pb-2 px-3 border-r border-gray-700">비중</th>
                               <th className="pb-2 px-3 border-r border-gray-700">수익</th>
-                              <th className="pb-2 px-3">수익률</th>
+                              <th className="pb-2 px-3 border-r border-gray-700">수익률</th>
+                              <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중1위<div className="text-[9px] text-gray-600 font-normal">종목·PER·추정</div></th>
+                              <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중2위<div className="text-[9px] text-gray-600 font-normal">종목·PER·추정</div></th>
+                              <th className="pb-2 px-2 text-sky-400/80 text-[10px]">비중3위<div className="text-[9px] text-gray-600 font-normal">종목·PER·추정</div></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -734,18 +774,59 @@ export default function IntegratedDashboard({
                                     {isLastCat ? (
                                       <>
                                         <td className="py-1.5 px-3 border-r border-gray-700 text-gray-600 text-right">-</td>
-                                        <td className="py-1.5 px-3 text-gray-600 text-right">-</td>
+                                        <td className="py-1.5 px-3 border-r border-gray-700 text-gray-600 text-right">-</td>
                                       </>
                                     ) : (
                                       <>
                                         <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>
                                           {hideAmounts ? '••••••' : (<><span className="text-[9px] mr-0.5">{profit >= 0 ? '▲' : '▼'}</span>{formatCurrency(Math.abs(profit))}</>)}
                                         </td>
-                                        <td className={`py-1.5 px-3 font-bold text-right ${profitColor}`}>
+                                        <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>
                                           {profitRate !== null ? (<><span className="text-[9px] mr-0.5">{profitRate >= 0 ? '▲' : '▼'}</span>{Math.abs(profitRate).toFixed(2)}%</>) : '-'}
                                         </td>
                                       </>
                                     )}
+                                    {(() => {
+                                      const info = etfInfoMap[item.name];
+                                      // 로딩 중
+                                      if (info === 'loading') return (
+                                        <td colSpan={3} className="py-1.5 px-2 text-center text-gray-600 align-middle">
+                                          <span className="text-[9px] animate-pulse">…</span>
+                                        </td>
+                                      );
+                                      // ETF: 구성종목 3개 셀
+                                      if (Array.isArray(info)) {
+                                        return [0, 1, 2].map(idx => {
+                                          const h = info[idx];
+                                          const isLast = idx === 2;
+                                          if (!h) return <td key={idx} className={`py-1.5 px-2 text-center text-gray-700 align-middle${isLast ? '' : ' border-r border-gray-700'}`}>—</td>;
+                                          return (
+                                            <td key={idx} className={`py-1.5 px-2 align-middle${isLast ? '' : ' border-r border-gray-700'}`}>
+                                              <div className="flex flex-col items-center gap-0 leading-tight">
+                                                <span className="text-[10px] text-gray-300 font-medium whitespace-nowrap">{h.name}</span>
+                                                <span className="text-[9px] text-gray-500 whitespace-nowrap">{h.ratio.toFixed(1)}%</span>
+                                                <span className="text-[9px] text-gray-600 whitespace-nowrap">
+                                                  P <span className="text-gray-400">{h.per != null ? h.per.toFixed(2) : '—'}</span>
+                                                  {' '}추정 <span className="text-gray-400">{h.fper != null ? h.fper.toFixed(2) : '—'}</span>
+                                                </span>
+                                              </div>
+                                            </td>
+                                          );
+                                        });
+                                      }
+                                      // 일반 주식: 자체 PER을 colSpan=3으로 표시
+                                      if (info?.isStock) return (
+                                        <td colSpan={3} className="py-1.5 px-3 text-center align-middle">
+                                          <span className="text-[10px] text-gray-500">
+                                            PER <span className="text-gray-300">{info.per != null ? info.per.toFixed(2) : '—'}</span>
+                                            <span className="mx-1.5 text-gray-700">|</span>
+                                            추정 <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
+                                          </span>
+                                        </td>
+                                      );
+                                      // 해당 없음 (해외 종목, 현금 등)
+                                      return <td colSpan={3} className="py-1.5 px-2 text-center text-gray-700 align-middle">—</td>;
+                                    })()}
                                   </tr>
                                 );
                               });

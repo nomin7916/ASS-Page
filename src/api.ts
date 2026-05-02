@@ -385,6 +385,84 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
   return null;
 };
 
+// ── ETF 구성종목 Top3 조회 (네이버 증권) ────────────────────────────────────
+const _etfHoldingsCache = new Map<string, { data: Array<{ name: string; code: string; ratio: number }> | null; ts: number }>();
+
+export const fetchEtfTopHoldings = async (
+  code: string
+): Promise<Array<{ name: string; code: string; ratio: number }> | null> => {
+  const cached = _etfHoldingsCache.get(code);
+  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.data;
+
+  const targetUrl = `https://m.stock.naver.com/api/etf/${code}/holding`;
+  const proxies = [
+    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  ];
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const list = data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? [];
+      if (Array.isArray(list) && list.length > 0) {
+        const result = list.slice(0, 3).map((x: any) => ({
+          name: x.itemName ?? x.stockName ?? x.name ?? '',
+          code: x.itemCode ?? x.stockCode ?? x.code ?? '',
+          ratio: parseFloat(String(x.holdingRatio ?? x.ratio ?? 0)),
+        })).filter((x: any) => x.name);
+        if (result.length > 0) {
+          _etfHoldingsCache.set(code, { data: result, ts: Date.now() });
+          return result;
+        }
+      }
+    } catch { continue; }
+  }
+  _etfHoldingsCache.set(code, { data: null, ts: Date.now() });
+  return null;
+};
+
+// ── 종목 PER / 추정PER 조회 (네이버 basic API) ──────────────────────────────
+const _stockPerCache = new Map<string, { data: { per: number | null; fper: number | null } | null; ts: number }>();
+
+export const fetchStockPer = async (
+  code: string
+): Promise<{ per: number | null; fper: number | null } | null> => {
+  const cached = _stockPerCache.get(code);
+  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
+
+  const parse = (v: any) => {
+    if (v == null || v === '-' || v === '') return null;
+    const n = parseFloat(String(v).replace(/,/g, ''));
+    return isNaN(n) || n <= 0 ? null : n;
+  };
+
+  const targetUrl = `https://m.stock.naver.com/api/stock/${code}/basic`;
+  const proxies = [
+    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  ];
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data?.stockName) {
+        const result = {
+          per: parse(data.per ?? data.PER),
+          fper: parse(data.forwardPer ?? data.estimatedPer ?? data.consPer ?? data.fwdPer),
+        };
+        _stockPerCache.set(code, { data: result, ts: Date.now() });
+        return result;
+      }
+    } catch { continue; }
+  }
+  _stockPerCache.set(code, { data: null, ts: Date.now() });
+  return null;
+};
+
 export const fetchNaverKospi = async () => {
   const targetUrl = `https://m.stock.naver.com/api/index/KOSPI/basic`;
   const proxies = [
