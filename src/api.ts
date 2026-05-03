@@ -406,7 +406,7 @@ export const fetchEtfTopHoldings = async (
   if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.data;
 
   const targetUrls = [
-    `https://m.stock.naver.com/api/domestic/stock/${code}/etfAnalysis`,
+    `https://m.stock.naver.com/api/stock/${code}/etfAnalysis`,
     `https://m.stock.naver.com/api/domestic/stock/${code}/etfComponentStock`,
     `https://m.stock.naver.com/api/etf/${code}/holding`,
     `https://m.stock.naver.com/api/domestic/stock/${code}/etfHolding`,
