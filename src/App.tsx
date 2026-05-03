@@ -44,6 +44,8 @@ import { usePinManager } from './hooks/usePinManager';
 import { useToast } from './hooks/useToast';
 import { useHistoryBackfill } from './hooks/useHistoryBackfill';
 import { useIndexImport } from './hooks/useIndexImport';
+import { usePortfolioData } from './hooks/usePortfolioData';
+import { useIntegratedData } from './hooks/useIntegratedData';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -555,50 +557,25 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePortfolioId]);
 
-  const totals = useMemo(() => {
-    const fxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-    let tInv = 0, tEvl = 0, tPrf = 0, cats = {}, stks = [];
-    const calc = portfolio.map(item => {
-      let inv = 0, evl = 0;
-      if (item.type === 'deposit') { inv = evl = cleanNum(item.depositAmount) * fxRate; }
-      else if (item.type === 'fund') {
-        inv = cleanNum(item.investAmount) * fxRate;
-        const qty = cleanNum(item.quantity);
-        const price = cleanNum(item.currentPrice);
-        evl = qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
-      }
-      else { inv = cleanNum(item.purchasePrice) * cleanNum(item.quantity) * fxRate; evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate; }
-      const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;
-      const c = item.type === 'deposit' ? '예수금' : (item.category || '미지정');
-      if (!cats[c]) cats[c] = { invest: 0, eval: 0, profit: 0 };
-      cats[c].invest += inv; cats[c].eval += evl; cats[c].profit += prf;
-      if (item.type === 'stock') stks.push({ name: item.name, eval: evl });
-      return { ...item, investAmount: inv, evalAmount: evl, profit: prf };
-    }).map(item => ({
-      ...item,
-      investRatio: tInv > 0 ? (item.investAmount / tInv) * 100 : 0,
-      evalRatio: tEvl > 0 ? (item.evalAmount / tEvl) * 100 : 0,
-      returnRate: item.investAmount > 0 ? (item.profit / item.investAmount) * 100 : 0
-    }));
-    return { calcPortfolio: calc, totalInvest: tInv, totalEval: tEvl, totalProfit: tPrf, cats, stks };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portfolio, activePortfolioAccountType, marketIndicators.usdkrw]);
-
-  const cagr = useMemo(() => {
-    const effectiveFx = activePortfolioAccountType === 'overseas'
-      ? (avgExchangeRate || marketIndicators.usdkrw || 1)
-      : 1;
-    const principalKRW = activePortfolioAccountType === 'overseas'
-      ? principal * effectiveFx
-      : principal;
-    if (!portfolioStartDate || principalKRW <= 0 || totals.totalEval <= 0) return 0;
-    const days = (new Date() - new Date(portfolioStartDate)) / (1000 * 60 * 60 * 24);
-    if (days <= 0) return 0;
-    if (days < 365) return (totals.totalEval / principalKRW - 1) * 100;
-    return (Math.pow(totals.totalEval / principalKRW, 1 / (days / 365.25)) - 1) * 100;
-  }, [portfolioStartDate, principal, avgExchangeRate, totals.totalEval, activePortfolioAccountType, marketIndicators.usdkrw]);
-
-  const sortedHistoryDesc = useMemo(() => [...history].sort((a, b) => new Date(b.date) - new Date(a.date)), [history]);
+  const {
+    totals,
+    cagr,
+    sortedHistoryDesc,
+    rebalanceData,
+    allPortfoliosForDividend,
+    rebalCatDonutData,
+    curCatDonutData,
+    displayHistSliced,
+    depositWithSum,
+    depositWithSum2,
+    depositWithSumSorted,
+    depositWithSum2Sorted,
+  } = usePortfolioData({
+    portfolio, activePortfolioAccountType, marketIndicators, principal,
+    avgExchangeRate, portfolioStartDate, settings, depositHistory, depositHistory2,
+    portfolios, activePortfolioId, history, historyLimit,
+    rebalanceSortConfig, depositSortConfig, depositSortConfig2,
+  });
 
   const unifiedDates = useMemo(() => {
     const dates = new Set();
@@ -753,173 +730,24 @@ export default function App() {
     });
   }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks]);
 
-  const rebalanceData = useMemo(() => {
-    const rebalFxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-    const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-    const nativeTotalEval = rebalFxRate > 1 ? totals.totalEval / rebalFxRate : totals.totalEval;
-    const overallExp = nativeTotalEval + cleanNum(settings.amount);
-    const accumulateBase = cleanNum(settings.amount) + depositAmount;
-    let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
-      const tRatio = cleanNum(item.targetRatio) / 100;
-      const qty = cleanNum(item.quantity);
-      const price = cleanNum(item.currentPrice);
-      const curEval = item.type === 'fund' && !(qty > 0 && price > 0)
-        ? cleanNum(item.evalAmount)
-        : price * qty;
-      let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((accumulateBase * tRatio) / price)) : 0;
-      const expEval = (qty + action) * price;
-      const cost = action * price;
-      const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
-      return { ...item, curEval, action, cost, expEval, expRatio };
-    });
-    if (rebalanceSortConfig.key && rebalanceSortConfig.key !== 'category') {
-      const catOrder: string[] = [];
-      const grouped: Record<string, typeof data> = {};
-      data.forEach(item => {
-        const cat = (item.category as string) || '기타';
-        if (!grouped[cat]) { grouped[cat] = []; catOrder.push(cat); }
-        grouped[cat].push(item);
-      });
-      Object.values(grouped).forEach(items => {
-        items.sort((a, b) => {
-          const vA = a[rebalanceSortConfig.key], vB = b[rebalanceSortConfig.key];
-          if (typeof vA === 'string') return vA.localeCompare(vB) * rebalanceSortConfig.direction;
-          return (vA - vB) * rebalanceSortConfig.direction;
-        });
-      });
-      data = catOrder.flatMap(cat => grouped[cat]);
-    } else if (rebalanceSortConfig.key === 'category') {
-      data.sort((a, b) => {
-        const catA = (a.category as string) || '기타', catB = (b.category as string) || '기타';
-        return catA.localeCompare(catB) * rebalanceSortConfig.direction;
-      });
-    }
-    return data;
-  }, [portfolio, totals.totalEval, settings, rebalanceSortConfig, activePortfolioAccountType, marketIndicators.usdkrw]);
-
-  const activeDividendHistory = useMemo(
-    () => portfolios.find(p => p.id === activePortfolioId)?.dividendHistory || {},
-    [portfolios, activePortfolioId]
-  );
-  const activeDividendHistoryUpdatedAt = useMemo(
-    () => portfolios.find(p => p.id === activePortfolioId)?.dividendHistoryUpdatedAt || null,
-    [portfolios, activePortfolioId]
-  );
-
-  const allPortfoliosForDividend = useMemo(() =>
-    portfolios.map(p =>
-      p.id === activePortfolioId ? { ...p, portfolio } : p
-    ),
-    [portfolios, activePortfolioId, portfolio]
-  );
-
-  const rebalCatDonutData = useMemo(() => {
-    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
-    const catMap: Record<string, { value: number; ratio: number }> = {};
-    rebalanceData.forEach(item => {
-      const cat = (item.category as string) || '기타';
-      if (!catMap[cat]) catMap[cat] = { value: 0, ratio: 0 };
-      catMap[cat].value += item.expEval;
-      catMap[cat].ratio += item.expRatio;
-    });
-    return Object.entries(catMap)
-      .map(([name, { value, ratio }]) => ({ name, value, ratio }))
-      .filter(x => x.value > 0 && x.ratio >= 0.05)
-      .sort((a, b) => {
-        const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
-        if (ia !== -1 && ib !== -1) return ia - ib;
-        if (ia !== -1) return -1;
-        if (ib !== -1) return 1;
-        return b.value - a.value;
-      });
-  }, [rebalanceData]);
-
-  const curCatDonutData = useMemo(() => {
-    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
-    return Object.entries(totals.cats)
-      .map(([name, val]: [string, any]) => ({ name, value: val.eval }))
-      .filter(x => x.value > 0)
-      .sort((a, b) => {
-        const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
-        if (ia !== -1 && ib !== -1) return ia - ib;
-        if (ia !== -1) return -1;
-        if (ib !== -1) return 1;
-        return b.value - a.value;
-      });
-  }, [totals.cats]);
-
   // ── 통합 대시보드 계산 ──
-  // 각 포트폴리오의 요약 계산 (active는 현재 state, 나머지는 저장된 데이터 사용)
-  const portfolioSummaries = useMemo(() => {
-    return portfolios.map(p => {
-      const isActive = p.id === activePortfolioId;
-      const startDate = isActive ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
-      const name = isActive ? title : p.name;
-      const days = startDate ? (Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24) : 0;
+  const {
+    portfolioSummaries,
+    intTotals,
+    computedIntHistory,
+    intSortedHistory,
+    intUnifiedDates,
+    intFilteredDates,
+    intChartData,
+    intMonthlyHistory,
+    intCatDonutData,
+    intHoldingsDonutData,
+  } = useIntegratedData({
+    portfolios, activePortfolioId, portfolio, principal,
+    avgExchangeRate, portfolioStartDate, title, marketIndicators,
+    history, intAppliedRange, intIsZeroBaseMode,
+  });
 
-      // 직접입력형 계좌: evalAmount와 principal을 직접 사용
-      if (p.accountType === 'simple') {
-        const evalAmount = cleanNum(p.evalAmount) || 0;
-        const prin = cleanNum(p.principal) || 0;
-        const returnRate = prin > 0 ? (evalAmount - prin) / prin * 100 : 0;
-        const cagr = prin > 0 && evalAmount > 0 && days > 0
-          ? days < 365 ? (evalAmount / prin - 1) * 100 : (Math.pow(evalAmount / prin, 365.25 / days) - 1) * 100
-          : 0;
-        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: 0, returnRate, cagr, cats: {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '' };
-      }
-
-      const items = isActive ? portfolio : (p.portfolio || []);
-      const prin = isActive ? principal : (p.principal || 0);
-      const summaryFxRate = p.accountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-      const summaryAvgFx = p.accountType === 'overseas'
-        ? ((isActive ? avgExchangeRate : (p.avgExchangeRate || 0)) || summaryFxRate)
-        : 1;
-      const principalKRW = prin * summaryAvgFx;
-      let totalEval = 0, depositAmt = 0;
-      const cats = {};
-      items.forEach(item => {
-        if (item.type === 'deposit') {
-          const v = cleanNum(item.depositAmount) * summaryFxRate;
-          totalEval += v; depositAmt += v;
-          cats['예수금'] = (cats['예수금'] || 0) + v;
-        } else if (item.type === 'fund') {
-          const qty = cleanNum(item.quantity);
-          const price = cleanNum(item.currentPrice);
-          const evl = qty > 0 && price > 0 ? qty * price * summaryFxRate : cleanNum(item.evalAmount) * summaryFxRate;
-          totalEval += evl;
-          cats['FUND'] = (cats['FUND'] || 0) + evl;
-        } else {
-          const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * summaryFxRate;
-          totalEval += evl;
-          const cat = item.category || '미지정';
-          cats[cat] = (cats[cat] || 0) + evl;
-        }
-      });
-      const returnRate = principalKRW > 0 ? (totalEval - principalKRW) / principalKRW * 100 : 0;
-      const cagr = principalKRW > 0 && totalEval > 0 && days > 0
-        ? days < 365
-          ? (totalEval / principalKRW - 1) * 100
-          : (Math.pow(totalEval / principalKRW, 365.25 / days) - 1) * 100
-        : 0;
-      return { id: p.id, name, startDate, currentEval: totalEval, principal: principalKRW, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '' };
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portfolios, activePortfolioId, portfolio, principal, avgExchangeRate, portfolioStartDate, title, marketIndicators.usdkrw]);
-
-  const intTotals = useMemo(() => {
-    let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
-    const cats = {};
-    portfolioSummaries.forEach(s => {
-      totalEval += s.currentEval;
-      totalPrincipal += s.principal;
-      totalDeposit += s.depositAmount;
-      Object.entries(s.cats).forEach(([cat, val]) => {
-        cats[cat] = (cats[cat] || 0) + val;
-      });
-    });
-    const returnRate = totalPrincipal > 0 ? (totalEval - totalPrincipal) / totalPrincipal * 100 : 0;
-    return { totalEval, totalPrincipal, totalDeposit, cats, returnRate };
-  }, [portfolioSummaries]);
 
   const { handleManualBackfill } = useHistoryBackfill({
     stockHistoryMap, indicatorHistoryMap, marketIndicators,
@@ -934,63 +762,6 @@ export default function App() {
     setStockHistoryMap, setMarketIndicators, setIndicatorHistoryMap, showToast,
   });
 
-  const computedIntHistory = useMemo(() => {
-    const dateToTotal = new Map();
-    const today = new Date().toISOString().split('T')[0];
-    portfolios.forEach(p => {
-      const hist = p.id === activePortfolioId ? history : (p.history || []);
-      hist.forEach(h => {
-        if (h.evalAmount > 0) dateToTotal.set(h.date, (dateToTotal.get(h.date) || 0) + h.evalAmount);
-      });
-    });
-    // 오늘은 항상 현재 총합으로 덮어씀 (일부 계좌만 오늘 기록된 경우 보정)
-    if (intTotals.totalEval > 0) dateToTotal.set(today, intTotals.totalEval);
-    return [...dateToTotal.entries()]
-      .map(([date, evalAmount]) => {
-        // 해당 날짜에 이미 시작된 계좌의 원금만 합산 (날짜별 유효 원금)
-        const effectivePrincipal = portfolios.reduce((sum, p) => {
-          const sd = p.portfolioStartDate || p.startDate || '';
-          const pr = p.id === activePortfolioId ? principal : (p.principal || 0);
-          return sum + (sd && sd <= date ? pr : 0);
-        }, 0);
-        return { id: date, date, evalAmount, effectivePrincipal };
-      })
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, history, activePortfolioId, intTotals.totalEval, principal]);
-
-  const intSortedHistory = useMemo(() =>
-    [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
-    [computedIntHistory]);
-
-  const intUnifiedDates = useMemo(() =>
-    Array.from(new Set(computedIntHistory.map(h => h.date))).sort(),
-    [computedIntHistory]);
-
-  const intFilteredDates = useMemo(() => {
-    if (!intAppliedRange.start || !intAppliedRange.end) return intUnifiedDates;
-    return intUnifiedDates.filter(d => d >= intAppliedRange.start && d <= intAppliedRange.end);
-  }, [intUnifiedDates, intAppliedRange]);
-
-  const intChartData = useMemo(() => {
-    if (intSortedHistory.length === 0) return [];
-    const all = intFilteredDates.length > 0
-      ? intSortedHistory.filter(h => intFilteredDates.includes(h.date))
-      : intSortedHistory;
-    if (all.length === 0) return [];
-    // 날짜별 유효 원금(effectivePrincipal) 기반으로 필터링: 해당 날짜 유효 원금의 70% 미만인 경우 제외
-    const filtered = intIsZeroBaseMode
-      ? (() => { const valid = all.filter(h => h.effectivePrincipal > 0 && h.evalAmount >= h.effectivePrincipal * 0.7); return valid.length > 0 ? valid : all; })()
-      : all;
-    const baseEval = filtered[0].evalAmount;
-    return filtered.map(h => ({
-      date: h.date,
-      evalAmount: h.evalAmount,
-      costAmount: h.effectivePrincipal,
-      returnRate: intIsZeroBaseMode
-        ? (baseEval > 0 ? ((h.evalAmount / baseEval) - 1) * 100 : 0)
-        : (h.effectivePrincipal > 0 ? ((h.evalAmount - h.effectivePrincipal) / h.effectivePrincipal * 100) : 0),
-    }));
-  }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode]);
 
   const {
     handleChartMouseDown, handleChartMouseMove, handleChartMouseUp, handleChartMouseLeave,
@@ -1037,114 +808,7 @@ export default function App() {
     refreshPrices();
   }, [activePortfolioId]);
 
-  const intMonthlyHistory = useMemo(() => {
-    const sortedDesc = [...computedIntHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
-    return sortedDesc.map((h, i) => {
-      const ep = h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal;
-      const monthlyChange = ep > 0 ? ((h.evalAmount - ep) / ep) * 100 : 0;
-      const prevRecord = sortedDesc[i + 1];
-      const dodChange = (prevRecord && prevRecord.evalAmount > 0)
-        ? ((h.evalAmount / prevRecord.evalAmount) - 1) * 100 : 0;
-      return { ...h, monthlyChange, dodChange };
-    });
-  }, [computedIntHistory, intTotals.totalPrincipal]);
 
-  const intCatDonutData = useMemo(() => {
-    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
-    return Object.entries(intTotals.cats)
-      .map(([name, value]) => ({ name, value }))
-      .filter(x => x.value > 0)
-      .sort((a, b) => {
-        const ia = ORDER.indexOf(a.name);
-        const ib = ORDER.indexOf(b.name);
-        if (ia !== -1 && ib !== -1) return ia - ib;
-        if (ia !== -1) return -1;
-        if (ib !== -1) return 1;
-        return b.value - a.value;
-      });
-  }, [intTotals.cats]);
-
-  const intHoldingsDonutData = useMemo(() => {
-    const holdingsMap: Record<string, { value: number; cost: number; category: string; code: string }> = {};
-    portfolios.forEach(p => {
-      if (p.accountType === 'simple') return;
-      const isActive = p.id === activePortfolioId;
-      const items = isActive ? portfolio : (p.portfolio || []);
-      const fxRate = p.accountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-      const isGold = p.accountType === 'gold';
-      items.forEach(item => {
-        if (item.type === 'deposit') {
-          const v = cleanNum(item.depositAmount) * fxRate;
-          if (v <= 0) return;
-          const key = '예수금';
-          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금', code: '' };
-          holdingsMap[key].value += v;
-          holdingsMap[key].cost += v;
-        } else if (item.type === 'fund') {
-          const qty = cleanNum(item.quantity);
-          const price = cleanNum(item.currentPrice);
-          const evl = qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
-          if (evl <= 0) return;
-          const cost = cleanNum(item.investAmount) * fxRate;
-          const key = item.name || item.code || 'FUND';
-          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: 'FUND', code: item.code || '' };
-          holdingsMap[key].value += evl;
-          holdingsMap[key].cost += cost;
-        } else {
-          const qty = cleanNum(item.quantity);
-          const evl = cleanNum(item.currentPrice) * qty * fxRate;
-          if (evl <= 0) return;
-          const cost = cleanNum(item.purchasePrice) * qty * fxRate;
-          const key = isGold ? 'KRX 금현물' : (item.name || item.code || '기타');
-          const category = isGold ? '금' : (item.category || '미지정');
-          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category, code: isGold ? '' : (item.code || '') };
-          holdingsMap[key].value += evl;
-          holdingsMap[key].cost += cost;
-        }
-      });
-    });
-    return Object.entries(holdingsMap)
-      .map(([name, { value, cost, category, code }]) => ({ name, value, cost, category, code }))
-      .filter(x => x.value > 0)
-      .sort((a, b) => b.value - a.value);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portfolios, activePortfolioId, portfolio, marketIndicators.usdkrw]);
-
-  const displayHistSliced = useMemo(() => sortedHistoryDesc.slice(0, historyLimit), [sortedHistoryDesc, historyLimit]);
-
-  const depositWithSum = useMemo(() => {
-    let runSum = 0;
-    return [...depositHistory].reverse().map((h, i) => {
-      runSum += cleanNum(h.amount);
-      return { ...h, cumulative: runSum, originalIndex: depositHistory.length - 1 - i };
-    }).reverse();
-  }, [depositHistory]);
-
-  const depositWithSum2 = useMemo(() => {
-    let runSum = 0;
-    return [...depositHistory2].reverse().map((h, i) => {
-      runSum += cleanNum(h.amount);
-      return { ...h, cumulative: runSum, originalIndex: depositHistory2.length - 1 - i };
-    }).reverse();
-  }, [depositHistory2]);
-
-  const depositWithSumSorted = useMemo(() => {
-    if (!depositSortConfig.key) return depositWithSum;
-    return [...depositWithSum].sort((a, b) => {
-      if (depositSortConfig.key === 'date') { const da = a.date ? new Date(a.date).getTime() : 0; const db = b.date ? new Date(b.date).getTime() : 0; return (da - db) * depositSortConfig.direction; }
-      if (depositSortConfig.key === 'amount') { return (cleanNum(a.amount) - cleanNum(b.amount)) * depositSortConfig.direction; }
-      return 0;
-    });
-  }, [depositWithSum, depositSortConfig]);
-
-  const depositWithSum2Sorted = useMemo(() => {
-    if (!depositSortConfig2.key) return depositWithSum2;
-    return [...depositWithSum2].sort((a, b) => {
-      if (depositSortConfig2.key === 'date') { const da = a.date ? new Date(a.date).getTime() : 0; const db = b.date ? new Date(b.date).getTime() : 0; return (da - db) * depositSortConfig2.direction; }
-      if (depositSortConfig2.key === 'amount') { return (cleanNum(a.amount) - cleanNum(b.amount)) * depositSortConfig2.direction; }
-      return 0;
-    });
-  }, [depositWithSum2, depositSortConfig2]);
 
   const handleSort = (key) => {
     let dir = sortConfig.key === key ? -sortConfig.direction : 1;
