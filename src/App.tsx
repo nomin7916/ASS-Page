@@ -1055,8 +1055,9 @@ export default function App() {
                 if (freshTs > localPortfolioUpdatedAt) localPortfolioUpdatedAt = freshTs;
               }
             } catch {}
-            // 로컬이 최신인 경우: 로컬 타임스탬프가 Drive보다 크면 유지 (Drive T=0인 구버전 데이터도 로컬 우선)
-            const keepLocal = localPortfolioUpdatedAt > 0 && localPortfolioUpdatedAt > drivePortfolioTs;
+            // 로컬이 최신이거나 동일한 경우 유지 — 구버전(portfolioUpdatedAt=0) 포함
+            // 같을 때 Drive 우선 정책은 구버전 Drive 데이터(잘못된 날짜)가 로컬을 덮어쓰는 버그를 유발함
+            const keepLocal = localPortfoliosCount > 0 && localPortfolioUpdatedAt >= drivePortfolioTs;
             if (!keepLocal) {
               await loadFromDrive(token);
               usedDriveData = true;
@@ -1143,6 +1144,8 @@ export default function App() {
         dividendTaxRate: p.dividendTaxRate,
         dividendSeparateTax: p.dividendSeparateTax,
         lookupRows: p.lookupRows,
+        memo: p.memo || '',
+        rowColor: p.rowColor || '',
       })),
       activePortfolioId, customLinks,
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
