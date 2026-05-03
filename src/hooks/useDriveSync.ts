@@ -226,17 +226,18 @@ export function useDriveSync({
     try {
       const stateData = await loadBackupById(driveTokenRef.current, fileId) as any;
       if (!stateData) throw new Error('empty');
+      // 2초 디바운스 타이머의 Drive 저장 guard를 초기화 → 백업 적용 후 반드시 Drive에 저장되도록 보장
+      lastDriveSavedPortfolioUpdatedAtRef.current = 0;
       applyBackupData(stateData, accountChartStatesRef);
       // Drive STATE에 백업 내용 즉시 반영 (isInitialLoad 및 portfolioUpdatedAt 조건 우회)
-      try {
-        const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = stateData;
-        const newUpdatedAt = Date.now();
-        const folderId = await ensureDriveFolder(driveTokenRef.current);
-        await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.STATE, { ...stateCore, portfolioUpdatedAt: newUpdatedAt });
-        await saveVersionFile(driveTokenRef.current, folderId, newUpdatedAt);
-        lastDriveSavedPortfolioUpdatedAtRef.current = newUpdatedAt;
-        portfolioUpdatedAtRef.current = newUpdatedAt;
-      } catch {}
+      // catch로 감추지 않고 에러 시 콘솔에 출력 — 2초 타이머가 실패 시 재시도 역할
+      const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = stateData;
+      const newUpdatedAt = Date.now();
+      const folderId = await ensureDriveFolder(driveTokenRef.current);
+      await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.STATE, { ...stateCore, portfolioUpdatedAt: newUpdatedAt });
+      await saveVersionFile(driveTokenRef.current, folderId, newUpdatedAt);
+      lastDriveSavedPortfolioUpdatedAtRef.current = newUpdatedAt;
+      portfolioUpdatedAtRef.current = newUpdatedAt;
       setDriveStatus('saved');
       setShowBackupModal(false);
       showToast(`${displayTime} 백업이 적용되었습니다.`);
