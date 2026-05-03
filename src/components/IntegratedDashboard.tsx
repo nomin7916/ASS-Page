@@ -114,7 +114,7 @@ export default function IntegratedDashboard({
   const fetchingRef = useRef(new Set());
 
   useEffect(() => {
-    const isKr6 = (c) => /^\d{6}$/.test(c || '');
+    const isKr6 = (c) => /^[A-Z0-9]{6}$/i.test(c || '');
     const candidates = intHoldingsDonutData.filter(item => isKr6(item.code));
     if (candidates.length === 0) return;
 

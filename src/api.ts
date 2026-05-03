@@ -389,12 +389,12 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
 const _etfHoldingsCache = new Map<string, { data: Array<{ name: string; code: string; ratio: number }> | null; ts: number }>();
 
 const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio: number }> | null => {
-  const list = data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? data?.data ?? [];
+  const list = data?.etfTop10MajorConstituentAssets ?? data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? data?.data ?? [];
   if (!Array.isArray(list) || list.length === 0) return null;
   const result = list.slice(0, 3).map((x: any) => ({
     name: x.itemName ?? x.stockName ?? x.name ?? '',
     code: x.itemCode ?? x.stockCode ?? x.code ?? '',
-    ratio: parseFloat(String(x.holdingRatio ?? x.ratio ?? x.weight ?? 0)),
+    ratio: parseFloat(String(x.etfWeight ?? x.holdingRatio ?? x.ratio ?? x.weight ?? 0).replace('%', '')),
   })).filter((x: any) => x.name);
   return result.length > 0 ? result : null;
 };
@@ -406,6 +406,7 @@ export const fetchEtfTopHoldings = async (
   if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.data;
 
   const targetUrls = [
+    `https://m.stock.naver.com/api/domestic/stock/${code}/etfAnalysis`,
     `https://m.stock.naver.com/api/domestic/stock/${code}/etfComponentStock`,
     `https://m.stock.naver.com/api/etf/${code}/holding`,
     `https://m.stock.naver.com/api/domestic/stock/${code}/etfHolding`,
