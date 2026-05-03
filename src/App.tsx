@@ -1416,9 +1416,11 @@ export default function App() {
       // Drive에서 이미 로드했으면 현재 상태 그대로 유지, localStorage 기준이면 Drive에 백업
       setTimeout(() => {
         isInitialLoad.current = false;
-        const snap = saveStateRef.current;
-        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
-          saveAllToDrive(snap);
+        if (!usedDriveData) {
+          const snap = saveStateRef.current;
+          if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
+            saveAllToDrive(snap);
+          }
         }
       }, 1000);
     }, 400);
