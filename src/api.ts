@@ -482,8 +482,8 @@ export const fetchStockPer = async (
     return null;
   }
 
-  // Step 2: 분기 EPS 조회 → PER = 주가 / 연환산EPS
-  for (const proxy of mkProxies(`https://m.stock.naver.com/api/stock/${code}/finance/summary`)) {
+  // Step 2: 연간 EPS 조회 → 네이버 PER/추정PER 기준 (finance/annual)
+  for (const proxy of mkProxies(`https://m.stock.naver.com/api/stock/${code}/finance/annual`)) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
@@ -492,26 +492,23 @@ export const fetchStockPer = async (
       const titleList: any[] = data?.chartEps?.trTitleList;
       if (!epsRow || !titleList) continue;
 
-      const quarters = titleList.map((t: any, i: number) => ({
+      const years = titleList.map((t: any, i: number) => ({
         isConsensus: t.isConsensus === 'Y',
         eps: parseNum(epsRow[i + 1]),
-      })).filter((q: any) => q.eps !== null);
+      })).filter((y: any) => y.eps !== null);
 
-      const actualQ = quarters.filter((q: any) => !q.isConsensus);
-      const consensusQ = quarters.filter((q: any) => q.isConsensus);
+      const actualY = years.filter((y: any) => !y.isConsensus);
+      const consensusY = years.filter((y: any) => y.isConsensus);
 
-      // trailing PER: 최근 4분기 실적 EPS 합산
+      // trailing PER: 가장 최근 실적 연간 EPS (네이버 기준)
       let per: number | null = null;
-      const last4 = actualQ.slice(-4);
-      if (last4.length >= 4) {
-        const annualEps = last4.reduce((s: number, q: any) => s + q.eps, 0);
-        if (annualEps > 0) per = Math.round(closePrice / annualEps * 100) / 100;
-      }
+      const lastActual = actualY[actualY.length - 1];
+      if (lastActual?.eps > 0) per = Math.round(closePrice / lastActual.eps * 100) / 100;
 
-      // forward PER: 첫 컨센서스 분기 EPS × 4 연환산
+      // forward PER: 첫 번째 컨센서스 연간 EPS (네이버 추정PER 기준)
       let fper: number | null = null;
-      if (consensusQ.length > 0 && consensusQ[0].eps > 0) {
-        fper = Math.round(closePrice / (consensusQ[0].eps * 4) * 100) / 100;
+      if (consensusY.length > 0 && consensusY[0].eps > 0) {
+        fper = Math.round(closePrice / consensusY[0].eps * 100) / 100;
       }
 
       const result = { per, fper };
@@ -521,6 +518,46 @@ export const fetchStockPer = async (
   }
 
   _stockPerCache.set(code, { data: null, ts: Date.now() });
+  return null;
+};
+
+// ── 해외 종목 PER / 선행PER 조회 (Yahoo Finance quoteSummary) ────────────────
+const _yahooPerCache = new Map<string, { data: { per: number | null; fper: number | null } | null; ts: number }>();
+
+export const fetchYahooStockPer = async (
+  ticker: string
+): Promise<{ per: number | null; fper: number | null } | null> => {
+  const key = ticker.toUpperCase();
+  const cached = _yahooPerCache.get(key);
+  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
+
+  const targetUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${key}?modules=summaryDetail`;
+  const proxies = [
+    targetUrl,
+    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  ];
+
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const detail = data?.quoteSummary?.result?.[0]?.summaryDetail;
+      if (!detail) continue;
+      const rawPer = detail.trailingPE?.raw;
+      const rawFper = detail.forwardPE?.raw;
+      const result = {
+        per: rawPer != null && isFinite(rawPer) ? Math.round(rawPer * 100) / 100 : null,
+        fper: rawFper != null && isFinite(rawFper) ? Math.round(rawFper * 100) / 100 : null,
+      };
+      _yahooPerCache.set(key, { data: result, ts: Date.now() });
+      return result;
+    } catch { continue; }
+  }
+
+  _yahooPerCache.set(key, { data: null, ts: Date.now() });
   return null;
 };
 

@@ -12,7 +12,7 @@ import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cl
 import CustomDatePicker from './CustomDatePicker';
 import { PieLabelOutside } from '../chartUtils';
 import DividendSummaryTable from './DividendSummaryTable';
-import { fetchEtfTopHoldings, fetchStockPer } from '../api';
+import { fetchEtfTopHoldings, fetchStockPer, fetchYahooStockPer } from '../api';
 
 // 세션 캐시 (컴포넌트 재마운트 간 유지)
 const _etfInfoCache = new Map(); // itemCode → { holdings: [...] | null, ts }
@@ -137,8 +137,13 @@ export default function IntegratedDashboard({
           setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: null, fper: null } }));
         }
       } else {
+        const isOverseasTicker = (c) => /^[A-Za-z]{1,6}$/.test(c || '');
         const perResults = await Promise.all(
-          holdings.map(h => isKr6(h.code) ? fetchStockPer(h.code) : Promise.resolve(null))
+          holdings.map(h =>
+            isKr6(h.code) ? fetchStockPer(h.code)
+            : isOverseasTicker(h.code) ? fetchYahooStockPer(h.code)
+            : Promise.resolve(null)
+          )
         );
         const enriched = holdings.map((h, i) => ({ ...h, per: perResults[i]?.per ?? null, fper: perResults[i]?.fper ?? null }));
         setEtfInfoMap(prev => ({ ...prev, [name]: enriched }));
@@ -748,9 +753,9 @@ export default function IntegratedDashboard({
                               <th className="pb-2 px-3 border-r border-gray-700">비중</th>
                               <th className="pb-2 px-3 border-r border-gray-700">수익</th>
                               <th className="pb-2 px-3 border-r border-gray-700">수익률</th>
-                              <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중1위<div className="text-[9px] text-gray-600 font-normal">종목·PER·추정</div></th>
-                              <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중2위<div className="text-[9px] text-gray-600 font-normal">종목·PER·추정</div></th>
-                              <th className="pb-2 px-2 text-sky-400/80 text-[10px]">비중3위<div className="text-[9px] text-gray-600 font-normal">종목·PER·추정</div></th>
+                              <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중1위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
+                              <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중2위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
+                              <th className="pb-2 px-2 text-sky-400/80 text-[10px]">비중3위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -811,12 +816,18 @@ export default function IntegratedDashboard({
                                           return (
                                             <td key={idx} className={`py-1.5 px-2 align-middle${isLast ? '' : ' border-r border-gray-700'}`}>
                                               <div className="flex flex-col items-center gap-0 leading-tight">
-                                                <span className="text-[10px] text-gray-300 font-medium whitespace-nowrap">{h.name}</span>
-                                                <span className="text-[9px] text-gray-500 whitespace-nowrap">{h.ratio.toFixed(1)}%</span>
-                                                <span className="text-[9px] text-gray-600 whitespace-nowrap">
-                                                  P <span className="text-gray-400">{h.per != null ? h.per.toFixed(2) : '—'}</span>
-                                                  {' '}추정 <span className="text-gray-400">{h.fper != null ? h.fper.toFixed(2) : '—'}</span>
-                                                </span>
+                                                <div className="flex items-center gap-1 whitespace-nowrap">
+                                                  <span className="text-[10px] text-gray-300 font-medium">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</span>
+                                                  <span className="text-[9px] text-gray-600">|</span>
+                                                  <span className="text-[9px] text-gray-500">{h.ratio.toFixed(1)}%</span>
+                                                </div>
+                                                <div className="flex items-center gap-1 whitespace-nowrap">
+                                                  <span className="text-[9px] text-gray-600">PER</span>
+                                                  <span className="text-[9px] text-gray-400">{h.per != null ? h.per.toFixed(2) : '—'}</span>
+                                                  <span className="text-[9px] text-gray-600">|</span>
+                                                  <span className="text-[9px] text-gray-600">선행</span>
+                                                  <span className="text-[9px] text-gray-400">{h.fper != null ? h.fper.toFixed(2) : '—'}</span>
+                                                </div>
                                               </div>
                                             </td>
                                           );
@@ -831,7 +842,7 @@ export default function IntegratedDashboard({
                                               <span className="text-[10px] text-gray-500">
                                                 PER <span className="text-gray-300">{info.per != null ? info.per.toFixed(2) : '—'}</span>
                                                 <span className="mx-1.5 text-gray-700">|</span>
-                                                추정 <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
+                                                선행PER <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
                                               </span>
                                             ) : (
                                               <span className="text-[9px] text-gray-700">조회불가</span>

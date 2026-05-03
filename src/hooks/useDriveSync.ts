@@ -227,6 +227,16 @@ export function useDriveSync({
       const stateData = await loadBackupById(driveTokenRef.current, fileId) as any;
       if (!stateData) throw new Error('empty');
       applyBackupData(stateData, accountChartStatesRef);
+      // Drive STATE에 백업 내용 즉시 반영 (isInitialLoad 및 portfolioUpdatedAt 조건 우회)
+      try {
+        const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = stateData;
+        const newUpdatedAt = Date.now();
+        const folderId = await ensureDriveFolder(driveTokenRef.current);
+        await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.STATE, { ...stateCore, portfolioUpdatedAt: newUpdatedAt });
+        await saveVersionFile(driveTokenRef.current, folderId, newUpdatedAt);
+        lastDriveSavedPortfolioUpdatedAtRef.current = newUpdatedAt;
+        portfolioUpdatedAtRef.current = newUpdatedAt;
+      } catch {}
       setDriveStatus('saved');
       setShowBackupModal(false);
       showToast(`${displayTime} 백업이 적용되었습니다.`);

@@ -1244,7 +1244,12 @@ export default function App() {
         // 구버전 호환: 통합 키에 stockHistoryMap이 있으면 사용 (신버전은 별도 키 사용)
         setStockHistoryMap(data.stockHistoryMap || {});
         if (data.portfolios?.length > 0) {
-          setPortfolios(data.portfolios);
+          const normalizedPortfolios = data.portfolios.map(p => ({
+            ...p,
+            startDate: p.portfolioStartDate || p.startDate || '',
+            portfolioStartDate: p.portfolioStartDate || p.startDate || '',
+          }));
+          setPortfolios(normalizedPortfolios);
           setActivePortfolioId(data.activePortfolioId || data.portfolios[0].id);
         } else if (data.portfolio) {
           // 구 형식 마이그레이션
@@ -1411,11 +1416,9 @@ export default function App() {
       // Drive에서 이미 로드했으면 현재 상태 그대로 유지, localStorage 기준이면 Drive에 백업
       setTimeout(() => {
         isInitialLoad.current = false;
-        if (!usedDriveData) {
-          const snap = saveStateRef.current;
-          if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
-            saveAllToDrive(snap);
-          }
+        const snap = saveStateRef.current;
+        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
+          saveAllToDrive(snap);
         }
       }, 1000);
     }, 400);
