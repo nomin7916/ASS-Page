@@ -361,6 +361,8 @@ export default function App() {
     if (stateData.portfolios?.length > 0) {
       const normalizedPortfolios = stateData.portfolios.map(p => ({
         ...p,
+        startDate: p.portfolioStartDate || p.startDate || '',
+        portfolioStartDate: p.portfolioStartDate || p.startDate || '',
         depositHistory: (p.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })),
         depositHistory2: (p.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })),
       }));
@@ -427,6 +429,8 @@ export default function App() {
     if (stateData.portfolios?.length > 0) {
       const normalizedPortfolios = stateData.portfolios.map(p => ({
         ...p,
+        startDate: p.portfolioStartDate || p.startDate || '',
+        portfolioStartDate: p.portfolioStartDate || p.startDate || '',
         depositHistory: (p.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })),
         depositHistory2: (p.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })),
       }));
@@ -849,7 +853,7 @@ export default function App() {
   const portfolioSummaries = useMemo(() => {
     return portfolios.map(p => {
       const isActive = p.id === activePortfolioId;
-      const startDate = isActive ? portfolioStartDate : (p.startDate || p.portfolioStartDate || '');
+      const startDate = isActive ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
       const name = isActive ? title : p.name;
       const days = startDate ? (Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24) : 0;
 
