@@ -129,8 +129,13 @@ export default function IntegratedDashboard({
 
       const holdings = await fetchEtfTopHoldings(code);
       if (!holdings || holdings.length === 0) {
+        // ETF holdings 조회 실패 → 종목 자체 PER 시도 (stocks만 유효, ETF는 fetchStockPer 내부에서 null 반환)
         const perData = await fetchStockPer(code);
-        setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: perData?.per ?? null, fper: perData?.fper ?? null } }));
+        if (perData?.per != null || perData?.fper != null) {
+          setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: perData.per, fper: perData.fper } }));
+        } else {
+          setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: null, fper: null } }));
+        }
       } else {
         const perResults = await Promise.all(
           holdings.map(h => isKr6(h.code) ? fetchStockPer(h.code) : Promise.resolve(null))
@@ -818,15 +823,22 @@ export default function IntegratedDashboard({
                                         });
                                       }
                                       // 일반 주식: 자체 PER을 colSpan=3으로 표시
-                                      if (info?.isStock) return (
-                                        <td colSpan={3} className="py-1.5 px-3 text-center align-middle">
-                                          <span className="text-[10px] text-gray-500">
-                                            PER <span className="text-gray-300">{info.per != null ? info.per.toFixed(2) : '—'}</span>
-                                            <span className="mx-1.5 text-gray-700">|</span>
-                                            추정 <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
-                                          </span>
-                                        </td>
-                                      );
+                                      if (info?.isStock) {
+                                        const hasAny = info.per != null || info.fper != null;
+                                        return (
+                                          <td colSpan={3} className="py-1.5 px-3 text-center align-middle">
+                                            {hasAny ? (
+                                              <span className="text-[10px] text-gray-500">
+                                                PER <span className="text-gray-300">{info.per != null ? info.per.toFixed(2) : '—'}</span>
+                                                <span className="mx-1.5 text-gray-700">|</span>
+                                                추정 <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
+                                              </span>
+                                            ) : (
+                                              <span className="text-[9px] text-gray-700">조회불가</span>
+                                            )}
+                                          </td>
+                                        );
+                                      }
                                       // 해당 없음 (해외 종목, 현금 등)
                                       return <td colSpan={3} className="py-1.5 px-2 text-center text-gray-700 align-middle">—</td>;
                                     })()}

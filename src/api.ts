@@ -389,10 +389,10 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
 const _etfHoldingsCache = new Map<string, { data: Array<{ name: string; code: string; ratio: number }> | null; ts: number }>();
 
 const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio: number }> | null => {
-  const list = data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? data?.data ?? [];
+  const list = data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? data?.data ?? [];
   if (!Array.isArray(list) || list.length === 0) return null;
   const result = list.slice(0, 3).map((x: any) => ({
-    name: x.itemName ?? x.stockName ?? x.name ?? x.stockName ?? '',
+    name: x.itemName ?? x.stockName ?? x.name ?? '',
     code: x.itemCode ?? x.stockCode ?? x.code ?? '',
     ratio: parseFloat(String(x.holdingRatio ?? x.ratio ?? x.weight ?? 0)),
   })).filter((x: any) => x.name);
@@ -406,6 +406,7 @@ export const fetchEtfTopHoldings = async (
   if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.data;
 
   const targetUrls = [
+    `https://m.stock.naver.com/api/domestic/stock/${code}/etfComponentStock`,
     `https://m.stock.naver.com/api/etf/${code}/holding`,
     `https://m.stock.naver.com/api/domestic/stock/${code}/etfHolding`,
     `https://m.stock.naver.com/api/stock/${code}/etfHolding`,
@@ -435,7 +436,8 @@ export const fetchEtfTopHoldings = async (
   return null;
 };
 
-// ── 종목 PER / 추정PER 조회 (네이버 basic API) ──────────────────────────────
+// ── 종목 PER / 추정PER 조회 (주가 ÷ EPS 직접 계산) ─────────────────────────
+// naver /basic 엔드포인트에는 PER 필드가 없음 → /basic 주가 + /finance/summary EPS 조합
 const _stockPerCache = new Map<string, { data: { per: number | null; fper: number | null } | null; ts: number }>();
 
 export const fetchStockPer = async (
@@ -444,35 +446,79 @@ export const fetchStockPer = async (
   const cached = _stockPerCache.get(code);
   if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
 
-  const parse = (v: any) => {
-    if (v == null || v === '-' || v === '') return null;
+  const parseNum = (v: any): number | null => {
+    if (v == null || v === '' || v === '-') return null;
     const n = parseFloat(String(v).replace(/,/g, ''));
     return isNaN(n) || n <= 0 ? null : n;
   };
 
-  const targetUrl = `https://m.stock.naver.com/api/stock/${code}/basic`;
-  const proxies = [
-    targetUrl,
-    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  const mkProxies = (url: string) => [
+    url,
+    `/api/proxy?url=${encodeURIComponent(url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${url}`,
   ];
-  for (const proxy of proxies) {
+
+  // Step 1: 현재가 조회
+  let closePrice: number | null = null;
+  let isEtf = false;
+  for (const proxy of mkProxies(`https://m.stock.naver.com/api/stock/${code}/basic`)) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
       const data = await res.json();
-      const hasName = data?.stockName ?? data?.itemName ?? data?.name;
-      if (hasName) {
-        const result = {
-          per: parse(data.per ?? data.PER ?? data.perRatio),
-          fper: parse(data.forwardPer ?? data.estimatedPer ?? data.consPer ?? data.fwdPer ?? data.forecastPer),
-        };
-        _stockPerCache.set(code, { data: result, ts: Date.now() });
-        return result;
+      if (data?.stockName && data?.closePrice) {
+        closePrice = parseNum(String(data.closePrice).replace(/,/g, ''));
+        isEtf = data.stockEndType === 'etf';
+        break;
       }
     } catch { continue; }
   }
+
+  // ETF는 EPS 기반 PER 없음
+  if (!closePrice || isEtf) {
+    _stockPerCache.set(code, { data: null, ts: Date.now() });
+    return null;
+  }
+
+  // Step 2: 분기 EPS 조회 → PER = 주가 / 연환산EPS
+  for (const proxy of mkProxies(`https://m.stock.naver.com/api/stock/${code}/finance/summary`)) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const epsRow: any[] = (data?.chartEps?.columns as any[])?.find((c: any[]) => c[0] === 'EPS');
+      const titleList: any[] = data?.chartEps?.trTitleList;
+      if (!epsRow || !titleList) continue;
+
+      const quarters = titleList.map((t: any, i: number) => ({
+        isConsensus: t.isConsensus === 'Y',
+        eps: parseNum(epsRow[i + 1]),
+      })).filter((q: any) => q.eps !== null);
+
+      const actualQ = quarters.filter((q: any) => !q.isConsensus);
+      const consensusQ = quarters.filter((q: any) => q.isConsensus);
+
+      // trailing PER: 최근 4분기 실적 EPS 합산
+      let per: number | null = null;
+      const last4 = actualQ.slice(-4);
+      if (last4.length >= 4) {
+        const annualEps = last4.reduce((s: number, q: any) => s + q.eps, 0);
+        if (annualEps > 0) per = Math.round(closePrice / annualEps * 100) / 100;
+      }
+
+      // forward PER: 첫 컨센서스 분기 EPS × 4 연환산
+      let fper: number | null = null;
+      if (consensusQ.length > 0 && consensusQ[0].eps > 0) {
+        fper = Math.round(closePrice / (consensusQ[0].eps * 4) * 100) / 100;
+      }
+
+      const result = { per, fper };
+      _stockPerCache.set(code, { data: result, ts: Date.now() });
+      return result;
+    } catch { continue; }
+  }
+
   _stockPerCache.set(code, { data: null, ts: Date.now() });
   return null;
 };
