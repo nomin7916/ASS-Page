@@ -246,15 +246,13 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     </div>
                   </td>
 
-                  {/* 구매단가 */}
-                  {isOverseas
-                    ? <td className={`${td} text-right text-gray-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                        {cleanNum(item.purchasePrice) > 0 ? formatUSD(item.purchasePrice) : <span className="text-gray-600">-</span>}
-                      </td>
-                    : <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
-                        <input type="text" data-col="purchasePrice" className={`${inp} text-right px-3 text-gray-400 caret-blue-400`} value={formatNumber(item.purchasePrice)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'purchasePrice', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')} />
-                      </td>
-                  }
+                  {/* 구매단가 — 읽기전용 */}
+                  <td className={`${td} text-right text-gray-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                    {isOverseas
+                      ? (cleanNum(item.purchasePrice) > 0 ? formatUSD(item.purchasePrice) : <span className="text-gray-600">-</span>)
+                      : (cleanNum(item.quantity) > 0 ? formatNumber(Math.round(cleanNum(item.investAmount) / cleanNum(item.quantity))) : <span className="text-gray-600">-</span>)
+                    }
+                  </td>
 
                   {/* 보유수량 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>

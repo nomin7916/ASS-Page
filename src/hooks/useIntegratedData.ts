@@ -197,7 +197,7 @@ export function useIntegratedData({
           const qty = cleanNum(item.quantity);
           const evl = cleanNum(item.currentPrice) * qty * fxRate;
           if (evl <= 0) return;
-          const cost = cleanNum(item.purchasePrice) * qty * fxRate;
+          const cost = (isGold || p.accountType === 'overseas') ? cleanNum(item.purchasePrice) * qty * fxRate : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * qty);
           const key = isGold ? 'KRX 금현물' : (item.name || item.code || '기타');
           const category = isGold ? '금' : (item.category || '미지정');
           if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category, code: isGold ? '' : (item.code || '') };

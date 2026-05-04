@@ -32,7 +32,7 @@ export function usePortfolioData({
         const price = cleanNum(item.currentPrice);
         evl = qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
       }
-      else { inv = cleanNum(item.purchasePrice) * cleanNum(item.quantity) * fxRate; evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate; }
+      else { const _qty = cleanNum(item.quantity); inv = (activePortfolioAccountType === 'overseas' || activePortfolioAccountType === 'gold') ? cleanNum(item.purchasePrice) * _qty * fxRate : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * _qty); evl = cleanNum(item.currentPrice) * _qty * fxRate; }
       const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;
       const c = item.type === 'deposit' ? '예수금' : (item.category || '미지정');
       if (!cats[c]) cats[c] = { invest: 0, eval: 0, profit: 0 };

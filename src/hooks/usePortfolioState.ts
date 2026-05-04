@@ -344,7 +344,7 @@ export function usePortfolioState({
 
   const handleAddStock = () =>
     setPortfolio(prev => [
-      { id: generateId(), type: 'stock', category: "주식", assetClass: 'D', code: "", name: "", currentPrice: 0, changeRate: 0, purchasePrice: 0, quantity: 0, targetRatio: 0, isManual: true },
+      { id: generateId(), type: 'stock', category: "주식", assetClass: 'D', code: "", name: "", currentPrice: 0, changeRate: 0, purchasePrice: 0, investAmount: 0, quantity: 0, targetRatio: 0, isManual: true },
       ...prev,
     ]);
 
