@@ -175,7 +175,7 @@ export default function App() {
   const [rebalanceSortConfig, setRebalanceSortConfig] = useState({ key: null, direction: 1 });
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
-  const { globalToast, showToast, notificationLog, setNotificationLog, clearNotificationLog } = useToast();
+  const { globalToast, showToast, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead } = useToast();
 
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
 
@@ -1399,7 +1399,7 @@ export default function App() {
         />
 
         {/* 알림 바 */}
-        <NotificationBar notificationLog={notificationLog} onClear={handleClearNotificationLog} />
+        <NotificationBar notificationLog={notificationLog} onClear={handleClearNotificationLog} unreadCount={unreadCount} onRead={markAsRead} />
 
         {/* 뷰 전환 탭 */}
         <AccountTabBar

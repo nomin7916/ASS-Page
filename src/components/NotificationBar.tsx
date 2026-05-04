@@ -1,11 +1,13 @@
 // @ts-nocheck
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import type { NotificationEntry } from '../hooks/useToast';
 
 interface Props {
   notificationLog: NotificationEntry[];
   onClear: () => void;
+  unreadCount: number;
+  onRead: () => void;
 }
 
 function formatTime(ts: number): string {
@@ -18,12 +20,43 @@ function formatTime(ts: number): string {
   return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')} ${d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
-export default function NotificationBar({ notificationLog, onClear }: Props) {
+export default function NotificationBar({ notificationLog, onClear, unreadCount, onRead }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const posInitialized = useRef(false);
   const dragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
+  // scrolling → pinned (1분 고정) → hidden
+  const [scrollPhase, setScrollPhase] = useState<'scrolling' | 'pinned' | 'hidden'>('hidden');
+  const pinnedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevLatestIdRef = useRef<string | null>(null);
+
   const latest = notificationLog[0] ?? null;
+
+  // 새 알림 도착 시 scrolling 페이즈로 리셋
+  useEffect(() => {
+    if (!latest) {
+      setScrollPhase('hidden');
+      if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
+      prevLatestIdRef.current = null;
+      return;
+    }
+    if (latest.id !== prevLatestIdRef.current) {
+      prevLatestIdRef.current = latest.id;
+      if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
+      setScrollPhase('scrolling');
+    }
+  }, [latest?.id]);
+
+  useEffect(() => () => {
+    if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
+  }, []);
+
+  // 5회 반복 완료 → 1분 고정 표시 후 숨김
+  const handleAnimationEnd = () => {
+    setScrollPhase('pinned');
+    if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
+    pinnedTimerRef.current = setTimeout(() => setScrollPhase('hidden'), 60000);
+  };
 
   const openPanel = () => {
     if (!posInitialized.current) {
@@ -31,6 +64,7 @@ export default function NotificationBar({ notificationLog, onClear }: Props) {
       posInitialized.current = true;
     }
     setIsOpen(true);
+    onRead();
   };
 
   const handleDragStart = (e) => {
@@ -54,18 +88,30 @@ export default function NotificationBar({ notificationLog, onClear }: Props) {
     <div className="relative w-full">
       {/* ── 알림 바 ── */}
       <div className="flex items-center bg-[#0b1120] border border-gray-700/40 rounded-md h-7 overflow-hidden select-none w-full">
-        {/* 레이블 */}
-        <span className="flex-shrink-0 px-2.5 text-[10px] text-gray-500 font-mono border-r border-gray-700/40 tracking-wider">
-          알림
-        </span>
+        {/* 레이블 + 뱃지 */}
+        <div className="relative flex-shrink-0 px-2.5 h-full flex items-center border-r border-gray-700/40 gap-1">
+          <span className="text-[10px] text-gray-500 font-mono tracking-wider">알림</span>
+          {unreadCount > 0 && (
+            <span className="min-w-[14px] h-[14px] bg-red-500 rounded-full text-[8px] text-white font-bold flex items-center justify-center px-0.5 leading-none">
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </div>
 
-        {/* 마퀴 텍스트 */}
+        {/* 텍스트 영역 */}
         <div className="flex-1 overflow-hidden relative h-full flex items-center">
-          {latest ? (
+          {scrollPhase === 'scrolling' && latest ? (
             <span
               key={latest.id}
               className={`absolute whitespace-nowrap text-[11px] font-mono ${latest.isError ? 'text-red-400' : 'text-sky-300'}`}
-              style={{ animation: 'notif-marquee 22s linear infinite' }}
+              style={{ animation: 'notif-marquee 22s linear 5' }}
+              onAnimationEnd={handleAnimationEnd}
+            >
+              {latest.message}
+            </span>
+          ) : scrollPhase === 'pinned' && latest ? (
+            <span
+              className={`text-[11px] font-mono truncate pl-2.5 ${latest.isError ? 'text-red-400' : 'text-sky-300'}`}
             >
               {latest.message}
             </span>
