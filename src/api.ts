@@ -78,6 +78,7 @@ export const fetchIndexData = async (symbol: string, startDate?: string) => {
     try {
       const stooqUrl = `https://stooq.com/q/d/l/?s=${stooqSymbol}&i=d`;
       const proxies = [
+        `/api/proxy?url=${encodeURIComponent(stooqUrl)}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(stooqUrl)}`,
         `https://api.codetabs.com/v1/proxy?quest=${stooqUrl}`,
         `https://corsproxy.io/?url=${encodeURIComponent(stooqUrl)}`
@@ -114,6 +115,7 @@ export const fetchIndexData = async (symbol: string, startDate?: string) => {
     : `range=2y&interval=1d`;
   const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?${yahooQuery}`;
   const proxies = [
+    { url: `/api/proxy?url=${encodeURIComponent(targetUrl)}`, name: 'server' },
     { url: `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`, name: 'corsproxy.io' },
     { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, name: 'allorigins' },
     { url: `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`, name: 'codetabs' }

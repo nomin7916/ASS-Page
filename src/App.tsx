@@ -1071,30 +1071,36 @@ export default function App() {
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
-    // 공휴일 캘린더 로드 완료 전 보류
     if (!calendarLoaded) return;
     const today = getTodayKST();
-    // 주말 스킵
     const dayOfWeek = new Date(today + 'T12:00:00').getDay();
-    if (dayOfWeek === 0 || dayOfWeek === 6) return;
-    // 공휴일 스킵
-    if (!isMarketOpen(activePortfolioAccountType)) return;
+    const isTradingDay = (dayOfWeek !== 0 && dayOfWeek !== 6) && isMarketOpen(activePortfolioAccountType);
     setHistory(prev => {
       const krH = marketHolidays.kr;
       const usH = marketHolidays.us;
       const accType = activePortfolioAccountType;
-      // 잘못 저장된 주말·공휴일 레코드(isFixed 아닌 것) 모두 제거
+      // 잘못 저장된 주말·공휴일 레코드 정리 — 거래일 여부와 무관하게 항상 실행
       const cleaned = prev.filter(h => {
         if (h.isFixed) return true;
         const day = new Date(h.date + 'T12:00:00').getDay();
         if (day === 0 || day === 6) return false;
         return accType === 'overseas' ? !usH.includes(h.date) : !krH.includes(h.date);
       });
+      if (!isTradingDay) {
+        // 비거래일: 정리만 수행, 오늘 항목 추가 없음
+        if (cleaned.length === prev.length) return prev;
+        const fills = fillNonTradingGaps(cleaned, krH, usH, accType);
+        return fills.length > 0 ? [...cleaned, ...fills] : cleaned;
+      }
+      // 거래일: 오늘 항목 추가/갱신 + 비거래일 채우기
       const newHist = [...cleaned];
       const idx = newHist.findIndex(h => h.date === today);
-      if (idx >= 0) { if (newHist[idx].evalAmount === totals.totalEval) return prev; newHist[idx] = { ...newHist[idx], evalAmount: totals.totalEval, principal }; }
-      else { newHist.push({ date: today, evalAmount: totals.totalEval, principal, isFixed: false }); }
-      // 주말 + 공휴일 날짜를 이전 거래일 종가로 채우기
+      if (idx >= 0) {
+        if (newHist[idx].evalAmount === totals.totalEval && cleaned.length === prev.length) return prev;
+        newHist[idx] = { ...newHist[idx], evalAmount: totals.totalEval, principal };
+      } else {
+        newHist.push({ date: today, evalAmount: totals.totalEval, principal, isFixed: false });
+      }
       const fills = fillNonTradingGaps(newHist, krH, usH, accType);
       return fills.length > 0 ? [...newHist, ...fills] : newHist;
     });
