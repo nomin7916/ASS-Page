@@ -116,8 +116,7 @@ export const fetchIndexData = async (symbol: string, startDate?: string) => {
   const proxies = [
     { url: `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`, name: 'corsproxy.io' },
     { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, name: 'allorigins' },
-    { url: `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`, name: 'codetabs' },
-    { url: `https://thingproxy.freeboard.io/fetch/${targetUrl}`, name: 'thingproxy' }
+    { url: `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`, name: 'codetabs' }
   ];
   for (const proxy of proxies) {
     try {
