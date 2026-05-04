@@ -97,15 +97,13 @@ export function useIntegratedData({
     if (intTotals.totalEval > 0) dateToTotal.set(today, intTotals.totalEval);
     return [...dateToTotal.entries()]
       .map(([date, evalAmount]) => {
-        const effectivePrincipal = portfolios.reduce((sum, p) => {
-          const sd = p.portfolioStartDate || p.startDate || '';
-          const pr = p.id === activePortfolioId ? principal : (p.principal || 0);
-          return sum + (sd && sd <= date ? pr : 0);
+        const effectivePrincipal = portfolioSummaries.reduce((sum, s) => {
+          return sum + (s.startDate && s.startDate <= date ? s.principal : 0);
         }, 0);
         return { id: date, date, evalAmount, effectivePrincipal };
       })
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, history, activePortfolioId, intTotals.totalEval, principal]);
+  }, [portfolios, history, activePortfolioId, intTotals.totalEval, portfolioSummaries]);
 
   const intSortedHistory = useMemo(() =>
     [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
