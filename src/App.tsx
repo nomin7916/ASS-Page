@@ -48,6 +48,7 @@ import { useHistoryBackfill } from './hooks/useHistoryBackfill';
 import { useIndexImport } from './hooks/useIndexImport';
 import { usePortfolioData } from './hooks/usePortfolioData';
 import { useIntegratedData } from './hooks/useIntegratedData';
+import { useMarketCalendar, getTodayKST } from './hooks/useMarketCalendar';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -182,6 +183,7 @@ export default function App() {
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
   const { notify, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead, confirmState, confirm, resolveConfirm } = useToast();
+  const { isMarketOpen, loaded: calendarLoaded } = useMarketCalendar();
 
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
 
@@ -1069,16 +1071,28 @@ export default function App() {
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
-    const today = new Date().toISOString().split('T')[0];
+    // 공휴일 캘린더 로드 완료 전 보류
+    if (!calendarLoaded) return;
+    const today = getTodayKST();
+    // 주말 스킵
+    const dayOfWeek = new Date(today + 'T12:00:00').getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) return;
+    // 공휴일 스킵
+    if (!isMarketOpen(activePortfolioAccountType)) return;
     setHistory(prev => {
-      const newHist = [...prev];
+      // 기존에 잘못 저장된 주말 레코드(isFixed 아닌 것) 제거 → fillWeekendGaps가 올바르게 재생성
+      const cleaned = prev.filter(h => {
+        const d = new Date(h.date + 'T12:00:00').getDay();
+        return (d !== 0 && d !== 6) || h.isFixed;
+      });
+      const newHist = [...cleaned];
       const idx = newHist.findIndex(h => h.date === today);
       if (idx >= 0) { if (newHist[idx].evalAmount === totals.totalEval) return prev; newHist[idx] = { ...newHist[idx], evalAmount: totals.totalEval, principal }; }
       else { newHist.push({ date: today, evalAmount: totals.totalEval, principal, isFixed: false }); }
       const wFills = fillWeekendGaps(newHist, today);
       return wFills.length > 0 ? [...newHist, ...wFills] : newHist;
     });
-  }, [totals.totalEval, principal]);
+  }, [totals.totalEval, principal, calendarLoaded, activePortfolioAccountType]);
 
   useEffect(() => {
     if (unifiedDates.length === 0) return;
