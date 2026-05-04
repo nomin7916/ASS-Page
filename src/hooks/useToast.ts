@@ -23,11 +23,16 @@ export function useToast() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const counterRef = useRef(0);
+  const recentMessagesRef = useRef<Map<string, number>>(new Map());
 
   const notify = (text: string, type: NotificationType = 'info') => {
+    const now = Date.now();
+    const lastTime = recentMessagesRef.current.get(text) ?? 0;
+    if (now - lastTime < 5000) return;
+    recentMessagesRef.current.set(text, now);
     const entry: NotificationEntry = {
-      id: `${Date.now()}_${++counterRef.current}`,
-      time: Date.now(),
+      id: `${now}_${++counterRef.current}`,
+      time: now,
       message: text,
       type,
     };
