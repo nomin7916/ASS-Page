@@ -70,6 +70,37 @@ export const fillWeekendGaps = (history, today) => {
   return fills;
 };
 
+// 주말 + 공휴일 날짜를 이전 거래일 값으로 채워서 반환
+// 연속 두 레코드 사이 간격이 30일 초과이면 비정상 갭으로 보고 스킵
+export const fillNonTradingGaps = (history, krHolidays = [], usHolidays = [], accountType = 'portfolio') => {
+  const isNonTrading = (dateStr) => {
+    const day = new Date(dateStr + 'T12:00:00').getDay();
+    if (day === 0 || day === 6) return true;
+    return accountType === 'overseas' ? usHolidays.includes(dateStr) : krHolidays.includes(dateStr);
+  };
+  const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length < 2) return [];
+  const dateSet = new Set(sorted.map(h => h.date));
+  const fills = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const curr = sorted[i];
+    const next = sorted[i + 1];
+    const gapMs = new Date(next.date + 'T12:00:00').getTime() - new Date(curr.date + 'T12:00:00').getTime();
+    if (gapMs > 30 * 86400000) continue;
+    const d = new Date(curr.date + 'T12:00:00');
+    d.setDate(d.getDate() + 1);
+    while (d.toISOString().split('T')[0] < next.date) {
+      const ds = d.toISOString().split('T')[0];
+      if (!dateSet.has(ds) && isNonTrading(ds)) {
+        fills.push({ date: ds, evalAmount: curr.evalAmount, principal: curr.principal, isFixed: false });
+        dateSet.add(ds);
+      }
+      d.setDate(d.getDate() + 1);
+    }
+  }
+  return fills;
+};
+
 export const cleanNum = (val) => {
   if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return val;

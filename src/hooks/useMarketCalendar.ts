@@ -165,5 +165,5 @@ export function useMarketCalendar() {
     return isKRXOpen(today);
   };
 
-  return { isMarketOpen, isKRXOpen, isNYSEOpen, getTodayKST, holidays, loaded };
+  return { isMarketOpen, isKRXOpen, isNYSEOpen, holidays, loaded };
 }

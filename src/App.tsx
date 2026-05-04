@@ -54,7 +54,7 @@ import {
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
   getClosestValue, getIndexLatest, handleTableKeyDown, handleReadonlyCellNav, buildIndexStatus,
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
-  fillWeekendGaps, calcPeriodStart
+  fillWeekendGaps, fillNonTradingGaps, calcPeriodStart
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
@@ -183,7 +183,7 @@ export default function App() {
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
   const { notify, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead, confirmState, confirm, resolveConfirm } = useToast();
-  const { isMarketOpen, loaded: calendarLoaded } = useMarketCalendar();
+  const { isMarketOpen, holidays: marketHolidays, loaded: calendarLoaded } = useMarketCalendar();
 
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
 
@@ -1080,17 +1080,23 @@ export default function App() {
     // 공휴일 스킵
     if (!isMarketOpen(activePortfolioAccountType)) return;
     setHistory(prev => {
-      // 기존에 잘못 저장된 주말 레코드(isFixed 아닌 것) 제거 → fillWeekendGaps가 올바르게 재생성
+      const krH = marketHolidays.kr;
+      const usH = marketHolidays.us;
+      const accType = activePortfolioAccountType;
+      // 잘못 저장된 주말·공휴일 레코드(isFixed 아닌 것) 모두 제거
       const cleaned = prev.filter(h => {
-        const d = new Date(h.date + 'T12:00:00').getDay();
-        return (d !== 0 && d !== 6) || h.isFixed;
+        if (h.isFixed) return true;
+        const day = new Date(h.date + 'T12:00:00').getDay();
+        if (day === 0 || day === 6) return false;
+        return accType === 'overseas' ? !usH.includes(h.date) : !krH.includes(h.date);
       });
       const newHist = [...cleaned];
       const idx = newHist.findIndex(h => h.date === today);
       if (idx >= 0) { if (newHist[idx].evalAmount === totals.totalEval) return prev; newHist[idx] = { ...newHist[idx], evalAmount: totals.totalEval, principal }; }
       else { newHist.push({ date: today, evalAmount: totals.totalEval, principal, isFixed: false }); }
-      const wFills = fillWeekendGaps(newHist, today);
-      return wFills.length > 0 ? [...newHist, ...wFills] : newHist;
+      // 주말 + 공휴일 날짜를 이전 거래일 종가로 채우기
+      const fills = fillNonTradingGaps(newHist, krH, usH, accType);
+      return fills.length > 0 ? [...newHist, ...fills] : newHist;
     });
   }, [totals.totalEval, principal, calendarLoaded, activePortfolioAccountType]);
 
