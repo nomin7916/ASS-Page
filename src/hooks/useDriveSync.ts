@@ -16,11 +16,13 @@ import { GOOGLE_CLIENT_ID } from '../config';
 type SyncStatus = 'idle' | 'loading' | 'ready' | 'saving' | 'error';
 
 type ApplyStateDataFn = (stateData: any, stockData: any, marketData: any) => void;
+type ApplyStockDataFn = (stockMap: Record<string, Record<string, number>>) => void;
 type ApplyBackupDataFn = (stateData: any, accountChartStatesRef: React.MutableRefObject<any>) => void;
 
 interface UseDriveSyncParams {
   authUser: { email: string; token: string } | null;
   applyStateData: ApplyStateDataFn;
+  applyStockData: ApplyStockDataFn;
   applyBackupData: ApplyBackupDataFn;
   accountChartStatesRef: React.MutableRefObject<any>;
   saveStateRef: React.MutableRefObject<any>;
@@ -31,6 +33,7 @@ interface UseDriveSyncParams {
 export function useDriveSync({
   authUser,
   applyStateData,
+  applyStockData,
   applyBackupData,
   accountChartStatesRef,
   saveStateRef,
@@ -79,15 +82,14 @@ export function useDriveSync({
       setDriveStatus('loading');
       const folderId = await ensureDriveFolder(token);
 
-      const [stateData, stockData, marketData] = await Promise.all([
+      const [stateData, marketData] = await Promise.all([
         loadDriveFile(token, folderId, DRIVE_FILES.STATE),
-        loadDriveFile(token, folderId, DRIVE_FILES.STOCK),
         loadDriveFile(token, folderId, DRIVE_FILES.MARKET),
       ]);
 
       if (!stateData) { setSS('ready'); setDriveStatus(''); return null; }
 
-      applyStateData(stateData, stockData, marketData);
+      applyStateData(stateData, null, marketData);
       setSS('ready');
       setDriveStatus('saved');
       return stateData.portfolios?.[0]?.portfolio || stateData.portfolio || [];
@@ -150,6 +152,19 @@ export function useDriveSync({
     }
   };
 
+  // ── STOCK 파일만 백그라운드 로드 (비차단) ──
+  const loadStockFromDrive = async (token: string) => {
+    try {
+      const folderId = await ensureDriveFolder(token);
+      const stockData = await loadDriveFile(token, folderId, DRIVE_FILES.STOCK);
+      if (stockData?.stockHistoryMap) {
+        applyStockData(stockData.stockHistoryMap);
+      }
+    } catch (err) {
+      console.warn('[Drive] STOCK 백그라운드 로드 실패:', err);
+    }
+  };
+
   // ── OAuth 토큰 요청 ──
   const requestDriveToken = (prompt = '') => {
     if (!tokenClientRef.current) return;
@@ -198,6 +213,7 @@ export function useDriveSync({
         // 로드 직전 SAVING 상태로 바뀌었을 수 있으므로 재확인
         if (syncStatusRef.current === 'saving') return;
         await loadFromDrive(driveTokenRef.current);
+        loadStockFromDrive(driveTokenRef.current);
       }
     } catch {
       // 오프라인·토큰 만료 등 조용히 무시
@@ -350,6 +366,7 @@ export function useDriveSync({
     // 함수
     ensureDriveFolder,
     loadFromDrive,
+    loadStockFromDrive,
     saveAllToDrive,
     requestDriveToken,
     initTokenClient,

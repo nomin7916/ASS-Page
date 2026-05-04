@@ -340,11 +340,12 @@ export function useStockData({
     setIsLoading(false);
 
     // 해외계좌: 그래프용 과거 데이터 백그라운드 수집 (252건 미만이면 전체 재수집)
+    // stockHistoryMapRef.current 사용 — Drive 백그라운드 로드 완료 후 최신값 반영
     if (isOverseas) {
       const codesNeedingHistory = stocks
         .map(s => s.code)
         .filter(code => {
-          const existing = stockHistoryMap[code];
+          const existing = stockHistoryMapRef.current[code];
           return !existing || Object.keys(existing).length <= 252;
         });
       if (codesNeedingHistory.length > 0) {

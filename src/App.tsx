@@ -190,8 +190,9 @@ export default function App() {
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
   const didSwitchPortfolioRef = useRef(false); // 탭 전환 시 최초 마운트 skip용
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
-  // applyStateData/applyBackupData 콜백 ref (useDriveSync → useMarketData 순환 의존 해소)
+  // applyStateData/applyStockData/applyBackupData 콜백 ref (useDriveSync → useMarketData 순환 의존 해소)
   const applyStateDataRef = useRef<Function | null>(null);
+  const applyStockDataRef = useRef<Function | null>(null);
   const applyBackupDataRef = useRef<Function | null>(null);
   // 계좌별 차트 상태 독립 관리
   const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
@@ -263,12 +264,13 @@ export default function App() {
     isInitialLoad, driveSaveTimerRef, portfolioUpdatedAtRef, prevPortfolioStructureRef,
     lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
     goldKrAutoCrawledRef, stooqAutoCrawledRef,
-    ensureDriveFolder, loadFromDrive, saveAllToDrive, requestDriveToken,
+    ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup,
   } = useDriveSync({
     authUser,
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
+    applyStockData: (...args) => applyStockDataRef.current?.(...args),
     applyBackupData: (...args) => applyBackupDataRef.current?.(...args),
     accountChartStatesRef, saveStateRef, notify, confirm,
   });
@@ -363,9 +365,8 @@ export default function App() {
   });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
-  const applyStateData = (stateData, stockData, marketData) => {
-    const resolvedStockHistoryMap = stockData?.stockHistoryMap || stateData.stockHistoryMap || {};
-    setStockHistoryMap(resolvedStockHistoryMap);
+  // STOCK 파일은 loadStockFromDrive가 별도 백그라운드 로드 → 여기서는 처리하지 않음
+  const applyStateData = (stateData, _stockData, marketData) => {
 
     if (stateData.portfolios?.length > 0) {
       const normalizedPortfolios = stateData.portfolios.map(p => ({
@@ -433,6 +434,18 @@ export default function App() {
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
   };
   applyStateDataRef.current = applyStateData;
+
+  // Drive STOCK 파일 백그라운드 로드 완료 시 호출 — 기존 메모리 데이터와 병합 (덮어쓰기 금지)
+  const applyStockData = (driveStockMap) => {
+    setStockHistoryMap(prev => {
+      const merged = { ...driveStockMap };
+      Object.entries(prev).forEach(([code, hist]) => {
+        merged[code] = { ...(merged[code] || {}), ...hist };
+      });
+      return merged;
+    });
+  };
+  applyStockDataRef.current = applyStockData;
 
   const applyBackupData = (stateData, acRef) => {
     if (stateData.portfolios?.length > 0) {
@@ -957,6 +970,9 @@ export default function App() {
       }
 
       isInitialLoad.current = false;
+
+      // STOCK 파일 백그라운드 로드 — await 없이 실행 (앱 시작을 막지 않음)
+      loadStockFromDrive(token);
     }, 400);
 
     return () => clearTimeout(bgTimer);
