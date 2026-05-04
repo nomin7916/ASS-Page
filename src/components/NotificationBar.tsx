@@ -1,6 +1,6 @@
 // @ts-nocheck
-import React, { useState } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import type { NotificationEntry } from '../hooks/useToast';
 
 interface Props {
@@ -15,23 +15,51 @@ function formatTime(ts: number): string {
   if (isSameDay) {
     return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   }
-  return d.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')} ${d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
 export default function NotificationBar({ notificationLog, onClear }: Props) {
   const [isOpen, setIsOpen] = useState(false);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const posInitialized = useRef(false);
+  const dragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const latest = notificationLog[0] ?? null;
+
+  const openPanel = () => {
+    if (!posInitialized.current) {
+      setPos({ x: Math.max(0, window.innerWidth / 2 - 152), y: Math.max(60, window.innerHeight / 2 - 180) });
+      posInitialized.current = true;
+    }
+    setIsOpen(true);
+  };
+
+  const handleDragStart = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragRef.current = { active: true, offsetX: e.clientX - pos.x, offsetY: e.clientY - pos.y };
+    const onMove = (mv) => {
+      if (!dragRef.current.active) return;
+      setPos({ x: mv.clientX - dragRef.current.offsetX, y: mv.clientY - dragRef.current.offsetY });
+    };
+    const onUp = () => {
+      dragRef.current.active = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   return (
     <div className="relative w-full">
-      {/* 알림 바 */}
+      {/* ── 알림 바 ── */}
       <div className="flex items-center bg-[#0b1120] border border-gray-700/40 rounded-md h-7 overflow-hidden select-none w-full">
         {/* 레이블 */}
         <span className="flex-shrink-0 px-2.5 text-[10px] text-gray-500 font-mono border-r border-gray-700/40 tracking-wider">
           알림
         </span>
 
-        {/* 마퀴 영역 */}
+        {/* 마퀴 텍스트 */}
         <div className="flex-1 overflow-hidden relative h-full flex items-center">
           {latest ? (
             <span
@@ -46,9 +74,9 @@ export default function NotificationBar({ notificationLog, onClear }: Props) {
           )}
         </div>
 
-        {/* 이력 토글 버튼 */}
+        {/* 토글 버튼 */}
         <button
-          onClick={() => setIsOpen(p => !p)}
+          onClick={() => (isOpen ? setIsOpen(false) : openPanel())}
           className={`flex-shrink-0 px-2 h-full flex items-center border-l border-gray-700/40 transition-colors ${
             isOpen ? 'text-sky-400 bg-sky-900/20' : 'text-gray-600 hover:text-gray-300 hover:bg-gray-800/40'
           }`}
@@ -58,40 +86,81 @@ export default function NotificationBar({ notificationLog, onClear }: Props) {
         </button>
       </div>
 
-      {/* 알림 이력 패널 */}
+      {/* ── 드래그 가능 팝업 ── */}
       {isOpen && (
-        <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-[#0f172a] border border-gray-700 rounded-lg shadow-2xl flex flex-col max-h-72 overflow-hidden">
-          {/* 패널 헤더 */}
-          <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-700/60 flex-shrink-0 bg-[#111827]">
-            <span className="text-[11px] text-gray-400 font-mono">
+        <div
+          className="fixed z-[999] w-72 shadow-2xl"
+          style={{ left: pos.x, top: pos.y }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* 타이틀 바 (드래그 핸들) */}
+          <div
+            className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none"
+            onMouseDown={handleDragStart}
+          >
+            <div className="flex items-center gap-2.5">
+              {/* 분홍 — 닫기 */}
+              <button
+                onClick={() => setIsOpen(false)}
+                className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all"
+                title="닫기"
+              >
+                <X size={7} className="text-white" />
+              </button>
+              {/* 보라 — 이력 초기화 */}
+              <button
+                onClick={() => { onClear(); }}
+                className="w-3 h-3 rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center transition-all"
+                title="이력 초기화"
+              >
+                <span className="text-white leading-none" style={{ fontSize: 7 }}>✕</span>
+              </button>
+            </div>
+            <span className="text-[11px] font-bold tracking-[0.25em] bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 bg-clip-text text-transparent select-none">
               알림 이력
-              {notificationLog.length > 0 && (
-                <span className="ml-1.5 text-gray-600">({notificationLog.length})</span>
-              )}
             </span>
-            <button
-              onClick={() => { onClear(); setIsOpen(false); }}
-              title="알림 이력 초기화"
-              className="text-gray-600 hover:text-red-400 transition-colors text-[20px] leading-none font-light w-5 h-5 flex items-center justify-center rounded hover:bg-red-900/20"
-            >
-              ×
-            </button>
+            <span className="text-[10px] text-gray-700 font-mono w-10 text-right">
+              {notificationLog.length > 0 ? notificationLog.length : ''}
+            </span>
           </div>
 
-          {/* 이력 목록 */}
-          <div className="overflow-y-auto flex-1 divide-y divide-gray-800/60">
+          {/* 알림 목록 — 줄선 메모 배경 */}
+          <div
+            className="overflow-y-auto"
+            style={{
+              backgroundColor: '#000',
+              backgroundImage: `repeating-linear-gradient(
+                transparent 0px,
+                transparent 23px,
+                rgba(99,130,255,0.25) 23px,
+                rgba(99,130,255,0.25) 24px
+              )`,
+              backgroundSize: '100% 24px',
+              backgroundPosition: '0 0',
+              minHeight: 96,
+              maxHeight: 288,
+            }}
+          >
             {notificationLog.length === 0 ? (
-              <div className="text-center text-[11px] text-gray-600 py-6 font-mono">알림 없음</div>
+              <div
+                className="text-[11px] text-gray-700 font-mono px-3"
+                style={{ lineHeight: '24px' }}
+              >
+                알림 없음
+              </div>
             ) : (
               notificationLog.map(entry => (
                 <div
                   key={entry.id}
-                  className="flex items-start gap-2.5 px-3 py-1.5 hover:bg-gray-800/30 transition-colors"
+                  className="flex items-baseline gap-2 px-3"
+                  style={{ lineHeight: '24px', minHeight: 24 }}
                 >
-                  <span className="flex-shrink-0 text-[10px] text-gray-600 font-mono mt-0.5 w-[72px]">
+                  <span className="flex-shrink-0 text-[9px] text-gray-600 font-mono">
                     {formatTime(entry.time)}
                   </span>
-                  <span className={`text-[11px] font-mono leading-relaxed break-all ${entry.isError ? 'text-red-400' : 'text-gray-300'}`}>
+                  <span
+                    className={`text-[11px] font-mono break-all leading-snug ${entry.isError ? 'text-red-400' : 'text-gray-300'}`}
+                  >
                     {entry.message}
                   </span>
                 </div>
