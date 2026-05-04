@@ -14,12 +14,13 @@ export interface DriveBackupEntry {
 }
 
 export const DRIVE_FILES = {
-  STATE:        'portfolio_state.json',
-  STOCK:        'portfolio_stockdata.json',
-  MARKET:       'portfolio_marketdata.json',
-  PIN:          'portfolio_pin.json',
-  VERSION:      'portfolio_version.json', // 폴링용 경량 버전 파일 (~50 bytes)
-  DIVIDEND_TAX: 'dividend_tax_history.json',
+  STATE:             'portfolio_state.json',
+  STOCK:             'portfolio_stockdata.json',
+  MARKET:            'portfolio_marketdata.json',
+  PIN:               'portfolio_pin.json',
+  VERSION:           'portfolio_version.json', // 폴링용 경량 버전 파일 (~50 bytes)
+  DIVIDEND_TAX:      'dividend_tax_history.json',
+  NOTIFICATION_LOG:  'notification_log.json',  // 알림 이력 (기기 간 공유)
 };
 
 // Index_Data 폴더 찾기 또는 없으면 생성

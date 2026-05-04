@@ -34,6 +34,7 @@ import AccountTabBar from './components/AccountTabBar';
 import UserInfoBar from './components/UserInfoBar';
 import DividendSummaryTable from './components/DividendSummaryTable';
 import DividendTaxPage from './components/DividendTaxPage';
+import NotificationBar from './components/NotificationBar';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -174,7 +175,7 @@ export default function App() {
   const [rebalanceSortConfig, setRebalanceSortConfig] = useState({ key: null, direction: 1 });
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
-  const { globalToast, showToast } = useToast();
+  const { globalToast, showToast, notificationLog, setNotificationLog, clearNotificationLog } = useToast();
 
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
 
@@ -862,6 +863,16 @@ export default function App() {
     }
   };
 
+  const handleClearNotificationLog = async () => {
+    clearNotificationLog();
+    if (driveTokenRef.current) {
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolder(driveTokenRef.current);
+        await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.NOTIFICATION_LOG, { entries: [] });
+      } catch {}
+    }
+  };
+
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
     // portfolioUpdatedAt이 없으면 saveAllToDrive의 guard(0 > 0)가 항상 false → STATE 저장 안됨
@@ -1075,6 +1086,13 @@ export default function App() {
         if (taxData && typeof taxData === 'object') setDividendTaxHistory(taxData);
       } catch {}
 
+      // 알림 이력 Drive에서 복원
+      try {
+        const logFolderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+        const logData = await loadDriveFile(token, logFolderId, DRIVE_FILES.NOTIFICATION_LOG) as any;
+        if (logData?.entries?.length > 0) setNotificationLog(logData.entries);
+      } catch {}
+
       // 시장지표 백그라운드 수집, 종목 현재가 갱신
       fetchMarketIndicators();
       const portfolioToRefresh = portfolioRef.current;
@@ -1118,6 +1136,18 @@ export default function App() {
     }, AUTO_REFRESH_INTERVAL);
     return () => clearInterval(intervalId);
   }, []);
+
+  // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
+  useEffect(() => {
+    if (!authUser || !driveTokenRef.current || isInitialLoad.current) return;
+    const timer = setTimeout(async () => {
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolder(driveTokenRef.current);
+        await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.NOTIFICATION_LOG, { entries: notificationLog });
+      } catch {}
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [notificationLog]);
 
   useEffect(() => {
     if (portfolios.length === 0) return;
@@ -1309,7 +1339,7 @@ export default function App() {
 
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
-      <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
+      <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; } @keyframes notif-marquee { from { transform: translateX(100vw); } to { transform: translateX(-100%); } }` }} />
       {adminViewingAs && (
         <div className="fixed top-0 left-0 right-0 z-[200] bg-gray-900/98 border-b border-gray-700 px-4 py-2 flex items-center justify-between backdrop-blur-sm">
           <span className="text-gray-400 text-xs">
@@ -1367,6 +1397,9 @@ export default function App() {
           canAccessDividendTax={canAccessDividendTax}
           onOpenDividendTax={() => setShowDividendTaxPage(true)}
         />
+
+        {/* 알림 바 */}
+        <NotificationBar notificationLog={notificationLog} onClear={handleClearNotificationLog} />
 
         {/* 뷰 전환 탭 */}
         <AccountTabBar
