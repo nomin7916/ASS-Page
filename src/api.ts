@@ -413,7 +413,6 @@ export const fetchEtfTopHoldings = async (
     `https://m.stock.naver.com/api/stock/${code}/etfHolding`,
   ];
   const makeProxies = (url: string) => [
-    url,
     `/api/proxy?url=${encodeURIComponent(url)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     `https://api.codetabs.com/v1/proxy?quest=${url}`,
@@ -454,7 +453,6 @@ export const fetchStockPer = async (
   };
 
   const mkProxies = (url: string) => [
-    url,
     `/api/proxy?url=${encodeURIComponent(url)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     `https://api.codetabs.com/v1/proxy?quest=${url}`,
