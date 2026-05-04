@@ -7,7 +7,14 @@ import {
 } from '../driveStorage';
 import { GOOGLE_CLIENT_ID } from '../config';
 
-// loadFromDrive / handleApplyBackup 에서 state를 적용하는 콜백 타입
+// SyncStatus 상태 머신
+// idle    → 로그인 전
+// loading → Drive 데이터 로드 중 (저장 차단)
+// ready   → 정상 동작 중
+// saving  → Drive 저장 중 (Drive 로드 차단)
+// error   → 마지막 작업 실패
+type SyncStatus = 'idle' | 'loading' | 'ready' | 'saving' | 'error';
+
 type ApplyStateDataFn = (stateData: any, stockData: any, marketData: any) => void;
 type ApplyBackupDataFn = (stateData: any, accountChartStatesRef: React.MutableRefObject<any>) => void;
 
@@ -36,6 +43,10 @@ export function useDriveSync({
   const [backupListLoading, setBackupListLoading] = useState(false);
   const [applyingBackupId, setApplyingBackupId] = useState<string | null>(null);
 
+  // ── SyncStatus ref (렌더 없이 동기적으로 읽어야 하므로 ref 사용) ──
+  const syncStatusRef = useRef<SyncStatus>('idle');
+  const setSS = (s: SyncStatus) => { syncStatusRef.current = s; };
+
   // ── Drive refs ──
   const driveTokenRef = useRef('');
   const driveFolderIdRef = useRef('');
@@ -62,6 +73,7 @@ export function useDriveSync({
   // ── Drive에서 데이터 불러오기 → applyStateData 콜백으로 state 적용 ──
   const loadFromDrive = async (token: string) => {
     try {
+      setSS('loading');
       setDriveStatus('loading');
       const folderId = await ensureDriveFolder(token);
 
@@ -71,14 +83,16 @@ export function useDriveSync({
         loadDriveFile(token, folderId, DRIVE_FILES.MARKET),
       ]);
 
-      if (!stateData) { setDriveStatus(''); return null; }
+      if (!stateData) { setSS('ready'); setDriveStatus(''); return null; }
 
       applyStateData(stateData, stockData, marketData);
+      setSS('ready');
       setDriveStatus('saved');
       return stateData.portfolios?.[0]?.portfolio || stateData.portfolio || [];
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('Drive 불러오기 실패:', msg);
+      setSS('error');
       if (msg.includes('401')) {
         console.warn('[Drive] 토큰 만료 또는 Drive 권한 없음 → 재로그인 필요');
         setDriveStatus('auth_needed');
@@ -94,10 +108,14 @@ export function useDriveSync({
 
   // ── Drive에 3개 파일로 저장 ──
   // versioned: 'manual'=수동 저장, 'auto'=20분 자동저장, false=백업 이력 불필요한 저장
-  const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false) => {
+  // isRetry: true면 실패 시 재시도·토스트 없이 조용히 종료
+  const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false, isRetry = false) => {
+    // LOADING 중에는 저장 차단 — 초기 Drive 로드와의 경쟁 방지
+    if (syncStatusRef.current === 'loading') return;
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     try {
+      setSS('saving');
       setDriveStatus('saving');
       const folderId = await ensureDriveFolder(token);
       const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
@@ -116,10 +134,17 @@ export function useDriveSync({
           : Promise.resolve(),
         saveDriveFile(token, folderId, DRIVE_FILES.MARKET, { marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }),
       ]);
+      setSS('ready');
       setDriveStatus('saved');
     } catch (err) {
       console.error('Drive 저장 실패:', err);
+      setSS('error');
       setDriveStatus('error');
+      if (!isRetry) {
+        showToast('Drive 저장에 실패했습니다. 잠시 후 재시도합니다...', true);
+        // 15초 후 1회 재시도
+        setTimeout(() => saveAllToDrive(state, versioned, true), 15000);
+      }
     }
   };
 
@@ -140,8 +165,10 @@ export function useDriveSync({
           if (t) {
             driveTokenRef.current = t;
             setDriveToken(t);
+            if (syncStatusRef.current !== 'loading') setSS('ready');
             setDriveStatus('');
           } else {
+            setSS('error');
             setDriveStatus('auth_needed');
           }
           if (pendingTokenResolveRef.current) {
@@ -157,6 +184,8 @@ export function useDriveSync({
   // ── Drive version 파일 확인 → 최신이면 전체 STATE 로드 ──
   const checkAndSyncFromDrive = async () => {
     if (!driveTokenRef.current || isInitialLoad.current) return;
+    // SAVING 중에는 Drive 로드 차단 — 저장 중인 데이터를 덮어쓰는 경쟁 방지
+    if (syncStatusRef.current === 'saving') return;
     if (driveCheckInProgressRef.current) return;
     driveCheckInProgressRef.current = true;
     lastDriveCheckAtRef.current = Date.now();
@@ -164,6 +193,8 @@ export function useDriveSync({
       const folderId = await ensureDriveFolder(driveTokenRef.current);
       const driveTs = await loadVersionTimestamp(driveTokenRef.current, folderId);
       if (driveTs !== null && driveTs > portfolioUpdatedAtRef.current) {
+        // 로드 직전 SAVING 상태로 바뀌었을 수 있으므로 재확인
+        if (syncStatusRef.current === 'saving') return;
         await loadFromDrive(driveTokenRef.current);
       }
     } catch {
@@ -222,6 +253,7 @@ export function useDriveSync({
   const handleApplyBackup = async (fileId: string, displayTime: string) => {
     if (!window.confirm(`"${displayTime}" 시점의 백업을 현재 데이터에 적용하시겠습니까?\n(현재 계좌·종목 구성이 백업 시점으로 교체됩니다)`)) return;
     setApplyingBackupId(fileId);
+    setSS('loading');
     setDriveStatus('loading');
     try {
       const stateData = await loadBackupById(driveTokenRef.current, fileId) as any;
@@ -229,8 +261,7 @@ export function useDriveSync({
       // 2초 디바운스 타이머의 Drive 저장 guard를 초기화 → 백업 적용 후 반드시 Drive에 저장되도록 보장
       lastDriveSavedPortfolioUpdatedAtRef.current = 0;
       applyBackupData(stateData, accountChartStatesRef);
-      // Drive STATE에 백업 내용 즉시 반영 (isInitialLoad 및 portfolioUpdatedAt 조건 우회)
-      // catch로 감추지 않고 에러 시 콘솔에 출력 — 2초 타이머가 실패 시 재시도 역할
+      // Drive STATE에 백업 내용 즉시 반영
       const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = stateData;
       // portfolioStartDate가 ''인 백업도 정규화하여 Drive STATE에 항상 올바른 값 저장
       const normalizedPortfolios = stateCore.portfolios?.map((p: any) => ({
@@ -248,11 +279,13 @@ export function useDriveSync({
       await saveVersionFile(driveTokenRef.current, folderId, newUpdatedAt);
       lastDriveSavedPortfolioUpdatedAtRef.current = newUpdatedAt;
       portfolioUpdatedAtRef.current = newUpdatedAt;
+      setSS('ready');
       setDriveStatus('saved');
       setShowBackupModal(false);
       showToast(`${displayTime} 백업이 적용되었습니다.`);
     } catch {
       showToast('백업 적용에 실패했습니다.', true);
+      setSS('error');
       setDriveStatus('error');
     } finally {
       setApplyingBackupId(null);
@@ -311,6 +344,7 @@ export function useDriveSync({
     lastDriveCheckAtRef,
     goldKrAutoCrawledRef,
     stooqAutoCrawledRef,
+    syncStatusRef,
     // 함수
     ensureDriveFolder,
     loadFromDrive,

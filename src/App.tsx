@@ -1082,17 +1082,15 @@ export default function App() {
         await autoRefreshStockPrices(portfolioToRefresh);
       }
 
-      // 조회 완료 후 자동저장 활성화
+      // 조회 완료 후 자동저장 활성화 (모든 비동기 작업 완료 후 즉시 — SyncStatus가 loading 중 저장을 차단)
       // Drive에서 이미 로드했으면 현재 상태 그대로 유지, localStorage 기준이면 Drive에 백업
-      setTimeout(() => {
-        isInitialLoad.current = false;
-        if (!usedDriveData) {
-          const snap = saveStateRef.current;
-          if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
-            saveAllToDrive(snap);
-          }
+      isInitialLoad.current = false;
+      if (!usedDriveData) {
+        const snap = saveStateRef.current;
+        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
+          saveAllToDrive(snap);
         }
-      }, 1000);
+      }
     }, 400);
 
     return () => clearTimeout(bgTimer);
@@ -1112,7 +1110,8 @@ export default function App() {
           const snap = saveStateRef.current;
           if (snap && snap.portfolios?.length > 0) {
             console.log('[자동저장] 20분 주기 Drive 백업');
-            saveAllToDrive(snap, 'auto'); // 20분 자동저장 백업
+            // portfolioUpdatedAt을 현재 시각으로 강제 갱신 — 가격만 변경된 경우에도 STATE 저장
+            saveAllToDrive({ ...snap, portfolioUpdatedAt: Date.now() }, 'auto');
           }
         }, 3000);
       }
@@ -1163,11 +1162,15 @@ export default function App() {
     // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
     const stateEmail = adminViewingAsRef.current || authUser.email;
     const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
-    try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch {}
+    try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch (e) {
+      if (e instanceof DOMException && e.name === 'QuotaExceededError') showToast('브라우저 저장공간이 부족합니다. 이력 데이터를 정리해 주세요.', true);
+    }
     try {
       if (Object.keys(shm || {}).length > 0)
         localStorage.setItem(`portfolioStockData_v5_${stateEmail}`, JSON.stringify({ stockHistoryMap: shm }));
-    } catch {}
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'QuotaExceededError') showToast('종목 이력 저장 실패 — 저장공간 부족', true);
+    }
     try {
       localStorage.setItem(`portfolioMarketData_v5_${stateEmail}`, JSON.stringify({ marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }));
     } catch {}

@@ -89,7 +89,8 @@
       "Bash(npm --version)",
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\" -Directory | Select-Object Name; $env:PATH -split \";\" | Where-Object { $_ -match \"node|nvm\" })",
       "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\) -split \";\" | Where-Object { $_ -ne \"\" })",
-      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) -split \";\" | Where-Object { $_ -ne \"\" })"
+      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) -split \";\" | Where-Object { $_ -ne \"\" })",
+      "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:APPDATA\\\\npm\" -ErrorAction SilentlyContinue; Get-ChildItem \"$env:LOCALAPPDATA\\\\nvm\" -ErrorAction SilentlyContinue)"
     ]
   }
 }
