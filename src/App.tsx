@@ -155,6 +155,11 @@ export default function App() {
 
   const handleReturnToAdminPage = async () => {
     const ownToken = adminOwnDriveTokenRef.current;
+    const viewedEmail = adminViewingAsRef.current;
+    if (viewedEmail) {
+      ['portfolioState', 'portfolioStockData', 'portfolioMarketData']
+        .forEach(p => localStorage.removeItem(`${p}_v5_${viewedEmail}`));
+    }
     adminOwnDriveTokenRef.current = '';
     adminViewingAsRef.current = null;
     setAdminViewingAs(null);
@@ -911,120 +916,7 @@ export default function App() {
     const stockKey = `portfolioStockData_v5_${authUser.email}`;
     const marketKey = `portfolioMarketData_v5_${authUser.email}`;
 
-    // 사용자별 localStorage에서 복원 (Drive와 동일하게 3개 키로 분리)
-    let hasLocalData = false;
-    let localUpdatedAt = 0;
-    let localPortfolioUpdatedAt = 0; // 가격갱신과 구분된 계좌구조 변경 시각
-    let localPortfoliosCount = 0;
-    const saved = localStorage.getItem(userKey);
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-
-        // 포트폴리오 데이터 로드 (새 형식 우선, 구 형식 마이그레이션)
-        // 구버전 호환: 통합 키에 stockHistoryMap이 있으면 사용 (신버전은 별도 키 사용)
-        setStockHistoryMap(data.stockHistoryMap || {});
-        if (data.portfolios?.length > 0) {
-          const normalizedPortfolios = data.portfolios.map(p => ({
-            ...p,
-            startDate: p.portfolioStartDate || p.startDate || '',
-            portfolioStartDate: p.portfolioStartDate || p.startDate || '',
-          }));
-          setPortfolios(normalizedPortfolios);
-          setActivePortfolioId(data.activePortfolioId || data.portfolios[0].id);
-        } else if (data.portfolio) {
-          // 구 형식 마이그레이션
-          const newId = generateId();
-          const startDate = data.portfolioStartDate || data.history?.[0]?.date || '';
-          const migrated = {
-            id: newId,
-            name: data.title || 'DC',
-            startDate,
-            portfolioStartDate: startDate,
-            portfolio: data.portfolio || [],
-            principal: cleanNum(data.principal),
-            history: data.history || [],
-            depositHistory: data.depositHistory || [],
-            depositHistory2: data.depositHistory2 || [],
-            settings: data.settings || { mode: 'rebalance', amount: 1000000 },
-          };
-          setPortfolios([migrated]);
-          setActivePortfolioId(newId);
-        }
-
-        setCustomLinks(data.customLinks || UI_CONFIG.DEFAULT_LINKS);
-        if (data.overseasLinks) setOverseasLinks(data.overseasLinks);
-        setCompStocks(data.compStocks || defaultCompStocks);
-        if (data.adminAccessAllowed !== undefined) setAdminAccessAllowed(data.adminAccessAllowed);
-        if (data.marketIndices) {
-          setMarketIndices(data.marketIndices);
-          setIndexFetchStatus({
-            kospi: data.marketIndices.kospi ? buildIndexStatus(data.marketIndices.kospi, 'localStorage') : null,
-            sp500: data.marketIndices.sp500 ? buildIndexStatus(data.marketIndices.sp500, 'localStorage') : null,
-            nasdaq: data.marketIndices.nasdaq ? buildIndexStatus(data.marketIndices.nasdaq, 'localStorage') : null,
-          });
-        }
-        if (data.chartPrefs) {
-          if (data.chartPrefs.showKospi !== undefined) setShowKospi(data.chartPrefs.showKospi);
-          if (data.chartPrefs.showSp500 !== undefined) setShowSp500(data.chartPrefs.showSp500);
-          if (data.chartPrefs.showNasdaq !== undefined) setShowNasdaq(data.chartPrefs.showNasdaq);
-          if (data.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(data.chartPrefs.isZeroBaseMode);
-          if (data.chartPrefs.showTotalEval !== undefined) setShowTotalEval(data.chartPrefs.showTotalEval);
-          if (data.chartPrefs.showReturnRate !== undefined) setShowReturnRate(data.chartPrefs.showReturnRate);
-          if (data.chartPrefs.accountChartStates) accountChartStatesRef.current = data.chartPrefs.accountChartStates;
-          if (data.chartPrefs.showMarketPanel !== undefined) setShowMarketPanel(data.chartPrefs.showMarketPanel);
-          if (data.chartPrefs.hideAmounts !== undefined) setHideAmounts(data.chartPrefs.hideAmounts);
-          if (data.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(data.chartPrefs.showIndicatorsInChart);
-          if (data.chartPrefs.goldIndicators) setGoldIndicators(data.chartPrefs.goldIndicators);
-          if (data.chartPrefs.goldIndicatorColors) setGoldIndicatorColors(data.chartPrefs.goldIndicatorColors);
-          if (data.chartPrefs.indicatorScales) setIndicatorScales(data.chartPrefs.indicatorScales);
-          if (data.chartPrefs.backtestColor) setBacktestColor(data.chartPrefs.backtestColor);
-          if (data.chartPrefs.showBacktest !== undefined) setShowBacktest(data.chartPrefs.showBacktest);
-          if (data.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(data.chartPrefs.sectionCollapsedMap);
-          if (data.chartPrefs.intSec) setIntSec(data.chartPrefs.intSec);
-          if (data.chartPrefs.intChartPeriod) setIntChartPeriod(data.chartPrefs.intChartPeriod);
-          if (data.chartPrefs.intDateRange) setIntDateRange(data.chartPrefs.intDateRange);
-          if (data.chartPrefs.intAppliedRange) setIntAppliedRange(data.chartPrefs.intAppliedRange);
-        }
-        if (data.marketIndicators) setMarketIndicators(data.marketIndicators);
-        if (data.indicatorHistoryMap) setIndicatorHistoryMap(data.indicatorHistoryMap);
-        if (data.intHistory) setIntHistory(data.intHistory);
-        localUpdatedAt = data.portfolioUpdatedAt || data.updatedAt || 0;
-        localPortfolioUpdatedAt = data.portfolioUpdatedAt || 0;
-        localPortfoliosCount = data.portfolios?.length || 0;
-        hasLocalData = true;
-      } catch (e) {}
-    }
-
-    // 분리 저장된 종목 이력 로드 (신버전 별도 키, 통합 키보다 우선)
-    const savedStock = localStorage.getItem(stockKey);
-    if (savedStock) {
-      try {
-        const stockData = JSON.parse(savedStock);
-        if (stockData.stockHistoryMap && Object.keys(stockData.stockHistoryMap).length > 0)
-          setStockHistoryMap(stockData.stockHistoryMap);
-      } catch {}
-    }
-
-    // 분리 저장된 시장 데이터 로드 (신버전 별도 키, 통합 키보다 우선)
-    const savedMarket = localStorage.getItem(marketKey);
-    if (savedMarket) {
-      try {
-        const marketData = JSON.parse(savedMarket);
-        if (marketData.marketIndices) {
-          setMarketIndices(marketData.marketIndices);
-          setIndexFetchStatus({
-            kospi: marketData.marketIndices.kospi ? buildIndexStatus(marketData.marketIndices.kospi, 'localStorage') : null,
-            sp500: marketData.marketIndices.sp500 ? buildIndexStatus(marketData.marketIndices.sp500, 'localStorage') : null,
-            nasdaq: marketData.marketIndices.nasdaq ? buildIndexStatus(marketData.marketIndices.nasdaq, 'localStorage') : null,
-          });
-        }
-        if (marketData.marketIndicators) setMarketIndicators(marketData.marketIndicators);
-        if (marketData.indicatorHistoryMap) setIndicatorHistoryMap(marketData.indicatorHistoryMap);
-      } catch {}
-    }
-
-    // Drive 토큰 설정
+    // Drive 토큰 설정 (localStorage 읽기 없이 바로 Drive 우선 로드)
     driveTokenRef.current = token;
     setDriveToken(token);
     setDriveStatus('');
@@ -1032,52 +924,15 @@ export default function App() {
     const bgTimer = setTimeout(async () => {
       initTokenClient();
 
-      let usedDriveData = false;
-
-      if (!hasLocalData) {
-        // localStorage 없음 → Drive에서 불러오거나 신규 생성
-        const drivePortfolio = await loadFromDrive(token);
-        if (drivePortfolio !== null) {
-          // Drive에 데이터가 존재 (빈 포트폴리오, simple 계좌 포함 모두 처리)
-          usedDriveData = true;
-          await new Promise(r => setTimeout(r, 600));
-        } else {
-          // 완전 신규 사용자: 초기 포트폴리오 생성
-          const newId = generateId();
-          const today = new Date().toISOString().split('T')[0];
-          const initP = { id: newId, name: '내 포트폴리오', startDate: today, portfolioStartDate: today, portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }], principal: 0, history: [], depositHistory: [], depositHistory2: [], settings: { mode: 'rebalance', amount: 1000000 } };
-          setPortfolios([initP]);
-          setActivePortfolioId(newId);
-        }
-      } else {
-        // localStorage가 있어도 Drive를 우선 확인 → 다른 기기의 최신 계좌 구조를 항상 반영
-        // 핵심: portfolioUpdatedAt(계좌 구조 변경 시각)만 비교 — updatedAt(가격 갱신 포함)은 사용 안함
-        // 로컬의 portfolioUpdatedAt이 명확히 더 최신일 때만 로컬 유지 (그 외 모두 Drive 우선)
-        try {
-          const checkFolderId = await ensureDriveFolder(token);
-          const driveRaw = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
-          if (driveRaw) {
-            const drivePortfolioTs = driveRaw.portfolioUpdatedAt || 0;
-            // Drive 비교 직전 localStorage를 다시 읽어 최신 타임스탬프 사용
-            // (Drive 조회 중 사용자가 데이터 변경 → save useEffect가 localStorage를 갱신했을 수 있음)
-            try {
-              const freshSaved = localStorage.getItem(userKey);
-              if (freshSaved) {
-                const freshTs = JSON.parse(freshSaved).portfolioUpdatedAt || 0;
-                if (freshTs > localPortfolioUpdatedAt) localPortfolioUpdatedAt = freshTs;
-              }
-            } catch {}
-            // 로컬이 최신이거나 동일한 경우 유지 — 구버전(portfolioUpdatedAt=0) 포함
-            // 같을 때 Drive 우선 정책은 구버전 Drive 데이터(잘못된 날짜)가 로컬을 덮어쓰는 버그를 유발함
-            const keepLocal = localPortfoliosCount > 0 && localPortfolioUpdatedAt >= drivePortfolioTs;
-            if (!keepLocal) {
-              await loadFromDrive(token);
-              usedDriveData = true;
-            }
-          }
-        } catch {
-          // Drive 접근 실패 → localStorage 유지
-        }
+      // 항상 Drive에서 최신 데이터 로드 — localStorage 캐시 사용 안 함
+      const drivePortfolio = await loadFromDrive(token);
+      if (drivePortfolio === null) {
+        // 완전 신규 사용자: 초기 포트폴리오 생성
+        const newId = generateId();
+        const today = new Date().toISOString().split('T')[0];
+        const initP = { id: newId, name: '내 포트폴리오', startDate: today, portfolioStartDate: today, portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }], principal: 0, history: [], depositHistory: [], depositHistory2: [], settings: { mode: 'rebalance', amount: 1000000 } };
+        setPortfolios([initP]);
+        setActivePortfolioId(newId);
       }
 
       // dividendTaxHistory는 별도 파일이므로 항상 Drive에서 로드
@@ -1101,15 +956,7 @@ export default function App() {
         await autoRefreshStockPrices(portfolioToRefresh);
       }
 
-      // 조회 완료 후 자동저장 활성화 (모든 비동기 작업 완료 후 즉시 — SyncStatus가 loading 중 저장을 차단)
-      // Drive에서 이미 로드했으면 현재 상태 그대로 유지, localStorage 기준이면 Drive에 백업
       isInitialLoad.current = false;
-      if (!usedDriveData) {
-        const snap = saveStateRef.current;
-        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current) {
-          saveAllToDrive(snap);
-        }
-      }
     }, 400);
 
     return () => clearTimeout(bgTimer);
@@ -1190,21 +1037,11 @@ export default function App() {
     }
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
-    // localStorage를 Drive와 동일하게 3개 키로 분리 저장 (QuotaExceeded 방지)
+    // Drive가 항상 정본 — localStorage에는 포트폴리오 구조만 최소 저장 (세션 중 안전망)
+    // stockHistoryMap·marketData는 Drive에서 로드하므로 localStorage에 저장하지 않음
     const stateEmail = adminViewingAsRef.current || authUser.email;
     const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
-    try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch (e) {
-      if (e instanceof DOMException && e.name === 'QuotaExceededError') notify('브라우저 저장공간이 부족합니다. 이력 데이터를 정리해 주세요.', 'error');
-    }
-    try {
-      if (Object.keys(shm || {}).length > 0)
-        localStorage.setItem(`portfolioStockData_v5_${stateEmail}`, JSON.stringify({ stockHistoryMap: shm }));
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'QuotaExceededError') notify('종목 이력 저장 실패 — 저장공간 부족', 'error');
-    }
-    try {
-      localStorage.setItem(`portfolioMarketData_v5_${stateEmail}`, JSON.stringify({ marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }));
-    } catch {}
+    try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch {}
     // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스 — 포트폴리오 테이블 변경 시 2초 이내 백업)
     if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
