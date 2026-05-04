@@ -4,7 +4,7 @@ import { X, Upload, Trash2, Save, Plus, FileText } from 'lucide-react';
 import { parseSamsungFundCSV } from '../utils';
 import { fetchStockInfo } from '../api';
 
-export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, isAdmin, onUpdate }) {
+export default function DividendTaxPage({ onLoad, onSave, onClose, notify, confirm, isAdmin, onUpdate }) {
   const [taxHistory, setTaxHistory] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -44,9 +44,9 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
     try {
       await onSave(taxHistory);
       setLastSynced(new Date().toLocaleString('ko-KR'));
-      showToast('저장되었습니다.');
+      notify('저장되었습니다.', 'success');
     } catch {
-      showToast('저장 실패', true);
+      notify('저장 실패', 'error');
     }
     setIsSaving(false);
   };
@@ -68,7 +68,7 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
       const records = parseSamsungFundCSV(text);
       const count = Object.keys(records).length;
       if (count === 0) {
-        showToast('파싱된 데이터가 없습니다. CSV 형식을 확인하세요.', true);
+        notify('파싱된 데이터가 없습니다. CSV 형식을 확인하세요.', 'warning');
         return;
       }
       setTaxHistory(prev => ({
@@ -79,7 +79,7 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
           records: { ...(prev[code]?.records || {}), ...records },
         },
       }));
-      showToast(`${count}개월 데이터가 추가되었습니다.`);
+      notify(`${count}개월 데이터가 추가되었습니다.`, 'success');
     };
     reader.readAsText(file, 'euc-kr');
     e.target.value = '';
@@ -133,9 +133,9 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, showToast, is
     setEditingNameValue('');
   };
 
-  const handleDeleteStock = (code) => {
+  const handleDeleteStock = async (code) => {
     const name = taxHistory[code]?.name || code;
-    if (!window.confirm(`"${name}" 이력을 모두 삭제할까요?`)) return;
+    if (!await confirm(`"${name}" 이력을 모두 삭제할까요?`)) return;
     setTaxHistory(prev => {
       const next = { ...prev };
       delete next[code];

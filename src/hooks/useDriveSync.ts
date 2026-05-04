@@ -24,7 +24,8 @@ interface UseDriveSyncParams {
   applyBackupData: ApplyBackupDataFn;
   accountChartStatesRef: React.MutableRefObject<any>;
   saveStateRef: React.MutableRefObject<any>;
-  showToast: (text: string, isError?: boolean) => void;
+  notify: (text: string, type?: string) => void;
+  confirm: (message: string, confirmLabel?: string) => Promise<boolean>;
 }
 
 export function useDriveSync({
@@ -33,7 +34,8 @@ export function useDriveSync({
   applyBackupData,
   accountChartStatesRef,
   saveStateRef,
-  showToast,
+  notify,
+  confirm,
 }: UseDriveSyncParams) {
   // ── Drive 상태 ──
   const [driveStatus, setDriveStatus] = useState(''); // '' | 'auth_needed' | 'loading' | 'saving' | 'saved' | 'error'
@@ -141,7 +143,7 @@ export function useDriveSync({
       setSS('error');
       setDriveStatus('error');
       if (!isRetry) {
-        showToast('Drive 저장에 실패했습니다. 잠시 후 재시도합니다...', true);
+        notify('Drive 저장에 실패했습니다. 잠시 후 재시도합니다...', 'error');
         // 15초 후 1회 재시도
         setTimeout(() => saveAllToDrive(state, versioned, true), 15000);
       }
@@ -207,35 +209,35 @@ export function useDriveSync({
   // ── Drive 수동 불러오기 버튼 핸들러 ──
   const handleDriveLoadOnly = async () => {
     if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
-      showToast('config.ts에 Google Client ID를 설정해 주세요', true);
+      notify('config.ts에 Google Client ID를 설정해 주세요', 'error');
       return;
     }
     let token = driveTokenRef.current;
     if (!token) {
       if (!tokenClientRef.current) {
-        showToast('Drive 클라이언트 초기화 실패. 페이지를 새로고침해 주세요.', true);
+        notify('Drive 클라이언트 초기화 실패. 페이지를 새로고침해 주세요.', 'error');
         return;
       }
-      showToast('Google Drive 로그인 팝업을 확인해 주세요...');
+      notify('Google Drive 로그인 팝업을 확인해 주세요...', 'info');
       token = await new Promise<string | null>((resolve) => {
         pendingTokenResolveRef.current = resolve;
         tokenClientRef.current.requestAccessToken({ prompt: 'select_account' });
       });
     }
     if (!token) {
-      showToast('Drive 로그인이 취소되었거나 실패했습니다.', true);
+      notify('Drive 로그인이 취소되었거나 실패했습니다.', 'warning');
       return;
     }
     const result = await loadFromDrive(token);
     if (result === null) {
-      showToast('Drive에서 데이터를 불러오지 못했습니다.', true);
+      notify('Drive에서 데이터를 불러오지 못했습니다.', 'error');
     }
   };
 
   // ── 백업 목록 모달 열기 ──
   const handleOpenBackupModal = async () => {
     const token = driveTokenRef.current;
-    if (!token) { showToast('Drive 연결 필요 — 먼저 Drive를 연결해 주세요', true); return; }
+    if (!token) { notify('Drive 연결 필요 — 먼저 Drive를 연결해 주세요', 'warning'); return; }
     setShowBackupModal(true);
     setBackupListLoading(true);
     try {
@@ -243,7 +245,7 @@ export function useDriveSync({
       const backups = await listBackups(token, folderId);
       setBackupList(backups);
     } catch {
-      showToast('백업 목록을 불러오지 못했습니다.', true);
+      notify('백업 목록을 불러오지 못했습니다.', 'error');
     } finally {
       setBackupListLoading(false);
     }
@@ -251,7 +253,7 @@ export function useDriveSync({
 
   // ── 백업 적용 → applyBackupData 콜백으로 state 적용 ──
   const handleApplyBackup = async (fileId: string, displayTime: string) => {
-    if (!window.confirm(`"${displayTime}" 시점의 백업을 현재 데이터에 적용하시겠습니까?\n(현재 계좌·종목 구성이 백업 시점으로 교체됩니다)`)) return;
+    if (!await confirm(`"${displayTime}" 시점의 백업을 현재 데이터에 적용하시겠습니까?\n(현재 계좌·종목 구성이 백업 시점으로 교체됩니다)`)) return;
     setApplyingBackupId(fileId);
     setSS('loading');
     setDriveStatus('loading');
@@ -282,9 +284,9 @@ export function useDriveSync({
       setSS('ready');
       setDriveStatus('saved');
       setShowBackupModal(false);
-      showToast(`${displayTime} 백업이 적용되었습니다.`);
+      notify(`${displayTime} 백업이 적용되었습니다.`, 'success');
     } catch {
-      showToast('백업 적용에 실패했습니다.', true);
+      notify('백업 적용에 실패했습니다.', 'error');
       setSS('error');
       setDriveStatus('error');
     } finally {

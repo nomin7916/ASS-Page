@@ -8,7 +8,7 @@ export const useIndexImport = ({
   setStockHistoryMap,
   setMarketIndicators,
   setIndicatorHistoryMap,
-  showToast,
+  notify,
 }) => {
   const handleImportHistoryJSON = (e) => {
     const files = Array.from(e.target.files);
@@ -23,7 +23,7 @@ export const useIndexImport = ({
         if (ext === 'csv') {
           const parsedData = parseIndexCSV(content, fileName);
           if (!parsedData || Object.keys(parsedData).length === 0) {
-            showToast(`${fileName}: CSV 파싱 실패 (지원 형식: 네이버증권/investing.com/stooq)`, true);
+            notify(`${fileName}: CSV 파싱 실패 (지원 형식: 네이버증권/investing.com/stooq)`, 'error');
             return;
           }
           const detectedIndex = detectIndexFromFileName(fileName);
@@ -91,7 +91,7 @@ export const useIndexImport = ({
             });
 
             if (Object.keys(formattedData).length === 0) {
-              showToast(`${fileName}: 유효 데이터 없음 (날짜/값 확인 필요)`, true);
+              notify(`${fileName}: 유효 데이터 없음 (날짜/값 확인 필요)`, 'warning');
               return;
             }
 
@@ -166,7 +166,7 @@ export const useIndexImport = ({
               }
             }
           }
-        } catch (err) { showToast(`${fileName} 파싱 실패`, true); }
+        } catch (err) { notify(`${fileName} 파싱 실패`, 'error'); }
       };
       reader.readAsText(file);
     });

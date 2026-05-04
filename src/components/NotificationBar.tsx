@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
-import type { NotificationEntry } from '../hooks/useToast';
+import type { NotificationEntry, NotificationType, ConfirmState } from '../hooks/useToast';
 
 interface Props {
   notificationLog: NotificationEntry[];
@@ -9,6 +9,14 @@ interface Props {
   unreadCount: number;
   onRead: () => void;
 }
+
+const TYPE_COLOR: Record<string, string> = {
+  info:    'text-sky-300',
+  success: 'text-green-400',
+  warning: 'text-amber-400',
+  error:   'text-red-400',
+};
+const typeColor = (type: string) => TYPE_COLOR[type] ?? TYPE_COLOR.info;
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
@@ -103,7 +111,7 @@ export default function NotificationBar({ notificationLog, onClear, unreadCount,
           {scrollPhase === 'scrolling' && latest ? (
             <span
               key={latest.id}
-              className={`absolute whitespace-nowrap text-[11px] font-mono ${latest.isError ? 'text-red-400' : 'text-sky-300'}`}
+              className={`absolute whitespace-nowrap text-[11px] font-mono ${typeColor(latest.type)}`}
               style={{ animation: 'notif-marquee 22s linear 5' }}
               onAnimationEnd={handleAnimationEnd}
             >
@@ -111,7 +119,7 @@ export default function NotificationBar({ notificationLog, onClear, unreadCount,
             </span>
           ) : scrollPhase === 'pinned' && latest ? (
             <span
-              className={`text-[11px] font-mono truncate pl-2.5 ${latest.isError ? 'text-red-400' : 'text-sky-300'}`}
+              className={`text-[11px] font-mono truncate pl-2.5 ${typeColor(latest.type)}`}
             >
               {latest.message}
             </span>
@@ -205,7 +213,7 @@ export default function NotificationBar({ notificationLog, onClear, unreadCount,
                     {formatTime(entry.time)}
                   </span>
                   <span
-                    className={`text-[11px] font-mono break-all leading-snug ${entry.isError ? 'text-red-400' : 'text-gray-300'}`}
+                    className={`text-[11px] font-mono break-all leading-snug ${typeColor(entry.type)}`}
                   >
                     {entry.message}
                   </span>

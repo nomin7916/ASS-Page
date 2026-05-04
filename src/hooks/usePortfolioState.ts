@@ -5,13 +5,15 @@ import { generateId, cleanNum } from '../utils';
 
 interface UsePortfolioStateParams {
   marketIndicators: { goldKr?: number; goldKrChg?: number; [key: string]: any };
-  showToast: (text: string, isError?: boolean) => void;
+  notify: (text: string, type?: string) => void;
+  confirm: (message: string, confirmLabel?: string) => Promise<boolean>;
   setShowIntegratedDashboard: (v: boolean) => void;
 }
 
 export function usePortfolioState({
   marketIndicators,
-  showToast,
+  notify,
+  confirm,
   setShowIntegratedDashboard,
 }: UsePortfolioStateParams) {
   // ── 포트폴리오 목록 (단일 소스) ──
@@ -99,12 +101,12 @@ export function usePortfolioState({
   };
 
   // ── 포트폴리오 삭제 ──
-  const deletePortfolio = (id) => {
+  const deletePortfolio = async (id) => {
     const isLast = portfolios.length <= 1;
     const confirmMsg = isLast
       ? '마지막 계좌입니다. 삭제하면 새 빈 계좌가 자동으로 생성됩니다. 삭제하시겠습니까?'
       : '이 포트폴리오 계좌를 삭제하시겠습니까?';
-    if (!window.confirm(confirmMsg)) return;
+    if (!await confirm(confirmMsg)) return;
     const remaining = portfolios.filter(p => p.id !== id);
     if (remaining.length === 0) {
       const newId = generateId();

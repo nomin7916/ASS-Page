@@ -20,14 +20,14 @@ export default function HistoryPanel({
   setComparisonMode,
   handleDownloadCSV,
   handleLookupDownloadCSV,
-  showToast,
+  notify,
 }) {
   return (
           <div className="w-full xl:w-[26%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
             <div className="p-4 bg-[#0f172a] text-white font-bold flex justify-between items-center text-sm border-b border-gray-700 shrink-0">
               <span>📈 자산 평가액 추이</span>
               <div className="flex items-center gap-1">
-                <button onClick={() => { const today = new Date().toISOString().split('T')[0]; setHistory(prev => { const todayEntry = prev.find(h => h.date === today); return todayEntry ? [todayEntry] : (totals.totalEval > 0 ? [{ date: today, evalAmount: totals.totalEval, principal, isFixed: false }] : []); }); showToast("평가 기록 리셋 완료 (오늘 데이터만 유지)"); }} className="p-1 hover:bg-gray-800 rounded transition text-orange-400 hover:text-white" title="평가 기록 리셋 (오늘만 유지)"><Trash2 size={14} /></button>
+                <button onClick={() => { const today = new Date().toISOString().split('T')[0]; setHistory(prev => { const todayEntry = prev.find(h => h.date === today); return todayEntry ? [todayEntry] : (totals.totalEval > 0 ? [{ date: today, evalAmount: totals.totalEval, principal, isFixed: false }] : []); }); notify("평가 기록 리셋 완료 (오늘 데이터만 유지)", "success"); }} className="p-1 hover:bg-gray-800 rounded transition text-orange-400 hover:text-white" title="평가 기록 리셋 (오늘만 유지)"><Trash2 size={14} /></button>
                 <button onClick={handleDownloadCSV} className="p-1 hover:bg-gray-800 rounded transition text-blue-400 hover:text-white" title="전체 엑셀 다운로드"><Download size={14} /></button>
               </div>
             </div>
@@ -55,7 +55,7 @@ export default function HistoryPanel({
                         <td className="py-2 px-3 text-center border-r border-gray-600 font-bold text-gray-400">{formatShortDate(h.date)}</td>
                         <td className="py-2 px-3 border-r border-gray-600 font-bold text-white text-right">{activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(h.evalAmount/(marketIndicators.usdkrw||1))}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div> : formatCurrency(h.evalAmount)}</td>
                         <td className="py-2 px-3 border-r border-gray-600 text-center font-bold"><span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span></td>
-                        <td className="py-2 px-2 text-center"><button onClick={() => { setLookupRows([{ id: generateId(), date: h.date }, ...lookupRows]); showToast("조회 목록 복사"); }} className="text-blue-400"><ArrowDownToLine size={12} /></button></td>
+                        <td className="py-2 px-2 text-center"><button onClick={() => { setLookupRows([{ id: generateId(), date: h.date }, ...lookupRows]); notify("조회 목록 복사", "info"); }} className="text-blue-400"><ArrowDownToLine size={12} /></button></td>
                       </tr>
                     );
                   })}

@@ -15,7 +15,7 @@ interface UseMarketDataParams {
   driveTokenRef: React.MutableRefObject<string>;
   ensureDriveFolder: (token: string) => Promise<string>;
   appliedRange: { start: string; end: string };
-  showToast: (text: string, isError?: boolean) => void;
+  notify: (text: string, type?: string) => void;
   goldKrAutoCrawledRef: React.MutableRefObject<boolean>;
   stooqAutoCrawledRef: React.MutableRefObject<boolean>;
 }
@@ -25,7 +25,7 @@ export function useMarketData({
   driveTokenRef,
   ensureDriveFolder,
   appliedRange,
-  showToast,
+  notify,
   goldKrAutoCrawledRef,
   stooqAutoCrawledRef,
 }: UseMarketDataParams) {
@@ -513,12 +513,12 @@ export function useMarketData({
           }
         }
       } catch (err) {
-        showToast(`${file.name} 파싱 실패`, true);
+        notify(`${file.name} 파싱 실패`, 'error');
         return;
       }
 
       if (!parsedData || Object.keys(parsedData).length === 0) {
-        showToast(`${file.name}: 유효 데이터 없음`, true);
+        notify(`${file.name}: 유효 데이터 없음`, 'warning');
         return;
       }
 

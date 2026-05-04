@@ -35,6 +35,7 @@ import UserInfoBar from './components/UserInfoBar';
 import DividendSummaryTable from './components/DividendSummaryTable';
 import DividendTaxPage from './components/DividendTaxPage';
 import NotificationBar from './components/NotificationBar';
+import ConfirmDialog from './components/ConfirmDialog';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -95,7 +96,7 @@ export default function App() {
           hint: targetEmail,
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {
-              showToast(`${targetEmail} 계정 접속 실패. 해당 계정이 이 브라우저에 로그인되어 있지 않을 수 있습니다.`, true);
+              notify(`${targetEmail} 계정 접속 실패. 해당 계정이 이 브라우저에 로그인되어 있지 않을 수 있습니다.`, 'error');
               setShowAdminPage(true);
               return;
             }
@@ -106,12 +107,12 @@ export default function App() {
               });
               const infoData = await infoRes.json();
               if (infoData.email?.toLowerCase() !== targetEmail.toLowerCase()) {
-                showToast('다른 계정으로 로그인되었습니다.', true);
+                notify('다른 계정으로 로그인되었습니다.', 'error');
                 setShowAdminPage(true);
                 return;
               }
             } catch {
-              showToast('계정 확인 실패', true);
+              notify('계정 확인 실패', 'error');
               setShowAdminPage(true);
               return;
             }
@@ -122,7 +123,7 @@ export default function App() {
               const isAllowed = !stateData || stateData.adminAccessAllowed !== false;
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: isAllowed }));
               if (!isAllowed) {
-                showToast(`${targetEmail} 사용자가 관리자 접속을 허용하지 않았습니다.`, true);
+                notify(`${targetEmail} 사용자가 관리자 접속을 허용하지 않았습니다.`, 'warning');
                 setShowAdminPage(true);
                 return;
               }
@@ -145,7 +146,7 @@ export default function App() {
       } else if (retries > 0) {
         setTimeout(() => tryInit(retries - 1), 300);
       } else {
-        showToast('Google 인증 초기화 실패', true);
+        notify('Google 인증 초기화 실패', 'error');
         setShowAdminPage(true);
       }
     };
@@ -175,7 +176,7 @@ export default function App() {
   const [rebalanceSortConfig, setRebalanceSortConfig] = useState({ key: null, direction: 1 });
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
-  const { globalToast, showToast, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead } = useToast();
+  const { notify, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead, confirmState, confirm, resolveConfirm } = useToast();
 
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
 
@@ -264,7 +265,7 @@ export default function App() {
     authUser,
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
     applyBackupData: (...args) => applyBackupDataRef.current?.(...args),
-    accountChartStatesRef, saveStateRef, showToast,
+    accountChartStatesRef, saveStateRef, notify, confirm,
   });
 
   // ── useMarketData 훅 ──
@@ -293,7 +294,7 @@ export default function App() {
     handleIndicatorUpload,
     fetchMarketIndicators,
     fetchSingleIndexHistory,
-  } = useMarketData({ driveStatus, driveTokenRef, ensureDriveFolder, appliedRange, showToast, goldKrAutoCrawledRef, stooqAutoCrawledRef });
+  } = useMarketData({ driveStatus, driveTokenRef, ensureDriveFolder, appliedRange, notify, goldKrAutoCrawledRef, stooqAutoCrawledRef });
 
   // ── usePortfolioState 훅 ──
   const {
@@ -346,7 +347,7 @@ export default function App() {
     updatePortfolioExtraRowCode,
     deletePortfolioExtraRow,
     updatePortfolioExtraRowMonth,
-  } = usePortfolioState({ marketIndicators, showToast, setShowIntegratedDashboard });
+  } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
   // ── 섹션 접기/펼치기 (계좌별 독립) ──
   const _SEC_DEFAULT = { summary: false, stats: false, dividend: false, chart: false, rebalancing: false, donut: false };
@@ -755,12 +756,12 @@ export default function App() {
     portfolioSummaries, portfolios, setPortfolios,
     activePortfolioId, activePortfolioAccountType,
     portfolio, principal, history, setHistory,
-    portfolioStartDate, showToast,
+    portfolioStartDate, notify,
   });
 
   const { handleImportHistoryJSON } = useIndexImport({
     marketIndices, setMarketIndices, setIndexFetchStatus,
-    setStockHistoryMap, setMarketIndicators, setIndicatorHistoryMap, showToast,
+    setStockHistoryMap, setMarketIndicators, setIndicatorHistoryMap, notify,
   });
 
 
@@ -799,7 +800,7 @@ export default function App() {
     stockHistoryMapRef,
     saveStateRef, driveTokenRef, saveAllToDrive,
     chartPeriod, appliedRange,
-    setIsLoading, showToast,
+    setIsLoading, notify,
     setMarketIndices, setIndexFetchStatus,
   });
 
@@ -884,7 +885,7 @@ export default function App() {
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
-      showToast('☁️ Drive 미연결 — 먼저 Drive를 연결해 주세요', true);
+      notify('☁️ Drive 미연결 — 먼저 Drive를 연결해 주세요', 'warning');
     }
   };
 
@@ -1193,13 +1194,13 @@ export default function App() {
     const stateEmail = adminViewingAsRef.current || authUser.email;
     const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
     try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch (e) {
-      if (e instanceof DOMException && e.name === 'QuotaExceededError') showToast('브라우저 저장공간이 부족합니다. 이력 데이터를 정리해 주세요.', true);
+      if (e instanceof DOMException && e.name === 'QuotaExceededError') notify('브라우저 저장공간이 부족합니다. 이력 데이터를 정리해 주세요.', 'error');
     }
     try {
       if (Object.keys(shm || {}).length > 0)
         localStorage.setItem(`portfolioStockData_v5_${stateEmail}`, JSON.stringify({ stockHistoryMap: shm }));
     } catch (e) {
-      if (e instanceof DOMException && e.name === 'QuotaExceededError') showToast('종목 이력 저장 실패 — 저장공간 부족', true);
+      if (e instanceof DOMException && e.name === 'QuotaExceededError') notify('종목 이력 저장 실패 — 저장공간 부족', 'error');
     }
     try {
       localStorage.setItem(`portfolioMarketData_v5_${stateEmail}`, JSON.stringify({ marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }));
@@ -1330,7 +1331,8 @@ export default function App() {
           return saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.DIVIDEND_TAX, data);
         }}
         onClose={() => setShowDividendTaxPage(false)}
-        showToast={showToast}
+        notify={notify}
+        confirm={confirm}
         isAdmin={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()}
         onUpdate={setDividendTaxHistory}
       />
@@ -1355,9 +1357,7 @@ export default function App() {
           </button>
         </div>
       )}
-      {globalToast.text && (
-        <div className={`fixed ${adminViewingAs ? 'top-14' : 'top-6'} left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-xl shadow-2xl z-[100] font-bold text-white border transition-all duration-300 max-w-lg text-center ${globalToast.isError ? 'bg-red-900/90 border-red-500' : 'bg-blue-600/90 border-blue-400'}`}>{globalToast.text}</div>
-      )}
+      <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
       
       
       {/* 지표 배율 설정 모달 */}
@@ -1450,7 +1450,7 @@ export default function App() {
           pinChangeSaving={pinChangeSaving}
           setPinChangeSaving={setPinChangeSaving}
           authUser={authUser}
-          showToast={showToast}
+          notify={notify}
         />
         {/* 금액 보기 잠금 해제 모달 */}
         <UnlockPinModal
@@ -1534,7 +1534,7 @@ export default function App() {
             setComparisonMode={setComparisonMode}
             handleDownloadCSV={handleDownloadCSV}
             handleLookupDownloadCSV={handleLookupDownloadCSV}
-            showToast={showToast}
+            notify={notify}
           />
 
           <DepositPanel

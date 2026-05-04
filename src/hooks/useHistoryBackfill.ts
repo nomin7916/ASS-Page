@@ -16,7 +16,7 @@ export const useHistoryBackfill = ({
   history,
   setHistory,
   portfolioStartDate,
-  showToast,
+  notify,
 }) => {
   const nonActiveHistRecordedRef = useRef({});
   const backfillDoneRef = useRef({});
@@ -161,7 +161,7 @@ export const useHistoryBackfill = ({
     if (!fromDate) return;
     const today = new Date().toISOString().split('T')[0];
     const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
-    if (fromDate >= today) { showToast('시작일은 오늘 이전이어야 합니다.'); return; }
+    if (fromDate >= today) { notify('시작일은 오늘 이전이어야 합니다.', 'warning'); return; }
 
     const calcEval = (items, accountType, date) =>
       calcPortfolioEvalForDate(items, accountType, date, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw);
@@ -207,7 +207,8 @@ export const useHistoryBackfill = ({
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
 
-    showToast(totalAdded > 0 ? `${totalAdded}건의 누락 기록을 채웠습니다.` : '채울 누락 기록이 없습니다.');
+    if (totalAdded > 0) notify(`${totalAdded}건의 누락 기록을 채웠습니다.`, 'success');
+    else notify('채울 누락 기록이 없습니다.', 'info');
   };
 
   return { handleManualBackfill };

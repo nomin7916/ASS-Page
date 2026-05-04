@@ -24,7 +24,7 @@ interface UseStockDataParams {
   chartPeriod: string;
   appliedRange: { start: string; end: string };
   setIsLoading: (v: boolean) => void;
-  showToast: (text: string, isError?: boolean) => void;
+  notify: (text: string, type?: string) => void;
   setMarketIndices: (fn: any) => void;
   setIndexFetchStatus: (fn: any) => void;
 }
@@ -46,7 +46,7 @@ export function useStockData({
   stockHistoryMapRef,
   saveStateRef, driveTokenRef, saveAllToDrive,
   chartPeriod, appliedRange,
-  setIsLoading, showToast,
+  setIsLoading, notify,
   setMarketIndices, setIndexFetchStatus,
 }: UseStockDataParams) {
 
@@ -102,7 +102,7 @@ export function useStockData({
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
       } else {
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'fail' }));
-        showToast(`${fundCode} 기준가 갱신 실패`, true);
+        notify(`${fundCode} 기준가 갱신 실패`, 'error');
       }
       return;
     }
@@ -117,7 +117,7 @@ export function useStockData({
       setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
     } else {
       setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
-      showToast(`${code} 현재가 갱신 실패`, true);
+      notify(`${code} 현재가 갱신 실패`, 'error');
     }
   };
 
