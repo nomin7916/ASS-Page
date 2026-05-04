@@ -112,8 +112,8 @@ export function useDriveSync({
   // versioned: 'manual'=수동 저장, 'auto'=20분 자동저장, false=백업 이력 불필요한 저장
   // isRetry: true면 실패 시 재시도·토스트 없이 조용히 종료
   const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false, isRetry = false) => {
-    // LOADING 중에는 저장 차단 — 초기 Drive 로드와의 경쟁 방지
-    if (syncStatusRef.current === 'loading') return;
+    // LOADING·SAVING 중에는 저장 차단 — 초기 Drive 로드 / 동시 저장 경쟁 방지
+    if (syncStatusRef.current === 'loading' || syncStatusRef.current === 'saving') return;
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     try {

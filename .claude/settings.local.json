@@ -94,7 +94,8 @@
       "PowerShell($nodePaths = @\\(\"C:\\\\Program Files\\\\nodejs\", \"C:\\\\Program Files \\(x86\\)\\\\nodejs\", \"$env:APPDATA\\\\npm\", \"$env:LOCALAPPDATA\\\\Programs\\\\nodejs\"\\); foreach \\($p in $nodePaths\\) { if \\(Test-Path \"$p\\\\npm.cmd\"\\) { Write-Output \"Found at: $p\"; & \"$p\\\\npm.cmd\" run build --prefix \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\" 2>&1; break } })",
       "PowerShell(Test-Path \"$env:APPDATA\\\\nvm\"; Test-Path \"$env:LOCALAPPDATA\\\\fnm\"; Get-ChildItem \"$env:APPDATA\" -Filter \"nvm\" -ErrorAction SilentlyContinue | Select-Object Name)",
       "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 25)",
-      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-Command npm -ErrorAction SilentlyContinue; $env:PATH -split ';' | Where-Object { $_ -match 'node|npm' })"
+      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-Command npm -ErrorAction SilentlyContinue; $env:PATH -split ';' | Where-Object { $_ -match 'node|npm' })",
+      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-Command npm -ErrorAction SilentlyContinue; $env:Path -split \";\" | Where-Object { $_ -match \"node\" })"
     ]
   }
 }
