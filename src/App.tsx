@@ -938,6 +938,19 @@ export default function App() {
     }
   };
 
+  const handleAppClose = () => {
+    notify('백업 저장합니다.', 'info');
+    const currentPortfolios = buildPortfoliosState();
+    const newUpdatedAt = Date.now();
+    portfolioUpdatedAtRef.current = newUpdatedAt;
+    lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory, portfolioUpdatedAt: newUpdatedAt };
+    if (driveTokenRef.current) {
+      saveAllToDrive(state, 'auto');
+    }
+    setTimeout(() => window.close(), 2000);
+  };
+
   const today = new Date().toISOString().split('T')[0];
   const handleDownloadCSV = () => downloadCSV(`ISA_자산추이_${today}.csv`, buildHistoryCSV(history));
   const handleLookupDownloadCSV = () => downloadCSV(`ISA_지정일비교_${today}.csv`, buildLookupCSV(lookupRows, history, comparisonMode, totals.totalEval));
@@ -1327,6 +1340,7 @@ export default function App() {
           onLogout={() => { sessionStorage.removeItem(SESSION_KEY); setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
           canAccessDividendTax={canAccessDividendTax}
           onOpenDividendTax={() => setShowDividendTaxPage(true)}
+          onAppClose={handleAppClose}
         />
 
         {/* 알림 바 */}

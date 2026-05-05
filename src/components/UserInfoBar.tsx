@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { Settings, Lock, Link2, LogOut, FileSpreadsheet } from 'lucide-react';
+import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power } from 'lucide-react';
 import { ADMIN_EMAIL } from '../config';
 
 export default function UserInfoBar({
@@ -12,6 +12,7 @@ export default function UserInfoBar({
   onLogout,
   canAccessDividendTax,
   onOpenDividendTax,
+  onAppClose,
 }) {
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
@@ -66,6 +67,18 @@ export default function UserInfoBar({
         >
           <LogOut size={14} />
         </button>
+        {onAppClose && (
+          <>
+            <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
+            <button
+              onClick={onAppClose}
+              className="text-gray-500 hover:text-rose-400 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+              title="앱 닫기 (백업 저장 후 종료)"
+            >
+              <Power size={14} />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
