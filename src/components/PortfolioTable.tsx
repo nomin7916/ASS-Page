@@ -145,7 +145,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     {item.rowColor ? (
                       <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none" style={{minHeight:'44px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
                     ) : (
-                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer" style={{minHeight:'44px', backgroundColor: '#334155'}}>
+                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer" style={{minHeight:'44px', backgroundColor: '#64748b'}}>
                         <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => onUpdate(item.id, 'rowColor', e.target.value)} />
                       </label>
                     )}
@@ -343,7 +343,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     {item.rowColor ? (
                       <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none" style={{minHeight:'44px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
                     ) : (
-                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer" style={{minHeight:'44px', backgroundColor: '#334155'}}>
+                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer" style={{minHeight:'44px', backgroundColor: '#64748b'}}>
                         <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => onUpdate(item.id, 'rowColor', e.target.value)} />
                       </label>
                     )}

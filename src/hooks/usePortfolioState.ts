@@ -339,7 +339,7 @@ export function usePortfolioState({
   // ── 포트폴리오 항목 CRUD ──
   const handleUpdate = (id, field, value) =>
     setPortfolio(prev => prev.map(p =>
-      p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass'].includes(field) ? value : cleanNum(value) } : p
+      p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass', 'rowColor'].includes(field) ? value : cleanNum(value) } : p
     ));
 
   const handleDeleteStock = (id) => setPortfolio(prev => prev.filter(p => p.id !== id));
