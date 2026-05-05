@@ -10,7 +10,7 @@ import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
-import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
+import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
 import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder } from './driveStorage';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
@@ -18,6 +18,7 @@ import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
 import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
+import AdminNotificationModal, { AdminNotification } from './components/AdminNotificationModal';
 import IntegratedDashboard from './components/IntegratedDashboard';
 import HistoryPanel from './components/HistoryPanel';
 import DepositPanel from './components/DepositPanel';
@@ -70,6 +71,7 @@ export default function App() {
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
+  const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
   const adminOwnDriveTokenRef = useRef<string>('');
   const adminViewingAsRef = useRef<string | null>(null);
   const {
@@ -975,6 +977,28 @@ export default function App() {
         if (logData?.entries?.length > 0) setNotificationLog(logData.entries);
       } catch {}
 
+      // 관리자 공지 확인 (관리자 본인 제외)
+      if (authUser.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+        try {
+          // Apps Script getNotifications 엔드포인트 필요:
+          // action=getNotifications → { notifications: [{id, targetEmail, message, type, createdAt}] }
+          const notifsRes = await fetch(`${APPS_SCRIPT_URL}?action=getNotifications&cacheBust=${Date.now()}`);
+          if (notifsRes.ok) {
+            const notifsData = await notifsRes.json();
+            const all: AdminNotification[] = notifsData.notifications || [];
+            const seenKey = `adminNotifs_seen_v1_${authUser.email}`;
+            const seenIds: string[] = JSON.parse(localStorage.getItem(seenKey) || '[]');
+            const myNotifs = all.filter(n =>
+              (n.targetEmail === '__all__' || n.targetEmail?.toLowerCase() === authUser.email.toLowerCase())
+              && !seenIds.includes(n.id)
+            );
+            if (myNotifs.length > 0) {
+              setPendingAdminNotifs(myNotifs);
+            }
+          }
+        } catch {}
+      }
+
       // 시장지표 백그라운드 수집, 종목 현재가 갱신
       fetchMarketIndicators();
       const portfolioToRefresh = portfolioRef.current;
@@ -1259,6 +1283,19 @@ export default function App() {
         </div>
       )}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
+      {pendingAdminNotifs.length > 0 && (
+        <AdminNotificationModal
+          notifications={pendingAdminNotifs}
+          onClose={() => {
+            const seenKey = `adminNotifs_seen_v1_${authUser.email}`;
+            const prev: string[] = JSON.parse(localStorage.getItem(seenKey) || '[]');
+            const newIds = [...prev, ...pendingAdminNotifs.map(n => n.id)];
+            localStorage.setItem(seenKey, JSON.stringify(newIds));
+            pendingAdminNotifs.forEach(n => notify(`[관리자 공지] ${n.message}`, n.type || 'info'));
+            setPendingAdminNotifs([]);
+          }}
+        />
+      )}
       
       
       {/* 지표 배율 설정 모달 */}

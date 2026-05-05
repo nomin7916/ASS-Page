@@ -38,6 +38,13 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // 공지 보내기 상태
+  const [notifTarget, setNotifTarget] = useState('__all__');
+  const [notifMessage, setNotifMessage] = useState('');
+  const [notifType, setNotifType] = useState('info');
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState<'success' | 'error' | null>(null);
+
   useEffect(() => {
     fetchApprovedUsers().then(u => {
       setUsers(u);
@@ -50,6 +57,45 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
     const u = await fetchApprovedUsers();
     setUsers(u);
     setLoading(false);
+  };
+
+  const handleSendNotification = async () => {
+    if (!notifMessage.trim()) return;
+    setSending(true);
+    setSendResult(null);
+    try {
+      // Apps Script에 POST로 공지 전송
+      // Apps Script doPost에 아래 코드 추가 필요:
+      // if (action === 'sendNotification') {
+      //   const ss = SpreadsheetApp.openById(SHEET_ID);
+      //   let sheet = ss.getSheetByName('notifications') || ss.insertSheet('notifications');
+      //   if (sheet.getLastRow() === 0) sheet.appendRow(['id','targetEmail','message','type','createdAt']);
+      //   const id = Utilities.getUuid();
+      //   sheet.appendRow([id, params.targetEmail, params.message, params.type || 'info', Date.now()]);
+      //   return ContentService.createTextOutput(JSON.stringify({ success: true, id })).setMimeType(ContentService.MimeType.JSON);
+      // }
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'sendNotification',
+          targetEmail: notifTarget,
+          message: notifMessage.trim(),
+          type: notifType,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        setSendResult('success');
+        setNotifMessage('');
+      } else {
+        setSendResult('error');
+      }
+    } catch {
+      setSendResult('error');
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleOpenSheet = () => {
@@ -186,6 +232,55 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
               </svg>
               Google Colab 열기
             </button>
+          </div>
+        </div>
+
+        {/* 공지 보내기 */}
+        <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+          <p className="text-blue-400 text-xs font-semibold uppercase tracking-wider">📢 공지 보내기</p>
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <select
+                value={notifTarget}
+                onChange={e => setNotifTarget(e.target.value)}
+                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs focus:outline-none focus:border-blue-500"
+              >
+                <option value="__all__">전체 사용자</option>
+                {users.filter(u => u.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()).map(u => (
+                  <option key={u.email} value={u.email}>{u.name ? `${u.name} (${u.email})` : u.email}</option>
+                ))}
+              </select>
+              <select
+                value={notifType}
+                onChange={e => setNotifType(e.target.value)}
+                className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs focus:outline-none focus:border-blue-500"
+              >
+                <option value="info">정보</option>
+                <option value="success">성공</option>
+                <option value="warning">경고</option>
+                <option value="error">오류</option>
+              </select>
+            </div>
+            <textarea
+              value={notifMessage}
+              onChange={e => setNotifMessage(e.target.value)}
+              placeholder="전달할 공지 내용을 입력하세요..."
+              rows={3}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-blue-500 resize-none"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSendNotification}
+                disabled={sending || !notifMessage.trim()}
+                className="flex-1 flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-4 rounded-lg transition-colors"
+              >
+                {sending ? (
+                  <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />전송 중...</>
+                ) : '전송'}
+              </button>
+              {sendResult === 'success' && <span className="text-green-400 text-xs">✓ 전송 완료</span>}
+              {sendResult === 'error' && <span className="text-red-400 text-xs">✗ 전송 실패</span>}
+            </div>
           </div>
         </div>
 
