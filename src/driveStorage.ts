@@ -40,7 +40,7 @@ export async function getOrCreateIndexFolder(token: string): Promise<string> {
 
 async function _doGetOrCreateIndexFolder(token: string): Promise<string> {
   const q = encodeURIComponent(
-    `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
+    `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
   );
   const res = await fetch(
     `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,createdTime)&orderBy=createdTime`,
