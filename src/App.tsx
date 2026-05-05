@@ -1094,25 +1094,31 @@ export default function App() {
         const day = new Date(h.date + 'T12:00:00').getDay();
         return day !== 0 && day !== 6;
       });
-      // 직전 기록으로 이상치 판단 (휴일에만 적용)
       const prevEntries = [...cleaned].sort((a, b) => b.date.localeCompare(a.date));
-      const prevValue = prevEntries.length > 0 ? prevEntries[0].evalAmount : 0;
+      const lastEntry = prevEntries[0];
+      const prevValue = lastEntry?.evalAmount ?? 0;
+      // 직전 기록이 현재 합산가의 10% 미만이면 예수금만 기록된 비정상 데이터 → 현재값으로 보정
+      const needsCorrection = !!(lastEntry && !lastEntry.isFixed && prevValue > 0 && prevValue < totals.totalEval * 0.1);
+      const correctedCleaned = needsCorrection
+        ? cleaned.map(h => h.date === lastEntry.date ? { ...h, evalAmount: totals.totalEval } : h)
+        : cleaned;
+      const effectivePrevValue = needsCorrection ? totals.totalEval : prevValue;
       const isHoliday = !isTradingDay;
-      const isAnomaly = isHoliday && prevValue > 0 && Math.abs(totals.totalEval - prevValue) / prevValue > 0.9;
+      // 휴일에 합산가가 전일 대비 10% 미만으로 감소한 경우만 이상치로 판단 (가격 미로드 방지)
+      const isAnomaly = isHoliday && effectivePrevValue > 0 && totals.totalEval < effectivePrevValue * 0.1;
       let todayEntry;
       if (existingToday?.userChosen) {
-        // 사용자가 명시적으로 선택한 값 — actualEvalAmount만 갱신
         todayEntry = { ...existingToday, actualEvalAmount: totals.totalEval };
       } else if (isAnomaly) {
-        todayEntry = { date: today, evalAmount: prevValue, adjustedAmount: prevValue, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: true, userChosen: false };
+        todayEntry = { date: today, evalAmount: effectivePrevValue, adjustedAmount: effectivePrevValue, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: true, userChosen: false };
       } else {
         todayEntry = { date: today, evalAmount: totals.totalEval, adjustedAmount: totals.totalEval, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: false, userChosen: false };
       }
-      if (existingToday && !existingToday.userChosen && !isAnomaly &&
+      if (!needsCorrection && existingToday && !existingToday.userChosen && !isAnomaly &&
           existingToday.evalAmount === totals.totalEval && cleaned.length === prev.length - 1) {
         return prev;
       }
-      const newHist = [...cleaned, todayEntry];
+      const newHist = [...correctedCleaned, todayEntry];
       const fills = fillNonTradingGaps(newHist, krH, usH, accType);
       return fills.length > 0 ? [...newHist, ...fills] : newHist;
     });

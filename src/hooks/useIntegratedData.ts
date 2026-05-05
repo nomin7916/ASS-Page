@@ -97,7 +97,7 @@ export function useIntegratedData({
     if (intTotals.totalEval > 0) {
       const prevEntries = [...dateToTotal.entries()].filter(([d]) => d < today).sort((a, b) => b[0].localeCompare(a[0]));
       const prevValue = prevEntries.length > 0 ? prevEntries[0][1] : 0;
-      const isAnomaly = prevValue > 0 && Math.abs(intTotals.totalEval - prevValue) / prevValue > 0.9;
+      const isAnomaly = prevValue > 0 && intTotals.totalEval < prevValue * 0.1;
       dateToTotal.set(today, isAnomaly ? prevValue : intTotals.totalEval);
     }
     return [...dateToTotal.entries()]
