@@ -93,10 +93,10 @@ export default function App() {
     setShowAdminPage(false);
     const tryInit = (retries = 20) => {
       if ((window as any).google?.accounts?.oauth2) {
-        // 관리자 자신의 계정으로 drive.readonly 스코프 토큰 요청 — 공유받은 폴더 읽기 가능
+        // 관리자 자신의 계정으로 drive 스코프 토큰 요청 — 공유받은 폴더 읽기/쓰기 가능
         const client = (window as any).google.accounts.oauth2.initTokenClient({
           client_id: GOOGLE_CLIENT_ID,
-          scope: 'openid email profile https://www.googleapis.com/auth/drive.readonly',
+          scope: 'openid email profile https://www.googleapis.com/auth/drive',
           hint: authUser.email,
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {
@@ -1089,7 +1089,7 @@ export default function App() {
     const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
     try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch {}
     // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스 — 포트폴리오 테이블 변경 시 2초 이내 백업)
-    if (!isInitialLoad.current && driveTokenRef.current && !adminViewingAsRef.current) {
+    if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
       driveSaveTimerRef.current = setTimeout(() => {
         saveAllToDrive(state);
@@ -1261,15 +1261,15 @@ export default function App() {
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
       {adminViewingAs && (
-        <div className="fixed top-0 left-0 right-0 z-[200] bg-gray-900/98 border-b border-gray-700 px-4 py-2 flex items-center justify-between backdrop-blur-sm">
-          <span className="text-gray-400 text-xs">
-            <span className="text-gray-500 mr-1">관리자 뷰</span>
-            <span className="text-gray-200 font-medium">{adminViewingAs}</span>
-            <span className="ml-2 text-gray-600 text-[10px] uppercase tracking-wider">읽기 전용</span>
+        <div className="fixed top-0 left-0 right-0 z-[200] bg-amber-950/95 border-b border-amber-700/60 px-4 py-2 flex items-center justify-between backdrop-blur-sm">
+          <span className="text-amber-200 text-xs flex items-center gap-2">
+            <span className="text-amber-400">✏️ 편집 모드</span>
+            <span className="text-amber-100 font-medium">{adminViewingAs}</span>
+            <span className="text-amber-600 text-[10px]">— 저장 시 해당 사용자 Drive에 반영됩니다</span>
           </span>
           <button
             onClick={handleReturnToAdminPage}
-            className="text-gray-400 hover:text-gray-100 text-xs font-medium px-3 py-1 rounded border border-gray-700 hover:border-gray-500 transition-colors bg-gray-800 hover:bg-gray-750"
+            className="text-amber-300 hover:text-white text-xs font-medium px-3 py-1 rounded border border-amber-700 hover:border-amber-400 transition-colors bg-amber-900/60 hover:bg-amber-800/60"
           >
             ← 관리자 페이지
           </button>

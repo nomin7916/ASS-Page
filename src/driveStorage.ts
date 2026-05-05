@@ -90,14 +90,33 @@ async function _doGetOrCreateIndexFolder(token: string): Promise<string> {
   return created.id;
 }
 
-// 폴더에 관리자 읽기 권한 부여 (adminAccessAllowed = true 시 호출)
+// 폴더에 관리자 편집 권한 부여 (adminAccessAllowed = true 시 호출)
+// 기존 reader 권한이 있으면 writer로 업그레이드, 없으면 신규 부여
 export async function grantAdminReadAccess(token: string, folderId: string, adminEmail: string): Promise<void> {
   try {
-    await fetch(`${DRIVE_API}/files/${folderId}/permissions?sendNotificationEmail=false`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'reader', type: 'user', emailAddress: adminEmail }),
-    });
+    const res = await fetch(
+      `${DRIVE_API}/files/${folderId}/permissions?fields=permissions(id,emailAddress,role)`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    const existing = data.permissions?.find(
+      (p: any) => p.emailAddress?.toLowerCase() === adminEmail.toLowerCase()
+    );
+    if (existing) {
+      if (existing.role === 'writer') return;
+      await fetch(`${DRIVE_API}/files/${folderId}/permissions/${existing.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'writer' }),
+      });
+    } else {
+      await fetch(`${DRIVE_API}/files/${folderId}/permissions?sendNotificationEmail=false`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: adminEmail }),
+      });
+    }
   } catch {}
 }
 

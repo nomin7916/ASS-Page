@@ -130,14 +130,19 @@ export function useDriveSync({
   const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false, isRetry = false) => {
     // LOADING·SAVING 중에는 저장 차단 — 초기 Drive 로드 / 동시 저장 경쟁 방지
     if (syncStatusRef.current === 'loading' || syncStatusRef.current === 'saving') return;
-    // 관리자 뷰 모드 또는 전환 중 — 타인 계정 데이터가 saveStateRef에 남아있을 수 있으므로 차단
-    if (adminViewingAsRef.current || adminTransitioningRef.current) return;
+    // 전환 중 — 관리자↔사용자 데이터 교체 중 저장 차단 (편집 모드 자체는 저장 허용)
+    if (adminTransitioningRef.current) return;
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
+    const isAdminEdit = !!adminViewingAsRef.current;
     try {
       setSS('saving');
       setDriveStatus('saving');
-      if (versioned === 'manual' && !isRetry) notify('☁️ Drive에 저장 중...', 'info');
+      if (versioned === 'manual' && !isRetry) {
+        isAdminEdit
+          ? notify(`☁️ ${adminViewingAsRef.current} Drive에 저장 중...`, 'info')
+          : notify('☁️ Drive에 저장 중...', 'info');
+      }
       const folderId = await ensureDriveFolder(token);
       const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
       // STATE는 portfolioUpdatedAt이 실제로 변경됐을 때만 저장
@@ -146,14 +151,16 @@ export function useDriveSync({
         await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
         lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
       }
-      // adminAccessAllowed 변경 시 Drive 폴더 공유/해제 — portfolioUpdatedAt과 독립적으로 실행
-      const currAllowed = state.adminAccessAllowed !== false;
-      if (lastAdminAccessAllowedRef.current !== currAllowed) {
-        lastAdminAccessAllowedRef.current = currAllowed;
-        if (currAllowed) {
-          grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
-        } else {
-          revokeAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+      // adminAccessAllowed 변경 시 Drive 폴더 공유/해제 — 관리자 편집 중에는 건드리지 않음
+      if (!isAdminEdit) {
+        const currAllowed = state.adminAccessAllowed !== false;
+        if (lastAdminAccessAllowedRef.current !== currAllowed) {
+          lastAdminAccessAllowedRef.current = currAllowed;
+          if (currAllowed) {
+            grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+          } else {
+            revokeAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+          }
         }
       }
       if (versioned) {
@@ -167,7 +174,11 @@ export function useDriveSync({
       ]);
       setSS('ready');
       setDriveStatus('saved');
-      if (versioned === 'manual') notify('Drive 저장 완료', 'success');
+      if (versioned === 'manual') {
+        isAdminEdit
+          ? notify(`${adminViewingAsRef.current} Drive에 저장 완료`, 'success')
+          : notify('Drive 저장 완료', 'success');
+      }
     } catch (err) {
       console.error('Drive 저장 실패:', err);
       setSS('error');
