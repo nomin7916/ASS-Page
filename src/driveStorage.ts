@@ -56,6 +56,53 @@ export async function getOrCreateIndexFolder(token: string): Promise<string> {
   return created.id;
 }
 
+// 폴더에 관리자 읽기 권한 부여 (adminAccessAllowed = true 시 호출)
+export async function grantAdminReadAccess(token: string, folderId: string, adminEmail: string): Promise<void> {
+  try {
+    await fetch(`${DRIVE_API}/files/${folderId}/permissions?sendNotificationEmail=false`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'reader', type: 'user', emailAddress: adminEmail }),
+    });
+  } catch {}
+}
+
+// 폴더에서 관리자 읽기 권한 제거 (adminAccessAllowed = false 시 호출)
+export async function revokeAdminReadAccess(token: string, folderId: string, adminEmail: string): Promise<void> {
+  try {
+    const res = await fetch(
+      `${DRIVE_API}/files/${folderId}/permissions?fields=permissions(id,emailAddress)`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    const perm = data.permissions?.find((p: any) => p.emailAddress?.toLowerCase() === adminEmail.toLowerCase());
+    if (!perm) return;
+    await fetch(`${DRIVE_API}/files/${folderId}/permissions/${perm.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {}
+}
+
+// 관리자 토큰으로 대상 사용자의 Index_Data 폴더 ID 찾기
+export async function findUserIndexFolder(adminToken: string, targetEmail: string): Promise<string | null> {
+  try {
+    const q = encodeURIComponent(
+      `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${targetEmail}' in owners`
+    );
+    const res = await fetch(
+      `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${adminToken}` } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.files?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // 폴더 안에서 파일 ID 찾기
 async function findFileId(token: string, folderId: string, fileName: string): Promise<string | null> {
   const q = encodeURIComponent(

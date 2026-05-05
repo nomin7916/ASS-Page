@@ -98,7 +98,10 @@
       "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-Command npm -ErrorAction SilentlyContinue; $env:Path -split \";\" | Where-Object { $_ -match \"node\" })",
       "Bash(export PATH=\"$PATH:/c/Program Files/nodejs\")",
       "PowerShell($nvm = \"$env:APPDATA\\\\nvm\"; if \\(Test-Path $nvm\\) { Get-ChildItem $nvm } else { \"nvm not found\" }; $fnm = \"$env:LOCALAPPDATA\\\\fnm\"; if \\(Test-Path $fnm\\) { Get-ChildItem $fnm } else { \"fnm not found\" })",
-      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\scoop\\\\apps\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object -First 3; Get-ChildItem \"$env:LOCALAPPDATA\\\\Programs\\\\node\" -ErrorAction SilentlyContinue | Select-Object -First 3; where.exe node 2>&1)"
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\scoop\\\\apps\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object -First 3; Get-ChildItem \"$env:LOCALAPPDATA\\\\Programs\\\\node\" -ErrorAction SilentlyContinue | Select-Object -First 3; where.exe node 2>&1)",
+      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-Command npm -ErrorAction SilentlyContinue; [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\) | Select-String -Pattern \"node\")",
+      "PowerShell(Get-ChildItem \"$env:LOCALAPPDATA\\\\claude-cli-nodejs\" | Select-Object -First 5; Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Roaming\\\\nvm\" -ErrorAction SilentlyContinue | Select-Object -First 5)",
+      "PowerShell($env:PATH -split ';' | Where-Object { $_ -ne '' } | Select-Object -First 30)"
     ]
   }
 }

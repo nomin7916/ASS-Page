@@ -11,7 +11,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL } from './config';
-import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, MAX_BACKUPS } from './driveStorage';
+import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder } from './driveStorage';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
@@ -91,36 +91,28 @@ export default function App() {
     setShowAdminPage(false);
     const tryInit = (retries = 20) => {
       if ((window as any).google?.accounts?.oauth2) {
+        // 관리자 자신의 계정으로 drive.readonly 스코프 토큰 요청 — 공유받은 폴더 읽기 가능
         const client = (window as any).google.accounts.oauth2.initTokenClient({
           client_id: GOOGLE_CLIENT_ID,
-          scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
-          hint: targetEmail,
+          scope: 'openid email profile https://www.googleapis.com/auth/drive.readonly',
+          hint: authUser.email,
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {
-              notify(`${targetEmail} 계정 접속 실패. 해당 계정이 이 브라우저에 로그인되어 있지 않을 수 있습니다.`, 'error');
+              notify('관리자 Drive 인증 실패. 다시 시도해 주세요.', 'error');
               setShowAdminPage(true);
               return;
             }
-            const token = resp.access_token;
-            try {
-              const infoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              const infoData = await infoRes.json();
-              if (infoData.email?.toLowerCase() !== targetEmail.toLowerCase()) {
-                notify('다른 계정으로 로그인되었습니다.', 'error');
-                setShowAdminPage(true);
-                return;
-              }
-            } catch {
-              notify('계정 확인 실패', 'error');
+            const adminToken = resp.access_token;
+            // 대상 사용자가 공유한 Index_Data 폴더 찾기
+            const userFolderId = await findUserIndexFolder(adminToken, targetEmail);
+            if (!userFolderId) {
+              notify(`${targetEmail} 사용자의 Drive 폴더를 찾을 수 없습니다. 해당 사용자가 관리자 접근을 허용했는지 확인하세요.`, 'error');
               setShowAdminPage(true);
               return;
             }
-            // 접속 허용 여부 확인 (사용자 Drive state 파일에서 adminAccessAllowed 체크)
+            // 접속 허용 여부 확인
             try {
-              const checkFolderId = await getOrCreateIndexFolder(token);
-              const stateData = await loadDriveFile(token, checkFolderId, DRIVE_FILES.STATE) as any;
+              const stateData = await loadDriveFile(adminToken, userFolderId, DRIVE_FILES.STATE) as any;
               const isAllowed = !stateData || stateData.adminAccessAllowed !== false;
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: isAllowed }));
               if (!isAllowed) {
@@ -129,17 +121,16 @@ export default function App() {
                 return;
               }
             } catch {
-              // 파일 없거나 오류 시 허용 (신규 사용자)
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
             }
             adminOwnDriveTokenRef.current = driveTokenRef.current;
             adminViewingAsRef.current = targetEmail;
             setAdminViewingAs(targetEmail);
             isInitialLoad.current = true;
-            driveTokenRef.current = token;
-            setDriveToken(token);
-            driveFolderIdRef.current = '';
-            await loadFromDrive(token);
+            driveTokenRef.current = adminToken;
+            setDriveToken(adminToken);
+            driveFolderIdRef.current = userFolderId;
+            await loadFromDrive(adminToken);
             isInitialLoad.current = false;
           },
         });
@@ -278,7 +269,7 @@ export default function App() {
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
     applyStockData: (...args) => applyStockDataRef.current?.(...args),
     applyBackupData: (...args) => applyBackupDataRef.current?.(...args),
-    accountChartStatesRef, saveStateRef, notify, confirm,
+    accountChartStatesRef, saveStateRef, adminViewingAsRef, notify, confirm,
   });
 
   // ── useMarketData 훅 ──
@@ -1081,7 +1072,7 @@ export default function App() {
     const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
     try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch {}
     // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스 — 포트폴리오 테이블 변경 시 2초 이내 백업)
-    if (!isInitialLoad.current && driveTokenRef.current) {
+    if (!isInitialLoad.current && driveTokenRef.current && !adminViewingAsRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
       driveSaveTimerRef.current = setTimeout(() => {
         saveAllToDrive(state);

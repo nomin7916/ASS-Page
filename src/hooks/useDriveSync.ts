@@ -4,8 +4,9 @@ import {
   DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile,
   loadVersionTimestamp, saveVersionFile, saveVersionedBackup,
   listBackups, loadBackupById, DriveBackupEntry,
+  grantAdminReadAccess, revokeAdminReadAccess,
 } from '../driveStorage';
-import { GOOGLE_CLIENT_ID } from '../config';
+import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
 
 // SyncStatus 상태 머신
 // idle    → 로그인 전
@@ -26,6 +27,7 @@ interface UseDriveSyncParams {
   applyBackupData: ApplyBackupDataFn;
   accountChartStatesRef: React.MutableRefObject<any>;
   saveStateRef: React.MutableRefObject<any>;
+  adminViewingAsRef: React.MutableRefObject<string | null>;
   notify: (text: string, type?: string) => void;
   confirm: (message: string, confirmLabel?: string) => Promise<boolean>;
 }
@@ -37,6 +39,7 @@ export function useDriveSync({
   applyBackupData,
   accountChartStatesRef,
   saveStateRef,
+  adminViewingAsRef,
   notify,
   confirm,
 }: UseDriveSyncParams) {
@@ -66,6 +69,7 @@ export function useDriveSync({
   const lastDriveCheckAtRef = useRef<number>(0);
   const goldKrAutoCrawledRef = useRef(false);  // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);   // 세션 당 한 번만 stooq 지표 자동 크롤링
+  const lastAdminAccessAllowedRef = useRef<boolean | null>(null);
 
   // ── Drive 폴더 ID 캐시 확보 ──
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -116,6 +120,8 @@ export function useDriveSync({
   const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false, isRetry = false) => {
     // LOADING·SAVING 중에는 저장 차단 — 초기 Drive 로드 / 동시 저장 경쟁 방지
     if (syncStatusRef.current === 'loading' || syncStatusRef.current === 'saving') return;
+    // 관리자 뷰 모드 — 타인 계정 열람 중에는 저장 차단
+    if (adminViewingAsRef.current) return;
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     try {
@@ -129,6 +135,16 @@ export function useDriveSync({
         await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
         await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
         lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
+        // adminAccessAllowed 변경 시 Drive 폴더 공유/해제
+        const currAllowed = state.adminAccessAllowed !== false;
+        if (lastAdminAccessAllowedRef.current !== currAllowed) {
+          lastAdminAccessAllowedRef.current = currAllowed;
+          if (currAllowed) {
+            grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+          } else {
+            revokeAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+          }
+        }
       }
       if (versioned) {
         saveVersionedBackup(token, folderId, stateCore, versioned).catch(() => {});
