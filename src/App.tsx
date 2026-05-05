@@ -1031,29 +1031,6 @@ export default function App() {
     return () => clearTimeout(bgTimer);
   }, [authUser]);
 
-  // 20분(1,200,000ms)마다 자동으로 현재가 + 시장지표 갱신 후 Drive 백업
-  useEffect(() => {
-    const AUTO_REFRESH_INTERVAL = 20 * 60 * 1000; // 20분
-    const intervalId = setInterval(async () => {
-      // portfolio가 있을 때만 실행
-      if (portfolioRef.current.length > 0 && portfolioRef.current.some(p => p.type === 'stock' && p.code)) {
-        console.log('[자동갱신] 20분 주기 현재가 + 시장지표 갱신 시작');
-        fetchMarketIndicators();
-        await refreshPrices();
-        // 갱신 완료 후 3초 대기 (React 상태 업데이트 반영) → Drive 자동저장
-        setTimeout(() => {
-          const snap = saveStateRef.current;
-          if (snap && snap.portfolios?.length > 0) {
-            console.log('[자동저장] 20분 주기 Drive 백업');
-            // portfolioUpdatedAt을 현재 시각으로 강제 갱신 — 가격만 변경된 경우에도 STATE 저장
-            saveAllToDrive({ ...snap, portfolioUpdatedAt: Date.now() }, 'auto');
-          }
-        }, 3000);
-      }
-    }, AUTO_REFRESH_INTERVAL);
-    return () => clearInterval(intervalId);
-  }, []);
-
   // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
   useEffect(() => {
     if (!authUser || !driveTokenRef.current || isInitialLoad.current) return;

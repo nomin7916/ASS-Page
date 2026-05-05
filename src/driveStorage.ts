@@ -244,7 +244,7 @@ export async function saveVersionFile(
 }
 
 // 타임스탬프 이름의 백업 파일 저장 후 오래된 것 정리
-// type: 'manual' = 수동 저장, 'auto' = 20분 자동저장
+// type: 'manual' = 수동 저장, 'auto' = 자동 저장
 export async function saveVersionedBackup(
   token: string,
   folderId: string,
