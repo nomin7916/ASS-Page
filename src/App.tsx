@@ -179,7 +179,7 @@ export default function App() {
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
-  const [rebalanceSortConfig, setRebalanceSortConfig] = useState({ key: null, direction: 1 });
+  const [rebalanceSortConfigMap, setRebalanceSortConfigMap] = useState<Record<string, { key: string | null, direction: number }>>({});
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
   
   const { notify, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead, confirmState, confirm, resolveConfirm } = useToast();
@@ -361,6 +361,9 @@ export default function App() {
     deletePortfolioExtraRow,
     updatePortfolioExtraRowMonth,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
+
+  // ── 리밸런싱 정렬 (계좌별 독립) ──
+  const rebalanceSortConfig = rebalanceSortConfigMap[activePortfolioId] ?? { key: null, direction: 1 };
 
   // ── 섹션 접기/펼치기 (계좌별 독립) ──
   const _SEC_DEFAULT = { summary: false, stats: false, dividend: false, chart: false, rebalancing: false, donut: false };
@@ -876,7 +879,10 @@ export default function App() {
     });
   };
 
-  const handleRebalanceSort = (key) => setRebalanceSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
+  const handleRebalanceSort = (key) => setRebalanceSortConfigMap(prev => {
+    const cur = prev[activePortfolioId] ?? { key: null, direction: 1 };
+    return { ...prev, [activePortfolioId]: { key, direction: cur.key === key ? -cur.direction : 1 } };
+  });
   const handleDepositSort = (key) => setDepositSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort2 = (key) => setDepositSortConfig2(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
 
