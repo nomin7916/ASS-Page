@@ -1086,28 +1086,33 @@ export default function App() {
       const krH = marketHolidays.kr;
       const usH = marketHolidays.us;
       const accType = activePortfolioAccountType;
-      // 잘못 저장된 주말·공휴일 레코드 정리 — 거래일 여부와 무관하게 항상 실행
+      const existingToday = prev.find(h => h.date === today);
+      // 주말 항목만 제거 — 공휴일은 유효한 기록으로 유지, 오늘 항목은 아래서 재구성
       const cleaned = prev.filter(h => {
+        if (h.date === today) return false;
         if (h.isFixed) return true;
         const day = new Date(h.date + 'T12:00:00').getDay();
-        if (day === 0 || day === 6) return false;
-        return accType === 'overseas' ? !usH.includes(h.date) : !krH.includes(h.date);
+        return day !== 0 && day !== 6;
       });
-      if (!isTradingDay) {
-        // 비거래일: 정리만 수행, 오늘 항목 추가 없음
-        if (cleaned.length === prev.length) return prev;
-        const fills = fillNonTradingGaps(cleaned, krH, usH, accType);
-        return fills.length > 0 ? [...cleaned, ...fills] : cleaned;
-      }
-      // 거래일: 오늘 항목 추가/갱신 + 비거래일 채우기
-      const newHist = [...cleaned];
-      const idx = newHist.findIndex(h => h.date === today);
-      if (idx >= 0) {
-        if (newHist[idx].evalAmount === totals.totalEval && cleaned.length === prev.length) return prev;
-        newHist[idx] = { ...newHist[idx], evalAmount: totals.totalEval, principal };
+      // 직전 기록으로 이상치 판단 (휴일에만 적용)
+      const prevEntries = [...cleaned].sort((a, b) => b.date.localeCompare(a.date));
+      const prevValue = prevEntries.length > 0 ? prevEntries[0].evalAmount : 0;
+      const isHoliday = !isTradingDay;
+      const isAnomaly = isHoliday && prevValue > 0 && Math.abs(totals.totalEval - prevValue) / prevValue > 0.9;
+      let todayEntry;
+      if (existingToday?.userChosen) {
+        // 사용자가 명시적으로 선택한 값 — actualEvalAmount만 갱신
+        todayEntry = { ...existingToday, actualEvalAmount: totals.totalEval };
+      } else if (isAnomaly) {
+        todayEntry = { date: today, evalAmount: prevValue, adjustedAmount: prevValue, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: true, userChosen: false };
       } else {
-        newHist.push({ date: today, evalAmount: totals.totalEval, principal, isFixed: false });
+        todayEntry = { date: today, evalAmount: totals.totalEval, adjustedAmount: totals.totalEval, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: false, userChosen: false };
       }
+      if (existingToday && !existingToday.userChosen && !isAnomaly &&
+          existingToday.evalAmount === totals.totalEval && cleaned.length === prev.length - 1) {
+        return prev;
+      }
+      const newHist = [...cleaned, todayEntry];
       const fills = fillNonTradingGaps(newHist, krH, usH, accType);
       return fills.length > 0 ? [...newHist, ...fills] : newHist;
     });

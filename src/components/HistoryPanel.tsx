@@ -50,10 +50,26 @@ export default function HistoryPanel({
                   {displayHistSliced.map((h, i) => {
                     const prev = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
                     const dod = (prev && prev.evalAmount > 0) ? ((h.evalAmount / prev.evalAmount) - 1) * 100 : 0;
+                    const isToday = h.date === new Date().toISOString().split('T')[0];
+                    const showingActual = h.isAdjusted && h.evalAmount === h.actualEvalAmount;
+                    const handleToggle = h.isAdjusted ? () => {
+                      setHistory(prevHist => prevHist.map(entry => {
+                        if (entry.date !== h.date) return entry;
+                        const newEval = entry.evalAmount === entry.actualEvalAmount ? (entry.adjustedAmount ?? entry.evalAmount) : entry.actualEvalAmount;
+                        return { ...entry, evalAmount: newEval, userChosen: true };
+                      }));
+                    } : undefined;
                     return (
-                      <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
-                        <td className="py-2 px-3 text-center border-r border-gray-600 font-bold text-gray-400">{formatShortDate(h.date)}</td>
-                        <td className="py-2 px-3 border-r border-gray-600 font-bold text-white text-right">{activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(h.evalAmount/(marketIndicators.usdkrw||1))}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div> : formatCurrency(h.evalAmount)}</td>
+                      <tr key={h.id || i} className={`border-b border-gray-700 ${isToday ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
+                        <td className={`py-2 px-3 text-center border-r border-gray-600 font-bold ${h.isAdjusted ? 'text-blue-300' : 'text-gray-400'}`}>{formatShortDate(h.date)}</td>
+                        <td
+                          className={`py-2 px-3 border-r border-gray-600 font-bold text-right ${h.isAdjusted ? 'text-blue-300 cursor-pointer hover:text-blue-200' : 'text-white'}`}
+                          onClick={handleToggle}
+                          title={h.isAdjusted ? (showingActual ? '클릭: 전일 종가로 전환' : '클릭: 실제 포트폴리오 합계로 전환') : undefined}
+                        >
+                          {activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(h.evalAmount/(marketIndicators.usdkrw||1))}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div> : formatCurrency(h.evalAmount)}
+                          {h.isAdjusted && <span className="block text-[9px] font-normal leading-none mt-0.5">{showingActual ? '실제값' : '조정됨'}</span>}
+                        </td>
                         <td className="py-2 px-3 border-r border-gray-600 text-center font-bold"><span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span></td>
                         <td className="py-2 px-2 text-center"><button onClick={() => { setLookupRows([{ id: generateId(), date: h.date }, ...lookupRows]); notify("조회 목록 복사", "info"); }} className="text-blue-400"><ArrowDownToLine size={12} /></button></td>
                       </tr>

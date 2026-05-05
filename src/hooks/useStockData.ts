@@ -366,7 +366,7 @@ export function useStockData({
     return priceResults;
   };
 
-  // 초기 로드 후 종목 현재가를 직접 조회하는 함수 (React 상태 클로저 무관)
+  // 초기 로드 후 종목 현재가를 직접 조회하는 함수 (활성 계좌만 — 초기 로드 안전성 보장)
   const autoRefreshStockPrices = async (loadedPortfolio, accountType = activePortfolioAccountType) => {
     const stocks = loadedPortfolio.filter(p => p.type === 'stock' && p.code);
     if (stocks.length === 0) return;
@@ -378,14 +378,19 @@ export function useStockData({
     setStockFetchStatus(prev => ({ ...prev, ...loadingStatus }));
 
     const today = new Date().toISOString().split('T')[0];
+    const priceResults = {};
 
-    // 전체 계좌 동시 조회
-    const priceResults = await fetchAllPortfoliosPrices(today);
+    await Promise.all(stocks.map(async (item) => {
+      const d = isOverseas ? await fetchUsStockInfo(item.code) : await fetchStockInfo(item.code);
+      if (d) {
+        setStockFetchStatus(prev => ({ ...prev, [item.code]: 'success' }));
+        setStockHistoryMap(prev => ({ ...prev, [item.code]: { ...(prev[item.code] || {}), [today]: d.price } }));
+        priceResults[item.code] = d;
+      } else {
+        setStockFetchStatus(prev => ({ ...prev, [item.code]: 'fail' }));
+      }
+    }));
 
-    // 활성 계좌 fetch status 및 portfolio 업데이트
-    stocks.forEach(item => {
-      setStockFetchStatus(prev => ({ ...prev, [item.code]: priceResults[item.code] ? 'success' : 'fail' }));
-    });
     if (Object.keys(priceResults).length > 0) {
       setPortfolio(prev => prev.map(item => {
         if (item.type === 'stock' && item.code && priceResults[item.code]) {
