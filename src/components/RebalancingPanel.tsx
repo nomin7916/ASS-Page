@@ -72,12 +72,7 @@ export default function RebalancingPanel({
                     <tr>
                       <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600 sticky top-0 left-0 z-30 bg-[#1e293b]" onClick={() => handleRebalanceSort('category')}>구분{arr('category')}</th>
                       <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky top-0 left-[80px] z-30 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]" onClick={() => handleRebalanceSort('name')}>종목명{arr('name')}</th>
-                      <th className="py-0 px-0 min-w-[90px] text-gray-500 text-center sticky top-0 z-20 bg-[#1e293b]">
-                        <div className="flex h-full">
-                          <div className="flex-1 py-3 px-2 cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('category')} title="구분별로 정렬" />
-                          <div className={`flex-1 py-3 px-2 cursor-pointer hover:bg-gray-700 border-l border-gray-700 ${sk === 'code-global' ? 'text-gray-200' : ''}`} onClick={() => handleRebalanceSort('code-global')} title="코드순으로 전체 정렬">코드</div>
-                        </div>
-                      </th>
+                      <th className={`py-3 px-3 min-w-[90px] text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] ${sk === 'code-global' ? 'text-gray-200' : 'text-gray-500'}`} title="왼쪽: 구분별 재배치  |  오른쪽: 코드순 전체 정렬" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); e.clientX < r.left + r.width / 2 ? handleRebalanceSort(null) : handleRebalanceSort('code-global'); }}>코드</th>
                       <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('curEval')}>평가금{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('currentPrice')}>현재가{arr('currentPrice')}</th>
                       <th className="py-2 px-3 min-w-[100px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b]">
@@ -164,33 +159,22 @@ export default function RebalancingPanel({
                     grouped[cat].forEach((item, j) => { itemColorMap[`${cat}::${item.id}`] = shades[j]; });
                   });
                   let rowNum = 0;
-                  return catOrder.flatMap(cat => {
-                    const items = grouped[cat];
+                  const renderRow = (item, catTd) => {
+                    rowNum += 1;
+                    const num = rowNum;
+                    const cat = item.category || '기타';
                     const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
-                    const catTotalEval = items.reduce((sum, item) => sum + item.curEval, 0);
-                    const catRatio = totals.totalEval > 0 ? catTotalEval / totals.totalEval * 100 : 0;
-                    return items.map((item, j) => {
-                      rowNum += 1;
-                      const num = rowNum;
-                      const itemColor = itemColorMap[`${cat}::${item.id}`] || catColor;
-                      const extraQty = rebalExtraQty[item.id] || 0;
-                      const totalAction = item.action + extraQty;
-                      const itemPrice = cleanNum(item.currentPrice);
-                      const adjustedCost = totalAction * itemPrice;
-                      const maxAdd = itemPrice > 0
-                        ? (settings.mode === 'accumulate'
-                            ? Math.max(0, Math.floor(effectiveRemaining / itemPrice))
-                            : Math.floor(effectiveRemaining / itemPrice))
-                        : 0;
-                      return (
+                    const itemColor = itemColorMap[`${cat}::${item.id}`] || catColor;
+                    const extraQty = rebalExtraQty[item.id] || 0;
+                    const totalAction = item.action + extraQty;
+                    const itemPrice = cleanNum(item.currentPrice);
+                    const adjustedCost = totalAction * itemPrice;
+                    const maxAdd = itemPrice > 0
+                      ? (settings.mode === 'accumulate' ? Math.max(0, Math.floor(effectiveRemaining / itemPrice)) : Math.floor(effectiveRemaining / itemPrice))
+                      : 0;
+                    return (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
-                        {j === 0 && (
-                          <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]">
-                            <div style={{ color: catColor }}>{cat}</div>
-                            <div className="text-gray-400 text-[10px] font-normal mt-0.5">{isOverseas ? <>{fmtUSD(catTotalEval)}<br/><span className="text-gray-600">{formatCurrency(catTotalEval * usdkrw)}</span></> : formatCurrency(catTotalEval)}</div>
-                            <div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div>
-                          </td>
-                        )}
+                        {catTd}
                         <td className="py-3 px-4 text-center font-bold sticky left-[80px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav} style={{ color: itemColor }}><div className="line-clamp-2">{num}. {item.name}</div></td>
                         <td className="py-3 px-3 text-center text-gray-500 font-mono text-xs focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.code}</td>
                         <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.curEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.curEval * usdkrw)}</span></div> : formatCurrency(item.curEval)}</td>
@@ -215,6 +199,25 @@ export default function RebalancingPanel({
                         <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(isOverseas ? 2 : 1)}%</td>
                       </tr>
                     );
+                  };
+                  if (rebalanceSortConfig.key === 'code-global') {
+                    return rebalanceData.map(item => {
+                      const cat = item.category || '기타';
+                      const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                      const catTd = <td className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]"><div style={{ color: catColor }} className="text-xs">{cat}</div></td>;
+                      return renderRow(item, catTd);
+                    });
+                  }
+                  return catOrder.flatMap(cat => {
+                    const items = grouped[cat];
+                    const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
+                    const catTotalEval = items.reduce((sum, item) => sum + item.curEval, 0);
+                    const catRatio = totals.totalEval > 0 ? catTotalEval / totals.totalEval * 100 : 0;
+                    return items.map((item, j) => {
+                      const catTd = j === 0
+                        ? <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]"><div style={{ color: catColor }}>{cat}</div><div className="text-gray-400 text-[10px] font-normal mt-0.5">{isOverseas ? <>{fmtUSD(catTotalEval)}<br/><span className="text-gray-600">{formatCurrency(catTotalEval * usdkrw)}</span></> : formatCurrency(catTotalEval)}</div><div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div></td>
+                        : null;
+                      return renderRow(item, catTd);
                     });
                   });
                 })()}
