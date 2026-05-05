@@ -101,7 +101,16 @@
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\scoop\\\\apps\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object -First 3; Get-ChildItem \"$env:LOCALAPPDATA\\\\Programs\\\\node\" -ErrorAction SilentlyContinue | Select-Object -First 3; where.exe node 2>&1)",
       "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-Command npm -ErrorAction SilentlyContinue; [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\) | Select-String -Pattern \"node\")",
       "PowerShell(Get-ChildItem \"$env:LOCALAPPDATA\\\\claude-cli-nodejs\" | Select-Object -First 5; Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Roaming\\\\nvm\" -ErrorAction SilentlyContinue | Select-Object -First 5)",
-      "PowerShell($env:PATH -split ';' | Where-Object { $_ -ne '' } | Select-Object -First 30)"
+      "PowerShell($env:PATH -split ';' | Where-Object { $_ -ne '' } | Select-Object -First 30)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\\\\src\" -Recurse -File)",
+      "Bash(Select-Object Name, FullName)",
+      "Bash(Head -30)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\", \"User\"\\); cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/nodejs:/c/Users/arui1/AppData/Roaming/npm\")",
+      "Bash(ls /c/)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "PowerShell($nodeDir = \\(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Roaming\\\\nvm\" -Recurse -Filter \"npm.cmd\" -ErrorAction SilentlyContinue | Select-Object -First 1\\).DirectoryName; if \\($nodeDir\\) { $env:PATH = \"$nodeDir;$env:PATH\"; Write-Host \"Found npm at: $nodeDir\" } else { Write-Host \"npm not found in nvm\" })"
     ]
   }
 }

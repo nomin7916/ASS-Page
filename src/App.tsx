@@ -125,6 +125,13 @@ export default function App() {
             } catch {
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
             }
+            // 전환 전 관리자 자신의 현재 상태를 Drive에 백업 (복구 수단 확보)
+            const snapBeforeSwitch = saveStateRef.current;
+            if (snapBeforeSwitch?.portfolios?.length > 0 && driveTokenRef.current) {
+              await saveAllToDrive({ ...snapBeforeSwitch, portfolioUpdatedAt: Date.now() }, 'auto');
+            }
+            // 전환 전체 구간 동안 저장 차단 (React 렌더 완료까지 보호)
+            adminTransitioningRef.current = true;
             adminOwnDriveTokenRef.current = driveTokenRef.current;
             adminViewingAsRef.current = targetEmail;
             setAdminViewingAs(targetEmail);
@@ -134,6 +141,8 @@ export default function App() {
             driveFolderIdRef.current = userFolderId;
             await loadFromDrive(adminToken);
             isInitialLoad.current = false;
+            // 500ms 후 해제 — React가 사용자 데이터로 saveStateRef를 갱신할 충분한 시간
+            setTimeout(() => { adminTransitioningRef.current = false; }, 500);
           },
         });
         client.requestAccessToken({ prompt: '' });
@@ -148,6 +157,8 @@ export default function App() {
   };
 
   const handleReturnToAdminPage = async () => {
+    // 전환 시작 즉시 저장 차단 — adminViewingAsRef 해제 후 React 렌더 전 사이의 race condition 방지
+    adminTransitioningRef.current = true;
     const ownToken = adminOwnDriveTokenRef.current;
     const viewedEmail = adminViewingAsRef.current;
     if (viewedEmail) {
@@ -155,15 +166,20 @@ export default function App() {
         .forEach(p => localStorage.removeItem(`${p}_v5_${viewedEmail}`));
     }
     adminOwnDriveTokenRef.current = '';
-    adminViewingAsRef.current = null;
-    setAdminViewingAs(null);
+    // adminViewingAsRef는 loadFromDrive 완료 후 해제 — 로드 중 저장 가드 역할 유지
     isInitialLoad.current = true;
     driveTokenRef.current = ownToken;
     setDriveToken(ownToken);
     driveFolderIdRef.current = '';
     await loadFromDrive(ownToken);
+    // 관리자 데이터 로드 완료 후 뷰 상태 해제
+    adminViewingAsRef.current = null;
+    setAdminViewingAs(null);
     isInitialLoad.current = false;
     setShowAdminPage(true);
+    // 500ms 후 전환 가드 해제 — React가 관리자 데이터로 saveStateRef를 갱신할 충분한 시간
+    // 이 시간 동안 visibilitychange 등으로 saveAllToDrive가 호출돼도 차단됨
+    setTimeout(() => { adminTransitioningRef.current = false; }, 500);
   };
 
   const [historyLimit, setHistoryLimit] = useState(UI_CONFIG.DEFAULTS.HISTORY_LIMIT);
@@ -262,7 +278,7 @@ export default function App() {
     driveTokenRef, driveFolderIdRef, tokenClientRef, pendingTokenResolveRef,
     isInitialLoad, driveSaveTimerRef, portfolioUpdatedAtRef, prevPortfolioStructureRef,
     lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
-    goldKrAutoCrawledRef, stooqAutoCrawledRef,
+    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef,
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup,
@@ -271,7 +287,7 @@ export default function App() {
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
     applyStockData: (...args) => applyStockDataRef.current?.(...args),
     applyBackupData: (...args) => applyBackupDataRef.current?.(...args),
-    accountChartStatesRef, saveStateRef, adminViewingAsRef, notify, confirm,
+    accountChartStatesRef, saveStateRef, adminViewingAsRef, adminOwnDriveTokenRef, notify, confirm,
   });
 
   // ── useMarketData 훅 ──

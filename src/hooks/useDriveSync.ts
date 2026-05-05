@@ -28,6 +28,7 @@ interface UseDriveSyncParams {
   accountChartStatesRef: React.MutableRefObject<any>;
   saveStateRef: React.MutableRefObject<any>;
   adminViewingAsRef: React.MutableRefObject<string | null>;
+  adminOwnDriveTokenRef: React.MutableRefObject<string>;
   notify: (text: string, type?: string) => void;
   confirm: (message: string, confirmLabel?: string) => Promise<boolean>;
 }
@@ -40,6 +41,7 @@ export function useDriveSync({
   accountChartStatesRef,
   saveStateRef,
   adminViewingAsRef,
+  adminOwnDriveTokenRef,
   notify,
   confirm,
 }: UseDriveSyncParams) {
@@ -70,6 +72,8 @@ export function useDriveSync({
   const goldKrAutoCrawledRef = useRef(false);  // 세션 당 한 번만 국내금 자동 크롤링
   const stooqAutoCrawledRef = useRef(false);   // 세션 당 한 번만 stooq 지표 자동 크롤링
   const lastAdminAccessAllowedRef = useRef<boolean | null>(null);
+  // 관리자 뷰 전환 중(로드 완료 후 React 렌더 전) 저장 차단 — saveAllToDrive 가드에서 사용
+  const adminTransitioningRef = useRef(false);
 
   // ── Drive 폴더 ID 캐시 확보 ──
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -126,8 +130,8 @@ export function useDriveSync({
   const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false, isRetry = false) => {
     // LOADING·SAVING 중에는 저장 차단 — 초기 Drive 로드 / 동시 저장 경쟁 방지
     if (syncStatusRef.current === 'loading' || syncStatusRef.current === 'saving') return;
-    // 관리자 뷰 모드 — 타인 계정 열람 중에는 저장 차단
-    if (adminViewingAsRef.current) return;
+    // 관리자 뷰 모드 또는 전환 중 — 타인 계정 데이터가 saveStateRef에 남아있을 수 있으므로 차단
+    if (adminViewingAsRef.current || adminTransitioningRef.current) return;
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     try {
@@ -204,10 +208,16 @@ export function useDriveSync({
         callback: (resp: any) => {
           const t: string | null = resp.error ? null : resp.access_token;
           if (t) {
-            driveTokenRef.current = t;
-            setDriveToken(t);
-            if (syncStatusRef.current !== 'loading') setSS('ready');
-            setDriveStatus('');
+            if (adminViewingAsRef.current) {
+              // 관리자가 타인 계정 열람 중 토큰 갱신 — driveTokenRef(사용자용 readonly 토큰)를 덮어쓰지 않고
+              // 관리자 자신의 쓰기 토큰 ref만 업데이트하여 복귀 시 유효한 토큰 사용
+              adminOwnDriveTokenRef.current = t;
+            } else {
+              driveTokenRef.current = t;
+              setDriveToken(t);
+              if (syncStatusRef.current !== 'loading') setSS('ready');
+              setDriveStatus('');
+            }
           } else {
             setSS('error');
             setDriveStatus('auth_needed');
@@ -387,6 +397,7 @@ export function useDriveSync({
     goldKrAutoCrawledRef,
     stooqAutoCrawledRef,
     syncStatusRef,
+    adminTransitioningRef,
     // 함수
     ensureDriveFolder,
     loadFromDrive,
