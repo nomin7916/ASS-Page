@@ -1028,12 +1028,9 @@ export default function App() {
         } catch {}
       }
 
-      // 시장지표 백그라운드 수집, 종목 현재가 갱신
+      // 시장지표 + 전체 계좌 종목 현재가 갱신 (통합 대시보드 총평가금액 정확성 확보)
       fetchMarketIndicators();
-      const portfolioToRefresh = portfolioRef.current;
-      if (portfolioToRefresh.length > 0) {
-        await autoRefreshStockPrices(portfolioToRefresh);
-      }
+      await refreshPrices();
 
       isInitialLoad.current = false;
 
