@@ -5,7 +5,7 @@ const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 
 const BACKUP_PREFIX = 'portfolio_backup_';
-export const MAX_BACKUPS = 6; // 20분 간격으로 최대 6개 = 약 2시간치 백업
+export const MAX_BACKUPS = 20; // 로그인·자동(20분)·수동 백업 최대 20개
 
 export interface DriveBackupEntry {
   id: string;

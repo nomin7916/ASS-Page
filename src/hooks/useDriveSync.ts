@@ -84,7 +84,8 @@ export function useDriveSync({
   };
 
   // ── Drive에서 데이터 불러오기 → applyStateData 콜백으로 state 적용 ──
-  const loadFromDrive = async (token: string) => {
+  // createStartupBackup: 로그인 초기 로드 시 true — 복구 기준점 백업을 즉시 생성
+  const loadFromDrive = async (token: string, createStartupBackup = false) => {
     try {
       setSS('loading');
       setDriveStatus('loading');
@@ -105,6 +106,11 @@ export function useDriveSync({
       lastAdminAccessAllowedRef.current = loadedAllowed;
       if (loadedAllowed && !adminViewingAsRef.current) {
         grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+      }
+      // 로그인 초기 로드 시 즉시 백업 생성 — 항상 복구 기준점 확보 (관리자 뷰 전환 중이면 생략)
+      if (createStartupBackup && !adminViewingAsRef.current && !adminTransitioningRef.current) {
+        const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = stateData;
+        saveVersionedBackup(token, folderId, stateCore, 'auto').catch(() => {});
       }
       return stateData.portfolios?.[0]?.portfolio || stateData.portfolio || [];
     } catch (err) {

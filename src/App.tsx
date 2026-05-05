@@ -969,7 +969,8 @@ export default function App() {
       initTokenClient();
 
       // 항상 Drive에서 최신 데이터 로드 — localStorage 캐시 사용 안 함
-      const drivePortfolio = await loadFromDrive(token);
+      // createStartupBackup=true: 로그인 직후 즉시 백업 생성 (앱 재시작 후에도 복구 기준점 확보)
+      const drivePortfolio = await loadFromDrive(token, true);
       if (drivePortfolio === null) {
         // 완전 신규 사용자: 초기 포트폴리오 생성
         const newId = generateId();
