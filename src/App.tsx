@@ -11,7 +11,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
-import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder } from './driveStorage';
+import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup } from './driveStorage';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
@@ -938,17 +938,27 @@ export default function App() {
     }
   };
 
-  const handleAppClose = () => {
+  const handleAppClose = async () => {
     notify('백업 저장합니다.', 'info');
     const currentPortfolios = buildPortfoliosState();
     const newUpdatedAt = Date.now();
-    portfolioUpdatedAtRef.current = newUpdatedAt;
-    lastDriveSavedPortfolioUpdatedAtRef.current = 0;
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec }, intHistory, portfolioUpdatedAt: newUpdatedAt };
+    const minWait = new Promise<void>(r => setTimeout(r, 2000));
     if (driveTokenRef.current) {
-      saveAllToDrive(state, 'auto');
+      const token = driveTokenRef.current;
+      const { stockHistoryMap: _shm, marketIndices: _mi, marketIndicators: _mInd, indicatorHistoryMap: _ihm, ...stateCore } = state;
+      const savePromise = (async () => {
+        try {
+          const folderId = await ensureDriveFolder(token);
+          await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
+          await saveVersionedBackup(token, folderId, stateCore, 'auto');
+        } catch {}
+      })();
+      await Promise.all([minWait, savePromise]);
+    } else {
+      await minWait;
     }
-    setTimeout(() => window.close(), 2000);
+    window.close();
   };
 
   const today = new Date().toISOString().split('T')[0];
