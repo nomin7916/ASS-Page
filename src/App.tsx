@@ -1368,7 +1368,9 @@ export default function App() {
           setHideAmounts={setHideAmounts}
         />
 
-        <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={showIntegratedDashboard ? refreshPrices : (activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices)} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
+        {!showIntegratedDashboard && (
+          <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
+        )}
 
         {!showIntegratedDashboard && (<>
         <div className="flex items-start gap-0 w-full">
