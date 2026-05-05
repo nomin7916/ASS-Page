@@ -513,29 +513,41 @@ export function useStockData({
         return item;
       }));
 
-      const codesNeedingHistory = activeStockCodes.filter(code => {
-        const existing = stockHistoryMapRef.current[code];
-        return !existing || Object.keys(existing).length <= (isOverseasRefresh ? 252 : 3);
+      // 전체 계좌 국내 주식 코드 수집 — 최근 이력 없으면 재수집 (useHistoryBackfill이 모든 계좌 빈 날짜 채우는 데 필요)
+      const allKoreanCodes = new Set<string>();
+      portfoliosRef.current.forEach(p => {
+        if (p.accountType === 'simple' || p.accountType === 'overseas') return;
+        const items = p.id === activePortfolioIdRef.current ? portfolioRef.current : (p.portfolio || []);
+        items.forEach(item => { if (item.type === 'stock' && item.code) allKoreanCodes.add(item.code); });
       });
-      if (codesNeedingHistory.length > 0) {
-        Promise.all(codesNeedingHistory.map(async (code) => {
-          if (isOverseasRefresh) {
-            const r = await fetchUsStockHistory(code);
-            if (r?.data && Object.keys(r.data).length > 1) {
-              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
-            }
-          } else {
+      const korCodesNeedingHistory = [...allKoreanCodes].filter(code => {
+        const existing = stockHistoryMapRef.current[code];
+        if (!existing || Object.keys(existing).length <= 3) return true;
+        const latestDate = Object.keys(existing).sort().pop() || '';
+        return (Date.now() - new Date(latestDate + 'T12:00:00').getTime()) / 86400000 > 1.5;
+      });
+      const usCodesNeedingHistory = isOverseasRefresh ? activeStockCodes.filter(code => {
+        const existing = stockHistoryMapRef.current[code];
+        return !existing || Object.keys(existing).length <= 252;
+      }) : [];
+
+      if (korCodesNeedingHistory.length > 0 || usCodesNeedingHistory.length > 0) {
+        Promise.all([
+          ...korCodesNeedingHistory.map(async (code) => {
             let hist: Record<string, number> | null = null;
             const rKIS = await fetchKISStockHistory(code);
             if (rKIS) hist = rKIS.data;
             if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
             if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
             if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
-            if (hist) {
-              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
-            }
-          }
-        })).then(() => {
+            if (hist) setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+          }),
+          ...usCodesNeedingHistory.map(async (code) => {
+            const r = await fetchUsStockHistory(code);
+            if (r?.data && Object.keys(r.data).length > 1)
+              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
+          }),
+        ]).then(() => {
           setTimeout(() => {
             const snap = saveStateRef.current;
             if (snap && driveTokenRef.current) saveAllToDrive(snap);

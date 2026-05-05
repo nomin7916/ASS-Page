@@ -199,6 +199,7 @@ export default function App() {
   const applyStateDataRef = useRef<Function | null>(null);
   const applyStockDataRef = useRef<Function | null>(null);
   const applyBackupDataRef = useRef<Function | null>(null);
+  const refreshPricesRef = useRef<Function | null>(null);
   // 계좌별 차트 상태 독립 관리
   const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
   const accountChartStatesRef = useRef<Record<string, any>>({});
@@ -449,6 +450,8 @@ export default function App() {
       });
       return merged;
     });
+    // STOCK 파일 로드 완료 → 전체 계좌 누락 이력 수집 트리거 (useHistoryBackfill이 모든 계좌 빈 날짜 채우는 데 필요)
+    setTimeout(() => refreshPricesRef.current?.(), 1200);
   };
   applyStockDataRef.current = applyStockData;
 
@@ -833,6 +836,7 @@ export default function App() {
     setIsLoading, notify,
     setMarketIndices, setIndexFetchStatus,
   });
+  refreshPricesRef.current = refreshPrices;
 
   // 계좌 탭 전환 시 현재가 자동 갱신
   useEffect(() => {
