@@ -411,8 +411,21 @@ export function useDriveSync({
       }
       checkAndSyncFromDrive();
     };
+    const handlePageHide = () => {
+      if (adminViewingAsRef.current || adminTransitioningRef.current) return;
+      const snap = saveStateRef.current;
+      if (!snap || !snap.portfolios?.length || !driveTokenRef.current || isInitialLoad.current) return;
+      const folderId = driveFolderIdRef.current;
+      if (!folderId) return;
+      const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = snap;
+      saveVersionedBackup(driveTokenRef.current, folderId, stateCore, 'auto').catch(() => {});
+    };
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
   }, [authUser]);
 
   // ── 10분마다 Drive version 파일 polling ──
