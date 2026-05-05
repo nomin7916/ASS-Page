@@ -83,7 +83,9 @@ export function usePortfolioData({
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
       return { ...item, curEval, action, cost, expEval, expRatio };
     });
-    if (rebalanceSortConfig.key && rebalanceSortConfig.key !== 'category') {
+    if (rebalanceSortConfig.key === 'code-global') {
+      data.sort((a, b) => (a.code || '').localeCompare(b.code || '') * rebalanceSortConfig.direction);
+    } else if (rebalanceSortConfig.key && rebalanceSortConfig.key !== 'category') {
       const catOrder = [];
       const grouped = {};
       data.forEach(item => {

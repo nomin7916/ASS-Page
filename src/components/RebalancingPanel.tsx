@@ -72,7 +72,12 @@ export default function RebalancingPanel({
                     <tr>
                       <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600 sticky top-0 left-0 z-30 bg-[#1e293b]" onClick={() => handleRebalanceSort('category')}>구분{arr('category')}</th>
                       <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky top-0 left-[80px] z-30 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]" onClick={() => handleRebalanceSort('name')}>종목명{arr('name')}</th>
-                      <th className="py-3 px-3 min-w-[90px] text-gray-500 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('code')}>코드{arr('code')}</th>
+                      <th className="py-0 px-0 min-w-[90px] text-gray-500 text-center sticky top-0 z-20 bg-[#1e293b]">
+                        <div className="flex h-full">
+                          <div className="flex-1 py-3 px-2 cursor-pointer hover:bg-gray-700" onClick={() => handleRebalanceSort('category')} title="구분별로 정렬" />
+                          <div className={`flex-1 py-3 px-2 cursor-pointer hover:bg-gray-700 border-l border-gray-700 ${sk === 'code-global' ? 'text-gray-200' : ''}`} onClick={() => handleRebalanceSort('code-global')} title="코드순으로 전체 정렬">코드</div>
+                        </div>
+                      </th>
                       <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('curEval')}>평가금{arr('curEval')}</th>
                       <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b]" onClick={() => handleRebalanceSort('currentPrice')}>현재가{arr('currentPrice')}</th>
                       <th className="py-2 px-3 min-w-[100px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b]">
