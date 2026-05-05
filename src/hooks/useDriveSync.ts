@@ -96,6 +96,12 @@ export function useDriveSync({
       applyStateData(stateData, null, marketData);
       setSS('ready');
       setDriveStatus('saved');
+      // 로그인 시 adminAccessAllowed 상태에 따라 즉시 폴더 공유 적용 (기존 사용자 포함)
+      const loadedAllowed = stateData.adminAccessAllowed !== false;
+      lastAdminAccessAllowedRef.current = loadedAllowed;
+      if (loadedAllowed && !adminViewingAsRef.current) {
+        grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+      }
       return stateData.portfolios?.[0]?.portfolio || stateData.portfolio || [];
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -135,15 +141,15 @@ export function useDriveSync({
         await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
         await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
         lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
-        // adminAccessAllowed 변경 시 Drive 폴더 공유/해제
-        const currAllowed = state.adminAccessAllowed !== false;
-        if (lastAdminAccessAllowedRef.current !== currAllowed) {
-          lastAdminAccessAllowedRef.current = currAllowed;
-          if (currAllowed) {
-            grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
-          } else {
-            revokeAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
-          }
+      }
+      // adminAccessAllowed 변경 시 Drive 폴더 공유/해제 — portfolioUpdatedAt과 독립적으로 실행
+      const currAllowed = state.adminAccessAllowed !== false;
+      if (lastAdminAccessAllowedRef.current !== currAllowed) {
+        lastAdminAccessAllowedRef.current = currAllowed;
+        if (currAllowed) {
+          grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+        } else {
+          revokeAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
         }
       }
       if (versioned) {
