@@ -631,8 +631,10 @@ export function useStockData({
         };
       });
 
+      notify('종목 가격 갱신 완료', 'success');
     } catch (err) {
       console.error('데이터 갱신 오류:', err);
+      notify('가격 갱신 중 오류가 발생했습니다', 'error');
     } finally {
       setIsLoading(false);
     }

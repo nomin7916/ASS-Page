@@ -121,6 +121,7 @@ export function useDriveSync({
     try {
       setSS('saving');
       setDriveStatus('saving');
+      if (versioned === 'manual' && !isRetry) notify('☁️ Drive에 저장 중...', 'info');
       const folderId = await ensureDriveFolder(token);
       const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
       // STATE는 portfolioUpdatedAt이 실제로 변경됐을 때만 저장
@@ -140,6 +141,7 @@ export function useDriveSync({
       ]);
       setSS('ready');
       setDriveStatus('saved');
+      if (versioned === 'manual') notify('Drive 저장 완료', 'success');
     } catch (err) {
       console.error('Drive 저장 실패:', err);
       setSS('error');
