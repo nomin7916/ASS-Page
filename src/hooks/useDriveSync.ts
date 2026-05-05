@@ -312,6 +312,11 @@ export function useDriveSync({
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    // Drive 토큰 없으면 복원 불가 — 재로그인 유도
+    if (!driveTokenRef.current) {
+      notify('Drive에 연결된 상태에서만 파일 복원이 가능합니다. 잠시 후 다시 시도해 주세요.', 'error');
+      return;
+    }
     if (!await confirm(`"${file.name}" 파일의 데이터를 현재 계좌에 적용하시겠습니까?\n(현재 계좌·종목 구성이 파일의 내용으로 교체됩니다)`)) return;
     setSS('loading');
     setDriveStatus('loading');
@@ -319,6 +324,7 @@ export function useDriveSync({
       const text = await file.text();
       const stateData = JSON.parse(text);
       if (!stateData?.portfolios?.length && !stateData?.portfolio) throw new Error('invalid');
+      // React 상태 적용
       lastDriveSavedPortfolioUpdatedAtRef.current = 0;
       applyBackupData(stateData, accountChartStatesRef);
       const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = stateData;
@@ -328,23 +334,27 @@ export function useDriveSync({
         portfolioStartDate: p.portfolioStartDate || p.startDate || '',
       }));
       const newUpdatedAt = Date.now();
-      const token = driveTokenRef.current;
-      if (token) {
-        const folderId = await ensureDriveFolder(token);
-        await saveDriveFile(token, folderId, DRIVE_FILES.STATE, {
-          ...stateCore,
-          portfolios: normalizedPortfolios ?? stateCore.portfolios,
-          portfolioUpdatedAt: newUpdatedAt,
-        });
-        await saveVersionFile(token, folderId, newUpdatedAt);
-        lastDriveSavedPortfolioUpdatedAtRef.current = newUpdatedAt;
-        portfolioUpdatedAtRef.current = newUpdatedAt;
-      }
+      // Drive에 직접 저장 — 토큰이 있어야 이 라인에 도달하므로 if 조건 불필요
+      const folderId = await ensureDriveFolder(driveTokenRef.current);
+      await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.STATE, {
+        ...stateCore,
+        portfolios: normalizedPortfolios ?? stateCore.portfolios,
+        portfolioUpdatedAt: newUpdatedAt,
+      });
+      await saveVersionFile(driveTokenRef.current, folderId, newUpdatedAt);
+      lastDriveSavedPortfolioUpdatedAtRef.current = newUpdatedAt;
+      portfolioUpdatedAtRef.current = newUpdatedAt;
       setSS('ready');
-      setDriveStatus(token ? 'saved' : '');
-      notify('파일에서 데이터를 복원했습니다.', 'success');
-    } catch {
-      notify('파일 복원에 실패했습니다. portfolio_state.json 파일인지 확인해 주세요.', 'error');
+      setDriveStatus('saved');
+      notify('파일에서 데이터를 복원하고 Drive에 저장했습니다.', 'success');
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      if (msg === 'invalid') {
+        notify('올바른 portfolio_state.json 파일이 아닙니다.', 'error');
+      } else {
+        notify('파일 복원 또는 Drive 저장에 실패했습니다. Drive 연결을 확인하고 다시 시도해 주세요.', 'error');
+        console.error('[handleImportStateFile] 실패:', msg);
+      }
       setSS('error');
       setDriveStatus('error');
     }

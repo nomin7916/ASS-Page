@@ -28,8 +28,10 @@ export async function getOrCreateIndexFolder(token: string): Promise<string> {
   const q = encodeURIComponent(
     `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
   );
+  // orderBy=createdTime → 가장 처음 생성된 폴더 우선 (=원래 사용하던 폴더)
+  // 여러 폴더가 존재할 경우 오래된 것이 정상 데이터를 보유할 가능성이 높음
   const res = await fetch(
-    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name)`,
+    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,createdTime)&orderBy=createdTime`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res.ok) {
@@ -37,7 +39,12 @@ export async function getOrCreateIndexFolder(token: string): Promise<string> {
     throw new Error(`[Drive] 폴더 검색 실패 ${res.status}: ${err?.error?.message || res.statusText}`);
   }
   const data = await res.json();
-  if (data.files?.length > 0) return data.files[0].id;
+  if (data.files?.length > 0) {
+    if (data.files.length > 1) {
+      console.warn(`[Drive] Index_Data 폴더가 ${data.files.length}개 발견됨. 가장 오래된 폴더 사용:`, data.files[0].id, '생성:', data.files[0].createdTime);
+    }
+    return data.files[0].id;
+  }
 
   // 폴더 없으면 생성
   const createRes = await fetch(`${DRIVE_API}/files`, {
