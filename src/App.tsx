@@ -396,6 +396,7 @@ export default function App() {
       }));
       setPortfolios(normalizedPortfolios);
       setActivePortfolioId(stateData.activePortfolioId || stateData.portfolios[0].id);
+      notify(`계좌 ${normalizedPortfolios.length}개 복구 완료 — 활성화 중`, 'info');
     } else if (stateData.portfolio) {
       const newId = generateId();
       const migrated = {
@@ -409,6 +410,7 @@ export default function App() {
       };
       setPortfolios([migrated]);
       setActivePortfolioId(newId);
+      notify('계좌 1개 복구 완료 — 활성화 중', 'info');
     }
     setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
@@ -992,6 +994,7 @@ export default function App() {
       initTokenClient();
 
       // 항상 Drive에서 최신 데이터 로드 — localStorage 캐시 사용 안 함
+      notify('Drive 데이터 불러오는 중...', 'info');
       const drivePortfolio = await loadFromDrive(token);
       if (drivePortfolio === null) {
         // 완전 신규 사용자: 초기 포트폴리오 생성
@@ -1000,6 +1003,7 @@ export default function App() {
         const initP = { id: newId, name: '내 포트폴리오', startDate: today, portfolioStartDate: today, portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }], principal: 0, history: [], depositHistory: [], depositHistory2: [], settings: { mode: 'rebalance', amount: 1000000 } };
         setPortfolios([initP]);
         setActivePortfolioId(newId);
+        notify('새 계좌 생성 완료', 'info');
       }
 
       // dividendTaxHistory는 별도 파일이므로 항상 Drive에서 로드
@@ -1040,7 +1044,9 @@ export default function App() {
 
       // 시장지표 + 전체 계좌 종목 현재가 갱신 (통합 대시보드 총평가금액 정확성 확보)
       fetchMarketIndicators();
+      notify('전체 계좌 현재가 조회 중...', 'info');
       await refreshPrices();
+      notify('총자산현황 합계 반영 완료', 'success');
 
       isInitialLoad.current = false;
 
