@@ -4,7 +4,7 @@ import { Trash2, RefreshCw, Plus } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber,
-  formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav
+  formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, hexToRgba
 } from '../utils';
 
 const formatUSD = (n) => {
@@ -116,6 +116,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
         <table className="w-full text-right table-fixed min-w-[1200px]">
           <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold">
             <tr className="text-center">
+              <th className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></th>
               <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('category')}>구분</th>
               <th className="py-3 w-[15%] text-center px-4 text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]" onClick={() => onSort('name')}>종목명</th>
               <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('code')}>코드</th>
@@ -138,7 +139,17 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const isRefreshing = fStatus === 'loading';
               const assetClass = item.assetClass ?? getAssetClass(item.category);
               return (
-                <tr key={item.id} className="group hover:bg-gray-800/40 transition-colors border-b border-gray-700">
+                <tr key={item.id} className={`group transition-colors border-b border-gray-700 ${!item.rowColor ? 'hover:bg-gray-800/40' : ''}`} style={item.rowColor ? { backgroundColor: hexToRgba(item.rowColor, 0.18) } : {}}>
+                  {/* 색상 스트립 */}
+                  <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
+                    {item.rowColor ? (
+                      <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none" style={{minHeight:'44px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
+                    ) : (
+                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer" style={{minHeight:'44px', backgroundColor: '#334155'}}>
+                        <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => onUpdate(item.id, 'rowColor', e.target.value)} />
+                      </label>
+                    )}
+                  </td>
                   {/* 구분 */}
                   <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                     <div className="flex flex-row h-full">
@@ -308,6 +319,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             })}
             {depositItems.map((item) => (
               <tr key={item.id} className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
+                <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
                 <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={7}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
                 <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={formatNumber(item.depositAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'depositAmount', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
                 <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(item.investRatio)}</td>
@@ -325,7 +337,17 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const storedQty = cleanNum(item.quantity);
               const purchasePriceCalc = storedQty > 0 ? Math.round(cleanNum(item.investAmount) / storedQty) : 0;
               return (
-                <tr key={item.id} className="group bg-indigo-950/30 hover:bg-indigo-900/20 transition-colors border-b border-indigo-800/30">
+                <tr key={item.id} className={`group transition-colors border-b border-indigo-800/30 ${!item.rowColor ? 'bg-indigo-950/30 hover:bg-indigo-900/20' : ''}`} style={item.rowColor ? { backgroundColor: hexToRgba(item.rowColor, 0.18) } : {}}>
+                  {/* 색상 스트립 */}
+                  <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
+                    {item.rowColor ? (
+                      <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none" style={{minHeight:'44px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
+                    ) : (
+                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer" style={{minHeight:'44px', backgroundColor: '#334155'}}>
+                        <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => onUpdate(item.id, 'rowColor', e.target.value)} />
+                      </label>
+                    )}
+                  </td>
                   {/* 구분: FUND 링크 + S/D 텍스트 토글 */}
                   <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                     <div className="flex flex-row h-full items-stretch">
@@ -409,7 +431,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             })}
             {isRetirement && (
               <tr className="border-b border-indigo-800/20 bg-indigo-950/10">
-                <td colSpan={14} className="py-1.5 text-center">
+                <td colSpan={15} className="py-1.5 text-center">
                   <button onClick={onAddFund} className="text-indigo-500 hover:text-indigo-300 text-xs flex items-center gap-1 mx-auto transition-colors px-3 py-1 rounded hover:bg-indigo-900/30">
                     <Plus size={12} /> 펀드 추가
                   </button>
@@ -420,7 +442,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
           <tfoot className="bg-[#1e293b] font-bold border-t-2 border-gray-500">
             {isRetirement && retirementStats && (
               <tr className="border-b border-amber-600/30 bg-amber-950/20">
-                <td colSpan={14} className="py-2.5 px-4">
+                <td colSpan={15} className="py-2.5 px-4">
                   <div className="flex items-center gap-4 flex-wrap">
                     <span className="text-amber-400 font-bold text-xs tracking-wide">퇴직연금 자산 비율</span>
                     <div className="flex items-center gap-1.5">
@@ -461,6 +483,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               </tr>
             )}
             <tr>
+              <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
               <td colSpan={7} className="py-3 text-center border-r border-gray-600 uppercase tracking-widest text-gray-500">Total Calculation</td>
               <td className="py-3 px-2 text-blue-200 bg-blue-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalInvest) : formatCurrency(totals.totalInvest)}</td>
               <td className="py-3 text-center text-gray-400 bg-blue-900/10 border-r border-gray-600">100%</td>
