@@ -120,9 +120,19 @@ export const useHistoryBackfill = ({
       if (yRec) {
         const key = `${portfolioId}_correct_${yesterday}`;
         if (!backfillDoneRef.current[key]) {
-          backfillDoneRef.current[key] = true;
-          const evalAmt = calcEval(items, accountType, yesterday);
-          if (evalAmt > 0 && Math.abs(evalAmt - yRec.evalAmount) > 1) updates.push({ date: yesterday, evalAmt });
+          const hasExactPrice = isGold
+            ? !!(indicatorHistoryMap?.goldKr?.[yesterday])
+            : items.some(item =>
+                (item.type === 'stock' || item.type === 'fund') && item.code &&
+                stockHistoryMap?.[item.code]?.[yesterday] !== undefined
+              );
+          if (hasExactPrice) {
+            const evalAmt = calcEval(items, accountType, yesterday);
+            if (evalAmt > 0) {
+              backfillDoneRef.current[key] = true;
+              if (Math.abs(evalAmt - yRec.evalAmount) > 1) updates.push({ date: yesterday, evalAmt });
+            }
+          }
         }
       }
 

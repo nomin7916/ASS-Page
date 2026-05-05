@@ -543,6 +543,29 @@ export function useStockData({
         });
       }
 
+      // 전체 계좌 종목 중 어제 날짜 가격이 없는 종목 → 최근 이력 수집 (useHistoryBackfill 어제 보정용)
+      const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
+      const allStockCodesSet = new Set<string>();
+      portfoliosRef.current.forEach(p => {
+        if (p.accountType === 'simple' || p.accountType === 'overseas') return;
+        const items = p.id === activePortfolioIdRef.current ? portfolioRef.current : (p.portfolio || []);
+        items.forEach(item => { if (item.type === 'stock' && item.code) allStockCodesSet.add(item.code); });
+      });
+      const codesNeedingYesterday = [...allStockCodesSet].filter(code => {
+        return stockHistoryMapRef.current[code]?.[yesterday] === undefined;
+      });
+      if (codesNeedingYesterday.length > 0) {
+        Promise.all(codesNeedingYesterday.map(async (code) => {
+          let hist: Record<string, number> | null = null;
+          const rKIS = await fetchKISStockHistory(code);
+          if (rKIS) hist = rKIS.data;
+          if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
+          if (hist) {
+            setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+          }
+        }));
+      }
+
       // 펀드 기준가 이력 조회 → stockHistoryMap 저장 (useHistoryBackfill 소급 기록에 활용)
       const allFundCodes = new Set<string>();
       portfoliosRef.current.forEach(p => {
