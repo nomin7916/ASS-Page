@@ -188,7 +188,9 @@ export default function App() {
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
 
   const portfolioRef = useRef([]);
+  const portfoliosRef = useRef([]);
   const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
+  const activePortfolioIdRef = useRef<string | null>(null);
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
   const didSwitchPortfolioRef = useRef(false); // 탭 전환 시 최초 마운트 skip용
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
@@ -489,7 +491,9 @@ export default function App() {
 
   // *Ref를 항상 최신 상태로 동기화 (클로저 문제 해결용 — 20분 인터벌 등 stale closure 방지)
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
+  useEffect(() => { portfoliosRef.current = portfolios; }, [portfolios]);
   useEffect(() => { activePortfolioAccountTypeRef.current = activePortfolioAccountType; }, [activePortfolioAccountType]);
+  useEffect(() => { activePortfolioIdRef.current = activePortfolioId; }, [activePortfolioId]);
   useEffect(() => { stockHistoryMapRef.current = stockHistoryMap; }, [stockHistoryMap]);
 
   // gold 계좌 전용 차트 지표 — 다른 계좌의 showIndicatorsInChart와 완전 분리
@@ -809,6 +813,7 @@ export default function App() {
     refreshPrices,
   } = useStockData({
     portfolio, setPortfolio,
+    portfolios, setPortfolios,
     activePortfolioAccountType,
     stockHistoryMap, setStockHistoryMap,
     stockFetchStatus, setStockFetchStatus,
@@ -816,7 +821,9 @@ export default function App() {
     stockListingDates, setStockListingDates,
     autoFetchedCodes,
     portfolioRef,
+    portfoliosRef,
     activePortfolioAccountTypeRef,
+    activePortfolioIdRef,
     stockHistoryMapRef,
     saveStateRef, driveTokenRef, saveAllToDrive,
     chartPeriod, appliedRange,

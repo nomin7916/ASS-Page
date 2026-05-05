@@ -94,7 +94,12 @@ export function useIntegratedData({
         if (h.evalAmount > 0) dateToTotal.set(h.date, (dateToTotal.get(h.date) || 0) + h.evalAmount);
       });
     });
-    if (intTotals.totalEval > 0) dateToTotal.set(today, intTotals.totalEval);
+    if (intTotals.totalEval > 0) {
+      const prevEntries = [...dateToTotal.entries()].filter(([d]) => d < today).sort((a, b) => b[0].localeCompare(a[0]));
+      const prevValue = prevEntries.length > 0 ? prevEntries[0][1] : 0;
+      const isAnomaly = prevValue > 0 && Math.abs(intTotals.totalEval - prevValue) / prevValue > 0.9;
+      dateToTotal.set(today, isAnomaly ? prevValue : intTotals.totalEval);
+    }
     return [...dateToTotal.entries()]
       .map(([date, evalAmount]) => {
         const effectivePrincipal = portfolioSummaries.reduce((sum, s) => {
