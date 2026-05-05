@@ -23,13 +23,25 @@ export const DRIVE_FILES = {
   NOTIFICATION_LOG:  'notification_log.json',  // 알림 이력 (기기 간 공유)
 };
 
+// 동시 호출 중복 방지 — 같은 토큰에 대해 한 번만 검색/생성 (토큰 변경 시 캐시 무효화)
+let _folderCache: { token: string; promise: Promise<string> } | null = null;
+
 // Index_Data 폴더 찾기 또는 없으면 생성
+// 여러 폴더가 존재할 경우: portfolio_state.json이 있는 폴더 우선 → 없으면 가장 오래된 폴더
 export async function getOrCreateIndexFolder(token: string): Promise<string> {
+  if (_folderCache?.token === token) return _folderCache.promise;
+  const promise = _doGetOrCreateIndexFolder(token).catch(err => {
+    _folderCache = null;
+    throw err;
+  });
+  _folderCache = { token, promise };
+  return promise;
+}
+
+async function _doGetOrCreateIndexFolder(token: string): Promise<string> {
   const q = encodeURIComponent(
     `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
   );
-  // orderBy=createdTime → 가장 처음 생성된 폴더 우선 (=원래 사용하던 폴더)
-  // 여러 폴더가 존재할 경우 오래된 것이 정상 데이터를 보유할 가능성이 높음
   const res = await fetch(
     `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,createdTime)&orderBy=createdTime`,
     { headers: { Authorization: `Bearer ${token}` } }
@@ -40,9 +52,24 @@ export async function getOrCreateIndexFolder(token: string): Promise<string> {
   }
   const data = await res.json();
   if (data.files?.length > 0) {
-    if (data.files.length > 1) {
-      console.warn(`[Drive] Index_Data 폴더가 ${data.files.length}개 발견됨. 가장 오래된 폴더 사용:`, data.files[0].id, '생성:', data.files[0].createdTime);
+    if (data.files.length === 1) return data.files[0].id;
+    // 폴더가 여러 개인 경우: portfolio_state.json이 있는 폴더를 우선 사용
+    console.warn(`[Drive] Index_Data 폴더가 ${data.files.length}개 발견됨. portfolio_state.json 보유 폴더 탐색 중...`);
+    for (const folder of data.files) {
+      const sq = encodeURIComponent(`name='portfolio_state.json' and '${folder.id}' in parents and trashed=false`);
+      const sr = await fetch(`${DRIVE_API}/files?q=${sq}&spaces=drive&fields=files(id)`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (sr.ok) {
+        const sd = await sr.json();
+        if (sd.files?.length > 0) {
+          console.warn(`[Drive] portfolio_state.json 발견 → 폴더 사용:`, folder.id, '생성:', folder.createdTime);
+          return folder.id;
+        }
+      }
     }
+    // 어느 폴더에도 state 파일이 없으면 가장 오래된 폴더 사용 (신규 사용자 초기화)
+    console.warn(`[Drive] 어느 폴더에도 데이터 없음 → 가장 오래된 폴더 사용:`, data.files[0].id);
     return data.files[0].id;
   }
 

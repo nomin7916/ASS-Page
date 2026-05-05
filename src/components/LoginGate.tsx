@@ -36,20 +36,20 @@ export function savePin(pin: string, email: string): void {
 }
 
 // ── Google Drive PIN 저장/불러오기 ──────────────────────────────
-export async function loadPinFromDrive(token: string): Promise<string | null> {
+export async function loadPinFromDrive(token: string): Promise<{ pinHash: string | null; folderId: string }> {
   try {
     const folderId = await getOrCreateIndexFolder(token);
     const data = await loadDriveFile(token, folderId, DRIVE_FILES.PIN) as { pinHash?: string } | null;
-    return data?.pinHash ?? null;
+    return { pinHash: data?.pinHash ?? null, folderId };
   } catch {
-    return null;
+    return { pinHash: null, folderId: '' };
   }
 }
 
-export async function savePinToDrive(pinHash: string, token: string): Promise<void> {
+export async function savePinToDrive(pinHash: string, token: string, folderId?: string): Promise<void> {
   try {
-    const folderId = await getOrCreateIndexFolder(token);
-    await saveDriveFile(token, folderId, DRIVE_FILES.PIN, { pinHash });
+    const id = folderId || await getOrCreateIndexFolder(token);
+    await saveDriveFile(token, id, DRIVE_FILES.PIN, { pinHash });
   } catch { /* fire and forget */ }
 }
 
@@ -257,15 +257,15 @@ export default function LoginGate({ onApproved }: Props) {
           clearResetFlag(email);
           setResetNotice(true);
         } else {
-          const drivePinHash = await loadPinFromDrive(token);
+          const { pinHash: drivePinHash, folderId: pinFolderId } = await loadPinFromDrive(token);
           if (drivePinHash) {
             localStorage.setItem(PIN_KEY(email), drivePinHash);
           } else if (!isPinSet(email)) {
             const defaultHash = hashPin(DEFAULT_PIN);
             localStorage.setItem(PIN_KEY(email), defaultHash);
-            savePinToDrive(defaultHash, token);
+            savePinToDrive(defaultHash, token, pinFolderId || undefined);
           } else if (!drivePinHash && isPinSet(email)) {
-            savePinToDrive(localStorage.getItem(PIN_KEY(email))!, token);
+            savePinToDrive(localStorage.getItem(PIN_KEY(email))!, token, pinFolderId || undefined);
           }
         }
 
