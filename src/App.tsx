@@ -189,6 +189,7 @@ export default function App() {
 
   const portfolioRef = useRef([]);
   const portfoliosRef = useRef([]);
+  const marketIndicatorsRef = useRef({});
   const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
   const activePortfolioIdRef = useRef<string | null>(null);
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
@@ -492,6 +493,7 @@ export default function App() {
   // *Ref를 항상 최신 상태로 동기화 (클로저 문제 해결용 — 20분 인터벌 등 stale closure 방지)
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
   useEffect(() => { portfoliosRef.current = portfolios; }, [portfolios]);
+  useEffect(() => { marketIndicatorsRef.current = marketIndicators; }, [marketIndicators]);
   useEffect(() => { activePortfolioAccountTypeRef.current = activePortfolioAccountType; }, [activePortfolioAccountType]);
   useEffect(() => { activePortfolioIdRef.current = activePortfolioId; }, [activePortfolioId]);
   useEffect(() => { stockHistoryMapRef.current = stockHistoryMap; }, [stockHistoryMap]);
@@ -822,6 +824,7 @@ export default function App() {
     autoFetchedCodes,
     portfolioRef,
     portfoliosRef,
+    marketIndicatorsRef,
     activePortfolioAccountTypeRef,
     activePortfolioIdRef,
     stockHistoryMapRef,

@@ -329,6 +329,53 @@ export const fetchFundInfo = async (code: string): Promise<{ name: string; price
   return null;
 };
 
+// ── funetf.co.kr 펀드 기준가 이력 조회 ──────────────────────────────────────
+export const fetchFundNavHistory = async (
+  code: string,
+  startDate: string, // YYYY-MM-DD
+  endDate: string    // YYYY-MM-DD
+): Promise<Record<string, number> | null> => {
+  if (!code || code.trim().length < 8) return null;
+  const c = code.trim();
+  const today = endDate.replace(/-/g, '');
+  const start = startDate.replace(/-/g, '');
+  const end = endDate.replace(/-/g, '');
+  const apiUrl = `https://www.funetf.co.kr/api/public/product/view/fundnav?gijunYmd=${today}&wGijunYmd=${today}&fundCd=${c}&schNavTerm=A&schNavStDt=${start}&schNavEdDt=${end}&schCtenDvsn=MK_VIEW`;
+  const proxies = [
+    apiUrl,
+    `/api/proxy?url=${encodeURIComponent(apiUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(apiUrl)}`,
+  ];
+  for (const url of proxies) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const list =
+        data?.fundNavListInfo?.list ??
+        data?.fundNavList ??
+        data?.navList ??
+        data?.list ??
+        (Array.isArray(data) ? data : null);
+      if (!Array.isArray(list) || list.length === 0) continue;
+      const result: Record<string, number> = {};
+      for (const item of list) {
+        const dateRaw = item.gijunYmd ?? item.date ?? item.dt ?? item.ymd;
+        const priceRaw = item.nav ?? item.basicNav ?? item.fundNav ?? item.basicPrice ?? item.price;
+        if (!dateRaw || !priceRaw) continue;
+        const d = String(dateRaw).replace(/-/g, '');
+        if (d.length !== 8) continue;
+        const dateStr = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+        const price = parseFloat(String(priceRaw).replace(/,/g, ''));
+        if (price > 0) result[dateStr] = price;
+      }
+      if (Object.keys(result).length > 0) return result;
+    } catch { continue; }
+  }
+  return null;
+};
+
 export const fetchDividendHistory = async (code: string): Promise<{
   totalCount: number;
   result: Array<{ dividendAmount: number; exDividendAt: string; dividendYield: number }>;

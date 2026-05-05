@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchNaverKospi } from '../api';
-import { buildIndexStatus } from '../utils';
+import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchNaverKospi } from '../api';
+import { buildIndexStatus, cleanNum } from '../utils';
 
 interface UseStockDataParams {
   portfolio: any[];
@@ -19,6 +19,7 @@ interface UseStockDataParams {
   autoFetchedCodes: React.MutableRefObject<Set<string>>;
   portfolioRef: React.MutableRefObject<any[]>;
   portfoliosRef: React.MutableRefObject<any[]>;
+  marketIndicatorsRef: React.MutableRefObject<any>;
   activePortfolioAccountTypeRef: React.MutableRefObject<string>;
   activePortfolioIdRef: React.MutableRefObject<string | null>;
   stockHistoryMapRef: React.MutableRefObject<Record<string, Record<string, number>>>;
@@ -48,6 +49,7 @@ export function useStockData({
   autoFetchedCodes,
   portfolioRef,
   portfoliosRef,
+  marketIndicatorsRef,
   activePortfolioAccountTypeRef,
   activePortfolioIdRef,
   stockHistoryMapRef,
@@ -313,6 +315,7 @@ export function useStockData({
   const fetchAllPortfoliosPrices = async (today: string) => {
     const koreanCodes = new Set<string>();
     const overseasCodes = new Set<string>();
+    const fundCodes = new Set<string>();
 
     portfoliosRef.current.forEach(p => {
       if (p.accountType === 'simple') return;
@@ -323,11 +326,14 @@ export function useStockData({
         if (item.type === 'stock' && item.code) {
           if (isOverseas) overseasCodes.add(item.code);
           else koreanCodes.add(item.code);
+        } else if (item.type === 'fund' && item.code) {
+          fundCodes.add(item.code);
         }
       });
     });
 
     const priceResults: Record<string, any> = {};
+    const fundResults: Record<string, any> = {};
     await Promise.all([
       ...[...koreanCodes].map(async (code) => {
         const d = await fetchStockInfo(code);
@@ -343,27 +349,70 @@ export function useStockData({
           setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
         }
       }),
+      ...[...fundCodes].map(async (code) => {
+        const d = await fetchFundInfo(code);
+        if (d) {
+          fundResults[code] = d;
+          setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+        }
+      }),
     ]);
 
-    if (Object.keys(priceResults).length === 0) return priceResults;
+    const hasAnyResult = Object.keys(priceResults).length > 0 || Object.keys(fundResults).length > 0;
+    if (!hasAnyResult) return { priceResults, fundResults };
 
-    // 비활성 계좌 portfolios[] 업데이트
+    // 비활성 계좌 portfolios[] 가격 + 오늘 히스토리 동시 업데이트
     setPortfolios(prev => prev.map(p => {
       if (p.id === activePortfolioIdRef.current) return p;
       if (p.accountType === 'simple') return p;
       const items = p.portfolio || [];
-      if (!items.some(item => item.type === 'stock' && item.code && priceResults[item.code])) return p;
-      return {
-        ...p,
-        portfolio: items.map(item => {
-          if (item.type !== 'stock' || !item.code || !priceResults[item.code]) return item;
+      const hasUpdate = items.some(item =>
+        (item.type === 'stock' && item.code && priceResults[item.code]) ||
+        (item.type === 'fund' && item.code && fundResults[item.code])
+      );
+      if (!hasUpdate) return p;
+
+      const updatedItems = items.map(item => {
+        if (item.type === 'stock' && item.code && priceResults[item.code]) {
           const d = priceResults[item.code];
           return { ...item, name: d.name, currentPrice: d.price, changeRate: d.changeRate };
-        }),
-      };
+        }
+        if (item.type === 'fund' && item.code && fundResults[item.code]) {
+          const d = fundResults[item.code];
+          return { ...item, currentPrice: d.price, changeRate: d.changeRate };
+        }
+        return item;
+      });
+
+      const usdkrw = marketIndicatorsRef.current?.usdkrw || 1;
+      const fxRate = p.accountType === 'overseas' ? usdkrw : 1;
+      let totalEval = 0;
+      updatedItems.forEach(item => {
+        if (item.type === 'deposit') totalEval += cleanNum(item.depositAmount) * fxRate;
+        else if (item.type === 'fund') {
+          const qty = cleanNum(item.quantity);
+          const price = cleanNum(item.currentPrice);
+          totalEval += qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
+        } else {
+          totalEval += cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
+        }
+      });
+
+      if (totalEval <= 0) return { ...p, portfolio: updatedItems };
+
+      const history = p.history || [];
+      const idx = history.findIndex(h => h.date === today);
+      let newHistory;
+      if (idx >= 0) {
+        if (Math.abs(history[idx].evalAmount - totalEval) < 1) return { ...p, portfolio: updatedItems };
+        newHistory = history.map((h, i) => i === idx ? { ...h, evalAmount: totalEval } : h);
+      } else {
+        newHistory = [...history, { date: today, evalAmount: totalEval, principal: cleanNum(p.principal) || 0, isFixed: false }];
+      }
+      return { ...p, portfolio: updatedItems, history: newHistory };
     }));
 
-    return priceResults;
+    return { priceResults, fundResults };
   };
 
   // 초기 로드 후 종목 현재가를 직접 조회하는 함수 (활성 계좌만 — 초기 로드 안전성 보장)
@@ -444,18 +493,22 @@ export function useStockData({
       const isOverseasRefresh = activePortfolioAccountTypeRef.current === 'overseas';
 
       // 전체 계좌 종목 동시 조회 및 portfolios[] 업데이트
-      const priceResults = await fetchAllPortfoliosPrices(today);
+      const { priceResults, fundResults } = await fetchAllPortfoliosPrices(today);
 
       // 활성 계좌 fetch status 업데이트
       activeStockCodes.forEach(code => {
         setStockFetchStatus(prev => ({ ...prev, [code]: priceResults[code] ? 'success' : 'fail' }));
       });
 
-      // 활성 계좌 portfolio 업데이트
+      // 활성 계좌 portfolio 업데이트 (주식 + 펀드)
       setPortfolio(prev => prev.map(item => {
         if (item.type === 'stock' && item.code && priceResults[item.code]) {
           const d = priceResults[item.code];
           return { ...item, name: d.name, currentPrice: d.price, changeRate: d.changeRate };
+        }
+        if (item.type === 'fund' && item.code && fundResults[item.code]) {
+          const d = fundResults[item.code];
+          return { ...item, currentPrice: d.price, changeRate: d.changeRate };
         }
         return item;
       }));
@@ -487,6 +540,33 @@ export function useStockData({
             const snap = saveStateRef.current;
             if (snap && driveTokenRef.current) saveAllToDrive(snap);
           }, 600);
+        });
+      }
+
+      // 펀드 기준가 이력 조회 → stockHistoryMap 저장 (useHistoryBackfill 소급 기록에 활용)
+      const allFundCodes = new Set<string>();
+      portfoliosRef.current.forEach(p => {
+        if (p.accountType === 'simple') return;
+        const items = p.id === activePortfolioIdRef.current ? portfolioRef.current : (p.portfolio || []);
+        items.forEach(item => { if (item.type === 'fund' && item.code) allFundCodes.add(item.code); });
+      });
+      if (allFundCodes.size > 0) {
+        const oneYearAgo = new Date();
+        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+        const histStartDate = oneYearAgo.toISOString().split('T')[0];
+        Promise.all([...allFundCodes].map(async (code) => {
+          const existing = stockHistoryMapRef.current[code];
+          const existingKeys = existing ? Object.keys(existing) : [];
+          if (existingKeys.length > 30 && existingKeys.includes(today)) return;
+          const hist = await fetchFundNavHistory(code, histStartDate, today);
+          if (hist && Object.keys(hist).length > 0) {
+            setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+          }
+        })).then(() => {
+          setTimeout(() => {
+            const snap = saveStateRef.current;
+            if (snap && driveTokenRef.current) saveAllToDrive(snap);
+          }, 800);
         });
       }
 
