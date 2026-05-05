@@ -307,6 +307,49 @@ export function useDriveSync({
     }
   };
 
+  // ── 로컬 파일(portfolio_state.json)에서 상태 복원 ──
+  const handleImportStateFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!await confirm(`"${file.name}" 파일의 데이터를 현재 계좌에 적용하시겠습니까?\n(현재 계좌·종목 구성이 파일의 내용으로 교체됩니다)`)) return;
+    setSS('loading');
+    setDriveStatus('loading');
+    try {
+      const text = await file.text();
+      const stateData = JSON.parse(text);
+      if (!stateData?.portfolios?.length && !stateData?.portfolio) throw new Error('invalid');
+      lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+      applyBackupData(stateData, accountChartStatesRef);
+      const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = stateData;
+      const normalizedPortfolios = stateCore.portfolios?.map((p: any) => ({
+        ...p,
+        startDate: p.portfolioStartDate || p.startDate || '',
+        portfolioStartDate: p.portfolioStartDate || p.startDate || '',
+      }));
+      const newUpdatedAt = Date.now();
+      const token = driveTokenRef.current;
+      if (token) {
+        const folderId = await ensureDriveFolder(token);
+        await saveDriveFile(token, folderId, DRIVE_FILES.STATE, {
+          ...stateCore,
+          portfolios: normalizedPortfolios ?? stateCore.portfolios,
+          portfolioUpdatedAt: newUpdatedAt,
+        });
+        await saveVersionFile(token, folderId, newUpdatedAt);
+        lastDriveSavedPortfolioUpdatedAtRef.current = newUpdatedAt;
+        portfolioUpdatedAtRef.current = newUpdatedAt;
+      }
+      setSS('ready');
+      setDriveStatus(token ? 'saved' : '');
+      notify('파일에서 데이터를 복원했습니다.', 'success');
+    } catch {
+      notify('파일 복원에 실패했습니다. portfolio_state.json 파일인지 확인해 주세요.', 'error');
+      setSS('error');
+      setDriveStatus('error');
+    }
+  };
+
   // ── 백업 적용 → applyBackupData 콜백으로 state 적용 ──
   const handleApplyBackup = async (fileId: string, displayTime: string) => {
     if (!await confirm(`"${displayTime}" 시점의 백업을 현재 데이터에 적용하시겠습니까?\n(현재 계좌·종목 구성이 백업 시점으로 교체됩니다)`)) return;
@@ -415,5 +458,6 @@ export function useDriveSync({
     handleDriveLoadOnly,
     handleOpenBackupModal,
     handleApplyBackup,
+    handleImportStateFile,
   };
 }

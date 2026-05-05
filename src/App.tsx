@@ -281,7 +281,7 @@ export default function App() {
     goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef,
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
-    handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup,
+    handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
   } = useDriveSync({
     authUser,
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
@@ -1377,6 +1377,7 @@ export default function App() {
           handleOpenBackupModal={handleOpenBackupModal}
           historyInputRef={historyInputRef}
           handleImportHistoryJSON={handleImportHistoryJSON}
+          handleImportStateFile={handleImportStateFile}
         />
 
         {/* Drive 백업 이력 모달 */}

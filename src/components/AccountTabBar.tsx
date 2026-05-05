@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { RefreshCw, CloudDownload, Save, History, FileUp } from 'lucide-react';
+import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore } from 'lucide-react';
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 
 export default function AccountTabBar({
@@ -23,7 +23,9 @@ export default function AccountTabBar({
   handleOpenBackupModal,
   historyInputRef,
   handleImportHistoryJSON,
+  handleImportStateFile,
 }) {
+  const stateFileInputRef = React.useRef(null);
   return (
     <div className="flex items-center justify-between border-b border-gray-700/50 flex-wrap gap-y-1 py-1.5">
       <div className="flex gap-2 flex-wrap items-center">
@@ -114,6 +116,14 @@ export default function AccountTabBar({
             <FileUp size={14} />
           </button>
           <input type="file" ref={historyInputRef} onChange={handleImportHistoryJSON} className="hidden" accept=".json,.csv" multiple />
+          <button
+            onClick={() => stateFileInputRef.current?.click()}
+            title="계좌 데이터 파일로 복원 (portfolio_state.json)"
+            className="p-1.5 hover:bg-gray-800 rounded transition text-green-400 hover:text-green-300"
+          >
+            <ArchiveRestore size={14} />
+          </button>
+          <input type="file" ref={stateFileInputRef} onChange={handleImportStateFile} className="hidden" accept=".json" />
         </div>
       )}
     </div>
