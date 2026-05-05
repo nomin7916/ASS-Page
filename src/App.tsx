@@ -437,6 +437,7 @@ export default function App() {
       if (stateData.chartPrefs.intChartPeriod) setIntChartPeriod(stateData.chartPrefs.intChartPeriod);
       if (stateData.chartPrefs.intDateRange) setIntDateRange(stateData.chartPrefs.intDateRange);
       if (stateData.chartPrefs.intAppliedRange) setIntAppliedRange(stateData.chartPrefs.intAppliedRange);
+      if (stateData.chartPrefs.intIsZeroBaseMode !== undefined) setIntIsZeroBaseMode(stateData.chartPrefs.intIsZeroBaseMode);
     }
     const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
     const resolvedIndicatorHistoryMap = marketData?.indicatorHistoryMap || stateData.indicatorHistoryMap || {};
@@ -1042,11 +1043,24 @@ export default function App() {
         } catch {}
       }
 
-      // 시장지표 + 전체 계좌 종목 현재가 갱신 (통합 대시보드 총평가금액 정확성 확보)
+      // 시장지표 수집 (백그라운드)
       fetchMarketIndicators();
-      notify('전체 계좌 현재가 조회 중...', 'info');
+
+      // 3단계: 각 계좌 탭 순환 — 활성화 상태 거치게 하여 총자산현황 합계 정합성 확보
+      for (const p of portfoliosRef.current) {
+        notify(p.name, 'info');
+        switchToPortfolio(p.id);
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+
+      // 총자산현황으로 이동
+      notify('총자산현황', 'info');
+      setShowIntegratedDashboard(true);
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      // 4단계: 전체 계좌 현재가 갱신
       await refreshPrices();
-      notify('총자산현황 합계 반영 완료', 'success');
+      notify('전체 계좌 현재가 조회 완료', 'success');
 
       isInitialLoad.current = false;
 
