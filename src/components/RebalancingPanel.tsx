@@ -5,6 +5,11 @@ import { UI_CONFIG } from '../config';
 import { cleanNum, formatCurrency, formatNumber, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 
+const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
+const getAssetClass = (item) => item.type === 'fund'
+  ? (item.assetClass ?? 'S')
+  : (item.assetClass ?? (SAFE_CATEGORIES.includes(item.category) ? 'S' : 'D'));
+
 export default function RebalancingPanel({
   activePortfolioAccountType,
   portfolio,
@@ -28,6 +33,7 @@ export default function RebalancingPanel({
   setPortfolio,
   showTable = true,
   showDonut = true,
+  isRetirement = false,
 }) {
   const [editingRatio, setEditingRatio] = useState({});
 
@@ -223,6 +229,65 @@ export default function RebalancingPanel({
                   {(() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
                   <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>
                 </tr>
+                {isRetirement && (() => {
+                  const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+                  const curD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.curEval, 0);
+                  const curS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.curEval, 0) + depositEval;
+                  const curTotal = curD + curS;
+                  const curDRatio = curTotal > 0 ? curD / curTotal * 100 : 0;
+                  const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
+                  const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
+                  const projTotal = projD + projS;
+                  const projDRatio = projTotal > 0 ? projD / projTotal * 100 : 0;
+                  const projSRatio = projTotal > 0 ? projS / projTotal * 100 : 0;
+                  const onTarget = Math.abs(projDRatio - 70) <= 5;
+                  return (
+                    <tr className="border-t border-amber-600/30 bg-amber-950/20">
+                      <td colSpan={13} className="py-2.5 px-4">
+                        <div className="flex items-center gap-4 flex-wrap">
+                          <span className="text-amber-400 font-bold text-xs tracking-wide">퇴직연금 자산 비율</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-gray-500 text-[11px]">현재</span>
+                            <span className="text-red-300 text-xs font-bold">D {curDRatio.toFixed(1)}%</span>
+                            <span className="text-gray-600 text-[10px]">/</span>
+                            <span className="text-emerald-300 text-xs font-bold">S {(100 - curDRatio).toFixed(1)}%</span>
+                            <span className="text-gray-500 text-[11px] ml-2">→</span>
+                            <span className="text-gray-400 text-[11px]">예상</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-red-400 font-bold text-xs">위험 D</span>
+                            <span className={`font-bold text-sm ${onTarget ? 'text-red-400' : 'text-red-300'}`}>{projDRatio.toFixed(1)}%</span>
+                            <span className="text-gray-600 text-[11px]">(목표 70%)</span>
+                            {!onTarget && (
+                              <span className="text-orange-400 text-[11px]">
+                                {projDRatio > 70 ? `+${(projDRatio - 70).toFixed(1)}%` : `${(projDRatio - 70).toFixed(1)}%`}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-emerald-400 font-bold text-xs">안전 S</span>
+                            <span className={`font-bold text-sm ${Math.abs(projSRatio - 30) <= 5 ? 'text-emerald-400' : 'text-emerald-300'}`}>{projSRatio.toFixed(1)}%</span>
+                            <span className="text-gray-600 text-[11px]">(목표 30%)</span>
+                          </div>
+                          <div className="flex-1 flex items-center gap-1 min-w-[120px]">
+                            <div className="flex-1 h-2.5 bg-gray-700 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all duration-500"
+                                style={{
+                                  width: `${Math.min(projDRatio, 100)}%`,
+                                  background: onTarget
+                                    ? 'linear-gradient(90deg, #ef4444 0%, #f97316 100%)'
+                                    : 'linear-gradient(90deg, #dc2626 0%, #ea580c 100%)',
+                                }}
+                              />
+                            </div>
+                            <span className="text-[10px] text-gray-500 shrink-0">D70/S30</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })()}
               </tfoot>
             </table>
           </div>

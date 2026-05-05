@@ -1607,6 +1607,7 @@ export default function App() {
             setPortfolio={setPortfolio}
             showTable={!sectionCollapsed.rebalancing}
             showDonut={!sectionCollapsed.donut}
+            isRetirement={activePortfolioAccountType === 'dc-irp'}
           />
         )}
           </div>
