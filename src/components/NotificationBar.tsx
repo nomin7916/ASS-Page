@@ -18,6 +18,16 @@ const TYPE_COLOR: Record<string, string> = {
 };
 const typeColor = (type: string) => TYPE_COLOR[type] ?? TYPE_COLOR.info;
 
+function formatNotifTime(ts: number): string {
+  const d = new Date(ts);
+  const yy = d.getFullYear();
+  const mo = (d.getMonth() + 1).toString().padStart(2, '0');
+  const dd = d.getDate().toString().padStart(2, '0');
+  const hh = d.getHours().toString().padStart(2, '0');
+  const mm = d.getMinutes().toString().padStart(2, '0');
+  return `${yy}-${mo}-${dd} ${hh}:${mm}`;
+}
+
 function formatTime(ts: number): string {
   const d = new Date(ts);
   const now = new Date();
@@ -33,38 +43,31 @@ export default function NotificationBar({ notificationLog, onClear, unreadCount,
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const posInitialized = useRef(false);
   const dragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
-  // scrolling → pinned (1분 고정) → hidden
-  const [scrollPhase, setScrollPhase] = useState<'scrolling' | 'pinned' | 'hidden'>('hidden');
-  const pinnedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [visible, setVisible] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevLatestIdRef = useRef<string | null>(null);
 
   const latest = notificationLog[0] ?? null;
 
-  // 새 알림 도착 시 scrolling 페이즈로 리셋
+  // 새 알림 도착 시 10초 표시 후 숨김
   useEffect(() => {
     if (!latest) {
-      setScrollPhase('hidden');
-      if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
+      setVisible(false);
+      if (timerRef.current) clearTimeout(timerRef.current);
       prevLatestIdRef.current = null;
       return;
     }
     if (latest.id !== prevLatestIdRef.current) {
       prevLatestIdRef.current = latest.id;
-      if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
-      setScrollPhase('scrolling');
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setVisible(true);
+      timerRef.current = setTimeout(() => setVisible(false), 10000);
     }
   }, [latest?.id]);
 
   useEffect(() => () => {
-    if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
+    if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
-
-  // 5회 반복 완료 → 1분 고정 표시 후 숨김
-  const handleAnimationEnd = () => {
-    setScrollPhase('pinned');
-    if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
-    pinnedTimerRef.current = setTimeout(() => setScrollPhase('hidden'), 60000);
-  };
 
   const openPanel = () => {
     if (!posInitialized.current) {
@@ -107,24 +110,18 @@ export default function NotificationBar({ notificationLog, onClear, unreadCount,
         </div>
 
         {/* 텍스트 영역 */}
-        <div className="flex-1 overflow-hidden relative h-full flex items-center">
-          {scrollPhase === 'scrolling' && latest ? (
-            <span
-              key={latest.id}
-              className={`absolute whitespace-nowrap text-[11px] font-mono ${typeColor(latest.type)}`}
-              style={{ animation: 'notif-marquee 22s linear 5' }}
-              onAnimationEnd={handleAnimationEnd}
-            >
-              {latest.message}
-            </span>
-          ) : scrollPhase === 'pinned' && latest ? (
-            <span
-              className={`text-[11px] font-mono truncate pl-2.5 ${typeColor(latest.type)}`}
-            >
-              {latest.message}
-            </span>
+        <div className="flex-1 overflow-hidden h-full flex items-center gap-1.5 pl-2.5 pr-1">
+          {visible && latest ? (
+            <>
+              <span className="flex-shrink-0 text-[9px] text-gray-500 font-mono">
+                {formatNotifTime(latest.time)}
+              </span>
+              <span className={`text-[11px] font-mono truncate ${typeColor(latest.type)}`}>
+                {latest.message}
+              </span>
+            </>
           ) : (
-            <span className="text-[10px] text-gray-700 font-mono pl-2.5">없음</span>
+            <span className="text-[10px] text-gray-700 font-mono">없음</span>
           )}
         </div>
 

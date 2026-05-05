@@ -1245,7 +1245,7 @@ export default function App() {
 
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
-      <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; } @keyframes notif-marquee { from { transform: translateX(100vw); } to { transform: translateX(-100%); } }` }} />
+      <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
       {adminViewingAs && (
         <div className="fixed top-0 left-0 right-0 z-[200] bg-gray-900/98 border-b border-gray-700 px-4 py-2 flex items-center justify-between backdrop-blur-sm">
           <span className="text-gray-400 text-xs">
