@@ -444,7 +444,7 @@ export default function IntegratedDashboard({
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
 
               {/* 평가액 추이 테이블 */}
-              <div className="w-full xl:w-[380px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[344px] sm:max-h-[384px] md:max-h-[424px] xl:max-h-[464px]">
+              <div className="w-full xl:w-[490px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[344px] sm:max-h-[384px] md:max-h-[424px] xl:max-h-[464px]">
                 <div className="p-3 bg-[#0f172a] flex items-center justify-between border-b border-gray-700 shrink-0">
                   <span className="text-white font-bold text-sm">📅 평가액 추이</span>
                   {onManualBackfill && (
@@ -467,27 +467,29 @@ export default function IntegratedDashboard({
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 z-10">
                       <tr>
-                        <th className="py-2.5 px-3 text-center border-r border-gray-700">일자</th>
-                        <th className="py-2.5 px-3 text-right border-r border-gray-700">총 평가금액</th>
-                        <th className="py-2.5 px-3 text-center border-r border-gray-700 whitespace-nowrap">전일대비(%)</th>
-                        <th className="py-2.5 px-3 text-center whitespace-nowrap">원금대비수익률(%)</th>
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">일자</th>
+                        <th className="py-2.5 px-2 text-right border-r border-gray-700 whitespace-nowrap">평가금액</th>
+                        <th className="py-2.5 px-2 text-right border-r border-gray-700 whitespace-nowrap">투자원금</th>
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">전일대비</th>
+                        <th className="py-2.5 px-2 text-center whitespace-nowrap">원금대비</th>
                       </tr>
                     </thead>
                     <tbody>
                       {intMonthlyHistory.map((h, i) => (
                         <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
-                          <td className="py-2 px-3 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
-                          <td className="py-2 px-3 font-bold text-white text-right border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
-                          <td className="py-2 px-3 text-center border-r border-gray-700">
-                            <span className={`text-sm font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
+                          <td className="py-2 px-2 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
+                          <td className="py-2 px-2 font-bold text-white text-right border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
+                          <td className="py-2 px-2 font-bold text-gray-300 text-right border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal)}</td>
+                          <td className="py-2 px-2 text-center border-r border-gray-700">
+                            <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
                           </td>
-                          <td className="py-2 px-3 text-center">
-                            <span className={`text-sm font-bold ${h.monthlyChange > 0 ? 'text-red-400' : h.monthlyChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.monthlyChange)}</span>
+                          <td className="py-2 px-2 text-center">
+                            <span className={`font-bold ${h.monthlyChange > 0 ? 'text-red-400' : h.monthlyChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.monthlyChange)}</span>
                           </td>
                         </tr>
                       ))}
                       {intMonthlyHistory.length === 0 && (
-                        <tr><td colSpan={4} className="py-6 text-center text-gray-500">데이터 없음<br/><span className="text-[10px] text-gray-600">계좌 평가금액을 입력하면 자동으로 기록됩니다.</span></td></tr>
+                        <tr><td colSpan={5} className="py-6 text-center text-gray-500">데이터 없음<br/><span className="text-[10px] text-gray-600">계좌 평가금액을 입력하면 자동으로 기록됩니다.</span></td></tr>
                       )}
                     </tbody>
                   </table>
