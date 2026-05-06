@@ -1,15 +1,12 @@
 ﻿// @ts-nocheck
-import React, { useState, useMemo } from 'react';
-import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, Plus } from 'lucide-react';
+import React, { useState } from 'react';
+import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, Plus, TrendingUp } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
 import ChartRangeControls from './ChartRangeControls';
 import { extractLinkLabel } from '../chartUtils';
 import { CHART_NAME_TO_POINT_KEY } from '../constants';
-
-const MA_PERIODS = [20, 60, 120, 240];
-const MA_COLORS = ['#30d158', '#ffd60a', '#ff9f0a', '#bf5af2'];
 
 export default function PortfolioChart({
   activePortfolioAccountType,
@@ -58,35 +55,10 @@ export default function PortfolioChart({
   handleRemoveCompStock,
   defaultSelectionResult,
 }) {
-  const [showMA, setShowMA] = useState([false, false, false, false]);
-
-  const chartDataWithMA = useMemo(() => {
-    if (!showMA.some(Boolean)) return finalChartData;
-    return finalChartData.map((point, i) => {
-      const extra = {};
-      MA_PERIODS.forEach((period, pi) => {
-        if (!showMA[pi]) return;
-        if (i < period - 1) { extra[`ma${pi + 1}`] = null; return; }
-        const slice = finalChartData.slice(i - period + 1, i + 1);
-        const rates = slice.map(p => p.returnRate).filter(v => v != null);
-        extra[`ma${pi + 1}`] = rates.length >= Math.ceil(period / 2) ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
-      });
-      return { ...point, ...extra };
-    });
-  }, [finalChartData, showMA]);
+  const [showPrincipal, setShowPrincipal] = useState(false);
 
   const hoveredData = hoveredPoint ? finalChartData.find(d => d.date === hoveredPoint.label) : null;
   const hoveredReturnRate = hoveredData?.returnRate ?? null;
-
-  const yDomainLeft = useMemo(() => {
-    const rates = finalChartData.flatMap(d => {
-      const vals = [d.returnRate, d.kospiRate, d.sp500Rate, d.nasdaqRate, d.backtestRate];
-      compStocks.forEach((_, ci) => vals.push(d[`comp${ci + 1}Rate`]));
-      return vals;
-    }).filter(v => v != null && isFinite(v));
-    if (rates.length === 0) return [-10, 10];
-    return [Math.min(...rates), Math.max(...rates)];
-  }, [finalChartData, compStocks]);
 
   const CompStockDot = ({ code }) => {
     const st = stockFetchStatus?.[code];
@@ -265,6 +237,11 @@ export default function PortfolioChart({
               title="자산 총액 표시"
             ><BarChart2 size={14} /></button>
             <button
+              onClick={() => setShowPrincipal(!showPrincipal)}
+              className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showPrincipal ? 'text-cyan-400 bg-cyan-900/20 border-cyan-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
+              title="투자원금 표시"
+            ><TrendingUp size={14} /></button>
+            <button
               onClick={() => setShowReturnRate(!showReturnRate)}
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
               title="수익률(%) 표시"
@@ -293,16 +270,6 @@ export default function PortfolioChart({
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isZeroBaseMode ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
               title="조회 시작일을 0% 기준으로 차트 재정렬"
             ><Activity size={14} /></button>
-            <div className="w-px h-3 bg-gray-700 mx-0.5" />
-            {MA_PERIODS.map((period, pi) => (
-              <button
-                key={pi}
-                onClick={() => setShowMA(prev => { const n = [...prev]; n[pi] = !n[pi]; return n; })}
-                className="px-1.5 py-1 rounded border text-[9px] font-bold transition-colors"
-                style={showMA[pi] ? { color: MA_COLORS[pi], borderColor: MA_COLORS[pi] + '80', backgroundColor: MA_COLORS[pi] + '15' } : { color: '#6b7280', borderColor: 'transparent' }}
-                title={`MA${period} 이동평균선`}
-              >{period}</button>
-            ))}
             {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && (<>
               <div className="w-px h-3 bg-gray-700 mx-0.5" />
               <button
@@ -415,7 +382,7 @@ export default function PortfolioChart({
                     ? (entry.payload?.[dk.replace('RateScaled', 'Rate')] ?? rawValue)
                     : rawValue;
                   let displayVal: string;
-                  if (entry.name === '총자산') {
+                  if (entry.name === '총자산' || entry.name === '투자원금') {
                     displayVal = formatNumber(rawValue);
                   } else {
                     const pointKey = CHART_NAME_TO_POINT_KEY[entry.name];
@@ -552,7 +519,7 @@ export default function PortfolioChart({
         className="chart-container-for-drag p-4 min-h-[400px] xl:flex-1 relative select-none"
       >
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartDataWithMA} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
+          <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
             <defs>
               <filter id="neonGlow">
                 <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
@@ -578,7 +545,7 @@ export default function PortfolioChart({
             <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
             <XAxis dataKey="date" tickFormatter={formatShortDate} stroke="#9ca3af" tick={{ fontSize: 10 }} />
             <YAxis yAxisId="left" stroke="#9ca3af" tickFormatter={v => v + '%'} tick={{ fontSize: 10 }} />
-            {showTotalEval && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
+            {(showTotalEval || showPrincipal) && <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tickFormatter={v => v / 10000 + '만'} tick={{ fontSize: 10 }} />}
             {effectiveShowIndicators.us10y && indicatorHistoryMap.us10y && <YAxis yAxisId="right-us10y" orientation="right" stroke="#8e8e93" tick={{ fontSize: 9 }} tickFormatter={v => Number(v).toFixed(2)} width={52} domain={['dataMin', 'dataMax']}><Label value="US 10Y" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#8e8e93', fontSize: 11, fontWeight: 500 }} /></YAxis>}
             {effectiveShowIndicators.goldIntl && indicatorHistoryMap.goldIntl && <YAxis yAxisId="right-goldIntl" orientation="right" stroke={goldIndicatorColors.goldIntl} tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={56} domain={['dataMin', 'dataMax']}><Label value="Gold" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: goldIndicatorColors.goldIntl, fontSize: 11, fontWeight: 500 }} /></YAxis>}
             {effectiveShowIndicators.goldKr && indicatorHistoryMap.goldKr && <YAxis yAxisId="right-goldKr" orientation="right" stroke={goldIndicatorColors.goldKr} tick={{ fontSize: 9 }} tickFormatter={v => Math.round(v).toLocaleString()} width={62} domain={['dataMin', 'dataMax']}><Label value="국내금" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: goldIndicatorColors.goldKr, fontSize: 11, fontWeight: 500 }} /></YAxis>}
@@ -591,6 +558,7 @@ export default function PortfolioChart({
             {effectiveShowIndicators.eth && indicatorHistoryMap.eth && <YAxis yAxisId="right-eth" orientation="right" stroke="#627eea" tick={{ fontSize: 9 }} tickFormatter={v => '$' + Math.round(v).toLocaleString()} width={72} domain={['dataMin', 'dataMax']}><Label value="ETH" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#627eea', fontSize: 11, fontWeight: 500 }} /></YAxis>}
             <RechartsTooltip content={() => null} />
             {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
+            {showPrincipal && <Line yAxisId="right" type="monotone" dataKey="principalAmount" name="투자원금" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="5 3" connectNulls />}
             {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
             {!userFeatures.feature1 && showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#38bdf8" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
@@ -624,7 +592,6 @@ export default function PortfolioChart({
             )}
             {showBacktest && <Area yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke={backtestColor} strokeWidth={2} fill="url(#backtestGradient)" strokeDasharray="6 3" dot={false} connectNulls />}
             {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
-            {showMA.map((active, pi) => active ? <Line key={`ma${pi + 1}`} yAxisId="left" type="monotone" dataKey={`ma${pi + 1}`} name={`MA${MA_PERIODS[pi]}`} stroke={MA_COLORS[pi]} strokeWidth={1.5} dot={false} connectNulls /> : null)}
             {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
             {hoveredPoint && !refAreaLeft && hoveredPoint.payload
               .filter(p =>

@@ -695,6 +695,8 @@ export default function App() {
 
   const finalChartData = useMemo(() => {
     const localSortedHist = [...history].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const sortedDeposits = [...depositHistory].sort((a, b) => a.date < b.date ? -1 : 1);
+    const sortedWithdrawals = [...depositHistory2].sort((a, b) => a.date < b.date ? -1 : 1);
     const rawData = filteredDates.map(date => {
       let trueEvalAtDate = 0, retRate = 0;
       if (date >= portfolioStartDate) {
@@ -713,7 +715,10 @@ export default function App() {
         if (!hasTrueData && hIdx) trueEvalAtDate = hIdx.evalAmount;
         retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
       }
-      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate };
+      let principalAmount = 0;
+      for (const d of sortedDeposits) { if (d.date <= date) principalAmount += cleanNum(d.amount); else break; }
+      for (const w of sortedWithdrawals) { if (w.date <= date) principalAmount -= cleanNum(w.amount); else break; }
+      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData[0];
@@ -774,7 +779,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2]);
 
   // ── 통합 대시보드 계산 ──
   const {
