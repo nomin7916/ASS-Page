@@ -12,6 +12,8 @@ export function useIntegratedData({
   title,
   marketIndicators,
   history,
+  depositHistory,
+  depositHistory2,
   intAppliedRange,
   intIsZeroBaseMode,
 }) {
@@ -100,15 +102,30 @@ export function useIntegratedData({
       const isAnomaly = prevValue > 0 && intTotals.totalEval < prevValue * 0.1;
       dateToTotal.set(today, isAnomaly ? prevValue : intTotals.totalEval);
     }
+    const portfolioPrincipalData = portfolios.map(p => {
+      const isActive = p.id === activePortfolioId;
+      const startDate = isActive ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
+      const currentPrincipal = isActive ? principal : (p.principal || 0);
+      const fxRate = p.accountType === 'overseas'
+        ? ((isActive ? avgExchangeRate : p.avgExchangeRate) || marketIndicators.usdkrw || 1)
+        : 1;
+      const currentPrincipalKRW = currentPrincipal * fxRate;
+      const deps = isActive ? depositHistory : (p.depositHistory || []);
+      const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
+      return { startDate, currentPrincipalKRW, deps, wds };
+    });
     return [...dateToTotal.entries()]
       .map(([date, evalAmount]) => {
-        const effectivePrincipal = portfolioSummaries.reduce((sum, s) => {
-          return sum + (s.startDate && s.startDate <= date ? s.principal : 0);
+        const effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, deps, wds }) => {
+          if (!startDate || startDate > date) return sum;
+          const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (d.fxRate || 1), 0);
+          const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (d.fxRate || 1), 0);
+          return sum + Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
         }, 0);
         return { id: date, date, evalAmount, effectivePrincipal };
       })
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, history, activePortfolioId, intTotals.totalEval, portfolioSummaries]);
+  }, [portfolios, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw]);
 
   const intSortedHistory = useMemo(() =>
     [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
@@ -154,6 +171,28 @@ export function useIntegratedData({
       return { ...h, monthlyChange, dodChange };
     });
   }, [computedIntHistory, intTotals.totalPrincipal]);
+
+  const intDepositEvents = useMemo(() => {
+    const byDate = new Map();
+    portfolios.forEach(p => {
+      const isActive = p.id === activePortfolioId;
+      const deps = isActive ? depositHistory : (p.depositHistory || []);
+      const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
+      deps.forEach(d => {
+        if (!d.date) return;
+        const prev = byDate.get(d.date) || { date: d.date, deposits: 0, withdrawals: 0 };
+        prev.deposits += (d.amount || 0) * (d.fxRate || 1);
+        byDate.set(d.date, prev);
+      });
+      wds.forEach(d => {
+        if (!d.date) return;
+        const prev = byDate.get(d.date) || { date: d.date, deposits: 0, withdrawals: 0 };
+        prev.withdrawals += (d.amount || 0) * (d.fxRate || 1);
+        byDate.set(d.date, prev);
+      });
+    });
+    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  }, [portfolios, depositHistory, depositHistory2, activePortfolioId]);
 
   const intCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
@@ -227,5 +266,6 @@ export function useIntegratedData({
     intMonthlyHistory,
     intCatDonutData,
     intHoldingsDonutData,
+    intDepositEvents,
   };
 }

@@ -93,6 +93,7 @@ export default function IntegratedDashboard({
   updatePortfolioActualDividendUsd,
   updatePortfolioActualAfterTaxUsd,
   updatePortfolioActualAfterTaxKrw,
+  intDepositEvents = [],
   usdkrw = 1300,
   dividendTaxHistory = {},
   onManualBackfill,
@@ -595,6 +596,23 @@ export default function IntegratedDashboard({
                       <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={false} />
                       <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={false} />
                       <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} fill="url(#intEvalGrad)" dot={false} activeDot={false} />
+                      {intDepositEvents
+                        .filter(e => {
+                          const first = intChartData[0]?.date;
+                          const last = intChartData[intChartData.length - 1]?.date;
+                          return first && last && e.date >= first && e.date <= last;
+                        })
+                        .map(e => (
+                          <ReferenceLine
+                            key={`dep-${e.date}`}
+                            yAxisId="left"
+                            x={e.date}
+                            stroke={e.deposits >= e.withdrawals ? 'rgba(74,222,128,0.45)' : 'rgba(248,113,113,0.45)'}
+                            strokeWidth={1}
+                            strokeDasharray="4 3"
+                          />
+                        ))
+                      }
                       {intHoveredPoint && !intRefAreaLeft && (
                         <ReferenceLine yAxisId="left" x={intHoveredPoint.label} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />
                       )}

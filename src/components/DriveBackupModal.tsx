@@ -32,7 +32,7 @@ export default function DriveBackupModal({
               <span className="text-xs">백업 목록 불러오는 중...</span>
             </div>
           ) : backupList.length === 0 ? (
-            <div className="text-center py-10 text-gray-500 text-xs">저장된 백업이 없습니다<br /><span className="text-gray-600">로그인 시 자동 생성 · 20분 자동저장 · 수동 Save 시 생성됩니다</span></div>
+            <div className="text-center py-10 text-gray-500 text-xs">저장된 백업이 없습니다<br /><span className="text-gray-600">로그인 시 자동 생성 · 수동 Save 시 생성됩니다</span></div>
           ) : (
             <div className="space-y-2">
               {backupList.map((backup) => {
@@ -60,7 +60,7 @@ export default function DriveBackupModal({
               })}
             </div>
           )}
-          <p className="mt-3 text-[10px] text-gray-600 text-center">최대 {MAX_BACKUPS}개 저장 · 로그인 시 자동 생성 · 20분 자동저장 · 수동 Save 시 생성</p>
+          <p className="mt-3 text-[10px] text-gray-600 text-center">최대 {MAX_BACKUPS}개 저장 · 로그인 시 자동 생성 · 수동 Save 시 생성</p>
         </div>
       </div>
     </div>

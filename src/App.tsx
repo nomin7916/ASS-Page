@@ -199,7 +199,7 @@ export default function App() {
   const portfolioRef = useRef([]);
   const portfoliosRef = useRef([]);
   const marketIndicatorsRef = useRef({});
-  const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용 (20분 인터벌 등)
+  const activePortfolioAccountTypeRef = useRef('portfolio'); // 클로저 문제 해결용
   const activePortfolioIdRef = useRef<string | null>(null);
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
   const didSwitchPortfolioRef = useRef(false); // 탭 전환 시 최초 마운트 skip용
@@ -508,7 +508,7 @@ export default function App() {
   };
   applyBackupDataRef.current = applyBackupData;
 
-  // *Ref를 항상 최신 상태로 동기화 (클로저 문제 해결용 — 20분 인터벌 등 stale closure 방지)
+  // *Ref를 항상 최신 상태로 동기화 (stale closure 방지)
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
   useEffect(() => { portfoliosRef.current = portfolios; }, [portfolios]);
   useEffect(() => { marketIndicatorsRef.current = marketIndicators; }, [marketIndicators]);
@@ -788,10 +788,11 @@ export default function App() {
     intMonthlyHistory,
     intCatDonutData,
     intHoldingsDonutData,
+    intDepositEvents,
   } = useIntegratedData({
     portfolios, activePortfolioId, portfolio, principal,
     avgExchangeRate, portfolioStartDate, title, marketIndicators,
-    history, intAppliedRange, intIsZeroBaseMode,
+    history, depositHistory, depositHistory2, intAppliedRange, intIsZeroBaseMode,
   });
 
 
@@ -1714,6 +1715,7 @@ export default function App() {
             intRefAreaRight={intRefAreaRight}
             intCatDonutData={intCatDonutData}
             intHoldingsDonutData={intHoldingsDonutData}
+            intDepositEvents={intDepositEvents}
             hoveredIntCatSlice={hoveredIntCatSlice}
             hoveredIntHoldSlice={hoveredIntHoldSlice}
             portfolioSummaries={portfolioSummaries}
