@@ -141,11 +141,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               return (
                 <tr key={item.id} className={`group transition-colors border-b border-gray-700 ${!item.rowColor ? 'hover:bg-gray-800/40' : ''}`} style={item.rowColor ? { backgroundColor: hexToRgba(item.rowColor, 0.18) } : {}}>
                   {/* 색상 스트립 */}
-                  <td className="px-0 py-1 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
+                  <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
                     {item.rowColor ? (
-                      <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none rounded-sm" style={{minHeight:'28px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
+                      <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none rounded" style={{margin:'6px 0', minHeight:'24px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
                     ) : (
-                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded-sm" style={{minHeight:'28px'}}>
+                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded" style={{margin:'6px 0', minHeight:'24px'}}>
                         <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => onUpdate(item.id, 'rowColor', e.target.value)} />
                       </label>
                     )}
@@ -339,11 +339,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               return (
                 <tr key={item.id} className={`group transition-colors border-b border-indigo-800/30 ${!item.rowColor ? 'bg-indigo-950/30 hover:bg-indigo-900/20' : ''}`} style={item.rowColor ? { backgroundColor: hexToRgba(item.rowColor, 0.18) } : {}}>
                   {/* 색상 스트립 */}
-                  <td className="px-0 py-1 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
+                  <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
                     {item.rowColor ? (
-                      <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none rounded-sm" style={{minHeight:'28px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
+                      <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none rounded" style={{margin:'6px 0', minHeight:'24px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
                     ) : (
-                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded-sm" style={{minHeight:'28px'}}>
+                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded" style={{margin:'6px 0', minHeight:'24px'}}>
                         <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => onUpdate(item.id, 'rowColor', e.target.value)} />
                       </label>
                     )}
