@@ -622,6 +622,16 @@ export default function IntegratedDashboard({
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
+                <div className="flex items-center gap-4 px-3 pb-2 pt-1">
+                  <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                    <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: 'rgba(74,222,128,0.7)' }} />
+                    입금일
+                  </span>
+                  <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                    <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: 'rgba(248,113,113,0.7)' }} />
+                    출금일
+                  </span>
+                </div>
               </div>
             </div>
             )}
