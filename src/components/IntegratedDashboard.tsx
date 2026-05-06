@@ -318,7 +318,7 @@ export default function IntegratedDashboard({
                               {s.rowColor ? (
                                 <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none rounded-sm" style={{minHeight:'28px', backgroundColor: s.rowColor}} onClick={() => updatePortfolioColor(s.id, '')} />
                               ) : (
-                                <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded-sm" style={{minHeight:'28px', backgroundColor: '#64748b'}}>
+                                <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded-sm" style={{minHeight:'28px'}}>
                                   <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => updatePortfolioColor(s.id, e.target.value)} />
                                 </label>
                               )}
