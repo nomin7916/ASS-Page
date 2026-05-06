@@ -8,7 +8,7 @@ const Header = ({ title, setTitle, isLoading, driveStatus, onRefresh, onDriveSav
   <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full mt-2 relative">
     <div className="p-4 md:p-5 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center bg-[#1e293b] gap-4">
       <div className="flex items-center gap-3 flex-1 min-w-[250px] w-full md:w-auto mt-2 md:mt-0">
-        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="text-2xl md:text-3xl font-bold bg-transparent outline-none hover:border-b hover:border-gray-500 focus:border-b focus:border-blue-500 w-full max-w-xl text-white truncate transition-colors caret-transparent cursor-pointer" />
+        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="text-2xl md:text-3xl font-bold bg-transparent outline-none border-b border-transparent hover:border-gray-500 focus:border-blue-400 w-full max-w-xl text-white transition-colors caret-white cursor-text" />
       </div>
       <div className="flex flex-col items-end gap-2.5 w-full md:w-auto">
         {/* 상태 표시 */}
