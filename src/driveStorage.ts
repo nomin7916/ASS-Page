@@ -1,6 +1,7 @@
-// Google Drive REST API helper — Index_Data 폴더 기반 저장/불러오기
+// Google Drive REST API helper — Index_Data_<email> 폴더 기반 저장/불러오기
 
-const FOLDER_NAME = 'Index_Data';
+const FOLDER_NAME_LEGACY = 'Index_Data';
+const getFolderName = (email: string) => `Index_Data_${email}`;
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 
@@ -23,39 +24,51 @@ export const DRIVE_FILES = {
   NOTIFICATION_LOG:  'notification_log.json',  // 알림 이력 (기기 간 공유)
 };
 
-// 동시 호출 중복 방지 — 같은 토큰에 대해 한 번만 검색/생성 (토큰 변경 시 캐시 무효화)
-let _folderCache: { token: string; promise: Promise<string> } | null = null;
+// 동시 호출 중복 방지 — 같은 토큰+이메일 조합에 대해 한 번만 검색/생성
+let _folderCache: { key: string; promise: Promise<string> } | null = null;
 
-// Index_Data 폴더 찾기 또는 없으면 생성
-// 여러 폴더가 존재할 경우: portfolio_state.json이 있는 폴더 우선 → 없으면 가장 오래된 폴더
-export async function getOrCreateIndexFolder(token: string): Promise<string> {
-  if (_folderCache?.token === token) return _folderCache.promise;
-  const promise = _doGetOrCreateIndexFolder(token).catch(err => {
+// Index_Data_<email> 폴더 찾기 또는 없으면 생성
+// 구 형식(Index_Data) 폴더가 있으면 자동으로 새 이름으로 마이그레이션
+export async function getOrCreateIndexFolder(token: string, email: string): Promise<string> {
+  const key = `${token}::${email}`;
+  if (_folderCache?.key === key) return _folderCache.promise;
+  const promise = _doGetOrCreateIndexFolder(token, email).catch(err => {
     _folderCache = null;
     throw err;
   });
-  _folderCache = { token, promise };
+  _folderCache = { key, promise };
   return promise;
 }
 
-async function _doGetOrCreateIndexFolder(token: string): Promise<string> {
-  const q = encodeURIComponent(
-    `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
+async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<string> {
+  const newName = getFolderName(email);
+
+  // 1단계: 새 형식 폴더(Index_Data_<email>) 탐색
+  const q1 = encodeURIComponent(
+    `name='${newName}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
   );
-  const res = await fetch(
-    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,createdTime)&orderBy=createdTime`,
+  const res1 = await fetch(
+    `${DRIVE_API}/files?q=${q1}&spaces=drive&fields=files(id,createdTime)`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`[Drive] 폴더 검색 실패 ${res.status}: ${err?.error?.message || res.statusText}`);
+  if (!res1.ok) {
+    const err = await res1.json().catch(() => ({}));
+    throw new Error(`[Drive] 폴더 검색 실패 ${res1.status}: ${err?.error?.message || res1.statusText}`);
   }
-  const data = await res.json();
-  if (data.files?.length > 0) {
-    if (data.files.length === 1) return data.files[0].id;
-    // 폴더가 여러 개인 경우: portfolio_state.json이 있는 폴더를 우선 사용
-    console.warn(`[Drive] Index_Data 폴더가 ${data.files.length}개 발견됨. portfolio_state.json 보유 폴더 탐색 중...`);
-    for (const folder of data.files) {
+  const data1 = await res1.json();
+  if (data1.files?.length > 0) return data1.files[0].id;
+
+  // 2단계: 구 형식 폴더(Index_Data) 탐색 → 데이터 있는 폴더를 새 이름으로 마이그레이션
+  const q2 = encodeURIComponent(
+    `name='${FOLDER_NAME_LEGACY}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
+  );
+  const res2 = await fetch(
+    `${DRIVE_API}/files?q=${q2}&spaces=drive&fields=files(id,createdTime)&orderBy=createdTime`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (res2.ok) {
+    const data2 = await res2.json();
+    for (const folder of (data2.files || [])) {
       const sq = encodeURIComponent(`name='portfolio_state.json' and '${folder.id}' in parents and trashed=false`);
       const sr = await fetch(`${DRIVE_API}/files?q=${sq}&spaces=drive&fields=files(id)`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -63,22 +76,28 @@ async function _doGetOrCreateIndexFolder(token: string): Promise<string> {
       if (sr.ok) {
         const sd = await sr.json();
         if (sd.files?.length > 0) {
-          console.warn(`[Drive] portfolio_state.json 발견 → 폴더 사용:`, folder.id, '생성:', folder.createdTime);
+          const renameRes = await fetch(`${DRIVE_API}/files/${folder.id}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName }),
+          });
+          if (renameRes.ok) {
+            console.warn(`[Drive] 폴더 마이그레이션 완료: ${FOLDER_NAME_LEGACY} → ${newName}`);
+          } else {
+            console.warn(`[Drive] 폴더 이름 변경 실패 (${renameRes.status}). 기존 폴더 계속 사용.`);
+          }
           return folder.id;
         }
       }
     }
-    // 어느 폴더에도 state 파일이 없으면 가장 오래된 폴더 사용 (신규 사용자 초기화)
-    console.warn(`[Drive] 어느 폴더에도 데이터 없음 → 가장 오래된 폴더 사용:`, data.files[0].id);
-    return data.files[0].id;
   }
 
-  // 폴더 없으면 생성
+  // 3단계: 새 폴더 생성
   const createRes = await fetch(`${DRIVE_API}/files`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name: FOLDER_NAME,
+      name: newName,
       mimeType: 'application/vnd.google-apps.folder',
     }),
   });
@@ -138,19 +157,22 @@ export async function revokeAdminReadAccess(token: string, folderId: string, adm
   } catch {}
 }
 
-// 관리자 토큰으로 대상 사용자의 Index_Data 폴더 ID 찾기
+// 관리자 토큰으로 대상 사용자의 폴더 ID 찾기 — 새 형식(Index_Data_<email>) 우선, 구 형식(Index_Data) 폴백
 export async function findUserIndexFolder(adminToken: string, targetEmail: string): Promise<string | null> {
   try {
-    const q = encodeURIComponent(
-      `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${targetEmail}' in owners`
-    );
-    const res = await fetch(
-      `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
-      { headers: { Authorization: `Bearer ${adminToken}` } }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.files?.[0]?.id ?? null;
+    const searchByName = async (name: string) => {
+      const q = encodeURIComponent(
+        `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${targetEmail}' in owners`
+      );
+      const res = await fetch(
+        `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
+        { headers: { Authorization: `Bearer ${adminToken}` } }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.files?.[0]?.id ?? null;
+    };
+    return (await searchByName(getFolderName(targetEmail))) ?? (await searchByName(FOLDER_NAME_LEGACY));
   } catch {
     return null;
   }

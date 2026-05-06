@@ -78,7 +78,7 @@ export function useDriveSync({
   // ── Drive 폴더 ID 캐시 확보 ──
   const ensureDriveFolder = async (token: string): Promise<string> => {
     if (driveFolderIdRef.current) return driveFolderIdRef.current;
-    const id = await getOrCreateIndexFolder(token);
+    const id = await getOrCreateIndexFolder(token, authUser?.email || '');
     driveFolderIdRef.current = id;
     return id;
   };

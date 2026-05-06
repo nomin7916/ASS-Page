@@ -110,7 +110,8 @@
       "Bash(ls /c/)",
       "Read(//c/Program Files/**)",
       "Read(//c/Program Files \\(x86\\)/**)",
-      "PowerShell($nodeDir = \\(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Roaming\\\\nvm\" -Recurse -Filter \"npm.cmd\" -ErrorAction SilentlyContinue | Select-Object -First 1\\).DirectoryName; if \\($nodeDir\\) { $env:PATH = \"$nodeDir;$env:PATH\"; Write-Host \"Found npm at: $nodeDir\" } else { Write-Host \"npm not found in nvm\" })"
+      "PowerShell($nodeDir = \\(Get-ChildItem \"C:\\\\Users\\\\arui1\\\\AppData\\\\Roaming\\\\nvm\" -Recurse -Filter \"npm.cmd\" -ErrorAction SilentlyContinue | Select-Object -First 1\\).DirectoryName; if \\($nodeDir\\) { $env:PATH = \"$nodeDir;$env:PATH\"; Write-Host \"Found npm at: $nodeDir\" } else { Write-Host \"npm not found in nvm\" })",
+      "PowerShell($env:PATH += \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; node --version; npx tsc --noEmit 2>&1 | Select-Object -First 50)"
     ]
   }
 }

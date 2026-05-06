@@ -121,7 +121,7 @@ export default function PinChangeModal({
               if (np !== cp) { setPinChangeError('새 비밀번호가 일치하지 않습니다.'); setPinConfirm(['','','','']); return; }
               setPinChangeSaving(true);
               savePin(np, authUser.email);
-              await savePinToDrive(hashPin(np), authUser.token);
+              await savePinToDrive(hashPin(np), authUser.token, authUser.email);
               setPinChangeSaving(false);
               setShowPinChange(false);
               notify('비밀번호가 변경되었습니다.', 'success');

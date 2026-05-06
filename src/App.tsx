@@ -11,7 +11,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
-import { DRIVE_FILES, getOrCreateIndexFolder, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup } from './driveStorage';
+import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup } from './driveStorage';
 import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
