@@ -1528,6 +1528,7 @@ export default function App() {
             handleWithdrawDownloadCSV={handleWithdrawDownloadCSV}
             activePortfolioAccountType={activePortfolioAccountType}
             marketIndicators={marketIndicators}
+            setPrincipal={setPrincipal}
           />
         </div>
         )}

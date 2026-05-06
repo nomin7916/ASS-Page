@@ -19,6 +19,7 @@ export default function DepositPanel({
   handleWithdrawDownloadCSV,
   activePortfolioAccountType,
   marketIndicators,
+  setPrincipal,
 }) {
   const isOverseas = activePortfolioAccountType === 'overseas';
 
@@ -83,10 +84,15 @@ export default function DepositPanel({
     e.target.select();
   };
 
-  const amountBlur = (h, prefix, history, setHistory) => {
+  const amountBlur = (h, prefix, history, setHistory, sign = 0) => {
+    const newAmount = cleanNum(editVal);
+    const oldAmount = h.amount || 0;
     const n = [...history];
-    n[h.originalIndex].amount = cleanNum(editVal);
+    n[h.originalIndex].amount = newAmount;
     setHistory(n);
+    if (setPrincipal && newAmount !== oldAmount) {
+      setPrincipal(p => p + sign * (newAmount - oldAmount));
+    }
     setEditField(null);
   };
 
@@ -128,7 +134,7 @@ export default function DepositPanel({
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" value={h.date} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].date = e.target.value; setDepositHistory(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd1')} onFocus={e => amountFocus(h, 'd1', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd1', depositHistory, setDepositHistory)} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
+                        <input type="text" data-col="d1amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd1')} onFocus={e => amountFocus(h, 'd1', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd1', depositHistory, setDepositHistory, 1)} onKeyDown={e => handleTableKeyDown(e, 'd1amount')} />
                       </td>
                       {isOverseas && (
                         <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sky-500">
@@ -142,7 +148,7 @@ export default function DepositPanel({
                           <button onClick={() => openMemoModal(h, 'd1')} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
                         </div>
                       </td>
-                      <td className="py-2 text-center"><button onClick={() => setDepositHistory(depositHistory.filter(x => x.id !== h.id))} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
+                      <td className="py-2 text-center"><button onClick={() => { const amt = h.amount || 0; setDepositHistory(depositHistory.filter(x => x.id !== h.id)); if (setPrincipal && amt !== 0) setPrincipal(p => p - amt); }} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -186,7 +192,7 @@ export default function DepositPanel({
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" value={h.date} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].date = e.target.value; setDepositHistory2(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                        <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd2')} onFocus={e => amountFocus(h, 'd2', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd2', depositHistory2, setDepositHistory2)} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
+                        <input type="text" data-col="d2amount" className={`w-full bg-transparent text-right outline-none font-bold px-1 py-2 caret-blue-400 ${cleanNum(h.amount) >= 0 ? 'text-blue-300' : 'text-red-300'}`} value={amountDisplay(h, 'd2')} onFocus={e => amountFocus(h, 'd2', e)} onChange={e => setEditVal(e.target.value)} onBlur={() => amountBlur(h, 'd2', depositHistory2, setDepositHistory2, -1)} onKeyDown={e => handleTableKeyDown(e, 'd2amount')} />
                       </td>
                       {isOverseas && (
                         <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-sky-500">
@@ -200,7 +206,7 @@ export default function DepositPanel({
                           <button onClick={() => openMemoModal(h, 'd2')} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
                         </div>
                       </td>
-                      <td className="py-2 text-center"><button onClick={() => setDepositHistory2(depositHistory2.filter(x => x.id !== h.id))} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
+                      <td className="py-2 text-center"><button onClick={() => { const amt = h.amount || 0; setDepositHistory2(depositHistory2.filter(x => x.id !== h.id)); if (setPrincipal && amt !== 0) setPrincipal(p => p + amt); }} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
                     </tr>
                   ))}
                 </tbody>
