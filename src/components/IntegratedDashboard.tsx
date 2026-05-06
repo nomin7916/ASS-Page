@@ -468,24 +468,24 @@ export default function IntegratedDashboard({
                     <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 z-10">
                       <tr>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">일자</th>
-                        <th className="py-2.5 px-2 text-right border-r border-gray-700 whitespace-nowrap">평가금액</th>
-                        <th className="py-2.5 px-2 text-right border-r border-gray-700 whitespace-nowrap">투자원금</th>
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">평가금액</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">전일대비</th>
-                        <th className="py-2.5 px-2 text-center whitespace-nowrap">원금대비</th>
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">원금대비</th>
+                        <th className="py-2.5 px-2 text-center whitespace-nowrap">투자원금</th>
                       </tr>
                     </thead>
                     <tbody>
                       {intMonthlyHistory.map((h, i) => (
                         <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
                           <td className="py-2 px-2 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
-                          <td className="py-2 px-2 font-bold text-white text-right border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
-                          <td className="py-2 px-2 font-bold text-gray-300 text-right border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal)}</td>
+                          <td className="py-2 px-2 font-bold text-white text-center border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
                           <td className="py-2 px-2 text-center border-r border-gray-700">
                             <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
                           </td>
-                          <td className="py-2 px-2 text-center">
+                          <td className="py-2 px-2 text-center border-r border-gray-700">
                             <span className={`font-bold ${h.monthlyChange > 0 ? 'text-red-400' : h.monthlyChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.monthlyChange)}</span>
                           </td>
+                          <td className="py-2 px-2 font-bold text-gray-300 text-center">{hideAmounts ? '••••••' : formatCurrency(h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal)}</td>
                         </tr>
                       ))}
                       {intMonthlyHistory.length === 0 && (
