@@ -1448,7 +1448,18 @@ export default function App() {
         )}
 
         {!showIntegratedDashboard && (<>
-        <div className="flex items-start gap-0 w-full">
+        <div className="flex items-stretch gap-0 w-full">
+          {/* 계좌 색상 탭 */}
+          {(() => {
+            const color = portfolios.find(p => p.id === activePortfolioId)?.rowColor || '';
+            return color ? (
+              <button title="클릭하여 계좌 색상 제거" className="flex-shrink-0 cursor-pointer border-0 outline-none" style={{ width: '8px', backgroundColor: color }} onClick={() => updatePortfolioColor(activePortfolioId, '')} />
+            ) : (
+              <label title="클릭하여 계좌 색상 설정" className="flex-shrink-0 cursor-pointer" style={{ width: '8px', backgroundColor: '#334155' }}>
+                <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => updatePortfolioColor(activePortfolioId, e.target.value)} />
+              </label>
+            );
+          })()}
           {/* 섹션 콘텐츠 */}
           <div className="flex-1 flex flex-col gap-6 min-w-0" style={{ paddingBottom: '40vh' }}>
         {activePortfolioAccountType === 'gold' ? (
