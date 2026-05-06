@@ -4,7 +4,7 @@ import { Trash2, RefreshCw, Plus } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber,
-  formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, hexToRgba
+  formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, hexToRgba, blendWithDarkBg
 } from '../utils';
 
 const formatUSD = (n) => {
@@ -221,7 +221,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   </td>
 
                   {/* 종목명 */}
-                  <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`}>
+                  <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={item.rowColor ? { backgroundColor: blendWithDarkBg(item.rowColor, 0.35) } : {}}>
                     <div className="flex items-center gap-1 px-1">
                       <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-gray-300 caret-blue-400`} value={item.name} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
                       {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
@@ -364,7 +364,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     </div>
                   </td>
                   {/* 종목명 */}
-                  <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-indigo-950/60 group-hover:bg-indigo-900/30 [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`}>
+                  <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-indigo-950/60 group-hover:bg-indigo-900/30 [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={item.rowColor ? { backgroundColor: blendWithDarkBg(item.rowColor, 0.35) } : {}}>
                     <div className="flex items-center gap-1 px-1">
                       <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-indigo-200 caret-blue-400`} value={item.name} placeholder="펀드명" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
                       {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
