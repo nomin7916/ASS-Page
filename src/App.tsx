@@ -20,6 +20,7 @@ import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSIO
 import AdminPage from './components/AdminPage';
 import AdminPortal from './components/AdminPortal';
 import AdminNotificationModal, { AdminNotification } from './components/AdminNotificationModal';
+import AdminChoiceModal from './components/AdminChoiceModal';
 import IntegratedDashboard from './components/IntegratedDashboard';
 import HistoryPanel from './components/HistoryPanel';
 import DepositPanel from './components/DepositPanel';
@@ -74,6 +75,7 @@ export default function App() {
   const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
+  const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
@@ -187,6 +189,25 @@ export default function App() {
     // 500ms 후 전환 가드 해제 — React가 관리자 데이터로 saveStateRef를 갱신할 충분한 시간
     // 이 시간 동안 visibilitychange 등으로 saveAllToDrive가 호출돼도 차단됨
     setTimeout(() => { adminTransitioningRef.current = false; }, 500);
+  };
+
+  // 포트폴리오 페이지에서 관리자 페이지로 이동 시: Drive 저장 후 선택 팝업 표시
+  const handleGoToAdminPage = async () => {
+    // 다른 사용자 포트폴리오 편집 중일 때는 amber 배너 버튼 사용
+    if (adminViewingAsRef.current) return;
+    if (driveTokenRef.current && saveStateRef.current?.portfolios?.length > 0) {
+      const newUpdatedAt = Date.now();
+      portfolioUpdatedAtRef.current = newUpdatedAt;
+      lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+      const currentPortfolios = buildPortfoliosState();
+      const state = { ...saveStateRef.current, portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+      try {
+        await saveAllToDrive(state, 'manual');
+      } catch {
+        notify('Drive 저장 실패. 계속 진행합니다.', 'error');
+      }
+    }
+    setShowAdminChoiceModal(true);
   };
 
   const [historyLimit, setHistoryLimit] = useState(UI_CONFIG.DEFAULTS.HISTORY_LIMIT);
@@ -1070,6 +1091,11 @@ export default function App() {
       await refreshPrices();
       setIsInitialLoading(false);
 
+      // 관리자 로그인 완료 시 페이지 선택 팝업 표시
+      if (authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+        setShowAdminChoiceModal(true);
+      }
+
       isInitialLoad.current = false;
 
       // STOCK 파일 백그라운드 로드 — await 없이 실행 (앱 시작을 막지 않음)
@@ -1292,7 +1318,7 @@ export default function App() {
 
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return <AdminPage adminEmail={authUser.email} onClose={() => setShowAdminPage(false)} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} />;
+    return <AdminPage adminEmail={authUser.email} onClose={() => { setShowAdminPage(false); setShowAdminChoiceModal(true); }} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} />;
   }
 
   // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)
@@ -1337,6 +1363,13 @@ export default function App() {
       )}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
       <LoadingOverlay visible={isInitialLoading} notificationLog={notificationLog} onDismiss={() => setIsInitialLoading(false)} />
+      {showAdminChoiceModal && !adminViewingAs && (
+        <AdminChoiceModal
+          adminEmail={authUser.email}
+          onSelectPortfolio={() => setShowAdminChoiceModal(false)}
+          onSelectAdmin={() => { setShowAdminChoiceModal(false); setShowAdminPage(true); }}
+        />
+      )}
       {pendingAdminNotifs.length > 0 && (
         <AdminNotificationModal
           notifications={pendingAdminNotifs}
@@ -1374,7 +1407,7 @@ export default function App() {
         <UserInfoBar
           email={authUser.email}
           adminAccessAllowed={adminAccessAllowed}
-          onOpenAdmin={() => setShowAdminPage(true)}
+          onOpenAdmin={handleGoToAdminPage}
           onOpenAdminPortal={() => setShowAdminPortal(true)}
           onOpenPinChange={openPinChange}
           onToggleAdminAccess={() => {
