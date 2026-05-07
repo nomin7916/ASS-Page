@@ -55,14 +55,14 @@ export default function RebalancingPanel({
   return (
     <>
         {showTable && <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-6">
-          <div className="p-5 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:items-center gap-4">
-            <span className="text-green-400 text-xl font-bold shrink-0">리밸런싱</span>
-            <div className="flex-1 flex justify-center gap-8">
+          <div className="px-5 py-3 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:items-start gap-4">
+            <span className="text-green-400 text-xl font-bold shrink-0 pt-1">리밸런싱</span>
+            <div className="flex-1 flex justify-end items-start gap-6">
               {(curCatDonutData.length > 0 || rebalCatDonutData.length > 0) && (
                 <>
                   <div className="flex flex-col items-center">
-                    <div className="text-gray-500 text-[10px] font-semibold mb-0.5">현재 비중</div>
-                    <div style={{ height: 160, width: 160 }}>
+                    <div className="text-gray-500 text-[10px] font-semibold mb-0">현재 비중</div>
+                    <div style={{ height: 120, width: 120 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie data={curCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
@@ -73,8 +73,8 @@ export default function RebalancingPanel({
                     </div>
                   </div>
                   <div className="flex flex-col items-center">
-                    <div className="text-gray-500 text-[10px] font-semibold mb-0.5">리밸런싱 후 비중</div>
-                    <div style={{ height: 160, width: 160 }}>
+                    <div className="text-gray-500 text-[10px] font-semibold mb-0">리밸런싱 후 비중</div>
+                    <div style={{ height: 120, width: 120 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie data={rebalCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
@@ -87,8 +87,8 @@ export default function RebalancingPanel({
                 </>
               )}
             </div>
-            <div className="flex flex-col gap-3 w-full xl:w-[600px] shrink-0">
-              <div className="flex items-center justify-between bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType === 'overseas') { const fx = marketIndicators.usdkrw || 1; return <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(dep)}</span><span className="text-sm text-green-600">{formatCurrency(dep * fx)}</span></div>; } return formatCurrency(dep); })()}</span></div>
+            <div className="flex flex-col gap-2 w-full xl:w-[560px] shrink-0">
+              <div className="flex items-center justify-between bg-gray-800/80 px-4 py-2 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType === 'overseas') { const fx = marketIndicators.usdkrw || 1; return <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(dep)}</span><span className="text-sm text-green-600">{formatCurrency(dep * fx)}</span></div>; } return formatCurrency(dep); })()}</span></div>
               <div className="flex flex-col gap-1">
                 <div className="flex items-stretch bg-gray-900 border border-gray-600 rounded-lg overflow-hidden h-12 shadow-sm">
                   <select className="bg-gray-800 text-gray-200 text-sm font-bold px-3 border-r border-gray-600 outline-none cursor-pointer" value={settings.mode} onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}><option value="rebalance">리밸런싱 (비중 기반)</option><option value="accumulate">적립 (신규 자금 분할)</option></select>
