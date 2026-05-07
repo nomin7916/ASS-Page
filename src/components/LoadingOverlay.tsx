@@ -47,7 +47,10 @@ export default function LoadingOverlay({ visible, notificationLog, onDismiss, au
   return (
     <div
       className="fixed inset-0 flex items-center justify-center"
-      style={{ zIndex: Z.overlay, backgroundColor: BG.overlay }}
+      style={{ zIndex: Z.overlay, backgroundColor: BG.overlay, cursor: 'wait', pointerEvents: 'all' }}
+      onMouseDown={e => e.stopPropagation()}
+      onClick={e => e.stopPropagation()}
+      onKeyDown={e => e.stopPropagation()}
     >
       <div
         className={`w-80 rounded-xl shadow-2xl overflow-hidden border ${BORDER.default}`}

@@ -116,7 +116,8 @@
       "PowerShell($env:PATH = $env:PATH + \";C:\\\\Program Files\\\\nodejs\"; cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1 | Select-Object -Last 25)",
       "Read(//mnt/c/Users/arui1/AppData/Roaming/**)",
       "Read(//mnt/c/Users/arui1/AppData/**)",
-      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) -split \";\" | Where-Object { $_ -ne \"\" } | Select-Object -First 30)"
+      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) -split \";\" | Where-Object { $_ -ne \"\" } | Select-Object -First 30)",
+      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-ChildItem \"C:\\\\Program Files\\\\nodejs\\\\\" -ErrorAction SilentlyContinue | Select-Object Name -First 5; Get-ChildItem \"$env:APPDATA\\\\npm\\\\\" -ErrorAction SilentlyContinue | Select-Object Name -First 5)"
     ]
   }
 }

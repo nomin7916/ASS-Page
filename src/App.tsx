@@ -992,6 +992,9 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
 
+    // 로그인 완료 즉시 오버레이 표시 — Drive 로딩 전 구간부터 차단
+    setIsInitialLoading(true);
+
     const token = authUser.token;
     const userKey = `portfolioState_v5_${authUser.email}`;
     const stockKey = `portfolioStockData_v5_${authUser.email}`;
@@ -1060,8 +1063,7 @@ export default function App() {
       // 총자산현황으로 이동
       setShowIntegratedDashboard(true);
 
-      // 전체 계좌 현재가 일괄 갱신 — 블로킹 오버레이 표시, 탭 순환 없음
-      setIsInitialLoading(true);
+      // 전체 계좌 현재가 일괄 갱신
       await refreshPrices();
       setIsInitialLoading(false);
 

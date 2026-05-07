@@ -37,6 +37,21 @@ export default function RebalancingPanel({
 }) {
   const [editingRatio, setEditingRatio] = useState({});
 
+  const renderCompactPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
+    if (percent < 0.05) return null;
+    const RADIAN = Math.PI / 180;
+    const radius = (innerRadius + outerRadius) * 0.5;
+    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+    const label = name.length > 4 ? name.slice(0, 4) : name;
+    return (
+      <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central" fontSize={9} fontWeight="bold" style={{ pointerEvents: 'none' }}>
+        <tspan x={x} dy="-0.55em">{label}</tspan>
+        <tspan x={x} dy="1.15em">{(percent * 100).toFixed(0)}%</tspan>
+      </text>
+    );
+  };
+
   return (
     <>
         {showTable && <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-6">
