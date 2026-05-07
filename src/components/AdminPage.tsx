@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
+import { LayoutDashboard } from 'lucide-react';
 import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
 
 const COLAB_URL = 'https://colab.research.google.com/drive/1hjCwtVjyKzooWly4AU_ufrMSV87FApzi#scrollTo=fe7b764e';
@@ -18,6 +19,7 @@ interface Props {
   adminEmail: string;
   onClose: () => void;
   onViewUser?: (email: string) => void;
+  onOpenPortal?: () => void;
   userAccessStatus?: Record<string, boolean>;
   switching?: boolean;
   userLastSeen?: Record<string, number>;
@@ -46,7 +48,7 @@ function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessStatus = {}, switching = false, userLastSeen = {}, onRefreshUserSessions }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, onRefreshUserSessions }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
@@ -136,12 +138,24 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
             <h1 className="text-xl font-bold text-white">관리자 페이지</h1>
             <p className="text-gray-500 text-sm mt-0.5">{adminEmail}</p>
           </div>
-          <button
-            onClick={onClose}
-            className="bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
-          >
-            나가기
-          </button>
+          <div className="flex items-center gap-2">
+            {onOpenPortal && (
+              <button
+                onClick={onOpenPortal}
+                className="flex items-center gap-1.5 bg-violet-800 hover:bg-violet-700 text-violet-100 text-sm font-semibold px-3 py-2 rounded-lg transition-colors"
+                title="관리자 포털"
+              >
+                <LayoutDashboard size={14} />
+                포털
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+            >
+              나가기
+            </button>
+          </div>
         </div>
 
         {/* 승인 사용자 목록 */}

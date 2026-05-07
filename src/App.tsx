@@ -1348,7 +1348,7 @@ export default function App() {
     return (
       <AdminPortal
         adminEmail={authUser.email}
-        onClose={() => setShowAdminPortal(false)}
+        onClose={() => { setShowAdminPortal(false); setShowAdminPage(true); }}
         onViewUser={handleAdminViewUser}
         notify={notify}
       />
@@ -1366,7 +1366,7 @@ export default function App() {
       setDriveLoadReady(false);
       setAdminPendingChoice(false);
       setAdminViewUserCtx(null);
-    }} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} />;
   }
 
   // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)
@@ -1441,7 +1441,7 @@ export default function App() {
           email={authUser.email}
           adminAccessAllowed={adminAccessAllowed}
           onOpenAdmin={undefined}
-          onOpenAdminPortal={() => setShowAdminPortal(true)}
+          onOpenAdminPortal={undefined}
           onOpenPinChange={openPinChange}
           onToggleAdminAccess={() => {
             const newVal = !adminAccessAllowed;
