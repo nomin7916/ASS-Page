@@ -184,6 +184,13 @@ export default function App() {
   };
 
   const handleReturnToAdminPage = async () => {
+    // 디바운스 타이머 취소 후 현재 사용자 편집 내용을 Drive에 즉시 저장
+    // (adminTransitioningRef 설정 전에 수행해야 saveAllToDrive 차단 안 됨)
+    if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
+    const snap = saveStateRef.current;
+    if (snap?.portfolios?.length > 0 && driveTokenRef.current) {
+      await saveAllToDrive(snap, 'auto');
+    }
     // Fix 1: 이전 전환 타이머 취소 후 저장 차단 시작
     clearTimeout(adminTransitionTimerRef.current);
     adminTransitioningRef.current = true;
