@@ -31,7 +31,7 @@ export function useIntegratedData({
         const cagr = prin > 0 && evalAmount > 0 && days > 0
           ? days < 365 ? (evalAmount / prin - 1) * 100 : (Math.pow(evalAmount / prin, 365.25 / days) - 1) * 100
           : 0;
-        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: 0, returnRate, cagr, cats: {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '' };
+        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: 0, returnRate, cagr, cats: evalAmount > 0 ? { '현금': evalAmount } : {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '' };
       }
 
       const items = isActive ? portfolio : (p.portfolio || []);
@@ -212,8 +212,17 @@ export function useIntegratedData({
   const intHoldingsDonutData = useMemo(() => {
     const holdingsMap = {};
     portfolios.forEach(p => {
-      if (p.accountType === 'simple') return;
       const isActive = p.id === activePortfolioId;
+      if (p.accountType === 'simple') {
+        const evalAmount = cleanNum(p.evalAmount);
+        if (evalAmount <= 0) return;
+        const accountName = isActive ? title : p.name;
+        const key = accountName || '직접입력';
+        if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '현금', code: '' };
+        holdingsMap[key].value += evalAmount;
+        holdingsMap[key].cost += cleanNum(p.principal) || evalAmount;
+        return;
+      }
       const items = isActive ? portfolio : (p.portfolio || []);
       const fxRate = p.accountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
       const isGold = p.accountType === 'gold';
