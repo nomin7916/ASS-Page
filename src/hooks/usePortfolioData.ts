@@ -19,6 +19,7 @@ export function usePortfolioData({
   rebalanceSortConfig,
   depositSortConfig,
   depositSortConfig2,
+  rebalExtraQty = {},
 }) {
   const totals = useMemo(() => {
     const fxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
@@ -78,7 +79,8 @@ export function usePortfolioData({
         ? cleanNum(item.evalAmount)
         : price * qty;
       let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((accumulateBase * tRatio) / price)) : 0;
-      const expEval = (qty + action) * price;
+      const extraQty = rebalExtraQty[item.id] || 0;
+      const expEval = (qty + action + extraQty) * price;
       const cost = action * price;
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
       return { ...item, curEval, action, cost, expEval, expRatio };
@@ -108,7 +110,7 @@ export function usePortfolioData({
       });
     }
     return data;
-  }, [portfolio, totals.totalEval, settings, rebalanceSortConfig, activePortfolioAccountType, marketIndicators.usdkrw]);
+  }, [portfolio, totals.totalEval, settings, rebalanceSortConfig, activePortfolioAccountType, marketIndicators.usdkrw, rebalExtraQty]);
 
   const allPortfoliosForDividend = useMemo(() =>
     portfolios.map(p =>

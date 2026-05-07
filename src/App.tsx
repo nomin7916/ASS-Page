@@ -621,6 +621,7 @@ export default function App() {
     avgExchangeRate, portfolioStartDate, settings, depositHistory, depositHistory2,
     portfolios, activePortfolioId, history, historyLimit,
     rebalanceSortConfig, depositSortConfig, depositSortConfig2,
+    rebalExtraQty,
   });
 
   const unifiedDates = useMemo(() => {
