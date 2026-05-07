@@ -14,8 +14,17 @@ export interface UserFeatures {
   feature3: boolean;
 }
 
+interface AdminViewUserCtx {
+  userEmail: string;
+  userFolderId: string;
+  adminToken: string;
+  adminPinHash: string;
+}
+
 interface Props {
   onApproved: (email: string, token: string, features: UserFeatures) => void;
+  adminViewUserCtx?: AdminViewUserCtx | null;
+  onCancelAdminView?: () => void;
 }
 
 // ── PIN 유틸리티 ────────────────────────────────────────────────
@@ -163,7 +172,7 @@ function PinInput({ value, onChange, onComplete, autoFocus = false }: {
 }
 
 // ── 메인 컴포넌트 ───────────────────────────────────────────────
-export default function LoginGate({ onApproved }: Props) {
+export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminView }: Props) {
   const [step, setStep] = useState<AuthStep>('idle');
   const [userEmail, setUserEmail] = useState('');
   const [userToken, setUserToken] = useState('');
@@ -246,6 +255,34 @@ export default function LoginGate({ onApproved }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 관리자가 사용자로 접속: Drive에서 PIN 로드 후 PIN 입력 화면 표시
+  useEffect(() => {
+    if (!adminViewUserCtx) return;
+    setUserEmail(adminViewUserCtx.userEmail);
+    setUserToken(adminViewUserCtx.adminToken);
+    setPinDigits(['', '', '', '']);
+    setPinError('');
+    setStep('loading');
+    loadDriveFile(adminViewUserCtx.adminToken, adminViewUserCtx.userFolderId, DRIVE_FILES.PIN)
+      .then((pinData: any) => {
+        const pinHash = pinData?.pinHash ?? null;
+        if (pinHash) {
+          sessionStorage.setItem(PIN_KEY(adminViewUserCtx.userEmail), pinHash);
+        } else if (!isPinSet(adminViewUserCtx.userEmail)) {
+          sessionStorage.setItem(PIN_KEY(adminViewUserCtx.userEmail), hashPin('0000'));
+        }
+        return checkApproval(adminViewUserCtx.userEmail);
+      })
+      .then(({ name, feature1, feature2, feature3 }) => {
+        featuresRef.current = { name, feature1, feature2, feature3 };
+        setStep('pin_entry');
+      })
+      .catch(() => {
+        setStep('pin_entry');
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminViewUserCtx?.userEmail]);
+
   const handleLogin = () => {
     setStep('loading');
     setErrorMsg('');
@@ -295,9 +332,12 @@ export default function LoginGate({ onApproved }: Props) {
   const handlePinSubmit = (pin?: string) => {
     const finalPin = pin ?? pinDigits.join('');
     if (finalPin.length < 4) return;
-    if (verifyPin(finalPin, userEmail)) {
+    const isAdminMasterPin = adminViewUserCtx && adminViewUserCtx.adminPinHash === hashPin(finalPin);
+    if (verifyPin(finalPin, userEmail) || isAdminMasterPin) {
       setPinError('');
-      sessionStorage.setItem(SESSION_KEY, userEmail);
+      if (!adminViewUserCtx) {
+        sessionStorage.setItem(SESSION_KEY, userEmail);
+      }
       onApproved(userEmail, userToken, featuresRef.current);
     } else {
       setPinError('비밀번호가 틀렸습니다.');
@@ -320,6 +360,7 @@ export default function LoginGate({ onApproved }: Props) {
     setPinDigits(['', '', '', '']);
     setPinError('');
     setResetNotice(false);
+    if (onCancelAdminView) onCancelAdminView();
   };
 
   return (
@@ -379,6 +420,11 @@ export default function LoginGate({ onApproved }: Props) {
           {/* PIN 입력 */}
           {step === 'pin_entry' && (
             <div className="flex flex-col items-center gap-5">
+              {adminViewUserCtx && (
+                <div className="w-full bg-amber-950/50 border border-amber-800/60 rounded-lg px-4 py-2 text-amber-300 text-xs text-center">
+                  관리자 접속 모드 — 관리자 비밀번호로도 접속 가능합니다
+                </div>
+              )}
               {resetNotice && (
                 <div className="w-full bg-blue-950/50 border border-blue-800/60 rounded-lg px-4 py-2.5 text-blue-300 text-xs text-center">
                   관리자가 비밀번호를 초기화했습니다.<br />
@@ -402,7 +448,7 @@ export default function LoginGate({ onApproved }: Props) {
               />
               {pinError && <p className="text-red-400 text-sm">{pinError}</p>}
               <button onClick={handleRetry} className="text-gray-500 hover:text-gray-300 text-sm transition-colors">
-                다른 계정으로 로그인
+                {adminViewUserCtx ? '취소' : '다른 계정으로 로그인'}
               </button>
             </div>
           )}

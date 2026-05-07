@@ -78,6 +78,9 @@ export default function App() {
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
   const [adminPendingChoice, setAdminPendingChoice] = useState(false);
   const [driveLoadReady, setDriveLoadReady] = useState(false);
+  const [adminViewUserCtx, setAdminViewUserCtx] = useState<{
+    userEmail: string; userFolderId: string; adminToken: string; adminPinHash: string;
+  } | null>(null);
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
@@ -112,6 +115,13 @@ export default function App() {
     setAuthUser({ email, token });
     setUserFeatures(features);
     driveTokenRef.current = token;
+    // 관리자가 사용자로 접속: 사전 확보된 폴더 ID 주입 → Drive 로드 바로 시작
+    if (adminViewUserCtx && email.toLowerCase() === adminViewUserCtx.userEmail.toLowerCase()) {
+      driveFolderIdRef.current = adminViewUserCtx.userFolderId;
+      setAdminViewUserCtx(null);
+      setDriveLoadReady(true);
+      return;
+    }
     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
       setAdminPendingChoice(true);
     } else {
@@ -120,7 +130,6 @@ export default function App() {
   };
 
   const handleAdminViewUser = (targetEmail: string) => {
-    // Fix 4: 전환 중 중복 호출 차단
     if (adminSwitching) return;
     setAdminSwitching(true);
     setShowAdminPage(false);
@@ -143,10 +152,10 @@ export default function App() {
               setShowAdminPage(true);
               return;
             }
-            const adminToken = resp.access_token;
+            const freshToken = resp.access_token;
             let userFolderId: string | null = null;
             try {
-              userFolderId = await findUserIndexFolder(adminToken, targetEmail);
+              userFolderId = await findUserIndexFolder(freshToken, targetEmail);
             } catch (e) {
               const msg = e instanceof Error ? e.message : '';
               const errMsg =
@@ -165,7 +174,7 @@ export default function App() {
               return;
             }
             try {
-              const stateData = await loadDriveFile(adminToken, userFolderId, DRIVE_FILES.STATE) as any;
+              const stateData = await loadDriveFile(freshToken, userFolderId, DRIVE_FILES.STATE) as any;
               const isAllowed = !stateData || stateData.adminAccessAllowed !== false;
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: isAllowed }));
               if (!isAllowed) {
@@ -177,50 +186,20 @@ export default function App() {
             } catch {
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
             }
-            try {
-              const sessionData = await loadDriveFile(adminToken, userFolderId, DRIVE_FILES.SESSION) as any;
-              if (sessionData?.lastSeen) {
-                setUserLastSeen(prev => ({ ...prev, [targetEmail]: sessionData.lastSeen }));
-              }
-            } catch {}
-            // 전환 전 관리자 자신의 현재 상태를 Drive에 백업
-            const snapBeforeSwitch = saveStateRef.current;
-            if (snapBeforeSwitch?.portfolios?.length > 0 && driveTokenRef.current) {
-              await saveAllToDrive({ ...snapBeforeSwitch, portfolioUpdatedAt: Date.now() }, 'auto');
-            }
-            // 저장 차단 시작 — ref를 먼저 설정해야 saveAllToDrive가 올바른 컨텍스트로 동작
-            clearTimeout(adminTransitionTimerRef.current);
-            adminViewingAsRef.current = targetEmail;         // 1. 플래그 먼저 (ref 기반 가드)
-            adminOwnDriveTokenRef.current = driveTokenRef.current; // 2. 기존 토큰 백업
-            adminTransitioningRef.current = true;
-            isInitialLoad.current = true;
-            driveTokenRef.current = adminToken;              // 3. 새 토큰 설정 (ref 설정 후)
-            setDriveToken(adminToken);
-            setAdminViewingAs(targetEmail);
-            driveFolderIdRef.current = userFolderId;
-            // Fix 2: 이전 사용자 저장 타임스탬프 초기화 — 새 사용자 데이터 저장 누락 방지
-            lastDriveSavedPortfolioUpdatedAtRef.current = 0;
-            const loadResult = await loadFromDrive(adminToken);
-            if (loadResult === null) {
-              notify(`${targetEmail} 데이터 로드 실패. 토큰 충돌 또는 네트워크 오류일 수 있습니다. "← 관리자 페이지" 버튼으로 복귀하세요.`, 'error');
-            }
-            isInitialLoad.current = false;
-            adminTransitionTimerRef.current = setTimeout(() => { adminTransitioningRef.current = false; }, 500);
+            // 관리자 PIN 해시 저장 — LoginGate에서 마스터 키로 사용
+            const adminPinHash = sessionStorage.getItem(PIN_KEY(authUser.email)) || '';
+            // 컨텍스트 설정 후 완전 로그아웃 → LoginGate가 PIN 화면으로 재진입
+            setAdminViewUserCtx({ userEmail: targetEmail, userFolderId, adminToken: freshToken, adminPinHash });
             setAdminSwitching(false);
-            // 세션 타이머는 로드 성공 시에만 시작 (실패 시 타이머 없이 복귀 버튼 대기)
-            if (loadResult !== null) {
-              adminSessionStartAtRef.current = Date.now();
-              if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
-              if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
-              adminSessionWarningTimerRef.current = setTimeout(() => {
-                notify(`${targetEmail} 페이지 접속 후 50분이 경과했습니다. 10분 후 자동으로 관리자 페이지로 복귀합니다.`, 'warning');
-              }, 50 * 60 * 1000);
-              adminSessionExpireTimerRef.current = setTimeout(async () => {
-                if (!adminViewingAsRef.current) return;
-                notify('관리자 접속 시간(1시간)이 만료되었습니다. 데이터를 저장하고 관리자 페이지로 복귀합니다.', 'warning');
-                await handleReturnToAdminPage();
-              }, 60 * 60 * 1000);
-            }
+            sessionStorage.removeItem(SESSION_KEY);
+            setAuthUser(null);
+            driveTokenRef.current = '';
+            setDriveToken('');
+            setDriveLoadReady(false);
+            setAdminPendingChoice(false);
+            setAdminViewingAs(null);
+            adminViewingAsRef.current = null;
+            adminTransitioningRef.current = false;
           },
         });
         client.requestAccessToken({ prompt: '' });
@@ -235,67 +214,6 @@ export default function App() {
     tryInit();
   };
 
-  const handleReturnToAdminPage = async () => {
-    // 세션 타이머 취소 (수동 복귀 또는 자동 만료 둘 다 이 함수로 수렴)
-    if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
-    if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
-    adminSessionWarningTimerRef.current = null;
-    adminSessionExpireTimerRef.current = null;
-    adminSessionStartAtRef.current = 0;
-    setAdminSessionElapsed(0);
-    // 디바운스 타이머 취소 후 현재 사용자 편집 내용을 Drive에 즉시 저장
-    // (adminTransitioningRef 설정 전에 수행해야 saveAllToDrive 차단 안 됨)
-    if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
-    const snap = saveStateRef.current;
-    if (snap?.portfolios?.length > 0 && driveTokenRef.current) {
-      await saveAllToDrive(snap, 'auto');
-    }
-    // 현재 driveTokenRef(사용자 접속용 adminToken)는 신선한 관리자 토큰이므로 그대로 유지
-    // 구 ownToken(로그인 시 백업)은 이미 만료됐을 수 있으므로 폐기
-    clearTimeout(adminTransitionTimerRef.current);
-    adminTransitioningRef.current = true;
-    const ownToken = adminOwnDriveTokenRef.current;
-    adminOwnDriveTokenRef.current = '';
-    isInitialLoad.current = true;
-    // driveTokenRef.current은 현재 신선한 adminToken — 교체하지 않고 유지
-    setDriveToken(driveTokenRef.current);
-    // 구 ownToken이 현재 토큰과 다를 경우에만 폐기
-    if (ownToken && ownToken !== driveTokenRef.current) {
-      fetch(`https://oauth2.googleapis.com/revoke?token=${ownToken}`, { method: 'POST' }).catch(() => {});
-    }
-    // 관리자 자신의 폴더 ID 복원 (재검색 방지) — 없으면 빈 문자열로 재검색 허용
-    driveFolderIdRef.current = ownFolderIdRef.current || '';
-    lastDriveSavedPortfolioUpdatedAtRef.current = 0;
-    const result = await loadFromDrive(driveTokenRef.current);
-    if (result === null && !saveStateRef.current?.portfolios?.length) {
-      notify('관리자 Drive 데이터 로드 실패. 헤더의 Drive 재연결 버튼을 눌러 주세요.', 'error');
-    }
-    adminViewingAsRef.current = null;
-    setAdminViewingAs(null);
-    isInitialLoad.current = false;
-    setShowAdminPage(true);
-    // Fix 1: 타이머 ID 저장
-    adminTransitionTimerRef.current = setTimeout(() => { adminTransitioningRef.current = false; }, 500);
-  };
-
-  // 포트폴리오 페이지에서 관리자 페이지로 이동 시: Drive 저장 후 선택 팝업 표시
-  const handleGoToAdminPage = async () => {
-    if (adminViewingAsRef.current) return;
-    if (driveTokenRef.current && saveStateRef.current?.portfolios?.length > 0) {
-      if (driveSaveTimerRef.current) { clearTimeout(driveSaveTimerRef.current); driveSaveTimerRef.current = null; }
-      const newUpdatedAt = Date.now();
-      portfolioUpdatedAtRef.current = newUpdatedAt;
-      lastDriveSavedPortfolioUpdatedAtRef.current = 0;
-      const currentPortfolios = buildPortfoliosState();
-      const state = { ...saveStateRef.current, portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
-      try {
-        await saveAllToDrive(state, 'manual');
-      } catch {
-        notify('Drive 저장 실패. 계속 진행합니다.', 'error');
-      }
-    }
-    setShowAdminChoiceModal(true);
-  };
 
   const handleRefreshUserSessions = async (emails: string[]) => {
     const token = driveTokenRef.current;
@@ -429,6 +347,9 @@ export default function App() {
       adminViewingAsRef.current = null;
       adminTransitioningRef.current = false;
       adminOwnDriveTokenRef.current = '';
+      setDriveLoadReady(false);
+      setAdminPendingChoice(false);
+      setAdminViewUserCtx(null);
       if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
       if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
       adminSessionWarningTimerRef.current = null;
@@ -1218,17 +1139,6 @@ export default function App() {
     return () => clearTimeout(bgTimer);
   }, [authUser, driveLoadReady]);
 
-  // 관리자 세션 경과 시간 — 1초마다 갱신
-  useEffect(() => {
-    if (!adminViewingAs) return;
-    const interval = setInterval(() => {
-      if (adminSessionStartAtRef.current) {
-        setAdminSessionElapsed(Math.floor((Date.now() - adminSessionStartAtRef.current) / 1000));
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [adminViewingAs]);
-
   // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
   useEffect(() => {
     if (!authUser || !driveTokenRef.current || isInitialLoad.current) return;
@@ -1419,7 +1329,7 @@ export default function App() {
 
   // 로그인 전: LoginGate 표시
   if (!authUser) {
-    return <LoginGate onApproved={handleLoginApproved} />;
+    return <LoginGate onApproved={handleLoginApproved} adminViewUserCtx={adminViewUserCtx} onCancelAdminView={() => setAdminViewUserCtx(null)} />;
   }
 
   // 관리자 로그인 직후 — Drive 로딩 전 페이지 선택
@@ -1447,7 +1357,16 @@ export default function App() {
 
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return <AdminPage adminEmail={authUser.email} onClose={() => { setShowAdminPage(false); setShowAdminChoiceModal(true); }} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} />;
+    return <AdminPage adminEmail={authUser.email} onClose={() => {
+      setShowAdminPage(false);
+      sessionStorage.removeItem(SESSION_KEY);
+      setAuthUser(null);
+      driveTokenRef.current = '';
+      setDriveToken('');
+      setDriveLoadReady(false);
+      setAdminPendingChoice(false);
+      setAdminViewUserCtx(null);
+    }} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} />;
   }
 
   // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)
@@ -1475,32 +1394,9 @@ export default function App() {
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
-      {adminViewingAs && (
-        <div className="fixed top-0 left-0 right-0 z-[200] bg-amber-950/95 border-b border-amber-700/60 px-4 py-2 flex items-center justify-between backdrop-blur-sm">
-          <span className="text-amber-200 text-xs flex items-center gap-2">
-            <span className="text-amber-400">✏️ 편집 모드</span>
-            <span className="text-amber-100 font-medium">{adminViewingAs}</span>
-            <span className="text-amber-600 text-[10px]">— 저장 시 해당 사용자 Drive에 반영됩니다</span>
-            <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${
-              adminSessionElapsed >= 3000
-                ? 'bg-orange-900/60 text-orange-300'
-                : 'bg-amber-900/40 text-amber-500'
-            }`}>
-              {String(Math.floor(adminSessionElapsed / 60)).padStart(2, '0')}:{String(adminSessionElapsed % 60).padStart(2, '0')}
-              {adminSessionElapsed >= 3000 && ' ⚠️'}
-            </span>
-          </span>
-          <button
-            onClick={handleReturnToAdminPage}
-            className="text-amber-300 hover:text-white text-xs font-medium px-3 py-1 rounded border border-amber-700 hover:border-amber-400 transition-colors bg-amber-900/60 hover:bg-amber-800/60"
-          >
-            ← 관리자 페이지
-          </button>
-        </div>
-      )}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
       <LoadingOverlay visible={isInitialLoading} notificationLog={notificationLog} onDismiss={() => setIsInitialLoading(false)} />
-      {showAdminChoiceModal && !adminViewingAs && (
+      {showAdminChoiceModal && (
         <AdminChoiceModal
           adminEmail={authUser.email}
           onSelectPortfolio={() => { setShowAdminChoiceModal(false); if (!driveLoadReady) setDriveLoadReady(true); }}
@@ -1544,7 +1440,7 @@ export default function App() {
         <UserInfoBar
           email={authUser.email}
           adminAccessAllowed={adminAccessAllowed}
-          onOpenAdmin={handleGoToAdminPage}
+          onOpenAdmin={undefined}
           onOpenAdminPortal={() => setShowAdminPortal(true)}
           onOpenPinChange={openPinChange}
           onToggleAdminAccess={() => {
@@ -1564,6 +1460,9 @@ export default function App() {
             setAdminViewingAs(null);
             adminViewingAsRef.current = null;
             adminTransitioningRef.current = false;
+            setDriveLoadReady(false);
+            setAdminPendingChoice(false);
+            setAdminViewUserCtx(null);
             if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
             if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
             adminSessionStartAtRef.current = 0;
