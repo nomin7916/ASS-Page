@@ -402,16 +402,10 @@ export function useStockData({
 
       const history = p.history || [];
       const idx = history.findIndex(h => h.date === today);
-      let newHistory;
-      if (idx >= 0) {
-        if (Math.abs(history[idx].evalAmount - totalEval) < 1) return { ...p, portfolio: updatedItems };
-        // 직전 기록 대비 3배 이상 차이면 이상값으로 간주하고 히스토리 업데이트 건너뜀
-        const prevRef = history[idx].adjustedAmount || history[idx].evalAmount;
-        if (prevRef > 0 && (totalEval > prevRef * 3 || totalEval < prevRef / 3)) return { ...p, portfolio: updatedItems };
-        newHistory = history.map((h, i) => i === idx ? { ...h, evalAmount: totalEval, adjustedAmount: totalEval, actualEvalAmount: totalEval } : h);
-      } else {
-        newHistory = [...history, { date: today, evalAmount: totalEval, principal: cleanNum(p.principal) || 0, isFixed: false }];
-      }
+      // 오늘 항목이 이미 있으면 가격만 업데이트, 히스토리는 수정하지 않음
+      if (idx >= 0) return { ...p, portfolio: updatedItems };
+      // 오늘 항목이 없을 때만 새로 추가
+      const newHistory = [...history, { date: today, evalAmount: totalEval, principal: cleanNum(p.principal) || 0, isFixed: false }];
       return { ...p, portfolio: updatedItems, history: newHistory };
     }));
 

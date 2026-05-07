@@ -40,15 +40,8 @@ export const useHistoryBackfill = ({
       nonActiveHistRecordedRef.current[key] = summary.currentEval;
       const hist = p.history || [];
       const idx = hist.findIndex(h => h.date === today);
-      if (idx >= 0) {
-        if (hist[idx].evalAmount === summary.currentEval) return p;
-        // 직전 기록 대비 3배 이상 차이면 이상값으로 간주하고 건너뜀
-        const prevRef = hist[idx].adjustedAmount || hist[idx].evalAmount;
-        if (prevRef > 0 && (summary.currentEval > prevRef * 3 || summary.currentEval < prevRef / 3)) return p;
-        const newHist = [...hist];
-        newHist[idx] = { ...newHist[idx], evalAmount: summary.currentEval, adjustedAmount: summary.currentEval, actualEvalAmount: summary.currentEval, principal: summary.principal };
-        return { ...p, history: newHist };
-      }
+      // 오늘 항목이 이미 있으면 수정하지 않음
+      if (idx >= 0) return p;
       return { ...p, history: [...hist, { date: today, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
     }));
   }, [portfolioSummaries, activePortfolioId]);
