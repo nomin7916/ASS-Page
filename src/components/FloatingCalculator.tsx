@@ -5,7 +5,7 @@ import { X, Trash2 } from 'lucide-react';
 const CALC_Z = 1050;
 
 const fmt = (n) => {
-  if (!isFinite(n)) return '오류';
+  if (isNaN(n) || !isFinite(n)) return '오류';
   return String(parseFloat(n.toPrecision(10)));
 };
 
@@ -17,11 +17,21 @@ const fmtDisplay = (s) => {
   return n.toLocaleString('ko-KR', { maximumFractionDigits: 10 });
 };
 
+const factorial = (n) => {
+  const ni = Math.round(n);
+  if (ni < 0 || ni > 170 || !Number.isFinite(ni)) return NaN;
+  if (ni <= 1) return 1;
+  let r = 1;
+  for (let i = 2; i <= ni; i++) r *= i;
+  return r;
+};
+
 const compute = (a, b, op) => {
   if (op === '+') return a + b;
   if (op === '−') return a - b;
   if (op === '×') return a * b;
   if (op === '÷') return b !== 0 ? a / b : NaN;
+  if (op === 'xⁿ') return Math.pow(a, b);
   return b;
 };
 
@@ -32,8 +42,13 @@ export default function FloatingCalculator({ isOpen, onClose }) {
   const [justEvaled, setJustEvaled] = useState(false);
   const [history, setHistory] = useState([]);
   const [pos, setPos] = useState({ x: Math.max(10, window.innerWidth - 330), y: 90 });
+  const [isScientific, setIsScientific] = useState(false);
+  const [isDeg, setIsDeg] = useState(true);
   const dragging = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
+
+  const toRad = (n) => isDeg ? n * Math.PI / 180 : n;
+  const fromRad = (n) => isDeg ? n * 180 / Math.PI : n;
 
   const onDragStart = useCallback((cx, cy) => {
     dragging.current = true;
@@ -75,6 +90,11 @@ export default function FloatingCalculator({ isOpen, onClose }) {
     if (!display.includes('.')) setDisplay(prev => prev + '.');
   };
 
+  const handleBackspace = () => {
+    if (display === '오류' || justEvaled) { setDisplay('0'); setJustEvaled(false); return; }
+    setDisplay(prev => prev.length > 1 ? prev.slice(0, -1) : '0');
+  };
+
   const clear = () => {
     setDisplay('0'); setPendingOp(null); setPendingVal(null); setJustEvaled(false);
   };
@@ -89,13 +109,23 @@ export default function FloatingCalculator({ isOpen, onClose }) {
     if (!isNaN(n)) setDisplay(fmt(n / 100));
   };
 
+  const applyUnary = (fn) => {
+    if (display === '오류') return;
+    const n = parseFloat(display);
+    if (isNaN(n)) return;
+    let result;
+    try { result = fn(n); } catch { result = NaN; }
+    setDisplay(isFinite(result) && !isNaN(result) ? fmt(result) : '오류');
+    setJustEvaled(true);
+  };
+
   const applyOp = (op) => {
     if (display === '오류') return;
     const val = parseFloat(display);
     if (pendingOp && !justEvaled) {
       const res = compute(pendingVal, val, pendingOp);
       setDisplay(fmt(res));
-      setPendingVal(isFinite(res) ? res : val);
+      setPendingVal(isFinite(res) && !isNaN(res) ? res : val);
     } else {
       setPendingVal(val);
     }
@@ -116,32 +146,125 @@ export default function FloatingCalculator({ isOpen, onClose }) {
     setJustEvaled(true);
   };
 
+  const insertConstant = (val) => {
+    setDisplay(fmt(val));
+    setJustEvaled(true);
+  };
+
+  // 키보드 입력 핸들러
+  useEffect(() => {
+    if (!isOpen) return;
+    const handler = (e) => {
+      // 텍스트 입력 중일 때는 무시
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+
+      if (e.key >= '0' && e.key <= '9') { e.preventDefault(); inputDigit(e.key); }
+      else if (e.key === '.' || e.key === ',') { e.preventDefault(); inputDot(); }
+      else if (e.key === '+') { e.preventDefault(); applyOp('+'); }
+      else if (e.key === '-') { e.preventDefault(); applyOp('−'); }
+      else if (e.key === '*') { e.preventDefault(); applyOp('×'); }
+      else if (e.key === '/') { e.preventDefault(); applyOp('÷'); }
+      else if (e.key === 'Enter' || e.key === '=') { e.preventDefault(); evaluate(); }
+      else if (e.key === 'Backspace') { e.preventDefault(); handleBackspace(); }
+      else if (e.key === 'Escape') { e.preventDefault(); clear(); }
+      else if (e.key === '%') { e.preventDefault(); percent(); }
+      else if (e.key === '^') { e.preventDefault(); if (isScientific) applyOp('xⁿ'); }
+      // 공학용 단축키 (Ctrl/Meta 없을 때만)
+      else if (isScientific && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === 's') { e.preventDefault(); applyUnary(n => Math.sin(toRad(n))); }
+        else if (e.key === 'c') { e.preventDefault(); applyUnary(n => Math.cos(toRad(n))); }
+        else if (e.key === 't') { e.preventDefault(); applyUnary(n => Math.tan(toRad(n))); }
+        else if (e.key === 'l') { e.preventDefault(); applyUnary(Math.log); }
+        else if (e.key === 'L') { e.preventDefault(); applyUnary(Math.log10); }
+        else if (e.key === 'r') { e.preventDefault(); applyUnary(Math.sqrt); }
+        else if (e.key === 'p') { e.preventDefault(); insertConstant(Math.PI); }
+        else if (e.key === 'q') { e.preventDefault(); applyUnary(n => n * n); }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isOpen, display, pendingOp, pendingVal, justEvaled, isScientific, isDeg]);
+
   if (!isOpen) return null;
 
   const btnCls = (extra) =>
     `flex items-center justify-center rounded-full h-[62px] text-[22px] font-medium select-none transition-all active:scale-95 focus:outline-none ${extra}`;
+
+  const sciBtnCls = (extra) =>
+    `flex items-center justify-center rounded-lg h-9 text-[11px] font-medium select-none transition-all active:scale-90 focus:outline-none ${extra}`;
+
+  const sciRows = [
+    [
+      { label: 'sin', title: 's', action: () => applyUnary(n => Math.sin(toRad(n))) },
+      { label: 'cos', title: 'c', action: () => applyUnary(n => Math.cos(toRad(n))) },
+      { label: 'tan', title: 't', action: () => applyUnary(n => Math.tan(toRad(n))) },
+      { label: 'asin', action: () => applyUnary(n => fromRad(Math.asin(n))) },
+      { label: 'acos', action: () => applyUnary(n => fromRad(Math.acos(n))) },
+    ],
+    [
+      { label: 'atan', action: () => applyUnary(n => fromRad(Math.atan(n))) },
+      { label: 'log', title: 'L', action: () => applyUnary(Math.log10) },
+      { label: 'ln', title: 'l', action: () => applyUnary(Math.log) },
+      { label: '√', title: 'r', action: () => applyUnary(Math.sqrt) },
+      { label: 'x²', title: 'q', action: () => applyUnary(n => n * n) },
+    ],
+    [
+      { label: 'xⁿ', title: '^', action: () => applyOp('xⁿ'), isOp: true },
+      { label: 'π', title: 'p', action: () => insertConstant(Math.PI) },
+      { label: 'e', action: () => insertConstant(Math.E) },
+      { label: '1/x', action: () => applyUnary(n => 1 / n) },
+      { label: 'n!', action: () => applyUnary(factorial) },
+    ],
+  ];
 
   return (
     <div
       style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: CALC_Z, width: 296, touchAction: 'none' }}
       className="rounded-2xl shadow-2xl overflow-hidden border border-gray-600/60"
     >
-      {/* 타이틀 바 (드래그 핸들) */}
+      {/* 타이틀 바 */}
       <div
         className="flex items-center justify-between bg-gray-900 px-3 py-2 cursor-move border-b border-gray-700/40 select-none"
         onMouseDown={(e) => { onDragStart(e.clientX, e.clientY); e.preventDefault(); }}
         onTouchStart={(e) => onDragStart(e.touches[0].clientX, e.touches[0].clientY)}
       >
         <span className="text-gray-200 text-sm font-semibold">🧮 계산기</span>
-        <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded transition-colors">
-          <X size={14} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {isScientific && (
+            <button
+              onClick={() => setIsDeg(v => !v)}
+              title="각도 단위 전환 (DEG=도 / RAD=라디안)"
+              className={`text-[10px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+                isDeg
+                  ? 'text-sky-300 border-sky-600/50 bg-sky-900/20 hover:bg-sky-900/40'
+                  : 'text-violet-300 border-violet-600/50 bg-violet-900/20 hover:bg-violet-900/40'
+              }`}
+            >
+              {isDeg ? 'DEG' : 'RAD'}
+            </button>
+          )}
+          <button
+            onClick={() => setIsScientific(v => !v)}
+            title="공학용 계산기 전환"
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+              isScientific
+                ? 'text-orange-300 border-orange-600/50 bg-orange-900/20 hover:bg-orange-900/40'
+                : 'text-gray-400 border-gray-600/50 hover:text-gray-200 hover:border-gray-500 hover:bg-gray-800/50'
+            }`}
+          >
+            공학
+          </button>
+          <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded transition-colors">
+            <X size={14} />
+          </button>
+        </div>
       </div>
 
       {/* 디스플레이 */}
       <div className="bg-black px-4 pt-2 pb-3">
         <div className="text-gray-500 text-xs h-5 text-right truncate">
-          {pendingOp != null ? `${fmtDisplay(fmt(pendingVal))} ${pendingOp}` : ' '}
+          {pendingOp != null ? `${fmtDisplay(fmt(pendingVal))} ${pendingOp}` : ' '}
         </div>
         <div
           className="text-white text-right font-light select-none overflow-hidden"
@@ -154,37 +277,60 @@ export default function FloatingCalculator({ isOpen, onClose }) {
         </div>
       </div>
 
-      {/* 버튼 영역 */}
-      <div className="bg-black px-3 pb-3 space-y-2">
-        {/* Row 1 */}
+      {/* 공학용 버튼 */}
+      {isScientific && (
+        <div className="bg-gray-950 px-3 pb-2 pt-1.5 border-b border-gray-800/60 space-y-1.5">
+          {sciRows.map((row, ri) => (
+            <div key={ri} className="grid grid-cols-5 gap-1.5">
+              {row.map((btn, bi) => (
+                <button
+                  key={bi}
+                  onClick={btn.action}
+                  title={btn.title ? `단축키: ${btn.title}` : undefined}
+                  className={sciBtnCls(
+                    btn.isOp && pendingOp === 'xⁿ' && justEvaled
+                      ? 'bg-orange-900/60 hover:bg-orange-800/60 text-orange-200 ring-1 ring-orange-500/50'
+                      : 'bg-gray-800 hover:bg-gray-700 text-sky-200 hover:text-white'
+                  )}
+                >
+                  {btn.label}
+                </button>
+              ))}
+            </div>
+          ))}
+          {/* 키보드 단축키 힌트 */}
+          <div className="text-[9px] text-gray-600 text-right pt-0.5">
+            s·c·t·l·L·r·q·p·^ 키 사용 가능
+          </div>
+        </div>
+      )}
+
+      {/* 기본 버튼 */}
+      <div className="bg-black px-3 pb-3 pt-3 space-y-2">
         <div className="grid grid-cols-4 gap-2">
           <button onClick={clear} className={btnCls('bg-gray-400 hover:bg-gray-300 text-black')}>AC</button>
           <button onClick={toggleSign} className={btnCls('bg-gray-400 hover:bg-gray-300 text-black')}>+/-</button>
           <button onClick={percent} className={btnCls('bg-gray-400 hover:bg-gray-300 text-black')}>%</button>
-          <button onClick={() => applyOp('÷')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '÷' && justEvaled ? 'ring-2 ring-white/50' : ''}`)}>÷</button>
+          <button onClick={() => applyOp('÷')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '÷' && justEvaled ? 'ring-2 ring-white/40' : ''}`)}>÷</button>
         </div>
-        {/* Row 2 */}
         <div className="grid grid-cols-4 gap-2">
           <button onClick={() => inputDigit('7')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>7</button>
           <button onClick={() => inputDigit('8')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>8</button>
           <button onClick={() => inputDigit('9')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>9</button>
-          <button onClick={() => applyOp('×')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '×' && justEvaled ? 'ring-2 ring-white/50' : ''}`)}>×</button>
+          <button onClick={() => applyOp('×')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '×' && justEvaled ? 'ring-2 ring-white/40' : ''}`)}>×</button>
         </div>
-        {/* Row 3 */}
         <div className="grid grid-cols-4 gap-2">
           <button onClick={() => inputDigit('4')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>4</button>
           <button onClick={() => inputDigit('5')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>5</button>
           <button onClick={() => inputDigit('6')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>6</button>
-          <button onClick={() => applyOp('−')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '−' && justEvaled ? 'ring-2 ring-white/50' : ''}`)}>−</button>
+          <button onClick={() => applyOp('−')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '−' && justEvaled ? 'ring-2 ring-white/40' : ''}`)}>−</button>
         </div>
-        {/* Row 4 */}
         <div className="grid grid-cols-4 gap-2">
           <button onClick={() => inputDigit('1')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>1</button>
           <button onClick={() => inputDigit('2')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>2</button>
           <button onClick={() => inputDigit('3')} className={btnCls('bg-gray-700 hover:bg-gray-600 text-white')}>3</button>
-          <button onClick={() => applyOp('+')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '+' && justEvaled ? 'ring-2 ring-white/50' : ''}`)}>+</button>
+          <button onClick={() => applyOp('+')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '+' && justEvaled ? 'ring-2 ring-white/40' : ''}`)}>+</button>
         </div>
-        {/* Row 5 — 0 버튼 넓게 */}
         <div className="flex gap-2">
           <button
             onClick={() => inputDigit('0')}
