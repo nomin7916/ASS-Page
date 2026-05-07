@@ -84,6 +84,7 @@ export default function App() {
   const adminViewingAsRef = useRef<string | null>(null);
   const adminTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [adminSwitching, setAdminSwitching] = useState(false);
+  const [userLastSeen, setUserLastSeen] = useState<Record<string, number>>({});
   const {
     showPinChange, setShowPinChange,
     pinChangeSaving, setPinChangeSaving,
@@ -139,6 +140,12 @@ export default function App() {
             } catch {
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
             }
+            try {
+              const sessionData = await loadDriveFile(adminToken, userFolderId, DRIVE_FILES.SESSION) as any;
+              if (sessionData?.lastSeen) {
+                setUserLastSeen(prev => ({ ...prev, [targetEmail]: sessionData.lastSeen }));
+              }
+            } catch {}
             // 전환 전 관리자 자신의 현재 상태를 Drive에 백업
             const snapBeforeSwitch = saveStateRef.current;
             if (snapBeforeSwitch?.portfolios?.length > 0 && driveTokenRef.current) {
@@ -223,6 +230,21 @@ export default function App() {
       }
     }
     setShowAdminChoiceModal(true);
+  };
+
+  const handleRefreshUserSessions = async (emails: string[]) => {
+    const token = driveTokenRef.current;
+    if (!token) return;
+    for (const email of emails) {
+      try {
+        const folderId = await findUserIndexFolder(token, email);
+        if (!folderId) continue;
+        const sessionData = await loadDriveFile(token, folderId, DRIVE_FILES.SESSION) as any;
+        if (sessionData?.lastSeen) {
+          setUserLastSeen(prev => ({ ...prev, [email]: sessionData.lastSeen }));
+        }
+      } catch {}
+    }
   };
 
   const [historyLimit, setHistoryLimit] = useState(UI_CONFIG.DEFAULTS.HISTORY_LIMIT);
@@ -321,16 +343,24 @@ export default function App() {
     driveTokenRef, driveFolderIdRef, tokenClientRef, pendingTokenResolveRef,
     isInitialLoad, driveSaveTimerRef, portfolioUpdatedAtRef, prevPortfolioStructureRef,
     lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
-    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef,
+    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef, ownFolderIdRef,
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
+    initSession,
   } = useDriveSync({
     authUser,
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
     applyStockData: (...args) => applyStockDataRef.current?.(...args),
     applyBackupData: (...args) => applyBackupDataRef.current?.(...args),
     accountChartStatesRef, saveStateRef, adminViewingAsRef, adminOwnDriveTokenRef, notify, confirm,
+    onForceLogout: () => {
+      sessionStorage.removeItem('appSessionId');
+      sessionStorage.removeItem('appSessionLoginAt');
+      setAuthUser(null);
+      driveTokenRef.current = '';
+      setDriveToken('');
+    },
   });
 
   // ── useMarketData 훅 ──
@@ -1106,6 +1136,9 @@ export default function App() {
       await refreshPrices();
       setIsInitialLoading(false);
 
+      // 세션 초기화 (단일 세션 강제 적용)
+      initSession();
+
       // 관리자 로그인 완료 시 페이지 선택 팝업 표시
       if (authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
         setShowAdminChoiceModal(true);
@@ -1333,7 +1366,7 @@ export default function App() {
 
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return <AdminPage adminEmail={authUser.email} onClose={() => { setShowAdminPage(false); setShowAdminChoiceModal(true); }} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} switching={adminSwitching} />;
+    return <AdminPage adminEmail={authUser.email} onClose={() => { setShowAdminPage(false); setShowAdminChoiceModal(true); }} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} />;
   }
 
   // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)

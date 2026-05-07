@@ -22,6 +22,7 @@ export const DRIVE_FILES = {
   VERSION:           'portfolio_version.json', // 폴링용 경량 버전 파일 (~50 bytes)
   DIVIDEND_TAX:      'dividend_tax_history.json',
   NOTIFICATION_LOG:  'notification_log.json',  // 알림 이력 (기기 간 공유)
+  SESSION:           'portfolio_session.json',  // 세션 관리 (단일 기기 접속 강제)
 };
 
 // 동시 호출 중복 방지 — 같은 토큰+이메일 조합에 대해 한 번만 검색/생성

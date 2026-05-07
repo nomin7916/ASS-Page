@@ -20,6 +20,8 @@ interface Props {
   onViewUser?: (email: string) => void;
   userAccessStatus?: Record<string, boolean>;
   switching?: boolean;
+  userLastSeen?: Record<string, number>;
+  onRefreshUserSessions?: (emails: string[]) => Promise<void>;
 }
 
 // Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
@@ -35,9 +37,19 @@ async function fetchApprovedUsers(): Promise<ApprovedUser[]> {
   }
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessStatus = {}, switching = false }: Props) {
+function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
+  const diff = Date.now() - ts;
+  const isOnline = diff < 5 * 60 * 1000;
+  if (isOnline) return { label: '접속 중', isOnline: true };
+  if (diff < 60 * 60 * 1000) return { label: `${Math.floor(diff / 60000)}분 전`, isOnline: false };
+  if (diff < 24 * 60 * 60 * 1000) return { label: `${Math.floor(diff / 3600000)}시간 전`, isOnline: false };
+  return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
+}
+
+export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessStatus = {}, switching = false, userLastSeen = {}, onRefreshUserSessions }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sessionRefreshing, setSessionRefreshing] = useState(false);
 
   // 공지 보내기 상태
   const [notifTarget, setNotifTarget] = useState('__all__');
@@ -46,10 +58,21 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<'success' | 'error' | null>(null);
 
+  const triggerSessionRefresh = async (userList: ApprovedUser[]) => {
+    if (!onRefreshUserSessions || sessionRefreshing) return;
+    setSessionRefreshing(true);
+    const emails = userList
+      .filter(u => u.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase())
+      .map(u => u.email);
+    await onRefreshUserSessions(emails);
+    setSessionRefreshing(false);
+  };
+
   useEffect(() => {
     fetchApprovedUsers().then(u => {
       setUsers(u);
       setLoading(false);
+      triggerSessionRefresh(u);
     });
   }, []);
 
@@ -58,6 +81,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
     const u = await fetchApprovedUsers();
     setUsers(u);
     setLoading(false);
+    triggerSessionRefresh(u);
   };
 
   const handleSendNotification = async () => {
@@ -129,13 +153,21 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
                 {!loading && `(${users.length}명)`}
               </span>
             </h2>
-            <button
-              onClick={handleRefresh}
-              disabled={loading}
-              className="text-gray-400 hover:text-white text-sm transition-colors disabled:opacity-50"
-            >
-              새로고침
-            </button>
+            <div className="flex items-center gap-3">
+              {sessionRefreshing && (
+                <span className="flex items-center gap-1.5 text-xs text-sky-400">
+                  <span className="w-3 h-3 border border-sky-500 border-t-transparent rounded-full animate-spin" />
+                  접속현황 조회 중
+                </span>
+              )}
+              <button
+                onClick={handleRefresh}
+                disabled={loading || sessionRefreshing}
+                className="text-gray-400 hover:text-white text-sm transition-colors disabled:opacity-50"
+              >
+                새로고침
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -175,6 +207,19 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
                         {userAccessStatus[u.email] === false && (
                           <span className="text-xs bg-red-900/60 text-red-300 border border-red-700/50 px-2 py-0.5 rounded-full">차단</span>
                         )}
+                        {userLastSeen[u.email] && (() => {
+                          const { label, isOnline } = formatLastSeen(userLastSeen[u.email]);
+                          return (
+                            <span className={`text-xs px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                              isOnline
+                                ? 'bg-green-950/70 text-green-300 border-green-700/50'
+                                : 'bg-gray-800/60 text-gray-400 border-gray-700/40'
+                            }`}>
+                              <span className={`inline-block w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-green-400' : 'bg-gray-500'}`} />
+                              {label}
+                            </span>
+                          );
+                        })()}
                         {onViewUser && (
                           <button
                             onClick={() => !switching && onViewUser(u.email)}

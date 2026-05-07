@@ -36,6 +36,7 @@ interface UseDriveSyncParams {
   adminOwnDriveTokenRef: React.MutableRefObject<string>;
   notify: (text: string, type?: string) => void;
   confirm: (message: string, confirmLabel?: string) => Promise<boolean>;
+  onForceLogout: () => void;
 }
 
 export function useDriveSync({
@@ -49,6 +50,7 @@ export function useDriveSync({
   adminOwnDriveTokenRef,
   notify,
   confirm,
+  onForceLogout,
 }: UseDriveSyncParams) {
   // ── Drive 상태 ──
   const [driveStatus, setDriveStatus] = useState(''); // '' | 'auth_needed' | 'loading' | 'saving' | 'saved' | 'error'
@@ -79,6 +81,9 @@ export function useDriveSync({
   const lastAdminAccessAllowedRef = useRef<boolean | null>(null);
   // 관리자 뷰 전환 중(로드 완료 후 React 렌더 전) 저장 차단 — saveAllToDrive 가드에서 사용
   const adminTransitioningRef = useRef(false);
+  // 세션 관리 — 단일 기기 강제 로그아웃
+  const sessionIdRef = useRef('');           // 이 기기의 세션 ID
+  const ownFolderIdRef = useRef('');         // 관리자가 타인 페이지 볼 때도 자신의 폴더 ID 유지
 
   // ── Drive 폴더 ID 캐시 확보 ──
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -86,6 +91,28 @@ export function useDriveSync({
     const id = await getOrCreateIndexFolder(token, authUser?.email || '');
     driveFolderIdRef.current = id;
     return id;
+  };
+
+  // ── 세션 초기화 — 로그인 직후 1회 호출, Drive에 세션 파일 기록 ──
+  // 다른 기기에서 새로 로그인하면 세션 파일이 덮어써져 기존 기기가 자동 로그아웃됨
+  const initSession = async () => {
+    try {
+      const token = driveTokenRef.current;
+      const folderId = driveFolderIdRef.current;
+      if (!token || !folderId) return;
+      ownFolderIdRef.current = folderId;
+      const sid = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const loginAt = Date.now();
+      sessionIdRef.current = sid;
+      sessionStorage.setItem('appSessionId', sid);
+      sessionStorage.setItem('appSessionLoginAt', String(loginAt));
+      await saveDriveFile(token, folderId, DRIVE_FILES.SESSION, {
+        sessionId: sid,
+        loginAt,
+        lastSeen: loginAt,
+        device: navigator.userAgent.slice(0, 120),
+      });
+    } catch {}
   };
 
   // ── Drive에서 데이터 불러오기 → applyStateData 콜백으로 state 적용 ──
@@ -275,16 +302,33 @@ export function useDriveSync({
   // ── Drive version 파일 확인 → 최신이면 전체 STATE 로드 ──
   const checkAndSyncFromDrive = async () => {
     if (!driveTokenRef.current || isInitialLoad.current) return;
-    // SAVING 중에는 Drive 로드 차단 — 저장 중인 데이터를 덮어쓰는 경쟁 방지
     if (syncStatusRef.current === 'saving') return;
+    if (adminTransitioningRef.current) return;
     if (driveCheckInProgressRef.current) return;
     driveCheckInProgressRef.current = true;
     lastDriveCheckAtRef.current = Date.now();
     try {
+      // ── 세션 유효성 검증 — 자신의 폴더/토큰으로 확인 (타인 열람 중에도 동작)
+      const sessionToken = adminViewingAsRef.current ? adminOwnDriveTokenRef.current : driveTokenRef.current;
+      const sessionFolderId = ownFolderIdRef.current || driveFolderIdRef.current;
+      if (sessionToken && sessionFolderId && sessionIdRef.current) {
+        try {
+          const sessionData = await loadDriveFile(sessionToken, sessionFolderId, DRIVE_FILES.SESSION) as any;
+          if (sessionData?.sessionId && sessionData.sessionId !== sessionIdRef.current) {
+            notify('다른 기기에서 로그인이 감지됩니다. 3초 후 자동 로그아웃됩니다.', 'warning');
+            setTimeout(() => onForceLogout(), 3000);
+            return;
+          }
+        } catch {} // 세션 파일 없음(구버전) 또는 네트워크 오류 → 무시
+      }
+
+      // ── 관리자가 타인 데이터 편집 중이면 자신의 데이터 폴링 건너뜀
+      if (adminViewingAsRef.current) return;
+
+      // ── 버전 파일로 Drive 최신 여부 확인
       const folderId = await ensureDriveFolder(driveTokenRef.current);
       const driveTs = await loadVersionTimestamp(driveTokenRef.current, folderId);
       if (driveTs !== null && driveTs > portfolioUpdatedAtRef.current) {
-        // 로드 직전 SAVING 상태로 바뀌었을 수 있으므로 재확인
         if (syncStatusRef.current === 'saving') return;
         await loadFromDrive(driveTokenRef.current);
         loadStockFromDrive(driveTokenRef.current);
@@ -480,6 +524,26 @@ export function useDriveSync({
     return () => clearInterval(intervalId);
   }, [authUser]);
 
+  // ── 3분마다 세션 파일 lastSeen 갱신 (하트비트) ──
+  // 다른 디바이스·AdminPage에서 "접속 중" 여부 판별에 사용
+  useEffect(() => {
+    if (!authUser) return;
+    const HEARTBEAT = 3 * 60 * 1000;
+    const timer = setInterval(() => {
+      const sid = sessionIdRef.current;
+      const folderId = ownFolderIdRef.current;
+      const token = adminViewingAsRef.current ? adminOwnDriveTokenRef.current : driveTokenRef.current;
+      if (!sid || !folderId || !token) return;
+      saveDriveFile(token, folderId, DRIVE_FILES.SESSION, {
+        sessionId: sid,
+        loginAt: parseInt(sessionStorage.getItem('appSessionLoginAt') || '0', 10),
+        lastSeen: Date.now(),
+        device: navigator.userAgent.slice(0, 120),
+      }).catch(() => {});
+    }, HEARTBEAT);
+    return () => clearInterval(timer);
+  }, [authUser]);
+
   return {
     // 상태
     driveStatus, setDriveStatus,
@@ -504,6 +568,7 @@ export function useDriveSync({
     stooqAutoCrawledRef,
     syncStatusRef,
     adminTransitioningRef,
+    ownFolderIdRef,
     // 함수
     ensureDriveFolder,
     loadFromDrive,
@@ -516,5 +581,6 @@ export function useDriveSync({
     handleOpenBackupModal,
     handleApplyBackup,
     handleImportStateFile,
+    initSession,
   };
 }
