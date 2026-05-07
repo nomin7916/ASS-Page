@@ -76,6 +76,8 @@ export default function App() {
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
+  const [adminPendingChoice, setAdminPendingChoice] = useState(false);
+  const [driveLoadReady, setDriveLoadReady] = useState(false);
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
@@ -109,6 +111,11 @@ export default function App() {
     setAdminSessionElapsed(0);
     setAuthUser({ email, token });
     setUserFeatures(features);
+    if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+      setAdminPendingChoice(true);
+    } else {
+      setDriveLoadReady(true);
+    }
   };
 
   const handleAdminViewUser = (targetEmail: string) => {
@@ -1126,7 +1133,7 @@ export default function App() {
 
   // 로그인 완료 후 Drive 초기화 + 시장 데이터 수집
   useEffect(() => {
-    if (!authUser) return;
+    if (!authUser || !driveLoadReady) return;
 
     // 로그인 완료 즉시 오버레이 표시 — Drive 로딩 전 구간부터 차단
     setIsInitialLoading(true);
@@ -1203,11 +1210,6 @@ export default function App() {
       // 세션 초기화 (단일 세션 강제 적용)
       initSession();
 
-      // 관리자 로그인 완료 시 페이지 선택 팝업 표시
-      if (authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-        setShowAdminChoiceModal(true);
-      }
-
       isInitialLoad.current = false;
 
       // STOCK 파일 백그라운드 로드 — await 없이 실행 (앱 시작을 막지 않음)
@@ -1215,7 +1217,7 @@ export default function App() {
     }, 400);
 
     return () => clearTimeout(bgTimer);
-  }, [authUser]);
+  }, [authUser, driveLoadReady]);
 
   // 관리자 세션 경과 시간 — 1초마다 갱신
   useEffect(() => {
@@ -1421,6 +1423,17 @@ export default function App() {
     return <LoginGate onApproved={handleLoginApproved} />;
   }
 
+  // 관리자 로그인 직후 — Drive 로딩 전 페이지 선택
+  if (adminPendingChoice) {
+    return (
+      <AdminChoiceModal
+        adminEmail={authUser.email}
+        onSelectPortfolio={() => { setAdminPendingChoice(false); setDriveLoadReady(true); }}
+        onSelectAdmin={() => { setAdminPendingChoice(false); setShowAdminPage(true); }}
+      />
+    );
+  }
+
   // 관리자 포털
   if (showAdminPortal && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
     return (
@@ -1491,7 +1504,7 @@ export default function App() {
       {showAdminChoiceModal && !adminViewingAs && (
         <AdminChoiceModal
           adminEmail={authUser.email}
-          onSelectPortfolio={() => setShowAdminChoiceModal(false)}
+          onSelectPortfolio={() => { setShowAdminChoiceModal(false); if (!driveLoadReady) setDriveLoadReady(true); }}
           onSelectAdmin={() => { setShowAdminChoiceModal(false); setShowAdminPage(true); }}
         />
       )}
