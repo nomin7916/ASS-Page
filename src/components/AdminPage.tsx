@@ -19,6 +19,7 @@ interface Props {
   onClose: () => void;
   onViewUser?: (email: string) => void;
   userAccessStatus?: Record<string, boolean>;
+  switching?: boolean;
 }
 
 // Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
@@ -34,7 +35,7 @@ async function fetchApprovedUsers(): Promise<ApprovedUser[]> {
   }
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessStatus = {} }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessStatus = {}, switching = false }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -176,10 +177,15 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, userAccessS
                         )}
                         {onViewUser && (
                           <button
-                            onClick={() => onViewUser(u.email)}
-                            className="text-xs bg-green-900/60 hover:bg-green-800/80 text-green-300 border border-green-700/50 px-2 py-0.5 rounded-full transition-colors"
+                            onClick={() => !switching && onViewUser(u.email)}
+                            disabled={switching}
+                            className={`text-xs border px-2 py-0.5 rounded-full transition-colors ${
+                              switching
+                                ? 'bg-gray-800/40 text-gray-600 border-gray-700/30 cursor-not-allowed'
+                                : 'bg-green-900/60 hover:bg-green-800/80 text-green-300 border-green-700/50'
+                            }`}
                           >
-                            접속
+                            {switching ? '전환 중...' : '접속'}
                           </button>
                         )}
                       </>

@@ -82,6 +82,8 @@ export default function App() {
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
   const adminOwnDriveTokenRef = useRef<string>('');
   const adminViewingAsRef = useRef<string | null>(null);
+  const adminTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [adminSwitching, setAdminSwitching] = useState(false);
   const {
     showPinChange, setShowPinChange,
     pinChangeSaving, setPinChangeSaving,
@@ -98,11 +100,13 @@ export default function App() {
   };
 
   const handleAdminViewUser = (targetEmail: string) => {
+    // Fix 4: 전환 중 중복 호출 차단
+    if (adminSwitching) return;
+    setAdminSwitching(true);
     setShowAdminPage(false);
     setShowAdminPortal(false);
     const tryInit = (retries = 20) => {
       if ((window as any).google?.accounts?.oauth2) {
-        // 관리자 자신의 계정으로 drive 스코프 토큰 요청 — 공유받은 폴더 읽기/쓰기 가능
         const client = (window as any).google.accounts.oauth2.initTokenClient({
           client_id: GOOGLE_CLIENT_ID,
           scope: 'openid email profile https://www.googleapis.com/auth/drive',
@@ -110,36 +114,38 @@ export default function App() {
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {
               notify('관리자 Drive 인증 실패. 다시 시도해 주세요.', 'error');
+              setAdminSwitching(false);
               setShowAdminPage(true);
               return;
             }
             const adminToken = resp.access_token;
-            // 대상 사용자가 공유한 Index_Data 폴더 찾기
             const userFolderId = await findUserIndexFolder(adminToken, targetEmail);
             if (!userFolderId) {
               notify(`${targetEmail} 사용자의 Drive 폴더를 찾을 수 없습니다. 해당 사용자가 관리자 접근을 허용했는지 확인하세요.`, 'error');
+              setAdminSwitching(false);
               setShowAdminPage(true);
               return;
             }
-            // 접속 허용 여부 확인
             try {
               const stateData = await loadDriveFile(adminToken, userFolderId, DRIVE_FILES.STATE) as any;
               const isAllowed = !stateData || stateData.adminAccessAllowed !== false;
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: isAllowed }));
               if (!isAllowed) {
                 notify(`${targetEmail} 사용자가 관리자 접속을 허용하지 않았습니다.`, 'warning');
+                setAdminSwitching(false);
                 setShowAdminPage(true);
                 return;
               }
             } catch {
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
             }
-            // 전환 전 관리자 자신의 현재 상태를 Drive에 백업 (복구 수단 확보)
+            // 전환 전 관리자 자신의 현재 상태를 Drive에 백업
             const snapBeforeSwitch = saveStateRef.current;
             if (snapBeforeSwitch?.portfolios?.length > 0 && driveTokenRef.current) {
               await saveAllToDrive({ ...snapBeforeSwitch, portfolioUpdatedAt: Date.now() }, 'auto');
             }
-            // 전환 전체 구간 동안 저장 차단 (React 렌더 완료까지 보호)
+            // Fix 1: 이전 전환 타이머 취소 후 저장 차단 시작
+            clearTimeout(adminTransitionTimerRef.current);
             adminTransitioningRef.current = true;
             adminOwnDriveTokenRef.current = driveTokenRef.current;
             adminViewingAsRef.current = targetEmail;
@@ -148,10 +154,14 @@ export default function App() {
             driveTokenRef.current = adminToken;
             setDriveToken(adminToken);
             driveFolderIdRef.current = userFolderId;
+            // Fix 2: 이전 사용자 저장 타임스탬프 초기화 — 새 사용자 데이터 저장 누락 방지
+            lastDriveSavedPortfolioUpdatedAtRef.current = 0;
             await loadFromDrive(adminToken);
             isInitialLoad.current = false;
-            // 500ms 후 해제 — React가 사용자 데이터로 saveStateRef를 갱신할 충분한 시간
-            setTimeout(() => { adminTransitioningRef.current = false; }, 500);
+            // Fix 1: 타이머 ID 저장 — 다음 전환 시 clearTimeout으로 취소 가능
+            adminTransitionTimerRef.current = setTimeout(() => { adminTransitioningRef.current = false; }, 500);
+            // Fix 4: 전환 완료
+            setAdminSwitching(false);
           },
         });
         client.requestAccessToken({ prompt: '' });
@@ -159,6 +169,7 @@ export default function App() {
         setTimeout(() => tryInit(retries - 1), 300);
       } else {
         notify('Google 인증 초기화 실패', 'error');
+        setAdminSwitching(false);
         setShowAdminPage(true);
       }
     };
@@ -166,7 +177,8 @@ export default function App() {
   };
 
   const handleReturnToAdminPage = async () => {
-    // 전환 시작 즉시 저장 차단 — adminViewingAsRef 해제 후 React 렌더 전 사이의 race condition 방지
+    // Fix 1: 이전 전환 타이머 취소 후 저장 차단 시작
+    clearTimeout(adminTransitionTimerRef.current);
     adminTransitioningRef.current = true;
     const ownToken = adminOwnDriveTokenRef.current;
     const viewedEmail = adminViewingAsRef.current;
@@ -175,20 +187,23 @@ export default function App() {
         .forEach(p => localStorage.removeItem(`${p}_v5_${viewedEmail}`));
     }
     adminOwnDriveTokenRef.current = '';
-    // adminViewingAsRef는 loadFromDrive 완료 후 해제 — 로드 중 저장 가드 역할 유지
     isInitialLoad.current = true;
     driveTokenRef.current = ownToken;
     setDriveToken(ownToken);
     driveFolderIdRef.current = '';
-    await loadFromDrive(ownToken);
-    // 관리자 데이터 로드 완료 후 뷰 상태 해제
+    // Fix 2: 이전 사용자 저장 타임스탬프 초기화
+    lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+    // Fix 5: 토큰 만료 등 로드 실패 시 재인증 유도
+    const result = await loadFromDrive(ownToken);
+    if (result === null && !saveStateRef.current?.portfolios?.length) {
+      notify('관리자 Drive 데이터 로드 실패. 헤더의 Drive 재연결 버튼을 눌러 주세요.', 'error');
+    }
     adminViewingAsRef.current = null;
     setAdminViewingAs(null);
     isInitialLoad.current = false;
     setShowAdminPage(true);
-    // 500ms 후 전환 가드 해제 — React가 관리자 데이터로 saveStateRef를 갱신할 충분한 시간
-    // 이 시간 동안 visibilitychange 등으로 saveAllToDrive가 호출돼도 차단됨
-    setTimeout(() => { adminTransitioningRef.current = false; }, 500);
+    // Fix 1: 타이머 ID 저장
+    adminTransitionTimerRef.current = setTimeout(() => { adminTransitioningRef.current = false; }, 500);
   };
 
   // 포트폴리오 페이지에서 관리자 페이지로 이동 시: Drive 저장 후 선택 팝업 표시
@@ -1318,7 +1333,7 @@ export default function App() {
 
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return <AdminPage adminEmail={authUser.email} onClose={() => { setShowAdminPage(false); setShowAdminChoiceModal(true); }} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} />;
+    return <AdminPage adminEmail={authUser.email} onClose={() => { setShowAdminPage(false); setShowAdminChoiceModal(true); }} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} switching={adminSwitching} />;
   }
 
   // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)

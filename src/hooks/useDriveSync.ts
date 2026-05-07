@@ -206,8 +206,16 @@ export function useDriveSync({
       setDriveStatus('error');
       if (!isRetry) {
         notify('Drive 저장에 실패했습니다. 잠시 후 재시도합니다...', 'error');
-        // 15초 후 1회 재시도
-        setTimeout(() => saveAllToDrive(state, versioned, true), 15000);
+        // Fix 3: 실패 시점의 컨텍스트 캡처 — 15초 후 사용자 전환이 일어났으면 재시도 취소
+        const retryViewingAs = adminViewingAsRef.current;
+        const retryFolderId = driveFolderIdRef.current;
+        setTimeout(() => {
+          // 전환 중이거나 대상 폴더/사용자가 바뀌었으면 재시도 취소 — 잘못된 폴더에 저장 방지
+          if (adminTransitioningRef.current) return;
+          if (adminViewingAsRef.current !== retryViewingAs) return;
+          if (driveFolderIdRef.current !== retryFolderId) return;
+          saveAllToDrive(state, versioned, true);
+        }, 15000);
       }
     }
   };
