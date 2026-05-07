@@ -160,23 +160,23 @@ export async function revokeAdminReadAccess(token: string, folderId: string, adm
 
 // 관리자 토큰으로 대상 사용자의 폴더 ID 찾기 — 새 형식(Index_Data_<email>) 우선, 구 형식(Index_Data) 폴백
 export async function findUserIndexFolder(adminToken: string, targetEmail: string): Promise<string | null> {
-  try {
-    const searchByName = async (name: string) => {
-      const q = encodeURIComponent(
-        `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${targetEmail}' in owners`
-      );
-      const res = await fetch(
-        `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
-        { headers: { Authorization: `Bearer ${adminToken}` } }
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.files?.[0]?.id ?? null;
-    };
-    return (await searchByName(getFolderName(targetEmail))) ?? (await searchByName(FOLDER_NAME_LEGACY));
-  } catch {
-    return null;
-  }
+  const searchByName = async (name: string) => {
+    const q = encodeURIComponent(
+      `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${targetEmail}' in owners`
+    );
+    const res = await fetch(
+      `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${adminToken}` } }
+    );
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('TOKEN_EXPIRED');
+      if (res.status === 403) throw new Error('PERMISSION_DENIED');
+      throw new Error(`DRIVE_ERROR_${res.status}`);
+    }
+    const data = await res.json();
+    return data.files?.[0]?.id ?? null;
+  };
+  return (await searchByName(getFolderName(targetEmail))) ?? (await searchByName(FOLDER_NAME_LEGACY));
 }
 
 // 폴더 안에서 파일 ID 찾기

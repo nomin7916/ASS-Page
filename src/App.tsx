@@ -114,15 +114,33 @@ export default function App() {
           hint: authUser.email,
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {
-              notify('관리자 Drive 인증 실패. 다시 시도해 주세요.', 'error');
+              const errMsg =
+                resp.error === 'access_denied' ? '관리자 Drive 권한이 거부되었습니다. Google 계정 권한을 확인하세요.' :
+                resp.error === 'popup_closed_by_user' ? '인증 창이 닫혔습니다. 다시 시도해 주세요.' :
+                resp.error === 'invalid_client' ? 'OAuth 클라이언트 설정 오류입니다. 관리자에게 문의하세요.' :
+                `Drive 인증 실패 (${resp.error || '알 수 없는 오류'})`;
+              notify(errMsg, 'error');
               setAdminSwitching(false);
               setShowAdminPage(true);
               return;
             }
             const adminToken = resp.access_token;
-            const userFolderId = await findUserIndexFolder(adminToken, targetEmail);
+            let userFolderId: string | null = null;
+            try {
+              userFolderId = await findUserIndexFolder(adminToken, targetEmail);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : '';
+              const errMsg =
+                msg === 'TOKEN_EXPIRED' ? `토큰 충돌: 관리자 인증이 만료되었습니다. 다시 접속해 주세요.` :
+                msg === 'PERMISSION_DENIED' ? `Drive 접근 권한 없음: ${targetEmail} 폴더에 접근할 수 없습니다.` :
+                `폴더 검색 오류 (${msg}). 네트워크 상태를 확인하세요.`;
+              notify(errMsg, 'error');
+              setAdminSwitching(false);
+              setShowAdminPage(true);
+              return;
+            }
             if (!userFolderId) {
-              notify(`${targetEmail} 사용자의 Drive 폴더를 찾을 수 없습니다. 해당 사용자가 관리자 접근을 허용했는지 확인하세요.`, 'error');
+              notify(`${targetEmail} 사용자의 Drive 폴더를 찾을 수 없습니다. 해당 사용자가 앱을 한 번 이상 실행했는지 확인하세요.`, 'error');
               setAdminSwitching(false);
               setShowAdminPage(true);
               return;
@@ -163,7 +181,10 @@ export default function App() {
             driveFolderIdRef.current = userFolderId;
             // Fix 2: 이전 사용자 저장 타임스탬프 초기화 — 새 사용자 데이터 저장 누락 방지
             lastDriveSavedPortfolioUpdatedAtRef.current = 0;
-            await loadFromDrive(adminToken);
+            const loadResult = await loadFromDrive(adminToken);
+            if (loadResult === null) {
+              notify(`${targetEmail} 데이터 로드 실패. 토큰 충돌 또는 네트워크 오류일 수 있습니다. "← 관리자 페이지" 버튼으로 복귀하세요.`, 'error');
+            }
             isInitialLoad.current = false;
             // Fix 1: 타이머 ID 저장 — 다음 전환 시 clearTimeout으로 취소 가능
             adminTransitionTimerRef.current = setTimeout(() => { adminTransitioningRef.current = false; }, 500);
@@ -191,6 +212,8 @@ export default function App() {
     if (snap?.portfolios?.length > 0 && driveTokenRef.current) {
       await saveAllToDrive(snap, 'auto');
     }
+    // 사용자 접근에 사용한 임시 토큰 즉시 폐기 (탈취 시 1시간 유효기간 단축)
+    const userAccessToken = driveTokenRef.current;
     // Fix 1: 이전 전환 타이머 취소 후 저장 차단 시작
     clearTimeout(adminTransitionTimerRef.current);
     adminTransitioningRef.current = true;
@@ -202,6 +225,10 @@ export default function App() {
     driveFolderIdRef.current = '';
     // Fix 2: 이전 사용자 저장 타임스탬프 초기화
     lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+    // 토큰 폐기 — fire-and-forget (UI 흐름 차단 안 함)
+    if (userAccessToken && userAccessToken !== ownToken) {
+      fetch(`https://oauth2.googleapis.com/revoke?token=${userAccessToken}`, { method: 'POST' }).catch(() => {});
+    }
     // Fix 5: 토큰 만료 등 로드 실패 시 재인증 유도
     const result = await loadFromDrive(ownToken);
     if (result === null && !saveStateRef.current?.portfolios?.length) {
