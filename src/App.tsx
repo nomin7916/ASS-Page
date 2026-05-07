@@ -100,6 +100,13 @@ export default function App() {
   } = usePinManager();
 
   const handleLoginApproved = (email: string, token: string, features: UserFeatures) => {
+    setAdminViewingAs(null);
+    adminViewingAsRef.current = null;
+    adminTransitioningRef.current = false;
+    if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
+    if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
+    adminSessionStartAtRef.current = 0;
+    setAdminSessionElapsed(0);
     setAuthUser({ email, token });
     setUserFeatures(features);
   };
@@ -1527,7 +1534,19 @@ export default function App() {
               saveAllToDrive(state);
             }
           }}
-          onLogout={() => { sessionStorage.removeItem(SESSION_KEY); setAuthUser(null); driveTokenRef.current = ''; setDriveToken(''); }}
+          onLogout={() => {
+            sessionStorage.removeItem(SESSION_KEY);
+            setAuthUser(null);
+            driveTokenRef.current = '';
+            setDriveToken('');
+            setAdminViewingAs(null);
+            adminViewingAsRef.current = null;
+            adminTransitioningRef.current = false;
+            if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
+            if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
+            adminSessionStartAtRef.current = 0;
+            setAdminSessionElapsed(0);
+          }}
           canAccessDividendTax={canAccessDividendTax}
           onOpenDividendTax={() => setShowDividendTaxPage(true)}
           onAppClose={handleAppClose}
