@@ -59,13 +59,13 @@ export default function RebalancingPanel({
             <div className="flex flex-col gap-2">
               <span className="text-green-400 text-xl font-bold">리밸런싱</span>
               {(curCatDonutData.length > 0 || rebalCatDonutData.length > 0) && (
-                <div className="flex gap-1">
+                <div className="flex gap-8">
                   <div className="flex flex-col items-center">
                     <div className="text-gray-500 text-[10px] font-semibold mb-0.5">현재 비중</div>
-                    <div style={{ height: 160, width: 175 }}>
+                    <div style={{ height: 160, width: 160 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Pie data={curCatDonutData} innerRadius="35%" outerRadius="55%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
+                          <Pie data={curCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
                             {curCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                           </Pie>
                         </PieChart>
@@ -74,10 +74,10 @@ export default function RebalancingPanel({
                   </div>
                   <div className="flex flex-col items-center">
                     <div className="text-gray-500 text-[10px] font-semibold mb-0.5">리밸런싱 후 비중</div>
-                    <div style={{ height: 160, width: 175 }}>
+                    <div style={{ height: 160, width: 160 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Pie data={rebalCatDonutData} innerRadius="35%" outerRadius="55%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
+                          <Pie data={rebalCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
                             {rebalCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                           </Pie>
                         </PieChart>
