@@ -37,6 +37,20 @@ export default function RebalancingPanel({
 }) {
   const [editingRatio, setEditingRatio] = useState({});
 
+  const renderCompactPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
+    if (percent < 0.07) return null;
+    const RADIAN = Math.PI / 180;
+    const radius = (innerRadius + outerRadius) * 0.5;
+    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+    const label = name.length > 3 ? name.slice(0, 3) : name;
+    return (
+      <text x={x} y={y} fill="black" textAnchor="middle" dominantBaseline="central" fontSize={8} fontWeight="bold" style={{ pointerEvents: 'none' }}>
+        {label}
+      </text>
+    );
+  };
+
   const compactPieTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null;
     const item = payload[0];
@@ -62,7 +76,7 @@ export default function RebalancingPanel({
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Tooltip content={compactPieTooltip} />
-                          <Pie data={curCatDonutData} outerRadius="72%" dataKey="value" onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
+                          <Pie data={curCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
                             {curCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                           </Pie>
                         </PieChart>
@@ -75,7 +89,7 @@ export default function RebalancingPanel({
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Tooltip content={compactPieTooltip} />
-                          <Pie data={rebalCatDonutData} outerRadius="72%" dataKey="value" onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
+                          <Pie data={rebalCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
                             {rebalCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                           </Pie>
                         </PieChart>
