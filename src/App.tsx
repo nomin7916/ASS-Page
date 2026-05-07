@@ -83,6 +83,8 @@ export default function App() {
   const adminOwnDriveTokenRef = useRef<string>('');
   const adminViewingAsRef = useRef<string | null>(null);
   const adminTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const adminSessionWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const adminSessionExpireTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [adminSwitching, setAdminSwitching] = useState(false);
   const [userLastSeen, setUserLastSeen] = useState<Record<string, number>>({});
   const {
@@ -190,6 +192,16 @@ export default function App() {
             adminTransitionTimerRef.current = setTimeout(() => { adminTransitioningRef.current = false; }, 500);
             // Fix 4: 전환 완료
             setAdminSwitching(false);
+            // 관리자 세션 타이머 시작 (50분 경고 → 60분 자동 종료)
+            if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
+            if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
+            adminSessionWarningTimerRef.current = setTimeout(() => {
+              notify(`${targetEmail} 페이지 접속 후 50분이 경과했습니다. 10분 후 자동으로 관리자 페이지로 복귀합니다.`, 'warning');
+            }, 50 * 60 * 1000);
+            adminSessionExpireTimerRef.current = setTimeout(async () => {
+              notify('관리자 접속 시간(1시간)이 만료되었습니다. 데이터를 저장하고 관리자 페이지로 복귀합니다.', 'warning');
+              await handleReturnToAdminPage();
+            }, 60 * 60 * 1000);
           },
         });
         client.requestAccessToken({ prompt: '' });
@@ -205,6 +217,11 @@ export default function App() {
   };
 
   const handleReturnToAdminPage = async () => {
+    // 세션 타이머 취소 (수동 복귀 또는 자동 만료 둘 다 이 함수로 수렴)
+    if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
+    if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
+    adminSessionWarningTimerRef.current = null;
+    adminSessionExpireTimerRef.current = null;
     // 디바운스 타이머 취소 후 현재 사용자 편집 내용을 Drive에 즉시 저장
     // (adminTransitioningRef 설정 전에 수행해야 saveAllToDrive 차단 안 됨)
     if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
