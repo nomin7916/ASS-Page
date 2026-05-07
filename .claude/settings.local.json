@@ -117,7 +117,9 @@
       "Read(//mnt/c/Users/arui1/AppData/Roaming/**)",
       "Read(//mnt/c/Users/arui1/AppData/**)",
       "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) -split \";\" | Where-Object { $_ -ne \"\" } | Select-Object -First 30)",
-      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-ChildItem \"C:\\\\Program Files\\\\nodejs\\\\\" -ErrorAction SilentlyContinue | Select-Object Name -First 5; Get-ChildItem \"$env:APPDATA\\\\npm\\\\\" -ErrorAction SilentlyContinue | Select-Object Name -First 5)"
+      "PowerShell(Get-Command node -ErrorAction SilentlyContinue; Get-ChildItem \"C:\\\\Program Files\\\\nodejs\\\\\" -ErrorAction SilentlyContinue | Select-Object Name -First 5; Get-ChildItem \"$env:APPDATA\\\\npm\\\\\" -ErrorAction SilentlyContinue | Select-Object Name -First 5)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); cd \"c:\\\\Users\\\\arui1\\\\Documents\\\\Github\\\\ASS-Page\"; npm run build 2>&1)",
+      "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object Name; Get-ChildItem \"$env:APPDATA\\\\npm\" -ErrorAction SilentlyContinue | Select-Object Name -First 5; ls \"C:\\\\Users\\\\arui1\\\\AppData\\\\Roaming\\\\nvm\" -ErrorAction SilentlyContinue)"
     ]
   }
 }

@@ -6,6 +6,11 @@ import {
   listBackups, loadBackupById, DriveBackupEntry,
   grantAdminReadAccess, revokeAdminReadAccess,
 } from '../driveStorage';
+
+function _stripStateForSave(stateData: any) {
+  const { stockHistoryMap: _s, marketIndices: _m, marketIndicators: _mi, indicatorHistoryMap: _ih, ...core } = stateData;
+  return core;
+}
 import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
 
 // SyncStatus 상태 머신
@@ -84,7 +89,8 @@ export function useDriveSync({
   };
 
   // ── Drive에서 데이터 불러오기 → applyStateData 콜백으로 state 적용 ──
-  const loadFromDrive = async (token: string) => {
+  // updateAccessLog=true: 사용자 최초 로그인 시에만 전달 — accessLog 카운트 증가 후 Drive 즉시 반영
+  const loadFromDrive = async (token: string, updateAccessLog = false) => {
     try {
       setSS('loading');
       setDriveStatus('loading');
@@ -97,7 +103,22 @@ export function useDriveSync({
 
       if (!stateData) { setSS('ready'); setDriveStatus(''); return null; }
 
-      applyStateData(stateData, null, marketData);
+      let stateToApply = stateData as any;
+      if (updateAccessLog) {
+        const now = Date.now();
+        const prev = (stateData as any).accessLog;
+        const updatedLog = {
+          count: (prev?.count || 0) + 1,
+          firstAt: prev?.firstAt || now,
+          lastAt: now,
+        };
+        stateToApply = { ...(stateData as any), accessLog: updatedLog };
+        // STATE 파일에 즉시 반영 (fire-and-forget) — 미저장 시 다음 saveAllToDrive에서 처리됨
+        saveDriveFile(token, folderId, DRIVE_FILES.STATE, _stripStateForSave(stateToApply)).catch(() => {});
+        lastDriveSavedPortfolioUpdatedAtRef.current = (stateData as any).portfolioUpdatedAt || 0;
+      }
+
+      applyStateData(stateToApply, null, marketData);
       setSS('ready');
       setDriveStatus('saved');
       // 로그인 시 adminAccessAllowed 상태에 따라 즉시 폴더 공유 적용 (기존 사용자 포함)

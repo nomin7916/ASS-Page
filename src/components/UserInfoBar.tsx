@@ -1,12 +1,13 @@
 // @ts-nocheck
 import React from 'react';
-import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power } from 'lucide-react';
+import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard } from 'lucide-react';
 import { ADMIN_EMAIL } from '../config';
 
 export default function UserInfoBar({
   email,
   adminAccessAllowed,
   onOpenAdmin,
+  onOpenAdminPortal,
   onOpenPinChange,
   onToggleAdminAccess,
   onLogout,
@@ -21,13 +22,22 @@ export default function UserInfoBar({
       <span className="font-mono">{email}</span>
       <div className="flex items-center gap-1">
         {isAdmin && (
-          <button
-            onClick={onOpenAdmin}
-            className="text-gray-500 hover:text-violet-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
-            title="관리자"
-          >
-            <Settings size={14} />
-          </button>
+          <>
+            <button
+              onClick={onOpenAdminPortal}
+              className="text-gray-500 hover:text-violet-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+              title="관리자 포털"
+            >
+              <LayoutDashboard size={14} />
+            </button>
+            <button
+              onClick={onOpenAdmin}
+              className="text-gray-500 hover:text-violet-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+              title="관리자 설정"
+            >
+              <Settings size={14} />
+            </button>
+          </>
         )}
         {canAccessDividendTax && (
           <button

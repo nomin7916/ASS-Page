@@ -18,6 +18,7 @@ import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
 import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSION_KEY, UserFeatures } from './components/LoginGate';
 import AdminPage from './components/AdminPage';
+import AdminPortal from './components/AdminPortal';
 import AdminNotificationModal, { AdminNotification } from './components/AdminNotificationModal';
 import IntegratedDashboard from './components/IntegratedDashboard';
 import HistoryPanel from './components/HistoryPanel';
@@ -72,6 +73,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
   const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
+  const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
@@ -95,6 +97,7 @@ export default function App() {
 
   const handleAdminViewUser = (targetEmail: string) => {
     setShowAdminPage(false);
+    setShowAdminPortal(false);
     const tryInit = (retries = 20) => {
       if ((window as any).google?.accounts?.oauth2) {
         // 관리자 자신의 계정으로 drive 스코프 토큰 요청 — 공유받은 폴더 읽기/쓰기 가능
@@ -1010,7 +1013,7 @@ export default function App() {
 
       // 항상 Drive에서 최신 데이터 로드 — localStorage 캐시 사용 안 함
       notify('Drive 데이터 불러오는 중...', 'info');
-      const drivePortfolio = await loadFromDrive(token);
+      const drivePortfolio = await loadFromDrive(token, true);
       if (drivePortfolio === null) {
         // 완전 신규 사용자: 초기 포트폴리오 생성
         const newId = generateId();
@@ -1275,6 +1278,18 @@ export default function App() {
     return <LoginGate onApproved={handleLoginApproved} />;
   }
 
+  // 관리자 포털
+  if (showAdminPortal && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+    return (
+      <AdminPortal
+        adminEmail={authUser.email}
+        onClose={() => setShowAdminPortal(false)}
+        onViewUser={handleAdminViewUser}
+        notify={notify}
+      />
+    );
+  }
+
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
     return <AdminPage adminEmail={authUser.email} onClose={() => setShowAdminPage(false)} onViewUser={handleAdminViewUser} userAccessStatus={userAccessStatus} />;
@@ -1360,6 +1375,7 @@ export default function App() {
           email={authUser.email}
           adminAccessAllowed={adminAccessAllowed}
           onOpenAdmin={() => setShowAdminPage(true)}
+          onOpenAdminPortal={() => setShowAdminPortal(true)}
           onOpenPinChange={openPinChange}
           onToggleAdminAccess={() => {
             const newVal = !adminAccessAllowed;

@@ -328,6 +328,39 @@ export async function loadBackupById(
   return await res.json();
 }
 
+// ── 관리자 전용 폴더 / 캐시 파일 ──
+const ADMIN_FOLDER_NAME = 'Index_Data_Admin';
+const ADMIN_CACHE_FILE = 'admin_user_cache.json';
+
+export async function getOrCreateAdminFolder(token: string): Promise<string> {
+  const q = encodeURIComponent(
+    `name='${ADMIN_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
+  );
+  const res = await fetch(
+    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) throw new Error(`[Drive] 관리자 폴더 검색 실패 ${res.status}`);
+  const data = await res.json();
+  if (data.files?.length > 0) return data.files[0].id;
+  const createRes = await fetch(`${DRIVE_API}/files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: ADMIN_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+  });
+  if (!createRes.ok) throw new Error(`[Drive] 관리자 폴더 생성 실패 ${createRes.status}`);
+  const created = await createRes.json();
+  return created.id;
+}
+
+export async function saveAdminUserCache(token: string, folderId: string, data: unknown): Promise<void> {
+  await saveDriveFile(token, folderId, ADMIN_CACHE_FILE, data);
+}
+
+export async function loadAdminUserCache(token: string, folderId: string): Promise<unknown | null> {
+  return loadDriveFile(token, folderId, ADMIN_CACHE_FILE);
+}
+
 async function cleanupOldBackups(token: string, folderId: string): Promise<void> {
   try {
     const backups = await listBackups(token, folderId);
