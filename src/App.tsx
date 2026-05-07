@@ -85,6 +85,8 @@ export default function App() {
   const adminTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const adminSessionWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const adminSessionExpireTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const adminSessionStartAtRef = useRef(0);
+  const [adminSessionElapsed, setAdminSessionElapsed] = useState(0);
   const [adminSwitching, setAdminSwitching] = useState(false);
   const [userLastSeen, setUserLastSeen] = useState<Record<string, number>>({});
   const {
@@ -193,6 +195,7 @@ export default function App() {
             // Fix 4: 전환 완료
             setAdminSwitching(false);
             // 관리자 세션 타이머 시작 (50분 경고 → 60분 자동 종료)
+            adminSessionStartAtRef.current = Date.now();
             if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
             if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
             adminSessionWarningTimerRef.current = setTimeout(() => {
@@ -222,6 +225,8 @@ export default function App() {
     if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
     adminSessionWarningTimerRef.current = null;
     adminSessionExpireTimerRef.current = null;
+    adminSessionStartAtRef.current = 0;
+    setAdminSessionElapsed(0);
     // 디바운스 타이머 취소 후 현재 사용자 편집 내용을 Drive에 즉시 저장
     // (adminTransitioningRef 설정 전에 수행해야 saveAllToDrive 차단 안 됨)
     if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
@@ -1194,6 +1199,17 @@ export default function App() {
     return () => clearTimeout(bgTimer);
   }, [authUser]);
 
+  // 관리자 세션 경과 시간 — 1초마다 갱신
+  useEffect(() => {
+    if (!adminViewingAs) return;
+    const interval = setInterval(() => {
+      if (adminSessionStartAtRef.current) {
+        setAdminSessionElapsed(Math.floor((Date.now() - adminSessionStartAtRef.current) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [adminViewingAs]);
+
   // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
   useEffect(() => {
     if (!authUser || !driveTokenRef.current || isInitialLoad.current) return;
@@ -1436,6 +1452,14 @@ export default function App() {
             <span className="text-amber-400">✏️ 편집 모드</span>
             <span className="text-amber-100 font-medium">{adminViewingAs}</span>
             <span className="text-amber-600 text-[10px]">— 저장 시 해당 사용자 Drive에 반영됩니다</span>
+            <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${
+              adminSessionElapsed >= 3000
+                ? 'bg-orange-900/60 text-orange-300'
+                : 'bg-amber-900/40 text-amber-500'
+            }`}>
+              {String(Math.floor(adminSessionElapsed / 60)).padStart(2, '0')}:{String(adminSessionElapsed % 60).padStart(2, '0')}
+              {adminSessionElapsed >= 3000 && ' ⚠️'}
+            </span>
           </span>
           <button
             onClick={handleReturnToAdminPage}
