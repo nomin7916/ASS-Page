@@ -311,7 +311,11 @@ export function useStockData({
     }
   };
 
-  // 전체 계좌 종목 가격을 병렬 조회하여 portfolios[] 전체 업데이트
+  // 단일 fetch에 타임아웃 적용 (ms 초과 시 null 반환)
+  const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+    Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]);
+
+  // 전체 계좌 종목 가격을 병렬 조회하여 portfolios[] 전체(활성 계좌 포함) 업데이트
   const fetchAllPortfoliosPrices = async (today: string) => {
     const koreanCodes = new Set<string>();
     const overseasCodes = new Set<string>();
@@ -334,38 +338,46 @@ export function useStockData({
 
     const priceResults: Record<string, any> = {};
     const fundResults: Record<string, any> = {};
+    const failedCodes: string[] = [];
+
     await Promise.all([
       ...[...koreanCodes].map(async (code) => {
-        const d = await fetchStockInfo(code);
+        const d = await withTimeout(fetchStockInfo(code), 10000);
         if (d) {
           priceResults[code] = d;
           setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+        } else {
+          failedCodes.push(code);
         }
       }),
       ...[...overseasCodes].map(async (code) => {
-        const d = await fetchUsStockInfo(code);
+        const d = await withTimeout(fetchUsStockInfo(code), 10000);
         if (d) {
           priceResults[code] = d;
           setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+        } else {
+          failedCodes.push(code);
         }
       }),
       ...[...fundCodes].map(async (code) => {
-        const d = await fetchFundInfo(code);
+        const d = await withTimeout(fetchFundInfo(code), 10000);
         if (d) {
           fundResults[code] = d;
           setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+        } else {
+          failedCodes.push(code);
         }
       }),
     ]);
 
     const hasAnyResult = Object.keys(priceResults).length > 0 || Object.keys(fundResults).length > 0;
-    if (!hasAnyResult) return { priceResults, fundResults };
+    if (!hasAnyResult) return { priceResults, fundResults, failedCodes };
 
-    // 비활성 계좌 portfolios[] 가격 + 오늘 히스토리 동시 업데이트
+    // 전체 계좌 portfolios[] 가격 업데이트 (활성 계좌 포함 — 총자산현황 즉시 반영)
     setPortfolios(prev => prev.map(p => {
-      if (p.id === activePortfolioIdRef.current) return p;
       if (p.accountType === 'simple') return p;
-      const items = p.portfolio || [];
+      const isActive = p.id === activePortfolioIdRef.current;
+      const items = isActive ? portfolioRef.current : (p.portfolio || []);
       const hasUpdate = items.some(item =>
         (item.type === 'stock' && item.code && priceResults[item.code]) ||
         (item.type === 'fund' && item.code && fundResults[item.code])
@@ -383,6 +395,9 @@ export function useStockData({
         }
         return item;
       });
+
+      // 활성 계좌: 히스토리 업데이트 없이 종목 가격만 반영 (히스토리는 메인 흐름에서 처리)
+      if (isActive) return { ...p, portfolio: updatedItems };
 
       const usdkrw = marketIndicatorsRef.current?.usdkrw || 1;
       const fxRate = p.accountType === 'overseas' ? usdkrw : 1;
@@ -409,7 +424,7 @@ export function useStockData({
       return { ...p, portfolio: updatedItems, history: newHistory };
     }));
 
-    return { priceResults, fundResults };
+    return { priceResults, fundResults, failedCodes };
   };
 
   // 초기 로드 후 종목 현재가를 직접 조회하는 함수 (활성 계좌만 — 초기 로드 안전성 보장)
@@ -489,8 +504,9 @@ export function useStockData({
       const today = new Date().toISOString().split('T')[0];
       const isOverseasRefresh = activePortfolioAccountTypeRef.current === 'overseas';
 
-      // 전체 계좌 종목 동시 조회 및 portfolios[] 업데이트
-      const { priceResults, fundResults } = await fetchAllPortfoliosPrices(today);
+      // 전체 계좌 종목 동시 조회 및 portfolios[] 업데이트 (활성 계좌 포함)
+      const { priceResults, fundResults, failedCodes } = await fetchAllPortfoliosPrices(today);
+      if (failedCodes.length > 0) notify(`조회 실패 (10초 초과): ${failedCodes.join(', ')}`, 'warning');
 
       // 활성 계좌 fetch status 업데이트
       activeStockCodes.forEach(code => {

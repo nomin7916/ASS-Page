@@ -37,6 +37,7 @@ import DividendSummaryTable from './components/DividendSummaryTable';
 import DividendTaxPage from './components/DividendTaxPage';
 import NotificationBar from './components/NotificationBar';
 import ConfirmDialog from './components/ConfirmDialog';
+import LoadingOverlay from './components/LoadingOverlay';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -63,6 +64,9 @@ import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
 
 export default function App() {
   const historyInputRef = useRef(null);
+
+  // ── 초기 로딩 오버레이 ──
+  const [isInitialLoading, setIsInitialLoading] = useState(false);
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
@@ -1053,21 +1057,13 @@ export default function App() {
       // 시장지표 수집 (백그라운드)
       fetchMarketIndicators();
 
-      // 3단계: 각 계좌 탭 순환 — 활성화 상태 거치게 하여 총자산현황 합계 정합성 확보
-      for (const p of portfoliosRef.current) {
-        notify(p.name, 'info');
-        switchToPortfolio(p.id);
-        await new Promise(resolve => setTimeout(resolve, 150));
-      }
-
       // 총자산현황으로 이동
-      notify('총자산현황', 'info');
       setShowIntegratedDashboard(true);
-      await new Promise(resolve => setTimeout(resolve, 150));
 
-      // 4단계: 전체 계좌 현재가 갱신
+      // 전체 계좌 현재가 일괄 갱신 — 블로킹 오버레이 표시, 탭 순환 없음
+      setIsInitialLoading(true);
       await refreshPrices();
-      notify('전체 계좌 현재가 조회 완료', 'success');
+      setIsInitialLoading(false);
 
       isInitialLoad.current = false;
 
@@ -1323,6 +1319,7 @@ export default function App() {
         </div>
       )}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
+      <LoadingOverlay visible={isInitialLoading} notificationLog={notificationLog} onDismiss={() => setIsInitialLoading(false)} />
       {pendingAdminNotifs.length > 0 && (
         <AdminNotificationModal
           notifications={pendingAdminNotifs}
