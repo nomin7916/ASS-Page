@@ -42,8 +42,11 @@ export const useHistoryBackfill = ({
       const idx = hist.findIndex(h => h.date === today);
       if (idx >= 0) {
         if (hist[idx].evalAmount === summary.currentEval) return p;
+        // 직전 기록 대비 3배 이상 차이면 이상값으로 간주하고 건너뜀
+        const prevRef = hist[idx].adjustedAmount || hist[idx].evalAmount;
+        if (prevRef > 0 && (summary.currentEval > prevRef * 3 || summary.currentEval < prevRef / 3)) return p;
         const newHist = [...hist];
-        newHist[idx] = { ...newHist[idx], evalAmount: summary.currentEval, principal: summary.principal };
+        newHist[idx] = { ...newHist[idx], evalAmount: summary.currentEval, adjustedAmount: summary.currentEval, actualEvalAmount: summary.currentEval, principal: summary.principal };
         return { ...p, history: newHist };
       }
       return { ...p, history: [...hist, { date: today, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };

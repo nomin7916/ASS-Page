@@ -405,7 +405,10 @@ export function useStockData({
       let newHistory;
       if (idx >= 0) {
         if (Math.abs(history[idx].evalAmount - totalEval) < 1) return { ...p, portfolio: updatedItems };
-        newHistory = history.map((h, i) => i === idx ? { ...h, evalAmount: totalEval } : h);
+        // 직전 기록 대비 3배 이상 차이면 이상값으로 간주하고 히스토리 업데이트 건너뜀
+        const prevRef = history[idx].adjustedAmount || history[idx].evalAmount;
+        if (prevRef > 0 && (totalEval > prevRef * 3 || totalEval < prevRef / 3)) return { ...p, portfolio: updatedItems };
+        newHistory = history.map((h, i) => i === idx ? { ...h, evalAmount: totalEval, adjustedAmount: totalEval, actualEvalAmount: totalEval } : h);
       } else {
         newHistory = [...history, { date: today, evalAmount: totalEval, principal: cleanNum(p.principal) || 0, isFixed: false }];
       }
