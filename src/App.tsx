@@ -1448,8 +1448,8 @@ export default function App() {
         )}
 
         {!showIntegratedDashboard && (<>
-        <div className="w-full">
-          <div className="flex flex-col gap-6 w-full" style={{ paddingBottom: '40vh' }}>
+        <div className="flex items-start gap-0 w-full">
+          <div className="flex-1 flex flex-col gap-6 min-w-0" style={{ paddingBottom: '40vh' }}>
         {activePortfolioAccountType === 'gold' ? (
           <KrxGoldTable
             portfolio={portfolio}
