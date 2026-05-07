@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState } from 'react';
-import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
@@ -37,18 +37,14 @@ export default function RebalancingPanel({
 }) {
   const [editingRatio, setEditingRatio] = useState({});
 
-  const renderCompactPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
-    if (percent < 0.05) return null;
-    const RADIAN = Math.PI / 180;
-    const radius = (innerRadius + outerRadius) * 0.5;
-    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-    const y = cy + radius * Math.sin(-midAngle * RADIAN);
-    const label = name.length > 4 ? name.slice(0, 4) : name;
+  const compactPieTooltip = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const item = payload[0];
+    const pct = ((item.payload?.percent ?? 0) * 100).toFixed(1);
     return (
-      <text x={x} y={y} fill="black" textAnchor="middle" dominantBaseline="central" fontSize={9} fontWeight="bold" style={{ pointerEvents: 'none' }}>
-        <tspan x={x} dy="-0.55em">{label}</tspan>
-        <tspan x={x} dy="1.15em">{(percent * 100).toFixed(0)}%</tspan>
-      </text>
+      <div style={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #374151', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 'bold', color: item.fill, whiteSpace: 'nowrap' }}>
+        {item.name} {pct}%
+      </div>
     );
   };
 
@@ -65,7 +61,8 @@ export default function RebalancingPanel({
                     <div style={{ height: 120, width: 120 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Pie data={curCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
+                          <Tooltip content={compactPieTooltip} />
+                          <Pie data={curCatDonutData} outerRadius="72%" dataKey="value" onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
                             {curCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                           </Pie>
                         </PieChart>
@@ -77,7 +74,8 @@ export default function RebalancingPanel({
                     <div style={{ height: 120, width: 120 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Pie data={rebalCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
+                          <Tooltip content={compactPieTooltip} />
+                          <Pie data={rebalCatDonutData} outerRadius="72%" dataKey="value" onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
                             {rebalCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                           </Pie>
                         </PieChart>
