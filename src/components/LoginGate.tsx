@@ -26,13 +26,13 @@ export function hashPin(pin: string): string {
   return btoa(`${pin}::portfolio_secure_2024`);
 }
 export function isPinSet(email: string): boolean {
-  return !!localStorage.getItem(PIN_KEY(email));
+  return !!sessionStorage.getItem(PIN_KEY(email));
 }
 export function verifyPin(pin: string, email: string): boolean {
-  return localStorage.getItem(PIN_KEY(email)) === hashPin(pin);
+  return sessionStorage.getItem(PIN_KEY(email)) === hashPin(pin);
 }
 export function savePin(pin: string, email: string): void {
-  localStorage.setItem(PIN_KEY(email), hashPin(pin));
+  sessionStorage.setItem(PIN_KEY(email), hashPin(pin));
 }
 
 // ── Google Drive PIN 저장/불러오기 ──────────────────────────────
@@ -252,20 +252,20 @@ export default function LoginGate({ onApproved }: Props) {
 
         if (needsReset) {
           const adminHash = hashPin(adminPin);
-          localStorage.setItem(PIN_KEY(email), adminHash);
+          sessionStorage.setItem(PIN_KEY(email), adminHash);
           savePinToDrive(adminHash, token, email);
           clearResetFlag(email);
           setResetNotice(true);
         } else {
           const { pinHash: drivePinHash, folderId: pinFolderId } = await loadPinFromDrive(token, email);
           if (drivePinHash) {
-            localStorage.setItem(PIN_KEY(email), drivePinHash);
+            sessionStorage.setItem(PIN_KEY(email), drivePinHash);
           } else if (!isPinSet(email)) {
             const defaultHash = hashPin(DEFAULT_PIN);
-            localStorage.setItem(PIN_KEY(email), defaultHash);
+            sessionStorage.setItem(PIN_KEY(email), defaultHash);
             savePinToDrive(defaultHash, token, email, pinFolderId || undefined);
           } else if (!drivePinHash && isPinSet(email)) {
-            savePinToDrive(localStorage.getItem(PIN_KEY(email))!, token, email, pinFolderId || undefined);
+            savePinToDrive(sessionStorage.getItem(PIN_KEY(email))!, token, email, pinFolderId || undefined);
           }
         }
 

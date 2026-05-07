@@ -195,11 +195,6 @@ export default function App() {
     clearTimeout(adminTransitionTimerRef.current);
     adminTransitioningRef.current = true;
     const ownToken = adminOwnDriveTokenRef.current;
-    const viewedEmail = adminViewingAsRef.current;
-    if (viewedEmail) {
-      ['portfolioState', 'portfolioStockData', 'portfolioMarketData']
-        .forEach(p => localStorage.removeItem(`${p}_v5_${viewedEmail}`));
-    }
     adminOwnDriveTokenRef.current = '';
     isInitialLoad.current = true;
     driveTokenRef.current = ownToken;
@@ -1062,9 +1057,7 @@ export default function App() {
   };
 
 
-  // 1단계: 로그인 후 사용자별 localStorage에서 복원 (step 2 내부에서 처리)
-
-  // 2단계: 로그인 완료 후 사용자별 localStorage 복원 + Drive 초기화 + 시장 데이터 수집
+  // 로그인 완료 후 Drive 초기화 + 시장 데이터 수집
   useEffect(() => {
     if (!authUser) return;
 
@@ -1072,11 +1065,8 @@ export default function App() {
     setIsInitialLoading(true);
 
     const token = authUser.token;
-    const userKey = `portfolioState_v5_${authUser.email}`;
-    const stockKey = `portfolioStockData_v5_${authUser.email}`;
-    const marketKey = `portfolioMarketData_v5_${authUser.email}`;
 
-    // Drive 토큰 설정 (localStorage 읽기 없이 바로 Drive 우선 로드)
+    // Drive 토큰 설정 (항상 Drive 우선 로드)
     driveTokenRef.current = token;
     setDriveToken(token);
     setDriveStatus('');
@@ -1212,11 +1202,6 @@ export default function App() {
     }
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
-    // Drive가 항상 정본 — localStorage에는 포트폴리오 구조만 최소 저장 (세션 중 안전망)
-    // stockHistoryMap·marketData는 Drive에서 로드하므로 localStorage에 저장하지 않음
-    const stateEmail = adminViewingAsRef.current || authUser.email;
-    const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
-    try { localStorage.setItem(`portfolioState_v5_${stateEmail}`, JSON.stringify(stateCore)); } catch {}
     // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스 — 포트폴리오 테이블 변경 시 2초 이내 백업)
     if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
