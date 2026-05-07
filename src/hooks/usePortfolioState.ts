@@ -147,7 +147,14 @@ export function usePortfolioState({
       if (p.id !== id) return p;
       if (field === 'evalAmount') {
         const num = cleanNum(val);
-        return { ...p, evalAmount: num, ...(!p.principalManual ? { principal: num } : {}) };
+        const prin = p.principalManual ? cleanNum(p.principal) : num;
+        const today = new Date().toISOString().split('T')[0];
+        const history = p.history || [];
+        const idx = history.findIndex(h => h.date === today);
+        const newHistory = idx >= 0
+          ? history.map((h, i) => i === idx ? { ...h, evalAmount: num, principal: prin } : h)
+          : [...history, { date: today, evalAmount: num, principal: prin, isFixed: false }];
+        return { ...p, evalAmount: num, ...(!p.principalManual ? { principal: num } : {}), history: newHistory };
       }
       if (field === 'principal') {
         return { ...p, principal: cleanNum(val), principalManual: true };

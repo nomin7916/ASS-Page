@@ -323,8 +323,7 @@ export function useStockData({
 
     portfoliosRef.current.forEach(p => {
       if (p.accountType === 'simple') return;
-      const isActive = p.id === activePortfolioIdRef.current;
-      const items = isActive ? portfolioRef.current : (p.portfolio || []);
+      const items = p.portfolio || [];
       const isOverseas = p.accountType === 'overseas';
       items.forEach(item => {
         if (item.type === 'stock' && item.code) {
@@ -377,7 +376,7 @@ export function useStockData({
     setPortfolios(prev => prev.map(p => {
       if (p.accountType === 'simple') return p;
       const isActive = p.id === activePortfolioIdRef.current;
-      const items = isActive ? portfolioRef.current : (p.portfolio || []);
+      const items = p.portfolio || [];
       const hasUpdate = items.some(item =>
         (item.type === 'stock' && item.code && priceResults[item.code]) ||
         (item.type === 'fund' && item.code && fundResults[item.code])
@@ -513,25 +512,11 @@ export function useStockData({
         setStockFetchStatus(prev => ({ ...prev, [code]: priceResults[code] ? 'success' : 'fail' }));
       });
 
-      // 활성 계좌 portfolio 업데이트 (주식 + 펀드)
-      setPortfolio(prev => prev.map(item => {
-        if (item.type === 'stock' && item.code && priceResults[item.code]) {
-          const d = priceResults[item.code];
-          return { ...item, name: d.name, currentPrice: d.price, changeRate: d.changeRate };
-        }
-        if (item.type === 'fund' && item.code && fundResults[item.code]) {
-          const d = fundResults[item.code];
-          return { ...item, currentPrice: d.price, changeRate: d.changeRate };
-        }
-        return item;
-      }));
-
       // 전체 계좌 국내 주식 코드 수집 — 최근 이력 없으면 재수집 (useHistoryBackfill이 모든 계좌 빈 날짜 채우는 데 필요)
       const allKoreanCodes = new Set<string>();
       portfoliosRef.current.forEach(p => {
         if (p.accountType === 'simple' || p.accountType === 'overseas') return;
-        const items = p.id === activePortfolioIdRef.current ? portfolioRef.current : (p.portfolio || []);
-        items.forEach(item => { if (item.type === 'stock' && item.code) allKoreanCodes.add(item.code); });
+        (p.portfolio || []).forEach(item => { if (item.type === 'stock' && item.code) allKoreanCodes.add(item.code); });
       });
       const korCodesNeedingHistory = [...allKoreanCodes].filter(code => {
         const existing = stockHistoryMapRef.current[code];
