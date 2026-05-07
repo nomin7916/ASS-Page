@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard } from 'lucide-react';
+import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard, Calculator } from 'lucide-react';
 import { ADMIN_EMAIL } from '../config';
 
 export default function UserInfoBar({
@@ -14,6 +14,8 @@ export default function UserInfoBar({
   canAccessDividendTax,
   onOpenDividendTax,
   onAppClose,
+  showCalculator,
+  onToggleCalculator,
 }) {
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
@@ -21,6 +23,20 @@ export default function UserInfoBar({
     <div className="flex items-center justify-between text-xs text-gray-500 px-1">
       <span className="font-mono">{email}</span>
       <div className="flex items-center gap-1">
+        {onToggleCalculator && (
+          <button
+            onClick={onToggleCalculator}
+            title={showCalculator ? '계산기 닫기' : '계산기 열기'}
+            className={`p-1.5 rounded border transition-colors flex items-center justify-center ${
+              showCalculator
+                ? 'text-orange-400 bg-orange-900/20 border-orange-700/40 hover:bg-orange-900/30 hover:text-orange-300'
+                : 'text-gray-500 hover:text-orange-300 hover:bg-gray-800 border-transparent hover:border-gray-700'
+            }`}
+          >
+            <Calculator size={14} />
+          </button>
+        )}
+        <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
         {isAdmin && onOpenAdminPortal && (
           <button
             onClick={onOpenAdminPortal}

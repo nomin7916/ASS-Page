@@ -40,6 +40,7 @@ import DividendTaxPage from './components/DividendTaxPage';
 import NotificationBar from './components/NotificationBar';
 import ConfirmDialog from './components/ConfirmDialog';
 import LoadingOverlay from './components/LoadingOverlay';
+import FloatingCalculator from './components/FloatingCalculator';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -82,6 +83,7 @@ export default function App() {
     userEmail: string; userFolderId: string; adminToken: string; adminPinHash: string;
   } | null>(null);
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
+  const [showCalculator, setShowCalculator] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
@@ -1471,6 +1473,8 @@ export default function App() {
           canAccessDividendTax={canAccessDividendTax}
           onOpenDividendTax={() => setShowDividendTaxPage(true)}
           onAppClose={handleAppClose}
+          showCalculator={showCalculator}
+          onToggleCalculator={() => setShowCalculator(v => !v)}
         />
 
         {/* 알림 바 */}
@@ -1885,6 +1889,7 @@ export default function App() {
         portfolio={portfolio}
         setPortfolio={setPortfolio}
       />
+      <FloatingCalculator isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
     </div>
   );
 }
