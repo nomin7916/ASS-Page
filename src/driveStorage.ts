@@ -184,7 +184,7 @@ async function findFileId(token: string, folderId: string, fileName: string): Pr
     `name='${fileName}' and '${folderId}' in parents and trashed=false`
   );
   const res = await fetch(
-    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
+    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)&orderBy=modifiedTime desc`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res.ok) {
