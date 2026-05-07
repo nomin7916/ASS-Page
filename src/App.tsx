@@ -180,15 +180,15 @@ export default function App() {
             if (snapBeforeSwitch?.portfolios?.length > 0 && driveTokenRef.current) {
               await saveAllToDrive({ ...snapBeforeSwitch, portfolioUpdatedAt: Date.now() }, 'auto');
             }
-            // Fix 1: 이전 전환 타이머 취소 후 저장 차단 시작
+            // 저장 차단 시작 — ref를 먼저 설정해야 saveAllToDrive가 올바른 컨텍스트로 동작
             clearTimeout(adminTransitionTimerRef.current);
+            adminViewingAsRef.current = targetEmail;         // 1. 플래그 먼저 (ref 기반 가드)
+            adminOwnDriveTokenRef.current = driveTokenRef.current; // 2. 기존 토큰 백업
             adminTransitioningRef.current = true;
-            adminOwnDriveTokenRef.current = driveTokenRef.current;
-            adminViewingAsRef.current = targetEmail;
-            setAdminViewingAs(targetEmail);
             isInitialLoad.current = true;
-            driveTokenRef.current = adminToken;
+            driveTokenRef.current = adminToken;              // 3. 새 토큰 설정 (ref 설정 후)
             setDriveToken(adminToken);
+            setAdminViewingAs(targetEmail);
             driveFolderIdRef.current = userFolderId;
             // Fix 2: 이전 사용자 저장 타임스탬프 초기화 — 새 사용자 데이터 저장 누락 방지
             lastDriveSavedPortfolioUpdatedAtRef.current = 0;
@@ -197,21 +197,22 @@ export default function App() {
               notify(`${targetEmail} 데이터 로드 실패. 토큰 충돌 또는 네트워크 오류일 수 있습니다. "← 관리자 페이지" 버튼으로 복귀하세요.`, 'error');
             }
             isInitialLoad.current = false;
-            // Fix 1: 타이머 ID 저장 — 다음 전환 시 clearTimeout으로 취소 가능
             adminTransitionTimerRef.current = setTimeout(() => { adminTransitioningRef.current = false; }, 500);
-            // Fix 4: 전환 완료
             setAdminSwitching(false);
-            // 관리자 세션 타이머 시작 (50분 경고 → 60분 자동 종료)
-            adminSessionStartAtRef.current = Date.now();
-            if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
-            if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
-            adminSessionWarningTimerRef.current = setTimeout(() => {
-              notify(`${targetEmail} 페이지 접속 후 50분이 경과했습니다. 10분 후 자동으로 관리자 페이지로 복귀합니다.`, 'warning');
-            }, 50 * 60 * 1000);
-            adminSessionExpireTimerRef.current = setTimeout(async () => {
-              notify('관리자 접속 시간(1시간)이 만료되었습니다. 데이터를 저장하고 관리자 페이지로 복귀합니다.', 'warning');
-              await handleReturnToAdminPage();
-            }, 60 * 60 * 1000);
+            // 세션 타이머는 로드 성공 시에만 시작 (실패 시 타이머 없이 복귀 버튼 대기)
+            if (loadResult !== null) {
+              adminSessionStartAtRef.current = Date.now();
+              if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
+              if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
+              adminSessionWarningTimerRef.current = setTimeout(() => {
+                notify(`${targetEmail} 페이지 접속 후 50분이 경과했습니다. 10분 후 자동으로 관리자 페이지로 복귀합니다.`, 'warning');
+              }, 50 * 60 * 1000);
+              adminSessionExpireTimerRef.current = setTimeout(async () => {
+                if (!adminViewingAsRef.current) return;
+                notify('관리자 접속 시간(1시간)이 만료되었습니다. 데이터를 저장하고 관리자 페이지로 복귀합니다.', 'warning');
+                await handleReturnToAdminPage();
+              }, 60 * 60 * 1000);
+            }
           },
         });
         client.requestAccessToken({ prompt: '' });
@@ -273,9 +274,9 @@ export default function App() {
 
   // 포트폴리오 페이지에서 관리자 페이지로 이동 시: Drive 저장 후 선택 팝업 표시
   const handleGoToAdminPage = async () => {
-    // 다른 사용자 포트폴리오 편집 중일 때는 amber 배너 버튼 사용
     if (adminViewingAsRef.current) return;
     if (driveTokenRef.current && saveStateRef.current?.portfolios?.length > 0) {
+      if (driveSaveTimerRef.current) { clearTimeout(driveSaveTimerRef.current); driveSaveTimerRef.current = null; }
       const newUpdatedAt = Date.now();
       portfolioUpdatedAtRef.current = newUpdatedAt;
       lastDriveSavedPortfolioUpdatedAtRef.current = 0;
@@ -418,6 +419,16 @@ export default function App() {
       setAuthUser(null);
       driveTokenRef.current = '';
       setDriveToken('');
+      setAdminViewingAs(null);
+      adminViewingAsRef.current = null;
+      adminTransitioningRef.current = false;
+      adminOwnDriveTokenRef.current = '';
+      if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
+      if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
+      adminSessionWarningTimerRef.current = null;
+      adminSessionExpireTimerRef.current = null;
+      adminSessionStartAtRef.current = 0;
+      setAdminSessionElapsed(0);
     },
   });
 
@@ -1269,12 +1280,11 @@ export default function App() {
     }
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
-    // 초기 로드 완료 후 Drive 자동저장 (2초 디바운스 — 포트폴리오 테이블 변경 시 2초 이내 백업)
     if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
       driveSaveTimerRef.current = setTimeout(() => {
         saveAllToDrive(state);
-      }, 2000);
+      }, 800);
     }
   }, [portfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange]);
 
