@@ -117,7 +117,8 @@ export function useDriveSync({
 
   // ── Drive에서 데이터 불러오기 → applyStateData 콜백으로 state 적용 ──
   // updateAccessLog=true: 사용자 최초 로그인 시에만 전달 — accessLog 카운트 증가 후 Drive 즉시 반영
-  const loadFromDrive = async (token: string, updateAccessLog = false) => {
+  // isRetry=true: 401 재시도 호출 — 무한 루프 방지용
+  const loadFromDrive = async (token: string, updateAccessLog = false, isRetry = false) => {
     try {
       setSS('loading');
       setDriveStatus('loading');
@@ -158,9 +159,21 @@ export function useDriveSync({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('Drive 불러오기 실패:', msg);
+      // 401: 토큰 만료 → 무음 갱신 후 1회 재시도 (팝업 없이, 무한 루프 방지)
+      if (msg.includes('401') && !isRetry && tokenClientRef.current) {
+        const newToken = await new Promise<string | null>((resolve) => {
+          pendingTokenResolveRef.current = resolve;
+          tokenClientRef.current.requestAccessToken({ prompt: '' });
+        });
+        if (newToken) {
+          driveTokenRef.current = newToken;
+          setDriveToken(newToken);
+          return loadFromDrive(newToken, updateAccessLog, true);
+        }
+      }
       setSS('error');
       if (msg.includes('401')) {
-        console.warn('[Drive] 토큰 만료 또는 Drive 권한 없음 → 재로그인 필요');
+        console.warn('[Drive] 토큰 갱신 실패 → 재로그인 필요');
         setDriveStatus('auth_needed');
       } else if (msg.includes('403')) {
         console.warn('[Drive] 403 Forbidden: Google Cloud Console에서 drive.file 권한 또는 테스트 사용자 설정 확인 필요');

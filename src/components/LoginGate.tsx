@@ -222,6 +222,19 @@ export default function LoginGate({ onApproved }: Props) {
           setStep('idle');
           return;
         }
+        // Drive 토큰 유효성 검증 — 만료 토큰으로 앱 진입 시 빈 페이지 방지
+        // 401/403: 세션 제거 후 로그인 화면 (네트워크 오류는 세션 유지하고 진입)
+        try {
+          const probe = await fetch(
+            'https://www.googleapis.com/drive/v3/about?fields=user',
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (probe.status === 401 || probe.status === 403) {
+            sessionStorage.removeItem(SESSION_KEY);
+            setStep('idle');
+            return;
+          }
+        } catch { /* 네트워크 오류 → 세션 유지하고 앱 진입 허용 */ }
         const { name, feature1, feature2, feature3 } = await checkApproval(email);
         onApproved(email, token, { name, feature1, feature2, feature3 });
       },

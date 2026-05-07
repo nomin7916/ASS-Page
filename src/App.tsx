@@ -111,6 +111,7 @@ export default function App() {
     setAdminSessionElapsed(0);
     setAuthUser({ email, token });
     setUserFeatures(features);
+    driveTokenRef.current = token;
     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
       setAdminPendingChoice(true);
     } else {
@@ -249,25 +250,23 @@ export default function App() {
     if (snap?.portfolios?.length > 0 && driveTokenRef.current) {
       await saveAllToDrive(snap, 'auto');
     }
-    // 사용자 접근에 사용한 임시 토큰 즉시 폐기 (탈취 시 1시간 유효기간 단축)
-    const userAccessToken = driveTokenRef.current;
-    // Fix 1: 이전 전환 타이머 취소 후 저장 차단 시작
+    // 현재 driveTokenRef(사용자 접속용 adminToken)는 신선한 관리자 토큰이므로 그대로 유지
+    // 구 ownToken(로그인 시 백업)은 이미 만료됐을 수 있으므로 폐기
     clearTimeout(adminTransitionTimerRef.current);
     adminTransitioningRef.current = true;
     const ownToken = adminOwnDriveTokenRef.current;
     adminOwnDriveTokenRef.current = '';
     isInitialLoad.current = true;
-    driveTokenRef.current = ownToken;
-    setDriveToken(ownToken);
-    driveFolderIdRef.current = '';
-    // Fix 2: 이전 사용자 저장 타임스탬프 초기화
-    lastDriveSavedPortfolioUpdatedAtRef.current = 0;
-    // 토큰 폐기 — fire-and-forget (UI 흐름 차단 안 함)
-    if (userAccessToken && userAccessToken !== ownToken) {
-      fetch(`https://oauth2.googleapis.com/revoke?token=${userAccessToken}`, { method: 'POST' }).catch(() => {});
+    // driveTokenRef.current은 현재 신선한 adminToken — 교체하지 않고 유지
+    setDriveToken(driveTokenRef.current);
+    // 구 ownToken이 현재 토큰과 다를 경우에만 폐기
+    if (ownToken && ownToken !== driveTokenRef.current) {
+      fetch(`https://oauth2.googleapis.com/revoke?token=${ownToken}`, { method: 'POST' }).catch(() => {});
     }
-    // Fix 5: 토큰 만료 등 로드 실패 시 재인증 유도
-    const result = await loadFromDrive(ownToken);
+    // 관리자 자신의 폴더 ID 복원 (재검색 방지) — 없으면 빈 문자열로 재검색 허용
+    driveFolderIdRef.current = ownFolderIdRef.current || '';
+    lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+    const result = await loadFromDrive(driveTokenRef.current);
     if (result === null && !saveStateRef.current?.portfolios?.length) {
       notify('관리자 Drive 데이터 로드 실패. 헤더의 Drive 재연결 버튼을 눌러 주세요.', 'error');
     }

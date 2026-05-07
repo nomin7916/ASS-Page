@@ -25,13 +25,13 @@ export const DRIVE_FILES = {
   SESSION:           'portfolio_session.json',  // 세션 관리 (단일 기기 접속 강제)
 };
 
-// 동시 호출 중복 방지 — 같은 토큰+이메일 조합에 대해 한 번만 검색/생성
+// 동시 호출 중복 방지 — 이메일 기준 캐시 (토큰 교체 시에도 폴더 중복 생성 방지)
 let _folderCache: { key: string; promise: Promise<string> } | null = null;
 
 // Index_Data_<email> 폴더 찾기 또는 없으면 생성
 // 구 형식(Index_Data) 폴더가 있으면 자동으로 새 이름으로 마이그레이션
 export async function getOrCreateIndexFolder(token: string, email: string): Promise<string> {
-  const key = `${token}::${email}`;
+  const key = email; // 토큰이 바뀌어도 같은 이메일이면 캐시 히트 → 중복 생성 방지
   if (_folderCache?.key === key) return _folderCache.promise;
   const promise = _doGetOrCreateIndexFolder(token, email).catch(err => {
     _folderCache = null;
