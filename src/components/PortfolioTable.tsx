@@ -161,6 +161,20 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const [modalEvalAfter, setModalEvalAfter] = useState('');
   const [editingInvestId, setEditingInvestId] = useState(null);
   const [editingInvestVal, setEditingInvestVal] = useState('');
+  const [editingCell, setEditingCell] = useState(null);
+  const numericVal = (id, col, fmt) =>
+    editingCell?.id === id && editingCell?.col === col ? editingCell.val : fmt;
+  const numericFocus = (id, col, raw) => e => {
+    const n = cleanNum(raw);
+    setEditingCell({ id, col, val: n ? String(n) : '' });
+    e.target.select();
+  };
+  const numericChange = val => setEditingCell(prev => prev ? { ...prev, val } : null);
+  const numericBlur = (id, col) => () => {
+    if (editingCell?.id === id && editingCell?.col === col)
+      onUpdate(id, col, editingCell.val);
+    setEditingCell(null);
+  };
 
   if (!totals) return null;
 
@@ -347,14 +361,14 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
 
                   {/* 보유수량 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
-                    <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200 caret-blue-400`} value={formatNumber(item.quantity)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'quantity', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
+                    <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200 caret-blue-400`} value={numericVal(item.id, 'quantity', formatNumber(item.quantity))} onFocus={numericFocus(item.id, 'quantity', item.quantity)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'quantity')} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
                   </td>
 
                   {/* 투자금액 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
                     {isOverseas
                       ? <input type="text" data-col="investAmountUSD" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={editingInvestId === item.id ? editingInvestVal : formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => { const usd = cleanNum(item.purchasePrice) * cleanNum(item.quantity); setEditingInvestId(item.id); setEditingInvestVal(usd > 0 ? String(usd) : ''); e.target.select(); }} onChange={e => setEditingInvestVal(e.target.value)} onBlur={() => { const usd = cleanNum(editingInvestVal); const qty = cleanNum(item.quantity); onUpdate(item.id, 'purchasePrice', qty > 0 ? usd / qty : 0); setEditingInvestId(null); }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
-                      : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
+                      : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={numericVal(item.id, 'investAmount', formatNumber(item.investAmount))} onFocus={numericFocus(item.id, 'investAmount', item.investAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'investAmount')} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
                     }
                   </td>
 
@@ -401,7 +415,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               <tr key={item.id} className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
                 <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
                 <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={7}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
-                <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={formatNumber(item.depositAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'depositAmount', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
+                <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={numericVal(item.id, 'depositAmount', formatNumber(item.depositAmount))} onFocus={numericFocus(item.id, 'depositAmount', item.depositAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'depositAmount')} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
                 <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(item.investRatio)}</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
                 <td className="py-3 px-3 border-r border-gray-600 text-yellow-500 bg-yellow-900/20 text-right">{formatPercent(item.evalRatio)}</td>
@@ -486,7 +500,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   </td>
                   {/* 투자금액 - 직접입력 */}
                   <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
-                    <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={formatNumber(item.investAmount)} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'investAmount', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
+                    <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={numericVal(item.id, 'investAmount', formatNumber(item.investAmount))} onFocus={numericFocus(item.id, 'investAmount', item.investAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'investAmount')} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
                   </td>
                   {/* 비중(투자) */}
                   <td className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.investRatio)}</td>

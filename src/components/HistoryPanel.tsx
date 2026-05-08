@@ -31,7 +31,7 @@ export default function HistoryPanel({
   };
 
   const commitEdit = (date) => {
-    const parsed = parseInt(editingValue.replace(/[^0-9]/g, ''), 10);
+    const parsed = parseFloat(editingValue.replace(/[^0-9.]/g, ''));
     if (!isNaN(parsed) && parsed > 0) {
       setHistory(prev => prev.map(h => h.date === date ? { ...h, evalAmount: parsed } : h));
       notify(`${date} 평가액 수정 완료`, 'success');

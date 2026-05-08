@@ -404,12 +404,12 @@ export default function IntegratedDashboard({
                                   inputMode="numeric"
                                   className="w-full min-w-[90px] bg-transparent font-bold outline-none text-center text-gray-200 border-b border-dashed border-gray-600 focus:border-green-400"
                                   value={simpleEditField?.id === s.id && simpleEditField?.field === 'principal'
-                                    ? (s.principal || '')
+                                    ? (simpleEditField.rawVal ?? '')
                                     : s.principal ? formatCurrency(s.principal) : ''}
                                   placeholder={s.currentEval ? formatCurrency(s.currentEval) : '₩0'}
-                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'principal'}); e.target.select(); }}
-                                  onBlur={() => setSimpleEditField(null)}
-                                  onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value.replace(/[^0-9]/g, ''))}
+                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'principal', rawVal: s.principal ? String(cleanNum(s.principal)) : ''}); e.target.select(); }}
+                                  onBlur={() => { if (simpleEditField?.id === s.id && simpleEditField?.field === 'principal') updateSimpleAccountField(s.id, 'principal', simpleEditField?.rawVal ?? ''); setSimpleEditField(null); }}
+                                  onChange={e => setSimpleEditField(prev => prev ? { ...prev, rawVal: e.target.value } : null)}
                                 />)
                               ) : isMatong ? (
                                 hideAmounts ? '••••••' : <span className="text-gray-200">{formatCurrency(s.principal)}</span>
@@ -424,12 +424,12 @@ export default function IntegratedDashboard({
                                   inputMode="numeric"
                                   className="w-full min-w-[90px] bg-transparent font-bold outline-none text-center text-white border-b border-dashed border-gray-600 focus:border-green-400"
                                   value={simpleEditField?.id === s.id && simpleEditField?.field === 'eval'
-                                    ? (s.currentEval || '')
+                                    ? (simpleEditField.rawVal ?? '')
                                     : s.currentEval ? formatCurrency(s.currentEval) : ''}
                                   placeholder="₩0"
-                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'eval'}); e.target.select(); }}
-                                  onBlur={() => setSimpleEditField(null)}
-                                  onChange={e => updateSimpleAccountField(s.id, 'evalAmount', e.target.value.replace(/[^0-9]/g, ''))}
+                                  onFocus={e => { setSimpleEditField({id: s.id, field: 'eval', rawVal: s.currentEval ? String(cleanNum(s.currentEval)) : ''}); e.target.select(); }}
+                                  onBlur={() => { if (simpleEditField?.id === s.id && simpleEditField?.field === 'eval') updateSimpleAccountField(s.id, 'evalAmount', simpleEditField?.rawVal ?? ''); setSimpleEditField(null); }}
+                                  onChange={e => setSimpleEditField(prev => prev ? { ...prev, rawVal: e.target.value } : null)}
                                 />
                               ) : (hideAmounts ? '••••••' : formatCurrency(s.currentEval))}
                             </td>
@@ -476,11 +476,11 @@ export default function IntegratedDashboard({
                                       data-matong-input="true"
                                       className="w-[110px] bg-[#1e293b] border border-green-700/50 rounded px-2 py-0.5 text-green-300 font-bold text-center outline-none focus:border-green-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawableTotal'
-                                        ? (s.withdrawableTotal || '') : s.withdrawableTotal ? formatCurrency(s.withdrawableTotal) : ''}
+                                        ? (simpleEditField.rawVal ?? '') : s.withdrawableTotal ? formatCurrency(s.withdrawableTotal) : ''}
                                       placeholder="₩0"
-                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'withdrawableTotal'}); e.target.select(); }}
-                                      onBlur={() => setSimpleEditField(null)}
-                                      onChange={e => updateMatongAccountField(s.id, 'withdrawableTotal', e.target.value.replace(/[^0-9]/g, ''))}
+                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'withdrawableTotal', rawVal: s.withdrawableTotal ? String(cleanNum(s.withdrawableTotal)) : ''}); e.target.select(); }}
+                                      onBlur={() => { if (simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawableTotal') updateMatongAccountField(s.id, 'withdrawableTotal', simpleEditField?.rawVal ?? ''); setSimpleEditField(null); }}
+                                      onChange={e => setSimpleEditField(prev => prev ? { ...prev, rawVal: e.target.value } : null)}
                                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); focusNextMatongInput(e.target, 1); } }}
                                     />
                                   </label>
@@ -491,11 +491,11 @@ export default function IntegratedDashboard({
                                       data-matong-input="true"
                                       className="w-[110px] bg-[#1e293b] border border-green-700/50 rounded px-2 py-0.5 text-green-300 font-bold text-center outline-none focus:border-green-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'currentWithdrawal'
-                                        ? (s.currentWithdrawal || '') : s.currentWithdrawal ? formatCurrency(s.currentWithdrawal) : ''}
+                                        ? (simpleEditField.rawVal ?? '') : s.currentWithdrawal ? formatCurrency(s.currentWithdrawal) : ''}
                                       placeholder="₩0"
-                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'currentWithdrawal'}); e.target.select(); }}
-                                      onBlur={() => setSimpleEditField(null)}
-                                      onChange={e => updateMatongAccountField(s.id, 'currentWithdrawal', e.target.value.replace(/[^0-9]/g, ''))}
+                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'currentWithdrawal', rawVal: s.currentWithdrawal ? String(cleanNum(s.currentWithdrawal)) : ''}); e.target.select(); }}
+                                      onBlur={() => { if (simpleEditField?.id === s.id && simpleEditField?.field === 'currentWithdrawal') updateMatongAccountField(s.id, 'currentWithdrawal', simpleEditField?.rawVal ?? ''); setSimpleEditField(null); }}
+                                      onChange={e => setSimpleEditField(prev => prev ? { ...prev, rawVal: e.target.value } : null)}
                                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); focusNextMatongInput(e.target, 1); } }}
                                     />
                                   </label>
@@ -506,11 +506,11 @@ export default function IntegratedDashboard({
                                       data-matong-input="true"
                                       className="w-[110px] bg-[#1e293b] border border-green-700/50 rounded px-2 py-0.5 text-green-300 font-bold text-center outline-none focus:border-green-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawalLimit'
-                                        ? (s.withdrawalLimit || '') : s.withdrawalLimit ? formatCurrency(s.withdrawalLimit) : ''}
+                                        ? (simpleEditField.rawVal ?? '') : s.withdrawalLimit ? formatCurrency(s.withdrawalLimit) : ''}
                                       placeholder="₩0"
-                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'withdrawalLimit'}); e.target.select(); }}
-                                      onBlur={() => setSimpleEditField(null)}
-                                      onChange={e => updateMatongAccountField(s.id, 'withdrawalLimit', e.target.value.replace(/[^0-9]/g, ''))}
+                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'withdrawalLimit', rawVal: s.withdrawalLimit ? String(cleanNum(s.withdrawalLimit)) : ''}); e.target.select(); }}
+                                      onBlur={() => { if (simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawalLimit') updateMatongAccountField(s.id, 'withdrawalLimit', simpleEditField?.rawVal ?? ''); setSimpleEditField(null); }}
+                                      onChange={e => setSimpleEditField(prev => prev ? { ...prev, rawVal: e.target.value } : null)}
                                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); focusNextMatongInput(e.target, 1); } }}
                                     />
                                   </label>

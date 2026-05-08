@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React from 'react';
+import React, { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { cleanNum, formatCurrency, formatPercent, formatNumber, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 
@@ -31,6 +31,20 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors text-[13px]";
   const CELL_FOCUS = 'focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500';
   const refreshCls = `flex items-center justify-end gap-1 cursor-pointer hover:bg-teal-900/30 rounded px-1 py-0.5 font-bold text-gray-300 transition-colors ${isRefreshing ? 'animate-pulse' : ''}`;
+  const [editingCell, setEditingCell] = useState(null);
+  const numericVal = (id, col, fmt) =>
+    editingCell?.id === id && editingCell?.col === col ? editingCell.val : fmt;
+  const numericFocus = (id, col, raw) => e => {
+    const n = cleanNum(raw);
+    setEditingCell({ id, col, val: n ? String(n) : '' });
+    e.target.select();
+  };
+  const numericChange = val => setEditingCell(prev => prev ? { ...prev, val } : null);
+  const numericBlur = (id, col) => () => {
+    if (editingCell?.id === id && editingCell?.col === col)
+      onUpdate(id, col, editingCell.val);
+    setEditingCell(null);
+  };
 
   return (
     <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full">
@@ -76,9 +90,10 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
                   type="text"
                   data-col="purchasePrice"
                   className={`${inp} text-right px-3 py-3 text-gray-400 caret-blue-400`}
-                  value={goldItem ? formatNumber(goldItem.purchasePrice) : '0'}
-                  onFocus={e => e.target.select()}
-                  onChange={e => goldItem && onUpdate(goldItem.id, 'purchasePrice', e.target.value)}
+                  value={goldItem ? numericVal(goldItem.id, 'purchasePrice', formatNumber(goldItem.purchasePrice)) : '0'}
+                  onFocus={goldItem ? numericFocus(goldItem.id, 'purchasePrice', goldItem.purchasePrice) : undefined}
+                  onChange={e => numericChange(e.target.value)}
+                  onBlur={goldItem ? numericBlur(goldItem.id, 'purchasePrice') : undefined}
                   onKeyDown={e => handleTableKeyDown(e, 'purchasePrice')}
                 />
               </td>
@@ -88,9 +103,10 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
                     type="text"
                     data-col="quantity"
                     className={`${inp} text-center text-blue-200 flex-1 min-w-0 caret-blue-400`}
-                    value={goldItem ? formatNumber(goldItem.quantity) : '0'}
-                    onFocus={e => e.target.select()}
-                    onChange={e => goldItem && onUpdate(goldItem.id, 'quantity', e.target.value)}
+                    value={goldItem ? numericVal(goldItem.id, 'quantity', formatNumber(goldItem.quantity)) : '0'}
+                    onFocus={goldItem ? numericFocus(goldItem.id, 'quantity', goldItem.quantity) : undefined}
+                    onChange={e => numericChange(e.target.value)}
+                    onBlur={goldItem ? numericBlur(goldItem.id, 'quantity') : undefined}
                     onKeyDown={e => handleTableKeyDown(e, 'quantity')}
                   />
                   <span className="text-gray-500 text-[11px] shrink-0">g</span>
@@ -206,9 +222,10 @@ const KrxGoldTable = ({ portfolio, goldKr, goldIntl, usdkrw, onUpdate, onRefresh
                   <input
                     type="text"
                     className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px]"
-                    value={formatNumber(depositItem.depositAmount)}
-                    onFocus={e => e.target.select()}
-                    onChange={e => onUpdate(depositItem.id, 'depositAmount', e.target.value)}
+                    value={numericVal(depositItem.id, 'depositAmount', formatNumber(depositItem.depositAmount))}
+                    onFocus={numericFocus(depositItem.id, 'depositAmount', depositItem.depositAmount)}
+                    onChange={e => numericChange(e.target.value)}
+                    onBlur={numericBlur(depositItem.id, 'depositAmount')}
                     onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
                   />
                 </td>

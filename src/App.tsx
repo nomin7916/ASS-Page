@@ -277,7 +277,7 @@ export default function App() {
   // ── 통합 대시보드 ──
   const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(true);
   const [intExpandedCat, setIntExpandedCat] = useState(null);
-  const [simpleEditField, setSimpleEditField] = useState<{id: string, field: string} | null>(null);
+  const [simpleEditField, setSimpleEditField] = useState<{id: string, field: string, rawVal?: string} | null>(null);
   const [showNewAccountMenu, setShowNewAccountMenu] = useState(false);
   const [showUnlockPinModal, setShowUnlockPinModal] = useState(false);
   const [unlockPinDigits, setUnlockPinDigits] = useState(['', '', '', '']);
