@@ -59,6 +59,9 @@ export function useDriveSync({
   const [backupList, setBackupList] = useState<DriveBackupEntry[]>([]);
   const [backupListLoading, setBackupListLoading] = useState(false);
   const [applyingBackupId, setApplyingBackupId] = useState<string | null>(null);
+  const [showInactivityWarning, setShowInactivityWarning] = useState(false);
+  const lastActivityAtRef = useRef<number>(Date.now());
+  const inactivityWarningActiveRef = useRef(false);
 
   // ── SyncStatus ref (렌더 없이 동기적으로 읽어야 하므로 ref 사용) ──
   const syncStatusRef = useRef<SyncStatus>('idle');
@@ -576,6 +579,46 @@ export function useDriveSync({
     return () => clearInterval(timer);
   }, [authUser]);
 
+  // ── 비활동 타임아웃: 30초마다 체크, 50분 비활동 시 경고 ──
+  useEffect(() => {
+    if (!authUser) return;
+    const TIMEOUT = 50 * 60 * 1000;
+    const id = setInterval(() => {
+      if (isInitialLoad.current) return;
+      if (inactivityWarningActiveRef.current) return;
+      if (Date.now() - lastActivityAtRef.current >= TIMEOUT) {
+        inactivityWarningActiveRef.current = true;
+        setShowInactivityWarning(true);
+      }
+    }, 30000);
+    return () => {
+      clearInterval(id);
+      inactivityWarningActiveRef.current = false;
+      setShowInactivityWarning(false);
+    };
+  }, [authUser]);
+
+  const resetActivity = () => {
+    lastActivityAtRef.current = Date.now();
+  };
+
+  const handleInactivityContinue = () => {
+    inactivityWarningActiveRef.current = false;
+    setShowInactivityWarning(false);
+    lastActivityAtRef.current = Date.now();
+  };
+
+  const handleInactivityLogout = async () => {
+    inactivityWarningActiveRef.current = false;
+    setShowInactivityWarning(false);
+    const snap = saveStateRef.current;
+    if (snap?.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
+      try { await saveAllToDrive(snap); } catch {}
+    }
+    onForceLogout();
+    try { window.close(); } catch {}
+  };
+
   return {
     // 상태
     driveStatus, setDriveStatus,
@@ -584,6 +627,10 @@ export function useDriveSync({
     backupList, setBackupList,
     backupListLoading, setBackupListLoading,
     applyingBackupId, setApplyingBackupId,
+    showInactivityWarning,
+    resetActivity,
+    handleInactivityContinue,
+    handleInactivityLogout,
     // refs (App.tsx auth effect에서 직접 조작)
     driveTokenRef,
     driveFolderIdRef,

@@ -40,6 +40,7 @@ import DividendTaxPage from './components/DividendTaxPage';
 import NotificationBar from './components/NotificationBar';
 import ConfirmDialog from './components/ConfirmDialog';
 import LoadingOverlay from './components/LoadingOverlay';
+import InactivityModal from './components/InactivityModal';
 import FloatingCalculator from './components/FloatingCalculator';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
@@ -325,6 +326,10 @@ export default function App() {
     backupList, setBackupList,
     backupListLoading, setBackupListLoading,
     applyingBackupId, setApplyingBackupId,
+    showInactivityWarning,
+    resetActivity,
+    handleInactivityContinue,
+    handleInactivityLogout,
     driveTokenRef, driveFolderIdRef, tokenClientRef, pendingTokenResolveRef,
     isInitialLoad, driveSaveTimerRef, portfolioUpdatedAtRef, prevPortfolioStructureRef,
     lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
@@ -360,6 +365,20 @@ export default function App() {
       setAdminSessionElapsed(0);
     },
   });
+
+  // ── 사용자 활동 감지 → 비활동 타임아웃 리셋 ──
+  useEffect(() => {
+    if (!authUser) return;
+    const handler = () => resetActivity();
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('keydown', handler);
+    document.addEventListener('touchstart', handler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('keydown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
+  }, [authUser]);
 
   // ── useMarketData 훅 ──
   const {
@@ -1400,6 +1419,7 @@ export default function App() {
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
       <LoadingOverlay visible={isInitialLoading} notificationLog={notificationLog} onDismiss={() => setIsInitialLoading(false)} />
+      {showInactivityWarning && <InactivityModal onContinue={handleInactivityContinue} onLogout={handleInactivityLogout} />}
       {showAdminChoiceModal && (
         <AdminChoiceModal
           adminEmail={authUser.email}
