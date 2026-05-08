@@ -102,6 +102,8 @@ export default function IntegratedDashboard({
   sec = { dividend: false, history: false, donut: false },
   setSec,
   intDefaultSelectionResult,
+  matongClosedIds = {},
+  setMatongClosedIds,
 }) {
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -109,7 +111,6 @@ export default function IntegratedDashboard({
   const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
   const memoDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const [showSimpleMenu, setShowSimpleMenu] = useState(false);
-  const [matongClosedIds, setMatongClosedIds] = useState({});
   const simpleMenuRef = useRef(null);
   useEffect(() => {
     if (!showSimpleMenu) return;
