@@ -89,7 +89,8 @@ export function useIntegratedData({
 
   const computedIntHistory = useMemo(() => {
     const dateToTotal = new Map();
-    const today = new Date().toISOString().split('T')[0];
+    const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const today = kstNow.toISOString().split('T')[0];
     portfolios.forEach(p => {
       const hist = p.id === activePortfolioId ? history : (p.history || []);
       hist.forEach(h => {
@@ -104,22 +105,24 @@ export function useIntegratedData({
     }
     const portfolioPrincipalData = portfolios.map(p => {
       const isActive = p.id === activePortfolioId;
+      const isOverseas = p.accountType === 'overseas';
       const startDate = isActive ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
       const currentPrincipal = isActive ? principal : (p.principal || 0);
-      const fxRate = p.accountType === 'overseas'
+      const fxRate = isOverseas
         ? ((isActive ? avgExchangeRate : p.avgExchangeRate) || marketIndicators.usdkrw || 1)
         : 1;
       const currentPrincipalKRW = currentPrincipal * fxRate;
       const deps = isActive ? depositHistory : (p.depositHistory || []);
       const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
-      return { startDate, currentPrincipalKRW, deps, wds };
+      return { startDate, currentPrincipalKRW, deps, wds, isOverseas };
     });
     return [...dateToTotal.entries()]
       .map(([date, evalAmount]) => {
-        const effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, deps, wds }) => {
+        const effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, deps, wds, isOverseas }) => {
           if (!startDate || startDate > date) return sum;
-          const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (d.fxRate || 1), 0);
-          const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (d.fxRate || 1), 0);
+          const depRate = (d) => isOverseas ? (d.fxRate || 1) : 1;
+          const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
+          const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
           return sum + Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
         }, 0);
         return { id: date, date, evalAmount, effectivePrincipal };

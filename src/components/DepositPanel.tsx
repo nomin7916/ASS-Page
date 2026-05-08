@@ -120,7 +120,7 @@ export default function DepositPanel({
                     <th className="py-2.5 border-r border-gray-600 text-center px-2 font-normal whitespace-nowrap">메모</th>
                     <th className={`py-2.5 ${isOverseas ? 'w-[40px]' : 'w-[45px]'} text-center font-normal`}>
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: marketIndicators.usdkrw || 1, memo: "" }, ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                        <button onClick={() => setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: isOverseas ? (marketIndicators.usdkrw || 1) : 1, memo: "" }, ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
                         <button onClick={handleDepositDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="입금 내역 CSV 다운로드"><Download size={12} /></button>
                       </div>
                     </th>
@@ -178,7 +178,7 @@ export default function DepositPanel({
                     <th className="py-2.5 border-r border-gray-600 text-center px-2 font-normal whitespace-nowrap">메모</th>
                     <th className={`py-2.5 ${isOverseas ? 'w-[40px]' : 'w-[45px]'} text-center font-normal`}>
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setDepositHistory2([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: marketIndicators.usdkrw || 1, memo: "" }, ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
+                        <button onClick={() => setDepositHistory2([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: isOverseas ? (marketIndicators.usdkrw || 1) : 1, memo: "" }, ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
                         <button onClick={handleWithdrawDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="출금 내역 CSV 다운로드"><Download size={12} /></button>
                       </div>
                     </th>
