@@ -802,6 +802,7 @@ export default function App() {
     const localSortedHist = [...history].sort((a, b) => new Date(a.date) - new Date(b.date));
     const sortedDeposits = [...depositHistory].sort((a, b) => a.date < b.date ? -1 : 1);
     const sortedWithdrawals = [...depositHistory2].sort((a, b) => a.date < b.date ? -1 : 1);
+    const isOverseasChart = activePortfolioAccountType === 'overseas';
     const rawData = filteredDates.map(date => {
       let trueEvalAtDate = 0, retRate = 0;
       if (date >= portfolioStartDate) {
@@ -821,8 +822,12 @@ export default function App() {
         retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
       }
       let principalAmount = 0;
-      for (const d of sortedDeposits) { if (d.date <= date) principalAmount += cleanNum(d.amount); else break; }
-      for (const w of sortedWithdrawals) { if (w.date <= date) principalAmount -= cleanNum(w.amount); else break; }
+      for (const d of sortedDeposits) { if (d.date <= date) principalAmount += cleanNum(d.amount) * (isOverseasChart ? (cleanNum(d.fxRate) || 1) : 1); else break; }
+      for (const w of sortedWithdrawals) { if (w.date <= date) principalAmount -= cleanNum(w.amount) * (isOverseasChart ? (cleanNum(w.fxRate) || 1) : 1); else break; }
+      if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) {
+        const fallbackFx = isOverseasChart ? (cleanNum(avgExchangeRate) || marketIndicators?.usdkrw || 1) : 1;
+        principalAmount = cleanNum(principal) * fallbackFx;
+      }
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
@@ -884,7 +889,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators]);
 
   // ── 통합 대시보드 계산 ──
   const {
