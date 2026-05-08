@@ -87,6 +87,7 @@ export default function App() {
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
+  const [youtubeUrl, setYoutubeUrl] = useState('');
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
   const [seenAdminNotifIds, setSeenAdminNotifIds] = useState<string[]>([]);
