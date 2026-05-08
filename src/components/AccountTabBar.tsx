@@ -34,7 +34,7 @@ export default function AccountTabBar({
           style={{ boxShadow: `inset 3px 0 0 0 #60a5fa${showIntegratedDashboard ? 'CC' : '66'}` }}
           className={`w-[96px] py-2 text-xs font-bold rounded-md border transition-all duration-200 truncate ${showIntegratedDashboard ? 'bg-slate-800 text-white border-slate-500' : 'text-gray-400 border-slate-700 hover:bg-slate-800 hover:text-white hover:border-slate-500'}`}
         >총 자산 현황</button>
-        {portfolios.filter(p => p.accountType !== 'simple').map(p => {
+        {portfolios.filter(p => p.accountType !== 'simple' && p.accountType !== 'matong').map(p => {
           const typeConf = ACCOUNT_TYPE_CONFIG[p.accountType] || ACCOUNT_TYPE_CONFIG['portfolio'];
           const isActive = !showIntegratedDashboard && activePortfolioId === p.id;
           return (
