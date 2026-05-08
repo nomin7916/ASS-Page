@@ -367,8 +367,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
     <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-10">
-          <div className="text-4xl font-black text-white tracking-tight mb-2">포트폴리오 대시보드</div>
-          <div className="text-gray-400 text-sm">투자 포트폴리오 관리 시스템</div>
+          <div className="text-4xl font-black text-white tracking-tight">종합 자산관리 대시보드</div>
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
@@ -384,9 +383,6 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
           {/* 구글 로그인 */}
           {(step === 'idle' || step === 'loading') && (
             <div className="flex flex-col items-center gap-6">
-              <p className="text-gray-300 text-sm text-center leading-relaxed">
-                구글 계정으로 로그인하면<br />관리자가 승인 후 이용 가능합니다.
-              </p>
               <button
                 onClick={handleLogin}
                 disabled={step === 'loading'}
@@ -409,11 +405,6 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
                   </>
                 )}
               </button>
-              {step === 'idle' && (
-                <p className="text-gray-600 text-xs text-center">
-                  로그인 시 구글 드라이브 접근 권한이 요청됩니다.
-                </p>
-              )}
             </div>
           )}
 
@@ -523,9 +514,6 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
           )}
         </div>
 
-        <p className="text-center text-gray-700 text-xs mt-6">
-          관리자 문의: {ADMIN_EMAIL}
-        </p>
       </div>
     </div>
   );

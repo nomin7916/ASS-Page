@@ -390,6 +390,10 @@ export default function App() {
     };
   }, [authUser]);
 
+  useEffect(() => {
+    document.title = authUser ? `종합 자산 관리 - ${authUser.email}` : '종합 자산 관리';
+  }, [authUser]);
+
   // ── useMarketData 훅 ──
   const {
     indicatorHistoryLoading, setIndicatorHistoryLoading,
