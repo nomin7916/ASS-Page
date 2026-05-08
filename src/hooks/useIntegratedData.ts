@@ -31,7 +31,7 @@ export function useIntegratedData({
         const cagr = prin > 0 && evalAmount > 0 && days > 0
           ? days < 365 ? (evalAmount / prin - 1) * 100 : (Math.pow(evalAmount / prin, 365.25 / days) - 1) * 100
           : 0;
-        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: 0, returnRate, cagr, cats: evalAmount > 0 ? { '현금': evalAmount } : {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '' };
+        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: evalAmount, returnRate, cagr, cats: evalAmount > 0 ? { '예수금': evalAmount } : {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '' };
       }
 
       if (p.accountType === 'matong') {
@@ -236,7 +236,7 @@ export function useIntegratedData({
         if (evalAmount <= 0) return;
         const accountName = isActive ? title : p.name;
         const key = accountName || '직접입력';
-        if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '현금', code: '' };
+        if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금', code: '' };
         holdingsMap[key].value += evalAmount;
         holdingsMap[key].cost += cleanNum(p.principal) || evalAmount;
         return;

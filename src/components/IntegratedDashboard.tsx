@@ -435,7 +435,7 @@ export default function IntegratedDashboard({
                             </td>
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{isMatong ? '0.00%' : formatPercent(s.returnRate)}</td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-blue-300 font-bold">{isMatong ? '0.00%' : formatPercent(s.cagr)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isSimple || isMatong ? '-' : (hideAmounts ? '••••••' : formatCurrency(s.depositAmount))}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isMatong ? '-' : (hideAmounts ? '••••••' : formatCurrency(s.depositAmount))}</td>
                             {/* 수익 */}
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.currentEval - s.principal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                               {isMatong ? '₩0' : (hideAmounts ? '••••••' : formatCurrency(s.currentEval - s.principal))}
