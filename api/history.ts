@@ -4,6 +4,112 @@ export const config = { runtime: 'edge' };
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
 
+const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
+const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
+const KIS_APP_SECRET = process.env.KIS_APP_SECRET ?? '';
+
+let _kisToken: string | null = null;
+let _kisTokenExpiry = 0;
+
+async function getKisToken(): Promise<string | null> {
+  if (!KIS_APP_KEY || !KIS_APP_SECRET) return null;
+  if (_kisToken && Date.now() < _kisTokenExpiry) return _kisToken;
+  try {
+    const res = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'client_credentials', appkey: KIS_APP_KEY, appsecret: KIS_APP_SECRET }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (!json.access_token) return null;
+    _kisToken = json.access_token;
+    _kisTokenExpiry = Date.now() + 23 * 60 * 60 * 1000;
+    return _kisToken;
+  } catch { return null; }
+}
+
+const SUFFIX_TO_EXCD: Record<string, string> = { O: 'NASD', N: 'NYSE', P: 'AMEX', K: 'NYSE' };
+const EXCD_TRY_ORDER = ['NASD', 'NYSE', 'AMEX'];
+
+// KIS 해외주식 기간별시세 (HHDFS76240000) — KEYB 페이지네이션으로 최대 ~3년치 수집
+async function fetchKisOverseasHistory(
+  baseTicker: string,
+  token: string,
+  excd: string,
+  d1: string, // YYYYMMDD
+  d2: string  // YYYYMMDD
+): Promise<Record<string, number>> {
+  const result: Record<string, number> = {};
+  let keyb = '';
+  const endDate = d2.slice(0, 8);
+
+  for (let page = 0; page < 12; page++) {
+    try {
+      const params = new URLSearchParams({
+        AUTH: '', EXCD: excd, SYMB: baseTicker,
+        GUBN: '0',   // 일별
+        BYMD: endDate,
+        MODP: '1',   // 수정주가
+        KEYB: keyb,
+      });
+      const res = await fetch(`${KIS_BASE}/uapi/overseas-price/v1/quotations/dailyprice?${params}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${token}`,
+          appkey: KIS_APP_KEY,
+          appsecret: KIS_APP_SECRET,
+          tr_id: 'HHDFS76240000',
+          custtype: 'P',
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) break;
+      const json = await res.json();
+      const rows: any[] = json.output2 ?? [];
+      if (rows.length === 0) break;
+
+      let earliest = '';
+      for (const row of rows) {
+        const d = String(row.bass_dt ?? '');
+        const price = parseFloat(String(row.clos_prce ?? '0').replace(/,/g, ''));
+        if (d.length === 8 && price > 0) {
+          const dateStr = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+          result[dateStr] = price;
+          if (!earliest || d < earliest) earliest = d;
+        }
+      }
+
+      if (earliest && earliest <= d1.slice(0, 8)) break;
+      keyb = String(json.ctx_area_nk ?? '');
+      if (!keyb) break;
+    } catch { break; }
+  }
+  return result;
+}
+
+// KIS 해외주식 히스토리: EXCD 힌트 없으면 NASD→NYSE→AMEX 순 시도
+async function fetchKisOverseasHistoryAuto(
+  ticker: string,
+  token: string,
+  d1: string,
+  d2: string,
+  hintExcd?: string
+): Promise<Record<string, number>> {
+  const baseTicker = ticker.includes('.') ? ticker.split('.')[0] : ticker;
+  const suffixMatch = ticker.match(/\.([A-Z]{1,2})$/);
+  const targets = hintExcd
+    ? [hintExcd]
+    : (suffixMatch ? [SUFFIX_TO_EXCD[suffixMatch[1]] ?? 'NASD'] : EXCD_TRY_ORDER);
+
+  for (const ex of targets) {
+    const data = await fetchKisOverseasHistory(baseTicker, token, ex, d1, d2);
+    if (Object.keys(data).length >= 5) return data;
+  }
+  return {};
+}
+
 // Yahoo Finance 심볼 매핑 (stooq 대체)
 const YAHOO_SYMBOLS: Record<string, string> = {
   us10y:    '^TNX',
@@ -227,7 +333,7 @@ export default async function handler(request: Request): Promise<Response> {
   const start = (searchParams.get('start') ?? '').replace(/-/g, '');
   const end   = (searchParams.get('end')   ?? '').replace(/-/g, '');
 
-  // ── 해외주식 히스토리: Yahoo Finance (1순위) → Naver worldstock (2순위) ──
+  // ── 해외주식 히스토리: Yahoo Finance (1순위) → KIS (2순위) → Naver worldstock (3순위) ──
   if (key === 'worldstock') {
     const code = searchParams.get('code') ?? '';
     if (!code) return new Response('code 파라미터 필요', { status: 400 });
@@ -236,12 +342,24 @@ export default async function handler(request: Request): Promise<Response> {
     const d1 = start || defStart;
     const d2 = end   || defEnd;
 
-    // 1순위: Yahoo Finance — 단일 호출로 수년치 데이터 (Edge Function 타임아웃 없음)
+    // 1순위: Yahoo Finance — 단일 호출로 수년치 데이터
     const yahooTicker = code.includes('.') ? code.split('.')[0] : code;
     let data = await fetchYahooHistory(yahooTicker, d1, d2);
     let source = 'Yahoo Finance';
 
-    // 2순위: Naver worldstock — Yahoo 실패 시 청크 수집으로 보완
+    // 2순위: KIS 해외주식 기간별시세 — Yahoo 실패 시 사용
+    if (Object.keys(data).length < 5) {
+      const kisToken = await getKisToken();
+      if (kisToken) {
+        const kisData = await fetchKisOverseasHistoryAuto(code, kisToken, d1, d2);
+        if (Object.keys(kisData).length >= 5) {
+          data = kisData;
+          source = 'KIS-Overseas';
+        }
+      }
+    }
+
+    // 3순위: Naver worldstock — KIS도 실패 시 청크 수집으로 보완
     if (Object.keys(data).length < 5) {
       const naverData = await fetchNaverWorldstockHistory(code, d1, d2);
       if (Object.keys(naverData).length > 0) {
