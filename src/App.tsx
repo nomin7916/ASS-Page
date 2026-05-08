@@ -497,7 +497,13 @@ export default function App() {
         depositHistory2: (p.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })),
       }));
       setPortfolios(normalizedPortfolios);
-      setActivePortfolioId(stateData.activePortfolioId || stateData.portfolios[0].id);
+      const restoredId = stateData.activePortfolioId || stateData.portfolios[0].id;
+      const restoredP = normalizedPortfolios.find(p => p.id === restoredId);
+      if (restoredP?.accountType === 'simple' || restoredP?.accountType === 'matong') {
+        setShowIntegratedDashboard(true);
+      } else {
+        setActivePortfolioId(restoredId);
+      }
       notify(`계좌 ${normalizedPortfolios.length}개 복구 완료 — 활성화 중`, 'info');
     } else if (stateData.portfolio) {
       const newId = generateId();
@@ -586,7 +592,13 @@ export default function App() {
         depositHistory2: (p.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })),
       }));
       setPortfolios(normalizedPortfolios);
-      setActivePortfolioId(stateData.activePortfolioId || stateData.portfolios[0].id);
+      const restoredId = stateData.activePortfolioId || stateData.portfolios[0].id;
+      const restoredP = normalizedPortfolios.find(p => p.id === restoredId);
+      if (restoredP?.accountType === 'simple' || restoredP?.accountType === 'matong') {
+        setShowIntegratedDashboard(true);
+      } else {
+        setActivePortfolioId(restoredId);
+      }
     }
     if (stateData.customLinks) setCustomLinks(stateData.customLinks);
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);

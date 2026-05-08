@@ -75,6 +75,8 @@ export function usePortfolioState({
 
   // ── 포트폴리오 탭 전환 ──
   const switchToPortfolio = (id) => {
+    const target = portfolios.find(p => p.id === id);
+    if (!target || target.accountType === 'simple' || target.accountType === 'matong') return;
     setActivePortfolioId(id);
     setShowIntegratedDashboard(false);
   };
@@ -124,7 +126,14 @@ export function usePortfolioState({
       return;
     }
     setPortfolios(remaining);
-    if (activePortfolioId === id) setActivePortfolioId(remaining[0].id);
+    if (activePortfolioId === id) {
+      const nextActive = remaining.find(p => p.accountType !== 'simple' && p.accountType !== 'matong');
+      if (nextActive) {
+        setActivePortfolioId(nextActive.id);
+      } else {
+        setShowIntegratedDashboard(true);
+      }
+    }
   };
 
   // ── 직접입력 계좌 추가 ──
