@@ -24,6 +24,8 @@ interface Props {
   switching?: boolean;
   userLastSeen?: Record<string, number>;
   onRefreshUserSessions?: (emails: string[]) => Promise<void>;
+  youtubeUrl?: string;
+  onSetYoutubeUrl?: (url: string) => Promise<void>;
 }
 
 // Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
@@ -48,7 +50,7 @@ function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, onRefreshUserSessions }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
@@ -58,6 +60,10 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [notifMessage, setNotifMessage] = useState('');
   const [notifType, setNotifType] = useState('info');
   const [sending, setSending] = useState(false);
+
+  // YouTube 채널 링크 상태
+  const [youtubeInput, setYoutubeInput] = useState(youtubeUrl);
+  const [youtubeSaving, setYoutubeSaving] = useState(false);
   const [sendResult, setSendResult] = useState<'success' | 'error' | null>(null);
 
   const triggerSessionRefresh = async (userList: ApprovedUser[]) => {
@@ -389,6 +395,63 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
             이메일을 확인 후 구글 시트에 해당 이메일을 추가하면 즉시 접근이 허용됩니다.
           </p>
         </div>
+
+        {/* YouTube 채널 링크 설정 */}
+        {onSetYoutubeUrl && (
+          <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+            <p className="text-red-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
+              <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
+                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+              </svg>
+              YouTube 채널 링크
+            </p>
+            <p className="text-gray-500 text-xs">
+              링크를 설정하면 모든 사용자의 상단 바에 YouTube 버튼이 표시됩니다.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={youtubeInput}
+                onChange={e => setYoutubeInput(e.target.value)}
+                placeholder="https://www.youtube.com/@channel"
+                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-red-500"
+              />
+              <button
+                onClick={async () => {
+                  setYoutubeSaving(true);
+                  await onSetYoutubeUrl(youtubeInput.trim());
+                  setYoutubeSaving(false);
+                }}
+                disabled={youtubeSaving || youtubeInput.trim() === youtubeUrl}
+                className="flex items-center gap-1.5 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
+              >
+                {youtubeSaving ? (
+                  <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />저장 중</>
+                ) : '저장'}
+              </button>
+            </div>
+            {youtubeUrl && (
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 text-xs">현재:</span>
+                <a href={youtubeUrl} target="_blank" rel="noopener noreferrer" className="text-red-400 hover:text-red-300 text-xs underline decoration-dotted truncate flex-1">
+                  {youtubeUrl}
+                </a>
+                <button
+                  onClick={async () => {
+                    setYoutubeInput('');
+                    setYoutubeSaving(true);
+                    await onSetYoutubeUrl('');
+                    setYoutubeSaving(false);
+                  }}
+                  disabled={youtubeSaving}
+                  className="text-gray-600 hover:text-red-400 text-xs transition-colors shrink-0"
+                >
+                  삭제
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

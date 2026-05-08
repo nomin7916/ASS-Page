@@ -20,6 +20,7 @@ import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSIO
 import AdminPage from './components/AdminPage';
 import AdminPortal from './components/AdminPortal';
 import AdminNotificationModal, { AdminNotification } from './components/AdminNotificationModal';
+import PinnedNotificationsBar from './components/PinnedNotificationsBar';
 import AdminChoiceModal from './components/AdminChoiceModal';
 import IntegratedDashboard from './components/IntegratedDashboard';
 import HistoryPanel from './components/HistoryPanel';
@@ -88,6 +89,10 @@ export default function App() {
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
+  const [seenAdminNotifIds, setSeenAdminNotifIds] = useState<string[]>([]);
+  const [pinnedAdminNotifIds, setPinnedAdminNotifIds] = useState<string[]>([]);
+  const [allMyAdminNotifs, setAllMyAdminNotifs] = useState<AdminNotification[]>([]);
+  const seenAdminNotifIdsRef = useRef<string[]>([]);
   const adminOwnDriveTokenRef = useRef<string>('');
   const adminViewingAsRef = useRef<string | null>(null);
   const adminTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -545,6 +550,9 @@ export default function App() {
     if (resolvedMarketIndicators) setMarketIndicators(resolvedMarketIndicators);
     if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
+    seenAdminNotifIdsRef.current = stateData.seenAdminNotifIds || [];
+    setSeenAdminNotifIds(seenAdminNotifIdsRef.current);
+    setPinnedAdminNotifIds(stateData.pinnedAdminNotifIds || []);
   };
   applyStateDataRef.current = applyStateData;
 
@@ -1025,6 +1033,28 @@ export default function App() {
     }
   };
 
+  const handleSetYoutubeUrl = async (url: string) => {
+    // Apps Script setSettings 엔드포인트 필요:
+    // POST { action: 'setSettings', key: 'youtubeUrl', value: url }
+    // → Apps Script가 settings 시트에 저장 후 { success: true } 반환
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrl', value: url }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success !== false) {
+        setYoutubeUrl(url);
+        notify(url ? 'YouTube 채널 링크가 설정되었습니다.' : 'YouTube 채널 링크가 삭제되었습니다.', 'success');
+      } else {
+        notify('YouTube 링크 저장 실패 (Apps Script 응답 오류)', 'error');
+      }
+    } catch {
+      notify('YouTube 링크 저장 실패 (네트워크 오류)', 'error');
+    }
+  };
+
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
     // portfolioUpdatedAt이 없으면 saveAllToDrive의 guard(0 > 0)가 항상 false → STATE 저장 안됨
@@ -1118,6 +1148,16 @@ export default function App() {
         if (logData?.entries?.length > 0) setNotificationLog(logData.entries);
       } catch {}
 
+      // YouTube 채널 URL 로드 (Apps Script getSettings 엔드포인트 필요)
+      // action=getSettings → { youtubeUrl: '...' }
+      try {
+        const settingsRes = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
+        if (settingsRes.ok) {
+          const settingsData = await settingsRes.json();
+          if (settingsData.youtubeUrl) setYoutubeUrl(settingsData.youtubeUrl);
+        }
+      } catch {}
+
       // 관리자 공지 확인 (관리자 본인 제외)
       if (authUser.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
         try {
@@ -1127,12 +1167,11 @@ export default function App() {
           if (notifsRes.ok) {
             const notifsData = await notifsRes.json();
             const all: AdminNotification[] = notifsData.notifications || [];
-            const seenKey = `adminNotifs_seen_v1_${authUser.email}`;
-            const seenIds: string[] = JSON.parse(localStorage.getItem(seenKey) || '[]');
-            const myNotifs = all.filter(n =>
-              (n.targetEmail === '__all__' || n.targetEmail?.toLowerCase() === authUser.email.toLowerCase())
-              && !seenIds.includes(n.id)
+            const myAll = all.filter(n =>
+              n.targetEmail === '__all__' || n.targetEmail?.toLowerCase() === authUser.email.toLowerCase()
             );
+            setAllMyAdminNotifs(myAll);
+            const myNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
             if (myNotifs.length > 0) {
               setPendingAdminNotifs(myNotifs);
             }
@@ -1212,7 +1251,7 @@ export default function App() {
     if (activePortfolioId) {
       accountChartStatesRef.current[activePortfolioId] = { ...currentChartStateRef.current };
     }
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode }, intHistory, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode }, intHistory, seenAdminNotifIds, pinnedAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
@@ -1220,7 +1259,7 @@ export default function App() {
         saveAllToDrive(state);
       }, 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, seenAdminNotifIds, pinnedAdminNotifIds]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
@@ -1389,7 +1428,7 @@ export default function App() {
       setDriveLoadReady(false);
       setAdminPendingChoice(false);
       setAdminViewUserCtx(null);
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} />;
   }
 
   // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)
@@ -1430,11 +1469,14 @@ export default function App() {
       {pendingAdminNotifs.length > 0 && (
         <AdminNotificationModal
           notifications={pendingAdminNotifs}
+          pinnedIds={pinnedAdminNotifIds}
+          onPin={(id) => setPinnedAdminNotifIds(prev =>
+            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+          )}
           onClose={() => {
-            const seenKey = `adminNotifs_seen_v1_${authUser.email}`;
-            const prev: string[] = JSON.parse(localStorage.getItem(seenKey) || '[]');
-            const newIds = [...prev, ...pendingAdminNotifs.map(n => n.id)];
-            localStorage.setItem(seenKey, JSON.stringify(newIds));
+            const newSeen = [...seenAdminNotifIds, ...pendingAdminNotifs.map(n => n.id)];
+            seenAdminNotifIdsRef.current = newSeen;
+            setSeenAdminNotifIds(newSeen);
             pendingAdminNotifs.forEach(n => notify(`[관리자 공지] ${n.message}`, n.type || 'info'));
             setPendingAdminNotifs([]);
           }}
@@ -1497,10 +1539,17 @@ export default function App() {
           onAppClose={handleAppClose}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
+          youtubeUrl={youtubeUrl}
         />
 
         {/* 알림 바 */}
         <NotificationBar notificationLog={notificationLog} onClear={handleClearNotificationLog} unreadCount={unreadCount} onRead={markAsRead} />
+
+        {/* 고정 공지 바 */}
+        <PinnedNotificationsBar
+          notifications={allMyAdminNotifs.filter(n => pinnedAdminNotifIds.includes(n.id))}
+          onUnpin={(id) => setPinnedAdminNotifIds(prev => prev.filter(x => x !== id))}
+        />
 
         {/* 뷰 전환 탭 */}
         <AccountTabBar

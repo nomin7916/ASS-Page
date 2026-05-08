@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard, Calculator } from 'lucide-react';
+import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard, Calculator, Youtube } from 'lucide-react';
 import { ADMIN_EMAIL } from '../config';
 
 export default function UserInfoBar({
@@ -16,6 +16,7 @@ export default function UserInfoBar({
   onAppClose,
   showCalculator,
   onToggleCalculator,
+  youtubeUrl,
 }) {
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
@@ -35,6 +36,17 @@ export default function UserInfoBar({
           >
             <Calculator size={14} />
           </button>
+        )}
+        {youtubeUrl && (
+          <a
+            href={youtubeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="YouTube 채널 바로가기"
+            className="text-gray-500 hover:text-red-400 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+          >
+            <Youtube size={14} />
+          </a>
         )}
         <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
         {isAdmin && onOpenAdminPortal && (
