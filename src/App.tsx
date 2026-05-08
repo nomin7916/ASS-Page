@@ -1546,11 +1546,6 @@ export default function App() {
       />
 
       <div className="flex min-h-screen">
-        {/* 좌측 광고 패널 */}
-        <div className="hidden min-[1800px]:flex w-[160px] shrink-0 flex-col items-center pt-16 border-r border-gray-800/50">
-          <div className="sticky top-16 w-[140px] min-h-[600px] rounded-lg bg-gray-800/10">
-          </div>
-        </div>
         {/* 메인 컨텐츠 */}
         <div className="flex-1 min-w-0 py-4 px-3 md:px-5 md:py-5">
         <div className="w-full max-w-[1440px] mx-auto flex flex-col gap-6">
@@ -2002,11 +1997,6 @@ export default function App() {
         )}
 
         </div>
-        </div>
-        {/* 우측 광고 패널 */}
-        <div className="hidden min-[1800px]:flex w-[160px] shrink-0 flex-col items-center pt-16 border-l border-gray-800/50">
-          <div className="sticky top-16 w-[140px] min-h-[600px] rounded-lg bg-gray-800/10">
-          </div>
         </div>
       </div>
 
