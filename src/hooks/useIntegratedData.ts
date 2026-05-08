@@ -45,7 +45,7 @@ export function useIntegratedData({
           depositAmount: 0, returnRate: 0, cagr: 0,
           cats: prin > 0 ? { '현금': prin } : {},
           isActive: false, accountType: 'matong', rowColor: p.rowColor || '', memo: p.memo || '',
-          withdrawableTotal: wt, currentWithdrawal: cw, withdrawalLimit: wl, agreedRate: ar,
+          withdrawableTotal: wt, currentWithdrawal: cw, withdrawalLimit: wl, agreedRate: ar, agreedRateStr: String(p.agreedRate ?? ''),
         };
       }
 

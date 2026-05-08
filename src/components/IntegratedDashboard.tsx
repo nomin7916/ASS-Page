@@ -303,7 +303,7 @@ export default function IntegratedDashboard({
                         <button onClick={() => { addSimpleAccount(); setShowSimpleMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-green-300 hover:bg-green-900/30 transition-colors flex items-center gap-2">
                           <span>📋</span> 직접입력
                         </button>
-                        <button onClick={() => { addMatongAccount(); setShowSimpleMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-yellow-300 hover:bg-yellow-900/30 transition-colors flex items-center gap-2">
+                        <button onClick={() => { addMatongAccount(); setShowSimpleMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-green-300 hover:bg-green-900/30 transition-colors flex items-center gap-2">
                           <span>🏦</span> 마통계좌
                         </button>
                       </div>
@@ -350,7 +350,7 @@ export default function IntegratedDashboard({
                       return (
                         <React.Fragment key={s.id}>
                           <tr
-                            className={`border-b border-gray-700 transition-colors ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : isMatong ? 'bg-yellow-950/10 hover:bg-yellow-900/10' : 'hover:bg-gray-800/40') : ''}`}
+                            className={`border-b border-gray-700 transition-colors ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : isMatong ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40') : ''}`}
                             style={s.rowColor ? { backgroundColor: hexToRgba(s.rowColor, 0.18) } : {}}
                           >
                             {/* 색상 스트립 */}
@@ -389,7 +389,7 @@ export default function IntegratedDashboard({
                               {isSimple ? (
                                 <input type="text" className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300" value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
                               ) : isMatong ? (
-                                <input type="text" className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-yellow-300" value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
+                                <input type="text" className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300" value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
                               ) : (
                                 <span className="font-bold text-blue-300 select-none">{s.name}</span>
                               )}
@@ -411,7 +411,7 @@ export default function IntegratedDashboard({
                                   onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value.replace(/[^0-9]/g, ''))}
                                 />)
                               ) : isMatong ? (
-                                hideAmounts ? '••••••' : <span className="text-yellow-200">{formatCurrency(s.principal)}</span>
+                                hideAmounts ? '••••••' : <span className="text-gray-200">{formatCurrency(s.principal)}</span>
                               ) : (hideAmounts ? '••••••' : formatCurrency(s.principal))}
                             </td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300">{allocRatio.toFixed(2)}%</td>
@@ -442,13 +442,13 @@ export default function IntegratedDashboard({
                             <td className="p-0 border-r border-gray-700 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                               {isMatong ? (
                                 <div className="flex items-center gap-2 px-2 py-1.5 text-[11px]">
-                                  <span className="text-yellow-400 font-bold">{parseFloat(s.agreedRate || 0).toFixed(2)}%</span>
+                                  <span className="text-gray-400 font-bold">{parseFloat(s.agreedRate || 0).toFixed(2)}%</span>
                                   <span className="text-gray-500">|</span>
                                   <span className="text-gray-400">월이자</span>
-                                  <span className="text-yellow-300 font-bold">{hideAmounts ? '••••••' : formatCurrency(matongMonthlyInterest)}</span>
+                                  <span className="text-gray-300 font-bold">{hideAmounts ? '••••••' : formatCurrency(matongMonthlyInterest)}</span>
                                   <button
                                     onClick={() => setMatongClosedIds(prev => ({...prev, [s.id]: !prev[s.id]}))}
-                                    className="ml-1 text-[10px] px-1.5 py-0.5 rounded border border-yellow-700/50 text-yellow-600 hover:text-yellow-300 hover:border-yellow-400 transition-colors"
+                                    className="ml-1 text-[10px] px-1.5 py-0.5 rounded border border-green-700/50 text-green-700 hover:text-green-300 hover:border-green-400 transition-colors"
                                   >
                                     {matongClosedIds[s.id] ? '펼치기' : '숨기기'}
                                   </button>
@@ -465,7 +465,7 @@ export default function IntegratedDashboard({
                             </td>
                           </tr>
                           {isMatong && !matongClosedIds[s.id] && (
-                            <tr className="bg-yellow-950/10 border-b border-gray-700/60">
+                            <tr className="bg-green-950/10 border-b border-gray-700/60">
                               <td colSpan={13} className="py-2 px-4">
                                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px]">
                                   <label className="flex items-center gap-1.5 text-gray-400">
@@ -473,7 +473,7 @@ export default function IntegratedDashboard({
                                     <input
                                       type="text" inputMode="numeric"
                                       data-matong-input="true"
-                                      className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
+                                      className="w-[110px] bg-[#1e293b] border border-green-700/50 rounded px-2 py-0.5 text-green-300 font-bold text-center outline-none focus:border-green-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawableTotal'
                                         ? (s.withdrawableTotal || '') : s.withdrawableTotal ? formatCurrency(s.withdrawableTotal) : ''}
                                       placeholder="₩0"
@@ -488,7 +488,7 @@ export default function IntegratedDashboard({
                                     <input
                                       type="text" inputMode="numeric"
                                       data-matong-input="true"
-                                      className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
+                                      className="w-[110px] bg-[#1e293b] border border-green-700/50 rounded px-2 py-0.5 text-green-300 font-bold text-center outline-none focus:border-green-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'currentWithdrawal'
                                         ? (s.currentWithdrawal || '') : s.currentWithdrawal ? formatCurrency(s.currentWithdrawal) : ''}
                                       placeholder="₩0"
@@ -503,7 +503,7 @@ export default function IntegratedDashboard({
                                     <input
                                       type="text" inputMode="numeric"
                                       data-matong-input="true"
-                                      className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
+                                      className="w-[110px] bg-[#1e293b] border border-green-700/50 rounded px-2 py-0.5 text-green-300 font-bold text-center outline-none focus:border-green-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawalLimit'
                                         ? (s.withdrawalLimit || '') : s.withdrawalLimit ? formatCurrency(s.withdrawalLimit) : ''}
                                       placeholder="₩0"
@@ -518,22 +518,20 @@ export default function IntegratedDashboard({
                                     <input
                                       type="text" inputMode="decimal"
                                       data-matong-input="true"
-                                      className="w-[70px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-300 font-bold text-center outline-none focus:border-yellow-400"
-                                      value={simpleEditField?.id === s.id && simpleEditField?.field === 'agreedRate'
-                                        ? (s.agreedRate ?? '') : (s.agreedRate ?? '')}
+                                      className="w-[70px] bg-[#1e293b] border border-green-700/50 rounded px-2 py-0.5 text-green-300 font-bold text-center outline-none focus:border-green-400"
+                                      value={s.agreedRateStr ?? ''}
                                       placeholder="0.00"
-                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'agreedRate'}); e.target.select(); }}
-                                      onBlur={() => setSimpleEditField(null)}
+                                      onFocus={e => e.target.select()}
                                       onChange={e => updateMatongAccountField(s.id, 'agreedRate', e.target.value.replace(/[^0-9.]/g, ''))}
                                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }}
                                     />
                                   </label>
                                   <span className="text-gray-500">→</span>
                                   <span className="text-gray-400">투자원금</span>
-                                  <span className="text-yellow-200 font-bold">{hideAmounts ? '••••••' : formatCurrency(s.principal)}</span>
+                                  <span className="text-gray-200 font-bold">{hideAmounts ? '••••••' : formatCurrency(s.principal)}</span>
                                   <span className="text-gray-500">|</span>
                                   <span className="text-gray-400">월이자</span>
-                                  <span className="text-yellow-300 font-bold">{hideAmounts ? '••••••' : formatCurrency(matongMonthlyInterest)}</span>
+                                  <span className="text-gray-300 font-bold">{hideAmounts ? '••••••' : formatCurrency(matongMonthlyInterest)}</span>
                                 </div>
                               </td>
                             </tr>
