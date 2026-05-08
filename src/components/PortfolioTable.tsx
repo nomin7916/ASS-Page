@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Trash2, RefreshCw, Plus } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import {
@@ -18,6 +18,139 @@ const getAssetClass = (cat) => SAFE_CATEGORIES.includes(cat) ? 'S' : 'D';
 
 const CELL_FOCUS = 'focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500';
 const RO_FOCUS = 'focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none';
+
+const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
+  const [mode, setMode] = useState('idle');
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0 });
+  const wrapRef = useRef(null);
+  const dropRef = useRef(null);
+  const editRef = useRef(null);
+  const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
+  const normalize = s => s.replace(/\s/g, '').replace('α', 'a').replace('A', 'a');
+  const matchCat = s =>
+    validCats.find(c => normalize(c) === normalize(s)) ||
+    validCats.find(c => normalize(s).includes(normalize(c)));
+  const colorClass = UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white';
+
+  useEffect(() => {
+    if (mode !== 'dropdown') return;
+    const close = e => {
+      if (!wrapRef.current?.contains(e.target) && !dropRef.current?.contains(e.target))
+        setMode('idle');
+    };
+    const closeOnScroll = () => setMode('idle');
+    document.addEventListener('mousedown', close);
+    document.addEventListener('scroll', closeOnScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('scroll', closeOnScroll, true);
+    };
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode === 'edit' && editRef.current) { editRef.current.focus(); editRef.current.select(); }
+  }, [mode]);
+
+  const openDropdown = () => {
+    if (wrapRef.current) {
+      const rect = wrapRef.current.getBoundingClientRect();
+      setDropPos({ top: rect.bottom + 2, left: rect.left });
+    }
+    setMode('dropdown');
+  };
+
+  const applyCategory = cat => {
+    onUpdate(item.id, 'category', cat);
+    if (isRetirement) onUpdate(item.id, 'assetClass', getAssetClass(cat));
+    setMode('idle');
+  };
+
+  const handlePaste = e => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text');
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length <= 1) {
+      const match = matchCat(lines[0] || '');
+      if (match) applyCategory(match);
+    } else {
+      const allStockItems = portfolio.filter(p => p.type === 'stock');
+      const startIdx = allStockItems.findIndex(p => p.id === item.id);
+      lines.forEach((line, i) => {
+        const target = allStockItems[startIdx + i];
+        if (!target) return;
+        const match = matchCat(line);
+        if (match) {
+          onUpdate(target.id, 'category', match);
+          if (isRetirement) onUpdate(target.id, 'assetClass', getAssetClass(match));
+        }
+      });
+    }
+    setMode('idle');
+  };
+
+  return (
+    <div ref={wrapRef} className="flex-1 min-w-0">
+      {mode !== 'edit' ? (
+        <div
+          tabIndex={0}
+          className={`w-full text-center text-xs font-bold cursor-pointer px-1 py-3 outline-none select-none ${colorClass} ${mode === 'dropdown' ? 'bg-blue-900/30' : ''}`}
+          onClick={e => {
+            if (e.detail === 2) return;
+            if (mode === 'dropdown') setMode('idle');
+            else openDropdown();
+          }}
+          onDoubleClick={() => setMode('edit')}
+          onPaste={handlePaste}
+          onKeyDown={handleRowArrowNav}
+        >
+          {item.category}
+        </div>
+      ) : (
+        <input
+          ref={editRef}
+          className={`w-full bg-blue-900/30 text-center text-xs outline-none font-bold px-1 py-3 ${colorClass} caret-blue-400`}
+          value={item.category}
+          onChange={e => onUpdate(item.id, 'category', e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Escape' || e.key === 'Enter') setMode('idle');
+            else handleRowArrowNav(e);
+          }}
+          onBlur={e => {
+            const val = e.target.value;
+            if (!validCats.includes(val)) {
+              const match = validCats.find(c => normalize(c) === normalize(val));
+              if (match) {
+                onUpdate(item.id, 'category', match);
+                if (isRetirement) onUpdate(item.id, 'assetClass', getAssetClass(match));
+              }
+            } else if (isRetirement) {
+              onUpdate(item.id, 'assetClass', getAssetClass(val));
+            }
+            setMode('idle');
+          }}
+          onPaste={handlePaste}
+        />
+      )}
+      {mode === 'dropdown' && (
+        <div
+          ref={dropRef}
+          className="fixed z-[100] bg-[#1e293b] border border-gray-600 rounded-lg shadow-2xl overflow-hidden py-1"
+          style={{ top: dropPos.top, left: dropPos.left, minWidth: 96 }}
+        >
+          {validCats.map(cat => (
+            <button
+              key={cat}
+              className={`block w-full text-center px-4 py-1.5 text-xs font-bold hover:bg-gray-700/60 transition-colors ${UI_CONFIG.COLORS.CATEGORIES[cat]} ${cat === item.category ? 'bg-gray-700/40' : ''}`}
+              onMouseDown={e => { e.preventDefault(); applyCategory(cat); }}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
@@ -153,60 +286,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {/* 구분 */}
                   <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                     <div className="flex flex-row h-full">
-                      <input
-                        className={`${isRetirement ? 'flex-1 min-w-0' : 'w-full'} bg-transparent text-center text-xs outline-none font-bold cursor-pointer px-1 py-3 ${UI_CONFIG.COLORS.CATEGORIES[item.category] || 'text-white'} caret-transparent`}
-                        value={item.category}
-                        onFocus={e => e.target.select()}
-                        onChange={e => {
-                          const val = e.target.value;
-                          const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
-                          const match = validCats.find(c => c === val);
-                          onUpdate(item.id, 'category', match || val);
-                          if (isRetirement && match) onUpdate(item.id, 'assetClass', getAssetClass(match));
-                        }}
-                        onKeyDown={handleRowArrowNav}
-                        onPaste={e => {
-                          e.preventDefault();
-                          const text = e.clipboardData.getData('text');
-                          const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-                          const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
-                          const normalize = s => s.replace(/\s/g, '').replace('α', 'a').replace('A', 'a');
-                          const matchCat = s => validCats.find(c => normalize(c) === normalize(s)) || validCats.find(c => normalize(s).includes(normalize(c)));
-                          if (lines.length <= 1) {
-                            const match = matchCat(lines[0] || '');
-                            if (match) {
-                              onUpdate(item.id, 'category', match);
-                              if (isRetirement) onUpdate(item.id, 'assetClass', getAssetClass(match));
-                            }
-                          } else {
-                            const allStockItems = portfolio.filter(p => p.type === 'stock');
-                            const startIdx = allStockItems.findIndex(p => p.id === item.id);
-                            lines.forEach((line, i) => {
-                              const target = allStockItems[startIdx + i];
-                              if (!target) return;
-                              const match = matchCat(line);
-                              if (match) {
-                                onUpdate(target.id, 'category', match);
-                                if (isRetirement) onUpdate(target.id, 'assetClass', getAssetClass(match));
-                              }
-                            });
-                          }
-                        }}
-                        onBlur={e => {
-                          const val = e.target.value;
-                          const validCats = Object.keys(UI_CONFIG.COLORS.CATEGORIES);
-                          if (!validCats.includes(val)) {
-                            const normalize = s => s.replace(/\s/g, '').toLowerCase().replace('α', 'a');
-                            const match = validCats.find(c => normalize(c) === normalize(val));
-                            if (match) {
-                              onUpdate(item.id, 'category', match);
-                              if (isRetirement) onUpdate(item.id, 'assetClass', getAssetClass(match));
-                            }
-                          } else if (isRetirement) {
-                            onUpdate(item.id, 'assetClass', getAssetClass(val));
-                          }
-                        }}
-                      />
+                      <CategoryCell item={item} portfolio={portfolio} isRetirement={isRetirement} onUpdate={onUpdate} />
                       {isRetirement && (
                         <>
                           <div className="w-px bg-gray-600/60 self-stretch" />
