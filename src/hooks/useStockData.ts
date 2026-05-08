@@ -91,6 +91,16 @@ export function useStockData({
       setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
       const today = new Date().toISOString().split('T')[0];
       setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+      if (isOverseas && (!stockHistoryMapRef.current[code] || Object.keys(stockHistoryMapRef.current[code]).length <= 1)) {
+        notify(`${code} 백테스트 이력 수집 중...`, 'info');
+        fetchUsStockHistory(code).then(r => {
+          if (r?.data && Object.keys(r.data).length > 1) {
+            setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
+          } else {
+            notify(`${code} 백테스트 이력 수집 실패`, 'warning');
+          }
+        });
+      }
     } else {
       setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
     }
@@ -544,6 +554,8 @@ export function useStockData({
             const r = await fetchUsStockHistory(code);
             if (r?.data && Object.keys(r.data).length > 1)
               setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
+            else
+              notify(`${code} 이력 수집 실패 (백테스트 불가)`, 'warning');
           }),
         ]).then(() => {
           setTimeout(() => {
