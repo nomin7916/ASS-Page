@@ -241,7 +241,21 @@ export function useDriveSync({
           : notify('Drive 저장 완료', 'success');
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('Drive 저장 실패:', err);
+      // 401: 토큰 만료 → 무음 갱신 후 1회 재시도 (팝업 없이, 무한 루프 방지)
+      if (msg.includes('401') && !isRetry && tokenClientRef.current) {
+        const newToken = await new Promise<string | null>((resolve) => {
+          pendingTokenResolveRef.current = resolve;
+          tokenClientRef.current.requestAccessToken({ prompt: '' });
+        });
+        if (newToken) {
+          driveTokenRef.current = newToken;
+          setDriveToken(newToken);
+          setSS('ready');
+          return saveAllToDrive(state, versioned, true);
+        }
+      }
       setSS('error');
       setDriveStatus('error');
       if (!isRetry) {

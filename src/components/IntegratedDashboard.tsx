@@ -69,6 +69,8 @@ export default function IntegratedDashboard({
   setSimpleEditField,
   addPortfolio,
   addSimpleAccount,
+  addMatongAccount,
+  updateMatongAccountField,
   deletePortfolio,
   switchToPortfolio,
   movePortfolio,
@@ -106,6 +108,14 @@ export default function IntegratedDashboard({
   const [memoModal, setMemoModal] = useState(null);
   const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
   const memoDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
+  const [showSimpleMenu, setShowSimpleMenu] = useState(false);
+  const simpleMenuRef = useRef(null);
+  useEffect(() => {
+    if (!showSimpleMenu) return;
+    const handler = (e) => { if (simpleMenuRef.current && !simpleMenuRef.current.contains(e.target)) setShowSimpleMenu(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showSimpleMenu]);
 
   const newAccBtnRef = useRef(null);
   const [newAccMenuPos, setNewAccMenuPos] = useState({ top: 0, right: 0 });
@@ -274,9 +284,21 @@ export default function IntegratedDashboard({
                       </>
                     )}
                   </div>
-                  <button onClick={addSimpleAccount} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded" title="날짜·계좌·자산을 직접 입력하는 간단 계좌 추가">
-                    <Plus size={12} /> 직접입력
-                  </button>
+                  <div className="relative" ref={simpleMenuRef}>
+                    <button onClick={() => setShowSimpleMenu(v => !v)} className="flex items-center gap-1 text-green-400 hover:text-green-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-green-900/20 rounded" title="직접입력 계좌 추가">
+                      <Plus size={12} /> 직접입력 <span className="text-[10px]">▾</span>
+                    </button>
+                    {showSimpleMenu && (
+                      <div className="absolute left-0 top-full mt-1 z-50 bg-[#1e293b] border border-gray-600 rounded shadow-lg min-w-[130px]">
+                        <button onClick={() => { addSimpleAccount(); setShowSimpleMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-green-300 hover:bg-green-900/30 transition-colors flex items-center gap-2">
+                          <span>📋</span> 직접입력
+                        </button>
+                        <button onClick={() => { addMatongAccount(); setShowSimpleMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-yellow-300 hover:bg-yellow-900/30 transition-colors flex items-center gap-2">
+                          <span>🏦</span> 마통계좌
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <div className="w-[1px] h-4 bg-gray-700 mx-1" />
                   <button onClick={handleSave} className="flex items-center gap-1 text-orange-400 hover:text-orange-300 transition-colors text-xs font-bold px-2 py-1 hover:bg-orange-900/20 rounded" title="JSON 파일로 다운로드 (PC 백업)">
                     <Download size={12} /> PC 백업
@@ -303,14 +325,22 @@ export default function IntegratedDashboard({
                     </tr>
                   </thead>
                   <tbody>
-                    {portfolioSummaries.map((s, sIdx) => {
+                    {(() => {
+                      const regularAccounts = portfolioSummaries.filter(s => s.accountType !== 'matong');
+                      const matongAccounts = portfolioSummaries.filter(s => s.accountType === 'matong');
+                      const sortedSummaries = [...regularAccounts, ...matongAccounts];
+                      return sortedSummaries.map((s, sIdx) => {
                       const allocRatio = intTotals.totalEval > 0 ? s.currentEval / intTotals.totalEval * 100 : 0;
                       const isCatOpen = intExpandedCat === s.id;
                       const isSimple = s.accountType === 'simple';
+                      const isMatong = s.accountType === 'matong';
+                      const matongMonthlyInterest = isMatong ? Math.round((s.currentWithdrawal || 0) * ((s.agreedRate || 0) / 100 / 12)) : 0;
+                      const isMatongIdx = isMatong;
+                      const regularCount = regularAccounts.length;
                       return (
                         <React.Fragment key={s.id}>
                           <tr
-                            className={`border-b border-gray-700 transition-colors ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40') : ''}`}
+                            className={`border-b border-gray-700 transition-colors ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : isMatong ? 'bg-yellow-950/10 hover:bg-yellow-900/10' : 'hover:bg-gray-800/40') : ''}`}
                             style={s.rowColor ? { backgroundColor: hexToRgba(s.rowColor, 0.18) } : {}}
                           >
                             {/* 색상 스트립 */}
@@ -325,22 +355,31 @@ export default function IntegratedDashboard({
                             </td>
                             {/* 순서 화살표 */}
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
-                              <div className="flex flex-col items-center gap-0.5">
-                                <button onClick={() => movePortfolio(s.id, -1)} disabled={sIdx === 0} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="위로">▲</button>
-                                <button onClick={() => movePortfolio(s.id, 1)} disabled={sIdx === portfolioSummaries.length - 1} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="아래로">▼</button>
-                              </div>
+                              {isMatong ? (
+                                <div className="flex flex-col items-center gap-0.5 opacity-20 cursor-not-allowed">
+                                  <span className="leading-none text-[10px] text-gray-500">▲</span>
+                                  <span className="leading-none text-[10px] text-gray-500">▼</span>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <button onClick={() => movePortfolio(s.id, -1)} disabled={sIdx === 0} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="위로">▲</button>
+                                  <button onClick={() => movePortfolio(s.id, 1)} disabled={sIdx === regularCount - 1} className="text-gray-500 hover:text-blue-400 disabled:opacity-20 disabled:cursor-default leading-none text-[10px]" title="아래로">▼</button>
+                                </div>
+                              )}
                             </td>
                             <td className="py-1.5 px-3 text-center border-r border-gray-700">
                               <CustomDatePicker value={s.startDate} onChange={v => updatePortfolioStartDate(s.id, v)} />
                             </td>
                             {/* 계좌 */}
                             <td
-                              className={`py-1.5 px-3 text-center border-r border-gray-700 sticky left-0 z-[5] bg-[#1e293b] ${!isSimple ? 'cursor-pointer hover:bg-blue-900/20' : ''}`}
+                              className={`py-1.5 px-3 text-center border-r border-gray-700 sticky left-0 z-[5] bg-[#1e293b] ${!isSimple && !isMatong ? 'cursor-pointer hover:bg-blue-900/20' : ''}`}
                               style={s.rowColor ? { backgroundColor: blendWithDarkBg(s.rowColor, 0.35) } : {}}
-                              onClick={!isSimple ? () => switchToPortfolio(s.id) : undefined}
+                              onClick={!isSimple && !isMatong ? () => switchToPortfolio(s.id) : undefined}
                             >
                               {isSimple ? (
                                 <input type="text" className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300" value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
+                              ) : isMatong ? (
+                                <input type="text" className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-yellow-300" value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
                               ) : (
                                 <span className="font-bold text-blue-300 select-none">{s.name}</span>
                               )}
@@ -361,6 +400,8 @@ export default function IntegratedDashboard({
                                   onBlur={() => setSimpleEditField(null)}
                                   onChange={e => updateSimpleAccountField(s.id, 'principal', e.target.value.replace(/[^0-9]/g, ''))}
                                 />)
+                              ) : isMatong ? (
+                                hideAmounts ? '••••••' : <span className="text-yellow-200">{formatCurrency(s.principal)}</span>
                               ) : (hideAmounts ? '••••••' : formatCurrency(s.principal))}
                             </td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300">{allocRatio.toFixed(2)}%</td>
@@ -381,23 +422,98 @@ export default function IntegratedDashboard({
                                 />
                               ) : (hideAmounts ? '••••••' : formatCurrency(s.currentEval))}
                             </td>
-                            <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(s.returnRate)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-blue-300 font-bold">{formatPercent(s.cagr)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isSimple ? '-' : (hideAmounts ? '••••••' : formatCurrency(s.depositAmount))}</td>
+                            <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{isMatong ? '0.00%' : formatPercent(s.returnRate)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-blue-300 font-bold">{isMatong ? '0.00%' : formatPercent(s.cagr)}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isSimple || isMatong ? '-' : (hideAmounts ? '••••••' : formatCurrency(s.depositAmount))}</td>
                             {/* 수익 */}
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.currentEval - s.principal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                              {hideAmounts ? '••••••' : formatCurrency(s.currentEval - s.principal)}
+                              {isMatong ? '₩0' : (hideAmounts ? '••••••' : formatCurrency(s.currentEval - s.principal))}
                             </td>
                             <td className="p-0 border-r border-gray-700 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                              <div className="flex items-center">
-                                <input type="text" className="flex-1 min-w-0 bg-transparent outline-none px-2 py-1.5 text-gray-300 text-xs caret-blue-400 overflow-hidden placeholder-gray-600" value={s.memo ?? ''} onChange={e => updatePortfolioMemo(s.id, e.target.value)} placeholder="메모..." />
-                                <button onClick={() => openMemoModal(s.id, s.memo)} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
-                              </div>
+                              {isMatong ? (
+                                <div className="flex items-center gap-2 px-2 py-1.5 text-[11px]">
+                                  <span className="text-yellow-400 font-bold">{(s.agreedRate || 0).toFixed(2)}%</span>
+                                  <span className="text-gray-500">|</span>
+                                  <span className="text-gray-400">월이자</span>
+                                  <span className="text-yellow-300 font-bold">{hideAmounts ? '••••••' : formatCurrency(matongMonthlyInterest)}</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center">
+                                  <input type="text" className="flex-1 min-w-0 bg-transparent outline-none px-2 py-1.5 text-gray-300 text-xs caret-blue-400 overflow-hidden placeholder-gray-600" value={s.memo ?? ''} onChange={e => updatePortfolioMemo(s.id, e.target.value)} placeholder="메모..." />
+                                  <button onClick={() => openMemoModal(s.id, s.memo)} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
+                                </div>
+                              )}
                             </td>
                             <td className="py-1.5 px-2 text-center">
                               <button onClick={() => deletePortfolio(s.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                             </td>
                           </tr>
+                          {isMatong && (
+                            <tr className="bg-yellow-950/10 border-b border-gray-700/60">
+                              <td colSpan={13} className="py-2 px-4">
+                                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px]">
+                                  <label className="flex items-center gap-1.5 text-gray-400">
+                                    인출가능 총액
+                                    <input
+                                      type="text" inputMode="numeric"
+                                      className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
+                                      value={simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawableTotal'
+                                        ? (s.withdrawableTotal || '') : s.withdrawableTotal ? formatCurrency(s.withdrawableTotal) : ''}
+                                      placeholder="₩0"
+                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'withdrawableTotal'}); e.target.select(); }}
+                                      onBlur={() => setSimpleEditField(null)}
+                                      onChange={e => updateMatongAccountField(s.id, 'withdrawableTotal', e.target.value.replace(/[^0-9]/g, ''))}
+                                    />
+                                  </label>
+                                  <label className="flex items-center gap-1.5 text-gray-400">
+                                    현재 인출액
+                                    <input
+                                      type="text" inputMode="numeric"
+                                      className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
+                                      value={simpleEditField?.id === s.id && simpleEditField?.field === 'currentWithdrawal'
+                                        ? (s.currentWithdrawal || '') : s.currentWithdrawal ? formatCurrency(s.currentWithdrawal) : ''}
+                                      placeholder="₩0"
+                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'currentWithdrawal'}); e.target.select(); }}
+                                      onBlur={() => setSimpleEditField(null)}
+                                      onChange={e => updateMatongAccountField(s.id, 'currentWithdrawal', e.target.value.replace(/[^0-9]/g, ''))}
+                                    />
+                                  </label>
+                                  <label className="flex items-center gap-1.5 text-gray-400">
+                                    인출제한금액
+                                    <input
+                                      type="text" inputMode="numeric"
+                                      className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
+                                      value={simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawalLimit'
+                                        ? (s.withdrawalLimit || '') : s.withdrawalLimit ? formatCurrency(s.withdrawalLimit) : ''}
+                                      placeholder="₩0"
+                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'withdrawalLimit'}); e.target.select(); }}
+                                      onBlur={() => setSimpleEditField(null)}
+                                      onChange={e => updateMatongAccountField(s.id, 'withdrawalLimit', e.target.value.replace(/[^0-9]/g, ''))}
+                                    />
+                                  </label>
+                                  <label className="flex items-center gap-1.5 text-gray-400">
+                                    약정이율(%)
+                                    <input
+                                      type="text" inputMode="decimal"
+                                      className="w-[70px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-300 font-bold text-center outline-none focus:border-yellow-400"
+                                      value={simpleEditField?.id === s.id && simpleEditField?.field === 'agreedRate'
+                                        ? (s.agreedRate ?? '') : (s.agreedRate ?? '')}
+                                      placeholder="0.00"
+                                      onFocus={e => { setSimpleEditField({id: s.id, field: 'agreedRate'}); e.target.select(); }}
+                                      onBlur={() => setSimpleEditField(null)}
+                                      onChange={e => updateMatongAccountField(s.id, 'agreedRate', e.target.value.replace(/[^0-9.]/g, ''))}
+                                    />
+                                  </label>
+                                  <span className="text-gray-500">→</span>
+                                  <span className="text-gray-400">투자원금</span>
+                                  <span className="text-yellow-200 font-bold">{hideAmounts ? '••••••' : formatCurrency(s.principal)}</span>
+                                  <span className="text-gray-500">|</span>
+                                  <span className="text-gray-400">월이자</span>
+                                  <span className="text-yellow-300 font-bold">{hideAmounts ? '••••••' : formatCurrency(matongMonthlyInterest)}</span>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
                           {isCatOpen && Object.keys(s.cats).length > 0 && (
                             <tr className="bg-gray-800/30 border-b border-gray-700">
                               <td colSpan={13} className="py-3 px-4">
@@ -416,7 +532,8 @@ export default function IntegratedDashboard({
                           )}
                         </React.Fragment>
                       );
-                    })}
+                    });
+                    })()}
                     {portfolioSummaries.length === 0 && (
                       <tr><td colSpan={13} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
                     )}

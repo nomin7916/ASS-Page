@@ -416,6 +416,8 @@ export default function App() {
     switchToPortfolio,
     addSimpleAccount,
     updateSimpleAccountField,
+    addMatongAccount,
+    updateMatongAccountField,
     updatePortfolioStartDate,
     updatePortfolioName,
     updatePortfolioColor,
@@ -1843,6 +1845,8 @@ export default function App() {
             setSimpleEditField={setSimpleEditField}
             addPortfolio={addPortfolio}
             addSimpleAccount={addSimpleAccount}
+            addMatongAccount={addMatongAccount}
+            updateMatongAccountField={updateMatongAccountField}
             deletePortfolio={deletePortfolio}
             switchToPortfolio={switchToPortfolio}
             movePortfolio={movePortfolio}

@@ -34,6 +34,21 @@ export function useIntegratedData({
         return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: 0, returnRate, cagr, cats: evalAmount > 0 ? { '현금': evalAmount } : {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '' };
       }
 
+      if (p.accountType === 'matong') {
+        const wt = cleanNum(p.withdrawableTotal) || 0;
+        const cw = cleanNum(p.currentWithdrawal) || 0;
+        const wl = cleanNum(p.withdrawalLimit) || 0;
+        const ar = parseFloat(p.agreedRate) || 0;
+        const prin = Math.max(0, wt - (cw + wl));
+        return {
+          id: p.id, name, startDate, currentEval: prin, principal: prin,
+          depositAmount: 0, returnRate: 0, cagr: 0,
+          cats: prin > 0 ? { '현금': prin } : {},
+          isActive: false, accountType: 'matong', rowColor: p.rowColor || '', memo: p.memo || '',
+          withdrawableTotal: wt, currentWithdrawal: cw, withdrawalLimit: wl, agreedRate: ar,
+        };
+      }
+
       const items = isActive ? portfolio : (p.portfolio || []);
       const prin = isActive ? principal : (p.principal || 0);
       const summaryFxRate = p.accountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;

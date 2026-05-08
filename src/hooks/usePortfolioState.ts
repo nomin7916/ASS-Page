@@ -141,6 +141,35 @@ export function usePortfolioState({
     setPortfolios(prev => [...prev, newP]);
   };
 
+  // ── 마통 계좌 추가 ──
+  const addMatongAccount = () => {
+    const newId = generateId();
+    const today = new Date().toISOString().split('T')[0];
+    const newP = {
+      id: newId, name: '마통계좌', startDate: today, portfolioStartDate: today,
+      accountType: 'matong',
+      withdrawableTotal: 0, currentWithdrawal: 0, withdrawalLimit: 0, agreedRate: 0,
+      evalAmount: 0,
+      portfolio: [], principal: 0, history: [], depositHistory: [], depositHistory2: [],
+      settings: { mode: 'rebalance', amount: 1000000 },
+    };
+    setPortfolios(prev => [...prev, newP]);
+  };
+
+  // ── 마통 계좌 필드 수정 ──
+  const updateMatongAccountField = (id, field, val) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      const num = field === 'agreedRate' ? parseFloat(val) || 0 : cleanNum(val);
+      const updated = { ...p, [field]: num };
+      const wt = field === 'withdrawableTotal' ? num : (cleanNum(p.withdrawableTotal) || 0);
+      const cw = field === 'currentWithdrawal' ? num : (cleanNum(p.currentWithdrawal) || 0);
+      const wl = field === 'withdrawalLimit' ? num : (cleanNum(p.withdrawalLimit) || 0);
+      const newPrincipal = Math.max(0, wt - (cw + wl));
+      return { ...updated, principal: newPrincipal, evalAmount: newPrincipal };
+    }));
+  };
+
   // ── 직접입력 계좌 필드 수정 ──
   const updateSimpleAccountField = (id, field, val) => {
     setPortfolios(prev => prev.map(p => {
@@ -431,6 +460,8 @@ export function usePortfolioState({
     switchToPortfolio,
     addSimpleAccount,
     updateSimpleAccountField,
+    addMatongAccount,
+    updateMatongAccountField,
     updatePortfolioStartDate,
     updatePortfolioName,
     updatePortfolioColor,
