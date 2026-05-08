@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { LayoutDashboard } from 'lucide-react';
 import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
+import { RULED_BG_STYLE, NOTIFY_HEX } from '../design';
 
 const COLAB_URL = 'https://colab.research.google.com/drive/1hjCwtVjyKzooWly4AU_ufrMSV87FApzi#scrollTo=fe7b764e';
 const COLAB_PASSWORD = '0000';
@@ -13,6 +14,14 @@ interface ApprovedUser {
   feature1?: boolean;
   feature2?: boolean;
   feature3?: boolean;
+}
+
+interface SentNotification {
+  id: string;
+  targetEmail: string;
+  message: string;
+  type: string;
+  createdAt: number;
 }
 
 interface Props {
@@ -60,11 +69,46 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [notifMessage, setNotifMessage] = useState('');
   const [notifType, setNotifType] = useState('info');
   const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState<'success' | 'error' | null>(null);
+
+  // 발송 이력 상태
+  const [sentNotifs, setSentNotifs] = useState<SentNotification[]>([]);
+  const [notifsLoading, setNotifsLoading] = useState(false);
+  const [notifFilter, setNotifFilter] = useState('__all__');
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   // YouTube 채널 링크 상태
   const [youtubeInput, setYoutubeInput] = useState(youtubeUrl);
   const [youtubeSaving, setYoutubeSaving] = useState(false);
-  const [sendResult, setSendResult] = useState<'success' | 'error' | null>(null);
+
+  const fetchSentNotifications = async () => {
+    setNotifsLoading(true);
+    try {
+      const res = await fetch(`${APPS_SCRIPT_URL}?action=getNotifications&cacheBust=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        const all: SentNotification[] = data.notifications || [];
+        setSentNotifs(all.sort((a, b) => b.createdAt - a.createdAt));
+      }
+    } catch {}
+    setNotifsLoading(false);
+  };
+
+  const handleDeleteNotification = async (id: string) => {
+    setDeletingIds(prev => new Set([...prev, id]));
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'deleteNotification', notifId: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        setSentNotifs(prev => prev.filter(n => n.id !== id));
+      }
+    } catch {}
+    setDeletingIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+  };
 
   const triggerSessionRefresh = async (userList: ApprovedUser[]) => {
     if (!onRefreshUserSessions || sessionRefreshing) return;
@@ -82,6 +126,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       setLoading(false);
       triggerSessionRefresh(u);
     });
+    fetchSentNotifications();
   }, []);
 
   const handleRefresh = async () => {
@@ -121,6 +166,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       if (data.success) {
         setSendResult('success');
         setNotifMessage('');
+        fetchSentNotifications();
       } else {
         setSendResult('error');
       }
@@ -352,6 +398,115 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               {sendResult === 'success' && <span className="text-green-400 text-xs">✓ 전송 완료</span>}
               {sendResult === 'error' && <span className="text-red-400 text-xs">✗ 전송 실패</span>}
             </div>
+          </div>
+
+          {/* 발송 이력 */}
+          <div className="pt-3 border-t border-gray-800">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-gray-400 text-xs font-semibold">📋 발송 이력</span>
+              <button
+                onClick={fetchSentNotifications}
+                disabled={notifsLoading}
+                className="text-gray-600 hover:text-gray-400 text-xs transition-colors disabled:opacity-50"
+              >
+                {notifsLoading ? '불러오는 중...' : '새로고침'}
+              </button>
+            </div>
+
+            {/* 필터 탭 */}
+            {sentNotifs.length > 0 && (() => {
+              const uniqueTargets = [...new Set(sentNotifs.map(n => n.targetEmail))].filter(e => e !== '__all__');
+              return (
+                <div className="flex gap-1 flex-wrap mb-2">
+                  <button
+                    onClick={() => setNotifFilter('__all__')}
+                    className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                      notifFilter === '__all__'
+                        ? 'bg-blue-900/60 border-blue-700/60 text-blue-300'
+                        : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+                    }`}
+                  >
+                    전체
+                  </button>
+                  {uniqueTargets.map(email => {
+                    const user = users.find(u => u.email === email);
+                    return (
+                      <button
+                        key={email}
+                        onClick={() => setNotifFilter(email)}
+                        className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                          notifFilter === email
+                            ? 'bg-blue-900/60 border-blue-700/60 text-blue-300'
+                            : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+                        }`}
+                      >
+                        {user?.name || email.split('@')[0]}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            {/* 이력 목록 — 알림장 스타일 */}
+            {(() => {
+              const filtered = sentNotifs.filter(n =>
+                notifFilter === '__all__' || n.targetEmail === notifFilter
+              );
+              if (notifsLoading && sentNotifs.length === 0) {
+                return (
+                  <div className="flex items-center justify-center py-4 text-gray-600 text-xs gap-1.5">
+                    <div className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin" />
+                    불러오는 중...
+                  </div>
+                );
+              }
+              if (filtered.length === 0) {
+                return <p className="text-gray-700 text-xs text-center py-3">발송 이력이 없습니다.</p>;
+              }
+              return (
+                <div
+                  className="rounded-lg overflow-y-auto border border-gray-700/40 max-h-60"
+                  style={RULED_BG_STYLE}
+                >
+                  {filtered.map((n, i) => {
+                    const dot = NOTIFY_HEX[n.type] || NOTIFY_HEX.info;
+                    const d = new Date(n.createdAt);
+                    const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                    const targetLabel = n.targetEmail === '__all__' ? '전체' : (() => {
+                      const u = users.find(x => x.email === n.targetEmail);
+                      return u?.name || n.targetEmail.split('@')[0];
+                    })();
+                    return (
+                      <div
+                        key={n.id}
+                        className={`flex items-start gap-2 px-3 py-2 ${i < filtered.length - 1 ? 'border-b border-gray-700/30' : ''}`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5" style={{ backgroundColor: dot }} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-gray-200 text-xs leading-relaxed break-words">{n.message}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-gray-600 text-xs">{dateStr}</span>
+                            <span className="text-gray-700 text-xs">·</span>
+                            <span className="text-gray-500 text-xs">{targetLabel}</span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteNotification(n.id)}
+                          disabled={deletingIds.has(n.id)}
+                          className="text-gray-700 hover:text-red-400 text-sm leading-none transition-colors disabled:opacity-40 flex-shrink-0 mt-0.5"
+                          title="삭제"
+                        >
+                          {deletingIds.has(n.id) ? (
+                            <span className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin inline-block" />
+                          ) : '×'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         </div>
 

@@ -1482,6 +1482,8 @@ export default function App() {
             setSeenAdminNotifIds(newSeen);
             pendingAdminNotifs.forEach(n => notify(`[관리자 공지] ${n.message}`, n.type || 'info'));
             setPendingAdminNotifs([]);
+            // 초기 로딩 중이라도 즉시 Drive에 저장 — 다음 앱 시작 시 재공지 방지
+            saveAllToDrive({ ...saveStateRef.current, seenAdminNotifIds: newSeen });
           }}
         />
       )}
