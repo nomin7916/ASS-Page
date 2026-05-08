@@ -127,12 +127,14 @@ export default function App() {
     if (adminViewUserCtx && email.toLowerCase() === adminViewUserCtx.userEmail.toLowerCase()) {
       driveFolderIdRef.current = adminViewUserCtx.userFolderId;
       setAdminViewUserCtx(null);
+      setIsInitialLoading(true);
       setDriveLoadReady(true);
       return;
     }
     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
       setAdminPendingChoice(true);
     } else {
+      setIsInitialLoading(true);
       setDriveLoadReady(true);
     }
   };
