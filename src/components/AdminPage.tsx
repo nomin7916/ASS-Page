@@ -80,6 +80,44 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   // YouTube 채널 링크 상태
   const [youtubeInput, setYoutubeInput] = useState(youtubeUrl);
   const [youtubeSaving, setYoutubeSaving] = useState(false);
+  const [youtubeHistory, setYoutubeHistory] = useState<{url: string, savedAt: number}[]>([]);
+
+  const loadYoutubeHistory = async () => {
+    try {
+      const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.youtubeUrlHistory) {
+          setYoutubeHistory(JSON.parse(data.youtubeUrlHistory));
+        }
+      }
+    } catch {}
+  };
+
+  const saveYoutubeHistoryEntry = async (url: string, currentHistory: {url: string, savedAt: number}[]) => {
+    const newEntry = { url, savedAt: Date.now() };
+    const newHistory = [newEntry, ...currentHistory.filter(h => h.url !== url)].slice(0, 20);
+    setYoutubeHistory(newHistory);
+    try {
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrlHistory', value: JSON.stringify(newHistory) }),
+      });
+    } catch {}
+  };
+
+  const handleDeleteYoutubeHistory = async (savedAt: number) => {
+    const newHistory = youtubeHistory.filter(h => h.savedAt !== savedAt);
+    setYoutubeHistory(newHistory);
+    try {
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrlHistory', value: JSON.stringify(newHistory) }),
+      });
+    } catch {}
+  };
 
   const fetchSentNotifications = async () => {
     setNotifsLoading(true);
@@ -127,6 +165,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       triggerSessionRefresh(u);
     });
     fetchSentNotifications();
+    loadYoutubeHistory();
   }, []);
 
   const handleRefresh = async () => {
@@ -532,8 +571,10 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               />
               <button
                 onClick={async () => {
+                  const newUrl = youtubeInput.trim();
                   setYoutubeSaving(true);
-                  await onSetYoutubeUrl(youtubeInput.trim());
+                  await onSetYoutubeUrl(newUrl);
+                  if (newUrl) await saveYoutubeHistoryEntry(newUrl, youtubeHistory);
                   setYoutubeSaving(false);
                 }}
                 disabled={youtubeSaving || youtubeInput.trim() === youtubeUrl}
@@ -562,6 +603,67 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                 >
                   삭제
                 </button>
+              </div>
+            )}
+
+            {/* YouTube 링크 이력 */}
+            {youtubeHistory.length > 0 && (
+              <div className="pt-3 border-t border-gray-800">
+                <span className="text-gray-500 text-xs font-semibold">링크 이력</span>
+                <div
+                  className="mt-2 rounded-lg overflow-y-auto border border-gray-700/40 max-h-44"
+                  style={RULED_BG_STYLE}
+                >
+                  {youtubeHistory.map((h, i) => {
+                    const d = new Date(h.savedAt);
+                    const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                    const isCurrent = h.url === youtubeUrl;
+                    return (
+                      <div
+                        key={h.savedAt}
+                        className={`flex items-start gap-2 px-3 py-2 ${i < youtubeHistory.length - 1 ? 'border-b border-gray-700/30' : ''}`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <a
+                            href={h.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`text-xs underline decoration-dotted truncate block ${isCurrent ? 'text-red-400' : 'text-gray-400 hover:text-gray-200'}`}
+                          >
+                            {h.url}
+                          </a>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-gray-600 text-xs">{dateStr}</span>
+                            {isCurrent && <span className="text-red-500/70 text-xs">현재 적용 중</span>}
+                          </div>
+                        </div>
+                        {!isCurrent && (
+                          <button
+                            onClick={async () => {
+                              setYoutubeInput(h.url);
+                              setYoutubeSaving(true);
+                              await onSetYoutubeUrl(h.url);
+                              await saveYoutubeHistoryEntry(h.url, youtubeHistory);
+                              setYoutubeSaving(false);
+                            }}
+                            disabled={youtubeSaving}
+                            className="text-gray-600 hover:text-red-400 text-xs transition-colors flex-shrink-0 disabled:opacity-40"
+                            title="이 링크로 적용"
+                          >
+                            적용
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDeleteYoutubeHistory(h.savedAt)}
+                          className="text-gray-700 hover:text-red-400 text-sm leading-none transition-colors flex-shrink-0"
+                          title="이력에서 삭제"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
