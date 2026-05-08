@@ -846,7 +846,7 @@ export default function App() {
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
-      const baseItem = rawData[0];
+      const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
       return rawData.map(item => {
         const indRates = {};
         INDICATOR_CHART_KEYS.forEach(k => {
@@ -858,7 +858,7 @@ export default function App() {
         });
         return {
           ...item,
-          returnRate: baseItem.evalAmount > 0 ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : 0,
+          returnRate: item.evalAmount === 0 ? 0 : (baseItem.evalAmount > 0 ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : 0),
           kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
           sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
           nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
