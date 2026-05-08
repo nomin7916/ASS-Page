@@ -302,7 +302,7 @@ export default function IntegratedDashboard({
                     {showSimpleMenu && (
                       <div className="absolute left-0 top-full mt-1 z-50 bg-[#1e293b] border border-gray-600 rounded shadow-lg min-w-[130px]">
                         <button onClick={() => { addSimpleAccount(); setShowSimpleMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-green-300 hover:bg-green-900/30 transition-colors flex items-center gap-2">
-                          <span>📋</span> 직접입력
+                          <span>📋</span> 일반계좌
                         </button>
                         <button onClick={() => { addMatongAccount(); setShowSimpleMenu(false); }} className="w-full text-left px-3 py-2 text-xs text-green-300 hover:bg-green-900/30 transition-colors flex items-center gap-2">
                           <span>🏦</span> 마통계좌
@@ -435,7 +435,7 @@ export default function IntegratedDashboard({
                             </td>
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{isMatong ? '0.00%' : formatPercent(s.returnRate)}</td>
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-blue-300 font-bold">{isMatong ? '0.00%' : formatPercent(s.cagr)}</td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{isMatong ? '-' : (hideAmounts ? '••••••' : formatCurrency(s.depositAmount))}</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-400 font-bold">{hideAmounts ? '••••••' : formatCurrency(s.depositAmount)}</td>
                             {/* 수익 */}
                             <td className={`py-1.5 px-3 border-r border-gray-700 text-center font-bold ${s.currentEval - s.principal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                               {isMatong ? '₩0' : (hideAmounts ? '••••••' : formatCurrency(s.currentEval - s.principal))}
@@ -893,6 +893,10 @@ export default function IntegratedDashboard({
                     const totalDenom = intTotals.totalEval > 0 ? intTotals.totalEval : holdingsTotal;
                     const groupedDonutData = groupEntries.flatMap(([, items]) => items);
                     let rowNum = 0;
+                    const nonCashItems = intHoldingsDonutData.filter(x => !LAST_CATS.includes(x.category));
+                    const totalProfit = nonCashItems.reduce((s, x) => s + (x.value - x.cost), 0);
+                    const totalCostForProfit = nonCashItems.reduce((s, x) => s + x.cost, 0);
+                    const overallProfitRate = totalCostForProfit > 0 ? (totalProfit / totalCostForProfit * 100) : null;
                     return (
                       <>
                         <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
@@ -1028,6 +1032,21 @@ export default function IntegratedDashboard({
                               });
                             })}
                           </tbody>
+                          <tfoot className="border-t-2 border-gray-600 bg-gray-800/20">
+                            <tr className="text-center">
+                              <td className="py-2 px-2 border-r border-gray-700 text-gray-400 font-bold">합계</td>
+                              <td className="py-2 px-2 border-r border-gray-700 text-gray-500 sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">—</td>
+                              <td className="py-2 px-3 border-r border-gray-700 text-yellow-400 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(holdingsTotal)}</td>
+                              <td className="py-2 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{totalDenom > 0 ? ((holdingsTotal / totalDenom) * 100).toFixed(1) : 0}%</td>
+                              <td className={`py-2 px-3 border-r border-gray-700 font-bold text-right ${totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                                {hideAmounts ? '••••••' : (<><span className="text-[9px] mr-0.5">{totalProfit >= 0 ? '▲' : '▼'}</span>{formatCurrency(Math.abs(totalProfit))}</>)}
+                              </td>
+                              <td className={`py-2 px-3 border-r border-gray-700 font-bold text-right ${overallProfitRate !== null && overallProfitRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                                {overallProfitRate !== null ? (<><span className="text-[9px] mr-0.5">{overallProfitRate >= 0 ? '▲' : '▼'}</span>{Math.abs(overallProfitRate).toFixed(2)}%</>) : '-'}
+                              </td>
+                              <td colSpan={3} className="py-2 px-2 text-center text-gray-700">—</td>
+                            </tr>
+                          </tfoot>
                         </table>
                         </div>
                       </>

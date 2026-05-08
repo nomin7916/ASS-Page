@@ -42,7 +42,7 @@ export function useIntegratedData({
         const prin = Math.max(0, wt - (cw + wl));
         return {
           id: p.id, name, startDate, currentEval: prin, principal: prin,
-          depositAmount: 0, returnRate: 0, cagr: 0,
+          depositAmount: prin, returnRate: 0, cagr: 0,
           cats: prin > 0 ? { '현금': prin } : {},
           isActive: false, accountType: 'matong', rowColor: p.rowColor || '', memo: p.memo || '',
           withdrawableTotal: wt, currentWithdrawal: cw, withdrawalLimit: wl, agreedRate: ar, agreedRateStr: String(p.agreedRate ?? ''),
@@ -235,10 +235,23 @@ export function useIntegratedData({
         const evalAmount = cleanNum(p.evalAmount);
         if (evalAmount <= 0) return;
         const accountName = isActive ? title : p.name;
-        const key = accountName || '직접입력';
+        const key = accountName || '일반계좌';
         if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금', code: '' };
         holdingsMap[key].value += evalAmount;
         holdingsMap[key].cost += cleanNum(p.principal) || evalAmount;
+        return;
+      }
+      if (p.accountType === 'matong') {
+        const wt = cleanNum(p.withdrawableTotal) || 0;
+        const cw = cleanNum(p.currentWithdrawal) || 0;
+        const wl = cleanNum(p.withdrawalLimit) || 0;
+        const prin = Math.max(0, wt - (cw + wl));
+        if (prin <= 0) return;
+        const accountName = isActive ? title : p.name;
+        const key = accountName || '마통계좌';
+        if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예수금', code: '' };
+        holdingsMap[key].value += prin;
+        holdingsMap[key].cost += prin;
         return;
       }
       const items = isActive ? portfolio : (p.portfolio || []);
