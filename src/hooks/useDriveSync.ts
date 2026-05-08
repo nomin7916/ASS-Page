@@ -255,6 +255,11 @@ export function useDriveSync({
           setSS('ready');
           return saveAllToDrive(state, versioned, true);
         }
+        // 갱신 실패(세션 만료·권한 거부) → auth_needed 유지, 재시도 무의미
+        setSS('error');
+        setDriveStatus('auth_needed');
+        notify('Drive 인증이 만료되었습니다. 헤더의 Drive 아이콘을 눌러 다시 연결해 주세요.', 'warning');
+        return;
       }
       setSS('error');
       setDriveStatus('error');
