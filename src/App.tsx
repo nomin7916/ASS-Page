@@ -88,6 +88,7 @@ export default function App() {
   const [showCalculator, setShowCalculator] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [notebookLinks, setNotebookLinks] = useState<{title: string, url: string, createdAt: number}[]>([]);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
   const [seenAdminNotifIds, setSeenAdminNotifIds] = useState<string[]>([]);
@@ -1058,6 +1059,25 @@ export default function App() {
     }
   };
 
+  const handleSetNotebookLinks = async (links: {title: string, url: string, createdAt: number}[]) => {
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(links) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success !== false) {
+        setNotebookLinks(links);
+        notify('노트북LM 링크가 저장됐습니다.', 'success');
+      } else {
+        notify('링크 저장 실패 (Apps Script 응답 오류)', 'error');
+      }
+    } catch {
+      notify('링크 저장 실패 (네트워크 오류)', 'error');
+    }
+  };
+
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
     // portfolioUpdatedAt이 없으면 saveAllToDrive의 guard(0 > 0)가 항상 false → STATE 저장 안됨
@@ -1158,6 +1178,9 @@ export default function App() {
         if (settingsRes.ok) {
           const settingsData = await settingsRes.json();
           if (settingsData.youtubeUrl) setYoutubeUrl(settingsData.youtubeUrl);
+          if (settingsData.notebookLinks) {
+            try { setNotebookLinks(JSON.parse(settingsData.notebookLinks)); } catch {}
+          }
         }
       } catch {}
 
@@ -1431,7 +1454,7 @@ export default function App() {
       setDriveLoadReady(false);
       setAdminPendingChoice(false);
       setAdminViewUserCtx(null);
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} />;
   }
 
   // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)
@@ -1545,6 +1568,7 @@ export default function App() {
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
           youtubeUrl={youtubeUrl}
+          notebookLinks={notebookLinks}
         />
 
         {/* 알림 바 */}

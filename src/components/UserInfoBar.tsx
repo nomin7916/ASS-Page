@@ -1,7 +1,19 @@
 // @ts-nocheck
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard, Calculator, Youtube } from 'lucide-react';
 import { ADMIN_EMAIL } from '../config';
+
+function NotebookLMIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+      <path d="M9 8.5a3 3 0 0 1 6 0" />
+      <rect x="8.5" y="10.5" width="2" height="2.5" rx="1" />
+      <rect x="13.5" y="10.5" width="2" height="2.5" rx="1" />
+    </svg>
+  );
+}
 
 export default function UserInfoBar({
   email,
@@ -17,8 +29,22 @@ export default function UserInfoBar({
   showCalculator,
   onToggleCalculator,
   youtubeUrl,
+  notebookLinks = [],
 }) {
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const [notebookOpen, setNotebookOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!notebookOpen) return;
+    const handler = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setNotebookOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [notebookOpen]);
 
   return (
     <div className="flex items-center justify-between text-xs text-gray-500 px-1">
@@ -47,6 +73,49 @@ export default function UserInfoBar({
           >
             <Youtube size={14} />
           </a>
+        )}
+        {/* 노트북LM 링크 드롭다운 */}
+        {notebookLinks.length > 0 && (
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={() => setNotebookOpen(v => !v)}
+              title="학습 자료 바로가기"
+              className={`p-1.5 rounded border transition-colors flex items-center justify-center ${
+                notebookOpen
+                  ? 'text-sky-400 bg-sky-900/20 border-sky-700/40'
+                  : 'text-gray-500 hover:text-sky-400 hover:bg-gray-800 border-transparent hover:border-gray-700'
+              }`}
+            >
+              <NotebookLMIcon size={14} />
+            </button>
+            {notebookOpen && (
+              <div className="absolute right-0 top-full mt-1.5 z-50 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden min-w-[220px] max-w-[300px]">
+                <div className="px-3 py-2 border-b border-gray-800">
+                  <span className="text-gray-500 text-xs font-semibold">학습 자료</span>
+                </div>
+                <ul className="py-1 max-h-64 overflow-y-auto">
+                  {notebookLinks.map((link, i) => (
+                    <li key={i}>
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => setNotebookOpen(false)}
+                        className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
+                      >
+                        <span className="flex-shrink-0 text-sky-500 group-hover:text-sky-400 transition-colors">
+                          <NotebookLMIcon size={13} />
+                        </span>
+                        <span className="text-gray-300 text-xs group-hover:text-white transition-colors truncate">
+                          {link.title}
+                        </span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         )}
         <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
         {isAdmin && onOpenAdminPortal && (

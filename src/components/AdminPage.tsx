@@ -24,6 +24,12 @@ interface SentNotification {
   createdAt: number;
 }
 
+interface NotebookLink {
+  title: string;
+  url: string;
+  createdAt: number;
+}
+
 interface Props {
   adminEmail: string;
   onClose: () => void;
@@ -35,6 +41,8 @@ interface Props {
   onRefreshUserSessions?: (emails: string[]) => Promise<void>;
   youtubeUrl?: string;
   onSetYoutubeUrl?: (url: string) => Promise<void>;
+  notebookLinks?: NotebookLink[];
+  onSetNotebookLinks?: (links: NotebookLink[]) => Promise<void>;
 }
 
 // Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
@@ -59,7 +67,7 @@ function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
@@ -81,6 +89,12 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [youtubeInput, setYoutubeInput] = useState(youtubeUrl);
   const [youtubeSaving, setYoutubeSaving] = useState(false);
   const [youtubeHistory, setYoutubeHistory] = useState<{url: string, savedAt: number}[]>([]);
+
+  // 노트북LM 링크 상태
+  const [nbTitle, setNbTitle] = useState('');
+  const [nbUrl, setNbUrl] = useState('');
+  const [nbSaving, setNbSaving] = useState(false);
+  const [deletingNbIds, setDeletingNbIds] = useState<Set<number>>(new Set());
 
   const loadYoutubeHistory = async () => {
     try {
@@ -105,6 +119,23 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
         body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrlHistory', value: JSON.stringify(newHistory) }),
       });
     } catch {}
+  };
+
+  const handleAddNotebookLink = async () => {
+    if (!nbTitle.trim() || !nbUrl.trim() || !onSetNotebookLinks) return;
+    setNbSaving(true);
+    const newLink: NotebookLink = { title: nbTitle.trim(), url: nbUrl.trim(), createdAt: Date.now() };
+    await onSetNotebookLinks([...notebookLinks, newLink]);
+    setNbTitle('');
+    setNbUrl('');
+    setNbSaving(false);
+  };
+
+  const handleDeleteNotebookLink = async (createdAt: number) => {
+    if (!onSetNotebookLinks) return;
+    setDeletingNbIds(prev => new Set([...prev, createdAt]));
+    await onSetNotebookLinks(notebookLinks.filter(l => l.createdAt !== createdAt));
+    setDeletingNbIds(prev => { const next = new Set(prev); next.delete(createdAt); return next; });
   };
 
   const handleDeleteYoutubeHistory = async (savedAt: number) => {
@@ -664,6 +695,100 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                     );
                   })}
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 노트북LM 링크 관리 */}
+        {onSetNotebookLinks && (
+          <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+            <p className="text-sky-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                <path d="M9 8.5a3 3 0 0 1 6 0" />
+                <rect x="8.5" y="10.5" width="2" height="2.5" rx="1" />
+                <rect x="13.5" y="10.5" width="2" height="2.5" rx="1" />
+              </svg>
+              학습 자료 링크 (노트북LM)
+            </p>
+            <p className="text-gray-500 text-xs">
+              링크를 추가하면 모든 사용자의 상단 바 노트북 아이콘 드롭다운에 표시됩니다.
+            </p>
+
+            {/* 추가 폼 */}
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={nbTitle}
+                onChange={e => setNbTitle(e.target.value)}
+                placeholder="제목 (예: 2024년 투자 전략 팟캐스트)"
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-sky-500"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={nbUrl}
+                  onChange={e => setNbUrl(e.target.value)}
+                  placeholder="https://notebooklm.google.com/..."
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-sky-500"
+                />
+                <button
+                  onClick={handleAddNotebookLink}
+                  disabled={nbSaving || !nbTitle.trim() || !nbUrl.trim()}
+                  className="flex items-center gap-1.5 bg-sky-700 hover:bg-sky-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  {nbSaving ? (
+                    <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />추가 중</>
+                  ) : '추가'}
+                </button>
+              </div>
+            </div>
+
+            {/* 링크 목록 */}
+            {notebookLinks.length === 0 ? (
+              <p className="text-gray-700 text-xs text-center py-2">등록된 링크가 없습니다.</p>
+            ) : (
+              <div
+                className="rounded-lg overflow-y-auto border border-gray-700/40 max-h-52"
+                style={RULED_BG_STYLE}
+              >
+                {notebookLinks.map((link, i) => (
+                  <div
+                    key={link.createdAt}
+                    className={`flex items-start gap-2 px-3 py-2 ${i < notebookLinks.length - 1 ? 'border-b border-gray-700/30' : ''}`}
+                  >
+                    <svg className="flex-shrink-0 mt-0.5 text-sky-500" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                      <path d="M9 8.5a3 3 0 0 1 6 0" />
+                      <rect x="8.5" y="10.5" width="2" height="2.5" rx="1" />
+                      <rect x="13.5" y="10.5" width="2" height="2.5" rx="1" />
+                    </svg>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-gray-200 text-xs font-medium truncate">{link.title}</p>
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-gray-600 hover:text-sky-400 text-xs underline decoration-dotted truncate block transition-colors"
+                      >
+                        {link.url}
+                      </a>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteNotebookLink(link.createdAt)}
+                      disabled={deletingNbIds.has(link.createdAt)}
+                      className="text-gray-700 hover:text-red-400 text-sm leading-none transition-colors flex-shrink-0 mt-0.5 disabled:opacity-40"
+                      title="삭제"
+                    >
+                      {deletingNbIds.has(link.createdAt) ? (
+                        <span className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin inline-block" />
+                      ) : '×'}
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
