@@ -427,11 +427,40 @@ const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio
   const list = data?.etfTop10MajorConstituentAssets ?? data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? data?.data ?? [];
   if (!Array.isArray(list) || list.length === 0) return null;
   const result = list.slice(0, 3).map((x: any) => ({
-    name: x.itemName ?? x.stockName ?? x.name ?? '',
-    code: x.itemCode ?? x.stockCode ?? x.code ?? '',
-    ratio: parseFloat(String(x.etfWeight ?? x.holdingRatio ?? x.ratio ?? x.weight ?? 0).replace('%', '')),
+    name: x.itemName ?? x.stockName ?? x.name ?? x.holdingName ?? '',
+    code: x.itemCode ?? x.stockCode ?? x.code ?? x.symbol ?? x.ticker ?? '',
+    ratio: parseFloat(String(x.etfWeight ?? x.holdingRatio ?? x.holdingRate ?? x.ratio ?? x.weight ?? x.constituentRatio ?? x.stockRatio ?? 0).replace('%', '')),
   })).filter((x: any) => x.name);
   return result.length > 0 ? result : null;
+};
+
+const _fetchYahooEtfHoldings = async (
+  ticker: string
+): Promise<Array<{ name: string; code: string; ratio: number }> | null> => {
+  const key = ticker.toUpperCase();
+  const targetUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${key}?modules=topHoldings`;
+  const proxies = [
+    targetUrl,
+    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  ];
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const holdings = data?.quoteSummary?.result?.[0]?.topHoldings?.holdings;
+      if (!Array.isArray(holdings) || holdings.length === 0) continue;
+      const result = holdings.slice(0, 3).map((h: any) => ({
+        name: h.holdingName ?? h.symbol ?? '',
+        code: h.symbol ?? '',
+        ratio: h.holdingPercent?.raw != null ? Math.round(h.holdingPercent.raw * 10000) / 100 : 0,
+      })).filter((h: any) => h.name);
+      if (result.length > 0) return result;
+    } catch { continue; }
+  }
+  return null;
 };
 
 export const fetchEtfTopHoldings = async (
@@ -439,6 +468,13 @@ export const fetchEtfTopHoldings = async (
 ): Promise<Array<{ name: string; code: string; ratio: number }> | null> => {
   const cached = _etfHoldingsCache.get(code);
   if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.data;
+
+  // US ETF (알파벳 1~6자): Yahoo Finance topHoldings
+  if (/^[A-Za-z]{1,6}$/.test(code)) {
+    const result = await _fetchYahooEtfHoldings(code);
+    _etfHoldingsCache.set(code, { data: result, ts: Date.now() });
+    return result;
+  }
 
   const targetUrls = [
     `https://m.stock.naver.com/api/stock/${code}/etfAnalysis`,
@@ -493,9 +529,10 @@ export const fetchStockPer = async (
     `https://api.codetabs.com/v1/proxy?quest=${url}`,
   ];
 
-  // Step 1: 현재가 조회
+  // Step 1: 현재가 + basic API에서 직접 PER 필드 추출
   let closePrice: number | null = null;
   let isEtf = false;
+  let basicPer: number | null = null;
   for (const proxy of mkProxies(`https://m.stock.naver.com/api/stock/${code}/basic`)) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -504,6 +541,7 @@ export const fetchStockPer = async (
       if (data?.stockName && data?.closePrice) {
         closePrice = parseNum(String(data.closePrice).replace(/,/g, ''));
         isEtf = data.stockEndType === 'etf';
+        basicPer = parseNum(data.per ?? data.perValue ?? data.PER);
         break;
       }
     } catch { continue; }
@@ -548,6 +586,13 @@ export const fetchStockPer = async (
       _stockPerCache.set(code, { data: result, ts: Date.now() });
       return result;
     } catch { continue; }
+  }
+
+  // finance/annual 파싱 실패 시 basic API per 필드 폴백
+  if (basicPer != null) {
+    const result = { per: basicPer, fper: null };
+    _stockPerCache.set(code, { data: result, ts: Date.now() });
+    return result;
   }
 
   _stockPerCache.set(code, { data: null, ts: Date.now() });

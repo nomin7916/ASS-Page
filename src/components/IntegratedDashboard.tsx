@@ -137,7 +137,8 @@ export default function IntegratedDashboard({
 
   useEffect(() => {
     const isKr6 = (c) => /^[A-Z0-9]{6}$/i.test(c || '');
-    const candidates = intHoldingsDonutData.filter(item => isKr6(item.code));
+    const isUsTicker = (c) => /^[A-Za-z]{1,6}$/.test(c || '');
+    const candidates = intHoldingsDonutData.filter(item => isKr6(item.code) || isUsTicker(item.code));
     if (candidates.length === 0) return;
 
     const fetchOne = async (item) => {
@@ -151,8 +152,10 @@ export default function IntegratedDashboard({
 
       const holdings = await fetchEtfTopHoldings(code);
       if (!holdings || holdings.length === 0) {
-        // ETF holdings 조회 실패 → 종목 자체 PER 시도 (stocks만 유효, ETF는 fetchStockPer 내부에서 null 반환)
-        const perData = await fetchStockPer(code);
+        // ETF holdings 조회 실패 → 종목 자체 PER 시도
+        const perData = isUsTicker(code)
+          ? await fetchYahooStockPer(code)
+          : await fetchStockPer(code);
         if (perData?.per != null || perData?.fper != null) {
           setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: perData.per, fper: perData.fper } }));
         } else {
