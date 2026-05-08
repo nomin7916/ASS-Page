@@ -160,11 +160,11 @@ export function usePortfolioState({
   const updateMatongAccountField = (id, field, val) => {
     setPortfolios(prev => prev.map(p => {
       if (p.id !== id) return p;
-      const num = field === 'agreedRate' ? parseFloat(val) || 0 : cleanNum(val);
-      const updated = { ...p, [field]: num };
-      const wt = field === 'withdrawableTotal' ? num : (cleanNum(p.withdrawableTotal) || 0);
-      const cw = field === 'currentWithdrawal' ? num : (cleanNum(p.currentWithdrawal) || 0);
-      const wl = field === 'withdrawalLimit' ? num : (cleanNum(p.withdrawalLimit) || 0);
+      const stored = field === 'agreedRate' ? val : cleanNum(val);
+      const updated = { ...p, [field]: stored };
+      const wt = field === 'withdrawableTotal' ? cleanNum(val) : (cleanNum(p.withdrawableTotal) || 0);
+      const cw = field === 'currentWithdrawal' ? cleanNum(val) : (cleanNum(p.currentWithdrawal) || 0);
+      const wl = field === 'withdrawalLimit' ? cleanNum(val) : (cleanNum(p.withdrawalLimit) || 0);
       const newPrincipal = Math.max(0, wt - (cw + wl));
       return { ...updated, principal: newPrincipal, evalAmount: newPrincipal };
     }));

@@ -109,6 +109,7 @@ export default function IntegratedDashboard({
   const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
   const memoDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const [showSimpleMenu, setShowSimpleMenu] = useState(false);
+  const [matongClosedIds, setMatongClosedIds] = useState({});
   const simpleMenuRef = useRef(null);
   useEffect(() => {
     if (!showSimpleMenu) return;
@@ -116,6 +117,15 @@ export default function IntegratedDashboard({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [showSimpleMenu]);
+
+  const focusNextMatongInput = useCallback((el, dir) => {
+    const tr = el.closest('tr');
+    if (!tr) return;
+    const inputs = Array.from(tr.querySelectorAll('input[data-matong-input]'));
+    const idx = inputs.indexOf(el);
+    const next = inputs[idx + dir];
+    if (next) { next.focus(); next.select(); }
+  }, []);
 
   const newAccBtnRef = useRef(null);
   const [newAccMenuPos, setNewAccMenuPos] = useState({ top: 0, right: 0 });
@@ -432,10 +442,16 @@ export default function IntegratedDashboard({
                             <td className="p-0 border-r border-gray-700 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                               {isMatong ? (
                                 <div className="flex items-center gap-2 px-2 py-1.5 text-[11px]">
-                                  <span className="text-yellow-400 font-bold">{(s.agreedRate || 0).toFixed(2)}%</span>
+                                  <span className="text-yellow-400 font-bold">{parseFloat(s.agreedRate || 0).toFixed(2)}%</span>
                                   <span className="text-gray-500">|</span>
                                   <span className="text-gray-400">월이자</span>
                                   <span className="text-yellow-300 font-bold">{hideAmounts ? '••••••' : formatCurrency(matongMonthlyInterest)}</span>
+                                  <button
+                                    onClick={() => setMatongClosedIds(prev => ({...prev, [s.id]: !prev[s.id]}))}
+                                    className="ml-1 text-[10px] px-1.5 py-0.5 rounded border border-yellow-700/50 text-yellow-600 hover:text-yellow-300 hover:border-yellow-400 transition-colors"
+                                  >
+                                    {matongClosedIds[s.id] ? '펼치기' : '숨기기'}
+                                  </button>
                                 </div>
                               ) : (
                                 <div className="flex items-center">
@@ -448,7 +464,7 @@ export default function IntegratedDashboard({
                               <button onClick={() => deletePortfolio(s.id)} className="text-gray-500 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                             </td>
                           </tr>
-                          {isMatong && (
+                          {isMatong && !matongClosedIds[s.id] && (
                             <tr className="bg-yellow-950/10 border-b border-gray-700/60">
                               <td colSpan={13} className="py-2 px-4">
                                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px]">
@@ -456,6 +472,7 @@ export default function IntegratedDashboard({
                                     인출가능 총액
                                     <input
                                       type="text" inputMode="numeric"
+                                      data-matong-input="true"
                                       className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawableTotal'
                                         ? (s.withdrawableTotal || '') : s.withdrawableTotal ? formatCurrency(s.withdrawableTotal) : ''}
@@ -463,12 +480,14 @@ export default function IntegratedDashboard({
                                       onFocus={e => { setSimpleEditField({id: s.id, field: 'withdrawableTotal'}); e.target.select(); }}
                                       onBlur={() => setSimpleEditField(null)}
                                       onChange={e => updateMatongAccountField(s.id, 'withdrawableTotal', e.target.value.replace(/[^0-9]/g, ''))}
+                                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); focusNextMatongInput(e.target, 1); } }}
                                     />
                                   </label>
                                   <label className="flex items-center gap-1.5 text-gray-400">
                                     현재 인출액
                                     <input
                                       type="text" inputMode="numeric"
+                                      data-matong-input="true"
                                       className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'currentWithdrawal'
                                         ? (s.currentWithdrawal || '') : s.currentWithdrawal ? formatCurrency(s.currentWithdrawal) : ''}
@@ -476,12 +495,14 @@ export default function IntegratedDashboard({
                                       onFocus={e => { setSimpleEditField({id: s.id, field: 'currentWithdrawal'}); e.target.select(); }}
                                       onBlur={() => setSimpleEditField(null)}
                                       onChange={e => updateMatongAccountField(s.id, 'currentWithdrawal', e.target.value.replace(/[^0-9]/g, ''))}
+                                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); focusNextMatongInput(e.target, 1); } }}
                                     />
                                   </label>
                                   <label className="flex items-center gap-1.5 text-gray-400">
                                     인출제한금액
                                     <input
                                       type="text" inputMode="numeric"
+                                      data-matong-input="true"
                                       className="w-[110px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-200 font-bold text-center outline-none focus:border-yellow-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'withdrawalLimit'
                                         ? (s.withdrawalLimit || '') : s.withdrawalLimit ? formatCurrency(s.withdrawalLimit) : ''}
@@ -489,12 +510,14 @@ export default function IntegratedDashboard({
                                       onFocus={e => { setSimpleEditField({id: s.id, field: 'withdrawalLimit'}); e.target.select(); }}
                                       onBlur={() => setSimpleEditField(null)}
                                       onChange={e => updateMatongAccountField(s.id, 'withdrawalLimit', e.target.value.replace(/[^0-9]/g, ''))}
+                                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); focusNextMatongInput(e.target, 1); } }}
                                     />
                                   </label>
                                   <label className="flex items-center gap-1.5 text-gray-400">
                                     약정이율(%)
                                     <input
                                       type="text" inputMode="decimal"
+                                      data-matong-input="true"
                                       className="w-[70px] bg-[#1e293b] border border-yellow-700/50 rounded px-2 py-0.5 text-yellow-300 font-bold text-center outline-none focus:border-yellow-400"
                                       value={simpleEditField?.id === s.id && simpleEditField?.field === 'agreedRate'
                                         ? (s.agreedRate ?? '') : (s.agreedRate ?? '')}
@@ -502,6 +525,7 @@ export default function IntegratedDashboard({
                                       onFocus={e => { setSimpleEditField({id: s.id, field: 'agreedRate'}); e.target.select(); }}
                                       onBlur={() => setSimpleEditField(null)}
                                       onChange={e => updateMatongAccountField(s.id, 'agreedRate', e.target.value.replace(/[^0-9.]/g, ''))}
+                                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }}
                                     />
                                   </label>
                                   <span className="text-gray-500">→</span>
