@@ -455,7 +455,7 @@ const _fetchYahooEtfHoldings = async (
       const result = holdings.slice(0, 3).map((h: any) => ({
         name: h.holdingName ?? h.symbol ?? '',
         code: h.symbol ?? '',
-        ratio: h.holdingPercent?.raw != null ? Math.round(h.holdingPercent.raw * 10000) / 100 : 0,
+        ratio: (() => { const r = h.holdingPercent?.raw; return (r != null && isFinite(r)) ? Math.round(r * 10000) / 100 : 0; })(),
       })).filter((h: any) => h.name);
       if (result.length > 0) return result;
     } catch { continue; }
@@ -599,8 +599,13 @@ export const fetchStockPer = async (
   return null;
 };
 
-// ── 해외 종목 PER / 선행PER 조회 (Yahoo Finance quoteSummary) ────────────────
+// ── 해외 종목 PER / 선행PER 조회 ─────────────────────────────────────────────
+// 1차: v7/finance/quote (topHoldings와 동일 경로, 차단 적음)
+// 2차: v10/finance/quoteSummary?modules=summaryDetail (fallback)
 const _yahooPerCache = new Map<string, { data: { per: number | null; fper: number | null } | null; ts: number }>();
+
+const _toValidPer = (v: any): number | null =>
+  v != null && isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : null;
 
 export const fetchYahooStockPer = async (
   ticker: string
@@ -609,26 +614,49 @@ export const fetchYahooStockPer = async (
   const cached = _yahooPerCache.get(key);
   if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
 
-  const targetUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${key}?modules=summaryDetail`;
-  const proxies = [
-    targetUrl,
-    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
+  // 1차: v7/finance/quote
+  const v7Url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${key}`;
+  const v7Proxies = [
+    v7Url,
+    `/api/proxy?url=${encodeURIComponent(v7Url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(v7Url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${v7Url}`,
   ];
+  for (const proxy of v7Proxies) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const q = data?.quoteResponse?.result?.[0];
+      if (!q) continue;
+      const per = _toValidPer(q.trailingPE);
+      const fper = _toValidPer(q.forwardPE);
+      if (per !== null || fper !== null) {
+        const result = { per, fper };
+        _yahooPerCache.set(key, { data: result, ts: Date.now() });
+        return result;
+      }
+    } catch { continue; }
+  }
 
-  for (const proxy of proxies) {
+  // 2차: v10/quoteSummary?modules=summaryDetail
+  const v10Url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${key}?modules=summaryDetail`;
+  const v10Proxies = [
+    v10Url,
+    `/api/proxy?url=${encodeURIComponent(v10Url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(v10Url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${v10Url}`,
+  ];
+  for (const proxy of v10Proxies) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
       const data = await res.json();
       const detail = data?.quoteSummary?.result?.[0]?.summaryDetail;
       if (!detail) continue;
-      const rawPer = detail.trailingPE?.raw;
-      const rawFper = detail.forwardPE?.raw;
       const result = {
-        per: rawPer != null && isFinite(rawPer) ? Math.round(rawPer * 100) / 100 : null,
-        fper: rawFper != null && isFinite(rawFper) ? Math.round(rawFper * 100) / 100 : null,
+        per: _toValidPer(detail.trailingPE?.raw),
+        fper: _toValidPer(detail.forwardPE?.raw),
       };
       _yahooPerCache.set(key, { data: result, ts: Date.now() });
       return result;
