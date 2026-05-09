@@ -34,16 +34,19 @@ function computePortfolioStats(portfolios: any[]): { evalTotal: number; principa
   let evalTotal = 0;
   let principal = 0;
   for (const p of (portfolios || [])) {
-    principal += Number(p.principal) || 0;
+    const isOverseas = p.accountType === 'overseas';
+    const avgFx = isOverseas ? (Number(p.avgExchangeRate) || 1) : 1;
+    principal += (Number(p.principal) || 0) * avgFx;
     if (p.accountType === 'simple') {
       evalTotal += Number(p.evalAmount) || 0;
     } else {
-      for (const s of (p.portfolio || [])) {
-        if (s.type === 'deposit') {
-          evalTotal += Number(s.depositAmount) || 0;
-        } else {
-          evalTotal += (Number(s.quantity) || 0) * (Number(s.currentPrice) || Number(s.avgPrice) || 0);
-        }
+      // history의 evalAmount는 앱이 올바르게 계산한 KRW 값 — 환율 재계산 불필요
+      const history = (p.history || []) as { date: string; evalAmount: number }[];
+      const lastEntry = history.length > 0
+        ? history.reduce((a, b) => (a.date >= b.date ? a : b))
+        : null;
+      if (lastEntry && Number(lastEntry.evalAmount) > 0) {
+        evalTotal += Number(lastEntry.evalAmount);
       }
     }
   }
