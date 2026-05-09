@@ -1075,6 +1075,13 @@ export default function App() {
       if (data.success !== false) {
         setYoutubeUrl(url);
         notify(url ? 'YouTube 채널 링크가 설정되었습니다.' : 'YouTube 채널 링크가 삭제되었습니다.', 'success');
+        try {
+          const token = driveTokenRef.current;
+          if (token) {
+            const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+            await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks });
+          }
+        } catch {}
       } else {
         notify('YouTube 링크 저장 실패 (Apps Script 응답 오류)', 'error');
       }
@@ -1095,6 +1102,13 @@ export default function App() {
       if (data.success !== false) {
         setNotebookLinks(sorted);
         notify('노트북LM 링크가 저장됐습니다.', 'success');
+        try {
+          const token = driveTokenRef.current;
+          if (token) {
+            const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+            await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: sorted });
+          }
+        } catch {}
       } else {
         notify('링크 저장 실패 (Apps Script 응답 오류)', 'error');
       }
@@ -1196,16 +1210,26 @@ export default function App() {
         if (logData?.entries?.length > 0) setNotificationLog(logData.entries);
       } catch {}
 
-      // YouTube 채널 URL 로드 (Apps Script getSettings 엔드포인트 필요)
-      // action=getSettings → { youtubeUrl: '...' }
+      // 앱 설정 로드: Drive 캐시 파일 우선 복원 → Apps Script 정본으로 갱신
+      let driveSettingsCache: { youtubeUrl?: string, notebookLinks?: any[] } | null = null;
+      try {
+        const settingsFolderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+        driveSettingsCache = await loadDriveFile(token, settingsFolderId, DRIVE_FILES.SETTINGS) as any;
+        if (driveSettingsCache?.youtubeUrl) setYoutubeUrl(driveSettingsCache.youtubeUrl);
+        if (Array.isArray(driveSettingsCache?.notebookLinks)) setNotebookLinks(driveSettingsCache.notebookLinks);
+      } catch {}
       try {
         const settingsRes = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
         if (settingsRes.ok) {
           const settingsData = await settingsRes.json();
-          if (settingsData.youtubeUrl) setYoutubeUrl(settingsData.youtubeUrl);
-          if (settingsData.notebookLinks) {
-            try { setNotebookLinks(JSON.parse(settingsData.notebookLinks)); } catch {}
-          }
+          const yu = settingsData.youtubeUrl || '';
+          const nl: any[] | null = settingsData.notebookLinks ? (() => { try { return JSON.parse(settingsData.notebookLinks); } catch { return null; } })() : null;
+          setYoutubeUrl(yu);
+          if (Array.isArray(nl)) setNotebookLinks(nl);
+          try {
+            const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+            await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [] });
+          } catch {}
         }
       } catch {}
 
