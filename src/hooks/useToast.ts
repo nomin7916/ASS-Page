@@ -8,6 +8,7 @@ export interface NotificationEntry {
   time: number;
   message: string;
   type: NotificationType;
+  adminNotifId?: string;
 }
 
 export interface ConfirmState {
@@ -25,7 +26,7 @@ export function useToast() {
   const counterRef = useRef(0);
   const recentMessagesRef = useRef<Map<string, number>>(new Map());
 
-  const notify = (text: string, type: NotificationType = 'info') => {
+  const notify = (text: string, type: NotificationType = 'info', opts?: { adminNotifId?: string }) => {
     const now = Date.now();
     const lastTime = recentMessagesRef.current.get(text) ?? 0;
     if (now - lastTime < 5000) return;
@@ -35,6 +36,7 @@ export function useToast() {
       time: now,
       message: text,
       type,
+      adminNotifId: opts?.adminNotifId,
     };
     setNotificationLog(prev => [entry, ...prev].slice(0, MAX_LOG));
     setUnreadCount(prev => prev + 1);

@@ -1052,12 +1052,23 @@ export default function App() {
   };
 
   const handleClearNotificationLog = async () => {
+    const adminIds = notificationLog.filter(e => e.adminNotifId).map(e => e.adminNotifId as string);
+    if (adminIds.length > 0) {
+      setPinnedAdminNotifIds(prev => prev.filter(id => !adminIds.includes(id)));
+    }
     clearNotificationLog();
     if (driveTokenRef.current) {
       try {
         const folderId = driveFolderIdRef.current || await ensureDriveFolder(driveTokenRef.current);
         await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.NOTIFICATION_LOG, { entries: [] });
       } catch {}
+    }
+  };
+
+  const handleDeleteNotificationEntry = (entry) => {
+    setNotificationLog(prev => prev.filter(e => e.id !== entry.id));
+    if (entry.adminNotifId) {
+      setPinnedAdminNotifIds(prev => prev.filter(id => id !== entry.adminNotifId));
     }
   };
 
@@ -1581,10 +1592,13 @@ export default function App() {
             const newSeen = [...seenAdminNotifIds, ...pendingAdminNotifs.map(n => n.id)];
             seenAdminNotifIdsRef.current = newSeen;
             setSeenAdminNotifIds(newSeen);
-            pendingAdminNotifs.forEach(n => notify(`[관리자 공지] ${n.message}`, n.type || 'info'));
+            pendingAdminNotifs.forEach(n => notify(`[관리자 공지] ${n.message}`, n.type || 'info', { adminNotifId: n.id }));
             setPendingAdminNotifs([]);
-            // 초기 로딩 중이라도 즉시 Drive에 저장 — 다음 앱 시작 시 재공지 방지
-            saveAllToDrive({ ...saveStateRef.current, seenAdminNotifIds: newSeen });
+            // portfolioUpdatedAt 없이 저장 시 가드가 STATE 파일 저장을 스킵 → seenAdminNotifIds 유실 방지
+            const nowTs = Date.now();
+            portfolioUpdatedAtRef.current = nowTs;
+            lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+            saveAllToDrive({ ...saveStateRef.current, seenAdminNotifIds: newSeen, portfolioUpdatedAt: nowTs });
           }}
         />
       )}
@@ -1645,7 +1659,7 @@ export default function App() {
         />
 
         {/* 알림 바 */}
-        <NotificationBar notificationLog={notificationLog} onClear={handleClearNotificationLog} unreadCount={unreadCount} onRead={markAsRead} />
+        <NotificationBar notificationLog={notificationLog} onClear={handleClearNotificationLog} unreadCount={unreadCount} onRead={markAsRead} onDeleteEntry={handleDeleteNotificationEntry} />
 
         {/* 고정 공지 바 */}
         <PinnedNotificationsBar

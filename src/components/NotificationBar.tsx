@@ -8,6 +8,7 @@ interface Props {
   onClear: () => void;
   unreadCount: number;
   onRead: () => void;
+  onDeleteEntry?: (entry: NotificationEntry) => void;
 }
 
 const TYPE_COLOR: Record<string, string> = {
@@ -38,7 +39,7 @@ function formatTime(ts: number): string {
   return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')} ${d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
-export default function NotificationBar({ notificationLog, onClear, unreadCount, onRead }: Props) {
+export default function NotificationBar({ notificationLog, onClear, unreadCount, onRead, onDeleteEntry }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const posInitialized = useRef(false);
@@ -198,17 +199,27 @@ export default function NotificationBar({ notificationLog, onClear, unreadCount,
               notificationLog.map(entry => (
                 <div
                   key={entry.id}
-                  className="flex items-baseline gap-2 px-3"
+                  className="flex items-baseline gap-2 px-3 group"
                   style={{ lineHeight: '24px', minHeight: 24 }}
                 >
                   <span className="flex-shrink-0 text-[9px] text-gray-600 font-mono">
                     {formatTime(entry.time)}
                   </span>
                   <span
-                    className={`text-[11px] font-mono break-all leading-snug ${typeColor(entry.type)}`}
+                    className={`flex-1 text-[11px] font-mono break-all leading-snug ${typeColor(entry.type)}`}
                   >
                     {entry.message}
                   </span>
+                  {onDeleteEntry && (
+                    <button
+                      onClick={() => onDeleteEntry(entry)}
+                      className="flex-shrink-0 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all"
+                      title="삭제"
+                      style={{ lineHeight: '24px', fontSize: 10 }}
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
               ))
             )}
