@@ -711,7 +711,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                 <rect x="8.5" y="10.5" width="2" height="2.5" rx="1" />
                 <rect x="13.5" y="10.5" width="2" height="2.5" rx="1" />
               </svg>
-              학습 자료 링크 (노트북LM)
+              노트북 LM 슬라이드
             </p>
             <p className="text-gray-500 text-xs">
               링크를 추가하면 모든 사용자의 상단 바 노트북 아이콘 드롭다운에 표시됩니다.
