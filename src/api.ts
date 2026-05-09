@@ -385,14 +385,20 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
 const _etfHoldingsCache = new Map<string, { data: Array<{ name: string; code: string; ratio: number }> | null; ts: number }>();
 
 const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio: number }> | null => {
-  const list = data?.etfTop10MajorConstituentAssets ?? data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? data?.data ?? [];
+  const list = data?.etfTop10MajorConstituentAssets ?? data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? (Array.isArray(data) ? data : null) ?? data?.data ?? [];
   if (!Array.isArray(list) || list.length === 0) return null;
   const result = list.slice(0, 3).map((x: any) => ({
     name: x.itemName ?? x.stockName ?? x.name ?? x.holdingName ?? '',
     code: x.itemCode ?? x.stockCode ?? x.code ?? x.symbol ?? x.ticker ?? '',
-    ratio: parseFloat(String(x.etfWeight ?? x.holdingRatio ?? x.holdingRate ?? x.ratio ?? x.weight ?? x.constituentRatio ?? x.stockRatio ?? 0).replace('%', '')) || 0,
+    ratio: parseFloat(String(x.etfWeight ?? x.holdingRatio ?? x.holdingRate ?? x.ratio ?? x.weight ?? x.constituentRatio ?? x.stockRatio ?? x.holdingWeightRatio ?? 0).replace('%', '')) || 0,
   })).filter((x: any) => x.name);
-  return result.length > 0 ? result : null;
+  if (result.length === 0) return null;
+  // 소수 표현(0.085 = 8.5%) 정규화
+  const nonZero = result.filter((x: any) => x.ratio > 0);
+  if (nonZero.length > 0 && Math.max(...nonZero.map((x: any) => x.ratio)) < 2.0) {
+    result.forEach((x: any) => { x.ratio = Math.round(x.ratio * 10000) / 100; });
+  }
+  return result;
 };
 
 const _fetchYahooEtfHoldings = async (
@@ -437,7 +443,21 @@ export const fetchEtfTopHoldings = async (
     return result;
   }
 
+  // 서버사이드 엔드포인트 우선 (Naver 헤더 포함, CORS 우회)
+  try {
+    const res = await fetch(`/api/etf-holdings?code=${code}`, { signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const d = await res.json();
+      if (Array.isArray(d) && d.length > 0) {
+        _etfHoldingsCache.set(code, { data: d, ts: Date.now() });
+        return d;
+      }
+    }
+  } catch {}
+
+  // 클라이언트 폴백: domestic/etfAnalysis 포함
   const targetUrls = [
+    `https://m.stock.naver.com/api/domestic/stock/${code}/etfAnalysis`,
     `https://m.stock.naver.com/api/stock/${code}/etfAnalysis`,
     `https://m.stock.naver.com/api/domestic/stock/${code}/etfComponentStock`,
     `https://m.stock.naver.com/api/etf/${code}/holding`,
@@ -445,9 +465,9 @@ export const fetchEtfTopHoldings = async (
     `https://m.stock.naver.com/api/stock/${code}/etfHolding`,
   ];
   const makeProxies = (url: string) => [
+    url,
     `/api/proxy?url=${encodeURIComponent(url)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${url}`,
   ];
 
   for (const targetUrl of targetUrls) {
