@@ -95,6 +95,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [nbUrl, setNbUrl] = useState('');
   const [nbSaving, setNbSaving] = useState(false);
   const [deletingNbIds, setDeletingNbIds] = useState<Set<number>>(new Set());
+  const [movingNbId, setMovingNbId] = useState<number | null>(null);
 
   const loadYoutubeHistory = async () => {
     try {
@@ -125,11 +126,32 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     if (!nbTitle.trim() || !nbUrl.trim() || !onSetNotebookLinks) return;
     setNbSaving(true);
     const newLink: NotebookLink = { title: nbTitle.trim(), url: nbUrl.trim(), createdAt: Date.now() };
-    const sorted = [newLink, ...notebookLinks].sort((a, b) => b.createdAt - a.createdAt);
-    await onSetNotebookLinks(sorted);
+    await onSetNotebookLinks([newLink, ...notebookLinks]);
+    // 새 슬라이드 등록 시 전체 사용자에게 자동 알림 (비차단)
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({
+        action: 'sendNotification',
+        targetEmail: '__all__',
+        message: `📚 새 학습 자료가 등록됐습니다: ${newLink.title}`,
+        type: 'info',
+      }),
+    }).catch(() => {});
     setNbTitle('');
     setNbUrl('');
     setNbSaving(false);
+  };
+
+  const handleMoveNotebookLink = async (index: number, direction: 'up' | 'down') => {
+    if (!onSetNotebookLinks) return;
+    const arr = [...notebookLinks];
+    const target = direction === 'up' ? index - 1 : index + 1;
+    if (target < 0 || target >= arr.length) return;
+    setMovingNbId(arr[index].createdAt);
+    [arr[index], arr[target]] = [arr[target], arr[index]];
+    await onSetNotebookLinks(arr);
+    setMovingNbId(null);
   };
 
   const handleDeleteNotebookLink = async (createdAt: number) => {
@@ -760,13 +782,15 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                         <th className="px-2 py-1.5 text-left text-gray-500 font-semibold whitespace-nowrap">등록일시</th>
                         <th className="px-2 py-1.5 text-left text-gray-500 font-semibold">제목</th>
                         <th className="px-2 py-1.5 text-left text-gray-500 font-semibold">링크</th>
+                        <th className="px-1 py-1.5 w-8"></th>
                         <th className="px-2 py-1.5 w-6"></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {[...notebookLinks].sort((a, b) => b.createdAt - a.createdAt).map((link, i) => {
+                      {notebookLinks.map((link, i) => {
                         const d = new Date(link.createdAt);
                         const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                        const isBusy = movingNbId !== null || deletingNbIds.has(link.createdAt);
                         return (
                           <tr key={link.createdAt} className={i < notebookLinks.length - 1 ? 'border-b border-gray-700/30' : ''}>
                             <td className="px-2 py-1.5 text-center text-gray-600">{i + 1}</td>
@@ -783,10 +807,28 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                                 {link.url}
                               </a>
                             </td>
+                            <td className="px-1 py-1.5 text-center">
+                              <div className="flex flex-col items-center gap-0">
+                                <button
+                                  onClick={() => handleMoveNotebookLink(i, 'up')}
+                                  disabled={i === 0 || isBusy}
+                                  className="text-gray-600 hover:text-gray-300 leading-none disabled:opacity-20 transition-colors px-0.5"
+                                  style={{ fontSize: '9px' }}
+                                  title="위로"
+                                >▲</button>
+                                <button
+                                  onClick={() => handleMoveNotebookLink(i, 'down')}
+                                  disabled={i === notebookLinks.length - 1 || isBusy}
+                                  className="text-gray-600 hover:text-gray-300 leading-none disabled:opacity-20 transition-colors px-0.5"
+                                  style={{ fontSize: '9px' }}
+                                  title="아래로"
+                                >▼</button>
+                              </div>
+                            </td>
                             <td className="px-2 py-1.5 text-center">
                               <button
                                 onClick={() => handleDeleteNotebookLink(link.createdAt)}
-                                disabled={deletingNbIds.has(link.createdAt)}
+                                disabled={isBusy}
                                 className="text-gray-700 hover:text-red-400 text-sm leading-none transition-colors disabled:opacity-40"
                                 title="삭제"
                               >

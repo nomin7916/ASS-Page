@@ -1083,14 +1083,13 @@ export default function App() {
   };
 
   const handleSetNotebookLinks = async (links: {title: string, url: string, createdAt: number}[]) => {
-    const sorted = [...links].sort((a, b) => b.createdAt - a.createdAt);
     // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
     try {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: sorted });
-      setNotebookLinks(sorted);
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links });
+      setNotebookLinks(links);
       notify('노트북LM 링크가 저장됐습니다.', 'success');
     } catch {
       notify('링크 저장 실패 (Drive 오류)', 'error');
@@ -1100,7 +1099,7 @@ export default function App() {
     fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(sorted) }),
+      body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(links) }),
     }).catch(() => {});
   };
 
