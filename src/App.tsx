@@ -1690,7 +1690,11 @@ export default function App() {
         {/* 고정 공지 바 */}
         <PinnedNotificationsBar
           notifications={allMyAdminNotifs.filter(n => pinnedAdminNotifIds.includes(n.id))}
-          onUnpin={(id) => setPinnedAdminNotifIds(prev => prev.filter(x => x !== id))}
+          onUnpin={(id) => {
+            const newPinnedIds = pinnedAdminNotifIds.filter(x => x !== id);
+            setPinnedAdminNotifIds(newPinnedIds);
+            saveAllToDrive({ ...saveStateRef.current, pinnedAdminNotifIds: newPinnedIds });
+          }}
         />
 
         {/* 뷰 전환 탭 */}
