@@ -600,17 +600,10 @@ export const fetchYahooStockPer = async (
     }
   } catch {}
 
-  const mkProxies = (url: string) => [
-    url,
-    `/api/proxy?url=${encodeURIComponent(url)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${url}`,
-  ];
-
-  // 1차: Naver 해외종목 basic API — 거래소 suffix 순서로 시도 (.O=NASDAQ, .N=NYSE, .A=AMEX)
+  // Naver 해외종목 basic API — 거래소 suffix 순서로 시도 (.O=NASDAQ, .N=NYSE, .A=AMEX)
   for (const suffix of ['.O', '.N', '.A']) {
     const url = `https://m.stock.naver.com/api/overseas/stock/${key}${suffix}/basic`;
-    for (const proxy of mkProxies(url)) {
+    for (const proxy of [url, `/api/proxy?url=${encodeURIComponent(url)}`]) {
       try {
         const res = await fetch(proxy, { signal: AbortSignal.timeout(6000) });
         if (!res.ok) continue;
@@ -624,43 +617,6 @@ export const fetchYahooStockPer = async (
         }
       } catch { continue; }
     }
-  }
-
-  // 2차: Yahoo Finance v7/finance/quote
-  const v7Url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${key}`;
-  for (const proxy of mkProxies(v7Url)) {
-    try {
-      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const q = data?.quoteResponse?.result?.[0];
-      if (!q) continue;
-      const per = _toValidPer(q.trailingPE);
-      const fper = _toValidPer(q.forwardPE);
-      if (per !== null || fper !== null) {
-        const result = { per, fper };
-        _yahooPerCache.set(key, { data: result, ts: Date.now() });
-        return result;
-      }
-    } catch { continue; }
-  }
-
-  // 3차: Yahoo Finance v10/quoteSummary?modules=summaryDetail
-  const v10Url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${key}?modules=summaryDetail`;
-  for (const proxy of mkProxies(v10Url)) {
-    try {
-      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const detail = data?.quoteSummary?.result?.[0]?.summaryDetail;
-      if (!detail) continue;
-      const result = {
-        per: _toValidPer(detail.trailingPE?.raw),
-        fper: _toValidPer(detail.forwardPE?.raw),
-      };
-      _yahooPerCache.set(key, { data: result, ts: Date.now() });
-      return result;
-    } catch { continue; }
   }
 
   _yahooPerCache.set(key, { data: null, ts: Date.now() });
