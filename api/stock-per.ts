@@ -175,15 +175,30 @@ async function debugKoreanRaw(code: string): Promise<object> {
       const d = await res.json();
       out.annual_keys = Object.keys(d);
       const fi = d?.financeInfo;
-      if (fi?.rowListW) {
-        out.annual_row_titles = (fi.rowListW as any[]).map((r: any) => r.titleW);
-        out.annual_titles = fi.trTitleListW;
-        const epsRow = (fi.rowListW as any[]).find((r: any) => String(r.titleW).replace(/\s/g, '') === 'EPS');
-        if (epsRow) {
-          out.annual_eps_row_title = epsRow.titleW;
-          out.annual_eps_columns = epsRow.columnsW;
+      out.fi_keys = fi ? Object.keys(fi) : null;
+      // rowListW 키를 동적으로 탐색
+      const rowListKey = fi ? Object.keys(fi).find(k => k.startsWith('rowList')) : null;
+      out.detected_rowListKey = rowListKey;
+      const rows = rowListKey ? fi[rowListKey] : null;
+      if (rows?.length > 0) {
+        const firstRow = rows[0];
+        out.first_row_keys = Object.keys(firstRow);
+        const titleKey = Object.keys(firstRow).find(k => k.startsWith('title'));
+        const colKey = Object.keys(firstRow).find(k => k.startsWith('col'));
+        out.detected_titleKey = titleKey;
+        out.detected_colKey = colKey;
+        out.annual_row_titles = rows.map((r: any) => titleKey ? r[titleKey] : null);
+        const titlesKey = Object.keys(fi).find(k => k.startsWith('trTitle'));
+        const titles = titlesKey ? fi[titlesKey] : null;
+        out.titles_sample = titles?.slice(0, 4);
+        const epsRow = rows.find((r: any) =>
+          titleKey && String(r[titleKey]).replace(/\s/g, '') === 'EPS'
+        );
+        if (epsRow && colKey) {
+          out.eps_row_title = epsRow[titleKey!];
+          out.eps_columns = epsRow[colKey];
         } else {
-          out.annual_eps_row = 'NOT FOUND — available titles above';
+          out.eps_row = 'NOT FOUND';
         }
       } else {
         out.annual_sample = JSON.stringify(d).slice(0, 800);
