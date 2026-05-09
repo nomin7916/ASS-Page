@@ -116,16 +116,62 @@ async function usPer(ticker: string): Promise<{ per: number | null; fper: number
   return null;
 }
 
+async function debugKoreanRaw(code: string): Promise<object> {
+  const out: Record<string, any> = {};
+  try {
+    const res = await fetch(`https://m.stock.naver.com/api/stock/${code}/basic`, {
+      headers: NAVER_HEADERS,
+      signal: AbortSignal.timeout(8000),
+    });
+    out.basic_status = res.status;
+    if (res.ok) {
+      const d = await res.json();
+      out.basic_keys = Object.keys(d);
+      out.basic_closePrice = d.closePrice;
+      out.basic_per = d.per;
+      out.basic_perValue = d.perValue;
+      out.basic_PER = d.PER;
+      out.basic_stockEndType = d.stockEndType;
+      out.basic_sample = JSON.stringify(d).slice(0, 500);
+    } else {
+      out.basic_text = await res.text().catch(() => '');
+    }
+  } catch (e) {
+    out.basic_error = String(e);
+  }
+  try {
+    const res = await fetch(`https://m.stock.naver.com/api/stock/${code}/finance/annual`, {
+      headers: NAVER_HEADERS,
+      signal: AbortSignal.timeout(8000),
+    });
+    out.annual_status = res.status;
+    if (res.ok) {
+      const d = await res.json();
+      out.annual_keys = Object.keys(d);
+      out.annual_sample = JSON.stringify(d).slice(0, 500);
+    }
+  } catch (e) {
+    out.annual_error = String(e);
+  }
+  return out;
+}
+
 export default async function handler(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const code = (searchParams.get('code') ?? '').trim().toUpperCase();
   const ticker = (searchParams.get('ticker') ?? '').trim().toUpperCase();
+  const debug = searchParams.get('debug') === '1';
 
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
-    'Cache-Control': 'public, max-age=3600',
+    'Cache-Control': 'no-store',
   };
+
+  if (debug && code && /^[A-Z0-9]{6}$/.test(code)) {
+    const raw = await debugKoreanRaw(code);
+    return new Response(JSON.stringify(raw, null, 2), { headers });
+  }
 
   let result: { per: number | null; fper: number | null } | null = null;
 
