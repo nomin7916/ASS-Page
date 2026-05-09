@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronUp, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import type { NotificationEntry, NotificationType, ConfirmState } from '../hooks/useToast';
 
 interface Props {
@@ -99,18 +99,24 @@ export default function NotificationBar({ notificationLog, onClear, unreadCount,
     <div className="relative w-full">
       {/* ── 알림 바 ── */}
       <div className="flex items-center bg-[#0b1120] border border-gray-700/40 rounded-md h-7 overflow-hidden select-none w-full">
-        {/* 레이블 + 뱃지 */}
-        <div className="relative flex-shrink-0 px-2.5 h-full flex items-center border-r border-gray-700/40 gap-1">
-          <span className="text-[10px] text-gray-500 font-mono tracking-wider">알림</span>
+        {/* 레이블 + 뱃지 (클릭으로 토글) */}
+        <button
+          onClick={() => (isOpen ? setIsOpen(false) : openPanel())}
+          className={`relative flex-shrink-0 px-2.5 h-full flex items-center border-r border-gray-700/40 gap-1 transition-colors ${
+            isOpen ? 'text-sky-400 bg-sky-900/20' : 'hover:bg-gray-800/40'
+          }`}
+          title={isOpen ? '알림 이력 닫기' : '알림 이력 열기'}
+        >
+          <span className={`text-[10px] font-mono tracking-wider ${isOpen ? 'text-sky-400' : 'text-gray-500'}`}>알림</span>
           {unreadCount > 0 && (
             <span className="min-w-[14px] h-[14px] bg-red-500 rounded-full text-[8px] text-white font-bold flex items-center justify-center px-0.5 leading-none">
               {unreadCount > 99 ? '99+' : unreadCount}
             </span>
           )}
-        </div>
+        </button>
 
         {/* 텍스트 영역 */}
-        <div className="flex-1 overflow-hidden h-full flex items-center gap-1.5 pl-2.5 pr-1">
+        <div className="flex-1 overflow-hidden h-full flex items-center gap-1.5 pl-2.5 pr-2.5">
           {visible && latest ? (
             <>
               <span className="flex-shrink-0 text-[9px] text-gray-500 font-mono">
@@ -124,17 +130,6 @@ export default function NotificationBar({ notificationLog, onClear, unreadCount,
             <span className="text-[10px] text-gray-700 font-mono">없음</span>
           )}
         </div>
-
-        {/* 토글 버튼 */}
-        <button
-          onClick={() => (isOpen ? setIsOpen(false) : openPanel())}
-          className={`flex-shrink-0 px-2 h-full flex items-center border-l border-gray-700/40 transition-colors ${
-            isOpen ? 'text-sky-400 bg-sky-900/20' : 'text-gray-600 hover:text-gray-300 hover:bg-gray-800/40'
-          }`}
-          title={isOpen ? '알림 이력 닫기' : '알림 이력 열기'}
-        >
-          {isOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-        </button>
       </div>
 
       {/* ── 드래그 가능 팝업 ── */}
