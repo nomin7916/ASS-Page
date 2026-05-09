@@ -507,8 +507,7 @@ export const fetchEtfTopHoldings = async (
   return null;
 };
 
-// ── 종목 PER / 추정PER 조회 (주가 ÷ EPS 직접 계산) ─────────────────────────
-// naver /basic 엔드포인트에는 PER 필드가 없음 → /basic 주가 + /finance/summary EPS 조합
+// ── 국내 종목 PER / 추정PER 조회 ────────────────────────────────────────────
 const _stockPerCache = new Map<string, { data: { per: number | null; fper: number | null } | null; ts: number }>();
 
 export const fetchStockPer = async (
@@ -523,13 +522,15 @@ export const fetchStockPer = async (
     return isNaN(n) || n <= 0 ? null : n;
   };
 
+  // Naver m.stock은 CORS 허용 → 직접 URL 우선, 프록시 폴백
   const mkProxies = (url: string) => [
+    url,
     `/api/proxy?url=${encodeURIComponent(url)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     `https://api.codetabs.com/v1/proxy?quest=${url}`,
   ];
 
-  // Step 1: 현재가 + basic API에서 직접 PER 필드 추출
+  // Step 1: basic API → 현재가 + 직접 PER 필드
   let closePrice: number | null = null;
   let isEtf = false;
   let basicPer: number | null = null;
@@ -553,7 +554,7 @@ export const fetchStockPer = async (
     return null;
   }
 
-  // Step 2: 연간 EPS 조회 → 네이버 PER/추정PER 기준 (finance/annual)
+  // Step 2: finance/annual → EPS 기반 PER 계산
   for (const proxy of mkProxies(`https://m.stock.naver.com/api/stock/${code}/finance/annual`)) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -571,24 +572,23 @@ export const fetchStockPer = async (
       const actualY = years.filter((y: any) => !y.isConsensus);
       const consensusY = years.filter((y: any) => y.isConsensus);
 
-      // trailing PER: 가장 최근 실적 연간 EPS (네이버 기준)
       let per: number | null = null;
       const lastActual = actualY[actualY.length - 1];
       if (lastActual?.eps > 0) per = Math.round(closePrice / lastActual.eps * 100) / 100;
 
-      // forward PER: 첫 번째 컨센서스 연간 EPS (네이버 추정PER 기준)
       let fper: number | null = null;
       if (consensusY.length > 0 && consensusY[0].eps > 0) {
         fper = Math.round(closePrice / consensusY[0].eps * 100) / 100;
       }
 
-      const result = { per, fper };
+      // EPS 계산이 null이면 basic API per 필드로 보완
+      const result = { per: per ?? basicPer ?? null, fper };
       _stockPerCache.set(code, { data: result, ts: Date.now() });
       return result;
     } catch { continue; }
   }
 
-  // finance/annual 파싱 실패 시 basic API per 필드 폴백
+  // finance/annual 완전 실패 시 basic API per 폴백
   if (basicPer != null) {
     const result = { per: basicPer, fper: null };
     _stockPerCache.set(code, { data: result, ts: Date.now() });
@@ -600,8 +600,9 @@ export const fetchStockPer = async (
 };
 
 // ── 해외 종목 PER / 선행PER 조회 ─────────────────────────────────────────────
-// 1차: v7/finance/quote (topHoldings와 동일 경로, 차단 적음)
-// 2차: v10/finance/quoteSummary?modules=summaryDetail (fallback)
+// 1차: Naver 해외종목 basic API (CORS 허용, ETF holdings와 동일 경로)
+// 2차: Yahoo Finance v7/finance/quote
+// 3차: Yahoo Finance v10/quoteSummary?modules=summaryDetail
 const _yahooPerCache = new Map<string, { data: { per: number | null; fper: number | null } | null; ts: number }>();
 
 const _toValidPer = (v: any): number | null =>
@@ -614,15 +615,35 @@ export const fetchYahooStockPer = async (
   const cached = _yahooPerCache.get(key);
   if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
 
-  // 1차: v7/finance/quote
-  const v7Url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${key}`;
-  const v7Proxies = [
-    v7Url,
-    `/api/proxy?url=${encodeURIComponent(v7Url)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(v7Url)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${v7Url}`,
+  const mkProxies = (url: string) => [
+    url,
+    `/api/proxy?url=${encodeURIComponent(url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${url}`,
   ];
-  for (const proxy of v7Proxies) {
+
+  // 1차: Naver 해외종목 basic API — 거래소 suffix 순서로 시도 (.O=NASDAQ, .N=NYSE, .A=AMEX)
+  for (const suffix of ['.O', '.N', '.A']) {
+    const url = `https://m.stock.naver.com/api/overseas/stock/${key}${suffix}/basic`;
+    for (const proxy of mkProxies(url)) {
+      try {
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(6000) });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (!data?.closePrice) continue;
+        const per = _toValidPer(parseFloat(String(data.per ?? data.perValue ?? '').replace(/,/g, '')));
+        if (per !== null) {
+          const result = { per, fper: null };
+          _yahooPerCache.set(key, { data: result, ts: Date.now() });
+          return result;
+        }
+      } catch { continue; }
+    }
+  }
+
+  // 2차: Yahoo Finance v7/finance/quote
+  const v7Url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${key}`;
+  for (const proxy of mkProxies(v7Url)) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
@@ -639,15 +660,9 @@ export const fetchYahooStockPer = async (
     } catch { continue; }
   }
 
-  // 2차: v10/quoteSummary?modules=summaryDetail
+  // 3차: Yahoo Finance v10/quoteSummary?modules=summaryDetail
   const v10Url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${key}?modules=summaryDetail`;
-  const v10Proxies = [
-    v10Url,
-    `/api/proxy?url=${encodeURIComponent(v10Url)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(v10Url)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${v10Url}`,
-  ];
-  for (const proxy of v10Proxies) {
+  for (const proxy of mkProxies(v10Url)) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
