@@ -1316,6 +1316,32 @@ export default function App() {
     })();
   }, [showAdminPage, authUser, driveLoadReady]);
 
+  // 관리자 공지 주기적 폴링 (5분마다) — 앱 사용 중 새 공지 즉시 감지
+  useEffect(() => {
+    if (!authUser || authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${APPS_SCRIPT_URL}?action=getNotifications&cacheBust=${Date.now()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const all: AdminNotification[] = data.notifications || [];
+        const myAll = all.filter(n =>
+          n.targetEmail === '__all__' || n.targetEmail?.toLowerCase() === authUser.email.toLowerCase()
+        );
+        setAllMyAdminNotifs(myAll);
+        const newNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
+        if (newNotifs.length > 0) {
+          setPendingAdminNotifs(prev => {
+            const prevIds = prev.map(p => p.id);
+            return [...prev, ...newNotifs.filter(n => !prevIds.includes(n.id))];
+          });
+        }
+      } catch {}
+    };
+    const interval = setInterval(poll, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [authUser]);
+
   // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
   useEffect(() => {
     if (!authUser || !driveTokenRef.current || isInitialLoad.current) return;
