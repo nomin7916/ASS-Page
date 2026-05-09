@@ -1198,16 +1198,21 @@ export default function App() {
       } catch {}
 
       // 앱 설정 로드
-      // 관리자: Drive가 정본 → 즉시 복원, Apps Script 배포는 비차단으로 처리
-      // 일반 사용자: Drive 캐시 우선 복원 → Apps Script로 갱신
+      // 관리자: Drive가 정본. Drive 파일 없으면 Apps Script로 마이그레이션 (1회) 후 Drive에 저장
+      // 일반 사용자: Drive 캐시 우선 → Apps Script로 갱신
       const isAdmin = authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+      let driveSettingsFound = false;
       try {
         const settingsFolderId = driveFolderIdRef.current || await ensureDriveFolder(token);
         const driveSettings = await loadDriveFile(token, settingsFolderId, DRIVE_FILES.SETTINGS) as any;
-        if (driveSettings?.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
-        if (Array.isArray(driveSettings?.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
+        if (driveSettings && (driveSettings.youtubeUrl || Array.isArray(driveSettings.notebookLinks))) {
+          driveSettingsFound = true;
+          if (driveSettings.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
+          if (Array.isArray(driveSettings.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
+        }
       } catch {}
-      if (!isAdmin) {
+      if (!isAdmin || !driveSettingsFound) {
+        // 일반 사용자는 항상, 관리자는 Drive 파일 없을 때만 (최초 마이그레이션)
         try {
           const settingsRes = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
           if (settingsRes.ok) {
@@ -1216,6 +1221,8 @@ export default function App() {
             const nl: any[] | null = settingsData.notebookLinks ? (() => { try { return JSON.parse(settingsData.notebookLinks); } catch { return null; } })() : null;
             setYoutubeUrl(yu);
             if (Array.isArray(nl)) setNotebookLinks(nl);
+            // 관리자: Drive에 저장 (이후 Drive가 정본으로 동작)
+            // 일반 사용자: Drive에 캐시 저장
             try {
               const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
               await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [] });
