@@ -1062,59 +1062,46 @@ export default function App() {
   };
 
   const handleSetYoutubeUrl = async (url: string) => {
-    // Apps Script setSettings 엔드포인트 필요:
-    // POST { action: 'setSettings', key: 'youtubeUrl', value: url }
-    // → Apps Script가 settings 시트에 저장 후 { success: true } 반환
+    // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrl', value: url }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.success !== false) {
-        setYoutubeUrl(url);
-        notify(url ? 'YouTube 채널 링크가 설정되었습니다.' : 'YouTube 채널 링크가 삭제되었습니다.', 'success');
-        try {
-          const token = driveTokenRef.current;
-          if (token) {
-            const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-            await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks });
-          }
-        } catch {}
-      } else {
-        notify('YouTube 링크 저장 실패 (Apps Script 응답 오류)', 'error');
-      }
+      const token = driveTokenRef.current;
+      if (!token) { notify('Drive 인증 필요', 'error'); return; }
+      const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks });
+      setYoutubeUrl(url);
+      notify(url ? 'YouTube 채널 링크가 설정되었습니다.' : 'YouTube 채널 링크가 삭제되었습니다.', 'success');
     } catch {
-      notify('YouTube 링크 저장 실패 (네트워크 오류)', 'error');
+      notify('YouTube 링크 저장 실패 (Drive 오류)', 'error');
+      return;
     }
+    // Apps Script 배포 — 일반 사용자에게 전달 (비차단, 실패 무시)
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrl', value: url }),
+    }).catch(() => {});
   };
 
   const handleSetNotebookLinks = async (links: {title: string, url: string, createdAt: number}[]) => {
     const sorted = [...links].sort((a, b) => b.createdAt - a.createdAt);
+    // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
     try {
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(sorted) }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.success !== false) {
-        setNotebookLinks(sorted);
-        notify('노트북LM 링크가 저장됐습니다.', 'success');
-        try {
-          const token = driveTokenRef.current;
-          if (token) {
-            const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-            await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: sorted });
-          }
-        } catch {}
-      } else {
-        notify('링크 저장 실패 (Apps Script 응답 오류)', 'error');
-      }
+      const token = driveTokenRef.current;
+      if (!token) { notify('Drive 인증 필요', 'error'); return; }
+      const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: sorted });
+      setNotebookLinks(sorted);
+      notify('노트북LM 링크가 저장됐습니다.', 'success');
     } catch {
-      notify('링크 저장 실패 (네트워크 오류)', 'error');
+      notify('링크 저장 실패 (Drive 오류)', 'error');
+      return;
     }
+    // Apps Script 배포 — 일반 사용자에게 전달 (비차단, 실패 무시)
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(sorted) }),
+    }).catch(() => {});
   };
 
   const handleDriveSave = () => {
@@ -1210,28 +1197,32 @@ export default function App() {
         if (logData?.entries?.length > 0) setNotificationLog(logData.entries);
       } catch {}
 
-      // 앱 설정 로드: Drive 캐시 파일 우선 복원 → Apps Script 정본으로 갱신
-      let driveSettingsCache: { youtubeUrl?: string, notebookLinks?: any[] } | null = null;
+      // 앱 설정 로드
+      // 관리자: Drive가 정본 → 즉시 복원, Apps Script 배포는 비차단으로 처리
+      // 일반 사용자: Drive 캐시 우선 복원 → Apps Script로 갱신
+      const isAdmin = authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
       try {
         const settingsFolderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-        driveSettingsCache = await loadDriveFile(token, settingsFolderId, DRIVE_FILES.SETTINGS) as any;
-        if (driveSettingsCache?.youtubeUrl) setYoutubeUrl(driveSettingsCache.youtubeUrl);
-        if (Array.isArray(driveSettingsCache?.notebookLinks)) setNotebookLinks(driveSettingsCache.notebookLinks);
+        const driveSettings = await loadDriveFile(token, settingsFolderId, DRIVE_FILES.SETTINGS) as any;
+        if (driveSettings?.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
+        if (Array.isArray(driveSettings?.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
       } catch {}
-      try {
-        const settingsRes = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
-        if (settingsRes.ok) {
-          const settingsData = await settingsRes.json();
-          const yu = settingsData.youtubeUrl || '';
-          const nl: any[] | null = settingsData.notebookLinks ? (() => { try { return JSON.parse(settingsData.notebookLinks); } catch { return null; } })() : null;
-          setYoutubeUrl(yu);
-          if (Array.isArray(nl)) setNotebookLinks(nl);
-          try {
-            const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-            await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [] });
-          } catch {}
-        }
-      } catch {}
+      if (!isAdmin) {
+        try {
+          const settingsRes = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
+          if (settingsRes.ok) {
+            const settingsData = await settingsRes.json();
+            const yu = settingsData.youtubeUrl || '';
+            const nl: any[] | null = settingsData.notebookLinks ? (() => { try { return JSON.parse(settingsData.notebookLinks); } catch { return null; } })() : null;
+            setYoutubeUrl(yu);
+            if (Array.isArray(nl)) setNotebookLinks(nl);
+            try {
+              const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+              await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [] });
+            } catch {}
+          }
+        } catch {}
+      }
 
       // 관리자 공지 확인 (관리자 본인 제외)
       if (authUser.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
