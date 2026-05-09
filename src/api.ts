@@ -429,7 +429,7 @@ const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio
   const result = list.slice(0, 3).map((x: any) => ({
     name: x.itemName ?? x.stockName ?? x.name ?? x.holdingName ?? '',
     code: x.itemCode ?? x.stockCode ?? x.code ?? x.symbol ?? x.ticker ?? '',
-    ratio: parseFloat(String(x.etfWeight ?? x.holdingRatio ?? x.holdingRate ?? x.ratio ?? x.weight ?? x.constituentRatio ?? x.stockRatio ?? 0).replace('%', '')),
+    ratio: parseFloat(String(x.etfWeight ?? x.holdingRatio ?? x.holdingRate ?? x.ratio ?? x.weight ?? x.constituentRatio ?? x.stockRatio ?? 0).replace('%', '')) || 0,
   })).filter((x: any) => x.name);
   return result.length > 0 ? result : null;
 };

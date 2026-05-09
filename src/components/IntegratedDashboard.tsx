@@ -153,9 +153,12 @@ export default function IntegratedDashboard({
       const holdings = await fetchEtfTopHoldings(code);
       if (!holdings || holdings.length === 0) {
         // ETF holdings 조회 실패 → 종목 자체 PER 시도
-        const perData = isUsTicker(code)
-          ? await fetchYahooStockPer(code)
-          : await fetchStockPer(code);
+        const baseCode = code.includes('.') ? code.split('.')[0] : code;
+        const perData = isKr6(code)
+          ? await fetchStockPer(code)
+          : isUsTicker(baseCode)
+            ? await fetchYahooStockPer(baseCode)
+            : null;
         if (perData?.per != null || perData?.fper != null) {
           setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: perData.per, fper: perData.fper } }));
         } else {
@@ -164,11 +167,12 @@ export default function IntegratedDashboard({
       } else {
         const isOverseasTicker = (c) => /^[A-Za-z]{1,6}$/.test(c || '');
         const perResults = await Promise.all(
-          holdings.map(h =>
-            isKr6(h.code) ? fetchStockPer(h.code)
-            : isOverseasTicker(h.code) ? fetchYahooStockPer(h.code)
-            : Promise.resolve(null)
-          )
+          holdings.map(h => {
+            if (isKr6(h.code)) return fetchStockPer(h.code);
+            const base = h.code.includes('.') ? h.code.split('.')[0] : h.code;
+            if (isOverseasTicker(base)) return fetchYahooStockPer(base);
+            return Promise.resolve(null);
+          })
         );
         const enriched = holdings.map((h, i) => ({ ...h, per: perResults[i]?.per ?? null, fper: perResults[i]?.fper ?? null }));
         setEtfInfoMap(prev => ({ ...prev, [name]: enriched }));
