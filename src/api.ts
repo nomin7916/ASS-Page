@@ -71,45 +71,6 @@ export const fetchNaverStockHistory = async (
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const fetchIndexData = async (symbol: string, startDate?: string) => {
-  const stooqMap: Record<string, string> = { '^KS11': '^kospi', '^GSPC': '^spx' };
-  const stooqSymbol = stooqMap[symbol];
-
-  if (stooqSymbol) {
-    try {
-      const stooqUrl = `https://stooq.com/q/d/l/?s=${stooqSymbol}&i=d`;
-      const proxies = [
-        `/api/proxy?url=${encodeURIComponent(stooqUrl)}`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(stooqUrl)}`,
-        `https://api.codetabs.com/v1/proxy?quest=${stooqUrl}`,
-        `https://corsproxy.io/?url=${encodeURIComponent(stooqUrl)}`
-      ];
-      for (const proxy of proxies) {
-        try {
-          const res = await fetch(proxy);
-          if (!res.ok) continue;
-          const text = await res.text();
-          if (!text || text.includes('No data') || text.trim().length < 30) continue;
-          const lines = text.trim().split('\n');
-          if (lines.length < 2) continue;
-          const result: Record<string, number> = {};
-          for (let i = 1; i < lines.length; i++) {
-            const cols = lines[i].split(',');
-            if (cols.length >= 5 && cols[0] && cols[4]) {
-              const dateStr = cols[0].trim();
-              const close = parseFloat(cols[4].trim());
-              if (dateStr && !isNaN(close) && close > 0) {
-                result[dateStr] = close;
-              }
-            }
-          }
-          if (Object.keys(result).length > 10) {
-            return { data: result, source: `stooq` };
-          }
-        } catch (e) { continue; }
-      }
-    } catch (e) {}
-  }
-
   const yahooQuery = startDate
     ? `period1=${Math.floor(new Date(startDate).getTime() / 1000)}&period2=${Math.floor(Date.now() / 1000)}&interval=1d`
     : `range=2y&interval=1d`;

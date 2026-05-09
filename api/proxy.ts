@@ -8,7 +8,6 @@ const ALLOWED_DOMAINS = [
   'stock.naver.com',
   'finance.naver.com',
   'query1.finance.yahoo.com',
-  'stooq.com',
   'funetf.co.kr',
 ];
 
