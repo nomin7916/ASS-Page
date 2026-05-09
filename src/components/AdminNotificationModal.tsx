@@ -16,15 +16,18 @@ interface Props {
   onClose: () => void;
 }
 
-const TYPE_STYLE: Record<string, string> = {
-  info:    'bg-sky-900/40 border-sky-700/50 text-sky-200',
-  success: 'bg-green-900/40 border-green-700/50 text-green-200',
-  warning: 'bg-amber-900/40 border-amber-700/50 text-amber-200',
-  error:   'bg-red-900/40 border-red-700/50 text-red-200',
+const BADGE_STYLE: Record<string, string> = {
+  info:    'bg-green-900/60 text-green-300',
+  success: 'bg-green-900/60 text-green-300',
+  warning: 'bg-amber-900/60 text-amber-300',
+  error:   'bg-red-900/60 text-red-300',
 };
 
-const TYPE_ICON: Record<string, string> = {
-  info: 'ℹ️', success: '✅', warning: '⚠️', error: '🚨',
+const BADGE_LABEL: Record<string, string> = {
+  info:    '공지',
+  success: '안내',
+  warning: '주의',
+  error:   '긴급',
 };
 
 export function renderMessageWithLinks(text: string) {
@@ -51,36 +54,36 @@ export function renderMessageWithLinks(text: string) {
 export default function AdminNotificationModal({ notifications, pinnedIds, onPin, onClose }: Props) {
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/75 p-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
+      <div className="bg-gray-900 border border-gray-700/60 rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
         <div className="flex items-center gap-2 px-6 pt-6 pb-4 border-b border-gray-800">
-          <span className="text-xl">📢</span>
           <h2 className="text-white font-bold text-base flex-1">관리자 공지</h2>
           <span className="text-gray-500 text-sm">{notifications.length}건</span>
         </div>
-        <div className="overflow-y-auto flex-1 px-6 py-4 space-y-3">
+        <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
           {notifications.map((n) => {
             const isPinned = pinnedIds.includes(n.id);
             return (
-              <div
-                key={n.id}
-                className={`rounded-xl p-4 border ${TYPE_STYLE[n.type] || TYPE_STYLE.info}`}
-              >
-                <div className="flex items-start gap-2">
-                  <span className="text-base flex-shrink-0 mt-0.5">{TYPE_ICON[n.type] || TYPE_ICON.info}</span>
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap flex-1">
-                    {renderMessageWithLinks(n.message)}
-                  </p>
+              <div key={n.id} className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${BADGE_STYLE[n.type] || BADGE_STYLE.info}`}>
+                    {BADGE_LABEL[n.type] || BADGE_LABEL.info}
+                  </span>
+                  <span className="text-gray-600 text-xs ml-auto">
+                    {new Date(n.createdAt).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
                   <button
                     onClick={() => onPin(n.id)}
                     title={isPinned ? '고정 해제' : '상단 고정'}
-                    className={`flex-shrink-0 mt-0.5 text-base transition-opacity ${isPinned ? 'opacity-100' : 'opacity-30 hover:opacity-70'}`}
+                    className={`flex-shrink-0 text-base transition-opacity ${isPinned ? 'opacity-100' : 'opacity-30 hover:opacity-70'}`}
                   >
                     📌
                   </button>
                 </div>
-                <p className="text-xs text-gray-500 mt-2 text-right">
-                  {new Date(n.createdAt).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                </p>
+                <div className="bg-gray-800/60 rounded-xl px-4 py-3">
+                  <p className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">
+                    {renderMessageWithLinks(n.message)}
+                  </p>
+                </div>
               </div>
             );
           })}
