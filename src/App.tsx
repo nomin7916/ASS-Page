@@ -1693,7 +1693,10 @@ export default function App() {
           onUnpin={(id) => {
             const newPinnedIds = pinnedAdminNotifIds.filter(x => x !== id);
             setPinnedAdminNotifIds(newPinnedIds);
-            saveAllToDrive({ ...saveStateRef.current, pinnedAdminNotifIds: newPinnedIds });
+            const nowTs = Date.now();
+            portfolioUpdatedAtRef.current = nowTs;
+            lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+            saveAllToDrive({ ...saveStateRef.current, pinnedAdminNotifIds: newPinnedIds, portfolioUpdatedAt: nowTs });
           }}
         />
 
