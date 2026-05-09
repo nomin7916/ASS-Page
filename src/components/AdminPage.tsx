@@ -508,7 +508,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
 
             {/* 필터 탭 */}
             {sentNotifs.length > 0 && (() => {
-              const uniqueTargets = [...new Set(sentNotifs.map(n => n.targetEmail))].filter(e => e !== '__all__');
+              const uniqueTargets = [...new Set(sentNotifs.map(n => n.targetEmail))].filter(e => typeof e === 'string' && e !== '__all__');
               return (
                 <div className="flex gap-1 flex-wrap mb-2">
                   <button
@@ -533,7 +533,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                             : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
                         }`}
                       >
-                        {user?.name || email.split('@')[0]}
+                        {user?.name || (typeof email === 'string' ? email.split('@')[0] : String(email))}
                       </button>
                     );
                   })}
@@ -568,7 +568,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                     const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
                     const targetLabel = n.targetEmail === '__all__' ? '전체' : (() => {
                       const u = users.find(x => x.email === n.targetEmail);
-                      return u?.name || n.targetEmail.split('@')[0];
+                      return u?.name || (typeof n.targetEmail === 'string' ? n.targetEmail.split('@')[0] : String(n.targetEmail ?? ''));
                     })();
                     return (
                       <div
@@ -577,7 +577,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                       >
                         <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5" style={{ backgroundColor: dot }} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-gray-200 text-xs leading-relaxed break-words">{n.message}</p>
+                          <p className="text-gray-200 text-xs leading-relaxed break-words">{typeof n.message === 'string' ? n.message : String(n.message ?? '')}</p>
                           <div className="flex items-center gap-2 mt-0.5">
                             <span className="text-gray-600 text-xs">{dateStr}</span>
                             <span className="text-gray-700 text-xs">·</span>
