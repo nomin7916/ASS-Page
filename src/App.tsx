@@ -1205,10 +1205,11 @@ export default function App() {
       try {
         const settingsFolderId = driveFolderIdRef.current || await ensureDriveFolder(token);
         const driveSettings = await loadDriveFile(token, settingsFolderId, DRIVE_FILES.SETTINGS) as any;
-        if (driveSettings && (driveSettings.youtubeUrl || Array.isArray(driveSettings.notebookLinks))) {
-          driveSettingsFound = true;
+        if (driveSettings) {
           if (driveSettings.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
           if (Array.isArray(driveSettings.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
+          // 실제 데이터가 있을 때만 "찾음"으로 처리 — 빈 배열만 있으면 Apps Script 폴백 허용
+          driveSettingsFound = !!(driveSettings.youtubeUrl || driveSettings.notebookLinks?.length > 0);
         }
       } catch {}
       if (!isAdmin || !driveSettingsFound) {
@@ -1273,6 +1274,37 @@ export default function App() {
 
     return () => clearTimeout(bgTimer);
   }, [authUser, driveLoadReady]);
+
+  // Admin Page 모드 전용 settings 로드
+  // driveLoadReady=false 상태(포트폴리오 로드 없이 관리자 페이지 직접 진입)에서만 실행
+  useEffect(() => {
+    if (!showAdminPage || !authUser || driveLoadReady) return;
+    const token = driveTokenRef.current;
+    if (!token) return;
+    (async () => {
+      let found = false;
+      try {
+        const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+        const settings = await loadDriveFile(token, folderId, DRIVE_FILES.SETTINGS) as any;
+        if (settings?.youtubeUrl) { setYoutubeUrl(settings.youtubeUrl); found = true; }
+        if (Array.isArray(settings?.notebookLinks) && settings.notebookLinks.length > 0) {
+          setNotebookLinks(settings.notebookLinks); found = true;
+        }
+      } catch {}
+      if (!found) {
+        try {
+          const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
+          if (res.ok) {
+            const d = await res.json();
+            if (d.youtubeUrl) setYoutubeUrl(d.youtubeUrl);
+            if (d.notebookLinks) {
+              try { setNotebookLinks(JSON.parse(d.notebookLinks)); } catch {}
+            }
+          }
+        } catch {}
+      }
+    })();
+  }, [showAdminPage, authUser, driveLoadReady]);
 
   // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
   useEffect(() => {
