@@ -516,6 +516,18 @@ export const fetchStockPer = async (
   const cached = _stockPerCache.get(code);
   if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
 
+  // 서버사이드 Edge Function 우선 (CORS/401 우회)
+  try {
+    const res = await fetch(`/api/stock-per?code=${code}`, { signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const d = await res.json();
+      if (d.per !== null || d.fper !== null) {
+        _stockPerCache.set(code, { data: d, ts: Date.now() });
+        return d;
+      }
+    }
+  } catch {}
+
   const parseNum = (v: any): number | null => {
     if (v == null || v === '' || v === '-') return null;
     const n = parseFloat(String(v).replace(/,/g, ''));
@@ -614,6 +626,18 @@ export const fetchYahooStockPer = async (
   const key = ticker.toUpperCase();
   const cached = _yahooPerCache.get(key);
   if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
+
+  // 서버사이드 Edge Function 우선 (Yahoo Finance 401/CORS 우회)
+  try {
+    const res = await fetch(`/api/stock-per?ticker=${key}`, { signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const d = await res.json();
+      if (d.per !== null || d.fper !== null) {
+        _yahooPerCache.set(key, { data: d, ts: Date.now() });
+        return d;
+      }
+    }
+  } catch {}
 
   const mkProxies = (url: string) => [
     url,

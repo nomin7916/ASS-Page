@@ -1,0 +1,139 @@
+// Vercel Edge Function — 종목 PER/선행PER 서버사이드 조회
+// 클라이언트에서 CORS/401로 실패하는 Yahoo Finance, Naver API를 서버에서 직접 호출
+export const config = { runtime: 'edge' };
+
+const parseNum = (v: any): number | null => {
+  if (v == null || v === '' || v === '-') return null;
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return isNaN(n) || n <= 0 ? null : n;
+};
+
+const toValidPer = (v: any): number | null => {
+  const n = typeof v === 'string' ? parseFloat(v.replace(/,/g, '')) : Number(v);
+  return isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+};
+
+const NAVER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+  'Accept-Language': 'ko-KR,ko;q=0.9',
+  'Referer': 'https://m.stock.naver.com/',
+};
+
+const YAHOO_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+async function koreanPer(code: string): Promise<{ per: number | null; fper: number | null } | null> {
+  let closePrice: number | null = null;
+  let basicPer: number | null = null;
+
+  try {
+    const res = await fetch(`https://m.stock.naver.com/api/stock/${code}/basic`, {
+      headers: NAVER_HEADERS,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      if (d?.closePrice) {
+        closePrice = parseNum(String(d.closePrice).replace(/,/g, ''));
+        if (d.stockEndType === 'etf') return null;
+        basicPer = parseNum(d.per ?? d.perValue ?? d.PER);
+      }
+    }
+  } catch {}
+
+  if (!closePrice) return null;
+
+  try {
+    const res = await fetch(`https://m.stock.naver.com/api/stock/${code}/finance/annual`, {
+      headers: NAVER_HEADERS,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      const epsRow = (d?.chartEps?.columns as any[])?.find((c: any[]) => c[0] === 'EPS');
+      const titles = d?.chartEps?.trTitleList as any[];
+      if (epsRow && titles) {
+        const years = titles
+          .map((t: any, i: number) => ({ consensus: t.isConsensus === 'Y', eps: parseNum(epsRow[i + 1]) }))
+          .filter((y: any) => y.eps !== null);
+        const actual = years.filter((y: any) => !y.consensus);
+        const consensus = years.filter((y: any) => y.consensus);
+        const lastActual = actual[actual.length - 1];
+        const per = lastActual?.eps && lastActual.eps > 0
+          ? Math.round((closePrice / lastActual.eps) * 100) / 100
+          : null;
+        const fper = consensus[0]?.eps && consensus[0].eps > 0
+          ? Math.round((closePrice / consensus[0].eps) * 100) / 100
+          : null;
+        const result = { per: per ?? basicPer ?? null, fper };
+        if (result.per !== null || result.fper !== null) return result;
+      }
+    }
+  } catch {}
+
+  return basicPer !== null ? { per: basicPer, fper: null } : null;
+}
+
+async function usPer(ticker: string): Promise<{ per: number | null; fper: number | null } | null> {
+  // v10 quoteSummary → trailingPE + forwardPE
+  try {
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail`,
+      { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(8000) }
+    );
+    if (res.ok) {
+      const d = await res.json();
+      const detail = d?.quoteSummary?.result?.[0]?.summaryDetail;
+      if (detail) {
+        const per = toValidPer(detail.trailingPE?.raw);
+        const fper = toValidPer(detail.forwardPE?.raw);
+        if (per !== null || fper !== null) return { per, fper };
+      }
+    }
+  } catch {}
+
+  // v7 quote fallback
+  try {
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${ticker}`,
+      { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(8000) }
+    );
+    if (res.ok) {
+      const d = await res.json();
+      const q = d?.quoteResponse?.result?.[0];
+      if (q) {
+        const per = toValidPer(q.trailingPE);
+        const fper = toValidPer(q.forwardPE);
+        if (per !== null || fper !== null) return { per, fper };
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+export default async function handler(request: Request): Promise<Response> {
+  const { searchParams } = new URL(request.url);
+  const code = (searchParams.get('code') ?? '').trim().toUpperCase();
+  const ticker = (searchParams.get('ticker') ?? '').trim().toUpperCase();
+
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'public, max-age=3600',
+  };
+
+  let result: { per: number | null; fper: number | null } | null = null;
+
+  if (code && /^[A-Z0-9]{6}$/.test(code)) {
+    result = await koreanPer(code);
+  } else if (ticker && /^[A-Z]{1,6}$/.test(ticker)) {
+    result = await usPer(ticker);
+  }
+
+  return new Response(JSON.stringify(result ?? { per: null, fper: null }), { headers });
+}
