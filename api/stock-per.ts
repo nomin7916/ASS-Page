@@ -174,7 +174,20 @@ async function debugKoreanRaw(code: string): Promise<object> {
     if (res.ok) {
       const d = await res.json();
       out.annual_keys = Object.keys(d);
-      out.annual_sample = JSON.stringify(d).slice(0, 500);
+      const fi = d?.financeInfo;
+      if (fi?.rowListW) {
+        out.annual_row_titles = (fi.rowListW as any[]).map((r: any) => r.titleW);
+        out.annual_titles = fi.trTitleListW;
+        const epsRow = (fi.rowListW as any[]).find((r: any) => String(r.titleW).replace(/\s/g, '') === 'EPS');
+        if (epsRow) {
+          out.annual_eps_row_title = epsRow.titleW;
+          out.annual_eps_columns = epsRow.columnsW;
+        } else {
+          out.annual_eps_row = 'NOT FOUND — available titles above';
+        }
+      } else {
+        out.annual_sample = JSON.stringify(d).slice(0, 800);
+      }
     }
   } catch (e) {
     out.annual_error = String(e);
