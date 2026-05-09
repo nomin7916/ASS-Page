@@ -125,7 +125,8 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     if (!nbTitle.trim() || !nbUrl.trim() || !onSetNotebookLinks) return;
     setNbSaving(true);
     const newLink: NotebookLink = { title: nbTitle.trim(), url: nbUrl.trim(), createdAt: Date.now() };
-    await onSetNotebookLinks([...notebookLinks, newLink]);
+    const sorted = [newLink, ...notebookLinks].sort((a, b) => b.createdAt - a.createdAt);
+    await onSetNotebookLinks(sorted);
     setNbTitle('');
     setNbUrl('');
     setNbSaving(false);
@@ -750,45 +751,56 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
             {notebookLinks.length === 0 ? (
               <p className="text-gray-700 text-xs text-center py-2">등록된 링크가 없습니다.</p>
             ) : (
-              <div
-                className="rounded-lg overflow-y-auto border border-gray-700/40 max-h-52"
-                style={RULED_BG_STYLE}
-              >
-                {notebookLinks.map((link, i) => (
-                  <div
-                    key={link.createdAt}
-                    className={`flex items-start gap-2 px-3 py-2 ${i < notebookLinks.length - 1 ? 'border-b border-gray-700/30' : ''}`}
-                  >
-                    <svg className="flex-shrink-0 mt-0.5 text-sky-500" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-                      <path d="M9 8.5a3 3 0 0 1 6 0" />
-                      <rect x="8.5" y="10.5" width="2" height="2.5" rx="1" />
-                      <rect x="13.5" y="10.5" width="2" height="2.5" rx="1" />
-                    </svg>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-gray-200 text-xs font-medium truncate">{link.title}</p>
-                      <a
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-gray-600 hover:text-sky-400 text-xs underline decoration-dotted truncate block transition-colors"
-                      >
-                        {link.url}
-                      </a>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteNotebookLink(link.createdAt)}
-                      disabled={deletingNbIds.has(link.createdAt)}
-                      className="text-gray-700 hover:text-red-400 text-sm leading-none transition-colors flex-shrink-0 mt-0.5 disabled:opacity-40"
-                      title="삭제"
-                    >
-                      {deletingNbIds.has(link.createdAt) ? (
-                        <span className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin inline-block" />
-                      ) : '×'}
-                    </button>
-                  </div>
-                ))}
+              <div className="rounded-lg overflow-hidden border border-gray-700/40" style={RULED_BG_STYLE}>
+                <div className="overflow-y-auto max-h-64">
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-gray-700/50 bg-gray-800/60">
+                        <th className="px-2 py-1.5 text-center text-gray-500 font-semibold w-8">#</th>
+                        <th className="px-2 py-1.5 text-left text-gray-500 font-semibold whitespace-nowrap">등록일시</th>
+                        <th className="px-2 py-1.5 text-left text-gray-500 font-semibold">제목</th>
+                        <th className="px-2 py-1.5 text-left text-gray-500 font-semibold">링크</th>
+                        <th className="px-2 py-1.5 w-6"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...notebookLinks].sort((a, b) => b.createdAt - a.createdAt).map((link, i) => {
+                        const d = new Date(link.createdAt);
+                        const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                        return (
+                          <tr key={link.createdAt} className={i < notebookLinks.length - 1 ? 'border-b border-gray-700/30' : ''}>
+                            <td className="px-2 py-1.5 text-center text-gray-600">{i + 1}</td>
+                            <td className="px-2 py-1.5 text-gray-500 whitespace-nowrap">{dateStr}</td>
+                            <td className="px-2 py-1.5 text-gray-200 font-medium max-w-[120px] truncate">{link.title}</td>
+                            <td className="px-2 py-1.5 max-w-[160px]">
+                              <a
+                                href={link.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sky-500 hover:text-sky-300 underline decoration-dotted truncate block transition-colors"
+                                title={link.url}
+                              >
+                                {link.url}
+                              </a>
+                            </td>
+                            <td className="px-2 py-1.5 text-center">
+                              <button
+                                onClick={() => handleDeleteNotebookLink(link.createdAt)}
+                                disabled={deletingNbIds.has(link.createdAt)}
+                                className="text-gray-700 hover:text-red-400 text-sm leading-none transition-colors disabled:opacity-40"
+                                title="삭제"
+                              >
+                                {deletingNbIds.has(link.createdAt) ? (
+                                  <span className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin inline-block" />
+                                ) : '×'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>

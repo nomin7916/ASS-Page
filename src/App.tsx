@@ -1084,15 +1084,16 @@ export default function App() {
   };
 
   const handleSetNotebookLinks = async (links: {title: string, url: string, createdAt: number}[]) => {
+    const sorted = [...links].sort((a, b) => b.createdAt - a.createdAt);
     try {
       const res = await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(links) }),
+        body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(sorted) }),
       });
       const data = await res.json().catch(() => ({}));
       if (data.success !== false) {
-        setNotebookLinks(links);
+        setNotebookLinks(sorted);
         notify('노트북LM 링크가 저장됐습니다.', 'success');
       } else {
         notify('링크 저장 실패 (Apps Script 응답 오류)', 'error');
