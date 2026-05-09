@@ -20,7 +20,6 @@ import LoginGate, { verifyPin, savePin, hashPin, savePinToDrive, PIN_KEY, SESSIO
 import AdminPage from './components/AdminPage';
 import AdminPortal from './components/AdminPortal';
 import AdminNotificationModal, { AdminNotification } from './components/AdminNotificationModal';
-import PinnedNotificationsBar from './components/PinnedNotificationsBar';
 import AdminChoiceModal from './components/AdminChoiceModal';
 import IntegratedDashboard from './components/IntegratedDashboard';
 import HistoryPanel from './components/HistoryPanel';
@@ -92,8 +91,6 @@ export default function App() {
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
   const [seenAdminNotifIds, setSeenAdminNotifIds] = useState<string[]>([]);
-  const [pinnedAdminNotifIds, setPinnedAdminNotifIds] = useState<string[]>([]);
-  const [allMyAdminNotifs, setAllMyAdminNotifs] = useState<AdminNotification[]>([]);
   const seenAdminNotifIdsRef = useRef<string[]>([]);
   const adminOwnDriveTokenRef = useRef<string>('');
   const adminViewingAsRef = useRef<string | null>(null);
@@ -568,7 +565,6 @@ export default function App() {
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
     seenAdminNotifIdsRef.current = stateData.seenAdminNotifIds || [];
     setSeenAdminNotifIds(seenAdminNotifIdsRef.current);
-    setPinnedAdminNotifIds(stateData.pinnedAdminNotifIds || []);
   };
   applyStateDataRef.current = applyStateData;
 
@@ -1254,7 +1250,6 @@ export default function App() {
             const myAll = all.filter(n =>
               n.targetEmail === '__all__' || n.targetEmail?.toLowerCase() === authUser.email.toLowerCase()
             );
-            setAllMyAdminNotifs(myAll);
             const myNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
             if (myNotifs.length > 0) {
               setPendingAdminNotifs(myNotifs);
@@ -1328,7 +1323,6 @@ export default function App() {
         const myAll = all.filter(n =>
           n.targetEmail === '__all__' || n.targetEmail?.toLowerCase() === authUser.email.toLowerCase()
         );
-        setAllMyAdminNotifs(myAll);
         const newNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
         if (newNotifs.length > 0) {
           setPendingAdminNotifs(prev => {
@@ -1392,7 +1386,7 @@ export default function App() {
     if (activePortfolioId) {
       accountChartStatesRef.current[activePortfolioId] = { ...currentChartStateRef.current };
     }
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds }, intHistory, seenAdminNotifIds, pinnedAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds }, intHistory, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
@@ -1400,7 +1394,7 @@ export default function App() {
         saveAllToDrive(state);
       }, 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, seenAdminNotifIds, pinnedAdminNotifIds]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, seenAdminNotifIds]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
@@ -1610,10 +1604,6 @@ export default function App() {
       {pendingAdminNotifs.length > 0 && (
         <AdminNotificationModal
           notifications={pendingAdminNotifs}
-          pinnedIds={pinnedAdminNotifIds}
-          onPin={(id) => setPinnedAdminNotifIds(prev =>
-            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-          )}
           onClose={() => {
             const newSeen = [...seenAdminNotifIds, ...pendingAdminNotifs.map(n => n.id)];
             seenAdminNotifIdsRef.current = newSeen;
@@ -1686,19 +1676,6 @@ export default function App() {
 
         {/* 알림 바 */}
         <NotificationBar notificationLog={notificationLog} onClear={handleClearNotificationLog} unreadCount={unreadCount} onRead={markAsRead} onDeleteEntry={handleDeleteNotificationEntry} />
-
-        {/* 고정 공지 바 */}
-        <PinnedNotificationsBar
-          notifications={allMyAdminNotifs.filter(n => pinnedAdminNotifIds.includes(n.id))}
-          onUnpin={(id) => {
-            const newPinnedIds = pinnedAdminNotifIds.filter(x => x !== id);
-            setPinnedAdminNotifIds(newPinnedIds);
-            const nowTs = Date.now();
-            portfolioUpdatedAtRef.current = nowTs;
-            lastDriveSavedPortfolioUpdatedAtRef.current = 0;
-            saveAllToDrive({ ...saveStateRef.current, pinnedAdminNotifIds: newPinnedIds, portfolioUpdatedAt: nowTs });
-          }}
-        />
 
         {/* 뷰 전환 탭 */}
         <AccountTabBar
