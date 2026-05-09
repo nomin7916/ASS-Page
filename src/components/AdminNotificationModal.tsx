@@ -53,46 +53,46 @@ export function renderMessageWithLinks(text: string) {
 
 export default function AdminNotificationModal({ notifications, pinnedIds, onPin, onClose }: Props) {
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/75 p-4">
-      <div className="bg-gray-900 border border-gray-700/60 rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]">
-        <div className="flex items-center gap-2 px-6 pt-6 pb-4 border-b border-gray-800">
-          <h2 className="text-white font-bold text-base flex-1">관리자 공지</h2>
-          <span className="text-gray-500 text-sm">{notifications.length}건</span>
+    <div className="fixed top-14 left-4 z-[300] w-64 shadow-2xl">
+      <div className="bg-[#0f1623] border border-gray-700/60 rounded-2xl flex flex-col max-h-[70vh]">
+        <div className="flex items-center gap-2 px-4 pt-4 pb-2.5 border-b border-gray-800">
+          <h2 className="text-white font-bold text-xs flex-1">관리자 공지</h2>
+          <span className="text-gray-500 text-xs">{notifications.length}건</span>
         </div>
-        <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
+        <div className="overflow-y-auto flex-1 px-4 py-3 space-y-3">
           {notifications.map((n) => {
             const isPinned = pinnedIds.includes(n.id);
             return (
               <div key={n.id} className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${BADGE_STYLE[n.type] || BADGE_STYLE.info}`}>
+                  <span className={`rounded-xl px-3 py-1.5 text-sm font-semibold ${BADGE_STYLE[n.type] || BADGE_STYLE.info}`}>
                     {BADGE_LABEL[n.type] || BADGE_LABEL.info}
-                  </span>
-                  <span className="text-gray-600 text-xs ml-auto">
-                    {new Date(n.createdAt).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                   </span>
                   <button
                     onClick={() => onPin(n.id)}
                     title={isPinned ? '고정 해제' : '상단 고정'}
-                    className={`flex-shrink-0 text-base transition-opacity ${isPinned ? 'opacity-100' : 'opacity-30 hover:opacity-70'}`}
+                    className={`ml-auto flex-shrink-0 text-sm transition-opacity ${isPinned ? 'opacity-100' : 'opacity-30 hover:opacity-70'}`}
                   >
                     📌
                   </button>
                 </div>
-                <div className="bg-gray-800/60 rounded-xl px-4 py-3">
-                  <p className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">
+                <div className="bg-gray-800/80 rounded-xl px-3 py-2.5">
+                  <p className="text-gray-200 text-xs leading-relaxed whitespace-pre-wrap">
                     {renderMessageWithLinks(n.message)}
+                  </p>
+                  <p className="text-gray-600 text-xs mt-1.5 text-right">
+                    {new Date(n.createdAt).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
               </div>
             );
           })}
         </div>
-        <div className="px-6 pb-6 pt-4 border-t border-gray-800">
-          <p className="text-gray-600 text-xs text-center mb-3">📌 버튼을 누르면 공지를 상단에 고정할 수 있습니다</p>
+        <div className="px-4 pb-4 pt-2.5 border-t border-gray-800">
+          <p className="text-gray-600 text-xs text-center mb-2">📌 고정하면 상단 바에 표시됩니다</p>
           <button
             onClick={onClose}
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-xl transition-colors"
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 rounded-xl transition-colors text-xs"
           >
             확인
           </button>
