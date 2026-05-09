@@ -624,15 +624,13 @@ export const fetchYahooStockPer = async (
   const cached = _yahooPerCache.get(key);
   if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
 
-  // 서버사이드 Edge Function 우선 (Yahoo Finance 401/CORS 우회)
+  // 서버사이드 Edge Function 우선 — 응답 무조건 신뢰 (클라이언트 fallback 시 CORS 폭발 방지)
   try {
     const res = await fetch(`/api/stock-per?ticker=${key}`, { signal: AbortSignal.timeout(10000) });
     if (res.ok) {
       const d = await res.json();
-      if (d.per !== null || d.fper !== null) {
-        _yahooPerCache.set(key, { data: d, ts: Date.now() });
-        return d;
-      }
+      _yahooPerCache.set(key, { data: d, ts: Date.now() });
+      return d;
     }
   } catch {}
 

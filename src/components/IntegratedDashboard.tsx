@@ -1026,7 +1026,7 @@ export default function IntegratedDashboard({
                                                 선행PER <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
                                               </span>
                                             ) : (
-                                              <span className="text-[9px] text-gray-700">조회불가</span>
+                                              <span className="text-[9px] text-gray-700">—</span>
                                             )}
                                           </td>
                                         );
