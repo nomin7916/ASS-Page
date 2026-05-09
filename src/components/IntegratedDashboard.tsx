@@ -1000,7 +1000,7 @@ export default function IntegratedDashboard({
                                                 <div className="flex items-center gap-1 whitespace-nowrap">
                                                   <span className="text-[10px] text-gray-300 font-medium">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</span>
                                                   <span className="text-[9px] text-gray-600">|</span>
-                                                  <span className="text-[9px] text-gray-500">{h.ratio.toFixed(1)}%</span>
+                                                  <span className="text-[9px] text-gray-500">{h.ratio > 0 ? h.ratio.toFixed(1) + '%' : '—'}</span>
                                                 </div>
                                                 <div className="flex items-center gap-1 whitespace-nowrap">
                                                   <span className="text-[9px] text-gray-600">PER</span>
