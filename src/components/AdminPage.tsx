@@ -97,6 +97,128 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [deletingNbIds, setDeletingNbIds] = useState<Set<number>>(new Set());
   const [movingNbId, setMovingNbId] = useState<number | null>(null);
 
+  // API 진단 상태
+  const [apiTestCode, setApiTestCode] = useState('');
+  const [apiTestLoading, setApiTestLoading] = useState(false);
+  const [apiTestResult, setApiTestResult] = useState<any>(null);
+
+  const runApiTest = async () => {
+    const code = apiTestCode.trim().toUpperCase();
+    if (!code) return;
+    setApiTestLoading(true);
+    setApiTestResult(null);
+    const result: any = { code, steps: [] };
+
+    const addStep = (label: string, status: 'ok' | 'fail' | 'info', data?: any) => {
+      result.steps.push({ label, status, data });
+    };
+
+    const isKr = /^\d{6}$/.test(code);
+    const isUs = /^[A-Z]{1,6}$/.test(code);
+
+    if (isUs) {
+      // US ETF: Yahoo Finance topHoldings
+      addStep('코드 유형', 'info', '미국 ETF/주식 티커');
+      try {
+        const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${code}?modules=topHoldings`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        addStep(`Yahoo topHoldings (직접)`, res.ok ? 'ok' : 'fail',
+          res.ok ? JSON.parse(JSON.stringify(
+            (await res.json())?.quoteSummary?.result?.[0]?.topHoldings?.holdings?.slice(0, 3)
+            ?? 'holdings 없음'
+          )) : `HTTP ${res.status}`
+        );
+      } catch (e) { addStep('Yahoo topHoldings (직접)', 'fail', String(e)); }
+
+      try {
+        const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${code}?modules=summaryDetail`;
+        const res = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(8000) });
+        if (res.ok) {
+          const d = await res.json();
+          const det = d?.quoteSummary?.result?.[0]?.summaryDetail;
+          addStep('Yahoo summaryDetail (PER)', 'ok', { trailingPE: det?.trailingPE?.raw, forwardPE: det?.forwardPE?.raw });
+        } else { addStep('Yahoo summaryDetail (PER)', 'fail', `HTTP ${res.status}`); }
+      } catch (e) { addStep('Yahoo summaryDetail (PER)', 'fail', String(e)); }
+
+    } else if (isKr) {
+      addStep('코드 유형', 'info', '국내 6자리 코드');
+
+      // Step 1: Naver etfAnalysis
+      let naverData: any = null;
+      try {
+        const res = await fetch(`https://m.stock.naver.com/api/stock/${code}/etfAnalysis`, { signal: AbortSignal.timeout(8000) });
+        addStep(`Naver etfAnalysis`, res.ok ? 'ok' : 'fail', res.ok ? 'HTTP 200' : `HTTP ${res.status}`);
+        if (res.ok) {
+          naverData = await res.json();
+          const rawList = naverData?.etfTop10MajorConstituentAssets ?? [];
+          const isOverseas = Array.isArray(rawList) && rawList.length > 0 && rawList[0]?.etfWeight === '-';
+          addStep('etfBaseIndex', 'info', naverData?.etfBaseIndex ?? '없음');
+          addStep('해외 ETF 여부', isOverseas ? 'info' : 'ok', isOverseas ? '해외 ETF (etfWeight="-")' : '국내 ETF');
+          addStep('구성종목 샘플 (Naver)', 'info',
+            rawList.slice(0, 3).map((x: any) => ({ name: x.itemName, code: x.itemCode, etfWeight: x.etfWeight }))
+          );
+
+          if (isOverseas) {
+            // 인덱스 매핑
+            const u = (naverData?.etfBaseIndex ?? '').toUpperCase();
+            let mapped = null;
+            if (u.includes('NASDAQ 100') || u.includes('NASDAQ-100')) mapped = 'QQQ';
+            else if (u.includes('S&P 500') || u.includes('S&P500')) mapped = 'SPY';
+            else if (u.includes('PHLX SEMICONDUCTOR') || u.includes('PHILADELPHIA SEMICONDUCTOR')) mapped = 'SOXX';
+            else if (u.includes('NIFTY 50') || u.includes('NIFTY50')) mapped = 'INDY';
+            else if (u.includes('CSI 300') || u.includes('CSI300')) mapped = 'ASHR';
+            else if (u.includes('MSCI CHINA')) mapped = 'MCHI';
+            else if (u.includes('MSCI EM') || u.includes('MSCI EMERGING')) mapped = 'EEM';
+            else if (u.includes('DOW JONES')) mapped = 'DIA';
+            else if (u.includes('RUSSELL 2000')) mapped = 'IWM';
+            else if (u.includes('NIKKEI')) mapped = 'EWJ';
+            else if (u.includes('HANG SENG')) mapped = 'EWH';
+
+            addStep('인덱스 → US ETF 매핑', mapped ? 'ok' : 'fail', mapped ? `→ ${mapped}` : '매핑 없음 (신규 추가 필요)');
+
+            if (mapped) {
+              // Yahoo Finance topHoldings
+              try {
+                const yUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${mapped}?modules=topHoldings`;
+                const yRes = await fetch(yUrl, { signal: AbortSignal.timeout(8000) });
+                if (yRes.ok) {
+                  const yData = await yRes.json();
+                  const holdings = yData?.quoteSummary?.result?.[0]?.topHoldings?.holdings?.slice(0, 3);
+                  addStep(`Yahoo topHoldings (${mapped})`, holdings?.length > 0 ? 'ok' : 'fail',
+                    holdings?.map((h: any) => ({ name: h.holdingName, code: h.symbol, ratio: h.holdingPercent?.raw != null ? (h.holdingPercent.raw * 100).toFixed(2) + '%' : '?' })) ?? 'holdings 없음'
+                  );
+                } else { addStep(`Yahoo topHoldings (${mapped})`, 'fail', `HTTP ${yRes.status}`); }
+              } catch (e) { addStep(`Yahoo topHoldings (${mapped})`, 'fail', String(e)); }
+            }
+          }
+        }
+      } catch (e) { addStep('Naver etfAnalysis', 'fail', String(e)); }
+
+      // Step 2: Naver domestic stock PER
+      try {
+        const res = await fetch(`https://m.stock.naver.com/api/stock/${code}/basic`, { signal: AbortSignal.timeout(6000) });
+        if (res.ok) {
+          const d = await res.json();
+          addStep('Naver basic (종목정보)', 'ok', { stockEndType: d.stockEndType, closePrice: d.closePrice, per: d.per });
+        } else { addStep('Naver basic', 'fail', `HTTP ${res.status}`); }
+      } catch (e) { addStep('Naver basic', 'fail', String(e)); }
+
+      // Step 3: 서버 etf-holdings 엔드포인트
+      try {
+        const res = await fetch(`/api/etf-holdings?code=${code}&debug=1`, { signal: AbortSignal.timeout(10000) });
+        addStep('/api/etf-holdings (서버)', res.ok ? 'ok' : 'fail',
+          res.ok ? await res.json() : `HTTP ${res.status}`
+        );
+      } catch (e) { addStep('/api/etf-holdings (서버)', 'fail', String(e)); }
+
+    } else {
+      addStep('코드 유형', 'fail', '인식 불가: 6자리 숫자 또는 영문 1~6자 입력');
+    }
+
+    setApiTestResult(result);
+    setApiTestLoading(false);
+  };
+
   const loadYoutubeHistory = async () => {
     try {
       const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
@@ -887,6 +1009,48 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
             새 사용자가 접근을 요청하면 <span className="text-gray-300">{ADMIN_EMAIL}</span>로 이메일이 자동 발송됩니다.
             이메일을 확인 후 구글 시트에 해당 이메일을 추가하면 즉시 접근이 허용됩니다.
           </p>
+        </div>
+
+        {/* API 진단 도구 */}
+        <div className="mt-6 bg-gray-900 border border-gray-700 rounded-xl p-4">
+          <h3 className="text-sm font-bold text-sky-400 mb-3">API 진단 도구</h3>
+          <p className="text-xs text-gray-500 mb-3">ETF/종목 코드를 입력하고 각 API 단계별 응답을 확인합니다. 코드 수정 전 데이터 구조 파악에 사용하세요.</p>
+          <div className="flex gap-2 mb-4">
+            <input
+              className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm font-mono placeholder-gray-600 focus:outline-none focus:border-sky-500"
+              placeholder="예: 360750  /  QQQ  /  005930"
+              value={apiTestCode}
+              onChange={e => setApiTestCode(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && runApiTest()}
+            />
+            <button
+              onClick={runApiTest}
+              disabled={apiTestLoading || !apiTestCode.trim()}
+              className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-semibold rounded-lg transition-colors"
+            >
+              {apiTestLoading ? '조회 중…' : '테스트'}
+            </button>
+          </div>
+
+          {apiTestResult && (
+            <div className="space-y-1.5">
+              {apiTestResult.steps.map((step: any, i: number) => (
+                <div key={i} className="bg-gray-800 rounded-lg p-2.5 flex gap-2.5 items-start">
+                  <span className={`text-xs font-bold mt-0.5 shrink-0 w-3 ${step.status === 'ok' ? 'text-green-400' : step.status === 'fail' ? 'text-red-400' : 'text-gray-400'}`}>
+                    {step.status === 'ok' ? '✓' : step.status === 'fail' ? '✗' : '·'}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-xs text-gray-300 font-medium">{step.label}</span>
+                    {step.data !== undefined && (
+                      <pre className="mt-1 text-[10px] text-gray-400 whitespace-pre-wrap break-all leading-relaxed font-mono bg-gray-900 rounded p-1.5 max-h-40 overflow-y-auto">
+                        {typeof step.data === 'string' ? step.data : JSON.stringify(step.data, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

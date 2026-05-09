@@ -393,12 +393,34 @@ const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio
     ratio: parseFloat(String(x.etfWeight ?? x.holdingRatio ?? x.holdingRate ?? x.ratio ?? x.weight ?? x.constituentRatio ?? x.stockRatio ?? x.holdingWeightRatio ?? 0).replace('%', '')) || 0,
   })).filter((x: any) => x.name);
   if (result.length === 0) return null;
-  // 소수 표현(0.085 = 8.5%) 정규화
   const nonZero = result.filter((x: any) => x.ratio > 0);
   if (nonZero.length > 0 && Math.max(...nonZero.map((x: any) => x.ratio)) < 2.0) {
     result.forEach((x: any) => { x.ratio = Math.round(x.ratio * 10000) / 100; });
   }
   return result;
+};
+
+// etfBaseIndex → 미국 ETF 티커 (클라이언트/서버 공용)
+const _matchIndexToUsTicker = (baseIndex: string): string | null => {
+  if (!baseIndex) return null;
+  const u = baseIndex.toUpperCase();
+  if (u.includes('NASDAQ 100') || u.includes('NASDAQ-100') || u.includes('NASDAQ100')) return 'QQQ';
+  if (u.includes('S&P 500') || u.includes('S&P500')) return 'SPY';
+  if (u.includes('DOW JONES')) return 'DIA';
+  if (u.includes('RUSSELL 2000')) return 'IWM';
+  if (u.includes('RUSSELL 1000')) return 'IWB';
+  if (u.includes('PHLX SEMICONDUCTOR') || u.includes('PHILADELPHIA SEMICONDUCTOR')) return 'SOXX';
+  if (u.includes('NIFTY 50') || u.includes('NIFTY50')) return 'INDY';
+  if (u.includes('CSI 300') || u.includes('CSI300')) return 'ASHR';
+  if (u.includes('MSCI CHINA')) return 'MCHI';
+  if (u.includes('MSCI EM') || u.includes('MSCI EMERGING')) return 'EEM';
+  if (u.includes('MSCI WORLD')) return 'URTH';
+  if (u.includes('MSCI EUROPE')) return 'EZU';
+  if (u.includes('NIKKEI')) return 'EWJ';
+  if (u.includes('HANG SENG')) return 'EWH';
+  if (u.includes('GLOBAL CLEAN ENERGY')) return 'ICLN';
+  if (u.includes('REAL ESTATE') || u.includes('REIT')) return 'VNQ';
+  return null;
 };
 
 const _fetchYahooEtfHoldings = async (
@@ -443,47 +465,41 @@ export const fetchEtfTopHoldings = async (
     return result;
   }
 
-  // 서버사이드 엔드포인트 우선 (Naver 헤더 포함, CORS 우회)
+  // Naver etfAnalysis — CORS 허용이므로 클라이언트에서 직접 조회
   try {
-    const res = await fetch(`/api/etf-holdings?code=${code}`, { signal: AbortSignal.timeout(10000) });
+    const res = await fetch(
+      `https://m.stock.naver.com/api/stock/${code}/etfAnalysis`,
+      { signal: AbortSignal.timeout(8000) }
+    );
     if (res.ok) {
-      const d = await res.json();
-      if (Array.isArray(d) && d.length > 0) {
-        _etfHoldingsCache.set(code, { data: d, ts: Date.now() });
-        return d;
-      }
-    }
-  } catch {}
-
-  // 클라이언트 폴백: domestic/etfAnalysis 포함
-  const targetUrls = [
-    `https://m.stock.naver.com/api/domestic/stock/${code}/etfAnalysis`,
-    `https://m.stock.naver.com/api/stock/${code}/etfAnalysis`,
-    `https://m.stock.naver.com/api/domestic/stock/${code}/etfComponentStock`,
-    `https://m.stock.naver.com/api/etf/${code}/holding`,
-    `https://m.stock.naver.com/api/domestic/stock/${code}/etfHolding`,
-    `https://m.stock.naver.com/api/stock/${code}/etfHolding`,
-  ];
-  const makeProxies = (url: string) => [
-    url,
-    `/api/proxy?url=${encodeURIComponent(url)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  ];
-
-  for (const targetUrl of targetUrls) {
-    for (const proxy of makeProxies(targetUrl)) {
-      try {
-        const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-        if (!res.ok) continue;
-        const data = await res.json();
+      const data = await res.json();
+      const rawList: any[] = data?.etfTop10MajorConstituentAssets ?? [];
+      if (Array.isArray(rawList) && rawList.length > 0) {
+        if (rawList[0]?.etfWeight === '-') {
+          // 해외 ETF: etfBaseIndex → 미국 ETF → Yahoo Finance topHoldings
+          const usTicker = _matchIndexToUsTicker(data?.etfBaseIndex ?? '');
+          if (usTicker) {
+            const yahooResult = await _fetchYahooEtfHoldings(usTicker);
+            if (yahooResult) {
+              _etfHoldingsCache.set(code, { data: yahooResult, ts: Date.now() });
+              return yahooResult;
+            }
+          }
+          // Yahoo 실패: Naver 이름만 반환 (비중 0)
+          const fallback = _parseHoldingList(data);
+          _etfHoldingsCache.set(code, { data: fallback, ts: Date.now() });
+          return fallback;
+        }
+        // 국내 ETF: etfWeight 직접 파싱
         const result = _parseHoldingList(data);
         if (result) {
           _etfHoldingsCache.set(code, { data: result, ts: Date.now() });
           return result;
         }
-      } catch { continue; }
+      }
     }
-  }
+  } catch {}
+
   _etfHoldingsCache.set(code, { data: null, ts: Date.now() });
   return null;
 };
@@ -620,10 +636,10 @@ export const fetchYahooStockPer = async (
     }
   } catch {}
 
-  // Naver 해외종목 basic API — 거래소 suffix 순서로 시도 (.O=NASDAQ, .N=NYSE, .A=AMEX)
+  // Naver 해외종목 basic API — 프록시 경유 (overseas API는 CORS 차단)
   for (const suffix of ['.O', '.N', '.A']) {
     const url = `https://m.stock.naver.com/api/overseas/stock/${key}${suffix}/basic`;
-    for (const proxy of [url, `/api/proxy?url=${encodeURIComponent(url)}`]) {
+    for (const proxy of [`/api/proxy?url=${encodeURIComponent(url)}`]) {
       try {
         const res = await fetch(proxy, { signal: AbortSignal.timeout(6000) });
         if (!res.ok) continue;
