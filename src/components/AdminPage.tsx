@@ -134,7 +134,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       body: JSON.stringify({
         action: 'sendNotification',
         targetEmail: '__all__',
-        message: `📚 새 학습 자료가 등록됐습니다: ${newLink.title}`,
+        message: `📚 ${newLink.title}가 등록되었습니다.`,
         type: 'info',
       }),
     }).catch(() => {});
