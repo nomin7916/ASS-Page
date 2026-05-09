@@ -53,22 +53,22 @@ async function koreanPer(code: string): Promise<{ per: number | null; fper: numb
     if (res.ok) {
       const d = await res.json();
 
-      // 신규 API 구조: financeInfo.trTitleListW + financeInfo.rowListW
+      // 신규 API 구조: financeInfo.trTitleList + financeInfo.rowList (W 접미사 없음)
       const fi = d?.financeInfo;
-      if (fi?.trTitleListW && fi?.rowListW) {
-        const titles = fi.trTitleListW as any[];
-        const rows = fi.rowListW as any[];
-        const epsRow = rows.find((r: any) => String(r.titleW).replace(/\s/g, '') === 'EPS');
-        if (epsRow?.columnsW) {
+      if (fi?.trTitleList && fi?.rowList) {
+        const titles = fi.trTitleList as any[];
+        const rows = fi.rowList as any[];
+        const epsRow = rows.find((r: any) => String(r.title).replace(/\s/g, '') === 'EPS');
+        if (epsRow?.columns) {
           const actual = titles.filter((t: any) => t.isConsensus !== 'Y');
           const consensus = titles.filter((t: any) => t.isConsensus === 'Y');
           const lastActual = actual[actual.length - 1];
           const firstConsensus = consensus[0];
           const lastActualEps = lastActual
-            ? parseNum(String(epsRow.columnsW[lastActual.keyW]?.valueW ?? '').replace(/,/g, ''))
+            ? parseNum(String(epsRow.columns[lastActual.key]?.value ?? '').replace(/,/g, ''))
             : null;
           const firstConsensusEps = firstConsensus
-            ? parseNum(String(epsRow.columnsW[firstConsensus.keyW]?.valueW ?? '').replace(/,/g, ''))
+            ? parseNum(String(epsRow.columns[firstConsensus.key]?.value ?? '').replace(/,/g, ''))
             : null;
           const per = lastActualEps && lastActualEps > 0
             ? Math.round((closePrice / lastActualEps) * 100) / 100
