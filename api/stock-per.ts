@@ -28,7 +28,6 @@ const YAHOO_HEADERS = {
 
 async function koreanPer(code: string): Promise<{ per: number | null; fper: number | null } | null> {
   let closePrice: number | null = null;
-  let basicPer: number | null = null;
 
   try {
     const res = await fetch(`https://m.stock.naver.com/api/stock/${code}/basic`, {
@@ -40,7 +39,6 @@ async function koreanPer(code: string): Promise<{ per: number | null; fper: numb
       if (d?.closePrice) {
         closePrice = parseNum(String(d.closePrice).replace(/,/g, ''));
         if (d.stockEndType === 'etf') return null;
-        basicPer = parseNum(d.per ?? d.perValue ?? d.PER);
       }
     }
   } catch {}
@@ -54,10 +52,39 @@ async function koreanPer(code: string): Promise<{ per: number | null; fper: numb
     });
     if (res.ok) {
       const d = await res.json();
+
+      // 신규 API 구조: financeInfo.trTitleListW + financeInfo.rowListW
+      const fi = d?.financeInfo;
+      if (fi?.trTitleListW && fi?.rowListW) {
+        const titles = fi.trTitleListW as any[];
+        const rows = fi.rowListW as any[];
+        const epsRow = rows.find((r: any) => String(r.titleW).replace(/\s/g, '') === 'EPS');
+        if (epsRow?.columnsW) {
+          const actual = titles.filter((t: any) => t.isConsensus !== 'Y');
+          const consensus = titles.filter((t: any) => t.isConsensus === 'Y');
+          const lastActual = actual[actual.length - 1];
+          const firstConsensus = consensus[0];
+          const lastActualEps = lastActual
+            ? parseNum(String(epsRow.columnsW[lastActual.keyW]?.valueW ?? '').replace(/,/g, ''))
+            : null;
+          const firstConsensusEps = firstConsensus
+            ? parseNum(String(epsRow.columnsW[firstConsensus.keyW]?.valueW ?? '').replace(/,/g, ''))
+            : null;
+          const per = lastActualEps && lastActualEps > 0
+            ? Math.round((closePrice / lastActualEps) * 100) / 100
+            : null;
+          const fper = firstConsensusEps && firstConsensusEps > 0
+            ? Math.round((closePrice / firstConsensusEps) * 100) / 100
+            : null;
+          if (per !== null || fper !== null) return { per, fper };
+        }
+      }
+
+      // 구버전 API 구조 fallback: chartEps.columns + chartEps.trTitleList
       const epsRow = (d?.chartEps?.columns as any[])?.find((c: any[]) => c[0] === 'EPS');
-      const titles = d?.chartEps?.trTitleList as any[];
-      if (epsRow && titles) {
-        const years = titles
+      const titlesOld = d?.chartEps?.trTitleList as any[];
+      if (epsRow && titlesOld) {
+        const years = titlesOld
           .map((t: any, i: number) => ({ consensus: t.isConsensus === 'Y', eps: parseNum(epsRow[i + 1]) }))
           .filter((y: any) => y.eps !== null);
         const actual = years.filter((y: any) => !y.consensus);
@@ -69,13 +96,12 @@ async function koreanPer(code: string): Promise<{ per: number | null; fper: numb
         const fper = consensus[0]?.eps && consensus[0].eps > 0
           ? Math.round((closePrice / consensus[0].eps) * 100) / 100
           : null;
-        const result = { per: per ?? basicPer ?? null, fper };
-        if (result.per !== null || result.fper !== null) return result;
+        if (per !== null || fper !== null) return { per, fper };
       }
     }
   } catch {}
 
-  return basicPer !== null ? { per: basicPer, fper: null } : null;
+  return null;
 }
 
 async function usPer(ticker: string): Promise<{ per: number | null; fper: number | null } | null> {
