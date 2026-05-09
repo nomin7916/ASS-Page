@@ -1048,10 +1048,6 @@ export default function App() {
   };
 
   const handleClearNotificationLog = async () => {
-    const adminIds = notificationLog.filter(e => e.adminNotifId).map(e => e.adminNotifId as string);
-    if (adminIds.length > 0) {
-      setPinnedAdminNotifIds(prev => prev.filter(id => !adminIds.includes(id)));
-    }
     clearNotificationLog();
     if (driveTokenRef.current) {
       try {
@@ -1064,9 +1060,6 @@ export default function App() {
   const handleDeleteNotificationEntry = async (entry) => {
     const newLog = notificationLog.filter(e => e.id !== entry.id);
     setNotificationLog(newLog);
-    if (entry.adminNotifId) {
-      setPinnedAdminNotifIds(prev => prev.filter(id => id !== entry.adminNotifId));
-    }
     if (driveTokenRef.current) {
       try {
         const folderId = driveFolderIdRef.current || await ensureDriveFolder(driveTokenRef.current);
