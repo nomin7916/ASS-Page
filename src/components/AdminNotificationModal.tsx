@@ -31,6 +31,7 @@ const BADGE_LABEL: Record<string, string> = {
 };
 
 export function renderMessageWithLinks(text: string) {
+  if (!text) return null;
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
   return parts.map((part, i) => {
     if (/^https?:\/\//.test(part)) {
