@@ -27,11 +27,12 @@ const hexToRgba = (hex, alpha) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-const getStockUrl = (code) => {
+const getStockUrl = (code, category = '') => {
   if (!code) return null;
-  if (/^\d{6}$/.test(code)) return `https://m.stock.naver.com/domestic/stock/${code}/total`;
-  if (/^[A-Za-z]{1,6}$/.test(code)) return `https://m.stock.naver.com/overseas/stock/${code}/total`;
-  return `https://finance.yahoo.com/quote/${encodeURIComponent(code)}`;
+  if (category === 'FUND') return `https://www.funetf.co.kr/product/fund/view/${code}`;
+  if (/^\d/.test(code)) return `https://m.stock.naver.com/domestic/stock/${code}/total`;
+  if (/^[A-Za-z]+$/.test(code)) return `https://finance.yahoo.com/quote/${code.toUpperCase()}`;
+  return null;
 };
 
 const blendWithDarkBg = (hex, alpha, bgHex = '#1e293b') => {
@@ -974,8 +975,8 @@ export default function IntegratedDashboard({
                                       </td>
                                     )}
                                     <td className="py-1.5 px-2 text-center border-r border-gray-700 sticky left-0 z-10 bg-[#1e293b] group-hover:bg-[#1d2d40] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">
-                                      {getStockUrl(item.code)
-                                        ? <a href={getStockUrl(item.code)} target="_blank" rel="noopener noreferrer" style={{ color: itemColor }} className="hover:underline">{num}. {item.name}</a>
+                                      {getStockUrl(item.code, item.category)
+                                        ? <a href={getStockUrl(item.code, item.category)} target="_blank" rel="noopener noreferrer" style={{ color: itemColor }} className="hover:underline">{num}. {item.name}</a>
                                         : <span style={{ color: itemColor }}>{num}. {item.name}</span>
                                       }
                                       {item.code && <div className="text-[9px] text-gray-600 mt-0.5">({item.code})</div>}

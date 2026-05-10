@@ -6,6 +6,13 @@ import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKe
 import { PieLabelOutside } from '../chartUtils';
 
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
+const getItemUrl = (item) => {
+  if (!item.code) return null;
+  if (item.type === 'fund') return `https://www.funetf.co.kr/product/fund/view/${item.code}`;
+  if (/^\d/.test(item.code)) return `https://m.stock.naver.com/domestic/stock/${item.code}/total`;
+  if (/^[A-Za-z]+$/.test(item.code)) return `https://finance.yahoo.com/quote/${item.code.toUpperCase()}`;
+  return null;
+};
 const getAssetClass = (item) => item.type === 'fund'
   ? (item.assetClass ?? 'S')
   : (item.assetClass ?? (SAFE_CATEGORIES.includes(item.category) ? 'S' : 'D'));
@@ -234,7 +241,7 @@ export default function RebalancingPanel({
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {catTd}
                         <td className="py-3 px-2 text-center sticky left-[80px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}><span className={`text-xs font-bold ${(item.changeRate || 0) > 0 ? 'text-red-400' : (item.changeRate || 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.changeRate != null ? formatChangeRate(item.changeRate) : '-'}</span></td>
-                        <td className="py-3 px-4 text-center font-bold sticky left-[145px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav} style={{ color: itemColor }}><div className="line-clamp-2">{num}. {item.name}</div></td>
+                        <td className="py-3 px-4 text-center font-bold sticky left-[145px] z-[5] bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav} style={{ color: itemColor }}>{(() => { const url = getItemUrl(item); return url ? <a href={url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 hover:underline" style={{ color: itemColor }}>{num}. {item.name}</a> : <div className="line-clamp-2">{num}. {item.name}</div>; })()}</td>
                         <td className="py-3 px-3 text-center text-gray-500 font-mono text-xs focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.code}</td>
                         <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.curEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.curEval * usdkrw)}</span></div> : formatCurrency(item.curEval)}</td>
                         <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}</td>

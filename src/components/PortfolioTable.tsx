@@ -336,7 +336,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     tabIndex={0}
                     onKeyDown={handleReadonlyCellNav}
                   >
-                    <div className={`w-full h-full py-3 px-3 flex items-center justify-center cursor-pointer hover:bg-gray-700/50 transition-colors font-bold ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`} onClick={() => item.code && window.open(isOverseas ? `https://finance.yahoo.com/quote/${item.code.toUpperCase()}` : `https://m.stock.naver.com/domestic/stock/${item.code.toUpperCase()}/total`, '_blank')} title="상세">{formatChangeRate(item.changeRate)}</div>
+                    <div className={`w-full h-full py-3 px-3 flex items-center justify-center cursor-pointer hover:bg-gray-700/50 transition-colors font-bold ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`} onClick={() => item.code && window.open((isOverseas || /^[A-Za-z]+$/.test(item.code)) ? `https://finance.yahoo.com/quote/${item.code.toUpperCase()}` : `https://m.stock.naver.com/domestic/stock/${item.code.toUpperCase()}/total`, '_blank')} title="상세">{formatChangeRate(item.changeRate)}</div>
                   </td>
 
                   {/* 현재가 — 읽기전용(클릭 새로고침) */}
