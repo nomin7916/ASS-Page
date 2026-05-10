@@ -129,6 +129,29 @@ markAsRead() / clearNotificationLog()
 
 ---
 
+## 브라우저 저장소 정책
+
+### localStorage 사용 제한 — 다중 사용자 계정 오염 방지
+
+이 앱은 **하나의 디바이스에서 여러 Google 계정이 번갈아 로그인**하는 사용 패턴이 있다.
+`localStorage`는 브라우저 전체에서 공유되므로 사용자 A의 캐시 데이터가 사용자 B에게 노출될 수 있다.
+
+**원칙:**
+- `localStorage`는 **원칙적으로 사용 금지**
+- 세션 내 빠른 재접근이 필요한 캐시는 **`sessionStorage`** 사용
+  - `sessionStorage`는 탭 단위로 격리되며, 브라우저/탭 종료 시 자동 소멸 → 다음 로그인 사용자에게 데이터가 남지 않음
+  - 페이지 새로고침(F5)은 같은 탭이므로 캐시가 유지됨 (설계 의도)
+- 예외적으로 `localStorage`를 사용해야 할 경우:
+  1. 키를 반드시 `{prefix}_{userEmail}` 형태로 사용자별 격리
+  2. 로그아웃 핸들러에서 해당 사용자 키를 명시적으로 삭제
+  3. CLAUDE.md에 예외 사유 기재
+
+**현재 적용 대상:**
+- `src/api.ts` — `etfHoldingsCache_v1`, `stockPerCache_v1`: `localStorage` → `sessionStorage` 로 교체 필요 (2026-05-10 기록)
+- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v1`: 공휴일 데이터는 사용자 무관하므로 `localStorage` 유지 허용
+
+---
+
 ## 코딩 규칙
 
 - `// @ts-nocheck` 유지 (App.tsx, 일부 훅) — props 타입 명시 불필요
