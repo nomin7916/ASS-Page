@@ -1610,7 +1610,7 @@ export default function App() {
       <div className="flex min-h-screen">
         {/* 메인 컨텐츠 */}
         <div className="flex-1 min-w-0 py-4 px-3 md:px-5 md:py-5">
-        <div className="w-full max-w-[1440px] mx-auto flex flex-col gap-6">
+        <div className="w-full max-w-[1200px] mx-auto flex flex-col gap-6">
         {/* 로그인 사용자 정보 바 */}
         <UserInfoBar
           email={authUser.email}
@@ -1708,13 +1708,11 @@ export default function App() {
         />
 
         {!showIntegratedDashboard && (
-          <div className="w-full max-w-[1200px] mx-auto">
-            <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
-          </div>
+          <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
         )}
 
         {!showIntegratedDashboard && (<>
-        <div className="flex items-start gap-0 w-full max-w-[1200px] mx-auto">
+        <div className="flex items-start gap-0 w-full">
           <div className="flex-1 flex flex-col gap-6 min-w-0" style={{ paddingBottom: '40vh' }}>
         {activePortfolioAccountType === 'gold' ? (
           <KrxGoldTable
@@ -1973,7 +1971,6 @@ export default function App() {
         </>)}
 
         {showIntegratedDashboard && (
-          <div className="w-full max-w-[1200px] mx-auto">
           <IntegratedDashboard
             intHistory={computedIntHistory}
             intTotals={intTotals}
@@ -2041,7 +2038,6 @@ export default function App() {
             matongClosedIds={matongClosedIds}
             setMatongClosedIds={setMatongClosedIds}
           />
-          </div>
         )}
 
         </div>
