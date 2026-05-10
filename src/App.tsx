@@ -1973,6 +1973,7 @@ export default function App() {
         </>)}
 
         {showIntegratedDashboard && (
+          <div className="w-full max-w-[1200px] mx-auto">
           <IntegratedDashboard
             intHistory={computedIntHistory}
             intTotals={intTotals}
@@ -2040,6 +2041,7 @@ export default function App() {
             matongClosedIds={matongClosedIds}
             setMatongClosedIds={setMatongClosedIds}
           />
+          </div>
         )}
 
         </div>
