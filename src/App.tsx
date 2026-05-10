@@ -352,24 +352,8 @@ export default function App() {
     applyBackupData: (...args) => applyBackupDataRef.current?.(...args),
     accountChartStatesRef, saveStateRef, adminViewingAsRef, adminOwnDriveTokenRef, notify, confirm,
     onForceLogout: () => {
-      sessionStorage.removeItem('appSessionId');
-      sessionStorage.removeItem('appSessionLoginAt');
-      setAuthUser(null);
-      driveTokenRef.current = '';
-      setDriveToken('');
-      setAdminViewingAs(null);
-      adminViewingAsRef.current = null;
-      adminTransitioningRef.current = false;
-      adminOwnDriveTokenRef.current = '';
-      setDriveLoadReady(false);
-      setAdminPendingChoice(false);
-      setAdminViewUserCtx(null);
-      if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
-      if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
-      adminSessionWarningTimerRef.current = null;
-      adminSessionExpireTimerRef.current = null;
-      adminSessionStartAtRef.current = 0;
-      setAdminSessionElapsed(0);
+      sessionStorage.removeItem(SESSION_KEY);
+      window.location.reload();
     },
   });
 
@@ -1555,14 +1539,8 @@ export default function App() {
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
     return <AdminPage adminEmail={authUser.email} onClose={() => {
-      setShowAdminPage(false);
       sessionStorage.removeItem(SESSION_KEY);
-      setAuthUser(null);
-      driveTokenRef.current = '';
-      setDriveToken('');
-      setDriveLoadReady(false);
-      setAdminPendingChoice(false);
-      setAdminViewUserCtx(null);
+      window.location.reload();
     }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} />;
   }
 
@@ -1651,19 +1629,7 @@ export default function App() {
           }}
           onLogout={() => {
             sessionStorage.removeItem(SESSION_KEY);
-            setAuthUser(null);
-            driveTokenRef.current = '';
-            setDriveToken('');
-            setAdminViewingAs(null);
-            adminViewingAsRef.current = null;
-            adminTransitioningRef.current = false;
-            setDriveLoadReady(false);
-            setAdminPendingChoice(false);
-            setAdminViewUserCtx(null);
-            if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
-            if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
-            adminSessionStartAtRef.current = 0;
-            setAdminSessionElapsed(0);
+            window.location.reload();
           }}
           canAccessDividendTax={canAccessDividendTax}
           onOpenDividendTax={() => setShowDividendTaxPage(true)}
