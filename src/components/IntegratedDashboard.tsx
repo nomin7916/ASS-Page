@@ -29,7 +29,8 @@ const hexToRgba = (hex, alpha) => {
 
 const getStockUrl = (code) => {
   if (!code) return null;
-  if (/^\d{6}$/.test(code)) return `https://finance.naver.com/item/main.naver?code=${code}`;
+  if (/^\d{6}$/.test(code)) return `https://m.stock.naver.com/domestic/stock/${code}/total`;
+  if (/^[A-Za-z]{1,6}$/.test(code)) return `https://m.stock.naver.com/overseas/stock/${code}/total`;
   return `https://finance.yahoo.com/quote/${encodeURIComponent(code)}`;
 };
 
