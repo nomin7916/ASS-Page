@@ -940,7 +940,7 @@ export default function IntegratedDashboard({
                               <th className="pb-2 px-3 border-r border-gray-700">비중</th>
                               <th className="pb-2 px-3 border-r border-gray-700">수익</th>
                               <th className="pb-2 px-3 border-r border-gray-700">수익률</th>
-                              <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중1위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
+                              <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중1위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div>{(Object.values(holdingsFetchDate)[0] as string) && <div className="text-[9px] text-gray-600/60 font-normal">확인: {Object.values(holdingsFetchDate)[0] as string}</div>}</th>
                               <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중2위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
                               <th className="pb-2 px-2 text-sky-400/80 text-[10px]">비중3위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
                             </tr>
@@ -1009,15 +1009,10 @@ export default function IntegratedDashboard({
                                                   <span className="text-[9px] text-gray-500">{h.ratio > 0 ? h.ratio.toFixed(1) + '%' : '—'}</span>
                                                 </div>
                                                 <div className="flex items-center gap-1 whitespace-nowrap">
-                                                  <span className="text-[9px] text-gray-600">PER</span>
                                                   <span className="text-[9px] text-gray-400">{h.per != null ? h.per.toFixed(2) : '—'}</span>
                                                   <span className="text-[9px] text-gray-600">|</span>
-                                                  <span className="text-[9px] text-gray-600">선행</span>
                                                   <span className="text-[9px] text-gray-400">{h.fper != null ? h.fper.toFixed(2) : '—'}</span>
                                                 </div>
-                                                {idx === 0 && holdingsFetchDate[item.name] && (
-                                                  <div className="text-[9px] text-gray-600/60 mt-0.5">확인: {holdingsFetchDate[item.name]}</div>
-                                                )}
                                               </div>
                                             </td>
                                           );
@@ -1030,15 +1025,12 @@ export default function IntegratedDashboard({
                                           <td colSpan={3} className="py-1.5 px-3 text-center align-middle">
                                             {hasAny ? (
                                               <span className="text-[10px] text-gray-500">
-                                                PER <span className="text-gray-300">{info.per != null ? info.per.toFixed(2) : '—'}</span>
+                                                <span className="text-gray-300">{info.per != null ? info.per.toFixed(2) : '—'}</span>
                                                 <span className="mx-1.5 text-gray-700">|</span>
-                                                선행PER <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
+                                                <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
                                               </span>
                                             ) : (
                                               <span className="text-[9px] text-gray-700">—</span>
-                                            )}
-                                            {holdingsFetchDate[item.name] && (
-                                              <span className="text-[9px] text-gray-600/60 ml-2">확인: {holdingsFetchDate[item.name]}</span>
                                             )}
                                           </td>
                                         );
