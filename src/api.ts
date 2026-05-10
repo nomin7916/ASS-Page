@@ -381,8 +381,41 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
   return null;
 };
 
+// ── localStorage 캐시 헬퍼 (holdings·PER 영속화) ────────────────────────────
+const _ETF_HOLDINGS_LS_KEY = 'etfHoldingsCache_v1';
+const _ETF_HOLDINGS_LS_TTL = 7 * 24 * 60 * 60 * 1000;
+const _STOCK_PER_LS_KEY = 'stockPerCache_v1';
+const _STOCK_PER_LS_TTL = 2 * 24 * 60 * 60 * 1000;
+
+function _fmtDate(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getFullYear()).slice(2)}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function _lsGet<T>(key: string, code: string, ttl: number): { data: T; fetchedAt: string } | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const cache = JSON.parse(raw) as Record<string, { data: T; ts: number; fetchedAt: string }>;
+    const entry = cache[code];
+    if (!entry || Date.now() - entry.ts > ttl) return null;
+    return { data: entry.data, fetchedAt: entry.fetchedAt };
+  } catch { return null; }
+}
+
+function _lsSet<T>(key: string, code: string, data: T, fetchedAt: string): void {
+  try {
+    const raw = localStorage.getItem(key);
+    const cache: Record<string, { data: unknown; ts: number; fetchedAt: string }> = raw ? JSON.parse(raw) : {};
+    cache[code] = { data, ts: Date.now(), fetchedAt };
+    localStorage.setItem(key, JSON.stringify(cache));
+  } catch {}
+}
+
 // ── ETF 구성종목 Top3 조회 (네이버 증권) ────────────────────────────────────
 const _etfHoldingsCache = new Map<string, { data: Array<{ name: string; code: string; ratio: number }> | null; ts: number }>();
+const _etfHoldingsFetchAt = new Map<string, string>();
+export const getEtfHoldingsFetchAt = (code: string): string | null => _etfHoldingsFetchAt.get(code) ?? null;
 
 const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio: number }> | null => {
   const list = data?.etfTop10MajorConstituentAssets ?? data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? (Array.isArray(data) ? data : null) ?? data?.data ?? [];
@@ -455,17 +488,57 @@ const _fetchYahooEtfHoldings = async (
 export const fetchEtfTopHoldings = async (
   code: string
 ): Promise<Array<{ name: string; code: string; ratio: number }> | null> => {
+  type H = Array<{ name: string; code: string; ratio: number }>;
+  const save = (result: H | null) => {
+    const fetchedAt = _fmtDate(Date.now());
+    _etfHoldingsFetchAt.set(code, fetchedAt);
+    _lsSet<H | null>(_ETF_HOLDINGS_LS_KEY, code, result, fetchedAt);
+    _etfHoldingsCache.set(code, { data: result, ts: Date.now() });
+  };
+
   const cached = _etfHoldingsCache.get(code);
-  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.data;
+  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+    if (!_etfHoldingsFetchAt.has(code)) {
+      const ls = _lsGet<H>(_ETF_HOLDINGS_LS_KEY, code, _ETF_HOLDINGS_LS_TTL);
+      if (ls) _etfHoldingsFetchAt.set(code, ls.fetchedAt);
+    }
+    return cached.data;
+  }
 
   // US ETF (알파벳 1~6자): Yahoo Finance topHoldings
   if (/^[A-Za-z]{1,6}$/.test(code)) {
+    const ls = _lsGet<H>(_ETF_HOLDINGS_LS_KEY, code, _ETF_HOLDINGS_LS_TTL);
+    if (ls) {
+      _etfHoldingsFetchAt.set(code, ls.fetchedAt);
+      _etfHoldingsCache.set(code, { data: ls.data, ts: Date.now() });
+      return ls.data;
+    }
     const result = await _fetchYahooEtfHoldings(code);
-    _etfHoldingsCache.set(code, { data: result, ts: Date.now() });
+    save(result);
     return result;
   }
 
-  // Naver etfAnalysis — CORS 허용이므로 클라이언트에서 직접 조회
+  // localStorage 캐시 확인 (7일 TTL)
+  const ls = _lsGet<H>(_ETF_HOLDINGS_LS_KEY, code, _ETF_HOLDINGS_LS_TTL);
+  if (ls) {
+    _etfHoldingsFetchAt.set(code, ls.fetchedAt);
+    _etfHoldingsCache.set(code, { data: ls.data, ts: Date.now() });
+    return ls.data;
+  }
+
+  // 1순위: 서버사이드 /api/etf-holdings (CORS 제한 없음)
+  try {
+    const res = await fetch(`/api/etf-holdings?code=${code}`, { signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        save(data);
+        return data;
+      }
+    }
+  } catch {}
+
+  // 2순위: Naver etfAnalysis 직접 조회 (CORS 허용 환경 fallback)
   try {
     const res = await fetch(
       `https://m.stock.naver.com/api/stock/${code}/etfAnalysis`,
@@ -476,26 +549,17 @@ export const fetchEtfTopHoldings = async (
       const rawList: any[] = data?.etfTop10MajorConstituentAssets ?? [];
       if (Array.isArray(rawList) && rawList.length > 0) {
         if (rawList[0]?.etfWeight === '-') {
-          // 해외 ETF: etfBaseIndex → 미국 ETF → Yahoo Finance topHoldings
           const usTicker = _matchIndexToUsTicker(data?.etfBaseIndex ?? '');
           if (usTicker) {
             const yahooResult = await _fetchYahooEtfHoldings(usTicker);
-            if (yahooResult) {
-              _etfHoldingsCache.set(code, { data: yahooResult, ts: Date.now() });
-              return yahooResult;
-            }
+            if (yahooResult) { save(yahooResult); return yahooResult; }
           }
-          // Yahoo 실패: Naver 이름만 반환 (비중 0)
           const fallback = _parseHoldingList(data);
-          _etfHoldingsCache.set(code, { data: fallback, ts: Date.now() });
+          save(fallback);
           return fallback;
         }
-        // 국내 ETF: etfWeight 직접 파싱
         const result = _parseHoldingList(data);
-        if (result) {
-          _etfHoldingsCache.set(code, { data: result, ts: Date.now() });
-          return result;
-        }
+        if (result) { save(result); return result; }
       }
     }
   } catch {}
@@ -506,12 +570,36 @@ export const fetchEtfTopHoldings = async (
 
 // ── 국내 종목 PER / 추정PER 조회 ────────────────────────────────────────────
 const _stockPerCache = new Map<string, { data: { per: number | null; fper: number | null } | null; ts: number }>();
+const _stockPerFetchAt = new Map<string, string>();
+export const getStockPerFetchAt = (code: string): string | null => _stockPerFetchAt.get(code) ?? null;
 
 export const fetchStockPer = async (
   code: string
 ): Promise<{ per: number | null; fper: number | null } | null> => {
+  type P = { per: number | null; fper: number | null };
+  const perSave = (result: P | null) => {
+    const fetchedAt = _fmtDate(Date.now());
+    _stockPerFetchAt.set(code, fetchedAt);
+    _lsSet<P | null>(_STOCK_PER_LS_KEY, code, result, fetchedAt);
+    _stockPerCache.set(code, { data: result, ts: Date.now() });
+  };
+
   const cached = _stockPerCache.get(code);
-  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
+  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) {
+    if (!_stockPerFetchAt.has(code)) {
+      const ls = _lsGet<P>(_STOCK_PER_LS_KEY, code, _STOCK_PER_LS_TTL);
+      if (ls) _stockPerFetchAt.set(code, ls.fetchedAt);
+    }
+    return cached.data;
+  }
+
+  // localStorage 캐시 확인 (2일 TTL)
+  const ls = _lsGet<P>(_STOCK_PER_LS_KEY, code, _STOCK_PER_LS_TTL);
+  if (ls) {
+    _stockPerFetchAt.set(code, ls.fetchedAt);
+    _stockPerCache.set(code, { data: ls.data, ts: Date.now() });
+    return ls.data;
+  }
 
   // 서버사이드 Edge Function 우선 (CORS/401 우회)
   try {
@@ -519,7 +607,7 @@ export const fetchStockPer = async (
     if (res.ok) {
       const d = await res.json();
       if (d.per !== null || d.fper !== null) {
-        _stockPerCache.set(code, { data: d, ts: Date.now() });
+        perSave(d);
         return d;
       }
     }
@@ -531,7 +619,6 @@ export const fetchStockPer = async (
     return isNaN(n) || n <= 0 ? null : n;
   };
 
-  // Naver m.stock은 CORS 허용 → 직접 URL 우선, 프록시 폴백
   const mkProxies = (url: string) => [
     url,
     `/api/proxy?url=${encodeURIComponent(url)}`,
@@ -539,7 +626,6 @@ export const fetchStockPer = async (
     `https://api.codetabs.com/v1/proxy?quest=${url}`,
   ];
 
-  // Step 1: basic API → 현재가 + 직접 PER 필드
   let closePrice: number | null = null;
   let isEtf = false;
   let basicPer: number | null = null;
@@ -557,13 +643,11 @@ export const fetchStockPer = async (
     } catch { continue; }
   }
 
-  // ETF는 EPS 기반 PER 없음
   if (!closePrice || isEtf) {
     _stockPerCache.set(code, { data: null, ts: Date.now() });
     return null;
   }
 
-  // Step 2: finance/annual → EPS 기반 PER 계산
   for (const proxy of mkProxies(`https://m.stock.naver.com/api/stock/${code}/finance/annual`)) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
@@ -590,17 +674,15 @@ export const fetchStockPer = async (
         fper = Math.round(closePrice / consensusY[0].eps * 100) / 100;
       }
 
-      // EPS 계산이 null이면 basic API per 필드로 보완
       const result = { per: per ?? basicPer ?? null, fper };
-      _stockPerCache.set(code, { data: result, ts: Date.now() });
+      perSave(result);
       return result;
     } catch { continue; }
   }
 
-  // finance/annual 완전 실패 시 basic API per 폴백
   if (basicPer != null) {
     const result = { per: basicPer, fper: null };
-    _stockPerCache.set(code, { data: result, ts: Date.now() });
+    perSave(result);
     return result;
   }
 
@@ -620,21 +702,43 @@ const _toValidPer = (v: any): number | null =>
 export const fetchYahooStockPer = async (
   ticker: string
 ): Promise<{ per: number | null; fper: number | null } | null> => {
+  type P = { per: number | null; fper: number | null };
   const key = ticker.toUpperCase();
-  const cached = _yahooPerCache.get(key);
-  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
+  const yahooSave = (result: P | null) => {
+    const fetchedAt = _fmtDate(Date.now());
+    _stockPerFetchAt.set(key, fetchedAt);
+    _lsSet<P | null>(_STOCK_PER_LS_KEY, key, result, fetchedAt);
+    _yahooPerCache.set(key, { data: result, ts: Date.now() });
+  };
 
-  // 서버사이드 Edge Function 우선 — 응답 무조건 신뢰 (클라이언트 fallback 시 CORS 폭발 방지)
+  const cached = _yahooPerCache.get(key);
+  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) {
+    if (!_stockPerFetchAt.has(key)) {
+      const ls = _lsGet<P>(_STOCK_PER_LS_KEY, key, _STOCK_PER_LS_TTL);
+      if (ls) _stockPerFetchAt.set(key, ls.fetchedAt);
+    }
+    return cached.data;
+  }
+
+  // localStorage 캐시 확인 (2일 TTL)
+  const ls = _lsGet<P>(_STOCK_PER_LS_KEY, key, _STOCK_PER_LS_TTL);
+  if (ls) {
+    _stockPerFetchAt.set(key, ls.fetchedAt);
+    _yahooPerCache.set(key, { data: ls.data, ts: Date.now() });
+    return ls.data;
+  }
+
+  // 서버사이드 Edge Function 우선
   try {
     const res = await fetch(`/api/stock-per?ticker=${key}`, { signal: AbortSignal.timeout(10000) });
     if (res.ok) {
       const d = await res.json();
-      _yahooPerCache.set(key, { data: d, ts: Date.now() });
+      yahooSave(d);
       return d;
     }
   } catch {}
 
-  // Naver 해외종목 basic API — 프록시 경유 (overseas API는 CORS 차단)
+  // Naver 해외종목 basic API — 프록시 경유
   for (const suffix of ['.O', '.N', '.A']) {
     const url = `https://m.stock.naver.com/api/overseas/stock/${key}${suffix}/basic`;
     for (const proxy of [`/api/proxy?url=${encodeURIComponent(url)}`]) {
@@ -646,7 +750,7 @@ export const fetchYahooStockPer = async (
         const per = _toValidPer(parseFloat(String(data.per ?? data.perValue ?? '').replace(/,/g, '')));
         if (per !== null) {
           const result = { per, fper: null };
-          _yahooPerCache.set(key, { data: result, ts: Date.now() });
+          yahooSave(result);
           return result;
         }
       } catch { continue; }

@@ -12,7 +12,7 @@ import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cl
 import CustomDatePicker from './CustomDatePicker';
 import { PieLabelOutside } from '../chartUtils';
 import DividendSummaryTable from './DividendSummaryTable';
-import { fetchEtfTopHoldings, fetchStockPer, fetchYahooStockPer } from '../api';
+import { fetchEtfTopHoldings, fetchStockPer, fetchYahooStockPer, getEtfHoldingsFetchAt, getStockPerFetchAt } from '../api';
 
 // 세션 캐시 (컴포넌트 재마운트 간 유지)
 const _etfInfoCache = new Map(); // itemCode → { holdings: [...] | null, ts }
@@ -133,6 +133,7 @@ export default function IntegratedDashboard({
 
   // ETF 구성종목 + PER 데이터 (itemName → holdings[] | { isStock, per, fper } | 'loading')
   const [etfInfoMap, setEtfInfoMap] = useState({});
+  const [holdingsFetchDate, setHoldingsFetchDate] = useState({});
   const fetchingRef = useRef(new Set());
 
   useEffect(() => {
@@ -151,6 +152,7 @@ export default function IntegratedDashboard({
       });
 
       const holdings = await fetchEtfTopHoldings(code);
+      const holdingDate = getEtfHoldingsFetchAt(code);
       if (!holdings || holdings.length === 0) {
         // ETF holdings 조회 실패 → 종목 자체 PER 시도
         const baseCode = code.includes('.') ? code.split('.')[0] : code;
@@ -159,12 +161,16 @@ export default function IntegratedDashboard({
           : isUsTicker(baseCode)
             ? await fetchYahooStockPer(baseCode)
             : null;
+        const perDate = getStockPerFetchAt(isKr6(code) ? code : baseCode);
+        const fetchDate = holdingDate ?? perDate ?? null;
+        if (fetchDate) setHoldingsFetchDate(prev => ({ ...prev, [name]: fetchDate }));
         if (perData?.per != null || perData?.fper != null) {
           setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: perData.per, fper: perData.fper } }));
         } else {
           setEtfInfoMap(prev => ({ ...prev, [name]: { isStock: true, per: null, fper: null } }));
         }
       } else {
+        if (holdingDate) setHoldingsFetchDate(prev => ({ ...prev, [name]: holdingDate }));
         const isOverseasTicker = (c) => /^[A-Za-z]{1,6}$/.test(c || '');
         const perResults = await Promise.all(
           holdings.map(h => {
@@ -1009,6 +1015,9 @@ export default function IntegratedDashboard({
                                                   <span className="text-[9px] text-gray-600">선행</span>
                                                   <span className="text-[9px] text-gray-400">{h.fper != null ? h.fper.toFixed(2) : '—'}</span>
                                                 </div>
+                                                {idx === 0 && holdingsFetchDate[item.name] && (
+                                                  <div className="text-[9px] text-gray-600/60 mt-0.5">확인: {holdingsFetchDate[item.name]}</div>
+                                                )}
                                               </div>
                                             </td>
                                           );
@@ -1027,6 +1036,9 @@ export default function IntegratedDashboard({
                                               </span>
                                             ) : (
                                               <span className="text-[9px] text-gray-700">—</span>
+                                            )}
+                                            {holdingsFetchDate[item.name] && (
+                                              <span className="text-[9px] text-gray-600/60 ml-2">확인: {holdingsFetchDate[item.name]}</span>
                                             )}
                                           </td>
                                         );
