@@ -214,7 +214,11 @@ export default async function handler(request: Request): Promise<Response> {
         return new Response(JSON.stringify(yahooResult), { headers });
       }
     }
-    // 액티브 ETF 또는 Yahoo 실패: Naver 실제 보유 종목명 반환 (비중 '-'→0)
+    // 해외 액티브 ETF: 비중 데이터 없음 → 셀 숨김
+    if (isActiveFund) {
+      return new Response(JSON.stringify(null), { headers });
+    }
+    // 인덱스 ETF인데 Yahoo 실패: Naver 종목명 반환
     const fallback = parseNaverHoldingList(rawList);
     return new Response(JSON.stringify(fallback), { headers });
   }

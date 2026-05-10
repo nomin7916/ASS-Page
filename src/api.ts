@@ -526,10 +526,13 @@ export const fetchEtfTopHoldings = async (
               const yahooResult = await _fetchYahooEtfHoldings(usTicker);
               if (yahooResult) { save(yahooResult); return yahooResult; }
             }
+            const fallback = _parseHoldingList(data);
+            save(fallback);
+            return fallback;
           }
-          const fallback = _parseHoldingList(data);
-          save(fallback);
-          return fallback;
+          // 해외 액티브 ETF: 비중 데이터 없음 → null (셀 숨김)
+          save(null);
+          return null;
         }
         const result = _parseHoldingList(data);
         if (result) { save(result); return result; }
