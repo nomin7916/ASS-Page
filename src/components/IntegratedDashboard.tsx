@@ -12,7 +12,7 @@ import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cl
 import CustomDatePicker from './CustomDatePicker';
 import { PieLabelOutside } from '../chartUtils';
 import DividendSummaryTable from './DividendSummaryTable';
-import { fetchEtfTopHoldings, fetchStockPer, fetchYahooStockPer, getEtfHoldingsFetchAt, getStockPerFetchAt } from '../api';
+import { fetchEtfTopHoldings, fetchStockPer, fetchYahooStockPer, getEtfHoldingsFetchAt, getStockPerFetchAt, injectEtfCacheFromDrive } from '../api';
 
 // 세션 캐시 (컴포넌트 재마운트 간 유지)
 const _etfInfoCache = new Map(); // itemCode → { holdings: [...] | null, ts }
@@ -104,6 +104,7 @@ export default function IntegratedDashboard({
   intDefaultSelectionResult,
   matongClosedIds = {},
   setMatongClosedIds,
+  etfDriveCache = null,
 }) {
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -1040,6 +1041,24 @@ export default function IntegratedDashboard({
                                             {holdingsFetchDate[item.name] && (
                                               <span className="text-[9px] text-gray-600/60 ml-2">확인: {holdingsFetchDate[item.name]}</span>
                                             )}
+                                          </td>
+                                        );
+                                      }
+                                      // Drive 폴백 버튼: API 실패 + Drive에 해당 코드 캐시 존재
+                                      const driveEntry = etfDriveCache?.[item.code];
+                                      if (driveEntry?.holdings?.length > 0) {
+                                        return (
+                                          <td colSpan={3} className="py-1.5 px-2 text-center align-middle">
+                                            <button
+                                              className="text-[9px] text-sky-500/70 hover:text-sky-400 border border-sky-700/40 hover:border-sky-500/60 rounded px-2 py-0.5 transition-colors"
+                                              onClick={() => {
+                                                injectEtfCacheFromDrive({ [item.code]: driveEntry });
+                                                setEtfInfoMap(prev => ({ ...prev, [item.name]: driveEntry.holdings }));
+                                                if (driveEntry.fetchedAt) setHoldingsFetchDate(prev => ({ ...prev, [item.name]: driveEntry.fetchedAt }));
+                                              }}
+                                            >
+                                              Drive 데이터 적용 ({driveEntry.fetchedAt})
+                                            </button>
                                           </td>
                                         );
                                       }

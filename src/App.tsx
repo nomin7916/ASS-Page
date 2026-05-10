@@ -344,7 +344,7 @@ export default function App() {
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
-    initSession,
+    initSession, etfDriveCache,
   } = useDriveSync({
     authUser,
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
@@ -2018,6 +2018,7 @@ export default function App() {
             intRefAreaRight={intRefAreaRight}
             intCatDonutData={intCatDonutData}
             intHoldingsDonutData={intHoldingsDonutData}
+            etfDriveCache={etfDriveCache}
             intDepositEvents={intDepositEvents}
             hoveredIntCatSlice={hoveredIntCatSlice}
             hoveredIntHoldSlice={hoveredIntHoldSlice}

@@ -381,7 +381,7 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
   return null;
 };
 
-// ── localStorage 캐시 헬퍼 (holdings·PER 영속화) ────────────────────────────
+// ── sessionStorage 캐시 헬퍼 (holdings·PER 영속화) ────────────────────────────
 const _ETF_HOLDINGS_LS_KEY = 'etfHoldingsCache_v1';
 const _ETF_HOLDINGS_LS_TTL = 7 * 24 * 60 * 60 * 1000;
 const _STOCK_PER_LS_KEY = 'stockPerCache_v1';
@@ -394,7 +394,7 @@ function _fmtDate(ms: number): string {
 
 function _lsGet<T>(key: string, code: string, ttl: number): { data: T; fetchedAt: string } | null {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = sessionStorage.getItem(key);
     if (!raw) return null;
     const cache = JSON.parse(raw) as Record<string, { data: T; ts: number; fetchedAt: string }>;
     const entry = cache[code];
@@ -405,10 +405,10 @@ function _lsGet<T>(key: string, code: string, ttl: number): { data: T; fetchedAt
 
 function _lsSet<T>(key: string, code: string, data: T, fetchedAt: string): void {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = sessionStorage.getItem(key);
     const cache: Record<string, { data: unknown; ts: number; fetchedAt: string }> = raw ? JSON.parse(raw) : {};
     cache[code] = { data, ts: Date.now(), fetchedAt };
-    localStorage.setItem(key, JSON.stringify(cache));
+    sessionStorage.setItem(key, JSON.stringify(cache));
   } catch {}
 }
 
@@ -416,6 +416,29 @@ function _lsSet<T>(key: string, code: string, data: T, fetchedAt: string): void 
 const _etfHoldingsCache = new Map<string, { data: Array<{ name: string; code: string; ratio: number }> | null; ts: number }>();
 const _etfHoldingsFetchAt = new Map<string, string>();
 export const getEtfHoldingsFetchAt = (code: string): string | null => _etfHoldingsFetchAt.get(code) ?? null;
+
+// Drive 저장용: 현재 유효한 ETF holdings 스냅샷 반환
+export const getEtfCacheSnapshot = (): Record<string, { holdings: Array<{ name: string; code: string; ratio: number }> | null; fetchedAt: string }> => {
+  const result: Record<string, { holdings: Array<{ name: string; code: string; ratio: number }> | null; fetchedAt: string }> = {};
+  _etfHoldingsCache.forEach((entry, code) => {
+    if (entry.data !== null && _etfHoldingsFetchAt.has(code)) {
+      result[code] = { holdings: entry.data, fetchedAt: _etfHoldingsFetchAt.get(code)! };
+    }
+  });
+  return result;
+};
+
+// Drive 로드 후 주입: 메모리 + sessionStorage 캐시를 Drive 데이터로 채움
+export const injectEtfCacheFromDrive = (
+  data: Record<string, { holdings: Array<{ name: string; code: string; ratio: number }> | null; fetchedAt: string }>
+): void => {
+  Object.entries(data).forEach(([code, entry]) => {
+    if (!entry?.holdings) return;
+    _etfHoldingsFetchAt.set(code, entry.fetchedAt);
+    _etfHoldingsCache.set(code, { data: entry.holdings, ts: Date.now() - 23 * 60 * 60 * 1000 });
+    _lsSet<typeof entry.holdings>(_ETF_HOLDINGS_LS_KEY, code, entry.holdings, entry.fetchedAt);
+  });
+};
 
 const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio: number }> | null => {
   const list = data?.etfTop10MajorConstituentAssets ?? data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? (Array.isArray(data) ? data : null) ?? data?.data ?? [];
@@ -518,7 +541,7 @@ export const fetchEtfTopHoldings = async (
     return result;
   }
 
-  // localStorage 캐시 확인 (7일 TTL)
+  // sessionStorage 캐시 확인 (7일 TTL)
   const ls = _lsGet<H>(_ETF_HOLDINGS_LS_KEY, code, _ETF_HOLDINGS_LS_TTL);
   if (ls) {
     _etfHoldingsFetchAt.set(code, ls.fetchedAt);
@@ -593,7 +616,7 @@ export const fetchStockPer = async (
     return cached.data;
   }
 
-  // localStorage 캐시 확인 (2일 TTL)
+  // sessionStorage 캐시 확인 (2일 TTL)
   const ls = _lsGet<P>(_STOCK_PER_LS_KEY, code, _STOCK_PER_LS_TTL);
   if (ls) {
     _stockPerFetchAt.set(code, ls.fetchedAt);
@@ -720,7 +743,7 @@ export const fetchYahooStockPer = async (
     return cached.data;
   }
 
-  // localStorage 캐시 확인 (2일 TTL)
+  // sessionStorage 캐시 확인 (2일 TTL)
   const ls = _lsGet<P>(_STOCK_PER_LS_KEY, key, _STOCK_PER_LS_TTL);
   if (ls) {
     _stockPerFetchAt.set(key, ls.fetchedAt);
