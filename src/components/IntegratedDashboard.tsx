@@ -978,6 +978,7 @@ export default function IntegratedDashboard({
                                         ? <a href={getStockUrl(item.code)} target="_blank" rel="noopener noreferrer" style={{ color: itemColor }} className="hover:underline">{num}. {item.name}</a>
                                         : <span style={{ color: itemColor }}>{num}. {item.name}</span>
                                       }
+                                      {item.code && <div className="text-[9px] text-gray-600 mt-0.5">({item.code})</div>}
                                     </td>
                                     <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(item.value)}</td>
                                     <td className="py-1.5 px-3 border-r border-gray-700 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
