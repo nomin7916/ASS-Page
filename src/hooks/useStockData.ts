@@ -154,8 +154,18 @@ export function useStockData({
 
   const handleCompStockBlur = async (index, code) => {
     if (!code) return;
-    const d = isKoreanCode(code) ? await fetchStockInfo(code) : await fetchUsStockInfo(code);
-    const resolvedName = d?.name || code;
+    // 포트폴리오에 같은 코드가 있으면 저장된 종목명 재사용 (API 호출 불필요)
+    let resolvedName: string | null = null;
+    for (const p of portfoliosRef.current) {
+      const match = (p.portfolio || []).find((item: any) => item.code === code && item.name);
+      if (match) { resolvedName = match.name; break; }
+    }
+    if (!resolvedName) {
+      // 6자리 순수 숫자 또는 6자리 영숫자 혼합(한국 ETF 코드) → 한국 API
+      const isKorean = /^[A-Z0-9]{6}$/i.test(code) && !/^[A-Z]+$/.test(code);
+      const d = isKorean ? await fetchStockInfo(code) : await fetchUsStockInfo(code);
+      resolvedName = d?.name || code;
+    }
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], name: resolvedName }; return n; });
   };
 
