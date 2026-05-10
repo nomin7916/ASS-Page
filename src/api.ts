@@ -518,10 +518,14 @@ export const fetchEtfTopHoldings = async (
       const rawList: any[] = data?.etfTop10MajorConstituentAssets ?? [];
       if (Array.isArray(rawList) && rawList.length > 0) {
         if (rawList[0]?.etfWeight === '-') {
-          const usTicker = _matchIndexToUsTicker(data?.etfBaseIndex ?? '');
-          if (usTicker) {
-            const yahooResult = await _fetchYahooEtfHoldings(usTicker);
-            if (yahooResult) { save(yahooResult); return yahooResult; }
+          const etfItemName: string = data?.itemName ?? '';
+          const isActiveFund = /액티브|active/i.test(etfItemName);
+          if (!isActiveFund) {
+            const usTicker = _matchIndexToUsTicker(data?.etfBaseIndex ?? '');
+            if (usTicker) {
+              const yahooResult = await _fetchYahooEtfHoldings(usTicker);
+              if (yahooResult) { save(yahooResult); return yahooResult; }
+            }
           }
           const fallback = _parseHoldingList(data);
           save(fallback);

@@ -188,29 +188,33 @@ export default async function handler(request: Request): Promise<Response> {
   const rawList: any[] = naverData?.etfTop10MajorConstituentAssets ?? [];
   const isOverseas = Array.isArray(rawList) && rawList.length > 0 && rawList[0]?.etfWeight === '-';
   const baseIndex: string = naverData?.etfBaseIndex ?? '';
-  const mappedTicker = isOverseas ? matchIndexToUsTicker(baseIndex) : null;
+  const etfName: string = naverData?.itemName ?? '';
+  // 액티브 ETF는 인덱스 매핑 불가 — 실제 Naver 보유 종목 사용
+  const isActiveFund = /액티브|active/i.test(etfName);
+  const mappedTicker = (isOverseas && !isActiveFund) ? matchIndexToUsTicker(baseIndex) : null;
 
   if (debug) {
     return new Response(JSON.stringify({
-      etfName: naverData.itemName,
+      etfName,
       etfBaseIndex: baseIndex,
       isOverseas,
+      isActiveFund,
       mappedTicker,
-      sample: rawList.slice(0, 2).map((x: any) => ({
+      sample: rawList.slice(0, 3).map((x: any) => ({
         name: x.itemName, code: x.itemCode, etfWeight: x.etfWeight,
       })),
     }, null, 2), { headers });
   }
 
   if (isOverseas) {
-    // 1순위: 매핑된 US 티커로 Yahoo Finance 조회 (crumb 인증 포함)
     if (mappedTicker) {
+      // 인덱스 ETF: Yahoo Finance crumb 인증으로 실제 비중 조회
       const yahooResult = await fetchYahooHoldings(mappedTicker);
       if (yahooResult) {
         return new Response(JSON.stringify(yahooResult), { headers });
       }
     }
-    // 2순위: Naver 원본 데이터 반환 (비중 없이 이름만)
+    // 액티브 ETF 또는 Yahoo 실패: Naver 실제 보유 종목명 반환 (비중 '-'→0)
     const fallback = parseNaverHoldingList(rawList);
     return new Response(JSON.stringify(fallback), { headers });
   }
