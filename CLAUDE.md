@@ -131,35 +131,22 @@ markAsRead() / clearNotificationLog()
 
 ## 브라우저 저장소 정책
 
-### ETF 비중·PER 데이터 3단계 저장 전략
+### ETF 비중·PER 데이터 — 메모리 캐시만 사용
 
-ETF 구성종목 비중(holdings)과 PER 데이터는 외부 API 캐시 데이터이므로 아래 우선순위로 관리한다.
+ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map)에만** 저장한다.
 
-```
-1순위: sessionStorage (in-session 캐시)
-  - ETF holdings: 7일 TTL / PER: 2일 TTL
-  - 탭 닫으면 자동 소멸 → 계정 오염 없음, 새로고침은 유지
-  - 파일: src/api.ts (_lsGet/_lsSet 함수가 sessionStorage 사용)
-
-2순위: API 실시간 조회 (서버사이드 우선)
-  - sessionStorage 미스 시 /api/etf-holdings, /api/stock-per 서버사이드 호출
-  - 실패 시 직접 Naver 클라이언트 폴백
-
-3순위: Google Drive 폴백 (수동 버튼)
-  - API 조회 실패 시 → 테이블에 "Drive 데이터 적용 (YY/MM/DD)" 버튼 표시
-  - 사용자가 명시적으로 눌렀을 때만 Drive 데이터 적용 (자동 로드 X → 속도 보호)
-  - 저장 파일: portfolio_etf_cache.json (DRIVE_FILES.ETF_CACHE)
-  - 저장 시점: 포트폴리오 변경으로 saveAllToDrive가 실행될 때 ETF 캐시 스냅샷 함께 저장 (fire-and-forget)
-  - beforeunload 저장 금지: 비동기 Drive 저장은 탭 종료 시 완료 보장 불가
-```
+- sessionStorage/localStorage 사용 금지: 같은 탭에서 다른 사용자가 로그인하면 이전 사용자 데이터 노출
+- Google Drive 저장 금지: ETF API 캐시는 사용자 데이터가 아님, Drive 저장 불필요
+- 페이지 새로고침 시 재조회: 서버사이드 `/api/etf-holdings`, `/api/stock-per` Edge Function 경유
+- 수집일 "확인: YY/MM/DD"는 `_etfHoldingsFetchAt`, `_stockPerFetchAt` Map에 인메모리 보관
 
 ### localStorage 사용 제한 — 다중 사용자 계정 오염 방지
 
 이 앱은 **하나의 디바이스에서 여러 Google 계정이 번갈아 로그인**하는 사용 패턴이 있다.
-`localStorage`는 브라우저 전체에서 공유되므로 사용자 A의 캐시 데이터가 사용자 B에게 노출될 수 있다.
+**같은 탭에서 로그아웃→로그인 시 sessionStorage도 유지**되므로 API 캐시 데이터도 오염 위험이 있다.
 
 **원칙:**
-- `localStorage`는 **원칙적으로 사용 금지**, `sessionStorage` 사용
+- `localStorage`, `sessionStorage` 모두 API 캐시에 **사용 금지**
 - 예외: 사용자 무관한 공통 데이터 (공휴일 등) — `localStorage` 유지 허용
 - `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v1`: 공휴일 데이터이므로 예외 허용
 

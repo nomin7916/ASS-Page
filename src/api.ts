@@ -381,35 +381,9 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
   return null;
 };
 
-// ── sessionStorage 캐시 헬퍼 (holdings·PER 영속화) ────────────────────────────
-const _ETF_HOLDINGS_LS_KEY = 'etfHoldingsCache_v1';
-const _ETF_HOLDINGS_LS_TTL = 7 * 24 * 60 * 60 * 1000;
-const _STOCK_PER_LS_KEY = 'stockPerCache_v1';
-const _STOCK_PER_LS_TTL = 2 * 24 * 60 * 60 * 1000;
-
 function _fmtDate(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getFullYear()).slice(2)}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function _lsGet<T>(key: string, code: string, ttl: number): { data: T; fetchedAt: string } | null {
-  try {
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return null;
-    const cache = JSON.parse(raw) as Record<string, { data: T; ts: number; fetchedAt: string }>;
-    const entry = cache[code];
-    if (!entry || Date.now() - entry.ts > ttl) return null;
-    return { data: entry.data, fetchedAt: entry.fetchedAt };
-  } catch { return null; }
-}
-
-function _lsSet<T>(key: string, code: string, data: T, fetchedAt: string): void {
-  try {
-    const raw = sessionStorage.getItem(key);
-    const cache: Record<string, { data: unknown; ts: number; fetchedAt: string }> = raw ? JSON.parse(raw) : {};
-    cache[code] = { data, ts: Date.now(), fetchedAt };
-    sessionStorage.setItem(key, JSON.stringify(cache));
-  } catch {}
 }
 
 // ── ETF 구성종목 Top3 조회 (네이버 증권) ────────────────────────────────────
@@ -417,28 +391,6 @@ const _etfHoldingsCache = new Map<string, { data: Array<{ name: string; code: st
 const _etfHoldingsFetchAt = new Map<string, string>();
 export const getEtfHoldingsFetchAt = (code: string): string | null => _etfHoldingsFetchAt.get(code) ?? null;
 
-// Drive 저장용: 현재 유효한 ETF holdings 스냅샷 반환
-export const getEtfCacheSnapshot = (): Record<string, { holdings: Array<{ name: string; code: string; ratio: number }> | null; fetchedAt: string }> => {
-  const result: Record<string, { holdings: Array<{ name: string; code: string; ratio: number }> | null; fetchedAt: string }> = {};
-  _etfHoldingsCache.forEach((entry, code) => {
-    if (entry.data !== null && _etfHoldingsFetchAt.has(code)) {
-      result[code] = { holdings: entry.data, fetchedAt: _etfHoldingsFetchAt.get(code)! };
-    }
-  });
-  return result;
-};
-
-// Drive 로드 후 주입: 메모리 + sessionStorage 캐시를 Drive 데이터로 채움
-export const injectEtfCacheFromDrive = (
-  data: Record<string, { holdings: Array<{ name: string; code: string; ratio: number }> | null; fetchedAt: string }>
-): void => {
-  Object.entries(data).forEach(([code, entry]) => {
-    if (!entry?.holdings) return;
-    _etfHoldingsFetchAt.set(code, entry.fetchedAt);
-    _etfHoldingsCache.set(code, { data: entry.holdings, ts: Date.now() - 23 * 60 * 60 * 1000 });
-    _lsSet<typeof entry.holdings>(_ETF_HOLDINGS_LS_KEY, code, entry.holdings, entry.fetchedAt);
-  });
-};
 
 const _parseHoldingList = (data: any): Array<{ name: string; code: string; ratio: number }> | null => {
   const list = data?.etfTop10MajorConstituentAssets ?? data?.etfComponentStockList ?? data?.holdingList ?? data?.etfHoldingList ?? data?.items ?? (Array.isArray(data) ? data : null) ?? data?.data ?? [];
@@ -513,40 +465,18 @@ export const fetchEtfTopHoldings = async (
 ): Promise<Array<{ name: string; code: string; ratio: number }> | null> => {
   type H = Array<{ name: string; code: string; ratio: number }>;
   const save = (result: H | null) => {
-    const fetchedAt = _fmtDate(Date.now());
-    _etfHoldingsFetchAt.set(code, fetchedAt);
-    _lsSet<H | null>(_ETF_HOLDINGS_LS_KEY, code, result, fetchedAt);
+    _etfHoldingsFetchAt.set(code, _fmtDate(Date.now()));
     _etfHoldingsCache.set(code, { data: result, ts: Date.now() });
   };
 
   const cached = _etfHoldingsCache.get(code);
-  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
-    if (!_etfHoldingsFetchAt.has(code)) {
-      const ls = _lsGet<H>(_ETF_HOLDINGS_LS_KEY, code, _ETF_HOLDINGS_LS_TTL);
-      if (ls) _etfHoldingsFetchAt.set(code, ls.fetchedAt);
-    }
-    return cached.data;
-  }
+  if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) return cached.data;
 
   // US ETF (알파벳 1~6자): Yahoo Finance topHoldings
   if (/^[A-Za-z]{1,6}$/.test(code)) {
-    const ls = _lsGet<H>(_ETF_HOLDINGS_LS_KEY, code, _ETF_HOLDINGS_LS_TTL);
-    if (ls) {
-      _etfHoldingsFetchAt.set(code, ls.fetchedAt);
-      _etfHoldingsCache.set(code, { data: ls.data, ts: Date.now() });
-      return ls.data;
-    }
     const result = await _fetchYahooEtfHoldings(code);
     save(result);
     return result;
-  }
-
-  // sessionStorage 캐시 확인 (7일 TTL)
-  const ls = _lsGet<H>(_ETF_HOLDINGS_LS_KEY, code, _ETF_HOLDINGS_LS_TTL);
-  if (ls) {
-    _etfHoldingsFetchAt.set(code, ls.fetchedAt);
-    _etfHoldingsCache.set(code, { data: ls.data, ts: Date.now() });
-    return ls.data;
   }
 
   // 1순위: 서버사이드 /api/etf-holdings (CORS 제한 없음)
@@ -601,28 +531,12 @@ export const fetchStockPer = async (
 ): Promise<{ per: number | null; fper: number | null } | null> => {
   type P = { per: number | null; fper: number | null };
   const perSave = (result: P | null) => {
-    const fetchedAt = _fmtDate(Date.now());
-    _stockPerFetchAt.set(code, fetchedAt);
-    _lsSet<P | null>(_STOCK_PER_LS_KEY, code, result, fetchedAt);
+    _stockPerFetchAt.set(code, _fmtDate(Date.now()));
     _stockPerCache.set(code, { data: result, ts: Date.now() });
   };
 
   const cached = _stockPerCache.get(code);
-  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) {
-    if (!_stockPerFetchAt.has(code)) {
-      const ls = _lsGet<P>(_STOCK_PER_LS_KEY, code, _STOCK_PER_LS_TTL);
-      if (ls) _stockPerFetchAt.set(code, ls.fetchedAt);
-    }
-    return cached.data;
-  }
-
-  // sessionStorage 캐시 확인 (2일 TTL)
-  const ls = _lsGet<P>(_STOCK_PER_LS_KEY, code, _STOCK_PER_LS_TTL);
-  if (ls) {
-    _stockPerFetchAt.set(code, ls.fetchedAt);
-    _stockPerCache.set(code, { data: ls.data, ts: Date.now() });
-    return ls.data;
-  }
+  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
 
   // 서버사이드 Edge Function 우선 (CORS/401 우회)
   try {
@@ -728,28 +642,12 @@ export const fetchYahooStockPer = async (
   type P = { per: number | null; fper: number | null };
   const key = ticker.toUpperCase();
   const yahooSave = (result: P | null) => {
-    const fetchedAt = _fmtDate(Date.now());
-    _stockPerFetchAt.set(key, fetchedAt);
-    _lsSet<P | null>(_STOCK_PER_LS_KEY, key, result, fetchedAt);
+    _stockPerFetchAt.set(key, _fmtDate(Date.now()));
     _yahooPerCache.set(key, { data: result, ts: Date.now() });
   };
 
   const cached = _yahooPerCache.get(key);
-  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) {
-    if (!_stockPerFetchAt.has(key)) {
-      const ls = _lsGet<P>(_STOCK_PER_LS_KEY, key, _STOCK_PER_LS_TTL);
-      if (ls) _stockPerFetchAt.set(key, ls.fetchedAt);
-    }
-    return cached.data;
-  }
-
-  // sessionStorage 캐시 확인 (2일 TTL)
-  const ls = _lsGet<P>(_STOCK_PER_LS_KEY, key, _STOCK_PER_LS_TTL);
-  if (ls) {
-    _stockPerFetchAt.set(key, ls.fetchedAt);
-    _yahooPerCache.set(key, { data: ls.data, ts: Date.now() });
-    return ls.data;
-  }
+  if (cached && Date.now() - cached.ts < 60 * 60 * 1000) return cached.data;
 
   // 서버사이드 Edge Function 우선
   try {

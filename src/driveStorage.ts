@@ -24,7 +24,6 @@ export const DRIVE_FILES = {
   NOTIFICATION_LOG:  'notification_log.json',  // 알림 이력 (기기 간 공유)
   SESSION:           'portfolio_session.json',  // 세션 관리 (단일 기기 접속 강제)
   SETTINGS:          'app_settings.json',       // 전역 앱 설정 캐시 (youtubeUrl, notebookLinks)
-  ETF_CACHE:         'portfolio_etf_cache.json', // ETF 구성종목 비중 스냅샷 (API 폴백용)
 };
 
 // 동시 호출 중복 방지 — 이메일 기준 캐시 (토큰 교체 시에도 폴더 중복 생성 방지)

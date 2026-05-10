@@ -6,7 +6,6 @@ import {
   listBackups, loadBackupById, DriveBackupEntry,
   grantAdminReadAccess, revokeAdminReadAccess,
 } from '../driveStorage';
-import { getEtfCacheSnapshot } from '../api';
 
 function _stripStateForSave(stateData: any) {
   const { stockHistoryMap: _s, marketIndices: _m, marketIndicators: _mi, indicatorHistoryMap: _ih, ...core } = stateData;
@@ -57,7 +56,6 @@ export function useDriveSync({
   const [driveStatus, setDriveStatus] = useState(''); // '' | 'auth_needed' | 'loading' | 'saving' | 'saved' | 'error'
   const [driveToken, setDriveToken] = useState('');
   const [showBackupModal, setShowBackupModal] = useState(false);
-  const [etfDriveCache, setEtfDriveCache] = useState(null); // { [code]: { holdings, fetchedAt } }
   const [backupList, setBackupList] = useState<DriveBackupEntry[]>([]);
   const [backupListLoading, setBackupListLoading] = useState(false);
   const [applyingBackupId, setApplyingBackupId] = useState<string | null>(null);
@@ -129,13 +127,10 @@ export function useDriveSync({
       setDriveStatus('loading');
       const folderId = await ensureDriveFolder(token);
 
-      const [stateData, marketData, etfCacheData] = await Promise.all([
+      const [stateData, marketData] = await Promise.all([
         loadDriveFile(token, folderId, DRIVE_FILES.STATE),
         loadDriveFile(token, folderId, DRIVE_FILES.MARKET),
-        loadDriveFile(token, folderId, DRIVE_FILES.ETF_CACHE).catch(() => null),
       ]);
-
-      if (etfCacheData) setEtfDriveCache(etfCacheData);
       if (!stateData) { setSS('ready'); setDriveStatus(''); return null; }
 
       let stateToApply = stateData as any;
@@ -233,11 +228,6 @@ export function useDriveSync({
       }
       if (versioned) {
         saveVersionedBackup(token, folderId, stateCore, versioned).catch(() => {});
-      }
-      // ETF 캐시 스냅샷 저장 (fire-and-forget — 실패해도 전체 저장에 영향 없음)
-      const etfSnapshot = getEtfCacheSnapshot();
-      if (Object.keys(etfSnapshot).length > 0) {
-        saveDriveFile(token, folderId, DRIVE_FILES.ETF_CACHE, etfSnapshot).catch(() => {});
       }
       await Promise.all([
         Object.keys(shm || {}).length > 0
@@ -657,8 +647,6 @@ export function useDriveSync({
     syncStatusRef,
     adminTransitioningRef,
     ownFolderIdRef,
-    // ETF Drive 캐시
-    etfDriveCache,
     // 함수
     ensureDriveFolder,
     loadFromDrive,
