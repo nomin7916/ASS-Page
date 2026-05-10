@@ -1708,11 +1708,13 @@ export default function App() {
         />
 
         {!showIntegratedDashboard && (
-          <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
+          <div className="w-full max-w-[1200px] mx-auto">
+            <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
+          </div>
         )}
 
         {!showIntegratedDashboard && (<>
-        <div className="flex items-start gap-0 w-full">
+        <div className="flex items-start gap-0 w-full max-w-[1200px] mx-auto">
           <div className="flex-1 flex flex-col gap-6 min-w-0" style={{ paddingBottom: '40vh' }}>
         {activePortfolioAccountType === 'gold' ? (
           <KrxGoldTable

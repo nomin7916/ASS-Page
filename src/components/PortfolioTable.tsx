@@ -260,24 +260,24 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
     )}
     <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full">
       <div className="overflow-x-auto w-full">
-        <table className="w-full text-right table-fixed min-w-[1200px]">
+        <table className="w-full text-right table-fixed min-w-[960px]">
           <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold">
             <tr className="text-center">
               <th className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></th>
-              <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('category')}>구분</th>
-              <th className="py-3 w-[15%] text-center px-4 text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]" onClick={() => onSort('name')}>종목명</th>
-              <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('code')}>코드</th>
-              <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('changeRate')}>등락률</th>
-              <th className="py-3 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('currentPrice')}>{isOverseas ? '현재가(USD)' : '현재가'}</th>
-              <th className="py-3 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('purchasePrice')}>{isOverseas ? '구매단가(USD)' : '구매단가'}</th>
-              <th className="py-3 w-[7%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('quantity')}>보유수량</th>
-              <th className="py-3 w-[9%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('investAmount')}>투자금액</th>
-              <th className="py-3 w-[5%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('investRatio')}>비중</th>
-              <th className="py-3 w-[9%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50" onClick={() => onSort('evalAmount')}>평가금액</th>
-              <th className="py-3 w-[5%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50" onClick={() => onSort('evalRatio')}>비중</th>
-              <th className="py-3 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('returnRate')}>수익률</th>
-              <th className="py-3 w-[7%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('profit')}>차익</th>
-              <th className="py-3 w-[3%] text-center"><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
+              <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('category')}>구분</th>
+              <th className="py-2 w-[15%] text-center px-2 text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]" onClick={() => onSort('name')}>종목명</th>
+              <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('code')}>코드</th>
+              <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('changeRate')}>등락률</th>
+              <th className="py-2 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('currentPrice')}>{isOverseas ? '현재가(USD)' : '현재가'}</th>
+              <th className="py-2 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('purchasePrice')}>{isOverseas ? '구매단가(USD)' : '구매단가'}</th>
+              <th className="py-2 w-[7%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('quantity')}>보유수량</th>
+              <th className="py-2 w-[9%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('investAmount')}>투자금액</th>
+              <th className="py-2 w-[5%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('investRatio')}>비중</th>
+              <th className="py-2 w-[9%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50" onClick={() => onSort('evalAmount')}>평가금액</th>
+              <th className="py-2 w-[5%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50" onClick={() => onSort('evalRatio')}>비중</th>
+              <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('returnRate')}>수익률</th>
+              <th className="py-2 w-[7%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('profit')}>차익</th>
+              <th className="py-2 w-[3%] text-center"><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
             </tr>
           </thead>
           <tbody>
