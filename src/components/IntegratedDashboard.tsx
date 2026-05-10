@@ -27,6 +27,12 @@ const hexToRgba = (hex, alpha) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
+const getStockUrl = (code) => {
+  if (!code) return null;
+  if (/^\d{6}$/.test(code)) return `https://finance.naver.com/item/main.naver?code=${code}`;
+  return `https://finance.yahoo.com/quote/${encodeURIComponent(code)}`;
+};
+
 const blendWithDarkBg = (hex, alpha, bgHex = '#1e293b') => {
   if (!hex || hex.length < 7) return bgHex;
   const r = parseInt(hex.slice(1, 3), 16);
@@ -967,7 +973,10 @@ export default function IntegratedDashboard({
                                       </td>
                                     )}
                                     <td className="py-1.5 px-2 text-center border-r border-gray-700 sticky left-0 z-10 bg-[#1e293b] group-hover:bg-[#1d2d40] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">
-                                      <span style={{ color: itemColor }}>{num}. {item.name}</span>
+                                      {getStockUrl(item.code)
+                                        ? <a href={getStockUrl(item.code)} target="_blank" rel="noopener noreferrer" style={{ color: itemColor }} className="hover:underline">{num}. {item.name}</a>
+                                        : <span style={{ color: itemColor }}>{num}. {item.name}</span>
+                                      }
                                     </td>
                                     <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(item.value)}</td>
                                     <td className="py-1.5 px-3 border-r border-gray-700 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
@@ -1004,7 +1013,10 @@ export default function IntegratedDashboard({
                                             <td key={idx} className={`py-1.5 px-2 align-middle${isLast ? '' : ' border-r border-gray-700'}`}>
                                               <div className="flex flex-col items-center gap-0 leading-tight">
                                                 <div className="flex items-center gap-1 whitespace-nowrap">
-                                                  <span className="text-[10px] text-gray-300 font-medium">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</span>
+                                                  {getStockUrl(h.code)
+                                                    ? <a href={getStockUrl(h.code)} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-300 font-medium hover:text-sky-300 hover:underline">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</a>
+                                                    : <span className="text-[10px] text-gray-300 font-medium">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</span>
+                                                  }
                                                   <span className="text-[9px] text-gray-600">|</span>
                                                   <span className="text-[9px] text-gray-500">{h.ratio > 0 ? h.ratio.toFixed(1) + '%' : '—'}</span>
                                                 </div>
