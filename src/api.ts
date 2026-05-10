@@ -427,7 +427,20 @@ const _matchIndexToUsTicker = (baseIndex: string): string | null => {
   if (u.includes('NIKKEI')) return 'EWJ';
   if (u.includes('HANG SENG')) return 'EWH';
   if (u.includes('GLOBAL CLEAN ENERGY')) return 'ICLN';
+  if (u.includes('BIOTECH')) return 'XBI';
+  if (u.includes('FINANCIAL')) return 'XLF';
+  if (u.includes('ENERGY') && !u.includes('CLEAN')) return 'XLE';
   if (u.includes('REAL ESTATE') || u.includes('REIT')) return 'VNQ';
+  if (u.includes('SEMICONDUCTOR') || u.includes('SOX')) return 'SOXX';
+  if (u.includes('GOLD') || u.includes('GLD')) return 'GLD';
+  if (u.includes('TREASURY') || u.includes('BOND') || u.includes('TLT')) return 'TLT';
+  if (u.includes('DIVIDEND') && (u.includes('US') || u.includes('AMERICA'))) return 'VIG';
+  if (u.includes('CHINA') || u.includes('CSI')) return 'MCHI';
+  if (u.includes('JAPAN') || u.includes('TOPIX')) return 'EWJ';
+  if (u.includes('EUROPE')) return 'EZU';
+  if (u.includes('INDIA')) return 'INDY';
+  if (u.includes('VIETNAM')) return 'VNM';
+  if (u.includes('INDONESIA')) return 'EIDO';
   return null;
 };
 
@@ -435,14 +448,17 @@ const _fetchYahooEtfHoldings = async (
   ticker: string
 ): Promise<Array<{ name: string; code: string; ratio: number }> | null> => {
   const key = ticker.toUpperCase();
-  const targetUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${key}?modules=topHoldings`;
-  const proxies = [
-    targetUrl,
-    `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${targetUrl}`,
-  ];
-  for (const proxy of proxies) {
+  // 1순위: 서버사이드 Edge Function (crumb 인증 포함)
+  try {
+    const res = await fetch(`/api/etf-holdings?code=${key}`, { signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) return data;
+    }
+  } catch {}
+  // 2순위: 직접 조회 (CORS 허용 환경 fallback)
+  const targetUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${key}?modules=topHoldings`;
+  for (const proxy of [targetUrl, `/api/proxy?url=${encodeURIComponent(targetUrl)}`]) {
     try {
       const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) continue;
