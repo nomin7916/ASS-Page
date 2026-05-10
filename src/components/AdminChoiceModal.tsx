@@ -20,20 +20,20 @@ export default function AdminChoiceModal({ onSelectPortfolio, onSelectAdmin, adm
           <p className="text-gray-500 text-xs font-mono">{adminEmail}</p>
           <p className="text-gray-400 text-sm mt-2">이동할 페이지를 선택하세요</p>
         </div>
-        <div className="flex flex-col gap-3">
-          <button
-            onClick={onSelectPortfolio}
-            className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors text-sm"
-          >
-            <LayoutDashboard size={16} />
-            자산관리 페이지
-          </button>
+        <div className="flex flex-row gap-3">
           <button
             onClick={onSelectAdmin}
-            className="w-full flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold py-3.5 px-4 rounded-xl transition-colors text-sm"
+            className="flex-1 flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold py-3.5 px-4 rounded-xl transition-colors text-sm"
           >
             <Settings size={16} />
             관리자 페이지
+          </button>
+          <button
+            onClick={onSelectPortfolio}
+            className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors text-sm"
+          >
+            <LayoutDashboard size={16} />
+            자산관리 페이지
           </button>
         </div>
       </div>
