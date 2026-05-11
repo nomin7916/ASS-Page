@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
@@ -62,6 +62,21 @@ export default function RebalancingPanel({
   onToggleColumn = () => {},
 }) {
   const [editingRatio, setEditingRatio] = useState({});
+  const [dateEditMode, setDateEditMode] = useState(false);
+  const datePickerRef = useRef(null);
+  const formatDisplayDate = (iso) => {
+    if (!iso) return '날짜';
+    const p = iso.split('-');
+    return p.length === 3 ? `${p[0].slice(2)}/${p[1]}/${p[2]}` : iso;
+  };
+  const parseDisplayDate = (text) => {
+    const p = text.replace(/[.\-]/g, '/').split('/');
+    if (p.length === 3) {
+      const y = p[0].length === 2 ? `20${p[0]}` : p[0];
+      return `${y}-${p[1].padStart(2,'0')}-${p[2].padStart(2,'0')}`;
+    }
+    return null;
+  };
 
   const H = (k) => hiddenColumns.includes(k);
 
@@ -227,16 +242,36 @@ export default function RebalancingPanel({
                         <th className="py-2 px-3 min-w-[100px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b] relative">
                           {hideStrip('targetRatio')}
                           <div className="flex flex-col items-center gap-1">
-                            <input
-                              type="date"
-                              className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-gray-600 rounded px-1 py-0.5 w-full cursor-pointer hover:border-gray-500 focus:border-green-500 transition-colors"
-                              value={settings.targetDate || ''}
-                              onChange={e => updateSettingsForType({ ...settings, targetDate: e.target.value })}
-                              onClick={e => e.stopPropagation()}
-                              title="목표 비중 설정 날짜"
-                            />
+                            <div className="relative w-full">
+                              <input
+                                ref={datePickerRef}
+                                type="date"
+                                className="absolute opacity-0 w-0 h-0 pointer-events-none"
+                                value={settings.targetDate || ''}
+                                onChange={e => updateSettingsForType({ ...settings, targetDate: e.target.value })}
+                                tabIndex={-1}
+                              />
+                              {dateEditMode ? (
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-green-500 rounded px-1 py-0.5 w-full text-center"
+                                  defaultValue={formatDisplayDate(settings.targetDate)}
+                                  onBlur={e => { const parsed = parseDisplayDate(e.target.value); if (parsed) updateSettingsForType({ ...settings, targetDate: parsed }); setDateEditMode(false); }}
+                                  onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); e.stopPropagation(); }}
+                                  onClick={e => e.stopPropagation()}
+                                />
+                              ) : (
+                                <span
+                                  className="block text-gray-400 text-[9px] border border-gray-600 rounded px-1 py-0.5 w-full text-center cursor-pointer hover:border-gray-500 bg-gray-800 select-none"
+                                  onClick={e => { e.stopPropagation(); datePickerRef.current?.showPicker?.(); }}
+                                  onDoubleClick={e => { e.stopPropagation(); setDateEditMode(true); }}
+                                  title="클릭: 달력 | 더블클릭: 직접 입력"
+                                >{formatDisplayDate(settings.targetDate)}</span>
+                              )}
+                            </div>
                             <div className="flex items-center gap-1">
-                              <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>목표{arr('targetRatio')}</span>
+                              <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>{arr('targetRatio')}목표</span>
                               <button
                                 onClick={e => {
                                   e.stopPropagation();
