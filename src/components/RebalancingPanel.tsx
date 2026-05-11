@@ -609,6 +609,18 @@ export default function RebalancingPanel({
                         ));
                       })()}
                     </tbody>
+                    <tfoot>
+                      {(() => {
+                        const total = rebalCatDonutData.reduce((s, x) => s + x.value, 0);
+                        return (
+                          <tr className="border-t-2 border-gray-600 bg-gray-800/40">
+                            <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700 text-gray-300">합계</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-white font-bold text-right">{hideAmounts ? '••••••' : activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end gap-0.5"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(total)}</span><span className="text-[11px] text-gray-400">{formatCurrency(total * (marketIndicators.usdkrw || 1))}</span></div> : formatCurrency(total)}</td>
+                            <td className="py-1.5 px-3 text-white font-bold text-right">100%</td>
+                          </tr>
+                        );
+                      })()}
+                    </tfoot>
                   </table>
                 </>
               )}
@@ -655,6 +667,18 @@ export default function RebalancingPanel({
                         </tr>
                       ))}
                     </tbody>
+                    <tfoot>
+                      {(() => {
+                        const total = curCatDonutData.reduce((s, x) => s + x.value, 0);
+                        return (
+                          <tr className="border-t-2 border-gray-600 bg-gray-800/40">
+                            <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700 text-gray-300">합계</td>
+                            <td className="py-1.5 px-3 border-r border-gray-700 text-white font-bold text-right">{hideAmounts ? '••••••' : activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end gap-0.5"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(total / (marketIndicators.usdkrw || 1))}</span><span className="text-[11px] text-gray-400">{formatCurrency(total)}</span></div> : formatCurrency(total)}</td>
+                            <td className="py-1.5 px-3 text-white font-bold text-right">100%</td>
+                          </tr>
+                        );
+                      })()}
+                    </tfoot>
                   </table>
                 </>
               )}

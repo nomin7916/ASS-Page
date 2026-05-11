@@ -132,7 +132,10 @@ export function usePortfolioData({
       catMap[cat].ratio += item.expRatio;
     });
     const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-    const totalCost = rebalanceData.reduce((s, item) => s + (item.cost || 0), 0);
+    const totalCost = rebalanceData.reduce((s, item) => {
+      const eqty = rebalExtraQty[item.id] || 0;
+      return s + (item.cost || 0) + eqty * cleanNum(item.currentPrice);
+    }, 0);
     const remainingDeposit = depositAmount + cleanNum(settings.amount) - totalCost;
     if (remainingDeposit > 0) {
       const nativeTotalEval = activePortfolioAccountType === 'overseas'
@@ -154,7 +157,7 @@ export function usePortfolioData({
         if (ib !== -1) return 1;
         return b.value - a.value;
       });
-  }, [rebalanceData, portfolio, settings, activePortfolioAccountType, totals.totalEval, marketIndicators.usdkrw]);
+  }, [rebalanceData, portfolio, settings, activePortfolioAccountType, totals.totalEval, marketIndicators.usdkrw, rebalExtraQty]);
 
   const curCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
