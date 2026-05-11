@@ -236,6 +236,7 @@ export default function RebalancingPanel({
                               title="목표 비중 설정 날짜"
                             />
                             <div className="flex items-center gap-1">
+                              <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>목표{arr('targetRatio')}</span>
                               <button
                                 onClick={e => {
                                   e.stopPropagation();
@@ -263,7 +264,6 @@ export default function RebalancingPanel({
                                 className={`text-[11px] font-bold leading-none transition-colors select-none ${settings.trackingMode ? 'text-green-400' : 'text-gray-500 hover:text-green-400'}`}
                                 title={settings.trackingMode ? '추적 중 — 클릭하면 해제' : '현재 비중 추적 시작'}
                               >(%)</button>
-                              <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>목표{arr('targetRatio')}</span>
                             </div>
                           </div>
                         </th>
