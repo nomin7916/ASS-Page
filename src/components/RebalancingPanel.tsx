@@ -99,7 +99,7 @@ export default function RebalancingPanel({
   const compactPieTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null;
     const item = payload[0];
-    const pct = ((item.payload?.percent ?? 0) * 100).toFixed(1);
+    const pct = ((item.percent ?? item.payload?.percent ?? 0) * 100).toFixed(1);
     return (
       <div style={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #374151', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 'bold', color: item.fill, whiteSpace: 'nowrap' }}>
         {item.name} {pct}%
