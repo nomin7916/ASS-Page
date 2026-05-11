@@ -19,6 +19,22 @@ const getAssetClass = (cat) => SAFE_CATEGORIES.includes(cat) ? 'S' : 'D';
 const CELL_FOCUS = 'focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500';
 const RO_FOCUS = 'focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none';
 
+const PT_COLS = [
+  { key: 'category', label: '구분' },
+  { key: 'name', label: '종목명' },
+  { key: 'code', label: '코드' },
+  { key: 'changeRate', label: '등락률' },
+  { key: 'currentPrice', label: '현재가' },
+  { key: 'purchasePrice', label: '구매단가' },
+  { key: 'quantity', label: '보유수량' },
+  { key: 'investAmount', label: '투자금액' },
+  { key: 'investRatio', label: '투자비중' },
+  { key: 'evalAmount', label: '평가금액' },
+  { key: 'evalRatio', label: '평가비중' },
+  { key: 'returnRate', label: '수익률' },
+  { key: 'profit', label: '차익' },
+];
+
 const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
   const [mode, setMode] = useState('idle');
   const [dropPos, setDropPos] = useState({ top: 0, left: 0 });
@@ -152,7 +168,7 @@ const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
   );
 };
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, hiddenColumns = [], onToggleColumn = () => {} }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -177,6 +193,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   };
 
   if (!totals) return null;
+
+  const H = (k) => hiddenColumns.includes(k);
 
   const fmtDual = (krwAmount: number) => (
     <div className="flex flex-col items-end gap-0.5">
@@ -212,6 +230,18 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const modalNewQty = fundModal ? fundModal.currentQty + modalAddQty : 0;
   const modalNewInvest = fundModal ? fundModal.currentInvest + modalAddInvestNum : 0;
   const modalAvgPrice = modalNewQty > 0 ? modalNewInvest / modalNewQty : 0;
+
+  const spanColKeys = ['category', 'name', 'code', 'changeRate', 'currentPrice', 'purchasePrice', 'quantity'];
+  const depositColSpan = spanColKeys.filter(k => !H(k)).length;
+  const totalColCount = 15 - hiddenColumns.length;
+
+  const hideStrip = (key) => (
+    <div
+      className="absolute top-0 left-0 right-0 h-3 cursor-pointer z-10 hover:bg-indigo-400/25 transition-colors"
+      onClick={e => { e.stopPropagation(); onToggleColumn(key); }}
+      title="클릭하여 열 숨기기"
+    />
+  );
 
   return (
     <>
@@ -259,24 +289,103 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
       </div>
     )}
     <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full">
+      {hiddenColumns.length > 0 && (
+        <div className="flex items-end gap-1 px-3 pt-2 pb-0 flex-wrap bg-[#080e1c]">
+          {PT_COLS.filter(c => hiddenColumns.includes(c.key)).map(col => (
+            <button
+              key={col.key}
+              onClick={() => onToggleColumn(col.key)}
+              className="px-2.5 py-1 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-t-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors"
+              title={`${col.label} 열 표시`}
+            >
+              {col.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="overflow-x-auto w-full">
         <table className="w-full text-right table-fixed min-w-[960px]">
           <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold">
             <tr className="text-center">
               <th className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></th>
-              <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('category')}>구분</th>
-              <th className="py-2 w-[15%] text-center px-2 text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]" onClick={() => onSort('name')}>종목명</th>
-              <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('code')}>코드</th>
-              <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('changeRate')}>등락률</th>
-              <th className="py-2 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('currentPrice')}>{isOverseas ? '현재가(USD)' : '현재가'}</th>
-              <th className="py-2 w-[8%] text-center cursor-pointer hover:bg-gray-700" onClick={() => onSort('purchasePrice')}>{isOverseas ? '구매단가(USD)' : '구매단가'}</th>
-              <th className="py-2 w-[7%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('quantity')}>보유수량</th>
-              <th className="py-2 w-[9%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('investAmount')}>투자금액</th>
-              <th className="py-2 w-[5%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50" onClick={() => onSort('investRatio')}>비중</th>
-              <th className="py-2 w-[9%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50" onClick={() => onSort('evalAmount')}>평가금액</th>
-              <th className="py-2 w-[5%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50" onClick={() => onSort('evalRatio')}>비중</th>
-              <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('returnRate')}>수익률</th>
-              <th className="py-2 w-[7%] cursor-pointer hover:bg-gray-700" onClick={() => onSort('profit')}>차익</th>
+              {!H('category') && (
+                <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('category')}>
+                  {hideStrip('category')}
+                  구분
+                </th>
+              )}
+              {!H('name') && (
+                <th className="py-2 w-[15%] text-center px-2 text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] relative" onClick={() => onSort('name')}>
+                  {hideStrip('name')}
+                  종목명
+                </th>
+              )}
+              {!H('code') && (
+                <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('code')}>
+                  {hideStrip('code')}
+                  코드
+                </th>
+              )}
+              {!H('changeRate') && (
+                <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('changeRate')}>
+                  {hideStrip('changeRate')}
+                  등락률
+                </th>
+              )}
+              {!H('currentPrice') && (
+                <th className="py-2 w-[8%] text-center cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('currentPrice')}>
+                  {hideStrip('currentPrice')}
+                  {isOverseas ? '현재가(USD)' : '현재가'}
+                </th>
+              )}
+              {!H('purchasePrice') && (
+                <th className="py-2 w-[8%] text-center cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('purchasePrice')}>
+                  {hideStrip('purchasePrice')}
+                  {isOverseas ? '구매단가(USD)' : '구매단가'}
+                </th>
+              )}
+              {!H('quantity') && (
+                <th className="py-2 w-[7%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('quantity')}>
+                  {hideStrip('quantity')}
+                  보유수량
+                </th>
+              )}
+              {!H('investAmount') && (
+                <th className="py-2 w-[9%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('investAmount')}>
+                  {hideStrip('investAmount')}
+                  투자금액
+                </th>
+              )}
+              {!H('investRatio') && (
+                <th className="py-2 w-[5%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('investRatio')}>
+                  {hideStrip('investRatio')}
+                  비중
+                </th>
+              )}
+              {!H('evalAmount') && (
+                <th className="py-2 w-[9%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50 relative" onClick={() => onSort('evalAmount')}>
+                  {hideStrip('evalAmount')}
+                  평가금액
+                </th>
+              )}
+              {!H('evalRatio') && (
+                <th className="py-2 w-[5%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50 relative" onClick={() => onSort('evalRatio')}>
+                  {hideStrip('evalRatio')}
+                  비중
+                </th>
+              )}
+              {!H('returnRate') && (
+                <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('returnRate')}>
+                  {hideStrip('returnRate')}
+                  수익률
+                </th>
+              )}
+              {!H('profit') && (
+                <th className="py-2 w-[7%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('profit')}>
+                  {hideStrip('profit')}
+                  차익
+                </th>
+              )}
               <th className="py-2 w-[3%] text-center"><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
             </tr>
           </thead>
@@ -298,115 +407,100 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     )}
                   </td>
                   {/* 구분 */}
-                  <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
-                    <div className="flex flex-row h-full">
-                      <CategoryCell item={item} portfolio={portfolio} isRetirement={isRetirement} onUpdate={onUpdate} />
-                      {isRetirement && (
-                        <>
-                          <div className="w-px bg-gray-600/60 self-stretch" />
-                          <span
-                            className="w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none text-gray-500 hover:text-gray-400 transition-colors"
-                            onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
-                            title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
-                          >{assetClass}</span>
-                        </>
-                      )}
-                    </div>
-                  </td>
-
+                  {!H('category') && (
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                      <div className="flex flex-row h-full">
+                        <CategoryCell item={item} portfolio={portfolio} isRetirement={isRetirement} onUpdate={onUpdate} />
+                        {isRetirement && (
+                          <>
+                            <div className="w-px bg-gray-600/60 self-stretch" />
+                            <span
+                              className="w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none text-gray-500 hover:text-gray-400 transition-colors"
+                              onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                              title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
+                            >{assetClass}</span>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  )}
                   {/* 종목명 */}
-                  <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={item.rowColor ? { backgroundColor: blendWithDarkBg(item.rowColor, 0.35) } : {}}>
-                    <div className="flex items-center gap-1 px-1">
-                      <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-gray-300 caret-blue-400`} value={item.name} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
-                      {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
-                      {fStatus === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />}
-                      {fStatus === 'loading' && <RefreshCw size={10} className="animate-spin text-yellow-400 shrink-0" title="갱신 중..." />}
-                      {!fStatus && item.code && <span className="w-2 h-2 rounded-full bg-gray-600 shrink-0" title="미갱신" />}
-                    </div>
-                  </td>
-
+                  {!H('name') && (
+                    <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={item.rowColor ? { backgroundColor: blendWithDarkBg(item.rowColor, 0.35) } : {}}>
+                      <div className="flex items-center gap-1 px-1">
+                        <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-gray-300 caret-blue-400`} value={item.name} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
+                        {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
+                        {fStatus === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />}
+                        {fStatus === 'loading' && <RefreshCw size={10} className="animate-spin text-yellow-400 shrink-0" title="갱신 중..." />}
+                        {!fStatus && item.code && <span className="w-2 h-2 rounded-full bg-gray-600 shrink-0" title="미갱신" />}
+                      </div>
+                    </td>
+                  )}
                   {/* 코드 */}
-                  <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
-                    <input type="text" data-col="code" className={`${inp} text-center text-gray-400 text-xs font-mono caret-blue-400`} value={item.code} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => onBlur(item.id, e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'code')} />
-                  </td>
-
-                  {/* 등락률 — 읽기전용 */}
-                  <td
-                    className={`p-0 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap ${RO_FOCUS}`}
-                    tabIndex={0}
-                    onKeyDown={handleReadonlyCellNav}
-                  >
-                    <div className={`w-full h-full py-3 px-3 flex items-center justify-center cursor-pointer hover:bg-gray-700/50 transition-colors font-bold ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`} onClick={() => item.code && window.open((isOverseas || /^[A-Za-z]+$/.test(item.code)) ? `https://finance.yahoo.com/quote/${item.code.toUpperCase()}` : `https://m.stock.naver.com/domestic/stock/${item.code.toUpperCase()}/total`, '_blank')} title="상세">{formatChangeRate(item.changeRate)}</div>
-                  </td>
-
-                  {/* 현재가 — 읽기전용(클릭 새로고침) */}
-                  <td
-                    className={`p-0 border-r border-gray-600 ${RO_FOCUS}`}
-                    tabIndex={0}
-                    onKeyDown={handleReadonlyCellNav}
-                  >
-                    <div className={`w-full h-full py-3 px-3 text-right text-gray-300 font-bold cursor-pointer hover:bg-teal-900/30 transition-colors flex items-center justify-end gap-1 ${isRefreshing ? 'animate-pulse' : ''}`} onClick={() => item.code && onSingleRefresh(item.id, item.code)} title={item.code ? (isOverseas ? `클릭하여 현재가 새로고침 (≈${formatNumber(Math.round(cleanNum(item.currentPrice) * usdkrw))}원)` : "클릭하여 현재가 새로고침") : "종목코드를 먼저 입력하세요"}>
-                      {isRefreshing && <RefreshCw size={11} className="text-teal-400 animate-spin shrink-0" />}
-                      <span>{isOverseas ? formatUSD(item.currentPrice) : formatNumber(item.currentPrice)}</span>
-                    </div>
-                  </td>
-
-                  {/* 구매단가 — 읽기전용 */}
-                  <td className={`${td} text-right text-gray-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                    {isOverseas
-                      ? (cleanNum(item.purchasePrice) > 0 ? formatUSD(item.purchasePrice) : <span className="text-gray-600">-</span>)
-                      : (cleanNum(item.quantity) > 0 ? formatNumber(Math.round(cleanNum(item.investAmount) / cleanNum(item.quantity))) : <span className="text-gray-600">-</span>)
-                    }
-                  </td>
-
+                  {!H('code') && (
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                      <input type="text" data-col="code" className={`${inp} text-center text-gray-400 text-xs font-mono caret-blue-400`} value={item.code} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => onBlur(item.id, e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'code')} />
+                    </td>
+                  )}
+                  {/* 등락률 */}
+                  {!H('changeRate') && (
+                    <td className={`p-0 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                      <div className={`w-full h-full py-3 px-3 flex items-center justify-center cursor-pointer hover:bg-gray-700/50 transition-colors font-bold ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`} onClick={() => item.code && window.open((isOverseas || /^[A-Za-z]+$/.test(item.code)) ? `https://finance.yahoo.com/quote/${item.code.toUpperCase()}` : `https://m.stock.naver.com/domestic/stock/${item.code.toUpperCase()}/total`, '_blank')} title="상세">{formatChangeRate(item.changeRate)}</div>
+                    </td>
+                  )}
+                  {/* 현재가 */}
+                  {!H('currentPrice') && (
+                    <td className={`p-0 border-r border-gray-600 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                      <div className={`w-full h-full py-3 px-3 text-right text-gray-300 font-bold cursor-pointer hover:bg-teal-900/30 transition-colors flex items-center justify-end gap-1 ${isRefreshing ? 'animate-pulse' : ''}`} onClick={() => item.code && onSingleRefresh(item.id, item.code)} title={item.code ? (isOverseas ? `클릭하여 현재가 새로고침 (≈${formatNumber(Math.round(cleanNum(item.currentPrice) * usdkrw))}원)` : "클릭하여 현재가 새로고침") : "종목코드를 먼저 입력하세요"}>
+                        {isRefreshing && <RefreshCw size={11} className="text-teal-400 animate-spin shrink-0" />}
+                        <span>{isOverseas ? formatUSD(item.currentPrice) : formatNumber(item.currentPrice)}</span>
+                      </div>
+                    </td>
+                  )}
+                  {/* 구매단가 */}
+                  {!H('purchasePrice') && (
+                    <td className={`${td} text-right text-gray-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                      {isOverseas
+                        ? (cleanNum(item.purchasePrice) > 0 ? formatUSD(item.purchasePrice) : <span className="text-gray-600">-</span>)
+                        : (cleanNum(item.quantity) > 0 ? formatNumber(Math.round(cleanNum(item.investAmount) / cleanNum(item.quantity))) : <span className="text-gray-600">-</span>)
+                      }
+                    </td>
+                  )}
                   {/* 보유수량 */}
-                  <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
-                    <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200 caret-blue-400`} value={numericVal(item.id, 'quantity', formatNumber(item.quantity))} onFocus={numericFocus(item.id, 'quantity', item.quantity)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'quantity')} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
-                  </td>
-
+                  {!H('quantity') && (
+                    <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
+                      <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200 caret-blue-400`} value={numericVal(item.id, 'quantity', formatNumber(item.quantity))} onFocus={numericFocus(item.id, 'quantity', item.quantity)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'quantity')} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
+                    </td>
+                  )}
                   {/* 투자금액 */}
-                  <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
-                    {isOverseas
-                      ? <input type="text" data-col="investAmountUSD" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={editingInvestId === item.id ? editingInvestVal : formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => { const usd = cleanNum(item.purchasePrice) * cleanNum(item.quantity); setEditingInvestId(item.id); setEditingInvestVal(usd > 0 ? String(usd) : ''); e.target.select(); }} onChange={e => setEditingInvestVal(e.target.value)} onBlur={() => { const usd = cleanNum(editingInvestVal); const qty = cleanNum(item.quantity); onUpdate(item.id, 'purchasePrice', qty > 0 ? usd / qty : 0); setEditingInvestId(null); }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
-                      : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={numericVal(item.id, 'investAmount', formatNumber(item.investAmount))} onFocus={numericFocus(item.id, 'investAmount', item.investAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'investAmount')} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
-                    }
-                  </td>
-
-                  {/* 비중(투자) — 읽기전용 */}
-                  <td
-                    className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`}
-                    tabIndex={0}
-                    onKeyDown={handleReadonlyCellNav}
-                  >{formatPercent(item.investRatio)}</td>
-
-                  {/* 평가금액 — 읽기전용 */}
-                  <td
-                    className={`${td} text-white font-bold text-right bg-[rgba(113,63,18,0.2)] ${RO_FOCUS}`}
-                    tabIndex={0}
-                    onKeyDown={handleReadonlyCellNav}
-                  >{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
-
-                  {/* 비중(평가) — 읽기전용 */}
-                  <td
-                    className={`${td} text-yellow-600 bg-yellow-900/10 text-center ${RO_FOCUS}`}
-                    tabIndex={0}
-                    onKeyDown={handleReadonlyCellNav}
-                  >{formatPercent(item.evalRatio)}</td>
-
-                  {/* 수익률 — 읽기전용 */}
-                  <td
-                    className={`${td} text-center font-bold ${item.returnRate > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`}
-                    tabIndex={0}
-                    onKeyDown={handleReadonlyCellNav}
-                  >{formatPercent(item.returnRate)}</td>
-
-                  {/* 차익 — 읽기전용 */}
-                  <td
-                    className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`}
-                    tabIndex={0}
-                    onKeyDown={handleReadonlyCellNav}
-                  >{isOverseas ? fmtDual(item.profit) : formatCurrency(item.profit)}</td>
-
+                  {!H('investAmount') && (
+                    <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
+                      {isOverseas
+                        ? <input type="text" data-col="investAmountUSD" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={editingInvestId === item.id ? editingInvestVal : formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => { const usd = cleanNum(item.purchasePrice) * cleanNum(item.quantity); setEditingInvestId(item.id); setEditingInvestVal(usd > 0 ? String(usd) : ''); e.target.select(); }} onChange={e => setEditingInvestVal(e.target.value)} onBlur={() => { const usd = cleanNum(editingInvestVal); const qty = cleanNum(item.quantity); onUpdate(item.id, 'purchasePrice', qty > 0 ? usd / qty : 0); setEditingInvestId(null); }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
+                        : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={numericVal(item.id, 'investAmount', formatNumber(item.investAmount))} onFocus={numericFocus(item.id, 'investAmount', item.investAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'investAmount')} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
+                      }
+                    </td>
+                  )}
+                  {/* 비중(투자) */}
+                  {!H('investRatio') && (
+                    <td className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.investRatio)}</td>
+                  )}
+                  {/* 평가금액 */}
+                  {!H('evalAmount') && (
+                    <td className={`${td} text-white font-bold text-right bg-[rgba(113,63,18,0.2)] ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
+                  )}
+                  {/* 비중(평가) */}
+                  {!H('evalRatio') && (
+                    <td className={`${td} text-yellow-600 bg-yellow-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.evalRatio)}</td>
+                  )}
+                  {/* 수익률 */}
+                  {!H('returnRate') && (
+                    <td className={`${td} text-center font-bold ${item.returnRate > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.returnRate)}</td>
+                  )}
+                  {/* 차익 */}
+                  {!H('profit') && (
+                    <td className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? fmtDual(item.profit) : formatCurrency(item.profit)}</td>
+                  )}
                   <td className="text-center py-2.5"><button onClick={() => onDelete(item.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1"><Trash2 size={14} /></button></td>
                 </tr>
               );
@@ -414,13 +508,27 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             {depositItems.map((item) => (
               <tr key={item.id} className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
                 <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
-                <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={7}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
-                <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={numericVal(item.id, 'depositAmount', formatNumber(item.depositAmount))} onFocus={numericFocus(item.id, 'depositAmount', item.depositAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'depositAmount')} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
-                <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(item.investRatio)}</td>
-                <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
-                <td className="py-3 px-3 border-r border-gray-600 text-yellow-500 bg-yellow-900/20 text-right">{formatPercent(item.evalRatio)}</td>
-                <td className="py-3 px-3 border-r border-gray-600 text-center text-gray-500">-</td>
-                <td className="py-3 px-3 border-r border-gray-600 text-right text-gray-500">{isOverseas ? '$0.00' : '₩0'}</td>
+                {depositColSpan > 0 && (
+                  <td className="py-3 px-3 border-r border-gray-600 text-center text-yellow-500 tracking-[0.2em] text-[14px]" colSpan={depositColSpan}>{isOverseas ? '예수금 (USD CASH)' : '예수금 (CASH)'}</td>
+                )}
+                {!H('investAmount') && (
+                  <td className={`p-0 border-r border-gray-600 bg-blue-900/20 ${CELL_FOCUS}`}><input type="text" className="w-full h-full bg-transparent outline-none font-bold text-right text-blue-300 px-3 py-3 focus:bg-blue-800/50 transition-colors text-[14px] caret-blue-400" value={numericVal(item.id, 'depositAmount', formatNumber(item.depositAmount))} onFocus={numericFocus(item.id, 'depositAmount', item.depositAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'depositAmount')} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></td>
+                )}
+                {!H('investRatio') && (
+                  <td className="py-3 px-3 border-r border-gray-600 text-blue-300 bg-blue-900/20 text-right">{formatPercent(item.investRatio)}</td>
+                )}
+                {!H('evalAmount') && (
+                  <td className="py-3 px-3 border-r border-gray-600 text-white font-bold text-right bg-yellow-900/20 text-[14px]">{isOverseas ? fmtDual(item.evalAmount) : formatCurrency(item.evalAmount)}</td>
+                )}
+                {!H('evalRatio') && (
+                  <td className="py-3 px-3 border-r border-gray-600 text-yellow-500 bg-yellow-900/20 text-right">{formatPercent(item.evalRatio)}</td>
+                )}
+                {!H('returnRate') && (
+                  <td className="py-3 px-3 border-r border-gray-600 text-center text-gray-500">-</td>
+                )}
+                {!H('profit') && (
+                  <td className="py-3 px-3 border-r border-gray-600 text-right text-gray-500">{isOverseas ? '$0.00' : '₩0'}</td>
+                )}
                 <td className="text-center py-2.5 bg-gray-800/50">🔒</td>
               </tr>
             ))}
@@ -443,77 +551,101 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     )}
                   </td>
                   {/* 구분: FUND 링크 + S/D 텍스트 토글 */}
-                  <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
-                    <div className="flex flex-row h-full items-stretch">
-                      <a href="https://www.funetf.co.kr/" target="_blank" rel="noopener noreferrer"
-                         className="flex-1 py-3 px-1 text-center text-xs font-bold text-indigo-300 hover:text-indigo-100 hover:underline transition-colors">
-                        FUND
-                      </a>
-                      <div className="w-px bg-gray-600/60 self-stretch" />
-                      <span
-                        className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
-                        onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
-                        title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
-                      >{assetClass}</span>
-                    </div>
-                  </td>
+                  {!H('category') && (
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                      <div className="flex flex-row h-full items-stretch">
+                        <a href="https://www.funetf.co.kr/" target="_blank" rel="noopener noreferrer"
+                           className="flex-1 py-3 px-1 text-center text-xs font-bold text-indigo-300 hover:text-indigo-100 hover:underline transition-colors">
+                          FUND
+                        </a>
+                        <div className="w-px bg-gray-600/60 self-stretch" />
+                        <span
+                          className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
+                          onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                          title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
+                        >{assetClass}</span>
+                      </div>
+                    </td>
+                  )}
                   {/* 종목명 */}
-                  <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-indigo-950/60 group-hover:bg-indigo-900/30 [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={item.rowColor ? { backgroundColor: blendWithDarkBg(item.rowColor, 0.35) } : {}}>
-                    <div className="flex items-center gap-1 px-1">
-                      <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-indigo-200 caret-blue-400`} value={item.name} placeholder="펀드명" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
-                      {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
-                      {fStatus === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />}
-                      {fStatus === 'loading' && <RefreshCw size={10} className="animate-spin text-yellow-400 shrink-0" title="갱신 중..." />}
-                    </div>
-                  </td>
+                  {!H('name') && (
+                    <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-indigo-950/60 group-hover:bg-indigo-900/30 [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={item.rowColor ? { backgroundColor: blendWithDarkBg(item.rowColor, 0.35) } : {}}>
+                      <div className="flex items-center gap-1 px-1">
+                        <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-indigo-200 caret-blue-400`} value={item.name} placeholder="펀드명" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
+                        {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
+                        {fStatus === 'fail' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="갱신 실패" />}
+                        {fStatus === 'loading' && <RefreshCw size={10} className="animate-spin text-yellow-400 shrink-0" title="갱신 중..." />}
+                      </div>
+                    </td>
+                  )}
                   {/* 코드 */}
-                  <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
-                    <input type="text" data-col="code" className={`${inp} text-center text-indigo-400 text-[11px] font-mono caret-blue-400`} value={item.code} placeholder="K55301DW8222" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => onBlur(item.id, e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'code')} />
-                  </td>
+                  {!H('code') && (
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                      <input type="text" data-col="code" className={`${inp} text-center text-indigo-400 text-[11px] font-mono caret-blue-400`} value={item.code} placeholder="K55301DW8222" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => onBlur(item.id, e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'code')} />
+                    </td>
+                  )}
                   {/* 등락률 */}
-                  <td className={`p-0 border-r border-gray-600 align-middle ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                    <div className={`w-full h-full py-3 px-3 flex items-center justify-center font-bold text-[13px] cursor-pointer hover:bg-indigo-900/30 transition-colors ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`}
-                         onClick={() => item.code && window.open(`https://www.funetf.co.kr/product/fund/view/${item.code}`, '_blank')}
-                         title={item.code ? 'funetf에서 상세보기' : ''}>
-                      {formatChangeRate(item.changeRate)}
-                    </div>
-                  </td>
+                  {!H('changeRate') && (
+                    <td className={`p-0 border-r border-gray-600 align-middle ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                      <div className={`w-full h-full py-3 px-3 flex items-center justify-center font-bold text-[13px] cursor-pointer hover:bg-indigo-900/30 transition-colors ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`}
+                           onClick={() => item.code && window.open(`https://www.funetf.co.kr/product/fund/view/${item.code}`, '_blank')}
+                           title={item.code ? 'funetf에서 상세보기' : ''}>
+                        {formatChangeRate(item.changeRate)}
+                      </div>
+                    </td>
+                  )}
                   {/* 현재가(기준가) */}
-                  <td className={`p-0 border-r border-gray-600 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                    <div className={`w-full h-full py-3 px-3 text-right text-indigo-200 font-bold cursor-pointer hover:bg-indigo-900/30 transition-colors flex items-center justify-end gap-1 ${isRefreshing ? 'animate-pulse' : ''}`}
-                         onClick={() => item.code && onSingleRefresh(item.id, item.code)}
-                         title={item.code ? '클릭하여 기준가 새로고침' : '펀드코드를 먼저 입력하세요'}>
-                      {isRefreshing && <RefreshCw size={11} className="text-indigo-400 animate-spin shrink-0" />}
-                      <span>{formatNumber(item.currentPrice)}</span>
-                    </div>
-                  </td>
-                  {/* 구매단가 - 자동계산 (투자금/수량) */}
-                  <td className={`${td} text-right text-gray-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                    {purchasePriceCalc > 0 ? formatNumber(purchasePriceCalc) : <span className="text-gray-600">-</span>}
-                  </td>
-                  {/* 보유수량 - 저장된 값, 미설정시 버튼 유도 */}
-                  <td className={`${td} text-center bg-blue-900/10 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                    {storedQty > 0
-                      ? <span className="text-indigo-300 font-bold">{formatNumber(Math.round(storedQty))}</span>
-                      : <span className="text-orange-400 text-[11px] cursor-pointer hover:text-orange-300" onClick={() => { setFundModal({ id: item.id, currentPrice: cleanNum(item.currentPrice), currentQty: 0, currentInvest: 0 }); setModalAddInvest(''); setModalEvalAfter(''); }} title="클릭하여 수량 설정">미설정</span>
-                    }
-                  </td>
-                  {/* 투자금액 - 직접입력 */}
-                  <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
-                    <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={numericVal(item.id, 'investAmount', formatNumber(item.investAmount))} onFocus={numericFocus(item.id, 'investAmount', item.investAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'investAmount')} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
-                  </td>
+                  {!H('currentPrice') && (
+                    <td className={`p-0 border-r border-gray-600 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                      <div className={`w-full h-full py-3 px-3 text-right text-indigo-200 font-bold cursor-pointer hover:bg-indigo-900/30 transition-colors flex items-center justify-end gap-1 ${isRefreshing ? 'animate-pulse' : ''}`}
+                           onClick={() => item.code && onSingleRefresh(item.id, item.code)}
+                           title={item.code ? '클릭하여 기준가 새로고침' : '펀드코드를 먼저 입력하세요'}>
+                        {isRefreshing && <RefreshCw size={11} className="text-indigo-400 animate-spin shrink-0" />}
+                        <span>{formatNumber(item.currentPrice)}</span>
+                      </div>
+                    </td>
+                  )}
+                  {/* 구매단가 - 자동계산 */}
+                  {!H('purchasePrice') && (
+                    <td className={`${td} text-right text-gray-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                      {purchasePriceCalc > 0 ? formatNumber(purchasePriceCalc) : <span className="text-gray-600">-</span>}
+                    </td>
+                  )}
+                  {/* 보유수량 */}
+                  {!H('quantity') && (
+                    <td className={`${td} text-center bg-blue-900/10 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                      {storedQty > 0
+                        ? <span className="text-indigo-300 font-bold">{formatNumber(Math.round(storedQty))}</span>
+                        : <span className="text-orange-400 text-[11px] cursor-pointer hover:text-orange-300" onClick={() => { setFundModal({ id: item.id, currentPrice: cleanNum(item.currentPrice), currentQty: 0, currentInvest: 0 }); setModalAddInvest(''); setModalEvalAfter(''); }} title="클릭하여 수량 설정">미설정</span>
+                      }
+                    </td>
+                  )}
+                  {/* 투자금액 */}
+                  {!H('investAmount') && (
+                    <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
+                      <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={numericVal(item.id, 'investAmount', formatNumber(item.investAmount))} onFocus={numericFocus(item.id, 'investAmount', item.investAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'investAmount')} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
+                    </td>
+                  )}
                   {/* 비중(투자) */}
-                  <td className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.investRatio)}</td>
-                  {/* 평가금액 - 자동계산 (수량 × 기준가) */}
-                  <td className={`${td} text-white font-bold text-right bg-yellow-900/20 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                    {formatCurrency(item.evalAmount)}
-                  </td>
+                  {!H('investRatio') && (
+                    <td className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.investRatio)}</td>
+                  )}
+                  {/* 평가금액 */}
+                  {!H('evalAmount') && (
+                    <td className={`${td} text-white font-bold text-right bg-yellow-900/20 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.evalAmount)}</td>
+                  )}
                   {/* 비중(평가) */}
-                  <td className={`${td} text-yellow-600 bg-yellow-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.evalRatio)}</td>
+                  {!H('evalRatio') && (
+                    <td className={`${td} text-yellow-600 bg-yellow-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.evalRatio)}</td>
+                  )}
                   {/* 수익률 */}
-                  <td className={`${td} text-center font-bold ${item.returnRate > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.returnRate)}</td>
+                  {!H('returnRate') && (
+                    <td className={`${td} text-center font-bold ${item.returnRate > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.returnRate)}</td>
+                  )}
                   {/* 차익 */}
-                  <td className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.profit)}</td>
+                  {!H('profit') && (
+                    <td className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.profit)}</td>
+                  )}
                   <td className="text-center py-2.5">
                     <div className="flex items-center justify-center gap-0.5">
                       <button onClick={() => { setFundModal({ id: item.id, currentPrice: cleanNum(item.currentPrice), currentQty: storedQty, currentInvest: cleanNum(item.investAmount) }); setModalAddInvest(''); setModalEvalAfter(''); }} className="text-indigo-500 hover:text-indigo-300 transition-colors p-1" title="매수/적립 수량 계산"><Plus size={13} /></button>
@@ -525,7 +657,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             })}
             {isRetirement && (
               <tr className="border-b border-indigo-800/20 bg-indigo-950/10">
-                <td colSpan={15} className="py-1.5 text-center">
+                <td colSpan={totalColCount} className="py-1.5 text-center">
                   <button onClick={onAddFund} className="text-indigo-500 hover:text-indigo-300 text-xs flex items-center gap-1 mx-auto transition-colors px-3 py-1 rounded hover:bg-indigo-900/30">
                     <Plus size={12} /> 펀드 추가
                   </button>
@@ -536,7 +668,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
           <tfoot className="bg-[#1e293b] font-bold border-t-2 border-gray-500">
             {isRetirement && retirementStats && (
               <tr className="border-b border-amber-600/30 bg-amber-950/20">
-                <td colSpan={15} className="py-2.5 px-4">
+                <td colSpan={totalColCount} className="py-2.5 px-4">
                   <div className="flex items-center gap-4 flex-wrap">
                     <span className="text-amber-400 font-bold text-xs tracking-wide">퇴직연금 자산 비율</span>
                     <div className="flex items-center gap-1.5">
@@ -578,13 +710,27 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             )}
             <tr>
               <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
-              <td colSpan={7} className="py-3 text-center border-r border-gray-600 uppercase tracking-widest text-gray-500">Total Calculation</td>
-              <td className="py-3 px-2 text-blue-200 bg-blue-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalInvest) : formatCurrency(totals.totalInvest)}</td>
-              <td className="py-3 text-center text-gray-400 bg-blue-900/10 border-r border-gray-600">100%</td>
-              <td className="py-3 px-2 text-white bg-yellow-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalEval) : formatCurrency(totals.totalEval)}</td>
-              <td className="py-3 text-center text-yellow-500 bg-yellow-900/10 border-r border-gray-600">100%</td>
-              <td className={`py-3 text-center border-r border-gray-600 ${totals.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(totals.totalInvest > 0 ? totals.totalProfit / totals.totalInvest * 100 : 0)}</td>
-              <td className={`py-3 px-2 border-r border-gray-600 ${totals.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{isOverseas ? fmtDual(totals.totalProfit) : formatCurrency(totals.totalProfit)}</td>
+              {depositColSpan > 0 && (
+                <td colSpan={depositColSpan} className="py-3 text-center border-r border-gray-600 uppercase tracking-widest text-gray-500">Total Calculation</td>
+              )}
+              {!H('investAmount') && (
+                <td className="py-3 px-2 text-blue-200 bg-blue-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalInvest) : formatCurrency(totals.totalInvest)}</td>
+              )}
+              {!H('investRatio') && (
+                <td className="py-3 text-center text-gray-400 bg-blue-900/10 border-r border-gray-600">100%</td>
+              )}
+              {!H('evalAmount') && (
+                <td className="py-3 px-2 text-white bg-yellow-900/10 border-r border-gray-600">{isOverseas ? fmtDual(totals.totalEval) : formatCurrency(totals.totalEval)}</td>
+              )}
+              {!H('evalRatio') && (
+                <td className="py-3 text-center text-yellow-500 bg-yellow-900/10 border-r border-gray-600">100%</td>
+              )}
+              {!H('returnRate') && (
+                <td className={`py-3 text-center border-r border-gray-600 ${totals.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(totals.totalInvest > 0 ? totals.totalProfit / totals.totalInvest * 100 : 0)}</td>
+              )}
+              {!H('profit') && (
+                <td className={`py-3 px-2 border-r border-gray-600 ${totals.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{isOverseas ? fmtDual(totals.totalProfit) : formatCurrency(totals.totalProfit)}</td>
+              )}
               <td></td>
             </tr>
           </tfoot>

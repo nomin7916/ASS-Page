@@ -50,6 +50,16 @@ export function usePortfolioState({
   const portfolioStartDate = activePortfolio?.portfolioStartDate || activePortfolio?.startDate || _defaultStartDate;
   const lookupRows = activePortfolio?.lookupRows ?? [];
   const setLookupRows = (v) => patchActive(p => ({ lookupRows: typeof v === 'function' ? v(p.lookupRows ?? []) : v }));
+  const hiddenColumnsPortfolio = activePortfolio?.hiddenColumnsPortfolio ?? [];
+  const hiddenColumnsRebalancing = activePortfolio?.hiddenColumnsRebalancing ?? [];
+  const toggleHiddenColumnPortfolio = (key) => patchActive(p => {
+    const cur = p.hiddenColumnsPortfolio ?? [];
+    return { hiddenColumnsPortfolio: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key] };
+  });
+  const toggleHiddenColumnRebalancing = (key) => patchActive(p => {
+    const cur = p.hiddenColumnsRebalancing ?? [];
+    return { hiddenColumnsRebalancing: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key] };
+  });
 
   // ── 활성 포트폴리오만 갱신하는 헬퍼 ──
   const patchActive = (patch) =>
@@ -459,6 +469,8 @@ export function usePortfolioState({
     customLinks, setCustomLinks,
     overseasLinks, setOverseasLinks,
     lookupRows, setLookupRows,
+    hiddenColumnsPortfolio, hiddenColumnsRebalancing,
+    toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
     adminAccessAllowed, setAdminAccessAllowed,
     // 파생 상태
     activePortfolioAccountType,
