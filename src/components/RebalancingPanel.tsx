@@ -238,18 +238,29 @@ export default function RebalancingPanel({
                             <button
                               onClick={e => {
                                 e.stopPropagation();
-                                if (totals.totalEval <= 0) return;
                                 const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-                                setPortfolio(prev => prev.map(p => {
-                                  if (p.type !== 'stock' && p.type !== 'fund') return p;
-                                  const qty = cleanNum(p.quantity);
-                                  const price = cleanNum(p.currentPrice);
-                                  const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
-                                  return { ...p, targetRatio: parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(rebalFx > 1 ? 2 : 1)) };
-                                }));
+                                if (settings.trackingMode) {
+                                  const decimals = rebalFx > 1 ? 2 : 1;
+                                  setPortfolio(prev => prev.map(p => {
+                                    if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                    const qty = cleanNum(p.quantity);
+                                    const price = cleanNum(p.currentPrice);
+                                    const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
+                                    const curRatio = parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(decimals));
+                                    return { ...p, targetRatio: p.targetRatioFixed ? cleanNum(p.targetRatio) : curRatio, targetRatioFixed: false };
+                                  }));
+                                  updateSettingsForType({ ...settings, trackingMode: false });
+                                } else {
+                                  if (totals.totalEval <= 0) return;
+                                  setPortfolio(prev => prev.map(p => {
+                                    if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                    return { ...p, targetRatioFixed: false };
+                                  }));
+                                  updateSettingsForType({ ...settings, trackingMode: true });
+                                }
                               }}
-                              className="px-2 py-0.5 text-[10px] font-bold rounded-md border border-green-500/70 text-green-300 bg-green-900/20 hover:bg-green-700/50 hover:border-green-400 active:scale-95 transition-all whitespace-nowrap"
-                              title="현재 비중을 목표 비중으로 일괄 설정"
+                              className={`px-2 py-0.5 text-[10px] font-bold rounded-md border active:scale-95 transition-all whitespace-nowrap ${settings.trackingMode ? 'border-green-400 text-white bg-green-600/70 hover:bg-green-500/80' : 'border-green-500/70 text-green-300 bg-green-900/20 hover:bg-green-700/50 hover:border-green-400'}`}
+                              title={settings.trackingMode ? '추적 중 — 클릭하면 해제' : '현재 비중 추적 시작'}
                             >현재→목표</button>
                             <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</span>
                           </div>
@@ -390,15 +401,26 @@ export default function RebalancingPanel({
                         )}
                         {!H('targetRatio') && (() => {
                           const itemCurRatio = totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0;
-                          const targetVal = cleanNum(item.targetRatio) || 0;
                           const threshold = isOverseas ? 0.005 : 0.05;
-                          const isDifferent = Math.abs(targetVal - itemCurRatio) > threshold;
+                          const isDifferent = Math.abs((item.effectiveTargetRatio || 0) - itemCurRatio) > threshold;
+                          const isTracking = settings.trackingMode && !item.targetRatioFixed;
+                          const displayVal = editingRatio[item.id] !== undefined
+                            ? editingRatio[item.id]
+                            : isTracking
+                              ? (item.effectiveTargetRatio || 0).toFixed(isOverseas ? 2 : 1)
+                              : (isOverseas ? (cleanNum(item.targetRatio) || 0).toFixed(2) : (item.targetRatio || 0));
                           return (
                             <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
                               <input type="text" data-col="targetRatio" className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400 ${isDifferent ? 'text-red-400' : 'text-green-400'}`}
-                                value={editingRatio[item.id] !== undefined ? editingRatio[item.id] : (isOverseas ? (cleanNum(item.targetRatio) || 0).toFixed(2) : (item.targetRatio || 0))}
+                                value={displayVal}
                                 onChange={e => setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value }))}
-                                onBlur={e => { handleUpdate(item.id, 'targetRatio', e.target.value); setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; }); }}
+                                onBlur={e => {
+                                  handleUpdate(item.id, 'targetRatio', e.target.value);
+                                  if (settings.trackingMode) {
+                                    setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetRatioFixed: true } : p));
+                                  }
+                                  setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
+                                }}
                                 onFocus={e => { setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); e.target.select(); }}
                                 onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); handleTableKeyDown(e, 'targetRatio'); }}
                               />
@@ -461,7 +483,7 @@ export default function RebalancingPanel({
                   {!H('code') && <td className="py-3 px-3"></td>}
                   {!H('curEval') && (() => { const totCurEval = rebalanceData.reduce((s, d) => s + d.curEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 text-gray-300 font-bold text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totCurEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totCurEval * fxRate)}</span></div> : formatCurrency(totCurEval)}</td>; })()}
                   {!H('currentPrice') && <td className="py-3 px-3"></td>}
-                  {!H('targetRatio') && <td className="py-3 px-3 text-center font-bold text-green-400">{rebalanceData.reduce((s, d) => s + (d.targetRatio || 0), 0).toFixed(activePortfolioAccountType === 'overseas' ? 2 : 1)}%</td>}
+                  {!H('targetRatio') && <td className="py-3 px-3 text-center font-bold text-green-400">{rebalanceData.reduce((s, d) => s + (d.effectiveTargetRatio || 0), 0).toFixed(activePortfolioAccountType === 'overseas' ? 2 : 1)}%</td>}
                   {!H('curRatio') && <td className="py-3 px-3 text-center font-bold text-gray-400">100%</td>}
                   {!H('action') && <td className="py-3 px-3"></td>}
                   {!H('extraQty') && <td className="py-3 px-3"></td>}

@@ -72,18 +72,21 @@ export function usePortfolioData({
     const overallExp = nativeTotalEval + cleanNum(settings.amount);
     const accumulateBase = cleanNum(settings.amount) + depositAmount;
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
-      const tRatio = cleanNum(item.targetRatio) / 100;
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
       const curEval = item.type === 'fund' && !(qty > 0 && price > 0)
         ? cleanNum(item.evalAmount)
         : price * qty;
+      const effectiveTargetRatio = (settings.trackingMode && !item.targetRatioFixed)
+        ? (nativeTotalEval > 0 ? curEval / nativeTotalEval * 100 : 0)
+        : (cleanNum(item.targetRatio) || 0);
+      const tRatio = effectiveTargetRatio / 100;
       let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((accumulateBase * tRatio) / price)) : 0;
       const extraQty = rebalExtraQty[item.id] || 0;
       const expEval = (qty + action + extraQty) * price;
       const cost = action * price;
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
-      return { ...item, curEval, action, cost, expEval, expRatio };
+      return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio };
     });
     if (rebalanceSortConfig.key === 'code-global') {
       data.sort((a, b) => (a.code || '').localeCompare(b.code || '') * rebalanceSortConfig.direction);
@@ -128,9 +131,22 @@ export function usePortfolioData({
       catMap[cat].value += item.expEval;
       catMap[cat].ratio += item.expRatio;
     });
+    const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+    const totalCost = rebalanceData.reduce((s, item) => s + (item.cost || 0), 0);
+    const remainingDeposit = depositAmount + cleanNum(settings.amount) - totalCost;
+    if (remainingDeposit > 0) {
+      const nativeTotalEval = activePortfolioAccountType === 'overseas'
+        ? totals.totalEval / (marketIndicators.usdkrw || 1)
+        : totals.totalEval;
+      const overallExp = nativeTotalEval + cleanNum(settings.amount);
+      catMap['예수금'] = {
+        value: remainingDeposit,
+        ratio: overallExp > 0 ? (remainingDeposit / overallExp * 100) : 0,
+      };
+    }
     return Object.entries(catMap)
       .map(([name, { value, ratio }]) => ({ name, value, ratio }))
-      .filter(x => x.value > 0 && x.ratio >= 0.05)
+      .filter(x => x.value > 0)
       .sort((a, b) => {
         const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
         if (ia !== -1 && ib !== -1) return ia - ib;
@@ -138,7 +154,7 @@ export function usePortfolioData({
         if (ib !== -1) return 1;
         return b.value - a.value;
       });
-  }, [rebalanceData]);
+  }, [rebalanceData, portfolio, settings, activePortfolioAccountType, totals.totalEval, marketIndicators.usdkrw]);
 
   const curCatDonutData = useMemo(() => {
     const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
