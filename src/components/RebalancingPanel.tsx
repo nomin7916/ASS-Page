@@ -179,7 +179,7 @@ export default function RebalancingPanel({
             </div>
           )}
           <div className="overflow-x-auto bg-[#0f172a]">
-            <table className="text-right text-[13px]">
+            <table className="w-full text-right text-[13px]">
               <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold text-center">
                 {(() => {
                   const sk = rebalanceSortConfig.key, sd = rebalanceSortConfig.direction;

@@ -304,89 +304,89 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
         </div>
       )}
       <div className="overflow-x-auto w-full">
-        <table className="w-full text-right table-fixed min-w-[960px]">
+        <table className="w-full text-right">
           <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold">
             <tr className="text-center">
               <th className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></th>
               {!H('category') && (
-                <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('category')}>
+                <th className="py-2 min-w-[60px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('category')}>
                   {hideStrip('category')}
                   구분
                 </th>
               )}
               {!H('name') && (
-                <th className="py-2 w-[15%] text-center px-2 text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] relative" onClick={() => onSort('name')}>
+                <th className="py-2 min-w-[130px] text-center px-2 text-gray-300 cursor-pointer hover:bg-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] relative" onClick={() => onSort('name')}>
                   {hideStrip('name')}
                   종목명
                 </th>
               )}
               {!H('code') && (
-                <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('code')}>
+                <th className="py-2 min-w-[65px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('code')}>
                   {hideStrip('code')}
                   코드
                 </th>
               )}
               {!H('changeRate') && (
-                <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('changeRate')}>
+                <th className="py-2 min-w-[65px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('changeRate')}>
                   {hideStrip('changeRate')}
                   등락률
                 </th>
               )}
               {!H('currentPrice') && (
-                <th className="py-2 w-[8%] text-center cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('currentPrice')}>
+                <th className="py-2 min-w-[85px] text-center cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('currentPrice')}>
                   {hideStrip('currentPrice')}
                   {isOverseas ? '현재가(USD)' : '현재가'}
                 </th>
               )}
               {!H('purchasePrice') && (
-                <th className="py-2 w-[8%] text-center cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('purchasePrice')}>
+                <th className="py-2 min-w-[85px] text-center cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('purchasePrice')}>
                   {hideStrip('purchasePrice')}
                   {isOverseas ? '구매단가(USD)' : '구매단가'}
                 </th>
               )}
               {!H('quantity') && (
-                <th className="py-2 w-[7%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('quantity')}>
+                <th className="py-2 min-w-[75px] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('quantity')}>
                   {hideStrip('quantity')}
                   보유수량
                 </th>
               )}
               {!H('investAmount') && (
-                <th className="py-2 w-[9%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('investAmount')}>
+                <th className="py-2 min-w-[90px] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('investAmount')}>
                   {hideStrip('investAmount')}
                   투자금액
                 </th>
               )}
               {!H('investRatio') && (
-                <th className="py-2 w-[5%] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('investRatio')}>
+                <th className="py-2 min-w-[60px] bg-blue-900/20 text-blue-200 cursor-pointer hover:bg-blue-800/50 relative" onClick={() => onSort('investRatio')}>
                   {hideStrip('investRatio')}
                   비중
                 </th>
               )}
               {!H('evalAmount') && (
-                <th className="py-2 w-[9%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50 relative" onClick={() => onSort('evalAmount')}>
+                <th className="py-2 min-w-[90px] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50 relative" onClick={() => onSort('evalAmount')}>
                   {hideStrip('evalAmount')}
                   평가금액
                 </th>
               )}
               {!H('evalRatio') && (
-                <th className="py-2 w-[5%] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50 relative" onClick={() => onSort('evalRatio')}>
+                <th className="py-2 min-w-[60px] bg-yellow-900/20 text-yellow-500 cursor-pointer hover:bg-yellow-800/50 relative" onClick={() => onSort('evalRatio')}>
                   {hideStrip('evalRatio')}
                   비중
                 </th>
               )}
               {!H('returnRate') && (
-                <th className="py-2 w-[6%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('returnRate')}>
+                <th className="py-2 min-w-[65px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('returnRate')}>
                   {hideStrip('returnRate')}
                   수익률
                 </th>
               )}
               {!H('profit') && (
-                <th className="py-2 w-[7%] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('profit')}>
+                <th className="py-2 min-w-[80px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('profit')}>
                   {hideStrip('profit')}
                   차익
                 </th>
               )}
-              <th className="py-2 w-[3%] text-center"><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
+              <th className="py-2 w-[36px] min-w-[36px] text-center"><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
             </tr>
           </thead>
           <tbody>
