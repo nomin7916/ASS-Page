@@ -226,6 +226,14 @@ export default function RebalancingPanel({
                         <th className="py-2 px-3 min-w-[100px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b] relative">
                           {hideStrip('targetRatio')}
                           <div className="flex flex-col items-center gap-1">
+                            <input
+                              type="date"
+                              className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-gray-600 rounded px-1 py-0.5 w-full cursor-pointer hover:border-gray-500 focus:border-green-500 transition-colors"
+                              value={settings.targetDate || ''}
+                              onChange={e => updateSettingsForType({ ...settings, targetDate: e.target.value })}
+                              onClick={e => e.stopPropagation()}
+                              title="목표 비중 설정 날짜"
+                            />
                             <button
                               onClick={e => {
                                 e.stopPropagation();
@@ -379,17 +387,23 @@ export default function RebalancingPanel({
                         {!H('currentPrice') && (
                           <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}</td>
                         )}
-                        {!H('targetRatio') && (
-                          <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                            <input type="text" data-col="targetRatio" className="w-full h-full bg-transparent text-center text-green-400 font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400"
-                              value={editingRatio[item.id] !== undefined ? editingRatio[item.id] : (isOverseas ? (cleanNum(item.targetRatio) || 0).toFixed(2) : (item.targetRatio || 0))}
-                              onChange={e => setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value }))}
-                              onBlur={e => { handleUpdate(item.id, 'targetRatio', e.target.value); setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; }); }}
-                              onFocus={e => { setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); e.target.select(); }}
-                              onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); handleTableKeyDown(e, 'targetRatio'); }}
-                            />
-                          </td>
-                        )}
+                        {!H('targetRatio') && (() => {
+                          const itemCurRatio = totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0;
+                          const targetVal = cleanNum(item.targetRatio) || 0;
+                          const threshold = isOverseas ? 0.005 : 0.05;
+                          const isDifferent = Math.abs(targetVal - itemCurRatio) > threshold;
+                          return (
+                            <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
+                              <input type="text" data-col="targetRatio" className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400 ${isDifferent ? 'text-red-400' : 'text-green-400'}`}
+                                value={editingRatio[item.id] !== undefined ? editingRatio[item.id] : (isOverseas ? (cleanNum(item.targetRatio) || 0).toFixed(2) : (item.targetRatio || 0))}
+                                onChange={e => setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                onBlur={e => { handleUpdate(item.id, 'targetRatio', e.target.value); setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; }); }}
+                                onFocus={e => { setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); e.target.select(); }}
+                                onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); handleTableKeyDown(e, 'targetRatio'); }}
+                              />
+                            </td>
+                          );
+                        })()}
                         {!H('curRatio') && (
                           <td className="py-3 px-3 text-center text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0).toFixed(isOverseas ? 2 : 1)}%</td>
                         )}
