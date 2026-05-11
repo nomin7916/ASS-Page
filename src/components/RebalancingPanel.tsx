@@ -235,34 +235,36 @@ export default function RebalancingPanel({
                               onClick={e => e.stopPropagation()}
                               title="목표 비중 설정 날짜"
                             />
-                            <button
-                              onClick={e => {
-                                e.stopPropagation();
-                                const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-                                if (settings.trackingMode) {
-                                  const decimals = rebalFx > 1 ? 2 : 1;
-                                  setPortfolio(prev => prev.map(p => {
-                                    if (p.type !== 'stock' && p.type !== 'fund') return p;
-                                    const qty = cleanNum(p.quantity);
-                                    const price = cleanNum(p.currentPrice);
-                                    const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
-                                    const curRatio = parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(decimals));
-                                    return { ...p, targetRatio: p.targetRatioFixed ? cleanNum(p.targetRatio) : curRatio, targetRatioFixed: false };
-                                  }));
-                                  updateSettingsForType({ ...settings, trackingMode: false });
-                                } else {
-                                  if (totals.totalEval <= 0) return;
-                                  setPortfolio(prev => prev.map(p => {
-                                    if (p.type !== 'stock' && p.type !== 'fund') return p;
-                                    return { ...p, targetRatioFixed: false };
-                                  }));
-                                  updateSettingsForType({ ...settings, trackingMode: true });
-                                }
-                              }}
-                              className={`px-2 py-0.5 text-[10px] font-bold rounded-md border active:scale-95 transition-all whitespace-nowrap ${settings.trackingMode ? 'border-green-400 text-white bg-green-600/70 hover:bg-green-500/80' : 'border-green-500/70 text-green-300 bg-green-900/20 hover:bg-green-700/50 hover:border-green-400'}`}
-                              title={settings.trackingMode ? '추적 중 — 클릭하면 해제' : '현재 비중 추적 시작'}
-                            >현재→목표</button>
-                            <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
+                                  if (settings.trackingMode) {
+                                    const decimals = rebalFx > 1 ? 2 : 1;
+                                    setPortfolio(prev => prev.map(p => {
+                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                      const qty = cleanNum(p.quantity);
+                                      const price = cleanNum(p.currentPrice);
+                                      const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
+                                      const curRatio = parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(decimals));
+                                      return { ...p, targetRatio: p.targetRatioFixed ? cleanNum(p.targetRatio) : curRatio, targetRatioFixed: false };
+                                    }));
+                                    updateSettingsForType({ ...settings, trackingMode: false });
+                                  } else {
+                                    if (totals.totalEval <= 0) return;
+                                    setPortfolio(prev => prev.map(p => {
+                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                      return { ...p, targetRatioFixed: false };
+                                    }));
+                                    updateSettingsForType({ ...settings, trackingMode: true });
+                                  }
+                                }}
+                                className={`text-base leading-none transition-colors select-none ${settings.trackingMode ? 'text-green-400' : 'text-gray-500 hover:text-green-400'}`}
+                                title={settings.trackingMode ? '추적 중 — 클릭하면 해제' : '현재 비중 추적 시작'}
+                              >⟳</button>
+                              <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>목표비중(%){arr('targetRatio')}</span>
+                            </div>
                           </div>
                         </th>
                       )}
