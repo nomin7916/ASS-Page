@@ -96,10 +96,11 @@ export default function RebalancingPanel({
     );
   };
 
-  const compactPieTooltip = ({ active, payload }) => {
+  const makeCompactPieTooltip = (data) => ({ active, payload }) => {
     if (!active || !payload?.length) return null;
     const item = payload[0];
-    const pct = ((item.percent ?? item.payload?.percent ?? 0) * 100).toFixed(1);
+    const total = data.reduce((s, x) => s + x.value, 0);
+    const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : '0.0';
     return (
       <div style={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #374151', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 'bold', color: item.fill, whiteSpace: 'nowrap' }}>
         {item.name} {pct}%
@@ -120,7 +121,7 @@ export default function RebalancingPanel({
                     <div style={{ height: 120, width: 120 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Tooltip content={compactPieTooltip} />
+                          <Tooltip content={makeCompactPieTooltip(curCatDonutData)} />
                           <Pie data={curCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredCurCatSlice(data)} onMouseLeave={() => setHoveredCurCatSlice(null)}>
                             {curCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                           </Pie>
@@ -133,7 +134,7 @@ export default function RebalancingPanel({
                     <div style={{ height: 120, width: 120 }}>
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Tooltip content={compactPieTooltip} />
+                          <Tooltip content={makeCompactPieTooltip(rebalCatDonutData)} />
                           <Pie data={rebalCatDonutData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredRebalCatSlice(data)} onMouseLeave={() => setHoveredRebalCatSlice(null)}>
                             {rebalCatDonutData.map(({ name }, i) => <Cell key={i} fill={UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[name] || UI_CONFIG.COLORS.CHART_PALETTE[i % 8]} />)}
                           </Pie>
