@@ -824,7 +824,7 @@ export default function App() {
       }
       let principalAmount = 0;
       for (const d of sortedDeposits) { if (d.date <= date) principalAmount += cleanNum(d.amount) * (isOverseasChart ? (cleanNum(d.fxRate) || 1) : 1); else break; }
-      for (const w of sortedWithdrawals) { if (w.date <= date) principalAmount -= cleanNum(w.amount) * (isOverseasChart ? (cleanNum(w.fxRate) || 1) : 1); else break; }
+      for (const w of sortedWithdrawals) { if (w.date <= date) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)) * (isOverseasChart ? (cleanNum(w.fxRate) || 1) : 1); else break; }
       if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) {
         const fallbackFx = isOverseasChart ? (cleanNum(avgExchangeRate) || marketIndicators?.usdkrw || 1) : 1;
         principalAmount = cleanNum(principal) * fallbackFx;
@@ -1799,6 +1799,8 @@ export default function App() {
             activePortfolioAccountType={activePortfolioAccountType}
             marketIndicators={marketIndicators}
             setPrincipal={setPrincipal}
+            principal={principal}
+            evalAmount={totals.totalEval}
           />
         </div>
         )}

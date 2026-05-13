@@ -20,6 +20,8 @@ export default function DepositPanel({
   activePortfolioAccountType,
   marketIndicators,
   setPrincipal,
+  principal,
+  evalAmount,
 }) {
   const isOverseas = activePortfolioAccountType === 'overseas';
 
@@ -84,11 +86,31 @@ export default function DepositPanel({
     e.target.select();
   };
 
+  const calcProrataPrincipalDeducted = (withdrawAmount, currentPrincipal, currentEval) => {
+    if (withdrawAmount <= 0) return 0;
+    if (currentEval > 0 && currentPrincipal > 0) {
+      return Math.min(withdrawAmount * (currentPrincipal / currentEval), currentPrincipal);
+    }
+    return Math.min(withdrawAmount, Math.max(currentPrincipal, 0));
+  };
+
   const amountBlur = (h, prefix, history, setHistory, sign = 0) => {
     const newAmount = cleanNum(editVal);
     const oldAmount = h.amount || 0;
     const n = [...history];
     n[h.originalIndex].amount = newAmount;
+
+    if (sign === -1 && setPrincipal) {
+      const oldPrincipalDeducted = h.principalDeducted ?? oldAmount;
+      const principalAfterRestore = (principal ?? 0) + oldPrincipalDeducted;
+      const newPrincipalDeducted = calcProrataPrincipalDeducted(newAmount, principalAfterRestore, evalAmount ?? 0);
+      n[h.originalIndex].principalDeducted = newPrincipalDeducted;
+      setHistory(n);
+      setPrincipal(principalAfterRestore - newPrincipalDeducted);
+      setEditField(null);
+      return;
+    }
+
     setHistory(n);
     if (setPrincipal && newAmount !== oldAmount) {
       setPrincipal(p => p + sign * (newAmount - oldAmount));
@@ -206,7 +228,7 @@ export default function DepositPanel({
                           <button onClick={() => openMemoModal(h, 'd2')} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
                         </div>
                       </td>
-                      <td className="py-1 text-center"><button onClick={() => { const amt = h.amount || 0; setDepositHistory2(depositHistory2.filter(x => x.id !== h.id)); if (setPrincipal && amt !== 0) setPrincipal(p => p + amt); }} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
+                      <td className="py-1 text-center"><button onClick={() => { const deducted = h.principalDeducted ?? (h.amount || 0); setDepositHistory2(depositHistory2.filter(x => x.id !== h.id)); if (setPrincipal && deducted !== 0) setPrincipal(p => p + deducted); }} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
                     </tr>
                   ))}
                 </tbody>
