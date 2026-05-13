@@ -58,6 +58,7 @@ export default function RebalancingPanel({
   showTable = true,
   showDonut = true,
   isRetirement = false,
+  showRetirementStats = false,
   hiddenColumns = [],
   onToggleColumn = () => {},
 }) {
@@ -529,7 +530,7 @@ export default function RebalancingPanel({
                   {!H('expEval') && (() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
                   {!H('expRatio') && <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>}
                 </tr>
-                {isRetirement && (() => {
+                {showRetirementStats && (() => {
                   const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
                   const curD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.curEval, 0);
                   const curS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.curEval, 0) + depositEval;

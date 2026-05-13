@@ -1730,7 +1730,7 @@ export default function App() {
             usdkrwFetchStatus={indicatorFetchStatus?.usdkrw?.status}
           />
         ) : (
-          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp' || activePortfolioAccountType === 'pension'} hiddenColumns={hiddenColumnsPortfolio} onToggleColumn={toggleHiddenColumnPortfolio} />
+          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp' || activePortfolioAccountType === 'pension'} showRetirementStats={activePortfolioAccountType === 'dc-irp'} hiddenColumns={hiddenColumnsPortfolio} onToggleColumn={toggleHiddenColumnPortfolio} />
         )}
 
         {activePortfolioAccountType !== 'gold' && !sectionCollapsed.summary && (
@@ -1951,6 +1951,7 @@ export default function App() {
             showTable={!sectionCollapsed.rebalancing}
             showDonut={!sectionCollapsed.donut}
             isRetirement={activePortfolioAccountType === 'dc-irp' || activePortfolioAccountType === 'pension'}
+            showRetirementStats={activePortfolioAccountType === 'dc-irp'}
             hiddenColumns={hiddenColumnsRebalancing}
             onToggleColumn={toggleHiddenColumnRebalancing}
           />

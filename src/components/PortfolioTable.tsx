@@ -168,7 +168,7 @@ const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
   );
 };
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, hiddenColumns = [], onToggleColumn = () => {} }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {} }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -666,7 +666,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             )}
           </tbody>
           <tfoot className="bg-[#1e293b] font-bold border-t-2 border-gray-500">
-            {isRetirement && retirementStats && (
+            {showRetirementStats && retirementStats && (
               <tr className="border-b border-amber-600/30 bg-amber-950/20">
                 <td colSpan={totalColCount} className="py-2.5 px-4">
                   <div className="flex items-center gap-4 flex-wrap">
