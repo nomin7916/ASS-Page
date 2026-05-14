@@ -340,7 +340,7 @@ export default function App() {
     driveTokenRef, driveFolderIdRef, tokenClientRef, pendingTokenResolveRef,
     isInitialLoad, driveSaveTimerRef, portfolioUpdatedAtRef, prevPortfolioStructureRef,
     lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
-    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef, ownFolderIdRef,
+    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef, ownFolderIdRef, syncStatusRef,
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
@@ -1165,8 +1165,8 @@ export default function App() {
       // 항상 Drive에서 최신 데이터 로드 — localStorage 캐시 사용 안 함
       notify('Drive 데이터 불러오는 중...', 'info');
       const drivePortfolio = await loadFromDrive(token, true);
-      if (drivePortfolio === null) {
-        // 완전 신규 사용자: 초기 포트폴리오 생성
+      if (drivePortfolio === null && syncStatusRef.current !== 'error') {
+        // 완전 신규 사용자 (파일 없음, 오류 아님): 초기 포트폴리오 생성
         const newId = generateId();
         const today = new Date().toISOString().split('T')[0];
         const initP = { id: newId, name: '내 포트폴리오', startDate: today, portfolioStartDate: today, portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }], principal: 0, history: [], depositHistory: [], depositHistory2: [], settings: { mode: 'rebalance', amount: 1000000 } };

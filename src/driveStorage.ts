@@ -50,7 +50,7 @@ async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<
     `name='${newName}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
   );
   const res1 = await fetch(
-    `${DRIVE_API}/files?q=${q1}&spaces=drive&fields=files(id,createdTime)`,
+    `${DRIVE_API}/files?q=${q1}&spaces=drive&fields=files(id,modifiedTime)&orderBy=modifiedTime+desc`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res1.ok) {
@@ -166,7 +166,7 @@ export async function findUserIndexFolder(adminToken: string, targetEmail: strin
       `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${targetEmail}' in owners`
     );
     const res = await fetch(
-      `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
+      `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,modifiedTime)&orderBy=modifiedTime+desc`,
       { headers: { Authorization: `Bearer ${adminToken}` } }
     );
     if (!res.ok) {
