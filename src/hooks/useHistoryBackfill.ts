@@ -88,6 +88,21 @@ export const useHistoryBackfill = ({
         if (evalAmt > 0) { backfillDoneRef.current[key] = true; updates.push({ date, evalAmt }); }
       });
 
+      // 전날 종가 교정: 장 마감 전 기록된 전날 항목을 실제 종가로 덮어쓰기
+      if (availDates.has(yesterday)) {
+        const existingYesterday = hist.find(h => h.date === yesterday);
+        if (existingYesterday && !existingYesterday.isFixed && !existingYesterday.userChosen) {
+          const key = `${portfolioId}_correct_${yesterday}`;
+          if (!backfillDoneRef.current[key]) {
+            const evalAmt = calcEval(items, accountType, yesterday);
+            if (evalAmt > 0 && evalAmt !== existingYesterday.evalAmount) {
+              backfillDoneRef.current[key] = true;
+              updates.push({ date: yesterday, evalAmt });
+            }
+          }
+        }
+      }
+
       // 기존 기록 사이의 주말/연휴 gap 채우기 (2~5일 gap = 주말 or 공휴일)
       const sortedHist = [...hist].sort((a, b) => a.date.localeCompare(b.date));
       for (let i = 0; i < sortedHist.length - 1; i++) {
