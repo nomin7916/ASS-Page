@@ -48,14 +48,20 @@ export default function HistoryPanel({
                 <button onClick={handleDownloadCSV} className="p-1 hover:bg-gray-800 rounded transition text-blue-400 hover:text-white" title="전체 엑셀 다운로드"><Download size={14} /></button>
               </div>
             </div>
-            <div className="shrink-0 h-[215px] overflow-x-auto overflow-y-auto">
-              <table className="w-full min-w-max text-right text-[13px] table-auto border-collapse whitespace-nowrap">
+            <div className="shrink-0 h-[215px] overflow-y-auto">
+              <table className="w-full text-right text-[11px] table-fixed border-collapse">
+                <colgroup>
+                  <col className="w-[35%]" />
+                  <col className="w-[35%]" />
+                  <col className="w-[20%]" />
+                  <col className="w-[10%]" />
+                </colgroup>
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
                   <tr>
-                    <th className="py-2 px-3 text-center border-r border-gray-600 font-normal">일자</th>
-                    <th className="py-2 px-3 text-center border-r border-gray-600 font-normal">평가자산</th>
-                    <th className="py-2 px-3 text-center border-r border-gray-600 font-normal cursor-help" title="수식: (당일/전일)-1">전일대비</th>
-                    <th className="py-2 px-2 text-center font-normal">
+                    <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal">일자</th>
+                    <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal">평가자산</th>
+                    <th className="py-1.5 px-1 text-center border-r border-gray-600 font-normal cursor-help" title="수식: (당일/전일)-1">전일대비</th>
+                    <th className="py-1.5 px-1 text-center font-normal">
                       <div className="flex items-center justify-center gap-1">
                         <button onClick={() => setHistoryLimit(p => p + 5)} className="text-gray-400 hover:text-white"><Plus size={12} /></button>
                         <button onClick={() => setHistoryLimit(p => Math.max(p - 5, 3))} className="text-gray-400 hover:text-white"><Minus size={12} /></button>
@@ -79,9 +85,9 @@ export default function HistoryPanel({
                     const isEditing = editingDate === h.date;
                     return (
                       <tr key={h.id || i} className={`border-b border-gray-700 ${isToday ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
-                        <td className={`py-2 px-3 text-center border-r border-gray-600 font-bold ${h.isAdjusted ? 'text-blue-300' : 'text-gray-400'}`}>{formatShortDate(h.date)}</td>
+                        <td className={`py-1.5 px-1.5 text-center border-r border-gray-600 font-bold ${h.isAdjusted ? 'text-blue-300' : 'text-gray-400'}`}>{formatShortDate(h.date)}</td>
                         <td
-                          className={`py-2 px-3 border-r border-gray-600 font-bold text-right ${h.isAdjusted ? 'text-blue-300 cursor-pointer hover:text-blue-200' : 'text-white cursor-pointer'}`}
+                          className={`py-1.5 px-1.5 border-r border-gray-600 font-bold text-right ${h.isAdjusted ? 'text-blue-300 cursor-pointer hover:text-blue-200' : 'text-white cursor-pointer'}`}
                           onClick={handleToggle}
                           onDoubleClick={() => startEdit(h.date, h.evalAmount)}
                           title={h.isAdjusted ? (showingActual ? '클릭: 전일 종가로 전환 / 더블클릭: 값 직접 수정' : '클릭: 실제 포트폴리오 합계로 전환 / 더블클릭: 값 직접 수정') : '더블클릭: 값 직접 수정'}
@@ -95,7 +101,7 @@ export default function HistoryPanel({
                               onChange={e => setEditingValue(e.target.value)}
                               onKeyDown={e => { if (e.key === 'Enter') commitEdit(h.date); if (e.key === 'Escape') setEditingDate(null); }}
                               onBlur={() => commitEdit(h.date)}
-                              className="w-full bg-gray-900 text-yellow-300 text-right px-1 py-0.5 rounded border border-yellow-500 outline-none text-[13px]"
+                              className="w-full bg-gray-900 text-yellow-300 text-right px-1 py-0.5 rounded border border-yellow-500 outline-none text-[11px]"
                               onClick={e => e.stopPropagation()}
                             />
                           ) : (
@@ -105,8 +111,8 @@ export default function HistoryPanel({
                             </>
                           )}
                         </td>
-                        <td className="py-2 px-3 border-r border-gray-600 text-center font-bold"><span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span></td>
-                        <td className="py-2 px-2 text-center"><button onClick={() => { setLookupRows([{ id: generateId(), date: h.date }, ...lookupRows]); notify("조회 목록 복사", "info"); }} className="text-blue-400"><ArrowDownToLine size={12} /></button></td>
+                        <td className="py-1.5 px-1 border-r border-gray-600 text-center font-bold"><span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span></td>
+                        <td className="py-1.5 px-1 text-center"><button onClick={() => { setLookupRows([{ id: generateId(), date: h.date }, ...lookupRows]); notify("조회 목록 복사", "info"); }} className="text-blue-400"><ArrowDownToLine size={12} /></button></td>
                       </tr>
                     );
                   })}
