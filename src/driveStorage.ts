@@ -7,6 +7,7 @@ const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 
 const BACKUP_PREFIX = 'portfolio_backup_';
 export const MAX_BACKUPS = 6;
+export const MAX_MANUAL_BACKUPS = 10;
 
 export interface DriveBackupEntry {
   id: string;
@@ -24,6 +25,7 @@ export const DRIVE_FILES = {
   NOTIFICATION_LOG:  'notification_log.json',  // 알림 이력 (기기 간 공유)
   SESSION:           'portfolio_session.json',  // 세션 관리 (단일 기기 접속 강제)
   SETTINGS:          'app_settings.json',       // 전역 앱 설정 캐시 (youtubeUrl, notebookLinks)
+  MANUAL_LATEST:     'portfolio_manual_latest.json', // 마지막 수동 저장본 (항상 최신 유지)
 };
 
 // 동시 호출 중복 방지 — 이메일 기준 캐시 (토큰 교체 시에도 폴더 중복 생성 방지)
@@ -366,9 +368,15 @@ export async function loadAdminUserCache(token: string, folderId: string): Promi
 async function cleanupOldBackups(token: string, folderId: string): Promise<void> {
   try {
     const backups = await listBackups(token, folderId);
-    if (backups.length <= MAX_BACKUPS) return;
+    const autoBackups = backups.filter(b => b.name.endsWith('_auto.json'));
+    const manualBackups = backups.filter(b => b.name.endsWith('_manual.json'));
+    const toDelete = [
+      ...autoBackups.slice(MAX_BACKUPS),
+      ...manualBackups.slice(MAX_MANUAL_BACKUPS),
+    ];
+    if (toDelete.length === 0) return;
     await Promise.all(
-      backups.slice(MAX_BACKUPS).map(b =>
+      toDelete.map(b =>
         fetch(`${DRIVE_API}/files/${b.id}`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${token}` },
@@ -377,5 +385,21 @@ async function cleanupOldBackups(token: string, folderId: string): Promise<void>
     );
   } catch {
     // 정리 실패 무시 — 다음 저장 시 재시도
+  }
+}
+
+// 마지막 수동 저장본(MANUAL_LATEST) 항목 조회 — 백업 모달 상단에 표시용
+export async function getManualLatestEntry(token: string, folderId: string): Promise<DriveBackupEntry | null> {
+  try {
+    const data = await loadDriveFile(token, folderId, DRIVE_FILES.MANUAL_LATEST) as any;
+    if (!data?.manualSavedAt) return null;
+    const fileId = await findFileId(token, folderId, DRIVE_FILES.MANUAL_LATEST);
+    if (!fileId) return null;
+    const d = new Date(data.manualSavedAt);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const label = `[수동] ${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return { id: fileId, name: label, createdTime: new Date(data.manualSavedAt).toISOString() };
+  } catch {
+    return null;
   }
 }

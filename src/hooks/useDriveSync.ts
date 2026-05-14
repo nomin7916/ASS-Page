@@ -5,6 +5,7 @@ import {
   loadVersionTimestamp, saveVersionFile, saveVersionedBackup,
   listBackups, loadBackupById, DriveBackupEntry,
   grantAdminReadAccess, revokeAdminReadAccess,
+  getManualLatestEntry,
 } from '../driveStorage';
 
 function _stripStateForSave(stateData: any) {
@@ -87,6 +88,7 @@ export function useDriveSync({
   // 세션 관리 — 단일 기기 강제 로그아웃
   const sessionIdRef = useRef('');           // 이 기기의 세션 ID
   const ownFolderIdRef = useRef('');         // 관리자가 타인 페이지 볼 때도 자신의 폴더 ID 유지
+  const lastVisibilityBackupRef = useRef<number>(0); // 탭 숨김 자동 백업 마지막 실행 시각
 
   // ── Drive 폴더 ID 캐시 확보 ──
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -151,6 +153,18 @@ export function useDriveSync({
       applyStateData(stateToApply, null, marketData);
       setSS('ready');
       setDriveStatus('saved');
+
+      // 방안 A: 수동 저장본과 현재 상태 비교 — 불일치 시 경고 (fire-and-forget)
+      const stateTs = (stateToApply as any).portfolioUpdatedAt || 0;
+      getManualLatestEntry(token, folderId).then(entry => {
+        if (!entry) return;
+        const manualTs = new Date(entry.createdTime).getTime();
+        if (manualTs > stateTs) {
+          const label = entry.name;
+          notify(`수동 저장본(${label})이 현재 데이터보다 최신입니다 — 백업 목록에서 복원 가능`, 'warning');
+        }
+      }).catch(() => {});
+
       // 로그인 시 adminAccessAllowed 상태에 따라 즉시 폴더 공유 적용 (기존 사용자 포함)
       const loadedAllowed = stateData.adminAccessAllowed !== false;
       lastAdminAccessAllowedRef.current = loadedAllowed;
@@ -228,6 +242,9 @@ export function useDriveSync({
       }
       if (versioned) {
         saveVersionedBackup(token, folderId, stateCore, versioned).catch(() => {});
+      }
+      if (versioned === 'manual') {
+        saveDriveFile(token, folderId, DRIVE_FILES.MANUAL_LATEST, { ...stateCore, manualSavedAt: Date.now() }).catch(() => {});
       }
       await Promise.all([
         Object.keys(shm || {}).length > 0
@@ -410,8 +427,17 @@ export function useDriveSync({
     setBackupListLoading(true);
     try {
       const folderId = await ensureDriveFolder(token);
-      const backups = await listBackups(token, folderId);
-      setBackupList(backups);
+      const [backups, manualLatest] = await Promise.all([
+        listBackups(token, folderId),
+        getManualLatestEntry(token, folderId),
+      ]);
+      // 수동 저장본을 목록 맨 위에 별도 항목으로 추가 (중복 방지: 동일 id 제거)
+      if (manualLatest) {
+        const filtered = backups.filter(b => b.id !== manualLatest.id);
+        setBackupList([manualLatest, ...filtered]);
+      } else {
+        setBackupList(backups);
+      }
     } catch {
       notify('백업 목록을 불러오지 못했습니다.', 'error');
     } finally {
@@ -523,7 +549,19 @@ export function useDriveSync({
         const snap = saveStateRef.current;
         if (snap && snap.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
           if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
+          // 일반 저장 (STATE + MARKET 파일)
           saveAllToDrive(snap);
+          // 방안 C: 탭 숨김 시 자동 백업 — 5분 쓰로틀
+          const now = Date.now();
+          const FIVE_MIN = 5 * 60 * 1000;
+          if (now - lastVisibilityBackupRef.current >= FIVE_MIN) {
+            lastVisibilityBackupRef.current = now;
+            const folderId = driveFolderIdRef.current;
+            if (folderId && !adminViewingAsRef.current && !adminTransitioningRef.current) {
+              const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = snap;
+              saveVersionedBackup(driveTokenRef.current, folderId, stateCore, 'auto').catch(() => {});
+            }
+          }
         }
         return;
       }
