@@ -1338,8 +1338,9 @@ export default function App() {
     if (portfolios.length === 0) return;
     if (!authUser?.email) return;
     const currentPortfolios = portfolios;
-    // 계좌/종목 구조만 비교 — history(일일 평가액)·시장 데이터는 제외하여
-    // 시장가격 갱신이 portfolioUpdatedAt을 덮어쓰지 않도록 방지
+    // 계좌/종목 구조 + history 건수 비교
+    // historyLen: 항목 추가·삭제 시 Drive 저장 트리거 (비활성 계좌 자동 기록, 백필, 수동 입력 모두 포함)
+    // 평가액 값 자체는 제외 — 시장가격 갱신이 portfolioUpdatedAt을 덮어쓰지 않도록 방지
     // compStocks(비교종목 추가/활성화)도 구조 변경으로 간주 → Drive STATE 즉시 반영
     const portfolioStructureKey = JSON.stringify([
       currentPortfolios.map(p => ({
@@ -1360,6 +1361,7 @@ export default function App() {
         lookupRows: p.lookupRows,
         memo: p.memo || '',
         rowColor: p.rowColor || '',
+        historyLen: (p.history || []).length,
       })),
       activePortfolioId, customLinks,
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
