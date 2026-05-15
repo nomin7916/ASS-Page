@@ -164,8 +164,9 @@ export function useDriveSync({
         if (!entry) return;
         const manualTs = new Date(entry.createdTime).getTime();
         if (manualTs > stateTs) {
-          const label = entry.name;
-          notify(`수동 저장본(${label})이 현재 데이터보다 최신입니다 — 백업 목록에서 복원 가능`, 'warning');
+          const mLabel = entry.name.match(/portfolio_backup_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
+          const displayLabel = mLabel ? `${mLabel[1]}-${mLabel[2]}-${mLabel[3]} ${mLabel[4]}:${mLabel[5]}` : entry.name;
+          notify(`수동 저장본(${displayLabel})이 현재 데이터보다 최신입니다 — 백업 목록에서 복원 가능`, 'warning');
         }
       }).catch(() => {});
 
@@ -445,7 +446,15 @@ export function useDriveSync({
       ]);
       // 수동 저장본을 목록 맨 위에 별도 항목으로 추가 (중복 방지: 동일 id 제거)
       if (manualLatest) {
-        const filtered = backups.filter(b => b.id !== manualLatest.id);
+        const manualTimeKey = manualLatest.name.match(/portfolio_backup_(\d{8}_\d{4})/)?.[1];
+        const filtered = backups.filter(b => {
+          if (b.id === manualLatest.id) return false;
+          if (manualTimeKey) {
+            const bKey = b.name.match(/portfolio_backup_(\d{8}_\d{4})/)?.[1];
+            if (bKey === manualTimeKey) return false;
+          }
+          return true;
+        });
         setBackupList([manualLatest, ...filtered]);
       } else {
         setBackupList(backups);

@@ -18,6 +18,7 @@ export const useHistoryBackfill = ({
   setHistory,
   portfolioStartDate,
   notify,
+  effectiveDateKey,
 }) => {
   const nonActiveHistRecordedRef = useRef({});
   const backfillDoneRef = useRef({});
@@ -44,7 +45,7 @@ export const useHistoryBackfill = ({
       if (idx >= 0) return p;
       return { ...p, history: [...hist, { date: today, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
     }));
-  }, [portfolioSummaries, activePortfolioId]);
+  }, [portfolioSummaries, activePortfolioId, effectiveDateKey]);
 
   // 자동 히스토리 백필: 모든 누락 날짜 채우기
   useEffect(() => {
@@ -161,7 +162,7 @@ export const useHistoryBackfill = ({
       return { ...p, history: applyUpdates(p.history || [], res.updates, res.prin) };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
-  }, [stockHistoryMap, indicatorHistoryMap]);
+  }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey]);
 
   // 수동 백필: 지정 날짜부터 effectiveDate 미만까지 누락 평가액 채우기
   const handleManualBackfill = (fromDate) => {

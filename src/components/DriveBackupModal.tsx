@@ -35,7 +35,7 @@ export default function DriveBackupModal({
             <div className="text-center py-10 text-gray-500 text-xs">저장된 백업이 없습니다<br /><span className="text-gray-600">로그인 시 자동 생성 · 수동 Save 시 생성됩니다</span></div>
           ) : (
             <div className="space-y-2">
-              {backupList.filter(b => b.name.includes('_manual') || b.name.startsWith('[수동]') || b.name.includes('_change')).slice(0, 12).map((backup) => {
+              {backupList.filter(b => b.name.includes('_manual') || b.name.includes('_change')).slice(0, 6).map((backup) => {
                 const m = backup.name.match(/portfolio_backup_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
                 const displayTime = m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : backup.name;
                 const isApplying = applyingBackupId === backup.id;

@@ -432,7 +432,7 @@ export async function getManualLatestEntry(token: string, folderId: string): Pro
     if (!fileId) return null;
     const d = new Date(data.manualSavedAt);
     const pad = (n: number) => String(n).padStart(2, '0');
-    const label = `[수동] ${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const label = `portfolio_backup_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}00_manuallatest`;
     return { id: fileId, name: label, createdTime: new Date(data.manualSavedAt).toISOString() };
   } catch {
     return null;

@@ -54,7 +54,7 @@ import { useHistoryBackfill } from './hooks/useHistoryBackfill';
 import { useIndexImport } from './hooks/useIndexImport';
 import { usePortfolioData } from './hooks/usePortfolioData';
 import { useIntegratedData } from './hooks/useIntegratedData';
-import { useMarketCalendar, getTodayKST } from './hooks/useMarketCalendar';
+import { useMarketCalendar, getTodayKST, getEffectiveDate, getMsUntilCutoff } from './hooks/useMarketCalendar';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -250,6 +250,15 @@ export default function App() {
   
   const { notify, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead, confirmState, confirm, resolveConfirm } = useToast();
   const { isMarketOpen, holidays: marketHolidays, loaded: calendarLoaded } = useMarketCalendar();
+
+  // 07:30 이전: 전날 날짜로 기록 / 07:30 이후: 오늘 날짜로 기록
+  const [effectiveDateKey, setEffectiveDateKey] = useState(() => getEffectiveDate());
+  useEffect(() => {
+    const ms = getMsUntilCutoff();
+    if (ms === null) return;
+    const timer = setTimeout(() => setEffectiveDateKey(getEffectiveDate()), ms);
+    return () => clearTimeout(timer);
+  }, []);
 
   const [userAccessStatus, setUserAccessStatus] = useState<Record<string, boolean>>({});
 
@@ -939,7 +948,7 @@ export default function App() {
     portfolioSummaries, portfolios, setPortfolios,
     activePortfolioId, activePortfolioAccountType,
     portfolio, principal, history, setHistory,
-    portfolioStartDate, notify,
+    portfolioStartDate, notify, effectiveDateKey,
   });
 
   const { handleImportHistoryJSON } = useIndexImport({
@@ -1427,7 +1436,7 @@ export default function App() {
   useEffect(() => {
     if (totals.totalEval === 0) return;
     if (!calendarLoaded) return;
-    const today = getTodayKST();
+    const today = effectiveDateKey;
     const dayOfWeek = new Date(today + 'T12:00:00').getDay();
     const isTradingDay = (dayOfWeek !== 0 && dayOfWeek !== 6) && isMarketOpen(activePortfolioAccountType);
     setHistory(prev => {
@@ -1470,7 +1479,7 @@ export default function App() {
       const fills = fillNonTradingGaps(newHist, krH, usH, accType);
       return fills.length > 0 ? [...newHist, ...fills] : newHist;
     });
-  }, [totals.totalEval, principal, calendarLoaded, activePortfolioAccountType]);
+  }, [totals.totalEval, principal, calendarLoaded, activePortfolioAccountType, effectiveDateKey]);
 
   useEffect(() => {
     if (unifiedDates.length === 0) return;
@@ -1967,6 +1976,7 @@ export default function App() {
             handleToggleComp={handleToggleComp}
             handleFetchCompHistory={handleFetchCompHistory}
             handleRemoveCompStock={handleRemoveCompStock}
+            effectiveDateKey={effectiveDateKey}
           />
         </div>
         )}

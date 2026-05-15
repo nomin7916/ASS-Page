@@ -1,6 +1,6 @@
 ﻿// @ts-nocheck
 import React, { useState } from 'react';
-import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, Plus, TrendingUp } from 'lucide-react';
+import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, Plus, TrendingUp, Info } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
@@ -54,6 +54,7 @@ export default function PortfolioChart({
   handleFetchCompHistory,
   handleRemoveCompStock,
   defaultSelectionResult,
+  effectiveDateKey,
 }) {
   const [showPrincipal, setShowPrincipal] = useState(false);
 
@@ -111,6 +112,13 @@ export default function PortfolioChart({
         })()}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
+            <span
+              className="text-gray-500 text-[10px] font-bold flex items-center gap-0.5 cursor-help select-none shrink-0"
+              title={`평가 추이액 종가 기준 (KST 07:30)\n· 07:30 이전: 전날(${effectiveDateKey || ''}) 날짜로 기록\n· 07:30 이후: 오늘 날짜로 새 기록 생성\n전일 종가가 확정된 이후 기록이 고정(isFixed)됩니다.`}
+            >
+              <Info size={11} className="text-gray-600" />
+              평가추이
+            </span>
             {/* gold 계좌: 고정 지표 4개 칩 / 그 외: 비교종목 칩 */}
             {!userFeatures.feature1 && activePortfolioAccountType === 'gold' && (
               <div className="flex flex-wrap items-center gap-2">
