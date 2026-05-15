@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useMemo } from 'react';
 import { cleanNum } from '../utils';
+import { getEffectiveDate } from './useMarketCalendar';
 
 export function useIntegratedData({
   portfolios,
@@ -16,6 +17,7 @@ export function useIntegratedData({
   depositHistory2,
   intAppliedRange,
   intIsZeroBaseMode,
+  effectiveDateKey,
 }) {
   const portfolioSummaries = useMemo(() => {
     return portfolios.map(p => {
@@ -104,8 +106,7 @@ export function useIntegratedData({
 
   const computedIntHistory = useMemo(() => {
     const dateToTotal = new Map();
-    const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
-    const today = kstNow.toISOString().split('T')[0];
+    const today = effectiveDateKey || getEffectiveDate();
     portfolios.forEach(p => {
       const hist = p.id === activePortfolioId ? history : (p.history || []);
       hist.forEach(h => {
@@ -143,7 +144,7 @@ export function useIntegratedData({
         return { id: date, date, evalAmount, effectivePrincipal };
       })
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw]);
+  }, [portfolios, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw, effectiveDateKey]);
 
   const intSortedHistory = useMemo(() =>
     [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),

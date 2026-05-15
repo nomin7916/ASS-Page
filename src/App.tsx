@@ -940,6 +940,7 @@ export default function App() {
     portfolios, activePortfolioId, portfolio, principal,
     avgExchangeRate, portfolioStartDate, title, marketIndicators,
     history, depositHistory, depositHistory2, intAppliedRange, intIsZeroBaseMode,
+    effectiveDateKey,
   });
 
 
