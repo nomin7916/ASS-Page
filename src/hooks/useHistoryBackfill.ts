@@ -46,11 +46,10 @@ export const useHistoryBackfill = ({
     }));
   }, [portfolioSummaries, activePortfolioId]);
 
-  // 자동 히스토리 백필: 날짜 gap 채우기 + 전날 종가 교정
+  // 자동 히스토리 백필: 날짜 gap 채우기
   useEffect(() => {
     if (Object.keys(stockHistoryMap).length === 0) return;
     const today = new Date().toISOString().split('T')[0];
-    const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
 
     const hasHistData = Object.values(stockHistoryMap).some(m => Object.keys(m).some(d => d < today));
     const hasGoldHistData = Object.keys(indicatorHistoryMap.goldKr || {}).some(d => d < today);
@@ -88,22 +87,6 @@ export const useHistoryBackfill = ({
         if (evalAmt > 0) { backfillDoneRef.current[key] = true; updates.push({ date, evalAmt }); }
       });
 
-      // 전날 종가 교정: 장 마감 전 기록된 전날 항목을 실제 종가로 덮어쓰기
-      // sysCorrected: true 이면 이미 교정 완료 — 재실행 방지
-      if (availDates.has(yesterday)) {
-        const existingYesterday = hist.find(h => h.date === yesterday);
-        if (existingYesterday && !existingYesterday.isFixed && !existingYesterday.userChosen && !existingYesterday.sysCorrected) {
-          const key = `${portfolioId}_correct_${yesterday}`;
-          if (!backfillDoneRef.current[key]) {
-            const evalAmt = calcEval(items, accountType, yesterday);
-            if (evalAmt > 0 && evalAmt !== existingYesterday.evalAmount) {
-              backfillDoneRef.current[key] = true;
-              updates.push({ date: yesterday, evalAmt, isCorrection: true });
-            }
-          }
-        }
-      }
-
       // 기존 기록 사이의 주말/연휴 gap 채우기 (2~5일 gap = 주말 or 공휴일)
       const sortedHist = [...hist].sort((a, b) => a.date.localeCompare(b.date));
       for (let i = 0; i < sortedHist.length - 1; i++) {
@@ -134,7 +117,7 @@ export const useHistoryBackfill = ({
 
     const applyUpdates = (hist, updates, prin) => {
       const newHist = [...hist];
-      updates.forEach(({ date, evalAmt, isCorrection }) => {
+      updates.forEach(({ date, evalAmt }) => {
         const idx = newHist.findIndex(h => h.date === date);
         if (idx >= 0) {
           if (!newHist[idx].isFixed) {
@@ -142,7 +125,6 @@ export const useHistoryBackfill = ({
               ...newHist[idx],
               evalAmount: evalAmt,
               principal: prin,
-              ...(isCorrection && { sysCorrected: true }),
             };
           }
         } else {
