@@ -35,16 +35,17 @@ export default function DriveBackupModal({
             <div className="text-center py-10 text-gray-500 text-xs">저장된 백업이 없습니다<br /><span className="text-gray-600">로그인 시 자동 생성 · 수동 Save 시 생성됩니다</span></div>
           ) : (
             <div className="space-y-2">
-              {backupList.filter(b => b.name.includes('_manual') || b.name.startsWith('[수동]')).slice(0, 6).map((backup) => {
+              {backupList.filter(b => b.name.includes('_manual') || b.name.startsWith('[수동]') || b.name.includes('_change')).slice(0, 12).map((backup) => {
                 const m = backup.name.match(/portfolio_backup_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
                 const displayTime = m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : backup.name;
                 const isApplying = applyingBackupId === backup.id;
+                const isChange = backup.name.includes('_change');
                 return (
                   <div key={backup.id} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-slate-800/70 border border-gray-700/40 hover:border-purple-700/40 transition">
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] text-gray-300 font-mono">{displayTime}</span>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-blue-700/60 text-blue-200">
-                        수동
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${isChange ? 'bg-orange-700/60 text-orange-200' : 'bg-blue-700/60 text-blue-200'}`}>
+                        {isChange ? '변경' : '수동'}
                       </span>
                     </div>
                     <button
@@ -59,7 +60,7 @@ export default function DriveBackupModal({
               })}
             </div>
           )}
-          <p className="mt-3 text-[10px] text-gray-600 text-center">최대 {MAX_BACKUPS}개 저장 · 로그인 시 자동 생성 · 수동 Save 시 생성</p>
+          <p className="mt-3 text-[10px] text-gray-600 text-center">수동 최대 {MAX_BACKUPS}개 · 변경 최대 {MAX_BACKUPS}개 저장</p>
         </div>
       </div>
     </div>

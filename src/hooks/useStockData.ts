@@ -1,6 +1,8 @@
 // @ts-nocheck
+import { useEffect, useRef } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum } from '../utils';
+import { getEffectiveDate, getMsUntilCutoff } from './useMarketCalendar';
 
 interface UseStockDataParams {
   portfolio: any[];
@@ -520,7 +522,7 @@ export function useStockData({
     setStockFetchStatus(prev => ({ ...prev, ...loadingStatus }));
 
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getEffectiveDate();
       const isOverseasRefresh = activePortfolioAccountTypeRef.current === 'overseas';
 
       // 전체 계좌 종목 동시 조회 및 portfolios[] 업데이트 (활성 계좌 포함)
@@ -542,7 +544,7 @@ export function useStockData({
         const existing = stockHistoryMapRef.current[code];
         if (!existing || Object.keys(existing).length <= 3) return true;
         const latestDate = Object.keys(existing).sort().pop() || '';
-        return (Date.now() - new Date(latestDate + 'T12:00:00').getTime()) / 86400000 > 1.5;
+        return (Date.now() - new Date(latestDate + 'T12:00:00').getTime()) / 86400000 > 0.5;
       });
       const usCodesNeedingHistory = isOverseasRefresh ? activeStockCodes.filter(code => {
         const existing = stockHistoryMapRef.current[code];
@@ -671,6 +673,17 @@ export function useStockData({
       setIsLoading(false);
     }
   };
+
+  // 07:30 AM KST 경계 자동 전환: 앱이 07:30 이전에 시작된 경우 타이머 설정
+  // 타이머 발동 시 refreshPrices() 재실행 → effectiveDate가 오늘로 전환됨
+  const refreshPricesRef = useRef(refreshPrices);
+  refreshPricesRef.current = refreshPrices;
+  useEffect(() => {
+    const ms = getMsUntilCutoff();
+    if (ms === null) return;
+    const timer = setTimeout(() => { refreshPricesRef.current(); }, ms);
+    return () => clearTimeout(timer);
+  }, []);
 
   return {
     handleStockBlur,

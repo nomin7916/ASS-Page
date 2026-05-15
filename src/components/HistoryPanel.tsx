@@ -20,25 +20,10 @@ export default function HistoryPanel({
   setComparisonMode,
   handleDownloadCSV,
   handleLookupDownloadCSV,
+  stockHistoryMap,
+  portfolio,
   notify,
 }) {
-  const [editingDate, setEditingDate] = React.useState(null);
-  const [editingValue, setEditingValue] = React.useState('');
-
-  const startEdit = (date, currentVal) => {
-    setEditingDate(date);
-    setEditingValue(String(currentVal));
-  };
-
-  const commitEdit = (date) => {
-    const parsed = parseFloat(editingValue.replace(/[^0-9.]/g, ''));
-    if (!isNaN(parsed) && parsed > 0) {
-      setHistory(prev => prev.map(h => h.date === date ? { ...h, evalAmount: parsed } : h));
-      notify(`${date} 평가액 수정 완료`, 'success');
-    }
-    setEditingDate(null);
-  };
-
   return (
           <div className="w-full xl:w-[24%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
             <div className="p-4 bg-[#0f172a] text-white font-bold flex justify-between items-center text-sm border-b border-gray-700 shrink-0">
@@ -52,9 +37,9 @@ export default function HistoryPanel({
               <table className="w-full text-right text-[11px] table-fixed border-collapse">
                 <colgroup>
                   <col className="w-[35%]" />
-                  <col className="w-[35%]" />
+                  <col className="w-[38%]" />
                   <col className="w-[20%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[7%]" />
                 </colgroup>
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
                   <tr>
@@ -74,42 +59,39 @@ export default function HistoryPanel({
                     const prev = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
                     const dod = (prev && prev.evalAmount > 0) ? ((h.evalAmount / prev.evalAmount) - 1) * 100 : 0;
                     const isToday = h.date === new Date().toISOString().split('T')[0];
-                    const showingActual = h.isAdjusted && h.evalAmount === h.actualEvalAmount;
-                    const handleToggle = h.isAdjusted ? () => {
-                      setHistory(prevHist => prevHist.map(entry => {
-                        if (entry.date !== h.date) return entry;
-                        const newEval = entry.evalAmount === entry.actualEvalAmount ? (entry.adjustedAmount ?? entry.evalAmount) : entry.actualEvalAmount;
-                        return { ...entry, evalAmount: newEval, userChosen: true };
-                      }));
-                    } : undefined;
-                    const isEditing = editingDate === h.date;
+
+                    // 종가 검증: stockHistoryMap 기준 기대값 계산
+                    let verifyIcon = null;
+                    if (h.isFixed && stockHistoryMap && portfolio?.length > 0) {
+                      const stocks = portfolio.filter(p => p.type === 'stock' && p.code && stockHistoryMap[p.code]?.[h.date]);
+                      if (stocks.length > 0) {
+                        const expected = stocks.reduce((sum, p) => {
+                          const price = stockHistoryMap[p.code]?.[h.date];
+                          return sum + (price ? price * (parseFloat(p.quantity) || 0) : 0);
+                        }, 0);
+                        const diff = expected > 0 ? Math.abs(h.evalAmount - expected) / expected : 0;
+                        verifyIcon = diff < 0.001
+                          ? <span className="text-green-500 text-[9px]" title={`종가 일치: ${Math.round(expected).toLocaleString()}원`}>✓</span>
+                          : <span className="text-amber-400 text-[9px]" title={`종가 불일치\n기록: ${Math.round(h.evalAmount).toLocaleString()}\n종가계산: ${Math.round(expected).toLocaleString()}`}>△</span>;
+                      }
+                    }
+
                     return (
                       <tr key={h.id || i} className={`border-b border-gray-700 ${isToday ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
-                        <td className={`py-1.5 px-1.5 text-center border-r border-gray-600 font-bold ${h.isAdjusted ? 'text-blue-300' : 'text-gray-400'}`}>{formatShortDate(h.date)}</td>
-                        <td
-                          className={`py-1.5 px-1.5 border-r border-gray-600 font-bold text-right ${h.isAdjusted ? 'text-blue-300 cursor-pointer hover:text-blue-200' : 'text-white cursor-pointer'}`}
-                          onClick={handleToggle}
-                          onDoubleClick={() => startEdit(h.date, h.evalAmount)}
-                          title={h.isAdjusted ? (showingActual ? '클릭: 전일 종가로 전환 / 더블클릭: 값 직접 수정' : '클릭: 실제 포트폴리오 합계로 전환 / 더블클릭: 값 직접 수정') : '더블클릭: 값 직접 수정'}
-                        >
-                          {isEditing ? (
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              autoFocus
-                              value={editingValue}
-                              onChange={e => setEditingValue(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter') commitEdit(h.date); if (e.key === 'Escape') setEditingDate(null); }}
-                              onBlur={() => commitEdit(h.date)}
-                              className="w-full bg-gray-900 text-yellow-300 text-right px-1 py-0.5 rounded border border-yellow-500 outline-none text-[11px]"
-                              onClick={e => e.stopPropagation()}
-                            />
-                          ) : (
-                            <>
-                              {activePortfolioAccountType === 'overseas' ? <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(h.evalAmount/(marketIndicators.usdkrw||1))}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div> : formatCurrency(h.evalAmount)}
-                              {h.isAdjusted && <span className="block text-[9px] font-normal leading-none mt-0.5">{showingActual ? '실제값' : '조정됨'}</span>}
-                            </>
-                          )}
+                        <td className={`py-1.5 px-1.5 text-center border-r border-gray-600 font-bold ${h.isFixed ? 'text-emerald-400/80' : 'text-gray-400'}`}>
+                          {formatShortDate(h.date)}
+                          {h.isFixed && <span className="ml-0.5 text-[8px] text-emerald-500/60">●</span>}
+                        </td>
+                        <td className="py-1.5 px-1.5 border-r border-gray-600 font-bold text-right text-white">
+                          <div className="flex items-center justify-end gap-1">
+                            {verifyIcon}
+                            <span>
+                              {activePortfolioAccountType === 'overseas'
+                                ? <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(h.evalAmount/(marketIndicators.usdkrw||1))}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div>
+                                : formatCurrency(h.evalAmount)}
+                            </span>
+                          </div>
+                          {h.isAdjusted && <span className="block text-[9px] font-normal leading-none mt-0.5 text-blue-400">조정됨</span>}
                         </td>
                         <td className="py-1.5 px-1 border-r border-gray-600 text-center font-bold"><span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span></td>
                         <td className="py-1.5 px-1 text-center"><button onClick={() => { setLookupRows([{ id: generateId(), date: h.date }, ...lookupRows]); notify("조회 목록 복사", "info"); }} className="text-blue-400"><ArrowDownToLine size={12} /></button></td>

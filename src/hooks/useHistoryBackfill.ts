@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useRef, useEffect } from 'react';
 import { calcPortfolioEvalForDate, isWeekend } from '../utils';
+import { getEffectiveDate } from './useMarketCalendar';
 
 export const useHistoryBackfill = ({
   stockHistoryMap,
@@ -23,7 +24,7 @@ export const useHistoryBackfill = ({
 
   // 비활성 계좌 오늘 평가액 자동 기록
   useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getEffectiveDate();
     let needsUpdate = false;
     portfolioSummaries.forEach(s => {
       if (s.id === activePortfolioId || s.currentEval === 0) return;
@@ -40,19 +41,18 @@ export const useHistoryBackfill = ({
       nonActiveHistRecordedRef.current[key] = summary.currentEval;
       const hist = p.history || [];
       const idx = hist.findIndex(h => h.date === today);
-      // 오늘 항목이 이미 있으면 수정하지 않음
       if (idx >= 0) return p;
       return { ...p, history: [...hist, { date: today, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
     }));
   }, [portfolioSummaries, activePortfolioId]);
 
-  // 자동 히스토리 백필: 날짜 gap 채우기
+  // 자동 히스토리 백필: 모든 누락 날짜 채우기
   useEffect(() => {
     if (Object.keys(stockHistoryMap).length === 0) return;
-    const today = new Date().toISOString().split('T')[0];
+    const effectiveDate = getEffectiveDate();
 
-    const hasHistData = Object.values(stockHistoryMap).some(m => Object.keys(m).some(d => d < today));
-    const hasGoldHistData = Object.keys(indicatorHistoryMap.goldKr || {}).some(d => d < today);
+    const hasHistData = Object.values(stockHistoryMap).some(m => Object.keys(m).some(d => d < effectiveDate));
+    const hasGoldHistData = Object.keys(indicatorHistoryMap.goldKr || {}).some(d => d < effectiveDate);
     if (!hasHistData && !hasGoldHistData) return;
 
     const calcEval = (items, accountType, date) =>
@@ -65,70 +65,85 @@ export const useHistoryBackfill = ({
       const baseDate = startDate || sortedDates[0] || null;
       if (!baseDate) return null;
 
+      // stockHistoryMap에 있는 과거 날짜 수집 (effectiveDate 미만)
       const availDates = new Set();
       if (isGold) {
-        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= baseDate && d < today) availDates.add(d); });
+        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= baseDate && d < effectiveDate) availDates.add(d); });
       } else {
         items.forEach(item => {
           if ((item.type === 'stock' || item.type === 'fund') && item.code && stockHistoryMap[item.code]) {
-            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d >= baseDate && d < today) availDates.add(d); });
+            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d >= baseDate && d < effectiveDate) availDates.add(d); });
           }
         });
       }
 
       const updates = [];
-      const existingDates = new Set(hist.map(h => h.date));
+      const existingMap = new Map(hist.map(h => [h.date, h]));
 
+      // 거래일 데이터가 있는 날짜: isFixed: false이면 종가로 교정, 없으면 신규 추가
       [...availDates].sort().forEach(date => {
-        if (existingDates.has(date)) return;
+        const existing = existingMap.get(date);
+        if (existing?.isFixed) return;
         const key = `${portfolioId}_fill_${date}`;
         if (backfillDoneRef.current[key]) return;
         const evalAmt = calcEval(items, accountType, date);
-        if (evalAmt > 0) { backfillDoneRef.current[key] = true; updates.push({ date, evalAmt }); }
+        if (evalAmt > 0) {
+          backfillDoneRef.current[key] = true;
+          updates.push({ date, evalAmt, isFixed: true });
+        }
       });
 
-      // 기존 기록 사이의 주말/연휴 gap 채우기 (2~5일 gap = 주말 or 공휴일)
-      const sortedHist = [...hist].sort((a, b) => a.date.localeCompare(b.date));
-      for (let i = 0; i < sortedHist.length - 1; i++) {
-        const from = sortedHist[i];
-        const to = sortedHist[i + 1];
-        const gapMs = new Date(to.date + 'T12:00:00') - new Date(from.date + 'T12:00:00');
-        const gapDays = Math.round(gapMs / 86400000);
-        if (gapDays < 2 || gapDays > 5) continue;
-        const d = new Date(from.date + 'T12:00:00');
+      // 주말·공휴일 gap 채우기: 거래일 데이터가 없는 날짜를 직전 거래일 값으로 이월
+      // 범위: baseDate ~ effectiveDate 사이 전체 날짜 순회
+      const sortedAvail = [...availDates].sort();
+      if (sortedAvail.length > 0) {
+        const rangeStart = sortedAvail[0];
+        const rangeEnd = effectiveDate;
+        const d = new Date(rangeStart + 'T12:00:00');
+        let lastVal = 0;
+
+        // rangeStart의 값 초기화
+        const startEntry = existingMap.get(rangeStart) || updates.find(u => u.date === rangeStart);
+        if (startEntry) lastVal = startEntry.evalAmt ?? startEntry.evalAmount ?? 0;
+
         d.setDate(d.getDate() + 1);
-        while (d.toISOString().split('T')[0] < to.date) {
+        while (true) {
           const ds = d.toISOString().split('T')[0];
-          if (!existingDates.has(ds) && !availDates.has(ds) && (isWeekend(ds) || gapDays <= 3)) {
-            const key = `${portfolioId}_gap_${ds}`;
-            if (!backfillDoneRef.current[key]) {
-              backfillDoneRef.current[key] = true;
-              updates.push({ date: ds, evalAmt: from.evalAmount });
-              existingDates.add(ds);
+          if (ds >= rangeEnd) break;
+          if (!availDates.has(ds)) {
+            // 거래일 데이터 없음 (주말/공휴일) → 직전 값 이월
+            const existing = existingMap.get(ds);
+            if (!existing?.isFixed) {
+              const key = `${portfolioId}_gap_${ds}`;
+              if (!backfillDoneRef.current[key] && lastVal > 0) {
+                backfillDoneRef.current[key] = true;
+                updates.push({ date: ds, evalAmt: lastVal, isFixed: true });
+              }
             }
+          } else {
+            // 거래일: lastVal 갱신
+            const filled = updates.find(u => u.date === ds);
+            const ex = existingMap.get(ds);
+            const v = filled?.evalAmt || ex?.evalAmount || 0;
+            if (v > 0) lastVal = v;
           }
           d.setDate(d.getDate() + 1);
         }
       }
-
 
       return updates.length > 0 ? { updates, prin } : null;
     };
 
     const applyUpdates = (hist, updates, prin) => {
       const newHist = [...hist];
-      updates.forEach(({ date, evalAmt }) => {
+      updates.forEach(({ date, evalAmt, isFixed }) => {
         const idx = newHist.findIndex(h => h.date === date);
         if (idx >= 0) {
           if (!newHist[idx].isFixed) {
-            newHist[idx] = {
-              ...newHist[idx],
-              evalAmount: evalAmt,
-              principal: prin,
-            };
+            newHist[idx] = { ...newHist[idx], evalAmount: evalAmt, principal: prin, isFixed };
           }
         } else {
-          newHist.push({ date, evalAmount: evalAmt, principal: prin, isFixed: false });
+          newHist.push({ date, evalAmount: evalAmt, principal: prin, isFixed });
         }
       });
       return newHist;
@@ -148,12 +163,11 @@ export const useHistoryBackfill = ({
     if (portfoliosChanged) setPortfolios(nextPortfolios);
   }, [stockHistoryMap, indicatorHistoryMap]);
 
-  // 수동 백필: 지정 날짜부터 어제까지 모든 계좌의 누락 평가액 채우기
+  // 수동 백필: 지정 날짜부터 effectiveDate 미만까지 누락 평가액 채우기
   const handleManualBackfill = (fromDate) => {
     if (!fromDate) return;
-    const today = new Date().toISOString().split('T')[0];
-    const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
-    if (fromDate >= today) { notify('시작일은 오늘 이전이어야 합니다.', 'warning'); return; }
+    const effectiveDate = getEffectiveDate();
+    if (fromDate >= effectiveDate) { notify('시작일은 오늘 이전이어야 합니다.', 'warning'); return; }
 
     const calcEval = (items, accountType, date) =>
       calcPortfolioEvalForDate(items, accountType, date, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw);
@@ -161,14 +175,14 @@ export const useHistoryBackfill = ({
     const fillMissing = (items, accountType, prin, hist) => {
       if (accountType === 'simple' || !items.length) return null;
       const isGold = accountType === 'gold';
-      const existingDates = new Set(hist.map(h => h.date));
+      const existingDates = new Set(hist.filter(h => h.isFixed).map(h => h.date));
       const availDates = new Set();
       if (isGold) {
-        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= fromDate && d <= yesterday) availDates.add(d); });
+        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= fromDate && d < effectiveDate) availDates.add(d); });
       } else {
         items.forEach(item => {
           if ((item.type === 'stock' || item.type === 'fund') && item.code && stockHistoryMap[item.code]) {
-            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d >= fromDate && d <= yesterday) availDates.add(d); });
+            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d >= fromDate && d < effectiveDate) availDates.add(d); });
           }
         });
       }
@@ -176,7 +190,7 @@ export const useHistoryBackfill = ({
       [...availDates].sort().forEach(date => {
         if (existingDates.has(date)) return;
         const evalAmt = calcEval(items, accountType, date);
-        if (evalAmt > 0) newRecords.push({ date, evalAmount: evalAmt, principal: prin, isFixed: false });
+        if (evalAmt > 0) newRecords.push({ date, evalAmount: evalAmt, principal: prin, isFixed: true });
       });
       return newRecords.length > 0 ? newRecords : null;
     };

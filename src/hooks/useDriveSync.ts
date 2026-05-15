@@ -653,6 +653,21 @@ export function useDriveSync({
     try { window.close(); } catch {}
   };
 
+  // ── 포트폴리오 구성 변경 시 자동 백업 (메모 포함) ──
+  const handleAutoBackupWithMemo = (memo: string) => {
+    const token = driveTokenRef.current;
+    const folderId = driveFolderIdRef.current;
+    if (!token || !folderId || isInitialLoad.current) return;
+    setTimeout(async () => {
+      try {
+        const snap = saveStateRef.current;
+        if (!snap?.portfolios?.length) return;
+        const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = snap;
+        await saveVersionedBackup(token, folderId, { ...stateCore, changeNote: memo }, 'change');
+      } catch {}
+    }, 800);
+  };
+
   return {
     // 상태
     driveStatus, setDriveStatus,
@@ -694,6 +709,7 @@ export function useDriveSync({
     handleOpenBackupModal,
     handleApplyBackup,
     handleImportStateFile,
+    handleAutoBackupWithMemo,
     initSession,
   };
 }

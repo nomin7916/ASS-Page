@@ -322,12 +322,12 @@ export async function saveVersionFile(
 }
 
 // 타임스탬프 이름의 백업 파일 저장 후 오래된 것 정리
-// type: 'manual' = 수동 저장, 'auto' = 자동 저장
+// type: 'manual' = 수동 저장, 'auto' = 자동 저장, 'change' = 포트폴리오 구성 변경 자동 저장
 export async function saveVersionedBackup(
   token: string,
   folderId: string,
   data: unknown,
-  type: 'manual' | 'auto' = 'auto'
+  type: 'manual' | 'auto' | 'change' = 'auto'
 ): Promise<void> {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -403,9 +403,11 @@ async function cleanupOldBackups(token: string, folderId: string): Promise<void>
     const backups = await listBackups(token, folderId);
     const autoBackups = backups.filter(b => b.name.endsWith('_auto.json'));
     const manualBackups = backups.filter(b => b.name.endsWith('_manual.json'));
+    const changeBackups = backups.filter(b => b.name.endsWith('_change.json'));
     const toDelete = [
       ...autoBackups.slice(MAX_BACKUPS),
       ...manualBackups.slice(MAX_MANUAL_BACKUPS),
+      ...changeBackups.slice(MAX_BACKUPS),
     ];
     if (toDelete.length === 0) return;
     await Promise.all(

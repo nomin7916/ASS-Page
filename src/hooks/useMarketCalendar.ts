@@ -65,6 +65,33 @@ export function getEffectiveUSDate(): string {
   return formatDateKST(nowKST);
 }
 
+// 총자산 기록 유효 날짜:
+// KR+US 모든 자산 종가는 KST 07:30 이후 확정
+// → 07:30 미만이면 전일이 유효 날짜 (전일 종가 기준 기록)
+// → 07:30 이후면 오늘이 유효 날짜 (당일 현재가 기록)
+export function getEffectiveDate(): string {
+  const nowKST = getNowKST();
+  const h = nowKST.getHours();
+  const m = nowKST.getMinutes();
+  if (h < 7 || (h === 7 && m < 30)) {
+    const prev = new Date(nowKST);
+    prev.setDate(prev.getDate() - 1);
+    return formatDateKST(prev);
+  }
+  return formatDateKST(nowKST);
+}
+
+// 07:30 AM KST까지 남은 ms 반환 (이미 지났으면 null)
+export function getMsUntilCutoff(): number | null {
+  const nowKST = getNowKST();
+  const h = nowKST.getHours();
+  const m = nowKST.getMinutes();
+  if (h > 7 || (h === 7 && m >= 30)) return null;
+  const cutoff = new Date(nowKST);
+  cutoff.setHours(7, 30, 0, 0);
+  return cutoff.getTime() - nowKST.getTime();
+}
+
 async function fetchHolidaysForYear(year: number): Promise<{ kr: string[]; us: string[] }> {
   const [krRes, usRes] = await Promise.all([
     fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/KR`),
