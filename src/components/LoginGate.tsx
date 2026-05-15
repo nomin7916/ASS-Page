@@ -191,7 +191,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
       if ((window as any).google?.accounts?.oauth2) {
         const client = (window as any).google.accounts.oauth2.initTokenClient({
           client_id: GOOGLE_CLIENT_ID,
-          scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
+          scope: 'openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly',
           hint: opts.hint,
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {

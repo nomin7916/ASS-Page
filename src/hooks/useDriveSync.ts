@@ -322,7 +322,7 @@ export function useDriveSync({
     if ((window as any).google?.accounts?.oauth2) {
       const client = (window as any).google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
-        scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
+        scope: 'openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly',
         callback: (resp: any) => {
           const t: string | null = resp.error ? null : resp.access_token;
           if (t) {

@@ -31,29 +31,9 @@ export const DRIVE_FILES = {
 // 동시 호출 중복 방지 — 이메일 기준 캐시 (토큰 교체 시에도 폴더 중복 생성 방지)
 let _folderCache: { key: string; promise: Promise<string> } | null = null;
 
-// drive.file 스코프는 files.list가 새 세션에서 기존 폴더를 반환하지 않을 수 있음
-// → 폴더 ID를 이메일 키로 localStorage에 영구 캐시하여 직접 접근
-const _lsKey = (email: string) => `_driveFolderId_${email}`;
-
-function _saveFolderIdCache(email: string, id: string) {
-  try { localStorage.setItem(_lsKey(email), id); } catch {}
-}
-
-async function _verifyFolderId(token: string, id: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${DRIVE_API}/files/${id}?fields=id,trashed`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    return !data.trashed;
-  } catch {
-    return false;
-  }
-}
-
 // Index_Data_<email> 폴더 찾기 또는 없으면 생성
 // 구 형식(Index_Data) 폴더가 있으면 자동으로 새 이름으로 마이그레이션
+// drive.metadata.readonly 스코프 추가로 files.list가 기기/세션에 관계없이 모든 폴더를 반환함
 export async function getOrCreateIndexFolder(token: string, email: string): Promise<string> {
   const key = email; // 토큰이 바뀌어도 같은 이메일이면 캐시 히트 → 중복 생성 방지
   if (_folderCache?.key === key) return _folderCache.promise;
@@ -68,18 +48,6 @@ export async function getOrCreateIndexFolder(token: string, email: string): Prom
 async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<string> {
   const newName = getFolderName(email);
 
-  // 0단계: localStorage 캐시 확인
-  // drive.file 스코프에서 files.list는 현재 세션에 열거나 만든 파일만 반환하지만,
-  // 파일 ID 직접 접근(GET /files/{id})은 앱이 생성한 모든 파일에 동작함
-  if (email) {
-    const cachedId = localStorage.getItem(_lsKey(email));
-    if (cachedId) {
-      const valid = await _verifyFolderId(token, cachedId);
-      if (valid) return cachedId;
-      try { localStorage.removeItem(_lsKey(email)); } catch {}
-    }
-  }
-
   // 1단계: 새 형식 폴더(Index_Data_<email>) 탐색
   const q1 = encodeURIComponent(
     `name='${newName}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
@@ -93,11 +61,7 @@ async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<
     throw new Error(`[Drive] 폴더 검색 실패 ${res1.status}: ${err?.error?.message || res1.statusText}`);
   }
   const data1 = await res1.json();
-  if (data1.files?.length > 0) {
-    const id = data1.files[0].id;
-    _saveFolderIdCache(email, id);
-    return id;
-  }
+  if (data1.files?.length > 0) return data1.files[0].id;
 
   // 2단계: 구 형식 폴더(Index_Data) 탐색 → 데이터 있는 폴더를 새 이름으로 마이그레이션
   const q2 = encodeURIComponent(
@@ -127,7 +91,6 @@ async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<
           } else {
             console.warn(`[Drive] 폴더 이름 변경 실패 (${renameRes.status}). 기존 폴더 계속 사용.`);
           }
-          _saveFolderIdCache(email, folder.id);
           return folder.id;
         }
       }
@@ -148,7 +111,6 @@ async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<
     throw new Error(`[Drive] 폴더 생성 실패 ${createRes.status}: ${err?.error?.message || createRes.statusText}`);
   }
   const created = await createRes.json();
-  _saveFolderIdCache(email, created.id);
   return created.id;
 }
 
