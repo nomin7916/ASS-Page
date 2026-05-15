@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore } from 'lucide-react';
+import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload } from 'lucide-react';
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 
 export default function AccountTabBar({
@@ -24,6 +24,8 @@ export default function AccountTabBar({
   historyInputRef,
   handleImportHistoryJSON,
   handleImportStateFile,
+  handleDownloadStateFile,
+  isAdmin,
 }) {
   const stateFileInputRef = React.useRef(null);
   return (
@@ -108,17 +110,28 @@ export default function AccountTabBar({
           >
             <History size={14} />
           </button>
+          {isAdmin && (
+            <>
+              <button
+                onClick={() => historyInputRef.current?.click()}
+                title="지수/종목 히스토리 주입 (JSON 또는 CSV)"
+                className="p-1.5 hover:bg-gray-800 rounded transition text-orange-400 hover:text-orange-300"
+              >
+                <FileUp size={14} />
+              </button>
+              <input type="file" ref={historyInputRef} onChange={handleImportHistoryJSON} className="hidden" accept=".json,.csv" multiple />
+            </>
+          )}
           <button
-            onClick={() => historyInputRef.current?.click()}
-            title="지수/종목 히스토리 주입 (JSON 또는 CSV)"
-            className="p-1.5 hover:bg-gray-800 rounded transition text-orange-400 hover:text-orange-300"
+            onClick={handleDownloadStateFile}
+            title="PC에 데이터 저장 (portfolio_state.json 다운로드)"
+            className="p-1.5 hover:bg-gray-800 rounded transition text-emerald-400 hover:text-emerald-300"
           >
-            <FileUp size={14} />
+            <HardDriveDownload size={14} />
           </button>
-          <input type="file" ref={historyInputRef} onChange={handleImportHistoryJSON} className="hidden" accept=".json,.csv" multiple />
           <button
             onClick={() => stateFileInputRef.current?.click()}
-            title="계좌 데이터 파일로 복원 (portfolio_state.json)"
+            title="파일에서 데이터 복원 (portfolio_state.json)"
             className="p-1.5 hover:bg-gray-800 rounded transition text-green-400 hover:text-green-300"
           >
             <ArchiveRestore size={14} />

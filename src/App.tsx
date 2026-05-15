@@ -1111,6 +1111,21 @@ export default function App() {
     }
   };
 
+  const handleDownloadStateFile = () => {
+    const currentPortfolios = buildPortfoliosState();
+    const newUpdatedAt = Date.now();
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds }, intHistory, portfolioUpdatedAt: newUpdatedAt };
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
+    a.href = url;
+    a.download = `portfolio_state_${dateStr}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    notify('PC에 데이터를 저장했습니다.', 'success');
+  };
+
   const handleAppClose = async () => {
     notify('백업 저장합니다.', 'info');
     const currentPortfolios = buildPortfoliosState();
@@ -1669,6 +1684,8 @@ export default function App() {
           historyInputRef={historyInputRef}
           handleImportHistoryJSON={handleImportHistoryJSON}
           handleImportStateFile={handleImportStateFile}
+          handleDownloadStateFile={handleDownloadStateFile}
+          isAdmin={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()}
         />
 
         {/* Drive 백업 이력 모달 */}
