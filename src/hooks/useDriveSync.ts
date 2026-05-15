@@ -88,7 +88,6 @@ export function useDriveSync({
   // 세션 관리 — 단일 기기 강제 로그아웃
   const sessionIdRef = useRef('');           // 이 기기의 세션 ID
   const ownFolderIdRef = useRef('');         // 관리자가 타인 페이지 볼 때도 자신의 폴더 ID 유지
-  const lastVisibilityBackupRef = useRef<number>(0); // 탭 숨김 자동 백업 마지막 실행 시각
 
   // ── Drive 폴더 ID 캐시 확보 ──
   const ensureDriveFolder = async (token: string): Promise<string> => {
@@ -559,19 +558,7 @@ export function useDriveSync({
         const snap = saveStateRef.current;
         if (snap && snap.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
           if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
-          // 일반 저장 (STATE + MARKET 파일)
           saveAllToDrive(snap);
-          // 방안 C: 탭 숨김 시 자동 백업 — 5분 쓰로틀
-          const now = Date.now();
-          const FIVE_MIN = 5 * 60 * 1000;
-          if (now - lastVisibilityBackupRef.current >= FIVE_MIN) {
-            lastVisibilityBackupRef.current = now;
-            const folderId = driveFolderIdRef.current;
-            if (folderId && !adminViewingAsRef.current && !adminTransitioningRef.current) {
-              const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = snap;
-              saveVersionedBackup(driveTokenRef.current, folderId, stateCore, 'auto').catch(() => {});
-            }
-          }
         }
         return;
       }
@@ -581,10 +568,7 @@ export function useDriveSync({
       if (adminViewingAsRef.current || adminTransitioningRef.current) return;
       const snap = saveStateRef.current;
       if (!snap || !snap.portfolios?.length || !driveTokenRef.current || isInitialLoad.current) return;
-      const folderId = driveFolderIdRef.current;
-      if (!folderId) return;
-      const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = snap;
-      saveVersionedBackup(driveTokenRef.current, folderId, stateCore, 'auto').catch(() => {});
+      saveAllToDrive(snap);
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', handlePageHide);
