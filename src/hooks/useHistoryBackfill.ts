@@ -89,15 +89,16 @@ export const useHistoryBackfill = ({
       });
 
       // 전날 종가 교정: 장 마감 전 기록된 전날 항목을 실제 종가로 덮어쓰기
+      // sysCorrected: true 이면 이미 교정 완료 — 재실행 방지
       if (availDates.has(yesterday)) {
         const existingYesterday = hist.find(h => h.date === yesterday);
-        if (existingYesterday && !existingYesterday.isFixed && !existingYesterday.userChosen) {
+        if (existingYesterday && !existingYesterday.isFixed && !existingYesterday.userChosen && !existingYesterday.sysCorrected) {
           const key = `${portfolioId}_correct_${yesterday}`;
           if (!backfillDoneRef.current[key]) {
             const evalAmt = calcEval(items, accountType, yesterday);
             if (evalAmt > 0 && evalAmt !== existingYesterday.evalAmount) {
               backfillDoneRef.current[key] = true;
-              updates.push({ date: yesterday, evalAmt });
+              updates.push({ date: yesterday, evalAmt, isCorrection: true });
             }
           }
         }
@@ -133,10 +134,17 @@ export const useHistoryBackfill = ({
 
     const applyUpdates = (hist, updates, prin) => {
       const newHist = [...hist];
-      updates.forEach(({ date, evalAmt }) => {
+      updates.forEach(({ date, evalAmt, isCorrection }) => {
         const idx = newHist.findIndex(h => h.date === date);
         if (idx >= 0) {
-          if (!newHist[idx].isFixed) newHist[idx] = { ...newHist[idx], evalAmount: evalAmt, principal: prin };
+          if (!newHist[idx].isFixed) {
+            newHist[idx] = {
+              ...newHist[idx],
+              evalAmount: evalAmt,
+              principal: prin,
+              ...(isCorrection && { sysCorrected: true }),
+            };
+          }
         } else {
           newHist.push({ date, evalAmount: evalAmt, principal: prin, isFixed: false });
         }
