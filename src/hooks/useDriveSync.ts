@@ -93,7 +93,9 @@ export function useDriveSync({
   // ── Drive 폴더 ID 캐시 확보 ──
   const ensureDriveFolder = async (token: string): Promise<string> => {
     if (driveFolderIdRef.current) return driveFolderIdRef.current;
-    const id = await getOrCreateIndexFolder(token, authUser?.email || '');
+    const email = authUser?.email;
+    if (!email) throw new Error('[Drive] 이메일 없음 — 로그인 상태를 확인하세요');
+    const id = await getOrCreateIndexFolder(token, email);
     driveFolderIdRef.current = id;
     return id;
   };
@@ -188,7 +190,10 @@ export function useDriveSync({
         }
       }
       setSS('error');
-      if (msg.includes('401')) {
+      if (msg.includes('FOLDER_NOT_FOUND_FOR_KNOWN_USER')) {
+        notify('Drive 데이터 폴더를 찾을 수 없습니다. Google Drive 휴지통을 확인하거나 관리자에게 문의하세요.', 'error');
+        setDriveStatus('error');
+      } else if (msg.includes('401')) {
         console.warn('[Drive] 토큰 갱신 실패 → 재로그인 필요');
         setDriveStatus('auth_needed');
       } else if (msg.includes('403')) {
@@ -281,6 +286,11 @@ export function useDriveSync({
         return;
       }
       setSS('error');
+      if (msg.includes('FOLDER_NOT_FOUND_FOR_KNOWN_USER')) {
+        notify('Drive 데이터 폴더를 찾을 수 없습니다. Google Drive 휴지통을 확인하거나 관리자에게 문의하세요.', 'error');
+        setDriveStatus('error');
+        return;
+      }
       setDriveStatus('error');
       if (!isRetry) {
         notify('Drive 저장에 실패했습니다. 잠시 후 재시도합니다...', 'error');

@@ -11,6 +11,7 @@ interface ApprovedUser {
   email: string;
   resetFlag: string; // Apps Script returns raw A열 value: '', 'RESET', 'RESET:1234'
   name?: string;
+  registeredAt?: string; // 가입일 (ISO 날짜: "2026-01-15") — 시트 E열, Apps Script 업데이트 후 사용 가능
   feature1?: boolean;
   feature2?: boolean;
   feature3?: boolean;
@@ -466,6 +467,9 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   <div className="flex-1 min-w-0">
                     {u.name && <div className="text-gray-100 text-xs font-semibold truncate">{u.name}</div>}
                     <span className="text-gray-400 text-sm truncate">{u.email}</span>
+                    {u.registeredAt && (
+                      <div className="text-gray-600 text-xs mt-0.5">가입일: {u.registeredAt}</div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 ml-auto flex-shrink-0">
                     {u.feature1 && (
@@ -537,7 +541,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               구글 시트에서 사용자 관리
             </button>
             <p className="text-gray-600 text-xs mt-2 text-center">
-              A열: RESET / B열: 이메일 / C열: 이름 / D열: 기능1(ON/OFF)
+              A열: RESET / B열: 이메일 / C열: 이름 / D열: 기능1(ON/OFF) / E열: 가입일(YYYY-MM-DD)
             </p>
 
             <a

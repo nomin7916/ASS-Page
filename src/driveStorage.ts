@@ -31,13 +31,29 @@ export const DRIVE_FILES = {
 // 동시 호출 중복 방지 — 이메일 기준 캐시 (토큰 교체 시에도 폴더 중복 생성 방지)
 let _folderCache: { key: string; promise: Promise<string> } | null = null;
 
+// 후보 폴더 중 최적 선택: registeredAt 제공 시 가입일과 생성일 차이가 가장 작은 폴더,
+// 없으면 가장 오래된 폴더 (createdTime 오름차순 정렬 전제)
+function _pickBestFolder(folders: { id: string; createdTime: string }[], registeredAt?: string): string {
+  if (folders.length === 1) return folders[0].id;
+  if (!registeredAt) return folders[0].id; // 정렬이 createdTime asc이므로 index 0 = 가장 오래된 폴더
+  const regMs = new Date(registeredAt).getTime();
+  let best = folders[0];
+  let bestDiff = Math.abs(new Date(folders[0].createdTime).getTime() - regMs);
+  for (const f of folders.slice(1)) {
+    const diff = Math.abs(new Date(f.createdTime).getTime() - regMs);
+    if (diff < bestDiff) { best = f; bestDiff = diff; }
+  }
+  return best.id;
+}
+
 // Index_Data_<email> 폴더 찾기 또는 없으면 생성
 // 구 형식(Index_Data) 폴더가 있으면 자동으로 새 이름으로 마이그레이션
 // drive.metadata.readonly 스코프 추가로 files.list가 기기/세션에 관계없이 모든 폴더를 반환함
-export async function getOrCreateIndexFolder(token: string, email: string): Promise<string> {
+// registeredAt: 관리자가 기록한 가입일 (ISO 날짜 문자열, 예: "2026-01-15") — 중복 폴더 선택 기준
+export async function getOrCreateIndexFolder(token: string, email: string, registeredAt?: string): Promise<string> {
   const key = email; // 토큰이 바뀌어도 같은 이메일이면 캐시 히트 → 중복 생성 방지
   if (_folderCache?.key === key) return _folderCache.promise;
-  const promise = _doGetOrCreateIndexFolder(token, email).catch(err => {
+  const promise = _doGetOrCreateIndexFolder(token, email, registeredAt).catch(err => {
     _folderCache = null;
     throw err;
   });
@@ -45,15 +61,16 @@ export async function getOrCreateIndexFolder(token: string, email: string): Prom
   return promise;
 }
 
-async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<string> {
+async function _doGetOrCreateIndexFolder(token: string, email: string, registeredAt?: string): Promise<string> {
   const newName = getFolderName(email);
 
   // 1단계: 새 형식 폴더(Index_Data_<email>) 탐색
+  // createdTime 오름차순 정렬 → 중복 시 가장 오래된 폴더(원본)가 index 0
   const q1 = encodeURIComponent(
     `name='${newName}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
   );
   const res1 = await fetch(
-    `${DRIVE_API}/files?q=${q1}&spaces=drive&fields=files(id,modifiedTime)&orderBy=modifiedTime+desc`,
+    `${DRIVE_API}/files?q=${q1}&spaces=drive&fields=files(id,createdTime)&orderBy=createdTime`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res1.ok) {
@@ -61,7 +78,7 @@ async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<
     throw new Error(`[Drive] 폴더 검색 실패 ${res1.status}: ${err?.error?.message || res1.statusText}`);
   }
   const data1 = await res1.json();
-  if (data1.files?.length > 0) return data1.files[0].id;
+  if (data1.files?.length > 0) return _pickBestFolder(data1.files, registeredAt);
 
   // 2단계: 구 형식 폴더(Index_Data) 탐색 → 데이터 있는 폴더를 새 이름으로 마이그레이션
   const q2 = encodeURIComponent(
@@ -97,7 +114,22 @@ async function _doGetOrCreateIndexFolder(token: string, email: string): Promise<
     }
   }
 
-  // 3단계: 새 폴더 생성
+  // 2.5단계: 안전망 — portfolio_state.json 전역 검색
+  // 1·2단계에서 폴더를 못 찾았어도 데이터 파일이 존재하면 기존 사용자이므로 생성 차단
+  const safetyRes = await fetch(
+    `${DRIVE_API}/files?q=${encodeURIComponent(`name='portfolio_state.json' and trashed=false and 'me' in owners`)}&spaces=drive&fields=files(id,parents)`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  ).catch(() => null);
+  if (safetyRes?.ok) {
+    const safetyData = await safetyRes.json().catch(() => ({ files: [] }));
+    if (safetyData.files?.length > 0) {
+      const parentId = safetyData.files[0].parents?.[0];
+      if (parentId) return parentId;
+      throw new Error('FOLDER_NOT_FOUND_FOR_KNOWN_USER');
+    }
+  }
+
+  // 3단계: 새 폴더 생성 (1·2·2.5단계 모두 실패 = 진짜 신규 사용자)
   const createRes = await fetch(`${DRIVE_API}/files`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
