@@ -1382,8 +1382,11 @@ export default function App() {
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
     ]);
     if (portfolioStructureKey !== prevPortfolioStructureRef.current) {
+      const wasInitial = prevPortfolioStructureRef.current === '';
       prevPortfolioStructureRef.current = portfolioStructureKey;
-      portfolioUpdatedAtRef.current = Date.now();
+      if (!wasInitial) {
+        portfolioUpdatedAtRef.current = Date.now();
+      }
     }
     // 활성 포트폴리오의 차트 상태(비교종목 포함)를 항상 최신으로 유지
     if (activePortfolioId) {

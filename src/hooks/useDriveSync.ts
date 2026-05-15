@@ -152,6 +152,9 @@ export function useDriveSync({
       }
 
       applyStateData(stateToApply, null, marketData);
+      // 로드한 portfolioUpdatedAt을 ref에 동기화 — 초기 로드 시 useEffect가 새 타임스탬프를 만들어
+      // lastDriveSavedPortfolioUpdatedAt보다 커지는 것을 방지 (의도치 않은 자동 저장 억제)
+      portfolioUpdatedAtRef.current = (stateToApply as any).portfolioUpdatedAt || 0;
       setSS('ready');
       setDriveStatus('saved');
 
