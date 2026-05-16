@@ -240,6 +240,18 @@ export const calcPortfolioEvalForDate = (
       hasAnyPrice = true;
       return;
     }
+    if (item.type === 'fund') {
+      // 펀드: 해당 날짜 NAV 이력 우선, 없으면 현재 평가액으로 폴백
+      // (통합·포트폴리오 테이블 계산과 동일 규칙 — 일일 평가액에서 누락 금지)
+      const fQty = cleanNum(item.quantity);
+      const histPrice = item.code ? (getClosestValue(stockHistoryMap?.[item.code], date) || 0) : 0;
+      let evl = 0;
+      if (fQty > 0 && histPrice > 0) evl = fQty * histPrice * fxRate;
+      else if (fQty > 0 && cleanNum(item.currentPrice) > 0) evl = fQty * cleanNum(item.currentPrice) * fxRate;
+      else evl = cleanNum(item.evalAmount) * fxRate;
+      if (evl > 0) { totalEval += evl; hasAnyPrice = true; }
+      return;
+    }
     const qty = cleanNum(item.quantity);
     if (!qty || qty <= 0) return;
     let price = 0;
