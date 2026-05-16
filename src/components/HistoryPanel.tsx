@@ -67,16 +67,24 @@ export default function HistoryPanel({
                     // 종가 검증
                     let verifyIcon = null;
                     if (isWeekend && prevEntry) {
-                      // 주말: 직전 항목(평일) 종가와 비교
-                      const diff = prevEntry.evalAmount > 0 ? Math.abs(h.evalAmount - prevEntry.evalAmount) / prevEntry.evalAmount : 0;
+                      // 주말: 직전 거래일 종가 계산 (stockHistoryMap/goldKr 우선, 없으면 직전 기록값)
+                      let targetVal = prevEntry.evalAmount;
+                      if (stockHistoryMap && portfolio?.length > 0) {
+                        const closingExpected = calcPortfolioEvalForDate(
+                          portfolio, activePortfolioAccountType, prevEntry.date,
+                          stockHistoryMap, indicatorHistoryMap || {}, marketIndicators?.usdkrw || 1
+                        );
+                        if (closingExpected > 0) targetVal = closingExpected;
+                      }
+                      const diff = targetVal > 0 ? Math.abs(h.evalAmount - targetVal) / targetVal : 0;
                       if (diff < 0.001) {
                         verifyIcon = <span className="text-green-500 text-[9px]" title={`직전 거래일(${formatShortDate(prevEntry.date)}) 종가 일치`}>✓</span>;
                       } else {
-                        const syncVal = prevEntry.evalAmount;
+                        const syncVal = Math.round(targetVal);
                         verifyIcon = (
                           <button
                             className="text-amber-400 text-[9px] hover:text-amber-200 cursor-pointer transition-colors"
-                            title={`주말·휴장 불일치\n기록: ${Math.round(h.evalAmount).toLocaleString()}\n직전 거래일(${formatShortDate(prevEntry.date)}): ${Math.round(syncVal).toLocaleString()}\n클릭 시 직전 거래일 종가로 업데이트`}
+                            title={`주말·휴장 불일치\n기록: ${Math.round(h.evalAmount).toLocaleString()}\n직전 거래일(${formatShortDate(prevEntry.date)}) 종가: ${syncVal.toLocaleString()}\n클릭 시 직전 거래일 종가로 업데이트`}
                             onClick={() => {
                               const isEffectiveToday = h.date === effectiveDateKey;
                               setHistory(hist => hist.map(item =>
