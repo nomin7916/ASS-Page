@@ -57,13 +57,39 @@ export default function HistoryPanel({
                 </thead>
                 <tbody>
                   {displayHistSliced.map((h, i) => {
-                    const prev = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
-                    const dod = (prev && prev.evalAmount > 0) ? ((h.evalAmount / prev.evalAmount) - 1) * 100 : 0;
+                    const prevEntry = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
+                    const dod = (prevEntry && prevEntry.evalAmount > 0) ? ((h.evalAmount / prevEntry.evalAmount) - 1) * 100 : 0;
                     const isToday = h.date === new Date().toISOString().split('T')[0];
+                    const dayOfWeek = new Date(h.date + 'T12:00:00').getDay();
+                    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
-                    // 종가 검증: stockHistoryMap 기준 기대값 계산
+                    // 종가 검증
                     let verifyIcon = null;
-                    if (stockHistoryMap && portfolio?.length > 0) {
+                    if (isWeekend && prevEntry) {
+                      // 주말: 직전 항목(평일) 종가와 비교
+                      const diff = prevEntry.evalAmount > 0 ? Math.abs(h.evalAmount - prevEntry.evalAmount) / prevEntry.evalAmount : 0;
+                      if (diff < 0.001) {
+                        verifyIcon = <span className="text-green-500 text-[9px]" title={`직전 거래일(${formatShortDate(prevEntry.date)}) 종가 일치`}>✓</span>;
+                      } else {
+                        const syncVal = prevEntry.evalAmount;
+                        verifyIcon = (
+                          <button
+                            className="text-amber-400 text-[9px] hover:text-amber-200 cursor-pointer transition-colors"
+                            title={`주말·휴장 불일치\n기록: ${Math.round(h.evalAmount).toLocaleString()}\n직전 거래일(${formatShortDate(prevEntry.date)}): ${Math.round(syncVal).toLocaleString()}\n클릭 시 직전 거래일 종가로 업데이트`}
+                            onClick={() => {
+                              const isEffectiveToday = h.date === effectiveDateKey;
+                              setHistory(hist => hist.map(item =>
+                                (item.id ? item.id === h.id : item.date === h.date)
+                                  ? { ...item, evalAmount: syncVal, adjustedAmount: syncVal, ...(isEffectiveToday ? { userChosen: true } : { isFixed: true }) }
+                                  : item
+                              ));
+                              notify(`${formatShortDate(h.date)} 직전 거래일 종가로 업데이트 완료`, 'success');
+                            }}
+                          >△</button>
+                        );
+                      }
+                    } else if (stockHistoryMap && portfolio?.length > 0) {
+                      // 평일: stockHistoryMap 기반 종가 비교
                       const stocks = portfolio.filter(p => p.type === 'stock' && p.code && stockHistoryMap[p.code]?.[h.date]);
                       if (stocks.length > 0) {
                         const expected = stocks.reduce((sum, p) => {
@@ -81,7 +107,7 @@ export default function HistoryPanel({
                               title={`종가 불일치\n기록: ${Math.round(h.evalAmount).toLocaleString()}\n종가계산: ${rounded.toLocaleString()}\n클릭 시 종가로 업데이트`}
                               onClick={() => {
                                 const isEffectiveToday = h.date === effectiveDateKey;
-                                setHistory(prev => prev.map(item =>
+                                setHistory(hist => hist.map(item =>
                                   (item.id ? item.id === h.id : item.date === h.date)
                                     ? { ...item, evalAmount: rounded, adjustedAmount: rounded, ...(isEffectiveToday ? { userChosen: true } : { isFixed: true }) }
                                     : item
@@ -91,6 +117,12 @@ export default function HistoryPanel({
                             >△</button>
                           );
                         }
+                      } else {
+                        // 해당 날짜 종가 데이터 없음
+                        const hasAnyStocks = portfolio.some(p => p.type === 'stock' && p.code);
+                        if (hasAnyStocks) {
+                          verifyIcon = <span className="text-gray-500 text-[9px] cursor-default" title="종가 데이터 미조회\n주가 데이터가 로드되면 자동으로 비교됩니다">–</span>;
+                        }
                       }
                     }
 
@@ -98,7 +130,7 @@ export default function HistoryPanel({
                       <tr key={h.id || i} className={`border-b border-gray-700 ${isToday ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
                         <td className={`py-1.5 px-1.5 text-center border-r border-gray-600 font-bold ${h.isFixed ? 'text-emerald-400/80' : 'text-gray-400'}`}>
                           {formatShortDate(h.date)}
-                          {h.isFixed && <span className="ml-0.5 text-[8px] text-emerald-500/60">●</span>}
+                          {h.isFixed && <span className="ml-0.5 text-[8px] text-emerald-500/60" title="종가 확정 기록&#10;거래 종료 후 종가 기준으로 확정된 히스토리입니다">●</span>}
                         </td>
                         <td className="py-1.5 px-1.5 border-r border-gray-600 font-bold text-right text-white">
                           <div className="flex items-center justify-end gap-1">

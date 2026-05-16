@@ -81,15 +81,26 @@ export const useHistoryBackfill = ({
       const updates = [];
       const existingMap = new Map(hist.map(h => [h.date, h]));
 
-      // 거래일 데이터가 있는 날짜: isFixed: false이면 종가로 교정, 없으면 신규 추가
+      // 항목 유형 판별 헬퍼:
+      // - 실시간 기록: isFixed: false + evalAmount > 0 → 절대 덮어쓰기 금지
+      // - 사용자 확정/실시간 확정: isFixed: true + adjustedAmount 있음 → 덮어쓰기 금지
+      // - 순수 백필: isFixed: true + adjustedAmount 없음 → 펀드 데이터 포함 재계산 허용
+      // - 없는 날짜: 신규 추가
       [...availDates].sort().forEach(date => {
         const existing = existingMap.get(date);
-        if (existing?.isFixed) return;
+        if (!existing?.isFixed && existing?.evalAmount > 0) return; // 실시간 기록 보호
+        if (existing?.isFixed && existing?.adjustedAmount !== undefined) return; // 확정 항목 보호
+
+        const isPureBackfill = !!(existing?.isFixed && existing?.adjustedAmount === undefined);
         const key = `${portfolioId}_fill_${date}`;
-        if (backfillDoneRef.current[key]) return;
+
+        // 새 항목(없는 날짜): backfillDoneRef로 동일 세션 중복 방지
+        // 순수 백필 항목: backfillDoneRef 무시 → 펀드 데이터 로드 후 재계산 허용
+        if (!isPureBackfill && backfillDoneRef.current[key]) return;
+
         const evalAmt = calcEval(items, accountType, date);
         if (evalAmt > 0) {
-          backfillDoneRef.current[key] = true;
+          if (!isPureBackfill) backfillDoneRef.current[key] = true;
           updates.push({ date, evalAmt, isFixed: true });
         }
       });
@@ -103,9 +114,11 @@ export const useHistoryBackfill = ({
         const d = new Date(rangeStart + 'T12:00:00');
         let lastVal = 0;
 
-        // rangeStart의 값 초기화
-        const startEntry = existingMap.get(rangeStart) || updates.find(u => u.date === rangeStart);
-        if (startEntry) lastVal = startEntry.evalAmt ?? startEntry.evalAmount ?? 0;
+        // rangeStart의 값 초기화 — 새로 계산된 값 우선, 없으면 기존 값
+        const startFilled = updates.find(u => u.date === rangeStart);
+        const startExisting = existingMap.get(rangeStart);
+        if (startFilled?.evalAmt > 0) lastVal = startFilled.evalAmt;
+        else if (startExisting?.evalAmount > 0) lastVal = startExisting.evalAmount;
 
         d.setDate(d.getDate() + 1);
         while (true) {
@@ -114,15 +127,21 @@ export const useHistoryBackfill = ({
           if (!availDates.has(ds)) {
             // 거래일 데이터 없음 (주말/공휴일) → 직전 값 이월
             const existing = existingMap.get(ds);
-            if (!existing?.isFixed) {
+            const isPureBackfillEntry = !!(existing?.isFixed && existing?.adjustedAmount === undefined);
+            // 없는 날짜 또는 순수 백필 항목만 업데이트 (실시간/확정 항목 보호)
+            const isProtectedEntry = existing && (
+              (!existing.isFixed && existing.evalAmount > 0) ||
+              (existing.isFixed && existing.adjustedAmount !== undefined)
+            );
+            if (!isProtectedEntry) {
               const key = `${portfolioId}_gap_${ds}`;
               if (!backfillDoneRef.current[key] && lastVal > 0) {
-                backfillDoneRef.current[key] = true;
+                if (!isPureBackfillEntry) backfillDoneRef.current[key] = true;
                 updates.push({ date: ds, evalAmt: lastVal, isFixed: true });
               }
             }
           } else {
-            // 거래일: lastVal 갱신
+            // 거래일: lastVal 갱신 — 새로 계산된 값(펀드 포함) 우선
             const filled = updates.find(u => u.date === ds);
             const ex = existingMap.get(ds);
             const v = filled?.evalAmt || ex?.evalAmount || 0;
@@ -136,18 +155,26 @@ export const useHistoryBackfill = ({
     };
 
     const applyUpdates = (hist, updates, prin) => {
+      if (!updates.length) return hist;
       const newHist = [...hist];
+      let changed = false;
       updates.forEach(({ date, evalAmt, isFixed }) => {
         const idx = newHist.findIndex(h => h.date === date);
         if (idx >= 0) {
-          if (!newHist[idx].isFixed) {
-            newHist[idx] = { ...newHist[idx], evalAmount: evalAmt, principal: prin, isFixed };
+          const entry = newHist[idx];
+          // 보호 조건: 실시간 기록(isFixed: false + evalAmount > 0) 또는 사용자 확정(isFixed: true + adjustedAmount 있음)
+          const isProtected = (!entry.isFixed && (entry.evalAmount ?? 0) > 0) ||
+                              (entry.isFixed && entry.adjustedAmount !== undefined);
+          if (!isProtected && Math.round(entry.evalAmount ?? 0) !== Math.round(evalAmt)) {
+            newHist[idx] = { ...entry, evalAmount: evalAmt, principal: prin, isFixed };
+            changed = true;
           }
         } else {
           newHist.push({ date, evalAmount: evalAmt, principal: prin, isFixed });
+          changed = true;
         }
       });
-      return newHist;
+      return changed ? newHist : hist;
     };
 
     const activeRes = computeUpdates(activePortfolioId, portfolio, activePortfolioAccountType, principal, history, portfolioStartDate);
@@ -158,8 +185,10 @@ export const useHistoryBackfill = ({
       if (p.id === activePortfolioId) return p;
       const res = computeUpdates(p.id, p.portfolio || [], p.accountType, p.principal || 0, p.history || [], p.startDate || p.portfolioStartDate || '');
       if (!res) return p;
+      const updated = applyUpdates(p.history || [], res.updates, res.prin);
+      if (updated === (p.history || [])) return p;
       portfoliosChanged = true;
-      return { ...p, history: applyUpdates(p.history || [], res.updates, res.prin) };
+      return { ...p, history: updated };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
   }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey]);
