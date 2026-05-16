@@ -1835,6 +1835,7 @@ export default function App() {
             handleDownloadCSV={handleDownloadCSV}
             handleLookupDownloadCSV={handleLookupDownloadCSV}
             stockHistoryMap={stockHistoryMap}
+            indicatorHistoryMap={indicatorHistoryMap}
             portfolio={portfolio}
             notify={notify}
             effectiveDateKey={effectiveDateKey}

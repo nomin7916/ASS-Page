@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React from 'react';
 import { Plus, Minus, Download, Trash2, ArrowDownToLine, Triangle } from 'lucide-react';
-import { generateId, formatCurrency, formatPercent, formatShortDate } from '../utils';
+import { generateId, formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalForDate } from '../utils';
 
 export default function HistoryPanel({
   history,
@@ -21,6 +21,7 @@ export default function HistoryPanel({
   handleDownloadCSV,
   handleLookupDownloadCSV,
   stockHistoryMap,
+  indicatorHistoryMap,
   portfolio,
   notify,
   effectiveDateKey,
@@ -89,14 +90,17 @@ export default function HistoryPanel({
                         );
                       }
                     } else if (stockHistoryMap && portfolio?.length > 0) {
-                      // 평일: stockHistoryMap 기반 종가 비교
-                      const stocks = portfolio.filter(p => p.type === 'stock' && p.code && stockHistoryMap[p.code]?.[h.date]);
-                      if (stocks.length > 0) {
-                        const expected = stocks.reduce((sum, p) => {
-                          const price = stockHistoryMap[p.code]?.[h.date];
-                          return sum + (price ? price * (parseFloat(p.quantity) || 0) : 0);
-                        }, 0);
-                        const diff = expected > 0 ? Math.abs(h.evalAmount - expected) / expected : 0;
+                      // 평일: 주식+펀드+예수금 전체 종가 비교 (calcPortfolioEvalForDate 사용)
+                      const expected = calcPortfolioEvalForDate(
+                        portfolio,
+                        activePortfolioAccountType,
+                        h.date,
+                        stockHistoryMap,
+                        indicatorHistoryMap || {},
+                        marketIndicators?.usdkrw || 1
+                      );
+                      if (expected > 0) {
+                        const diff = Math.abs(h.evalAmount - expected) / expected;
                         if (diff < 0.001) {
                           verifyIcon = <span className="text-green-500 text-[9px]" title={`종가 일치: ${Math.round(expected).toLocaleString()}원`}>✓</span>;
                         } else {
@@ -119,8 +123,8 @@ export default function HistoryPanel({
                         }
                       } else {
                         // 해당 날짜 종가 데이터 없음
-                        const hasAnyStocks = portfolio.some(p => p.type === 'stock' && p.code);
-                        if (hasAnyStocks) {
+                        const hasAnyItems = portfolio.some(p => (p.type === 'stock' || p.type === 'fund') && p.code);
+                        if (hasAnyItems) {
                           verifyIcon = <span className="text-gray-500 text-[9px] cursor-default" title="종가 데이터 미조회\n주가 데이터가 로드되면 자동으로 비교됩니다">–</span>;
                         }
                       }
