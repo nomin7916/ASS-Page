@@ -1837,6 +1837,7 @@ export default function App() {
             stockHistoryMap={stockHistoryMap}
             portfolio={portfolio}
             notify={notify}
+            effectiveDateKey={effectiveDateKey}
           />
 
           <DepositPanel

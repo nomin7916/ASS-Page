@@ -23,6 +23,7 @@ export default function HistoryPanel({
   stockHistoryMap,
   portfolio,
   notify,
+  effectiveDateKey,
 }) {
   return (
           <div className="w-full xl:w-[24%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
@@ -62,7 +63,7 @@ export default function HistoryPanel({
 
                     // 종가 검증: stockHistoryMap 기준 기대값 계산
                     let verifyIcon = null;
-                    if (h.isFixed && stockHistoryMap && portfolio?.length > 0) {
+                    if (stockHistoryMap && portfolio?.length > 0) {
                       const stocks = portfolio.filter(p => p.type === 'stock' && p.code && stockHistoryMap[p.code]?.[h.date]);
                       if (stocks.length > 0) {
                         const expected = stocks.reduce((sum, p) => {
@@ -70,9 +71,26 @@ export default function HistoryPanel({
                           return sum + (price ? price * (parseFloat(p.quantity) || 0) : 0);
                         }, 0);
                         const diff = expected > 0 ? Math.abs(h.evalAmount - expected) / expected : 0;
-                        verifyIcon = diff < 0.001
-                          ? <span className="text-green-500 text-[9px]" title={`종가 일치: ${Math.round(expected).toLocaleString()}원`}>✓</span>
-                          : <span className="text-amber-400 text-[9px]" title={`종가 불일치\n기록: ${Math.round(h.evalAmount).toLocaleString()}\n종가계산: ${Math.round(expected).toLocaleString()}`}>△</span>;
+                        if (diff < 0.001) {
+                          verifyIcon = <span className="text-green-500 text-[9px]" title={`종가 일치: ${Math.round(expected).toLocaleString()}원`}>✓</span>;
+                        } else {
+                          const rounded = Math.round(expected);
+                          verifyIcon = (
+                            <button
+                              className="text-amber-400 text-[9px] hover:text-amber-200 cursor-pointer transition-colors"
+                              title={`종가 불일치\n기록: ${Math.round(h.evalAmount).toLocaleString()}\n종가계산: ${rounded.toLocaleString()}\n클릭 시 종가로 업데이트`}
+                              onClick={() => {
+                                const isEffectiveToday = h.date === effectiveDateKey;
+                                setHistory(prev => prev.map(item =>
+                                  (item.id ? item.id === h.id : item.date === h.date)
+                                    ? { ...item, evalAmount: rounded, adjustedAmount: rounded, ...(isEffectiveToday ? { userChosen: true } : { isFixed: true }) }
+                                    : item
+                                ));
+                                notify(`${formatShortDate(h.date)} 종가 기준 업데이트 완료`, 'success');
+                              }}
+                            >△</button>
+                          );
+                        }
                       }
                     }
 
