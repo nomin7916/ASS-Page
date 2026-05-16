@@ -1394,7 +1394,7 @@ export default function App() {
         id: p.id, name: p.name,
         startDate: p.startDate || p.portfolioStartDate,
         portfolioStartDate: p.portfolioStartDate || p.startDate,
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, shares: item.shares, buyPrice: item.buyPrice, depositAmount: item.depositAmount, fundCode: item.fundCode })),
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
