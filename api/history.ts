@@ -429,20 +429,20 @@ export default async function handler(request: Request): Promise<Response> {
         );
         if (!res.ok) return {};
         const html = await res.text();
-        const dates:  string[] = [];
-        const prices: number[] = [];
-        const dateRe  = /class="date">(\d{4})\.(\d{2})\.(\d{2})/g;
-        const priceRe = /class="num">([\d,]+\.?\d*)</g;
-        let dm: RegExpExecArray | null;
-        while ((dm = dateRe.exec(html))  !== null) dates.push(`${dm[1]}-${dm[2]}-${dm[3]}`);
-        let pm: RegExpExecArray | null;
-        while ((pm = priceRe.exec(html)) !== null) {
-          const v = parseFloat(pm[1].replace(/,/g, ''));
-          if (v > 1000) prices.push(v);
-        }
         const result: Record<string, number> = {};
-        for (let i = 0; i < Math.min(dates.length, prices.length); i++) {
-          result[dates[i]] = Math.round(prices[i]);
+        const trRe       = /<tr[^>]*>[\s\S]*?<\/tr>/g;
+        const dateInRow  = /class="date">(\d{4})\.(\d{2})\.(\d{2})/;
+        const priceInRow = /class="num">([\d,]+)/;
+        let trm: RegExpExecArray | null;
+        while ((trm = trRe.exec(html)) !== null) {
+          const row = trm[0];
+          const dm = dateInRow.exec(row);
+          const pm = priceInRow.exec(row);
+          if (dm && pm) {
+            const date  = `${dm[1]}-${dm[2]}-${dm[3]}`;
+            const price = parseFloat(pm[1].replace(/,/g, ''));
+            if (price > 1000) result[date] = Math.round(price);
+          }
         }
         return result;
       } catch {
