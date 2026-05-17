@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { formatCurrency, formatPercent, formatShortDate } from '../utils';
 import VerifyEvalModal from './VerifyEvalModal';
 
@@ -20,6 +20,20 @@ export default function HistoryPanel({
   effectiveDateKey,
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
+
+  // 사용자가 직접 수정한 날짜 집합: manual 스냅샷(종목 추가/삭제/수량변경) + 수동 종가 입력.
+  // kind 'auto'/'baseline'은 시스템 자동 생성이므로 제외.
+  const userModifiedDates = useMemo(() => {
+    const set = new Set();
+    const snaps = activePortfolio?.holdingSnapshots || [];
+    snaps.forEach(s => { if (s?.kind === 'manual' && s?.date) set.add(s.date); });
+    const mpo = activePortfolio?.manualPriceOverrides || {};
+    Object.values(mpo).forEach(byDate => {
+      Object.keys(byDate || {}).forEach(d => set.add(d));
+    });
+    return set;
+  }, [activePortfolio]);
+
   return (
         <>
           <div className="w-full xl:w-[24%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-[520px] flex flex-col overflow-hidden shrink-0">
@@ -45,10 +59,11 @@ export default function HistoryPanel({
                     const prevEntry = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
                     const dod = (prevEntry && prevEntry.evalAmount > 0) ? ((h.evalAmount / prevEntry.evalAmount) - 1) * 100 : 0;
                     const isToday = h.date === new Date().toISOString().split('T')[0];
+                    const isUserModified = h.isAdjusted || userModifiedDates.has(h.date);
 
                     return (
                       <tr key={h.id || i} className={`border-b border-gray-700 ${isToday ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
-                        <td className={`py-1.5 px-1.5 text-center border-r border-gray-600 font-bold ${h.isFixed ? 'text-emerald-400/80' : 'text-gray-400'}`}>
+                        <td className={`py-1.5 px-1.5 text-center border-r border-gray-600 font-bold ${isUserModified ? 'text-sky-300' : 'text-gray-300'}`}>
                           <button
                             className="hover:text-sky-300 hover:underline transition-colors cursor-pointer"
                             title="클릭: 보유종목·종가 검증/편집"
@@ -56,7 +71,6 @@ export default function HistoryPanel({
                           >
                             {formatShortDate(h.date)}
                           </button>
-                          {h.isFixed && <span className="ml-0.5 text-[8px] text-emerald-500/60" title="종가 확정 기록&#10;거래 종료 후 종가 기준으로 확정된 히스토리입니다">●</span>}
                         </td>
                         <td className="py-1.5 px-1.5 border-r border-gray-600 font-bold text-right text-white">
                           <div className="flex items-center justify-end gap-1">
