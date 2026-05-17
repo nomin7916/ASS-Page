@@ -1,6 +1,5 @@
 // @ts-nocheck
 import React, { useState } from 'react';
-import { Plus, Minus } from 'lucide-react';
 import { formatCurrency, formatPercent, formatShortDate } from '../utils';
 import VerifyEvalModal from './VerifyEvalModal';
 
@@ -11,10 +10,7 @@ export default function HistoryPanel({
   principal,
   activePortfolioAccountType,
   marketIndicators,
-  displayHistSliced,
   sortedHistoryDesc,
-  historyLimit,
-  setHistoryLimit,
   handleDownloadCSV,
   stockHistoryMap,
   indicatorHistoryMap,
@@ -27,12 +23,8 @@ export default function HistoryPanel({
   return (
         <>
           <div className="w-full xl:w-[24%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
-            <div className="p-4 bg-[#0f172a] text-white font-bold flex justify-between items-center text-sm border-b border-gray-700 shrink-0">
+            <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center text-sm border-b border-gray-700 shrink-0">
               <span>📈 자산 평가액 추이</span>
-              <div className="flex items-center gap-1">
-                <button onClick={() => setHistoryLimit(p => p + 5)} className="p-1 hover:bg-gray-800 rounded transition text-gray-400 hover:text-white" title="표시 행 5개 추가"><Plus size={14} /></button>
-                <button onClick={() => setHistoryLimit(p => Math.max(p - 5, 3))} className="p-1 hover:bg-gray-800 rounded transition text-gray-400 hover:text-white" title="표시 행 5개 감소"><Minus size={14} /></button>
-              </div>
             </div>
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed border-collapse">
@@ -49,7 +41,7 @@ export default function HistoryPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {displayHistSliced.map((h, i) => {
+                  {sortedHistoryDesc.map((h, i) => {
                     const prevEntry = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
                     const dod = (prevEntry && prevEntry.evalAmount > 0) ? ((h.evalAmount / prevEntry.evalAmount) - 1) * 100 : 0;
                     const isToday = h.date === new Date().toISOString().split('T')[0];

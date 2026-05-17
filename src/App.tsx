@@ -1867,16 +1867,8 @@ export default function App() {
             principal={principal}
             activePortfolioAccountType={activePortfolioAccountType}
             marketIndicators={marketIndicators}
-            displayHistSliced={displayHistSliced}
             sortedHistoryDesc={sortedHistoryDesc}
-            historyLimit={historyLimit}
-            setHistoryLimit={setHistoryLimit}
-            lookupRows={lookupRows}
-            setLookupRows={setLookupRows}
-            comparisonMode={comparisonMode}
-            setComparisonMode={setComparisonMode}
             handleDownloadCSV={handleDownloadCSV}
-            handleLookupDownloadCSV={handleLookupDownloadCSV}
             stockHistoryMap={stockHistoryMap}
             indicatorHistoryMap={indicatorHistoryMap}
             activePortfolio={activePortfolio}
