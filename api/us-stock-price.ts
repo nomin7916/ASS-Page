@@ -2,7 +2,7 @@
 // Yahoo Finance(직접) → KIS 해외주식 API → Naver worldstock polling 순으로 시도
 export const config = { runtime: 'edge' };
 
-import { getKisToken } from './_kisToken';
+import { getKisToken } from './_kisToken.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';

@@ -2,7 +2,7 @@
 // 브라우저에서 인증 정보 노출 없이 직접 KIS API 호출
 export const config = { runtime: 'edge' };
 
-import { getKisToken } from './_kisToken';
+import { getKisToken } from './_kisToken.js';
 
 const KIS_BASE    = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY    ?? '';

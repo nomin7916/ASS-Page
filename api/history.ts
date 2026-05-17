@@ -4,7 +4,7 @@ export const config = { runtime: 'edge' };
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
 
-import { getKisToken } from './_kisToken';
+import { getKisToken } from './_kisToken.js';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
