@@ -4,31 +4,11 @@ export const config = { runtime: 'edge' };
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
 
+import { getKisToken } from './_kisToken';
+
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
 const KIS_APP_SECRET = process.env.KIS_APP_SECRET ?? '';
-
-let _kisToken: string | null = null;
-let _kisTokenExpiry = 0;
-
-async function getKisToken(): Promise<string | null> {
-  if (!KIS_APP_KEY || !KIS_APP_SECRET) return null;
-  if (_kisToken && Date.now() < _kisTokenExpiry) return _kisToken;
-  try {
-    const res = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'client_credentials', appkey: KIS_APP_KEY, appsecret: KIS_APP_SECRET }),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    if (!json.access_token) return null;
-    _kisToken = json.access_token;
-    _kisTokenExpiry = Date.now() + 23 * 60 * 60 * 1000;
-    return _kisToken;
-  } catch { return null; }
-}
 
 const SUFFIX_TO_EXCD: Record<string, string> = { O: 'NASD', N: 'NYSE', P: 'AMEX', K: 'NYSE' };
 const EXCD_TRY_ORDER = ['NASD', 'NYSE', 'AMEX'];

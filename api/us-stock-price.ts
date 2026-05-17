@@ -2,31 +2,11 @@
 // Yahoo Finance(직접) → KIS 해외주식 API → Naver worldstock polling 순으로 시도
 export const config = { runtime: 'edge' };
 
+import { getKisToken } from './_kisToken';
+
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY ?? '';
 const KIS_APP_SECRET = process.env.KIS_APP_SECRET ?? '';
-
-let _token: string | null = null;
-let _tokenExpiry = 0;
-
-async function getToken(): Promise<string | null> {
-  if (!KIS_APP_KEY || !KIS_APP_SECRET) return null;
-  if (_token && Date.now() < _tokenExpiry) return _token;
-  try {
-    const res = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'client_credentials', appkey: KIS_APP_KEY, appsecret: KIS_APP_SECRET }),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    if (!json.access_token) return null;
-    _token = json.access_token;
-    _tokenExpiry = Date.now() + 23 * 60 * 60 * 1000;
-    return _token;
-  } catch { return null; }
-}
 
 // Naver suffix → KIS EXCD 매핑 (Reuters 거래소 코드 → KIS 거래소 코드)
 const SUFFIX_TO_EXCD: Record<string, string> = { O: 'NASD', N: 'NYSE', P: 'AMEX', K: 'NYSE' };
@@ -159,7 +139,7 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   // 2순위: KIS 해외주식 현재가
-  const token = await getToken();
+  const token = await getKisToken();
   if (token) {
     const kis = await kisPrice(baseTicker, token, resolvedExcd);
     if (kis) {

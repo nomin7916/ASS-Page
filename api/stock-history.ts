@@ -2,39 +2,11 @@
 // 브라우저에서 인증 정보 노출 없이 직접 KIS API 호출
 export const config = { runtime: 'edge' };
 
+import { getKisToken } from './_kisToken';
+
 const KIS_BASE    = 'https://openapi.koreainvestment.com:9443';
 const KIS_APP_KEY = process.env.KIS_APP_KEY    ?? '';
 const KIS_APP_SECRET = process.env.KIS_APP_SECRET ?? '';
-
-// 토큰 모듈 레벨 캐시 (웜 인스턴스 재사용)
-let _token: string | null = null;
-let _tokenExpiry = 0;
-
-async function getToken(): Promise<string | null> {
-  if (!KIS_APP_KEY || !KIS_APP_SECRET) return null;
-  if (_token && Date.now() < _tokenExpiry) return _token;
-
-  try {
-    const res = await fetch(`${KIS_BASE}/oauth2/tokenP`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'client_credentials',
-        appkey: KIS_APP_KEY,
-        appsecret: KIS_APP_SECRET,
-      }),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    if (!json.access_token) return null;
-    _token = json.access_token as string;
-    _tokenExpiry = Date.now() + 23 * 60 * 60 * 1000;
-    return _token;
-  } catch {
-    return null;
-  }
-}
 
 export default async function handler(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
@@ -45,7 +17,7 @@ export default async function handler(request: Request): Promise<Response> {
     return new Response('code 파라미터 필요 (5자리 이상)', { status: 400 });
   }
 
-  const token = await getToken();
+  const token = await getKisToken();
   if (!token) {
     return new Response('KIS 토큰 발급 실패 (앱키/시크릿 확인)', { status: 503 });
   }
@@ -84,7 +56,10 @@ export default async function handler(request: Request): Promise<Response> {
           signal: AbortSignal.timeout(10000),
         }
       );
-      if (!res.ok) break;
+      if (!res.ok) {
+        console.error(`[stock-history] chunk ${dateFrom}-${dateTo} status=${res.status}`);
+        continue; // 단일 청크 실패가 전체 수집을 죽이지 않게 (수집된 데이터는 유지)
+      }
       const json = await res.json();
       const rows: any[] = json.output2 ?? [];
       for (const item of rows) {
@@ -94,8 +69,9 @@ export default async function handler(request: Request): Promise<Response> {
           result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
         }
       }
-    } catch {
-      break;
+    } catch (e) {
+      console.error(`[stock-history] chunk ${dateFrom}-${dateTo} error: ${e}`);
+      continue;
     }
   }
 
