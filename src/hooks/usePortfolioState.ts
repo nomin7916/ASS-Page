@@ -107,6 +107,8 @@ export function usePortfolioState({
       portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
       principal: 0, avgExchangeRate: 0, history: [], depositHistory: [], depositHistory2: [],
       settings: inheritedSettings,
+      // 자산검증: 신규 계좌는 가입일을 기준일로 (가입 이전 추정 구간 없음)
+      baselineDate: today, holdingSnapshots: [], manualPriceOverrides: {}, preBaselineVerified: false,
     };
     setPortfolios(prev => [...prev, newP]);
     setActivePortfolioId(newId);
@@ -129,6 +131,7 @@ export function usePortfolioState({
         portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
         principal: 0, history: [], depositHistory: [], depositHistory2: [],
         settings: { mode: 'rebalance', amount: 1000000 },
+        baselineDate: today, holdingSnapshots: [], manualPriceOverrides: {}, preBaselineVerified: false,
       };
       setPortfolios([blank]);
       setActivePortfolioId(blank.id);
@@ -442,6 +445,8 @@ export function usePortfolioState({
   return {
     // 파생 상태 (읽기 전용)
     title,
+    activePortfolio,
+    patchActivePortfolio: patchActive,
     portfolio,
     principal,
     avgExchangeRate,

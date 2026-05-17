@@ -60,7 +60,8 @@ import {
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
   getClosestValue, getIndexLatest, handleTableKeyDown, handleReadonlyCellNav, buildIndexStatus,
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
-  fillWeekendGaps, fillNonTradingGaps, calcPeriodStart
+  fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
+  ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
@@ -416,6 +417,7 @@ export default function App() {
   // ── usePortfolioState 훅 ──
   const {
     title, setTitle,
+    activePortfolio, patchActivePortfolio,
     portfolio, setPortfolio,
     principal, setPrincipal,
     avgExchangeRate, setAvgExchangeRate,
@@ -507,7 +509,7 @@ export default function App() {
   const applyStateData = (stateData, _stockData, marketData) => {
 
     if (stateData.portfolios?.length > 0) {
-      const normalizedPortfolios = stateData.portfolios.map(p => ({
+      const normalizedPortfolios = stateData.portfolios.map(p => ensurePortfolioVerificationFields({
         ...p,
         startDate: p.portfolioStartDate || p.startDate || '',
         portfolioStartDate: p.portfolioStartDate || p.startDate || '',
@@ -601,7 +603,7 @@ export default function App() {
 
   const applyBackupData = (stateData, acRef) => {
     if (stateData.portfolios?.length > 0) {
-      const normalizedPortfolios = stateData.portfolios.map(p => ({
+      const normalizedPortfolios = stateData.portfolios.map(p => ensurePortfolioVerificationFields({
         ...p,
         startDate: p.portfolioStartDate || p.startDate || '',
         portfolioStartDate: p.portfolioStartDate || p.startDate || '',
@@ -947,9 +949,7 @@ export default function App() {
   const { handleManualBackfill } = useHistoryBackfill({
     stockHistoryMap, indicatorHistoryMap, marketIndicators,
     portfolioSummaries, portfolios, setPortfolios,
-    activePortfolioId, activePortfolioAccountType,
-    portfolio, principal, history, setHistory,
-    portfolioStartDate, notify, effectiveDateKey,
+    activePortfolioId, setHistory, notify, effectiveDateKey,
   });
 
   const { handleImportHistoryJSON } = useIndexImport({
@@ -1409,6 +1409,11 @@ export default function App() {
         memo: p.memo || '',
         rowColor: p.rowColor || '',
         historyLen: (p.history || []).length,
+        // 자산검증: 스냅샷·수동종가·기준일 변경도 구조 변경으로 간주 → Drive STATE 즉시 반영
+        baselineDate: p.baselineDate || '',
+        preBaselineVerified: !!p.preBaselineVerified,
+        manualPriceOverrides: p.manualPriceOverrides || {},
+        holdingSnapshotsKey: (p.holdingSnapshots || []).map(s => `${s.date}:${s.kind}:${(s.items || []).length}`).join('|'),
       })),
       activePortfolioId, customLinks,
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
@@ -1433,6 +1438,44 @@ export default function App() {
       }, 800);
     }
   }, [portfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, seenAdminNotifIds]);
+
+  // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
+  // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
+  // 가격 변동은 무시(snapshotCompositionKey가 수량·예수금·구성만 비교) → 일별 적재 아님.
+  useEffect(() => {
+    if (portfolios.length === 0) return;
+    const today = effectiveDateKey;
+    const maybeUpdate = (p) => {
+      if (!p || p.accountType === 'simple' || p.accountType === 'matong') return null;
+      const items = snapshotItemsFromPortfolio(p.portfolio || []);
+      if (items.length === 0) return null;
+      const compKey = snapshotCompositionKey(p.portfolio || []);
+      const snaps = Array.isArray(p.holdingSnapshots) ? p.holdingSnapshots : [];
+      const baselineDate = p.baselineDate || today;
+      if (snaps.length === 0) {
+        return [{ date: baselineDate, kind: 'baseline', items }];
+      }
+      const sorted = [...snaps].sort((a, b) => a.date.localeCompare(b.date));
+      const latest = sorted[sorted.length - 1];
+      if (snapshotCompositionKey(latest.items || []) === compKey) return null;
+      const recordDate = today >= baselineDate ? today : baselineDate;
+      const idx = snaps.findIndex(s => s.date === recordDate);
+      if (idx >= 0) {
+        const copy = snaps.slice();
+        copy[idx] = { ...copy[idx], items };
+        return copy;
+      }
+      return [...snaps, { date: recordDate, kind: 'auto', items }];
+    };
+    let changed = false;
+    const next = portfolios.map(p => {
+      const upd = maybeUpdate(p);
+      if (!upd) return p;
+      changed = true;
+      return { ...p, holdingSnapshots: upd };
+    });
+    if (changed) setPortfolios(next);
+  }, [portfolios, effectiveDateKey]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
@@ -1836,7 +1879,8 @@ export default function App() {
             handleLookupDownloadCSV={handleLookupDownloadCSV}
             stockHistoryMap={stockHistoryMap}
             indicatorHistoryMap={indicatorHistoryMap}
-            portfolio={portfolio}
+            activePortfolio={activePortfolio}
+            patchActivePortfolio={patchActivePortfolio}
             notify={notify}
             effectiveDateKey={effectiveDateKey}
           />

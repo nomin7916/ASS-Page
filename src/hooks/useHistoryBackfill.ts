@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useRef, useEffect } from 'react';
-import { calcPortfolioEvalForDate, isWeekend } from '../utils';
+import { calcPortfolioEvalForDate, resolveHoldings } from '../utils';
 import { getEffectiveDate } from './useMarketCalendar';
 
 export const useHistoryBackfill = ({
@@ -11,12 +11,7 @@ export const useHistoryBackfill = ({
   portfolios,
   setPortfolios,
   activePortfolioId,
-  activePortfolioAccountType,
-  portfolio,
-  principal,
-  history,
   setHistory,
-  portfolioStartDate,
   notify,
   effectiveDateKey,
 }) => {
@@ -56,25 +51,36 @@ export const useHistoryBackfill = ({
     const hasGoldHistData = Object.keys(indicatorHistoryMap.goldKr || {}).some(d => d < effectiveDate);
     if (!hasHistData && !hasGoldHistData) return;
 
-    const calcEval = (items, accountType, date) =>
-      calcPortfolioEvalForDate(items, accountType, date, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw);
+    const calcEval = (p, accountType, date) => {
+      const resolved = resolveHoldings(p, date);
+      return calcPortfolioEvalForDate(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw, p.manualPriceOverrides || {});
+    };
 
-    const computeUpdates = (portfolioId, items, accountType, prin, hist, startDate) => {
-      if (accountType === 'simple' || !items.length) return null;
+    const computeUpdates = (p) => {
+      const portfolioId = p.id;
+      const items = p.portfolio || [];
+      const accountType = p.accountType;
+      const prin = p.principal || 0;
+      const hist = p.history || [];
+      const startDate = p.portfolioStartDate || p.startDate || '';
+      const snaps = p.holdingSnapshots || [];
+      const hasHoldings = items.length > 0 || snaps.some(s => (s.items || []).length > 0);
+      if (accountType === 'simple' || !hasHoldings) return null;
       const isGold = accountType === 'gold';
       const sortedDates = hist.map(h => h.date).sort();
       const baseDate = startDate || sortedDates[0] || null;
       if (!baseDate) return null;
 
-      // stockHistoryMap에 있는 과거 날짜 수집 (effectiveDate 미만)
+      // stockHistoryMap에 있는 과거 날짜 수집 (effectiveDate 미만) — 현재 보유 + 과거 스냅샷 종목 합집합
       const availDates = new Set();
       if (isGold) {
         Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= baseDate && d < effectiveDate) availDates.add(d); });
       } else {
-        items.forEach(item => {
-          if ((item.type === 'stock' || item.type === 'fund') && item.code && stockHistoryMap[item.code]) {
-            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d >= baseDate && d < effectiveDate) availDates.add(d); });
-          }
+        const codes = new Set();
+        items.forEach(it => { if ((it.type === 'stock' || it.type === 'fund') && it.code) codes.add(it.code); });
+        snaps.forEach(s => (s.items || []).forEach(it => { if ((it.type === 'stock' || it.type === 'fund') && it.code) codes.add(it.code); }));
+        codes.forEach(code => {
+          if (stockHistoryMap[code]) Object.keys(stockHistoryMap[code]).forEach(d => { if (d >= baseDate && d < effectiveDate) availDates.add(d); });
         });
       }
 
@@ -98,7 +104,7 @@ export const useHistoryBackfill = ({
         // 순수 백필 항목: backfillDoneRef 무시 → 펀드 데이터 로드 후 재계산 허용
         if (!isPureBackfill && backfillDoneRef.current[key]) return;
 
-        const evalAmt = calcEval(items, accountType, date);
+        const evalAmt = calcEval(p, accountType, date);
         if (evalAmt > 0) {
           if (!isPureBackfill) backfillDoneRef.current[key] = true;
           updates.push({ date, evalAmt, isFixed: true });
@@ -177,13 +183,14 @@ export const useHistoryBackfill = ({
       return changed ? newHist : hist;
     };
 
-    const activeRes = computeUpdates(activePortfolioId, portfolio, activePortfolioAccountType, principal, history, portfolioStartDate);
+    const activeP = portfolios.find(p => p.id === activePortfolioId);
+    const activeRes = activeP ? computeUpdates(activeP) : null;
     if (activeRes) setHistory(prev => applyUpdates(prev, activeRes.updates, activeRes.prin));
 
     let portfoliosChanged = false;
     const nextPortfolios = portfolios.map(p => {
       if (p.id === activePortfolioId) return p;
-      const res = computeUpdates(p.id, p.portfolio || [], p.accountType, p.principal || 0, p.history || [], p.startDate || p.portfolioStartDate || '');
+      const res = computeUpdates(p);
       if (!res) return p;
       const updated = applyUpdates(p.history || [], res.updates, res.prin);
       if (updated === (p.history || [])) return p;
@@ -199,34 +206,44 @@ export const useHistoryBackfill = ({
     const effectiveDate = getEffectiveDate();
     if (fromDate >= effectiveDate) { notify('시작일은 오늘 이전이어야 합니다.', 'warning'); return; }
 
-    const calcEval = (items, accountType, date) =>
-      calcPortfolioEvalForDate(items, accountType, date, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw);
+    const calcEval = (p, accountType, date) => {
+      const resolved = resolveHoldings(p, date);
+      return calcPortfolioEvalForDate(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw, p.manualPriceOverrides || {});
+    };
 
-    const fillMissing = (items, accountType, prin, hist) => {
-      if (accountType === 'simple' || !items.length) return null;
+    const fillMissing = (p) => {
+      const items = p.portfolio || [];
+      const accountType = p.accountType;
+      const prin = p.principal || 0;
+      const hist = p.history || [];
+      const snaps = p.holdingSnapshots || [];
+      const hasHoldings = items.length > 0 || snaps.some(s => (s.items || []).length > 0);
+      if (accountType === 'simple' || !hasHoldings) return null;
       const isGold = accountType === 'gold';
       const existingDates = new Set(hist.filter(h => h.isFixed).map(h => h.date));
       const availDates = new Set();
       if (isGold) {
         Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= fromDate && d < effectiveDate) availDates.add(d); });
       } else {
-        items.forEach(item => {
-          if ((item.type === 'stock' || item.type === 'fund') && item.code && stockHistoryMap[item.code]) {
-            Object.keys(stockHistoryMap[item.code]).forEach(d => { if (d >= fromDate && d < effectiveDate) availDates.add(d); });
-          }
+        const codes = new Set();
+        items.forEach(it => { if ((it.type === 'stock' || it.type === 'fund') && it.code) codes.add(it.code); });
+        snaps.forEach(s => (s.items || []).forEach(it => { if ((it.type === 'stock' || it.type === 'fund') && it.code) codes.add(it.code); }));
+        codes.forEach(code => {
+          if (stockHistoryMap[code]) Object.keys(stockHistoryMap[code]).forEach(d => { if (d >= fromDate && d < effectiveDate) availDates.add(d); });
         });
       }
       const newRecords = [];
       [...availDates].sort().forEach(date => {
         if (existingDates.has(date)) return;
-        const evalAmt = calcEval(items, accountType, date);
+        const evalAmt = calcEval(p, accountType, date);
         if (evalAmt > 0) newRecords.push({ date, evalAmount: evalAmt, principal: prin, isFixed: true });
       });
       return newRecords.length > 0 ? newRecords : null;
     };
 
     let totalAdded = 0;
-    const activeRecords = fillMissing(portfolio, activePortfolioAccountType, principal, history);
+    const activeP = portfolios.find(p => p.id === activePortfolioId);
+    const activeRecords = activeP ? fillMissing(activeP) : null;
     if (activeRecords) {
       totalAdded += activeRecords.length;
       setHistory(prev => [...prev, ...activeRecords]);
@@ -235,7 +252,7 @@ export const useHistoryBackfill = ({
     let portfoliosChanged = false;
     const nextPortfolios = portfolios.map(p => {
       if (p.id === activePortfolioId) return p;
-      const records = fillMissing(p.portfolio || [], p.accountType, p.principal || 0, p.history || []);
+      const records = fillMissing(p);
       if (!records) return p;
       totalAdded += records.length;
       portfoliosChanged = true;

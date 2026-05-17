@@ -219,14 +219,44 @@ export const handleRowArrowNav = (e) => {
   if (next) { next.focus(); next.select?.(); }
 };
 
-export const calcPortfolioEvalForDate = (
+// ASS-Page 자산검증: 기존 계좌(baselineDate 미보유)의 기준일 = 직전 거래일(2026-05-15 금)
+// 신규 계좌는 생성 시 가입일(startDate)을 baselineDate로 설정한다.
+export const BASELINE_DEFAULT_DATE = '2026-05-15';
+
+// 종목의 수동 종가 오버라이드 키 (gold는 code가 없으므로 'GOLD' 사용)
+const overrideKeyForItem = (item: any, isGold: boolean): string =>
+  item?.code || (isGold ? 'GOLD' : '');
+
+// 특정 날짜·종목의 단가 결정: 수동입력(manualPriceOverrides) 최우선 → 이력 → 0
+const resolvePriceForItem = (
+  item: any,
+  date: string,
+  stockHistoryMap: Record<string, Record<string, number>>,
+  indicatorHistoryMap: Record<string, any>,
+  isGold: boolean,
+  manualPriceOverrides?: Record<string, Record<string, number>> | null
+): { price: number; source: 'manual' | 'history' | 'none' } => {
+  const ovKey = overrideKeyForItem(item, isGold);
+  const manualRaw = ovKey ? manualPriceOverrides?.[ovKey]?.[date] : undefined;
+  if (manualRaw != null && cleanNum(manualRaw) > 0) {
+    return { price: cleanNum(manualRaw), source: 'manual' };
+  }
+  let price = 0;
+  if (isGold) price = getClosestValue(indicatorHistoryMap?.goldKr, date) || 0;
+  else if (item?.code) price = getClosestValue(stockHistoryMap?.[item.code], date) || 0;
+  return price > 0 ? { price, source: 'history' } : { price: 0, source: 'none' };
+};
+
+// 특정 날짜의 종목별 평가 내역 + 합계 (검증 모달 P2가 사용)
+export const calcPortfolioEvalDetail = (
   items: any[],
   accountType: string,
   date: string,
   stockHistoryMap: Record<string, Record<string, number>>,
   indicatorHistoryMap: Record<string, any>,
-  currentFxRate = 1
-): number => {
+  currentFxRate = 1,
+  manualPriceOverrides?: Record<string, Record<string, number>> | null
+): { total: number; fxRate: number; items: any[]; hasAnyPrice: boolean } => {
   const isGold = accountType === 'gold';
   const isOverseas = accountType === 'overseas';
   const fxRate = isOverseas
@@ -234,35 +264,101 @@ export const calcPortfolioEvalForDate = (
     : 1;
   let totalEval = 0;
   let hasAnyPrice = false;
-  items.forEach(item => {
+  const detail: any[] = [];
+  (items || []).forEach(item => {
     if (item.type === 'deposit') {
-      totalEval += cleanNum(item.depositAmount) * fxRate;
+      const evl = cleanNum(item.depositAmount) * fxRate;
+      totalEval += evl;
       hasAnyPrice = true;
+      detail.push({ id: item.id, type: 'deposit', code: '', name: '예수금', quantity: null, price: null, source: 'deposit', eval: evl });
       return;
     }
     if (item.type === 'fund') {
-      // 펀드: 해당 날짜 NAV 이력 우선, 없으면 현재 평가액으로 폴백
-      // (통합·포트폴리오 테이블 계산과 동일 규칙 — 일일 평가액에서 누락 금지)
+      // 펀드: 수동입력 → 해당 날짜 NAV 이력 → 현재 평가액 폴백 (일일 평가액에서 누락 금지)
       const fQty = cleanNum(item.quantity);
-      const histPrice = item.code ? (getClosestValue(stockHistoryMap?.[item.code], date) || 0) : 0;
+      const { price: histPrice, source } = resolvePriceForItem(item, date, stockHistoryMap, indicatorHistoryMap, false, manualPriceOverrides);
       let evl = 0;
+      let usedSource: string = source;
       if (fQty > 0 && histPrice > 0) evl = fQty * histPrice * fxRate;
-      else if (fQty > 0 && cleanNum(item.currentPrice) > 0) evl = fQty * cleanNum(item.currentPrice) * fxRate;
-      else evl = cleanNum(item.evalAmount) * fxRate;
+      else if (fQty > 0 && cleanNum(item.currentPrice) > 0) { evl = fQty * cleanNum(item.currentPrice) * fxRate; usedSource = 'currentPrice'; }
+      else { evl = cleanNum(item.evalAmount) * fxRate; usedSource = 'evalAmount'; }
       if (evl > 0) { totalEval += evl; hasAnyPrice = true; }
+      detail.push({ id: item.id, type: 'fund', code: item.code || '', name: item.name || '', quantity: fQty, price: histPrice || (usedSource === 'currentPrice' ? cleanNum(item.currentPrice) : null), source: usedSource, eval: evl });
       return;
     }
     const qty = cleanNum(item.quantity);
     if (!qty || qty <= 0) return;
-    let price = 0;
-    if (isGold) {
-      price = getClosestValue(indicatorHistoryMap?.goldKr, date) || 0;
-    } else if (item.code) {
-      price = getClosestValue(stockHistoryMap?.[item.code], date) || 0;
-    }
-    if (price > 0) { totalEval += qty * price * fxRate; hasAnyPrice = true; }
+    const { price, source } = resolvePriceForItem(item, date, stockHistoryMap, indicatorHistoryMap, isGold, manualPriceOverrides);
+    const evl = price > 0 ? qty * price * fxRate : 0;
+    if (evl > 0) { totalEval += evl; hasAnyPrice = true; }
+    detail.push({ id: item.id, type: 'stock', code: item.code || '', name: item.name || (isGold ? 'KRX 금현물' : ''), quantity: qty, price: price || null, source, eval: evl });
   });
-  return hasAnyPrice ? totalEval : 0;
+  return { total: hasAnyPrice ? totalEval : 0, fxRate, items: detail, hasAnyPrice };
+};
+
+export const calcPortfolioEvalForDate = (
+  items: any[],
+  accountType: string,
+  date: string,
+  stockHistoryMap: Record<string, Record<string, number>>,
+  indicatorHistoryMap: Record<string, any>,
+  currentFxRate = 1,
+  manualPriceOverrides?: Record<string, Record<string, number>> | null
+): number =>
+  calcPortfolioEvalDetail(items, accountType, date, stockHistoryMap, indicatorHistoryMap, currentFxRate, manualPriceOverrides).total;
+
+// 포트폴리오 항목 → 스냅샷 아이템 (가격 무관, 수량·구성만 보존)
+export const snapshotItemsFromPortfolio = (items: any[]): any[] =>
+  (items || []).map(it => ({
+    code: it.code || '',
+    name: it.name || '',
+    type: it.type || 'stock',
+    quantity: cleanNum(it.quantity),
+    investAmount: cleanNum(it.investAmount),
+    depositAmount: cleanNum(it.depositAmount),
+  }));
+
+// 구성 변경 감지용 지문 (가격 제외 — 수량·예수금·종목 구성만)
+export const snapshotCompositionKey = (items: any[]): string =>
+  JSON.stringify(
+    snapshotItemsFromPortfolio(items)
+      .map(it => `${it.type}:${it.code}:${it.quantity}:${it.depositAmount}:${it.investAmount}`)
+      .sort()
+  );
+
+// 계좌에 자산검증 필드 보강 (로드/생성 시 호출). 기존 계좌는 baselineDate=직전거래일.
+export const ensurePortfolioVerificationFields = (p: any): any => {
+  if (!p || p.accountType === 'simple' || p.accountType === 'matong') return p;
+  const next = { ...p };
+  if (!next.manualPriceOverrides || typeof next.manualPriceOverrides !== 'object') next.manualPriceOverrides = {};
+  if (typeof next.preBaselineVerified !== 'boolean') next.preBaselineVerified = false;
+  if (!Array.isArray(next.holdingSnapshots)) next.holdingSnapshots = [];
+  if (!next.baselineDate) {
+    const start = next.portfolioStartDate || next.startDate || '';
+    next.baselineDate = (start && start > BASELINE_DEFAULT_DATE) ? start : BASELINE_DEFAULT_DATE;
+  }
+  return next;
+};
+
+// 특정 날짜의 보유 종목 해결: baseline 이전 → baseline 스냅샷(추정),
+// baseline 이후 → date 이하 최신 스냅샷. 스냅샷 없으면 현재 포트폴리오(추정).
+export const resolveHoldings = (
+  p: any,
+  date: string
+): { items: any[]; kind: string; estimated: boolean } => {
+  const snaps = (p?.holdingSnapshots || []).filter((s: any) => Array.isArray(s?.items));
+  if (snaps.length === 0) {
+    return { items: p?.portfolio || [], kind: 'live', estimated: true };
+  }
+  const sorted = [...snaps].sort((a, b) => a.date.localeCompare(b.date));
+  const baselineDate = p?.baselineDate || '';
+  if (baselineDate && date < baselineDate) {
+    const baseline = sorted.find((s: any) => s.kind === 'baseline') || sorted[0];
+    return { items: baseline?.items || [], kind: 'baseline', estimated: !p?.preBaselineVerified };
+  }
+  const eligible = sorted.filter((s: any) => s.date <= date);
+  const chosen = eligible.length ? eligible[eligible.length - 1] : sorted[0];
+  return { items: chosen?.items || [], kind: chosen?.kind || 'baseline', estimated: false };
 };
 
 export const buildIndexStatus = (data, source) => {
