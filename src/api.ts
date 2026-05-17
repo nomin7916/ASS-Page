@@ -310,7 +310,9 @@ export const fetchFundNavHistory = async (
       const result: Record<string, number> = {};
       for (const item of list) {
         const dateRaw = item.gijunYmd ?? item.date ?? item.dt ?? item.ymd;
-        const priceRaw = item.nav ?? item.basicNav ?? item.fundNav ?? item.basicPrice ?? item.price;
+        // funetf 응답 필드: gijunGa(기준가) / ugijunGa(수정기준가). 라이브
+        // fetchFundInfo가 기준가를 쓰므로 gijunGa 우선, 그다음 폴백.
+        const priceRaw = item.gijunGa ?? item.ugijunGa ?? item.nav ?? item.basicNav ?? item.fundNav ?? item.basicPrice ?? item.price;
         if (!dateRaw || !priceRaw) continue;
         const d = String(dateRaw).replace(/-/g, '');
         if (d.length !== 8) continue;

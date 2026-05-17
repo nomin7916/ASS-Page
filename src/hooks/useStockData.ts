@@ -61,6 +61,11 @@ export function useStockData({
   setMarketIndices, setIndexFetchStatus,
 }: UseStockDataParams) {
 
+  // 펀드 전체이력(상장일~) 광역 조회를 앱 로드당 코드별 1회로 제한 —
+  // 가입일이 상장일보다 이르면 earliestStored가 영원히 미충족이라 매 새로고침
+  // 재조회되는 것을 방지. 새로고침(페이지 리로드) 시 ref 초기화 → 1회 재검증.
+  const fundWideFetchedRef = useRef<Set<string>>(new Set());
+
   const extractFundCode = (input: string): string => {
     const m = input.match(/funetf\.co\.kr\/product\/fund\/view\/([A-Za-z0-9]+)/);
     return m ? m[1] : input.trim();
@@ -583,34 +588,62 @@ export function useStockData({
 
       // 펀드 기준가 이력 조회 → stockHistoryMap 저장 (useHistoryBackfill 소급 기록에 활용)
       // 대상: 현재 보유 + holdingSnapshots 종목 합집합 (과거 일자 검증에 필요)
-      const allFundCodes = new Set<string>();
+      // 시작일: 펀드를 참조하는 계좌들의 최소 가입일/baseline/스냅샷/이력 날짜.
+      // funetf API가 상장일(데이터 최소일)로 자동 캡하므로 전체 이력을 1회에 수집 →
+      // 차트 조회기간과 무관하게 모든 과거 일자 검증이 커버됨.
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      const oneYearAgoStr = oneYearAgo.toISOString().split('T')[0];
+      const fundStartByCode: Record<string, string> = {};
+      const noteFundStart = (code: string, d?: string) => {
+        if (!code) return;
+        const cur = fundStartByCode[code];
+        if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+          if (!cur || d < cur) fundStartByCode[code] = d;
+        } else if (!(code in fundStartByCode)) {
+          fundStartByCode[code] = '';
+        }
+      };
       portfoliosRef.current.forEach(p => {
         if (p.accountType === 'simple') return;
         const items = p.id === activePortfolioIdRef.current ? portfolioRef.current : (p.portfolio || []);
-        items.forEach(item => { if (item.type === 'fund' && item.code) allFundCodes.add(item.code); });
+        const pStart = p.portfolioStartDate || p.startDate || p.baselineDate || '';
+        const histFirst = (p.history || []).map(h => h.date).filter(Boolean).sort()[0] || '';
+        const earliest = [pStart, histFirst].filter(Boolean).sort()[0] || '';
+        items.forEach(item => { if (item.type === 'fund' && item.code) noteFundStart(item.code, earliest); });
         (p.holdingSnapshots || []).forEach(s => (s.items || []).forEach(it => {
-          if (it.type === 'fund' && it.code) allFundCodes.add(it.code);
+          if (it.type === 'fund' && it.code) {
+            const snapEarliest = [earliest, s.date].filter(Boolean).sort()[0] || '';
+            noteFundStart(it.code, snapEarliest);
+          }
         }));
       });
-      if (allFundCodes.size > 0) {
-        const oneYearAgo = new Date();
-        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-        const histStartDate = oneYearAgo.toISOString().split('T')[0];
-
+      const allFundCodes = Object.keys(fundStartByCode);
+      if (allFundCodes.length > 0) {
         // today 기준 직전 거래일(주말 제외) — NAV는 비거래일에 없으므로
         // 이 날짜까지 채워졌으면 최신으로 간주. (공휴일은 재조회 1회 유발, 무해)
         const ltd = new Date(today + 'T12:00:00');
         while (isWeekend(ltd.toISOString().split('T')[0])) ltd.setDate(ltd.getDate() - 1);
         const lastTradingDay = ltd.toISOString().split('T')[0];
 
-        Promise.all([...allFundCodes].map(async (code) => {
+        Promise.all(allFundCodes.map(async (code) => {
+          // 시작일 미상이면 1년 전. 상장일 이전을 요청해도 API가 자동 캡함.
+          const histStartDate = fundStartByCode[code] || oneYearAgoStr;
           const existing = stockHistoryMapRef.current[code] || {};
           // 실제 NAV(거래일) 키만 신선도 판단에 사용 — 과거 잘못 찍힌 비거래일 키 제외
           const tradingKeys = Object.keys(existing).filter(d => !isWeekend(d)).sort();
           const latest = tradingKeys[tradingKeys.length - 1] || '';
-          const fresh = tradingKeys.length > 30 && latest >= lastTradingDay;
+          const earliestStored = tradingKeys[0] || '';
+          // 시작 커버리지: histStartDate 이전 데이터를 이미 보유했거나,
+          // 이번 세션에 광역(상장일~) 조회를 1회 수행함(가입일<상장일이면
+          // earliestStored가 영영 미충족이라 세션 ref로 무한 재조회 차단).
+          const startCovered = (!!earliestStored && earliestStored <= histStartDate)
+            || fundWideFetchedRef.current.has(code);
+          // 최신성 + 시작 커버리지 모두 충족해야 fresh.
+          const fresh = tradingKeys.length > 30 && latest >= lastTradingDay && startCovered;
 
           const hist = fresh ? null : await fetchFundNavHistory(code, histStartDate, today);
+          if (hist) fundWideFetchedRef.current.add(code);
 
           // 기존 맵에 남아있는 비거래일 키(과거 라이브 stamp 잔재) 정리 — 실제
           // NAV는 거래일에만 존재하므로 비거래일 키는 검증 불일치를 유발한다.
