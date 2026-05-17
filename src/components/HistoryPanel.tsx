@@ -22,7 +22,7 @@ export default function HistoryPanel({
   const [verifyRecord, setVerifyRecord] = useState(null);
   return (
         <>
-          <div className="w-full xl:w-[24%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden shrink-0">
+          <div className="w-full xl:w-[24%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-[520px] flex flex-col overflow-hidden shrink-0">
             <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center text-sm border-b border-gray-700 shrink-0">
               <span>📈 자산 평가액 추이</span>
             </div>
