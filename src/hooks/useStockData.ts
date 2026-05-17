@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useEffect, useRef } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchNaverKospi } from '../api';
-import { buildIndexStatus, cleanNum } from '../utils';
+import { buildIndexStatus, cleanNum, isWeekend } from '../utils';
 import { getEffectiveDate, getMsUntilCutoff } from './useMarketCalendar';
 
 interface UseStockDataParams {
@@ -383,8 +383,12 @@ export function useStockData({
       ...[...fundCodes].map(async (code) => {
         const d = await withTimeout(fetchFundInfo(code), 10000);
         if (d) {
+          // 라이브 기준가는 포트폴리오 currentPrice 갱신에만 사용.
+          // stockHistoryMap에는 stamp 금지 — today가 비거래일(주말/휴일)이면
+          // 미래 날짜 키가 생겨 과거 일자 검증이 깨진다. 펀드 이력은
+          // fetchFundNavHistory의 실제 거래일 NAV만 저장하고, 비거래일은
+          // getClosestValue 역탐색이 직전 거래일가를 자동 반영한다.
           fundResults[code] = d;
-          setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
         } else {
           failedCodes.push(code);
         }
@@ -578,24 +582,47 @@ export function useStockData({
       }
 
       // 펀드 기준가 이력 조회 → stockHistoryMap 저장 (useHistoryBackfill 소급 기록에 활용)
+      // 대상: 현재 보유 + holdingSnapshots 종목 합집합 (과거 일자 검증에 필요)
       const allFundCodes = new Set<string>();
       portfoliosRef.current.forEach(p => {
         if (p.accountType === 'simple') return;
         const items = p.id === activePortfolioIdRef.current ? portfolioRef.current : (p.portfolio || []);
         items.forEach(item => { if (item.type === 'fund' && item.code) allFundCodes.add(item.code); });
+        (p.holdingSnapshots || []).forEach(s => (s.items || []).forEach(it => {
+          if (it.type === 'fund' && it.code) allFundCodes.add(it.code);
+        }));
       });
       if (allFundCodes.size > 0) {
         const oneYearAgo = new Date();
         oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
         const histStartDate = oneYearAgo.toISOString().split('T')[0];
+
+        // today 기준 직전 거래일(주말 제외) — NAV는 비거래일에 없으므로
+        // 이 날짜까지 채워졌으면 최신으로 간주. (공휴일은 재조회 1회 유발, 무해)
+        const ltd = new Date(today + 'T12:00:00');
+        while (isWeekend(ltd.toISOString().split('T')[0])) ltd.setDate(ltd.getDate() - 1);
+        const lastTradingDay = ltd.toISOString().split('T')[0];
+
         Promise.all([...allFundCodes].map(async (code) => {
-          const existing = stockHistoryMapRef.current[code];
-          const existingKeys = existing ? Object.keys(existing) : [];
-          if (existingKeys.length > 30 && existingKeys.includes(today)) return;
-          const hist = await fetchFundNavHistory(code, histStartDate, today);
-          if (hist && Object.keys(hist).length > 0) {
-            setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
-          }
+          const existing = stockHistoryMapRef.current[code] || {};
+          // 실제 NAV(거래일) 키만 신선도 판단에 사용 — 과거 잘못 찍힌 비거래일 키 제외
+          const tradingKeys = Object.keys(existing).filter(d => !isWeekend(d)).sort();
+          const latest = tradingKeys[tradingKeys.length - 1] || '';
+          const fresh = tradingKeys.length > 30 && latest >= lastTradingDay;
+
+          const hist = fresh ? null : await fetchFundNavHistory(code, histStartDate, today);
+
+          // 기존 맵에 남아있는 비거래일 키(과거 라이브 stamp 잔재) 정리 — 실제
+          // NAV는 거래일에만 존재하므로 비거래일 키는 검증 불일치를 유발한다.
+          const staleWeekendKeys = Object.keys(existing).filter(d => isWeekend(d));
+          if (!hist && staleWeekendKeys.length === 0) return;
+
+          setStockHistoryMap(prev => {
+            const merged: Record<string, number> = { ...(prev[code] || {}) };
+            staleWeekendKeys.forEach(d => { delete merged[d]; });
+            if (hist) Object.assign(merged, hist);
+            return { ...prev, [code]: merged };
+          });
         })).then(() => {
           setTimeout(() => {
             const snap = saveStateRef.current;
