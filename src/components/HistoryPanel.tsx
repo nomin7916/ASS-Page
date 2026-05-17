@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState } from 'react';
-import { Plus, Minus, Download, Trash2 } from 'lucide-react';
+import { Plus, Minus } from 'lucide-react';
 import { formatCurrency, formatPercent, formatShortDate } from '../utils';
 import VerifyEvalModal from './VerifyEvalModal';
 
@@ -32,8 +32,6 @@ export default function HistoryPanel({
               <div className="flex items-center gap-1">
                 <button onClick={() => setHistoryLimit(p => p + 5)} className="p-1 hover:bg-gray-800 rounded transition text-gray-400 hover:text-white" title="표시 행 5개 추가"><Plus size={14} /></button>
                 <button onClick={() => setHistoryLimit(p => Math.max(p - 5, 3))} className="p-1 hover:bg-gray-800 rounded transition text-gray-400 hover:text-white" title="표시 행 5개 감소"><Minus size={14} /></button>
-                <button onClick={() => { const today = new Date().toISOString().split('T')[0]; setHistory(prev => { const todayEntry = prev.find(h => h.date === today); return todayEntry ? [todayEntry] : (totals.totalEval > 0 ? [{ date: today, evalAmount: totals.totalEval, principal, isFixed: false }] : []); }); notify("평가 기록 리셋 완료 (오늘 데이터만 유지)", "success"); }} className="p-1 hover:bg-gray-800 rounded transition text-orange-400 hover:text-white" title="평가 기록 리셋 (오늘만 유지)"><Trash2 size={14} /></button>
-                <button onClick={handleDownloadCSV} className="p-1 hover:bg-gray-800 rounded transition text-blue-400 hover:text-white" title="전체 엑셀 다운로드"><Download size={14} /></button>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto">
