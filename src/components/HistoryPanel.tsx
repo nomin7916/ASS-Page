@@ -26,7 +26,7 @@ export default function HistoryPanel({
             <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center text-sm border-b border-gray-700 shrink-0">
               <span>📈 자산 평가액 추이</span>
             </div>
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed border-collapse">
                 <colgroup>
                   <col className="w-[35%]" />
