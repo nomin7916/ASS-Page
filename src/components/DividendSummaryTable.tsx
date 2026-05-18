@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { cleanNum, formatCurrency } from '../utils';
+import { cleanNum, formatCurrency, dividendPayDate } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
@@ -24,6 +24,41 @@ function buildMonthPrediction(codeHistory) {
     if (entries.length > 0) pred[m] = entries[0][1];
   }
   return pred;
+}
+
+// 월별 배당락일 예측: 같은 월(MM)의 가장 최근 연도 배당락일(YYYY-MM-DD) 선택
+function buildMonthExPrediction(codeExHistory) {
+  const pred = {};
+  for (let m = 1; m <= 12; m++) {
+    const mo = String(m).padStart(2, '0');
+    const entries = Object.entries(codeExHistory || {})
+      .filter(([key]) => key.endsWith(`-${mo}`))
+      .sort(([a], [b]) => b.localeCompare(a));
+    if (entries.length > 0) pred[m] = entries[0][1];
+  }
+  return pred;
+}
+
+// 'YYYY-MM-DD' → 'M/D' (없으면 '')
+const fmtMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? `${+s.slice(5, 7)}/${+s.slice(8, 10)}` : '';
+
+// 월 셀 상단: 분배락/지급일 + 수량×주당분배금 (예측월은 ~ 표기)
+function DivMeta({ d, isOverseas }) {
+  if (!(d.amount > 0)) return null;
+  const tilde = d.exPredicted ? '~' : '';
+  const per = isOverseas ? formatUsd(d.perShare) : formatCurrency(d.perShare);
+  return (
+    <>
+      {d.exMD && (
+        <span className="text-gray-500 text-[9px] leading-tight">
+          분배락 {tilde}{d.exMD}{d.payMD ? ` · 지급 ${tilde}${d.payMD}` : ''}
+        </span>
+      )}
+      <span className={`text-[9px] leading-tight ${d.qtyBackCalc ? 'text-amber-400/70' : 'text-gray-500'}`}>
+        {d.qty.toLocaleString()}주 × {per}
+      </span>
+    </>
+  );
 }
 
 function parseDividendApiResult(result) {
@@ -101,25 +136,47 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const divHistory = pf.dividendHistory || {};
       const isOverseas = pf.accountType === 'overseas';
       const fxRate = isOverseas ? usdkrw : 1;
+      const exHistoryAll = pf.dividendExDate || {};
+      const actualDiv = pf.actualDividend || {};
+      const actualDivUsd = pf.actualDividendUsd || {};
+      const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
       (pf.portfolio || []).forEach(item => {
         if (!getCodeType(item.code, pf)) return;
-        const qty = cleanNum(item.quantity);
-        if (!qty) return;
+        const baseQty = cleanNum(item.quantity);
+        if (!baseQty) return;
         const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
+        const exHistory = exHistoryAll[item.code] || {};
+        const exPred = buildMonthExPrediction(exHistory);
+        const codeActual = isOverseas ? (actualDivUsd[item.code] || {}) : (actualDiv[item.code] || {});
         const monthData = Array.from({ length: 12 }, (_, i) => {
           const mo = String(i + 1).padStart(2, '0');
-          const isActual = !!divHistory[item.code]?.[`${CURRENT_YEAR}-${mo}`];
+          const ym = `${CURRENT_YEAR}-${mo}`;
+          const isActual = !!divHistory[item.code]?.[ym];
           const perShare = pred[i + 1] || 0;
+          // 배당락일: 올해 실제값 우선, 없으면 직전연도 기준 예측
+          const exDateRaw = exHistory[ym] || exPred[i + 1] || '';
+          const exPredicted = !exHistory[ym] && !!exPred[i + 1];
+          const payDateRaw = (perShare > 0 && exDateRaw) ? dividendPayDate(exDateRaw, hol) : '';
+          // 월별 수량: 실지급액이 입력된 달은 (실지급액 ÷ 주당분배금)로 역산, 그 외 현재 보유수량
+          const actualAmt = codeActual[ym];
+          const qty = (actualAmt > 0 && perShare > 0)
+            ? Math.round(actualAmt / perShare)
+            : baseQty;
+          const qtyBackCalc = actualAmt > 0 && perShare > 0;
           const amountUsd = perShare * qty;
           const amount = amountUsd * fxRate;
-          return { amount, amountUsd: isOverseas ? amountUsd : 0, isActual };
+          return {
+            amount, amountUsd: isOverseas ? amountUsd : 0, isActual,
+            qty, perShare, qtyBackCalc,
+            exMD: fmtMD(exDateRaw), payMD: fmtMD(payDateRaw), exPredicted,
+          };
         });
         result.push({
           portfolioTitle: pf.title || pf.name || '계좌',
           portfolioId: pf.id,
           code: item.code,
           name: item.name,
-          qty,
+          qty: baseQty,
           isOverseas,
           hasDivData: Object.keys(pred).length > 0,
           monthData,
@@ -129,7 +186,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
     });
     return result;
-  }, [nonGoldPortfolios]);
+  }, [nonGoldPortfolios, holidays, usdkrw]);
 
   // 월 입금 내역 rows — 예상값 기반 + 사용자 직접 입력 override
   const actualRows = useMemo(() => {
@@ -535,8 +592,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     return expectedRows.reduce((sum, row) => {
       const rate = getTaxRate(row.portfolioId);
       const taxRec = dividendTaxHistory?.[row.code]?.records?.[yearMonth];
-      if (taxRec && row.qty > 0) {
-        return sum + Math.round(taxRec.perShareTaxableBase * row.qty * rate / 100);
+      const mQty = row.monthData[i].qty;
+      if (taxRec && mQty > 0) {
+        return sum + Math.round(taxRec.perShareTaxableBase * mQty * rate / 100);
       }
       return sum + Math.round(row.monthData[i].amount * rate / 100);
     }, 0);
@@ -1047,16 +1105,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                   <tr>
                     <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">코드</th>
-                    <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
                     {MONTHS.map(m => (
-                      <th key={m} colSpan={expectedHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[68px]">{m}</th>
+                      <th key={m} colSpan={expectedHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[104px]">{m}</th>
                     ))}
                     <th colSpan={expectedHasOverseas ? 2 : 1} className="py-2 px-2 min-w-[88px] text-yellow-500 font-bold">연간합계</th>
                   </tr>
                   {expectedHasOverseas && (
                     <tr className="text-[9px] border-b border-gray-700/50">
                       <th className="sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]"></th>
-                      <th></th>
                       {MONTHS.map(m => (
                         <React.Fragment key={m}>
                           <th className="py-1 text-blue-400 font-normal min-w-[62px]">세전</th>
@@ -1077,7 +1133,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           <div className="line-clamp-1">{row.name || row.code}</div>
                           {row.name && <div className="text-gray-500 text-[9px] font-normal">({row.code})</div>}
                         </td>
-                        <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
                         {row.isOverseas && expectedHasOverseas ? (
                           row.monthData.map((d, i) => {
                             const afterTaxUsd = d.amountUsd * (1 - taxRate / 100);
@@ -1091,6 +1146,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                     : 'text-gray-700'
                                 }`}>
                                   <div className="flex flex-col items-center gap-0">
+                                    <DivMeta d={d} isOverseas={true} />
                                     <span>{d.amountUsd > 0 ? formatUsd(d.amountUsd) : loading && !row.hasDivData ? '...' : '-'}</span>
                                     {d.amount > 0 && <span className="text-gray-500 text-[9px]">{formatCurrency(d.amount)}</span>}
                                   </div>
@@ -1116,13 +1172,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 : 'text-gray-700'
                             }`}>
                               <div className="flex flex-col items-center gap-0">
+                                <DivMeta d={d} isOverseas={false} />
                                 <span>{d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}</span>
                                 {taxRate > 0 && d.amount > 0 && (() => {
                                   const mo = String(i + 1).padStart(2, '0');
                                   const ym = `${CURRENT_YEAR}-${mo}`;
                                   const taxRec = dividendTaxHistory?.[row.code]?.records?.[ym];
-                                  const taxAmt = taxRec && row.qty > 0
-                                    ? Math.round(taxRec.perShareTaxableBase * row.qty * taxRate / 100)
+                                  const taxAmt = taxRec && d.qty > 0
+                                    ? Math.round(taxRec.perShareTaxableBase * d.qty * taxRate / 100)
                                     : Math.round(d.amount * taxRate / 100);
                                   return (<>
                                     <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxAmt)}</span>
@@ -1161,8 +1218,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                   const mo = String(i + 1).padStart(2, '0');
                                   const ym = `${CURRENT_YEAR}-${mo}`;
                                   const taxRec = dividendTaxHistory?.[row.code]?.records?.[ym];
-                                  return s + (taxRec && row.qty > 0
-                                    ? Math.round(taxRec.perShareTaxableBase * row.qty * taxRate / 100)
+                                  return s + (taxRec && d.qty > 0
+                                    ? Math.round(taxRec.perShareTaxableBase * d.qty * taxRate / 100)
                                     : Math.round(d.amount * taxRate / 100));
                                 }, 0);
                                 return (<>
@@ -1179,7 +1236,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 </tbody>
                 <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
                   <tr>
-                    <td colSpan={2} className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
+                    <td className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
                     {expectedHasOverseas ? (
                       MONTHS.map((_, i) => (
                         <React.Fragment key={i}>
@@ -1233,7 +1290,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             )}
             {!loading && expectedRows.length > 0 && (
               <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-                초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측
+                초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 분배락/지급일 ~ = 직전연도 기준 추정일 &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산
               </div>
             )}
           </div>
