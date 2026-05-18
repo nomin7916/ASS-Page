@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Trash2, RefreshCw, Plus } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import {
-  cleanNum, formatCurrency, formatPercent, formatNumber,
+  cleanNum, formatCurrency, formatPercent, formatNumber, formatFundPrice,
   formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, hexToRgba, blendWithDarkBg
 } from '../utils';
 
@@ -253,7 +253,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             {fundModal.currentQty > 0 && <span className="text-[11px] text-gray-500 font-normal">(추가 적립)</span>}
           </h3>
           <div className="text-[12px] text-gray-400 bg-gray-900/60 rounded-lg px-3 py-2.5 mb-3 space-y-1">
-            <div className="flex justify-between"><span>현재 기준가</span><span className="text-indigo-200 font-bold">{formatNumber(fundModal.currentPrice)}원</span></div>
+            <div className="flex justify-between"><span>현재 기준가</span><span className="text-indigo-200 font-bold">{formatFundPrice(fundModal.currentPrice)}원</span></div>
             {fundModal.currentQty > 0 && <>
               <div className="flex justify-between"><span>현재 보유수량</span><span className="text-indigo-300">{fundModal.currentQty.toFixed(3)}</span></div>
               <div className="flex justify-between"><span>현재 투자금액</span><span className="text-blue-300">{formatCurrency(fundModal.currentInvest)}</span></div>
@@ -615,7 +615,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                            onClick={() => item.code && onSingleRefresh(item.id, item.code)}
                            title={item.code ? '클릭하여 기준가 새로고침' : '펀드코드를 먼저 입력하세요'}>
                         {isRefreshing && <RefreshCw size={11} className="text-indigo-400 animate-spin shrink-0" />}
-                        <span>{formatNumber(item.currentPrice)}</span>
+                        <span>{formatFundPrice(item.currentPrice)}</span>
                       </div>
                     </td>
                   )}
