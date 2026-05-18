@@ -744,12 +744,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           <button
             onClick={handleRefreshAll}
             disabled={loading}
-            title={loading ? '조회 중...' : '새로고침'}
+            title={loading ? '조회 중...' : '분배금 최신값 조회·저장됩니다'}
             className="ml-auto w-7 h-7 flex items-center justify-center rounded border border-gray-600/70 text-gray-400 hover:bg-gray-700/50 hover:text-gray-200 hover:border-gray-500 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <svg viewBox="0 0 16 16" className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M13.5 8A5.5 5.5 0 1 1 10 3.07"/>
-              <polyline points="10 1 10 4 13 4"/>
+            <svg viewBox="0 0 24 24" className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
             </svg>
           </button>
         </div>
@@ -1067,12 +1067,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           <button
             onClick={handleRefreshAll}
             disabled={loading}
-            title={loading ? '조회 중...' : '새로고침'}
+            title={loading ? '조회 중...' : '분배금 최신값 조회·저장됩니다'}
             className="w-7 h-7 flex items-center justify-center rounded border border-gray-600/70 text-gray-400 hover:bg-gray-700/50 hover:text-gray-200 hover:border-gray-500 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <svg viewBox="0 0 16 16" className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M13.5 8A5.5 5.5 0 1 1 10 3.07"/>
-              <polyline points="10 1 10 4 13 4"/>
+            <svg viewBox="0 0 24 24" className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
             </svg>
           </button>
         </div>
