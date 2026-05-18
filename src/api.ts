@@ -357,7 +357,7 @@ function parseMiraeTotalPages(html: string): number {
 }
 
 // ── 미래에셋 펀드 기준가 조회 (현재가 + 등락액) ────────────────────────────
-export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: string; price: number; changeRate: number; changeAmount: number } | null> => {
+export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: string; price: number; changeRate: number; changeAmount: number; navDate: string; prevNavDate?: string; prevNavPrice?: number } | null> => {
   const code = rawCode.replace(/^MA:/i, '').toUpperCase();
   const today = new Date().toISOString().split('T')[0];
   const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
@@ -390,9 +390,12 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
       const rows = parseMiraeBasePricesHtml(html);
       if (rows.length === 0) continue;
       const price = rows[0].price;
+      const navDate = rows[0].date;
       const changeAmount = rows.length > 1 ? +(rows[0].price - rows[1].price).toFixed(2) : 0;
       const changeRate = (rows.length > 1 && rows[1].price > 0) ? +((changeAmount / rows[1].price) * 100).toFixed(2) : 0;
-      return { name, price, changeRate, changeAmount };
+      const prevNavDate = rows.length > 1 ? rows[1].date : undefined;
+      const prevNavPrice = rows.length > 1 ? rows[1].price : undefined;
+      return { name, price, changeRate, changeAmount, navDate, prevNavDate, prevNavPrice };
     } catch { continue; }
   }
   return null;

@@ -270,6 +270,7 @@ export default function App() {
   const activePortfolioIdRef = useRef<string | null>(null);
   const stockHistoryMapRef = useRef<Record<string, Record<string, number>>>({}); // 클로저 문제 해결용
   const didSwitchPortfolioRef = useRef(false); // 탭 전환 시 최초 마운트 skip용
+  const autoFundHistoryRef = useRef<string | null>(null); // 자동 기록한 마지막 navDate (포트폴리오별 추적)
   const saveStateRef = useRef<Record<string, any>>({}); // 항상 최신 state 스냅샷 유지
   // applyStateData/applyStockData/applyBackupData 콜백 ref (useDriveSync → useMarketData 순환 의존 해소)
   const applyStateDataRef = useRef<Function | null>(null);
@@ -982,8 +983,9 @@ export default function App() {
   });
   refreshPricesRef.current = refreshPrices;
 
-  // 계좌 탭 전환 시 현재가 자동 갱신
+  // 계좌 탭 전환 시 현재가 자동 갱신, 자동 기록 ref 초기화
   useEffect(() => {
+    autoFundHistoryRef.current = null;
     if (!didSwitchPortfolioRef.current) { didSwitchPortfolioRef.current = true; return; }
     refreshPrices();
   }, [activePortfolioId]);
@@ -1506,6 +1508,59 @@ export default function App() {
       return fills.length > 0 ? [...newHist, ...fills] : newHist;
     });
   }, [totals.totalEval, principal, calendarLoaded, activePortfolioAccountType, effectiveDateKey]);
+
+  // 07:30 이후 활성 포트폴리오의 전날 종가를 히스토리에 자동 기록 (MA: 펀드 보유 계좌)
+  useEffect(() => {
+    const now = new Date();
+    if (now.getHours() < 7 || (now.getHours() === 7 && now.getMinutes() < 30)) return;
+
+    const today = now.toISOString().split('T')[0];
+    const maFunds = portfolio.filter(item => item.type === 'fund' && item.code?.startsWith('MA:'));
+    if (maFunds.length === 0) return;
+    if (maFunds.some(item => !item.navDate)) return; // 아직 가격 미로드
+
+    let targetDate = null;
+    let useCurrentPrices = true;
+
+    const sample = maFunds[0];
+    if (sample.navDate < today) {
+      targetDate = sample.navDate; // rows[0] = 전날 종가
+    } else if (sample.navDate === today && sample.prevNavDate && sample.prevNavDate < today) {
+      targetDate = sample.prevNavDate; // 오늘 기준가 이미 발표, rows[1] = 전날
+      useCurrentPrices = false;
+    }
+
+    if (!targetDate) return;
+    if (autoFundHistoryRef.current === targetDate) return; // 이미 처리
+
+    let targetEval = 0;
+    portfolio.forEach(item => {
+      if (item.type === 'deposit') {
+        targetEval += cleanNum(item.depositAmount);
+      } else if (item.type === 'fund') {
+        const qty = cleanNum(item.quantity);
+        const price = (!useCurrentPrices && item.code?.startsWith('MA:') && item.prevNavPrice != null)
+          ? item.prevNavPrice
+          : cleanNum(item.currentPrice);
+        targetEval += qty > 0 && price > 0 ? qty * price : cleanNum(item.evalAmount);
+      } else {
+        targetEval += cleanNum(item.currentPrice) * cleanNum(item.quantity);
+      }
+    });
+
+    if (targetEval <= 0) return;
+
+    setHistory(prev => {
+      const idx = prev.findIndex(h => h.date === targetDate);
+      if (idx >= 0 && Math.abs(prev[idx].evalAmount - targetEval) < 1) return prev;
+      const entry = { date: targetDate, evalAmount: targetEval, principal: cleanNum(principal), isFixed: false };
+      if (idx >= 0) return prev.map((h, i) => i === idx ? entry : h);
+      return [...prev, entry];
+    });
+
+    autoFundHistoryRef.current = targetDate;
+    notify(`${targetDate} 종가 기준 자산 평가액이 자동으로 기록되었습니다.`, 'success');
+  }, [portfolio, totals.totalEval]);
 
   useEffect(() => {
     if (unifiedDates.length === 0) return;

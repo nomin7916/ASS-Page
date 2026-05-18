@@ -105,7 +105,12 @@ export function useStockData({
           name: d.name || p.name,
           currentPrice: d.price,
           changeRate: d.changeRate,
-          ...(isMirae ? { changeAmount: (d as any).changeAmount ?? 0 } : {}),
+          ...(isMirae ? {
+            changeAmount: (d as any).changeAmount ?? 0,
+            navDate: (d as any).navDate,
+            prevNavDate: (d as any).prevNavDate,
+            prevNavPrice: (d as any).prevNavPrice,
+          } : {}),
         } : p));
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
       } else {
@@ -156,7 +161,12 @@ export function useStockData({
           name: d.name || p.name,
           currentPrice: d.price,
           changeRate: d.changeRate,
-          ...(isMirae ? { changeAmount: (d as any).changeAmount ?? 0 } : {}),
+          ...(isMirae ? {
+            changeAmount: (d as any).changeAmount ?? 0,
+            navDate: (d as any).navDate,
+            prevNavDate: (d as any).prevNavDate,
+            prevNavPrice: (d as any).prevNavPrice,
+          } : {}),
         } : p));
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
       } else {
@@ -455,7 +465,12 @@ export function useStockData({
         }
         if (item.type === 'fund' && item.code && fundResults[item.code]) {
           const d = fundResults[item.code];
-          const extra = item.code.startsWith('MA:') && d.changeAmount !== undefined ? { changeAmount: d.changeAmount } : {};
+          const extra = item.code.startsWith('MA:') ? {
+            ...(d.changeAmount !== undefined ? { changeAmount: d.changeAmount } : {}),
+            ...(d.navDate ? { navDate: d.navDate } : {}),
+            ...(d.prevNavDate ? { prevNavDate: d.prevNavDate } : {}),
+            ...(d.prevNavPrice !== undefined ? { prevNavPrice: d.prevNavPrice } : {}),
+          } : {};
           return { ...item, currentPrice: d.price, changeRate: d.changeRate, ...extra };
         }
         return item;
@@ -481,10 +496,54 @@ export function useStockData({
       if (totalEval <= 0) return { ...p, portfolio: updatedItems };
 
       const history = p.history || [];
+
+      // 07:30 이후이고 MA: 펀드 종목이 있으면 → 전날 종가 날짜로 히스토리 기록 (overwrite)
+      const now = new Date();
+      const isAfter0730 = now.getHours() > 7 || (now.getHours() === 7 && now.getMinutes() >= 30);
+      if (isAfter0730) {
+        const maFunds = updatedItems.filter(i => i.type === 'fund' && i.code?.startsWith('MA:'));
+        if (maFunds.length > 0) {
+          const sample = maFunds[0];
+          let targetDate = null;
+          let targetEval = totalEval;
+
+          if (sample.navDate && sample.navDate < today) {
+            // 07:30에 rows[0] = 전날 종가 (오늘 기준가 미발표)
+            targetDate = sample.navDate;
+          } else if (sample.navDate === today && sample.prevNavDate && sample.prevNavDate < today) {
+            // 오늘 기준가가 이미 발표된 경우: rows[1] = 전날 종가, prevNavPrice 사용
+            targetDate = sample.prevNavDate;
+            targetEval = 0;
+            updatedItems.forEach(item => {
+              if (item.type === 'deposit') {
+                targetEval += cleanNum(item.depositAmount) * fxRate;
+              } else if (item.type === 'fund') {
+                const qty = cleanNum(item.quantity);
+                const price = (item.code?.startsWith('MA:') && item.prevNavPrice != null)
+                  ? item.prevNavPrice
+                  : cleanNum(item.currentPrice);
+                targetEval += qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
+              } else {
+                targetEval += cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
+              }
+            });
+          }
+
+          if (targetDate && targetEval > 0) {
+            const tIdx = history.findIndex(h => h.date === targetDate);
+            if (tIdx >= 0) {
+              if (Math.abs(history[tIdx].evalAmount - targetEval) < 1) return { ...p, portfolio: updatedItems };
+              const updated = history.map((h, i) => i === tIdx ? { ...h, evalAmount: targetEval, principal: cleanNum(p.principal) || 0 } : h);
+              return { ...p, portfolio: updatedItems, history: updated };
+            }
+            return { ...p, portfolio: updatedItems, history: [...history, { date: targetDate, evalAmount: targetEval, principal: cleanNum(p.principal) || 0, isFixed: false }] };
+          }
+        }
+      }
+
+      // 기존 동작: 오늘 항목이 없을 때만 추가
       const idx = history.findIndex(h => h.date === today);
-      // 오늘 항목이 이미 있으면 가격만 업데이트, 히스토리는 수정하지 않음
       if (idx >= 0) return { ...p, portfolio: updatedItems };
-      // 오늘 항목이 없을 때만 새로 추가
       const newHistory = [...history, { date: today, evalAmount: totalEval, principal: cleanNum(p.principal) || 0, isFixed: false }];
       return { ...p, portfolio: updatedItems, history: newHistory };
     }));
