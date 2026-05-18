@@ -39,8 +39,17 @@ function buildMonthExPrediction(codeExHistory) {
   return pred;
 }
 
-// 'YYYY-MM-DD' → 'M/D' (없으면 '')
-const fmtMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? `${+s.slice(5, 7)}/${+s.slice(8, 10)}` : '';
+// 'YYYY-MM-DD' → 'MM/DD' (없으면 '')
+const fmtMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? `${s.slice(5, 7)}/${s.slice(8, 10)}` : '';
+
+// 슬롯이 없는 지급월에 사용자가 직접 입력할 때 쓸 폴백 배당락 키.
+// 월배당 관례상 지급월 직전월이 배당락월 — 1월 지급분은 직전연도 12월 배당락.
+const _CY = Number(CURRENT_YEAR);
+const fallbackExYm = (payIdx) => payIdx === 0
+  ? `${_CY - 1}-12`
+  : `${_CY}-${String(payIdx).padStart(2, '0')}`;
+// 폴백 배당락월에 대응하는 월별 주당분배금 예측 키(1~12)
+const fallbackPredMonth = (payIdx) => payIdx === 0 ? 12 : payIdx;
 
 // 한 종목의 배당락 이벤트들을 '올해 지급월' 슬롯으로 재배치한다.
 // 저장 키는 배당락월(exYm) 그대로 유지하고 표시 위치만 지급월 기준으로 옮긴다.
@@ -86,7 +95,7 @@ function DivMeta({ d, isOverseas }) {
     <>
       {d.exMD && (
         <span className="text-gray-500 text-[9px] leading-tight">
-          분배락 {tilde}{d.exMD}{d.payMD ? ` · 지급 ${tilde}${d.payMD}` : ''}
+          {tilde}{d.exMD}{d.payMD ? `-${d.payMD}` : ''}
         </span>
       )}
       <span className={`text-[9px] leading-tight ${d.qtyBackCalc ? 'text-amber-400/70' : 'text-gray-500'}`}>
@@ -246,14 +255,19 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const codeQtyOv = actualDividendQty[item.code] || {};
         // 지급월 기준 재배치 (저장 키는 배당락월 유지)
         const slots = buildPaySlots(divHistory[item.code], exHistoryAll[item.code] || {}, hol);
-        const monthData = slots.map((srcs) => {
+        const monthData = slots.map((slotSrcs, payIdx) => {
+          // 예상 분배금 슬롯이 없어도 사용자가 실수령액을 직접 기록할 수 있도록
+          // 폴백 배당락 키를 가진 합성 소스를 사용한다 (1월=직전연도 12월).
+          const srcs = slotSrcs.length ? slotSrcs : [{
+            exYm: fallbackExYm(payIdx),
+            exMonthIdx: fallbackPredMonth(payIdx) - 1,
+            perShare: pred[fallbackPredMonth(payIdx)] || 0,
+            exDateRaw: '', payDateRaw: '', exPredicted: false,
+          }];
           if (isOverseas) {
             const codeActualUsd = actualDividendUsd[item.code] || {};
             const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[item.code] || {};
             const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[item.code] || {};
-            if (!srcs.length) {
-              return { grossUsd: 0, grossKrw: 0, afterTaxUsd: 0, afterTaxKrw: 0, hasManualGross: false, hasManualAfterTax: false, hasManual: false, taxKrwManual: 0, effectiveTaxKrw: 0, yearMonth: '', perShare: 0, calcQty: 0, qtyVal: 0, qtyIsManual: false };
-            }
             let grossUsd = 0, grossKrw = 0, afterTaxUsd = 0, afterTaxKrw = 0, effectiveTaxKrw = 0, taxKrwManual = 0, calcQty = 0;
             let hasManualGross = false, hasManualAfterTax = false;
             const parts = srcs.map(s => {
@@ -293,9 +307,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, hasManual: hasManualGross || hasManualAfterTax, taxKrwManual, effectiveTaxKrw, yearMonth: dom.exYm, perShare: dom.perShare, calcQty, qtyVal: overrideQty > 0 ? overrideQty : calcQty, qtyIsManual: overrideQty > 0 };
           } else {
             const codeActual = actualDividend[item.code] || {};
-            if (!srcs.length) {
-              return { amount: 0, amountUsd: 0, predicted: 0, hasManual: false, yearMonth: '', taxAmount: null, perShare: 0, calcQty: 0, qtyVal: 0, qtyIsManual: false };
-            }
             let amount = 0, predicted = 0, calcQty = 0, taxSum = 0, hasManual = false, taxAny = false;
             const parts = srcs.map(s => {
               const ek = s.exYm;
@@ -429,7 +440,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const codeActualUsd = actualDividendUsd[code] || {};
             const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[code] || {};
             const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[code] || {};
-            slots[i].forEach(s => {
+            (slots[i].length ? slots[i] : [{ exYm: fallbackExYm(i) }]).forEach(s => {
               const ek = s.exYm;
               const hasManualGross = ek in codeActualUsd;
               const storedAfterUsd = codeAfterTaxUsd[ek];
@@ -468,7 +479,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           let amount = 0, taxKrw = 0, hasManual = false;
           stockSlots.forEach(({ code, slots }) => {
             const codeActual = actualDividend[code] || {};
-            slots[i].forEach(s => {
+            (slots[i].length ? slots[i] : [{ exYm: fallbackExYm(i) }]).forEach(s => {
               const ek = s.exYm;
               if (!(ek in codeActual)) return;
               amount += codeActual[ek];
@@ -1372,7 +1383,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             )}
             {!loading && expectedRows.length > 0 && (
               <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-                초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 분배락/지급일 ~ = 직전연도 기준 추정일 &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산
+                초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 날짜 = 배당락-지급일(~ 는 직전연도 기준 추정) &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산
               </div>
             )}
           </div>

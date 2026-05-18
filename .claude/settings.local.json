@@ -132,7 +132,11 @@
       "Read(//opt/homebrew/**)",
       "Bash(command -v volta fnm asdf)",
       "Bash(find ~ /usr/local /opt -maxdepth 4 -name \"node\" -type f 2>/dev/null | head; echo \"--- nvm dir ---\"; ls -d ~/.nvm 2>/dev/null; ls ~/.nvm/versions/node 2>/dev/null; echo \"--- profiles ---\"; ls -a ~ | grep -i \"zprofile\\\\|zshenv\\\\|bash_profile\")",
-      "Read(//opt/**)"
+      "Read(//opt/**)",
+      "PowerShell(npm run build)",
+      "PowerShell($p = @\\(\"$env:ProgramFiles\\\\nodejs\\\\npm.cmd\",\"$env:APPDATA\\\\npm\\\\npm.cmd\",\"$env:LOCALAPPDATA\\\\Programs\\\\nodejs\\\\npm.cmd\"\\); $p | Where-Object { Test-Path $_ }; \\(Get-Command node -ErrorAction SilentlyContinue\\).Source)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Program Files\",\"C:\\\\Program Files \\(x86\\)\",\"$env:LOCALAPPDATA\",\"$env:APPDATA\" -Filter \"npm.cmd\" -Recurse -ErrorAction SilentlyContinue -Depth 3 | Select-Object -First 5 -ExpandProperty FullName)",
+      "PowerShell(where.exe node; where.exe npm; Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object -First 3 Name; $env:PATH -split ';' | Where-Object { $_ -match 'node|npm|nvm|fnm|volta' })"
     ]
   }
 }
