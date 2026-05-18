@@ -354,7 +354,6 @@ export default function App() {
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
-    handleAutoBackupWithMemo,
     initSession,
   } = useDriveSync({
     authUser,
