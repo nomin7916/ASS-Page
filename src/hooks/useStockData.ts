@@ -67,15 +67,23 @@ export function useStockData({
   const fundWideFetchedRef = useRef<Set<string>>(new Set());
 
   const extractFundCode = (input: string): string => {
+    const trimmed = input.trim();
     // 미래에셋 URL: childFundCd 우선, 없으면 fundCd
-    if (/investments\.miraeasset\.com/i.test(input)) {
-      const child = input.match(/[?&]childFundCd=([A-Za-z0-9]+)/i);
+    if (/investments\.miraeasset\.com/i.test(trimmed)) {
+      const child = trimmed.match(/[?&]childFundCd=([A-Za-z0-9]+)/i);
       if (child) return `MA:${child[1].toUpperCase()}`;
-      const fund = input.match(/[?&]fundCd=([A-Za-z0-9]+)/i);
+      const fund = trimmed.match(/[?&]fundCd=([A-Za-z0-9]+)/i);
       if (fund) return `MA:${fund[1].toUpperCase()}`;
     }
-    const m = input.match(/funetf\.co\.kr\/product\/fund\/view\/([A-Za-z0-9]+)/);
-    return m ? m[1].toUpperCase() : input.trim().toUpperCase();
+    // funetf URL
+    const m = trimmed.match(/funetf\.co\.kr\/product\/fund\/view\/([A-Za-z0-9]+)/);
+    if (m) return m[1].toUpperCase();
+    // MA: 접두어 직접 입력
+    if (/^MA:/i.test(trimmed)) return `MA:${trimmed.slice(3).toUpperCase()}`;
+    // 5~7자 코드: 미래에셋 펀드코드 (funetf는 항상 8자 이상)
+    if (/^[A-Za-z0-9]{5,7}$/.test(trimmed)) return `MA:${trimmed.toUpperCase()}`;
+    // 8자 이상: funetf 코드
+    return trimmed.toUpperCase();
   };
 
   const handleStockBlur = async (id, code) => {
