@@ -1378,6 +1378,7 @@ export default function App() {
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
         actualDividend: p.actualDividend,
+        dividendHistoryUpdatedAt: p.dividendHistoryUpdatedAt || 0,
         extraDividendRows: p.extraDividendRows,
         actualDividendUsd: p.actualDividendUsd,
         actualAfterTaxUsd: p.actualAfterTaxUsd,
