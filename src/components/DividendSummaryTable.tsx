@@ -7,11 +7,6 @@ const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','
 const CURRENT_YEAR = new Date().getFullYear().toString();
 const formatUsd = (v) => v > 0 ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
 
-// 분배금 조회 시도 기록 — 모듈 스코프(메모리 전용)로 컴포넌트 언마운트/리마운트(계좌 이동)
-// 후에도 유지. 빈 응답(무배당) 종목도 "조회 시도함"으로 영구 기억해 재진입 시 헛조회 방지.
-// 키는 `${portfolioId}:${code}` (분배금 값 미포함) — 사용자 전환 시 ID가 달라 오염 없음.
-const dividendFetchAttempted = new Set<string>();
-
 const isKrCode = (code) => /^[A-Z0-9]{5,6}$/i.test(String(code || ''));
 const isUsCode = (code) => /^[A-Z]{1,5}$/i.test(String(code || ''));
 const getCodeType = (code, pf) => {
@@ -45,7 +40,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
-  const fetchedRef = useRef(dividendFetchAttempted);
   const inputRef = useRef(null);
   const krwInputRef = useRef(null);
   const afterTaxBlurTimer = useRef(null);
@@ -54,57 +48,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
     (portfolios || []).filter(p => p.accountType !== 'gold'),
     [portfolios]
   );
-
-  const stockKeys = useMemo(() =>
-    nonGoldPortfolios
-      .flatMap(pf =>
-        (pf.portfolio || [])
-          .filter(item => getCodeType(item.code, pf) !== null)
-          .map(item => `${pf.id}:${item.code}`)
-      )
-      .sort()
-      .join(','),
-    [nonGoldPortfolios]
-  );
-
-  useEffect(() => {
-    if (!stockKeys) return;
-    const fetchMissing = async () => {
-      const byPortfolio = {};
-      nonGoldPortfolios.forEach(pf => {
-        const divHistory = pf.dividendHistory || {};
-        (pf.portfolio || []).forEach(item => {
-          const codeType = getCodeType(item.code, pf);
-          if (!codeType) return;
-          const key = `${pf.id}:${item.code}`;
-          if (fetchedRef.current.has(key) || divHistory[item.code]) return;
-          fetchedRef.current.add(key);
-          if (!byPortfolio[pf.id]) byPortfolio[pf.id] = [];
-          byPortfolio[pf.id].push({ code: item.code, codeType });
-        });
-      });
-      if (!Object.keys(byPortfolio).length) return;
-      setLoading(true);
-      await Promise.all(
-        Object.entries(byPortfolio).map(async ([portfolioId, items]) => {
-          const mergeMap = {};
-          await Promise.all(items.map(async ({ code, codeType }) => {
-            let monthData;
-            if (codeType === 'us') {
-              monthData = await fetchYahooDividendHistory(code);
-            } else {
-              const data = await fetchDividendHistory(code);
-              if (data?.result?.length) monthData = parseDividendApiResult(data.result);
-            }
-            if (monthData && Object.keys(monthData).length) mergeMap[code] = monthData;
-          }));
-          if (Object.keys(mergeMap).length) updatePortfolioDividendHistory(portfolioId, mergeMap);
-        })
-      );
-      setLoading(false);
-    };
-    fetchMissing();
-  }, [stockKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fix: 셀 identity(code+monthIdx+field)가 바뀔 때만 focus/select 실행
   const editingCellKey = editingCell
@@ -119,7 +62,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   }, [editingCellKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRefreshAll = useCallback(async () => {
-    fetchedRef.current.clear();
     setLoading(true);
     await Promise.all(
       nonGoldPortfolios.map(async pf => {
@@ -127,7 +69,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         if (!stocks.length) return;
         const mergeMap = {};
         await Promise.all(stocks.map(async item => {
-          fetchedRef.current.add(`${pf.id}:${item.code}`);
           const codeType = getCodeType(item.code, pf);
           let monthData;
           if (codeType === 'us') {

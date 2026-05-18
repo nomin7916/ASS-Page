@@ -127,7 +127,9 @@
       "Bash(command -v volta fnm)",
       "Read(//Users/aruimacmini/**)",
       "Read(//usr/local/**)",
-      "Bash(zsh -lic 'which node npm && npm run build 2>&1 | tail -20')"
+      "Bash(zsh -lic 'which node npm && npm run build 2>&1 | tail -20')",
+      "Bash(ls /usr/local/bin/npm /opt/homebrew/bin/npm 2>/dev/null; ls -d /opt/homebrew/Cellar/node* 2>/dev/null; find ~ -maxdepth 3 -name npm -type f 2>/dev/null | head)",
+      "Read(//opt/homebrew/**)"
     ]
   }
 }
