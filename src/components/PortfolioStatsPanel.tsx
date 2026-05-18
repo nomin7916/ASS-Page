@@ -74,13 +74,13 @@ export default function PortfolioStatsPanel({
   };
 
   const rowPy = isOv ? 'py-1' : 'py-1.5';
-  const contentP = isOv ? 'p-1.5' : 'p-2';
+  const contentP = isOv ? 'p-1.5' : 'px-3 py-1.5';
   const cardH = isOv ? 'h-full min-h-[520px]' : 'h-[360px]';
-  const headerP = isOv ? 'p-3 space-y-2' : 'p-2 space-y-1';
+  const headerP = isOv ? 'p-3 space-y-2' : 'px-3 py-2 space-y-1';
 
   return (
     <>
-    <div className={`w-full xl:w-[16%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${cardH} flex flex-col overflow-hidden shrink-0`}>
+    <div className={`w-full xl:w-[22%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${cardH} flex flex-col overflow-hidden shrink-0`}>
       <div className={`${headerP} bg-black shrink-0 border-b border-gray-700 text-gray-400 text-xs`}>
         <div className="flex justify-between items-start">
           <span className="shrink-0">투자금액</span>

@@ -42,6 +42,41 @@ function buildMonthExPrediction(codeExHistory) {
 // 'YYYY-MM-DD' → 'M/D' (없으면 '')
 const fmtMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? `${+s.slice(5, 7)}/${+s.slice(8, 10)}` : '';
 
+// 한 종목의 배당락 이벤트들을 '올해 지급월' 슬롯으로 재배치한다.
+// 저장 키는 배당락월(exYm) 그대로 유지하고 표시 위치만 지급월 기준으로 옮긴다.
+// 반환: slots[payIdx 0-11] = [{ exYm, exMonthIdx, perShare, exDateRaw, payDateRaw, exPredicted }]
+// - 배당락일 미확정 예측월: 직전연도 배당락일 + 2영업일로 추정 배치
+// - 올해 12월 배당락 → 내년 1월 지급분은 올해 표에서 제외
+// - 직전연도 12월 배당락 → 올해 1월 지급분은 1월 슬롯에 편입
+function buildPaySlots(codeHistory, codeExHistory, hol) {
+  const monthPred = buildMonthPrediction(codeHistory);
+  const exPred = buildMonthExPrediction(codeExHistory);
+  const CY = Number(CURRENT_YEAR);
+  const slots = Array.from({ length: 12 }, () => []);
+  const consider = (exYear, mIdx) => {
+    const m = mIdx + 1;
+    const mo = String(m).padStart(2, '0');
+    const perShare = monthPred[m] || 0;
+    if (!(perShare > 0)) return;
+    const exYm = `${exYear}-${mo}`;
+    const actualEx = codeExHistory?.[exYm];
+    let exDateRaw, exPredicted;
+    if (actualEx) { exDateRaw = actualEx; exPredicted = false; }
+    else if (exPred[m]) { exDateRaw = `${exYear}-${mo}-${exPred[m].slice(8, 10)}`; exPredicted = true; }
+    else return;
+    const payDateRaw = dividendPayDate(exDateRaw, hol);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(payDateRaw))) return;
+    if (Number(payDateRaw.slice(0, 4)) !== CY) return;
+    slots[Number(payDateRaw.slice(5, 7)) - 1].push({ exYm, exMonthIdx: mIdx, perShare, exDateRaw, payDateRaw, exPredicted });
+  };
+  for (let i = 0; i < 12; i++) consider(CY, i);
+  consider(CY - 1, 11); // 직전연도 12월 → 올해 1월 지급 가능
+  return slots;
+}
+
+// 슬롯 내 지배(금액 큰) 소스 — 표시용 분배락/지급일·주당분배금 기준
+const pickDominant = (parts) => parts.reduce((a, b) => (b._w > a._w ? b : a), parts[0]);
+
 // 월 셀 상단: 분배락/지급일 + 수량×주당분배금 (예측월은 ~ 표기)
 function DivMeta({ d, isOverseas }) {
   if (!(d.amount > 0)) return null;
@@ -146,29 +181,32 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         if (!baseQty) return;
         const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
         const exHistory = exHistoryAll[item.code] || {};
-        const exPred = buildMonthExPrediction(exHistory);
         const codeActual = isOverseas ? (actualDivUsd[item.code] || {}) : (actualDiv[item.code] || {});
-        const monthData = Array.from({ length: 12 }, (_, i) => {
-          const mo = String(i + 1).padStart(2, '0');
-          const ym = `${CURRENT_YEAR}-${mo}`;
-          const isActual = !!divHistory[item.code]?.[ym];
-          const perShare = pred[i + 1] || 0;
-          // 배당락일: 올해 실제값 우선, 없으면 직전연도 기준 예측
-          const exDateRaw = exHistory[ym] || exPred[i + 1] || '';
-          const exPredicted = !exHistory[ym] && !!exPred[i + 1];
-          const payDateRaw = (perShare > 0 && exDateRaw) ? dividendPayDate(exDateRaw, hol) : '';
-          // 월별 수량: 실지급액이 입력된 달은 (실지급액 ÷ 주당분배금)로 역산, 그 외 현재 보유수량
-          const actualAmt = codeActual[ym];
-          const qty = (actualAmt > 0 && perShare > 0)
-            ? Math.round(actualAmt / perShare)
-            : baseQty;
-          const qtyBackCalc = actualAmt > 0 && perShare > 0;
-          const amountUsd = perShare * qty;
-          const amount = amountUsd * fxRate;
+        // 지급월 기준 재배치 (저장 키는 배당락월 유지)
+        const slots = buildPaySlots(divHistory[item.code], exHistory, hol);
+        const monthData = slots.map((srcs) => {
+          if (!srcs.length) {
+            return {
+              amount: 0, amountUsd: 0, isActual: false, qty: baseQty, perShare: 0,
+              qtyBackCalc: false, exMD: '', payMD: '', exPredicted: false, yearMonth: '',
+            };
+          }
+          let amountUsd = 0;
+          const parts = srcs.map(s => {
+            // 실지급액이 입력된 달은 (실지급액 ÷ 주당분배금)로 수량 역산, 그 외 현재 보유수량
+            const actualAmt = codeActual[s.exYm];
+            const q = (actualAmt > 0 && s.perShare > 0) ? Math.round(actualAmt / s.perShare) : baseQty;
+            const aUsd = s.perShare * q;
+            amountUsd += aUsd;
+            return { ...s, q, _w: aUsd, backCalc: actualAmt > 0 && s.perShare > 0 };
+          });
+          const dom = pickDominant(parts);
+          const isActual = srcs.some(s => !s.exPredicted && !!divHistory[item.code]?.[s.exYm]);
           return {
-            amount, amountUsd: isOverseas ? amountUsd : 0, isActual,
-            qty, perShare, qtyBackCalc,
-            exMD: fmtMD(exDateRaw), payMD: fmtMD(payDateRaw), exPredicted,
+            amount: amountUsd * fxRate, amountUsd: isOverseas ? amountUsd : 0, isActual,
+            qty: dom.q, perShare: dom.perShare, qtyBackCalc: dom.backCalc,
+            exMD: fmtMD(dom.exDateRaw), payMD: fmtMD(dom.payDateRaw), exPredicted: dom.exPredicted,
+            yearMonth: dom.exYm,
           };
         });
         result.push({
@@ -198,60 +236,83 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const actualDividendQty = pf.actualDividendQty || {};
       const isOverseas = pf.accountType === 'overseas';
       const taxRate = pf.dividendTaxRate ?? 15.4;
+      const exHistoryAll = pf.dividendExDate || {};
+      const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
       (pf.portfolio || []).forEach(item => {
         if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);
         if (!qty) return;
         const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
         const codeQtyOv = actualDividendQty[item.code] || {};
-        const monthData = Array.from({ length: 12 }, (_, i) => {
-          const mo = String(i + 1).padStart(2, '0');
-          const yearMonth = `${CURRENT_YEAR}-${mo}`;
+        // 지급월 기준 재배치 (저장 키는 배당락월 유지)
+        const slots = buildPaySlots(divHistory[item.code], exHistoryAll[item.code] || {}, hol);
+        const monthData = slots.map((srcs) => {
           if (isOverseas) {
             const codeActualUsd = actualDividendUsd[item.code] || {};
             const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[item.code] || {};
             const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[item.code] || {};
-            const taxKrwManual = (pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] || 0;
-            const hasManualGross = yearMonth in codeActualUsd;
-            const storedAfterUsd = codeAfterTaxUsd[yearMonth];
-            const storedAfterKrw = codeAfterTaxKrw[yearMonth];
-            const hasManualAfterTax = storedAfterUsd != null || storedAfterKrw != null;
-            const hasManual = hasManualGross || hasManualAfterTax;
-            let grossUsd, grossKrw, effectiveTaxKrw;
-            if (hasManualAfterTax) {
-              const atKrw = storedAfterKrw != null ? storedAfterKrw : Math.round((storedAfterUsd || 0) * usdkrw);
-              effectiveTaxKrw = taxKrwManual > 0 ? taxKrwManual : (taxRate > 0 && taxRate < 100 ? Math.round(atKrw * taxRate / (100 - taxRate)) : 0);
-              grossKrw = atKrw + effectiveTaxKrw;
-              grossUsd = grossKrw / (usdkrw || 1);
-            } else if (hasManualGross) {
-              grossUsd = codeActualUsd[yearMonth];
-              grossKrw = Math.round(grossUsd * usdkrw);
-              effectiveTaxKrw = taxKrwManual > 0 ? taxKrwManual : (taxRate > 0 ? Math.round(grossKrw * taxRate / 100) : 0);
-            } else {
-              grossUsd = (pred[i + 1] || 0) * qty;
-              grossKrw = Math.round(grossUsd * usdkrw);
-              effectiveTaxKrw = 0;
+            if (!srcs.length) {
+              return { grossUsd: 0, grossKrw: 0, afterTaxUsd: 0, afterTaxKrw: 0, hasManualGross: false, hasManualAfterTax: false, hasManual: false, taxKrwManual: 0, effectiveTaxKrw: 0, yearMonth: '', perShare: 0, calcQty: 0, qtyVal: 0, qtyIsManual: false };
             }
-            const autoAfterUsd = grossUsd * (1 - taxRate / 100);
-            const afterTaxUsd = storedAfterUsd != null ? storedAfterUsd : autoAfterUsd;
-            const afterTaxKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterTaxUsd * usdkrw);
-            const perShare = pred[i + 1] || 0;
-            const calcQty = (perShare > 0 && grossUsd > 0) ? Math.round(grossUsd / perShare) : 0;
-            const overrideQty = codeQtyOv[yearMonth];
-            const qtyVal = overrideQty > 0 ? overrideQty : calcQty;
-            return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, hasManual, taxKrwManual, effectiveTaxKrw, yearMonth, perShare, calcQty, qtyVal, qtyIsManual: overrideQty > 0 };
+            let grossUsd = 0, grossKrw = 0, afterTaxUsd = 0, afterTaxKrw = 0, effectiveTaxKrw = 0, taxKrwManual = 0, calcQty = 0;
+            let hasManualGross = false, hasManualAfterTax = false;
+            const parts = srcs.map(s => {
+              const ek = s.exYm;
+              const tkm = (pf.dividendTaxAmounts || {})[item.code]?.[ek] || 0;
+              const hmg = ek in codeActualUsd;
+              const sAfterUsd = codeAfterTaxUsd[ek];
+              const sAfterKrw = codeAfterTaxKrw[ek];
+              const hmat = sAfterUsd != null || sAfterKrw != null;
+              let gUsd, gKrw, etk;
+              if (hmat) {
+                const atKrw = sAfterKrw != null ? sAfterKrw : Math.round((sAfterUsd || 0) * usdkrw);
+                etk = tkm > 0 ? tkm : (taxRate > 0 && taxRate < 100 ? Math.round(atKrw * taxRate / (100 - taxRate)) : 0);
+                gKrw = atKrw + etk;
+                gUsd = gKrw / (usdkrw || 1);
+              } else if (hmg) {
+                gUsd = codeActualUsd[ek];
+                gKrw = Math.round(gUsd * usdkrw);
+                etk = tkm > 0 ? tkm : (taxRate > 0 ? Math.round(gKrw * taxRate / 100) : 0);
+              } else {
+                gUsd = s.perShare * qty;
+                gKrw = Math.round(gUsd * usdkrw);
+                etk = 0;
+              }
+              const autoAfterUsd = gUsd * (1 - taxRate / 100);
+              const atUsd = sAfterUsd != null ? sAfterUsd : autoAfterUsd;
+              const atKrw = sAfterKrw != null ? sAfterKrw : Math.round(atUsd * usdkrw);
+              const cq = (s.perShare > 0 && gUsd > 0) ? Math.round(gUsd / s.perShare) : 0;
+              grossUsd += gUsd; grossKrw += gKrw; afterTaxUsd += atUsd; afterTaxKrw += atKrw;
+              effectiveTaxKrw += etk; taxKrwManual += tkm; calcQty += cq;
+              if (hmg) hasManualGross = true;
+              if (hmat) hasManualAfterTax = true;
+              return { ...s, _w: gKrw };
+            });
+            const dom = pickDominant(parts);
+            const overrideQty = codeQtyOv[dom.exYm];
+            return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, hasManual: hasManualGross || hasManualAfterTax, taxKrwManual, effectiveTaxKrw, yearMonth: dom.exYm, perShare: dom.perShare, calcQty, qtyVal: overrideQty > 0 ? overrideQty : calcQty, qtyIsManual: overrideQty > 0 };
           } else {
             const codeActual = actualDividend[item.code] || {};
-            const hasManual = yearMonth in codeActual;
-            const predicted = (pred[i + 1] || 0) * qty;
-            const amount = hasManual ? codeActual[yearMonth] : predicted;
-            const taxAmount = (pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] ?? null;
-            const perShare = pred[i + 1] || 0;
-            const gross = amount + (taxAmount || 0);
-            const calcQty = (perShare > 0 && gross > 0) ? Math.round(gross / perShare) : 0;
-            const overrideQty = codeQtyOv[yearMonth];
-            const qtyVal = overrideQty > 0 ? overrideQty : calcQty;
-            return { amount, amountUsd: 0, predicted, hasManual, yearMonth, taxAmount, perShare, calcQty, qtyVal, qtyIsManual: overrideQty > 0 };
+            if (!srcs.length) {
+              return { amount: 0, amountUsd: 0, predicted: 0, hasManual: false, yearMonth: '', taxAmount: null, perShare: 0, calcQty: 0, qtyVal: 0, qtyIsManual: false };
+            }
+            let amount = 0, predicted = 0, calcQty = 0, taxSum = 0, hasManual = false, taxAny = false;
+            const parts = srcs.map(s => {
+              const ek = s.exYm;
+              const cm = ek in codeActual;
+              const predS = s.perShare * qty;
+              const amtS = cm ? codeActual[ek] : predS;
+              const taxS = (pf.dividendTaxAmounts || {})[item.code]?.[ek];
+              const gS = amtS + (taxS || 0);
+              const cqS = (s.perShare > 0 && gS > 0) ? Math.round(gS / s.perShare) : 0;
+              amount += amtS; predicted += predS; calcQty += cqS;
+              if (cm) hasManual = true;
+              if (taxS != null) { taxSum += taxS; taxAny = true; }
+              return { ...s, _w: amtS };
+            });
+            const dom = pickDominant(parts);
+            const overrideQty = codeQtyOv[dom.exYm];
+            return { amount, amountUsd: 0, predicted, hasManual, yearMonth: dom.exYm, taxAmount: taxAny ? taxSum : null, perShare: dom.perShare, calcQty, qtyVal: overrideQty > 0 ? overrideQty : calcQty, qtyIsManual: overrideQty > 0 };
           }
         });
         result.push({
@@ -273,7 +334,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       });
     });
     return result;
-  }, [nonGoldPortfolios]);
+  }, [nonGoldPortfolios, holidays, usdkrw]);
 
   // 수동 추가 행 (포트폴리오에서 제거된 종목의 과거 배당금 기록용)
   const extraActualRows = useMemo(() => {
@@ -312,36 +373,35 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const isOverseas = pf.accountType === 'overseas';
       const fxRate = isOverseas ? usdkrw : 1;
       const taxRate = pf.dividendTaxRate ?? 15.4;
-      const monthData = Array.from({ length: 12 }, (_, i) => {
-        const yearMonth = `${CURRENT_YEAR}-${String(i + 1).padStart(2, '0')}`;
-        let amountUsd = 0;
-        let taxKrw = 0;
-        const amount = (pf.portfolio || []).reduce((sum, item) => {
-          if (!getCodeType(item.code, pf)) return sum;
-          const qty = cleanNum(item.quantity);
-          if (!qty) return sum;
-          const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
-          const perShareUsd = pred[i + 1] || 0;
-          if (isOverseas) amountUsd += perShareUsd * qty;
-          const grossKrw = perShareUsd * qty * fxRate;
-          const taxRec = !isOverseas && dividendTaxHistory?.[item.code]?.records?.[yearMonth];
-          taxKrw += taxRec && qty > 0
-            ? Math.round(taxRec.perShareTaxableBase * qty * taxRate / 100)
-            : Math.round(grossKrw * taxRate / 100);
-          return sum + grossKrw;
-        }, 0);
-        const hasActual = !isOverseas && (pf.portfolio || []).some(item => {
-          if (!getCodeType(item.code, pf) || !cleanNum(item.quantity)) return false;
-          return !!divHistory[item.code]?.[yearMonth];
+      const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
+      const monthData = Array.from({ length: 12 }, () => ({ amount: 0, amountUsd: 0, taxKrw: 0, hasActual: false }));
+      (pf.portfolio || []).forEach(item => {
+        if (!getCodeType(item.code, pf)) return;
+        const qty = cleanNum(item.quantity);
+        if (!qty) return;
+        const exH = (pf.dividendExDate || {})[item.code] || {};
+        const slots = buildPaySlots(divHistory[item.code], exH, hol);
+        slots.forEach((srcs, pi) => {
+          srcs.forEach(s => {
+            const perShareUsd = s.perShare || 0;
+            if (isOverseas) monthData[pi].amountUsd += perShareUsd * qty;
+            const grossKrw = perShareUsd * qty * fxRate;
+            monthData[pi].amount += grossKrw;
+            const taxRec = !isOverseas && dividendTaxHistory?.[item.code]?.records?.[s.exYm];
+            monthData[pi].taxKrw += taxRec && qty > 0
+              ? Math.round(taxRec.perShareTaxableBase * qty * taxRate / 100)
+              : Math.round(grossKrw * taxRate / 100);
+            if (!isOverseas && !s.exPredicted && !!divHistory[item.code]?.[s.exYm]) monthData[pi].hasActual = true;
+          });
         });
-        return { amount, amountUsd: isOverseas ? amountUsd : 0, taxKrw, hasActual };
       });
+      monthData.forEach(d => { if (!isOverseas) d.amountUsd = 0; });
       const annual = monthData.reduce((s, d) => s + d.amount, 0);
       const annualUsd = isOverseas ? monthData.reduce((s, d) => s + d.amountUsd, 0) : 0;
       const annualTax = monthData.reduce((s, d) => s + d.taxKrw, 0);
       return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTax };
     }).filter(row => row.annual > 0);
-  }, [compact, nonGoldPortfolios, dividendTaxHistory]);
+  }, [compact, nonGoldPortfolios, dividendTaxHistory, holidays, usdkrw]);
 
   const compactActualRows = useMemo(() => {
     if (!compact) return [];
@@ -351,35 +411,44 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const actualDividendUsd = pf.actualDividendUsd || {};
       const isOverseas = pf.accountType === 'overseas';
       const taxRate = pf.dividendTaxRate ?? 15.4;
+      const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
+      // 종목별 지급월 슬롯 1회 산출 (저장 키는 배당락월 유지)
+      const stockSlots = (pf.portfolio || []).map(item => {
+        if (!getCodeType(item.code, pf)) return null;
+        const qty = cleanNum(item.quantity);
+        if (!qty) return null;
+        const exH = (pf.dividendExDate || {})[item.code] || {};
+        return { code: item.code, slots: buildPaySlots(divHistory[item.code], exH, hol) };
+      }).filter(Boolean);
       const monthData = Array.from({ length: 12 }, (_, i) => {
         const mo = String(i + 1).padStart(2, '0');
         const yearMonth = `${CURRENT_YEAR}-${mo}`;
         if (isOverseas) {
           let pfAfterUsd = 0, pfAfterKrw = 0, pfHasActual = false;
-          (pf.portfolio || []).forEach(item => {
-            if (!getCodeType(item.code, pf)) return;
-            const qty = cleanNum(item.quantity);
-            if (!qty) return;
-            const codeActualUsd = actualDividendUsd[item.code] || {};
-            const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[item.code] || {};
-            const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[item.code] || {};
-            const hasManualGross = yearMonth in codeActualUsd;
-            const storedAfterUsd = codeAfterTaxUsd[yearMonth];
-            const storedAfterKrw = codeAfterTaxKrw[yearMonth];
-            const hasManualAfterTax = storedAfterUsd != null || storedAfterKrw != null;
-            if (!hasManualGross && !hasManualAfterTax) return;
-            pfHasActual = true;
-            let afterUsd, afterKrw;
-            if (hasManualAfterTax) {
-              afterUsd = storedAfterUsd != null ? storedAfterUsd : (storedAfterKrw != null && usdkrw > 0 ? storedAfterKrw / usdkrw : 0);
-              afterKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterUsd * usdkrw);
-            } else {
-              const grossUsd = codeActualUsd[yearMonth];
-              afterUsd = grossUsd * (1 - taxRate / 100);
-              afterKrw = Math.round(afterUsd * usdkrw);
-            }
-            pfAfterUsd += afterUsd;
-            pfAfterKrw += afterKrw;
+          stockSlots.forEach(({ code, slots }) => {
+            const codeActualUsd = actualDividendUsd[code] || {};
+            const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[code] || {};
+            const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[code] || {};
+            slots[i].forEach(s => {
+              const ek = s.exYm;
+              const hasManualGross = ek in codeActualUsd;
+              const storedAfterUsd = codeAfterTaxUsd[ek];
+              const storedAfterKrw = codeAfterTaxKrw[ek];
+              const hasManualAfterTax = storedAfterUsd != null || storedAfterKrw != null;
+              if (!hasManualGross && !hasManualAfterTax) return;
+              pfHasActual = true;
+              let afterUsd, afterKrw;
+              if (hasManualAfterTax) {
+                afterUsd = storedAfterUsd != null ? storedAfterUsd : (storedAfterKrw != null && usdkrw > 0 ? storedAfterKrw / usdkrw : 0);
+                afterKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterUsd * usdkrw);
+              } else {
+                const grossUsd = codeActualUsd[ek];
+                afterUsd = grossUsd * (1 - taxRate / 100);
+                afterKrw = Math.round(afterUsd * usdkrw);
+              }
+              pfAfterUsd += afterUsd;
+              pfAfterKrw += afterKrw;
+            });
           });
           let extraAfterUsd = 0, extraAfterKrw = 0, extraHasActual = false;
           (pf.extraDividendRows || []).forEach(row => {
@@ -396,31 +465,23 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             : 0;
           return { amount: totalAfterKrw, amountUsd: pfAfterUsd + extraAfterUsd, taxKrw, yearMonth, hasActual };
         } else {
-          let amount = (pf.portfolio || []).reduce((sum, item) => {
-            if (!getCodeType(item.code, pf)) return sum;
-            const qty = cleanNum(item.quantity);
-            if (!qty) return sum;
-            const codeActual = actualDividend[item.code] || {};
-            if (!(yearMonth in codeActual)) return sum;
-            return sum + codeActual[yearMonth];
-          }, 0);
+          let amount = 0, taxKrw = 0, hasManual = false;
+          stockSlots.forEach(({ code, slots }) => {
+            const codeActual = actualDividend[code] || {};
+            slots[i].forEach(s => {
+              const ek = s.exYm;
+              if (!(ek in codeActual)) return;
+              amount += codeActual[ek];
+              taxKrw += (pf.dividendTaxAmounts || {})[code]?.[ek] || 0;
+              hasManual = true;
+            });
+          });
           amount += (pf.extraDividendRows || []).reduce((s, row) => {
             const entry = row.monthData?.[yearMonth] || {};
             return s + (entry.afterTaxKrw || 0);
           }, 0);
-          const hasManual = (pf.portfolio || []).some(item => {
-            if (!getCodeType(item.code, pf)) return false;
-            return yearMonth in (actualDividend[item.code] || {});
-          }) || (pf.extraDividendRows || []).some(row => {
-            const entry = row.monthData?.[yearMonth] || {};
-            return (entry.afterTaxKrw || 0) > 0;
-          });
-          const taxKrw = (pf.portfolio || []).reduce((sum, item) => {
-            if (!getCodeType(item.code, pf)) return sum;
-            const codeActual = actualDividend[item.code] || {};
-            if (!(yearMonth in codeActual)) return sum;
-            return sum + ((pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] || 0);
-          }, 0) + (pf.extraDividendRows || []).reduce((s, row) => {
+          if ((pf.extraDividendRows || []).some(row => ((row.monthData?.[yearMonth] || {}).afterTaxKrw || 0) > 0)) hasManual = true;
+          taxKrw += (pf.extraDividendRows || []).reduce((s, row) => {
             const entry = row.monthData?.[yearMonth] || {};
             return s + (entry.taxKrw || 0);
           }, 0);
@@ -436,7 +497,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         : monthData.reduce((s, d) => s + (d.hasManual ? (d.taxKrw || 0) : 0), 0);
       return { portfolioId: pf.id, portfolioTitle: pf.title || pf.name || '계좌', rowColor: pf.rowColor || '', isOverseas, monthData, annual, annualUsd, annualTax };
     }).filter(row => row.annual > 0);
-  }, [compact, nonGoldPortfolios]);
+  }, [compact, nonGoldPortfolios, holidays, usdkrw]);
 
   const commitEdit = () => {
     if (!editingCell) return;
@@ -614,11 +675,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   );
   const annualTotal = monthlyTotals.reduce((s, v) => s + v, 0);
   const monthlyTaxTotals = Array.from({ length: 12 }, (_, i) => {
-    const mo = String(i + 1).padStart(2, '0');
-    const yearMonth = `${CURRENT_YEAR}-${mo}`;
     return expectedRows.reduce((sum, row) => {
       const rate = getTaxRate(row.portfolioId);
-      const taxRec = dividendTaxHistory?.[row.code]?.records?.[yearMonth];
+      const taxRec = dividendTaxHistory?.[row.code]?.records?.[row.monthData[i].yearMonth];
       const mQty = row.monthData[i].qty;
       if (taxRec && mQty > 0) {
         return sum + Math.round(taxRec.perShareTaxableBase * mQty * rate / 100);
@@ -1202,9 +1261,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 <DivMeta d={d} isOverseas={false} />
                                 <span>{d.amount > 0 ? formatCurrency(d.amount) : loading && !row.hasDivData ? '...' : '-'}</span>
                                 {taxRate > 0 && d.amount > 0 && (() => {
-                                  const mo = String(i + 1).padStart(2, '0');
-                                  const ym = `${CURRENT_YEAR}-${mo}`;
-                                  const taxRec = dividendTaxHistory?.[row.code]?.records?.[ym];
+                                  const taxRec = dividendTaxHistory?.[row.code]?.records?.[d.yearMonth];
                                   const taxAmt = taxRec && d.qty > 0
                                     ? Math.round(taxRec.perShareTaxableBase * d.qty * taxRate / 100)
                                     : Math.round(d.amount * taxRate / 100);
@@ -1241,10 +1298,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             <div className="flex flex-col items-center gap-0">
                               <span>{row.annual > 0 ? formatCurrency(row.annual) : loading && !row.hasDivData ? '...' : '-'}</span>
                               {taxRate > 0 && row.annual > 0 && (() => {
-                                const tax = row.monthData.reduce((s, d, i) => {
-                                  const mo = String(i + 1).padStart(2, '0');
-                                  const ym = `${CURRENT_YEAR}-${mo}`;
-                                  const taxRec = dividendTaxHistory?.[row.code]?.records?.[ym];
+                                const tax = row.monthData.reduce((s, d) => {
+                                  const taxRec = dividendTaxHistory?.[row.code]?.records?.[d.yearMonth];
                                   return s + (taxRec && d.qty > 0
                                     ? Math.round(taxRec.perShareTaxableBase * d.qty * taxRate / 100)
                                     : Math.round(d.amount * taxRate / 100));

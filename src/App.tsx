@@ -1824,7 +1824,7 @@ export default function App() {
         )}
 
         {!sectionCollapsed.stats && (
-        <div className="flex flex-col xl:flex-row gap-6 w-full items-stretch">
+        <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
           <PortfolioStatsPanel
             totals={totals}
             marketIndicators={marketIndicators}
