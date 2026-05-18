@@ -76,7 +76,7 @@ function parseDividendApiResult(result) {
   return { amounts, exDates };
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] } }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] } }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -195,6 +195,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const divHistory = pf.dividendHistory || {};
       const actualDividend = pf.actualDividend || {};
       const actualDividendUsd = pf.actualDividendUsd || {};
+      const actualDividendQty = pf.actualDividendQty || {};
       const isOverseas = pf.accountType === 'overseas';
       const taxRate = pf.dividendTaxRate ?? 15.4;
       (pf.portfolio || []).forEach(item => {
@@ -202,6 +203,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const qty = cleanNum(item.quantity);
         if (!qty) return;
         const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
+        const codeQtyOv = actualDividendQty[item.code] || {};
         const monthData = Array.from({ length: 12 }, (_, i) => {
           const mo = String(i + 1).padStart(2, '0');
           const yearMonth = `${CURRENT_YEAR}-${mo}`;
@@ -233,14 +235,23 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             const autoAfterUsd = grossUsd * (1 - taxRate / 100);
             const afterTaxUsd = storedAfterUsd != null ? storedAfterUsd : autoAfterUsd;
             const afterTaxKrw = storedAfterKrw != null ? storedAfterKrw : Math.round(afterTaxUsd * usdkrw);
-            return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, hasManual, taxKrwManual, effectiveTaxKrw, yearMonth };
+            const perShare = pred[i + 1] || 0;
+            const calcQty = (perShare > 0 && grossUsd > 0) ? Math.round(grossUsd / perShare) : 0;
+            const overrideQty = codeQtyOv[yearMonth];
+            const qtyVal = overrideQty > 0 ? overrideQty : calcQty;
+            return { grossUsd, grossKrw, afterTaxUsd, afterTaxKrw, hasManualGross, hasManualAfterTax, hasManual, taxKrwManual, effectiveTaxKrw, yearMonth, perShare, calcQty, qtyVal, qtyIsManual: overrideQty > 0 };
           } else {
             const codeActual = actualDividend[item.code] || {};
             const hasManual = yearMonth in codeActual;
             const predicted = (pred[i + 1] || 0) * qty;
             const amount = hasManual ? codeActual[yearMonth] : predicted;
             const taxAmount = (pf.dividendTaxAmounts || {})[item.code]?.[yearMonth] ?? null;
-            return { amount, amountUsd: 0, predicted, hasManual, yearMonth, taxAmount };
+            const perShare = pred[i + 1] || 0;
+            const gross = amount + (taxAmount || 0);
+            const calcQty = (perShare > 0 && gross > 0) ? Math.round(gross / perShare) : 0;
+            const overrideQty = codeQtyOv[yearMonth];
+            const qtyVal = overrideQty > 0 ? overrideQty : calcQty;
+            return { amount, amountUsd: 0, predicted, hasManual, yearMonth, taxAmount, perShare, calcQty, qtyVal, qtyIsManual: overrideQty > 0 };
           }
         });
         result.push({
@@ -430,6 +441,13 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const commitEdit = () => {
     if (!editingCell) return;
     const { portfolioId, code, yearMonth, field, isOverseas, isExtra, rowId } = editingCell;
+    if (field === 'qty') {
+      const raw = String(editingCell.value || '').trim();
+      const num = raw === '' ? null : (parseFloat(raw.replace(/,/g, '')) || 0);
+      updatePortfolioActualDividendQty(portfolioId, code, yearMonth, num);
+      setEditingCell(null);
+      return;
+    }
     if (isExtra) {
       if (isOverseas) {
         const usdNum = parseFloat(String(editingCell.usdValue || '').replace(/,/g, '')) || 0;
@@ -483,6 +501,15 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       yearMonth: d.yearMonth, isOverseas: false, field: 'krw',
       value: d.hasManual ? String(d.amount) : '',
       taxValue: d.taxAmount != null ? String(d.taxAmount) : '',
+    });
+  };
+
+  const handleQtyDblClick = (row, monthIdx) => {
+    const d = row.monthData[monthIdx];
+    setEditingCell({
+      portfolioId: row.portfolioId, code: row.code, monthIdx,
+      yearMonth: d.yearMonth, isOverseas: row.isOverseas, field: 'qty',
+      value: d.qtyIsManual ? String(d.qtyVal) : (d.calcQty > 0 ? String(d.calcQty) : ''),
     });
   };
 
@@ -1307,16 +1334,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                 <tr>
                   <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">코드</th>
-                  <th className="py-2 px-2 text-gray-500 min-w-[45px]">수량</th>
                   {MONTHS.map(m => (
-                    <th key={m} colSpan={actualHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[68px]">{m}</th>
+                    <th key={m} colSpan={actualHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[96px]">{m}</th>
                   ))}
                   <th colSpan={actualHasOverseas ? 2 : 1} className="py-2 px-2 min-w-[88px] text-emerald-500 font-bold">연간합계</th>
                 </tr>
                 {actualHasOverseas && (
                   <tr className="text-[9px] border-b border-gray-700/50">
                     <th className="sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]"></th>
-                    <th></th>
                     {MONTHS.map(m => (
                       <React.Fragment key={m}>
                         <th className="py-1 text-blue-400 font-normal min-w-[62px]">세전</th>
@@ -1335,24 +1360,53 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       <div className="line-clamp-1">{row.name || row.code}</div>
                       {row.name && <div className="text-gray-500 text-[9px] font-normal">({row.code})</div>}
                     </td>
-                    <td className="py-2 px-2 text-gray-400">{row.qty.toLocaleString()}</td>
                     {row.monthData.map((d, i) => {
+                      const isEditingQty = editingCell?.portfolioId === row.portfolioId
+                        && editingCell?.code === row.code
+                        && editingCell?.monthIdx === i
+                        && !editingCell?.isExtra
+                        && editingCell?.field === 'qty';
                       const isEditingCell = editingCell?.portfolioId === row.portfolioId
                         && editingCell?.code === row.code
                         && editingCell?.monthIdx === i
-                        && !editingCell?.isExtra;
+                        && !editingCell?.isExtra
+                        && editingCell?.field !== 'qty';
                       const isEditingAfterTax = isEditingCell && editingCell?.field === 'afterTax';
                       const isLastMonthCol = i === 11;
+                      const qtyNode = isEditingQty ? (
+                        <input
+                          ref={inputRef}
+                          type="text" inputMode="numeric"
+                          value={editingCell.value}
+                          onChange={e => setEditingCell(prev => ({ ...prev, value: e.target.value }))}
+                          onClick={e => e.stopPropagation()}
+                          onBlur={handleAfterTaxBlur}
+                          onFocus={handleAfterTaxFocus}
+                          onKeyDown={handleCellKeyDown}
+                          className="w-14 bg-transparent text-amber-300 text-center text-[10px] outline-none border-b border-amber-500/60"
+                          placeholder="수량"
+                        />
+                      ) : ((d.hasManual || d.qtyIsManual) && d.qtyVal > 0) ? (
+                        <span
+                          onClick={e => e.stopPropagation()}
+                          onDoubleClick={e => { e.stopPropagation(); handleQtyDblClick(row, i); }}
+                          title="더블클릭하여 수량 수정"
+                          className={`text-[9px] leading-tight cursor-pointer hover:underline ${d.qtyIsManual ? 'text-amber-400/80' : 'text-gray-500'}`}
+                        >
+                          {d.qtyVal.toLocaleString()}주{d.perShare > 0 ? ` × ${row.isOverseas ? formatUsd(d.perShare) : formatCurrency(d.perShare)}` : ''}
+                        </span>
+                      ) : null;
 
                       if (row.isOverseas) {
                         return (
                           <React.Fragment key={i}>
                             {/* 세전 열: 계산값 표시만 (읽기전용) */}
                             <td className={`py-0.5 px-1 text-center text-[10px] border-r border-gray-700/20 ${d.hasManual ? 'text-blue-300/70' : 'text-gray-700'}`}>
-                              {d.hasManual ? (
+                              {(d.hasManual || qtyNode) ? (
                                 <div className="flex flex-col items-center gap-0">
-                                  <span>{formatUsd(d.grossUsd)}</span>
-                                  <span className="text-gray-600 text-[9px]">{formatCurrency(d.grossKrw)}</span>
+                                  {qtyNode}
+                                  {d.hasManual && <span>{formatUsd(d.grossUsd)}</span>}
+                                  {d.hasManual && <span className="text-gray-600 text-[9px]">{formatCurrency(d.grossKrw)}</span>}
                                 </div>
                               ) : '-'}
                             </td>
@@ -1428,7 +1482,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           <td
                             key={i}
                             colSpan={actualHasOverseas ? 2 : 1}
-                            onClick={() => !isEditingCell && handleKrwCellClick(row, i)}
+                            onClick={() => !isEditingCell && !isEditingQty && handleKrwCellClick(row, i)}
                             className={`py-0.5 px-0.5 text-center text-[10px] cursor-pointer transition-colors ${
                               isLastMonthCol ? '' : 'border-r border-gray-600/40'
                             } ${
@@ -1468,11 +1522,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                   />
                                 </div>
                               </div>
-                            ) : d.hasManual ? (
+                            ) : (d.hasManual || qtyNode) ? (
                               <div className="flex flex-col items-center gap-0">
-                                {beforeTax > 0 && <span className="text-blue-300/70 text-[9px]">{formatCurrency(beforeTax)}</span>}
-                                {taxAmt > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxAmt)}</span>}
-                                <span>{d.amount > 0 ? formatCurrency(d.amount) : '₩0'}</span>
+                                {qtyNode}
+                                {d.hasManual && beforeTax > 0 && <span className="text-blue-300/70 text-[9px]">{formatCurrency(beforeTax)}</span>}
+                                {d.hasManual && taxAmt > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxAmt)}</span>}
+                                {d.hasManual && <span>{d.amount > 0 ? formatCurrency(d.amount) : '₩0'}</span>}
                               </div>
                             ) : (
                               <span>-</span>
@@ -1539,7 +1594,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                           >✕</button>
                         </div>
                       </td>
-                      <td className="py-2 px-2 text-gray-600 text-[10px]">-</td>
                       {row.monthData.map((d, i) => {
                         const isEditingCell = editingCell?.isExtra && editingCell?.rowId === row.rowId && editingCell?.monthIdx === i;
                         const isEditingAfterTax = isEditingCell && editingCell?.field === 'afterTax';
@@ -1683,7 +1737,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               </tbody>
               <tfoot className="bg-[#1e293b] border-t-2 border-gray-500">
                 <tr>
-                  <td colSpan={2} className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
+                  <td className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
                   {actualHasOverseas ? (
                     MONTHS.map((_, i) => (
                       <React.Fragment key={i}>
@@ -1731,7 +1785,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 </tr>
                 {!actualHasOverseas && actualAnnualTaxTotal > 0 && (<>
                   <tr className="text-orange-300/60">
-                    <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+                    <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
                       과세합계
                     </td>
                     {actualMonthlyTaxTotals.map((tax, i) => (
@@ -1742,7 +1796,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     <td className="py-1 px-2 text-center text-[10px]">{formatCurrency(actualAnnualTaxTotal)}</td>
                   </tr>
                   <tr className="text-green-400/70">
-                    <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">실 수령(세후)</td>
+                    <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">실 수령(세후)</td>
                     {actualMonthlyGrossKrw.map((total, i) => (
                       <td key={i} className="py-1 px-1 text-center text-[9px]">
                         {total > 0 ? formatCurrency(total - (actualMonthlyTaxTotals[i] || 0)) : '-'}
@@ -1755,7 +1809,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 </>)}
                 {actualHasOverseas && actualAnnualOverseasTaxKrw > 0 && (
                   <tr className="text-orange-300/60">
-                    <td colSpan={2} className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">과세합계</td>
+                    <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">과세합계</td>
                     {actualMonthlyOverseasTaxKrw.map((tax, i) => (
                       <React.Fragment key={i}>
                         <td className="py-1 px-1 text-center text-[9px] text-gray-700">-</td>
@@ -1770,7 +1824,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             </table>
           )}
           <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-            셀 클릭 → 실제 입금액 직접 입력 (Enter 저장 · Esc 취소) &nbsp;·&nbsp; 초록 = 직접 입력 &nbsp;·&nbsp; 파란 = 예상값
+            셀 클릭 → 실제 입금액 직접 입력 (Enter 저장 · Esc 취소) &nbsp;·&nbsp; 초록 = 직접 입력 &nbsp;·&nbsp; 파란 = 예상값 &nbsp;·&nbsp; 수량 = (세후+과세)÷주당분배금 계산값, <span className="text-amber-400/80">더블클릭 시 직접 수정</span>
           </div>
         </div>
       )}

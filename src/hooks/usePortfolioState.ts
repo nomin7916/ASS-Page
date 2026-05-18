@@ -310,6 +310,17 @@ export function usePortfolioState({
     }));
   };
 
+  // 월 입금 내역 수동 수량(표시·기록용 override) — 세후/과세 금액 재계산 안 함
+  const updatePortfolioActualDividendQty = (portfolioId, code, yearMonth, qty) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const existing = p.actualDividendQty || {};
+      const codeData = { ...(existing[code] || {}) };
+      if (qty === null || !(qty > 0)) delete codeData[yearMonth]; else codeData[yearMonth] = qty;
+      return { ...p, actualDividendQty: { ...existing, [code]: codeData } };
+    }));
+  };
+
   const updatePortfolioDividendTaxRate = (portfolioId, rate) => {
     setPortfolios(prev => prev.map(p => {
       if (p.id !== portfolioId) return p;
@@ -511,6 +522,7 @@ export function usePortfolioState({
     updatePortfolioDividendSeparateTax,
     updatePortfolioDividendTaxAmount,
     updatePortfolioActualDividendUsd,
+    updatePortfolioActualDividendQty,
     updatePortfolioActualAfterTaxUsd,
     updatePortfolioActualAfterTaxKrw,
     addPortfolioExtraRow,

@@ -460,6 +460,7 @@ export default function App() {
     updatePortfolioDividendHistory,
     updatePortfolioActualDividend,
     updatePortfolioActualDividendUsd,
+    updatePortfolioActualDividendQty,
     updatePortfolioDividendTaxRate,
     updatePortfolioDividendSeparateTax,
     updatePortfolioDividendTaxAmount,
@@ -1886,6 +1887,7 @@ export default function App() {
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
             updatePortfolioActualDividend={updatePortfolioActualDividend}
             updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd}
+            updatePortfolioActualDividendQty={updatePortfolioActualDividendQty}
             updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate}
             updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax}
             updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
@@ -2111,6 +2113,7 @@ export default function App() {
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
             updatePortfolioActualDividend={updatePortfolioActualDividend}
             updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd}
+            updatePortfolioActualDividendQty={updatePortfolioActualDividendQty}
             updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate}
             updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax}
             updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
