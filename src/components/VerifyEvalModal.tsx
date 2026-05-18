@@ -5,6 +5,7 @@ import {
   cleanNum,
   formatCurrency,
   formatShortDate,
+  formatFundPrice,
   calcPortfolioEvalDetail,
   resolveHoldings,
   snapshotItemsFromPortfolio,
@@ -110,6 +111,7 @@ export default function VerifyEvalModal({
     return {
       item,
       isDeposit: item.type === 'deposit',
+      isFund: item.type === 'fund',
       name: item.type === 'deposit' ? '예수금' : (item.name || (isGold ? 'KRX 금현물' : (item.code ? item.code.replace(/^MA:/i, '') : '—'))),
       quantity: realQty,
       price: pd.price ?? null,
@@ -279,7 +281,7 @@ export default function VerifyEvalModal({
                           />
                         ) : (
                           <span className="inline-flex items-center gap-1 justify-end">
-                            {fmtPrice(r.price)}
+                            {r.isFund ? (r.price == null ? '—' : formatFundPrice(r.price)) : fmtPrice(r.price)}
                             <button
                               className="text-gray-500 hover:text-blue-400"
                               title="종가 수동입력 (manualPriceOverrides)"
