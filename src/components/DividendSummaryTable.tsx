@@ -2,7 +2,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { cleanNum, formatCurrency } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
-import DividendVerifyModal from './DividendVerifyModal';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -45,7 +44,6 @@ function parseDividendApiResult(result) {
 export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] } }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
-  const [showVerify, setShowVerify] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
   const inputRef = useRef(null);
   const krwInputRef = useRef(null);
@@ -709,25 +707,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
             </svg>
           </button>
-          <button
-            onClick={() => setShowVerify(true)}
-            title="분배금 검증 — 올해 월별 분배 확인"
-            className="ml-1.5 w-7 h-7 flex items-center justify-center rounded border border-gray-600/70 text-gray-400 hover:bg-gray-700/50 hover:text-gray-200 hover:border-gray-500 active:scale-95 transition-all"
-          >
-            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="7"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-          </button>
-          {showVerify && (
-            <DividendVerifyModal
-              portfolios={nonGoldPortfolios}
-              dividendTaxHistory={dividendTaxHistory}
-              usdkrw={usdkrw}
-              holidays={holidays}
-              onClose={() => setShowVerify(false)}
-            />
-          )}
         </div>
         <div className="overflow-x-auto">
           {rows.length === 0 ? (
@@ -1051,25 +1030,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
             </svg>
           </button>
-          <button
-            onClick={() => setShowVerify(true)}
-            title="분배금 검증 — 올해 월별 분배 확인"
-            className="ml-1.5 w-7 h-7 flex items-center justify-center rounded border border-gray-600/70 text-gray-400 hover:bg-gray-700/50 hover:text-gray-200 hover:border-gray-500 active:scale-95 transition-all"
-          >
-            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="7"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-          </button>
-          {showVerify && (
-            <DividendVerifyModal
-              portfolios={nonGoldPortfolios}
-              dividendTaxHistory={dividendTaxHistory}
-              usdkrw={usdkrw}
-              holidays={holidays}
-              onClose={() => setShowVerify(false)}
-            />
-          )}
         </div>
       </div>
 
