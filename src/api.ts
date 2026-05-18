@@ -326,6 +326,123 @@ export const fetchFundNavHistory = async (
   return null;
 };
 
+// ── 미래에셋 기준가 HTML 파싱 헬퍼 ──────────────────────────────────────────
+function parseMiraeBasePricesHtml(html: string): Array<{ date: string; price: number }> {
+  const results: Array<{ date: string; price: number }> = [];
+  const tbodyMatch = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
+  const content = tbodyMatch ? tbodyMatch[1] : html;
+  const rows = [...content.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
+  for (const row of rows) {
+    const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)];
+    if (cells.length < 2) continue;
+    const getText = (s: string) => s.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    const dateRaw = getText(cells[0][1]);
+    const priceRaw = getText(cells[1][1]);
+    const dm = dateRaw.match(/(\d{4})[.\-\/](\d{2})[.\-\/](\d{2})/);
+    if (!dm) continue;
+    const date = `${dm[1]}-${dm[2]}-${dm[3]}`;
+    const price = parseFloat(priceRaw.replace(/,/g, ''));
+    if (price > 0) results.push({ date, price });
+  }
+  return results;
+}
+
+function parseMiraeTotalPages(html: string): number {
+  const patterns = [/pageNo=(\d+)/g, /doPage\((\d+)\)/g, /goPage\((\d+)\)/g, /fnPage\((\d+)\)/g];
+  let maxPage = 1;
+  for (const pat of patterns) {
+    for (const m of html.matchAll(pat)) maxPage = Math.max(maxPage, parseInt(m[1]));
+  }
+  return maxPage;
+}
+
+// ── 미래에셋 펀드 기준가 조회 (현재가 + 등락액) ────────────────────────────
+export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: string; price: number; changeRate: number; changeAmount: number } | null> => {
+  const code = rawCode.replace(/^MA:/i, '').toUpperCase();
+  const today = new Date().toISOString().split('T')[0];
+  const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
+  const priceUrl = `https://investments.miraeasset.com/magi/fund/basePrices/list.do?fundGb=2&fundCd=${code}&startDate=${twoWeeksAgo}&endDate=${today}&pageNo=1&_=${Date.now()}`;
+  const viewUrl = `https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=${code}`;
+
+  let name = '';
+  // 펀드명: view 페이지 title에서 추출 시도
+  for (const proxy of [viewUrl, `/api/proxy?url=${encodeURIComponent(viewUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(viewUrl)}`]) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const html = await res.text();
+      if (!html || html.length < 200) continue;
+      const tm = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      if (tm) {
+        const t = tm[1].split('|')[0].split('::')[0].split('-')[0].trim();
+        if (t.length > 3 && !/미래에셋$/.test(t)) { name = t; break; }
+      }
+    } catch { continue; }
+  }
+
+  // 기준가: basePrices list 에서 최신 2행 파싱 → 등락액 계산
+  for (const proxy of [priceUrl, `/api/proxy?url=${encodeURIComponent(priceUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(priceUrl)}`, `https://corsproxy.io/?url=${encodeURIComponent(priceUrl)}`]) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) continue;
+      const html = await res.text();
+      if (!html || html.length < 100) continue;
+      const rows = parseMiraeBasePricesHtml(html);
+      if (rows.length === 0) continue;
+      const price = rows[0].price;
+      const changeAmount = rows.length > 1 ? +(rows[0].price - rows[1].price).toFixed(2) : 0;
+      const changeRate = (rows.length > 1 && rows[1].price > 0) ? +((changeAmount / rows[1].price) * 100).toFixed(2) : 0;
+      return { name, price, changeRate, changeAmount };
+    } catch { continue; }
+  }
+  return null;
+};
+
+// ── 미래에셋 펀드 기준가 이력 조회 (페이지네이션 전체 수집) ──────────────────
+export const fetchMiraeFundNavHistory = async (
+  rawCode: string,
+  startDate: string,
+  endDate: string,
+): Promise<Record<string, number> | null> => {
+  const code = rawCode.replace(/^MA:/i, '').toUpperCase();
+  const makeUrl = (page: number) =>
+    `https://investments.miraeasset.com/magi/fund/basePrices/list.do?fundGb=2&fundCd=${code}&startDate=${startDate}&endDate=${endDate}&pageNo=${page}&_=${Date.now()}`;
+
+  const fetchPage = async (page: number): Promise<string | null> => {
+    const url = makeUrl(page);
+    for (const proxy of [url, `/api/proxy?url=${encodeURIComponent(url)}`]) {
+      try {
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
+        if (!res.ok) continue;
+        const html = await res.text();
+        if (html && html.length > 100) return html;
+      } catch { continue; }
+    }
+    return null;
+  };
+
+  const firstHtml = await fetchPage(1);
+  if (!firstHtml) return null;
+
+  const totalPages = parseMiraeTotalPages(firstHtml);
+  const result: Record<string, number> = {};
+  for (const { date, price } of parseMiraeBasePricesHtml(firstHtml)) result[date] = price;
+
+  if (totalPages > 1) {
+    const BATCH = 10;
+    for (let bStart = 2; bStart <= totalPages; bStart += BATCH) {
+      const pages = Array.from({ length: Math.min(BATCH, totalPages - bStart + 1) }, (_, i) => bStart + i);
+      const htmls = await Promise.all(pages.map(p => fetchPage(p)));
+      for (const html of htmls) {
+        if (!html) continue;
+        for (const { date, price } of parseMiraeBasePricesHtml(html)) result[date] = price;
+      }
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+};
+
 export const fetchDividendHistory = async (code: string): Promise<{
   totalCount: number;
   result: Array<{ dividendAmount: number; exDividendAt: string; dividendYield: number }>;

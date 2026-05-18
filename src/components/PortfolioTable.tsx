@@ -554,9 +554,10 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('category') && (
                     <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                       <div className="flex flex-row h-full items-stretch">
-                        <a href="https://www.funetf.co.kr/" target="_blank" rel="noopener noreferrer"
-                           className="flex-1 py-3 px-1 text-center text-xs font-bold text-indigo-300 hover:text-indigo-100 hover:underline transition-colors">
-                          FUND
+                        <a href={item.code?.startsWith('MA:') ? 'https://investments.miraeasset.com' : 'https://www.funetf.co.kr/'} target="_blank" rel="noopener noreferrer"
+                           className="flex-1 py-3 px-1 text-center text-xs font-bold text-indigo-300 hover:text-indigo-100 hover:underline transition-colors"
+                           title={item.code?.startsWith('MA:') ? '미래에셋자산운용' : 'funetf'}>
+                          {item.code?.startsWith('MA:') ? 'MIRAE' : 'FUND'}
                         </a>
                         <div className="w-px bg-gray-600/60 self-stretch" />
                         <span
@@ -584,14 +585,27 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                       <input type="text" data-col="code" className={`${inp} text-center text-indigo-400 text-[11px] font-mono caret-blue-400`} value={item.code} placeholder="K55301DW8222" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'code', e.target.value)} onBlur={e => onBlur(item.id, e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'code')} />
                     </td>
                   )}
-                  {/* 등락률 */}
+                  {/* 등락률 / 등락액 */}
                   {!H('changeRate') && (
                     <td className={`p-0 border-r border-gray-600 align-middle ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
-                      <div className={`w-full h-full py-3 px-3 flex items-center justify-center font-bold text-[13px] cursor-pointer hover:bg-indigo-900/30 transition-colors ${item.changeRate > 0 ? 'text-red-400' : item.changeRate < 0 ? 'text-blue-400' : 'text-gray-500'}`}
-                           onClick={() => item.code && window.open(`https://www.funetf.co.kr/product/fund/view/${item.code}`, '_blank')}
-                           title={item.code ? 'funetf에서 상세보기' : ''}>
-                        {formatChangeRate(item.changeRate)}
-                      </div>
+                      {(() => {
+                        const isMirae = item.code?.startsWith('MA:');
+                        const changeVal = isMirae ? (item.changeAmount ?? 0) : item.changeRate;
+                        const display = isMirae
+                          ? (changeVal > 0 ? `+${changeVal.toFixed(2)}` : changeVal.toFixed(2))
+                          : formatChangeRate(item.changeRate);
+                        const url = isMirae
+                          ? `https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=${item.code.replace('MA:', '')}`
+                          : `https://www.funetf.co.kr/product/fund/view/${item.code}`;
+                        const linkTitle = isMirae ? '미래에셋에서 상세보기' : 'funetf에서 상세보기';
+                        return (
+                          <div className={`w-full h-full py-3 px-3 flex items-center justify-center font-bold text-[13px] cursor-pointer hover:bg-indigo-900/30 transition-colors ${changeVal > 0 ? 'text-red-400' : changeVal < 0 ? 'text-blue-400' : 'text-gray-500'}`}
+                               onClick={() => item.code && window.open(url, '_blank')}
+                               title={item.code ? linkTitle : ''}>
+                            {display}
+                          </div>
+                        );
+                      })()}
                     </td>
                   )}
                   {/* 현재가(기준가) */}

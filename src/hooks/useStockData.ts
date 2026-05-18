@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useEffect, useRef } from 'react';
-import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchNaverKospi } from '../api';
+import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend } from '../utils';
 import { getEffectiveDate, getMsUntilCutoff } from './useMarketCalendar';
 
@@ -67,6 +67,13 @@ export function useStockData({
   const fundWideFetchedRef = useRef<Set<string>>(new Set());
 
   const extractFundCode = (input: string): string => {
+    // 미래에셋 URL: childFundCd 우선, 없으면 fundCd
+    if (/investments\.miraeasset\.com/i.test(input)) {
+      const child = input.match(/[?&]childFundCd=([A-Za-z0-9]+)/i);
+      if (child) return `MA:${child[1].toUpperCase()}`;
+      const fund = input.match(/[?&]fundCd=([A-Za-z0-9]+)/i);
+      if (fund) return `MA:${fund[1].toUpperCase()}`;
+    }
     const m = input.match(/funetf\.co\.kr\/product\/fund\/view\/([A-Za-z0-9]+)/);
     return m ? m[1].toUpperCase() : input.trim().toUpperCase();
   };
@@ -74,15 +81,24 @@ export function useStockData({
   const handleStockBlur = async (id, code) => {
     const item = portfolio.find(p => p.id === id);
     if (item?.type === 'fund') {
-      if (!code || code.trim().length < 8) return;
+      if (!code) return;
       const fundCode = extractFundCode(code);
+      const isMirae = fundCode.startsWith('MA:');
+      const rawFundCode = isMirae ? fundCode.replace('MA:', '') : fundCode;
+      if (isMirae ? rawFundCode.length < 5 : fundCode.length < 8) return;
       if (fundCode !== code.trim()) {
         setPortfolio(prev => prev.map(p => p.id === id ? { ...p, code: fundCode } : p));
       }
       setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'loading' }));
-      const d = await fetchFundInfo(fundCode);
+      const d = isMirae ? await fetchMiraeFundInfo(fundCode) : await fetchFundInfo(fundCode);
       if (d) {
-        setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
+        setPortfolio(prev => prev.map(p => p.id === id ? {
+          ...p,
+          name: d.name || p.name,
+          currentPrice: d.price,
+          changeRate: d.changeRate,
+          ...(isMirae ? { changeAmount: (d as any).changeAmount ?? 0 } : {}),
+        } : p));
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
       } else {
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'fail' }));
@@ -116,15 +132,24 @@ export function useStockData({
   const handleSingleStockRefresh = async (id, code) => {
     const item = portfolio.find(p => p.id === id);
     if (item?.type === 'fund') {
-      if (!code || code.trim().length < 8) return;
+      if (!code) return;
       const fundCode = extractFundCode(code);
+      const isMirae = fundCode.startsWith('MA:');
+      const rawFundCode = isMirae ? fundCode.replace('MA:', '') : fundCode;
+      if (isMirae ? rawFundCode.length < 5 : fundCode.length < 8) return;
       if (fundCode !== code.trim()) {
         setPortfolio(prev => prev.map(p => p.id === id ? { ...p, code: fundCode } : p));
       }
       setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'loading' }));
-      const d = await fetchFundInfo(fundCode);
+      const d = isMirae ? await fetchMiraeFundInfo(fundCode) : await fetchFundInfo(fundCode);
       if (d) {
-        setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
+        setPortfolio(prev => prev.map(p => p.id === id ? {
+          ...p,
+          name: d.name || p.name,
+          currentPrice: d.price,
+          changeRate: d.changeRate,
+          ...(isMirae ? { changeAmount: (d as any).changeAmount ?? 0 } : {}),
+        } : p));
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
       } else {
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'fail' }));
@@ -386,7 +411,8 @@ export function useStockData({
         }
       }),
       ...[...fundCodes].map(async (code) => {
-        const d = await withTimeout(fetchFundInfo(code), 10000);
+        const isMirae = code.startsWith('MA:');
+        const d = await withTimeout(isMirae ? fetchMiraeFundInfo(code) : fetchFundInfo(code), 10000);
         if (d) {
           // 라이브 기준가는 포트폴리오 currentPrice 갱신에만 사용.
           // stockHistoryMap에는 stamp 금지 — today가 비거래일(주말/휴일)이면
@@ -421,7 +447,8 @@ export function useStockData({
         }
         if (item.type === 'fund' && item.code && fundResults[item.code]) {
           const d = fundResults[item.code];
-          return { ...item, currentPrice: d.price, changeRate: d.changeRate };
+          const extra = item.code.startsWith('MA:') && d.changeAmount !== undefined ? { changeAmount: d.changeAmount } : {};
+          return { ...item, currentPrice: d.price, changeRate: d.changeRate, ...extra };
         }
         return item;
       });
@@ -646,7 +673,9 @@ export function useStockData({
           // 최신성 + 시작 커버리지 모두 충족해야 fresh.
           const fresh = tradingKeys.length > 30 && latest >= lastTradingDay && startCovered;
 
-          const hist = fresh ? null : await fetchFundNavHistory(code, histStartDate, today);
+          const hist = fresh ? null : (code.startsWith('MA:')
+            ? await fetchMiraeFundNavHistory(code, histStartDate, today)
+            : await fetchFundNavHistory(code, histStartDate, today));
           if (hist) fundWideFetchedRef.current.add(code);
 
           // 기존 맵에 남아있는 비거래일 키(과거 라이브 stamp 잔재) 정리 — 실제
