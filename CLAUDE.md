@@ -78,6 +78,19 @@ src/
 - `portfolio.dividendHistory`: `{ [code]: { [YYYY-MM]: perShareAmount } }` — API 조회
 - `portfolio.actualDividend`: `{ [code]: { [YYYY-MM]: absoluteAmount } }` — 사용자 입력(절댓값, 수량 무관)
 - `portfolio.rowColor`: 계좌별 색상 (hex) — DividendSummaryTable compact 그라데이션에 사용
+- **저장 키는 배당락월(YYYY-MM) 기준** 유지. dividendExDate/actualDividend/actualDividendQty/dividendTaxAmounts/actualAfterTax* 동일.
+
+### 분배금 현황 = 지급월 기준 표시
+`DividendSummaryTable`의 12개월 컬럼은 **지급일(배당락+2영업일, `dividendPayDate`) 기준**으로 재배치한다.
+저장 키는 배당락월 그대로 두고 `buildPaySlots(codeHistory, codeExHistory, hol)`가 종목별로
+지급월 슬롯(0-11)에 소스 이벤트를 모은다. 각 `monthData[i].yearMonth`는 지배(금액 큰)
+소스의 배당락월 키 → 셀 편집/세금 조회가 올바른 저장 키를 가리킨다.
+- 직전연도 12월 배당락 → 올해 1월 지급분은 1월 슬롯에 편입
+- 올해 12월 배당락 → 내년 1월 지급분은 올해 표에서 제외
+- 한 지급월에 2건 겹치면 **합산**, 분배락/지급일·주당분배금 표기는 지배 소스 기준
+- 예측월(배당락일 미확정)은 직전연도 배당락일+2영업일로 추정 배치
+- `extraDividendRows`(수동 추가 행)는 사용자가 월을 직접 지정 → 재배치 대상 아님
+- 적용 범위: expectedRows / actualRows / compactExpectedRows / compactActualRows
 
 ### DividendSummaryTable
 - `compact=false` (기본): 개별 계좌 뷰, 종목 행 표시, 셀 직접 편집 가능
