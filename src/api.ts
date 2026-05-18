@@ -365,6 +365,7 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
   const viewUrl = `https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=${code}`;
 
   let name = '';
+  let viewPagePrice = 0;
   // 펀드명: JSON API → view 페이지 title 순으로 시도
   const infoUrl = `https://investments.miraeasset.com/magi/fund/getBasicInfo.do?fundCd=${code}&fundGb=2&_=${Date.now()}`;
   for (const infoProxy of [infoUrl, `/api/proxy?url=${encodeURIComponent(infoUrl)}`]) {
@@ -378,20 +379,34 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
       if (n && String(n).length > 3) { name = String(n).trim(); break; }
     } catch { continue; }
   }
-  if (!name) {
-    for (const proxy of [viewUrl, `/api/proxy?url=${encodeURIComponent(viewUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(viewUrl)}`]) {
-      try {
-        const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
-        if (!res.ok) continue;
-        const html = await res.text();
-        if (!html || html.length < 200) continue;
+  // view 페이지: 이름 폴백 + 현재가 파싱 (basePrices API보다 빠르게 반영됨)
+  for (const proxy of [viewUrl, `/api/proxy?url=${encodeURIComponent(viewUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(viewUrl)}`]) {
+    try {
+      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const html = await res.text();
+      if (!html || html.length < 200) continue;
+      if (!name) {
         const tm = html.match(/<title[^>]*>([^<]+)<\/title>/i);
         if (tm) {
           const t = tm[1].split('|')[0].split('::')[0].split('-')[0].trim();
-          if (t.length > 3 && !/^미래에셋(자산운용)?$/.test(t)) { name = t; break; }
+          if (t.length > 3 && !/^미래에셋(자산운용)?$/.test(t)) name = t;
         }
-      } catch { continue; }
-    }
+      }
+      for (const pat of [
+        /기준가[^0-9\n]{0,30}([\d,]+\.\d{2})/,
+        /([\d,]+\.\d{2})\s*원/,
+        /"nav"\s*:\s*"?([\d.]+)"?/,
+        /"basicPrice"\s*:\s*"?([\d.]+)"?/,
+      ]) {
+        const m = html.match(pat);
+        if (m) {
+          const v = parseFloat(m[1].replace(/,/g, ''));
+          if (v > 100) { viewPagePrice = v; break; }
+        }
+      }
+      break;
+    } catch { continue; }
   }
 
   // 기준가: basePrices list 에서 최신 2행 파싱 → 등락액 계산
@@ -403,6 +418,7 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
       if (!html || html.length < 100) continue;
       const rows = parseMiraeBasePricesHtml(html);
       if (rows.length === 0) continue;
+      rows.sort((a, b) => b.date.localeCompare(a.date)); // 날짜 내림차순 정렬
       // view URL에서 이름을 못 가져온 경우 basePrices HTML에서 재시도
       if (!name) {
         const tm = html.match(/<title[^>]*>([^<]+)<\/title>/i);
@@ -417,6 +433,12 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
             if (t.length > 5) name = t;
           }
         }
+      }
+      // basePrices 최신 날짜가 오늘이 아닌 경우 view 페이지 가격 우선 사용
+      if (rows[0].date < today && viewPagePrice > 0) {
+        const changeAmt = +(viewPagePrice - rows[0].price).toFixed(2);
+        const changeRt = rows[0].price > 0 ? +((changeAmt / rows[0].price) * 100).toFixed(2) : 0;
+        return { name, price: viewPagePrice, changeRate: changeRt, changeAmount: changeAmt, navDate: today, prevNavDate: rows[0].date, prevNavPrice: rows[0].price };
       }
       const price = rows[0].price;
       const navDate = rows[0].date;
