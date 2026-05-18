@@ -393,13 +393,17 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
           if (t.length > 3 && !/^미래에셋(자산운용)?$/.test(t)) name = t;
         }
       }
-      for (const pat of [
-        /기준가[^0-9\n]{0,30}([\d,]+\.\d{2})/,
-        /([\d,]+\.\d{2})\s*원/,
-        /"nav"\s*:\s*"?([\d.]+)"?/,
-        /"basicPrice"\s*:\s*"?([\d.]+)"?/,
-      ]) {
-        const m = html.match(pat);
+      // HTML 태그 제거 후 텍스트 패턴 매칭 (태그가 숫자와 "원" 사이에 있는 구조 대응)
+      const stripped = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+      const textPats: Array<[RegExp, string]> = [
+        [/기준가.{0,120}?([\d,]+\.\d{2})\s*원/, stripped],
+        [/([\d,]+\.\d{2})\s*원/, stripped],
+        [/"nav"\s*:\s*"?([\d.]+)"?/, html],
+        [/"basicPrice"\s*:\s*"?([\d.]+)"?/, html],
+        [/"standardPrice"\s*:\s*"?([\d.]+)"?/, html],
+      ];
+      for (const [pat, src] of textPats) {
+        const m = src.match(pat);
         if (m) {
           const v = parseFloat(m[1].replace(/,/g, ''));
           if (v > 100) { viewPagePrice = v; break; }
