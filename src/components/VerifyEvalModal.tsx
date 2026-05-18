@@ -186,13 +186,14 @@ export default function VerifyEvalModal({
     setAddForm({ code: '', name: '', type: 'stock', quantity: '', start: date, end: '' });
   };
 
+  const isToday = date === effectiveDateKey;
+
   const confirm = () => {
     if (recomputed <= 0) { notify('재계산 합계가 0원입니다 — 종가/수량을 확인하세요', 'warning'); return; }
-    const isToday = date === effectiveDateKey;
     const v = Math.round(recomputed);
     setHistory(hist => hist.map(item =>
       (item.id ? item.id === record.id : item.date === date)
-        ? { ...item, evalAmount: v, adjustedAmount: v, ...(isToday ? { userChosen: true } : { isFixed: true }) }
+        ? { ...item, evalAmount: v, adjustedAmount: v, isFixed: true }
         : item));
     notify(`${formatShortDate(date)} 평가액 ${v.toLocaleString()}원으로 확정`, 'success');
     onClose();
@@ -348,12 +349,15 @@ export default function VerifyEvalModal({
             </div>
             <button
               className="w-full py-2 bg-emerald-700/70 hover:bg-emerald-600/70 disabled:bg-gray-700/50 disabled:text-gray-500 text-emerald-50 rounded font-bold tracking-wide"
-              disabled={recomputed <= 0}
+              disabled={recomputed <= 0 || isToday}
               onClick={confirm}
             >
               이 구성으로 확정
             </button>
-            <div className="text-[10px] text-gray-600 text-center">확정 시에만 평가자산 기록이 갱신됩니다 — 자동 덮어쓰기 없음</div>
+            {isToday
+              ? <div className="text-[10px] text-amber-600 text-center">오늘 날짜는 종가 미확정 — 장 마감 후 자동 고정됩니다</div>
+              : <div className="text-[10px] text-gray-600 text-center">확정 시에만 평가자산 기록이 갱신됩니다 — 자동 덮어쓰기 없음</div>
+            }
           </div>
         </div>
       </div>
