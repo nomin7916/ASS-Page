@@ -472,26 +472,6 @@ export default function App() {
     updatePortfolioExtraRowMonth,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
-  // ── 포트폴리오 구성 변경 감지 → 자동 백업 ──
-  const portfolioCompositionTrackerRef = useRef({ id: '', key: '' });
-  const portfolioCompositionKey = useMemo(() =>
-    portfolio
-      .filter(p => p.type === 'stock' || p.type === 'fund')
-      .map(p => `${p.id}:${p.quantity ?? 0}:${p.investAmount ?? 0}`)
-      .join('|'),
-    [portfolio]
-  );
-  useEffect(() => {
-    const tracker = portfolioCompositionTrackerRef.current;
-    if (tracker.id !== activePortfolioId || tracker.key === '') {
-      portfolioCompositionTrackerRef.current = { id: activePortfolioId, key: portfolioCompositionKey };
-      return;
-    }
-    if (tracker.key !== portfolioCompositionKey) {
-      portfolioCompositionTrackerRef.current = { ...tracker, key: portfolioCompositionKey };
-      handleAutoBackupWithMemo('포트폴리오 변경');
-    }
-  }, [portfolioCompositionKey, activePortfolioId]);
 
   // ── 리밸런싱 정렬 (계좌별 독립) ──
   const rebalanceSortConfig = rebalanceSortConfigMap[activePortfolioId] ?? { key: null, direction: 1 };
