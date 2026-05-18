@@ -1487,14 +1487,12 @@ export default function App() {
       // 휴일에 합산가가 전일 대비 10% 미만으로 감소한 경우만 이상치로 판단 (가격 미로드 방지)
       const isAnomaly = isHoliday && effectivePrevValue > 0 && totals.totalEval < effectivePrevValue * 0.1;
       let todayEntry;
-      if (existingToday?.userChosen) {
-        todayEntry = { ...existingToday, actualEvalAmount: totals.totalEval };
-      } else if (isAnomaly) {
-        todayEntry = { date: today, evalAmount: effectivePrevValue, adjustedAmount: effectivePrevValue, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: true, userChosen: false };
+      if (isAnomaly) {
+        todayEntry = { date: today, evalAmount: effectivePrevValue, adjustedAmount: effectivePrevValue, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: true };
       } else {
-        todayEntry = { date: today, evalAmount: totals.totalEval, adjustedAmount: totals.totalEval, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: false, userChosen: false };
+        todayEntry = { date: today, evalAmount: totals.totalEval, adjustedAmount: totals.totalEval, actualEvalAmount: totals.totalEval, principal, isFixed: false, isAdjusted: false };
       }
-      if (!needsCorrection && existingToday && !existingToday.userChosen && !isAnomaly &&
+      if (!needsCorrection && existingToday && !isAnomaly &&
           existingToday.evalAmount === totals.totalEval && cleaned.length === prev.length - 1) {
         return prev;
       }
