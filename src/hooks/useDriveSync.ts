@@ -85,6 +85,8 @@ export function useDriveSync({
   const lastAdminAccessAllowedRef = useRef<boolean | null>(null);
   // 관리자 뷰 전환 중(로드 완료 후 React 렌더 전) 저장 차단 — saveAllToDrive 가드에서 사용
   const adminTransitioningRef = useRef(false);
+  // 저장 차단 시 최신 상태를 보관 — 현재 저장 완료 후 즉시 재실행
+  const pendingSaveRef = useRef<any>(null);
   // 세션 관리 — 단일 기기 강제 로그아웃
   const sessionIdRef = useRef('');           // 이 기기의 세션 ID
   const ownFolderIdRef = useRef('');         // 관리자가 타인 페이지 볼 때도 자신의 폴더 ID 유지
@@ -214,7 +216,11 @@ export function useDriveSync({
   // isRetry: true면 실패 시 재시도·토스트 없이 조용히 종료
   const saveAllToDrive = async (state, versioned: false | 'manual' | 'auto' = false, isRetry = false) => {
     // LOADING·SAVING 중에는 저장 차단 — 초기 Drive 로드 / 동시 저장 경쟁 방지
-    if (syncStatusRef.current === 'loading' || syncStatusRef.current === 'saving') return;
+    // 차단 시 최신 상태를 pendingSaveRef에 보관 → 현재 저장 완료 후 즉시 재실행
+    if (syncStatusRef.current === 'loading' || syncStatusRef.current === 'saving') {
+      if (syncStatusRef.current === 'saving') pendingSaveRef.current = saveStateRef.current ?? state;
+      return;
+    }
     // 전환 중 — 관리자↔사용자 데이터 교체 중 저장 차단 (편집 모드 자체는 저장 허용)
     if (adminTransitioningRef.current) return;
     const token = driveTokenRef.current;
@@ -266,6 +272,12 @@ export function useDriveSync({
         isAdminEdit
           ? notify(`${adminViewingAsRef.current} Drive에 저장 완료`, 'success')
           : notify('Drive 저장 완료', 'success');
+      }
+      // 저장 중 차단된 최신 상태가 있으면 즉시 재실행
+      const pending = pendingSaveRef.current;
+      if (pending) {
+        pendingSaveRef.current = null;
+        saveAllToDrive(pending);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
