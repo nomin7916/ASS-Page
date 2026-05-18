@@ -43,6 +43,25 @@ export const isWeekend = (dateStr) => {
   return d.getDay() === 0 || d.getDay() === 6;
 };
 
+// dateStr(YYYY-MM-DD)에 영업일 n일을 더한 날짜 반환. 주말 및 holidays(YYYY-MM-DD[]) 제외.
+export const addBusinessDays = (dateStr: string, n: number, holidays: string[] = []): string => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ''))) return '';
+  const set = new Set(holidays || []);
+  const d = new Date(dateStr + 'T12:00:00');
+  let added = 0;
+  while (added < n) {
+    d.setDate(d.getDate() + 1);
+    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (d.getDay() === 0 || d.getDay() === 6 || set.has(ds)) continue;
+    added++;
+  }
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// 분배금 지급(예정)일 = 배당락일 + 2영업일 (한국 ETF 기준일 T+2, 휴일 제외)
+export const dividendPayDate = (exDate: string, holidays: string[] = []): string =>
+  addBusinessDays(exDate, 2, holidays);
+
 // 최근 7일 범위 내 주말 날짜를 이전 기록값으로 채워서 반환 (저장용)
 export const fillWeekendGaps = (history, today) => {
   const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));

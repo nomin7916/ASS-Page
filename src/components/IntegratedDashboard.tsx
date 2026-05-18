@@ -105,6 +105,7 @@ export default function IntegratedDashboard({
   updatePortfolioActualAfterTaxKrw,
   intDepositEvents = [],
   usdkrw = 1300,
+  holidays = { kr: [], us: [] },
   dividendTaxHistory = {},
   onManualBackfill,
   sec = { dividend: false, history: false, donut: false },
@@ -1083,7 +1084,7 @@ export default function IntegratedDashboard({
             </div>
             )}
             {!sec.dividend && (
-              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate} updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax} updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount} updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd} updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd} updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw} usdkrw={usdkrw} dividendTaxHistory={dividendTaxHistory} />
+              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate} updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax} updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount} updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd} updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd} updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw} usdkrw={usdkrw} holidays={holidays} dividendTaxHistory={dividendTaxHistory} />
             )}
               </div>
               <div className="sticky top-14 self-start flex flex-col gap-px flex-shrink-0 z-10 pt-3">

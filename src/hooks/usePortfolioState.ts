@@ -261,28 +261,33 @@ export function usePortfolioState({
   };
 
   // ── 분배금 이력 저장 ──
-  const updateDividendHistory = (mergeMap) => {
-    setPortfolios(prev => prev.map(p => {
-      if (p.id !== activePortfolioId) return p;
-      const existing = p.dividendHistory || {};
-      const updated = { ...existing };
-      Object.entries(mergeMap).forEach(([code, monthData]) => {
-        updated[code] = { ...(existing[code] || {}), ...monthData };
+  const mergeDividendData = (p, mergeMap, exDateMap) => {
+    const existing = p.dividendHistory || {};
+    const updated = { ...existing };
+    Object.entries(mergeMap).forEach(([code, monthData]) => {
+      updated[code] = { ...(existing[code] || {}), ...monthData };
+    });
+    let exUpdated = p.dividendExDate || {};
+    if (exDateMap && Object.keys(exDateMap).length) {
+      const existingEx = p.dividendExDate || {};
+      exUpdated = { ...existingEx };
+      Object.entries(exDateMap).forEach(([code, exData]) => {
+        exUpdated[code] = { ...(existingEx[code] || {}), ...exData };
       });
-      return { ...p, dividendHistory: updated, dividendHistoryUpdatedAt: Date.now() };
-    }));
+    }
+    return { ...p, dividendHistory: updated, dividendExDate: exUpdated, dividendHistoryUpdatedAt: Date.now() };
   };
 
-  const updatePortfolioDividendHistory = (portfolioId, mergeMap) => {
-    setPortfolios(prev => prev.map(p => {
-      if (p.id !== portfolioId) return p;
-      const existing = p.dividendHistory || {};
-      const updated = { ...existing };
-      Object.entries(mergeMap).forEach(([code, monthData]) => {
-        updated[code] = { ...(existing[code] || {}), ...monthData };
-      });
-      return { ...p, dividendHistory: updated, dividendHistoryUpdatedAt: Date.now() };
-    }));
+  const updateDividendHistory = (mergeMap, exDateMap) => {
+    setPortfolios(prev => prev.map(p =>
+      p.id !== activePortfolioId ? p : mergeDividendData(p, mergeMap, exDateMap)
+    ));
+  };
+
+  const updatePortfolioDividendHistory = (portfolioId, mergeMap, exDateMap) => {
+    setPortfolios(prev => prev.map(p =>
+      p.id !== portfolioId ? p : mergeDividendData(p, mergeMap, exDateMap)
+    ));
   };
 
   const updatePortfolioActualDividend = (portfolioId, code, yearMonth, amount) => {

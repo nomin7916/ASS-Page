@@ -354,7 +354,10 @@ export const fetchDividendHistory = async (code: string): Promise<{
   return null;
 };
 
-export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [yearMonth: string]: number } | null> => {
+export const fetchYahooDividendHistory = async (ticker: string): Promise<{
+  amounts: { [yearMonth: string]: number };
+  exDates: { [yearMonth: string]: string };
+} | null> => {
   if (!ticker || !/^[A-Z]{1,5}$/i.test(ticker)) return null;
   const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker.toUpperCase()}?events=div&interval=1d&range=10y`;
   const proxyFns = [
@@ -371,13 +374,20 @@ export const fetchYahooDividendHistory = async (ticker: string): Promise<{ [year
       if (!dividends) continue;
       const entries = Object.values(dividends) as Array<{ amount: number; date: number }>;
       if (!entries.length) continue;
-      const monthData: { [yearMonth: string]: number } = {};
+      const amounts: { [yearMonth: string]: number } = {};
+      const exDates: { [yearMonth: string]: string } = {};
       entries.forEach(({ amount, date }) => {
+        // 배당락일은 UTC 자정 타임스탬프 — 로컬 시간대 변환 시 월이 밀릴 수 있어 UTC 기준으로 고정
         const d = new Date(date * 1000);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        monthData[key] = (monthData[key] || 0) + amount;
+        const y = d.getUTCFullYear();
+        const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        const key = `${y}-${mo}`;
+        const ds = `${y}-${mo}-${day}`;
+        amounts[key] = (amounts[key] || 0) + amount;
+        if (!exDates[key] || ds > exDates[key]) exDates[key] = ds;
       });
-      return Object.keys(monthData).length > 0 ? monthData : null;
+      return Object.keys(amounts).length > 0 ? { amounts, exDates } : null;
     } catch { continue; }
   }
   return null;

@@ -28,16 +28,21 @@ function buildMonthPrediction(codeHistory) {
 }
 
 function parseDividendApiResult(result) {
-  const monthData = {};
+  const amounts = {};
+  const exDates = {};
   result.forEach(({ dividendAmount, exDividendAt }) => {
-    const parts = exDividendAt.split('.');
-    const key = `${parts[0]}-${parts[1].padStart(2, '0')}`;
-    monthData[key] = (monthData[key] || 0) + dividendAmount;
+    // Naver 배당락일 형식: "YYYY.MM.DD" — 형식이 어긋난 항목은 건너뜀
+    const m = /^(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(exDividendAt || '').trim());
+    if (!m) return;
+    const ds = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    const key = `${m[1]}-${m[2].padStart(2, '0')}`;
+    amounts[key] = (amounts[key] || 0) + dividendAmount;
+    if (!exDates[key] || ds > exDates[key]) exDates[key] = ds;
   });
-  return monthData;
+  return { amounts, exDates };
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] } }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [showVerify, setShowVerify] = useState(false);
@@ -70,18 +75,22 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const stocks = (pf.portfolio || []).filter(item => getCodeType(item.code, pf) !== null);
         if (!stocks.length) return;
         const mergeMap = {};
+        const exDateMap = {};
         await Promise.all(stocks.map(async item => {
           const codeType = getCodeType(item.code, pf);
-          let monthData;
+          let parsed;
           if (codeType === 'us') {
-            monthData = await fetchYahooDividendHistory(String(item.code));
+            parsed = await fetchYahooDividendHistory(String(item.code));
           } else {
             const data = await fetchDividendHistory(String(item.code));
-            if (data?.result?.length) monthData = parseDividendApiResult(data.result);
+            if (data?.result?.length) parsed = parseDividendApiResult(data.result);
           }
-          if (monthData && Object.keys(monthData).length) mergeMap[item.code] = monthData;
+          if (parsed?.amounts && Object.keys(parsed.amounts).length) {
+            mergeMap[item.code] = parsed.amounts;
+            if (parsed.exDates && Object.keys(parsed.exDates).length) exDateMap[item.code] = parsed.exDates;
+          }
         }));
-        if (Object.keys(mergeMap).length) updatePortfolioDividendHistory(pf.id, mergeMap);
+        if (Object.keys(mergeMap).length) updatePortfolioDividendHistory(pf.id, mergeMap, exDateMap);
       })
     );
     setLoading(false);
@@ -715,6 +724,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               portfolios={nonGoldPortfolios}
               dividendTaxHistory={dividendTaxHistory}
               usdkrw={usdkrw}
+              holidays={holidays}
               onClose={() => setShowVerify(false)}
             />
           )}
@@ -1056,6 +1066,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               portfolios={nonGoldPortfolios}
               dividendTaxHistory={dividendTaxHistory}
               usdkrw={usdkrw}
+              holidays={holidays}
               onClose={() => setShowVerify(false)}
             />
           )}

@@ -129,7 +129,10 @@
       "Read(//usr/local/**)",
       "Bash(zsh -lic 'which node npm && npm run build 2>&1 | tail -20')",
       "Bash(ls /usr/local/bin/npm /opt/homebrew/bin/npm 2>/dev/null; ls -d /opt/homebrew/Cellar/node* 2>/dev/null; find ~ -maxdepth 3 -name npm -type f 2>/dev/null | head)",
-      "Read(//opt/homebrew/**)"
+      "Read(//opt/homebrew/**)",
+      "Bash(command -v volta fnm asdf)",
+      "Bash(find ~ /usr/local /opt -maxdepth 4 -name \"node\" -type f 2>/dev/null | head; echo \"--- nvm dir ---\"; ls -d ~/.nvm 2>/dev/null; ls ~/.nvm/versions/node 2>/dev/null; echo \"--- profiles ---\"; ls -a ~ | grep -i \"zprofile\\\\|zshenv\\\\|bash_profile\")",
+      "Read(//opt/**)"
     ]
   }
 }

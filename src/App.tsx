@@ -1896,6 +1896,7 @@ export default function App() {
             deletePortfolioExtraRow={deletePortfolioExtraRow}
             updatePortfolioExtraRowMonth={updatePortfolioExtraRowMonth}
             usdkrw={marketIndicators.usdkrw || 1300}
+            holidays={marketHolidays}
             dividendTaxHistory={dividendTaxHistory}
             onDividendTaxHistoryUpdate={setDividendTaxHistory}
           />
@@ -2116,6 +2117,7 @@ export default function App() {
             updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd}
             updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw}
             usdkrw={marketIndicators.usdkrw || 1300}
+            holidays={marketHolidays}
             dividendTaxHistory={dividendTaxHistory}
             onManualBackfill={handleManualBackfill}
             matongClosedIds={matongClosedIds}
