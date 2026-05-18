@@ -365,19 +365,33 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
   const viewUrl = `https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=${code}`;
 
   let name = '';
-  // 펀드명: view 페이지 title에서 추출 시도
-  for (const proxy of [viewUrl, `/api/proxy?url=${encodeURIComponent(viewUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(viewUrl)}`]) {
+  // 펀드명: JSON API → view 페이지 title 순으로 시도
+  const infoUrl = `https://investments.miraeasset.com/magi/fund/getBasicInfo.do?fundCd=${code}&fundGb=2&_=${Date.now()}`;
+  for (const infoProxy of [infoUrl, `/api/proxy?url=${encodeURIComponent(infoUrl)}`]) {
     try {
-      const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(infoProxy, { signal: AbortSignal.timeout(6000) });
       if (!res.ok) continue;
-      const html = await res.text();
-      if (!html || html.length < 200) continue;
-      const tm = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-      if (tm) {
-        const t = tm[1].split('|')[0].split('::')[0].split('-')[0].trim();
-        if (t.length > 3 && !/미래에셋$/.test(t)) { name = t; break; }
-      }
+      const text = await res.text();
+      if (!text || text.length < 5) continue;
+      const json = JSON.parse(text);
+      const n = json.fundName ?? json.fund_name ?? json.name ?? json.data?.fundName ?? json.result?.fundName;
+      if (n && String(n).length > 3) { name = String(n).trim(); break; }
     } catch { continue; }
+  }
+  if (!name) {
+    for (const proxy of [viewUrl, `/api/proxy?url=${encodeURIComponent(viewUrl)}`, `https://api.allorigins.win/raw?url=${encodeURIComponent(viewUrl)}`]) {
+      try {
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const html = await res.text();
+        if (!html || html.length < 200) continue;
+        const tm = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        if (tm) {
+          const t = tm[1].split('|')[0].split('::')[0].split('-')[0].trim();
+          if (t.length > 3 && !/^미래에셋(자산운용)?$/.test(t)) { name = t; break; }
+        }
+      } catch { continue; }
+    }
   }
 
   // 기준가: basePrices list 에서 최신 2행 파싱 → 등락액 계산
@@ -389,6 +403,21 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
       if (!html || html.length < 100) continue;
       const rows = parseMiraeBasePricesHtml(html);
       if (rows.length === 0) continue;
+      // view URL에서 이름을 못 가져온 경우 basePrices HTML에서 재시도
+      if (!name) {
+        const tm = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        if (tm) {
+          const t = tm[1].split('|')[0].split('::')[0].trim();
+          if (t.length > 5 && !/^미래에셋(자산운용)?$/.test(t) && !t.toLowerCase().includes('error')) name = t;
+        }
+        if (!name) {
+          const h1 = html.match(/<h[123][^>]*>([\s\S]*?)<\/h[123]>/i);
+          if (h1) {
+            const t = h1[1].replace(/<[^>]+>/g, '').trim();
+            if (t.length > 5) name = t;
+          }
+        }
+      }
       const price = rows[0].price;
       const navDate = rows[0].date;
       const changeAmount = rows.length > 1 ? +(rows[0].price - rows[1].price).toFixed(2) : 0;

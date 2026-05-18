@@ -110,7 +110,7 @@ export default function VerifyEvalModal({
     return {
       item,
       isDeposit: item.type === 'deposit',
-      name: item.type === 'deposit' ? '예수금' : (item.name || (isGold ? 'KRX 금현물' : item.code || '—')),
+      name: item.type === 'deposit' ? '예수금' : (item.name || (isGold ? 'KRX 금현물' : (item.code ? item.code.replace(/^MA:/i, '') : '—'))),
       quantity: realQty,
       price: pd.price ?? null,
       source: pd.source || 'none',
