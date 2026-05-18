@@ -121,7 +121,7 @@ export default function DepositPanel({
   return (
     <>
           {/* 입금 내역 */}
-          <div className="flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden">
+          <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden`}>
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 입금 내역</span>
               {isOverseas && (
@@ -179,7 +179,7 @@ export default function DepositPanel({
           </div>
 
           {/* 출금 내역 */}
-          <div className="flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg h-full min-h-[520px] flex flex-col overflow-hidden">
+          <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden`}>
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 출금 내역</span>
               {isOverseas && (
