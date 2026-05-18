@@ -7,6 +7,11 @@ const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','
 const CURRENT_YEAR = new Date().getFullYear().toString();
 const formatUsd = (v) => v > 0 ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
 
+// 분배금 조회 시도 기록 — 모듈 스코프(메모리 전용)로 컴포넌트 언마운트/리마운트(계좌 이동)
+// 후에도 유지. 빈 응답(무배당) 종목도 "조회 시도함"으로 영구 기억해 재진입 시 헛조회 방지.
+// 키는 `${portfolioId}:${code}` (분배금 값 미포함) — 사용자 전환 시 ID가 달라 오염 없음.
+const dividendFetchAttempted = new Set<string>();
+
 const isKrCode = (code) => /^[A-Z0-9]{5,6}$/i.test(String(code || ''));
 const isUsCode = (code) => /^[A-Z]{1,5}$/i.test(String(code || ''));
 const getCodeType = (code, pf) => {
@@ -40,7 +45,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
-  const fetchedRef = useRef(new Set());
+  const fetchedRef = useRef(dividendFetchAttempted);
   const inputRef = useRef(null);
   const krwInputRef = useRef(null);
   const afterTaxBlurTimer = useRef(null);

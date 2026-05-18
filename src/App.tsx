@@ -1397,6 +1397,9 @@ export default function App() {
       })),
       activePortfolioId, customLinks,
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
+      // 바인더 인덱스/섹션 펼침 상태 — 사용자 토글 시에만 변경(시세 갱신 무관)
+      // → 변경 시 portfolioUpdatedAt 상승시켜 Drive STATE 저장 트리거 (앱 재시작 시 상태 유지)
+      intSec, sectionCollapsedMap,
     ]);
     if (portfolioStructureKey !== prevPortfolioStructureRef.current) {
       const wasInitial = prevPortfolioStructureRef.current === '';

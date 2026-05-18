@@ -122,7 +122,12 @@
       "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object Name; Get-ChildItem \"$env:APPDATA\\\\npm\" -ErrorAction SilentlyContinue | Select-Object Name -First 5; ls \"C:\\\\Users\\\\arui1\\\\AppData\\\\Roaming\\\\nvm\" -ErrorAction SilentlyContinue)",
       "Read(//opt/homebrew/bin/**)",
       "Bash(command -v node)",
-      "Read(//Users/aruimacmini/.volta/**)"
+      "Read(//Users/aruimacmini/.volta/**)",
+      "Read(//Users/aruimacmini/.nvm/versions/**)",
+      "Bash(command -v volta fnm)",
+      "Read(//Users/aruimacmini/**)",
+      "Read(//usr/local/**)",
+      "Bash(zsh -lic 'which node npm && npm run build 2>&1 | tail -20')"
     ]
   }
 }
