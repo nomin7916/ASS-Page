@@ -26,6 +26,7 @@ src/
 └── components/
     ├── IntegratedDashboard.tsx   # 통합 대시보드 (멀티 계좌 합산 뷰)
     ├── DividendSummaryTable.tsx  # 분배금 현황 테이블 (compact/개별 모드)
+    ├── DividendVerifyModal.tsx   # 분배금 검증 모달 (올해 1월~최근월 종목×월 매트릭스)
     ├── PortfolioTable.tsx        # 종목 테이블
     ├── KrxGoldTable.tsx          # KRX 금현물 전용 테이블
     ├── PortfolioChart.tsx        # 수익률 라인 차트
