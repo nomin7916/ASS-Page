@@ -68,7 +68,7 @@ export function useStockData({
 
   const extractFundCode = (input: string): string => {
     const m = input.match(/funetf\.co\.kr\/product\/fund\/view\/([A-Za-z0-9]+)/);
-    return m ? m[1] : input.trim();
+    return m ? m[1].toUpperCase() : input.trim().toUpperCase();
   };
 
   const handleStockBlur = async (id, code) => {
@@ -541,6 +541,10 @@ export function useStockData({
       // 활성 계좌 fetch status 업데이트
       activeStockCodes.forEach(code => {
         setStockFetchStatus(prev => ({ ...prev, [code]: priceResults[code] ? 'success' : 'fail' }));
+      });
+      const activeFundCodes = portfolioRef.current.filter(p => p.type === 'fund' && p.code).map(p => p.code);
+      activeFundCodes.forEach(code => {
+        setStockFetchStatus(prev => ({ ...prev, [code]: fundResults[code] ? 'success' : 'fail' }));
       });
 
       // 전체 계좌 국내 주식 코드 수집 — 최근 이력 없으면 재수집 (useHistoryBackfill이 모든 계좌 빈 날짜 채우는 데 필요)

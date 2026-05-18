@@ -207,7 +207,7 @@ export const fetchUsStockInfo = async (ticker: string): Promise<{ name: string; 
 // ── funetf.co.kr 펀드 기준가 조회 ─────────────────────────────────────────
 export const fetchFundInfo = async (code: string): Promise<{ name: string; price: number; changeRate: number } | null> => {
   if (!code || code.trim().length < 8) return null;
-  const c = code.trim();
+  const c = code.trim().toUpperCase();
 
   const targetUrl = `https://www.funetf.co.kr/product/fund/view/${c}`;
   const proxies = [
@@ -284,7 +284,7 @@ export const fetchFundNavHistory = async (
   endDate: string    // YYYY-MM-DD
 ): Promise<Record<string, number> | null> => {
   if (!code || code.trim().length < 8) return null;
-  const c = code.trim();
+  const c = code.trim().toUpperCase();
   const today = endDate.replace(/-/g, '');
   const start = startDate.replace(/-/g, '');
   const end = endDate.replace(/-/g, '');
