@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
+import { HelpCircle, X } from 'lucide-react';
 import { formatCurrency, formatPercent, formatShortDate } from '../utils';
 import VerifyEvalModal from './VerifyEvalModal';
 
@@ -20,6 +21,31 @@ export default function HistoryPanel({
   effectiveDateKey,
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpPos, setHelpPos] = useState({ x: 0, y: 0 });
+  const helpDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
+
+  const openHelp = () => {
+    setHelpPos({ x: Math.max(8, window.innerWidth / 2 - 160), y: Math.max(8, window.innerHeight / 2 - 240) });
+    setHelpOpen(true);
+  };
+
+  const handleHelpDragStart = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    helpDrag.current = { active: true, offsetX: e.clientX - helpPos.x, offsetY: e.clientY - helpPos.y };
+    const onMove = (e) => {
+      if (!helpDrag.current.active) return;
+      setHelpPos({ x: e.clientX - helpDrag.current.offsetX, y: e.clientY - helpDrag.current.offsetY });
+    };
+    const onUp = () => {
+      helpDrag.current.active = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   // 사용자가 직접 수정한 날짜 집합: manual 스냅샷(종목 추가/삭제/수량변경) + 수동 종가 입력.
   // kind 'auto'/'baseline'은 시스템 자동 생성이므로 제외.
@@ -37,8 +63,9 @@ export default function HistoryPanel({
   return (
         <>
           <div className={`w-full xl:w-[21%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${activePortfolioAccountType === 'overseas' ? 'h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden shrink-0`}>
-            <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center text-sm border-b border-gray-700 shrink-0">
+            <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center justify-between text-sm border-b border-gray-700 shrink-0">
               <span>📈 자산 평가액 추이</span>
+              <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={14} /></button>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed border-collapse">
