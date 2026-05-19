@@ -780,6 +780,29 @@ export function useStockData({
             return { ...prev, [code]: merged };
           });
 
+          // funetf 펀드: 이력 마지막 2 거래일로 changeRate 계산 (HTML 파싱 불신뢰 대체)
+          if (!code.startsWith('MA:') && hist) {
+            const tradingDates = Object.keys(hist).filter(d => !isWeekend(d)).sort();
+            if (tradingDates.length >= 2) {
+              const prevNav = hist[tradingDates[tradingDates.length - 2]];
+              const currNav = hist[tradingDates[tradingDates.length - 1]];
+              const computedRate = prevNav > 0 ? +((currNav - prevNav) / prevNav * 100).toFixed(2) : 0;
+              const applyRate = (item: any) =>
+                (item.type === 'fund' && item.code === code && item.changeRate !== computedRate)
+                  ? { ...item, changeRate: computedRate }
+                  : item;
+              setPortfolios(prev => prev.map(p => {
+                const items = p.portfolio || [];
+                const updated = items.map(applyRate);
+                return updated.some((it: any, i: number) => it !== items[i]) ? { ...p, portfolio: updated } : p;
+              }));
+              setPortfolio(prev => {
+                const updated = prev.map(applyRate);
+                return updated.some((it: any, i: number) => it !== prev[i]) ? updated : prev;
+              });
+            }
+          }
+
           // MA 펀드이고 오늘 NAV를 새로 받았으면 portfolio currentPrice 보정
           // (fetchMiraeFundInfo가 외부 프록시 캐시로 인해 어제 기준가를 반환한 경우 수정)
           if (code.startsWith('MA:') && hist?.[today]) {

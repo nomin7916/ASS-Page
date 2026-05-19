@@ -112,7 +112,18 @@ export default function VerifyEvalModal({
       item,
       isDeposit: item.type === 'deposit',
       isFund: item.type === 'fund',
-      name: item.type === 'deposit' ? '예수금' : (item.name || (isGold ? 'KRX 금현물' : (item.code ? item.code.replace(/^MA:/i, '') : '—'))),
+      name: item.type === 'deposit' ? '예수금' : (() => {
+        const code = item.code || '';
+        const codeStripped = code.replace(/^MA:/i, '');
+        const snapName = item.name;
+        // 스냅샷 항목 이름이 비어있거나 코드와 같은 경우 현재 포트폴리오에서 최신 이름 보완
+        if (!snapName || snapName === code || snapName === codeStripped) {
+          const liveItem = (portfolio?.portfolio || []).find((pi: any) => pi.code === code && pi.type === item.type);
+          const liveName = liveItem?.name;
+          if (liveName && liveName !== code && liveName !== codeStripped) return liveName;
+        }
+        return snapName || (isGold ? 'KRX 금현물' : (code ? codeStripped : '—'));
+      })(),
       quantity: realQty,
       price: pd.price ?? null,
       source: pd.source || 'none',
