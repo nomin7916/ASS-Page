@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useState, useEffect } from 'react';
 
-const CACHE_KEY = 'marketCalendarCache_v1';
+const CACHE_KEY = 'marketCalendarCache_v2';
 const CACHE_DAYS = 7;
 
 // NYSE는 Columbus Day, Veterans Day 쉬지 않음
@@ -103,6 +103,12 @@ async function fetchHolidaysForYear(year: number): Promise<{ kr: string[]; us: s
 
   const kr: string[] = krData.map((h: any) => h.date);
 
+  // KRX 연말 휴장일: 12/31은 법정 공휴일이 아니라 거래소 전용 휴장일이라
+  // nager.at 응답에 없음. 매년 12/31 휴장이므로 명시적으로 추가
+  // (12/31이 주말이면 영업일 계산에서 어차피 제외돼 무해)
+  const krxYearEnd = `${year}-12-31`;
+  if (!kr.includes(krxYearEnd)) kr.push(krxYearEnd);
+
   // NYSE: 연방공휴일 중 거래소 미휴장 제외, Good Friday 추가
   const us: string[] = usData
     .filter((h: any) => !NYSE_EXCLUDED.includes(h.name))
@@ -155,7 +161,7 @@ export function useMarketCalendar() {
         const fixedKR = [y, y + 1].flatMap(yr => [
           `${yr}-01-01`, `${yr}-03-01`, `${yr}-05-05`,
           `${yr}-06-06`, `${yr}-08-15`, `${yr}-10-03`,
-          `${yr}-10-09`, `${yr}-12-25`,
+          `${yr}-10-09`, `${yr}-12-25`, `${yr}-12-31`,
         ]);
         const fixedUS = [y, y + 1].flatMap(yr => [
           `${yr}-01-01`, `${yr}-07-04`, `${yr}-12-25`,

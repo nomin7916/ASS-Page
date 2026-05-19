@@ -162,7 +162,8 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **원칙:**
 - `localStorage`, `sessionStorage` 모두 API 캐시에 **사용 금지**
 - 예외: 사용자 무관한 공통 데이터 (공휴일 등) — `localStorage` 유지 허용
-- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v1`: 공휴일 데이터이므로 예외 허용
+- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v2`: 공휴일 데이터이므로 예외 허용
+  (KRX 연말 휴장일 12/31을 kr 휴장일에 항상 추가 — 법정 공휴일이 아니라 nager.at에 없음)
 
 ---
 
