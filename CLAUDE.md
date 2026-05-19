@@ -162,8 +162,28 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **원칙:**
 - `localStorage`, `sessionStorage` 모두 API 캐시에 **사용 금지**
 - 예외: 사용자 무관한 공통 데이터 (공휴일 등) — `localStorage` 유지 허용
-- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v2`: 공휴일 데이터이므로 예외 허용
-  (KRX 연말 휴장일 12/31을 kr 휴장일에 항상 추가 — 법정 공휴일이 아니라 nager.at에 없음)
+- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v3`: 공휴일 데이터이므로 예외 허용
+
+---
+
+## 증시 휴장일 (KRX/NYSE)
+
+`useMarketCalendar`는 nager.at를 직접 호출하지 않고 **`/api/market-calendar`** 단일
+서버리스 엔드포인트를 호출한다 (현재연도~+5년치, localStorage `marketCalendarCache_v3` 7일 캐시).
+
+- **`api/_marketCalendarData.ts`** — 큐레이션 스냅샷(2026~2031, 검증·보정 완료).
+  언더스코어 = 비라우트 데이터 모듈. `CURATED_KR/US`, `KRX_ADHOC/NYSE_ADHOC`.
+- **`api/market-calendar.ts`** — Edge 함수. 우선순위: 큐레이션 > 범위 밖 nager 라이브 >
+  최소 폴백. 항상 적용 규칙: KR 연말 휴장(12/31), NYSE Good Friday,
+  미휴장 항목 제외, ADHOC 병합. 엣지 캐시 `s-maxage=86400`.
+- **보정 규칙**: KR은 제헌절(7/17) 제외(2008년부터 증시 개장), 부처님오신날 토/일
+  대체공휴일 보강(2023 신설, nager 미반영). NYSE는 Columbus/Indigenous/Veterans/
+  Lincoln/Truman 제외, 토요일 새해 직전 금요일 미관측.
+- **유지보수**: 매년 11~12월 KRX 익년 휴장일정·NYSE 캘린더 공시 시
+  `_marketCalendarData.ts`에 +1년치 추가 + 거래소 임시휴장(선거일·국가 애도일)을
+  `*_ADHOC`에 반영 후 일반 커밋. 6년 버퍼라 갱신 누락돼도 즉시 장애 아님.
+- **검증**: `npm run verify:calendar` — 큐레이션 ↔ nager 라이브 교차검증,
+  드리프트 시 종료코드 1.
 
 ---
 
