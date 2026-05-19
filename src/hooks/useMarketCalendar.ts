@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useState, useEffect } from 'react';
 
-const CACHE_KEY = 'marketCalendarCache_v3';
+const CACHE_KEY = 'marketCalendarCache_v4';
 const CACHE_DAYS = 7;
 
 // 부활절 계산 (Meeus/Jones/Butcher 알고리즘)
@@ -91,10 +91,13 @@ export function getMsUntilCutoff(): number | null {
 
 // 휴장일은 /api/market-calendar 서버리스 함수에서 통합 산출한다.
 // (큐레이션 스냅샷 2026~2031 + 범위 밖 nager 라이브 + 12/31·Good Friday 규칙 보정)
-// 클라이언트는 단일 호출로 현재연도~+5년치를 받는다.
+// 클라이언트는 단일 호출로 직전연도~+5년치를 받는다.
+// 직전연도 포함 이유: 직전연도 12월 말 배당락(예: 12/29)의 지급일(T+2)이
+// 직전연도 KRX 연말 휴장(12/31)을 건너뛰어 올해 1월로 넘어가므로,
+// 분배금 지급월 재배치에 직전연도 연말 휴장일이 필요하다.
 async function fetchMarketCalendar(): Promise<{ kr: string[]; us: string[] }> {
   const year = getNowKST().getFullYear();
-  const r = await fetch(`/api/market-calendar?yearStart=${year}&yearEnd=${year + 5}`, {
+  const r = await fetch(`/api/market-calendar?yearStart=${year - 1}&yearEnd=${year + 5}`, {
     signal: AbortSignal.timeout(10000),
   });
   if (!r.ok) throw new Error('market-calendar failed');
@@ -130,10 +133,10 @@ export function useMarketCalendar() {
         try { localStorage.setItem(CACHE_KEY, JSON.stringify(merged)); } catch {}
         setHolidays({ kr, us });
       } catch {
-        // /api 자체 도달 불가 시 최후 폴백: 6년치 고정 공휴일(음력 명절 제외).
+        // /api 자체 도달 불가 시 최후 폴백: 직전연도~+5년 고정 공휴일(음력 명절 제외).
         // 동일 오리진 /api 이므로 이 경로는 사실상 앱 자체 미가용 상황에서만 발생.
         const y = getNowKST().getFullYear();
-        const yrs = Array.from({ length: 6 }, (_, i) => y + i);
+        const yrs = Array.from({ length: 7 }, (_, i) => y - 1 + i);
         const fixedKR = yrs.flatMap(yr => [
           `${yr}-01-01`, `${yr}-03-01`, `${yr}-05-01`, `${yr}-05-05`,
           `${yr}-06-06`, `${yr}-08-15`, `${yr}-10-03`,

@@ -162,14 +162,16 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **원칙:**
 - `localStorage`, `sessionStorage` 모두 API 캐시에 **사용 금지**
 - 예외: 사용자 무관한 공통 데이터 (공휴일 등) — `localStorage` 유지 허용
-- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v3`: 공휴일 데이터이므로 예외 허용
+- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v4`: 공휴일 데이터이므로 예외 허용
 
 ---
 
 ## 증시 휴장일 (KRX/NYSE)
 
 `useMarketCalendar`는 nager.at를 직접 호출하지 않고 **`/api/market-calendar`** 단일
-서버리스 엔드포인트를 호출한다 (현재연도~+5년치, localStorage `marketCalendarCache_v3` 7일 캐시).
+서버리스 엔드포인트를 호출한다 (직전연도~+5년치, localStorage `marketCalendarCache_v4` 7일 캐시).
+직전연도 포함: 직전연도 12월 말 배당락(예: 12/29)의 지급일(T+2)이 직전연도 KRX
+연말 휴장(12/31)을 건너뛰어 올해 1월로 넘어가므로 분배금 지급월 재배치에 필요.
 
 - **`api/_marketCalendarData.ts`** — 큐레이션 스냅샷(2026~2031, 검증·보정 완료).
   언더스코어 = 비라우트 데이터 모듈. `CURATED_KR/US`, `KRX_ADHOC/NYSE_ADHOC`.

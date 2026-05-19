@@ -61,6 +61,9 @@ function buildPaySlots(codeHistory, codeExHistory, hol) {
   const monthPred = buildMonthPrediction(codeHistory);
   const exPred = buildMonthExPrediction(codeExHistory);
   const CY = Number(CURRENT_YEAR);
+  // 캘린더 응답이 직전연도를 누락하더라도 직전연도 12월 말 배당락의 지급일(T+2)이
+  // KRX 연말 휴장(12/31)을 건너뛰어 올해 1월로 넘어가도록 방어적으로 보강한다.
+  const holAug = [...(hol || []), `${CY - 1}-12-31`];
   const slots = Array.from({ length: 12 }, () => []);
   const consider = (exYear, mIdx, prevDecToJan = false) => {
     const m = mIdx + 1;
@@ -74,14 +77,14 @@ function buildPaySlots(codeHistory, codeExHistory, hol) {
     // 아래 일반 로직이 12월 지급분(연내)을 올해 표에서 정상 제외한다.
     if (prevDecToJan && !actualEx) {
       const exDateRaw = `${exYear}-12-31`;
-      slots[0].push({ exYm, exMonthIdx: mIdx, perShare, exDateRaw, payDateRaw: dividendPayDate(exDateRaw, hol), exPredicted: true });
+      slots[0].push({ exYm, exMonthIdx: mIdx, perShare, exDateRaw, payDateRaw: dividendPayDate(exDateRaw, holAug), exPredicted: true });
       return;
     }
     let exDateRaw, exPredicted;
     if (actualEx) { exDateRaw = actualEx; exPredicted = false; }
     else if (exPred[m]) { exDateRaw = `${exYear}-${mo}-${exPred[m].slice(8, 10)}`; exPredicted = true; }
     else return;
-    const payDateRaw = dividendPayDate(exDateRaw, hol);
+    const payDateRaw = dividendPayDate(exDateRaw, holAug);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(payDateRaw))) return;
     if (Number(payDateRaw.slice(0, 4)) !== CY) return;
     slots[Number(payDateRaw.slice(5, 7)) - 1].push({ exYm, exMonthIdx: mIdx, perShare, exDateRaw, payDateRaw, exPredicted });
