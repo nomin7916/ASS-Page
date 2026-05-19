@@ -160,6 +160,47 @@ export default function RebalancingPanel({
                   </div>
                 </>
               )}
+              {showRetirementStats && rebalanceData.length > 0 && (() => {
+                const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+                const curD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.curEval, 0);
+                const curS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.curEval, 0) + depositEval;
+                const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
+                const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
+                const DS_COLORS = { '위험D': '#ef4444', '안전S': '#10b981' };
+                const curDSData = [{ name: '위험D', value: curD }, { name: '안전S', value: curS }];
+                const projDSData = [{ name: '위험D', value: projD }, { name: '안전S', value: projS }];
+                return (
+                  <>
+                    <div className="w-px self-stretch bg-gray-700/60 mx-1" />
+                    <div className="flex flex-col items-center">
+                      <div className="text-amber-500/80 text-[10px] font-semibold mb-0">현재 위험/안전</div>
+                      <div style={{ height: 120, width: 120 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Tooltip content={makeCompactPieTooltip(curDSData)} />
+                            <Pie data={curDSData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false}>
+                              {curDSData.map(({ name }, i) => <Cell key={i} fill={DS_COLORS[name] || '#64748b'} />)}
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <div className="text-amber-500/80 text-[10px] font-semibold mb-0">예상 위험/안전</div>
+                      <div style={{ height: 120, width: 120 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Tooltip content={makeCompactPieTooltip(projDSData)} />
+                            <Pie data={projDSData} outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false}>
+                              {projDSData.map(({ name }, i) => <Cell key={i} fill={DS_COLORS[name] || '#64748b'} />)}
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
             <div className="flex flex-col gap-2 w-full xl:w-[560px] shrink-0">
               <div className="flex items-center justify-between bg-gray-800/80 px-4 py-2 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType === 'overseas') { const fx = marketIndicators.usdkrw || 1; return <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(dep)}</span><span className="text-sm text-green-600">{formatCurrency(dep * fx)}</span></div>; } return formatCurrency(dep); })()}</span></div>
