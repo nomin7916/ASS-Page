@@ -100,16 +100,23 @@ export function useStockData({
       setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'loading' }));
       const d = isMirae ? await fetchMiraeFundInfo(fundCode) : await fetchFundInfo(fundCode);
       if (d) {
+        const blurToday = new Date().toISOString().split('T')[0];
+        const navD = isMirae ? (d as any).navDate : null;
+        const histPrice = (isMirae && navD && navD < blurToday)
+          ? (stockHistoryMapRef.current[fundCode]?.[blurToday] || 0) : 0;
+        const price = histPrice || d.price;
+        const changeAmt = histPrice ? +(histPrice - d.price).toFixed(2) : ((d as any).changeAmount ?? 0);
+        const changeRt = (histPrice && d.price > 0) ? +((changeAmt / d.price) * 100).toFixed(2) : d.changeRate;
         setPortfolio(prev => prev.map(p => p.id === id ? {
           ...p,
           name: d.name || p.name,
-          currentPrice: d.price,
-          changeRate: d.changeRate,
+          currentPrice: price,
+          changeRate: changeRt,
           ...(isMirae ? {
-            changeAmount: (d as any).changeAmount ?? 0,
-            navDate: (d as any).navDate,
-            prevNavDate: (d as any).prevNavDate,
-            prevNavPrice: (d as any).prevNavPrice,
+            changeAmount: changeAmt,
+            navDate: histPrice ? blurToday : navD,
+            prevNavDate: histPrice ? navD : (d as any).prevNavDate,
+            prevNavPrice: histPrice ? d.price : (d as any).prevNavPrice,
           } : {}),
         } : p));
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
@@ -156,16 +163,23 @@ export function useStockData({
       setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'loading' }));
       const d = isMirae ? await fetchMiraeFundInfo(fundCode) : await fetchFundInfo(fundCode);
       if (d) {
+        const refreshToday = new Date().toISOString().split('T')[0];
+        const navD = isMirae ? (d as any).navDate : null;
+        const histPrice = (isMirae && navD && navD < refreshToday)
+          ? (stockHistoryMapRef.current[fundCode]?.[refreshToday] || 0) : 0;
+        const price = histPrice || d.price;
+        const changeAmt = histPrice ? +(histPrice - d.price).toFixed(2) : ((d as any).changeAmount ?? 0);
+        const changeRt = (histPrice && d.price > 0) ? +((changeAmt / d.price) * 100).toFixed(2) : d.changeRate;
         setPortfolio(prev => prev.map(p => p.id === id ? {
           ...p,
           name: d.name || p.name,
-          currentPrice: d.price,
-          changeRate: d.changeRate,
+          currentPrice: price,
+          changeRate: changeRt,
           ...(isMirae ? {
-            changeAmount: (d as any).changeAmount ?? 0,
-            navDate: (d as any).navDate,
-            prevNavDate: (d as any).prevNavDate,
-            prevNavPrice: (d as any).prevNavPrice,
+            changeAmount: changeAmt,
+            navDate: histPrice ? refreshToday : navD,
+            prevNavDate: histPrice ? navD : (d as any).prevNavDate,
+            prevNavPrice: histPrice ? d.price : (d as any).prevNavPrice,
           } : {}),
         } : p));
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
@@ -437,7 +451,16 @@ export function useStockData({
           // 미래 날짜 키가 생겨 과거 일자 검증이 깨진다. 펀드 이력은
           // fetchFundNavHistory의 실제 거래일 NAV만 저장하고, 비거래일은
           // getClosestValue 역탐색이 직전 거래일가를 자동 반영한다.
-          fundResults[code] = d;
+          const navD = isMirae ? (d as any).navDate : null;
+          const histPrice = (isMirae && navD && navD < today)
+            ? (stockHistoryMapRef.current[code]?.[today] || 0) : 0;
+          if (histPrice) {
+            const changeAmt = +(histPrice - d.price).toFixed(2);
+            const changeRt = d.price > 0 ? +((changeAmt / d.price) * 100).toFixed(2) : 0;
+            fundResults[code] = { ...d, price: histPrice, changeRate: changeRt, changeAmount: changeAmt, navDate: today, prevNavDate: navD, prevNavPrice: d.price };
+          } else {
+            fundResults[code] = d;
+          }
         } else {
           failedCodes.push(code);
         }
@@ -756,6 +779,35 @@ export function useStockData({
             if (hist) Object.assign(merged, hist);
             return { ...prev, [code]: merged };
           });
+
+          // MA 펀드이고 오늘 NAV를 새로 받았으면 portfolio currentPrice 보정
+          // (fetchMiraeFundInfo가 외부 프록시 캐시로 인해 어제 기준가를 반환한 경우 수정)
+          if (code.startsWith('MA:') && hist?.[today]) {
+            const todayNav = hist[today];
+            setPortfolios(prev => prev.map(p => {
+              const items = p.portfolio || [];
+              let changed = false;
+              const updItems = items.map(item => {
+                if (item.type !== 'fund' || item.code !== code || item.currentPrice === todayNav) return item;
+                changed = true;
+                const hasStaleNav = item.navDate && item.navDate < today;
+                return {
+                  ...item,
+                  currentPrice: todayNav,
+                  changeRate: (hasStaleNav && item.currentPrice > 0)
+                    ? +((todayNav - item.currentPrice) / item.currentPrice * 100).toFixed(2)
+                    : item.changeRate,
+                  changeAmount: (hasStaleNav && item.currentPrice > 0)
+                    ? +(todayNav - item.currentPrice).toFixed(2)
+                    : item.changeAmount,
+                  navDate: today,
+                  ...(hasStaleNav ? { prevNavDate: item.navDate, prevNavPrice: item.currentPrice } : {}),
+                };
+              });
+              if (!changed) return p;
+              return { ...p, portfolio: updItems };
+            }));
+          }
         })).then(() => {
           setTimeout(() => {
             const snap = saveStateRef.current;
