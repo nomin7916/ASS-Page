@@ -242,33 +242,39 @@ export const fetchFundInfo = async (code: string): Promise<{ name: string; price
         } catch { /* HTML 파싱으로 폴백 */ }
       }
 
-      // HTML 파싱 폴백
+      // HTML 파싱 폴백 — 태그 제거 후 텍스트 패턴 매칭
       const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/);
       let name = titleMatch ? titleMatch[1].split('|')[0].split('-')[0].split('·')[0].trim() : '';
 
+      const stripped = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
       let price = 0;
-      for (const pat of [
-        /기준가[^\d]*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)/,
-        /기준가격[^\d]*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)/,
-        /현재가[^\d]*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]+)?)/,
-        /"nav"\s*:\s*"?([0-9.]+)"?/,
-        /"price"\s*:\s*"?([0-9.]+)"?/,
-      ]) {
-        const m = html.match(pat);
+      for (const [pat, src] of [
+        [/기준가.{0,80}?([\d]{1,4}(?:,[\d]{3})*\.\d{2})/, stripped],
+        [/기준가격.{0,80}?([\d]{1,4}(?:,[\d]{3})*\.\d{2})/, stripped],
+        [/"nav"\s*:\s*"?([0-9.]+)"?/, html],
+        [/"price"\s*:\s*"?([0-9.]+)"?/, html],
+      ] as Array<[RegExp, string]>) {
+        const m = src.match(pat);
         if (m) {
           const v = parseFloat(m[1].replace(/,/g, ''));
           if (v > 100) { price = v; break; }
         }
       }
 
+      // 방향 문자(▼/▲) + 변화금액 + (백분율%) 패턴: funetf 형식 "▼ 6.67 (0.40%)"
       let changeRate = 0;
-      for (const pat of [
-        /등락률[^0-9+\-]*([+\-]?[0-9]+(?:\.[0-9]+)?)/,
-        /전일대비[^0-9+\-]*([+\-]?[0-9]+(?:\.[0-9]+)?)/,
-        /"changeRate"\s*:\s*"?([+\-]?[0-9.]+)"?/,
-      ]) {
-        const m = html.match(pat);
-        if (m) { changeRate = parseFloat(m[1]); break; }
+      const dirMatch = stripped.match(/([▼▲])\s*[\d,]+(?:\.\d+)?\s*\(\s*([\d.]+)\s*%?\)/);
+      if (dirMatch) {
+        changeRate = (dirMatch[1] === '▼' ? -1 : 1) * parseFloat(dirMatch[2]);
+      } else {
+        for (const pat of [
+          /"changeRate"\s*:\s*"?([+\-]?[0-9.]+)"?/,
+          /"changeRatio"\s*:\s*"?([+\-]?[0-9.]+)"?/,
+        ]) {
+          const m = html.match(pat);
+          if (m) { changeRate = parseFloat(m[1]); break; }
+        }
       }
 
       if (price > 0) return { name: name || c, price, changeRate };
