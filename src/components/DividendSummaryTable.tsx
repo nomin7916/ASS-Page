@@ -60,14 +60,31 @@ function slotExOffset(slots) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
 }
 
-// 슬롯이 없는 지급월에 사용자가 직접 입력할 때 쓸 폴백 배당락 소스.
-// 지급월(payIdx) - 오프셋 → 배당락 월. 음수 월 인덱스는 직전연도로 넘긴다.
-const fallbackSource = (payIdx, offset) => {
-  const raw = payIdx - offset;
-  const exMonthIdx = ((raw % 12) + 12) % 12;
-  const year = raw < 0 ? _CY - 1 : _CY;
-  return { exYm: `${year}-${String(exMonthIdx + 1).padStart(2, '0')}`, exMonthIdx };
-};
+// 비어있는 미래 지급월에 사용자가 실수령액을 직접 기록할 때 쓸 폴백 배당락 키.
+// 빈 슬롯은 예측 분배금을 표시하지 않고(빈 셀) 사용자 입력만 받으므로, 폴백 키가
+// (1) 실제 소스의 배당락월 키, (2) 다른 빈 슬롯의 폴백 키와 절대 겹치지 않도록
+// 보장한다. 겹치면 한 셀 편집·삭제가 옆 달로 전이된다(사용자 보고 버그).
+// 반환: 슬롯별 폴백 exYm 배열(실제 소스 있는 슬롯은 null). slots가 고정이면
+// 결과도 결정적이라 입력 전후 같은 키를 가리켜 값이 같은 셀에 유지된다.
+function buildFallbackExYms(slots) {
+  const off = slotExOffset(slots);
+  const used = new Set();
+  slots.forEach(srcs => srcs.forEach(s => used.add(s.exYm)));
+  return slots.map((srcs, payIdx) => {
+    if (srcs.length) return null;
+    let raw = payIdx - off;
+    let exYm = '';
+    for (let guard = 0; guard < 24; guard++) {
+      const exMonthIdx = ((raw % 12) + 12) % 12;
+      const year = raw < 0 ? _CY - 1 : raw > 11 ? _CY + 1 : _CY;
+      exYm = `${year}-${String(exMonthIdx + 1).padStart(2, '0')}`;
+      if (!used.has(exYm)) break;
+      raw -= 1; // 충돌 시 한 달 앞으로 이동해 고유 키 확보
+    }
+    used.add(exYm);
+    return exYm;
+  });
+}
 
 // 종목 배당 주기/지급 시점 분류 배지 (코드명 옆 표시).
 // - 데이터상 연 1회 → '년말', 연 2~6회 → '분기'
@@ -315,19 +332,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         const codeQtyOv = actualDividendQty[item.code] || {};
         // 지급월 기준 재배치 (저장 키는 배당락월 유지)
         const slots = buildPaySlots(divHistory[item.code], exHistoryAll[item.code] || {}, hol);
-        const slotOff = slotExOffset(slots);
+        const fbExYms = buildFallbackExYms(slots);
         const monthData = slots.map((slotSrcs, payIdx) => {
           // 예상 분배금 슬롯이 없어도 사용자가 실수령액을 직접 기록할 수 있도록
-          // 종목 고유 오프셋으로 산출한 폴백 배당락 키를 가진 합성 소스를 사용한다.
-          const srcs = slotSrcs.length ? slotSrcs : (() => {
-            const fb = fallbackSource(payIdx, slotOff);
-            return [{
-              exYm: fb.exYm,
-              exMonthIdx: fb.exMonthIdx,
-              perShare: pred[fb.exMonthIdx + 1] || 0,
-              exDateRaw: '', payDateRaw: '', exPredicted: false,
-            }];
-          })();
+          // 충돌 없는 폴백 배당락 키를 가진 합성 소스를 사용한다. 단 예측 분배금은
+          // 표시하지 않으므로(빈 셀) perShare=0 — 사용자가 입력해야만 값이 표시된다.
+          const srcs = slotSrcs.length ? slotSrcs : [{
+            exYm: fbExYms[payIdx],
+            exMonthIdx: Number(fbExYms[payIdx].slice(5, 7)) - 1,
+            perShare: 0,
+            exDateRaw: '', payDateRaw: '', exPredicted: false,
+          }];
           if (isOverseas) {
             const codeActualUsd = actualDividendUsd[item.code] || {};
             const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[item.code] || {};
@@ -495,18 +510,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         if (!qty) return null;
         const exH = (pf.dividendExDate || {})[item.code] || {};
         const slots = buildPaySlots(divHistory[item.code], exH, hol);
-        return { code: item.code, slots, off: slotExOffset(slots) };
+        return { code: item.code, slots, fbExYms: buildFallbackExYms(slots) };
       }).filter(Boolean);
       const monthData = Array.from({ length: 12 }, (_, i) => {
         const mo = String(i + 1).padStart(2, '0');
         const yearMonth = `${CURRENT_YEAR}-${mo}`;
         if (isOverseas) {
           let pfAfterUsd = 0, pfAfterKrw = 0, pfHasActual = false;
-          stockSlots.forEach(({ code, slots, off }) => {
+          stockSlots.forEach(({ code, slots, fbExYms }) => {
             const codeActualUsd = actualDividendUsd[code] || {};
             const codeAfterTaxUsd = (pf.actualAfterTaxUsd || {})[code] || {};
             const codeAfterTaxKrw = (pf.actualAfterTaxKrw || {})[code] || {};
-            (slots[i].length ? slots[i] : [{ exYm: fallbackSource(i, off).exYm }]).forEach(s => {
+            (slots[i].length ? slots[i] : [{ exYm: fbExYms[i] }]).forEach(s => {
               const ek = s.exYm;
               const hasManualGross = ek in codeActualUsd;
               const storedAfterUsd = codeAfterTaxUsd[ek];
@@ -543,9 +558,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           return { amount: totalAfterKrw, amountUsd: pfAfterUsd + extraAfterUsd, taxKrw, yearMonth, hasActual };
         } else {
           let amount = 0, taxKrw = 0, hasManual = false;
-          stockSlots.forEach(({ code, slots, off }) => {
+          stockSlots.forEach(({ code, slots, fbExYms }) => {
             const codeActual = actualDividend[code] || {};
-            (slots[i].length ? slots[i] : [{ exYm: fallbackSource(i, off).exYm }]).forEach(s => {
+            (slots[i].length ? slots[i] : [{ exYm: fbExYms[i] }]).forEach(s => {
               const ek = s.exYm;
               if (!(ek in codeActual)) return;
               amount += codeActual[ek];
