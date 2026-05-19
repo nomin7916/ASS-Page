@@ -445,7 +445,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             monthData[pi].taxKrw += taxRec && qty > 0
               ? Math.round(taxRec.perShareTaxableBase * qty * taxRate / 100)
               : Math.round(grossKrw * taxRate / 100);
-            if (!isOverseas && !s.exPredicted && !!divHistory[item.code]?.[s.exYm]) monthData[pi].hasActual = true;
+            if (!s.exPredicted && !!divHistory[item.code]?.[s.exYm]) monthData[pi].hasActual = true;
           });
         });
       });
@@ -954,7 +954,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       {row.monthData.map((d, i) => {
                         if (activeTab === 'actual' && row.isOverseas) {
                           return (
-                            <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${d.amountUsd > 0 ? 'text-emerald-400' : 'text-gray-700'}`}>
+                            <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${d.amountUsd > 0 ? 'text-emerald-400 bg-emerald-900/20' : 'text-gray-700'}`}>
                               <div className="flex flex-col items-center justify-center gap-0">
                                 <span className="font-semibold">{d.amountUsd > 0 ? formatUsd(d.amountUsd) : '-'}</span>
                                 {d.amount > 0 && <span className="text-emerald-400/40 text-[9px]">{formatCurrency(d.amount)}</span>}
@@ -966,7 +966,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         if (activeTab === 'expected' && row.isOverseas) {
                           const taxKrw = rowTaxRate > 0 && d.amount > 0 ? Math.round(d.amount * rowTaxRate / 100) : 0;
                           return (
-                            <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${d.amountUsd > 0 ? 'text-blue-300/80' : 'text-gray-700'}`}>
+                            <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${
+                              d.amountUsd > 0
+                                ? d.hasActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/80'
+                                : 'text-gray-700'
+                            }`}>
                               <div className="flex flex-col items-center justify-center gap-0">
                                 <span className="font-semibold">{d.amountUsd > 0 ? formatUsd(d.amountUsd) : '-'}</span>
                                 {d.amount > 0 && <span className="text-blue-300/40 text-[9px]">{formatCurrency(d.amount)}</span>}
