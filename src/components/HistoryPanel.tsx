@@ -132,6 +132,67 @@ export default function HistoryPanel({
               onClose={() => setVerifyRecord(null)}
             />
           )}
+          {helpOpen && (
+            <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setHelpOpen(false)}>
+              <div className="absolute w-[320px] shadow-2xl overflow-hidden" style={{ left: helpPos.x, top: helpPos.y }} onClick={e => e.stopPropagation()}>
+                <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleHelpDragStart}>
+                  <button onClick={() => setHelpOpen(false)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={7} className="text-white" /></button>
+                  <span className="text-[11px] font-bold tracking-[0.18em] bg-gradient-to-r from-sky-400 via-blue-400 to-purple-400 bg-clip-text text-transparent select-none">자산 평가액 추이 안내</span>
+                  <div className="w-3" />
+                </div>
+                <div className="overflow-y-auto max-h-[75vh]" style={{
+                  backgroundColor: '#000',
+                  backgroundImage: 'repeating-linear-gradient(transparent 0px, transparent 23px, rgba(99,130,255,0.25) 23px, rgba(99,130,255,0.25) 24px)',
+                  backgroundSize: '100% 24px',
+                  backgroundPosition: '0 8px',
+                  lineHeight: '24px',
+                  padding: '8px 12px',
+                }}>
+                  {[
+                    { icon: '🕖', color: 'text-sky-300', title: '기록 시점 (KST 07:30 기준)', lines: [
+                      '매일 전일 종가가 확정되면 평가자산이 기록됩니다.',
+                      `07:30 이전 접속: 전날(${effectiveDateKey || ''}) 날짜로 기록됩니다.`,
+                      '07:30 이후 접속: 오늘 날짜로 새 기록이 생성됩니다.',
+                      '전일 종가 확정 후 해당 기록은 고정(isFixed)되어 변경되지 않습니다.',
+                    ] },
+                    { icon: '％', color: 'text-blue-300', title: '전일대비', lines: [
+                      '수식: (당일 평가자산 ÷ 전일 평가자산) − 1',
+                      '빨강 = 상승 · 파랑 = 하락 · 회색 = 변동 없음.',
+                    ] },
+                    { icon: '🎨', color: 'text-sky-300', title: '일자 색상', lines: [
+                      '회색: 시스템이 자동 생성한 기록입니다.',
+                      '하늘색: 사용자가 직접 수정한 날짜입니다.',
+                      '(종목 추가·삭제·수량 변경 또는 종가 수동 입력)',
+                    ] },
+                    { icon: '✏', color: 'text-gray-300', title: '기록 검증·편집', lines: [
+                      '일자를 클릭하면 해당일의 보유종목·종가를 검증/편집할 수 있습니다.',
+                      '값을 보정하면 평가자산이 재계산됩니다.',
+                    ] },
+                    { icon: '🔵', color: 'text-blue-400', title: "'조정됨' 표시", lines: [
+                      '평가자산이 수동으로 조정된 기록에 표시됩니다.',
+                      '자동 기록과 구분하기 위한 표식입니다.',
+                    ] },
+                  ].map(({ icon, color, title, lines }) => (
+                    <div key={title} className="mb-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`${color} font-bold text-[11px] w-4 text-center shrink-0`}>{icon}</span>
+                        <span className="text-white font-bold text-[11px]">{title}</span>
+                      </div>
+                      {lines.map((line, i) => (
+                        <div key={i} className="flex items-start gap-1.5 pl-1">
+                          <span className="text-gray-600 text-[10px] shrink-0 mt-0.5">·</span>
+                          <span className="text-[10px] leading-6 text-gray-400">{line}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  <div className="mt-2 pt-1 border-t border-gray-800">
+                    <p className="text-[9px] text-gray-600 leading-5">기록은 Google Drive에 자동 백업됩니다.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </>
   );
 }
