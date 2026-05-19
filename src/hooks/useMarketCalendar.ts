@@ -1,11 +1,8 @@
 // @ts-nocheck
 import { useState, useEffect } from 'react';
 
-const CACHE_KEY = 'marketCalendarCache_v1';
+const CACHE_KEY = 'marketCalendarCache_v4';
 const CACHE_DAYS = 7;
-
-// NYSE는 Columbus Day, Veterans Day 쉬지 않음
-const NYSE_EXCLUDED = ['Columbus Day', 'Veterans Day'];
 
 // 부활절 계산 (Meeus/Jones/Butcher 알고리즘)
 function calcEaster(year: number): Date {
@@ -92,25 +89,21 @@ export function getMsUntilCutoff(): number | null {
   return cutoff.getTime() - nowKST.getTime();
 }
 
-async function fetchHolidaysForYear(year: number): Promise<{ kr: string[]; us: string[] }> {
-  const [krRes, usRes] = await Promise.all([
-    fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/KR`),
-    fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/US`),
-  ]);
-  if (!krRes.ok || !usRes.ok) throw new Error('fetch failed');
-  const krData = await krRes.json();
-  const usData = await usRes.json();
-
-  const kr: string[] = krData.map((h: any) => h.date);
-
-  // NYSE: 연방공휴일 중 거래소 미휴장 제외, Good Friday 추가
-  const us: string[] = usData
-    .filter((h: any) => !NYSE_EXCLUDED.includes(h.name))
-    .map((h: any) => h.date);
-  const gf = getGoodFriday(year);
-  if (!us.includes(gf)) us.push(gf);
-
-  return { kr, us };
+// 휴장일은 /api/market-calendar 서버리스 함수에서 통합 산출한다.
+// (큐레이션 스냅샷 2026~2031 + 범위 밖 nager 라이브 + 12/31·Good Friday 규칙 보정)
+// 클라이언트는 단일 호출로 직전연도~+5년치를 받는다.
+// 직전연도 포함 이유: 직전연도 12월 말 배당락(예: 12/29)의 지급일(T+2)이
+// 직전연도 KRX 연말 휴장(12/31)을 건너뛰어 올해 1월로 넘어가므로,
+// 분배금 지급월 재배치에 직전연도 연말 휴장일이 필요하다.
+async function fetchMarketCalendar(): Promise<{ kr: string[]; us: string[] }> {
+  const year = getNowKST().getFullYear();
+  const r = await fetch(`/api/market-calendar?yearStart=${year - 1}&yearEnd=${year + 5}`, {
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!r.ok) throw new Error('market-calendar failed');
+  const data = await r.json();
+  if (!data?.kr?.length || !data?.us?.length) throw new Error('market-calendar empty');
+  return { kr: data.kr, us: data.us };
 }
 
 export function useMarketCalendar() {
@@ -133,31 +126,23 @@ export function useMarketCalendar() {
         }
       } catch {}
 
-      // API 호출: 현재 연도 + 다음 연도 (11월부터 미리 로드)
+      // /api/market-calendar 단일 호출 (현재연도~+5년치)
       try {
-        const nowKST = getNowKST();
-        const year = nowKST.getFullYear();
-        const [curr, next] = await Promise.all([
-          fetchHolidaysForYear(year),
-          fetchHolidaysForYear(year + 1),
-        ]);
-        const merged = {
-          kr: [...curr.kr, ...next.kr],
-          us: [...curr.us, ...next.us],
-          fetchedAt: Date.now(),
-        };
+        const { kr, us } = await fetchMarketCalendar();
+        const merged = { kr, us, fetchedAt: Date.now() };
         try { localStorage.setItem(CACHE_KEY, JSON.stringify(merged)); } catch {}
-        setHolidays({ kr: merged.kr, us: merged.us });
+        setHolidays({ kr, us });
       } catch {
-        // nager.at 실패 시 연도 고정 공휴일 최소 fallback 적용
-        const nowKST = getNowKST();
-        const y = nowKST.getFullYear();
-        const fixedKR = [y, y + 1].flatMap(yr => [
-          `${yr}-01-01`, `${yr}-03-01`, `${yr}-05-05`,
+        // /api 자체 도달 불가 시 최후 폴백: 직전연도~+5년 고정 공휴일(음력 명절 제외).
+        // 동일 오리진 /api 이므로 이 경로는 사실상 앱 자체 미가용 상황에서만 발생.
+        const y = getNowKST().getFullYear();
+        const yrs = Array.from({ length: 7 }, (_, i) => y - 1 + i);
+        const fixedKR = yrs.flatMap(yr => [
+          `${yr}-01-01`, `${yr}-03-01`, `${yr}-05-01`, `${yr}-05-05`,
           `${yr}-06-06`, `${yr}-08-15`, `${yr}-10-03`,
-          `${yr}-10-09`, `${yr}-12-25`,
+          `${yr}-10-09`, `${yr}-12-25`, `${yr}-12-31`,
         ]);
-        const fixedUS = [y, y + 1].flatMap(yr => [
+        const fixedUS = yrs.flatMap(yr => [
           `${yr}-01-01`, `${yr}-07-04`, `${yr}-12-25`,
           getGoodFriday(yr),
         ]);

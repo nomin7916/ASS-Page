@@ -88,9 +88,16 @@ src/
 - 직전연도 12월 배당락 → 올해 1월 지급분은 1월 슬롯에 편입
 - 올해 12월 배당락 → 내년 1월 지급분은 올해 표에서 제외
 - 한 지급월에 2건 겹치면 **합산**, 분배락/지급일·주당분배금 표기는 지배 소스 기준
-- 예측월(배당락일 미확정)은 직전연도 배당락일+2영업일로 추정 배치
+- 예측월(분배 이력 있고 배당락일만 미확정)은 직전연도 배당락일+2영업일로 추정 배치
+- **분배 이력 자체가 없는 빈 미래월**(월 입금 내역 탭): 예측값을 표시하지 않고
+  빈 셀(`-`)로 두되 클릭 시 사용자가 실수령액 직접 입력 가능. 저장 키는
+  `buildFallbackExYms(slots)`가 산출 — 실제 소스의 배당락월 키 및 다른 빈 슬롯의
+  폴백 키와 절대 겹치지 않도록 보장(겹치면 한 셀 편집·삭제가 옆 달로 전이됨).
+  slots가 고정이면 결과도 결정적이라 입력 전후 같은 셀 유지. expectedRows(월
+  예상 분배금)는 빈 슬롯을 `yearMonth:''`로 두어 편집 비활성 — 폴백 미적용.
 - `extraDividendRows`(수동 추가 행)는 사용자가 월을 직접 지정 → 재배치 대상 아님
 - 적용 범위: expectedRows / actualRows / compactExpectedRows / compactActualRows
+  (빈 미래월 폴백은 actualRows / compactActualRows 에만 적용)
 
 ### DividendSummaryTable
 - `compact=false` (기본): 개별 계좌 뷰, 종목 행 표시, 셀 직접 편집 가능
@@ -162,7 +169,30 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **원칙:**
 - `localStorage`, `sessionStorage` 모두 API 캐시에 **사용 금지**
 - 예외: 사용자 무관한 공통 데이터 (공휴일 등) — `localStorage` 유지 허용
-- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v1`: 공휴일 데이터이므로 예외 허용
+- `src/hooks/useMarketCalendar.ts` — `marketCalendarCache_v4`: 공휴일 데이터이므로 예외 허용
+
+---
+
+## 증시 휴장일 (KRX/NYSE)
+
+`useMarketCalendar`는 nager.at를 직접 호출하지 않고 **`/api/market-calendar`** 단일
+서버리스 엔드포인트를 호출한다 (직전연도~+5년치, localStorage `marketCalendarCache_v4` 7일 캐시).
+직전연도 포함: 직전연도 12월 말 배당락(예: 12/29)의 지급일(T+2)이 직전연도 KRX
+연말 휴장(12/31)을 건너뛰어 올해 1월로 넘어가므로 분배금 지급월 재배치에 필요.
+
+- **`api/_marketCalendarData.ts`** — 큐레이션 스냅샷(2026~2031, 검증·보정 완료).
+  언더스코어 = 비라우트 데이터 모듈. `CURATED_KR/US`, `KRX_ADHOC/NYSE_ADHOC`.
+- **`api/market-calendar.ts`** — Edge 함수. 우선순위: 큐레이션 > 범위 밖 nager 라이브 >
+  최소 폴백. 항상 적용 규칙: KR 연말 휴장(12/31), NYSE Good Friday,
+  미휴장 항목 제외, ADHOC 병합. 엣지 캐시 `s-maxage=86400`.
+- **보정 규칙**: KR은 제헌절(7/17) 제외(2008년부터 증시 개장), 부처님오신날 토/일
+  대체공휴일 보강(2023 신설, nager 미반영). NYSE는 Columbus/Indigenous/Veterans/
+  Lincoln/Truman 제외, 토요일 새해 직전 금요일 미관측.
+- **유지보수**: 매년 11~12월 KRX 익년 휴장일정·NYSE 캘린더 공시 시
+  `_marketCalendarData.ts`에 +1년치 추가 + 거래소 임시휴장(선거일·국가 애도일)을
+  `*_ADHOC`에 반영 후 일반 커밋. 6년 버퍼라 갱신 누락돼도 즉시 장애 아님.
+- **검증**: `npm run verify:calendar` — 큐레이션 ↔ nager 라이브 교차검증,
+  드리프트 시 종료코드 1.
 
 ---
 
