@@ -62,13 +62,21 @@ function buildPaySlots(codeHistory, codeExHistory, hol) {
   const exPred = buildMonthExPrediction(codeExHistory);
   const CY = Number(CURRENT_YEAR);
   const slots = Array.from({ length: 12 }, () => []);
-  const consider = (exYear, mIdx) => {
+  const consider = (exYear, mIdx, prevDecToJan = false) => {
     const m = mIdx + 1;
     const mo = String(m).padStart(2, '0');
     const perShare = monthPred[m] || 0;
     if (!(perShare > 0)) return;
     const exYm = `${exYear}-${mo}`;
     const actualEx = codeExHistory?.[exYm];
+    // 직전연도 12월: 실배당락일이 확정되지 않으면 월배당 관례상 월말 배당락
+    // (→ 올해 1월 지급)으로 추정해 1월 슬롯에 편입한다. 확정 배당락일이 있으면
+    // 아래 일반 로직이 12월 지급분(연내)을 올해 표에서 정상 제외한다.
+    if (prevDecToJan && !actualEx) {
+      const exDateRaw = `${exYear}-12-31`;
+      slots[0].push({ exYm, exMonthIdx: mIdx, perShare, exDateRaw, payDateRaw: dividendPayDate(exDateRaw, hol), exPredicted: true });
+      return;
+    }
     let exDateRaw, exPredicted;
     if (actualEx) { exDateRaw = actualEx; exPredicted = false; }
     else if (exPred[m]) { exDateRaw = `${exYear}-${mo}-${exPred[m].slice(8, 10)}`; exPredicted = true; }
@@ -79,7 +87,7 @@ function buildPaySlots(codeHistory, codeExHistory, hol) {
     slots[Number(payDateRaw.slice(5, 7)) - 1].push({ exYm, exMonthIdx: mIdx, perShare, exDateRaw, payDateRaw, exPredicted });
   };
   for (let i = 0; i < 12; i++) consider(CY, i);
-  consider(CY - 1, 11); // 직전연도 12월 → 올해 1월 지급 가능
+  consider(CY - 1, 11, true); // 직전연도 12월 → 올해 1월 지급 (배당락일 미확정 시 월말 추정)
   return slots;
 }
 
