@@ -590,10 +590,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                     <td className={`p-0 border-r border-gray-600 align-middle ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                       {(() => {
                         const isMirae = item.code?.startsWith('MA:');
-                        const changeVal = isMirae ? (item.changeAmount ?? 0) : item.changeRate;
-                        const display = isMirae
-                          ? (changeVal > 0 ? `+${changeVal.toFixed(2)}` : changeVal.toFixed(2))
-                          : formatChangeRate(item.changeRate);
+                        const changeVal = item.changeRate ?? 0;
+                        const display = formatChangeRate(changeVal);
                         const url = isMirae
                           ? `https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=${item.code.replace('MA:', '')}`
                           : `https://www.funetf.co.kr/product/fund/view/${item.code}`;
