@@ -51,6 +51,36 @@ const fallbackExYm = (payIdx) => payIdx === 0
 // 폴백 배당락월에 대응하는 월별 주당분배금 예측 키(1~12)
 const fallbackPredMonth = (payIdx) => payIdx === 0 ? 12 : payIdx;
 
+// 종목 배당 주기/지급 시점 분류 배지 (코드명 옆 표시).
+// - 데이터상 연 1회 → '년말', 연 2~6회 → '분기'
+// - 월배당(연 7회 이상) → 대표 배당락일의 지급일(+2영업일) 일자로 월초/월중/월말
+//   (배당락 월말 → 지급 월초 → '월초', 배당락 10~15일 → 지급 월중 → '월중')
+function classifyCadence(hist, exH, hol) {
+  const keys = Object.keys(hist || {});
+  if (!keys.length) return null;
+  const byYear = {};
+  keys.forEach(k => {
+    const [y, m] = String(k).split('-');
+    if (!y || !m) return;
+    (byYear[y] || (byYear[y] = new Set())).add(m);
+  });
+  const counts = Object.values(byYear).map(s => s.size);
+  if (!counts.length) return null;
+  const freq = Math.max(...counts);
+  if (freq <= 1) return { label: '년말', cls: 'text-purple-300 border-purple-400/50' };
+  if (freq <= 6) return { label: '분기', cls: 'text-teal-300 border-teal-400/50' };
+  const payDays = Object.values(exH || {})
+    .map(ex => dividendPayDate(ex, hol))
+    .filter(pd => /^\d{4}-\d{2}-\d{2}$/.test(String(pd)))
+    .map(pd => Number(pd.slice(8, 10)))
+    .sort((a, b) => a - b);
+  if (!payDays.length) return { label: '월', cls: 'text-sky-300 border-sky-400/50' };
+  const med = payDays[Math.floor(payDays.length / 2)];
+  if (med <= 10) return { label: '월초', cls: 'text-sky-300 border-sky-400/50' };
+  if (med <= 20) return { label: '월중', cls: 'text-amber-300 border-amber-400/50' };
+  return { label: '월말', cls: 'text-rose-300 border-rose-400/50' };
+}
+
 // 한 종목의 배당락 이벤트들을 '올해 지급월' 슬롯으로 재배치한다.
 // 저장 키는 배당락월(exYm) 그대로 유지하고 표시 위치만 지급월 기준으로 옮긴다.
 // 반환: slots[payIdx 0-11] = [{ exYm, exMonthIdx, perShare, exDateRaw, payDateRaw, exPredicted }]
@@ -236,6 +266,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           name: item.name,
           qty: baseQty,
           isOverseas,
+          cadence: classifyCadence(divHistory[item.code], exHistory, hol),
           hasDivData: Object.keys(pred).length > 0,
           monthData,
           annual: monthData.reduce((s, d) => s + d.amount, 0),
@@ -344,6 +375,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           name: item.name,
           qty,
           isOverseas,
+          cadence: classifyCadence(divHistory[item.code], exHistoryAll[item.code] || {}, hol),
           hasDivData: Object.keys(pred).length > 0,
           monthData,
           annual: isOverseas
@@ -1238,7 +1270,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     return (
                       <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                         <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
-                          <div className="line-clamp-1">{row.name || row.code}</div>
+                          <div className="flex items-center gap-1">
+                            <div className="line-clamp-1">{row.name || row.code}</div>
+                            {row.cadence && <span className={`shrink-0 px-1 py-0.5 rounded border text-[8px] font-bold leading-none ${row.cadence.cls}`}>{row.cadence.label}</span>}
+                          </div>
                           {row.name && <div className="text-gray-500 text-[9px] font-normal">({row.code})</div>}
                         </td>
                         {row.isOverseas && expectedHasOverseas ? (
@@ -1434,7 +1469,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 {actualRows.map((row) => (
                   <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                     <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
-                      <div className="line-clamp-1">{row.name || row.code}</div>
+                      <div className="flex items-center gap-1">
+                        <div className="line-clamp-1">{row.name || row.code}</div>
+                        {row.cadence && <span className={`shrink-0 px-1 py-0.5 rounded border text-[8px] font-bold leading-none ${row.cadence.cls}`}>{row.cadence.label}</span>}
+                      </div>
                       {row.name && <div className="text-gray-500 text-[9px] font-normal">({row.code})</div>}
                     </td>
                     {row.monthData.map((d, i) => {
