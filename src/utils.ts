@@ -505,8 +505,8 @@ export const buildLookupCSV = (lookupRows, history, comparisonMode, currentTotal
 };
 
 export const buildDepositCSV = (rows) => {
-  let csv = '﻿일자,금액,합계,메모\n';
-  rows.forEach(h => { csv += `${h.date},${cleanNum(h.amount)},${cleanNum(h.cumulative)},${h.memo || ''}\n`; });
+  let csv = '﻿일자,금액,합계,메모,원금제외\n';
+  rows.forEach(h => { csv += `${h.date},${cleanNum(h.amount)},${cleanNum(h.cumulative)},${h.memo || ''},${h.noPrincipal ? 'Y' : ''}\n`; });
   return csv;
 };
 

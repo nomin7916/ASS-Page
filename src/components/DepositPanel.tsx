@@ -100,7 +100,7 @@ export default function DepositPanel({
     const n = [...history];
     n[h.originalIndex].amount = newAmount;
 
-    if (sign === -1 && setPrincipal) {
+    if (!h.noPrincipal && sign === -1 && setPrincipal) {
       const oldPrincipalDeducted = h.principalDeducted ?? oldAmount;
       const principalAfterRestore = (principal ?? 0) + oldPrincipalDeducted;
       const newPrincipalDeducted = calcProrataPrincipalDeducted(newAmount, principalAfterRestore, evalAmount ?? 0);
@@ -112,7 +112,7 @@ export default function DepositPanel({
     }
 
     setHistory(n);
-    if (setPrincipal && newAmount !== oldAmount) {
+    if (!h.noPrincipal && setPrincipal && newAmount !== oldAmount) {
       setPrincipal(p => p + sign * (newAmount - oldAmount));
     }
     setEditField(null);
@@ -124,12 +124,11 @@ export default function DepositPanel({
           <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden`}>
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 입금 내역</span>
-              {isOverseas && (
-                <div className="flex items-center gap-2">
-                  {depositAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(depositAvgFx).toLocaleString()}</span>}
-                  {marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                {isOverseas && depositAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(depositAvgFx).toLocaleString()}</span>}
+                {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+                <button onClick={handleDepositDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="입금 내역 CSV 다운로드"><Download size={12} /></button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed">
@@ -140,19 +139,30 @@ export default function DepositPanel({
                     {isOverseas && <th className="py-1.5 border-r border-gray-600 px-1 w-[46px] text-sky-400 font-normal text-center">환율</th>}
                     <th className={`py-1.5 border-r border-gray-600 px-1 ${isOverseas ? 'w-[70px]' : 'w-[75px]'} text-yellow-400 font-normal text-center`}>{isOverseas ? '합계($)' : '합계'}</th>
                     <th className="py-1.5 border-r border-gray-600 text-center px-1 font-normal whitespace-nowrap">메모</th>
-                    <th className={`py-1.5 ${isOverseas ? 'w-[32px]' : 'w-[36px]'} text-center font-normal`}>
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: isOverseas ? (marketIndicators.usdkrw || 1) : 1, memo: "" }, ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
-                        <button onClick={handleDepositDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="입금 내역 CSV 다운로드"><Download size={12} /></button>
-                      </div>
+                    <th className="py-1.5 w-[28px] text-center font-normal">
+                      <button onClick={() => setDepositHistory([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: isOverseas ? (marketIndicators.usdkrw || 1) : 1, memo: "", noPrincipal: false }, ...depositHistory])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {depositWithSumSorted.map((h) => (
                     <tr key={h.id} className="border-b border-gray-700 hover:bg-gray-800/50 transition-colors">
-                      <td className="py-1.5 border-r border-gray-600 align-middle relative cursor-pointer" onClick={e => e.currentTarget.querySelector('input[type="date"]')?.showPicker()}>
-                        <div className="flex items-center justify-center font-mono text-[10px] text-gray-300 gap-1 pointer-events-none">{formatVeryShortDate(h.date)}<Calendar size={10} className="text-gray-500" /></div>
+                      <td className="py-1.5 border-r border-gray-600 align-middle relative">
+                        <div className="flex items-center justify-center gap-1">
+                          <span
+                            className={`font-mono text-[10px] select-none ${h.noPrincipal ? 'text-amber-400 cursor-default' : 'text-gray-300 cursor-pointer hover:text-amber-300'}`}
+                            title={h.noPrincipal ? '원금 비영향 (해제하려면 행 삭제 후 재추가)' : '클릭 → 원금 비영향으로 설정 (배당·이자 등)'}
+                            onClick={() => {
+                              if (h.noPrincipal) return;
+                              const n = [...depositHistory];
+                              n[h.originalIndex].noPrincipal = true;
+                              setDepositHistory(n);
+                              const amt = cleanNum(h.amount);
+                              if (setPrincipal && amt !== 0) setPrincipal(p => p - amt);
+                            }}
+                          >{formatVeryShortDate(h.date)}</span>
+                          <Calendar size={10} className="text-gray-500 hover:text-gray-300 cursor-pointer shrink-0" onClick={e => { e.currentTarget.closest('td').querySelector('input[type="date"]')?.showPicker(); }} />
+                        </div>
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" value={h.date} onChange={e => { const n = [...depositHistory]; n[h.originalIndex].date = e.target.value; setDepositHistory(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
@@ -170,7 +180,7 @@ export default function DepositPanel({
                           <button onClick={() => openMemoModal(h, 'd1')} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
                         </div>
                       </td>
-                      <td className="py-1 text-center"><button onClick={() => { const amt = h.amount || 0; setDepositHistory(depositHistory.filter(x => x.id !== h.id)); if (setPrincipal && amt !== 0) setPrincipal(p => p - amt); }} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
+                      <td className="py-1 text-center"><button onClick={() => { const amt = h.amount || 0; setDepositHistory(depositHistory.filter(x => x.id !== h.id)); if (!h.noPrincipal && setPrincipal && amt !== 0) setPrincipal(p => p - amt); }} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -182,12 +192,11 @@ export default function DepositPanel({
           <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden`}>
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 출금 내역</span>
-              {isOverseas && (
-                <div className="flex items-center gap-2">
-                  {withdrawAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(withdrawAvgFx).toLocaleString()}</span>}
-                  {marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                {isOverseas && withdrawAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(withdrawAvgFx).toLocaleString()}</span>}
+                {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+                <button onClick={handleWithdrawDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="출금 내역 CSV 다운로드"><Download size={12} /></button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed">
@@ -198,19 +207,31 @@ export default function DepositPanel({
                     {isOverseas && <th className="py-1.5 border-r border-gray-600 px-1 w-[46px] text-sky-400 font-normal text-center">환율</th>}
                     <th className={`py-1.5 border-r border-gray-600 px-1 ${isOverseas ? 'w-[70px]' : 'w-[75px]'} text-yellow-400 font-normal text-center`}>{isOverseas ? '합계($)' : '합계'}</th>
                     <th className="py-1.5 border-r border-gray-600 text-center px-1 font-normal whitespace-nowrap">메모</th>
-                    <th className={`py-1.5 ${isOverseas ? 'w-[32px]' : 'w-[36px]'} text-center font-normal`}>
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setDepositHistory2([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: isOverseas ? (marketIndicators.usdkrw || 1) : 1, memo: "" }, ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
-                        <button onClick={handleWithdrawDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="출금 내역 CSV 다운로드"><Download size={12} /></button>
-                      </div>
+                    <th className="py-1.5 w-[28px] text-center font-normal">
+                      <button onClick={() => setDepositHistory2([{ id: generateId(), date: new Date().toISOString().split('T')[0], amount: 0, fxRate: isOverseas ? (marketIndicators.usdkrw || 1) : 1, memo: "", noPrincipal: false }, ...depositHistory2])} className="text-blue-400 hover:text-white transition-colors" title="행 추가"><Plus size={12} /></button>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {depositWithSum2Sorted.map((h) => (
                     <tr key={h.id} className="border-b border-gray-700 hover:bg-gray-800/50 transition-colors">
-                      <td className="py-1.5 border-r border-gray-600 align-middle relative cursor-pointer" onClick={e => e.currentTarget.querySelector('input[type="date"]')?.showPicker()}>
-                        <div className="flex items-center justify-center font-mono text-[10px] text-gray-300 gap-1 pointer-events-none">{formatVeryShortDate(h.date)}<Calendar size={10} className="text-gray-500" /></div>
+                      <td className="py-1.5 border-r border-gray-600 align-middle relative">
+                        <div className="flex items-center justify-center gap-1">
+                          <span
+                            className={`font-mono text-[10px] select-none ${h.noPrincipal ? 'text-amber-400 cursor-default' : 'text-gray-300 cursor-pointer hover:text-amber-300'}`}
+                            title={h.noPrincipal ? '원금 비영향 (해제하려면 행 삭제 후 재추가)' : '클릭 → 원금 비영향으로 설정 (배당·이자 등)'}
+                            onClick={() => {
+                              if (h.noPrincipal) return;
+                              const n = [...depositHistory2];
+                              const deducted = n[h.originalIndex].principalDeducted ?? cleanNum(n[h.originalIndex].amount);
+                              n[h.originalIndex].noPrincipal = true;
+                              n[h.originalIndex].principalDeducted = 0;
+                              setDepositHistory2(n);
+                              if (setPrincipal && deducted !== 0) setPrincipal(p => p + deducted);
+                            }}
+                          >{formatVeryShortDate(h.date)}</span>
+                          <Calendar size={10} className="text-gray-500 hover:text-gray-300 cursor-pointer shrink-0" onClick={e => { e.currentTarget.closest('td').querySelector('input[type="date"]')?.showPicker(); }} />
+                        </div>
                         <input type="date" className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" value={h.date} onChange={e => { const n = [...depositHistory2]; n[h.originalIndex].date = e.target.value; setDepositHistory2(n); }} />
                       </td>
                       <td className="p-0 border-r border-gray-600 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
@@ -228,7 +249,7 @@ export default function DepositPanel({
                           <button onClick={() => openMemoModal(h, 'd2')} className="shrink-0 pr-1 text-gray-600 hover:text-blue-400 transition-colors" title="메모 전체 보기"><Maximize2 size={10} /></button>
                         </div>
                       </td>
-                      <td className="py-1 text-center"><button onClick={() => { const deducted = h.principalDeducted ?? (h.amount || 0); setDepositHistory2(depositHistory2.filter(x => x.id !== h.id)); if (setPrincipal && deducted !== 0) setPrincipal(p => p + deducted); }} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
+                      <td className="py-1 text-center"><button onClick={() => { const deducted = h.principalDeducted ?? (h.amount || 0); setDepositHistory2(depositHistory2.filter(x => x.id !== h.id)); if (!h.noPrincipal && setPrincipal && deducted !== 0) setPrincipal(p => p + deducted); }} className="text-gray-500 hover:text-red-400 px-1"><Trash2 size={12} /></button></td>
                     </tr>
                   ))}
                 </tbody>

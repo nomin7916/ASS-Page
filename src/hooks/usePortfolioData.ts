@@ -178,7 +178,7 @@ export function usePortfolioData({
   const depositWithSum = useMemo(() => {
     let runSum = 0;
     return [...depositHistory].reverse().map((h, i) => {
-      runSum += cleanNum(h.amount);
+      if (!h.noPrincipal) runSum += cleanNum(h.amount);
       return { ...h, cumulative: runSum, originalIndex: depositHistory.length - 1 - i };
     }).reverse();
   }, [depositHistory]);
@@ -186,7 +186,7 @@ export function usePortfolioData({
   const depositWithSum2 = useMemo(() => {
     let runSum = 0;
     return [...depositHistory2].reverse().map((h, i) => {
-      runSum += cleanNum(h.amount);
+      if (!h.noPrincipal) runSum += cleanNum(h.amount);
       return { ...h, cumulative: runSum, originalIndex: depositHistory2.length - 1 - i };
     }).reverse();
   }, [depositHistory2]);

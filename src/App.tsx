@@ -837,8 +837,8 @@ export default function App() {
         retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
       }
       let principalAmount = 0;
-      for (const d of sortedDeposits) { if (d.date <= date) principalAmount += cleanNum(d.amount) * (isOverseasChart ? (cleanNum(d.fxRate) || 1) : 1); else break; }
-      for (const w of sortedWithdrawals) { if (w.date <= date) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)) * (isOverseasChart ? (cleanNum(w.fxRate) || 1) : 1); else break; }
+      for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount) * (isOverseasChart ? (cleanNum(d.fxRate) || 1) : 1); }
+      for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)) * (isOverseasChart ? (cleanNum(w.fxRate) || 1) : 1); }
       if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) {
         const fallbackFx = isOverseasChart ? (cleanNum(avgExchangeRate) || marketIndicators?.usdkrw || 1) : 1;
         principalAmount = cleanNum(principal) * fallbackFx;
