@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef } from 'react';
-import { Plus, Download, Trash2, Calendar, Maximize2, X, Check } from 'lucide-react';
+import { Plus, Download, Trash2, Calendar, Maximize2, X, Check, HelpCircle } from 'lucide-react';
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { sortArrow } from '../chartUtils';
 
@@ -39,6 +39,31 @@ export default function DepositPanel({
   const [memoModal, setMemoModal] = useState(null); // { id, originalIndex, type: 'd1'|'d2', val }
   const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
   const memoDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpPos, setHelpPos] = useState({ x: 0, y: 0 });
+  const helpDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
+
+  const openHelp = () => {
+    setHelpPos({ x: Math.max(8, window.innerWidth / 2 - 160), y: Math.max(8, window.innerHeight / 2 - 280) });
+    setHelpOpen(true);
+  };
+
+  const handleHelpDragStart = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    helpDrag.current = { active: true, offsetX: e.clientX - helpPos.x, offsetY: e.clientY - helpPos.y };
+    const onMove = (e) => {
+      if (!helpDrag.current.active) return;
+      setHelpPos({ x: e.clientX - helpDrag.current.offsetX, y: e.clientY - helpDrag.current.offsetY });
+    };
+    const onUp = () => {
+      helpDrag.current.active = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   const openMemoModal = (h, type) => {
     setMemoPos({ x: window.innerWidth / 2 - 128, y: window.innerHeight / 2 - 180 });
@@ -127,6 +152,7 @@ export default function DepositPanel({
               <div className="flex items-center gap-2">
                 {isOverseas && depositAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(depositAvgFx).toLocaleString()}</span>}
                 {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+                <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={12} /></button>
                 <button onClick={handleDepositDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="입금 내역 CSV 다운로드"><Download size={12} /></button>
               </div>
             </div>
@@ -150,7 +176,7 @@ export default function DepositPanel({
                       <td className="py-1.5 border-r border-gray-600 align-middle relative">
                         <div className="flex items-center justify-center gap-1">
                           <span
-                            className={`font-mono text-[10px] select-none ${h.noPrincipal ? 'text-amber-400 cursor-default' : 'text-gray-300 cursor-pointer hover:text-amber-300'}`}
+                            className={`font-mono text-[10px] select-none ${h.noPrincipal ? 'text-sky-300 cursor-default' : 'text-gray-300 cursor-pointer hover:text-sky-300'}`}
                             title={h.noPrincipal ? '원금 비영향 (해제하려면 행 삭제 후 재추가)' : '클릭 → 원금 비영향으로 설정 (배당·이자 등)'}
                             onClick={() => {
                               if (h.noPrincipal) return;
@@ -195,6 +221,7 @@ export default function DepositPanel({
               <div className="flex items-center gap-2">
                 {isOverseas && withdrawAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(withdrawAvgFx).toLocaleString()}</span>}
                 {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+                <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={12} /></button>
                 <button onClick={handleWithdrawDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="출금 내역 CSV 다운로드"><Download size={12} /></button>
               </div>
             </div>
@@ -218,7 +245,7 @@ export default function DepositPanel({
                       <td className="py-1.5 border-r border-gray-600 align-middle relative">
                         <div className="flex items-center justify-center gap-1">
                           <span
-                            className={`font-mono text-[10px] select-none ${h.noPrincipal ? 'text-amber-400 cursor-default' : 'text-gray-300 cursor-pointer hover:text-amber-300'}`}
+                            className={`font-mono text-[10px] select-none ${h.noPrincipal ? 'text-sky-300 cursor-default' : 'text-gray-300 cursor-pointer hover:text-sky-300'}`}
                             title={h.noPrincipal ? '원금 비영향 (해제하려면 행 삭제 후 재추가)' : '클릭 → 원금 비영향으로 설정 (배당·이자 등)'}
                             onClick={() => {
                               if (h.noPrincipal) return;
@@ -256,6 +283,84 @@ export default function DepositPanel({
               </table>
             </div>
           </div>
+      {helpOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setHelpOpen(false)}>
+          <div className="absolute w-[320px] shadow-2xl overflow-hidden" style={{ left: helpPos.x, top: helpPos.y }} onClick={e => e.stopPropagation()}>
+            <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleHelpDragStart}>
+              <button onClick={() => setHelpOpen(false)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={7} className="text-white" /></button>
+              <span className="text-[11px] font-bold tracking-[0.18em] bg-gradient-to-r from-sky-400 via-blue-400 to-purple-400 bg-clip-text text-transparent select-none">입출금 내역 사용법</span>
+              <div className="w-3" />
+            </div>
+            <div className="overflow-y-auto max-h-[75vh]" style={{
+              backgroundColor: '#000',
+              backgroundImage: 'repeating-linear-gradient(transparent 0px, transparent 23px, rgba(99,130,255,0.25) 23px, rgba(99,130,255,0.25) 24px)',
+              backgroundSize: '100% 24px',
+              backgroundPosition: '0 8px',
+              lineHeight: '24px',
+              padding: '8px 12px',
+            }}>
+              {[
+                { icon: '＋', color: 'text-blue-400', title: '행 추가', lines: [
+                  '헤더의 [+] 버튼을 클릭합니다.',
+                  '오늘 날짜의 빈 행이 맨 위에 생깁니다.',
+                  '금액·날짜·메모를 순서대로 입력하세요.',
+                ] },
+                { icon: '₩', color: 'text-blue-300', title: '금액 입력', lines: [
+                  '금액 셀을 클릭해 숫자를 입력합니다.',
+                  'Tab·Enter·다른 셀 클릭 시 자동 저장.',
+                  '입금: 투자원금이 증가합니다.',
+                  '출금: 투자원금이 감소합니다.',
+                ] },
+                { icon: '📅', color: 'text-gray-400', title: '날짜 변경', lines: [
+                  '날짜 셀의 달력(📅) 아이콘을 클릭합니다.',
+                  '달력에서 원하는 날짜를 선택하세요.',
+                ] },
+                { icon: '◐', color: 'text-sky-300', title: '원금 비영향 설정', lines: [
+                  '배당금·이자 등 원금과 무관한 내역 기록 시.',
+                  '날짜 텍스트(회색)를 클릭하면 파란색으로 변경됩니다.',
+                  '이후 금액 입력 시 원금에 영향을 주지 않습니다.',
+                  '합계(누적) 집계에서도 제외됩니다.',
+                  '⚠ 해제: 행 삭제 후 새로 추가하세요.',
+                ] },
+                { icon: '✏', color: 'text-gray-300', title: '메모 입력', lines: [
+                  '메모 셀을 클릭해 직접 입력합니다.',
+                  '[↗] 아이콘 → 전체화면 메모장으로 입력.',
+                  '전체 메모장: Ctrl+Enter 저장 / Esc 취소.',
+                ] },
+                { icon: '↕', color: 'text-gray-400', title: '정렬', lines: [
+                  '헤더의 일자·금액 텍스트를 클릭합니다.',
+                  '▲ 오름차순 ↔ ▼ 내림차순으로 전환됩니다.',
+                ] },
+                { icon: '↓', color: 'text-gray-400', title: 'CSV 내보내기', lines: [
+                  '헤더 우측 다운로드(↓) 버튼을 클릭합니다.',
+                  '일자·금액·합계·메모·원금제외 컬럼 포함.',
+                ] },
+                { icon: '🗑', color: 'text-gray-500', title: '행 삭제', lines: [
+                  '행 맨 끝 휴지통 버튼을 클릭합니다.',
+                  '일반 행 삭제 시 원금도 자동 복구됩니다.',
+                  '원금 비영향 행은 원금 변동 없이 삭제됩니다.',
+                ] },
+              ].map(({ icon, color, title, lines }) => (
+                <div key={title} className="mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`${color} font-bold text-[11px] w-4 text-center shrink-0`}>{icon}</span>
+                    <span className="text-white font-bold text-[11px]">{title}</span>
+                  </div>
+                  {lines.map((line, i) => (
+                    <div key={i} className="flex items-start gap-1.5 pl-1">
+                      <span className="text-gray-600 text-[10px] shrink-0 mt-0.5">·</span>
+                      <span className={`text-[10px] leading-6 ${line.startsWith('⚠') ? 'text-amber-400' : 'text-gray-400'}`}>{line}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <div className="mt-2 pt-1 border-t border-gray-800">
+                <p className="text-[9px] text-gray-600 leading-5">입금 내역과 출금 내역의 조작 방법은 동일합니다.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {memoModal && (
         <div className="fixed inset-0 z-50 bg-black/40">
           <div className="absolute w-64 shadow-2xl overflow-hidden" style={{ left: memoPos.x, top: memoPos.y }} onClick={e => e.stopPropagation()}>
