@@ -90,6 +90,8 @@ export default function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [notebookLinks, setNotebookLinks] = useState<{title: string, url: string, createdAt: number}[]>([]);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
+  const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
+  const adminTargetNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
   const [seenAdminNotifIds, setSeenAdminNotifIds] = useState<string[]>([]);
   const seenAdminNotifIdsRef = useRef<string[]>([]);
@@ -129,6 +131,9 @@ export default function App() {
       setAdminViewUserCtx(null);
       setIsInitialLoading(true);
       setDriveLoadReady(true);
+      // 관리자가 사용자 계정 보기 모드 진입 — 목표 비중 PIN 우회 및 변경 감시용 플래그
+      setAdminViewingAs(email);
+      adminViewingAsRef.current = email;
       return;
     }
     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
@@ -224,6 +229,15 @@ export default function App() {
     tryInit();
   };
 
+
+  // 사용자 전환 / 로그아웃 시 목표 비중 편집 권한 초기화 (세션 1회 PIN 정책 유지)
+  useEffect(() => {
+    setTargetEditAuthorized(false);
+    if (adminTargetNotifTimerRef.current) {
+      clearTimeout(adminTargetNotifTimerRef.current);
+      adminTargetNotifTimerRef.current = null;
+    }
+  }, [authUser?.email]);
 
   const handleRefreshUserSessions = async (emails: string[]) => {
     const token = driveTokenRef.current;
@@ -1109,6 +1123,28 @@ export default function App() {
       headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(links) }),
     }).catch(() => {});
+  };
+
+  // 관리자가 사용자의 목표 비중을 변경했을 때 호출 — 디바운스 후 사용자 다음 로그인용 알림 1건 발송
+  const notifyUserOfAdminTargetChange = () => {
+    const targetEmail = adminViewingAsRef.current;
+    if (!targetEmail) return;
+    if (adminTargetNotifTimerRef.current) clearTimeout(adminTargetNotifTimerRef.current);
+    adminTargetNotifTimerRef.current = setTimeout(() => {
+      const finalEmail = adminViewingAsRef.current;
+      if (!finalEmail) return;
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'sendNotification',
+          targetEmail: finalEmail,
+          message: '목표 비중이 수정되었습니다.',
+          type: 'warning',
+        }),
+      }).catch(() => {});
+      adminTargetNotifTimerRef.current = null;
+    }, 5000);
   };
 
   const handleDriveSave = () => {
@@ -2101,6 +2137,11 @@ export default function App() {
             showRetirementStats={activePortfolioAccountType === 'dc-irp'}
             hiddenColumns={hiddenColumnsRebalancing}
             onToggleColumn={toggleHiddenColumnRebalancing}
+            authUser={authUser}
+            isAdmin={!!adminViewingAs || (authUser && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase())}
+            targetEditAuthorized={targetEditAuthorized}
+            setTargetEditAuthorized={setTargetEditAuthorized}
+            onAdminTargetChange={adminViewingAs ? notifyUserOfAdminTargetChange : null}
           />
         )}
           </div>

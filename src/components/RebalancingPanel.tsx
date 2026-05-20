@@ -1,9 +1,11 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { Lock } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
+import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
 const getItemUrl = (item) => {
@@ -61,9 +63,15 @@ export default function RebalancingPanel({
   showRetirementStats = false,
   hiddenColumns = [],
   onToggleColumn = () => {},
+  authUser = null,
+  isAdmin = false,
+  targetEditAuthorized = false,
+  setTargetEditAuthorized = () => {},
+  onAdminTargetChange = null,
 }) {
   const [editingRatio, setEditingRatio] = useState({});
   const [dateEditMode, setDateEditMode] = useState(false);
+  const [pinModal, setPinModal] = useState(null); // { onAuthorized: () => void } | null
   const [hoveredCurDSSlice, setHoveredCurDSSlice] = useState(null);
   const [hoveredProjDSSlice, setHoveredProjDSSlice] = useState(null);
   const datePickerRef = useRef(null);
@@ -82,6 +90,10 @@ export default function RebalancingPanel({
   };
 
   const H = (k) => hiddenColumns.includes(k);
+
+  // 고정 모드 + 미인증 + 비관리자 → PIN 잠금
+  const isFixedLocked = settings.targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
+  const reportAdminChange = () => { if (onAdminTargetChange) onAdminTargetChange(); };
 
   const CAT_W = 80;
   const CHRATE_W = 65;
@@ -448,7 +460,7 @@ export default function RebalancingPanel({
                                 type="date"
                                 className="absolute opacity-0 w-0 h-0 pointer-events-none"
                                 value={settings.targetDate || ''}
-                                onChange={e => updateSettingsForType({ ...settings, targetDate: e.target.value })}
+                                onChange={e => { updateSettingsForType({ ...settings, targetDate: e.target.value }); reportAdminChange(); }}
                                 tabIndex={-1}
                               />
                               {dateEditMode ? (
@@ -457,7 +469,7 @@ export default function RebalancingPanel({
                                   autoFocus
                                   className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-green-500 rounded px-1 py-0.5 w-full text-center"
                                   defaultValue={formatDisplayDate(settings.targetDate)}
-                                  onBlur={e => { const parsed = parseDisplayDate(e.target.value); if (parsed) updateSettingsForType({ ...settings, targetDate: parsed }); setDateEditMode(false); }}
+                                  onBlur={e => { const parsed = parseDisplayDate(e.target.value); if (parsed) { updateSettingsForType({ ...settings, targetDate: parsed }); reportAdminChange(); } setDateEditMode(false); }}
                                   onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); e.stopPropagation(); }}
                                   onClick={e => e.stopPropagation()}
                                 />
@@ -485,14 +497,15 @@ export default function RebalancingPanel({
                                   title="내림차순 정렬"
                                 >▼</button>
                               </div>
-                              <div className="relative inline-flex items-center">
+                              <div className="relative inline-flex items-center gap-1">
+                                {isFixedLocked && <Lock size={10} className="text-amber-400" />}
                                 <span className={`cursor-pointer font-bold ${targetMode === 'variable' ? 'text-amber-300' : 'text-green-400'} hover:opacity-80`} title="클릭: 고정/수시변경 선택">
                                   목표
                                 </span>
                                 <select
                                   className="absolute inset-0 w-full h-full bg-transparent text-transparent cursor-pointer outline-none appearance-none"
                                   value={targetMode}
-                                  onChange={e => updateSettingsForType({ ...settings, targetMode: e.target.value })}
+                                  onChange={e => { updateSettingsForType({ ...settings, targetMode: e.target.value }); reportAdminChange(); }}
                                   title="고정 / 수시변경"
                                   onClick={e => e.stopPropagation()}
                                 >
@@ -505,21 +518,29 @@ export default function RebalancingPanel({
                                 onClick={e => {
                                   e.stopPropagation();
                                   if (totals.totalEval <= 0) return;
-                                  const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-                                  const decimals = rebalFx > 1 ? 2 : 1;
-                                  const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
-                                  setPortfolio(prev => prev.map(p => {
-                                    if (p.type !== 'stock' && p.type !== 'fund') return p;
-                                    const qty = cleanNum(p.quantity);
-                                    const price = cleanNum(p.currentPrice);
-                                    const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
-                                    const curRatio = parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(decimals));
-                                    return { ...p, [slotField]: curRatio };
-                                  }));
+                                  const doSeed = () => {
+                                    const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
+                                    const decimals = rebalFx > 1 ? 2 : 1;
+                                    const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
+                                    setPortfolio(prev => prev.map(p => {
+                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                      const qty = cleanNum(p.quantity);
+                                      const price = cleanNum(p.currentPrice);
+                                      const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
+                                      const curRatio = parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(decimals));
+                                      return { ...p, [slotField]: curRatio };
+                                    }));
+                                    reportAdminChange();
+                                  };
+                                  if (targetMode !== 'variable' && !targetEditAuthorized && !isAdmin) {
+                                    setPinModal({ onAuthorized: doSeed });
+                                  } else {
+                                    doSeed();
+                                  }
                                 }}
-                                className="text-[11px] font-bold leading-none transition-colors select-none text-gray-500 hover:text-green-400"
-                                title={`현재 비중을 ${targetMode === 'variable' ? '수시변경' : '고정'} 목표값에 복사`}
-                              >(%)</button>
+                                className={`text-[11px] font-bold leading-none transition-colors select-none ${isFixedLocked ? 'text-gray-600 hover:text-amber-400' : 'text-gray-500 hover:text-green-400'}`}
+                                title={isFixedLocked ? '잠금 — 클릭하여 비밀번호 입력' : `현재 비중을 ${targetMode === 'variable' ? '수시변경' : '고정'} 목표값에 복사`}
+                              >{isFixedLocked ? '🔒(%)' : '(%)'}</button>
                             </div>
                           </div>
                         </th>
@@ -669,17 +690,43 @@ export default function RebalancingPanel({
                           const textColor = targetMode === 'variable'
                             ? (isDifferent ? 'text-red-400' : 'text-amber-300')
                             : (isDifferent ? 'text-red-400' : 'text-green-400');
+                          const cellLocked = targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
                           return (
-                            <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                              <input type="text" data-col="targetRatio" className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400 ${textColor}`}
+                            <td className={`p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500 ${cellLocked ? 'cursor-pointer' : ''}`}
+                              onClick={cellLocked ? (e => {
+                                e.preventDefault();
+                                const tr = e.currentTarget.closest('tr');
+                                const focusBack = () => {
+                                  const ip = tr?.querySelector(`input[data-col="targetRatio"][data-item-id="${item.id}"]`);
+                                  if (ip) { ip.focus(); ip.select?.(); }
+                                };
+                                setPinModal({ onAuthorized: () => setTimeout(focusBack, 80) });
+                              }) : undefined}
+                            >
+                              <input type="text" data-col="targetRatio" data-item-id={item.id} className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 caret-blue-400 ${textColor} ${cellLocked ? 'cursor-pointer focus:bg-amber-900/10' : 'focus:bg-blue-900/20'}`}
                                 value={displayVal}
-                                onChange={e => setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                readOnly={cellLocked}
+                                onChange={e => { if (!cellLocked) setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); }}
                                 onBlur={e => {
+                                  if (cellLocked) return;
                                   handleUpdate(item.id, slotField, e.target.value);
                                   setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
+                                  reportAdminChange();
                                 }}
-                                onFocus={e => { setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); e.target.select(); }}
-                                onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); handleTableKeyDown(e, 'targetRatio'); }}
+                                onFocus={e => {
+                                  if (cellLocked) {
+                                    e.target.blur();
+                                    return;
+                                  }
+                                  setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value }));
+                                  e.target.select();
+                                }}
+                                onKeyDown={e => {
+                                  if (cellLocked) { e.preventDefault(); return; }
+                                  if (e.key === 'Enter') e.target.blur();
+                                  handleTableKeyDown(e, 'targetRatio');
+                                }}
+                                title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : undefined}
                               />
                             </td>
                           );
@@ -940,6 +987,17 @@ export default function RebalancingPanel({
             </div>
           </div>
         </div>}
+        <RebalanceTargetPinModal
+          open={!!pinModal}
+          authUser={authUser}
+          onAuthorized={() => {
+            setTargetEditAuthorized(true);
+            const cb = pinModal?.onAuthorized;
+            setPinModal(null);
+            if (cb) cb();
+          }}
+          onClose={() => setPinModal(null)}
+        />
     </>
   );
 }
