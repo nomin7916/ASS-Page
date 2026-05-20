@@ -192,7 +192,7 @@ export default function RebalancingPanel({
               <div className="flex items-center justify-between bg-gray-800/80 px-4 py-2 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType === 'overseas') { const fx = marketIndicators.usdkrw || 1; return <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(dep)}</span><span className="text-sm text-green-600">{formatCurrency(dep * fx)}</span></div>; } return formatCurrency(dep); })()}</span></div>
               <div className="flex flex-col gap-1">
                 <div className="flex items-stretch bg-gray-900 border border-gray-600 rounded-lg overflow-hidden h-12 shadow-sm">
-                  <select className="bg-gray-800 text-gray-200 text-sm font-bold px-3 border-r border-gray-600 outline-none cursor-pointer" value={settings.mode} onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}><option value="rebalance">리밸런싱 (비중 기반)</option><option value="accumulate">적립 (신규 자금 분할)</option></select>
+                  <select className="bg-gray-800 text-gray-200 text-sm font-bold px-3 border-r border-gray-600 outline-none cursor-pointer" value={settings.mode} onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}><option value="rebalance">리밸런싱 (비중 기반)</option><option value="accumulate">적립 (신규 자금 분할)</option><option value="deposit-only">예수금만 분배 (적립금 제외)</option></select>
                   {activePortfolioAccountType === 'overseas' ? (
                     <div className="flex-1 flex items-center justify-end px-4 gap-1">
                       <span className="text-sky-400 font-bold text-lg">$</span>
@@ -381,10 +381,11 @@ export default function RebalancingPanel({
                 {(() => {
                   const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
                   const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
+                  const isCapped = settings.mode === 'accumulate' || settings.mode === 'deposit-only';
                   const rawRemaining = settings.mode === 'accumulate'
                     ? depositAmount + cleanNum(settings.amount) - baseTotalCost
                     : depositAmount - baseTotalCost;
-                  const baseRemaining = settings.mode === 'accumulate' ? Math.max(0, rawRemaining) : rawRemaining;
+                  const baseRemaining = isCapped ? Math.max(0, rawRemaining) : rawRemaining;
                   const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
                   const effectiveRemaining = baseRemaining - totalExtraAllocated;
                   const isOverseas = activePortfolioAccountType === 'overseas';
@@ -440,7 +441,7 @@ export default function RebalancingPanel({
                     const itemPrice = cleanNum(item.currentPrice);
                     const adjustedCost = totalAction * itemPrice;
                     const maxAdd = itemPrice > 0
-                      ? (settings.mode === 'accumulate' ? Math.max(0, Math.floor(effectiveRemaining / itemPrice)) : Math.floor(effectiveRemaining / itemPrice))
+                      ? (isCapped ? Math.max(0, Math.floor(effectiveRemaining / itemPrice)) : Math.floor(effectiveRemaining / itemPrice))
                       : 0;
                     return (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">

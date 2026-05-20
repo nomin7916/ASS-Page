@@ -69,8 +69,9 @@ export function usePortfolioData({
     const rebalFxRate = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
     const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
     const nativeTotalEval = rebalFxRate > 1 ? totals.totalEval / rebalFxRate : totals.totalEval;
-    const overallExp = nativeTotalEval + cleanNum(settings.amount);
-    const accumulateBase = cleanNum(settings.amount) + depositAmount;
+    const isDepositOnly = settings.mode === 'deposit-only';
+    const overallExp = nativeTotalEval + (isDepositOnly ? 0 : cleanNum(settings.amount));
+    const allocBase = isDepositOnly ? depositAmount : cleanNum(settings.amount) + depositAmount;
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
@@ -81,7 +82,7 @@ export function usePortfolioData({
         ? (nativeTotalEval > 0 ? curEval / nativeTotalEval * 100 : 0)
         : (cleanNum(item.targetRatio) || 0);
       const tRatio = effectiveTargetRatio / 100;
-      let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((accumulateBase * tRatio) / price)) : 0;
+      let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((allocBase * tRatio) / price)) : 0;
       const extraQty = rebalExtraQty[item.id] || 0;
       const expEval = (qty + action + extraQty) * price;
       const cost = action * price;
@@ -132,16 +133,18 @@ export function usePortfolioData({
       catMap[cat].ratio += item.expRatio;
     });
     const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+    const isDepositOnly = settings.mode === 'deposit-only';
     const totalCost = rebalanceData.reduce((s, item) => {
       const eqty = rebalExtraQty[item.id] || 0;
       return s + (item.cost || 0) + eqty * cleanNum(item.currentPrice);
     }, 0);
-    const remainingDeposit = depositAmount + cleanNum(settings.amount) - totalCost;
+    const baseDeposit = isDepositOnly ? depositAmount : depositAmount + cleanNum(settings.amount);
+    const remainingDeposit = baseDeposit - totalCost;
     if (remainingDeposit > 0) {
       const nativeTotalEval = activePortfolioAccountType === 'overseas'
         ? totals.totalEval / (marketIndicators.usdkrw || 1)
         : totals.totalEval;
-      const overallExp = nativeTotalEval + cleanNum(settings.amount);
+      const overallExp = nativeTotalEval + (isDepositOnly ? 0 : cleanNum(settings.amount));
       catMap['예수금'] = {
         value: remainingDeposit,
         ratio: overallExp > 0 ? (remainingDeposit / overallExp * 100) : 0,
