@@ -226,7 +226,7 @@ export default function RebalancingPanel({
                 </>
               )}
             </div>
-            <div className="flex items-stretch gap-3 w-full xl:w-[560px] shrink-0">
+            <div className="w-full xl:w-[560px] shrink-0">
               {(() => {
                 const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
                 const fmtAmount = (n) => isOverseasHeader ? fmtUSD(n) : formatCurrency(n);
@@ -246,125 +246,133 @@ export default function RebalancingPanel({
                   { value: 'rebalance', label: '리밸런싱', color: '#22c55e' },
                 ];
                 const currentOpt = modeOptions.find(o => o.value === settings.mode) || modeOptions[0];
+                const investableSourceLabel = isRebalance ? leftLabel : useDepositLabel;
+                const investableSourceVal = isRebalance ? leftVal : headerUseDeposit;
+                const inputBlockWidth = 'w-[184px]';
                 return (
-                  <>
-                    <div className="flex-1 bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner flex flex-col gap-1.5 text-[12px] min-w-0">
-                      {isRebalance ? (
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-gray-400 shrink-0">{leftLabel}</span>
-                          <span className="text-gray-200 font-bold text-right truncate">{fmtAmount(leftVal)}</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-gray-400">{leftLabel}</span>
-                            <span className="text-gray-200 font-bold">{fmtAmount(leftVal)}</span>
-                          </div>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-gray-400 shrink-0">{useDepositLabel}</span>
-                            <div className="flex items-center gap-1 min-w-0">
-                              {isOverseasHeader && <span className="text-sky-400 font-bold shrink-0">$</span>}
-                              <input
-                                type="text"
-                                className={`bg-gray-900/60 border rounded px-2 py-0.5 text-right font-bold outline-none w-full max-w-[140px] text-[12px] ${isUseDepositExplicit ? 'text-cyan-300 border-gray-700 focus:border-cyan-500' : 'text-gray-500 border-gray-700 focus:border-cyan-500'}`}
-                                value={isUseDepositExplicit
-                                  ? (isOverseasHeader ? settings.useDepositAmount : formatNumber(settings.useDepositAmount))
-                                  : ''}
-                                placeholder={isOverseasHeader ? `전액 ${fmtUSD(headerDepositAmount)}` : `전액 ${formatNumber(headerDepositAmount)}`}
-                                onChange={e => {
-                                  const raw = e.target.value;
-                                  if (raw === '') {
-                                    updateSettingsForType({ ...settings, useDepositAmount: null });
-                                  } else {
-                                    const v = Math.min(Math.max(0, cleanNum(raw)), headerDepositAmount);
-                                    updateSettingsForType({ ...settings, useDepositAmount: v });
-                                  }
-                                }}
-                                onFocus={e => e.target.select()}
-                                onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
-                                disabled={headerDepositAmount <= 0}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => updateSettingsForType({ ...settings, useDepositAmount: headerDepositAmount })}
-                                disabled={headerDepositAmount <= 0}
-                                className="px-2 py-0.5 text-[10px] font-bold rounded bg-cyan-900/40 hover:bg-cyan-700/60 text-cyan-300 hover:text-cyan-100 border border-cyan-700/40 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-                                title="예수금 전액을 사용할 예수금에 채우기"
-                              >
-                                전액
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                  <div className="bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner flex flex-col gap-1.5 text-[12px] min-w-0">
+                    <div className="flex items-center justify-between gap-3 pb-1.5 border-b border-gray-700/60">
+                      <span className="text-gray-300 font-bold shrink-0">투자선택</span>
+                      <div className="relative inline-flex items-center gap-1.5 px-2 py-0.5 bg-gray-900/60 border border-gray-600 rounded hover:border-gray-400 transition-colors cursor-pointer">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: currentOpt.color }} />
+                        <span className="text-gray-200 text-[12px] font-bold">{currentOpt.label}</span>
+                        <span className="text-gray-500 text-[9px] leading-none">▼</span>
+                        <select
+                          className="absolute inset-0 w-full h-full bg-transparent text-transparent cursor-pointer outline-none appearance-none"
+                          value={settings.mode}
+                          onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}
+                          title="투자 선택"
+                        >
+                          {modeOptions.map(o => (
+                            <option key={o.value} value={o.value} className="bg-gray-800 text-gray-200">{o.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {isRebalance ? (
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-gray-400 shrink-0">적립금</span>
-                        <div className="flex items-center gap-1 min-w-0">
-                          {isOverseasHeader && <span className="text-sky-400 font-bold shrink-0">$</span>}
-                          <input
-                            type="text"
-                            className="bg-gray-900/60 border border-gray-700 rounded px-2 py-0.5 text-right text-orange-300 font-bold outline-none focus:border-orange-500 w-full max-w-[180px] text-[12px]"
-                            value={isOverseasHeader ? (headerAmount > 0 ? headerAmount : '') : formatNumber(settings.amount)}
-                            placeholder="0"
-                            onChange={e => updateSettingsForType({ ...settings, amount: cleanNum(e.target.value) })}
-                            onFocus={e => e.target.select()}
-                            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
-                          />
+                        <span className="text-gray-400 shrink-0">{leftLabel}</span>
+                        <span className="text-gray-200 font-bold text-right truncate">{fmtAmount(leftVal)}</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-gray-400">{leftLabel}</span>
+                          <span className="text-gray-200 font-bold">{fmtAmount(leftVal)}</span>
+                        </div>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-gray-400 shrink-0">{useDepositLabel}</span>
+                          <div className={`flex items-center gap-1 ${inputBlockWidth}`}>
+                            {isOverseasHeader && <span className="text-sky-400 font-bold shrink-0">$</span>}
+                            <input
+                              type="text"
+                              className={`bg-gray-900/60 border rounded px-2 py-0.5 text-right font-bold outline-none flex-1 min-w-0 text-[12px] ${isUseDepositExplicit ? 'text-cyan-300 border-gray-700 focus:border-cyan-500' : 'text-gray-500 border-gray-700 focus:border-cyan-500'}`}
+                              value={isUseDepositExplicit
+                                ? (isOverseasHeader ? settings.useDepositAmount : formatNumber(settings.useDepositAmount))
+                                : ''}
+                              placeholder={isOverseasHeader ? `전액 ${fmtUSD(headerDepositAmount)}` : `전액 ${formatNumber(headerDepositAmount)}`}
+                              onChange={e => {
+                                const raw = e.target.value;
+                                if (raw === '') {
+                                  updateSettingsForType({ ...settings, useDepositAmount: null });
+                                } else {
+                                  const v = Math.min(Math.max(0, cleanNum(raw)), headerDepositAmount);
+                                  updateSettingsForType({ ...settings, useDepositAmount: v });
+                                }
+                              }}
+                              onFocus={e => e.target.select()}
+                              onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                              disabled={headerDepositAmount <= 0}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateSettingsForType({ ...settings, useDepositAmount: headerDepositAmount })}
+                              disabled={headerDepositAmount <= 0}
+                              className="px-2 py-0.5 text-[10px] font-bold rounded bg-cyan-900/40 hover:bg-cyan-700/60 text-cyan-300 hover:text-cyan-100 border border-cyan-700/40 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="예수금 전액을 사용할 예수금에 채우기"
+                            >
+                              전액
+                            </button>
+                          </div>
                         </div>
                       </div>
-                      {isOverseasHeader && headerAmount > 0 && (
-                        <div className="text-right text-[10px] text-gray-500 -mt-1">≈ {formatCurrency(headerAmount * headerFx)}</div>
-                      )}
-                      <div className="flex items-center justify-between gap-3 border-t border-gray-700/60 pt-1.5">
+                    )}
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-gray-400 shrink-0">적립금</span>
+                      <div className={`flex items-center gap-1 ${inputBlockWidth}`}>
+                        {isOverseasHeader && <span className="text-sky-400 font-bold shrink-0">$</span>}
+                        <input
+                          type="text"
+                          className="bg-gray-900/60 border border-gray-700 rounded px-2 py-0.5 text-right text-orange-300 font-bold outline-none focus:border-orange-500 flex-1 min-w-0 text-[12px]"
+                          value={isOverseasHeader ? (headerAmount > 0 ? headerAmount : '') : formatNumber(settings.amount)}
+                          placeholder="0"
+                          onChange={e => updateSettingsForType({ ...settings, amount: cleanNum(e.target.value) })}
+                          onFocus={e => e.target.select()}
+                          onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                        />
+                      </div>
+                    </div>
+                    {isOverseasHeader && headerAmount > 0 && (
+                      <div className="text-right text-[10px] text-gray-500 -mt-1">≈ {formatCurrency(headerAmount * headerFx)}</div>
+                    )}
+                    <div className="flex flex-col border-t border-gray-700/60 pt-1.5">
+                      <div className="flex items-center justify-between gap-3">
                         <span className="text-gray-300 font-bold shrink-0">투자가능금</span>
                         <span className="text-green-400 font-bold text-right truncate text-[13px]">
-                          {isRebalance ? (
-                            headerAmount > 0
-                              ? <>{leftLabel}({fmtPlain(leftVal)}) + 적립금({fmtPlain(headerAmount)}) = {fmtAmount(investable)}</>
-                              : <>{leftLabel} = {fmtAmount(investable)}</>
-                          ) : (
-                            headerAmount > 0
-                              ? <>{useDepositLabel}({fmtPlain(headerUseDeposit)}) + 적립금({fmtPlain(headerAmount)}) = {fmtAmount(investable)}</>
-                              : <>{useDepositLabel} = {fmtAmount(investable)}</>
-                          )}
+                          {headerAmount > 0
+                            ? <>{fmtPlain(investableSourceVal)} + {fmtPlain(headerAmount)} = {fmtAmount(investable)}</>
+                            : fmtAmount(investable)}
                         </span>
                       </div>
+                      <div className="text-right text-[10px] text-gray-500 leading-tight">
+                        ({headerAmount > 0
+                          ? `${investableSourceLabel} + 적립금 = 투자가능금`
+                          : `${investableSourceLabel} = 투자가능금`})
+                      </div>
+                    </div>
+                    <div className="flex flex-col">
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-gray-400 shrink-0">잔액</span>
                         <span className={`font-bold text-right truncate ${balance > 0 ? 'text-sky-300' : balance < 0 ? 'text-red-400' : 'text-gray-500'}`}>
-                          투자가능금({fmtPlain(investable)}) − 실구매비용({fmtPlain(totalCost)}) = {fmtAmount(balance)}
+                          {fmtPlain(investable)} − {fmtPlain(totalCost)} = {fmtAmount(balance)}
                         </span>
                       </div>
-                      {rebalRemaining > 0 && (
-                        <button
-                          type="button"
-                          onClick={applyRemainingToDeposit}
-                          className="flex items-center justify-between gap-3 text-[11px] text-gray-400 hover:text-green-300 transition-colors group"
-                          title="잔액을 현재 예수금에 적용"
-                        >
-                          <span className="shrink-0">리밸런싱 잔액</span>
-                          <span className="text-right truncate"><span className="text-gray-300">{formatRemaining(rebalRemaining)}</span> <span className="text-green-400 group-hover:text-green-200">→ 예수금에 적용</span></span>
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex flex-col w-[80px] shrink-0 bg-gray-900 border border-gray-600 rounded-lg overflow-hidden shadow-sm relative">
-                      <div className="flex items-center justify-center gap-1 px-2 py-2 border-b border-gray-700 bg-gray-800/80">
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: currentOpt.color }} />
-                        <span className="text-gray-200 text-[11px] font-bold truncate">{currentOpt.label}</span>
+                      <div className="text-right text-[10px] text-gray-500 leading-tight">
+                        (투자가능금 − 실구매비용 = 잔액)
                       </div>
-                      <div className="flex-1 flex items-center justify-center text-[10px] text-gray-500 px-2 pt-1">투자 선택</div>
-                      <select
-                        className="absolute inset-0 w-full h-full bg-transparent text-transparent cursor-pointer outline-none appearance-none"
-                        value={settings.mode}
-                        onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}
-                        title="투자 선택"
-                      >
-                        {modeOptions.map(o => (
-                          <option key={o.value} value={o.value} className="bg-gray-800 text-gray-200">{o.label}</option>
-                        ))}
-                      </select>
                     </div>
-                  </>
+                    {rebalRemaining > 0 && (
+                      <button
+                        type="button"
+                        onClick={applyRemainingToDeposit}
+                        className="flex items-center justify-between gap-3 text-[11px] text-gray-400 hover:text-green-300 transition-colors group"
+                        title="잔액을 현재 예수금에 적용"
+                      >
+                        <span className="shrink-0">리밸런싱 잔액</span>
+                        <span className="text-right truncate"><span className="text-gray-300">{formatRemaining(rebalRemaining)}</span> <span className="text-green-400 group-hover:text-green-200">→ 예수금에 적용</span></span>
+                      </button>
+                    )}
+                  </div>
                 );
               })()}
             </div>
