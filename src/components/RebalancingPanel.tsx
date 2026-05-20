@@ -249,44 +249,51 @@ export default function RebalancingPanel({
                 return (
                   <>
                     <div className="flex-1 bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner flex flex-col gap-1.5 text-[12px] min-w-0">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-gray-400 shrink-0">{leftLabel}</span>
-                        <span className="text-gray-200 font-bold text-right truncate">{fmtAmount(leftVal)}</span>
-                      </div>
-                      {!isRebalance && (
+                      {isRebalance ? (
                         <div className="flex items-center justify-between gap-3">
-                          <span className="text-gray-400 shrink-0">{useDepositLabel}</span>
-                          <div className="flex items-center gap-1 min-w-0">
-                            {isOverseasHeader && <span className="text-sky-400 font-bold shrink-0">$</span>}
-                            <input
-                              type="text"
-                              className={`bg-gray-900/60 border rounded px-2 py-0.5 text-right font-bold outline-none w-full max-w-[140px] text-[12px] ${isUseDepositExplicit ? 'text-cyan-300 border-gray-700 focus:border-cyan-500' : 'text-gray-500 border-gray-700 focus:border-cyan-500'}`}
-                              value={isUseDepositExplicit
-                                ? (isOverseasHeader ? settings.useDepositAmount : formatNumber(settings.useDepositAmount))
-                                : ''}
-                              placeholder={isOverseasHeader ? `전액 ${fmtUSD(headerDepositAmount)}` : `전액 ${formatNumber(headerDepositAmount)}`}
-                              onChange={e => {
-                                const raw = e.target.value;
-                                if (raw === '') {
-                                  updateSettingsForType({ ...settings, useDepositAmount: null });
-                                } else {
-                                  const v = Math.min(Math.max(0, cleanNum(raw)), headerDepositAmount);
-                                  updateSettingsForType({ ...settings, useDepositAmount: v });
-                                }
-                              }}
-                              onFocus={e => e.target.select()}
-                              onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
-                              disabled={headerDepositAmount <= 0}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updateSettingsForType({ ...settings, useDepositAmount: headerDepositAmount })}
-                              disabled={headerDepositAmount <= 0}
-                              className="px-2 py-0.5 text-[10px] font-bold rounded bg-cyan-900/40 hover:bg-cyan-700/60 text-cyan-300 hover:text-cyan-100 border border-cyan-700/40 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-                              title="예수금 전액을 사용할 예수금에 채우기"
-                            >
-                              전액
-                            </button>
+                          <span className="text-gray-400 shrink-0">{leftLabel}</span>
+                          <span className="text-gray-200 font-bold text-right truncate">{fmtAmount(leftVal)}</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-gray-400">{leftLabel}</span>
+                            <span className="text-gray-200 font-bold">{fmtAmount(leftVal)}</span>
+                          </div>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-gray-400 shrink-0">{useDepositLabel}</span>
+                            <div className="flex items-center gap-1 min-w-0">
+                              {isOverseasHeader && <span className="text-sky-400 font-bold shrink-0">$</span>}
+                              <input
+                                type="text"
+                                className={`bg-gray-900/60 border rounded px-2 py-0.5 text-right font-bold outline-none w-full max-w-[140px] text-[12px] ${isUseDepositExplicit ? 'text-cyan-300 border-gray-700 focus:border-cyan-500' : 'text-gray-500 border-gray-700 focus:border-cyan-500'}`}
+                                value={isUseDepositExplicit
+                                  ? (isOverseasHeader ? settings.useDepositAmount : formatNumber(settings.useDepositAmount))
+                                  : ''}
+                                placeholder={isOverseasHeader ? `전액 ${fmtUSD(headerDepositAmount)}` : `전액 ${formatNumber(headerDepositAmount)}`}
+                                onChange={e => {
+                                  const raw = e.target.value;
+                                  if (raw === '') {
+                                    updateSettingsForType({ ...settings, useDepositAmount: null });
+                                  } else {
+                                    const v = Math.min(Math.max(0, cleanNum(raw)), headerDepositAmount);
+                                    updateSettingsForType({ ...settings, useDepositAmount: v });
+                                  }
+                                }}
+                                onFocus={e => e.target.select()}
+                                onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                                disabled={headerDepositAmount <= 0}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => updateSettingsForType({ ...settings, useDepositAmount: headerDepositAmount })}
+                                disabled={headerDepositAmount <= 0}
+                                className="px-2 py-0.5 text-[10px] font-bold rounded bg-cyan-900/40 hover:bg-cyan-700/60 text-cyan-300 hover:text-cyan-100 border border-cyan-700/40 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                                title="예수금 전액을 사용할 예수금에 채우기"
+                              >
+                                전액
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )}
@@ -420,8 +427,11 @@ export default function RebalancingPanel({
                           현재가{arr('currentPrice')}
                         </th>
                       )}
-                      {!H('targetRatio') && (
-                        <th className="py-2 px-3 min-w-[100px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b] relative">
+                      {!H('targetRatio') && (() => {
+                        const targetMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
+                        const isTargetSorted = sk === 'targetRatio';
+                        return (
+                        <th className="py-2 px-3 min-w-[120px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b] relative">
                           {hideStrip('targetRatio')}
                           <div className="flex flex-col items-center gap-1">
                             <div className="relative w-full">
@@ -452,39 +462,61 @@ export default function RebalancingPanel({
                                 >{formatDisplayDate(settings.targetDate)}</span>
                               )}
                             </div>
-                            <div className="flex items-center gap-1">
-                              <span className="cursor-pointer hover:text-green-300" onClick={() => handleRebalanceSort('targetRatio')}>{arr('targetRatio')}목표</span>
+                            <div className="flex items-center justify-center gap-1.5">
+                              <div className="flex flex-col items-center leading-none select-none">
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); handleRebalanceSort('targetRatio', 1); }}
+                                  className={`text-[10px] leading-none transition-colors hover:text-green-300 ${isTargetSorted && sd === 1 ? 'text-green-400' : 'text-gray-500'}`}
+                                  title="오름차순 정렬"
+                                >▲</button>
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); handleRebalanceSort('targetRatio', -1); }}
+                                  className={`text-[10px] leading-none transition-colors hover:text-green-300 ${isTargetSorted && sd === -1 ? 'text-green-400' : 'text-gray-500'}`}
+                                  title="내림차순 정렬"
+                                >▼</button>
+                              </div>
+                              <div className="relative inline-flex items-center">
+                                <span className={`cursor-pointer font-bold ${targetMode === 'variable' ? 'text-amber-300' : 'text-green-400'} hover:opacity-80`} title="클릭: 고정/수시변경 선택">
+                                  목표
+                                </span>
+                                <select
+                                  className="absolute inset-0 w-full h-full bg-transparent text-transparent cursor-pointer outline-none appearance-none"
+                                  value={targetMode}
+                                  onChange={e => updateSettingsForType({ ...settings, targetMode: e.target.value })}
+                                  title="고정 / 수시변경"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <option value="fixed" className="bg-gray-800 text-gray-200">고정</option>
+                                  <option value="variable" className="bg-gray-800 text-gray-200">수시변경</option>
+                                </select>
+                              </div>
                               <button
+                                type="button"
                                 onClick={e => {
                                   e.stopPropagation();
+                                  if (totals.totalEval <= 0) return;
                                   const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-                                  if (settings.trackingMode) {
-                                    const decimals = rebalFx > 1 ? 2 : 1;
-                                    setPortfolio(prev => prev.map(p => {
-                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
-                                      const qty = cleanNum(p.quantity);
-                                      const price = cleanNum(p.currentPrice);
-                                      const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
-                                      const curRatio = parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(decimals));
-                                      return { ...p, targetRatio: p.targetRatioFixed ? cleanNum(p.targetRatio) : curRatio, targetRatioFixed: false };
-                                    }));
-                                    updateSettingsForType({ ...settings, trackingMode: false });
-                                  } else {
-                                    if (totals.totalEval <= 0) return;
-                                    setPortfolio(prev => prev.map(p => {
-                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
-                                      return { ...p, targetRatioFixed: false };
-                                    }));
-                                    updateSettingsForType({ ...settings, trackingMode: true });
-                                  }
+                                  const decimals = rebalFx > 1 ? 2 : 1;
+                                  const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
+                                  setPortfolio(prev => prev.map(p => {
+                                    if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                    const qty = cleanNum(p.quantity);
+                                    const price = cleanNum(p.currentPrice);
+                                    const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
+                                    const curRatio = parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(decimals));
+                                    return { ...p, [slotField]: curRatio };
+                                  }));
                                 }}
-                                className={`text-[11px] font-bold leading-none transition-colors select-none ${settings.trackingMode ? 'text-green-400' : 'text-gray-500 hover:text-green-400'}`}
-                                title={settings.trackingMode ? '추적 중 — 클릭하면 해제' : '현재 비중 추적 시작'}
+                                className="text-[11px] font-bold leading-none transition-colors select-none text-gray-500 hover:text-green-400"
+                                title={`현재 비중을 ${targetMode === 'variable' ? '수시변경' : '고정'} 목표값에 복사`}
                               >(%)</button>
                             </div>
                           </div>
                         </th>
-                      )}
+                        );
+                      })()}
                       {!H('curRatio') && (
                         <th className="py-3 px-3 min-w-[80px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('curEval')}>
                           {hideStrip('curRatio')}
@@ -620,22 +652,22 @@ export default function RebalancingPanel({
                           const itemCurRatio = totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0;
                           const threshold = isOverseas ? 0.005 : 0.05;
                           const isDifferent = Math.abs((item.effectiveTargetRatio || 0) - itemCurRatio) > threshold;
-                          const isTracking = settings.trackingMode && !item.targetRatioFixed;
+                          const targetMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
+                          const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
+                          const slotVal = cleanNum(item[slotField]) || 0;
                           const displayVal = editingRatio[item.id] !== undefined
                             ? editingRatio[item.id]
-                            : isTracking
-                              ? (item.effectiveTargetRatio || 0).toFixed(isOverseas ? 2 : 1)
-                              : (isOverseas ? (cleanNum(item.targetRatio) || 0).toFixed(2) : (item.targetRatio || 0));
+                            : (isOverseas ? slotVal.toFixed(2) : slotVal);
+                          const textColor = targetMode === 'variable'
+                            ? (isDifferent ? 'text-red-400' : 'text-amber-300')
+                            : (isDifferent ? 'text-red-400' : 'text-green-400');
                           return (
                             <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500">
-                              <input type="text" data-col="targetRatio" className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400 ${isDifferent ? 'text-red-400' : 'text-green-400'}`}
+                              <input type="text" data-col="targetRatio" className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 focus:bg-blue-900/20 caret-blue-400 ${textColor}`}
                                 value={displayVal}
                                 onChange={e => setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value }))}
                                 onBlur={e => {
-                                  handleUpdate(item.id, 'targetRatio', e.target.value);
-                                  if (settings.trackingMode) {
-                                    setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetRatioFixed: true } : p));
-                                  }
+                                  handleUpdate(item.id, slotField, e.target.value);
                                   setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
                                 }}
                                 onFocus={e => { setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); e.target.select(); }}

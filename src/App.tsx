@@ -1022,9 +1022,10 @@ export default function App() {
     });
   };
 
-  const handleRebalanceSort = (key) => setRebalanceSortConfigMap(prev => {
+  const handleRebalanceSort = (key, forcedDir) => setRebalanceSortConfigMap(prev => {
     const cur = prev[activePortfolioId] ?? { key: null, direction: 1 };
-    return { ...prev, [activePortfolioId]: { key, direction: cur.key === key ? -cur.direction : 1 } };
+    const direction = forcedDir != null ? forcedDir : (cur.key === key ? -cur.direction : 1);
+    return { ...prev, [activePortfolioId]: { key, direction } };
   });
   const handleDepositSort = (key) => setDepositSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort2 = (key) => setDepositSortConfig2(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));

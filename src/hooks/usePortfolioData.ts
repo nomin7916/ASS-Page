@@ -80,8 +80,8 @@ export function usePortfolioData({
       const curEval = item.type === 'fund' && !(qty > 0 && price > 0)
         ? cleanNum(item.evalAmount)
         : price * qty;
-      const effectiveTargetRatio = (settings.trackingMode && !item.targetRatioFixed)
-        ? (nativeTotalEval > 0 ? curEval / nativeTotalEval * 100 : 0)
+      const effectiveTargetRatio = settings.targetMode === 'variable'
+        ? (cleanNum(item.targetRatioVar) || 0)
         : (cleanNum(item.targetRatio) || 0);
       const tRatio = effectiveTargetRatio / 100;
       let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((allocBase * tRatio) / price)) : 0;
