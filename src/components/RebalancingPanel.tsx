@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
@@ -114,6 +114,34 @@ export default function RebalancingPanel({
     );
   };
 
+  const headerDepositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+  const headerBaseCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
+  const headerExtraCost = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
+  const headerAllocPool = settings.mode === 'accumulate'
+    ? headerDepositAmount + cleanNum(settings.amount)
+    : headerDepositAmount;
+  const rebalRemaining = headerAllocPool - headerBaseCost - headerExtraCost;
+
+  useEffect(() => {
+    if (settings.mode === 'deposit-only' && !cleanNum(settings.amount) && headerDepositAmount > 0) {
+      updateSettingsForType({ ...settings, amount: headerDepositAmount });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.mode]);
+
+  const applyRemainingToDeposit = () => {
+    if (rebalRemaining <= 0) return;
+    const newDeposit = Math.round(rebalRemaining);
+    setPortfolio(prev => prev.map(p => p.type === 'deposit' ? { ...p, depositAmount: newDeposit } : p));
+    if (settings.mode === 'deposit-only') {
+      updateSettingsForType({ ...settings, amount: newDeposit });
+    }
+  };
+
+  const formatRemaining = (n) => activePortfolioAccountType === 'overseas'
+    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n))
+    : formatNumber(Math.round(n));
+
   const makeCompactPieTooltip = (data) => ({ active, payload }) => {
     if (!active || !payload?.length) return null;
     const item = payload[0];
@@ -189,7 +217,23 @@ export default function RebalancingPanel({
               )}
             </div>
             <div className="flex flex-col gap-2 w-full xl:w-[560px] shrink-0">
-              <div className="flex items-center justify-between bg-gray-800/80 px-4 py-2 rounded-lg border border-gray-700 shadow-inner"><span className="text-gray-300 text-sm font-bold">현재 예수금</span><span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType === 'overseas') { const fx = marketIndicators.usdkrw || 1; return <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(dep)}</span><span className="text-sm text-green-600">{formatCurrency(dep * fx)}</span></div>; } return formatCurrency(dep); })()}</span></div>
+              <div className="flex items-center justify-between bg-gray-800/80 px-4 py-2 rounded-lg border border-gray-700 shadow-inner gap-3">
+                <div className="flex items-center gap-3 flex-wrap min-w-0">
+                  {rebalRemaining > 0 && (
+                    <button
+                      type="button"
+                      onClick={applyRemainingToDeposit}
+                      className="text-[11px] text-gray-400 hover:text-green-300 transition-colors flex items-center gap-1 whitespace-nowrap"
+                      title="잔액을 현재 예수금에 적용"
+                    >
+                      <span>리밸런싱 잔액 : {formatRemaining(rebalRemaining)}</span>
+                      <span className="text-green-400">→ 예수금에 적용</span>
+                    </button>
+                  )}
+                  <span className="text-gray-300 text-sm font-bold">현재 예수금</span>
+                </div>
+                <span className="text-green-400 text-xl font-bold">{(() => { const dep = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0); if (activePortfolioAccountType === 'overseas') { const fx = marketIndicators.usdkrw || 1; return <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(dep)}</span><span className="text-sm text-green-600">{formatCurrency(dep * fx)}</span></div>; } return formatCurrency(dep); })()}</span>
+              </div>
               <div className="flex flex-col gap-1">
                 <div className="flex items-stretch bg-gray-900 border border-gray-600 rounded-lg overflow-hidden h-12 shadow-sm">
                   <select className="bg-gray-800 text-gray-200 text-sm font-bold px-3 border-r border-gray-600 outline-none cursor-pointer" value={settings.mode} onChange={e => updateSettingsForType({ ...settings, mode: e.target.value })}><option value="rebalance">리밸런싱 (비중 기반)</option><option value="accumulate">적립 (신규 자금 분할)</option><option value="deposit-only">예수금만 분배 (적립금 제외)</option></select>
