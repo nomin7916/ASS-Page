@@ -1856,7 +1856,7 @@ export default function App() {
         />
 
         {!showIntegratedDashboard && (
-          <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onDriveLoadOnly={handleDriveLoadOnly} />
+          <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onOpenBackupModal={handleOpenBackupModal} />
         )}
 
         {!showIntegratedDashboard && (<>

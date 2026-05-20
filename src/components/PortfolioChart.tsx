@@ -112,9 +112,6 @@ export default function PortfolioChart({
         })()}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="text-gray-500 text-[10px] font-bold flex items-center select-none shrink-0">
-              평가추이
-            </span>
             {/* gold 계좌: 고정 지표 4개 칩 / 그 외: 비교종목 칩 */}
             {!userFeatures.feature1 && activePortfolioAccountType === 'gold' && (
               <div className="flex flex-wrap items-center gap-2">

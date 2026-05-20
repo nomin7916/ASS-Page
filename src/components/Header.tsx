@@ -1,10 +1,10 @@
 // @ts-nocheck
 import React from 'react';
 import {
-  RefreshCw, Save, ClipboardPaste, CloudDownload
+  RefreshCw, Save, ClipboardPaste, History
 } from 'lucide-react';
 
-const Header = ({ title, setTitle, isLoading, driveStatus, onRefresh, onDriveSave, onPaste, onDriveConnect, onDriveLoadOnly }) => (
+const Header = ({ title, setTitle, isLoading, driveStatus, onRefresh, onDriveSave, onPaste, onDriveConnect, onOpenBackupModal }) => (
   <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full mt-2 relative">
     <div className="p-4 md:p-5 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center bg-[#1e293b] gap-4">
       <div className="flex items-center gap-3 flex-1 min-w-[250px] w-full md:w-auto mt-2 md:mt-0">
@@ -39,7 +39,7 @@ const Header = ({ title, setTitle, isLoading, driveStatus, onRefresh, onDriveSav
               <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
             </button>
           </div>
-          <button onClick={onDriveLoadOnly} title="Google Drive에서 최신 데이터 불러오기" className="bg-blue-700 hover:bg-blue-600 text-white p-2 rounded shadow transition border border-blue-500/30 flex items-center justify-center"><CloudDownload size={16} /></button>
+          <button onClick={onOpenBackupModal} title="Drive 백업 이력 보기 — 시간대별 백업 선택 적용" className="bg-purple-700 hover:bg-purple-600 text-white p-2 rounded shadow transition border border-purple-500/30 flex items-center justify-center"><History size={16} /></button>
           <button onClick={onDriveSave} title="Google Drive에만 백업 저장" className="bg-indigo-600 hover:bg-indigo-500 text-white p-2 rounded shadow transition border border-indigo-500/30 flex items-center justify-center"><Save size={16} /></button>
           <div className="w-[1px] h-5 bg-gray-600 mx-0.5"></div>
           <button onClick={onPaste} title="엑셀 붙여넣기" className="bg-green-600 hover:bg-green-500 text-white p-2 rounded shadow transition border border-green-500/30 flex items-center justify-center"><ClipboardPaste size={16} /></button>
