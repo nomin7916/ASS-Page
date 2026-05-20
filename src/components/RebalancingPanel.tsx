@@ -119,11 +119,14 @@ export default function RebalancingPanel({
   const headerNativeTotalEval = isOverseasHeader ? totals.totalEval / headerFx : totals.totalEval;
   const headerDepositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
   const headerAmount = cleanNum(settings.amount);
+  const headerUseDeposit = settings.useDepositAmount != null
+    ? Math.min(Math.max(0, cleanNum(settings.useDepositAmount)), headerDepositAmount)
+    : headerDepositAmount;
   const headerBaseCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
   const headerExtraCost = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
   const headerAllocPool = settings.mode === 'rebalance'
     ? headerNativeTotalEval + headerAmount
-    : headerDepositAmount + headerAmount;
+    : headerUseDeposit + headerAmount;
   const rebalRemaining = headerAllocPool - headerBaseCost - headerExtraCost;
 
   useEffect(() => {
@@ -135,8 +138,14 @@ export default function RebalancingPanel({
 
   const applyRemainingToDeposit = () => {
     if (rebalRemaining <= 0) return;
-    const newDeposit = Math.round(rebalRemaining);
+    const unusedDeposit = settings.mode === 'rebalance'
+      ? 0
+      : Math.max(0, headerDepositAmount - headerUseDeposit);
+    const newDeposit = Math.round(unusedDeposit + rebalRemaining);
     setPortfolio(prev => prev.map(p => p.type === 'deposit' ? { ...p, depositAmount: newDeposit } : p));
+    if (settings.mode !== 'rebalance' && settings.useDepositAmount != null) {
+      updateSettingsForType({ ...settings, useDepositAmount: null });
+    }
   };
 
   const formatRemaining = (n) => activePortfolioAccountType === 'overseas'
@@ -227,7 +236,9 @@ export default function RebalancingPanel({
                 const isRebalance = settings.mode === 'rebalance';
                 const leftLabel = isRebalance ? '총평가금액' : '예수금';
                 const leftVal = isRebalance ? headerNativeTotalEval : headerDepositAmount;
-                const investable = leftVal + headerAmount;
+                const useDepositLabel = '사용할 예수금';
+                const isUseDepositExplicit = settings.useDepositAmount != null;
+                const investable = isRebalance ? (leftVal + headerAmount) : (headerUseDeposit + headerAmount);
                 const totalCost = headerBaseCost + headerExtraCost;
                 const balance = investable - totalCost;
                 const modeOptions = [
@@ -242,6 +253,43 @@ export default function RebalancingPanel({
                         <span className="text-gray-400 shrink-0">{leftLabel}</span>
                         <span className="text-gray-200 font-bold text-right truncate">{fmtAmount(leftVal)}</span>
                       </div>
+                      {!isRebalance && (
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-gray-400 shrink-0">{useDepositLabel}</span>
+                          <div className="flex items-center gap-1 min-w-0">
+                            {isOverseasHeader && <span className="text-sky-400 font-bold shrink-0">$</span>}
+                            <input
+                              type="text"
+                              className={`bg-gray-900/60 border rounded px-2 py-0.5 text-right font-bold outline-none w-full max-w-[140px] text-[12px] ${isUseDepositExplicit ? 'text-cyan-300 border-gray-700 focus:border-cyan-500' : 'text-gray-500 border-gray-700 focus:border-cyan-500'}`}
+                              value={isUseDepositExplicit
+                                ? (isOverseasHeader ? settings.useDepositAmount : formatNumber(settings.useDepositAmount))
+                                : ''}
+                              placeholder={isOverseasHeader ? `전액 ${fmtUSD(headerDepositAmount)}` : `전액 ${formatNumber(headerDepositAmount)}`}
+                              onChange={e => {
+                                const raw = e.target.value;
+                                if (raw === '') {
+                                  updateSettingsForType({ ...settings, useDepositAmount: null });
+                                } else {
+                                  const v = Math.min(Math.max(0, cleanNum(raw)), headerDepositAmount);
+                                  updateSettingsForType({ ...settings, useDepositAmount: v });
+                                }
+                              }}
+                              onFocus={e => e.target.select()}
+                              onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                              disabled={headerDepositAmount <= 0}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateSettingsForType({ ...settings, useDepositAmount: headerDepositAmount })}
+                              disabled={headerDepositAmount <= 0}
+                              className="px-2 py-0.5 text-[10px] font-bold rounded bg-cyan-900/40 hover:bg-cyan-700/60 text-cyan-300 hover:text-cyan-100 border border-cyan-700/40 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="예수금 전액을 사용할 예수금에 채우기"
+                            >
+                              전액
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-gray-400 shrink-0">적립금</span>
                         <div className="flex items-center gap-1 min-w-0">
@@ -263,9 +311,15 @@ export default function RebalancingPanel({
                       <div className="flex items-center justify-between gap-3 border-t border-gray-700/60 pt-1.5">
                         <span className="text-gray-300 font-bold shrink-0">투자가능금</span>
                         <span className="text-green-400 font-bold text-right truncate text-[13px]">
-                          {headerAmount > 0
-                            ? <>{leftLabel}({fmtPlain(leftVal)}) + 적립금({fmtPlain(headerAmount)}) = {fmtAmount(investable)}</>
-                            : <>{leftLabel} = {fmtAmount(investable)}</>}
+                          {isRebalance ? (
+                            headerAmount > 0
+                              ? <>{leftLabel}({fmtPlain(leftVal)}) + 적립금({fmtPlain(headerAmount)}) = {fmtAmount(investable)}</>
+                              : <>{leftLabel} = {fmtAmount(investable)}</>
+                          ) : (
+                            headerAmount > 0
+                              ? <>{useDepositLabel}({fmtPlain(headerUseDeposit)}) + 적립금({fmtPlain(headerAmount)}) = {fmtAmount(investable)}</>
+                              : <>{useDepositLabel} = {fmtAmount(investable)}</>
+                          )}
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">

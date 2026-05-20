@@ -70,7 +70,10 @@ export function usePortfolioData({
     const depositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
     const nativeTotalEval = rebalFxRate > 1 ? totals.totalEval / rebalFxRate : totals.totalEval;
     const overallExp = nativeTotalEval + cleanNum(settings.amount);
-    const allocBase = cleanNum(settings.amount) + depositAmount;
+    const useDeposit = settings.useDepositAmount != null
+      ? Math.min(Math.max(0, cleanNum(settings.useDepositAmount)), depositAmount)
+      : depositAmount;
+    const allocBase = cleanNum(settings.amount) + useDeposit;
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
