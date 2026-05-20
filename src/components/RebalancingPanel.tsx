@@ -161,6 +161,7 @@ export default function RebalancingPanel({
                     </div>
                   </div>
                   {(() => {
+                    if (!['dc-irp', 'pension'].includes(activePortfolioAccountType)) return null;
                     const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
                     const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
                     const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
