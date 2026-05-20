@@ -480,6 +480,57 @@ export default function PortfolioChart({
                     })}
                   </div>
                 )}
+                {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && (() => {
+                  const marketItems = [
+                    ...(showKospi ? [{ key: 'kospi', label: 'KOSPI', color: '#38bdf8', isKrw: true }] : []),
+                    ...(showSp500 ? [{ key: 'sp500', label: 'S&P500', color: '#bf5af2', isKrw: false }] : []),
+                    ...(showNasdaq ? [{ key: 'nasdaq', label: 'NASDAQ', color: '#30d158', isKrw: false }] : []),
+                  ];
+                  const indItems = [
+                    { key: 'us10y', label: 'US 10Y', color: '#8e8e93' },
+                    { key: 'kr10y', label: 'KR 10Y', color: '#636366' },
+                    { key: 'goldIntl', label: 'Gold(국제)', color: goldIndicatorColors.goldIntl },
+                    { key: 'goldKr', label: '국내금', color: goldIndicatorColors.goldKr },
+                    { key: 'usdkrw', label: 'USD/KRW', color: goldIndicatorColors.usdkrw },
+                    { key: 'dxy', label: 'DXY', color: goldIndicatorColors.dxy },
+                    { key: 'fedRate', label: '기준금리', color: '#ff375f' },
+                    { key: 'vix', label: 'VIX', color: '#ff453a' },
+                    { key: 'btc', label: 'Bitcoin', color: '#f7931a' },
+                    { key: 'eth', label: 'Ethereum', color: '#627eea' },
+                  ].filter(({ key }) => effectiveShowIndicators[key]);
+                  const allItems = [...marketItems, ...indItems];
+                  const visibleItems = allItems.filter(({ key }) => {
+                    const rate = displayResult[`${key}PeriodRate`];
+                    return rate != null;
+                  });
+                  if (!visibleItems.length) return null;
+                  return (
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                      {visibleItems.map(({ key, label, color, isKrw }) => {
+                        const rate = displayResult[`${key}PeriodRate`];
+                        const startPt = finalChartData.find(d => d.date === displayResult.startDate)?.[`${key}Point`];
+                        const endPt = finalChartData.find(d => d.date === displayResult.endDate)?.[`${key}Point`];
+                        const fmtPt = (v) => (isKrw ?? false)
+                          ? Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 })
+                          : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                        return (
+                          <div key={key} className="flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: color }} />
+                            <span className="text-[11px] font-bold" style={{ color }}>{label}</span>
+                            <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                              {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
+                            </span>
+                            {startPt != null && endPt != null && (
+                              <span className="text-[10px] text-gray-500 font-mono">
+                                ({fmtPt(startPt)} → {fmtPt(endPt)})
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 {activePortfolioAccountType === 'gold' && (
                   <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
                     {([

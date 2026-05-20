@@ -1601,7 +1601,19 @@ export default function App() {
     const s = finalChartData[0];
     const e = finalChartData[finalChartData.length - 1];
     const profit = e.evalAmount - s.evalAmount;
-    setDefaultSelectionResult({ startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? (profit / s.evalAmount) * 100 : 0 });
+    const indRates = {};
+    INDICATOR_CHART_KEYS.forEach(k => {
+      const sp = s[`${k}Point`]; const ep = e[`${k}Point`];
+      indRates[`${k}PeriodRate`] = (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
+    });
+    setDefaultSelectionResult({
+      startDate: s.date, endDate: e.date, profit,
+      rate: s.evalAmount > 0 ? (profit / s.evalAmount) * 100 : 0,
+      kospiPeriodRate: s.kospiPoint > 0 ? ((e.kospiPoint / s.kospiPoint) - 1) * 100 : null,
+      sp500PeriodRate: s.sp500Point > 0 ? ((e.sp500Point / s.sp500Point) - 1) * 100 : null,
+      nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
+      ...indRates,
+    });
   }, [finalChartData]);
 
   // 통합 대시보드: 조회기간 변경 시 드래그 선택 초기화 + 전체 기간 기본값 계산
