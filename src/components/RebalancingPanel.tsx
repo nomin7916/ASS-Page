@@ -128,6 +128,128 @@ export default function RebalancingPanel({
 
   return (
     <>
+        {showRetirementStats && rebalanceData.length > 0 && (() => {
+          const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+          const curD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.curEval, 0);
+          const curS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.curEval, 0) + depositEval;
+          const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
+          const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
+          const DS_COLORS = { '위험(D)': '#ef4444', '안전(S)': '#10b981' };
+          const curDSData = [{ name: '위험(D)', value: curD }, { name: '안전(S)', value: curS }];
+          const projDSData = [{ name: '위험(D)', value: projD }, { name: '안전(S)', value: projS }];
+          const curTotal = curD + curS;
+          const projTotal = projD + projS;
+          const curDRatio = curTotal > 0 ? curD / curTotal * 100 : 0;
+          const projDRatio = projTotal > 0 ? projD / projTotal * 100 : 0;
+          const onTarget = Math.abs(projDRatio - 70) <= 5;
+          return (
+            <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-6">
+              <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex items-center gap-4 flex-wrap">
+                <span className="text-amber-400 font-bold text-sm">위험/안전 자산 비율</span>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-500">현재</span>
+                  <span className="text-red-400 font-bold">위험 D {curDRatio.toFixed(1)}%</span>
+                  <span className="text-emerald-400 font-bold">안전 S {(100 - curDRatio).toFixed(1)}%</span>
+                  <span className="text-gray-500 mx-1">→</span>
+                  <span className="text-gray-400">예상</span>
+                  <span className={`font-bold ${onTarget ? 'text-red-400' : 'text-red-300'}`}>위험 D {projDRatio.toFixed(1)}%</span>
+                  <span className="text-gray-600 text-[11px]">(목표 70%)</span>
+                  {!onTarget && <span className="text-orange-400 text-[11px]">{projDRatio > 70 ? `+${(projDRatio - 70).toFixed(1)}%` : `${(projDRatio - 70).toFixed(1)}%`}</span>}
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-700">
+                <div className="p-4">
+                  <div className="text-gray-400 text-xs text-center mb-2 font-semibold">현재 위험/안전 비율</div>
+                  <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                    {hoveredCurDSSlice ? (
+                      <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredCurDSSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredCurDSSlice.fill }}>{hoveredCurDSSlice.name} {(hoveredCurDSSlice.percent * 100).toFixed(1)}%</span></>
+                    ) : (
+                      <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                    )}
+                  </div>
+                  <div style={{ height: 240 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={curDSData} innerRadius="35%" outerRadius="60%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredCurDSSlice(data)} onMouseLeave={() => setHoveredCurDSSlice(null)}>
+                          {curDSData.map(({ name }, i) => <Cell key={i} fill={DS_COLORS[name] || '#64748b'} />)}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <table className="w-full text-xs mt-3">
+                    <thead className="text-gray-400 border-b border-gray-700">
+                      <tr className="text-center">
+                        <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                        <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
+                        <th className="pb-2 px-3">비중</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {curDSData.map(({ name, value }) => (
+                        <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                          <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700"><span style={{ color: DS_COLORS[name] }}>{name}</span></td>
+                          <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(value)}</td>
+                          <td className="py-1.5 px-3 text-gray-400 text-right">{curTotal > 0 ? ((value / curTotal) * 100).toFixed(1) : 0}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-gray-600 bg-gray-800/40">
+                        <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700 text-gray-300">합계</td>
+                        <td className="py-1.5 px-3 border-r border-gray-700 text-white font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(curTotal)}</td>
+                        <td className="py-1.5 px-3 text-white font-bold text-right">100%</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                <div className="p-4">
+                  <div className="text-gray-400 text-xs text-center mb-2 font-semibold">리밸런싱 후 위험/안전 비율</div>
+                  <div className="h-6 flex items-center gap-2 px-1 overflow-hidden mb-1">
+                    {hoveredProjDSSlice ? (
+                      <><div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: hoveredProjDSSlice.fill }} /><span className="text-[11px] font-bold" style={{ color: hoveredProjDSSlice.fill }}>{hoveredProjDSSlice.name} {(hoveredProjDSSlice.percent * 100).toFixed(1)}%</span></>
+                    ) : (
+                      <span className="text-gray-600 text-[10px]">항목에 마우스를 올리면 표시</span>
+                    )}
+                  </div>
+                  <div style={{ height: 240 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={projDSData} innerRadius="35%" outerRadius="60%" dataKey="value" label={PieLabelOutside} onMouseEnter={(data) => setHoveredProjDSSlice(data)} onMouseLeave={() => setHoveredProjDSSlice(null)}>
+                          {projDSData.map(({ name }, i) => <Cell key={i} fill={DS_COLORS[name] || '#64748b'} />)}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <table className="w-full text-xs mt-3">
+                    <thead className="text-gray-400 border-b border-gray-700">
+                      <tr className="text-center">
+                        <th className="pb-2 px-2 border-r border-gray-700">구분</th>
+                        <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">예상평가금</th>
+                        <th className="pb-2 px-3">비중</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {projDSData.map(({ name, value }) => (
+                        <tr key={name} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                          <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700"><span style={{ color: DS_COLORS[name] }}>{name}</span></td>
+                          <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(value)}</td>
+                          <td className="py-1.5 px-3 text-gray-400 text-right">{projTotal > 0 ? ((value / projTotal) * 100).toFixed(1) : 0}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-gray-600 bg-gray-800/40">
+                        <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700 text-gray-300">합계</td>
+                        <td className="py-1.5 px-3 border-r border-gray-700 text-white font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(projTotal)}</td>
+                        <td className="py-1.5 px-3 text-white font-bold text-right">100%</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
         {showTable && <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-6">
           <div className="px-5 py-3 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:items-start gap-4">
             <span className="text-green-400 text-xl font-bold shrink-0 pt-1">리밸런싱</span>
