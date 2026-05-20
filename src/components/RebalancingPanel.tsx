@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Lock } from 'lucide-react';
+import { Lock, HelpCircle, X } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
@@ -74,7 +74,30 @@ export default function RebalancingPanel({
   const [pinModal, setPinModal] = useState(null); // { onAuthorized: () => void } | null
   const [hoveredCurDSSlice, setHoveredCurDSSlice] = useState(null);
   const [hoveredProjDSSlice, setHoveredProjDSSlice] = useState(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpPos, setHelpPos] = useState({ x: 0, y: 0 });
+  const helpDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const datePickerRef = useRef(null);
+  const openHelp = () => {
+    setHelpPos({ x: Math.max(8, window.innerWidth / 2 - 220), y: Math.max(8, window.innerHeight / 2 - 280) });
+    setHelpOpen(true);
+  };
+  const handleHelpDragStart = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    helpDrag.current = { active: true, offsetX: e.clientX - helpPos.x, offsetY: e.clientY - helpPos.y };
+    const onMove = (ev) => {
+      if (!helpDrag.current.active) return;
+      setHelpPos({ x: ev.clientX - helpDrag.current.offsetX, y: ev.clientY - helpDrag.current.offsetY });
+    };
+    const onUp = () => {
+      helpDrag.current.active = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
   const formatDisplayDate = (iso) => {
     if (!iso) return '날짜';
     const p = iso.split('-');
@@ -136,10 +159,8 @@ export default function RebalancingPanel({
     : headerDepositAmount;
   const headerBaseCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
   const headerExtraCost = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
-  const headerAllocPool = settings.mode === 'rebalance'
-    ? headerNativeTotalEval + headerAmount
-    : headerUseDeposit + headerAmount;
-  const rebalRemaining = headerAllocPool - headerBaseCost - headerExtraCost;
+  const rebalBalance = -(headerBaseCost + headerExtraCost);
+  const rebalRemaining = Math.max(0, rebalBalance);
 
   useEffect(() => {
     if (settings.mode === 'deposit-only') {
@@ -150,10 +171,7 @@ export default function RebalancingPanel({
 
   const applyRemainingToDeposit = () => {
     if (rebalRemaining <= 0) return;
-    const unusedDeposit = settings.mode === 'rebalance'
-      ? 0
-      : Math.max(0, headerDepositAmount - headerUseDeposit);
-    const newDeposit = Math.round(unusedDeposit + rebalRemaining);
+    const newDeposit = Math.round(headerDepositAmount + rebalRemaining);
     setPortfolio(prev => prev.map(p => p.type === 'deposit' ? { ...p, depositAmount: newDeposit } : p));
     if (settings.mode !== 'rebalance' && settings.useDepositAmount != null) {
       updateSettingsForType({ ...settings, useDepositAmount: null });
@@ -180,7 +198,10 @@ export default function RebalancingPanel({
     <>
         {showTable && <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg w-full flex flex-col mb-6">
           <div className="px-5 py-3 bg-[#0f172a] border-b border-gray-700 flex flex-col xl:flex-row xl:items-start gap-4">
-            <span className="text-green-400 text-xl font-bold shrink-0 pt-1">리밸런싱</span>
+            <div className="flex items-center gap-1.5 shrink-0 pt-1">
+              <span className="text-green-400 text-xl font-bold">리밸런싱</span>
+              <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="계산식 보기"><HelpCircle size={14} /></button>
+            </div>
             <div className="flex-1 flex justify-end items-start gap-6">
               {(curCatDonutData.length > 0 || rebalCatDonutData.length > 0) && (
                 <>
@@ -252,7 +273,9 @@ export default function RebalancingPanel({
                 const isUseDepositExplicit = settings.useDepositAmount != null;
                 const investable = isRebalance ? (leftVal + headerAmount) : (headerUseDeposit + headerAmount);
                 const totalCost = headerBaseCost + headerExtraCost;
-                const balance = investable - totalCost;
+                const displayCost = -totalCost;
+                const balance = -totalCost;
+                const displayBalance = Math.max(0, balance);
                 const modeOptions = [
                   { value: 'accumulate', label: '적립식', color: '#facc15' },
                   { value: 'rebalance', label: '리밸런싱', color: '#22c55e' },
@@ -364,13 +387,24 @@ export default function RebalancingPanel({
                     </div>
                     <div className="flex flex-col">
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-gray-400 shrink-0">잔액</span>
-                        <span className={`font-bold text-right truncate ${balance > 0 ? 'text-sky-300' : balance < 0 ? 'text-red-400' : 'text-gray-500'}`}>
-                          {fmtPlain(investable)} − {fmtPlain(totalCost)} = {fmtAmount(balance)}
+                        <span className="text-gray-400 shrink-0">실구매비용</span>
+                        <span className={`font-bold text-right truncate ${displayCost > 0 ? 'text-sky-300' : displayCost < 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                          {fmtAmount(displayCost)}
                         </span>
                       </div>
                       <div className="text-right text-[10px] text-gray-500 leading-tight">
-                        (투자가능금 − 실구매비용 = 잔액)
+                        (매도총합 − 매수총합)
+                      </div>
+                    </div>
+                    <div className="flex flex-col">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-gray-400 shrink-0">잔액</span>
+                        <span className={`font-bold text-right truncate ${displayBalance > 0 ? 'text-sky-300' : 'text-gray-500'}`}>
+                          {fmtAmount(displayBalance)}
+                        </span>
+                      </div>
+                      <div className="text-right text-[10px] text-gray-500 leading-tight">
+                        (실구매비용이 + 이면 표시 · − 이면 0)
                       </div>
                     </div>
                     {rebalRemaining > 0 && (
@@ -595,11 +629,8 @@ export default function RebalancingPanel({
               <tbody>
                 {(() => {
                   const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
-                  const isCapped = settings.mode === 'accumulate';
-                  const rawRemaining = headerAllocPool - baseTotalCost;
-                  const baseRemaining = isCapped ? Math.max(0, rawRemaining) : rawRemaining;
                   const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
-                  const effectiveRemaining = baseRemaining - totalExtraAllocated;
+                  const effectiveRemaining = -(baseTotalCost + totalExtraAllocated);
                   const isOverseas = activePortfolioAccountType === 'overseas';
                   const usdkrw = marketIndicators.usdkrw || 1;
                   const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
@@ -652,9 +683,8 @@ export default function RebalancingPanel({
                     const totalAction = item.action + extraQty;
                     const itemPrice = cleanNum(item.currentPrice);
                     const adjustedCost = totalAction * itemPrice;
-                    const maxAdd = itemPrice > 0
-                      ? (isCapped ? Math.max(0, Math.floor(effectiveRemaining / itemPrice)) : Math.floor(effectiveRemaining / itemPrice))
-                      : 0;
+                    const displayAdjustedCost = -adjustedCost;
+                    const maxAdd = itemPrice > 0 ? Math.floor(effectiveRemaining / itemPrice) : 0;
                     return (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {catTd}
@@ -746,7 +776,7 @@ export default function RebalancingPanel({
                           <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd > 0 ? '+' + maxAdd : maxAdd < 0 ? maxAdd : '0'}</td>
                         )}
                         {!H('cost') && (
-                          <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${adjustedCost > 0 ? 'text-red-400' : adjustedCost < 0 ? 'text-blue-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(adjustedCost)}</span><span className="text-[11px] opacity-70">{formatCurrency(adjustedCost * usdkrw)}</span></div> : formatCurrency(adjustedCost)}</td>
+                          <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${displayAdjustedCost > 0 ? 'text-sky-300' : displayAdjustedCost < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(displayAdjustedCost)}</span><span className="text-[11px] opacity-70">{formatCurrency(displayAdjustedCost * usdkrw)}</span></div> : formatCurrency(displayAdjustedCost)}</td>
                         )}
                         {!H('expEval') && (
                           <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.expEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.expEval * usdkrw)}</span></div> : formatCurrency(item.expEval)}</td>
@@ -792,7 +822,7 @@ export default function RebalancingPanel({
                   {!H('action') && <td className="py-3 px-3"></td>}
                   {!H('extraQty') && <td className="py-3 px-3"></td>}
                   {!H('maxAdd') && <td className="py-3 px-3"></td>}
-                  {!H('cost') && (() => { const adjTotal = rebalanceData.reduce((s, d) => s + (d.action + (rebalExtraQty[d.id] || 0)) * cleanNum(d.currentPrice), 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className={`py-3 px-3 font-bold text-right ${adjTotal > 0 ? 'text-red-400' : adjTotal < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(adjTotal)}</span><span className="text-[11px] opacity-70">{formatCurrency(adjTotal * fxRate)}</span></div> : formatCurrency(adjTotal)}</td>; })()}
+                  {!H('cost') && (() => { const adjTotal = -rebalanceData.reduce((s, d) => s + (d.action + (rebalExtraQty[d.id] || 0)) * cleanNum(d.currentPrice), 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className={`py-3 px-3 font-bold text-right ${adjTotal > 0 ? 'text-sky-300' : adjTotal < 0 ? 'text-red-400' : 'text-gray-500'}`}>{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(adjTotal)}</span><span className="text-[11px] opacity-70">{formatCurrency(adjTotal * fxRate)}</span></div> : formatCurrency(adjTotal)}</td>; })()}
                   {!H('expEval') && (() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
                   {!H('expRatio') && <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>}
                 </tr>
@@ -998,6 +1028,81 @@ export default function RebalancingPanel({
           }}
           onClose={() => setPinModal(null)}
         />
+        {helpOpen && (
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setHelpOpen(false)}>
+            <div className="absolute w-[440px] shadow-2xl overflow-hidden" style={{ left: helpPos.x, top: helpPos.y }} onClick={e => e.stopPropagation()}>
+              <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleHelpDragStart}>
+                <button onClick={() => setHelpOpen(false)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={7} className="text-white" /></button>
+                <span className="text-[11px] font-bold tracking-[0.18em] bg-gradient-to-r from-green-400 via-emerald-400 to-sky-400 bg-clip-text text-transparent select-none">리밸런싱 계산식 안내</span>
+                <div className="w-3" />
+              </div>
+              <div className="overflow-y-auto max-h-[78vh]" style={{
+                backgroundColor: '#000',
+                backgroundImage: 'repeating-linear-gradient(transparent 0px, transparent 23px, rgba(99,130,255,0.25) 23px, rgba(99,130,255,0.25) 24px)',
+                backgroundSize: '100% 24px',
+                backgroundPosition: '0 8px',
+                lineHeight: '24px',
+                padding: '8px 12px',
+              }}>
+                {[
+                  { icon: '💰', color: 'text-amber-300', title: '투자가능금 (기준 금액)', lines: [
+                    '투자가능금 = 종목/펀드 평가금 + 예수금 + 적립금',
+                    '리밸런싱의 분모. 종목 비중 계산의 기준.',
+                    '모든 자금(예수금·적립금·매도·매수)은 투자가능금 안에서 정의됨.',
+                  ] },
+                  { icon: '🎯', color: 'text-green-300', title: '각 종목의 목표 평가금', lines: [
+                    '목표 평가금 = 투자가능금 × 목표비중(%)',
+                    '액션(수량) = ⌊ (목표 평가금 − 현재 평가금) ÷ 종목가격 ⌋',
+                    '액션 + 이면 매수, − 이면 매도.',
+                  ] },
+                  { icon: '💸', color: 'text-sky-300', title: '실 구매비용 (행별 / TOTAL)', lines: [
+                    '행별 = −(액션 × 종목가격)',
+                    '매도 행: + (자금 회수)',
+                    '매수 행: − (자금 지출)',
+                    'TOTAL = 매도총합 − 매수총합',
+                  ] },
+                  { icon: '⚖', color: 'text-cyan-300', title: '잔액 (리밸런싱 자금 차익)', lines: [
+                    '잔액 = 매도총합 − 매수총합 = 실구매비용 TOTAL',
+                    '잔액 표시: + 그대로 / − 일 때는 0',
+                    '예수금·적립금은 이미 투자가능금 분모에 흡수되어 있어 잔액 식에 더하지 않음 (이중 계산 방지).',
+                  ] },
+                  { icon: '➕', color: 'text-emerald-300', title: '추가 가능 수량 (행별)', lines: [
+                    '추가 가능 = ⌊ 잔액 ÷ 종목가격 ⌋',
+                    '+ 값: 그만큼 더 매수 가능 (매도 차익을 추가 매수에 활용)',
+                    '− 값: 그만큼 매도 더 필요 (매수가 과다하다는 신호)',
+                    '"추가" 컬럼에 음수 입력 가능 — 사용자가 직접 매도 수량 조절',
+                  ] },
+                  { icon: '🏦', color: 'text-amber-300', title: '예수금에 적용', lines: [
+                    '잔액이 + 이면 "→ 예수금에 적용" 버튼이 나타남',
+                    '클릭 시: 새 예수금 = 기존 예수금 + 잔액',
+                    '자동 적용 안 함 — 사용자가 직접 적용해야 다음 리밸런싱 자금이 됨',
+                  ] },
+                  { icon: '📊', color: 'text-purple-300', title: '계산 예시', lines: [
+                    '투자가능금 100,000 (종목 99,000 + 예수금 1,000 + 적립금 0)',
+                    '목표 비중 합 98.9% → 매도 약간 더 발생 가정',
+                    '매수 = 50,000, 매도 = 50,500',
+                    '실구매비용 TOTAL = 50,500 − 50,000 = +500',
+                    '잔액 = +500 → 표시 500',
+                    '추가가능 (가격 100원 종목) = ⌊500 ÷ 100⌋ = 5개',
+                  ] },
+                ].map(({ icon, color, title, lines }) => (
+                  <div key={title} className="mb-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`${color} font-bold text-[11px] w-4 text-center shrink-0`}>{icon}</span>
+                      <span className="text-white font-bold text-[11px]">{title}</span>
+                    </div>
+                    {lines.map((line, i) => (
+                      <div key={i} className="flex items-start gap-1.5 pl-1">
+                        <span className="text-gray-600 text-[10px] shrink-0 mt-0.5">·</span>
+                        <span className="text-[10px] leading-6 text-gray-400">{line}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
     </>
   );
 }
