@@ -221,11 +221,15 @@ export default function RebalancingPanel({
               {(() => {
                 const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
                 const fmtAmount = (n) => isOverseasHeader ? fmtUSD(n) : formatCurrency(n);
+                const fmtPlain = (n) => isOverseasHeader
+                  ? new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cleanNum(n))
+                  : formatNumber(Math.round(cleanNum(n)));
                 const isRebalance = settings.mode === 'rebalance';
                 const leftLabel = isRebalance ? '총평가금액' : '예수금';
                 const leftVal = isRebalance ? headerNativeTotalEval : headerDepositAmount;
                 const investable = leftVal + headerAmount;
-                const balance = investable - headerBaseCost - headerExtraCost;
+                const totalCost = headerBaseCost + headerExtraCost;
+                const balance = investable - totalCost;
                 const modeOptions = [
                   { value: 'accumulate', label: '적립식', color: '#facc15' },
                   { value: 'rebalance', label: '리밸런싱', color: '#22c55e' },
@@ -258,11 +262,17 @@ export default function RebalancingPanel({
                       )}
                       <div className="flex items-center justify-between gap-3 border-t border-gray-700/60 pt-1.5">
                         <span className="text-gray-300 font-bold shrink-0">투자가능금</span>
-                        <span className="text-green-400 font-bold text-right truncate text-[13px]">{leftLabel} {headerAmount > 0 ? `+ 적립금 ` : ''}= {fmtAmount(investable)}</span>
+                        <span className="text-green-400 font-bold text-right truncate text-[13px]">
+                          {headerAmount > 0
+                            ? <>{leftLabel}({fmtPlain(leftVal)}) + 적립금({fmtPlain(headerAmount)}) = {fmtAmount(investable)}</>
+                            : <>{leftLabel} = {fmtAmount(investable)}</>}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-gray-400 shrink-0">잔액</span>
-                        <span className={`font-bold text-right truncate ${balance > 0 ? 'text-sky-300' : balance < 0 ? 'text-red-400' : 'text-gray-500'}`}>투자가능금 − 실구매비용 = {fmtAmount(balance)}</span>
+                        <span className={`font-bold text-right truncate ${balance > 0 ? 'text-sky-300' : balance < 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                          투자가능금({fmtPlain(investable)}) − 실구매비용({fmtPlain(totalCost)}) = {fmtAmount(balance)}
+                        </span>
                       </div>
                       {rebalRemaining > 0 && (
                         <button
