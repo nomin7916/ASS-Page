@@ -444,7 +444,24 @@ export default function PortfolioChart({
                     <span className={`text-[10px] font-bold ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
                       ({displayResult.profit >= 0 ? '+' : ''}{formatCurrency(displayResult.profit)})
                     </span>
+                    {displayResult.startProfit != null && displayResult.endProfit != null && (
+                      <span className="text-[10px] text-gray-500 font-mono">
+                        ({formatCurrency(displayResult.startProfit)} → {formatCurrency(displayResult.endProfit)})
+                      </span>
+                    )}
                   </div>
+                  {displayResult.startEval != null && displayResult.endEval != null && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-sm bg-gray-400 shrink-0" />
+                      <span className="text-[11px] font-bold text-gray-300">나의 총자산</span>
+                      <span className={`text-[12px] font-black ${displayResult.endEval >= displayResult.startEval ? 'text-red-400' : 'text-blue-400'}`}>
+                        {displayResult.rate > 0 ? '+' : displayResult.rate < 0 ? '' : ''}{displayResult.rate.toFixed(2)}%
+                      </span>
+                      <span className="text-[10px] text-gray-500 font-mono">
+                        ({formatCurrency(displayResult.startEval)} → {formatCurrency(displayResult.endEval)})
+                      </span>
+                    </div>
+                  )}
                   {showBacktest && displayResult.backtestPeriodRate != null && (
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />

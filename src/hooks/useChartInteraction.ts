@@ -47,8 +47,14 @@ export function useChartInteraction({
     const backtestPeriodRate = (sData.backtestRate != null && eData.backtestRate != null)
       ? ((100 + eData.backtestRate) / (100 + sData.backtestRate) - 1) * 100
       : null;
+    const sPrin = Number(sData.principalAmount) || 0;
+    const ePrin = Number(eData.principalAmount) || 0;
     return {
       startDate: sData.date, endDate: eData.date, profit, rate,
+      startEval: sData.evalAmount,
+      endEval: eData.evalAmount,
+      startProfit: sData.evalAmount - sPrin,
+      endProfit: eData.evalAmount - ePrin,
       kospiPeriodRate: sData.kospiPoint > 0 ? ((eData.kospiPoint / sData.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: sData.sp500Point > 0 ? ((eData.sp500Point / sData.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: sData.nasdaqPoint > 0 ? ((eData.nasdaqPoint / sData.nasdaqPoint) - 1) * 100 : null,
