@@ -160,6 +160,30 @@ export default function RebalancingPanel({
                       </ResponsiveContainer>
                     </div>
                   </div>
+                  {(() => {
+                    const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+                    const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
+                    const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
+                    const projTotal = projD + projS;
+                    if (projTotal <= 0) return null;
+                    const projDSData = [{ name: '위험', value: projD }, { name: '안전', value: projS }];
+                    const DS_COLORS = ['#ef4444', '#10b981'];
+                    return (
+                      <div className="flex flex-col items-center">
+                        <div className="text-gray-500 text-[10px] font-semibold mb-0">리밸런싱 후 위험/안전</div>
+                        <div style={{ height: 120, width: 120 }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Tooltip content={makeCompactPieTooltip(projDSData)} />
+                              <Pie data={projDSData} innerRadius="35%" outerRadius="72%" dataKey="value" label={renderCompactPieLabel} labelLine={false} onMouseEnter={(data) => setHoveredProjDSSlice(data)} onMouseLeave={() => setHoveredProjDSSlice(null)}>
+                                {projDSData.map((_, i) => <Cell key={i} fill={DS_COLORS[i]} />)}
+                              </Pie>
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </>
               )}
             </div>
