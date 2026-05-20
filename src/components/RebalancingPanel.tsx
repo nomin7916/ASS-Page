@@ -275,9 +275,9 @@ export default function RebalancingPanel({
                   return (
                     <tr>
                       {!H('category') && (
-                        <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600 sticky top-0 left-0 z-30 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('category')}>
+                        <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600 sticky top-0 left-0 z-30 bg-[#1e293b] relative" onClick={() => handleRebalanceSort(null)} title="클릭하여 정렬 초기화">
                           {hideStrip('category')}
-                          구분{arr('category')}
+                          구분
                         </th>
                       )}
                       {!H('changeRate') && (
