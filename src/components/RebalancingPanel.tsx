@@ -114,28 +114,29 @@ export default function RebalancingPanel({
     );
   };
 
+  const isOverseasHeader = activePortfolioAccountType === 'overseas';
+  const headerFx = marketIndicators.usdkrw || 1;
+  const headerNativeTotalEval = isOverseasHeader ? totals.totalEval / headerFx : totals.totalEval;
   const headerDepositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+  const headerAmount = cleanNum(settings.amount);
   const headerBaseCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
   const headerExtraCost = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
-  const headerAllocPool = settings.mode === 'accumulate'
-    ? headerDepositAmount + cleanNum(settings.amount)
-    : headerDepositAmount;
+  const headerAllocPool = settings.mode === 'rebalance'
+    ? headerNativeTotalEval + headerAmount
+    : headerDepositAmount + headerAmount;
   const rebalRemaining = headerAllocPool - headerBaseCost - headerExtraCost;
 
   useEffect(() => {
-    if (settings.mode === 'deposit-only' && !cleanNum(settings.amount) && headerDepositAmount > 0) {
-      updateSettingsForType({ ...settings, amount: headerDepositAmount });
+    if (settings.mode === 'deposit-only') {
+      updateSettingsForType({ ...settings, mode: 'accumulate', amount: 0 });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.mode]);
+  }, []);
 
   const applyRemainingToDeposit = () => {
     if (rebalRemaining <= 0) return;
     const newDeposit = Math.round(rebalRemaining);
     setPortfolio(prev => prev.map(p => p.type === 'deposit' ? { ...p, depositAmount: newDeposit } : p));
-    if (settings.mode === 'deposit-only') {
-      updateSettingsForType({ ...settings, amount: newDeposit });
-    }
   };
 
   const formatRemaining = (n) => activePortfolioAccountType === 'overseas'
