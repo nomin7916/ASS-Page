@@ -1,6 +1,6 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-05-19  
+> 마지막 작업일: 2026-05-21  
 > 브랜치: main  
 > 작업 PC: 메인 PC
 
@@ -9,15 +9,61 @@
 ## 현재 상태 요약
 
 ### App.tsx 규모
-- 약 **2,099줄** (Phase 10 완료 기준)
+- 약 **2,103줄** (한국 ETF 과표 계산기 wiring 포함)
 
 ### 컴포넌트 수
-- `components/`: **22개** (DividendSummaryTable 포함)
+- `components/`: **23개** (KrEtfTaxModal 추가)
 - `hooks/`: **7개**
 
 ---
 
-## 이번 세션 작업 내역 (2026-05-19)
+## 이번 세션 작업 내역 (2026-05-21)
+
+### 한국 ETF 배당 과표 계산기 신규 기능
+
+**대상 파일**: `src/utils.ts`, `src/hooks/usePortfolioState.ts`, `src/components/KrEtfTaxModal.tsx` (신규), `src/components/DividendSummaryTable.tsx`, `src/App.tsx`, `scripts/verify-kretf-tax.mjs` (신규), `package.json`, `CLAUDE.md`, `memory/use-korean-honorifics.md` (신규)
+
+#### 요구사항
+- 한국 ETF의 매입 시점 과표기준가와 배당락일 과표기준가를 입력받아 분배금 과세 금액을 산출.
+- 가중평균 매입 과표 → max(0, 배당락 과표 - 가중평균) × 보유수량 × 15.4%.
+- 평균법 매도 지원, 주당 과세표준은 소수 둘째자리 반올림(운용사 관행).
+
+#### 변경 내용
+1. **순수 계산 함수** (`src/utils.ts`)
+   - `calculateKrEtfDividendTax(purchases, dividend, options)` 및 5종 타입(`KrEtfPurchaseEvent`, `KrEtfSaleEvent`, `KrEtfDividendEvent`, `KrEtfTaxOptions`, `KrEtfTaxResult`).
+   - 평균법 매도: 매도 시 `totalCost -= shares × (totalCost/heldShares)`로 평균 단가 유지.
+   - 입력 검증 throw: 빈 매입, 소수 shares, 0 과표, 잘못된 날짜 형식, 매도 > 보유, FIFO 미지원.
+2. **단위 테스트 스크립트** (`scripts/verify-kretf-tax.mjs`, `npm run verify:tax`)
+   - 8개 케이스: 명세 예시 일치(20,001주 → 세금 ₩13,892), 음수 과세차 클램프, 평균법 매도, ex-date 이후 매입 무시, 초과 매도 에러, 입력 검증, 부동소수점 누적 안정성, 전량 매도 케이스.
+3. **데이터 모델 핸들러** (`src/hooks/usePortfolioState.ts`)
+   - `portfolio.taxBaseHistory[code] = { purchases: [], sales: [], exTaxBase: {} }` 구조.
+   - 신규 핸들러 3종: `updateTaxBasePurchases`, `updateTaxBaseSales`, `updateTaxBaseExPrice`.
+4. **모달 컴포넌트** (`src/components/KrEtfTaxModal.tsx`)
+   - 종목 선택 드롭다운 + 현재 보유수량 대비 입력 합계 불일치 경고.
+   - 매입 이벤트 테이블(날짜·주식수·과표 입력), 매도 이벤트 테이블(접힘, 평균법).
+   - 배당 이벤트별 카드: 배당락 과표 입력 + 실시간 계산 결과 + "세금을 표에 적용" 버튼.
+   - 적용 시 `dividendTaxAmounts[code][ym]`에 저장 → 분배금 표가 자동 갱신.
+5. **헤더 버튼 통합** (`src/components/DividendSummaryTable.tsx`)
+   - 헤더 우측에 🧮 아이콘 버튼 추가(`+ ↻` 좌측).
+   - 노출 조건: `accountType ∈ {portfolio, dividend, isa, pension, dc-irp}` (한국 ETF 보유 가능 타입). 탭 무관 항상 노출.
+6. **App.tsx wiring** — `usePortfolioState`에서 3 핸들러 + `notify` 프롭 전달.
+7. **CLAUDE.md** — 컴포넌트 목록, 훅 핸들러, 데이터 구조 항목 갱신.
+8. **신규 메모리 `memory/use-korean-honorifics.md`** — 모든 한국어 응답은 높임말로 작성 규칙.
+
+#### 설계 결정 (사용자 답변 기반)
+- 우선순위: 새 계산 결과를 `dividendTaxAmounts`에 저장(수동값과 동급, 최우선).
+- 매도 처리: v1부터 평균법만 지원 (FIFO 추후).
+- 매입 입력: 모달에서 수동 입력(기존 `quantity`와 별개).
+- 노출 범위: 초기 `portfolio`만 → COVERD 4 계좌(추정 `dividend` 타입)에서 미노출 신고 받아 5종으로 확장.
+
+#### 검증
+- `npm run verify:tax` — 로컬에서 사용자가 실행 필요(이 환경에 Node 미설치).
+- `npm run build` — 마찬가지로 사용자 환경에서 확인 필요.
+- 수동 통합 테스트: dev 서버에서 KODEX 200타겟위 사례(17,516 + 400 + 2,085주, 배당락 과표 9841.20, 주당 348원) → 세금 ₩13,892, 실수령 ₩6,946,456 일치 확인.
+
+---
+
+## 이전 세션 작업 내역 (2026-05-19)
 
 ### 분배금 버그 수정 — 빈 미래월 셀의 허위 금액·옆 달 전이 제거
 
