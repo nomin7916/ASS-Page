@@ -510,6 +510,149 @@ export const buildDepositCSV = (rows) => {
   return csv;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 한국 ETF 배당 과세 계산 (사용자 입력 매입 과표 → 분배락 과세표준 차분)
+// 실제 운용사 관행: 주당 과세표준을 소수 둘째 자리로 반올림한 후 보유수량을 곱한다.
+// ─────────────────────────────────────────────────────────────────────────────
+export interface KrEtfPurchaseEvent {
+  id?: string;
+  date: string;            // 'YYYY-MM-DD'
+  shares: number;          // 양의 정수
+  taxBasePrice: number;    // 매입 시점 과표기준가, > 0 (소수점 허용)
+}
+
+export interface KrEtfSaleEvent {
+  id?: string;
+  date: string;            // 'YYYY-MM-DD'
+  shares: number;          // 양의 정수
+}
+
+export interface KrEtfDividendEvent {
+  exDate: string;             // 'YYYY-MM-DD'
+  exTaxBasePrice: number;     // 배당락일 과표기준가, > 0
+  perShareGrossDividend: number;  // 주당 세전 배당금, ≥ 0
+}
+
+export interface KrEtfTaxOptions {
+  taxRate?: number;             // default 0.154 (배당소득세 15.4%)
+  saleMethod?: 'avg';           // v1: 평균법만 지원 (FIFO 추후)
+  sales?: KrEtfSaleEvent[];
+  perShareDecimals?: number;    // 주당 과세표준 반올림 자릿수 (default 2)
+}
+
+export interface KrEtfTaxResult {
+  weightedAvgTaxBase: number;   // 배당락일 시점 가중평균 매입 과표
+  taxablePerShare: number;      // max(0, exBase - 가중평균), 소수 N자리 반올림
+  totalShares: number;          // 배당락일 보유수량
+  taxableAmount: number;        // taxablePerShare × totalShares (원, 반올림)
+  tax: number;                  // 원천징수액 (원, 반올림)
+  grossDividend: number;        // 세전 배당금 (원, 반올림)
+  netDividend: number;          // 세후 배당금 (gross - tax)
+}
+
+export function calculateKrEtfDividendTax(
+  purchases: KrEtfPurchaseEvent[],
+  dividend: KrEtfDividendEvent,
+  options: KrEtfTaxOptions = {},
+): KrEtfTaxResult {
+  const taxRate = options.taxRate ?? 0.154;
+  const saleMethod = options.saleMethod ?? 'avg';
+  const sales = options.sales ?? [];
+  const perShareDecimals = options.perShareDecimals ?? 2;
+
+  if (!Array.isArray(purchases) || purchases.length === 0) {
+    throw new Error('매입 이벤트가 최소 1건 필요합니다.');
+  }
+  if (!dividend || !/^\d{4}-\d{2}-\d{2}$/.test(String(dividend.exDate || ''))) {
+    throw new Error('배당락일이 올바른 YYYY-MM-DD 형식이 아닙니다.');
+  }
+  if (!(dividend.exTaxBasePrice > 0)) {
+    throw new Error('배당락일 과표기준가는 0보다 커야 합니다.');
+  }
+  if (!(dividend.perShareGrossDividend >= 0)) {
+    throw new Error('주당 세전 배당금은 0 이상이어야 합니다.');
+  }
+  if (saleMethod !== 'avg') {
+    throw new Error(`saleMethod '${saleMethod}' 미지원 (v1: 'avg'만 지원)`);
+  }
+
+  purchases.forEach((p, i) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || ''))) {
+      throw new Error(`매입[${i}] 날짜 형식 오류: ${p.date}`);
+    }
+    if (!Number.isFinite(p.shares) || p.shares <= 0 || !Number.isInteger(p.shares)) {
+      throw new Error(`매입[${i}] 주식수는 양의 정수여야 합니다: ${p.shares}`);
+    }
+    if (!Number.isFinite(p.taxBasePrice) || p.taxBasePrice <= 0) {
+      throw new Error(`매입[${i}] 과표기준가는 0보다 커야 합니다: ${p.taxBasePrice}`);
+    }
+  });
+  sales.forEach((s, i) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date || ''))) {
+      throw new Error(`매도[${i}] 날짜 형식 오류: ${s.date}`);
+    }
+    if (!Number.isFinite(s.shares) || s.shares <= 0 || !Number.isInteger(s.shares)) {
+      throw new Error(`매도[${i}] 주식수는 양의 정수여야 합니다: ${s.shares}`);
+    }
+  });
+
+  type Evt = { date: string; kind: 'B' | 'S'; shares: number; price?: number };
+  const events: Evt[] = [
+    ...purchases.map<Evt>(p => ({ date: p.date, kind: 'B', shares: p.shares, price: p.taxBasePrice })),
+    ...sales.map<Evt>(s => ({ date: s.date, kind: 'S', shares: s.shares })),
+  ]
+    .filter(e => e.date <= dividend.exDate)
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.kind === b.kind ? 0 : a.kind === 'B' ? -1 : 1));
+
+  let heldShares = 0;
+  let totalCost = 0;
+  for (const e of events) {
+    if (e.kind === 'B') {
+      totalCost += e.shares * (e.price as number);
+      heldShares += e.shares;
+    } else {
+      if (e.shares > heldShares) {
+        throw new Error(`매도 ${e.date}: 보유수량(${heldShares}) 초과 매도(${e.shares})`);
+      }
+      const costPerShare = heldShares > 0 ? totalCost / heldShares : 0;
+      totalCost -= e.shares * costPerShare;
+      heldShares -= e.shares;
+    }
+  }
+
+  if (heldShares <= 0) {
+    return {
+      weightedAvgTaxBase: 0,
+      taxablePerShare: 0,
+      totalShares: 0,
+      taxableAmount: 0,
+      tax: 0,
+      grossDividend: 0,
+      netDividend: 0,
+    };
+  }
+
+  const weightedAvgTaxBase = totalCost / heldShares;
+  const rawTaxablePerShare = Math.max(0, dividend.exTaxBasePrice - weightedAvgTaxBase);
+  const factor = 10 ** perShareDecimals;
+  const taxablePerShare = Math.round(rawTaxablePerShare * factor) / factor;
+  const totalShares = heldShares;
+  const taxableAmount = Math.round(taxablePerShare * totalShares);
+  const tax = Math.round(taxableAmount * taxRate);
+  const grossDividend = Math.round(dividend.perShareGrossDividend * totalShares);
+  const netDividend = grossDividend - tax;
+
+  return {
+    weightedAvgTaxBase,
+    taxablePerShare,
+    totalShares,
+    taxableAmount,
+    tax,
+    grossDividend,
+    netDividend,
+  };
+}
+
 // 삼성운용 ETF 배당 과세 CSV 파싱
 // 포맷: 1행=펀드명, 2행=기준일, 3행=헤더, 4행~=데이터(지급기준일,실지급일,분배율,분배금액,주당과세표준)
 export const parseSamsungFundCSV = (text) => {

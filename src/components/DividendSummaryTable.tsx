@@ -2,6 +2,7 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { cleanNum, formatCurrency, dividendPayDate } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
+import KrEtfTaxModal from './KrEtfTaxModal';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -196,10 +197,11 @@ function parseDividendApiResult(result) {
   return { amounts, exDates };
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] } }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] } }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
+  const [showTaxModal, setShowTaxModal] = useState(false);
   const inputRef = useRef(null);
   const krwInputRef = useRef(null);
   const afterTaxBlurTimer = useRef(null);
@@ -1247,6 +1249,24 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </div>
         )}
         <div className="ml-auto flex items-center gap-1.5 shrink-0 self-center">
+          {activeTab === 'actual' && nonGoldPortfolios[0]?.accountType === 'portfolio' && updateTaxBasePurchases && (
+            <button
+              onClick={() => setShowTaxModal(true)}
+              title="한국 ETF 과표 기반 세금 계산"
+              className="w-7 h-7 flex items-center justify-center rounded border border-amber-700/50 text-amber-400/80 hover:bg-amber-900/30 hover:text-amber-300 hover:border-amber-600 active:scale-95 transition-all"
+            >
+              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="2" width="16" height="20" rx="2"/>
+                <line x1="8" y1="6" x2="16" y2="6"/>
+                <line x1="8" y1="10" x2="10" y2="10"/>
+                <line x1="12" y1="10" x2="14" y2="10"/>
+                <line x1="16" y1="10" x2="16" y2="14"/>
+                <line x1="8" y1="14" x2="10" y2="14"/>
+                <line x1="12" y1="14" x2="14" y2="14"/>
+                <line x1="8" y1="18" x2="14" y2="18"/>
+              </svg>
+            </button>
+          )}
           {activeTab === 'actual' && addPortfolioExtraRow && (
             <button
               onClick={() => addPortfolioExtraRow(nonGoldPortfolios[0]?.id)}
@@ -1984,6 +2004,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             셀 클릭 → 실제 입금액 직접 입력 (Enter 저장 · Esc 취소) &nbsp;·&nbsp; 초록 = 직접 입력 &nbsp;·&nbsp; 파란 = 예상값 &nbsp;·&nbsp; 수량 = (세후+과세)÷주당분배금 계산값, <span className="text-amber-400/80">더블클릭 시 직접 수정</span>
           </div>
         </div>
+      )}
+      {showTaxModal && nonGoldPortfolios[0]?.accountType === 'portfolio' && (
+        <KrEtfTaxModal
+          portfolio={nonGoldPortfolios[0]}
+          onClose={() => setShowTaxModal(false)}
+          updateTaxBasePurchases={updateTaxBasePurchases}
+          updateTaxBaseSales={updateTaxBaseSales}
+          updateTaxBaseExPrice={updateTaxBaseExPrice}
+          updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
+          notify={notify || (() => {})}
+        />
       )}
     </div>
   );

@@ -27,6 +27,7 @@ src/
     ├── IntegratedDashboard.tsx   # 통합 대시보드 (멀티 계좌 합산 뷰)
     ├── DividendSummaryTable.tsx  # 분배금 현황 테이블 (compact/개별 모드)
     ├── DividendVerifyModal.tsx   # 분배금 검증 모달 (올해 1월~최근월 종목×월 매트릭스)
+    ├── KrEtfTaxModal.tsx         # 한국 ETF 과표 계산기 (매입/매도/배당락 과표 → 세금 산출)
     ├── PortfolioTable.tsx        # 종목 테이블
     ├── KrxGoldTable.tsx          # KRX 금현물 전용 테이블
     ├── PortfolioChart.tsx        # 수익률 라인 차트
@@ -72,13 +73,16 @@ src/
 `updatePortfolioColor`, `resetAllPortfolioColors`, `updateSettingsForType`,
 `updatePortfolioMemo`, `movePortfolio`, `handleUpdate`, `handleDeleteStock`,
 `handleAddStock`, `handleAddFund`,
-`updateDividendHistory`, `updatePortfolioDividendHistory`, `updatePortfolioActualDividend`
+`updateDividendHistory`, `updatePortfolioDividendHistory`, `updatePortfolioActualDividend`,
+`updateTaxBasePurchases`, `updateTaxBaseSales`, `updateTaxBaseExPrice` (한국 ETF 과표 입력)
 
 ### 분배금 데이터 구조
 - `portfolio.dividendHistory`: `{ [code]: { [YYYY-MM]: perShareAmount } }` — API 조회
 - `portfolio.actualDividend`: `{ [code]: { [YYYY-MM]: absoluteAmount } }` — 사용자 입력(절댓값, 수량 무관)
 - `portfolio.rowColor`: 계좌별 색상 (hex) — DividendSummaryTable compact 그라데이션에 사용
 - **저장 키는 배당락월(YYYY-MM) 기준** 유지. dividendExDate/actualDividend/actualDividendQty/dividendTaxAmounts/actualAfterTax* 동일.
+- `portfolio.taxBaseHistory`: `{ [code]: { purchases: [{id,date,shares,taxBasePrice}], sales: [{id,date,shares}], exTaxBase: {[YYYY-MM]: number} } }` — 한국 ETF 과표 입력. KrEtfTaxModal에서 사용자가 직접 매입/매도/배당락 과표를 기록하고 `calculateKrEtfDividendTax`(utils.ts)로 세금 산출. 적용 시 `dividendTaxAmounts[code][ym]`에 저장 → 기존 수동값과 동급 최우선.
+- 모달 노출 조건: `accountType === 'portfolio'` 계좌의 "월 입금 내역" 탭. `npm run verify:tax`로 계산 함수 단위 테스트.
 
 ### 분배금 현황 = 지급월 기준 표시
 `DividendSummaryTable`의 12개월 컬럼은 **지급일(배당락+2영업일, `dividendPayDate`) 기준**으로 재배치한다.

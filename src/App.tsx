@@ -485,6 +485,9 @@ export default function App() {
     updatePortfolioExtraRowCode,
     deletePortfolioExtraRow,
     updatePortfolioExtraRowMonth,
+    updateTaxBasePurchases,
+    updateTaxBaseSales,
+    updateTaxBaseExPrice,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
 
@@ -2001,6 +2004,10 @@ export default function App() {
             updatePortfolioExtraRowCode={updatePortfolioExtraRowCode}
             deletePortfolioExtraRow={deletePortfolioExtraRow}
             updatePortfolioExtraRowMonth={updatePortfolioExtraRowMonth}
+            updateTaxBasePurchases={updateTaxBasePurchases}
+            updateTaxBaseSales={updateTaxBaseSales}
+            updateTaxBaseExPrice={updateTaxBaseExPrice}
+            notify={notify}
             usdkrw={marketIndicators.usdkrw || 1300}
             holidays={marketHolidays}
             dividendTaxHistory={dividendTaxHistory}
