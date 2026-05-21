@@ -82,7 +82,7 @@ src/
 - `portfolio.rowColor`: 계좌별 색상 (hex) — DividendSummaryTable compact 그라데이션에 사용
 - **저장 키는 배당락월(YYYY-MM) 기준** 유지. dividendExDate/actualDividend/actualDividendQty/dividendTaxAmounts/actualAfterTax* 동일.
 - `portfolio.taxBaseHistory`: `{ [code]: { purchases: [{id,date,shares,taxBasePrice}], sales: [{id,date,shares}], exTaxBase: {[YYYY-MM]: number} } }` — 한국 ETF 과표 입력. KrEtfTaxModal에서 사용자가 직접 매입/매도/배당락 과표를 기록하고 `calculateKrEtfDividendTax`(utils.ts)로 세금 산출. 적용 시 `dividendTaxAmounts[code][ym]`에 저장 → 기존 수동값과 동급 최우선.
-- 모달 노출 조건: `accountType === 'portfolio'` 계좌의 "월 입금 내역" 탭. `npm run verify:tax`로 계산 함수 단위 테스트.
+- 모달 노출 조건: `accountType ∈ {portfolio, dividend, isa, pension, dc-irp}` (한국 ETF 보유 가능 타입). 탭 무관 항상 노출. `npm run verify:tax`로 계산 함수 단위 테스트.
 
 ### 분배금 현황 = 지급월 기준 표시
 `DividendSummaryTable`의 12개월 컬럼은 **지급일(배당락+2영업일, `dividendPayDate`) 기준**으로 재배치한다.

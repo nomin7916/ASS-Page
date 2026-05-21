@@ -116,7 +116,7 @@ export default function KrEtfTaxModal({
     notify(`${ev.yearMonth} 세금 ${formatCurrency(result.tax)} 적용`, 'success');
   };
 
-  if (!portfolio || portfolio.accountType !== 'portfolio') return null;
+  if (!portfolio || !['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(portfolio.accountType)) return null;
 
   return (
     <div

@@ -1249,7 +1249,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </div>
         )}
         <div className="ml-auto flex items-center gap-1.5 shrink-0 self-center">
-          {activeTab === 'actual' && nonGoldPortfolios[0]?.accountType === 'portfolio' && updateTaxBasePurchases && (
+          {['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(nonGoldPortfolios[0]?.accountType) && updateTaxBasePurchases && (
             <button
               onClick={() => setShowTaxModal(true)}
               title="한국 ETF 과표 기반 세금 계산"
@@ -2005,7 +2005,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </div>
         </div>
       )}
-      {showTaxModal && nonGoldPortfolios[0]?.accountType === 'portfolio' && (
+      {showTaxModal && ['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(nonGoldPortfolios[0]?.accountType) && (
         <KrEtfTaxModal
           portfolio={nonGoldPortfolios[0]}
           onClose={() => setShowTaxModal(false)}
