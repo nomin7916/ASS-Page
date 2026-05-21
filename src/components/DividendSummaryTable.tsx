@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { cleanNum, formatCurrency, dividendPayDate } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
-import KrEtfTaxModal from './KrEtfTaxModal';
+import KrEtfTaxMatrix from './KrEtfTaxMatrix';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -201,7 +201,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
-  const [showTaxModal, setShowTaxModal] = useState(false);
   const inputRef = useRef(null);
   const krwInputRef = useRef(null);
   const afterTaxBlurTimer = useRef(null);
@@ -1182,6 +1181,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           >
             월 입금 내역
           </button>
+          {['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(nonGoldPortfolios[0]?.accountType) && updateTaxBasePurchases && (
+            <button
+              onClick={() => setActiveTab('tax')}
+              className={`px-3 py-1 text-xs font-bold transition-colors border-l border-gray-700 ${activeTab === 'tax' ? 'bg-amber-700/80 text-white' : 'bg-transparent text-gray-400 hover:bg-gray-700/50'}`}
+            >
+              과표 계산
+            </button>
+          )}
         </div>
         {activeTab === 'expected' && annualTotal > 0 && (
           <div className="flex items-start gap-3 self-center">
@@ -1249,24 +1256,6 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </div>
         )}
         <div className="ml-auto flex items-center gap-1.5 shrink-0 self-center">
-          {['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(nonGoldPortfolios[0]?.accountType) && updateTaxBasePurchases && (
-            <button
-              onClick={() => setShowTaxModal(true)}
-              title="한국 ETF 과표 기반 세금 계산"
-              className="w-7 h-7 flex items-center justify-center rounded border border-amber-700/50 text-amber-400/80 hover:bg-amber-900/30 hover:text-amber-300 hover:border-amber-600 active:scale-95 transition-all"
-            >
-              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="4" y="2" width="16" height="20" rx="2"/>
-                <line x1="8" y1="6" x2="16" y2="6"/>
-                <line x1="8" y1="10" x2="10" y2="10"/>
-                <line x1="12" y1="10" x2="14" y2="10"/>
-                <line x1="16" y1="10" x2="16" y2="14"/>
-                <line x1="8" y1="14" x2="10" y2="14"/>
-                <line x1="12" y1="14" x2="14" y2="14"/>
-                <line x1="8" y1="18" x2="14" y2="18"/>
-              </svg>
-            </button>
-          )}
           {activeTab === 'actual' && addPortfolioExtraRow && (
             <button
               onClick={() => addPortfolioExtraRow(nonGoldPortfolios[0]?.id)}
@@ -2005,10 +1994,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </div>
         </div>
       )}
-      {showTaxModal && ['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(nonGoldPortfolios[0]?.accountType) && (
-        <KrEtfTaxModal
+      {activeTab === 'tax' && ['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(nonGoldPortfolios[0]?.accountType) && updateTaxBasePurchases && (
+        <KrEtfTaxMatrix
           portfolio={nonGoldPortfolios[0]}
-          onClose={() => setShowTaxModal(false)}
           updateTaxBasePurchases={updateTaxBasePurchases}
           updateTaxBaseSales={updateTaxBaseSales}
           updateTaxBaseExPrice={updateTaxBaseExPrice}
