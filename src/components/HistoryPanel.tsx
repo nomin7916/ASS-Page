@@ -85,7 +85,7 @@ export default function HistoryPanel({
                   {sortedHistoryDesc.map((h, i) => {
                     const prevEntry = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
                     const dod = (prevEntry && prevEntry.evalAmount > 0) ? ((h.evalAmount / prevEntry.evalAmount) - 1) * 100 : 0;
-                    const isToday = h.date === new Date().toISOString().split('T')[0];
+                    const isToday = h.date === effectiveDateKey;
                     const isUserModified = h.isAdjusted || userModifiedDates.has(h.date);
 
                     return (
