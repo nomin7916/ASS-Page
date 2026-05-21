@@ -63,8 +63,8 @@ export default function KrEtfTaxModal({
       .sort((a, b) => b.yearMonth.localeCompare(a.yearMonth));
   }, [portfolio?.dividendHistory, portfolio?.dividendExDate, selectedCode]);
 
-  const totalPurchasedShares = purchases.reduce((s, p) => s + (cleanNum(p.shares) || 0), 0);
-  const totalSoldShares = sales.reduce((s, p) => s + (cleanNum(p.shares) || 0), 0);
+  const totalPurchasedShares = purchases.reduce((s, p) => s + safeNum(p.shares), 0);
+  const totalSoldShares = sales.reduce((s, p) => s + safeNum(p.shares), 0);
   const netShares = totalPurchasedShares - totalSoldShares;
   const currentQty = cleanNum(selectedStock?.quantity || 0);
 
@@ -76,7 +76,7 @@ export default function KrEtfTaxModal({
     { id: generateId(), date: new Date().toISOString().slice(0, 10), shares: 0, taxBasePrice: 0 },
   ]);
   const updatePurchase = (id, field, value) => persistPurchases(purchases.map(p =>
-    p.id !== id ? p : { ...p, [field]: field === 'date' ? String(value) : safeNum(value) },
+    p.id !== id ? p : { ...p, [field]: field === 'date' ? String(value) : value },
   ));
   const deletePurchase = (id) => persistPurchases(purchases.filter(p => p.id !== id));
 
@@ -85,18 +85,20 @@ export default function KrEtfTaxModal({
     { id: generateId(), date: new Date().toISOString().slice(0, 10), shares: 0 },
   ]);
   const updateSale = (id, field, value) => persistSales(sales.map(p =>
-    p.id !== id ? p : { ...p, [field]: field === 'date' ? String(value) : safeNum(value) },
+    p.id !== id ? p : { ...p, [field]: field === 'date' ? String(value) : value },
   ));
   const deleteSale = (id) => persistSales(sales.filter(p => p.id !== id));
 
   const computeForEvent = (ev) => {
-    const exPrice = exTaxBase[ev.yearMonth];
+    const exPrice = safeNum(exTaxBase[ev.yearMonth]);
     if (!(exPrice > 0)) return null;
     const validPurchases = purchases
+      .map(p => ({ ...p, shares: safeNum(p.shares), taxBasePrice: safeNum(p.taxBasePrice) }))
       .filter(p => p.shares > 0 && p.taxBasePrice > 0 && /^\d{4}-\d{2}-\d{2}$/.test(p.date))
       .map(p => ({ id: p.id, date: p.date, shares: Math.floor(p.shares), taxBasePrice: p.taxBasePrice }));
     if (validPurchases.length === 0) return null;
     const validSales = sales
+      .map(s => ({ ...s, shares: safeNum(s.shares) }))
       .filter(s => s.shares > 0 && /^\d{4}-\d{2}-\d{2}$/.test(s.date))
       .map(s => ({ id: s.id, date: s.date, shares: Math.floor(s.shares) }));
     try {
@@ -337,7 +339,8 @@ export default function KrEtfTaxModal({
                       dividendEvents.map(ev => {
                         const result = computeForEvent(ev);
                         const hasResult = result && !result.error && result.totalShares > 0;
-                        const exPrice = exTaxBase[ev.yearMonth];
+                        const exPriceRaw = exTaxBase[ev.yearMonth];
+                        const exPrice = safeNum(exPriceRaw);
                         return (
                           <div key={ev.yearMonth} className="bg-gray-900/50 border border-gray-800 rounded-lg p-3">
                             <div className="flex items-center justify-between mb-2">
@@ -351,8 +354,8 @@ export default function KrEtfTaxModal({
                                 <input
                                   type="text"
                                   inputMode="decimal"
-                                  value={exPrice || ''}
-                                  onChange={e => updateTaxBaseExPrice(portfolio.id, selectedCode, ev.yearMonth, safeNum(e.target.value))}
+                                  value={exPriceRaw ?? ''}
+                                  onChange={e => updateTaxBaseExPrice(portfolio.id, selectedCode, ev.yearMonth, e.target.value)}
                                   placeholder="0.00"
                                   className="w-24 bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-2 py-1 text-[11px] text-amber-300 outline-none tabular-nums text-right"
                                 />
