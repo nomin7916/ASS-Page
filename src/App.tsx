@@ -1014,6 +1014,7 @@ export default function App() {
     setSortConfig({ key, direction: dir });
     setPortfolio(prev => {
       const stocks = [...prev.filter(p => p.type === 'stock')];
+      const funds = prev.filter(p => p.type === 'fund');
       const deposits = prev.filter(p => p.type === 'deposit');
       let tInv = 0, tEvl = 0;
       prev.forEach(item => {
@@ -1035,7 +1036,7 @@ export default function App() {
         if (typeof vA === 'string') return vA.localeCompare(vB) * dir;
         return (vA - vB) * dir;
       });
-      return [...stocks, ...deposits];
+      return [...stocks, ...funds, ...deposits];
     });
   };
 
