@@ -225,10 +225,16 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
 
   const modalAddInvestNum = cleanNum(modalAddInvest);
   const modalEvalAfterNum = cleanNum(modalEvalAfter);
-  const modalNewQty = fundModal && fundModal.currentPrice > 0 && modalEvalAfterNum > 0
-    ? modalEvalAfterNum / fundModal.currentPrice
-    : (fundModal?.currentQty ?? 0);
-  const modalAddQty = fundModal ? Math.max(0, modalNewQty - fundModal.currentQty) : 0;
+  const modalMode = modalEvalAfterNum > 0
+    ? (modalAddInvestNum > 0 ? 'confirmed' : 'correction')
+    : (modalAddInvestNum > 0 ? 'projected' : 'idle');
+  const modalNewQty = (() => {
+    if (!fundModal || fundModal.currentPrice <= 0) return fundModal?.currentQty ?? 0;
+    if (modalEvalAfterNum > 0) return modalEvalAfterNum / fundModal.currentPrice;
+    if (modalAddInvestNum > 0) return fundModal.currentQty + (modalAddInvestNum / fundModal.currentPrice);
+    return fundModal.currentQty;
+  })();
+  const modalQtyDelta = fundModal ? modalNewQty - fundModal.currentQty : 0;
   const modalNewInvest = fundModal ? fundModal.currentInvest + modalAddInvestNum : 0;
   const modalAvgPrice = modalNewQty > 0 ? modalNewInvest / modalNewQty : 0;
 
@@ -278,23 +284,68 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               <input type="text" className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white font-bold text-sm outline-none focus:border-indigo-500 caret-blue-400" value={modalEvalAfter} placeholder="예: 1,005,000" onFocus={e => e.target.select()} onChange={e => setModalEvalAfter(e.target.value)} />
             </div>
           </div>
-          {modalEvalAfterNum > 0 && modalNewQty > 0 && (
-            <div className="text-[12px] bg-indigo-950/60 border border-indigo-800/40 rounded-lg px-3 py-2.5 space-y-1.5 mb-3">
-              <div className="text-indigo-200 font-bold text-[11px] mb-1">✅ 확정 계산 (계좌 평가금액 기준)</div>
-              {modalAddQty > 0 && <div className="flex justify-between"><span className="text-gray-400">추가 수량</span><span className="text-indigo-300 font-bold">+{modalAddQty.toFixed(3)}</span></div>}
-              <div className="flex justify-between border-t border-indigo-800/30 pt-1.5"><span className="text-gray-300 font-bold">총 보유수량</span><span className="text-indigo-200 font-bold">{modalNewQty.toFixed(3)}</span></div>
-              {modalNewInvest > 0 && <div className="flex justify-between"><span className="text-gray-400">총 투자금액</span><span className="text-blue-300 font-bold">{formatCurrency(modalNewInvest)}</span></div>}
-              {modalAvgPrice > 0 && <div className="flex justify-between"><span className="text-gray-400">평균 구매단가</span><span className="text-yellow-300 font-bold">{formatNumber(Math.round(modalAvgPrice))}원</span></div>}
+          {modalMode !== 'idle' && modalNewQty > 0 && (
+            <div className={`text-[12px] rounded-lg px-3 py-2.5 space-y-1.5 mb-3 border ${
+              modalMode === 'projected'
+                ? 'bg-amber-950/30 border-amber-700/40'
+                : 'bg-indigo-950/60 border-indigo-800/40'
+            }`}>
+              <div className={`font-bold text-[11px] mb-1 ${
+                modalMode === 'projected' ? 'text-amber-300' : 'text-indigo-200'
+              }`}>
+                {modalMode === 'projected' && '📊 예상치로 적용 (현재 기준가 기준)'}
+                {modalMode === 'correction' && '🔧 수량 보정 (투자금액 유지)'}
+                {modalMode === 'confirmed' && '✅ 확정 계산 (계좌 평가금액 기준)'}
+              </div>
+              {Math.abs(modalQtyDelta) > 0.0005 && (
+                <div className="flex justify-between">
+                  <span className="text-gray-400">
+                    {modalMode === 'correction' ? '수량 보정' : '추가 수량'}
+                    {modalMode === 'projected' && <span className="text-gray-600 ml-1">(예상)</span>}
+                  </span>
+                  <span className={`font-bold ${modalQtyDelta >= 0 ? 'text-indigo-300' : 'text-orange-300'}`}>
+                    {modalQtyDelta >= 0 ? '+' : ''}{modalQtyDelta.toFixed(3)}
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between border-t border-indigo-800/30 pt-1.5">
+                <span className="text-gray-300 font-bold">총 보유수량</span>
+                <span className={`font-bold ${modalMode === 'projected' ? 'text-amber-200' : 'text-indigo-200'}`}>
+                  {modalNewQty.toFixed(3)}
+                </span>
+              </div>
+              {modalNewInvest > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-gray-400">
+                    총 투자금액
+                    {modalMode === 'correction' && <span className="text-gray-600 text-[10px] ml-1">(변경 없음)</span>}
+                  </span>
+                  <span className="text-blue-300 font-bold">{formatCurrency(modalNewInvest)}</span>
+                </div>
+              )}
+              {modalAvgPrice > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-gray-400">평균 구매단가</span>
+                  <span className="text-yellow-300 font-bold">{formatNumber(Math.round(modalAvgPrice))}원</span>
+                </div>
+              )}
+              {modalMode === 'projected' && (
+                <div className="text-[10px] text-amber-200/70 leading-snug pt-1.5 border-t border-amber-700/20">
+                  지금 적용 시 수량은 예상치로 저장됩니다.<br/>
+                  며칠 뒤 "매수 후 평가금액"만 입력해서 수량 보정 가능합니다.
+                </div>
+              )}
             </div>
           )}
           {modalAddInvestNum > 0 && fundModal.currentPrice > 0 && (
             <div className="text-[11px] bg-gray-900/40 border border-amber-700/30 rounded-lg px-3 py-2.5 mb-3 space-y-1.5">
               <div className="text-amber-300 font-bold text-[11px] flex items-center gap-1">
-                📐 예상 계산 (현재 기준가 기준 · 검증용)
+                📐 계산 과정 {modalMode === 'confirmed' ? '(검증용)' : '(예상치 산출)'}
               </div>
               <div className="text-[10px] text-gray-500 leading-snug pb-1">
-                결제까지 며칠 걸리므로 실제 매수가는 다를 수 있습니다.<br/>
-                "매수 후 평가금액"이 확정되면 위의 ✅ 확정 계산과 비교하세요.
+                {modalMode === 'confirmed'
+                  ? '위 ✅ 확정 계산과 일치하는지 확인하세요.'
+                  : '결제까지 며칠 걸리므로 실제 매수가는 다를 수 있습니다.'}
               </div>
               <div className="space-y-1 border-t border-amber-700/20 pt-1.5">
                 <div className="text-[10px] text-gray-400">① 매수 가능 수량 = 추가금액 ÷ 기준가</div>
@@ -339,11 +390,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
           )}
           <div className="flex gap-2">
             <button onClick={() => { setFundModal(null); setModalAddInvest(''); setModalEvalAfter(''); }} className="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">취소</button>
-            <button disabled={modalEvalAfterNum <= 0 || modalNewQty <= 0} onClick={() => {
+            <button disabled={modalMode === 'idle' || modalNewQty <= 0} onClick={() => {
               onUpdate(fundModal.id, 'quantity', modalNewQty);
               onUpdate(fundModal.id, 'investAmount', modalNewInvest);
               setFundModal(null); setModalAddInvest(''); setModalEvalAfter('');
-            }} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-bold transition-colors" title={modalEvalAfterNum <= 0 ? '매수 후 평가금액을 입력하세요' : ''}>적용</button>
+            }} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-bold transition-colors" title={modalMode === 'idle' ? '추가투자금액 또는 평가금액을 입력하세요' : ''}>적용</button>
           </div>
         </div>
       </div>
