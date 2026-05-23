@@ -225,11 +225,20 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
 
   const modalAddInvestNum = cleanNum(modalAddInvest);
   const modalEvalAfterNum = cleanNum(modalEvalAfter);
-  const modalAddQty = fundModal && fundModal.currentPrice > 0 && modalEvalAfterNum > 0
-    ? modalEvalAfterNum / fundModal.currentPrice : 0;
-  const modalNewQty = fundModal ? fundModal.currentQty + modalAddQty : 0;
+  const modalNewQty = fundModal && fundModal.currentPrice > 0 && modalEvalAfterNum > 0
+    ? modalEvalAfterNum / fundModal.currentPrice
+    : (fundModal?.currentQty ?? 0);
+  const modalAddQty = fundModal ? Math.max(0, modalNewQty - fundModal.currentQty) : 0;
   const modalNewInvest = fundModal ? fundModal.currentInvest + modalAddInvestNum : 0;
   const modalAvgPrice = modalNewQty > 0 ? modalNewInvest / modalNewQty : 0;
+
+  const projAddQty = fundModal && fundModal.currentPrice > 0 && modalAddInvestNum > 0
+    ? modalAddInvestNum / fundModal.currentPrice : 0;
+  const projTotalQty = fundModal ? fundModal.currentQty + projAddQty : 0;
+  const projTotalInvest = fundModal ? fundModal.currentInvest + modalAddInvestNum : 0;
+  const projTotalEval = projTotalQty * (fundModal?.currentPrice ?? 0);
+  const projReturnRate = projTotalInvest > 0
+    ? (projTotalEval - projTotalInvest) / projTotalInvest * 100 : 0;
 
   const spanColKeys = ['category', 'name', 'code', 'changeRate', 'currentPrice', 'purchasePrice', 'quantity'];
   const depositColSpan = spanColKeys.filter(k => !H(k)).length;
@@ -269,21 +278,72 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               <input type="text" className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white font-bold text-sm outline-none focus:border-indigo-500 caret-blue-400" value={modalEvalAfter} placeholder="예: 1,005,000" onFocus={e => e.target.select()} onChange={e => setModalEvalAfter(e.target.value)} />
             </div>
           </div>
-          {modalNewQty > 0 && (
+          {modalEvalAfterNum > 0 && modalNewQty > 0 && (
             <div className="text-[12px] bg-indigo-950/60 border border-indigo-800/40 rounded-lg px-3 py-2.5 space-y-1.5 mb-3">
+              <div className="text-indigo-200 font-bold text-[11px] mb-1">✅ 확정 계산 (계좌 평가금액 기준)</div>
               {modalAddQty > 0 && <div className="flex justify-between"><span className="text-gray-400">추가 수량</span><span className="text-indigo-300 font-bold">+{modalAddQty.toFixed(3)}</span></div>}
               <div className="flex justify-between border-t border-indigo-800/30 pt-1.5"><span className="text-gray-300 font-bold">총 보유수량</span><span className="text-indigo-200 font-bold">{modalNewQty.toFixed(3)}</span></div>
               {modalNewInvest > 0 && <div className="flex justify-between"><span className="text-gray-400">총 투자금액</span><span className="text-blue-300 font-bold">{formatCurrency(modalNewInvest)}</span></div>}
               {modalAvgPrice > 0 && <div className="flex justify-between"><span className="text-gray-400">평균 구매단가</span><span className="text-yellow-300 font-bold">{formatNumber(Math.round(modalAvgPrice))}원</span></div>}
             </div>
           )}
+          {modalAddInvestNum > 0 && fundModal.currentPrice > 0 && (
+            <div className="text-[11px] bg-gray-900/40 border border-amber-700/30 rounded-lg px-3 py-2.5 mb-3 space-y-1.5">
+              <div className="text-amber-300 font-bold text-[11px] flex items-center gap-1">
+                📐 예상 계산 (현재 기준가 기준 · 검증용)
+              </div>
+              <div className="text-[10px] text-gray-500 leading-snug pb-1">
+                결제까지 며칠 걸리므로 실제 매수가는 다를 수 있습니다.<br/>
+                "매수 후 평가금액"이 확정되면 위의 ✅ 확정 계산과 비교하세요.
+              </div>
+              <div className="space-y-1 border-t border-amber-700/20 pt-1.5">
+                <div className="text-[10px] text-gray-400">① 매수 가능 수량 = 추가금액 ÷ 기준가</div>
+                <div className="text-[10px] text-gray-500 pl-3">
+                  = {formatNumber(modalAddInvestNum)} ÷ {formatFundPrice(fundModal.currentPrice)}
+                  <span className="text-amber-200 font-bold ml-1">= {projAddQty.toFixed(3)}</span>
+                </div>
+              </div>
+              {fundModal.currentQty > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[10px] text-gray-400">② 예상 총 보유수량 = 현재 보유 + 매수</div>
+                  <div className="text-[10px] text-gray-500 pl-3">
+                    = {fundModal.currentQty.toFixed(3)} + {projAddQty.toFixed(3)}
+                    <span className="text-amber-200 font-bold ml-1">= {projTotalQty.toFixed(3)}</span>
+                  </div>
+                </div>
+              )}
+              <div className="space-y-1">
+                <div className="text-[10px] text-gray-400">③ 예상 총 투자금액 = 현재 투자 + 추가금액</div>
+                <div className="text-[10px] text-gray-500 pl-3">
+                  = {formatCurrency(fundModal.currentInvest)} + {formatCurrency(modalAddInvestNum)}
+                  <span className="text-blue-300 font-bold ml-1">= {formatCurrency(projTotalInvest)}</span>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-[10px] text-gray-400">④ 예상 총 평가금액 = 총 수량 × 기준가</div>
+                <div className="text-[10px] text-gray-500 pl-3">
+                  = {projTotalQty.toFixed(3)} × {formatFundPrice(fundModal.currentPrice)}
+                  <span className="text-indigo-200 font-bold ml-1">= {formatCurrency(Math.round(projTotalEval))}</span>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-[10px] text-gray-400">⑤ 예상 수익률 = (평가 − 투자) ÷ 투자</div>
+                <div className="text-[10px] text-gray-500 pl-3">
+                  = ({formatCurrency(Math.round(projTotalEval))} − {formatCurrency(projTotalInvest)}) ÷ {formatCurrency(projTotalInvest)}
+                  <span className={`font-bold ml-1 ${projReturnRate >= 0 ? 'text-red-300' : 'text-blue-300'}`}>
+                    = {projReturnRate >= 0 ? '+' : ''}{projReturnRate.toFixed(2)}%
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="flex gap-2">
             <button onClick={() => { setFundModal(null); setModalAddInvest(''); setModalEvalAfter(''); }} className="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">취소</button>
-            <button disabled={modalNewQty <= 0} onClick={() => {
+            <button disabled={modalEvalAfterNum <= 0 || modalNewQty <= 0} onClick={() => {
               onUpdate(fundModal.id, 'quantity', modalNewQty);
               onUpdate(fundModal.id, 'investAmount', modalNewInvest);
               setFundModal(null); setModalAddInvest(''); setModalEvalAfter('');
-            }} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-bold transition-colors">적용</button>
+            }} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-bold transition-colors" title={modalEvalAfterNum <= 0 ? '매수 후 평가금액을 입력하세요' : ''}>적용</button>
           </div>
         </div>
       </div>
