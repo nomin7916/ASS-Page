@@ -497,7 +497,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   차익
                 </th>
               )}
-              <th className="py-2 w-[36px] min-w-[36px] text-center"><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
+              <th className={`py-2 text-center ${isRetirement ? 'w-[64px] min-w-[64px]' : 'w-[36px] min-w-[36px]'}`}><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
             </tr>
           </thead>
           <tbody>
@@ -769,10 +769,18 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('profit') && (
                     <td className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.profit)}</td>
                   )}
-                  <td className="text-center py-2.5">
-                    <div className="flex items-center justify-center gap-0.5">
-                      <button onClick={() => { setFundModal({ id: item.id, currentPrice: cleanNum(item.currentPrice), currentQty: storedQty, currentInvest: cleanNum(item.investAmount) }); setModalAddInvest(''); setModalEvalAfter(''); }} className="text-indigo-500 hover:text-indigo-300 transition-colors p-1" title="매수/적립 수량 계산"><Plus size={13} /></button>
-                      <button onClick={() => onDelete(item.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1"><Trash2 size={13} /></button>
+                  <td className="p-0 align-middle">
+                    <div className="flex items-stretch justify-center h-full min-h-[36px]">
+                      <button
+                        onClick={() => { setFundModal({ id: item.id, currentPrice: cleanNum(item.currentPrice), currentQty: storedQty, currentInvest: cleanNum(item.investAmount) }); setModalAddInvest(''); setModalEvalAfter(''); }}
+                        className="flex-1 flex items-center justify-center text-indigo-400 hover:text-indigo-100 hover:bg-indigo-600/40 border-r border-gray-600/60 transition-colors"
+                        title="매수/적립 수량 계산"
+                      ><Plus size={14} /></button>
+                      <button
+                        onClick={() => onDelete(item.id)}
+                        className="flex-1 flex items-center justify-center text-gray-500 hover:text-red-200 hover:bg-red-600/40 transition-colors"
+                        title="펀드 삭제"
+                      ><Trash2 size={13} /></button>
                     </div>
                   </td>
                 </tr>
