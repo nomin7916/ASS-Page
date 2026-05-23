@@ -441,38 +441,38 @@ export default function PortfolioChart({
                   <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
-                    <span className="text-[11px] font-bold text-gray-300">나의 수익</span>
-                    <span className={`text-[12px] font-black ${displayResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                    <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">나의 수익</span>
+                    <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                       {displayResult.rate > 0 ? '+' : displayResult.rate < 0 ? '' : ''}{displayResult.rate.toFixed(2)}%
                     </span>
-                    <span className={`text-[10px] font-bold ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
+                    <span className={`text-[10px] font-bold whitespace-nowrap ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
                       ({displayResult.profit >= 0 ? '+' : ''}{formatCurrency(displayResult.profit)})
                     </span>
                     {displayResult.startProfit != null && displayResult.endProfit != null && (
-                      <span className="text-[10px] text-gray-500 font-mono">
+                      <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
                         ({formatCurrency(displayResult.startProfit)} → {formatCurrency(displayResult.endProfit)})
                       </span>
                     )}
                   </div>
                   {displayResult.startEval != null && displayResult.endEval != null && (
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                       <div className="w-2 h-2 rounded-sm bg-gray-400 shrink-0" />
-                      <span className="text-[11px] font-bold text-gray-300">나의 총자산</span>
-                      <span className={`text-[12px] font-black ${displayResult.endEval >= displayResult.startEval ? 'text-red-400' : 'text-blue-400'}`}>
+                      <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">나의 총자산</span>
+                      <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.endEval >= displayResult.startEval ? 'text-red-400' : 'text-blue-400'}`}>
                         {displayResult.rate > 0 ? '+' : displayResult.rate < 0 ? '' : ''}{displayResult.rate.toFixed(2)}%
                       </span>
-                      <span className="text-[10px] text-gray-500 font-mono">
+                      <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
                         ({formatCurrency(displayResult.startEval)} → {formatCurrency(displayResult.endEval)})
                       </span>
                     </div>
                   )}
                   {showBacktest && displayResult.backtestPeriodRate != null && (
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                       <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />
-                      <span className="text-[11px] font-bold text-gray-300">백테스트</span>
-                      <span className={`text-[12px] font-black ${displayResult.backtestPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">백테스트</span>
+                      <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.backtestPeriodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                         {displayResult.backtestPeriodRate > 0 ? '+' : ''}{displayResult.backtestPeriodRate.toFixed(2)}%
                       </span>
                     </div>
@@ -487,14 +487,14 @@ export default function PortfolioChart({
                       const startPt = finalChartData.find(d => d.date === displayResult.startDate)?.[`comp${ci + 1}Point`];
                       const endPt = finalChartData.find(d => d.date === displayResult.endDate)?.[`comp${ci + 1}Point`];
                       return (
-                        <div key={comp.id} className="flex items-center gap-1.5">
+                        <div key={comp.id} className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                           <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: comp.color || '#10b981' }} />
-                          <span className="text-[11px] font-bold" style={{ color: comp.color || '#10b981' }}>{comp.name}</span>
-                          <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                          <span className="text-[11px] font-bold whitespace-nowrap" style={{ color: comp.color || '#10b981' }}>{comp.name}</span>
+                          <span className={`text-[12px] font-black whitespace-nowrap ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                             {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
                           </span>
                           {startPt != null && endPt != null && (
-                            <span className="text-[10px] text-gray-500 font-mono">
+                            <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
                               ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
                             </span>
                           )}
@@ -537,14 +537,14 @@ export default function PortfolioChart({
                           ? Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 })
                           : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                         return (
-                          <div key={key} className="flex items-center gap-1.5">
+                          <div key={key} className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                             <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: color }} />
-                            <span className="text-[11px] font-bold" style={{ color }}>{label}</span>
-                            <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                            <span className="text-[11px] font-bold whitespace-nowrap" style={{ color }}>{label}</span>
+                            <span className={`text-[12px] font-black whitespace-nowrap ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                               {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
                             </span>
                             {startPt != null && endPt != null && (
-                              <span className="text-[10px] text-gray-500 font-mono">
+                              <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
                                 ({fmtPt(startPt)} → {fmtPt(endPt)})
                               </span>
                             )}
@@ -569,14 +569,14 @@ export default function PortfolioChart({
                       const startPt = finalChartData.find(d => d.date === displayResult.startDate)?.[`${key}Point`];
                       const endPt = finalChartData.find(d => d.date === displayResult.endDate)?.[`${key}Point`];
                       return (
-                        <div key={key} className="flex items-center gap-1.5">
+                        <div key={key} className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                           <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: color }} />
-                          <span className="text-[11px] font-bold" style={{ color }}>{label}</span>
-                          <span className={`text-[12px] font-black ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                          <span className="text-[11px] font-bold whitespace-nowrap" style={{ color }}>{label}</span>
+                          <span className={`text-[12px] font-black whitespace-nowrap ${rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                             {rate > 0 ? '+' : ''}{rate.toFixed(2)}%
                           </span>
                           {startPt != null && endPt != null && (
-                            <span className="text-[10px] text-gray-500 font-mono">
+                            <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
                               ({Number(startPt).toLocaleString()} → {Number(endPt).toLocaleString()})
                             </span>
                           )}
