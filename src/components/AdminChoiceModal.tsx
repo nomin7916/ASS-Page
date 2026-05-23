@@ -23,17 +23,17 @@ export default function AdminChoiceModal({ onSelectPortfolio, onSelectAdmin, adm
         <div className="flex flex-row gap-3">
           <button
             onClick={onSelectAdmin}
-            className="flex-1 flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold py-3.5 px-4 rounded-xl transition-colors text-sm"
+            className="flex-1 flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold py-3.5 px-4 rounded-xl transition-colors text-sm whitespace-nowrap"
           >
             <Settings size={16} />
-            관리자 페이지
+            관리자
           </button>
           <button
             onClick={onSelectPortfolio}
-            className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors text-sm"
+            className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors text-sm whitespace-nowrap"
           >
             <LayoutDashboard size={16} />
-            자산관리 페이지
+            자산관리
           </button>
         </div>
       </div>
