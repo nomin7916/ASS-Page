@@ -6,7 +6,7 @@
 import {
   CURATED_KR, CURATED_US, KRX_ADHOC, NYSE_ADHOC,
   CURATED_YEAR_MIN, CURATED_YEAR_MAX,
-} from './_marketCalendarData';
+} from './_marketCalendarData.js';
 
 export const config = { runtime: 'edge' };
 
