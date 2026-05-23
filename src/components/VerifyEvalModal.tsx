@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { X, Plus, Trash2, Pencil } from 'lucide-react';
 import {
   cleanNum,
@@ -62,10 +62,30 @@ export default function VerifyEvalModal({
   const fx = marketIndicators?.usdkrw || 1;
   const mpo = portfolio?.manualPriceOverrides || {};
 
-  const [pos, setPos] = useState({
-    x: Math.max(20, window.innerWidth / 2 - 280),
-    y: Math.max(20, window.innerHeight / 2 - 260),
+  const [vp, setVp] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  useEffect(() => {
+    const onResize = () => setVp({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+  const isMobile = vp.w < 640;
+  const modalWidth = isMobile ? Math.max(280, vp.w - 16) : 560;
+
+  const [pos, setPos] = useState(() => {
+    const w = window.innerWidth, h = window.innerHeight;
+    const mw = w < 640 ? Math.max(280, w - 16) : 560;
+    return { x: Math.max(8, (w - mw) / 2), y: Math.max(12, h / 2 - 260) };
   });
+  useEffect(() => {
+    setPos(p => ({
+      x: isMobile ? Math.max(8, (vp.w - modalWidth) / 2) : Math.max(0, Math.min(Math.max(0, vp.w - modalWidth), p.x)),
+      y: Math.max(8, Math.min(Math.max(8, vp.h - 80), p.y)),
+    }));
+  }, [vp.w, vp.h, modalWidth, isMobile]);
   const dragRef = useRef({ active: false, ox: 0, oy: 0 });
   const [editQtyIdx, setEditQtyIdx] = useState(-1);
   const [editQtyRaw, setEditQtyRaw] = useState('');
@@ -77,12 +97,17 @@ export default function VerifyEvalModal({
   });
 
   const handleDragStart = (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || isMobile) return;
     e.preventDefault();
     dragRef.current = { active: true, ox: e.clientX - pos.x, oy: e.clientY - pos.y };
     const onMove = (ev) => {
       if (!dragRef.current.active) return;
-      setPos({ x: ev.clientX - dragRef.current.ox, y: ev.clientY - dragRef.current.oy });
+      const nx = ev.clientX - dragRef.current.ox;
+      const ny = ev.clientY - dragRef.current.oy;
+      setPos({
+        x: Math.max(0, Math.min(Math.max(0, window.innerWidth - modalWidth), nx)),
+        y: Math.max(0, Math.min(Math.max(0, window.innerHeight - 80), ny)),
+      });
     };
     const onUp = () => {
       dragRef.current.active = false;
@@ -215,14 +240,15 @@ export default function VerifyEvalModal({
   const fmtPrice = (n) => (n == null ? '—' : Math.round(n).toLocaleString());
 
   return (
-    <div className="fixed inset-0" style={{ zIndex: Z.dialog }} onMouseDown={onClose}>
+    <div className="fixed inset-0" style={{ zIndex: Z.dialog }} onMouseDown={onClose} onTouchStart={onClose}>
       <div
         className="fixed border rounded-xl shadow-2xl flex flex-col"
-        style={{ width: 560, top: pos.y, left: pos.x, backgroundColor: BG.card, borderColor: '#4b5563' }}
+        style={{ width: modalWidth, top: pos.y, left: pos.x, backgroundColor: BG.card, borderColor: '#4b5563', maxHeight: `calc(100vh - ${pos.y + 16}px)` }}
         onMouseDown={e => e.stopPropagation()}
+        onTouchStart={e => e.stopPropagation()}
       >
         <div
-          className={`flex items-center justify-between px-3 py-2 border-b ${BORDER.default} cursor-move select-none`}
+          className={`flex items-center justify-between px-3 py-2 border-b ${BORDER.default} ${isMobile ? '' : 'cursor-move'} select-none`}
           onMouseDown={handleDragStart}
         >
           <button onClick={onClose} className="text-pink-500 hover:text-pink-300"><X size={14} /></button>
@@ -230,22 +256,23 @@ export default function VerifyEvalModal({
           <div style={{ width: 14 }} />
         </div>
 
-        <div className="p-4 space-y-3 text-[11px] leading-relaxed overflow-y-auto max-h-[72vh]">
+        <div className={`${isMobile ? 'p-3' : 'p-4'} space-y-3 text-[11px] leading-relaxed overflow-y-auto flex-1 min-h-0`}>
+
           {resolved.estimated && (
             <div className="bg-amber-900/30 border border-amber-700/50 rounded px-3 py-1.5 text-amber-300 font-bold">
               🟡 추정 (보유수량 미확정) — 이 날짜의 구성을 확정하려면 수량을 검토·편집하세요.
             </div>
           )}
 
-          <div className="rounded overflow-hidden border border-gray-700/60">
-            <table className="w-full text-right text-[11px] border-collapse">
+          <div className="rounded border border-gray-700/60 overflow-x-auto -mx-1 sm:mx-0">
+            <table className={`w-full text-right ${isMobile ? 'text-[10px] min-w-[440px]' : 'text-[11px]'} border-collapse`}>
               <thead className="bg-gray-800 text-gray-400">
                 <tr>
-                  <th className="py-1.5 px-2 text-left font-normal border-r border-gray-700">종목</th>
-                  <th className="py-1.5 px-2 font-normal border-r border-gray-700">보유수량</th>
-                  <th className="py-1.5 px-2 font-normal border-r border-gray-700">종가</th>
-                  <th className="py-1.5 px-2 text-center font-normal border-r border-gray-700">출처</th>
-                  <th className="py-1.5 px-2 font-normal border-r border-gray-700">평가금</th>
+                  <th className={`py-1.5 ${isMobile ? 'px-1.5' : 'px-2'} text-left font-normal border-r border-gray-700`}>종목</th>
+                  <th className={`py-1.5 ${isMobile ? 'px-1.5' : 'px-2'} font-normal border-r border-gray-700`}>보유수량</th>
+                  <th className={`py-1.5 ${isMobile ? 'px-1.5' : 'px-2'} font-normal border-r border-gray-700`}>종가</th>
+                  <th className={`py-1.5 ${isMobile ? 'px-1.5' : 'px-2'} text-center font-normal border-r border-gray-700`}>출처</th>
+                  <th className={`py-1.5 ${isMobile ? 'px-1.5' : 'px-2'} font-normal border-r border-gray-700`}>평가금</th>
                   <th className="py-1.5 px-1 font-normal w-[28px]" />
                 </tr>
               </thead>
@@ -255,10 +282,11 @@ export default function VerifyEvalModal({
                 )}
                 {rows.map((r, idx) => {
                   const badge = SOURCE_BADGE[r.source] || SOURCE_BADGE.none;
+                  const cellPad = isMobile ? 'px-1.5' : 'px-2';
                   return (
                     <tr key={idx} className="border-t border-gray-700/60 hover:bg-gray-800/40">
-                      <td className="py-1.5 px-2 text-left text-gray-200">{r.name}</td>
-                      <td className="py-1.5 px-2 text-gray-300">
+                      <td className={`py-1.5 ${cellPad} text-left text-gray-200`}>{r.name}</td>
+                      <td className={`py-1.5 ${cellPad} text-gray-300`}>
                         {r.isDeposit ? '—' : editQtyIdx === idx ? (
                           <input
                             autoFocus
@@ -279,7 +307,7 @@ export default function VerifyEvalModal({
                           </span>
                         )}
                       </td>
-                      <td className="py-1.5 px-2 text-gray-300">
+                      <td className={`py-1.5 ${cellPad} text-gray-300`}>
                         {r.isDeposit ? '—' : editPriceIdx === idx ? (
                           <input
                             autoFocus
@@ -301,8 +329,8 @@ export default function VerifyEvalModal({
                           </span>
                         )}
                       </td>
-                      <td className={`py-1.5 px-2 text-center font-bold whitespace-nowrap ${badge.cls}`}>{badge.label}</td>
-                      <td className="py-1.5 px-2 text-gray-200 font-bold">{formatCurrency(r.evalAmt)}</td>
+                      <td className={`py-1.5 ${cellPad} text-center font-bold whitespace-nowrap ${badge.cls}`}>{badge.label}</td>
+                      <td className={`py-1.5 ${cellPad} text-gray-200 font-bold whitespace-nowrap`}>{formatCurrency(r.evalAmt)}</td>
                       <td className="py-1.5 px-1 text-center">
                         {!r.isDeposit && (
                           <button className="text-gray-600 hover:text-red-400" title="이 날짜에서 종목 제거" onClick={() => removeRow(idx)}>
