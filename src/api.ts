@@ -400,10 +400,11 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
         }
       }
       // HTML 태그 제거 후 텍스트 패턴 매칭 (태그가 숫자와 "원" 사이에 있는 구조 대응)
+      // generic "X.XX 원" 매칭은 view 페이지의 무관한 숫자(다른 펀드 기준가·운용보수·만기평가액 등)를
+      // 잡아낼 위험이 커서 제거. "기준가" 앵커가 있는 패턴 + JSON 키만 신뢰.
       const stripped = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
       const textPats: Array<[RegExp, string]> = [
         [/기준가.{0,120}?([\d,]+\.\d{2})\s*원/, stripped],
-        [/([\d,]+\.\d{2})\s*원/, stripped],
         [/"nav"\s*:\s*"?([\d.]+)"?/, html],
         [/"basicPrice"\s*:\s*"?([\d.]+)"?/, html],
         [/"standardPrice"\s*:\s*"?([\d.]+)"?/, html],
@@ -444,8 +445,14 @@ export const fetchMiraeFundInfo = async (rawCode: string): Promise<{ name: strin
           }
         }
       }
-      // basePrices 최신 날짜가 오늘이 아닌 경우 view 페이지 가격 우선 사용
-      if (rows[0].date < today && viewPagePrice > 0) {
+      // basePrices 최신 날짜가 오늘이 아닌 경우 view 페이지 가격 우선 사용 (장중 빠른 반영용).
+      // 단 view 페이지 정규식이 무관한 숫자를 잡아낼 위험이 있어, basePrices 최신값 대비
+      // ±10% 이내일 때만 신뢰. 토·일·휴장일에는 어차피 폴백이 발동하지 않도록 sanity 게이트 역할도 함.
+      const baseLatest = rows[0].price;
+      const viewPriceTrustworthy =
+        viewPagePrice > 0 && baseLatest > 0 &&
+        Math.abs(viewPagePrice - baseLatest) / baseLatest < 0.1;
+      if (rows[0].date < today && viewPriceTrustworthy) {
         const changeAmt = +(viewPagePrice - rows[0].price).toFixed(2);
         const changeRt = rows[0].price > 0 ? +((changeAmt / rows[0].price) * 100).toFixed(2) : 0;
         return { name, price: viewPagePrice, changeRate: changeRt, changeAmount: changeAmt, navDate: today, prevNavDate: rows[0].date, prevNavPrice: rows[0].price };
