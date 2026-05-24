@@ -65,6 +65,9 @@ export function useStockData({
   // 가입일이 상장일보다 이르면 earliestStored가 영원히 미충족이라 매 새로고침
   // 재조회되는 것을 방지. 새로고침(페이지 리로드) 시 ref 초기화 → 1회 재검증.
   const fundWideFetchedRef = useRef<Set<string>>(new Set());
+  // 세션당 1회 trend API 재조회 추적 — Drive 캐시가 오늘 날짜로 최신이어도
+  // 수정주가→실제종가 전환 시 반드시 1회 trend API 재조회가 필요함
+  const trendMigratedInSession = useRef<Set<string>>(new Set());
 
   const extractFundCode = (input: string): string => {
     const trimmed = input.trim();
@@ -676,6 +679,9 @@ export function useStockData({
         (p.portfolio || []).forEach(item => { if (item.type === 'stock' && item.code) allKoreanCodes.add(item.code); });
       });
       const korCodesNeedingHistory = [...allKoreanCodes].filter(code => {
+        // 세션 첫 갱신: trend API 미조회 코드는 캐시 신선도 무관 강제 재조회
+        // (Drive에 수정주가가 캐시된 경우 실제종가로 교체)
+        if (!trendMigratedInSession.current.has(code)) return true;
         const existing = stockHistoryMapRef.current[code];
         if (!existing || Object.keys(existing).length <= 3) return true;
         const latestDate = Object.keys(existing).sort().pop() || '';
@@ -690,13 +696,26 @@ export function useStockData({
         Promise.all([
           ...korCodesNeedingHistory.map(async (code) => {
             let hist: Record<string, number> | null = null;
+            let fromTrend = false;
             const rTrend = await fetchNaverDomesticHistory(code);
-            if (rTrend) hist = rTrend.data;
+            if (rTrend) { hist = rTrend.data; fromTrend = true; trendMigratedInSession.current.add(code); }
             if (!hist) { const rKIS = await fetchKISStockHistory(code); if (rKIS) hist = rKIS.data; }
             if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
             if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
             if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
-            if (hist) setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+            if (hist) {
+              if (fromTrend) {
+                // 수정주가 캐시 교체: trend API 데이터로 대체, 오늘 현재가 보존
+                setStockHistoryMap(prev => {
+                  const todayPrice = prev[code]?.[today];
+                  const next = { ...hist! };
+                  if (todayPrice) next[today] = todayPrice;
+                  return { ...prev, [code]: next };
+                });
+              } else {
+                setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+              }
+            }
           }),
           ...usCodesNeedingHistory.map(async (code) => {
             const r = await fetchUsStockHistory(code);
