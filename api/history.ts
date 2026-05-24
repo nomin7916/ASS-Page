@@ -243,10 +243,58 @@ function defaultDateRange() {
   return { start, end };
 }
 
+// Naver 국내 주식 일별 이력 — /api/stock/CODE/day (모바일 API, trend API 폴백용)
+async function fetchNaverDomesticDayHistory(code: string, d1: string): Promise<Record<string, number>> {
+  const HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    'Referer':    'https://m.stock.naver.com/',
+    'Accept':     'application/json',
+  };
+  const toNaverDt = (yyyymmdd: string, end = false) => `${yyyymmdd}${end ? '235959' : '000000'}`;
+  const limitStart = (d1 || '20000101').slice(0, 8);
+  const defEnd = new Date().toISOString().split('T')[0].replace(/-/g, '');
+
+  const allData: Record<string, number> = {};
+  let chunkEnd = defEnd;
+
+  for (let iter = 0; iter < 25; iter++) {
+    const url = `https://m.stock.naver.com/api/stock/${encodeURIComponent(code)}/day`
+      + `?startDateTime=${toNaverDt(limitStart)}&endDateTime=${toNaverDt(chunkEnd, true)}&timeframe=day`;
+    try {
+      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(12000) });
+      if (!res.ok) { console.error(`[domestic-day] ${code} status=${res.status} iter=${iter}`); break; }
+      const raw: any = await res.json();
+      const items: any[] = Array.isArray(raw) ? raw : (raw?.result ?? raw?.prices ?? []);
+      if (items.length === 0) break;
+
+      let earliestInChunk = chunkEnd;
+      for (const item of items) {
+        const ld = String(item.localDate ?? item.localTradedAt ?? item.bizdate ?? '').replace(/T.*/, '').replace(/-/g, '');
+        const price = parseFloat(String(item.closePrice ?? item.close ?? 0).replace(/,/g, ''));
+        if (ld.length === 8 && price > 0) {
+          allData[`${ld.slice(0,4)}-${ld.slice(4,6)}-${ld.slice(6,8)}`] = price;
+          if (ld < earliestInChunk) earliestInChunk = ld;
+        }
+      }
+
+      if (earliestInChunk <= limitStart) break;
+      const prev = new Date(
+        parseInt(earliestInChunk.slice(0,4)),
+        parseInt(earliestInChunk.slice(4,6)) - 1,
+        parseInt(earliestInChunk.slice(6,8)) - 1,
+      );
+      if (isNaN(prev.getTime())) break;
+      chunkEnd = prev.toISOString().split('T')[0].replace(/-/g, '');
+      if (chunkEnd <= limitStart) break;
+    } catch (e) { console.error(`[domestic-day] ${code} error=${e} iter=${iter}`); break; }
+  }
+
+  return allData;
+}
+
 // Naver 국내 주식 실제 종가 이력 — trend API (수정주가 미반영, 실제 체결가)
-// https://m.stock.naver.com/front-api/stock/domestic/trend?code=CODE&marketType=KRX&pageSize=100&bizdate=YYYYMMDD
-// bizdate 는 조회 기준일(exclusive upper bound): 해당 날짜 이전 데이터부터 반환
-async function fetchNaverDomesticTrendHistory(code: string, d1: string): Promise<Record<string, number>> {
+// front-api 차단 시 /api/stock/CODE/day 로 폴백
+async function fetchNaverDomesticTrendHistory(code: string, d1: string): Promise<{ data: Record<string, number>; source: string }> {
   const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
     'Referer':    'https://m.stock.naver.com/',
@@ -264,10 +312,15 @@ async function fetchNaverDomesticTrendHistory(code: string, d1: string): Promise
 
     try {
       const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
-      if (!res.ok) break;
-
+      if (!res.ok) {
+        console.error(`[domestic-trend] ${code} iter=${iter} status=${res.status}`);
+        break;
+      }
       const json: any = await res.json();
-      if (!json.isSuccess || !Array.isArray(json.result) || json.result.length === 0) break;
+      if (!json.isSuccess || !Array.isArray(json.result) || json.result.length === 0) {
+        console.error(`[domestic-trend] ${code} iter=${iter} isSuccess=${json.isSuccess} len=${json.result?.length ?? 'N/A'} keys=${Object.keys(json).join(',')}`);
+        break;
+      }
 
       let earliest = '';
       for (const item of json.result) {
@@ -280,13 +333,19 @@ async function fetchNaverDomesticTrendHistory(code: string, d1: string): Promise
       }
 
       if (!earliest || earliest <= limitStart) break;
-      bizdate = earliest; // 이전 응답의 최초일을 다음 호출의 bizdate로(exclusive upper bound)
-    } catch {
+      bizdate = earliest;
+    } catch (e) {
+      console.error(`[domestic-trend] ${code} iter=${iter} error=${e}`);
       break;
     }
   }
 
-  return result;
+  if (Object.keys(result).length > 0) return { data: result, source: 'naver-trend' };
+
+  // front-api 실패 → /api/stock/CODE/day 폴백
+  console.error(`[domestic-trend] ${code} front-api 실패 → day API 폴백`);
+  const dayData = await fetchNaverDomesticDayHistory(code, d1);
+  return { data: dayData, source: 'naver-day' };
 }
 
 // Naver worldstock 해외주식 일별 히스토리 (다중 청크 수집)
@@ -369,11 +428,14 @@ export default async function handler(request: Request): Promise<Response> {
       .toISOString().split('T')[0].replace(/-/g, '');
     const d1 = start || fiveYearsAgo;
 
-    const data = await fetchNaverDomesticTrendHistory(code, d1);
+    const { data, source: domSource } = await fetchNaverDomesticTrendHistory(code, d1);
     if (Object.keys(data).length === 0) {
-      return new Response('Naver trend 데이터 없음', { status: 404 });
+      return new Response(JSON.stringify({ error: 'Naver 국내 히스토리 수집 실패', code }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      });
     }
-    return new Response(JSON.stringify({ data, source: 'naver-trend' }), {
+    return new Response(JSON.stringify({ data, source: domSource }), {
       headers: {
         'Content-Type':                'application/json; charset=utf-8',
         'Access-Control-Allow-Origin': '*',
