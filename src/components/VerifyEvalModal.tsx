@@ -237,6 +237,17 @@ export default function VerifyEvalModal({
     onClose();
   };
 
+  const unconfirm = () => {
+    setHistory(hist => hist.map(item => {
+      if (!(item.id ? item.id === record.id : item.date === date)) return item;
+      const next = { ...item, isFixed: false };
+      delete next.adjustedAmount;
+      return next;
+    }));
+    notify(`${formatShortDate(date)} 확정 취소 — 자동 업데이트 허용`, 'info');
+    onClose();
+  };
+
   const fmtPrice = (n) => (n == null ? '—' : Math.round(n).toLocaleString());
 
   return (
@@ -388,13 +399,23 @@ export default function VerifyEvalModal({
                 </span>
               </div>
             </div>
-            <button
-              className="w-full py-2 bg-emerald-700/70 hover:bg-emerald-600/70 disabled:bg-gray-700/50 disabled:text-gray-500 text-emerald-50 rounded font-bold tracking-wide"
-              disabled={recomputed <= 0 || isToday}
-              onClick={confirm}
-            >
-              이 구성으로 확정
-            </button>
+            <div className="flex gap-2">
+              <button
+                className="flex-1 py-2 bg-emerald-700/70 hover:bg-emerald-600/70 disabled:bg-gray-700/50 disabled:text-gray-500 text-emerald-50 rounded font-bold tracking-wide"
+                disabled={recomputed <= 0 || isToday}
+                onClick={confirm}
+              >
+                수량*종가로 확정
+              </button>
+              {record.isFixed && (
+                <button
+                  className="px-3 py-2 bg-gray-700/70 hover:bg-amber-800/60 text-gray-300 hover:text-amber-200 rounded font-bold tracking-wide text-[11px] whitespace-nowrap"
+                  onClick={unconfirm}
+                >
+                  확정 취소
+                </button>
+              )}
+            </div>
             {isToday
               ? <div className="text-[10px] text-amber-600 text-center">오늘 날짜는 종가 미확정 — 장 마감 후 자동 고정됩니다</div>
               : <div className="text-[10px] text-gray-600 text-center">확정 시에만 평가자산 기록이 갱신됩니다 — 자동 덮어쓰기 없음</div>
