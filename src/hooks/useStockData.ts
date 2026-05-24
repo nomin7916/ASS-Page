@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useEffect, useRef } from 'react';
-import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
+import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend } from '../utils';
 import { getEffectiveDate, getMsUntilCutoff } from './useMarketCalendar';
 
@@ -249,12 +249,14 @@ export function useStockData({
         const rUS = await fetchUsStockHistory(comp.code);
         if (rUS) hist = rUS.data;
       } else {
-        // 1순위: KIS OpenAPI (상장 이후 전체 데이터, 수정주가 기준)
-        const rKIS = await fetchKISStockHistory(comp.code);
-        if (rKIS) hist = rKIS.data;
-        // 2순위: 네이버 fchart (KIS 실패 시 폴백)
+        // 1순위: Naver trend API (실제 종가, 수정주가 미반영)
+        const rTrend = await fetchNaverDomesticHistory(comp.code);
+        if (rTrend) hist = rTrend.data;
+        // 2순위: KIS OpenAPI (trend 실패 시 폴백)
+        if (!hist) { const rKIS = await fetchKISStockHistory(comp.code); if (rKIS) hist = rKIS.data; }
+        // 3순위: 네이버 fchart
         if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code); if (rNaver) hist = rNaver.data; }
-        // 3순위: Yahoo Finance (.KS / .KQ)
+        // 4순위: Yahoo Finance (.KS / .KQ)
         if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`); if (r1) hist = r1.data; }
         if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`); if (r2) hist = r2.data; }
       }
@@ -290,8 +292,9 @@ export function useStockData({
           const fromYear = parseInt(latestDate.split('-')[0]);
           const daysDiff = Math.ceil((Date.now() - new Date(latestDate).getTime()) / 86400000);
           const naverCount = Math.ceil(daysDiff * 5 / 7) + 30;
-          const rKIS = await fetchKISStockHistory(comp.code, fromYear);
-          if (rKIS) newData = rKIS.data;
+          const rTrend = await fetchNaverDomesticHistory(comp.code, latestDate);
+          if (rTrend) newData = rTrend.data;
+          if (!newData) { const rKIS = await fetchKISStockHistory(comp.code, fromYear); if (rKIS) newData = rKIS.data; }
           if (!newData) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) newData = rNaver.data; }
           if (!newData) { const r1 = await fetchIndexData(`${comp.code}.KS`, latestDate); if (r1) newData = r1.data; }
           if (!newData) { const r2 = await fetchIndexData(`${comp.code}.KQ`, latestDate); if (r2) newData = r2.data; }
@@ -353,12 +356,14 @@ export function useStockData({
       const daysDiff = lastCachedDate ? Math.ceil((Date.now() - new Date(lastCachedDate).getTime()) / 86400000) : null;
       const naverCount = daysDiff ? Math.ceil(daysDiff * 5 / 7) + 30 : 2000;
       const yahooStartDate = lastCachedDate ?? startDate;
-      // 1순위: KIS (캐시 있으면 마지막 연도부터, 없으면 2000년부터)
-      const rKIS = await fetchKISStockHistory(comp.code, startYear);
-      if (rKIS) hist = rKIS.data;
-      // 2순위: 네이버 fchart (계산된 count로)
+      // 1순위: Naver trend API (실제 종가, 수정주가 미반영)
+      const rTrend = await fetchNaverDomesticHistory(comp.code, lastCachedDate ?? undefined);
+      if (rTrend) hist = rTrend.data;
+      // 2순위: KIS (trend 실패 시 폴백)
+      if (!hist) { const rKIS = await fetchKISStockHistory(comp.code, startYear); if (rKIS) hist = rKIS.data; }
+      // 3순위: 네이버 fchart
       if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) hist = rNaver.data; }
-      // 3순위: Yahoo (.KS / .KQ, 마지막 캐시 날짜 또는 조회기간 지정)
+      // 4순위: Yahoo (.KS / .KQ)
       if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`, yahooStartDate); if (r1) hist = r1.data; }
       if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`, yahooStartDate); if (r2) hist = r2.data; }
     }
@@ -685,8 +690,9 @@ export function useStockData({
         Promise.all([
           ...korCodesNeedingHistory.map(async (code) => {
             let hist: Record<string, number> | null = null;
-            const rKIS = await fetchKISStockHistory(code);
-            if (rKIS) hist = rKIS.data;
+            const rTrend = await fetchNaverDomesticHistory(code);
+            if (rTrend) hist = rTrend.data;
+            if (!hist) { const rKIS = await fetchKISStockHistory(code); if (rKIS) hist = rKIS.data; }
             if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
             if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
             if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }

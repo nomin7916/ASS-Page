@@ -243,6 +243,52 @@ function defaultDateRange() {
   return { start, end };
 }
 
+// Naver 국내 주식 실제 종가 이력 — trend API (수정주가 미반영, 실제 체결가)
+// https://m.stock.naver.com/front-api/stock/domestic/trend?code=CODE&marketType=KRX&pageSize=100&bizdate=YYYYMMDD
+// bizdate 는 조회 기준일(exclusive upper bound): 해당 날짜 이전 데이터부터 반환
+async function fetchNaverDomesticTrendHistory(code: string, d1: string): Promise<Record<string, number>> {
+  const HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    'Referer':    'https://m.stock.naver.com/',
+    'Accept':     'application/json',
+  };
+
+  const result: Record<string, number> = {};
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0].replace(/-/g, '');
+  let bizdate = tomorrow;
+  const limitStart = (d1 || '20000101').slice(0, 8);
+
+  for (let iter = 0; iter < 25; iter++) {
+    const url = `https://m.stock.naver.com/front-api/stock/domestic/trend`
+      + `?code=${encodeURIComponent(code)}&marketType=KRX&pageSize=100&bizdate=${bizdate}`;
+
+    try {
+      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+      if (!res.ok) break;
+
+      const json: any = await res.json();
+      if (!json.isSuccess || !Array.isArray(json.result) || json.result.length === 0) break;
+
+      let earliest = '';
+      for (const item of json.result) {
+        const d = String(item.bizdate ?? '');
+        const price = parseInt(String(item.closePrice ?? '').replace(/,/g, ''), 10);
+        if (d.length === 8 && !isNaN(price) && price > 0) {
+          result[`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`] = price;
+          if (!earliest || d < earliest) earliest = d;
+        }
+      }
+
+      if (!earliest || earliest <= limitStart) break;
+      bizdate = earliest; // 이전 응답의 최초일을 다음 호출의 bizdate로(exclusive upper bound)
+    } catch {
+      break;
+    }
+  }
+
+  return result;
+}
+
 // Naver worldstock 해외주식 일별 히스토리 (다중 청크 수집)
 async function fetchNaverWorldstockHistory(code: string, d1: string, d2: string): Promise<Record<string, number>> {
   const HEADERS = {
@@ -312,6 +358,29 @@ export default async function handler(request: Request): Promise<Response> {
   const key   = searchParams.get('key') ?? '';
   const start = (searchParams.get('start') ?? '').replace(/-/g, '');
   const end   = (searchParams.get('end')   ?? '').replace(/-/g, '');
+
+  // ── 국내 종목 실제 종가 이력: Naver trend API (수정주가 미반영) ────────────
+  if (key === 'domestic') {
+    const code = searchParams.get('code') ?? '';
+    if (!code || code.length < 5) {
+      return new Response('code 파라미터 필요', { status: 400 });
+    }
+    const fiveYearsAgo = new Date(Date.now() - 5 * 365.25 * 24 * 3600 * 1000)
+      .toISOString().split('T')[0].replace(/-/g, '');
+    const d1 = start || fiveYearsAgo;
+
+    const data = await fetchNaverDomesticTrendHistory(code, d1);
+    if (Object.keys(data).length === 0) {
+      return new Response('Naver trend 데이터 없음', { status: 404 });
+    }
+    return new Response(JSON.stringify({ data, source: 'naver-trend' }), {
+      headers: {
+        'Content-Type':                'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+      },
+    });
+  }
 
   // ── 해외주식 히스토리: Yahoo Finance (1순위) → KIS (2순위) → Naver worldstock (3순위) ──
   if (key === 'worldstock') {

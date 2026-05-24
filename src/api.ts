@@ -35,6 +35,26 @@ export const fetchKISStockHistory = async (
   }
 };
 
+// ── Naver 국내 종목 실제 종가 이력 (수정주가 미반영, trend API) ──────────────
+export const fetchNaverDomesticHistory = async (
+  code: string,
+  fromDate?: string
+): Promise<{ data: Record<string, number>; source: string } | null> => {
+  try {
+    const params = new URLSearchParams({ key: 'domestic', code });
+    if (fromDate) params.set('start', fromDate.replace(/-/g, ''));
+    const res = await fetch(`/api/history?${params}`, {
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (!json.data || Object.keys(json.data).length < 3) return null;
+    return { data: json.data, source: json.source };
+  } catch {
+    return null;
+  }
+};
+
 // ── Naver fchart 종목 히스토리: 서버사이드 경유 (CORS 프록시 불필요) ────────
 export const fetchNaverStockHistory = async (
   code: string,
