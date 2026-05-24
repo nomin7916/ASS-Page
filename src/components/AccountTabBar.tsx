@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload } from 'lucide-react';
+import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock } from 'lucide-react';
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 
 export default function AccountTabBar({
@@ -66,13 +66,35 @@ export default function AccountTabBar({
           >
             <span className="text-[13px] font-bold leading-none">₩</span>
           </button>
-          <button
-            onClick={refreshPrices}
-            title="새로고침 — 모든 계좌 종목가격·지수 데이터 갱신"
-            className="p-1.5 hover:bg-gray-800 rounded transition text-teal-400 hover:text-teal-300"
-          >
-            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-          </button>
+          <div className="relative">
+            {(driveStatus === 'saving' || driveStatus === 'loading' || isLoading) && (
+              <span className="absolute -top-4 left-1/2 -translate-x-1/2 pointer-events-none select-none z-10 text-sky-300 animate-cloud-glow" title={driveStatus === 'saving' ? 'Drive 저장 중...' : driveStatus === 'loading' ? 'Drive 불러오는 중...' : '갱신 중...'}>
+                <Cloud size={12} strokeWidth={2.4} />
+              </span>
+            )}
+            {driveStatus === 'saved' && !isLoading && (
+              <span className="absolute -top-4 left-1/2 -translate-x-1/2 pointer-events-none select-none z-10 text-amber-300" title="Drive 동기화 완료">
+                <CloudSun size={12} strokeWidth={2.4} />
+              </span>
+            )}
+            {driveStatus === 'error' && !isLoading && (
+              <span className="absolute -top-4 left-1/2 -translate-x-1/2 pointer-events-none select-none z-10 text-gray-500" title="Drive 동기화 실패">
+                <CloudOff size={12} strokeWidth={2.4} />
+              </span>
+            )}
+            {driveStatus === 'auth_needed' && !isLoading && (
+              <span className="absolute -top-4 left-1/2 -translate-x-1/2 pointer-events-none select-none z-10 text-orange-400" title="Drive 로그인 필요">
+                <Lock size={12} strokeWidth={2.4} />
+              </span>
+            )}
+            <button
+              onClick={refreshPrices}
+              title="새로고침 — 모든 계좌 종목가격·지수 데이터 갱신"
+              className="p-1.5 hover:bg-gray-800 rounded transition text-teal-400 hover:text-teal-300"
+            >
+              <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+            </button>
+          </div>
           <button
             onClick={handleDriveLoadOnly}
             title={driveStatus === 'loading' ? 'Drive 불러오는 중...' : driveStatus === 'saved' ? 'Drive 동기화 완료 — 다시 불러오기' : driveStatus === 'auth_needed' ? 'Drive 로그인 필요' : 'Google Drive에서 최신 데이터 불러오기'}
