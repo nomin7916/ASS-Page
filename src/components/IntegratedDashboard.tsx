@@ -1,6 +1,6 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus, Activity, TrendingUp } from 'lucide-react';
+import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus, Activity, TrendingUp, ExternalLink, Settings, BarChart3 } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
 import {
@@ -127,7 +127,12 @@ export default function IntegratedDashboard({
   handleCompStockBlur,
   handleFetchCompHistory,
   handleRemoveCompStock,
+  customLinks = [],
+  setCustomLinks,
+  isLinkSettingsOpen = false,
+  setIsLinkSettingsOpen,
 }) {
+  const [showCompStocks, setShowCompStocks] = useState(false);
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
 
   const [memoModal, setMemoModal] = useState(null);
@@ -674,14 +679,44 @@ export default function IntegratedDashboard({
 
               {/* 기간별 수익 차트 */}
               <div className="w-full xl:flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col xl:h-[464px]">
-                {/* 헤더: 제목 + 날짜범위 + 드롭다운 */}
+                {/* 헤더: 제목 + 링크 + 날짜범위 + 드롭다운 */}
                 <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-col gap-2 shrink-0">
                   <div className="flex flex-wrap gap-2 items-center">
                     <div className="flex items-center gap-1.5 shrink-0">
                       <TrendingUp size={14} className="text-red-400" />
                       <span className="text-white font-bold text-sm">총자산현황 수익율</span>
                     </div>
+                    {/* 사이트 링크 버튼 (아이콘만, 툴팁=이름·URL) */}
+                    {setCustomLinks && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {customLinks.slice(0, 3).map((link, i) => {
+                          const tip = link.url
+                            ? (link.name?.trim() ? `링크${i + 1} · ${link.name.trim()} — ${link.url}` : `링크${i + 1} — ${link.url}`)
+                            : `링크${i + 1} 설정 필요`;
+                          return (
+                            <button
+                              key={i}
+                              onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')}
+                              className="bg-gray-800 hover:bg-gray-700 text-blue-300 w-[28px] h-[28px] rounded shadow transition border border-gray-600 flex items-center justify-center"
+                              title={tip}
+                            ><ExternalLink size={12} /></button>
+                          );
+                        })}
+                        <button
+                          onClick={() => setIsLinkSettingsOpen?.(!isLinkSettingsOpen)}
+                          className="bg-gray-800 hover:bg-gray-700 text-gray-400 w-[28px] h-[28px] rounded shadow transition border border-gray-600 flex items-center justify-center"
+                          title="퀵 링크 설정"
+                        ><Settings size={12} /></button>
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 ml-auto flex-wrap justify-end">
+                      {setCompStocks && handleAddCompStock && (
+                        <button
+                          onClick={() => setShowCompStocks(v => !v)}
+                          className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showCompStocks ? 'text-emerald-300 bg-emerald-900/30 border-emerald-700/50' : 'text-gray-500 border-gray-700 hover:text-gray-300 hover:bg-gray-800'}`}
+                          title={showCompStocks ? '비교종목 숨기기' : '비교종목 펼치기'}
+                        ><BarChart3 size={14} /></button>
+                      )}
                       <ChartRangeControls
                         dateRange={intDateRange}
                         setDateRange={setIntDateRange}
@@ -692,7 +727,37 @@ export default function IntegratedDashboard({
                       <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`p-1.5 rounded border flex items-center justify-center transition-colors ${intIsZeroBaseMode ? 'text-indigo-300 bg-indigo-900/40 border-indigo-700/60' : 'text-gray-500 border-gray-700 hover:text-gray-300 hover:bg-gray-800'}`} title="기간 시작 기준 / 원금 기준 전환"><Activity size={14} /></button>
                     </div>
                   </div>
-                  {setCompStocks && handleAddCompStock && (
+                  {/* 링크 설정 패널 */}
+                  {isLinkSettingsOpen && setCustomLinks && (
+                    <div className="flex flex-wrap gap-3 pb-1 border-b border-gray-700/50">
+                      {customLinks.slice(0, 3).map((l, i) => (
+                        <div key={i} className="flex flex-col gap-1.5 flex-1 min-w-[160px] max-w-[240px]">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 이름 <span className="text-gray-600 font-normal">(직접 입력, 최대 7자)</span></span>
+                            <input
+                              type="text" maxLength={7}
+                              className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-400 shadow-inner font-normal"
+                              value={l.name || ''}
+                              onChange={(e) => { const n = [...customLinks]; n[i] = { ...n[i], name: e.target.value }; setCustomLinks(n); }}
+                              placeholder="비워두면 URL에서 자동 추출"
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-500 font-bold ml-1">버튼 {i + 1} 연결 (URL)</span>
+                            <input
+                              type="text"
+                              className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-500 shadow-inner font-normal"
+                              value={l.url || ''}
+                              onChange={(e) => { const n = [...customLinks]; n[i] = { ...n[i], url: e.target.value }; setCustomLinks(n); }}
+                              placeholder="https://..."
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      <button onClick={() => setIsLinkSettingsOpen?.(false)} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded text-xs font-bold shadow transition">완료</button>
+                    </div>
+                  )}
+                  {showCompStocks && setCompStocks && handleAddCompStock && (
                     <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1 xl:flex-wrap xl:overflow-visible xl:pb-0 xl:mx-0 xl:px-0">
                       <CompStockChips
                         compStocks={compStocks}

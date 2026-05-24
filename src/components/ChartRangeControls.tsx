@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { Search } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 import CustomDatePicker from './CustomDatePicker';
 
 const PERIOD_OPTIONS = [
@@ -22,17 +22,35 @@ export default function ChartRangeControls({ dateRange, setDateRange, period, se
   return (
     <>
       <div className="flex items-center bg-gray-800 border border-gray-600 rounded shadow-sm px-1.5 py-1 relative z-30">
-        <CustomDatePicker
-          value={dateRange.start}
-          onChange={v => { setDateRange(p => ({ ...p, start: v })); setPeriod('custom'); }}
-        />
+        <div className="flex items-center">
+          <CustomDatePicker
+            value={dateRange.start}
+            onChange={v => { setDateRange(p => ({ ...p, start: v })); setPeriod('custom'); }}
+          />
+          {dateRange.start && (
+            <button
+              onClick={() => { setDateRange(p => ({ ...p, start: '' })); setPeriod('custom'); }}
+              className="text-gray-500 hover:text-red-400 -ml-1 p-0.5 transition-colors"
+              title="시작일 비우기"
+            ><X size={10} /></button>
+          )}
+        </div>
         <span className="text-gray-500 mx-0.5">~</span>
-        <CustomDatePicker
-          value={dateRange.end}
-          onChange={v => { setDateRange(p => ({ ...p, end: v })); setPeriod('custom'); }}
-        />
+        <div className="flex items-center">
+          <CustomDatePicker
+            value={dateRange.end}
+            onChange={v => { setDateRange(p => ({ ...p, end: v })); setPeriod('custom'); }}
+          />
+          {dateRange.end && (
+            <button
+              onClick={() => { setDateRange(p => ({ ...p, end: '' })); setPeriod('custom'); }}
+              className="text-gray-500 hover:text-red-400 -ml-1 p-0.5 transition-colors"
+              title="종료일 비우기 (오늘까지 자동 연장)"
+            ><X size={10} /></button>
+          )}
+        </div>
         <div className="w-[1px] h-4 bg-gray-600 mx-1.5" />
-        <button onClick={onSearch} className="text-blue-400 hover:text-blue-300 hover:bg-gray-700 rounded p-1.5 transition-colors" title="조회">
+        <button onClick={onSearch} className="text-blue-400 hover:text-blue-300 hover:bg-gray-700 rounded p-1.5 transition-colors" title="조회 (종료일이 비어있으면 오늘까지)">
           <Search size={14} />
         </button>
       </div>

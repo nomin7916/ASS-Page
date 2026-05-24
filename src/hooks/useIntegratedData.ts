@@ -157,8 +157,11 @@ export function useIntegratedData({
     [computedIntHistory]);
 
   const intFilteredDates = useMemo(() => {
-    if (!intAppliedRange.start || !intAppliedRange.end) return intUnifiedDates;
-    return intUnifiedDates.filter(d => d >= intAppliedRange.start && d <= intAppliedRange.end);
+    if (!intAppliedRange.start && !intAppliedRange.end) return intUnifiedDates;
+    return intUnifiedDates.filter(d =>
+      (!intAppliedRange.start || d >= intAppliedRange.start) &&
+      (!intAppliedRange.end   || d <= intAppliedRange.end)
+    );
   }, [intUnifiedDates, intAppliedRange]);
 
   const intChartData = useMemo(() => {

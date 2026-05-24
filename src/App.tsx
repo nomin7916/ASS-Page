@@ -773,8 +773,11 @@ export default function App() {
   }, [history, marketIndices, stockHistoryMap, indicatorHistoryMap, portfolioStartDate]);
 
   const filteredDates = useMemo(() => {
-    if (!appliedRange.start || !appliedRange.end) return unifiedDates;
-    return unifiedDates.filter(d => d >= appliedRange.start && d <= appliedRange.end);
+    if (!appliedRange.start && !appliedRange.end) return unifiedDates;
+    return unifiedDates.filter(d =>
+      (!appliedRange.start || d >= appliedRange.start) &&
+      (!appliedRange.end   || d <= appliedRange.end)
+    );
   }, [unifiedDates, appliedRange]);
 
   const INDICATOR_CHART_KEYS = ['us10y', 'kr10y', 'goldIntl', 'goldKr', 'usdkrw', 'dxy', 'fedRate', 'vix', 'btc', 'eth'];
@@ -1212,7 +1215,9 @@ export default function App() {
   const handleWithdrawDownloadCSV = () => downloadCSV(`출금내역_${today}.csv`, buildDepositCSV(depositWithSum2));
 
   const handleSearchClick = () => {
-    if (dateRange.start && dateRange.end) { setAppliedRange({ start: dateRange.start, end: dateRange.end }); setChartPeriod('custom'); }
+    if (!dateRange.start && !dateRange.end) return;
+    setAppliedRange({ start: dateRange.start, end: dateRange.end });
+    setChartPeriod('custom');
   };
 
 
@@ -1613,10 +1618,9 @@ export default function App() {
 
 
   const handleIntSearchClick = () => {
-    if (intDateRange.start && intDateRange.end) {
-      setIntAppliedRange({ start: intDateRange.start, end: intDateRange.end });
-      setIntChartPeriod('custom');
-    }
+    if (!intDateRange.start && !intDateRange.end) return;
+    setIntAppliedRange({ start: intDateRange.start, end: intDateRange.end });
+    setIntChartPeriod('custom');
   };
 
   // 통합 대시보드 - 기간 변경 시 차트 범위 업데이트
@@ -2256,6 +2260,10 @@ export default function App() {
             handleCompStockBlur={handleCompStockBlur}
             handleFetchCompHistory={handleFetchCompHistory}
             handleRemoveCompStock={handleRemoveCompStock}
+            customLinks={customLinks}
+            setCustomLinks={setCustomLinks}
+            isLinkSettingsOpen={isLinkSettingsOpen}
+            setIsLinkSettingsOpen={setIsLinkSettingsOpen}
           />
         )}
 
