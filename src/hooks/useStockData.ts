@@ -697,10 +697,19 @@ export function useStockData({
           ...korCodesNeedingHistory.map(async (code) => {
             let hist: Record<string, number> | null = null;
             let fromTrend = false;
+            console.log(`[history] ${code} 조회 시작 (trend API 우선)`);
             const rTrend = await fetchNaverDomesticHistory(code);
-            if (rTrend) { hist = rTrend.data; fromTrend = true; trendMigratedInSession.current.add(code); }
-            if (!hist) { const rKIS = await fetchKISStockHistory(code); if (rKIS) hist = rKIS.data; }
-            if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
+            if (rTrend) {
+              hist = rTrend.data;
+              fromTrend = true;
+              trendMigratedInSession.current.add(code);
+              const dates = Object.keys(rTrend.data).sort();
+              console.log(`[history] ${code} trend API 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}, 샘플=${JSON.stringify(Object.fromEntries(dates.slice(-3).map(d => [d, rTrend.data[d]])))}`);
+            } else {
+              console.warn(`[history] ${code} trend API 실패 → fallback`);
+            }
+            if (!hist) { const rKIS = await fetchKISStockHistory(code); if (rKIS) { hist = rKIS.data; console.log(`[history] ${code} KIS 폴백 성공`); } }
+            if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) { hist = rNaver.data; console.log(`[history] ${code} fchart 폴백 성공`); } }
             if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
             if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
             if (hist) {
