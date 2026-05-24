@@ -1,13 +1,6 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus, Activity, TrendingUp, Settings, BarChart3 } from 'lucide-react';
-
-const NumberSquareIcon = ({ n, size = 14 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="3" y="3" width="18" height="18" rx="2" />
-    <text x="12" y="17.5" textAnchor="middle" fontSize="13" fontWeight="700" fill="currentColor" stroke="none" style={{ fontFamily: 'inherit' }}>{n}</text>
-  </svg>
-);
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
 import {
@@ -704,9 +697,9 @@ export default function IntegratedDashboard({
                             <button
                               key={i}
                               onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')}
-                              className="bg-gray-800 hover:bg-gray-700 text-blue-300 w-[28px] h-[28px] rounded shadow transition border border-gray-600 flex items-center justify-center"
+                              className="bg-gray-800 hover:bg-gray-700 text-blue-300 w-[28px] h-[28px] rounded shadow transition border border-gray-600 flex items-center justify-center text-[16px] font-extrabold leading-none"
                               title={tip}
-                            ><NumberSquareIcon n={i + 1} size={14} /></button>
+                            >{i + 1}</button>
                           );
                         })}
                         <button
