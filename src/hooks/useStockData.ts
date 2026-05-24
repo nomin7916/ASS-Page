@@ -246,7 +246,9 @@ export function useStockData({
     let hist = stockHistoryMap[comp.code];
     // 해외: 252건(약 1년) 미만이면 전체 재조회 / 국내: 3건 이상이면 증분 조회
     const hasRichHistory = hist && (isOverseasComp ? Object.keys(hist).length > 252 : Object.keys(hist).length > 3);
-    if (!hasRichHistory) {
+    // 국내 비교종목 미이전: 캐시 풍부해도 전체 재조회 강제 (수정주가 → 실제종가)
+    const compNeedsMigration = !isOverseasComp && !trendMigratedInSession.current.has(comp.code);
+    if (!hasRichHistory || compNeedsMigration) {
       if (isOverseasComp) {
         // 해외주식: fetchUsStockHistory (Naver worldstock → Yahoo Finance)
         const rUS = await fetchUsStockHistory(comp.code);
@@ -254,7 +256,8 @@ export function useStockData({
       } else {
         // 1순위: Naver trend API (실제 종가, 수정주가 미반영)
         const rTrend = await fetchNaverDomesticHistory(comp.code);
-        if (rTrend) hist = rTrend.data;
+        if (rTrend) { hist = rTrend.data; trendMigratedInSession.current.add(comp.code); }
+        console.log(`[history] ${comp.code} 비교종목 trend API ${rTrend ? `성공 ${Object.keys(rTrend.data).length}건` : '실패 → fallback'}`);
         // 2순위: KIS OpenAPI (trend 실패 시 폴백)
         if (!hist) { const rKIS = await fetchKISStockHistory(comp.code); if (rKIS) hist = rKIS.data; }
         // 3순위: 네이버 fchart
@@ -295,15 +298,20 @@ export function useStockData({
           const fromYear = parseInt(latestDate.split('-')[0]);
           const daysDiff = Math.ceil((Date.now() - new Date(latestDate).getTime()) / 86400000);
           const naverCount = Math.ceil(daysDiff * 5 / 7) + 30;
-          const rTrend = await fetchNaverDomesticHistory(comp.code, latestDate);
-          if (rTrend) newData = rTrend.data;
+          // 미이전 코드: latestDate 무시하고 전체 재조회 (수정주가 캐시 교체)
+          const incNeedsMigration = !trendMigratedInSession.current.has(comp.code);
+          const rTrend = await fetchNaverDomesticHistory(comp.code, incNeedsMigration ? undefined : latestDate);
+          if (rTrend) { newData = rTrend.data; trendMigratedInSession.current.add(comp.code); }
           if (!newData) { const rKIS = await fetchKISStockHistory(comp.code, fromYear); if (rKIS) newData = rKIS.data; }
           if (!newData) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) newData = rNaver.data; }
           if (!newData) { const r1 = await fetchIndexData(`${comp.code}.KS`, latestDate); if (r1) newData = r1.data; }
           if (!newData) { const r2 = await fetchIndexData(`${comp.code}.KQ`, latestDate); if (r2) newData = r2.data; }
         }
         if (newData) {
-          hist = { ...hist, ...newData };
+          // 미이전이면 REPLACE(수정주가 제거), 아니면 MERGE(증분)
+          hist = trendMigratedInSession.current.has(comp.code) && !isOverseasComp
+            ? newData
+            : { ...hist, ...newData };
           setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
           setTimeout(() => {
             const snap = saveStateRef.current;
@@ -678,6 +686,8 @@ export function useStockData({
         if (p.accountType === 'simple' || p.accountType === 'overseas') return;
         (p.portfolio || []).forEach(item => { if (item.type === 'stock' && item.code) allKoreanCodes.add(item.code); });
       });
+      // 활성 비교종목(국내 6자리) 도 포함 — Drive 캐시의 수정주가를 실제종가로 교체
+      compStocks.filter(s => s.active && s.code && /^\d{6}$/.test(s.code)).forEach(s => allKoreanCodes.add(s.code));
       const korCodesNeedingHistory = [...allKoreanCodes].filter(code => {
         // 세션 첫 갱신: trend API 미조회 코드는 캐시 신선도 무관 강제 재조회
         // (Drive에 수정주가가 캐시된 경우 실제종가로 교체)
