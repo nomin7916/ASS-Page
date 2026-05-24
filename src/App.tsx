@@ -941,6 +941,7 @@ export default function App() {
     avgExchangeRate, portfolioStartDate, title, marketIndicators,
     history, depositHistory, depositHistory2, intAppliedRange, intIsZeroBaseMode,
     effectiveDateKey,
+    compStocks, stockHistoryMap,
   });
 
 
@@ -2242,6 +2243,19 @@ export default function App() {
             onManualBackfill={handleManualBackfill}
             matongClosedIds={matongClosedIds}
             setMatongClosedIds={setMatongClosedIds}
+            compStocks={compStocks}
+            setCompStocks={setCompStocks}
+            stockHistoryMap={stockHistoryMap}
+            stockListingDates={stockListingDates}
+            setStockListingDates={setStockListingDates}
+            appliedRange={intAppliedRange}
+            autoFetchedCodes={autoFetchedCodes}
+            stockFetchStatus={stockFetchStatus}
+            handleAddCompStock={handleAddCompStock}
+            handleToggleComp={handleToggleComp}
+            handleCompStockBlur={handleCompStockBlur}
+            handleFetchCompHistory={handleFetchCompHistory}
+            handleRemoveCompStock={handleRemoveCompStock}
           />
         )}
 

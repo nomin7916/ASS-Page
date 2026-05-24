@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum } from '../utils';
+import { cleanNum, getClosestValue } from '../utils';
 import { getEffectiveDate } from './useMarketCalendar';
 
 export function useIntegratedData({
@@ -18,6 +18,8 @@ export function useIntegratedData({
   intAppliedRange,
   intIsZeroBaseMode,
   effectiveDateKey,
+  compStocks,
+  stockHistoryMap,
 }) {
   const portfolioSummaries = useMemo(() => {
     return portfolios.map(p => {
@@ -169,15 +171,41 @@ export function useIntegratedData({
       ? (() => { const valid = all.filter(h => h.effectivePrincipal > 0 && h.evalAmount >= h.effectivePrincipal * 0.7); return valid.length > 0 ? valid : all; })()
       : all;
     const baseEval = filtered[0].evalAmount;
-    return filtered.map(h => ({
-      date: h.date,
-      evalAmount: h.evalAmount,
-      costAmount: h.effectivePrincipal,
-      returnRate: intIsZeroBaseMode
-        ? (baseEval > 0 ? ((h.evalAmount / baseEval) - 1) * 100 : 0)
-        : (h.effectivePrincipal > 0 ? ((h.evalAmount - h.effectivePrincipal) / h.effectivePrincipal * 100) : 0),
-    }));
-  }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode]);
+
+    const comps = compStocks || [];
+    const compBases = comps.map(comp => {
+      if (!comp?.active || !comp?.code) return null;
+      const series = stockHistoryMap?.[comp.code];
+      if (!series) return null;
+      for (let i = 0; i < filtered.length; i++) {
+        const v = getClosestValue(series, filtered[i].date);
+        if (v != null && v > 0) return v;
+      }
+      return null;
+    });
+
+    return filtered.map(h => {
+      const row = {
+        date: h.date,
+        evalAmount: h.evalAmount,
+        costAmount: h.effectivePrincipal,
+        returnRate: intIsZeroBaseMode
+          ? (baseEval > 0 ? ((h.evalAmount / baseEval) - 1) * 100 : 0)
+          : (h.effectivePrincipal > 0 ? ((h.evalAmount - h.effectivePrincipal) / h.effectivePrincipal * 100) : 0),
+      };
+      comps.forEach((comp, ci) => {
+        const key = `comp${ci + 1}Rate`;
+        const base = compBases[ci];
+        if (!comp?.active || !comp?.code || base == null) {
+          row[key] = null;
+          return;
+        }
+        const v = getClosestValue(stockHistoryMap?.[comp.code], h.date);
+        row[key] = (v != null && v > 0) ? ((v / base) - 1) * 100 : null;
+      });
+      return row;
+    });
+  }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode, compStocks, stockHistoryMap]);
 
   const intMonthlyHistory = useMemo(() => {
     const sortedDesc = [...computedIntHistory].sort((a, b) => new Date(b.date) - new Date(a.date));

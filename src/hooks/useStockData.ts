@@ -325,7 +325,7 @@ export function useStockData({
       startDate = appliedRange.start;
     } else {
       const now = new Date();
-      const periodDays: Record<string, number> = { '1w': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365, '2y': 730, '3y': 1095, '4y': 1460, '5y': 1825, '10y': 3650 };
+      const periodDays: Record<string, number> = { '1w': 7, '1m': 30, '2m': 60, '3m': 90, '6m': 180, '1y': 365, '2y': 730, '3y': 1095, '4y': 1460, '5y': 1825, '10y': 3650 };
       const days = periodDays[chartPeriod] ?? 365;
       now.setDate(now.getDate() - days);
       startDate = now.toISOString().split('T')[0];

@@ -6,6 +6,7 @@ import CustomDatePicker from './CustomDatePicker';
 const PERIOD_OPTIONS = [
   { value: '1w',  label: '1주일' },
   { value: '1m',  label: '1개월' },
+  { value: '2m',  label: '2개월' },
   { value: '3m',  label: '3개월' },
   { value: '6m',  label: '6개월' },
   { value: '1y',  label: '1년' },

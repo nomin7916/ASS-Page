@@ -2,6 +2,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus, Activity, TrendingUp } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
+import CompStockChips from './CompStockChips';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, ReferenceLine,
@@ -113,6 +114,19 @@ export default function IntegratedDashboard({
   intDefaultSelectionResult,
   matongClosedIds = {},
   setMatongClosedIds,
+  compStocks = [],
+  setCompStocks,
+  stockHistoryMap = {},
+  stockListingDates = {},
+  setStockListingDates,
+  appliedRange = { start: '', end: '' },
+  autoFetchedCodes,
+  stockFetchStatus = {},
+  handleAddCompStock,
+  handleToggleComp,
+  handleCompStockBlur,
+  handleFetchCompHistory,
+  handleRemoveCompStock,
 }) {
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -661,21 +675,42 @@ export default function IntegratedDashboard({
               {/* 기간별 수익 차트 */}
               <div className="w-full xl:flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col xl:h-[464px]">
                 {/* 헤더: 제목 + 날짜범위 + 드롭다운 */}
-                <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-wrap gap-2 items-center shrink-0">
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <TrendingUp size={14} className="text-red-400" />
-                    <span className="text-white font-bold text-sm">총자산현황 수익율</span>
+                <div className="p-3 bg-[#0f172a] border-b border-gray-700 flex flex-col gap-2 shrink-0">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <TrendingUp size={14} className="text-red-400" />
+                      <span className="text-white font-bold text-sm">총자산현황 수익율</span>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto flex-wrap justify-end">
+                      <ChartRangeControls
+                        dateRange={intDateRange}
+                        setDateRange={setIntDateRange}
+                        period={intChartPeriod}
+                        setPeriod={setIntChartPeriod}
+                        onSearch={handleIntSearchClick}
+                      />
+                      <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`p-1.5 rounded border flex items-center justify-center transition-colors ${intIsZeroBaseMode ? 'text-indigo-300 bg-indigo-900/40 border-indigo-700/60' : 'text-gray-500 border-gray-700 hover:text-gray-300 hover:bg-gray-800'}`} title="기간 시작 기준 / 원금 기준 전환"><Activity size={14} /></button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 ml-auto flex-wrap justify-end">
-                    <ChartRangeControls
-                      dateRange={intDateRange}
-                      setDateRange={setIntDateRange}
-                      period={intChartPeriod}
-                      setPeriod={setIntChartPeriod}
-                      onSearch={handleIntSearchClick}
-                    />
-                    <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`p-1.5 rounded border flex items-center justify-center transition-colors ${intIsZeroBaseMode ? 'text-indigo-300 bg-indigo-900/40 border-indigo-700/60' : 'text-gray-500 border-gray-700 hover:text-gray-300 hover:bg-gray-800'}`} title="기간 시작 기준 / 원금 기준 전환"><Activity size={14} /></button>
-                  </div>
+                  {setCompStocks && handleAddCompStock && (
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1 xl:flex-wrap xl:overflow-visible xl:pb-0 xl:mx-0 xl:px-0">
+                      <CompStockChips
+                        compStocks={compStocks}
+                        setCompStocks={setCompStocks}
+                        stockHistoryMap={stockHistoryMap}
+                        stockListingDates={stockListingDates}
+                        setStockListingDates={setStockListingDates}
+                        appliedRange={appliedRange}
+                        autoFetchedCodes={autoFetchedCodes}
+                        stockFetchStatus={stockFetchStatus}
+                        handleAddCompStock={handleAddCompStock}
+                        handleToggleComp={handleToggleComp}
+                        handleCompStockBlur={handleCompStockBlur}
+                        handleFetchCompHistory={handleFetchCompHistory}
+                        handleRemoveCompStock={handleRemoveCompStock}
+                      />
+                    </div>
+                  )}
                 </div>
                 {/* 드래그 기간 선택 결과 패널 */}
                 {(() => {
@@ -713,10 +748,12 @@ export default function IntegratedDashboard({
                           .filter(entry => entry.dataKey && entry.value != null)
                           .sort((a, b) => {
                             const order = { evalAmount: 0, returnRate: 1, costAmount: 2 };
-                            return (order[a.dataKey] ?? 99) - (order[b.dataKey] ?? 99);
+                            const ak = order[a.dataKey] ?? (/^comp\d+Rate$/.test(a.dataKey) ? 10 + parseInt(a.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
+                            const bk = order[b.dataKey] ?? (/^comp\d+Rate$/.test(b.dataKey) ? 10 + parseInt(b.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
+                            return ak - bk;
                           })
                           .map((entry, i) => {
-                            const isRate = entry.dataKey === 'returnRate';
+                            const isRate = entry.dataKey === 'returnRate' || /^comp\d+Rate$/.test(entry.dataKey);
                             const displayVal = isRate
                               ? `${Number(entry.value) >= 0 ? '+' : ''}${Number(entry.value).toFixed(2)}%`
                               : (hideAmounts ? '••••••' : formatCurrency(entry.value));
@@ -760,6 +797,23 @@ export default function IntegratedDashboard({
                       <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={false} />
                       <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={false} />
                       <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} fill="url(#intEvalGrad)" dot={false} activeDot={false} />
+                      {compStocks.map((comp, ci) => (
+                        comp?.active && comp?.code ? (
+                          <Line
+                            key={`comp-${ci}`}
+                            yAxisId="left"
+                            type="monotone"
+                            dataKey={`comp${ci + 1}Rate`}
+                            name={comp.name || `종목${ci + 1}`}
+                            stroke={comp.color || '#10b981'}
+                            strokeWidth={1.5}
+                            dot={false}
+                            activeDot={false}
+                            connectNulls
+                            isAnimationActive={false}
+                          />
+                        ) : null
+                      ))}
                       {intDepositEvents
                         .filter(e => {
                           const first = intChartData[0]?.date;

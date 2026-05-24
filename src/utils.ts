@@ -6,6 +6,7 @@ export const calcPeriodStart = (period: string, latest: string, earliest: string
   const d = new Date(latest);
   if      (period === '1w')  d.setDate(d.getDate() - 7);
   else if (period === '1m')  d.setMonth(d.getMonth() - 1);
+  else if (period === '2m')  d.setMonth(d.getMonth() - 2);
   else if (period === '3m')  d.setMonth(d.getMonth() - 3);
   else if (period === '6m')  d.setMonth(d.getMonth() - 6);
   else if (period === '1y')  d.setFullYear(d.getFullYear() - 1);
