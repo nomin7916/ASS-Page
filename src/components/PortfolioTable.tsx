@@ -1,11 +1,12 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { Trash2, RefreshCw, Plus } from 'lucide-react';
+import { Trash2, RefreshCw, Plus, Settings } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber, formatFundPrice,
   formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, hexToRgba, blendWithDarkBg
 } from '../utils';
+import { extractLinkLabel } from '../chartUtils';
 
 const formatUSD = (n) => {
   const v = cleanNum(n);
@@ -168,7 +169,9 @@ const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
   );
 };
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {} }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, customLinks, setCustomLinks, overseasLinks, setOverseasLinks, isLinkSettingsOpen, setIsLinkSettingsOpen }) => {
+  const activeLinks = isOverseas ? (overseasLinks || []) : (customLinks || []);
+  const showLinkButtons = Array.isArray(activeLinks) && activeLinks.length > 0;
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -400,18 +403,45 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
       </div>
     )}
     <div className="bg-[#0f172a] rounded-xl shadow-lg border border-gray-700 overflow-hidden w-full">
-      {hiddenColumns.length > 0 && (
-        <div className="flex items-end gap-1 px-3 pt-2 pb-0 flex-wrap bg-[#080e1c]">
-          {PT_COLS.filter(c => hiddenColumns.includes(c.key)).map(col => (
-            <button
-              key={col.key}
-              onClick={() => onToggleColumn(col.key)}
-              className="px-2.5 py-1 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-t-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors"
-              title={`${col.label} 열 표시`}
-            >
-              {col.label}
-            </button>
-          ))}
+      {(hiddenColumns.length > 0 || showLinkButtons) && (
+        <div className="flex items-end justify-between gap-2 px-3 pt-2 pb-0 flex-wrap bg-[#080e1c]">
+          <div className="flex items-end gap-1 flex-wrap">
+            {PT_COLS.filter(c => hiddenColumns.includes(c.key)).map(col => (
+              <button
+                key={col.key}
+                onClick={() => onToggleColumn(col.key)}
+                className="px-2.5 py-1 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-t-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors"
+                title={`${col.label} 열 표시`}
+              >
+                {col.label}
+              </button>
+            ))}
+          </div>
+          {showLinkButtons && (
+            <div className="flex items-center gap-1 pb-1 shrink-0">
+              {activeLinks.slice(0, 3).map((link, i) => {
+                const label = link.name?.trim() ? link.name.trim().slice(0, 7) : extractLinkLabel(link.url);
+                const tip = link.url
+                  ? (link.name?.trim() ? `링크${i + 1} · ${link.name.trim()} — ${link.url}` : `링크${i + 1} — ${link.url}`)
+                  : `링크${i + 1} 설정 필요`;
+                return (
+                  <button
+                    key={i}
+                    onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')}
+                    className={`bg-gray-800 hover:bg-gray-700 text-blue-300 h-[24px] rounded shadow transition border border-gray-600 flex items-center justify-center font-bold tracking-tight ${label ? 'px-2 text-[11px] min-w-[24px]' : 'w-[24px] text-xs'}`}
+                    title={tip}
+                  >{label ?? (i + 1)}</button>
+                );
+              })}
+              {setIsLinkSettingsOpen && (
+                <button
+                  onClick={() => setIsLinkSettingsOpen(!isLinkSettingsOpen)}
+                  className="bg-gray-800 hover:bg-gray-700 text-gray-400 w-[24px] h-[24px] rounded shadow transition border border-gray-600 flex items-center justify-center"
+                  title="퀵 링크 설정 (수익률 차트에서 편집)"
+                ><Settings size={11} /></button>
+              )}
+            </div>
+          )}
         </div>
       )}
       <div className="overflow-x-auto w-full">
