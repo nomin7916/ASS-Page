@@ -549,7 +549,16 @@ export default function App() {
       if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
       if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
       if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
-      if (stateData.chartPrefs.accountChartStates) accountChartStatesRef.current = stateData.chartPrefs.accountChartStates;
+      if (stateData.chartPrefs.accountChartStates) {
+        accountChartStatesRef.current = stateData.chartPrefs.accountChartStates;
+        // 앱 시작 시 활성 계좌의 차트 기간 복원
+        // (계좌 전환 이펙트는 prevId===null 조건으로 최초 로드 시 실행 안 됨)
+        const restoredActiveId = stateData.activePortfolioId || stateData.portfolios?.[0]?.id;
+        const activeSaved = restoredActiveId ? stateData.chartPrefs.accountChartStates[restoredActiveId] : null;
+        if (activeSaved?.chartPeriod) setChartPeriod(activeSaved.chartPeriod);
+        if (activeSaved?.dateRange) setDateRange(activeSaved.dateRange);
+        if (activeSaved?.appliedRange) setAppliedRange(activeSaved.appliedRange);
+      }
       if (stateData.chartPrefs.showMarketPanel !== undefined) setShowMarketPanel(stateData.chartPrefs.showMarketPanel);
       if (stateData.chartPrefs.hideAmounts !== undefined) setHideAmounts(stateData.chartPrefs.hideAmounts);
       if (stateData.chartPrefs.showIndicatorsInChart) setShowIndicatorsInChart(stateData.chartPrefs.showIndicatorsInChart);
