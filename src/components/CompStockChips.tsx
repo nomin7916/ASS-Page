@@ -15,6 +15,7 @@ export default function CompStockChips({
   handleToggleComp,
   handleCompStockBlur,
   handleFetchCompHistory,
+  handleForceRefetchComp,
   handleRemoveCompStock,
 }) {
   const CompStockDot = ({ code }) => {
@@ -69,13 +70,9 @@ export default function CompStockChips({
             </button>
             {comp.active && (
               <button
-                onClick={() => {
-                  autoFetchedCodes?.current?.delete(comp.code);
-                  setStockListingDates?.(prev => { const n = { ...prev }; delete n[comp.code]; return n; });
-                  handleFetchCompHistory(idx);
-                }}
+                onClick={() => handleForceRefetchComp(idx)}
                 className={`px-1.5 py-1.5 transition-colors border-l ${hasIssue ? 'text-orange-400 hover:text-orange-200 hover:bg-orange-900/30 border-orange-700/40' : 'text-gray-600 hover:text-gray-300 hover:bg-gray-700/40 border-gray-700/40'}`}
-                title={refreshTitle}
+                title="종가 재조회 (캐시 초기화 후 전체 이력 새로 수집, Drive 저장)"
               >
                 <RefreshCw size={10} />
               </button>

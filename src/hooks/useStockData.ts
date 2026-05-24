@@ -411,6 +411,49 @@ export function useStockData({
     }
   };
 
+  // 비교종목 이력 강제 재조회 — 기존 캐시 완전 교체 (수정주가 제거용)
+  const handleForceRefetchComp = async (index) => {
+    const comp = compStocks[index];
+    if (!comp.code) return;
+
+    setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
+
+    // 캐시 무효화 (세션 마이그레이션 상태 포함)
+    trendMigratedInSession.current.delete(comp.code);
+    autoFetchedCodes.current.delete(comp.code);
+
+    const isOverseasComp = !isKoreanCode(comp.code);
+    let hist: Record<string, number> | null = null;
+
+    if (isOverseasComp) {
+      const rUS = await fetchUsStockHistory(comp.code);
+      if (rUS) hist = rUS.data;
+    } else {
+      const rTrend = await fetchNaverDomesticHistory(comp.code);
+      if (rTrend) { hist = rTrend.data; trendMigratedInSession.current.add(comp.code); }
+      console.log(`[history] ${comp.code} 강제재조회 trend ${rTrend ? `성공 ${Object.keys(rTrend.data).length}건` : '실패 → fallback'}`);
+      if (!hist) { const rKIS = await fetchKISStockHistory(comp.code); if (rKIS) hist = rKIS.data; }
+      if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code); if (rNaver) hist = rNaver.data; }
+      if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`); if (r1) hist = r1.data; }
+      if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`); if (r2) hist = r2.data; }
+    }
+
+    if (hist && Object.keys(hist).length > 1) {
+      // 기존 캐시 완전 교체
+      setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+      const earliest = Object.keys(hist).sort()[0];
+      setStockListingDates(prev => { const n = { ...prev }; if (earliest) n[comp.code] = earliest; else delete n[comp.code]; return n; });
+      autoFetchedCodes.current.add(comp.code);
+      setTimeout(() => {
+        const snap = saveStateRef.current;
+        if (snap && driveTokenRef.current) saveAllToDrive(snap);
+      }, 600);
+      setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: false, active: true }; return n; });
+    } else {
+      setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: false }; return n; });
+    }
+  };
+
   // 단일 fetch에 타임아웃 적용 (ms 초과 시 null 반환)
   const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]);
@@ -972,6 +1015,7 @@ export function useStockData({
     handleCompStockBlur,
     handleToggleComp,
     handleFetchCompHistory,
+    handleForceRefetchComp,
     autoRefreshStockPrices,
     refreshPrices,
   };

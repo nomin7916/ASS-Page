@@ -989,6 +989,7 @@ export default function App() {
     handleCompStockBlur,
     handleToggleComp,
     handleFetchCompHistory,
+    handleForceRefetchComp,
     autoRefreshStockPrices,
     refreshPrices,
   } = useStockData({
@@ -2124,6 +2125,7 @@ export default function App() {
             handleCompStockBlur={handleCompStockBlur}
             handleToggleComp={handleToggleComp}
             handleFetchCompHistory={handleFetchCompHistory}
+            handleForceRefetchComp={handleForceRefetchComp}
             handleRemoveCompStock={handleRemoveCompStock}
             effectiveDateKey={effectiveDateKey}
           />
@@ -2268,6 +2270,7 @@ export default function App() {
             handleToggleComp={handleToggleComp}
             handleCompStockBlur={handleCompStockBlur}
             handleFetchCompHistory={handleFetchCompHistory}
+            handleForceRefetchComp={handleForceRefetchComp}
             handleRemoveCompStock={handleRemoveCompStock}
             customLinks={customLinks}
             setCustomLinks={setCustomLinks}

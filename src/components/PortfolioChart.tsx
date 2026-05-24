@@ -53,6 +53,7 @@ export default function PortfolioChart({
   handleCompStockBlur,
   handleToggleComp,
   handleFetchCompHistory,
+  handleForceRefetchComp,
   handleRemoveCompStock,
   defaultSelectionResult,
   effectiveDateKey,
@@ -174,6 +175,7 @@ export default function PortfolioChart({
                 handleToggleComp={handleToggleComp}
                 handleCompStockBlur={handleCompStockBlur}
                 handleFetchCompHistory={handleFetchCompHistory}
+                handleForceRefetchComp={handleForceRefetchComp}
                 handleRemoveCompStock={handleRemoveCompStock}
               />
               <button onClick={() => setShowIndexVerify(!showIndexVerify)} className={`shrink-0 px-2 py-1.5 rounded text-[11px] font-bold transition-colors flex items-center gap-1 ml-1 ${showIndexVerify ? 'bg-blue-900/50 text-blue-300 border border-blue-500/50' : 'bg-transparent text-gray-500 hover:bg-gray-700 border border-gray-700'}`} title="지수 데이터 검증">
