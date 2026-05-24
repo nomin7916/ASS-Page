@@ -159,7 +159,8 @@ export default function RebalancingPanel({
     : headerDepositAmount;
   const headerBaseCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
   const headerExtraCost = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
-  const rebalBalance = -(headerBaseCost + headerExtraCost);
+  const headerInvestable = settings.mode === 'rebalance' ? headerAmount : (headerUseDeposit + headerAmount);
+  const rebalBalance = headerInvestable - headerBaseCost - headerExtraCost;
   const rebalRemaining = Math.max(0, rebalBalance);
 
   useEffect(() => {
@@ -274,8 +275,9 @@ export default function RebalancingPanel({
                 const investable = isRebalance ? (leftVal + headerAmount) : (headerUseDeposit + headerAmount);
                 const totalCost = headerBaseCost + headerExtraCost;
                 const displayCost = -totalCost;
-                const balance = -totalCost;
-                const displayBalance = Math.max(0, balance);
+                const cashInvestable = isRebalance ? headerAmount : (headerUseDeposit + headerAmount);
+                const balance = cashInvestable - totalCost;
+                const displayBalance = balance;
                 const modeOptions = [
                   { value: 'accumulate', label: '적립식', color: '#facc15' },
                   { value: 'rebalance', label: '리밸런싱', color: '#22c55e' },
@@ -399,12 +401,12 @@ export default function RebalancingPanel({
                     <div className="flex flex-col">
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-gray-400 shrink-0">잔액</span>
-                        <span className={`font-bold text-right truncate ${displayBalance > 0 ? 'text-sky-300' : 'text-gray-500'}`}>
+                        <span className={`font-bold text-right truncate ${displayBalance > 0 ? 'text-sky-300' : displayBalance < 0 ? 'text-red-400' : 'text-gray-500'}`}>
                           {fmtAmount(displayBalance)}
                         </span>
                       </div>
                       <div className="text-right text-[10px] text-gray-500 leading-tight">
-                        (실구매비용이 + 이면 표시 · − 이면 0)
+                        ({isRebalance ? '적립금' : '투자가능금'} − 매수액 = 잔액)
                       </div>
                     </div>
                     {rebalRemaining > 0 && (
@@ -630,7 +632,14 @@ export default function RebalancingPanel({
                 {(() => {
                   const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
                   const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
-                  const effectiveRemaining = -(baseTotalCost + totalExtraAllocated);
+                  const tableDepositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+                  const tableUseDeposit = settings.useDepositAmount != null
+                    ? Math.min(Math.max(0, cleanNum(settings.useDepositAmount)), tableDepositAmount)
+                    : tableDepositAmount;
+                  const tableCashInvestable = settings.mode === 'rebalance'
+                    ? cleanNum(settings.amount)
+                    : (tableUseDeposit + cleanNum(settings.amount));
+                  const effectiveRemaining = tableCashInvestable - baseTotalCost - totalExtraAllocated;
                   const isOverseas = activePortfolioAccountType === 'overseas';
                   const usdkrw = marketIndicators.usdkrw || 1;
                   const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
@@ -684,7 +693,7 @@ export default function RebalancingPanel({
                     const itemPrice = cleanNum(item.currentPrice);
                     const adjustedCost = totalAction * itemPrice;
                     const displayAdjustedCost = -adjustedCost;
-                    const maxAdd = itemPrice > 0 ? Math.floor(effectiveRemaining / itemPrice) : 0;
+                    const maxAdd = itemPrice > 0 ? effectiveRemaining / itemPrice : 0;
                     return (
                       <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
                         {catTd}
@@ -773,7 +782,7 @@ export default function RebalancingPanel({
                           </td>
                         )}
                         {!H('maxAdd') && (
-                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd > 0 ? '+' + maxAdd : maxAdd < 0 ? maxAdd : '0'}</td>
+                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd === 0 ? '0' : (maxAdd > 0 ? '+' : '') + maxAdd.toFixed(1)}</td>
                         )}
                         {!H('cost') && (
                           <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${displayAdjustedCost > 0 ? 'text-sky-300' : displayAdjustedCost < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(displayAdjustedCost)}</span><span className="text-[11px] opacity-70">{formatCurrency(displayAdjustedCost * usdkrw)}</span></div> : formatCurrency(displayAdjustedCost)}</td>
