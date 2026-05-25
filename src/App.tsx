@@ -865,7 +865,8 @@ export default function App() {
         const exactHist = histByDate.get(date);
         if (exactHist) {
           trueEvalAtDate = exactHist.evalAmount;
-          retRate = exactHist.principal > 0 ? ((exactHist.evalAmount - exactHist.principal) / exactHist.principal * 100) : 0;
+          const histPrin = exactHist.principal > 0 ? exactHist.principal : cleanNum(principal);
+          retRate = histPrin > 0 ? ((exactHist.evalAmount - histPrin) / histPrin * 100) : 0;
         } else {
           let hasTrueData = false;
           const hIdx = localSortedHist.slice().reverse().find(h => h.date <= date) || localSortedHist[0];
