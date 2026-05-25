@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp } from 'lucide-react';
+import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
@@ -827,8 +827,18 @@ export default function RebalancingPanel({
                               ? (isDifferent ? 'text-red-400' : 'text-amber-300')
                               : (isDifferent ? 'text-red-400' : 'text-green-400');
                           const cellLocked = targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
+                          const showResetIcon = !isLiveMirror && (item[overrideField] || Math.abs(baseVal - itemCurRatio) > threshold);
+                          const alwaysShowReset = !!item[overrideField];
+                          const applyReset = () => {
+                            setPortfolio(prev => prev.map(p => p.id === item.id
+                              ? { ...p, [slotField]: itemCurRatio, [overrideField]: false }
+                              : p
+                            ));
+                            setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
+                            reportAdminChange();
+                          };
                           return (
-                            <td className={`p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500 ${cellLocked ? 'cursor-pointer' : ''}`}
+                            <td className={`p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500 relative ${cellLocked ? 'cursor-pointer' : ''}`}
                               onClick={cellLocked ? (e => {
                                 e.preventDefault();
                                 const tr = e.currentTarget.closest('tr');
@@ -839,7 +849,7 @@ export default function RebalancingPanel({
                                 setPinModal({ onAuthorized: () => setTimeout(focusBack, 80) });
                               }) : undefined}
                             >
-                              <input type="text" data-col="targetRatio" data-item-id={item.id} className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 caret-blue-400 ${textColor} ${cellLocked ? 'cursor-pointer focus:bg-amber-900/10' : 'focus:bg-blue-900/20'}`}
+                              <input type="text" data-col="targetRatio" data-item-id={item.id} className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-blue-400 ${textColor} ${cellLocked ? 'cursor-pointer focus:bg-amber-900/10' : 'focus:bg-blue-900/20'}`}
                                 value={displayVal}
                                 readOnly={cellLocked}
                                 onChange={e => { if (!cellLocked) setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); }}
@@ -867,6 +877,25 @@ export default function RebalancingPanel({
                                 }}
                                 title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
                               />
+                              {showResetIcon && (
+                                <button
+                                  type="button"
+                                  tabIndex={-1}
+                                  onMouseDown={e => e.preventDefault()}
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    if (cellLocked) {
+                                      setPinModal({ onAuthorized: applyReset });
+                                    } else {
+                                      applyReset();
+                                    }
+                                  }}
+                                  className={`absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-gray-500 hover:text-emerald-300 hover:bg-emerald-900/20 transition-all ${alwaysShowReset ? 'opacity-80' : 'opacity-0 group-hover:opacity-60'} hover:!opacity-100`}
+                                  title={alwaysShowReset ? '수동 편집됨 — 클릭하여 현재 비중으로 복원' : '현재 비중으로 복원'}
+                                >
+                                  <RotateCcw size={11} />
+                                </button>
+                              )}
                             </td>
                           );
                         })()}
