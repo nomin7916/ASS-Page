@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { X, Plus, Trash2, Pencil } from 'lucide-react';
+import { X, Plus, Trash2, Pencil, RotateCcw } from 'lucide-react';
 import {
   cleanNum,
   formatCurrency,
@@ -251,6 +251,20 @@ export default function VerifyEvalModal({
     notify(v > 0
       ? `${formatShortDate(date)} 투자원금 ${Math.round(v).toLocaleString()}원으로 수동 설정`
       : `${formatShortDate(date)} 투자원금 수동 설정 해제 — 입출금 누적으로 복귀`, 'success');
+  };
+
+  // 적용 중인 anchor의 principalManual 플래그 해제 — 이 anchor에 의해 보정 중이던 모든 날짜가
+  // 입출금 누적값으로 복귀. 다른 anchor가 있으면 그 anchor 기준으로 다시 전파.
+  const revertCorrection = () => {
+    const anchorDate = effective.anchor?.date;
+    if (!anchorDate) return;
+    setHistory(hist => hist.map(item => {
+      if (item.date !== anchorDate) return item;
+      const next = { ...item };
+      delete next.principalManual;
+      return next;
+    }));
+    notify(`${formatShortDate(anchorDate)} 수동 설정 해제 — 보정 적용 중이던 날짜들이 입출금 누적값으로 복귀`, 'success');
   };
 
   const removeRow = (idx) => {
@@ -507,6 +521,15 @@ export default function VerifyEvalModal({
                       <span className="text-amber-400 text-[9px] font-bold" title={`${effective.anchor.date}의 수동 설정값에 입출금 변동 반영`}>
                         🟡 {formatShortDate(effective.anchor.date).split(' ')[0]} 보정
                       </span>
+                    )}
+                    {effective.anchor && (
+                      <button
+                        className="text-gray-500 hover:text-amber-400 inline-flex items-center gap-0.5 text-[9px] font-bold"
+                        title={`${effective.anchor.date} 수동 설정 해제 (보정 적용 중인 날짜들이 입출금 누적값으로 복귀)`}
+                        onClick={revertCorrection}
+                      >
+                        <RotateCcw size={9} /> 되돌리기
+                      </button>
                     )}
                   </span>
                   {editPrincipal ? (
