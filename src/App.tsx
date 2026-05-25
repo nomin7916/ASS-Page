@@ -2007,6 +2007,8 @@ export default function App() {
             patchActivePortfolio={patchActivePortfolio}
             notify={notify}
             effectiveDateKey={effectiveDateKey}
+            refreshPrices={refreshPrices}
+            isLoading={isLoading}
           />
 
           <DepositPanel

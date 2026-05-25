@@ -19,6 +19,8 @@ export default function HistoryPanel({
   patchActivePortfolio,
   notify,
   effectiveDateKey,
+  refreshPrices,
+  isLoading,
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -64,7 +66,15 @@ export default function HistoryPanel({
         <>
           <div className={`w-full xl:w-[21%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${activePortfolioAccountType === 'overseas' ? 'h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden shrink-0`}>
             <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center justify-between text-sm border-b border-gray-700 shrink-0">
-              <span>📈 자산 평가액 추이</span>
+              <button
+                onClick={refreshPrices}
+                disabled={isLoading}
+                className="flex items-center gap-1.5 hover:text-sky-300 transition-colors disabled:opacity-60"
+                title="클릭 시 종가 데이터를 새로 수집하여 자산 검증에 반영"
+              >
+                <span>📈 자산 평가액 추이</span>
+                {isLoading && <span className="inline-block animate-spin text-sky-400 text-base leading-none">↻</span>}
+              </button>
               <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={14} /></button>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
