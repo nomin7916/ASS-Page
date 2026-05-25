@@ -915,10 +915,6 @@ export default function RebalancingPanel({
                 </tr>
                 {showRetirementStats && (() => {
                   const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-                  const curD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.curEval, 0);
-                  const curS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.curEval, 0) + depositEval;
-                  const curTotal = curD + curS;
-                  const curDRatio = curTotal > 0 ? curD / curTotal * 100 : 0;
                   const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
                   const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
                   const projTotal = projD + projS;
@@ -929,15 +925,7 @@ export default function RebalancingPanel({
                     <tr className="border-t border-amber-600/30 bg-amber-950/20">
                       <td colSpan={retirementColSpan} className="py-2.5 px-4">
                         <div className="flex items-center gap-4 flex-wrap">
-                          <span className="text-amber-400 font-bold text-xs tracking-wide">퇴직연금 자산 비율</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-gray-500 text-[11px]">현재</span>
-                            <span className="text-red-300 text-xs font-bold">D {curDRatio.toFixed(1)}%</span>
-                            <span className="text-gray-600 text-[10px]">/</span>
-                            <span className="text-emerald-300 text-xs font-bold">S {(100 - curDRatio).toFixed(1)}%</span>
-                            <span className="text-gray-500 text-[11px] ml-2">→</span>
-                            <span className="text-gray-400 text-[11px]">예상</span>
-                          </div>
+                          <span className="text-amber-400 font-bold text-xs tracking-wide">퇴직연금 예상 자산 비율</span>
                           <div className="flex items-center gap-1.5">
                             <span className="text-red-400 font-bold text-xs">위험 D</span>
                             <span className={`font-bold text-sm ${onTarget ? 'text-red-400' : 'text-red-300'}`}>{projDRatio.toFixed(1)}%</span>
