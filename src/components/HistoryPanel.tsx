@@ -21,6 +21,8 @@ export default function HistoryPanel({
   effectiveDateKey,
   refreshPrices,
   isLoading,
+  depositHistory,
+  depositHistory2,
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -140,6 +142,8 @@ export default function HistoryPanel({
               setHistory={setHistory}
               notify={notify}
               onClose={() => setVerifyRecord(null)}
+              depositHistory={depositHistory}
+              depositHistory2={depositHistory2}
             />
           )}
           {helpOpen && (

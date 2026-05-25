@@ -2026,6 +2026,8 @@ export default function App() {
             effectiveDateKey={effectiveDateKey}
             refreshPrices={refreshPrices}
             isLoading={isLoading}
+            depositHistory={depositHistory}
+            depositHistory2={depositHistory2}
           />
 
           <DepositPanel

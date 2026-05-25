@@ -56,6 +56,8 @@ export default function VerifyEvalModal({
   setHistory,
   notify,
   onClose,
+  depositHistory,
+  depositHistory2,
 }) {
   const date = record.date;
   const isGold = accountType === 'gold';
@@ -164,6 +166,38 @@ export default function VerifyEvalModal({
   const stored = cleanNum(record.evalAmount);
   const diffRatio = stored > 0 ? Math.abs(recomputed - stored) / stored : (recomputed > 0 ? 1 : 0);
   const matched = recomputed > 0 && diffRatio < 0.001;
+
+  const isOverseas = accountType === 'overseas';
+
+  const depositsOnDate = useMemo(
+    () => (depositHistory || []).filter(d => d.date === date),
+    [depositHistory, date],
+  );
+  const withdrawalsOnDate = useMemo(
+    () => (depositHistory2 || []).filter(w => w.date === date),
+    [depositHistory2, date],
+  );
+
+  const cumPrincipalOnDate = useMemo(() => {
+    const deps = [...(depositHistory || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const wds = [...(depositHistory2 || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    let cum = 0;
+    for (const d of deps) {
+      if ((d.date || '') > date) break;
+      if (!d.noPrincipal) cum += cleanNum(d.amount) * (isOverseas ? (cleanNum(d.fxRate) || 1) : 1);
+    }
+    for (const w of wds) {
+      if ((w.date || '') > date) break;
+      if (!w.noPrincipal) {
+        const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
+        cum -= deducted * (isOverseas ? (cleanNum(w.fxRate) || 1) : 1);
+      }
+    }
+    return Math.max(0, cum);
+  }, [depositHistory, depositHistory2, date, isOverseas]);
+
+  const hasCashFlow = depositsOnDate.length > 0 || withdrawalsOnDate.length > 0;
+  const principalOnDate = cumPrincipalOnDate > 0 ? cumPrincipalOnDate : cleanNum(record.principal ?? portfolio?.principal ?? 0);
 
   const commitQty = (idx) => {
     const v = cleanNum(editQtyRaw);
@@ -399,6 +433,70 @@ export default function VerifyEvalModal({
                 </span>
               </div>
             </div>
+
+            <div className="bg-gray-800/50 rounded px-3 py-2 space-y-1">
+              <div className="text-gray-500 text-[10px] font-bold mb-1">자금 현황</div>
+              {!hasCashFlow && (
+                <div className="text-gray-600 text-[10px] text-center py-0.5">이 날 입출금 없음</div>
+              )}
+              {depositsOnDate.map((d, i) => (
+                <div key={d.id ?? i} className="flex justify-between items-center">
+                  <span className="flex items-center gap-1">
+                    <span className="text-emerald-400 font-bold text-[10px]">입금</span>
+                    {d.noPrincipal && <span className="text-sky-400 text-[9px]">원금제외</span>}
+                    {d.memo && <span className="text-gray-500 text-[9px] truncate max-w-[80px]">{d.memo}</span>}
+                  </span>
+                  <span className="text-emerald-300 font-bold">
+                    +{isOverseas ? `$${cleanNum(d.amount).toLocaleString()}` : formatCurrency(cleanNum(d.amount))}
+                  </span>
+                </div>
+              ))}
+              {withdrawalsOnDate.map((w, i) => {
+                const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : null;
+                return (
+                  <div key={w.id ?? i} className="flex justify-between items-center">
+                    <span className="flex items-center gap-1">
+                      <span className="text-red-400 font-bold text-[10px]">출금</span>
+                      {w.noPrincipal
+                        ? <span className="text-sky-400 text-[9px]">원금무영향</span>
+                        : deducted != null && deducted !== cleanNum(w.amount)
+                          ? <span className="text-amber-400 text-[9px]">원금차감 {isOverseas ? `$${deducted.toLocaleString()}` : formatCurrency(deducted)}</span>
+                          : <span className="text-amber-400 text-[9px]">원금차감</span>
+                      }
+                      {w.memo && <span className="text-gray-500 text-[9px] truncate max-w-[60px]">{w.memo}</span>}
+                    </span>
+                    <span className="text-red-300 font-bold">
+                      -{isOverseas ? `$${cleanNum(w.amount).toLocaleString()}` : formatCurrency(cleanNum(w.amount))}
+                    </span>
+                  </div>
+                );
+              })}
+              {(hasCashFlow || principalOnDate > 0) && (
+                <div className="border-t border-gray-700/50 mt-1 pt-1 space-y-0.5">
+                  {principalOnDate > 0 && (
+                    <div className="text-gray-400 flex justify-between">
+                      <span>이 날 투자원금</span>
+                      <span className="text-sky-200 font-bold">{isOverseas ? `$${Math.round(principalOnDate).toLocaleString()}` : formatCurrency(principalOnDate)}</span>
+                    </div>
+                  )}
+                  {stored > 0 && (
+                    <div className="text-gray-400 flex justify-between">
+                      <span>저장 평가자산</span>
+                      <span className="text-gray-200 font-bold">{formatCurrency(stored)}</span>
+                    </div>
+                  )}
+                  {principalOnDate > 0 && stored > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">평가손익</span>
+                      <span className={`font-bold ${stored - principalOnDate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {stored - principalOnDate >= 0 ? '+' : ''}{formatCurrency(Math.round(stored - principalOnDate))}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="flex gap-2">
               <button
                 className="flex-1 py-2 bg-emerald-700/70 hover:bg-emerald-600/70 disabled:bg-gray-700/50 disabled:text-gray-500 text-emerald-50 rounded font-bold tracking-wide"
