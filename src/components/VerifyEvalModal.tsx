@@ -39,6 +39,7 @@ const SOURCE_BADGE = {
   history: { label: '🟢 API', cls: 'text-green-400' },
   manual: { label: '🔴 수동입력', cls: 'text-red-400' },
   none: { label: '⚪ 데이터없음', cls: 'text-gray-500' },
+  approximate: { label: '🟡 근사값', cls: 'text-amber-400' },
   deposit: { label: '예수금', cls: 'text-sky-300' },
   currentPrice: { label: '⚪ 폴백', cls: 'text-gray-500' },
   evalAmount: { label: '⚪ 폴백', cls: 'text-gray-500' },

@@ -248,7 +248,20 @@ export const BASELINE_DEFAULT_DATE = '2026-05-15';
 const overrideKeyForItem = (item: any, isGold: boolean): string =>
   item?.code || (isGold ? 'GOLD' : '');
 
-// 특정 날짜·종목의 단가 결정: 수동입력(manualPriceOverrides) 최우선 → 이력 → 0
+// 특정 날짜 이후 최대 forwardDays 일 안의 가장 가까운 다음 값 (주말/공휴일 이후 첫 거래일 폴백)
+const getForwardValue = (dataObj: Record<string, number> | null | undefined, targetDateStr: string, forwardDays: number): number | null => {
+  if (!dataObj) return null;
+  let d = new Date(targetDateStr);
+  d.setDate(d.getDate() + 1);
+  for (let i = 0; i < forwardDays; i++) {
+    const ds = d.toISOString().split('T')[0];
+    if (dataObj[ds] !== undefined) return dataObj[ds];
+    d.setDate(d.getDate() + 1);
+  }
+  return null;
+};
+
+// 특정 날짜·종목의 단가 결정: 수동입력(manualPriceOverrides) 최우선 → 이력 → 순방향 근사 → 0
 const resolvePriceForItem = (
   item: any,
   date: string,
@@ -256,7 +269,7 @@ const resolvePriceForItem = (
   indicatorHistoryMap: Record<string, any>,
   isGold: boolean,
   manualPriceOverrides?: Record<string, Record<string, number>> | null
-): { price: number; source: 'manual' | 'history' | 'none' } => {
+): { price: number; source: 'manual' | 'history' | 'approximate' | 'none' } => {
   const ovKey = overrideKeyForItem(item, isGold);
   const manualRaw = ovKey ? manualPriceOverrides?.[ovKey]?.[date] : undefined;
   if (manualRaw != null && cleanNum(manualRaw) > 0) {
@@ -265,7 +278,11 @@ const resolvePriceForItem = (
   let price = 0;
   if (isGold) price = getClosestValue(indicatorHistoryMap?.goldKr, date) || 0;
   else if (item?.code) price = getClosestValue(stockHistoryMap?.[item.code], date) || 0;
-  return price > 0 ? { price, source: 'history' } : { price: 0, source: 'none' };
+  if (price > 0) return { price, source: 'history' };
+  // 소급 조회 실패 시 최대 5거래일 순방향 조회 (주말·휴장일 검증 시 직후 첫 거래일가 활용)
+  const dataObj = isGold ? indicatorHistoryMap?.goldKr : (item?.code ? stockHistoryMap?.[item.code] : null);
+  const fwdPrice = getForwardValue(dataObj, date, 5) || 0;
+  return fwdPrice > 0 ? { price: fwdPrice, source: 'approximate' } : { price: 0, source: 'none' };
 };
 
 // 특정 날짜의 종목별 평가 내역 + 합계 (검증 모달 P2가 사용)
