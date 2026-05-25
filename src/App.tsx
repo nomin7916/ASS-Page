@@ -898,7 +898,7 @@ export default function App() {
         });
         return {
           ...item,
-          returnRate: item.evalAmount === 0 ? 0 : (baseItem.evalAmount > 0 ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : 0),
+          // returnRate: ...item 스프레드의 원금 기반 값 유지 — 지수/비교종목만 구간 정규화
           kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
           sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
           nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,

@@ -749,25 +749,37 @@ export function useStockData({
         Promise.all([
           ...korCodesNeedingHistory.map(async (code) => {
             let hist: Record<string, number> | null = null;
-            let fromTrend = false;
-            console.log(`[history] ${code} 조회 시작 (trend API 우선)`);
-            const rTrend = await fetchNaverDomesticHistory(code);
-            if (rTrend) {
-              hist = rTrend.data;
-              fromTrend = true;
+            let fromRealPrice = false;
+            // 1순위: KIS 실제종가 (FID_ORG_ADJ_PRC=1, 수정주가 미반영)
+            const rKIS = await fetchKISStockHistory(code);
+            if (rKIS) {
+              hist = rKIS.data;
+              fromRealPrice = true;
               trendMigratedInSession.current.add(code);
-              const dates = Object.keys(rTrend.data).sort();
-              console.log(`[history] ${code} trend API 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}, 샘플=${JSON.stringify(Object.fromEntries(dates.slice(-3).map(d => [d, rTrend.data[d]])))}`);
+              const dates = Object.keys(rKIS.data).sort();
+              console.log(`[history] ${code} KIS 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}, 샘플=${JSON.stringify(Object.fromEntries(dates.slice(-3).map(d => [d, rKIS.data[d]])))}`);
             } else {
-              console.warn(`[history] ${code} trend API 실패 → fallback`);
+              console.warn(`[history] ${code} KIS 실패 → Naver trend 폴백`);
             }
-            if (!hist) { const rKIS = await fetchKISStockHistory(code); if (rKIS) { hist = rKIS.data; console.log(`[history] ${code} KIS 폴백 성공`); } }
+            // 2순위: Naver trend (실제종가, 수정주가 미반영)
+            if (!hist) {
+              const rTrend = await fetchNaverDomesticHistory(code);
+              if (rTrend) {
+                hist = rTrend.data;
+                fromRealPrice = true;
+                trendMigratedInSession.current.add(code);
+                const dates = Object.keys(rTrend.data).sort();
+                console.log(`[history] ${code} Naver trend 폴백 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
+              } else {
+                console.warn(`[history] ${code} Naver trend 실패 → fchart 폴백`);
+              }
+            }
             if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) { hist = rNaver.data; console.log(`[history] ${code} fchart 폴백 성공`); } }
             if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
             if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
             if (hist) {
-              if (fromTrend) {
-                // 수정주가 캐시 교체: trend API 데이터로 대체, 오늘 현재가 보존
+              if (fromRealPrice) {
+                // 실제종가 캐시 교체: KIS/Naver trend 데이터로 전체 대체, 오늘 현재가 보존
                 setStockHistoryMap(prev => {
                   const todayPrice = prev[code]?.[today];
                   const next = { ...hist! };
