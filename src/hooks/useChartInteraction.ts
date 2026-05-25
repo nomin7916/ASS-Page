@@ -38,7 +38,7 @@ export function useChartInteraction({
     const sData = finalChartData[Math.min(idx1, idx2)];
     const eData = finalChartData[Math.max(idx1, idx2)];
     const profit = eData.evalAmount - sData.evalAmount;
-    const rate = eData.returnRate - sData.returnRate;
+    const rate = sData.evalAmount > 0 ? (profit / sData.evalAmount) * 100 : 0;
     const indPeriodRates: Record<string, number | null> = {};
     INDICATOR_CHART_KEYS.forEach(k => {
       const sp = sData[`${k}Point`]; const ep = eData[`${k}Point`];

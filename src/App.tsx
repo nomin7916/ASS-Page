@@ -862,15 +862,18 @@ export default function App() {
     const isOverseasChart = activePortfolioAccountType === 'overseas';
     const histByDate = new Map(localSortedHist.map(h => [h.date, h]));
     const rawData = filteredDates.map(date => {
-      let trueEvalAtDate = 0;
+      let trueEvalAtDate = 0, retRate = 0;
       if (date >= portfolioStartDate) {
         const exactHist = histByDate.get(date);
         if (exactHist) {
           trueEvalAtDate = exactHist.evalAmount;
+          const histPrin = exactHist.principal > 0 ? exactHist.principal : cleanNum(principal);
+          retRate = histPrin > 0 ? ((exactHist.evalAmount - histPrin) / histPrin * 100) : 0;
         } else {
           let hasTrueData = false;
           const hIdx = localSortedHist.slice().reverse().find(h => h.date <= date) || localSortedHist[0];
           const baseEval = hIdx ? hIdx.evalAmount : totals.totalEval;
+          const basePrin = hIdx ? hIdx.principal : principal;
           portfolio.forEach(item => {
             if (item.type === 'deposit') { trueEvalAtDate += cleanNum(item.depositAmount); }
             else if (item.code && stockHistoryMap[item.code]) {
@@ -880,6 +883,7 @@ export default function App() {
             } else { trueEvalAtDate += cleanNum(item.evalAmount) * (baseEval / (totals.totalEval || 1)); }
           });
           if (!hasTrueData && hIdx) trueEvalAtDate = hIdx.evalAmount;
+          retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
         }
       }
       let principalAmount = 0;
@@ -889,9 +893,6 @@ export default function App() {
         const fallbackFx = isOverseasChart ? (cleanNum(avgExchangeRate) || marketIndicators?.usdkrw || 1) : 1;
         principalAmount = cleanNum(principal) * fallbackFx;
       }
-      const retRate = (principalAmount > 0 && date >= portfolioStartDate)
-        ? ((trueEvalAtDate - principalAmount) / principalAmount * 100)
-        : 0;
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
@@ -1707,7 +1708,7 @@ export default function App() {
     });
     setDefaultSelectionResult({
       startDate: s.date, endDate: e.date, profit,
-      rate: e.returnRate - s.returnRate,
+      rate: s.evalAmount > 0 ? (profit / s.evalAmount) * 100 : 0,
       kospiPeriodRate: s.kospiPoint > 0 ? ((e.kospiPoint / s.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: s.sp500Point > 0 ? ((e.sp500Point / s.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
