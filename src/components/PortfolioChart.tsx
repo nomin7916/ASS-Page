@@ -404,24 +404,12 @@ export default function PortfolioChart({
                     <span className={`text-[10px] font-bold whitespace-nowrap ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
                       ({displayResult.profit >= 0 ? '+' : ''}{formatCurrency(displayResult.profit)})
                     </span>
-                    {displayResult.startProfit != null && displayResult.endProfit != null && (
-                      <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                        ({formatCurrency(displayResult.startProfit)} → {formatCurrency(displayResult.endProfit)})
-                      </span>
-                    )}
-                  </div>
-                  {displayResult.startEval != null && displayResult.endEval != null && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                      <div className="w-2 h-2 rounded-sm bg-gray-400 shrink-0" />
-                      <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">나의 총자산</span>
-                      <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.endEval >= displayResult.startEval ? 'text-red-400' : 'text-blue-400'}`}>
-                        {displayResult.rate > 0 ? '+' : displayResult.rate < 0 ? '' : ''}{displayResult.rate.toFixed(2)}%
-                      </span>
+                    {displayResult.startEval != null && displayResult.endEval != null && (
                       <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
                         ({formatCurrency(displayResult.startEval)} → {formatCurrency(displayResult.endEval)})
                       </span>
-                    </div>
-                  )}
+                    )}
+                  </div>
                   {showBacktest && displayResult.backtestPeriodRate != null && (
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                       <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />
