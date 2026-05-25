@@ -353,6 +353,9 @@ export default function App() {
   } = useHistoryChart();
   const prevChartPeriodRef = useRef<string>(chartPeriod);
   const prevIntChartPeriodRef = useRef<string>(intChartPeriod);
+  // 조회기간 자동 재계산 가드: chartPeriod 실제 변경 vs unifiedDates만 변경(계좌 전환·백그라운드 로드) 구분용
+  const prevChartPeriodForRangeRef = useRef<string | null>(null);
+  const prevIntChartPeriodForRangeRef = useRef<string | null>(null);
 
   // ── useDriveSync 훅 ──
   const {
@@ -1682,10 +1685,17 @@ export default function App() {
 
   useEffect(() => {
     if (unifiedDates.length === 0) return;
+    const prev = prevChartPeriodForRangeRef.current;
+    prevChartPeriodForRangeRef.current = chartPeriod;
+    if (chartPeriod === 'custom') return;
+    const periodChanged = prev !== chartPeriod;
+    // unifiedDates만 변경된 경우(계좌 전환·STOCK 백그라운드 로드 등) 사용자 range 보호.
+    // chartPeriod이 실제로 바뀌었거나 appliedRange가 비어 있을 때만 재계산.
+    if (!periodChanged && (appliedRange.start || appliedRange.end)) return;
     const latest = unifiedDates[unifiedDates.length - 1];
     const newStart = calcPeriodStart(chartPeriod, latest, unifiedDates[0]);
     if (newStart !== null) { setDateRange({ start: newStart, end: latest }); setAppliedRange({ start: newStart, end: latest }); }
-  }, [chartPeriod, unifiedDates]);
+  }, [chartPeriod, unifiedDates, appliedRange]);
 
 
   const handleIntSearchClick = () => {
@@ -1697,10 +1707,15 @@ export default function App() {
   // 통합 대시보드 - 기간 변경 시 차트 범위 업데이트
   useEffect(() => {
     if (intUnifiedDates.length === 0) return;
+    const prev = prevIntChartPeriodForRangeRef.current;
+    prevIntChartPeriodForRangeRef.current = intChartPeriod;
+    if (intChartPeriod === 'custom') return;
+    const periodChanged = prev !== intChartPeriod;
+    if (!periodChanged && (intAppliedRange.start || intAppliedRange.end)) return;
     const latest = intUnifiedDates[intUnifiedDates.length - 1];
     const newStart = calcPeriodStart(intChartPeriod, latest, intUnifiedDates[0]);
     if (newStart !== null) { setIntDateRange({ start: newStart, end: latest }); setIntAppliedRange({ start: newStart, end: latest }); }
-  }, [intChartPeriod, intUnifiedDates]);
+  }, [intChartPeriod, intUnifiedDates, intAppliedRange]);
 
   // ── 기본 선택기간 자동 계산 ──
   const [defaultSelectionResult, setDefaultSelectionResult] = React.useState(null);
