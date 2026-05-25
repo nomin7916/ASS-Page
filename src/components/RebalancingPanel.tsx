@@ -1003,12 +1003,18 @@ export default function RebalancingPanel({
                             </div>
                           </div>
                         ) : (
-                          <div className="flex items-baseline justify-end gap-1.5 flex-wrap font-bold">
-                            <span className="text-green-300 text-[13px]">{fmtAmt(rebalTotalAvailable)}</span>
-                            <span className="text-gray-500 text-[11px]">−</span>
-                            <span className="text-red-300 text-[13px]">{fmtAmt(headerTotalBuy)}</span>
-                            <span className="text-gray-500 text-[11px]">=</span>
-                            <span className={`text-[14px] ${balanceColor}`}>{fmtAmt(rebalBalance)}</span>
+                          <div className="grid grid-cols-[auto_1fr_auto] gap-x-2 gap-y-2 items-baseline">
+                            <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap">투자가능금액 :</span>
+                            <span className="text-green-300 font-bold text-[14px] text-right whitespace-nowrap">{fmtAmt(rebalTotalAvailable)}</span>
+                            <span className="text-gray-500 text-[11px] w-2 text-center">−</span>
+
+                            <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap">매수 금액 :</span>
+                            <span className="text-red-300 font-bold text-[14px] text-right whitespace-nowrap">{fmtAmt(headerTotalBuy)}</span>
+                            <span className="text-gray-500 text-[11px] w-2 text-center">=</span>
+
+                            <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap">잔액</span>
+                            <span className={`font-bold text-[15px] text-right whitespace-nowrap ${balanceColor}`}>{fmtAmt(rebalBalance)}</span>
+                            <span className="w-2" />
                           </div>
                         )}
                       </td>
