@@ -787,7 +787,12 @@ export function useStockData({
                   return { ...prev, [code]: next };
                 });
               } else {
-                setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+                // KIS/Naver trend 실패 시 fchart/Yahoo 수정종가 폴백:
+                // 기존 캐시가 충분하면(30건↑) MERGE 금지 — 실제종가가 수정종가로 재오염되는 것을 방지
+                const existingCount = Object.keys(stockHistoryMapRef.current[code] || {}).length;
+                if (existingCount < 30) {
+                  setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+                }
               }
             }
           }),
