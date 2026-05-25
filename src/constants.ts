@@ -30,6 +30,29 @@ export const CHART_NAME_TO_PERIOD_KEY = {
   'VIX':     'vixPeriodRate',
 };
 
+export const MARK_COLOR_CYCLE = ['yellow', 'slate', 'rose', 'brown'] as const;
+
+export const MARK_ROW_BG: Record<string, string> = {
+  yellow: 'bg-[rgba(234,179,8,0.20)] hover:bg-[rgba(234,179,8,0.30)]',
+  slate:  'bg-[rgba(148,163,184,0.22)] hover:bg-[rgba(148,163,184,0.32)]',
+  rose:   'bg-[rgba(225,29,72,0.22)] hover:bg-[rgba(225,29,72,0.32)]',
+  brown:  'bg-[rgba(180,83,9,0.28)] hover:bg-[rgba(180,83,9,0.38)]',
+};
+
+export const MARK_STICKY_BG: Record<string, string> = {
+  yellow: 'bg-[#3a3015] group-hover:bg-[#4a3d1a]',
+  slate:  'bg-[#2b3142] group-hover:bg-[#3a4257]',
+  rose:   'bg-[#3a1a2a] group-hover:bg-[#4a223a]',
+  brown:  'bg-[#3a2a18] group-hover:bg-[#4a3520]',
+};
+
+export const MARK_STRIP_BG: Record<string, string> = {
+  yellow: '#eab308',
+  slate:  '#94a3b8',
+  rose:   '#e11d48',
+  brown:  '#b45309',
+};
+
 export const CHART_NAME_TO_POINT_KEY = {
   'KOSPI':   'kospiPoint',  'S&P500': 'sp500Point', 'NASDAQ': 'nasdaqPoint',
   'US 10Y':  'us10yPoint',  'Gold': 'goldIntlPoint', '국내금': 'goldKrPoint', 'USDKRW': 'usdkrwPoint',

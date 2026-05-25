@@ -71,6 +71,17 @@ export function usePortfolioState({
     else delete next[itemId];
     return { markedRebalRows: next };
   });
+  const markedPortfolioRows = activePortfolio?.markedPortfolioRows ?? {};
+  const toggleMarkedPortfolioRow = (itemId) => patchActive(p => {
+    const cur = p.markedPortfolioRows ?? {};
+    const order = ['yellow', 'slate', 'rose', 'brown'];
+    const next = { ...cur };
+    const idx = order.indexOf(cur[itemId]);
+    if (idx === -1) next[itemId] = order[0];
+    else if (idx < order.length - 1) next[itemId] = order[idx + 1];
+    else delete next[itemId];
+    return { markedPortfolioRows: next };
+  });
 
   // ── 활성 포트폴리오만 갱신하는 헬퍼 ──
   const patchActive = (patch) =>
@@ -461,7 +472,7 @@ export function usePortfolioState({
   // ── 포트폴리오 항목 CRUD ──
   const handleUpdate = (id, field, value) =>
     setPortfolio(prev => prev.map(p =>
-      p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass', 'rowColor'].includes(field) ? value : cleanNum(value) } : p
+      p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass'].includes(field) ? value : cleanNum(value) } : p
     ));
 
   const handleDeleteStock = (id) => setPortfolio(prev => prev.filter(p => p.id !== id));
@@ -541,6 +552,7 @@ export function usePortfolioState({
     hiddenColumnsPortfolio, hiddenColumnsRebalancing,
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
     markedRebalRows, toggleMarkedRebalRow,
+    markedPortfolioRows, toggleMarkedPortfolioRow,
     adminAccessAllowed, setAdminAccessAllowed,
     // 파생 상태
     activePortfolioAccountType,

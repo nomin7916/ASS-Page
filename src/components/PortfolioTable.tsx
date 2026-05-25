@@ -2,9 +2,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Trash2, RefreshCw, Plus, Settings } from 'lucide-react';
 import { UI_CONFIG } from '../config';
+import { MARK_ROW_BG, MARK_STICKY_BG, MARK_STRIP_BG } from '../constants';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber, formatFundPrice,
-  formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, hexToRgba, blendWithDarkBg
+  formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav
 } from '../utils';
 import { extractLinkLabel } from '../chartUtils';
 
@@ -169,7 +170,7 @@ const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
   );
 };
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, customLinks, setCustomLinks, overseasLinks, setOverseasLinks, isLinkSettingsOpen, setIsLinkSettingsOpen }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, customLinks, setCustomLinks, overseasLinks, setOverseasLinks, isLinkSettingsOpen, setIsLinkSettingsOpen, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {} }) => {
   const activeLinks = isOverseas ? (overseasLinks || []) : (customLinks || []);
   const showLinkButtons = Array.isArray(activeLinks) && activeLinks.length > 0;
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
@@ -450,7 +451,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             <tr className="text-center">
               <th className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></th>
               {!H('category') && (
-                <th className="py-2 min-w-[60px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort('category')}>
+                <th className="py-2 min-w-[60px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort(null)} title="클릭하여 정렬 초기화">
                   {hideStrip('category')}
                   구분
                 </th>
@@ -535,17 +536,19 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const fStatus = stockFetchStatus?.[item.code];
               const isRefreshing = fStatus === 'loading';
               const assetClass = item.assetClass ?? getAssetClass(item.category);
+              const markColor = markedPortfolioRows[item.id];
+              const rowMarkClass = markColor ? MARK_ROW_BG[markColor] : 'hover:bg-gray-800/40';
+              const stickyMarkClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-[#0f172a] group-hover:bg-[#1a2535]';
               return (
-                <tr key={item.id} className={`group transition-colors border-b border-gray-700 ${!item.rowColor ? 'hover:bg-gray-800/40' : ''}`} style={item.rowColor ? { backgroundColor: hexToRgba(item.rowColor, 0.18) } : {}}>
-                  {/* 색상 스트립 */}
+                <tr key={item.id} className={`group transition-colors border-b border-gray-700 ${rowMarkClass}`}>
+                  {/* 색상 스트립 — 클릭 시 yellow→slate→rose→brown→해제 사이클 */}
                   <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
-                    {item.rowColor ? (
-                      <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none rounded" style={{margin:'6px 0', minHeight:'24px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
-                    ) : (
-                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded" style={{margin:'6px 0', minHeight:'24px'}}>
-                        <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => onUpdate(item.id, 'rowColor', e.target.value)} />
-                      </label>
-                    )}
+                    <button
+                      title="클릭하여 행 색상 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                      className="block w-full cursor-pointer border-0 outline-none rounded"
+                      style={{margin:'6px 0', minHeight:'24px', backgroundColor: markColor ? MARK_STRIP_BG[markColor] : 'transparent'}}
+                      onClick={() => onToggleMarkedPortfolioRow(item.id)}
+                    />
                   </td>
                   {/* 구분 */}
                   {!H('category') && (
@@ -567,7 +570,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   )}
                   {/* 종목명 */}
                   {!H('name') && (
-                    <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-[#0f172a] group-hover:bg-[#1a2535] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={item.rowColor ? { backgroundColor: blendWithDarkBg(item.rowColor, 0.35) } : {}}>
+                    <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 ${stickyMarkClass} [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`}>
                       <div className="flex items-center gap-1 px-1">
                         <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-gray-300 caret-blue-400`} value={item.name} onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
                         {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
@@ -679,17 +682,19 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const assetClass = item.assetClass ?? 'S';
               const storedQty = cleanNum(item.quantity);
               const purchasePriceCalc = storedQty > 0 ? Math.round(cleanNum(item.investAmount) / storedQty) : 0;
+              const markColor = markedPortfolioRows[item.id];
+              const rowMarkClass = markColor ? MARK_ROW_BG[markColor] : 'bg-indigo-950/30 hover:bg-indigo-900/20';
+              const stickyMarkClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-indigo-950/60 group-hover:bg-indigo-900/30';
               return (
-                <tr key={item.id} className={`group transition-colors border-b border-indigo-800/30 ${!item.rowColor ? 'bg-indigo-950/30 hover:bg-indigo-900/20' : ''}`} style={item.rowColor ? { backgroundColor: hexToRgba(item.rowColor, 0.18) } : {}}>
-                  {/* 색상 스트립 */}
+                <tr key={item.id} className={`group transition-colors border-b border-indigo-800/30 ${rowMarkClass}`}>
+                  {/* 색상 스트립 — 클릭 시 yellow→slate→rose→brown→해제 사이클 */}
                   <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
-                    {item.rowColor ? (
-                      <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none rounded" style={{margin:'6px 0', minHeight:'24px', backgroundColor: item.rowColor}} onClick={() => onUpdate(item.id, 'rowColor', '')} />
-                    ) : (
-                      <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded" style={{margin:'6px 0', minHeight:'24px'}}>
-                        <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => onUpdate(item.id, 'rowColor', e.target.value)} />
-                      </label>
-                    )}
+                    <button
+                      title="클릭하여 행 색상 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                      className="block w-full cursor-pointer border-0 outline-none rounded"
+                      style={{margin:'6px 0', minHeight:'24px', backgroundColor: markColor ? MARK_STRIP_BG[markColor] : 'transparent'}}
+                      onClick={() => onToggleMarkedPortfolioRow(item.id)}
+                    />
                   </td>
                   {/* 구분: FUND 링크 + S/D 텍스트 토글 */}
                   {!H('category') && (
@@ -711,7 +716,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   )}
                   {/* 종목명 */}
                   {!H('name') && (
-                    <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 bg-indigo-950/60 group-hover:bg-indigo-900/30 [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`} style={item.rowColor ? { backgroundColor: blendWithDarkBg(item.rowColor, 0.35) } : {}}>
+                    <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 ${stickyMarkClass} [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`}>
                       <div className="flex items-center gap-1 px-1">
                         <input type="text" data-col="name" className={`${inp} text-center flex-1 px-2 text-indigo-200 caret-blue-400`} value={item.name} placeholder="펀드명" onFocus={e => e.target.select()} onChange={e => onUpdate(item.id, 'name', e.target.value)} onKeyDown={e => handleTableKeyDown(e, 'name')} />
                         {fStatus === 'success' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="갱신 완료" />}
