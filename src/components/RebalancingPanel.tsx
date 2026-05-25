@@ -446,12 +446,12 @@ export default function RebalancingPanel({
               </div>
               {onManualSave && (() => {
                 const saveBtnColor = driveStatus === 'saving'
-                  ? 'text-sky-400 border-sky-500/40'
+                  ? 'text-sky-400'
                   : driveStatus === 'saved'
-                    ? 'text-green-400 border-green-500/40'
+                    ? 'text-green-300'
                     : driveStatus === 'error' || driveStatus === 'auth_needed'
-                      ? 'text-red-400 border-red-500/40'
-                      : 'text-gray-400 border-gray-600 hover:text-sky-300 hover:border-sky-500/40';
+                      ? 'text-red-400'
+                      : 'text-green-400 hover:text-green-300';
                 const saveTitle = driveStatus === 'saving'
                   ? 'Drive에 저장 중...'
                   : driveStatus === 'saved'
@@ -466,10 +466,10 @@ export default function RebalancingPanel({
                     type="button"
                     onClick={onManualSave}
                     disabled={driveStatus === 'saving'}
-                    className={`shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-md border bg-gray-800/80 hover:bg-gray-700 transition-colors disabled:cursor-not-allowed ${saveBtnColor}`}
+                    className={`shrink-0 inline-flex items-center justify-center p-1 mb-1 bg-transparent border-0 transition-transform hover:scale-110 disabled:cursor-not-allowed disabled:hover:scale-100 ${saveBtnColor}`}
                     title={saveTitle}
                   >
-                    <Save size={16} className={driveStatus === 'saving' ? 'animate-pulse' : ''} />
+                    <Save size={20} className={driveStatus === 'saving' ? 'animate-pulse' : ''} />
                   </button>
                 );
               })()}
