@@ -38,7 +38,7 @@ export default async function handler(request: Request): Promise<Response> {
       FID_INPUT_DATE_1:       dateFrom,
       FID_INPUT_DATE_2:       dateTo,
       FID_PERIOD_DIV_CODE:    'D',
-      FID_ORG_ADJ_PRC:        '0',
+      FID_ORG_ADJ_PRC:        '1',  // 원주가 (실제종가, 수정주가 미반영)
     });
 
     try {

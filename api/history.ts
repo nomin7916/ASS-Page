@@ -412,13 +412,63 @@ async function fetchNaverWorldstockHistory(code: string, d1: string, d2: string)
   return allData;
 }
 
+// KIS 국내 주식 실제 종가 이력 (FID_ORG_ADJ_PRC=1 → 원주가, 수정주가 미반영)
+async function fetchKisDomesticActualHistory(code: string, token: string, d1: string): Promise<Record<string, number>> {
+  const result: Record<string, number> = {};
+  const today   = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const startY  = parseInt((d1 || '20210101').slice(0, 4), 10);
+  const endYear = new Date().getFullYear();
+
+  for (let year = startY; year <= endYear; year += 2) {
+    const dateFrom = `${year}0101`;
+    const rawTo    = `${Math.min(year + 1, endYear)}1231`;
+    const dateTo   = rawTo <= today ? rawTo : today;
+
+    const params = new URLSearchParams({
+      FID_COND_MRKT_DIV_CODE: 'J',
+      FID_INPUT_ISCD:         code,
+      FID_INPUT_DATE_1:       dateFrom,
+      FID_INPUT_DATE_2:       dateTo,
+      FID_PERIOD_DIV_CODE:    'D',
+      FID_ORG_ADJ_PRC:        '1',  // 원주가 (실제종가, 수정주가 미반영)
+    });
+
+    try {
+      const res = await fetch(
+        `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice?${params}`,
+        {
+          headers: {
+            'Content-Type':  'application/json',
+            'authorization': `Bearer ${token}`,
+            'appkey':        KIS_APP_KEY,
+            'appsecret':     KIS_APP_SECRET,
+            'tr_id':         'FHKST03010100',
+            'custtype':      'P',
+          },
+          signal: AbortSignal.timeout(10000),
+        }
+      );
+      if (!res.ok) { console.error(`[kis-domestic] ${code} chunk=${dateFrom}-${dateTo} status=${res.status}`); continue; }
+      const json = await res.json();
+      for (const row of (json.output2 ?? [])) {
+        const d     = String(row.stck_bsop_date ?? '');
+        const price = parseInt(String(row.stck_clpr ?? '0'), 10);
+        if (d.length === 8 && !isNaN(price) && price > 0) {
+          result[`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`] = price;
+        }
+      }
+    } catch (e) { console.error(`[kis-domestic] ${code} chunk=${dateFrom}-${dateTo} error=${e}`); continue; }
+  }
+  return result;
+}
+
 export default async function handler(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const key   = searchParams.get('key') ?? '';
   const start = (searchParams.get('start') ?? '').replace(/-/g, '');
   const end   = (searchParams.get('end')   ?? '').replace(/-/g, '');
 
-  // ── 국내 종목 실제 종가 이력: Naver trend API (수정주가 미반영) ────────────
+  // ── 국내 종목 실제 종가 이력: Naver trend (1순위) → KIS 원주가 (2순위) ────────
   if (key === 'domestic') {
     const code = searchParams.get('code') ?? '';
     if (!code || code.length < 5) {
@@ -428,19 +478,36 @@ export default async function handler(request: Request): Promise<Response> {
       .toISOString().split('T')[0].replace(/-/g, '');
     const d1 = start || fiveYearsAgo;
 
-    const { data, source: domSource } = await fetchNaverDomesticTrendHistory(code, d1);
-    if (Object.keys(data).length === 0) {
-      return new Response(JSON.stringify({ error: 'Naver 국내 히스토리 수집 실패', code }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    const { data: navData, source: domSource } = await fetchNaverDomesticTrendHistory(code, d1);
+    if (Object.keys(navData).length > 0) {
+      return new Response(JSON.stringify({ data: navData, source: domSource }), {
+        headers: {
+          'Content-Type':                'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+        },
       });
     }
-    return new Response(JSON.stringify({ data, source: domSource }), {
-      headers: {
-        'Content-Type':                'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-        'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
-      },
+
+    // Naver 차단 시 KIS 원주가로 폴백
+    const kisToken = await getKisToken();
+    if (kisToken) {
+      const kisData = await fetchKisDomesticActualHistory(code, kisToken, d1);
+      if (Object.keys(kisData).length > 0) {
+        console.log(`[domestic] ${code} KIS 원주가 폴백 성공: ${Object.keys(kisData).length}건`);
+        return new Response(JSON.stringify({ data: kisData, source: 'KIS-actual' }), {
+          headers: {
+            'Content-Type':                'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+          },
+        });
+      }
+    }
+
+    return new Response(JSON.stringify({ error: 'Naver 국내 히스토리 수집 실패', code }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
 
