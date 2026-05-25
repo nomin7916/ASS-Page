@@ -551,33 +551,74 @@ export default function RebalancingPanel({
                                   <option value="variable" className="bg-gray-800 text-gray-200">수시변경</option>
                                 </select>
                               </div>
-                              <button
-                                type="button"
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  if (totals.totalEval <= 0) return;
-                                  const doSeed = () => {
-                                    const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-                                    const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
+                              {(() => {
+                                const mirrorField = targetMode === 'variable' ? 'targetMirrorVar' : 'targetMirrorFixed';
+                                const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
+                                const overrideField = targetMode === 'variable' ? 'targetRatioVarOverride' : 'targetRatioOverride';
+                                const mirrorState = settings[mirrorField] || 'off';
+                                const cycleMirror = () => {
+                                  const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
+                                  if (mirrorState === 'off') {
                                     setPortfolio(prev => prev.map(p => {
                                       if (p.type !== 'stock' && p.type !== 'fund') return p;
                                       const qty = cleanNum(p.quantity);
                                       const price = cleanNum(p.currentPrice);
                                       const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
                                       const curRatio = totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
-                                      return { ...p, [slotField]: curRatio };
+                                      return { ...p, [slotField]: curRatio, [overrideField]: false };
                                     }));
-                                    reportAdminChange();
-                                  };
-                                  if (targetMode !== 'variable' && !targetEditAuthorized && !isAdmin) {
-                                    setPinModal({ onAuthorized: doSeed });
+                                    updateSettingsForType({ ...settings, [mirrorField]: 'seeded' });
+                                  } else if (mirrorState === 'seeded') {
+                                    setPortfolio(prev => prev.map(p => {
+                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                      return { ...p, [overrideField]: false };
+                                    }));
+                                    updateSettingsForType({ ...settings, [mirrorField]: 'on' });
                                   } else {
-                                    doSeed();
+                                    setPortfolio(prev => prev.map(p => {
+                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                      if (p[overrideField]) return { ...p, [overrideField]: false };
+                                      const qty = cleanNum(p.quantity);
+                                      const price = cleanNum(p.currentPrice);
+                                      const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
+                                      const curRatio = totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
+                                      return { ...p, [slotField]: curRatio, [overrideField]: false };
+                                    }));
+                                    updateSettingsForType({ ...settings, [mirrorField]: 'off' });
                                   }
-                                }}
-                                className={`text-[11px] font-bold leading-none transition-colors select-none ${isFixedLocked ? 'text-gray-600 hover:text-amber-400' : 'text-gray-500 hover:text-green-400'}`}
-                                title={isFixedLocked ? '잠금 — 클릭하여 비밀번호 입력' : `현재 비중을 ${targetMode === 'variable' ? '수시변경' : '고정'} 목표값에 복사`}
-                              >{isFixedLocked ? '🔒(%)' : '(%)'}</button>
+                                  reportAdminChange();
+                                };
+                                const btnColor = isFixedLocked
+                                  ? 'text-gray-600 hover:text-amber-400'
+                                  : mirrorState === 'on'
+                                    ? 'text-green-400 hover:text-green-300 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]'
+                                    : mirrorState === 'seeded'
+                                      ? 'text-emerald-300/70 hover:text-green-400'
+                                      : 'text-gray-500 hover:text-green-400';
+                                const btnTitle = isFixedLocked
+                                  ? '잠금 — 클릭하여 비밀번호 입력'
+                                  : mirrorState === 'on'
+                                    ? '라이브 미러 ON — 클릭하여 해제 (현재 비중 박제)'
+                                    : mirrorState === 'seeded'
+                                      ? '시드 완료 — 클릭하여 라이브 미러 시작'
+                                      : `클릭 1: 현재 비중을 ${targetMode === 'variable' ? '수시변경' : '고정'} 목표값에 복사 | 다음 클릭: 라이브 미러`;
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      if (totals.totalEval <= 0) return;
+                                      if (targetMode !== 'variable' && !targetEditAuthorized && !isAdmin) {
+                                        setPinModal({ onAuthorized: cycleMirror });
+                                      } else {
+                                        cycleMirror();
+                                      }
+                                    }}
+                                    className={`text-[11px] font-bold leading-none transition-colors select-none ${btnColor}`}
+                                    title={btnTitle}
+                                  >{isFixedLocked ? '🔒(%)' : '(%)'}</button>
+                                );
+                              })()}
                             </div>
                           </div>
                         </th>
@@ -738,13 +779,20 @@ export default function RebalancingPanel({
                           const isDifferent = Math.abs((item.effectiveTargetRatio || 0) - itemCurRatio) > threshold;
                           const targetMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
                           const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
+                          const overrideField = targetMode === 'variable' ? 'targetRatioVarOverride' : 'targetRatioOverride';
+                          const mirrorField = targetMode === 'variable' ? 'targetMirrorVar' : 'targetMirrorFixed';
+                          const mirrorState = settings[mirrorField] || 'off';
+                          const isLiveMirror = mirrorState === 'on' && !item[overrideField];
                           const slotVal = cleanNum(item[slotField]) || 0;
+                          const baseVal = isLiveMirror ? itemCurRatio : slotVal;
                           const displayVal = editingRatio[item.id] !== undefined
                             ? editingRatio[item.id]
-                            : slotVal.toFixed(2);
-                          const textColor = targetMode === 'variable'
-                            ? (isDifferent ? 'text-red-400' : 'text-amber-300')
-                            : (isDifferent ? 'text-red-400' : 'text-green-400');
+                            : baseVal.toFixed(2);
+                          const textColor = isLiveMirror
+                            ? 'text-emerald-300/80 italic'
+                            : targetMode === 'variable'
+                              ? (isDifferent ? 'text-red-400' : 'text-amber-300')
+                              : (isDifferent ? 'text-red-400' : 'text-green-400');
                           const cellLocked = targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
                           return (
                             <td className={`p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500 ${cellLocked ? 'cursor-pointer' : ''}`}
@@ -765,6 +813,9 @@ export default function RebalancingPanel({
                                 onBlur={e => {
                                   if (cellLocked) return;
                                   handleUpdate(item.id, slotField, e.target.value);
+                                  if (mirrorState === 'on') {
+                                    setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, [overrideField]: true } : p));
+                                  }
                                   setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
                                   reportAdminChange();
                                 }}
@@ -781,7 +832,7 @@ export default function RebalancingPanel({
                                   if (e.key === 'Enter') e.target.blur();
                                   handleTableKeyDown(e, 'targetRatio');
                                 }}
-                                title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : undefined}
+                                title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
                               />
                             </td>
                           );

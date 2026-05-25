@@ -74,15 +74,23 @@ export function usePortfolioData({
       ? Math.min(Math.max(0, cleanNum(settings.useDepositAmount)), depositAmount)
       : depositAmount;
     const allocBase = cleanNum(settings.amount) + useDeposit;
+    const isVariableMode = settings.targetMode === 'variable';
+    const mirrorState = isVariableMode
+      ? (settings.targetMirrorVar || 'off')
+      : (settings.targetMirrorFixed || 'off');
+    const slotField = isVariableMode ? 'targetRatioVar' : 'targetRatio';
+    const overrideField = isVariableMode ? 'targetRatioVarOverride' : 'targetRatioOverride';
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
       const curEval = item.type === 'fund' && !(qty > 0 && price > 0)
         ? cleanNum(item.evalAmount)
         : price * qty;
-      const effectiveTargetRatio = settings.targetMode === 'variable'
-        ? (cleanNum(item.targetRatioVar) || 0)
-        : (cleanNum(item.targetRatio) || 0);
+      const isLiveMirror = mirrorState === 'on' && !item[overrideField];
+      const liveRatio = totals.totalEval > 0 ? (curEval * rebalFxRate / totals.totalEval * 100) : 0;
+      const effectiveTargetRatio = isLiveMirror
+        ? liveRatio
+        : (cleanNum(item[slotField]) || 0);
       const tRatio = effectiveTargetRatio / 100;
       let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((allocBase * tRatio) / price)) : 0;
       const extraQty = rebalExtraQty[item.id] || 0;
