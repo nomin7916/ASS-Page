@@ -296,8 +296,6 @@ export default function App() {
   const accountChartStatesRef = useRef<Record<string, any>>({});
   const prevActivePortfolioIdRef = useRef<string | null>(null);
   const chartPrefsUpdatedAtRef = useRef<number>(0);
-  const prevChartPeriodRef = useRef<string>(chartPeriod);
-  const prevIntChartPeriodRef = useRef<string>(intChartPeriod);
 
   // ── 통합 대시보드 ──
   const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(true);
@@ -352,6 +350,8 @@ export default function App() {
     intIsZeroBaseMode, setIntIsZeroBaseMode,
     intHoveredPoint, setIntHoveredPoint,
   } = useHistoryChart();
+  const prevChartPeriodRef = useRef<string>(chartPeriod);
+  const prevIntChartPeriodRef = useRef<string>(intChartPeriod);
 
   // ── useDriveSync 훅 ──
   const {
