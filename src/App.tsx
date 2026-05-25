@@ -858,23 +858,30 @@ export default function App() {
     const sortedDeposits = [...depositHistory].sort((a, b) => a.date < b.date ? -1 : 1);
     const sortedWithdrawals = [...depositHistory2].sort((a, b) => a.date < b.date ? -1 : 1);
     const isOverseasChart = activePortfolioAccountType === 'overseas';
+    const histByDate = new Map(localSortedHist.map(h => [h.date, h]));
     const rawData = filteredDates.map(date => {
       let trueEvalAtDate = 0, retRate = 0;
       if (date >= portfolioStartDate) {
-        let hasTrueData = false;
-        const hIdx = localSortedHist.slice().reverse().find(h => h.date <= date) || localSortedHist[0];
-        const baseEval = hIdx ? hIdx.evalAmount : totals.totalEval;
-        const basePrin = hIdx ? hIdx.principal : principal;
-        portfolio.forEach(item => {
-          if (item.type === 'deposit') { trueEvalAtDate += cleanNum(item.depositAmount); }
-          else if (item.code && stockHistoryMap[item.code]) {
-            const priceAtDate = getClosestValue(stockHistoryMap[item.code], date);
-            if (priceAtDate) { trueEvalAtDate += priceAtDate * item.quantity; hasTrueData = true; }
-            else { trueEvalAtDate += cleanNum(item.evalAmount) * (baseEval / (totals.totalEval || 1)); }
-          } else { trueEvalAtDate += cleanNum(item.evalAmount) * (baseEval / (totals.totalEval || 1)); }
-        });
-        if (!hasTrueData && hIdx) trueEvalAtDate = hIdx.evalAmount;
-        retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
+        const exactHist = histByDate.get(date);
+        if (exactHist) {
+          trueEvalAtDate = exactHist.evalAmount;
+          retRate = exactHist.principal > 0 ? ((exactHist.evalAmount - exactHist.principal) / exactHist.principal * 100) : 0;
+        } else {
+          let hasTrueData = false;
+          const hIdx = localSortedHist.slice().reverse().find(h => h.date <= date) || localSortedHist[0];
+          const baseEval = hIdx ? hIdx.evalAmount : totals.totalEval;
+          const basePrin = hIdx ? hIdx.principal : principal;
+          portfolio.forEach(item => {
+            if (item.type === 'deposit') { trueEvalAtDate += cleanNum(item.depositAmount); }
+            else if (item.code && stockHistoryMap[item.code]) {
+              const priceAtDate = getClosestValue(stockHistoryMap[item.code], date);
+              if (priceAtDate) { trueEvalAtDate += priceAtDate * item.quantity; hasTrueData = true; }
+              else { trueEvalAtDate += cleanNum(item.evalAmount) * (baseEval / (totals.totalEval || 1)); }
+            } else { trueEvalAtDate += cleanNum(item.evalAmount) * (baseEval / (totals.totalEval || 1)); }
+          });
+          if (!hasTrueData && hIdx) trueEvalAtDate = hIdx.evalAmount;
+          retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
+        }
       }
       let principalAmount = 0;
       for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount) * (isOverseasChart ? (cleanNum(d.fxRate) || 1) : 1); }

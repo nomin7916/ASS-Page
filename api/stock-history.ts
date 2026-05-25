@@ -1,6 +1,7 @@
-// Vercel Edge Function — KIS OpenAPI 종목 히스토리 서버사이드 수집
-// 브라우저에서 인증 정보 노출 없이 직접 KIS API 호출
-export const config = { runtime: 'edge' };
+// Vercel Serverless Function — KIS OpenAPI 종목 히스토리 서버사이드 수집
+// Node.js 런타임: module-level L1 캐시가 인스턴스 수명(~15분) 동안 유지되어
+// 동일 인스턴스로 들어오는 다중 요청이 KIS 토큰을 재발급 없이 공유함
+export const config = { maxDuration: 60 };
 
 import { getKisToken } from './_kisToken.js';
 
