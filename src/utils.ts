@@ -128,6 +128,41 @@ export const cleanNum = (val) => {
   return isNaN(parsed) || !isFinite(parsed) ? 0 : parsed;
 };
 
+// 입출금 내역 누적합 — 특정 날짜까지 (포함). "anchor + delta" 모델용.
+const cumDepositsUpTo = (date, depositHistory, depositHistory2, isOverseas) => {
+  let cum = 0;
+  for (const d of depositHistory || []) {
+    if ((d.date || '') > date) continue;
+    if (!d.noPrincipal) cum += cleanNum(d.amount) * (isOverseas ? (cleanNum(d.fxRate) || 1) : 1);
+  }
+  for (const w of depositHistory2 || []) {
+    if ((w.date || '') > date) continue;
+    if (!w.noPrincipal) {
+      const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
+      cum -= deducted * (isOverseas ? (cleanNum(w.fxRate) || 1) : 1);
+    }
+  }
+  return cum;
+};
+
+// 수동 anchor + delta: D에서 수동 설정한 원금이 다음 anchor 전까지 자동 전파.
+// 전파값 = anchor.principal + (cum_deposits(date) - cum_deposits(anchor.date))
+// anchor 없으면 { value: null } → 호출측이 기존 로직으로 폴백.
+export const computeEffectivePrincipal = (date, history, depositHistory, depositHistory2, isOverseas) => {
+  if (!Array.isArray(history) || history.length === 0) return { value: null, anchor: null };
+  let anchor = null;
+  for (const h of history) {
+    if (!h.principalManual) continue;
+    if (cleanNum(h.principal) <= 0) continue;
+    if ((h.date || '') > date) continue;
+    if (!anchor || (h.date || '') > (anchor.date || '')) anchor = h;
+  }
+  if (!anchor) return { value: null, anchor: null };
+  const cumAtDate = cumDepositsUpTo(date, depositHistory, depositHistory2, isOverseas);
+  const cumAtAnchor = cumDepositsUpTo(anchor.date, depositHistory, depositHistory2, isOverseas);
+  return { value: cleanNum(anchor.principal) + (cumAtDate - cumAtAnchor), anchor };
+};
+
 export const formatCurrency = (n) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(cleanNum(n));
 export const formatPercent = (n) => cleanNum(n).toFixed(2) + '%';
 export const formatNumber = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR').format(cleanNum(n));

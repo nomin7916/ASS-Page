@@ -61,7 +61,8 @@ import {
   getClosestValue, getIndexLatest, handleTableKeyDown, handleReadonlyCellNav, buildIndexStatus,
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
-  ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey
+  ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
+  computeEffectivePrincipal
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -866,18 +867,22 @@ export default function App() {
       reversedHist.find(h => h.date < beforeDate && cleanNum(h.principal) > 0)?.principal;
     const rawData = filteredDates.map(date => {
       let trueEvalAtDate = 0, retRate = 0;
+      // 수동 anchor + delta: 사용자가 수동 설정한 원금이 다음 anchor 전까지 입출금 변동분만 반영해 전파.
+      const effective = computeEffectivePrincipal(date, localSortedHist, sortedDeposits, sortedWithdrawals, isOverseasChart);
       if (date >= portfolioStartDate) {
         const exactHist = histByDate.get(date);
         if (exactHist) {
           trueEvalAtDate = exactHist.evalAmount;
           const storedPrin = cleanNum(exactHist.principal);
-          const histPrin = storedPrin > 0 ? storedPrin : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
+          const fallbackPrin = storedPrin > 0 ? storedPrin : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
+          const histPrin = effective.value != null ? effective.value : fallbackPrin;
           retRate = histPrin > 0 ? ((exactHist.evalAmount - histPrin) / histPrin * 100) : 0;
         } else {
           let hasTrueData = false;
           const hIdx = reversedHist.find(h => h.date <= date) || localSortedHist[0];
           const baseEval = hIdx ? hIdx.evalAmount : totals.totalEval;
-          const basePrin = cleanNum(hIdx?.principal) > 0 ? cleanNum(hIdx.principal) : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
+          const fallbackPrin = cleanNum(hIdx?.principal) > 0 ? cleanNum(hIdx.principal) : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
+          const basePrin = effective.value != null ? effective.value : fallbackPrin;
           portfolio.forEach(item => {
             if (item.type === 'deposit') { trueEvalAtDate += cleanNum(item.depositAmount); }
             else if (item.code && stockHistoryMap[item.code]) {
@@ -891,11 +896,15 @@ export default function App() {
         }
       }
       let principalAmount = 0;
-      for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount) * (isOverseasChart ? (cleanNum(d.fxRate) || 1) : 1); }
-      for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)) * (isOverseasChart ? (cleanNum(w.fxRate) || 1) : 1); }
-      if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) {
-        const fallbackFx = isOverseasChart ? (cleanNum(avgExchangeRate) || marketIndicators?.usdkrw || 1) : 1;
-        principalAmount = cleanNum(principal) * fallbackFx;
+      if (effective.value != null) {
+        principalAmount = effective.value;
+      } else {
+        for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount) * (isOverseasChart ? (cleanNum(d.fxRate) || 1) : 1); }
+        for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)) * (isOverseasChart ? (cleanNum(w.fxRate) || 1) : 1); }
+        if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) {
+          const fallbackFx = isOverseasChart ? (cleanNum(avgExchangeRate) || marketIndicators?.usdkrw || 1) : 1;
+          principalAmount = cleanNum(principal) * fallbackFx;
+        }
       }
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount };
     });

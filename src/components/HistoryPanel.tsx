@@ -144,6 +144,7 @@ export default function HistoryPanel({
               onClose={() => setVerifyRecord(null)}
               depositHistory={depositHistory}
               depositHistory2={depositHistory2}
+              history={history}
             />
           )}
           {helpOpen && (

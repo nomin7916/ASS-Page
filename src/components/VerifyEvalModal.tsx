@@ -9,6 +9,7 @@ import {
   calcPortfolioEvalDetail,
   resolveHoldings,
   snapshotItemsFromPortfolio,
+  computeEffectivePrincipal,
 } from '../utils';
 import { BG, BORDER, Z } from '../design';
 
@@ -59,6 +60,7 @@ export default function VerifyEvalModal({
   onClose,
   depositHistory,
   depositHistory2,
+  history,
 }) {
   const date = record.date;
   const isGold = accountType === 'gold';
@@ -200,10 +202,14 @@ export default function VerifyEvalModal({
   }, [depositHistory, depositHistory2, date, isOverseas]);
 
   const hasCashFlow = depositsOnDate.length > 0 || withdrawalsOnDate.length > 0;
-  const isPrincipalManual = !!record.principalManual;
-  const manualPrincipal = isPrincipalManual ? cleanNum(record.principal) : null;
+  const effective = useMemo(
+    () => computeEffectivePrincipal(date, history || [], depositHistory, depositHistory2, isOverseas),
+    [date, history, depositHistory, depositHistory2, isOverseas],
+  );
+  const isAnchorDay = !!effective.anchor && effective.anchor.date === date;
+  const isPropagated = !!effective.anchor && effective.anchor.date !== date;
   const autoPrincipal = cumPrincipalOnDate > 0 ? cumPrincipalOnDate : cleanNum(record.principal ?? portfolio?.principal ?? 0);
-  const principalOnDate = manualPrincipal != null ? manualPrincipal : autoPrincipal;
+  const principalOnDate = effective.value != null ? effective.value : autoPrincipal;
 
   const commitQty = (idx) => {
     const v = cleanNum(editQtyRaw);
@@ -496,7 +502,12 @@ export default function VerifyEvalModal({
                 <div className="text-gray-400 flex justify-between items-center">
                   <span className="inline-flex items-center gap-1">
                     이 날 투자원금
-                    {isPrincipalManual && <span className="text-red-400 text-[9px] font-bold">🔴 수동</span>}
+                    {isAnchorDay && <span className="text-red-400 text-[9px] font-bold">🔴 수동</span>}
+                    {isPropagated && (
+                      <span className="text-amber-400 text-[9px] font-bold" title={`${effective.anchor.date}의 수동 설정값에 입출금 변동 반영`}>
+                        🟡 {formatShortDate(effective.anchor.date).split(' ')[0]} 보정
+                      </span>
+                    )}
                   </span>
                   {editPrincipal ? (
                     <input
