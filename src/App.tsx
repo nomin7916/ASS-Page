@@ -450,6 +450,7 @@ export default function App() {
     lookupRows, setLookupRows,
     hiddenColumnsPortfolio, hiddenColumnsRebalancing,
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
+    markedRebalRows, toggleMarkedRebalRow,
     adminAccessAllowed, setAdminAccessAllowed,
     activePortfolioAccountType,
     buildPortfoliosState,
@@ -2161,6 +2162,8 @@ export default function App() {
             showRetirementStats={activePortfolioAccountType === 'dc-irp'}
             hiddenColumns={hiddenColumnsRebalancing}
             onToggleColumn={toggleHiddenColumnRebalancing}
+            markedRebalRows={markedRebalRows}
+            onToggleMarkedRebalRow={toggleMarkedRebalRow}
             authUser={authUser}
             isAdmin={!!adminViewingAs || (authUser && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase())}
             targetEditAuthorized={targetEditAuthorized}

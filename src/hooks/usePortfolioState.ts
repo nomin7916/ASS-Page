@@ -60,6 +60,17 @@ export function usePortfolioState({
     const cur = p.hiddenColumnsRebalancing ?? [];
     return { hiddenColumnsRebalancing: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key] };
   });
+  const markedRebalRows = activePortfolio?.markedRebalRows ?? {};
+  const toggleMarkedRebalRow = (itemId) => patchActive(p => {
+    const cur = p.markedRebalRows ?? {};
+    const order = ['indigo', 'amber', 'emerald'];
+    const next = { ...cur };
+    const idx = order.indexOf(cur[itemId]);
+    if (idx === -1) next[itemId] = 'indigo';
+    else if (idx < order.length - 1) next[itemId] = order[idx + 1];
+    else delete next[itemId];
+    return { markedRebalRows: next };
+  });
 
   // ── 활성 포트폴리오만 갱신하는 헬퍼 ──
   const patchActive = (patch) =>
@@ -529,6 +540,7 @@ export function usePortfolioState({
     lookupRows, setLookupRows,
     hiddenColumnsPortfolio, hiddenColumnsRebalancing,
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
+    markedRebalRows, toggleMarkedRebalRow,
     adminAccessAllowed, setAdminAccessAllowed,
     // 파생 상태
     activePortfolioAccountType,

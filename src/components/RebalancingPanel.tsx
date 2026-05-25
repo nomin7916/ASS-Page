@@ -68,6 +68,8 @@ export default function RebalancingPanel({
   targetEditAuthorized = false,
   setTargetEditAuthorized = () => {},
   onAdminTargetChange = null,
+  markedRebalRows = {},
+  onToggleMarkedRebalRow = () => {},
 }) {
   const [editingRatio, setEditingRatio] = useState({});
   const [dateEditMode, setDateEditMode] = useState(false);
@@ -681,6 +683,16 @@ export default function RebalancingPanel({
                     const shades = genShades(baseHex, grouped[cat].length);
                     grouped[cat].forEach((item, j) => { itemColorMap[`${cat}::${item.id}`] = shades[j]; });
                   });
+                  const MARK_ROW_BG = {
+                    indigo: 'bg-indigo-500/15 hover:bg-indigo-500/25',
+                    amber: 'bg-amber-500/12 hover:bg-amber-500/22',
+                    emerald: 'bg-emerald-500/12 hover:bg-emerald-500/22',
+                  };
+                  const MARK_STICKY_BG = {
+                    indigo: 'bg-[#1c1f3d] group-hover:bg-[#262a55]',
+                    amber: 'bg-[#2a2415] group-hover:bg-[#3c321e]',
+                    emerald: 'bg-[#152a23] group-hover:bg-[#1e3c33]',
+                  };
                   let rowNum = 0;
                   const renderRow = (item, catTd) => {
                     rowNum += 1;
@@ -694,16 +706,19 @@ export default function RebalancingPanel({
                     const adjustedCost = totalAction * itemPrice;
                     const displayAdjustedCost = -adjustedCost;
                     const maxAdd = itemPrice > 0 ? effectiveRemaining / itemPrice : 0;
+                    const markColor = markedRebalRows[item.id];
+                    const rowMarkClass = markColor ? MARK_ROW_BG[markColor] : 'hover:bg-gray-800';
+                    const stickyCellClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-[#0f172a] group-hover:bg-gray-800';
                     return (
-                      <tr key={item.id} className="group border-b border-gray-700 hover:bg-gray-800 transition-colors">
+                      <tr key={item.id} className={`group border-b border-gray-700 ${rowMarkClass} transition-colors`}>
                         {catTd}
                         {!H('changeRate') && (
-                          <td className="py-3 px-2 text-center bg-[#0f172a] group-hover:bg-gray-800 transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" style={{ position: 'sticky', left: changeRateLeft, zIndex: 5 }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                          <td className={`py-3 px-2 text-center ${stickyCellClass} transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: changeRateLeft, zIndex: 5 }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                             <span className={`text-xs font-bold ${(item.changeRate || 0) > 0 ? 'text-red-400' : (item.changeRate || 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.changeRate != null ? formatChangeRate(item.changeRate) : '-'}</span>
                           </td>
                         )}
                         {!H('name') && (
-                          <td className="py-3 px-4 text-center font-bold bg-[#0f172a] group-hover:bg-gray-800 transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" style={{ position: 'sticky', left: nameLeft, zIndex: 5, color: itemColor }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                          <td className={`py-3 px-4 text-center font-bold ${stickyCellClass} transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: nameLeft, zIndex: 5, color: itemColor }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                             {(() => { const url = getItemUrl(item); return url ? <a href={url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 hover:underline" style={{ color: itemColor }}>{num}. {item.name}</a> : <div className="line-clamp-2">{num}. {item.name}</div>; })()}
                           </td>
                         )}
@@ -796,11 +811,25 @@ export default function RebalancingPanel({
                       </tr>
                     );
                   };
+                  const buildCatTd = (item, content, extraClass = '') => {
+                    if (H('category')) return null;
+                    const mc = markedRebalRows[item.id];
+                    const bgClass = mc ? MARK_STICKY_BG[mc] : 'bg-[#0f172a] group-hover:bg-gray-800';
+                    return (
+                      <td
+                        className={`py-3 px-3 text-center font-bold border-r border-gray-700 align-middle ${bgClass} sticky left-0 z-[5] cursor-pointer transition-colors ${extraClass}`}
+                        onClick={() => onToggleMarkedRebalRow(item.id)}
+                        title="클릭하여 매도/매수 표시 토글 (인디고→앰버→에메랄드→해제)"
+                      >
+                        {content}
+                      </td>
+                    );
+                  };
                   if (rebalanceSortConfig.key === 'code-global') {
                     return rebalanceData.map(item => {
                       const cat = item.category || '기타';
                       const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
-                      const catTd = H('category') ? null : <td className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]"><div style={{ color: catColor }} className="text-xs">{cat}</div></td>;
+                      const catTd = buildCatTd(item, <div style={{ color: catColor }} className="text-xs">{cat}</div>);
                       return renderRow(item, catTd);
                     });
                   }
@@ -810,9 +839,10 @@ export default function RebalancingPanel({
                     const catTotalEval = items.reduce((sum, item) => sum + item.curEval, 0);
                     const catRatio = totals.totalEval > 0 ? catTotalEval / totals.totalEval * 100 : 0;
                     return items.map((item, j) => {
-                      const catTd = H('category') ? null : (j === 0
-                        ? <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]"><div style={{ color: catColor }}>{cat}</div><div className="text-gray-400 text-[10px] font-normal mt-0.5">{isOverseas ? <>{fmtUSD(catTotalEval)}<br/><span className="text-gray-600">{formatCurrency(catTotalEval * usdkrw)}</span></> : formatCurrency(catTotalEval)}</div><div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div></td>
-                        : null);
+                      const content = j === 0
+                        ? (<><div style={{ color: catColor }}>{cat}</div><div className="text-gray-400 text-[10px] font-normal mt-0.5">{isOverseas ? <>{fmtUSD(catTotalEval)}<br/><span className="text-gray-600">{formatCurrency(catTotalEval * usdkrw)}</span></> : formatCurrency(catTotalEval)}</div><div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div></>)
+                        : null;
+                      const catTd = buildCatTd(item, content, j === 0 ? '' : 'border-t border-gray-700/30');
                       return renderRow(item, catTd);
                     });
                   });
