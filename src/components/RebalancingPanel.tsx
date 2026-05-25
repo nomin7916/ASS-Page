@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Lock, HelpCircle, X } from 'lucide-react';
+import { Lock, HelpCircle, X, Save } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
@@ -71,6 +71,8 @@ export default function RebalancingPanel({
   onAdminTargetChange = null,
   markedRebalRows = {},
   onToggleMarkedRebalRow = () => {},
+  onManualSave = null,
+  driveStatus = '',
 }) {
   const [editingRatio, setEditingRatio] = useState({});
   const [dateEditMode, setDateEditMode] = useState(false);
@@ -428,18 +430,49 @@ export default function RebalancingPanel({
               })()}
             </div>
           </div>
-          {hiddenColumns.length > 0 && (
-            <div className="flex items-end gap-1 px-3 pt-2 pb-0 flex-wrap bg-[#080e1c]">
-              {RB_COLS.filter(c => hiddenColumns.includes(c.key)).map(col => (
-                <button
-                  key={col.key}
-                  onClick={() => onToggleColumn(col.key)}
-                  className="px-2.5 py-1 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-t-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors"
-                  title={`${col.label} 열 표시`}
-                >
-                  {col.label}
-                </button>
-              ))}
+          {(hiddenColumns.length > 0 || onManualSave) && (
+            <div className="flex items-end justify-between gap-2 px-3 pt-2 pb-0 bg-[#080e1c]">
+              <div className="flex items-end gap-1 flex-wrap min-w-0">
+                {RB_COLS.filter(c => hiddenColumns.includes(c.key)).map(col => (
+                  <button
+                    key={col.key}
+                    onClick={() => onToggleColumn(col.key)}
+                    className="px-2.5 py-1 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-t-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors"
+                    title={`${col.label} 열 표시`}
+                  >
+                    {col.label}
+                  </button>
+                ))}
+              </div>
+              {onManualSave && (() => {
+                const saveBtnColor = driveStatus === 'saving'
+                  ? 'text-sky-400 border-sky-500/40'
+                  : driveStatus === 'saved'
+                    ? 'text-green-400 border-green-500/40'
+                    : driveStatus === 'error' || driveStatus === 'auth_needed'
+                      ? 'text-red-400 border-red-500/40'
+                      : 'text-gray-400 border-gray-600 hover:text-sky-300 hover:border-sky-500/40';
+                const saveTitle = driveStatus === 'saving'
+                  ? 'Drive에 저장 중...'
+                  : driveStatus === 'saved'
+                    ? '저장 완료 — 클릭 시 다시 저장'
+                    : driveStatus === 'error'
+                      ? '저장 실패 — 클릭하여 재시도'
+                      : driveStatus === 'auth_needed'
+                        ? 'Drive 인증 필요'
+                        : 'Drive에 저장 + 백업 생성';
+                return (
+                  <button
+                    type="button"
+                    onClick={onManualSave}
+                    disabled={driveStatus === 'saving'}
+                    className={`shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-md border bg-gray-800/80 hover:bg-gray-700 transition-colors disabled:cursor-not-allowed ${saveBtnColor}`}
+                    title={saveTitle}
+                  >
+                    <Save size={16} className={driveStatus === 'saving' ? 'animate-pulse' : ''} />
+                  </button>
+                );
+              })()}
             </div>
           )}
           <div className="overflow-x-auto bg-[#0f172a]">

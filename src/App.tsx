@@ -2188,6 +2188,8 @@ export default function App() {
             targetEditAuthorized={targetEditAuthorized}
             setTargetEditAuthorized={setTargetEditAuthorized}
             onAdminTargetChange={adminViewingAs ? notifyUserOfAdminTargetChange : null}
+            onManualSave={handleDriveSave}
+            driveStatus={driveStatus}
           />
         )}
           </div>
