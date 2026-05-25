@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Lock, HelpCircle, X, Save } from 'lucide-react';
+import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
@@ -80,6 +80,7 @@ export default function RebalancingPanel({
   const [hoveredCurDSSlice, setHoveredCurDSSlice] = useState(null);
   const [hoveredProjDSSlice, setHoveredProjDSSlice] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [showCostFormula, setShowCostFormula] = useState(false);
   const [helpPos, setHelpPos] = useState({ x: 0, y: 0 });
   const helpDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const datePickerRef = useRef(null);
@@ -165,7 +166,17 @@ export default function RebalancingPanel({
   const headerBaseCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
   const headerExtraCost = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
   const headerInvestable = settings.mode === 'rebalance' ? headerAmount : (headerUseDeposit + headerAmount);
-  const rebalBalance = headerInvestable - headerBaseCost - headerExtraCost;
+  const headerTotalBuy = rebalanceData.reduce((s, d) => {
+    const q = d.action + (rebalExtraQty[d.id] || 0);
+    return s + (q > 0 ? q * cleanNum(d.currentPrice) : 0);
+  }, 0);
+  const headerTotalSell = rebalanceData.reduce((s, d) => {
+    const q = d.action + (rebalExtraQty[d.id] || 0);
+    return s + (q < 0 ? -q * cleanNum(d.currentPrice) : 0);
+  }, 0);
+  const headerDepositForBuy = settings.mode === 'rebalance' ? headerDepositAmount : headerUseDeposit;
+  const rebalTotalAvailable = headerDepositForBuy + headerAmount + headerTotalSell;
+  const rebalBalance = rebalTotalAvailable - headerTotalBuy;
   const rebalRemaining = Math.max(0, rebalBalance);
 
   useEffect(() => {
@@ -177,9 +188,12 @@ export default function RebalancingPanel({
 
   const applyRemainingToDeposit = () => {
     if (rebalRemaining <= 0) return;
-    const newDeposit = Math.round(headerDepositAmount + rebalRemaining);
+    const isRebalance = settings.mode === 'rebalance';
+    const newDeposit = isRebalance
+      ? Math.round(rebalRemaining)
+      : Math.round(headerDepositAmount - headerUseDeposit + rebalRemaining);
     setPortfolio(prev => prev.map(p => p.type === 'deposit' ? { ...p, depositAmount: newDeposit } : p));
-    if (settings.mode !== 'rebalance' && settings.useDepositAmount != null) {
+    if (!isRebalance && settings.useDepositAmount != null) {
       updateSettingsForType({ ...settings, useDepositAmount: null });
     }
   };
@@ -280,9 +294,6 @@ export default function RebalancingPanel({
                 const investable = isRebalance ? (leftVal + headerAmount) : (headerUseDeposit + headerAmount);
                 const totalCost = headerBaseCost + headerExtraCost;
                 const displayCost = -totalCost;
-                const cashInvestable = isRebalance ? headerAmount : (headerUseDeposit + headerAmount);
-                const balance = cashInvestable - totalCost;
-                const displayBalance = balance;
                 const modeOptions = [
                   { value: 'accumulate', label: '적립식', color: '#facc15' },
                   { value: 'rebalance', label: '리밸런싱', color: '#22c55e' },
@@ -406,12 +417,12 @@ export default function RebalancingPanel({
                     <div className="flex flex-col">
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-gray-400 shrink-0">잔액</span>
-                        <span className={`font-bold text-right truncate ${displayBalance > 0 ? 'text-sky-300' : displayBalance < 0 ? 'text-red-400' : 'text-gray-500'}`}>
-                          {fmtAmount(displayBalance)}
+                        <span className={`font-bold text-right truncate ${rebalBalance > 0 ? 'text-sky-300' : rebalBalance < 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                          {fmtAmount(rebalBalance)}
                         </span>
                       </div>
                       <div className="text-right text-[10px] text-gray-500 leading-tight">
-                        ({isRebalance ? '적립금' : '투자가능금'} − 매수액 = 잔액)
+                        ({isRebalance ? '예수금' : '사용예수금'} + 적립금 + 매도 − 매수 = 잔액)
                       </div>
                     </div>
                     {rebalRemaining > 0 && (
@@ -942,7 +953,67 @@ export default function RebalancingPanel({
                   {!H('action') && <td className="py-3 px-3"></td>}
                   {!H('extraQty') && <td className="py-3 px-3"></td>}
                   {!H('maxAdd') && <td className="py-3 px-3"></td>}
-                  {!H('cost') && (() => { const adjTotal = -rebalanceData.reduce((s, d) => s + (d.action + (rebalExtraQty[d.id] || 0)) * cleanNum(d.currentPrice), 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); const isRebalance = settings.mode === 'rebalance'; const balanceLabel = `(${isRebalance ? '적립금' : '투자가능금'} − 매수액 = 잔액)`; const balanceColor = rebalBalance > 0 ? 'text-sky-300' : rebalBalance < 0 ? 'text-red-400' : 'text-gray-500'; return <td className={`py-3 px-3 font-bold text-right ${adjTotal > 0 ? 'text-sky-300' : adjTotal < 0 ? 'text-red-400' : 'text-gray-500'}`}>{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(adjTotal)}</span><span className="text-[11px] opacity-70">{formatCurrency(adjTotal * fxRate)}</span></div> : formatCurrency(adjTotal)}<div className="mt-1.5 pt-1.5 border-t border-gray-700/60 flex flex-col items-end gap-0.5 font-normal"><span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">{balanceLabel}</span><span className={`font-bold ${balanceColor}`}>{isOv ? fmtUS(rebalBalance) : formatCurrency(rebalBalance)}</span></div></td>; })()}
+                  {!H('cost') && (() => {
+                    const isOv = activePortfolioAccountType === 'overseas';
+                    const fxRate = marketIndicators.usdkrw || 1;
+                    const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
+                    const fmtAmt = (n) => isOv ? fmtUS(n) : formatCurrency(n);
+                    const isRebalance = settings.mode === 'rebalance';
+                    const depositLabel = isRebalance ? '예수금' : '사용예수금';
+                    const balanceColor = rebalBalance > 0 ? 'text-sky-300' : rebalBalance < 0 ? 'text-red-400' : 'text-gray-500';
+                    return (
+                      <td className="py-3 px-3 text-right align-top">
+                        <div className="flex justify-end mb-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setShowCostFormula(v => !v)}
+                            className="inline-flex items-center gap-0.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors font-normal"
+                            title={showCostFormula ? '계산식 숨기기' : '계산식 보기'}
+                          >
+                            계산식
+                            {showCostFormula ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                          </button>
+                        </div>
+                        {showCostFormula ? (
+                          <div className="flex flex-col items-end gap-1 font-normal">
+                            <div className="text-[10px] text-gray-400 font-bold w-full text-right">총 구매 가능 금액</div>
+                            <div className="flex items-center justify-end gap-2 w-full">
+                              <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">매도</span>
+                              <span className="font-bold text-sky-300 text-[12px]">{fmtAmt(headerTotalSell)}</span>
+                            </div>
+                            <div className="flex items-center justify-end gap-2 w-full">
+                              <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">+ {depositLabel}</span>
+                              <span className="font-bold text-gray-300 text-[12px]">{fmtAmt(headerDepositForBuy)}</span>
+                            </div>
+                            <div className="flex items-center justify-end gap-2 w-full">
+                              <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">+ 적립금</span>
+                              <span className="font-bold text-orange-300 text-[12px]">{fmtAmt(headerAmount)}</span>
+                            </div>
+                            <div className="flex items-center justify-end gap-2 w-full border-t border-gray-700/40 pt-1">
+                              <span className="text-[10px] text-gray-400 leading-tight whitespace-nowrap font-bold">= 총 구매 가능 금액</span>
+                              <span className="font-bold text-green-300 text-[12px]">{fmtAmt(rebalTotalAvailable)}</span>
+                            </div>
+                            <div className="flex items-center justify-end gap-2 w-full mt-1">
+                              <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">− 매수금액</span>
+                              <span className="font-bold text-red-300 text-[12px]">{fmtAmt(headerTotalBuy)}</span>
+                            </div>
+                            <div className="flex items-center justify-end gap-2 w-full border-t border-gray-700/60 pt-1.5 mt-0.5">
+                              <span className="text-[10px] text-gray-400 leading-tight whitespace-nowrap font-bold">= 잔액</span>
+                              <span className={`font-bold text-[13px] ${balanceColor}`}>{fmtAmt(rebalBalance)}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-baseline justify-end gap-1.5 flex-wrap font-bold">
+                            <span className="text-green-300 text-[13px]">{fmtAmt(rebalTotalAvailable)}</span>
+                            <span className="text-gray-500 text-[11px]">−</span>
+                            <span className="text-red-300 text-[13px]">{fmtAmt(headerTotalBuy)}</span>
+                            <span className="text-gray-500 text-[11px]">=</span>
+                            <span className={`text-[14px] ${balanceColor}`}>{fmtAmt(rebalBalance)}</span>
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })()}
                   {!H('expEval') && (() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
                   {!H('expRatio') && <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>}
                 </tr>
@@ -1170,9 +1241,11 @@ export default function RebalancingPanel({
                     'TOTAL = 매도총합 − 매수총합',
                   ] },
                   { icon: '⚖', color: 'text-cyan-300', title: '잔액 (리밸런싱 자금 차익)', lines: [
-                    '잔액 = 매도총합 − 매수총합 = 실구매비용 TOTAL',
-                    '잔액 표시: + 그대로 / − 일 때는 0',
-                    '예수금·적립금은 이미 투자가능금 분모에 흡수되어 있어 잔액 식에 더하지 않음 (이중 계산 방지).',
+                    '총 구매 가능 금액 = 매도 금액 + (사용)예수금 + 적립금',
+                    '잔액 = 총 구매 가능 금액 − 매수 금액',
+                    '리밸런싱 모드: 예수금 전액 포함 (수량 계산이 totals.totalEval = 종목+예수금 기준)',
+                    '적립식 모드: 사용예수금만 포함 (수량 계산이 사용예수금+적립금 기준)',
+                    '트런케이션 오차 및 목표비중 합≠100%에서 비롯되는 차액이 잔액에 나타남.',
                   ] },
                   { icon: '➕', color: 'text-emerald-300', title: '추가 가능 수량 (행별)', lines: [
                     '추가 가능 = ⌊ 잔액 ÷ 종목가격 ⌋',
