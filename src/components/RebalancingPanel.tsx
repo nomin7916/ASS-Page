@@ -558,14 +558,13 @@ export default function RebalancingPanel({
                                   if (totals.totalEval <= 0) return;
                                   const doSeed = () => {
                                     const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
-                                    const decimals = rebalFx > 1 ? 2 : 1;
                                     const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
                                     setPortfolio(prev => prev.map(p => {
                                       if (p.type !== 'stock' && p.type !== 'fund') return p;
                                       const qty = cleanNum(p.quantity);
                                       const price = cleanNum(p.currentPrice);
                                       const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
-                                      const curRatio = parseFloat((curEval * rebalFx / totals.totalEval * 100).toFixed(decimals));
+                                      const curRatio = totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
                                       return { ...p, [slotField]: curRatio };
                                     }));
                                     reportAdminChange();
@@ -740,7 +739,7 @@ export default function RebalancingPanel({
                           const slotVal = cleanNum(item[slotField]) || 0;
                           const displayVal = editingRatio[item.id] !== undefined
                             ? editingRatio[item.id]
-                            : (isOverseas ? slotVal.toFixed(2) : slotVal);
+                            : slotVal.toFixed(2);
                           const textColor = targetMode === 'variable'
                             ? (isDifferent ? 'text-red-400' : 'text-amber-300')
                             : (isDifferent ? 'text-red-400' : 'text-green-400');
@@ -856,7 +855,19 @@ export default function RebalancingPanel({
                   {!H('code') && <td className="py-3 px-3"></td>}
                   {!H('curEval') && (() => { const totCurEval = rebalanceData.reduce((s, d) => s + d.curEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 text-gray-300 font-bold text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totCurEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totCurEval * fxRate)}</span></div> : formatCurrency(totCurEval)}</td>; })()}
                   {!H('currentPrice') && <td className="py-3 px-3"></td>}
-                  {!H('targetRatio') && <td className="py-3 px-3 text-center font-bold text-green-400">{rebalanceData.reduce((s, d) => s + (d.effectiveTargetRatio || 0), 0).toFixed(activePortfolioAccountType === 'overseas' ? 2 : 1)}%</td>}
+                  {!H('targetRatio') && (() => {
+                    const targetSum = rebalanceData.reduce((s, d) => s + (d.effectiveTargetRatio || 0), 0);
+                    const diff = 100 - targetSum;
+                    const isMatch = Math.abs(diff) < 0.005;
+                    return (
+                      <td className="py-3 px-3 text-center font-bold text-green-400">
+                        <div>{targetSum.toFixed(2)}%</div>
+                        <div className={`text-[10px] font-normal mt-0.5 ${isMatch ? 'text-green-300' : 'text-amber-300'}`}>
+                          {diff >= 0 ? '+' : ''}{diff.toFixed(2)}%
+                        </div>
+                      </td>
+                    );
+                  })()}
                   {!H('curRatio') && <td className="py-3 px-3 text-center font-bold text-gray-400">100%</td>}
                   {!H('action') && <td className="py-3 px-3"></td>}
                   {!H('extraQty') && <td className="py-3 px-3"></td>}
