@@ -615,7 +615,12 @@ export function useStockData({
             const tIdx = history.findIndex(h => h.date === targetDate);
             if (tIdx >= 0) {
               if (Math.abs(history[tIdx].evalAmount - targetEval) < 1) return { ...p, portfolio: updatedItems };
-              const updated = history.map((h, i) => i === tIdx ? { ...h, evalAmount: targetEval, principal: cleanNum(p.principal) || 0 } : h);
+              const updated = history.map((h, i) => {
+                if (i !== tIdx) return h;
+                const next = { ...h, evalAmount: targetEval };
+                if (!h.principalManual) next.principal = cleanNum(p.principal) || 0;
+                return next;
+              });
               return { ...p, portfolio: updatedItems, history: updated };
             }
             return { ...p, portfolio: updatedItems, history: [...history, { date: targetDate, evalAmount: targetEval, principal: cleanNum(p.principal) || 0, isFixed: false }] };

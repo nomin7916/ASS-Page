@@ -94,6 +94,8 @@ export default function VerifyEvalModal({
   const [editQtyRaw, setEditQtyRaw] = useState('');
   const [editPriceIdx, setEditPriceIdx] = useState(-1);
   const [editPriceRaw, setEditPriceRaw] = useState('');
+  const [editPrincipal, setEditPrincipal] = useState(false);
+  const [editPrincipalRaw, setEditPrincipalRaw] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({
     code: '', name: '', type: 'stock', quantity: '', start: date, end: '',
@@ -198,7 +200,10 @@ export default function VerifyEvalModal({
   }, [depositHistory, depositHistory2, date, isOverseas]);
 
   const hasCashFlow = depositsOnDate.length > 0 || withdrawalsOnDate.length > 0;
-  const principalOnDate = cumPrincipalOnDate > 0 ? cumPrincipalOnDate : cleanNum(record.principal ?? portfolio?.principal ?? 0);
+  const isPrincipalManual = !!record.principalManual;
+  const manualPrincipal = isPrincipalManual ? cleanNum(record.principal) : null;
+  const autoPrincipal = cumPrincipalOnDate > 0 ? cumPrincipalOnDate : cleanNum(record.principal ?? portfolio?.principal ?? 0);
+  const principalOnDate = manualPrincipal != null ? manualPrincipal : autoPrincipal;
 
   const commitQty = (idx) => {
     const v = cleanNum(editQtyRaw);
@@ -225,6 +230,21 @@ export default function VerifyEvalModal({
     notify(v > 0
       ? `${row.name} ${formatShortDate(date)} 수동종가 ${v.toLocaleString()} 저장`
       : `${row.name} ${formatShortDate(date)} 수동종가 해제`, 'success');
+  };
+
+  const commitPrincipal = () => {
+    const v = cleanNum(editPrincipalRaw);
+    setEditPrincipal(false);
+    setHistory(hist => hist.map(item => {
+      if (!(item.id ? item.id === record.id : item.date === date)) return item;
+      if (v > 0) return { ...item, principal: v, principalManual: true };
+      const next = { ...item };
+      delete next.principalManual;
+      return next;
+    }));
+    notify(v > 0
+      ? `${formatShortDate(date)} 투자원금 ${Math.round(v).toLocaleString()}원으로 수동 설정`
+      : `${formatShortDate(date)} 투자원금 수동 설정 해제 — 입출금 누적으로 복귀`, 'success');
   };
 
   const removeRow = (idx) => {
@@ -472,30 +492,48 @@ export default function VerifyEvalModal({
                   </div>
                 );
               })}
-              {(hasCashFlow || principalOnDate > 0) && (
-                <div className="border-t border-gray-700/50 mt-1 pt-1 space-y-0.5">
-                  {principalOnDate > 0 && (
-                    <div className="text-gray-400 flex justify-between">
-                      <span>이 날 투자원금</span>
+              <div className="border-t border-gray-700/50 mt-1 pt-1 space-y-0.5">
+                <div className="text-gray-400 flex justify-between items-center">
+                  <span className="inline-flex items-center gap-1">
+                    이 날 투자원금
+                    {isPrincipalManual && <span className="text-red-400 text-[9px] font-bold">🔴 수동</span>}
+                  </span>
+                  {editPrincipal ? (
+                    <input
+                      autoFocus
+                      className="w-[140px] bg-gray-900 border border-blue-500 rounded px-1 py-0.5 text-right text-gray-100 outline-none"
+                      value={editPrincipalRaw}
+                      placeholder="0=해제"
+                      onChange={e => setEditPrincipalRaw(e.target.value)}
+                      onBlur={commitPrincipal}
+                      onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setEditPrincipal(false); }}
+                    />
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
                       <span className="text-sky-200 font-bold">{isOverseas ? `$${Math.round(principalOnDate).toLocaleString()}` : formatCurrency(principalOnDate)}</span>
-                    </div>
-                  )}
-                  {stored > 0 && (
-                    <div className="text-gray-400 flex justify-between">
-                      <span>저장 평가자산</span>
-                      <span className="text-gray-200 font-bold">{formatCurrency(stored)}</span>
-                    </div>
-                  )}
-                  {principalOnDate > 0 && stored > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">평가손익</span>
-                      <span className={`font-bold ${stored - principalOnDate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                        {stored - principalOnDate >= 0 ? '+' : ''}{formatCurrency(Math.round(stored - principalOnDate))}
-                      </span>
-                    </div>
+                      <button
+                        className="text-gray-500 hover:text-blue-400"
+                        title="이 날 투자원금 수동 입력 (입출금 누적값 오버라이드)"
+                        onClick={() => { setEditPrincipal(true); setEditPrincipalRaw(principalOnDate > 0 ? String(Math.round(principalOnDate)) : ''); }}
+                      ><Pencil size={11} /></button>
+                    </span>
                   )}
                 </div>
-              )}
+                {stored > 0 && (
+                  <div className="text-gray-400 flex justify-between">
+                    <span>저장 평가자산</span>
+                    <span className="text-gray-200 font-bold">{formatCurrency(stored)}</span>
+                  </div>
+                )}
+                {principalOnDate > 0 && stored > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">평가손익</span>
+                    <span className={`font-bold ${stored - principalOnDate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {stored - principalOnDate >= 0 ? '+' : ''}{formatCurrency(Math.round(stored - principalOnDate))}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="flex gap-2">

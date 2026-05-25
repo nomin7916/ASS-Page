@@ -172,7 +172,9 @@ export const useHistoryBackfill = ({
           const isProtected = (!entry.isFixed && (entry.evalAmount ?? 0) > 0) ||
                               (entry.isFixed && entry.adjustedAmount !== undefined);
           if (!isProtected && Math.round(entry.evalAmount ?? 0) !== Math.round(evalAmt)) {
-            newHist[idx] = { ...entry, evalAmount: evalAmt, principal: prin, isFixed };
+            const next = { ...entry, evalAmount: evalAmt, isFixed };
+            if (!entry.principalManual) next.principal = prin;
+            newHist[idx] = next;
             changed = true;
           }
         } else {

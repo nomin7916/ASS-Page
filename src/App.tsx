@@ -1658,9 +1658,13 @@ export default function App() {
     setHistory(prev => {
       const idx = prev.findIndex(h => h.date === targetDate);
       if (idx >= 0 && Math.abs(prev[idx].evalAmount - targetEval) < 1) return prev;
-      const entry = { date: targetDate, evalAmount: targetEval, principal: cleanNum(principal), isFixed: false };
-      if (idx >= 0) return prev.map((h, i) => i === idx ? entry : h);
-      return [...prev, entry];
+      if (idx >= 0) return prev.map((h, i) => {
+        if (i !== idx) return h;
+        const next = { ...h, date: targetDate, evalAmount: targetEval, isFixed: false };
+        if (!h.principalManual) next.principal = cleanNum(principal);
+        return next;
+      });
+      return [...prev, { date: targetDate, evalAmount: targetEval, principal: cleanNum(principal), isFixed: false }];
     });
 
     autoFundHistoryRef.current = targetDate;
