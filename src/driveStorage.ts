@@ -263,6 +263,7 @@ export async function saveDriveFile(
   if (fileId) {
     await fetch(`${UPLOAD_API}/files/${fileId}?uploadType=multipart`, {
       method: 'PATCH',
+      keepalive: true,
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': `multipart/related; boundary=${boundary}`,
@@ -272,6 +273,7 @@ export async function saveDriveFile(
   } else {
     await fetch(`${UPLOAD_API}/files?uploadType=multipart`, {
       method: 'POST',
+      keepalive: true,
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': `multipart/related; boundary=${boundary}`,

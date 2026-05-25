@@ -296,6 +296,8 @@ export default function App() {
   const accountChartStatesRef = useRef<Record<string, any>>({});
   const prevActivePortfolioIdRef = useRef<string | null>(null);
   const chartPrefsUpdatedAtRef = useRef<number>(0);
+  const prevChartPeriodRef = useRef<string>(chartPeriod);
+  const prevIntChartPeriodRef = useRef<string>(intChartPeriod);
 
   // ── 통합 대시보드 ──
   const [showIntegratedDashboard, setShowIntegratedDashboard] = useState(true);
@@ -1510,10 +1512,17 @@ export default function App() {
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap }, intHistory, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
+      const chartPeriodChanged =
+        prevChartPeriodRef.current !== chartPeriod ||
+        prevIntChartPeriodRef.current !== intChartPeriod;
+      if (chartPeriodChanged) {
+        prevChartPeriodRef.current = chartPeriod;
+        prevIntChartPeriodRef.current = intChartPeriod;
+      }
       if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
       driveSaveTimerRef.current = setTimeout(() => {
         saveAllToDrive(state);
-      }, 800);
+      }, chartPeriodChanged ? 50 : 800);
     }
   }, [portfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, rebalanceSortConfigMap]);
 
