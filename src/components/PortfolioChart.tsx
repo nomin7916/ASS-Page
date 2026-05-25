@@ -57,6 +57,8 @@ export default function PortfolioChart({
   handleRemoveCompStock,
   defaultSelectionResult,
   effectiveDateKey,
+  depositHistory,
+  depositHistory2,
 }) {
   const [showPrincipal, setShowPrincipal] = useState(false);
   const [isXl, setIsXl] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches);
@@ -71,6 +73,20 @@ export default function PortfolioChart({
 
   const hoveredData = hoveredPoint ? finalChartData.find(d => d.date === hoveredPoint.label) : null;
   const hoveredReturnRate = hoveredData?.returnRate ?? null;
+
+  const chartDateSet = new Set(finalChartData.map(d => d.date));
+  const fmtMarkerAmt = (amt) => {
+    const a = Math.abs(amt);
+    if (a >= 1e8) return (amt / 1e8).toFixed(1).replace(/\.0$/, '') + '억';
+    if (a >= 1e4) return Math.round(amt / 1e4) + '만';
+    return String(amt);
+  };
+  const depositMarkers = (depositHistory || [])
+    .filter(d => !d.noPrincipal && d.amount && chartDateSet.has(d.date))
+    .map(d => ({ date: d.date, amount: d.amount, type: 'deposit' }));
+  const withdrawalMarkers = (depositHistory2 || [])
+    .filter(d => !d.noPrincipal && d.amount && chartDateSet.has(d.date))
+    .map(d => ({ date: d.date, amount: d.amount, type: 'withdrawal' }));
 
   return (
     <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg flex-1 min-w-0 flex flex-col">
@@ -611,6 +627,32 @@ export default function PortfolioChart({
               comp.active ? <Line key={comp.id} yAxisId="left" type="monotone" dataKey={`comp${idx + 1}Rate`} name={comp.name} stroke={comp.color || '#10b981'} strokeWidth={1.5} dot={false} connectNulls={false} /> : null
             )}
             {showBacktest && <Area yAxisId="left" type="monotone" dataKey="backtestRate" name="백테스트(현재비중)" stroke={backtestColor} strokeWidth={2} fill="url(#backtestGradient)" strokeDasharray="6 3" dot={false} connectNulls />}
+            {depositMarkers.map((evt, i) => (
+              <ReferenceLine key={`dep-${i}`} yAxisId="left" x={evt.date} stroke="#22c55e" strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.7}
+                label={({ viewBox }) => {
+                  const { x, y } = viewBox;
+                  return (
+                    <g>
+                      <text x={x} y={y + 10} textAnchor="middle" fill="#22c55e" fontSize={9} fontWeight={700}>▲</text>
+                      <text x={x} y={y + 20} textAnchor="middle" fill="#22c55e" fontSize={8}>{fmtMarkerAmt(evt.amount)}</text>
+                    </g>
+                  );
+                }}
+              />
+            ))}
+            {withdrawalMarkers.map((evt, i) => (
+              <ReferenceLine key={`wdw-${i}`} yAxisId="left" x={evt.date} stroke="#f87171" strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.7}
+                label={({ viewBox }) => {
+                  const { x, y } = viewBox;
+                  return (
+                    <g>
+                      <text x={x} y={y + 10} textAnchor="middle" fill="#f87171" fontSize={9} fontWeight={700}>▼</text>
+                      <text x={x} y={y + 20} textAnchor="middle" fill="#f87171" fontSize={8}>{fmtMarkerAmt(evt.amount)}</text>
+                    </g>
+                  );
+                }}
+              />
+            ))}
             {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
             {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
             {hoveredPoint && !refAreaLeft && hoveredPoint.payload
