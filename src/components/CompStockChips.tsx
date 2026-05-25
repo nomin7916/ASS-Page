@@ -1,6 +1,13 @@
 // @ts-nocheck
 import React from 'react';
-import { RefreshCw, Plus, X } from 'lucide-react';
+import { RefreshCw, Plus, X, ExternalLink } from 'lucide-react';
+
+const getStockUrl = (code: string) => {
+  if (!code) return null;
+  if (/^\d/.test(code)) return `https://m.stock.naver.com/domestic/stock/${code}/total`;
+  if (/^[A-Za-z]+$/.test(code)) return `https://finance.yahoo.com/quote/${code.toUpperCase()}`;
+  return null;
+};
 
 export default function CompStockChips({
   compStocks,
@@ -68,6 +75,15 @@ export default function CompStockChips({
               {comp.loading ? <RefreshCw size={12} className="animate-spin" /> : (comp.name || `종목${idx + 1}`)}
               <CompStockDot code={comp.code} />
             </button>
+            {comp.active && getStockUrl(comp.code) && (
+              <button
+                onClick={() => window.open(getStockUrl(comp.code), '_blank')}
+                className="px-1.5 py-1.5 text-gray-600 hover:text-blue-300 hover:bg-blue-900/20 transition-colors border-l border-gray-700/40"
+                title="네이버 증권 상세 페이지"
+              >
+                <ExternalLink size={10} />
+              </button>
+            )}
             {comp.active && (
               <button
                 onClick={() => handleForceRefetchComp(idx)}
