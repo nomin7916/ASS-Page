@@ -78,6 +78,7 @@ export function useDriveSync({
   const portfolioUpdatedAtRef = useRef<number>(0);
   const prevPortfolioStructureRef = useRef<string>('');
   const lastDriveSavedPortfolioUpdatedAtRef = useRef<number>(0);
+  const lastDriveSavedChartPrefsAtRef = useRef<number>(0);
   const driveCheckInProgressRef = useRef(false);
   const lastDriveCheckAtRef = useRef<number>(0);
   const goldKrAutoCrawledRef = useRef(false);  // 세션 당 한 번만 국내금 자동 크롤링
@@ -154,9 +155,10 @@ export function useDriveSync({
       }
 
       applyStateData(stateToApply, null, marketData);
-      // 로드한 portfolioUpdatedAt을 ref에 동기화 — 초기 로드 시 useEffect가 새 타임스탬프를 만들어
-      // lastDriveSavedPortfolioUpdatedAt보다 커지는 것을 방지 (의도치 않은 자동 저장 억제)
+      // 로드한 portfolioUpdatedAt/chartPrefsUpdatedAt을 ref에 동기화 — 초기 로드 시 useEffect가 새
+      // 타임스탬프를 만들어 lastDriveSaved*보다 커지는 것을 방지 (의도치 않은 자동 저장 억제)
       portfolioUpdatedAtRef.current = (stateToApply as any).portfolioUpdatedAt || 0;
+      lastDriveSavedChartPrefsAtRef.current = (stateToApply as any).chartPrefsUpdatedAt || 0;
       setSS('ready');
       setDriveStatus('saved');
 
@@ -236,11 +238,17 @@ export function useDriveSync({
       }
       const folderId = await ensureDriveFolder(token);
       const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
-      // STATE는 portfolioUpdatedAt이 실제로 변경됐을 때만 저장
-      if ((state.portfolioUpdatedAt || 0) > lastDriveSavedPortfolioUpdatedAtRef.current) {
+      // STATE: 포트폴리오 구조 변경 또는 차트 설정 변경 시 저장
+      // version 파일은 포트폴리오 구조 변경 시에만 갱신 (다기기 sync 트리거 최소화)
+      const portfolioChanged = (state.portfolioUpdatedAt || 0) > lastDriveSavedPortfolioUpdatedAtRef.current;
+      const chartPrefsChanged = (state.chartPrefsUpdatedAt || 0) > lastDriveSavedChartPrefsAtRef.current;
+      if (portfolioChanged || chartPrefsChanged) {
         await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
-        await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
-        lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
+        if (portfolioChanged) {
+          await saveVersionFile(token, folderId, state.portfolioUpdatedAt || 0);
+          lastDriveSavedPortfolioUpdatedAtRef.current = state.portfolioUpdatedAt || 0;
+        }
+        lastDriveSavedChartPrefsAtRef.current = state.chartPrefsUpdatedAt || 0;
       }
       // adminAccessAllowed 변경 시 Drive 폴더 공유/해제 — 관리자 편집 중에는 건드리지 않음
       if (!isAdminEdit) {
