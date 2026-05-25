@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useMemo } from 'react';
 import { cleanNum } from '../utils';
+import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function usePortfolioData({
   portfolio,
@@ -134,7 +135,6 @@ export function usePortfolioData({
   );
 
   const rebalCatDonutData = useMemo(() => {
-    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
     const catMap = {};
     rebalanceData.forEach(item => {
       const cat = (item.category) || '기타';
@@ -163,7 +163,7 @@ export function usePortfolioData({
       .map(([name, { value, ratio }]) => ({ name, value, ratio }))
       .filter(x => x.value > 0)
       .sort((a, b) => {
-        const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
+        const ia = CATEGORY_DISPLAY_ORDER.indexOf(a.name), ib = CATEGORY_DISPLAY_ORDER.indexOf(b.name);
         if (ia !== -1 && ib !== -1) return ia - ib;
         if (ia !== -1) return -1;
         if (ib !== -1) return 1;
@@ -172,12 +172,11 @@ export function usePortfolioData({
   }, [rebalanceData, portfolio, settings, activePortfolioAccountType, totals.totalEval, marketIndicators.usdkrw, rebalExtraQty]);
 
   const curCatDonutData = useMemo(() => {
-    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
     return Object.entries(totals.cats)
       .map(([name, val]) => ({ name, value: val.eval }))
       .filter(x => x.value > 0)
       .sort((a, b) => {
-        const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
+        const ia = CATEGORY_DISPLAY_ORDER.indexOf(a.name), ib = CATEGORY_DISPLAY_ORDER.indexOf(b.name);
         if (ia !== -1 && ib !== -1) return ia - ib;
         if (ia !== -1) return -1;
         if (ib !== -1) return 1;

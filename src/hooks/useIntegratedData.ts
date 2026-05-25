@@ -2,6 +2,7 @@
 import { useMemo } from 'react';
 import { cleanNum, getClosestValue } from '../utils';
 import { getEffectiveDate } from './useMarketCalendar';
+import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function useIntegratedData({
   portfolios,
@@ -245,13 +246,12 @@ export function useIntegratedData({
   }, [portfolios, depositHistory, depositHistory2, activePortfolioId]);
 
   const intCatDonutData = useMemo(() => {
-    const ORDER = ['주식', '주식-a', '채권', '금', '배당주식', '리츠', '현금', '예수금', 'FUND'];
     return Object.entries(intTotals.cats)
       .map(([name, value]) => ({ name, value }))
       .filter(x => x.value > 0)
       .sort((a, b) => {
-        const ia = ORDER.indexOf(a.name);
-        const ib = ORDER.indexOf(b.name);
+        const ia = CATEGORY_DISPLAY_ORDER.indexOf(a.name);
+        const ib = CATEGORY_DISPLAY_ORDER.indexOf(b.name);
         if (ia !== -1 && ib !== -1) return ia - ib;
         if (ia !== -1) return -1;
         if (ib !== -1) return 1;

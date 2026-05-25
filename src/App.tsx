@@ -64,7 +64,7 @@ import {
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey
 } from './utils';
 
-import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG } from './constants';
+import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
 
 
 export default function App() {
@@ -1028,6 +1028,18 @@ export default function App() {
   const handleSort = (key) => {
     if (key === null) {
       setSortConfig({ key: null, direction: 1 });
+      setPortfolio(prev => {
+        const stocks = [...prev.filter(p => p.type === 'stock')];
+        const rest = prev.filter(p => p.type !== 'stock');
+        stocks.sort((a, b) => {
+          const ia = CATEGORY_DISPLAY_ORDER.indexOf(a.category);
+          const ib = CATEGORY_DISPLAY_ORDER.indexOf(b.category);
+          const ra = ia === -1 ? CATEGORY_DISPLAY_ORDER.length : ia;
+          const rb = ib === -1 ? CATEGORY_DISPLAY_ORDER.length : ib;
+          return ra - rb;
+        });
+        return [...stocks, ...rest];
+      });
       return;
     }
     let dir = sortConfig.key === key ? -sortConfig.direction : 1;

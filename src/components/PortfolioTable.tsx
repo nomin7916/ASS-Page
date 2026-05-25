@@ -451,7 +451,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             <tr className="text-center">
               <th className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></th>
               {!H('category') && (
-                <th className="py-2 min-w-[60px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort(null)} title="클릭하여 정렬 초기화">
+                <th className="py-2 min-w-[60px] cursor-pointer hover:bg-gray-700 relative" onClick={() => onSort(null)} title="클릭하여 자산군 순서로 정렬 (주식→주식-a→채권→금→배당주식→리츠→현금→예수금→FUND)">
                   {hideStrip('category')}
                   구분
                 </th>
