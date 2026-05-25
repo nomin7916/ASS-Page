@@ -63,10 +63,10 @@ export function usePortfolioState({
   const markedRebalRows = activePortfolio?.markedRebalRows ?? {};
   const toggleMarkedRebalRow = (itemId) => patchActive(p => {
     const cur = p.markedRebalRows ?? {};
-    const order = ['indigo', 'amber', 'emerald'];
+    const order = ['yellow', 'slate', 'rose', 'brown'];
     const next = { ...cur };
     const idx = order.indexOf(cur[itemId]);
-    if (idx === -1) next[itemId] = 'indigo';
+    if (idx === -1) next[itemId] = order[0];
     else if (idx < order.length - 1) next[itemId] = order[idx + 1];
     else delete next[itemId];
     return { markedRebalRows: next };

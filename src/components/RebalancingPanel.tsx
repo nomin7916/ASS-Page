@@ -683,14 +683,16 @@ export default function RebalancingPanel({
                     grouped[cat].forEach((item, j) => { itemColorMap[`${cat}::${item.id}`] = shades[j]; });
                   });
                   const MARK_ROW_BG = {
-                    indigo: 'bg-indigo-500/15 hover:bg-indigo-500/25',
-                    amber: 'bg-amber-500/12 hover:bg-amber-500/22',
-                    emerald: 'bg-emerald-500/12 hover:bg-emerald-500/22',
+                    yellow: 'bg-[rgba(234,179,8,0.20)] hover:bg-[rgba(234,179,8,0.30)]',
+                    slate: 'bg-[rgba(148,163,184,0.22)] hover:bg-[rgba(148,163,184,0.32)]',
+                    rose: 'bg-[rgba(225,29,72,0.22)] hover:bg-[rgba(225,29,72,0.32)]',
+                    brown: 'bg-[rgba(180,83,9,0.28)] hover:bg-[rgba(180,83,9,0.38)]',
                   };
                   const MARK_STICKY_BG = {
-                    indigo: 'bg-[#1c1f3d] group-hover:bg-[#262a55]',
-                    amber: 'bg-[#2a2415] group-hover:bg-[#3c321e]',
-                    emerald: 'bg-[#152a23] group-hover:bg-[#1e3c33]',
+                    yellow: 'bg-[#3a3015] group-hover:bg-[#4a3d1a]',
+                    slate: 'bg-[#2b3142] group-hover:bg-[#3a4257]',
+                    rose: 'bg-[#3a1a2a] group-hover:bg-[#4a223a]',
+                    brown: 'bg-[#3a2a18] group-hover:bg-[#4a3520]',
                   };
                   let rowNum = 0;
                   const renderRow = (item, catTd) => {
@@ -810,25 +812,21 @@ export default function RebalancingPanel({
                       </tr>
                     );
                   };
-                  const buildCatTd = (item, content, extraClass = '') => {
-                    if (H('category')) return null;
-                    const mc = markedRebalRows[item.id];
-                    const bgClass = mc ? MARK_STICKY_BG[mc] : 'bg-[#0f172a] group-hover:bg-gray-800';
-                    return (
-                      <td
-                        className={`py-3 px-3 text-center font-bold border-r border-gray-700 align-middle ${bgClass} sticky left-0 z-[5] cursor-pointer transition-colors ${extraClass}`}
-                        onClick={() => onToggleMarkedRebalRow(item.id)}
-                        title="클릭하여 매도/매수 표시 토글 (인디고→앰버→에메랄드→해제)"
-                      >
-                        {content}
-                      </td>
-                    );
-                  };
                   if (rebalanceSortConfig.key === 'code-global') {
                     return rebalanceData.map(item => {
                       const cat = item.category || '기타';
                       const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
-                      const catTd = buildCatTd(item, <div style={{ color: catColor }} className="text-xs">{cat}</div>);
+                      const mc = markedRebalRows[item.id];
+                      const bgClass = mc ? MARK_STICKY_BG[mc] : 'bg-[#0f172a] group-hover:bg-gray-800';
+                      const catTd = H('category') ? null : (
+                        <td
+                          className={`py-3 px-3 text-center font-bold border-r border-gray-700 align-middle ${bgClass} sticky left-0 z-[5] cursor-pointer transition-colors`}
+                          onClick={() => onToggleMarkedRebalRow(item.id)}
+                          title="클릭하여 매도/매수 표시 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                        >
+                          <div style={{ color: catColor }} className="text-xs">{cat}</div>
+                        </td>
+                      );
                       return renderRow(item, catTd);
                     });
                   }
@@ -838,10 +836,9 @@ export default function RebalancingPanel({
                     const catTotalEval = items.reduce((sum, item) => sum + item.curEval, 0);
                     const catRatio = totals.totalEval > 0 ? catTotalEval / totals.totalEval * 100 : 0;
                     return items.map((item, j) => {
-                      const content = j === 0
-                        ? (<><div style={{ color: catColor }}>{cat}</div><div className="text-gray-400 text-[10px] font-normal mt-0.5">{isOverseas ? <>{fmtUSD(catTotalEval)}<br/><span className="text-gray-600">{formatCurrency(catTotalEval * usdkrw)}</span></> : formatCurrency(catTotalEval)}</div><div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div></>)
-                        : null;
-                      const catTd = buildCatTd(item, content, j === 0 ? '' : 'border-t border-gray-700/30');
+                      const catTd = H('category') ? null : (j === 0
+                        ? <td rowSpan={items.length} className="py-3 px-3 text-center font-bold border-r border-gray-700 align-middle bg-[#0f172a] sticky left-0 z-[5]"><div style={{ color: catColor }}>{cat}</div><div className="text-gray-400 text-[10px] font-normal mt-0.5">{isOverseas ? <>{fmtUSD(catTotalEval)}<br/><span className="text-gray-600">{formatCurrency(catTotalEval * usdkrw)}</span></> : formatCurrency(catTotalEval)}</div><div className="text-gray-400 text-[10px] font-normal">{catRatio.toFixed(1)}%</div></td>
+                        : null);
                       return renderRow(item, catTd);
                     });
                   });
