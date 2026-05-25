@@ -861,19 +861,23 @@ export default function App() {
     const sortedWithdrawals = [...depositHistory2].sort((a, b) => a.date < b.date ? -1 : 1);
     const isOverseasChart = activePortfolioAccountType === 'overseas';
     const histByDate = new Map(localSortedHist.map(h => [h.date, h]));
+    const reversedHist = [...localSortedHist].reverse();
+    const findNearestPrincipal = (beforeDate) =>
+      reversedHist.find(h => h.date < beforeDate && cleanNum(h.principal) > 0)?.principal;
     const rawData = filteredDates.map(date => {
       let trueEvalAtDate = 0, retRate = 0;
       if (date >= portfolioStartDate) {
         const exactHist = histByDate.get(date);
         if (exactHist) {
           trueEvalAtDate = exactHist.evalAmount;
-          const histPrin = exactHist.principal > 0 ? exactHist.principal : cleanNum(principal);
+          const storedPrin = cleanNum(exactHist.principal);
+          const histPrin = storedPrin > 0 ? storedPrin : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
           retRate = histPrin > 0 ? ((exactHist.evalAmount - histPrin) / histPrin * 100) : 0;
         } else {
           let hasTrueData = false;
-          const hIdx = localSortedHist.slice().reverse().find(h => h.date <= date) || localSortedHist[0];
+          const hIdx = reversedHist.find(h => h.date <= date) || localSortedHist[0];
           const baseEval = hIdx ? hIdx.evalAmount : totals.totalEval;
-          const basePrin = hIdx ? hIdx.principal : principal;
+          const basePrin = cleanNum(hIdx?.principal) > 0 ? cleanNum(hIdx.principal) : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
           portfolio.forEach(item => {
             if (item.type === 'deposit') { trueEvalAtDate += cleanNum(item.depositAmount); }
             else if (item.code && stockHistoryMap[item.code]) {
