@@ -111,7 +111,7 @@ export default function UserInfoBar({
   return (
     <div className="flex items-center justify-between text-xs text-gray-500 px-1 gap-3">
       <div className="flex items-center gap-3 min-w-0 flex-1">
-        <span className="font-mono whitespace-nowrap">{email}</span>
+        <span className="hidden md:inline font-mono whitespace-nowrap">{email}</span>
         {showTitleInput && (
           <input
             type="text"
