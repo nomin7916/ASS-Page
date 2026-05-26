@@ -258,6 +258,16 @@ export function useStockData({
         const rTrend = await fetchNaverDomesticHistory(comp.code);
         if (rTrend) { hist = rTrend.data; trendMigratedInSession.current.add(comp.code); }
         console.log(`[history] ${comp.code} 비교종목 trend API ${rTrend ? `성공 ${Object.keys(rTrend.data).length}건` : '실패 → fallback'}`);
+        // trend가 sparse한 경우(예: KODEX 200TR ~300건) fchart로 과거 gap 보강 — trend 값이 우선
+        if (hist) {
+          const rSup = await fetchNaverStockHistory(comp.code);
+          if (rSup) {
+            const trendHist = hist;
+            hist = { ...rSup.data, ...trendHist };
+            const added = Object.keys(rSup.data).filter(d => trendHist[d] === undefined).length;
+            if (added > 0) console.log(`[history] ${comp.code} 비교종목 fchart 보강: +${added}건`);
+          }
+        }
         // 2순위: KIS OpenAPI (trend 실패 시 폴백)
         if (!hist) { const rKIS = await fetchKISStockHistory(comp.code); if (rKIS) hist = rKIS.data; }
         // 3순위: 네이버 fchart
@@ -370,6 +380,16 @@ export function useStockData({
       // 1순위: Naver trend API (실제 종가, 수정주가 미반영)
       const rTrend = await fetchNaverDomesticHistory(comp.code, lastCachedDate ?? undefined);
       if (rTrend) hist = rTrend.data;
+      // trend가 sparse한 경우 fchart로 과거 gap 보강 — trend 값이 우선
+      if (hist) {
+        const rSup = await fetchNaverStockHistory(comp.code, naverCount);
+        if (rSup) {
+          const trendHist = hist;
+          hist = { ...rSup.data, ...trendHist };
+          const added = Object.keys(rSup.data).filter(d => trendHist[d] === undefined).length;
+          if (added > 0) console.log(`[history] ${comp.code} 조회기간 fchart 보강: +${added}건`);
+        }
+      }
       // 2순위: KIS (trend 실패 시 폴백)
       if (!hist) { const rKIS = await fetchKISStockHistory(comp.code, startYear); if (rKIS) hist = rKIS.data; }
       // 3순위: 네이버 fchart
@@ -432,6 +452,16 @@ export function useStockData({
       const rTrend = await fetchNaverDomesticHistory(comp.code);
       if (rTrend) { hist = rTrend.data; trendMigratedInSession.current.add(comp.code); }
       console.log(`[history] ${comp.code} 강제재조회 trend ${rTrend ? `성공 ${Object.keys(rTrend.data).length}건` : '실패 → fallback'}`);
+      // trend가 sparse한 경우 fchart로 과거 gap 보강 — trend 값이 우선
+      if (hist) {
+        const rSup = await fetchNaverStockHistory(comp.code);
+        if (rSup) {
+          const trendHist = hist;
+          hist = { ...rSup.data, ...trendHist };
+          const added = Object.keys(rSup.data).filter(d => trendHist[d] === undefined).length;
+          if (added > 0) console.log(`[history] ${comp.code} 강제재조회 fchart 보강: +${added}건`);
+        }
+      }
       if (!hist) { const rKIS = await fetchKISStockHistory(comp.code); if (rKIS) hist = rKIS.data; }
       if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code); if (rNaver) hist = rNaver.data; }
       if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`); if (r1) hist = r1.data; }
