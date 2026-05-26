@@ -784,20 +784,20 @@ export function useStockData({
             if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
             if (hist) {
               if (fromRealPrice) {
-                // 실제종가 캐시 교체: KIS/Naver trend 데이터로 전체 대체, 오늘 현재가 보존
-                setStockHistoryMap(prev => {
-                  const todayPrice = prev[code]?.[today];
-                  const next = { ...hist! };
-                  if (todayPrice) next[today] = todayPrice;
-                  return { ...prev, [code]: next };
-                });
+                // KIS/Naver trend는 실제종가. 응답에 포함된 날짜만 갱신하고
+                // 응답에 없는 날짜는 기존 캐시 보존 — KIS 청크 부분 실패 시 데이터 손실 방지.
+                setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist! } }));
               } else {
-                // KIS/Naver trend 실패 시 fchart/Yahoo 수정종가 폴백:
-                // 기존 캐시가 충분하면(30건↑) MERGE 금지 — 실제종가가 수정종가로 재오염되는 것을 방지
-                const existingCount = Object.keys(stockHistoryMapRef.current[code] || {}).length;
-                if (existingCount < 30) {
-                  setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
-                }
+                // fchart/Yahoo는 수정종가 위험 — 기존 값은 절대 덮어쓰지 않고
+                // 캐시에 없는 날짜(gap)만 채움.
+                setStockHistoryMap(prev => {
+                  const existing = prev[code] || {};
+                  const filled = { ...existing };
+                  for (const [d, price] of Object.entries(hist!)) {
+                    if (existing[d] === undefined) filled[d] = price;
+                  }
+                  return { ...prev, [code]: filled };
+                });
               }
             }
           }),
