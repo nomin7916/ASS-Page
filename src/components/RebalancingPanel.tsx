@@ -33,6 +33,7 @@ const RB_COLS = [
   { key: 'extraQty', label: '추가' },
   { key: 'maxAdd', label: '추가가능' },
   { key: 'cost', label: '실구매비용' },
+  { key: 'expQty', label: '예상 주식수' },
   { key: 'expEval', label: '예상평가금' },
   { key: 'expRatio', label: '예상비중' },
 ];
@@ -133,7 +134,7 @@ export default function RebalancingPanel({
 
   const stickySpanKeys = ['category', 'changeRate', 'name'];
   const stickySpanCount = stickySpanKeys.filter(k => !H(k)).length;
-  const retirementColSpan = 14 - hiddenColumns.length;
+  const retirementColSpan = 15 - hiddenColumns.length;
 
   const hideStrip = (key) => (
     <div
@@ -715,6 +716,12 @@ export default function RebalancingPanel({
                           실 구매비용{arr('cost')}
                         </th>
                       )}
+                      {!H('expQty') && (
+                        <th className="py-3 px-3 min-w-[90px] text-blue-300 text-center font-normal sticky top-0 z-20 bg-[#1e293b] relative">
+                          {hideStrip('expQty')}
+                          예상 주식수
+                        </th>
+                      )}
                       {!H('expEval') && (
                         <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('expEval')}>
                           {hideStrip('expEval')}
@@ -932,6 +939,12 @@ export default function RebalancingPanel({
                         {!H('cost') && (
                           <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${displayAdjustedCost > 0 ? 'text-sky-300' : displayAdjustedCost < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(displayAdjustedCost)}</span><span className="text-[11px] opacity-70">{formatCurrency(displayAdjustedCost * usdkrw)}</span></div> : formatCurrency(displayAdjustedCost)}</td>
                         )}
+                        {!H('expQty') && (() => {
+                          const expQty = cleanNum(item.quantity) + totalAction;
+                          return (
+                            <td className="py-3 px-3 text-right text-gray-200 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(expQty)}</td>
+                          );
+                        })()}
                         {!H('expEval') && (
                           <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.expEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.expEval * usdkrw)}</span></div> : formatCurrency(item.expEval)}</td>
                         )}
@@ -1065,6 +1078,7 @@ export default function RebalancingPanel({
                       </td>
                     );
                   })()}
+                  {!H('expQty') && <td className="py-3 px-3"></td>}
                   {!H('expEval') && (() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
                   {!H('expRatio') && <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>}
                 </tr>
