@@ -8,7 +8,16 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, ReferenceLine,
 } from 'recharts';
 import { UI_CONFIG } from '../config';
+import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
 import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum } from '../utils';
+
+const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
+const nextRowColor = (cur: string): string => {
+  if (!cur) return ROW_COLOR_CYCLE[0];
+  const idx = ROW_COLOR_CYCLE.indexOf(cur.toLowerCase());
+  if (idx < 0) return '';
+  return idx >= ROW_COLOR_CYCLE.length - 1 ? '' : ROW_COLOR_CYCLE[idx + 1];
+};
 
 import CustomDatePicker from './CustomDatePicker';
 import { PieLabelOutside } from '../chartUtils';
@@ -395,15 +404,14 @@ export default function IntegratedDashboard({
                             className={`border-b border-gray-700 transition-colors ${!s.rowColor ? (s.isActive ? 'bg-blue-950/20' : isSimple ? 'bg-green-950/10 hover:bg-green-900/10' : isMatong ? 'bg-green-950/10 hover:bg-green-900/10' : 'hover:bg-gray-800/40') : ''}`}
                             style={s.rowColor ? { backgroundColor: hexToRgba(s.rowColor, 0.18) } : {}}
                           >
-                            {/* 색상 스트립 */}
+                            {/* 색상 스트립 — 클릭 시 노랑→슬레이트→로즈→갈색→해제 사이클 */}
                             <td className="px-0 py-1 border-r border-gray-700" style={{width:'10px',minWidth:'10px'}}>
-                              {s.rowColor ? (
-                                <button title="클릭하여 행 색상 제거" className="block w-full cursor-pointer border-0 outline-none rounded-sm" style={{minHeight:'28px', backgroundColor: s.rowColor}} onClick={() => updatePortfolioColor(s.id, '')} />
-                              ) : (
-                                <label title="클릭하여 행 색상 설정" className="block w-full cursor-pointer rounded-sm" style={{minHeight:'28px'}}>
-                                  <input type="color" className="sr-only" defaultValue="#3b82f6" onChange={e => updatePortfolioColor(s.id, e.target.value)} />
-                                </label>
-                              )}
+                              <button
+                                title="클릭하여 행 색상 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                                className="block w-full cursor-pointer border-0 outline-none rounded-sm"
+                                style={{minHeight:'28px', backgroundColor: s.rowColor || 'transparent'}}
+                                onClick={() => updatePortfolioColor(s.id, nextRowColor(s.rowColor || ''))}
+                              />
                             </td>
                             {/* 순서 화살표 */}
                             <td className="py-1.5 px-2 text-center border-r border-gray-700">
