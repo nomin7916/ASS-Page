@@ -1964,6 +1964,8 @@ export default function App() {
           onPaste={() => setIsPasteModalOpen(true)}
           activePortfolioAccountType={activePortfolioAccountType}
           fetchMarketIndicators={fetchMarketIndicators}
+          activeLinks={activePortfolioAccountType === 'overseas' ? (overseasLinks || []) : (customLinks || [])}
+          onOpenLinkSettings={() => setIsLinkSettingsOpen(v => !v)}
         />
         </div>
 

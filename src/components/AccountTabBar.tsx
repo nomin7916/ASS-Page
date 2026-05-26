@@ -1,6 +1,6 @@
 // @ts-nocheck
-import React from 'react';
-import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock, ClipboardPaste } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock, ClipboardPaste, ChevronDown, Settings } from 'lucide-react';
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 
 export default function AccountTabBar({
@@ -29,20 +29,110 @@ export default function AccountTabBar({
   onPaste,
   activePortfolioAccountType,
   fetchMarketIndicators,
+  activeLinks = [],
+  onOpenLinkSettings,
 }) {
   const stateFileInputRef = React.useRef(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const handler = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownOpen]);
+
   const handleRefresh = !showIntegratedDashboard && activePortfolioAccountType === 'gold'
     ? fetchMarketIndicators
     : refreshPrices;
+
+  const visiblePortfolios = portfolios.filter(p => p.accountType !== 'simple' && p.accountType !== 'matong');
+
+  const activePortfolio = visiblePortfolios.find(p => p.id === activePortfolioId);
+  const activeTypeConf = activePortfolio
+    ? (ACCOUNT_TYPE_CONFIG[activePortfolio.accountType] || ACCOUNT_TYPE_CONFIG['portfolio'])
+    : null;
+  const activeAccountName = showIntegratedDashboard
+    ? '총 자산 현황'
+    : (title || activePortfolio?.name || '계좌');
+  const activeAccountColor = showIntegratedDashboard ? '#60a5fa' : (activeTypeConf?.color || '#60a5fa');
+  const showLinksOnNarrow = !showIntegratedDashboard && Array.isArray(activeLinks) && activeLinks.length > 0;
+
   return (
-    <div className="flex items-center justify-between border-b border-gray-700/50 flex-wrap gap-y-1 py-1.5">
-      <div className="flex gap-2 flex-wrap items-center">
+    <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b border-gray-700/50 md:flex-wrap gap-y-1 py-1.5">
+      {/* 좁은 화면: 드롭다운 + 우측 링크 */}
+      <div className="md:hidden flex items-center justify-between gap-2">
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={() => setDropdownOpen(v => !v)}
+            style={{ boxShadow: `inset 3px 0 0 0 ${activeAccountColor}CC` }}
+            className="min-w-[120px] max-w-[200px] py-2 pl-3 pr-2 text-xs font-bold rounded-md border bg-slate-800 text-white border-slate-500 transition-all duration-200 flex items-center justify-between gap-1.5"
+            title="계좌 전환"
+          >
+            <span className="truncate">{activeAccountName}</span>
+            <ChevronDown size={12} className={`flex-shrink-0 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {dropdownOpen && (
+            <div className="absolute left-0 top-full mt-1 z-50 bg-gray-900 border border-gray-700 rounded-md shadow-2xl overflow-hidden min-w-[180px] max-h-72 overflow-y-auto">
+              <button
+                onClick={() => { setShowIntegratedDashboard(true); setDropdownOpen(false); }}
+                style={{ boxShadow: `inset 3px 0 0 0 #60a5fa${showIntegratedDashboard ? 'CC' : '66'}` }}
+                className={`w-full text-left px-3 py-2 text-xs font-bold transition-colors ${showIntegratedDashboard ? 'bg-slate-800 text-white' : 'text-gray-300 hover:bg-slate-800 hover:text-white'}`}
+              >총 자산 현황</button>
+              {visiblePortfolios.map(p => {
+                const typeConf = ACCOUNT_TYPE_CONFIG[p.accountType] || ACCOUNT_TYPE_CONFIG['portfolio'];
+                const isActive = !showIntegratedDashboard && activePortfolioId === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => { switchToPortfolio(p.id); setDropdownOpen(false); }}
+                    style={{ boxShadow: `inset 3px 0 0 0 ${typeConf.color}${isActive ? 'CC' : '66'}` }}
+                    className={`w-full text-left px-3 py-2 text-xs font-bold transition-colors ${isActive ? 'bg-slate-800 text-white' : 'text-gray-300 hover:bg-slate-800 hover:text-white'}`}
+                  >{(p.id === activePortfolioId ? title : p.name) || '계좌'}</button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        {showLinksOnNarrow && (
+          <div className="flex items-center gap-1">
+            {activeLinks.slice(0, 3).map((link, i) => {
+              const tip = link.url
+                ? (link.name?.trim() ? `링크${i + 1} · ${link.name.trim()} — ${link.url}` : `링크${i + 1} — ${link.url}`)
+                : `링크${i + 1} 설정 필요`;
+              return (
+                <button
+                  key={i}
+                  onClick={() => link.url && window.open(link.url.startsWith('http') ? link.url : 'https://' + link.url, '_blank')}
+                  className="bg-gray-800/60 hover:bg-gray-700 text-blue-300 w-[22px] h-[22px] rounded border border-gray-600/60 flex items-center justify-center text-[11px] font-bold transition"
+                  title={tip}
+                >{i + 1}</button>
+              );
+            })}
+            {onOpenLinkSettings && (
+              <button
+                onClick={onOpenLinkSettings}
+                title="퀵 링크 설정 (수익률 차트에서 편집)"
+                className="bg-gray-800/60 hover:bg-gray-700 text-gray-400 w-[22px] h-[22px] rounded border border-gray-600/60 flex items-center justify-center transition"
+              ><Settings size={11} /></button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 넓은 화면: 기존 탭 리스트 */}
+      <div className="hidden md:flex gap-2 flex-wrap items-center">
         <button
           onClick={() => setShowIntegratedDashboard(true)}
           style={{ boxShadow: `inset 3px 0 0 0 #60a5fa${showIntegratedDashboard ? 'CC' : '66'}` }}
           className={`w-[96px] py-2 text-xs font-bold rounded-md border transition-all duration-200 truncate ${showIntegratedDashboard ? 'bg-slate-800 text-white border-slate-500' : 'text-gray-400 border-slate-700 hover:bg-slate-800 hover:text-white hover:border-slate-500'}`}
         >총 자산 현황</button>
-        {portfolios.filter(p => p.accountType !== 'simple' && p.accountType !== 'matong').map(p => {
+        {visiblePortfolios.map(p => {
           const typeConf = ACCOUNT_TYPE_CONFIG[p.accountType] || ACCOUNT_TYPE_CONFIG['portfolio'];
           const isActive = !showIntegratedDashboard && activePortfolioId === p.id;
           return (
@@ -55,7 +145,9 @@ export default function AccountTabBar({
           );
         })}
       </div>
-      <div className="flex items-center gap-1 pr-1">
+
+      {/* 액션 아이콘 (항상 표시) */}
+      <div className="flex items-center gap-1 pr-1 flex-wrap">
         {(driveStatus === 'saving' || driveStatus === 'loading' || isLoading) && (
           <span className="p-1.5 inline-flex items-center justify-center text-sky-300 animate-cloud-glow" title={driveStatus === 'saving' ? 'Drive 저장 중...' : driveStatus === 'loading' ? 'Drive 불러오는 중...' : '갱신 중...'}>
             <Cloud size={14} strokeWidth={2.4} />

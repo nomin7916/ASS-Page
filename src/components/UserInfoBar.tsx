@@ -117,7 +117,7 @@ export default function UserInfoBar({
             type="text"
             value={title || ''}
             onChange={(e) => setTitle(e.target.value)}
-            className="text-lg md:text-xl font-bold bg-transparent outline-none border-b border-transparent hover:border-gray-600 focus:border-blue-400 text-white transition-colors caret-white cursor-text min-w-0 flex-1 max-w-[280px]"
+            className="hidden md:block text-lg md:text-xl font-bold bg-transparent outline-none border-b border-transparent hover:border-gray-600 focus:border-blue-400 text-white transition-colors caret-white cursor-text min-w-0 flex-1 max-w-[280px]"
             placeholder="계좌명"
           />
         )}
@@ -141,10 +141,10 @@ export default function UserInfoBar({
           )}
         </button>
 
-        {/* 외부 링크 1·2·3 */}
+        {/* 외부 링크 1·2·3 — 좁은 화면에서는 AccountTabBar로 이동 */}
         {showLinks && (
           <>
-            <div className="flex items-center gap-1 ml-1">
+            <div className="hidden md:flex items-center gap-1 ml-1">
               {activeLinks.slice(0, 3).map((link, i) => {
                 const tip = link.url
                   ? (link.name?.trim() ? `링크${i + 1} · ${link.name.trim()} — ${link.url}` : `링크${i + 1} — ${link.url}`)
@@ -166,7 +166,7 @@ export default function UserInfoBar({
                 ><Settings size={11} /></button>
               )}
             </div>
-            <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
+            <div className="hidden md:block w-px h-3 bg-gray-700/60 mx-0.5" />
           </>
         )}
 
