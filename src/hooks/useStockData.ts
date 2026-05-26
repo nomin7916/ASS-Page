@@ -322,11 +322,53 @@ export function useStockData({
           hist = trendMigratedInSession.current.has(comp.code) && !isOverseasComp
             ? newData
             : { ...hist, ...newData };
+          // 국내 종목 sparse 캐시(< 1500) 보강: 과거 gap을 fchart 풀카운트로 채움 — trend 값 우선
+          if (!isOverseasComp && Object.keys(hist).length < 1500) {
+            const rSup = await fetchNaverStockHistory(comp.code);
+            if (rSup) {
+              const trendHist = hist;
+              hist = { ...rSup.data, ...trendHist };
+              const added = Object.keys(rSup.data).filter(d => trendHist[d] === undefined).length;
+              if (added > 0) console.log(`[history] ${comp.code} 증분경로 fchart 보강: +${added}건`);
+            }
+          }
           setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
           setTimeout(() => {
             const snap = saveStateRef.current;
             if (snap && driveTokenRef.current) saveAllToDrive(snap);
           }, 600);
+        } else if (!isOverseasComp && Object.keys(hist).length < 1500) {
+          // 증분 API 모두 실패해도, 캐시가 sparse면 fchart로 과거 gap만 보강 시도
+          const rSup = await fetchNaverStockHistory(comp.code);
+          if (rSup) {
+            const existing = hist;
+            hist = { ...rSup.data, ...existing };
+            const added = Object.keys(rSup.data).filter(d => existing[d] === undefined).length;
+            if (added > 0) {
+              console.log(`[history] ${comp.code} 증분경로 fchart 보강(폴백): +${added}건`);
+              setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+              setTimeout(() => {
+                const snap = saveStateRef.current;
+                if (snap && driveTokenRef.current) saveAllToDrive(snap);
+              }, 600);
+            }
+          }
+        }
+      } else if (!isOverseasComp && Object.keys(hist).length < 1500) {
+        // 캐시 최신(latestDate==today)이지만 sparse한 경우: fchart 과거 gap 보강
+        const rSup = await fetchNaverStockHistory(comp.code);
+        if (rSup) {
+          const existing = hist;
+          hist = { ...rSup.data, ...existing };
+          const added = Object.keys(rSup.data).filter(d => existing[d] === undefined).length;
+          if (added > 0) {
+            console.log(`[history] ${comp.code} 증분경로 fchart 보강(최신캐시): +${added}건`);
+            setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+            setTimeout(() => {
+              const snap = saveStateRef.current;
+              if (snap && driveTokenRef.current) saveAllToDrive(snap);
+            }, 600);
+          }
         }
       }
     }
@@ -380,9 +422,10 @@ export function useStockData({
       // 1순위: Naver trend API (실제 종가, 수정주가 미반영)
       const rTrend = await fetchNaverDomesticHistory(comp.code, lastCachedDate ?? undefined);
       if (rTrend) hist = rTrend.data;
-      // trend가 sparse한 경우 fchart로 과거 gap 보강 — trend 값이 우선
+      // trend가 sparse한 경우 fchart로 과거 gap 보강 — trend 값이 우선.
+      // naverCount는 증분용(lastCachedDate 이후 일수)이라 작을 수 있어 풀카운트(2000) 사용.
       if (hist) {
-        const rSup = await fetchNaverStockHistory(comp.code, naverCount);
+        const rSup = await fetchNaverStockHistory(comp.code);
         if (rSup) {
           const trendHist = hist;
           hist = { ...rSup.data, ...trendHist };
@@ -851,9 +894,11 @@ export function useStockData({
           if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) { hist = rNaver.data; console.log(`[history] ${code} fchart 폴백 성공`); } }
           if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
           if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
-          // KIS/Naver trend 부분 응답 보강: 100건 미만이면 fchart로 gap-fill 추가 시도.
-          // 실제종가(KIS) 값은 보존하고 응답에 없는 날짜만 fchart 수정종가로 채움 — 자산검증 빈칸 최소화.
-          if (hist && fromRealPrice && Object.keys(hist).length < 100) {
+          // KIS/Naver trend sparse 응답 보강: 1500건 미만이면 fchart로 gap-fill.
+          // trend는 자연한계 ~300건, KIS 부분 응답은 <100건 — 둘 다 풀히스토리 못 채우므로
+          // 임계값을 fchart 한도(2000) 아래까지 상향. 실제종가(KIS/trend) 값은 보존하고
+          // 응답에 없는 날짜만 fchart 수정종가로 채움 — 차트·자산검증 풀히스토리 보장.
+          if (hist && fromRealPrice && Object.keys(hist).length < 1500) {
             const rSup = await fetchNaverStockHistory(code);
             if (rSup) {
               const supData = rSup.data;
