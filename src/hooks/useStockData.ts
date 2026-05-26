@@ -458,6 +458,24 @@ export function useStockData({
   const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
     Promise.race([p, new Promise<null>(res => setTimeout(() => res(null), ms))]);
 
+  // 배열의 비동기 작업을 동시 limit개씩 처리 (rate limit 폭주 방지).
+  // 결과는 입력 순서와 동일한 인덱스로 반환.
+  const runWithConcurrency = async <T>(
+    tasks: Array<() => Promise<T>>,
+    limit: number,
+  ): Promise<T[]> => {
+    const results: T[] = new Array(tasks.length);
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+      while (cursor < tasks.length) {
+        const i = cursor++;
+        results[i] = await tasks[i]();
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  };
+
   // 전체 계좌 종목 가격을 병렬 조회하여 portfolios[] 전체(활성 계좌 포함) 업데이트
   const fetchAllPortfoliosPrices = async (today: string) => {
     const koreanCodes = new Set<string>();
@@ -766,56 +784,65 @@ export function useStockData({
       }
 
       if (korCodesNeedingHistory.length > 0 || usCodesNeedingHistory.length > 0) {
-        Promise.all([
-          ...korCodesNeedingHistory.map(async (code) => {
-            let hist: Record<string, number> | null = null;
-            let fromRealPrice = false;
-            // 1순위: KIS 실제종가 (FID_ORG_ADJ_PRC=1, 수정주가 미반영)
-            const rKIS = await fetchKISStockHistory(code);
-            if (rKIS) {
-              hist = rKIS.data;
+        const korFailed: string[] = [];
+        const korTasks = korCodesNeedingHistory.map(code => async () => {
+          let hist: Record<string, number> | null = null;
+          let fromRealPrice = false;
+          // 1순위: KIS 실제종가 (FID_ORG_ADJ_PRC=1, 수정주가 미반영)
+          const rKIS = await fetchKISStockHistory(code);
+          if (rKIS) {
+            hist = rKIS.data;
+            fromRealPrice = true;
+            trendMigratedInSession.current.add(code);
+            const dates = Object.keys(rKIS.data).sort();
+            console.log(`[history] ${code} KIS 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}, 샘플=${JSON.stringify(Object.fromEntries(dates.slice(-3).map(d => [d, rKIS.data[d]])))}`);
+          } else {
+            console.warn(`[history] ${code} KIS 실패 → Naver trend 폴백`);
+          }
+          // 2순위: Naver trend (실제종가, 수정주가 미반영)
+          if (!hist) {
+            const rTrend = await fetchNaverDomesticHistory(code);
+            if (rTrend) {
+              hist = rTrend.data;
               fromRealPrice = true;
               trendMigratedInSession.current.add(code);
-              const dates = Object.keys(rKIS.data).sort();
-              console.log(`[history] ${code} KIS 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}, 샘플=${JSON.stringify(Object.fromEntries(dates.slice(-3).map(d => [d, rKIS.data[d]])))}`);
+              const dates = Object.keys(rTrend.data).sort();
+              console.log(`[history] ${code} Naver trend 폴백 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
             } else {
-              console.warn(`[history] ${code} KIS 실패 → Naver trend 폴백`);
+              console.warn(`[history] ${code} Naver trend 실패 → fchart 폴백`);
             }
-            // 2순위: Naver trend (실제종가, 수정주가 미반영)
-            if (!hist) {
-              const rTrend = await fetchNaverDomesticHistory(code);
-              if (rTrend) {
-                hist = rTrend.data;
-                fromRealPrice = true;
-                trendMigratedInSession.current.add(code);
-                const dates = Object.keys(rTrend.data).sort();
-                console.log(`[history] ${code} Naver trend 폴백 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
-              } else {
-                console.warn(`[history] ${code} Naver trend 실패 → fchart 폴백`);
-              }
+          }
+          if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) { hist = rNaver.data; console.log(`[history] ${code} fchart 폴백 성공`); } }
+          if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
+          if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
+          if (hist) {
+            if (fromRealPrice) {
+              // KIS/Naver trend는 실제종가. 응답에 포함된 날짜만 갱신하고
+              // 응답에 없는 날짜는 기존 캐시 보존 — KIS 청크 부분 실패 시 데이터 손실 방지.
+              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist! } }));
+            } else {
+              // fchart/Yahoo는 수정종가 위험 — 기존 값은 절대 덮어쓰지 않고
+              // 캐시에 없는 날짜(gap)만 채움.
+              setStockHistoryMap(prev => {
+                const existing = prev[code] || {};
+                const filled = { ...existing };
+                for (const [d, price] of Object.entries(hist!)) {
+                  if (existing[d] === undefined) filled[d] = price;
+                }
+                return { ...prev, [code]: filled };
+              });
             }
-            if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) { hist = rNaver.data; console.log(`[history] ${code} fchart 폴백 성공`); } }
-            if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
-            if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
-            if (hist) {
-              if (fromRealPrice) {
-                // KIS/Naver trend는 실제종가. 응답에 포함된 날짜만 갱신하고
-                // 응답에 없는 날짜는 기존 캐시 보존 — KIS 청크 부분 실패 시 데이터 손실 방지.
-                setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist! } }));
-              } else {
-                // fchart/Yahoo는 수정종가 위험 — 기존 값은 절대 덮어쓰지 않고
-                // 캐시에 없는 날짜(gap)만 채움.
-                setStockHistoryMap(prev => {
-                  const existing = prev[code] || {};
-                  const filled = { ...existing };
-                  for (const [d, price] of Object.entries(hist!)) {
-                    if (existing[d] === undefined) filled[d] = price;
-                  }
-                  return { ...prev, [code]: filled };
-                });
-              }
-            }
-          }),
+          } else {
+            korFailed.push(code);
+          }
+        });
+
+        // KIS는 앱키당 초당 20건 제한. 코드별 함수가 각각 13청크를 sequential로 호출하므로
+        // 동시 4개 인스턴스 = 평균 4~8건/초 → rate limit 폭주를 사전 차단.
+        // force=true 시 전 계좌 모든 종목이 대상이라 직렬화가 특히 중요.
+        const KIS_CONCURRENCY = force ? 4 : 8;
+        Promise.all([
+          runWithConcurrency(korTasks, KIS_CONCURRENCY),
           ...usCodesNeedingHistory.map(async (code) => {
             const r = await fetchUsStockHistory(code);
             if (r?.data && Object.keys(r.data).length > 1)
@@ -824,6 +851,11 @@ export function useStockData({
               notify(`${code} 이력 수집 실패 (백테스트 불가)`, 'warning');
           }),
         ]).then(() => {
+          if (force && korFailed.length > 0) {
+            notify(`⚠️ 과거 종가 수집 실패 ${korFailed.length}건: ${korFailed.join(', ')} — 잠시 후 다시 시도하세요`, 'error');
+          } else if (force) {
+            notify(`✅ 과거 종가 수집 완료 — 국내 ${korCodesNeedingHistory.length} · 해외 ${usCodesNeedingHistory.length}`, 'success');
+          }
           setTimeout(() => {
             const snap = saveStateRef.current;
             if (snap && driveTokenRef.current) saveAllToDrive(snap);

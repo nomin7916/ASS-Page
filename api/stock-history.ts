@@ -27,12 +27,21 @@ export default async function handler(request: Request): Promise<Response> {
   const today   = new Date().toISOString().split('T')[0].replace(/-/g, '');
   const endYear = new Date().getFullYear();
 
-  // KIS는 한 번에 최대 ~100건 → 2년 단위 청크로 전체 기간 수집
+  // KIS는 한 번에 최대 ~100건 → 2년 단위 청크. 최신 청크부터 처리(역순):
+  // 다중 코드 병렬 호출로 KIS rate limit(20 req/sec/appkey)에 걸려 후반 청크가
+  // 떨어져나가도 최근 데이터가 먼저 확보돼 자산 검증에서 '근사값' 폴백 없이 표시됨.
+  const chunks: Array<{ from: string; to: string }> = [];
   for (let year = fromYear; year <= endYear; year += 2) {
     const dateFrom = `${year}0101`;
     const rawTo    = `${Math.min(year + 1, endYear)}1231`;
     const dateTo   = rawTo <= today ? rawTo : today;
+    chunks.push({ from: dateFrom, to: dateTo });
+  }
+  chunks.reverse();
 
+  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+  const fetchChunk = async (dateFrom: string, dateTo: string): Promise<any[] | null> => {
     const params = new URLSearchParams({
       FID_COND_MRKT_DIV_CODE: 'J',
       FID_INPUT_ISCD:         code,
@@ -41,7 +50,6 @@ export default async function handler(request: Request): Promise<Response> {
       FID_PERIOD_DIV_CODE:    'D',
       FID_ORG_ADJ_PRC:        '1',  // 원주가 (실제종가, 수정주가 미반영)
     });
-
     try {
       const res = await fetch(
         `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice?${params}`,
@@ -54,25 +62,43 @@ export default async function handler(request: Request): Promise<Response> {
             'tr_id':         'FHKST03010100',
             'custtype':      'P',
           },
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(7000),
         }
       );
       if (!res.ok) {
-        console.error(`[stock-history] chunk ${dateFrom}-${dateTo} status=${res.status}`);
-        continue; // 단일 청크 실패가 전체 수집을 죽이지 않게 (수집된 데이터는 유지)
+        console.error(`[stock-history] ${code} chunk ${dateFrom}-${dateTo} status=${res.status}`);
+        return null;
       }
       const json = await res.json();
-      const rows: any[] = json.output2 ?? [];
-      for (const item of rows) {
-        const d     = item.stck_bsop_date as string;
-        const close = parseInt(item.stck_clpr, 10);
-        if (d?.length === 8 && !isNaN(close) && close > 0) {
-          result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
-        }
+      // KIS rate limit 응답(EGW00201/초당 거래건수 초과)도 200을 반환할 수 있어
+      // rt_cd 검사로 throttling 판별 → 재시도 트리거
+      if (json.rt_cd && json.rt_cd !== '0') {
+        console.error(`[stock-history] ${code} chunk ${dateFrom}-${dateTo} rt_cd=${json.rt_cd} msg=${json.msg1}`);
+        return null;
       }
+      return json.output2 ?? [];
     } catch (e) {
-      console.error(`[stock-history] chunk ${dateFrom}-${dateTo} error: ${e}`);
-      continue;
+      console.error(`[stock-history] ${code} chunk ${dateFrom}-${dateTo} error: ${e}`);
+      return null;
+    }
+  };
+
+  // 청크별 1회 재시도(900ms 백오프) — KIS 일시적 throttling/timeout 회복.
+  // maxDuration: 60s 제한 안에서 13청크 × (7s + 0.9s + 7s) = 약 195s 워스트 케이스가
+  // 발생하지 않도록, 호출 측에서 동시성 4로 제한해 KIS 부하를 분산함.
+  for (const { from, to } of chunks) {
+    let rows = await fetchChunk(from, to);
+    if (rows === null) {
+      await sleep(900);
+      rows = await fetchChunk(from, to);
+    }
+    if (!rows) continue;
+    for (const item of rows) {
+      const d     = item.stck_bsop_date as string;
+      const close = parseInt(item.stck_clpr, 10);
+      if (d?.length === 8 && !isNaN(close) && close > 0) {
+        result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
+      }
     }
   }
 

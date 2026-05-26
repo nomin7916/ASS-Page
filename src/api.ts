@@ -26,7 +26,8 @@ export const fetchKISStockHistory = async (
   try {
     const params = new URLSearchParams({ code, fromYear: String(fromYear) });
     const res = await fetch(`/api/stock-history?${params}`, {
-      signal: AbortSignal.timeout(60000), // 2000년부터 청크 수집 시 최대 60초
+      // 서버 maxDuration: 60s와 일치. 동시성 제한(4)로 KIS rate limit 폭주 방지 + 청크별 재시도.
+      signal: AbortSignal.timeout(60000),
     });
     if (!res.ok) return null;
     return await res.json();
