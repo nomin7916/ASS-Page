@@ -698,7 +698,11 @@ export function useStockData({
     }
   };
 
-  const refreshPrices = async () => {
+  // options.force=true: 모든 필터(세션 마이그레이션 플래그·캐시 신선도) 무시하고
+  // 전 계좌 모든 종목의 과거 이력을 KIS/Naver/NAV API로 무조건 다시 조회.
+  // 이벤트 핸들러로 전달돼도 안전(MouseEvent에 force 프로퍼티 없음).
+  const refreshPrices = async (options?: { force?: boolean } | any) => {
+    const force = options && typeof options === 'object' && options.force === true;
     setIsLoading(true);
     setIndexFetchStatus({
       kospi: { status: 'loading' },
@@ -737,6 +741,8 @@ export function useStockData({
       // 활성 비교종목(국내 6자리) 도 포함 — Drive 캐시의 수정주가를 실제종가로 교체
       compStocks.filter(s => s.active && s.code && /^\d{6}$/.test(s.code)).forEach(s => allKoreanCodes.add(s.code));
       const korCodesNeedingHistory = [...allKoreanCodes].filter(code => {
+        // force: 모든 필터 우회, 무조건 KIS·Naver trend 재조회
+        if (force) return true;
         // 세션 첫 갱신: trend API 미조회 코드는 캐시 신선도 무관 강제 재조회
         // (Drive에 수정주가가 캐시된 경우 실제종가로 교체)
         if (!trendMigratedInSession.current.has(code)) return true;
@@ -746,9 +752,18 @@ export function useStockData({
         return (Date.now() - new Date(latestDate + 'T12:00:00').getTime()) / 86400000 > 0.5;
       });
       const usCodesNeedingHistory = isOverseasRefresh ? activeStockCodes.filter(code => {
+        if (force) return true;
         const existing = stockHistoryMapRef.current[code];
         return !existing || Object.keys(existing).length <= 252;
       }) : [];
+
+      if (force) {
+        const fundCount = portfoliosRef.current.reduce((n, p) => {
+          if (p.accountType === 'simple') return n;
+          return n + (p.portfolio || []).filter((it: any) => it.type === 'fund' && it.code).length;
+        }, 0);
+        notify(`🔄 전체 강제 재수집 시작 — 국내 ${korCodesNeedingHistory.length} · 해외 ${usCodesNeedingHistory.length} · 펀드 ${fundCount}`, 'info');
+      }
 
       if (korCodesNeedingHistory.length > 0 || usCodesNeedingHistory.length > 0) {
         Promise.all([
@@ -869,8 +884,8 @@ export function useStockData({
           // earliestStored가 영영 미충족이라 세션 ref로 무한 재조회 차단).
           const startCovered = (!!earliestStored && earliestStored <= histStartDate)
             || fundWideFetchedRef.current.has(code);
-          // 최신성 + 시작 커버리지 모두 충족해야 fresh.
-          const fresh = tradingKeys.length > 30 && latest >= lastTradingDay && startCovered;
+          // 최신성 + 시작 커버리지 모두 충족해야 fresh. force=true면 무조건 재조회.
+          const fresh = !force && (tradingKeys.length > 30 && latest >= lastTradingDay && startCovered);
 
           const hist = fresh ? null : (code.startsWith('MA:')
             ? await fetchMiraeFundNavHistory(code, histStartDate, today)

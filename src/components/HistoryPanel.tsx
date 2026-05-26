@@ -69,10 +69,10 @@ export default function HistoryPanel({
           <div className={`w-full xl:w-[21%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${activePortfolioAccountType === 'overseas' ? 'h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden shrink-0`}>
             <div className="p-4 bg-[#0f172a] text-white font-bold flex items-center justify-between text-sm border-b border-gray-700 shrink-0">
               <button
-                onClick={refreshPrices}
+                onClick={() => refreshPrices({ force: true })}
                 disabled={isLoading}
                 className="flex items-center gap-1.5 hover:text-sky-300 transition-colors disabled:opacity-60"
-                title="클릭 시 종가 데이터를 새로 수집하여 자산 검증에 반영"
+                title="전체 강제 재수집 — 모든 필터 우회, 전 계좌 모든 종목의 과거 이력을 KIS·Naver·NAV API로 무조건 다시 조회"
               >
                 <span>📈 자산 평가액 추이</span>
                 {isLoading && <span className="inline-block animate-spin text-sky-400 text-base leading-none">↻</span>}
