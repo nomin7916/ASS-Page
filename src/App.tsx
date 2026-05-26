@@ -2263,6 +2263,8 @@ export default function App() {
             onAdminTargetChange={adminViewingAs ? notifyUserOfAdminTargetChange : null}
             onManualSave={handleDriveSave}
             driveStatus={driveStatus}
+            showCalculator={showCalculator}
+            onToggleCalculator={() => setShowCalculator(v => !v)}
           />
         )}
           </div>

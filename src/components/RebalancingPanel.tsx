@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
+import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
@@ -73,6 +73,8 @@ export default function RebalancingPanel({
   onToggleMarkedRebalRow = () => {},
   onManualSave = null,
   driveStatus = '',
+  showCalculator = false,
+  onToggleCalculator = null,
 }) {
   const [editingRatio, setEditingRatio] = useState({});
   const [dateEditMode, setDateEditMode] = useState(false);
@@ -441,7 +443,7 @@ export default function RebalancingPanel({
               })()}
             </div>
           </div>
-          {(hiddenColumns.length > 0 || onManualSave) && (
+          {(hiddenColumns.length > 0 || onManualSave || onToggleCalculator) && (
             <div className="flex items-end justify-between gap-2 px-3 pt-2 pb-0 bg-[#080e1c]">
               <div className="flex items-end gap-1 flex-wrap min-w-0">
                 {RB_COLS.filter(c => hiddenColumns.includes(c.key)).map(col => (
@@ -455,6 +457,19 @@ export default function RebalancingPanel({
                   </button>
                 ))}
               </div>
+              <div className="flex items-end gap-1 shrink-0">
+              {onToggleCalculator && (
+                <button
+                  type="button"
+                  onClick={onToggleCalculator}
+                  title={showCalculator ? '계산기 닫기' : '계산기 열기'}
+                  className={`shrink-0 inline-flex items-center justify-center p-1 mb-1 bg-transparent border-0 transition-transform hover:scale-110 ${
+                    showCalculator ? 'text-orange-400' : 'text-gray-500 hover:text-orange-300'
+                  }`}
+                >
+                  <Calculator size={20} />
+                </button>
+              )}
               {onManualSave && (() => {
                 const saveBtnColor = driveStatus === 'saving'
                   ? 'text-sky-400'
@@ -484,6 +499,7 @@ export default function RebalancingPanel({
                   </button>
                 );
               })()}
+              </div>
             </div>
           )}
           <div className="overflow-x-auto bg-[#0f172a]">
