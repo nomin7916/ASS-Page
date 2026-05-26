@@ -913,6 +913,13 @@ export default function App() {
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
+      // 비교종목 base는 종목별로 자기 데이터의 첫 non-null 시점을 사용.
+      // baseItem 일괄 적용 시, baseItem 시점에 그 비교종목 가격이 0/null이면 (예: 상장 이전·캐시 미수집)
+      // 전 구간 rate가 null이 되어 connectNulls=false 차트 라인이 통째로 사라지는 문제 방지.
+      const compBases = compStocks.map((_, ci) => {
+        const firstWithData = rawData.find(d => d[`comp${ci + 1}Point`] != null && d[`comp${ci + 1}Point`] > 0);
+        return firstWithData?.[`comp${ci + 1}Point`] || 0;
+      });
       return rawData.map(item => {
         const indRates = {};
         INDICATOR_CHART_KEYS.forEach(k => {
@@ -931,7 +938,8 @@ export default function App() {
           ...Object.fromEntries(compStocks.map((_, ci) => {
             const pk = `comp${ci + 1}Point`;
             const rk = `comp${ci + 1}Rate`;
-            return [rk, (baseItem[pk] > 0 && item[pk] != null) ? ((item[pk] / baseItem[pk]) - 1) * 100 : null];
+            const cBase = compBases[ci];
+            return [rk, (cBase > 0 && item[pk] != null) ? ((item[pk] / cBase) - 1) * 100 : null];
           })),
           ...indRates,
         };

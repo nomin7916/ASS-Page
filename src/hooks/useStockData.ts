@@ -751,10 +751,14 @@ export function useStockData({
       });
 
       // 전체 계좌 국내 주식 코드 수집 — 최근 이력 없으면 재수집 (useHistoryBackfill이 모든 계좌 빈 날짜 채우는 데 필요)
+      // 현재 보유 + 과거 보유(holdingSnapshots) 합집합 — 매도 후 portfolio에서 사라진 종목도 자산검증용 종가가 필요.
       const allKoreanCodes = new Set<string>();
       portfoliosRef.current.forEach(p => {
         if (p.accountType === 'simple' || p.accountType === 'overseas') return;
         (p.portfolio || []).forEach(item => { if (item.type === 'stock' && item.code) allKoreanCodes.add(item.code); });
+        (p.holdingSnapshots || []).forEach((s: any) => (s.items || []).forEach((it: any) => {
+          if (it.type === 'stock' && it.code && /^\d{6}$/.test(it.code)) allKoreanCodes.add(it.code);
+        }));
       });
       // 활성 비교종목(국내 6자리) 도 포함 — Drive 캐시의 수정주가를 실제종가로 교체
       compStocks.filter(s => s.active && s.code && /^\d{6}$/.test(s.code)).forEach(s => allKoreanCodes.add(s.code));
@@ -793,9 +797,11 @@ export function useStockData({
           if (rKIS) {
             hist = rKIS.data;
             fromRealPrice = true;
-            trendMigratedInSession.current.add(code);
             const dates = Object.keys(rKIS.data).sort();
-            console.log(`[history] ${code} KIS 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}, 샘플=${JSON.stringify(Object.fromEntries(dates.slice(-3).map(d => [d, rKIS.data[d]])))}`);
+            // 부분 응답(청크 일부만 성공) 가드: 100건 미만이면 마이그 플래그 보류 → 다음 갱신에서 재시도 허용.
+            // KIS는 13청크 × ~50거래일 = 정상 시 600~6000건. 100건 미만 = rate limit으로 대부분 청크 실패한 상태.
+            if (dates.length >= 100) trendMigratedInSession.current.add(code);
+            console.log(`[history] ${code} KIS 성공: ${dates.length}건${dates.length < 100 ? ' (부분 응답 — 재시도 대기)' : ''}, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
           } else {
             console.warn(`[history] ${code} KIS 실패 → Naver trend 폴백`);
           }
@@ -805,9 +811,9 @@ export function useStockData({
             if (rTrend) {
               hist = rTrend.data;
               fromRealPrice = true;
-              trendMigratedInSession.current.add(code);
               const dates = Object.keys(rTrend.data).sort();
-              console.log(`[history] ${code} Naver trend 폴백 성공: ${dates.length}건, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
+              if (dates.length >= 100) trendMigratedInSession.current.add(code);
+              console.log(`[history] ${code} Naver trend 폴백 성공: ${dates.length}건${dates.length < 100 ? ' (부분 응답 — 재시도 대기)' : ''}, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
             } else {
               console.warn(`[history] ${code} Naver trend 실패 → fchart 폴백`);
             }
@@ -815,6 +821,19 @@ export function useStockData({
           if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) { hist = rNaver.data; console.log(`[history] ${code} fchart 폴백 성공`); } }
           if (!hist) { const r1 = await fetchIndexData(`${code}.KS`); if (r1) hist = r1.data; }
           if (!hist) { const r2 = await fetchIndexData(`${code}.KQ`); if (r2) hist = r2.data; }
+          // KIS/Naver trend 부분 응답 보강: 100건 미만이면 fchart로 gap-fill 추가 시도.
+          // 실제종가(KIS) 값은 보존하고 응답에 없는 날짜만 fchart 수정종가로 채움 — 자산검증 빈칸 최소화.
+          if (hist && fromRealPrice && Object.keys(hist).length < 100) {
+            const rSup = await fetchNaverStockHistory(code);
+            if (rSup) {
+              const supData = rSup.data;
+              let added = 0;
+              for (const [d, price] of Object.entries(supData)) {
+                if (hist[d] === undefined) { hist[d] = price as number; added++; }
+              }
+              if (added > 0) console.log(`[history] ${code} fchart 보강 성공: +${added}건`);
+            }
+          }
           if (hist) {
             if (fromRealPrice) {
               // KIS/Naver trend는 실제종가. 응답에 포함된 날짜만 갱신하고
