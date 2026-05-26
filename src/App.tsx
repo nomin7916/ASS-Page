@@ -12,7 +12,6 @@ import {
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
 import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup } from './driveStorage';
-import Header from './components/Header';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
@@ -37,7 +36,6 @@ import AccountTabBar from './components/AccountTabBar';
 import UserInfoBar from './components/UserInfoBar';
 import DividendSummaryTable from './components/DividendSummaryTable';
 import DividendTaxPage from './components/DividendTaxPage';
-import NotificationBar from './components/NotificationBar';
 import ConfirmDialog from './components/ConfirmDialog';
 import LoadingOverlay from './components/LoadingOverlay';
 import InactivityModal from './components/InactivityModal';
@@ -1900,7 +1898,8 @@ export default function App() {
         {/* 메인 컨텐츠 */}
         <div className="flex-1 min-w-0 py-4 px-3 md:px-5 md:py-5">
         <div className="w-full max-w-[1200px] mx-auto flex flex-col gap-6">
-        {/* 로그인 사용자 정보 바 */}
+        {/* 상단 sticky 헤더: UserInfoBar + AccountTabBar */}
+        <div className="sticky top-0 z-30 bg-[#0b1120] -mx-3 md:-mx-5 px-3 md:px-5 pt-2 pb-1 border-b-2 border-emerald-500/60 shadow-[0_2px_10px_rgba(16,185,129,0.18)]">
         <UserInfoBar
           email={authUser.email}
           adminAccessAllowed={adminAccessAllowed}
@@ -1927,12 +1926,18 @@ export default function App() {
           onToggleCalculator={() => setShowCalculator(v => !v)}
           youtubeUrl={youtubeUrl}
           notebookLinks={notebookLinks}
+          title={title}
+          setTitle={setTitle}
+          showIntegratedDashboard={showIntegratedDashboard}
+          activeLinks={activePortfolioAccountType === 'overseas' ? (overseasLinks || []) : (customLinks || [])}
+          onOpenLinkSettings={() => setIsLinkSettingsOpen(v => !v)}
+          notificationLog={notificationLog}
+          unreadCount={unreadCount}
+          onReadNotifications={markAsRead}
+          onClearNotifications={handleClearNotificationLog}
+          onDeleteNotificationEntry={handleDeleteNotificationEntry}
         />
 
-        {/* 알림 바 */}
-        <NotificationBar notificationLog={notificationLog} onClear={handleClearNotificationLog} unreadCount={unreadCount} onRead={markAsRead} onDeleteEntry={handleDeleteNotificationEntry} />
-
-        {/* 뷰 전환 탭 */}
         <AccountTabBar
           portfolios={portfolios}
           showIntegratedDashboard={showIntegratedDashboard}
@@ -1956,7 +1961,11 @@ export default function App() {
           handleImportStateFile={handleImportStateFile}
           handleDownloadStateFile={handleDownloadStateFile}
           isAdmin={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()}
+          onPaste={() => setIsPasteModalOpen(true)}
+          activePortfolioAccountType={activePortfolioAccountType}
+          fetchMarketIndicators={fetchMarketIndicators}
         />
+        </div>
 
         {/* Drive 백업 이력 모달 */}
         <DriveBackupModal
@@ -1998,10 +2007,6 @@ export default function App() {
           setHideAmounts={setHideAmounts}
         />
 
-        {!showIntegratedDashboard && (
-          <Header title={title} setTitle={setTitle} isLoading={isLoading} driveStatus={driveStatus} onRefresh={activePortfolioAccountType === 'gold' ? fetchMarketIndicators : refreshPrices} onDriveSave={handleDriveSave} onPaste={() => setIsPasteModalOpen(true)} onDriveConnect={() => requestDriveToken('select_account')} onOpenBackupModal={handleOpenBackupModal} />
-        )}
-
         {!showIntegratedDashboard && (<>
         <div className="flex items-start gap-0 w-full">
           <div className="flex-1 flex flex-col gap-6 min-w-0" style={{ paddingBottom: '40vh' }}>
@@ -2019,7 +2024,7 @@ export default function App() {
             usdkrwFetchStatus={indicatorFetchStatus?.usdkrw?.status}
           />
         ) : (
-          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} showRetirementStats={activePortfolioAccountType === 'dc-irp'} hiddenColumns={hiddenColumnsPortfolio} onToggleColumn={toggleHiddenColumnPortfolio} customLinks={customLinks} setCustomLinks={setCustomLinks} overseasLinks={overseasLinks} setOverseasLinks={setOverseasLinks} isLinkSettingsOpen={isLinkSettingsOpen} setIsLinkSettingsOpen={setIsLinkSettingsOpen} markedPortfolioRows={markedPortfolioRows} onToggleMarkedPortfolioRow={toggleMarkedPortfolioRow} />
+          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp'} showRetirementStats={activePortfolioAccountType === 'dc-irp'} hiddenColumns={hiddenColumnsPortfolio} onToggleColumn={toggleHiddenColumnPortfolio} markedPortfolioRows={markedPortfolioRows} onToggleMarkedPortfolioRow={toggleMarkedPortfolioRow} />
         )}
 
         {activePortfolioAccountType !== 'gold' && !sectionCollapsed.summary && (

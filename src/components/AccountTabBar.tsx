@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React from 'react';
-import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock } from 'lucide-react';
+import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock, ClipboardPaste } from 'lucide-react';
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 
 export default function AccountTabBar({
@@ -26,8 +26,14 @@ export default function AccountTabBar({
   handleImportStateFile,
   handleDownloadStateFile,
   isAdmin,
+  onPaste,
+  activePortfolioAccountType,
+  fetchMarketIndicators,
 }) {
   const stateFileInputRef = React.useRef(null);
+  const handleRefresh = !showIntegratedDashboard && activePortfolioAccountType === 'gold'
+    ? fetchMarketIndicators
+    : refreshPrices;
   return (
     <div className="flex items-center justify-between border-b border-gray-700/50 flex-wrap gap-y-1 py-1.5">
       <div className="flex gap-2 flex-wrap items-center">
@@ -49,28 +55,28 @@ export default function AccountTabBar({
           );
         })}
       </div>
-      {showIntegratedDashboard && (
-        <div className="flex items-center gap-1 pr-1">
-          {(driveStatus === 'saving' || driveStatus === 'loading' || isLoading) && (
-            <span className="p-1.5 inline-flex items-center justify-center text-sky-300 animate-cloud-glow" title={driveStatus === 'saving' ? 'Drive 저장 중...' : driveStatus === 'loading' ? 'Drive 불러오는 중...' : '갱신 중...'}>
-              <Cloud size={14} strokeWidth={2.4} />
-            </span>
-          )}
-          {driveStatus === 'saved' && !isLoading && (
-            <span className="p-1.5 inline-flex items-center justify-center text-amber-300" title="Drive 동기화 완료">
-              <CloudSun size={14} strokeWidth={2.4} />
-            </span>
-          )}
-          {driveStatus === 'error' && !isLoading && (
-            <span className="p-1.5 inline-flex items-center justify-center text-gray-500" title="Drive 동기화 실패">
-              <CloudOff size={14} strokeWidth={2.4} />
-            </span>
-          )}
-          {driveStatus === 'auth_needed' && !isLoading && (
-            <span className="p-1.5 inline-flex items-center justify-center text-orange-400" title="Drive 로그인 필요">
-              <Lock size={14} strokeWidth={2.4} />
-            </span>
-          )}
+      <div className="flex items-center gap-1 pr-1">
+        {(driveStatus === 'saving' || driveStatus === 'loading' || isLoading) && (
+          <span className="p-1.5 inline-flex items-center justify-center text-sky-300 animate-cloud-glow" title={driveStatus === 'saving' ? 'Drive 저장 중...' : driveStatus === 'loading' ? 'Drive 불러오는 중...' : '갱신 중...'}>
+            <Cloud size={14} strokeWidth={2.4} />
+          </span>
+        )}
+        {driveStatus === 'saved' && !isLoading && (
+          <span className="p-1.5 inline-flex items-center justify-center text-amber-300" title="Drive 동기화 완료">
+            <CloudSun size={14} strokeWidth={2.4} />
+          </span>
+        )}
+        {driveStatus === 'error' && !isLoading && (
+          <span className="p-1.5 inline-flex items-center justify-center text-gray-500" title="Drive 동기화 실패">
+            <CloudOff size={14} strokeWidth={2.4} />
+          </span>
+        )}
+        {driveStatus === 'auth_needed' && !isLoading && (
+          <span className="p-1.5 inline-flex items-center justify-center text-orange-400" title="Drive 로그인 필요">
+            <Lock size={14} strokeWidth={2.4} />
+          </span>
+        )}
+        {showIntegratedDashboard && (
           <button
             onClick={() => {
               if (hideAmounts) {
@@ -86,13 +92,15 @@ export default function AccountTabBar({
           >
             <span className="text-[13px] font-bold leading-none">₩</span>
           </button>
-          <button
-            onClick={refreshPrices}
-            title="새로고침 — 모든 계좌 종목가격·지수 데이터 갱신"
-            className="p-1.5 hover:bg-gray-800 rounded transition text-teal-400 hover:text-teal-300"
-          >
-            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-          </button>
+        )}
+        <button
+          onClick={handleRefresh}
+          title={showIntegratedDashboard ? '새로고침 — 모든 계좌 종목가격·지수 데이터 갱신' : '새로고침 (종목가격 + 지수 데이터 수집)'}
+          className="p-1.5 hover:bg-gray-800 rounded transition text-teal-400 hover:text-teal-300"
+        >
+          <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+        </button>
+        {showIntegratedDashboard && (
           <button
             onClick={handleDriveLoadOnly}
             title={driveStatus === 'loading' ? 'Drive 불러오는 중...' : driveStatus === 'saved' ? 'Drive 동기화 완료 — 다시 불러오기' : driveStatus === 'auth_needed' ? 'Drive 로그인 필요' : 'Google Drive에서 최신 데이터 불러오기'}
@@ -108,57 +116,70 @@ export default function AccountTabBar({
           >
             <CloudDownload size={14} />
           </button>
+        )}
+        <button
+          onClick={handleDriveSave}
+          title={driveStatus === 'saving' ? 'Drive 저장 중...' : driveStatus === 'saved' ? 'Drive 저장 완료 — 다시 저장' : driveStatus === 'auth_needed' ? 'Drive 로그인 필요' : 'Google Drive에 전체 데이터 백업'}
+          className={`p-1.5 hover:bg-gray-800 rounded transition ${
+            driveStatus === 'saving'
+              ? 'text-indigo-300 animate-pulse'
+              : driveStatus === 'saved'
+              ? 'text-indigo-400 hover:text-indigo-300'
+              : driveStatus === 'error' || driveStatus === 'auth_needed'
+              ? 'text-indigo-800/60 hover:text-indigo-500'
+              : 'text-indigo-500/70 hover:text-indigo-400'
+          }`}
+        >
+          <Save size={14} />
+        </button>
+        <button
+          onClick={handleOpenBackupModal}
+          title="Drive 백업 이력 보기 — 시간대별 백업 선택 적용"
+          className="p-1.5 hover:bg-gray-800 rounded transition text-purple-500/70 hover:text-purple-400"
+        >
+          <History size={14} />
+        </button>
+        {!showIntegratedDashboard && onPaste && (
           <button
-            onClick={handleDriveSave}
-            title={driveStatus === 'saving' ? 'Drive 저장 중...' : driveStatus === 'saved' ? 'Drive 저장 완료 — 다시 저장' : driveStatus === 'auth_needed' ? 'Drive 로그인 필요' : 'Google Drive에 전체 데이터 백업'}
-            className={`p-1.5 hover:bg-gray-800 rounded transition ${
-              driveStatus === 'saving'
-                ? 'text-indigo-300 animate-pulse'
-                : driveStatus === 'saved'
-                ? 'text-indigo-400 hover:text-indigo-300'
-                : driveStatus === 'error' || driveStatus === 'auth_needed'
-                ? 'text-indigo-800/60 hover:text-indigo-500'
-                : 'text-indigo-500/70 hover:text-indigo-400'
-            }`}
+            onClick={onPaste}
+            title="엑셀 붙여넣기"
+            className="p-1.5 hover:bg-gray-800 rounded transition text-green-500/80 hover:text-green-400"
           >
-            <Save size={14} />
+            <ClipboardPaste size={14} />
           </button>
-          <button
-            onClick={handleOpenBackupModal}
-            title="Drive 백업 이력 보기 — 시간대별 백업 선택 적용"
-            className="p-1.5 hover:bg-gray-800 rounded transition text-purple-500/70 hover:text-purple-400"
-          >
-            <History size={14} />
-          </button>
-          {isAdmin && (
-            <>
-              <button
-                onClick={() => historyInputRef.current?.click()}
-                title="지수/종목 히스토리 주입 (JSON 또는 CSV)"
-                className="p-1.5 hover:bg-gray-800 rounded transition text-orange-400 hover:text-orange-300"
-              >
-                <FileUp size={14} />
-              </button>
-              <input type="file" ref={historyInputRef} onChange={handleImportHistoryJSON} className="hidden" accept=".json,.csv" multiple />
-            </>
-          )}
-          <button
-            onClick={handleDownloadStateFile}
-            title="PC에 데이터 저장 (portfolio_state.json 다운로드)"
-            className="p-1.5 hover:bg-gray-800 rounded transition text-emerald-400 hover:text-emerald-300"
-          >
-            <HardDriveDownload size={14} />
-          </button>
-          <button
-            onClick={() => stateFileInputRef.current?.click()}
-            title="파일에서 데이터 복원 (portfolio_state.json)"
-            className="p-1.5 hover:bg-gray-800 rounded transition text-green-400 hover:text-green-300"
-          >
-            <ArchiveRestore size={14} />
-          </button>
-          <input type="file" ref={stateFileInputRef} onChange={handleImportStateFile} className="hidden" accept=".json" />
-        </div>
-      )}
+        )}
+        {showIntegratedDashboard && isAdmin && (
+          <>
+            <button
+              onClick={() => historyInputRef.current?.click()}
+              title="지수/종목 히스토리 주입 (JSON 또는 CSV)"
+              className="p-1.5 hover:bg-gray-800 rounded transition text-orange-400 hover:text-orange-300"
+            >
+              <FileUp size={14} />
+            </button>
+            <input type="file" ref={historyInputRef} onChange={handleImportHistoryJSON} className="hidden" accept=".json,.csv" multiple />
+          </>
+        )}
+        {showIntegratedDashboard && (
+          <>
+            <button
+              onClick={handleDownloadStateFile}
+              title="PC에 데이터 저장 (portfolio_state.json 다운로드)"
+              className="p-1.5 hover:bg-gray-800 rounded transition text-emerald-400 hover:text-emerald-300"
+            >
+              <HardDriveDownload size={14} />
+            </button>
+            <button
+              onClick={() => stateFileInputRef.current?.click()}
+              title="파일에서 데이터 복원 (portfolio_state.json)"
+              className="p-1.5 hover:bg-gray-800 rounded transition text-green-400 hover:text-green-300"
+            >
+              <ArchiveRestore size={14} />
+            </button>
+            <input type="file" ref={stateFileInputRef} onChange={handleImportStateFile} className="hidden" accept=".json" />
+          </>
+        )}
+      </div>
     </div>
   );
 }
