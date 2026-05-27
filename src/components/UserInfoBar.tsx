@@ -114,6 +114,11 @@ export default function UserInfoBar({
     <div className="flex items-center justify-between text-xs text-gray-500 px-1 gap-3">
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <span className="hidden md:inline font-mono whitespace-nowrap">{email}</span>
+        {marketIndicators && (
+          <div className="hidden md:flex items-center">
+            <HeaderMarketChips marketIndicators={marketIndicators} />
+          </div>
+        )}
         {showTitleInput && (
           <input
             type="text"
@@ -125,12 +130,6 @@ export default function UserInfoBar({
         )}
       </div>
       <div className="flex items-center gap-1">
-        {/* 시장 지표 칩 — 넓은 화면 전용 */}
-        {marketIndicators && (
-          <div className="hidden md:flex items-center mr-1">
-            <HeaderMarketChips marketIndicators={marketIndicators} />
-          </div>
-        )}
         {/* 알림 버튼 */}
         <button
           onClick={() => (notifOpen ? setNotifOpen(false) : openNotifPanel())}
