@@ -375,7 +375,7 @@ export default function IntegratedDashboard({
                       <th className="py-2 px-3 text-center border-r border-gray-700">시작일</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700 sticky left-0 z-20 bg-[#0f172a]">계좌</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">투자원금</th>
-                      <th className="py-2 px-3 text-center border-r border-gray-700">투자비율</th>
+                      <th className="py-2 px-3 text-center border-r border-gray-700">평가비중</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">총자산</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">수익율</th>
                       <th className="py-2 px-3 text-center border-r border-gray-700">CAGR</th>
@@ -464,7 +464,10 @@ export default function IntegratedDashboard({
                                 hideAmounts ? '••••••' : <span className="text-gray-200">{formatCurrency(s.principal)}</span>
                               ) : (hideAmounts ? '••••••' : formatCurrency(s.principal))}
                             </td>
-                            <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300">{allocRatio.toFixed(2)}%</td>
+                            <td
+                              className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300 cursor-help"
+                              title={`계좌 총자산 / 전체 총자산\n${s.name} ${formatCurrency(s.currentEval)} / TOTAL ${formatCurrency(intTotals.totalEval)} = ${allocRatio.toFixed(2)}%`}
+                            >{allocRatio.toFixed(2)}%</td>
                             {/* 총자산 */}
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center font-bold text-white">
                               {isSimple ? (
