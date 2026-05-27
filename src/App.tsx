@@ -872,12 +872,15 @@ export default function App() {
       const effective = computeEffectivePrincipal(date, localSortedHist, sortedDeposits, sortedWithdrawals, isOverseasChart);
       if (date >= portfolioStartDate) {
         const exactHist = histByDate.get(date);
+        // 해외계좌: evalAmount=KRW, principal=USD → 수익률을 USD 기준으로 통일
+        const overseasFx = isOverseasChart ? (cleanNum(marketIndicators?.usdkrw) || cleanNum(avgExchangeRate) || 1) : 1;
         if (exactHist) {
           trueEvalAtDate = exactHist.evalAmount;
           const storedPrin = cleanNum(exactHist.principal);
           const fallbackPrin = storedPrin > 0 ? storedPrin : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
           const histPrin = effective.value != null ? effective.value : fallbackPrin;
-          retRate = histPrin > 0 ? ((exactHist.evalAmount - histPrin) / histPrin * 100) : 0;
+          const evalUsd = exactHist.evalAmount / overseasFx;
+          retRate = histPrin > 0 ? ((evalUsd - histPrin) / histPrin * 100) : 0;
         } else {
           let hasTrueData = false;
           const hIdx = reversedHist.find(h => h.date <= date) || localSortedHist[0];
@@ -893,7 +896,8 @@ export default function App() {
             } else { trueEvalAtDate += cleanNum(item.evalAmount) * (baseEval / (totals.totalEval || 1)); }
           });
           if (!hasTrueData && hIdx) trueEvalAtDate = hIdx.evalAmount;
-          retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
+          const evalForRate = (isOverseasChart && !hasTrueData && hIdx) ? trueEvalAtDate / overseasFx : trueEvalAtDate;
+          retRate = basePrin > 0 ? ((evalForRate - basePrin) / basePrin * 100) : 0;
         }
       }
       let principalAmount = 0;
