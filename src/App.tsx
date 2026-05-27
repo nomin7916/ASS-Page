@@ -1936,6 +1936,7 @@ export default function App() {
           onReadNotifications={markAsRead}
           onClearNotifications={handleClearNotificationLog}
           onDeleteNotificationEntry={handleDeleteNotificationEntry}
+          marketIndicators={marketIndicators}
         />
 
         <AccountTabBar
@@ -1966,6 +1967,7 @@ export default function App() {
           fetchMarketIndicators={fetchMarketIndicators}
           activeLinks={activePortfolioAccountType === 'overseas' ? (overseasLinks || []) : (customLinks || [])}
           onOpenLinkSettings={() => setIsLinkSettingsOpen(v => !v)}
+          marketIndicators={marketIndicators}
         />
         </div>
 

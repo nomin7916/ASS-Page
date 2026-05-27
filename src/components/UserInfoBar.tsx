@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard, Calculator, Youtube, X, Bell } from 'lucide-react';
 import { ADMIN_EMAIL } from '../config';
+import HeaderMarketChips from './HeaderMarketChips';
 
 function NotebookLMIcon({ size = 14 }) {
   return (
@@ -58,6 +59,7 @@ export default function UserInfoBar({
   onReadNotifications,
   onClearNotifications,
   onDeleteNotificationEntry,
+  marketIndicators,
 }) {
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
   const [notebookOpen, setNotebookOpen] = useState(false);
@@ -123,6 +125,12 @@ export default function UserInfoBar({
         )}
       </div>
       <div className="flex items-center gap-1">
+        {/* 시장 지표 칩 — 넓은 화면 전용 */}
+        {marketIndicators && (
+          <div className="hidden md:flex items-center mr-1">
+            <HeaderMarketChips marketIndicators={marketIndicators} />
+          </div>
+        )}
         {/* 알림 버튼 */}
         <button
           onClick={() => (notifOpen ? setNotifOpen(false) : openNotifPanel())}

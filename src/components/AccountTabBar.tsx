@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock, ClipboardPaste, ChevronDown, Settings } from 'lucide-react';
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
+import HeaderMarketChips from './HeaderMarketChips';
 
 export default function AccountTabBar({
   portfolios,
@@ -31,6 +32,7 @@ export default function AccountTabBar({
   fetchMarketIndicators,
   activeLinks = [],
   onOpenLinkSettings,
+  marketIndicators,
 }) {
   const stateFileInputRef = React.useRef(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -65,9 +67,10 @@ export default function AccountTabBar({
 
   return (
     <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b border-gray-700/50 md:flex-wrap gap-y-1 py-1.5">
-      {/* 좁은 화면: 드롭다운 + 우측 링크 */}
+      {/* 좁은 화면: 드롭다운 + 시장지표 칩 + 우측 링크 */}
       <div className="md:hidden flex items-center justify-between gap-2">
-        <div className="relative" ref={dropdownRef}>
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+        <div className="relative flex-shrink-0" ref={dropdownRef}>
           <button
             onClick={() => setDropdownOpen(v => !v)}
             style={{ boxShadow: `inset 3px 0 0 0 ${activeAccountColor}CC` }}
@@ -98,6 +101,8 @@ export default function AccountTabBar({
               })}
             </div>
           )}
+        </div>
+        {marketIndicators && <HeaderMarketChips marketIndicators={marketIndicators} />}
         </div>
         {showLinksOnNarrow && (
           <div className="flex items-center gap-1">
