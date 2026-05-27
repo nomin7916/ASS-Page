@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, cleanNum, getClosestValue } from '../utils';
 import VerifyEvalModal from './VerifyEvalModal';
 
 export default function HistoryPanel({
@@ -64,6 +64,25 @@ export default function HistoryPanel({
     return set;
   }, [activePortfolio]);
 
+  // 해외계좌: 차트와 동일한 방식으로 USD 평가액 계산 (stockHistoryMap × 현재보유수량)
+  const computeOverseasUsd = useMemo(() => {
+    if (activePortfolioAccountType !== 'overseas') return null;
+    const holdings = activePortfolio?.portfolio ?? [];
+    return (date) => {
+      let usd = 0, hasData = false;
+      for (const item of holdings) {
+        if (item.type === 'deposit') {
+          usd += cleanNum(item.depositAmount);
+          hasData = true;
+        } else if (item.code && stockHistoryMap?.[item.code]) {
+          const p = getClosestValue(stockHistoryMap[item.code], date);
+          if (p != null) { usd += p * item.quantity; hasData = true; }
+        }
+      }
+      return hasData ? usd : null;
+    };
+  }, [activePortfolioAccountType, activePortfolio, stockHistoryMap]);
+
   return (
         <>
           <div className={`w-full xl:w-[21%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${activePortfolioAccountType === 'overseas' ? 'h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden shrink-0`}>
@@ -115,7 +134,13 @@ export default function HistoryPanel({
                           <div className="flex items-center justify-end gap-1">
                             <span>
                               {activePortfolioAccountType === 'overseas'
-                                ? <div className="flex flex-col items-end leading-tight"><span>{new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(h.evalAmount/(marketIndicators.usdkrw||1))}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div>
+                                ? (() => {
+                                    const usd = computeOverseasUsd ? computeOverseasUsd(h.date) : null;
+                                    const usdDisplay = usd != null
+                                      ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(usd)
+                                      : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(h.evalAmount / (marketIndicators.usdkrw || 1));
+                                    return <div className="flex flex-col items-end leading-tight"><span>{usdDisplay}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div>;
+                                  })()
                                 : formatCurrency(h.evalAmount)}
                             </span>
                           </div>

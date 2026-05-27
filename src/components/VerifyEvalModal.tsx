@@ -163,16 +163,18 @@ export default function VerifyEvalModal({
     };
   }), [resolved, accountType, date, stockHistoryMap, indicatorHistoryMap, fx, mpo, isGold]);
 
-  const recomputed = useMemo(
-    () => calcPortfolioEvalDetail(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap || {}, fx, mpo).total,
+  const isOverseas = accountType === 'overseas';
+
+  const recomputedResult = useMemo(
+    () => calcPortfolioEvalDetail(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap || {}, fx, mpo),
     [resolved, accountType, date, stockHistoryMap, indicatorHistoryMap, fx, mpo],
   );
+  const recomputed = recomputedResult.total;
+  const histFxRate = isOverseas ? (recomputedResult.fxRate || fx) : 1;
 
   const stored = cleanNum(record.evalAmount);
   const diffRatio = stored > 0 ? Math.abs(recomputed - stored) / stored : (recomputed > 0 ? 1 : 0);
   const matched = recomputed > 0 && diffRatio < 0.001;
-
-  const isOverseas = accountType === 'overseas';
 
   const depositsOnDate = useMemo(
     () => (depositHistory || []).filter(d => d.date === date),
@@ -465,8 +467,29 @@ export default function VerifyEvalModal({
           <div className="space-y-2 pt-1 border-t border-gray-700/60">
             <div className="bg-gray-800/50 rounded px-3 py-2 space-y-1">
               <div className="text-gray-500 text-[10px] font-bold mb-1">검증</div>
-              <div className="text-gray-400 flex justify-between"><span>재계산 합계 (수량 × 종가)</span><span className="text-gray-200 font-bold">{formatCurrency(recomputed)}</span></div>
+              {isOverseas && histFxRate > 1 && (
+                <div className="text-gray-400 flex justify-between">
+                  <span>당일 환율</span>
+                  <span className="text-sky-300 font-bold">₩{Math.round(histFxRate).toLocaleString()}</span>
+                </div>
+              )}
+              <div className="text-gray-400 flex justify-between">
+                <span>재계산 합계 ({isOverseas ? '수량 × 종가 × 환율' : '수량 × 종가'})</span>
+                <span className="text-gray-200 font-bold">{formatCurrency(recomputed)}</span>
+              </div>
+              {isOverseas && histFxRate > 1 && recomputed > 0 && (
+                <div className="text-gray-400 flex justify-between">
+                  <span>재계산 합계 (수량 × 종가, USD)</span>
+                  <span className="text-gray-200 font-bold">${(recomputed / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+                </div>
+              )}
               <div className="text-gray-400 flex justify-between"><span>저장된 평가자산</span><span className="text-gray-300 font-bold">{formatCurrency(stored)}</span></div>
+              {isOverseas && histFxRate > 1 && stored > 0 && (
+                <div className="text-gray-400 flex justify-between">
+                  <span>저장된 평가자산 (USD)</span>
+                  <span className="text-gray-300 font-bold">${(stored / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+                </div>
+              )}
               <div className="flex justify-between pt-0.5">
                 <span className="text-gray-500">상태</span>
                 <span className={`font-bold ${matched ? 'text-green-400' : 'text-amber-400'}`}>
