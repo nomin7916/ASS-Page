@@ -112,21 +112,23 @@ export default function UserInfoBar({
 
   return (
     <div className="flex items-center justify-between text-xs text-gray-500 px-1 gap-3">
-      <div className="flex items-center gap-3 min-w-0 flex-1">
-        <span className="hidden md:inline font-mono whitespace-nowrap">{email}</span>
-        {marketIndicators && (
-          <div className="hidden md:flex items-center">
-            <HeaderMarketChips marketIndicators={marketIndicators} />
-          </div>
-        )}
+      <div className="flex items-center gap-2 min-w-0 flex-1">
         {showTitleInput && (
           <input
             type="text"
             value={title || ''}
             onChange={(e) => setTitle(e.target.value)}
-            className="hidden md:block text-lg md:text-xl font-bold bg-transparent outline-none border-b border-transparent hover:border-gray-600 focus:border-blue-400 text-white transition-colors caret-white cursor-text min-w-0 flex-1 max-w-[280px]"
+            className="hidden md:block text-lg md:text-xl font-bold bg-transparent outline-none border-b border-transparent hover:border-gray-600 focus:border-blue-400 text-white transition-colors caret-white cursor-text flex-shrink-0 max-w-[280px]"
             placeholder="계좌명"
           />
+        )}
+        {showTitleInput && marketIndicators && (
+          <div className="hidden md:block w-px h-4 bg-gray-600/70 mx-1 flex-shrink-0" />
+        )}
+        {marketIndicators && (
+          <div className="hidden md:flex items-center">
+            <HeaderMarketChips marketIndicators={marketIndicators} />
+          </div>
         )}
       </div>
       <div className="flex items-center gap-1">
