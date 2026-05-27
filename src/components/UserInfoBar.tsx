@@ -113,6 +113,9 @@ export default function UserInfoBar({
   return (
     <div className="flex items-center justify-between text-xs text-gray-500 px-1 gap-3">
       <div className="flex items-center gap-2 min-w-0 flex-1">
+        {showIntegratedDashboard && (
+          <span className="hidden md:inline font-mono whitespace-nowrap text-gray-400">{email}</span>
+        )}
         {showTitleInput && (
           <input
             type="text"
@@ -122,7 +125,7 @@ export default function UserInfoBar({
             placeholder="계좌명"
           />
         )}
-        {showTitleInput && marketIndicators && (
+        {(showIntegratedDashboard || showTitleInput) && marketIndicators && (
           <div className="hidden md:block w-px h-4 bg-gray-600/70 mx-1 flex-shrink-0" />
         )}
         {marketIndicators && (
