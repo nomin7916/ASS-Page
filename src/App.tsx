@@ -872,15 +872,25 @@ export default function App() {
       const effective = computeEffectivePrincipal(date, localSortedHist, sortedDeposits, sortedWithdrawals, isOverseasChart);
       if (date >= portfolioStartDate) {
         const exactHist = histByDate.get(date);
-        // 해외계좌: evalAmount=KRW, principal=USD → 수익률을 USD 기준으로 통일
-        const overseasFx = isOverseasChart ? (cleanNum(marketIndicators?.usdkrw) || cleanNum(avgExchangeRate) || 1) : 1;
-        if (exactHist) {
+        if (isOverseasChart) {
+          // 해외계좌: USD 주가 이력으로만 계산 — KRW evalAmount/fxRate 완전 미사용
+          let usdEval = 0, hasData = false;
+          portfolio.forEach(item => {
+            if (item.type === 'deposit') { usdEval += cleanNum(item.depositAmount); hasData = true; }
+            else if (item.code && stockHistoryMap[item.code]) {
+              const p = getClosestValue(stockHistoryMap[item.code], date);
+              if (p) { usdEval += p * item.quantity; hasData = true; }
+            }
+          });
+          trueEvalAtDate = hasData ? usdEval : 0;
+          const usdPrin = cleanNum(principal);
+          if (hasData && usdPrin > 0) retRate = (usdEval - usdPrin) / usdPrin * 100;
+        } else if (exactHist) {
           trueEvalAtDate = exactHist.evalAmount;
           const storedPrin = cleanNum(exactHist.principal);
           const fallbackPrin = storedPrin > 0 ? storedPrin : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
           const histPrin = effective.value != null ? effective.value : fallbackPrin;
-          const evalUsd = exactHist.evalAmount / overseasFx;
-          retRate = histPrin > 0 ? ((evalUsd - histPrin) / histPrin * 100) : 0;
+          retRate = histPrin > 0 ? ((exactHist.evalAmount - histPrin) / histPrin * 100) : 0;
         } else {
           let hasTrueData = false;
           const hIdx = reversedHist.find(h => h.date <= date) || localSortedHist[0];
@@ -896,20 +906,21 @@ export default function App() {
             } else { trueEvalAtDate += cleanNum(item.evalAmount) * (baseEval / (totals.totalEval || 1)); }
           });
           if (!hasTrueData && hIdx) trueEvalAtDate = hIdx.evalAmount;
-          const evalForRate = (isOverseasChart && !hasTrueData && hIdx) ? trueEvalAtDate / overseasFx : trueEvalAtDate;
-          retRate = basePrin > 0 ? ((evalForRate - basePrin) / basePrin * 100) : 0;
+          retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
         }
       }
       let principalAmount = 0;
-      if (effective.value != null) {
+      if (isOverseasChart) {
+        // 해외계좌: USD 기준 — fxRate 미적용
+        for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount); }
+        for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
+        if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
+      } else if (effective.value != null) {
         principalAmount = effective.value;
       } else {
-        for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount) * (isOverseasChart ? (cleanNum(d.fxRate) || 1) : 1); }
-        for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)) * (isOverseasChart ? (cleanNum(w.fxRate) || 1) : 1); }
-        if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) {
-          const fallbackFx = isOverseasChart ? (cleanNum(avgExchangeRate) || marketIndicators?.usdkrw || 1) : 1;
-          principalAmount = cleanNum(principal) * fallbackFx;
-        }
+        for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount); }
+        for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
+        if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
       }
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount };
     });
