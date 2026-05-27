@@ -75,6 +75,11 @@ export default function PortfolioChart({
   const hoveredReturnRate = hoveredData?.returnRate ?? null;
 
   const chartDateSet = new Set(finalChartData.map(d => d.date));
+  const isOverseas = activePortfolioAccountType === 'overseas';
+  const fmtMoney = (v) => isOverseas
+    ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
+    : formatCurrency(v);
+
   const fmtMarkerAmt = (amt) => {
     const a = Math.abs(amt);
     if (a >= 1e8) return (amt / 1e8).toFixed(1).replace(/\.0$/, '') + '억';
@@ -363,7 +368,9 @@ export default function PortfolioChart({
                     : rawValue;
                   let displayVal: string;
                   if (entry.name === '총자산' || entry.name === '투자원금') {
-                    displayVal = formatNumber(rawValue);
+                    displayVal = isOverseas
+                      ? '$' + Number(rawValue).toLocaleString('en-US', { maximumFractionDigits: 0 })
+                      : formatNumber(rawValue);
                   } else {
                     const pointKey = CHART_NAME_TO_POINT_KEY[entry.name];
                     let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
@@ -418,11 +425,11 @@ export default function PortfolioChart({
                       {displayResult.rate > 0 ? '+' : displayResult.rate < 0 ? '' : ''}{displayResult.rate.toFixed(2)}%
                     </span>
                     <span className={`text-[10px] font-bold whitespace-nowrap ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
-                      ({displayResult.profit >= 0 ? '+' : ''}{formatCurrency(displayResult.profit)})
+                      ({displayResult.profit >= 0 ? '+' : ''}{fmtMoney(displayResult.profit)})
                     </span>
                     {displayResult.startEval != null && displayResult.endEval != null && (
                       <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                        ({formatCurrency(displayResult.startEval)} → {formatCurrency(displayResult.endEval)})
+                        ({fmtMoney(displayResult.startEval)} → {fmtMoney(displayResult.endEval)})
                       </span>
                     )}
                   </div>
