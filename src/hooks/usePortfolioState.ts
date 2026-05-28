@@ -389,10 +389,19 @@ export function usePortfolioState({
   };
 
   // ── 한국 ETF 과표기준가 이력 (분배금 과세 계산용) ──
-  // 구조: portfolio.taxBaseHistory[code] = { purchases: [...], sales: [...], exTaxBase: { 'YYYY-MM': number } }
+  // 구조: portfolio.taxBaseHistory[code] = { purchases: [...], sales: [...], exTaxBase: { 'YYYY-MM': number }, avgTaxBase: { 'YYYY-MM': number } }
   const _ensureTaxBase = (p, code) => {
     const existing = p.taxBaseHistory || {};
-    return { ...existing, [code]: existing[code] || { purchases: [], sales: [], exTaxBase: {} } };
+    const codeRec = existing[code] || {};
+    return {
+      ...existing,
+      [code]: {
+        purchases: codeRec.purchases || [],
+        sales: codeRec.sales || [],
+        exTaxBase: codeRec.exTaxBase || {},
+        avgTaxBase: codeRec.avgTaxBase || {},
+      },
+    };
   };
 
   const updateTaxBasePurchases = (portfolioId, code, purchases) => {
@@ -421,6 +430,18 @@ export function usePortfolioState({
       if (price == null || !(price > 0)) delete exTaxBase[yearMonth];
       else exTaxBase[yearMonth] = price;
       tbh[code] = { ...tbh[code], exTaxBase };
+      return { ...p, taxBaseHistory: tbh };
+    }));
+  };
+
+  const updateTaxBaseAvgPrice = (portfolioId, code, yearMonth, price) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const tbh = _ensureTaxBase(p, code);
+      const avgTaxBase = { ...(tbh[code].avgTaxBase || {}) };
+      if (price == null || !(price > 0)) delete avgTaxBase[yearMonth];
+      else avgTaxBase[yearMonth] = price;
+      tbh[code] = { ...tbh[code], avgTaxBase };
       return { ...p, taxBaseHistory: tbh };
     }));
   };
@@ -593,5 +614,6 @@ export function usePortfolioState({
     updateTaxBasePurchases,
     updateTaxBaseSales,
     updateTaxBaseExPrice,
+    updateTaxBaseAvgPrice,
   };
 }

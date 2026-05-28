@@ -19,6 +19,7 @@ export function getCodeTaxBase(portfolio, code) {
     purchases: rec.purchases || [],
     sales: rec.sales || [],
     exTaxBase: rec.exTaxBase || {},
+    avgTaxBase: rec.avgTaxBase || {},
   };
 }
 

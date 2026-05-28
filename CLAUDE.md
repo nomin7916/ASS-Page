@@ -74,14 +74,14 @@ src/
 `updatePortfolioMemo`, `movePortfolio`, `handleUpdate`, `handleDeleteStock`,
 `handleAddStock`, `handleAddFund`,
 `updateDividendHistory`, `updatePortfolioDividendHistory`, `updatePortfolioActualDividend`,
-`updateTaxBasePurchases`, `updateTaxBaseSales`, `updateTaxBaseExPrice` (한국 ETF 과표 입력)
+`updateTaxBasePurchases`, `updateTaxBaseSales`, `updateTaxBaseExPrice`, `updateTaxBaseAvgPrice` (한국 ETF 과표 입력)
 
 ### 분배금 데이터 구조
 - `portfolio.dividendHistory`: `{ [code]: { [YYYY-MM]: perShareAmount } }` — API 조회
 - `portfolio.actualDividend`: `{ [code]: { [YYYY-MM]: absoluteAmount } }` — 사용자 입력(절댓값, 수량 무관)
 - `portfolio.rowColor`: 계좌별 색상 (hex) — DividendSummaryTable compact 그라데이션에 사용
 - **저장 키는 배당락월(YYYY-MM) 기준** 유지. dividendExDate/actualDividend/actualDividendQty/dividendTaxAmounts/actualAfterTax* 동일.
-- `portfolio.taxBaseHistory`: `{ [code]: { purchases: [{id,date,shares,taxBasePrice}], sales: [{id,date,shares}], exTaxBase: {[YYYY-MM]: number} } }` — 한국 ETF 과표 입력. KrEtfTaxModal에서 사용자가 직접 매입/매도/배당락 과표를 기록하고 `calculateKrEtfDividendTax`(utils.ts)로 세금 산출. 적용 시 `dividendTaxAmounts[code][ym]`에 저장 → 기존 수동값과 동급 최우선.
+- `portfolio.taxBaseHistory`: `{ [code]: { purchases: [{id,date,shares,taxBasePrice}], sales: [{id,date,shares}], exTaxBase: {[YYYY-MM]: number}, avgTaxBase: {[YYYY-MM]: number} } }` — 한국 ETF 과표 입력. `exTaxBase`(배당락일 과표) / `avgTaxBase`(시점별 평균 과표) 모두 월별 저장. `KrEtfTaxMatrix`의 5단 셀(배당 과표·보유 주식수·평균 과표·과세 과표·예상 과세)에서 직접 입력. **평균 과표 자동 산출(매입 이벤트 기반)·분배금 표 세금 적용 로직은 추후 작업.** `calculateKrEtfDividendTax`(utils.ts) 함수는 `dividendTaxAmounts[code][ym]`을 채울 때 사용 가능하지만 현재 UI에서는 호출되지 않음.
 - 모달 노출 조건: `accountType ∈ {portfolio, dividend, isa, pension, dc-irp}` (한국 ETF 보유 가능 타입). 탭 무관 항상 노출. `npm run verify:tax`로 계산 함수 단위 테스트.
 
 ### 분배금 현황 = 지급월 기준 표시

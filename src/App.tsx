@@ -495,6 +495,7 @@ export default function App() {
     updateTaxBasePurchases,
     updateTaxBaseSales,
     updateTaxBaseExPrice,
+    updateTaxBaseAvgPrice,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
 
@@ -2138,6 +2139,7 @@ export default function App() {
             updateTaxBasePurchases={updateTaxBasePurchases}
             updateTaxBaseSales={updateTaxBaseSales}
             updateTaxBaseExPrice={updateTaxBaseExPrice}
+            updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
             notify={notify}
             usdkrw={marketIndicators.usdkrw || 1300}
             holidays={marketHolidays}
