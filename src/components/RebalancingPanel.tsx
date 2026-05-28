@@ -1022,10 +1022,10 @@ export default function RebalancingPanel({
                     );
                   })()}
                   {!H('curRatio') && <td className="py-3 px-3 text-center font-bold text-gray-400">100%</td>}
-                  {!H('action') && <td className="py-3 px-3"></td>}
-                  {!H('extraQty') && <td className="py-3 px-3"></td>}
-                  {!H('maxAdd') && <td className="py-3 px-3"></td>}
-                  {!H('expQty') && <td className="py-3 px-3"></td>}
+                  {H('cost') && !H('action') && <td className="py-3 px-3"></td>}
+                  {H('cost') && !H('extraQty') && <td className="py-3 px-3"></td>}
+                  {H('cost') && !H('maxAdd') && <td className="py-3 px-3"></td>}
+                  {H('cost') && !H('expQty') && <td className="py-3 px-3"></td>}
                   {!H('cost') && (() => {
                     const isOv = activePortfolioAccountType === 'overseas';
                     const fxRate = marketIndicators.usdkrw || 1;
@@ -1034,8 +1034,9 @@ export default function RebalancingPanel({
                     const isRebalance = settings.mode === 'rebalance';
                     const depositLabel = isRebalance ? '예수금' : '사용예수금';
                     const balanceColor = rebalBalance > 0 ? 'text-sky-300' : rebalBalance < 0 ? 'text-red-400' : 'text-gray-500';
+                    const absorbedCount = [!H('action'), !H('extraQty'), !H('maxAdd'), !H('expQty')].filter(Boolean).length;
                     return (
-                      <td className="py-3 px-3 text-right align-top">
+                      <td colSpan={absorbedCount + 1} className="py-3 px-3 text-right align-top">
                         <div className="flex justify-end mb-1.5">
                           <button
                             type="button"
