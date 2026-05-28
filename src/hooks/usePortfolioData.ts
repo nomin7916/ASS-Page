@@ -87,6 +87,12 @@ export function usePortfolioData({
       const curEval = item.type === 'fund' && !(qty > 0 && price > 0)
         ? cleanNum(item.evalAmount)
         : price * qty;
+      const invForReturn = item.type === 'fund'
+        ? cleanNum(item.investAmount)
+        : (activePortfolioAccountType === 'overseas' || activePortfolioAccountType === 'gold')
+          ? cleanNum(item.purchasePrice) * qty
+          : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * qty);
+      const returnRate = invForReturn > 0 ? ((curEval - invForReturn) / invForReturn) * 100 : 0;
       const isLiveMirror = mirrorState === 'on' && !item[overrideField];
       const liveRatio = totals.totalEval > 0 ? (curEval * rebalFxRate / totals.totalEval * 100) : 0;
       const effectiveTargetRatio = isLiveMirror
@@ -98,7 +104,7 @@ export function usePortfolioData({
       const expEval = (qty + action + extraQty) * price;
       const cost = action * price;
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
-      return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio };
+      return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio, returnRate };
     });
     if (rebalanceSortConfig.key === 'code-global') {
       data.sort((a, b) => (a.code || '').localeCompare(b.code || '') * rebalanceSortConfig.direction);

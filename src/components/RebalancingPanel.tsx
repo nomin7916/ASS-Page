@@ -23,6 +23,7 @@ const getAssetClass = (item) => item.type === 'fund'
 const RB_COLS = [
   { key: 'category', label: '구분' },
   { key: 'changeRate', label: '등락률' },
+  { key: 'returnRate', label: '수익률' },
   { key: 'name', label: '종목명' },
   { key: 'code', label: '코드' },
   { key: 'curEval', label: '평가금' },
@@ -32,8 +33,8 @@ const RB_COLS = [
   { key: 'action', label: '수량' },
   { key: 'extraQty', label: '추가' },
   { key: 'maxAdd', label: '추가가능' },
-  { key: 'cost', label: '실구매비용' },
   { key: 'expQty', label: '예상 주식수' },
+  { key: 'cost', label: '실구매비용' },
   { key: 'expEval', label: '예상평가금' },
   { key: 'expRatio', label: '예상비중' },
 ];
@@ -129,12 +130,14 @@ export default function RebalancingPanel({
 
   const CAT_W = 80;
   const CHRATE_W = 65;
+  const RETURN_W = 65;
   const changeRateLeft = H('category') ? 0 : CAT_W;
-  const nameLeft = changeRateLeft + (H('changeRate') ? 0 : CHRATE_W);
+  const returnRateLeft = changeRateLeft + (H('changeRate') ? 0 : CHRATE_W);
+  const nameLeft = returnRateLeft + (H('returnRate') ? 0 : RETURN_W);
 
-  const stickySpanKeys = ['category', 'changeRate', 'name'];
+  const stickySpanKeys = ['category', 'changeRate', 'returnRate', 'name'];
   const stickySpanCount = stickySpanKeys.filter(k => !H(k)).length;
-  const retirementColSpan = 15 - hiddenColumns.length;
+  const retirementColSpan = 16 - hiddenColumns.length;
 
   const hideStrip = (key) => (
     <div
@@ -512,37 +515,43 @@ export default function RebalancingPanel({
                   return (
                     <tr>
                       {!H('category') && (
-                        <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600 sticky top-0 left-0 z-30 bg-[#1e293b] relative" onClick={() => handleRebalanceSort(null)} title="클릭하여 정렬 초기화">
+                        <th className="py-3 px-3 min-w-[80px] text-center cursor-pointer hover:bg-gray-700 border-r border-gray-600 sticky top-0 left-0 z-30 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort(null)} title="클릭하여 정렬 초기화">
                           {hideStrip('category')}
                           구분
                         </th>
                       )}
                       {!H('changeRate') && (
-                        <th className="py-3 px-2 min-w-[65px] text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-30 bg-[#1e293b] relative" style={{ left: changeRateLeft }} onClick={() => handleRebalanceSort('changeRate')}>
+                        <th className="py-3 px-2 min-w-[65px] text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-30 bg-[#1e293b] relative whitespace-nowrap" style={{ left: changeRateLeft }} onClick={() => handleRebalanceSort('changeRate')}>
                           {hideStrip('changeRate')}
                           등락률{arr('changeRate')}
                         </th>
                       )}
+                      {!H('returnRate') && (
+                        <th className="py-3 px-2 min-w-[65px] text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-30 bg-[#1e293b] relative whitespace-nowrap" style={{ left: returnRateLeft }} onClick={() => handleRebalanceSort('returnRate')}>
+                          {hideStrip('returnRate')}
+                          수익률{arr('returnRate')}
+                        </th>
+                      )}
                       {!H('name') && (
-                        <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky top-0 z-30 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] relative" style={{ left: nameLeft }} onClick={() => handleRebalanceSort('name')}>
+                        <th className="py-3 px-3 min-w-[110px] text-center text-gray-300 cursor-pointer hover:bg-gray-700 sticky top-0 z-30 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] relative whitespace-nowrap" style={{ left: nameLeft }} onClick={() => handleRebalanceSort('name')}>
                           {hideStrip('name')}
                           종목명{arr('name')}
                         </th>
                       )}
                       {!H('code') && (
-                        <th className={`py-3 px-3 min-w-[90px] text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative ${sk === 'code-global' ? 'text-gray-200' : 'text-gray-500'}`} title="왼쪽: 구분별 재배치  |  오른쪽: 코드순 전체 정렬" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); e.clientX < r.left + r.width / 2 ? handleRebalanceSort(null) : handleRebalanceSort('code-global'); }}>
+                        <th className={`py-3 px-3 min-w-[90px] text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap ${sk === 'code-global' ? 'text-gray-200' : 'text-gray-500'}`} title="왼쪽: 구분별 재배치  |  오른쪽: 코드순 전체 정렬" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); e.clientX < r.left + r.width / 2 ? handleRebalanceSort(null) : handleRebalanceSort('code-global'); }}>
                           {hideStrip('code')}
                           코드
                         </th>
                       )}
                       {!H('curEval') && (
-                        <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('curEval')}>
+                        <th className="py-3 px-3 min-w-[120px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('curEval')}>
                           {hideStrip('curEval')}
                           평가금{arr('curEval')}
                         </th>
                       )}
                       {!H('currentPrice') && (
-                        <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('currentPrice')}>
+                        <th className="py-3 px-3 min-w-[100px] text-gray-500 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('currentPrice')}>
                           {hideStrip('currentPrice')}
                           현재가{arr('currentPrice')}
                         </th>
@@ -551,7 +560,7 @@ export default function RebalancingPanel({
                         const targetMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
                         const isTargetSorted = sk === 'targetRatio';
                         return (
-                        <th className="py-2 px-3 min-w-[120px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b] relative">
+                        <th className="py-2 px-3 min-w-[120px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap">
                           {hideStrip('targetRatio')}
                           <div className="flex flex-col items-center gap-1">
                             <div className="relative w-full">
@@ -687,49 +696,49 @@ export default function RebalancingPanel({
                         );
                       })()}
                       {!H('curRatio') && (
-                        <th className="py-3 px-3 min-w-[80px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('curEval')}>
+                        <th className="py-3 px-3 min-w-[80px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('curEval')}>
                           {hideStrip('curRatio')}
                           현재비중{arr('curEval')}
                         </th>
                       )}
                       {!H('action') && (
-                        <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('action')}>
+                        <th className="py-3 px-3 min-w-[75px] text-blue-300 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('action')}>
                           {hideStrip('action')}
                           수량{arr('action')}
                         </th>
                       )}
                       {!H('extraQty') && (
-                        <th className="py-3 px-3 min-w-[65px] text-orange-300 text-center sticky top-0 z-20 bg-[#1e293b] relative">
+                        <th className="py-3 px-3 min-w-[65px] text-orange-300 text-center sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap">
                           {hideStrip('extraQty')}
                           추가
                         </th>
                       )}
                       {!H('maxAdd') && (
-                        <th className="py-3 px-3 min-w-[85px] text-cyan-400 text-center sticky top-0 z-20 bg-[#1e293b] relative">
+                        <th className="py-3 px-3 min-w-[85px] text-cyan-400 text-center sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap">
                           {hideStrip('maxAdd')}
                           추가 가능
                         </th>
                       )}
-                      {!H('cost') && (
-                        <th className="py-3 px-3 min-w-[120px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('cost')}>
-                          {hideStrip('cost')}
-                          실 구매비용{arr('cost')}
-                        </th>
-                      )}
                       {!H('expQty') && (
-                        <th className="py-3 px-3 min-w-[90px] text-blue-300 text-center font-normal sticky top-0 z-20 bg-[#1e293b] relative">
+                        <th className="py-3 px-3 min-w-[90px] text-blue-300 text-center font-normal sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap">
                           {hideStrip('expQty')}
                           예상 주식수
                         </th>
                       )}
+                      {!H('cost') && (
+                        <th className="py-3 px-3 min-w-[100px] text-blue-300 text-center font-normal cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('cost')}>
+                          {hideStrip('cost')}
+                          실 구매비용{arr('cost')}
+                        </th>
+                      )}
                       {!H('expEval') && (
-                        <th className="py-3 px-3 min-w-[120px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('expEval')}>
+                        <th className="py-3 px-3 min-w-[100px] text-yellow-500 text-center font-bold cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('expEval')}>
                           {hideStrip('expEval')}
                           예상평가금{arr('expEval')}
                         </th>
                       )}
                       {!H('expRatio') && (
-                        <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative" onClick={() => handleRebalanceSort('expRatio')}>
+                        <th className="py-3 px-3 min-w-[85px] text-yellow-500 font-bold text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('expRatio')}>
                           {hideStrip('expRatio')}
                           예상비중{arr('expRatio')}
                         </th>
@@ -815,6 +824,11 @@ export default function RebalancingPanel({
                             <span className={`text-xs font-bold ${(item.changeRate || 0) > 0 ? 'text-red-400' : (item.changeRate || 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.changeRate != null ? formatChangeRate(item.changeRate) : '-'}</span>
                           </td>
                         )}
+                        {!H('returnRate') && (
+                          <td className={`py-3 px-2 text-center ${stickyCellClass} transition-colors focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: returnRateLeft, zIndex: 5 }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                            <span className={`text-xs font-bold ${(item.returnRate || 0) > 0 ? 'text-red-400' : (item.returnRate || 0) < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{item.returnRate != null ? formatChangeRate(item.returnRate) : '-'}</span>
+                          </td>
+                        )}
                         {!H('name') && (
                           <td className={`py-3 px-4 text-center font-bold ${stickyCellClass} transition-colors [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none`} style={{ position: 'sticky', left: nameLeft, zIndex: 5, color: itemColor }} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
                             {(() => { const url = getItemUrl(item); return url ? <a href={url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 hover:underline" style={{ color: itemColor }}>{num}. {item.name}</a> : <div className="line-clamp-2">{num}. {item.name}</div>; })()}
@@ -824,10 +838,10 @@ export default function RebalancingPanel({
                           <td className="py-3 px-3 text-center text-gray-500 font-mono text-xs focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.code}</td>
                         )}
                         {!H('curEval') && (
-                          <td className="py-3 px-3 text-gray-400 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.curEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.curEval * usdkrw)}</span></div> : formatCurrency(item.curEval)}</td>
+                          <td className="py-3 px-3 text-gray-400 text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.curEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.curEval * usdkrw)}</span></div> : formatCurrency(item.curEval)}</td>
                         )}
                         {!H('currentPrice') && (
-                          <td className="py-3 px-3 text-gray-500 font-mono text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}</td>
+                          <td className="py-3 px-3 text-gray-500 font-mono text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}</td>
                         )}
                         {!H('targetRatio') && (() => {
                           const itemCurRatio = totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0;
@@ -936,17 +950,17 @@ export default function RebalancingPanel({
                         {!H('maxAdd') && (
                           <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd === 0 ? '0' : (maxAdd > 0 ? '+' : '') + maxAdd.toFixed(1)}</td>
                         )}
-                        {!H('cost') && (
-                          <td className={`py-3 px-3 font-bold text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${displayAdjustedCost > 0 ? 'text-sky-300' : displayAdjustedCost < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(displayAdjustedCost)}</span><span className="text-[11px] opacity-70">{formatCurrency(displayAdjustedCost * usdkrw)}</span></div> : formatCurrency(displayAdjustedCost)}</td>
-                        )}
                         {!H('expQty') && (() => {
                           const expQty = cleanNum(item.quantity) + totalAction;
                           return (
-                            <td className="py-3 px-3 text-right text-gray-200 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(expQty)}</td>
+                            <td className="py-3 px-3 text-center text-gray-200 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(expQty)}</td>
                           );
                         })()}
+                        {!H('cost') && (
+                          <td className={`py-3 px-3 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${displayAdjustedCost > 0 ? 'text-sky-300' : displayAdjustedCost < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(displayAdjustedCost)}</span><span className="text-[11px] opacity-70">{formatCurrency(displayAdjustedCost * usdkrw)}</span></div> : formatCurrency(displayAdjustedCost)}</td>
+                        )}
                         {!H('expEval') && (
-                          <td className="py-3 px-3 font-bold text-yellow-500 text-right focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUSD(item.expEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.expEval * usdkrw)}</span></div> : formatCurrency(item.expEval)}</td>
+                          <td className="py-3 px-3 font-bold text-yellow-500 text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.expEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.expEval * usdkrw)}</span></div> : formatCurrency(item.expEval)}</td>
                         )}
                         {!H('expRatio') && (
                           <td className="py-3 px-3 text-center text-yellow-600 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{item.expRatio.toFixed(isOverseas ? 2 : 1)}%</td>
@@ -992,7 +1006,7 @@ export default function RebalancingPanel({
                     <td colSpan={stickySpanCount} className="py-3 px-3 text-center uppercase tracking-widest text-gray-500 text-xs sticky left-0 z-[5] bg-[#1e293b]">TOTAL</td>
                   )}
                   {!H('code') && <td className="py-3 px-3"></td>}
-                  {!H('curEval') && (() => { const totCurEval = rebalanceData.reduce((s, d) => s + d.curEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 text-gray-300 font-bold text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totCurEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totCurEval * fxRate)}</span></div> : formatCurrency(totCurEval)}</td>; })()}
+                  {!H('curEval') && (() => { const totCurEval = rebalanceData.reduce((s, d) => s + d.curEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 text-gray-300 font-bold text-center">{isOv ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUS(totCurEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totCurEval * fxRate)}</span></div> : formatCurrency(totCurEval)}</td>; })()}
                   {!H('currentPrice') && <td className="py-3 px-3"></td>}
                   {!H('targetRatio') && (() => {
                     const targetSum = rebalanceData.reduce((s, d) => s + (d.effectiveTargetRatio || 0), 0);
@@ -1011,6 +1025,7 @@ export default function RebalancingPanel({
                   {!H('action') && <td className="py-3 px-3"></td>}
                   {!H('extraQty') && <td className="py-3 px-3"></td>}
                   {!H('maxAdd') && <td className="py-3 px-3"></td>}
+                  {!H('expQty') && <td className="py-3 px-3"></td>}
                   {!H('cost') && (() => {
                     const isOv = activePortfolioAccountType === 'overseas';
                     const fxRate = marketIndicators.usdkrw || 1;
@@ -1078,8 +1093,7 @@ export default function RebalancingPanel({
                       </td>
                     );
                   })()}
-                  {!H('expQty') && <td className="py-3 px-3"></td>}
-                  {!H('expEval') && (() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-right">{isOv ? <div className="flex flex-col items-end gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
+                  {!H('expEval') && (() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-center">{isOv ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
                   {!H('expRatio') && <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>}
                 </tr>
                 {showRetirementStats && (() => {
