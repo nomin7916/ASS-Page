@@ -53,7 +53,7 @@ export default function KrEtfTaxMatrix({
       const avgVal = avgTaxBase[ym];
       const exNum = safeNum(exVal);
       const avgNum = safeNum(avgVal);
-      const taxBasePerShare = avgNum - exNum;
+      const taxBasePerShare = exNum - avgNum;
       const expected = Math.max(0, taxBasePerShare) * currentQty;
       return { ym, exVal, avgVal, exNum, avgNum, taxBasePerShare, expected };
     });
@@ -90,7 +90,7 @@ export default function KrEtfTaxMatrix({
   return (
     <div className="overflow-x-auto">
       <div className="px-3 py-2 bg-[#0f172a]/60 border-b border-gray-700/50 flex items-center gap-3 flex-wrap text-[10px]">
-        <span className="text-gray-500">{CURRENT_YEAR}년 · 과세 과표 = 평균 과표 − 배당 과표 · 예상 과세 = max(0, 과세과표) × 보유주식수</span>
+        <span className="text-gray-500">{CURRENT_YEAR}년 · 과세 과표 = 배당 과표 − 평균 과표 · 예상 과세 = max(0, 과세과표) × 보유주식수</span>
         <span className="text-gray-600">|</span>
         <span className="text-gray-500">연간 예상 과세 합계</span>
         <span className="text-emerald-400 font-semibold tabular-nums">{formatCurrency(grandExpected)}</span>
@@ -160,7 +160,7 @@ export default function KrEtfTaxMatrix({
                           className={avgInputCls}
                           title="해당 시점의 평균 과표기준가 (1주당) — 다음 단계에서 매입 이벤트 기반 자동 계산 예정"
                         />
-                        <div className="text-[9px] text-sky-300 tabular-nums text-right px-0.5" title="과세 과표 = 평균 과표 − 배당 과표 (1주당)">
+                        <div className="text-[9px] text-sky-300 tabular-nums text-right px-0.5" title="과세 과표 = 배당 과표 − 평균 과표 (1주당)">
                           과세 {fmtTaxBase(d.taxBasePerShare)}
                         </div>
                         <div className="text-[10px] text-emerald-400 tabular-nums text-right px-0.5 font-medium" title="예상 과세 = max(0, 과세 과표) × 보유 주식수">
@@ -338,7 +338,7 @@ export default function KrEtfTaxMatrix({
         </tfoot>
       </table>
       <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-        배당 과표·평균 과표 입력 → 과세 과표·예상 과세 자동 계산 · 데이터는 자동 저장 · 평균 과표 자동 산출은 다음 단계에서 추가 예정
+        배당 과표·평균 과표 입력 → 과세 과표(배당-평균)·예상 과세 자동 계산 · 데이터는 자동 저장 · 평균 과표 자동 산출은 다음 단계에서 추가 예정
       </div>
     </div>
   );
