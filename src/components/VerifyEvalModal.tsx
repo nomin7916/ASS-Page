@@ -191,17 +191,17 @@ export default function VerifyEvalModal({
     let cum = 0;
     for (const d of deps) {
       if ((d.date || '') > date) break;
-      if (!d.noPrincipal) cum += cleanNum(d.amount) * (isOverseas ? (cleanNum(d.fxRate) || 1) : 1);
+      if (!d.noPrincipal) cum += cleanNum(d.amount);
     }
     for (const w of wds) {
       if ((w.date || '') > date) break;
       if (!w.noPrincipal) {
         const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
-        cum -= deducted * (isOverseas ? (cleanNum(w.fxRate) || 1) : 1);
+        cum -= deducted;
       }
     }
     return Math.max(0, cum);
-  }, [depositHistory, depositHistory2, date, isOverseas]);
+  }, [depositHistory, depositHistory2, date]);
 
   const hasCashFlow = depositsOnDate.length > 0 || withdrawalsOnDate.length > 0;
   const effective = useMemo(
@@ -251,7 +251,7 @@ export default function VerifyEvalModal({
       return next;
     }));
     notify(v > 0
-      ? `${formatShortDate(date)} 투자원금 ${Math.round(v).toLocaleString()}원으로 수동 설정`
+      ? `${formatShortDate(date)} 투자원금 ${isOverseas ? `$${Math.round(v).toLocaleString('en-US')}` : `${Math.round(v).toLocaleString()}원`}으로 수동 설정`
       : `${formatShortDate(date)} 투자원금 수동 설정 해제 — 입출금 누적으로 복귀`, 'success');
   };
 
@@ -418,7 +418,11 @@ export default function VerifyEvalModal({
                         )}
                       </td>
                       <td className={`py-1.5 ${cellPad} text-center font-bold whitespace-nowrap ${badge.cls}`}>{badge.label}</td>
-                      <td className={`py-1.5 ${cellPad} text-gray-200 font-bold whitespace-nowrap`}>{formatCurrency(r.evalAmt)}</td>
+                      <td className={`py-1.5 ${cellPad} text-gray-200 font-bold whitespace-nowrap`}>
+                        {isOverseas && histFxRate > 1
+                          ? `$${(r.evalAmt / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                          : formatCurrency(r.evalAmt)}
+                      </td>
                       <td className="py-1.5 px-1 text-center">
                         {!r.isDeposit && (
                           <button className="text-gray-600 hover:text-red-400" title="이 날짜에서 종목 제거" onClick={() => removeRow(idx)}>
@@ -474,26 +478,37 @@ export default function VerifyEvalModal({
                 </div>
               )}
               <div className="text-gray-400 flex justify-between">
-                <span>재계산 합계 ({isOverseas ? '수량 × 종가 × 환율' : '수량 × 종가'})</span>
-                <span className="text-gray-200 font-bold">{formatCurrency(recomputed)}</span>
+                <span>재계산 합계 ({isOverseas ? '수량 × 종가' : '수량 × 종가'})</span>
+                <span className="text-gray-200 font-bold">
+                  {isOverseas && histFxRate > 1
+                    ? `$${(recomputed / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                    : formatCurrency(recomputed)}
+                </span>
               </div>
               {isOverseas && histFxRate > 1 && recomputed > 0 && (
                 <div className="text-gray-400 flex justify-between">
-                  <span>재계산 합계 (수량 × 종가, USD)</span>
-                  <span className="text-gray-200 font-bold">${(recomputed / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+                  <span>재계산 합계 (수량 × 종가 × 환율, ₩)</span>
+                  <span className="text-gray-500">{formatCurrency(recomputed)}</span>
                 </div>
               )}
-              <div className="text-gray-400 flex justify-between"><span>저장된 평가자산</span><span className="text-gray-300 font-bold">{formatCurrency(stored)}</span></div>
+              <div className="text-gray-400 flex justify-between">
+                <span>저장된 평가자산</span>
+                <span className="text-gray-300 font-bold">
+                  {isOverseas && histFxRate > 1 && stored > 0
+                    ? `$${(stored / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                    : formatCurrency(stored)}
+                </span>
+              </div>
               {isOverseas && histFxRate > 1 && stored > 0 && (
                 <div className="text-gray-400 flex justify-between">
-                  <span>저장된 평가자산 (USD)</span>
-                  <span className="text-gray-300 font-bold">${(stored / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+                  <span>저장된 평가자산 (₩)</span>
+                  <span className="text-gray-500">{formatCurrency(stored)}</span>
                 </div>
               )}
               <div className="flex justify-between pt-0.5">
                 <span className="text-gray-500">상태</span>
                 <span className={`font-bold ${matched ? 'text-green-400' : 'text-amber-400'}`}>
-                  {recomputed <= 0 ? '⚪ 데이터없음' : matched ? '✅ 일치' : `🔺 불일치 (차이 ${formatCurrency(Math.round(recomputed - stored))})`}
+                  {recomputed <= 0 ? '⚪ 데이터없음' : matched ? '✅ 일치' : `🔺 불일치 (차이 ${isOverseas && histFxRate > 1 ? `$${Math.round((recomputed - stored) / histFxRate).toLocaleString('en-US')}` : formatCurrency(Math.round(recomputed - stored))})`}
                 </span>
               </div>
             </div>
@@ -579,17 +594,29 @@ export default function VerifyEvalModal({
                 {stored > 0 && (
                   <div className="text-gray-400 flex justify-between">
                     <span>저장 평가자산</span>
-                    <span className="text-gray-200 font-bold">{formatCurrency(stored)}</span>
-                  </div>
-                )}
-                {principalOnDate > 0 && stored > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">평가손익</span>
-                    <span className={`font-bold ${stored - principalOnDate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                      {stored - principalOnDate >= 0 ? '+' : ''}{formatCurrency(Math.round(stored - principalOnDate))}
+                    <span className="text-gray-200 font-bold">
+                      {isOverseas && histFxRate > 1
+                        ? `$${(stored / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                        : formatCurrency(stored)}
                     </span>
                   </div>
                 )}
+                {principalOnDate > 0 && stored > 0 && (() => {
+                  const gain = isOverseas && histFxRate > 1
+                    ? stored / histFxRate - principalOnDate
+                    : stored - principalOnDate;
+                  return (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">평가손익</span>
+                      <span className={`font-bold ${gain >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {gain >= 0 ? '+' : ''}
+                        {isOverseas && histFxRate > 1
+                          ? `$${Math.round(gain).toLocaleString('en-US')}`
+                          : formatCurrency(Math.round(gain))}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 

@@ -129,17 +129,19 @@ export const cleanNum = (val) => {
 };
 
 // 입출금 내역 누적합 — 특정 날짜까지 (포함). "anchor + delta" 모델용.
-const cumDepositsUpTo = (date, depositHistory, depositHistory2, isOverseas) => {
+// overseas 계좌는 amount가 USD이므로 fxRate 곱하지 않고 USD 합산.
+// 비overseas 계좌도 fxRate=1이므로 동일 결과.
+const cumDepositsUpTo = (date, depositHistory, depositHistory2) => {
   let cum = 0;
   for (const d of depositHistory || []) {
     if ((d.date || '') > date) continue;
-    if (!d.noPrincipal) cum += cleanNum(d.amount) * (isOverseas ? (cleanNum(d.fxRate) || 1) : 1);
+    if (!d.noPrincipal) cum += cleanNum(d.amount);
   }
   for (const w of depositHistory2 || []) {
     if ((w.date || '') > date) continue;
     if (!w.noPrincipal) {
       const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
-      cum -= deducted * (isOverseas ? (cleanNum(w.fxRate) || 1) : 1);
+      cum -= deducted;
     }
   }
   return cum;
@@ -158,8 +160,8 @@ export const computeEffectivePrincipal = (date, history, depositHistory, deposit
     if (!anchor || (h.date || '') > (anchor.date || '')) anchor = h;
   }
   if (!anchor) return { value: null, anchor: null };
-  const cumAtDate = cumDepositsUpTo(date, depositHistory, depositHistory2, isOverseas);
-  const cumAtAnchor = cumDepositsUpTo(anchor.date, depositHistory, depositHistory2, isOverseas);
+  const cumAtDate = cumDepositsUpTo(date, depositHistory, depositHistory2);
+  const cumAtAnchor = cumDepositsUpTo(anchor.date, depositHistory, depositHistory2);
   return { value: cleanNum(anchor.principal) + (cumAtDate - cumAtAnchor), anchor };
 };
 
