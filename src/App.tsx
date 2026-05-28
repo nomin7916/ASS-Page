@@ -548,7 +548,6 @@ export default function App() {
     }
     setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
-    setCompStocks(stateData.compStocks || defaultCompStocks);
     if (stateData.adminAccessAllowed !== undefined) setAdminAccessAllowed(stateData.adminAccessAllowed);
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
@@ -637,7 +636,6 @@ export default function App() {
     }
     if (stateData.customLinks) setCustomLinks(stateData.customLinks);
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
-    if (stateData.compStocks) setCompStocks(stateData.compStocks);
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
@@ -763,6 +761,19 @@ export default function App() {
     prevActivePortfolioIdRef.current = activePortfolioId;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePortfolioId]);
+
+  // 통합 대시보드 ↔ 개별 계좌 전환 시 비교종목 상태 분리
+  useEffect(() => {
+    if (showIntegratedDashboard) {
+      setCompStocks(defaultCompStocks);
+    } else if (activePortfolioId) {
+      const saved = accountChartStatesRef.current[activePortfolioId];
+      if (saved?.compStocks) {
+        setCompStocks(saved.compStocks.map((s) => ({ ...s, loading: false })));
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showIntegratedDashboard]);
 
   const {
     totals,
@@ -1547,8 +1558,14 @@ export default function App() {
       }
     }
     // 활성 포트폴리오의 차트 상태(비교종목 포함)를 항상 최신으로 유지
+    // 통합 대시보드 모드에서는 defaultCompStocks 가 계좌 저장값을 덮어쓰지 않도록 보호
     if (activePortfolioId) {
-      accountChartStatesRef.current[activePortfolioId] = { ...currentChartStateRef.current };
+      const stateToSave = { ...currentChartStateRef.current };
+      if (showIntegratedDashboard) {
+        const prevCompStocks = accountChartStatesRef.current[activePortfolioId]?.compStocks;
+        if (prevCompStocks) stateToSave.compStocks = prevCompStocks;
+      }
+      accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap }, intHistory, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
