@@ -429,20 +429,20 @@ export default function KrEtfTaxMatrix({
                             이벤트가 없습니다. '행 추가'로 매입/매도를 입력하세요.
                           </div>
                         ) : (
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-[10px]">
+                          <div>
+                            <table className="text-[10px] border-collapse">
                               <thead className="text-gray-500 border-b border-gray-700/50">
                                 <tr>
-                                  <th className="text-left py-1 pl-3 font-normal w-[120px]">일자</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[100px]">
+                                  <th className="text-left py-1 pl-2 pr-1 font-normal w-[108px]">일자</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[84px]">
                                     전일 수량
                                     <span className="text-gray-600 font-normal ml-0.5" title="자산검증 전일 수량 자동 조회">↺</span>
                                   </th>
-                                  <th className="text-right py-1 px-1 font-normal w-[80px]">매도/매수</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[80px]">조정 수량</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[100px]">과표기준가</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[100px]">평균 과표</th>
-                                  <th className="py-1 pr-2 w-[24px]"></th>
+                                  <th className="text-right py-1 px-1 font-normal w-[68px]">매도/매수</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[64px]">조정 수량</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[88px]">과표기준가</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[80px]">평균 과표</th>
+                                  <th className="py-1 px-1 w-[20px]"></th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -458,30 +458,23 @@ export default function KrEtfTaxMatrix({
                                   const fpDiffers = hasFpData && fpValue !== safeNum(evt.taxBasePrice);
                                   return (
                                     <tr key={evt.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/10">
-                                      <td className="py-1 pl-3">
+                                      <td className="py-1 pl-2 pr-0.5">
                                         <div className="flex items-center gap-0.5">
-                                        <input
-                                          type="date"
-                                          value={evt.date || ''}
-                                          onChange={e => handleEventDateChange(stock, events, evt.id, e.target.value)}
-                                          className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none"
-                                        />
-                                        {evt.date && (
-                                          hasFpData ? (
-                                            <span
-                                              className="text-emerald-500 text-[9px]"
-                                              title={`FP: ${fmtTaxBase(fpValue)}`}
-                                            >●</span>
-                                          ) : (
-                                            <a
-                                              href={funetfEtfUrl(stock.code)}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="text-gray-600 hover:text-amber-400 text-[9px] transition"
-                                              title="이 날짜 과표기준가 데이터 없음 — FunETF에서 직접 확인"
-                                            >●</a>
-                                          )
-                                        )}
+                                          <input
+                                            type="date"
+                                            value={evt.date || ''}
+                                            onChange={e => handleEventDateChange(stock, events, evt.id, e.target.value)}
+                                            className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none w-[100px]"
+                                          />
+                                          {evt.date && (
+                                            hasFpData ? (
+                                              <span className="text-emerald-500 text-[9px]" title={`FP: ${fmtTaxBase(fpValue)}`}>●</span>
+                                            ) : (
+                                              <a href={funetfEtfUrl(stock.code)} target="_blank" rel="noopener noreferrer"
+                                                className="text-gray-600 hover:text-amber-400 text-[9px] transition"
+                                                title="이 날짜 과표기준가 데이터 없음 — FunETF에서 직접 확인">●</a>
+                                            )
+                                          )}
                                         </div>
                                       </td>
                                       <td className="py-1 px-1">
@@ -499,9 +492,7 @@ export default function KrEtfTaxMatrix({
                                             onClick={() => refetchPrevQty(stock, events, evt)}
                                             className="text-gray-600 hover:text-sky-400 p-0.5 rounded shrink-0 transition"
                                             title="자산검증에서 전일 수량 재조회"
-                                          >
-                                            <RotateCcw size={9} />
-                                          </button>
+                                          ><RotateCcw size={9} /></button>
                                         </div>
                                       </td>
                                       <td className="py-1 px-1">
@@ -511,10 +502,7 @@ export default function KrEtfTaxMatrix({
                                           value={evt.change !== undefined && evt.change !== '' ? evt.change : ''}
                                           onChange={e => updateEvent(stock.code, events, evt.id, 'change', e.target.value)}
                                           placeholder="0"
-                                          className={
-                                            numInputCls +
-                                            (isSell ? ' !text-rose-400' : isBuy ? ' !text-emerald-400' : '')
-                                          }
+                                          className={numInputCls + (isSell ? ' !text-rose-400' : isBuy ? ' !text-emerald-400' : '')}
                                           title="매수=양수, 매도=음수"
                                         />
                                       </td>
@@ -546,14 +534,12 @@ export default function KrEtfTaxMatrix({
                                       <td className="py-1 px-1 text-right tabular-nums text-sky-300">
                                         {runningAvg > 0 ? fmtTaxBase(runningAvg) : <span className="text-gray-700">-</span>}
                                       </td>
-                                      <td className="py-1 pr-2 text-center">
+                                      <td className="py-1 px-1 text-center">
                                         <button
                                           onClick={() => deleteEvent(stock.code, events, evt.id)}
                                           className="text-gray-600 hover:text-red-400 p-0.5 rounded transition"
                                           title="삭제"
-                                        >
-                                          <Trash2 size={10} />
-                                        </button>
+                                        ><Trash2 size={10} /></button>
                                       </td>
                                     </tr>
                                   );
