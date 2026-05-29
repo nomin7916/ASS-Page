@@ -592,7 +592,7 @@ export default function VerifyEvalModal({
               <div className="border-t border-gray-700/50 mt-1 pt-1 space-y-0.5">
                 <div className="text-gray-400 flex justify-between items-center">
                   <span className="inline-flex items-center gap-1">
-                    이 날 투자원금
+                    {formatShortDate(date).split(' ')[0]} 투자원금
                     {isAnchorDay && <span className="text-red-400 text-[9px] font-bold">🔴 수동</span>}
                     {isPropagated && (
                       <span className="text-amber-400 text-[9px] font-bold" title={`${effective.anchor.date}의 수동 설정값에 입출금 변동 반영`}>
@@ -624,7 +624,7 @@ export default function VerifyEvalModal({
                       <span className="text-sky-200 font-bold">{isOverseas ? `$${Math.round(principalOnDate).toLocaleString()}` : formatCurrency(principalOnDate)}</span>
                       <button
                         className="text-gray-500 hover:text-blue-400"
-                        title="이 날 투자원금 수동 입력 (입출금 누적값 오버라이드)"
+                        title={`${formatShortDate(date).split(' ')[0]} 투자원금 수동 입력 (입출금 누적값 오버라이드)`}
                         onClick={() => { setEditPrincipal(true); setEditPrincipalRaw(principalOnDate > 0 ? String(Math.round(principalOnDate)) : ''); }}
                       ><Pencil size={11} /></button>
                     </span>
