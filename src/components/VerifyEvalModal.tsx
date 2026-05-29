@@ -207,6 +207,17 @@ export default function VerifyEvalModal({
   const autoPrincipal = principalAtDate > 0 ? principalAtDate : cleanNum(record.principal ?? 0);
   const principalOnDate = effective.value != null ? effective.value : autoPrincipal;
 
+  const depositsOnDateAffecting = depositsOnDate.filter(d => !d.noPrincipal);
+  const withdrawalsOnDateAffecting = withdrawalsOnDate.filter(w => !w.noPrincipal);
+  const totalDepositsOnDate = depositsOnDateAffecting.reduce((s, d) => s + cleanNum(d.amount), 0);
+  const totalWithdrawalsOnDate = withdrawalsOnDateAffecting.reduce(
+    (s, w) => s + (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)), 0,
+  );
+  const principalBefore = principalOnDate - totalDepositsOnDate + totalWithdrawalsOnDate;
+  const showFormula = (depositsOnDateAffecting.length > 0 || withdrawalsOnDateAffecting.length > 0) && !effective.anchor;
+  const multiLineFormula = depositsOnDateAffecting.length + withdrawalsOnDateAffecting.length > 1;
+  const fmtPrin = (n) => isOverseas ? `$${Math.round(n).toLocaleString('en-US')}` : formatCurrency(Math.round(n));
+
   const commitQty = (idx) => {
     const v = cleanNum(editQtyRaw);
     setEditQtyIdx(-1);
@@ -612,17 +623,68 @@ export default function VerifyEvalModal({
                       onBlur={commitPrincipal}
                       onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setEditPrincipal(false); }}
                     />
-                  ) : (
+                  ) : showFormula && !multiLineFormula ? (
+                    <span className="inline-flex items-center gap-1 text-[10px]">
+                      <span className="text-gray-400">{fmtPrin(principalBefore)}</span>
+                      {totalDepositsOnDate > 0 && (
+                        <span className="text-emerald-400">+{fmtPrin(totalDepositsOnDate)}</span>
+                      )}
+                      {totalWithdrawalsOnDate > 0 && (
+                        <span className="text-red-400">−{fmtPrin(totalWithdrawalsOnDate)}</span>
+                      )}
+                      <span className="text-gray-500">=</span>
+                      <span className="text-sky-200 font-bold">{fmtPrin(principalOnDate)}</span>
+                      <button
+                        className="text-gray-500 hover:text-blue-400"
+                        title={`${formatShortDate(date).split(' ')[0]} 투자원금 수동 입력`}
+                        onClick={() => { setEditPrincipal(true); setEditPrincipalRaw(principalOnDate > 0 ? String(Math.round(principalOnDate)) : ''); }}
+                      ><Pencil size={11} /></button>
+                    </span>
+                  ) : !showFormula ? (
                     <span className="inline-flex items-center gap-1">
-                      <span className="text-sky-200 font-bold">{isOverseas ? `$${Math.round(principalOnDate).toLocaleString()}` : formatCurrency(principalOnDate)}</span>
+                      <span className="text-sky-200 font-bold">{fmtPrin(principalOnDate)}</span>
                       <button
                         className="text-gray-500 hover:text-blue-400"
                         title={`${formatShortDate(date).split(' ')[0]} 투자원금 수동 입력 (입출금 누적값 오버라이드)`}
                         onClick={() => { setEditPrincipal(true); setEditPrincipalRaw(principalOnDate > 0 ? String(Math.round(principalOnDate)) : ''); }}
                       ><Pencil size={11} /></button>
                     </span>
-                  )}
+                  ) : null}
                 </div>
+                {showFormula && multiLineFormula && !editPrincipal && (
+                  <div className="pl-2 space-y-0.5 text-[10px]">
+                    <div className="flex justify-between text-gray-500">
+                      <span>이전</span>
+                      <span>{fmtPrin(principalBefore)}</span>
+                    </div>
+                    {depositsOnDateAffecting.map((d, i) => (
+                      <div key={d.id ?? i} className="flex justify-between">
+                        <span className="text-emerald-400">+ 입금</span>
+                        <span className="text-emerald-300">{fmtPrin(cleanNum(d.amount))}</span>
+                      </div>
+                    ))}
+                    {withdrawalsOnDateAffecting.map((w, i) => {
+                      const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
+                      return (
+                        <div key={w.id ?? i} className="flex justify-between">
+                          <span className="text-red-400">− 출금</span>
+                          <span className="text-red-300">{fmtPrin(deducted)}</span>
+                        </div>
+                      );
+                    })}
+                    <div className="flex justify-between items-center border-t border-gray-700/40 pt-0.5">
+                      <span className="text-gray-500">=</span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-sky-200 font-bold text-[11px]">{fmtPrin(principalOnDate)}</span>
+                        <button
+                          className="text-gray-500 hover:text-blue-400"
+                          title={`${formatShortDate(date).split(' ')[0]} 투자원금 수동 입력`}
+                          onClick={() => { setEditPrincipal(true); setEditPrincipalRaw(principalOnDate > 0 ? String(Math.round(principalOnDate)) : ''); }}
+                        ><Pencil size={11} /></button>
+                      </span>
+                    </div>
+                  </div>
+                )}
                 {stored > 0 && (
                   <div className="text-gray-400 flex justify-between">
                     <span>저장 평가자산</span>
