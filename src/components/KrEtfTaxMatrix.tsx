@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, FileText } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, FileText, RefreshCw } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency } from '../utils';
 import {
   getKrEtfStocks,
@@ -28,12 +28,14 @@ export default function KrEtfTaxMatrix({
   updateTaxBaseSales,
   updateTaxBaseExPrice,
   updateTaxBaseAvgPrice,
+  updateTaxBaseDailyFp,
   notify,
   driveTokenRef,
   driveFolderIdRef,
 }) {
   const [expandedCode, setExpandedCode] = useState(null);
   const [lookupStock, setLookupStock] = useState(null);
+  const [fetchingCode, setFetchingCode] = useState(null); // 조회 중인 종목코드
 
   const krStocks = useMemo(() => getKrEtfStocks(portfolio), [portfolio?.portfolio]);
 
@@ -73,6 +75,85 @@ export default function KrEtfTaxMatrix({
   const persistPurchases = (code, next) => updateTaxBasePurchases(portfolio.id, code, next);
   const persistSales = (code, next) => updateTaxBaseSales(portfolio.id, code, next);
 
+  // ── 과표기준가 자동 조회 ─────────────────────────────────────────────────
+  const fetchTaxBase = async (stock) => {
+    const code = stock.code;
+    setFetchingCode(code);
+    try {
+      const res = await fetch(`/api/etf-tax-base?code=${encodeURIComponent(code)}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        notify(`[${code}] 과표기준가 조회 실패: ${err?.error ?? res.status}`, 'error');
+        return;
+      }
+      const data = await res.json();
+      if (!data?.items?.length) {
+        notify(`[${code}] 조회 결과가 없습니다.`, 'warning');
+        return;
+      }
+
+      // dailyTaxFp 맵 구성 { YYYYMMDD: number }
+      const dailyMap = {};
+      for (const item of data.items) {
+        if (item.taxFp != null) dailyMap[item.gijunYmd] = item.taxFp;
+      }
+
+      // 오늘 날짜 (YYYYMMDD)
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const todayYmd = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+
+      // Drive에 저장 (기존 데이터와 merge)
+      updateTaxBaseDailyFp(portfolio.id, code, dailyMap, todayYmd);
+
+      // 배당락일 과표 자동 채움 (dividendExDate 연계)
+      const exDateMap = portfolio?.dividendExDate?.[code] || {};
+      let exFillCount = 0;
+      for (const [ym, exDate] of Object.entries(exDateMap)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(exDate))) continue;
+        const exYmd = String(exDate).replace(/-/g, '');
+        const taxFp = dailyMap[exYmd];
+        if (taxFp != null) {
+          updateTaxBaseExPrice(portfolio.id, code, ym, taxFp);
+          exFillCount++;
+        }
+      }
+
+      // 매입 이벤트 과표기준가 자동 채움
+      const { purchases } = getCodeTaxBase(portfolio, code);
+      const updatedPurchases = purchases.map(p => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || ''))) return p;
+        const pYmd = String(p.date).replace(/-/g, '');
+        const taxFp = dailyMap[pYmd];
+        return taxFp != null ? { ...p, taxBasePrice: taxFp } : p;
+      });
+      const purchasesFilled = updatedPurchases.filter((p, i) =>
+        p.taxBasePrice !== purchases[i]?.taxBasePrice
+      ).length;
+      if (purchases.length > 0) {
+        persistPurchases(code, updatedPurchases);
+      }
+
+      notify(
+        `[${stock.name || code}] 과표기준가 ${data.count}일 수집 완료` +
+        (exFillCount ? ` · 배당락 ${exFillCount}건` : '') +
+        (purchasesFilled ? ` · 매입 ${purchasesFilled}건 자동 입력` : ''),
+        'success',
+      );
+    } catch (e) {
+      notify(`[${code}] 과표기준가 조회 중 오류: ${e?.message ?? e}`, 'error');
+    } finally {
+      setFetchingCode(null);
+    }
+  };
+
+  // 모든 한국 ETF 일괄 조회
+  const fetchAllTaxBase = async () => {
+    for (const stock of krStocks) {
+      await fetchTaxBase(stock);
+    }
+  };
+
   const addPurchase = (code, purchases) => persistPurchases(code, [
     ...purchases,
     { id: generateId(), date: new Date().toISOString().slice(0, 10), shares: 0, taxBasePrice: 0 },
@@ -98,8 +179,17 @@ export default function KrEtfTaxMatrix({
         <span className="text-gray-600">|</span>
         <span className="text-gray-500">연간 예상 과세 합계</span>
         <span className="text-emerald-400 font-semibold tabular-nums">{formatCurrency(grandExpected)}</span>
-        <span className="ml-auto text-gray-600">
-          종목명 클릭 → 매입/매도 이벤트 편집
+        <span className="ml-auto flex items-center gap-2">
+          <span className="text-gray-600">종목명 클릭 → 매입/매도 이벤트 편집</span>
+          <button
+            onClick={fetchAllTaxBase}
+            disabled={fetchingCode != null}
+            className="px-2.5 py-1 rounded border border-sky-700/60 text-sky-300 hover:text-sky-200 hover:border-sky-500 hover:bg-sky-900/20 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5 transition"
+            title="FunETF에서 전체 종목 과표기준가 일괄 조회 → exTaxBase·매입 과표 자동 입력"
+          >
+            <RefreshCw size={10} className={fetchingCode != null ? 'animate-spin' : ''} />
+            과표 전체 자동조회
+          </button>
         </span>
       </div>
       <table className="w-full text-[11px] text-center">
@@ -122,13 +212,35 @@ export default function KrEtfTaxMatrix({
               <React.Fragment key={stock.code}>
                 <tr className="border-b border-gray-700/40 hover:bg-gray-800/20">
                   <td className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
-                    <button
-                      onClick={() => setLookupStock(stock)}
-                      className="mb-1 text-[10px] px-2 py-0.5 rounded border border-amber-700/60 text-amber-300 hover:text-amber-200 hover:border-amber-500 hover:bg-amber-900/20 inline-flex items-center gap-1 transition"
-                      title="Drive에서 최신 과표 데이터 조회 + 메모장 보기 + CSV 다운로드"
-                    >
-                      <FileText size={10} /> 과표 조회
-                    </button>
+                    <div className="mb-1 flex items-center gap-1 flex-wrap">
+                      <button
+                        onClick={() => setLookupStock(stock)}
+                        className="text-[10px] px-2 py-0.5 rounded border border-amber-700/60 text-amber-300 hover:text-amber-200 hover:border-amber-500 hover:bg-amber-900/20 inline-flex items-center gap-1 transition"
+                        title="Drive에서 최신 과표 데이터 조회 + 메모장 보기 + CSV 다운로드"
+                      >
+                        <FileText size={10} /> 과표 조회
+                      </button>
+                      <button
+                        onClick={() => fetchTaxBase(stock)}
+                        disabled={fetchingCode != null}
+                        className="text-[10px] px-2 py-0.5 rounded border border-sky-700/60 text-sky-300 hover:text-sky-200 hover:border-sky-500 hover:bg-sky-900/20 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1 transition"
+                        title="FunETF에서 과표기준가 자동 조회 → exTaxBase·매입 과표 자동 입력"
+                      >
+                        <RefreshCw size={10} className={fetchingCode === stock.code ? 'animate-spin' : ''} />
+                        {fetchingCode === stock.code ? '조회 중...' : '자동조회'}
+                      </button>
+                      {(() => {
+                        const rec = portfolio?.taxBaseHistory?.[stock.code];
+                        const lf = rec?.lastFetched;
+                        if (!lf) return null;
+                        const cnt = Object.keys(rec?.dailyTaxFp || {}).length;
+                        return (
+                          <span className="text-[9px] text-gray-600 tabular-nums">
+                            {lf.slice(0,4)}-{lf.slice(4,6)}-{lf.slice(6,8)} · {cnt}일
+                          </span>
+                        );
+                      })()}
+                    </div>
                     <button
                       onClick={() => setExpandedCode(isExpanded ? null : stock.code)}
                       className="flex items-start gap-1.5 text-left w-full hover:text-amber-300"
