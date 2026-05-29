@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { X, Plus, Trash2, Pencil, RotateCcw } from 'lucide-react';
+import { X, Plus, Trash2, Pencil, RotateCcw, HelpCircle } from 'lucide-react';
 import {
   cleanNum,
   formatCurrency,
@@ -98,6 +98,7 @@ export default function VerifyEvalModal({
   const [editPriceRaw, setEditPriceRaw] = useState('');
   const [editPrincipal, setEditPrincipal] = useState(false);
   const [editPrincipalRaw, setEditPrincipalRaw] = useState('');
+  const [showHelp, setShowHelp] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({
     code: '', name: '', type: 'stock', quantity: '', start: date, end: '',
@@ -210,7 +211,7 @@ export default function VerifyEvalModal({
   );
   const isAnchorDay = !!effective.anchor && effective.anchor.date === date;
   const isPropagated = !!effective.anchor && effective.anchor.date !== date;
-  const autoPrincipal = cumPrincipalOnDate > 0 ? cumPrincipalOnDate : cleanNum(record.principal ?? portfolio?.principal ?? 0);
+  const autoPrincipal = cumPrincipalOnDate > 0 ? cumPrincipalOnDate : cleanNum(portfolio?.principal ?? record.principal ?? 0);
   const principalOnDate = effective.value != null ? effective.value : autoPrincipal;
 
   const commitQty = (idx) => {
@@ -341,9 +342,47 @@ export default function VerifyEvalModal({
         >
           <button onClick={onClose} className="text-pink-500 hover:text-pink-300"><X size={14} /></button>
           <span className="text-xs text-gray-300 font-bold">자산 검증 · {formatShortDate(date)}</span>
-          <div style={{ width: 14 }} />
+          <button
+            onClick={() => setShowHelp(s => !s)}
+            onMouseDown={e => e.stopPropagation()}
+            className={`text-gray-500 hover:text-sky-400 transition-colors ${showHelp ? 'text-sky-400' : ''}`}
+            title="저장된 평가자산 vs 재계산 합계 설명"
+          ><HelpCircle size={14} /></button>
         </div>
 
+        {showHelp && (
+          <div className="border-b border-gray-700/60 px-3 py-3 bg-gray-900/60 text-[10px] leading-relaxed">
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="text-gray-500">
+                  <th className="py-1 pr-2 font-normal w-[72px]" />
+                  <th className="py-1 px-2 font-bold text-gray-300 border-l border-gray-700">저장된 평가자산</th>
+                  <th className="py-1 px-2 font-bold text-gray-300 border-l border-gray-700">재계산 합계</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-400">
+                <tr className="border-t border-gray-700/50">
+                  <td className="py-1 pr-2 text-gray-500 whitespace-nowrap">기준</td>
+                  <td className="py-1 px-2 border-l border-gray-700">앱이 마지막으로 열렸을 때 API 가격</td>
+                  <td className="py-1 px-2 border-l border-gray-700">지금 이 순간 종가 이력 × 수량</td>
+                </tr>
+                <tr className="border-t border-gray-700/50">
+                  <td className="py-1 pr-2 text-gray-500 whitespace-nowrap">언제 갱신</td>
+                  <td className="py-1 px-2 border-l border-gray-700">앱 열 때마다 자동 (<code className="text-amber-400">isFixed: false</code> 인 경우)</td>
+                  <td className="py-1 px-2 border-l border-gray-700">모달 열 때마다 항상</td>
+                </tr>
+                <tr className="border-t border-gray-700/50">
+                  <td className="py-1 pr-2 text-gray-500 whitespace-nowrap">사용자 개입</td>
+                  <td className="py-1 px-2 border-l border-gray-700">없음 (자동)</td>
+                  <td className="py-1 px-2 border-l border-gray-700">없음 (자동)</td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="mt-2 text-gray-500 leading-snug">
+              사용자가 확정한 값은 <span className="text-emerald-400 font-bold">수량×종가로 확정</span> 버튼을 눌렀을 때 <code className="text-amber-400">isFixed: true</code>로 저장된 경우이며, 이 경우 불일치가 있어도 앱이 자동으로 덮어쓰지 않습니다.
+            </p>
+          </div>
+        )}
         <div className={`${isMobile ? 'p-3' : 'p-4'} space-y-3 text-[11px] leading-relaxed overflow-y-auto flex-1 min-h-0`}>
 
           {resolved.estimated && (
