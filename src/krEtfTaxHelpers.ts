@@ -46,7 +46,7 @@ export function computeRunningAvgSnapshots(events) {
   });
 }
 
-// 각 배당락 월(YYYY-MM)의 평균 과표 자동 계산
+// 각 배당락 월(YYYY-MM)의 평균 과표 자동 계산 (세금 계산용)
 // exDateMap: { 'YYYY-MM': 'YYYY-MM-DD' } (portfolio.dividendExDate[code])
 export function computeMonthlyAvgFromEvents(events, exDateMap) {
   const snapshots = computeRunningAvgSnapshots(events);
@@ -56,6 +56,24 @@ export function computeMonthlyAvgFromEvents(events, exDateMap) {
     let best = null;
     for (const s of snapshots) {
       if (s.date <= exDate) best = s;
+      else break;
+    }
+    if (best && best.avgPrice > 0) result[ym] = best.avgPrice;
+  }
+  return result;
+}
+
+// 연간 그리드 표시용 — 배당락일 없는 달도 포함, 각 달 말일 기준 평균 과표 계산
+// monthYms: ['YYYY-01', ..., 'YYYY-12']
+export function computeMonthlyAvgForGrid(events, monthYms) {
+  const snapshots = computeRunningAvgSnapshots(events);
+  const result: Record<string, number> = {};
+  for (const ym of (monthYms || [])) {
+    const [year, month] = ym.split('-').map(Number);
+    const lastDay = new Date(year, month, 0).toISOString().slice(0, 10);
+    let best = null;
+    for (const s of snapshots) {
+      if (s.date <= lastDay) best = s;
       else break;
     }
     if (best && best.avgPrice > 0) result[ym] = best.avgPrice;

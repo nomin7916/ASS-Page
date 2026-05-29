@@ -6,7 +6,7 @@ import {
   getKrEtfStocks,
   getCodeTaxBase,
   safeNum,
-  computeMonthlyAvgFromEvents,
+  computeMonthlyAvgForGrid,
 } from '../krEtfTaxHelpers';
 import TaxBaseLookupModal from './TaxBaseLookupModal';
 
@@ -110,8 +110,7 @@ export default function KrEtfTaxMatrix({
 
   const stockRows = krStocks.map(stock => {
     const { events, purchases, sales, exTaxBase, avgTaxBase, dailyTaxFp } = getCodeTaxBase(portfolio, stock.code);
-    const exDateMap = portfolio?.dividendExDate?.[stock.code] || {};
-    const computedAvg = computeMonthlyAvgFromEvents(events, exDateMap);
+    const computedAvg = computeMonthlyAvgForGrid(events, monthYms);
     const sortedEventsWithAvg = buildSortedEventsWithAvg(events);
     const currentQty = cleanNum(stock.quantity || 0);
     const monthData = monthYms.map(ym => {
