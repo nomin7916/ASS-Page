@@ -1015,6 +1015,7 @@ export default function IntegratedDashboard({
                     });
                     const hsk = holdingsSortConfig.key, hsd = holdingsSortConfig.direction;
                     const arr = (k) => <span className={`ml-0.5 text-[9px] ${hsk === k ? 'text-gray-300' : 'invisible'}`}>{hsk === k && hsd === -1 ? '▼' : '▲'}</span>;
+                    let sortedFlatItems = null;
                     if (hsk) {
                       const getSortVal = (item) => {
                         if (hsk === 'name') return item.name;
@@ -1023,12 +1024,10 @@ export default function IntegratedDashboard({
                         if (hsk === 'profitRate') return item.cost > 0 ? (item.value - item.cost) / item.cost * 100 : 0;
                         return 0;
                       };
-                      groupEntries.forEach(([, items]) => {
-                        items.sort((a, b) => {
-                          const va = getSortVal(a), vb = getSortVal(b);
-                          if (typeof va === 'string') return va.localeCompare(vb) * hsd;
-                          return (va - vb) * hsd;
-                        });
+                      sortedFlatItems = groupEntries.flatMap(([, items]) => items).slice().sort((a, b) => {
+                        const va = getSortVal(a), vb = getSortVal(b);
+                        if (typeof va === 'string') return va.localeCompare(vb) * hsd;
+                        return (va - vb) * hsd;
                       });
                     }
                     const parseHex = (hex) => {
@@ -1109,109 +1108,125 @@ export default function IntegratedDashboard({
                             </tr>
                           </thead>
                           <tbody>
-                            {groupEntries.flatMap(([cat, items]) => {
-                              const catColor = catBaseColorMap[cat];
-                              const catDisplayValue = catValueMap[cat] ?? items.reduce((s, x) => s + x.value, 0);
-                              const isLastCat = LAST_CATS.includes(cat);
-                              return items.map((item, j) => {
-                                rowNum += 1;
-                                const num = rowNum;
+                            {(() => {
+                              const renderItemCells = (item, cat, num) => {
+                                const catColor = catBaseColorMap[cat];
+                                const isLastCat = LAST_CATS.includes(cat);
                                 const itemColor = itemColorMap[`${cat}::${item.name}`] || catColor;
                                 const profit = item.value - item.cost;
                                 const profitRate = item.cost > 0 ? (profit / item.cost) * 100 : null;
                                 const profitColor = profit > 0 ? 'text-red-400' : profit < 0 ? 'text-blue-400' : 'text-gray-400';
-                                return (
-                                  <tr key={`${cat}-${item.name}`} className={`group hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
-                                    {j === 0 && (
-                                      <td rowSpan={items.length} className="py-1.5 px-2 text-center font-bold border-r border-gray-700 border-b border-gray-700 align-middle">
-                                        <div style={{ color: catColor }}>{cat}</div>
-                                        <div className="text-gray-500 font-normal mt-0.5">{hideAmounts ? '••••••' : formatCurrency(catDisplayValue)}</div>
-                                        <div className="text-gray-500 font-normal">{totalDenom > 0 ? ((catDisplayValue / totalDenom) * 100).toFixed(1) : 0}%</div>
+                                const info = etfInfoMap[item.name];
+                                return (<>
+                                  <td className="py-1.5 px-2 text-center border-r border-gray-700 sticky left-0 z-10 bg-[#1e293b] group-hover:bg-[#1d2d40] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">
+                                    {getStockUrl(item.code, item.category)
+                                      ? <a href={getStockUrl(item.code, item.category)} target="_blank" rel="noopener noreferrer" style={{ color: itemColor }} className="hover:underline">{num}. {item.name}</a>
+                                      : <span style={{ color: itemColor }}>{num}. {item.name}</span>
+                                    }
+                                    {item.code && <div className="text-[9px] text-gray-600 mt-0.5">({item.code})</div>}
+                                  </td>
+                                  <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(item.value)}</td>
+                                  <td className="py-1.5 px-3 border-r border-gray-700 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
+                                  {isLastCat ? (
+                                    <>
+                                      <td className="py-1.5 px-3 border-r border-gray-700 text-gray-600 text-right">-</td>
+                                      <td className="py-1.5 px-3 border-r border-gray-700 text-gray-600 text-right">-</td>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>
+                                        {hideAmounts ? '••••••' : (<><span className="text-[9px] mr-0.5">{profit >= 0 ? '▲' : '▼'}</span>{formatCurrency(Math.abs(profit))}</>)}
                                       </td>
-                                    )}
-                                    <td className="py-1.5 px-2 text-center border-r border-gray-700 sticky left-0 z-10 bg-[#1e293b] group-hover:bg-[#1d2d40] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">
-                                      {getStockUrl(item.code, item.category)
-                                        ? <a href={getStockUrl(item.code, item.category)} target="_blank" rel="noopener noreferrer" style={{ color: itemColor }} className="hover:underline">{num}. {item.name}</a>
-                                        : <span style={{ color: itemColor }}>{num}. {item.name}</span>
-                                      }
-                                      {item.code && <div className="text-[9px] text-gray-600 mt-0.5">({item.code})</div>}
-                                    </td>
-                                    <td className="py-1.5 px-3 border-r border-gray-700 text-gray-300 font-bold text-right">{hideAmounts ? '••••••' : formatCurrency(item.value)}</td>
-                                    <td className="py-1.5 px-3 border-r border-gray-700 text-gray-400 text-right">{totalDenom > 0 ? ((item.value / totalDenom) * 100).toFixed(1) : 0}%</td>
-                                    {isLastCat ? (
-                                      <>
-                                        <td className="py-1.5 px-3 border-r border-gray-700 text-gray-600 text-right">-</td>
-                                        <td className="py-1.5 px-3 border-r border-gray-700 text-gray-600 text-right">-</td>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>
-                                          {hideAmounts ? '••••••' : (<><span className="text-[9px] mr-0.5">{profit >= 0 ? '▲' : '▼'}</span>{formatCurrency(Math.abs(profit))}</>)}
-                                        </td>
-                                        <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>
-                                          {profitRate !== null ? (<><span className="text-[9px] mr-0.5">{profitRate >= 0 ? '▲' : '▼'}</span>{Math.abs(profitRate).toFixed(2)}%</>) : '-'}
-                                        </td>
-                                      </>
-                                    )}
-                                    {(() => {
-                                      const info = etfInfoMap[item.name];
-                                      // 로딩 중
-                                      if (info === 'loading') return (
-                                        <td colSpan={3} className="py-1.5 px-2 text-center text-gray-600 align-middle">
-                                          <span className="text-[9px] animate-pulse">…</span>
-                                        </td>
-                                      );
-                                      // ETF: 구성종목 3개 셀
-                                      if (Array.isArray(info)) {
-                                        return [0, 1, 2].map(idx => {
-                                          const h = info[idx];
-                                          const isLast = idx === 2;
-                                          if (!h) return <td key={idx} className={`py-1.5 px-2 text-center text-gray-700 align-middle${isLast ? '' : ' border-r border-gray-700'}`}>—</td>;
-                                          return (
-                                            <td key={idx} className={`py-1.5 px-2 align-middle${isLast ? '' : ' border-r border-gray-700'}`}>
-                                              <div className="flex flex-col items-center gap-0 leading-tight">
-                                                <div className="flex items-center gap-1 whitespace-nowrap">
-                                                  {getStockUrl(h.code)
-                                                    ? <a href={getStockUrl(h.code)} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-300 font-medium hover:text-sky-300 hover:underline">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</a>
-                                                    : <span className="text-[10px] text-gray-300 font-medium">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</span>
-                                                  }
-                                                  <span className="text-[9px] text-gray-600">|</span>
-                                                  <span className="text-[9px] text-gray-500">{h.ratio > 0 ? h.ratio.toFixed(1) + '%' : '—'}</span>
-                                                </div>
-                                                <div className="flex items-center gap-1 whitespace-nowrap">
-                                                  <span className="text-[9px] text-gray-400">{h.per != null ? h.per.toFixed(2) : '—'}</span>
-                                                  <span className="text-[9px] text-gray-600">|</span>
-                                                  <span className="text-[9px] text-gray-400">{h.fper != null ? h.fper.toFixed(2) : '—'}</span>
-                                                </div>
-                                              </div>
-                                            </td>
-                                          );
-                                        });
-                                      }
-                                      // 일반 주식: 자체 PER을 colSpan=3으로 표시
-                                      if (info?.isStock) {
-                                        const hasAny = info.per != null || info.fper != null;
+                                      <td className={`py-1.5 px-3 border-r border-gray-700 font-bold text-right ${profitColor}`}>
+                                        {profitRate !== null ? (<><span className="text-[9px] mr-0.5">{profitRate >= 0 ? '▲' : '▼'}</span>{Math.abs(profitRate).toFixed(2)}%</>) : '-'}
+                                      </td>
+                                    </>
+                                  )}
+                                  {(() => {
+                                    if (info === 'loading') return <td colSpan={3} className="py-1.5 px-2 text-center text-gray-600 align-middle"><span className="text-[9px] animate-pulse">…</span></td>;
+                                    if (Array.isArray(info)) {
+                                      return [0, 1, 2].map(idx => {
+                                        const h = info[idx];
+                                        const isLast = idx === 2;
+                                        if (!h) return <td key={idx} className={`py-1.5 px-2 text-center text-gray-700 align-middle${isLast ? '' : ' border-r border-gray-700'}`}>—</td>;
                                         return (
-                                          <td colSpan={3} className="py-1.5 px-3 text-center align-middle">
-                                            {hasAny ? (
-                                              <span className="text-[10px] text-gray-500">
-                                                <span className="text-gray-300">{info.per != null ? info.per.toFixed(2) : '—'}</span>
-                                                <span className="mx-1.5 text-gray-700">|</span>
-                                                <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
-                                              </span>
-                                            ) : (
-                                              <span className="text-[9px] text-gray-700">—</span>
-                                            )}
+                                          <td key={idx} className={`py-1.5 px-2 align-middle${isLast ? '' : ' border-r border-gray-700'}`}>
+                                            <div className="flex flex-col items-center gap-0 leading-tight">
+                                              <div className="flex items-center gap-1 whitespace-nowrap">
+                                                {getStockUrl(h.code)
+                                                  ? <a href={getStockUrl(h.code)} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-300 font-medium hover:text-sky-300 hover:underline">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</a>
+                                                  : <span className="text-[10px] text-gray-300 font-medium">{h.name.length > 8 ? h.name.slice(0, 8) + '…' : h.name}</span>
+                                                }
+                                                <span className="text-[9px] text-gray-600">|</span>
+                                                <span className="text-[9px] text-gray-500">{h.ratio > 0 ? h.ratio.toFixed(1) + '%' : '—'}</span>
+                                              </div>
+                                              <div className="flex items-center gap-1 whitespace-nowrap">
+                                                <span className="text-[9px] text-gray-400">{h.per != null ? h.per.toFixed(2) : '—'}</span>
+                                                <span className="text-[9px] text-gray-600">|</span>
+                                                <span className="text-[9px] text-gray-400">{h.fper != null ? h.fper.toFixed(2) : '—'}</span>
+                                              </div>
+                                            </div>
                                           </td>
                                         );
-                                      }
-                                      // 해당 없음 (해외 종목, 현금 등)
-                                      return <td colSpan={3} className="py-1.5 px-2 text-center text-gray-700 align-middle">—</td>;
-                                    })()}
-                                  </tr>
-                                );
+                                      });
+                                    }
+                                    if (info?.isStock) {
+                                      const hasAny = info.per != null || info.fper != null;
+                                      return (
+                                        <td colSpan={3} className="py-1.5 px-3 text-center align-middle">
+                                          {hasAny ? (
+                                            <span className="text-[10px] text-gray-500">
+                                              <span className="text-gray-300">{info.per != null ? info.per.toFixed(2) : '—'}</span>
+                                              <span className="mx-1.5 text-gray-700">|</span>
+                                              <span className="text-gray-300">{info.fper != null ? info.fper.toFixed(2) : '—'}</span>
+                                            </span>
+                                          ) : (
+                                            <span className="text-[9px] text-gray-700">—</span>
+                                          )}
+                                        </td>
+                                      );
+                                    }
+                                    return <td colSpan={3} className="py-1.5 px-2 text-center text-gray-700 align-middle">—</td>;
+                                  })()}
+                                </>);
+                              };
+
+                              if (sortedFlatItems) {
+                                return sortedFlatItems.map((item) => {
+                                  rowNum += 1;
+                                  const cat = item.category;
+                                  const catColor = catBaseColorMap[cat];
+                                  return (
+                                    <tr key={`sorted-${cat}-${item.name}`} className="group hover:bg-gray-800/30 border-b border-gray-700/30">
+                                      <td className="py-1.5 px-2 text-center font-bold border-r border-gray-700 align-middle whitespace-nowrap">
+                                        <span style={{ color: catColor }}>{cat}</span>
+                                      </td>
+                                      {renderItemCells(item, cat, rowNum)}
+                                    </tr>
+                                  );
+                                });
+                              }
+
+                              return groupEntries.flatMap(([cat, items]) => {
+                                const catColor = catBaseColorMap[cat];
+                                const catDisplayValue = catValueMap[cat] ?? items.reduce((s, x) => s + x.value, 0);
+                                return items.map((item, j) => {
+                                  rowNum += 1;
+                                  return (
+                                    <tr key={`${cat}-${item.name}`} className={`group hover:bg-gray-800/30 ${j === items.length - 1 ? 'border-b border-gray-700' : 'border-b border-gray-700/30'}`}>
+                                      {j === 0 && (
+                                        <td rowSpan={items.length} className="py-1.5 px-2 text-center font-bold border-r border-gray-700 border-b border-gray-700 align-middle">
+                                          <div style={{ color: catColor }}>{cat}</div>
+                                          <div className="text-gray-500 font-normal mt-0.5">{hideAmounts ? '••••••' : formatCurrency(catDisplayValue)}</div>
+                                          <div className="text-gray-500 font-normal">{totalDenom > 0 ? ((catDisplayValue / totalDenom) * 100).toFixed(1) : 0}%</div>
+                                        </td>
+                                      )}
+                                      {renderItemCells(item, cat, rowNum)}
+                                    </tr>
+                                  );
+                                });
                               });
-                            })}
+                            })()}
                           </tbody>
                           <tfoot className="border-t-2 border-gray-600 bg-gray-800/20">
                             <tr className="text-center">
