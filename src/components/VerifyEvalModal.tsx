@@ -368,7 +368,7 @@ export default function VerifyEvalModal({
                 </tr>
                 <tr className="border-t border-gray-700/50">
                   <td className="py-1 pr-2 text-gray-500 whitespace-nowrap">언제 갱신</td>
-                  <td className="py-1 px-2 border-l border-gray-700">앱 열 때마다 자동 (<code className="text-amber-400">isFixed: false</code> 인 경우)</td>
+                  <td className="py-1 px-2 border-l border-gray-700">앱 열 때마다 자동 갱신 (미확정 상태)</td>
                   <td className="py-1 px-2 border-l border-gray-700">모달 열 때마다 항상</td>
                 </tr>
                 <tr className="border-t border-gray-700/50">
@@ -379,7 +379,7 @@ export default function VerifyEvalModal({
               </tbody>
             </table>
             <p className="mt-2 text-gray-500 leading-snug">
-              사용자가 확정한 값은 <span className="text-emerald-400 font-bold">수량×종가로 확정</span> 버튼을 눌렀을 때 <code className="text-amber-400">isFixed: true</code>로 저장된 경우이며, 이 경우 불일치가 있어도 앱이 자동으로 덮어쓰지 않습니다.
+              <span className="text-emerald-400 font-bold">수량×종가로 확정</span> 버튼을 누르면 현재 재계산값이 확정 저장되며, 이후 앱을 열어도 자동으로 덮어쓰지 않습니다. <span className="text-gray-600">확정 취소 시 다시 자동 갱신됩니다.</span>
             </p>
           </div>
         )}
