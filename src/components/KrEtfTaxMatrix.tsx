@@ -13,7 +13,7 @@ import TaxBaseLookupModal from './TaxBaseLookupModal';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
-  const base = 'KR7' + ticker.toUpperCase();
+  const base = 'KR7' + ticker.toUpperCase() + '00';
   const digits = [];
   for (const c of base) {
     if (c >= '0' && c <= '9') digits.push(parseInt(c, 10));
@@ -284,7 +284,7 @@ export default function KrEtfTaxMatrix({
           </tr>
         </thead>
         <tbody>
-          {stockRows.map(({ stock, events, sortedEventsWithAvg, purchases, sales, currentQty, monthData, annualExpected }) => {
+          {stockRows.map(({ stock, events, sortedEventsWithAvg, dailyTaxFp, purchases, sales, currentQty, monthData, annualExpected }) => {
             const isExpanded = expandedCode === stock.code;
             return (
               <React.Fragment key={stock.code}>
