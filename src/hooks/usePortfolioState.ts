@@ -401,6 +401,7 @@ export function usePortfolioState({
     return {
       ...existing,
       [code]: {
+        events: codeRec.events || [],
         purchases: codeRec.purchases || [],
         sales: codeRec.sales || [],
         exTaxBase: codeRec.exTaxBase || {},
@@ -409,6 +410,15 @@ export function usePortfolioState({
         lastFetched: codeRec.lastFetched || '',
       },
     };
+  };
+
+  const updateTaxBaseEvents = (portfolioId, code, events) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const tbh = _ensureTaxBase(p, code);
+      tbh[code] = { ...tbh[code], events: Array.isArray(events) ? events : [] };
+      return { ...p, taxBaseHistory: tbh };
+    }));
   };
 
   const updateTaxBasePurchases = (portfolioId, code, purchases) => {
@@ -633,6 +643,7 @@ export function usePortfolioState({
     updatePortfolioExtraRowCode,
     deletePortfolioExtraRow,
     updatePortfolioExtraRowMonth,
+    updateTaxBaseEvents,
     updateTaxBasePurchases,
     updateTaxBaseSales,
     updateTaxBaseExPrice,

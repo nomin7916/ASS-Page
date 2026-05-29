@@ -197,7 +197,7 @@ function parseDividendApiResult(result) {
   return { amounts, exDates };
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, updateTaxBaseDailyFp, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, driveTokenRef, driveFolderIdRef }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, updateTaxBaseDailyFp, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, driveTokenRef, driveFolderIdRef }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -1997,6 +1997,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       {activeTab === 'tax' && ['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(nonGoldPortfolios[0]?.accountType) && updateTaxBasePurchases && (
         <KrEtfTaxMatrix
           portfolio={nonGoldPortfolios[0]}
+          updateTaxBaseEvents={updateTaxBaseEvents}
           updateTaxBasePurchases={updateTaxBasePurchases}
           updateTaxBaseSales={updateTaxBaseSales}
           updateTaxBaseExPrice={updateTaxBaseExPrice}

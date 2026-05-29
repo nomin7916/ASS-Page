@@ -16,11 +16,51 @@ export function getKrEtfStocks(portfolio) {
 export function getCodeTaxBase(portfolio, code) {
   const rec = portfolio?.taxBaseHistory?.[code] || {};
   return {
+    events: rec.events || [],
     purchases: rec.purchases || [],
     sales: rec.sales || [],
     exTaxBase: rec.exTaxBase || {},
     avgTaxBase: rec.avgTaxBase || {},
+    dailyTaxFp: rec.dailyTaxFp || {},
   };
+}
+
+// 이벤트 목록에서 날짜 순으로 정렬 후 각 이벤트 후 누적 수량·평균 과표 계산
+// change > 0: 매수, change < 0: 매도 (매도 시 평균 과표 유지)
+export function computeRunningAvgSnapshots(events) {
+  const valid = (events || [])
+    .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) !== 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  let qty = 0;
+  let avg = 0;
+  return valid.map(e => {
+    const change = safeNum(e.change);
+    if (change > 0) {
+      const newQty = qty + change;
+      avg = newQty > 0 ? (qty * avg + change * safeNum(e.taxBasePrice)) / newQty : 0;
+      qty = newQty;
+    } else {
+      qty = Math.max(0, qty + change);
+    }
+    return { id: e.id, date: e.date, qty, avgPrice: avg };
+  });
+}
+
+// 각 배당락 월(YYYY-MM)의 평균 과표 자동 계산
+// exDateMap: { 'YYYY-MM': 'YYYY-MM-DD' } (portfolio.dividendExDate[code])
+export function computeMonthlyAvgFromEvents(events, exDateMap) {
+  const snapshots = computeRunningAvgSnapshots(events);
+  const result: Record<string, number> = {};
+  for (const [ym, exDate] of Object.entries(exDateMap || {})) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(exDate || ''))) continue;
+    let best = null;
+    for (const s of snapshots) {
+      if (s.date <= exDate) best = s;
+      else break;
+    }
+    if (best && best.avgPrice > 0) result[ym] = best.avgPrice;
+  }
+  return result;
 }
 
 export function buildDividendEvents(portfolio, code) {

@@ -492,6 +492,7 @@ export default function App() {
     updatePortfolioExtraRowCode,
     deletePortfolioExtraRow,
     updatePortfolioExtraRowMonth,
+    updateTaxBaseEvents,
     updateTaxBasePurchases,
     updateTaxBaseSales,
     updateTaxBaseExPrice,
@@ -2154,6 +2155,7 @@ export default function App() {
             updatePortfolioExtraRowCode={updatePortfolioExtraRowCode}
             deletePortfolioExtraRow={deletePortfolioExtraRow}
             updatePortfolioExtraRowMonth={updatePortfolioExtraRowMonth}
+            updateTaxBaseEvents={updateTaxBaseEvents}
             updateTaxBasePurchases={updateTaxBasePurchases}
             updateTaxBaseSales={updateTaxBaseSales}
             updateTaxBaseExPrice={updateTaxBaseExPrice}

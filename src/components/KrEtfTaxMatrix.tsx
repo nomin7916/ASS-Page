@@ -1,11 +1,12 @@
 // @ts-nocheck
 import React, { useMemo, useState } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, FileText, RefreshCw } from 'lucide-react';
-import { generateId, cleanNum, formatCurrency } from '../utils';
+import { Plus, Trash2, ChevronDown, ChevronRight, FileText, RefreshCw, RotateCcw } from 'lucide-react';
+import { generateId, cleanNum, formatCurrency, resolveHoldings } from '../utils';
 import {
   getKrEtfStocks,
   getCodeTaxBase,
   safeNum,
+  computeMonthlyAvgFromEvents,
 } from '../krEtfTaxHelpers';
 import TaxBaseLookupModal from './TaxBaseLookupModal';
 
@@ -24,6 +25,7 @@ const fmtTaxBase = (v) => {
 
 export default function KrEtfTaxMatrix({
   portfolio,
+  updateTaxBaseEvents,
   updateTaxBasePurchases,
   updateTaxBaseSales,
   updateTaxBaseExPrice,
@@ -35,7 +37,7 @@ export default function KrEtfTaxMatrix({
 }) {
   const [expandedCode, setExpandedCode] = useState(null);
   const [lookupStock, setLookupStock] = useState(null);
-  const [fetchingCode, setFetchingCode] = useState(null); // 조회 중인 종목코드
+  const [fetchingCode, setFetchingCode] = useState(null);
 
   const krStocks = useMemo(() => getKrEtfStocks(portfolio), [portfolio?.portfolio]);
 
@@ -51,20 +53,58 @@ export default function KrEtfTaxMatrix({
 
   const monthYms = MONTHS.map((_, i) => `${CURRENT_YEAR}-${String(i + 1).padStart(2, '0')}`);
 
+  // 자산검증 스냅샷에서 전일 수량 조회
+  const lookupPrevQty = (date, stockCode) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 0;
+    const d = new Date(date);
+    d.setDate(d.getDate() - 1);
+    const prevDate = d.toISOString().slice(0, 10);
+    const { items } = resolveHoldings(portfolio, prevDate);
+    const item = (items || []).find(i => i.code === stockCode);
+    return item ? safeNum(item.quantity) : 0;
+  };
+
+  // 이벤트 목록에서 날짜순 정렬 + 누적 평균 과표 계산
+  const buildSortedEventsWithAvg = (events) => {
+    const valid = (events || [])
+      .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    let runQty = 0, runAvg = 0;
+    const withAvg = valid.map(evt => {
+      const change = safeNum(evt.change);
+      if (change > 0) {
+        const newQty = runQty + change;
+        runAvg = newQty > 0 ? (runQty * runAvg + change * safeNum(evt.taxBasePrice)) / newQty : 0;
+        runQty = newQty;
+      } else if (change < 0) {
+        runQty = Math.max(0, runQty + change);
+      }
+      return { evt, runningAvg: runAvg, runningQty: runQty };
+    });
+    // 날짜 미입력 이벤트는 뒤에 추가
+    const invalid = (events || []).filter(e => !/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')));
+    return [...withAvg, ...invalid.map(evt => ({ evt, runningAvg: 0, runningQty: 0 }))];
+  };
+
   const stockRows = krStocks.map(stock => {
-    const { purchases, sales, exTaxBase, avgTaxBase } = getCodeTaxBase(portfolio, stock.code);
+    const { events, purchases, sales, exTaxBase, avgTaxBase, dailyTaxFp } = getCodeTaxBase(portfolio, stock.code);
+    const exDateMap = portfolio?.dividendExDate?.[stock.code] || {};
+    const computedAvg = computeMonthlyAvgFromEvents(events, exDateMap);
+    const sortedEventsWithAvg = buildSortedEventsWithAvg(events);
     const currentQty = cleanNum(stock.quantity || 0);
     const monthData = monthYms.map(ym => {
       const exVal = exTaxBase[ym];
-      const avgVal = avgTaxBase[ym];
+      const manualAvgVal = avgTaxBase[ym] !== undefined ? avgTaxBase[ym] : undefined;
+      const computedAvgVal = computedAvg[ym];
+      const avgVal = manualAvgVal !== undefined ? manualAvgVal : computedAvgVal;
       const exNum = safeNum(exVal);
       const avgNum = safeNum(avgVal);
       const taxBasePerShare = exNum - avgNum;
       const expected = Math.max(0, taxBasePerShare) * currentQty;
-      return { ym, exVal, avgVal, exNum, avgNum, taxBasePerShare, expected };
+      return { ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected };
     });
     const annualExpected = monthData.reduce((s, d) => s + d.expected, 0);
-    return { stock, purchases, sales, currentQty, monthData, annualExpected };
+    return { stock, events, sortedEventsWithAvg, dailyTaxFp, purchases, sales, currentQty, monthData, annualExpected };
   });
 
   const monthlyExpected = monthYms.map((_, i) =>
@@ -72,8 +112,36 @@ export default function KrEtfTaxMatrix({
   );
   const grandExpected = monthlyExpected.reduce((s, v) => s + v, 0);
 
-  const persistPurchases = (code, next) => updateTaxBasePurchases(portfolio.id, code, next);
-  const persistSales = (code, next) => updateTaxBaseSales(portfolio.id, code, next);
+  // ── 이벤트 CRUD ─────────────────────────────────────────────────────────────
+  const persistEvents = (code, next) => updateTaxBaseEvents(portfolio.id, code, next);
+
+  const addEvent = (code, events) => persistEvents(code, [
+    ...events,
+    { id: generateId(), date: new Date().toISOString().slice(0, 10), prevQty: 0, change: 0, taxBasePrice: 0 },
+  ]);
+
+  const updateEvent = (code, events, id, field, value) => persistEvents(code, events.map(e =>
+    e.id !== id ? e : { ...e, [field]: field === 'date' ? String(value) : value },
+  ));
+
+  const deleteEvent = (code, events, id) => persistEvents(code, events.filter(e => e.id !== id));
+
+  const handleEventDateChange = (stock, events, id, newDate) => {
+    const updates = { date: newDate };
+    if (/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+      updates.prevQty = lookupPrevQty(newDate, stock.code);
+      const { dailyTaxFp } = getCodeTaxBase(portfolio, stock.code);
+      const ymd = newDate.replace(/-/g, '');
+      if (dailyTaxFp[ymd] != null) updates.taxBasePrice = dailyTaxFp[ymd];
+    }
+    persistEvents(stock.code, events.map(e => e.id !== id ? e : { ...e, ...updates }));
+  };
+
+  const refetchPrevQty = (stock, events, evt) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(evt.date || ''))) return;
+    const prevQty = lookupPrevQty(evt.date, stock.code);
+    persistEvents(stock.code, events.map(e => e.id !== evt.id ? e : { ...e, prevQty }));
+  };
 
   // ── 과표기준가 자동 조회 ─────────────────────────────────────────────────
   const fetchTaxBase = async (stock) => {
@@ -92,21 +160,18 @@ export default function KrEtfTaxMatrix({
         return;
       }
 
-      // dailyTaxFp 맵 구성 { YYYYMMDD: number }
       const dailyMap = {};
       for (const item of data.items) {
         if (item.taxFp != null) dailyMap[item.gijunYmd] = item.taxFp;
       }
 
-      // 오늘 날짜 (YYYYMMDD)
       const now = new Date();
       const pad = (n) => String(n).padStart(2, '0');
       const todayYmd = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
 
-      // Drive에 저장 (기존 데이터와 merge)
       updateTaxBaseDailyFp(portfolio.id, code, dailyMap, todayYmd);
 
-      // 배당락일 과표 자동 채움 (dividendExDate 연계)
+      // 배당락일 과표 자동 채움
       const exDateMap = portfolio?.dividendExDate?.[code] || {};
       let exFillCount = 0;
       for (const [ym, exDate] of Object.entries(exDateMap)) {
@@ -119,7 +184,24 @@ export default function KrEtfTaxMatrix({
         }
       }
 
-      // 매입 이벤트 과표기준가 자동 채움
+      // 이벤트 과표기준가 자동 채움
+      const { events: currentEvents } = getCodeTaxBase(portfolio, code);
+      let eventsFilled = 0;
+      if (currentEvents.length > 0) {
+        const updatedEvents = currentEvents.map(evt => {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(String(evt.date || ''))) return evt;
+          const evtYmd = String(evt.date).replace(/-/g, '');
+          const taxFp = dailyMap[evtYmd];
+          if (taxFp != null && taxFp !== safeNum(evt.taxBasePrice)) {
+            eventsFilled++;
+            return { ...evt, taxBasePrice: taxFp };
+          }
+          return evt;
+        });
+        if (eventsFilled > 0) updateTaxBaseEvents(portfolio.id, code, updatedEvents);
+      }
+
+      // 구 purchases 과표기준가 자동 채움 (하위 호환)
       const { purchases } = getCodeTaxBase(portfolio, code);
       const updatedPurchases = purchases.map(p => {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || ''))) return p;
@@ -127,17 +209,12 @@ export default function KrEtfTaxMatrix({
         const taxFp = dailyMap[pYmd];
         return taxFp != null ? { ...p, taxBasePrice: taxFp } : p;
       });
-      const purchasesFilled = updatedPurchases.filter((p, i) =>
-        p.taxBasePrice !== purchases[i]?.taxBasePrice
-      ).length;
-      if (purchases.length > 0) {
-        persistPurchases(code, updatedPurchases);
-      }
+      if (purchases.length > 0) updateTaxBasePurchases(portfolio.id, code, updatedPurchases);
 
       notify(
         `[${stock.name || code}] 과표기준가 ${data.count}일 수집 완료` +
         (exFillCount ? ` · 배당락 ${exFillCount}건` : '') +
-        (purchasesFilled ? ` · 매입 ${purchasesFilled}건 자동 입력` : ''),
+        (eventsFilled ? ` · 이벤트 ${eventsFilled}건 자동 입력` : ''),
         'success',
       );
     } catch (e) {
@@ -147,30 +224,11 @@ export default function KrEtfTaxMatrix({
     }
   };
 
-  // 모든 한국 ETF 일괄 조회
   const fetchAllTaxBase = async () => {
     for (const stock of krStocks) {
       await fetchTaxBase(stock);
     }
   };
-
-  const addPurchase = (code, purchases) => persistPurchases(code, [
-    ...purchases,
-    { id: generateId(), date: new Date().toISOString().slice(0, 10), shares: 0, taxBasePrice: 0 },
-  ]);
-  const updatePurchase = (code, purchases, id, field, value) => persistPurchases(code, purchases.map(p =>
-    p.id !== id ? p : { ...p, [field]: field === 'date' ? String(value) : value },
-  ));
-  const deletePurchase = (code, purchases, id) => persistPurchases(code, purchases.filter(p => p.id !== id));
-
-  const addSale = (code, sales) => persistSales(code, [
-    ...sales,
-    { id: generateId(), date: new Date().toISOString().slice(0, 10), shares: 0 },
-  ]);
-  const updateSale = (code, sales, id, field, value) => persistSales(code, sales.map(s =>
-    s.id !== id ? s : { ...s, [field]: field === 'date' ? String(value) : value },
-  ));
-  const deleteSale = (code, sales, id) => persistSales(code, sales.filter(s => s.id !== id));
 
   return (
     <div className="overflow-x-auto">
@@ -185,7 +243,7 @@ export default function KrEtfTaxMatrix({
             onClick={fetchAllTaxBase}
             disabled={fetchingCode != null}
             className="px-2.5 py-1 rounded border border-sky-700/60 text-sky-300 hover:text-sky-200 hover:border-sky-500 hover:bg-sky-900/20 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5 transition"
-            title="FunETF에서 전체 종목 과표기준가 일괄 조회 → exTaxBase·매입 과표 자동 입력"
+            title="FunETF에서 전체 종목 과표기준가 일괄 조회 → 배당락·이벤트 과표 자동 입력"
           >
             <RefreshCw size={10} className={fetchingCode != null ? 'animate-spin' : ''} />
             과표 전체 자동조회
@@ -203,11 +261,8 @@ export default function KrEtfTaxMatrix({
           </tr>
         </thead>
         <tbody>
-          {stockRows.map(({ stock, purchases, sales, currentQty, monthData, annualExpected }) => {
+          {stockRows.map(({ stock, events, sortedEventsWithAvg, purchases, sales, currentQty, monthData, annualExpected }) => {
             const isExpanded = expandedCode === stock.code;
-            const purchasedShares = purchases.reduce((s, p) => s + safeNum(p.shares), 0);
-            const soldShares = sales.reduce((s, p) => s + safeNum(p.shares), 0);
-            const netShares = purchasedShares - soldShares;
             return (
               <React.Fragment key={stock.code}>
                 <tr className="border-b border-gray-700/40 hover:bg-gray-800/20">
@@ -224,7 +279,7 @@ export default function KrEtfTaxMatrix({
                         onClick={() => fetchTaxBase(stock)}
                         disabled={fetchingCode != null}
                         className="text-[10px] px-2 py-0.5 rounded border border-sky-700/60 text-sky-300 hover:text-sky-200 hover:border-sky-500 hover:bg-sky-900/20 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1 transition"
-                        title="FunETF에서 과표기준가 자동 조회 → exTaxBase·매입 과표 자동 입력"
+                        title="FunETF에서 과표기준가 자동 조회 → 배당락·이벤트 과표 자동 입력"
                       >
                         <RefreshCw size={10} className={fetchingCode === stock.code ? 'animate-spin' : ''} />
                         {fetchingCode === stock.code ? '조회 중...' : '자동조회'}
@@ -252,8 +307,8 @@ export default function KrEtfTaxMatrix({
                         <div className="text-[11px] text-gray-100 font-medium truncate">{stock.name || stock.code}</div>
                         <div className="text-[9px] text-gray-500 tabular-nums">
                           {stock.code} · 보유 {currentQty.toLocaleString()}주
-                          {purchasedShares > 0 && netShares !== currentQty && (
-                            <span className="text-amber-400/80 ml-1">⚠ 입력 {netShares.toLocaleString()}주</span>
+                          {events.length > 0 && (
+                            <span className="text-sky-400/70 ml-1">· 이벤트 {events.length}건</span>
                           )}
                         </div>
                       </div>
@@ -274,15 +329,40 @@ export default function KrEtfTaxMatrix({
                         <div className="text-[9px] text-gray-500 tabular-nums text-right px-0.5" title="포트폴리오 보유 주식수">
                           보유 {currentQty.toLocaleString()}주
                         </div>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={d.avgVal ?? ''}
-                          onChange={e => updateTaxBaseAvgPrice(portfolio.id, stock.code, d.ym, e.target.value)}
-                          placeholder="평균 과표"
-                          className={avgInputCls}
-                          title="해당 시점의 평균 과표기준가 (1주당) — 다음 단계에서 매입 이벤트 기반 자동 계산 예정"
-                        />
+                        <div className="relative">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={
+                              d.manualAvgVal !== undefined
+                                ? d.manualAvgVal
+                                : (d.computedAvgVal ? fmtTaxBase(d.computedAvgVal) : '')
+                            }
+                            onChange={e => {
+                              const val = e.target.value;
+                              updateTaxBaseAvgPrice(portfolio.id, stock.code, d.ym, val === '' ? null : val);
+                            }}
+                            placeholder={d.computedAvgVal ? '자동' : '평균 과표'}
+                            className={
+                              avgInputCls +
+                              (d.manualAvgVal === undefined && d.computedAvgVal ? ' opacity-60' : '')
+                            }
+                            title={
+                              d.manualAvgVal === undefined && d.computedAvgVal
+                                ? '이벤트 기반 자동 계산 (수정하면 수동 저장, 빈칸으로 되돌리기)'
+                                : '평균 과표 (수동 입력)'
+                            }
+                          />
+                        </div>
+                        {d.manualAvgVal === undefined && d.computedAvgVal ? (
+                          <div className="text-[8px] text-sky-500/50 text-right px-0.5">자동</div>
+                        ) : d.manualAvgVal !== undefined && d.computedAvgVal ? (
+                          <button
+                            onClick={() => updateTaxBaseAvgPrice(portfolio.id, stock.code, d.ym, null)}
+                            className="text-[8px] text-sky-500/60 hover:text-sky-400 text-right px-0.5 block w-full"
+                            title="이벤트 기반 자동 계산값으로 되돌리기"
+                          >↺ 자동</button>
+                        ) : null}
                         <div className="text-[9px] text-sky-300 tabular-nums text-right px-0.5" title="과세 과표 = 배당 과표 − 평균 과표 (1주당)">
                           과세 {fmtTaxBase(d.taxBasePerShare)}
                         </div>
@@ -299,142 +379,128 @@ export default function KrEtfTaxMatrix({
                 {isExpanded && (
                   <tr className="bg-[#0b1322] border-b border-gray-700/40">
                     <td colSpan={MONTHS.length + 2} className="px-4 py-3">
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                        {/* 매입 섹션 */}
-                        <div className="border border-gray-700/60 rounded-lg bg-gray-900/40">
-                          <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] font-semibold text-gray-200">매입 이벤트</span>
-                              <span className="text-[10px] text-gray-500">{purchases.length}건 · {purchasedShares.toLocaleString()}주</span>
-                            </div>
-                            <button
-                              onClick={() => addPurchase(stock.code, purchases)}
-                              className="text-[10px] px-2 py-0.5 rounded border border-blue-700/60 text-blue-400 hover:text-blue-300 hover:border-blue-500 inline-flex items-center gap-1"
-                            >
-                              <Plus size={10} /> 행 추가
-                            </button>
+                      <div className="border border-gray-700/60 rounded-lg bg-gray-900/40">
+                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-semibold text-gray-200">매입/매도 이벤트</span>
+                            <span className="text-[10px] text-gray-500">{events.length}건</span>
                           </div>
-                          <div className="px-3 py-2">
-                            {purchases.length === 0 ? (
-                              <div className="text-[10px] text-gray-600 text-center py-2">매입 이벤트가 없습니다.</div>
-                            ) : (
-                              <table className="w-full text-[10px]">
-                                <thead className="text-gray-500 border-b border-gray-700/50">
-                                  <tr>
-                                    <th className="text-left py-1 pl-1 font-normal w-[110px]">날짜</th>
-                                    <th className="text-right py-1 px-1 font-normal">주식수</th>
-                                    <th className="text-right py-1 px-1 font-normal">매입 과표기준가</th>
-                                    <th className="py-1 pr-1 w-[24px]"></th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {purchases.map(p => (
-                                    <tr key={p.id} className="border-b border-gray-800/40 last:border-0">
-                                      <td className="py-1 pl-1">
+                          <button
+                            onClick={() => addEvent(stock.code, events)}
+                            className="text-[10px] px-2 py-0.5 rounded border border-blue-700/60 text-blue-400 hover:text-blue-300 hover:border-blue-500 inline-flex items-center gap-1"
+                          >
+                            <Plus size={10} /> 행 추가
+                          </button>
+                        </div>
+                        {events.length === 0 ? (
+                          <div className="text-[10px] text-gray-600 text-center py-4">
+                            이벤트가 없습니다. '행 추가'로 매입/매도를 입력하세요.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-[10px]">
+                              <thead className="text-gray-500 border-b border-gray-700/50">
+                                <tr>
+                                  <th className="text-left py-1 pl-3 font-normal w-[120px]">일자</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[100px]">
+                                    전일 수량
+                                    <span className="text-gray-600 font-normal ml-0.5" title="자산검증 전일 수량 자동 조회">↺</span>
+                                  </th>
+                                  <th className="text-right py-1 px-1 font-normal w-[80px]">매도/매수</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[80px]">조정 수량</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[100px]">과표기준가</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[100px]">평균 과표</th>
+                                  <th className="py-1 pr-2 w-[24px]"></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {sortedEventsWithAvg.map(({ evt, runningAvg }) => {
+                                  const prevQtyNum = safeNum(evt.prevQty);
+                                  const changeNum = safeNum(evt.change);
+                                  const adjustedQty = prevQtyNum + changeNum;
+                                  const isSell = changeNum < 0;
+                                  const isBuy = changeNum > 0;
+                                  return (
+                                    <tr key={evt.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/10">
+                                      <td className="py-1 pl-3">
                                         <input
                                           type="date"
-                                          value={p.date || ''}
-                                          onChange={e => updatePurchase(stock.code, purchases, p.id, 'date', e.target.value)}
+                                          value={evt.date || ''}
+                                          onChange={e => handleEventDateChange(stock, events, evt.id, e.target.value)}
                                           className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none"
                                         />
+                                      </td>
+                                      <td className="py-1 px-1">
+                                        <div className="flex items-center gap-0.5">
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={evt.prevQty !== undefined && evt.prevQty !== null && evt.prevQty !== '' ? evt.prevQty : ''}
+                                            onChange={e => updateEvent(stock.code, events, evt.id, 'prevQty', e.target.value)}
+                                            placeholder="0"
+                                            className={numInputCls + ' flex-1 min-w-0'}
+                                            title="전일 보유 수량 (직접 입력 가능)"
+                                          />
+                                          <button
+                                            onClick={() => refetchPrevQty(stock, events, evt)}
+                                            className="text-gray-600 hover:text-sky-400 p-0.5 rounded shrink-0 transition"
+                                            title="자산검증에서 전일 수량 재조회"
+                                          >
+                                            <RotateCcw size={9} />
+                                          </button>
+                                        </div>
                                       </td>
                                       <td className="py-1 px-1">
                                         <input
                                           type="text"
                                           inputMode="numeric"
-                                          value={p.shares || ''}
-                                          onChange={e => updatePurchase(stock.code, purchases, p.id, 'shares', e.target.value)}
+                                          value={evt.change !== undefined && evt.change !== '' ? evt.change : ''}
+                                          onChange={e => updateEvent(stock.code, events, evt.id, 'change', e.target.value)}
                                           placeholder="0"
-                                          className={numInputCls}
+                                          className={
+                                            numInputCls +
+                                            (isSell ? ' !text-rose-400' : isBuy ? ' !text-emerald-400' : '')
+                                          }
+                                          title="매수=양수, 매도=음수"
                                         />
+                                      </td>
+                                      <td className="py-1 px-1 text-right tabular-nums text-gray-300">
+                                        {adjustedQty !== 0 || prevQtyNum !== 0
+                                          ? adjustedQty.toLocaleString()
+                                          : <span className="text-gray-700">-</span>}
                                       </td>
                                       <td className="py-1 px-1">
                                         <input
                                           type="text"
                                           inputMode="decimal"
-                                          value={p.taxBasePrice || ''}
-                                          onChange={e => updatePurchase(stock.code, purchases, p.id, 'taxBasePrice', e.target.value)}
+                                          value={evt.taxBasePrice !== undefined && evt.taxBasePrice !== '' ? evt.taxBasePrice : ''}
+                                          onChange={e => updateEvent(stock.code, events, evt.id, 'taxBasePrice', e.target.value)}
                                           placeholder="0.00"
                                           className={numInputCls}
+                                          title="해당 날짜의 과표기준가 (자동조회 또는 직접 입력)"
                                         />
                                       </td>
-                                      <td className="py-1 pr-1 text-center">
+                                      <td className="py-1 px-1 text-right tabular-nums text-sky-300">
+                                        {runningAvg > 0 ? fmtTaxBase(runningAvg) : <span className="text-gray-700">-</span>}
+                                      </td>
+                                      <td className="py-1 pr-2 text-center">
                                         <button
-                                          onClick={() => deletePurchase(stock.code, purchases, p.id)}
-                                          className="text-gray-600 hover:text-red-400 p-0.5 rounded"
+                                          onClick={() => deleteEvent(stock.code, events, evt.id)}
+                                          className="text-gray-600 hover:text-red-400 p-0.5 rounded transition"
                                           title="삭제"
                                         >
                                           <Trash2 size={10} />
                                         </button>
                                       </td>
                                     </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )}
+                                  );
+                                })}
+                              </tbody>
+                            </table>
                           </div>
-                        </div>
-                        {/* 매도 섹션 */}
-                        <div className="border border-gray-700/60 rounded-lg bg-gray-900/40">
-                          <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] font-semibold text-gray-200">매도 이벤트 <span className="text-gray-600 text-[9px] font-normal">(평균법)</span></span>
-                              <span className="text-[10px] text-gray-500">{sales.length}건 · {soldShares.toLocaleString()}주</span>
-                            </div>
-                            <button
-                              onClick={() => addSale(stock.code, sales)}
-                              className="text-[10px] px-2 py-0.5 rounded border border-rose-700/60 text-rose-400 hover:text-rose-300 hover:border-rose-500 inline-flex items-center gap-1"
-                            >
-                              <Plus size={10} /> 행 추가
-                            </button>
-                          </div>
-                          <div className="px-3 py-2">
-                            {sales.length === 0 ? (
-                              <div className="text-[10px] text-gray-600 text-center py-2">매도 이벤트가 없습니다.</div>
-                            ) : (
-                              <table className="w-full text-[10px]">
-                                <thead className="text-gray-500 border-b border-gray-700/50">
-                                  <tr>
-                                    <th className="text-left py-1 pl-1 font-normal w-[110px]">날짜</th>
-                                    <th className="text-right py-1 px-1 font-normal">주식수</th>
-                                    <th className="py-1 pr-1 w-[24px]"></th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {sales.map(s => (
-                                    <tr key={s.id} className="border-b border-gray-800/40 last:border-0">
-                                      <td className="py-1 pl-1">
-                                        <input
-                                          type="date"
-                                          value={s.date || ''}
-                                          onChange={e => updateSale(stock.code, sales, s.id, 'date', e.target.value)}
-                                          className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none"
-                                        />
-                                      </td>
-                                      <td className="py-1 px-1">
-                                        <input
-                                          type="text"
-                                          inputMode="numeric"
-                                          value={s.shares || ''}
-                                          onChange={e => updateSale(stock.code, sales, s.id, 'shares', e.target.value)}
-                                          placeholder="0"
-                                          className={numInputCls}
-                                        />
-                                      </td>
-                                      <td className="py-1 pr-1 text-center">
-                                        <button
-                                          onClick={() => deleteSale(stock.code, sales, s.id)}
-                                          className="text-gray-600 hover:text-red-400 p-0.5 rounded"
-                                        >
-                                          <Trash2 size={10} />
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )}
-                          </div>
+                        )}
+                        <div className="px-3 py-1 text-[9px] text-gray-600 border-t border-gray-800/50">
+                          일자 선택 시 자산검증 전일 수량·과표기준가 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨
                         </div>
                       </div>
                     </td>
@@ -461,7 +527,7 @@ export default function KrEtfTaxMatrix({
         </tfoot>
       </table>
       <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-        배당 과표·평균 과표 입력 → 과세 과표(배당-평균)·예상 과세 자동 계산 · 데이터는 자동 저장 · 평균 과표 자동 산출은 다음 단계에서 추가 예정
+        배당 과표·평균 과표 입력 → 과세 과표(배당-평균)·예상 과세 자동 계산 · 평균 과표 "자동" = 이벤트 기반 자동 산출 (빈칸 입력 시 되돌리기)
       </div>
       {lookupStock && (
         <TaxBaseLookupModal
