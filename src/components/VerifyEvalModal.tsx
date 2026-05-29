@@ -186,23 +186,16 @@ export default function VerifyEvalModal({
     [depositHistory2, date],
   );
 
-  const cumPrincipalOnDate = useMemo(() => {
-    const deps = [...(depositHistory || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    const wds = [...(depositHistory2 || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    let cum = 0;
-    for (const d of deps) {
-      if ((d.date || '') > date) break;
-      if (!d.noPrincipal) cum += cleanNum(d.amount);
-    }
-    for (const w of wds) {
-      if ((w.date || '') > date) break;
-      if (!w.noPrincipal) {
-        const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
-        cum -= deducted;
-      }
-    }
-    return Math.max(0, cum);
-  }, [depositHistory, depositHistory2, date]);
+  const principalAtDate = useMemo(() => {
+    const base = cleanNum(portfolio?.principal ?? 0);
+    const depositsAfter = (depositHistory || [])
+      .filter(d => (d.date || '') > date && !d.noPrincipal)
+      .reduce((s, d) => s + cleanNum(d.amount), 0);
+    const withdrawalsAfter = (depositHistory2 || [])
+      .filter(w => (w.date || '') > date && !w.noPrincipal)
+      .reduce((s, w) => s + (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)), 0);
+    return Math.max(0, base - depositsAfter + withdrawalsAfter);
+  }, [portfolio, depositHistory, depositHistory2, date]);
 
   const hasCashFlow = depositsOnDate.length > 0 || withdrawalsOnDate.length > 0;
   const effective = useMemo(
@@ -211,7 +204,7 @@ export default function VerifyEvalModal({
   );
   const isAnchorDay = !!effective.anchor && effective.anchor.date === date;
   const isPropagated = !!effective.anchor && effective.anchor.date !== date;
-  const autoPrincipal = cumPrincipalOnDate > 0 ? cumPrincipalOnDate : cleanNum(portfolio?.principal ?? record.principal ?? 0);
+  const autoPrincipal = principalAtDate > 0 ? principalAtDate : cleanNum(record.principal ?? 0);
   const principalOnDate = effective.value != null ? effective.value : autoPrincipal;
 
   const commitQty = (idx) => {
