@@ -1,12 +1,13 @@
 // @ts-nocheck
 import React, { useMemo, useState } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency } from '../utils';
 import {
   getKrEtfStocks,
   getCodeTaxBase,
   safeNum,
 } from '../krEtfTaxHelpers';
+import TaxBaseLookupModal from './TaxBaseLookupModal';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -28,8 +29,11 @@ export default function KrEtfTaxMatrix({
   updateTaxBaseExPrice,
   updateTaxBaseAvgPrice,
   notify,
+  driveTokenRef,
+  driveFolderIdRef,
 }) {
   const [expandedCode, setExpandedCode] = useState(null);
+  const [lookupStock, setLookupStock] = useState(null);
 
   const krStocks = useMemo(() => getKrEtfStocks(portfolio), [portfolio?.portfolio]);
 
@@ -118,6 +122,13 @@ export default function KrEtfTaxMatrix({
               <React.Fragment key={stock.code}>
                 <tr className="border-b border-gray-700/40 hover:bg-gray-800/20">
                   <td className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+                    <button
+                      onClick={() => setLookupStock(stock)}
+                      className="mb-1 text-[10px] px-2 py-0.5 rounded border border-amber-700/60 text-amber-300 hover:text-amber-200 hover:border-amber-500 hover:bg-amber-900/20 inline-flex items-center gap-1 transition"
+                      title="Drive에서 최신 과표 데이터 조회 + 메모장 보기 + CSV 다운로드"
+                    >
+                      <FileText size={10} /> 과표 조회
+                    </button>
                     <button
                       onClick={() => setExpandedCode(isExpanded ? null : stock.code)}
                       className="flex items-start gap-1.5 text-left w-full hover:text-amber-300"
@@ -340,6 +351,16 @@ export default function KrEtfTaxMatrix({
       <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
         배당 과표·평균 과표 입력 → 과세 과표(배당-평균)·예상 과세 자동 계산 · 데이터는 자동 저장 · 평균 과표 자동 산출은 다음 단계에서 추가 예정
       </div>
+      {lookupStock && (
+        <TaxBaseLookupModal
+          stock={lookupStock}
+          portfolio={portfolio}
+          driveTokenRef={driveTokenRef}
+          driveFolderIdRef={driveFolderIdRef}
+          notify={notify}
+          onClose={() => setLookupStock(null)}
+        />
+      )}
     </div>
   );
 }

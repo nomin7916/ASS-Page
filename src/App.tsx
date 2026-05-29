@@ -2162,6 +2162,8 @@ export default function App() {
             holidays={marketHolidays}
             dividendTaxHistory={dividendTaxHistory}
             onDividendTaxHistoryUpdate={setDividendTaxHistory}
+            driveTokenRef={driveTokenRef}
+            driveFolderIdRef={driveFolderIdRef}
           />
         )}
 
