@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, FileText, RefreshCw, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, FileText, RefreshCw, RotateCcw, ExternalLink } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency, resolveHoldings } from '../utils';
 import {
   getKrEtfStocks,
@@ -9,6 +9,28 @@ import {
   computeMonthlyAvgFromEvents,
 } from '../krEtfTaxHelpers';
 import TaxBaseLookupModal from './TaxBaseLookupModal';
+
+const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
+
+function tickerToIsin(ticker) {
+  const base = 'KR7' + ticker.toUpperCase();
+  const digits = [];
+  for (const c of base) {
+    if (c >= '0' && c <= '9') digits.push(parseInt(c, 10));
+    else if (c >= 'A' && c <= 'Z') { const v = c.charCodeAt(0) - 65 + 10; digits.push(Math.floor(v / 10), v % 10); }
+  }
+  digits.push(0);
+  let sum = 0;
+  const len = digits.length;
+  for (let i = len - 1; i >= 0; i--) {
+    let d = digits[i];
+    if ((len - i) % 2 === 0) { d *= 2; if (d > 9) d -= 9; }
+    sum += d;
+  }
+  return base + String((10 - (sum % 10)) % 10);
+}
+
+const funetfEtfUrl = (code) => `${FUNETF_ORIGIN}/product/etf/view/${tickerToIsin(code)}`;
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -276,6 +298,15 @@ export default function KrEtfTaxMatrix({
                       >
                         <FileText size={10} /> 과표 조회
                       </button>
+                      <a
+                        href={funetfEtfUrl(stock.code)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] px-2 py-0.5 rounded border border-gray-700/60 text-gray-400 hover:text-gray-200 hover:border-gray-500 hover:bg-gray-800/40 inline-flex items-center gap-1 transition"
+                        title={`FunETF 상세 페이지 — ${stock.name || stock.code}`}
+                      >
+                        <ExternalLink size={10} /> FunETF
+                      </a>
                       <button
                         onClick={() => fetchTaxBase(stock)}
                         disabled={fetchingCode != null}
@@ -436,10 +467,20 @@ export default function KrEtfTaxMatrix({
                                           className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none"
                                         />
                                         {evt.date && (
-                                          <span
-                                            className={hasFpData ? 'text-emerald-500 text-[9px]' : 'text-gray-600 text-[9px]'}
-                                            title={hasFpData ? `FP: ${fmtTaxBase(fpValue)}` : '이 날짜의 과표기준가 데이터 없음 (자동조회 필요 또는 직접 입력)'}
-                                          >●</span>
+                                          hasFpData ? (
+                                            <span
+                                              className="text-emerald-500 text-[9px]"
+                                              title={`FP: ${fmtTaxBase(fpValue)}`}
+                                            >●</span>
+                                          ) : (
+                                            <a
+                                              href={funetfEtfUrl(stock.code)}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="text-gray-600 hover:text-amber-400 text-[9px] transition"
+                                              title="이 날짜 과표기준가 데이터 없음 — FunETF에서 직접 확인"
+                                            >●</a>
+                                          )
                                         )}
                                         </div>
                                       </td>
