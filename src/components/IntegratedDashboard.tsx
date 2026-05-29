@@ -1014,7 +1014,6 @@ export default function IntegratedDashboard({
                       return itemsB.reduce((s, x) => s + x.value, 0) - itemsA.reduce((s, x) => s + x.value, 0);
                     });
                     const hsk = holdingsSortConfig.key, hsd = holdingsSortConfig.direction;
-                    const arr = (k) => <span className={`ml-0.5 text-[9px] ${hsk === k ? 'text-gray-300' : 'invisible'}`}>{hsk === k && hsd === -1 ? '▼' : '▲'}</span>;
                     let sortedFlatItems = null;
                     if (hsk) {
                       const getSortVal = (item) => {
@@ -1097,11 +1096,11 @@ export default function IntegratedDashboard({
                           <thead className="text-gray-400 border-b border-gray-700">
                             <tr className="text-center">
                               <th className="pb-2 px-2 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort(null)} title="클릭하여 정렬 초기화">구분</th>
-                              <th className="pb-2 px-2 border-r border-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('name')}>종목{arr('name')}</th>
-                              <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('value')}>평가금액{arr('value')}</th>
-                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('value')}>비중{arr('value')}</th>
-                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('profit')}>수익{arr('profit')}</th>
-                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('profitRate')}>수익률{arr('profitRate')}</th>
+                              <th className="pb-2 px-2 border-r border-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('name')}>종목</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('value')}>평가금액</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('value')}>비중</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('profit')}>수익</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('profitRate')}>수익률</th>
                               <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중1위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div>{(Object.values(holdingsFetchDate)[0] as string) && <div className="text-[9px] text-gray-600/60 font-normal">확인: {Object.values(holdingsFetchDate)[0] as string}</div>}</th>
                               <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중2위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
                               <th className="pb-2 px-2 text-sky-400/80 text-[10px]">비중3위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
