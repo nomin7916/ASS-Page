@@ -171,6 +171,7 @@ export default function IntegratedDashboard({
   // ETF 구성종목 + PER 데이터 (itemName → holdings[] | { isStock, per, fper } | 'loading')
   const [etfInfoMap, setEtfInfoMap] = useState({});
   const [holdingsFetchDate, setHoldingsFetchDate] = useState({});
+  const [holdingsSortConfig, setHoldingsSortConfig] = useState({ key: null, direction: 1 });
   const fetchingRef = useRef(new Set());
 
   useEffect(() => {
@@ -225,6 +226,11 @@ export default function IntegratedDashboard({
 
     candidates.forEach(item => fetchOne(item));
   }, [intHoldingsDonutData]);
+
+  const handleHoldingsSort = (key) => setHoldingsSortConfig(prev => ({
+    key,
+    direction: prev.key === key ? -prev.direction : 1,
+  }));
 
   const handleNewAccToggle = useCallback(() => {
     if (newAccBtnRef.current) {
@@ -1007,6 +1013,24 @@ export default function IntegratedDashboard({
                       if (idxB !== -1) return 1;
                       return itemsB.reduce((s, x) => s + x.value, 0) - itemsA.reduce((s, x) => s + x.value, 0);
                     });
+                    const hsk = holdingsSortConfig.key, hsd = holdingsSortConfig.direction;
+                    const arr = (k) => <span className={`ml-0.5 text-[9px] ${hsk === k ? 'text-gray-300' : 'invisible'}`}>{hsk === k && hsd === -1 ? '▼' : '▲'}</span>;
+                    if (hsk) {
+                      const getSortVal = (item) => {
+                        if (hsk === 'name') return item.name;
+                        if (hsk === 'value') return item.value;
+                        if (hsk === 'profit') return item.value - item.cost;
+                        if (hsk === 'profitRate') return item.cost > 0 ? (item.value - item.cost) / item.cost * 100 : 0;
+                        return 0;
+                      };
+                      groupEntries.forEach(([, items]) => {
+                        items.sort((a, b) => {
+                          const va = getSortVal(a), vb = getSortVal(b);
+                          if (typeof va === 'string') return va.localeCompare(vb) * hsd;
+                          return (va - vb) * hsd;
+                        });
+                      });
+                    }
                     const parseHex = (hex) => {
                       if (!hex || !hex.startsWith('#') || hex.length < 7) return null;
                       const r = parseInt(hex.slice(1, 3), 16) / 255;
@@ -1073,12 +1097,12 @@ export default function IntegratedDashboard({
                         <table className="w-full text-xs min-w-[780px]">
                           <thead className="text-gray-400 border-b border-gray-700">
                             <tr className="text-center">
-                              <th className="pb-2 px-2 border-r border-gray-700">구분</th>
-                              <th className="pb-2 px-2 border-r border-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)]">종목</th>
-                              <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400">평가금액</th>
-                              <th className="pb-2 px-3 border-r border-gray-700">비중</th>
-                              <th className="pb-2 px-3 border-r border-gray-700">수익</th>
-                              <th className="pb-2 px-3 border-r border-gray-700">수익률</th>
+                              <th className="pb-2 px-2 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort(null)} title="클릭하여 정렬 초기화">구분</th>
+                              <th className="pb-2 px-2 border-r border-gray-700 sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('name')}>종목{arr('name')}</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 text-yellow-400 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('value')}>평가금액{arr('value')}</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('value')}>비중{arr('value')}</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('profit')}>수익{arr('profit')}</th>
+                              <th className="pb-2 px-3 border-r border-gray-700 cursor-pointer hover:bg-gray-700/50 whitespace-nowrap" onClick={() => handleHoldingsSort('profitRate')}>수익률{arr('profitRate')}</th>
                               <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중1위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div>{(Object.values(holdingsFetchDate)[0] as string) && <div className="text-[9px] text-gray-600/60 font-normal">확인: {Object.values(holdingsFetchDate)[0] as string}</div>}</th>
                               <th className="pb-2 px-2 border-r border-gray-700 text-sky-400/80 text-[10px]">비중2위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
                               <th className="pb-2 px-2 text-sky-400/80 text-[10px]">비중3위<div className="text-[9px] text-gray-600 font-normal">종목·비중 / PER·선행PER</div></th>
