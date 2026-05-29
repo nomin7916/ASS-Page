@@ -187,16 +187,16 @@ export default function KrEtfTaxMatrix({
       // 이벤트 과표기준가 자동 채움
       const { events: currentEvents } = getCodeTaxBase(portfolio, code);
       let eventsFilled = 0;
+      let eventsNoData = 0;
       if (currentEvents.length > 0) {
         const updatedEvents = currentEvents.map(evt => {
           if (!/^\d{4}-\d{2}-\d{2}$/.test(String(evt.date || ''))) return evt;
           const evtYmd = String(evt.date).replace(/-/g, '');
           const taxFp = dailyMap[evtYmd];
-          if (taxFp != null && taxFp !== safeNum(evt.taxBasePrice)) {
-            eventsFilled++;
-            return { ...evt, taxBasePrice: taxFp };
-          }
-          return evt;
+          if (taxFp == null) { eventsNoData++; return evt; }
+          if (taxFp === safeNum(evt.taxBasePrice)) return evt;
+          eventsFilled++;
+          return { ...evt, taxBasePrice: taxFp };
         });
         if (eventsFilled > 0) updateTaxBaseEvents(portfolio.id, code, updatedEvents);
       }
@@ -213,8 +213,9 @@ export default function KrEtfTaxMatrix({
 
       notify(
         `[${stock.name || code}] 과표기준가 ${data.count}일 수집 완료` +
-        (exFillCount ? ` · 배당락 ${exFillCount}건` : '') +
-        (eventsFilled ? ` · 이벤트 ${eventsFilled}건 자동 입력` : ''),
+        (exFillCount ? ` · 배당락 ${exFillCount}건 자동입력` : '') +
+        (eventsFilled ? ` · 이벤트 ${eventsFilled}건 자동입력` : '') +
+        (eventsNoData ? ` · 이벤트 ${eventsNoData}건 날짜 데이터 없음 (직접 입력 필요)` : ''),
         'success',
       );
     } catch (e) {
@@ -420,15 +421,27 @@ export default function KrEtfTaxMatrix({
                                   const adjustedQty = prevQtyNum + changeNum;
                                   const isSell = changeNum < 0;
                                   const isBuy = changeNum > 0;
+                                  const evtYmd = String(evt.date || '').replace(/-/g, '');
+                                  const fpValue = /^\d{8}$/.test(evtYmd) ? dailyTaxFp[evtYmd] : undefined;
+                                  const hasFpData = fpValue != null;
+                                  const fpDiffers = hasFpData && fpValue !== safeNum(evt.taxBasePrice);
                                   return (
                                     <tr key={evt.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/10">
                                       <td className="py-1 pl-3">
+                                        <div className="flex items-center gap-0.5">
                                         <input
                                           type="date"
                                           value={evt.date || ''}
                                           onChange={e => handleEventDateChange(stock, events, evt.id, e.target.value)}
                                           className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none"
                                         />
+                                        {evt.date && (
+                                          <span
+                                            className={hasFpData ? 'text-emerald-500 text-[9px]' : 'text-gray-600 text-[9px]'}
+                                            title={hasFpData ? `FP: ${fmtTaxBase(fpValue)}` : '이 날짜의 과표기준가 데이터 없음 (자동조회 필요 또는 직접 입력)'}
+                                          >●</span>
+                                        )}
+                                        </div>
                                       </td>
                                       <td className="py-1 px-1">
                                         <div className="flex items-center gap-0.5">
@@ -470,15 +483,24 @@ export default function KrEtfTaxMatrix({
                                           : <span className="text-gray-700">-</span>}
                                       </td>
                                       <td className="py-1 px-1">
-                                        <input
-                                          type="text"
-                                          inputMode="decimal"
-                                          value={evt.taxBasePrice !== undefined && evt.taxBasePrice !== '' ? evt.taxBasePrice : ''}
-                                          onChange={e => updateEvent(stock.code, events, evt.id, 'taxBasePrice', e.target.value)}
-                                          placeholder="0.00"
-                                          className={numInputCls}
-                                          title="해당 날짜의 과표기준가 (자동조회 또는 직접 입력)"
-                                        />
+                                        <div className="flex flex-col gap-0.5">
+                                          <input
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={evt.taxBasePrice !== undefined && evt.taxBasePrice !== '' ? evt.taxBasePrice : ''}
+                                            onChange={e => updateEvent(stock.code, events, evt.id, 'taxBasePrice', e.target.value)}
+                                            placeholder={hasFpData ? fmtTaxBase(fpValue) : '0.00'}
+                                            className={numInputCls}
+                                            title={hasFpData ? `FP 데이터: ${fmtTaxBase(fpValue)}` : '해당 날짜 과표기준가 데이터 없음 — 직접 입력'}
+                                          />
+                                          {fpDiffers && (
+                                            <button
+                                              onClick={() => updateEvent(stock.code, events, evt.id, 'taxBasePrice', fpValue)}
+                                              className="text-[8px] text-amber-500/70 hover:text-amber-400 text-right leading-none"
+                                              title={`FP 데이터 ${fmtTaxBase(fpValue)} 적용`}
+                                            >↙ {fmtTaxBase(fpValue)}</button>
+                                          )}
+                                        </div>
                                       </td>
                                       <td className="py-1 px-1 text-right tabular-nums text-sky-300">
                                         {runningAvg > 0 ? fmtTaxBase(runningAvg) : <span className="text-gray-700">-</span>}
