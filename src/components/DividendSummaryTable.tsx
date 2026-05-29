@@ -3,6 +3,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { cleanNum, formatCurrency, dividendPayDate } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
 import KrEtfTaxMatrix from './KrEtfTaxMatrix';
+import ErrorBoundary from './ErrorBoundary';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -1995,19 +1996,21 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         </div>
       )}
       {activeTab === 'tax' && ['portfolio', 'dividend', 'isa', 'pension', 'dc-irp'].includes(nonGoldPortfolios[0]?.accountType) && updateTaxBasePurchases && (
-        <KrEtfTaxMatrix
-          portfolio={nonGoldPortfolios[0]}
-          updateTaxBaseEvents={updateTaxBaseEvents}
-          updateTaxBasePurchases={updateTaxBasePurchases}
-          updateTaxBaseSales={updateTaxBaseSales}
-          updateTaxBaseExPrice={updateTaxBaseExPrice}
-          updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
-          updateTaxBaseDailyFp={updateTaxBaseDailyFp}
-          updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
-          notify={notify || (() => {})}
-          driveTokenRef={driveTokenRef}
-          driveFolderIdRef={driveFolderIdRef}
-        />
+        <ErrorBoundary label="과표 계산">
+          <KrEtfTaxMatrix
+            portfolio={nonGoldPortfolios[0]}
+            updateTaxBaseEvents={updateTaxBaseEvents}
+            updateTaxBasePurchases={updateTaxBasePurchases}
+            updateTaxBaseSales={updateTaxBaseSales}
+            updateTaxBaseExPrice={updateTaxBaseExPrice}
+            updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
+            updateTaxBaseDailyFp={updateTaxBaseDailyFp}
+            updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
+            notify={notify || (() => {})}
+            driveTokenRef={driveTokenRef}
+            driveFolderIdRef={driveFolderIdRef}
+          />
+        </ErrorBoundary>
       )}
     </div>
   );

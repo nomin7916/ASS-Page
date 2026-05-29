@@ -3,6 +3,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
 import { formatCurrency, formatPercent, formatShortDate, cleanNum, getClosestValue } from '../utils';
 import VerifyEvalModal from './VerifyEvalModal';
+import ErrorBoundary from './ErrorBoundary';
 
 export default function HistoryPanel({
   history,
@@ -155,22 +156,24 @@ export default function HistoryPanel({
             </div>
           </div>
           {verifyRecord && activePortfolio && (
-            <VerifyEvalModal
-              record={verifyRecord}
-              portfolio={activePortfolio}
-              accountType={activePortfolioAccountType}
-              stockHistoryMap={stockHistoryMap}
-              indicatorHistoryMap={indicatorHistoryMap}
-              marketIndicators={marketIndicators}
-              effectiveDateKey={effectiveDateKey}
-              patchActivePortfolio={patchActivePortfolio}
-              setHistory={setHistory}
-              notify={notify}
-              onClose={() => setVerifyRecord(null)}
-              depositHistory={depositHistory}
-              depositHistory2={depositHistory2}
-              history={history}
-            />
+            <ErrorBoundary label="자산검증">
+              <VerifyEvalModal
+                record={verifyRecord}
+                portfolio={activePortfolio}
+                accountType={activePortfolioAccountType}
+                stockHistoryMap={stockHistoryMap}
+                indicatorHistoryMap={indicatorHistoryMap}
+                marketIndicators={marketIndicators}
+                effectiveDateKey={effectiveDateKey}
+                patchActivePortfolio={patchActivePortfolio}
+                setHistory={setHistory}
+                notify={notify}
+                onClose={() => setVerifyRecord(null)}
+                depositHistory={depositHistory}
+                depositHistory2={depositHistory2}
+                history={history}
+              />
+            </ErrorBoundary>
           )}
           {helpOpen && (
             <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setHelpOpen(false)}>
