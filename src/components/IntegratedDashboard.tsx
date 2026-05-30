@@ -831,7 +831,7 @@ export default function IntegratedDashboard({
                     <div className="px-4 py-2 border-b border-gray-700/40 bg-[#060f1e]/70 min-h-[34px] shrink-0 flex items-center">
                       {displayResult ? (
                         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 w-full">
-                          <span className="text-gray-500 text-[10px] font-bold shrink-0">선택 기간</span>
+                          <span className="text-gray-500 text-[10px] font-bold shrink-0">{intSelectionResult ? '선택 기간' : '조회기간'}</span>
                           <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
                           <div className="flex items-center gap-1.5">
                             <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />

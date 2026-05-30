@@ -414,7 +414,7 @@ export default function PortfolioChart({
             {displayResult ? (
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center gap-2">
-                  <span className="text-gray-500 text-[10px] font-bold shrink-0">선택 기간</span>
+                  <span className="text-gray-500 text-[10px] font-bold shrink-0">{selectionResult ? '선택 기간' : '조회기간'}</span>
                   <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-1">

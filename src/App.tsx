@@ -1793,15 +1793,23 @@ export default function App() {
       const sp = s[`${k}Point`]; const ep = e[`${k}Point`];
       indRates[`${k}PeriodRate`] = (sp > 0 && ep != null) ? ((ep / sp) - 1) * 100 : null;
     });
+    const backtestPeriodRate = (s.backtestRate != null && e.backtestRate != null)
+      ? ((100 + e.backtestRate) / (100 + s.backtestRate) - 1) * 100 : null;
+    const compRates = Object.fromEntries(compStocks.map((_, ci) => {
+      const pk = `comp${ci + 1}Point`;
+      return [`comp${ci + 1}PeriodRate`, (s[pk] > 0 && e[pk] != null) ? ((e[pk] / s[pk]) - 1) * 100 : null];
+    }));
     setDefaultSelectionResult({
       startDate: s.date, endDate: e.date, profit,
       rate: s.evalAmount > 0 ? (profit / s.evalAmount) * 100 : 0,
+      startEval: s.evalAmount, endEval: e.evalAmount,
+      backtestPeriodRate,
       kospiPeriodRate: s.kospiPoint > 0 ? ((e.kospiPoint / s.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: s.sp500Point > 0 ? ((e.sp500Point / s.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
-      ...indRates,
+      ...indRates, ...compRates,
     });
-  }, [finalChartData]);
+  }, [finalChartData, compStocks]);
 
   // 통합 대시보드: 조회기간 변경 시 드래그 선택 초기화 + 전체 기간 기본값 계산
   useEffect(() => {
