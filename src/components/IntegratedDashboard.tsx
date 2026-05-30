@@ -143,6 +143,7 @@ export default function IntegratedDashboard({
 }) {
   const [showCompStocks, setShowCompStocks] = useState(false);
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
+  const [rightAxisZoom, setRightAxisZoom] = useState(0);
 
   const [memoModal, setMemoModal] = useState(null);
   const [memoPos, setMemoPos] = useState({ x: 0, y: 0 });
@@ -742,6 +743,23 @@ export default function IntegratedDashboard({
                         onSearch={handleIntSearchClick}
                       />
                       <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`p-1.5 rounded border flex items-center justify-center transition-colors ${intIsZeroBaseMode ? 'text-indigo-300 bg-indigo-900/40 border-indigo-700/60' : 'text-gray-500 border-gray-700 hover:text-gray-300 hover:bg-gray-800'}`} title="기간 시작 기준 / 원금 기준 전환"><Activity size={14} /></button>
+                      <div className="flex items-center gap-1 shrink-0 border border-gray-700 rounded px-2 py-1" title="우측 Y축(금액) 스케일 조절 — 오른쪽으로 당길수록 변동폭이 확대됩니다">
+                        <span className="text-[10px] text-gray-500 select-none">↕</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={5}
+                          value={rightAxisZoom}
+                          onChange={e => setRightAxisZoom(Number(e.target.value))}
+                          className="w-14 cursor-pointer accent-blue-400"
+                          style={{ height: '4px' }}
+                          title={rightAxisZoom === 0 ? '우측 Y축: 전체 범위 (0 기준)' : `우측 Y축 확대: ${rightAxisZoom}%`}
+                        />
+                        {rightAxisZoom > 0 && (
+                          <button onClick={() => setRightAxisZoom(0)} className="text-gray-600 hover:text-gray-400 text-[10px] leading-none" title="초기화">✕</button>
+                        )}
+                      </div>
                     </div>
                   </div>
                   {/* 링크 설정 패널 */}
@@ -874,7 +892,7 @@ export default function IntegratedDashboard({
                       <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.5} />
                       <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatVeryShortDate} minTickGap={30} />
                       <YAxis yAxisId="left" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => `${v.toFixed(1)}%`} width={48} />
-                      <YAxis yAxisId="right" orientation="right" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => (v >= 1e8 ? (v/1e8).toFixed(1)+'억' : (v/1e4).toFixed(0)+'만')} width={55} />
+                      <YAxis yAxisId="right" orientation="right" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => (v >= 1e8 ? (v/1e8).toFixed(1)+'억' : (v/1e4).toFixed(0)+'만')} width={55} domain={(() => { if (rightAxisZoom === 0 || intChartData.length === 0) return [0, 'auto']; const vals = intChartData.flatMap(d => [d.costAmount, d.evalAmount]).filter(v => v != null && v > 0); if (vals.length === 0) return [0, 'auto']; const dataMin = Math.min(...vals); return [Math.max(0, dataMin * (rightAxisZoom / 100) * 0.98), 'auto']; })()} />
                       <RechartsTooltip content={() => null} />
                       <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={false} />
                       <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={false} />
