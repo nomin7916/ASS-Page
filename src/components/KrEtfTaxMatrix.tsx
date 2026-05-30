@@ -7,6 +7,7 @@ import {
   getCodeTaxBase,
   safeNum,
   computeMonthlyAvgForGrid,
+  computeMonthlyQtyForGrid,
 } from '../krEtfTaxHelpers';
 import TaxBaseLookupModal from './TaxBaseLookupModal';
 
@@ -111,6 +112,8 @@ export default function KrEtfTaxMatrix({
   const stockRows = krStocks.map(stock => {
     const { events, purchases, sales, exTaxBase, avgTaxBase, dailyTaxFp } = getCodeTaxBase(portfolio, stock.code);
     const computedAvg = computeMonthlyAvgForGrid(events, monthYms);
+    const computedQtyMap = computeMonthlyQtyForGrid(events, monthYms);
+    const hasQtyEvents = Object.keys(computedQtyMap).length > 0;
     const sortedEventsWithAvg = buildSortedEventsWithAvg(events);
     const currentQty = cleanNum(stock.quantity || 0);
     const monthData = monthYms.map(ym => {
@@ -121,8 +124,9 @@ export default function KrEtfTaxMatrix({
       const exNum = safeNum(exVal);
       const avgNum = safeNum(avgVal);
       const taxBasePerShare = exNum - avgNum;
-      const expected = Math.max(0, taxBasePerShare) * currentQty;
-      return { ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected };
+      const monthQty = hasQtyEvents ? (computedQtyMap[ym] ?? 0) : currentQty;
+      const expected = Math.max(0, taxBasePerShare) * monthQty;
+      return { ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty };
     });
     const annualExpected = monthData.reduce((s, d) => s + d.expected, 0);
     return { stock, events, sortedEventsWithAvg, dailyTaxFp, purchases, sales, currentQty, monthData, annualExpected };
@@ -357,8 +361,8 @@ export default function KrEtfTaxMatrix({
                           className={exInputCls}
                           title="배당락일 과표기준가 (1주당)"
                         />
-                        <div className="text-[9px] text-gray-500 tabular-nums text-right px-0.5" title="포트폴리오 보유 주식수">
-                          보유 {currentQty.toLocaleString()}주
+                        <div className="text-[9px] text-gray-500 tabular-nums text-right px-0.5" title="해당 월 말 기준 보유 주식수">
+                          보유 {d.monthQty.toLocaleString()}주
                         </div>
                         <div className="relative">
                           <input

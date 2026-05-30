@@ -81,6 +81,25 @@ export function computeMonthlyAvgForGrid(events, monthYms) {
   return result;
 }
 
+// 연간 그리드 표시용 — 각 달 말일 기준 누적 보유 수량 계산
+// 이벤트가 없으면 {} 반환 (호출부에서 currentQty로 폴백)
+export function computeMonthlyQtyForGrid(events, monthYms) {
+  const snapshots = computeRunningAvgSnapshots(events);
+  if (snapshots.length === 0) return {};
+  const result: Record<string, number> = {};
+  for (const ym of (monthYms || [])) {
+    const [year, month] = ym.split('-').map(Number);
+    const lastDay = new Date(year, month, 0).toISOString().slice(0, 10);
+    let best = null;
+    for (const s of snapshots) {
+      if (s.date <= lastDay) best = s;
+      else break;
+    }
+    result[ym] = best != null ? best.qty : 0;
+  }
+  return result;
+}
+
 export function buildDividendEvents(portfolio, code) {
   if (!code) return [];
   const hist = portfolio?.dividendHistory?.[code] || {};
