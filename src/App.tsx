@@ -293,6 +293,7 @@ export default function App() {
   // 계좌별 차트 상태 독립 관리
   const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
   const accountChartStatesRef = useRef<Record<string, any>>({});
+  const intDashCompStocksRef = useRef<any[]>(defaultCompStocks);
   const prevActivePortfolioIdRef = useRef<string | null>(null);
   const chartPrefsUpdatedAtRef = useRef<number>(0);
 
@@ -767,11 +768,14 @@ export default function App() {
   // 통합 대시보드 ↔ 개별 계좌 전환 시 비교종목 상태 분리
   useEffect(() => {
     if (showIntegratedDashboard) {
-      setCompStocks(defaultCompStocks);
-    } else if (activePortfolioId) {
-      const saved = accountChartStatesRef.current[activePortfolioId];
-      if (saved?.compStocks) {
-        setCompStocks(saved.compStocks.map((s) => ({ ...s, loading: false })));
+      setCompStocks(intDashCompStocksRef.current.map((s) => ({ ...s, loading: false })));
+    } else {
+      intDashCompStocksRef.current = currentChartStateRef.current.compStocks || defaultCompStocks;
+      if (activePortfolioId) {
+        const saved = accountChartStatesRef.current[activePortfolioId];
+        if (saved?.compStocks) {
+          setCompStocks(saved.compStocks.map((s) => ({ ...s, loading: false })));
+        }
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
