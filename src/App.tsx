@@ -323,6 +323,7 @@ export default function App() {
     showBacktest, setShowBacktest,
     backtestColor, setBacktestColor,
     isZeroBaseMode, setIsZeroBaseMode,
+    isAvgPriceMode, setIsAvgPriceMode,
     hoveredPoint, setHoveredPoint,
     hoveredPortCatSlice, setHoveredPortCatSlice,
     hoveredPortStkSlice, setHoveredPortStkSlice,
@@ -885,6 +886,11 @@ export default function App() {
     const sortedDeposits = [...depositHistory].sort((a, b) => a.date < b.date ? -1 : 1);
     const sortedWithdrawals = [...depositHistory2].sort((a, b) => a.date < b.date ? -1 : 1);
     const isOverseasChart = activePortfolioAccountType === 'overseas';
+    const costBasis = portfolio.reduce((sum, item) => {
+      if (item.type === 'deposit') return sum + cleanNum(item.depositAmount);
+      if (isOverseasChart) return sum + cleanNum(item.purchasePrice) * cleanNum(item.quantity);
+      return sum + cleanNum(item.investAmount);
+    }, 0);
     const histByDate = new Map(localSortedHist.map(h => [h.date, h]));
     const reversedHist = [...localSortedHist].reverse();
     const findNearestPrincipal = (beforeDate) =>
@@ -945,7 +951,8 @@ export default function App() {
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
         if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
       }
-      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount };
+      const avgCostReturnRate = costBasis > 0 ? (trueEvalAtDate - costBasis) / costBasis * 100 : null;
+      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, avgCostReturnRate };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
@@ -1807,6 +1814,7 @@ export default function App() {
       kospiPeriodRate: s.kospiPoint > 0 ? ((e.kospiPoint / s.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: s.sp500Point > 0 ? ((e.sp500Point / s.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
+      avgCostReturnRateAtEnd: e.avgCostReturnRate ?? null,
       ...indRates, ...compRates,
     });
   }, [finalChartData, compStocks]);
@@ -2248,6 +2256,8 @@ export default function App() {
             setBacktestColor={setBacktestColor}
             isZeroBaseMode={isZeroBaseMode}
             setIsZeroBaseMode={setIsZeroBaseMode}
+            isAvgPriceMode={isAvgPriceMode}
+            setIsAvgPriceMode={setIsAvgPriceMode}
             showMarketPanel={showMarketPanel}
             setShowMarketPanel={setShowMarketPanel}
             setIsScaleSettingOpen={setIsScaleSettingOpen}

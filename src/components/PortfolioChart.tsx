@@ -1,6 +1,6 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp } from 'lucide-react';
+import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, Target } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
@@ -21,6 +21,7 @@ export default function PortfolioChart({
   showBacktest, setShowBacktest,
   backtestColor, setBacktestColor,
   isZeroBaseMode, setIsZeroBaseMode,
+  isAvgPriceMode, setIsAvgPriceMode,
   showMarketPanel, setShowMarketPanel,
   setIsScaleSettingOpen,
   showIndexVerify, setShowIndexVerify,
@@ -255,6 +256,11 @@ export default function PortfolioChart({
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isZeroBaseMode ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
               title="조회 시작일을 0% 기준으로 차트 재정렬"
             ><Activity size={14} /></button>
+            <button
+              onClick={() => setIsAvgPriceMode(!isAvgPriceMode)}
+              className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isAvgPriceMode ? 'text-amber-400 bg-amber-900/20 border-amber-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
+              title="매입단가 기준 수익률 표시 (포트폴리오 테이블 매입금액 기준)"
+            ><Target size={14} /></button>
             {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && (<>
               <div className="w-px h-3 bg-gray-700 mx-0.5" />
               <button
@@ -433,6 +439,15 @@ export default function PortfolioChart({
                       </span>
                     )}
                   </div>
+                  {isAvgPriceMode && displayResult.avgCostReturnRateAtEnd != null && (
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                      <div className="w-2 h-2 rounded-sm shrink-0 bg-amber-500" />
+                      <span className="text-[11px] font-bold text-amber-400 whitespace-nowrap">매입단가 기준</span>
+                      <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.avgCostReturnRateAtEnd >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {displayResult.avgCostReturnRateAtEnd > 0 ? '+' : ''}{displayResult.avgCostReturnRateAtEnd.toFixed(2)}%
+                      </span>
+                    </div>
+                  )}
                   {showBacktest && displayResult.backtestPeriodRate != null && (
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                       <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />
@@ -603,6 +618,7 @@ export default function PortfolioChart({
             {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
             {showPrincipal && <Line yAxisId="right" type="monotone" dataKey="principalAmount" name="투자원금" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="5 3" connectNulls />}
             {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
+            {isAvgPriceMode && <Line yAxisId="left" type="monotone" dataKey="avgCostReturnRate" name="매입단가 기준" stroke="#f59e0b" strokeWidth={2} dot={false} activeDot={{ r: 5 }} connectNulls />}
             {!userFeatures.feature1 && showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#38bdf8" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
