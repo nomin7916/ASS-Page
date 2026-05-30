@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, FileText, RefreshCw, RotateCcw, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency, resolveHoldings } from '../utils';
 import {
   getKrEtfStocks,
@@ -9,8 +9,6 @@ import {
   computeMonthlyAvgForGrid,
   computeMonthlyQtyForGrid,
 } from '../krEtfTaxHelpers';
-import TaxBaseLookupModal from './TaxBaseLookupModal';
-
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
 function tickerToIsin(ticker) {
@@ -53,14 +51,9 @@ export default function KrEtfTaxMatrix({
   updateTaxBaseSales,
   updateTaxBaseExPrice,
   updateTaxBaseAvgPrice,
-  updateTaxBaseDailyFp,
   notify,
-  driveTokenRef,
-  driveFolderIdRef,
 }) {
   const [expandedCode, setExpandedCode] = useState(null);
-  const [lookupStock, setLookupStock] = useState(null);
-  const [fetchingCode, setFetchingCode] = useState(null);
 
   const krStocks = useMemo(() => getKrEtfStocks(portfolio), [portfolio?.portfolio]);
 
@@ -110,7 +103,7 @@ export default function KrEtfTaxMatrix({
   };
 
   const stockRows = krStocks.map(stock => {
-    const { events, purchases, sales, exTaxBase, avgTaxBase, dailyTaxFp } = getCodeTaxBase(portfolio, stock.code);
+    const { events, purchases, sales, exTaxBase, avgTaxBase } = getCodeTaxBase(portfolio, stock.code);
     const computedAvg = computeMonthlyAvgForGrid(events, monthYms);
     const computedQtyMap = computeMonthlyQtyForGrid(events, monthYms);
     const hasQtyEvents = Object.keys(computedQtyMap).length > 0;
@@ -129,7 +122,7 @@ export default function KrEtfTaxMatrix({
       return { ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty };
     });
     const annualExpected = monthData.reduce((s, d) => s + d.expected, 0);
-    return { stock, events, sortedEventsWithAvg, dailyTaxFp, purchases, sales, currentQty, monthData, annualExpected };
+    return { stock, events, sortedEventsWithAvg, purchases, sales, currentQty, monthData, annualExpected };
   });
 
   const monthlyExpected = monthYms.map((_, i) =>
@@ -155,9 +148,6 @@ export default function KrEtfTaxMatrix({
     const updates = { date: newDate };
     if (/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
       updates.prevQty = lookupPrevQty(newDate, stock.code);
-      const { dailyTaxFp } = getCodeTaxBase(portfolio, stock.code);
-      const ymd = newDate.replace(/-/g, '');
-      if (dailyTaxFp[ymd] != null) updates.taxBasePrice = dailyTaxFp[ymd];
     }
     persistEvents(stock.code, events.map(e => e.id !== id ? e : { ...e, ...updates }));
   };
@@ -166,94 +156,6 @@ export default function KrEtfTaxMatrix({
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(evt.date || ''))) return;
     const prevQty = lookupPrevQty(evt.date, stock.code);
     persistEvents(stock.code, events.map(e => e.id !== evt.id ? e : { ...e, prevQty }));
-  };
-
-  // ── 과표기준가 자동 조회 ─────────────────────────────────────────────────
-  const fetchTaxBase = async (stock) => {
-    const code = stock.code;
-    setFetchingCode(code);
-    try {
-      const res = await fetch(`/api/etf-tax-base?code=${encodeURIComponent(code)}`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        notify(`[${code}] 과표기준가 조회 실패: ${err?.error ?? res.status}`, 'error');
-        return;
-      }
-      const data = await res.json();
-      if (!data?.items?.length) {
-        notify(`[${code}] 조회 결과가 없습니다.`, 'warning');
-        return;
-      }
-
-      const dailyMap = {};
-      for (const item of data.items) {
-        if (item.taxFp != null) dailyMap[item.gijunYmd] = item.taxFp;
-      }
-
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      const todayYmd = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-
-      updateTaxBaseDailyFp(portfolio.id, code, dailyMap, todayYmd);
-
-      // 배당락일 과표 자동 채움
-      const exDateMap = portfolio?.dividendExDate?.[code] || {};
-      let exFillCount = 0;
-      for (const [ym, exDate] of Object.entries(exDateMap)) {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(exDate))) continue;
-        const exYmd = String(exDate).replace(/-/g, '');
-        const taxFp = dailyMap[exYmd];
-        if (taxFp != null) {
-          updateTaxBaseExPrice(portfolio.id, code, ym, taxFp);
-          exFillCount++;
-        }
-      }
-
-      // 이벤트 과표기준가 자동 채움
-      const { events: currentEvents } = getCodeTaxBase(portfolio, code);
-      let eventsFilled = 0;
-      let eventsNoData = 0;
-      if (currentEvents.length > 0) {
-        const updatedEvents = currentEvents.map(evt => {
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(String(evt.date || ''))) return evt;
-          const evtYmd = String(evt.date).replace(/-/g, '');
-          const taxFp = dailyMap[evtYmd];
-          if (taxFp == null) { eventsNoData++; return evt; }
-          if (taxFp === safeNum(evt.taxBasePrice)) return evt;
-          eventsFilled++;
-          return { ...evt, taxBasePrice: taxFp };
-        });
-        if (eventsFilled > 0) updateTaxBaseEvents(portfolio.id, code, updatedEvents);
-      }
-
-      // 구 purchases 과표기준가 자동 채움 (하위 호환)
-      const { purchases } = getCodeTaxBase(portfolio, code);
-      const updatedPurchases = purchases.map(p => {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || ''))) return p;
-        const pYmd = String(p.date).replace(/-/g, '');
-        const taxFp = dailyMap[pYmd];
-        return taxFp != null ? { ...p, taxBasePrice: taxFp } : p;
-      });
-      if (purchases.length > 0) updateTaxBasePurchases(portfolio.id, code, updatedPurchases);
-
-      notify(
-        `[${stock.name || code}] 과표기준가 ${data.count}일 수집 완료` +
-        (exFillCount ? ` · 배당락 ${exFillCount}건 자동입력` : '') +
-        (eventsFilled ? ` · 이벤트 ${eventsFilled}건 자동입력` : '') +
-        (eventsNoData ? ` · 이벤트 ${eventsNoData}건 날짜 데이터 없음 (직접 입력 필요)` : ''),
-        'success',
-      );
-    } catch (e) {
-      notify(`[${code}] 과표기준가 조회 중 오류: ${e?.message ?? e}`, 'error');
-    } finally {
-      setFetchingCode(null);
-    }
-  };
-
-  const fetchAllTaxBase = async () => {
-    for (const stock of krStocks) {
-      await fetchTaxBase(stock);
-    }
   };
 
   return (
@@ -265,15 +167,6 @@ export default function KrEtfTaxMatrix({
         <span className="text-emerald-400 font-semibold tabular-nums">{formatCurrency(grandExpected)}</span>
         <span className="ml-auto flex items-center gap-2">
           <span className="text-gray-600">종목명 클릭 → 평균 과표 계산기</span>
-          <button
-            onClick={fetchAllTaxBase}
-            disabled={fetchingCode != null}
-            className="px-2.5 py-1 rounded border border-sky-700/60 text-sky-300 hover:text-sky-200 hover:border-sky-500 hover:bg-sky-900/20 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5 transition"
-            title="FunETF에서 전체 종목 과표기준가 일괄 조회 → 배당락·이벤트 과표 자동 입력"
-          >
-            <RefreshCw size={10} className={fetchingCode != null ? 'animate-spin' : ''} />
-            과표 전체 자동조회
-          </button>
         </span>
       </div>
       <table className="w-full text-[11px] text-center">
@@ -287,20 +180,13 @@ export default function KrEtfTaxMatrix({
           </tr>
         </thead>
         <tbody>
-          {stockRows.map(({ stock, events, sortedEventsWithAvg, dailyTaxFp, purchases, sales, currentQty, monthData, annualExpected }) => {
+          {stockRows.map(({ stock, events, sortedEventsWithAvg, purchases, sales, currentQty, monthData, annualExpected }) => {
             const isExpanded = expandedCode === stock.code;
             return (
               <React.Fragment key={stock.code}>
                 <tr className="border-b border-gray-700/40 hover:bg-gray-800/20">
                   <td className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
                     <div className="mb-1 flex items-center gap-1 flex-wrap">
-                      <button
-                        onClick={() => setLookupStock(stock)}
-                        className="text-[10px] px-2 py-0.5 rounded border border-amber-700/60 text-amber-300 hover:text-amber-200 hover:border-amber-500 hover:bg-amber-900/20 inline-flex items-center gap-1 transition"
-                        title="Drive에서 최신 과표 데이터 조회 + 메모장 보기 + CSV 다운로드"
-                      >
-                        <FileText size={10} /> 과표 조회
-                      </button>
                       <a
                         href={funetfEtfUrl(stock.code)}
                         target="_blank"
@@ -310,26 +196,6 @@ export default function KrEtfTaxMatrix({
                       >
                         <ExternalLink size={10} /> FunETF
                       </a>
-                      <button
-                        onClick={() => fetchTaxBase(stock)}
-                        disabled={fetchingCode != null}
-                        className="text-[10px] px-2 py-0.5 rounded border border-sky-700/60 text-sky-300 hover:text-sky-200 hover:border-sky-500 hover:bg-sky-900/20 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1 transition"
-                        title="FunETF에서 과표기준가 자동 조회 → 배당락·이벤트 과표 자동 입력"
-                      >
-                        <RefreshCw size={10} className={fetchingCode === stock.code ? 'animate-spin' : ''} />
-                        {fetchingCode === stock.code ? '조회 중...' : '자동조회'}
-                      </button>
-                      {(() => {
-                        const rec = portfolio?.taxBaseHistory?.[stock.code];
-                        const lf = rec?.lastFetched;
-                        if (!lf) return null;
-                        const cnt = Object.keys(rec?.dailyTaxFp || {}).length;
-                        return (
-                          <span className="text-[9px] text-gray-600 tabular-nums">
-                            {lf.slice(0,4)}-{lf.slice(4,6)}-{lf.slice(6,8)} · {cnt}일
-                          </span>
-                        );
-                      })()}
                     </div>
                     <button
                       onClick={() => setExpandedCode(isExpanded ? null : stock.code)}
@@ -453,30 +319,15 @@ export default function KrEtfTaxMatrix({
                                   const adjustedQty = prevQtyNum + changeNum;
                                   const isSell = changeNum < 0;
                                   const isBuy = changeNum > 0;
-                                  const evtYmd = String(evt.date || '').replace(/-/g, '');
-                                  const fpValue = /^\d{8}$/.test(evtYmd) ? dailyTaxFp[evtYmd] : undefined;
-                                  const hasFpData = fpValue != null;
-                                  const fpDiffers = hasFpData && fpValue !== safeNum(evt.taxBasePrice);
                                   return (
                                     <tr key={evt.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/10">
                                       <td className="py-1 pl-2 pr-0.5">
-                                        <div className="flex items-center gap-0.5">
-                                          <input
-                                            type="date"
-                                            value={evt.date || ''}
-                                            onChange={e => handleEventDateChange(stock, events, evt.id, e.target.value)}
-                                            className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none w-[100px]"
-                                          />
-                                          {evt.date && (
-                                            hasFpData ? (
-                                              <span className="text-emerald-500 text-[9px]" title={`FP: ${fmtTaxBase(fpValue)}`}>●</span>
-                                            ) : (
-                                              <a href={funetfEtfUrl(stock.code)} target="_blank" rel="noopener noreferrer"
-                                                className="text-gray-600 hover:text-amber-400 text-[9px] transition"
-                                                title="이 날짜 과표기준가 데이터 없음 — FunETF에서 직접 확인">●</a>
-                                            )
-                                          )}
-                                        </div>
+                                        <input
+                                          type="date"
+                                          value={evt.date || ''}
+                                          onChange={e => handleEventDateChange(stock, events, evt.id, e.target.value)}
+                                          className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none w-[100px]"
+                                        />
                                       </td>
                                       <td className="py-1 px-1">
                                         <div className="flex items-center gap-0.5">
@@ -513,24 +364,14 @@ export default function KrEtfTaxMatrix({
                                           : <span className="text-gray-700">-</span>}
                                       </td>
                                       <td className="py-1 px-1">
-                                        <div className="flex flex-col gap-0.5">
-                                          <input
-                                            type="text"
-                                            inputMode="decimal"
-                                            value={evt.taxBasePrice !== undefined && evt.taxBasePrice !== '' ? evt.taxBasePrice : ''}
-                                            onChange={e => updateEvent(stock.code, events, evt.id, 'taxBasePrice', e.target.value)}
-                                            placeholder={hasFpData ? fmtTaxBase(fpValue) : '0.00'}
-                                            className={numInputCls}
-                                            title={hasFpData ? `FP 데이터: ${fmtTaxBase(fpValue)}` : '해당 날짜 과표기준가 데이터 없음 — 직접 입력'}
-                                          />
-                                          {fpDiffers && (
-                                            <button
-                                              onClick={() => updateEvent(stock.code, events, evt.id, 'taxBasePrice', fpValue)}
-                                              className="text-[8px] text-amber-500/70 hover:text-amber-400 text-right leading-none"
-                                              title={`FP 데이터 ${fmtTaxBase(fpValue)} 적용`}
-                                            >↙ {fmtTaxBase(fpValue)}</button>
-                                          )}
-                                        </div>
+                                        <input
+                                          type="text"
+                                          inputMode="decimal"
+                                          value={evt.taxBasePrice !== undefined && evt.taxBasePrice !== '' ? evt.taxBasePrice : ''}
+                                          onChange={e => updateEvent(stock.code, events, evt.id, 'taxBasePrice', e.target.value)}
+                                          placeholder="0.00"
+                                          className={numInputCls}
+                                        />
                                       </td>
                                       <td className="py-1 px-1 text-right tabular-nums text-sky-300">
                                         {runningAvg > 0 ? fmtTaxBase(runningAvg) : <span className="text-gray-700">-</span>}
@@ -550,7 +391,7 @@ export default function KrEtfTaxMatrix({
                           </div>
                         )}
                         <div className="px-3 py-1 text-[9px] text-gray-600 border-t border-gray-800/50">
-                          일자 선택 시 자산검증 전일 수량·과표기준가 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨
+                          일자 선택 시 자산검증 전일 수량 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨
                         </div>
                       </div>
                     </td>
@@ -579,16 +420,6 @@ export default function KrEtfTaxMatrix({
       <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
         배당 과표·평균 과표 입력 → 과세 과표(배당-평균)·예상 과세 자동 계산 · 평균 과표 "자동" = 이벤트 기반 자동 산출 (빈칸 입력 시 되돌리기)
       </div>
-      {lookupStock && (
-        <TaxBaseLookupModal
-          stock={lookupStock}
-          portfolio={portfolio}
-          driveTokenRef={driveTokenRef}
-          driveFolderIdRef={driveFolderIdRef}
-          notify={notify}
-          onClose={() => setLookupStock(null)}
-        />
-      )}
     </div>
   );
 }

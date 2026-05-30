@@ -392,8 +392,6 @@ export function usePortfolioState({
   // 구조: portfolio.taxBaseHistory[code] = {
   //   purchases: [...], sales: [...],
   //   exTaxBase: { 'YYYY-MM': number }, avgTaxBase: { 'YYYY-MM': number },
-  //   dailyTaxFp: { 'YYYYMMDD': number },  // 일별 과표기준가 (자동 수집)
-  //   lastFetched: 'YYYYMMDD',             // 마지막 수집 날짜
   // }
   const _ensureTaxBase = (p, code) => {
     const existing = p.taxBaseHistory || {};
@@ -406,8 +404,6 @@ export function usePortfolioState({
         sales: codeRec.sales || [],
         exTaxBase: codeRec.exTaxBase || {},
         avgTaxBase: codeRec.avgTaxBase || {},
-        dailyTaxFp: codeRec.dailyTaxFp || {},
-        lastFetched: codeRec.lastFetched || '',
       },
     };
   };
@@ -459,21 +455,6 @@ export function usePortfolioState({
       if (price == null || !(price > 0)) delete avgTaxBase[yearMonth];
       else avgTaxBase[yearMonth] = price;
       tbh[code] = { ...tbh[code], avgTaxBase };
-      return { ...p, taxBaseHistory: tbh };
-    }));
-  };
-
-  // 일별 과표기준가 일괄 저장 (api/etf-tax-base 조회 결과)
-  // newDailyFp: { [YYYYMMDD]: number } 형태로 기존 데이터에 merge
-  const updateTaxBaseDailyFp = (portfolioId, code, newDailyFp, lastFetched) => {
-    setPortfolios(prev => prev.map(p => {
-      if (p.id !== portfolioId) return p;
-      const tbh = _ensureTaxBase(p, code);
-      tbh[code] = {
-        ...tbh[code],
-        dailyTaxFp: { ...(tbh[code].dailyTaxFp || {}), ...newDailyFp },
-        lastFetched: lastFetched || tbh[code].lastFetched || '',
-      };
       return { ...p, taxBaseHistory: tbh };
     }));
   };
@@ -648,6 +629,5 @@ export function usePortfolioState({
     updateTaxBaseSales,
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
-    updateTaxBaseDailyFp,
   };
 }

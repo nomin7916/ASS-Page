@@ -498,7 +498,6 @@ export default function App() {
     updateTaxBaseSales,
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
-    updateTaxBaseDailyFp,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
 
@@ -2190,14 +2189,11 @@ export default function App() {
             updateTaxBaseSales={updateTaxBaseSales}
             updateTaxBaseExPrice={updateTaxBaseExPrice}
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
-            updateTaxBaseDailyFp={updateTaxBaseDailyFp}
             notify={notify}
             usdkrw={marketIndicators.usdkrw || 1300}
             holidays={marketHolidays}
             dividendTaxHistory={dividendTaxHistory}
             onDividendTaxHistoryUpdate={setDividendTaxHistory}
-            driveTokenRef={driveTokenRef}
-            driveFolderIdRef={driveFolderIdRef}
           />
         )}
 
