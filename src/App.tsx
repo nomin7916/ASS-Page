@@ -956,9 +956,6 @@ export default function App() {
         const firstWithData = rawData.find(d => d[`comp${ci + 1}Point`] != null && d[`comp${ci + 1}Point`] > 0);
         return firstWithData?.[`comp${ci + 1}Point`] || 0;
       });
-      // 나의 수익(retRate)도 시작 시점 0% 기준으로 평행이동: 원금 기반 계산은 유지하고 표시만 시프트.
-      const baseRetItem = rawData.find(d => d.evalAmount > 0 && d.returnRate != null);
-      const baseRet = baseRetItem ? baseRetItem.returnRate : 0;
       return rawData.map(item => {
         const indRates = {};
         INDICATOR_CHART_KEYS.forEach(k => {
@@ -970,7 +967,7 @@ export default function App() {
         });
         return {
           ...item,
-          returnRate: (item.evalAmount > 0 && item.returnRate != null) ? item.returnRate - baseRet : item.returnRate,
+          returnRate: (baseItem.evalAmount > 0 && item.evalAmount > 0) ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : item.returnRate,
           kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
           sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
           nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
