@@ -1555,6 +1555,10 @@ export default function App() {
         preBaselineVerified: !!p.preBaselineVerified,
         manualPriceOverrides: p.manualPriceOverrides || {},
         holdingSnapshotsKey: (p.holdingSnapshots || []).map(s => `${s.date}:${s.kind}:${(s.items || []).length}`).join('|'),
+        taxBaseKey: JSON.stringify(Object.keys(p.taxBaseHistory || {}).sort().map(code => {
+          const rec = (p.taxBaseHistory || {})[code] || {};
+          return { code, events: rec.events || [], exTaxBase: rec.exTaxBase || {}, avgTaxBase: rec.avgTaxBase || {}, lastFetched: rec.lastFetched || '' };
+        })),
       })),
       activePortfolioId, customLinks,
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),

@@ -260,7 +260,7 @@ export default function KrEtfTaxMatrix({
         <span className="text-gray-500">연간 예상 과세 합계</span>
         <span className="text-emerald-400 font-semibold tabular-nums">{formatCurrency(grandExpected)}</span>
         <span className="ml-auto flex items-center gap-2">
-          <span className="text-gray-600">종목명 클릭 → 매입/매도 이벤트 편집</span>
+          <span className="text-gray-600">종목명 클릭 → 평균 과표 계산기</span>
           <button
             onClick={fetchAllTaxBase}
             disabled={fetchingCode != null}
@@ -413,7 +413,7 @@ export default function KrEtfTaxMatrix({
                       <div className="border border-gray-700/60 rounded-lg bg-gray-900/40">
                         <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800">
                           <div className="flex items-center gap-2">
-                            <span className="text-[11px] font-semibold text-gray-200">매입/매도 이벤트</span>
+                            <span className="text-[11px] font-semibold text-gray-200">평균 과표 계산기</span>
                             <span className="text-[10px] text-gray-500">{events.length}건</span>
                           </div>
                           <button
