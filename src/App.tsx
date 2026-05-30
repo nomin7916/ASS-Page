@@ -64,6 +64,7 @@ import {
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
+import { computeRunningAvgPurchaseSnapshots } from './krEtfTaxHelpers';
 
 
 export default function App() {
@@ -886,11 +887,17 @@ export default function App() {
     const sortedDeposits = [...depositHistory].sort((a, b) => a.date < b.date ? -1 : 1);
     const sortedWithdrawals = [...depositHistory2].sort((a, b) => a.date < b.date ? -1 : 1);
     const isOverseasChart = activePortfolioAccountType === 'overseas';
-    const costBasis = portfolio.reduce((sum, item) => {
-      if (item.type === 'deposit') return sum + cleanNum(item.depositAmount);
-      if (isOverseasChart) return sum + cleanNum(item.purchasePrice) * cleanNum(item.quantity);
-      return sum + cleanNum(item.investAmount);
-    }, 0);
+    // 종목별 매입단가 이벤트 스냅샷 사전 계산 (과표계산기 매입단가 입력 기반)
+    const taxBaseHistory = activePortfolio?.taxBaseHistory || {};
+    const purchaseSnapshotMap = {};
+    portfolio.forEach(item => {
+      if (item.type !== 'stock' || !item.code) return;
+      const events = taxBaseHistory[item.code]?.events || [];
+      const snaps = computeRunningAvgPurchaseSnapshots(events);
+      if (snaps.some(s => s.avgPurchasePrice > 0)) {
+        purchaseSnapshotMap[item.code] = snaps;
+      }
+    });
     const histByDate = new Map(localSortedHist.map(h => [h.date, h]));
     const reversedHist = [...localSortedHist].reverse();
     const findNearestPrincipal = (beforeDate) =>
@@ -951,7 +958,22 @@ export default function App() {
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
         if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
       }
-      const avgCostReturnRate = costBasis > 0 ? (trueEvalAtDate - costBasis) / costBasis * 100 : null;
+      let totalCostBasis = 0;
+      portfolio.forEach(item => {
+        if (item.type === 'deposit') { totalCostBasis += cleanNum(item.depositAmount); return; }
+        if (item.type !== 'stock') { totalCostBasis += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.investAmount); return; }
+        const snaps = purchaseSnapshotMap[item.code];
+        if (snaps) {
+          let bestSnap = null;
+          for (const s of snaps) { if (s.date <= date) bestSnap = s; else break; }
+          if (bestSnap && bestSnap.avgPurchasePrice > 0) {
+            totalCostBasis += bestSnap.avgPurchasePrice * bestSnap.qty;
+            return;
+          }
+        }
+        totalCostBasis += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.investAmount);
+      });
+      const avgCostReturnRate = totalCostBasis > 0 ? (trueEvalAtDate - totalCostBasis) / totalCostBasis * 100 : null;
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, avgCostReturnRate };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
@@ -1021,7 +1043,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activePortfolio]);
 
   // ── 통합 대시보드 계산 ──
   const {

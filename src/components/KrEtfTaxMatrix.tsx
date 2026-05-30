@@ -306,6 +306,7 @@ export default function KrEtfTaxMatrix({
                                     <span className="text-gray-600 font-normal ml-0.5" title="자산검증 전일 수량 자동 조회">↺</span>
                                   </th>
                                   <th className="text-right py-1 px-1 font-normal w-[68px]">매도/매수</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[84px] text-orange-400/70">매입단가</th>
                                   <th className="text-right py-1 px-1 font-normal w-[64px]">조정 수량</th>
                                   <th className="text-right py-1 px-1 font-normal w-[88px]">과표기준가</th>
                                   <th className="text-right py-1 px-1 font-normal w-[80px]">평균 과표</th>
@@ -358,6 +359,21 @@ export default function KrEtfTaxMatrix({
                                           title="매수=양수, 매도=음수"
                                         />
                                       </td>
+                                      <td className="py-1 px-1">
+                                        {isBuy ? (
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={evt.purchasePrice !== undefined && evt.purchasePrice !== '' ? evt.purchasePrice : ''}
+                                            onChange={e => updateEvent(stock.code, events, evt.id, 'purchasePrice', e.target.value)}
+                                            placeholder="0"
+                                            className={numInputCls + ' !text-orange-300'}
+                                            title="실제 매입단가 (차트 평균단가 기준 수익률 계산용)"
+                                          />
+                                        ) : (
+                                          <div className="text-[10px] text-gray-700 text-right px-1">-</div>
+                                        )}
+                                      </td>
                                       <td className="py-1 px-1 text-right tabular-nums text-gray-300">
                                         {adjustedQty !== 0 || prevQtyNum !== 0
                                           ? adjustedQty.toLocaleString()
@@ -392,6 +408,8 @@ export default function KrEtfTaxMatrix({
                         )}
                         <div className="px-3 py-1 text-[9px] text-gray-600 border-t border-gray-800/50">
                           일자 선택 시 자산검증 전일 수량 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨
+                          <br />
+                          <span className="text-orange-400/60">매입단가</span> 입력 시 차트 '매입단가 기준' 수익률(🎯) 동적 계산에 활용됨 · 미입력 시 포트폴리오 테이블 매입금액 기준으로 폴백
                         </div>
                       </div>
                     </td>

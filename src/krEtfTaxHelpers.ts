@@ -24,6 +24,35 @@ export function getCodeTaxBase(portfolio, code) {
   };
 }
 
+// 이벤트 목록에서 날짜순 정렬 후 누적 평균 매입단가 계산 (차트 수익률용)
+// purchasePrice > 0 인 매수 이벤트만 가중평균 업데이트, 매도는 qty만 감소
+// 반환: [{date, qty, avgPurchasePrice}]
+export function computeRunningAvgPurchaseSnapshots(events) {
+  const valid = (events || [])
+    .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) !== 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  let qty = 0;
+  let avgPurchasePrice = 0;
+  const result = [];
+  for (const e of valid) {
+    const change = safeNum(e.change);
+    if (change > 0) {
+      const purchasePrice = safeNum(e.purchasePrice);
+      const newQty = qty + change;
+      if (purchasePrice > 0) {
+        avgPurchasePrice = newQty > 0
+          ? (qty * avgPurchasePrice + change * purchasePrice) / newQty
+          : purchasePrice;
+      }
+      qty = newQty;
+    } else {
+      qty = Math.max(0, qty + change);
+    }
+    result.push({ date: e.date, qty, avgPurchasePrice });
+  }
+  return result;
+}
+
 // 이벤트 목록에서 날짜 순으로 정렬 후 각 이벤트 후 누적 수량·평균 과표 계산
 // change > 0: 매수, change < 0: 매도 (매도 시 평균 과표 유지)
 export function computeRunningAvgSnapshots(events) {
