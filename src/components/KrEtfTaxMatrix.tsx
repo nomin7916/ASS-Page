@@ -411,11 +411,9 @@ export default function KrEtfTaxMatrix({
                   <tr className="bg-[#0b1322] border-b border-gray-700/40">
                     <td colSpan={MONTHS.length + 2} className="px-4 py-3">
                       <div className="border border-gray-700/60 rounded-lg bg-gray-900/40">
-                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] font-semibold text-gray-200">평균 과표 계산기</span>
-                            <span className="text-[10px] text-gray-500">{events.length}건</span>
-                          </div>
+                        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800">
+                          <span className="text-[11px] font-semibold text-gray-200">평균 과표 계산기</span>
+                          <span className="text-[10px] text-gray-500">{events.length}건</span>
                           <button
                             onClick={() => addEvent(stock.code, events)}
                             className="text-[10px] px-2 py-0.5 rounded border border-blue-700/60 text-blue-400 hover:text-blue-300 hover:border-blue-500 inline-flex items-center gap-1"
