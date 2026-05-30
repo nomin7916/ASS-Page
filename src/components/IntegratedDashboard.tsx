@@ -831,6 +831,20 @@ export default function IntegratedDashboard({
                               ({displayResult.profit >= 0 ? '+' : ''}{hideAmounts ? '••••••' : formatCurrency(displayResult.profit)})
                             </span>
                           </div>
+                          {compStocks.map((comp, ci) => {
+                            if (!comp?.active || !comp?.code) return null;
+                            const periodRate = displayResult[`comp${ci + 1}PeriodRate`];
+                            if (periodRate == null) return null;
+                            return (
+                              <div key={ci} className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: comp.color || '#10b981' }} />
+                                <span className="text-[11px] font-bold" style={{ color: comp.color || '#10b981' }}>{comp.name || comp.code}</span>
+                                <span className={`text-[12px] font-black ${periodRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                                  {periodRate >= 0 ? '+' : ''}{periodRate.toFixed(2)}%
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : (
                         <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>

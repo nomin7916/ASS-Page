@@ -1808,8 +1808,15 @@ export default function App() {
     const s = intChartData[0];
     const e = intChartData[intChartData.length - 1];
     const profit = e.evalAmount - s.evalAmount;
-    setIntDefaultSelectionResult({ startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? ((e.evalAmount / s.evalAmount) - 1) * 100 : 0 });
-  }, [intChartData]);
+    const result: any = { startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? ((e.evalAmount / s.evalAmount) - 1) * 100 : 0 };
+    compStocks.forEach((_: any, ci: number) => {
+      const key = `comp${ci + 1}Rate`;
+      const sr = s[key];
+      const er = e[key];
+      result[`comp${ci + 1}PeriodRate`] = (sr != null && er != null) ? ((100 + er) / (100 + sr) - 1) * 100 : null;
+    });
+    setIntDefaultSelectionResult(result);
+  }, [intChartData, compStocks]);
 
   // 조회기간 변경 시 활성 비교종목 데이터가 범위를 커버하지 못하면 자동 전체 이력 재조회
   useEffect(() => {

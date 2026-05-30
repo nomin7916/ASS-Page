@@ -67,14 +67,21 @@ export function useChartInteraction({
     };
   };
 
-  // 통합 대시보드 차트 선택 계산 (evalAmount 기반 단순 계산)
+  // 통합 대시보드 차트 선택 계산 (evalAmount 기반 + 비교종목 기간 수익률)
   const calculateIntSelection = (l: string, r: string) => {
     const [left, right] = [l, r].sort();
     const s = intChartData.find((d: any) => d.date >= left);
     const e = [...intChartData].reverse().find((d: any) => d.date <= right);
     if (!s || !e || s.date === e.date) return null;
     const profit = e.evalAmount - s.evalAmount;
-    return { startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? ((e.evalAmount / s.evalAmount) - 1) * 100 : 0 };
+    const result: any = { startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? ((e.evalAmount / s.evalAmount) - 1) * 100 : 0 };
+    compStocks.forEach((_: any, ci: number) => {
+      const key = `comp${ci + 1}Rate`;
+      const sr = s[key];
+      const er = e[key];
+      result[`comp${ci + 1}PeriodRate`] = (sr != null && er != null) ? ((100 + er) / (100 + sr) - 1) * 100 : null;
+    });
+    return result;
   };
 
   // ── 개별 계좌 차트 핸들러 ──
