@@ -669,6 +669,7 @@ export default function IntegratedDashboard({
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">일자</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">평가금액</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">전일대비</th>
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">수익</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">원금대비</th>
                         <th className="py-2.5 px-2 text-center whitespace-nowrap">투자원금</th>
                       </tr>
@@ -682,13 +683,24 @@ export default function IntegratedDashboard({
                             <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
                           </td>
                           <td className="py-2 px-2 text-center border-r border-gray-700">
+                            {hideAmounts ? (
+                              <span className="text-gray-500">••••••</span>
+                            ) : h.dodAbsChange != null ? (
+                              <span className={`font-bold ${h.dodAbsChange > 0 ? 'text-red-400' : h.dodAbsChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>
+                                {h.dodAbsChange > 0 ? '+' : ''}{formatCurrency(h.dodAbsChange)}
+                              </span>
+                            ) : (
+                              <span className="text-gray-600">-</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-2 text-center border-r border-gray-700">
                             <span className={`font-bold ${h.monthlyChange > 0 ? 'text-red-400' : h.monthlyChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.monthlyChange)}</span>
                           </td>
                           <td className="py-2 px-2 font-bold text-gray-300 text-center">{hideAmounts ? '••••••' : formatCurrency(h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal)}</td>
                         </tr>
                       ))}
                       {intMonthlyHistory.length === 0 && (
-                        <tr><td colSpan={5} className="py-6 text-center text-gray-500">데이터 없음<br/><span className="text-[10px] text-gray-600">계좌 평가금액을 입력하면 자동으로 기록됩니다.</span></td></tr>
+                        <tr><td colSpan={6} className="py-6 text-center text-gray-500">데이터 없음<br/><span className="text-[10px] text-gray-600">계좌 평가금액을 입력하면 자동으로 기록됩니다.</span></td></tr>
                       )}
                     </tbody>
                   </table>

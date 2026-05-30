@@ -219,7 +219,8 @@ export function useIntegratedData({
       const prevRecord = sortedDesc[i + 1];
       const dodChange = (prevRecord && prevRecord.evalAmount > 0)
         ? ((h.evalAmount / prevRecord.evalAmount) - 1) * 100 : 0;
-      return { ...h, monthlyChange, dodChange };
+      const dodAbsChange = prevRecord != null ? h.evalAmount - prevRecord.evalAmount : null;
+      return { ...h, monthlyChange, dodChange, dodAbsChange };
     });
   }, [computedIntHistory, intTotals.totalPrincipal]);
 
