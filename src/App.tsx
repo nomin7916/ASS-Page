@@ -959,15 +959,28 @@ export default function App() {
       let avgCostEval = 0;
       heldItems.forEach(item => {
         if (item.type === 'deposit') return; // 예수금은 매입원가 개념 없음 → 원가·평가 모두 제외
-        const qty = cleanNum(item.quantity);
-        let inv, evl;
-        if (item.type === 'fund') {
-          inv = cleanNum(item.investAmount);
-          evl = (qty > 0 && cleanNum(item.currentPrice) > 0) ? qty * cleanNum(item.currentPrice) : cleanNum(item.evalAmount);
+        const qty = cleanNum(item.quantity); // 그 시점 보유수량 (스냅샷 — 신뢰 가능)
+        // 매입금액(원가): 스냅샷의 investAmount는 추정·구버전 값으로 부정확할 수 있어 신뢰하지 않고,
+        // '시점별 보유수량(스냅샷)' × '현재 평균단가(현재 보유 investAmount÷수량)'로 재구성한다.
+        // = 패널 정의 "매입금액 = 평균단가 × 보유수량"과 일치. 평균단가 안정 가정.
+        const live = portfolio.find(p => p.type === item.type && (p.code || '') === (item.code || ''));
+        let inv;
+        if (live) {
+          const lq = cleanNum(live.quantity);
+          const liveInv = live.type === 'fund'
+            ? cleanNum(live.investAmount)
+            : (isOvOrGold ? cleanNum(live.purchasePrice) * lq : (cleanNum(live.investAmount) || cleanNum(live.purchasePrice) * lq));
+          inv = lq > 0 ? (liveInv / lq) * qty : liveInv;
         } else {
-          inv = isOvOrGold ? cleanNum(item.purchasePrice) * qty : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * qty);
+          inv = cleanNum(item.investAmount); // 매도되어 현재 보유에 없는 종목: 스냅샷 폴백
+        }
+        // 평가액(분자): 그날 종가 × 그 시점 보유수량 (시세 이력 없으면 현재가/평가액 폴백)
+        let evl;
+        if (item.type === 'fund') {
+          evl = (qty > 0 && cleanNum(live?.currentPrice) > 0) ? qty * cleanNum(live.currentPrice) : cleanNum(item.evalAmount);
+        } else {
           const histPrice = (item.type === 'stock' && item.code && stockHistoryMap[item.code]) ? getClosestValue(stockHistoryMap[item.code], date) : null;
-          evl = histPrice ? histPrice * qty : (cleanNum(item.currentPrice) * qty || cleanNum(item.evalAmount));
+          evl = histPrice ? histPrice * qty : (cleanNum(live?.currentPrice) * qty || cleanNum(item.evalAmount));
         }
         totalCostBasis += inv;
         avgCostEval += evl;
