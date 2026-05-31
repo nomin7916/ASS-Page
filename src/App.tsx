@@ -958,9 +958,20 @@ export default function App() {
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
         if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
       }
+      // 매입단가 기준 수익률: 예수금(현금)·받은 분배금 제외, 보유 종목만 (매입원가 = Σ 구매단가×수량)
+      // 분자(평가액)·분모(매입원가) 모두 종목으로 한정해 포트폴리오 테이블 수익률과 일치시킴
       let totalCostBasis = 0;
+      let avgCostEval = 0;
       portfolio.forEach(item => {
-        if (item.type === 'deposit') { totalCostBasis += cleanNum(item.depositAmount); return; }
+        if (item.type === 'deposit') return; // 예수금은 매입단가 개념 없음 → 원가·평가 모두 제외
+        // 평가액(분자): 종목은 당일 종가×보유수량, 시세 없으면 현재 평가액 폴백
+        if (item.type === 'stock' && item.code && stockHistoryMap[item.code]) {
+          const p = getClosestValue(stockHistoryMap[item.code], date);
+          avgCostEval += p ? p * cleanNum(item.quantity) : cleanNum(item.evalAmount);
+        } else {
+          avgCostEval += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.evalAmount);
+        }
+        // 매입원가(분모): 과표 계산기 누적평균 매입단가×수량, 미입력 시 테이블 매입금액 폴백
         if (item.type !== 'stock') { totalCostBasis += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.investAmount); return; }
         const snaps = purchaseSnapshotMap[item.code];
         if (snaps) {
@@ -973,8 +984,8 @@ export default function App() {
         }
         totalCostBasis += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.investAmount);
       });
-      const avgCostReturnRate = totalCostBasis > 0 ? (trueEvalAtDate - totalCostBasis) / totalCostBasis * 100 : null;
-      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, avgCostReturnRate, totalCostBasis };
+      const avgCostReturnRate = totalCostBasis > 0 ? (avgCostEval - totalCostBasis) / totalCostBasis * 100 : null;
+      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, avgCostReturnRate, totalCostBasis, avgCostEval };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
@@ -1838,6 +1849,7 @@ export default function App() {
       nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
       avgCostReturnRateAtEnd: e.avgCostReturnRate ?? null,
       avgCostBasisAtEnd: e.totalCostBasis ?? null,
+      avgCostEvalAtEnd: e.avgCostEval ?? null,
       ...indRates, ...compRates,
     });
   }, [finalChartData, compStocks]);

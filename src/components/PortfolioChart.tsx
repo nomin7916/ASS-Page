@@ -446,9 +446,9 @@ export default function PortfolioChart({
                       <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.avgCostReturnRateAtEnd >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                         {displayResult.avgCostReturnRateAtEnd > 0 ? '+' : ''}{displayResult.avgCostReturnRateAtEnd.toFixed(2)}%
                       </span>
-                      {displayResult.avgCostBasisAtEnd != null && displayResult.endEval != null && (
+                      {displayResult.avgCostBasisAtEnd != null && displayResult.avgCostEvalAtEnd != null && (
                         <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                          ({fmtMoney(displayResult.avgCostBasisAtEnd)} → {fmtMoney(displayResult.endEval)})
+                          ({fmtMoney(displayResult.avgCostBasisAtEnd)} → {fmtMoney(displayResult.avgCostEvalAtEnd)})
                         </span>
                       )}
                     </div>

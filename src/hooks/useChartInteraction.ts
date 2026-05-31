@@ -61,6 +61,7 @@ export function useChartInteraction({
       backtestPeriodRate,
       avgCostReturnRateAtEnd: eData.avgCostReturnRate ?? null,
       avgCostBasisAtEnd: eData.totalCostBasis ?? null,
+      avgCostEvalAtEnd: eData.avgCostEval ?? null,
       ...Object.fromEntries(compStocks.map((_, ci) => {
         const pk = `comp${ci + 1}Point`;
         return [`comp${ci + 1}PeriodRate`, (sData[pk] > 0 && eData[pk] != null) ? ((eData[pk] / sData[pk]) - 1) * 100 : null];
