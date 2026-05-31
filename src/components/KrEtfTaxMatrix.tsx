@@ -108,6 +108,20 @@ export default function KrEtfTaxMatrix({
     const computedQtyMap = computeMonthlyQtyForGrid(events, monthYms);
     const hasQtyEvents = Object.keys(computedQtyMap).length > 0;
     const sortedEventsWithAvg = buildSortedEventsWithAvg(events);
+    // 매수 요약: 매입단가>0 인 매수 이벤트 기준 매수일·총 매수수량·총 매입금액·평균 매입단가
+    const buyEvts = (events || [])
+      .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) > 0 && safeNum(e.purchasePrice) > 0)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const buyQtyTotal = buyEvts.reduce((s, e) => s + safeNum(e.change), 0);
+    const buyAmountTotal = buyEvts.reduce((s, e) => s + safeNum(e.change) * safeNum(e.purchasePrice), 0);
+    const buySummary = {
+      count: buyEvts.length,
+      firstDate: buyEvts[0]?.date || '',
+      lastDate: buyEvts[buyEvts.length - 1]?.date || '',
+      qtyTotal: buyQtyTotal,
+      amountTotal: buyAmountTotal,
+      avgPrice: buyQtyTotal > 0 ? buyAmountTotal / buyQtyTotal : 0,
+    };
     const currentQty = cleanNum(stock.quantity || 0);
     const monthData = monthYms.map(ym => {
       const exVal = exTaxBase[ym];
@@ -122,7 +136,7 @@ export default function KrEtfTaxMatrix({
       return { ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty };
     });
     const annualExpected = monthData.reduce((s, d) => s + d.expected, 0);
-    return { stock, events, sortedEventsWithAvg, purchases, sales, currentQty, monthData, annualExpected };
+    return { stock, events, sortedEventsWithAvg, buySummary, purchases, sales, currentQty, monthData, annualExpected };
   });
 
   const monthlyExpected = monthYms.map((_, i) =>
@@ -180,7 +194,7 @@ export default function KrEtfTaxMatrix({
           </tr>
         </thead>
         <tbody>
-          {stockRows.map(({ stock, events, sortedEventsWithAvg, purchases, sales, currentQty, monthData, annualExpected }) => {
+          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, purchases, sales, currentQty, monthData, annualExpected }) => {
             const isExpanded = expandedCode === stock.code;
             return (
               <React.Fragment key={stock.code}>
@@ -404,6 +418,26 @@ export default function KrEtfTaxMatrix({
                                 })}
                               </tbody>
                             </table>
+                            {buySummary.count > 0 && (
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 border-t border-gray-700/50 bg-gray-900/40 text-[10px]">
+                                <span className="text-gray-500">매수일
+                                  <span className="text-gray-200 font-semibold ml-1">{buySummary.firstDate}{buySummary.lastDate !== buySummary.firstDate ? ` ~ ${buySummary.lastDate}` : ''}</span>
+                                  <span className="text-gray-600 ml-1">({buySummary.count}건)</span>
+                                </span>
+                                <span className="text-gray-700">·</span>
+                                <span className="text-gray-500">매수 합계
+                                  <span className="text-emerald-300 font-semibold ml-1 tabular-nums">{buySummary.qtyTotal.toLocaleString()}주</span>
+                                </span>
+                                <span className="text-gray-700">·</span>
+                                <span className="text-gray-500">매입금액
+                                  <span className="text-gray-200 font-semibold ml-1 tabular-nums">{formatCurrency(Math.round(buySummary.amountTotal))}</span>
+                                </span>
+                                <span className="text-gray-700">·</span>
+                                <span className="text-gray-500">매입 평균 단가
+                                  <span className="text-orange-300 font-bold ml-1 tabular-nums">{buySummary.avgPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}원</span>
+                                </span>
+                              </div>
+                            )}
                           </div>
                         )}
                         <div className="px-3 py-1 text-[9px] text-gray-600 border-t border-gray-800/50">
