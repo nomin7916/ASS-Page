@@ -325,6 +325,7 @@ export default function App() {
     backtestColor, setBacktestColor,
     isZeroBaseMode, setIsZeroBaseMode,
     isAvgPriceMode, setIsAvgPriceMode,
+    showCalcVerify, setShowCalcVerify,
     hoveredPoint, setHoveredPoint,
     hoveredPortCatSlice, setHoveredPortCatSlice,
     hoveredPortStkSlice, setHoveredPortStkSlice,
@@ -2293,6 +2294,8 @@ export default function App() {
             setIsZeroBaseMode={setIsZeroBaseMode}
             isAvgPriceMode={isAvgPriceMode}
             setIsAvgPriceMode={setIsAvgPriceMode}
+            showCalcVerify={showCalcVerify}
+            setShowCalcVerify={setShowCalcVerify}
             showMarketPanel={showMarketPanel}
             setShowMarketPanel={setShowMarketPanel}
             setIsScaleSettingOpen={setIsScaleSettingOpen}

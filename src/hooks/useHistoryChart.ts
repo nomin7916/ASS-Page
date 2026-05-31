@@ -16,6 +16,7 @@ export function useHistoryChart() {
   const [backtestColor, setBacktestColor] = useState('#f97316');
   const [isZeroBaseMode, setIsZeroBaseMode] = useState(true);
   const [isAvgPriceMode, setIsAvgPriceMode] = useState(false);
+  const [showCalcVerify, setShowCalcVerify] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState(null);
   const [hoveredPortCatSlice, setHoveredPortCatSlice] = useState(null);
   const [hoveredPortStkSlice, setHoveredPortStkSlice] = useState(null);
@@ -66,6 +67,7 @@ export function useHistoryChart() {
     backtestColor, setBacktestColor,
     isZeroBaseMode, setIsZeroBaseMode,
     isAvgPriceMode, setIsAvgPriceMode,
+    showCalcVerify, setShowCalcVerify,
     hoveredPoint, setHoveredPoint,
     hoveredPortCatSlice, setHoveredPortCatSlice,
     hoveredPortStkSlice, setHoveredPortStkSlice,

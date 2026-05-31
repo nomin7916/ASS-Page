@@ -1,6 +1,6 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, Target } from 'lucide-react';
+import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, Target, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
@@ -22,6 +22,7 @@ export default function PortfolioChart({
   backtestColor, setBacktestColor,
   isZeroBaseMode, setIsZeroBaseMode,
   isAvgPriceMode, setIsAvgPriceMode,
+  showCalcVerify, setShowCalcVerify,
   showMarketPanel, setShowMarketPanel,
   setIsScaleSettingOpen,
   showIndexVerify, setShowIndexVerify,
@@ -420,9 +421,120 @@ export default function PortfolioChart({
             {displayResult ? (
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowCalcVerify(!showCalcVerify)}
+                    className={`shrink-0 p-0.5 rounded transition-colors flex items-center justify-center ${showCalcVerify ? 'text-sky-300' : 'text-gray-600 hover:text-gray-300'}`}
+                    title="각 선의 계산식·데이터 출처 검증"
+                  >
+                    <HelpCircle size={13} />
+                  </button>
                   <span className="text-gray-500 text-[10px] font-bold shrink-0">{selectionResult ? '선택 기간' : '조회기간'}</span>
                   <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
                 </div>
+                {showCalcVerify && (() => {
+                  const vStart = finalChartData.find(d => d.date === displayResult.startDate);
+                  const vEnd = finalChartData.find(d => d.date === displayResult.endDate);
+                  const fmtRate = (r) => r == null ? '—' : `${r > 0 ? '+' : ''}${Number(r).toFixed(2)}%`;
+                  const rateCls = (r) => r == null ? 'text-gray-400' : (r >= 0 ? 'text-red-400' : 'text-blue-400');
+                  const fmtPt = (v) => v == null ? '—' : Number(v).toLocaleString();
+                  const isOverseasComp = activePortfolioAccountType === 'overseas';
+                  const Row = ({ label, source, value, date, extra }) => (
+                    <>
+                      <span className="text-gray-500 whitespace-nowrap">{label}</span>
+                      <span className="text-gray-300 leading-snug">
+                        <span className="text-gray-400">{source}</span>
+                        <span className="mx-1 text-gray-600">·</span>
+                        <span className="font-mono text-gray-200">{value}</span>
+                        {date && <span className="ml-1 text-gray-600">({date})</span>}
+                        {extra}
+                      </span>
+                    </>
+                  );
+                  return (
+                    <div className="rounded-lg border border-sky-700/40 bg-[#0a1322]/80 p-2.5 animate-in fade-in slide-in-from-top-1">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] text-sky-300 font-bold">🔍 시리즈별 계산식 · 데이터 출처</span>
+                        <button onClick={() => setShowCalcVerify(false)} className="text-gray-500 hover:text-white p-0.5"><X size={12} /></button>
+                      </div>
+
+                      {/* ① 나의 수익 */}
+                      <div className="py-2 border-t border-gray-700/30 first:border-t-0 first:pt-0">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <div className="w-2 h-2 rounded-sm shrink-0 bg-red-500" />
+                          <span className="text-[11px] font-bold text-red-400">나의 수익</span>
+                          <span className={`text-[11px] font-black ${rateCls(displayResult.rate)}`}>{fmtRate(displayResult.rate)}</span>
+                        </div>
+                        <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] pl-3.5">
+                          <Row label="시작" source="자산검증 저장값 또는 API 종가×수량" value={fmtMoney(displayResult.startEval)} date={formatShortDate(displayResult.startDate)} />
+                          <Row label="종료" source="자산검증 저장값 또는 API 종가×수량" value={fmtMoney(displayResult.endEval)} date={formatShortDate(displayResult.endDate)} />
+                          <span className="text-gray-500">계산식</span>
+                          <span className="text-sky-200/90 font-mono leading-snug">(종료 − 시작) ÷ 시작 × 100 = {fmtRate(displayResult.rate)}</span>
+                        </div>
+                        <div className="mt-1 ml-3.5 text-[9.5px] text-gray-500 leading-snug">* 빨간 선의 점별 값은 원금 대비(또는 0% 기준 정규화)이고, 이 %는 조회 시작일 평가액 대비 상대수익입니다.</div>
+                      </div>
+
+                      {/* ② 매입단가 기준 */}
+                      {isAvgPriceMode && displayResult.avgCostReturnRateAtEnd != null && (
+                        <div className="py-2 border-t border-gray-700/30">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <div className="w-2 h-2 rounded-sm shrink-0 bg-amber-500" />
+                            <span className="text-[11px] font-bold text-amber-400">매입단가 기준</span>
+                            <span className={`text-[11px] font-black ${rateCls(displayResult.avgCostReturnRateAtEnd)}`}>{fmtRate(displayResult.avgCostReturnRateAtEnd)}</span>
+                          </div>
+                          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] pl-3.5">
+                            <Row
+                              label="시작"
+                              source="매입원가 / 평가액"
+                              value={`${vStart?.totalCostBasis != null ? fmtMoney(vStart.totalCostBasis) : '—'} / ${vStart?.avgCostEval != null ? fmtMoney(vStart.avgCostEval) : '—'}`}
+                              date={formatShortDate(displayResult.startDate)}
+                              extra={vStart?.avgCostReturnRate != null && <span className={`ml-1 font-bold ${rateCls(vStart.avgCostReturnRate)}`}>→ {fmtRate(vStart.avgCostReturnRate)}</span>}
+                            />
+                            <Row
+                              label="종료"
+                              source="매입원가 / 평가액"
+                              value={`${displayResult.avgCostBasisAtEnd != null ? fmtMoney(displayResult.avgCostBasisAtEnd) : '—'} / ${displayResult.avgCostEvalAtEnd != null ? fmtMoney(displayResult.avgCostEvalAtEnd) : '—'}`}
+                              date={formatShortDate(displayResult.endDate)}
+                              extra={<span className={`ml-1 font-bold ${rateCls(displayResult.avgCostReturnRateAtEnd)}`}>→ {fmtRate(displayResult.avgCostReturnRateAtEnd)}</span>}
+                            />
+                            <span className="text-gray-500">계산식</span>
+                            <span className="text-sky-200/90 font-mono leading-snug">(평가액 − 매입원가) ÷ 매입원가 × 100</span>
+                            <span className="text-gray-500">출처</span>
+                            <span className="text-gray-400 leading-snug">매입원가 = 과표 누적평균 매입단가(과표계산기 입력, 미입력 시 매입금액) · 평가액 = 보유종목 종가×수량(API) · 예수금 제외</span>
+                          </div>
+                          <div className="mt-1.5 ml-3.5 p-1.5 rounded bg-amber-950/30 border border-amber-800/30 text-[9.5px] text-amber-200/80 leading-relaxed">
+                            ℹ️ 이 선만 <b>0% 기준 재정렬에서 제외</b>됩니다. 나의 수익·비교종목·지수는 조회 시작일을 0%로 맞추지만, 매입단가 기준은 항상 <b>매입원가 대비 절대 누적수익</b>이라 시작일이 0%가 아니라 그 시점의 평가액÷매입원가 수익률에서 시작합니다.
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ③ 비교종목 */}
+                      {compStocks.map((comp, ci) => {
+                        if (!comp.active || !comp.code) return null;
+                        const rate = displayResult[`comp${ci + 1}PeriodRate`];
+                        if (rate == null) return null;
+                        const startPt = vStart?.[`comp${ci + 1}Point`];
+                        const endPt = vEnd?.[`comp${ci + 1}Point`];
+                        const color = comp.color || '#10b981';
+                        return (
+                          <div key={comp.id} className="py-2 border-t border-gray-700/30">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: color }} />
+                              <span className="text-[11px] font-bold" style={{ color }}>{comp.name || comp.code}</span>
+                              <span className={`text-[11px] font-black ${rateCls(rate)}`}>{fmtRate(rate)}</span>
+                            </div>
+                            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] pl-3.5">
+                              <Row label="시작" source={`비교종목 ${isOverseasComp ? '해외 ' : ''}API 종가`} value={fmtPt(startPt)} date={formatShortDate(displayResult.startDate)} />
+                              <Row label="종료" source={`비교종목 ${isOverseasComp ? '해외 ' : ''}API 종가`} value={fmtPt(endPt)} date={formatShortDate(displayResult.endDate)} />
+                              <span className="text-gray-500">계산식</span>
+                              <span className="text-sky-200/90 font-mono leading-snug">(종료종가 ÷ 시작종가 − 1) × 100 = {fmtRate(rate)}</span>
+                            </div>
+                            <div className="mt-1 ml-3.5 text-[9.5px] text-gray-500 leading-snug">* 네이버→KIS→야후 종가, 15일 역탐색·수정주가 미반영. 차트 선은 0% 기준 정규화이나 이 %는 원시 시작/종료 종가로 직접 계산.</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
                   <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
