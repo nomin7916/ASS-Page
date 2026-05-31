@@ -1,6 +1,6 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, Target, HelpCircle } from 'lucide-react';
+import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
@@ -231,7 +231,7 @@ export default function PortfolioChart({
             <button
               onClick={() => setShowReturnRate(!showReturnRate)}
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
-              title="수익률(%) 표시"
+              title="나의 수익률(%) 표시 — 매수가(평균단가) 기준"
             ><Percent size={14} /></button>
             <div
               className="flex items-stretch rounded border overflow-hidden transition-colors"
@@ -257,11 +257,6 @@ export default function PortfolioChart({
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isZeroBaseMode ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
               title="조회 시작일을 0% 기준으로 차트 재정렬"
             ><Activity size={14} /></button>
-            <button
-              onClick={() => setIsAvgPriceMode(!isAvgPriceMode)}
-              className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isAvgPriceMode ? 'text-amber-400 bg-amber-900/20 border-amber-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
-              title="일일 수익률 표시 (포트폴리오 테이블 매입금액 기준)"
-            ><Target size={14} /></button>
             {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && (<>
               <div className="w-px h-3 bg-gray-700 mx-0.5" />
               <button
@@ -457,55 +452,43 @@ export default function PortfolioChart({
                         <button onClick={() => setShowCalcVerify(false)} className="text-gray-500 hover:text-white p-0.5"><X size={12} /></button>
                       </div>
 
-                      {/* ① 나의 수익 */}
+                      {/* ① 나의 수익률 (매수가 기준) */}
                       <div className="py-2 border-t border-gray-700/30 first:border-t-0 first:pt-0">
                         <div className="flex items-center gap-1.5 mb-1">
                           <div className="w-2 h-2 rounded-sm shrink-0 bg-red-500" />
-                          <span className="text-[11px] font-bold text-red-400">나의 수익</span>
-                          <span className={`text-[11px] font-black ${rateCls(displayResult.rate)}`}>{fmtRate(displayResult.rate)}</span>
+                          <span className="text-[11px] font-bold text-red-400">나의 수익률</span>
+                          <span className={`text-[11px] font-black ${rateCls(displayResult.avgCostReturnRateAtEnd)}`}>{fmtRate(displayResult.avgCostReturnRateAtEnd)}</span>
                         </div>
-                        <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] pl-3.5">
-                          <Row label="시작" source="자산검증 저장값 또는 API 종가×수량" value={fmtMoney(displayResult.startEval)} date={formatShortDate(displayResult.startDate)} />
-                          <Row label="종료" source="자산검증 저장값 또는 API 종가×수량" value={fmtMoney(displayResult.endEval)} date={formatShortDate(displayResult.endDate)} />
-                          <span className="text-gray-500">계산식</span>
-                          <span className="text-sky-200/90 font-mono leading-snug">(종료 − 시작) ÷ 시작 × 100 = {fmtRate(displayResult.rate)}</span>
-                        </div>
-                        <div className="mt-1 ml-3.5 text-[9.5px] text-gray-500 leading-snug">* 빨간 선의 점별 값은 원금 대비(또는 0% 기준 정규화)이고, 이 %는 조회 시작일 평가액 대비 상대수익입니다.</div>
+                        {displayResult.avgCostReturnRateAtEnd != null ? (
+                          <>
+                            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] pl-3.5">
+                              <Row
+                                label="시작"
+                                source="매입금액 / 평가액(종가×수량)"
+                                value={`${vStart?.totalCostBasis != null ? fmtMoney(vStart.totalCostBasis) : '—'} / ${vStart?.avgCostEval != null ? fmtMoney(vStart.avgCostEval) : '—'}`}
+                                date={formatShortDate(displayResult.startDate)}
+                                extra={vStart?.avgCostReturnRate != null && <span className={`ml-1 font-bold ${rateCls(vStart.avgCostReturnRate)}`}>→ {fmtRate(vStart.avgCostReturnRate)}</span>}
+                              />
+                              <Row
+                                label="종료"
+                                source="매입금액 / 평가액(종가×수량)"
+                                value={`${displayResult.avgCostBasisAtEnd != null ? fmtMoney(displayResult.avgCostBasisAtEnd) : '—'} / ${displayResult.avgCostEvalAtEnd != null ? fmtMoney(displayResult.avgCostEvalAtEnd) : '—'}`}
+                                date={formatShortDate(displayResult.endDate)}
+                                extra={<span className={`ml-1 font-bold ${rateCls(displayResult.avgCostReturnRateAtEnd)}`}>→ {fmtRate(displayResult.avgCostReturnRateAtEnd)}</span>}
+                              />
+                              <span className="text-gray-500">계산식</span>
+                              <span className="text-sky-200/90 font-mono leading-snug">(당일 종가×수량 − 매입금액) ÷ 매입금액 × 100 = (종가 − 평균단가) ÷ 평균단가</span>
+                              <span className="text-gray-500">출처</span>
+                              <span className="text-gray-400 leading-snug">매입금액 = 포트폴리오 테이블 매입금액(평균단가×보유수량) · 평가액 = 당일 종가×보유수량 · 예수금 제외 · 증권사·테이블 수익률과 동일</span>
+                            </div>
+                            <div className="mt-1.5 ml-3.5 p-1.5 rounded bg-gray-800/40 border border-gray-700/40 text-[9.5px] text-gray-400 leading-relaxed">
+                              ℹ️ 기준은 <b>내 평균 매수단가</b>입니다(조회 시작일 0% 아님). 당일 종가가 평균단가보다 낮으면 <span className="text-blue-400 font-bold">−수익률</span>, 높으면 <span className="text-red-400 font-bold">+수익률</span>로 표시됩니다.
+                            </div>
+                          </>
+                        ) : (
+                          <div className="ml-3.5 text-[10px] text-gray-500">포트폴리오 테이블에 매입금액(투자금액)을 입력하면 표시됩니다.</div>
+                        )}
                       </div>
-
-                      {/* ② 일일 수익률 (매입원가 대비 누적) */}
-                      {isAvgPriceMode && displayResult.avgCostReturnRateAtEnd != null && (
-                        <div className="py-2 border-t border-gray-700/30">
-                          <div className="flex items-center gap-1.5 mb-1">
-                            <div className="w-2 h-2 rounded-sm shrink-0 bg-amber-500" />
-                            <span className="text-[11px] font-bold text-amber-400">일일 수익률</span>
-                            <span className={`text-[11px] font-black ${rateCls(displayResult.avgCostReturnRateAtEnd)}`}>{fmtRate(displayResult.avgCostReturnRateAtEnd)}</span>
-                          </div>
-                          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] pl-3.5">
-                            <Row
-                              label="시작"
-                              source="매입원가 / 평가액"
-                              value={`${vStart?.totalCostBasis != null ? fmtMoney(vStart.totalCostBasis) : '—'} / ${vStart?.avgCostEval != null ? fmtMoney(vStart.avgCostEval) : '—'}`}
-                              date={formatShortDate(displayResult.startDate)}
-                              extra={vStart?.avgCostReturnRate != null && <span className={`ml-1 font-bold ${rateCls(vStart.avgCostReturnRate)}`}>→ {fmtRate(vStart.avgCostReturnRate)}</span>}
-                            />
-                            <Row
-                              label="종료"
-                              source="매입원가 / 평가액"
-                              value={`${displayResult.avgCostBasisAtEnd != null ? fmtMoney(displayResult.avgCostBasisAtEnd) : '—'} / ${displayResult.avgCostEvalAtEnd != null ? fmtMoney(displayResult.avgCostEvalAtEnd) : '—'}`}
-                              date={formatShortDate(displayResult.endDate)}
-                              extra={<span className={`ml-1 font-bold ${rateCls(displayResult.avgCostReturnRateAtEnd)}`}>→ {fmtRate(displayResult.avgCostReturnRateAtEnd)}</span>}
-                            />
-                            <span className="text-gray-500">계산식</span>
-                            <span className="text-sky-200/90 font-mono leading-snug">(평가액 − 매입원가) ÷ 매입원가 × 100</span>
-                            <span className="text-gray-500">출처</span>
-                            <span className="text-gray-400 leading-snug">매입원가 = 포트폴리오 테이블 매입금액(투자금액) · 평가액 = 보유종목 종가×수량(API) · 예수금 제외 · 증권사·테이블 수익률과 동일</span>
-                          </div>
-                          <div className="mt-1.5 ml-3.5 p-1.5 rounded bg-amber-950/30 border border-amber-800/30 text-[9.5px] text-amber-200/80 leading-relaxed">
-                            ℹ️ 이 선만 <b>0% 기준 재정렬에서 제외</b>됩니다. 나의 수익·비교종목·지수는 조회 시작일을 0%로 맞추지만, 일일 수익률은 항상 <b>매입원가 대비 절대 누적수익</b>이라 시작일이 0%가 아니라 그 시점의 평가액÷매입원가 수익률에서 시작합니다.
-                          </div>
-                        </div>
-                      )}
 
                       {/* ③ 비교종목 */}
                       {compStocks.map((comp, ci) => {
@@ -538,33 +521,32 @@ export default function PortfolioChart({
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
                   <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
-                    <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">나의 수익</span>
-                    <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                      {displayResult.rate > 0 ? '+' : displayResult.rate < 0 ? '' : ''}{displayResult.rate.toFixed(2)}%
-                    </span>
-                    <span className={`text-[10px] font-bold whitespace-nowrap ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
-                      ({displayResult.profit >= 0 ? '+' : ''}{fmtMoney(displayResult.profit)})
-                    </span>
-                    {displayResult.startEval != null && displayResult.endEval != null && (
-                      <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                        ({fmtMoney(displayResult.startEval)} → {fmtMoney(displayResult.endEval)})
-                      </span>
+                    <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">나의 수익률</span>
+                    {displayResult.avgCostReturnRateAtEnd != null ? (() => {
+                      const cost = displayResult.avgCostBasisAtEnd;
+                      const evl = displayResult.avgCostEvalAtEnd;
+                      const prof = (cost != null && evl != null) ? evl - cost : null;
+                      return (
+                        <>
+                          <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.avgCostReturnRateAtEnd >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                            {displayResult.avgCostReturnRateAtEnd > 0 ? '+' : ''}{displayResult.avgCostReturnRateAtEnd.toFixed(2)}%
+                          </span>
+                          {prof != null && (
+                            <span className={`text-[10px] font-bold whitespace-nowrap ${prof >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
+                              ({prof >= 0 ? '+' : ''}{fmtMoney(prof)})
+                            </span>
+                          )}
+                          {cost != null && evl != null && (
+                            <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
+                              (매입 {fmtMoney(cost)} → 평가 {fmtMoney(evl)})
+                            </span>
+                          )}
+                        </>
+                      );
+                    })() : (
+                      <span className="text-[10px] text-gray-500 whitespace-nowrap">포트폴리오 테이블 매입금액 입력 필요</span>
                     )}
                   </div>
-                  {isAvgPriceMode && displayResult.avgCostReturnRateAtEnd != null && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                      <div className="w-2 h-2 rounded-sm shrink-0 bg-amber-500" />
-                      <span className="text-[11px] font-bold text-amber-400 whitespace-nowrap">일일 수익률</span>
-                      <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.avgCostReturnRateAtEnd >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                        {displayResult.avgCostReturnRateAtEnd > 0 ? '+' : ''}{displayResult.avgCostReturnRateAtEnd.toFixed(2)}%
-                      </span>
-                      {displayResult.avgCostBasisAtEnd != null && displayResult.avgCostEvalAtEnd != null && (
-                        <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                          ({fmtMoney(displayResult.avgCostBasisAtEnd)} → {fmtMoney(displayResult.avgCostEvalAtEnd)})
-                        </span>
-                      )}
-                    </div>
-                  )}
                   {showBacktest && displayResult.backtestPeriodRate != null && (
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                       <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: backtestColor }} />
@@ -734,8 +716,7 @@ export default function PortfolioChart({
             <RechartsTooltip content={() => null} />
             {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
             {showPrincipal && <Line yAxisId="right" type="monotone" dataKey="principalAmount" name="투자원금" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="5 3" connectNulls />}
-            {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
-            {isAvgPriceMode && <Line yAxisId="left" type="monotone" dataKey="avgCostReturnRate" name="일일 수익률" stroke="#f59e0b" strokeWidth={2} dot={false} activeDot={{ r: 5 }} connectNulls />}
+            {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="avgCostReturnRate" name="나의 수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} connectNulls />}
             {!userFeatures.feature1 && showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#38bdf8" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
