@@ -499,7 +499,7 @@ export default function PortfolioChart({
                             <span className="text-gray-500">계산식</span>
                             <span className="text-sky-200/90 font-mono leading-snug">(평가액 − 매입원가) ÷ 매입원가 × 100</span>
                             <span className="text-gray-500">출처</span>
-                            <span className="text-gray-400 leading-snug">매입원가 = 과표 누적평균 매입단가(과표계산기 입력, 미입력 시 매입금액) · 평가액 = 보유종목 종가×수량(API) · 예수금 제외</span>
+                            <span className="text-gray-400 leading-snug">매입원가 = 포트폴리오 테이블 매입금액(투자금액) · 평가액 = 보유종목 종가×수량(API) · 예수금 제외 · 증권사·테이블 수익률과 동일</span>
                           </div>
                           <div className="mt-1.5 ml-3.5 p-1.5 rounded bg-amber-950/30 border border-amber-800/30 text-[9.5px] text-amber-200/80 leading-relaxed">
                             ℹ️ 이 선만 <b>0% 기준 재정렬에서 제외</b>됩니다. 나의 수익·비교종목·지수는 조회 시작일을 0%로 맞추지만, 일일 수익률은 항상 <b>매입원가 대비 절대 누적수익</b>이라 시작일이 0%가 아니라 그 시점의 평가액÷매입원가 수익률에서 시작합니다.

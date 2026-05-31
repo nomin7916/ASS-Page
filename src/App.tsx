@@ -64,8 +64,6 @@ import {
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
-import { computeRunningAvgPurchaseSnapshots } from './krEtfTaxHelpers';
-
 
 export default function App() {
   const historyInputRef = useRef(null);
@@ -888,17 +886,6 @@ export default function App() {
     const sortedDeposits = [...depositHistory].sort((a, b) => a.date < b.date ? -1 : 1);
     const sortedWithdrawals = [...depositHistory2].sort((a, b) => a.date < b.date ? -1 : 1);
     const isOverseasChart = activePortfolioAccountType === 'overseas';
-    // 종목별 매입단가 이벤트 스냅샷 사전 계산 (과표계산기 매입단가 입력 기반)
-    const taxBaseHistory = activePortfolio?.taxBaseHistory || {};
-    const purchaseSnapshotMap = {};
-    portfolio.forEach(item => {
-      if (item.type !== 'stock' || !item.code) return;
-      const events = taxBaseHistory[item.code]?.events || [];
-      const snaps = computeRunningAvgPurchaseSnapshots(events);
-      if (snaps.some(s => s.avgPurchasePrice > 0)) {
-        purchaseSnapshotMap[item.code] = snaps;
-      }
-    });
     const histByDate = new Map(localSortedHist.map(h => [h.date, h]));
     const reversedHist = [...localSortedHist].reverse();
     const findNearestPrincipal = (beforeDate) =>
@@ -959,31 +946,28 @@ export default function App() {
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
         if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
       }
-      // 매입단가 기준 수익률: 예수금(현금)·받은 분배금 제외, 보유 종목만 (매입원가 = Σ 구매단가×수량)
-      // 분자(평가액)·분모(매입원가) 모두 종목으로 한정해 포트폴리오 테이블 수익률과 일치시킴
+      // 일일 수익률: 증권사·포트폴리오 테이블과 동일하게 (평가액 − 매입금액) ÷ 매입금액.
+      // 종목별 매입금액·평가액을 테이블(usePortfolioData totals)과 동일 공식으로 산출(예수금 제외).
+      //  · 매입금액(분모): fund=investAmount, 해외·금=매입단가×수량, 그외=investAmount||매입단가×수량
+      //  · 평가액(분자): 종목은 당일 종가×수량(시세 이력 없으면 현재가×수량 폴백), fund/기타는 현재가×수량
+      // 비율 기준이라 해외 환율은 분자·분모에서 상쇄 → 통화 변환 불필요.
+      const isOvOrGold = isOverseasChart || activePortfolioAccountType === 'gold';
       let totalCostBasis = 0;
       let avgCostEval = 0;
       portfolio.forEach(item => {
-        if (item.type === 'deposit') return; // 예수금은 매입단가 개념 없음 → 원가·평가 모두 제외
-        // 평가액(분자): 종목은 당일 종가×보유수량, 시세 없으면 현재 평가액 폴백
-        if (item.type === 'stock' && item.code && stockHistoryMap[item.code]) {
-          const p = getClosestValue(stockHistoryMap[item.code], date);
-          avgCostEval += p ? p * cleanNum(item.quantity) : cleanNum(item.evalAmount);
+        if (item.type === 'deposit') return; // 예수금은 매입원가 개념 없음 → 원가·평가 모두 제외
+        const qty = cleanNum(item.quantity);
+        let inv, evl;
+        if (item.type === 'fund') {
+          inv = cleanNum(item.investAmount);
+          evl = (qty > 0 && cleanNum(item.currentPrice) > 0) ? qty * cleanNum(item.currentPrice) : cleanNum(item.evalAmount);
         } else {
-          avgCostEval += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.evalAmount);
+          inv = isOvOrGold ? cleanNum(item.purchasePrice) * qty : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * qty);
+          const histPrice = (item.type === 'stock' && item.code && stockHistoryMap[item.code]) ? getClosestValue(stockHistoryMap[item.code], date) : null;
+          evl = histPrice ? histPrice * qty : (cleanNum(item.currentPrice) * qty || cleanNum(item.evalAmount));
         }
-        // 매입원가(분모): 과표 계산기 누적평균 매입단가×수량, 미입력 시 테이블 매입금액 폴백
-        if (item.type !== 'stock') { totalCostBasis += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.investAmount); return; }
-        const snaps = purchaseSnapshotMap[item.code];
-        if (snaps) {
-          let bestSnap = null;
-          for (const s of snaps) { if (s.date <= date) bestSnap = s; else break; }
-          if (bestSnap && bestSnap.avgPurchasePrice > 0) {
-            totalCostBasis += bestSnap.avgPurchasePrice * bestSnap.qty;
-            return;
-          }
-        }
-        totalCostBasis += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.investAmount);
+        totalCostBasis += inv;
+        avgCostEval += evl;
       });
       const avgCostReturnRate = totalCostBasis > 0 ? (avgCostEval - totalCostBasis) / totalCostBasis * 100 : null;
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, avgCostReturnRate, totalCostBasis, avgCostEval };

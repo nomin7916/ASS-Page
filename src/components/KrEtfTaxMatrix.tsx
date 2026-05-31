@@ -443,7 +443,7 @@ export default function KrEtfTaxMatrix({
                         <div className="px-3 py-1 text-[9px] text-gray-600 border-t border-gray-800/50">
                           일자 선택 시 자산검증 전일 수량 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨
                           <br />
-                          <span className="text-orange-400/60">매입단가</span> 입력 시 차트 '일일 수익률'(🎯) 동적 계산에 활용됨 · 미입력 시 포트폴리오 테이블 매입금액 기준으로 폴백
+                          <span className="text-orange-400/60">매입단가</span> 는 아래 매수 요약(평균 매입단가) 산출에 사용됩니다 · 차트 '일일 수익률'(🎯)은 포트폴리오 테이블 매입금액 기준으로 증권사 수익률과 일치
                         </div>
                       </div>
                     </td>
