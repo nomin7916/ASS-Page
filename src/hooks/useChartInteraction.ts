@@ -60,6 +60,7 @@ export function useChartInteraction({
       nasdaqPeriodRate: sData.nasdaqPoint > 0 ? ((eData.nasdaqPoint / sData.nasdaqPoint) - 1) * 100 : null,
       backtestPeriodRate,
       avgCostReturnRateAtEnd: eData.avgCostReturnRate ?? null,
+      avgCostBasisAtEnd: eData.totalCostBasis ?? null,
       ...Object.fromEntries(compStocks.map((_, ci) => {
         const pk = `comp${ci + 1}Point`;
         return [`comp${ci + 1}PeriodRate`, (sData[pk] > 0 && eData[pk] != null) ? ((eData[pk] / sData[pk]) - 1) * 100 : null];

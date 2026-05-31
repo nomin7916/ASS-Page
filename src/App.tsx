@@ -974,7 +974,7 @@ export default function App() {
         totalCostBasis += isOverseasChart ? cleanNum(item.purchasePrice) * cleanNum(item.quantity) : cleanNum(item.investAmount);
       });
       const avgCostReturnRate = totalCostBasis > 0 ? (trueEvalAtDate - totalCostBasis) / totalCostBasis * 100 : null;
-      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, avgCostReturnRate };
+      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, avgCostReturnRate, totalCostBasis };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
@@ -1837,6 +1837,7 @@ export default function App() {
       sp500PeriodRate: s.sp500Point > 0 ? ((e.sp500Point / s.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
       avgCostReturnRateAtEnd: e.avgCostReturnRate ?? null,
+      avgCostBasisAtEnd: e.totalCostBasis ?? null,
       ...indRates, ...compRates,
     });
   }, [finalChartData, compStocks]);
