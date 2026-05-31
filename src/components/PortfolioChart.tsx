@@ -403,6 +403,17 @@ export default function PortfolioChart({
                       displayVal = startPrice != null
                         ? `${rateStr} (${fmtPrice(startPrice)} → ${fmtPrice(pointVal)})`
                         : `${rateStr} (${fmtPrice(pointVal)})`;
+                    } else if (dk === 'avgCostReturnRate') {
+                      // 나의 수익률: 비교종목처럼 실제 평가액(조회시작일 → 해당일)을 병기.
+                      // 값 = avgCostEval(당일 종가×보유수량 — 이 % 의 분자). 예수금 제외.
+                      const startEval = firstNonNullVal('avgCostEval');
+                      const dayEval = entry.payload?.avgCostEval;
+                      const fmtEval = (v: any) => isOverseas
+                        ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
+                        : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
+                      displayVal = (startEval != null && dayEval != null)
+                        ? `${rateStr} (${fmtEval(startEval)} → ${fmtEval(dayEval)})`
+                        : rateStr;
                     } else {
                       const startRate = firstNonNullVal(dk);
                       displayVal = startRate != null
