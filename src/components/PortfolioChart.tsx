@@ -76,6 +76,14 @@ export default function PortfolioChart({
   const hoveredData = hoveredPoint ? finalChartData.find(d => d.date === hoveredPoint.label) : null;
   const hoveredReturnRate = hoveredData?.returnRate ?? null;
 
+  // 호버 시 '조회시작일 → 해당일' 병기용: 시리즈 키별 조회기간 첫 유효값(시작값).
+  // 비교종목 등 시작 시점 데이터 없으면 첫 non-null 시점을 base로 사용(rate baseline과 일치).
+  const firstNonNullVal = (key: string) => {
+    if (!key) return null;
+    for (const d of finalChartData) { if (d[key] != null) return d[key]; }
+    return null;
+  };
+
   const chartDateSet = new Set(finalChartData.map(d => d.date));
   const isOverseas = activePortfolioAccountType === 'overseas';
   const fmtMoney = (v) => isOverseas
@@ -375,22 +383,31 @@ export default function PortfolioChart({
                       : formatNumber(rawValue);
                   } else {
                     const pointKey = CHART_NAME_TO_POINT_KEY[entry.name];
-                    let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
                     const inlineCompMatch = dk?.match(/^comp(\d+)Rate$/);
-                    if (pointVal == null && inlineCompMatch && entry.payload) {
-                      pointVal = entry.payload[`comp${inlineCompMatch[1]}Point`];
+                    const compPointKey = inlineCompMatch ? `comp${inlineCompMatch[1]}Point` : null;
+                    let pointVal = pointKey && entry.payload ? entry.payload[pointKey] : null;
+                    if (pointVal == null && compPointKey && entry.payload) {
+                      pointVal = entry.payload[compPointKey];
                     }
                     const sign = Number(value) >= 0 ? '+' : '';
                     const rateStr = `${sign}${Number(value).toFixed(2)}%`;
+                    // 조회시작일 → 해당일 병기. 가격 있는 시리즈(비교종목·지수·금)는 시작가→해당일가,
+                    // 가격 없는 시리즈(나의 수익률 등)는 시작 %→해당일 %.
                     if (pointVal != null) {
                       const isComp = !!inlineCompMatch;
                       const isKrwPoint = ['국내금', 'USDKRW', 'KOSPI'].includes(entry.name);
-                      const priceStr = (isComp || isKrwPoint)
-                        ? Number(pointVal).toLocaleString('ko-KR', { maximumFractionDigits: 0 })
-                        : Number(pointVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                      displayVal = `${rateStr} (${priceStr})`;
+                      const fmtPrice = (v: any) => (isComp || isKrwPoint)
+                        ? Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 })
+                        : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      const startPrice = firstNonNullVal(compPointKey || pointKey);
+                      displayVal = startPrice != null
+                        ? `${rateStr} (${fmtPrice(startPrice)} → ${fmtPrice(pointVal)})`
+                        : `${rateStr} (${fmtPrice(pointVal)})`;
                     } else {
-                      displayVal = rateStr;
+                      const startRate = firstNonNullVal(dk);
+                      displayVal = startRate != null
+                        ? `${rateStr} (시작 ${Number(startRate) >= 0 ? '+' : ''}${Number(startRate).toFixed(2)}% → ${rateStr})`
+                        : rateStr;
                     }
                   }
                   return (
