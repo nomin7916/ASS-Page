@@ -382,7 +382,10 @@ export const calcPortfolioEvalForDate = (
 ): number =>
   calcPortfolioEvalDetail(items, accountType, date, stockHistoryMap, indicatorHistoryMap, currentFxRate, manualPriceOverrides).total;
 
-// 포트폴리오 항목 → 스냅샷 아이템 (가격 무관, 수량·구성만 보존)
+// 포트폴리오 항목 → 스냅샷 아이템 (수량·매입금액·구성 보존).
+// purchasePrice/currentPrice/evalAmount는 시점별 수익률 차트의 매입금액·평가 폴백용
+// (해외·금 계좌 매입단가, 펀드 과거 NAV 폴백). snapshotCompositionKey는 이 필드들을
+// 키에 넣지 않으므로 가격 변동만으로 스냅샷이 새로 쌓이지 않는다.
 export const snapshotItemsFromPortfolio = (items: any[]): any[] =>
   (items || []).map(it => ({
     code: it.code || '',
@@ -391,6 +394,9 @@ export const snapshotItemsFromPortfolio = (items: any[]): any[] =>
     quantity: cleanNum(it.quantity),
     investAmount: cleanNum(it.investAmount),
     depositAmount: cleanNum(it.depositAmount),
+    purchasePrice: cleanNum(it.purchasePrice),
+    currentPrice: cleanNum(it.currentPrice),
+    evalAmount: cleanNum(it.evalAmount),
   }));
 
 // 구성 변경 감지용 지문 (가격 제외 — 수량·예수금·종목 구성만)

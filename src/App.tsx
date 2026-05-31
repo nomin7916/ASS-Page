@@ -60,7 +60,7 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal
+  computeEffectivePrincipal, resolveHoldings
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -946,15 +946,18 @@ export default function App() {
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
         if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
       }
-      // 일일 수익률: 증권사·포트폴리오 테이블과 동일하게 (평가액 − 매입금액) ÷ 매입금액.
-      // 종목별 매입금액·평가액을 테이블(usePortfolioData totals)과 동일 공식으로 산출(예수금 제외).
+      // 나의 수익률: 증권사·포트폴리오 테이블과 동일하게 (평가액 − 매입금액) ÷ 매입금액.
+      // 매입금액·평가액을 **그 시점 실제 보유분**(resolveHoldings 스냅샷)으로 산출 — 현재 보유분을
+      // 과거에 투영하지 않는다. 예: 04/03(한 종목)엔 04/03 매입금액, 신규 매수일부터 분모 증가.
+      // 스냅샷 없으면 resolveHoldings가 현재 포트폴리오로 폴백(기존 동작).
       //  · 매입금액(분모): fund=investAmount, 해외·금=매입단가×수량, 그외=investAmount||매입단가×수량
-      //  · 평가액(분자): 종목은 당일 종가×수량(시세 이력 없으면 현재가×수량 폴백), fund/기타는 현재가×수량
+      //  · 평가액(분자): 종목은 그날 종가×수량(시세 이력 없으면 현재가×수량 폴백), fund/기타는 현재가×수량
       // 비율 기준이라 해외 환율은 분자·분모에서 상쇄 → 통화 변환 불필요.
       const isOvOrGold = isOverseasChart || activePortfolioAccountType === 'gold';
+      const heldItems = resolveHoldings(activePortfolio || { portfolio }, date).items || [];
       let totalCostBasis = 0;
       let avgCostEval = 0;
-      portfolio.forEach(item => {
+      heldItems.forEach(item => {
         if (item.type === 'deposit') return; // 예수금은 매입원가 개념 없음 → 원가·평가 모두 제외
         const qty = cleanNum(item.quantity);
         let inv, evl;
