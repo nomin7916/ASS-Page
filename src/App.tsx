@@ -1958,6 +1958,10 @@ export default function App() {
     );
   }
 
+  // 계좌 유형 파생 플래그 — 여러 컴포넌트에서 공유, 조건 변경 시 이 한 줄만 수정
+  const isRetirementAccount = activePortfolioAccountType === 'dc-irp' || activePortfolioAccountType === 'pension';
+  const isDcIrpAccount = activePortfolioAccountType === 'dc-irp';
+
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
@@ -2133,7 +2137,27 @@ export default function App() {
             usdkrwFetchStatus={indicatorFetchStatus?.usdkrw?.status}
           />
         ) : (
-          <PortfolioTable portfolio={totals.calcPortfolio} totals={totals} sortConfig={sortConfig} onSort={handleSort} onUpdate={handleUpdate} onBlur={handleStockBlur} onDelete={handleDeleteStock} onAddStock={handleAddStock} onAddFund={handleAddFund} stockFetchStatus={stockFetchStatus} onSingleRefresh={handleSingleStockRefresh} isOverseas={activePortfolioAccountType === 'overseas'} usdkrw={marketIndicators.usdkrw || 1} isRetirement={activePortfolioAccountType === 'dc-irp' || activePortfolioAccountType === 'pension'} showRetirementStats={activePortfolioAccountType === 'dc-irp'} hiddenColumns={hiddenColumnsPortfolio} onToggleColumn={toggleHiddenColumnPortfolio} markedPortfolioRows={markedPortfolioRows} onToggleMarkedPortfolioRow={toggleMarkedPortfolioRow} />
+          <PortfolioTable
+            portfolio={totals.calcPortfolio}
+            totals={totals}
+            sortConfig={sortConfig}
+            onSort={handleSort}
+            onUpdate={handleUpdate}
+            onBlur={handleStockBlur}
+            onDelete={handleDeleteStock}
+            onAddStock={handleAddStock}
+            onAddFund={handleAddFund}
+            stockFetchStatus={stockFetchStatus}
+            onSingleRefresh={handleSingleStockRefresh}
+            isOverseas={activePortfolioAccountType === 'overseas'}
+            usdkrw={marketIndicators.usdkrw || 1}
+            isRetirement={isRetirementAccount}
+            showRetirementStats={isDcIrpAccount}
+            hiddenColumns={hiddenColumnsPortfolio}
+            onToggleColumn={toggleHiddenColumnPortfolio}
+            markedPortfolioRows={markedPortfolioRows}
+            onToggleMarkedPortfolioRow={toggleMarkedPortfolioRow}
+          />
         )}
 
         {activePortfolioAccountType !== 'gold' && !sectionCollapsed.summary && (
@@ -2370,8 +2394,8 @@ export default function App() {
             setPortfolio={setPortfolio}
             showTable={!sectionCollapsed.rebalancing}
             showDonut={!sectionCollapsed.donut}
-            isRetirement={activePortfolioAccountType === 'dc-irp' || activePortfolioAccountType === 'pension'}
-            showRetirementStats={activePortfolioAccountType === 'dc-irp'}
+            isRetirement={isRetirementAccount}
+            showRetirementStats={isDcIrpAccount}
             hiddenColumns={hiddenColumnsRebalancing}
             onToggleColumn={toggleHiddenColumnRebalancing}
             markedRebalRows={markedRebalRows}
