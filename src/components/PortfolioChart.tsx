@@ -404,15 +404,16 @@ export default function PortfolioChart({
                         ? `${rateStr} (${fmtPrice(startPrice)} → ${fmtPrice(pointVal)})`
                         : `${rateStr} (${fmtPrice(pointVal)})`;
                     } else if (dk === 'avgCostReturnRate') {
-                      // 나의 수익률: 비교종목처럼 실제 평가액(조회시작일 → 해당일)을 병기.
-                      // 값 = avgCostEval(당일 종가×보유수량 — 이 % 의 분자). 예수금 제외.
-                      const startEval = firstNonNullVal('avgCostEval');
+                      // 나의 수익률: 퍼센트의 실제 분모·분자를 그대로 병기 — (평가액 − 매입금액) ÷ 매입금액.
+                      // 매입금액=그날 평균단가×보유수량(분모), 평가액=그날 종가×보유수량(분자). 예수금 제외.
+                      // 시작 평가액이 아닌 '매입 → 평가'를 보여야 화면에서 퍼센트가 그대로 검산됨(하단 요약과 동일 형식).
+                      const dayCost = entry.payload?.totalCostBasis;
                       const dayEval = entry.payload?.avgCostEval;
                       const fmtEval = (v: any) => isOverseas
                         ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
                         : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
-                      displayVal = (startEval != null && dayEval != null)
-                        ? `${rateStr} (${fmtEval(startEval)} → ${fmtEval(dayEval)})`
+                      displayVal = (dayCost != null && dayEval != null)
+                        ? `${rateStr} (매입 ${fmtEval(dayCost)} → 평가 ${fmtEval(dayEval)})`
                         : rateStr;
                     } else {
                       const startRate = firstNonNullVal(dk);
