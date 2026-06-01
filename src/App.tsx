@@ -2039,7 +2039,8 @@ export default function App() {
           setTitle={setTitle}
           showIntegratedDashboard={showIntegratedDashboard}
           activeLinks={activePortfolioAccountType === 'overseas' ? (overseasLinks || []) : (customLinks || [])}
-          onOpenLinkSettings={() => setIsLinkSettingsOpen(v => !v)}
+          setActiveLinks={activePortfolioAccountType === 'overseas' ? setOverseasLinks : setCustomLinks}
+          isOverseasLinks={activePortfolioAccountType === 'overseas'}
           notificationLog={notificationLog}
           unreadCount={unreadCount}
           onReadNotifications={markAsRead}
@@ -2075,7 +2076,7 @@ export default function App() {
           activePortfolioAccountType={activePortfolioAccountType}
           fetchMarketIndicators={fetchMarketIndicators}
           activeLinks={activePortfolioAccountType === 'overseas' ? (overseasLinks || []) : (customLinks || [])}
-          onOpenLinkSettings={() => setIsLinkSettingsOpen(v => !v)}
+          setActiveLinks={activePortfolioAccountType === 'overseas' ? setOverseasLinks : setCustomLinks}
           marketIndicators={marketIndicators}
         />
         </div>

@@ -31,12 +31,14 @@ export default function AccountTabBar({
   activePortfolioAccountType,
   fetchMarketIndicators,
   activeLinks = [],
-  onOpenLinkSettings,
+  setActiveLinks,
   marketIndicators,
 }) {
   const stateFileInputRef = React.useRef(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const [linkEditOpen, setLinkEditOpen] = useState(false);
+  const linkEditRef = useRef(null);
 
   useEffect(() => {
     if (!dropdownOpen) return;
@@ -48,6 +50,19 @@ export default function AccountTabBar({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [dropdownOpen]);
+
+  useEffect(() => {
+    if (!linkEditOpen) return;
+    const handler = (e) => {
+      if (linkEditRef.current && !linkEditRef.current.contains(e.target)) {
+        setLinkEditOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [linkEditOpen]);
+
+  const isOverseasLinks = activePortfolioAccountType === 'overseas';
 
   const handleRefresh = !showIntegratedDashboard && activePortfolioAccountType === 'gold'
     ? fetchMarketIndicators
@@ -105,7 +120,7 @@ export default function AccountTabBar({
         {marketIndicators && <HeaderMarketChips marketIndicators={marketIndicators} />}
         </div>
         {showLinksOnNarrow && (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 relative" ref={linkEditRef}>
             {activeLinks.slice(0, 3).map((link, i) => {
               const tip = link.url
                 ? (link.name?.trim() ? `링크${i + 1} · ${link.name.trim()} — ${link.url}` : `링크${i + 1} — ${link.url}`)
@@ -119,12 +134,50 @@ export default function AccountTabBar({
                 >{i + 1}</button>
               );
             })}
-            {onOpenLinkSettings && (
+            {typeof setActiveLinks === 'function' && (
               <button
-                onClick={onOpenLinkSettings}
-                title="퀵 링크 설정 (수익률 차트에서 편집)"
-                className="bg-gray-800/60 hover:bg-gray-700 text-gray-400 w-[22px] h-[22px] rounded border border-gray-600/60 flex items-center justify-center transition"
+                onClick={() => setLinkEditOpen(v => !v)}
+                title="퀵 링크 설정"
+                className={`w-[22px] h-[22px] rounded border flex items-center justify-center transition ${
+                  linkEditOpen
+                    ? 'text-sky-400 bg-sky-900/20 border-sky-700/40'
+                    : 'bg-gray-800/60 hover:bg-gray-700 text-gray-400 border-gray-600/60'
+                }`}
               ><Settings size={11} /></button>
+            )}
+            {linkEditOpen && typeof setActiveLinks === 'function' && (
+              <div className="absolute right-0 top-full mt-1.5 z-50 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-3 w-[260px] max-w-[calc(100vw-24px)] flex flex-col gap-3 cursor-default">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-300 text-xs font-bold">퀵 링크 설정</span>
+                  {isOverseasLinks && <span className="text-[10px] text-sky-400/70 font-bold">🌐 해외계좌 전용</span>}
+                </div>
+                {activeLinks.slice(0, 3).map((l, i) => (
+                  <div key={i} className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[10px] text-gray-500 font-bold ml-0.5">버튼 {i + 1} 이름 <span className="text-gray-600 font-normal">(최대 7자)</span></span>
+                      <input
+                        type="text"
+                        maxLength={7}
+                        className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-400 shadow-inner font-normal"
+                        value={l.name || ''}
+                        onChange={(e) => { const n = [...activeLinks]; n[i] = { ...n[i], name: e.target.value }; setActiveLinks(n); }}
+                        placeholder="비워두면 URL에서 자동 추출"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[10px] text-gray-500 font-bold ml-0.5">버튼 {i + 1} 연결 (URL)</span>
+                      <input
+                        type="text"
+                        className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-blue-500 shadow-inner font-normal"
+                        value={l.url || ''}
+                        onChange={(e) => { const n = [...activeLinks]; n[i] = { ...n[i], url: e.target.value }; setActiveLinks(n); }}
+                        placeholder="https://..."
+                      />
+                    </div>
+                  </div>
+                ))}
+                <button onClick={() => setLinkEditOpen(false)} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded text-xs font-bold shadow transition">완료</button>
+              </div>
             )}
           </div>
         )}
