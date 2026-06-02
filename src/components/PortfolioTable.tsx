@@ -36,7 +36,7 @@ const PT_COLS = [
   { key: 'profit', label: '차익' },
 ];
 
-const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
+const CategoryCell = ({ item, portfolio, showAssetClass, onUpdate }) => {
   const [mode, setMode] = useState('idle');
   const [dropPos, setDropPos] = useState({ top: 0, left: 0 });
   const wrapRef = useRef(null);
@@ -78,7 +78,7 @@ const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
 
   const applyCategory = cat => {
     onUpdate(item.id, 'category', cat);
-    if (isRetirement) onUpdate(item.id, 'assetClass', getAssetClass(cat));
+    if (showAssetClass) onUpdate(item.id, 'assetClass', getAssetClass(cat));
     setMode('idle');
   };
 
@@ -98,7 +98,7 @@ const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
         const match = matchCat(line);
         if (match) {
           onUpdate(target.id, 'category', match);
-          if (isRetirement) onUpdate(target.id, 'assetClass', getAssetClass(match));
+          if (showAssetClass) onUpdate(target.id, 'assetClass', getAssetClass(match));
         }
       });
     }
@@ -138,9 +138,9 @@ const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
               const match = validCats.find(c => normalize(c) === normalize(val));
               if (match) {
                 onUpdate(item.id, 'category', match);
-                if (isRetirement) onUpdate(item.id, 'assetClass', getAssetClass(match));
+                if (showAssetClass) onUpdate(item.id, 'assetClass', getAssetClass(match));
               }
-            } else if (isRetirement) {
+            } else if (showAssetClass) {
               onUpdate(item.id, 'assetClass', getAssetClass(val));
             }
             setMode('idle');
@@ -169,7 +169,10 @@ const CategoryCell = ({ item, portfolio, isRetirement, onUpdate }) => {
   );
 };
 
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {} }) => {
+// 계좌 타입별 기능 게이팅 (혼동/회귀 방지 — CLAUDE.md "계좌 타입별 D/S·펀드 게이팅" 참조)
+//  · isRetirement   : 펀드 행 + "펀드 추가" 버튼 — 퇴직연금(DC/IRP) + 개인연금(pension)
+//  · showAssetClass : 위험/안전(D/S) 자산 구분 배지 — 퇴직연금(DC/IRP) 전용 (개인연금 제외)
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {} }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -208,7 +211,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const depositItems = portfolio.filter(p => p.type === 'deposit');
   const fundItems = portfolio.filter(p => p.type === 'fund');
 
-  const retirementStats = isRetirement ? (() => {
+  const retirementStats = showRetirementStats ? (() => {
     const dangerEval = stockItems
       .filter(p => (p.assetClass ?? getAssetClass(p.category)) === 'D')
       .reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
@@ -524,8 +527,8 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('category') && (
                     <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
                       <div className="flex flex-row h-full">
-                        <CategoryCell item={item} portfolio={portfolio} isRetirement={isRetirement} onUpdate={onUpdate} />
-                        {isRetirement && (
+                        <CategoryCell item={item} portfolio={portfolio} showAssetClass={showAssetClass} onUpdate={onUpdate} />
+                        {showAssetClass && (
                           <>
                             <div className="w-px bg-gray-600/60 self-stretch" />
                             <span
@@ -675,12 +678,16 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                            title={item.code?.startsWith('MA:') ? '미래에셋자산운용' : 'funetf'}>
                           {item.code?.startsWith('MA:') ? 'MIRAE' : 'FUND'}
                         </a>
-                        <div className="w-px bg-gray-600/60 self-stretch" />
-                        <span
-                          className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
-                          onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
-                          title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
-                        >{assetClass}</span>
+                        {showAssetClass && (
+                          <>
+                            <div className="w-px bg-gray-600/60 self-stretch" />
+                            <span
+                              className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
+                              onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                              title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
+                            >{assetClass}</span>
+                          </>
+                        )}
                       </div>
                     </td>
                   )}

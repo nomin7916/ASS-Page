@@ -1926,7 +1926,9 @@ export default function App() {
     );
   }
 
-  // 계좌 유형 파생 플래그 — 여러 컴포넌트에서 공유, 조건 변경 시 이 한 줄만 수정
+  // 계좌 유형 파생 플래그 — 의미가 다르므로 절대 합치지 말 것 (혼동/회귀 방지)
+  //  · isRetirementAccount: 펀드 기능(펀드 행·"펀드 추가" 버튼) — 퇴직연금(DC/IRP) + 개인연금(pension)
+  //  · isDcIrpAccount     : 위험/안전(D/S) 자산 구분 + D70/S30 통계 — 퇴직연금(DC/IRP) 전용
   const isRetirementAccount = activePortfolioAccountType === 'dc-irp' || activePortfolioAccountType === 'pension';
   const isDcIrpAccount = activePortfolioAccountType === 'dc-irp';
 
@@ -2121,6 +2123,7 @@ export default function App() {
             isOverseas={activePortfolioAccountType === 'overseas'}
             usdkrw={marketIndicators.usdkrw || 1}
             isRetirement={isRetirementAccount}
+            showAssetClass={isDcIrpAccount}
             showRetirementStats={isDcIrpAccount}
             hiddenColumns={hiddenColumnsPortfolio}
             onToggleColumn={toggleHiddenColumnPortfolio}
@@ -2363,7 +2366,6 @@ export default function App() {
             setPortfolio={setPortfolio}
             showTable={!sectionCollapsed.rebalancing}
             showDonut={!sectionCollapsed.donut}
-            isRetirement={isRetirementAccount}
             showRetirementStats={isDcIrpAccount}
             hiddenColumns={hiddenColumnsRebalancing}
             onToggleColumn={toggleHiddenColumnRebalancing}

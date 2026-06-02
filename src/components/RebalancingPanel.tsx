@@ -62,7 +62,6 @@ export default function RebalancingPanel({
   setPortfolio,
   showTable = true,
   showDonut = true,
-  isRetirement = false,
   showRetirementStats = false,
   hiddenColumns = [],
   onToggleColumn = () => {},
