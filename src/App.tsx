@@ -260,7 +260,8 @@ export default function App() {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
   const [rebalanceSortConfigMap, setRebalanceSortConfigMap] = useState<Record<string, { key: string | null, direction: number }>>({});
   const [rebalExtraQty, setRebalExtraQty] = useState<Record<string, number>>({});
-  
+  useEffect(() => { rebalExtraQtyRef.current = rebalExtraQty; }, [rebalExtraQty]);
+
   const { notify, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead, confirmState, confirm, resolveConfirm } = useToast();
   const { isMarketOpen, holidays: marketHolidays, loaded: calendarLoaded } = useMarketCalendar();
 
@@ -292,6 +293,8 @@ export default function App() {
   // 계좌별 차트 상태 독립 관리
   const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
   const accountChartStatesRef = useRef<Record<string, any>>({});
+  const accountRebalExtraQtyRef = useRef<Record<string, Record<string, number>>>({}); // 계좌별 리밸런싱 '추가' 입력값 보존
+  const rebalExtraQtyRef = useRef<Record<string, number>>({}); // 최신 rebalExtraQty 스냅샷 (탭 전환 저장용)
   const intDashCompStocksRef = useRef<any[]>(defaultCompStocks);
   const prevActivePortfolioIdRef = useRef<string | null>(null);
   const chartPrefsUpdatedAtRef = useRef<number>(0);
@@ -726,7 +729,9 @@ export default function App() {
   useEffect(() => {
     const prevId = prevActivePortfolioIdRef.current;
     if (prevId !== null && prevId !== activePortfolioId) {
-      setRebalExtraQty({});
+      // 리밸런싱 '추가' 입력값을 계좌별로 보존 — 이전 계좌 저장 후 새 계좌 복원
+      accountRebalExtraQtyRef.current[prevId] = { ...rebalExtraQtyRef.current };
+      setRebalExtraQty(accountRebalExtraQtyRef.current[activePortfolioId] || {});
       // 이전 계좌 상태 저장
       accountChartStatesRef.current[prevId] = { ...currentChartStateRef.current };
       // 새 계좌 상태 복원
