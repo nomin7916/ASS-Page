@@ -905,6 +905,30 @@ export default function App() {
       if (w.date > portfolioStartDate) break;
       if (!w.noPrincipal) startCumDep -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
     }
+    // 이중 계상 감지용: portfolioStartDate 당일 입금 합계(에폭 시작 기준점)와
+    // portfolioStartDate 이후 전체 입출금 합계(principal 필드가 post-start 입금을 포함하는지 역산)
+    let historyEpochStart = 0;
+    let finalPostStartDep = 0;
+    if (portfolioStartDate) {
+      for (const d of sortedDeposits) {
+        if (d.date < portfolioStartDate) continue;
+        if (d.date > portfolioStartDate) break;
+        if (!d.noPrincipal) historyEpochStart += cleanNum(d.amount);
+      }
+      for (const w of sortedWithdrawals) {
+        if (w.date < portfolioStartDate) continue;
+        if (w.date > portfolioStartDate) break;
+        if (!w.noPrincipal) historyEpochStart -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
+      }
+      for (const d of sortedDeposits) {
+        if (d.date <= portfolioStartDate) continue;
+        if (!d.noPrincipal) finalPostStartDep += cleanNum(d.amount);
+      }
+      for (const w of sortedWithdrawals) {
+        if (w.date <= portfolioStartDate) continue;
+        if (!w.noPrincipal) finalPostStartDep -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
+      }
+    }
     const rawData = filteredDates.map(date => {
       let trueEvalAtDate = 0, retRate = 0;
       // hasReliableEval: trueEvalAtDate가 실제 주가 데이터(또는 사용자 기록)에서 나왔는지 여부.
@@ -970,12 +994,17 @@ export default function App() {
       } else {
         const initPrin = cleanNum(principal);
         if (initPrin > 0 && date >= portfolioStartDate) {
-          // 암묵적 앵커: portfolioStartDate + principal → DCA 적립형 계좌 곡선 연속성 보장
-          // principalAmount = initPrin + Σ입출금(portfolioStartDate < t ≤ date)
+          // 암묵적 앵커 + 이중 계상 방지:
+          // principal 필드가 post-start 입금까지 포함한 누적 총액일 때,
+          // (cumDep - startCumDep)을 그대로 더하면 해당 입금이 두 번 계산됨.
+          // epochBase = max(historyEpochStart, initPrin - finalPostStartDep) 으로
+          // "시작일 시점의 순수 원금"을 역산해 post-start delta와 합산.
           let cumDep = 0;
           for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) cumDep += cleanNum(d.amount); }
           for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) cumDep -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
-          principalAmount = initPrin + (cumDep - startCumDep);
+          const cappedInitPrin = Math.max(0, initPrin - finalPostStartDep);
+          const epochBase = Math.max(historyEpochStart, cappedInitPrin);
+          principalAmount = epochBase + (cumDep - startCumDep);
           if (principalAmount <= 0) principalAmount = initPrin;
         } else {
           // principal 미설정: 입출금 합산, 없으면 totals.totalInvest 폴백
