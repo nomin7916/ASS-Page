@@ -158,7 +158,17 @@ function buildPaySlots(codeHistory, codeExHistory, hol) {
   };
   for (let i = 0; i < 12; i++) consider(CY, i);
   consider(CY - 1, 11, true); // 직전연도 12월 → 올해 1월 지급 (배당락일 미확정 시 월말 추정)
-  return slots;
+  // ⚠️ 이중 계상 방지(회귀 주의): 한 지급월 슬롯에 '확정 배당락(exPredicted=false)'
+  // 소스가 있으면, 같은 슬롯의 '직전연도 추정(exPredicted=true)' 소스는 제거한다.
+  // 배당 일정이 바뀌는 과도기(예: 월중→월초)에 직전연도 기준 예측 배당락이 실제
+  // 배당락의 지급월로 잘못 끌려와, 같은 달에 실제 분배금 + 예측 분배금이 합산되어
+  // 셀 합계 ≠ (지배 소스 수량 × 주당분배금)으로 보이는 버그를 방지한다.
+  // 확정 데이터가 있는 달엔 예측을 노이즈로 보고 버린다(확정 우선).
+  // 검증: npm run verify:dividend
+  return slots.map(srcs => {
+    if (srcs.length <= 1 || !srcs.some(s => !s.exPredicted)) return srcs;
+    return srcs.filter(s => !s.exPredicted);
+  });
 }
 
 // 슬롯 내 지배(금액 큰) 소스 — 표시용 분배락/지급일·주당분배금 기준
@@ -177,7 +187,7 @@ function DivMeta({ d, isOverseas }) {
         </span>
       )}
       <span className={`text-[9px] leading-tight ${d.qtyBackCalc ? 'text-amber-400/70' : 'text-gray-500'}`}>
-        {d.qty.toLocaleString()}주 × {per}
+        {d.qty.toLocaleString()}주 × {per}{d.srcCount > 1 ? ` 외 ${d.srcCount - 1}건` : ''}
       </span>
     </>
   );
@@ -275,7 +285,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           if (!srcs.length) {
             return {
               amount: 0, amountUsd: 0, isActual: false, qty: baseQty, perShare: 0,
-              qtyBackCalc: false, exMD: '', payMD: '', exPredicted: false, yearMonth: '',
+              qtyBackCalc: false, exMD: '', payMD: '', exPredicted: false, yearMonth: '', srcCount: 0,
             };
           }
           let amountUsd = 0;
@@ -293,7 +303,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             amount: amountUsd * fxRate, amountUsd: isOverseas ? amountUsd : 0, isActual,
             qty: dom.q, perShare: dom.perShare, qtyBackCalc: dom.backCalc,
             exMD: fmtMD(dom.exDateRaw), payMD: fmtMD(dom.payDateRaw), exPredicted: dom.exPredicted,
-            yearMonth: dom.exYm,
+            yearMonth: dom.exYm, srcCount: parts.length,
           };
         });
         result.push({

@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "verify:calendar": "node scripts/verify-market-calendar.mjs",
-    "verify:tax": "node scripts/verify-kretf-tax.mjs"
+    "verify:tax": "node scripts/verify-kretf-tax.mjs",
+    "verify:dividend": "node scripts/verify-dividend-slots.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
