@@ -111,15 +111,8 @@ export function useIntegratedData({
     const dateToTotal = new Map();
     const today = effectiveDateKey || getEffectiveDate();
     portfolios.forEach(p => {
-      const isActive = p.id === activePortfolioId;
-      // 계좌 시작일 이전 평가액 기록은 통합 합산에서 제외 — effectivePrincipal은
-      // startDate <= date인 계좌만 합산(아래 portfolioPrincipalData)하는데 평가액은
-      // 필터 없이 합산해 "평가액엔 포함·원금엔 미포함" 불일치로 수익률이 왜곡됐음.
-      // 비파괴적: history는 보존하고 합산 시점에만 제외 → 시작일 변경 시 자동 복귀.
-      const startDate = isActive ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
-      const hist = isActive ? history : (p.history || []);
+      const hist = p.id === activePortfolioId ? history : (p.history || []);
       hist.forEach(h => {
-        if (startDate && h.date < startDate) return;
         if (h.evalAmount > 0) dateToTotal.set(h.date, (dateToTotal.get(h.date) || 0) + h.evalAmount);
       });
     });
