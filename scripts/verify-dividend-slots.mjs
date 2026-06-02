@@ -212,6 +212,32 @@ it('prevDec→Jan 폴백이 가드에 의해 사라지지 않음', () => {
   expectEq(slots[0][0].exYm, `${PY}-12`, '1월 소스 exYm(직전연도 12월)');
 });
 
+console.log('\n[6] 월 입금 내역 탭 — 실지급액 입력 시 이중 계상 방지');
+// actualRows(비해외) 셀 계산 미러: 슬롯 소스들에 대해 실지급액/예측 합산 + 수량 역산.
+function actualCell(srcs, codeActual, qty) {
+  let amount = 0, calcQty = 0;
+  srcs.forEach(s => {
+    const ek = s.exYm;
+    const cm = ek in codeActual;
+    const amtS = cm ? codeActual[ek] : s.perShare * qty;
+    const gS = amtS; // 세금 0 가정
+    const cqS = (s.perShare > 0 && gS > 0) ? Math.round(gS / s.perShare) : 0;
+    amount += amtS; calcQty += cqS;
+  });
+  return { amount, calcQty };
+}
+it('647,292 입력 → 647,292 표시 (1,014,024 아님), 수량 2,004 (4,008 아님)', () => {
+  // 사용자 보고 케이스 재현: 월 입금 내역 6월 셀에 647292 입력
+  const codeHistory = { [`${CY}-04`]: 374, [`${CY}-05`]: 323, [`${PY}-06`]: 183 };
+  const codeExHistory = { [`${CY}-05`]: `${CY}-05-28`, [`${PY}-06`]: `${PY}-06-15` };
+  const qty = 2004;
+  const codeActual = { [`${CY}-05`]: 647292 }; // 지배 소스 exYm(2026-05)에 저장됨
+  const slots = buildPaySlots(codeHistory, codeExHistory, [], CY);
+  const cell = actualCell(slots[5], codeActual, qty);
+  expectEq(cell.amount, 647292, '6월 입금 금액');
+  expectEq(cell.calcQty, 2004, '6월 역산 수량');
+});
+
 // ─── 결과 출력 ────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`결과: ${pass} pass, ${fail} fail`);
