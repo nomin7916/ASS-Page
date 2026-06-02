@@ -895,6 +895,16 @@ export default function App() {
     const reversedHist = [...localSortedHist].reverse();
     const findNearestPrincipal = (beforeDate) =>
       reversedHist.find(h => h.date < beforeDate && cleanNum(h.principal) > 0)?.principal;
+    // portfolioStartDate 기준 누적 입출금 — 암묵적 앵커 계산용 (루프 밖에서 1회만 산출)
+    let startCumDep = 0;
+    for (const d of sortedDeposits) {
+      if (d.date > portfolioStartDate) break;
+      if (!d.noPrincipal) startCumDep += cleanNum(d.amount);
+    }
+    for (const w of sortedWithdrawals) {
+      if (w.date > portfolioStartDate) break;
+      if (!w.noPrincipal) startCumDep -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
+    }
     const rawData = filteredDates.map(date => {
       let trueEvalAtDate = 0, retRate = 0;
       // hasReliableEval: trueEvalAtDate가 실제 주가 데이터(또는 사용자 기록)에서 나왔는지 여부.
@@ -952,26 +962,30 @@ export default function App() {
         for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount); }
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
         if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
+        // 해외: principal 필드(USD 수동 입력) 하한 — depositHistory 일부만 있을 때 과대 수익률 방지
+        if (principalAmount > 0 && cleanNum(principal) > principalAmount) principalAmount = cleanNum(principal);
       } else if (effective.value != null && effective.value > 0) {
-        // effective.value > 0일 때만 anchor 값 사용. ≤ 0이면 입출금 합산으로 폴백.
+        // 수동 anchor + delta: principalManual 항목 기준
         principalAmount = effective.value;
       } else {
-        for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount); }
-        for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
-        // 입출금 내역 없으면 포트폴리오 테이블 매입금액 합산(투자 요약 패널 기준과 일치)으로 폴백.
-        // cleanNum(principal) 단일 필드 폴백 대신 totals.totalInvest를 우선 사용해 요약 패널 수익률과 근사.
-        if (principalAmount === 0 && date >= portfolioStartDate) {
-          const fallback = totals.totalInvest > 0 ? totals.totalInvest : cleanNum(principal);
-          if (fallback > 0) principalAmount = fallback;
+        const initPrin = cleanNum(principal);
+        if (initPrin > 0 && date >= portfolioStartDate) {
+          // 암묵적 앵커: portfolioStartDate + principal → DCA 적립형 계좌 곡선 연속성 보장
+          // principalAmount = initPrin + Σ입출금(portfolioStartDate < t ≤ date)
+          let cumDep = 0;
+          for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) cumDep += cleanNum(d.amount); }
+          for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) cumDep -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
+          principalAmount = initPrin + (cumDep - startCumDep);
+          if (principalAmount <= 0) principalAmount = initPrin;
+        } else {
+          // principal 미설정: 입출금 합산, 없으면 totals.totalInvest 폴백
+          for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount); }
+          for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
+          if (principalAmount === 0 && date >= portfolioStartDate) {
+            const fallback = totals.totalInvest > 0 ? totals.totalInvest : cleanNum(principal);
+            if (fallback > 0) principalAmount = fallback;
+          }
         }
-      }
-      // principalAmount 하한: 입금 내역이 불완전(일부만 입력)해도 실제 투자원금보다 과소되지 않도록 보정.
-      // · 해외: principal 필드(USD 수동 입력) 하한 — depositHistory 일부만 있을 때 과대 수익률 방지
-      // · 국내: totals.totalInvest(포트폴리오 매입원가 합산) 하한 — 앵커값·입금 누락 시 스파이크 방지
-      if (isOverseasChart) {
-        if (principalAmount > 0 && cleanNum(principal) > principalAmount) principalAmount = cleanNum(principal);
-      } else {
-        if (principalAmount > 0 && totals.totalInvest > principalAmount) principalAmount = totals.totalInvest;
       }
       // 나의 수익률: 실제 주가/이력 데이터가 있는 날(hasReliableEval)만 산출.
       // 주가 데이터 없이 hIdx.evalAmount 폴백만 쓰는 날은 null → 차트에서 해당 구간 제외(0% 평탄선 방지).
