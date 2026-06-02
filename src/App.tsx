@@ -897,6 +897,9 @@ export default function App() {
       reversedHist.find(h => h.date < beforeDate && cleanNum(h.principal) > 0)?.principal;
     const rawData = filteredDates.map(date => {
       let trueEvalAtDate = 0, retRate = 0;
+      // hasReliableEval: trueEvalAtDate가 실제 주가 데이터(또는 사용자 기록)에서 나왔는지 여부.
+      // false = hIdx.evalAmount 폴백만 사용 → 해당 날짜는 principalReturnRate를 null로 반환해 차트에서 제외.
+      let hasReliableEval = false;
       // 수동 anchor + delta: 사용자가 수동 설정한 원금이 다음 anchor 전까지 입출금 변동분만 반영해 전파.
       const effective = computeEffectivePrincipal(date, localSortedHist, sortedDeposits, sortedWithdrawals, isOverseasChart);
       if (date >= portfolioStartDate) {
@@ -912,10 +915,12 @@ export default function App() {
             }
           });
           trueEvalAtDate = hasData ? usdEval : 0;
+          hasReliableEval = hasData;
           const usdPrin = cleanNum(principal);
           if (hasData && usdPrin > 0) retRate = (usdEval - usdPrin) / usdPrin * 100;
         } else if (exactHist) {
           trueEvalAtDate = exactHist.evalAmount;
+          hasReliableEval = true;
           const storedPrin = cleanNum(exactHist.principal);
           const fallbackPrin = storedPrin > 0 ? storedPrin : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
           const histPrin = effective.value != null ? effective.value : fallbackPrin;
@@ -935,6 +940,9 @@ export default function App() {
             } else { trueEvalAtDate += cleanNum(item.evalAmount) * (baseEval / (totals.totalEval || 1)); }
           });
           if (!hasTrueData && hIdx) trueEvalAtDate = hIdx.evalAmount;
+          // hIdx.date <= date: 이 날짜 이전에 기록된 이력(역방향 보간) → 신뢰 가능.
+          // hasTrueData 없어도 확정 이력이 있는 계좌(펀드·simple 등)에서 빈 차트 방지.
+          hasReliableEval = hasTrueData || (!!hIdx && hIdx.date <= date);
           retRate = basePrin > 0 ? ((trueEvalAtDate - basePrin) / basePrin * 100) : 0;
         }
       }
@@ -944,17 +952,30 @@ export default function App() {
         for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount); }
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
         if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
-      } else if (effective.value != null) {
+      } else if (effective.value != null && effective.value > 0) {
+        // effective.value > 0일 때만 anchor 값 사용. ≤ 0이면 입출금 합산으로 폴백.
         principalAmount = effective.value;
       } else {
         for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount); }
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
-        if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
+        // 입출금 내역 없으면 포트폴리오 테이블 매입금액 합산(투자 요약 패널 기준과 일치)으로 폴백.
+        // cleanNum(principal) 단일 필드 폴백 대신 totals.totalInvest를 우선 사용해 요약 패널 수익률과 근사.
+        if (principalAmount === 0 && date >= portfolioStartDate) {
+          const fallback = totals.totalInvest > 0 ? totals.totalInvest : cleanNum(principal);
+          if (fallback > 0) principalAmount = fallback;
+        }
       }
-      // 나의 수익률: 투자원금(입금 누적, principalAmount) 대비 평가자산(예수금 포함 총평가액, trueEvalAtDate).
-      //   (평가자산 − 투자원금) ÷ 투자원금 × 100 — 투자 요약 패널의 '수익률'과 동일 정의.
-      // 배당 재투자·매매차익은 투자원금이 아닌 평가자산 증가로 수익에 반영(매입금액 기준과의 차이).
-      const principalReturnRate = principalAmount > 0 ? (trueEvalAtDate - principalAmount) / principalAmount * 100 : null;
+      // principalAmount 하한: 입금 내역이 불완전(일부만 입력)해도 실제 투자원금보다 과소되지 않도록 보정.
+      // · 해외: principal 필드(USD 수동 입력) 하한 — depositHistory 일부만 있을 때 과대 수익률 방지
+      // · 국내: totals.totalInvest(포트폴리오 매입원가 합산) 하한 — 앵커값·입금 누락 시 스파이크 방지
+      if (isOverseasChart) {
+        if (principalAmount > 0 && cleanNum(principal) > principalAmount) principalAmount = cleanNum(principal);
+      } else {
+        if (principalAmount > 0 && totals.totalInvest > principalAmount) principalAmount = totals.totalInvest;
+      }
+      // 나의 수익률: 실제 주가/이력 데이터가 있는 날(hasReliableEval)만 산출.
+      // 주가 데이터 없이 hIdx.evalAmount 폴백만 쓰는 날은 null → 차트에서 해당 구간 제외(0% 평탄선 방지).
+      const principalReturnRate = (hasReliableEval && principalAmount > 0) ? (trueEvalAtDate - principalAmount) / principalAmount * 100 : null;
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, principalReturnRate };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
@@ -1024,7 +1045,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators]);
 
   // ── 통합 대시보드 계산 ──
   const {
