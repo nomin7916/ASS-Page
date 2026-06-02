@@ -112,8 +112,8 @@ export function MainChartCustomTooltip({ active, payload, label, selectionResult
           const periodKey = CHART_NAME_TO_PERIOD_KEY[name];
           if (periodKey && selectionResult[periodKey] != null) {
             periodRate = selectionResult[periodKey];
-          } else if (name === '나의 수익률' && selectionResult.avgCostReturnRateAtEnd != null) {
-            periodRate = selectionResult.avgCostReturnRateAtEnd;
+          } else if (name === '나의 수익률' && selectionResult.principalReturnRateAtEnd != null) {
+            periodRate = selectionResult.principalReturnRateAtEnd;
           } else if (name === '수익률' && selectionResult.rate != null) {
             periodRate = selectionResult.rate;
           } else if (dk?.match(/^comp(\d+)Rate$/)) {

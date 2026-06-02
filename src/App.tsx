@@ -60,7 +60,7 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal, resolveHoldings
+  computeEffectivePrincipal
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -946,47 +946,11 @@ export default function App() {
         for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
         if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
       }
-      // 나의 수익률: 증권사·포트폴리오 테이블과 동일하게 (평가액 − 매입금액) ÷ 매입금액.
-      // 매입금액·평가액을 **그 시점 실제 보유분**(resolveHoldings 스냅샷)으로 산출 — 현재 보유분을
-      // 과거에 투영하지 않는다. 예: 04/03(한 종목)엔 04/03 매입금액, 신규 매수일부터 분모 증가.
-      // 스냅샷 없으면 resolveHoldings가 현재 포트폴리오로 폴백(기존 동작).
-      //  · 매입금액(분모): fund=investAmount, 해외·금=매입단가×수량, 그외=investAmount||매입단가×수량
-      //  · 평가액(분자): 종목은 그날 종가×수량(시세 이력 없으면 현재가×수량 폴백), fund/기타는 현재가×수량
-      // 비율 기준이라 해외 환율은 분자·분모에서 상쇄 → 통화 변환 불필요.
-      const isOvOrGold = isOverseasChart || activePortfolioAccountType === 'gold';
-      const heldItems = resolveHoldings(activePortfolio || { portfolio }, date).items || [];
-      let totalCostBasis = 0;
-      let avgCostEval = 0;
-      heldItems.forEach(item => {
-        if (item.type === 'deposit') return; // 예수금은 매입원가 개념 없음 → 원가·평가 모두 제외
-        const qty = cleanNum(item.quantity); // 그 시점 보유수량 (스냅샷 — 신뢰 가능)
-        // 매입금액(원가): 스냅샷의 investAmount는 추정·구버전 값으로 부정확할 수 있어 신뢰하지 않고,
-        // '시점별 보유수량(스냅샷)' × '현재 평균단가(현재 보유 investAmount÷수량)'로 재구성한다.
-        // = 패널 정의 "매입금액 = 평균단가 × 보유수량"과 일치. 평균단가 안정 가정.
-        const live = portfolio.find(p => p.type === item.type && (p.code || '') === (item.code || ''));
-        let inv;
-        if (live) {
-          const lq = cleanNum(live.quantity);
-          const liveInv = live.type === 'fund'
-            ? cleanNum(live.investAmount)
-            : (isOvOrGold ? cleanNum(live.purchasePrice) * lq : (cleanNum(live.investAmount) || cleanNum(live.purchasePrice) * lq));
-          inv = lq > 0 ? (liveInv / lq) * qty : liveInv;
-        } else {
-          inv = cleanNum(item.investAmount); // 매도되어 현재 보유에 없는 종목: 스냅샷 폴백
-        }
-        // 평가액(분자): 그날 종가 × 그 시점 보유수량 (시세 이력 없으면 현재가/평가액 폴백)
-        let evl;
-        if (item.type === 'fund') {
-          evl = (qty > 0 && cleanNum(live?.currentPrice) > 0) ? qty * cleanNum(live.currentPrice) : cleanNum(item.evalAmount);
-        } else {
-          const histPrice = (item.type === 'stock' && item.code && stockHistoryMap[item.code]) ? getClosestValue(stockHistoryMap[item.code], date) : null;
-          evl = histPrice ? histPrice * qty : (cleanNum(live?.currentPrice) * qty || cleanNum(item.evalAmount));
-        }
-        totalCostBasis += inv;
-        avgCostEval += evl;
-      });
-      const avgCostReturnRate = totalCostBasis > 0 ? (avgCostEval - totalCostBasis) / totalCostBasis * 100 : null;
-      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, avgCostReturnRate, totalCostBasis, avgCostEval };
+      // 나의 수익률: 투자원금(입금 누적, principalAmount) 대비 평가자산(예수금 포함 총평가액, trueEvalAtDate).
+      //   (평가자산 − 투자원금) ÷ 투자원금 × 100 — 투자 요약 패널의 '수익률'과 동일 정의.
+      // 배당 재투자·매매차익은 투자원금이 아닌 평가자산 증가로 수익에 반영(매입금액 기준과의 차이).
+      const principalReturnRate = principalAmount > 0 ? (trueEvalAtDate - principalAmount) / principalAmount * 100 : null;
+      return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, principalReturnRate };
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
@@ -1055,7 +1019,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activePortfolio]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators]);
 
   // ── 통합 대시보드 계산 ──
   const {
@@ -1848,9 +1812,8 @@ export default function App() {
       kospiPeriodRate: s.kospiPoint > 0 ? ((e.kospiPoint / s.kospiPoint) - 1) * 100 : null,
       sp500PeriodRate: s.sp500Point > 0 ? ((e.sp500Point / s.sp500Point) - 1) * 100 : null,
       nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
-      avgCostReturnRateAtEnd: e.avgCostReturnRate ?? null,
-      avgCostBasisAtEnd: e.totalCostBasis ?? null,
-      avgCostEvalAtEnd: e.avgCostEval ?? null,
+      principalReturnRateAtEnd: e.principalReturnRate ?? null,
+      principalAtEnd: e.principalAmount ?? null,
       ...indRates, ...compRates,
     });
   }, [finalChartData, compStocks]);

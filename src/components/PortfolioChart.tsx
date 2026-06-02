@@ -239,7 +239,7 @@ export default function PortfolioChart({
             <button
               onClick={() => setShowReturnRate(!showReturnRate)}
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
-              title="나의 수익률(%) 표시 — 매수가(평균단가) 기준"
+              title="나의 수익률(%) 표시 — 투자원금 기준"
             ><Percent size={14} /></button>
             <div
               className="flex items-stretch rounded border overflow-hidden transition-colors"
@@ -403,17 +403,17 @@ export default function PortfolioChart({
                       displayVal = startPrice != null
                         ? `${rateStr} (${fmtPrice(startPrice)} → ${fmtPrice(pointVal)})`
                         : `${rateStr} (${fmtPrice(pointVal)})`;
-                    } else if (dk === 'avgCostReturnRate') {
-                      // 나의 수익률: 퍼센트의 실제 분모·분자를 그대로 병기 — (평가액 − 매입금액) ÷ 매입금액.
-                      // 매입금액=그날 평균단가×보유수량(분모), 평가액=그날 종가×보유수량(분자). 예수금 제외.
-                      // 시작 평가액이 아닌 '매입 → 평가'를 보여야 화면에서 퍼센트가 그대로 검산됨(하단 요약과 동일 형식).
-                      const dayCost = entry.payload?.totalCostBasis;
-                      const dayEval = entry.payload?.avgCostEval;
+                    } else if (dk === 'principalReturnRate') {
+                      // 나의 수익률: 퍼센트의 실제 분모·분자를 그대로 병기 — (평가자산 − 투자원금) ÷ 투자원금.
+                      // 투자원금=그날까지 입금 누적(분모), 평가자산=그날 예수금 포함 총평가액(분자).
+                      // '원금 → 평가'를 보여야 화면에서 퍼센트가 그대로 검산됨(투자 요약 패널과 동일 형식).
+                      const dayPrin = entry.payload?.principalAmount;
+                      const dayEval = entry.payload?.evalAmount;
                       const fmtEval = (v: any) => isOverseas
                         ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
                         : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
-                      displayVal = (dayCost != null && dayEval != null)
-                        ? `${rateStr} (매입 ${fmtEval(dayCost)} → 평가 ${fmtEval(dayEval)})`
+                      displayVal = (dayPrin != null && dayEval != null)
+                        ? `${rateStr} (원금 ${fmtEval(dayPrin)} → 평가 ${fmtEval(dayEval)})`
                         : rateStr;
                     } else {
                       const startRate = firstNonNullVal(dk);
@@ -481,41 +481,41 @@ export default function PortfolioChart({
                         <button onClick={() => setShowCalcVerify(false)} className="text-gray-500 hover:text-white p-0.5"><X size={12} /></button>
                       </div>
 
-                      {/* ① 나의 수익률 (매수가 기준) */}
+                      {/* ① 나의 수익률 (투자원금 기준) */}
                       <div className="py-2 border-t border-gray-700/30 first:border-t-0 first:pt-0">
                         <div className="flex items-center gap-1.5 mb-1">
                           <div className="w-2 h-2 rounded-sm shrink-0 bg-red-500" />
                           <span className="text-[11px] font-bold text-red-400">나의 수익률</span>
-                          <span className={`text-[11px] font-black ${rateCls(displayResult.avgCostReturnRateAtEnd)}`}>{fmtRate(displayResult.avgCostReturnRateAtEnd)}</span>
+                          <span className={`text-[11px] font-black ${rateCls(displayResult.principalReturnRateAtEnd)}`}>{fmtRate(displayResult.principalReturnRateAtEnd)}</span>
                         </div>
-                        {displayResult.avgCostReturnRateAtEnd != null ? (
+                        {displayResult.principalReturnRateAtEnd != null ? (
                           <>
                             <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] pl-3.5">
                               <Row
                                 label="시작"
-                                source="매입금액 / 평가액(종가×수량)"
-                                value={`${vStart?.totalCostBasis != null ? fmtMoney(vStart.totalCostBasis) : '—'} / ${vStart?.avgCostEval != null ? fmtMoney(vStart.avgCostEval) : '—'}`}
+                                source="투자원금 / 평가자산(예수금 포함)"
+                                value={`${vStart?.principalAmount != null ? fmtMoney(vStart.principalAmount) : '—'} / ${vStart?.evalAmount != null ? fmtMoney(vStart.evalAmount) : '—'}`}
                                 date={formatShortDate(displayResult.startDate)}
-                                extra={vStart?.avgCostReturnRate != null && <span className={`ml-1 font-bold ${rateCls(vStart.avgCostReturnRate)}`}>→ {fmtRate(vStart.avgCostReturnRate)}</span>}
+                                extra={vStart?.principalReturnRate != null && <span className={`ml-1 font-bold ${rateCls(vStart.principalReturnRate)}`}>→ {fmtRate(vStart.principalReturnRate)}</span>}
                               />
                               <Row
                                 label="종료"
-                                source="매입금액 / 평가액(종가×수량)"
-                                value={`${displayResult.avgCostBasisAtEnd != null ? fmtMoney(displayResult.avgCostBasisAtEnd) : '—'} / ${displayResult.avgCostEvalAtEnd != null ? fmtMoney(displayResult.avgCostEvalAtEnd) : '—'}`}
+                                source="투자원금 / 평가자산(예수금 포함)"
+                                value={`${displayResult.principalAtEnd != null ? fmtMoney(displayResult.principalAtEnd) : '—'} / ${displayResult.endEval != null ? fmtMoney(displayResult.endEval) : '—'}`}
                                 date={formatShortDate(displayResult.endDate)}
-                                extra={<span className={`ml-1 font-bold ${rateCls(displayResult.avgCostReturnRateAtEnd)}`}>→ {fmtRate(displayResult.avgCostReturnRateAtEnd)}</span>}
+                                extra={<span className={`ml-1 font-bold ${rateCls(displayResult.principalReturnRateAtEnd)}`}>→ {fmtRate(displayResult.principalReturnRateAtEnd)}</span>}
                               />
                               <span className="text-gray-500">계산식</span>
-                              <span className="text-sky-200/90 font-mono leading-snug">(당일 종가×수량 − 매입금액) ÷ 매입금액 × 100 = (종가 − 평균단가) ÷ 평균단가</span>
+                              <span className="text-sky-200/90 font-mono leading-snug">(당일 평가자산 − 투자원금) ÷ 투자원금 × 100</span>
                               <span className="text-gray-500">출처</span>
-                              <span className="text-gray-400 leading-snug">매입금액 = 포트폴리오 테이블 매입금액(평균단가×보유수량) · 평가액 = 당일 종가×보유수량 · 예수금 제외 · 증권사·테이블 수익률과 동일</span>
+                              <span className="text-gray-400 leading-snug">투자원금 = 입금 누적(투자 요약의 투자 원금) · 평가자산 = 당일 총평가액(예수금 포함) · 투자 요약 패널 수익률과 동일 · 배당 재투자는 수익으로 반영</span>
                             </div>
                             <div className="mt-1.5 ml-3.5 p-1.5 rounded bg-gray-800/40 border border-gray-700/40 text-[9.5px] text-gray-400 leading-relaxed">
-                              ℹ️ 기준은 <b>내 평균 매수단가</b>입니다(조회 시작일 0% 아님). 당일 종가가 평균단가보다 낮으면 <span className="text-blue-400 font-bold">−수익률</span>, 높으면 <span className="text-red-400 font-bold">+수익률</span>로 표시됩니다.
+                              ℹ️ 기준은 <b>내 투자원금</b>입니다(조회 시작일 0% 아님). 평가자산이 투자원금보다 낮으면 <span className="text-blue-400 font-bold">−수익률</span>, 높으면 <span className="text-red-400 font-bold">+수익률</span>로 표시됩니다.
                             </div>
                           </>
                         ) : (
-                          <div className="ml-3.5 text-[10px] text-gray-500">포트폴리오 테이블에 매입금액(투자금액)을 입력하면 표시됩니다.</div>
+                          <div className="ml-3.5 text-[10px] text-gray-500">입출금 내역 또는 투자 원금을 입력하면 표시됩니다.</div>
                         )}
                       </div>
 
@@ -551,29 +551,29 @@ export default function PortfolioChart({
                   <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
                     <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">나의 수익률</span>
-                    {displayResult.avgCostReturnRateAtEnd != null ? (() => {
-                      const cost = displayResult.avgCostBasisAtEnd;
-                      const evl = displayResult.avgCostEvalAtEnd;
-                      const prof = (cost != null && evl != null) ? evl - cost : null;
+                    {displayResult.principalReturnRateAtEnd != null ? (() => {
+                      const prin = displayResult.principalAtEnd;
+                      const evl = displayResult.endEval;
+                      const prof = (prin != null && evl != null) ? evl - prin : null;
                       return (
                         <>
-                          <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.avgCostReturnRateAtEnd >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                            {displayResult.avgCostReturnRateAtEnd > 0 ? '+' : ''}{displayResult.avgCostReturnRateAtEnd.toFixed(2)}%
+                          <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.principalReturnRateAtEnd >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                            {displayResult.principalReturnRateAtEnd > 0 ? '+' : ''}{displayResult.principalReturnRateAtEnd.toFixed(2)}%
                           </span>
                           {prof != null && (
                             <span className={`text-[10px] font-bold whitespace-nowrap ${prof >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
                               ({prof >= 0 ? '+' : ''}{fmtMoney(prof)})
                             </span>
                           )}
-                          {cost != null && evl != null && (
+                          {prin != null && evl != null && (
                             <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                              (매입 {fmtMoney(cost)} → 평가 {fmtMoney(evl)})
+                              (원금 {fmtMoney(prin)} → 평가 {fmtMoney(evl)})
                             </span>
                           )}
                         </>
                       );
                     })() : (
-                      <span className="text-[10px] text-gray-500 whitespace-nowrap">포트폴리오 테이블 매입금액 입력 필요</span>
+                      <span className="text-[10px] text-gray-500 whitespace-nowrap">입출금 내역 또는 투자 원금 입력 필요</span>
                     )}
                   </div>
                   {showBacktest && displayResult.backtestPeriodRate != null && (
@@ -745,7 +745,7 @@ export default function PortfolioChart({
             <RechartsTooltip content={() => null} />
             {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
             {showPrincipal && <Line yAxisId="right" type="monotone" dataKey="principalAmount" name="투자원금" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="5 3" connectNulls />}
-            {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="avgCostReturnRate" name="나의 수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} connectNulls />}
+            {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="principalReturnRate" name="나의 수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} connectNulls />}
             {!userFeatures.feature1 && showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#38bdf8" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {!userFeatures.feature1 && showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
