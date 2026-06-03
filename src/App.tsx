@@ -1114,10 +1114,10 @@ export default function App() {
   });
 
 
-  const { handleManualBackfill } = useHistoryBackfill({
+  useHistoryBackfill({
     stockHistoryMap, indicatorHistoryMap, marketIndicators,
     portfolioSummaries, portfolios, setPortfolios,
-    activePortfolioId, setHistory, notify, effectiveDateKey,
+    activePortfolioId, setHistory, effectiveDateKey,
   });
 
   const { handleImportHistoryJSON } = useIndexImport({
@@ -2535,7 +2535,6 @@ export default function App() {
             usdkrw={marketIndicators.usdkrw || 1300}
             holidays={marketHolidays}
             dividendTaxHistory={dividendTaxHistory}
-            onManualBackfill={handleManualBackfill}
             matongClosedIds={matongClosedIds}
             setMatongClosedIds={setMatongClosedIds}
             compStocks={compStocks}

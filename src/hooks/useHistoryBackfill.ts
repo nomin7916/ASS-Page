@@ -12,7 +12,6 @@ export const useHistoryBackfill = ({
   setPortfolios,
   activePortfolioId,
   setHistory,
-  notify,
   effectiveDateKey,
 }) => {
   const nonActiveHistRecordedRef = useRef({});
@@ -202,83 +201,5 @@ export const useHistoryBackfill = ({
     if (portfoliosChanged) setPortfolios(nextPortfolios);
   }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey]);
 
-  // 수동 백필: 지정 날짜부터 effectiveDate 미만까지 누락 평가액 채우기
-  const handleManualBackfill = (fromDate) => {
-    if (!fromDate) return;
-    const effectiveDate = getEffectiveDate();
-    if (fromDate >= effectiveDate) { notify('시작일은 오늘 이전이어야 합니다.', 'warning'); return; }
-
-    const calcEval = (p, accountType, date) => {
-      const resolved = resolveHoldings(p, date);
-      return calcPortfolioEvalForDate(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw, p.manualPriceOverrides || {});
-    };
-
-    const fillMissing = (p) => {
-      const items = p.portfolio || [];
-      const accountType = p.accountType;
-      const prin = p.principal || 0;
-      const hist = p.history || [];
-      const snaps = p.holdingSnapshots || [];
-      const hasHoldings = items.length > 0 || snaps.some(s => (s.items || []).length > 0);
-      if (accountType === 'simple' || !hasHoldings) return null;
-      const isGold = accountType === 'gold';
-      // 이미 기록이 있는 모든 날짜(실시간 isFixed:false 포함)를 '존재'로 본다.
-      // isFixed 만 보던 과거 로직은 실시간 레코드가 있는 날을 '누락'으로 오판해
-      // 같은 날짜에 백필 레코드를 중복 추가했음 → 날짜 중복 버그 원인.
-      const existingDates = new Set(hist.map(h => h.date));
-      const availDates = new Set();
-      if (isGold) {
-        Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= fromDate && d < effectiveDate) availDates.add(d); });
-      } else {
-        const codes = new Set();
-        items.forEach(it => { if ((it.type === 'stock' || it.type === 'fund') && it.code) codes.add(it.code); });
-        snaps.forEach(s => (s.items || []).forEach(it => { if ((it.type === 'stock' || it.type === 'fund') && it.code) codes.add(it.code); }));
-        codes.forEach(code => {
-          if (stockHistoryMap[code]) Object.keys(stockHistoryMap[code]).forEach(d => { if (d >= fromDate && d < effectiveDate) availDates.add(d); });
-        });
-      }
-      const newRecords = [];
-      [...availDates].sort().forEach(date => {
-        if (existingDates.has(date)) return;
-        const evalAmt = calcEval(p, accountType, date);
-        if (evalAmt > 0) newRecords.push({ date, evalAmount: evalAmt, principal: prin, isFixed: true });
-      });
-      return newRecords.length > 0 ? newRecords : null;
-    };
-
-    // 빈 날짜만 채운다 — 이미 같은 날짜 기록이 있으면 절대 덮어쓰거나 중복 추가하지 않음.
-    const mergeMissing = (hist, records) => {
-      const dates = new Set((hist || []).map(h => h.date));
-      const fresh = records.filter(r => !dates.has(r.date));
-      return { hist: fresh.length > 0 ? [...(hist || []), ...fresh] : (hist || []), added: fresh.length };
-    };
-
-    let totalAdded = 0;
-    const activeP = portfolios.find(p => p.id === activePortfolioId);
-    const activeRecords = activeP ? fillMissing(activeP) : null;
-    if (activeRecords) {
-      // 카운트는 현재 활성 history 기준으로 동기 계산(알림 정확도·StrictMode 이중호출 회피),
-      // 실제 갱신은 prev 기준 순수 머지로 적용.
-      totalAdded += mergeMissing(activeP.history || [], activeRecords).added;
-      setHistory(prev => mergeMissing(prev, activeRecords).hist);
-    }
-
-    let portfoliosChanged = false;
-    const nextPortfolios = portfolios.map(p => {
-      if (p.id === activePortfolioId) return p;
-      const records = fillMissing(p);
-      if (!records) return p;
-      const { hist, added } = mergeMissing(p.history || [], records);
-      if (added === 0) return p;
-      totalAdded += added;
-      portfoliosChanged = true;
-      return { ...p, history: hist };
-    });
-    if (portfoliosChanged) setPortfolios(nextPortfolios);
-
-    if (totalAdded > 0) notify(`${totalAdded}건의 누락 기록을 채웠습니다.`, 'success');
-    else notify('채울 누락 기록이 없습니다.', 'info');
-  };
-
-  return { handleManualBackfill };
 };
+

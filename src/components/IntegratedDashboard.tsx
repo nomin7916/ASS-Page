@@ -1,6 +1,6 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Plus, Download, Trash2, Maximize2, X, Check, CalendarPlus, Activity, TrendingUp, Settings, BarChart3 } from 'lucide-react';
+import { Plus, Download, Trash2, Maximize2, X, Check, Activity, TrendingUp, Settings, BarChart3 } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
 import {
@@ -646,21 +646,6 @@ export default function IntegratedDashboard({
               <div className="w-full xl:w-[490px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[344px] sm:max-h-[384px] md:max-h-[424px] xl:max-h-[464px]">
                 <div className="p-3 bg-[#0f172a] flex items-center justify-between border-b border-gray-700 shrink-0">
                   <span className="text-white font-bold text-sm">📅 평가액 추이</span>
-                  {onManualBackfill && (
-                    <CustomDatePicker
-                      value=""
-                      onChange={(date) => { onManualBackfill(date); }}
-                      align="right"
-                      trigger={
-                        <button
-                          className="p-1.5 rounded hover:bg-orange-900/30 transition-colors text-orange-400 hover:text-orange-300"
-                          title="선택한 날짜부터 누락된 평가액 기록을 모든 계좌에 채웁니다"
-                        >
-                          <CalendarPlus size={15} />
-                        </button>
-                      }
-                    />
-                  )}
                 </div>
                 <div className="overflow-x-auto overflow-y-auto flex-1">
                   <table className="w-full text-xs">
