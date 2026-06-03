@@ -108,17 +108,41 @@ export function useIntegratedData({
   }, [portfolioSummaries]);
 
   const computedIntHistory = useMemo(() => {
-    const dateToTotal = new Map();
     const today = effectiveDateKey || getEffectiveDate();
-    portfolios.forEach(p => {
+
+    // 계좌별 (날짜 → 평가액) 시계열 구성.
+    // 같은 날짜에 기록이 둘 이상이면 마지막 값으로 정리 → 합산 시 이중 계상 방지.
+    const accountSeries = portfolios.map(p => {
       const hist = p.id === activePortfolioId ? history : (p.history || []);
+      const map = new Map();
       hist.forEach(h => {
-        if (h.evalAmount > 0) dateToTotal.set(h.date, (dateToTotal.get(h.date) || 0) + h.evalAmount);
+        if (h && h.date && h.evalAmount > 0) map.set(h.date, h.evalAmount);
       });
+      return { dates: [...map.keys()].sort(), map };
+    }).filter(a => a.dates.length > 0);
+
+    // 전체 날짜 합집합 (+ 오늘)
+    const dateSet = new Set();
+    accountSeries.forEach(a => a.dates.forEach(d => dateSet.add(d)));
+    if (intTotals.totalEval > 0) dateSet.add(today);
+    const sortedDates = [...dateSet].sort();
+
+    // 각 날짜에 대해 계좌별 직전 거래일 값(carry-forward)을 합산.
+    // 주말·공휴일 등 일부 계좌만 기록된 날짜에도 모든 계좌의 평가액이 빠짐없이 반영된다.
+    // (각 계좌 첫 기록 이전 날짜에는 lastVal=0 → 기여하지 않음)
+    const dateToTotal = new Map();
+    accountSeries.forEach(({ dates, map }) => {
+      let i = 0, lastVal = 0;
+      for (const d of sortedDates) {
+        while (i < dates.length && dates[i] <= d) { lastVal = map.get(dates[i]); i++; }
+        if (lastVal > 0) dateToTotal.set(d, (dateToTotal.get(d) || 0) + lastVal);
+      }
     });
+
+    // 오늘 값은 실시간 합산 평가액으로 보정 (휴일에 가격 미로드로 폭락한 경우 직전값 유지)
     if (intTotals.totalEval > 0) {
-      const prevEntries = [...dateToTotal.entries()].filter(([d]) => d < today).sort((a, b) => b[0].localeCompare(a[0]));
-      const prevValue = prevEntries.length > 0 ? prevEntries[0][1] : 0;
+      const prevDates = sortedDates.filter(d => d < today);
+      const prevValue = prevDates.length > 0 ? (dateToTotal.get(prevDates[prevDates.length - 1]) || 0) : 0;
       const isAnomaly = prevValue > 0 && intTotals.totalEval < prevValue * 0.1;
       dateToTotal.set(today, isAnomaly ? prevValue : intTotals.totalEval);
     }
