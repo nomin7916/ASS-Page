@@ -169,14 +169,25 @@ export default function IntegratedDashboard({
 
   const histDetailRows = useMemo(() => {
     if (!histDetailDate || !allPortfoliosForDividend) return { rows: [], totalEval: 0, totalPrincipal: 0 };
+    // intMonthlyHistory[0]가 오늘(실시간 값 사용 날짜)이므로 그 date와 비교
+    const realtimeDate = intMonthlyHistory.length > 0 ? intMonthlyHistory[0].date : '';
+    const isRealtimeDate = histDetailDate === realtimeDate;
     let totalEval = 0, totalPrincipal = 0;
     const rows = [];
     allPortfoliosForDividend.forEach(p => {
-      const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
-      const sorted = [...hist].filter(h => h?.date && h.evalAmount > 0).sort((a, b) => a.date.localeCompare(b.date));
-      const rec = sorted.filter(h => h.date <= histDetailDate).pop();
-      if (!rec || rec.evalAmount <= 0) return;
-      const evalAmt = rec.evalAmount;
+      const summary = portfolioSummaries.find(s => s.id === p.id);
+      let evalAmt = 0;
+      if (isRealtimeDate) {
+        // 오늘은 실시간 평가금 사용 → 테이블 합계와 일치
+        evalAmt = summary?.currentEval || 0;
+      } else {
+        const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
+        const sorted = [...hist].filter(h => h?.date && h.evalAmount > 0).sort((a, b) => a.date.localeCompare(b.date));
+        const rec = sorted.filter(h => h.date <= histDetailDate).pop();
+        if (!rec || rec.evalAmount <= 0) return;
+        evalAmt = rec.evalAmount;
+      }
+      if (evalAmt <= 0) return;
       totalEval += evalAmt;
       const isOverseas = p.accountType === 'overseas';
       const fxRate = isOverseas ? (p.avgExchangeRate || 1) : 1;
@@ -187,14 +198,13 @@ export default function IntegratedDashboard({
       const futureWithdrawals = wds.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
       const effPrincipal = Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
       totalPrincipal += effPrincipal;
-      const summary = portfolioSummaries.find(s => s.id === p.id);
       const name = summary?.name || p.name || p.id;
       const profit = evalAmt - effPrincipal;
       const returnRate = effPrincipal > 0 ? (profit / effPrincipal) * 100 : 0;
       rows.push({ id: p.id, name, evalAmount: evalAmt, principal: effPrincipal, profit, returnRate, rowColor: p.rowColor || '' });
     });
     return { rows, totalEval, totalPrincipal };
-  }, [histDetailDate, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries]);
+  }, [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries]);
 
   const focusNextMatongInput = useCallback((el, dir) => {
     const tr = el.closest('tr');
