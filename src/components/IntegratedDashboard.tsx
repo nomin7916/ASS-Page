@@ -168,11 +168,11 @@ export default function IntegratedDashboard({
   }, [histDetailDate]);
 
   const histDetailRows = useMemo(() => {
-    if (!histDetailDate || !allPortfoliosForDividend) return { rows: [], totalEval: 0, totalPrincipal: 0 };
+    if (!histDetailDate || !allPortfoliosForDividend) return { rows: [], totalEval: 0, totalPrincipal: 0, totalDeposit: 0 };
     // intMonthlyHistory[0]가 오늘(실시간 값 사용 날짜)이므로 그 date와 비교
     const realtimeDate = intMonthlyHistory.length > 0 ? intMonthlyHistory[0].date : '';
     const isRealtimeDate = histDetailDate === realtimeDate;
-    let totalEval = 0, totalPrincipal = 0;
+    let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
     const rows = [];
     allPortfoliosForDividend.forEach(p => {
       const summary = portfolioSummaries.find(s => s.id === p.id);
@@ -198,12 +198,14 @@ export default function IntegratedDashboard({
       const futureWithdrawals = wds.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
       const effPrincipal = Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
       totalPrincipal += effPrincipal;
+      const depositAmt = summary?.depositAmount || 0;
+      totalDeposit += depositAmt;
       const name = summary?.name || p.name || p.id;
       const profit = evalAmt - effPrincipal;
       const returnRate = effPrincipal > 0 ? (profit / effPrincipal) * 100 : 0;
-      rows.push({ id: p.id, name, evalAmount: evalAmt, principal: effPrincipal, profit, returnRate, rowColor: p.rowColor || '' });
+      rows.push({ id: p.id, name, evalAmount: evalAmt, principal: effPrincipal, profit, returnRate, depositAmount: depositAmt, rowColor: p.rowColor || '' });
     });
-    return { rows, totalEval, totalPrincipal };
+    return { rows, totalEval, totalPrincipal, totalDeposit };
   }, [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries]);
 
   const focusNextMatongInput = useCallback((el, dir) => {
@@ -1365,6 +1367,7 @@ export default function IntegratedDashboard({
                     <th className="py-2 px-2 text-right border-r border-gray-700 whitespace-nowrap">투자원금</th>
                     <th className="py-2 px-2 text-right border-r border-gray-700 whitespace-nowrap">평가금액</th>
                     <th className="py-2 px-2 text-center border-r border-gray-700">비중</th>
+                    <th className="py-2 px-2 text-right border-r border-gray-700 whitespace-nowrap">예수금</th>
                     <th className="py-2 px-2 text-right border-r border-gray-700">수익</th>
                     <th className="py-2 px-2 text-right">수익률</th>
                   </tr>
@@ -1381,12 +1384,13 @@ export default function IntegratedDashboard({
                       <td className="py-2 px-2 text-right text-gray-400 border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(r.principal)}</td>
                       <td className="py-2 px-2 text-right text-white font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(r.evalAmount)}</td>
                       <td className="py-2 px-2 text-center text-gray-300 border-r border-gray-700">{histDetailRows.totalEval > 0 ? formatPercent(r.evalAmount / histDetailRows.totalEval * 100) : '-'}</td>
+                      <td className="py-2 px-2 text-right text-gray-400 border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(r.depositAmount)}</td>
                       <td className={`py-2 px-2 text-right border-r border-gray-700 font-bold ${r.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{hideAmounts ? '••••••' : formatCurrency(r.profit)}</td>
                       <td className={`py-2 px-2 text-right font-bold ${r.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(r.returnRate)}</td>
                     </tr>
                   ))}
                   {histDetailRows.rows.length === 0 && (
-                    <tr><td colSpan={6} className="py-6 text-center text-gray-500">해당 날짜 데이터 없음</td></tr>
+                    <tr><td colSpan={7} className="py-6 text-center text-gray-500">해당 날짜 데이터 없음</td></tr>
                   )}
                 </tbody>
                 {histDetailRows.rows.length > 0 && (
@@ -1396,6 +1400,7 @@ export default function IntegratedDashboard({
                       <td className="py-2 px-2 text-right text-gray-300 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalPrincipal)}</td>
                       <td className="py-2 px-2 text-right text-yellow-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalEval)}</td>
                       <td className="py-2 px-2 text-center text-gray-300 font-bold border-r border-gray-700">100%</td>
+                      <td className="py-2 px-2 text-right text-gray-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalDeposit)}</td>
                       <td className={`py-2 px-2 text-right font-bold border-r border-gray-700 ${histDetailRows.totalEval - histDetailRows.totalPrincipal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                         {hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalEval - histDetailRows.totalPrincipal)}
                       </td>
