@@ -209,7 +209,8 @@ export default function IntegratedDashboard({
           ? recPrincipal
           : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
       totalPrincipal += effPrincipal;
-      const depositAmt = summary?.depositAmount || 0;
+      // 마통: 예수금도 잔액(=평가=원금)과 동일 유지 → 어떤 날짜든 투자원금=평가금액=예수금, 수익 0.
+      const depositAmt = isMatong ? effPrincipal : (summary?.depositAmount || 0);
       totalDeposit += depositAmt;
       const name = summary?.name || p.name || p.id;
       const profit = evalAmt - effPrincipal;
