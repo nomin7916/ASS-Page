@@ -96,12 +96,16 @@ export default function PortfolioChart({
     if (a >= 1e4) return Math.round(amt / 1e4) + '만';
     return String(amt);
   };
-  const depositMarkers = (depositHistory || [])
-    .filter(d => !d.noPrincipal && d.amount && chartDateSet.has(d.date))
-    .map(d => ({ date: d.date, amount: d.amount, type: 'deposit' }));
-  const withdrawalMarkers = (depositHistory2 || [])
-    .filter(d => !d.noPrincipal && d.amount && chartDateSet.has(d.date))
-    .map(d => ({ date: d.date, amount: d.amount, type: 'withdrawal' }));
+  const depositMarkers = Object.entries(
+    (depositHistory || [])
+      .filter(d => !d.noPrincipal && d.amount && chartDateSet.has(d.date))
+      .reduce((acc, d) => { acc[d.date] = (acc[d.date] || 0) + d.amount; return acc; }, {} as Record<string, number>)
+  ).map(([date, amount]) => ({ date, amount, type: 'deposit' }));
+  const withdrawalMarkers = Object.entries(
+    (depositHistory2 || [])
+      .filter(d => !d.noPrincipal && d.amount && chartDateSet.has(d.date))
+      .reduce((acc, d) => { acc[d.date] = (acc[d.date] || 0) + d.amount; return acc; }, {} as Record<string, number>)
+  ).map(([date, amount]) => ({ date, amount, type: 'withdrawal' }));
 
   return (
     <div className="bg-[#1e293b] rounded-xl border border-gray-700 overflow-hidden shadow-lg flex-1 min-w-0 flex flex-col">
