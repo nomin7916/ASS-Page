@@ -2523,6 +2523,8 @@ export default function App() {
             intHoveredPoint={intHoveredPoint}
             handleSave={handleSave}
             allPortfoliosForDividend={allPortfoliosForDividend}
+            activePortfolioId={activePortfolioId}
+            activeHistory={history}
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
             updatePortfolioActualDividend={updatePortfolioActualDividend}
             updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd}

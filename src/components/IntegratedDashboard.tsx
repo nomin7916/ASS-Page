@@ -1,5 +1,5 @@
 ﻿﻿// @ts-nocheck
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Plus, Download, Trash2, Maximize2, X, Check, Activity, TrendingUp, Settings, BarChart3 } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
@@ -140,6 +140,8 @@ export default function IntegratedDashboard({
   setCustomLinks,
   isLinkSettingsOpen = false,
   setIsLinkSettingsOpen,
+  activePortfolioId = '',
+  activeHistory = [],
 }) {
   const [showCompStocks, setShowCompStocks] = useState(false);
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
@@ -156,6 +158,43 @@ export default function IntegratedDashboard({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [showSimpleMenu]);
+
+  const [histDetailDate, setHistDetailDate] = useState(null);
+  useEffect(() => {
+    if (!histDetailDate) return;
+    const handler = (e) => { if (e.key === 'Escape') setHistDetailDate(null); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [histDetailDate]);
+
+  const histDetailRows = useMemo(() => {
+    if (!histDetailDate || !allPortfoliosForDividend) return { rows: [], totalEval: 0, totalPrincipal: 0 };
+    let totalEval = 0, totalPrincipal = 0;
+    const rows = [];
+    allPortfoliosForDividend.forEach(p => {
+      const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
+      const sorted = [...hist].filter(h => h?.date && h.evalAmount > 0).sort((a, b) => a.date.localeCompare(b.date));
+      const rec = sorted.filter(h => h.date <= histDetailDate).pop();
+      if (!rec || rec.evalAmount <= 0) return;
+      const evalAmt = rec.evalAmount;
+      totalEval += evalAmt;
+      const isOverseas = p.accountType === 'overseas';
+      const fxRate = isOverseas ? (p.avgExchangeRate || 1) : 1;
+      const currentPrincipalKRW = (p.principal || 0) * fxRate;
+      const deps = p.depositHistory || [];
+      const wds = p.depositHistory2 || [];
+      const futureDeposits = deps.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+      const futureWithdrawals = wds.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+      const effPrincipal = Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
+      totalPrincipal += effPrincipal;
+      const summary = portfolioSummaries.find(s => s.id === p.id);
+      const name = summary?.name || p.name || p.id;
+      const profit = evalAmt - effPrincipal;
+      const returnRate = effPrincipal > 0 ? (profit / effPrincipal) * 100 : 0;
+      rows.push({ id: p.id, name, evalAmount: evalAmt, principal: effPrincipal, profit, returnRate, rowColor: p.rowColor || '' });
+    });
+    return { rows, totalEval, totalPrincipal };
+  }, [histDetailDate, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries]);
 
   const focusNextMatongInput = useCallback((el, dir) => {
     const tr = el.closest('tr');
@@ -662,7 +701,7 @@ export default function IntegratedDashboard({
                     <tbody>
                       {intMonthlyHistory.map((h, i) => (
                         <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
-                          <td className="py-2 px-2 text-center font-bold text-gray-400 border-r border-gray-700">{formatShortDate(h.date)}</td>
+                          <td className="py-2 px-2 text-center font-bold text-gray-400 border-r border-gray-700 cursor-pointer hover:text-sky-300 transition-colors" onClick={() => setHistDetailDate(h.date)}>{formatShortDate(h.date)}</td>
                           <td className="py-2 px-2 font-bold text-white text-center border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
                           <td className="py-2 px-2 text-center border-r border-gray-700">
                             <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
@@ -1301,6 +1340,66 @@ export default function IntegratedDashboard({
             </div>
 
           </div>
+      {histDetailDate && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70" onClick={() => setHistDetailDate(null)}>
+          <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-2xl w-full max-w-xl mx-4 max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 bg-[#0f172a] border-b border-gray-700 shrink-0">
+              <span className="text-white font-bold text-sm">📊 {formatShortDate(histDetailDate)} — 계좌별 현황</span>
+              <button onClick={() => setHistDetailDate(null)} className="text-gray-400 hover:text-white transition-colors"><X size={16} /></button>
+            </div>
+            <div className="overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 z-10">
+                  <tr>
+                    <th className="py-2 px-3 text-left border-r border-gray-700">계좌</th>
+                    <th className="py-2 px-2 text-right border-r border-gray-700 whitespace-nowrap">투자원금</th>
+                    <th className="py-2 px-2 text-right border-r border-gray-700 whitespace-nowrap">평가금액</th>
+                    <th className="py-2 px-2 text-center border-r border-gray-700">비중</th>
+                    <th className="py-2 px-2 text-right border-r border-gray-700">수익</th>
+                    <th className="py-2 px-2 text-right">수익률</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {histDetailRows.rows.map((r, i) => (
+                    <tr key={r.id} className={`border-b border-gray-700/50 ${i % 2 === 0 ? '' : 'bg-gray-800/20'}`}>
+                      <td className="py-2 px-3 text-left border-r border-gray-700">
+                        <div className="flex items-center gap-1.5">
+                          {r.rowColor && <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: r.rowColor }} />}
+                          <span className="text-gray-200 font-medium truncate max-w-[130px]">{r.name}</span>
+                        </div>
+                      </td>
+                      <td className="py-2 px-2 text-right text-gray-400 border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(r.principal)}</td>
+                      <td className="py-2 px-2 text-right text-white font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(r.evalAmount)}</td>
+                      <td className="py-2 px-2 text-center text-gray-300 border-r border-gray-700">{histDetailRows.totalEval > 0 ? formatPercent(r.evalAmount / histDetailRows.totalEval * 100) : '-'}</td>
+                      <td className={`py-2 px-2 text-right border-r border-gray-700 font-bold ${r.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{hideAmounts ? '••••••' : formatCurrency(r.profit)}</td>
+                      <td className={`py-2 px-2 text-right font-bold ${r.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(r.returnRate)}</td>
+                    </tr>
+                  ))}
+                  {histDetailRows.rows.length === 0 && (
+                    <tr><td colSpan={6} className="py-6 text-center text-gray-500">해당 날짜 데이터 없음</td></tr>
+                  )}
+                </tbody>
+                {histDetailRows.rows.length > 0 && (
+                  <tfoot className="border-t border-gray-600 bg-gray-800/60">
+                    <tr>
+                      <td className="py-2 px-3 text-gray-300 font-bold border-r border-gray-700">소계</td>
+                      <td className="py-2 px-2 text-right text-gray-300 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalPrincipal)}</td>
+                      <td className="py-2 px-2 text-right text-yellow-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalEval)}</td>
+                      <td className="py-2 px-2 text-center text-gray-300 font-bold border-r border-gray-700">100%</td>
+                      <td className={`py-2 px-2 text-right font-bold border-r border-gray-700 ${histDetailRows.totalEval - histDetailRows.totalPrincipal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalEval - histDetailRows.totalPrincipal)}
+                      </td>
+                      <td className={`py-2 px-2 text-right font-bold ${histDetailRows.totalPrincipal > 0 && (histDetailRows.totalEval - histDetailRows.totalPrincipal) / histDetailRows.totalPrincipal * 100 >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {histDetailRows.totalPrincipal > 0 ? formatPercent((histDetailRows.totalEval - histDetailRows.totalPrincipal) / histDetailRows.totalPrincipal * 100) : '-'}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
       {memoModal && (
         <div className="fixed inset-0 z-50 bg-black/40">
           <div className="absolute w-64 shadow-2xl overflow-hidden" style={{ left: memoPos.x, top: memoPos.y }} onClick={e => e.stopPropagation()}>
