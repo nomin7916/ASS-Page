@@ -176,7 +176,10 @@ export default function IntegratedDashboard({
     const rows = [];
     allPortfoliosForDividend.forEach(p => {
       const summary = portfolioSummaries.find(s => s.id === p.id);
+      const isMatong = p.accountType === 'matong';
+      const isSimple = p.accountType === 'simple';
       let evalAmt = 0;
+      let recPrincipal = null;
       if (isRealtimeDate) {
         // 오늘은 실시간 평가금 사용 → 테이블 합계와 일치
         evalAmt = summary?.currentEval || 0;
@@ -186,6 +189,7 @@ export default function IntegratedDashboard({
         const rec = sorted.filter(h => h.date <= histDetailDate).pop();
         if (!rec || rec.evalAmount <= 0) return;
         evalAmt = rec.evalAmount;
+        if (rec.principal != null) recPrincipal = rec.principal;
       }
       if (evalAmt <= 0) return;
       totalEval += evalAmt;
@@ -196,7 +200,14 @@ export default function IntegratedDashboard({
       const wds = p.depositHistory2 || [];
       const futureDeposits = deps.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
       const futureWithdrawals = wds.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
-      const effPrincipal = Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
+      // 마통: 투자원금=평가금액 불변 → 수익·수익률 항상 0 (수동 입력 파생값이라 history 보정식 미적용).
+      // 직접입력: 그날 기록된 원금 사용(일반계좌면 원금=평가 → 수익 0, 그 외는 당시 원금 그대로).
+      // 그 외 계좌(주식 포트폴리오 등)는 입출금 시점 보정식 유지.
+      const effPrincipal = isMatong
+        ? evalAmt
+        : (isSimple && recPrincipal != null)
+          ? recPrincipal
+          : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
       totalPrincipal += effPrincipal;
       const depositAmt = summary?.depositAmount || 0;
       totalDeposit += depositAmt;
@@ -1354,13 +1365,13 @@ export default function IntegratedDashboard({
           </div>
       {histDetailDate && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70" onClick={() => setHistDetailDate(null)}>
-          <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-2xl w-full max-w-xl mx-4 max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+          <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-2xl w-full max-w-4xl mx-4 max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 bg-[#0f172a] border-b border-gray-700 shrink-0">
               <span className="text-white font-bold text-sm">📊 {formatShortDate(histDetailDate)} — 계좌별 현황</span>
               <button onClick={() => setHistDetailDate(null)} className="text-gray-400 hover:text-white transition-colors"><X size={16} /></button>
             </div>
-            <div className="overflow-y-auto">
-              <table className="w-full text-xs">
+            <div className="overflow-auto">
+              <table className="w-full min-w-[640px] text-xs">
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 z-10">
                   <tr>
                     <th className="py-2 px-3 text-left border-r border-gray-700">계좌</th>
