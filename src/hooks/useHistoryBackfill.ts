@@ -222,7 +222,10 @@ export const useHistoryBackfill = ({
       const hasHoldings = items.length > 0 || snaps.some(s => (s.items || []).length > 0);
       if (accountType === 'simple' || !hasHoldings) return null;
       const isGold = accountType === 'gold';
-      const existingDates = new Set(hist.filter(h => h.isFixed).map(h => h.date));
+      // 이미 기록이 있는 모든 날짜(실시간 isFixed:false 포함)를 '존재'로 본다.
+      // isFixed 만 보던 과거 로직은 실시간 레코드가 있는 날을 '누락'으로 오판해
+      // 같은 날짜에 백필 레코드를 중복 추가했음 → 날짜 중복 버그 원인.
+      const existingDates = new Set(hist.map(h => h.date));
       const availDates = new Set();
       if (isGold) {
         Object.keys(indicatorHistoryMap.goldKr || {}).forEach(d => { if (d >= fromDate && d < effectiveDate) availDates.add(d); });
@@ -243,12 +246,21 @@ export const useHistoryBackfill = ({
       return newRecords.length > 0 ? newRecords : null;
     };
 
+    // 빈 날짜만 채운다 — 이미 같은 날짜 기록이 있으면 절대 덮어쓰거나 중복 추가하지 않음.
+    const mergeMissing = (hist, records) => {
+      const dates = new Set((hist || []).map(h => h.date));
+      const fresh = records.filter(r => !dates.has(r.date));
+      return { hist: fresh.length > 0 ? [...(hist || []), ...fresh] : (hist || []), added: fresh.length };
+    };
+
     let totalAdded = 0;
     const activeP = portfolios.find(p => p.id === activePortfolioId);
     const activeRecords = activeP ? fillMissing(activeP) : null;
     if (activeRecords) {
-      totalAdded += activeRecords.length;
-      setHistory(prev => [...prev, ...activeRecords]);
+      // 카운트는 현재 활성 history 기준으로 동기 계산(알림 정확도·StrictMode 이중호출 회피),
+      // 실제 갱신은 prev 기준 순수 머지로 적용.
+      totalAdded += mergeMissing(activeP.history || [], activeRecords).added;
+      setHistory(prev => mergeMissing(prev, activeRecords).hist);
     }
 
     let portfoliosChanged = false;
@@ -256,9 +268,11 @@ export const useHistoryBackfill = ({
       if (p.id === activePortfolioId) return p;
       const records = fillMissing(p);
       if (!records) return p;
-      totalAdded += records.length;
+      const { hist, added } = mergeMissing(p.history || [], records);
+      if (added === 0) return p;
+      totalAdded += added;
       portfoliosChanged = true;
-      return { ...p, history: [...(p.history || []), ...records] };
+      return { ...p, history: hist };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
 

@@ -121,6 +121,36 @@ export const fillNonTradingGaps = (history, krHolidays = [], usHolidays = [], ac
   return fills;
 };
 
+// 같은 날짜 history 레코드 중복 제거 — 날짜당 1건만 유지(시계열은 날짜당 단일 값이 정상).
+// 우선순위: 실시간 권위값(isFixed:false & evalAmount>0) > 확정값(isFixed:true & adjustedAmount 있음) > 순수 백필.
+// 동순위는 나중(배열 뒤) 값을 채택. 등장 순서는 날짜 첫 등장 기준으로 보존.
+// 중복이 없으면 원본 배열을 그대로 반환(불필요한 재생성 방지).
+// date가 없는 레코드는 시계열에서 무의미하므로 의도적으로 폐기한다.
+// 검증: npm run verify:history
+export const dedupeHistoryByDate = (history) => {
+  if (!Array.isArray(history) || history.length < 2) return history;
+  const rank = (h) => {
+    if (!h?.isFixed && cleanNum(h?.evalAmount) > 0) return 2;
+    if (h?.isFixed && h?.adjustedAmount !== undefined) return 1;
+    return 0;
+  };
+  const best = new Map();
+  for (const h of history) {
+    if (!h?.date) continue;
+    const cur = best.get(h.date);
+    if (!cur || rank(h) >= rank(cur)) best.set(h.date, h);
+  }
+  if (best.size === history.length) return history;
+  const seen = new Set();
+  const out = [];
+  for (const h of history) {
+    if (!h?.date || seen.has(h.date)) continue;
+    seen.add(h.date);
+    out.push(best.get(h.date));
+  }
+  return out;
+};
+
 export const cleanNum = (val) => {
   if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return val;

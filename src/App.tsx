@@ -60,7 +60,7 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal
+  computeEffectivePrincipal, dedupeHistoryByDate
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -525,6 +525,7 @@ export default function App() {
         ...p,
         startDate: p.portfolioStartDate || p.startDate || '',
         portfolioStartDate: p.portfolioStartDate || p.startDate || '',
+        history: dedupeHistoryByDate(p.history || []),
         depositHistory: (p.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })),
         depositHistory2: (p.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })),
       }));
@@ -544,7 +545,7 @@ export default function App() {
         startDate: stateData.portfolioStartDate || stateData.history?.[0]?.date || '',
         portfolioStartDate: stateData.portfolioStartDate || '',
         portfolio: stateData.portfolio || [], principal: cleanNum(stateData.principal),
-        history: stateData.history || [], depositHistory: stateData.depositHistory || [],
+        history: dedupeHistoryByDate(stateData.history || []), depositHistory: stateData.depositHistory || [],
         depositHistory2: stateData.depositHistory2 || [],
         settings: stateData.settings || { mode: 'rebalance', amount: 1000000 },
       };
@@ -634,6 +635,7 @@ export default function App() {
         ...p,
         startDate: p.portfolioStartDate || p.startDate || '',
         portfolioStartDate: p.portfolioStartDate || p.startDate || '',
+        history: dedupeHistoryByDate(p.history || []),
         depositHistory: (p.depositHistory || []).map(h => ({ ...h, memo: h.memo ?? '' })),
         depositHistory2: (p.depositHistory2 || []).map(h => ({ ...h, memo: h.memo ?? '' })),
       }));
