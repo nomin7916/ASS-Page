@@ -97,20 +97,26 @@ src/
   복원에서 기존 중복을 정리(우선순위 실시간>확정>백필, 중복 없으면 동일 참조 반환).
 - 검증: `npm run verify:history`.
 
-### 계좌별 현황 팝업(평가액 추이 날짜 클릭) — 마통/직접입력 수익 (⚠️ 회귀 주의)
+### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '현재값 평탄' 처리 (⚠️ 회귀 주의)
 
-`IntegratedDashboard.tsx`의 `histDetailRows`는 과거 날짜 클릭 시 계좌별 평가/원금/수익을
-보여준다. **마통(`matong`)·직접입력(`simple`) 계좌는 평가금액=투자원금이라 수익·수익률이
-항상 0이어야** 한다(라이브 표와 동일 불변식).
-- **과거 버그**: 팝업이 평가금액은 `p.history`의 옛 스냅샷(예 2,008,263)을 읽고 투자원금은
-  **현재** `p.principal`(예 8,291,714)을 써서 둘이 어긋남 → 가짜 손실 표시. 마통 평가는
-  `wt-(cw+wl)` 파생값이라 사용자가 마통 값을 고치면 옛 history 스냅샷이 박제된 채 남는 게 원인.
-  (계좌 간 값이 섞이는 오염 경로는 **없음** — 각 계좌는 자기 `p.history`만 읽고 합산은 더하기만 함.)
-- **수정**: 마통은 `effPrincipal = evalAmt`로 강제(수익·수익률 0). 직접입력은 현재 `p.principal`
-  대신 그날 history 레코드의 `principal`(`rec.principal`)을 사용(일반계좌 원금=평가 → 수익 0,
-  CMA 등 원금≠평가는 그대로 보존). 그 외 계좌는 입출금 시점 보정식 유지.
-- 추이 차트(`computedIntHistory`)는 손대지 않음(스냅샷 기준 유지) → 팝업 평가금액 소계가
-  차트 그날 값과 일치. 마통/직접입력 history 자동기록은 유지(앞으로 기록돼도 무방).
+**마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 사용자가 단일
+'현재값'으로만 관리. 평가금액=투자원금=예수금이라 **수익·수익률은 항상 0**이어야 한다(라이브 표
+불변식). 따라서 추이/팝업에서 **`p.history` 스냅샷을 신뢰하지 말고 현재값을 시작일 이후 평탄
+반영**한다(현재값 0이면 추이·팝업에서 자연히 제외).
+- **과거 버그(2단계)**: ① 팝업이 평가금액은 옛 스냅샷, 투자원금은 현재 `p.principal`을 써서
+  가짜 손익 표시. ② 더 근본적으로, CMA를 0으로 비워도 과거 스냅샷(예 10,335,867)이 박제된 채
+  남아 **추이 차트(`computedIntHistory`)와 날짜 팝업(`histDetailRows`) 모두 유령 잔액으로
+  합산** → 그날 총자산이 부풀려짐. 마통·simple은 시세 이력이 없으니 스냅샷 자체가 신뢰 불가.
+  (계좌 간 값이 섞이는 오염 경로는 **없음** — 각 계좌는 자기 값만 읽고 합산은 더하기만 함.)
+- **수정(현재 설계)**: `computedIntHistory`와 `histDetailRows` 양쪽에서 현금성 계좌를 동일 규칙으로
+  처리 — 스냅샷(`accountSeries`/`rec`)에서 **제외**하고, `cashSeries`로 분리해 **시작일 이후 모든
+  날짜에 현재값(simple=`evalAmount`, matong=`wt-(cw+wl)`)을 평탄 합산**. 원금도 같은 현재값을
+  평탄 합산(평가와 동일 → 수익 0). 팝업도 `isCash`면 `evalAmt=summary.currentEval`, `effPrincipal=
+  depositAmt=evalAmt`(시작일 가드 `startDate>histDetailDate`면 제외). **양쪽이 같은 현재값을 쓰므로
+  팝업 소계 = 차트 그날 값**으로 항상 일치.
+- **주의**: 더는 마통만 특수처리(`effPrincipal=evalAmt`)하거나 simple에 `rec.principal`을 쓰지 말 것.
+  둘 다 `isCash`로 묶어 현재값 평탄 처리한다. 마통/simple history 자동기록은 남아도 무방(무시됨).
+- 시장 계좌(주식·gold·overseas 등)는 종전대로 스냅샷 carry-forward + 입출금 시점 원금 보정식 유지.
 
 ### usePortfolioState 훅 (모든 포트폴리오 상태 + CRUD)
 `switchToPortfolio`, `addPortfolio`, `deletePortfolio`, `addSimpleAccount`,

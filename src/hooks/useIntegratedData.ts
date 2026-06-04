@@ -110,16 +110,33 @@ export function useIntegratedData({
   const computedIntHistory = useMemo(() => {
     const today = effectiveDateKey || getEffectiveDate();
 
-    // 계좌별 (날짜 → 평가액) 시계열 구성.
+    // 현금성 계좌(마통·직접입력)는 시장 시세 이력이 없다 — 사용자가 단일 '현재값'으로만 관리.
+    // 과거 자동 스냅샷이 박제되면 이미 비운 잔액이 유령으로 합산돼 추이를 왜곡하므로(예: CMA를
+    // 0으로 바꿔도 옛 평가금 스냅샷이 남음), 스냅샷을 무시하고 시작일 이후 모든 날짜에 현재값을
+    // 평탄 반영한다(현재값 0이면 기여 없음 → 추이/팝업에서 자연히 제외).
+    const cashSeries = portfolios
+      .filter(p => p.accountType === 'matong' || p.accountType === 'simple')
+      .map(p => {
+        const startDate = p.id === activePortfolioId ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
+        const evalAmount = p.accountType === 'simple'
+          ? (cleanNum(p.evalAmount) || 0)
+          : Math.max(0, (cleanNum(p.withdrawableTotal) || 0) - ((cleanNum(p.currentWithdrawal) || 0) + (cleanNum(p.withdrawalLimit) || 0)));
+        return { startDate, evalAmount };
+      })
+      .filter(c => c.evalAmount > 0);
+
+    // 시장 계좌별 (날짜 → 평가액) 시계열 구성. (현금성 계좌는 스냅샷 미사용 → 제외)
     // 같은 날짜에 기록이 둘 이상이면 마지막 값으로 정리 → 합산 시 이중 계상 방지.
-    const accountSeries = portfolios.map(p => {
-      const hist = p.id === activePortfolioId ? history : (p.history || []);
-      const map = new Map();
-      hist.forEach(h => {
-        if (h && h.date && h.evalAmount > 0) map.set(h.date, h.evalAmount);
-      });
-      return { dates: [...map.keys()].sort(), map };
-    }).filter(a => a.dates.length > 0);
+    const accountSeries = portfolios
+      .filter(p => p.accountType !== 'matong' && p.accountType !== 'simple')
+      .map(p => {
+        const hist = p.id === activePortfolioId ? history : (p.history || []);
+        const map = new Map();
+        hist.forEach(h => {
+          if (h && h.date && h.evalAmount > 0) map.set(h.date, h.evalAmount);
+        });
+        return { dates: [...map.keys()].sort(), map };
+      }).filter(a => a.dates.length > 0);
 
     // 전체 날짜 합집합 (+ 오늘)
     const dateSet = new Set();
@@ -139,6 +156,14 @@ export function useIntegratedData({
       }
     });
 
+    // 현금성 계좌: 시작일 이후 모든 날짜에 현재값을 평탄 합산 (스냅샷 무시 → 유령 잔액 제거)
+    cashSeries.forEach(({ startDate, evalAmount }) => {
+      for (const d of sortedDates) {
+        if (startDate && d < startDate) continue;
+        dateToTotal.set(d, (dateToTotal.get(d) || 0) + evalAmount);
+      }
+    });
+
     // 오늘 값은 실시간 합산 평가액으로 보정 (휴일에 가격 미로드로 폭락한 경우 직전값 유지)
     if (intTotals.totalEval > 0) {
       const prevDates = sortedDates.filter(d => d < today);
@@ -146,28 +171,36 @@ export function useIntegratedData({
       const isAnomaly = prevValue > 0 && intTotals.totalEval < prevValue * 0.1;
       dateToTotal.set(today, isAnomaly ? prevValue : intTotals.totalEval);
     }
-    const portfolioPrincipalData = portfolios.map(p => {
-      const isActive = p.id === activePortfolioId;
-      const isOverseas = p.accountType === 'overseas';
-      const startDate = isActive ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
-      const currentPrincipal = isActive ? principal : (p.principal || 0);
-      const fxRate = isOverseas
-        ? ((isActive ? avgExchangeRate : p.avgExchangeRate) || marketIndicators.usdkrw || 1)
-        : 1;
-      const currentPrincipalKRW = currentPrincipal * fxRate;
-      const deps = isActive ? depositHistory : (p.depositHistory || []);
-      const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
-      return { startDate, currentPrincipalKRW, deps, wds, isOverseas };
-    });
+    // 시장 계좌만 원금 보정식 적용(현금성 계좌는 아래에서 평탄 합산 → 수익 0 유지)
+    const portfolioPrincipalData = portfolios
+      .filter(p => p.accountType !== 'matong' && p.accountType !== 'simple')
+      .map(p => {
+        const isActive = p.id === activePortfolioId;
+        const isOverseas = p.accountType === 'overseas';
+        const startDate = isActive ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
+        const currentPrincipal = isActive ? principal : (p.principal || 0);
+        const fxRate = isOverseas
+          ? ((isActive ? avgExchangeRate : p.avgExchangeRate) || marketIndicators.usdkrw || 1)
+          : 1;
+        const currentPrincipalKRW = currentPrincipal * fxRate;
+        const deps = isActive ? depositHistory : (p.depositHistory || []);
+        const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
+        return { startDate, currentPrincipalKRW, deps, wds, isOverseas };
+      });
     return [...dateToTotal.entries()]
       .map(([date, evalAmount]) => {
-        const effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, deps, wds, isOverseas }) => {
+        let effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, deps, wds, isOverseas }) => {
           if (!startDate || startDate > date) return sum;
           const depRate = (d) => isOverseas ? (d.fxRate || 1) : 1;
           const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
           const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
           return sum + Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
         }, 0);
+        // 현금성 계좌: 원금=평가(현재값) → 시작일 이후 평탄 합산(평가와 동일 → 수익 0 유지)
+        cashSeries.forEach(({ startDate, evalAmount: cashEval }) => {
+          if (startDate && startDate > date) return;
+          effectivePrincipal += cashEval;
+        });
         return { id: date, date, evalAmount, effectivePrincipal };
       })
       .sort((a, b) => a.date.localeCompare(b.date));

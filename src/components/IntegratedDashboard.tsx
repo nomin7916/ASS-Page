@@ -176,12 +176,17 @@ export default function IntegratedDashboard({
     const rows = [];
     allPortfoliosForDividend.forEach(p => {
       const summary = portfolioSummaries.find(s => s.id === p.id);
-      const isMatong = p.accountType === 'matong';
-      const isSimple = p.accountType === 'simple';
+      const isCash = p.accountType === 'matong' || p.accountType === 'simple';
       let evalAmt = 0;
-      let recPrincipal = null;
       if (isRealtimeDate) {
         // 오늘은 실시간 평가금 사용 → 테이블 합계와 일치
+        evalAmt = summary?.currentEval || 0;
+      } else if (isCash) {
+        // 현금성 계좌(마통·직접입력): 시장 시세 이력이 없어 과거 스냅샷이 박제되면 유령 잔액이
+        // 된다(예: CMA를 0으로 바꿔도 옛 평가금이 남음). 스냅샷을 무시하고 현재값을 평탄 반영
+        // (시작일 이후). 추이 차트(computedIntHistory)와 동일 규칙 → 소계가 차트 그날 값과 일치.
+        const startDate = summary?.startDate || p.portfolioStartDate || p.startDate || '';
+        if (startDate && startDate > histDetailDate) return;
         evalAmt = summary?.currentEval || 0;
       } else {
         const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
@@ -189,7 +194,6 @@ export default function IntegratedDashboard({
         const rec = sorted.filter(h => h.date <= histDetailDate).pop();
         if (!rec || rec.evalAmount <= 0) return;
         evalAmt = rec.evalAmount;
-        if (rec.principal != null) recPrincipal = rec.principal;
       }
       if (evalAmt <= 0) return;
       totalEval += evalAmt;
@@ -200,17 +204,15 @@ export default function IntegratedDashboard({
       const wds = p.depositHistory2 || [];
       const futureDeposits = deps.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
       const futureWithdrawals = wds.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
-      // 마통: 투자원금=평가금액 불변 → 수익·수익률 항상 0 (수동 입력 파생값이라 history 보정식 미적용).
-      // 직접입력: 그날 기록된 원금 사용(일반계좌면 원금=평가 → 수익 0, 그 외는 당시 원금 그대로).
+      // 현금성 계좌(마통·직접입력): 투자원금=평가금액=예수금 불변 → 수익·수익률 항상 0.
+      //   시장 시세가 없어 사용자 현재값이 곧 잔액이므로 과거 원금 보정식·스냅샷 미적용.
       // 그 외 계좌(주식 포트폴리오 등)는 입출금 시점 보정식 유지.
-      const effPrincipal = isMatong
+      const effPrincipal = isCash
         ? evalAmt
-        : (isSimple && recPrincipal != null)
-          ? recPrincipal
-          : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
+        : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
       totalPrincipal += effPrincipal;
-      // 마통: 예수금도 잔액(=평가=원금)과 동일 유지 → 어떤 날짜든 투자원금=평가금액=예수금, 수익 0.
-      const depositAmt = isMatong ? effPrincipal : (summary?.depositAmount || 0);
+      // 현금성 계좌: 예수금도 잔액(=평가=원금)과 동일 유지.
+      const depositAmt = isCash ? effPrincipal : (summary?.depositAmount || 0);
       totalDeposit += depositAmt;
       const name = summary?.name || p.name || p.id;
       const profit = evalAmt - effPrincipal;
