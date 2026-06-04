@@ -142,6 +142,7 @@ export default function IntegratedDashboard({
   setIsLinkSettingsOpen,
   activePortfolioId = '',
   activeHistory = [],
+  userFeatures = { feature1: false, feature2: false, feature3: false },
 }) {
   const [showCompStocks, setShowCompStocks] = useState(false);
   const toggleSec = (key) => setSec(prev => ({ ...prev, [key]: !prev[key] }));
@@ -1345,7 +1346,7 @@ export default function IntegratedDashboard({
               </div>
             </div>
             )}
-            {!sec.dividend && (
+            {!userFeatures.feature3 && !sec.dividend && (
               <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate} updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax} updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount} updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd} updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd} updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw} usdkrw={usdkrw} holidays={holidays} dividendTaxHistory={dividendTaxHistory} />
             )}
               </div>
@@ -1358,10 +1359,12 @@ export default function IntegratedDashboard({
                   className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sec.donut ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>
                   자산카테고리
                 </button>
+                {!userFeatures.feature3 && (
                 <button onClick={() => toggleSec('dividend')} style={{ writingMode: 'vertical-lr' }}
                   className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sec.dividend ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>
                   분배금 현황
                 </button>
+                )}
               </div>
             </div>
 

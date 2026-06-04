@@ -473,8 +473,18 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   </div>
                   <div className="flex items-center gap-2 ml-auto flex-shrink-0">
                     {u.feature1 && (
-                      <span className="text-xs bg-orange-900/60 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded-full">
+                      <span className="text-xs bg-orange-900/60 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded-full" title="종목 비교 숨김">
                         기능1
+                      </span>
+                    )}
+                    {u.feature2 && (
+                      <span className="text-xs bg-green-900/60 text-green-300 border border-green-700/50 px-2 py-0.5 rounded-full" title="배당 과세 관리">
+                        기능2
+                      </span>
+                    )}
+                    {u.feature3 && (
+                      <span className="text-xs bg-sky-900/60 text-sky-300 border border-sky-700/50 px-2 py-0.5 rounded-full" title="분배금 현황 숨김">
+                        기능3
                       </span>
                     )}
                     {u.resetFlag && (
