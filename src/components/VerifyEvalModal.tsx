@@ -657,21 +657,31 @@ export default function VerifyEvalModal({
                       <span>이전</span>
                       <span>{fmtPrin(principalBefore)}</span>
                     </div>
-                    {depositsOnDateAffecting.map((d, i) => (
-                      <div key={d.id ?? i} className="flex justify-between">
+                    {depositsOnDateAffecting.length === 1 ? (
+                      <div className="flex justify-between">
                         <span className="text-emerald-400">+ 입금</span>
-                        <span className="text-emerald-300">{fmtPrin(cleanNum(d.amount))}</span>
+                        <span className="text-emerald-300">{fmtPrin(cleanNum(depositsOnDateAffecting[0].amount))}</span>
                       </div>
-                    ))}
-                    {withdrawalsOnDateAffecting.map((w, i) => {
-                      const deducted = w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount);
+                    ) : depositsOnDateAffecting.length > 1 ? (
+                      <div className="flex justify-between">
+                        <span className="text-emerald-400">+ 입금 합계</span>
+                        <span className="text-emerald-300">{fmtPrin(totalDepositsOnDate)}</span>
+                      </div>
+                    ) : null}
+                    {withdrawalsOnDateAffecting.length === 1 ? (() => {
+                      const deducted = withdrawalsOnDateAffecting[0].principalDeducted != null ? cleanNum(withdrawalsOnDateAffecting[0].principalDeducted) : cleanNum(withdrawalsOnDateAffecting[0].amount);
                       return (
-                        <div key={w.id ?? i} className="flex justify-between">
+                        <div className="flex justify-between">
                           <span className="text-red-400">− 출금</span>
                           <span className="text-red-300">{fmtPrin(deducted)}</span>
                         </div>
                       );
-                    })}
+                    })() : withdrawalsOnDateAffecting.length > 1 ? (
+                      <div className="flex justify-between">
+                        <span className="text-red-400">− 출금 합계</span>
+                        <span className="text-red-300">{fmtPrin(totalWithdrawalsOnDate)}</span>
+                      </div>
+                    ) : null}
                     <div className="flex justify-between items-center border-t border-gray-700/40 pt-0.5">
                       <span className="text-gray-500">=</span>
                       <span className="inline-flex items-center gap-1">
