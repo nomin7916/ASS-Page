@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { X, RotateCcw } from 'lucide-react';
-import { formatNumber, cleanNum } from '../utils';
+import { formatNumber, formatCurrency, cleanNum } from '../utils';
 
 interface LadderRow {
   id: string;
@@ -15,21 +15,28 @@ interface Props {
   currentPrice: number;
   totalAction: number;
   rebalFund: number;
+  currency?: 'KRW' | 'USD';
+  fxRate?: number;
   pos: { x: number; y: number };
   onClose: () => void;
 }
 
 function tri(n: number): number { return n * (n + 1) / 2; }
 
-function buildLadder(basePrice: number, tickSize: number, totalQty: number): LadderRow[] {
+function roundTo(n: number, decimals: number): number {
+  const f = Math.pow(10, decimals);
+  return Math.round(n * f) / f;
+}
+
+function buildLadder(basePrice: number, tickSize: number, totalQty: number, floor: number, decimals: number): LadderRow[] {
   if (totalQty <= 0 || tickSize <= 0 || basePrice <= 0) return [];
   let N = 1;
   while (tri(N) < totalQty) N++;
   const rows: LadderRow[] = [];
   let rem = totalQty;
   for (let i = 0; i < N; i++) {
-    const price = basePrice - i * tickSize;
-    if (price <= 0) break;
+    const price = roundTo(basePrice - i * tickSize, decimals);
+    if (price < floor) break;
     const qty = i < N - 1 ? i + 1 : rem;
     rows.push({ id: `r${i}`, price, qty, locked: false });
     rem -= qty;
@@ -38,20 +45,20 @@ function buildLadder(basePrice: number, tickSize: number, totalQty: number): Lad
   return rows;
 }
 
-function maxAffordableQty(basePrice: number, tickSize: number, fund: number): number {
+function maxAffordableQty(basePrice: number, tickSize: number, fund: number, floor: number, decimals: number): number {
   if (tickSize <= 0 || basePrice <= 0 || fund <= 0) return 0;
   let Q = 0;
   while (Q < 100000) {
-    const rows = buildLadder(basePrice, tickSize, Q + 1);
+    const rows = buildLadder(basePrice, tickSize, Q + 1, floor, decimals);
     if (!rows.length) break;
     const cost = rows.reduce((s, r) => s + r.price * r.qty, 0);
-    if (cost > fund || rows[rows.length - 1].price <= 0) break;
+    if (cost > fund || rows[rows.length - 1].price < floor) break;
     Q++;
   }
   return Q;
 }
 
-function recalcAllPrices(rows: LadderRow[], basePrice: number, tickSize: number): LadderRow[] {
+function recalcAllPrices(rows: LadderRow[], basePrice: number, tickSize: number, floor: number, decimals: number): LadderRow[] {
   // anchorPrice at virtual idx=-1 so that row 0 = basePrice
   let anchorPrice = basePrice + tickSize;
   let anchorIdx = -1;
@@ -61,7 +68,7 @@ function recalcAllPrices(rows: LadderRow[], basePrice: number, tickSize: number)
       anchorIdx = idx;
       return row;
     }
-    const newPrice = Math.max(1, anchorPrice - (idx - anchorIdx) * tickSize);
+    const newPrice = roundTo(Math.max(floor, anchorPrice - (idx - anchorIdx) * tickSize), decimals);
     return { ...row, price: newPrice };
   });
 }
@@ -88,9 +95,22 @@ function redistribute(rows: LadderRow[], target: number): LadderRow[] {
   return rows.map(r => r.locked ? r : { ...r, qty: qtys[ui++] ?? 0 });
 }
 
-export default function LadderBuyModal({ itemName, currentPrice, totalAction, rebalFund, pos, onClose }: Props) {
-  const [tickInput, setTickInput] = useState('10');
-  const [tickSize, setTickSize] = useState(10);
+export default function LadderBuyModal({ itemName, currentPrice, totalAction, rebalFund, currency = 'KRW', fxRate = 1, pos, onClose }: Props) {
+  const isUSD = currency === 'USD';
+  const decimals = isUSD ? 2 : 0;
+  const priceFloor = isUSD ? 0.01 : 1;
+  const defaultTick = isUSD ? 0.1 : 10;
+
+  // 달러 기반 표시 — USD는 소수 2자리, KRW는 정수. 원화 환산(wonLine)은 참고용만.
+  const fmt = (n: number) => new Intl.NumberFormat(isUSD ? 'en-US' : 'ko-KR', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(cleanNum(n));
+  // 현재가격은 KRW에서 원본대로 소수 보존(formatNumber), USD는 2자리 고정.
+  const fmtCurPrice = (n: number) => isUSD ? fmt(n) : formatNumber(n);
+
+  const [tickInput, setTickInput] = useState(String(defaultTick));
+  const [tickSize, setTickSize] = useState(defaultTick);
   const [rows, setRows] = useState<LadderRow[]>([]);
   const [targetQty, setTargetQty] = useState(0);
   const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
@@ -98,9 +118,9 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
   const drag = useRef({ active: false, ox: 0, oy: 0 });
 
   const doRegenerate = (price: number, tick: number, fund: number) => {
-    const Q = maxAffordableQty(price, tick, fund);
+    const Q = maxAffordableQty(price, tick, fund, priceFloor, decimals);
     setTargetQty(Q);
-    setRows(buildLadder(price, tick, Q));
+    setRows(buildLadder(price, tick, Q, priceFloor, decimals));
     setPriceEdits({});
   };
 
@@ -131,12 +151,12 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
   const handleRowPriceBlur = (id: string) => {
     const val = priceEdits[id];
     if (val !== undefined) {
-      const newPrice = cleanNum(val);
+      const newPrice = roundTo(cleanNum(val), decimals);
       setPriceEdits(prev => { const n = { ...prev }; delete n[id]; return n; });
       if (newPrice > 0) {
         setRows(prev => {
           const updated = prev.map(r => r.id === id ? { ...r, price: newPrice, locked: true } : r);
-          return recalcAllPrices(updated, currentPrice, tickSize);
+          return recalcAllPrices(updated, currentPrice, tickSize, priceFloor, decimals);
         });
       }
     }
@@ -146,7 +166,7 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
     setPriceEdits(prev => { const n = { ...prev }; delete n[id]; return n; });
     setRows(prev => {
       const unlocked = prev.map(r => r.id === id ? { ...r, locked: false } : r);
-      const priceFixed = recalcAllPrices(unlocked, currentPrice, tickSize);
+      const priceFixed = recalcAllPrices(unlocked, currentPrice, tickSize, priceFloor, decimals);
       return redistribute(priceFixed, targetQty);
     });
   };
@@ -168,6 +188,10 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
     document.addEventListener('mouseup', onUp);
   };
 
+  const wonLine = (n: number) => isUSD
+    ? <span className="block text-[9px] text-gray-500 font-normal leading-tight">{formatCurrency(cleanNum(n) * fxRate)}</span>
+    : null;
+
   return (
     <div
       className="fixed z-[1050] bg-[#0f172a] border border-gray-600 rounded-xl shadow-2xl select-none"
@@ -179,7 +203,7 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
         onMouseDown={handleDragStart}
       >
         <span className="text-[11px] font-bold text-sky-400 truncate max-w-[280px]">
-          {itemName} — 분할매수 계산기
+          {itemName} — 분할매수 계산기{isUSD ? ' ($)' : ''}
         </span>
         <div className="flex items-center gap-2 shrink-0">
           <button
@@ -211,14 +235,14 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
           <span className="text-green-400 font-bold text-right">{totalQty}주</span>
 
           <span className="text-gray-500 whitespace-nowrap">현재가격</span>
-          <span className="text-gray-300 font-bold">{formatNumber(currentPrice)}</span>
+          <span className="text-gray-300 font-bold">{fmtCurPrice(currentPrice)}{wonLine(currentPrice)}</span>
           <span className="text-gray-500 whitespace-nowrap">리밸런싱 자금</span>
-          <span className="text-sky-300 font-bold text-right">{formatNumber(Math.round(rebalFund))}</span>
+          <span className="text-sky-300 font-bold text-right">{fmt(rebalFund)}{wonLine(rebalFund)}</span>
 
           <span className="text-gray-500 whitespace-nowrap">평균단가</span>
-          <span className="text-yellow-400 font-bold">{avgPrice > 0 ? formatNumber(Math.round(avgPrice)) : '—'}</span>
+          <span className="text-yellow-400 font-bold">{avgPrice > 0 ? fmt(avgPrice) : '—'}{avgPrice > 0 && wonLine(avgPrice)}</span>
           <span className="text-gray-500 whitespace-nowrap">매수 금액</span>
-          <span className="text-yellow-400 font-bold text-right">{totalCost > 0 ? formatNumber(Math.round(totalCost)) : '—'}</span>
+          <span className="text-yellow-400 font-bold text-right">{totalCost > 0 ? fmt(totalCost) : '—'}{totalCost > 0 && wonLine(totalCost)}</span>
         </div>
       </div>
 
@@ -252,7 +276,7 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
                       className={`w-full bg-transparent text-center font-mono outline-none focus:bg-gray-800/60 rounded px-1 py-0.5 select-text ${
                         row.locked ? 'text-indigo-300' : 'text-gray-300'
                       }`}
-                      value={priceEdits[row.id] !== undefined ? priceEdits[row.id] : formatNumber(row.price)}
+                      value={priceEdits[row.id] !== undefined ? priceEdits[row.id] : fmt(row.price)}
                       onChange={e => handleRowPriceChange(row.id, e.target.value)}
                       onBlur={() => handleRowPriceBlur(row.id)}
                       onFocus={e => { setPriceEdits(prev => ({ ...prev, [row.id]: String(row.price) })); e.target.select(); }}
@@ -269,10 +293,10 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
                     />
                   </td>
                   <td className="py-1 px-2 text-center text-gray-400 font-mono">
-                    {formatNumber(Math.round(rowCost))}
+                    {fmt(rowCost)}
                   </td>
                   <td className="py-1 px-2 text-center font-mono text-yellow-600">
-                    {formatNumber(Math.round(runAvg))}
+                    {fmt(runAvg)}
                   </td>
                   <td className="py-1 px-1 text-center">
                     {row.locked && (
@@ -296,7 +320,7 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
       <div className="px-3 py-2 border-t border-gray-700/60 flex items-center justify-between text-[10px] rounded-b-xl">
         <span className="text-gray-500">남은 자금</span>
         <span className={`font-bold ${remaining >= 0 ? 'text-sky-400' : 'text-red-400'}`}>
-          {formatNumber(Math.round(remaining))}
+          {fmt(remaining)}
         </span>
       </div>
     </div>

@@ -855,6 +855,8 @@ export default function RebalancingPanel({
                                 currentPrice: itemPrice,
                                 totalAction,
                                 rebalFund: totalAction * itemPrice,
+                                currency: isOverseas ? 'USD' : 'KRW',
+                                fxRate: isOverseas ? usdkrw : 1,
                                 pos: { x, y },
                               });
                             } : undefined}
@@ -1313,6 +1315,8 @@ export default function RebalancingPanel({
             currentPrice={ladderModal.currentPrice}
             totalAction={ladderModal.totalAction}
             rebalFund={ladderModal.rebalFund}
+            currency={ladderModal.currency}
+            fxRate={ladderModal.fxRate}
             pos={ladderModal.pos}
             onClose={() => setLadderModal(null)}
           />
