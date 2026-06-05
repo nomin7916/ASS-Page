@@ -51,6 +51,21 @@ function maxAffordableQty(basePrice: number, tickSize: number, fund: number): nu
   return Q;
 }
 
+function recalcAllPrices(rows: LadderRow[], basePrice: number, tickSize: number): LadderRow[] {
+  // anchorPrice at virtual idx=-1 so that row 0 = basePrice
+  let anchorPrice = basePrice + tickSize;
+  let anchorIdx = -1;
+  return rows.map((row, idx) => {
+    if (row.locked) {
+      anchorPrice = row.price;
+      anchorIdx = idx;
+      return row;
+    }
+    const newPrice = Math.max(1, anchorPrice - (idx - anchorIdx) * tickSize);
+    return { ...row, price: newPrice };
+  });
+}
+
 function redistribute(rows: LadderRow[], target: number): LadderRow[] {
   const lockedQty = rows.filter(r => r.locked).reduce((s, r) => s + r.qty, 0);
   const remaining = Math.max(0, target - lockedQty);
@@ -119,15 +134,21 @@ export default function LadderBuyModal({ itemName, currentPrice, totalAction, re
       const newPrice = cleanNum(val);
       setPriceEdits(prev => { const n = { ...prev }; delete n[id]; return n; });
       if (newPrice > 0) {
-        setRows(rows.map(r => r.id === id ? { ...r, price: newPrice, locked: true } : r));
+        setRows(prev => {
+          const updated = prev.map(r => r.id === id ? { ...r, price: newPrice, locked: true } : r);
+          return recalcAllPrices(updated, currentPrice, tickSize);
+        });
       }
     }
   };
 
   const unlockRow = (id: string) => {
     setPriceEdits(prev => { const n = { ...prev }; delete n[id]; return n; });
-    const unlocked = rows.map(r => r.id === id ? { ...r, locked: false } : r);
-    setRows(redistribute(unlocked, targetQty));
+    setRows(prev => {
+      const unlocked = prev.map(r => r.id === id ? { ...r, locked: false } : r);
+      const priceFixed = recalcAllPrices(unlocked, currentPrice, tickSize);
+      return redistribute(priceFixed, targetQty);
+    });
   };
 
   const handleDragStart = (e: React.MouseEvent) => {
