@@ -1149,6 +1149,7 @@ export default function App() {
     handleForceRefetchComp,
     autoRefreshStockPrices,
     refreshPrices,
+    refetchStockHistory,
   } = useStockData({
     portfolio, setPortfolio,
     portfolios, setPortfolios,
@@ -2247,6 +2248,7 @@ export default function App() {
             isLoading={isLoading}
             depositHistory={depositHistory}
             depositHistory2={depositHistory2}
+            refetchStockHistory={refetchStockHistory}
           />
 
           <DepositPanel

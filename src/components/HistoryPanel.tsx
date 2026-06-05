@@ -24,6 +24,7 @@ export default function HistoryPanel({
   isLoading,
   depositHistory,
   depositHistory2,
+  refetchStockHistory,
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -172,6 +173,7 @@ export default function HistoryPanel({
                 depositHistory={depositHistory}
                 depositHistory2={depositHistory2}
                 history={history}
+                refetchStockHistory={refetchStockHistory}
               />
             </ErrorBoundary>
           )}

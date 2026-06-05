@@ -1170,6 +1170,20 @@ export function useStockData({
     return () => clearTimeout(timer);
   }, []);
 
+  // 자산검증 모달에서 특정 종목 1개를 즉시 재조회해 stockHistoryMap에 병합.
+  // KIS(원주가) → Naver fchart 순으로 시도. 성공 시 true 반환.
+  const refetchStockHistory = async (code: string): Promise<boolean> => {
+    if (!code) return false;
+    let hist: Record<string, number> | null = null;
+    const rKIS = await fetchKISStockHistory(code);
+    if (rKIS && Object.keys(rKIS.data).length > 0) hist = rKIS.data;
+    if (!hist) { const rNaver = await fetchNaverStockHistory(code); if (rNaver) hist = rNaver.data; }
+    if (!hist) { const rDomestic = await fetchNaverDomesticHistory(code); if (rDomestic) hist = rDomestic.data; }
+    if (!hist || Object.keys(hist).length === 0) return false;
+    setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist } }));
+    return true;
+  };
+
   return {
     handleStockBlur,
     handleSingleStockRefresh,
@@ -1181,5 +1195,6 @@ export function useStockData({
     handleForceRefetchComp,
     autoRefreshStockPrices,
     refreshPrices,
+    refetchStockHistory,
   };
 }

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { X, Plus, Trash2, Pencil, RotateCcw, HelpCircle } from 'lucide-react';
+import { X, Plus, Trash2, Pencil, RotateCcw, HelpCircle, RefreshCw } from 'lucide-react';
 import {
   cleanNum,
   formatCurrency,
@@ -61,6 +61,7 @@ export default function VerifyEvalModal({
   depositHistory,
   depositHistory2,
   history,
+  refetchStockHistory,
 }) {
   const date = record.date;
   const isGold = accountType === 'gold';
@@ -92,6 +93,7 @@ export default function VerifyEvalModal({
     }));
   }, [vp.w, vp.h, modalWidth, isMobile]);
   const dragRef = useRef({ active: false, ox: 0, oy: 0 });
+  const [refetchingCodes, setRefetchingCodes] = useState<Set<string>>(new Set());
   const [editQtyIdx, setEditQtyIdx] = useState(-1);
   const [editQtyRaw, setEditQtyRaw] = useState('');
   const [editPriceIdx, setEditPriceIdx] = useState(-1);
@@ -217,6 +219,14 @@ export default function VerifyEvalModal({
   const showFormula = (depositsOnDateAffecting.length > 0 || withdrawalsOnDateAffecting.length > 0) && !effective.anchor;
   const multiLineFormula = depositsOnDateAffecting.length + withdrawalsOnDateAffecting.length > 1;
   const fmtPrin = (n) => isOverseas ? `$${Math.round(n).toLocaleString('en-US')}` : formatCurrency(Math.round(n));
+
+  const handleRefetch = async (code: string) => {
+    if (!code || !refetchStockHistory || refetchingCodes.has(code)) return;
+    setRefetchingCodes(prev => new Set(prev).add(code));
+    const ok = await refetchStockHistory(code);
+    setRefetchingCodes(prev => { const n = new Set(prev); n.delete(code); return n; });
+    if (!ok) notify(`${code} 종가 데이터를 찾을 수 없습니다 (신규 상장 또는 API 일시 불가)`, 'warning');
+  };
 
   const commitQty = (idx) => {
     const v = cleanNum(editQtyRaw);
@@ -460,7 +470,21 @@ export default function VerifyEvalModal({
                           </span>
                         )}
                       </td>
-                      <td className={`py-1.5 ${cellPad} text-center font-bold whitespace-nowrap ${badge.cls}`}>{badge.label}</td>
+                      <td className={`py-1.5 ${cellPad} text-center font-bold whitespace-nowrap ${badge.cls}`}>
+                        <span className="inline-flex items-center gap-1 justify-center">
+                          {badge.label}
+                          {r.source === 'none' && !r.isDeposit && r.item?.code && refetchStockHistory && (
+                            <button
+                              className="text-gray-500 hover:text-sky-400 disabled:opacity-40 transition-colors"
+                              title={`${r.item.code} 종가 재조회 (KIS → Naver)`}
+                              disabled={refetchingCodes.has(r.item.code)}
+                              onClick={() => handleRefetch(r.item.code)}
+                            >
+                              <RefreshCw size={11} className={refetchingCodes.has(r.item.code) ? 'animate-spin' : ''} />
+                            </button>
+                          )}
+                        </span>
+                      </td>
                       <td className={`py-1.5 ${cellPad} text-gray-200 font-bold whitespace-nowrap`}>
                         {isOverseas && histFxRate > 1
                           ? `$${(r.evalAmt / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
