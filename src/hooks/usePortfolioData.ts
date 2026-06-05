@@ -109,21 +109,11 @@ export function usePortfolioData({
     if (rebalanceSortConfig.key === 'code-global') {
       data.sort((a, b) => (a.code || '').localeCompare(b.code || '') * rebalanceSortConfig.direction);
     } else if (rebalanceSortConfig.key && rebalanceSortConfig.key !== 'category') {
-      const catOrder = [];
-      const grouped = {};
-      data.forEach(item => {
-        const cat = (item.category) || '기타';
-        if (!grouped[cat]) { grouped[cat] = []; catOrder.push(cat); }
-        grouped[cat].push(item);
+      data.sort((a, b) => {
+        const vA = a[rebalanceSortConfig.key], vB = b[rebalanceSortConfig.key];
+        if (typeof vA === 'string') return vA.localeCompare(vB) * rebalanceSortConfig.direction;
+        return (vA - vB) * rebalanceSortConfig.direction;
       });
-      Object.values(grouped).forEach(items => {
-        items.sort((a, b) => {
-          const vA = a[rebalanceSortConfig.key], vB = b[rebalanceSortConfig.key];
-          if (typeof vA === 'string') return vA.localeCompare(vB) * rebalanceSortConfig.direction;
-          return (vA - vB) * rebalanceSortConfig.direction;
-        });
-      });
-      data = catOrder.flatMap(cat => grouped[cat]);
     } else if (rebalanceSortConfig.key === 'category') {
       data.sort((a, b) => {
         const catA = (a.category) || '기타', catB = (b.category) || '기타';

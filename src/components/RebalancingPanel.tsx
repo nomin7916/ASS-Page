@@ -967,7 +967,7 @@ export default function RebalancingPanel({
                       </tr>
                     );
                   };
-                  if (rebalanceSortConfig.key === 'code-global') {
+                  if (rebalanceSortConfig.key !== null) {
                     return rebalanceData.map(item => {
                       const cat = item.category || '기타';
                       const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
