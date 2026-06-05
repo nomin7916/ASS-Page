@@ -473,7 +473,7 @@ export default function VerifyEvalModal({
                       <td className={`py-1.5 ${cellPad} text-center font-bold whitespace-nowrap ${badge.cls}`}>
                         <span className="inline-flex items-center gap-1 justify-center">
                           {badge.label}
-                          {r.source === 'none' && !r.isDeposit && r.item?.code && refetchStockHistory && (
+                          {(r.source === 'none' || r.source === 'approximate') && !r.isDeposit && r.item?.code && refetchStockHistory && (
                             <button
                               className="text-gray-500 hover:text-sky-400 disabled:opacity-40 transition-colors"
                               title={`${r.item.code} 종가 재조회 (KIS → Naver)`}
