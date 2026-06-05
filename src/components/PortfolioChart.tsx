@@ -408,17 +408,18 @@ export default function PortfolioChart({
                         ? `${rateStr} (${fmtPrice(startPrice)} → ${fmtPrice(pointVal)})`
                         : `${rateStr} (${fmtPrice(pointVal)})`;
                     } else if (dk === 'principalReturnRate') {
-                      // 나의 수익률: 퍼센트의 실제 분모·분자를 그대로 병기 — (평가자산 − 투자원금) ÷ 투자원금.
-                      // 투자원금=그날까지 입금 누적(분모), 평가자산=그날 예수금 포함 총평가액(분자).
-                      // '원금 → 평가'를 보여야 화면에서 퍼센트가 그대로 검산됨(투자 요약 패널과 동일 형식).
                       const dayPrin = entry.payload?.principalAmount;
                       const dayEval = entry.payload?.evalAmount;
                       const fmtEval = (v: any) => isOverseas
                         ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
                         : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
-                      displayVal = (dayPrin != null && dayEval != null)
-                        ? `${rateStr} (원금 ${fmtEval(dayPrin)} → 평가 ${fmtEval(dayEval)})`
-                        : rateStr;
+                      if (isZeroBaseMode) {
+                        displayVal = dayEval != null ? `${rateStr} (조회시작 평가 기준)` : rateStr;
+                      } else {
+                        displayVal = (dayPrin != null && dayEval != null)
+                          ? `${rateStr} (원금 ${fmtEval(dayPrin)} → 평가 ${fmtEval(dayEval)})`
+                          : rateStr;
+                      }
                     } else {
                       const startRate = firstNonNullVal(dk);
                       displayVal = startRate != null
@@ -510,12 +511,23 @@ export default function PortfolioChart({
                                 extra={<span className={`ml-1 font-bold ${rateCls(displayResult.principalReturnRateAtEnd)}`}>→ {fmtRate(displayResult.principalReturnRateAtEnd)}</span>}
                               />
                               <span className="text-gray-500">계산식</span>
-                              <span className="text-sky-200/90 font-mono leading-snug">(당일 평가자산 − 투자원금) ÷ 투자원금 × 100</span>
+                              <span className="text-sky-200/90 font-mono leading-snug">
+                                {isZeroBaseMode
+                                  ? '(당일 평가자산 ÷ 조회시작 평가자산 − 1) × 100'
+                                  : '(당일 평가자산 − 투자원금) ÷ 투자원금 × 100'}
+                              </span>
                               <span className="text-gray-500">출처</span>
-                              <span className="text-gray-400 leading-snug">투자원금 = 입금 누적(투자 요약의 투자 원금) · 평가자산 = 당일 총평가액(예수금 포함) · 투자 요약 패널 수익률과 동일 · 배당 재투자는 수익으로 반영</span>
+                              <span className="text-gray-400 leading-snug">
+                                {isZeroBaseMode
+                                  ? '조회시작 평가자산 = 조회 첫날 총평가액 · 당일 평가자산 = 당일 총평가액(예수금 포함)'
+                                  : '투자원금 = 입금 누적(투자 요약의 투자 원금) · 평가자산 = 당일 총평가액(예수금 포함) · 투자 요약 패널 수익률과 동일 · 배당 재투자는 수익으로 반영'}
+                              </span>
                             </div>
                             <div className="mt-1.5 ml-3.5 p-1.5 rounded bg-gray-800/40 border border-gray-700/40 text-[9.5px] text-gray-400 leading-relaxed">
-                              ℹ️ 기준은 <b>내 투자원금</b>입니다(조회 시작일 0% 아님). 평가자산이 투자원금보다 낮으면 <span className="text-blue-400 font-bold">−수익률</span>, 높으면 <span className="text-red-400 font-bold">+수익률</span>로 표시됩니다.
+                              {isZeroBaseMode
+                                ? <>ℹ️ <b>조회 시작일 0% 모드</b>: 조회 시작일 평가금 대비 수익률을 표시합니다. 투자 원금과 무관하게 해당 기간 동안의 변동률만 비교할 수 있습니다.</>
+                                : <>ℹ️ 기준은 <b>내 투자원금</b>입니다(조회 시작일 0% 아님). 평가자산이 투자원금보다 낮으면 <span className="text-blue-400 font-bold">−수익률</span>, 높으면 <span className="text-red-400 font-bold">+수익률</span>로 표시됩니다.</>
+                              }
                             </div>
                           </>
                         ) : (
@@ -558,7 +570,10 @@ export default function PortfolioChart({
                     {displayResult.principalReturnRateAtEnd != null ? (() => {
                       const prin = displayResult.principalAtEnd;
                       const evl = displayResult.endEval;
-                      const prof = (prin != null && evl != null) ? evl - prin : null;
+                      const startEvl = displayResult.startEval;
+                      const prof = isZeroBaseMode
+                        ? (startEvl != null && evl != null ? evl - startEvl : null)
+                        : (prin != null && evl != null ? evl - prin : null);
                       return (
                         <>
                           <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.principalReturnRateAtEnd >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
@@ -569,10 +584,18 @@ export default function PortfolioChart({
                               ({prof >= 0 ? '+' : ''}{fmtMoney(prof)})
                             </span>
                           )}
-                          {prin != null && evl != null && (
-                            <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                              (원금 {fmtMoney(prin)} → 평가 {fmtMoney(evl)})
-                            </span>
+                          {isZeroBaseMode ? (
+                            startEvl != null && evl != null && (
+                              <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
+                                (조회시작 {fmtMoney(startEvl)} → 평가 {fmtMoney(evl)})
+                              </span>
+                            )
+                          ) : (
+                            prin != null && evl != null && (
+                              <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
+                                (원금 {fmtMoney(prin)} → 평가 {fmtMoney(evl)})
+                              </span>
+                            )
                           )}
                         </>
                       );

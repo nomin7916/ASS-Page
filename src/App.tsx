@@ -1044,6 +1044,7 @@ export default function App() {
         return {
           ...item,
           returnRate: (baseItem.evalAmount > 0 && item.evalAmount > 0) ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : item.returnRate,
+          principalReturnRate: (baseItem.evalAmount > 0 && item.principalReturnRate != null) ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : item.principalReturnRate,
           kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
           sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
           nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
