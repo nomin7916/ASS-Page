@@ -7,6 +7,7 @@ import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
+import LadderBuyModal from './LadderBuyModal';
 
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
 const getItemUrl = (item) => {
@@ -78,6 +79,7 @@ export default function RebalancingPanel({
   onToggleCalculator = null,
 }) {
   const [editingRatio, setEditingRatio] = useState({});
+  const [ladderModal, setLadderModal] = useState(null);
   const [dateEditMode, setDateEditMode] = useState(false);
   const [pinModal, setPinModal] = useState(null); // { onAuthorized: () => void } | null
   const [hoveredCurDSSlice, setHoveredCurDSSlice] = useState(null);
@@ -840,7 +842,26 @@ export default function RebalancingPanel({
                           <td className="py-3 px-3 text-gray-400 text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.curEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.curEval * usdkrw)}</span></div> : formatCurrency(item.curEval)}</td>
                         )}
                         {!H('currentPrice') && (
-                          <td className="py-3 px-3 text-gray-500 font-mono text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}</td>
+                          <td
+                            className={`py-3 px-3 font-mono text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none transition-colors ${totalAction > 0 ? 'text-gray-300 cursor-pointer hover:bg-blue-900/30 hover:text-blue-300' : 'text-gray-500'}`}
+                            tabIndex={0}
+                            onKeyDown={handleReadonlyCellNav}
+                            onClick={totalAction > 0 ? (e) => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const x = Math.max(8, Math.min(rect.right + 8, window.innerWidth - 416));
+                              const y = Math.max(8, Math.min(rect.top - 20, window.innerHeight - 540));
+                              setLadderModal({
+                                itemName: item.name,
+                                currentPrice: itemPrice,
+                                totalAction,
+                                rebalFund: totalAction * itemPrice,
+                                pos: { x, y },
+                              });
+                            } : undefined}
+                            title={totalAction > 0 ? '클릭하여 분할매수 계산기 열기' : undefined}
+                          >
+                            {isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}
+                          </td>
                         )}
                         {!H('targetRatio') && (() => {
                           const itemCurRatio = totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0;
@@ -1286,6 +1307,16 @@ export default function RebalancingPanel({
           }}
           onClose={() => setPinModal(null)}
         />
+        {ladderModal && (
+          <LadderBuyModal
+            itemName={ladderModal.itemName}
+            currentPrice={ladderModal.currentPrice}
+            totalAction={ladderModal.totalAction}
+            rebalFund={ladderModal.rebalFund}
+            pos={ladderModal.pos}
+            onClose={() => setLadderModal(null)}
+          />
+        )}
         {helpOpen && (
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setHelpOpen(false)}>
             <div className="absolute w-[440px] shadow-2xl overflow-hidden" style={{ left: helpPos.x, top: helpPos.y }} onClick={e => e.stopPropagation()}>
