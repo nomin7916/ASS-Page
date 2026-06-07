@@ -413,11 +413,21 @@ export default function PortfolioChart({
                       const fmtEval = (v: any) => isOverseas
                         ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
                         : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
+                      // 날짜범위 + 평가금 + 수익률 병기. 조회시작 0% 모드: 조회시작 평가 ~ 해당일 평가,
+                      // 일반(투자원금 기준) 모드: 해당일 원금 → 평가.
+                      const ymd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[0].slice(2)}/${p[1]}/${p[2]}` : s; };
+                      const mmdd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[1]}/${p[2]}` : s; };
+                      const rateParen = `(${Number(value).toFixed(2)}%)`;
                       if (isZeroBaseMode) {
-                        displayVal = dayEval != null ? `${rateStr} (조회시작 평가 기준)` : rateStr;
+                        const startEntry = finalChartData.find(d => d.evalAmount != null);
+                        const startEval = startEntry?.evalAmount;
+                        const startDate = startEntry?.date;
+                        displayVal = (dayEval != null && startEval != null && startDate)
+                          ? `${rateStr} ${ymd(startDate)}~${mmdd(hoveredPoint.label)} : ${fmtEval(startEval)} ~ ${fmtEval(dayEval)} ${rateParen}`
+                          : rateStr;
                       } else {
                         displayVal = (dayPrin != null && dayEval != null)
-                          ? `${rateStr} (원금 ${fmtEval(dayPrin)} → 평가 ${fmtEval(dayEval)})`
+                          ? `${rateStr} ${mmdd(hoveredPoint.label)} : 원금 ${fmtEval(dayPrin)} → 평가 ${fmtEval(dayEval)} ${rateParen}`
                           : rateStr;
                       }
                     } else {
