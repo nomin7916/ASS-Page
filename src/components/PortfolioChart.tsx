@@ -381,6 +381,8 @@ export default function PortfolioChart({
                     ? (entry.payload?.[dk.replace('RateScaled', 'Rate')] ?? rawValue)
                     : rawValue;
                   let displayVal: string;
+                  let detailStr = '';
+                  let isMyReturn = false;
                   if (entry.name === '총자산' || entry.name === '투자원금') {
                     displayVal = isOverseas
                       ? '$' + Number(rawValue).toLocaleString('en-US', { maximumFractionDigits: 0 })
@@ -408,27 +410,27 @@ export default function PortfolioChart({
                         ? `${rateStr} (${fmtPrice(startPrice)} → ${fmtPrice(pointVal)})`
                         : `${rateStr} (${fmtPrice(pointVal)})`;
                     } else if (dk === 'principalReturnRate') {
+                      isMyReturn = true;
                       const dayPrin = entry.payload?.principalAmount;
                       const dayEval = entry.payload?.evalAmount;
                       const fmtEval = (v: any) => isOverseas
                         ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
                         : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 0 });
-                      // 날짜범위 + 평가금 + 수익률 병기. 조회시작 0% 모드: 조회시작 평가 ~ 해당일 평가,
-                      // 일반(투자원금 기준) 모드: 해당일 원금 → 평가.
+                      // 총수익률(displayVal)은 크게·적색, 조회기간 상세(detailStr)는 작게·회색으로 분리 렌더.
+                      // 조회시작 0% 모드: 조회시작 평가 ~ 해당일 평가, 일반(투자원금 기준) 모드: 해당일 원금 → 평가.
                       const ymd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[0].slice(2)}/${p[1]}/${p[2]}` : s; };
                       const mmdd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[1]}/${p[2]}` : s; };
                       const rateParen = `(${Number(value).toFixed(2)}%)`;
+                      displayVal = rateStr;
                       if (isZeroBaseMode) {
                         const startEntry = finalChartData.find(d => d.evalAmount != null);
                         const startEval = startEntry?.evalAmount;
                         const startDate = startEntry?.date;
-                        displayVal = (dayEval != null && startEval != null && startDate)
-                          ? `${rateStr} ${ymd(startDate)}~${mmdd(hoveredPoint.label)} : ${fmtEval(startEval)} ~ ${fmtEval(dayEval)} ${rateParen}`
-                          : rateStr;
+                        if (dayEval != null && startEval != null && startDate)
+                          detailStr = `${ymd(startDate)}~${mmdd(hoveredPoint.label)} : ${fmtEval(startEval)} ~ ${fmtEval(dayEval)} ${rateParen}`;
                       } else {
-                        displayVal = (dayPrin != null && dayEval != null)
-                          ? `${rateStr} ${mmdd(hoveredPoint.label)} : 원금 ${fmtEval(dayPrin)} → 평가 ${fmtEval(dayEval)} ${rateParen}`
-                          : rateStr;
+                        if (dayPrin != null && dayEval != null)
+                          detailStr = `${mmdd(hoveredPoint.label)} : 원금 ${fmtEval(dayPrin)} → 평가 ${fmtEval(dayEval)} ${rateParen}`;
                       }
                     } else {
                       const startRate = firstNonNullVal(dk);
@@ -441,7 +443,14 @@ export default function PortfolioChart({
                     <div key={i} className="flex items-center gap-1.5 shrink-0">
                       <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
                       <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
-                      <span className="text-[11px] text-gray-300">{displayVal}</span>
+                      {isMyReturn ? (
+                        <>
+                          <span className={`text-[14px] font-black ${Number(value) >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{displayVal}</span>
+                          {detailStr && <span className="text-[10px] text-gray-400">{detailStr}</span>}
+                        </>
+                      ) : (
+                        <span className="text-[11px] text-gray-300">{displayVal}</span>
+                      )}
                     </div>
                   );
                 })}
