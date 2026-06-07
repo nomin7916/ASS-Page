@@ -97,26 +97,34 @@ src/
   복원에서 기존 중복을 정리(우선순위 실시간>확정>백필, 중복 없으면 동일 참조 반환).
 - 검증: `npm run verify:history`.
 
-### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '현재값 평탄' 처리 (⚠️ 회귀 주의)
+### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
-**마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 사용자가 단일
-'현재값'으로만 관리. 평가금액=투자원금=예수금이라 **수익·수익률은 항상 0**이어야 한다(라이브 표
-불변식). 따라서 추이/팝업에서 **`p.history` 스냅샷을 신뢰하지 말고 현재값을 시작일 이후 평탄
-반영**한다(현재값 0이면 추이·팝업에서 자연히 제외).
-- **과거 버그(2단계)**: ① 팝업이 평가금액은 옛 스냅샷, 투자원금은 현재 `p.principal`을 써서
-  가짜 손익 표시. ② 더 근본적으로, CMA를 0으로 비워도 과거 스냅샷(예 10,335,867)이 박제된 채
-  남아 **추이 차트(`computedIntHistory`)와 날짜 팝업(`histDetailRows`) 모두 유령 잔액으로
-  합산** → 그날 총자산이 부풀려짐. 마통·simple은 시세 이력이 없으니 스냅샷 자체가 신뢰 불가.
-  (계좌 간 값이 섞이는 오염 경로는 **없음** — 각 계좌는 자기 값만 읽고 합산은 더하기만 함.)
-- **수정(현재 설계)**: `computedIntHistory`와 `histDetailRows` 양쪽에서 현금성 계좌를 동일 규칙으로
-  처리 — 스냅샷(`accountSeries`/`rec`)에서 **제외**하고, `cashSeries`로 분리해 **시작일 이후 모든
-  날짜에 현재값(simple=`evalAmount`, matong=`wt-(cw+wl)`)을 평탄 합산**. 원금도 같은 현재값을
-  평탄 합산(평가와 동일 → 수익 0). 팝업도 `isCash`면 `evalAmt=summary.currentEval`, `effPrincipal=
-  depositAmt=evalAmt`(시작일 가드 `startDate>histDetailDate`면 제외). **양쪽이 같은 현재값을 쓰므로
-  팝업 소계 = 차트 그날 값**으로 항상 일치.
-- **주의**: 더는 마통만 특수처리(`effPrincipal=evalAmt`)하거나 simple에 `rec.principal`을 쓰지 말 것.
-  둘 다 `isCash`로 묶어 현재값 평탄 처리한다. 마통/simple history 자동기록은 남아도 무방(무시됨).
-- 시장 계좌(주식·gold·overseas 등)는 종전대로 스냅샷 carry-forward + 입출금 시점 원금 보정식 유지.
+**마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가
+편집할 때만 바뀐다. 평가금액=투자원금=예수금이라 **수익·수익률은 항상 0**이어야 한다(라이브 표
+불변식). 일별 자동기록(`useHistoryBackfill`)이 그날의 잔액을 `p.history`에 적재하므로, 추이/팝업
+에서 **시장 계좌처럼 스냅샷 carry-forward로 과거 그날의 기록값을 그대로 복원**한다. **현재값을
+과거 날짜에 소급하지 않는다** — '오늘'만 현재값을 권위로 사용(최신 편집·비움 즉시 반영).
+- **설계 전환 배경**: 과거엔 "현재값을 시작일 이후 평탄 반영"(스냅샷 무시)했으나, 이는 현재값을
+  편집하면 **모든 과거 날짜가 소급 변경**돼 일별 분석 기록이 부정확해지는 문제가 있었다(예: BNK
+  마통을 8.29M→9.29M 수정 시 6/2~6/5 팝업이 전부 9.29M로 바뀜). 일별 스냅샷이 이미 존재하므로
+  이를 신뢰해 carry-forward로 복원한다.
+- **유령 잔액(emptied-to-0) 회귀 방지**: 평탄 설계가 본래 막으려던 버그는 "CMA를 0으로 비워도
+  과거 양수 스냅샷이 carry-forward로 **오늘**까지 박제"되던 것. 핵심 원인은 **비움(0)이 스냅샷에
+  기록되지 않아** 마지막 양수값이 계속 이월된 것. → `useHistoryBackfill` 자동기록이 현금성 계좌는
+  **0도 기록(오늘 값 변경 시 upsert)** 하도록 수정 → 비우면 `{오늘:0}`이 남아 carry-forward가
+  0으로 이어진다. 과거 날짜는 그날의 실제값을 유지(=정확). (단 한 번도 잔액이 없던 빈 계좌는 0
+  스냅샷 생략 — 노이즈 방지.)
+- **구현(현재 설계)**: `computedIntHistory`·`histDetailRows` 양쪽에서 현금성 계좌를 **동일 규칙**으로
+  처리. `cashSeries`(차트)는 `p.history` 스냅샷 맵(0 포함, `evalAmount>=0`)을 carry-forward하여
+  `cashByDate`로 날짜별 잔액 산출 — `오늘=currentEval`(simple=`evalAmount`, matong=`wt-(cw+wl)`),
+  `시작일 이전=0`. 원금도 `cashByDate` 동일 합산(평가와 동일 → 수익 0). 팝업도 `isCash`면 실시간
+  날짜는 `currentEval`, 과거는 `rec`(스냅샷 carry-forward, `evalAmount>=0`); `effPrincipal=
+  depositAmt=evalAmt`, 시작일 가드 `startDate>histDetailDate`면 제외. **양쪽이 같은 스냅샷 carry-
+  forward를 쓰므로 팝업 소계 = 차트 그날 값**으로 항상 일치.
+- **주의**: 더는 현금성 계좌를 "현재값 평탄 합산"하지 말 것. 차트·팝업·자동기록 셋이 같은 스냅샷
+  규칙(0 포함 carry-forward + 오늘 현재값)으로 묶여야 일치한다.
+- 시장 계좌(주식·gold·overseas 등)는 종전대로 스냅샷 carry-forward(`evalAmount>0`) + 입출금 시점
+  원금 보정식 유지. 현금성과 달리 0은 미로드로 보고 기록·합산에서 제외.
 
 ### usePortfolioState 훅 (모든 포트폴리오 상태 + CRUD)
 `switchToPortfolio`, `addPortfolio`, `deletePortfolio`, `addSimpleAccount`,

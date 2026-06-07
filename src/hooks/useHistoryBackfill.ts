@@ -18,11 +18,17 @@ export const useHistoryBackfill = ({
   const backfillDoneRef = useRef({});
 
   // 비활성 계좌 오늘 평가액 자동 기록
+  //  - 시장 계좌: currentEval 0(가격 미로드)이면 기록 안 함, 같은 날 1건만 기록(불변).
+  //  - 현금성(마통·simple): 시세 이력이 없어 값은 편집할 때만 바뀐다. 오늘 값이 바뀌면 오늘
+  //    스냅샷을 갱신(비움=0 포함)해 carry-forward가 최신 잔액을 반영하고, 비운 계좌가 과거
+  //    양수 스냅샷의 유령 잔액으로 남지 않게 한다. (단 한 번도 잔액이 없던 빈 계좌는 0 기록 생략)
   useEffect(() => {
     const today = getEffectiveDate();
     let needsUpdate = false;
     portfolioSummaries.forEach(s => {
-      if (s.id === activePortfolioId || s.currentEval === 0) return;
+      if (s.id === activePortfolioId) return;
+      const isCash = s.accountType === 'matong' || s.accountType === 'simple';
+      if (!isCash && s.currentEval === 0) return;
       const key = `${s.id}_${today}`;
       if (nonActiveHistRecordedRef.current[key] !== s.currentEval) needsUpdate = true;
     });
@@ -30,12 +36,26 @@ export const useHistoryBackfill = ({
     setPortfolios(prev => prev.map(p => {
       if (p.id === activePortfolioId) return p;
       const summary = portfolioSummaries.find(s => s.id === p.id);
-      if (!summary || summary.currentEval === 0) return p;
+      if (!summary) return p;
+      const isCash = p.accountType === 'matong' || p.accountType === 'simple';
+      if (!isCash && summary.currentEval === 0) return p;
       const key = `${p.id}_${today}`;
       if (nonActiveHistRecordedRef.current[key] === summary.currentEval) return p;
-      nonActiveHistRecordedRef.current[key] = summary.currentEval;
       const hist = p.history || [];
       const idx = hist.findIndex(h => h.date === today);
+      if (isCash) {
+        nonActiveHistRecordedRef.current[key] = summary.currentEval;
+        // 한 번도 잔액이 없던 빈 현금계좌는 0 스냅샷을 만들지 않음 (노이즈 방지)
+        if (summary.currentEval === 0 && idx < 0 && !hist.some(h => h.evalAmount > 0)) return p;
+        if (idx >= 0) {
+          if (Math.round(hist[idx].evalAmount ?? 0) === Math.round(summary.currentEval)) return p;
+          const nh = hist.slice();
+          nh[idx] = { ...nh[idx], evalAmount: summary.currentEval, principal: summary.principal, isFixed: false };
+          return { ...p, history: nh };
+        }
+        return { ...p, history: [...hist, { date: today, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
+      }
+      nonActiveHistRecordedRef.current[key] = summary.currentEval;
       if (idx >= 0) return p;
       return { ...p, history: [...hist, { date: today, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
     }));

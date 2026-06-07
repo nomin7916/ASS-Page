@@ -110,20 +110,22 @@ export function useIntegratedData({
   const computedIntHistory = useMemo(() => {
     const today = effectiveDateKey || getEffectiveDate();
 
-    // 현금성 계좌(마통·직접입력)는 시장 시세 이력이 없다 — 사용자가 단일 '현재값'으로만 관리.
-    // 과거 자동 스냅샷이 박제되면 이미 비운 잔액이 유령으로 합산돼 추이를 왜곡하므로(예: CMA를
-    // 0으로 바꿔도 옛 평가금 스냅샷이 남음), 스냅샷을 무시하고 시작일 이후 모든 날짜에 현재값을
-    // 평탄 반영한다(현재값 0이면 기여 없음 → 추이/팝업에서 자연히 제외).
+    // 현금성 계좌(마통·직접입력)는 시장 시세 이력이 없다 — 값은 사용자가 편집할 때만 바뀐다.
+    // 일별 자동 스냅샷(useHistoryBackfill)이 그날의 잔액을 p.history에 기록하므로, 시장 계좌처럼
+    // 스냅샷 carry-forward로 과거 잔액을 그대로 복원한다(현재값을 과거 날짜에 소급하지 않음).
+    // '오늘'만 현재값을 권위로 사용해 최신 편집(비움=0 포함)을 즉시 반영한다.
+    // (스냅샷에 0도 포함 → 비운 계좌가 carry-forward로 0이 이어져 유령 잔액이 남지 않음)
     const cashSeries = portfolios
       .filter(p => p.accountType === 'matong' || p.accountType === 'simple')
       .map(p => {
         const startDate = p.id === activePortfolioId ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
-        const evalAmount = p.accountType === 'simple'
+        const currentEval = p.accountType === 'simple'
           ? (cleanNum(p.evalAmount) || 0)
           : Math.max(0, (cleanNum(p.withdrawableTotal) || 0) - ((cleanNum(p.currentWithdrawal) || 0) + (cleanNum(p.withdrawalLimit) || 0)));
-        return { startDate, evalAmount };
-      })
-      .filter(c => c.evalAmount > 0);
+        const map = new Map();
+        (p.history || []).forEach(h => { if (h && h.date && typeof h.evalAmount === 'number' && h.evalAmount >= 0) map.set(h.date, h.evalAmount); });
+        return { startDate, currentEval, dates: [...map.keys()].sort(), map };
+      });
 
     // 시장 계좌별 (날짜 → 평가액) 시계열 구성. (현금성 계좌는 스냅샷 미사용 → 제외)
     // 같은 날짜에 기록이 둘 이상이면 마지막 값으로 정리 → 합산 시 이중 계상 방지.
@@ -141,6 +143,7 @@ export function useIntegratedData({
     // 전체 날짜 합집합 (+ 오늘)
     const dateSet = new Set();
     accountSeries.forEach(a => a.dates.forEach(d => dateSet.add(d)));
+    cashSeries.forEach(c => c.dates.forEach(d => dateSet.add(d)));
     if (intTotals.totalEval > 0) dateSet.add(today);
     const sortedDates = [...dateSet].sort();
 
@@ -156,13 +159,19 @@ export function useIntegratedData({
       }
     });
 
-    // 현금성 계좌: 시작일 이후 모든 날짜에 현재값을 평탄 합산 (스냅샷 무시 → 유령 잔액 제거)
-    cashSeries.forEach(({ startDate, evalAmount }) => {
+    // 현금성 계좌: 날짜별 잔액(스냅샷 carry-forward, 오늘은 현재값, 시작일 이전 0)을 합산.
+    // 과거 그날의 기록값을 그대로 반영 → 현재값이 과거로 소급되지 않는다.
+    const cashByDate = new Map();
+    cashSeries.forEach(({ startDate, currentEval, dates, map }) => {
+      let i = 0, lastVal = 0;
       for (const d of sortedDates) {
-        if (startDate && d < startDate) continue;
-        dateToTotal.set(d, (dateToTotal.get(d) || 0) + evalAmount);
+        while (i < dates.length && dates[i] <= d) { lastVal = map.get(dates[i]); i++; }
+        let v = d === today ? currentEval : lastVal;
+        if (startDate && d < startDate) v = 0;
+        if (v > 0) cashByDate.set(d, (cashByDate.get(d) || 0) + v);
       }
     });
+    cashByDate.forEach((v, d) => dateToTotal.set(d, (dateToTotal.get(d) || 0) + v));
 
     // 오늘 값은 실시간 합산 평가액으로 보정 (휴일에 가격 미로드로 폭락한 경우 직전값 유지)
     if (intTotals.totalEval > 0) {
@@ -171,7 +180,7 @@ export function useIntegratedData({
       const isAnomaly = prevValue > 0 && intTotals.totalEval < prevValue * 0.1;
       dateToTotal.set(today, isAnomaly ? prevValue : intTotals.totalEval);
     }
-    // 시장 계좌만 원금 보정식 적용(현금성 계좌는 아래에서 평탄 합산 → 수익 0 유지)
+    // 시장 계좌만 원금 보정식 적용(현금성 계좌는 아래에서 날짜별 잔액 합산 → 수익 0 유지)
     const portfolioPrincipalData = portfolios
       .filter(p => p.accountType !== 'matong' && p.accountType !== 'simple')
       .map(p => {
@@ -196,11 +205,8 @@ export function useIntegratedData({
           const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
           return sum + Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
         }, 0);
-        // 현금성 계좌: 원금=평가(현재값) → 시작일 이후 평탄 합산(평가와 동일 → 수익 0 유지)
-        cashSeries.forEach(({ startDate, evalAmount: cashEval }) => {
-          if (startDate && startDate > date) return;
-          effectivePrincipal += cashEval;
-        });
+        // 현금성 계좌: 원금=평가(날짜별 잔액) → 평가와 동일 합산 → 수익 0 유지
+        effectivePrincipal += cashByDate.get(date) || 0;
         return { id: date, date, evalAmount, effectivePrincipal };
       })
       .sort((a, b) => a.date.localeCompare(b.date));

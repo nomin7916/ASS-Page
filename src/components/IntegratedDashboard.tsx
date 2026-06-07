@@ -183,12 +183,16 @@ export default function IntegratedDashboard({
         // 오늘은 실시간 평가금 사용 → 테이블 합계와 일치
         evalAmt = summary?.currentEval || 0;
       } else if (isCash) {
-        // 현금성 계좌(마통·직접입력): 시장 시세 이력이 없어 과거 스냅샷이 박제되면 유령 잔액이
-        // 된다(예: CMA를 0으로 바꿔도 옛 평가금이 남음). 스냅샷을 무시하고 현재값을 평탄 반영
-        // (시작일 이후). 추이 차트(computedIntHistory)와 동일 규칙 → 소계가 차트 그날 값과 일치.
+        // 현금성 계좌(마통·직접입력): 일별 자동 스냅샷(p.history)을 carry-forward로 복원해
+        // 그날의 잔액을 그대로 표시한다(현재값을 과거 날짜에 소급하지 않음). 오늘은 위 isRealtimeDate
+        // 분기가 현재값을 쓰므로 여기는 항상 과거 날짜 → 스냅샷 기준. 추이 차트(computedIntHistory)와
+        // 동일 규칙(스냅샷 carry-forward, 0 포함) → 소계가 차트 그날 값과 일치.
         const startDate = summary?.startDate || p.portfolioStartDate || p.startDate || '';
         if (startDate && startDate > histDetailDate) return;
-        evalAmt = summary?.currentEval || 0;
+        const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
+        const sorted = [...hist].filter(h => h?.date && typeof h.evalAmount === 'number' && h.evalAmount >= 0).sort((a, b) => a.date.localeCompare(b.date));
+        const rec = sorted.filter(h => h.date <= histDetailDate).pop();
+        evalAmt = rec ? rec.evalAmount : 0;
       } else {
         const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
         const sorted = [...hist].filter(h => h?.date && h.evalAmount > 0).sort((a, b) => a.date.localeCompare(b.date));
@@ -206,7 +210,7 @@ export default function IntegratedDashboard({
       const futureDeposits = deps.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
       const futureWithdrawals = wds.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
       // 현금성 계좌(마통·직접입력): 투자원금=평가금액=예수금 불변 → 수익·수익률 항상 0.
-      //   시장 시세가 없어 사용자 현재값이 곧 잔액이므로 과거 원금 보정식·스냅샷 미적용.
+      //   원금은 그날 잔액(=평가 스냅샷)과 동일하게 둔다(입출금 시점 보정식 미적용).
       // 그 외 계좌(주식 포트폴리오 등)는 입출금 시점 보정식 유지.
       const effPrincipal = isCash
         ? evalAmt
