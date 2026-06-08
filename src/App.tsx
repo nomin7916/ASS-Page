@@ -190,12 +190,6 @@ export default function App() {
               const stateData = await loadDriveFile(freshToken, userFolderId, DRIVE_FILES.STATE) as any;
               const isAllowed = !stateData || stateData.adminAccessAllowed !== false;
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: isAllowed }));
-              if (!isAllowed) {
-                notify(`${targetEmail} 사용자가 관리자 접속을 허용하지 않았습니다.`, 'warning');
-                setAdminSwitching(false);
-                setShowAdminPage(true);
-                return;
-              }
             } catch {
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
             }
