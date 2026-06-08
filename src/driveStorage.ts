@@ -194,9 +194,10 @@ export async function revokeAdminReadAccess(token: string, folderId: string, adm
   } catch {}
 }
 
-// 관리자 토큰으로 대상 사용자의 폴더 ID 찾기 — 새 형식(Index_Data_<email>) 우선, 구 형식(Index_Data) 폴백
+// 관리자 토큰으로 대상 사용자의 폴더 ID 찾기
+// 1순위: 사용자 소유 폴더 / 2순위: 관리자 Drive 내 프록시 폴더(신규 사용자)
 export async function findUserIndexFolder(adminToken: string, targetEmail: string): Promise<string | null> {
-  const searchByName = async (name: string) => {
+  const searchByOwner = async (name: string) => {
     const q = encodeURIComponent(
       `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${targetEmail}' in owners`
     );
@@ -212,7 +213,83 @@ export async function findUserIndexFolder(adminToken: string, targetEmail: strin
     const data = await res.json();
     return data.files?.[0]?.id ?? null;
   };
-  return (await searchByName(getFolderName(targetEmail))) ?? (await searchByName(FOLDER_NAME_LEGACY));
+
+  const id = (await searchByOwner(getFolderName(targetEmail))) ?? (await searchByOwner(FOLDER_NAME_LEGACY));
+  if (id) return id;
+
+  // 신규 사용자 폴백: 관리자 Drive에 생성된 프록시 폴더 검색
+  try {
+    const q = encodeURIComponent(
+      `name='${getFolderName(targetEmail)}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
+    );
+    const res = await fetch(
+      `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,modifiedTime)&orderBy=modifiedTime+desc`,
+      { headers: { Authorization: `Bearer ${adminToken}` } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.files?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// 신규 사용자용 프록시 폴더 생성 또는 기존 폴더 반환 (관리자 Drive 내)
+// getOrCreateIndexFolder 대신 사용 — 안전망 로직이 다른 프록시 폴더를 반환하는 충돌 방지
+export async function createOrFindProxyFolder(adminToken: string, targetEmail: string): Promise<string> {
+  const name = getFolderName(targetEmail);
+  const q = encodeURIComponent(
+    `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners`
+  );
+  const findRes = await fetch(
+    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
+    { headers: { Authorization: `Bearer ${adminToken}` } }
+  );
+  if (findRes.ok) {
+    const data = await findRes.json();
+    if (data.files?.length > 0) return data.files[0].id;
+  }
+  const createRes = await fetch(`${DRIVE_API}/files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' }),
+  });
+  if (!createRes.ok) {
+    const err = await createRes.json().catch(() => ({}));
+    throw new Error(`[Drive] 프록시 폴더 생성 실패 ${createRes.status}: ${err?.error?.message || createRes.statusText}`);
+  }
+  const created = await createRes.json();
+  return created.id;
+}
+
+// 신규 사용자에게 프록시 폴더 공유 (사용자 첫 로그인 시 데이터 이전을 위해)
+export async function shareWithUser(adminToken: string, folderId: string, targetEmail: string): Promise<void> {
+  try {
+    await fetch(`${DRIVE_API}/files/${folderId}/permissions?sendNotificationEmail=false`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: targetEmail }),
+    });
+  } catch {}
+}
+
+// 사용자 토큰으로 sharedWithMe 프록시 폴더 검색 (첫 로그인 시 마이그레이션용)
+export async function findProxyFolderSharedWithMe(userToken: string, email: string): Promise<string | null> {
+  try {
+    const name = getFolderName(email);
+    const q = encodeURIComponent(
+      `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and sharedWithMe=true`
+    );
+    const res = await fetch(
+      `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${userToken}` } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.files?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // 폴더 안에서 파일 ID 찾기

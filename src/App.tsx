@@ -11,7 +11,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
-import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup } from './driveStorage';
+import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, createOrFindProxyFolder, shareWithUser } from './driveStorage';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
@@ -181,10 +181,19 @@ export default function App() {
               return;
             }
             if (!userFolderId) {
-              notify(`${targetEmail} 사용자의 Drive 폴더를 찾을 수 없습니다. 해당 사용자가 앱을 한 번 이상 실행했는지 확인하세요.`, 'error');
-              setAdminSwitching(false);
-              setShowAdminPage(true);
-              return;
+              // 신규 사용자 — 관리자 Drive에 프록시 폴더 생성 후 해당 사용자와 공유
+              try {
+                notify(`${targetEmail} 사용자의 Drive 폴더가 없습니다. 프록시 폴더를 생성합니다…`, 'info');
+                userFolderId = await createOrFindProxyFolder(freshToken, targetEmail);
+                await shareWithUser(freshToken, userFolderId, targetEmail);
+                notify(`프록시 폴더 생성 완료. 사용자 첫 로그인 시 본인 Drive로 이전됩니다.`, 'success');
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                notify(`프록시 폴더 생성 실패: ${msg}`, 'error');
+                setAdminSwitching(false);
+                setShowAdminPage(true);
+                return;
+              }
             }
             try {
               const stateData = await loadDriveFile(freshToken, userFolderId, DRIVE_FILES.STATE) as any;
