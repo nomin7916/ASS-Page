@@ -97,6 +97,24 @@ async function clearResetFlag(email: string): Promise<void> {
   } catch { /* fire and forget */ }
 }
 
+// ── 구글 인증 오류 → 사용자 안내 메시지 ─────────────────────────
+// 모바일(특히 사파리)에서 PC와 달리 실패하는 원인을 구체적으로 안내.
+function describeAuthError(detail?: string): string {
+  const d = (detail || '').toLowerCase();
+  if (!detail) return '인증 창이 닫혔거나 응답이 없습니다. 다시 시도해 주세요.';
+  if (d.includes('popup_failed_to_open') || (d.includes('popup') && d.includes('open')))
+    return '브라우저가 로그인 창을 차단했습니다. 팝업 차단을 해제하거나 다른 브라우저로 시도해 주세요.';
+  if (d.includes('popup_closed') || d.includes('closed'))
+    return '로그인 창이 닫혔습니다. 다시 시도해 주세요.';
+  if (d.includes('access_denied') || d.includes('denied'))
+    return '권한이 거부되었습니다. Google 계정 권한 요청을 모두 허용해 주세요.';
+  if (d.includes('invalid_client'))
+    return 'OAuth 클라이언트 설정 오류입니다. 관리자에게 문의하세요.';
+  if (d.includes('idpiframe') || d.includes('cookie') || d.includes('storage') || d.includes('interaction_required'))
+    return '브라우저의 쿠키/추적 방지 설정으로 로그인이 차단되었습니다. (아이폰: 설정 → Safari → "사이트 간 추적 방지" 끄기, 시크릿/비공개 탭 해제 후 재시도)';
+  return '로그인에 실패했습니다. 다시 시도해 주세요.';
+}
+
 async function fetchUserEmail(token: string): Promise<string | null> {
   try {
     const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
@@ -186,7 +204,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
   const featuresRef = useRef<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
 
   // ── 구글 토큰 요청 공통 함수 ────────────────────────────────────
-  const requestGoogleToken = (opts: { prompt: string; hint?: string; onSuccess: (email: string, token: string) => void; onFail: () => void }) => {
+  const requestGoogleToken = (opts: { prompt: string; hint?: string; onSuccess: (email: string, token: string) => void; onFail: (detail?: string) => void }) => {
     const tryInit = (retries = 20) => {
       if ((window as any).google?.accounts?.oauth2) {
         const client = (window as any).google.accounts.oauth2.initTokenClient({
@@ -195,13 +213,17 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
           hint: opts.hint,
           callback: async (resp: any) => {
             if (resp.error || !resp.access_token) {
-              opts.onFail();
+              opts.onFail(resp.error_description || resp.error || '토큰 응답 없음');
               return;
             }
             const token = resp.access_token;
             const email = await fetchUserEmail(token);
-            if (!email) { opts.onFail(); return; }
+            if (!email) { opts.onFail('사용자 정보 조회 실패 (네트워크/쿠키 확인)'); return; }
             opts.onSuccess(email, token);
+          },
+          // 팝업 차단·쿠키 차단 등 OAuth 응답 이전 오류는 error_callback으로만 전달됨
+          error_callback: (err: any) => {
+            opts.onFail(err?.message || err?.type || '인증 창 오류');
           },
         });
         tokenClientRef.current = client;
@@ -209,7 +231,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
       } else if (retries > 0) {
         setTimeout(() => tryInit(retries - 1), 300);
       } else {
-        opts.onFail();
+        opts.onFail('Google 로그인 모듈 로드 실패 (네트워크 확인)');
       }
     };
     tryInit();
@@ -322,9 +344,9 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         setPinDigits(['', '', '', '']);
         setStep('pin_entry');
       },
-      onFail: () => {
+      onFail: (detail) => {
         setStep('error');
-        setErrorMsg('로그인이 취소되었습니다. 다시 시도해 주세요.');
+        setErrorMsg(`${describeAuthError(detail)}${detail ? `\n(${detail})` : ''}`);
       },
     });
   };
@@ -505,7 +527,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
               </div>
               <div>
                 <p className="text-white font-semibold mb-1">오류가 발생했습니다</p>
-                <p className="text-gray-400 text-sm">{errorMsg}</p>
+                <p className="text-gray-400 text-sm whitespace-pre-line break-words">{errorMsg}</p>
               </div>
               <button onClick={handleRetry} className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200">
                 다시 시도
