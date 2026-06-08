@@ -3,8 +3,5 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ],
-  "functions": {
-    "api/stock-history.ts": { "maxDuration": 60 }
-  }
+  ]
 }
