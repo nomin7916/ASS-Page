@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings } from '../utils';
 import { getEffectiveDate } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -21,6 +21,7 @@ export function useIntegratedData({
   effectiveDateKey,
   compStocks,
   stockHistoryMap,
+  indicatorHistoryMap,
 }) {
   const portfolioSummaries = useMemo(() => {
     return portfolios.map(p => {
@@ -129,14 +130,30 @@ export function useIntegratedData({
 
     // 시장 계좌별 (날짜 → 평가액) 시계열 구성. (현금성 계좌는 스냅샷 미사용 → 제외)
     // 같은 날짜에 기록이 둘 이상이면 마지막 값으로 정리 → 합산 시 이중 계상 방지.
+    // 해외계좌는 저장된 evalAmount(기록 시점 라이브 환율로 박제)를 신뢰하지 않고, 날짜별 환율로 재계산한다.
+    //  evalAmount = USD(해당일 보유종목 × 과거 종가) × 환율(getClosestValue(usdkrw) 이월, 없으면 라이브).
+    //  종가 미로드 등으로 재계산 불가하면 저장값으로 폴백(초기 로딩·데이터 공백 보호).
+    const liveFx = marketIndicators.usdkrw || 1;
     const accountSeries = portfolios
       .filter(p => p.accountType !== 'matong' && p.accountType !== 'simple')
       .map(p => {
-        const hist = p.id === activePortfolioId ? history : (p.history || []);
+        const isActive = p.id === activePortfolioId;
+        const hist = isActive ? history : (p.history || []);
         const map = new Map();
-        hist.forEach(h => {
-          if (h && h.date && h.evalAmount > 0) map.set(h.date, h.evalAmount);
-        });
+        if (p.accountType === 'overseas') {
+          const src = isActive ? { ...p, portfolio } : p;
+          const mpo = p.manualPriceOverrides || {};
+          hist.forEach(h => {
+            if (!h || !h.date) return;
+            const r = calcPortfolioEvalDetail(resolveHoldings(src, h.date).items, 'overseas', h.date, stockHistoryMap, indicatorHistoryMap || {}, liveFx, mpo);
+            const v = r.hasAnyPrice ? r.total : (h.evalAmount > 0 ? h.evalAmount : 0);
+            if (v > 0) map.set(h.date, v);
+          });
+        } else {
+          hist.forEach(h => {
+            if (h && h.date && h.evalAmount > 0) map.set(h.date, h.evalAmount);
+          });
+        }
         return { dates: [...map.keys()].sort(), map };
       }).filter(a => a.dates.length > 0);
 
@@ -210,7 +227,7 @@ export function useIntegratedData({
         return { id: date, date, evalAmount, effectivePrincipal };
       })
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw, effectiveDateKey]);
+  }, [portfolios, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw, effectiveDateKey, portfolio, stockHistoryMap, indicatorHistoryMap]);
 
   const intSortedHistory = useMemo(() =>
     [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),

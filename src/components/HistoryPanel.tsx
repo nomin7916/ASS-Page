@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, cleanNum, getClosestValue } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings } from '../utils';
 import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -66,24 +66,31 @@ export default function HistoryPanel({
     return set;
   }, [activePortfolio]);
 
-  // 해외계좌: 차트와 동일한 방식으로 USD 평가액 계산 (stockHistoryMap × 현재보유수량)
-  const computeOverseasUsd = useMemo(() => {
+  // 해외계좌: 검증모달·통합대시보드와 동일 방식으로 USD·원화 재계산.
+  //  USD = 해당일 보유종목 × 과거 종가, 원화 = USD × 날짜별 환율(getClosestValue(usdkrw) 이월, 없으면 라이브).
+  //  저장된 evalAmount는 기록 시점 라이브 환율로 박제돼 있어, 같은 달러라도 환율 변동분이 누락된다.
+  //  날짜별 환율로 재계산하면 주말 등 같은 달러·같은 이월환율 날짜가 동일 원화가 된다.
+  const computeOverseasEval = useMemo(() => {
     if (activePortfolioAccountType !== 'overseas') return null;
-    const holdings = activePortfolio?.portfolio ?? [];
+    const liveFx = marketIndicators.usdkrw || 1;
+    const mpo = activePortfolio?.manualPriceOverrides || {};
     return (date) => {
-      let usd = 0, hasData = false;
-      for (const item of holdings) {
-        if (item.type === 'deposit') {
-          usd += cleanNum(item.depositAmount);
-          hasData = true;
-        } else if (item.code && stockHistoryMap?.[item.code]) {
-          const p = getClosestValue(stockHistoryMap[item.code], date);
-          if (p != null) { usd += p * item.quantity; hasData = true; }
-        }
-      }
-      return hasData ? usd : null;
+      const resolved = resolveHoldings(activePortfolio, date);
+      const r = calcPortfolioEvalDetail(resolved.items, 'overseas', date, stockHistoryMap, indicatorHistoryMap || {}, liveFx, mpo);
+      if (!r.hasAnyPrice) return null;
+      const fx = r.fxRate || liveFx;
+      return { usd: r.total / fx, krw: r.total };
     };
-  }, [activePortfolioAccountType, activePortfolio, stockHistoryMap]);
+  }, [activePortfolioAccountType, activePortfolio, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw]);
+
+  const overseasEvalByDate = useMemo(() => {
+    if (!computeOverseasEval) return null;
+    const m = new Map();
+    sortedHistoryDesc.forEach(h => {
+      if (h?.date && !m.has(h.date)) { const e = computeOverseasEval(h.date); if (e) m.set(h.date, e); }
+    });
+    return m;
+  }, [computeOverseasEval, sortedHistoryDesc]);
 
   return (
         <>
@@ -117,7 +124,12 @@ export default function HistoryPanel({
                 <tbody>
                   {sortedHistoryDesc.map((h, i) => {
                     const prevEntry = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
-                    const dod = (prevEntry && prevEntry.evalAmount > 0) ? ((h.evalAmount / prevEntry.evalAmount) - 1) * 100 : 0;
+                    const isOverseasAcc = activePortfolioAccountType === 'overseas';
+                    const ov = isOverseasAcc && overseasEvalByDate ? overseasEvalByDate.get(h.date) : null;
+                    const prevOv = isOverseasAcc && overseasEvalByDate && prevEntry ? overseasEvalByDate.get(prevEntry.date) : null;
+                    const curKrw = ov ? ov.krw : h.evalAmount;
+                    const prevKrw = prevEntry ? (prevOv ? prevOv.krw : prevEntry.evalAmount) : 0;
+                    const dod = prevKrw > 0 ? ((curKrw / prevKrw) - 1) * 100 : 0;
                     const isToday = h.date === effectiveDateKey;
                     const isUserModified = h.isAdjusted || userModifiedDates.has(h.date);
 
@@ -135,13 +147,11 @@ export default function HistoryPanel({
                         <td className="py-1.5 px-1.5 border-r border-gray-600 font-bold text-right text-white">
                           <div className="flex items-center justify-end gap-1">
                             <span>
-                              {activePortfolioAccountType === 'overseas'
+                              {isOverseasAcc
                                 ? (() => {
-                                    const usd = computeOverseasUsd ? computeOverseasUsd(h.date) : null;
-                                    const usdDisplay = usd != null
-                                      ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(usd)
-                                      : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(h.evalAmount / (marketIndicators.usdkrw || 1));
-                                    return <div className="flex flex-col items-end leading-tight"><span>{usdDisplay}</span><span className="text-[10px] text-gray-500">{formatCurrency(h.evalAmount)}</span></div>;
+                                    const usd = ov ? ov.usd : h.evalAmount / (marketIndicators.usdkrw || 1);
+                                    const usdDisplay = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(usd);
+                                    return <div className="flex flex-col items-end leading-tight"><span>{usdDisplay}</span><span className="text-[10px] text-gray-500">{formatCurrency(curKrw)}</span></div>;
                                   })()
                                 : formatCurrency(h.evalAmount)}
                             </span>

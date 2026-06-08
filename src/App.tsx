@@ -1111,7 +1111,7 @@ export default function App() {
     avgExchangeRate, portfolioStartDate, title, marketIndicators,
     history, depositHistory, depositHistory2, intAppliedRange, intIsZeroBaseMode,
     effectiveDateKey,
-    compStocks, stockHistoryMap,
+    compStocks, stockHistoryMap, indicatorHistoryMap,
   });
 
 

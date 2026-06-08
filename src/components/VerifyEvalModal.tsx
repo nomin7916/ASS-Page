@@ -177,7 +177,9 @@ export default function VerifyEvalModal({
 
   const stored = cleanNum(record.evalAmount);
   const diffRatio = stored > 0 ? Math.abs(recomputed - stored) / stored : (recomputed > 0 ? 1 : 0);
-  const matched = recomputed > 0 && diffRatio < 0.001;
+  // 해외계좌: 저장된 KRW는 기록 시점 라이브 환율로 박제된 캐시 → 날짜별 환율 재계산값(recomputed)이 권위.
+  // 환율 변동분만으로 생기는 KRW 차이를 '불일치'로 오판하지 않도록 USD 재계산 성공 여부로 상태 판단.
+  const matched = isOverseas ? recomputed > 0 : (recomputed > 0 && diffRatio < 0.001);
 
   const depositsOnDate = useMemo(
     () => (depositHistory || []).filter(d => d.date === date),
@@ -558,24 +560,22 @@ export default function VerifyEvalModal({
                   <span className="text-gray-500">{formatCurrency(recomputed)}</span>
                 </div>
               )}
-              <div className="text-gray-400 flex justify-between">
-                <span>저장된 평가자산</span>
-                <span className="text-gray-300 font-bold">
-                  {isOverseas && histFxRate > 1 && stored > 0
-                    ? `$${(stored / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-                    : formatCurrency(stored)}
-                </span>
-              </div>
-              {isOverseas && histFxRate > 1 && stored > 0 && (
+              {!isOverseas && (
                 <div className="text-gray-400 flex justify-between">
-                  <span>저장된 평가자산 (₩)</span>
-                  <span className="text-gray-500">{formatCurrency(stored)}</span>
+                  <span>저장된 평가자산</span>
+                  <span className="text-gray-300 font-bold">{formatCurrency(stored)}</span>
+                </div>
+              )}
+              {isOverseas && stored > 0 && (
+                <div className="text-gray-500 flex justify-between text-[10px]">
+                  <span>저장된 스냅샷 (기록시점 환율)</span>
+                  <span>{formatCurrency(stored)}</span>
                 </div>
               )}
               <div className="flex justify-between pt-0.5">
                 <span className="text-gray-500">상태</span>
                 <span className={`font-bold ${matched ? 'text-green-400' : 'text-amber-400'}`}>
-                  {recomputed <= 0 ? '⚪ 데이터없음' : matched ? '✅ 일치' : `🔺 불일치 (차이 ${isOverseas && histFxRate > 1 ? `$${Math.round((recomputed - stored) / histFxRate).toLocaleString('en-US')}` : formatCurrency(Math.round(recomputed - stored))})`}
+                  {recomputed <= 0 ? '⚪ 데이터없음' : matched ? '✅ 일치' : `🔺 불일치 (차이 ${formatCurrency(Math.round(recomputed - stored))})`}
                 </span>
               </div>
             </div>
@@ -719,19 +719,19 @@ export default function VerifyEvalModal({
                     </div>
                   </div>
                 )}
-                {stored > 0 && (
+                {(isOverseas ? recomputed > 0 : stored > 0) && (
                   <div className="text-gray-400 flex justify-between">
-                    <span>저장 평가자산</span>
+                    <span>{isOverseas ? '평가자산 (재계산)' : '저장 평가자산'}</span>
                     <span className="text-gray-200 font-bold">
                       {isOverseas && histFxRate > 1
-                        ? `$${(stored / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                        ? `$${(recomputed / histFxRate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
                         : formatCurrency(stored)}
                     </span>
                   </div>
                 )}
-                {principalOnDate > 0 && stored > 0 && (() => {
+                {principalOnDate > 0 && (isOverseas ? recomputed > 0 : stored > 0) && (() => {
                   const gain = isOverseas && histFxRate > 1
-                    ? stored / histFxRate - principalOnDate
+                    ? recomputed / histFxRate - principalOnDate
                     : stored - principalOnDate;
                   return (
                     <div className="flex justify-between">
