@@ -464,6 +464,12 @@ export default function PortfolioChart({
       {/* 드래그 기간 선택 결과 패널 */}
       {(() => {
         const displayResult = selectionResult ?? defaultSelectionResult;
+        // '나의 수익률' 표기 기준: 조회시작 0% 모드는 선택기간 구간 수익률(시작평가→종료평가),
+        // 일반 모드는 투자원금 기준 누적 수익률(종료일 시점). 과거엔 두 모드 모두 누적값을 써
+        // 구간이 하락해도 +누적%가 표시되는 불일치(예: 손익 −81M인데 +64%)가 있었음.
+        const myReturnRate = displayResult
+          ? (isZeroBaseMode ? (displayResult.rate ?? null) : (displayResult.principalReturnRateAtEnd ?? null))
+          : null;
         return (
           <div className="px-4 py-2 border-t border-gray-700/40 bg-[#060f1e]/70 min-h-[36px] shrink-0">
             {displayResult ? (
@@ -510,9 +516,9 @@ export default function PortfolioChart({
                         <div className="flex items-center gap-1.5 mb-1">
                           <div className="w-2 h-2 rounded-sm shrink-0 bg-red-500" />
                           <span className="text-[11px] font-bold text-red-400">나의 수익률</span>
-                          <span className={`text-[11px] font-black ${rateCls(displayResult.principalReturnRateAtEnd)}`}>{fmtRate(displayResult.principalReturnRateAtEnd)}</span>
+                          <span className={`text-[11px] font-black ${rateCls(myReturnRate)}`}>{fmtRate(myReturnRate)}</span>
                         </div>
-                        {displayResult.principalReturnRateAtEnd != null ? (
+                        {myReturnRate != null ? (
                           <>
                             <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] pl-3.5">
                               <Row
@@ -520,14 +526,17 @@ export default function PortfolioChart({
                                 source="투자원금 / 평가자산(예수금 포함)"
                                 value={`${vStart?.principalAmount != null ? fmtMoney(vStart.principalAmount) : '—'} / ${vStart?.evalAmount != null ? fmtMoney(vStart.evalAmount) : '—'}`}
                                 date={formatShortDate(displayResult.startDate)}
-                                extra={vStart?.principalReturnRate != null && <span className={`ml-1 font-bold ${rateCls(vStart.principalReturnRate)}`}>→ {fmtRate(vStart.principalReturnRate)}</span>}
+                                extra={(() => {
+                                  const startRate = isZeroBaseMode ? 0 : vStart?.principalReturnRate;
+                                  return startRate != null && <span className={`ml-1 font-bold ${rateCls(startRate)}`}>→ {fmtRate(startRate)}</span>;
+                                })()}
                               />
                               <Row
                                 label="종료"
                                 source="투자원금 / 평가자산(예수금 포함)"
                                 value={`${displayResult.principalAtEnd != null ? fmtMoney(displayResult.principalAtEnd) : '—'} / ${displayResult.endEval != null ? fmtMoney(displayResult.endEval) : '—'}`}
                                 date={formatShortDate(displayResult.endDate)}
-                                extra={<span className={`ml-1 font-bold ${rateCls(displayResult.principalReturnRateAtEnd)}`}>→ {fmtRate(displayResult.principalReturnRateAtEnd)}</span>}
+                                extra={<span className={`ml-1 font-bold ${rateCls(myReturnRate)}`}>→ {fmtRate(myReturnRate)}</span>}
                               />
                               <span className="text-gray-500">계산식</span>
                               <span className="text-sky-200/90 font-mono leading-snug">
@@ -586,7 +595,7 @@ export default function PortfolioChart({
                   <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
                     <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">나의 수익률</span>
-                    {displayResult.principalReturnRateAtEnd != null ? (() => {
+                    {myReturnRate != null ? (() => {
                       const prin = displayResult.principalAtEnd;
                       const evl = displayResult.endEval;
                       const startEvl = displayResult.startEval;
@@ -595,8 +604,8 @@ export default function PortfolioChart({
                         : (prin != null && evl != null ? evl - prin : null);
                       return (
                         <>
-                          <span className={`text-[12px] font-black whitespace-nowrap ${displayResult.principalReturnRateAtEnd >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                            {displayResult.principalReturnRateAtEnd > 0 ? '+' : ''}{displayResult.principalReturnRateAtEnd.toFixed(2)}%
+                          <span className={`text-[12px] font-black whitespace-nowrap ${myReturnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                            {myReturnRate > 0 ? '+' : ''}{myReturnRate.toFixed(2)}%
                           </span>
                           {prof != null && (
                             <span className={`text-[10px] font-bold whitespace-nowrap ${prof >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
