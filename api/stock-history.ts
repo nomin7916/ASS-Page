@@ -10,7 +10,12 @@ const KIS_APP_KEY = process.env.KIS_APP_KEY    ?? '';
 const KIS_APP_SECRET = process.env.KIS_APP_SECRET ?? '';
 
 export default async function handler(request: Request): Promise<Response> {
-  const { searchParams } = new URL(request.url);
+  let searchParams: URLSearchParams;
+  try {
+    ({ searchParams } = new URL(request.url, 'https://x.invalid'));
+  } catch {
+    return new Response('잘못된 요청 URL', { status: 400 });
+  }
   const code     = searchParams.get('code') ?? '';
   const fromYear = parseInt(searchParams.get('fromYear') ?? '2000', 10);
 
