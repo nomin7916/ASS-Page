@@ -1,13 +1,16 @@
-// Vercel Serverless Function — KIS OpenAPI 종목 히스토리 서버사이드 수집
-// Node.js 런타임: module-level L1 캐시가 인스턴스 수명(~15분) 동안 유지되어
-// 동일 인스턴스로 들어오는 다중 요청이 KIS 토큰을 재발급 없이 공유함
-export const config = { maxDuration: 60 };
+// Vercel Edge Function — KIS OpenAPI 종목 히스토리 서버사이드 수집
+export const config = { runtime: 'edge' };
 
 import { getKisToken } from './_kisToken.js';
 
-const KIS_BASE    = 'https://openapi.koreainvestment.com:9443';
-const KIS_APP_KEY = process.env.KIS_APP_KEY    ?? '';
+const KIS_BASE       = 'https://openapi.koreainvestment.com:9443';
+const KIS_APP_KEY    = process.env.KIS_APP_KEY    ?? '';
 const KIS_APP_SECRET = process.env.KIS_APP_SECRET ?? '';
+
+const CONCURRENCY      = 5;     // KIS rate limit(20 req/sec/appkey) 고려
+const CHUNK_TIMEOUT_MS = 5000;  // 개별 KIS 호출 최대 대기
+const RETRY_DELAY_MS   = 300;   // rate limit 회복 대기
+const DEADLINE_MS      = 22000; // Edge 30s 제한 전에 부분 결과 반환
 
 export default async function handler(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
@@ -23,13 +26,12 @@ export default async function handler(request: Request): Promise<Response> {
     return new Response('KIS 토큰 발급 실패 (앱키/시크릿 확인)', { status: 503 });
   }
 
-  const result: Record<string, number> = {};
-  const today   = new Date().toISOString().split('T')[0].replace(/-/g, '');
-  const endYear = new Date().getFullYear();
+  const today     = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const endYear   = new Date().getFullYear();
+  const startTime = Date.now();
 
-  // KIS는 한 번에 최대 ~100건 → 2년 단위 청크. 최신 청크부터 처리(역순):
-  // 다중 코드 병렬 호출로 KIS rate limit(20 req/sec/appkey)에 걸려 후반 청크가
-  // 떨어져나가도 최근 데이터가 먼저 확보돼 자산 검증에서 '근사값' 폴백 없이 표시됨.
+  // 2년 단위 청크 생성 — KIS는 한 번에 최대 ~100건 반환
+  // 최신 데이터부터 확보하도록 역순 정렬
   const chunks: Array<{ from: string; to: string }> = [];
   for (let year = fromYear; year <= endYear; year += 2) {
     const dateFrom = `${year}0101`;
@@ -39,8 +41,6 @@ export default async function handler(request: Request): Promise<Response> {
   }
   chunks.reverse();
 
-  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
-
   const fetchChunk = async (dateFrom: string, dateTo: string): Promise<any[] | null> => {
     const params = new URLSearchParams({
       FID_COND_MRKT_DIV_CODE: 'J',
@@ -48,21 +48,21 @@ export default async function handler(request: Request): Promise<Response> {
       FID_INPUT_DATE_1:       dateFrom,
       FID_INPUT_DATE_2:       dateTo,
       FID_PERIOD_DIV_CODE:    'D',
-      FID_ORG_ADJ_PRC:        '1',  // 원주가 (실제종가, 수정주가 미반영)
+      FID_ORG_ADJ_PRC:        '1',
     });
     try {
       const res = await fetch(
         `${KIS_BASE}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice?${params}`,
         {
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type':  'application/json',
             'authorization': `Bearer ${token}`,
             'appkey':        KIS_APP_KEY,
             'appsecret':     KIS_APP_SECRET,
             'tr_id':         'FHKST03010100',
             'custtype':      'P',
           },
-          signal: AbortSignal.timeout(7000),
+          signal: AbortSignal.timeout(CHUNK_TIMEOUT_MS),
         }
       );
       if (!res.ok) {
@@ -70,8 +70,6 @@ export default async function handler(request: Request): Promise<Response> {
         return null;
       }
       const json = await res.json();
-      // KIS rate limit 응답(EGW00201/초당 거래건수 초과)도 200을 반환할 수 있어
-      // rt_cd 검사로 throttling 판별 → 재시도 트리거
       if (json.rt_cd && json.rt_cd !== '0') {
         console.error(`[stock-history] ${code} chunk ${dateFrom}-${dateTo} rt_cd=${json.rt_cd} msg=${json.msg1}`);
         return null;
@@ -83,21 +81,37 @@ export default async function handler(request: Request): Promise<Response> {
     }
   };
 
-  // 청크별 1회 재시도(900ms 백오프) — KIS 일시적 throttling/timeout 회복.
-  // maxDuration: 60s 제한 안에서 13청크 × (7s + 0.9s + 7s) = 약 195s 워스트 케이스가
-  // 발생하지 않도록, 호출 측에서 동시성 4로 제한해 KIS 부하를 분산함.
-  for (const { from, to } of chunks) {
-    let rows = await fetchChunk(from, to);
-    if (rows === null) {
-      await sleep(900);
-      rows = await fetchChunk(from, to);
+  // 실패 시 1회 재시도 (rate limit EGW00201 회복용)
+  const fetchChunkWithRetry = async (dateFrom: string, dateTo: string): Promise<any[] | null> => {
+    const rows = await fetchChunk(dateFrom, dateTo);
+    if (rows !== null) return rows;
+    await new Promise<void>(r => setTimeout(r, RETRY_DELAY_MS));
+    return fetchChunk(dateFrom, dateTo);
+  };
+
+  const result: Record<string, number> = {};
+
+  // CONCURRENCY 단위 배치 병렬 처리 — 최신 데이터부터 수집하므로
+  // DEADLINE 초과 시 부분 결과(최근 N년)라도 반환 가능
+  for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+    if (Date.now() - startTime > DEADLINE_MS) {
+      console.warn(`[stock-history] ${code} deadline at batch ${Math.floor(i / CONCURRENCY)}, returning partial (${Object.keys(result).length} days)`);
+      break;
     }
-    if (!rows) continue;
-    for (const item of rows) {
-      const d     = item.stck_bsop_date as string;
-      const close = parseInt(item.stck_clpr, 10);
-      if (d?.length === 8 && !isNaN(close) && close > 0) {
-        result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
+
+    const batch = chunks.slice(i, i + CONCURRENCY);
+    const settled = await Promise.allSettled(
+      batch.map(({ from, to }) => fetchChunkWithRetry(from, to))
+    );
+
+    for (const r of settled) {
+      if (r.status !== 'fulfilled' || !r.value) continue;
+      for (const item of r.value) {
+        const d     = item.stck_bsop_date as string;
+        const close = parseInt(item.stck_clpr, 10);
+        if (d?.length === 8 && !isNaN(close) && close > 0) {
+          result[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = close;
+        }
       }
     }
   }
