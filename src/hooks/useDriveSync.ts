@@ -5,7 +5,7 @@ import {
   loadVersionTimestamp, saveVersionFile, saveVersionedBackup,
   listBackups, loadBackupById, DriveBackupEntry,
   grantAdminReadAccess, revokeAdminReadAccess,
-  getManualLatestEntry, findProxyFolderSharedWithMe,
+  getManualLatestEntry,
 } from '../driveStorage';
 
 function _stripStateForSave(stateData: any) {
@@ -137,30 +137,6 @@ export function useDriveSync({
         loadDriveFile(token, folderId, DRIVE_FILES.STATE),
         loadDriveFile(token, folderId, DRIVE_FILES.MARKET),
       ]);
-
-      // 신규 사용자 첫 로그인 — 관리자가 생성한 프록시 폴더 데이터를 본인 Drive로 이전
-      if (!stateData && !adminViewingAsRef.current && authUser?.email) {
-        try {
-          const proxyFolderId = await findProxyFolderSharedWithMe(token, authUser.email);
-          if (proxyFolderId) {
-            const [proxyState, proxyMarket] = await Promise.all([
-              loadDriveFile(token, proxyFolderId, DRIVE_FILES.STATE),
-              loadDriveFile(token, proxyFolderId, DRIVE_FILES.MARKET),
-            ]);
-            if (proxyState) {
-              // 데이터를 본인 폴더로 이전
-              await Promise.all([
-                saveDriveFile(token, folderId, DRIVE_FILES.STATE, _stripStateForSave(proxyState as any)),
-                proxyMarket ? saveDriveFile(token, folderId, DRIVE_FILES.MARKET, proxyMarket) : Promise.resolve(),
-              ]);
-              notify('관리자가 설정한 데이터를 내 Drive로 이전했습니다.', 'success');
-              // 이전 완료 후 재로드 (한 번만 — isRetry=true)
-              return loadFromDrive(token, updateAccessLog, true);
-            }
-          }
-        } catch {}
-        setSS('ready'); setDriveStatus(''); return null;
-      }
 
       if (!stateData) { setSS('ready'); setDriveStatus(''); return null; }
 
