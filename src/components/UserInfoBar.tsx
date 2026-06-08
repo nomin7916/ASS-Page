@@ -282,31 +282,45 @@ export default function UserInfoBar({
             <NotebookLMIcon size={14} />
           </button>
           {notebookOpen && notebookLinks.length > 0 && (
-            <div className="absolute right-0 top-full mt-1.5 z-50 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden min-w-[220px] max-w-[300px]">
-              <div className="px-3 py-2 border-b border-gray-800">
-                <span className="text-gray-500 text-xs font-semibold">학습 자료</span>
+            <>
+              {/* 모바일: 화면 중앙 배치를 위한 배경 오버레이 (탭 시 닫힘) */}
+              <div
+                className="md:hidden fixed inset-0 z-[998] bg-black/50"
+                onClick={() => setNotebookOpen(false)}
+              />
+              <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(90vw,340px)] z-[999] bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden md:absolute md:left-auto md:top-full md:right-0 md:translate-x-0 md:translate-y-0 md:mt-1.5 md:w-auto md:min-w-[220px] md:max-w-[300px] md:z-50">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+                  <span className="text-gray-500 text-xs font-semibold">학습 자료</span>
+                  <button
+                    onClick={() => setNotebookOpen(false)}
+                    className="md:hidden text-gray-500 hover:text-gray-300 transition-colors"
+                    title="닫기"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <ul className="py-1 max-h-[60vh] md:max-h-64 overflow-y-auto">
+                  {notebookLinks.map((link, i) => (
+                    <li key={i}>
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => setNotebookOpen(false)}
+                        className="flex items-start md:items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
+                      >
+                        <span className="flex-shrink-0 mt-0.5 md:mt-0 text-sky-500 group-hover:text-sky-400 transition-colors">
+                          <NotebookLMIcon size={13} />
+                        </span>
+                        <span className="text-gray-300 text-xs group-hover:text-white transition-colors break-words md:truncate">
+                          {link.title}
+                        </span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <ul className="py-1 max-h-64 overflow-y-auto">
-                {notebookLinks.map((link, i) => (
-                  <li key={i}>
-                    <a
-                      href={link.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={() => setNotebookOpen(false)}
-                      className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
-                    >
-                      <span className="flex-shrink-0 text-sky-500 group-hover:text-sky-400 transition-colors">
-                        <NotebookLMIcon size={13} />
-                      </span>
-                      <span className="text-gray-300 text-xs group-hover:text-white transition-colors truncate">
-                        {link.title}
-                      </span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            </>
           )}
         </div>
         <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
