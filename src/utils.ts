@@ -273,6 +273,22 @@ export const savingsMaturity = (item) => {
   return Math.round(m);
 };
 
+// 단일 적립(트랜치)의 평가금: 입금일부터 asOf(미지정=오늘)까지 연이율 단리 누적. 만기 도달 시 만기에서
+// 정지. 입금일이 asOf 이후(미입금)면 0. 모든 적립의 savingsDepositEval 합 = savingsEval(item)(불변식).
+export const savingsDepositEval = (item, deposit, asOf) => {
+  const rate = cleanNum(item?.annualRate) / 100;
+  const amt = cleanNum(deposit?.amount);
+  if (amt <= 0) return 0;
+  const endDay = toSavingsDayNum(item?.endDate);
+  const asOfDay = asOf ? toSavingsDayNum(asOf) : null;
+  let upper = asOfDay != null ? Math.min(asOfDay, savingsTodayDayNum()) : savingsTodayDayNum();
+  if (endDay != null && endDay < upper) upper = endDay;
+  const depDay = toSavingsDayNum(deposit?.date) ?? toSavingsDayNum(item?.startDate) ?? upper;
+  if (depDay > upper) return 0; // 아직 미입금
+  const days = Math.max(0, upper - depDay);
+  return Math.round(amt * (1 + rate * days / 365));
+};
+
 // 등락률 칸: 연이율을 1일치로 환산한 일일 수익률(%) 표시
 export const formatSavingsDailyRate = (annualRate) => {
   const r = cleanNum(annualRate);

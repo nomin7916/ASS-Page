@@ -5,7 +5,7 @@ import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG, MARK_STRIP_BG } from '../constants';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber, formatFundPrice,
-  formatChangeRate, formatSavingsDailyRate, formatSavingsPeriod, savingsMaturity,
+  formatChangeRate, formatSavingsDailyRate, formatSavingsPeriod, savingsMaturity, savingsDepositEval,
   handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav
 } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
@@ -432,25 +432,31 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             {(savingsModalItem.startDate || savingsModalItem.endDate) && (
               <div className="flex justify-between"><span>투자기간</span><span className="text-emerald-200">{formatSavingsPeriod(savingsModalItem.startDate, savingsModalItem.endDate)}</span></div>
             )}
-            <div className="flex justify-between border-t border-gray-700/50 pt-1"><span>총 투자금액</span><span className="text-blue-300 font-bold">{formatCurrency(savingsModalItem.investAmount)}</span></div>
-            <div className="flex justify-between"><span>예상 평가금액</span><span className="text-white font-bold">{formatCurrency(savingsModalItem.evalAmount)}</span></div>
-            <div className="flex justify-between"><span>차익</span><span className={`font-bold ${cleanNum(savingsModalItem.profit) >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{formatCurrency(savingsModalItem.profit)}</span></div>
             {savingsMaturity(savingsModalItem) > 0 && (
-              <div className="flex justify-between border-t border-gray-700/50 pt-1"><span>만기 예상금액</span><span className="text-emerald-300 font-bold">{formatCurrency(savingsMaturity(savingsModalItem))}</span></div>
+              <div className="flex justify-between"><span>만기금액</span><span className="text-emerald-300 font-bold">{formatCurrency(savingsMaturity(savingsModalItem))}</span></div>
             )}
+            <div className="flex justify-between border-t border-gray-700/50 pt-1"><span>총 투자금액</span><span className="text-blue-300 font-bold">{formatCurrency(savingsModalItem.investAmount)}</span></div>
+            <div className="flex justify-between"><span>예상 평가금액(현재)</span><span className="text-white font-bold">{formatCurrency(savingsModalItem.evalAmount)}</span></div>
+            <div className="flex justify-between"><span>차익</span><span className={`font-bold ${cleanNum(savingsModalItem.profit) >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{formatCurrency(savingsModalItem.profit)}</span></div>
           </div>
           {/* 적립 내역 */}
           {(savingsModalItem.deposits || []).length > 0 && (
             <div className="mb-3">
-              <div className="text-[11px] text-gray-400 mb-1">적립 내역 ({savingsModalItem.deposits.length}건)</div>
+              <div className="text-[11px] text-gray-400 mb-1">적립 내역 ({savingsModalItem.deposits.length}건) · 입금액 <span className="text-emerald-300/80">(현재 평가금)</span></div>
               <div className="max-h-[150px] overflow-y-auto space-y-1 pr-0.5">
-                {savingsModalItem.deposits.map(d => (
+                {savingsModalItem.deposits.map(d => {
+                  const depEval = savingsDepositEval(savingsModalItem, d);
+                  return (
                   <div key={d.id} className="flex items-center justify-between bg-gray-900/40 rounded px-2.5 py-1.5 text-[12px]">
                     <span className="text-gray-300 font-mono">{d.date || '날짜미정'}</span>
-                    <span className="text-blue-200 font-bold">{formatCurrency(d.amount)}</span>
-                    <button onClick={() => onRemoveSavingsDeposit(savingsModalItem.id, d.id)} className="text-gray-500 hover:text-red-300 transition-colors" title="이 적립 삭제"><Trash2 size={12} /></button>
+                    <span className="text-right">
+                      <span className="text-blue-200 font-bold">{formatCurrency(d.amount)}</span>
+                      <span className="text-emerald-300/80 ml-1">({depEval > 0 ? formatCurrency(depEval) : '예정'})</span>
+                    </span>
+                    <button onClick={() => onRemoveSavingsDeposit(savingsModalItem.id, d.id)} className="text-gray-500 hover:text-red-300 transition-colors ml-1 shrink-0" title="이 적립 삭제"><Trash2 size={12} /></button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
