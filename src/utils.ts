@@ -212,21 +212,25 @@ export const savingsInvest = (item) =>
     ? item.deposits.reduce((s, d) => s + cleanNum(d?.amount), 0)
     : cleanNum(item?.investAmount);
 
-export const savingsEval = (item) => {
+// asOf(YYYY-MM-DD): 해당 날짜 기준 누적값. 미지정 시 오늘. 날짜별 history 백필에서 과거 평가액을
+// 그 날짜 기준으로 산출하기 위해 사용(라이브 합산 경로는 asOf 미전달 → 오늘로 동작).
+export const savingsEval = (item, asOf) => {
   const rate = cleanNum(item?.annualRate) / 100;
   const deposits = (Array.isArray(item?.deposits) && item.deposits.length)
     ? item.deposits
     : (cleanNum(item?.investAmount) > 0 ? [{ date: item?.startDate, amount: cleanNum(item.investAmount) }] : []);
   if (!deposits.length) return 0;
   const endTs = item?.endDate ? new Date(item.endDate).getTime() : null;
-  const nowTs = Date.now();
-  const asOfTs = (endTs != null && !isNaN(endTs) && endTs < nowTs) ? endTs : nowTs;
+  const asOfDateTs = asOf ? new Date(asOf).getTime() : NaN;
+  const upperTs = !isNaN(asOfDateTs) ? Math.min(asOfDateTs, Date.now()) : Date.now();
+  const asOfTs = (endTs != null && !isNaN(endTs) && endTs < upperTs) ? endTs : upperTs;
   let evl = 0;
   for (const d of deposits) {
     const amt = cleanNum(d?.amount);
     if (amt <= 0) continue;
     const startTs = d?.date ? new Date(d.date).getTime()
       : (item?.startDate ? new Date(item.startDate).getTime() : asOfTs);
+    if (!isNaN(startTs) && startTs > asOfTs) continue; // 해당 날짜 이후 적립분은 그 시점에 아직 미입금
     const days = (isNaN(startTs)) ? 0 : Math.max(0, (asOfTs - startTs) / 86400000);
     evl += amt * (1 + rate * days / 365);
   }
@@ -446,8 +450,8 @@ export const calcPortfolioEvalDetail = (
       return;
     }
     if (item.type === 'savings') {
-      // 예적금: 입력된 연이율로 누적한 평가액 (날짜 무관 — 단리 누적값)
-      const evl = savingsEval(item) * fxRate;
+      // 예적금: 연이율 단리 누적 평가액 (해당 날짜 기준 — 과거 백필 시 그날까지만 누적)
+      const evl = savingsEval(item, date) * fxRate;
       if (evl > 0) { totalEval += evl; hasAnyPrice = true; }
       detail.push({ id: item.id, type: 'savings', code: '', name: item.name || '예적금', quantity: null, price: null, source: 'savings', eval: evl });
       return;

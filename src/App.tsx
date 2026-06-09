@@ -480,6 +480,10 @@ export default function App() {
     handleDeleteStock,
     handleAddStock,
     handleAddFund,
+    handleAddSavings,
+    updateSavingsField,
+    addSavingsDeposit,
+    removeSavingsDeposit,
     updateDividendHistory,
     updatePortfolioDividendHistory,
     updatePortfolioActualDividend,
@@ -966,6 +970,7 @@ export default function App() {
           const basePrin = effective.value != null ? effective.value : fallbackPrin;
           portfolio.forEach(item => {
             if (item.type === 'deposit') { trueEvalAtDate += cleanNum(item.depositAmount); }
+            else if (item.type === 'savings') { trueEvalAtDate += savingsEval(item, date); }
             else if (item.code && stockHistoryMap[item.code]) {
               const priceAtDate = getClosestValue(stockHistoryMap[item.code], date);
               if (priceAtDate) { trueEvalAtDate += priceAtDate * item.quantity; hasTrueData = true; }
@@ -1606,7 +1611,7 @@ export default function App() {
         id: p.id, name: p.name,
         startDate: p.startDate || p.portfolioStartDate,
         portfolioStartDate: p.portfolioStartDate || p.startDate,
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride })),
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
@@ -2186,6 +2191,11 @@ export default function App() {
             onDelete={handleDeleteStock}
             onAddStock={handleAddStock}
             onAddFund={handleAddFund}
+            onAddSavings={handleAddSavings}
+            onUpdateSavingsField={updateSavingsField}
+            onAddSavingsDeposit={addSavingsDeposit}
+            onRemoveSavingsDeposit={removeSavingsDeposit}
+            showSavings={isDcIrpAccount}
             stockFetchStatus={stockFetchStatus}
             onSingleRefresh={handleSingleStockRefresh}
             isOverseas={activePortfolioAccountType === 'overseas'}

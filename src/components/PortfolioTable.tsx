@@ -1,12 +1,14 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { Trash2, RefreshCw, Plus } from 'lucide-react';
+import { Trash2, RefreshCw, Plus, Calendar } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG, MARK_STRIP_BG } from '../constants';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber, formatFundPrice,
-  formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav
+  formatChangeRate, formatSavingsDailyRate, formatSavingsPeriod,
+  handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav
 } from '../utils';
+import CustomDatePicker from './CustomDatePicker';
 
 const formatUSD = (n) => {
   const v = cleanNum(n);
@@ -172,13 +174,23 @@ const CategoryCell = ({ item, portfolio, showAssetClass, onUpdate }) => {
 // 계좌 타입별 기능 게이팅 (혼동/회귀 방지 — CLAUDE.md "계좌 타입별 D/S·펀드 게이팅" 참조)
 //  · isRetirement   : 펀드 행 + "펀드 추가" 버튼 — 퇴직연금(DC/IRP) + 개인연금(pension)
 //  · showAssetClass : 위험/안전(D/S) 자산 구분 배지 — 퇴직연금(DC/IRP) 전용 (개인연금 제외)
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {} }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {} }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
   const [fundModal, setFundModal] = useState(null);
   const [modalAddInvest, setModalAddInvest] = useState('');
   const [modalEvalAfter, setModalEvalAfter] = useState('');
+  const [savingsModalId, setSavingsModalId] = useState(null); // 예적금 적립 모달 대상 id
+  const [savingsAddDate, setSavingsAddDate] = useState('');
+  const [savingsAddAmount, setSavingsAddAmount] = useState('');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const openSavingsModal = (item) => {
+    setSavingsModalId(item.id);
+    setSavingsAddDate(item.startDate || todayStr);
+    setSavingsAddAmount('');
+  };
+  const closeSavingsModal = () => { setSavingsModalId(null); setSavingsAddDate(''); setSavingsAddAmount(''); };
   const [editingInvestId, setEditingInvestId] = useState(null);
   const [editingInvestVal, setEditingInvestVal] = useState('');
   const [editingCell, setEditingCell] = useState(null);
@@ -210,6 +222,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const stockItems = portfolio.filter(p => p.type === 'stock');
   const depositItems = portfolio.filter(p => p.type === 'deposit');
   const fundItems = portfolio.filter(p => p.type === 'fund');
+  const savingsItems = portfolio.filter(p => p.type === 'savings');
 
   const retirementStats = showRetirementStats ? (() => {
     const dangerEval = stockItems
@@ -221,11 +234,15 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
     const depositEval = depositItems.reduce((sum, p) => sum + (cleanNum(p.evalAmount) || cleanNum(p.depositAmount) || 0), 0);
     const fundDangerEval = fundItems.filter(p => (p.assetClass ?? 'S') === 'D').reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
     const fundSafeEval = fundItems.filter(p => (p.assetClass ?? 'S') === 'S').reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
-    const totalEval = dangerEval + fundDangerEval + safeStockEval + fundSafeEval + depositEval;
-    const dRatio = totalEval > 0 ? (dangerEval + fundDangerEval) / totalEval * 100 : 0;
-    const sRatio = totalEval > 0 ? (safeStockEval + fundSafeEval + depositEval) / totalEval * 100 : 0;
+    const savingsDangerEval = savingsItems.filter(p => (p.assetClass ?? 'S') === 'D').reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
+    const savingsSafeEval = savingsItems.filter(p => (p.assetClass ?? 'S') === 'S').reduce((sum, p) => sum + cleanNum(p.evalAmount), 0);
+    const totalEval = dangerEval + fundDangerEval + savingsDangerEval + safeStockEval + fundSafeEval + savingsSafeEval + depositEval;
+    const dRatio = totalEval > 0 ? (dangerEval + fundDangerEval + savingsDangerEval) / totalEval * 100 : 0;
+    const sRatio = totalEval > 0 ? (safeStockEval + fundSafeEval + savingsSafeEval + depositEval) / totalEval * 100 : 0;
     return { dRatio, sRatio, totalEval };
   })() : null;
+
+  const savingsModalItem = savingsModalId ? portfolio.find(p => p.id === savingsModalId && p.type === 'savings') : null;
 
   const modalAddInvestNum = cleanNum(modalAddInvest);
   const modalEvalAfterNum = cleanNum(modalEvalAfter);
@@ -400,6 +417,58 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               setFundModal(null); setModalAddInvest(''); setModalEvalAfter('');
             }} className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-bold transition-colors" title={modalMode === 'idle' ? '추가투자금액 또는 평가금액을 입력하세요' : ''}>적용</button>
           </div>
+        </div>
+      </div>
+    )}
+    {savingsModalItem && (
+      <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center" onClick={closeSavingsModal}>
+        <div className="bg-[#1e293b] rounded-xl border border-emerald-600/50 shadow-2xl p-5 w-[420px] max-w-[94vw]" onClick={e => e.stopPropagation()}>
+          <h3 className="text-emerald-300 font-bold text-sm mb-3 flex items-center gap-2">
+            🏦 예적금 적립{savingsModalItem.name && <span className="text-gray-400 font-normal">— {savingsModalItem.name}</span>}
+          </h3>
+          {/* 요약 */}
+          <div className="text-[12px] text-gray-400 bg-gray-900/60 rounded-lg px-3 py-2.5 mb-3 space-y-1">
+            <div className="flex justify-between"><span>연이율</span><span className="text-emerald-200 font-bold">{cleanNum(savingsModalItem.annualRate)}%</span></div>
+            {(savingsModalItem.startDate || savingsModalItem.endDate) && (
+              <div className="flex justify-between"><span>투자기간</span><span className="text-emerald-200">{formatSavingsPeriod(savingsModalItem.startDate, savingsModalItem.endDate)}</span></div>
+            )}
+            <div className="flex justify-between border-t border-gray-700/50 pt-1"><span>총 투자금액</span><span className="text-blue-300 font-bold">{formatCurrency(savingsModalItem.investAmount)}</span></div>
+            <div className="flex justify-between"><span>예상 평가금액</span><span className="text-white font-bold">{formatCurrency(savingsModalItem.evalAmount)}</span></div>
+            <div className="flex justify-between"><span>차익</span><span className={`font-bold ${cleanNum(savingsModalItem.profit) >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{formatCurrency(savingsModalItem.profit)}</span></div>
+          </div>
+          {/* 적립 내역 */}
+          {(savingsModalItem.deposits || []).length > 0 && (
+            <div className="mb-3">
+              <div className="text-[11px] text-gray-400 mb-1">적립 내역 ({savingsModalItem.deposits.length}건)</div>
+              <div className="max-h-[150px] overflow-y-auto space-y-1 pr-0.5">
+                {savingsModalItem.deposits.map(d => (
+                  <div key={d.id} className="flex items-center justify-between bg-gray-900/40 rounded px-2.5 py-1.5 text-[12px]">
+                    <span className="text-gray-300 font-mono">{d.date || '날짜미정'}</span>
+                    <span className="text-blue-200 font-bold">{formatCurrency(d.amount)}</span>
+                    <button onClick={() => onRemoveSavingsDeposit(savingsModalItem.id, d.id)} className="text-gray-500 hover:text-red-300 transition-colors" title="이 적립 삭제"><Trash2 size={12} /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* 적립 추가 폼 */}
+          <div className="bg-gray-900/40 border border-emerald-700/30 rounded-lg px-3 py-2.5 mb-3 space-y-2">
+            <div className="text-emerald-300 font-bold text-[11px]">적립 입금 추가</div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 bg-gray-900 border border-gray-600 rounded-lg px-2 py-2 shrink-0">
+                <Calendar size={12} className="text-gray-400" />
+                <CustomDatePicker value={savingsAddDate} onChange={setSavingsAddDate} placeholder="입금일" />
+              </div>
+              <input type="text" inputMode="numeric" className="flex-1 min-w-0 bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-blue-200 font-bold text-sm outline-none focus:border-emerald-500 caret-blue-400" value={savingsAddAmount} placeholder="예: 1,000,000" onFocus={e => e.target.select()}
+                onChange={e => setSavingsAddAmount(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && cleanNum(savingsAddAmount) > 0) { onAddSavingsDeposit(savingsModalItem.id, savingsAddDate || todayStr, savingsAddAmount); setSavingsAddAmount(''); } }} />
+              <button disabled={cleanNum(savingsAddAmount) <= 0} onClick={() => { onAddSavingsDeposit(savingsModalItem.id, savingsAddDate || todayStr, savingsAddAmount); setSavingsAddAmount(''); }} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-bold transition-colors shrink-0">추가</button>
+            </div>
+            {cleanNum(savingsAddAmount) > 0 && (
+              <div className="text-[10px] text-gray-500">{savingsAddDate || todayStr} 에 {formatCurrency(cleanNum(savingsAddAmount))} 적립 → 가입일부터 연이율 단리 누적</div>
+            )}
+          </div>
+          <button onClick={closeSavingsModal} className="w-full py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">닫기</button>
         </div>
       </div>
     )}
@@ -803,6 +872,145 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                 <td colSpan={totalColCount} className="py-1.5 text-center">
                   <button onClick={onAddFund} className="text-indigo-500 hover:text-indigo-300 text-xs flex items-center gap-1 mx-auto transition-colors px-3 py-1 rounded hover:bg-indigo-900/30">
                     <Plus size={12} /> 펀드 추가
+                  </button>
+                </td>
+              </tr>
+            )}
+            {/* ── 예적금(savings) 행 — 퇴직연금(dc-irp) 전용 ── */}
+            {showSavings && savingsItems.map((item) => {
+              const assetClass = item.assetClass ?? 'S';
+              const markColor = markedPortfolioRows[item.id];
+              const rowMarkClass = markColor ? MARK_ROW_BG[markColor] : 'bg-emerald-950/20 hover:bg-emerald-900/20';
+              const stickyMarkClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-emerald-950/50 group-hover:bg-emerald-900/30';
+              const investAmt = cleanNum(item.investAmount);
+              const periodLabel = formatSavingsPeriod(item.startDate, item.endDate);
+              return (
+                <tr key={item.id} className={`group transition-colors border-b border-emerald-800/30 ${rowMarkClass}`}>
+                  {/* 색상 스트립 */}
+                  <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
+                    <button
+                      title="클릭하여 행 색상 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                      className="block w-full cursor-pointer border-0 outline-none rounded"
+                      style={{margin:'6px 0', minHeight:'24px', backgroundColor: markColor ? MARK_STRIP_BG[markColor] : 'transparent'}}
+                      onClick={() => onToggleMarkedPortfolioRow(item.id)}
+                    />
+                  </td>
+                  {/* 구분: 예적금 배지 + S/D 토글 */}
+                  {!H('category') && (
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                      <div className="flex flex-row h-full items-stretch">
+                        <span className="flex-1 py-3 px-1 text-center text-xs font-bold text-emerald-300">예적금</span>
+                        {showAssetClass && (
+                          <>
+                            <div className="w-px bg-gray-600/60 self-stretch" />
+                            <span
+                              className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
+                              onClick={() => onUpdateSavingsField(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                              title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
+                            >{assetClass}</span>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  )}
+                  {/* 종목명 */}
+                  {!H('name') && (
+                    <td className={`p-0 border-r border-gray-600 sticky left-0 z-10 ${stickyMarkClass} [box-shadow:2px_0_6px_rgba(0,0,0,0.6)] ${CELL_FOCUS}`}>
+                      <input type="text" className={`${inp} text-center w-full px-2 text-emerald-200 caret-blue-400`} value={item.name} placeholder="예적금명" onFocus={e => e.target.select()} onChange={e => onUpdateSavingsField(item.id, 'name', e.target.value)} />
+                    </td>
+                  )}
+                  {/* 코드 칸 → 연이율 */}
+                  {!H('code') && (
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                      <div className="flex items-center justify-center gap-0.5 px-1">
+                        <span className="text-emerald-400 text-[11px]">연</span>
+                        <input type="text" inputMode="decimal" className={`${inp} text-right text-emerald-300 text-[12px] w-[40px] caret-blue-400`} value={item.annualRate ? String(item.annualRate) : ''} placeholder="0" onFocus={e => e.target.select()} onChange={e => { const v = e.target.value; if (v === '' || /^[0-9]*\.?[0-9]*$/.test(v)) onUpdateSavingsField(item.id, 'annualRate', v); }} />
+                        <span className="text-emerald-400 text-[11px]">%</span>
+                      </div>
+                    </td>
+                  )}
+                  {/* 등락률 칸 → 연이율 1일 환산 */}
+                  {!H('changeRate') && (
+                    <td className={`${td} text-center font-bold text-red-400 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav} title="연이율 1일 환산 수익률">
+                      {formatSavingsDailyRate(item.annualRate)}
+                    </td>
+                  )}
+                  {/* 현재가 칸 → 투자기간 (달력) */}
+                  {!H('currentPrice') && (
+                    <td className="p-0 border-r border-gray-600">
+                      <div className="flex flex-col items-center justify-center gap-0.5 py-2 px-1.5 min-w-[120px]">
+                        <span className="text-emerald-200 text-[11px] font-bold text-center leading-tight">
+                          {periodLabel || <span className="text-gray-600">기간 미설정</span>}
+                        </span>
+                        <div className="flex items-center gap-1.5 text-[10px]">
+                          <CustomDatePicker value={item.startDate} onChange={v => onUpdateSavingsField(item.id, 'startDate', v)}
+                            trigger={<button className="flex items-center gap-0.5 text-gray-400 hover:text-emerald-300 transition-colors" title="시작일 선택"><Calendar size={11} />{!item.startDate && '시작'}</button>} />
+                          <span className="text-gray-600">~</span>
+                          <CustomDatePicker value={item.endDate} onChange={v => onUpdateSavingsField(item.id, 'endDate', v)} align="right"
+                            trigger={<button className="flex items-center gap-0.5 text-gray-400 hover:text-emerald-300 transition-colors" title="종료일 선택"><Calendar size={11} />{!item.endDate && '종료'}</button>} />
+                        </div>
+                      </div>
+                    </td>
+                  )}
+                  {/* 구매단가 칸 → 미사용 */}
+                  {!H('purchasePrice') && (
+                    <td className={`${td} text-center text-gray-600 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>-</td>
+                  )}
+                  {/* 보유수량 칸 → 미사용 */}
+                  {!H('quantity') && (
+                    <td className={`${td} text-center text-gray-600 bg-blue-900/10 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>-</td>
+                  )}
+                  {/* 투자금액 → 적립 모달 */}
+                  {!H('investAmount') && (
+                    <td className={`${td} bg-blue-900/10 text-right ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>
+                      {investAmt > 0
+                        ? <button className="text-blue-200 font-bold hover:text-blue-100 hover:underline" onClick={() => openSavingsModal(item)} title="클릭하여 적립 내역 관리">{formatCurrency(investAmt)}</button>
+                        : <span className="text-orange-400 text-[11px] cursor-pointer hover:text-orange-300" onClick={() => openSavingsModal(item)} title="클릭하여 적립 입력">미설정</span>}
+                    </td>
+                  )}
+                  {/* 투자비중 */}
+                  {!H('investRatio') && (
+                    <td className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.investRatio)}</td>
+                  )}
+                  {/* 평가금액 */}
+                  {!H('evalAmount') && (
+                    <td className={`${td} text-white font-bold text-right bg-yellow-900/20 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.evalAmount)}</td>
+                  )}
+                  {/* 평가비중 */}
+                  {!H('evalRatio') && (
+                    <td className={`${td} text-yellow-600 bg-yellow-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.evalRatio)}</td>
+                  )}
+                  {/* 수익률 */}
+                  {!H('returnRate') && (
+                    <td className={`${td} text-center font-bold ${item.returnRate > 0 ? 'text-red-400' : item.returnRate < 0 ? 'text-blue-400' : 'text-gray-500'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.returnRate)}</td>
+                  )}
+                  {/* 차익 */}
+                  {!H('profit') && (
+                    <td className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : item.profit < 0 ? 'text-blue-400' : 'text-gray-500'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.profit)}</td>
+                  )}
+                  {/* 액션: 적립 + 삭제 */}
+                  <td className="p-0 align-middle">
+                    <div className="flex items-stretch justify-center h-full min-h-[36px]">
+                      <button
+                        onClick={() => openSavingsModal(item)}
+                        className="flex-1 flex items-center justify-center text-emerald-400 hover:text-emerald-100 hover:bg-emerald-600/40 border-r border-gray-600/60 transition-colors"
+                        title="적립 입금"
+                      ><Plus size={14} /></button>
+                      <button
+                        onClick={() => onDelete(item.id)}
+                        className="flex-1 flex items-center justify-center text-gray-500 hover:text-red-200 hover:bg-red-600/40 transition-colors"
+                        title="예적금 삭제"
+                      ><Trash2 size={13} /></button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {showSavings && (
+              <tr className="border-b border-emerald-800/20 bg-emerald-950/10">
+                <td colSpan={totalColCount} className="py-1.5 text-center">
+                  <button onClick={onAddSavings} className="text-emerald-500 hover:text-emerald-300 text-xs flex items-center gap-1 mx-auto transition-colors px-3 py-1 rounded hover:bg-emerald-900/30">
+                    <Plus size={12} /> 예적금 추가
                   </button>
                 </td>
               </tr>

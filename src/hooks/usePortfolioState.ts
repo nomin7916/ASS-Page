@@ -543,7 +543,8 @@ export function usePortfolioState({
   const updateSavingsField = (id, field, value) =>
     setPortfolio(prev => prev.map(p => {
       if (p.id !== id) return p;
-      if (field === 'name' || field === 'startDate' || field === 'endDate' || field === 'assetClass')
+      // annualRate는 원시 문자열로 저장(소수점 '3.' 입력 보존) — 소비처(savingsEval/표시)에서 cleanNum.
+      if (field === 'name' || field === 'startDate' || field === 'endDate' || field === 'assetClass' || field === 'annualRate')
         return { ...p, [field]: value };
       return { ...p, [field]: cleanNum(value) };
     }));

@@ -42,6 +42,7 @@ const SOURCE_BADGE = {
   none: { label: '⚪ 데이터없음', cls: 'text-gray-500' },
   approximate: { label: '🟡 근사값', cls: 'text-amber-400' },
   deposit: { label: '예수금', cls: 'text-sky-300' },
+  savings: { label: '🏦 예적금', cls: 'text-emerald-300' },
   currentPrice: { label: '⚪ 폴백', cls: 'text-gray-500' },
   evalAmount: { label: '⚪ 폴백', cls: 'text-gray-500' },
 };
@@ -147,6 +148,7 @@ export default function VerifyEvalModal({
       item,
       isDeposit: item.type === 'deposit',
       isFund: item.type === 'fund',
+      isSavings: item.type === 'savings',
       name: item.type === 'deposit' ? '예수금' : (() => {
         const code = item.code || '';
         const codeStripped = code.replace(/^MA:/i, '');
@@ -430,7 +432,7 @@ export default function VerifyEvalModal({
                     <tr key={idx} className="border-t border-gray-700/60 hover:bg-gray-800/40">
                       <td className={`py-1.5 ${cellPad} text-left text-gray-200`}>{r.name}</td>
                       <td className={`py-1.5 ${cellPad} text-gray-300`}>
-                        {r.isDeposit ? '—' : editQtyIdx === idx ? (
+                        {r.isDeposit || r.isSavings ? '—' : editQtyIdx === idx ? (
                           <input
                             autoFocus
                             className="w-[72px] bg-gray-900 border border-blue-500 rounded px-1 py-0.5 text-right text-gray-100 outline-none"
@@ -451,7 +453,7 @@ export default function VerifyEvalModal({
                         )}
                       </td>
                       <td className={`py-1.5 ${cellPad} text-gray-300`}>
-                        {r.isDeposit ? '—' : editPriceIdx === idx ? (
+                        {r.isDeposit || r.isSavings ? '—' : editPriceIdx === idx ? (
                           <input
                             autoFocus
                             className="w-[84px] bg-gray-900 border border-blue-500 rounded px-1 py-0.5 text-right text-gray-100 outline-none"
@@ -493,7 +495,7 @@ export default function VerifyEvalModal({
                           : formatCurrency(r.evalAmt)}
                       </td>
                       <td className="py-1.5 px-1 text-center">
-                        {!r.isDeposit && (
+                        {!r.isDeposit && !r.isSavings && (
                           <button className="text-gray-600 hover:text-red-400" title="이 날짜에서 종목 제거" onClick={() => removeRow(idx)}>
                             <Trash2 size={11} />
                           </button>

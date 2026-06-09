@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import LadderBuyModal from './LadderBuyModal';
@@ -261,8 +261,11 @@ export default function RebalancingPanel({
                   {(() => {
                     if (activePortfolioAccountType !== 'dc-irp') return null;
                     const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-                    const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
-                    const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
+                    const savingsItems = portfolio.filter(p => p.type === 'savings');
+                    const savingsD = savingsItems.filter(p => getAssetClass(p) === 'D').reduce((s, p) => s + savingsEval(p), 0);
+                    const savingsS = savingsItems.filter(p => getAssetClass(p) === 'S').reduce((s, p) => s + savingsEval(p), 0);
+                    const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0) + savingsD;
+                    const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval + savingsS;
                     const projTotal = projD + projS;
                     if (projTotal <= 0) return null;
                     const projDSData = [{ name: '위험', value: projD }, { name: '안전', value: projS }];
@@ -1121,8 +1124,11 @@ export default function RebalancingPanel({
                 </tr>
                 {showRetirementStats && (() => {
                   const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-                  const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
-                  const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
+                  const savingsItems = portfolio.filter(p => p.type === 'savings');
+                  const savingsD = savingsItems.filter(p => getAssetClass(p) === 'D').reduce((s, p) => s + savingsEval(p), 0);
+                  const savingsS = savingsItems.filter(p => getAssetClass(p) === 'S').reduce((s, p) => s + savingsEval(p), 0);
+                  const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0) + savingsD;
+                  const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval + savingsS;
                   const projTotal = projD + projS;
                   const projDRatio = projTotal > 0 ? projD / projTotal * 100 : 0;
                   const projSRatio = projTotal > 0 ? projS / projTotal * 100 : 0;
