@@ -82,6 +82,28 @@ src/
   `showRetirementStats`로 이미 dc-irp 전용 게이팅됨 (별도 `isRetirement` prop 없음).
 - 플래그 정의 위치: `App.tsx` `isRetirementAccount` / `isDcIrpAccount` 두 줄. 조건 변경 시 이 두 줄만 수정.
 
+### 예적금(savings) 항목 — 퇴직연금(dc-irp) 전용 (⚠️ 펀드/예수금과 혼동 금지)
+
+원금보장형 예적금(예: "kb손해보험 이율보증형 3년")을 위한 **별도 항목 타입 `type:'savings'`**.
+`type:'deposit'`(예수금/CASH 행)와 **완전 별개** — 절대 합치지 말 것. "펀드 추가" 아래
+"예적금 추가" 버튼으로 추가하며 **`dc-irp` 전용**(펀드는 dc-irp+pension, 예적금은 dc-irp만).
+→ `App.tsx` `isDcIrpAccount` → `PortfolioTable` prop `showSavings`.
+
+- **데이터 모델**: `{ type:'savings', category:'예적금', assetClass:'S'|'D'(기본 S), name,
+  annualRate(연이율 %, 원시 문자열 — 소수 입력 보존), startDate/endDate(투자기간),
+  investAmount(=Σ deposits), evalAmount(저장 안 함 — 산출값), deposits:[{id,date,amount}] }`.
+- **평가액 = `savingsEval(item, asOf?)`** (`utils.ts`): 각 적립(deposit) 트랜치를 그 날짜부터
+  만기/asOf까지 **연이율 단리**로 누적. `asOf` 미전달 시 오늘. 과거 백필은 `asOf=date`로 그날
+  기준 누적(미래 적립분 제외). **evalAmount를 item에 저장하지 않으므로** 모든 합산 경로가
+  `savingsEval`을 직접 호출해야 함(usePortfolioData/useStockData/useIntegratedData/
+  calcPortfolioEvalDetail/App auto-history·차트/RebalancingPanel). 투자원금=`savingsInvest`.
+- **CRUD**: `usePortfolioState` — `handleAddSavings`, `updateSavingsField`(annualRate는 원시
+  문자열 저장), `addSavingsDeposit`/`removeSavingsDeposit`(적립 모달, investAmount 재계산).
+- **회귀 주의**: ① Drive 변경감지 키(`App.tsx` `portfolioStructureKey`)에 savings 고유 필드
+  (annualRate/startDate/endDate/assetClass/deposits)를 포함해야 단독 수정이 저장됨. ② 정렬
+  (`handleSort`)·스냅샷(`snapshotItemsFromPortfolio`)에서 savings 보존. ③ D/S 합산(PortfolioTable
+  retirementStats·RebalancingPanel projD/S)에 savings 포함(원금보장=안전 S 기본).
+
 ### 평가액 history 날짜 중복 방지 (⚠️ 회귀 주의 — 절대 raw append 금지)
 
 각 계좌 `p.history`는 **날짜당 1건** 불변식을 유지한다. history에 레코드를 추가하는 모든
@@ -132,6 +154,7 @@ src/
 `updatePortfolioColor`, `resetAllPortfolioColors`, `updateSettingsForType`,
 `updatePortfolioMemo`, `movePortfolio`, `handleUpdate`, `handleDeleteStock`,
 `handleAddStock`, `handleAddFund`,
+`handleAddSavings`, `updateSavingsField`, `addSavingsDeposit`, `removeSavingsDeposit` (예적금, dc-irp 전용),
 `updateDividendHistory`, `updatePortfolioDividendHistory`, `updatePortfolioActualDividend`,
 `updateTaxBasePurchases`, `updateTaxBaseSales`, `updateTaxBaseExPrice`, `updateTaxBaseAvgPrice` (한국 ETF 과표 입력)
 
