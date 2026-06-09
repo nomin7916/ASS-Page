@@ -60,7 +60,7 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal, dedupeHistoryByDate
+  computeEffectivePrincipal, dedupeHistoryByDate, savingsEval
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -1204,6 +1204,7 @@ export default function App() {
     setPortfolio(prev => {
       const stocks = [...prev.filter(p => p.type === 'stock')];
       const funds = prev.filter(p => p.type === 'fund');
+      const savings = prev.filter(p => p.type === 'savings');
       const deposits = prev.filter(p => p.type === 'deposit');
       let tInv = 0, tEvl = 0;
       prev.forEach(item => {
@@ -1225,7 +1226,7 @@ export default function App() {
         if (typeof vA === 'string') return vA.localeCompare(vB) * dir;
         return (vA - vB) * dir;
       });
-      return [...stocks, ...funds, ...deposits];
+      return [...stocks, ...funds, ...savings, ...deposits];
     });
   };
 
@@ -1793,6 +1794,8 @@ export default function App() {
           ? item.prevNavPrice
           : cleanNum(item.currentPrice);
         targetEval += qty > 0 && price > 0 ? qty * price : cleanNum(item.evalAmount);
+      } else if (item.type === 'savings') {
+        targetEval += savingsEval(item);
       } else {
         targetEval += cleanNum(item.currentPrice) * cleanNum(item.quantity);
       }

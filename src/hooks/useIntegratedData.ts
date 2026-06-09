@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest } from '../utils';
 import { getEffectiveDate } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -75,6 +75,10 @@ export function useIntegratedData({
           const evl = qty > 0 && price > 0 ? qty * price * summaryFxRate : cleanNum(item.evalAmount) * summaryFxRate;
           totalEval += evl;
           cats['FUND'] = (cats['FUND'] || 0) + evl;
+        } else if (item.type === 'savings') {
+          const evl = savingsEval(item) * summaryFxRate;
+          totalEval += evl;
+          cats['예적금'] = (cats['예적금'] || 0) + evl;
         } else {
           const evl = cleanNum(item.currentPrice) * cleanNum(item.quantity) * summaryFxRate;
           totalEval += evl;
@@ -386,6 +390,14 @@ export function useIntegratedData({
           const cost = cleanNum(item.investAmount) * fxRate;
           const key = item.name || item.code || 'FUND';
           if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: 'FUND', code: item.code || '' };
+          holdingsMap[key].value += evl;
+          holdingsMap[key].cost += cost;
+        } else if (item.type === 'savings') {
+          const evl = savingsEval(item) * fxRate;
+          if (evl <= 0) return;
+          const cost = savingsInvest(item) * fxRate;
+          const key = item.name || '예적금';
+          if (!holdingsMap[key]) holdingsMap[key] = { value: 0, cost: 0, category: '예적금', code: '' };
           holdingsMap[key].value += evl;
           holdingsMap[key].cost += cost;
         } else {

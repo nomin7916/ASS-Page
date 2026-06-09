@@ -203,6 +203,60 @@ export const formatChangeRate = (n) => {
   const s = cleanNum(n);
   return (s > 0 ? '▲' : s < 0 ? '▼' : '') + Math.abs(s).toFixed(2) + '%';
 };
+
+// ── 예적금(savings) 계산 헬퍼 ──
+// 예적금 항목은 입금(deposits) 트랜치별로 연이율 단리 이자를 가입일부터 만기(또는 오늘)까지 누적한다.
+// deposits: [{ id, date, amount }] — 없으면 investAmount를 시작일 기준 단일 원금으로 폴백.
+export const savingsInvest = (item) =>
+  (Array.isArray(item?.deposits) && item.deposits.length)
+    ? item.deposits.reduce((s, d) => s + cleanNum(d?.amount), 0)
+    : cleanNum(item?.investAmount);
+
+export const savingsEval = (item) => {
+  const rate = cleanNum(item?.annualRate) / 100;
+  const deposits = (Array.isArray(item?.deposits) && item.deposits.length)
+    ? item.deposits
+    : (cleanNum(item?.investAmount) > 0 ? [{ date: item?.startDate, amount: cleanNum(item.investAmount) }] : []);
+  if (!deposits.length) return 0;
+  const endTs = item?.endDate ? new Date(item.endDate).getTime() : null;
+  const nowTs = Date.now();
+  const asOfTs = (endTs != null && !isNaN(endTs) && endTs < nowTs) ? endTs : nowTs;
+  let evl = 0;
+  for (const d of deposits) {
+    const amt = cleanNum(d?.amount);
+    if (amt <= 0) continue;
+    const startTs = d?.date ? new Date(d.date).getTime()
+      : (item?.startDate ? new Date(item.startDate).getTime() : asOfTs);
+    const days = (isNaN(startTs)) ? 0 : Math.max(0, (asOfTs - startTs) / 86400000);
+    evl += amt * (1 + rate * days / 365);
+  }
+  return Math.round(evl);
+};
+
+// 등락률 칸: 연이율을 1일치로 환산한 일일 수익률(%) 표시
+export const formatSavingsDailyRate = (annualRate) => {
+  const r = cleanNum(annualRate);
+  if (r <= 0) return '-';
+  return '▲' + (r / 365).toFixed(4) + '%';
+};
+
+// 투자기간 표시: "2년 3개월, 26/03~28/03"
+export const formatSavingsPeriod = (startDate, endDate) => {
+  if (!startDate && !endDate) return '';
+  const fmt = (s) => { const p = (s || '').split('-'); return p.length >= 2 ? `${p[0].slice(2)}/${p[1]}` : ''; };
+  const range = `${fmt(startDate)}~${fmt(endDate)}`;
+  if (startDate && endDate) {
+    const ms = new Date(endDate).getTime() - new Date(startDate).getTime();
+    if (!isNaN(ms) && ms > 0) {
+      const totalMonths = Math.round(ms / 86400000 / 30.4375);
+      const y = Math.floor(totalMonths / 12);
+      const m = totalMonths % 12;
+      const dur = y > 0 ? (m > 0 ? `${y}년 ${m}개월` : `${y}년`) : `${m}개월`;
+      return `${dur}, ${range}`;
+    }
+  }
+  return range;
+};
 export const formatShortDate = (s) => {
   if (!s) return '';
   const p = s.split('-');
@@ -391,6 +445,13 @@ export const calcPortfolioEvalDetail = (
       detail.push({ id: item.id, type: 'fund', code: item.code || '', name: item.name || '', quantity: fQty, price: histPrice || (usedSource === 'currentPrice' ? cleanNum(item.currentPrice) : null), source: usedSource, eval: evl });
       return;
     }
+    if (item.type === 'savings') {
+      // 예적금: 입력된 연이율로 누적한 평가액 (날짜 무관 — 단리 누적값)
+      const evl = savingsEval(item) * fxRate;
+      if (evl > 0) { totalEval += evl; hasAnyPrice = true; }
+      detail.push({ id: item.id, type: 'savings', code: '', name: item.name || '예적금', quantity: null, price: null, source: 'savings', eval: evl });
+      return;
+    }
     const qty = cleanNum(item.quantity);
     if (!qty || qty <= 0) return;
     const { price, source } = resolvePriceForItem(item, date, stockHistoryMap, indicatorHistoryMap, isGold, manualPriceOverrides);
@@ -427,6 +488,13 @@ export const snapshotItemsFromPortfolio = (items: any[]): any[] =>
     purchasePrice: cleanNum(it.purchasePrice),
     currentPrice: cleanNum(it.currentPrice),
     evalAmount: cleanNum(it.evalAmount),
+    // 예적금(savings): 평가액은 연이율로 누적 산출되므로 산출 필드를 함께 보존
+    ...(it.type === 'savings' ? {
+      annualRate: cleanNum(it.annualRate),
+      startDate: it.startDate || '',
+      endDate: it.endDate || '',
+      deposits: Array.isArray(it.deposits) ? it.deposits.map(d => ({ date: d?.date || '', amount: cleanNum(d?.amount) })) : [],
+    } : {}),
   }));
 
 // 구성 변경 감지용 지문 (가격 제외 — 수량·예수금·종목 구성만)

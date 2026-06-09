@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum } from '../utils';
+import { cleanNum, savingsEval, savingsInvest } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function usePortfolioData({
@@ -33,6 +33,10 @@ export function usePortfolioData({
         const qty = cleanNum(item.quantity);
         const price = cleanNum(item.currentPrice);
         evl = qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
+      }
+      else if (item.type === 'savings') {
+        inv = savingsInvest(item) * fxRate;
+        evl = savingsEval(item) * fxRate;
       }
       else { const _qty = cleanNum(item.quantity); inv = (activePortfolioAccountType === 'overseas' || activePortfolioAccountType === 'gold') ? cleanNum(item.purchasePrice) * _qty * fxRate : (cleanNum(item.investAmount) || cleanNum(item.purchasePrice) * _qty); evl = cleanNum(item.currentPrice) * _qty * fxRate; }
       const prf = evl - inv; tInv += inv; tEvl += evl; tPrf += prf;

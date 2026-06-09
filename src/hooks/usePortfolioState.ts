@@ -526,6 +526,46 @@ export function usePortfolioState({
       return [...prev.slice(0, insertIdx), newFund, ...prev.slice(insertIdx)];
     });
 
+  // ── 예적금(savings) CRUD — 퇴직연금(dc-irp) 전용 ──
+  const handleAddSavings = () =>
+    setPortfolio(prev => {
+      const lastSavingsIdx = prev.reduceRight((acc, p, i) => acc === -1 && p.type === 'savings' ? i : acc, -1);
+      const lastFundIdx = prev.reduceRight((acc, p, i) => acc === -1 && p.type === 'fund' ? i : acc, -1);
+      const depositIdx = prev.findIndex(p => p.type === 'deposit');
+      const insertIdx = lastSavingsIdx >= 0 ? lastSavingsIdx + 1
+        : lastFundIdx >= 0 ? lastFundIdx + 1
+        : depositIdx >= 0 ? depositIdx + 1
+        : prev.length;
+      const newSavings = { id: generateId(), type: 'savings', category: '예적금', assetClass: 'S', name: '', annualRate: 0, startDate: '', endDate: '', investAmount: 0, evalAmount: 0, deposits: [], targetRatio: 0, isManual: true };
+      return [...prev.slice(0, insertIdx), newSavings, ...prev.slice(insertIdx)];
+    });
+
+  const updateSavingsField = (id, field, value) =>
+    setPortfolio(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      if (field === 'name' || field === 'startDate' || field === 'endDate' || field === 'assetClass')
+        return { ...p, [field]: value };
+      return { ...p, [field]: cleanNum(value) };
+    }));
+
+  const addSavingsDeposit = (id, date, amount) =>
+    setPortfolio(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      const amt = cleanNum(amount);
+      if (amt <= 0) return p;
+      const deposits = [...(p.deposits || []), { id: generateId(), date: date || '', amount: amt }];
+      const investAmount = deposits.reduce((s, d) => s + cleanNum(d.amount), 0);
+      return { ...p, deposits, investAmount };
+    }));
+
+  const removeSavingsDeposit = (id, depId) =>
+    setPortfolio(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      const deposits = (p.deposits || []).filter(d => d.id !== depId);
+      const investAmount = deposits.reduce((s, d) => s + cleanNum(d.amount), 0);
+      return { ...p, deposits, investAmount };
+    }));
+
   // ── KRX 금현물 포트폴리오: 주식 항목이 없으면 자동 초기화 ──
   useEffect(() => {
     if (activePortfolioAccountType !== 'gold') return;
@@ -610,6 +650,10 @@ export function usePortfolioState({
     handleDeleteStock,
     handleAddStock,
     handleAddFund,
+    handleAddSavings,
+    updateSavingsField,
+    addSavingsDeposit,
+    removeSavingsDeposit,
     updateDividendHistory,
     updatePortfolioDividendHistory,
     updatePortfolioActualDividend,

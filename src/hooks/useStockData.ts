@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useEffect, useRef } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
-import { buildIndexStatus, cleanNum, isWeekend } from '../utils';
+import { buildIndexStatus, cleanNum, isWeekend, savingsEval } from '../utils';
 import { getEffectiveDate, getMsUntilCutoff } from './useMarketCalendar';
 
 interface UseStockDataParams {
@@ -661,6 +661,8 @@ export function useStockData({
           const qty = cleanNum(item.quantity);
           const price = cleanNum(item.currentPrice);
           totalEval += qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
+        } else if (item.type === 'savings') {
+          totalEval += savingsEval(item) * fxRate;
         } else {
           totalEval += cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
         }
@@ -696,6 +698,8 @@ export function useStockData({
                   ? item.prevNavPrice
                   : cleanNum(item.currentPrice);
                 targetEval += qty > 0 && price > 0 ? qty * price * fxRate : cleanNum(item.evalAmount) * fxRate;
+              } else if (item.type === 'savings') {
+                targetEval += savingsEval(item) * fxRate;
               } else {
                 targetEval += cleanNum(item.currentPrice) * cleanNum(item.quantity) * fxRate;
               }
