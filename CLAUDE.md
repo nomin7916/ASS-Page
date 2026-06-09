@@ -93,10 +93,18 @@ src/
   annualRate(연이율 %, 원시 문자열 — 소수 입력 보존), startDate/endDate(투자기간),
   investAmount(=Σ deposits), evalAmount(저장 안 함 — 산출값), deposits:[{id,date,amount}] }`.
 - **평가액 = `savingsEval(item, asOf?)`** (`utils.ts`): 각 적립(deposit) 트랜치를 그 날짜부터
-  만기/asOf까지 **연이율 단리**로 누적. `asOf` 미전달 시 오늘. 과거 백필은 `asOf=date`로 그날
-  기준 누적(미래 적립분 제외). **evalAmount를 item에 저장하지 않으므로** 모든 합산 경로가
-  `savingsEval`을 직접 호출해야 함(usePortfolioData/useStockData/useIntegratedData/
-  calcPortfolioEvalDetail/App auto-history·차트/RebalancingPanel). 투자원금=`savingsInvest`.
+  만기/asOf까지 **연이율 단리**로 누적. **일(day) 단위 계산**(`toSavingsDayNum` — 타임존 무관
+  캘린더 일자) — 입금 당일은 이자 0(평가금=원금), 다음 날부터 1일치 단리. `asOf` 미전달 시 오늘.
+  과거 백필은 `asOf=date`로 그날 기준 누적(미래 적립분 제외, `min(asOf,오늘)` 캡). 만기일 이후로는
+  만기일에서 정지. **evalAmount를 item에 저장하지 않으므로** 모든 합산 경로가 `savingsEval`을 직접
+  호출해야 함(usePortfolioData/useStockData/useIntegratedData/calcPortfolioEvalDetail/App
+  auto-history·차트/RebalancingPanel). 투자원금=`savingsInvest`.
+  ⚠️ **시각(datetime) 비교 금지** — 과거 `new Date(dateStr)`(UTC 자정) > `Date.now()` 비교가
+  한국 오전엔 "오늘" 적립을 미래로 오판→스킵해 평가금 0이 되던 버그. 반드시 일 단위로 비교.
+- **만기금액 = `savingsMaturity(item)`** (`utils.ts`): 각 적립을 **만기일(endDate)까지** 단리
+  누적(오늘 상한 없음). `savingsEval(item, endDate)`는 `min(asOf,오늘)` 캡 탓에 오늘값이 나오므로
+  만기 산출엔 못 씀 → 별도 함수. endDate 미설정/적립 없음 → 0. **표시**: `PortfolioTable` 평가금
+  셀 하단 작은 글씨("만기 ₩…") + 적립 모달 요약. 적립 모달 입금일 기본값=오늘(`openSavingsModal`).
 - **CRUD**: `usePortfolioState` — `handleAddSavings`, `updateSavingsField`(annualRate는 원시
   문자열 저장), `addSavingsDeposit`/`removeSavingsDeposit`(적립 모달, investAmount 재계산).
 - **회귀 주의**: ① Drive 변경감지 키(`App.tsx` `portfolioStructureKey`)에 savings 고유 필드

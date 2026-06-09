@@ -5,7 +5,7 @@ import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG, MARK_STRIP_BG } from '../constants';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber, formatFundPrice,
-  formatChangeRate, formatSavingsDailyRate, formatSavingsPeriod,
+  formatChangeRate, formatSavingsDailyRate, formatSavingsPeriod, savingsMaturity,
   handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav
 } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
@@ -187,7 +187,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
   const todayStr = new Date().toISOString().split('T')[0];
   const openSavingsModal = (item) => {
     setSavingsModalId(item.id);
-    setSavingsAddDate(item.startDate || todayStr);
+    setSavingsAddDate(todayStr); // 입금일 기본값=오늘(미래 가입일에 묶여 평가금 0이 되는 것 방지)
     setSavingsAddAmount('');
   };
   const closeSavingsModal = () => { setSavingsModalId(null); setSavingsAddDate(''); setSavingsAddAmount(''); };
@@ -435,6 +435,9 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             <div className="flex justify-between border-t border-gray-700/50 pt-1"><span>총 투자금액</span><span className="text-blue-300 font-bold">{formatCurrency(savingsModalItem.investAmount)}</span></div>
             <div className="flex justify-between"><span>예상 평가금액</span><span className="text-white font-bold">{formatCurrency(savingsModalItem.evalAmount)}</span></div>
             <div className="flex justify-between"><span>차익</span><span className={`font-bold ${cleanNum(savingsModalItem.profit) >= 0 ? 'text-red-300' : 'text-blue-300'}`}>{formatCurrency(savingsModalItem.profit)}</span></div>
+            {savingsMaturity(savingsModalItem) > 0 && (
+              <div className="flex justify-between border-t border-gray-700/50 pt-1"><span>만기 예상금액</span><span className="text-emerald-300 font-bold">{formatCurrency(savingsMaturity(savingsModalItem))}</span></div>
+            )}
           </div>
           {/* 적립 내역 */}
           {(savingsModalItem.deposits || []).length > 0 && (
@@ -884,6 +887,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const stickyMarkClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-emerald-950/50 group-hover:bg-emerald-900/30';
               const investAmt = cleanNum(item.investAmount);
               const periodLabel = formatSavingsPeriod(item.startDate, item.endDate);
+              const maturityAmt = savingsMaturity(item);
               return (
                 <tr key={item.id} className={`group transition-colors border-b border-emerald-800/30 ${rowMarkClass}`}>
                   {/* 색상 스트립 */}
@@ -972,9 +976,16 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('investRatio') && (
                     <td className={`${td} text-blue-300 bg-blue-900/10 text-center ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatPercent(item.investRatio)}</td>
                   )}
-                  {/* 평가금액 */}
+                  {/* 평가금액 (+ 만기금액 작은 글씨) */}
                   {!H('evalAmount') && (
-                    <td className={`${td} text-white font-bold text-right bg-yellow-900/20 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatCurrency(item.evalAmount)}</td>
+                    <td className={`${td} text-right bg-yellow-900/20 ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav} title={maturityAmt > 0 ? `만기금액 ${formatCurrency(maturityAmt)}` : undefined}>
+                      <div className="leading-tight">
+                        <div className="text-white font-bold">{formatCurrency(item.evalAmount)}</div>
+                        {maturityAmt > 0 && (
+                          <div className="text-[10px] text-emerald-400/70 font-normal mt-0.5">만기 {formatCurrency(maturityAmt)}</div>
+                        )}
+                      </div>
+                    </td>
                   )}
                   {/* 평가비중 */}
                   {!H('evalRatio') && (

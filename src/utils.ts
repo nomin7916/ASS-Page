@@ -212,29 +212,65 @@ export const savingsInvest = (item) =>
     ? item.deposits.reduce((s, d) => s + cleanNum(d?.amount), 0)
     : cleanNum(item?.investAmount);
 
-// asOf(YYYY-MM-DD): 해당 날짜 기준 누적값. 미지정 시 오늘. 날짜별 history 백필에서 과거 평가액을
-// 그 날짜 기준으로 산출하기 위해 사용(라이브 합산 경로는 asOf 미전달 → 오늘로 동작).
-export const savingsEval = (item, asOf) => {
-  const rate = cleanNum(item?.annualRate) / 100;
-  const deposits = (Array.isArray(item?.deposits) && item.deposits.length)
+// 날짜 → 일(day) 번호. 'YYYY-MM-DD'를 타임존 무관하게 캘린더 일자로 환산(시:분 오차 제거).
+// 시각 단위 비교를 쓰면 입금일을 UTC 자정으로 파싱해 한국 오전엔 '미래'로 오판→스킵되는 버그가 있었음.
+const toSavingsDayNum = (v) => {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string') {
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(v);
+    if (m) return Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000);
+  }
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+};
+const savingsTodayDayNum = () => { const n = new Date(); return Math.floor(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 86400000); };
+// 적립 트랜치 목록: deposits 우선, 없으면 investAmount를 시작일 기준 단일 원금으로 폴백.
+const savingsDeposits = (item) =>
+  (Array.isArray(item?.deposits) && item.deposits.length)
     ? item.deposits
     : (cleanNum(item?.investAmount) > 0 ? [{ date: item?.startDate, amount: cleanNum(item.investAmount) }] : []);
+
+// asOf(YYYY-MM-DD): 해당 날짜 기준 누적값. 미지정 시 오늘. 일(day) 단위로 계산하므로 입금 당일은
+// 이자 0(평가금=원금), 다음 날부터 1일치 단리가 붙는다. 만기일 이후로는 만기일에서 누적 정지.
+// 날짜별 history 백필에서 과거 평가액을 그 날짜 기준으로 산출(라이브 합산 경로는 asOf 미전달 → 오늘).
+export const savingsEval = (item, asOf) => {
+  const rate = cleanNum(item?.annualRate) / 100;
+  const deposits = savingsDeposits(item);
   if (!deposits.length) return 0;
-  const endTs = item?.endDate ? new Date(item.endDate).getTime() : null;
-  const asOfDateTs = asOf ? new Date(asOf).getTime() : NaN;
-  const upperTs = !isNaN(asOfDateTs) ? Math.min(asOfDateTs, Date.now()) : Date.now();
-  const asOfTs = (endTs != null && !isNaN(endTs) && endTs < upperTs) ? endTs : upperTs;
+  const endDay = toSavingsDayNum(item?.endDate);
+  const asOfDay = asOf ? toSavingsDayNum(asOf) : null;
+  let upper = asOfDay != null ? Math.min(asOfDay, savingsTodayDayNum()) : savingsTodayDayNum();
+  if (endDay != null && endDay < upper) upper = endDay; // 만기 도달 시 정지
   let evl = 0;
   for (const d of deposits) {
     const amt = cleanNum(d?.amount);
     if (amt <= 0) continue;
-    const startTs = d?.date ? new Date(d.date).getTime()
-      : (item?.startDate ? new Date(item.startDate).getTime() : asOfTs);
-    if (!isNaN(startTs) && startTs > asOfTs) continue; // 해당 날짜 이후 적립분은 그 시점에 아직 미입금
-    const days = (isNaN(startTs)) ? 0 : Math.max(0, (asOfTs - startTs) / 86400000);
+    const depDay = toSavingsDayNum(d?.date) ?? toSavingsDayNum(item?.startDate) ?? upper;
+    if (depDay > upper) continue; // 그 시점 이후 적립분은 아직 미입금
+    const days = Math.max(0, upper - depDay);
     evl += amt * (1 + rate * days / 365);
   }
   return Math.round(evl);
+};
+
+// 만기금액: 각 적립을 만기일(endDate)까지 연이율 단리로 누적(오늘 상한을 두지 않음).
+// endDate 미설정이거나 적립이 없으면 0. savingsEval(item, endDate)는 min(asOf,오늘)로 캡되어
+// 오늘값이 나오므로 만기 산출에는 쓸 수 없어 별도 함수로 둔다.
+export const savingsMaturity = (item) => {
+  const rate = cleanNum(item?.annualRate) / 100;
+  const deposits = savingsDeposits(item);
+  if (!deposits.length) return 0;
+  const endDay = toSavingsDayNum(item?.endDate);
+  if (endDay == null) return 0;
+  let m = 0;
+  for (const d of deposits) {
+    const amt = cleanNum(d?.amount);
+    if (amt <= 0) continue;
+    const depDay = toSavingsDayNum(d?.date) ?? toSavingsDayNum(item?.startDate) ?? endDay;
+    const days = Math.max(0, endDay - depDay);
+    m += amt * (1 + rate * days / 365);
+  }
+  return Math.round(m);
 };
 
 // 등락률 칸: 연이율을 1일치로 환산한 일일 수익률(%) 표시
