@@ -23,6 +23,7 @@ interface UserStat {
   dailyReturnRate: number;
   cachedAt: number;
   fetchFailed: boolean;
+  adminAllowed: boolean;
 }
 
 interface AdminCache {
@@ -227,18 +228,19 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
             dailyReturnRate,
             cachedAt: Date.now(),
             fetchFailed: false,
+            adminAllowed: stateData.adminAccessAllowed !== false,
           };
         } catch {
           const prev = existingCache?.users[u.email];
           newCache.users[u.email] = prev
-            ? { ...prev, fetchFailed: true }
+            ? { ...prev, fetchFailed: true, adminAllowed: prev.adminAllowed ?? false }
             : {
                 email: u.email,
                 name: u.name || u.email.split('@')[0],
                 accessCount: 0, firstAt: null, lastAt: null,
                 evalTotal: 0, principal: 0, totalReturnRate: 0,
                 prevEvalTotal: 0, prevDate: today, dailyReturnRate: 0,
-                cachedAt: 0, fetchFailed: true,
+                cachedAt: 0, fetchFailed: true, adminAllowed: false,
               };
         }
       }));
@@ -325,9 +327,9 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
                   {userStats.map((u) => (
                     <tr
                       key={u.email}
-                      className={`border-b border-gray-800/50 hover:bg-gray-800/20 transition-colors ${u.fetchFailed ? 'opacity-40' : ''}`}
+                      className="border-b border-gray-800/50 hover:bg-gray-800/20 transition-colors"
                     >
-                      <td className="px-4 py-3">
+                      <td className={`px-4 py-3 ${u.fetchFailed ? 'opacity-40' : ''}`}>
                         <div className="flex items-center gap-1.5">
                           {u.fetchFailed && <AlertCircle size={11} className="text-amber-500 flex-shrink-0" />}
                           <div>
@@ -336,17 +338,21 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-right text-gray-400">{fmtDays(u.firstAt)}</td>
-                      <td className="px-4 py-3 text-right font-medium text-gray-100">{fmtAmount(u.evalTotal)}</td>
-                      <td className="px-4 py-3 text-right">{fmtReturnEl(u.totalReturnRate)}</td>
-                      <td className="px-4 py-3 text-right text-gray-500">{fmtAmount(u.principal)}</td>
-                      <td className="px-4 py-3 text-right">{fmtReturnEl(u.dailyReturnRate)}</td>
-                      <td className="px-4 py-3 text-right text-gray-400">{u.accessCount > 0 ? `${u.accessCount}회` : '-'}</td>
-                      <td className="px-4 py-3 text-right text-gray-500 whitespace-nowrap text-[11px]">{fmtRelTime(u.lastAt)}</td>
+                      <td className={`px-4 py-3 text-right text-gray-400 ${u.fetchFailed ? 'opacity-40' : ''}`}>{fmtDays(u.firstAt)}</td>
+                      <td className={`px-4 py-3 text-right font-medium text-gray-100 ${u.fetchFailed ? 'opacity-40' : ''}`}>{fmtAmount(u.evalTotal)}</td>
+                      <td className={`px-4 py-3 text-right ${u.fetchFailed ? 'opacity-40' : ''}`}>{fmtReturnEl(u.totalReturnRate)}</td>
+                      <td className={`px-4 py-3 text-right text-gray-500 ${u.fetchFailed ? 'opacity-40' : ''}`}>{fmtAmount(u.principal)}</td>
+                      <td className={`px-4 py-3 text-right ${u.fetchFailed ? 'opacity-40' : ''}`}>{fmtReturnEl(u.dailyReturnRate)}</td>
+                      <td className={`px-4 py-3 text-right text-gray-400 ${u.fetchFailed ? 'opacity-40' : ''}`}>{u.accessCount > 0 ? `${u.accessCount}회` : '-'}</td>
+                      <td className={`px-4 py-3 text-right text-gray-500 whitespace-nowrap text-[11px] ${u.fetchFailed ? 'opacity-40' : ''}`}>{fmtRelTime(u.lastAt)}</td>
                       <td className="px-4 py-3 text-right">
                         <button
                           onClick={() => onViewUser(u.email)}
-                          className="text-[11px] bg-emerald-900/50 hover:bg-emerald-800/70 text-emerald-300 border border-emerald-700/40 px-2.5 py-1 rounded-full transition-colors whitespace-nowrap"
+                          className={`text-[11px] px-2.5 py-1 rounded-full transition-colors whitespace-nowrap border ${
+                            u.adminAllowed
+                              ? 'bg-emerald-900/50 hover:bg-emerald-800/70 text-emerald-300 border-emerald-700/40'
+                              : 'bg-amber-900/50 hover:bg-amber-800/70 text-amber-300 border-amber-700/40'
+                          }`}
                         >
                           접속
                         </button>

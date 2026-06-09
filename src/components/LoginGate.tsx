@@ -196,6 +196,9 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
   const [userToken, setUserToken] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [resetNotice, setResetNotice] = useState(false);
+  const [gisReady, setGisReady] = useState<boolean>(
+    typeof window !== 'undefined' && !!(window as any).google?.accounts?.oauth2
+  );
 
   const [pinDigits, setPinDigits] = useState<string[]>(['', '', '', '']);
   const [pinError, setPinError] = useState('');
@@ -236,6 +239,21 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
     };
     tryInit();
   };
+
+  // ── GIS 스크립트 로드 완료 감지 (팝업은 사용자 제스처 직후 동기 호출 필수) ──
+  useEffect(() => {
+    if (gisReady) return;
+    let timerId: ReturnType<typeof setTimeout>;
+    const check = () => {
+      if ((window as any).google?.accounts?.oauth2) {
+        setGisReady(true);
+      } else {
+        timerId = setTimeout(check, 300);
+      }
+    };
+    check();
+    return () => clearTimeout(timerId);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 새로고침 시 자동 재인증 ─────────────────────────────────────
   useEffect(() => {
@@ -306,12 +324,36 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
   }, [adminViewUserCtx?.userEmail]);
 
   const handleLogin = () => {
+    // GIS가 로드되지 않은 상태에서 클릭 시 명확한 오류 표시
+    const gis = (window as any).google?.accounts?.oauth2;
+    if (!gis) {
+      setStep('error');
+      setErrorMsg('Google 로그인 모듈이 아직 로드되지 않았습니다.\n잠시 후 다시 시도하거나 페이지를 새로고침해 주세요.');
+      return;
+    }
+
     setStep('loading');
     setErrorMsg('');
 
-    requestGoogleToken({
-      prompt: 'select_account',
-      onSuccess: async (email, token) => {
+    // requestAccessToken을 사용자 제스처(클릭) 직후 동기 호출해야 모바일 팝업 차단 방지
+    // requestGoogleToken의 setTimeout retry loop를 사용하면 제스처 컨텍스트 손실 → 팝업 차단
+    const client = gis.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: 'openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly',
+      callback: async (resp: any) => {
+        if (resp.error || !resp.access_token) {
+          const detail = resp.error_description || resp.error || '토큰 응답 없음';
+          setStep('error');
+          setErrorMsg(`${describeAuthError(detail)}\n(${detail})`);
+          return;
+        }
+        const token = resp.access_token;
+        const email = await fetchUserEmail(token);
+        if (!email) {
+          setStep('error');
+          setErrorMsg('사용자 정보 조회 실패 (네트워크/쿠키 확인)');
+          return;
+        }
         setUserEmail(email);
         setUserToken(token);
 
@@ -344,11 +386,14 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         setPinDigits(['', '', '', '']);
         setStep('pin_entry');
       },
-      onFail: (detail) => {
+      error_callback: (err: any) => {
+        const detail = err?.message || err?.type || '인증 창 오류';
         setStep('error');
         setErrorMsg(`${describeAuthError(detail)}${detail ? `\n(${detail})` : ''}`);
       },
     });
+    tokenClientRef.current = client;
+    client.requestAccessToken({ prompt: 'select_account' });
   };
 
   const handlePinSubmit = (pin?: string) => {
@@ -407,13 +452,18 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
             <div className="flex flex-col items-center gap-6">
               <button
                 onClick={handleLogin}
-                disabled={step === 'loading'}
+                disabled={step === 'loading' || !gisReady}
                 className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-100 text-gray-900 font-semibold py-3 px-6 rounded-xl transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {step === 'loading' ? (
                   <>
                     <div className="w-5 h-5 border-2 border-gray-400 border-t-gray-700 rounded-full animate-spin" />
                     <span>로그인 중...</span>
+                  </>
+                ) : !gisReady ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-gray-400 border-t-gray-700 rounded-full animate-spin" />
+                    <span>초기화 중...</span>
                   </>
                 ) : (
                   <>

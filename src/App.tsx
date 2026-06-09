@@ -181,7 +181,10 @@ export default function App() {
               return;
             }
             if (!userFolderId) {
-              notify(`${targetEmail} 사용자의 Drive 폴더를 찾을 수 없습니다. 해당 사용자가 앱을 한 번 이상 실행했는지 확인하세요.`, 'error');
+              notify(
+                `${targetEmail} 사용자가 아직 앱에 로그인한 적이 없습니다. 해당 사용자가 앱에 1회 접속하면 Drive 폴더가 생성되어 관리자 접속이 가능합니다.`,
+                'warning'
+              );
               setAdminSwitching(false);
               setShowAdminPage(true);
               return;
@@ -190,12 +193,6 @@ export default function App() {
               const stateData = await loadDriveFile(freshToken, userFolderId, DRIVE_FILES.STATE) as any;
               const isAllowed = !stateData || stateData.adminAccessAllowed !== false;
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: isAllowed }));
-              if (!isAllowed) {
-                notify(`${targetEmail} 사용자가 관리자 접속을 허용하지 않았습니다.`, 'warning');
-                setAdminSwitching(false);
-                setShowAdminPage(true);
-                return;
-              }
             } catch {
               setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
             }
