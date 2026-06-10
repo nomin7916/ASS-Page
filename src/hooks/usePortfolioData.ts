@@ -85,7 +85,21 @@ export function usePortfolioData({
       : (settings.targetMirrorFixed || 'off');
     const slotField = isVariableMode ? 'targetRatioVar' : 'targetRatio';
     const overrideField = isVariableMode ? 'targetRatioVarOverride' : 'targetRatioOverride';
-    let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund').map(item => {
+    let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund' || p.type === 'savings').map(item => {
+      // 예적금(savings): 시세·수량이 없어 리밸런싱 매매 대상이 아님 — 고정 참고 행.
+      // 평가금은 savingsEval(단리 누적)로 산출, 평가금 그대로 예상평가금에 이월(매매 0).
+      // 단 목표비중은 펀드처럼 편집·합계(100%)에 포함(라이브 미러 시드 포함).
+      if (item.type === 'savings') {
+        const curEval = savingsEval(item);
+        const invForReturn = savingsInvest(item);
+        const returnRate = invForReturn > 0 ? ((curEval - invForReturn) / invForReturn) * 100 : 0;
+        const isLiveMirror = mirrorState === 'on' && !item[overrideField];
+        const liveRatio = totals.totalEval > 0 ? (curEval / totals.totalEval * 100) : 0;
+        const effectiveTargetRatio = isLiveMirror ? liveRatio : (cleanNum(item[slotField]) || 0);
+        const expEval = curEval;
+        const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
+        return { ...item, curEval, action: 0, cost: 0, expEval, expRatio, effectiveTargetRatio, returnRate, isSavings: true };
+      }
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
       const curEval = item.type === 'fund' && !(qty > 0 && price > 0)

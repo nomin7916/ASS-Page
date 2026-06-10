@@ -17,6 +17,7 @@ export const UI_CONFIG = {
       '배당주식': '#F472B6',
       '예수금': '#9CA3AF',
       'FUND': '#818CF8',
+      '예적금': '#2DD4BF',
       '미지정': '#64748B',
     } as Record<string, string>,
   },

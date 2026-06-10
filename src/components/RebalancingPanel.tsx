@@ -17,7 +17,7 @@ const getItemUrl = (item) => {
   if (/^[A-Za-z]+$/.test(item.code)) return `https://finance.yahoo.com/quote/${item.code.toUpperCase()}`;
   return null;
 };
-const getAssetClass = (item) => item.type === 'fund'
+const getAssetClass = (item) => (item.type === 'fund' || item.type === 'savings')
   ? (item.assetClass ?? 'S')
   : (item.assetClass ?? (SAFE_CATEGORIES.includes(item.category) ? 'S' : 'D'));
 
@@ -261,11 +261,9 @@ export default function RebalancingPanel({
                   {(() => {
                     if (activePortfolioAccountType !== 'dc-irp') return null;
                     const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-                    const savingsItems = portfolio.filter(p => p.type === 'savings');
-                    const savingsD = savingsItems.filter(p => getAssetClass(p) === 'D').reduce((s, p) => s + savingsEval(p), 0);
-                    const savingsS = savingsItems.filter(p => getAssetClass(p) === 'S').reduce((s, p) => s + savingsEval(p), 0);
-                    const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0) + savingsD;
-                    const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval + savingsS;
+                    // 예적금은 rebalanceData에 고정 행으로 포함됨(expEval=평가금) → 아래 합산에 이미 반영. 별도 가산 금지(이중 계상).
+                    const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
+                    const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
                     const projTotal = projD + projS;
                     if (projTotal <= 0) return null;
                     const projDSData = [{ name: '위험', value: projD }, { name: '안전', value: projS }];
@@ -635,27 +633,27 @@ export default function RebalancingPanel({
                                   const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
                                   if (mirrorState === 'off') {
                                     setPortfolio(prev => prev.map(p => {
-                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                      if (p.type !== 'stock' && p.type !== 'fund' && p.type !== 'savings') return p;
                                       const qty = cleanNum(p.quantity);
                                       const price = cleanNum(p.currentPrice);
-                                      const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
+                                      const curEval = p.type === 'savings' ? savingsEval(p) : (p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty);
                                       const curRatio = totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
                                       return { ...p, [slotField]: curRatio, [overrideField]: false };
                                     }));
                                     updateSettingsForType({ ...settings, [mirrorField]: 'seeded' });
                                   } else if (mirrorState === 'seeded') {
                                     setPortfolio(prev => prev.map(p => {
-                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                      if (p.type !== 'stock' && p.type !== 'fund' && p.type !== 'savings') return p;
                                       return { ...p, [overrideField]: false };
                                     }));
                                     updateSettingsForType({ ...settings, [mirrorField]: 'on' });
                                   } else {
                                     setPortfolio(prev => prev.map(p => {
-                                      if (p.type !== 'stock' && p.type !== 'fund') return p;
+                                      if (p.type !== 'stock' && p.type !== 'fund' && p.type !== 'savings') return p;
                                       if (p[overrideField]) return { ...p, [overrideField]: false };
                                       const qty = cleanNum(p.quantity);
                                       const price = cleanNum(p.currentPrice);
-                                      const curEval = p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty;
+                                      const curEval = p.type === 'savings' ? savingsEval(p) : (p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty);
                                       const curRatio = totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
                                       return { ...p, [slotField]: curRatio, [overrideField]: false };
                                     }));
@@ -808,6 +806,7 @@ export default function RebalancingPanel({
                   const renderRow = (item, catTd) => {
                     rowNum += 1;
                     const num = rowNum;
+                    const isSavings = item.type === 'savings';
                     const cat = item.category || '기타';
                     const catColor = UI_CONFIG.COLORS.CATEGORY_HEX_COLORS[cat] || '#64748B';
                     const itemColor = itemColorMap[`${cat}::${item.id}`] || catColor;
@@ -865,7 +864,7 @@ export default function RebalancingPanel({
                             } : undefined}
                             title={totalAction > 0 ? '클릭하여 분할매수 계산기 열기' : undefined}
                           >
-                            {isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}
+                            {isSavings ? <span className="text-gray-600">-</span> : isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}
                           </td>
                         )}
                         {!H('targetRatio') && (() => {
@@ -965,24 +964,26 @@ export default function RebalancingPanel({
                           <td className="py-3 px-3 text-center text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0).toFixed(isOverseas ? 2 : 1)}%</td>
                         )}
                         {!H('action') && (
-                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${totalAction > 0 ? 'text-green-400' : totalAction < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totalAction > 0 ? '+' : '') + totalAction}</td>
+                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${totalAction > 0 ? 'text-green-400' : totalAction < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isSavings ? '-' : (totalAction > 0 ? '+' : '') + totalAction}</td>
                         )}
-                        {!H('extraQty') && (
+                        {!H('extraQty') && (isSavings ? (
+                          <td className="py-3 px-3 text-center text-gray-600 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>-</td>
+                        ) : (
                           <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500">
                             <input type="text" className="w-full h-full bg-transparent text-center text-orange-300 font-bold outline-none py-3 focus:bg-orange-900/20 caret-orange-400 min-w-[65px]" value={extraQty !== 0 ? extraQty : ''} placeholder="0" onChange={e => { const val = parseInt(e.target.value.replace(/[^\-\d]/g, '')) || 0; setRebalExtraQty(prev => ({ ...prev, [item.id]: val })); }} onFocus={e => e.target.select()} />
                           </td>
-                        )}
+                        ))}
                         {!H('maxAdd') && (
-                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{maxAdd === 0 ? '0' : (maxAdd > 0 ? '+' : '') + maxAdd.toFixed(1)}</td>
+                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isSavings ? '-' : maxAdd === 0 ? '0' : (maxAdd > 0 ? '+' : '') + maxAdd.toFixed(1)}</td>
                         )}
                         {!H('expQty') && (() => {
                           const expQty = cleanNum(item.quantity) + totalAction;
                           return (
-                            <td className="py-3 px-3 text-center text-gray-200 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{formatNumber(expQty)}</td>
+                            <td className="py-3 px-3 text-center text-gray-200 font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isSavings ? '-' : formatNumber(expQty)}</td>
                           );
                         })()}
                         {!H('cost') && (
-                          <td className={`py-3 px-3 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${displayAdjustedCost > 0 ? 'text-sky-300' : displayAdjustedCost < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(displayAdjustedCost)}</span><span className="text-[11px] opacity-70">{formatCurrency(displayAdjustedCost * usdkrw)}</span></div> : formatCurrency(displayAdjustedCost)}</td>
+                          <td className={`py-3 px-3 font-bold text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${displayAdjustedCost > 0 ? 'text-sky-300' : displayAdjustedCost < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isSavings ? <span className="text-gray-600">-</span> : isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(displayAdjustedCost)}</span><span className="text-[11px] opacity-70">{formatCurrency(displayAdjustedCost * usdkrw)}</span></div> : formatCurrency(displayAdjustedCost)}</td>
                         )}
                         {!H('expEval') && (
                           <td className="py-3 px-3 font-bold text-yellow-500 text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.expEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.expEval * usdkrw)}</span></div> : formatCurrency(item.expEval)}</td>
@@ -1124,11 +1125,9 @@ export default function RebalancingPanel({
                 </tr>
                 {showRetirementStats && (() => {
                   const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-                  const savingsItems = portfolio.filter(p => p.type === 'savings');
-                  const savingsD = savingsItems.filter(p => getAssetClass(p) === 'D').reduce((s, p) => s + savingsEval(p), 0);
-                  const savingsS = savingsItems.filter(p => getAssetClass(p) === 'S').reduce((s, p) => s + savingsEval(p), 0);
-                  const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0) + savingsD;
-                  const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval + savingsS;
+                  // 예적금은 rebalanceData 고정 행으로 포함됨 → 별도 가산 금지(이중 계상).
+                  const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
+                  const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
                   const projTotal = projD + projS;
                   const projDRatio = projTotal > 0 ? projD / projTotal * 100 : 0;
                   const projSRatio = projTotal > 0 ? projS / projTotal * 100 : 0;
