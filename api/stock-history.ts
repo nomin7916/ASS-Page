@@ -1,4 +1,5 @@
 // Vercel Edge Function — KIS OpenAPI 종목 히스토리 서버사이드 수집
+// [최적화] 과거 주가 히스토리(수년치 차트용)는 당일 1회 이상 갱신 불필요 → 24h 캐시
 export const config = { runtime: 'edge' };
 
 import { getKisToken } from './_kisToken.js';
@@ -124,7 +125,7 @@ export default async function handler(request: Request): Promise<Response> {
     headers: {
       'Content-Type':                'application/json',
       'Access-Control-Allow-Origin': '*',
-      'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+      'Cache-Control':               's-maxage=86400, stale-while-revalidate=43200',
     },
   });
 }

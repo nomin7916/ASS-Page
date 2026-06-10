@@ -1,5 +1,6 @@
 // Vercel Edge Function — 외부 API CORS 프록시
 // 허용된 도메인으로만 요청을 중계하여 Vercel 배포 환경의 CORS 문제 해결
+// [최적화] &cache=N 쿼리 파라미터가 있으면 s-maxage=N 캐시 허용, 없으면 기존 no-cache 유지(호환성 보존)
 
 export const config = { runtime: 'edge' };
 
@@ -15,6 +16,7 @@ const ALLOWED_DOMAINS = [
 export default async function handler(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const target = searchParams.get('url');
+  const cacheSeconds = parseInt(searchParams.get('cache') ?? '0', 10);
 
   if (!target) {
     return new Response('Missing url parameter', { status: 400 });
@@ -55,7 +57,9 @@ export default async function handler(request: Request): Promise<Response> {
       headers: {
         'Access-Control-Allow-Origin': '*',
         'Content-Type': response.headers.get('content-type') || 'application/octet-stream',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': cacheSeconds > 0
+          ? `s-maxage=${cacheSeconds}, stale-while-revalidate=${cacheSeconds}`
+          : 'no-cache',
       },
     });
   } catch (e) {

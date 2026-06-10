@@ -1,5 +1,6 @@
 // Vercel Edge Function — 지표 장기 히스토리 수집
 // stooq API 키 요구로 인해 Yahoo Finance v8 + FRED로 교체
+// [최적화] goldKr 100→20페이지·5페이지 배치 처리(동시요청 폭주 방지), goldKr 캐시 6h, 지표히스토리 csvResponse 24h
 export const config = { runtime: 'edge' };
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
@@ -227,12 +228,13 @@ function toCSV(data: Record<string, number>): string {
   return lines.join('\n');
 }
 
+// 순수 과거 지표 히스토리(us10y/fedRate/kr10y/goldIntl/usdkrw/dxy/vix/btc/eth) → 24h 캐시
 function csvResponse(data: Record<string, number>): Response {
   return new Response(toCSV(data), {
     headers: {
       'Content-Type':                'text/plain; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
-      'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+      'Cache-Control':               's-maxage=86400, stale-while-revalidate=43200',
     },
   });
 }
@@ -628,20 +630,27 @@ export default async function handler(request: Request): Promise<Response> {
       }
     };
 
-    const pageNums = Array.from({ length: 100 }, (_, i) => i + 1);
-    const results  = await Promise.allSettled(pageNums.map(p => parsePage(p)));
+    // 100→20페이지: 한 페이지 약 10~15건이므로 200건 이상 확보 가능
+    // 5페이지씩 순차 배치 처리 — 동시 요청 폭주 방지
+    const pageNums = Array.from({ length: 20 }, (_, i) => i + 1);
+    const batchSize = 5;
     const allData: Record<string, number> = {};
-    for (const r of results) {
-      if (r.status === 'fulfilled') Object.assign(allData, r.value);
+    for (let i = 0; i < pageNums.length; i += batchSize) {
+      const batch = pageNums.slice(i, i + batchSize);
+      const results = await Promise.allSettled(batch.map(p => parsePage(p)));
+      for (const r of results) {
+        if (r.status === 'fulfilled') Object.assign(allData, r.value);
+      }
     }
     if (Object.keys(allData).length < 10) {
       return new Response('국내금 데이터 수집 실패', { status: 502 });
     }
+    // 국내금 일별 데이터는 장중 변동 없음 → 6h 캐시
     return new Response(JSON.stringify(allData), {
       headers: {
         'Content-Type':                'application/json; charset=utf-8',
         'Access-Control-Allow-Origin': '*',
-        'Cache-Control':               's-maxage=3600, stale-while-revalidate=300',
+        'Cache-Control':               's-maxage=21600, stale-while-revalidate=3600',
       },
     });
   }

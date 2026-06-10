@@ -1565,6 +1565,8 @@ export default function App() {
   useEffect(() => {
     if (!authUser || authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return;
     const poll = async () => {
+      // 백그라운드 탭에서는 폴링 스킵 — 불필요한 외부 API 호출 방지
+      if (document.visibilityState === 'hidden') return;
       try {
         const res = await fetch(`${APPS_SCRIPT_URL}?action=getNotifications&cacheBust=${Date.now()}`);
         if (!res.ok) return;

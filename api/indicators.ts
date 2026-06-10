@@ -1,12 +1,13 @@
 // Vercel Edge Function — 시장 지표 서버사이드 수집
 // 브라우저 CORS 없이 직접 FRED / Naver / Yahoo Finance 호출
+// [최적화] timeout 9000→6000ms(느린 응답 CPU 점유 단축), SWR 60→600s(캐시 만료 후 백그라운드 갱신 확대)
 export const config = { runtime: 'edge' };
 
 const FRED_KEY = process.env.FRED_API_KEY ?? '';
 
 async function safeJson(url: string, init?: RequestInit) {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(9000), ...init });
+    const res = await fetch(url, { signal: AbortSignal.timeout(6000), ...init });
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -59,7 +60,7 @@ async function fetchGoldKrFinanceNaver(): Promise<{ price: number | null; change
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
           'Referer':    'https://finance.naver.com/marketindex/',
         },
-        signal: AbortSignal.timeout(9000),
+        signal: AbortSignal.timeout(6000),
       }
     );
     if (!res.ok) return { price: null, change: null, source: 'Naver금' };
@@ -148,7 +149,7 @@ async function fetchNaverGoldIntl(): Promise<{ price: number | null; change: num
           'Referer':      'https://m.stock.naver.com/marketindex/metals/GCcv1',
         },
         body: JSON.stringify({ reutersCodes: ['GCcv1'] }),
-        signal: AbortSignal.timeout(9000),
+        signal: AbortSignal.timeout(6000),
       }
     );
     if (!res.ok) return { price: null, change: null, source: 'NaverGold' };
@@ -258,7 +259,7 @@ export default async function handler(_req: Request): Promise<Response> {
     headers: {
       'Content-Type':                 'application/json',
       'Access-Control-Allow-Origin':  '*',
-      'Cache-Control':                's-maxage=300, stale-while-revalidate=60',
+      'Cache-Control':                's-maxage=300, stale-while-revalidate=600',
     },
   });
 }
