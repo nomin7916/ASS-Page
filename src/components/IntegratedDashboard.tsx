@@ -227,6 +227,33 @@ export default function IntegratedDashboard({
     return { rows, totalEval, totalPrincipal, totalDeposit };
   }, [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries]);
 
+  // 앱 기록 시작일: 모든 계좌의 가장 이른 '실제 기록일'(실시간 isFixed:false / 사용자 확정 adjustedAmount).
+  // 순수 백필(isFixed:true + adjustedAmount 없음)은 역추산이라 제외 — 그 이전 구간은 전부 역추산이므로
+  // 실제 보유 이력이 아니다. 백필 자체는 유지하되, 이 날짜에 차트 마커를 찍어 이전 데이터가 부정확할
+  // 수 있음을 사용자가 알 수 있게 한다.
+  const appTrackingStartDate = useMemo(() => {
+    let earliest = null;
+    (allPortfoliosForDividend || []).forEach(p => {
+      const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
+      (hist || []).forEach(h => {
+        if (!h || !h.date) return;
+        const isPureBackfill = h.isFixed === true && h.adjustedAmount === undefined;
+        if (isPureBackfill) return;
+        if (earliest === null || h.date < earliest) earliest = h.date;
+      });
+    });
+    return earliest;
+  }, [allPortfoliosForDividend, activePortfolioId, activeHistory]);
+
+  // 차트 X축은 카테고리(날짜)라 ReferenceLine x는 실제 데이터 포인트와 일치해야 렌더된다.
+  // 시작일 이전에 표시되는(역추산) 데이터가 있을 때만, 시작일 이상 첫 포인트에 스냅해 마커를 노출.
+  const trackingMarkerDate = useMemo(() => {
+    if (!appTrackingStartDate || intChartData.length === 0) return null;
+    if (!intChartData.some(d => d.date < appTrackingStartDate)) return null;
+    const hit = intChartData.find(d => d.date >= appTrackingStartDate);
+    return hit ? hit.date : null;
+  }, [appTrackingStartDate, intChartData]);
+
   const focusNextMatongInput = useCallback((el, dir) => {
     const tr = el.closest('tr');
     if (!tr) return;
@@ -1012,6 +1039,22 @@ export default function IntegratedDashboard({
                           />
                         ))
                       }
+                      {trackingMarkerDate && (
+                        <ReferenceLine
+                          yAxisId="left"
+                          x={trackingMarkerDate}
+                          stroke="#fbbf24"
+                          strokeWidth={1.5}
+                          strokeDasharray="5 3"
+                          label={({ viewBox }) => {
+                            const lx = viewBox?.x ?? 0;
+                            const ly = (viewBox?.y ?? 0) + 9;
+                            return (
+                              <text x={lx - 5} y={ly} textAnchor="end" fill="#fbbf24" fontSize={9} fontWeight={700}>앱 기록 시작</text>
+                            );
+                          }}
+                        />
+                      )}
                       {intHoveredPoint && !intRefAreaLeft && (
                         <ReferenceLine yAxisId="left" x={intHoveredPoint.label} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />
                       )}
@@ -1028,6 +1071,12 @@ export default function IntegratedDashboard({
                     <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: 'rgba(248,113,113,0.7)' }} />
                     출금일
                   </span>
+                  {trackingMarkerDate && (
+                    <span className="flex items-center gap-1.5 text-[11px] text-amber-400/90">
+                      <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: '#fbbf24' }} />
+                      앱 기록 시작 ({appTrackingStartDate}) · 이전 데이터는 역추산이라 부정확할 수 있음
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
