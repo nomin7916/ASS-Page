@@ -133,6 +133,11 @@ export function useDriveSync({
       setDriveStatus('loading');
       const folderId = await ensureDriveFolder(token);
 
+      // 로그인 시 항상 관리자 폴더 접근 권한 부여 — 신규 사용자(stateData 없음)도 포함
+      if (!adminViewingAsRef.current) {
+        grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+      }
+
       const [stateData, marketData] = await Promise.all([
         loadDriveFile(token, folderId, DRIVE_FILES.STATE),
         loadDriveFile(token, folderId, DRIVE_FILES.MARKET),
@@ -175,11 +180,7 @@ export function useDriveSync({
         }
       }).catch(() => {});
 
-      // 로그인 시 항상 관리자 폴더 접근 권한 부여 (adminAccessAllowed 설정과 무관)
       lastAdminAccessAllowedRef.current = stateData.adminAccessAllowed !== false;
-      if (!adminViewingAsRef.current) {
-        grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
-      }
       return stateData.portfolios?.[0]?.portfolio || stateData.portfolio || [];
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -250,14 +251,12 @@ export function useDriveSync({
         }
         lastDriveSavedChartPrefsAtRef.current = state.chartPrefsUpdatedAt || 0;
       }
-      // adminAccessAllowed 변경 시 허용→부여만 (제거 없음 — 관리자는 항상 접속 가능)
+      // adminAccessAllowed 변경 감지 — 항상 권한 부여 (관리자는 항상 접속 가능)
       if (!isAdminEdit) {
         const currAllowed = state.adminAccessAllowed !== false;
         if (lastAdminAccessAllowedRef.current !== currAllowed) {
           lastAdminAccessAllowedRef.current = currAllowed;
-          if (currAllowed) {
-            grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
-          }
+          grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
         }
       }
       if (versioned) {
