@@ -147,33 +147,45 @@ async function _doGetOrCreateIndexFolder(token: string, email: string, registere
 }
 
 // 폴더에 관리자 편집 권한 부여 (adminAccessAllowed = true 시 호출)
-// 기존 reader 권한이 있으면 writer로 업그레이드, 없으면 신규 부여
-export async function grantAdminReadAccess(token: string, folderId: string, adminEmail: string): Promise<void> {
+// GET permissions가 drive.file scope 제한으로 403 반환 시에도 POST 권한 부여를 독립 시도
+export async function grantAdminReadAccess(token: string, folderId: string, adminEmail: string): Promise<boolean> {
   try {
+    // GET으로 기존 권한 확인 — 403(scope 제한) 시에도 POST 폴백으로 진행
     const res = await fetch(
       `${DRIVE_API}/files/${folderId}/permissions?fields=permissions(id,emailAddress,role)`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    if (!res.ok) return;
-    const data = await res.json();
-    const existing = data.permissions?.find(
-      (p: any) => p.emailAddress?.toLowerCase() === adminEmail.toLowerCase()
-    );
-    if (existing) {
-      if (existing.role === 'writer') return;
-      await fetch(`${DRIVE_API}/files/${folderId}/permissions/${existing.id}`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'writer' }),
-      });
-    } else {
-      await fetch(`${DRIVE_API}/files/${folderId}/permissions?sendNotificationEmail=false`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: adminEmail }),
-      });
+    if (res.ok) {
+      const data = await res.json();
+      const existing = data.permissions?.find(
+        (p: any) => p.emailAddress?.toLowerCase() === adminEmail.toLowerCase()
+      );
+      if (existing) {
+        if (existing.role === 'writer') return true;
+        const patchRes = await fetch(`${DRIVE_API}/files/${folderId}/permissions/${existing.id}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: 'writer' }),
+        });
+        return patchRes.ok;
+      }
     }
-  } catch {}
+    // GET 실패(403 scope 제한 등) 또는 기존 권한 없는 경우 → POST로 신규 부여 시도
+    const postRes = await fetch(`${DRIVE_API}/files/${folderId}/permissions?sendNotificationEmail=false`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: adminEmail }),
+    });
+    if (!postRes.ok) {
+      const err = await postRes.json().catch(() => ({}));
+      console.warn('[Drive] 관리자 권한 부여 실패:', postRes.status, err?.error?.message || '');
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[Drive] 관리자 권한 부여 예외:', e);
+    return false;
+  }
 }
 
 // 폴더에서 관리자 읽기 권한 제거 (adminAccessAllowed = false 시 호출)

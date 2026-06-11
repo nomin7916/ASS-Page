@@ -135,7 +135,9 @@ export function useDriveSync({
 
       // 로그인 시 항상 관리자 폴더 접근 권한 부여 — 신규 사용자(stateData 없음)도 포함
       if (!adminViewingAsRef.current) {
-        grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+        grantAdminReadAccess(token, folderId, ADMIN_EMAIL).then(ok => {
+          if (!ok) console.warn('[Drive] 관리자 폴더 접근 권한 미부여 — scope 또는 도메인 공유 정책 확인 필요');
+        });
       }
 
       const [stateData, marketData] = await Promise.all([
@@ -256,7 +258,9 @@ export function useDriveSync({
         const currAllowed = state.adminAccessAllowed !== false;
         if (lastAdminAccessAllowedRef.current !== currAllowed) {
           lastAdminAccessAllowedRef.current = currAllowed;
-          grantAdminReadAccess(token, folderId, ADMIN_EMAIL).catch(() => {});
+          grantAdminReadAccess(token, folderId, ADMIN_EMAIL).then(ok => {
+            if (!ok) console.warn('[Drive] 관리자 폴더 접근 권한 미부여 — scope 또는 도메인 공유 정책 확인 필요');
+          });
         }
       }
       if (versioned) {
