@@ -2286,7 +2286,7 @@ export default function App() {
         </div>
         )}
 
-        {!userFeatures.feature3 && activePortfolioAccountType !== 'gold' && !sectionCollapsed.dividend && (
+        {(authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.feature3) && activePortfolioAccountType !== 'gold' && !sectionCollapsed.dividend && (
           <DividendSummaryTable
             portfolios={allPortfoliosForDividend.filter(p => p.id === activePortfolioId)}
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
@@ -2319,7 +2319,7 @@ export default function App() {
         {!sectionCollapsed.chart && (
         <div className="flex flex-col xl:flex-row gap-4 w-full mb-10 items-stretch">
           {/* 시장 지표 카드 — gold 계좌 또는 패널 숨김 시 비표시 */}
-          {!userFeatures.feature1 && activePortfolioAccountType !== 'gold' && showMarketPanel && (
+          {(authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.feature1) && activePortfolioAccountType !== 'gold' && showMarketPanel && (
             <MarketIndicators
               marketIndicators={marketIndicators}
               marketIndices={marketIndices}
@@ -2470,7 +2470,7 @@ export default function App() {
               <button onClick={() => toggleSection('summary')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sectionCollapsed.summary ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>포트폴리오 요약</button>
             )}
             <button onClick={() => toggleSection('stats')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sectionCollapsed.stats ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>통계·히스토리</button>
-            {!userFeatures.feature3 && activePortfolioAccountType !== 'gold' && (
+            {(authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.feature3) && activePortfolioAccountType !== 'gold' && (
               <button onClick={() => toggleSection('dividend')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sectionCollapsed.dividend ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>분배금 현황</button>
             )}
             <button onClick={() => toggleSection('chart')} style={{ writingMode: 'vertical-lr' }} className={`w-7 px-1.5 py-3 cursor-pointer select-none text-[10px] font-medium tracking-wide transition-all duration-150 rounded-r-md border-r border-t border-b ${!sectionCollapsed.chart ? 'bg-gray-800/90 border-gray-600/60 text-gray-300' : 'bg-transparent border-transparent text-gray-700 hover:text-gray-400 hover:bg-gray-800/30 hover:border-gray-700/40'}`}>수익률 차트</button>

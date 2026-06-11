@@ -138,7 +138,7 @@ async function sendApprovalRequest(email: string): Promise<boolean> {
       method: 'POST',
       mode: 'no-cors',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name: email.split('@')[0] }),
+      body: JSON.stringify({ action: 'addUser', email, name: email.split('@')[0] }),
     });
     return true;
   } catch {
