@@ -41,6 +41,7 @@ interface Props {
   userAccessStatus?: Record<string, boolean>;
   switching?: boolean;
   userLastSeen?: Record<string, number>;
+  userDriveStatus?: Record<string, 'found' | 'not_found' | 'checking'>;
   onRefreshUserSessions?: (emails: string[]) => Promise<void>;
   youtubeUrl?: string;
   onSetYoutubeUrl?: (url: string) => Promise<void>;
@@ -70,7 +71,7 @@ function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
@@ -552,6 +553,22 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                             {userAccessStatus[u.email] === false && (
                               <span className="text-[10px] bg-red-900/60 text-red-300 border border-red-700/50 px-1.5 py-0.5 rounded-full">차단</span>
                             )}
+                            {(() => {
+                              const ds = userDriveStatus[u.email];
+                              if (ds === 'checking') return (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-gray-800/60 text-gray-400 border-gray-700/40 flex items-center gap-1">
+                                  <span className="w-2 h-2 border border-gray-500 border-t-transparent rounded-full animate-spin inline-block" />
+                                  Drive확인중
+                                </span>
+                              );
+                              if (ds === 'found') return (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-sky-900/50 text-sky-300 border-sky-700/50">Drive✓</span>
+                              );
+                              if (ds === 'not_found') return (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-red-900/50 text-red-300 border-red-700/50" title="Drive 폴더 접근 불가 — 사용자가 앱에 로그인한 적 없거나 공유 권한 미부여">Drive✗</span>
+                              );
+                              return null;
+                            })()}
                             {userLastSeen[u.email] && (() => {
                               const { label, isOnline } = formatLastSeen(userLastSeen[u.email]);
                               return (

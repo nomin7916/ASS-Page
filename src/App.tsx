@@ -102,6 +102,7 @@ export default function App() {
   const [adminSessionElapsed, setAdminSessionElapsed] = useState(0);
   const [adminSwitching, setAdminSwitching] = useState(false);
   const [userLastSeen, setUserLastSeen] = useState<Record<string, number>>({});
+  const [userDriveStatus, setUserDriveStatus] = useState<Record<string, 'found' | 'not_found' | 'checking'>>({});
   const {
     showPinChange, setShowPinChange,
     pinChangeSaving, setPinChangeSaving,
@@ -237,15 +238,26 @@ export default function App() {
   const handleRefreshUserSessions = async (emails: string[]) => {
     const token = driveTokenRef.current;
     if (!token) return;
+    setUserDriveStatus(prev => {
+      const next = { ...prev };
+      for (const e of emails) next[e] = 'checking';
+      return next;
+    });
     for (const email of emails) {
       try {
         const folderId = await findUserIndexFolder(token, email);
-        if (!folderId) continue;
+        if (!folderId) {
+          setUserDriveStatus(prev => ({ ...prev, [email]: 'not_found' }));
+          continue;
+        }
+        setUserDriveStatus(prev => ({ ...prev, [email]: 'found' }));
         const sessionData = await loadDriveFile(token, folderId, DRIVE_FILES.SESSION) as any;
         if (sessionData?.lastSeen) {
           setUserLastSeen(prev => ({ ...prev, [email]: sessionData.lastSeen }));
         }
-      } catch {}
+      } catch {
+        setUserDriveStatus(prev => ({ ...prev, [email]: 'not_found' }));
+      }
     }
   };
 
@@ -1978,7 +1990,7 @@ export default function App() {
     return <AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} />;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨
