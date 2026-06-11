@@ -302,13 +302,14 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     setNbSaving(true);
     const newLink: NotebookLink = { title: nbTitle.trim(), url: nbUrl.trim(), createdAt: Date.now() };
     await onSetNotebookLinks([newLink, ...notebookLinks]);
-    // 새 슬라이드 등록 시 전체 사용자에게 자동 알림 (비차단)
+    // 새 슬라이드 등록 시 학습자료(notebookEnabled) ON 사용자에게만 자동 알림 (비차단)
+    // '__notebook__' 센티넬 → App.tsx notifTargetsUser가 학습자료 ON 사용자만 통과시킴
     fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify({
         action: 'sendNotification',
-        targetEmail: '__all__',
+        targetEmail: '__notebook__',
         message: `📚 ${newLink.title}가 등록되었습니다.`,
         type: 'info',
       }),
@@ -448,6 +449,14 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
 
   const handleOpenSheet = () => {
     window.open(`https://docs.google.com/spreadsheets/d/${APPROVED_SHEET_ID}/edit`, '_blank');
+  };
+
+  // 공지 발송 대상 라벨 — 센티넬을 사람이 읽을 수 있는 문구로 변환
+  const formatNotifTarget = (target: string) => {
+    if (target === '__all__') return '전체';
+    if (target === '__notebook__') return '학습자료 ON';
+    const u = users.find(x => x.email === target);
+    return u?.name || (typeof target === 'string' ? target.split('@')[0] : String(target ?? ''));
   };
 
   return (
@@ -751,9 +760,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   >
                     전체
                   </button>
-                  {uniqueTargets.map(email => {
-                    const user = users.find(u => u.email === email);
-                    return (
+                  {uniqueTargets.map(email => (
                       <button
                         key={email}
                         onClick={() => setNotifFilter(email)}
@@ -763,10 +770,9 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                             : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
                         }`}
                       >
-                        {user?.name || (typeof email === 'string' ? email.split('@')[0] : String(email))}
+                        {formatNotifTarget(email)}
                       </button>
-                    );
-                  })}
+                  ))}
                 </div>
               );
             })()}
@@ -796,10 +802,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                     const dot = NOTIFY_HEX[n.type] || NOTIFY_HEX.info;
                     const d = new Date(n.createdAt);
                     const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-                    const targetLabel = n.targetEmail === '__all__' ? '전체' : (() => {
-                      const u = users.find(x => x.email === n.targetEmail);
-                      return u?.name || (typeof n.targetEmail === 'string' ? n.targetEmail.split('@')[0] : String(n.targetEmail ?? ''));
-                    })();
+                    const targetLabel = formatNotifTarget(n.targetEmail);
                     return (
                       <div
                         key={n.id}

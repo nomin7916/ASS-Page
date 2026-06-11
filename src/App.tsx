@@ -65,6 +65,13 @@ import {
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
 
+// 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
+// '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
+function notifTargetsUser(targetEmail: string, email: string, notebookEnabled: boolean): boolean {
+  if (targetEmail === '__notebook__') return notebookEnabled === true;
+  return targetEmail === '__all__' || targetEmail?.toLowerCase() === email.toLowerCase();
+}
+
 export default function App() {
   const historyInputRef = useRef(null);
 
@@ -1513,7 +1520,7 @@ export default function App() {
             const notifsData = await notifsRes.json();
             const all: AdminNotification[] = notifsData.notifications || [];
             const myAll = all.filter(n =>
-              n.targetEmail === '__all__' || n.targetEmail?.toLowerCase() === authUser.email.toLowerCase()
+              notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled)
             );
             const myNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
             if (myNotifs.length > 0) {
@@ -1589,7 +1596,7 @@ export default function App() {
         const data = await res.json();
         const all: AdminNotification[] = data.notifications || [];
         const myAll = all.filter(n =>
-          n.targetEmail === '__all__' || n.targetEmail?.toLowerCase() === authUser.email.toLowerCase()
+          notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled)
         );
         const newNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
         if (newNotifs.length > 0) {
@@ -1602,7 +1609,7 @@ export default function App() {
     };
     const interval = setInterval(poll, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [authUser]);
+  }, [authUser, userFeatures.notebookEnabled]);
 
   // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
   useEffect(() => {
