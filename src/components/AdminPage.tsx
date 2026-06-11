@@ -101,9 +101,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [movingNbId, setMovingNbId] = useState<number | null>(null);
 
   // 기능 설정 상태
-  const [feature1Label, setFeature1Label] = useState('기능1');
-  const [feature1LabelInput, setFeature1LabelInput] = useState('기능1');
-  const [featureLabelSaving, setFeatureLabelSaving] = useState(false);
+  const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료']);
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
 
   // API 진단 상태
@@ -255,12 +253,11 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
 
   const loadFeatureSettings = async () => {
     try {
-      const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
+      const res = await fetch(`${APPS_SCRIPT_URL}?action=getFeatureLabels&cacheBust=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
-        if (data.feature1Label) {
-          setFeature1Label(data.feature1Label);
-          setFeature1LabelInput(data.feature1Label);
+        if (Array.isArray(data.labels) && data.labels.length === 5) {
+          setFeatureLabels(data.labels);
         }
       }
     } catch {}
@@ -297,21 +294,6 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       }
     } catch {}
     setTogglingKey(null);
-  };
-
-  const handleSaveFeature1Label = async () => {
-    const label = feature1LabelInput.trim() || '기능1';
-    setFeatureLabelSaving(true);
-    try {
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ action: 'setSettings', key: 'feature1Label', value: label }),
-      });
-      setFeature1Label(label);
-      setFeature1LabelInput(label);
-    } catch {}
-    setFeatureLabelSaving(false);
   };
 
   const handleAddNotebookLink = async () => {
@@ -534,11 +516,11 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               {users.map((u, i) => {
                 const isAdminUser = u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
                 const featureDefs = [
-                  { feat: 'feature1', label: feature1Label, val: !!u.feature1, onCls: 'text-orange-300 border-orange-700/60 bg-orange-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
-                  { feat: 'feature2', label: '기능2', val: !!u.feature2, onCls: 'text-green-300 border-green-700/60 bg-green-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
-                  { feat: 'feature3', label: '기능3', val: !!u.feature3, onCls: 'text-sky-300 border-sky-700/60 bg-sky-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
-                  { feat: 'youtubeEnabled', label: '유튜브', val: !!u.youtubeEnabled, onCls: 'text-red-300 border-red-700/60 bg-red-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
-                  { feat: 'notebookEnabled', label: '학습자료', val: !!u.notebookEnabled, onCls: 'text-violet-300 border-violet-700/60 bg-violet-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'feature1',       label: featureLabels[0], val: !!u.feature1,       onCls: 'text-orange-300 border-orange-700/60 bg-orange-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'feature2',       label: featureLabels[1], val: !!u.feature2,       onCls: 'text-green-300 border-green-700/60 bg-green-900/40',  offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'feature3',       label: featureLabels[2], val: !!u.feature3,       onCls: 'text-sky-300 border-sky-700/60 bg-sky-900/40',        offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'youtubeEnabled', label: featureLabels[3], val: !!u.youtubeEnabled, onCls: 'text-red-300 border-red-700/60 bg-red-900/40',        offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'notebookEnabled',label: featureLabels[4], val: !!u.notebookEnabled,onCls: 'text-violet-300 border-violet-700/60 bg-violet-900/40',offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                 ];
                 return (
                   <li key={i} className="bg-gray-800 rounded-lg px-3 py-2">
@@ -628,33 +610,6 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
             </ul>
           )}
 
-          {/* 기능 이름 설정 */}
-          <div className="mt-4 pt-4 border-t border-gray-800/60">
-            <p className="text-gray-500 text-xs font-semibold mb-2">기능 표시 이름</p>
-            <div className="flex items-end gap-2">
-              <div className="flex-1">
-                <label className="text-gray-600 text-[10px] block mb-1">기능1 이름 <span className="text-gray-700">(최대 10자)</span></label>
-                <input
-                  type="text"
-                  value={feature1LabelInput}
-                  onChange={e => setFeature1LabelInput(e.target.value)}
-                  placeholder="기능1"
-                  maxLength={10}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-orange-500"
-                />
-              </div>
-              <button
-                onClick={handleSaveFeature1Label}
-                disabled={featureLabelSaving || !feature1LabelInput.trim() || feature1LabelInput.trim() === feature1Label}
-                className="flex items-center gap-1.5 bg-orange-800/80 hover:bg-orange-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold py-1.5 px-3 rounded-lg transition-colors whitespace-nowrap"
-              >
-                {featureLabelSaving ? (
-                  <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />저장 중</>
-                ) : '저장'}
-              </button>
-            </div>
-          </div>
-
           {/* 사용자 추가/시트 버튼 */}
           <div className="mt-5 pt-5 border-t border-gray-800">
             <p className="text-gray-500 text-sm mb-3">
@@ -670,7 +625,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               구글 시트에서 사용자 관리
             </button>
             <p className="text-gray-600 text-xs mt-2 text-center">
-              A열: RESET / B열: 이메일 / C열: 이름 / D열: 가입일(YYYY-MM-DD) / E열: {feature1Label} / F열: 기능2 / G열: 기능3
+              A열: RESET / B열: 이메일 / C열: 이름 / D열: 가입일(YYYY-MM-DD) / E~I열: 기능1~5 (ON/OFF)
             </p>
 
             <a
