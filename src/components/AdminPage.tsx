@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LayoutDashboard } from 'lucide-react';
 import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
 import { RULED_BG_STYLE, NOTIFY_HEX } from '../design';
@@ -29,7 +29,8 @@ interface SentNotification {
 
 interface NotebookLink {
   title: string;
-  url: string;
+  url?: string;        // 외부 링크형 (새 탭)
+  fileId?: string;     // HTML 학습자료형 (sandbox iframe 뷰어) — 관리자 Drive 공개 파일 id
   createdAt: number;
 }
 
@@ -47,6 +48,8 @@ interface Props {
   onSetYoutubeUrl?: (url: string) => Promise<void>;
   notebookLinks?: NotebookLink[];
   onSetNotebookLinks?: (links: NotebookLink[]) => Promise<void>;
+  onUploadStudyMaterial?: (file: File) => Promise<string>; // HTML 업로드 → fileId
+  onDeleteStudyMaterialFile?: (fileId: string) => Promise<void>; // Drive 원본 정리
 }
 
 // Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
@@ -71,7 +74,7 @@ function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks, onUploadStudyMaterial, onDeleteStudyMaterialFile }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
@@ -100,6 +103,12 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [nbSaving, setNbSaving] = useState(false);
   const [deletingNbIds, setDeletingNbIds] = useState<Set<number>>(new Set());
   const [movingNbId, setMovingNbId] = useState<number | null>(null);
+  // HTML 학습자료 업로드 상태
+  const [nbFileTitle, setNbFileTitle] = useState('');
+  const [nbFile, setNbFile] = useState<File | null>(null);
+  const [nbUploading, setNbUploading] = useState(false);
+  const [nbUploadError, setNbUploadError] = useState('');
+  const nbFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // 기능 설정 상태
   const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료']);
@@ -319,6 +328,36 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     setNbSaving(false);
   };
 
+  const handleUploadStudyMaterialFile = async () => {
+    if (!nbFile || !onUploadStudyMaterial || !onSetNotebookLinks) return;
+    const title = (nbFileTitle.trim() || nbFile.name.replace(/\.html?$/i, '')).trim();
+    if (!title) { setNbUploadError('제목을 입력하세요.'); return; }
+    setNbUploadError('');
+    setNbUploading(true);
+    try {
+      const fileId = await onUploadStudyMaterial(nbFile);
+      const newLink: NotebookLink = { title, fileId, createdAt: Date.now() };
+      await onSetNotebookLinks([newLink, ...notebookLinks]);
+      // 학습자료(notebookEnabled) ON 사용자에게만 자동 알림 (비차단)
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'sendNotification',
+          targetEmail: '__notebook__',
+          message: `📚 ${title}가 등록되었습니다.`,
+          type: 'info',
+        }),
+      }).catch(() => {});
+      setNbFile(null);
+      setNbFileTitle('');
+      if (nbFileInputRef.current) nbFileInputRef.current.value = '';
+    } catch (e: any) {
+      setNbUploadError(e?.message?.includes('no-token') ? 'Drive 인증이 필요합니다.' : '업로드 실패. 다시 시도하세요.');
+    }
+    setNbUploading(false);
+  };
+
   const handleMoveNotebookLink = async (index: number, direction: 'up' | 'down') => {
     if (!onSetNotebookLinks) return;
     const arr = [...notebookLinks];
@@ -333,7 +372,12 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const handleDeleteNotebookLink = async (createdAt: number) => {
     if (!onSetNotebookLinks) return;
     setDeletingNbIds(prev => new Set([...prev, createdAt]));
+    const target = notebookLinks.find(l => l.createdAt === createdAt);
     await onSetNotebookLinks(notebookLinks.filter(l => l.createdAt !== createdAt));
+    // HTML 학습자료면 Drive 원본 파일도 정리 (비차단)
+    if (target?.fileId && onDeleteStudyMaterialFile) {
+      onDeleteStudyMaterialFile(target.fileId).catch(() => {});
+    }
     setDeletingNbIds(prev => { const next = new Set(prev); next.delete(createdAt); return next; });
   };
 
@@ -1002,6 +1046,42 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               </div>
             </div>
 
+            {/* HTML 파일 업로드 (자체완결형 HTML → 관리자 Drive 저장 → 사용자 sandbox 뷰어로 열람) */}
+            {onUploadStudyMaterial && (
+              <div className="space-y-2 pt-2 border-t border-gray-800">
+                <p className="text-gray-400 text-xs font-semibold">또는 HTML 파일 업로드</p>
+                <p className="text-gray-600 text-[11px] leading-relaxed">
+                  자체완결형 HTML 파일을 올리면 관리자 Drive에 저장되고, 사용자는 새 탭이 아닌 격리된 뷰어(iframe)에서 열람합니다.
+                </p>
+                <input
+                  type="text"
+                  value={nbFileTitle}
+                  onChange={e => setNbFileTitle(e.target.value)}
+                  placeholder="제목 (비우면 파일명 사용)"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-sky-500"
+                />
+                <div className="flex gap-2">
+                  <input
+                    ref={nbFileInputRef}
+                    type="file"
+                    accept=".html,.htm,text/html"
+                    onChange={e => { setNbFile(e.target.files?.[0] ?? null); setNbUploadError(''); }}
+                    className="flex-1 text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-gray-700 file:text-gray-200 hover:file:bg-gray-600 file:cursor-pointer"
+                  />
+                  <button
+                    onClick={handleUploadStudyMaterialFile}
+                    disabled={nbUploading || !nbFile}
+                    className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    {nbUploading ? (
+                      <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />업로드 중</>
+                    ) : '업로드'}
+                  </button>
+                </div>
+                {nbUploadError && <p className="text-red-400 text-[11px]">{nbUploadError}</p>}
+              </div>
+            )}
+
             {/* 링크 목록 */}
             {notebookLinks.length === 0 ? (
               <p className="text-gray-700 text-xs text-center py-2">등록된 링크가 없습니다.</p>
@@ -1030,15 +1110,22 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                             <td className="px-2 py-1.5 text-gray-500 whitespace-nowrap">{dateStr}</td>
                             <td className="px-2 py-1.5 text-gray-200 font-medium max-w-[120px] truncate">{link.title}</td>
                             <td className="px-2 py-1.5 max-w-[160px]">
-                              <a
-                                href={link.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sky-500 hover:text-sky-300 underline decoration-dotted truncate block transition-colors"
-                                title={link.url}
-                              >
-                                {link.url}
-                              </a>
+                              {link.fileId ? (
+                                <span className="inline-flex items-center gap-1 text-violet-400 text-[11px] font-semibold">
+                                  <span className="px-1.5 py-0.5 rounded bg-violet-900/40 border border-violet-700/50">HTML</span>
+                                  <span className="text-gray-500">학습자료 파일</span>
+                                </span>
+                              ) : (
+                                <a
+                                  href={link.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sky-500 hover:text-sky-300 underline decoration-dotted truncate block transition-colors"
+                                  title={link.url}
+                                >
+                                  {link.url}
+                                </a>
+                              )}
                             </td>
                             <td className="px-1 py-1.5 text-center">
                               <div className="flex flex-col items-center gap-0">

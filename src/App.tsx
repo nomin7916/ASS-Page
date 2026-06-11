@@ -11,7 +11,7 @@ import {
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, Label
 } from 'recharts';
 import { UI_CONFIG, GOOGLE_CLIENT_ID, ADMIN_EMAIL, APPS_SCRIPT_URL } from './config';
-import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup } from './driveStorage';
+import { DRIVE_FILES, saveDriveFile, loadDriveFile, MAX_BACKUPS, findUserIndexFolder, saveVersionedBackup, uploadHtmlStudyMaterial, deleteDriveFileById } from './driveStorage';
 import PortfolioTable from './components/PortfolioTable';
 import KrxGoldTable from './components/KrxGoldTable';
 import MarketIndicators from './components/MarketIndicators';
@@ -93,7 +93,7 @@ export default function App() {
   const [showCalculator, setShowCalculator] = useState(false);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [youtubeUrl, setYoutubeUrl] = useState('');
-  const [notebookLinks, setNotebookLinks] = useState<{title: string, url: string, createdAt: number}[]>([]);
+  const [notebookLinks, setNotebookLinks] = useState<{title: string, url?: string, fileId?: string, createdAt: number}[]>([]);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
   const adminTargetNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1321,7 +1321,24 @@ export default function App() {
     }).catch(() => {});
   };
 
-  const handleSetNotebookLinks = async (links: {title: string, url: string, createdAt: number}[]) => {
+  // 학습자료 HTML 파일을 관리자 Drive에 업로드(공개 권한 부여) → fileId 반환. AdminPage가 notebookLinks에 등록.
+  const handleUploadStudyMaterial = async (file: File): Promise<string> => {
+    const token = driveTokenRef.current;
+    if (!token) { notify('Drive 인증 필요', 'error'); throw new Error('no-token'); }
+    const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+    const htmlContent = await file.text();
+    const safeName = `study_${Date.now()}_${file.name.replace(/[^\w.\-]/g, '_')}`;
+    return await uploadHtmlStudyMaterial(token, folderId, safeName, htmlContent);
+  };
+
+  // 학습자료 링크 삭제 시 Drive 원본 HTML 파일도 정리 (fileId 보유 항목만)
+  const handleDeleteStudyMaterialFile = async (fileId: string): Promise<void> => {
+    const token = driveTokenRef.current;
+    if (!token || !fileId) return;
+    await deleteDriveFileById(token, fileId);
+  };
+
+  const handleSetNotebookLinks = async (links: {title: string, url?: string, fileId?: string, createdAt: number}[]) => {
     // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
     try {
       const token = driveTokenRef.current;
@@ -1999,7 +2016,7 @@ export default function App() {
     return <AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨

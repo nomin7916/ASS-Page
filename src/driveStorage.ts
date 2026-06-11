@@ -295,6 +295,67 @@ export async function saveDriveFile(
   }
 }
 
+// HTML 학습자료를 관리자 Drive에 업로드하고 '링크 있는 사람 누구나 보기' 공개 권한을 부여한 뒤 fileId 반환.
+// 일반 사용자는 drive.file scope라 관리자 파일을 직접 못 읽으므로, 공개로 두고 /api/study-material 프록시가 서버사이드로 읽어 전달한다.
+export async function uploadHtmlStudyMaterial(
+  token: string,
+  folderId: string,
+  fileName: string,
+  htmlContent: string
+): Promise<string> {
+  const boundary = 'drive_boundary_html';
+  const meta = { name: fileName, mimeType: 'text/html', parents: [folderId] };
+  const body = [
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    JSON.stringify(meta),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    '',
+    htmlContent,
+    `--${boundary}--`,
+  ].join('\r\n');
+  const res = await fetch(`${UPLOAD_API}/files?uploadType=multipart&fields=id`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    body,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`[Drive] 학습자료 업로드 실패 ${res.status}: ${err?.error?.message || res.statusText}`);
+  }
+  const data = await res.json();
+  const fileId = data.id as string;
+  if (!fileId) throw new Error('[Drive] 학습자료 업로드 응답에 fileId 없음');
+  // 공개 권한(anyone with link, reader) 부여 — 프록시가 키 없이도 읽을 수 있게
+  const permRes = await fetch(`${DRIVE_API}/files/${fileId}/permissions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+  });
+  if (!permRes.ok) {
+    // 권한 부여 실패 시 업로드한 파일을 정리하고 에러 — 비공개 파일은 사용자가 못 읽음
+    await deleteDriveFileById(token, fileId);
+    const err = await permRes.json().catch(() => ({}));
+    throw new Error(`[Drive] 학습자료 공개 권한 부여 실패 ${permRes.status}: ${err?.error?.message || permRes.statusText}`);
+  }
+  return fileId;
+}
+
+// fileId로 Drive 파일 삭제 (학습자료 링크 삭제 시 원본 정리, 실패 무시)
+export async function deleteDriveFileById(token: string, fileId: string): Promise<void> {
+  try {
+    await fetch(`${DRIVE_API}/files/${fileId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {}
+}
+
 // Drive 파일에서 JSON 데이터 불러오기
 export async function loadDriveFile(
   token: string,

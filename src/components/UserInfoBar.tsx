@@ -66,6 +66,31 @@ export default function UserInfoBar({
   const [notebookOpen, setNotebookOpen] = useState(false);
   const dropdownRef = useRef(null);
 
+  // HTML 학습자료 뷰어 (sandbox iframe) 상태
+  const [viewer, setViewer] = useState(null); // { title }
+  const [viewerHtml, setViewerHtml] = useState('');
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const [viewerError, setViewerError] = useState('');
+
+  const openStudyMaterial = async (link) => {
+    setNotebookOpen(false);
+    setViewer({ title: link.title });
+    setViewerHtml('');
+    setViewerError('');
+    setViewerLoading(true);
+    try {
+      const res = await fetch(`/api/study-material?id=${encodeURIComponent(link.fileId)}`);
+      if (!res.ok) throw new Error(String(res.status));
+      const html = await res.text();
+      setViewerHtml(html);
+    } catch {
+      setViewerError('학습자료를 불러오지 못했습니다.');
+    }
+    setViewerLoading(false);
+  };
+
+  const closeViewer = () => { setViewer(null); setViewerHtml(''); setViewerError(''); };
+
   const [linkEditOpen, setLinkEditOpen] = useState(false);
   const linkEditRef = useRef(null);
 
@@ -302,25 +327,83 @@ export default function UserInfoBar({
                 <ul className="py-1 max-h-[60vh] md:max-h-64 overflow-y-auto">
                   {notebookLinks.map((link, i) => (
                     <li key={i}>
-                      <a
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => setNotebookOpen(false)}
-                        className="flex items-start md:items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
-                      >
-                        <span className="flex-shrink-0 mt-0.5 md:mt-0 text-sky-500 group-hover:text-sky-400 transition-colors">
-                          <NotebookLMIcon size={13} />
-                        </span>
-                        <span className="text-gray-300 text-xs group-hover:text-white transition-colors break-words md:truncate">
-                          {link.title}
-                        </span>
-                      </a>
+                      {link.fileId ? (
+                        <button
+                          onClick={() => openStudyMaterial(link)}
+                          className="w-full text-left flex items-start md:items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
+                        >
+                          <span className="flex-shrink-0 mt-0.5 md:mt-0 text-violet-400 group-hover:text-violet-300 transition-colors">
+                            <NotebookLMIcon size={13} />
+                          </span>
+                          <span className="text-gray-300 text-xs group-hover:text-white transition-colors break-words md:truncate">
+                            {link.title}
+                          </span>
+                        </button>
+                      ) : (
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={() => setNotebookOpen(false)}
+                          className="flex items-start md:items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
+                        >
+                          <span className="flex-shrink-0 mt-0.5 md:mt-0 text-sky-500 group-hover:text-sky-400 transition-colors">
+                            <NotebookLMIcon size={13} />
+                          </span>
+                          <span className="text-gray-300 text-xs group-hover:text-white transition-colors break-words md:truncate">
+                            {link.title}
+                          </span>
+                        </a>
+                      )}
                     </li>
                   ))}
                 </ul>
               </div>
             </>
+          )}
+
+          {/* HTML 학습자료 뷰어 — sandbox iframe으로 격리 렌더 (allow-same-origin 미부여 → 앱 데이터 접근 차단) */}
+          {viewer && (
+            <div className="fixed inset-0 z-[1100] bg-black/80 flex flex-col" onClick={closeViewer}>
+              <div
+                className="m-auto w-[96vw] h-[92vh] max-w-[1100px] bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden flex flex-col"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800 flex-shrink-0">
+                  <span className="text-gray-200 text-sm font-semibold truncate pr-2">{viewer.title}</span>
+                  <button
+                    onClick={closeViewer}
+                    className="text-gray-500 hover:text-gray-200 transition-colors flex-shrink-0"
+                    title="닫기"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="flex-1 relative bg-white">
+                  {viewerLoading && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+                      <div className="flex items-center gap-2 text-gray-400 text-sm">
+                        <div className="w-4 h-4 border-2 border-gray-600 border-t-gray-300 rounded-full animate-spin" />
+                        불러오는 중…
+                      </div>
+                    </div>
+                  )}
+                  {viewerError && !viewerLoading && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+                      <span className="text-red-400 text-sm">{viewerError}</span>
+                    </div>
+                  )}
+                  {!viewerLoading && !viewerError && (
+                    <iframe
+                      title={viewer.title}
+                      srcDoc={viewerHtml}
+                      sandbox="allow-scripts allow-popups"
+                      className="w-full h-full border-0"
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
           )}
         </div>
         <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
