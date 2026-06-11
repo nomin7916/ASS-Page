@@ -98,6 +98,12 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [deletingNbIds, setDeletingNbIds] = useState<Set<number>>(new Set());
   const [movingNbId, setMovingNbId] = useState<number | null>(null);
 
+  // 기능 설정 상태
+  const [feature1Label, setFeature1Label] = useState('기능1');
+  const [feature1LabelInput, setFeature1LabelInput] = useState('기능1');
+  const [featureLabelSaving, setFeatureLabelSaving] = useState(false);
+  const [togglingKey, setTogglingKey] = useState<string | null>(null);
+
   // API 진단 상태
   const [apiTestCode, setApiTestCode] = useState('');
   const [apiTestLoading, setApiTestLoading] = useState(false);
@@ -245,6 +251,67 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     } catch {}
   };
 
+  const loadFeatureSettings = async () => {
+    try {
+      const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.feature1Label) {
+          setFeature1Label(data.feature1Label);
+          setFeature1LabelInput(data.feature1Label);
+        }
+      }
+    } catch {}
+  };
+
+  // Apps Script doPost에 아래 코드 추가 필요:
+  // if (action === 'setUserFeature') {
+  //   const ss = SpreadsheetApp.openById(SHEET_ID);
+  //   const sheet = ss.getSheetByName(APPROVED_SHEET_NAME);
+  //   const rows = sheet.getDataRange().getValues();
+  //   const colMap = { feature1: 4, feature2: 5, feature3: 6 }; // E=4, F=5, G=6 (0-indexed)
+  //   for (let i = 1; i < rows.length; i++) {
+  //     if (String(rows[i][1]).toLowerCase() === params.email.toLowerCase()) {
+  //       sheet.getRange(i + 1, colMap[params.feature] + 1).setValue(params.value ? 'ON' : 'OFF');
+  //       break;
+  //     }
+  //   }
+  //   return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
+  // }
+  const handleToggleFeature = async (email: string, feature: string, currentValue: boolean) => {
+    const key = `${email}:${feature}`;
+    setTogglingKey(key);
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'setUserFeature', email, feature, value: !currentValue }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        setUsers(prev => prev.map(u =>
+          u.email === email ? { ...u, [feature]: !currentValue } : u
+        ));
+      }
+    } catch {}
+    setTogglingKey(null);
+  };
+
+  const handleSaveFeature1Label = async () => {
+    const label = feature1LabelInput.trim() || '기능1';
+    setFeatureLabelSaving(true);
+    try {
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'setSettings', key: 'feature1Label', value: label }),
+      });
+      setFeature1Label(label);
+      setFeature1LabelInput(label);
+    } catch {}
+    setFeatureLabelSaving(false);
+  };
+
   const handleAddNotebookLink = async () => {
     if (!nbTitle.trim() || !nbUrl.trim() || !onSetNotebookLinks) return;
     setNbSaving(true);
@@ -343,6 +410,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     });
     fetchSentNotifications();
     loadYoutubeHistory();
+    loadFeatureSettings();
   }, []);
 
   const handleRefresh = async () => {
@@ -460,81 +528,128 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
           ) : users.length === 0 ? (
             <p className="text-gray-600 text-sm text-center py-6">승인된 사용자가 없습니다.</p>
           ) : (
-            <ul className="space-y-2 max-h-64 overflow-y-auto">
-              {users.map((u, i) => (
-                <li key={i} className="flex items-center gap-3 bg-gray-800 rounded-lg px-4 py-2.5">
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${u.resetFlag ? 'bg-yellow-400' : 'bg-green-400'}`} />
-                  <div className="flex-1 min-w-0">
-                    {u.name && <div className="text-gray-100 text-xs font-semibold truncate">{u.name}</div>}
-                    <span className="text-gray-400 text-sm truncate">{u.email}</span>
-                    {u.registeredAt && (
-                      <div className="text-gray-600 text-xs mt-0.5">가입일: {u.registeredAt}</div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 ml-auto flex-shrink-0">
-                    {u.feature1 && (
-                      <span className="text-xs bg-orange-900/60 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded-full" title="종목 비교 숨김">
-                        기능1
-                      </span>
-                    )}
-                    {u.feature2 && (
-                      <span className="text-xs bg-green-900/60 text-green-300 border border-green-700/50 px-2 py-0.5 rounded-full" title="배당 과세 관리">
-                        기능2
-                      </span>
-                    )}
-                    {u.feature3 && (
-                      <span className="text-xs bg-sky-900/60 text-sky-300 border border-sky-700/50 px-2 py-0.5 rounded-full" title="분배금 현황 숨김">
-                        기능3
-                      </span>
-                    )}
-                    {u.resetFlag && (
-                      <span className="text-xs bg-yellow-900/60 text-yellow-300 border border-yellow-700/50 px-2 py-0.5 rounded-full">
-                        PIN 초기화됨
-                      </span>
-                    )}
-                    {u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? (
-                      <span className="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded-full">관리자</span>
-                    ) : (
-                      <>
-                        {userAccessStatus[u.email] === true && (
-                          <span className="text-xs bg-emerald-900/60 text-emerald-300 border border-emerald-700/50 px-2 py-0.5 rounded-full">허용</span>
+            <ul className="space-y-2 max-h-72 overflow-y-auto">
+              {users.map((u, i) => {
+                const isAdminUser = u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+                const featureDefs = [
+                  { feat: 'feature1', label: feature1Label, val: !!u.feature1, onCls: 'text-orange-300 border-orange-700/60 bg-orange-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'feature2', label: '기능2', val: !!u.feature2, onCls: 'text-green-300 border-green-700/60 bg-green-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'feature3', label: '기능3', val: !!u.feature3, onCls: 'text-sky-300 border-sky-700/60 bg-sky-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                ];
+                return (
+                  <li key={i} className="bg-gray-800 rounded-lg px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${u.resetFlag ? 'bg-yellow-400' : 'bg-green-400'}`} />
+                      <div className="flex-1 min-w-0">
+                        {u.name && <div className="text-gray-100 text-xs font-semibold truncate">{u.name}</div>}
+                        <span className="text-gray-400 text-xs truncate block">{u.email}</span>
+                        {u.registeredAt && (
+                          <div className="text-gray-600 text-[10px] mt-0.5">가입일: {u.registeredAt}</div>
                         )}
-                        {userAccessStatus[u.email] === false && (
-                          <span className="text-xs bg-red-900/60 text-red-300 border border-red-700/50 px-2 py-0.5 rounded-full">차단</span>
+                      </div>
+                      <div className="flex items-center gap-1 ml-auto flex-shrink-0 flex-wrap justify-end">
+                        {u.resetFlag && (
+                          <span className="text-[10px] bg-yellow-900/60 text-yellow-300 border border-yellow-700/50 px-1.5 py-0.5 rounded-full">
+                            PIN초기화
+                          </span>
                         )}
-                        {userLastSeen[u.email] && (() => {
-                          const { label, isOnline } = formatLastSeen(userLastSeen[u.email]);
+                        {isAdminUser ? (
+                          <>
+                            {u.feature2 && <span className="text-[10px] bg-green-900/60 text-green-300 border border-green-700/50 px-1.5 py-0.5 rounded-full">기능2</span>}
+                            <span className="text-[10px] bg-blue-900 text-blue-300 px-1.5 py-0.5 rounded-full">관리자</span>
+                          </>
+                        ) : (
+                          <>
+                            {userAccessStatus[u.email] === true && (
+                              <span className="text-[10px] bg-emerald-900/60 text-emerald-300 border border-emerald-700/50 px-1.5 py-0.5 rounded-full">허용</span>
+                            )}
+                            {userAccessStatus[u.email] === false && (
+                              <span className="text-[10px] bg-red-900/60 text-red-300 border border-red-700/50 px-1.5 py-0.5 rounded-full">차단</span>
+                            )}
+                            {userLastSeen[u.email] && (() => {
+                              const { label, isOnline } = formatLastSeen(userLastSeen[u.email]);
+                              return (
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full border flex items-center gap-1 ${
+                                  isOnline
+                                    ? 'bg-green-950/70 text-green-300 border-green-700/50'
+                                    : 'bg-gray-800/60 text-gray-400 border-gray-700/40'
+                                }`}>
+                                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-green-400' : 'bg-gray-500'}`} />
+                                  {label}
+                                </span>
+                              );
+                            })()}
+                            {onViewUser && (
+                              <button
+                                onClick={() => !switching && onViewUser(u.email)}
+                                disabled={switching}
+                                className={`text-[10px] border px-1.5 py-0.5 rounded-full transition-colors ${
+                                  switching
+                                    ? 'bg-gray-800/40 text-gray-600 border-gray-700/30 cursor-not-allowed'
+                                    : 'bg-green-900/60 hover:bg-green-800/80 text-green-300 border-green-700/50'
+                                }`}
+                              >
+                                {switching ? '전환 중...' : '접속'}
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {/* 기능 ON/OFF 토글 — 비관리자 전용 */}
+                    {!isAdminUser && (
+                      <div className="flex items-center gap-1 mt-1.5 ml-4">
+                        {featureDefs.map(({ feat, label, val, onCls, offCls }) => {
+                          const togKey = `${u.email}:${feat}`;
+                          const isToggling = togglingKey === togKey;
                           return (
-                            <span className={`text-xs px-2 py-0.5 rounded-full border flex items-center gap-1 ${
-                              isOnline
-                                ? 'bg-green-950/70 text-green-300 border-green-700/50'
-                                : 'bg-gray-800/60 text-gray-400 border-gray-700/40'
-                            }`}>
-                              <span className={`inline-block w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-green-400' : 'bg-gray-500'}`} />
-                              {label}
-                            </span>
+                            <button
+                              key={feat}
+                              onClick={() => !togglingKey && handleToggleFeature(u.email, feat, val)}
+                              disabled={!!togglingKey}
+                              title={`${label}: ${val ? 'ON — 클릭하여 끄기' : 'OFF — 클릭하여 켜기'}`}
+                              className={`text-[10px] font-semibold px-2 py-0.5 rounded border transition-all disabled:opacity-50 ${val ? onCls : offCls}`}
+                            >
+                              {isToggling
+                                ? <span className="inline-block w-2 h-2 border border-current border-t-transparent rounded-full animate-spin align-middle" />
+                                : `${label} ${val ? 'ON' : 'OFF'}`}
+                            </button>
                           );
-                        })()}
-                        {onViewUser && (
-                          <button
-                            onClick={() => !switching && onViewUser(u.email)}
-                            disabled={switching}
-                            className={`text-xs border px-2 py-0.5 rounded-full transition-colors ${
-                              switching
-                                ? 'bg-gray-800/40 text-gray-600 border-gray-700/30 cursor-not-allowed'
-                                : 'bg-green-900/60 hover:bg-green-800/80 text-green-300 border-green-700/50'
-                            }`}
-                          >
-                            {switching ? '전환 중...' : '접속'}
-                          </button>
-                        )}
-                      </>
+                        })}
+                      </div>
                     )}
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
+
+          {/* 기능 이름 설정 */}
+          <div className="mt-4 pt-4 border-t border-gray-800/60">
+            <p className="text-gray-500 text-xs font-semibold mb-2">기능 표시 이름</p>
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <label className="text-gray-600 text-[10px] block mb-1">기능1 이름 <span className="text-gray-700">(최대 10자)</span></label>
+                <input
+                  type="text"
+                  value={feature1LabelInput}
+                  onChange={e => setFeature1LabelInput(e.target.value)}
+                  placeholder="기능1"
+                  maxLength={10}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+              <button
+                onClick={handleSaveFeature1Label}
+                disabled={featureLabelSaving || !feature1LabelInput.trim() || feature1LabelInput.trim() === feature1Label}
+                className="flex items-center gap-1.5 bg-orange-800/80 hover:bg-orange-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold py-1.5 px-3 rounded-lg transition-colors whitespace-nowrap"
+              >
+                {featureLabelSaving ? (
+                  <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />저장 중</>
+                ) : '저장'}
+              </button>
+            </div>
+          </div>
 
           {/* 사용자 추가/시트 버튼 */}
           <div className="mt-5 pt-5 border-t border-gray-800">
@@ -551,7 +666,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               구글 시트에서 사용자 관리
             </button>
             <p className="text-gray-600 text-xs mt-2 text-center">
-              A열: RESET / B열: 이메일 / C열: 이름 / D열: 가입일(YYYY-MM-DD) / E열: 기능1 / F열: 기능2 / G열: 기능3
+              A열: RESET / B열: 이메일 / C열: 이름 / D열: 가입일(YYYY-MM-DD) / E열: {feature1Label} / F열: 기능2 / G열: 기능3
             </p>
 
             <a
