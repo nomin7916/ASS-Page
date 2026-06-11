@@ -1981,8 +1981,14 @@ export default function App() {
     }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} />;
   }
 
+  // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨
+  const isAdminUser = authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const effectiveUserFeatures = isAdminUser
+    ? { ...userFeatures, feature1: true, feature2: true, feature3: true }
+    : userFeatures;
+
   // 배당 과세 이력 관리 페이지 (관리자 또는 feature2 허용 사용자)
-  const canAccessDividendTax = authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.feature2;
+  const canAccessDividendTax = isAdminUser || userFeatures.feature2;
   if (showDividendTaxPage && canAccessDividendTax) {
     return (
       <DividendTaxPage
@@ -2389,7 +2395,7 @@ export default function App() {
             setGoldIndicatorColors={setGoldIndicatorColors}
             compStocks={compStocks}
             setCompStocks={setCompStocks}
-            userFeatures={userFeatures}
+            userFeatures={effectiveUserFeatures}
             finalChartData={finalChartData}
             effectiveShowIndicators={effectiveShowIndicators}
             selectionResult={selectionResult}
@@ -2542,7 +2548,7 @@ export default function App() {
             allPortfoliosForDividend={allPortfoliosForDividend}
             activePortfolioId={activePortfolioId}
             activeHistory={history}
-            userFeatures={userFeatures}
+            userFeatures={effectiveUserFeatures}
             updatePortfolioDividendHistory={updatePortfolioDividendHistory}
             updatePortfolioActualDividend={updatePortfolioActualDividend}
             updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd}
