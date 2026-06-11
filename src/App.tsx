@@ -1475,7 +1475,8 @@ export default function App() {
           if (settingsRes.ok) {
             const settingsData = await settingsRes.json();
             const yu = settingsData.youtubeUrl || '';
-            const nl: any[] | null = settingsData.notebookLinks ? (() => { try { return JSON.parse(settingsData.notebookLinks); } catch { return null; } })() : null;
+            const rawNl = settingsData.notebookLinks;
+            const nl: any[] | null = rawNl ? (Array.isArray(rawNl) ? rawNl : (() => { try { return JSON.parse(rawNl); } catch { return null; } })()) : null;
             setYoutubeUrl(yu);
             if (Array.isArray(nl)) setNotebookLinks(nl);
             // 관리자: Drive에 저장 (이후 Drive가 정본으로 동작)
@@ -1553,7 +1554,8 @@ export default function App() {
             const d = await res.json();
             if (d.youtubeUrl) setYoutubeUrl(d.youtubeUrl);
             if (d.notebookLinks) {
-              try { setNotebookLinks(JSON.parse(d.notebookLinks)); } catch {}
+              if (Array.isArray(d.notebookLinks)) setNotebookLinks(d.notebookLinks);
+              else { try { setNotebookLinks(JSON.parse(d.notebookLinks)); } catch {} }
             }
           }
         } catch {}
