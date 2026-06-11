@@ -288,8 +288,8 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
             return;
           }
         } catch { /* 네트워크 오류 → 세션 유지하고 앱 진입 허용 */ }
-        const { name, feature1, feature2, feature3 } = await checkApproval(email);
-        onApproved(email, token, { name, feature1, feature2, feature3 });
+        const { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled } = await checkApproval(email);
+        onApproved(email, token, { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled });
       },
       onFail: () => {
         sessionStorage.removeItem(SESSION_KEY);
@@ -317,8 +317,8 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         }
         return checkApproval(adminViewUserCtx.userEmail);
       })
-      .then(({ name, feature1, feature2, feature3 }) => {
-        featuresRef.current = { name, feature1, feature2, feature3 };
+      .then(({ name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled }) => {
+        featuresRef.current = { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled };
         setStep('pin_entry');
       })
       .catch(() => {
@@ -361,12 +361,12 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         setUserEmail(email);
         setUserToken(token);
 
-        const { approved, needsReset, adminPin, name, feature1, feature2, feature3 } = await checkApproval(email);
+        const { approved, needsReset, adminPin, name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled } = await checkApproval(email);
         if (!approved) {
           setStep('pending');
           return;
         }
-        featuresRef.current = { name, feature1, feature2, feature3 };
+        featuresRef.current = { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled };
 
         if (needsReset) {
           const adminHash = hashPin(adminPin);
