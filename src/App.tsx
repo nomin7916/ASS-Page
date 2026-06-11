@@ -73,7 +73,7 @@ export default function App() {
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
-  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
+  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
@@ -2078,8 +2078,8 @@ export default function App() {
           onAppClose={handleAppClose}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
-          youtubeUrl={youtubeUrl}
-          notebookLinks={notebookLinks}
+          youtubeUrl={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.youtubeEnabled ? youtubeUrl : ''}
+          notebookLinks={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.notebookEnabled ? notebookLinks : []}
           title={title}
           setTitle={setTitle}
           showIntegratedDashboard={showIntegratedDashboard}

@@ -15,6 +15,8 @@ interface ApprovedUser {
   feature1?: boolean;
   feature2?: boolean;
   feature3?: boolean;
+  youtubeEnabled?: boolean; // H열
+  notebookEnabled?: boolean; // I열
 }
 
 interface SentNotification {
@@ -269,7 +271,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   //   const ss = SpreadsheetApp.openById(SHEET_ID);
   //   const sheet = ss.getSheetByName(APPROVED_SHEET_NAME);
   //   const rows = sheet.getDataRange().getValues();
-  //   const colMap = { feature1: 4, feature2: 5, feature3: 6 }; // E=4, F=5, G=6 (0-indexed)
+  //   const colMap = { feature1: 4, feature2: 5, feature3: 6, youtubeEnabled: 7, notebookEnabled: 8 }; // E=4,F=5,G=6,H=7,I=8 (0-indexed)
   //   for (let i = 1; i < rows.length; i++) {
   //     if (String(rows[i][1]).toLowerCase() === params.email.toLowerCase()) {
   //       sheet.getRange(i + 1, colMap[params.feature] + 1).setValue(params.value ? 'ON' : 'OFF');
@@ -535,6 +537,8 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   { feat: 'feature1', label: feature1Label, val: !!u.feature1, onCls: 'text-orange-300 border-orange-700/60 bg-orange-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                   { feat: 'feature2', label: '기능2', val: !!u.feature2, onCls: 'text-green-300 border-green-700/60 bg-green-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                   { feat: 'feature3', label: '기능3', val: !!u.feature3, onCls: 'text-sky-300 border-sky-700/60 bg-sky-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'youtubeEnabled', label: '유튜브', val: !!u.youtubeEnabled, onCls: 'text-red-300 border-red-700/60 bg-red-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'notebookEnabled', label: '학습자료', val: !!u.notebookEnabled, onCls: 'text-violet-300 border-violet-700/60 bg-violet-900/40', offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                 ];
                 return (
                   <li key={i} className="bg-gray-800 rounded-lg px-3 py-2">

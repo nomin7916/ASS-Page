@@ -12,6 +12,8 @@ export interface UserFeatures {
   feature1: boolean;
   feature2: boolean;
   feature3: boolean;
+  youtubeEnabled: boolean;
+  notebookEnabled: boolean;
 }
 
 interface AdminViewUserCtx {
@@ -69,7 +71,7 @@ async function checkApproval(email: string): Promise<{ approved: boolean; needsR
   try {
     const url = `${APPS_SCRIPT_URL}?action=check&email=${encodeURIComponent(email)}&cacheBust=${Date.now()}`;
     const res = await fetch(url);
-    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false };
+    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false };
     const data = await res.json();
     // Apps Script returns { status: 'approved'/'not_approved', resetPassword: string|null, name, feature1, ... }
     return {
@@ -80,9 +82,11 @@ async function checkApproval(email: string): Promise<{ approved: boolean; needsR
       feature1: data.feature1 ?? false,
       feature2: data.feature2 ?? false,
       feature3: data.feature3 ?? false,
+      youtubeEnabled: data.youtubeEnabled ?? false,
+      notebookEnabled: data.notebookEnabled ?? false,
     };
   } catch {
-    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false };
+    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false };
   }
 }
 
