@@ -102,7 +102,7 @@ export default function App() {
   const [adminSessionElapsed, setAdminSessionElapsed] = useState(0);
   const [adminSwitching, setAdminSwitching] = useState(false);
   const [userLastSeen, setUserLastSeen] = useState<Record<string, number>>({});
-  const [userDriveStatus, setUserDriveStatus] = useState<Record<string, 'found' | 'not_found' | 'checking'>>({});
+  const [userDriveStatus, setUserDriveStatus] = useState<Record<string, 'found' | 'not_found' | 'error' | 'checking'>>({});
   const {
     showPinChange, setShowPinChange,
     pinChangeSaving, setPinChangeSaving,
@@ -255,8 +255,10 @@ export default function App() {
         if (sessionData?.lastSeen) {
           setUserLastSeen(prev => ({ ...prev, [email]: sessionData.lastSeen }));
         }
-      } catch {
-        setUserDriveStatus(prev => ({ ...prev, [email]: 'not_found' }));
+      } catch (e: any) {
+        const msg = String(e?.message || '');
+        const isApiError = msg.includes('TOKEN_EXPIRED') || msg.includes('PERMISSION_DENIED') || msg.includes('DRIVE_ERROR');
+        setUserDriveStatus(prev => ({ ...prev, [email]: isApiError ? 'error' : 'not_found' }));
       }
     }
   };

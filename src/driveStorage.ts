@@ -207,10 +207,12 @@ export async function revokeAdminReadAccess(token: string, folderId: string, adm
 }
 
 // 관리자 토큰으로 대상 사용자의 폴더 ID 찾기 — 새 형식(Index_Data_<email>) 우선, 구 형식(Index_Data) 폴백
+// targetEmail은 시트에서 공백이 섞여 올 수 있으므로 trim() 후 사용
 export async function findUserIndexFolder(adminToken: string, targetEmail: string): Promise<string | null> {
+  const email = targetEmail.trim();
   const searchByName = async (name: string) => {
     const q = encodeURIComponent(
-      `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${targetEmail}' in owners`
+      `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false and '${email}' in owners`
     );
     const res = await fetch(
       `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,modifiedTime)&orderBy=modifiedTime+desc`,
@@ -224,7 +226,7 @@ export async function findUserIndexFolder(adminToken: string, targetEmail: strin
     const data = await res.json();
     return data.files?.[0]?.id ?? null;
   };
-  return (await searchByName(getFolderName(targetEmail))) ?? (await searchByName(FOLDER_NAME_LEGACY));
+  return (await searchByName(getFolderName(email))) ?? (await searchByName(FOLDER_NAME_LEGACY));
 }
 
 // 폴더 안에서 파일 ID 찾기

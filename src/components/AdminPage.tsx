@@ -41,7 +41,7 @@ interface Props {
   userAccessStatus?: Record<string, boolean>;
   switching?: boolean;
   userLastSeen?: Record<string, number>;
-  userDriveStatus?: Record<string, 'found' | 'not_found' | 'checking'>;
+  userDriveStatus?: Record<string, 'found' | 'not_found' | 'error' | 'checking'>;
   onRefreshUserSessions?: (emails: string[]) => Promise<void>;
   youtubeUrl?: string;
   onSetYoutubeUrl?: (url: string) => Promise<void>;
@@ -56,7 +56,7 @@ async function fetchApprovedUsers(): Promise<ApprovedUser[]> {
     const res = await fetch(url);
     if (!res.ok) return [];
     const data = await res.json();
-    return (data.users || []).filter((u: ApprovedUser) => u.email);
+    return (data.users || []).filter((u: ApprovedUser) => u.email).map((u: ApprovedUser) => ({ ...u, email: u.email.trim() }));
   } catch {
     return [];
   }
@@ -565,7 +565,10 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                                 <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-sky-900/50 text-sky-300 border-sky-700/50">Drive✓</span>
                               );
                               if (ds === 'not_found') return (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-red-900/50 text-red-300 border-red-700/50" title="Drive 폴더 접근 불가 — 사용자가 앱에 로그인한 적 없거나 공유 권한 미부여">Drive✗</span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-red-900/50 text-red-300 border-red-700/50" title="Drive 폴더 없음 — 앱에 최초 로그인하면 자동 생성됩니다">Drive✗</span>
+                              );
+                              if (ds === 'error') return (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-amber-900/50 text-amber-300 border-amber-700/50" title="Drive API 오류 — 관리자 토큰 만료 또는 권한 없음 (새로고침 시도)">Drive?</span>
                               );
                               return null;
                             })()}
