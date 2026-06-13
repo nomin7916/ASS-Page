@@ -52,7 +52,7 @@ import { useHistoryBackfill } from './hooks/useHistoryBackfill';
 import { useIndexImport } from './hooks/useIndexImport';
 import { usePortfolioData } from './hooks/usePortfolioData';
 import { useIntegratedData } from './hooks/useIntegratedData';
-import { useMarketCalendar, getTodayKST, getEffectiveDate, getMsUntilCutoff } from './hooks/useMarketCalendar';
+import { useMarketCalendar, getTodayKST, getEffectiveDate, getEffectiveDateKR, getEffectiveDateForAccount, getBackfillBoundaryKR, isKrCutoffAccount, getMsUntilNextBoundary } from './hooks/useMarketCalendar';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -283,12 +283,20 @@ export default function App() {
   const { notify, notificationLog, setNotificationLog, clearNotificationLog, unreadCount, markAsRead, confirmState, confirm, resolveConfirm } = useToast();
   const { isMarketOpen, holidays: marketHolidays, loaded: calendarLoaded } = useMarketCalendar();
 
-  // 07:30 이전: 전날 날짜로 기록 / 07:30 이후: 오늘 날짜로 기록
+  // 글로벌(overseas/crypto/현금성): 07:30 이전 전날 날짜로 기록 / 이후 오늘 날짜로 기록
+  // KR(국내시장 계좌): 09:00(개장)~21:00 오늘 날짜로 기록 / 그 외 null(21:00 당일 확정·동결)
   const [effectiveDateKey, setEffectiveDateKey] = useState(() => getEffectiveDate());
+  const [krEffectiveDateKey, setKrEffectiveDateKey] = useState(() => getEffectiveDateKR());
   useEffect(() => {
-    const ms = getMsUntilCutoff();
-    if (ms === null) return;
-    const timer = setTimeout(() => setEffectiveDateKey(getEffectiveDate()), ms);
+    let timer;
+    const arm = () => {
+      timer = setTimeout(() => {
+        setEffectiveDateKey(getEffectiveDate());
+        setKrEffectiveDateKey(getEffectiveDateKR());
+        arm(); // 07:30 → 09:00 → 21:00 매 경계 재무장 — 자정 통과·장시간 켜둔 앱 커버
+      }, getMsUntilNextBoundary());
+    };
+    arm();
     return () => clearTimeout(timer);
   }, []);
 
@@ -1141,7 +1149,7 @@ export default function App() {
   useHistoryBackfill({
     stockHistoryMap, indicatorHistoryMap, marketIndicators,
     portfolioSummaries, portfolios, setPortfolios,
-    activePortfolioId, setHistory, effectiveDateKey,
+    activePortfolioId, setHistory, effectiveDateKey, krEffectiveDateKey,
   });
 
   const { handleImportHistoryJSON } = useIndexImport({
@@ -1725,9 +1733,12 @@ export default function App() {
   // 가격 변동은 무시(snapshotCompositionKey가 수량·예수금·구성만 비교) → 일별 적재 아님.
   useEffect(() => {
     if (portfolios.length === 0) return;
-    const today = effectiveDateKey;
     const maybeUpdate = (p) => {
       if (!p || p.accountType === 'simple' || p.accountType === 'matong') return null;
+      // KR 계좌는 다음 실시간 기록 대상일(21:00 전 오늘 / 후 내일)로 기록 —
+      // 새벽 구성 변경이 21:00에 확정된 전일 날짜 스냅샷으로 남는 것 방지
+      // (accountType 미설정 레거시 계좌는 'portfolio' 취급 — 앱 전역 컨벤션)
+      const today = isKrCutoffAccount(p.accountType || 'portfolio') ? getBackfillBoundaryKR() : effectiveDateKey;
       const items = snapshotItemsFromPortfolio(p.portfolio || []);
       if (items.length === 0) return null;
       const compKey = snapshotCompositionKey(p.portfolio || []);
@@ -1756,12 +1767,13 @@ export default function App() {
       return { ...p, holdingSnapshots: upd };
     });
     if (changed) setPortfolios(next);
-  }, [portfolios, effectiveDateKey]);
+  }, [portfolios, effectiveDateKey, krEffectiveDateKey]);
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
     if (!calendarLoaded) return;
-    const today = effectiveDateKey;
+    const today = getEffectiveDateForAccount(activePortfolioAccountType);
+    if (!today) return; // KR 계좌 기록 창(09:00~21:00) 밖 — 21:00 당일 확정·동결, 개장 전 placeholder 미생성
     const dayOfWeek = new Date(today + 'T12:00:00').getDay();
     const isTradingDay = (dayOfWeek !== 0 && dayOfWeek !== 6) && isMarketOpen(activePortfolioAccountType);
     setHistory(prev => {
@@ -1802,7 +1814,7 @@ export default function App() {
       const fills = fillNonTradingGaps(newHist, krH, usH, accType);
       return fills.length > 0 ? [...newHist, ...fills] : newHist;
     });
-  }, [totals.totalEval, principal, calendarLoaded, activePortfolioAccountType, effectiveDateKey]);
+  }, [totals.totalEval, principal, calendarLoaded, activePortfolioAccountType, effectiveDateKey, krEffectiveDateKey]);
 
   // 07:30 이후 활성 포트폴리오의 전날 종가를 히스토리에 자동 기록 (MA: 펀드 보유 계좌)
   useEffect(() => {
@@ -2302,7 +2314,7 @@ export default function App() {
             activePortfolio={activePortfolio}
             patchActivePortfolio={patchActivePortfolio}
             notify={notify}
-            effectiveDateKey={effectiveDateKey}
+            effectiveDateKey={isKrCutoffAccount(activePortfolioAccountType) ? krEffectiveDateKey : effectiveDateKey}
             refreshPrices={refreshPrices}
             isLoading={isLoading}
             depositHistory={depositHistory}

@@ -62,10 +62,11 @@ export function getEffectiveUSDate(): string {
   return formatDateKST(nowKST);
 }
 
-// 총자산 기록 유효 날짜:
-// KR+US 모든 자산 종가는 KST 07:30 이후 확정
-// → 07:30 미만이면 전일이 유효 날짜 (전일 종가 기준 기록)
-// → 07:30 이후면 오늘이 유효 날짜 (당일 현재가 기록)
+// 총자산 기록 유효 날짜 — 시장별 분리:
+// - 글로벌(overseas/crypto/현금성): US 종가는 KST 익일 07:30 확정 (getEffectiveDate)
+//   → 07:30 미만이면 전일이 유효 날짜 (전일 종가 기준 기록)
+//   → 07:30 이후면 오늘이 유효 날짜 (당일 현재가 기록)
+// - 국내시장 계좌(KR_CUTOFF_ACCOUNT_TYPES): 당일 21:00 확정 (getEffectiveDateKR)
 export function getEffectiveDate(): string {
   const nowKST = getNowKST();
   const h = nowKST.getHours();
@@ -87,6 +88,65 @@ export function getMsUntilCutoff(): number | null {
   const cutoff = new Date(nowKST);
   cutoff.setHours(7, 30, 0, 0);
   return cutoff.getTime() - nowKST.getTime();
+}
+
+// 국내시장 계좌(당일 21:00 KST 종가 확정): 그 외(overseas/crypto/matong/simple)는 글로벌 07:30 유지
+export const KR_CUTOFF_ACCOUNT_TYPES = new Set(['portfolio', 'isa', 'dc-irp', 'pension', 'dividend', 'gold']);
+export const isKrCutoffAccount = (accountType: string): boolean => KR_CUTOFF_ACCOUNT_TYPES.has(accountType);
+
+// KR 계좌 실시간 기록 대상 날짜: 09:00(개장)~21:00 → 오늘 / 그 외 → null(기록 중단)
+// - 21:00 이후: 당일 확정·동결
+// - 09:00 이전: 전일 종가 이월 placeholder를 만들지 않음 — isFixed:false 실시간 기록은 권위값이라
+//   백필이 영구 보호하므로, 전일 값이 당일 날짜에 박제되는 오귀속 방지(당일 기록은 개장 후 라이브
+//   또는 21:00 이후 백필이 종가로 생성)
+export function getEffectiveDateKR(): string | null {
+  const nowKST = getNowKST();
+  const h = nowKST.getHours();
+  return h >= 9 && h < 21 ? formatDateKST(nowKST) : null;
+}
+
+// KR 당일 종가 정산일: 21:00~24:00이면 오늘 날짜, 그 외 null.
+// 백필의 '실시간 기록 보호' 예외 대상 — 장중 값으로 동결된 당일 기록을 종가 재계산으로 1회 보정 허용.
+export function getKrSettledTodayDate(): string | null {
+  const nowKST = getNowKST();
+  return nowKST.getHours() >= 21 ? formatDateKST(nowKST) : null;
+}
+
+// KR 계좌 백필 상한(exclusive): 21:00 미만 → 오늘(d < 오늘) / 21:00 이후 → 내일(당일 백필 허용)
+// 21:00 이후 값(내일)은 "다음 실시간 기록 대상일"과도 일치한다.
+export function getBackfillBoundaryKR(): string {
+  const nowKST = getNowKST();
+  if (nowKST.getHours() < 21) return formatDateKST(nowKST);
+  const next = new Date(nowKST);
+  next.setDate(next.getDate() + 1);
+  return formatDateKST(next);
+}
+
+export function getEffectiveDateForAccount(accountType: string): string | null {
+  return isKrCutoffAccount(accountType) ? getEffectiveDateKR() : getEffectiveDate();
+}
+
+export function getBackfillBoundaryForAccount(accountType: string): string {
+  return isKrCutoffAccount(accountType) ? getBackfillBoundaryKR() : getEffectiveDate();
+}
+
+// 다음 경계(07:30 글로벌 / 09:00 KR 재개 / 21:00 KR 동결)까지 남은 ms — 항상 양수, 재무장(re-arm) 타이머용
+// 자정에는 두 날짜 모두 값이 바뀌지 않으므로(글로벌은 전일 유지, KR은 null 유지) 경계 불필요.
+export function getMsUntilNextBoundary(): number {
+  const nowKST = getNowKST();
+  const mins = nowKST.getHours() * 60 + nowKST.getMinutes();
+  const target = new Date(nowKST);
+  if (mins < 450) {
+    target.setHours(7, 30, 0, 0);
+  } else if (mins < 540) {
+    target.setHours(9, 0, 0, 0);
+  } else if (mins < 1260) {
+    target.setHours(21, 0, 0, 0);
+  } else {
+    target.setDate(target.getDate() + 1);
+    target.setHours(7, 30, 0, 0);
+  }
+  return Math.max(1000, target.getTime() - nowKST.getTime());
 }
 
 // 휴장일은 /api/market-calendar 서버리스 함수에서 통합 산출한다.

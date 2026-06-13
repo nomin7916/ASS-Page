@@ -2,7 +2,7 @@
 import { useEffect, useRef } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend, savingsEval } from '../utils';
-import { getEffectiveDate, getMsUntilCutoff } from './useMarketCalendar';
+import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff } from './useMarketCalendar';
 
 interface UseStockDataParams {
   portfolio: any[];
@@ -723,10 +723,12 @@ export function useStockData({
         }
       }
 
-      // 기존 동작: 오늘 항목이 없을 때만 추가
-      const idx = history.findIndex(h => h.date === today);
+      // 기존 동작: 기록 대상일 항목이 없을 때만 추가 (KR 계좌는 기록 창 09:00~21:00 밖이면 생략)
+      const recDate = getEffectiveDateForAccount(p.accountType || 'portfolio');
+      if (!recDate) return { ...p, portfolio: updatedItems };
+      const idx = history.findIndex(h => h.date === recDate);
       if (idx >= 0) return { ...p, portfolio: updatedItems };
-      const newHistory = [...history, { date: today, evalAmount: totalEval, principal: cleanNum(p.principal) || 0, isFixed: false }];
+      const newHistory = [...history, { date: recDate, evalAmount: totalEval, principal: cleanNum(p.principal) || 0, isFixed: false }];
       return { ...p, portfolio: updatedItems, history: newHistory };
     }));
 

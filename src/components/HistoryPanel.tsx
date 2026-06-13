@@ -2,6 +2,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
 import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings } from '../utils';
+import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -204,7 +205,14 @@ export default function HistoryPanel({
                   padding: '8px 12px',
                 }}>
                   {[
-                    { icon: '🕖', color: 'text-sky-300', title: '기록 시점 (KST 07:30 기준)', lines: [
+                    isKrCutoffAccount(activePortfolioAccountType)
+                    ? { icon: '🕘', color: 'text-sky-300', title: '기록 시점 (국내 계좌 — KST 21:00 확정)', lines: [
+                      '당일 평가자산이 당일 21:00에 확정됩니다.',
+                      '기록은 개장(09:00)부터 21:00까지 실시간으로 갱신됩니다.',
+                      '21:00 이후·개장 전에는 기록이 일시 중지되며,',
+                      '접속하지 못한 날은 종가 기준으로 자동 보완됩니다.',
+                    ] }
+                    : { icon: '🕖', color: 'text-sky-300', title: '기록 시점 (KST 익일 07:30 확정)', lines: [
                       '매일 전일 종가가 확정되면 평가자산이 기록됩니다.',
                       `07:30 이전 접속: 전날(${effectiveDateKey || ''}) 날짜로 기록됩니다.`,
                       '07:30 이후 접속: 오늘 날짜로 새 기록이 생성됩니다.',
