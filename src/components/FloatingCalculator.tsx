@@ -141,6 +141,39 @@ const serializeAtom = (a) => {
 // 결과 숫자 문자열 → 입력 원자 배열 (이력 클릭 시 재삽입용)
 const strToAtoms = (s) => s.split('').map((c) => (c === '-' ? { t: 'op', v: '−' } : { t: 'd', v: c }));
 
+// 숫자 런(run)별 천 단위 구분 공백 위치 — 각 원자 인덱스 앞에 공백을 둘지 여부 (정수부만)
+const computeGroupSeps = (seq) => {
+  const sep = new Array(seq.length).fill(false);
+  let i = 0;
+  while (i < seq.length) {
+    if (seq[i].t !== 'd') { i++; continue; }
+    let j = i;
+    while (j < seq.length && seq[j].t === 'd') j++;
+    let dot = -1;
+    for (let k = i; k < j; k++) if (seq[k].v === '.') { dot = k; break; }
+    const intLen = (dot === -1 ? j : dot) - i;          // 소수점 이전 정수 자릿수
+    for (let p = 1; p < intLen; p++) if ((intLen - p) % 3 === 0) sep[i + p] = true;
+    i = j;
+  }
+  return sep;
+};
+
+// 붙여넣기 텍스트에서 숫자 추출 (대시보드 셀의 ₩ / , / % 등 제거, 자릿수 최다 토큰 선택)
+const parsePastedNumber = (text) => {
+  if (!text) return null;
+  // 공백/탭/줄바꿈은 숫자 구분자 — 문자 클래스에 \s를 넣으면 인접 숫자가 한 토큰으로 합쳐짐
+  const matches = String(text).match(/-?\d[\d,]*(?:\.\d+)?/g);
+  if (!matches) return null;
+  let best = null, bestDigits = -1;
+  for (const raw of matches) {
+    const cleaned = raw.replace(/,/g, '');
+    if (!isFinite(parseFloat(cleaned))) continue;
+    const digits = (cleaned.match(/\d/g) || []).length;
+    if (digits > bestDigits) { best = cleaned; bestDigits = digits; }
+  }
+  return best;
+};
+
 // ───────── 트리 경로 헬퍼 ─────────
 const pathKey = (p) => p.map((s) => s.i + s.f).join('/');
 const getSeq = (root, path) => {
@@ -255,6 +288,17 @@ export default function FloatingCalculator({ isOpen, onClose }) {
     setRoot(setSeq(root, cursor.path, newSeq));
     if (descend) setCursor({ path: [...cursor.path, { i: cursor.idx, f: descend }], idx: 0 });
     else setCursor({ path: cursor.path, idx: cursor.idx + 1 });
+  };
+
+  // 여러 원자 일괄 삽입 (붙여넣기용)
+  const insertAtoms = (atoms) => {
+    if (!atoms.length) return;
+    setResult(null);
+    const seq = getSeq(root, cursor.path);
+    if (seq == null) { setCursor({ path: [], idx: root.length }); return; }
+    const newSeq = [...seq.slice(0, cursor.idx), ...atoms, ...seq.slice(cursor.idx)];
+    setRoot(setSeq(root, cursor.path, newSeq));
+    setCursor({ path: cursor.path, idx: cursor.idx + atoms.length });
   };
 
   const insertChar = (ch) => {
@@ -426,15 +470,38 @@ export default function FloatingCalculator({ isOpen, onClose }) {
     return () => window.removeEventListener('keydown', handler);
   }, [isOpen, root, cursor, isDeg, lastAns]);
 
+  // 붙여넣기: 대시보드에서 복사한 숫자(₩·콤마·% 포함)를 계산기에 입력
+  useEffect(() => {
+    if (!isOpen) return;
+    const onPaste = (e) => {
+      // 다른 위젯(예: 카테고리 셀)이 이미 preventDefault로 소비한 붙여넣기는 가로채지 않음
+      if (e.defaultPrevented) return;
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      const text = e.clipboardData?.getData('text') ?? '';
+      const num = parsePastedNumber(text);
+      if (!num || num === '-') return;
+      e.preventDefault();
+      insertAtoms(strToAtoms(num));
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [isOpen, root, cursor]);
+
   if (!isOpen) return null;
 
   // ───────── 2D 렌더 ─────────
   const renderSeq = (seq, path) => {
     const here = pathKey(path) === pathKey(cursor.path);
+    const seps = computeGroupSeps(seq);
     const nodes = [];
     for (let i = 0; i < seq.length; i++) {
       if (here && cursor.idx === i) nodes.push(<Caret key={'c' + i} />);
-      nodes.push(<span key={'a' + i} className="inline-flex items-center">{renderAtom(seq[i], path, i)}</span>);
+      nodes.push(
+        <span key={'a' + i} className={`inline-flex items-center${seps[i] ? ' ml-[0.32em]' : ''}`}>
+          {renderAtom(seq[i], path, i)}
+        </span>
+      );
     }
     if (here && cursor.idx === seq.length) nodes.push(<Caret key="cend" />);
     if (seq.length === 0) nodes.push(<span key="ph" className="text-gray-600 px-0.5">▯</span>);
