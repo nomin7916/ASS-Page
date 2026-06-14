@@ -26,12 +26,20 @@ const factorial = (n) => {
   return r;
 };
 
+// 백분율 연산자 (문자열 리터럴을 상수로 묶어 compute·버튼·하이라이트 간 불일치 방지)
+const OP_PCT = '%';      // a ÷ b × 100
+const OP_ADDPCT = '+%';  // a × (1 + b%)
+const OP_SUBPCT = '−%';  // a × (1 − b%)
+
 const compute = (a, b, op) => {
   if (op === '+') return a + b;
   if (op === '−') return a - b;
   if (op === '×') return a * b;
   if (op === '÷') return b !== 0 ? a / b : NaN;
   if (op === 'xⁿ') return Math.pow(a, b);
+  if (op === OP_PCT) return b !== 0 ? (a / b) * 100 : NaN;
+  if (op === OP_ADDPCT) return a * (1 + b / 100);
+  if (op === OP_SUBPCT) return a * (1 - b / 100);
   return b;
 };
 
@@ -41,11 +49,15 @@ export default function FloatingCalculator({ isOpen, onClose }) {
   const [pendingVal, setPendingVal] = useState(null);
   const [justEvaled, setJustEvaled] = useState(false);
   const [history, setHistory] = useState([]);
-  const [pos, setPos] = useState({ x: Math.max(10, window.innerWidth - 330), y: 90 });
+  const [pos, setPos] = useState(() => ({
+    x: Math.max(10, Math.round((window.innerWidth - 296) / 2)),
+    y: 80,
+  }));
   const [isScientific, setIsScientific] = useState(false);
   const [isDeg, setIsDeg] = useState(true);
   const dragging = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
+  const rootRef = useRef(null);
 
   const toRad = (n) => isDeg ? n * Math.PI / 180 : n;
   const fromRad = (n) => isDeg ? n * 180 / Math.PI : n;
@@ -61,8 +73,8 @@ export default function FloatingCalculator({ isOpen, onClose }) {
       const cx = e.touches ? e.touches[0].clientX : e.clientX;
       const cy = e.touches ? e.touches[0].clientY : e.clientY;
       setPos({
-        x: Math.max(0, Math.min(window.innerWidth - 296, cx - dragOffset.current.x)),
-        y: Math.max(0, Math.min(window.innerHeight - 80, cy - dragOffset.current.y)),
+        x: Math.max(0, Math.min(window.innerWidth - (rootRef.current?.offsetWidth || 296), cx - dragOffset.current.x)),
+        y: Math.max(0, Math.min(window.innerHeight - (rootRef.current?.offsetHeight || 330), cy - dragOffset.current.y)),
       });
     };
     const onEnd = () => { dragging.current = false; };
@@ -77,6 +89,36 @@ export default function FloatingCalculator({ isOpen, onClose }) {
       window.removeEventListener('touchend', onEnd);
     };
   }, []);
+
+  // 계산기를 열 때마다 화면 중앙으로 재배치
+  // (이전에 좌/우 끝에 두고 닫아도 항상 화면 안 중앙에 다시 나타나도록)
+  useEffect(() => {
+    if (!isOpen) return;
+    const id = requestAnimationFrame(() => {
+      const w = rootRef.current?.offsetWidth || 296;
+      const h = rootRef.current?.offsetHeight || 480;
+      setPos({
+        x: Math.max(10, Math.round((window.innerWidth - w) / 2)),
+        y: Math.max(20, Math.round((window.innerHeight - h) / 2)),
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isOpen]);
+
+  // 공학용 전환·이력 표시 등으로 높이가 바뀌면 현재 위치를 화면 안으로 보정
+  // (위치는 유지하되, 화면 밖으로 넘칠 때만 당겨옴)
+  useEffect(() => {
+    if (!isOpen) return;
+    const id = requestAnimationFrame(() => {
+      const w = rootRef.current?.offsetWidth || 296;
+      const h = rootRef.current?.offsetHeight || 330;
+      setPos(p => ({
+        x: Math.max(0, Math.min(window.innerWidth - w, p.x)),
+        y: Math.max(0, Math.min(window.innerHeight - h, p.y)),
+      }));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isScientific, history.length === 0]);
 
   const inputDigit = (d) => {
     if (display === '오류') { setDisplay(String(d)); setJustEvaled(false); return; }
@@ -102,11 +144,6 @@ export default function FloatingCalculator({ isOpen, onClose }) {
   const toggleSign = () => {
     const n = parseFloat(display);
     if (!isNaN(n)) setDisplay(fmt(-n));
-  };
-
-  const percent = () => {
-    const n = parseFloat(display);
-    if (!isNaN(n)) setDisplay(fmt(n / 100));
   };
 
   const applyUnary = (fn) => {
@@ -168,7 +205,7 @@ export default function FloatingCalculator({ isOpen, onClose }) {
       else if (e.key === 'Enter' || e.key === '=') { e.preventDefault(); evaluate(); }
       else if (e.key === 'Backspace') { e.preventDefault(); handleBackspace(); }
       else if (e.key === 'Escape') { e.preventDefault(); clear(); }
-      else if (e.key === '%') { e.preventDefault(); percent(); }
+      else if (e.key === '%') { e.preventDefault(); applyOp(OP_PCT); }
       else if (e.key === '^') { e.preventDefault(); if (isScientific) applyOp('xⁿ'); }
       // 공학용 단축키 (Ctrl/Meta 없을 때만)
       else if (isScientific && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -220,6 +257,7 @@ export default function FloatingCalculator({ isOpen, onClose }) {
 
   return (
     <div
+      ref={rootRef}
       style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: CALC_Z, width: 296, touchAction: 'none' }}
       className="rounded-2xl shadow-2xl overflow-hidden border border-gray-600/60"
     >
@@ -307,10 +345,27 @@ export default function FloatingCalculator({ isOpen, onClose }) {
 
       {/* 기본 버튼 */}
       <div className="bg-black px-3 pb-3 pt-3 space-y-2">
+        {/* 백분율 가감 연산자: a×(1+b%) / a×(1−b%) — a 입력 → 버튼 → b 입력 → = */}
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => applyOp(OP_ADDPCT)}
+            title="a × (1 + b%): a 입력 → +% → b 입력 → ="
+            className={btnCls(`bg-teal-600 hover:bg-teal-500 text-white ${pendingOp === OP_ADDPCT && justEvaled ? 'ring-2 ring-white/50' : ''}`)}
+          >
+            +%
+          </button>
+          <button
+            onClick={() => applyOp(OP_SUBPCT)}
+            title="a × (1 − b%): a 입력 → −% → b 입력 → ="
+            className={btnCls(`bg-teal-600 hover:bg-teal-500 text-white ${pendingOp === OP_SUBPCT && justEvaled ? 'ring-2 ring-white/50' : ''}`)}
+          >
+            −%
+          </button>
+        </div>
         <div className="grid grid-cols-4 gap-2">
           <button onClick={clear} className={btnCls('bg-gray-400 hover:bg-gray-300 text-black')}>AC</button>
           <button onClick={toggleSign} className={btnCls('bg-gray-400 hover:bg-gray-300 text-black')}>+/-</button>
-          <button onClick={percent} className={btnCls('bg-gray-400 hover:bg-gray-300 text-black')}>%</button>
+          <button onClick={() => applyOp(OP_PCT)} title="백분율 (a ÷ b × 100): a 입력 → % → b 입력 → =" className={btnCls(`bg-gray-400 hover:bg-gray-300 text-black ${pendingOp === OP_PCT && justEvaled ? 'ring-2 ring-orange-400/60' : ''}`)}>%</button>
           <button onClick={() => applyOp('÷')} className={btnCls(`bg-orange-500 hover:bg-orange-400 text-white ${pendingOp === '÷' && justEvaled ? 'ring-2 ring-white/40' : ''}`)}>÷</button>
         </div>
         <div className="grid grid-cols-4 gap-2">
