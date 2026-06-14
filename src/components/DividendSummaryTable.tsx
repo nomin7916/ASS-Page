@@ -773,6 +773,27 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
 
   if (!nonGoldPortfolios.length) return null;
 
+  // ── 분배율 = 월(또는 연간) 합계 ÷ 투자원금 ──
+  // 표시 계좌의 투자원금 합산(비compact는 활성 계좌 1개 → 그 계좌 원금)을 분모로 사용
+  const totalPrincipal = nonGoldPortfolios.reduce((s, p) => s + (cleanNum(p.principal) || 0), 0);
+  const fmtDistRate = (amt) => totalPrincipal > 0 ? `${(amt / totalPrincipal * 100).toFixed(2)}%` : '-';
+  const renderDistRateRow = (monthlyArr, annualVal, hasOverseas) => (
+    <tr className="border-t border-gray-700/40">
+      <td className="py-1.5 px-3 text-left sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+        <div className="text-[11px] font-bold text-teal-300">분배율</div>
+        <div className="text-gray-500 text-[9px] font-normal">월 합계 ÷ 원금 {formatCurrency(totalPrincipal)}</div>
+      </td>
+      {monthlyArr.map((total, i) => (
+        <td key={i} colSpan={hasOverseas ? 2 : 1} className={`py-1.5 px-1 text-center text-[10px] font-semibold ${total > 0 ? 'text-teal-300/80' : 'text-gray-600'}`}>
+          {total > 0 ? fmtDistRate(total) : '-'}
+        </td>
+      ))}
+      <td colSpan={hasOverseas ? 2 : 1} className={`py-1.5 px-2 text-center text-[10px] font-bold ${annualVal > 0 ? 'text-teal-300' : 'text-gray-600'}`}>
+        {annualVal > 0 ? fmtDistRate(annualVal) : '-'}
+      </td>
+    </tr>
+  );
+
   // ── 월 예상 분배금 탭 totals ──
   const monthlyTotals = Array.from({ length: 12 }, (_, i) =>
     expectedRows.reduce((sum, row) => sum + row.monthData[i].amount, 0)
@@ -1142,6 +1163,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </td>
                   )}
                 </tr>
+                {renderDistRateRow(compactMonthlyTotals, totalAnnual, false)}
                 {activeTab === 'expected' && compactAnnualTax > 0 && (() => {
                   const monthlyTaxArr = Array.from({ length: 12 }, (_, i) =>
                     compactExpectedRows
@@ -1486,6 +1508,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       </td>
                     )}
                   </tr>
+                  {renderDistRateRow(monthlyTotals, annualTotal, expectedHasOverseas)}
                 </tfoot>
               </table>
             )}
@@ -1960,6 +1983,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </td>
                   )}
                 </tr>
+                {renderDistRateRow(actualMonthlyGrossKrw, actualAnnualGrossKrw, actualHasOverseas)}
                 {!actualHasOverseas && actualAnnualTaxTotal > 0 && (<>
                   <tr className="text-orange-300/60">
                     <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
