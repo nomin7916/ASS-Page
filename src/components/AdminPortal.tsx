@@ -339,7 +339,9 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
           if (!userFolderId) throw new Error('no folder');
           const stateData = await loadDriveFile(tok, userFolderId, DRIVE_FILES.STATE) as any;
           if (!stateData) throw new Error('no state');
-          const portfolios = stateData.portfolios || [];
+          // TEST 계좌(p.isTest)는 사용자 통합 대시보드와 동일하게 모든 합산에서 제외
+          // (평가총액·투자원금·전일대비·일별 추이 매트릭스 전부 portfolios에서 파생되므로 소스에서 1회 필터)
+          const portfolios = (stateData.portfolios || []).filter((p: any) => !p.isTest);
           const ihm = stateData.indicatorHistoryMap || {};
 
           // 이 사용자 보유종목 시세 사전 조회(캐시 dedup → 중복 종목 1회만 호출)

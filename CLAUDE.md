@@ -85,6 +85,9 @@ src/
   simple/matong 이름 input은 `onClick stopPropagation`으로 편집 중 토글 방지. 별도 토글 버튼/아이콘 없음.
 - **persist**: `App.tsx` `portfolioStructureKey`에 `isTest` 포함(단독 토글도 Drive 저장 트리거).
   로드 정규화(`applyStateData`/`applyBackupData`)는 `...p` 스프레드라 자동 보존.
+- **관리자 포털**(`AdminPortal.tsx`)도 TEST 계좌 제외: 사용자 Drive `stateData.portfolios`를
+  읽는 시점(`handleRefresh`)에 `.filter(p => !p.isTest)` 1회 적용 → 평가총액·투자원금·전일대비·
+  일별 추이 매트릭스가 전부 그 `portfolios`에서 파생되므로 일괄 제외(소스 단일 필터).
 - **범위 밖(의도)**: 분배금 현황 표(통합 compact)는 isTest 미적용. `useHistoryBackfill`의 계좌별
   일별 자동기록도 미적용(TEST 계좌도 자기 history는 계속 기록 → 해제 시 데이터 온전).
 
