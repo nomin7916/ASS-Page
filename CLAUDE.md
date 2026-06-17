@@ -69,7 +69,7 @@ src/
 
 ### TEST 계좌 플래그 `isTest` — 통합 대시보드 표시만, 모든 합산에서 제외 (⚠️ 회귀 주의)
 
-계좌별 boolean `p.isTest`. 통합 계좌 현황 표의 **계좌명 좌측 토글 버튼**(녹색 점)으로 ON/OFF
+계좌별 boolean `p.isTest`. 통합 계좌 현황 표의 **계좌명 셀 빈 공간 클릭**으로 ON/OFF
 (`togglePortfolioTest` — `usePortfolioState`). ON이면 계좌명이 **이탤릭+녹색**으로 표시되고
 통합 대시보드의 **모든 합산·차트·비중에서 제외**되지만 표의 행 자체는 그대로 노출된다(계좌를
 열면 개별 뷰는 정상 동작 — 데이터는 보존, 해제 시 즉시 복원).
@@ -80,8 +80,9 @@ src/
   ③ `intDepositEvents`(입출금 마커) ④ `intHoldingsDonutData`(종목별 비중).
   `IntegratedDashboard` — ⑤ `histDetailRows`(추이 팝업 소계, 차트값과 일치 유지) ⑥ `appTrackingStartDate`
   (역추산 경계 마커). `portfolioSummaries`는 행 표시를 위해 **제외하지 않고** `isTest`만 노출.
-- **표 UI**: TEST 행의 **평가비중 셀은 `-`**(100% 합계에서 빠지므로). 계좌명 셀 좌측 토글은
-  `stopPropagation`으로 계좌 전환(switchToPortfolio) 클릭과 분리.
+- **표 UI**: TEST 행의 **평가비중 셀은 `-`**(100% 합계에서 빠지므로). 계좌명 셀의 **빈 공간 클릭=
+  TEST 토글**(td onClick), **계좌명 텍스트 클릭=계좌 열기**(span onClick+`stopPropagation`),
+  simple/matong 이름 input은 `onClick stopPropagation`으로 편집 중 토글 방지. 별도 토글 버튼/아이콘 없음.
 - **persist**: `App.tsx` `portfolioStructureKey`에 `isTest` 포함(단독 토글도 Drive 저장 트리거).
   로드 정규화(`applyStateData`/`applyBackupData`)는 `...p` 스프레드라 자동 보존.
 - **범위 밖(의도)**: 분배금 현황 표(통합 compact)는 isTest 미적용. `useHistoryBackfill`의 계좌별

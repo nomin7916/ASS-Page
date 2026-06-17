@@ -538,27 +538,20 @@ export default function IntegratedDashboard({
                               <CustomDatePicker value={s.startDate} onChange={v => updatePortfolioStartDate(s.id, v)} />
                             </td>
                             {/* 계좌 */}
+                            {/* 계좌명 셀의 빈 공간 클릭 → TEST 토글(합산·차트·카테고리 제외). 계좌명 텍스트 클릭은 계좌 열기 유지 */}
                             <td
-                              className={`py-1.5 px-3 text-center border-r border-gray-700 sticky left-0 z-[5] bg-[#1e293b] ${!isSimple && !isMatong ? 'cursor-pointer hover:bg-blue-900/20' : ''}`}
+                              className="py-1.5 px-3 text-center border-r border-gray-700 sticky left-0 z-[5] bg-[#1e293b] cursor-pointer hover:bg-blue-900/10"
                               style={s.rowColor ? { backgroundColor: blendWithDarkBg(s.rowColor, 0.35) } : {}}
-                              onClick={!isSimple && !isMatong ? () => switchToPortfolio(s.id) : undefined}
+                              onClick={() => togglePortfolioTest(s.id)}
+                              title={s.isTest ? '셀 빈 곳 클릭 → TEST 해제 (합산·차트·카테고리에 포함)' : '셀 빈 곳 클릭 → TEST 계좌로 표시 (합산·수익율·평가액추이·카테고리 비중에서 제외)'}
                             >
-                              <div className="flex items-center justify-center gap-1.5">
-                                {/* TEST 토글 — 계좌명 좌측. 켜면 합계·차트·카테고리 비중에서 제외(표시만) */}
-                                <button
-                                  type="button"
-                                  title={s.isTest ? 'TEST 계좌 해제 (합산·차트·카테고리에 포함)' : 'TEST 계좌로 표시 (합산·수익율·평가액추이·카테고리 비중에서 제외)'}
-                                  onClick={e => { e.stopPropagation(); togglePortfolioTest(s.id); }}
-                                  className={`shrink-0 w-2.5 h-2.5 rounded-full border transition-colors cursor-pointer ${s.isTest ? 'bg-green-400 border-green-400' : 'border-gray-500 hover:border-green-400'}`}
-                                />
-                                {isSimple ? (
-                                  <input type="text" className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300 ${s.isTest ? 'italic' : ''}`} value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
-                                ) : isMatong ? (
-                                  <input type="text" className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300 ${s.isTest ? 'italic' : ''}`} value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
-                                ) : (
-                                  <span className={`font-bold select-none ${s.isTest ? 'italic text-green-400' : 'text-blue-300'}`}>{s.name}</span>
-                                )}
-                              </div>
+                              {isSimple ? (
+                                <input type="text" onClick={e => e.stopPropagation()} className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300 ${s.isTest ? 'italic' : ''}`} value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
+                              ) : isMatong ? (
+                                <input type="text" onClick={e => e.stopPropagation()} className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300 ${s.isTest ? 'italic' : ''}`} value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
+                              ) : (
+                                <span onClick={e => { e.stopPropagation(); switchToPortfolio(s.id); }} title="클릭하여 계좌 열기" className={`font-bold select-none cursor-pointer hover:underline ${s.isTest ? 'italic text-green-400' : 'text-blue-300'}`}>{s.name}</span>
+                              )}
                             </td>
                             {/* 투자원금 */}
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold">
