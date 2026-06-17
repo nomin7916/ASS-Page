@@ -751,16 +751,9 @@ export default function RebalancingPanel({
               </thead>
               <tbody>
                 {(() => {
-                  const baseTotalCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
-                  const totalExtraAllocated = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
-                  const tableDepositAmount = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-                  const tableUseDeposit = settings.useDepositAmount != null
-                    ? Math.min(Math.max(0, cleanNum(settings.useDepositAmount)), tableDepositAmount)
-                    : tableDepositAmount;
-                  const tableCashInvestable = settings.mode === 'rebalance'
-                    ? cleanNum(settings.amount)
-                    : (tableUseDeposit + cleanNum(settings.amount));
-                  const effectiveRemaining = tableCashInvestable - baseTotalCost - totalExtraAllocated;
+                  // 추가 가능(maxAdd) = 표시 잔액(rebalBalance) ÷ 종목가격. 헤더 '잔액'과 동일한
+                  // rebalBalance를 직접 사용 — 과거 별도 재계산(effectiveRemaining)이 리밸런싱
+                  // 모드에서 예수금을 누락해 잔액이 +인데도 음수로 표시되던 버그 방지.
                   const isOverseas = activePortfolioAccountType === 'overseas';
                   const usdkrw = marketIndicators.usdkrw || 1;
                   const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
@@ -815,7 +808,7 @@ export default function RebalancingPanel({
                     const itemPrice = cleanNum(item.currentPrice);
                     const adjustedCost = totalAction * itemPrice;
                     const displayAdjustedCost = -adjustedCost;
-                    const maxAdd = itemPrice > 0 ? effectiveRemaining / itemPrice : 0;
+                    const maxAdd = itemPrice > 0 ? rebalBalance / itemPrice : 0;
                     const markColor = markedRebalRows[item.id];
                     const rowMarkClass = markColor ? MARK_ROW_BG[markColor] : 'hover:bg-gray-800';
                     const stickyCellClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-[#0f172a] group-hover:bg-gray-800';
@@ -974,7 +967,7 @@ export default function RebalancingPanel({
                           </td>
                         ))}
                         {!H('maxAdd') && (
-                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isSavings ? '-' : maxAdd === 0 ? '0' : (maxAdd > 0 ? '+' : '') + maxAdd.toFixed(1)}</td>
+                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isSavings ? '-' : maxAdd === 0 ? '0' : (maxAdd > 0 ? '+' : '') + maxAdd.toFixed(2)}</td>
                         )}
                         {!H('expQty') && (() => {
                           const expQty = cleanNum(item.quantity) + totalAction;
@@ -1367,7 +1360,7 @@ export default function RebalancingPanel({
                     '트런케이션 오차 및 목표비중 합≠100%에서 비롯되는 차액이 잔액에 나타남.',
                   ] },
                   { icon: '➕', color: 'text-emerald-300', title: '추가 가능 수량 (행별)', lines: [
-                    '추가 가능 = ⌊ 잔액 ÷ 종목가격 ⌋',
+                    '추가 가능 = 잔액 ÷ 종목가격 (소수 둘째자리)',
                     '+ 값: 그만큼 더 매수 가능 (매도 차익을 추가 매수에 활용)',
                     '− 값: 그만큼 매도 더 필요 (매수가 과다하다는 신호)',
                     '"추가" 컬럼에 음수 입력 가능 — 사용자가 직접 매도 수량 조절',
@@ -1383,7 +1376,7 @@ export default function RebalancingPanel({
                     '매수 = 50,000, 매도 = 50,500',
                     '실구매비용 TOTAL = 50,500 − 50,000 = +500',
                     '잔액 = +500 → 표시 500',
-                    '추가가능 (가격 100원 종목) = ⌊500 ÷ 100⌋ = 5개',
+                    '추가가능 (가격 100원 종목) = 500 ÷ 100 = 5.00',
                   ] },
                 ].map(({ icon, color, title, lines }) => (
                   <div key={title} className="mb-1">
