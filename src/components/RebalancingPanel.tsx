@@ -86,6 +86,7 @@ export default function RebalancingPanel({
   const [hoveredProjDSSlice, setHoveredProjDSSlice] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [showCostFormula, setShowCostFormula] = useState(false);
+  const [maxAddLink, setMaxAddLink] = useState({}); // 추가가능→추가 연동된 행 id 집합
   const [helpPos, setHelpPos] = useState({ x: 0, y: 0 });
   const helpDrag = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const datePickerRef = useRef(null);
@@ -192,6 +193,47 @@ export default function RebalancingPanel({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 추가가능(maxAdd) ↔ 추가(extraQty) 연동 토글. 연동 ON: 그 시점 용량을 floor해 추가에 채움.
+  // 연동 OFF(재클릭): 추가를 0으로 초기화. 값 계산·진동 방지는 아래 유지 effect가 담당.
+  const toggleMaxAddLink = (id, capacity) => {
+    const wasLinked = !!maxAddLink[id];
+    setMaxAddLink(prev => {
+      const next = { ...prev };
+      if (wasLinked) delete next[id]; else next[id] = true;
+      return next;
+    });
+    setRebalExtraQty(prev => ({ ...prev, [id]: wasLinked ? 0 : Math.max(0, Math.floor(capacity)) }));
+  };
+
+  // 연동된 행 유지: "잔액 + 그 행이 이미 쓴 금액(extra×현재가)"(자기 소비 환원)을 풀(pool)로
+  // 보고 floor(pool÷현재가)를 추가에 채운다. 추가가 잔액을 차지해 차익을 만드는 관계라
+  // (consumed = extra×현재가, action 부호 무관), 이 풀은 연동 행 자신의 추가 변동에 불변 →
+  // floor가 고정점이라 진동하지 않고 가격/잔액/타행 변동 시에만 재계산된다. 변화 없으면 prev
+  // 반환 → 리렌더 무한루프 차단. 여러 행 동시 연동은 공유 풀을 순차 배분(역시 안정).
+  useEffect(() => {
+    const linkedIds = rebalanceData.filter(d => maxAddLink[d.id] && d.type !== 'savings' && cleanNum(d.currentPrice) > 0).map(d => d.id);
+    if (linkedIds.length === 0) return;
+    const linkedSet = new Set(linkedIds);
+    let pool = rebalBalance;
+    rebalanceData.forEach(d => {
+      if (linkedSet.has(d.id)) pool += (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice);
+    });
+    const desired = {};
+    rebalanceData.forEach(d => {
+      if (!linkedSet.has(d.id)) return;
+      const price = cleanNum(d.currentPrice);
+      const qty = Math.max(0, Math.floor(pool / price));
+      desired[d.id] = qty;
+      pool -= qty * price;
+    });
+    setRebalExtraQty(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of linkedIds) if ((prev[id] || 0) !== desired[id]) { next[id] = desired[id]; changed = true; }
+      return changed ? next : prev;
+    });
+  }, [rebalanceData, rebalBalance, maxAddLink, rebalExtraQty, setRebalExtraQty]);
 
   const applyRemainingToDeposit = () => {
     if (rebalRemaining <= 0) return;
@@ -809,6 +851,9 @@ export default function RebalancingPanel({
                     const adjustedCost = totalAction * itemPrice;
                     const displayAdjustedCost = -adjustedCost;
                     const maxAdd = itemPrice > 0 ? rebalBalance / itemPrice : 0;
+                    const isLinked = !!maxAddLink[item.id];
+                    // 연동 시 채울 수량 = 현재 추가가능(잔액÷현재가) + 이미 이 행이 가져간 추가(extra)
+                    const linkCapacity = maxAdd + extraQty;
                     const markColor = markedRebalRows[item.id];
                     const rowMarkClass = markColor ? MARK_ROW_BG[markColor] : 'hover:bg-gray-800';
                     const stickyCellClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-[#0f172a] group-hover:bg-gray-800';
@@ -963,11 +1008,17 @@ export default function RebalancingPanel({
                           <td className="py-3 px-3 text-center text-gray-600 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>-</td>
                         ) : (
                           <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500">
-                            <input type="text" className="w-full h-full bg-transparent text-center text-orange-300 font-bold outline-none py-3 focus:bg-orange-900/20 caret-orange-400 min-w-[65px]" value={extraQty !== 0 ? extraQty : ''} placeholder="0" onChange={e => { const val = parseInt(e.target.value.replace(/[^\-\d]/g, '')) || 0; setRebalExtraQty(prev => ({ ...prev, [item.id]: val })); }} onFocus={e => e.target.select()} />
+                            <input type="text" className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 caret-orange-400 min-w-[65px] ${isLinked ? 'text-cyan-300 focus:bg-cyan-900/20' : 'text-orange-300 focus:bg-orange-900/20'}`} value={extraQty !== 0 ? extraQty : ''} placeholder="0" title={isLinked ? '추가 가능 연동 중 — 직접 입력하면 연동 해제' : undefined} onChange={e => { const val = parseInt(e.target.value.replace(/[^\-\d]/g, '')) || 0; if (maxAddLink[item.id]) setMaxAddLink(prev => { const n = { ...prev }; delete n[item.id]; return n; }); setRebalExtraQty(prev => ({ ...prev, [item.id]: val })); }} onFocus={e => e.target.select()} />
                           </td>
                         ))}
                         {!H('maxAdd') && (
-                          <td className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isSavings ? '-' : maxAdd === 0 ? '0' : (maxAdd > 0 ? '+' : '') + maxAdd.toFixed(2)}</td>
+                          <td
+                            className={`py-3 px-3 text-center font-bold focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none transition-colors ${isSavings ? '' : 'cursor-pointer'} ${isLinked ? 'bg-cyan-900/30 ring-1 ring-inset ring-cyan-500/50' : !isSavings ? 'hover:bg-cyan-900/15' : ''} ${maxAdd > 0 ? 'text-cyan-400' : maxAdd < 0 ? 'text-red-400' : 'text-gray-500'}`}
+                            tabIndex={0}
+                            onKeyDown={handleReadonlyCellNav}
+                            onClick={isSavings ? undefined : () => toggleMaxAddLink(item.id, linkCapacity)}
+                            title={isSavings ? undefined : isLinked ? '추가 가능 연동 ON — 클릭하여 해제(추가 0)' : '클릭하여 추가 수량에 연동 (가격 변동 시 자동 갱신)'}
+                          >{isSavings ? '-' : maxAdd === 0 ? '0' : (maxAdd > 0 ? '+' : '') + maxAdd.toFixed(2)}</td>
                         )}
                         {!H('expQty') && (() => {
                           const expQty = cleanNum(item.quantity) + totalAction;
