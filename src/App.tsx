@@ -501,6 +501,7 @@ export default function App() {
     updatePortfolioStartDate,
     updatePortfolioName,
     updatePortfolioColor,
+    togglePortfolioTest,
     resetAllPortfolioColors,
     updateSettingsForType,
     updatePortfolioMemo,
@@ -1676,6 +1677,7 @@ export default function App() {
         lookupRows: p.lookupRows,
         memo: p.memo || '',
         rowColor: p.rowColor || '',
+        isTest: !!p.isTest,
         historyLen: (p.history || []).length,
         // 자산검증: 스냅샷·수동종가·기준일 변경도 구조 변경으로 간주 → Drive STATE 즉시 반영
         baselineDate: p.baselineDate || '',
@@ -2584,6 +2586,7 @@ export default function App() {
             switchToPortfolio={switchToPortfolio}
             movePortfolio={movePortfolio}
             updatePortfolioColor={updatePortfolioColor}
+            togglePortfolioTest={togglePortfolioTest}
             updatePortfolioStartDate={updatePortfolioStartDate}
             updatePortfolioName={updatePortfolioName}
             updatePortfolioMemo={updatePortfolioMemo}

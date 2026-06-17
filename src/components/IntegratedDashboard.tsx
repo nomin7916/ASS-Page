@@ -93,6 +93,7 @@ export default function IntegratedDashboard({
   switchToPortfolio,
   movePortfolio,
   updatePortfolioColor,
+  togglePortfolioTest,
   updatePortfolioStartDate,
   updatePortfolioName,
   updatePortfolioMemo,
@@ -176,6 +177,7 @@ export default function IntegratedDashboard({
     let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
     const rows = [];
     allPortfoliosForDividend.forEach(p => {
+      if (p.isTest) return; // TEST 계좌는 추이 팝업 소계에서 제외(차트 값과 일치)
       const summary = portfolioSummaries.find(s => s.id === p.id);
       const isCash = p.accountType === 'matong' || p.accountType === 'simple';
       let evalAmt = 0;
@@ -234,6 +236,7 @@ export default function IntegratedDashboard({
   const appTrackingStartDate = useMemo(() => {
     let earliest = null;
     (allPortfoliosForDividend || []).forEach(p => {
+      if (p.isTest) return; // TEST 계좌는 차트 미표시 → 기록 시작일 마커 산정에서 제외
       const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
       (hist || []).forEach(h => {
         if (!h || !h.date) return;
@@ -540,13 +543,22 @@ export default function IntegratedDashboard({
                               style={s.rowColor ? { backgroundColor: blendWithDarkBg(s.rowColor, 0.35) } : {}}
                               onClick={!isSimple && !isMatong ? () => switchToPortfolio(s.id) : undefined}
                             >
-                              {isSimple ? (
-                                <input type="text" className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300" value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
-                              ) : isMatong ? (
-                                <input type="text" className="w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300" value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
-                              ) : (
-                                <span className="font-bold text-blue-300 select-none">{s.name}</span>
-                              )}
+                              <div className="flex items-center justify-center gap-1.5">
+                                {/* TEST 토글 — 계좌명 좌측. 켜면 합계·차트·카테고리 비중에서 제외(표시만) */}
+                                <button
+                                  type="button"
+                                  title={s.isTest ? 'TEST 계좌 해제 (합산·차트·카테고리에 포함)' : 'TEST 계좌로 표시 (합산·수익율·평가액추이·카테고리 비중에서 제외)'}
+                                  onClick={e => { e.stopPropagation(); togglePortfolioTest(s.id); }}
+                                  className={`shrink-0 w-2.5 h-2.5 rounded-full border transition-colors cursor-pointer ${s.isTest ? 'bg-green-400 border-green-400' : 'border-gray-500 hover:border-green-400'}`}
+                                />
+                                {isSimple ? (
+                                  <input type="text" className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300 ${s.isTest ? 'italic' : ''}`} value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
+                                ) : isMatong ? (
+                                  <input type="text" className={`w-full min-w-[70px] bg-transparent font-bold outline-none text-center text-green-300 ${s.isTest ? 'italic' : ''}`} value={s.name} onChange={e => updatePortfolioName(s.id, e.target.value)} />
+                                ) : (
+                                  <span className={`font-bold select-none ${s.isTest ? 'italic text-green-400' : 'text-blue-300'}`}>{s.name}</span>
+                                )}
+                              </div>
                             </td>
                             {/* 투자원금 */}
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-200 font-bold">
@@ -570,8 +582,10 @@ export default function IntegratedDashboard({
                             </td>
                             <td
                               className="py-1.5 px-3 border-r border-gray-700 text-center text-gray-300 cursor-help"
-                              title={`계좌 총자산 / 전체 총자산\n${s.name} ${formatCurrency(s.currentEval)} / TOTAL ${formatCurrency(intTotals.totalEval)} = ${allocRatio.toFixed(2)}%`}
-                            >{allocRatio.toFixed(2)}%</td>
+                              title={s.isTest
+                                ? `TEST 계좌 — 전체 합계에서 제외됨`
+                                : `계좌 총자산 / 전체 총자산\n${s.name} ${formatCurrency(s.currentEval)} / TOTAL ${formatCurrency(intTotals.totalEval)} = ${allocRatio.toFixed(2)}%`}
+                            >{s.isTest ? '-' : `${allocRatio.toFixed(2)}%`}</td>
                             {/* 총자산 */}
                             <td className="py-1.5 px-3 border-r border-gray-700 text-center font-bold text-white">
                               {isSimple ? (

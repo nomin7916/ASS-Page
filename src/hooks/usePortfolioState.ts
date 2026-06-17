@@ -251,6 +251,11 @@ export function usePortfolioState({
     setPortfolios(prev => prev.map(p => p.id === id ? { ...p, rowColor } : p));
   };
 
+  // ── TEST 계좌 토글 ── 통합 대시보드 표시는 유지하되 합산·차트·카테고리 비중에서 제외
+  const togglePortfolioTest = (id) => {
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, isTest: !p.isTest } : p));
+  };
+
   // ── 전체 색상 초기화 ──
   const resetAllPortfolioColors = () => {
     setPortfolios(prev => prev.map(p => ({ ...p, rowColor: '' })));
@@ -643,6 +648,7 @@ export function usePortfolioState({
     updatePortfolioStartDate,
     updatePortfolioName,
     updatePortfolioColor,
+    togglePortfolioTest,
     resetAllPortfolioColors,
     updateSettingsForType,
     updatePortfolioMemo,

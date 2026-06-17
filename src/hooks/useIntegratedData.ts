@@ -37,7 +37,7 @@ export function useIntegratedData({
         const cagr = prin > 0 && evalAmount > 0 && days > 0
           ? days < 365 ? (evalAmount / prin - 1) * 100 : (Math.pow(evalAmount / prin, 365.25 / days) - 1) * 100
           : 0;
-        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: evalAmount, returnRate, cagr, cats: evalAmount > 0 ? { '예수금': evalAmount } : {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '' };
+        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: evalAmount, returnRate, cagr, cats: evalAmount > 0 ? { '예수금': evalAmount } : {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest };
       }
 
       if (p.accountType === 'matong') {
@@ -50,7 +50,7 @@ export function useIntegratedData({
           id: p.id, name, startDate, currentEval: prin, principal: prin,
           depositAmount: prin, returnRate: 0, cagr: 0,
           cats: prin > 0 ? { '현금': prin } : {},
-          isActive: false, accountType: 'matong', rowColor: p.rowColor || '', memo: p.memo || '',
+          isActive: false, accountType: 'matong', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest,
           withdrawableTotal: wt, currentWithdrawal: cw, withdrawalLimit: wl, agreedRate: ar, agreedRateStr: String(p.agreedRate ?? ''),
         };
       }
@@ -92,7 +92,7 @@ export function useIntegratedData({
           ? (totalEval / principalKRW - 1) * 100
           : (Math.pow(totalEval / principalKRW, 365.25 / days) - 1) * 100
         : 0;
-      return { id: p.id, name, startDate, currentEval: totalEval, principal: principalKRW, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '' };
+      return { id: p.id, name, startDate, currentEval: totalEval, principal: principalKRW, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest };
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolios, activePortfolioId, portfolio, principal, avgExchangeRate, portfolioStartDate, title, marketIndicators.usdkrw]);
@@ -101,6 +101,7 @@ export function useIntegratedData({
     let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
     const cats = {};
     portfolioSummaries.forEach(s => {
+      if (s.isTest) return; // TEST 계좌는 합계·카테고리 비중에서 제외(표시만)
       totalEval += s.currentEval;
       totalPrincipal += s.principal;
       totalDeposit += s.depositAmount;
@@ -121,7 +122,7 @@ export function useIntegratedData({
     // '오늘'만 현재값을 권위로 사용해 최신 편집(비움=0 포함)을 즉시 반영한다.
     // (스냅샷에 0도 포함 → 비운 계좌가 carry-forward로 0이 이어져 유령 잔액이 남지 않음)
     const cashSeries = portfolios
-      .filter(p => p.accountType === 'matong' || p.accountType === 'simple')
+      .filter(p => !p.isTest && (p.accountType === 'matong' || p.accountType === 'simple'))
       .map(p => {
         const startDate = p.id === activePortfolioId ? portfolioStartDate : (p.portfolioStartDate || p.startDate || '');
         const currentEval = p.accountType === 'simple'
@@ -139,7 +140,7 @@ export function useIntegratedData({
     //  종가 미로드 등으로 재계산 불가하면 저장값으로 폴백(초기 로딩·데이터 공백 보호).
     const liveFx = marketIndicators.usdkrw || 1;
     const accountSeries = portfolios
-      .filter(p => p.accountType !== 'matong' && p.accountType !== 'simple')
+      .filter(p => !p.isTest && p.accountType !== 'matong' && p.accountType !== 'simple')
       .map(p => {
         const isActive = p.id === activePortfolioId;
         const hist = isActive ? history : (p.history || []);
@@ -203,7 +204,7 @@ export function useIntegratedData({
     }
     // 시장 계좌만 원금 보정식 적용(현금성 계좌는 아래에서 날짜별 잔액 합산 → 수익 0 유지)
     const portfolioPrincipalData = portfolios
-      .filter(p => p.accountType !== 'matong' && p.accountType !== 'simple')
+      .filter(p => !p.isTest && p.accountType !== 'matong' && p.accountType !== 'simple')
       .map(p => {
         const isActive = p.id === activePortfolioId;
         const isOverseas = p.accountType === 'overseas';
@@ -311,6 +312,7 @@ export function useIntegratedData({
   const intDepositEvents = useMemo(() => {
     const byDate = new Map();
     portfolios.forEach(p => {
+      if (p.isTest) return; // TEST 계좌는 추이 차트 입출금 마커에서 제외
       const isActive = p.id === activePortfolioId;
       const deps = isActive ? depositHistory : (p.depositHistory || []);
       const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
@@ -347,6 +349,7 @@ export function useIntegratedData({
   const intHoldingsDonutData = useMemo(() => {
     const holdingsMap = {};
     portfolios.forEach(p => {
+      if (p.isTest) return; // TEST 계좌는 통합 자산 카테고리·종목별 비중에서 제외
       const isActive = p.id === activePortfolioId;
       if (p.accountType === 'simple') {
         const evalAmount = cleanNum(p.evalAmount);
