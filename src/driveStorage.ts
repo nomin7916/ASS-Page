@@ -473,6 +473,17 @@ export async function loadAdminUserCache(token: string, folderId: string): Promi
   return loadDriveFile(token, folderId, ADMIN_CACHE_FILE);
 }
 
+// 관리자 포털 뷰 설정(숨김 사용자·그룹) — 캐시(무거움)와 분리한 소형 파일
+const ADMIN_PORTAL_CONFIG_FILE = 'admin_portal_config.json';
+
+export async function saveAdminPortalConfig(token: string, folderId: string, data: unknown): Promise<void> {
+  await saveDriveFile(token, folderId, ADMIN_PORTAL_CONFIG_FILE, data);
+}
+
+export async function loadAdminPortalConfig(token: string, folderId: string): Promise<unknown | null> {
+  return loadDriveFile(token, folderId, ADMIN_PORTAL_CONFIG_FILE);
+}
+
 async function cleanupOldBackups(token: string, folderId: string): Promise<void> {
   try {
     const backups = await listBackups(token, folderId);
