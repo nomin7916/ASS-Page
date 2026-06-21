@@ -1479,8 +1479,7 @@ export default function RebalancingPanel({
           />
         )}
         {noteLogOpen && (
-          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setNoteLogOpen(false)}>
-            <div className="absolute w-[576px] shadow-2xl overflow-hidden" style={{ left: noteLogPos.x, top: noteLogPos.y }} onClick={e => e.stopPropagation()}>
+          <div className="fixed w-[576px] shadow-2xl overflow-hidden" style={{ left: noteLogPos.x, top: noteLogPos.y, zIndex: 1000 }}>
               <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleNoteLogDragStart}>
                 <button onClick={() => setNoteLogOpen(false)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={7} className="text-white" /></button>
                 <span className="text-[17px] font-bold tracking-[0.18em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">투자 기록</span>
@@ -1514,12 +1513,10 @@ export default function RebalancingPanel({
                   </div>
                 ))}
               </div>
-            </div>
           </div>
         )}
         {noteExpandModal && (
-          <div className="fixed inset-0 z-[60] bg-black/40">
-            <div className="absolute w-[576px] shadow-2xl overflow-hidden" style={{ left: noteExpandPos.x, top: noteExpandPos.y }} onClick={e => e.stopPropagation()}>
+          <div className="fixed w-[576px] shadow-2xl overflow-hidden" style={{ left: noteExpandPos.x, top: noteExpandPos.y, zIndex: 1010 }}>
               <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleNoteExpandDragStart}>
                 <div className="flex items-center gap-2.5">
                   <button onClick={() => setNoteExpandModal(null)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="취소 (Esc)"><X size={7} className="text-white" /></button>
@@ -1559,7 +1556,6 @@ export default function RebalancingPanel({
                   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') saveNoteExpand();
                 }}
               />
-            </div>
           </div>
         )}
         {helpOpen && (
