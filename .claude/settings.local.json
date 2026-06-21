@@ -136,7 +136,15 @@
       "PowerShell(npm run build)",
       "PowerShell($p = @\\(\"$env:ProgramFiles\\\\nodejs\\\\npm.cmd\",\"$env:APPDATA\\\\npm\\\\npm.cmd\",\"$env:LOCALAPPDATA\\\\Programs\\\\nodejs\\\\npm.cmd\"\\); $p | Where-Object { Test-Path $_ }; \\(Get-Command node -ErrorAction SilentlyContinue\\).Source)",
       "PowerShell(Get-ChildItem -Path \"C:\\\\Program Files\",\"C:\\\\Program Files \\(x86\\)\",\"$env:LOCALAPPDATA\",\"$env:APPDATA\" -Filter \"npm.cmd\" -Recurse -ErrorAction SilentlyContinue -Depth 3 | Select-Object -First 5 -ExpandProperty FullName)",
-      "PowerShell(where.exe node; where.exe npm; Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object -First 3 Name; $env:PATH -split ';' | Where-Object { $_ -match 'node|npm|nvm|fnm|volta' })"
+      "PowerShell(where.exe node; where.exe npm; Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object -First 3 Name; $env:PATH -split ';' | Where-Object { $_ -match 'node|npm|nvm|fnm|volta' })",
+      "PowerShell(git -C \"c:\\\\Users\\\\arui1\\\\Documents\\\\GitHub\\\\ASS-Page\" add -A)",
+      "PowerShell(git -C \"c:\\\\Users\\\\arui1\\\\Documents\\\\GitHub\\\\ASS-Page\" status --short)",
+      "PowerShell(git -C \"c:\\\\Users\\\\arui1\\\\Documents\\\\GitHub\\\\ASS-Page\" restore --staged .claude/settings.local.json)",
+      "PowerShell(git -C \"c:\\\\Users\\\\arui1\\\\Documents\\\\GitHub\\\\ASS-Page\" commit -F \"C:\\\\Users\\\\arui1\\\\AppData\\\\Local\\\\Temp\\\\ass_commitmsg.txt\")",
+      "PowerShell(git -C \"c:\\\\Users\\\\arui1\\\\Documents\\\\GitHub\\\\ASS-Page\" push origin main)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\arui1\\AppData\\Local\\Temp"
     ]
   }
 }
