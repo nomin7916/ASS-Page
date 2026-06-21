@@ -1480,21 +1480,21 @@ export default function RebalancingPanel({
         )}
         {noteLogOpen && (
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setNoteLogOpen(false)}>
-            <div className="absolute w-96 shadow-2xl overflow-hidden" style={{ left: noteLogPos.x, top: noteLogPos.y }} onClick={e => e.stopPropagation()}>
+            <div className="absolute w-[576px] shadow-2xl overflow-hidden" style={{ left: noteLogPos.x, top: noteLogPos.y }} onClick={e => e.stopPropagation()}>
               <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleNoteLogDragStart}>
                 <button onClick={() => setNoteLogOpen(false)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={7} className="text-white" /></button>
-                <span className="text-[11px] font-bold tracking-[0.18em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">투자 기록</span>
-                <button onClick={addNewNote} className="text-gray-500 hover:text-emerald-400 transition-colors" title="새 메모 추가"><Plus size={13} /></button>
+                <span className="text-[17px] font-bold tracking-[0.18em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">투자 기록</span>
+                <button onClick={addNewNote} className="text-gray-500 hover:text-emerald-400 transition-colors" title="새 메모 추가"><Plus size={19} /></button>
               </div>
               <div className="overflow-y-auto max-h-[60vh]" style={{
                 backgroundColor: '#000',
-                backgroundImage: 'repeating-linear-gradient(transparent 0px, transparent 23px, rgba(99,130,255,0.25) 23px, rgba(99,130,255,0.25) 24px)',
-                backgroundSize: '100% 24px',
+                backgroundImage: 'repeating-linear-gradient(transparent 0px, transparent 35px, rgba(99,130,255,0.25) 35px, rgba(99,130,255,0.25) 36px)',
+                backgroundSize: '100% 36px',
                 backgroundPosition: '0 0',
-                lineHeight: '24px',
+                lineHeight: '36px',
               }}>
                 {sortedNotes.length === 0 && (
-                  <div className="px-4 py-5 text-gray-600 text-[11px] text-center select-none">
+                  <div className="px-4 py-5 text-gray-600 text-[17px] text-center select-none">
                     아직 기록이 없습니다.<br />
                     <span className="text-gray-700">오른쪽 상단 + 버튼으로 추가하세요.</span>
                   </div>
@@ -1503,13 +1503,13 @@ export default function RebalancingPanel({
                   <div
                     key={note.id}
                     className="flex items-center gap-2 px-3 border-b border-gray-900/60 hover:bg-white/5 transition-colors group"
-                    style={{ minHeight: '24px' }}
+                    style={{ minHeight: '36px' }}
                   >
-                    <span className="shrink-0 text-[10px] font-mono text-sky-500 w-[52px]">{formatNoteDate(note.date)}</span>
-                    <span className="flex-1 text-[11px] text-gray-300 truncate overflow-hidden whitespace-nowrap">{note.content || <span className="text-gray-700 italic">내용 없음</span>}</span>
+                    <span className="shrink-0 text-[15px] font-mono text-sky-500 w-[76px]">{formatNoteDate(note.date)}</span>
+                    <span className="flex-1 text-[17px] text-gray-300 truncate overflow-hidden whitespace-nowrap">{note.content || <span className="text-gray-700 italic">내용 없음</span>}</span>
                     <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => openNoteExpand(note)} className="text-gray-500 hover:text-blue-400 transition-colors" title="전체 보기/편집"><Maximize2 size={10} /></button>
-                      <button onClick={() => deleteNote(note.id)} className="text-gray-500 hover:text-red-400 transition-colors" title="삭제"><Trash2 size={10} /></button>
+                      <button onClick={() => openNoteExpand(note)} className="text-gray-500 hover:text-blue-400 transition-colors" title="전체 보기/편집"><Maximize2 size={15} /></button>
+                      <button onClick={() => deleteNote(note.id)} className="text-gray-500 hover:text-red-400 transition-colors" title="삭제"><Trash2 size={15} /></button>
                     </div>
                   </div>
                 ))}
@@ -1519,7 +1519,7 @@ export default function RebalancingPanel({
         )}
         {noteExpandModal && (
           <div className="fixed inset-0 z-[60] bg-black/40">
-            <div className="absolute w-96 shadow-2xl overflow-hidden" style={{ left: noteExpandPos.x, top: noteExpandPos.y }} onClick={e => e.stopPropagation()}>
+            <div className="absolute w-[576px] shadow-2xl overflow-hidden" style={{ left: noteExpandPos.x, top: noteExpandPos.y }} onClick={e => e.stopPropagation()}>
               <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleNoteExpandDragStart}>
                 <div className="flex items-center gap-2.5">
                   <button onClick={() => setNoteExpandModal(null)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="취소 (Esc)"><X size={7} className="text-white" /></button>
@@ -1528,22 +1528,22 @@ export default function RebalancingPanel({
                 <div className="flex items-center gap-2">
                   <input
                     type="date"
-                    className="bg-transparent border-0 outline-none text-[10px] text-gray-500 font-mono cursor-pointer"
+                    className="bg-transparent border-0 outline-none text-[15px] text-gray-500 font-mono cursor-pointer"
                     value={noteExpandModal.date}
                     onChange={e => setNoteExpandModal(prev => ({ ...prev, date: e.target.value }))}
                   />
-                  <span className="text-[11px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">MEMO</span>
+                  <span className="text-[17px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">MEMO</span>
                 </div>
                 <div className="w-10" />
               </div>
               <textarea
-                className="w-full text-gray-200 text-[12px] outline-none resize-none caret-sky-400 placeholder-gray-700"
+                className="w-full text-gray-200 text-[18px] font-bold outline-none resize-none caret-sky-400 placeholder-gray-700"
                 style={{
                   backgroundColor: '#000',
-                  backgroundImage: `repeating-linear-gradient(transparent 0px, transparent 23px, rgba(99,130,255,0.3) 23px, rgba(99,130,255,0.3) 24px)`,
-                  backgroundSize: '100% 24px',
+                  backgroundImage: `repeating-linear-gradient(transparent 0px, transparent 35px, rgba(99,130,255,0.3) 35px, rgba(99,130,255,0.3) 36px)`,
+                  backgroundSize: '100% 36px',
                   backgroundPosition: '0 8px',
-                  lineHeight: '24px',
+                  lineHeight: '36px',
                   paddingLeft: '10px',
                   paddingRight: '10px',
                   paddingTop: '8px',
