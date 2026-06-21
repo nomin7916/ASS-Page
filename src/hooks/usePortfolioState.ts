@@ -82,16 +82,8 @@ export function usePortfolioState({
     else delete next[itemId];
     return { markedPortfolioRows: next };
   });
-  const resetMarkedRebalRow = (itemId) => patchActive(p => {
-    const next = { ...p.markedRebalRows ?? {} };
-    delete next[itemId];
-    return { markedRebalRows: next };
-  });
-  const resetMarkedPortfolioRow = (itemId) => patchActive(p => {
-    const next = { ...p.markedPortfolioRows ?? {} };
-    delete next[itemId];
-    return { markedPortfolioRows: next };
-  });
+  const resetAllMarkedRebalRows = () => patchActive(() => ({ markedRebalRows: {} }));
+  const resetAllMarkedPortfolioRows = () => patchActive(() => ({ markedPortfolioRows: {} }));
 
   // ── 활성 포트폴리오만 갱신하는 헬퍼 ──
   const patchActive = (patch) =>
@@ -643,8 +635,8 @@ export function usePortfolioState({
     lookupRows, setLookupRows,
     hiddenColumnsPortfolio, hiddenColumnsRebalancing,
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
-    markedRebalRows, toggleMarkedRebalRow, resetMarkedRebalRow,
-    markedPortfolioRows, toggleMarkedPortfolioRow, resetMarkedPortfolioRow,
+    markedRebalRows, toggleMarkedRebalRow, resetAllMarkedRebalRows,
+    markedPortfolioRows, toggleMarkedPortfolioRow, resetAllMarkedPortfolioRows,
     adminAccessAllowed, setAdminAccessAllowed,
     // 파생 상태
     activePortfolioAccountType,

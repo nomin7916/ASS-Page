@@ -486,8 +486,8 @@ export default function App() {
     lookupRows, setLookupRows,
     hiddenColumnsPortfolio, hiddenColumnsRebalancing,
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,
-    markedRebalRows, toggleMarkedRebalRow, resetMarkedRebalRow,
-    markedPortfolioRows, toggleMarkedPortfolioRow, resetMarkedPortfolioRow,
+    markedRebalRows, toggleMarkedRebalRow, resetAllMarkedRebalRows,
+    markedPortfolioRows, toggleMarkedPortfolioRow, resetAllMarkedPortfolioRows,
     adminAccessAllowed, setAdminAccessAllowed,
     activePortfolioAccountType,
     buildPortfoliosState,
@@ -2272,7 +2272,7 @@ export default function App() {
             onToggleColumn={toggleHiddenColumnPortfolio}
             markedPortfolioRows={markedPortfolioRows}
             onToggleMarkedPortfolioRow={toggleMarkedPortfolioRow}
-            onResetMarkedPortfolioRow={resetMarkedPortfolioRow}
+            onResetAllMarkedPortfolioRows={resetAllMarkedPortfolioRows}
           />
         )}
 
@@ -2516,7 +2516,7 @@ export default function App() {
             onToggleColumn={toggleHiddenColumnRebalancing}
             markedRebalRows={markedRebalRows}
             onToggleMarkedRebalRow={toggleMarkedRebalRow}
-            onResetMarkedRebalRow={resetMarkedRebalRow}
+            onResetAllMarkedRebalRows={resetAllMarkedRebalRows}
             authUser={authUser}
             isAdmin={!!adminViewingAs || (authUser && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase())}
             targetEditAuthorized={targetEditAuthorized}
