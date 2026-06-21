@@ -579,27 +579,24 @@ export default function RebalancingPanel({
             </div>
           </div>
           {onUpdateInvestmentNotes && (
-            <div className="px-3 pt-2 pb-0 bg-[#080e1c]">
-              <div
-                className="flex items-stretch cursor-pointer w-full"
-                onClick={openNoteLog}
-                title="투자 기록 메모장 열기"
-              >
-                <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-tl-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors flex items-center gap-1.5 shrink-0">
-                  <BookOpen size={10} />
-                  투자 기록
-                </div>
-                <div className="flex-1 px-3 py-1.5 text-[10px] border border-l-0 border-gray-600 border-b-0 rounded-tr-md bg-gray-800/30 hover:bg-gray-700/30 transition-colors flex items-center gap-3 min-w-0 overflow-hidden">
-                  {latestNote ? (
-                    <>
-                      <span className="text-sky-500 font-mono shrink-0">{formatNoteDate(latestNote.date)}</span>
-                      <span className="text-gray-400 truncate whitespace-nowrap">{latestNote.content}</span>
-                    </>
-                  ) : (
-                    <span className="text-gray-700 italic">기록 없음</span>
-                  )}
-                </div>
+            <div
+              className="flex items-center gap-3 px-4 py-2 bg-[#080e1c] border-b border-gray-800/60 cursor-pointer hover:bg-[#0b1322] transition-colors group"
+              onClick={openNoteLog}
+              title="투자 기록 메모장 열기"
+            >
+              <div className="flex items-center gap-1.5 text-gray-500 group-hover:text-gray-400 transition-colors shrink-0">
+                <BookOpen size={11} />
+                <span className="text-[11px] font-medium tracking-wide">투자 기록</span>
               </div>
+              <div className="w-px h-3 bg-gray-700 shrink-0" />
+              {latestNote ? (
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <span className="text-sky-500 font-mono text-[11px] shrink-0">{formatNoteDate(latestNote.date)}</span>
+                  <span className="text-gray-400 text-[11px] truncate">{latestNote.content}</span>
+                </div>
+              ) : (
+                <span className="text-gray-700 text-[11px]">기록 없음</span>
+              )}
             </div>
           )}
           {(hiddenColumns.length > 0 || onManualSave || onToggleCalculator) && (
