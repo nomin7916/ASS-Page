@@ -1481,7 +1481,7 @@ export default function RebalancingPanel({
         {noteLogOpen && (
           <div className="fixed w-[576px] shadow-2xl overflow-hidden" style={{ left: noteLogPos.x, top: noteLogPos.y, zIndex: 1000 }}>
               <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleNoteLogDragStart}>
-                <button onClick={() => setNoteLogOpen(false)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={7} className="text-white" /></button>
+                <button onClick={() => setNoteLogOpen(false)} className="w-[18px] h-[18px] rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={10} className="text-white" /></button>
                 <span className="text-[17px] font-bold tracking-[0.18em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">투자 기록</span>
                 <button onClick={addNewNote} className="text-gray-500 hover:text-emerald-400 transition-colors" title="새 메모 추가"><Plus size={19} /></button>
               </div>
@@ -1518,9 +1518,9 @@ export default function RebalancingPanel({
         {noteExpandModal && (
           <div className="fixed w-[576px] shadow-2xl overflow-hidden" style={{ left: noteExpandPos.x, top: noteExpandPos.y, zIndex: 1010 }}>
               <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleNoteExpandDragStart}>
-                <div className="flex items-center gap-2.5">
-                  <button onClick={() => setNoteExpandModal(null)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="취소 (Esc)"><X size={7} className="text-white" /></button>
-                  <button onClick={saveNoteExpand} className="w-3 h-3 rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center transition-all" title="저장 (Ctrl+Enter)"><Check size={7} className="text-white" /></button>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setNoteExpandModal(null)} className="w-[18px] h-[18px] rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="취소 (Esc)"><X size={10} className="text-white" /></button>
+                  <button onClick={saveNoteExpand} className="w-[18px] h-[18px] rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center transition-all" title="저장 (Ctrl+Enter)"><Check size={10} className="text-white" /></button>
                 </div>
                 <div className="flex items-center gap-2">
                   <input
@@ -1562,7 +1562,7 @@ export default function RebalancingPanel({
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setHelpOpen(false)}>
             <div className="absolute w-[440px] shadow-2xl overflow-hidden" style={{ left: helpPos.x, top: helpPos.y }} onClick={e => e.stopPropagation()}>
               <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleHelpDragStart}>
-                <button onClick={() => setHelpOpen(false)} className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={7} className="text-white" /></button>
+                <button onClick={() => setHelpOpen(false)} className="w-[18px] h-[18px] rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all" title="닫기"><X size={10} className="text-white" /></button>
                 <span className="text-[11px] font-bold tracking-[0.18em] bg-gradient-to-r from-green-400 via-emerald-400 to-sky-400 bg-clip-text text-transparent select-none">리밸런싱 계산식 안내</span>
                 <div className="w-3" />
               </div>

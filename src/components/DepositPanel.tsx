@@ -366,20 +366,20 @@ export default function DepositPanel({
           <div className="absolute w-64 shadow-2xl overflow-hidden" style={{ left: memoPos.x, top: memoPos.y }} onClick={e => e.stopPropagation()}>
             {/* 헤더 — 드래그 핸들 */}
             <div className="bg-black border-b border-gray-900 px-3 py-2 flex items-center justify-between cursor-move select-none" onMouseDown={handleMemoDragStart}>
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-3">
                 <button
                   onClick={() => setMemoModal(null)}
-                  className="w-3 h-3 rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center group transition-all"
+                  className="w-[18px] h-[18px] rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center group transition-all"
                   title="취소 (Esc)"
                 >
-                  <X size={7} className="text-white" />
+                  <X size={10} className="text-white" />
                 </button>
                 <button
                   onClick={saveMemoModal}
-                  className="w-3 h-3 rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center group transition-all"
+                  className="w-[18px] h-[18px] rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center group transition-all"
                   title="저장 (Ctrl+Enter)"
                 >
-                  <Check size={7} className="text-white" />
+                  <Check size={10} className="text-white" />
                 </button>
               </div>
               <span className="text-[11px] font-bold tracking-[0.25em] bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-500 bg-clip-text text-transparent select-none">MEMO</span>
