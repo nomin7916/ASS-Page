@@ -533,6 +533,7 @@ export default function App() {
     updateTaxBaseSales,
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
+    updateInvestmentNotes,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
 
@@ -1676,6 +1677,7 @@ export default function App() {
         dividendSeparateTax: p.dividendSeparateTax,
         lookupRows: p.lookupRows,
         memo: p.memo || '',
+        investmentNotesKey: (p.investmentNotes || []).map(n => `${n.id}:${n.date}`).join('|'),
         rowColor: p.rowColor || '',
         isTest: !!p.isTest,
         historyLen: (p.history || []).length,
@@ -2066,6 +2068,7 @@ export default function App() {
   //  · isDcIrpAccount     : 위험/안전(D/S) 자산 구분 + D70/S30 통계 — 퇴직연금(DC/IRP) 전용
   const isRetirementAccount = activePortfolioAccountType === 'dc-irp' || activePortfolioAccountType === 'pension';
   const isDcIrpAccount = activePortfolioAccountType === 'dc-irp';
+  const investmentNotes = activePortfolio?.investmentNotes ?? [];
 
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
@@ -2521,6 +2524,8 @@ export default function App() {
             driveStatus={driveStatus}
             showCalculator={showCalculator}
             onToggleCalculator={() => setShowCalculator(v => !v)}
+            investmentNotes={investmentNotes}
+            onUpdateInvestmentNotes={updateInvestmentNotes}
           />
         )}
           </div>

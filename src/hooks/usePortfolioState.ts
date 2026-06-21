@@ -597,6 +597,8 @@ export function usePortfolioState({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marketIndicators.goldKr, activePortfolioAccountType]);
 
+  const updateInvestmentNotes = (notes) => patchActive({ investmentNotes: notes });
+
   return {
     // 파생 상태 (읽기 전용)
     title,
@@ -680,5 +682,6 @@ export function usePortfolioState({
     updateTaxBaseSales,
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
+    updateInvestmentNotes,
   };
 }
