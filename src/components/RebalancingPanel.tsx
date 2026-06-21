@@ -141,6 +141,7 @@ export default function RebalancingPanel({
   };
 
   const openNoteExpand = (note) => {
+    setNoteLogOpen(false);
     setNoteExpandPos({ x: Math.max(8, window.innerWidth / 2 - 192), y: Math.max(8, window.innerHeight / 2 - 180) });
     setNoteExpandModal({ id: note.id, date: note.date, val: note.content ?? '' });
   };
@@ -595,7 +596,16 @@ export default function RebalancingPanel({
                   <span className="text-gray-400 text-[11px] truncate">{latestNote.content}</span>
                 </div>
               ) : (
-                <span className="text-gray-700 text-[11px]">기록 없음</span>
+                <span className="text-gray-700 text-[11px] flex-1">기록 없음</span>
+              )}
+              {latestNote && (
+                <button
+                  onClick={e => { e.stopPropagation(); openNoteExpand(latestNote); }}
+                  className="shrink-0 text-gray-600 hover:text-blue-400 transition-colors"
+                  title="메모 바로 열기"
+                >
+                  <Maximize2 size={13} />
+                </button>
               )}
             </div>
           )}
