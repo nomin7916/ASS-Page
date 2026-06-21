@@ -578,32 +578,33 @@ export default function RebalancingPanel({
               })()}
             </div>
           </div>
-          {(hiddenColumns.length > 0 || onManualSave || onToggleCalculator || onUpdateInvestmentNotes) && (
+          {onUpdateInvestmentNotes && (
+            <div className="px-3 pt-2 pb-0 bg-[#080e1c]">
+              <div
+                className="flex items-stretch cursor-pointer w-full"
+                onClick={openNoteLog}
+                title="투자 기록 메모장 열기"
+              >
+                <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-tl-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors flex items-center gap-1.5 shrink-0">
+                  <BookOpen size={10} />
+                  투자 기록
+                </div>
+                <div className="flex-1 px-3 py-1.5 text-[10px] border border-l-0 border-gray-600 border-b-0 rounded-tr-md bg-gray-800/30 hover:bg-gray-700/30 transition-colors flex items-center gap-3 min-w-0 overflow-hidden">
+                  {latestNote ? (
+                    <>
+                      <span className="text-sky-500 font-mono shrink-0">{formatNoteDate(latestNote.date)}</span>
+                      <span className="text-gray-400 truncate whitespace-nowrap">{latestNote.content}</span>
+                    </>
+                  ) : (
+                    <span className="text-gray-700 italic">기록 없음</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          {(hiddenColumns.length > 0 || onManualSave || onToggleCalculator) && (
             <div className="flex items-end justify-between gap-2 px-3 pt-2 pb-0 bg-[#080e1c]">
               <div className="flex items-end gap-1 flex-wrap min-w-0">
-                {onUpdateInvestmentNotes && (
-                  <div
-                    className="flex items-end cursor-pointer"
-                    onClick={openNoteLog}
-                    title="투자 기록 메모장 열기"
-                  >
-                    <div className="px-2.5 py-1 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-tl-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors flex items-center gap-1 shrink-0">
-                      <BookOpen size={10} />
-                      투자 기록
-                    </div>
-                    {latestNote && (
-                      <div className="px-2.5 py-1 text-[10px] border border-l-0 border-gray-600 border-b-0 rounded-tr-md bg-gray-800/40 hover:bg-gray-700/40 transition-colors flex items-center gap-2 max-w-[300px] overflow-hidden">
-                        <span className="text-sky-500 font-mono shrink-0">{formatNoteDate(latestNote.date)}</span>
-                        <span className="text-gray-400 truncate whitespace-nowrap">{latestNote.content}</span>
-                      </div>
-                    )}
-                    {!latestNote && (
-                      <div className="px-2.5 py-1 text-[10px] border border-l-0 border-gray-600 border-b-0 rounded-tr-md bg-gray-800/40 flex items-center">
-                        <span className="text-gray-700 italic">기록 없음</span>
-                      </div>
-                    )}
-                  </div>
-                )}
                 {RB_COLS.filter(c => hiddenColumns.includes(c.key)).map(col => (
                   <button
                     key={col.key}
