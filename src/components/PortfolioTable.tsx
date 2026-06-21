@@ -114,11 +114,12 @@ const CategoryCell = ({ item, portfolio, showAssetClass, onUpdate }) => {
           tabIndex={0}
           className={`w-full text-center text-xs font-bold cursor-pointer px-1 py-3 outline-none select-none ${colorClass} ${mode === 'dropdown' ? 'bg-blue-900/30' : ''}`}
           onClick={e => {
+            e.stopPropagation();
             if (e.detail === 2) return;
             if (mode === 'dropdown') setMode('idle');
             else openDropdown();
           }}
-          onDoubleClick={() => setMode('edit')}
+          onDoubleClick={e => { e.stopPropagation(); setMode('edit'); }}
           onPaste={handlePaste}
           onKeyDown={handleRowArrowNav}
         >
@@ -174,7 +175,7 @@ const CategoryCell = ({ item, portfolio, showAssetClass, onUpdate }) => {
 // 계좌 타입별 기능 게이팅 (혼동/회귀 방지 — CLAUDE.md "계좌 타입별 D/S·펀드 게이팅" 참조)
 //  · isRetirement   : 펀드 행 + "펀드 추가" 버튼 — 퇴직연금(DC/IRP) + 개인연금(pension)
 //  · showAssetClass : 위험/안전(D/S) 자산 구분 배지 — 퇴직연금(DC/IRP) 전용 (개인연금 제외)
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {} }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetMarkedPortfolioRow = () => {} }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -592,18 +593,18 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const stickyMarkClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-[#0f172a] group-hover:bg-[#1a2535]';
               return (
                 <tr key={item.id} className={`group transition-colors border-b border-gray-700 ${rowMarkClass}`}>
-                  {/* 색상 스트립 — 클릭 시 yellow→slate→rose→brown→해제 사이클 */}
+                  {/* 색상 스트립 — 클릭 시 색 즉시 초기화 */}
                   <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
                     <button
-                      title="클릭하여 행 색상 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                      title="클릭하여 행 색상 초기화"
                       className="block w-full cursor-pointer border-0 outline-none rounded"
                       style={{margin:'6px 0', minHeight:'24px', backgroundColor: markColor ? MARK_STRIP_BG[markColor] : 'transparent'}}
-                      onClick={() => onToggleMarkedPortfolioRow(item.id)}
+                      onClick={() => onResetMarkedPortfolioRow(item.id)}
                     />
                   </td>
-                  {/* 구분 */}
+                  {/* 구분 — 클릭 시 색 사이클 (CategoryCell·D/S배지 클릭은 stopPropagation으로 분리) */}
                   {!H('category') && (
-                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`} onClick={() => onToggleMarkedPortfolioRow(item.id)} title="클릭하여 행 색상 사이클 (노랑→슬레이트→로즈→갈색→해제)">
                       <div className="flex flex-row h-full">
                         <CategoryCell item={item} portfolio={portfolio} showAssetClass={showAssetClass} onUpdate={onUpdate} />
                         {showAssetClass && (
@@ -611,7 +612,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                             <div className="w-px bg-gray-600/60 self-stretch" />
                             <span
                               className="w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none text-gray-500 hover:text-gray-400 transition-colors"
-                              onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                              onClick={e => { e.stopPropagation(); onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D'); }}
                               title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
                             >{assetClass}</span>
                           </>
@@ -738,22 +739,23 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const stickyMarkClass = markColor ? MARK_STICKY_BG[markColor] : 'bg-indigo-950/60 group-hover:bg-indigo-900/30';
               return (
                 <tr key={item.id} className={`group transition-colors border-b border-indigo-800/30 ${rowMarkClass}`}>
-                  {/* 색상 스트립 — 클릭 시 yellow→slate→rose→brown→해제 사이클 */}
+                  {/* 색상 스트립 — 클릭 시 색 즉시 초기화 */}
                   <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
                     <button
-                      title="클릭하여 행 색상 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                      title="클릭하여 행 색상 초기화"
                       className="block w-full cursor-pointer border-0 outline-none rounded"
                       style={{margin:'6px 0', minHeight:'24px', backgroundColor: markColor ? MARK_STRIP_BG[markColor] : 'transparent'}}
-                      onClick={() => onToggleMarkedPortfolioRow(item.id)}
+                      onClick={() => onResetMarkedPortfolioRow(item.id)}
                     />
                   </td>
-                  {/* 구분: FUND 링크 + S/D 텍스트 토글 */}
+                  {/* 구분: FUND 링크 + S/D 텍스트 토글 — 클릭 시 색 사이클 (링크·D/S배지는 stopPropagation) */}
                   {!H('category') && (
-                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`} onClick={() => onToggleMarkedPortfolioRow(item.id)} title="클릭하여 행 색상 사이클 (노랑→슬레이트→로즈→갈색→해제)">
                       <div className="flex flex-row h-full items-stretch">
                         <a href={item.code?.startsWith('MA:') ? 'https://investments.miraeasset.com' : 'https://www.funetf.co.kr/'} target="_blank" rel="noopener noreferrer"
                            className="flex-1 py-3 px-1 text-center text-xs font-bold text-indigo-300 hover:text-indigo-100 hover:underline transition-colors"
-                           title={item.code?.startsWith('MA:') ? '미래에셋자산운용' : 'funetf'}>
+                           title={item.code?.startsWith('MA:') ? '미래에셋자산운용' : 'funetf'}
+                           onClick={e => e.stopPropagation()}>
                           {item.code?.startsWith('MA:') ? 'MIRAE' : 'FUND'}
                         </a>
                         {showAssetClass && (
@@ -761,7 +763,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                             <div className="w-px bg-gray-600/60 self-stretch" />
                             <span
                               className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
-                              onClick={() => onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                              onClick={e => { e.stopPropagation(); onUpdate(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D'); }}
                               title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
                             >{assetClass}</span>
                           </>
@@ -896,18 +898,18 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
               const maturityAmt = savingsMaturity(item);
               return (
                 <tr key={item.id} className={`group transition-colors border-b border-emerald-800/30 ${rowMarkClass}`}>
-                  {/* 색상 스트립 */}
+                  {/* 색상 스트립 — 클릭 시 색 즉시 초기화 */}
                   <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}>
                     <button
-                      title="클릭하여 행 색상 토글 (노랑→슬레이트→로즈→갈색→해제)"
+                      title="클릭하여 행 색상 초기화"
                       className="block w-full cursor-pointer border-0 outline-none rounded"
                       style={{margin:'6px 0', minHeight:'24px', backgroundColor: markColor ? MARK_STRIP_BG[markColor] : 'transparent'}}
-                      onClick={() => onToggleMarkedPortfolioRow(item.id)}
+                      onClick={() => onResetMarkedPortfolioRow(item.id)}
                     />
                   </td>
-                  {/* 구분: 예적금 배지 + S/D 토글 */}
+                  {/* 구분: 예적금 배지 + S/D 토글 — 클릭 시 색 사이클 (D/S배지는 stopPropagation) */}
                   {!H('category') && (
-                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`}>
+                    <td className={`p-0 border-r border-gray-600 ${CELL_FOCUS}`} onClick={() => onToggleMarkedPortfolioRow(item.id)} title="클릭하여 행 색상 사이클 (노랑→슬레이트→로즈→갈색→해제)">
                       <div className="flex flex-row h-full items-stretch">
                         <span className="flex-1 py-3 px-1 text-center text-xs font-bold text-emerald-300">예적금</span>
                         {showAssetClass && (
@@ -915,7 +917,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                             <div className="w-px bg-gray-600/60 self-stretch" />
                             <span
                               className={`w-5 shrink-0 flex items-center justify-center text-[10px] font-bold cursor-pointer select-none transition-colors ${assetClass === 'D' ? 'text-red-400 hover:text-red-300' : 'text-emerald-400 hover:text-emerald-300'}`}
-                              onClick={() => onUpdateSavingsField(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D')}
+                              onClick={e => { e.stopPropagation(); onUpdateSavingsField(item.id, 'assetClass', assetClass === 'D' ? 'S' : 'D'); }}
                               title={`클릭: ${assetClass === 'D' ? '안전(S)' : '위험(D)'}으로 변경`}
                             >{assetClass}</span>
                           </>

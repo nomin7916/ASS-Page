@@ -73,6 +73,7 @@ export default function RebalancingPanel({
   onAdminTargetChange = null,
   markedRebalRows = {},
   onToggleMarkedRebalRow = () => {},
+  onResetMarkedRebalRow = () => {},
   onManualSave = null,
   driveStatus = '',
   showCalculator = false,
@@ -1163,12 +1164,26 @@ export default function RebalancingPanel({
                       const mc = markedRebalRows[item.id];
                       const bgClass = mc ? MARK_STICKY_BG[mc] : 'bg-[#0f172a] group-hover:bg-gray-800';
                       const catTd = H('category') ? null : (
-                        <td
-                          className={`py-3 px-3 text-center font-bold border-r border-gray-700 align-middle ${bgClass} sticky left-0 z-[5] cursor-pointer transition-colors`}
-                          onClick={() => onToggleMarkedRebalRow(item.id)}
-                          title="클릭하여 매도/매수 표시 토글 (노랑→슬레이트→로즈→갈색→해제)"
-                        >
-                          <div style={{ color: catColor }} className="text-xs">{cat}</div>
+                        <td className={`p-0 text-center font-bold border-r border-gray-700 align-middle ${bgClass} sticky left-0 z-[5] transition-colors`}>
+                          <div className="flex">
+                            <div
+                              className="w-3 shrink-0 cursor-pointer hover:bg-white/10 transition-colors"
+                              onClick={() => onResetMarkedRebalRow(item.id)}
+                              title="색상 초기화"
+                            />
+                            <div
+                              className="flex-1 flex items-center justify-center cursor-pointer py-3 hover:bg-white/10 transition-colors"
+                              onClick={() => onToggleMarkedRebalRow(item.id)}
+                              title="클릭하여 행 색상 사이클 (노랑→슬레이트→로즈→갈색→해제)"
+                            >
+                              <div style={{ color: catColor }} className="text-xs">{cat}</div>
+                            </div>
+                            <div
+                              className="w-3 shrink-0 cursor-pointer hover:bg-blue-400/20 transition-colors"
+                              onClick={() => handleRebalanceSort(null)}
+                              title="정렬 초기화"
+                            />
+                          </div>
                         </td>
                       );
                       return renderRow(item, catTd);
