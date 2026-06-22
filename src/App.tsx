@@ -1425,7 +1425,10 @@ export default function App() {
     notify('백업 저장합니다.', 'info');
     const currentPortfolios = buildPortfoliosState();
     const newUpdatedAt = Date.now();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap }, intHistory, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    // 정식 전체 state 스냅샷(saveStateRef.current) 기반 저장 — 부분 state를 손으로 재구성하면
+    // chartPrefs.intDashCompStocks(통합 대시보드 비교종목)·seenAdminNotifIds 등이 누락되어
+    // "앱 닫기"로 종료할 때마다 비교종목이 초기화되던 버그 방지 (메인 저장과 동일 필드 보장)
+    const state = { ...saveStateRef.current, portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const minWait = new Promise<void>(r => setTimeout(r, 2000));
     if (driveTokenRef.current) {
       const token = driveTokenRef.current;
@@ -2127,8 +2130,9 @@ export default function App() {
             const newVal = !adminAccessAllowed;
             setAdminAccessAllowed(newVal);
             if (driveTokenRef.current) {
-              const currentPortfolios = buildPortfoliosState();
-              const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed: newVal, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current }, intHistory, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+              // 정식 전체 state 스냅샷 기반 — 부분 state 저장 시 chartPrefs 대부분(비교종목 포함)·
+              // seenAdminNotifIds 등이 누락되어 관리자 접근 토글 시 비교종목이 초기화되던 버그 방지
+              const state = { ...saveStateRef.current, portfolios: buildPortfoliosState(), adminAccessAllowed: newVal, portfolioUpdatedAt: Date.now() };
               saveAllToDrive(state);
             }
           }}
