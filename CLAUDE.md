@@ -352,6 +352,29 @@ markAsRead() / clearNotificationLog()
   `AdminPage.tsx` 업로드 UI(`handleUploadStudyMaterialFile`). 저장/로드 경로는 배열을 그대로 통과시켜
   fileId 보존(별도 정규화 없음).
 
+### 시장동향 리포트(reportLinks) — 학습자료와 병렬인 별도 기능 (⚠️ 회귀 주의)
+
+학습자료(notebook)와 **완전히 동일한 구조**의 두 번째 자료 채널. 관리자가 선별한 시장 동향
+리포트를 올리는 용도. notebook과 **데이터·플래그·센티넬·UI를 절대 공유하지 않고 병렬 복제**한다.
+
+- **사용자 플래그**: `userFeatures.reportEnabled` ← approved_users 시트 **J열(index 9)**.
+  Apps Script `check`/`listUsers` 응답 + `setUserFeature` colMap에 `reportEnabled:9` 추가됨.
+  `getFeatureLabels`는 E1:J1(6개) 읽음 → AdminPage `featureLabels` 6번째(`시장리포트`)·
+  `loadFeatureSettings` 길이 가드 `=== 6`·featureDefs 6번째 토글(teal).
+- **데이터**: settings 키 `reportLinks`(`{title,url?,fileId?,createdAt}[]`) — notebook과 동일 shape.
+  Drive `app_settings.json`에 `youtubeUrl`/`notebookLinks`와 **함께** 저장.
+  ⚠️ **app_settings 저장 경로 3곳(`handleSetYoutubeUrl`·`handleSetNotebookLinks`·`handleSetReportLinks`)
+  + Apps Script 마이그레이션 저장(1곳)은 반드시 세 배열(youtubeUrl·notebookLinks·reportLinks)을
+  모두 포함**해야 함 — 한 곳이라도 누락하면 다른 채널 데이터를 빈 값으로 덮어씀(상호 유실).
+- **알림 센티넬**: `__report__` (notebook의 `__notebook__` 대응). `notifTargetsUser(...,notebookEnabled,
+  reportEnabled)` 4번째 인자로 게이팅. 신규 등록 시 `📈 …리포트가 등록되었습니다` 발송(시장리포트 ON만 수신).
+- **HTML 업로드/뷰어는 학습자료와 공용**: `handleUploadStudyMaterial`/`handleDeleteStudyMaterialFile`·
+  `/api/study-material` 프록시·UserInfoBar `openStudyMaterial`(sandbox iframe) 그대로 재사용.
+  업로드 폼만 AdminPage에 별도(rp* state). 상단바는 **별도 📈 TrendingUp 드롭다운**(teal, `reportOpen`).
+- **Apps Script**: `_downloads/AppsScript_계정관리_arui114501.js`가 정본. 코드 교체 후 **새 버전 배포**
+  필요(미배포 시 J열·reportLinks 미반영 → 프론트는 기본 OFF/빈 배열로 안전 동작). `setupSheet`는
+  비파괴(기존 E~I 커스텀 헤더 보존, 빈 J1만 `시장리포트` 세팅 + E2:J100 ON/OFF 검증·기본 OFF).
+
 ---
 
 ## 브라우저 저장소 정책
