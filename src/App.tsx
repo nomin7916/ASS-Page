@@ -323,6 +323,10 @@ export default function App() {
   const rebalExtraQtyRef = useRef<Record<string, number>>({}); // 최신 rebalExtraQty 스냅샷 (탭 전환 저장용)
   const intDashCompStocksRef = useRef<any[]>(defaultCompStocks);
   const prevActivePortfolioIdRef = useRef<string | null>(null);
+  // 직전 렌더의 통합 대시보드 표시 여부 — 계좌 전환 시 "대시보드에서 떠나는지" 판별용
+  // (앱은 항상 대시보드로 부팅하므로 초기값 true). 배치 업데이트로 showIntegratedDashboard가
+  // 이미 false가 된 시점에 [activePortfolioId] 이펙트가 실행되므로, 현재값 대신 이 ref로 직전 상태를 본다.
+  const prevShowIntegratedDashboardRef = useRef<boolean>(true);
   const chartPrefsUpdatedAtRef = useRef<number>(0);
 
   // ── 통합 대시보드 ──
@@ -766,8 +770,14 @@ export default function App() {
       // 리밸런싱 '추가' 입력값을 계좌별로 보존 — 이전 계좌 저장 후 새 계좌 복원
       accountRebalExtraQtyRef.current[prevId] = { ...rebalExtraQtyRef.current };
       setRebalExtraQty(accountRebalExtraQtyRef.current[activePortfolioId] || {});
-      // 이전 계좌 상태 저장
-      accountChartStatesRef.current[prevId] = { ...currentChartStateRef.current };
+      // 이전 계좌 상태 저장 — 직전 뷰가 통합 대시보드였다면 currentChartStateRef.compStocks 는
+      // 대시보드 비교종목이므로, 떠나는 개별 계좌(prevId)의 저장된 비교종목을 대시보드 값으로
+      // 덮어쓰지 않도록 보존(메인 저장 가드와 동일 취지). 대시보드가 아니었으면 그대로 저장.
+      const prevStateToSave = { ...currentChartStateRef.current };
+      if (prevShowIntegratedDashboardRef.current) {
+        prevStateToSave.compStocks = accountChartStatesRef.current[prevId]?.compStocks ?? defaultCompStocks;
+      }
+      accountChartStatesRef.current[prevId] = prevStateToSave;
       // 새 계좌 상태 복원
       const saved = accountChartStatesRef.current[activePortfolioId];
       if (saved) {
@@ -823,6 +833,8 @@ export default function App() {
         }
       }
     }
+    // 다음 계좌 전환 이펙트가 "직전 뷰가 대시보드였는지" 판별할 수 있도록 기록
+    prevShowIntegratedDashboardRef.current = showIntegratedDashboard;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showIntegratedDashboard]);
 
