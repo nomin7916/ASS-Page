@@ -65,10 +65,12 @@ import {
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
 
-// 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
+// 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만,
+// '__report__'(시장리포트 등록 알림)은 시장리포트 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
-function notifTargetsUser(targetEmail: string, email: string, notebookEnabled: boolean): boolean {
+function notifTargetsUser(targetEmail: string, email: string, notebookEnabled: boolean, reportEnabled: boolean): boolean {
   if (targetEmail === '__notebook__') return notebookEnabled === true;
+  if (targetEmail === '__report__') return reportEnabled === true;
   return targetEmail === '__all__' || targetEmail?.toLowerCase() === email.toLowerCase();
 }
 
@@ -80,7 +82,7 @@ export default function App() {
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
-  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false });
+  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
@@ -94,6 +96,7 @@ export default function App() {
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [notebookLinks, setNotebookLinks] = useState<{title: string, url?: string, fileId?: string, createdAt: number}[]>([]);
+  const [reportLinks, setReportLinks] = useState<{title: string, url?: string, fileId?: string, createdAt: number}[]>([]);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
   const adminTargetNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1328,7 +1331,7 @@ export default function App() {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks });
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks, reportLinks });
       setYoutubeUrl(url);
       notify(url ? 'YouTube 채널 링크가 설정되었습니다.' : 'YouTube 채널 링크가 삭제되었습니다.', 'success');
     } catch {
@@ -1366,7 +1369,7 @@ export default function App() {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links });
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links, reportLinks });
       setNotebookLinks(links);
       notify('노트북LM 링크가 저장됐습니다.', 'success');
     } catch {
@@ -1378,6 +1381,28 @@ export default function App() {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(links) }),
+    }).catch(() => {});
+  };
+
+  // 시장동향 리포트 링크 — 학습자료와 동일 구조(외부 링크 + HTML 파일). 별도 settings 키 reportLinks.
+  const handleSetReportLinks = async (links: {title: string, url?: string, fileId?: string, createdAt: number}[]) => {
+    // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
+    try {
+      const token = driveTokenRef.current;
+      if (!token) { notify('Drive 인증 필요', 'error'); return; }
+      const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks: links });
+      setReportLinks(links);
+      notify('시장동향 리포트 링크가 저장됐습니다.', 'success');
+    } catch {
+      notify('링크 저장 실패 (Drive 오류)', 'error');
+      return;
+    }
+    // Apps Script 배포 — 일반 사용자에게 전달 (비차단, 실패 무시)
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ action: 'setSettings', key: 'reportLinks', value: JSON.stringify(links) }),
     }).catch(() => {});
   };
 
@@ -1527,8 +1552,9 @@ export default function App() {
         if (driveSettings) {
           if (driveSettings.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
           if (Array.isArray(driveSettings.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
+          if (Array.isArray(driveSettings.reportLinks)) setReportLinks(driveSettings.reportLinks);
           // 실제 데이터가 있을 때만 "찾음"으로 처리 — 빈 배열만 있으면 Apps Script 폴백 허용
-          driveSettingsFound = !!(driveSettings.youtubeUrl || driveSettings.notebookLinks?.length > 0);
+          driveSettingsFound = !!(driveSettings.youtubeUrl || driveSettings.notebookLinks?.length > 0 || driveSettings.reportLinks?.length > 0);
         }
       } catch {}
       if (!isAdmin || !driveSettingsFound) {
@@ -1540,13 +1566,16 @@ export default function App() {
             const yu = settingsData.youtubeUrl || '';
             const rawNl = settingsData.notebookLinks;
             const nl: any[] | null = rawNl ? (Array.isArray(rawNl) ? rawNl : (() => { try { return JSON.parse(rawNl); } catch { return null; } })()) : null;
+            const rawRl = settingsData.reportLinks;
+            const rl: any[] | null = rawRl ? (Array.isArray(rawRl) ? rawRl : (() => { try { return JSON.parse(rawRl); } catch { return null; } })()) : null;
             setYoutubeUrl(yu);
             if (Array.isArray(nl)) setNotebookLinks(nl);
+            if (Array.isArray(rl)) setReportLinks(rl);
             // 관리자: Drive에 저장 (이후 Drive가 정본으로 동작)
             // 일반 사용자: Drive에 캐시 저장
             try {
               const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-              await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [] });
+              await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [], reportLinks: Array.isArray(rl) ? rl : [] });
             } catch {}
           }
         } catch {}
@@ -1562,7 +1591,7 @@ export default function App() {
             const notifsData = await notifsRes.json();
             const all: AdminNotification[] = notifsData.notifications || [];
             const myAll = all.filter(n =>
-              notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled)
+              notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled, userFeatures.reportEnabled)
             );
             const myNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
             if (myNotifs.length > 0) {
@@ -1609,6 +1638,9 @@ export default function App() {
         if (Array.isArray(settings?.notebookLinks) && settings.notebookLinks.length > 0) {
           setNotebookLinks(settings.notebookLinks); found = true;
         }
+        if (Array.isArray(settings?.reportLinks) && settings.reportLinks.length > 0) {
+          setReportLinks(settings.reportLinks); found = true;
+        }
       } catch {}
       if (!found) {
         try {
@@ -1619,6 +1651,10 @@ export default function App() {
             if (d.notebookLinks) {
               if (Array.isArray(d.notebookLinks)) setNotebookLinks(d.notebookLinks);
               else { try { setNotebookLinks(JSON.parse(d.notebookLinks)); } catch {} }
+            }
+            if (d.reportLinks) {
+              if (Array.isArray(d.reportLinks)) setReportLinks(d.reportLinks);
+              else { try { setReportLinks(JSON.parse(d.reportLinks)); } catch {} }
             }
           }
         } catch {}
@@ -1638,7 +1674,7 @@ export default function App() {
         const data = await res.json();
         const all: AdminNotification[] = data.notifications || [];
         const myAll = all.filter(n =>
-          notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled)
+          notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled, userFeatures.reportEnabled)
         );
         const newNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
         if (newNotifs.length > 0) {
@@ -1651,7 +1687,7 @@ export default function App() {
     };
     const interval = setInterval(poll, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [authUser, userFeatures.notebookEnabled]);
+  }, [authUser, userFeatures.notebookEnabled, userFeatures.reportEnabled]);
 
   // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
   useEffect(() => {
@@ -2047,7 +2083,7 @@ export default function App() {
     return <AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportLinks={reportLinks} onSetReportLinks={handleSetReportLinks} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨
@@ -2159,6 +2195,7 @@ export default function App() {
           onToggleCalculator={() => setShowCalculator(v => !v)}
           youtubeUrl={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.youtubeEnabled ? youtubeUrl : ''}
           notebookLinks={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.notebookEnabled ? notebookLinks : []}
+          reportLinks={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.reportEnabled ? reportLinks : []}
           title={title}
           setTitle={setTitle}
           showIntegratedDashboard={showIntegratedDashboard}

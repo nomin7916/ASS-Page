@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard, Calculator, Youtube, X, Bell } from 'lucide-react';
+import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard, Calculator, Youtube, X, Bell, TrendingUp } from 'lucide-react';
 import { ADMIN_EMAIL } from '../config';
 import HeaderMarketChips from './HeaderMarketChips';
 
@@ -49,6 +49,7 @@ export default function UserInfoBar({
   onToggleCalculator,
   youtubeUrl,
   notebookLinks = [],
+  reportLinks = [],
   title,
   setTitle,
   showIntegratedDashboard,
@@ -65,6 +66,8 @@ export default function UserInfoBar({
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
   const [notebookOpen, setNotebookOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const reportDropdownRef = useRef(null);
 
   // HTML 학습자료 뷰어 (sandbox iframe) 상태
   const [viewer, setViewer] = useState(null); // { title }
@@ -74,6 +77,7 @@ export default function UserInfoBar({
 
   const openStudyMaterial = async (link) => {
     setNotebookOpen(false);
+    setReportOpen(false);
     setViewer({ title: link.title });
     setViewerHtml('');
     setViewerError('');
@@ -109,6 +113,17 @@ export default function UserInfoBar({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [notebookOpen]);
+
+  useEffect(() => {
+    if (!reportOpen) return;
+    const handler = (e) => {
+      if (reportDropdownRef.current && !reportDropdownRef.current.contains(e.target)) {
+        setReportOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [reportOpen]);
 
   useEffect(() => {
     if (!linkEditOpen) return;
@@ -404,6 +419,77 @@ export default function UserInfoBar({
                 </div>
               </div>
             </div>
+          )}
+        </div>
+        {/* 시장동향 리포트 드롭다운 */}
+        <div className="relative" ref={reportDropdownRef}>
+          <button
+            onClick={() => reportLinks.length > 0 && setReportOpen(v => !v)}
+            title={reportLinks.length > 0 ? '시장동향 리포트 바로가기' : '시장동향 리포트 없음'}
+            className={`p-1.5 rounded border transition-colors flex items-center justify-center ${
+              reportLinks.length === 0
+                ? 'text-gray-700 border-transparent cursor-default'
+                : reportOpen
+                  ? 'text-teal-400 bg-teal-900/20 border-teal-700/40'
+                  : 'text-gray-500 hover:text-teal-400 hover:bg-gray-800 border-transparent hover:border-gray-700'
+            }`}
+          >
+            <TrendingUp size={14} />
+          </button>
+          {reportOpen && reportLinks.length > 0 && (
+            <>
+              {/* 모바일: 화면 중앙 배치를 위한 배경 오버레이 (탭 시 닫힘) */}
+              <div
+                className="md:hidden fixed inset-0 z-[998] bg-black/50"
+                onClick={() => setReportOpen(false)}
+              />
+              <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(90vw,340px)] z-[999] bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden md:absolute md:left-auto md:top-full md:right-0 md:translate-x-0 md:translate-y-0 md:mt-1.5 md:w-auto md:min-w-[220px] md:max-w-[300px] md:z-50">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+                  <span className="text-gray-500 text-xs font-semibold">시장동향 리포트</span>
+                  <button
+                    onClick={() => setReportOpen(false)}
+                    className="md:hidden text-gray-500 hover:text-gray-300 transition-colors"
+                    title="닫기"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <ul className="py-1 max-h-[60vh] md:max-h-64 overflow-y-auto">
+                  {reportLinks.map((link, i) => (
+                    <li key={i}>
+                      {link.fileId ? (
+                        <button
+                          onClick={() => openStudyMaterial(link)}
+                          className="w-full text-left flex items-start md:items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
+                        >
+                          <span className="flex-shrink-0 mt-0.5 md:mt-0 text-teal-400 group-hover:text-teal-300 transition-colors">
+                            <TrendingUp size={13} />
+                          </span>
+                          <span className="text-gray-300 text-xs group-hover:text-white transition-colors break-words md:truncate">
+                            {link.title}
+                          </span>
+                        </button>
+                      ) : (
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={() => setReportOpen(false)}
+                          className="flex items-start md:items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
+                        >
+                          <span className="flex-shrink-0 mt-0.5 md:mt-0 text-teal-500 group-hover:text-teal-400 transition-colors">
+                            <TrendingUp size={13} />
+                          </span>
+                          <span className="text-gray-300 text-xs group-hover:text-white transition-colors break-words md:truncate">
+                            {link.title}
+                          </span>
+                        </a>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </>
           )}
         </div>
         <div className="w-px h-3 bg-gray-700/60 mx-0.5" />

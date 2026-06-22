@@ -14,6 +14,7 @@ export interface UserFeatures {
   feature3: boolean;
   youtubeEnabled: boolean;
   notebookEnabled: boolean;
+  reportEnabled: boolean;
 }
 
 interface AdminViewUserCtx {
@@ -71,7 +72,7 @@ async function checkApproval(email: string): Promise<{ approved: boolean; needsR
   try {
     const url = `${APPS_SCRIPT_URL}?action=check&email=${encodeURIComponent(email)}&cacheBust=${Date.now()}`;
     const res = await fetch(url);
-    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false };
+    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false };
     const data = await res.json();
     // Apps Script returns { status: 'approved'/'not_approved', resetPassword: string|null, name, feature1, ... }
     return {
@@ -84,9 +85,10 @@ async function checkApproval(email: string): Promise<{ approved: boolean; needsR
       feature3: data.feature3 ?? false,
       youtubeEnabled: data.youtubeEnabled ?? false,
       notebookEnabled: data.notebookEnabled ?? false,
+      reportEnabled: data.reportEnabled ?? false,
     };
   } catch {
-    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false };
+    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false };
   }
 }
 
@@ -288,8 +290,8 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
             return;
           }
         } catch { /* 네트워크 오류 → 세션 유지하고 앱 진입 허용 */ }
-        const { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled } = await checkApproval(email);
-        onApproved(email, token, { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled });
+        const { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled } = await checkApproval(email);
+        onApproved(email, token, { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled });
       },
       onFail: () => {
         sessionStorage.removeItem(SESSION_KEY);
@@ -317,8 +319,8 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         }
         return checkApproval(adminViewUserCtx.userEmail);
       })
-      .then(({ name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled }) => {
-        featuresRef.current = { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled };
+      .then(({ name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled }) => {
+        featuresRef.current = { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled };
         setStep('pin_entry');
       })
       .catch(() => {
@@ -361,12 +363,12 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         setUserEmail(email);
         setUserToken(token);
 
-        const { approved, needsReset, adminPin, name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled } = await checkApproval(email);
+        const { approved, needsReset, adminPin, name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled } = await checkApproval(email);
         if (!approved) {
           setStep('pending');
           return;
         }
-        featuresRef.current = { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled };
+        featuresRef.current = { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled };
 
         if (needsReset) {
           const adminHash = hashPin(adminPin);

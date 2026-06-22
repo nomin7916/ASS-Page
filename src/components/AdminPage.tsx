@@ -17,6 +17,7 @@ interface ApprovedUser {
   feature3?: boolean;
   youtubeEnabled?: boolean; // H열
   notebookEnabled?: boolean; // I열
+  reportEnabled?: boolean; // J열
 }
 
 interface SentNotification {
@@ -48,8 +49,10 @@ interface Props {
   onSetYoutubeUrl?: (url: string) => Promise<void>;
   notebookLinks?: NotebookLink[];
   onSetNotebookLinks?: (links: NotebookLink[]) => Promise<void>;
-  onUploadStudyMaterial?: (file: File) => Promise<string>; // HTML 업로드 → fileId
-  onDeleteStudyMaterialFile?: (fileId: string) => Promise<void>; // Drive 원본 정리
+  reportLinks?: NotebookLink[];
+  onSetReportLinks?: (links: NotebookLink[]) => Promise<void>;
+  onUploadStudyMaterial?: (file: File) => Promise<string>; // HTML 업로드 → fileId (학습자료·리포트 공용)
+  onDeleteStudyMaterialFile?: (fileId: string) => Promise<void>; // Drive 원본 정리 (공용)
 }
 
 // Apps Script를 통해 사용자 목록 조회 (시트 비공개 유지)
@@ -74,7 +77,7 @@ function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks, onUploadStudyMaterial, onDeleteStudyMaterialFile }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks, reportLinks = [], onSetReportLinks, onUploadStudyMaterial, onDeleteStudyMaterialFile }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
@@ -110,8 +113,20 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [nbUploadError, setNbUploadError] = useState('');
   const nbFileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // 시장동향 리포트 링크 상태 (학습자료와 동일 구조)
+  const [rpTitle, setRpTitle] = useState('');
+  const [rpUrl, setRpUrl] = useState('');
+  const [rpSaving, setRpSaving] = useState(false);
+  const [deletingRpIds, setDeletingRpIds] = useState<Set<number>>(new Set());
+  const [movingRpId, setMovingRpId] = useState<number | null>(null);
+  const [rpFileTitle, setRpFileTitle] = useState('');
+  const [rpFile, setRpFile] = useState<File | null>(null);
+  const [rpUploading, setRpUploading] = useState(false);
+  const [rpUploadError, setRpUploadError] = useState('');
+  const rpFileInputRef = useRef<HTMLInputElement | null>(null);
+
   // 기능 설정 상태
-  const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료']);
+  const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트']);
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
 
   // API 진단 상태
@@ -266,7 +281,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       const res = await fetch(`${APPS_SCRIPT_URL}?action=getFeatureLabels&cacheBust=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data.labels) && data.labels.length === 5) {
+        if (Array.isArray(data.labels) && data.labels.length === 6) {
           setFeatureLabels(data.labels);
         }
       }
@@ -379,6 +394,82 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       onDeleteStudyMaterialFile(target.fileId).catch(() => {});
     }
     setDeletingNbIds(prev => { const next = new Set(prev); next.delete(createdAt); return next; });
+  };
+
+  // ── 시장동향 리포트 링크 관리 (학습자료와 동일 구조, 센티넬 '__report__') ──
+  const handleAddReportLink = async () => {
+    if (!rpTitle.trim() || !rpUrl.trim() || !onSetReportLinks) return;
+    setRpSaving(true);
+    const newLink: NotebookLink = { title: rpTitle.trim(), url: rpUrl.trim(), createdAt: Date.now() };
+    await onSetReportLinks([newLink, ...reportLinks]);
+    // 시장리포트(reportEnabled) ON 사용자에게만 자동 알림 (비차단)
+    // '__report__' 센티넬 → App.tsx notifTargetsUser가 시장리포트 ON 사용자만 통과시킴
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({
+        action: 'sendNotification',
+        targetEmail: '__report__',
+        message: `📈 ${newLink.title} 리포트가 등록되었습니다.`,
+        type: 'info',
+      }),
+    }).catch(() => {});
+    setRpTitle('');
+    setRpUrl('');
+    setRpSaving(false);
+  };
+
+  const handleUploadReportFile = async () => {
+    if (!rpFile || !onUploadStudyMaterial || !onSetReportLinks) return;
+    const title = (rpFileTitle.trim() || rpFile.name.replace(/\.html?$/i, '')).trim();
+    if (!title) { setRpUploadError('제목을 입력하세요.'); return; }
+    setRpUploadError('');
+    setRpUploading(true);
+    try {
+      const fileId = await onUploadStudyMaterial(rpFile);
+      const newLink: NotebookLink = { title, fileId, createdAt: Date.now() };
+      await onSetReportLinks([newLink, ...reportLinks]);
+      // 시장리포트(reportEnabled) ON 사용자에게만 자동 알림 (비차단)
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'sendNotification',
+          targetEmail: '__report__',
+          message: `📈 ${title} 리포트가 등록되었습니다.`,
+          type: 'info',
+        }),
+      }).catch(() => {});
+      setRpFile(null);
+      setRpFileTitle('');
+      if (rpFileInputRef.current) rpFileInputRef.current.value = '';
+    } catch (e: any) {
+      setRpUploadError(e?.message?.includes('no-token') ? 'Drive 인증이 필요합니다.' : '업로드 실패. 다시 시도하세요.');
+    }
+    setRpUploading(false);
+  };
+
+  const handleMoveReportLink = async (index: number, direction: 'up' | 'down') => {
+    if (!onSetReportLinks) return;
+    const arr = [...reportLinks];
+    const target = direction === 'up' ? index - 1 : index + 1;
+    if (target < 0 || target >= arr.length) return;
+    setMovingRpId(arr[index].createdAt);
+    [arr[index], arr[target]] = [arr[target], arr[index]];
+    await onSetReportLinks(arr);
+    setMovingRpId(null);
+  };
+
+  const handleDeleteReportLink = async (createdAt: number) => {
+    if (!onSetReportLinks) return;
+    setDeletingRpIds(prev => new Set([...prev, createdAt]));
+    const target = reportLinks.find(l => l.createdAt === createdAt);
+    await onSetReportLinks(reportLinks.filter(l => l.createdAt !== createdAt));
+    // HTML 리포트면 Drive 원본 파일도 정리 (비차단)
+    if (target?.fileId && onDeleteStudyMaterialFile) {
+      onDeleteStudyMaterialFile(target.fileId).catch(() => {});
+    }
+    setDeletingRpIds(prev => { const next = new Set(prev); next.delete(createdAt); return next; });
   };
 
   const handleDeleteYoutubeHistory = async (savedAt: number) => {
@@ -499,6 +590,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const formatNotifTarget = (target: string) => {
     if (target === '__all__') return '전체';
     if (target === '__notebook__') return '학습자료 ON';
+    if (target === '__report__') return '시장리포트 ON';
     const u = users.find(x => x.email === target);
     return u?.name || (typeof target === 'string' ? target.split('@')[0] : String(target ?? ''));
   };
@@ -575,6 +667,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   { feat: 'feature3',       label: featureLabels[2], val: !!u.feature3,       onCls: 'text-sky-300 border-sky-700/60 bg-sky-900/40',        offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                   { feat: 'youtubeEnabled', label: featureLabels[3], val: !!u.youtubeEnabled, onCls: 'text-red-300 border-red-700/60 bg-red-900/40',        offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                   { feat: 'notebookEnabled',label: featureLabels[4], val: !!u.notebookEnabled,onCls: 'text-violet-300 border-violet-700/60 bg-violet-900/40',offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'reportEnabled',  label: featureLabels[5], val: !!u.reportEnabled,  onCls: 'text-teal-300 border-teal-700/60 bg-teal-900/40',      offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                 ];
                 return (
                   <li key={i} className="bg-gray-800 rounded-lg px-3 py-2">
@@ -698,7 +791,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               구글 시트에서 사용자 관리
             </button>
             <p className="text-gray-600 text-xs mt-2 text-center">
-              A열: RESET / B열: 이메일 / C열: 이름 / D열: 가입일(YYYY-MM-DD) / E~I열: 기능1~5 (ON/OFF)
+              A열: RESET / B열: 이메일 / C열: 이름 / D열: 가입일(YYYY-MM-DD) / E~J열: 기능1~6 (ON/OFF)
             </p>
 
             <a
@@ -1153,6 +1246,171 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                                 title="삭제"
                               >
                                 {deletingNbIds.has(link.createdAt) ? (
+                                  <span className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin inline-block" />
+                                ) : '×'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 시장동향 리포트 관리 */}
+        {onSetReportLinks && (
+          <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+            <p className="text-teal-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+                <polyline points="16 7 22 7 22 13" />
+              </svg>
+              시장동향 리포트
+            </p>
+            <p className="text-gray-500 text-xs">
+              선별한 시장 동향 리포트를 추가하면 시장리포트 ON 사용자의 상단 바 📈 아이콘 드롭다운에 표시됩니다.
+            </p>
+
+            {/* 추가 폼 */}
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={rpTitle}
+                onChange={e => setRpTitle(e.target.value)}
+                placeholder="제목 (예: 2026년 6월 주간 시황 리포트)"
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-teal-500"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={rpUrl}
+                  onChange={e => setRpUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-teal-500"
+                />
+                <button
+                  onClick={handleAddReportLink}
+                  disabled={rpSaving || !rpTitle.trim() || !rpUrl.trim()}
+                  className="flex items-center gap-1.5 bg-teal-700 hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  {rpSaving ? (
+                    <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />추가 중</>
+                  ) : '추가'}
+                </button>
+              </div>
+            </div>
+
+            {/* HTML 파일 업로드 (자체완결형 HTML → 관리자 Drive 저장 → 사용자 sandbox 뷰어로 열람) */}
+            {onUploadStudyMaterial && (
+              <div className="space-y-2 pt-2 border-t border-gray-800">
+                <p className="text-gray-400 text-xs font-semibold">또는 HTML 파일 업로드</p>
+                <p className="text-gray-600 text-[11px] leading-relaxed">
+                  자체완결형 HTML 리포트를 올리면 관리자 Drive에 저장되고, 사용자는 새 탭이 아닌 격리된 뷰어(iframe)에서 열람합니다.
+                </p>
+                <input
+                  type="text"
+                  value={rpFileTitle}
+                  onChange={e => setRpFileTitle(e.target.value)}
+                  placeholder="제목 (비우면 파일명 사용)"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-teal-500"
+                />
+                <div className="flex gap-2">
+                  <input
+                    ref={rpFileInputRef}
+                    type="file"
+                    accept=".html,.htm,text/html"
+                    onChange={e => { setRpFile(e.target.files?.[0] ?? null); setRpUploadError(''); }}
+                    className="flex-1 text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-gray-700 file:text-gray-200 hover:file:bg-gray-600 file:cursor-pointer"
+                  />
+                  <button
+                    onClick={handleUploadReportFile}
+                    disabled={rpUploading || !rpFile}
+                    className="flex items-center gap-1.5 bg-teal-700 hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    {rpUploading ? (
+                      <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />업로드 중</>
+                    ) : '업로드'}
+                  </button>
+                </div>
+                {rpUploadError && <p className="text-red-400 text-[11px]">{rpUploadError}</p>}
+              </div>
+            )}
+
+            {/* 링크 목록 */}
+            {reportLinks.length === 0 ? (
+              <p className="text-gray-700 text-xs text-center py-2">등록된 리포트가 없습니다.</p>
+            ) : (
+              <div className="rounded-lg overflow-hidden border border-gray-700/40" style={RULED_BG_STYLE}>
+                <div className="overflow-y-auto max-h-64">
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-gray-700/50 bg-gray-800/60">
+                        <th className="px-2 py-1.5 text-center text-gray-500 font-semibold w-8">#</th>
+                        <th className="px-2 py-1.5 text-left text-gray-500 font-semibold whitespace-nowrap">등록일시</th>
+                        <th className="px-2 py-1.5 text-left text-gray-500 font-semibold">제목</th>
+                        <th className="px-2 py-1.5 text-left text-gray-500 font-semibold">링크</th>
+                        <th className="px-1 py-1.5 w-8"></th>
+                        <th className="px-2 py-1.5 w-6"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportLinks.map((link, i) => {
+                        const d = new Date(link.createdAt);
+                        const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                        const isBusy = movingRpId !== null || deletingRpIds.has(link.createdAt);
+                        return (
+                          <tr key={link.createdAt} className={i < reportLinks.length - 1 ? 'border-b border-gray-700/30' : ''}>
+                            <td className="px-2 py-1.5 text-center text-gray-600">{i + 1}</td>
+                            <td className="px-2 py-1.5 text-gray-500 whitespace-nowrap">{dateStr}</td>
+                            <td className="px-2 py-1.5 text-gray-200 font-medium max-w-[120px] truncate">{link.title}</td>
+                            <td className="px-2 py-1.5 max-w-[160px]">
+                              {link.fileId ? (
+                                <span className="inline-flex items-center gap-1 text-teal-400 text-[11px] font-semibold">
+                                  <span className="px-1.5 py-0.5 rounded bg-teal-900/40 border border-teal-700/50">HTML</span>
+                                  <span className="text-gray-500">리포트 파일</span>
+                                </span>
+                              ) : (
+                                <a
+                                  href={link.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-teal-500 hover:text-teal-300 underline decoration-dotted truncate block transition-colors"
+                                  title={link.url}
+                                >
+                                  {link.url}
+                                </a>
+                              )}
+                            </td>
+                            <td className="px-1 py-1.5 text-center">
+                              <div className="flex flex-col items-center gap-0">
+                                <button
+                                  onClick={() => handleMoveReportLink(i, 'up')}
+                                  disabled={i === 0 || isBusy}
+                                  className="text-gray-600 hover:text-gray-300 leading-none disabled:opacity-20 transition-colors px-0.5"
+                                  style={{ fontSize: '9px' }}
+                                  title="위로"
+                                >▲</button>
+                                <button
+                                  onClick={() => handleMoveReportLink(i, 'down')}
+                                  disabled={i === reportLinks.length - 1 || isBusy}
+                                  className="text-gray-600 hover:text-gray-300 leading-none disabled:opacity-20 transition-colors px-0.5"
+                                  style={{ fontSize: '9px' }}
+                                  title="아래로"
+                                >▼</button>
+                              </div>
+                            </td>
+                            <td className="px-2 py-1.5 text-center">
+                              <button
+                                onClick={() => handleDeleteReportLink(link.createdAt)}
+                                disabled={isBusy}
+                                className="text-gray-700 hover:text-red-400 text-sm leading-none transition-colors disabled:opacity-40"
+                                title="삭제"
+                              >
+                                {deletingRpIds.has(link.createdAt) ? (
                                   <span className="w-3 h-3 border border-gray-600 border-t-gray-400 rounded-full animate-spin inline-block" />
                                 ) : '×'}
                               </button>
