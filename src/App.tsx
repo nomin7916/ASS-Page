@@ -49,6 +49,7 @@ import { useStockData } from './hooks/useStockData';
 import { usePinManager } from './hooks/usePinManager';
 import { useToast } from './hooks/useToast';
 import { useHistoryBackfill } from './hooks/useHistoryBackfill';
+import { useAutoConfirmHistory } from './hooks/useAutoConfirmHistory';
 import { useIndexImport } from './hooks/useIndexImport';
 import { usePortfolioData } from './hooks/usePortfolioData';
 import { useIntegratedData } from './hooks/useIntegratedData';
@@ -1169,6 +1170,12 @@ export default function App() {
     activePortfolioId, setHistory, effectiveDateKey, krEffectiveDateKey,
   });
 
+  // 앱 실행 시 자산검증 불일치 라이브 레코드를 '수량×종가로 자동확정' (useHistoryBackfill 뒤에서 합성)
+  useAutoConfirmHistory({
+    stockHistoryMap, indicatorHistoryMap, marketIndicators,
+    portfolios, setPortfolios, effectiveDateKey, krEffectiveDateKey,
+  });
+
   const { handleImportHistoryJSON } = useIndexImport({
     marketIndices, setMarketIndices, setIndexFetchStatus,
     setStockHistoryMap, setMarketIndicators, setIndicatorHistoryMap, notify,
@@ -1732,6 +1739,13 @@ export default function App() {
         rowColor: p.rowColor || '',
         isTest: !!p.isTest,
         historyLen: (p.history || []).length,
+        // 자산검증 확정상태 지문: 확정(isFixed)·자동확정거부(autoConfirmDeclined)·확정값 변경을
+        // 구조 변경으로 간주 → portfolioUpdatedAt 상승 → Drive STATE 저장(수동/자동 확정·확정취소
+        // 영속화). 라이브(isFixed:false) 레코드의 evalAmount는 제외 — 시장가 갱신이 저장을 유발하지
+        // 않도록(historyLen 주석의 의도 유지). 확정 레코드 evalAmount는 시장가로 안 바뀌어 안전.
+        historyVerifyKey: (p.history || []).map(h =>
+          h?.isFixed ? `${h.date}:${Math.round(cleanNum(h.evalAmount))}`
+          : h?.autoConfirmDeclined ? `${h.date}:D` : '').filter(Boolean).join('|'),
         // 자산검증: 스냅샷·수동종가·기준일 변경도 구조 변경으로 간주 → Drive STATE 즉시 반영
         baselineDate: p.baselineDate || '',
         preBaselineVerified: !!p.preBaselineVerified,
@@ -1836,6 +1850,9 @@ export default function App() {
       const usH = marketHolidays.us;
       const accType = activePortfolioAccountType;
       const existingToday = prev.find(h => h.date === today);
+      // 자동확정/백필로 이미 잠긴 당일(isFixed+adjustedAmount)은 라이브 값으로 재구성하지 않음 —
+      // 잠금 유지(21:00 이후 종가 확정 보존). useAutoConfirmHistory의 당일 자동확정이 되돌려지는 것 방지.
+      if (existingToday?.isFixed && existingToday.adjustedAmount !== undefined) return prev;
       // 주말 항목만 제거 — 공휴일은 유효한 기록으로 유지, 오늘 항목은 아래서 재구성
       const cleaned = prev.filter(h => {
         if (h.date === today) return false;

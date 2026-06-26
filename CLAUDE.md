@@ -200,6 +200,52 @@ src/
   복원에서 기존 중복을 정리(우선순위 실시간>확정>백필, 중복 없으면 동일 참조 반환).
 - 검증: `npm run verify:history`.
 
+### 앱 실행 시 '수량×종가로 자동확정' (`useAutoConfirmHistory`) — 자산검증 불일치 자동 보정 (⚠️ 회귀 주의)
+
+자산검증 모달(`VerifyEvalModal`)의 **'수량*종가로 확정'을 앱 실행 시 자동 수행**한다. `useHistoryBackfill`이
+실시간 기록(`isFixed:false`+`evalAmount>0`)을 권위값으로 보호해 종가로 덮어쓰지 않으므로(당일 21:00
+`liveOverrideDate` 예외만), 장중 기록된 과거 라이브 값이 종가와 어긋나도 영구히 '불일치'로 남았다 →
+사용자가 손수 확정해 왔다. 이 훅이 그 동작을 자동화한다.
+
+- **대상 레코드**: `isFixed:false`(라이브) + `evalAmount>0` + **불일치**(모달과 동일 판정) +
+  **모든 가격 종목이 그 날짜의 정확한 종가/NAV(또는 manual)** + 구성 확정(`!estimated`) + `autoConfirmDeclined`
+  없음. 날짜는 **과거(오늘 미만), 또는 KR 계좌(`isKrCutoffAccount`)의 당일 KST 21:00 이후**(`getKrSettledTodayDate`).
+  당일 확정은 KR 전용 — crypto 등 비KR은 과거만. 확정 = `{evalAmount=adjustedAmount=재계산값, isFixed:true}`
+  (수동 확정과 동일). **모든 계좌**(현금성 simple/matong 제외 — 시세 이력 없음, overseas는 환율 재계산이
+  권위라 항상 '일치'로 자연 제외).
+- **데이터 완비 가드(⚠️ 핵심)**: 한 가격 종목이라도 그 날짜의 **정확한 데이터가 없으면 보류**. source가
+  `history`여도 `getClosestValue`의 **소급 근사(carry-back)**일 수 있어(당일 종가 미로드 시 전일 종가 반환)
+  신뢰 불가 → `stockHistoryMap[code][date]`/`goldKr[date]` **해당 날짜 키 존재를 직접 확인**. `manual`(수동
+  입력)·deposit·savings는 허용, 그 외(`none`/`approximate`/펀드 `currentPrice`·`evalAmount` 폴백/소급 history)는
+  보류. 잘못된 값(특히 21:00 직후 당일 종가 API 지연 시 전일가, 과거 펀드 NAV 미로드 시 당일 currentPrice)을
+  영구 고정하는 것 방지. 모달 수동 확정은 이 가드가 없음(사용자 재량) → 자동확정이 더 보수적. 미완비 날짜는
+  라이브로 남아 데이터 로드 후 다음 실행에서 확정(또는 수동 확정).
+- **추정 구성 가드**: `resolveHoldings(p,date).estimated`(스냅샷 없음·미검증 pre-baseline — 보유수량
+  불확실)면 보류. 모달은 '🟡 추정' 경고로 사용자 검토를 받지만 자동 잠금은 잘못된 수량을 박을 위험 →
+  구성이 확정된(`estimated:false`) 날짜만 자동확정.
+- **확정 취소(`unconfirm`)는 `autoConfirmDeclined:true`를 박제** → 자동확정이 그 날짜를 재확정하지 않음
+  (취소 영속). 수동 확정(`confirm`)은 `autoConfirmDeclined`를 해제. 두 핸들러는 `VerifyEvalModal`에 있음.
+- **setPortfolios 합성(⚠️ 회귀 주의)**: 모든 계좌(활성+비활성)를 **단일 functional `setPortfolios`**로
+  처리하고 본 훅을 **`useHistoryBackfill` 뒤에 배치**. 백필은 비활성 계좌를 non-functional
+  setPortfolios(배열, 활성은 그대로 반환)로 갱신하므로, 같은 커밋에서 setHistory(=patchActive functional)와
+  섞이면 active 갱신이 유실될 수 있다. 단일 functional 갱신을 백필 뒤에 두면 백필 결과 위에 안전하게
+  compose된다. `applyConfirms`는 `prev`에서 `isFixed`/`autoConfirmDeclined`를 **재확인(staleness 가드)** →
+  백필/사용자가 먼저 처리한 레코드는 보존. 확정 후 `isFixed:true`라 다음 실행에서 제외(멱등). deps에
+  `portfolios` 없음 → 자기 setState로 재실행 안 됨(백필과 동일 패턴, 무한루프 없음).
+- **당일(21:00 이후) 처리**: KR 계좌 당일은 21:00 이후에만 대상(그 전엔 today-effect가 라이브 기록,
+  `getEffectiveDateKR`이 21:00 후 null이라 today-effect는 정지 → 본 훅과 시간대가 분리됨). 백필
+  `liveOverrideDate`(당일)도 종가로 보정하므로 본 훅이 뒤에서 합성 시 staleness 가드로 건너뛸 수 있음(값은
+  양쪽 모두 종가=정확). 활성 계좌 당일이 본 훅으로 잠기면(`isFixed`+`adjustedAmount`) **today-effect가
+  라이브로 되돌리지 않도록 보존 가드**를 둠(`App.tsx` today-effect 상단: `existingToday.isFixed &&
+  adjustedAmount!==undefined`면 `return prev`).
+- **persist(⚠️ 회귀 주의)**: 확정/거부는 record 내용만 바꿔 `historyLen`은 불변 → 과거엔 `portfolioStructureKey`가
+  안 바뀌어 `portfolioUpdatedAt` 미상승 → `useDriveSync`의 STATE 저장 가드(`portfolioUpdatedAt>lastSaved`)가
+  **저장을 건너뛰어** 확정/거부가 Drive에 안 남던 버그가 있었다(수동 확정도 동일). → `portfolioStructureKey`에
+  **`historyVerifyKey`**(확정 레코드 `date:반올림evalAmount` + 거부 레코드 `date:D`) 추가 → 확정상태 변경이
+  키를 바꿔 `portfolioUpdatedAt` 상승 → 저장됨. **라이브(`isFixed:false`) evalAmount는 키에서 제외**(시장가
+  갱신이 저장을 유발하지 않도록 — `historyLen` 주석 의도 유지). `dedupeHistoryByDate`는 원본 레코드를 그대로
+  반환 → `autoConfirmDeclined` 보존. 로드 정규화(`applyStateData`/`applyBackupData`)도 `...` 스프레드라 보존.
+
 ### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
 **마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가

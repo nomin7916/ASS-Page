@@ -325,10 +325,12 @@ export default function VerifyEvalModal({
   const confirm = () => {
     if (recomputed <= 0) { notify('재계산 합계가 0원입니다 — 종가/수량을 확인하세요', 'warning'); return; }
     const v = Math.round(recomputed);
-    setHistory(hist => hist.map(item =>
-      (item.id ? item.id === record.id : item.date === date)
-        ? { ...item, evalAmount: v, adjustedAmount: v, isFixed: true }
-        : item));
+    setHistory(hist => hist.map(item => {
+      if (!(item.id ? item.id === record.id : item.date === date)) return item;
+      const next = { ...item, evalAmount: v, adjustedAmount: v, isFixed: true };
+      delete next.autoConfirmDeclined; // 수동 확정 시 자동확정 거부 플래그 해제
+      return next;
+    }));
     notify(`${formatShortDate(date)} 평가액 ${v.toLocaleString()}원으로 확정`, 'success');
     onClose();
   };
@@ -336,7 +338,8 @@ export default function VerifyEvalModal({
   const unconfirm = () => {
     setHistory(hist => hist.map(item => {
       if (!(item.id ? item.id === record.id : item.date === date)) return item;
-      const next = { ...item, isFixed: false };
+      // autoConfirmDeclined: 앱 실행 시 자동확정(useAutoConfirmHistory)이 이 날짜를 재확정하지 못하게 박제
+      const next = { ...item, isFixed: false, autoConfirmDeclined: true };
       delete next.adjustedAmount;
       return next;
     }));
