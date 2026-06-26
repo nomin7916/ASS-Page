@@ -88,6 +88,16 @@ if (ADMIN_VIEW_EMAIL) {
   try { sessionStorage.removeItem(SESSION_KEY); } catch {}
 }
 
+// 새 탭 관리자 포털: 관리자 페이지의 "포털" 버튼이 window.open('/?adminPortal=1')로 새 탭을 연다.
+// adminView(impersonation)와 달리 SESSION_KEY를 제거하지 않는다 — opener의 sessionStorage가
+// 복제되면 LoginGate가 그 관리자 세션으로 무음 재인증(PIN 불필요) 후 곧바로 포털로 진입한다
+// (복제가 안 되는 브라우저에선 로그인 화면 → 수동 로그인 후 포털로 진입, 동일 결과). 관리자
+// 페이지 탭은 그대로 유지된다(상태 변경 없음). 토큰은 LoginGate/AdminPortal이 GIS로 재발급하므로
+// noopener 불필요(오히려 noopener는 sessionStorage 복제를 막아 무음 재인증을 깨뜨림).
+const ADMIN_PORTAL_BOOT: boolean = (() => {
+  try { return new URLSearchParams(window.location.search).get('adminPortal') === '1'; } catch { return false; }
+})();
+
 export default function App() {
   const historyInputRef = useRef(null);
 
@@ -160,7 +170,12 @@ export default function App() {
       return;
     }
     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-      setAdminPendingChoice(true);
+      // ?adminPortal=1 새 탭은 선택 모달/관리자 페이지를 건너뛰고 바로 포털로 진입
+      if (ADMIN_PORTAL_BOOT) {
+        setShowAdminPortal(true);
+      } else {
+        setAdminPendingChoice(true);
+      }
     } else {
       setIsInitialLoading(true);
       setDriveLoadReady(true);
@@ -2054,7 +2069,11 @@ export default function App() {
     return (
       <AdminPortal
         adminEmail={authUser.email}
-        onClose={() => { setShowAdminPortal(false); setShowAdminPage(true); }}
+        onClose={() => {
+          // ?adminPortal=1 새 탭의 뒤로가기는 탭을 닫는다(관리자 페이지는 원래 탭에 그대로 있음).
+          if (ADMIN_PORTAL_BOOT) { closeAdminViewTab(); return; }
+          setShowAdminPortal(false); setShowAdminPage(true);
+        }}
         onViewUser={handleAdminViewUser}
         notify={notify}
       />
@@ -2066,7 +2085,7 @@ export default function App() {
     return <AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { setShowAdminPage(false); setShowAdminPortal(true); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportLinks={reportLinks} onSetReportLinks={handleSetReportLinks} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportLinks={reportLinks} onSetReportLinks={handleSetReportLinks} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨

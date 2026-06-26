@@ -121,6 +121,27 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
 - **회귀 주의**: 옛 핸들러가 채우던 `userAccessStatus`(AdminPage 허용/차단 배지)는 새 흐름에선
   `handleRefreshUserSessions`(세션 새로고침)가 STATE의 `adminAccessAllowed`로 채운다.
 
+### 관리자 페이지 "포털" 버튼 = 새 탭 (⚠️ 회귀 주의 — 같은 탭 교체 금지)
+
+관리자 페이지의 **"포털" 버튼**(`AdminPage` `onOpenPortal`)은 관리자 포털을 **새 탭**에서 연다
+(`App.tsx` `onOpenPortal` → `window.open('/?adminPortal=1', '_blank')`). 관리자 페이지 탭은 상태
+변경 없이 그대로 유지된다(과거엔 같은 탭에서 `setShowAdminPage(false); setShowAdminPortal(true)`로
+교체). "접속" 새 탭 impersonation과 같은 사용성 — 관리자 페이지를 잃지 않고 포털을 병렬로 본다.
+
+- **콜드부팅 진입**: `App.tsx` 모듈 스코프 `ADMIN_PORTAL_BOOT = URLSearchParams.get('adminPortal')==='1'`.
+  ⚠️ **`adminView`와 달리 SESSION_KEY를 제거하지 않는다** — opener의 sessionStorage가 새 탭에
+  복제되면(`noopener` 미사용이라 복제됨) `LoginGate` 무음 재인증이 그 관리자 세션으로 진행돼
+  **PIN 없이** 포털로 진입한다. `handleLoginApproved`에서 관리자 + `ADMIN_PORTAL_BOOT`이면
+  `adminPendingChoice`(선택 모달)를 건너뛰고 `setShowAdminPortal(true)`. 토큰은 `LoginGate`/
+  `AdminPortal`이 GIS로 독립 재발급하므로 **`noopener` 미사용**(noopener는 sessionStorage 복제를
+  막아 무음 재인증을 깨므로 절대 추가 금지 — impersonation과 반대).
+- **sessionStorage 미복제 브라우저 폴백**: SESSION_KEY 부재 → `LoginGate` 로그인 화면 → 수동
+  로그인 후 동일하게 `ADMIN_PORTAL_BOOT` 분기로 포털 진입(우아한 degradation, 결과 동일).
+- **뒤로가기**: 포털 탭의 `onClose`는 `ADMIN_PORTAL_BOOT`이면 `closeAdminViewTab()`(탭 닫기 +
+  150ms 폴백 `location.replace(origin+'/')`)으로 탭을 닫는다 — 관리자 페이지는 원래 탭에 그대로
+  있으므로. 새로고침 시 `?adminPortal=1` 유지로 포털에 재진입(reload-loop 아님, 의도된 동작 —
+  impersonation의 reload 가드와 달리 포털 탭은 reload가 곧 재진입이라 별도 가드 불필요).
+
 ### 계좌 타입별 D/S·펀드 게이팅 (⚠️ 회귀 주의 — 절대 합치지 말 것)
 
 두 기능은 **적용 계좌가 다르므로 별개 플래그로 분리**한다. 과거 한 플래그(`isRetirement`)로
