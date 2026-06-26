@@ -20,6 +20,7 @@ import AdminPage from './components/AdminPage';
 import AdminPortal from './components/AdminPortal';
 import AdminNotificationModal, { AdminNotification } from './components/AdminNotificationModal';
 import AdminChoiceModal from './components/AdminChoiceModal';
+import AdminViewBootstrap from './components/AdminViewBootstrap';
 import IntegratedDashboard from './components/IntegratedDashboard';
 import HistoryPanel from './components/HistoryPanel';
 import DepositPanel from './components/DepositPanel';
@@ -73,6 +74,18 @@ function notifTargetsUser(targetEmail: string, email: string, notebookEnabled: b
   if (targetEmail === '__notebook__') return notebookEnabled === true;
   if (targetEmail === '__report__') return reportEnabled === true;
   return targetEmail === '__all__' || targetEmail?.toLowerCase() === email.toLowerCase();
+}
+
+// 새 탭 관리자 접속(impersonation): "접속" 버튼이 window.open('/?adminView=<email>')로 새 탭을 연다.
+// 이 상수는 새 탭 콜드부팅 시 1회 산출 — 관리자 포털 탭(파라미터 없음)에서는 null이라 영향 없음.
+// noopener 새 탭은 보통 opener의 sessionStorage를 상속하지 않지만, 일부 브라우저가 복제할 경우
+// 복제된 관리자 SESSION_KEY가 LoginGate 자동 재인증을 발동시켜 impersonation과 충돌하지 않도록
+// 렌더 전에 SESSION_KEY를 제거한다(관리자 토큰은 AdminViewBootstrap이 GIS로 독립 재발급).
+const ADMIN_VIEW_EMAIL: string | null = (() => {
+  try { return new URLSearchParams(window.location.search).get('adminView'); } catch { return null; }
+})();
+if (ADMIN_VIEW_EMAIL) {
+  try { sessionStorage.removeItem(SESSION_KEY); } catch {}
 }
 
 export default function App() {
@@ -154,86 +167,19 @@ export default function App() {
     }
   };
 
+  // 관리자 "접속": 새 탭에서 대상 사용자 대시보드를 연다 — 관리자 포털 탭은 이미 조회된 상태로 유지(재조회 방지).
+  // 새 탭은 콜드부팅 시 ?adminView 파라미터를 감지해(AdminViewBootstrap) 관리자 무음 재인증 → 해당 사용자 Drive 로드.
+  // 클릭 제스처 직후 동기 window.open 이라야 팝업 차단 안 됨. noopener: 새 탭이 window.opener(포털 탭)에
+  // 접근 못 하도록 격리(보안) — 새 탭은 토큰을 GIS로 독립 재발급하므로 opener가 불필요.
   const handleAdminViewUser = (targetEmail: string) => {
-    if (adminSwitching) return;
-    setAdminSwitching(true);
-    setShowAdminPage(false);
-    setShowAdminPortal(false);
-    const tryInit = (retries = 20) => {
-      if ((window as any).google?.accounts?.oauth2) {
-        const client = (window as any).google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
-          scope: 'openid email profile https://www.googleapis.com/auth/drive',
-          hint: authUser.email,
-          callback: async (resp: any) => {
-            if (resp.error || !resp.access_token) {
-              const errMsg =
-                resp.error === 'access_denied' ? '관리자 Drive 권한이 거부되었습니다. Google 계정 권한을 확인하세요.' :
-                resp.error === 'popup_closed_by_user' ? '인증 창이 닫혔습니다. 다시 시도해 주세요.' :
-                resp.error === 'invalid_client' ? 'OAuth 클라이언트 설정 오류입니다. 관리자에게 문의하세요.' :
-                `Drive 인증 실패 (${resp.error || '알 수 없는 오류'})`;
-              notify(errMsg, 'error');
-              setAdminSwitching(false);
-              setShowAdminPage(true);
-              return;
-            }
-            const freshToken = resp.access_token;
-            let userFolderId: string | null = null;
-            try {
-              userFolderId = await findUserIndexFolder(freshToken, targetEmail);
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : '';
-              const errMsg =
-                msg === 'TOKEN_EXPIRED' ? `토큰 충돌: 관리자 인증이 만료되었습니다. 다시 접속해 주세요.` :
-                msg === 'PERMISSION_DENIED' ? `Drive 접근 권한 없음: ${targetEmail} 폴더에 접근할 수 없습니다.` :
-                `폴더 검색 오류 (${msg}). 네트워크 상태를 확인하세요.`;
-              notify(errMsg, 'error');
-              setAdminSwitching(false);
-              setShowAdminPage(true);
-              return;
-            }
-            if (!userFolderId) {
-              notify(
-                `${targetEmail} 사용자가 아직 앱에 로그인한 적이 없습니다. 해당 사용자가 앱에 1회 접속하면 Drive 폴더가 생성되어 관리자 접속이 가능합니다.`,
-                'warning'
-              );
-              setAdminSwitching(false);
-              setShowAdminPage(true);
-              return;
-            }
-            try {
-              const stateData = await loadDriveFile(freshToken, userFolderId, DRIVE_FILES.STATE) as any;
-              const isAllowed = !stateData || stateData.adminAccessAllowed !== false;
-              setUserAccessStatus(prev => ({ ...prev, [targetEmail]: isAllowed }));
-            } catch {
-              setUserAccessStatus(prev => ({ ...prev, [targetEmail]: true }));
-            }
-            // 관리자 PIN 해시 저장 — LoginGate에서 마스터 키로 사용
-            const adminPinHash = sessionStorage.getItem(PIN_KEY(authUser.email)) || '';
-            // 컨텍스트 설정 후 완전 로그아웃 → LoginGate가 PIN 화면으로 재진입
-            setAdminViewUserCtx({ userEmail: targetEmail, userFolderId, adminToken: freshToken, adminPinHash });
-            setAdminSwitching(false);
-            sessionStorage.removeItem(SESSION_KEY);
-            setAuthUser(null);
-            driveTokenRef.current = '';
-            setDriveToken('');
-            setDriveLoadReady(false);
-            setAdminPendingChoice(false);
-            setAdminViewingAs(null);
-            adminViewingAsRef.current = null;
-            adminTransitioningRef.current = false;
-          },
-        });
-        client.requestAccessToken({ prompt: '' });
-      } else if (retries > 0) {
-        setTimeout(() => tryInit(retries - 1), 300);
-      } else {
-        notify('Google 인증 초기화 실패', 'error');
-        setAdminSwitching(false);
-        setShowAdminPage(true);
-      }
-    };
-    tryInit();
+    const url = `${window.location.origin}/?adminView=${encodeURIComponent(targetEmail)}`;
+    window.open(url, '_blank', 'noopener');
+  };
+
+  // 새 탭(impersonation) 종료 — 탭을 닫고, close가 막히면 파라미터 없는 깨끗한 루트로 이동.
+  const closeAdminViewTab = () => {
+    window.close();
+    setTimeout(() => { try { window.location.replace(window.location.origin + '/'); } catch {} }, 150);
   };
 
 
@@ -266,6 +212,12 @@ export default function App() {
         if (sessionData?.lastSeen) {
           setUserLastSeen(prev => ({ ...prev, [email]: sessionData.lastSeen }));
         }
+        // 관리자 접속 허용/차단 배지(AdminPage) 복원 — 새 탭 접속 흐름에선 호스트 탭이 STATE를 읽지
+        // 않으므로(window.open만 수행) 세션 새로고침 시 STATE의 adminAccessAllowed로 배지를 채운다.
+        try {
+          const stateData = await loadDriveFile(token, folderId, DRIVE_FILES.STATE) as any;
+          setUserAccessStatus(prev => ({ ...prev, [email]: !stateData || stateData.adminAccessAllowed !== false }));
+        } catch {}
       } catch (e: any) {
         const msg = String(e?.message || '');
         const isApiError = msg.includes('TOKEN_EXPIRED') || msg.includes('PERMISSION_DENIED') || msg.includes('DRIVE_ERROR');
@@ -421,6 +373,8 @@ export default function App() {
     applyBackupData: (...args) => applyBackupDataRef.current?.(...args),
     accountChartStatesRef, saveStateRef, adminViewingAsRef, adminOwnDriveTokenRef, notify, confirm,
     onForceLogout: () => {
+      // 새 탭 관리자 접속 중에는 reload가 ?adminView를 유지해 재부팅 루프가 되므로 탭을 닫는다.
+      if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
     },
@@ -2067,9 +2021,21 @@ export default function App() {
     return () => window.removeEventListener('mousedown', handler);
   }, []);
 
+  // 새 탭 관리자 접속 콜드부팅 — ?adminView 파라미터가 있고 아직 ctx 미구성이면 관리자 무음 인증 진행.
+  // 인증 완료 시 setAdminViewUserCtx → 아래 LoginGate가 ctx를 받아 PIN 화면(impersonation)으로 진입.
+  if (!authUser && ADMIN_VIEW_EMAIL && !adminViewUserCtx) {
+    return <AdminViewBootstrap targetEmail={ADMIN_VIEW_EMAIL} onReady={setAdminViewUserCtx} />;
+  }
+
   // 로그인 전: LoginGate 표시
   if (!authUser) {
-    return <LoginGate onApproved={handleLoginApproved} adminViewUserCtx={adminViewUserCtx} onCancelAdminView={() => setAdminViewUserCtx(null)} />;
+    return (
+      <LoginGate
+        onApproved={handleLoginApproved}
+        adminViewUserCtx={adminViewUserCtx}
+        onCancelAdminView={ADMIN_VIEW_EMAIL ? closeAdminViewTab : () => setAdminViewUserCtx(null)}
+      />
+    );
   }
 
   // 관리자 로그인 직후 — Drive 로딩 전 페이지 선택
@@ -2202,6 +2168,8 @@ export default function App() {
             }
           }}
           onLogout={() => {
+            // 새 탭 관리자 접속 중에는 로그아웃=탭 닫기(reload 시 ?adminView로 재진입 루프 방지)
+            if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }
             sessionStorage.removeItem(SESSION_KEY);
             window.location.reload();
           }}

@@ -121,7 +121,7 @@ function describeAuthError(detail?: string): string {
   return '로그인에 실패했습니다. 다시 시도해 주세요.';
 }
 
-async function fetchUserEmail(token: string): Promise<string | null> {
+export async function fetchUserEmail(token: string): Promise<string | null> {
   try {
     const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${token}` },
