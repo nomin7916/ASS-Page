@@ -65,6 +65,7 @@ function doPost(e) {
   if (action === 'setUserFeature')     return handleSetUserFeature(body.email, body.feature, body.value);
   if (action === 'sendNotification')   return handleSendNotification(body.targetEmail || '__all__', body.message || '', body.type || 'info');
   if (action === 'deleteNotification') return handleDeleteNotification(String(body.notifId || ''));
+  if (action === 'deleteAllNotifications') return handleDeleteAllNotifications(String(body.targetEmail || '__all__'));
 
   // action 없이 email만 보내는 승인 요청 (구버전 호환)
   if (!action && body.email)           return handleAddUser(body.email, body.name);
@@ -353,6 +354,35 @@ function handleDeleteNotification(notifId) {
       }
     }
     return jsonResponse({ success: true });
+  } catch (err) {
+    return jsonResponse({ success: false, error: err.toString() });
+  }
+}
+
+// ── 공지 일괄 삭제 ────────────────────────────────────────
+// targetEmail이 '__all__'/빈 값이면 전체 삭제, 특정 이메일이면 그 대상 행만 삭제.
+function handleDeleteAllNotifications(targetEmail) {
+  try {
+    const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('notifications');
+    if (!sheet) return jsonResponse({ success: true, deleted: 0 });
+    const last = sheet.getLastRow();
+    if (last <= 1) return jsonResponse({ success: true, deleted: 0 });
+    const filter = String(targetEmail || '').trim();
+    if (!filter || filter === '__all__') {
+      // 전체 삭제: 헤더(1행)만 남기고 데이터 행 일괄 제거
+      sheet.deleteRows(2, last - 1);
+      return jsonResponse({ success: true, deleted: last - 1 });
+    }
+    // 특정 대상만 삭제: 아래에서 위로 스캔(행 인덱스 밀림 방지)
+    const data = sheet.getDataRange().getValues();
+    let deleted = 0;
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (String(data[i][1]) === filter) {
+        sheet.deleteRow(i + 1);
+        deleted++;
+      }
+    }
+    return jsonResponse({ success: true, deleted });
   } catch (err) {
     return jsonResponse({ success: false, error: err.toString() });
   }

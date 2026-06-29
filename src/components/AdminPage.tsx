@@ -94,6 +94,8 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [notifsLoading, setNotifsLoading] = useState(false);
   const [notifFilter, setNotifFilter] = useState('__all__');
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [deletingAll, setDeletingAll] = useState(false);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
 
   // YouTube 채널 링크 상태
   const [youtubeInput, setYoutubeInput] = useState(youtubeUrl);
@@ -513,6 +515,40 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     setDeletingIds(prev => { const next = new Set(prev); next.delete(id); return next; });
   };
 
+  // 현재 필터에 보이는 발송 이력 일괄 삭제 ('전체' 필터면 전부, 특정 대상이면 그 대상만)
+  const handleDeleteAllNotifications = async () => {
+    if (deletingAll) return;
+    const targets = sentNotifs.filter(n => notifFilter === '__all__' || n.targetEmail === notifFilter);
+    if (targets.length === 0) { setConfirmDeleteAll(false); return; }
+    setDeletingAll(true);
+    const ids = new Set(targets.map(t => t.id));
+    try {
+      // 1차: 백엔드 일괄 삭제 (Apps Script 미배포 시 success:false → 폴백)
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'deleteAllNotifications', targetEmail: notifFilter }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.success) {
+        // 폴백: 개별 순차 삭제 (동시 deleteRow 시 행 인덱스 경쟁 방지 → await로 직렬화)
+        for (const t of targets) {
+          await fetch(APPS_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: 'deleteNotification', notifId: t.id }),
+          }).catch(() => {});
+        }
+      }
+      setSentNotifs(prev => prev.filter(n => !ids.has(n.id)));
+    } catch {}
+    setDeletingAll(false);
+    setConfirmDeleteAll(false);
+  };
+
+  // 필터 전환 시 '전체 삭제' 확인 상태 리셋 (이전 필터 대상 오삭제 방지)
+  useEffect(() => { setConfirmDeleteAll(false); }, [notifFilter]);
+
   const triggerSessionRefresh = async (userList: ApprovedUser[]) => {
     if (!onRefreshUserSessions || sessionRefreshing) return;
     setSessionRefreshing(true);
@@ -882,34 +918,64 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               </button>
             </div>
 
-            {/* 필터 탭 */}
+            {/* 필터 탭 + 전체 삭제 */}
             {sentNotifs.length > 0 && (() => {
               const uniqueTargets = [...new Set(sentNotifs.map(n => n.targetEmail))].filter(e => typeof e === 'string' && e !== '__all__');
+              const filteredCount = sentNotifs.filter(n => notifFilter === '__all__' || n.targetEmail === notifFilter).length;
               return (
-                <div className="flex gap-1 flex-wrap mb-2">
-                  <button
-                    onClick={() => setNotifFilter('__all__')}
-                    className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                      notifFilter === '__all__'
-                        ? 'bg-blue-900/60 border-blue-700/60 text-blue-300'
-                        : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
-                    }`}
-                  >
-                    전체
-                  </button>
-                  {uniqueTargets.map(email => (
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="flex gap-1 flex-wrap">
+                    <button
+                      onClick={() => setNotifFilter('__all__')}
+                      className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                        notifFilter === '__all__'
+                          ? 'bg-blue-900/60 border-blue-700/60 text-blue-300'
+                          : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+                      }`}
+                    >
+                      전체
+                    </button>
+                    {uniqueTargets.map(email => (
+                        <button
+                          key={email}
+                          onClick={() => setNotifFilter(email)}
+                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                            notifFilter === email
+                              ? 'bg-blue-900/60 border-blue-700/60 text-blue-300'
+                              : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+                          }`}
+                        >
+                          {formatNotifTarget(email)}
+                        </button>
+                    ))}
+                  </div>
+                  {filteredCount > 0 && (
+                    confirmDeleteAll ? (
+                      <span className="flex items-center gap-1 flex-shrink-0">
+                        <button
+                          onClick={handleDeleteAllNotifications}
+                          disabled={deletingAll}
+                          className="text-xs px-2 py-0.5 rounded-full border border-red-700/60 bg-red-900/40 text-red-300 hover:bg-red-900/70 transition-colors disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {deletingAll ? '삭제 중...' : `${filteredCount}건 삭제`}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteAll(false)}
+                          disabled={deletingAll}
+                          className="text-xs px-2 py-0.5 rounded-full border border-gray-700 text-gray-400 hover:text-gray-200 transition-colors disabled:opacity-50"
+                        >
+                          취소
+                        </button>
+                      </span>
+                    ) : (
                       <button
-                        key={email}
-                        onClick={() => setNotifFilter(email)}
-                        className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                          notifFilter === email
-                            ? 'bg-blue-900/60 border-blue-700/60 text-blue-300'
-                            : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
-                        }`}
+                        onClick={() => setConfirmDeleteAll(true)}
+                        className="text-xs px-2 py-0.5 rounded-full border border-gray-700 text-gray-500 hover:text-red-400 hover:border-red-700/50 transition-colors flex-shrink-0 whitespace-nowrap"
                       >
-                        {formatNotifTarget(email)}
+                        전체 삭제
                       </button>
-                  ))}
+                    )
+                  )}
                 </div>
               );
             })()}
