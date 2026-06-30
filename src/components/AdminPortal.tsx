@@ -68,7 +68,10 @@ const PROXIES = (url: string) => [
   `https://api.codetabs.com/v1/proxy?quest=${url}`,
 ];
 
-async function fetchLiveUsdKrw(): Promise<number> {
+// 시세 + 전일대비 등락률(%) 동반 반환 — 전일 종가 역산(현재가÷(1+등락률/100))에 사용.
+type LiveQuote = { price: number; changeRate: number };
+
+async function fetchLiveUsdKrw(): Promise<LiveQuote> {
   const targetUrl = 'https://m.stock.naver.com/api/marketIndex/exchange/FX_USDKRW';
   for (const proxy of PROXIES(targetUrl)) {
     try {
@@ -76,13 +79,16 @@ async function fetchLiveUsdKrw(): Promise<number> {
       if (!res.ok) continue;
       const data = await res.json();
       const price = parseFloat(String(data?.closePrice || data?.price || '0').replace(/,/g, ''));
-      if (price > 0) return price;
+      if (price > 0) {
+        const changeRate = parseFloat(String(data?.fluctuationsRatio ?? '0').replace(/,/g, '')) || 0;
+        return { price, changeRate };
+      }
     } catch { /* try next proxy */ }
   }
-  return 0;
+  return { price: 0, changeRate: 0 };
 }
 
-async function fetchLiveGoldKr(): Promise<number> {
+async function fetchLiveGoldKr(): Promise<LiveQuote> {
   const targetUrl = 'https://finance.naver.com/marketindex/goldDetail.naver';
   for (const proxy of PROXIES(targetUrl)) {
     try {
@@ -90,61 +96,84 @@ async function fetchLiveGoldKr(): Promise<number> {
       if (!res.ok) continue;
       const html = await res.text();
       const m = html.match(/var DEAL_VAL\s*=\s*([\d.]+)/);
-      if (m) { const price = parseFloat(m[1]); if (price > 0) return price; }
+      if (m) {
+        const price = parseFloat(m[1]);
+        if (price > 0) {
+          // 전일대비 등락률(페이지 노출 시 사용, 없으면 0 → 금 일변동은 보수적으로 미반영)
+          const rm = html.match(/var FLUC_RT\s*=\s*([+\-]?[\d.]+)/);
+          const changeRate = rm ? (parseFloat(rm[1]) || 0) : 0;
+          return { price, changeRate };
+        }
+      }
     } catch { /* try next proxy */ }
   }
-  return 0;
+  return { price: 0, changeRate: 0 };
 }
 
-// 종목 시세 dedup 캐시 (kind:code → price>0, 실패 시 0). 모든 사용자 간 공유 → 중복 조회 방지.
-async function getLivePrice(cache: Map<string, number>, kind: 'kr' | 'us' | 'fund', code: string): Promise<number> {
+// 종목 시세 dedup 캐시 (kind:code → {price,changeRate}). 모든 사용자 간 공유 → 중복 조회 방지.
+async function getLivePrice(cache: Map<string, LiveQuote>, kind: 'kr' | 'us' | 'fund', code: string): Promise<LiveQuote> {
   const key = `${kind}:${code}`;
   if (cache.has(key)) return cache.get(key)!;
-  let price = 0;
+  let price = 0, changeRate = 0;
   try {
     let d: any = null;
     if (kind === 'kr') d = await fetchStockInfo(code);
     else if (kind === 'us') d = await fetchUsStockInfo(code);
     else if (kind === 'fund') d = code.startsWith('MA:') ? await fetchMiraeFundInfo(code) : await fetchFundInfo(code);
-    if (d && Number(d.price) > 0) price = Number(d.price);
+    if (d && Number(d.price) > 0) { price = Number(d.price); changeRate = Number(d.changeRate) || 0; }
   } catch { /* fail → 0 */ }
-  cache.set(key, price);
-  return price;
+  const q: LiveQuote = { price, changeRate };
+  cache.set(key, q);
+  return q;
 }
 
-// 한 계좌의 실시간 평가액 산출. 시세 캐시는 사전 채움(prefetch) 완료 가정 → 동기 계산.
-// 실시간 시세 우선, 미조회분은 저장된 currentPrice, 전체 실패 시 마지막 기록 평가액으로 폴백.
+// 한 계좌의 평가액 산출 — { live: 현재 평가액, prev: 직전 거래일 평가액 }을 동시 반환.
+// live: 실시간 시세, 미조회분은 저장된 currentPrice, 전체 실패 시 마지막 기록 평가액으로 폴백.
+// prev: 각 종목의 전일 종가(현재가÷(1+등락률/100))로 재계산 → 사용자 통합 대시보드 '오늘 수익'과
+//       동일 기준(저장 이력·백필·휴장 달력 의존 없이 라이브 시세 한 번으로 직전 거래일 복원).
+//       현금성(simple·matong)·예수금은 일변동 0(prev=live), 보유종목 매매가 없으면 대시보드와 일치.
 function recomputePortfolioEval(
   p: any,
-  cache: Map<string, number>,
-  liveFx: number,
-  liveGold: number,
+  cache: Map<string, LiveQuote>,
+  liveFxObj: LiveQuote,
+  liveGoldObj: LiveQuote,
   ihm: any,
   today: string,
-): number {
+): { live: number; prev: number } {
   const at = p.accountType || 'portfolio';
-  if (at === 'simple') return cleanNum(p.evalAmount);
+  if (at === 'simple') { const v = cleanNum(p.evalAmount); return { live: v, prev: v }; }
   if (at === 'matong') {
-    return Math.max(0, cleanNum(p.withdrawableTotal) - (cleanNum(p.currentWithdrawal) + cleanNum(p.withdrawalLimit)));
+    const v = Math.max(0, cleanNum(p.withdrawableTotal) - (cleanNum(p.currentWithdrawal) + cleanNum(p.withdrawalLimit)));
+    return { live: v, prev: v };
   }
   const items = p.portfolio || [];
   const isOverseas = at === 'overseas';
-  const synthMap: Record<string, Record<string, number>> = {};
+  const toPrev = (px: number, rate: number) => { const f = 1 + (Number(rate) || 0) / 100; return f > 0 ? px / f : px; };
+  const synthLive: Record<string, Record<string, number>> = {};
+  const synthPrev: Record<string, Record<string, number>> = {};
   items.forEach((item: any) => {
     if (!item.code) return;
-    let px = 0;
-    if (item.type === 'stock') px = (cache.get(`${isOverseas ? 'us' : 'kr'}:${item.code}`) || 0) || cleanNum(item.currentPrice);
-    else if (item.type === 'fund') px = (cache.get(`fund:${item.code}`) || 0) || cleanNum(item.currentPrice);
+    let px = 0, rate = 0;
+    if (item.type === 'stock') { const q = cache.get(`${isOverseas ? 'us' : 'kr'}:${item.code}`); px = (q?.price || 0) || cleanNum(item.currentPrice); rate = q?.changeRate || 0; }
+    else if (item.type === 'fund') { const q = cache.get(`fund:${item.code}`); px = (q?.price || 0) || cleanNum(item.currentPrice); rate = q?.changeRate || 0; }
     else return;
-    if (px > 0) synthMap[item.code] = { [today]: px };
+    if (px > 0) { synthLive[item.code] = { [today]: px }; synthPrev[item.code] = { [today]: toPrev(px, rate) }; }
   });
-  const fx = isOverseas ? (liveFx || cleanNum(p.avgExchangeRate) || latestOf(ihm?.usdkrw) || 1) : 1;
-  const gold = liveGold || latestOf(ihm?.goldKr) || 0;
-  const indicatorMap = { usdkrw: { [today]: fx }, goldKr: gold > 0 ? { [today]: gold } : {} };
-  const r = calcPortfolioEvalDetail(items, at, today, synthMap, indicatorMap, fx, p.manualPriceOverrides || null);
-  if (r.hasAnyPrice && r.total > 0) return r.total;
-  const lh = lastHistEval(p);
-  return lh > 0 ? lh : (r.total || 0);
+  const fxLive = isOverseas ? (liveFxObj.price || cleanNum(p.avgExchangeRate) || latestOf(ihm?.usdkrw) || 1) : 1;
+  const fxPrev = isOverseas ? (toPrev(liveFxObj.price, liveFxObj.changeRate) || fxLive) : 1;
+  const goldLive = liveGoldObj.price || latestOf(ihm?.goldKr) || 0;
+  const goldPrev = toPrev(goldLive, liveGoldObj.changeRate);
+  const indLive = { usdkrw: { [today]: fxLive }, goldKr: goldLive > 0 ? { [today]: goldLive } : {} };
+  const indPrev = { usdkrw: { [today]: fxPrev }, goldKr: goldPrev > 0 ? { [today]: goldPrev } : {} };
+  const mpo = p.manualPriceOverrides || null;
+  const rLive = calcPortfolioEvalDetail(items, at, today, synthLive, indLive, fxLive, mpo);
+  const rPrev = calcPortfolioEvalDetail(items, at, today, synthPrev, indPrev, fxPrev, mpo);
+  let live: number;
+  if (rLive.hasAnyPrice && rLive.total > 0) live = rLive.total;
+  else { const lh = lastHistEval(p); live = lh > 0 ? lh : (rLive.total || 0); }
+  // 전일 종가를 신뢰성 있게 구한 경우만 prev 사용, 아니면 live로 폴백(일변동 0 → 노이즈 방지)
+  const prev = (rPrev.hasAnyPrice && rPrev.total > 0) ? rPrev.total : live;
+  return { live, prev };
 }
 
 // 사용자 일별 총 평가금액 시계열 산출(계좌별 carry-forward 합산, 오늘=실시간 합계).
@@ -449,9 +478,9 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
 
       // 공용 시장지표(USD/KRW, 국내금) 1회 조회
       setProgress('시장 지표 조회 중...');
-      const [liveFx, liveGold] = await Promise.all([fetchLiveUsdKrw(), fetchLiveGoldKr()]);
+      const [liveFxObj, liveGoldObj] = await Promise.all([fetchLiveUsdKrw(), fetchLiveGoldKr()]);
 
-      const priceCache = new Map<string, number>();
+      const priceCache = new Map<string, LiveQuote>();
       const refreshedAt = Date.now();
       const users: Record<string, UserStat> = {};
 
@@ -499,19 +528,20 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
           });
           await Promise.all(needs.map(([k, c]) => getLivePrice(priceCache, k, c)));
 
-          let evalTotal = 0;
+          let evalTotal = 0, prevEvalTotal = 0;
           portfolios.forEach((p: any) => {
-            evalTotal += recomputePortfolioEval(p, priceCache, liveFx, liveGold, ihm, today);
+            const { live, prev } = recomputePortfolioEval(p, priceCache, liveFxObj, liveGoldObj, ihm, today);
+            evalTotal += live; prevEvalTotal += prev;
           });
           const principal = computePrincipal(portfolios);
           const totalReturnRate = principal > 0 ? ((evalTotal - principal) / principal) * 100 : 0;
 
-          const series = buildUserSeries(portfolios, evalTotal, today);
-          // 전일 대비: 사용자 자체 시계열의 '오늘 직전' 기록값 기준 → 1회 새로고침만으로 산출
+          // 전일대비: 보유종목의 전일 종가로 재계산한 직전 거래일 평가액(prevEvalTotal) 기준 →
+          // 사용자 통합 대시보드 '오늘 수익'과 동일(저장 이력·새로고침 시점에 의존하지 않음).
+          const series = buildUserSeries(portfolios, evalTotal, today);   // 일별 비교 매트릭스용
           const prevDate = Object.keys(series).filter(d => d < today).sort().pop() || '';
-          const prevClose = prevDate ? Number(series[prevDate]) : 0;
-          const dailyReturnRate = prevClose > 0 ? ((evalTotal - prevClose) / prevClose) * 100 : 0;
-          const dodAbsChange = prevClose > 0 ? (evalTotal - prevClose) : 0;
+          const dailyReturnRate = prevEvalTotal > 0 ? ((evalTotal - prevEvalTotal) / prevEvalTotal) * 100 : 0;
+          const dodAbsChange = prevEvalTotal > 0 ? (evalTotal - prevEvalTotal) : 0;
 
           users[u.email] = {
             email: u.email,
@@ -520,7 +550,7 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
             firstAt: stateData.accessLog?.firstAt || null,
             lastAt: stateData.accessLog?.lastAt || null,
             evalTotal, principal, totalReturnRate,
-            prevEvalTotal: prevClose, prevDate, dailyReturnRate, dodAbsChange,
+            prevEvalTotal, prevDate, dailyReturnRate, dodAbsChange,
             series,
             cachedAt: Date.now(),
             fetchFailed: false,
