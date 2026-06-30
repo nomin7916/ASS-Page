@@ -472,6 +472,38 @@ markAsRead() / clearNotificationLog()
   필요(미배포 시 J열·reportLinks 미반영 → 프론트는 기본 OFF/빈 배열로 안전 동작). `setupSheet`는
   비파괴(기존 E~I 커스텀 헤더 보존, 빈 J1만 `시장리포트` 세팅 + E2:J100 ON/OFF 검증·기본 OFF).
 
+### 관리자 공지 클릭 → 학습자료/리포트 열기 (⚠️ 회귀 주의 — 부분문자열·이모지 매칭 금지)
+
+자료(학습자료/리포트) 등록 공지(`AdminNotificationModal`)와 **벨 알림이력**(`UserInfoBar`)에서 공지를
+누르면 해당 자료를 연다(fileId 자료 → 앱 내 sandbox 뷰어, url 자료 → 새 탭). 알림 레코드
+(`{id,targetEmail,message,type,createdAt}`)에는 자료 fileId/url 참조 필드가 없으므로(시트 스키마 고정),
+**메시지에 박힌 제목으로 클라이언트에서 복원**한다(Apps Script 변경 불필요).
+
+- **복원 규칙(`utils.ts`)**: `resolveNoticeMaterial(links, message, channel, refCreatedAt)`.
+  ⚠️ **부분문자열(`includes`) 매칭 절대 금지** — `📚 ${title}가 등록되었습니다.`는 조사 '가'가 제목에
+  공백 없이 붙고('신규' vs '신규가' 오매칭), 리포트는 보일러플레이트 '리포트'가 항상 들어가 다른 자료를
+  오매칭한다. → `parseNoticeTitle`이 **정확 템플릿 정규식**으로 제목 추출(`[관리자 공지] ` 접두사 허용,
+  NFC+trim) + **정확 일치**. 동일 제목 다수면 `refCreatedAt`(공지 발송시각) 최근접 createdAt 선택.
+  ⚠️ **채널은 권위 소스로만 판정**(이모지 추정 금지): 모달=`targetEmail` 센티넬(`noticeChannelOf`),
+  벨 이력=`NotificationEntry.materialChannel`(확인 시 `n.targetEmail`에서 파생해 박음). 임의 텍스트·
+  수동 브로드캐스트는 템플릿 불일치 → null(클릭 불가).
+- **발송측과 공유(드리프트 방지)**: `notebookNoticeMessage`/`reportNoticeMessage`(utils.ts)를
+  `AdminPage`의 4개 발송지점이 사용하고, `parseNoticeTitle`이 같은 템플릿을 역파싱한다. 문구 수정 시
+  양쪽이 같이 바뀌어야 함. 검증: `npm run verify:notice`(조사·보일러플레이트·중복·NFC·접두사 케이스).
+- **권한 게이트(⚠️ 필수)**: `resolveMaterial`은 **기능 게이팅된 배열**(`gatedNotebookLinks`/
+  `gatedReportLinks` = 관리자 또는 `userFeatures.*Enabled`일 때만 채움)만 사용 — UserInfoBar에 넘기는
+  배열과 동일 소스. raw `notebookLinks`/`reportLinks`를 쓰면 권한 OFF 사용자가 옛 공지로 자료를 여는
+  접근 우회 발생.
+- **클릭 가능 표시는 매 렌더 라이브 복원** — 자료가 늦게 로드되면 그때 활성화, 삭제됐으면 plain text로
+  자연 강등(죽은 클릭/오류 토스트 반복 방지). 복원 불가 공지엔 클릭 핸들러 미부착.
+- **단일 뷰어**: `StudyMaterialViewer`(App 최상위, `materialViewerLink` state, z-[1150] > LoadingOverlay
+  z-1100). fetch는 Abort('cancelled') 가드 + fileId 조건부 마운트(닫기→재오픈 시 재조회). Esc 닫기.
+  ⚠️ sandbox `allow-scripts allow-popups` **verbatim 유지**(allow-same-origin 절대 금지 — 학습자료 뷰어
+  불변식과 동일). UserInfoBar의 옛 내장 뷰어/`openStudyMaterial`은 제거되고 `onOpenMaterial` 경유로 통합.
+- **읽음 처리**: 공지에서 자료를 열면 그 공지만 `acknowledgeAdminNotices([n])`로 즉시 읽음+이력 적재
+  (확인 누락 시 재알림 방지), '확인' 버튼은 나머지 일괄 처리. 동일 제목 2건이 둘 다 이력에 남도록
+  `notify(...,{skipDedup:true})`로 5초 텍스트 dedup 우회(`adminNotifId`로 식별).
+
 ---
 
 ## 브라우저 저장소 정책

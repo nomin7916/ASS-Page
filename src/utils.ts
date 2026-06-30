@@ -1,5 +1,52 @@
 export const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
 
+// ── 관리자 공지 ↔ 학습자료/리포트 매칭 (공지 클릭 → 자료 열기) ──
+// 알림 레코드(id/targetEmail/message/type/createdAt)에는 자료 fileId/url 참조 필드가 없다(시트 스키마 고정).
+// 자료 제목은 등록 후 변경 불가(rename UI 없음)이고 발송 메시지에 그 제목이 박히므로, 제목을 안정 키로
+// 사용해 복원한다. ⚠️ 부분 문자열 매칭 금지 — '📚 ${title}가 등록되었습니다.'는 한국어 조사 '가'가 제목에
+// 공백 없이 붙고, 리포트는 'X 리포트가 등록되었습니다.'처럼 보일러플레이트('리포트')가 항상 들어가서
+// includes() 매칭은 다른 자료를 오매칭한다. → 정확 템플릿 추출 + 정확 일치만 사용.
+// 발송측(AdminPage)과 복원측(App/UserInfoBar)이 같은 빌더/파서를 공유해 문구 드리프트로 인한 무음
+// 매칭 실패를 막는다. 검증: npm run verify:notice.
+export const notebookNoticeMessage = (title: string) => `📚 ${title}가 등록되었습니다.`;
+export const reportNoticeMessage = (title: string) => `📈 ${title} 리포트가 등록되었습니다.`;
+
+export const noticeChannelOf = (targetEmail: string): 'notebook' | 'report' | null =>
+  targetEmail === '__notebook__' ? 'notebook' : targetEmail === '__report__' ? 'report' : null;
+
+// 공지 메시지에서 자료 제목 추출. 정확 템플릿만 매칭(임의 텍스트·수동 브로드캐스트는 null).
+// 벨 알림이력의 '[관리자 공지] ' 접두사 허용. NFC 정규화 + trim.
+export const parseNoticeTitle = (message: string, channel: 'notebook' | 'report' | null): string | null => {
+  if (typeof message !== 'string' || !channel) return null;
+  const body = message.replace(/^\[관리자 공지\]\s*/, '');
+  const m = channel === 'notebook'
+    ? body.match(/^📚 (.+)가 등록되었습니다\.$/)
+    : body.match(/^📈 (.+) 리포트가 등록되었습니다\.$/);
+  return m ? m[1].normalize('NFC').trim() : null;
+};
+
+// 채널 배열(이미 기능 게이팅된 notebookLinks/reportLinks)에서 메시지 제목과 정확 일치하는 링크 복원.
+// 동일 제목 다수 시 refCreatedAt(공지 발송시각)에 가장 근접한 createdAt 선택. 일치 없으면 null(=클릭 불가).
+export const resolveNoticeMaterial = (
+  links: any[],
+  message: string,
+  channel: 'notebook' | 'report' | null,
+  refCreatedAt?: number,
+): any | null => {
+  if (!Array.isArray(links) || links.length === 0) return null;
+  const title = parseNoticeTitle(message, channel);
+  if (!title) return null;
+  const matches = links.filter(l => ((l && l.title) || '').normalize('NFC').trim() === title);
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+  if (typeof refCreatedAt === 'number') {
+    return matches.reduce((best, l) =>
+      Math.abs(((l && l.createdAt) || 0) - refCreatedAt) < Math.abs(((best && best.createdAt) || 0) - refCreatedAt) ? l : best
+    );
+  }
+  return matches[0];
+};
+
 export const calcPeriodStart = (period: string, latest: string, earliest: string): string | null => {
   if (period === 'custom') return null;
   if (period === 'all') return earliest;

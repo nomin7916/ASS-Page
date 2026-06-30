@@ -62,6 +62,8 @@ export default function UserInfoBar({
   onClearNotifications,
   onDeleteNotificationEntry,
   marketIndicators,
+  onOpenMaterial,
+  resolveMaterial,
 }) {
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
   const [notebookOpen, setNotebookOpen] = useState(false);
@@ -69,32 +71,8 @@ export default function UserInfoBar({
   const [reportOpen, setReportOpen] = useState(false);
   const reportDropdownRef = useRef(null);
 
-  // HTML 학습자료 뷰어 (sandbox iframe) 상태
-  const [viewer, setViewer] = useState(null); // { title }
-  const [viewerHtml, setViewerHtml] = useState('');
-  const [viewerLoading, setViewerLoading] = useState(false);
-  const [viewerError, setViewerError] = useState('');
-
-  const openStudyMaterial = async (link) => {
-    setNotebookOpen(false);
-    setReportOpen(false);
-    setViewer({ title: link.title });
-    setViewerHtml('');
-    setViewerError('');
-    setViewerLoading(true);
-    try {
-      const res = await fetch(`/api/study-material?id=${encodeURIComponent(link.fileId)}`);
-      if (!res.ok) throw new Error(String(res.status));
-      const html = await res.text();
-      setViewerHtml(html);
-    } catch {
-      setViewerError('학습자료를 불러오지 못했습니다.');
-    }
-    setViewerLoading(false);
-  };
-
-  const closeViewer = () => { setViewer(null); setViewerHtml(''); setViewerError(''); };
-
+  // HTML 학습자료/리포트 뷰어는 App 최상위의 단일 StudyMaterialViewer로 통합(onOpenMaterial 경유).
+  // fileId 자료 → 앱 내 sandbox 뷰어, url 자료 → 새 탭. 드롭다운/벨 알림이력/관리자 공지 모달 공용.
   const [linkEditOpen, setLinkEditOpen] = useState(false);
   const linkEditRef = useRef(null);
 
@@ -344,7 +322,7 @@ export default function UserInfoBar({
                     <li key={i}>
                       {link.fileId ? (
                         <button
-                          onClick={() => openStudyMaterial(link)}
+                          onClick={() => { setNotebookOpen(false); onOpenMaterial?.(link); }}
                           className="w-full text-left flex items-start md:items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
                         >
                           <span className="flex-shrink-0 mt-0.5 md:mt-0 text-violet-400 group-hover:text-violet-300 transition-colors">
@@ -375,50 +353,6 @@ export default function UserInfoBar({
                 </ul>
               </div>
             </>
-          )}
-
-          {/* HTML 학습자료 뷰어 — sandbox iframe으로 격리 렌더 (allow-same-origin 미부여 → 앱 데이터 접근 차단) */}
-          {viewer && (
-            <div className="fixed inset-0 z-[1100] bg-black/80 flex flex-col" onClick={closeViewer}>
-              <div
-                className="m-auto w-[96vw] h-[92vh] max-w-[1100px] bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden flex flex-col"
-                onClick={e => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800 flex-shrink-0">
-                  <span className="text-gray-200 text-sm font-semibold truncate pr-2">{viewer.title}</span>
-                  <button
-                    onClick={closeViewer}
-                    className="text-gray-500 hover:text-gray-200 transition-colors flex-shrink-0"
-                    title="닫기"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-                <div className="flex-1 relative bg-white">
-                  {viewerLoading && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-                      <div className="flex items-center gap-2 text-gray-400 text-sm">
-                        <div className="w-4 h-4 border-2 border-gray-600 border-t-gray-300 rounded-full animate-spin" />
-                        불러오는 중…
-                      </div>
-                    </div>
-                  )}
-                  {viewerError && !viewerLoading && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-                      <span className="text-red-400 text-sm">{viewerError}</span>
-                    </div>
-                  )}
-                  {!viewerLoading && !viewerError && (
-                    <iframe
-                      title={viewer.title}
-                      srcDoc={viewerHtml}
-                      sandbox="allow-scripts allow-popups"
-                      className="w-full h-full border-0"
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
           )}
         </div>
         {/* 시장동향 리포트 드롭다운 */}
@@ -459,7 +393,7 @@ export default function UserInfoBar({
                     <li key={i}>
                       {link.fileId ? (
                         <button
-                          onClick={() => openStudyMaterial(link)}
+                          onClick={() => { setReportOpen(false); onOpenMaterial?.(link); }}
                           className="w-full text-left flex items-start md:items-center gap-2.5 px-3 py-2 hover:bg-gray-800 transition-colors group"
                         >
                           <span className="flex-shrink-0 mt-0.5 md:mt-0 text-teal-400 group-hover:text-teal-300 transition-colors">
@@ -621,7 +555,13 @@ export default function UserInfoBar({
                 알림 없음
               </div>
             ) : (
-              notificationLog.map(entry => (
+              notificationLog.map(entry => {
+                // 자료 공지(materialChannel 태그 보유) 이력은 클릭 → 자료 열기. 매 렌더 라이브 복원이라
+                // 자료가 삭제됐거나 권한 OFF면 자동으로 plain text(클릭 불가)로 강등된다.
+                const mat = (entry.materialChannel && typeof resolveMaterial === 'function')
+                  ? resolveMaterial(entry.materialChannel, entry.message, entry.materialCreatedAt)
+                  : null;
+                return (
                 <div
                   key={entry.id}
                   className="flex items-baseline gap-2 px-3 group"
@@ -630,11 +570,21 @@ export default function UserInfoBar({
                   <span className="flex-shrink-0 text-[9px] text-gray-600 font-mono">
                     {formatNotifTime(entry.time)}
                   </span>
-                  <span
-                    className={`flex-1 text-[11px] font-mono break-all leading-snug ${typeColor(entry.type)}`}
-                  >
-                    {entry.message}
-                  </span>
+                  {mat ? (
+                    <button
+                      onClick={() => onOpenMaterial?.(mat)}
+                      title={mat.fileId ? '자료 보기' : '링크 열기 (새 탭)'}
+                      className={`flex-1 text-left text-[11px] font-mono break-all leading-snug underline decoration-dotted underline-offset-2 hover:opacity-80 ${typeColor(entry.type)}`}
+                    >
+                      {entry.message}
+                    </button>
+                  ) : (
+                    <span
+                      className={`flex-1 text-[11px] font-mono break-all leading-snug ${typeColor(entry.type)}`}
+                    >
+                      {entry.message}
+                    </span>
+                  )}
                   {onDeleteNotificationEntry && (
                     <button
                       onClick={() => onDeleteNotificationEntry(entry)}
@@ -646,7 +596,8 @@ export default function UserInfoBar({
                     </button>
                   )}
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>

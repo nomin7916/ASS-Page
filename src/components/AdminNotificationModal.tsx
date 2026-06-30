@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React from 'react';
+import { BookOpen, ExternalLink } from 'lucide-react';
 
 export interface AdminNotification {
   id: string;
@@ -12,6 +13,9 @@ export interface AdminNotification {
 interface Props {
   notifications: AdminNotification[];
   onClose: () => void;
+  // 자료(학습자료/리포트) 공지면 link 반환 → 클릭 가능 표시. 복원 불가(삭제·미로드·권한 없음)면 null.
+  getMaterial?: (n: AdminNotification) => any | null;
+  onOpenMaterial?: (n: AdminNotification) => void;
 }
 
 const BADGE_STYLE: Record<string, string> = {
@@ -51,7 +55,7 @@ export function renderMessageWithLinks(text: string) {
   });
 }
 
-export default function AdminNotificationModal({ notifications, onClose }: Props) {
+export default function AdminNotificationModal({ notifications, onClose, getMaterial, onOpenMaterial }: Props) {
   return (
     <div className="fixed top-14 left-4 z-[300] w-64 shadow-2xl">
       <div className="bg-[#0f1623] border border-gray-700/60 rounded-2xl flex flex-col max-h-[70vh]">
@@ -60,23 +64,42 @@ export default function AdminNotificationModal({ notifications, onClose }: Props
           <span className="text-gray-500 text-xs">{notifications.length}건</span>
         </div>
         <div className="overflow-y-auto flex-1 px-4 py-3 space-y-3">
-          {notifications.map((n) => (
-            <div key={n.id} className="space-y-2">
-              <div className="flex items-center gap-2">
-                <span className={`rounded-xl px-3 py-1.5 text-sm font-semibold ${BADGE_STYLE[n.type] || BADGE_STYLE.info}`}>
-                  {BADGE_LABEL[n.type] || BADGE_LABEL.info}
-                </span>
+          {notifications.map((n) => {
+            // 자료 복원 여부를 매 렌더마다 라이브로 평가 — 자료 배열이 늦게 로드되면 그때 클릭 가능해지고,
+            // 자료가 삭제됐으면 클릭 불가(plain text)로 자연 강등(죽은 클릭/오류 토스트 반복 방지).
+            const mat = getMaterial ? getMaterial(n) : null;
+            const clickable = !!mat;
+            return (
+              <div key={n.id} className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className={`rounded-xl px-3 py-1.5 text-sm font-semibold ${BADGE_STYLE[n.type] || BADGE_STYLE.info}`}>
+                    {BADGE_LABEL[n.type] || BADGE_LABEL.info}
+                  </span>
+                </div>
+                <div
+                  className={`bg-gray-800/80 rounded-xl px-3 py-2.5 ${clickable ? 'cursor-pointer ring-1 ring-transparent hover:bg-gray-700/80 hover:ring-sky-600/40 transition-colors' : ''}`}
+                  onClick={clickable ? () => onOpenMaterial?.(n) : undefined}
+                  role={clickable ? 'button' : undefined}
+                  title={clickable ? (mat.fileId ? '자료 보기' : '링크 열기 (새 탭)') : undefined}
+                >
+                  <p className="text-gray-200 text-xs leading-relaxed whitespace-pre-wrap">
+                    {renderMessageWithLinks(n.message)}
+                  </p>
+                  <div className="flex items-center justify-between mt-1.5 gap-2">
+                    {clickable ? (
+                      <span className="text-sky-400 text-[11px] font-semibold flex items-center gap-1 flex-shrink-0">
+                        {mat.fileId ? <BookOpen size={11} /> : <ExternalLink size={11} />}
+                        {mat.fileId ? '자료 보기' : '링크 열기'}
+                      </span>
+                    ) : <span />}
+                    <span className="text-gray-600 text-xs text-right">
+                      {new Date(n.createdAt).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div className="bg-gray-800/80 rounded-xl px-3 py-2.5">
-                <p className="text-gray-200 text-xs leading-relaxed whitespace-pre-wrap">
-                  {renderMessageWithLinks(n.message)}
-                </p>
-                <p className="text-gray-600 text-xs mt-1.5 text-right">
-                  {new Date(n.createdAt).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                </p>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <div className="px-4 pb-4 pt-2.5 border-t border-gray-800">
           <button

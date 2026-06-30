@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { LayoutDashboard } from 'lucide-react';
 import { APPROVED_SHEET_ID, APPS_SCRIPT_URL, ADMIN_EMAIL } from '../config';
 import { RULED_BG_STYLE, NOTIFY_HEX } from '../design';
+import { notebookNoticeMessage, reportNoticeMessage } from '../utils';
 
 const COLAB_URL = 'https://colab.research.google.com/drive/1hjCwtVjyKzooWly4AU_ufrMSV87FApzi#scrollTo=fe7b764e';
 const COLAB_PASSWORD = '0000';
@@ -336,7 +337,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       body: JSON.stringify({
         action: 'sendNotification',
         targetEmail: '__notebook__',
-        message: `📚 ${newLink.title}가 등록되었습니다.`,
+        message: notebookNoticeMessage(newLink.title),
         type: 'info',
       }),
     }).catch(() => {});
@@ -362,7 +363,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
         body: JSON.stringify({
           action: 'sendNotification',
           targetEmail: '__notebook__',
-          message: `📚 ${title}가 등록되었습니다.`,
+          message: notebookNoticeMessage(title),
           type: 'info',
         }),
       }).catch(() => {});
@@ -412,7 +413,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       body: JSON.stringify({
         action: 'sendNotification',
         targetEmail: '__report__',
-        message: `📈 ${newLink.title} 리포트가 등록되었습니다.`,
+        message: reportNoticeMessage(newLink.title),
         type: 'info',
       }),
     }).catch(() => {});
@@ -438,7 +439,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
         body: JSON.stringify({
           action: 'sendNotification',
           targetEmail: '__report__',
-          message: `📈 ${title} 리포트가 등록되었습니다.`,
+          message: reportNoticeMessage(title),
           type: 'info',
         }),
       }).catch(() => {});

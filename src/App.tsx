@@ -39,6 +39,7 @@ import DividendSummaryTable from './components/DividendSummaryTable';
 import DividendTaxPage from './components/DividendTaxPage';
 import ConfirmDialog from './components/ConfirmDialog';
 import LoadingOverlay from './components/LoadingOverlay';
+import StudyMaterialViewer from './components/StudyMaterialViewer';
 import InactivityModal from './components/InactivityModal';
 import FloatingCalculator from './components/FloatingCalculator';
 import { useDriveSync } from './hooks/useDriveSync';
@@ -62,7 +63,8 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal, dedupeHistoryByDate, savingsEval
+  computeEffectivePrincipal, dedupeHistoryByDate, savingsEval,
+  noticeChannelOf, resolveNoticeMaterial
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -127,6 +129,8 @@ export default function App() {
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
   const [seenAdminNotifIds, setSeenAdminNotifIds] = useState<string[]>([]);
   const seenAdminNotifIdsRef = useRef<string[]>([]);
+  // 관리자 공지/벨 이력 클릭 → 학습자료/리포트 fileId 자료를 여는 sandbox 뷰어(App 단일 인스턴스). url 자료는 새 탭.
+  const [materialViewerLink, setMaterialViewerLink] = useState<any>(null);
   const adminOwnDriveTokenRef = useRef<string>('');
   const adminViewingAsRef = useRef<string | null>(null);
   const adminTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2123,6 +2127,49 @@ export default function App() {
   const isDcIrpAccount = activePortfolioAccountType === 'dc-irp';
   const investmentNotes = activePortfolio?.investmentNotes ?? [];
 
+  // ── 관리자 공지/벨 이력 클릭 → 학습자료·리포트 열기 ──
+  // ⚠️ resolveMaterial은 반드시 '기능 게이팅된' 배열만 사용한다(권한 OFF 사용자는 복원 0 → 접근 차단).
+  //    UserInfoBar에 넘기는 게이팅 배열(아래 props)과 동일 소스를 써서 모달/벨/드롭다운이 한 기준으로 동작.
+  //    isAdminUser는 위(관리자 자동 허용)에서 이미 선언됨 — 재선언 금지(중복 const = SyntaxError).
+  const gatedNotebookLinks = isAdminUser || userFeatures.notebookEnabled ? notebookLinks : [];
+  const gatedReportLinks = isAdminUser || userFeatures.reportEnabled ? reportLinks : [];
+  const resolveMaterial = (channel, message, refCreatedAt) => resolveNoticeMaterial(
+    channel === 'notebook' ? gatedNotebookLinks : channel === 'report' ? gatedReportLinks : [],
+    message, channel, refCreatedAt,
+  );
+  const openMaterial = (link) => {
+    if (!link) return;
+    if (link.fileId) { setMaterialViewerLink(link); return; }
+    if (link.url) {
+      const u = String(link.url).trim();
+      if (/^https?:\/\//i.test(u)) window.open(u, '_blank', 'noopener,noreferrer');
+      else notify('잘못된 링크 형식입니다.', 'error');
+    }
+  };
+  // 공지 확인 처리: 읽음 표시 + 벨 이력 적재(materialChannel 태그 포함) + Drive 저장.
+  // 전체(확인 버튼) / 단건(자료 클릭 시 그 공지만) 공용. record 내용만 바뀌어 historyLen 불변이므로
+  // portfolioUpdatedAt을 직접 올려 STATE 저장 가드를 통과시킨다(seenAdminNotifIds 유실 방지).
+  const acknowledgeAdminNotices = (notices) => {
+    if (!notices || notices.length === 0) return;
+    const ids = notices.map(n => n.id);
+    const fresh = ids.filter(id => !seenAdminNotifIdsRef.current.includes(id));
+    if (fresh.length === 0) return;
+    const newSeen = [...seenAdminNotifIdsRef.current, ...fresh];
+    seenAdminNotifIdsRef.current = newSeen;
+    setSeenAdminNotifIds(newSeen);
+    notices.forEach(n => {
+      const ch = noticeChannelOf(n.targetEmail);
+      notify(`[관리자 공지] ${n.message}`, n.type || 'info', {
+        adminNotifId: n.id, materialChannel: ch || undefined, materialCreatedAt: n.createdAt, skipDedup: true,
+      });
+    });
+    setPendingAdminNotifs(prev => prev.filter(p => !ids.includes(p.id)));
+    const nowTs = Date.now();
+    portfolioUpdatedAtRef.current = nowTs;
+    lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+    saveAllToDrive({ ...saveStateRef.current, seenAdminNotifIds: newSeen, portfolioUpdatedAt: nowTs });
+  };
+
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
@@ -2139,20 +2186,18 @@ export default function App() {
       {pendingAdminNotifs.length > 0 && (
         <AdminNotificationModal
           notifications={pendingAdminNotifs}
-          onClose={() => {
-            const newSeen = [...seenAdminNotifIds, ...pendingAdminNotifs.map(n => n.id)];
-            seenAdminNotifIdsRef.current = newSeen;
-            setSeenAdminNotifIds(newSeen);
-            pendingAdminNotifs.forEach(n => notify(`[관리자 공지] ${n.message}`, n.type || 'info', { adminNotifId: n.id }));
-            setPendingAdminNotifs([]);
-            // portfolioUpdatedAt 없이 저장 시 가드가 STATE 파일 저장을 스킵 → seenAdminNotifIds 유실 방지
-            const nowTs = Date.now();
-            portfolioUpdatedAtRef.current = nowTs;
-            lastDriveSavedPortfolioUpdatedAtRef.current = 0;
-            saveAllToDrive({ ...saveStateRef.current, seenAdminNotifIds: newSeen, portfolioUpdatedAt: nowTs });
+          getMaterial={(n) => resolveMaterial(noticeChannelOf(n.targetEmail), n.message, n.createdAt)}
+          onOpenMaterial={(n) => {
+            const mat = resolveMaterial(noticeChannelOf(n.targetEmail), n.message, n.createdAt);
+            if (!mat) return;
+            openMaterial(mat);
+            // 자료를 연 공지는 그 자리에서 읽음 처리(확인 누락 시 다음 세션 재알림 방지). 나머지는 확인 버튼으로.
+            acknowledgeAdminNotices([n]);
           }}
+          onClose={() => acknowledgeAdminNotices(pendingAdminNotifs)}
         />
       )}
+      <StudyMaterialViewer link={materialViewerLink} onClose={() => setMaterialViewerLink(null)} />
       
       
       {/* 지표 배율 설정 모달 */}
@@ -2212,6 +2257,8 @@ export default function App() {
           onClearNotifications={handleClearNotificationLog}
           onDeleteNotificationEntry={handleDeleteNotificationEntry}
           marketIndicators={marketIndicators}
+          onOpenMaterial={openMaterial}
+          resolveMaterial={resolveMaterial}
         />
 
         <AccountTabBar
