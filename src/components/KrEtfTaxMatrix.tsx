@@ -324,6 +324,7 @@ export default function KrEtfTaxMatrix({
                                   <th className="text-right py-1 px-1 font-normal w-[64px]">조정 수량</th>
                                   <th className="text-right py-1 px-1 font-normal w-[88px]">과표기준가</th>
                                   <th className="text-right py-1 px-1 font-normal w-[80px]">평균 과표</th>
+                                  <th className="text-right py-1 px-1 font-normal w-[96px] text-emerald-400/70" title="매도 시 과세: (과표기준가 − 평균 과표) × 매도주식수, 0 이하면 비과세">과세 금액</th>
                                   <th className="py-1 px-1 w-[20px]"></th>
                                 </tr>
                               </thead>
@@ -334,6 +335,11 @@ export default function KrEtfTaxMatrix({
                                   const adjustedQty = prevQtyNum + changeNum;
                                   const isSell = changeNum < 0;
                                   const isBuy = changeNum > 0;
+                                  const sellTaxBasePrice = safeNum(evt.taxBasePrice); // 매도시 과표기준가
+                                  const sellPerShareTax = sellTaxBasePrice - runningAvg; // 과표기준가 − 평균 과표 (1주당)
+                                  const soldQty = -changeNum; // 매도 주식수 (양수)
+                                  const canCalcSellTax = isSell && sellTaxBasePrice > 0 && runningAvg > 0;
+                                  const sellTaxAmount = sellPerShareTax > 0 ? sellPerShareTax * soldQty : 0; // 과세표준 (세율 미적용)
                                   return (
                                     <tr key={evt.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/10">
                                       <td className="py-1 pl-2 pr-0.5">
@@ -406,6 +412,25 @@ export default function KrEtfTaxMatrix({
                                       <td className="py-1 px-1 text-right tabular-nums text-sky-300">
                                         {runningAvg > 0 ? fmtTaxBase(runningAvg) : <span className="text-gray-700">-</span>}
                                       </td>
+                                      <td className="py-1 px-1 text-right tabular-nums">
+                                        {canCalcSellTax ? (
+                                          sellPerShareTax > 0 ? (
+                                            <>
+                                              <div className="text-emerald-400 font-medium" title="과세금액 = (과표기준가 − 평균 과표) × 매도주식수">
+                                                {formatCurrency(sellTaxAmount)}
+                                              </div>
+                                              <div className="text-[8px] text-gray-500">+{fmtTaxBase(sellPerShareTax)}/주 × {soldQty.toLocaleString()}</div>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <div className="text-gray-400" title="과표기준가 ≤ 평균 과표 → 비과세">비과세</div>
+                                              <div className="text-[8px] text-gray-600">{fmtTaxBase(sellPerShareTax)}/주</div>
+                                            </>
+                                          )
+                                        ) : (
+                                          <span className="text-gray-700">-</span>
+                                        )}
+                                      </td>
                                       <td className="py-1 px-1 text-center">
                                         <button
                                           onClick={() => deleteEvent(stock.code, events, evt.id)}
@@ -444,6 +469,8 @@ export default function KrEtfTaxMatrix({
                           일자 선택 시 자산검증 전일 수량 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨
                           <br />
                           <span className="text-orange-400/60">매입단가</span> 는 아래 매수 요약(평균 매입단가) 산출에 사용됩니다 · 차트 '일일 수익률'(🎯)은 포트폴리오 테이블 매입금액 기준으로 증권사 수익률과 일치
+                          <br />
+                          <span className="text-emerald-400/70">과세 금액</span> = 매도 시 (매도 과표기준가 − 평균 과표) × 매도주식수 · 0 이하면 <span className="text-gray-400">비과세</span> (세율 미적용 과세표준)
                         </div>
                       </div>
                     </td>
