@@ -63,7 +63,7 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal, dedupeHistoryByDate, savingsEval,
+  computeEffectivePrincipal, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
   noticeChannelOf, resolveNoticeMaterial
 } from './utils';
 
@@ -909,6 +909,14 @@ export default function App() {
     return map;
   }, [unifiedDates, marketIndices, compStocks, stockHistoryMap, indicatorHistoryMap]);
 
+  // 개별 계좌 차트도 추이 표와 동일하게 '수량 × 종가'(확정 종가 기반)를 권위값으로 사용.
+  // (해외·현금성은 각자 기존 경로 → 빈 Map이면 아래 exactHist 분기가 저장값으로 폴백)
+  const activeCloseEvalByDate = useMemo(() => {
+    if (['overseas', 'simple', 'matong'].includes(activePortfolioAccountType)) return new Map();
+    const edk = isKrCutoffAccount(activePortfolioAccountType) ? krEffectiveDateKey : effectiveDateKey;
+    return buildCloseEvalSeries(activePortfolio, history.map(h => h?.date), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, edk);
+  }, [activePortfolio, history, activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, krEffectiveDateKey, effectiveDateKey]);
+
   const finalChartData = useMemo(() => {
     const localSortedHist = [...history].sort((a, b) => new Date(a.date) - new Date(b.date));
     const sortedDeposits = [...depositHistory].sort((a, b) => a.date < b.date ? -1 : 1);
@@ -976,12 +984,15 @@ export default function App() {
           const usdPrin = cleanNum(principal);
           if (hasData && usdPrin > 0) retRate = (usdEval - usdPrin) / usdPrin * 100;
         } else if (exactHist) {
-          trueEvalAtDate = exactHist.evalAmount;
+          // 종가 확정 기반 재계산값(수량×종가)을 우선 사용, 없으면 저장된 라이브 값 폴백 (추이 표와 동일 소스)
+          const cb = activeCloseEvalByDate.get(date);
+          const evalForDate = cb != null ? cb : exactHist.evalAmount;
+          trueEvalAtDate = evalForDate;
           hasReliableEval = true;
           const storedPrin = cleanNum(exactHist.principal);
           const fallbackPrin = storedPrin > 0 ? storedPrin : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
           const histPrin = effective.value != null ? effective.value : fallbackPrin;
-          retRate = histPrin > 0 ? ((exactHist.evalAmount - histPrin) / histPrin * 100) : 0;
+          retRate = histPrin > 0 ? ((evalForDate - histPrin) / histPrin * 100) : 0;
         } else {
           let hasTrueData = false;
           const hIdx = reversedHist.find(h => h.date <= date) || localSortedHist[0];
@@ -1113,7 +1124,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activeCloseEvalByDate]);
 
   // ── 통합 대시보드 계산 ──
   const {

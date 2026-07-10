@@ -518,7 +518,7 @@ export const calcPortfolioEvalDetail = (
   indicatorHistoryMap: Record<string, any>,
   currentFxRate = 1,
   manualPriceOverrides?: Record<string, Record<string, number>> | null
-): { total: number; fxRate: number; items: any[]; hasAnyPrice: boolean } => {
+): { total: number; fxRate: number; items: any[]; hasAnyPrice: boolean; allExact: boolean } => {
   const isGold = accountType === 'gold';
   const isOverseas = accountType === 'overseas';
   const fxRate = isOverseas
@@ -562,7 +562,52 @@ export const calcPortfolioEvalDetail = (
     if (evl > 0) { totalEval += evl; hasAnyPrice = true; }
     detail.push({ id: item.id, type: 'stock', code: item.code || '', name: item.name || (isGold ? 'KRX 금현물' : ''), quantity: qty, price: price || null, source, eval: evl });
   });
-  return { total: hasAnyPrice ? totalEval : 0, fxRate, items: detail, hasAnyPrice };
+  // allExact: 모든 가격 종목이 '그 날짜의 정확한 종가/NAV'(또는 manual/deposit/savings)로 평가됐는지.
+  // source가 'history'여도 stockHistoryMap[code][date]/goldKr[date] 키가 없으면 getClosestValue 소급
+  // 근사(carry-back)이므로 exact 아님 → 종가 확정 기반 표시/기록의 게이트로 사용(useAutoConfirmHistory와 동일 판정).
+  const allExact = detail.every(it => {
+    if (it.source === 'deposit' || it.source === 'savings' || it.source === 'manual') return true;
+    if (it.source !== 'history') return false;
+    const src = isGold ? (indicatorHistoryMap?.goldKr || {}) : (it.code ? (stockHistoryMap?.[it.code] || {}) : {});
+    return src[date] != null;
+  });
+  return { total: hasAnyPrice ? totalEval : 0, fxRate, items: detail, hasAnyPrice, allExact: hasAnyPrice && allExact };
+};
+
+// 종가 확정 기반 평가액 시계열(carry-forward). 자산 평가액 추이·차트·통합 대시보드가 공용으로 사용해
+// '저장된 라이브 값'이 아니라 항상 '수량 × 종가'를 표시하기 위한 단일 소스.
+//  각 날짜에 대해:
+//   - 정확 종가 완비(allExact) & 보유수량 확정 → 수량 × 종가 재계산값 (검증 모달 '재계산 합계'와 동일)
+//   - 주말·공휴일·종가 미로드일·추정 수량 → 직전 정확값을 이월(carry-forward) — carry-back 근사로 튀지 않게
+//   - 첫 정확값 이전 or 오늘(effectiveDateKey) → map 미설정 → 호출부가 저장값/라이브값으로 폴백
+// 반환: Map<date, number> (정확값 또는 이월값이 있는 날짜만). 호출부는 `map.get(date) ?? 저장값`으로 사용.
+export const buildCloseEvalSeries = (
+  p: any,
+  dates: string[],
+  accountType: string,
+  stockHistoryMap: Record<string, Record<string, number>>,
+  indicatorHistoryMap: Record<string, any>,
+  effectiveDateKey: string,
+  fxRate = 1
+): Map<string, number> => {
+  const map = new Map<string, number>();
+  if (!p) return map;
+  const mpo = p.manualPriceOverrides || {};
+  const sorted = [...new Set(dates.filter(Boolean))].sort();
+  let lastClose: number | null = null;
+  for (const date of sorted) {
+    if (date === effectiveDateKey) continue; // 오늘=라이브 → 호출부 처리(미설정)
+    let closeVal: number | null = null;
+    const resolved = resolveHoldings(p, date);
+    if (!resolved.estimated) {
+      const r = calcPortfolioEvalDetail(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap || {}, fxRate, mpo);
+      if (r.hasAnyPrice && r.allExact) closeVal = r.total;
+    }
+    if (closeVal != null) { lastClose = closeVal; map.set(date, closeVal); }
+    else if (lastClose != null) map.set(date, lastClose);
+    // else: 미설정 → get() undefined → 호출부 저장값 폴백
+  }
+  return map;
 };
 
 export const calcPortfolioEvalForDate = (

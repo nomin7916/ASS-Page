@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries } from '../utils';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
@@ -93,6 +93,18 @@ export default function HistoryPanel({
     return m;
   }, [computeOverseasEval, sortedHistoryDesc]);
 
+  // 국내/gold 시장 계좌: 자산 평가액 추이를 '저장된 라이브 값'이 아니라 항상 '수량 × 종가'(확정 종가 기반)로 표시.
+  //  - 과거 거래일 & 그날 종가 정확 로드(allExact) → 수량×종가 재계산값(검증 모달 '재계산 합계'와 동일).
+  //  - 주말·공휴일·종가 미로드일 → 직전 '정확 종가 재계산값'을 이월(carry-forward) — carry-back 근사로 튀지 않게.
+  //  - 오늘 → 종가 미확정 → 저장된 라이브 값 유지.
+  //  - 추정 보유수량(스냅샷 없음)은 수량 불확실 → 그날은 저장값 폴백(잘못된 수량으로 재계산 방지).
+  //  현금성(simple/matong)·해외는 제외(각자 기존 경로).
+  const useCloseRecompute = !['overseas', 'simple', 'matong'].includes(activePortfolioAccountType);
+  const displayEvalByDate = useMemo(() => {
+    if (!useCloseRecompute || !activePortfolio) return null;
+    return buildCloseEvalSeries(activePortfolio, sortedHistoryDesc.map(h => h?.date), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey);
+  }, [useCloseRecompute, activePortfolio, sortedHistoryDesc, activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey]);
+
   return (
         <>
           <div className={`w-full xl:w-[21%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${activePortfolioAccountType === 'overseas' ? 'h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden shrink-0`}>
@@ -128,8 +140,8 @@ export default function HistoryPanel({
                     const isOverseasAcc = activePortfolioAccountType === 'overseas';
                     const ov = isOverseasAcc && overseasEvalByDate ? overseasEvalByDate.get(h.date) : null;
                     const prevOv = isOverseasAcc && overseasEvalByDate && prevEntry ? overseasEvalByDate.get(prevEntry.date) : null;
-                    const curKrw = ov ? ov.krw : h.evalAmount;
-                    const prevKrw = prevEntry ? (prevOv ? prevOv.krw : prevEntry.evalAmount) : 0;
+                    const curKrw = ov ? ov.krw : (displayEvalByDate?.get(h.date) ?? h.evalAmount);
+                    const prevKrw = prevEntry ? (prevOv ? prevOv.krw : (displayEvalByDate?.get(prevEntry.date) ?? prevEntry.evalAmount)) : 0;
                     const dod = prevKrw > 0 ? ((curKrw / prevKrw) - 1) * 100 : 0;
                     const isToday = h.date === effectiveDateKey;
                     const isUserModified = h.isAdjusted || userModifiedDates.has(h.date);
@@ -154,7 +166,7 @@ export default function HistoryPanel({
                                     const usdDisplay = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(usd);
                                     return <div className="flex flex-col items-end leading-tight"><span>{usdDisplay}</span><span className="text-[10px] text-gray-500">{formatCurrency(curKrw)}</span></div>;
                                   })()
-                                : formatCurrency(h.evalAmount)}
+                                : formatCurrency(curKrw)}
                             </span>
                           </div>
                           {h.isAdjusted && <span className="block text-[9px] font-normal leading-none mt-0.5 text-blue-400">조정됨</span>}
