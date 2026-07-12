@@ -888,7 +888,12 @@ export default function App() {
         }
       });
 
-      if (i === 0) { baseK = kPoint; baseS = sPoint; baseN = nPoint; }
+      // base는 각 지수의 첫 '실데이터'(currK/S/N) 시점으로 잡는다(지표·비교종목과 동일 패턴).
+      // i===0 무조건 기준으로 잡으면, KOSPI(네이버)가 S&P/Nasdaq(야후)보다 늦게 시작해 unifiedDates[0]에
+      // 실데이터가 없을 때 baseK가 합성 폴백(2600)이 되어 KOSPI 라인이 조회시작에서 −64%대로 찍힌다.
+      if (baseK == null && currK != null) baseK = currK;
+      if (baseS == null && currS != null) baseS = currS;
+      if (baseN == null && currN != null) baseN = currN;
       compStocks.forEach((_, ci) => {
         if (baseComps[ci] === null && compValues[ci] != null) baseComps[ci] = compValues[ci];
       });
