@@ -60,6 +60,16 @@ export function useMarketData({
   const appliedRangeRef = useRef(appliedRange);
   useEffect(() => { appliedRangeRef.current = appliedRange; }, [appliedRange]);
 
+  // 지수(KOSPI/S&P500/Nasdaq) 히스토리 수집 시작일 — 조회기간 시작일 우선, 없으면 10년 전.
+  // fetchIndexData는 startDate 없으면 range=2y(약 500거래일)로 제한돼 장기 차트를 못 채운다.
+  const wideIndexStart = () => {
+    const s = appliedRangeRef.current?.start;
+    if (s) return s;
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 10);
+    return d.toISOString().split('T')[0];
+  };
+
   // 개별 패치 함수들을 밖으로 빼서 재사용 가능하도록 구성 (Retry 용도)
   const fetchersMap = {
     us10y: async (now, statusMap) => {
@@ -585,13 +595,14 @@ export function useMarketData({
   };
 
   // KOSPI / S&P500 / Nasdaq 히스토리 단독 수집 (검증 패널 수집 버튼용)
-  const fetchSingleIndexHistory = async (key) => {
+  // startDate 미지정 시 조회기간 시작일(없으면 10년 전)부터 전체 수집
+  const fetchSingleIndexHistory = async (key, startDate) => {
     const symbolMap = { kospi: '^KS11', sp500: '^GSPC', nasdaq: '^NDX' };
     const symbol = symbolMap[key];
     if (!symbol) return;
     setIndicatorHistoryLoading(prev => ({ ...prev, [key]: true }));
     try {
-      const result = await fetchIndexData(symbol);
+      const result = await fetchIndexData(symbol, startDate || wideIndexStart());
       if (result?.data && Object.keys(result.data).length > 0) {
         setMarketIndices(prev => {
           const merged = { ...(prev[key] || {}), ...result.data };
@@ -659,10 +670,11 @@ export function useMarketData({
   // 앱 시작 시 KOSPI / S&P500 / Nasdaq 히스토리 로드
   useEffect(() => {
     const loadIndices = async () => {
+      const idxStart = wideIndexStart();
       const [kRes, sRes, nRes] = await Promise.allSettled([
-        fetchIndexData('^KS11'),
-        fetchIndexData('^GSPC'),
-        fetchIndexData('^NDX')
+        fetchIndexData('^KS11', idxStart),
+        fetchIndexData('^GSPC', idxStart),
+        fetchIndexData('^NDX', idxStart)
       ]);
       const newK = (kRes.status === 'fulfilled' && kRes.value) ? kRes.value : null;
       const newS = (sRes.status === 'fulfilled' && sRes.value) ? sRes.value : null;
@@ -693,6 +705,25 @@ export function useMarketData({
     };
     loadIndices();
   }, []);
+
+  // 조회기간이 보유 지수 데이터보다 앞으로 확장되면 자동 백필 (compStocks 커버리지 확장 패턴과 동일).
+  // 보유 데이터의 최초일이 조회기간 시작일보다 늦으면 시작일부터 전체 재수집 → 저장은 App 자동저장 effect가 처리.
+  const indexAutoExpandedRef = useRef(new Set());
+  useEffect(() => {
+    const start = appliedRange?.start;
+    if (!start) return;
+    (['kospi', 'sp500', 'nasdaq'] as const).forEach((key) => {
+      const hist = marketIndicesRef.current?.[key];
+      if (!hist || Object.keys(hist).length === 0) return; // 데이터 없음 → loadIndices가 처리
+      const earliest = Object.keys(hist).sort()[0];
+      if (earliest <= start) return; // 이미 커버
+      const guardKey = `${key}:${start}`;
+      if (indexAutoExpandedRef.current.has(guardKey)) return; // 중복 트리거 방지
+      indexAutoExpandedRef.current.add(guardKey);
+      fetchSingleIndexHistory(key, start);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedRange?.start]);
 
   return {
     // 상태

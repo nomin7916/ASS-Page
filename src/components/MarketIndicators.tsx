@@ -444,6 +444,10 @@ export default function MarketIndicators({
                   ? (() => { const d = new Date(latestDate); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })()
                   : null;
                 const isUpToDate = latestDate && latestDate >= today;
+                // 조회기간 시작일 커버 여부 — 지수는 최신이어도 시작일을 못 덮으면 백필 필요
+                const earliestDate = histCount > 0 ? Object.keys(hist).sort()[0] : null;
+                const coversStart = !appliedRange?.start || (earliestDate && earliestDate <= appliedRange.start);
+                const indexSatisfied = isUpToDate && coversStart;
 
                 // 수집 출처 URL
                 const sourceUrl = (() => {
@@ -467,7 +471,7 @@ export default function MarketIndicators({
                       {isHistLoading ? (
                         <span className="text-blue-300 animate-pulse">수집중...</span>
                       ) : isIndexItem ? (
-                        isUpToDate ? (
+                        indexSatisfied ? (
                           <span
                             className={`text-[8px] ${sourceUrl ? 'text-green-500 cursor-pointer hover:text-green-300' : 'text-green-600'}`}
                             onClick={() => sourceUrl && window.open(sourceUrl, '_blank')}
@@ -478,10 +482,12 @@ export default function MarketIndicators({
                         ) : (
                           <button
                             className="text-blue-400 hover:text-blue-200 transition-colors"
-                            onClick={() => fetchSingleIndexHistory?.(item.marketIndexKey)}
-                            title={latestDate
-                              ? `${item.label} 히스토리 수집\n보유: ~${latestDate}\n클릭하여 전체 갱신`
-                              : `${item.label} 히스토리 수집 (데이터 없음)`}
+                            onClick={() => fetchSingleIndexHistory?.(item.marketIndexKey, appliedRange?.start)}
+                            title={!coversStart && earliestDate
+                              ? `${item.label} 조회기간 백필\n보유: ${earliestDate} ~ ${latestDate}\n조회기간 시작: ${appliedRange?.start}\n클릭하여 시작일부터 전체 수집`
+                              : latestDate
+                                ? `${item.label} 히스토리 수집\n보유: ~${latestDate}\n클릭하여 전체 갱신`
+                                : `${item.label} 히스토리 수집 (데이터 없음)`}
                           >
                             {sourceText || 'stooq'} ↓
                           </button>
