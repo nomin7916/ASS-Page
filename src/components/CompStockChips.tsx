@@ -64,7 +64,7 @@ export default function CompStockChips({
               style={{ width: '50px', borderColor, color: comp.active ? textColor : '#93c5fd' }}
               placeholder="코드"
               value={comp.code}
-              onChange={e => { const n = [...compStocks]; n[idx] = { ...n[idx], code: e.target.value }; setCompStocks(n); }}
+              onChange={e => { const n = [...compStocks]; n[idx] = { ...n[idx], code: e.target.value.trim().toUpperCase() }; setCompStocks(n); }}
               onBlur={e => handleCompStockBlur(idx, e.target.value)}
             />
             <button

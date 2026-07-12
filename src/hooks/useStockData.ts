@@ -39,7 +39,10 @@ interface UseStockDataParams {
 
 const COMP_STOCK_EXTRA_COLORS = ['#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#f97316', '#64748b', '#e11d48'];
 
-const isKoreanCode = (code: string) => /^\d{6}$/.test(code);
+// 국내 코드 판별 — 6자리 영숫자 + 숫자 1개 이상 포함.
+// 순수 6자리 숫자(472150)뿐 아니라 글자 섞인 최신 ETF 코드(0210E0, 0177R0)도 국내로 인식.
+// (해외 티커는 대부분 5자 이하 또는 6자 전부 알파벳 → /\d/에서 걸러짐)
+const isKoreanCode = (code: string) => /^[A-Za-z0-9]{6}$/.test(code) && /\d/.test(code);
 
 export function useStockData({
   portfolio, setPortfolio,
@@ -232,8 +235,9 @@ export function useStockData({
       if (match) { resolvedName = match.name; break; }
     }
     if (!resolvedName) {
-      // 6자리 순수 숫자 또는 6자리 영숫자 혼합(한국 ETF 코드) → 한국 API
-      const isKorean = /^[A-Z0-9]{6}$/i.test(code) && !/^[A-Z]+$/.test(code);
+      // 6자리 순수 숫자 또는 6자리 영숫자 혼합(한국 ETF 코드) → 한국 API.
+      // 이력 조회 경로(handleToggleComp 등)와 동일한 판별식 공유 — 이름/이력 라우팅 불일치 방지.
+      const isKorean = isKoreanCode(code);
       const d = isKorean ? await fetchStockInfo(code) : await fetchUsStockInfo(code);
       resolvedName = d?.name || code;
     }
@@ -844,11 +848,13 @@ export function useStockData({
         if (p.accountType === 'simple' || p.accountType === 'overseas') return;
         (p.portfolio || []).forEach(item => { if (item.type === 'stock' && item.code) allKoreanCodes.add(item.code); });
         (p.holdingSnapshots || []).forEach((s: any) => (s.items || []).forEach((it: any) => {
-          if (it.type === 'stock' && it.code && /^\d{6}$/.test(it.code)) allKoreanCodes.add(it.code);
+          if (it.type === 'stock' && it.code && isKoreanCode(it.code)) allKoreanCodes.add(it.code);
         }));
       });
-      // 활성 비교종목(국내 6자리) 도 포함 — Drive 캐시의 수정주가를 실제종가로 교체
-      compStocks.filter(s => s.active && s.code && /^\d{6}$/.test(s.code)).forEach(s => allKoreanCodes.add(s.code));
+      // 활성 비교종목(국내 6자리, 영숫자 포함) 도 포함 — Drive 캐시의 수정주가를 실제종가로 교체.
+      // ⚠️ 앱 재시작 시 저장된 활성 비교종목 이력 복구 경로(단일포인트 폴백은 auto-coverage가 스킵하므로
+      // 여기서 refreshPrices의 KIS 재조회에 편입돼야 함) — 숫자전용으로 되돌리지 말 것.
+      compStocks.filter(s => s.active && s.code && isKoreanCode(s.code)).forEach(s => allKoreanCodes.add(s.code));
       const korCodesNeedingHistory = [...allKoreanCodes].filter(code => {
         // force: 모든 필터 우회, 무조건 KIS·Naver trend 재조회
         if (force) return true;
