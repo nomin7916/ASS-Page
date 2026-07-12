@@ -276,6 +276,37 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   복원에서 기존 중복을 정리(우선순위 실시간>확정>백필, 중복 없으면 동일 참조 반환).
 - 검증: `npm run verify:history`.
 
+### 비거래일(주말/공휴일)엔 라이브 스냅샷 금지 — 비활성 시장 계좌 (⚠️ 회귀 주의)
+
+**증권 캘린더를 따르는 계좌(KR: portfolio·isa·dc-irp·pension·dividend·gold + overseas)는 비거래일
+(주말/공휴일)에 시세가 변하지 않으므로, 그날 값은 반드시 직전 거래일 종가여야 한다.** `getEffectiveDateKR`/
+`getEffectiveDate`는 요일을 검사하지 않아 토/일에도 '오늘'을 반환하므로, 기록 경로가 비거래일 라이브
+스냅샷을 만들지 않도록 **거래일 게이팅**이 필요하다.
+
+- **판정 헬퍼**: `useMarketCalendar.ts` `isNonTradingDayForAccount(accountType, date, krHolidays, usHolidays)`.
+  KR 계좌는 KRX 캘린더, overseas는 NYSE 캘린더. **crypto(24시간 시장)·현금성(matong/simple, 상시 편집)은
+  항상 false**(=상시 기록 허용 — 절대 게이팅/치유 대상에 넣지 말 것). 공휴일 배열이 비면(캘린더 로드 전)
+  주말만 판정(graceful degradation, 주말은 캘린더 불필요).
+- **예방(비활성 전용)**: `useHistoryBackfill` 효과#1의 `recDateFor`, `useStockData` refreshPrices 기록
+  경로(`isActive` return 뒤 = 비활성) 둘 다 recDate가 비거래일이면 `null`로 만들어 기록을 생략한다.
+  ⚠️ `recDateFor`는 **사전체크 루프와 setPortfolios map 양쪽이 같은 함수를 호출**해 자동 미러링(무한루프
+  방지 불변식). **활성 계좌 today-effect(`App.tsx`)는 게이팅하지 않는다** — 활성은 라이브 시세가 완전
+  로드돼 주말값=금요일 종가로 정확하고, 이미 주말 cleanup(`1841-1846`)+`fillNonTradingGaps`로 관리되며,
+  게이팅하면 개별 계좌 차트(`finalChartData`)의 '오늘' 점이 주말 낮에 사라진다.
+- **치유(전 계좌, 값 다를 때만)**: `useHistoryBackfill` 효과#2의 백필 실시간 보호 2곳(gap-fill
+  `isProtectedEntry`, `applyUpdates` `isProtected`)에 `isNonTradingDayForAccount` 예외를 두어, 비거래일의
+  `isFixed:false` 라이브 스냅샷을 직전 거래일 종가 carry-forward로 **덮어쓴다**(`applyUpdates`는 값이 실제로
+  다를 때만 교체 → 정상 주말 레코드는 무손). 치유 결과(`isFixed:true`)는 `historyVerifyKey` 경유로 Drive
+  영속. `getKrSettledTodayDate`(당일 21:00 예외)는 과거 날짜엔 무효라 무관.
+- **과거 버그**: 비활성 KR 계좌가 토요일 09:00~21:00에 부분로드/스테일 시세(`summary.currentEval`)를
+  `isFixed:false`로 그날 기록 → cleanup이 없어 영구 잔존 + 백필 실시간 보호로 금요일 carry-forward를 가림
+  → 통합 대시보드 추이에 주말 딥(예: -1.52%) 후 일요일 라이브 회복(+1.53% **가짜 오늘 수익**). 활성
+  COVERD는 cleanup으로 면역이라 정상이었음(원인은 비활성 계좌). 재구성(차트·팝업)은 저장값을 충실히
+  재현만 하므로 버그는 재구성이 아니라 **기록측**에 있었다.
+- **⚠️ crypto 제외 필수**: 24시간 시장이라 주말 라이브값이 정당 → 치유하면 손익이 지워지는 회귀.
+  `isNonTradingDayForAccount`가 crypto에 false를 반환하는 것이 이 안전장치.
+- **범위 밖(별개)**: 차트-팝업 overseas 소계 미세차(FX 재계산 vs 저장값)는 이 딥과 독립된 상시 이슈.
+
 ### 앱 실행 시 '수량×종가로 자동확정' (`useAutoConfirmHistory`) — 자산검증 불일치 자동 보정 (⚠️ 회귀 주의)
 
 자산검증 모달(`VerifyEvalModal`)의 **'수량*종가로 확정'을 앱 실행 시 자동 수행**한다. `useHistoryBackfill`이

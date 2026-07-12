@@ -122,6 +122,23 @@ export function getBackfillBoundaryKR(): string {
   return formatDateKST(next);
 }
 
+// 해당 계좌 시장 기준 비거래일(주말/공휴일) 여부.
+// - 증권 캘린더를 따르는 계좌만 대상: KR 계좌(KR_CUTOFF_ACCOUNT_TYPES)는 KRX, overseas는 NYSE.
+// - crypto(24시간 시장)·현금성(matong/simple, 상시 편집)은 거래일 개념이 없어 항상 false(=상시 기록 허용).
+// - 공휴일 배열이 비어 있으면(마켓캘린더 로드 전) 주말만 판정(graceful degradation — 주말은 캘린더 불필요).
+export function isNonTradingDayForAccount(
+  accountType: string,
+  dateStr: string,
+  krHolidays: string[] = [],
+  usHolidays: string[] = [],
+): boolean {
+  if (!isKrCutoffAccount(accountType) && accountType !== 'overseas') return false;
+  const day = new Date(dateStr + 'T12:00:00').getDay();
+  if (day === 0 || day === 6) return true;
+  const holidays = accountType === 'overseas' ? usHolidays : krHolidays;
+  return holidays.includes(dateStr);
+}
+
 export function getEffectiveDateForAccount(accountType: string): string | null {
   return isKrCutoffAccount(accountType) ? getEffectiveDateKR() : getEffectiveDate();
 }

@@ -2,7 +2,7 @@
 import { useEffect, useRef } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend, savingsEval } from '../utils';
-import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff } from './useMarketCalendar';
+import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount } from './useMarketCalendar';
 
 interface UseStockDataParams {
   portfolio: any[];
@@ -34,6 +34,7 @@ interface UseStockDataParams {
   notify: (text: string, type?: string) => void;
   setMarketIndices: (fn: any) => void;
   setIndexFetchStatus: (fn: any) => void;
+  marketHolidays?: { kr: string[]; us: string[] };
 }
 
 const COMP_STOCK_EXTRA_COLORS = ['#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#f97316', '#64748b', '#e11d48'];
@@ -59,7 +60,10 @@ export function useStockData({
   chartPeriod, appliedRange,
   setIsLoading, notify,
   setMarketIndices, setIndexFetchStatus,
+  marketHolidays,
 }: UseStockDataParams) {
+  const krH = marketHolidays?.kr || [];
+  const usH = marketHolidays?.us || [];
 
   // 펀드 전체이력(상장일~) 광역 조회를 앱 로드당 코드별 1회로 제한 —
   // 가입일이 상장일보다 이르면 earliestStored가 영원히 미충족이라 매 새로고침
@@ -723,8 +727,12 @@ export function useStockData({
         }
       }
 
-      // 기존 동작: 기록 대상일 항목이 없을 때만 추가 (KR 계좌는 기록 창 09:00~21:00 밖이면 생략)
-      const recDate = getEffectiveDateForAccount(p.accountType || 'portfolio');
+      // 기존 동작: 기록 대상일 항목이 없을 때만 추가 (KR 계좌는 기록 창 09:00~21:00 밖이면 생략).
+      // 이 경로는 비활성 계좌 전용(활성은 위 isActive에서 return) — 시장 계좌(KR/overseas)는 비거래일
+      // (주말/공휴일)이면 라이브 스냅샷을 만들지 않는다(스테일 시세 박제 방지, 직전 거래일 종가 carry-forward).
+      const acctType = p.accountType || 'portfolio';
+      let recDate = getEffectiveDateForAccount(acctType);
+      if (recDate && isNonTradingDayForAccount(acctType, recDate, krH, usH)) recDate = null;
       if (!recDate) return { ...p, portfolio: updatedItems };
       const idx = history.findIndex(h => h.date === recDate);
       if (idx >= 0) return { ...p, portfolio: updatedItems };

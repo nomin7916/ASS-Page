@@ -1152,6 +1152,7 @@ export default function App() {
     stockHistoryMap, indicatorHistoryMap, marketIndicators,
     portfolioSummaries, portfolios, setPortfolios,
     activePortfolioId, setHistory, effectiveDateKey, krEffectiveDateKey,
+    marketHolidays,
   });
 
   // 앱 실행 시 자산검증 불일치 라이브 레코드를 '수량×종가로 자동확정' (useHistoryBackfill 뒤에서 합성)
@@ -1209,6 +1210,7 @@ export default function App() {
     chartPeriod, appliedRange,
     setIsLoading, notify,
     setMarketIndices, setIndexFetchStatus,
+    marketHolidays,
   });
   refreshPricesRef.current = refreshPrices;
 

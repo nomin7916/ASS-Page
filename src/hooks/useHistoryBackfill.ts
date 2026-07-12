@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useRef, useEffect } from 'react';
 import { calcPortfolioEvalForDate, resolveHoldings } from '../utils';
-import { getEffectiveDate, getEffectiveDateForAccount, getBackfillBoundaryForAccount, getBackfillBoundaryKR, getKrSettledTodayDate, isKrCutoffAccount } from './useMarketCalendar';
+import { getEffectiveDate, getEffectiveDateForAccount, getBackfillBoundaryForAccount, getBackfillBoundaryKR, getKrSettledTodayDate, isKrCutoffAccount, isNonTradingDayForAccount } from './useMarketCalendar';
 
 export const useHistoryBackfill = ({
   stockHistoryMap,
@@ -14,7 +14,10 @@ export const useHistoryBackfill = ({
   setHistory,
   effectiveDateKey,
   krEffectiveDateKey,
+  marketHolidays,
 }) => {
+  const krH = marketHolidays?.kr || [];
+  const usH = marketHolidays?.us || [];
   const nonActiveHistRecordedRef = useRef({});
   const backfillDoneRef = useRef({});
 
@@ -31,7 +34,12 @@ export const useHistoryBackfill = ({
     const typeById = new Map(portfolios.map(p => [p.id, p.accountType || 'portfolio']));
     const recDateFor = (accountType) => {
       const isCash = accountType === 'matong' || accountType === 'simple';
-      return isCash ? getEffectiveDate() : getEffectiveDateForAccount(accountType);
+      const d = isCash ? getEffectiveDate() : getEffectiveDateForAccount(accountType);
+      // 비활성 시장 계좌(KR/overseas)는 비거래일(주말/공휴일)에 라이브 스냅샷을 기록하지 않는다 —
+      // 스테일/부분로드 시세가 박제되는 것을 막고, 재구성/백필이 직전 거래일 종가를 carry-forward하게 한다.
+      // (현금성은 isNonTradingDayForAccount가 false라 상시 기록 유지. 활성 계좌는 이 경로를 안 타므로 무관.)
+      if (d && isNonTradingDayForAccount(accountType, d, krH, usH)) return null;
+      return d;
     };
     let needsUpdate = false;
     portfolioSummaries.forEach(s => {
@@ -74,7 +82,7 @@ export const useHistoryBackfill = ({
       if (idx >= 0) return p;
       return { ...p, history: [...hist, { date: recDate, evalAmount: summary.currentEval, principal: summary.principal, isFixed: false }] };
     }));
-  }, [portfolioSummaries, activePortfolioId, effectiveDateKey, krEffectiveDateKey]);
+  }, [portfolioSummaries, activePortfolioId, effectiveDateKey, krEffectiveDateKey, marketHolidays]);
 
   // 자동 히스토리 백필: 모든 누락 날짜 채우기
   useEffect(() => {
@@ -175,9 +183,13 @@ export const useHistoryBackfill = ({
             // 거래일 데이터 없음 (주말/공휴일) → 직전 값 이월
             const existing = existingMap.get(ds);
             const isPureBackfillEntry = !!(existing?.isFixed && existing?.adjustedAmount === undefined);
-            // 없는 날짜 또는 순수 백필 항목만 업데이트 (실시간/확정 항목 보호)
+            // 비거래일(주말/공휴일)의 라이브 스냅샷(isFixed:false)은 시세 무변동 구간이라 권위값이 아니다 →
+            // 직전 거래일 종가 carry-forward로 덮어쓰기(치유) 허용. crypto(24시간)·현금성은
+            // isNonTradingDayForAccount가 false라 제외 → 주말 라이브값이 그대로 보호됨.
+            const isNonTradingHeal = isNonTradingDayForAccount(accountType, ds, krH, usH);
+            // 없는 날짜 또는 순수 백필 항목만 업데이트 (거래일 실시간/확정 항목 보호)
             const isProtectedEntry = existing && (
-              (!existing.isFixed && existing.evalAmount > 0) ||
+              (!existing.isFixed && existing.evalAmount > 0 && !isNonTradingHeal) ||
               (existing.isFixed && existing.adjustedAmount !== undefined)
             );
             if (!isProtectedEntry) {
@@ -198,10 +210,10 @@ export const useHistoryBackfill = ({
         }
       }
 
-      return updates.length > 0 ? { updates, prin, liveOverrideDate } : null;
+      return updates.length > 0 ? { updates, prin, liveOverrideDate, accountType } : null;
     };
 
-    const applyUpdates = (hist, updates, prin, liveOverrideDate = null) => {
+    const applyUpdates = (hist, updates, prin, liveOverrideDate = null, accountType = 'portfolio') => {
       if (!updates.length) return hist;
       const newHist = [...hist];
       let changed = false;
@@ -211,7 +223,10 @@ export const useHistoryBackfill = ({
           const entry = newHist[idx];
           // 보호 조건: 실시간 기록(isFixed: false + evalAmount > 0, 단 liveOverrideDate 예외)
           //          또는 사용자 확정(isFixed: true + adjustedAmount 있음)
-          const isProtected = (!entry.isFixed && (entry.evalAmount ?? 0) > 0 && date !== liveOverrideDate) ||
+          // 예외: 비거래일(주말/공휴일)의 라이브 스냅샷(시장 계좌)은 시세 무변동 구간이라 권위값이
+          //       아니므로 직전 거래일 종가 carry-forward로 치유 허용(값이 실제로 다를 때만 교체).
+          const isNonTradingHeal = isNonTradingDayForAccount(accountType, date, krH, usH);
+          const isProtected = (!entry.isFixed && (entry.evalAmount ?? 0) > 0 && date !== liveOverrideDate && !isNonTradingHeal) ||
                               (entry.isFixed && entry.adjustedAmount !== undefined);
           if (!isProtected && Math.round(entry.evalAmount ?? 0) !== Math.round(evalAmt)) {
             const next = { ...entry, evalAmount: evalAmt, isFixed };
@@ -229,20 +244,20 @@ export const useHistoryBackfill = ({
 
     const activeP = portfolios.find(p => p.id === activePortfolioId);
     const activeRes = activeP ? computeUpdates(activeP) : null;
-    if (activeRes) setHistory(prev => applyUpdates(prev, activeRes.updates, activeRes.prin, activeRes.liveOverrideDate));
+    if (activeRes) setHistory(prev => applyUpdates(prev, activeRes.updates, activeRes.prin, activeRes.liveOverrideDate, activeRes.accountType));
 
     let portfoliosChanged = false;
     const nextPortfolios = portfolios.map(p => {
       if (p.id === activePortfolioId) return p;
       const res = computeUpdates(p);
       if (!res) return p;
-      const updated = applyUpdates(p.history || [], res.updates, res.prin, res.liveOverrideDate);
+      const updated = applyUpdates(p.history || [], res.updates, res.prin, res.liveOverrideDate, res.accountType);
       if (updated === (p.history || [])) return p;
       portfoliosChanged = true;
       return { ...p, history: updated };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
-  }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey, krEffectiveDateKey]);
+  }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey, krEffectiveDateKey, marketHolidays]);
 
 };
 
