@@ -374,6 +374,41 @@ export const formatVeryShortDate = (s) => {
   const p = s.split('-');
   return p.length === 3 ? `${p[1]}/${p[2]}` : s;
 };
+
+// ── 역사적 경기침체 구간 (차트 음영) ──
+// NBER(전미경제연구소) 공식 미국 경기침체 구간 — FRED가 회색 음영으로 표시하는 것과 동일.
+// 미국발 침체는 코스피 등 세계 증시에 파급되므로 '세계적 침체 구간' 참조로 사용한다.
+// 신규 침체 발표 시(NBER 공식 확정 기준) 배열에 {start, end, label}을 1건 추가.
+export const RECESSION_PERIODS: { start: string; end: string; label: string }[] = [
+  { start: '1990-07-01', end: '1991-03-31', label: '90년대 초 침체' },
+  { start: '2001-03-01', end: '2001-11-30', label: '닷컴 버블 붕괴' },
+  { start: '2007-12-01', end: '2009-06-30', label: '글로벌 금융위기' },
+  { start: '2020-02-01', end: '2020-04-30', label: '코로나19 침체' },
+];
+
+// 차트 category(날짜) 축에 맞춰 각 침체구간을 실제 데이터 날짜 경계로 스냅한다.
+// XAxis가 category 축이라 ReferenceArea의 x1/x2는 데이터에 존재하는 날짜여야 정확히 렌더된다.
+// dates: 'YYYY-MM-DD' 문자열 배열(정렬 여부 무관 — 내부에서 정렬 후 처리).
+// 조회기간과 겹치는 침체구간만, 그 경계를 조회기간 안쪽 데이터 날짜로 클램프하여 반환.
+export function recessionBandsForDates(
+  dates: string[]
+): { x1: string; x2: string; label: string }[] {
+  if (!dates || dates.length < 2) return [];
+  const sorted = [...dates].sort();
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const bands: { x1: string; x2: string; label: string }[] = [];
+  for (const r of RECESSION_PERIODS) {
+    if (r.end < first || r.start > last) continue; // 조회기간과 미겹침
+    const lo = r.start < first ? first : r.start;
+    const hi = r.end > last ? last : r.end;
+    const x1 = sorted.find(d => d >= lo);          // lo 이상인 첫 데이터 날짜
+    let x2: string | undefined;                     // hi 이하인 마지막 데이터 날짜
+    for (let i = sorted.length - 1; i >= 0; i--) { if (sorted[i] <= hi) { x2 = sorted[i]; break; } }
+    if (x1 && x2 && x1 <= x2) bands.push({ x1, x2, label: r.label });
+  }
+  return bands;
+}
 export const getSeededRandom = (seedStr) => {
   let hash = 0;
   for (let i = 0; i < seedStr.length; i++) hash = Math.imul(31, hash) + seedStr.charCodeAt(i) | 0;

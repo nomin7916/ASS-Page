@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
-import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates } from '../utils';
 
 const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
 const nextRowColor = (cur: string): string => {
@@ -256,6 +256,12 @@ export default function IntegratedDashboard({
     const hit = intChartData.find(d => d.date >= appTrackingStartDate);
     return hit ? hit.date : null;
   }, [appTrackingStartDate, intChartData]);
+
+  // 조회기간에 겹치는 역사적 경기침체(NBER) 구간을 실제 데이터 날짜로 스냅해 음영 표시
+  const recessionBands = useMemo(
+    () => recessionBandsForDates(intChartData.map(d => d.date)),
+    [intChartData]
+  );
 
   const focusNextMatongInput = useCallback((el, dir) => {
     const tr = el.closest('tr');
@@ -1009,6 +1015,27 @@ export default function IntegratedDashboard({
                       <YAxis yAxisId="left" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => `${v.toFixed(1)}%`} width={48} />
                       <YAxis yAxisId="right" orientation="right" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={v => (v >= 1e8 ? (v/1e8).toFixed(1)+'억' : (v/1e4).toFixed(0)+'만')} width={55} domain={(() => { if (rightAxisZoom === 0 || intChartData.length === 0) return [0, 'auto']; const vals = intChartData.flatMap(d => [d.costAmount, d.evalAmount]).filter(v => v != null && v > 0); if (vals.length === 0) return [0, 'auto']; const dataMin = Math.min(...vals); return [Math.max(0, dataMin * (rightAxisZoom / 100) * 0.98), 'auto']; })()} />
                       <RechartsTooltip content={() => null} />
+                      {/* 역사적 경기침체(NBER) 음영 — 데이터 선보다 먼저 선언해 뒤쪽 배경으로 렌더 */}
+                      {recessionBands.map((b, i) => (
+                        <ReferenceArea
+                          key={`rec-${i}`}
+                          yAxisId="left"
+                          x1={b.x1}
+                          x2={b.x2}
+                          fill="#94a3b8"
+                          fillOpacity={0.13}
+                          stroke="none"
+                          label={({ viewBox }) => {
+                            const w = viewBox?.width ?? 0;
+                            if (w < 48) return null;
+                            const cx = (viewBox?.x ?? 0) + w / 2;
+                            const ty = (viewBox?.y ?? 0) + 10;
+                            return (
+                              <text x={cx} y={ty} textAnchor="middle" fill="#94a3b8" fillOpacity={0.75} fontSize={9} fontWeight={600}>{b.label}</text>
+                            );
+                          }}
+                        />
+                      ))}
                       <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={false} />
                       <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={false} />
                       <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} fill="url(#intEvalGrad)" dot={false} activeDot={false} />
@@ -1082,6 +1109,12 @@ export default function IntegratedDashboard({
                     <span className="flex items-center gap-1.5 text-[11px] text-amber-400/90">
                       <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: '#fbbf24' }} />
                       앱 기록 시작 ({appTrackingStartDate}) · 이전 데이터는 역추산이라 부정확할 수 있음
+                    </span>
+                  )}
+                  {recessionBands.length > 0 && (
+                    <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                      <span className="inline-block w-4 h-3 rounded-sm" style={{ backgroundColor: 'rgba(148,163,184,0.28)' }} />
+                      경기침체(NBER)
                     </span>
                   )}
                 </div>

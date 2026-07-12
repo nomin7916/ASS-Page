@@ -1,8 +1,8 @@
 ﻿// @ts-nocheck
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
-import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus } from '../utils';
+import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
@@ -85,6 +85,12 @@ export default function PortfolioChart({
   };
 
   const chartDateSet = new Set(finalChartData.map(d => d.date));
+  // 조회기간에 겹치는 역사적 경기침체(NBER) 구간을 실제 데이터 날짜로 스냅해 음영 표시
+  // (드래그 선택 시 매 mousemove 재렌더 → 정렬 반복 방지 위해 memo)
+  const recessionBands = useMemo(
+    () => recessionBandsForDates(finalChartData.map(d => d.date)),
+    [finalChartData]
+  );
   const isOverseas = activePortfolioAccountType === 'overseas';
   const fmtMoney = (v) => isOverseas
     ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
@@ -800,6 +806,27 @@ export default function PortfolioChart({
             {isXl && effectiveShowIndicators.btc && indicatorHistoryMap.btc && <YAxis yAxisId="right-btc" orientation="right" stroke="#f7931a" tick={{ fontSize: 9 }} tickFormatter={v => '$' + Math.round(v).toLocaleString()} width={72} domain={['dataMin', 'dataMax']}><Label value="BTC" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#f7931a', fontSize: 11, fontWeight: 500 }} /></YAxis>}
             {isXl && effectiveShowIndicators.eth && indicatorHistoryMap.eth && <YAxis yAxisId="right-eth" orientation="right" stroke="#627eea" tick={{ fontSize: 9 }} tickFormatter={v => '$' + Math.round(v).toLocaleString()} width={72} domain={['dataMin', 'dataMax']}><Label value="ETH" angle={90} position="insideRight" offset={14} style={{ textAnchor: 'middle', fill: '#627eea', fontSize: 11, fontWeight: 500 }} /></YAxis>}
             <RechartsTooltip content={() => null} />
+            {/* 역사적 경기침체(NBER) 음영 — 데이터 선보다 먼저 선언해 뒤쪽 배경으로 렌더 */}
+            {recessionBands.map((b, i) => (
+              <ReferenceArea
+                key={`rec-${i}`}
+                yAxisId="left"
+                x1={b.x1}
+                x2={b.x2}
+                fill="#94a3b8"
+                fillOpacity={0.13}
+                stroke="none"
+                label={({ viewBox }) => {
+                  const w = viewBox?.width ?? 0;
+                  if (w < 48) return null;
+                  const cx = (viewBox?.x ?? 0) + w / 2;
+                  const ty = (viewBox?.y ?? 0) + 11;
+                  return (
+                    <text x={cx} y={ty} textAnchor="middle" fill="#94a3b8" fillOpacity={0.75} fontSize={9} fontWeight={600}>{b.label}</text>
+                  );
+                }}
+              />
+            ))}
             {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
             {showPrincipal && <Line yAxisId="right" type="monotone" dataKey="principalAmount" name="투자원금" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="5 3" connectNulls />}
             {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="principalReturnRate" name="나의 수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} connectNulls />}
