@@ -1058,17 +1058,23 @@ export default function App() {
     });
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
-      // 비교종목 base는 종목별로 자기 데이터의 첫 non-null 시점을 사용.
-      // baseItem 일괄 적용 시, baseItem 시점에 그 비교종목 가격이 0/null이면 (예: 상장 이전·캐시 미수집)
-      // 전 구간 rate가 null이 되어 connectNulls=false 차트 라인이 통째로 사라지는 문제 방지.
-      const compBases = compStocks.map((_, ci) => {
-        const firstWithData = rawData.find(d => d[`comp${ci + 1}Point`] != null && d[`comp${ci + 1}Point`] > 0);
-        return firstWithData?.[`comp${ci + 1}Point`] || 0;
-      });
+      // 지수·비교종목·시장지표 base는 각 시리즈의 조회기간 내 첫 non-null 시점(=조회시작)을 사용한다.
+      // '나의 수익률'(evalAmount)만 baseItem(포트폴리오 최초 평가일)을 0% 기준으로 쓰고, 시세 시리즈에
+      // baseItem을 쓰면 안 된다 — 포트폴리오 최초 평가일이 조회시작보다 늦을 때 그 늦은 날의 지수값이
+      // 0% 기준이 되어 조회시작 지점이 큰 음수(예: KOSPI −70%)로 찍히던 버그(정보패널 라벨·구간
+      // 수익률은 조회시작 시점을 base로 쓰므로 라인과 불일치). 또 baseItem 시점에 특정 시리즈 값이
+      // 0/null이면(상장 이전·캐시 미수집) 전 구간 rate가 null이 되어 라인이 통째로 사라진다.
+      const firstBase = (pk) => rawData.find(d => d[pk] != null && d[pk] > 0)?.[pk] || 0;
+      const kospiBase = firstBase('kospiPoint');
+      const sp500Base = firstBase('sp500Point');
+      const nasdaqBase = firstBase('nasdaqPoint');
+      const indBases = {};
+      INDICATOR_CHART_KEYS.forEach(k => { indBases[k] = firstBase(`${k}Point`); });
+      const compBases = compStocks.map((_, ci) => firstBase(`comp${ci + 1}Point`));
       return rawData.map(item => {
         const indRates = {};
         INDICATOR_CHART_KEYS.forEach(k => {
-          const basePoint = baseItem[`${k}Point`];
+          const basePoint = indBases[k];
           const curPoint = item[`${k}Point`];
           if (basePoint > 0 && curPoint != null) {
             indRates[`${k}Rate`] = ((curPoint / basePoint) - 1) * 100;
@@ -1078,9 +1084,9 @@ export default function App() {
           ...item,
           returnRate: (baseItem.evalAmount > 0 && item.evalAmount > 0) ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : item.returnRate,
           principalReturnRate: (baseItem.evalAmount > 0 && item.principalReturnRate != null) ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : item.principalReturnRate,
-          kospiRate: baseItem.kospiPoint > 0 ? ((item.kospiPoint / baseItem.kospiPoint) - 1) * 100 : 0,
-          sp500Rate: baseItem.sp500Point > 0 ? ((item.sp500Point / baseItem.sp500Point) - 1) * 100 : 0,
-          nasdaqRate: baseItem.nasdaqPoint > 0 ? ((item.nasdaqPoint / baseItem.nasdaqPoint) - 1) * 100 : 0,
+          kospiRate: kospiBase > 0 ? ((item.kospiPoint / kospiBase) - 1) * 100 : 0,
+          sp500Rate: sp500Base > 0 ? ((item.sp500Point / sp500Base) - 1) * 100 : 0,
+          nasdaqRate: nasdaqBase > 0 ? ((item.nasdaqPoint / nasdaqBase) - 1) * 100 : 0,
           ...Object.fromEntries(compStocks.map((_, ci) => {
             const pk = `comp${ci + 1}Point`;
             const rk = `comp${ci + 1}Rate`;
