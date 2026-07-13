@@ -2339,6 +2339,12 @@ export default function App() {
           holidays={marketHolidays}
           notify={notify}
           confirm={confirm}
+          metricsHistory={intMonthlyHistory}
+          todayReturnRate={intTotals.returnRate}
+          fxHistory={indicatorHistoryMap?.usdkrw}
+          us10yHistory={indicatorHistoryMap?.us10y}
+          liveFx={marketIndicators?.usdkrw}
+          liveUs10y={marketIndicators?.us10y}
         />
 
         {/* Drive 백업 이력 모달 */}

@@ -462,6 +462,26 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   `pad`를 effect deps에 넣어 클로저로 판별(setState 업데이터 내 부작용 금지). 날짜 키는 `${y}-${pad2(m+1)}-${pad2(d)}`
   로 직접 조립(TZ 안전, `new Date('YYYY-MM-DD')` UTC 파싱 금지), 오늘 판정은 `getTodayKST()`. 주말(일 red/토 blue)·
   KR 공휴일(`useMarketCalendar` holidays.kr) 색상 + 오늘 파란 배지.
+- **날짜별 포트폴리오 스냅샷 표시 (display-derived, ⚠️ persist 무관)**: 각 셀은 날짜 아래 3줄 축약
+  (총자산 억/만·그날 오늘수익 절대액+%·누적수익율), 메모 패드는 MEMO 헤더 아래 밴드에 풀 숫자
+  (`총자산 / 수익 / 수익율 / 환율 / US10Y`)를 표시한다. **그 날짜의 실제 기록**만 표시(기록 없는
+  날·미래는 스냅샷 없음). 손익 색상은 한국식(이익 red / 손실 blue).
+  - **데이터 소스(전부 App.tsx에서 이미 계산됨 → props로 전달만)**: 총자산/오늘수익/누적수익율 =
+    `intMonthlyHistory`(`evalAmount`/`dodAbsChange`+`dodChange`/`monthlyChange`, 날짜 키 = `date`).
+    환율/US10Y = `indicatorHistoryMap.usdkrw`/`.us10y`(날짜→값), 오늘값은 라이브 `marketIndicators.usdkrw`/`.us10y`.
+    비거래일 환율/US10Y는 `resolveOnOrBefore`로 직전 거래일값 carry-forward.
+  - **파생값이라 저장 안 함**: `calendarMemos` 구조·영속화 5지점 **불변**(스냅샷을 메모에 박제하지
+    않음 — 매 렌더 라이브 재계산). 새 저장 필드 추가 아님 → `portfolioStructureKey`도 무관.
+  - **⚠️ 헤더 일치는 `latestRecDate` 기준(getTodayKST 아님)**: '오늘 칸 = 통합 헤더 카드 정확 일치'
+    보장을 위해, `todayReturnRate`(=`intTotals.returnRate`) 누적 오버라이드와 라이브 환율/US10Y는
+    **최신 기록일 셀**(`latestRecDate` = `intMonthlyHistory[0].date` = 헤더의 `todayRec.date` =
+    `effectiveDate` 기준)에 적용한다. `getTodayKST()`(달력상 오늘, 파란 배지 전용)에 걸면 **00:00~07:30
+    KST 구간**엔 `getEffectiveDate()`가 전일을 반환해 둘이 어긋나 → 오늘 칸이 비고 헤더 누적이 어느
+    셀에도 안 뜨는 회귀가 난다(3개 리뷰어 독립 확인). 배지용 `isToday`와 헤더값용 `latestRecDate`는
+    **분리 유지**.
+  - **범위 밖(의도)**: 시세 로드 실패 시 `computedIntHistory` 이상치 가드(eval<전일 10%)가 전일값을
+    carry-forward하면 셀 총자산(전일값)과 헤더(붕괴된 라이브값)가 갈릴 수 있으나, 이는 깨진 로딩
+    상태로 carry-forward가 더 정확 → 미보정.
 
 ---
 

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2 } from 'lucide-react';
 import { BG, Z } from '../design';
 import { generateId } from '../utils';
@@ -15,10 +15,23 @@ const firstLine = (s) => {
   return i === -1 ? t : t.slice(0, i);
 };
 
+// 포트폴리오 스냅샷 표시용 포맷터 (달력 칸 = 억/만 축약, 메모장 = 풀 숫자).
+const nfmt = (n) => Math.round(n).toLocaleString('en-US');
+const fmtAbbrev = (n) => {
+  const a = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (a >= 1e8) return `${sign}₩${(a / 1e8).toFixed(2)}억`;
+  if (a >= 1e4) return `${sign}₩${nfmt(a / 1e4)}만`;
+  return `${sign}₩${nfmt(a)}`;
+};
+const fmtPct = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+// 한국식 손익 색상: 이익=빨강, 손실=파랑, 0=회색.
+const pnlColor = (v) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-blue-400' : 'text-gray-400');
+
 // 달력 메모 모달 — 통합 대시보드 헤더의 달력 아이콘으로 진입.
 // 데이터: { [YYYY-MM-DD]: { id, content, createdAt }[] } (앱 레벨, Drive STATE에 영속).
 // 하루 배열은 append 순(오래된 메모 위 / 새 메모 아래)으로 표시.
-export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm }) {
+export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null }) {
   const todayStr = getTodayKST();
   const tp = todayStr.split('-');
   const ty = parseInt(tp[0], 10);
@@ -51,6 +64,23 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     document.addEventListener('keydown', h);
     return () => document.removeEventListener('keydown', h);
   }, [open, pad, onClose]);
+
+  // 날짜별 포트폴리오 스냅샷 (그 날짜의 실제 기록) — 통합 대시보드 intMonthlyHistory 기반.
+  const metricsByDate = useMemo(() => {
+    const m = {};
+    (metricsHistory || []).forEach((h) => { if (h && h.date) m[h.date] = h; });
+    return m;
+  }, [metricsHistory]);
+  // 헤더 카드가 대표하는 '오늘' 기록의 날짜 = 최신 기록일(effectiveDate 기준, getTodayKST()와
+  // 00:00~07:30 KST엔 다를 수 있음). 헤더값 오버라이드(todayReturnRate)·라이브 지표는 이 셀에 적용.
+  const latestRecDate = useMemo(() => {
+    let latest = null;
+    (metricsHistory || []).forEach((h) => { if (h && h.date && (!latest || h.date > latest)) latest = h.date; });
+    return latest;
+  }, [metricsHistory]);
+  // 환율·US10Y 과거값 carry-forward용 정렬 키(문자열 YYYY-MM-DD = 시간순).
+  const fxKeys = useMemo(() => (fxHistory ? Object.keys(fxHistory).sort() : []), [fxHistory]);
+  const us10yKeys = useMemo(() => (us10yHistory ? Object.keys(us10yHistory).sort() : []), [us10yHistory]);
 
   if (!open) return null;
 
@@ -99,6 +129,17 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     const arr = (next[dayKey] || []).filter((m) => m.id !== memoId);
     if (arr.length) next[dayKey] = arr; else delete next[dayKey];
     onUpdateMemos(next);
+  };
+
+  // 해당 날짜 이전(포함) 가장 최근 지표값 (비거래일은 직전 거래일 값 이월).
+  const resolveOnOrBefore = (map, keys, dateKey) => {
+    if (!map) return null;
+    if (map[dateKey] != null) return map[dateKey];
+    let res = null;
+    for (let j = 0; j < keys.length; j++) {
+      if (keys[j] <= dateKey) res = map[keys[j]]; else break;
+    }
+    return res;
   };
 
   return (
@@ -158,20 +199,22 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                 const valid = dayNum >= 1 && dayNum <= daysInMonth;
                 const dow = i % 7;
                 if (!valid) {
-                  return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: '98px' }} />;
+                  return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: '130px' }} />;
                 }
                 const key = dayKeyOf(viewYear, viewMonth, dayNum);
                 const isToday = key === todayStr;
                 const isHol = krHol.includes(key);
                 const dayMemos = memos[key] || [];
                 const numColor = isHol || dow === 0 ? 'text-red-400' : dow === 6 ? 'text-blue-400' : 'text-gray-300';
+                const rawMetric = metricsByDate[key];
+                const metricCum = rawMetric ? ((key === latestRecDate && todayReturnRate != null) ? todayReturnRate : rawMetric.monthlyChange) : null;
                 return (
                   <div
                     key={i}
                     onClick={() => openNew(key)}
                     title="클릭하여 메모 추가"
                     className="border-r border-b border-gray-800/60 p-1 flex flex-col gap-0.5 cursor-pointer hover:bg-white/[0.03] transition-colors"
-                    style={{ minHeight: '98px' }}
+                    style={{ minHeight: '130px' }}
                   >
                     <div className="flex items-center justify-between shrink-0 px-0.5">
                       <span
@@ -181,7 +224,20 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       </span>
                       {dayMemos.length > 0 && <span className="text-[9px] text-gray-600 tabular-nums">{dayMemos.length}</span>}
                     </div>
-                    <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '72px' }}>
+                    {rawMetric && (
+                      <div className="shrink-0 px-0.5 leading-none">
+                        <div className="text-[10px] font-semibold text-gray-200 tabular-nums truncate">{fmtAbbrev(rawMetric.evalAmount)}</div>
+                        {rawMetric.dodAbsChange != null && (
+                          <div className={`text-[9px] tabular-nums truncate mt-[1px] ${pnlColor(rawMetric.dodAbsChange)}`}>
+                            {fmtAbbrev(rawMetric.dodAbsChange)} {fmtPct(rawMetric.dodChange)}
+                          </div>
+                        )}
+                        <div className={`text-[9px] tabular-nums truncate mt-[1px] ${pnlColor(metricCum)}`}>
+                          누적 {fmtPct(metricCum)}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '50px' }}>
                       {dayMemos.map((m) => (
                         <div
                           key={m.id}
@@ -245,6 +301,28 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               </div>
               <div className="w-10" />
             </div>
+            {/* 포트폴리오 스냅샷 (그 날짜 기준) — 기록 있는 날만 표시 */}
+            {(() => {
+              const raw = metricsByDate[pad.dayKey];
+              if (!raw) return null;
+              const isT = pad.dayKey === latestRecDate;
+              const cum = (isT && todayReturnRate != null) ? todayReturnRate : raw.monthlyChange;
+              const fx = (isT && liveFx != null) ? liveFx : resolveOnOrBefore(fxHistory, fxKeys, pad.dayKey);
+              const y10 = (isT && liveUs10y != null) ? liveUs10y : resolveOnOrBefore(us10yHistory, us10yKeys, pad.dayKey);
+              return (
+                <div className="bg-black px-3 py-1.5 border-b border-gray-900 text-center select-none leading-snug">
+                  <span className="text-[11px] font-semibold tabular-nums text-gray-300">
+                    총자산: <span className="text-gray-100">{nfmt(raw.evalAmount)}</span>
+                    {' / '}수익: {raw.dodAbsChange != null
+                      ? <span className={pnlColor(raw.dodAbsChange)}>{raw.dodAbsChange < 0 ? '-' : ''}₩{nfmt(Math.abs(raw.dodAbsChange))}({fmtPct(raw.dodChange)})</span>
+                      : <span className="text-gray-500">-</span>}
+                    {' / '}수익율: <span className={pnlColor(cum)}>{fmtPct(cum)}</span>
+                    {' / '}환율 :<span className="text-gray-100">{fx != null ? String(Math.round(fx)) : '-'}</span>
+                    {' / '}US10Y : <span className="text-gray-100">{y10 != null ? y10.toFixed(2) + '%' : '-'}</span>
+                  </span>
+                </div>
+              );
+            })()}
             {/* 줄선 메모 입력 */}
             <textarea
               className="w-full text-gray-200 text-[15px] outline-none resize-none caret-sky-400 placeholder-gray-700"
