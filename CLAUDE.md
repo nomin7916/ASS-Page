@@ -431,6 +431,38 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
 - `compact=true`: 통합 대시보드 뷰, 계좌별 월 합계만 표시, rowColor 그라데이션 텍스트
 - App.tsx 배치: non-compact ~1933줄 / compact ~2110줄 (`showIntegratedDashboard` 조건)
 
+### 메모 달력 (calendarMemos) — 헤더 달력 아이콘 → 날짜별 다중 메모 (⚠️ 회귀 주의)
+
+통합 대시보드 헤더의 **달력 아이콘**(`AccountTabBar` 복원 아이콘 옆, `showIntegratedDashboard`
+프래그먼트 내부 = 통합 대시보드에서만 노출)으로 여는 구글 캘린더식 월 그리드 모달
+(`CalendarModal.tsx`). 날짜 셀 클릭 → 사진 형식 메모 패드(핑크 X 취소 / 퍼플 체크 저장 /
+날짜 / MEMO 그라데이션 / 줄선 textarea — `RebalancingPanel`의 `noteExpandModal` 스타일 복제)
+→ 저장 시 셀에 한 줄 표시, 한 줄 클릭 → 펼침/편집, 같은 날 **append 누적**(오래된 위 · 새 아래).
+
+- **데이터 모델**: 앱 레벨 `calendarMemos: { [YYYY-MM-DD]: { id, content, createdAt }[] }`
+  (특정 포트폴리오에 종속 안 됨, `intHistory`와 동급). 하루 배열 `push`로 append → 표시 순서가
+  곧 생성 순서(오래된 위/새 아래). 빈 메모는 생성 안 함, 편집 후 비면 삭제, 배열이 비면 날짜 키 제거.
+- **영속화 5지점(⚠️ 신규 저장 필드 추가 시 동일 패턴 필수)**: ① `App.tsx` 저장 payload
+  literal(`const state = {...}`)에 `calendarMemos` 포함 ② **`portfolioStructureKey`에 `JSON.stringify(calendarMemos)`
+  지문 추가 — 없으면 `portfolioUpdatedAt` 미상승 → `useDriveSync` 저장 가드가 STATE 저장을 스킵**
+  (`historyVerifyKey`/`isTest`와 동일 버그류) ③ 저장 effect deps에 `calendarMemos` ④ `applyStateData`
+  ⑤ `applyBackupData` **양쪽** 복원(`if (stateData.calendarMemos) setCalendarMemos(...)` — 한쪽
+  누락 시 백업 복원이 메모를 지움). localStorage 금지(사용자 데이터 → Drive STATE만, 멀티계정 오염 방지).
+- **⚠️ PC 백업(`handleDownloadStateFile`)은 `{ ...saveStateRef.current, portfolios, portfolioUpdatedAt }`
+  스프레드로 저장** — 과거 필드를 손으로 나열하던 방식은 `calendarMemos` 등 신규 필드를 누락해
+  PC 파일 백업/복원 왕복에서 유실됐다(한국 ISP가 vercel.app 차단 → 로컬 파일 백업 의존이라 중요).
+  `handleAppClose`와 동일 패턴 → 앞으로 추가되는 저장 필드가 자동 포함(수동 나열 금지).
+- **z-index/피드백 제약(⚠️)**: 모달 = `Z.dialog`(1000), 메모 패드 = `Z.dialog+10`(1010). `ConfirmDialog`도
+  z-1000이고 App DOM상 `CalendarModal`보다 **앞**이라 동일 z에서 달력이 위에 그려짐 → **모달 위에서
+  `confirm()`(ConfirmDialog)·`notify()`(토스트 z-999)는 가려짐**. 따라서 메모 삭제는 confirm 없이
+  즉시 삭제(셀에서 사라지는 게 피드백, `RebalancingPanel deleteNote` 패턴). 모달 내에서 confirm/notify
+  의존 금지.
+- **UX 세부**: 메모 패드 백드롭 오클릭은 **입력이 비었을 때만** 닫음(`if (!pad.val.trim())`) — 작성 중
+  오클릭으로 텍스트 유실 방지(X/Esc/저장은 의도적 취소로 유지). Esc는 패드부터 닫고(없으면 모달 닫기),
+  `pad`를 effect deps에 넣어 클로저로 판별(setState 업데이터 내 부작용 금지). 날짜 키는 `${y}-${pad2(m+1)}-${pad2(d)}`
+  로 직접 조립(TZ 안전, `new Date('YYYY-MM-DD')` UTC 파싱 금지), 오늘 판정은 `getTodayKST()`. 주말(일 red/토 blue)·
+  KR 공휴일(`useMarketCalendar` holidays.kr) 색상 + 오늘 파란 배지.
+
 ---
 
 ## 다음 작업 후보 (Phase 11~)
