@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock, ClipboardPaste, ChevronDown, Settings } from 'lucide-react';
+import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock, ClipboardPaste, ChevronDown, Settings, Calendar } from 'lucide-react';
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 import HeaderMarketChips from './HeaderMarketChips';
 
@@ -33,6 +33,7 @@ export default function AccountTabBar({
   activeLinks = [],
   setActiveLinks,
   marketIndicators,
+  onOpenCalendar,
 }) {
   const stateFileInputRef = React.useRef(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -327,6 +328,13 @@ export default function AccountTabBar({
               <ArchiveRestore size={14} />
             </button>
             <input type="file" ref={stateFileInputRef} onChange={handleImportStateFile} className="hidden" accept=".json" />
+            <button
+              onClick={onOpenCalendar}
+              title="메모 달력"
+              className="p-1.5 hover:bg-gray-800 rounded transition text-sky-400 hover:text-sky-300"
+            >
+              <Calendar size={14} />
+            </button>
           </>
         )}
       </div>
