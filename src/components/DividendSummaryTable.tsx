@@ -208,7 +208,129 @@ function parseDividendApiResult(result) {
   return { amounts, exDates };
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] } }) {
+// 분배금 현황 헤더 사이트 링크 바 — 7개 버튼(사용자 정의 이니셜 1자 + URL) + 편집 팝오버.
+const DIV_LINK_COUNT = 7;
+const normalizeLinkUrl = (u) => {
+  const s = String(u || '').trim();
+  if (!s) return '';
+  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+};
+
+function DividendLinkBar({ links, onChange }) {
+  const [editing, setEditing] = useState(false);
+  const [anchor, setAnchor] = useState(null); // {top,right} — 카드 overflow-hidden 탈출용 fixed 좌표
+  const wrapRef = useRef(null);
+  const gearRef = useRef(null);
+  const slots = useMemo(() => Array.from({ length: DIV_LINK_COUNT }, (_, i) => ({
+    initial: String(links?.[i]?.initial ?? '').slice(0, 1),
+    url: String(links?.[i]?.url ?? ''),
+  })), [links]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const onDown = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setEditing(false); };
+    const onDismiss = () => setEditing(false);
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('resize', onDismiss);
+    window.addEventListener('scroll', onDismiss, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('resize', onDismiss);
+      window.removeEventListener('scroll', onDismiss, true);
+    };
+  }, [editing]);
+
+  const openEditor = () => {
+    if (gearRef.current) {
+      const r = gearRef.current.getBoundingClientRect();
+      setAnchor({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+    }
+    setEditing(true);
+  };
+
+  const patch = (i, field, value) => {
+    if (!onChange) return;
+    onChange(slots.map((s, idx) => idx === i
+      ? { ...s, [field]: field === 'initial' ? String(value).slice(0, 1) : value }
+      : s));
+  };
+
+  const openLink = (s) => {
+    const url = normalizeLinkUrl(s.url);
+    if (url) window.open(url, '_blank', 'noopener');
+    else openEditor();
+  };
+
+  return (
+    <div ref={wrapRef} className="relative flex items-center gap-1">
+      {slots.map((s, i) => {
+        const hasUrl = !!normalizeLinkUrl(s.url);
+        return (
+          <button
+            key={i}
+            onClick={() => openLink(s)}
+            title={hasUrl ? normalizeLinkUrl(s.url) : '사이트 링크 미설정 — ⚙️로 편집'}
+            className={`w-6 h-6 rounded flex items-center justify-center text-[11px] font-bold transition-all active:scale-95 border ${
+              hasUrl
+                ? 'border-sky-600/50 bg-sky-900/30 text-sky-300 hover:bg-sky-800/50 hover:border-sky-500'
+                : 'border-dashed border-gray-700 text-gray-600 hover:border-gray-500 hover:text-gray-400'
+            }`}
+          >
+            {s.initial || <span className="text-[9px] opacity-50">{i + 1}</span>}
+          </button>
+        );
+      })}
+      <button
+        ref={gearRef}
+        onClick={() => (editing ? setEditing(false) : openEditor())}
+        title="사이트 링크 편집"
+        className={`w-6 h-6 rounded flex items-center justify-center transition-all active:scale-95 border ${
+          editing ? 'border-gray-500 bg-gray-700/50 text-gray-200' : 'border-gray-700 text-gray-500 hover:bg-gray-700/40 hover:text-gray-300'
+        }`}
+      >
+        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+      {editing && (
+        <div
+          style={{ position: 'fixed', top: anchor?.top ?? 0, right: anchor?.right ?? 8, zIndex: 1000 }}
+          className="w-[300px] bg-[#0f172a] border border-gray-700 rounded-lg shadow-2xl p-3"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-gray-200 text-xs font-bold">🔗 사이트 링크 설정</span>
+            <button onClick={() => setEditing(false)} className="text-gray-500 hover:text-gray-300 text-sm leading-none">✕</button>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {slots.map((s, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <input
+                  value={s.initial}
+                  onChange={e => patch(i, 'initial', e.target.value)}
+                  maxLength={1}
+                  placeholder={String(i + 1)}
+                  className="w-7 h-7 shrink-0 bg-[#1e293b] border border-gray-600 rounded text-center text-[11px] text-sky-300 font-bold outline-none focus:border-sky-500"
+                />
+                <input
+                  value={s.url}
+                  onChange={e => patch(i, 'url', e.target.value)}
+                  placeholder="https://..."
+                  className="flex-1 min-w-0 h-7 bg-[#1e293b] border border-gray-600 rounded px-2 text-[11px] text-gray-200 outline-none focus:border-sky-500"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-[10px] text-gray-500 leading-relaxed">
+            이니셜(영문·한글 1자)과 링크를 입력하세요. 버튼을 누르면 새 탭으로 열립니다.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -1289,6 +1411,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           </div>
         )}
         <div className="ml-auto flex items-center gap-1.5 shrink-0 self-center">
+          <DividendLinkBar links={dividendLinks} onChange={setDividendLinks} />
+          <span className="w-px h-5 bg-gray-700/60 mx-0.5" />
           {activeTab === 'actual' && addPortfolioExtraRow && (
             <button
               onClick={() => addPortfolioExtraRow(nonGoldPortfolios[0]?.id)}

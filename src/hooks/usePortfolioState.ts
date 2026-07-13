@@ -22,6 +22,10 @@ export function usePortfolioState({
   const [intHistory, setIntHistory] = useState([]);
   const [customLinks, setCustomLinks] = useState(UI_CONFIG.DEFAULT_LINKS);
   const [overseasLinks, setOverseasLinks] = useState(UI_CONFIG.OVERSEAS_DEFAULT_LINKS);
+  // 분배금 현황 헤더 사이트 링크(사용자 정의 이니셜 1자 + URL). 항상 7슬롯.
+  const [dividendLinks, setDividendLinks] = useState(
+    () => Array.from({ length: 7 }, () => ({ initial: '', url: '' }))
+  );
   const [adminAccessAllowed, setAdminAccessAllowed] = useState(false);
   const [depositSortConfig, setDepositSortConfig] = useState({ key: null, direction: 1 });
   const [depositSortConfig2, setDepositSortConfig2] = useState({ key: null, direction: 1 });
@@ -632,6 +636,7 @@ export function usePortfolioState({
     depositSortConfig2, setDepositSortConfig2,
     customLinks, setCustomLinks,
     overseasLinks, setOverseasLinks,
+    dividendLinks, setDividendLinks,
     lookupRows, setLookupRows,
     hiddenColumnsPortfolio, hiddenColumnsRebalancing,
     toggleHiddenColumnPortfolio, toggleHiddenColumnRebalancing,

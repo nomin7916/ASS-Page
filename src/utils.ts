@@ -198,6 +198,16 @@ export const dedupeHistoryByDate = (history) => {
   return out;
 };
 
+// 분배금 현황 헤더 사이트 링크를 항상 7슬롯 { initial, url }로 정규화(로드 방어).
+export const DIVIDEND_LINK_COUNT = 7;
+export const normalizeDividendLinks = (raw) => {
+  const src = Array.isArray(raw) ? raw : [];
+  return Array.from({ length: DIVIDEND_LINK_COUNT }, (_, i) => ({
+    initial: String(src[i]?.initial ?? '').slice(0, 1),
+    url: String(src[i]?.url ?? ''),
+  }));
+};
+
 export const cleanNum = (val) => {
   if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return val;
