@@ -433,8 +433,9 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
 
 ### 메모 달력 (calendarMemos) — 헤더 달력 아이콘 → 날짜별 다중 메모 (⚠️ 회귀 주의)
 
-통합 대시보드 헤더의 **달력 아이콘**(`AccountTabBar` 복원 아이콘 옆, `showIntegratedDashboard`
-프래그먼트 내부 = 통합 대시보드에서만 노출)으로 여는 구글 캘린더식 월 그리드 모달
+헤더의 **달력 아이콘**(`AccountTabBar` 액션 아이콘 **우측 끝, 통합 대시보드·개별 계좌 모두
+항상 노출** — `showIntegratedDashboard` 프래그먼트 밖에 배치해 어느 뷰에서든 메모 가능)으로 여는
+구글 캘린더식 월 그리드 모달
 (`CalendarModal.tsx`). 날짜 셀 클릭 → 사진 형식 메모 패드(핑크 X 취소 / 퍼플 체크 저장 /
 날짜 / MEMO 그라데이션 / 줄선 textarea — `RebalancingPanel`의 `noteExpandModal` 스타일 복제)
 → 저장 시 셀에 한 줄 표시, 한 줄 클릭 → 펼침/편집, 같은 날 **append 누적**(오래된 위 · 새 아래).

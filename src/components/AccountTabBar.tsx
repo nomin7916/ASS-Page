@@ -328,15 +328,16 @@ export default function AccountTabBar({
               <ArchiveRestore size={14} />
             </button>
             <input type="file" ref={stateFileInputRef} onChange={handleImportStateFile} className="hidden" accept=".json" />
-            <button
-              onClick={onOpenCalendar}
-              title="메모 달력"
-              className="p-1.5 hover:bg-gray-800 rounded transition text-sky-400 hover:text-sky-300"
-            >
-              <Calendar size={14} />
-            </button>
           </>
         )}
+        {/* 메모 달력: 통합 대시보드·개별 계좌 모두 우측 끝에 항상 노출 (어디서든 메모 가능) */}
+        <button
+          onClick={onOpenCalendar}
+          title="메모 달력"
+          className="p-1.5 hover:bg-gray-800 rounded transition text-sky-400 hover:text-sky-300"
+        >
+          <Calendar size={14} />
+        </button>
       </div>
     </div>
   );
