@@ -59,6 +59,10 @@ const daysAgo = (n: number): string => {
   return d.toISOString().split('T')[0];
 };
 
+// KST 기준 YYYYMMDD (뷰어 타임존 무관 — 인트라데이 조회 창 계산용)
+const kstYmd = (date: Date): string =>
+  date.toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' }).replace(/-/g, '');
+
 // 미니 차트용 최근 ~1년 일별 종가 이력. [date, close][](오름차순) | null.
 // 1주/1개월/3개월/1년 토글은 이 1건을 팝업에서 기간별로 슬라이스(재조회 없이 즉시 반영).
 // ⚠️ 반환값은 팝업 로컬 맵에만 저장(공유 stockHistoryMap 오염 금지 — 보유종목 평가액 불변식 보호).
@@ -124,28 +128,39 @@ async function fetchYahooIntraday(ticker: string): Promise<number[] | null> {
   return null;
 }
 
+// 네이버 국내 분봉: /chart/domestic/item/{code}/minute?startDateTime&endDateTime
+// 응답 = [{ localDateTime:'YYYYMMDDHHmmss', currentPrice, openPrice, ... }] (국내 주식·ETF 공통, 검증됨).
+// 최근 4일 창으로 조회해 가장 최근 거래일의 분봉만 사용(주말/휴장에도 직전 거래일 표시).
 async function fetchNaverIntraday(code: string): Promise<number[] | null> {
-  const url = `https://api.stock.naver.com/chart/domestic/item/${code}/today`;
+  const now = Date.now();
+  const start = kstYmd(new Date(now - 4 * 86400000)) + '000000';
+  const end = kstYmd(new Date(now)) + '160000';
+  const target = `https://api.stock.naver.com/chart/domestic/item/${code}/minute?startDateTime=${start}&endDateTime=${end}`;
   const proxies = [
-    `/api/proxy?url=${encodeURIComponent(url)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${url}`,
+    `/api/proxy?url=${encodeURIComponent(target)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
   ];
   for (const p of proxies) {
     try {
-      const res = await fetch(p, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(p, { signal: AbortSignal.timeout(9000) });
       if (!res.ok) continue;
       const json: any = await res.json();
-      // 응답 형식이 배열/객체 어느 쪽이든 방어적으로 처리
-      const arr: any[] = Array.isArray(json)
-        ? json
-        : (json?.chartInfoList || json?.priceInfos || json?.prices || json?.result || json?.list || []);
-      if (Array.isArray(arr) && arr.length) {
-        const pts = arr
-          .map((it) => Number(it?.closePrice ?? it?.close ?? it?.currentPrice ?? it?.prc ?? it?.trdPrc ?? it?.price))
-          .filter((v) => isFinite(v) && v > 0);
-        if (pts.length >= 2) return pts;
+      const arr: any[] = Array.isArray(json) ? json : (json?.result || json?.priceInfos || []);
+      const rows: [string, number][] = [];
+      for (const it of arr) {
+        const dt = String(it?.localDateTime ?? it?.localDate ?? '');
+        const v = Number(it?.currentPrice ?? it?.closePrice ?? it?.close);
+        if (dt.length >= 8 && isFinite(v) && v > 0) rows.push([dt, v]);
       }
+      if (rows.length < 2) continue;
+      // 가장 최근 거래일(YYYYMMDD)의 분봉만 시간순으로
+      const maxDay = rows.reduce((m, [dt]) => (dt.slice(0, 8) > m ? dt.slice(0, 8) : m), '');
+      const pts = rows
+        .filter(([dt]) => dt.slice(0, 8) === maxDay)
+        .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+        .map(([, v]) => v);
+      if (pts.length >= 2) return pts;
     } catch { /* next proxy */ }
   }
   return null;

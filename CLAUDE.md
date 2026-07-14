@@ -714,7 +714,8 @@ markAsRead() / clearNotificationLog()
 - **미니차트 기간 토글(1일·1주·1개월·3개월·1년)**: `watchlistQuote.fetchWatchDaily`가 **~1년치 일별 종가
   [date,close][]를 코드당 1회** 받아 팝업 로컬 `dailyMap`에 저장 → 1주/1개월/3개월/1년은 `cutoffFor`
   날짜 컷오프로 **클라이언트 슬라이스(재조회 없이 즉시)**. `1일`만 `fetchWatchIntraday`(US=Yahoo 5분봉,
-  KR=네이버 today `api.stock.naver.com/.../today` 방어적 파싱, 펀드=없음)를 lazy 조회해 `intradayMap`에
+  KR=네이버 분봉 `api.stock.naver.com/chart/domestic/item/{code}/minute?startDateTime&endDateTime`
+  → `[{localDateTime,currentPrice}]` 최근 거래일 분봉만, 펀드=없음)를 lazy 조회해 `intradayMap`에
   저장. 기간 조회는 항상 활성 그룹 종목만(전체 그룹 동시 조회 금지). 인트라데이 소스는 프록시
   (`/api/proxy` 허용 도메인)+allorigins/codetabs 폴백, 실패 시 빈 차트로 graceful degradation.
 - **코드→시장 판정(`detectMarket`)**: 계좌 컨텍스트 없음 → 코드 포맷 사용. **6자 영숫자+숫자(005930·
