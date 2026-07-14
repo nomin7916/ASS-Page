@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock, ClipboardPaste, ChevronDown, Settings, Calendar } from 'lucide-react';
+import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDriveDownload, Cloud, CloudSun, CloudOff, Lock, ClipboardPaste, ChevronDown, Settings, Calendar, Star } from 'lucide-react';
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 import HeaderMarketChips from './HeaderMarketChips';
 
@@ -34,6 +34,7 @@ export default function AccountTabBar({
   setActiveLinks,
   marketIndicators,
   onOpenCalendar,
+  onOpenWatchlist,
 }) {
   const stateFileInputRef = React.useRef(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -227,6 +228,14 @@ export default function AccountTabBar({
             <Lock size={14} strokeWidth={2.4} />
           </span>
         )}
+        {/* 관심종목: 클라우드 상태 아이콘 우측, 통합·개별 뷰 모두 항상 노출 */}
+        <button
+          onClick={onOpenWatchlist}
+          title="관심종목"
+          className="p-1.5 hover:bg-gray-800 rounded transition text-amber-400 hover:text-amber-300"
+        >
+          <Star size={14} />
+        </button>
         {showIntegratedDashboard && (
           <button
             onClick={() => {

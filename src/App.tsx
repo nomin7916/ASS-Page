@@ -43,6 +43,7 @@ import LoadingOverlay from './components/LoadingOverlay';
 import StudyMaterialViewer from './components/StudyMaterialViewer';
 import InactivityModal from './components/InactivityModal';
 import FloatingCalculator from './components/FloatingCalculator';
+import WatchlistPopup from './components/WatchlistPopup';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -252,6 +253,7 @@ export default function App() {
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   const [calendarMemos, setCalendarMemos] = useState<Record<string, any[]>>({});
+  const [showWatchlist, setShowWatchlist] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
   const [rebalanceSortConfigMap, setRebalanceSortConfigMap] = useState<Record<string, { key: string | null, direction: number }>>({});
@@ -2340,6 +2342,7 @@ export default function App() {
           setActiveLinks={activePortfolioAccountType === 'overseas' ? setOverseasLinks : setCustomLinks}
           marketIndicators={marketIndicators}
           onOpenCalendar={() => setShowCalendarModal(true)}
+          onOpenWatchlist={() => setShowWatchlist(true)}
         />
         </div>
 
@@ -2834,6 +2837,7 @@ export default function App() {
         setPortfolio={setPortfolio}
       />
       <FloatingCalculator isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
+      <WatchlistPopup open={showWatchlist} onClose={() => setShowWatchlist(false)} />
     </div>
   );
 }
