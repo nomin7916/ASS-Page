@@ -513,6 +513,8 @@ export default function App() {
     updatePortfolioExtraRowCode,
     deletePortfolioExtraRow,
     updatePortfolioExtraRowMonth,
+    deletePortfolioDividendData,
+    deletePortfolioTaxData,
     updateTaxBaseEvents,
     updateTaxBasePurchases,
     updateTaxBaseSales,
@@ -2530,6 +2532,9 @@ export default function App() {
             updateTaxBaseSales={updateTaxBaseSales}
             updateTaxBaseExPrice={updateTaxBaseExPrice}
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
+            deletePortfolioDividendData={deletePortfolioDividendData}
+            deletePortfolioTaxData={deletePortfolioTaxData}
+            confirmDialog={confirm}
             notify={notify}
             usdkrw={marketIndicators.usdkrw || 1300}
             holidays={marketHolidays}

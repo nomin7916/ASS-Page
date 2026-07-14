@@ -514,6 +514,45 @@ export function usePortfolioState({
     }));
   };
 
+  // 포트폴리오에서 제거된 종목의 '삭제됨' 유령 행 × 버튼 — 그 코드의 수동 분배금 입력을 영구 삭제.
+  // 종목 삭제(handleDeleteStock)는 종목 행만 지우고 코드별 분배금/과세 데이터는 계좌에 그대로 남겨
+  // 유령 행으로 계속 노출된다. 이 핸들러만이 그 데이터를 실제로 제거한다.
+  const deletePortfolioDividendData = (portfolioId, code) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const strip = (map) => {
+        if (!map || !(code in map)) return map;
+        const next = { ...map };
+        delete next[code];
+        return next;
+      };
+      return {
+        ...p,
+        actualDividend: strip(p.actualDividend),
+        actualDividendUsd: strip(p.actualDividendUsd),
+        actualDividendQty: strip(p.actualDividendQty),
+        dividendTaxAmounts: strip(p.dividendTaxAmounts),
+        actualAfterTaxUsd: strip(p.actualAfterTaxUsd),
+        actualAfterTaxKrw: strip(p.actualAfterTaxKrw),
+        dividendHistory: strip(p.dividendHistory),
+        dividendExDate: strip(p.dividendExDate),
+        // dividendTaxAmounts/actualDividendQty는 portfolioStructureKey 지문에 없으므로
+        // 이 필드만 있던 코드 삭제도 Drive 저장되도록 타임스탬프를 갱신(지문 포함 필드).
+        dividendHistoryUpdatedAt: Date.now(),
+      };
+    }));
+  };
+
+  // 과표 계산 '삭제됨' 유령 행 × 버튼 — 그 코드의 과표 이력(taxBaseHistory)을 영구 삭제.
+  const deletePortfolioTaxData = (portfolioId, code) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId || !p.taxBaseHistory || !(code in p.taxBaseHistory)) return p;
+      const next = { ...p.taxBaseHistory };
+      delete next[code];
+      return { ...p, taxBaseHistory: next };
+    }));
+  };
+
   // ── 포트폴리오 항목 CRUD ──
   const handleUpdate = (id, field, value) =>
     setPortfolio(prev => prev.map(p =>
@@ -684,6 +723,8 @@ export function usePortfolioState({
     updatePortfolioExtraRowCode,
     deletePortfolioExtraRow,
     updatePortfolioExtraRowMonth,
+    deletePortfolioDividendData,
+    deletePortfolioTaxData,
     updateTaxBaseEvents,
     updateTaxBasePurchases,
     updateTaxBaseSales,

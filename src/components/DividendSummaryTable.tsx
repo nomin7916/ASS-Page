@@ -16,6 +16,32 @@ const getCodeType = (code, pf) => {
   return isKrCode(code) ? 'kr' : null;
 };
 
+// 포트폴리오 테이블에서 삭제됐지만 사용자가 입력한 분배금 데이터가 계좌에 남아있는 코드('삭제됨'
+// 유령 행). handleDeleteStock은 종목 행만 지우고 코드별 분배금 맵은 그대로 두므로, 그 데이터를
+// 계속 표시·편집할 수 있도록 유령 행으로 노출한다(금액이 실제 입력된 맵만 트리거 — 수량 override
+// 단독은 제외해 빈 행 방지). 저장 키(exYm)는 삭제 전과 동일한 dividendHistory/exDate에서 산출되므로
+// 삭제 후에도 같은 셀에 그대로 매핑된다.
+function getDividendOrphanCodes(pf) {
+  const inPortfolio = new Set((pf.portfolio || []).map(i => String(i.code)));
+  // 같은 코드로 만든 '수동 추가 행'(extraDividendRows)이 이미 있으면 유령 행을 만들지 않는다.
+  // extraDividendRows도 '제거된 종목의 과거 배당 기록용'이라 목적이 동일 — 둘 다 합산되면 같은
+  // 배당이 월/연 합계에서 이중 계상되고 같은 종목이 2줄로 뜬다. 기존 수동 행(사용자의 명시적 선택)을
+  // 우선하고 유령 행은 억제한다(actualDividend 데이터는 계좌에 남아, 수동 행 삭제 시 유령 행 복원).
+  const extraCodes = new Set((pf.extraDividendRows || []).map(r => String(r.code || '').trim()).filter(Boolean));
+  const codes = new Set();
+  const collect = (m) => Object.entries(m || {}).forEach(([code, byMonth]) => {
+    if (byMonth && Object.keys(byMonth).length > 0
+      && !inPortfolio.has(String(code)) && !extraCodes.has(String(code))
+      && getCodeType(code, pf)) codes.add(String(code));
+  });
+  collect(pf.actualDividend);
+  collect(pf.actualDividendUsd);
+  collect(pf.actualAfterTaxUsd);
+  collect(pf.actualAfterTaxKrw);
+  collect(pf.dividendTaxAmounts);
+  return [...codes];
+}
+
 function buildMonthPrediction(codeHistory) {
   const pred = {};
   for (let m = 1; m <= 12; m++) {
@@ -330,7 +356,7 @@ function DividendLinkBar({ links, onChange }) {
   );
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -458,10 +484,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const taxRate = pf.dividendTaxRate ?? 15.4;
       const exHistoryAll = pf.dividendExDate || {};
       const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
-      (pf.portfolio || []).forEach(item => {
+      const orphanItems = getDividendOrphanCodes(pf).map(code => ({ code, name: '', quantity: 0, __orphan: true }));
+      [...(pf.portfolio || []), ...orphanItems].forEach(item => {
         if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);
-        if (!qty) return;
+        if (!qty && !item.__orphan) return;
         const pred = divHistory[item.code] ? buildMonthPrediction(divHistory[item.code]) : {};
         const codeQtyOv = actualDividendQty[item.code] || {};
         // 지급월 기준 재배치 (저장 키는 배당락월 유지)
@@ -546,6 +573,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           name: item.name,
           qty,
           isOverseas,
+          isOrphan: !!item.__orphan,
           cadence: classifyCadence(divHistory[item.code], exHistoryAll[item.code] || {}, hol),
           hasDivData: Object.keys(pred).length > 0,
           monthData,
@@ -637,11 +665,13 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const isOverseas = pf.accountType === 'overseas';
       const taxRate = pf.dividendTaxRate ?? 15.4;
       const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
-      // 종목별 지급월 슬롯 1회 산출 (저장 키는 배당락월 유지)
-      const stockSlots = (pf.portfolio || []).map(item => {
+      // 종목별 지급월 슬롯 1회 산출 (저장 키는 배당락월 유지). 삭제된 종목의 유령 코드도 포함 —
+      // 그 계좌 월별/연간 합계에 과거 실입금이 계속 반영되도록(수량 없이 절대 입력값 사용).
+      const orphanItems = getDividendOrphanCodes(pf).map(code => ({ code, quantity: 0, __orphan: true }));
+      const stockSlots = [...(pf.portfolio || []), ...orphanItems].map(item => {
         if (!getCodeType(item.code, pf)) return null;
         const qty = cleanNum(item.quantity);
-        if (!qty) return null;
+        if (!qty && !item.__orphan) return null;
         const exH = (pf.dividendExDate || {})[item.code] || {};
         const slots = buildPaySlots(divHistory[item.code], exH, hol);
         return { code: item.code, slots, fbExYms: buildFallbackExYms(slots) };
@@ -1676,11 +1706,24 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               </thead>
               <tbody>
                 {actualRows.map((row) => (
-                  <tr key={`${row.portfolioId}-${row.code}`} className="border-b border-gray-700/50 hover:bg-gray-800/30">
+                  <tr key={`${row.portfolioId}-${row.code}`} className={`border-b border-gray-700/50 hover:bg-gray-800/30 ${row.isOrphan ? 'bg-rose-950/10' : ''}`}>
                     <td className="py-3 px-3 text-left sticky left-0 z-[5] bg-[#0f172a] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)] font-bold text-blue-300">
                       <div className="flex items-center gap-1">
-                        <div className="line-clamp-1">{row.name || row.code}</div>
+                        <div className={`line-clamp-1 ${row.isOrphan ? 'text-gray-400' : ''}`}>{row.name || row.code}</div>
+                        {row.isOrphan && <span className="shrink-0 px-1 py-0.5 rounded border border-rose-500/40 text-rose-300/80 text-[8px] font-bold leading-none" title="포트폴리오에서 삭제된 종목 — 입력한 분배금 기록은 보존됩니다">삭제됨</span>}
                         {row.cadence && <span className={`shrink-0 px-1 py-0.5 rounded border text-[8px] font-bold leading-none ${row.cadence.cls}`}>{row.cadence.label}</span>}
+                        {row.isOrphan && deletePortfolioDividendData && (
+                          <button
+                            onClick={async () => {
+                              const ok = confirmDialog
+                                ? await confirmDialog(`'${row.name || row.code}'의 분배금 입력 기록을 영구 삭제할까요?`, '삭제')
+                                : true;
+                              if (ok) deletePortfolioDividendData(row.portfolioId, row.code);
+                            }}
+                            title="이 종목의 분배금 입력 기록 영구 삭제"
+                            className="ml-auto shrink-0 text-gray-600 hover:text-red-400 transition-colors text-[10px]"
+                          >✕</button>
+                        )}
                       </div>
                       {row.name && <div className="text-gray-500 text-[9px] font-normal">({row.code})</div>}
                     </td>
@@ -2163,6 +2206,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             updateTaxBaseExPrice={updateTaxBaseExPrice}
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
             updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
+            deletePortfolioTaxData={deletePortfolioTaxData}
+            confirmDialog={confirmDialog}
             notify={notify || (() => {})}
           />
         </ErrorBoundary>

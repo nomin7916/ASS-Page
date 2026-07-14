@@ -8,6 +8,7 @@ import {
   safeNum,
   computeMonthlyAvgForGrid,
   computeMonthlyQtyForGrid,
+  isKrCode,
 } from '../krEtfTaxHelpers';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
 
@@ -44,6 +45,15 @@ const fmtTaxBase = (v) => {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+// 과표 이력에 실제 입력값이 있는지 (삭제된 종목의 '삭제됨' 유령 행 트리거용)
+const taxBaseHasData = (rec) => !!rec && (
+  (rec.events && rec.events.length > 0) ||
+  (rec.purchases && rec.purchases.length > 0) ||
+  (rec.sales && rec.sales.length > 0) ||
+  (rec.exTaxBase && Object.keys(rec.exTaxBase).length > 0) ||
+  (rec.avgTaxBase && Object.keys(rec.avgTaxBase).length > 0)
+);
+
 export default function KrEtfTaxMatrix({
   portfolio,
   updateTaxBaseEvents,
@@ -51,11 +61,22 @@ export default function KrEtfTaxMatrix({
   updateTaxBaseSales,
   updateTaxBaseExPrice,
   updateTaxBaseAvgPrice,
+  deletePortfolioTaxData,
+  confirmDialog,
   notify,
 }) {
   const [expandedCode, setExpandedCode] = useState(null);
 
-  const krStocks = useMemo(() => getKrEtfStocks(portfolio), [portfolio?.portfolio]);
+  // 포트폴리오 종목 + 삭제됐지만 과표 이력이 남은 코드('삭제됨' 유령 행). 종목 삭제는 종목 행만
+  // 지우고 taxBaseHistory[code]는 계좌에 그대로 남으므로, 그 입력값을 계속 표시·편집하도록 노출한다.
+  const krStocks = useMemo(() => {
+    const base = getKrEtfStocks(portfolio);
+    const inPortfolio = new Set(base.map(s => String(s.code)));
+    const orphans = Object.entries(portfolio?.taxBaseHistory || {})
+      .filter(([code, rec]) => isKrCode(code) && !inPortfolio.has(String(code)) && taxBaseHasData(rec))
+      .map(([code]) => ({ code, name: '', quantity: 0, type: 'stock', __orphan: true }));
+    return [...base, ...orphans];
+  }, [portfolio?.portfolio, portfolio?.taxBaseHistory]);
 
   if (!portfolio) return null;
 
@@ -210,6 +231,21 @@ export default function KrEtfTaxMatrix({
                       >
                         <ExternalLink size={10} /> FunETF
                       </a>
+                      {stock.__orphan && (
+                        <span className="text-[8px] px-1 py-0.5 rounded border border-rose-500/40 text-rose-300/80 font-bold leading-none" title="포트폴리오에서 삭제된 종목 — 입력한 과표 기록은 보존됩니다">삭제됨</span>
+                      )}
+                      {stock.__orphan && deletePortfolioTaxData && (
+                        <button
+                          onClick={async () => {
+                            const ok = confirmDialog
+                              ? await confirmDialog(`'${stock.name || stock.code}'의 과표 입력 기록을 영구 삭제할까요?`, '삭제')
+                              : true;
+                            if (ok) deletePortfolioTaxData(portfolio.id, stock.code);
+                          }}
+                          title="이 종목의 과표 입력 기록 영구 삭제"
+                          className="ml-auto text-gray-600 hover:text-red-400 transition-colors"
+                        ><Trash2 size={11} /></button>
+                      )}
                     </div>
                     <button
                       onClick={() => setExpandedCode(isExpanded ? null : stock.code)}
