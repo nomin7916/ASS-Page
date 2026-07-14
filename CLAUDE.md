@@ -725,6 +725,9 @@ markAsRead() / clearNotificationLog()
 - **인터랙션(PortfolioTable 복제)**: 등락율 클릭 = `window.open` 상세페이지(국내=네이버 m.stock,
   해외=야후, 펀드=미래에셋/funetf) + `recordRecent`(최근조회 기록). 현재가 클릭 = `loadQuote(s)` 단일
   재조회(teal 스피너). **notify는 z-1050 팝업에 가려지므로** 실패 피드백은 행 내부 상태점(빨간 점)으로만.
+- **등락율 정렬**: 종목 **2개 이상**일 때 리스트 상단 헤더의 `등락율` 클릭 → `sortDir` 토글
+  (원래순서→내림→오름→원래순서, ArrowUpDown/ArrowDown/ArrowUp). `sortedStocks`는 뷰 전용 정렬
+  (watchlistGroups 순서 미변경·Drive 저장 안 함), 시세 없는 종목은 원래순서로 뒤에. 헤더 열 폭은 행과 일치.
 - **'최근조회' 자동 그룹**: 예약 id `__recent__` + `auto:true`. 등락율 클릭 시 최근 우선·코드 dedup·20개
   상한으로 기록되며 항상 첫 칩 고정(Clock 아이콘, 이름편집/삭제 불가, 코드 입력창 대신 안내 표시).
   `watchlistGroups`에 포함돼 영속. 활성 그룹 미지정 시 첫 그룹 고정 effect로 재정렬 시 뷰 튐 방지.

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
 
@@ -95,6 +95,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const [dailyMap, setDailyMap] = useState({});       // { [code]: [date, close][] } 일별 종가(팝업 로컬 — Drive 저장 안 함)
   const [intradayMap, setIntradayMap] = useState({}); // { [code]: number[] } 오늘 인트라데이(1일)
   const [period, setPeriod] = useState('1개월');       // 미니차트 기간
+  const [sortDir, setSortDir] = useState(null);        // 등락율 정렬: null(원래순서)|'desc'|'asc'
   const loadedDailyRef = useRef(new Set());            // 일별 조회 완료/진행 코드:market
   const loadedIntradayRef = useRef(new Set());         // 인트라데이 조회 완료/진행 코드:market
 
@@ -282,6 +283,23 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     return daily.filter(([dt]) => dt >= cut).map(([, c]) => c);
   };
 
+  // 등락율 정렬 토글: 원래순서 → 내림차순 → 오름차순 → 원래순서
+  const cycleSort = () => setSortDir((d) => (d === null ? 'desc' : d === 'desc' ? 'asc' : null));
+  const activeStocks = activeGroup?.stocks || [];
+  // 정렬 적용된 표시 목록 (시세 없는 종목은 원래순서로 뒤에)
+  const sortedStocks = (() => {
+    if (!sortDir || activeStocks.length < 2) return activeStocks;
+    const scored = activeStocks.map((s, i) => ({ s, i, r: quotes[s.code]?.changeRate }));
+    scored.sort((a, b) => {
+      const ah = a.r == null, bh = b.r == null;
+      if (ah && bh) return a.i - b.i;
+      if (ah) return 1;
+      if (bh) return -1;
+      return sortDir === 'asc' ? a.r - b.r : b.r - a.r;
+    });
+    return scored.map((x) => x.s);
+  })();
+
   if (!open) return null;
 
   const chipInput = 'bg-gray-900 border border-amber-500/50 rounded-full px-2.5 py-1 text-xs text-white outline-none w-24';
@@ -445,11 +463,29 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
             </div>
 
             {/* 종목 리스트 */}
-            {(activeGroup.stocks || []).length === 0 ? (
+            {activeStocks.length === 0 ? (
               <div className="text-center text-gray-600 text-xs py-8">코드를 입력해 종목을 추가하세요.</div>
             ) : (
               <div className="flex flex-col">
-                {(activeGroup.stocks || []).map((s) => {
+                {/* 정렬 헤더 (종목 2개 이상일 때 — 등락율 클릭으로 오름/내림 토글) */}
+                {activeStocks.length >= 2 && (
+                  <div className="flex items-center gap-2 px-1 py-1 border-b border-gray-700/60 text-[10px] text-gray-500 select-none">
+                    <span className="w-1.5 shrink-0" />
+                    <span className="flex-1">종목</span>
+                    <span className="w-14 shrink-0" />
+                    <button
+                      onClick={cycleSort}
+                      title="수익율(등락율) 정렬 — 클릭하여 내림/오름/원래순서"
+                      className={`w-16 flex items-center justify-end gap-0.5 cursor-pointer transition-colors ${sortDir ? 'text-amber-300' : 'hover:text-amber-300'}`}
+                    >
+                      등락율
+                      {sortDir === 'asc' ? <ArrowUp size={10} /> : sortDir === 'desc' ? <ArrowDown size={10} /> : <ArrowUpDown size={10} className="text-gray-600" />}
+                    </button>
+                    <span className="w-24 text-right">현재가</span>
+                    <span className="w-3 shrink-0" />
+                  </div>
+                )}
+                {sortedStocks.map((s) => {
                   const q = quotes[s.code];
                   const st = status[s.code];
                   return (
