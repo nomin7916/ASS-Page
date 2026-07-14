@@ -143,6 +143,7 @@ export default function IntegratedDashboard({
   setIsLinkSettingsOpen,
   activePortfolioId = '',
   activeHistory = [],
+  intAccountSeriesById = {},
   userFeatures = { feature1: false, feature2: false, feature3: false },
 }) {
   const [showCompStocks, setShowCompStocks] = useState(false);
@@ -196,11 +197,19 @@ export default function IntegratedDashboard({
         const rec = sorted.filter(h => h.date <= histDetailDate).pop();
         evalAmt = rec ? rec.evalAmount : 0;
       } else {
-        const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
-        const sorted = [...hist].filter(h => h?.date && h.evalAmount > 0).sort((a, b) => a.date.localeCompare(b.date));
-        const rec = sorted.filter(h => h.date <= histDetailDate).pop();
-        if (!rec || rec.evalAmount <= 0) return;
-        evalAmt = rec.evalAmount;
+        // 시장 계좌: 통합 추이 차트(computedIntHistory)와 '동일한' 시계열(marketSeries)을 재사용한다.
+        // 저장된 라이브 evalAmount가 아니라 '수량 × 종가'(확정 종가) carry-forward 값 → 팝업 소계가
+        // 차트 그날 값·개별 계좌 추이와 정확히 일치(정확한 일별 자산 추적). 차트 dateToTotal과
+        // 동일하게 histDetailDate 이하 최신 기록값을 이월(carry-forward)한다.
+        const series = intAccountSeriesById[p.id];
+        if (!series || !series.dates || series.dates.length === 0) return;
+        let last = 0;
+        for (const d of series.dates) {
+          if (d <= histDetailDate) last = series.map.get(d);
+          else break;
+        }
+        if (!(last > 0)) return;
+        evalAmt = last;
       }
       if (evalAmt <= 0) return;
       totalEval += evalAmt;
@@ -227,7 +236,7 @@ export default function IntegratedDashboard({
       rows.push({ id: p.id, name, evalAmount: evalAmt, principal: effPrincipal, profit, returnRate, depositAmount: depositAmt, rowColor: p.rowColor || '' });
     });
     return { rows, totalEval, totalPrincipal, totalDeposit };
-  }, [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries]);
+  }, [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries, intAccountSeriesById]);
 
   // 앱 기록 시작일: 모든 계좌의 가장 이른 '실제 기록일'(실시간 isFixed:false / 사용자 확정 adjustedAmount).
   // 순수 백필(isFixed:true + adjustedAmount 없음)은 역추산이라 제외 — 그 이전 구간은 전부 역추산이므로

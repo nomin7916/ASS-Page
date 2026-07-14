@@ -1150,6 +1150,7 @@ export default function App() {
     portfolioSummaries,
     intTotals,
     computedIntHistory,
+    intAccountSeriesById,
     intSortedHistory,
     intUnifiedDates,
     intFilteredDates,
@@ -1162,7 +1163,7 @@ export default function App() {
     portfolios, activePortfolioId, portfolio, principal,
     avgExchangeRate, portfolioStartDate, title, marketIndicators,
     history, depositHistory, depositHistory2, intAppliedRange, intIsZeroBaseMode,
-    effectiveDateKey,
+    effectiveDateKey, krEffectiveDateKey,
     compStocks, stockHistoryMap, indicatorHistoryMap,
   });
 
@@ -2766,6 +2767,7 @@ export default function App() {
             intHoveredPoint={intHoveredPoint}
             handleSave={handleSave}
             allPortfoliosForDividend={allPortfoliosForDividend}
+            intAccountSeriesById={intAccountSeriesById}
             activePortfolioId={activePortfolioId}
             activeHistory={history}
             userFeatures={effectiveUserFeatures}

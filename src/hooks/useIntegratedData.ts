@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest } from '../utils';
-import { getEffectiveDate } from './useMarketCalendar';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries } from '../utils';
+import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function useIntegratedData({
@@ -19,6 +19,7 @@ export function useIntegratedData({
   intAppliedRange,
   intIsZeroBaseMode,
   effectiveDateKey,
+  krEffectiveDateKey,
   compStocks,
   stockHistoryMap,
   indicatorHistoryMap,
@@ -113,6 +114,47 @@ export function useIntegratedData({
     return { totalEval, totalPrincipal, totalDeposit, cats, returnRate };
   }, [portfolioSummaries]);
 
+  // 시장 계좌별 (날짜 → 평가액) 시계열. '저장된 라이브 값'이 아니라 항상 '수량 × 종가'(확정 종가)를
+  // 권위값으로 사용한다(buildCloseEvalSeries). 개별 계좌 차트(App.tsx finalChartData)와 동일 소스라
+  // 통합 추이·팝업(histDetailRows)이 개별 계좌 추이와 정확히 일치한다 → 정확한 일별 자산 추적.
+  //  - 해외계좌: USD(과거 종가) × 날짜별 환율로 재계산(기존 경로 유지 — buildCloseEvalSeries 대상 아님).
+  //  - 그 외(주식·금·연금 등): buildCloseEvalSeries가 날짜별 '수량 × 종가'(정확 종가 완비 시) 또는
+  //    직전 정확값 이월(carry-forward)을 반환. 오늘·첫 정확값 이전은 미설정 → 저장값 폴백.
+  //  마지막에 저장된 라이브 evalAmount로 폴백하므로 초기 로딩·데이터 공백에도 안전.
+  const marketSeries = useMemo(() => {
+    const globalToday = effectiveDateKey || getEffectiveDate();
+    const liveFx = marketIndicators.usdkrw || 1;
+    return portfolios
+      .filter(p => !p.isTest && p.accountType !== 'matong' && p.accountType !== 'simple')
+      .map(p => {
+        const isActive = p.id === activePortfolioId;
+        const hist = isActive ? history : (p.history || []);
+        const acctType = p.accountType || 'portfolio';
+        const src = isActive ? { ...p, portfolio } : p;
+        const mpo = p.manualPriceOverrides || {};
+        const map = new Map();
+        if (acctType === 'overseas') {
+          hist.forEach(h => {
+            if (!h || !h.date) return;
+            const r = calcPortfolioEvalDetail(resolveHoldings(src, h.date).items, 'overseas', h.date, stockHistoryMap, indicatorHistoryMap || {}, liveFx, mpo);
+            const v = r.hasAnyPrice ? r.total : (h.evalAmount > 0 ? h.evalAmount : 0);
+            if (v > 0) map.set(h.date, v);
+          });
+        } else {
+          const edk = isKrCutoffAccount(acctType) ? (krEffectiveDateKey || globalToday) : globalToday;
+          const closeSeries = buildCloseEvalSeries(src, hist.map(h => h?.date), acctType, stockHistoryMap, indicatorHistoryMap || {}, edk);
+          hist.forEach(h => {
+            if (!h || !h.date) return;
+            const cb = closeSeries.get(h.date);
+            const v = cb != null ? cb : (h.evalAmount > 0 ? h.evalAmount : 0);
+            if (v > 0) map.set(h.date, v);
+          });
+        }
+        return { id: p.id, dates: [...map.keys()].sort(), map };
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolios, activePortfolioId, portfolio, history, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw, effectiveDateKey, krEffectiveDateKey]);
+
   const computedIntHistory = useMemo(() => {
     const today = effectiveDateKey || getEffectiveDate();
 
@@ -133,34 +175,9 @@ export function useIntegratedData({
         return { startDate, currentEval, dates: [...map.keys()].sort(), map };
       });
 
-    // 시장 계좌별 (날짜 → 평가액) 시계열 구성. (현금성 계좌는 스냅샷 미사용 → 제외)
-    // 같은 날짜에 기록이 둘 이상이면 마지막 값으로 정리 → 합산 시 이중 계상 방지.
-    // 해외계좌는 저장된 evalAmount(기록 시점 라이브 환율로 박제)를 신뢰하지 않고, 날짜별 환율로 재계산한다.
-    //  evalAmount = USD(해당일 보유종목 × 과거 종가) × 환율(getClosestValue(usdkrw) 이월, 없으면 라이브).
-    //  종가 미로드 등으로 재계산 불가하면 저장값으로 폴백(초기 로딩·데이터 공백 보호).
-    const liveFx = marketIndicators.usdkrw || 1;
-    const accountSeries = portfolios
-      .filter(p => !p.isTest && p.accountType !== 'matong' && p.accountType !== 'simple')
-      .map(p => {
-        const isActive = p.id === activePortfolioId;
-        const hist = isActive ? history : (p.history || []);
-        const map = new Map();
-        if (p.accountType === 'overseas') {
-          const src = isActive ? { ...p, portfolio } : p;
-          const mpo = p.manualPriceOverrides || {};
-          hist.forEach(h => {
-            if (!h || !h.date) return;
-            const r = calcPortfolioEvalDetail(resolveHoldings(src, h.date).items, 'overseas', h.date, stockHistoryMap, indicatorHistoryMap || {}, liveFx, mpo);
-            const v = r.hasAnyPrice ? r.total : (h.evalAmount > 0 ? h.evalAmount : 0);
-            if (v > 0) map.set(h.date, v);
-          });
-        } else {
-          hist.forEach(h => {
-            if (h && h.date && h.evalAmount > 0) map.set(h.date, h.evalAmount);
-          });
-        }
-        return { dates: [...map.keys()].sort(), map };
-      }).filter(a => a.dates.length > 0);
+    // 시장 계좌별 시계열(marketSeries — 항상 '수량 × 종가' 권위값)에서 기록이 있는 계좌만 사용.
+    // (현금성 계좌는 스냅샷 미사용 → marketSeries에서 제외됨. 아래 cashSeries로 별도 처리.)
+    const accountSeries = marketSeries.filter(a => a.dates.length > 0);
 
     // 전체 날짜 합집합 (+ 오늘)
     const dateSet = new Set();
@@ -232,7 +249,15 @@ export function useIntegratedData({
         return { id: date, date, evalAmount, effectivePrincipal };
       })
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw, effectiveDateKey, portfolio, stockHistoryMap, indicatorHistoryMap]);
+  }, [portfolios, marketSeries, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw, effectiveDateKey, portfolio, stockHistoryMap, indicatorHistoryMap]);
+
+  // 계좌별 시계열(id → {dates, map})을 추이 팝업(histDetailRows)이 재사용 → 팝업 소계 = 차트 그날 값
+  // (개별 계좌 추이와도 동일 소스). 저장된 라이브 값이 아니라 '수량 × 종가'로 일별 자산을 추적.
+  const intAccountSeriesById = useMemo(() => {
+    const obj = {};
+    marketSeries.forEach(a => { obj[a.id] = a; });
+    return obj;
+  }, [marketSeries]);
 
   const intSortedHistory = useMemo(() =>
     [...computedIntHistory].sort((a, b) => new Date(a.date) - new Date(b.date)),
@@ -427,6 +452,7 @@ export function useIntegratedData({
     portfolioSummaries,
     intTotals,
     computedIntHistory,
+    intAccountSeriesById,
     intSortedHistory,
     intUnifiedDates,
     intFilteredDates,
