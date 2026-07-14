@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useCallback } from 'react';
 import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency, resolveHoldings, buildHeldNameMap } from '../utils';
 import {
@@ -66,6 +66,21 @@ export default function KrEtfTaxMatrix({
   notify,
 }) {
   const [expandedCode, setExpandedCode] = useState(null);
+
+  // 가로 스크롤 시 '평균 과표 계산기'(확장 행)를 왼쪽에 고정(엑셀 틀 고정)하기 위해, 스크롤
+  // 컨테이너의 가시 폭을 측정해 sticky 패널 너비로 사용한다. 콜백 ref + ResizeObserver로
+  // 마운트/리사이즈 시점에 자동 갱신(초기 0이면 패널은 블록 기본폭으로 폴백).
+  const [viewportW, setViewportW] = useState(0);
+  const roRef = useRef(null);
+  const setScrollRef = useCallback((node) => {
+    if (roRef.current) { roRef.current.disconnect(); roRef.current = null; }
+    if (node && typeof ResizeObserver !== 'undefined') {
+      const update = () => setViewportW(node.clientWidth);
+      update();
+      roRef.current = new ResizeObserver(update);
+      roRef.current.observe(node);
+    }
+  }, []);
 
   // 포트폴리오 종목 + 삭제됐지만 과표 이력이 남은 코드('삭제됨' 유령 행). 종목 삭제는 종목 행만
   // 지우고 taxBaseHistory[code]는 계좌에 그대로 남으므로, 그 입력값을 계속 표시·편집하도록 노출한다.
@@ -195,7 +210,7 @@ export default function KrEtfTaxMatrix({
   };
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" ref={setScrollRef}>
       <div className="px-3 py-2 bg-[#0f172a]/60 border-b border-gray-700/50 flex items-center gap-3 flex-wrap text-[10px]">
         <span className="text-gray-500">{CURRENT_YEAR}년 · 과세 과표 = 배당 과표 − 평균 과표 · 예상 과세 = max(0, 과세과표) × 보유주식수</span>
         <span className="text-gray-600">|</span>
@@ -330,7 +345,8 @@ export default function KrEtfTaxMatrix({
                 </tr>
                 {isExpanded && (
                   <tr className="bg-[#0b1322] border-b border-gray-700/40">
-                    <td colSpan={MONTHS.length + 2} className="px-4 py-3">
+                    <td colSpan={MONTHS.length + 2} className="p-0 align-top">
+                      <div className="sticky left-0 px-4 py-3" style={{ width: viewportW || undefined }}>
                       <div className="border border-gray-700/60 rounded-lg bg-gray-900/40">
                         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800">
                           <span className="text-[11px] font-semibold text-gray-200">평균 과표 계산기</span>
@@ -509,6 +525,7 @@ export default function KrEtfTaxMatrix({
                           <br />
                           <span className="text-emerald-400/70">과세 금액</span> = 매도 시 (매도 과표기준가 − 평균 과표) × 매도주식수 · 0 이하면 <span className="text-gray-400">비과세</span> (세율 미적용 과세표준)
                         </div>
+                      </div>
                       </div>
                     </td>
                   </tr>
