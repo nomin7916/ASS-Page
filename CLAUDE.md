@@ -379,8 +379,42 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   forward를 쓰므로 팝업 소계 = 차트 그날 값**으로 항상 일치.
 - **주의**: 더는 현금성 계좌를 "현재값 평탄 합산"하지 말 것. 차트·팝업·자동기록 셋이 같은 스냅샷
   규칙(0 포함 carry-forward + 오늘 현재값)으로 묶여야 일치한다.
-- 시장 계좌(주식·gold·overseas 등)는 종전대로 스냅샷 carry-forward(`evalAmount>0`) + 입출금 시점
-  원금 보정식 유지. 현금성과 달리 0은 미로드로 보고 기록·합산에서 제외.
+- 시장 계좌(주식·gold·overseas 등)의 **평가액은 저장된 `evalAmount`가 아니라 항상 '수량×종가'로
+  재계산**한다 — 아래 `buildCloseEvalSeries` 섹션 참조. 입출금 시점 원금 보정식은 유지.
+
+### 시장 계좌 평가액 추이·팝업 = 항상 '수량×종가'(`buildCloseEvalSeries`) 단일 소스 (⚠️ 회귀 주의)
+
+**개별 계좌 차트·자산 평가액 추이 표·통합 대시보드 추이·날짜별 '계좌별 현황' 팝업·달력 스냅샷은
+전부 저장된 라이브 `p.history[date].evalAmount`가 아니라 `buildCloseEvalSeries`(항상 '수량×종가'
+확정 종가)를 권위값으로 써야 한다.** 저장 evalAmount는 부분 로딩·장중 스테일 시세로 오염될 수
+있어(예: 4종목 중 1종목만 로드된 ₩307,890 스냅샷) 개별 계좌(재계산=₩52.8M)와 통합 대시보드가
+어긋났다. `buildCloseEvalSeries`(`utils.ts`)가 그 단일 소스다.
+
+- **`buildCloseEvalSeries(p, dates, accountType, stockHistoryMap, indicatorHistoryMap, edk, fxRate?)`**:
+  날짜별로 ① 보유수량 확정(`resolveHoldings` `!estimated`)+정확 종가 완비(`allExact`)면 `calcPortfolioEvalDetail`
+  재계산값(모달 '재계산 합계'와 동일) ② 주말·휴장·종가 미로드·추정 수량이면 **직전 정확값 이월**
+  (carry-forward, carry-back 근사로 튀지 않게) ③ 오늘(`edk`)·첫 정확값 이전이면 **미설정** → 호출부가
+  `?? 저장 evalAmount`로 폴백. 반환 `Map<date, number>`.
+- **적용 지점(모두 동일 함수·동일 입력이라 값이 일치)**:
+  ① 개별 계좌: `App.tsx` `activeCloseEvalByDate` → `finalChartData`(`cb ?? exactHist.evalAmount`).
+  ② `HistoryPanel`(자산 평가액 추이 표).
+  ③ 통합: `useIntegratedData` **`marketSeries`**(계좌별 `{id,dates,map}`) — `computedIntHistory`(추이
+  차트·`intMonthlyHistory`·달력 스냅샷)와 **`intAccountSeriesById`**(팝업용)가 공유.
+  ④ 팝업: `IntegratedDashboard` `histDetailRows` 시장계좌 분기가 `intAccountSeriesById[p.id]`를
+  `histDetailDate` 이하 최신값으로 carry-forward. **`computedIntHistory`의 `dateToTotal` carry-forward와
+  동일 `{dates,map}` 객체를 읽으므로 팝업 소계 = 차트 그날 값 = 개별 계좌 추이**(정확한 일별 추적).
+- **`edk`(오늘 skip)는 계좌별로 해석**: `isKrCutoffAccount(acctType) ? krEffectiveDateKey : effectiveDateKey`
+  — `App.tsx` 개별 차트와 동일해야 통합⟷개별이 모든 시간대에서 일치. `useIntegratedData`에 `krEffectiveDateKey`
+  전달 필수.
+- **해외계좌 예외**: `buildCloseEvalSeries` 대상 아님. `marketSeries` 해외 분기는 종전대로 USD(과거 종가)
+  ×날짜별 환율 재계산(`calcPortfolioEvalDetail(...,'overseas',...,liveFx)`) 유지. 현금성(matong/simple)도
+  대상 아님(위 스냅샷 carry-forward 섹션).
+- **폴백 안전망**: `buildCloseEvalSeries`가 미설정(데이터 공백·추정)일 때만 저장 evalAmount로 폴백하므로
+  초기 로딩·신규 상장에도 0/NaN 붕괴 없음. `allExact`·`!estimated` 게이트라 잘못된 소급 근사로 과거를
+  오염시키지 않는다.
+- ⚠️ **회귀 주의**: 통합 추이·팝업을 다시 `h.evalAmount`(저장 라이브값) 직접 합산으로 돌리지 말 것 —
+  개별 계좌와 어긋난다. 새 통합 합산/뷰 추가 시에도 `marketSeries`/`intAccountSeriesById`(또는
+  `buildCloseEvalSeries`)를 소스로 쓸 것.
 
 ### usePortfolioState 훅 (모든 포트폴리오 상태 + CRUD)
 `switchToPortfolio`, `addPortfolio`, `deletePortfolio`, `addSimpleAccount`,
