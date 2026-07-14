@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
 
@@ -476,10 +476,9 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                     <button
                       onClick={cycleSort}
                       title="수익율(등락율) 정렬 — 클릭하여 내림/오름/원래순서"
-                      className={`w-16 flex items-center justify-end gap-0.5 cursor-pointer transition-colors ${sortDir ? 'text-amber-300' : 'hover:text-amber-300'}`}
+                      className="w-16 text-right cursor-pointer transition-colors hover:text-gray-300"
                     >
                       등락율
-                      {sortDir === 'asc' ? <ArrowUp size={10} /> : sortDir === 'desc' ? <ArrowDown size={10} /> : <ArrowUpDown size={10} className="text-gray-600" />}
                     </button>
                     <span className="w-24 text-right">현재가</span>
                     <span className="w-3 shrink-0" />
