@@ -1,7 +1,10 @@
 // 관심종목 전용 시세 조회 유틸.
 // 포트폴리오 종목 추가와 달리 계좌 컨텍스트가 없으므로 코드 포맷으로 시장을 판정한다.
 // api.ts의 4개 fetcher는 모두 { name, price, changeRate } 동일 shape 반환(Mirae만 추가 필드).
-import { fetchStockInfo, fetchUsStockInfo, fetchFundInfo, fetchMiraeFundInfo } from './api';
+import {
+  fetchStockInfo, fetchUsStockInfo, fetchFundInfo, fetchMiraeFundInfo,
+  fetchNaverStockHistory, fetchUsStockHistory, fetchFundNavHistory, fetchMiraeFundNavHistory,
+} from './api';
 
 export type WatchMarket = 'kr' | 'us' | 'fund';
 
@@ -48,4 +51,36 @@ export async function fetchWatchQuote(market: WatchMarket, code: string):
     price: Number(d.price) || 0,
     changeRate: Number(d.changeRate) || 0,
   };
+}
+
+const daysAgo = (n: number): string => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+};
+
+// 미니 차트용 최근 일별 종가 이력. { 'YYYY-MM-DD': close } | null.
+// ⚠️ 반환값은 팝업 로컬 맵에만 저장(공유 stockHistoryMap 오염 금지 — 보유종목 평가액 불변식 보호).
+export async function fetchWatchHistory(market: WatchMarket, code: string):
+  Promise<Record<string, number> | null> {
+  const c = (code || '').trim();
+  if (!c) return null;
+  try {
+    if (market === 'kr') {
+      const r = await fetchNaverStockHistory(c, 60); // 최근 ~60거래일(fchart)
+      return r?.data || null;
+    }
+    if (market === 'us') {
+      const r = await fetchUsStockHistory(c.toUpperCase(), daysAgo(90));
+      return r?.data || null;
+    }
+    // fund
+    const start = daysAgo(120);
+    const end = daysAgo(0);
+    if (/^MA:/i.test(c)) return await fetchMiraeFundNavHistory(c, start, end);
+    if (/^[A-Za-z0-9]{5,7}$/.test(c)) return await fetchMiraeFundNavHistory(`MA:${c.toUpperCase()}`, start, end);
+    return await fetchFundNavHistory(c.toUpperCase(), start, end);
+  } catch {
+    return null;
+  }
 }

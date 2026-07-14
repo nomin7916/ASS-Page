@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
-import { detectMarket, fetchWatchQuote } from '../watchlistQuote';
+import { detectMarket, fetchWatchQuote, fetchWatchHistory } from '../watchlistQuote';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
 // - 단일 position:fixed div (백드롭/오버레이 없음 → 아래 앱 클릭·스크롤 통과)
@@ -32,6 +32,28 @@ const detailUrl = (market, code) => {
   return `https://m.stock.naver.com/domestic/stock/${code.toUpperCase()}/total`;
 };
 
+// 최근 종가 미니 라인차트(인라인 SVG — 행마다 recharts 컨테이너를 쓰지 않아 가벼움).
+// 상승 red / 하락 blue (한국식). 데이터 2점 미만이면 빈칸.
+function Sparkline({ points, width = 56, height = 20 }) {
+  if (!Array.isArray(points) || points.length < 2) return <div style={{ width, height }} className="shrink-0" />;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const up = points[points.length - 1] >= points[0];
+  const stroke = up ? '#f87171' : '#60a5fa';
+  const stepX = width / (points.length - 1);
+  const pad = 2;
+  const h = height - pad * 2;
+  const d = points
+    .map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * stepX).toFixed(1)},${(pad + h - ((v - min) / range) * h).toFixed(1)}`)
+    .join(' ');
+  return (
+    <svg width={width} height={height} className="shrink-0" style={{ display: 'block' }}>
+      <path d={d} fill="none" stroke={stroke} strokeWidth={1} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGroups }) {
   const [pos, setPos] = useState(() => ({
     x: Math.max(10, Math.round((window.innerWidth - PANEL_W) / 2)),
@@ -53,6 +75,8 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const [quotes, setQuotes] = useState({});   // { [code]: { name, price, changeRate } }
   const [status, setStatus] = useState({});   // { [code]: 'loading'|'success'|'fail' }
   const [codeInput, setCodeInput] = useState('');
+  const [histMap, setHistMap] = useState({});   // { [code]: number[] } 최근 종가 (팝업 로컬 — Drive 저장 안 함)
+  const loadedHistRef = useRef(new Set());       // 이력 조회 완료/진행 코드:market (재조회 방지)
 
   const list = Array.isArray(groups) ? groups : [];
   const activeGroup = list.find((g) => g.id === activeGroupId) || list[0] || null;
@@ -119,10 +143,26 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     }
   };
 
+  // 미니차트용 최근 종가 이력 (팝업 로컬 histMap에만 — 공유 stockHistoryMap 미접촉으로 보유종목 평가 불변식 보호)
+  const loadHistory = async (stock) => {
+    const key = stock.code + ':' + stock.market;
+    if (loadedHistRef.current.has(key)) return;
+    loadedHistRef.current.add(key);
+    const data = await fetchWatchHistory(stock.market, stock.code);
+    const points = data
+      ? Object.entries(data).sort(([a], [b]) => (a < b ? -1 : 1)).slice(-30).map(([, v]) => Number(v)).filter((v) => isFinite(v))
+      : [];
+    if (points.length >= 2) {
+      setHistMap((p) => ({ ...p, [stock.code]: points }));
+    } else {
+      loadedHistRef.current.delete(key); // 데이터 없음 → 다음 기회에 재시도 허용
+    }
+  };
+
   // 팝업 열 때 + 그룹 전환 시 활성 그룹 종목만 조회(전체 그룹 동시 조회 금지)
   useEffect(() => {
     if (!open || !activeGroup) return;
-    (activeGroup.stocks || []).forEach((s) => { loadQuote(s); });
+    (activeGroup.stocks || []).forEach((s) => { loadQuote(s); loadHistory(s); });
   }, [open, activeGroup?.id]);
 
   // ───────── 그룹 CRUD ─────────
@@ -160,6 +200,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
       (g.id === activeGroup.id ? { ...g, stocks: [...(g.stocks || []), stock] } : g)));
     setCodeInput('');
     loadQuote(stock);
+    loadHistory(stock);
   };
   const removeStock = (stockId) => {
     if (!activeGroup) return;
@@ -173,6 +214,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
       stocks: (g.stocks || []).map((s) => (s.id === stock.id ? { ...s, market } : s)),
     })));
     loadQuote({ ...stock, market });
+    loadHistory({ ...stock, market });
   };
 
   if (!open) return null;
@@ -332,6 +374,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                             <span className="text-gray-600">· {MARKET_LABEL[s.market] || s.market}</span>
                           </div>
                         </div>
+                        <Sparkline points={histMap[s.code]} />
                         <button
                           onClick={() => s.code && window.open(detailUrl(s.market, s.code), '_blank')}
                           title="종목 상세 보기"
