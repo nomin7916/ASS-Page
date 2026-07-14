@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { cleanNum, formatCurrency, dividendPayDate } from '../utils';
+import { cleanNum, formatCurrency, dividendPayDate, buildHeldNameMap } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
 import KrEtfTaxMatrix from './KrEtfTaxMatrix';
 import ErrorBoundary from './ErrorBoundary';
@@ -484,7 +484,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const taxRate = pf.dividendTaxRate ?? 15.4;
       const exHistoryAll = pf.dividendExDate || {};
       const hol = isOverseas ? (holidays?.us || []) : (holidays?.kr || []);
-      const orphanItems = getDividendOrphanCodes(pf).map(code => ({ code, name: '', quantity: 0, __orphan: true }));
+      const orphanNameMap = buildHeldNameMap(pf);
+      const orphanItems = getDividendOrphanCodes(pf).map(code => ({ code, name: orphanNameMap[code] || '', quantity: 0, __orphan: true }));
       [...(pf.portfolio || []), ...orphanItems].forEach(item => {
         if (!getCodeType(item.code, pf)) return;
         const qty = cleanNum(item.quantity);

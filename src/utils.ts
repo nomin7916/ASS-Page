@@ -690,6 +690,28 @@ export const snapshotItemsFromPortfolio = (items: any[]): any[] =>
     } : {}),
   }));
 
+// 삭제된 종목의 종목명 복원용 code→name 맵. 종목 삭제 시 이름은 코드별 데이터(actualDividend/
+// taxBaseHistory)에 저장되지 않지만, 보유 중 찍힌 holdingSnapshots에 name이 남아있어 오프라인으로
+// 복원 가능하다('삭제됨' 유령 행이 기존처럼 종목명+코드를 표시하도록). 최신 스냅샷 이름이 우선하고,
+// 현재 포트폴리오 항목 이름도 포함(정상 종목·무해).
+export const buildHeldNameMap = (pf: any): { [code: string]: string } => {
+  const map: { [code: string]: string } = {};
+  const snaps = Array.isArray(pf?.holdingSnapshots) ? pf.holdingSnapshots : [];
+  [...snaps]
+    .sort((a: any, b: any) => String(a?.date || '').localeCompare(String(b?.date || '')))
+    .forEach((s: any) => (s?.items || []).forEach((it: any) => {
+      const code = String(it?.code || '');
+      const name = String(it?.name || '').trim();
+      if (code && name) map[code] = name;
+    }));
+  (pf?.portfolio || []).forEach((it: any) => {
+    const code = String(it?.code || '');
+    const name = String(it?.name || '').trim();
+    if (code && name) map[code] = name;
+  });
+  return map;
+};
+
 // 구성 변경 감지용 지문 (가격 제외 — 수량·예수금·종목 구성만)
 export const snapshotCompositionKey = (items: any[]): string =>
   JSON.stringify(

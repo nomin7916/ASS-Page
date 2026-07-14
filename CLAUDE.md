@@ -479,6 +479,12 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   `if (!qty && !item.__orphan)`. 저장 키(exYm)는 삭제로 안 바뀌는 `dividendHistory`/`dividendExDate`에서
   산출되고 `handleRefreshAll`은 `pf.portfolio`만 갱신하므로, 유령 행 셀은 삭제 전과 **동일 월에 매핑**된다.
   '월 예상 분배금' 탭은 orphan 미포함(보유 없으면 예상 0 — 의도).
+- **종목명 복원(⚠️ 코드만 표시 금지)**: 삭제 시 종목명은 코드별 데이터에 저장 안 되지만, 보유 중 찍힌
+  `holdingSnapshots`(`snapshotItemsFromPortfolio`가 `name` 보존)에서 오프라인으로 복원한다 —
+  `buildHeldNameMap(pf)`(`utils.ts`, 최신 스냅샷 이름 우선 + 현재 포트폴리오 이름). `actualRows` orphanItems와
+  `KrEtfTaxMatrix` orphan의 `name`을 이 맵에서 채워, 유령 행이 **기존처럼 종목명+코드**로 표시된다(스냅샷에
+  없으면 코드만 — graceful). `KrEtfTaxMatrix` `krStocks` deps에 `holdingSnapshots` 포함. `allPortfoliosForDividend`
+  는 `...p` 스프레드라 `holdingSnapshots` 보존(이름 소스 확보).
 - **과표 유령 행**: `KrEtfTaxMatrix` `krStocks`에 `taxBaseHistory`에 입력값이 남고 포트폴리오에 없는
   코드를 `{type:'stock',__orphan:true,quantity:0}`로 추가(`taxBaseHasData` 트리거). **한계**: 매입/매도
   이벤트 없이 배당 과표만 입력한 경우, 삭제된 종목의 과거 보유수량이 taxBaseHistory에 없어 `보유주식수`/

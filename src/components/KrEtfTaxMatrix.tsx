@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useMemo, useState } from 'react';
 import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink } from 'lucide-react';
-import { generateId, cleanNum, formatCurrency, resolveHoldings } from '../utils';
+import { generateId, cleanNum, formatCurrency, resolveHoldings, buildHeldNameMap } from '../utils';
 import {
   getKrEtfStocks,
   getCodeTaxBase,
@@ -72,11 +72,12 @@ export default function KrEtfTaxMatrix({
   const krStocks = useMemo(() => {
     const base = getKrEtfStocks(portfolio);
     const inPortfolio = new Set(base.map(s => String(s.code)));
+    const nameMap = buildHeldNameMap(portfolio); // 삭제된 종목명은 보유 스냅샷에서 복원
     const orphans = Object.entries(portfolio?.taxBaseHistory || {})
       .filter(([code, rec]) => isKrCode(code) && !inPortfolio.has(String(code)) && taxBaseHasData(rec))
-      .map(([code]) => ({ code, name: '', quantity: 0, type: 'stock', __orphan: true }));
+      .map(([code]) => ({ code, name: nameMap[code] || '', quantity: 0, type: 'stock', __orphan: true }));
     return [...base, ...orphans];
-  }, [portfolio?.portfolio, portfolio?.taxBaseHistory]);
+  }, [portfolio?.portfolio, portfolio?.taxBaseHistory, portfolio?.holdingSnapshots]);
 
   if (!portfolio) return null;
 
