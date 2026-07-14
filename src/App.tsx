@@ -254,6 +254,7 @@ export default function App() {
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   const [calendarMemos, setCalendarMemos] = useState<Record<string, any[]>>({});
   const [showWatchlist, setShowWatchlist] = useState(false);
+  const [watchlistGroups, setWatchlistGroups] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
   const [rebalanceSortConfigMap, setRebalanceSortConfigMap] = useState<Record<string, { key: string | null, direction: number }>>({});
@@ -634,6 +635,7 @@ export default function App() {
     if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
     if (stateData.calendarMemos) setCalendarMemos(stateData.calendarMemos);
+    if (stateData.watchlistGroups) setWatchlistGroups(stateData.watchlistGroups);
     seenAdminNotifIdsRef.current = stateData.seenAdminNotifIds || [];
     setSeenAdminNotifIds(seenAdminNotifIdsRef.current);
   };
@@ -677,6 +679,7 @@ export default function App() {
     if (stateData.dividendLinks) setDividendLinks(normalizeDividendLinks(stateData.dividendLinks));
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
     if (stateData.calendarMemos) setCalendarMemos(stateData.calendarMemos);
+    if (stateData.watchlistGroups) setWatchlistGroups(stateData.watchlistGroups);
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
       if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
@@ -1773,6 +1776,7 @@ export default function App() {
       })),
       activePortfolioId, customLinks, JSON.stringify(dividendLinks),
       JSON.stringify(calendarMemos),
+      JSON.stringify(watchlistGroups),
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
       // 바인더 인덱스/섹션 펼침 상태 — 사용자 토글 시에만 변경(시세 갱신 무관)
       // → 변경 시 portfolioUpdatedAt 상승시켜 Drive STATE 저장 트리거 (앱 재시작 시 상태 유지)
@@ -1796,7 +1800,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -1811,7 +1815,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, rebalanceSortConfigMap, calendarMemos]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, rebalanceSortConfigMap, calendarMemos, watchlistGroups]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -2837,7 +2841,12 @@ export default function App() {
         setPortfolio={setPortfolio}
       />
       <FloatingCalculator isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
-      <WatchlistPopup open={showWatchlist} onClose={() => setShowWatchlist(false)} />
+      <WatchlistPopup
+        open={showWatchlist}
+        onClose={() => setShowWatchlist(false)}
+        groups={watchlistGroups}
+        onUpdateGroups={setWatchlistGroups}
+      />
     </div>
   );
 }
