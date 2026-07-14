@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote } from '../watchlistQuote';
 
@@ -20,6 +20,17 @@ const fmtPrice = (market, price) => {
 const rateColor = (r) => (r > 0 ? 'text-red-400' : r < 0 ? 'text-blue-400' : 'text-gray-500');
 const dotCls = (st) =>
   st === 'loading' ? 'bg-amber-400 animate-pulse' : st === 'success' ? 'bg-emerald-500' : st === 'fail' ? 'bg-red-500' : 'bg-gray-600';
+
+// 등락율 클릭 시 여는 종목 상세페이지 URL (PortfolioTable과 동일 규칙)
+const detailUrl = (market, code) => {
+  if (market === 'fund') {
+    return /^MA:/i.test(code)
+      ? `https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=${code.replace(/^MA:/i, '')}`
+      : `https://www.funetf.co.kr/product/fund/view/${code}`;
+  }
+  if (market === 'us') return `https://finance.yahoo.com/quote/${code.toUpperCase()}`;
+  return `https://m.stock.naver.com/domestic/stock/${code.toUpperCase()}/total`;
+};
 
 export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGroups }) {
   const [pos, setPos] = useState(() => ({
@@ -321,12 +332,21 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                             <span className="text-gray-600">· {MARKET_LABEL[s.market] || s.market}</span>
                           </div>
                         </div>
-                        <span className={`w-16 text-right text-xs font-medium ${q ? rateColor(q.changeRate) : 'text-gray-600'}`}>
+                        <button
+                          onClick={() => s.code && window.open(detailUrl(s.market, s.code), '_blank')}
+                          title="종목 상세 보기"
+                          className={`w-16 text-right text-xs font-medium cursor-pointer hover:underline ${q ? rateColor(q.changeRate) : 'text-gray-600'}`}
+                        >
                           {q ? formatChangeRate(q.changeRate) : st === 'loading' ? '…' : '-'}
-                        </span>
-                        <span className="w-24 text-right text-[13px] text-gray-200 tabular-nums">
-                          {q ? fmtPrice(s.market, q.price) : '-'}
-                        </span>
+                        </button>
+                        <button
+                          onClick={() => loadQuote(s)}
+                          title="클릭하여 현재가 새로고침"
+                          className="w-24 flex items-center justify-end gap-1 text-[13px] text-gray-200 tabular-nums cursor-pointer hover:text-teal-300 transition-colors"
+                        >
+                          {st === 'loading' && <RefreshCw size={10} className="text-teal-400 animate-spin shrink-0" />}
+                          <span>{q ? fmtPrice(s.market, q.price) : '-'}</span>
+                        </button>
                         <button
                           onClick={() => removeStock(s.id)}
                           title="종목 삭제"
