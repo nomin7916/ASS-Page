@@ -465,6 +465,38 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
 - `compact=true`: 통합 대시보드 뷰, 계좌별 월 합계만 표시, rowColor 그라데이션 텍스트
 - App.tsx 배치: non-compact ~1933줄 / compact ~2110줄 (`showIntegratedDashboard` 조건)
 
+### 삭제된 종목의 분배금·과세 입력 보존 = '삭제됨' 유령 행 (⚠️ 회귀 주의)
+
+포트폴리오 테이블에서 종목을 삭제(`handleDeleteStock` = `pf.portfolio` filter)해도 **계좌 단위로
+코드별 보관되는 사용자 입력 분배금/과표 데이터는 지워지지 않는다** — 삭제는 종목 행만 제거한다.
+분배금 표(`actualRows`/`compactActualRows`)와 과표 표(`getKrEtfStocks`)가 `pf.portfolio`만 순회하던
+탓에 그 데이터가 표에서 사라져 보이던 것을, 삭제된 코드를 **'삭제됨' 유령 행**으로 계속 노출한다.
+
+- **분배금 유령 행**: `getDividendOrphanCodes(pf)`(`DividendSummaryTable.tsx` 모듈 함수) — 금액이 실제
+  입력된 맵(`actualDividend`/`actualDividendUsd`/`actualAfterTaxUsd`/`actualAfterTaxKrw`/
+  `dividendTaxAmounts`)에 데이터가 남고 `pf.portfolio`에 없는 코드. `actualRows`·`compactActualRows`가
+  `[...pf.portfolio, ...orphanItems]`(orphan은 `quantity:0`,`__orphan:true`)를 순회하며 가드는
+  `if (!qty && !item.__orphan)`. 저장 키(exYm)는 삭제로 안 바뀌는 `dividendHistory`/`dividendExDate`에서
+  산출되고 `handleRefreshAll`은 `pf.portfolio`만 갱신하므로, 유령 행 셀은 삭제 전과 **동일 월에 매핑**된다.
+  '월 예상 분배금' 탭은 orphan 미포함(보유 없으면 예상 0 — 의도).
+- **과표 유령 행**: `KrEtfTaxMatrix` `krStocks`에 `taxBaseHistory`에 입력값이 남고 포트폴리오에 없는
+  코드를 `{type:'stock',__orphan:true,quantity:0}`로 추가(`taxBaseHasData` 트리거). **한계**: 매입/매도
+  이벤트 없이 배당 과표만 입력한 경우, 삭제된 종목의 과거 보유수량이 taxBaseHistory에 없어 `보유주식수`/
+  `예상 과세`가 0으로 표시된다(입력값=배당 과표·평균 과표·과세 과표는 보존·표시). 이벤트가 있으면
+  `computeMonthlyQtyForGrid`가 수량을 복원해 정상.
+- **영구 삭제(× 버튼)**: 유령 행의 작은 ×/휴지통 → `confirmDialog` 후 `deletePortfolioDividendData`
+  (분배금 맵 8개 strip + `dividendHistoryUpdatedAt` 갱신) / `deletePortfolioTaxData`(`taxBaseHistory[code]`
+  삭제). 지문(`portfolioStructureKey`)의 `actualDividend`/`dividendHistoryUpdatedAt`/`taxBaseKey` 변경으로
+  Drive STATE 저장 트리거(⚠️ `dividendTaxAmounts`/`actualDividendQty`는 지문 미포함이라
+  `dividendHistoryUpdatedAt` 갱신이 저장 보장). props: App→DividendSummaryTable(`deletePortfolioDividendData`/
+  `deletePortfolioTaxData`/`confirmDialog={confirm}`), DividendSummaryTable→KrEtfTaxMatrix(뒤 2개). compact
+  테이블(IntegratedDashboard)은 × 미전달(`&& deletePortfolioDividendData` 가드로 안전).
+- **⚠️ 이중 계상 방지(회귀 주의)**: `getDividendOrphanCodes`는 같은 코드로 만든 기존 '수동 추가 행'
+  (`extraDividendRows`, 목적 동일=제거 종목 배당 기록)이 있으면 그 코드를 **제외**한다. 안 그러면 유령 행
+  (`actualDividend`)과 수동 추가 행(`afterTaxKrw`)이 월/연 합계에서 **둘 다 합산**돼 2배가 되고 2줄로 뜬다.
+  기존 수동 행 우선, 유령 행 억제(데이터는 계좌에 남아 수동 행 삭제 시 복원). **새 통합 합산/orphan 소스
+  추가 시 이 dedup을 빠뜨리지 말 것.**
+
 ### 메모 달력 (calendarMemos) — 헤더 달력 아이콘 → 날짜별 다중 메모 (⚠️ 회귀 주의)
 
 헤더의 **달력 아이콘**(`AccountTabBar` 액션 아이콘 **우측 끝, 통합 대시보드·개별 계좌 모두
