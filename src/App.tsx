@@ -2172,8 +2172,13 @@ export default function App() {
   // ⚠️ resolveMaterial은 반드시 '기능 게이팅된' 배열만 사용한다(권한 OFF 사용자는 복원 0 → 접근 차단).
   //    UserInfoBar에 넘기는 게이팅 배열(아래 props)과 동일 소스를 써서 모달/벨/드롭다운이 한 기준으로 동작.
   //    isAdminUser는 위(관리자 자동 허용)에서 이미 선언됨 — 재선언 금지(중복 const = SyntaxError).
-  const gatedNotebookLinks = isAdminUser || userFeatures.notebookEnabled ? notebookLinks : [];
-  const gatedReportLinks = isAdminUser || userFeatures.reportEnabled ? reportLinks : [];
+  // 헤더 자료 아이콘(유튜브·학습자료·시장동향) 접근 권한 — 관리자 또는 사용자별 기능 ON.
+  // OFF면 아이콘 자체를 렌더하지 않는다(예초에 없었던 것처럼). 배당과세 아이콘(canAccessDividendTax)과 동일 패턴.
+  const youtubeAccess = isAdminUser || userFeatures.youtubeEnabled;
+  const notebookAccess = isAdminUser || userFeatures.notebookEnabled;
+  const reportAccess = isAdminUser || userFeatures.reportEnabled;
+  const gatedNotebookLinks = notebookAccess ? notebookLinks : [];
+  const gatedReportLinks = reportAccess ? reportLinks : [];
   const resolveMaterial = (channel, message, refCreatedAt) => resolveNoticeMaterial(
     channel === 'notebook' ? gatedNotebookLinks : channel === 'report' ? gatedReportLinks : [],
     message, channel, refCreatedAt,
@@ -2283,9 +2288,12 @@ export default function App() {
           onAppClose={handleAppClose}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
-          youtubeUrl={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.youtubeEnabled ? youtubeUrl : ''}
-          notebookLinks={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.notebookEnabled ? notebookLinks : []}
-          reportLinks={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || userFeatures.reportEnabled ? reportLinks : []}
+          youtubeUrl={youtubeAccess ? youtubeUrl : ''}
+          youtubeEnabled={youtubeAccess}
+          notebookLinks={gatedNotebookLinks}
+          notebookEnabled={notebookAccess}
+          reportLinks={gatedReportLinks}
+          reportEnabled={reportAccess}
           title={title}
           setTitle={setTitle}
           showIntegratedDashboard={showIntegratedDashboard}

@@ -48,8 +48,11 @@ export default function UserInfoBar({
   showCalculator,
   onToggleCalculator,
   youtubeUrl,
+  youtubeEnabled = false,
   notebookLinks = [],
+  notebookEnabled = false,
   reportLinks = [],
+  reportEnabled = false,
   title,
   setTitle,
   showIntegratedDashboard,
@@ -266,7 +269,7 @@ export default function UserInfoBar({
             <Calculator size={14} />
           </button>
         )}
-        {youtubeUrl ? (
+        {youtubeEnabled && (youtubeUrl ? (
           <a
             href={youtubeUrl}
             target="_blank"
@@ -283,8 +286,9 @@ export default function UserInfoBar({
           >
             <Youtube size={14} />
           </span>
-        )}
+        ))}
         {/* 노트북LM 링크 드롭다운 */}
+        {notebookEnabled && (
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => notebookLinks.length > 0 && setNotebookOpen(v => !v)}
@@ -355,7 +359,9 @@ export default function UserInfoBar({
             </>
           )}
         </div>
+        )}
         {/* 시장동향 리포트 드롭다운 */}
+        {reportEnabled && (
         <div className="relative" ref={reportDropdownRef}>
           <button
             onClick={() => reportLinks.length > 0 && setReportOpen(v => !v)}
@@ -426,6 +432,7 @@ export default function UserInfoBar({
             </>
           )}
         </div>
+        )}
         <div className="w-px h-3 bg-gray-700/60 mx-0.5" />
         {isAdmin && onOpenAdminPortal && (
           <button
