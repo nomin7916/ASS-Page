@@ -520,6 +520,7 @@ export default function App() {
     updateTaxBaseSales,
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
+    toggleHiddenTaxMonth,
     updateInvestmentNotes,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
@@ -1749,6 +1750,7 @@ export default function App() {
         investmentNotesKey: (p.investmentNotes || []).map(n => `${n.id}:${n.date}`).join('|'),
         rowColor: p.rowColor || '',
         isTest: !!p.isTest,
+        hiddenTaxMonths: [...(p.hiddenTaxMonths || [])].sort((a, b) => a - b),
         historyLen: (p.history || []).length,
         // 자산검증 확정상태 지문: 확정(isFixed)·자동확정거부(autoConfirmDeclined)·확정값 변경을
         // 구조 변경으로 간주 → portfolioUpdatedAt 상승 → Drive STATE 저장(수동/자동 확정·확정취소
@@ -2532,6 +2534,7 @@ export default function App() {
             updateTaxBaseSales={updateTaxBaseSales}
             updateTaxBaseExPrice={updateTaxBaseExPrice}
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
+            onToggleTaxMonth={toggleHiddenTaxMonth}
             deletePortfolioDividendData={deletePortfolioDividendData}
             deletePortfolioTaxData={deletePortfolioTaxData}
             confirmDialog={confirm}

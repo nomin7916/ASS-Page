@@ -470,6 +470,18 @@ export function usePortfolioState({
     }));
   };
 
+  // 과표 계산 매트릭스의 월(0~11) 컬럼 숨김 토글 — 계좌별 hiddenTaxMonths 배열에 저장.
+  // 포트폴리오 테이블 열 숨기기(hiddenColumnsPortfolio)의 과표표 버전. 표시 편의용이므로
+  // 연합계·월별 합계 계산에는 영향을 주지 않고 렌더만 숨긴다(KrEtfTaxMatrix 참조).
+  const toggleHiddenTaxMonth = (portfolioId, monthIndex) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const cur = p.hiddenTaxMonths ?? [];
+      const next = cur.includes(monthIndex) ? cur.filter(m => m !== monthIndex) : [...cur, monthIndex];
+      return { ...p, hiddenTaxMonths: next };
+    }));
+  };
+
   // ── 수동 추가 배당금 행 ──
   const addPortfolioExtraRow = (portfolioId) => {
     setPortfolios(prev => prev.map(p => {
@@ -730,6 +742,7 @@ export function usePortfolioState({
     updateTaxBaseSales,
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
+    toggleHiddenTaxMonth,
     updateInvestmentNotes,
   };
 }

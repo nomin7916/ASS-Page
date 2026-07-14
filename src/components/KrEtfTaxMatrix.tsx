@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState, useRef, useCallback } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Eye } from 'lucide-react';
 import { generateId, cleanNum, formatCurrency, resolveHoldings, buildHeldNameMap } from '../utils';
 import {
   getKrEtfStocks,
@@ -61,6 +61,7 @@ export default function KrEtfTaxMatrix({
   updateTaxBaseSales,
   updateTaxBaseExPrice,
   updateTaxBaseAvgPrice,
+  onToggleTaxMonth = () => {},
   deletePortfolioTaxData,
   confirmDialog,
   notify,
@@ -105,6 +106,19 @@ export default function KrEtfTaxMatrix({
   }
 
   const monthYms = MONTHS.map((_, i) => `${CURRENT_YEAR}-${String(i + 1).padStart(2, '0')}`);
+
+  // 월(0~11) 컬럼 숨기기 — 계좌별 hiddenTaxMonths. 표시 편의용이라 연합계·월별 합계 계산에는
+  // 영향을 주지 않고(전 12개월로 계산 유지) 렌더만 숨긴다. 종목 열/연합계/평균 과표 계산기는 숨김 대상 아님.
+  const hiddenTaxMonths = portfolio?.hiddenTaxMonths ?? [];
+  const isMonthHidden = (i) => hiddenTaxMonths.includes(i);
+  const visibleMonthCount = MONTHS.reduce((n, _, i) => n + (isMonthHidden(i) ? 0 : 1), 0);
+  const monthHideStrip = (i) => (
+    <div
+      className="absolute top-0 left-0 right-0 h-3 cursor-pointer z-10 hover:bg-indigo-400/25 transition-colors"
+      onClick={e => { e.stopPropagation(); onToggleTaxMonth(portfolio.id, i); }}
+      title="클릭하여 이 월 숨기기"
+    />
+  );
 
   // 자산검증 스냅샷에서 전일 수량 조회
   const lookupPrevQty = (date, stockCode) => {
@@ -216,16 +230,35 @@ export default function KrEtfTaxMatrix({
         <span className="text-gray-600">|</span>
         <span className="text-gray-500">연간 예상 과세 합계</span>
         <span className="text-emerald-400 font-semibold tabular-nums">{formatCurrency(grandExpected)}</span>
+        {hiddenTaxMonths.length > 0 && (
+          <span className="flex items-center gap-1 flex-wrap">
+            <span className="text-gray-600">|</span>
+            <span className="text-gray-500">숨긴 월</span>
+            {[...hiddenTaxMonths].sort((a, b) => a - b).map(i => (
+              <button
+                key={i}
+                onClick={() => onToggleTaxMonth(portfolio.id, i)}
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-bold text-gray-400 border border-gray-600 rounded bg-gray-800/80 hover:bg-gray-700 hover:text-amber-300 transition-colors"
+                title={`${MONTHS[i]} 다시 표시`}
+              >
+                <Eye size={9} /> {MONTHS[i]}
+              </button>
+            ))}
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-2">
-          <span className="text-gray-600">종목명 클릭 → 평균 과표 계산기</span>
+          <span className="text-gray-600">월 상단 클릭 → 숨기기 · 종목명 클릭 → 평균 과표 계산기</span>
         </span>
       </div>
       <table className="w-full text-[11px] text-center">
         <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
           <tr>
-            <th className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[170px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목</th>
-            {MONTHS.map(m => (
-              <th key={m} className="py-2 px-1 min-w-[128px] font-normal">{m}</th>
+            <th className="py-2 px-3 text-left sticky left-0 z-20 bg-[#1e293b] min-w-[170px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">종목</th>
+            {MONTHS.map((m, i) => !isMonthHidden(i) && (
+              <th key={m} className="py-2 px-1 min-w-[128px] font-normal relative">
+                {monthHideStrip(i)}
+                {m}
+              </th>
             ))}
             <th className="py-2 px-2 min-w-[96px] text-yellow-500 font-bold">연합계</th>
           </tr>
@@ -236,7 +269,7 @@ export default function KrEtfTaxMatrix({
             return (
               <React.Fragment key={stock.code}>
                 <tr className="border-b border-gray-700/40 hover:bg-gray-800/20">
-                  <td className="py-2 px-3 text-left sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+                  <td className="py-2 px-3 text-left sticky left-0 z-20 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
                     <div className="mb-1 flex items-center gap-1 flex-wrap">
                       <a
                         href={funetfEtfUrl(stock.code)}
@@ -281,7 +314,7 @@ export default function KrEtfTaxMatrix({
                       </div>
                     </button>
                   </td>
-                  {monthData.map(d => (
+                  {monthData.map((d, i) => !isMonthHidden(i) && (
                     <td key={d.ym} className="py-1 px-1 align-top">
                       <div className="space-y-0.5">
                         <input
@@ -345,7 +378,7 @@ export default function KrEtfTaxMatrix({
                 </tr>
                 {isExpanded && (
                   <tr className="bg-[#0b1322] border-b border-gray-700/40">
-                    <td colSpan={MONTHS.length + 2} className="p-0 align-top">
+                    <td colSpan={visibleMonthCount + 2} className="p-0 align-top">
                       <div className="sticky left-0 px-4 py-3" style={{ width: viewportW || undefined }}>
                       <div className="border border-gray-700/60 rounded-lg bg-gray-900/40">
                         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800">
@@ -536,10 +569,10 @@ export default function KrEtfTaxMatrix({
         </tbody>
         <tfoot className="bg-[#0f172a] border-t border-gray-600">
           <tr>
-            <td className="py-2 px-3 text-left sticky left-0 z-10 bg-[#0f172a] text-[11px] font-bold text-gray-300 [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+            <td className="py-2 px-3 text-left sticky left-0 z-20 bg-[#0f172a] text-[11px] font-bold text-gray-300 [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
               월별 예상 과세 합계
             </td>
-            {monthlyExpected.map((v, i) => (
+            {monthlyExpected.map((v, i) => !isMonthHidden(i) && (
               <td key={i} className="py-1 px-1 tabular-nums">
                 <div className="text-[10px] text-emerald-400 font-semibold">{v > 0 ? formatCurrency(v) : '-'}</div>
               </td>

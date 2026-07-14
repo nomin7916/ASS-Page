@@ -356,7 +356,7 @@ function DividendLinkBar({ links, onChange }) {
   );
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, onToggleTaxMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -2206,6 +2206,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             updateTaxBaseSales={updateTaxBaseSales}
             updateTaxBaseExPrice={updateTaxBaseExPrice}
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
+            onToggleTaxMonth={onToggleTaxMonth}
             updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
             deletePortfolioTaxData={deletePortfolioTaxData}
             confirmDialog={confirmDialog}
