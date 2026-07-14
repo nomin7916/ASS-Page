@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
-import { detectMarket, fetchWatchQuote, fetchWatchHistory } from '../watchlistQuote';
+import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
 // - 단일 position:fixed div (백드롭/오버레이 없음 → 아래 앱 클릭·스크롤 통과)
@@ -25,6 +25,18 @@ const fmtPrice = (market, price) => {
 const rateColor = (r) => (r > 0 ? 'text-red-400' : r < 0 ? 'text-blue-400' : 'text-gray-500');
 const dotCls = (st) =>
   st === 'loading' ? 'bg-amber-400 animate-pulse' : st === 'success' ? 'bg-emerald-500' : st === 'fail' ? 'bg-red-500' : 'bg-gray-600';
+
+const PERIODS = ['1일', '1주', '1개월', '3개월', '1년'];
+// 일별 기간의 시작 컷오프 날짜(YYYY-MM-DD). '1일'은 인트라데이라 미사용.
+const cutoffFor = (period) => {
+  const d = new Date();
+  if (period === '1주') d.setDate(d.getDate() - 7);
+  else if (period === '1개월') d.setMonth(d.getMonth() - 1);
+  else if (period === '3개월') d.setMonth(d.getMonth() - 3);
+  else if (period === '1년') d.setFullYear(d.getFullYear() - 1);
+  else return '';
+  return d.toISOString().split('T')[0];
+};
 
 // 등락율 클릭 시 여는 종목 상세페이지 URL (PortfolioTable과 동일 규칙)
 const detailUrl = (market, code) => {
@@ -80,8 +92,11 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const [quotes, setQuotes] = useState({});   // { [code]: { name, price, changeRate } }
   const [status, setStatus] = useState({});   // { [code]: 'loading'|'success'|'fail' }
   const [codeInput, setCodeInput] = useState('');
-  const [histMap, setHistMap] = useState({});   // { [code]: number[] } 최근 종가 (팝업 로컬 — Drive 저장 안 함)
-  const loadedHistRef = useRef(new Set());       // 이력 조회 완료/진행 코드:market (재조회 방지)
+  const [dailyMap, setDailyMap] = useState({});       // { [code]: [date, close][] } 일별 종가(팝업 로컬 — Drive 저장 안 함)
+  const [intradayMap, setIntradayMap] = useState({}); // { [code]: number[] } 오늘 인트라데이(1일)
+  const [period, setPeriod] = useState('1개월');       // 미니차트 기간
+  const loadedDailyRef = useRef(new Set());            // 일별 조회 완료/진행 코드:market
+  const loadedIntradayRef = useRef(new Set());         // 인트라데이 조회 완료/진행 코드:market
 
   const list = Array.isArray(groups) ? groups : [];
   const activeGroup = list.find((g) => g.id === activeGroupId) || list[0] || null;
@@ -148,27 +163,36 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     }
   };
 
-  // 미니차트용 최근 종가 이력 (팝업 로컬 histMap에만 — 공유 stockHistoryMap 미접촉으로 보유종목 평가 불변식 보호)
-  const loadHistory = async (stock) => {
+  // 미니차트 일별 종가(~1년) — 팝업 로컬 dailyMap에만 저장(공유 stockHistoryMap 미접촉으로 보유종목 평가 불변식 보호)
+  const loadDaily = async (stock) => {
     const key = stock.code + ':' + stock.market;
-    if (loadedHistRef.current.has(key)) return;
-    loadedHistRef.current.add(key);
-    const data = await fetchWatchHistory(stock.market, stock.code);
-    const points = data
-      ? Object.entries(data).sort(([a], [b]) => (a < b ? -1 : 1)).slice(-30).map(([, v]) => Number(v)).filter((v) => isFinite(v))
-      : [];
-    if (points.length >= 2) {
-      setHistMap((p) => ({ ...p, [stock.code]: points }));
-    } else {
-      loadedHistRef.current.delete(key); // 데이터 없음 → 다음 기회에 재시도 허용
-    }
+    if (loadedDailyRef.current.has(key)) return;
+    loadedDailyRef.current.add(key);
+    const pairs = await fetchWatchDaily(stock.market, stock.code);
+    if (pairs && pairs.length >= 2) setDailyMap((p) => ({ ...p, [stock.code]: pairs }));
+    else loadedDailyRef.current.delete(key); // 데이터 없음 → 재시도 허용
+  };
+  // '1일' 인트라데이 종가 — 팝업 로컬 intradayMap에만 저장
+  const loadIntraday = async (stock) => {
+    const key = stock.code + ':' + stock.market;
+    if (loadedIntradayRef.current.has(key)) return;
+    loadedIntradayRef.current.add(key);
+    const pts = await fetchWatchIntraday(stock.market, stock.code);
+    if (pts && pts.length >= 2) setIntradayMap((p) => ({ ...p, [stock.code]: pts }));
+    else loadedIntradayRef.current.delete(key);
   };
 
   // 팝업 열 때 + 그룹 전환 시 활성 그룹 종목만 조회(전체 그룹 동시 조회 금지)
   useEffect(() => {
     if (!open || !activeGroup) return;
-    (activeGroup.stocks || []).forEach((s) => { loadQuote(s); loadHistory(s); });
+    (activeGroup.stocks || []).forEach((s) => { loadQuote(s); loadDaily(s); });
   }, [open, activeGroup?.id]);
+
+  // 기간이 '1일'이면(1일 상태로 열림/그룹전환/토글) 활성 그룹 인트라데이 조회
+  useEffect(() => {
+    if (!open || !activeGroup || period !== '1일') return;
+    (activeGroup.stocks || []).forEach((s) => loadIntraday(s));
+  }, [open, activeGroup?.id, period]);
 
   // 활성 그룹 미지정 시 첫 그룹으로 고정 — recordRecent가 최근조회를 앞으로 재정렬해도 뷰가 튀지 않게
   useEffect(() => {
@@ -212,7 +236,8 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
       (g.id === activeGroup.id ? { ...g, stocks: [...(g.stocks || []), stock] } : g)));
     setCodeInput('');
     loadQuote(stock);
-    loadHistory(stock);
+    loadDaily(stock);
+    if (period === '1일') loadIntraday(stock);
   };
   const removeStock = (stockId) => {
     if (!activeGroup) return;
@@ -226,7 +251,8 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
       stocks: (g.stocks || []).map((s) => (s.id === stock.id ? { ...s, market } : s)),
     })));
     loadQuote({ ...stock, market });
-    loadHistory({ ...stock, market });
+    loadDaily({ ...stock, market });
+    if (period === '1일') loadIntraday({ ...stock, market });
   };
 
   // 상세페이지를 연 종목을 '최근조회' 자동 그룹에 기록(최근 우선, 코드 dedup, RECENT_CAP 상한).
@@ -246,6 +272,14 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     if (!s.code) return;
     window.open(detailUrl(s.market, s.code), '_blank');
     recordRecent({ ...s, name: q?.name || s.name || '' });
+  };
+
+  // 선택 기간에 따른 미니차트 종가 배열
+  const pointsFor = (s) => {
+    if (period === '1일') return intradayMap[s.code] || [];
+    const daily = dailyMap[s.code] || [];
+    const cut = cutoffFor(period);
+    return daily.filter(([dt]) => dt >= cut).map(([, c]) => c);
   };
 
   if (!open) return null;
@@ -392,6 +426,24 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
               </div>
             )}
 
+            {/* 미니차트 기간 토글 */}
+            <div className="flex items-center gap-1 mb-2">
+              {PERIODS.map((pd) => (
+                <button
+                  key={pd}
+                  onClick={() => setPeriod(pd)}
+                  title={`미니차트 기간: ${pd}`}
+                  className={`flex-1 rounded px-1 py-1 text-[11px] font-medium border transition-colors ${
+                    period === pd
+                      ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                      : 'border-gray-700 text-gray-400 hover:text-amber-300'
+                  }`}
+                >
+                  {pd}
+                </button>
+              ))}
+            </div>
+
             {/* 종목 리스트 */}
             {(activeGroup.stocks || []).length === 0 ? (
               <div className="text-center text-gray-600 text-xs py-8">코드를 입력해 종목을 추가하세요.</div>
@@ -413,7 +465,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                             <span className="text-gray-600">· {MARKET_LABEL[s.market] || s.market}</span>
                           </div>
                         </div>
-                        <Sparkline points={histMap[s.code]} />
+                        <Sparkline points={pointsFor(s)} />
                         <button
                           onClick={() => viewStock(s, q)}
                           title="종목 상세 보기"

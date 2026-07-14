@@ -707,11 +707,16 @@ markAsRead() / clearNotificationLog()
   리터럴 ④ 저장 effect deps ⑤ `applyStateData` ⑥ `applyBackupData`. PC 백업 2곳은 `{...saveStateRef.current}`
   스프레드로 자동 상속. [[feedback_auto_commit]]
 - **⚠️ 공유 `stockHistoryMap`에 절대 쓰지 말 것(핵심 불변식)**: 관심종목 시세/미니차트 이력은 **팝업
-  로컬 `histMap`(+`quotes`/`status`)에만** 저장한다. `stockHistoryMap`은 Drive 영속 + `buildCloseEvalSeries`
-  (보유종목 평가액 재계산)·`useAutoConfirmHistory` 데이터완비 가드의 권위 소스라, 관심종목의 라이브값/
-  fchart 수정주가를 병합하면 **보유+관심 중복 코드의 평가액이 오염되고 잘못된 값이 영구 고정**된다
-  (3중 리뷰 blocker). 미니차트 이력은 `watchlistQuote.fetchWatchHistory`(국내 fchart 60일/해외 90일/펀드
-  NAV)로 받아 로컬 `histMap`에만 넣는다.
+  로컬 `dailyMap`/`intradayMap`(+`quotes`/`status`)에만** 저장한다. `stockHistoryMap`은 Drive 영속 +
+  `buildCloseEvalSeries`(보유종목 평가액 재계산)·`useAutoConfirmHistory` 데이터완비 가드의 권위 소스라,
+  관심종목의 라이브값/fchart 수정주가를 병합하면 **보유+관심 중복 코드의 평가액이 오염되고 잘못된 값이
+  영구 고정**된다(3중 리뷰 blocker).
+- **미니차트 기간 토글(1일·1주·1개월·3개월·1년)**: `watchlistQuote.fetchWatchDaily`가 **~1년치 일별 종가
+  [date,close][]를 코드당 1회** 받아 팝업 로컬 `dailyMap`에 저장 → 1주/1개월/3개월/1년은 `cutoffFor`
+  날짜 컷오프로 **클라이언트 슬라이스(재조회 없이 즉시)**. `1일`만 `fetchWatchIntraday`(US=Yahoo 5분봉,
+  KR=네이버 today `api.stock.naver.com/.../today` 방어적 파싱, 펀드=없음)를 lazy 조회해 `intradayMap`에
+  저장. 기간 조회는 항상 활성 그룹 종목만(전체 그룹 동시 조회 금지). 인트라데이 소스는 프록시
+  (`/api/proxy` 허용 도메인)+allorigins/codetabs 폴백, 실패 시 빈 차트로 graceful degradation.
 - **코드→시장 판정(`detectMarket`)**: 계좌 컨텍스트 없음 → 코드 포맷 사용. **6자 영숫자+숫자(005930·
   0219E0)를 `extractFundCode`의 5~7자 펀드 규칙보다 먼저 KR로 판정**(안 그러면 국내 ETF가 미래에셋 펀드로
   오분류). MA:/URL→fund, 알파벳 티커→us, 그 외 5자+→fund. 잔여 오분류는 **실패 행의 시장 수동보정

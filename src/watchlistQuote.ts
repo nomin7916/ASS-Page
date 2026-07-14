@@ -59,28 +59,94 @@ const daysAgo = (n: number): string => {
   return d.toISOString().split('T')[0];
 };
 
-// 미니 차트용 최근 일별 종가 이력. { 'YYYY-MM-DD': close } | null.
+// 미니 차트용 최근 ~1년 일별 종가 이력. [date, close][](오름차순) | null.
+// 1주/1개월/3개월/1년 토글은 이 1건을 팝업에서 기간별로 슬라이스(재조회 없이 즉시 반영).
 // ⚠️ 반환값은 팝업 로컬 맵에만 저장(공유 stockHistoryMap 오염 금지 — 보유종목 평가액 불변식 보호).
-export async function fetchWatchHistory(market: WatchMarket, code: string):
-  Promise<Record<string, number> | null> {
+export async function fetchWatchDaily(market: WatchMarket, code: string):
+  Promise<[string, number][] | null> {
   const c = (code || '').trim();
   if (!c) return null;
+  let data: Record<string, number> | null = null;
   try {
     if (market === 'kr') {
-      const r = await fetchNaverStockHistory(c, 60); // 최근 ~60거래일(fchart)
-      return r?.data || null;
+      const r = await fetchNaverStockHistory(c, 300); // 최근 ~300거래일(fchart) ≈ 1.2년
+      data = r?.data || null;
+    } else if (market === 'us') {
+      const r = await fetchUsStockHistory(c.toUpperCase(), daysAgo(370));
+      data = r?.data || null;
+    } else {
+      const start = daysAgo(400);
+      const end = daysAgo(0);
+      if (/^MA:/i.test(c)) data = await fetchMiraeFundNavHistory(c, start, end);
+      else if (/^[A-Za-z0-9]{5,7}$/.test(c)) data = await fetchMiraeFundNavHistory(`MA:${c.toUpperCase()}`, start, end);
+      else data = await fetchFundNavHistory(c.toUpperCase(), start, end);
     }
-    if (market === 'us') {
-      const r = await fetchUsStockHistory(c.toUpperCase(), daysAgo(90));
-      return r?.data || null;
-    }
-    // fund
-    const start = daysAgo(120);
-    const end = daysAgo(0);
-    if (/^MA:/i.test(c)) return await fetchMiraeFundNavHistory(c, start, end);
-    if (/^[A-Za-z0-9]{5,7}$/.test(c)) return await fetchMiraeFundNavHistory(`MA:${c.toUpperCase()}`, start, end);
-    return await fetchFundNavHistory(c.toUpperCase(), start, end);
   } catch {
-    return null;
+    data = null;
   }
+  if (!data) return null;
+  const pairs = Object.entries(data)
+    .map(([d, v]) => [d, Number(v)] as [string, number])
+    .filter(([, v]) => isFinite(v) && v > 0);
+  pairs.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  return pairs.length ? pairs : null;
+}
+
+// '1일' 인트라데이 종가 배열(오늘 장중, 오름차순) | null. US=Yahoo 5분봉, KR=네이버 today, 펀드=없음.
+export async function fetchWatchIntraday(market: WatchMarket, code: string): Promise<number[] | null> {
+  const c = (code || '').trim();
+  if (!c) return null;
+  if (market === 'us') return fetchYahooIntraday(c);
+  if (market === 'kr') return fetchNaverIntraday(c);
+  return null; // fund: NAV는 일단위라 인트라데이 없음
+}
+
+async function fetchYahooIntraday(ticker: string): Promise<number[] | null> {
+  const t = ticker.toUpperCase();
+  const base = t.includes('.') ? t.split('.')[0] : t;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${base}?range=1d&interval=5m`;
+  const proxies = [
+    `/api/proxy?url=${encodeURIComponent(url)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${url}`,
+  ];
+  for (const p of proxies) {
+    try {
+      const res = await fetch(p, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const json: any = await res.json();
+      const closes: (number | null)[] = json?.chart?.result?.[0]?.indicators?.quote?.[0]?.close ?? [];
+      const pts = (closes || []).filter((v): v is number => v != null && isFinite(v) && v > 0);
+      if (pts.length >= 2) return pts;
+    } catch { /* next proxy */ }
+  }
+  return null;
+}
+
+async function fetchNaverIntraday(code: string): Promise<number[] | null> {
+  const url = `https://api.stock.naver.com/chart/domestic/item/${code}/today`;
+  const proxies = [
+    `/api/proxy?url=${encodeURIComponent(url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${url}`,
+  ];
+  for (const p of proxies) {
+    try {
+      const res = await fetch(p, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const json: any = await res.json();
+      // 응답 형식이 배열/객체 어느 쪽이든 방어적으로 처리
+      const arr: any[] = Array.isArray(json)
+        ? json
+        : (json?.chartInfoList || json?.priceInfos || json?.prices || json?.result || json?.list || []);
+      if (Array.isArray(arr) && arr.length) {
+        const pts = arr
+          .map((it) => Number(it?.closePrice ?? it?.close ?? it?.currentPrice ?? it?.prc ?? it?.trdPrc ?? it?.price))
+          .filter((v) => isFinite(v) && v > 0);
+        if (pts.length >= 2) return pts;
+      }
+    } catch { /* next proxy */ }
+  }
+  return null;
 }
