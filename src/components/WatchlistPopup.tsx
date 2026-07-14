@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchHistory } from '../watchlistQuote';
 
@@ -11,6 +11,11 @@ import { detectMarket, fetchWatchQuote, fetchWatchHistory } from '../watchlistQu
 const WATCHLIST_Z = 1050;
 const PANEL_W = 420;
 const MARKET_LABEL = { kr: '국내', us: '해외', fund: '펀드' };
+const RECENT_ID = '__recent__';   // 자동 '최근조회' 그룹의 예약 id
+const RECENT_NAME = '최근조회';
+const RECENT_CAP = 20;            // 최근조회 보관 개수
+const MAX_GROUPS = 30;           // 수동 그룹 소프트 상한(최근조회 제외)
+const MAX_STOCKS = 100;          // 그룹당 종목 소프트 상한
 
 const fmtPrice = (market, price) => {
   if (market === 'us') return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -165,10 +170,16 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     (activeGroup.stocks || []).forEach((s) => { loadQuote(s); loadHistory(s); });
   }, [open, activeGroup?.id]);
 
+  // 활성 그룹 미지정 시 첫 그룹으로 고정 — recordRecent가 최근조회를 앞으로 재정렬해도 뷰가 튀지 않게
+  useEffect(() => {
+    if (open && !activeGroupId && list.length) setActiveGroupId(list[0].id);
+  }, [open, list.length, activeGroupId]);
+
   // ───────── 그룹 CRUD ─────────
   const addGroup = () => {
     const name = newName.trim();
     if (!name) { setCreating(false); setNewName(''); return; }
+    if (list.filter((g) => g.id !== RECENT_ID).length >= MAX_GROUPS) { setCreating(false); setNewName(''); return; }
     const g = { id: generateId(), name, stocks: [], createdAt: Date.now() };
     onUpdateGroups?.((prev) => [...(Array.isArray(prev) ? prev : []), g]);
     setActiveGroupId(g.id);
@@ -191,6 +202,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const addStock = () => {
     const code = codeInput.trim();
     if (!code || !activeGroup) return;
+    if ((activeGroup.stocks || []).length >= MAX_STOCKS) { setCodeInput(''); return; }
     if ((activeGroup.stocks || []).some((s) => (s.code || '').toLowerCase() === code.toLowerCase())) {
       setCodeInput('');
       return; // 같은 그룹 내 중복 방지
@@ -215,6 +227,25 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     })));
     loadQuote({ ...stock, market });
     loadHistory({ ...stock, market });
+  };
+
+  // 상세페이지를 연 종목을 '최근조회' 자동 그룹에 기록(최근 우선, 코드 dedup, RECENT_CAP 상한).
+  const recordRecent = (stock) => {
+    onUpdateGroups?.((prev) => {
+      const arr = Array.isArray(prev) ? prev : [];
+      const entry = { id: generateId(), code: stock.code, market: stock.market, name: stock.name || '', addedAt: Date.now() };
+      const recent = arr.find((g) => g.id === RECENT_ID);
+      const others = arr.filter((g) => g.id !== RECENT_ID);
+      const prevStocks = (recent?.stocks || []).filter((s) => (s.code || '').toLowerCase() !== (stock.code || '').toLowerCase());
+      const stocks = [entry, ...prevStocks].slice(0, RECENT_CAP);
+      return [{ id: RECENT_ID, name: RECENT_NAME, auto: true, stocks, createdAt: recent?.createdAt || Date.now() }, ...others];
+    });
+  };
+  // 등락율 클릭 = 상세페이지 열기 + 최근조회 기록
+  const viewStock = (s, q) => {
+    if (!s.code) return;
+    window.open(detailUrl(s.market, s.code), '_blank');
+    recordRecent({ ...s, name: q?.name || s.name || '' });
   };
 
   if (!open) return null;
@@ -246,7 +277,8 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
       <div className="flex items-center gap-1.5 px-3 py-2 border-b border-gray-800/70 overflow-x-auto whitespace-nowrap">
         {list.map((g) => {
           const isActive = activeGroup?.id === g.id;
-          if (editingId === g.id) {
+          const isAuto = g.id === RECENT_ID || g.auto;
+          if (!isAuto && editingId === g.id) {
             return (
               <input
                 key={g.id}
@@ -260,7 +292,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
               />
             );
           }
-          if (confirmDelId === g.id) {
+          if (!isAuto && confirmDelId === g.id) {
             return (
               <span key={g.id} className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs bg-red-900/30 border border-red-600/50 text-red-300">
                 <span className="font-medium">삭제?</span>
@@ -280,13 +312,14 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
             >
               <button
                 onClick={() => setActiveGroupId(g.id)}
-                onDoubleClick={() => { setEditingId(g.id); setEditName(g.name); }}
-                className="font-medium max-w-[120px] truncate"
+                onDoubleClick={() => { if (!isAuto) { setEditingId(g.id); setEditName(g.name); } }}
+                className="font-medium max-w-[120px] truncate flex items-center gap-1"
                 title={g.name}
               >
+                {isAuto && <Clock size={11} className="shrink-0" />}
                 {g.name}
               </button>
-              {isActive && (
+              {isActive && !isAuto && (
                 <>
                   <button onClick={() => { setEditingId(g.id); setEditName(g.name); }} title="이름 변경" className="text-amber-400/70 hover:text-amber-200">
                     <Pencil size={11} />
@@ -336,22 +369,28 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
           </div>
         ) : activeGroup ? (
           <>
-            {/* 코드 입력 */}
-            <div className="flex items-center gap-1.5 mb-2">
-              <input
-                value={codeInput}
-                onChange={(e) => setCodeInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') addStock(); }}
-                placeholder="종목 코드 (예: 005930, AAPL, MA:...)"
-                className="flex-1 bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-amber-500/50 placeholder:text-gray-600"
-              />
-              <button
-                onClick={addStock}
-                className="shrink-0 rounded px-3 py-1.5 text-xs font-medium bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/25 transition-colors"
-              >
-                추가
-              </button>
-            </div>
+            {/* 코드 입력 (최근조회 자동 그룹은 입력창 대신 안내) */}
+            {(activeGroup.id === RECENT_ID || activeGroup.auto) ? (
+              <div className="flex items-center gap-1 mb-2 text-[11px] text-gray-500">
+                <Clock size={11} className="shrink-0" /> 등락율을 클릭해 상세페이지를 연 종목이 자동으로 기록됩니다.
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 mb-2">
+                <input
+                  value={codeInput}
+                  onChange={(e) => setCodeInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addStock(); }}
+                  placeholder="종목 코드 (예: 005930, AAPL, MA:...)"
+                  className="flex-1 bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-amber-500/50 placeholder:text-gray-600"
+                />
+                <button
+                  onClick={addStock}
+                  className="shrink-0 rounded px-3 py-1.5 text-xs font-medium bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/25 transition-colors"
+                >
+                  추가
+                </button>
+              </div>
+            )}
 
             {/* 종목 리스트 */}
             {(activeGroup.stocks || []).length === 0 ? (
@@ -376,7 +415,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                         </div>
                         <Sparkline points={histMap[s.code]} />
                         <button
-                          onClick={() => s.code && window.open(detailUrl(s.market, s.code), '_blank')}
+                          onClick={() => viewStock(s, q)}
                           title="종목 상세 보기"
                           className={`w-16 text-right text-xs font-medium cursor-pointer hover:underline ${q ? rateColor(q.changeRate) : 'text-gray-600'}`}
                         >
