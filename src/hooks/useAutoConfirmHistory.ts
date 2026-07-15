@@ -43,6 +43,7 @@ export const useAutoConfirmHistory = ({
     const fx = marketIndicators?.usdkrw || 1;
 
     const computeConfirms = (p) => {
+      if (p.deletedAt) return null; // 삭제 계좌는 자동확정 대상 아님(이력 동결, 불필요한 churn 방지)
       const accountType = p.accountType || 'portfolio';
       // 현금성(마통·직접입력)은 시세 이력이 없어 자산검증 불일치 개념이 없음 → 제외
       if (accountType === 'simple' || accountType === 'matong') return null;

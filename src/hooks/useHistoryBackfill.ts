@@ -44,6 +44,7 @@ export const useHistoryBackfill = ({
     let needsUpdate = false;
     portfolioSummaries.forEach(s => {
       if (s.id === activePortfolioId) return;
+      if (s.deletedAt) return; // 삭제 계좌는 신규 라이브 스냅샷 기록 중단(사전체크·map 양쪽 미러링 — 무한루프 방지)
       const accountType = typeById.get(s.id) || 'portfolio';
       const isCash = accountType === 'matong' || accountType === 'simple';
       const recDate = recDateFor(accountType);
@@ -55,6 +56,7 @@ export const useHistoryBackfill = ({
     if (!needsUpdate) return;
     setPortfolios(prev => prev.map(p => {
       if (p.id === activePortfolioId) return p;
+      if (p.deletedAt) return p; // 삭제 계좌 skip(사전체크와 동일 규칙 — needsUpdate 키 불일치 방지)
       const summary = portfolioSummaries.find(s => s.id === p.id);
       if (!summary) return p;
       const accountType = typeById.get(p.id) || p.accountType || 'portfolio';
@@ -100,6 +102,7 @@ export const useHistoryBackfill = ({
     };
 
     const computeUpdates = (p) => {
+      if (p.deletedAt) return null; // 삭제 계좌는 백필 중단 — 기존 이력 동결(차트는 carry-forward로 복원)
       const portfolioId = p.id;
       const items = p.portfolio || [];
       const accountType = p.accountType || 'portfolio';

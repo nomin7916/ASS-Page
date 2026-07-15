@@ -70,7 +70,7 @@ export default function AccountTabBar({
     ? fetchMarketIndicators
     : refreshPrices;
 
-  const visiblePortfolios = portfolios.filter(p => p.accountType !== 'simple' && p.accountType !== 'matong');
+  const visiblePortfolios = portfolios.filter(p => p.accountType !== 'simple' && p.accountType !== 'matong' && !p.deletedAt);
 
   const activePortfolio = visiblePortfolios.find(p => p.id === activePortfolioId);
   const activeTypeConf = activePortfolio

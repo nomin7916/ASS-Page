@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { UI_CONFIG } from '../config';
 import { generateId, cleanNum } from '../utils';
+import { getTodayKST } from './useMarketCalendar';
 
 interface UsePortfolioStateParams {
   marketIndicators: { goldKr?: number; goldKrChg?: number; [key: string]: any };
@@ -142,25 +143,72 @@ export function usePortfolioState({
     setActivePortfolioId(newId);
   };
 
-  // ── 포트폴리오 삭제 ──
+  // 빈 계좌 생성 헬퍼(마지막 계좌 삭제·영구삭제 시 앱이 비지 않도록)
+  const makeBlankPortfolio = () => {
+    const today = new Date().toISOString().split('T')[0];
+    return {
+      id: generateId(), name: '새 계좌', startDate: today, portfolioStartDate: today,
+      accountType: 'portfolio',
+      portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
+      principal: 0, history: [], depositHistory: [], depositHistory2: [],
+      settings: { mode: 'rebalance', amount: 1000000 },
+      baselineDate: today, holdingSnapshots: [], manualPriceOverrides: {}, preBaselineVerified: false,
+    };
+  };
+
+  // ── 포트폴리오 삭제 (소프트 삭제) ──
+  // 계좌를 배열에서 제거하지 않고 deletedAt(삭제일, KST) 태그만 단다. 삭제일 이전(d < deletedAt)
+  // 날짜의 통합 총자산·계좌별 현황 기여는 그대로 보존되고(과거 총자산 불변), 삭제일부터 라이브/오늘
+  // 뷰(통합 계좌 현황·평가액 추이·탭·비중)에서 제외된다. 데이터는 보존 → 언제든 복원 가능.
   const deletePortfolio = async (id) => {
-    const isLast = portfolios.length <= 1;
+    const target = portfolios.find(p => p.id === id);
+    if (!target || target.deletedAt) return;
+    const nonDeletedOthers = portfolios.filter(p => p.id !== id && !p.deletedAt);
+    const isLast = nonDeletedOthers.length === 0;
     const confirmMsg = isLast
-      ? '마지막 계좌입니다. 삭제하면 새 빈 계좌가 자동으로 생성됩니다. 삭제하시겠습니까?'
-      : '이 포트폴리오 계좌를 삭제하시겠습니까?';
+      ? '마지막 남은 계좌입니다. 삭제하면 과거 기록은 보존되고 새 빈 계좌가 생성됩니다. 삭제하시겠습니까?'
+      : '이 계좌를 삭제하시겠습니까?\n\n과거 총자산·계좌별 현황 기록은 그대로 보존되고, 통합 계좌 현황·평가액 추이에서는 삭제일 이후로 제외됩니다. (표 하단 "삭제된 계좌"에서 복원 가능)';
     if (!await confirm(confirmMsg)) return;
+    const deletedAt = getTodayKST();
+    const marked = portfolios.map(p => p.id === id ? { ...p, deletedAt } : p);
+    if (isLast) {
+      const blank = makeBlankPortfolio();
+      setPortfolios([...marked, blank]);
+      setActivePortfolioId(blank.id);
+      setShowIntegratedDashboard(false);
+      return;
+    }
+    setPortfolios(marked);
+    if (activePortfolioId === id) {
+      const nextActive = nonDeletedOthers.find(p => p.accountType !== 'simple' && p.accountType !== 'matong');
+      if (nextActive) {
+        setActivePortfolioId(nextActive.id);
+      } else {
+        // ⚠️ 삭제된 계좌를 활성으로 남기면 App.tsx 활성 계좌 기록 효과(오늘/MA펀드)가 동결돼야 할
+        //    계좌에 이력을 쓴다 → activePortfolioId를 비워 activePortfolio=null → totals=0 → 효과 no-op.
+        setActivePortfolioId(null);
+        setShowIntegratedDashboard(true);
+      }
+    }
+  };
+
+  // ── 삭제 계좌 복원 (deletedAt 제거) ──
+  const restorePortfolio = (id) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== id || !p.deletedAt) return p;
+      const { deletedAt, ...rest } = p;
+      return rest;
+    }));
+  };
+
+  // ── 삭제 계좌 영구 삭제 (하드 삭제 — 과거 기록까지 완전 제거, 되돌리기 불가) ──
+  const purgePortfolio = async (id) => {
+    const target = portfolios.find(p => p.id === id);
+    if (!target) return;
+    if (!await confirm('이 계좌를 영구 삭제하시겠습니까?\n\n과거 총자산·계좌별 현황 기록에서도 완전히 제거되어 되돌릴 수 없습니다.')) return;
     const remaining = portfolios.filter(p => p.id !== id);
     if (remaining.length === 0) {
-      const newId = generateId();
-      const today = new Date().toISOString().split('T')[0];
-      const blank = {
-        id: newId, name: '새 계좌', startDate: today, portfolioStartDate: today,
-        accountType: 'portfolio',
-        portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }],
-        principal: 0, history: [], depositHistory: [], depositHistory2: [],
-        settings: { mode: 'rebalance', amount: 1000000 },
-        baselineDate: today, holdingSnapshots: [], manualPriceOverrides: {}, preBaselineVerified: false,
-      };
+      const blank = makeBlankPortfolio();
       setPortfolios([blank]);
       setActivePortfolioId(blank.id);
       setShowIntegratedDashboard(false);
@@ -168,10 +216,11 @@ export function usePortfolioState({
     }
     setPortfolios(remaining);
     if (activePortfolioId === id) {
-      const nextActive = remaining.find(p => p.accountType !== 'simple' && p.accountType !== 'matong');
+      const nextActive = remaining.find(p => p.accountType !== 'simple' && p.accountType !== 'matong' && !p.deletedAt);
       if (nextActive) {
         setActivePortfolioId(nextActive.id);
       } else {
+        setActivePortfolioId(null);
         setShowIntegratedDashboard(true);
       }
     }
@@ -700,6 +749,8 @@ export function usePortfolioState({
     buildPortfoliosState,
     addPortfolio,
     deletePortfolio,
+    restorePortfolio,
+    purgePortfolio,
     switchToPortfolio,
     addSimpleAccount,
     updateSimpleAccountField,

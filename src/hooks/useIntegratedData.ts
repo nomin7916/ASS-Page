@@ -38,7 +38,7 @@ export function useIntegratedData({
         const cagr = prin > 0 && evalAmount > 0 && days > 0
           ? days < 365 ? (evalAmount / prin - 1) * 100 : (Math.pow(evalAmount / prin, 365.25 / days) - 1) * 100
           : 0;
-        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: evalAmount, returnRate, cagr, cats: evalAmount > 0 ? { '예수금': evalAmount } : {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest };
+        return { id: p.id, name, startDate, currentEval: evalAmount, principal: prin, depositAmount: evalAmount, returnRate, cagr, cats: evalAmount > 0 ? { '예수금': evalAmount } : {}, isActive: false, accountType: 'simple', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest, deletedAt: p.deletedAt || '' };
       }
 
       if (p.accountType === 'matong') {
@@ -51,7 +51,7 @@ export function useIntegratedData({
           id: p.id, name, startDate, currentEval: prin, principal: prin,
           depositAmount: prin, returnRate: 0, cagr: 0,
           cats: prin > 0 ? { '현금': prin } : {},
-          isActive: false, accountType: 'matong', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest,
+          isActive: false, accountType: 'matong', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest, deletedAt: p.deletedAt || '',
           withdrawableTotal: wt, currentWithdrawal: cw, withdrawalLimit: wl, agreedRate: ar, agreedRateStr: String(p.agreedRate ?? ''),
         };
       }
@@ -93,7 +93,7 @@ export function useIntegratedData({
           ? (totalEval / principalKRW - 1) * 100
           : (Math.pow(totalEval / principalKRW, 365.25 / days) - 1) * 100
         : 0;
-      return { id: p.id, name, startDate, currentEval: totalEval, principal: principalKRW, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest };
+      return { id: p.id, name, startDate, currentEval: totalEval, principal: principalKRW, depositAmount: depositAmt, returnRate, cagr, cats, isActive, accountType: 'portfolio', rowColor: p.rowColor || '', memo: p.memo || '', isTest: !!p.isTest, deletedAt: p.deletedAt || '' };
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolios, activePortfolioId, portfolio, principal, avgExchangeRate, portfolioStartDate, title, marketIndicators.usdkrw]);
@@ -103,6 +103,7 @@ export function useIntegratedData({
     const cats = {};
     portfolioSummaries.forEach(s => {
       if (s.isTest) return; // TEST 계좌는 합계·카테고리 비중에서 제외(표시만)
+      if (s.deletedAt) return; // 삭제된 계좌는 라이브 합계·비중에서 완전 제외(과거 시계열은 별도 보존)
       totalEval += s.currentEval;
       totalPrincipal += s.principal;
       totalDeposit += s.depositAmount;
@@ -150,7 +151,9 @@ export function useIntegratedData({
             if (v > 0) map.set(h.date, v);
           });
         }
-        return { id: p.id, dates: [...map.keys()].sort(), map };
+        // ⚠️ 삭제 계좌(deletedAt)도 시계열을 유지한다(과거 총자산·계좌별 현황 팝업 보존).
+        //   소비자(computedIntHistory carry-forward / histDetailRows)가 d < deletedAt로 캡한다.
+        return { id: p.id, dates: [...map.keys()].sort(), map, deletedAt: p.deletedAt || '' };
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolios, activePortfolioId, portfolio, history, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw, effectiveDateKey, krEffectiveDateKey]);
@@ -172,7 +175,7 @@ export function useIntegratedData({
           : Math.max(0, (cleanNum(p.withdrawableTotal) || 0) - ((cleanNum(p.currentWithdrawal) || 0) + (cleanNum(p.withdrawalLimit) || 0)));
         const map = new Map();
         (p.history || []).forEach(h => { if (h && h.date && typeof h.evalAmount === 'number' && h.evalAmount >= 0) map.set(h.date, h.evalAmount); });
-        return { startDate, currentEval, dates: [...map.keys()].sort(), map };
+        return { startDate, currentEval, dates: [...map.keys()].sort(), map, deletedAt: p.deletedAt || '' };
       });
 
     // 시장 계좌별 시계열(marketSeries — 항상 '수량 × 종가' 권위값)에서 기록이 있는 계좌만 사용.
@@ -189,10 +192,15 @@ export function useIntegratedData({
     // 각 날짜에 대해 계좌별 직전 거래일 값(carry-forward)을 합산.
     // 주말·공휴일 등 일부 계좌만 기록된 날짜에도 모든 계좌의 평가액이 빠짐없이 반영된다.
     // (각 계좌 첫 기록 이전 날짜에는 lastVal=0 → 기여하지 않음)
+    // 삭제 계좌 경계: min(deletedAt, today). 삭제일부터 미기여하되, 새벽(effectiveDate<달력today) 삭제 시
+    // 라이브 시점(today)의 평가(override=제외)와 원금·현금 carry-forward가 어긋나지 않도록 today에서도 정지.
+    const cutoffOf = (deletedAt) => deletedAt ? (deletedAt < today ? deletedAt : today) : '';
     const dateToTotal = new Map();
-    accountSeries.forEach(({ dates, map }) => {
+    accountSeries.forEach(({ dates, map, deletedAt }) => {
+      const cutoff = cutoffOf(deletedAt);
       let i = 0, lastVal = 0;
       for (const d of sortedDates) {
+        if (cutoff && d >= cutoff) break; // 삭제 계좌: 경계일부터 미기여(과거만 보존)
         while (i < dates.length && dates[i] <= d) { lastVal = map.get(dates[i]); i++; }
         if (lastVal > 0) dateToTotal.set(d, (dateToTotal.get(d) || 0) + lastVal);
       }
@@ -201,9 +209,11 @@ export function useIntegratedData({
     // 현금성 계좌: 날짜별 잔액(스냅샷 carry-forward, 오늘은 현재값, 시작일 이전 0)을 합산.
     // 과거 그날의 기록값을 그대로 반영 → 현재값이 과거로 소급되지 않는다.
     const cashByDate = new Map();
-    cashSeries.forEach(({ startDate, currentEval, dates, map }) => {
+    cashSeries.forEach(({ startDate, currentEval, dates, map, deletedAt }) => {
+      const cutoff = cutoffOf(deletedAt);
       let i = 0, lastVal = 0;
       for (const d of sortedDates) {
+        if (cutoff && d >= cutoff) break; // 삭제 계좌: 경계일부터 미기여(삭제 계좌는 today에 도달 안 함 → 라이브값 배제)
         while (i < dates.length && dates[i] <= d) { lastVal = map.get(dates[i]); i++; }
         let v = d === today ? currentEval : lastVal;
         if (startDate && d < startDate) v = 0;
@@ -212,10 +222,25 @@ export function useIntegratedData({
     });
     cashByDate.forEach((v, d) => dateToTotal.set(d, (dateToTotal.get(d) || 0) + v));
 
-    // 오늘 값은 실시간 합산 평가액으로 보정 (휴일에 가격 미로드로 폭락한 경우 직전값 유지)
+    // 오늘 값은 실시간 합산 평가액으로 보정 (휴일에 가격 미로드로 폭락한 경우 직전값 유지).
+    // ⚠️ 이상치 판정 기준(prevValue)은 오늘 라이브(intTotals=삭제 제외)와 '같은 집합'이어야 한다.
+    //   dateToTotal(prevDate)는 삭제 계좌를 포함(prevDate<cutoff)하므로, 지배적 계좌(비중>90%)를 삭제하면
+    //   'intTotals << prevValue'가 되어 정상 감소를 가격 미로드 이상치로 오판(today를 옛 총액으로 되돌려
+    //   삭제 계좌가 오늘에 되살아남). → prevDate에서 삭제 계좌가 기여했던 몫을 빼 라이브 멤버십으로 맞춘다.
     if (intTotals.totalEval > 0) {
       const prevDates = sortedDates.filter(d => d < today);
-      const prevValue = prevDates.length > 0 ? (dateToTotal.get(prevDates[prevDates.length - 1]) || 0) : 0;
+      const prevDate = prevDates.length > 0 ? prevDates[prevDates.length - 1] : '';
+      let prevValue = prevDate ? (dateToTotal.get(prevDate) || 0) : 0;
+      if (prevDate) {
+        const valAt = (dates, map) => { let last = 0; for (const d of dates) { if (d <= prevDate) last = map.get(d); else break; } return last || 0; };
+        accountSeries.forEach(({ dates, map, deletedAt }) => {
+          if (deletedAt && prevDate < cutoffOf(deletedAt)) prevValue -= valAt(dates, map);
+        });
+        cashSeries.forEach(({ startDate, dates, map, deletedAt }) => {
+          if (deletedAt && prevDate < cutoffOf(deletedAt) && !(startDate && prevDate < startDate)) prevValue -= valAt(dates, map);
+        });
+        if (prevValue < 0) prevValue = 0;
+      }
       const isAnomaly = prevValue > 0 && intTotals.totalEval < prevValue * 0.1;
       dateToTotal.set(today, isAnomaly ? prevValue : intTotals.totalEval);
     }
@@ -233,12 +258,14 @@ export function useIntegratedData({
         const currentPrincipalKRW = currentPrincipal * fxRate;
         const deps = isActive ? depositHistory : (p.depositHistory || []);
         const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
-        return { startDate, currentPrincipalKRW, deps, wds, isOverseas };
+        return { startDate, currentPrincipalKRW, deps, wds, isOverseas, deletedAt: p.deletedAt || '' };
       });
     return [...dateToTotal.entries()]
       .map(([date, evalAmount]) => {
-        let effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, deps, wds, isOverseas }) => {
+        let effectivePrincipal = portfolioPrincipalData.reduce((sum, { startDate, currentPrincipalKRW, deps, wds, isOverseas, deletedAt }) => {
           if (!startDate || startDate > date) return sum;
+          const cutoff = cutoffOf(deletedAt);
+          if (cutoff && date >= cutoff) return sum; // 삭제 계좌: 경계일부터 원금 미기여(평가와 동일 경계)
           const depRate = (d) => isOverseas ? (d.fxRate || 1) : 1;
           const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
           const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * depRate(d), 0);
@@ -338,17 +365,20 @@ export function useIntegratedData({
     const byDate = new Map();
     portfolios.forEach(p => {
       if (p.isTest) return; // TEST 계좌는 추이 차트 입출금 마커에서 제외
+      const cutoff = p.deletedAt || null; // 삭제 계좌는 삭제일 이전 마커만 유지(삭제일 이후 제외)
       const isActive = p.id === activePortfolioId;
       const deps = isActive ? depositHistory : (p.depositHistory || []);
       const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
       deps.forEach(d => {
         if (!d.date) return;
+        if (cutoff && d.date >= cutoff) return;
         const prev = byDate.get(d.date) || { date: d.date, deposits: 0, withdrawals: 0 };
         prev.deposits += (d.amount || 0) * (d.fxRate || 1);
         byDate.set(d.date, prev);
       });
       wds.forEach(d => {
         if (!d.date) return;
+        if (cutoff && d.date >= cutoff) return;
         const prev = byDate.get(d.date) || { date: d.date, deposits: 0, withdrawals: 0 };
         prev.withdrawals += (d.amount || 0) * (d.fxRate || 1);
         byDate.set(d.date, prev);
@@ -375,6 +405,7 @@ export function useIntegratedData({
     const holdingsMap = {};
     portfolios.forEach(p => {
       if (p.isTest) return; // TEST 계좌는 통합 자산 카테고리·종목별 비중에서 제외
+      if (p.deletedAt) return; // 삭제 계좌는 라이브 종목별 비중(오늘 보유)에서 제외
       const isActive = p.id === activePortfolioId;
       if (p.accountType === 'simple') {
         const evalAmount = cleanNum(p.evalAmount);

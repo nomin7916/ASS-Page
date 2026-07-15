@@ -564,7 +564,7 @@ export function useStockData({
     const fundCodes = new Set<string>();
 
     portfoliosRef.current.forEach(p => {
-      if (p.accountType === 'simple') return;
+      if (p.accountType === 'simple' || p.deletedAt) return; // 삭제 계좌는 시세 수집 대상 아님(동결)
       const items = p.portfolio || [];
       const isOverseas = p.accountType === 'overseas';
       items.forEach(item => {
@@ -630,7 +630,7 @@ export function useStockData({
 
     // 전체 계좌 portfolios[] 가격 업데이트 (활성 계좌 포함 — 총자산현황 즉시 반영)
     setPortfolios(prev => prev.map(p => {
-      if (p.accountType === 'simple') return p;
+      if (p.accountType === 'simple' || p.deletedAt) return p; // 삭제 계좌는 가격·이력 갱신 안 함(동결)
       const isActive = p.id === activePortfolioIdRef.current;
       const items = p.portfolio || [];
       const hasUpdate = items.some(item =>
@@ -996,7 +996,7 @@ export function useStockData({
         }
       };
       portfoliosRef.current.forEach(p => {
-        if (p.accountType === 'simple') return;
+        if (p.accountType === 'simple' || p.deletedAt) return; // 삭제 계좌는 펀드 NAV 이력 수집 대상 아님(동결)
         const items = p.id === activePortfolioIdRef.current ? portfolioRef.current : (p.portfolio || []);
         const pStart = p.portfolioStartDate || p.startDate || p.baselineDate || '';
         const histFirst = (p.history || []).map(h => h.date).filter(Boolean).sort()[0] || '';
@@ -1062,6 +1062,7 @@ export function useStockData({
                   ? { ...item, changeRate: computedRate }
                   : item;
               setPortfolios(prev => prev.map(p => {
+                if (p.deletedAt) return p; // 삭제 계좌 동결
                 const items = p.portfolio || [];
                 const updated = items.map(applyRate);
                 return updated.some((it: any, i: number) => it !== items[i]) ? { ...p, portfolio: updated } : p;
@@ -1078,6 +1079,7 @@ export function useStockData({
           if (code.startsWith('MA:') && hist?.[today]) {
             const todayNav = hist[today];
             setPortfolios(prev => prev.map(p => {
+              if (p.deletedAt) return p; // 삭제 계좌 동결
               const items = p.portfolio || [];
               let changed = false;
               const updItems = items.map(item => {

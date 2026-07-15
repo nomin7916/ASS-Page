@@ -93,6 +93,49 @@ src/
 - **범위 밖(의도)**: 분배금 현황 표(통합 compact)는 isTest 미적용. `useHistoryBackfill`의 계좌별
   일별 자동기록도 미적용(TEST 계좌도 자기 history는 계속 기록 → 해제 시 데이터 온전).
 
+### 계좌 소프트 삭제 `deletedAt` — 과거 총자산 보존, 삭제일 이후 제외 (⚠️ 회귀 주의)
+
+계좌 삭제는 배열에서 제거하지 않고 `p.deletedAt`(삭제일 `YYYY-MM-DD`, `getTodayKST`) 태그만 단다
+(`deletePortfolio` — `usePortfolioState`, 하드삭제 아님). 과거 삭제로 통합 일별 총자산이 소급 붕괴하던
+문제(computedIntHistory·histDetailRows가 라이브 `portfolios[]`에서 100% 재파생 → 배열 제거 시 그 계좌의
+모든 과거 기여 소멸)를 해결. **복원**(`restorePortfolio` — deletedAt 제거) / **영구삭제**(`purgePortfolio` —
+과거 기록까지 하드삭제) 제공. `IntegratedDashboard` 통합 표 하단 **접힌 "삭제된 계좌" 관리영역**에 노출
+(복원·영구삭제 버튼). 탭바·라이브 표에서는 숨김.
+
+- **핵심 불변식**: 계좌별 경계 `cutoff = min(deletedAt, today)`(더 이른 날짜, `today`=effectiveDate).
+  삭제 계좌는 **`d < cutoff` 날짜에만 삭제 전과 동일하게 기여**하고, `d >= cutoff`(라이브/오늘 포함)에는
+  존재하지 않는 것처럼 처리. `min`인 이유: 새벽(00:00~07:30 KST, effectiveDate가 전일) 삭제 시 라이브
+  시점(today)의 평가(override=제외)와 원금·현금 carry-forward가 어긋나지 않게 today에서도 정지.
+- **라이브/현재 = 완전 제외**: `intTotals`·`intHoldingsDonutData`(`useIntegratedData`, `if(s.deletedAt)`/
+  `if(p.deletedAt) return`), 통합 표 렌더(`IntegratedDashboard` regular/matongAccounts `.filter(!s.deletedAt)`),
+  탭바(`AccountTabBar` visiblePortfolios), 분배금 compact(`DividendSummaryTable` nonGoldPortfolios),
+  관리자 포털 라이브 총액(`AdminPortal` livePortfolios=`filter(!deletedAt)` → needs/recompute/computePrincipal).
+  `intCatDonutData`는 intTotals.cats 경유 자동 제외. `portfolioSummaries`는 행 판정용 `deletedAt` 태그만 노출.
+- **시계열 = `d < cutoff` 보존**: `computedIntHistory`의 accountSeries·cashByDate carry-forward loop와
+  effectivePrincipal reduce가 `cutoffOf(deletedAt)`로 `d >= cutoff` break/skip. `marketSeries`·`cashSeries`는
+  삭제 계좌를 **유지**(시계열 소스)하되 `deletedAt` 실어 보냄. `intDepositEvents`는 `date < deletedAt` 마커만.
+  팝업 `histDetailRows`(`IntegratedDashboard`): `if(p.deletedAt && (isRealtimeDate || histDetailDate >= p.deletedAt)) return`
+  + 이름에 `(삭제됨)` 접미. 관리자 일별 매트릭스 `buildUserSeries`는 full portfolios에 `cutoff` 캡(+cutoff 날짜를
+  ds에 추가해 주말 삭제도 경계에서 하락 materialize).
+- **⚠️ WRITE 동결(삭제일 이후 신규 기록 금지, 기존 이력 불변)**: `useHistoryBackfill` 효과#1(사전체크 `s.deletedAt`
+  + map `p.deletedAt` **양쪽 미러링** — 무한루프 불변식)·효과#2(`computeUpdates` 첫 줄 `if(p.deletedAt) return null`),
+  `useStockData`(수집·기록 map·펀드 NAV 3경로 `|| p.deletedAt`), `useAutoConfirmHistory`(`computeConfirms`),
+  `App.tsx` 스냅샷 효과(`maybeUpdate`).
+- **⚠️ 활성 계좌 기록 효과(App.tsx today-effect·MA펀드 효과)는 `deletedAt` 미가드 시 동결 계좌를 오염**:
+  삭제 대상이 활성이고 남은 비삭제 계좌가 현금뿐이면 과거엔 activePortfolioId가 삭제 계좌에 남아 두 활성 효과가
+  이력을 계속 썼다. → ① `deletePortfolio`/`purgePortfolio` else 분기 `setActivePortfolioId(null)`(activePortfolio=null
+  → totals=0 → 효과 no-op) ② 두 효과 상단 `if(activePortfolio?.deletedAt) return` ③ 로드
+  (`applyStateData`/`applyBackupData`)에서 restored 활성이 `deletedAt`이면 firstLive(비삭제 비현금)로 대체/없으면 null.
+- **⚠️ 이상치 가드 멤버십 일치**: `computedIntHistory` today 보정의 `prevValue`(직전 거래일 총액)는 삭제 계좌를
+  포함(prevDate<cutoff)하므로, **지배적(비중>90%) 계좌 삭제를 가격 미로드 이상치로 오판**(today를 옛 총액으로
+  되돌려 삭제 계좌 부활)한다. → prevDate에서 삭제 계좌 몫을 빼 intTotals(삭제 제외)와 같은 집합으로 맞춤.
+- **persist**: `App.tsx` `portfolioStructureKey`에 `deletedAt` 포함(삭제/복원이 저장 트리거). state 리터럴은 배열
+  전량 저장(삭제 계좌 보존), `applyStateData`/`applyBackupData` `...p` 스프레드로 자동 보존.
+- **동명 신규 계좌 = Drive 충돌 없음**: 계좌는 어디서도 name이 아니라 고유 `id`(`generateId`)로만 저장·매칭.
+  삭제 계좌 보존 + 동명 신규(다른 id) 공존 → 혼선 없음. 팝업 `(삭제됨)` 표기로 시각 구분.
+- **범위 밖(의도)**: 분배금 compact는 삭제 계좌 제외(라이브 뷰). 삭제일 boundary의 '오늘 수익' 절벽
+  (예: 07-14=₩100M → 07-15=₩70M, dod −30%)은 "과거 불변 + 삭제일부터 제외" 불변식의 필연적 결과(정상).
+
 ### 관리자 "접속" = 새 탭 impersonation (⚠️ 회귀 주의 — 같은 탭 교체 금지)
 
 관리자 포털/관리자 페이지의 **"접속" 버튼**은 대상 사용자 대시보드를 **새 탭**에서 연다

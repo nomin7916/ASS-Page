@@ -188,16 +188,21 @@ function buildUserSeries(portfolios: any[], liveTotal: number, today: string): R
       if (isCash) { if (!isNaN(v) && v >= 0) m.set(h.date, v); }
       else { if (v > 0) m.set(h.date, v); }
     });
-    return { dates: [...m.keys()].sort(), map: m };
+    return { dates: [...m.keys()].sort(), map: m, deletedAt: p.deletedAt || '' };
   });
   const ds = new Set<string>();
   per.forEach(s => s.dates.forEach(d => ds.add(d)));
   ds.add(today);
+  // 삭제일이 기록일이 아니어도(주말/휴일 삭제) 경계일에 하락이 materialize 되도록 cutoff를 날짜셋에 추가
+  per.forEach(s => { if (s.deletedAt) ds.add(s.deletedAt < today ? s.deletedAt : today); });
   const sorted = [...ds].sort();
   const out: Record<string, number> = {};
   per.forEach(s => {
+    // 삭제 계좌 경계: min(deletedAt, today) — 삭제일부터 미기여(사용자 통합 대시보드와 동일 규칙)
+    const cutoff = s.deletedAt ? (s.deletedAt < today ? s.deletedAt : today) : '';
     let i = 0, last = 0;
     for (const d of sorted) {
+      if (cutoff && d >= cutoff) break;
       while (i < s.dates.length && s.dates[i] <= d) { last = s.map.get(s.dates[i])!; i++; }
       if (last > 0) out[d] = (out[d] || 0) + last;
     }
@@ -512,11 +517,14 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
           // TEST 계좌(p.isTest)는 사용자 통합 대시보드와 동일하게 모든 합산에서 제외
           // (평가총액·투자원금·전일대비·일별 추이 매트릭스 전부 portfolios에서 파생되므로 소스에서 1회 필터)
           const portfolios = (stateData.portfolios || []).filter((p: any) => !p.isTest);
+          // 삭제 계좌(deletedAt)는 라이브 총액(평가·원금·전일대비)에서 제외하되, 일별 매트릭스(buildUserSeries)에는
+          // 삭제일 이전 기여를 보존(사용자 통합 대시보드와 동일 규칙 — 과거 총자산 불변).
+          const livePortfolios = portfolios.filter((p: any) => !p.deletedAt);
           const ihm = stateData.indicatorHistoryMap || {};
 
           // 이 사용자 보유종목 시세 사전 조회(캐시 dedup → 중복 종목 1회만 호출)
           const needs: Array<['kr' | 'us' | 'fund', string]> = [];
-          portfolios.forEach((p: any) => {
+          livePortfolios.forEach((p: any) => {
             const at = p.accountType || 'portfolio';
             if (at === 'simple' || at === 'matong') return;
             const isOverseas = at === 'overseas';
@@ -529,11 +537,11 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
           await Promise.all(needs.map(([k, c]) => getLivePrice(priceCache, k, c)));
 
           let evalTotal = 0, prevEvalTotal = 0;
-          portfolios.forEach((p: any) => {
+          livePortfolios.forEach((p: any) => {
             const { live, prev } = recomputePortfolioEval(p, priceCache, liveFxObj, liveGoldObj, ihm, today);
             evalTotal += live; prevEvalTotal += prev;
           });
-          const principal = computePrincipal(portfolios);
+          const principal = computePrincipal(livePortfolios);
           const totalReturnRate = principal > 0 ? ((evalTotal - principal) / principal) * 100 : 0;
 
           // 전일대비: 보유종목의 전일 종가로 재계산한 직전 거래일 평가액(prevEvalTotal) 기준 →

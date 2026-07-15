@@ -481,6 +481,8 @@ export default function App() {
     buildPortfoliosState,
     addPortfolio,
     deletePortfolio,
+    restorePortfolio,
+    purgePortfolio,
     switchToPortfolio,
     addSimpleAccount,
     updateSimpleAccountField,
@@ -555,7 +557,12 @@ export default function App() {
       setPortfolios(normalizedPortfolios);
       const restoredId = stateData.activePortfolioId || stateData.portfolios[0].id;
       const restoredP = normalizedPortfolios.find(p => p.id === restoredId);
-      if (restoredP?.accountType === 'simple' || restoredP?.accountType === 'matong') {
+      if (restoredP?.deletedAt) {
+        // ⚠️ 삭제된 계좌를 활성으로 복원하면 활성 기록 효과가 동결 계좌에 이력을 쓴다 → 라이브 계좌로 대체
+        const firstLive = normalizedPortfolios.find(p => !p.deletedAt && p.accountType !== 'simple' && p.accountType !== 'matong');
+        if (firstLive) setActivePortfolioId(firstLive.id);
+        else { setActivePortfolioId(null); setShowIntegratedDashboard(true); }
+      } else if (restoredP?.accountType === 'simple' || restoredP?.accountType === 'matong') {
         setShowIntegratedDashboard(true);
       } else {
         setActivePortfolioId(restoredId);
@@ -668,7 +675,11 @@ export default function App() {
       setPortfolios(normalizedPortfolios);
       const restoredId = stateData.activePortfolioId || stateData.portfolios[0].id;
       const restoredP = normalizedPortfolios.find(p => p.id === restoredId);
-      if (restoredP?.accountType === 'simple' || restoredP?.accountType === 'matong') {
+      if (restoredP?.deletedAt) {
+        const firstLive = normalizedPortfolios.find(p => !p.deletedAt && p.accountType !== 'simple' && p.accountType !== 'matong');
+        if (firstLive) setActivePortfolioId(firstLive.id);
+        else { setActivePortfolioId(null); setShowIntegratedDashboard(true); }
+      } else if (restoredP?.accountType === 'simple' || restoredP?.accountType === 'matong') {
         setShowIntegratedDashboard(true);
       } else {
         setActivePortfolioId(restoredId);
@@ -1755,6 +1766,7 @@ export default function App() {
         investmentNotesKey: (p.investmentNotes || []).map(n => `${n.id}:${n.date}`).join('|'),
         rowColor: p.rowColor || '',
         isTest: !!p.isTest,
+        deletedAt: p.deletedAt || '', // 소프트 삭제 태그 — 삭제/복원이 Drive STATE 저장을 트리거하도록 지문에 포함
         hiddenTaxMonths: [...(p.hiddenTaxMonths || [])].sort((a, b) => a - b),
         historyLen: (p.history || []).length,
         // 자산검증 확정상태 지문: 확정(isFixed)·자동확정거부(autoConfirmDeclined)·확정값 변경을
@@ -1824,6 +1836,7 @@ export default function App() {
     if (portfolios.length === 0) return;
     const maybeUpdate = (p) => {
       if (!p || p.accountType === 'simple' || p.accountType === 'matong') return null;
+      if (p.deletedAt) return null; // 삭제 계좌는 신규 스냅샷 기록 중단(기존 이력 동결 보존)
       // KR 계좌는 다음 실시간 기록 대상일(21:00 전 오늘 / 후 내일)로 기록 —
       // 새벽 구성 변경이 21:00에 확정된 전일 날짜 스냅샷으로 남는 것 방지
       // (accountType 미설정 레거시 계좌는 'portfolio' 취급 — 앱 전역 컨벤션)
@@ -1860,6 +1873,7 @@ export default function App() {
 
   useEffect(() => {
     if (totals.totalEval === 0) return;
+    if (activePortfolio?.deletedAt) return; // 삭제된 계좌가 활성이면(복원 후 재활성 등) 이력 기록 동결
     if (!calendarLoaded) return;
     const today = getEffectiveDateForAccount(activePortfolioAccountType);
     if (!today) return; // KR 계좌 기록 창(09:00~21:00) 밖 — 21:00 당일 확정·동결, 개장 전 placeholder 미생성
@@ -1910,6 +1924,7 @@ export default function App() {
 
   // 07:30 이후 활성 포트폴리오의 전날 종가를 히스토리에 자동 기록 (MA: 펀드 보유 계좌)
   useEffect(() => {
+    if (activePortfolio?.deletedAt) return; // 삭제된 계좌가 활성이면 이력 기록 동결
     const now = new Date();
     if (now.getHours() < 7 || (now.getHours() === 7 && now.getMinutes() < 30)) return;
 
@@ -2774,6 +2789,8 @@ export default function App() {
             addMatongAccount={addMatongAccount}
             updateMatongAccountField={updateMatongAccountField}
             deletePortfolio={deletePortfolio}
+            restorePortfolio={restorePortfolio}
+            purgePortfolio={purgePortfolio}
             switchToPortfolio={switchToPortfolio}
             movePortfolio={movePortfolio}
             updatePortfolioColor={updatePortfolioColor}

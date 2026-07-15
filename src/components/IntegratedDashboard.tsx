@@ -1,6 +1,6 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { Plus, Download, Trash2, Maximize2, X, Check, Activity, TrendingUp, Settings, BarChart3 } from 'lucide-react';
+import { Plus, Download, Trash2, Maximize2, X, Check, Activity, TrendingUp, Settings, BarChart3, RotateCcw } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
 import {
@@ -90,6 +90,8 @@ export default function IntegratedDashboard({
   addMatongAccount,
   updateMatongAccountField,
   deletePortfolio,
+  restorePortfolio,
+  purgePortfolio,
   switchToPortfolio,
   movePortfolio,
   updatePortfolioColor,
@@ -162,6 +164,23 @@ export default function IntegratedDashboard({
     return () => document.removeEventListener('mousedown', handler);
   }, [showSimpleMenu]);
 
+  const [showDeletedAccounts, setShowDeletedAccounts] = useState(false);
+
+  // 삭제된 계좌(deletedAt) — 통합 표에서 숨기고 접힌 관리영역에 노출(복원/영구삭제). 마지막 총자산은
+  // 삭제일 이전(d < deletedAt)의 마지막 기록 evalAmount(참고용).
+  const deletedAccounts = useMemo(() => {
+    return (allPortfoliosForDividend || [])
+      .filter(p => p.deletedAt)
+      .map(p => {
+        const summary = portfolioSummaries.find(s => s.id === p.id);
+        const recs = (p.history || []).filter(h => h && h.date && h.date < p.deletedAt && typeof h.evalAmount === 'number' && h.evalAmount > 0);
+        let lastEval = 0;
+        if (recs.length) lastEval = recs.reduce((a, b) => (a.date >= b.date ? a : b)).evalAmount;
+        return { id: p.id, name: summary?.name || p.name || p.id, deletedAt: p.deletedAt, accountType: p.accountType || 'portfolio', lastEval };
+      })
+      .sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+  }, [allPortfoliosForDividend, portfolioSummaries]);
+
   const [histDetailDate, setHistDetailDate] = useState(null);
   useEffect(() => {
     if (!histDetailDate) return;
@@ -172,13 +191,18 @@ export default function IntegratedDashboard({
 
   const histDetailRows = useMemo(() => {
     if (!histDetailDate || !allPortfoliosForDividend) return { rows: [], totalEval: 0, totalPrincipal: 0, totalDeposit: 0 };
-    // intMonthlyHistory[0]가 오늘(실시간 값 사용 날짜)이므로 그 date와 비교
+    // intMonthlyHistory[0]가 오늘(실시간 값 사용 날짜)이므로 그 date와 비교.
+    // ⚠️ 라이브 자산이 0(예: 유일 계좌 삭제 → 빈 계좌 자동생성)이면 computedIntHistory가 today를 추가하지
+    //   않아 intMonthlyHistory[0].date가 '과거' 최신점이 된다 → 이때 realtime 취급하면 그 과거점에서 삭제
+    //   계좌를 잘못 제외해 차트와 어긋난다. 따라서 라이브 자산이 있을 때만 realtime(오늘)으로 판정.
     const realtimeDate = intMonthlyHistory.length > 0 ? intMonthlyHistory[0].date : '';
-    const isRealtimeDate = histDetailDate === realtimeDate;
+    const isRealtimeDate = histDetailDate === realtimeDate && (intTotals?.totalEval || 0) > 0;
     let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
     const rows = [];
     allPortfoliosForDividend.forEach(p => {
       if (p.isTest) return; // TEST 계좌는 추이 팝업 소계에서 제외(차트 값과 일치)
+      // 삭제 계좌: 삭제일 이후(및 라이브 시점)는 제외 — 삭제일 이전 과거 날짜만 표시(차트 값과 일치)
+      if (p.deletedAt && (isRealtimeDate || histDetailDate >= p.deletedAt)) return;
       const summary = portfolioSummaries.find(s => s.id === p.id);
       const isCash = p.accountType === 'matong' || p.accountType === 'simple';
       let evalAmt = 0;
@@ -230,13 +254,13 @@ export default function IntegratedDashboard({
       // 현금성 계좌: 예수금도 잔액(=평가=원금)과 동일 유지.
       const depositAmt = isCash ? effPrincipal : (summary?.depositAmount || 0);
       totalDeposit += depositAmt;
-      const name = summary?.name || p.name || p.id;
+      const name = (summary?.name || p.name || p.id) + (p.deletedAt ? ' (삭제됨)' : '');
       const profit = evalAmt - effPrincipal;
       const returnRate = effPrincipal > 0 ? (profit / effPrincipal) * 100 : 0;
       rows.push({ id: p.id, name, evalAmount: evalAmt, principal: effPrincipal, profit, returnRate, depositAmount: depositAmt, rowColor: p.rowColor || '' });
     });
     return { rows, totalEval, totalPrincipal, totalDeposit };
-  }, [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries, intAccountSeriesById]);
+  }, [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries, intAccountSeriesById, intTotals?.totalEval]);
 
   // 앱 기록 시작일: 모든 계좌의 가장 이른 '실제 기록일'(실시간 isFixed:false / 사용자 확정 adjustedAmount).
   // 순수 백필(isFixed:true + adjustedAmount 없음)은 역추산이라 제외 — 그 이전 구간은 전부 역추산이므로
@@ -509,8 +533,8 @@ export default function IntegratedDashboard({
                   </thead>
                   <tbody>
                     {(() => {
-                      const regularAccounts = portfolioSummaries.filter(s => s.accountType !== 'matong');
-                      const matongAccounts = portfolioSummaries.filter(s => s.accountType === 'matong');
+                      const regularAccounts = portfolioSummaries.filter(s => s.accountType !== 'matong' && !s.deletedAt);
+                      const matongAccounts = portfolioSummaries.filter(s => s.accountType === 'matong' && !s.deletedAt);
                       const sortedSummaries = [...regularAccounts, ...matongAccounts];
                       return sortedSummaries.map((s, sIdx) => {
                       const allocRatio = intTotals.totalEval > 0 ? s.currentEval / intTotals.totalEval * 100 : 0;
@@ -735,7 +759,7 @@ export default function IntegratedDashboard({
                       );
                     });
                     })()}
-                    {portfolioSummaries.length === 0 && (
+                    {portfolioSummaries.filter(s => !s.deletedAt).length === 0 && (
                       <tr><td colSpan={13} className="py-8 text-center text-gray-500 text-xs">계좌가 없습니다. <span className="text-blue-400 font-bold">+ 계좌 추가</span> 버튼을 눌러 추가하세요.</td></tr>
                     )}
                   </tbody>
@@ -758,6 +782,58 @@ export default function IntegratedDashboard({
                 </table>
               </div>
             </div>
+
+            {/* 삭제된 계좌(소프트 삭제) — 통합 표에서 숨김. 과거 총자산·계좌별 현황은 그대로 보존됨.
+                복원(다시 활성화) 또는 영구삭제(과거 기록까지 완전 제거) 가능. */}
+            {deletedAccounts.length > 0 && (
+              <div className="w-full bg-[#161e2e] rounded-xl border border-gray-700/60 overflow-hidden">
+                <button
+                  onClick={() => setShowDeletedAccounts(v => !v)}
+                  className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-gray-800/40 transition-colors"
+                >
+                  <span className="text-gray-400 text-xs font-bold flex items-center gap-2">
+                    <Trash2 size={13} className="text-gray-500" />
+                    삭제된 계좌 {deletedAccounts.length}개
+                    <span className="text-gray-600 font-normal">· 과거 기록 보존(통합 현황·추이에서 제외)</span>
+                  </span>
+                  <span className="text-gray-500 text-[11px]">{showDeletedAccounts ? '접기 ▲' : '펼치기 ▼'}</span>
+                </button>
+                {showDeletedAccounts && (
+                  <div className="px-3 pb-3 pt-1 flex flex-col gap-1.5">
+                    {deletedAccounts.map(d => (
+                      <div key={d.id} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-[#1e293b] border border-gray-700/50">
+                        <span className="font-bold text-gray-300 text-sm truncate max-w-[160px]" title={d.name}>{d.name}</span>
+                        <span className="text-[11px] text-gray-500">삭제일 {d.deletedAt}</span>
+                        {d.lastEval > 0 && (
+                          <span className="text-[11px] text-gray-500">· 마지막 총자산 {hideAmounts ? '••••••' : formatCurrency(d.lastEval)}</span>
+                        )}
+                        <div className="ml-auto flex items-center gap-1.5">
+                          {restorePortfolio && (
+                            <button
+                              onClick={() => restorePortfolio(d.id)}
+                              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-blue-700/50 text-blue-300 hover:text-blue-200 hover:border-blue-400 transition-colors"
+                              title="이 계좌를 복원 (다시 활성화)"
+                            >
+                              <RotateCcw size={11} /> 복원
+                            </button>
+                          )}
+                          {purgePortfolio && (
+                            <button
+                              onClick={() => purgePortfolio(d.id)}
+                              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-red-800/50 text-red-400 hover:text-red-300 hover:border-red-500 transition-colors"
+                              title="영구 삭제 (과거 기록까지 완전 제거, 되돌리기 불가)"
+                            >
+                              <Trash2 size={11} /> 영구삭제
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {!sec.history && (
             <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
 

@@ -365,7 +365,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   const afterTaxBlurTimer = useRef(null);
 
   const nonGoldPortfolios = useMemo(() =>
-    (portfolios || []).filter(p => p.accountType !== 'gold'),
+    (portfolios || []).filter(p => p.accountType !== 'gold' && !p.deletedAt), // 삭제 계좌는 분배금 현황(통합 compact)에서 제외 — 데이터는 계좌에 보존(복원 시 재노출)
     [portfolios]
   );
 
