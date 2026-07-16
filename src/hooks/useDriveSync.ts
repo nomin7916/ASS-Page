@@ -12,6 +12,21 @@ function _stripStateForSave(stateData: any) {
   const { stockHistoryMap: _s, marketIndices: _m, marketIndicators: _mi, indicatorHistoryMap: _ih, ...core } = stateData;
   return core;
 }
+
+// 복원/가져오기(handleApplyBackup·handleImportStateFile)로 Drive STATE에 쓸 때 앱 레벨 개인 데이터
+// (메모 달력·관심종목)를 결정. 현재 값(current = saveStateRef.current)이 있으면 유지 → 과거 이력으로
+// 복원해도 메모·관심종목이 되돌려지지 않는다. 현재 값이 비어 있을 때만 백업/파일 값 채택(신규 기기
+// 이전 시 유실 방지). applyBackupData의 in-memory sticky 규칙과 동일한 current를 참조하므로 결과 일치.
+function _preserveStickyPersonalData(stateCore: any, current: any) {
+  const curMemos = current?.calendarMemos;
+  const curWatch = current?.watchlistGroups;
+  const keepMemos = curMemos && Object.keys(curMemos).length > 0;
+  const keepWatch = Array.isArray(curWatch) && curWatch.length > 0;
+  return {
+    calendarMemos: keepMemos ? curMemos : (stateCore.calendarMemos ?? curMemos),
+    watchlistGroups: keepWatch ? curWatch : (stateCore.watchlistGroups ?? curWatch),
+  };
+}
 import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
 
 // SyncStatus 상태 머신
@@ -519,6 +534,7 @@ export function useDriveSync({
       await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.STATE, {
         ...stateCore,
         portfolios: normalizedPortfolios ?? stateCore.portfolios,
+        ..._preserveStickyPersonalData(stateCore, saveStateRef.current),
         portfolioUpdatedAt: newUpdatedAt,
       });
       await saveVersionFile(driveTokenRef.current, folderId, newUpdatedAt);
@@ -565,6 +581,7 @@ export function useDriveSync({
       await saveDriveFile(driveTokenRef.current, folderId, DRIVE_FILES.STATE, {
         ...stateCore,
         portfolios: normalizedPortfolios ?? stateCore.portfolios,
+        ..._preserveStickyPersonalData(stateCore, saveStateRef.current),
         portfolioUpdatedAt: newUpdatedAt,
       });
       await saveVersionFile(driveTokenRef.current, folderId, newUpdatedAt);

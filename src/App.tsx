@@ -689,8 +689,12 @@ export default function App() {
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
     if (stateData.dividendLinks) setDividendLinks(normalizeDividendLinks(stateData.dividendLinks));
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
-    if (stateData.calendarMemos) setCalendarMemos(stateData.calendarMemos);
-    if (stateData.watchlistGroups) setWatchlistGroups(stateData.watchlistGroups);
+    // calendarMemos·watchlistGroups = 앱 레벨 개인 데이터 — 백업 복원/파일 가져오기가 현재 기록을
+    // 덮어쓰지 않는다. 현재 값이 있으면 유지(과거 이력으로 복원해도 메모 달력·관심종목 보존), 비어
+    // 있을 때만 백업/파일 값을 채택(신규 기기 이전 시 유실 방지). ⚠️ 회귀 주의: 이 sticky 규칙은
+    // applyBackupData(복원)에만 적용 — applyStateData(정식 Drive 로드)는 그대로 최신값을 불러온다.
+    setCalendarMemos(prev => (prev && Object.keys(prev).length > 0) ? prev : (stateData.calendarMemos || prev));
+    setWatchlistGroups(prev => (Array.isArray(prev) && prev.length > 0) ? prev : (stateData.watchlistGroups || prev));
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
       if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
@@ -1320,7 +1324,10 @@ export default function App() {
 
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap }, intHistory, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
+    // calendarMemos·watchlistGroups·seenAdminNotifIds 등 신규 필드가 PC 백업·Drive STATE에서 유실됨
+    // (handleDownloadStateFile·handleAppClose와 동일 패턴).
+    const state = { ...saveStateRef.current, portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -1467,7 +1474,10 @@ export default function App() {
     const newUpdatedAt = Date.now();
     portfolioUpdatedAtRef.current = newUpdatedAt;
     lastDriveSavedPortfolioUpdatedAtRef.current = 0;
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap }, intHistory, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
+    // calendarMemos·watchlistGroups·seenAdminNotifIds 등 신규 필드가 Drive STATE·수동 백업에서
+    // 유실된다(과거 '저장' 버튼이 메모 달력을 지우던 원인 — handleAppClose와 동일 패턴으로 보장).
+    const state = { ...saveStateRef.current, portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {

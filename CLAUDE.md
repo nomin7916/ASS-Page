@@ -564,12 +564,22 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   literal(`const state = {...}`)에 `calendarMemos` 포함 ② **`portfolioStructureKey`에 `JSON.stringify(calendarMemos)`
   지문 추가 — 없으면 `portfolioUpdatedAt` 미상승 → `useDriveSync` 저장 가드가 STATE 저장을 스킵**
   (`historyVerifyKey`/`isTest`와 동일 버그류) ③ 저장 effect deps에 `calendarMemos` ④ `applyStateData`
-  ⑤ `applyBackupData` **양쪽** 복원(`if (stateData.calendarMemos) setCalendarMemos(...)` — 한쪽
-  누락 시 백업 복원이 메모를 지움). localStorage 금지(사용자 데이터 → Drive STATE만, 멀티계정 오염 방지).
-- **⚠️ PC 백업(`handleDownloadStateFile`)은 `{ ...saveStateRef.current, portfolios, portfolioUpdatedAt }`
-  스프레드로 저장** — 과거 필드를 손으로 나열하던 방식은 `calendarMemos` 등 신규 필드를 누락해
-  PC 파일 백업/복원 왕복에서 유실됐다(한국 ISP가 vercel.app 차단 → 로컬 파일 백업 의존이라 중요).
-  `handleAppClose`와 동일 패턴 → 앞으로 추가되는 저장 필드가 자동 포함(수동 나열 금지).
+  (정식 Drive 로드 — 최신값 그대로 복원) ⑤ `applyBackupData`(백업 복원/파일 가져오기 — **sticky 규칙**,
+  아래). localStorage 금지(사용자 데이터 → Drive STATE만, 멀티계정 오염 방지).
+- **⚠️ 모든 STATE 저장 payload는 `{ ...saveStateRef.current, ... }` 스프레드로 구성** (⚠️ 회귀 주의 —
+  필드 손나열 금지): `saveAllToDrive`는 STATE 파일을 통째로 덮어쓰므로(`stateCore` 전체 write) payload에
+  없는 필드는 Drive에서 삭제된다. 과거 **수동 저장 버튼 `handleSave`·`handleDriveSave`가 부분 state를
+  손으로 나열해 `calendarMemos`·`watchlistGroups`·`seenAdminNotifIds`를 누락** → "저장" 누르면 메모 달력이
+  Drive·백업에서 유실됐다. 네 지점(`handleSave`·`handleDriveSave`·`handleDownloadStateFile`·`handleAppClose`)
+  전부 `saveStateRef.current` 스프레드 필수(자동 저장 effect literal은 원본 소스라 예외 — 여기에 모든
+  필드가 모임). 한국 ISP가 vercel.app 차단 → 로컬 파일 백업 의존이라 특히 중요.
+- **⚠️ 복원 sticky 규칙 — `calendarMemos`·`watchlistGroups`는 과거 이력 복원에도 보존** (회귀 주의):
+  메모 달력·관심종목은 포트폴리오 구성과 무관한 앱 레벨 개인 데이터라, **백업/파일 복원이 이를 되돌리지
+  않는다**. `applyBackupData`(in-memory)와 `handleApplyBackup`/`handleImportStateFile`의 Drive write
+  (`_preserveStickyPersonalData`, `useDriveSync.ts`)는 **현재 값이 있으면 유지**하고 **비어 있을 때만**
+  백업/파일 값을 채택한다(신규 기기 이전·유실 후 복구는 가능, 기존 기록 덮어쓰기는 금지). 두 경로가 같은
+  current(`saveStateRef.current` = 복원 직전 in-memory)를 참조해 결과 일치. `applyStateData`(정식 로드)는
+  이 규칙에서 제외 — Drive STATE의 최신값을 항상 그대로 불러온다.
 - **z-index/피드백 제약(⚠️)**: 모달 = `Z.dialog`(1000), 메모 패드 = `Z.dialog+10`(1010). `ConfirmDialog`도
   z-1000이고 App DOM상 `CalendarModal`보다 **앞**이라 동일 z에서 달력이 위에 그려짐 → **모달 위에서
   `confirm()`(ConfirmDialog)·`notify()`(토스트 z-999)는 가려짐**. 따라서 메모 삭제는 confirm 없이
@@ -747,8 +757,11 @@ markAsRead() / clearNotificationLog()
   STATE 캐시(로드 직후 코드만 뜨는 깜빡임 방지). ETF/PER 캐시와 동일한 "라이브값=비영속" 정책.
 - **영속화 5(+1)지점 = calendarMemos 미러**(빠짐없이 필수): `App.tsx` ① useState ② `portfolioStructureKey`
   지문 `JSON.stringify(watchlistGroups)`(⚠️ 없으면 `portfolioUpdatedAt` 미상승 → Drive 저장 스킵) ③ state
-  리터럴 ④ 저장 effect deps ⑤ `applyStateData` ⑥ `applyBackupData`. PC 백업 2곳은 `{...saveStateRef.current}`
-  스프레드로 자동 상속. [[feedback_auto_commit]]
+  리터럴 ④ 저장 effect deps ⑤ `applyStateData` ⑥ `applyBackupData`. PC 백업/수동 저장 4곳
+  (`handleSave`·`handleDriveSave`·`handleDownloadStateFile`·`handleAppClose`)은 `{...saveStateRef.current}`
+  스프레드로 자동 상속(⚠️ 손나열 금지 — calendarMemos 영속화 섹션의 STATE 저장 규칙 참조).
+  **복원 sticky 규칙 동일 적용**: 백업/파일 복원은 현재 관심종목을 되돌리지 않고 보존(비어 있을 때만
+  백업값 채택 — calendarMemos와 `_preserveStickyPersonalData` 공유). [[feedback_auto_commit]]
 - **⚠️ 공유 `stockHistoryMap`에 절대 쓰지 말 것(핵심 불변식)**: 관심종목 시세/미니차트 이력은 **팝업
   로컬 `dailyMap`/`intradayMap`(+`quotes`/`status`)에만** 저장한다. `stockHistoryMap`은 Drive 영속 +
   `buildCloseEvalSeries`(보유종목 평가액 재계산)·`useAutoConfirmHistory` 데이터완비 가드의 권위 소스라,
