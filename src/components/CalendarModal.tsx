@@ -282,7 +282,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               const valid = dayNum >= 1 && dayNum <= daysInMonth;
               const dow = i % 7;
               if (!valid) {
-                return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: '260px' }} />;
+                return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: '130px' }} />;
               }
               const key = dayKeyOf(viewYear, viewMonth, dayNum);
               const isToday = key === todayStr;
@@ -297,7 +297,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   onClick={() => openNew(key)}
                   title="클릭하여 메모 추가"
                   className="border-r border-b border-gray-800/60 p-1 flex flex-col gap-0.5 cursor-pointer hover:bg-white/[0.03] transition-colors"
-                  style={{ minHeight: '260px' }}
+                  style={{ minHeight: '130px' }}
                 >
                   <div className="flex items-center justify-between shrink-0 px-0.5">
                     <span
@@ -320,7 +320,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       </div>
                     </div>
                   )}
-                  <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '160px' }}>
+                  <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '50px' }}>
                     {dayMemos.map((m) => (
                       <div
                         key={m.id}

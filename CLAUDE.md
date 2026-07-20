@@ -566,12 +566,13 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   **`App.tsx` 최상위 형제로 마운트**(`FloatingCalculator`/`WatchlistPopup` 옆) → 탭/뷰 전환에도
   언마운트 안 됨(창 내부 상태·위치·열린 패드 유지, 닫기 전까지 지속). 재오픈(open false→true) 시에만
   이번 달 리셋 + 패드 닫기 + 창 중앙 재배치.
-- **크기 & ⚠️ 세로 잘림 방지(회귀 주의)**: 날짜칸 `minHeight 260px`(칸 내 메모 목록 `maxHeight 160px`),
-  메모 패드 `rows 28`(투자일기 `RebalancingPanel` noteExpandModal은 `rows 30`). 달력 창은 `maxHeight 92vh`
-  라 칸이 커지면 본문이 내부 스크롤된다. 패드는 세로가 길어 **고정 오프셋으로 배치하면 아래가 화면 밖으로
-  잘린다** → ① textarea에 `maxHeight: calc(100vh - 160px)` 상한(초과분 내부 스크롤) ② `CalendarModal`은
-  `padSeq` 증가 → rAF에서 **실제 offsetHeight를 측정해 중앙 배치 + 뷰포트 클램프**(`centerPad` 같은 고정
-  오프셋 방식으로 되돌리지 말 것). `RebalancingPanel`은 상한이 있어 상단 5vh에서 시작.
+- **크기 & ⚠️ 세로 잘림 방지(회귀 주의)**: **달력 그리드는 기본 크기 유지** — 날짜칸 `minHeight 130px`,
+  칸 내 메모 목록 `maxHeight 50px`, 창 폭 `CAL_W 920px`/`maxHeight 92vh`(**키우지 말 것** — 칸만 커지고
+  빈 공간만 넓어져 한 화면에 한 달이 안 들어온다). **길게 쓰는 건 메모 패드뿐**: 달력 메모 `rows 28`,
+  투자일기(`RebalancingPanel` noteExpandModal) `rows 30`. 패드는 세로가 길어 **고정 오프셋으로 배치하면
+  아래가 화면 밖으로 잘린다** → ① textarea에 `maxHeight: calc(100vh - 160px)` 상한(초과분 내부 스크롤)
+  ② `CalendarModal`은 `padSeq` 증가 → rAF에서 **실제 offsetHeight를 측정해 중앙 배치 + 뷰포트 클램프**
+  (`centerPad` 같은 고정 오프셋 방식으로 되돌리지 말 것). `RebalancingPanel`은 상한이 있어 상단 5vh에서 시작.
 
 - **데이터 모델**: 앱 레벨 `calendarMemos: { [YYYY-MM-DD]: { id, content, createdAt }[] }`
   (특정 포트폴리오에 종속 안 됨, `intHistory`와 동급). 하루 배열 `push`로 append → 표시 순서가
