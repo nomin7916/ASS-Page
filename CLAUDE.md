@@ -552,10 +552,20 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
 
 헤더의 **달력 아이콘**(`AccountTabBar` 액션 아이콘 **우측 끝, 통합 대시보드·개별 계좌 모두
 항상 노출** — `showIntegratedDashboard` 프래그먼트 밖에 배치해 어느 뷰에서든 메모 가능)으로 여는
-구글 캘린더식 월 그리드 모달
-(`CalendarModal.tsx`). 날짜 셀 클릭 → 사진 형식 메모 패드(핑크 X 취소 / 퍼플 체크 저장 /
-날짜 / MEMO 그라데이션 / 줄선 textarea — `RebalancingPanel`의 `noteExpandModal` 스타일 복제)
-→ 저장 시 셀에 한 줄 표시, 한 줄 클릭 → 펼침/편집, 같은 날 **append 누적**(오래된 위 · 새 아래).
+**비차단·이동 가능 플로팅 창**(`CalendarModal.tsx`, 구글 캘린더식 월 그리드). 날짜 셀 클릭 →
+사진 형식 메모 패드(핑크 X 취소 / 퍼플 체크 저장 / 날짜 / MEMO 그라데이션 / 줄선 textarea —
+`RebalancingPanel`의 `noteExpandModal` 스타일 복제) → 저장 시 셀에 한 줄 표시, 한 줄 클릭 →
+펼침/편집, 같은 날 **append 누적**(오래된 위 · 새 아래).
+
+- **비차단·이동 가능 (⚠️ 회귀 주의 — FloatingCalculator/WatchlistPopup과 동일 규칙)**: 달력 창과
+  메모 패드 모두 **백드롭 없는 단일 `position:fixed` div**라 아래 앱 클릭·스크롤이 통과한다(창을 열어
+  둔 채 계좌 탭 전환·뷰 이동 가능). 각각 **타이틀 바만 드래그 핸들**(window mousemove/touchmove +
+  뷰포트 클램프, 타이틀 바 100px는 항상 화면 안에 유지)로 **독립 이동**한다. 달력 창=`CAL_Z 1050`,
+  메모 패드=`PAD_Z 1060`(dialog 1000 < 여기 < LoadingOverlay 1100). 드래그 핸들 내 버튼(이전/다음/
+  오늘/닫기, 패드 X/체크)은 `onMouseDown stopPropagation`으로 드래그 시작을 막고 클릭만 처리.
+  **`App.tsx` 최상위 형제로 마운트**(`FloatingCalculator`/`WatchlistPopup` 옆) → 탭/뷰 전환에도
+  언마운트 안 됨(창 내부 상태·위치·열린 패드 유지, 닫기 전까지 지속). 재오픈(open false→true) 시에만
+  이번 달 리셋 + 패드 닫기 + 창 중앙 재배치.
 
 - **데이터 모델**: 앱 레벨 `calendarMemos: { [YYYY-MM-DD]: { id, content, createdAt }[] }`
   (특정 포트폴리오에 종속 안 됨, `intHistory`와 동급). 하루 배열 `push`로 append → 표시 순서가
@@ -580,16 +590,17 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   백업/파일 값을 채택한다(신규 기기 이전·유실 후 복구는 가능, 기존 기록 덮어쓰기는 금지). 두 경로가 같은
   current(`saveStateRef.current` = 복원 직전 in-memory)를 참조해 결과 일치. `applyStateData`(정식 로드)는
   이 규칙에서 제외 — Drive STATE의 최신값을 항상 그대로 불러온다.
-- **z-index/피드백 제약(⚠️)**: 모달 = `Z.dialog`(1000), 메모 패드 = `Z.dialog+10`(1010). `ConfirmDialog`도
-  z-1000이고 App DOM상 `CalendarModal`보다 **앞**이라 동일 z에서 달력이 위에 그려짐 → **모달 위에서
-  `confirm()`(ConfirmDialog)·`notify()`(토스트 z-999)는 가려짐**. 따라서 메모 삭제는 confirm 없이
-  즉시 삭제(셀에서 사라지는 게 피드백, `RebalancingPanel deleteNote` 패턴). 모달 내에서 confirm/notify
-  의존 금지.
-- **UX 세부**: 메모 패드 백드롭 오클릭은 **입력이 비었을 때만** 닫음(`if (!pad.val.trim())`) — 작성 중
-  오클릭으로 텍스트 유실 방지(X/Esc/저장은 의도적 취소로 유지). Esc는 패드부터 닫고(없으면 모달 닫기),
-  `pad`를 effect deps에 넣어 클로저로 판별(setState 업데이터 내 부작용 금지). 날짜 키는 `${y}-${pad2(m+1)}-${pad2(d)}`
-  로 직접 조립(TZ 안전, `new Date('YYYY-MM-DD')` UTC 파싱 금지), 오늘 판정은 `getTodayKST()`. 주말(일 red/토 blue)·
-  KR 공휴일(`useMarketCalendar` holidays.kr) 색상 + 오늘 파란 배지.
+- **z-index/피드백 제약(⚠️)**: 달력 창 `CAL_Z 1050`·메모 패드 `PAD_Z 1060` 모두 `Z.dialog`(1000)·
+  `ConfirmDialog`(1000)·`notify()` 토스트(z-999)보다 **위**라 창 위에서 confirm/notify는 가려진다.
+  따라서 메모 삭제는 confirm 없이 즉시 삭제(셀에서 사라지는 게 피드백, `RebalancingPanel deleteNote`
+  패턴). 창 내에서 confirm/notify 의존 금지.
+- **UX 세부**: 백드롭이 없어졌으므로 **오클릭 닫기 없음** — 패드는 **X/Esc/저장(체크)** 로만 닫는다
+  (비차단 통과 클릭이 텍스트를 지우지 않아 오히려 안전). Esc는 **패드만** 닫는다(비차단 배경 창을
+  전역 Esc로 통째 닫지 않음 — 닫기는 창 X 버튼). textarea onKeyDown Esc가 `stopPropagation` 후 닫고,
+  포커스가 딴 데 있을 때를 위한 전역 Esc 폴백은 `pad`를 deps에 넣어 클로저로 판별(패드 있을 때만 동작).
+  날짜 키는 `${y}-${pad2(m+1)}-${pad2(d)}`로 직접 조립(TZ 안전, `new Date('YYYY-MM-DD')` UTC 파싱 금지),
+  오늘 판정은 `getTodayKST()`. 주말(일 red/토 blue)·KR 공휴일(`useMarketCalendar` holidays.kr) 색상 +
+  오늘 파란 배지.
 - **날짜별 포트폴리오 스냅샷 표시 (display-derived, ⚠️ persist 무관)**: 각 셀은 날짜 아래 3줄 축약
   (총자산 억/만·그날 오늘수익 절대액+%·누적수익율), 메모 패드는 MEMO 헤더 아래 밴드에 풀 숫자
   (`총자산 / 수익 / 수익율 / 환율 / US10Y`)를 표시한다. **그 날짜의 실제 기록**만 표시(기록 없는

@@ -2375,23 +2375,6 @@ export default function App() {
         />
         </div>
 
-        {/* 메모 달력 모달 */}
-        <CalendarModal
-          open={showCalendarModal}
-          onClose={() => setShowCalendarModal(false)}
-          memos={calendarMemos}
-          onUpdateMemos={setCalendarMemos}
-          holidays={marketHolidays}
-          notify={notify}
-          confirm={confirm}
-          metricsHistory={intMonthlyHistory}
-          todayReturnRate={intTotals.returnRate}
-          fxHistory={indicatorHistoryMap?.usdkrw}
-          us10yHistory={indicatorHistoryMap?.us10y}
-          liveFx={marketIndicators?.usdkrw}
-          liveUs10y={marketIndicators?.us10y}
-        />
-
         {/* Drive 백업 이력 모달 */}
         <DriveBackupModal
           showBackupModal={showBackupModal}
@@ -2873,6 +2856,22 @@ export default function App() {
         onClose={() => setShowWatchlist(false)}
         groups={watchlistGroups}
         onUpdateGroups={setWatchlistGroups}
+      />
+      {/* 메모 달력 (비차단·이동 가능 플로팅 창) — App 최상위 형제로 마운트해 탭/뷰 전환에도 언마운트 안 됨 */}
+      <CalendarModal
+        open={showCalendarModal}
+        onClose={() => setShowCalendarModal(false)}
+        memos={calendarMemos}
+        onUpdateMemos={setCalendarMemos}
+        holidays={marketHolidays}
+        notify={notify}
+        confirm={confirm}
+        metricsHistory={intMonthlyHistory}
+        todayReturnRate={intTotals.returnRate}
+        fxHistory={indicatorHistoryMap?.usdkrw}
+        us10yHistory={indicatorHistoryMap?.us10y}
+        liveFx={marketIndicators?.usdkrw}
+        liveUs10y={marketIndicators?.us10y}
       />
     </div>
   );
