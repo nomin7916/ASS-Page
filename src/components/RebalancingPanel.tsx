@@ -143,7 +143,8 @@ export default function RebalancingPanel({
 
   const openNoteExpand = (note) => {
     setNoteLogOpen(false);
-    setNoteExpandPos({ x: Math.max(8, window.innerWidth / 2 - 192), y: Math.max(8, window.innerHeight / 2 - 180) });
+    // 세로 2배(rows 30)라 중앙 오프셋(-180)으로 열면 아래가 화면 밖으로 잘린다 → 상단 근처에서 시작
+    setNoteExpandPos({ x: Math.max(8, window.innerWidth / 2 - 192), y: Math.max(8, Math.round(window.innerHeight * 0.05)) });
     setNoteExpandModal({ id: note.id, date: note.date, val: note.content ?? '' });
   };
 
@@ -153,7 +154,7 @@ export default function RebalancingPanel({
     const newNote = { id: generateId(), date: today, content: '' };
     const updated = [newNote, ...(investmentNotes || [])];
     onUpdateInvestmentNotes(updated);
-    setNoteExpandPos({ x: Math.max(8, window.innerWidth / 2 - 192), y: Math.max(8, window.innerHeight / 2 - 180) });
+    setNoteExpandPos({ x: Math.max(8, window.innerWidth / 2 - 192), y: Math.max(8, Math.round(window.innerHeight * 0.05)) });
     setNoteExpandModal({ id: newNote.id, date: newNote.date, val: '' });
   };
 
@@ -1569,8 +1570,10 @@ export default function RebalancingPanel({
                   paddingRight: '10px',
                   paddingTop: '8px',
                   paddingBottom: '8px',
+                  // 세로 2배(rows 30)라도 패드 전체가 화면을 넘지 않도록 상한 — 초과분은 내부 스크롤
+                  maxHeight: 'calc(100vh - 160px)',
                 }}
-                rows={15}
+                rows={30}
                 autoFocus
                 placeholder="메모를 입력하세요..."
                 value={noteExpandModal.val}

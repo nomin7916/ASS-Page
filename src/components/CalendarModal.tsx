@@ -55,6 +55,8 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   // 플로팅 창 위치 (달력 창 / 메모 패드 각각 독립 이동)
   const [winPos, setWinPos] = useState(() => ({ x: 60, y: 40 }));
   const [padPos, setPadPos] = useState(() => ({ x: 200, y: 120 }));
+  // 패드가 열릴 때마다 증가 — 실제 높이 측정 후 중앙 배치 효과의 트리거
+  const [padSeq, setPadSeq] = useState(0);
   const winRef = useRef(null);
   const padRef = useRef(null);
   // 드래그 대상('win'|'pad'|null) + 커서-창 오프셋. 창 하나의 window 리스너로 둘 다 처리.
@@ -82,6 +84,23 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     });
     return () => cancelAnimationFrame(id);
   }, [open]);
+
+  // 패드가 열릴 때마다 실제 높이를 측정해 화면 중앙 배치 + 뷰포트 클램프.
+  // 세로를 크게 키웠으므로(rows 28) 고정 오프셋으로 배치하면 아래가 화면 밖으로 잘릴 수 있다.
+  useEffect(() => {
+    if (!padSeq) return;
+    const id = requestAnimationFrame(() => {
+      const el = padRef.current;
+      if (!el) return;
+      const w = el.offsetWidth || PAD_W;
+      const h = el.offsetHeight || 400;
+      setPadPos({
+        x: clamp(Math.round((window.innerWidth - w) / 2), 0, Math.max(0, window.innerWidth - w)),
+        y: clamp(Math.round((window.innerHeight - h) / 2), 0, Math.max(0, window.innerHeight - 40)),
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [padSeq]);
 
   // 드래그 이동 (window 리스너 — 커서가 창 밖으로 나가도 추적, 뷰포트 클램프)
   useEffect(() => {
@@ -161,13 +180,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   };
   const gotoToday = () => { setViewYear(ty); setViewMonth(tm); };
 
-  // 메모 패드를 화면 중앙 근처로 배치 (열 때마다)
-  const centerPad = () => setPadPos({
-    x: clamp(Math.round(window.innerWidth / 2 - PAD_W / 2), 8, Math.max(8, window.innerWidth - 120)),
-    y: Math.max(16, Math.round(window.innerHeight / 2 - 200)),
-  });
-  const openNew = (dayKey) => { centerPad(); setPad({ dayKey, mode: 'new', memoId: null, val: '' }); };
-  const openEdit = (dayKey, memo) => { centerPad(); setPad({ dayKey, mode: 'edit', memoId: memo.id, val: memo.content || '' }); };
+  // 패드 배치는 padSeq 효과가 실제 높이를 측정해 중앙 정렬 + 클램프한다(고정 오프셋 금지 — 세로가 길어 잘림).
+  const openNew = (dayKey) => { setPad({ dayKey, mode: 'new', memoId: null, val: '' }); setPadSeq((s) => s + 1); };
+  const openEdit = (dayKey, memo) => { setPad({ dayKey, mode: 'edit', memoId: memo.id, val: memo.content || '' }); setPadSeq((s) => s + 1); };
   const closePad = () => setPad(null);
 
   const savePad = () => {
@@ -267,7 +282,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               const valid = dayNum >= 1 && dayNum <= daysInMonth;
               const dow = i % 7;
               if (!valid) {
-                return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: '130px' }} />;
+                return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: '260px' }} />;
               }
               const key = dayKeyOf(viewYear, viewMonth, dayNum);
               const isToday = key === todayStr;
@@ -282,7 +297,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   onClick={() => openNew(key)}
                   title="클릭하여 메모 추가"
                   className="border-r border-b border-gray-800/60 p-1 flex flex-col gap-0.5 cursor-pointer hover:bg-white/[0.03] transition-colors"
-                  style={{ minHeight: '130px' }}
+                  style={{ minHeight: '260px' }}
                 >
                   <div className="flex items-center justify-between shrink-0 px-0.5">
                     <span
@@ -305,7 +320,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       </div>
                     </div>
                   )}
-                  <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '50px' }}>
+                  <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '160px' }}>
                     {dayMemos.map((m) => (
                       <div
                         key={m.id}
@@ -406,8 +421,10 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               backgroundPosition: '0 8px',
               lineHeight: '32px',
               padding: '8px 10px',
+              // 세로 2배(rows 28)라도 패드 전체가 화면을 넘지 않도록 상한 — 초과분은 내부 스크롤
+              maxHeight: 'calc(100vh - 160px)',
             }}
-            rows={14}
+            rows={28}
             autoFocus
             placeholder="메모를 입력하세요..."
             value={pad.val}
