@@ -1570,7 +1570,7 @@ export default function RebalancingPanel({
                   paddingTop: '8px',
                   paddingBottom: '8px',
                 }}
-                rows={10}
+                rows={15}
                 autoFocus
                 placeholder="메모를 입력하세요..."
                 value={noteExpandModal.val}

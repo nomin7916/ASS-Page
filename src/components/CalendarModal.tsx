@@ -407,7 +407,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               lineHeight: '32px',
               padding: '8px 10px',
             }}
-            rows={9}
+            rows={14}
             autoFocus
             placeholder="메모를 입력하세요..."
             value={pad.val}
