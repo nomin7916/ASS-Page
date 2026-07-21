@@ -531,6 +531,19 @@ export function usePortfolioState({
     }));
   };
 
+  // 분배금 표(월 예상 분배금·월 입금 내역)의 월(0~11) 컬럼 숨김 토글 — 계좌별·탭별 독립 배열.
+  // hiddenTaxMonths(과표)와 같은 표시 편의용이라 월별 합계·연간합계·분배율 계산에는 영향을 주지
+  // 않고(전 12개월로 계산 유지) 렌더만 숨긴다. 두 탭은 숨김 상태를 공유하지 않는다.
+  const toggleHiddenDividendMonth = (portfolioId, tab, monthIndex) => {
+    const field = tab === 'actual' ? 'hiddenDivMonthsActual' : 'hiddenDivMonthsExpected';
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const cur = p[field] ?? [];
+      const next = cur.includes(monthIndex) ? cur.filter(m => m !== monthIndex) : [...cur, monthIndex];
+      return { ...p, [field]: next };
+    }));
+  };
+
   // ── 수동 추가 배당금 행 ──
   const addPortfolioExtraRow = (portfolioId) => {
     setPortfolios(prev => prev.map(p => {
@@ -794,6 +807,7 @@ export function usePortfolioState({
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
     toggleHiddenTaxMonth,
+    toggleHiddenDividendMonth,
     updateInvestmentNotes,
   };
 }

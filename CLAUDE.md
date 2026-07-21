@@ -508,7 +508,54 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
 ### DividendSummaryTable
 - `compact=false` (기본): 개별 계좌 뷰, 종목 행 표시, 셀 직접 편집 가능
 - `compact=true`: 통합 대시보드 뷰, 계좌별 월 합계만 표시, rowColor 그라데이션 텍스트
-- App.tsx 배치: non-compact ~1933줄 / compact ~2110줄 (`showIntegratedDashboard` 조건)
+- 렌더 위치: non-compact = `App.tsx`(`showIntegratedDashboard` 아닐 때) / compact = `IntegratedDashboard.tsx`
+  (compact는 App.tsx가 아니라 **IntegratedDashboard 내부**에서 렌더된다)
+
+### 분배금 표 월 컬럼 숨기기 (⚠️ 회귀 주의 — 렌더 지점 23곳 전수 적용 필수)
+
+'월 예상 분배금'·'월 입금 내역' 탭에서 **월 `<th>` 상단 12px 빈 띠 클릭 → 그 월 컬럼 전체 숨김**
+(`KrEtfTaxMatrix`의 `hiddenTaxMonths`를 이식). 가로 스크롤이 긴 표에서 필요한 달만 남기는 용도.
+
+- **불변식**: 숨김은 **렌더 전용**. `monthlyTotals`·`compactMonthlyTotals`·`actualMonthlyGrossKrw`·
+  연간합계·분배율·과세합계는 전부 `Array.from({length:12})` 그대로 유지 — 숫자는 절대 변하지 않는다.
+  저장 키(`monthData[i].yearMonth`)도 원본 인덱스 `i`를 그대로 쓴다. ⚠️ **`.filter().map()`으로 바꾸면
+  인덱스가 밀려 옆 달에 저장된다 — 반드시 12개 원본 배열을 순회하고 반환값만 걸러낼 것.**
+- **저장 위치 2원화**(탭별 독립 — expected/actual 공유 안 함):
+  - 개별 계좌 → 계좌 필드 `p.hiddenDivMonthsExpected` / `p.hiddenDivMonthsActual`
+    (`usePortfolioState.toggleHiddenDividendMonth(portfolioId, tab, monthIndex)`).
+    영속화: `App.tsx` `portfolioStructureKey`에 두 필드 포함(⚠️ 없으면 `portfolioUpdatedAt` 미상승 →
+    Drive STATE 저장 스킵). 로드는 `...p` 스프레드로 자동 보존.
+  - 통합 대시보드 → 앱 레벨 `chartPrefs.intHiddenDivMonths = {expected:[],actual:[]}`
+    (compact는 여러 계좌 합산 뷰라 저장할 단일 계좌가 없음 → `intSec`·`sectionCollapsedMap`이 사는 곳 재사용).
+    ⚠️ **영속화 5지점 필수**: state 리터럴 `chartPrefs`, `chartPrefsUpdatedAt` effect deps,
+    STATE 저장 effect deps, `applyStateData`, `applyBackupData`. 저장 가드는
+    `useDriveSync` `portfolioChanged || chartPrefsChanged`라 chartPrefs 단독 변경도 저장된다
+    (단 `saveVersionFile`은 `portfolioChanged`일 때만 → **타 기기 즉시 반영은 안 됨**, 기존 chartPrefs와 동일).
+    로드 정규화 `normalizeIntHiddenDivMonths`(App.tsx 모듈 스코프)로 손상값 방어.
+- **컴포넌트 인터페이스**: `DividendSummaryTable`은 저장 위치를 모른다 — `hiddenMonths={{expected,actual}}`(읽기) +
+  `onToggleHiddenMonth(tab, monthIndex)`(쓰기) 2개 prop만 받는다. 핸들러가 없으면 스트립·칩 미렌더(graceful).
+  App→IntegratedDashboard 구간 prop명은 `intHiddenDivMonths`/`onToggleIntHiddenDivMonth`(3-hop).
+- **렌더 지점 23곳**(하나라도 빠지면 그 행만 열이 남아 **표 정렬이 깨진다**): `renderDistRateRow` 1 +
+  compact 7(thead·tbody·tfoot 3분기·과세합계 2) + expected 6(thead·overseas 서브헤더·tbody 2분기·tfoot 2) +
+  actual 9(thead·서브헤더·tbody 2(종목행/extraActualRows)·tfoot 2·과세합계·실수령·해외 과세합계).
+  표현식 바디 map은 `!isMonthHidden(i) && (...)`, 블록 바디 map은 첫 줄 `if (isMonthHidden(i)) return null;`.
+  ⚠️ 서브헤더(세전/세후)는 **필터만** 적용하고 스트립은 넣지 않는다(메인 헤더에만).
+  ⚠️ `expectedHasOverseas`/`actualHasOverseas`는 **행 집합에서 파생**되므로 월 필터를 태우면 안 된다.
+- **⚠️ 스트립 z-index는 `z-[1]`**(과표표의 `z-10` 아님): 이 표의 첫 열 sticky `<th>`가 `z-10`이고 월 `<th>`는
+  sticky가 아니라, 스트립을 `z-10`으로 두면 동률+DOM 후순위라 **가로 스크롤 시 스트립이 sticky 열 위로 얹혀
+  그 영역 클릭을 가로챈다**(과표표는 sticky th가 `z-20`이라 무사). 월 `<th>`에는 `relative` 필요.
+- **`toggleMonth(i)` 래퍼 경유 필수**(스트립·복원 칩 양쪽): `afterTaxBlurTimer` 정리 + 편집 중이면 `commitEdit()`.
+  안 그러면 셀이 언마운트된 뒤 150ms blur 타이머만 살아남아 **보이지 않는 월에 조용히 커밋**된다.
+- **`hiddenTab` 정규화**: `activeTab`이 `'tax'`일 수 있으므로 저장 버킷 인자는 `'actual'|'expected'`로 정규화해
+  전달한다(과표 탭은 `KrEtfTaxMatrix`가 자체 `hiddenTaxMonths`로 처리 — 절대 합치지 말 것).
+- **`lastVisibleMonth`**: 열 오른쪽 경계선이 원래 `i === 11` 고정이라 12월을 숨기면 표 끝에 여분 세로선이
+  남는다. `isLastCol`/`isLastMonthCol`/`i < 11` 5곳을 이 값 기준으로 비교.
+- **⚠️ non-compact 툴바는 `flex-wrap` 필수**: 카드가 `overflow-hidden`이라 숨긴 월 칩이 늘면 우측
+  `shrink-0` 그룹(행 추가·새로고침)이 **잘려 클릭 불가**가 된다. 칩은 그 그룹 **밖**에 둔다.
+  칩은 유일한 복원 수단이므로 합계 표시 조건부 블록 안에 넣지 말 것.
+- **범위 밖(의도)**: 백업 복원 sticky 규칙(`_preserveStickyPersonalData`) 미적용 — 계좌 필드는
+  `portfolios[]` 내부라 top-level 평면 머지 계약과 안 맞고, `intHiddenDivMonths`는 `intSec`·`matongClosedIds`와
+  같은 뷰 선호도 등급(클릭 한 번으로 복구 가능).
 
 ### 삭제된 종목의 분배금·과세 입력 보존 = '삭제됨' 유령 행 (⚠️ 회귀 주의)
 

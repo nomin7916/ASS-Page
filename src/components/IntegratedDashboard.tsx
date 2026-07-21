@@ -120,6 +120,8 @@ export default function IntegratedDashboard({
   usdkrw = 1300,
   holidays = { kr: [], us: [] },
   dividendTaxHistory = {},
+  intHiddenDivMonths = { expected: [], actual: [] },
+  onToggleIntHiddenDivMonth,
   onManualBackfill,
   sec = { dividend: false, history: false, donut: false },
   setSec,
@@ -1525,7 +1527,7 @@ export default function IntegratedDashboard({
             </div>
             )}
             {userFeatures.feature3 && !sec.dividend && (
-              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate} updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax} updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount} updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd} updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd} updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw} usdkrw={usdkrw} holidays={holidays} dividendTaxHistory={dividendTaxHistory} />
+              <DividendSummaryTable compact portfolios={allPortfoliosForDividend} updatePortfolioDividendHistory={updatePortfolioDividendHistory} updatePortfolioActualDividend={updatePortfolioActualDividend} updatePortfolioDividendTaxRate={updatePortfolioDividendTaxRate} updatePortfolioDividendSeparateTax={updatePortfolioDividendSeparateTax} updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount} updatePortfolioActualDividendUsd={updatePortfolioActualDividendUsd} updatePortfolioActualAfterTaxUsd={updatePortfolioActualAfterTaxUsd} updatePortfolioActualAfterTaxKrw={updatePortfolioActualAfterTaxKrw} usdkrw={usdkrw} holidays={holidays} dividendTaxHistory={dividendTaxHistory} hiddenMonths={intHiddenDivMonths} onToggleHiddenMonth={onToggleIntHiddenDivMonth} />
             )}
               </div>
               <div className="sticky top-14 self-start flex flex-col gap-px flex-shrink-0 z-10 pt-3">

@@ -102,6 +102,16 @@ const ADMIN_PORTAL_BOOT: boolean = (() => {
   try { return new URLSearchParams(window.location.search).get('adminPortal') === '1'; } catch { return false; }
 })();
 
+// 분배금 표 월 숨김 값 정규화 — 통합(chartPrefs.intHiddenDivMonths) 로드와 개별 계좌 prop 양쪽에서 사용.
+// Drive에 저장된 값이 옛 형태·손상값이어도 항상 {expected:number[], actual:number[]}로 맞춰
+// 렌더의 .includes 호출이 깨지지 않게 한다(중복 인덱스는 복원 칩 key 충돌 방지로 제거).
+const normalizeHiddenDivMonths = (raw) => {
+  const pick = (v) => Array.isArray(v)
+    ? [...new Set(v.filter(n => Number.isInteger(n) && n >= 0 && n <= 11))]
+    : [];
+  return { expected: pick(raw?.expected), actual: pick(raw?.actual) };
+};
+
 export default function App() {
   const historyInputRef = useRef(null);
 
@@ -321,6 +331,9 @@ export default function App() {
   const [sectionCollapsedMap, setSectionCollapsedMap] = useState({});
   const [matongClosedIds, setMatongClosedIds] = useState({});
   const [intSec, setIntSec] = useState({ dividend: false, history: false, donut: false });
+  // 통합 대시보드 분배금 표의 월 컬럼 숨김(탭별). 개별 계좌는 계좌별 hiddenDivMonths*에 저장하지만
+  // compact 표는 여러 계좌 합산 뷰라 저장할 단일 계좌가 없어 앱 레벨 chartPrefs에 보관한다.
+  const [intHiddenDivMonths, setIntHiddenDivMonths] = useState({ expected: [], actual: [] });
 
   // ── useHistoryChart 훅 ──
   const {
@@ -526,6 +539,7 @@ export default function App() {
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
     toggleHiddenTaxMonth,
+    toggleHiddenDividendMonth,
     updateInvestmentNotes,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
@@ -539,6 +553,14 @@ export default function App() {
   const toggleSection = (key) => setSectionCollapsedMap(prev => {
     const cur = prev[activePortfolioId] || {};
     return { ...prev, [activePortfolioId]: { ..._SEC_DEFAULT, ...cur, [key]: !(cur[key] ?? false) } };
+  });
+
+  // ── 통합 대시보드 분배금 표 월 숨김 토글 (탭별 독립) ──
+  const toggleIntHiddenDivMonth = (tab, monthIndex) => setIntHiddenDivMonths(prev => {
+    const key = tab === 'actual' ? 'actual' : 'expected';
+    const cur = prev?.[key] ?? [];
+    const next = cur.includes(monthIndex) ? cur.filter(m => m !== monthIndex) : [...cur, monthIndex];
+    return { ...prev, [key]: next };
   });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
@@ -618,6 +640,7 @@ export default function App() {
       if (stateData.chartPrefs.intDateRange) setIntDateRange(stateData.chartPrefs.intDateRange);
       if (stateData.chartPrefs.intAppliedRange) setIntAppliedRange(stateData.chartPrefs.intAppliedRange);
       if (stateData.chartPrefs.intIsZeroBaseMode !== undefined) setIntIsZeroBaseMode(stateData.chartPrefs.intIsZeroBaseMode);
+      if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
       if (stateData.chartPrefs.rebalanceSortConfigMap) setRebalanceSortConfigMap(stateData.chartPrefs.rebalanceSortConfigMap);
       // 통합 대시보드 비교종목 복원 — 앱은 항상 통합 대시보드에서 시작하므로 compStocks도 함께 설정
@@ -713,6 +736,7 @@ export default function App() {
       if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
       if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(stateData.chartPrefs.sectionCollapsedMap);
       if (stateData.chartPrefs.intSec) setIntSec(stateData.chartPrefs.intSec);
+      if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
       if (stateData.chartPrefs.rebalanceSortConfigMap) setRebalanceSortConfigMap(stateData.chartPrefs.rebalanceSortConfigMap);
     }
@@ -769,7 +793,7 @@ export default function App() {
   useEffect(() => {
     if (isInitialLoad.current) return;
     chartPrefsUpdatedAtRef.current = Date.now();
-  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, isZeroBaseMode, showTotalEval, showReturnRate, sectionCollapsedMap, rebalanceSortConfigMap, compStocks]);
+  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, isZeroBaseMode, showTotalEval, showReturnRate, sectionCollapsedMap, rebalanceSortConfigMap, intHiddenDivMonths, compStocks]);
 
   // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
@@ -1777,7 +1801,12 @@ export default function App() {
         rowColor: p.rowColor || '',
         isTest: !!p.isTest,
         deletedAt: p.deletedAt || '', // 소프트 삭제 태그 — 삭제/복원이 Drive STATE 저장을 트리거하도록 지문에 포함
-        hiddenTaxMonths: [...(p.hiddenTaxMonths || [])].sort((a, b) => a - b),
+        // ⚠️ Array.isArray 가드 필수 — 손상된 Drive 값이 비순회 truthy면 `[...x]`가 TypeError를 던져
+        // 이 지문 계산이 중단되고, 그 뒤 저장 스케줄까지 통째로 죽어 Drive 저장이 멈춘다.
+        hiddenTaxMonths: (Array.isArray(p.hiddenTaxMonths) ? [...p.hiddenTaxMonths] : []).sort((a, b) => a - b),
+        // 분배금 표 월 숨김(탭별) — 단독 토글도 Drive STATE 저장을 트리거하도록 지문에 포함
+        hiddenDivMonthsExpected: (Array.isArray(p.hiddenDivMonthsExpected) ? [...p.hiddenDivMonthsExpected] : []).sort((a, b) => a - b),
+        hiddenDivMonthsActual: (Array.isArray(p.hiddenDivMonthsActual) ? [...p.hiddenDivMonthsActual] : []).sort((a, b) => a - b),
         historyLen: (p.history || []).length,
         // 자산검증 확정상태 지문: 확정(isFixed)·자동확정거부(autoConfirmDeclined)·확정값 변경을
         // 구조 변경으로 간주 → portfolioUpdatedAt 상승 → Drive STATE 저장(수동/자동 확정·확정취소
@@ -1822,7 +1851,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -1837,7 +1866,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, rebalanceSortConfigMap, calendarMemos, watchlistGroups]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, rebalanceSortConfigMap, intHiddenDivMonths, calendarMemos, watchlistGroups]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -2558,6 +2587,11 @@ export default function App() {
             updateTaxBaseExPrice={updateTaxBaseExPrice}
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
             onToggleTaxMonth={toggleHiddenTaxMonth}
+            hiddenMonths={normalizeHiddenDivMonths({
+              expected: activePortfolio?.hiddenDivMonthsExpected,
+              actual: activePortfolio?.hiddenDivMonthsActual,
+            })}
+            onToggleHiddenMonth={(tab, monthIndex) => toggleHiddenDividendMonth(activePortfolioId, tab, monthIndex)}
             deletePortfolioDividendData={deletePortfolioDividendData}
             deletePortfolioTaxData={deletePortfolioTaxData}
             confirmDialog={confirm}
@@ -2816,6 +2850,8 @@ export default function App() {
             usdkrw={marketIndicators.usdkrw || 1300}
             holidays={marketHolidays}
             dividendTaxHistory={dividendTaxHistory}
+            intHiddenDivMonths={intHiddenDivMonths}
+            onToggleIntHiddenDivMonth={toggleIntHiddenDivMonth}
             matongClosedIds={matongClosedIds}
             setMatongClosedIds={setMatongClosedIds}
             compStocks={compStocks}

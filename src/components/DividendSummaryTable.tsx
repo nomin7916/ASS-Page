@@ -356,7 +356,7 @@ function DividendLinkBar({ links, onChange }) {
   );
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, onToggleTaxMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -926,6 +926,55 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
 
   if (!nonGoldPortfolios.length) return null;
 
+  // ── 월(0~11) 컬럼 숨기기 — 탭별 독립(expected/actual). KrEtfTaxMatrix의 hiddenTaxMonths와 같은
+  // 표시 편의용이라 월별 합계·연간합계·분배율 계산에는 전혀 영향을 주지 않고(전 12개월로 계산 유지)
+  // 렌더만 숨긴다. 저장 위치는 호출부가 결정(개별 계좌=계좌 필드, 통합=앱 레벨 chartPrefs).
+  // 과표 탭은 KrEtfTaxMatrix가 자체 hiddenTaxMonths로 처리하므로 여기서 제외한다.
+  // 저장 버킷은 expected/actual 둘뿐 — activeTab이 'tax'여도 그 값이 그대로 새어나가지 않도록 정규화한다.
+  const hiddenTab = activeTab === 'actual' ? 'actual' : 'expected';
+  const hiddenMonthList = hiddenMonths?.[hiddenTab] || [];
+  const isMonthHidden = (i) => activeTab !== 'tax' && hiddenMonthList.includes(i);
+  // 마지막으로 보이는 월 — 열 오른쪽 경계선이 원래 `i === 11` 고정이라 12월을 숨기면 표 끝에
+  // 불필요한 세로선이 남는다. 이 값으로 비교해 항상 실제 마지막 열만 경계선을 뺀다.
+  const lastVisibleMonth = MONTHS.reduce((last, _, i) => isMonthHidden(i) ? last : i, -1);
+  // 숨김 토글 — 편집 중이면 blur 커밋 타이머를 정리하고 즉시 커밋한다. 안 그러면 셀이 언마운트된 뒤
+  // 150ms 타이머만 살아남아 '보이지 않는 월'에 조용히 커밋된다(blur=커밋 시맨틱 자체는 유지).
+  const toggleMonth = (i) => {
+    if (afterTaxBlurTimer.current) { clearTimeout(afterTaxBlurTimer.current); afterTaxBlurTimer.current = null; }
+    if (editingCell) commitEdit();
+    onToggleHiddenMonth(hiddenTab, i);
+  };
+  // ⚠️ z-[1] — 이 표의 첫 열(계좌/코드) sticky th는 z-10이고 월 th는 sticky가 아니다. 스트립을
+  // 과표표처럼 z-10으로 두면 동률+DOM 후순위라 가로 스크롤 시 스트립이 sticky 열 위로 얹혀
+  // 그 영역의 클릭을 가로챈다(과표표는 sticky th가 z-20이라 무사). 텍스트 위에만 뜨면 되므로 z-1.
+  const monthHideStrip = (i) => onToggleHiddenMonth ? (
+    <div
+      className="absolute top-0 left-0 right-0 h-3 cursor-pointer z-[1] hover:bg-indigo-400/25 transition-colors"
+      onClick={e => { e.stopPropagation(); toggleMonth(i); }}
+      title="클릭하여 이 월 숨기기"
+    />
+  ) : null;
+  // 숨긴 월 복원 칩 — 과표 계산 툴바와 동일한 UI(Eye + 월 이름)
+  const hiddenMonthChips = () => (activeTab !== 'tax' && onToggleHiddenMonth && hiddenMonthList.length > 0) ? (
+    <span className="flex items-center gap-1 flex-wrap self-center min-w-0">
+      <span className="text-gray-600 text-[10px]">숨긴 월</span>
+      {[...hiddenMonthList].sort((a, b) => a - b).map(i => (
+        <button
+          key={i}
+          onClick={() => toggleMonth(i)}
+          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-bold text-gray-400 border border-gray-600 rounded bg-gray-800/80 hover:bg-gray-700 hover:text-amber-300 transition-colors"
+          title={`${MONTHS[i]} 다시 표시`}
+        >
+          <svg viewBox="0 0 24 24" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+          {MONTHS[i]}
+        </button>
+      ))}
+    </span>
+  ) : null;
+
   // ── 분배율 = 월(또는 연간) 합계 ÷ 투자원금 ──
   // 표시 계좌의 투자원금 합산(비compact는 활성 계좌 1개 → 그 계좌 원금)을 분모로 사용
   const totalPrincipal = nonGoldPortfolios.reduce((s, p) => s + (cleanNum(p.principal) || 0), 0);
@@ -936,7 +985,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
         <div className="text-[11px] font-bold text-teal-300">분배율</div>
         <div className="text-gray-500 text-[9px] font-normal">월 합계 ÷ 원금 {formatCurrency(totalPrincipal)}</div>
       </td>
-      {monthlyArr.map((total, i) => (
+      {monthlyArr.map((total, i) => !isMonthHidden(i) && (
         <td key={i} colSpan={hasOverseas ? 2 : 1} className={`py-1.5 px-1 text-center text-[10px] font-semibold ${total > 0 ? 'text-teal-300/80' : 'text-gray-600'}`}>
           {total > 0 ? fmtDistRate(total) : '-'}
         </td>
@@ -1118,6 +1167,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               )}
             </div>
           )}
+          {hiddenMonthChips()}
+          {onToggleHiddenMonth && <span className="text-gray-600 text-[10px]">월 상단 클릭 → 숨기기</span>}
           <button
             onClick={handleRefreshAll}
             disabled={loading}
@@ -1140,8 +1191,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                 <tr>
                   <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">계좌</th>
-                  {MONTHS.map(m => (
-                    <th key={m} className="py-2.5 px-1 min-w-[68px] text-center">{m}</th>
+                  {MONTHS.map((m, i) => !isMonthHidden(i) && (
+                    <th key={m} className="py-2.5 px-1 min-w-[68px] text-center relative">
+                      {monthHideStrip(i)}
+                      {m}
+                    </th>
                   ))}
                   <th className={`py-2 px-2 min-w-[88px] font-bold text-center ${activeTab === 'expected' ? 'text-yellow-500' : 'text-emerald-500'}`}>연간합계</th>
                 </tr>
@@ -1176,6 +1230,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         </div>
                       </td>
                       {row.monthData.map((d, i) => {
+                        if (isMonthHidden(i)) return null;
                         if (activeTab === 'actual' && row.isOverseas) {
                           return (
                             <td key={i} className={`py-1.5 px-1 text-center text-[10px] ${d.amountUsd > 0 ? 'text-emerald-400 bg-emerald-900/20' : 'text-gray-700'}`}>
@@ -1272,7 +1327,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 <tr>
                   <td className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
                   {activeTab === 'actual' && compactActualHasOverseas ? (
-                    compactActualMonthlyUsd.map((usdTotal, i) => (
+                    compactActualMonthlyUsd.map((usdTotal, i) => !isMonthHidden(i) && (
                       <td key={i} className="py-2.5 px-1 text-center font-bold text-[10px]">
                         <div className="flex flex-col items-center">
                           {usdTotal > 0 ? <span className="text-emerald-300">{formatUsd(usdTotal)}</span> : null}
@@ -1281,7 +1336,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       </td>
                     ))
                   ) : activeTab === 'expected' && compactExpectedHasOverseas ? (
-                    compactExpectedMonthlyUsd.map((usdTotal, i) => (
+                    compactExpectedMonthlyUsd.map((usdTotal, i) => !isMonthHidden(i) && (
                       <td key={i} className="py-2.5 px-1 text-center font-bold text-[10px]">
                         <div className="flex flex-col items-center">
                           {usdTotal > 0 ? <span className="text-yellow-300">{formatUsd(usdTotal)}</span> : null}
@@ -1290,7 +1345,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       </td>
                     ))
                   ) : (
-                    compactMonthlyTotals.map((total, i) => (
+                    compactMonthlyTotals.map((total, i) => !isMonthHidden(i) && (
                       <td key={i} className={`py-2.5 px-1 text-center font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
                         {total > 0 ? formatCurrency(total) : '-'}
                       </td>
@@ -1326,7 +1381,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                   return (
                     <tr className="text-orange-300/60">
                       <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">과세합계</td>
-                      {monthlyTaxArr.map((tax, i) => (
+                      {monthlyTaxArr.map((tax, i) => !isMonthHidden(i) && (
                         <td key={i} className="py-1 px-1 text-center text-[9px]">{tax > 0 ? formatCurrency(tax) : '-'}</td>
                       ))}
                       <td className="py-1 px-2 text-center text-[10px]">{formatCurrency(compactAnnualTax)}</td>
@@ -1336,7 +1391,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 {activeTab === 'actual' && compactActualAnnualTaxCombined > 0 && (
                   <tr className="text-orange-300/60">
                     <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">과세합계</td>
-                    {compactActualMonthlyTaxCombined.map((tax, i) => (
+                    {compactActualMonthlyTaxCombined.map((tax, i) => !isMonthHidden(i) && (
                       <td key={i} className="py-1 px-1 text-center text-[9px]">{tax > 0 ? formatCurrency(tax) : '-'}</td>
                     ))}
                     <td className="py-1 px-2 text-center text-[10px]">{formatCurrency(compactActualAnnualTaxCombined)}</td>
@@ -1352,7 +1407,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
 
   return (
     <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden w-full">
-      <div className="px-3 py-2.5 bg-[#0f172a] border-b border-gray-700 flex items-start gap-3">
+      {/* flex-wrap 필수 — 카드가 overflow-hidden이라 툴바가 넘치면 우측 그룹(행 추가·새로고침·숨긴 월 칩)이
+          잘려 클릭 불가가 된다. 숨긴 월 칩은 개수가 가변이므로 shrink-0 그룹 밖에 두고 줄바꿈되게 한다. */}
+      <div className="px-3 py-2.5 bg-[#0f172a] border-b border-gray-700 flex items-start gap-3 flex-wrap">
         <span className="text-white font-bold text-sm shrink-0 self-center">💰 분배금 현황</span>
         <div className="flex rounded-lg overflow-hidden border border-gray-700 shrink-0 self-center">
           <button
@@ -1441,6 +1498,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             )}
           </div>
         )}
+        {hiddenMonthChips()}
         <div className="ml-auto flex items-center gap-1.5 shrink-0 self-center">
           <DividendLinkBar links={dividendLinks} onChange={setDividendLinks} />
           <span className="w-px h-5 bg-gray-700/60 mx-0.5" />
@@ -1484,15 +1542,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                   <tr>
                     <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">코드</th>
-                    {MONTHS.map(m => (
-                      <th key={m} colSpan={expectedHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[104px]">{m}</th>
+                    {MONTHS.map((m, i) => !isMonthHidden(i) && (
+                      <th key={m} colSpan={expectedHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[104px] relative">
+                        {monthHideStrip(i)}
+                        {m}
+                      </th>
                     ))}
                     <th colSpan={expectedHasOverseas ? 2 : 1} className="py-2 px-2 min-w-[88px] text-yellow-500 font-bold">연간합계</th>
                   </tr>
                   {expectedHasOverseas && (
                     <tr className="text-[9px] border-b border-gray-700/50">
                       <th className="sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]"></th>
-                      {MONTHS.map(m => (
+                      {MONTHS.map((m, i) => !isMonthHidden(i) && (
                         <React.Fragment key={m}>
                           <th className="py-1 text-blue-400 font-normal min-w-[62px]">세전</th>
                           <th className="py-1 text-emerald-400 font-normal min-w-[62px]">세후</th>
@@ -1517,9 +1578,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         </td>
                         {row.isOverseas && expectedHasOverseas ? (
                           row.monthData.map((d, i) => {
+                            if (isMonthHidden(i)) return null;
                             const afterTaxUsd = d.amountUsd * (1 - taxRate / 100);
                             const afterTaxKrw = Math.round(afterTaxUsd * usdkrw);
-                            const isLastCol = i === 11;
+                            const isLastCol = i === lastVisibleMonth;
                             return (
                               <React.Fragment key={i}>
                                 <td className={`py-0.5 px-1 text-center text-[10px] border-r border-gray-700/20 ${
@@ -1547,7 +1609,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             );
                           })
                         ) : (
-                          row.monthData.map((d, i) => (
+                          row.monthData.map((d, i) => !isMonthHidden(i) && (
                             <td key={i} colSpan={expectedHasOverseas ? 2 : 1} className={`py-1.5 px-1 text-center text-[10px] ${
                               d.amount > 0
                                 ? d.isActual ? 'text-emerald-300 font-bold bg-emerald-900/25' : 'text-blue-300/70'
@@ -1616,7 +1678,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                   <tr>
                     <td className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
                     {expectedHasOverseas ? (
-                      MONTHS.map((_, i) => (
+                      MONTHS.map((_, i) => !isMonthHidden(i) && (
                         <React.Fragment key={i}>
                           <td className={`py-2.5 px-1 text-center font-bold text-[10px] border-r border-gray-700/20 ${monthlyUsdTotals[i] > 0 ? 'text-blue-300/70' : 'text-gray-600'}`}>
                             <div className="flex flex-col items-center">
@@ -1624,7 +1686,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                               {monthlyTotals[i] > 0 ? formatCurrency(monthlyTotals[i]) : '-'}
                             </div>
                           </td>
-                          <td className={`py-2.5 px-1 text-center font-bold text-[10px] ${i < 11 ? 'border-r border-gray-600/40' : ''} ${(monthlyUsdTotals[i] - monthlyUsdTaxTotals[i]) > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
+                          <td className={`py-2.5 px-1 text-center font-bold text-[10px] ${i < lastVisibleMonth ? 'border-r border-gray-600/40' : ''} ${(monthlyUsdTotals[i] - monthlyUsdTaxTotals[i]) > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
                             <div className="flex flex-col items-center">
                               {monthlyUsdTotals[i] > 0 && <span>{formatUsd(monthlyUsdTotals[i] - monthlyUsdTaxTotals[i])}</span>}
                               {monthlyTotals[i] > 0 ? formatCurrency(monthlyTotals[i] - (monthlyTaxTotals[i] || 0)) : '-'}
@@ -1633,7 +1695,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         </React.Fragment>
                       ))
                     ) : (
-                      monthlyTotals.map((total, i) => (
+                      monthlyTotals.map((total, i) => !isMonthHidden(i) && (
                         <td key={i} className={`py-2.5 px-1 text-center font-bold text-[10px] ${total > 0 ? 'text-green-300' : 'text-gray-600'}`}>
                           {total > 0 ? formatCurrency(total) : '-'}
                         </td>
@@ -1669,7 +1731,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             )}
             {!loading && expectedRows.length > 0 && (
               <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-                초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 날짜 = 배당락-지급일(~ 는 직전연도 기준 추정) &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산
+                초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 날짜 = 배당락-지급일(~ 는 직전연도 기준 추정) &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산 &nbsp;·&nbsp; 월 상단 클릭 → 숨기기
               </div>
             )}
           </div>
@@ -1686,15 +1748,18 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
               <thead className="bg-[#1e293b] text-gray-400 border-b border-gray-600">
                 <tr>
                   <th className="py-3 px-3 text-left sticky left-0 z-10 bg-[#1e293b] min-w-[130px] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">코드</th>
-                  {MONTHS.map(m => (
-                    <th key={m} colSpan={actualHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[96px]">{m}</th>
+                  {MONTHS.map((m, i) => !isMonthHidden(i) && (
+                    <th key={m} colSpan={actualHasOverseas ? 2 : 1} className="py-2.5 px-1 min-w-[96px] relative">
+                      {monthHideStrip(i)}
+                      {m}
+                    </th>
                   ))}
                   <th colSpan={actualHasOverseas ? 2 : 1} className="py-2 px-2 min-w-[88px] text-emerald-500 font-bold">연간합계</th>
                 </tr>
                 {actualHasOverseas && (
                   <tr className="text-[9px] border-b border-gray-700/50">
                     <th className="sticky left-0 z-10 bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]"></th>
-                    {MONTHS.map(m => (
+                    {MONTHS.map((m, i) => !isMonthHidden(i) && (
                       <React.Fragment key={m}>
                         <th className="py-1 text-blue-400 font-normal min-w-[62px]">세전</th>
                         <th className="py-1 text-emerald-400 font-normal min-w-[62px]">세후</th>
@@ -1729,6 +1794,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       {row.name && <div className="text-gray-500 text-[9px] font-normal">({row.code})</div>}
                     </td>
                     {row.monthData.map((d, i) => {
+                      if (isMonthHidden(i)) return null;
                       const isEditingQty = editingCell?.portfolioId === row.portfolioId
                         && editingCell?.code === row.code
                         && editingCell?.monthIdx === i
@@ -1740,7 +1806,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         && !editingCell?.isExtra
                         && editingCell?.field !== 'qty';
                       const isEditingAfterTax = isEditingCell && editingCell?.field === 'afterTax';
-                      const isLastMonthCol = i === 11;
+                      const isLastMonthCol = i === lastVisibleMonth;
                       const qtyNode = isEditingQty ? (
                         <input
                           ref={inputRef}
@@ -1963,10 +2029,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                         </div>
                       </td>
                       {row.monthData.map((d, i) => {
+                        if (isMonthHidden(i)) return null;
                         const isEditingCell = editingCell?.isExtra && editingCell?.rowId === row.rowId && editingCell?.monthIdx === i;
                         const isEditingAfterTax = isEditingCell && editingCell?.field === 'afterTax';
                         const isEditingKrw = isEditingCell && editingCell?.field === 'krw';
-                        const isLastMonthCol = i === 11;
+                        const isLastMonthCol = i === lastVisibleMonth;
 
                         if (row.isOverseas) {
                           return (
@@ -2107,7 +2174,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 <tr>
                   <td className="py-3 px-3 text-left text-gray-300 font-bold sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">합계</td>
                   {actualHasOverseas ? (
-                    MONTHS.map((_, i) => (
+                    MONTHS.map((_, i) => !isMonthHidden(i) && (
                       <React.Fragment key={i}>
                         <td className={`py-2.5 px-1 text-center font-bold text-[10px] border-r border-gray-700/20 ${actualMonthlyGrossKrw[i] > 0 ? 'text-blue-300/70' : 'text-gray-600'}`}>
                           <div className="flex flex-col items-center">
@@ -2115,7 +2182,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                             {actualMonthlyGrossKrw[i] > 0 ? formatCurrency(actualMonthlyGrossKrw[i]) : '-'}
                           </div>
                         </td>
-                        <td className={`py-2.5 px-1 text-center font-bold text-[10px] ${i < 11 ? 'border-r border-gray-600/40' : ''} ${actualMonthlyAfterKrw[i] > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
+                        <td className={`py-2.5 px-1 text-center font-bold text-[10px] ${i < lastVisibleMonth ? 'border-r border-gray-600/40' : ''} ${actualMonthlyAfterKrw[i] > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
                           <div className="flex flex-col items-center">
                             {actualMonthlyAfterUsd[i] > 0 && <span className="text-[9px]">{formatUsd(actualMonthlyAfterUsd[i])}</span>}
                             {actualMonthlyAfterKrw[i] > 0 ? formatCurrency(actualMonthlyAfterKrw[i]) : '-'}
@@ -2124,7 +2191,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       </React.Fragment>
                     ))
                   ) : (
-                    actualMonthlyGrossKrw.map((total, i) => (
+                    actualMonthlyGrossKrw.map((total, i) => !isMonthHidden(i) && (
                       <td key={i} className={`py-2.5 px-1 text-center font-bold text-[10px] ${total > 0 ? 'text-emerald-300' : 'text-gray-600'}`}>
                         {total > 0 ? formatCurrency(total) : '-'}
                       </td>
@@ -2157,7 +2224,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
                       과세합계
                     </td>
-                    {actualMonthlyTaxTotals.map((tax, i) => (
+                    {actualMonthlyTaxTotals.map((tax, i) => !isMonthHidden(i) && (
                       <td key={i} className="py-1 px-1 text-center text-[9px]">
                         {tax > 0 ? formatCurrency(tax) : '-'}
                       </td>
@@ -2166,7 +2233,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                   </tr>
                   <tr className="text-green-400/70">
                     <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">실 수령(세후)</td>
-                    {actualMonthlyGrossKrw.map((total, i) => (
+                    {actualMonthlyGrossKrw.map((total, i) => !isMonthHidden(i) && (
                       <td key={i} className="py-1 px-1 text-center text-[9px]">
                         {total > 0 ? formatCurrency(total - (actualMonthlyTaxTotals[i] || 0)) : '-'}
                       </td>
@@ -2179,7 +2246,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                 {actualHasOverseas && actualAnnualOverseasTaxKrw > 0 && (
                   <tr className="text-orange-300/60">
                     <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">과세합계</td>
-                    {actualMonthlyOverseasTaxKrw.map((tax, i) => (
+                    {actualMonthlyOverseasTaxKrw.map((tax, i) => !isMonthHidden(i) && (
                       <React.Fragment key={i}>
                         <td className="py-1 px-1 text-center text-[9px] text-gray-700">-</td>
                         <td className="py-1 px-1 text-center text-[9px]">{tax > 0 ? formatCurrency(tax) : '-'}</td>
@@ -2193,7 +2260,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             </table>
           )}
           <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
-            셀 클릭 → 실제 입금액 직접 입력 (Enter 저장 · Esc 취소) &nbsp;·&nbsp; 초록 = 직접 입력 &nbsp;·&nbsp; 파란 = 예상값 &nbsp;·&nbsp; 수량 = (세후+과세)÷주당분배금 계산값, <span className="text-amber-400/80">더블클릭 시 직접 수정</span>
+            셀 클릭 → 실제 입금액 직접 입력 (Enter 저장 · Esc 취소) &nbsp;·&nbsp; 초록 = 직접 입력 &nbsp;·&nbsp; 파란 = 예상값 &nbsp;·&nbsp; 수량 = (세후+과세)÷주당분배금 계산값, <span className="text-amber-400/80">더블클릭 시 직접 수정</span> &nbsp;·&nbsp; 월 상단 클릭 → 숨기기
           </div>
         </div>
       )}
