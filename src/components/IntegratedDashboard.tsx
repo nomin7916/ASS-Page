@@ -426,8 +426,8 @@ export default function IntegratedDashboard({
               const todayHeld = !todayRec || todayRec.dodAbsChange == null;
               const todayProfit = todayRec?.dodAbsChange ?? 0;
               const todayRate = todayRec?.dodChange ?? 0;
-              const todayFlow = todayRec?.netFlow ?? 0;
-              // 보류 행은 배지가 0이라 '입금했는데 아무것도 안 보인다'가 되므로 원본 원장 흐름을 안내
+              // 보류 행은 '-'만 뜨면 이유를 알 수 없으므로 방향(입금/출금)만 안내한다.
+              // ⚠️ 금액은 표기하지 않는다 — 입출금 금액 배지 비표시 규약(CLAUDE.md).
               const todayPendingFlow = todayHeld ? (todayRec?.ledgerFlow ?? 0) : 0;
               return (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -442,7 +442,7 @@ export default function IntegratedDashboard({
                         <span className="text-lg font-extrabold text-gray-500" title="입출금 기록과 평가 스냅샷이 어긋나 일간 지표를 보류했습니다.">-</span>
                         {todayPendingFlow !== 0 && (
                           <span className="text-[10px] font-bold text-amber-400">
-                            {hideAmounts ? '••••' : `${todayPendingFlow > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(todayPendingFlow))} 반영 대기`}
+                            {todayPendingFlow > 0 ? '입금' : '출금'} 반영 대기
                           </span>
                         )}
                       </>
@@ -454,11 +454,6 @@ export default function IntegratedDashboard({
                         <span className={`text-[11px] font-bold ${todayRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                           {todayRate >= 0 ? '+' : ''}{todayRate.toFixed(2)}%
                         </span>
-                        {todayFlow !== 0 && (
-                          <span className={`text-[10px] font-bold ${todayFlow > 0 ? 'text-emerald-400' : 'text-orange-400'}`}>
-                            {hideAmounts ? '••••' : `${todayFlow > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(todayFlow))} 제외`}
-                          </span>
-                        )}
                       </>
                     )}
                   </div>

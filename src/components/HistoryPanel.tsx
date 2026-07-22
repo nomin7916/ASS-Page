@@ -191,7 +191,7 @@ export default function HistoryPanel({
                     <th className="py-1.5 px-1 text-center font-normal cursor-help" title="윗줄: 입출금 영향을 제거한 순수 일간 수익률
    수식: (당일 평가자산 + 당일 출금) ÷ (전일 평가자산 + 당일 입금) − 1
 아랫줄: 그날 실제로 번 금액(일간 손익) = ΔV − 순입출금
-입출금이 있던 날은 그 금액이 초록(입금)·주황(출금)으로 함께 표시됩니다.">전일대비 · 손익</th>
+입출금이 있던 날도 그 금액은 제외되므로, 순수하게 시장에서 번 돈만 표시됩니다.">전일대비 · 손익</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -258,11 +258,6 @@ export default function HistoryPanel({
                               {dodProfit > 0 ? '+' : '−'}{formatCurrency(Math.abs(dodProfit))}
                             </span>
                           )}
-                          {flowNet !== 0 && (
-                            <span className={`block text-[8px] font-bold leading-none mt-0.5 whitespace-nowrap ${flowNet > 0 ? 'text-emerald-400' : 'text-orange-400'}`}>
-                              {flowNet > 0 ? '입금' : '출금'} {formatCurrency(Math.abs(flowNet))}
-                            </span>
-                          )}
                         </td>
                       </tr>
                     );
@@ -326,7 +321,8 @@ export default function HistoryPanel({
                       '윗줄 % — 수식: (당일 평가자산 + 당일 출금) ÷ (전일 평가자산 + 당일 입금) − 1',
                       '입금·출금 금액은 수익에서 제외되므로, 입금 규모와 무관한 순수 수익률입니다.',
                       '아랫줄 금액 — 그날 실제로 번 돈(일간 손익) = 평가액 변동 − 순입출금.',
-                      '입출금이 있던 날은 그 금액이 초록(입금)·주황(출금)으로 함께 표시됩니다.',
+                      '입출금액은 두 값 모두에서 제외됩니다(입금해도 수익으로 잡히지 않음).',
+                      '셀에 마우스를 올리면 그날 제외된 입출금액을 확인할 수 있습니다.',
                       "'-' 는 변동 없음이 아니라 '산출 보류'입니다(입출금이 아직 평가액에 반영 안 된 날).",
                       '빨강 = 상승 · 파랑 = 하락 · 회색 = 변동 없음.',
                     ] },
