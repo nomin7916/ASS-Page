@@ -282,8 +282,9 @@ export const dailyFlowAdjustedRate = (prevEval, curEval, flowIn, flowOut) => {
 //   (b) '|ΔV − 흐름| > 전일V×5%' — 흐름이 이미 반영된 날에도 '손익이 크면' 보류해(crypto +10%일 등)
 //       그 흐름을 다음 날 한 번 더 차감했고, 반대로 전일V의 5% 미만인 미반영 흐름은 놓쳤다.
 const MATERIAL_FLOW_RATIO = 0.01;  // 이 비율 이하의 소액 흐름은 (거래일에 한해) 판정 대상 아님
-const ABSORBED_RATIO = 0.5;        // ΔV가 흐름 방향으로 절반 이상 움직였으면 '반영됨'으로 본다
-export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow) => {
+const ABSORBED_RATIO = 0.5;        // 흐름 방향으로 절반 이상 움직였으면 '반영됨'으로 본다
+// bookDelta(장부액 변화, 있으면 우선) — 없으면 ΔV 휴리스틱으로 폴백해 기존 동작을 그대로 유지한다.
+export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow, bookDelta) => {
   if (prevEval == null || curEval == null) return true;
   if (!(prevEval > 0)) return true;
   const f = netFlow || 0;
@@ -292,11 +293,45 @@ export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow) => {
   // ⚠️ 비거래일 carry-forward 행(ΔV가 정확히 0)은 시장 정보가 전혀 없어 어떤 크기의 흐름도
   //    이 행에 반영될 수 없다 → 아래 소액 하한보다 **먼저** 판정해야 한다. 하한을 먼저 두면
   //    전일V의 1% 이하 입금(월 적립식 등)이 주말 원장에서 통째로 새어 가짜 손실이 된다.
+  //    ⚠️ bookDelta가 있어도 이 규칙엔 예외를 두지 말 것 — 장부가 바뀌었어도 평가액 시계열이
+  //    직전값 이월이면 그 흐름은 실제로 V에 안 들어 있다.
   if (dV === 0) return true;
   if (Math.abs(f) <= prevEval * MATERIAL_FLOW_RATIO) return false;
-  // ⚠️ 흡수 판정은 **부호까지** 본다. Math.abs로 비교하면 흐름과 반대 방향으로 움직인 시장을
-  //    '흡수 증거'로 오인해(입금일에 하락 등) 보류가 풀리고 흐름 전액이 손익으로 계상된다.
-  return f > 0 ? dV < f * ABSORBED_RATIO : dV > f * ABSORBED_RATIO;
+  // ⚠️ 흡수 판정의 근거는 ΔV보다 **장부액 변화(bookDelta = Σ(예수금+매입원가)의 전일 대비 변화)** 가
+  //    정확하다. 장부액은 시세로 변하지 않고 외부 입출금으로만 변하므로 '흐름이 V에 들어왔는가'를
+  //    추측이 아니라 관측으로 답한다. ΔV로만 보면 (a) 정상 반영된 출금이 같은 날 시장이 오르면
+  //    '미반영'으로 오판돼 '-'로 가려지고, (b) 그 이월이 다음 날 한 번 더 차감돼 부호가 뒤집힌다
+  //    (실측: 2% 인출 + 시장 +1.5% → '-', 다음날 시장 −2%인데 +₩10,000 이익으로 표시).
+  // ⚠️ 부호까지 본다. Math.abs로 비교하면 흐름과 반대 방향 변동을 '흡수 증거'로 오인해
+  //    (입금일에 하락 등) 보류가 풀리고 흐름 전액이 손익으로 계상된다.
+  const absorbed = bookDelta != null ? bookDelta : dV;
+  return f > 0 ? absorbed < f * ABSORBED_RATIO : absorbed > f * ABSORBED_RATIO;
+};
+
+// 장부액(원가 기준) = Σ(예수금 + 매입원가). 시세로는 변하지 않고 **외부 입출금으로만** 변한다.
+// ⚠️ 알려진 한계: 매도하면 예수금이 매입원가보다 실현손익만큼 더 늘어 bookDelta가 그만큼 움직인다.
+//    흡수 문턱이 흐름의 50%라 대부분 무해하지만, 흐름 대비 실현손익이 매우 크면 오판 여지가 남는다.
+export const bookCostOf = (items) => (items || []).reduce(
+  (s, it) => s + cleanNum(it?.type === 'deposit' ? it.depositAmount : it.investAmount), 0);
+
+// 계좌의 날짜별 장부액 Map. ⚠️ `resolveHoldings`가 '추정'(스냅샷 없음·미검증 pre-baseline)인 날짜는
+// 구성이 불확실하므로 **넣지 않는다** — 소비자는 미제공을 만나면 기존 ΔV 휴리스틱으로 폴백한다.
+export const buildBookCostSeries = (p, dates) => {
+  const m = new Map();
+  for (const d of dates || []) {
+    if (!d || m.has(d)) continue;
+    const r = resolveHoldings(p, d);
+    if (!r || r.estimated) continue;
+    m.set(d, bookCostOf(r.items));
+  }
+  return m;
+};
+
+// 인접한 두 기록일의 장부액 차이. 어느 한쪽이라도 미확보면 null(=폴백).
+export const bookDeltaBetween = (bookByDate, prevDate, date) => {
+  if (!bookByDate || !prevDate) return null;
+  const a = bookByDate.get(prevDate), b = bookByDate.get(date);
+  return (a != null && b != null) ? b - a : null;
 };
 
 // 일간 지표 시계열 — 보류된 행의 미소진 흐름을 다음 행으로 이월한다.
@@ -306,7 +341,8 @@ export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow) => {
 // ⚠️ 이월을 빼지 말 것 — 보류 행에서 흐름을 소각하면 다음 기록일 ΔV에 입금액이 그대로 남아
 //    같은 버그가 하루 밀려 재발한다(주말 행은 fillNonTradingGaps·백필 치유로 항상 존재하고
 //    buildCloseEvalSeries가 직전 정확값을 이월하므로 흔한 경로다).
-// rows: [{ date, evalAmount, flowIn, flowOut, ledger?, flowSuspect? }] — 반드시 날짜 오름차순
+// rows: [{ date, evalAmount, flowIn, flowOut, ledger?, flowSuspect?, bookDelta? }] — 반드시 날짜 오름차순
+//   bookDelta: 전일 대비 장부액(Σ 예수금+매입원가) 변화. 있으면 보류 판정이 추측 대신 관측을 쓴다(권장).
 // 반환: Map<date, { dodAbsChange, dodChange, ledgerFlow, held }>
 // 이월 상한 — 흡수되지 않은 흐름을 언제까지 들고 갈 것인가.
 //  · FROZEN(ΔV=0, 비거래일 carry-forward): KR 최장 연휴(설·추석+주말, 실측 최장 6일)를 덮어야 한다.
@@ -336,14 +372,19 @@ export const computeDailyMetricsSeries = (rows) => {
     const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
     // 1차 — 이월을 실은 채 판정한다. 이 행이 흐름을 흡수했다면(held=false) 이월을 그대로 소비한다.
     let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
-    let held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut);
+    const bookDelta = h.bookDelta != null ? h.bookDelta : null;
+    let held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut, bookDelta);
     // 2차 — 여전히 보류인데 상한을 넘겼으면 이월을 폐기하고 자기 흐름만으로 재산출한다.
     // ⚠️ 폐기를 '루프 진입부에서 무조건'으로 되돌리지 말 것 — 흐름을 흡수하는 바로 그 행에서
     //    이월이 버려져 입금액 전액이 하루 수익으로 찍힌다(고치려던 +9.10% 버그가 그대로 재현).
-    if (held && (carryRows >= CARRY_MAX_ROWS || activeRows >= CARRY_MAX_ACTIVE_ROWS)) {
+    // ⚠️ ACTIVE 폐기는 **bookDelta가 없을 때(ΔV 추측)만** 적용한다. 장부 관측이 있으면 '아직
+    //    반영 안 됨'이 확정 사실이므로, 폐기하면 흐름 전액이 그날 가짜 손익으로 찍힌다(출금 원장일과
+    //    예수금 수정일이 며칠 어긋나는 것은 구조적으로 정상 — DepositPanel은 평가액을 건드리지 않는다).
+    //    FROZEN 상한(CARRY_MAX_ROWS)은 그대로 적용돼 무한 이월은 막는다.
+    if (held && (carryRows >= CARRY_MAX_ROWS || (bookDelta == null && activeRows >= CARRY_MAX_ACTIVE_ROWS))) {
       carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
       fIn = ownIn; fOut = ownOut; ledger = ownLedger;
-      held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut);
+      held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut, bookDelta);
     }
     const netFlow = fIn - fOut;
     out.set(h.date, {
@@ -1082,8 +1123,10 @@ export const downloadCSV = (filename, csvString) => {
 // ⚠️ 화면(HistoryPanel)과 **같은 공용 함수**(computeDailyMetricsSeries)를 써야 CSV 대조 시
 //    값이 어긋나지 않는다 — 행별 독립 계산으로 되돌리면 보류 행의 흐름 이월이 깨진다.
 //    evalByDate: 화면이 쓰는 평가액 재계산 Map(날짜→원화). 미전달 시 저장 evalAmount 사용.
+//    bookByDate: 화면이 쓰는 장부액 Map(buildBookCostSeries). 미전달 시 보류 판정이 ΔV 폴백 →
+//                화면과 '-' 판정이 갈릴 수 있으므로 가능하면 함께 넘길 것.
 //    depositHistory/depositHistory2 미전달 시 흐름 0 → 기존 동작과 동일(하위호환).
-export const buildHistoryCSV = (history, depositHistory, depositHistory2, rateOf, evalByDate) => {
+export const buildHistoryCSV = (history, depositHistory, depositHistory2, rateOf, evalByDate, bookByDate) => {
   let csv = '﻿일자,평가자산,일간 손익,전일대비 수익률,순입출금\n';
   const sh = [...history].sort((a, b) => new Date(b.date) - new Date(a.date));
   const asc = [...sh].reverse();
@@ -1093,7 +1136,10 @@ export const buildHistoryCSV = (history, depositHistory, depositHistory2, rateOf
     const flow = prev
       ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, rateOf)
       : { in: 0, out: 0 };
-    return { date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out };
+    return {
+      date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out,
+      bookDelta: prev ? bookDeltaBetween(bookByDate, prev.date, h.date) : null,
+    };
   });
   const metrics = computeDailyMetricsSeries(rows);
   sh.forEach(h => {

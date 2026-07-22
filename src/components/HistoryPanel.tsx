@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, externalFlowInRange, computeDailyMetricsSeries, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, externalFlowInRange, computeDailyMetricsSeries, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum } from '../utils';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
@@ -123,15 +123,24 @@ export default function HistoryPanel({
       const ov = isOverseasAcc && overseasEvalByDate ? overseasEvalByDate.get(h.date) : null;
       return ov ? ov.krw : (displayEvalByDate?.get(h.date) ?? h.evalAmount);
     };
+    // 장부액(Σ 예수금+매입원가) 시계열 — 보류 판정이 '흐름이 V에 반영됐는가'를 ΔV로 추측하지 않고
+    // 관측하게 해준다. ⚠️ 해외계좌는 장부가 USD인데 흐름 rows는 ₩ 환산이라 단위가 어긋나므로 제외
+    //    (미제공 → 기존 ΔV 휴리스틱 폴백, 동작 불변).
+    const bookByDate = !isOverseasAcc && activePortfolio
+      ? buildBookCostSeries(activePortfolio, asc.map(h => h?.date))
+      : null;
     const rows = asc.map((h, i) => {
       const prev = asc[i - 1];
       const flow = prev
         ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, flowRate)
         : { in: 0, out: 0 };
-      return { date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out };
+      return {
+        date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out,
+        bookDelta: prev ? bookDeltaBetween(bookByDate, prev.date, h.date) : null,
+      };
     });
     return computeDailyMetricsSeries(rows);
-  }, [sortedHistoryDesc, activePortfolioAccountType, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
+  }, [sortedHistoryDesc, activePortfolioAccountType, activePortfolio, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
 
   // 누적(원금대비) 수익률·수익금 — "시작부터 통틀어 벌었나"에 답하는 값. 평가자산 셀 하단 2줄에 병기한다.
   // 3열의 일간 지표("오늘 장에서 벌었나")와 역할이 다르므로 같은 셀에 섞지 않는다.

@@ -49,7 +49,8 @@ const dailyProfit = (prevEval, curEval, flowIn, flowOut) => curEval - prevEval -
 // 'V가 그 흐름을 담고 있다고 볼 수 있는가' 하나로 판정한다.
 const MATERIAL_FLOW_RATIO = 0.01;
 const ABSORBED_RATIO = 0.5;
-const shouldHold = (prevV, curV, netFlow) => {
+// bookDelta(장부액 변화)가 있으면 ΔV 대신 그것으로 흡수를 판정한다(추측 → 관측).
+const shouldHold = (prevV, curV, netFlow, bookDelta) => {
   if (prevV == null || curV == null) return true;
   if (!(prevV > 0)) return true;
   const f = netFlow || 0;
@@ -57,7 +58,8 @@ const shouldHold = (prevV, curV, netFlow) => {
   const dV = curV - prevV;
   if (dV === 0) return true;
   if (Math.abs(f) <= prevV * MATERIAL_FLOW_RATIO) return false;
-  return f > 0 ? dV < f * ABSORBED_RATIO : dV > f * ABSORBED_RATIO;
+  const absorbed = bookDelta != null ? bookDelta : dV;
+  return f > 0 ? absorbed < f * ABSORBED_RATIO : absorbed > f * ABSORBED_RATIO;
 };
 
 // 보류된 행의 미소진 흐름 이월 (src/utils.ts computeDailyMetricsSeries 미러).
@@ -83,11 +85,13 @@ const computeDailyMetrics = (rows) => {
     const ownIn = h.flowIn || 0, ownOut = h.flowOut || 0;
     const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
     let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
-    let held = !!h.flowSuspect || shouldHold(prevV, h.evalAmount, fIn - fOut);
-    if (held && (carryRows >= CARRY_MAX_ROWS || activeRows >= CARRY_MAX_ACTIVE_ROWS)) {
+    const bookDelta = h.bookDelta != null ? h.bookDelta : null;
+    let held = !!h.flowSuspect || shouldHold(prevV, h.evalAmount, fIn - fOut, bookDelta);
+    // ACTIVE 폐기는 bookDelta가 없을 때(추측)만 — 관측이 있으면 미반영이 확정이라 폐기 시 가짜 손익
+    if (held && (carryRows >= CARRY_MAX_ROWS || (bookDelta == null && activeRows >= CARRY_MAX_ACTIVE_ROWS))) {
       carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
       fIn = ownIn; fOut = ownOut; ledger = ownLedger;
-      held = !!h.flowSuspect || shouldHold(prevV, h.evalAmount, fIn - fOut);
+      held = !!h.flowSuspect || shouldHold(prevV, h.evalAmount, fIn - fOut, bookDelta);
     }
     const netFlow = fIn - fOut;
     out.set(h.date, {
@@ -502,6 +506,86 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
   check('#28 전손 오판을 배율 1로 흡수', t.get('2026-06-02'), 0);
   check('#28 −100%로 영구 고정되지 않음', t.get('2026-06-03'), 0);
   check('#28 데이터 복구 후 곡선 재개', t.get('2026-06-04'), 1);
+}
+
+// #29 장부액(bookDelta) 관측 — '흐름이 그날 평가액에 반영됐는가'를 ΔV로 추측하면 두 가지가 깨진다.
+//     (A) 정상 반영된 출금이 같은 날 시장 상승에 가려 '미반영'으로 오판 → '-'로 은폐 + 다음 날 이중 차감
+//     (B) 출금 원장일과 예수금 수정일이 어긋난 구간에서 ACTIVE 폐기가 흐름을 소각 → 반영일에 가짜 대손실
+//     장부액(Σ 예수금+매입원가)은 시세로 변하지 않으므로 두 경우를 정확히 갈라낸다.
+{
+  const t = (label, args, expected) => {
+    const got = shouldHold(...args);
+    if (got !== expected) { failed++; console.error(`  ✗ #29 ${label} (기대 ${expected}, 실제 ${got})`); }
+    else console.log(`  ✓ #29 ${label}`);
+  };
+  // (A) 2% 인출 + 시장 +1.5% → ΔV(−50만)만 보면 보류(오탐), 장부(−200만)를 보면 반영됨이 확정
+  t('반영된 출금 + 같은날 상승 → ΔV만 보면 오탐 보류', [100_000_000, 99_500_000, -2_000_000], true);
+  t('반영된 출금 + 같은날 상승 → 장부 관측이면 보류 안 함', [100_000_000, 99_500_000, -2_000_000, -2_000_000], false);
+  // 미반영은 장부 관측으로도 여전히 보류돼야 한다(장부가 안 움직였으므로)
+  t('미반영 출금 → 장부도 0이라 보류 유지', [100_000_000, 100_500_000, -2_000_000, 0], true);
+  t('미반영 입금 → 장부도 0이라 보류 유지', [100_000_000, 101_000_000, 20_000_000, 0], true);
+  // 비거래일 규칙은 bookDelta가 있어도 예외 없음 — V가 직전값 이월이면 흐름은 V에 없다
+  t('비거래일(ΔV=0)은 장부가 바뀌어도 보류', [100_000_000, 100_000_000, -2_000_000, -2_000_000], true);
+}
+
+// #29b (A)의 시계열 — 오탐 보류가 다음 날 이중 차감으로 부호를 뒤집던 회귀.
+//      장부 관측이 있으면 D일에 정상 산출되고 D+1일은 자기 손익만 표시해야 한다.
+{
+  const m = computeDailyMetrics([
+    { date: '2026-05-11', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    // 시장 +1.5%(+150만) 후 200만 인출 → 장부 −200만(반영 확정)
+    { date: '2026-05-12', evalAmount: 99_500_000, flowIn: 0, flowOut: 2_000_000, bookDelta: -2_000_000 },
+    // 흐름 0, 시장 −2%
+    { date: '2026-05-13', evalAmount: 97_510_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+  ]);
+  if (m.get('2026-05-12').dodAbsChange !== 1_500_000) {
+    failed++; console.error(`  ✗ #29b 반영된 출금일이 은폐됨 (${m.get('2026-05-12').dodAbsChange})`);
+  } else console.log('  ✓ #29b 반영된 출금일이 정상 산출(+₩1,500,000)');
+  // ⚠️ 장부 관측 없이는 이 값이 +10,000(이익)으로 부호가 뒤집혔다
+  if (m.get('2026-05-13').dodAbsChange !== -1_990_000) {
+    failed++; console.error(`  ✗ #29b 다음 날 이중 차감으로 부호 반전 (${m.get('2026-05-13').dodAbsChange})`);
+  } else console.log('  ✓ #29b 다음 날 이중 차감 없음(−₩1,990,000)');
+}
+
+// #29c (B) 출금 원장일과 예수금 수정일이 며칠 어긋나도 흐름이 소각되면 안 된다.
+//      ACTIVE 폐기(2행)는 bookDelta가 없을 때만 적용되므로, 관측이 있으면 반영일까지 이월이 살아남는다.
+{
+  // ⚠️ 일변동이 흐름의 5%(=50만)를 넘어야 ACTIVE로 세므로, 폐기가 실제로 발동하도록 시장 등락을
+  //    +1,100,000으로 잡았다. 이 값을 줄이면 옛 코드에서도 통과해 회귀를 못 잡는다.
+  const m = computeDailyMetrics([
+    { date: '2026-05-18', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    // 출금 원장은 오늘이지만 예수금 미수정 → 장부 불변(미반영 확정). 시장만 등락.
+    { date: '2026-05-19', evalAmount: 101_100_000, flowIn: 0, flowOut: 10_000_000, bookDelta: 0 },
+    { date: '2026-05-20', evalAmount: 102_200_000, flowIn: 0, flowOut: 0, bookDelta: 0 }, // ACTIVE 1
+    { date: '2026-05-21', evalAmount: 103_300_000, flowIn: 0, flowOut: 0, bookDelta: 0 }, // 옛 코드는 여기서 폐기
+    // 사용자가 예수금을 고친 날 — 장부가 −1,000만 → 이월된 출금이 여기서 정산된다
+    { date: '2026-05-22', evalAmount: 93_300_000, flowIn: 0, flowOut: 0, bookDelta: -10_000_000 },
+  ]);
+  for (const d of ['2026-05-19', '2026-05-20', '2026-05-21']) {
+    if (m.get(d).dodAbsChange !== null) {
+      failed++; console.error(`  ✗ #29c ${d} 미반영 구간이 보류되지 않음 (${m.get(d).dodAbsChange})`);
+    }
+  }
+  // ⚠️ 폐기가 일어났다면 이 값이 −₩10,000,000 가짜 손실이 된다
+  if (m.get('2026-05-22').dodAbsChange !== 0) {
+    failed++; console.error(`  ✗ #29c 반영일에 가짜 손실 (${m.get('2026-05-22').dodAbsChange})`);
+  } else console.log('  ✓ #29c 지연 반영 출금이 소각되지 않고 반영일에 정산(₩0)');
+}
+
+// #29d 장부 미제공(추정 구성·해외계좌)이면 기존 ΔV 휴리스틱과 **완전히 동일**해야 한다(하위호환).
+{
+  const rows = [
+    { date: '2026-03-02', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-03-03', evalAmount: 98_000_000, flowIn: 5_000_000, flowOut: 0 },
+    { date: '2026-03-04', evalAmount: 98_980_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-03-05', evalAmount: 99_960_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-03-06', evalAmount: 100_960_000, flowIn: 0, flowOut: 0 },
+  ];
+  const a = computeDailyMetrics(rows);
+  const b = computeDailyMetrics(rows.map(r => ({ ...r, bookDelta: null })));
+  const same = rows.every(r => a.get(r.date).dodAbsChange === b.get(r.date).dodAbsChange);
+  if (!same) { failed++; console.error('  ✗ #29d bookDelta:null이 기존 동작과 다름'); }
+  else console.log('  ✓ #29d 장부 미제공 시 기존 ΔV 동작과 동일(#14b와 같은 결과)');
 }
 
 // ─── 결과 ───────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, computeDailyMetricsSeries } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, computeDailyMetricsSeries, buildBookCostSeries } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -151,9 +151,13 @@ export function useIntegratedData({
             if (v > 0) map.set(h.date, v);
           });
         }
+        // 장부액(Σ 예수금+매입원가) 시계열 — 일간 지표 보류 판정이 '원장 흐름이 그날 평가액에
+        // 반영됐는가'를 ΔV로 추측하지 않고 관측하도록 공급한다(개별 계좌 HistoryPanel과 동일 소스).
+        // ⚠️ 해외계좌는 장부가 USD인데 흐름은 ₩ 환산이라 단위가 어긋나므로 제외(미제공 → 기존 폴백).
+        const bookMap = acctType === 'overseas' ? null : buildBookCostSeries(src, [...map.keys()]);
         // ⚠️ 삭제 계좌(deletedAt)도 시계열을 유지한다(과거 총자산·계좌별 현황 팝업 보존).
         //   소비자(computedIntHistory carry-forward / histDetailRows)가 d < deletedAt로 캡한다.
-        return { id: p.id, dates: [...map.keys()].sort(), map, deletedAt: p.deletedAt || '' };
+        return { id: p.id, dates: [...map.keys()].sort(), map, bookMap, deletedAt: p.deletedAt || '' };
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolios, activePortfolioId, portfolio, history, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw, effectiveDateKey, krEffectiveDateKey]);
@@ -196,13 +200,26 @@ export function useIntegratedData({
     // 라이브 시점(today)의 평가(override=제외)와 원금·현금 carry-forward가 어긋나지 않도록 today에서도 정지.
     const cutoffOf = (deletedAt) => deletedAt ? (deletedAt < today ? deletedAt : today) : '';
     const dateToTotal = new Map();
-    accountSeries.forEach(({ dates, map, deletedAt }) => {
+    // 장부액도 평가액과 **완전히 같은 규칙**(carry-forward + 삭제 경계)으로 합산한다 — 규칙이 다르면
+    // bookDelta가 흐름이 아닌 집계 차이를 반영해 보류 판정이 틀린다.
+    // ⚠️ 한 계좌라도 그 날짜의 장부액이 미확보(추정 구성·해외)면 그날 합계는 통째로 무효(null)로 둔다.
+    //    일부만 더한 합계는 흐름과 비교할 수 없기 때문. 무효면 소비자가 기존 ΔV 휴리스틱으로 폴백한다.
+    const dateToBook = new Map();
+    const bookInvalid = new Set();
+    accountSeries.forEach(({ dates, map, bookMap, deletedAt }) => {
       const cutoff = cutoffOf(deletedAt);
-      let i = 0, lastVal = 0;
+      let i = 0, lastVal = 0, lastBook = null, sawAny = false;
       for (const d of sortedDates) {
         if (cutoff && d >= cutoff) break; // 삭제 계좌: 경계일부터 미기여(과거만 보존)
-        while (i < dates.length && dates[i] <= d) { lastVal = map.get(dates[i]); i++; }
+        while (i < dates.length && dates[i] <= d) {
+          lastVal = map.get(dates[i]);
+          if (bookMap) { const b = bookMap.get(dates[i]); if (b != null) { lastBook = b; sawAny = true; } }
+          i++;
+        }
         if (lastVal > 0) dateToTotal.set(d, (dateToTotal.get(d) || 0) + lastVal);
+        // 평가액엔 기여하는데 장부액은 못 내는 계좌가 있으면 그 날짜 합계는 신뢰 불가
+        if (lastVal > 0 && (!bookMap || !sawAny || lastBook == null)) bookInvalid.add(d);
+        else if (lastBook != null) dateToBook.set(d, (dateToBook.get(d) || 0) + lastBook);
       }
     });
 
@@ -221,6 +238,9 @@ export function useIntegratedData({
       }
     });
     cashByDate.forEach((v, d) => dateToTotal.set(d, (dateToTotal.get(d) || 0) + v));
+    // 현금성 계좌는 평가액 = 잔액 = 장부액이다(시세 개념이 없음). 그 잔액 Δ가 곧 흐름(②)이므로
+    // 장부 합계에도 같은 값을 더해야 bookDelta와 netFlow의 기준이 일치한다.
+    cashByDate.forEach((v, d) => dateToBook.set(d, (dateToBook.get(d) || 0) + v));
 
     // 오늘 값은 실시간 합산 평가액으로 보정 (휴일에 가격 미로드로 폭락한 경우 직전값 유지).
     // ⚠️ 이상치 판정 기준(prevValue)은 오늘 라이브(intTotals=삭제 제외)와 '같은 집합'이어야 한다.
@@ -393,6 +413,11 @@ export function useIntegratedData({
           netFlowIn: f ? f.in : 0,
           netFlowOut: f ? f.out : 0,
           ledgerFlow: f ? f.ledger : 0,
+          // 그날 총 장부액(Σ 예수금+매입원가). 한 계좌라도 미확보면 null → 소비자가 ΔV 폴백.
+          // ⚠️ 오늘 행의 evalAmount는 라이브 합계로 덮어써지지만(:247) 장부액은 스냅샷 기준이다.
+          //    예수금 편집은 그 날짜 스냅샷을 만들므로(snapshotCompositionKey에 depositAmount 포함)
+          //    오늘 편집도 오늘 장부에 잡힌다.
+          bookTotal: bookInvalid.has(date) ? null : (dateToBook.has(date) ? dateToBook.get(date) : null),
           // 오늘 라이브 평가액이 이상치로 판정돼 전일값으로 대체된 날은 ΔV가 0인데 흐름만 남아
           // 가짜 대손실이 난다 → 일간 지표를 보류(미산출)한다
           flowSuspect: date === today && todayAnomaly,
@@ -486,11 +511,19 @@ export function useIntegratedData({
     //    useHistoryBackfill 치유로 주말 행은 항상 존재). 이월하지 않으면 보류 행에서 IN이
     //    소각되고 다음 기록일 ΔV에 입금액이 그대로 남아 '입금액=수익' 버그가 하루 밀려 재발한다.
     const asc = [...computedIntHistory].sort((a, b) => a.date.localeCompare(b.date));
-    const metrics = computeDailyMetricsSeries(asc.map(h => ({
-      date: h.date, evalAmount: h.evalAmount,
-      flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0,
-      ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect,
-    })));
+    const metrics = computeDailyMetricsSeries(asc.map((h, i) => {
+      // 장부액 차분 — 보류 판정이 '흐름이 V에 반영됐는가'를 추측 대신 관측하게 한다(개별 계좌와 동일).
+      // 양쪽 날짜 모두 확보됐을 때만 유효(한쪽이라도 null이면 기존 ΔV 휴리스틱 폴백).
+      const prev = asc[i - 1];
+      const bookDelta = (prev && prev.bookTotal != null && h.bookTotal != null)
+        ? h.bookTotal - prev.bookTotal
+        : null;
+      return {
+        date: h.date, evalAmount: h.evalAmount,
+        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0,
+        ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect, bookDelta,
+      };
+    }));
     return [...asc].reverse().map(h => {
       const ep = h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal;
       const monthlyChange = ep > 0 ? ((h.evalAmount - ep) / ep) * 100 : 0;
