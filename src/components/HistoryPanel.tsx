@@ -133,9 +133,8 @@ export default function HistoryPanel({
     return computeDailyMetricsSeries(rows);
   }, [sortedHistoryDesc, activePortfolioAccountType, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
 
-  // 누적(원금대비) 수익률·수익금 — "지금 실제로 수익을 내고 있는가"에 답하는 값. 이 표의 3번째 열
-  // (구 '전일대비 · 손익')이 표시하는 주 지표다. 일간 지표는 하루짜리라 입출금 반영 시점이 하루만
-  // 어긋나도 부호가 뒤집혀 사용자를 오도했다(입금 D일 기록 → 평가 반영 D+1 → −11M/+7.4M 거울상).
+  // 누적(원금대비) 수익률·수익금 — "시작부터 통틀어 벌었나"에 답하는 값. 평가자산 셀 하단 2줄에 병기한다.
+  // 3열의 일간 지표("오늘 장에서 벌었나")와 역할이 다르므로 같은 셀에 섞지 않는다.
   // ⚠️ 원금은 개별 계좌 차트('나의 수익률')와 **같은 공용 함수**로 구한다 — 원화 계좌는
   //    resolveRecordPrincipal, 해외 계좌는 overseasPrincipalAt(날짜별 원장 누적).
   //    행별 자체 계산으로 되돌리면 같은 날짜에 차트와 표가 서로 다른 누적 수익률을 표시한다
@@ -203,7 +202,7 @@ export default function HistoryPanel({
 윗줄 %  = 일간 수익금 ÷ 그날의 시작 자산(전일 평가자산 + 당일 입금)
 아랫줄 ₩ = 일간 수익금 = 당일 평가자산 − 전일 평가자산 − 당일 순입출금
 입출금이 없던 날은 (당일 − 전일) ÷ 전일 과 정확히 같습니다.
-입출금이 있던 날은 그 금액을 빼므로, 입금해도 수익으로 잡히지 않습니다.">전일 수익률 · 수익금</th>
+입출금이 있던 날은 그 금액을 빼므로, 입금해도 수익으로 잡히지 않습니다.">일간 수익률 · 수익금</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -226,7 +225,7 @@ export default function HistoryPanel({
                       // ⚠️ 원인을 '투자원금 0'으로 단정하지 말 것 — cumulativeByDate가 항목을 비우는
                       //    경로는 원금 0 외에 '그날 종가 미로드'(해외 !ov)도 있어 오진단이 된다.
                       : '투자원금 또는 그날의 평가자산을 확정하지 못해 누적 수익률을 낼 수 없습니다.';
-                    // 전일 수익률·수익금 셀 툴팁 — 사용자의 정의("어제 종가를 오늘의 시작 금액으로 보고,
+                    // 일간 수익률·수익금 셀 툴팁 — 사용자의 정의("어제 종가를 오늘의 시작 금액으로 보고,
                     // 오늘 종가와 비교해 얼마 벌었나")를 그대로 풀어 쓴다. 입출금이 있으면 그 금액은
                     // 수익이 아니라 '시작 자산'에 더해진다는 점을 명시(그게 이 지표의 유일한 보정).
                     const dodTitle = dodProfit != null
@@ -278,7 +277,7 @@ export default function HistoryPanel({
                           )}
                           {h.isAdjusted && <span className="block text-[9px] font-normal leading-none mt-0.5 text-blue-400">조정됨</span>}
                         </td>
-                        {/* 전일 수익률 · 수익금 — "그날 하루 시장에서 얼마 벌었나"(전일 종가 → 당일 종가).
+                        {/* 일간 수익률 · 수익금 — "그날 하루 시장에서 얼마 벌었나"(전일 종가 → 당일 종가).
                             사용자 정의: 어제의 평가금 총액이 오늘의 시작 금액. 입출금이 없던 날은
                             (당일 − 전일) ÷ 전일 과 정확히 같고, 있던 날만 그 금액이 시작 자산으로 빠진다.
                             ⚠️ 여기서 전일대비를 다시 계산하지 말 것 — dailyMetricsByDate(공용 함수)가 단일
@@ -353,7 +352,7 @@ export default function HistoryPanel({
                       '07:30 이후 접속: 오늘 날짜로 새 기록이 생성됩니다.',
                       '전일 종가 확정 후 해당 기록은 고정(isFixed)되어 변경되지 않습니다.',
                     ] },
-                    { icon: '％', color: 'text-blue-300', title: '전일 수익률 · 수익금 (그날 하루)', lines: [
+                    { icon: '％', color: 'text-blue-300', title: '일간 수익률 · 수익금 (그날 하루)', lines: [
                       '"어제 종가를 오늘의 시작 금액으로 보고, 오늘 종가까지 얼마 벌었나"입니다.',
                       '아랫줄 금액 — 당일 평가자산 − 전일 평가자산 − 당일 순입출금.',
                       '윗줄 % — 그 금액 ÷ 그날의 시작 자산(전일 평가자산 + 당일 입금).',
