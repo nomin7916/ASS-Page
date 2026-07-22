@@ -114,9 +114,14 @@ export function MainChartCustomTooltip({ active, payload, label, selectionResult
             periodRate = selectionResult[periodKey];
           } else if (name === '나의 수익률' && selectionResult.principalReturnRateAtEnd != null) {
             periodRate = selectionResult.principalReturnRateAtEnd;
-          } else if ((name === '수익률' || name === '평가액 증감') && selectionResult.rate != null) {
-            // '평가액 증감' = 조회시작 0% 모드의 라인명(PortfolioChart myReturnLabel). 그 모드의 구간값은
-            // 원금대비(principalReturnRateAtEnd)가 아니라 평가액 비율(rate)이라야 라인·정보패널과 일치한다.
+          } else if (name === '기간 수익률' && selectionResult.myReturnPeriodRate != null) {
+            // '기간 수익률' = 조회시작 0%(TWR) 모드의 라인명(PortfolioChart myReturnLabel). 그 모드의
+            // 구간값은 원금대비(principalReturnRateAtEnd)도, 평가액 비율(rate)도 아닌 두 끝점 TWR의
+            // 비(myReturnPeriodRate)라야 라인·정보패널과 일치한다.
+            // ⚠️ selectionResult.rate(평가액 비율)로 되돌리지 말 것 — 입금액이 분자에 들어간다.
+            periodRate = selectionResult.myReturnPeriodRate;
+          } else if (name === '수익률' && selectionResult.rate != null) {
+            // '수익률' = 통합 대시보드 라인(IntegratedDashboard) — 평가액 비율 기준(별도 규약).
             periodRate = selectionResult.rate;
           } else if (dk?.match(/^comp(\d+)Rate$/)) {
             const compRateMatch2 = dk.match(/^comp(\d+)Rate$/);

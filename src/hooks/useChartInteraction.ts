@@ -61,6 +61,12 @@ export function useChartInteraction({
       backtestPeriodRate,
       principalReturnRateAtEnd: eData.principalReturnRate ?? null,
       principalAtEnd: eData.principalAmount ?? null,
+      // 조회시작 0%(TWR) 모드 전용 구간 수익률 — 라인이 재베이스된 누적 TWR이므로 구간값은
+      // 두 끝점의 비(조회시작 base가 약분된다). 원금대비 모드에서는 의미가 없어 쓰지 않는다.
+      // 시작점이 null(데이터 이전 구간)이면 재베이스 기준점=0%로 본다 — 라인이 조회시작에서
+      // 정확히 0%로 시작하므로 이 폴백이 라인과 일치한다. 종료점이 null이면 산출 불가.
+      myReturnPeriodRate: eData.principalReturnRate != null
+        ? ((100 + eData.principalReturnRate) / (100 + (sData.principalReturnRate ?? 0)) - 1) * 100 : null,
       ...Object.fromEntries(compStocks.map((_, ci) => {
         const pk = `comp${ci + 1}Point`;
         return [`comp${ci + 1}PeriodRate`, (sData[pk] > 0 && eData[pk] != null) ? ((eData[pk] / sData[pk]) - 1) * 100 : null];

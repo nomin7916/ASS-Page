@@ -108,6 +108,33 @@ const computeDailyMetrics = (rows) => {
   return out;
 };
 
+// 누적 TWR — src/utils.ts computeCumulativeTwrSeries 미러
+const computeCumulativeTwr = (rows) => {
+  const metrics = computeDailyMetrics(rows);
+  const out = new Map();
+  const list = Array.isArray(rows) ? rows : [];
+  let factor = 1;
+  for (const h of list) {
+    if (!h || !h.date) continue;
+    const m = metrics.get(h.date);
+    const r = (m && !m.held) ? (m.dodChange || 0) : 0;
+    const next = factor * (1 + r / 100);
+    if (Number.isFinite(next) && next > 0) factor = next;
+    out.set(h.date, (factor - 1) * 100);
+  }
+  return out;
+};
+
+// 구간 재베이스 — src/utils.ts rebaseTwr 미러
+const rebaseTwr = (twr, baseTwr) => {
+  if (twr == null) return null;
+  const b = baseTwr == null ? 0 : baseTwr;
+  const denom = 1 + b / 100;
+  if (!(denom > 0)) return null;
+  const r = ((1 + twr / 100) / denom - 1) * 100;
+  return Number.isFinite(r) ? r : null;
+};
+
 // ─── 테스트 하네스 ──────────────────────────────────────────────────────────
 let failed = 0;
 const R2 = (n) => Math.round(n * 10000) / 10000;
@@ -382,6 +409,99 @@ section('구현 감사 회귀 테스트 17~20');
     { date: '2026-05-14', evalAmount: 109_000_000, flowIn: 0, flowOut: 0 },         // 흐름 반영일
   ]);
   check('#21c 흡수 행에서 이월을 폐기하지 않음', m.get('2026-05-14').dodAbsChange, 1_000_000);
+}
+
+// ─── 4. 누적 TWR (개별 계좌 차트 '조회시작 0%' 라인) #22~#28 ────────────────
+section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
+
+// #22 흐름이 전혀 없으면 누적 TWR = 평가액 비율과 항등.
+{
+  const t = computeCumulativeTwr([
+    { date: '2026-03-02', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-03-03', evalAmount: 102_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-03-04', evalAmount:  99_000_000, flowIn: 0, flowOut: 0 },
+  ]);
+  check('#22 흐름 0 → 평가액 비율과 항등', t.get('2026-03-04'), -1);
+}
+
+// #23 ★핵심★ 대형 입금이 곡선을 왜곡하지 않는다.
+//     구버전 라인(V(t)÷V(시작)−1)은 같은 데이터에서 +747%가 나왔다(실제 시장 수익은 −5% 남짓).
+{
+  const afterDep = 9_900_000 + 99_180_147; // 대형 입금 직후 평가액(시장 변동 0)
+  const t = computeCumulativeTwr([
+    { date: '2026-07-14', evalAmount: 10_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-07-15', evalAmount:  9_900_000, flowIn: 0, flowOut: 0 },            // −1.0%
+    { date: '2026-07-16', evalAmount: afterDep,   flowIn: 99_180_147, flowOut: 0 },   // 대형 입금, 시장 0%
+    { date: '2026-07-17', evalAmount: afterDep * 0.99, flowIn: 0, flowOut: 0 },       // −1.0%
+  ]);
+  const legacy = (((afterDep * 0.99) / 10_000_000) - 1) * 100; // 구버전 라인이 그리던 값
+  check('#23 입금일 자체는 0% 기여', t.get('2026-07-16'), t.get('2026-07-15'));
+  check('#23 누적 = 시장 변동분만 (−1% 두 번)', t.get('2026-07-17'), ((0.99 * 0.99) - 1) * 100);
+  check('#23 구버전은 +700% 이상으로 부풀었다', legacy > 700 ? 1 : 0, 1);
+  check('#23 TWR은 실제 시장 성과 범위 안', Math.abs(t.get('2026-07-17')) < 5 ? 1 : 0, 1);
+}
+
+// #24 전액 출금 후 남은 잔액도 곡선을 무너뜨리지 않는다(분모 규약: 유출은 기말 가중).
+{
+  const t = computeCumulativeTwr([
+    { date: '2026-04-01', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-04-02', evalAmount:  50_500_000, flowIn: 0, flowOut: 50_000_000 }, // 출금 + 시장 +0.5%
+  ]);
+  check('#24 출금일 = 시장 변동분만', t.get('2026-04-02'), 0.5);
+}
+
+// #25 보류(held) 행은 배율 1.0 — 주말 carry-forward에서 곡선이 끊기거나 튀지 않는다.
+//     그리고 흐름은 다음 행으로 이월되므로 월요일 값은 시장 변동분만 남는다.
+{
+  const t = computeCumulativeTwr([
+    { date: '2026-07-17', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },          // 금
+    { date: '2026-07-18', evalAmount: 100_000_000, flowIn: 50_000_000, flowOut: 0 }, // 토(원장만, ΔV=0) → 보류
+    { date: '2026-07-19', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },          // 일 → 보류
+    { date: '2026-07-20', evalAmount: 151_500_000, flowIn: 0, flowOut: 0 },          // 월: 입금 반영 + 1%
+  ]);
+  check('#25 토요일 배율 1.0 (직전값 유지)', t.get('2026-07-18'), 0);
+  check('#25 일요일 배율 1.0 (직전값 유지)', t.get('2026-07-19'), 0);
+  check('#25 월요일 = 시장 변동분만', t.get('2026-07-20'), 1);
+}
+
+// #26 재베이스 항등식 — 구간 수익률은 두 끝점 누적의 비이고, base는 약분된다.
+{
+  const t = computeCumulativeTwr([
+    { date: '2026-02-02', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-02-03', evalAmount: 110_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-02-04', evalAmount: 121_000_000, flowIn: 0, flowOut: 0 },
+  ]);
+  const base = t.get('2026-02-03');
+  check('#26 base 자신을 재베이스하면 0%', rebaseTwr(base, base), 0);
+  check('#26 구간 수익률 = 끝점 비', rebaseTwr(t.get('2026-02-04'), base), 10);
+  // 조회구간을 어디서 시작하든 구간값이 동일해야 한다(곡선 모양 불변).
+  const full = rebaseTwr(t.get('2026-02-04'), t.get('2026-02-02'));
+  check('#26 전체구간 = 개별 일간의 곱', full, ((1.1 * 1.1) - 1) * 100);
+}
+
+// #27 첫 행은 항상 0% (비교 대상이 없고, 그 흐름은 이미 V에 반영돼 있다).
+{
+  const t = computeCumulativeTwr([
+    { date: '2026-01-05', evalAmount: 30_000_000, flowIn: 30_000_000, flowOut: 0 },
+    { date: '2026-01-06', evalAmount: 30_300_000, flowIn: 0, flowOut: 0 },
+  ]);
+  check('#27 첫 행 0%', t.get('2026-01-05'), 0);
+  check('#27 둘째 행에 가짜 손실 없음', t.get('2026-01-06'), 1);
+}
+
+// #28 평가액 0 + 출금 기록 없음(r = −100%)은 데이터 누락으로 보고 배율 1로 취급한다.
+//     곱이 0이 되면 이후 전 구간이 −100%로 영구 고정돼 차트가 죽는다.
+//     그 다음 행은 전일 평가액이 0이라 shouldHold가 한 번 더 보류시키고(정상), 그 이후 복귀한다.
+{
+  const t = computeCumulativeTwr([
+    { date: '2026-06-01', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-06-02', evalAmount:           0, flowIn: 0, flowOut: 0 }, // 시세 전체 미로드
+    { date: '2026-06-03', evalAmount: 101_000_000, flowIn: 0, flowOut: 0 }, // 전일 V=0 → 한 행 보류
+    { date: '2026-06-04', evalAmount: 102_010_000, flowIn: 0, flowOut: 0 }, // +1% 정상 복귀
+  ]);
+  check('#28 전손 오판을 배율 1로 흡수', t.get('2026-06-02'), 0);
+  check('#28 −100%로 영구 고정되지 않음', t.get('2026-06-03'), 0);
+  check('#28 데이터 복구 후 곡선 재개', t.get('2026-06-04'), 1);
 }
 
 // ─── 결과 ───────────────────────────────────────────────────────────────────

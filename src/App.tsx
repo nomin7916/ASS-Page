@@ -66,6 +66,7 @@ import {
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
   computeEffectivePrincipal, resolveRecordPrincipal, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
+  externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks
 } from './utils';
 
@@ -977,6 +978,29 @@ export default function App() {
     return buildCloseEvalSeries(activePortfolio, history.map(h => h?.date), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, edk);
   }, [activePortfolio, history, activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, krEffectiveDateKey, effectiveDateKey]);
 
+  // 개별 계좌 누적 TWR — '조회시작 0%' 모드 라인의 소스. 입출금이 있어도 곡선이 왜곡되지 않는다.
+  // ⚠️ 전체 이력에서 한 번 누적한다(조회구간으로 자르지 않는다). 구간 재베이스는 finalChartData가
+  //    rebaseTwr로 처리 — 그래야 조회구간을 바꿔도 곡선 모양이 불변이고 흐름 이월 상태가 안 끊긴다.
+  // ⚠️ 평가액 소스는 차트 라인과 **동일**해야 한다: 시장계좌=activeCloseEvalByDate(수량×종가),
+  //    해외=overseasUsdEvalAt(USD). 다른 소스를 쓰면 라인과 %가 갈린다.
+  // 해외는 평가도 원장도 USD 그대로 쓴다(환산 없음 — 아래 해외 원금 계산·PortfolioChart 실손익과 동일 규약).
+  const accountTwrByDate = useMemo(() => {
+    const asc = history.filter(h => h?.date).slice().sort((a, b) => a.date < b.date ? -1 : 1);
+    if (asc.length === 0) return new Map();
+    const isOv = activePortfolioAccountType === 'overseas';
+    const rows = asc.map((h, i) => {
+      const prev = asc[i - 1];
+      const flow = prev
+        ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date)
+        : { in: 0, out: 0 };
+      const ovEval = isOv ? overseasUsdEvalAt(portfolio, h.date, stockHistoryMap) : null;
+      const cb = isOv ? null : activeCloseEvalByDate.get(h.date);
+      const ev = ovEval != null ? ovEval : (cb != null ? cb : cleanNum(h.evalAmount));
+      return { date: h.date, evalAmount: ev, flowIn: flow.in, flowOut: flow.out };
+    });
+    return computeCumulativeTwrSeries(rows);
+  }, [history, activePortfolioAccountType, portfolio, stockHistoryMap, activeCloseEvalByDate, depositHistory, depositHistory2]);
+
   const finalChartData = useMemo(() => {
     const localSortedHist = [...history].sort((a, b) => new Date(a.date) - new Date(b.date));
     const sortedDeposits = [...depositHistory].sort((a, b) => a.date < b.date ? -1 : 1);
@@ -1031,15 +1055,11 @@ export default function App() {
         const exactHist = histByDate.get(date);
         if (isOverseasChart) {
           // 해외계좌: USD 주가 이력으로만 계산 — KRW evalAmount/fxRate 완전 미사용
-          let usdEval = 0, hasData = false;
-          portfolio.forEach(item => {
-            if (item.type === 'deposit') { usdEval += cleanNum(item.depositAmount); hasData = true; }
-            else if (item.code && stockHistoryMap[item.code]) {
-              const p = getClosestValue(stockHistoryMap[item.code], date);
-              if (p) { usdEval += p * item.quantity; hasData = true; }
-            }
-          });
-          trueEvalAtDate = hasData ? usdEval : 0;
+          // ⚠️ accountTwrByDate와 **같은 함수**를 쓴다(overseasUsdEvalAt) — 라인과 % 소스 일치.
+          const usdRaw = overseasUsdEvalAt(portfolio, date, stockHistoryMap);
+          const hasData = usdRaw != null;
+          const usdEval = hasData ? usdRaw : 0;
+          trueEvalAtDate = usdEval;
           hasReliableEval = hasData;
           const usdPrin = cleanNum(principal);
           if (hasData && usdPrin > 0) retRate = (usdEval - usdPrin) / usdPrin * 100;
@@ -1117,12 +1137,25 @@ export default function App() {
     const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
       // 지수·비교종목·시장지표 base는 각 시리즈의 조회기간 내 첫 non-null 시점(=조회시작)을 사용한다.
-      // '나의 수익률'(evalAmount)만 baseItem(포트폴리오 최초 평가일)을 0% 기준으로 쓰고, 시세 시리즈에
+      // 포트폴리오 시리즈만 baseItem(포트폴리오 최초 평가일)을 0% 기준으로 쓰고, 시세 시리즈에
       // baseItem을 쓰면 안 된다 — 포트폴리오 최초 평가일이 조회시작보다 늦을 때 그 늦은 날의 지수값이
       // 0% 기준이 되어 조회시작 지점이 큰 음수(예: KOSPI −70%)로 찍히던 버그(정보패널 라벨·구간
       // 수익률은 조회시작 시점을 base로 쓰므로 라인과 불일치). 또 baseItem 시점에 특정 시리즈 값이
       // 0/null이면(상장 이전·캐시 미수집) 전 구간 rate가 null이 되어 라인이 통째로 사라진다.
       const firstBase = (pk) => rawData.find(d => d[pk] != null && d[pk] > 0)?.[pk] || 0;
+      // '나의 수익률' 라인은 **누적 TWR을 조회시작 기준으로 재베이스**한 값이다(평가액 비율 아님).
+      // ⚠️ (V(t) ÷ V(시작) − 1)로 되돌리지 말 것 — 입금액이 분자에 통째로 들어가 +747%처럼 부풀고,
+      //    실제 손익이 마이너스인 구간이 플러스로 뒤집힌다(이 모드를 고친 이유).
+      // 기록일이 아닌 차트 날짜(주말·지수만 있는 날)는 직전 기록일 TWR을 이월(carry-forward).
+      // rawData는 filteredDates 순서(날짜 오름차순)라 포인터 1회 순회로 충분하다.
+      const twrEntries = [...accountTwrByDate.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1);
+      const twrByChartDate = new Map();
+      let tIdx = 0, curTwr = null;
+      for (const item of rawData) {
+        while (tIdx < twrEntries.length && twrEntries[tIdx][0] <= item.date) { curTwr = twrEntries[tIdx][1]; tIdx++; }
+        twrByChartDate.set(item.date, curTwr);
+      }
+      const baseTwr = twrByChartDate.get(baseItem.date);
       const kospiBase = firstBase('kospiPoint');
       const sp500Base = firstBase('sp500Point');
       const nasdaqBase = firstBase('nasdaqPoint');
@@ -1141,7 +1174,8 @@ export default function App() {
         return {
           ...item,
           returnRate: (baseItem.evalAmount > 0 && item.evalAmount > 0) ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : item.returnRate,
-          principalReturnRate: (baseItem.evalAmount > 0 && item.principalReturnRate != null) ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : item.principalReturnRate,
+          // 첫 기록 이전 날짜(TWR 미설정)는 null → 라인 미표시(0% 평탄선 방지, 기존 계약 유지).
+          principalReturnRate: item.principalReturnRate != null ? rebaseTwr(twrByChartDate.get(item.date), baseTwr) : null,
           kospiRate: kospiBase > 0 ? ((item.kospiPoint / kospiBase) - 1) * 100 : 0,
           sp500Rate: sp500Base > 0 ? ((item.sp500Point / sp500Base) - 1) * 100 : 0,
           nasdaqRate: nasdaqBase > 0 ? ((item.nasdaqPoint / nasdaqBase) - 1) * 100 : 0,
@@ -1188,7 +1222,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activeCloseEvalByDate]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activeCloseEvalByDate, accountTwrByDate]);
 
   // ── 통합 대시보드 계산 ──
   const {
@@ -2101,6 +2135,11 @@ export default function App() {
       nasdaqPeriodRate: s.nasdaqPoint > 0 ? ((e.nasdaqPoint / s.nasdaqPoint) - 1) * 100 : null,
       principalReturnRateAtEnd: e.principalReturnRate ?? null,
       principalAtEnd: e.principalAmount ?? null,
+      // 조회시작 0%(TWR) 모드 전용 구간 수익률 — 라인이 재베이스된 누적 TWR이므로
+      // 구간값은 두 끝점의 비(base가 약분된다). 원금대비 모드에서는 의미가 없어 쓰지 않는다.
+      // 시작점이 null(첫 기록 이전)이면 재베이스 기준점=0%로 본다(라인이 조회시작에서 0%로 출발).
+      myReturnPeriodRate: e.principalReturnRate != null
+        ? ((100 + e.principalReturnRate) / (100 + (s.principalReturnRate ?? 0)) - 1) * 100 : null,
       ...indRates, ...compRates,
     });
   }, [finalChartData, compStocks]);

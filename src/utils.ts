@@ -369,6 +369,66 @@ export const computeDailyMetricsSeries = (rows) => {
   return out;
 };
 
+// 누적 TWR(Time-Weighted Return) — 일간 보정 수익률의 곱셈 체인. 개별 계좌 차트 '조회시작 0%' 모드의 라인.
+// 왜 곱셈 체인인가(두 대안이 모두 입출금에 왜곡되기 때문):
+//   · V(t) ÷ V(시작) − 1  → 입금액이 분자에 그대로 들어가 부풀어 오른다(실측 +747%, 실손익은 −536만).
+//   · (V − C) ÷ C         → 입금일에 분모 C가 급증해 시장이 안 움직여도 수익률이 절벽처럼 꺾인다.
+//   일간 r(t)는 computeDailyMetricsSeries가 이미 흐름을 제거한 값이므로, 그 곱은 입출금 규모와
+//   무관한 순수 시장 성과가 된다. 부수 효과로 지수·비교종목 라인(0% 정규화 가격비)과 같은 축에서 비교 가능.
+// ⚠️ held 행(주말 carry-forward·미반영 흐름)은 **배율 1.0**(직전값 유지)이다 — 일간 표시 계약
+//    (dodAbsChange=null → '-')과 다른 것이 **정상**이다. null로 빼면 주말마다 선이 끊기고, 보류된
+//    흐름은 computeDailyMetricsSeries가 다음 행으로 이월하므로 곱은 그대로 정확하다.
+// ⚠️ 곱셈 체인은 하루짜리 이상치를 **영구 고정**한다(원금대비 방식은 다음 날 자동 복구된다).
+//    그래서 입력 평가액은 반드시 buildCloseEvalSeries(allExact·!estimated 게이트)를 통과한 값이어야 한다.
+// rows: computeDailyMetricsSeries와 **동일 형식·동일 정렬**(날짜 오름차순)
+// 반환: Map<date, 누적 TWR %> — 첫 행은 항상 0
+export const computeCumulativeTwrSeries = (rows) => {
+  const metrics = computeDailyMetricsSeries(rows);
+  const out = new Map();
+  const list = Array.isArray(rows) ? rows : [];
+  let factor = 1;
+  for (const h of list) {
+    if (!h || !h.date) continue;
+    const m = metrics.get(h.date);
+    const r = (m && !m.held) ? (m.dodChange || 0) : 0;
+    const next = factor * (1 + r / 100);
+    // 평가액 0 + 출금 기록 없음(= r −100%)은 실제 전손보다 '데이터 누락'일 확률이 압도적이다.
+    // 곱이 0이 되면 이후 전 구간이 −100%로 영구 고정되므로 그런 행은 배율 1(보류)로 취급한다.
+    if (Number.isFinite(next) && next > 0) factor = next;
+    out.set(h.date, (factor - 1) * 100);
+  }
+  return out;
+};
+
+// 누적 TWR 재베이스 — 조회구간 시작을 0%로 맞춘다. (1+TWR(t)) ÷ (1+TWR(base)) − 1
+// ⚠️ 구간만 잘라 체인하지 말 것: 첫 행이 held(비교 대상 없음)라 경계에서 흐름 이월 상태가 끊긴다.
+//    전체 이력에서 한 번 누적하고 표시 시점에 나눠야 조회구간을 바꿔도 곡선 모양이 불변이다.
+export const rebaseTwr = (twr, baseTwr) => {
+  if (twr == null) return null;
+  const b = baseTwr == null ? 0 : baseTwr;
+  const denom = 1 + b / 100;
+  if (!(denom > 0)) return null;
+  const r = ((1 + twr / 100) / denom - 1) * 100;
+  return Number.isFinite(r) ? r : null;
+};
+
+// 해외계좌 차트용 USD 평가액 — 현재 보유 × 해당일 USD 종가(환율 미적용, 예수금은 USD 그대로).
+// ⚠️ App.tsx finalChartData 해외 분기와 개별 계좌 누적 TWR이 반드시 이 한 함수를 공유할 것.
+//    한쪽만 자체 계산으로 되돌리면 같은 날짜에 라인과 %가 갈린다.
+// 반환: USD 평가액 (가격/예수금 데이터가 하나도 없으면 null)
+export const overseasUsdEvalAt = (items, date, stockHistoryMap) => {
+  let usd = 0, hasData = false;
+  for (const item of items || []) {
+    if (!item) continue;
+    if (item.type === 'deposit') { usd += cleanNum(item.depositAmount); hasData = true; }
+    else if (item.code && stockHistoryMap?.[item.code]) {
+      const p = getClosestValue(stockHistoryMap[item.code], date);
+      if (p) { usd += p * item.quantity; hasData = true; }
+    }
+  }
+  return hasData ? usd : null;
+};
+
 // 수동 anchor + delta: D에서 수동 설정한 원금이 다음 anchor 전까지 자동 전파.
 // 전파값 = anchor.principal + (cum_deposits(date) - cum_deposits(anchor.date))
 // anchor 없으면 { value: null } → 호출측이 기존 로직으로 폴백.
