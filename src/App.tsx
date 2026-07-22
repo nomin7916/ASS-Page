@@ -65,7 +65,7 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal, resolveRecordPrincipal, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
+  computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
   externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks
 } from './utils';
@@ -1095,12 +1095,9 @@ export default function App() {
       }
       let principalAmount = 0;
       if (isOverseasChart) {
-        // 해외계좌: USD 기준 — fxRate 미적용
-        for (const d of sortedDeposits) { if (d.date > date) break; if (!d.noPrincipal) principalAmount += cleanNum(d.amount); }
-        for (const w of sortedWithdrawals) { if (w.date > date) break; if (!w.noPrincipal) principalAmount -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
-        if (principalAmount === 0 && date >= portfolioStartDate && cleanNum(principal) > 0) principalAmount = cleanNum(principal);
-        // 해외: principal 필드(USD 수동 입력) 하한 — depositHistory 일부만 있을 때 과대 수익률 방지
-        if (principalAmount > 0 && cleanNum(principal) > principalAmount) principalAmount = cleanNum(principal);
+        // 해외계좌: USD 기준 — fxRate 미적용. ⚠️ 식을 여기 인라인으로 되돌리지 말 것 —
+        // HistoryPanel(추이 표 누적)이 같은 함수를 호출해야 두 화면의 원금·수익금이 일치한다.
+        principalAmount = overseasPrincipalAt(date, sortedDeposits, sortedWithdrawals, principal, portfolioStartDate);
       } else if (effective.value != null && effective.value > 0) {
         // 수동 anchor + delta: principalManual 항목 기준
         principalAmount = effective.value;
@@ -2588,6 +2585,7 @@ export default function App() {
             isLoading={isLoading}
             depositHistory={depositHistory}
             depositHistory2={depositHistory2}
+            portfolioStartDate={portfolioStartDate}
             refetchStockHistory={refetchStockHistory}
           />
 

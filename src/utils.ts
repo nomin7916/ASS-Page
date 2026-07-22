@@ -466,6 +466,24 @@ export const resolveRecordPrincipal = (effectiveValue, record, date, sortedHistA
   return cleanNum(principalProp);
 };
 
+// 해외(overseas) 계좌의 날짜별 투자원금(USD). 원장(입금 − 출금)을 그 날짜까지 적산하고,
+// principal 필드(USD 수동 입력)를 하한으로 둔다(depositHistory가 일부만 있을 때 과대 수익률 방지).
+// ⚠️ 해외 계좌는 `resolveRecordPrincipal`(원화 계좌용)을 쓰지 않으므로 이 함수가 그 자리를 대신한다 —
+//    개별 계좌 차트 '나의 수익률'(App.tsx finalChartData 해외 분기)과 '자산 평가액 추이' 표의
+//    누적(HistoryPanel cumulativeByDate)이 **반드시 공유**해야 한다. 한쪽만 principal 필드를 전 행에
+//    평탄 적용하면 출금이 있는 계좌에서 출금 이전 과거 행의 원금·수익금이 두 화면에서 갈린다
+//    (출금 시 principal 필드만 principalDeducted만큼 줄기 때문).
+// sortedDeposits/sortedWithdrawals: 날짜 오름차순(조기 break 전제).
+export const overseasPrincipalAt = (date, sortedDeposits, sortedWithdrawals, principalProp, portfolioStartDate) => {
+  let amount = 0;
+  for (const d of sortedDeposits || []) { if (d.date > date) break; if (!d.noPrincipal) amount += cleanNum(d.amount); }
+  for (const w of sortedWithdrawals || []) { if (w.date > date) break; if (!w.noPrincipal) amount -= w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount); }
+  const prin = cleanNum(principalProp);
+  if (amount === 0 && date >= (portfolioStartDate || '') && prin > 0) amount = prin;
+  if (amount > 0 && prin > amount) amount = prin;
+  return amount;
+};
+
 export const formatCurrency = (n) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(cleanNum(n));
 export const formatPercent = (n) => cleanNum(n).toFixed(2) + '%';
 export const formatNumber = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR').format(cleanNum(n));

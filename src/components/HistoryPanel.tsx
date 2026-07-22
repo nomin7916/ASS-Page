@@ -1,10 +1,12 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, externalFlowInRange, computeDailyMetricsSeries, computeEffectivePrincipal, resolveRecordPrincipal, getClosestValue, cleanNum } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, externalFlowInRange, computeDailyMetricsSeries, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum } from '../utils';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
+
+const formatUsd = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
 
 export default function HistoryPanel({
   history,
@@ -25,6 +27,7 @@ export default function HistoryPanel({
   isLoading,
   depositHistory,
   depositHistory2,
+  portfolioStartDate,
   refetchStockHistory,
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
@@ -130,9 +133,11 @@ export default function HistoryPanel({
     return computeDailyMetricsSeries(rows);
   }, [sortedHistoryDesc, activePortfolioAccountType, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
 
-  // 누적(원금대비) 수익률 — "지금 실제로 수익을 내고 있는가"에 답하는 값. 전일대비(일간)와 역할이 다르므로
-  // 같은 셀에 섞지 않고 평가자산 아래에 병기한다.
-  // ⚠️ 원금은 개별 계좌 차트('나의 수익률')와 **같은 공용 함수**(resolveRecordPrincipal)로 구한다.
+  // 누적(원금대비) 수익률·수익금 — "지금 실제로 수익을 내고 있는가"에 답하는 값. 이 표의 3번째 열
+  // (구 '전일대비 · 손익')이 표시하는 주 지표다. 일간 지표는 하루짜리라 입출금 반영 시점이 하루만
+  // 어긋나도 부호가 뒤집혀 사용자를 오도했다(입금 D일 기록 → 평가 반영 D+1 → −11M/+7.4M 거울상).
+  // ⚠️ 원금은 개별 계좌 차트('나의 수익률')와 **같은 공용 함수**로 구한다 — 원화 계좌는
+  //    resolveRecordPrincipal, 해외 계좌는 overseasPrincipalAt(날짜별 원장 누적).
   //    행별 자체 계산으로 되돌리면 같은 날짜에 차트와 표가 서로 다른 누적 수익률을 표시한다
   //    (일간 지표의 computeDailyMetricsSeries 단일 소스 규약과 같은 이유).
   //    평가액도 이 표가 실제로 렌더하는 값(종가 재계산·해외 재계산)을 써야 %와 표시 금액이 맞는다.
@@ -141,24 +146,28 @@ export default function HistoryPanel({
     const isOverseasAcc = activePortfolioAccountType === 'overseas';
     const m = new Map();
     // 해외계좌는 차트(App.tsx 해외 분기)와 동일하게 USD 기준 — 원금 필드도 평가도 USD라 환산하지 않는다.
-    // 수익금(₩)은 통화가 섞이므로 표시하지 않고 %만 낸다.
-    const usdPrin = cleanNum(principal);
+    // 수익금도 USD − USD라 통화가 섞이지 않는다(표시만 $ 포맷). 원화 환산은 하지 않는다.
+    // ⚠️ 원금은 principal 필드 평탄이 아니라 **날짜별 원장 누적**(overseasPrincipalAt 공용 함수)이다 —
+    //    출금 시 principal 필드만 줄어들어, 평탄 적용하면 출금 이전 과거 행이 차트와 갈린다.
+    const depAsc = isOverseasAcc ? [...(depositHistory || [])].sort((a, b) => (a.date < b.date ? -1 : 1)) : [];
+    const wdAsc = isOverseasAcc ? [...(depositHistory2 || [])].sort((a, b) => (a.date < b.date ? -1 : 1)) : [];
     asc.forEach(h => {
       if (!h?.date) return;
       if (isOverseasAcc) {
+        const usdPrin = overseasPrincipalAt(h.date, depAsc, wdAsc, principal, portfolioStartDate);
         const ov = overseasEvalByDate?.get(h.date);
         if (!ov || !(usdPrin > 0)) return;
-        m.set(h.date, { rate: (ov.usd - usdPrin) / usdPrin * 100, profit: null });
+        m.set(h.date, { rate: (ov.usd - usdPrin) / usdPrin * 100, profit: ov.usd - usdPrin, principal: usdPrin, eval: ov.usd });
         return;
       }
       const eff = computeEffectivePrincipal(h.date, asc, depositHistory, depositHistory2, false);
       const prin = resolveRecordPrincipal(eff.value, h, h.date, asc, principal);
       const v = displayEvalByDate?.get(h.date) ?? h.evalAmount;
       if (!(prin > 0) || v == null) return;
-      m.set(h.date, { rate: (v - prin) / prin * 100, profit: v - prin });
+      m.set(h.date, { rate: (v - prin) / prin * 100, profit: v - prin, principal: prin, eval: v });
     });
     return m;
-  }, [sortedHistoryDesc, activePortfolioAccountType, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, principal]);
+  }, [sortedHistoryDesc, activePortfolioAccountType, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, principal, portfolioStartDate]);
 
   return (
         <>
@@ -185,13 +194,11 @@ export default function HistoryPanel({
                 <thead className="sticky top-0 bg-gray-800 text-gray-400 border-b border-gray-600 shadow-sm z-10">
                   <tr>
                     <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal">일자</th>
-                    <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal cursor-help" title="윗줄: 그날의 총평가액
-아랫줄 '누적': 투자원금 대비 누적 수익률 = (평가자산 − 투자원금) ÷ 투자원금
-지금까지 실제로 벌었는지/잃었는지를 보는 값입니다(투자 요약 패널·수익률 차트와 동일 기준).">평가자산 · 누적</th>
-                    <th className="py-1.5 px-1 text-center font-normal cursor-help" title="윗줄: 입출금 영향을 제거한 순수 일간 수익률
-   수식: (당일 평가자산 + 당일 출금) ÷ (전일 평가자산 + 당일 입금) − 1
-아랫줄: 그날 실제로 번 금액(일간 손익) = ΔV − 순입출금
-입출금이 있던 날도 그 금액은 제외되므로, 순수하게 시장에서 번 돈만 표시됩니다.">전일대비 · 손익</th>
+                    <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal cursor-help" title="그날의 총평가액 (수량 × 그날 종가로 재계산한 값)">평가자산</th>
+                    <th className="py-1.5 px-1 text-center font-normal cursor-help" title="윗줄: 투자원금 대비 누적 수익률 = (평가자산 − 투자원금) ÷ 투자원금
+아랫줄: 누적 수익금 = 평가자산 − 투자원금
+지금까지 실제로 벌었는지/잃었는지를 보는 값입니다(투자 요약 패널·수익률 차트와 동일 기준).
+셀에 마우스를 올리면 그날의 투자원금과 전일대비(일간) 지표를 볼 수 있습니다.">누적 수익률 · 수익금</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -207,6 +214,19 @@ export default function HistoryPanel({
                     const flowNet = m.ledgerFlow || 0;
                     const cum = cumulativeByDate.get(h.date) || null;
                     const hasPrev = i < sortedHistoryDesc.length - 1;
+                    // 해외계좌는 누적을 USD 기준으로 내므로(원금·평가 모두 USD) 금액 표기도 $로 맞춘다.
+                    const fmtAmount = isOverseasAcc ? formatUsd : formatCurrency;
+                    // 일간 지표는 셀에서 내렸지만 정보 자체는 버리지 않는다 — 툴팁으로 유지(공용 함수 소비도 유지).
+                    const cumTitle = [
+                      cum != null
+                        ? `투자원금 ${fmtAmount(cum.principal)} · 평가자산 ${fmtAmount(cum.eval)}\n누적 수익금 = 평가자산 − 투자원금`
+                        // ⚠️ 원인을 '투자원금 0'으로 단정하지 말 것 — cumulativeByDate가 항목을 비우는
+                        //    경로는 원금 0 외에 '그날 종가 미로드'(해외 !ov)도 있어 오진단이 된다.
+                        : '투자원금 또는 그날의 평가자산을 확정하지 못해 누적 수익률을 낼 수 없습니다.',
+                      dodProfit != null
+                        ? `전일대비 ${formatPercent(dod)} · 일간 손익 ${formatCurrency(dodProfit)}${flowNet !== 0 ? ` (${flowNet > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(flowNet))} 제외)` : ''}`
+                        : (hasPrev ? '전일대비: 입출금 기록과 평가 스냅샷이 어긋나 일간 지표를 보류했습니다.' : null),
+                    ].filter(Boolean).join('\n');
                     const isToday = h.date === effectiveDateKey;
                     const isUserModified = h.isAdjusted || userModifiedDates.has(h.date);
 
@@ -227,35 +247,30 @@ export default function HistoryPanel({
                               {isOverseasAcc
                                 ? (() => {
                                     const usd = ov ? ov.usd : h.evalAmount / (marketIndicators.usdkrw || 1);
-                                    const usdDisplay = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(usd);
-                                    return <div className="flex flex-col items-end leading-tight"><span>{usdDisplay}</span><span className="text-[10px] text-gray-500">{formatCurrency(curKrw)}</span></div>;
+                                    return <div className="flex flex-col items-end leading-tight"><span>{formatUsd(usd)}</span><span className="text-[10px] text-gray-500">{formatCurrency(curKrw)}</span></div>;
                                   })()
                                 : formatCurrency(curKrw)}
                             </span>
                           </div>
-                          {/* 누적(원금대비) — 일간 수익률과 역할이 다른 값이라 '누적' 라벨을 붙여 구분한다 */}
-                          {cum && (
-                            <span
-                              className={`block text-[9px] font-bold leading-none mt-0.5 whitespace-nowrap ${cum.rate > 0 ? 'text-red-400/90' : cum.rate < 0 ? 'text-blue-400/90' : 'text-gray-500'}`}
-                              title={cum.profit != null ? `투자원금 대비 누적 손익 ${cum.profit >= 0 ? '+' : '−'}${formatCurrency(Math.abs(cum.profit))}` : '투자원금(USD) 대비 누적 수익률'}
-                            >
-                              누적 {cum.rate > 0 ? '+' : ''}{cum.rate.toFixed(2)}%
-                            </span>
-                          )}
                           {h.isAdjusted && <span className="block text-[9px] font-normal leading-none mt-0.5 text-blue-400">조정됨</span>}
                         </td>
-                        <td className="py-1.5 px-1 text-center font-bold" title={dodProfit != null
-                          ? `일간 손익 ${formatCurrency(dodProfit)}${flowNet !== 0 ? ` (${flowNet > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(flowNet))} 제외)` : ''}`
-                          : (hasPrev ? '입출금 기록과 평가 스냅샷이 어긋나 일간 지표를 보류했습니다.' : '')}>
-                          {/* 보류는 '변동 없음(0.00%)'이 아니라 '산출 불가' — 통합 추이표와 같은 규약 */}
-                          {dodProfit == null
+                        {/* 누적 수익률 · 수익금 (투자원금 대비) — 이 표의 주 지표.
+                            일간 지표(전일대비·일간 손익)는 하루 단위라 입출금 반영 시점이 어긋나면 부호까지
+                            뒤집혀 오해를 부르므로, 셀 본문에서 내리고 아래 툴팁으로만 남긴다.
+                            ⚠️ 누적을 여기서 자체 계산하지 말 것 — cumulativeByDate(resolveRecordPrincipal /
+                               해외는 overseasPrincipalAt)가 단일 소스이며, 차트 '나의 수익률'·투자 요약
+                               카드와 같은 값이라야 한다. */}
+                        <td className="py-1.5 px-1 text-center font-bold" title={cumTitle}>
+                          {cum == null
                             ? <span className="text-gray-600">-</span>
-                            : <span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span>}
-                          {/* 일간 손익(₩) — "실제로 수익을 내고 있나"는 %보다 금액이 직관적이라 툴팁에서 승격했다.
-                              입출금이 제거된 값이므로 입금일에도 시장에서 번 돈만 표시된다. */}
-                          {dodProfit != null && dodProfit !== 0 && (
-                            <span className={`block text-[9px] font-bold leading-none mt-0.5 whitespace-nowrap ${dodProfit > 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
-                              {dodProfit > 0 ? '+' : '−'}{formatCurrency(Math.abs(dodProfit))}
+                            : <span className={cum.rate > 0 ? 'text-red-400' : cum.rate < 0 ? 'text-blue-400' : 'text-gray-500'}>
+                                {cum.rate > 0 ? '+' : ''}{formatPercent(cum.rate)}
+                              </span>}
+                          {/* 누적 수익금 — "실제로 얼마를 벌었나"는 %보다 금액이 직관적이다.
+                              투자원금을 뺀 값이라 입금해도 그 금액만큼 늘어나지 않는다. */}
+                          {cum != null && cum.profit != null && cum.profit !== 0 && (
+                            <span className={`block text-[9px] font-bold leading-none mt-0.5 whitespace-nowrap ${cum.profit > 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
+                              {cum.profit > 0 ? '+' : '−'}{fmtAmount(Math.abs(cum.profit))}
                             </span>
                           )}
                         </td>
@@ -317,21 +332,22 @@ export default function HistoryPanel({
                       '07:30 이후 접속: 오늘 날짜로 새 기록이 생성됩니다.',
                       '전일 종가 확정 후 해당 기록은 고정(isFixed)되어 변경되지 않습니다.',
                     ] },
-                    { icon: '％', color: 'text-blue-300', title: '전일대비 · 손익 (일간 지표)', lines: [
-                      '윗줄 % — 수식: (당일 평가자산 + 당일 출금) ÷ (전일 평가자산 + 당일 입금) − 1',
-                      '입금·출금 금액은 수익에서 제외되므로, 입금 규모와 무관한 순수 수익률입니다.',
-                      '아랫줄 금액 — 그날 실제로 번 돈(일간 손익) = 평가액 변동 − 순입출금.',
-                      '입출금액은 두 값 모두에서 제외됩니다(입금해도 수익으로 잡히지 않음).',
-                      '셀에 마우스를 올리면 그날 제외된 입출금액을 확인할 수 있습니다.',
-                      "'-' 는 변동 없음이 아니라 '산출 보류'입니다(입출금이 아직 평가액에 반영 안 된 날).",
-                      '빨강 = 상승 · 파랑 = 하락 · 회색 = 변동 없음.',
-                    ] },
-                    { icon: '∑', color: 'text-emerald-300', title: '누적 (투자원금 대비)', lines: [
-                      '평가자산 아래 작은 글씨 — 수식: (평가자산 − 투자원금) ÷ 투자원금',
-                      '"지금까지 실제로 벌었는가"에 답하는 값입니다.',
-                      '전일대비(하루)와 역할이 다르므로 함께 봐야 합니다.',
+                    { icon: '∑', color: 'text-emerald-300', title: '누적 수익률 · 수익금 (투자원금 대비)', lines: [
+                      '윗줄 % — 수식: (평가자산 − 투자원금) ÷ 투자원금',
+                      '아랫줄 금액 — 누적 수익금 = 평가자산 − 투자원금.',
+                      '"지금까지 실제로 얼마를 벌었는가"에 답하는 값입니다.',
                       '투자 요약 패널의 수익률·수익률 차트(투자원금 기준)와 같은 기준입니다.',
                       '입금을 하면 원금이 함께 늘어나므로 %는 희석됩니다(입금 자체는 수익이 아님).',
+                      '빨강 = 이익 · 파랑 = 손실 · 회색 = 손익 없음(0.00%).',
+                      "'-' 는 손익 0이 아니라, 투자원금이나 그날 평가자산을 확정하지 못해 산출하지 못한 날입니다.",
+                    ] },
+                    { icon: '％', color: 'text-blue-300', title: '전일대비 (마우스 오버)', lines: [
+                      '셀에 마우스를 올리면 그날의 투자원금·평가자산과 전일대비 지표가 나옵니다.',
+                      '수식: (당일 평가자산 + 당일 출금) ÷ (전일 평가자산 + 당일 입금) − 1',
+                      '일간 손익 = 평가액 변동 − 순입출금 (입금해도 수익으로 잡히지 않음).',
+                      '하루 단위 값이라, 입금 기록일과 평가액 반영일이 하루만 어긋나도',
+                      '손익 부호가 뒤집혀 보일 수 있어 표 본문에서는 내렸습니다.',
+                      '입출금이 아직 평가액에 반영되지 않은 날은 툴팁에서 일간 지표를 보류합니다.',
                     ] },
                     { icon: '🎨', color: 'text-sky-300', title: '일자 색상', lines: [
                       '회색: 시스템이 자동 생성한 기록입니다.',
