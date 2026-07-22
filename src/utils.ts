@@ -311,8 +311,18 @@ export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow, bookDelta) =>
 // 장부액(원가 기준) = Σ(예수금 + 매입원가). 시세로는 변하지 않고 **외부 입출금으로만** 변한다.
 // ⚠️ 알려진 한계: 매도하면 예수금이 매입원가보다 실현손익만큼 더 늘어 bookDelta가 그만큼 움직인다.
 //    흡수 문턱이 흐름의 50%라 대부분 무해하지만, 흐름 대비 실현손익이 매우 크면 오판 여지가 남는다.
-export const bookCostOf = (items) => (items || []).reduce(
-  (s, it) => s + cleanNum(it?.type === 'deposit' ? it.depositAmount : it.investAmount), 0);
+// ⚠️ **주식(gold 포함) 항목의 `investAmount`는 0으로 초기화된 뒤 갱신되지 않는다**(usePortfolioState
+//    handleAddStock만 세팅, 편집 시 미유지 — 화면은 KrxGoldTable처럼 매입가×수량을 그때그때 계산한다).
+//    그래서 `investAmount`만 읽으면 주식 원가가 통째로 빠져, "입금 후 같은 날 매수"에서 bookDelta가
+//    0이 되어 정상 반영된 입금을 '미반영'으로 오판한다. 매입가×수량을 폴백으로 반드시 둘 것.
+//    (`investAmount`가 권위인 것은 fund·savings뿐 — 그쪽은 매입가×수량 개념이 없다.)
+//    `snapshotItemsFromPortfolio`가 purchasePrice·quantity를 보존하므로 과거 날짜도 산출된다.
+export const bookCostOf = (items) => (items || []).reduce((s, it) => {
+  if (!it) return s;
+  if (it.type === 'deposit') return s + cleanNum(it.depositAmount);
+  const stored = cleanNum(it.investAmount);
+  return s + (stored > 0 ? stored : cleanNum(it.purchasePrice) * cleanNum(it.quantity));
+}, 0);
 
 // 계좌의 날짜별 장부액 Map. ⚠️ `resolveHoldings`가 '추정'(스냅샷 없음·미검증 pre-baseline)인 날짜는
 // 구성이 불확실하므로 **넣지 않는다** — 소비자는 미제공을 만나면 기존 ΔV 휴리스틱으로 폴백한다.

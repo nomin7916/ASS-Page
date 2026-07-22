@@ -67,6 +67,7 @@ import {
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
   externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
+  buildBookCostSeries, bookDeltaBetween,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks
 } from './utils';
 
@@ -978,6 +979,18 @@ export default function App() {
     return buildCloseEvalSeries(activePortfolio, history.map(h => h?.date), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, edk);
   }, [activePortfolio, history, activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, krEffectiveDateKey, effectiveDateKey]);
 
+  // 활성 계좌의 날짜별 장부액(Σ 예수금+매입원가) — 일간 지표 보류 판정이 '원장 흐름이 그날 평가액에
+  // 반영됐는가'를 ΔV로 추측하지 않고 관측하게 하는 값.
+  // ⚠️ **활성 계좌의 `computeDailyMetricsSeries` 소비자 3곳이 이 하나의 Map을 공유해야 한다** —
+  //    `accountTwrByDate`(차트 조회시작 0% 라인)·`HistoryPanel`(추이표)·`handleDownloadCSV`.
+  //    한 곳만 빠지면 같은 날짜에 차트와 표가 다른 일간 수익률을 내고(표 −2.00% vs 차트 +0.01%),
+  //    TWR은 곱셈 체인이라 그 오차가 이후 전 구간에 영구 고정된다.
+  //    해외는 장부 USD ↔ 흐름 ₩ 단위 불일치로 미공급(null → 기존 ΔV 폴백).
+  const activeBookByDate = useMemo(() => {
+    if (['overseas', 'simple', 'matong'].includes(activePortfolioAccountType) || !activePortfolio) return null;
+    return buildBookCostSeries(activePortfolio, history.map(h => h?.date));
+  }, [activePortfolio, history, activePortfolioAccountType]);
+
   // 개별 계좌 누적 TWR — '조회시작 0%' 모드 라인의 소스. 입출금이 있어도 곡선이 왜곡되지 않는다.
   // ⚠️ 전체 이력에서 한 번 누적한다(조회구간으로 자르지 않는다). 구간 재베이스는 finalChartData가
   //    rebaseTwr로 처리 — 그래야 조회구간을 바꿔도 곡선 모양이 불변이고 흐름 이월 상태가 안 끊긴다.
@@ -996,10 +1009,15 @@ export default function App() {
       const ovEval = isOv ? overseasUsdEvalAt(portfolio, h.date, stockHistoryMap) : null;
       const cb = isOv ? null : activeCloseEvalByDate.get(h.date);
       const ev = ovEval != null ? ovEval : (cb != null ? cb : cleanNum(h.evalAmount));
-      return { date: h.date, evalAmount: ev, flowIn: flow.in, flowOut: flow.out };
+      // ⚠️ bookDelta를 빼지 말 것 — 추이표(HistoryPanel)와 같은 관측을 써야 같은 날짜에 두 화면이
+      //    같은 일간 수익률을 낸다. 곱셈 체인이라 하루의 불일치가 이후 전 구간에 영구 고정된다.
+      return {
+        date: h.date, evalAmount: ev, flowIn: flow.in, flowOut: flow.out,
+        bookDelta: prev ? bookDeltaBetween(activeBookByDate, prev.date, h.date) : null,
+      };
     });
     return computeCumulativeTwrSeries(rows);
-  }, [history, activePortfolioAccountType, portfolio, stockHistoryMap, activeCloseEvalByDate, depositHistory, depositHistory2]);
+  }, [history, activePortfolioAccountType, portfolio, stockHistoryMap, activeCloseEvalByDate, activeBookByDate, depositHistory, depositHistory2]);
 
   const finalChartData = useMemo(() => {
     const localSortedHist = [...history].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -1594,6 +1612,7 @@ export default function App() {
       ? (d) => (getClosestValue(indicatorHistoryMap?.usdkrw, d.date) || d.fxRate || marketIndicators.usdkrw || 1)
       : undefined,
     activeCloseEvalByDate,
+    activeBookByDate,
   ));
   const handleLookupDownloadCSV = () => downloadCSV(`ISA_지정일비교_${today}.csv`, buildLookupCSV(lookupRows, history, comparisonMode, totals.totalEval));
   const handleDepositDownloadCSV = () => downloadCSV(`입금내역_${today}.csv`, buildDepositCSV(depositWithSum));
@@ -2586,6 +2605,7 @@ export default function App() {
             depositHistory={depositHistory}
             depositHistory2={depositHistory2}
             portfolioStartDate={portfolioStartDate}
+            activeBookByDate={activeBookByDate}
             refetchStockHistory={refetchStockHistory}
           />
 

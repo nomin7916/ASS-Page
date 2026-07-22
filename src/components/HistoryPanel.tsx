@@ -28,6 +28,7 @@ export default function HistoryPanel({
   depositHistory,
   depositHistory2,
   portfolioStartDate,
+  activeBookByDate,
   refetchStockHistory,
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
@@ -124,11 +125,13 @@ export default function HistoryPanel({
       return ov ? ov.krw : (displayEvalByDate?.get(h.date) ?? h.evalAmount);
     };
     // 장부액(Σ 예수금+매입원가) 시계열 — 보류 판정이 '흐름이 V에 반영됐는가'를 ΔV로 추측하지 않고
-    // 관측하게 해준다. ⚠️ 해외계좌는 장부가 USD인데 흐름 rows는 ₩ 환산이라 단위가 어긋나므로 제외
+    // 관측하게 해준다. ⚠️ **App.tsx의 activeBookByDate와 같은 Map을 써야** 차트(누적 TWR)·CSV와
+    //    같은 날짜에 같은 판정이 나온다(prop 미전달 시에만 자체 계산 폴백).
+    //    해외계좌는 장부가 USD인데 흐름 rows는 ₩ 환산이라 단위가 어긋나므로 제외
     //    (미제공 → 기존 ΔV 휴리스틱 폴백, 동작 불변).
-    const bookByDate = !isOverseasAcc && activePortfolio
-      ? buildBookCostSeries(activePortfolio, asc.map(h => h?.date))
-      : null;
+    const bookByDate = isOverseasAcc
+      ? null
+      : (activeBookByDate || (activePortfolio ? buildBookCostSeries(activePortfolio, asc.map(h => h?.date)) : null));
     const rows = asc.map((h, i) => {
       const prev = asc[i - 1];
       const flow = prev
@@ -140,7 +143,7 @@ export default function HistoryPanel({
       };
     });
     return computeDailyMetricsSeries(rows);
-  }, [sortedHistoryDesc, activePortfolioAccountType, activePortfolio, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
+  }, [sortedHistoryDesc, activePortfolioAccountType, activePortfolio, activeBookByDate, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
 
   // 누적(원금대비) 수익률·수익금 — "시작부터 통틀어 벌었나"에 답하는 값. 평가자산 셀 하단 2줄에 병기한다.
   // 3열의 일간 지표("오늘 장에서 벌었나")와 역할이 다르므로 같은 셀에 섞지 않는다.
