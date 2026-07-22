@@ -895,11 +895,6 @@ export default function IntegratedDashboard({
                             {h.dodAbsChange == null
                               ? <span className="text-gray-600">-</span>
                               : <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>}
-                            {h.netFlow !== 0 && (
-                              <span className={`block text-[9px] font-bold leading-none mt-0.5 whitespace-nowrap ${h.netFlow > 0 ? 'text-emerald-400' : 'text-orange-400'}`}>
-                                {hideAmounts ? '••••' : `${h.netFlow > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(h.netFlow))}`}
-                              </span>
-                            )}
                           </td>
                           <td className="py-2 px-2 text-center border-r border-gray-700 whitespace-nowrap">
                             {hideAmounts ? (
