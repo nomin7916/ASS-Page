@@ -387,6 +387,25 @@ export const computeEffectivePrincipal = (date, history, depositHistory, deposit
   return { value: cleanNum(anchor.principal) + (cumAtDate - cumAtAnchor), anchor };
 };
 
+// 기록(history record)이 있는 날짜의 투자원금.
+// ⚠️ 개별 계좌 차트의 '나의 수익률'(App.tsx finalChartData)과 '자산 평가액 추이' 표의 누적(원금대비)
+//    컬럼이 **반드시 이 함수를 공유**해야 한다. 한쪽만 자체 계산으로 되돌리면 같은 날짜에 두 화면이
+//    서로 다른 누적 수익률을 표시한다(일간 지표의 computeDailyMetricsSeries 단일 소스 규약과 동일한 이유).
+//   우선순위: 수동 anchor 전파값 > 그 기록의 principal > 직전 기록의 principal > 계좌 principal 필드
+//   effectiveValue: 호출부가 이미 구한 computeEffectivePrincipal(...).value —
+//   날짜 루프 안에서 재계산하지 않도록 값으로 받는다(O(n²) 중복 방지).
+export const resolveRecordPrincipal = (effectiveValue, record, date, sortedHistAsc, principalProp) => {
+  if (effectiveValue != null) return effectiveValue;
+  const stored = cleanNum(record?.principal);
+  if (stored > 0) return stored;
+  const list = sortedHistAsc || [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const h = list[i];
+    if (h && h.date < date && cleanNum(h.principal) > 0) return cleanNum(h.principal);
+  }
+  return cleanNum(principalProp);
+};
+
 export const formatCurrency = (n) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(cleanNum(n));
 export const formatPercent = (n) => cleanNum(n).toFixed(2) + '%';
 export const formatNumber = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR').format(cleanNum(n));

@@ -114,7 +114,9 @@ export function MainChartCustomTooltip({ active, payload, label, selectionResult
             periodRate = selectionResult[periodKey];
           } else if (name === '나의 수익률' && selectionResult.principalReturnRateAtEnd != null) {
             periodRate = selectionResult.principalReturnRateAtEnd;
-          } else if (name === '수익률' && selectionResult.rate != null) {
+          } else if ((name === '수익률' || name === '평가액 증감') && selectionResult.rate != null) {
+            // '평가액 증감' = 조회시작 0% 모드의 라인명(PortfolioChart myReturnLabel). 그 모드의 구간값은
+            // 원금대비(principalReturnRateAtEnd)가 아니라 평가액 비율(rate)이라야 라인·정보패널과 일치한다.
             periodRate = selectionResult.rate;
           } else if (dk?.match(/^comp(\d+)Rate$/)) {
             const compRateMatch2 = dk.match(/^comp(\d+)Rate$/);

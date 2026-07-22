@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
-import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates } from '../utils';
+import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates, externalFlowInRange } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
@@ -95,6 +95,12 @@ export default function PortfolioChart({
   const fmtMoney = (v) => isOverseas
     ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
     : formatCurrency(v);
+
+  // 조회시작 0% 모드의 라인은 '수익률'이 아니라 평가액 증감률이다 — 구간 중 입금액이 그대로 분자에
+  // 들어간다(예: 12.5M → 108.2M이 +761%로 표시되지만 그중 99M이 입금이라 실손익은 −3.5M).
+  // ⚠️ 범례·툴팁·정보패널이 반드시 같은 라벨을 써야 한다. chartUtils의 [구간: x%] 태그 매칭도
+  //    이 문자열을 보므로, 여기를 바꾸면 chartUtils의 name 비교도 같이 바꿀 것.
+  const myReturnLabel = isZeroBaseMode ? '평가액 증감' : '나의 수익률';
 
   const fmtMarkerAmt = (amt) => {
     const a = Math.abs(amt);
@@ -250,7 +256,9 @@ export default function PortfolioChart({
             <button
               onClick={() => setShowReturnRate(!showReturnRate)}
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
-              title="나의 수익률(%) 표시 — 투자원금 기준"
+              title={isZeroBaseMode
+                ? '평가액 증감(%) 표시 — 조회시작 0% 모드에서는 입금액이 포함되므로 수익률이 아닙니다. 시계 아이콘(조회시작 0%)을 끄면 투자원금 기준 수익률로 바뀝니다.'
+                : '나의 수익률(%) 표시 — 투자원금 기준'}
             ><Percent size={14} /></button>
             <div
               className="flex items-stretch rounded border overflow-hidden transition-colors"
@@ -478,6 +486,15 @@ export default function PortfolioChart({
         const myReturnRate = displayResult
           ? (isZeroBaseMode ? (displayResult.rate ?? null) : (displayResult.principalReturnRateAtEnd ?? null))
           : null;
+        // (시작일, 종료일] 반개구간 — 시작일 평가액엔 그 이전 흐름이 이미 반영돼 있다.
+        // 해외계좌는 차트 평가액이 USD이므로 원장 금액(USD)을 환산 없이 그대로 쓴다(App.tsx 해외 원금 계산과 동일).
+        const periodFlow = displayResult
+          ? externalFlowInRange(depositHistory, depositHistory2, displayResult.startDate, displayResult.endDate)
+          : null;
+        const periodNetFlow = periodFlow ? periodFlow.in - periodFlow.out : 0;
+        const periodRealProfit = (displayResult && displayResult.startEval != null && displayResult.endEval != null)
+          ? displayResult.endEval - displayResult.startEval - periodNetFlow
+          : null;
         return (
           <div className="px-4 py-2 border-t border-gray-700/40 bg-[#060f1e]/70 min-h-[36px] shrink-0">
             {displayResult ? (
@@ -523,7 +540,7 @@ export default function PortfolioChart({
                       <div className="py-2 border-t border-gray-700/30 first:border-t-0 first:pt-0">
                         <div className="flex items-center gap-1.5 mb-1">
                           <div className="w-2 h-2 rounded-sm shrink-0 bg-red-500" />
-                          <span className="text-[11px] font-bold text-red-400">나의 수익률</span>
+                          <span className="text-[11px] font-bold text-red-400">{myReturnLabel}</span>
                           <span className={`text-[11px] font-black ${rateCls(myReturnRate)}`}>{fmtRate(myReturnRate)}</span>
                         </div>
                         {myReturnRate != null ? (
@@ -561,7 +578,7 @@ export default function PortfolioChart({
                             </div>
                             <div className="mt-1.5 ml-3.5 p-1.5 rounded bg-gray-800/40 border border-gray-700/40 text-[9.5px] text-gray-400 leading-relaxed">
                               {isZeroBaseMode
-                                ? <>ℹ️ <b>조회 시작일 0% 모드</b>: 조회 시작일 평가금 대비 수익률을 표시합니다. 투자 원금과 무관하게 해당 기간 동안의 변동률만 비교할 수 있습니다.</>
+                                ? <>⚠️ <b>조회 시작일 0% 모드 — 이 값은 수익률이 아니라 <span className="text-amber-400">평가액 증감률</span>입니다.</b> 구간 중 입금한 돈이 그대로 분자에 들어가므로, 입금이 있으면 실제 손익과 크게 달라집니다(입금액만큼 부풀려짐). 진짜 수익률은 <b>% 아이콘을 켠 상태에서 이 모드를 끄면</b> 투자원금 기준으로 표시됩니다.</>
                                 : <>ℹ️ 기준은 <b>내 투자원금</b>입니다(조회 시작일 0% 아님). 평가자산이 투자원금보다 낮으면 <span className="text-blue-400 font-bold">−수익률</span>, 높으면 <span className="text-red-400 font-bold">+수익률</span>로 표시됩니다.</>
                               }
                             </div>
@@ -602,7 +619,7 @@ export default function PortfolioChart({
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
                   <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
-                    <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">나의 수익률</span>
+                    <span className="text-[11px] font-bold text-gray-300 whitespace-nowrap">{myReturnLabel}</span>
                     {myReturnRate != null ? (() => {
                       const prin = displayResult.principalAtEnd;
                       const evl = displayResult.endEval;
@@ -632,6 +649,18 @@ export default function PortfolioChart({
                                 (원금 {fmtMoney(prin)} → 평가 {fmtMoney(evl)})
                               </span>
                             )
+                          )}
+                          {/* 조회시작 0% 모드는 분자에 입금액이 그대로 들어가므로, 흐름이 있으면
+                              순입출금과 실손익(= 평가액 변동 − 순입출금)을 반드시 함께 보여준다. */}
+                          {isZeroBaseMode && periodNetFlow !== 0 && periodRealProfit != null && (
+                            <span className="text-[10px] font-bold whitespace-nowrap text-amber-400">
+                              ⚠ 순{periodNetFlow > 0 ? '입금' : '출금'} {fmtMoney(Math.abs(periodNetFlow))} 포함
+                              <span className="mx-1 text-gray-600">·</span>
+                              <span className="text-gray-400 font-normal">실손익</span>{' '}
+                              <span className={periodRealProfit >= 0 ? 'text-red-400' : 'text-blue-400'}>
+                                {periodRealProfit >= 0 ? '+' : '−'}{fmtMoney(Math.abs(periodRealProfit))}
+                              </span>
+                            </span>
                           )}
                         </>
                       );
@@ -829,7 +858,7 @@ export default function PortfolioChart({
             ))}
             {showTotalEval && <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총자산" fill="rgba(156, 163, 175, 0.1)" stroke="#9ca3af" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />}
             {showPrincipal && <Line yAxisId="right" type="monotone" dataKey="principalAmount" name="투자원금" stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="5 3" connectNulls />}
-            {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="principalReturnRate" name="나의 수익률" fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} connectNulls />}
+            {showReturnRate && <Area yAxisId="left" type="monotone" dataKey="principalReturnRate" name={myReturnLabel} fill="rgba(239, 68, 68, 0.1)" stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 5 }} connectNulls />}
             {userFeatures.feature1 && showKospi && <Line yAxisId="left" type="monotone" dataKey="kospiRate" name="KOSPI" stroke="#38bdf8" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {userFeatures.feature1 && showSp500 && <Line yAxisId="left" type="monotone" dataKey="sp500Rate" name="S&P500" stroke="#bf5af2" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}
             {userFeatures.feature1 && showNasdaq && <Line yAxisId="left" type="monotone" dataKey="nasdaqRate" name="NASDAQ" stroke="#30d158" strokeWidth={1.5} dot={false} strokeDasharray="3 3" filter="url(#neonGlow)" />}

@@ -65,7 +65,7 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
+  computeEffectivePrincipal, resolveRecordPrincipal, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks
 } from './utils';
 
@@ -1049,9 +1049,7 @@ export default function App() {
           const evalForDate = cb != null ? cb : exactHist.evalAmount;
           trueEvalAtDate = evalForDate;
           hasReliableEval = true;
-          const storedPrin = cleanNum(exactHist.principal);
-          const fallbackPrin = storedPrin > 0 ? storedPrin : (cleanNum(findNearestPrincipal(date)) || cleanNum(principal));
-          const histPrin = effective.value != null ? effective.value : fallbackPrin;
+          const histPrin = resolveRecordPrincipal(effective.value, exactHist, date, localSortedHist, principal);
           retRate = histPrin > 0 ? ((evalForDate - histPrin) / histPrin * 100) : 0;
         } else {
           let hasTrueData = false;
