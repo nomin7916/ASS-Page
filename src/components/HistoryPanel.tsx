@@ -231,9 +231,13 @@ export default function HistoryPanel({
                     const dodTitle = dodProfit != null
                       ? [
                           `일간 손익 ${formatCurrency(dodProfit)}`,
-                          flowNet !== 0
-                            ? `${flowNet > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(flowNet))}은 수익이 아니라 시작 자산에 반영됨`
-                            : '입출금이 없던 날 — (당일 − 전일) ÷ 전일 과 동일',
+                          // ⚠️ 입금과 출금은 반영 위치가 다르다 — 입금은 분모(시작 자산),
+                          //    출금은 분자(당일 평가자산에 되더함). 한 문장으로 뭉뚱그리면 출금 설명이 틀린다.
+                          flowNet > 0
+                            ? `입금 ${formatCurrency(flowNet)}은 수익이 아니라 그날의 시작 자산에 더해짐`
+                            : flowNet < 0
+                              ? `출금 ${formatCurrency(-flowNet)}은 수익이 아니라 당일 평가자산에 되더해 계산됨`
+                              : '입출금이 없던 날 — (당일 − 전일) ÷ 전일 과 동일',
                         ].join('\n')
                       : (hasPrev ? '입출금 기록과 평가 스냅샷이 어긋나 산출을 보류했습니다(다음 기록일에 합산).' : '');
                     const isToday = h.date === effectiveDateKey;
