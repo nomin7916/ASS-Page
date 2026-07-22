@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, externalFlowInRange, computeDailyMetricsSeries, getClosestValue } from '../utils';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
@@ -105,6 +105,31 @@ export default function HistoryPanel({
     return buildCloseEvalSeries(activePortfolio, sortedHistoryDesc.map(h => h?.date), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey);
   }, [useCloseRecompute, activePortfolio, sortedHistoryDesc, activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey]);
 
+  // 일간 지표(전일대비·일간 손익) — 통합 대시보드·CSV와 **같은 공용 함수**를 써야 화면이 어긋나지 않는다.
+  // ⚠️ 행마다 독립 계산으로 되돌리지 말 것: 보류된 행(주말 원장 등)의 흐름을 다음 행으로 이월해야
+  //    '입금액=수익' 버그가 하루 밀려 재발하지 않는다(computeDailyMetricsSeries가 그 역할).
+  const dailyMetricsByDate = useMemo(() => {
+    const asc = [...sortedHistoryDesc].reverse();
+    const isOverseasAcc = activePortfolioAccountType === 'overseas';
+    // 흐름 환산도 평가액과 같은 소스(날짜별 환율)를 쓴다 — 원장의 d.fxRate는 '행 생성 시점' 환율로
+    // 박제되므로 소급 입력 시 V(날짜별 환율 재계산)와 어긋나 그날 가짜 손익이 남는다.
+    const flowRate = isOverseasAcc
+      ? (d) => (getClosestValue(indicatorHistoryMap?.usdkrw, d.date) || d.fxRate || marketIndicators.usdkrw || 1)
+      : undefined;
+    const evalOf = (h) => {
+      const ov = isOverseasAcc && overseasEvalByDate ? overseasEvalByDate.get(h.date) : null;
+      return ov ? ov.krw : (displayEvalByDate?.get(h.date) ?? h.evalAmount);
+    };
+    const rows = asc.map((h, i) => {
+      const prev = asc[i - 1];
+      const flow = prev
+        ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, flowRate)
+        : { in: 0, out: 0 };
+      return { date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out };
+    });
+    return computeDailyMetricsSeries(rows);
+  }, [sortedHistoryDesc, activePortfolioAccountType, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, indicatorHistoryMap, marketIndicators.usdkrw]);
+
   return (
         <>
           <div className={`w-full xl:w-[21%] bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${activePortfolioAccountType === 'overseas' ? 'h-[520px]' : 'h-[360px]'} flex flex-col overflow-hidden shrink-0`}>
@@ -131,18 +156,22 @@ export default function HistoryPanel({
                   <tr>
                     <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal">일자</th>
                     <th className="py-1.5 px-1.5 text-center border-r border-gray-600 font-normal">평가자산</th>
-                    <th className="py-1.5 px-1 text-center font-normal cursor-help" title="수식: (당일/전일)-1">전일대비</th>
+                    <th className="py-1.5 px-1 text-center font-normal cursor-help" title="수식: (당일 평가자산 + 당일 출금) ÷ (전일 평가자산 + 당일 입금) − 1
+입출금 영향을 제거한 순수 일간 수익률입니다.">전일대비</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedHistoryDesc.map((h, i) => {
-                    const prevEntry = sortedHistoryDesc[sortedHistoryDesc.indexOf(h) + 1];
                     const isOverseasAcc = activePortfolioAccountType === 'overseas';
                     const ov = isOverseasAcc && overseasEvalByDate ? overseasEvalByDate.get(h.date) : null;
-                    const prevOv = isOverseasAcc && overseasEvalByDate && prevEntry ? overseasEvalByDate.get(prevEntry.date) : null;
                     const curKrw = ov ? ov.krw : (displayEvalByDate?.get(h.date) ?? h.evalAmount);
-                    const prevKrw = prevEntry ? (prevOv ? prevOv.krw : (displayEvalByDate?.get(prevEntry.date) ?? prevEntry.evalAmount)) : 0;
-                    const dod = prevKrw > 0 ? ((curKrw / prevKrw) - 1) * 100 : 0;
+                    // ⚠️ 여기서 전일대비를 다시 계산하지 말 것 — dailyMetricsByDate(공용 함수)가 단일
+                    //    소스다. 행별 재계산으로 되돌리면 보류 행의 흐름 이월이 깨져 통합 뷰와 갈라진다.
+                    const m = dailyMetricsByDate.get(h.date) || { dodChange: 0, dodAbsChange: null, ledgerFlow: 0 };
+                    const dod = m.dodChange;
+                    const dodProfit = m.dodAbsChange;
+                    const flowNet = m.ledgerFlow || 0;
+                    const hasPrev = i < sortedHistoryDesc.length - 1;
                     const isToday = h.date === effectiveDateKey;
                     const isUserModified = h.isAdjusted || userModifiedDates.has(h.date);
 
@@ -171,7 +200,19 @@ export default function HistoryPanel({
                           </div>
                           {h.isAdjusted && <span className="block text-[9px] font-normal leading-none mt-0.5 text-blue-400">조정됨</span>}
                         </td>
-                        <td className="py-1.5 px-1 text-center font-bold"><span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span></td>
+                        <td className="py-1.5 px-1 text-center font-bold" title={dodProfit != null
+                          ? `일간 손익 ${formatCurrency(dodProfit)}${flowNet !== 0 ? ` (${flowNet > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(flowNet))} 제외)` : ''}`
+                          : (hasPrev ? '입출금 기록과 평가 스냅샷이 어긋나 일간 지표를 보류했습니다.' : '')}>
+                          {/* 보류는 '변동 없음(0.00%)'이 아니라 '산출 불가' — 통합 추이표와 같은 규약 */}
+                          {dodProfit == null
+                            ? <span className="text-gray-600">-</span>
+                            : <span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span>}
+                          {flowNet !== 0 && (
+                            <span className={`block text-[8px] font-bold leading-none mt-0.5 whitespace-nowrap ${flowNet > 0 ? 'text-emerald-400' : 'text-orange-400'}`}>
+                              {flowNet > 0 ? '입금' : '출금'} {formatCurrency(Math.abs(flowNet))}
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -230,8 +271,11 @@ export default function HistoryPanel({
                       '07:30 이후 접속: 오늘 날짜로 새 기록이 생성됩니다.',
                       '전일 종가 확정 후 해당 기록은 고정(isFixed)되어 변경되지 않습니다.',
                     ] },
-                    { icon: '％', color: 'text-blue-300', title: '전일대비', lines: [
-                      '수식: (당일 평가자산 ÷ 전일 평가자산) − 1',
+                    { icon: '％', color: 'text-blue-300', title: '전일대비 (입출금 보정)', lines: [
+                      '수식: (당일 평가자산 + 당일 출금) ÷ (전일 평가자산 + 당일 입금) − 1',
+                      '입금·출금 금액은 수익에서 제외되므로, 입금 규모와 무관한 순수 수익률입니다.',
+                      '입출금이 있던 날은 % 아래에 그 금액이 초록(입금)·주황(출금)으로 표시됩니다.',
+                      '셀에 마우스를 올리면 그날 실제로 번 금액(일간 손익)을 볼 수 있습니다.',
                       '빨강 = 상승 · 파랑 = 하락 · 회색 = 변동 없음.',
                     ] },
                     { icon: '🎨', color: 'text-sky-300', title: '일자 색상', lines: [

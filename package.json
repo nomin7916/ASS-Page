@@ -11,7 +11,8 @@
     "verify:tax": "node scripts/verify-kretf-tax.mjs",
     "verify:dividend": "node scripts/verify-dividend-slots.mjs",
     "verify:history": "node scripts/verify-history-dedup.mjs",
-    "verify:notice": "node scripts/verify-notice.mjs"
+    "verify:notice": "node scripts/verify-notice.mjs",
+    "verify:twr": "node scripts/verify-twr.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

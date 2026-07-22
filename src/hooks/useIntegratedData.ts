@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, computeDailyMetricsSeries } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -227,6 +227,7 @@ export function useIntegratedData({
     //   dateToTotal(prevDate)는 삭제 계좌를 포함(prevDate<cutoff)하므로, 지배적 계좌(비중>90%)를 삭제하면
     //   'intTotals << prevValue'가 되어 정상 감소를 가격 미로드 이상치로 오판(today를 옛 총액으로 되돌려
     //   삭제 계좌가 오늘에 되살아남). → prevDate에서 삭제 계좌가 기여했던 몫을 빼 라이브 멤버십으로 맞춘다.
+    let todayAnomaly = false;
     if (intTotals.totalEval > 0) {
       const prevDates = sortedDates.filter(d => d < today);
       const prevDate = prevDates.length > 0 ? prevDates[prevDates.length - 1] : '';
@@ -242,8 +243,121 @@ export function useIntegratedData({
         if (prevValue < 0) prevValue = 0;
       }
       const isAnomaly = prevValue > 0 && intTotals.totalEval < prevValue * 0.1;
+      todayAnomaly = isAnomaly;
       dateToTotal.set(today, isAnomaly ? prevValue : intTotals.totalEval);
     }
+
+    // ── 일간 수익률용 순 외부현금흐름(IN/OUT) ────────────────────────────────────────
+    // ⚠️ effectivePrincipal(:270~)의 일별 차분을 흐름으로 쓰면 안 된다. 그 값은 '원가 표시용'이라
+    //    Math.max(0,...) 클램프·startDate 게이트·noPrincipal 미필터가 섞여 있어, 차분을 흐름으로
+    //    삼으면 (a) 출금 1건이 몇 달 전 일간 수익률을 소급 변경하고 (b) 계좌 삭제일에 누적
+    //    미실현손익이 통째로 하루 수익이 되어 부호까지 뒤집힌다. 반드시 아래 3원 소스를 쓸 것.
+    //    ① 시장 계좌 입출금 원장 ② 현금성 계좌 잔액 변동 ③ 계좌 편입/이탈 경계
+    const flowInMap = new Map();
+    const flowOutMap = new Map();
+    // 배지 표시용은 별도 집계 — ③ 계좌 편입/이탈은 사용자가 한 적 없는 자금 이동이라
+    // '입금 ₩N' 배지로 찍히면 오해를 부른다. 수학에는 포함하되 배지에서는 제외한다.
+    const ledgerNetMap = new Map();
+    const addIn = (d, v) => { if (d && v > 0) flowInMap.set(d, (flowInMap.get(d) || 0) + v); };
+    const addOut = (d, v) => { if (d && v > 0) flowOutMap.set(d, (flowOutMap.get(d) || 0) + v); };
+    const addLedger = (d, v) => { if (d && v) ledgerNetMap.set(d, (ledgerNetMap.get(d) || 0) + v); };
+
+    // ③ 계좌 편입/이탈 — 원장에 없는 흐름. '원금'이 아니라 평가액 전액이라야 ΔV와 정확히 상쇄된다.
+    //    편입일(d0) 이하의 원장은 추적 시작 전 거래이므로 ①에서 제외한다(이중계상 방지).
+    const firstSeenById = new Map();
+    accountSeries.forEach(({ id, dates, map, deletedAt }) => {
+      const cutoff = cutoffOf(deletedAt);
+      const d0 = dates[0];
+      if (!d0 || (cutoff && d0 >= cutoff)) return;
+      firstSeenById.set(id, d0);
+      addIn(d0, map.get(d0) || 0);
+      if (!cutoff) return;
+      let i = 0, lastVal = 0;
+      for (const d of sortedDates) {
+        if (d >= cutoff) { addOut(d, lastVal); break; }
+        while (i < dates.length && dates[i] <= d) { lastVal = map.get(dates[i]); i++; }
+      }
+    });
+
+    // ① 시장 계좌 입출금 원장 (현금성 계좌는 원장 편집 UI가 존재하지 않아 ②에서 처리)
+    portfolios
+      .filter(p => !p.isTest && p.accountType !== 'matong' && p.accountType !== 'simple')
+      .forEach(p => {
+        // 평가 시계열에 한 번도 등장하지 않는 계좌(기록 0건 / 첫 기록 전에 삭제)는 V에 기여하지
+        // 않으므로 그 원장을 흐름으로 잡으면 ΔV가 없는 유령 손익이 된다 → 통째로 제외.
+        if (!firstSeenById.has(p.id)) return;
+        const isActive = p.id === activePortfolioId;
+        const isOverseas = p.accountType === 'overseas';
+        const cutoff = cutoffOf(p.deletedAt || '');
+        const since = firstSeenById.get(p.id) || '';
+        // 해외 흐름 환산은 V와 같은 소스(날짜별 환율)를 써야 한다 — 원장의 d.fxRate는 '행 생성
+        // 시점' 환율로 박제되므로(DepositPanel), 소급 입력 시 V(날짜별 환율 재계산)와 어긋나
+        // 입금일에 환율차만큼 가짜 손익이 남는다. 날짜별 값이 없을 때만 d.fxRate로 폴백.
+        const rateOf = (d) => isOverseas
+          ? (getClosestValue(indicatorHistoryMap?.usdkrw, d.date) || d.fxRate || marketIndicators.usdkrw || 1)
+          : 1;
+        const deps = isActive ? depositHistory : (p.depositHistory || []);
+        const wds = isActive ? depositHistory2 : (p.depositHistory2 || []);
+        // ⚠️ Math.abs 금지 — 음수 '정정 행'(DepositPanel이 빨간 글씨로 지원)은 유입의 반대다.
+        //    abs를 씌우면 정정 쌍이 상쇄되지 않고 이중 계상되어 오차가 원장 금액의 2배가 된다.
+        deps.forEach(d => {
+          // noPrincipal(배당·이자)은 계좌 안에서 발생한 수익 → 외부 유입이 아니다
+          if (!d || !d.date || d.noPrincipal) return;
+          if (since && d.date <= since) return;
+          if (cutoff && d.date >= cutoff) return;
+          const v = (cleanNum(d.amount) || 0) * rateOf(d);
+          if (v > 0) addIn(d.date, v); else if (v < 0) addOut(d.date, -v);
+          addLedger(d.date, v);
+        });
+        wds.forEach(w => {
+          // 출금은 noPrincipal이어도 현금이 실제로 빠져나간다 → 전액 반영(입금과 비대칭이 정상)
+          if (!w || !w.date) return;
+          if (since && w.date <= since) return;
+          if (cutoff && w.date >= cutoff) return;
+          const v = (cleanNum(w.amount) || 0) * rateOf(w);
+          if (v > 0) addOut(w.date, v); else if (v < 0) addIn(w.date, -v);
+          addLedger(w.date, -v);
+        });
+      });
+
+    // ①-b 평가 시계열이 없는 시장 계좌(기록 0건인 신규 계좌)는 dateToTotal에는 없지만
+    //     today 행이 intTotals.totalEval로 덮어써지므로(:247) 오늘 V에는 100% 포함된다.
+    //     → 그 평가액 전액이 '오늘 수익'으로 찍히는 것을 막기 위해 today 편입 흐름으로 계상한다.
+    portfolioSummaries.forEach(s => {
+      if (s.isTest || s.deletedAt) return;
+      if (s.accountType === 'matong' || s.accountType === 'simple') return;
+      if (firstSeenById.has(s.id)) return;
+      addIn(today, cleanNum(s.currentEval) || 0);
+    });
+
+    // ② 현금성 계좌(마통·직접입력) 잔액 변동 = 외부 흐름.
+    //    ΔV와 같은 값이 흐름으로 잡혀 r=0 → CLAUDE.md '현금성 계좌 수익 0' 불변식 유지.
+    let prevCash = 0;
+    for (const d of sortedDates) {
+      const v = cashByDate.get(d) || 0;
+      const delta = v - prevCash;
+      if (delta > 0) addIn(d, delta); else if (delta < 0) addOut(d, -delta);
+      // 현금성 잔액 편집도 사용자가 한 실제 자금 이동이므로 배지에 표시한다
+      addLedger(d, delta);
+      prevCash = v;
+    }
+
+    // 기록이 없는 날(주말 등)에 찍힌 원장 흐름은 다음 기록일 행으로 이월 — 흐름 유실 방지
+    const flowAtRow = new Map();
+    {
+      const allFlowDates = [...new Set([...flowInMap.keys(), ...flowOutMap.keys(), ...ledgerNetMap.keys(), ...sortedDates])].sort();
+      let carryIn = 0, carryOut = 0, carryLedger = 0;
+      for (const d of allFlowDates) {
+        carryIn += flowInMap.get(d) || 0;
+        carryOut += flowOutMap.get(d) || 0;
+        carryLedger += ledgerNetMap.get(d) || 0;
+        if (dateToTotal.has(d)) {
+          flowAtRow.set(d, { in: carryIn, out: carryOut, ledger: carryLedger });
+          carryIn = 0; carryOut = 0; carryLedger = 0;
+        }
+      }
+    }
+
     // 시장 계좌만 원금 보정식 적용(현금성 계좌는 아래에서 날짜별 잔액 합산 → 수익 0 유지)
     const portfolioPrincipalData = portfolios
       .filter(p => !p.isTest && p.accountType !== 'matong' && p.accountType !== 'simple')
@@ -273,10 +387,19 @@ export function useIntegratedData({
         }, 0);
         // 현금성 계좌: 원금=평가(날짜별 잔액) → 평가와 동일 합산 → 수익 0 유지
         effectivePrincipal += cashByDate.get(date) || 0;
-        return { id: date, date, evalAmount, effectivePrincipal };
+        const f = flowAtRow.get(date);
+        return {
+          id: date, date, evalAmount, effectivePrincipal,
+          netFlowIn: f ? f.in : 0,
+          netFlowOut: f ? f.out : 0,
+          ledgerFlow: f ? f.ledger : 0,
+          // 오늘 라이브 평가액이 이상치로 판정돼 전일값으로 대체된 날은 ΔV가 0인데 흐름만 남아
+          // 가짜 대손실이 난다 → 일간 지표를 보류(미산출)한다
+          flowSuspect: date === today && todayAnomaly,
+        };
       })
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [portfolios, marketSeries, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw, effectiveDateKey, portfolio, stockHistoryMap, indicatorHistoryMap]);
+  }, [portfolios, marketSeries, history, activePortfolioId, depositHistory, depositHistory2, intTotals.totalEval, portfolioStartDate, principal, avgExchangeRate, marketIndicators.usdkrw, effectiveDateKey, portfolio, stockHistoryMap, indicatorHistoryMap, portfolioSummaries]);
 
   // 계좌별 시계열(id → {dates, map})을 추이 팝업(histDetailRows)이 재사용 → 팝업 소계 = 차트 그날 값
   // (개별 계좌 추이와도 동일 소스). 저장된 라이브 값이 아니라 '수량 × 종가'로 일별 자산을 추적.
@@ -348,16 +471,31 @@ export function useIntegratedData({
     });
   }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode, compStocks, stockHistoryMap]);
 
+  // 일간 지표는 순 외부현금흐름을 제거한 뒤 산출한다 — ₩49,118,578이 입금된 날 옛 식은 +9.10%를
+  // 보였지만 실제 시장 수익은 ₩11,312,160(+1.59%)이다.
+  //  · 일간 손익(₩) = ΔV − (IN − OUT)  ← 입출금 규모와 완전히 무관한 값. 표의 주인공.
+  //  · 일간 수익률(%) = (V + OUT) / (V₋ + IN) − 1
+  //    유입은 기초(BOD)·유출은 기말(EOD) 가중. 분모를 V₋로만 두면 소액 계좌에 대형 입금이 들어올 때
+  //    +50% 같은 폭발이 나고(지금 고치는 버그의 재발), 유출까지 분모에 넣으면 전액 출금일에 분모가
+  //    0이 되어 그날 실수익이 소실된다. 이 비대칭이 두 붕괴를 동시에 피한다.
+  //    ⚠️ 관리자 포털(AdminPortal recomputePortfolioEval)이 구조적으로 같은 규약이라 자동 정합된다.
   const intMonthlyHistory = useMemo(() => {
-    const sortedDesc = [...computedIntHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
-    return sortedDesc.map((h, i) => {
+    // ⚠️ 오름차순 1패스로 '보류된 행의 미소진 흐름 이월'을 반드시 수행할 것.
+    //    flowAtRow는 '행 존재'만 보고 캐리를 리셋하는데, 주말·휴장 행은 buildCloseEvalSeries가
+    //    직전 정확값을 이월하므로 그날 ΔV가 흐름을 흡수하지 못한다(fillNonTradingGaps·
+    //    useHistoryBackfill 치유로 주말 행은 항상 존재). 이월하지 않으면 보류 행에서 IN이
+    //    소각되고 다음 기록일 ΔV에 입금액이 그대로 남아 '입금액=수익' 버그가 하루 밀려 재발한다.
+    const asc = [...computedIntHistory].sort((a, b) => a.date.localeCompare(b.date));
+    const metrics = computeDailyMetricsSeries(asc.map(h => ({
+      date: h.date, evalAmount: h.evalAmount,
+      flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0,
+      ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect,
+    })));
+    return [...asc].reverse().map(h => {
       const ep = h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal;
       const monthlyChange = ep > 0 ? ((h.evalAmount - ep) / ep) * 100 : 0;
-      const prevRecord = sortedDesc[i + 1];
-      const dodChange = (prevRecord && prevRecord.evalAmount > 0)
-        ? ((h.evalAmount / prevRecord.evalAmount) - 1) * 100 : 0;
-      const dodAbsChange = prevRecord != null ? h.evalAmount - prevRecord.evalAmount : null;
-      return { ...h, monthlyChange, dodChange, dodAbsChange };
+      const m = metrics.get(h.date) || { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true };
+      return { ...h, monthlyChange, dodChange: m.dodChange, dodAbsChange: m.dodAbsChange, netFlow: m.ledgerFlow };
     });
   }, [computedIntHistory, intTotals.totalPrincipal]);
 

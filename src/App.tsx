@@ -1554,7 +1554,18 @@ export default function App() {
   };
 
   const today = new Date().toISOString().split('T')[0];
-  const handleDownloadCSV = () => downloadCSV(`ISA_자산추이_${today}.csv`, buildHistoryCSV(history));
+  // 화면(HistoryPanel)과 같은 공용 함수·같은 평가액 소스·같은 날짜별 환율을 태운다
+  // (흐름 보정만 이식하고 평가액 소스를 raw로 두면 보류 판정 자체가 갈린다).
+  // ⚠️ 알려진 한계: activeCloseEvalByDate는 해외·현금성 계좌에서 빈 Map이라(:975) 그 계좌들은
+  //    CSV가 저장 evalAmount로 폴백한다. 해외는 화면이 날짜별 환율로 재계산하므로 CSV와
+  //    평가자산·일간 손익이 어긋난다(기존 동작 유지 — 해소하려면 해외 재계산을 App으로 승격해야 함).
+  const handleDownloadCSV = () => downloadCSV(`ISA_자산추이_${today}.csv`, buildHistoryCSV(
+    history, depositHistory, depositHistory2,
+    activePortfolioAccountType === 'overseas'
+      ? (d) => (getClosestValue(indicatorHistoryMap?.usdkrw, d.date) || d.fxRate || marketIndicators.usdkrw || 1)
+      : undefined,
+    activeCloseEvalByDate,
+  ));
   const handleLookupDownloadCSV = () => downloadCSV(`ISA_지정일비교_${today}.csv`, buildLookupCSV(lookupRows, history, comparisonMode, totals.totalEval));
   const handleDepositDownloadCSV = () => downloadCSV(`입금내역_${today}.csv`, buildDepositCSV(depositWithSum));
   const handleWithdrawDownloadCSV = () => downloadCSV(`출금내역_${today}.csv`, buildDepositCSV(depositWithSum2));

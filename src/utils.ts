@@ -234,6 +234,141 @@ const cumDepositsUpTo = (date, depositHistory, depositHistory2) => {
   return cum;
 };
 
+// 개별 계좌 일간 지표용 순 외부현금흐름 — (fromExclusive, toInclusive] 반개구간.
+// 통합(useIntegratedData의 원장 집계)과 같은 규칙: 입금은 noPrincipal(배당·이자) 제외, 출금은 전액.
+// ⚠️ cumDepositsUpTo(원금 산출용)와 절대 합치지 말 것 — 출금 규칙이 다르다. 원금은
+//    principalDeducted·noPrincipal을 반영하지만, 현금흐름은 실제로 계좌를 빠져나간 전액이다.
+// rateOf: 행 → 환율(해외계좌는 d.fxRate, 국내는 1). 미전달 시 1(원화 계좌).
+export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusive, toInclusive, rateOf) => {
+  const rate = typeof rateOf === 'function' ? rateOf : () => 1;
+  let inFlow = 0, outFlow = 0;
+  const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
+  // ⚠️ Math.abs 금지 — DepositPanel은 음수 '정정 행'을 빨간 글씨로 명시 지원한다
+  //    (DepositPanel.tsx 금액 셀: cleanNum(h.amount) >= 0 ? 파랑 : 빨강).
+  //    abs를 씌우면 마이너스 입금이 유입으로 뒤집혀 오차가 원장 금액의 2배가 된다.
+  //    코드베이스의 다른 모든 원장 소비자(cumDepositsUpTo·portfolioPrincipalData·
+  //    intDepositEvents·depositWithSum)가 부호 있는 합을 쓰므로 여기도 부호를 보존한다.
+  for (const d of depositHistory || []) {
+    if (!d || d.noPrincipal || !inRange(d.date || '')) continue;
+    const v = cleanNum(d.amount) * rate(d);
+    if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
+  }
+  for (const w of depositHistory2 || []) {
+    if (!w || !inRange(w.date || '')) continue;
+    const v = cleanNum(w.amount) * rate(w);
+    if (v > 0) outFlow += v; else if (v < 0) inFlow += -v;
+  }
+  return { in: inFlow, out: outFlow, net: inFlow - outFlow };
+};
+
+// 일간 수익률(%) — 유입은 기초(BOD)·유출은 기말(EOD) 가중한 Modified Dietz.
+// 통합 대시보드·개별 계좌·CSV가 전부 이 한 함수를 공유해야 값이 어긋나지 않는다.
+//   분모를 prevEval로만 두면 소액 계좌에 대형 입금 시 수익률이 폭발하고(고치려던 버그의 재발),
+//   유출까지 분모에 넣으면 전액 출금일에 분모가 0이 되어 그날 실수익이 소실된다.
+export const dailyFlowAdjustedRate = (prevEval, curEval, flowIn, flowOut) => {
+  const base = (prevEval || 0) + (flowIn || 0);
+  if (!(base > 0)) return 0;
+  const r = (((curEval || 0) + (flowOut || 0)) / base - 1) * 100;
+  return Number.isFinite(r) ? r : 0;
+};
+
+// 일간 지표 보류 판정 — 원장에 기록된 흐름이 아직 평가액에 반영되지 않은 날을 잡아낸다.
+// 판정 근거는 **'V가 그 흐름을 담고 있다고 볼 수 있는가'** 하나다:
+//   흐름이 반영됐다면 ΔV는 최소한 흐름의 절반 규모로 움직인다.
+//   반영 안 됐다면 ΔV는 시장 변동분뿐이라 흐름 대비 무시할 수준에 머문다.
+//   비거래일 carry-forward 행(주말·휴장)은 ΔV가 **정확히 0**이라 항상 여기에 걸린다 — 주 경로다.
+// ⚠️ 되돌리지 말아야 할 두 가지 오답:
+//   (a) '|ΔV| < |흐름|×5%' — 창이 ±0.37%뿐이라 시장이 조금만 움직여도 보류가 풀려 가짜 대손실.
+//   (b) '|ΔV − 흐름| > 전일V×5%' — 흐름이 이미 반영된 날에도 '손익이 크면' 보류해(crypto +10%일 등)
+//       그 흐름을 다음 날 한 번 더 차감했고, 반대로 전일V의 5% 미만인 미반영 흐름은 놓쳤다.
+const MATERIAL_FLOW_RATIO = 0.01;  // 이 비율 이하의 소액 흐름은 (거래일에 한해) 판정 대상 아님
+const ABSORBED_RATIO = 0.5;        // ΔV가 흐름 방향으로 절반 이상 움직였으면 '반영됨'으로 본다
+export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow) => {
+  if (prevEval == null || curEval == null) return true;
+  if (!(prevEval > 0)) return true;
+  const f = netFlow || 0;
+  if (f === 0) return false;
+  const dV = curEval - prevEval;
+  // ⚠️ 비거래일 carry-forward 행(ΔV가 정확히 0)은 시장 정보가 전혀 없어 어떤 크기의 흐름도
+  //    이 행에 반영될 수 없다 → 아래 소액 하한보다 **먼저** 판정해야 한다. 하한을 먼저 두면
+  //    전일V의 1% 이하 입금(월 적립식 등)이 주말 원장에서 통째로 새어 가짜 손실이 된다.
+  if (dV === 0) return true;
+  if (Math.abs(f) <= prevEval * MATERIAL_FLOW_RATIO) return false;
+  // ⚠️ 흡수 판정은 **부호까지** 본다. Math.abs로 비교하면 흐름과 반대 방향으로 움직인 시장을
+  //    '흡수 증거'로 오인해(입금일에 하락 등) 보류가 풀리고 흐름 전액이 손익으로 계상된다.
+  return f > 0 ? dV < f * ABSORBED_RATIO : dV > f * ABSORBED_RATIO;
+};
+
+// 일간 지표 시계열 — 보류된 행의 미소진 흐름을 다음 행으로 이월한다.
+// ⚠️ 통합(useIntegratedData)·개별 계좌(HistoryPanel)·CSV(buildHistoryCSV) 세 소비자가 반드시
+//    이 한 함수를 공유할 것. 한쪽에만 이월을 두면 같은 날짜에 통합 +1.59% vs 개별 +9.10%로
+//    두 화면이 정면 모순되고, 고치려던 '입금액=수익' 버그가 개별 뷰에 그대로 살아남는다.
+// ⚠️ 이월을 빼지 말 것 — 보류 행에서 흐름을 소각하면 다음 기록일 ΔV에 입금액이 그대로 남아
+//    같은 버그가 하루 밀려 재발한다(주말 행은 fillNonTradingGaps·백필 치유로 항상 존재하고
+//    buildCloseEvalSeries가 직전 정확값을 이월하므로 흔한 경로다).
+// rows: [{ date, evalAmount, flowIn, flowOut, ledger?, flowSuspect? }] — 반드시 날짜 오름차순
+// 반환: Map<date, { dodAbsChange, dodChange, ledgerFlow, held }>
+// 이월 상한 — 흡수되지 않은 흐름을 언제까지 들고 갈 것인가.
+//  · FROZEN(ΔV=0, 비거래일 carry-forward): KR 최장 연휴(설·추석+주말, 실측 최장 6일)를 덮어야 한다.
+//  · ACTIVE(ΔV≠0, 거래일): 오탐 보류일 가능성이 있으므로 짧게. 상한을 넘기면 이월을 **폐기**하고
+//    정상 산출로 복귀한다 — 계속 보류하면 화면이 몇 주씩 '-'로 잠긴다(틀린 숫자보다는 낫지만 과하다).
+const CARRY_MAX_ROWS = 15;
+const CARRY_MAX_ACTIVE_ROWS = 2;
+const ACTIVE_DRIFT_RATIO = 0.05; // 흐름 대비 이만큼도 안 움직인 행은 '거래일 보류'로 세지 않는다
+export const computeDailyMetricsSeries = (rows) => {
+  const out = new Map();
+  let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
+  const list = Array.isArray(rows) ? rows : [];
+  let prev = null; // ⚠️ list[i-1]이 아니라 '직전 유효 행' — 무효 행을 건너뛰면 기준이 어긋난다
+  for (let i = 0; i < list.length; i++) {
+    const h = list[i];
+    if (!h || !h.date) continue;
+    if (!prev) {
+      // 첫 행은 비교 대상이 없다. ⚠️ 이 행의 흐름을 이월하지 말 것 — 계좌 편입 평가액이라
+      //    이미 V에 반영돼 있어, 이월하면 두 번째 행이 그만큼 가짜 손실로 찍힌다.
+      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true });
+      prev = h;
+      continue;
+    }
+    const prevV = prev.evalAmount;
+    const dV = h.evalAmount - prevV;
+    const ownIn = h.flowIn || 0, ownOut = h.flowOut || 0;
+    const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
+    // 1차 — 이월을 실은 채 판정한다. 이 행이 흐름을 흡수했다면(held=false) 이월을 그대로 소비한다.
+    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
+    let held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut);
+    // 2차 — 여전히 보류인데 상한을 넘겼으면 이월을 폐기하고 자기 흐름만으로 재산출한다.
+    // ⚠️ 폐기를 '루프 진입부에서 무조건'으로 되돌리지 말 것 — 흐름을 흡수하는 바로 그 행에서
+    //    이월이 버려져 입금액 전액이 하루 수익으로 찍힌다(고치려던 +9.10% 버그가 그대로 재현).
+    if (held && (carryRows >= CARRY_MAX_ROWS || activeRows >= CARRY_MAX_ACTIVE_ROWS)) {
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
+      fIn = ownIn; fOut = ownOut; ledger = ownLedger;
+      held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut);
+    }
+    const netFlow = fIn - fOut;
+    out.set(h.date, {
+      dodAbsChange: held ? null : dV - netFlow,
+      dodChange: held ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, fIn, fOut),
+      // 배지는 실제로 보정에 쓰인 행에만 — 이월 중인 행에 찍으면 %와 어긋나 보인다
+      ledgerFlow: held ? 0 : ledger,
+      held,
+    });
+    // flowSuspect(오늘 라이브 이상치)는 항상 마지막 행이라 이월 대상이 아니다
+    if (held && !h.flowSuspect && netFlow !== 0) {
+      carryIn = fIn; carryOut = fOut; carryLedger = ledger;
+      carryRows += 1;
+      // ⚠️ `dV !== 0`으로 세지 말 것 — crypto(24시간 시장)·예적금(일 단위 단리)을 보유하면
+      //    비거래일에도 총자산이 몇십만 원씩 움직여, 주말 2행만으로 ACTIVE 예산이 소진되고
+      //    월요일에 이월이 폐기돼 원래 버그가 재현된다. 흐름 대비 유의미한 변동만 센다.
+      if (Math.abs(dV) > Math.abs(netFlow) * ACTIVE_DRIFT_RATIO) activeRows += 1;
+    } else {
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
+    }
+    prev = h;
+  }
+  return out;
+};
+
 // 수동 anchor + delta: D에서 수동 설정한 원금이 다음 anchor 전까지 자동 전파.
 // 전파값 = anchor.principal + (cum_deposits(date) - cum_deposits(anchor.date))
 // anchor 없으면 { value: null } → 호출측이 기존 로직으로 폴백.
@@ -847,14 +982,28 @@ export const downloadCSV = (filename, csvString) => {
   link.click();
 };
 
-export const buildHistoryCSV = (history) => {
-  let csv = '﻿일자,평가자산,전일대비 수익금,전일대비 수익률\n';
+// ⚠️ 화면(HistoryPanel)과 **같은 공용 함수**(computeDailyMetricsSeries)를 써야 CSV 대조 시
+//    값이 어긋나지 않는다 — 행별 독립 계산으로 되돌리면 보류 행의 흐름 이월이 깨진다.
+//    evalByDate: 화면이 쓰는 평가액 재계산 Map(날짜→원화). 미전달 시 저장 evalAmount 사용.
+//    depositHistory/depositHistory2 미전달 시 흐름 0 → 기존 동작과 동일(하위호환).
+export const buildHistoryCSV = (history, depositHistory, depositHistory2, rateOf, evalByDate) => {
+  let csv = '﻿일자,평가자산,일간 손익,전일대비 수익률,순입출금\n';
   const sh = [...history].sort((a, b) => new Date(b.date) - new Date(a.date));
-  sh.forEach((h, i) => {
-    const prev = sh[i + 1];
-    const dodProfit = prev ? h.evalAmount - prev.evalAmount : 0;
-    const dodRate = (prev && prev.evalAmount > 0) ? ((h.evalAmount / prev.evalAmount) - 1) * 100 : 0;
-    csv += `${h.date},${h.evalAmount},${dodProfit},${dodRate.toFixed(2)}%\n`;
+  const asc = [...sh].reverse();
+  const evalOf = (h) => (evalByDate && evalByDate.get(h.date) != null) ? evalByDate.get(h.date) : h.evalAmount;
+  const rows = asc.map((h, i) => {
+    const prev = asc[i - 1];
+    const flow = prev
+      ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, rateOf)
+      : { in: 0, out: 0 };
+    return { date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out };
+  });
+  const metrics = computeDailyMetricsSeries(rows);
+  sh.forEach(h => {
+    const m = metrics.get(h.date) || { dodAbsChange: null, dodChange: 0, ledgerFlow: 0 };
+    const v = evalOf(h);
+    if (m.dodAbsChange == null) { csv += `${h.date},${v},,,${m.ledgerFlow || 0}\n`; return; }
+    csv += `${h.date},${v},${m.dodAbsChange},${m.dodChange.toFixed(2)}%,${m.ledgerFlow || 0}\n`;
   });
   return csv;
 };

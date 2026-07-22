@@ -416,11 +416,19 @@ export default function IntegratedDashboard({
 
             {/* 통합 요약 카드 */}
             {(() => {
-              const sortedIntHist = [...intHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
-              const todayRec = sortedIntHist[0];
-              const prevRec = sortedIntHist[1];
-              const todayProfit = todayRec && prevRec ? todayRec.evalAmount - prevRec.evalAmount : 0;
-              const todayRate = prevRec?.evalAmount > 0 ? todayProfit / prevRec.evalAmount * 100 : 0;
+              // ⚠️ 여기서 전일대비를 다시 계산하지 말 것 — intMonthlyHistory가 입출금 보정을 마친
+              //    단일 소스다. 자체 raw diff(evalAmount 차)로 되돌리면 헤더 +9.10% vs 추이표 +1.59%로
+              //    갈라지고 CLAUDE.md '달력 오늘 칸 = 통합 헤더 카드 정확 일치' 불변식이 즉시 깨진다.
+              const todayRec = intMonthlyHistory[0];
+              // ⚠️ 보류(dodAbsChange==null)를 `?? 0`으로 삼키지 말 것 — '+₩0 / +0.00%'는 '변동 없음'이라는
+              //    사실 주장이 된다. 추이표('-')·메모 달력(줄 숨김)과 같은 '산출 불가' 규약을 공유해야
+              //    CLAUDE.md '달력 오늘 칸 = 통합 헤더 카드 정확 일치' 불변식이 유지된다.
+              const todayHeld = !todayRec || todayRec.dodAbsChange == null;
+              const todayProfit = todayRec?.dodAbsChange ?? 0;
+              const todayRate = todayRec?.dodChange ?? 0;
+              const todayFlow = todayRec?.netFlow ?? 0;
+              // 보류 행은 배지가 0이라 '입금했는데 아무것도 안 보인다'가 되므로 원본 원장 흐름을 안내
+              const todayPendingFlow = todayHeld ? (todayRec?.ledgerFlow ?? 0) : 0;
               return (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
@@ -429,12 +437,30 @@ export default function IntegratedDashboard({
                   </div>
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
                     <span className="text-gray-400 text-[11px] font-bold">오늘 수익 ({todayRec?.date || '-'})</span>
-                    <span className={`text-lg font-extrabold ${todayProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                      {hideAmounts ? '••••••' : `${todayProfit >= 0 ? '+' : ''}${formatCurrency(todayProfit)}`}
-                    </span>
-                    <span className={`text-[11px] font-bold ${todayRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                      {todayRate >= 0 ? '+' : ''}{todayRate.toFixed(2)}%
-                    </span>
+                    {todayHeld ? (
+                      <>
+                        <span className="text-lg font-extrabold text-gray-500" title="입출금 기록과 평가 스냅샷이 어긋나 일간 지표를 보류했습니다.">-</span>
+                        {todayPendingFlow !== 0 && (
+                          <span className="text-[10px] font-bold text-amber-400">
+                            {hideAmounts ? '••••' : `${todayPendingFlow > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(todayPendingFlow))} 반영 대기`}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <span className={`text-lg font-extrabold ${todayProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                          {hideAmounts ? '••••••' : `${todayProfit >= 0 ? '+' : ''}${formatCurrency(todayProfit)}`}
+                        </span>
+                        <span className={`text-[11px] font-bold ${todayRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                          {todayRate >= 0 ? '+' : ''}{todayRate.toFixed(2)}%
+                        </span>
+                        {todayFlow !== 0 && (
+                          <span className={`text-[10px] font-bold ${todayFlow > 0 ? 'text-emerald-400' : 'text-orange-400'}`}>
+                            {hideAmounts ? '••••' : `${todayFlow > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(todayFlow))} 제외`}
+                          </span>
+                        )}
+                      </>
+                    )}
                   </div>
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
                     <span className="text-gray-400 text-[11px] font-bold">전체 수익율</span>
@@ -850,8 +876,10 @@ export default function IntegratedDashboard({
                       <tr>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">일자</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">평가금액</th>
-                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">전일대비</th>
-                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap min-w-[100px]">수익</th>
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap cursor-help" title="(당일 총자산 + 당일 출금) ÷ (전일 총자산 + 당일 입금) − 1
+입출금 영향을 제거한 순수 일간 수익률입니다. 입출금이 있던 날은 아래에 금액이 표시됩니다.">전일대비</th>
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap min-w-[100px] cursor-help" title="당일 총자산 − 전일 총자산 − 당일 순입출금
+입금액 크기와 무관하게 그날 실제로 번 금액입니다.">일간 손익</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">원금대비</th>
                         <th className="py-2.5 px-2 text-center whitespace-nowrap">투자원금</th>
                       </tr>
@@ -862,7 +890,16 @@ export default function IntegratedDashboard({
                           <td className="py-2 px-2 text-center font-bold text-gray-400 border-r border-gray-700 cursor-pointer hover:text-sky-300 transition-colors" onClick={() => setHistDetailDate(h.date)}>{formatShortDate(h.date)}</td>
                           <td className="py-2 px-2 font-bold text-white text-center border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
                           <td className="py-2 px-2 text-center border-r border-gray-700">
-                            <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>
+                            {/* 보류(dodAbsChange==null)는 '변동 없음(0.00%)'이 아니라 '산출 불가' —
+                                0.00%로 단언하면 실제로 변동이 없던 날과 구분되지 않는다 */}
+                            {h.dodAbsChange == null
+                              ? <span className="text-gray-600">-</span>
+                              : <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>}
+                            {h.netFlow !== 0 && (
+                              <span className={`block text-[9px] font-bold leading-none mt-0.5 whitespace-nowrap ${h.netFlow > 0 ? 'text-emerald-400' : 'text-orange-400'}`}>
+                                {hideAmounts ? '••••' : `${h.netFlow > 0 ? '입금' : '출금'} ${formatCurrency(Math.abs(h.netFlow))}`}
+                              </span>
+                            )}
                           </td>
                           <td className="py-2 px-2 text-center border-r border-gray-700 whitespace-nowrap">
                             {hideAmounts ? (

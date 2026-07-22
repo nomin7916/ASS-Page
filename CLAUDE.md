@@ -461,6 +461,103 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   개별 계좌와 어긋난다. 새 통합 합산/뷰 추가 시에도 `marketSeries`/`intAccountSeriesById`(또는
   `buildCloseEvalSeries`)를 소스로 쓸 것.
 
+### 일간 지표 = 입출금 보정(Modified Dietz) — 전일대비·일간 손익 (⚠️ 회귀 주의)
+
+**'전일대비'와 '일간 손익'은 순 외부현금흐름(netFlow)을 제거한 뒤 산출한다.** 과거엔
+`(당일 평가액 / 전일 평가액) − 1` 이라 계좌에 입금하면 입금액이 통째로 수익으로 계상됐다
+(₩49,118,578 입금일에 통합 **+9.10%** / 개별 계좌 **+350.69%**. 실제 시장 수익은 ₩11,312,160 = **+1.59%**).
+
+```
+IN(t)  = Σ입금(날짜별 환율, noPrincipal 제외) + Δ현금성잔액⁺ + 신규 편입 계좌 첫 평가액
+OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭제 계좌 경계 평가액
+일간 손익 = V(t) − V(t−1) − (IN − OUT)      ← 입출금 규모와 완전히 무관. 표의 주인공.
+일간 수익률 = (V(t) + OUT) / (V(t−1) + IN) − 1
+```
+
+- **분모 규약(⚠️ 바꾸지 말 것)**: 유입은 기초(BOD)·유출은 기말(EOD) 가중. 분모를 `V(t−1)`로만 두면
+  소액 계좌에 대형 입금 시 **+50% 폭발**(고치려던 버그의 재발), 유출까지 분모에 넣으면 전액 출금일에
+  분모가 0이 되어 그날 실수익이 소실된다. 이 비대칭이 두 붕괴를 동시에 피한다.
+  관리자 포털(`recomputePortfolioEval`)이 구조적으로 같은 규약이라 입금일에 자동 정합된다.
+- **⚠️ `effectivePrincipal`의 일별 차분을 흐름으로 쓰지 말 것(폐기된 설계)**: 그 값은 '원가 표시용'이라
+  `Math.max(0,...)` 클램프·`startDate` 게이트·`noPrincipal` 미필터가 섞여 있어, 차분을 흐름으로 삼으면
+  ① 출금 1건이 **몇 달 전 일간 수익률을 소급 변경**하고 ② 계좌 삭제일에 누적 미실현손익이 통째로 하루
+  수익이 되어 **부호까지 뒤집힌다**(−3.01% → +4.52%). `effectivePrincipal`(`useIntegratedData`)은
+  투자원금 열·차트 costAmount 전용으로 **현행 유지**하고, 흐름은 반드시 아래 3원 소스로 별도 산출한다.
+- **흐름 3원 소스**(`useIntegratedData` `computedIntHistory` 내부, ③→①→①-b→②→이월 순):
+  ③ **계좌 편입/이탈** — 원장에 없는 흐름. 편입일 `+평가액 전액`(원금 아님), `cutoffOf` 경계일 `−평가액 전액`.
+  편입일(`firstSeenById`) 이하의 원장은 ①에서 제외해 이중계상을 막는다.
+  ① **시장 계좌 입출금 원장** — 입금은 `noPrincipal`(배당·이자) 제외, **출금은 `noPrincipal`이어도 전액**
+  (현금이 실제로 나감 — 이 비대칭이 정상). `firstSeenById`에 없는 계좌는 통째로 제외(V에 기여 안 함).
+  ①-b **평가 시계열이 없는 계좌**(기록 0건) — today 행이 `intTotals.totalEval`로 덮어써져 오늘 V에는
+  100% 포함되므로, `portfolioSummaries.currentEval`을 today 편입 흐름으로 계상(유령 수익 방지).
+  ② **현금성 계좌(마통·simple) 잔액 Δ** — 원장 편집 UI가 **구조적으로 존재하지 않으므로**(`usePortfolioState`가
+  현금성 계좌의 개별 뷰 진입을 차단) `cashByDate` 차분이 유일한 소스. ΔV와 같은 값이라 r=0 유지.
+- **⚠️ `Math.abs()` 금지**: `DepositPanel`은 음수 '정정 행'을 빨간 글씨로 명시 지원한다. abs를 씌우면
+  마이너스 입금이 유입으로 뒤집혀 **오차가 원장 금액의 2배**가 된다(정정 쌍이 상쇄 대신 이중 계상).
+  코드베이스의 다른 모든 원장 소비자(`cumDepositsUpTo`·`portfolioPrincipalData`·`intDepositEvents`·
+  `depositWithSum`)가 부호 있는 합을 쓴다 — 부호별로 IN/OUT에 라우팅할 것.
+- **⚠️ 일간 지표는 `utils.ts` `computeDailyMetricsSeries` **단 하나**를 통합·개별 계좌·CSV 3곳이 공유**한다.
+  행별 독립 계산으로 되돌리지 말 것 — 아래 '보류+이월'이 시계열 상태를 갖기 때문에, 한 곳만 누락하면
+  같은 날짜에 통합 +1.59% vs 개별 +9.10%로 두 화면이 정면 모순되고 원래 버그가 그 화면에 그대로 살아남는다.
+  입력은 `[{date, evalAmount, flowIn, flowOut, ledger?, flowSuspect?}]` **날짜 오름차순**, 출력은
+  `Map<date, {dodAbsChange, dodChange, ledgerFlow, held}>`. 소비자는 조회만 한다.
+- **보류(hold) 판정 = 'V가 그 흐름을 담고 있다고 볼 수 있는가'**(`shouldHoldDailyMetrics`), 순서 중요:
+  ① `흐름 === 0` → 판정 불필요(false) ② **`ΔV === 0` → 무조건 보류** (비거래일 carry-forward 행은 시장
+  정보가 0이라 어떤 크기의 흐름도 반영될 수 없다 — 주 경로) ③ `|흐름| <= 전일V × 1%` → 소액이라 대상 아님
+  ④ **부호를 보는 흡수 판정**: `흐름>0 ? ΔV < 흐름×0.5 : ΔV > 흐름×0.5` 면 보류.
+  ⚠️ **되돌리지 말아야 할 오답 4종**: (a) `|ΔV| < |흐름|×5%` — 창이 ±0.37%뿐이라 시장이 조금만 움직여도
+  보류가 풀려 `−흐름` 전액이 가짜 대손실(₩46M). (b) `|ΔV−흐름| > 전일V×5%` — 흐름이 **이미 반영된 날**에도
+  '손익이 크면' 보류해(crypto +10%일) 다음 날 한 번 더 차감했고, 전일V 5% 미만 미반영 흐름은 놓쳤다.
+  (c) **②를 ③ 뒤에 두는 것** — 전일V의 1% 이하 입금(월 적립식)이 주말 원장에서 통째로 새어 나간다.
+  (d) **④를 `Math.abs(ΔV)`로 쓰는 것** — 흐름과 반대 방향 시장 변동을 '흡수 증거'로 오인해(입금일 하락,
+  출금일 상승) 보류가 풀리고 흐름 전액이 손익이 된다(미반영 출금 + 상승 시 **+11.9%**까지 나왔다).
+- **⚠️ 보류된 행의 흐름은 반드시 다음 행으로 이월**: 소각하면 다음 기록일 ΔV에 입금액이 그대로 남아
+  **원래 버그가 하루 밀려 재발한다**(토 '-' → 월 +9.10%).
+  **첫 행은 이월 금지**(그 흐름은 ③ 계좌 편입 평가액이라 이미 V에 반영됨 → 이월 시 둘째 행이 가짜 손실).
+  `flowSuspect`(오늘 라이브 이상치)는 항상 마지막 행이라 이월 대상 아님.
+  주말 행은 `fillNonTradingGaps`·`useHistoryBackfill` 치유로 **항상 존재**하고 `buildCloseEvalSeries`가
+  직전 정확값을 이월하므로 이 경로는 드문 예외가 아니라 상시 발생한다.
+- **이월 상한 2종(⚠️ 줄이지 말 것)**: `CARRY_MAX_ROWS=15`는 KR 최장 연휴(실측 최장 6일)를 덮는 값
+  (5였을 때 2026 설 연휴에서 흐름이 소각돼 입금액 전액이 가짜 수익으로 부활했다).
+  `CARRY_MAX_ACTIVE_ROWS=2`는 **거래일 보류**에만 적용되는 짧은 상한 — 흐름과 시장 변동이 비슷한 크기로
+  상쇄되면 '미반영'과 형태가 같아 **오탐 보류가 원리적으로 불가피**한데, 이월을 오래 들고 가면 이미 반영된
+  흐름이 계속 차감돼 부호가 뒤집힌 값이 몇 주간 표시된다.
+- **⚠️ 폐기는 '여전히 보류일 때'만 — 루프 진입부 무조건 폐기로 되돌리지 말 것**: 이월을 실은 채 먼저
+  판정하고(1차), 그래도 `held`이면서 상한을 넘겼을 때만 폐기 후 자기 흐름으로 재산출한다(2차).
+  진입부에서 무조건 폐기하면 **흐름을 흡수하는 바로 그 행**에서 이월이 버려져 입금액 전액이 하루 수익으로
+  찍힌다(고치려던 +9.10% 버그 재현).
+- **⚠️ ACTIVE 카운트는 `dV !== 0`이 아니라 `|ΔV| > |흐름| × 5%`**: crypto(24시간 시장)·예적금(일 단위
+  단리)을 보유하면 **비거래일에도 총자산이 몇십만 원씩 움직인다**. 1원만 움직여도 ACTIVE로 세면 주말 2행
+  만으로 예산이 소진돼 월요일에 이월이 폐기되고 원래 버그가 재현된다.
+- **보류 행 표시 규약(4곳 통일)**: `dodAbsChange=null` + `%`도 `'-'`. `0.00%`로 단언하면 '변동 없음'과
+  구분되지 않는다. 통합 추이표·`HistoryPanel`·**헤더 '오늘 수익' 카드**(⚠️ `?? 0`으로 삼키지 말 것)는 `'-'`,
+  메모 달력은 줄 자체를 숨김. 헤더는 보류 시 원본 `ledgerFlow`로 "입금 ₩N 반영 대기"를 안내한다.
+- **적용 지점**: `useIntegratedData` `intMonthlyHistory`(통합 단일 소스) → 통합 추이표·**헤더 '오늘 수익' 카드**
+  (⚠️ 과거엔 raw `intHistory`로 **자체 계산**했다 — 되돌리면 헤더 +9.10% vs 표 +1.59%로 갈라지고 '달력 오늘 칸
+  = 헤더 카드 일치' 불변식이 깨진다)·메모 달력(무수정 자동 반영, `dodAbsChange` **null 계약** 준수 필수).
+  개별 계좌는 `HistoryPanel`의 `dailyMetricsByDate` memo + `utils.ts` `externalFlowInRange`(반개구간
+  `(직전 기록일, 당일]` — 직전 '거래일'이 아니라 '기록일'이다). CSV는
+  `buildHistoryCSV(history, deps, wds, rateOf, evalByDate)` — ⚠️ **평가액 소스(`activeCloseEvalByDate`)와
+  날짜별 환율까지 화면과 같이 넘겨야** 보류 판정 자체가 갈리지 않는다.
+  **알려진 한계**: `activeCloseEvalByDate`는 해외·현금성 계좌에서 빈 Map이라 그 계좌들의 CSV는 저장
+  `evalAmount`로 폴백한다. 해외는 화면이 날짜별 환율로 재계산하므로 CSV와 평가자산·일간 손익이 어긋난다
+  (기존 동작 유지 — 해소하려면 `HistoryPanel`의 해외 재계산을 `App.tsx`로 승격해야 한다).
+- **⚠️ 해외 흐름 환산은 날짜별 환율(`getClosestValue(indicatorHistoryMap.usdkrw, d.date)`) 우선**, 원장의
+  `d.fxRate`는 폴백. `d.fxRate`는 '행 생성 시점' 환율로 박제되므로 소급 입력 시 V(날짜별 환율 재계산)와
+  어긋나 그날 환율차만큼 가짜 손익이 남는다. 통합·개별·CSV **3곳 모두** 같은 식을 써야 한다.
+- **⚠️ 관리자 포털(`AdminPortal`)은 손대지 말 것** — `recomputePortfolioEval`이 같은 보유 스냅샷을 두 가격
+  벡터로 평가해 흐름이 대수적으로 소거되므로 **이미 구조적으로 면역**이다. 저장 history 비교로 되돌리는 것도 금지.
+- **영속화 무관**: `netFlow`/`ledgerFlow`/`flowSuspect`/일간 지표는 전부 매 렌더 파생값이다.
+  `portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps **전 지점 무수정**.
+  ⚠️ **일간 수익률이나 netFlow를 `p.history` 레코드에 저장 금지** — '날짜당 1건' 불변식·백필 실시간 보호 가드·
+  `historyVerifyKey`·`dedupeHistoryByDate`와 전부 충돌한다.
+- **범위 밖(의도)**: 누적 TWR 곡선(`Π(1+r)−1`)·차트 zero-base(+290%)·CAGR은 **미적용**. 곱셈 체인은
+  하루짜리 이상치를 영구 고정하므로 일간 값을 실데이터로 관찰한 뒤 별도 단계에서 도입한다.
+  '원금대비'(`monthlyChange`)는 누적 지표로 **현행 유지**(입금일 희석은 정의상 정상).
+- 검증: `npm run verify:twr` (명세 테스트 #1~#5 + 엣지 #6~#16 + 회귀 #17~#21c). `scripts/verify-twr.mjs`의 참조 구현은
+  `utils.ts`의 `externalFlowInRange`·`dailyFlowAdjustedRate`·`shouldHoldDailyMetrics`·
+  `computeDailyMetricsSeries` 본문과 **항상 1:1로 동기화**할 것.
+
 ### usePortfolioState 훅 (모든 포트폴리오 상태 + CRUD)
 `switchToPortfolio`, `addPortfolio`, `deletePortfolio`, `addSimpleAccount`,
 `updateSimpleAccountField`, `updatePortfolioStartDate`, `updatePortfolioName`,
