@@ -44,7 +44,6 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, notify, confi
     try {
       await onSave(taxHistory);
       setLastSynced(new Date().toLocaleString('ko-KR'));
-      notify('저장되었습니다.', 'success');
     } catch {
       notify('저장 실패', 'error');
     }
@@ -79,7 +78,6 @@ export default function DividendTaxPage({ onLoad, onSave, onClose, notify, confi
           records: { ...(prev[code]?.records || {}), ...records },
         },
       }));
-      notify(`${count}개월 데이터가 추가되었습니다.`, 'success');
     };
     reader.readAsText(file, 'euc-kr');
     e.target.value = '';

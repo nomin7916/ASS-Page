@@ -249,11 +249,6 @@ export function useDriveSync({
     try {
       setSS('saving');
       setDriveStatus('saving');
-      if (versioned === 'manual' && !isRetry) {
-        isAdminEdit
-          ? notify(`☁️ ${adminViewingAsRef.current} Drive에 저장 중...`, 'info')
-          : notify('☁️ Drive에 저장 중...', 'info');
-      }
       const folderId = await ensureDriveFolder(token);
       const { stockHistoryMap: shm, marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm, ...stateCore } = state;
       // STATE: 포트폴리오 구조 변경 또는 차트 설정 변경 시 저장
@@ -292,11 +287,6 @@ export function useDriveSync({
       ]);
       setSS('ready');
       setDriveStatus('saved');
-      if (versioned === 'manual') {
-        isAdminEdit
-          ? notify(`${adminViewingAsRef.current} Drive에 저장 완료`, 'success')
-          : notify('Drive 저장 완료', 'success');
-      }
       // 저장 중 차단된 최신 상태가 있으면 즉시 재실행
       const pending = pendingSaveRef.current;
       if (pending) {
@@ -452,7 +442,6 @@ export function useDriveSync({
         notify('Drive 클라이언트 초기화 실패. 페이지를 새로고침해 주세요.', 'error');
         return;
       }
-      notify('Google Drive 로그인 팝업을 확인해 주세요...', 'info');
       token = await new Promise<string | null>((resolve) => {
         pendingTokenResolveRef.current = resolve;
         tokenClientRef.current.requestAccessToken({ prompt: 'select_account' });
@@ -542,7 +531,6 @@ export function useDriveSync({
       portfolioUpdatedAtRef.current = newUpdatedAt;
       setSS('ready');
       setDriveStatus('saved');
-      notify('파일에서 데이터를 복원하고 Drive에 저장했습니다.', 'success');
     } catch (err: any) {
       const msg = String(err?.message || err);
       if (msg === 'invalid') {
@@ -590,7 +578,6 @@ export function useDriveSync({
       setSS('ready');
       setDriveStatus('saved');
       setShowBackupModal(false);
-      notify(`${displayTime} 백업이 적용되었습니다.`, 'success');
     } catch {
       notify('백업 적용에 실패했습니다.', 'error');
       setSS('error');

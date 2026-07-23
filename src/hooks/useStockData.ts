@@ -145,12 +145,9 @@ export function useStockData({
       const today = new Date().toISOString().split('T')[0];
       setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
       if (isOverseas && (!stockHistoryMapRef.current[code] || Object.keys(stockHistoryMapRef.current[code]).length <= 1)) {
-        notify(`${code} 백테스트 이력 수집 중...`, 'info');
         fetchUsStockHistory(code).then(r => {
           if (r?.data && Object.keys(r.data).length > 1) {
             setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
-          } else {
-            notify(`${code} 백테스트 이력 수집 실패`, 'warning');
           }
         });
       }
@@ -195,7 +192,6 @@ export function useStockData({
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'success' }));
       } else {
         setStockFetchStatus(prev => ({ ...prev, [fundCode]: 'fail' }));
-        notify(`${fundCode} 기준가 갱신 실패`, 'error');
       }
       return;
     }
@@ -210,7 +206,6 @@ export function useStockData({
       setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
     } else {
       setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
-      notify(`${code} 현재가 갱신 실패`, 'error');
     }
   };
 
@@ -830,7 +825,6 @@ export function useStockData({
 
       // 전체 계좌 종목 동시 조회 및 portfolios[] 업데이트 (활성 계좌 포함)
       const { priceResults, fundResults, failedCodes } = await fetchAllPortfoliosPrices(today);
-      if (failedCodes.length > 0) notify(`조회 실패 (10초 초과): ${failedCodes.join(', ')}`, 'warning');
 
       // 활성 계좌 fetch status 업데이트
       activeStockCodes.forEach(code => {
@@ -871,14 +865,6 @@ export function useStockData({
         const existing = stockHistoryMapRef.current[code];
         return !existing || Object.keys(existing).length <= 252;
       }) : [];
-
-      if (force) {
-        const fundCount = portfoliosRef.current.reduce((n, p) => {
-          if (p.accountType === 'simple') return n;
-          return n + (p.portfolio || []).filter((it: any) => it.type === 'fund' && it.code).length;
-        }, 0);
-        notify(`🔄 전체 강제 재수집 시작 — 국내 ${korCodesNeedingHistory.length} · 해외 ${usCodesNeedingHistory.length} · 펀드 ${fundCount}`, 'info');
-      }
 
       if (korCodesNeedingHistory.length > 0 || usCodesNeedingHistory.length > 0) {
         const korFailed: string[] = [];
@@ -961,15 +947,8 @@ export function useStockData({
             const r = await fetchUsStockHistory(code);
             if (r?.data && Object.keys(r.data).length > 1)
               setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
-            else
-              notify(`${code} 이력 수집 실패 (백테스트 불가)`, 'warning');
           }),
         ]).then(() => {
-          if (force && korFailed.length > 0) {
-            notify(`⚠️ 과거 종가 수집 실패 ${korFailed.length}건: ${korFailed.join(', ')} — 잠시 후 다시 시도하세요`, 'error');
-          } else if (force) {
-            notify(`✅ 과거 종가 수집 완료 — 국내 ${korCodesNeedingHistory.length} · 해외 ${usCodesNeedingHistory.length}`, 'success');
-          }
           setTimeout(() => {
             const snap = saveStateRef.current;
             if (snap && driveTokenRef.current) saveAllToDrive(snap);
@@ -1172,10 +1151,8 @@ export function useStockData({
         };
       });
 
-      notify('종목 가격 갱신 완료', 'success');
     } catch (err) {
       console.error('데이터 갱신 오류:', err);
-      notify('가격 갱신 중 오류가 발생했습니다', 'error');
     } finally {
       setIsLoading(false);
     }

@@ -955,9 +955,31 @@ markAsRead() / clearNotificationLog()
 
 색상: `info`=sky-300, `success`=green-400, `warning`=amber-400, `error`=red-400
 
-- `notify()` 대상: 시스템 메시지, 성공/실패 피드백, 파괴적 작업 확인
+- `notify()`는 **전용 토스트가 없다** — 호출 즉시 하는 일은 벨 '알림 이력'(`notificationLog`,
+  Drive 영속) prepend + 미확인 배지(`unreadCount`) 증가 **둘뿐**. 따라서 사용자가 보는 "알림"의
+  실체는 곧 벨 이력이고, "알림 최소화"는 곧 벨에 안 남기는 것이다.
 - 분리 유지: 모달 다이얼로그, LoginGate 인라인 에러, Header Drive 상태 아이콘
 - `ConfirmDialog.tsx` props: `state: ConfirmState | null`, `onResolve: (r: boolean) => void`
+
+### 알림 최소화 정책 (⚠️ 회귀 주의 — 성공/진행/시세 알림 재추가 금지)
+
+사용자 요청(2026-07): **벨 알림은 최소화**한다. 벨에 남기는 `notify()`는 **딱 세 부류만**:
+
+1. **관리자 공지** — `[관리자 공지] …` (`App.tsx` `acknowledgeAdminNotices`만 발송, 유일 경로).
+2. **중요 오류(데이터/접속에 영향)** — Drive 인증 필요/만료/실패, Drive 저장 실패, 폴더 없음, 클라이언트
+   초기화 실패, 다른 기기 로그인 감지, config Client ID 미설정, Drive 로드/백업 목록/백업 적용/파일 복원
+   실패, 올바른 파일 아님, Drive 미연결, 수동 저장본 최신 안내, 설정/데이터 저장·로드 실패(admin).
+3. **입력 가드 / 사용자 액션 실패** — 폼 검증(그룹 이름·사용자·수량·코드·날짜 입력, 재계산 0원, 종가
+   수동입력 불가/데이터 없음), 파일 임포트 파싱 실패(`useIndexImport`·`useMarketData`·`DividendTaxPage`
+   CSV), 잘못된 링크 형식. **사용자가 직접 한 동작이 거부/실패한 이유**라 반드시 알아야 함.
+
+**절대 다시 넣지 말 것(전부 제거됨)**: ① 모든 성공·완료(저장/변경/추가/생성·삭제/확정/복원/복구 완료)
+② 모든 진행·정보(불러오는 중, 저장 중, 팝업 확인, 강제 재수집 시작) ③ **시세 계층 전체**
+(`useStockData` — 종목 가격 갱신 완료/오류, 현재가·기준가 갱신 실패, 이력·백테스트 수집, 조회 실패).
+시세 실패는 `stockFetchStatus`의 행 내부 상태점(빨간 표시)이 시각 피드백을 대신하고, 사용자 액션
+완료(PC 저장·비밀번호 변경·백업 복원·자산검증 편집)는 **화면 변화 자체가 피드백**(무음 처리 — Q2 결정).
+- 제거로 `useStockData`·`PinChangeModal`의 `notify` 파라미터는 미사용이 되지만 **@ts-nocheck +
+  esbuild(`vite build`, 타입체크 없음)라 무해** → 향후 중요 오류 재추가 여지로 파라미터는 유지.
 
 ---
 

@@ -591,7 +591,6 @@ export default function App() {
       } else {
         setActivePortfolioId(restoredId);
       }
-      notify(`계좌 ${normalizedPortfolios.length}개 복구 완료 — 활성화 중`, 'info');
     } else if (stateData.portfolio) {
       const newId = generateId();
       const migrated = {
@@ -605,7 +604,6 @@ export default function App() {
       };
       setPortfolios([migrated]);
       setActivePortfolioId(newId);
-      notify('계좌 1개 복구 완료 — 활성화 중', 'info');
     }
     setCustomLinks(stateData.customLinks || UI_CONFIG.DEFAULT_LINKS);
     if (stateData.overseasLinks) setOverseasLinks(stateData.overseasLinks);
@@ -1443,7 +1441,6 @@ export default function App() {
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
       await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks, reportLinks });
       setYoutubeUrl(url);
-      notify(url ? 'YouTube 채널 링크가 설정되었습니다.' : 'YouTube 채널 링크가 삭제되었습니다.', 'success');
     } catch {
       notify('YouTube 링크 저장 실패 (Drive 오류)', 'error');
       return;
@@ -1481,7 +1478,6 @@ export default function App() {
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
       await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links, reportLinks });
       setNotebookLinks(links);
-      notify('노트북LM 링크가 저장됐습니다.', 'success');
     } catch {
       notify('링크 저장 실패 (Drive 오류)', 'error');
       return;
@@ -1503,7 +1499,6 @@ export default function App() {
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
       await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks: links });
       setReportLinks(links);
-      notify('시장동향 리포트 링크가 저장됐습니다.', 'success');
     } catch {
       notify('링크 저장 실패 (Drive 오류)', 'error');
       return;
@@ -1571,11 +1566,9 @@ export default function App() {
     a.download = `portfolio_state_${dateStr}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    notify('PC에 데이터를 저장했습니다.', 'success');
   };
 
   const handleAppClose = async () => {
-    notify('백업 저장합니다.', 'info');
     const currentPortfolios = buildPortfoliosState();
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 저장 — 부분 state를 손으로 재구성하면
@@ -1643,7 +1636,6 @@ export default function App() {
       initTokenClient();
 
       // 항상 Drive에서 최신 데이터 로드 — localStorage 캐시 사용 안 함
-      notify('Drive 데이터 불러오는 중...', 'info');
       const drivePortfolio = await loadFromDrive(token, true);
       if (drivePortfolio === null && syncStatusRef.current !== 'error') {
         // 완전 신규 사용자 (파일 없음, 오류 아님): 초기 포트폴리오 생성
@@ -1652,7 +1644,6 @@ export default function App() {
         const initP = { id: newId, name: '내 포트폴리오', startDate: today, portfolioStartDate: today, portfolio: [{ id: generateId(), type: 'deposit', depositAmount: 0 }], principal: 0, history: [], depositHistory: [], depositHistory2: [], settings: { mode: 'rebalance', amount: 1000000 } };
         setPortfolios([initP]);
         setActivePortfolioId(newId);
-        notify('새 계좌 생성 완료', 'info');
       }
 
       // dividendTaxHistory는 별도 파일이므로 항상 Drive에서 로드
@@ -2077,7 +2068,6 @@ export default function App() {
     });
 
     autoFundHistoryRef.current = targetDate;
-    notify(`${targetDate} 종가 기준 자산 평가액이 자동으로 기록되었습니다.`, 'success');
   }, [portfolio, totals.totalEval]);
 
   useEffect(() => {

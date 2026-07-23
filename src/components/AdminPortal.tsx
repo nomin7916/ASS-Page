@@ -369,7 +369,6 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
     setNewGroupName('');
     setSelectedEmails(new Set());
     persistConfig(hiddenEmails, next);
-    notify(`'${name}' 그룹 생성 (${[...selectedEmails].length}명)`, 'success');
   };
   const addToGroup = (groupId: string) => {
     if (!groupId) { notify('추가할 그룹을 선택하세요.', 'warning'); return; }
@@ -385,8 +384,6 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
     setGroups(next);
     setSelectedEmails(new Set());
     persistConfig(hiddenEmails, next);
-    const gName = groups.find(g => g.id === groupId)?.name || '';
-    notify(added > 0 ? `'${gName}'에 ${added}명 추가` : '이미 모두 포함된 사용자입니다.', added > 0 ? 'success' : 'info');
   };
   const removeMember = (groupId: string, email: string) => {
     const next = groups.map(g => g.id === groupId ? { ...g, members: g.members.filter(e => e !== email) } : g);
@@ -407,13 +404,11 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
     if (confirmDeleteGroupId === groupId) {
       if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
       setConfirmDeleteGroupId('');
-      const gName = groups.find(g => g.id === groupId)?.name || '';
       const next = groups.filter(g => g.id !== groupId);
       setGroups(next);
       setGroupSort(prev => { const n = { ...prev }; delete n[groupId]; return n; });
       if (addToGroupId === groupId) setAddToGroupId('');
       persistConfig(hiddenEmails, next);
-      notify(`'${gName}' 그룹 삭제`, 'success');
     } else {
       setConfirmDeleteGroupId(groupId);
       if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
@@ -468,7 +463,6 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
       if (!tok) {
         tok = await requestToken('');
         if (!tok) {
-          notify('Drive 인증 팝업을 확인해 주세요...', 'info');
           tok = await requestToken('select_account');
         }
         if (!tok) { notify('Drive 인증에 실패했습니다.', 'error'); return; }
@@ -583,7 +577,6 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
       const finalCache: AdminCache = { users, refreshedAt: Date.now() };
       await saveAdminUserCache(tok, folderId, finalCache);
       setCache(finalCache);
-      notify('대시보드 업데이트 완료', 'success');
     } catch (err) {
       notify('데이터 로드에 실패했습니다.', 'error');
       console.error('[AdminPortal]', err);

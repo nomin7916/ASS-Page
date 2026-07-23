@@ -238,7 +238,6 @@ export default function VerifyEvalModal({
     if (v < 0) return;
     patchActivePortfolio(p => withManualSnapshot(p, date, items =>
       items.map((it, i) => i === idx ? { ...it, quantity: v } : it)));
-    notify(`${formatShortDate(date)} 보유수량 수정 완료 (이후 스냅샷까지 적용)`, 'success');
   };
 
   const commitPrice = (idx) => {
@@ -254,9 +253,6 @@ export default function VerifyEvalModal({
       else delete forKey[date];
       return { ...p, manualPriceOverrides: { ...cur, [key]: forKey } };
     });
-    notify(v > 0
-      ? `${row.name} ${formatShortDate(date)} 수동종가 ${v.toLocaleString()} 저장`
-      : `${row.name} ${formatShortDate(date)} 수동종가 해제`, 'success');
   };
 
   const commitPrincipal = () => {
@@ -269,9 +265,6 @@ export default function VerifyEvalModal({
       delete next.principalManual;
       return next;
     }));
-    notify(v > 0
-      ? `${formatShortDate(date)} 투자원금 ${isOverseas ? `$${Math.round(v).toLocaleString('en-US')}` : `${Math.round(v).toLocaleString()}원`}으로 수동 설정`
-      : `${formatShortDate(date)} 투자원금 수동 설정 해제 — 입출금 누적으로 복귀`, 'success');
   };
 
   // 적용 중인 anchor의 principalManual 플래그 해제 — 이 anchor에 의해 보정 중이던 모든 날짜가
@@ -285,12 +278,10 @@ export default function VerifyEvalModal({
       delete next.principalManual;
       return next;
     }));
-    notify(`${formatShortDate(anchorDate)} 수동 설정 해제 — 보정 적용 중이던 날짜들이 입출금 누적값으로 복귀`, 'success');
   };
 
   const removeRow = (idx) => {
     patchActivePortfolio(p => withManualSnapshot(p, date, items => items.filter((_, i) => i !== idx)));
-    notify(`${formatShortDate(date)} 종목 제거 (manual 스냅샷)`, 'success');
   };
 
   const submitAdd = () => {
@@ -315,7 +306,6 @@ export default function VerifyEvalModal({
       }
       return np;
     });
-    notify(`${name || code} 추가 (${formatShortDate(start)}${end ? ` ~ ${formatShortDate(end)}` : ' ~'})`, 'success');
     setShowAdd(false);
     setAddForm({ code: '', name: '', type: 'stock', quantity: '', start: date, end: '' });
   };
@@ -331,7 +321,6 @@ export default function VerifyEvalModal({
       delete next.autoConfirmDeclined; // 수동 확정 시 자동확정 거부 플래그 해제
       return next;
     }));
-    notify(`${formatShortDate(date)} 평가액 ${v.toLocaleString()}원으로 확정`, 'success');
     onClose();
   };
 
@@ -343,7 +332,6 @@ export default function VerifyEvalModal({
       delete next.adjustedAmount;
       return next;
     }));
-    notify(`${formatShortDate(date)} 확정 취소 — 자동 업데이트 허용`, 'info');
     onClose();
   };
 

@@ -124,7 +124,6 @@ export default function PinChangeModal({
               await savePinToDrive(hashPin(np), authUser.token, authUser.email);
               setPinChangeSaving(false);
               setShowPinChange(false);
-              notify('비밀번호가 변경되었습니다.', 'success');
             }}
             className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-xl transition-colors text-sm flex items-center justify-center gap-2"
           >
