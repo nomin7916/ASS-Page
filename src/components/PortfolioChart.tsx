@@ -1,6 +1,6 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect, useMemo } from 'react';
-import { Settings, Search, BarChart2, Percent, History, Activity, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
+import { Settings, Search, BarChart2, Percent, History, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
 import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates, externalFlowInRange } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
@@ -20,7 +20,6 @@ export default function PortfolioChart({
   showReturnRate, setShowReturnRate,
   showBacktest, setShowBacktest,
   backtestColor, setBacktestColor,
-  isZeroBaseMode, setIsZeroBaseMode,
   isAvgPriceMode, setIsAvgPriceMode,
   showCalcVerify, setShowCalcVerify,
   showMarketPanel, setShowMarketPanel,
@@ -96,14 +95,14 @@ export default function PortfolioChart({
     ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
     : formatCurrency(v);
 
-  // 두 모드 모두 **진짜 수익률**이다(역할만 다름):
-  //   · 조회시작 0% ON  → '기간 수익률' = 누적 TWR 재베이스. 입출금 보정 완료 → 입금해도 곡선 불변.
-  //   · 조회시작 0% OFF → '나의 수익률' = 원금대비 (V−C)/C. 요약 카드·추이 표 누적 열과 동일 값.
-  // ⚠️ 과거엔 ON이 'V(t)÷V(시작)−1'(평가액 증감률)이라 입금액이 분자에 통째로 들어가 +747%로
-  //    부풀었다(실손익 −536만). 그 계산으로 되돌리지 말 것 — 라벨도 '평가액 증감'으로 되돌리지 말 것.
+  // 수익률 라인 = **항상 누적 TWR 재베이스**('기간 수익률', 2026-07 통일 — 시계 아이콘 토글 제거).
+  //   입출금 보정 완료 → 입금해도 곡선이 왜곡되지 않는다. 원금대비 (V−C)/C는 요약 카드·추이 표
+  //   누적 열에만 남는다(차트 라인 아님).
+  // ⚠️ 라인을 'V(t)÷V(시작)−1'(평가액 증감률: 입금액이 분자에 들어가 +747%로 부풀고 실손익 −536만)나
+  //    원금대비(입금일 분모 급증 절벽)로 되돌리지 말 것 — 라벨도 '평가액 증감'으로 되돌리지 말 것.
   // ⚠️ 범례·툴팁·정보패널이 반드시 같은 라벨을 써야 한다. chartUtils의 [구간: x%] 태그 매칭도
   //    이 문자열을 보므로, 여기를 바꾸면 chartUtils의 name 비교도 같이 바꿀 것.
-  const myReturnLabel = isZeroBaseMode ? '기간 수익률' : '나의 수익률';
+  const myReturnLabel = '기간 수익률';
 
   const fmtMarkerAmt = (amt) => {
     const a = Math.abs(amt);
@@ -259,9 +258,7 @@ export default function PortfolioChart({
             <button
               onClick={() => setShowReturnRate(!showReturnRate)}
               className={`p-1.5 rounded border flex items-center justify-center transition-colors ${showReturnRate ? 'text-red-400 bg-red-900/20 border-red-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
-              title={isZeroBaseMode
-                ? '기간 수익률(%) 표시 — 조회시작을 0%로 두고 입출금 영향을 제거한 순수 시장 수익률(TWR)입니다. 입금·출금이 있어도 곡선이 왜곡되지 않습니다. 시계 아이콘(조회시작 0%)을 끄면 투자원금 기준 누적 수익률로 바뀝니다.'
-                : '나의 수익률(%) 표시 — 투자원금 기준 누적'}
+              title="기간 수익률(%) 표시 — 조회시작을 0%로 두고 입출금 영향을 제거한 순수 시장 수익률(TWR)입니다. 입금·출금이 있어도 곡선이 왜곡되지 않습니다."
             ><Percent size={14} /></button>
             <div
               className="flex items-stretch rounded border overflow-hidden transition-colors"
@@ -281,12 +278,6 @@ export default function PortfolioChart({
                 title="현재 종목·비중을 조회기간 시작일부터 투자 시 수익률 (백테스트)"
               ><History size={13} /></button>
             </div>
-            <div className="w-px h-3 bg-gray-700 mx-0.5" />
-            <button
-              onClick={() => setIsZeroBaseMode(!isZeroBaseMode)}
-              className={`p-1.5 rounded border flex items-center justify-center transition-colors ${isZeroBaseMode ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800 hover:border-gray-700'}`}
-              title="조회 시작일을 0% 기준으로 차트 재정렬 (수익률 선은 입출금 보정 기간 수익률로 전환)"
-            ><Activity size={14} /></button>
             {activePortfolioAccountType !== 'gold' && (<>
               <div className="w-px h-3 bg-gray-700 mx-0.5" />
               <button
@@ -444,15 +435,12 @@ export default function PortfolioChart({
                       const mmdd = (s: string) => { const p = String(s).split('-'); return p.length === 3 ? `${p[1]}/${p[2]}` : s; };
                       const rateParen = `(${Number(value).toFixed(2)}%)`;
                       displayVal = rateStr;
-                      if (isZeroBaseMode) {
+                      {
                         const startEntry = finalChartData.find(d => d.evalAmount != null);
                         const startEval = startEntry?.evalAmount;
                         const startDate = startEntry?.date;
                         if (dayEval != null && startEval != null && startDate)
                           detailStr = `${ymd(startDate)}~${mmdd(hoveredPoint.label)} : 평가 ${fmtEval(startEval)} → ${fmtEval(dayEval)} · 입출금 보정 ${rateParen}`;
-                      } else {
-                        if (dayPrin != null && dayEval != null)
-                          detailStr = `${mmdd(hoveredPoint.label)} : 원금 ${fmtEval(dayPrin)} → 평가 ${fmtEval(dayEval)} ${rateParen}`;
                       }
                     } else {
                       const startRate = firstNonNullVal(dk);
@@ -491,9 +479,7 @@ export default function PortfolioChart({
         // 구간이 하락해도 +누적%가 표시되는 불일치(예: 손익 −81M인데 +64%)가 있었음.
         // ⚠️ TWR 모드에서 displayResult.rate(평가액 비율)로 되돌리지 말 것 — 입금액이 분자에
         //    들어가 라인(+보정된 %)과 정보패널(+부풀린 %)이 정면으로 갈린다.
-        const myReturnRate = displayResult
-          ? (isZeroBaseMode ? (displayResult.myReturnPeriodRate ?? null) : (displayResult.principalReturnRateAtEnd ?? null))
-          : null;
+        const myReturnRate = displayResult ? (displayResult.myReturnPeriodRate ?? null) : null;
         // (시작일, 종료일] 반개구간 — 시작일 평가액엔 그 이전 흐름이 이미 반영돼 있다.
         // 해외계좌는 차트 평가액이 USD이므로 원장 금액(USD)을 환산 없이 그대로 쓴다(App.tsx 해외 원금 계산과 동일).
         const periodFlow = displayResult
@@ -544,7 +530,7 @@ export default function PortfolioChart({
                         <button onClick={() => setShowCalcVerify(false)} className="text-gray-500 hover:text-white p-0.5"><X size={12} /></button>
                       </div>
 
-                      {/* ① 수익률 — 조회시작 0% ON: 기간 수익률(TWR) / OFF: 나의 수익률(원금대비) */}
+                      {/* ① 수익률 — 기간 수익률(누적 TWR, 입출금 보정) */}
                       <div className="py-2 border-t border-gray-700/30 first:border-t-0 first:pt-0">
                         <div className="flex items-center gap-1.5 mb-1">
                           <div className="w-2 h-2 rounded-sm shrink-0 bg-red-500" />
@@ -581,22 +567,15 @@ export default function PortfolioChart({
                               />
                               <span className="text-gray-500">계산식</span>
                               <span className="text-sky-200/90 font-mono leading-snug">
-                                {isZeroBaseMode
-                                  ? '누적 = Π(1 + 일간 수익률) − 1 · 일간 = (당일 평가 + 출금) ÷ (전일 평가 + 입금) − 1 · 구간 = (1+누적종료) ÷ (1+누적시작) − 1'
-                                  : '(당일 평가자산 − 투자원금) ÷ 투자원금 × 100'}
+                                {'누적 = Π(1 + 일간 수익률) − 1 · 일간 = (당일 평가 + 출금) ÷ (전일 평가 + 입금) − 1 · 구간 = (1+누적종료) ÷ (1+누적시작) − 1'}
                               </span>
                               <span className="text-gray-500">출처</span>
                               <span className="text-gray-400 leading-snug">
-                                {isZeroBaseMode
-                                  ? '일간 수익률 = 자산 평가액 추이 표의 일간 수익률과 동일한 입출금 보정값(Modified Dietz — 입금은 기초·출금은 기말 가중) · 평가자산 = 당일 총평가액(예수금 포함, 수량×종가 재계산) · 주말·휴장 등 평가 변동이 없는 날은 배율 1(직전값 유지)'
-                                  : '투자원금 = 입금 누적(투자 요약의 투자 원금) · 평가자산 = 당일 총평가액(예수금 포함) · 투자 요약 패널 수익률과 동일 · 배당 재투자는 수익으로 반영'}
+                                {'일간 수익률 = 자산 평가액 추이 표의 일간 수익률과 동일한 입출금 보정값(Modified Dietz — 입금은 기초·출금은 기말 가중) · 평가자산 = 당일 총평가액(예수금 포함, 수량×종가 재계산) · 주말·휴장 등 평가 변동이 없는 날은 배율 1(직전값 유지)'}
                               </span>
                             </div>
                             <div className="mt-1.5 ml-3.5 p-1.5 rounded bg-gray-800/40 border border-gray-700/40 text-[9.5px] text-gray-400 leading-relaxed">
-                              {isZeroBaseMode
-                                ? <>ℹ️ 조회 시작일을 0%로 둔 <b>기간 수익률(TWR)</b>입니다. 입금·출금은 일간 수익률 단계에서 이미 제거되므로 <b className="text-green-400">입출금 규모가 곡선을 왜곡하지 않습니다</b> — 돈을 넣었다고 수익률이 오르거나, 원금이 늘어 수익률이 희석되는 일이 없습니다. 지수·비교종목 선과 같은 기준(시작 0%)이라 직접 비교할 수 있습니다. 내 돈이 얼마나 불었는지(원금대비)는 <b>시계 아이콘을 끄면</b> 표시됩니다.</>
-                                : <>ℹ️ 기준은 <b>내 투자원금</b>입니다(조회 시작일 0% 아님). 평가자산이 투자원금보다 낮으면 <span className="text-blue-400 font-bold">−수익률</span>, 높으면 <span className="text-red-400 font-bold">+수익률</span>로 표시됩니다. 입금하면 원금이 늘어 수익률이 희석되는데, 이는 누적 지표의 정의상 정상입니다 — 입출금과 무관한 순수 시장 성과는 <b>시계 아이콘(조회시작 0%)을 켜면</b> 볼 수 있습니다.</>
-                              }
+                              <>ℹ️ 조회 시작일을 0%로 둔 <b>기간 수익률(TWR)</b>입니다. 입금·출금은 일간 수익률 단계에서 이미 제거되므로 <b className="text-green-400">입출금 규모가 곡선을 왜곡하지 않습니다</b> — 돈을 넣었다고 수익률이 오르거나, 원금이 늘어 수익률이 희석되는 일이 없습니다. 지수·비교종목 선과 같은 기준(시작 0%)이라 직접 비교할 수 있습니다. 내 돈이 원금 대비 얼마나 불었는지는 요약 카드·자산 평가액 추이 표에서 확인할 수 있습니다.</>
                             </div>
                           </>
                         ) : (
@@ -642,9 +621,7 @@ export default function PortfolioChart({
                       const startEvl = displayResult.startEval;
                       // TWR 모드의 ₩ 값은 '평가액 변동'이 아니라 **실손익**(변동 − 순입출금)이다.
                       // %가 흐름을 제거한 값이므로 금액도 같은 기준이라야 둘이 같은 이야기를 한다.
-                      const prof = isZeroBaseMode
-                        ? periodRealProfit
-                        : (prin != null && evl != null ? evl - prin : null);
+                      const prof = periodRealProfit;
                       return (
                         <>
                           <span className={`text-[12px] font-black whitespace-nowrap ${myReturnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
@@ -655,24 +632,16 @@ export default function PortfolioChart({
                               ({prof >= 0 ? '+' : ''}{fmtMoney(prof)})
                             </span>
                           )}
-                          {isZeroBaseMode ? (
-                            startEvl != null && evl != null && (
-                              <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                                (조회시작 {fmtMoney(startEvl)} → 평가 {fmtMoney(evl)})
-                              </span>
-                            )
-                          ) : (
-                            prin != null && evl != null && (
-                              <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                                (원금 {fmtMoney(prin)} → 평가 {fmtMoney(evl)})
-                              </span>
-                            )
+                          {startEvl != null && evl != null && (
+                            <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
+                              (조회시작 {fmtMoney(startEvl)} → 평가 {fmtMoney(evl)})
+                            </span>
                           )}
                           {/* ⚠️ 과거의 '⚠ 순입금 N 포함 · 실손익 M' 고지는 제거됐다. 그 문구는 이 모드의
                               %가 입금액을 분자에 넣어 거짓말을 하던 시절의 **오표시 정정 고지**였는데,
                               이제 %(TWR)도 ₩(실손익)도 흐름이 제거된 값이라 전제가 사라졌다.
                               입출금 금액 배지 비표시 규칙(CLAUDE.md)에 예외 없이 합류한다. */}
-                          {isZeroBaseMode && periodNetFlow !== 0 && (
+                          {periodNetFlow !== 0 && (
                             <span className="text-[10px] text-gray-500 whitespace-nowrap">입출금 보정됨</span>
                           )}
                         </>

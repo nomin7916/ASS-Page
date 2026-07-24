@@ -112,16 +112,14 @@ export function MainChartCustomTooltip({ active, payload, label, selectionResult
           const periodKey = CHART_NAME_TO_PERIOD_KEY[name];
           if (periodKey && selectionResult[periodKey] != null) {
             periodRate = selectionResult[periodKey];
-          } else if (name === '나의 수익률' && selectionResult.principalReturnRateAtEnd != null) {
-            periodRate = selectionResult.principalReturnRateAtEnd;
           } else if (name === '기간 수익률' && selectionResult.myReturnPeriodRate != null) {
-            // '기간 수익률' = 조회시작 0%(TWR) 모드의 라인명(PortfolioChart myReturnLabel). 그 모드의
-            // 구간값은 원금대비(principalReturnRateAtEnd)도, 평가액 비율(rate)도 아닌 두 끝점 TWR의
-            // 비(myReturnPeriodRate)라야 라인·정보패널과 일치한다.
-            // ⚠️ selectionResult.rate(평가액 비율)로 되돌리지 말 것 — 입금액이 분자에 들어간다.
+            // '기간 수익률' = 개별 계좌 수익률 라인(PortfolioChart myReturnLabel). 라인이 재베이스된
+            // 누적 TWR이므로 구간값은 두 끝점 TWR의 비(myReturnPeriodRate)라야 라인·정보패널과 일치한다.
+            // ⚠️ selectionResult.rate/principalReturnRateAtEnd로 되돌리지 말 것 — 입금액이 분자에 들어간다.
             periodRate = selectionResult.myReturnPeriodRate;
           } else if (name === '수익률' && selectionResult.rate != null) {
-            // '수익률' = 통합 대시보드 라인(IntegratedDashboard) — 평가액 비율 기준(별도 규약).
+            // '수익률' = 통합 대시보드 라인(IntegratedDashboard). 입출금 보정 통일 후 rate는 구간 TWR
+            // (두 끝점 재베이스 누적 TWR의 비)다 — 평가액 비율이 아니다.
             periodRate = selectionResult.rate;
           } else if (dk?.match(/^comp(\d+)Rate$/)) {
             const compRateMatch2 = dk.match(/^comp(\d+)Rate$/);

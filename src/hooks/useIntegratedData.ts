@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, computeDailyMetricsSeries, buildBookCostSeries } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, computeDailyMetricsSeries, computeCumulativeTwrSeries, rebaseTwr, buildBookCostSeries } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -17,7 +17,6 @@ export function useIntegratedData({
   depositHistory,
   depositHistory2,
   intAppliedRange,
-  intIsZeroBaseMode,
   effectiveDateKey,
   krEffectiveDateKey,
   compStocks,
@@ -450,16 +449,49 @@ export function useIntegratedData({
     );
   }, [intUnifiedDates, intAppliedRange]);
 
+  // 통합 대시보드 누적 TWR + 누적 실손익 — 수익률 라인·구간 선택의 단일 소스.
+  // 개별 계좌 accountTwrByDate(App.tsx)와 동일 규약: 전체 이력에서 한 번 누적하고, 조회구간
+  // 재베이스는 intChartData가 rebaseTwr로 처리(조회구간을 바꿔도 곡선 모양 불변).
+  // ⚠️ rows는 intMonthlyHistory(추이표·헤더 카드)와 '완전히 동일한' 구성이라야 두 화면이 같은
+  //    날짜에 같은 일간 수익률을 낸다(오름차순 + netFlowIn/Out·ledger·flowSuspect·bookDelta).
+  //    bookDelta(장부액 관측)를 실어보내므로 ΔV 추측 폴백으로 떨어지지 않는다.
+  // ⚠️ 구간 실손익(₩)은 개별의 externalFlowInRange(단일 원장)로는 못 구한다 — 통합은 계좌
+  //    편입/삭제 경계·현금성·다계좌 흐름이 섞여, 반드시 일별 dodAbsChange(=ΔV−순흐름)를 누적한다.
+  const intTwrCumByDate = useMemo(() => {
+    const asc = [...computedIntHistory].sort((a, b) => a.date.localeCompare(b.date));
+    const rows = asc.map((h, i) => {
+      const prev = asc[i - 1];
+      const bookDelta = (prev && prev.bookTotal != null && h.bookTotal != null)
+        ? h.bookTotal - prev.bookTotal
+        : null;
+      return {
+        date: h.date, evalAmount: h.evalAmount,
+        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0,
+        ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect, bookDelta,
+      };
+    });
+    const twr = computeCumulativeTwrSeries(rows);
+    const metrics = computeDailyMetricsSeries(rows);
+    const cumProfit = new Map();
+    let acc = 0;
+    for (const r of rows) {
+      const m = metrics.get(r.date);
+      if (m && m.dodAbsChange != null) acc += m.dodAbsChange;
+      cumProfit.set(r.date, acc);
+    }
+    return { twr, cumProfit };
+  }, [computedIntHistory]);
+
   const intChartData = useMemo(() => {
     if (intSortedHistory.length === 0) return [];
     const all = intFilteredDates.length > 0
       ? intSortedHistory.filter(h => intFilteredDates.includes(h.date))
       : intSortedHistory;
     if (all.length === 0) return [];
-    const filtered = intIsZeroBaseMode
-      ? (() => { const valid = all.filter(h => h.effectivePrincipal > 0 && h.evalAmount >= h.effectivePrincipal * 0.7); return valid.length > 0 ? valid : all; })()
-      : all;
-    const baseEval = filtered[0].evalAmount;
+    // 조회구간 내 원금·평가가 신뢰 가능한 첫 행부터 그린다(과거 zero-base 모드 유효성 필터를 상시 적용).
+    const filtered = (() => { const valid = all.filter(h => h.effectivePrincipal > 0 && h.evalAmount >= h.effectivePrincipal * 0.7); return valid.length > 0 ? valid : all; })();
+    // 라인 = 누적 TWR을 조회시작(=filtered[0]) 기준으로 재베이스. 입출금이 있어도 곡선이 왜곡되지 않는다.
+    const baseTwr = intTwrCumByDate.twr.get(filtered[0].date) ?? 0;
 
     const comps = compStocks || [];
     const compBases = comps.map(comp => {
@@ -474,13 +506,14 @@ export function useIntegratedData({
     });
 
     return filtered.map(h => {
+      const t = intTwrCumByDate.twr.get(h.date);
       const row = {
         date: h.date,
         evalAmount: h.evalAmount,
         costAmount: h.effectivePrincipal,
-        returnRate: intIsZeroBaseMode
-          ? (baseEval > 0 ? ((h.evalAmount / baseEval) - 1) * 100 : 0)
-          : (h.effectivePrincipal > 0 ? ((h.evalAmount - h.effectivePrincipal) / h.effectivePrincipal * 100) : 0),
+        // 라인 = 재베이스 누적 TWR(입출금 보정). 구간 선택은 두 끝점 TWR의 비 + 누적 실손익 차분을 쓴다.
+        returnRate: t != null ? rebaseTwr(t, baseTwr) : 0,
+        cumProfit: intTwrCumByDate.cumProfit.get(h.date) ?? null,
       };
       comps.forEach((comp, ci) => {
         const key = `comp${ci + 1}Rate`;
@@ -494,7 +527,7 @@ export function useIntegratedData({
       });
       return row;
     });
-  }, [intSortedHistory, intFilteredDates, intIsZeroBaseMode, compStocks, stockHistoryMap]);
+  }, [intSortedHistory, intFilteredDates, intTwrCumByDate, compStocks, stockHistoryMap]);
 
   // 일간 지표는 순 외부현금흐름을 제거한 뒤 산출한다 — ₩49,118,578이 입금된 날 옛 식은 +9.10%를
   // 보였지만 실제 시장 수익은 ₩11,312,160(+1.59%)이다.

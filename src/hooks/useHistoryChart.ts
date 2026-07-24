@@ -14,7 +14,6 @@ export function useHistoryChart() {
   const [showReturnRate, setShowReturnRate] = useState(true);
   const [showBacktest, setShowBacktest] = useState(false);
   const [backtestColor, setBacktestColor] = useState('#f97316');
-  const [isZeroBaseMode, setIsZeroBaseMode] = useState(true);
   const [isAvgPriceMode, setIsAvgPriceMode] = useState(false);
   const [showCalcVerify, setShowCalcVerify] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState(null);
@@ -49,7 +48,6 @@ export function useHistoryChart() {
   const [intRefAreaRight, setIntRefAreaRight] = useState('');
   const [intSelectionResult, setIntSelectionResult] = useState(null);
   const [intIsDragging, setIntIsDragging] = useState(false);
-  const [intIsZeroBaseMode, setIntIsZeroBaseMode] = useState(true);
   const [intHoveredPoint, setIntHoveredPoint] = useState(null);
 
   return {
@@ -65,7 +63,6 @@ export function useHistoryChart() {
     showReturnRate, setShowReturnRate,
     showBacktest, setShowBacktest,
     backtestColor, setBacktestColor,
-    isZeroBaseMode, setIsZeroBaseMode,
     isAvgPriceMode, setIsAvgPriceMode,
     showCalcVerify, setShowCalcVerify,
     hoveredPoint, setHoveredPoint,
@@ -95,7 +92,6 @@ export function useHistoryChart() {
     intRefAreaRight, setIntRefAreaRight,
     intSelectionResult, setIntSelectionResult,
     intIsDragging, setIntIsDragging,
-    intIsZeroBaseMode, setIntIsZeroBaseMode,
     intHoveredPoint, setIntHoveredPoint,
   };
 }

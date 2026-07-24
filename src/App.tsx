@@ -350,7 +350,6 @@ export default function App() {
     showReturnRate, setShowReturnRate,
     showBacktest, setShowBacktest,
     backtestColor, setBacktestColor,
-    isZeroBaseMode, setIsZeroBaseMode,
     isAvgPriceMode, setIsAvgPriceMode,
     showCalcVerify, setShowCalcVerify,
     hoveredPoint, setHoveredPoint,
@@ -377,7 +376,6 @@ export default function App() {
     intRefAreaRight, setIntRefAreaRight,
     intSelectionResult, setIntSelectionResult,
     intIsDragging, setIntIsDragging,
-    intIsZeroBaseMode, setIntIsZeroBaseMode,
     intHoveredPoint, setIntHoveredPoint,
   } = useHistoryChart();
   const prevChartPeriodRef = useRef<string>(chartPeriod);
@@ -613,7 +611,6 @@ export default function App() {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
       if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
       if (stateData.chartPrefs.showNasdaq !== undefined) setShowNasdaq(stateData.chartPrefs.showNasdaq);
-      if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
       if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
       if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
       if (stateData.chartPrefs.accountChartStates) {
@@ -639,7 +636,6 @@ export default function App() {
       if (stateData.chartPrefs.intChartPeriod) setIntChartPeriod(stateData.chartPrefs.intChartPeriod);
       if (stateData.chartPrefs.intDateRange) setIntDateRange(stateData.chartPrefs.intDateRange);
       if (stateData.chartPrefs.intAppliedRange) setIntAppliedRange(stateData.chartPrefs.intAppliedRange);
-      if (stateData.chartPrefs.intIsZeroBaseMode !== undefined) setIntIsZeroBaseMode(stateData.chartPrefs.intIsZeroBaseMode);
       if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
       if (stateData.chartPrefs.rebalanceSortConfigMap) setRebalanceSortConfigMap(stateData.chartPrefs.rebalanceSortConfigMap);
@@ -722,7 +718,6 @@ export default function App() {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
       if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
       if (stateData.chartPrefs.showNasdaq !== undefined) setShowNasdaq(stateData.chartPrefs.showNasdaq);
-      if (stateData.chartPrefs.isZeroBaseMode !== undefined) setIsZeroBaseMode(stateData.chartPrefs.isZeroBaseMode);
       if (stateData.chartPrefs.showTotalEval !== undefined) setShowTotalEval(stateData.chartPrefs.showTotalEval);
       if (stateData.chartPrefs.showReturnRate !== undefined) setShowReturnRate(stateData.chartPrefs.showReturnRate);
       if (stateData.chartPrefs.accountChartStates) acRef.current = stateData.chartPrefs.accountChartStates;
@@ -793,7 +788,7 @@ export default function App() {
   useEffect(() => {
     if (isInitialLoad.current) return;
     chartPrefsUpdatedAtRef.current = Date.now();
-  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, isZeroBaseMode, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, compStocks]);
+  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, compStocks]);
 
   // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
@@ -1147,7 +1142,7 @@ export default function App() {
       const principalReturnRate = (hasReliableEval && principalAmount > 0) ? (trueEvalAtDate - principalAmount) / principalAmount * 100 : null;
       return { date, ...(indexDataMap[date] || {}), evalAmount: trueEvalAtDate, returnRate: retRate, principalAmount, principalReturnRate };
     });
-    const zeroBasedData = (!isZeroBaseMode || rawData.length === 0) ? rawData : (() => {
+    const zeroBasedData = (rawData.length === 0) ? rawData : (() => {
       const baseItem = rawData.find(item => item.evalAmount > 0) || rawData[0];
       // 지수·비교종목·시장지표 base는 각 시리즈의 조회기간 내 첫 non-null 시점(=조회시작)을 사용한다.
       // 포트폴리오 시리즈만 baseItem(포트폴리오 최초 평가일)을 0% 기준으로 쓰고, 시세 시리즈에
@@ -1235,7 +1230,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, isZeroBaseMode, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activeCloseEvalByDate, accountTwrByDate]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activeCloseEvalByDate, accountTwrByDate]);
 
   // ── 통합 대시보드 계산 ──
   const {
@@ -1254,7 +1249,7 @@ export default function App() {
   } = useIntegratedData({
     portfolios, activePortfolioId, portfolio, principal,
     avgExchangeRate, portfolioStartDate, title, marketIndicators,
-    history, depositHistory, depositHistory2, intAppliedRange, intIsZeroBaseMode,
+    history, depositHistory, depositHistory2, intAppliedRange,
     effectiveDateKey, krEffectiveDateKey,
     compStocks, stockHistoryMap, indicatorHistoryMap,
   });
@@ -1901,7 +1896,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -1916,7 +1911,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, isZeroBaseMode, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, intIsZeroBaseMode, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, calendarMemos, watchlistGroups]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, calendarMemos, watchlistGroups]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -2161,8 +2156,13 @@ export default function App() {
     if (intChartData.length < 2) { setIntDefaultSelectionResult(null); return; }
     const s = intChartData[0];
     const e = intChartData[intChartData.length - 1];
-    const profit = e.evalAmount - s.evalAmount;
-    const result: any = { startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? ((e.evalAmount / s.evalAmount) - 1) * 100 : 0 };
+    // calculateIntSelection과 동일 규약(구간 TWR 비 + 누적 실손익 차분) — 두 곳이 항상 같아야 한다.
+    const rate = (s.returnRate != null && e.returnRate != null)
+      ? ((100 + e.returnRate) / (100 + s.returnRate) - 1) * 100 : 0;
+    const profit = (s.cumProfit != null && e.cumProfit != null)
+      ? e.cumProfit - s.cumProfit
+      : (e.evalAmount - s.evalAmount);
+    const result: any = { startDate: s.date, endDate: e.date, profit, rate, startEval: s.evalAmount, endEval: e.evalAmount };
     compStocks.forEach((_: any, ci: number) => {
       const key = `comp${ci + 1}Rate`;
       const sr = s[key];
@@ -2713,8 +2713,6 @@ export default function App() {
             setShowBacktest={setShowBacktest}
             backtestColor={backtestColor}
             setBacktestColor={setBacktestColor}
-            isZeroBaseMode={isZeroBaseMode}
-            setIsZeroBaseMode={setIsZeroBaseMode}
             isAvgPriceMode={isAvgPriceMode}
             setIsAvgPriceMode={setIsAvgPriceMode}
             showCalcVerify={showCalcVerify}
@@ -2842,7 +2840,6 @@ export default function App() {
             intChartPeriod={intChartPeriod}
             intSelectionResult={intSelectionResult}
             intDefaultSelectionResult={intDefaultSelectionResult}
-            intIsZeroBaseMode={intIsZeroBaseMode}
             intRefAreaLeft={intRefAreaLeft}
             intRefAreaRight={intRefAreaRight}
             intCatDonutData={intCatDonutData}
@@ -2862,7 +2859,6 @@ export default function App() {
             setIntDateRange={setIntDateRange}
             setIntAppliedRange={setIntAppliedRange}
             handleIntSearchClick={handleIntSearchClick}
-            setIntIsZeroBaseMode={setIntIsZeroBaseMode}
             setHoveredIntCatSlice={setHoveredIntCatSlice}
             setHoveredIntHoldSlice={setHoveredIntHoldSlice}
             setShowNewAccountMenu={setShowNewAccountMenu}

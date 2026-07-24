@@ -81,8 +81,14 @@ export function useChartInteraction({
     const s = intChartData.find((d: any) => d.date >= left);
     const e = [...intChartData].reverse().find((d: any) => d.date <= right);
     if (!s || !e || s.date === e.date) return null;
-    const profit = e.evalAmount - s.evalAmount;
-    const result: any = { startDate: s.date, endDate: e.date, profit, rate: s.evalAmount > 0 ? ((e.evalAmount / s.evalAmount) - 1) * 100 : 0 };
+    // 구간 수익률 = 두 끝점 재베이스 누적 TWR의 비(조회시작 base가 약분된다) — 입출금 왜곡 없음.
+    // 구간 실손익 = 누적 실손익(Σ 일간 손익)의 차분. 평가액 raw 차분(입출금 포함)으로 되돌리지 말 것.
+    const rate = (s.returnRate != null && e.returnRate != null)
+      ? ((100 + e.returnRate) / (100 + s.returnRate) - 1) * 100 : 0;
+    const profit = (s.cumProfit != null && e.cumProfit != null)
+      ? e.cumProfit - s.cumProfit
+      : (e.evalAmount - s.evalAmount);
+    const result: any = { startDate: s.date, endDate: e.date, profit, rate, startEval: s.evalAmount, endEval: e.evalAmount };
     compStocks.forEach((_: any, ci: number) => {
       const key = `comp${ci + 1}Rate`;
       const sr = s[key];

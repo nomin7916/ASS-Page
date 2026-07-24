@@ -1,6 +1,6 @@
 ﻿﻿// @ts-nocheck
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { Plus, Download, Trash2, Maximize2, X, Check, Activity, TrendingUp, Settings, BarChart3, RotateCcw } from 'lucide-react';
+import { Plus, Download, Trash2, Maximize2, X, Check, TrendingUp, Settings, BarChart3, RotateCcw } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
 import {
@@ -63,7 +63,6 @@ export default function IntegratedDashboard({
   intChartData,
   intChartPeriod,
   intSelectionResult,
-  intIsZeroBaseMode,
   intRefAreaLeft,
   intRefAreaRight,
   intCatDonutData,
@@ -80,7 +79,6 @@ export default function IntegratedDashboard({
   setIntDateRange,
   setIntAppliedRange,
   handleIntSearchClick,
-  setIntIsZeroBaseMode,
   setHoveredIntCatSlice,
   setHoveredIntHoldSlice,
   setShowNewAccountMenu,
@@ -963,7 +961,6 @@ export default function IntegratedDashboard({
                         setPeriod={setIntChartPeriod}
                         onSearch={handleIntSearchClick}
                       />
-                      <button onClick={() => setIntIsZeroBaseMode(m => !m)} className={`p-1.5 rounded border flex items-center justify-center transition-colors ${intIsZeroBaseMode ? 'text-indigo-300 bg-indigo-900/40 border-indigo-700/60' : 'text-gray-500 border-gray-700 hover:text-gray-300 hover:bg-gray-800'}`} title="기간 시작 기준 / 원금 기준 전환"><Activity size={14} /></button>
                       <div className="flex items-center gap-1 shrink-0 border border-gray-700 rounded px-2 py-1" title="우측 Y축(금액) 스케일 조절 — 오른쪽으로 당길수록 변동폭이 확대됩니다">
                         <span className="text-[10px] text-gray-500 select-none">↕</span>
                         <input
@@ -1045,7 +1042,7 @@ export default function IntegratedDashboard({
                           <div className="flex items-center gap-1.5">
                             <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
                             <span className="text-[11px] font-bold text-gray-300">수익</span>
-                            <span className={`text-[12px] font-black ${displayResult.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                            <span className={`text-[12px] font-black ${displayResult.rate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                               {displayResult.rate > 0 ? '+' : ''}{displayResult.rate.toFixed(2)}%
                             </span>
                             <span className={`text-[10px] font-bold ${displayResult.profit >= 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
