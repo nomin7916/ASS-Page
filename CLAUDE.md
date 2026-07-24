@@ -1122,6 +1122,18 @@ markAsRead() / clearNotificationLog()
   `sortDir` 토글(원래순서→내림→오름→원래순서). **정렬 아이콘/방향표시 없음**(PortfolioTable `th` 정렬과
   동일 — 리스트 재배치가 피드백). `sortedStocks`는 뷰 전용 정렬(watchlistGroups 순서 미변경·Drive 저장
   안 함), 시세 없는 종목은 원래순서로 뒤에. 헤더 열 폭은 행과 일치.
+- **순서 드래그(⚠️ 회귀 주의 — 정렬과 별개 규약)**: 행 왼쪽 그립 핸들(`GripVertical`)을 잡아 그룹 내
+  종목 순서를 드래그로 조정한다. `canReorder = activeGroup && !isAutoGroup && sortDir===null &&
+  activeStocks.length>=2` — **원래순서 모드에서만** 활성(정렬 중이면 보이는 순서≠저장 순서라 핸들 미노출)이고
+  '최근조회' 자동 그룹은 제외. 이 게이트 덕에 **등락율 정렬은 무손실 보존**되고, `sortDir===null`일 때
+  `sortedStocks===activeStocks`라 렌더 인덱스=저장 인덱스가 보장된다. Pointer Events+`setPointerCapture`
+  (마우스·터치 통합, 핸들 `touch-action:none`), `computeDropIndex`는 `[data-watch-row]`(안정 높이의 내부 행
+  div) rect 중점 비교로 삽입 슬롯(0..N) 산출, 드롭 표시는 **inset box-shadow**(레이아웃 무변동 → geometry
+  안정, 깜빡임 없음). 커밋은 `activeGroup.stocks` 배열 재정렬(`insertAt = to>from ? to-1 : to`) 후
+  `onUpdateGroups` — **no-op이면 setState 자체를 생략**. ⚠️ **순서는 `stocks` 배열 자체를 재정렬**하므로
+  기존 `portfolioStructureKey` 지문(`JSON.stringify(watchlistGroups)`) 경로로 **Drive 자동 저장**된다
+  (persist 지점 추가·`stockHistoryMap` 접촉 없음). **알려진 한계(의도)**: 긴 리스트에서 드래그 중 자동
+  스크롤 없음(스크롤 후 재드래그 필요) — 짧은 관심목록 전제라 미도입.
 - **'최근조회' 자동 그룹**: 예약 id `__recent__` + `auto:true`. 등락율 클릭 시 최근 우선·코드 dedup·20개
   상한으로 기록되며 항상 첫 칩 고정(Clock 아이콘, 이름편집/삭제 불가, 코드 입력창 대신 안내 표시).
   `watchlistGroups`에 포함돼 영속. 활성 그룹 미지정 시 첫 그룹 고정 effect로 재정렬 시 뷰 튐 방지.
