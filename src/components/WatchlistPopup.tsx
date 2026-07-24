@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
 
@@ -96,6 +96,9 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const [intradayMap, setIntradayMap] = useState({}); // { [code]: number[] } 오늘 인트라데이(1일)
   const [period, setPeriod] = useState('1개월');       // 미니차트 기간
   const [sortDir, setSortDir] = useState(null);        // 등락율 정렬: null(원래순서)|'desc'|'asc'
+  const [dragId, setDragId] = useState(null);          // 순서 드래그 중인 종목 id (원래순서 모드에서만)
+  const [dragOverIndex, setDragOverIndex] = useState(null); // 삽입 슬롯 인덱스(0..N)
+  const listRef = useRef(null);                        // 종목 리스트 컨테이너(행 geometry 측정)
   const loadedDailyRef = useRef(new Set());            // 일별 조회 완료/진행 코드:market
   const loadedIntradayRef = useRef(new Set());         // 인트라데이 조회 완료/진행 코드:market
 
@@ -300,6 +303,53 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     return scored.map((x) => x.s);
   })();
 
+  // ───────── 순서 드래그 (원래순서 모드 + 수동 그룹 전용) ─────────
+  // 정렬 중(sortDir≠null)이거나 '최근조회' 자동 그룹에선 비활성 — 보이는 순서=저장 순서일 때만 이동 허용.
+  const isAutoGroup = activeGroup?.id === RECENT_ID || !!activeGroup?.auto;
+  const canReorder = !!activeGroup && !isAutoGroup && sortDir === null && activeStocks.length >= 2;
+  // 포인터 Y로 삽입 슬롯(0..N) 계산 — 리스트는 드래그 중 재배열하지 않아 geometry가 안정적(깜빡임 없음).
+  const computeDropIndex = (clientY) => {
+    const rows = listRef.current?.querySelectorAll('[data-watch-row]');
+    if (!rows || !rows.length) return 0;
+    for (let i = 0; i < rows.length; i++) {
+      const rect = rows[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return i;
+    }
+    return rows.length;
+  };
+  const onGripPointerDown = (e, stock) => {
+    if (!canReorder) return;
+    e.stopPropagation();
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    setDragId(stock.id);
+    setDragOverIndex(activeStocks.findIndex((s) => s.id === stock.id));
+  };
+  const onGripPointerMove = (e) => {
+    if (dragId == null) return;
+    const idx = computeDropIndex(e.clientY);
+    setDragOverIndex((prev) => (prev === idx ? prev : idx));
+  };
+  const commitReorder = () => {
+    const id = dragId, to = dragOverIndex;
+    setDragId(null);
+    setDragOverIndex(null);
+    if (id == null || to == null || !activeGroup) return;
+    const from = (activeGroup.stocks || []).findIndex((s) => s.id === id);
+    if (from < 0) return;
+    const insertAt = to > from ? to - 1 : to;      // splice로 앞에서 하나 제거되므로 뒤로 갈 땐 -1
+    if (insertAt === from) return;                 // 순서 변화 없음 → setState 자체를 생략(불필요 렌더 방지)
+    onUpdateGroups?.((prev) => (Array.isArray(prev) ? prev : []).map((g) => {
+      if (g.id !== activeGroup.id) return g;
+      const arr = [...(g.stocks || [])];
+      if (from >= arr.length || arr[from]?.id !== id) return g;  // prev 스냅샷 불일치 방어
+      const [item] = arr.splice(from, 1);
+      arr.splice(insertAt, 0, item);
+      return { ...g, stocks: arr };
+    }));
+  };
+  const cancelReorder = () => { setDragId(null); setDragOverIndex(null); };
+
   if (!open) return null;
 
   const chipInput = 'bg-gray-900 border border-amber-500/50 rounded-full px-2.5 py-1 text-xs text-white outline-none w-24';
@@ -466,10 +516,11 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
             {activeStocks.length === 0 ? (
               <div className="text-center text-gray-600 text-xs py-8">코드를 입력해 종목을 추가하세요.</div>
             ) : (
-              <div className="flex flex-col">
+              <div className={`flex flex-col ${dragId != null ? 'select-none' : ''}`} ref={listRef}>
                 {/* 정렬 헤더 (종목 2개 이상일 때 — 등락율 클릭으로 오름/내림 토글) */}
                 {activeStocks.length >= 2 && (
                   <div className="flex items-center gap-2 px-1 py-1 border-b border-gray-700/60 text-[10px] text-gray-500 select-none">
+                    {canReorder && <span className="w-4 shrink-0" />}
                     <span className="w-1.5 shrink-0" />
                     <span className="flex-1">종목</span>
                     <span className="w-14 shrink-0" />
@@ -484,12 +535,33 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                     <span className="w-3 shrink-0" />
                   </div>
                 )}
-                {sortedStocks.map((s) => {
+                {sortedStocks.map((s, idx) => {
                   const q = quotes[s.code];
                   const st = status[s.code];
+                  const isDragging = dragId === s.id;
+                  const dropTop = canReorder && dragId != null && !isDragging && dragOverIndex === idx;
+                  const dropBottom = canReorder && dragId != null && !isDragging && idx === sortedStocks.length - 1 && dragOverIndex === sortedStocks.length;
                   return (
                     <div key={s.id}>
-                      <div className="flex items-center gap-2 px-1 py-1.5 border-b border-gray-800/50 hover:bg-white/[0.02] group">
+                      <div
+                        data-watch-row
+                        className={`flex items-center gap-2 px-1 py-1.5 border-b border-gray-800/50 hover:bg-white/[0.02] group ${isDragging ? 'opacity-40' : ''}`}
+                        style={{ boxShadow: dropTop ? 'inset 0 2px 0 0 #fbbf24' : dropBottom ? 'inset 0 -2px 0 0 #fbbf24' : undefined }}
+                      >
+                        {canReorder && (
+                          <button
+                            onPointerDown={(e) => onGripPointerDown(e, s)}
+                            onPointerMove={onGripPointerMove}
+                            onPointerUp={commitReorder}
+                            onPointerCancel={cancelReorder}
+                            onLostPointerCapture={cancelReorder}
+                            title="드래그하여 순서 이동"
+                            className="w-4 shrink-0 flex items-center justify-center text-gray-600 hover:text-amber-300 cursor-grab active:cursor-grabbing"
+                            style={{ touchAction: 'none' }}
+                          >
+                            <GripVertical size={13} />
+                          </button>
+                        )}
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotCls(st)}`} />
                         <div className="min-w-0 flex-1">
                           <div className="text-gray-100 text-[13px] font-medium truncate" title={q?.name || s.name || s.code}>
