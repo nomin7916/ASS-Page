@@ -1142,6 +1142,60 @@ markAsRead() / clearNotificationLog()
 
 ---
 
+### 환율 계산기 — 계산기 창 내부 '환율' 패널 (⚠️ 회귀 주의)
+
+`FloatingCalculator` 타이틀바 **환율 토글**로 여는 통화 변환 패널. 2~3개 슬롯, **아무 칸이나 입력**
+하면 그 칸이 기준(base)이 되고 나머지가 즉시 재계산된다. 데이터 계층은 `src/fxRates.ts`(신규),
+소스는 **야후 단일**, **USD 피벗**(`{CUR}=X` = USD 1단위당 통화, USD는 rate=1 무조회).
+검증: `npm run verify:fx` (#1~#26 — 참조 구현을 `fxRates.ts`와 **1:1 동기화**할 것).
+
+- **⚠️ spark 배치 응답은 반드시 `result[i].symbol`로 키잉 — 인덱스 매칭 절대 금지**:
+  `v7/finance/spark?symbols=...`는 **요청 순서를 보장하지 않고**(실측 5회 중 4회 불일치) 조회 실패
+  심볼을 **HTTP 200 + `spark.error=null`로 조용히 드롭**한다. 인덱스로 매핑하면 KRW 칸에 JPY 환율
+  (163.79)이 들어가 1,000,000원이 $685 대신 **$6,105(9배)로 오류 표시 없이** 나온다. 길이 검사
+  (`result.length === wanted.length`)로 대체 금지 — 드롭은 잡아도 **재정렬은 못 잡는다**.
+  `meta.symbol`도 키 금지(같은 심볼이 `KRW=X`/`USDKRW=X`로 번갈아 옴). 순수 함수
+  `mapSparkQuotes(json, wanted)`로 분리해 테스트로 고정(#19~#22). 실패 판정 = **응답 Map 키 부재**
+  → 그 코드만 `v8/finance/chart` 개별 폴백(심볼 1:1이라 인덱스 매칭 자체가 없음).
+- **⚠️ `convertFx`/`fxChangePct`는 null 반환 계약(예외 금지)**: 로딩 중 빈 맵·부분 성공 누락은
+  **정상 경로**다. 가드를 빼면 렌더 중 TypeError가 `main.tsx`의 **루트 ErrorBoundary**까지 올라가
+  계산기가 아니라 **앱 화면 전체가 오류 페이지로 대체**된다(계산기는 App 최상위 형제). 2차 방어로
+  `App.tsx`에서 `<ErrorBoundary label="계산기">`로 감쌌다(label = 섹션 모드 = 전체화면 대체 아님).
+  변환은 **렌더 파생값**으로만 쓰고 state에 저장하지 않는다.
+- **⚠️ 행별 등락률 = `(b.rate/a.rate) / (b.prevRate/a.prevRate) − 1`** — 그 행에 **표시된 금액**의
+  전일 대비 변화율(금액과 부호가 항상 일치). **통화 자기 변화율(`rate/prevRate−1`)로 바꾸지 말 것**
+  — base=KRW일 때 USD 행이 **항상 0.00%로 굳고** BRL 행은 −0.069%(참값 +0.938%)가 뜬다. base 행은
+  정의상 0이라 **% 미표시**, `prevRate` 없으면 **`0.00%` 단언 금지·자리 생략**(`dodAbsChange` null 계약과 동일).
+  (통화별 갱신시각 차이는 무해 — `{CUR}=X` 24종이 **동일 CCY 세션**을 써서 `chartPreviousClose` 기준일이 같다.)
+- **⚠️ 금액 파싱은 `parseFxAmount` 단일 함수**: `parseFloat` 직접 호출 금지(blur 포맷 `1,000,000`을
+  재편집하면 **1**이 된다). 통화기호 제거를 `[^\d.+-]` **전역 치환으로 하지 말 것** — `'12x34'`가
+  1234로 통과한다. 기호는 **앞뒤에서만** 벗기고 가운데는 strict 정규식이 거른다. focus 시 포맷 해제
+  (`plainFxAmount`), blur 시에만 포맷. 전역 paste 핸들러는 input이면 early-return하므로 **필드에
+  직접 `onPaste`**를 붙여 `parsePastedNumber`를 재사용한다.
+- **⚠️ base는 index가 아니라 통화 코드로 추적** — 슬롯 추가/삭제로 인덱스가 밀려도 어긋나지 않는다.
+  base 승계 금액은 **표시 반올림값이 아니라 full precision**(`fxAmount`) — 칸을 오갈 때마다 값이
+  깎이는 것 방지. 통화 select 변경 시 base 칸이면 **금액 유지**, 표시 중인 다른 슬롯과 겹치면 **자리 교환**.
+- **⚠️ 라이브 시세는 메모리 전용**: `stockHistoryMap`/`indicatorHistoryMap`에 **절대 병합 금지**
+  (평가액 재계산 권위 소스 오염 — WatchlistPopup 불변식과 동일). localStorage/sessionStorage 금지.
+  해외계좌 평가의 `marketIndicators.usdkrw` 경로와도 **연결하지 않는다**. 조회 경합은 시퀀스 토큰으로
+  늦은 응답을 폐기하고, 상태는 **교체가 아니라 병합**(다른 통화 캐시 보존). TTL 10분 + 수동 ⟳.
+- **⚠️ `isOpen=false`는 언마운트가 아니라 렌더 스킵**(early return이 모든 훅 뒤). state·ref가 살아남으므로
+  조회 트리거는 **`[isOpen, showFx, fxKey]` + TTL**로 게이팅한다.
+- **⚠️ 전역 keydown 가드에 `<button>`이 없다** → 패널을 `onKeyDownCapture={e => e.stopPropagation()}`로
+  감싸 내부 키 입력이 수식으로 새는 것을 막는다(가드 목록에 `button` 추가는 기존 키패드 동작을 바꾸므로 금지).
+- **⚠️ 루트 `touchAction:'none'`을 드래그 핸들(타이틀 바)로 이동**: 루트는 `overflow-y-auto` 스크롤
+  컨테이너라 `none`이면 패널이 늘어난 만큼을 **모바일에서 스크롤할 수 없다**. 창 위치 보정 effect deps에
+  `showFx`, `fxSlots.length` 추가 필수.
+- **실패 표시는 패널 내부 인라인만** — `notify()`는 토스트를 렌더하지 않고 벨 이력만 남기며, 시세 계층은
+  **알림 최소화 정책상 벨에 남기지 않는다**.
+- **영속화(chartPrefs 5지점)**: `fxCurrencies`(항상 3개 보존 — 3번째를 지웠다 다시 추가해도 직전 선택 복원) +
+  `fxSlotCount`(2|3, 표시 개수). ① state 리터럴 ② `chartPrefsUpdatedAt` effect deps ③ STATE 저장 effect deps
+  ④ `applyStateData` ⑤ `applyBackupData`. 로드 정규화 `normalizeFxCurrencies`는 **보충 → dedupe → 클램프**
+  순서 필수(dedupe를 먼저 하면 보충이 만든 중복이 남는다). 환율 값·시각은 저장하지 않는다(라이브 파생값).
+  **한계(기존 chartPrefs와 동일)**: 저장 effect가 `portfolios.length === 0`에서 조기 반환하므로 계좌가
+  하나도 없으면 저장되지 않고, chartPrefs 단독 변경은 `saveVersionFile`을 호출하지 않아 **타 기기 즉시 반영은 안 된다**.
+- **범위 밖(의도)**: 은행 고시환율/스프레드(살 때·팔 때), 환율 이력 차트, 4개 이상 통화.
+
 ## 브라우저 저장소 정책
 
 ### ETF 비중·PER 데이터 — 메모리 캐시만 사용

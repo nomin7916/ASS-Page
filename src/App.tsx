@@ -44,6 +44,8 @@ import StudyMaterialViewer from './components/StudyMaterialViewer';
 import InactivityModal from './components/InactivityModal';
 import FloatingCalculator from './components/FloatingCalculator';
 import WatchlistPopup from './components/WatchlistPopup';
+import ErrorBoundary from './components/ErrorBoundary';
+import { FX_DEFAULT, FX_MIN_SLOTS, normalizeFxCurrencies, normalizeFxSlotCount } from './fxRates';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -133,6 +135,10 @@ export default function App() {
   } | null>(null);
   const [showDividendTaxPage, setShowDividendTaxPage] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
+  // 환율 계산기 통화 선택 — 코드는 항상 3개 보존(3번째를 지웠다 다시 추가해도 직전 선택 복원),
+  // 화면에 보이는 개수만 fxSlotCount(2|3)로 분리 저장한다.
+  const [fxCurrencies, setFxCurrencies] = useState<string[]>(() => normalizeFxCurrencies(FX_DEFAULT));
+  const [fxSlotCount, setFxSlotCount] = useState(FX_MIN_SLOTS);
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [notebookLinks, setNotebookLinks] = useState<{title: string, url?: string, fileId?: string, createdAt: number}[]>([]);
@@ -637,6 +643,8 @@ export default function App() {
       if (stateData.chartPrefs.intDateRange) setIntDateRange(stateData.chartPrefs.intDateRange);
       if (stateData.chartPrefs.intAppliedRange) setIntAppliedRange(stateData.chartPrefs.intAppliedRange);
       if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
+      if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
+      if (stateData.chartPrefs.fxSlotCount !== undefined) setFxSlotCount(normalizeFxSlotCount(stateData.chartPrefs.fxSlotCount));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
       if (stateData.chartPrefs.rebalanceSortConfigMap) setRebalanceSortConfigMap(stateData.chartPrefs.rebalanceSortConfigMap);
       // 통합 대시보드 비교종목 복원 — 앱은 항상 통합 대시보드에서 시작하므로 compStocks도 함께 설정
@@ -732,6 +740,8 @@ export default function App() {
       if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(stateData.chartPrefs.sectionCollapsedMap);
       if (stateData.chartPrefs.intSec) setIntSec(stateData.chartPrefs.intSec);
       if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
+      if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
+      if (stateData.chartPrefs.fxSlotCount !== undefined) setFxSlotCount(normalizeFxSlotCount(stateData.chartPrefs.fxSlotCount));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
       if (stateData.chartPrefs.rebalanceSortConfigMap) setRebalanceSortConfigMap(stateData.chartPrefs.rebalanceSortConfigMap);
     }
@@ -788,7 +798,7 @@ export default function App() {
   useEffect(() => {
     if (isInitialLoad.current) return;
     chartPrefsUpdatedAtRef.current = Date.now();
-  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, compStocks]);
+  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, compStocks]);
 
   // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
@@ -1896,7 +1906,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -1911,7 +1921,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, calendarMemos, watchlistGroups]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -2938,7 +2948,20 @@ export default function App() {
         portfolio={portfolio}
         setPortfolio={setPortfolio}
       />
-      <FloatingCalculator isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
+      {/* 계산기는 App 최상위 형제라 렌더 예외가 루트 ErrorBoundary까지 올라가면 앱 화면 전체가
+          오류 페이지로 대체된다 → label 지정으로 섹션 모드 격리(2차 방어). */}
+      <ErrorBoundary label="계산기">
+        <FloatingCalculator
+          isOpen={showCalculator}
+          onClose={() => setShowCalculator(false)}
+          fxCurrencies={fxCurrencies}
+          fxSlotCount={fxSlotCount}
+          onChangeFx={(codes, slots) => {
+            setFxCurrencies(normalizeFxCurrencies(codes));
+            setFxSlotCount(normalizeFxSlotCount(slots));
+          }}
+        />
+      </ErrorBoundary>
       <WatchlistPopup
         open={showWatchlist}
         onClose={() => setShowWatchlist(false)}

@@ -1,8 +1,14 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Trash2, Delete, ArrowLeft, ArrowRight, ArrowUp, ArrowDown } from 'lucide-react';
+import { X, Trash2, Delete, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, RefreshCw } from 'lucide-react';
+import {
+  FX_CURRENCIES, FX_DEFAULT, FX_MIN_SLOTS, FX_MAX_SLOTS,
+  convertFx, fxChangePct, fetchFxRates, fxDp, fxName,
+  parseFxAmount, formatFxAmount, plainFxAmount, formatFxQuoteTime,
+} from '../fxRates';
 
 const CALC_Z = 1050;
+const FX_TTL = 10 * 60 * 1000;
 
 const fmt = (n) => {
   if (isNaN(n) || !isFinite(n)) return '오류';
@@ -196,7 +202,13 @@ const Caret = () => (
   <span className="inline-block w-[2px] self-stretch bg-orange-400 animate-pulse mx-[1px]" style={{ minHeight: '1.05em' }} />
 );
 
-export default function FloatingCalculator({ isOpen, onClose }) {
+export default function FloatingCalculator({
+  isOpen,
+  onClose,
+  fxCurrencies = FX_DEFAULT,
+  fxSlotCount = FX_MIN_SLOTS,
+  onChangeFx = null,
+}) {
   const [root, setRoot] = useState([]);                       // 수식 트리(원자 배열)
   const [cursor, setCursor] = useState({ path: [], idx: 0 }); // 커서 위치
   const [result, setResult] = useState(null);                 // '=' 결과 문자열 | null
@@ -208,6 +220,23 @@ export default function FloatingCalculator({ isOpen, onClose }) {
   }));
   const [isScientific, setIsScientific] = useState(false);
   const [isDeg, setIsDeg] = useState(true);
+  // ───────── 환율 패널 ─────────
+  const [showFx, setShowFx] = useState(false);
+  const [fxRates, setFxRates] = useState({});      // FxRateMap — 메모리 전용(브라우저 저장소·Drive 금지)
+  const [fxStatus, setFxStatus] = useState('idle');// idle | loading | ok | partial | error
+  const [fxBaseCode, setFxBaseCode] = useState(null);
+  const [fxAmount, setFxAmount] = useState(null);  // 기준 금액(full precision) — 표시 반올림값과 별개
+  const [fxEdit, setFxEdit] = useState(null);      // 편집 중 원문(콤마 없음). null이면 포맷 표시
+  const fxSeqRef = useRef(0);
+  const fxAbortRef = useRef(null);
+  const fxFetchedRef = useRef({ key: '', at: 0 });
+
+  const fxSlots = (Array.isArray(fxCurrencies) && fxCurrencies.length ? fxCurrencies : FX_DEFAULT)
+    .slice(0, Math.min(FX_MAX_SLOTS, Math.max(FX_MIN_SLOTS, fxSlotCount || FX_MIN_SLOTS)));
+  const fxKey = fxSlots.join(',');
+  // base는 index가 아니라 통화 코드로 추적 — 슬롯 추가/삭제로 인덱스가 밀려도 어긋나지 않는다.
+  const baseCode = fxBaseCode && fxSlots.includes(fxBaseCode) ? fxBaseCode : fxSlots[0];
+
   const dragging = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
   const rootRef = useRef(null);
@@ -266,7 +295,7 @@ export default function FloatingCalculator({ isOpen, onClose }) {
       }));
     });
     return () => cancelAnimationFrame(id);
-  }, [isScientific, history.length === 0, result == null]);
+  }, [isScientific, history.length === 0, result == null, showFx, fxSlots.length]);
 
   // 트리 변경으로 커서 경로가 무효화되면 안전 위치로 복구 (UI 크래시 방지)
   useEffect(() => {
@@ -488,6 +517,118 @@ export default function FloatingCalculator({ isOpen, onClose }) {
     return () => window.removeEventListener('paste', onPaste);
   }, [isOpen, root, cursor]);
 
+  // ───────── 환율 조회 ─────────
+  // 늦게 도착한 옛 응답이 최신 상태를 덮어쓰지 않도록 시퀀스 토큰으로 폐기하고,
+  // 상태는 교체가 아니라 병합해 이미 받아둔 다른 통화 시세를 지우지 않는다.
+  const fxLoad = useCallback(async (codes) => {
+    if (!codes || codes.length === 0) return;
+    const seq = ++fxSeqRef.current;
+    try { fxAbortRef.current?.abort(); } catch {}
+    const ac = new AbortController();
+    fxAbortRef.current = ac;
+    setFxStatus('loading');
+    const got = await fetchFxRates(codes, ac.signal);
+    if (seq !== fxSeqRef.current) return;
+    const okCount = codes.filter((c) => got[c]).length;
+    setFxRates((prev) => ({ ...prev, ...got }));
+    if (okCount === codes.length) {
+      fxFetchedRef.current = { key: codes.join(','), at: Date.now() };
+      setFxStatus('ok');
+    } else {
+      fxFetchedRef.current = { key: '', at: 0 };
+      setFxStatus(okCount > 0 ? 'partial' : 'error');
+    }
+  }, []);
+
+  // ⚠️ isOpen=false는 언마운트가 아니라 렌더 스킵이다(early return이 모든 훅 뒤에 있음).
+  //    state·ref가 살아남으므로 "보이게 된 시점 + TTL"을 조회 트리거로 삼는다.
+  useEffect(() => {
+    if (!isOpen || !showFx) return;
+    if (fxFetchedRef.current.key === fxKey && Date.now() - fxFetchedRef.current.at < FX_TTL) return;
+    fxLoad(fxKey.split(','));
+  }, [isOpen, showFx, fxKey, fxLoad]);
+
+  useEffect(() => () => { try { fxAbortRef.current?.abort(); } catch {} }, []);
+
+  // 포커스한 칸이 기준(base)이 된다. 승계 금액은 표시 반올림값이 아니라 full precision —
+  // 그래야 칸을 오갈 때마다 값이 조금씩 깎이지 않는다. 편집창에는 반올림 평문을 넣는다.
+  const fxSetBase = (code) => {
+    if (code === baseCode) {
+      setFxEdit(fxAmount == null ? '' : plainFxAmount(fxAmount, fxDp(code)));
+      return;
+    }
+    const v = convertFx(fxAmount, baseCode, code, fxRates);
+    setFxBaseCode(code);
+    setFxAmount(v);
+    setFxEdit(v == null ? '' : plainFxAmount(v, fxDp(code)));
+  };
+
+  const fxOnChange = (text) => { setFxEdit(text); setFxAmount(parseFxAmount(text)); };
+
+  // 전역 paste 핸들러는 input이면 early-return하므로 필드에 직접 붙인다(₩·콤마 제거 재사용).
+  const fxOnPaste = (e) => {
+    const num = parsePastedNumber(e.clipboardData?.getData('text') ?? '');
+    if (!num || num === '-') return;
+    e.preventDefault();
+    setFxEdit(num);
+    setFxAmount(parseFxAmount(num));
+  };
+
+  const fxSelectCode = (idx, code) => {
+    if (!onChangeFx) return;
+    const next = [...(Array.isArray(fxCurrencies) && fxCurrencies.length ? fxCurrencies : FX_DEFAULT)];
+    const prevCode = next[idx];
+    const dup = next.findIndex((c, j) => c === code && j !== idx && j < fxSlots.length);
+    if (dup >= 0) next[dup] = prevCode;               // 표시 중인 다른 슬롯과 겹치면 자리 교환
+    next[idx] = code;
+    onChangeFx(next, fxSlots.length);
+    if (prevCode === baseCode) setFxBaseCode(code);   // 기준 칸의 통화만 바뀐 것 — 금액은 유지
+  };
+
+  const fxAddSlot = () => {
+    if (!onChangeFx || fxSlots.length >= FX_MAX_SLOTS) return;
+    const next = [...(Array.isArray(fxCurrencies) && fxCurrencies.length ? fxCurrencies : FX_DEFAULT)];
+    const used = new Set(fxSlots);
+    if (!next[2] || used.has(next[2])) next[2] = FX_CURRENCIES.find((c) => !used.has(c.code))?.code;
+    onChangeFx(next, FX_MAX_SLOTS);
+  };
+
+  // 통화 코드는 배열에 남겨둔다 → 다시 추가할 때 직전 선택이 복원된다.
+  const fxRemoveSlot = () => {
+    if (!onChangeFx || fxSlots.length <= FX_MIN_SLOTS) return;
+    const dropped = fxSlots[fxSlots.length - 1];
+    if (baseCode === dropped) {
+      const nextBase = fxSlots[0];
+      setFxAmount(convertFx(fxAmount, baseCode, nextBase, fxRates));
+      setFxBaseCode(nextBase);
+      setFxEdit(null);
+    }
+    onChangeFx(fxCurrencies, FX_MIN_SLOTS);
+  };
+
+  // '=' 결과 → 기준 칸. result는 null이 아니라 '오류' 문자열일 수 있어 명시적으로 거른다.
+  const fxInjectSource = (result != null && result !== '오류') ? result : (lastAns != null ? fmt(lastAns) : null);
+  const fxInjectValue = fxInjectSource == null ? null : parseFxAmount(fxInjectSource);
+  const fxInject = () => {
+    if (fxInjectValue == null) return;
+    setFxAmount(fxInjectValue);
+    setFxEdit(null);
+  };
+
+  // 환율 값 → 수식. strToAtoms는 문자 그대로 원자를 만들므로 콤마·지수표기는 넣지 않는다.
+  const fxToFormula = (code) => {
+    const v = code === baseCode ? fxAmount : convertFx(fxAmount, baseCode, code, fxRates);
+    if (v == null) return;
+    const s = plainFxAmount(v, fxDp(code));
+    if (!/^-?\d+(\.\d+)?$/.test(s)) return;
+    insertAtoms(strToAtoms(s));
+  };
+
+  const fxOther = fxSlots.find((c) => c !== baseCode && fxRates[c]);
+  const fxUnit = fxOther ? convertFx(1, baseCode, fxOther, fxRates) : null;
+  const fxTimes = [baseCode, fxOther].map((c) => (c ? fxRates[c]?.at : null)).filter(Boolean);
+  const fxQuotedAt = fxTimes.length ? formatFxQuoteTime(Math.min(...fxTimes)) : '';
+
   if (!isOpen) return null;
 
   // ───────── 2D 렌더 ─────────
@@ -581,17 +722,28 @@ export default function FloatingCalculator({ isOpen, onClose }) {
   return (
     <div
       ref={rootRef}
-      style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: CALC_Z, width: 300, maxHeight: '94vh', touchAction: 'none' }}
+      style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: CALC_Z, width: 300, maxHeight: '94vh' }}
       className="rounded-2xl shadow-2xl overflow-y-auto border border-gray-600/60 bg-black"
     >
-      {/* 타이틀 바 */}
+      {/* 타이틀 바 — touchAction:'none'은 드래그 핸들인 여기에만 둔다(본문은 터치 스크롤 유지) */}
       <div
         className="flex items-center justify-between bg-gray-900 px-3 py-2 cursor-move border-b border-gray-700/40 select-none sticky top-0 z-10"
+        style={{ touchAction: 'none' }}
         onMouseDown={(e) => { onDragStart(e.clientX, e.clientY); e.preventDefault(); }}
         onTouchStart={(e) => onDragStart(e.touches[0].clientX, e.touches[0].clientY)}
       >
         <span className="text-gray-200 text-sm font-semibold">🧮 공학용 계산기</span>
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setShowFx((v) => !v)}
+            title="환율 변환 패널"
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+              showFx ? 'text-teal-300 border-teal-600/50 bg-teal-900/20 hover:bg-teal-900/40'
+                     : 'text-gray-400 border-gray-600/50 hover:text-gray-200 hover:border-gray-500 hover:bg-gray-800/50'
+            }`}
+          >
+            환율
+          </button>
           <button
             onClick={() => setIsDeg((v) => !v)}
             title="각도 단위 전환 (DEG=도 / RAD=라디안)"
@@ -627,6 +779,132 @@ export default function FloatingCalculator({ isOpen, onClose }) {
           {result != null ? (result === '오류' ? '오류' : `= ${fmtDisplay(result)}`) : ''}
         </div>
       </div>
+
+      {/* 환율 패널 — 조회 실패는 notify(벨 이력)가 아니라 패널 내부 인라인으로만 알린다
+          (알림 최소화 정책: 시세 계층은 벨에 남기지 않음).
+          onKeyDownCapture로 패널 내부 키 입력이 전역 keydown 핸들러(수식 입력)에 닿지 않게 막는다 —
+          버튼 포커스 상태의 숫자키가 수식으로 새는 것을 방지. */}
+      {showFx && (
+        <div
+          className="bg-gray-950 px-3 pb-2 pt-1.5 border-y border-gray-800/60 space-y-1.5"
+          onKeyDownCapture={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold text-teal-300">💱 환율 변환</span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={fxInject}
+                disabled={fxInjectValue == null}
+                title="계산 결과를 기준 칸에 넣기"
+                className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                  fxInjectValue == null
+                    ? 'text-gray-600 border-gray-700/50 cursor-not-allowed'
+                    : 'text-orange-300 border-orange-600/50 hover:bg-orange-900/30'
+                }`}
+              >
+                = 결과
+              </button>
+              <button
+                onClick={() => fxLoad(fxSlots)}
+                title="환율 새로고침"
+                className="text-gray-400 hover:text-teal-300 p-1 rounded transition-colors"
+              >
+                <RefreshCw size={12} className={fxStatus === 'loading' ? 'animate-spin' : ''} />
+              </button>
+            </div>
+          </div>
+
+          {fxSlots.map((code, i) => {
+            const dp = fxDp(code);
+            const isBase = code === baseCode;
+            const usable = !!fxRates[code];
+            const val = isBase ? fxAmount : convertFx(fxAmount, baseCode, code, fxRates);
+            const text = isBase && fxEdit != null
+              ? fxEdit
+              : (fxAmount == null ? '' : (val == null ? '—' : formatFxAmount(val, dp)));
+            const pct = isBase ? null : fxChangePct(baseCode, code, fxRates);
+            return (
+              <div key={`${code}-${i}`} className="flex items-center gap-1">
+                <select
+                  value={code}
+                  onChange={(e) => fxSelectCode(i, e.target.value)}
+                  title={fxName(code)}
+                  className="w-[60px] shrink-0 bg-gray-900 border border-gray-700 rounded text-gray-200 text-[11px] px-1 py-1 focus:outline-none focus:border-teal-500"
+                >
+                  {FX_CURRENCIES.map((c) => (
+                    <option key={c.code} value={c.code}>{c.code}</option>
+                  ))}
+                </select>
+                <input
+                  value={text}
+                  onChange={(e) => fxOnChange(e.target.value)}
+                  onFocus={() => fxSetBase(code)}
+                  onBlur={() => setFxEdit(null)}
+                  onPaste={fxOnPaste}
+                  disabled={!isBase && !usable}
+                  inputMode="decimal"
+                  placeholder={usable ? '0' : '—'}
+                  title={fxName(code)}
+                  className={`flex-1 min-w-0 text-right rounded px-1.5 py-1 text-[13px] bg-gray-900 border focus:outline-none disabled:opacity-40 ${
+                    isBase ? 'border-teal-600 text-white' : 'border-gray-700 text-gray-300'
+                  }`}
+                />
+                <span
+                  className={`w-[42px] shrink-0 text-right text-[9px] tabular-nums ${
+                    pct == null ? 'text-gray-600' : pct > 0 ? 'text-red-400' : pct < 0 ? 'text-blue-400' : 'text-gray-400'
+                  }`}
+                  title={pct == null ? '' : '전일 대비 이 금액의 변화율'}
+                >
+                  {pct == null ? '' : `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`}
+                </span>
+                <button
+                  onClick={() => fxToFormula(code)}
+                  title="이 값을 수식에 넣기"
+                  className="shrink-0 text-gray-500 hover:text-teal-300 p-0.5 transition-colors"
+                >
+                  <ArrowUp size={11} />
+                </button>
+                {i === fxSlots.length - 1 && fxSlots.length > FX_MIN_SLOTS ? (
+                  <button
+                    onClick={fxRemoveSlot}
+                    title="이 통화 제거"
+                    className="shrink-0 text-gray-600 hover:text-red-400 p-0.5 transition-colors"
+                  >
+                    <X size={11} />
+                  </button>
+                ) : (
+                  <span className="shrink-0 w-[19px]" />
+                )}
+              </div>
+            );
+          })}
+
+          {fxSlots.length < FX_MAX_SLOTS && onChangeFx && (
+            <button
+              onClick={fxAddSlot}
+              className="w-full text-[10px] text-gray-400 hover:text-teal-300 border border-dashed border-gray-700 hover:border-teal-700 rounded py-1 transition-colors"
+            >
+              + 통화 추가
+            </button>
+          )}
+
+          <div className="text-[9px] leading-relaxed text-gray-500">
+            {fxStatus === 'error' ? (
+              <span className="text-amber-400">환율을 불러오지 못했습니다 · 새로고침을 눌러 다시 시도하세요</span>
+            ) : fxStatus === 'loading' && !fxUnit ? (
+              '환율 불러오는 중…'
+            ) : fxUnit != null ? (
+              <>
+                1 {baseCode} = {formatFxAmount(fxUnit, fxUnit >= 100 ? 2 : 4)} {fxOther}
+                {fxQuotedAt ? ` · ${fxQuotedAt}` : ''} · 야후 시장환율
+                {fxStatus === 'partial' && <span className="text-amber-400"> · 일부 통화 조회 실패</span>}
+              </>
+            ) : (
+              '환율 대기 중'
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 함수 키패드 */}
       {isScientific && (
