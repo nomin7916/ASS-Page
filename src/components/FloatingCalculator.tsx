@@ -6,6 +6,9 @@ import {
   convertFx, fxChangePct, fetchFxRates, fxDp, fxName,
   parseFxAmount, formatFxAmount, plainFxAmount, formatFxQuoteTime,
 } from '../fxRates';
+import {
+  BRL_BOND_FACE, BRL_BOND_COUPON, BRL_BOND_YEARS, BRL_COUPONS_PER_YEAR, computeBrlBond,
+} from '../brlBond';
 
 const CALC_Z = 1050;
 const FX_TTL = 10 * 60 * 1000;
@@ -230,12 +233,30 @@ export default function FloatingCalculator({
   const fxSeqRef = useRef(0);
   const fxAbortRef = useRef(null);
   const fxFetchedRef = useRef({ key: '', at: 0 });
+  // ───────── 브라질 채권 패널 ─────────
+  // 입력은 컴포넌트 메모리 전용(Drive 저장 안 함) — 환율 패널의 '금액'과 동일 정책.
+  // 액면·표면금리·잔존만기는 브라질 국채 표준값을 실제 초기값으로 채우고,
+  // 환율 3칸은 빈칸(=조회시점 라이브 환율 사용)으로 둔다.
+  const [showBond, setShowBond] = useState(false);
+  const [bond, setBond] = useState({
+    krw: '', price: '',
+    face: String(BRL_BOND_FACE), rate: String(BRL_BOND_COUPON), years: String(BRL_BOND_YEARS),
+    fxBuy: '', fxUsdBrl: '', fxUsdKrw: '',
+  });
+  const setBondField = (k, v) => setBond((b) => ({ ...b, [k]: v }));
 
   const fxSlots = (Array.isArray(fxCurrencies) && fxCurrencies.length ? fxCurrencies : FX_DEFAULT)
     .slice(0, Math.min(FX_MAX_SLOTS, Math.max(FX_MIN_SLOTS, fxSlotCount || FX_MIN_SLOTS)));
-  const fxKey = fxSlots.join(',');
   // base는 index가 아니라 통화 코드로 추적 — 슬롯 추가/삭제로 인덱스가 밀려도 어긋나지 않는다.
   const baseCode = fxBaseCode && fxSlots.includes(fxBaseCode) ? fxBaseCode : fxSlots[0];
+
+  // ⚠️ 두 패널이 같은 fxRates 맵을 공유하므로 조회는 '합집합' 한 번으로 묶는다.
+  //    패널별로 따로 조회하면 fxFetchedRef.key 가 서로를 무효화해 TTL 이 깨지고 무한 재조회가 된다.
+  const needCodes = [
+    ...(showFx ? fxSlots : []),
+    ...(showBond ? ['KRW', 'USD', 'BRL'] : []),
+  ].filter((c, i, a) => a.indexOf(c) === i);
+  const needKey = needCodes.join(',');
 
   const dragging = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
@@ -295,7 +316,7 @@ export default function FloatingCalculator({
       }));
     });
     return () => cancelAnimationFrame(id);
-  }, [isScientific, history.length === 0, result == null, showFx, fxSlots.length]);
+  }, [isScientific, history.length === 0, result == null, showFx, showBond, fxSlots.length]);
 
   // 트리 변경으로 커서 경로가 무효화되면 안전 위치로 복구 (UI 크래시 방지)
   useEffect(() => {
@@ -543,10 +564,10 @@ export default function FloatingCalculator({
   // ⚠️ isOpen=false는 언마운트가 아니라 렌더 스킵이다(early return이 모든 훅 뒤에 있음).
   //    state·ref가 살아남으므로 "보이게 된 시점 + TTL"을 조회 트리거로 삼는다.
   useEffect(() => {
-    if (!isOpen || !showFx) return;
-    if (fxFetchedRef.current.key === fxKey && Date.now() - fxFetchedRef.current.at < FX_TTL) return;
-    fxLoad(fxKey.split(','));
-  }, [isOpen, showFx, fxKey, fxLoad]);
+    if (!isOpen || needKey === '') return;
+    if (fxFetchedRef.current.key === needKey && Date.now() - fxFetchedRef.current.at < FX_TTL) return;
+    fxLoad(needKey.split(','));
+  }, [isOpen, needKey, fxLoad]);
 
   useEffect(() => () => { try { fxAbortRef.current?.abort(); } catch {} }, []);
 
@@ -688,6 +709,108 @@ export default function FloatingCalculator({
     return null;
   };
 
+  // ───────── 브라질 채권 파생값 ─────────
+  // 라이브 환율(야후, USD 피벗): BRL.rate = USD당 헤알, KRW.rate = 원/달러, 원/헤알은 교차환율.
+  // ⚠️ 전부 렌더 파생값 — state 에 저장하지 않는다(환율 패널의 변환값과 동일 정책).
+  const liveFxBuy = convertFx(1, 'BRL', 'KRW', fxRates);
+  const liveUsdBrl = fxRates.BRL?.rate ?? null;
+  const liveUsdKrw = fxRates.KRW?.rate ?? null;
+  // 빈칸이면 조회시점(라이브) 환율. 값이 들어있으면 그 값만 쓴다 —
+  // 무효 입력을 라이브로 조용히 대체하면 사용자가 오타를 눈치채지 못한다.
+  const bondFx = (text, live) => (String(text ?? '').trim() === '' ? live : parseFxAmount(text));
+  const bondYears = parseFxAmount(bond.years);
+  const bondCalc = computeBrlBond({
+    krw: parseFxAmount(bond.krw),
+    price: parseFxAmount(bond.price),
+    face: parseFxAmount(bond.face),
+    couponRate: parseFxAmount(bond.rate),
+    years: bondYears,
+    fxBuy: bondFx(bond.fxBuy, liveFxBuy),
+    fxUsdBrl: bondFx(bond.fxUsdBrl, liveUsdBrl),
+    fxUsdKrw: bondFx(bond.fxUsdKrw, liveUsdKrw),
+  });
+  const bondFxReady = liveFxBuy != null && liveUsdBrl != null && liveUsdKrw != null;
+  // 조회 전(idle)·조회 중(loading)을 실패와 구분한다 — 안 그러면 패널을 연 첫 프레임에
+  // "불러오지 못했습니다"가 잘못 번쩍인다(fetch 는 useEffect 라 첫 페인트 뒤에 시작).
+  const bondFxPending = fxStatus === 'idle' || fxStatus === 'loading';
+  const bondTimes = [fxRates.BRL?.at, fxRates.KRW?.at].filter(Boolean);
+  const bondQuotedAt = bondTimes.length ? formatFxQuoteTime(Math.min(...bondTimes)) : '';
+
+  // ───────── 브라질 채권 패널 헬퍼 ─────────
+  const bondBrl = (v) => (v == null ? '—' : `R$ ${formatFxAmount(v, 2)}`);
+  const bondUsd = (v) => (v == null ? '—' : `$ ${formatFxAmount(v, 2)}`);
+  const bondWon = (v) => (v == null ? '—' : `₩${formatFxAmount(v, 0)}`);
+  const bondPct = (v) => (v == null ? '—' : `${formatFxAmount(v, 2)}%`);
+
+  // 결과값 → 수식. strToAtoms는 문자 그대로 원자를 만드므로 콤마·지수표기는 넣지 않는다(fxToFormula와 동일).
+  const bondPush = (v, dp) => {
+    if (v == null) return;
+    const s = plainFxAmount(v, dp);
+    if (!/^-?\d+(\.\d+)?$/.test(s)) return;
+    insertAtoms(strToAtoms(s));
+  };
+
+  const bondInputs = [
+    { key: 'krw', label: '투자금', unit: '원', ph: '0' },
+    { key: 'price', label: '매수단가', unit: 'BRL', ph: '780', title: '액면 1좌당 매수 가격 (BRL)' },
+    { key: 'face', label: '액면', unit: 'BRL', ph: String(BRL_BOND_FACE), title: '1좌 액면가 — 이자는 이 금액 기준으로 발생' },
+    { key: 'rate', label: '표면금리', unit: '%', ph: String(BRL_BOND_COUPON), title: '액면 기준 연 이자율 (쿠폰)' },
+    { key: 'years', label: '잔존만기', unit: '년', ph: String(BRL_BOND_YEARS), title: 'YTM·만기 손익 계산용' },
+  ];
+  const bondFxInputs = [
+    { key: 'fxBuy', label: '원/헤알', unit: '매수', ph: liveFxBuy == null ? '—' : formatFxAmount(liveFxBuy, 2), title: '매수 시점 환율 (원 → 헤알 환산)' },
+    { key: 'fxUsdBrl', label: 'USD당 헤알', unit: '이자', ph: liveUsdBrl == null ? '—' : formatFxAmount(liveUsdBrl, 4), title: '이자 수령 환율 (헤알 → 달러)' },
+    { key: 'fxUsdKrw', label: '원/달러', unit: '이자', ph: liveUsdKrw == null ? '—' : formatFxAmount(liveUsdKrw, 2), title: '이자 수령 환율 (달러 → 원)' },
+  ];
+
+  const bondInput = (f) => (
+    <div key={f.key} className="flex items-center gap-1">
+      <span className="w-[62px] shrink-0 text-[10px] text-gray-400 truncate" title={f.title || f.label}>{f.label}</span>
+      <input
+        value={bond[f.key]}
+        onChange={(e) => setBondField(f.key, e.target.value)}
+        onPaste={(e) => {
+          const n = parsePastedNumber(e.clipboardData?.getData('text') ?? '');
+          if (!n || n === '-') return;
+          e.preventDefault();
+          setBondField(f.key, n);
+        }}
+        inputMode="decimal"
+        placeholder={f.ph}
+        title={f.title || f.label}
+        className="flex-1 min-w-0 text-right rounded px-1.5 py-1 text-[12px] bg-gray-900 border border-gray-700 text-white placeholder-gray-600 focus:outline-none focus:border-amber-600"
+      />
+      <span className="w-[26px] shrink-0 text-[9px] text-gray-500">{f.unit}</span>
+    </div>
+  );
+
+  // ⚠️ 클릭 삽입값(raw)은 '그 줄에 보이는 값'과 반드시 같아야 한다 —
+  //    R$ 200 을 눌렀는데 원화가 수식에 들어가면 조용히 틀린 계산이 된다.
+  //    원화도 넣고 싶은 줄은 subRaw 로 아랫줄을 따로 클릭 가능하게 한다.
+  const bondRow = ({ label, main, sub, raw = null, dp = 2, cls = 'text-gray-100', subRaw = null, subDp = 0 }) => (
+    <div className="flex items-start justify-between gap-2">
+      <span className="text-[10px] text-gray-400 shrink-0 pt-px">{label}</span>
+      <div className="min-w-0 text-right">
+        <div
+          className={`text-[11px] tabular-nums ${cls}${raw == null ? '' : ' cursor-pointer hover:text-orange-300 transition-colors'}`}
+          onClick={() => bondPush(raw, dp)}
+          title={raw == null ? '' : '클릭하면 수식에 입력'}
+        >
+          {main}
+        </div>
+        {sub ? (
+          <div
+            className={`text-[9px] text-gray-500 tabular-nums break-words${subRaw == null ? '' : ' cursor-pointer hover:text-orange-300 transition-colors'}`}
+            onClick={() => bondPush(subRaw, subDp)}
+            title={subRaw == null ? '' : '클릭하면 수식에 입력'}
+          >
+            {sub}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+
   const btnCls = (extra) =>
     `flex items-center justify-center rounded-xl h-[54px] text-[20px] font-medium select-none transition-all active:scale-95 focus:outline-none ${extra}`;
   const navCls = (extra) =>
@@ -732,8 +855,19 @@ export default function FloatingCalculator({
         onMouseDown={(e) => { onDragStart(e.clientX, e.clientY); e.preventDefault(); }}
         onTouchStart={(e) => onDragStart(e.touches[0].clientX, e.touches[0].clientY)}
       >
-        <span className="text-gray-200 text-sm font-semibold">🧮 공학용 계산기</span>
-        <div className="flex items-center gap-1.5">
+        {/* 토글이 4개라 300px 폭에서는 제목이 밀린다 — 제목을 줄이고 truncate 로 보호 */}
+        <span className="text-gray-200 text-sm font-semibold truncate min-w-0">🧮 계산기</span>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={() => setShowBond((v) => !v)}
+            title="브라질 채권 수익률 계산"
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+              showBond ? 'text-amber-300 border-amber-600/50 bg-amber-900/20 hover:bg-amber-900/40'
+                       : 'text-gray-400 border-gray-600/50 hover:text-gray-200 hover:border-gray-500 hover:bg-gray-800/50'
+            }`}
+          >
+            채권
+          </button>
           <button
             onClick={() => setShowFx((v) => !v)}
             title="환율 변환 패널"
@@ -805,7 +939,7 @@ export default function FloatingCalculator({
                 = 결과
               </button>
               <button
-                onClick={() => fxLoad(fxSlots)}
+                onClick={() => fxLoad(needCodes)}
                 title="환율 새로고침"
                 className="text-gray-400 hover:text-teal-300 p-1 rounded transition-colors"
               >
@@ -902,6 +1036,121 @@ export default function FloatingCalculator({
             ) : (
               '환율 대기 중'
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 브라질 채권 패널 — 환율 패널과 동일 규약:
+          · 결측/무효 입력은 '—' (computeBrlBond 의 null 계약, 렌더 중 throw 금지)
+          · 조회 실패는 벨 알림이 아니라 패널 내부 인라인으로만 알린다(알림 최소화 정책)
+          · onKeyDownCapture 로 패널 내부 키 입력이 전역 keydown(수식 입력)에 닿지 않게 막는다 */}
+      {showBond && (
+        <div
+          className="bg-gray-950 px-3 pb-2 pt-1.5 border-y border-gray-800/60 space-y-1.5"
+          onKeyDownCapture={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold text-amber-300">🇧🇷 브라질 채권</span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => { if (fxInjectValue != null) setBondField('krw', String(fxInjectValue)); }}
+                disabled={fxInjectValue == null}
+                title="계산 결과를 투자금(원)에 넣기"
+                className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                  fxInjectValue == null
+                    ? 'text-gray-600 border-gray-700/50 cursor-not-allowed'
+                    : 'text-orange-300 border-orange-600/50 hover:bg-orange-900/30'
+                }`}
+              >
+                = 투자금
+              </button>
+              <button
+                onClick={() => fxLoad(needCodes)}
+                title="환율 새로고침"
+                className="text-gray-400 hover:text-amber-300 p-1 rounded transition-colors"
+              >
+                <RefreshCw size={12} className={fxStatus === 'loading' ? 'animate-spin' : ''} />
+              </button>
+            </div>
+          </div>
+
+          {bondInputs.map((f) => bondInput(f))}
+
+          <div className="pt-0.5 text-[9px] text-gray-500">환율 · 빈칸이면 조회시점 환율 적용</div>
+          {bondFxInputs.map((f) => bondInput(f))}
+
+          <div className="border-t border-gray-800 pt-1.5 space-y-1">
+            {bondRow({
+              label: '매수 수량', dp: 0, raw: bondCalc.qty,
+              main: bondCalc.qty == null ? '—' : `${formatFxAmount(bondCalc.qty, 0)} 좌`,
+              sub: `액면 ${bondBrl(bondCalc.faceTotal)} · 환산 ${bondBrl(bondCalc.investBrl)}`,
+            })}
+            {bondRow({
+              label: '투입 금액', main: bondBrl(bondCalc.costBrl), sub: bondWon(bondCalc.costKrw),
+              raw: bondCalc.costBrl, subRaw: bondCalc.costKrw,
+            })}
+            {bondRow({
+              label: '잔여', main: bondBrl(bondCalc.leftoverBrl), sub: bondWon(bondCalc.leftoverKrw),
+              raw: bondCalc.leftoverBrl, subRaw: bondCalc.leftoverKrw,
+            })}
+          </div>
+
+          <div className="border-t border-gray-800 pt-1.5 space-y-1">
+            {bondRow({
+              label: '매입가 기준', main: bondPct(bondCalc.currentYield), raw: bondCalc.currentYield, dp: 4,
+              cls: 'text-amber-300 font-semibold',
+              sub: `경상수익률 · 액면이자 ${bondBrl(bondCalc.couponUnitAnnual)} ÷ 매수단가`,
+            })}
+            {bondRow({
+              label: 'YTM (연)', main: bondPct(bondCalc.ytmAnnual), raw: bondCalc.ytmAnnual, dp: 4,
+              sub: bondCalc.ytmSemiPct != null
+                ? `반기 ${bondPct(bondCalc.ytmSemiPct)} · 실효 ${bondPct(bondCalc.ytmEffective)} · 상환차익 포함`
+                : bondYears == null ? '잔존만기를 입력하면 산출됩니다'
+                : '단가가 원리금 합보다 높습니다 (수익률 음수)',
+            })}
+          </div>
+
+          <div className="border-t border-gray-800 pt-1.5 space-y-1">
+            {bondRow({
+              label: `${12 / BRL_COUPONS_PER_YEAR}개월 이자`, cls: 'text-emerald-300 font-semibold',
+              main: bondBrl(bondCalc.couponHalfBrl), raw: bondCalc.couponHalfBrl,
+              sub: `${bondUsd(bondCalc.couponHalfUsd)} → ${bondWon(bondCalc.couponHalfKrw)}`,
+              subRaw: bondCalc.couponHalfKrw,
+            })}
+            {bondRow({
+              label: '연 이자', main: bondBrl(bondCalc.couponAnnualBrl), raw: bondCalc.couponAnnualBrl,
+              sub: `${bondUsd(bondCalc.couponAnnualUsd)} → ${bondWon(bondCalc.couponAnnualKrw)}`,
+              subRaw: bondCalc.couponAnnualKrw,
+            })}
+            {bondRow({
+              label: '원화 기준', main: bondPct(bondCalc.krwYield), raw: bondCalc.krwYield, dp: 4,
+              sub: '연 이자(원) ÷ 투입금액(원)',
+            })}
+          </div>
+
+          <div className="border-t border-gray-800 pt-1.5 space-y-1">
+            {bondRow({
+              label: '만기 상환차익', main: bondBrl(bondCalc.redeemGainBrl), raw: bondCalc.redeemGainBrl,
+              sub: `단가 대비 ${bondCalc.redeemGainPct == null ? '—' : `${bondCalc.redeemGainPct > 0 ? '+' : ''}${bondPct(bondCalc.redeemGainPct)}`}`,
+            })}
+            {bondRow({
+              label: '만기 총 손익', main: bondBrl(bondCalc.totalGainBrl), raw: bondCalc.totalGainBrl,
+              sub: `이자 ${bondBrl(bondCalc.totalCouponBrl)} + 차익 ${bondBrl(bondCalc.redeemGainBrl)}`,
+            })}
+          </div>
+
+          <div className="text-[9px] leading-relaxed text-gray-500">
+            {bondFxReady ? (
+              <>
+                라이브 1 BRL = {formatFxAmount(liveFxBuy, 2)}원 · 1 USD = {formatFxAmount(liveUsdBrl, 4)} BRL
+                {bondQuotedAt ? ` · ${bondQuotedAt}` : ''}
+              </>
+            ) : bondFxPending ? (
+              '환율 불러오는 중…'
+            ) : (
+              <span className="text-amber-400">환율을 불러오지 못했습니다 · 새로고침하거나 환율을 직접 입력하세요</span>
+            )}
+            <br />※ 경과이자 · 환전수수료 · 세금 · 향후 환율변동 미반영
           </div>
         </div>
       )}
