@@ -52,6 +52,8 @@ interface Props {
   onSetNotebookLinks?: (links: NotebookLink[]) => Promise<void>;
   reportLinks?: NotebookLink[];
   onSetReportLinks?: (links: NotebookLink[]) => Promise<void>;
+  noticeFlags?: { notebook: boolean; report: boolean }; // 자료 등록 시 사용자 공지 발송 여부(채널별)
+  onSetNoticeFlags?: (flags: { notebook: boolean; report: boolean }) => Promise<void>;
   onUploadStudyMaterial?: (file: File) => Promise<string>; // HTML 업로드 → fileId (학습자료·리포트 공용)
   onDeleteStudyMaterialFile?: (fileId: string) => Promise<void>; // Drive 원본 정리 (공용)
 }
@@ -78,7 +80,7 @@ function formatLastSeen(ts: number): { label: string; isOnline: boolean } {
   return { label: `${Math.floor(diff / 86400000)}일 전`, isOnline: false };
 }
 
-export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks, reportLinks = [], onSetReportLinks, onUploadStudyMaterial, onDeleteStudyMaterialFile }: Props) {
+export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPortal, userAccessStatus = {}, switching = false, userLastSeen = {}, userDriveStatus = {}, onRefreshUserSessions, youtubeUrl = '', onSetYoutubeUrl, notebookLinks = [], onSetNotebookLinks, reportLinks = [], onSetReportLinks, noticeFlags = { notebook: true, report: true }, onSetNoticeFlags, onUploadStudyMaterial, onDeleteStudyMaterialFile }: Props) {
   const [users, setUsers] = useState<ApprovedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
@@ -127,6 +129,51 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [rpUploading, setRpUploading] = useState(false);
   const [rpUploadError, setRpUploadError] = useState('');
   const rpFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ── 공지 ON/OFF (채널별) — 자료를 등록할 때 사용자에게 공지를 보낼지 결정. 관리자 Drive에 영속.
+  // OFF여도 자료는 정상 등록·배포되고, 사용자 드롭다운에도 즉시 보인다(알림만 나가지 않음).
+  const [noticeSavingKey, setNoticeSavingKey] = useState<'notebook' | 'report' | null>(null);
+  const noticeOn = (channel: 'notebook' | 'report') => noticeFlags?.[channel] !== false;
+  const toggleNotice = async (channel: 'notebook' | 'report') => {
+    if (!onSetNoticeFlags || noticeSavingKey) return;
+    setNoticeSavingKey(channel);
+    try {
+      const next = { notebook: noticeOn('notebook'), report: noticeOn('report') };
+      next[channel] = !next[channel];
+      await onSetNoticeFlags(next);
+    } catch {}
+    setNoticeSavingKey(null);
+  };
+  // Tailwind JIT는 문자열 조합 클래스를 수집하지 못하므로 채널별 ON 스타일을 리터럴로 둔다.
+  const NOTICE_ON_CLASS = {
+    notebook: 'border-sky-500/60 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20',
+    report: 'border-teal-500/60 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20',
+  };
+  const NOTICE_ON_DOT = { notebook: 'bg-sky-400', report: 'bg-teal-400' };
+  const renderNoticeToggle = (channel: 'notebook' | 'report') => {
+    if (!onSetNoticeFlags) return null;
+    const on = noticeOn(channel);
+    const busy = noticeSavingKey === channel;
+    return (
+      <button
+        onClick={() => toggleNotice(channel)}
+        disabled={!!noticeSavingKey}
+        title={on
+          ? '자료를 등록하면 사용자에게 공지가 발송됩니다 — 클릭하면 공지를 끕니다'
+          : '공지 없이 조용히 등록합니다 — 클릭하면 공지를 켭니다'}
+        className={`shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold normal-case tracking-normal transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+          on ? NOTICE_ON_CLASS[channel] : 'border-gray-700 bg-gray-800/60 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+        }`}
+      >
+        {busy ? (
+          <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />
+        ) : (
+          <span className={`w-1.5 h-1.5 rounded-full ${on ? NOTICE_ON_DOT[channel] : 'bg-gray-600'}`} />
+        )}
+        공지 {on ? 'ON' : 'OFF'}
+      </button>
+    );
+  };
 
   // 기능 설정 상태
   const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트']);
@@ -331,16 +378,19 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     await onSetNotebookLinks([newLink, ...notebookLinks]);
     // 새 슬라이드 등록 시 학습자료(notebookEnabled) ON 사용자에게만 자동 알림 (비차단)
     // '__notebook__' 센티넬 → App.tsx notifTargetsUser가 학습자료 ON 사용자만 통과시킴
-    fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({
-        action: 'sendNotification',
-        targetEmail: '__notebook__',
-        message: notebookNoticeMessage(newLink.title),
-        type: 'info',
-      }),
-    }).catch(() => {});
+    // 헤더의 '공지 OFF'면 발송 자체를 건너뛴다(자료 등록·배포는 그대로 진행)
+    if (noticeOn('notebook')) {
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'sendNotification',
+          targetEmail: '__notebook__',
+          message: notebookNoticeMessage(newLink.title),
+          type: 'info',
+        }),
+      }).catch(() => {});
+    }
     setNbTitle('');
     setNbUrl('');
     setNbSaving(false);
@@ -356,17 +406,19 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       const fileId = await onUploadStudyMaterial(nbFile);
       const newLink: NotebookLink = { title, fileId, createdAt: Date.now() };
       await onSetNotebookLinks([newLink, ...notebookLinks]);
-      // 학습자료(notebookEnabled) ON 사용자에게만 자동 알림 (비차단)
-      fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          action: 'sendNotification',
-          targetEmail: '__notebook__',
-          message: notebookNoticeMessage(title),
-          type: 'info',
-        }),
-      }).catch(() => {});
+      // 학습자료(notebookEnabled) ON 사용자에게만 자동 알림 (비차단) — 헤더 '공지 OFF'면 생략
+      if (noticeOn('notebook')) {
+        fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'sendNotification',
+            targetEmail: '__notebook__',
+            message: notebookNoticeMessage(title),
+            type: 'info',
+          }),
+        }).catch(() => {});
+      }
       setNbFile(null);
       setNbFileTitle('');
       if (nbFileInputRef.current) nbFileInputRef.current.value = '';
@@ -407,16 +459,19 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     await onSetReportLinks([newLink, ...reportLinks]);
     // 시장리포트(reportEnabled) ON 사용자에게만 자동 알림 (비차단)
     // '__report__' 센티넬 → App.tsx notifTargetsUser가 시장리포트 ON 사용자만 통과시킴
-    fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({
-        action: 'sendNotification',
-        targetEmail: '__report__',
-        message: reportNoticeMessage(newLink.title),
-        type: 'info',
-      }),
-    }).catch(() => {});
+    // 헤더의 '공지 OFF'면 발송 자체를 건너뛴다(자료 등록·배포는 그대로 진행)
+    if (noticeOn('report')) {
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'sendNotification',
+          targetEmail: '__report__',
+          message: reportNoticeMessage(newLink.title),
+          type: 'info',
+        }),
+      }).catch(() => {});
+    }
     setRpTitle('');
     setRpUrl('');
     setRpSaving(false);
@@ -432,17 +487,19 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       const fileId = await onUploadStudyMaterial(rpFile);
       const newLink: NotebookLink = { title, fileId, createdAt: Date.now() };
       await onSetReportLinks([newLink, ...reportLinks]);
-      // 시장리포트(reportEnabled) ON 사용자에게만 자동 알림 (비차단)
-      fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          action: 'sendNotification',
-          targetEmail: '__report__',
-          message: reportNoticeMessage(title),
-          type: 'info',
-        }),
-      }).catch(() => {});
+      // 시장리포트(reportEnabled) ON 사용자에게만 자동 알림 (비차단) — 헤더 '공지 OFF'면 생략
+      if (noticeOn('report')) {
+        fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'sendNotification',
+            targetEmail: '__report__',
+            message: reportNoticeMessage(title),
+            type: 'info',
+          }),
+        }).catch(() => {});
+      }
       setRpFile(null);
       setRpFileTitle('');
       if (rpFileInputRef.current) rpFileInputRef.current.value = '';
@@ -1163,18 +1220,22 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
         {/* 노트북LM 링크 관리 */}
         {onSetNotebookLinks && (
           <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
-            <p className="text-sky-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-                <path d="M9 8.5a3 3 0 0 1 6 0" />
-                <rect x="8.5" y="10.5" width="2" height="2.5" rx="1" />
-                <rect x="13.5" y="10.5" width="2" height="2.5" rx="1" />
-              </svg>
-              노트북 LM 슬라이드
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sky-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                  <path d="M9 8.5a3 3 0 0 1 6 0" />
+                  <rect x="8.5" y="10.5" width="2" height="2.5" rx="1" />
+                  <rect x="13.5" y="10.5" width="2" height="2.5" rx="1" />
+                </svg>
+                노트북 LM 슬라이드
+              </p>
+              {renderNoticeToggle('notebook')}
+            </div>
             <p className="text-gray-500 text-xs">
               링크를 추가하면 모든 사용자의 상단 바 노트북 아이콘 드롭다운에 표시됩니다.
+              {!noticeOn('notebook') && <span className="text-gray-600"> 공지 OFF 상태라 등록해도 알림은 가지 않습니다.</span>}
             </p>
 
             {/* 추가 폼 */}
@@ -1331,15 +1392,19 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
         {/* 시장동향 리포트 관리 */}
         {onSetReportLinks && (
           <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
-            <p className="text-teal-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
-                <polyline points="16 7 22 7 22 13" />
-              </svg>
-              시장동향 리포트
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-teal-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+                  <polyline points="16 7 22 7 22 13" />
+                </svg>
+                시장동향 리포트
+              </p>
+              {renderNoticeToggle('report')}
+            </div>
             <p className="text-gray-500 text-xs">
               선별한 시장 동향 리포트를 추가하면 시장리포트 ON 사용자의 상단 바 📈 아이콘 드롭다운에 표시됩니다.
+              {!noticeOn('report') && <span className="text-gray-600"> 공지 OFF 상태라 등록해도 알림은 가지 않습니다.</span>}
             </p>
 
             {/* 추가 폼 */}

@@ -84,6 +84,14 @@ function notifTargetsUser(targetEmail: string, email: string, notebookEnabled: b
   return targetEmail === '__all__' || targetEmail?.toLowerCase() === email.toLowerCase();
 }
 
+// 자료 등록 시 사용자 공지 발송 여부(채널별 '공지 ON/OFF' 토글) — app_settings.json 로드값 정규화.
+// 미지정/손상값은 ON으로 해석(기존 동작 유지) — OFF는 명시적으로 false일 때만.
+const NOTICE_FLAGS_DEFAULT = { notebook: true, report: true };
+const normalizeNoticeFlags = (raw: any) => ({
+  notebook: raw?.notebook !== false,
+  report: raw?.report !== false,
+});
+
 // 새 탭 관리자 접속(impersonation): "접속" 버튼이 window.open('/?adminView=<email>')로 새 탭을 연다.
 // 이 상수는 새 탭 콜드부팅 시 1회 산출 — 관리자 포털 탭(파라미터 없음)에서는 null이라 영향 없음.
 // noopener 새 탭은 보통 opener의 sessionStorage를 상속하지 않지만, 일부 브라우저가 복제할 경우
@@ -143,9 +151,14 @@ export default function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [notebookLinks, setNotebookLinks] = useState<{title: string, url?: string, fileId?: string, createdAt: number}[]>([]);
   const [reportLinks, setReportLinks] = useState<{title: string, url?: string, fileId?: string, createdAt: number}[]>([]);
+  // 자료 등록 시 사용자 공지 발송 여부 — 관리자 페이지 각 섹션 헤더의 '공지 ON/OFF' 토글.
+  // 관리자 Drive app_settings.json에 영속(채널별 독립). 기본 ON = 기존 동작.
+  const [noticeFlags, setNoticeFlags] = useState<{ notebook: boolean; report: boolean }>(NOTICE_FLAGS_DEFAULT);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
   const adminTargetNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 목표 비중 공지는 관리자 접속(impersonation) 세션당 1회만 — 발송 완료한 대상 이메일을 래치.
+  const adminTargetNotifSentRef = useRef<string | null>(null);
   const [pendingAdminNotifs, setPendingAdminNotifs] = useState<AdminNotification[]>([]);
   const [seenAdminNotifIds, setSeenAdminNotifIds] = useState<string[]>([]);
   const seenAdminNotifIdsRef = useRef<string[]>([]);
@@ -175,6 +188,12 @@ export default function App() {
     setAdminViewingAs(null);
     adminViewingAsRef.current = null;
     adminTransitioningRef.current = false;
+    // 새 접속 세션 시작 — 목표 비중 공지 1회 래치 해제(같은 사용자로 재접속하면 다시 1건 발송 가능)
+    if (adminTargetNotifTimerRef.current) {
+      clearTimeout(adminTargetNotifTimerRef.current);
+      adminTargetNotifTimerRef.current = null;
+    }
+    adminTargetNotifSentRef.current = null;
     if (adminSessionWarningTimerRef.current) clearTimeout(adminSessionWarningTimerRef.current);
     if (adminSessionExpireTimerRef.current) clearTimeout(adminSessionExpireTimerRef.current);
     adminSessionStartAtRef.current = 0;
@@ -229,6 +248,8 @@ export default function App() {
       clearTimeout(adminTargetNotifTimerRef.current);
       adminTargetNotifTimerRef.current = null;
     }
+    // 대상 사용자가 바뀌면 목표 비중 공지 1회 래치도 해제 — 새 사용자에게는 다시 1건 발송돼야 함
+    adminTargetNotifSentRef.current = null;
   }, [authUser?.email]);
 
   const handleRefreshUserSessions = async (emails: string[]) => {
@@ -1444,7 +1465,7 @@ export default function App() {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks, reportLinks });
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks, reportLinks, noticeFlags });
       setYoutubeUrl(url);
     } catch {
       notify('YouTube 링크 저장 실패 (Drive 오류)', 'error');
@@ -1481,7 +1502,7 @@ export default function App() {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links, reportLinks });
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links, reportLinks, noticeFlags });
       setNotebookLinks(links);
     } catch {
       notify('링크 저장 실패 (Drive 오류)', 'error');
@@ -1502,7 +1523,7 @@ export default function App() {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks: links });
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks: links, noticeFlags });
       setReportLinks(links);
     } catch {
       notify('링크 저장 실패 (Drive 오류)', 'error');
@@ -1516,14 +1537,42 @@ export default function App() {
     }).catch(() => {});
   };
 
-  // 관리자가 사용자의 목표 비중을 변경했을 때 호출 — 디바운스 후 사용자 다음 로그인용 알림 1건 발송
+  // 자료 등록 시 사용자 공지 발송 여부(채널별 '공지 ON/OFF') — 관리자 Drive app_settings.json에만 저장.
+  // 일반 사용자는 읽지 않는 관리자 전용 설정이라 Apps Script 배포는 하지 않는다
+  // (setSettings는 키 화이트리스트가 있어 새 키를 받지도 않는다 — 시트/재배포 불필요).
+  const handleSetNoticeFlags = async (flags: { notebook: boolean; report: boolean }) => {
+    try {
+      const token = driveTokenRef.current;
+      if (!token) { notify('Drive 인증 필요', 'error'); return; }
+      const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks, noticeFlags: flags });
+      setNoticeFlags(flags);
+    } catch {
+      notify('공지 설정 저장 실패 (Drive 오류)', 'error');
+    }
+  };
+
+  // 관리자가 사용자의 목표 비중을 변경했을 때 호출 — 관리자 접속(impersonation) 세션당 알림 1건만 발송.
+  // ⚠️ 회귀 주의: 과거엔 5초 디바운스만 있어, 여러 종목을 하나씩 고치면(편집 간격 > 5초) 그때마다
+  // 1건씩 계속 발송됐다. adminTargetNotifSentRef가 발송 완료한 대상 이메일을 래치해 같은 세션에서는
+  // 몇 종목·몇 번을 고쳐도 1건으로 끝난다. 래치 해제는 세션 시작 지점 2곳(handleLoginApproved,
+  // authUser 변경 effect)에서만 — 여기서 풀면 '세션당 1회'가 깨진다.
+  // 디바운스 5초는 유지: 연속 편집을 한 요청으로 모으고, 실수로 되돌린 변경까지는 알리지 않는다.
   const notifyUserOfAdminTargetChange = () => {
     const targetEmail = adminViewingAsRef.current;
     if (!targetEmail) return;
+    if (adminTargetNotifSentRef.current === targetEmail) return; // 이번 세션에서 이미 발송함
     if (adminTargetNotifTimerRef.current) clearTimeout(adminTargetNotifTimerRef.current);
     adminTargetNotifTimerRef.current = setTimeout(() => {
+      adminTargetNotifTimerRef.current = null;
       const finalEmail = adminViewingAsRef.current;
       if (!finalEmail) return;
+      if (adminTargetNotifSentRef.current === finalEmail) return;
+      adminTargetNotifSentRef.current = finalEmail; // 발송 직전에 래치 (중복 발송 방지)
+      // ⚠️ 발송이 실패하면 래치를 되돌린다 — 세션당 1회는 '성공 1건'을 뜻한다. 낙관적으로 래치만 남기면
+      // 일시 장애(네트워크 단절·5xx) 1회로 그 세션 공지가 영영 사라진다(변경 전엔 다음 편집이 재발송해
+      // 자연 복구됐다). Apps Script는 거부도 200 + {success:false}로 답하므로 본문까지 본다.
+      // 본문을 못 읽는 경우(파싱 실패)는 성공으로 간주 — 중복 발송보다 낫다.
       fetch(APPS_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
@@ -1533,8 +1582,17 @@ export default function App() {
           message: '목표 비중이 수정되었습니다.',
           type: 'warning',
         }),
-      }).catch(() => {});
-      adminTargetNotifTimerRef.current = null;
+      })
+        .then(async res => {
+          if (!res.ok) return false;
+          const data = await res.json().catch(() => null);
+          return !data || data.success !== false;
+        })
+        .catch(() => false)
+        .then(ok => {
+          // 늦게 온 응답이 다른 세션의 래치를 지우지 않도록 대상 일치 확인
+          if (!ok && adminTargetNotifSentRef.current === finalEmail) adminTargetNotifSentRef.current = null;
+        });
     }, 5000);
   };
 
@@ -1670,13 +1728,24 @@ export default function App() {
       // 일반 사용자: Drive 캐시 우선 → Apps Script로 갱신
       const isAdmin = authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
       let driveSettingsFound = false;
+      // 공지 ON/OFF는 Apps Script에 없는 Drive 전용 값 → 아래 마이그레이션 저장이 덮어쓰지 않도록
+      // 로드값을 지역 변수로 들고 간다(setState는 이 클로저에 반영되지 않음).
+      let loadedNoticeFlags = NOTICE_FLAGS_DEFAULT;
+      // ⚠️ 읽기 성공 여부를 따로 추적한다. loadDriveFile은 '파일 없음'만 null이고 401/5xx/네트워크 오류는
+      // throw → catch가 삼키면 loadedNoticeFlags가 기본 ON으로 남는데, 그 상태로 아래 마이그레이션 저장이
+      // 돌면 관리자가 저장해 둔 '공지 OFF'가 사용자 행동 없이 ON으로 되살아난다(noticeFlags는 Apps Script
+      // 사본이 없어 복구 불가). 파일이 없는 최초 마이그레이션은 readOk=true라 종전대로 저장된다.
+      let settingsReadOk = false;
       try {
         const settingsFolderId = driveFolderIdRef.current || await ensureDriveFolder(token);
         const driveSettings = await loadDriveFile(token, settingsFolderId, DRIVE_FILES.SETTINGS) as any;
+        settingsReadOk = true;
         if (driveSettings) {
           if (driveSettings.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
           if (Array.isArray(driveSettings.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
           if (Array.isArray(driveSettings.reportLinks)) setReportLinks(driveSettings.reportLinks);
+          loadedNoticeFlags = normalizeNoticeFlags(driveSettings.noticeFlags);
+          setNoticeFlags(loadedNoticeFlags);
           // 실제 데이터가 있을 때만 "찾음"으로 처리 — 빈 배열만 있으면 Apps Script 폴백 허용
           driveSettingsFound = !!(driveSettings.youtubeUrl || driveSettings.notebookLinks?.length > 0 || driveSettings.reportLinks?.length > 0);
         }
@@ -1697,9 +1766,14 @@ export default function App() {
             if (Array.isArray(rl)) setReportLinks(rl);
             // 관리자: Drive에 저장 (이후 Drive가 정본으로 동작)
             // 일반 사용자: Drive에 캐시 저장
+            // ⚠️ 읽기가 실패한 세션에서는 저장을 건너뛴다 — 파일 내용을 모르는 채로 전체 교체하면
+            // 저장돼 있던 noticeFlags(공지 OFF)를 기본 ON으로 지운다. 링크·유튜브는 Apps Script
+            // 시트가 정본이라 이번 회차를 걸러도 다음 로그인에서 그대로 복원된다.
             try {
-              const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-              await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [], reportLinks: Array.isArray(rl) ? rl : [] });
+              if (settingsReadOk) {
+                const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
+                await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [], reportLinks: Array.isArray(rl) ? rl : [], noticeFlags: loadedNoticeFlags });
+              }
             } catch {}
           }
         } catch {}
@@ -1765,6 +1839,9 @@ export default function App() {
         if (Array.isArray(settings?.reportLinks) && settings.reportLinks.length > 0) {
           setReportLinks(settings.reportLinks); found = true;
         }
+        // 공지 ON/OFF는 Drive 전용 값 — 파일이 있으면 항상 반영(없으면 기본 ON).
+        // found 판정에는 넣지 않는다: 링크가 비어 있으면 Apps Script 폴백은 그대로 진행돼야 한다.
+        if (settings) setNoticeFlags(normalizeNoticeFlags(settings.noticeFlags));
       } catch {}
       if (!found) {
         try {
@@ -2254,7 +2331,7 @@ export default function App() {
     return <AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportLinks={reportLinks} onSetReportLinks={handleSetReportLinks} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportLinks={reportLinks} onSetReportLinks={handleSetReportLinks} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨

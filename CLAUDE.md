@@ -1045,6 +1045,51 @@ markAsRead() / clearNotificationLog()
   필요(미배포 시 J열·reportLinks 미반영 → 프론트는 기본 OFF/빈 배열로 안전 동작). `setupSheet`는
   비파괴(기존 E~I 커스텀 헤더 보존, 빈 J1만 `시장리포트` 세팅 + E2:J100 ON/OFF 검증·기본 OFF).
 
+### 공지 발송 제어 — 자료 채널 '공지 ON/OFF' + 목표 비중 공지 세션당 1회 (⚠️ 회귀 주의)
+
+관리자가 **언제 공지를 보낼지** 고르는 두 장치. 서로 독립이며(플래그 공유 없음) 합치지 말 것.
+
+- **자료 채널 '공지 ON/OFF'**(`AdminPage`): '노트북 LM 슬라이드'·'시장동향 리포트' **섹션 헤더 우측
+  알약 버튼**(`renderNoticeToggle`, notebook=sky / report=teal, OFF=회색). OFF면 **등록·업로드 시
+  `sendNotification` 발송만 건너뛴다** — 자료 등록·Drive 저장·Apps Script 배포·사용자 드롭다운 노출은
+  그대로다(조용히 올리기). 게이트는 **발송 4지점 전부**(`handleAddNotebookLink`·
+  `handleUploadStudyMaterialFile`·`handleAddReportLink`·`handleUploadReportFile`)에 `noticeOn(channel)`으로
+  걸린다 — 새 자료 등록 경로를 추가하면 이 게이트도 같이 달 것. ⚠️ 채널 교차 금지(notebook 플래그가
+  report 발송을 막으면 안 됨).
+- **저장 위치 = 관리자 Drive `app_settings.json`의 `noticeFlags: {notebook, report}`**
+  (`App.tsx` `handleSetNoticeFlags`). Apps Script `setSettings`는 **키 화이트리스트**가 있어 새 키를
+  거부하므로 배포하지 않는다(관리자 전용 설정이라 일반 사용자는 읽을 필요 없음 → **Apps Script 재배포
+  불필요**). ⚠️ **co-write 규약 확장**: `DRIVE_FILES.SETTINGS`에 쓰는 **모든 지점**(youtubeUrl·
+  notebookLinks·reportLinks 3핸들러 + `handleSetNoticeFlags` + 로드 실패 시 Apps Script **마이그레이션
+  저장**)이 이제 **네 값**을 모두 실어야 한다 — 하나라도 빠지면 그 필드가 빈 값으로 덮인다.
+  마이그레이션 저장은 `setNoticeFlags` 클로저가 stale하므로 **지역 변수 `loadedNoticeFlags`**를 쓴다.
+- **로드 2경로**(정상 로드 · 관리자 페이지 전용 로드)가 모두 `normalizeNoticeFlags`로 읽는다.
+  **미지정/손상값 = ON**(`!== false`) → 구버전 파일·일반 사용자에게 기존 동작 그대로. `driveSettingsFound`
+  판정에는 **넣지 않는다**(링크가 비면 Apps Script 폴백이 그대로 돌아야 함).
+- **목표 비중 공지 = 관리자 접속(impersonation) 세션당 1건**(`App.tsx`
+  `notifyUserOfAdminTargetChange`). 과거엔 5초 디바운스뿐이라 **여러 종목을 하나씩 고치면 편집 간격마다
+  1건씩** 계속 나갔다. `adminTargetNotifSentRef`가 **발송한 대상 이메일을 래치**해 그 세션에서는 몇
+  종목·몇 번을 고쳐도 1건으로 끝난다(디바운스 5초는 유지 — 연속 편집을 한 요청으로 모음).
+  **래치 해제는 세션 시작 2곳 + 발송 실패**: `handleLoginApproved` 상단, `authUser?.email` effect,
+  그리고 **응답이 실패면 래치 되돌리기**. ⚠️ 다른 곳에서 풀면 '세션당 1회'가 깨지고, 반대로 해제를
+  지우면 다음 접속에서 영영 공지가 안 나간다. 래치는 **발송 직전 setTimeout 안에서** 세팅한다(대상
+  재확인 후 — 세션이 끝났으면 발송도 래치도 없음). 새 탭 impersonation은 콜드부팅이라 ref가 자연 초기화.
+  - ⚠️ **'세션당 1회' = '성공 1건'**: 낙관적 래치만 두면 일시 장애 1회로 그 세션 공지가 영구 소실된다
+    (변경 전엔 다음 편집이 재발송해 자연 복구됐다 → 회귀). `res.ok` + **본문 `success !== false`**
+    (Apps Script는 거부도 200으로 답한다)를 보고 실패면 래치를 되돌려 다음 편집이 재시도하게 한다.
+    되돌릴 때 **`=== finalEmail` 대상 일치 확인 필수**(늦게 온 응답이 다음 세션 래치를 지우지 않도록).
+    본문 파싱 실패는 **성공으로 간주**한다(중복 발송보다 낫다).
+- **⚠️ 설정 읽기 실패 세션에서는 마이그레이션 저장을 건너뛴다**(`settingsReadOk`): `loadDriveFile`은
+  '파일 없음'만 `null`이고 401/5xx/네트워크 오류는 **throw**한다 → `catch{}`가 삼키면 메모리 플래그가
+  기본 ON인 채로 남고, 이어지는 Apps Script 마이그레이션 저장이 파일을 통째로 교체하면서 **저장돼 있던
+  '공지 OFF'를 사용자 행동 없이 ON으로 되살린다**(`noticeFlags`만 Apps Script 사본이 없어 복구 불가).
+  파일이 없는 **최초 마이그레이션은 `readOk=true`**라 종전대로 저장된다. 링크·유튜브는 시트가 정본이라
+  이번 회차를 걸러도 다음 로그인에서 복원된다.
+- **이 공지에는 ON/OFF 토글이 없다(의도)** — 목표 비중 변경은 사용자 자산에 직접 영향이라 항상 알린다.
+- **영속화 무관 지점**: `noticeFlags`는 `app_settings.json` 전용이라 `portfolioStructureKey`·
+  `applyStateData`·`applyBackupData`·`saveStateRef` 스프레드와 **무관**(STATE 계열 아님). 목표 비중 래치는
+  ref라 저장 대상 자체가 아니다.
+
 ### 관리자 공지 클릭 → 학습자료/리포트 열기 (⚠️ 회귀 주의 — 부분문자열·이모지 매칭 금지)
 
 자료(학습자료/리포트) 등록 공지(`AdminNotificationModal`)와 **벨 알림이력**(`UserInfoBar`)에서 공지를
