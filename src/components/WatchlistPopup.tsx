@@ -9,7 +9,10 @@ import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } fr
 // - z 1050 (dialog 1000 < 여기 < LoadingOverlay 1100)
 // - 타이틀 바만 드래그 핸들, window mousemove/touchmove 리스너로 이동, 뷰포트 클램프
 const WATCHLIST_Z = 1050;
-const PANEL_W = 420;
+// 종목명 열은 고정폭 열(그립16+점6+미니차트56+등락율64+현재가96+삭제12+여백/gap 80 ≈ 330px)을 뺀 나머지라,
+// 폭이 좁으면 국내 ETF 풀네임(예: "KODEX 금융고배당TOP10타겟위클리커버드콜")이 대부분 잘린다.
+// 640px = 종목명 약 310px 확보 → 긴 ETF명도 한 줄에 그대로 보인다. (좁은 화면은 아래 maxWidth로 클램프)
+const PANEL_W = 640;
 const MARKET_LABEL = { kr: '국내', us: '해외', fund: '펀드' };
 const RECENT_ID = '__recent__';   // 자동 '최근조회' 그룹의 예약 id
 const RECENT_NAME = '최근조회';
