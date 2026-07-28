@@ -208,6 +208,18 @@ export const normalizeDividendLinks = (raw) => {
   }));
 };
 
+// YYYY-MM-DD 문자열이 **실제 달력에 존재하는 날짜**인지 검사.
+// ⚠️ 정규식(`^\d{4}-\d{2}-\d{2}$`)만으로는 부족하다 — 2026-13-45 같은 값이 통과해 메모 달력의
+// 날짜 키로 들어가면 CalendarModal이 실제 날짜로만 셀을 그리므로(dayKeyOf) 그 기록은 화면에
+// 영원히 안 보이고 삭제도 못 하는 유령이 된다. `new Date(y, m, 0).getDate()`로 그 달의 실제
+// 일수를 계산(윤년 자동 처리) — `new Date('2026-02-30')` 류의 롤오버 파싱에 의존하지 않는다.
+export const isValidIsoDate = (s) => {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1) return false;
+  return d <= new Date(y, m, 0).getDate();
+};
+
 export const cleanNum = (val) => {
   if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return val;

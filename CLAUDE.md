@@ -926,6 +926,90 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
     carry-forward하면 셀 총자산(전일값)과 헤더(붕괴된 라이브값)가 갈릴 수 있으나, 이는 깨진 로딩
     상태로 carry-forward가 더 정확 → 미보정.
 
+### 리밸런싱 목표비중 → 메모 달력 자동 기록 (`kind:'rebalTarget'`) (⚠️ 회귀 주의)
+
+리밸런싱 표 **'목표(%)' 열 헤더의 날짜**(`settings.targetDate`)가 가리키는 메모 달력 칸에, 그 시점
+목표 비중 스냅샷을 자동 기록한다. 사용자는 원래 이 날짜 칸에 "목표 비중을 조정한 날"을 손으로
+적어 왔고(그 필드는 코드베이스 다른 어디에서도 쓰이지 않는 순수 기록용), 그 날짜의 달력에
+`종목명 / 목표비중 / 현재수량 / 리밸런싱 후 수량 / 리밸런싱 후 평가금액`이 남기를 원했다.
+
+- **저장 위치 = `calendarMemos` 배열 재사용**(신규 저장 필드 0개). 항목에 `kind:'rebalTarget'`을 달아
+  일반 메모와 구분: `{ id, createdAt, updatedAt, kind, portfolioId, accountName, targetMode, investMode,
+  currency, rows:[{name, code, targetRatio, curQty, expQty, expEval}], totalTargetRatio, totalExpEval, content }`.
+  **영속화 5지점(state 리터럴·지문 `JSON.stringify(calendarMemos)`·저장 effect deps·`applyStateData`·
+  `applyBackupData`)과 복원 sticky 규칙(`_preserveStickyPersonalData`)을 그대로 상속** → 전 지점 무수정.
+  `content`(사람이 읽는 텍스트 사본)는 백업 JSON 가독성 + `firstLine(m.content)` 폴백용이라 **제거 금지**.
+- **upsert 키 = `(dayKey, kind==='rebalTarget', portfolioId)`** — 같은 날 같은 계좌면 덮어쓰기(최신 1건).
+  ⚠️ **교체 시 `id`·`createdAt`을 승계**해야 한다 — 칩 `key` 안정 + 열려 있던 읽기전용 패드(아래 memoId
+  앵커)가 닫히지 않고 새 스냅샷으로 갱신된다. `settings`는 `updateSettingsForType`이 **같은 accountType
+  계좌 전체에 동기화**하므로 `targetDate`가 계좌 간 공유된다 → 하루에 계좌별 기록이 여러 건 쌓이는 것이
+  예외가 아니라 **기본 시나리오**(portfolioId로 분리).
+- **⚠️ '헤더에 보이는 날짜 = 기록 날짜' 불변식 — 오늘로 폴백 금지**: `settings.targetDate`는 어디에서도
+  초기화되지 않아 신규·레거시 계좌는 `undefined`다(헤더에 `날짜 지정` 표시). 그 상태에서 오늘 칸으로
+  폴백하면 사용자가 지정한 적 없는 날짜에 조용히 기록된다 → `buildRebalTargetEntry`는 **커밋하지 않고
+  dirty를 유지**해 날짜를 지정하는 순간 그 날짜에 기록되게 한다. 헤더는 미지정일 때 **앰버 테두리**로
+  "여기에 날짜를 넣어야 기록된다"를 알린다.
+- **⚠️ 날짜 유효성은 `utils.ts isValidIsoDate`(실제 달력 존재) + 연도 1900~2999**: 정규식만으로는
+  `2026-13-45`가 통과하고, `CalendarModal`은 실제 날짜로만 셀을 그리므로 그 기록은 **화면에 영원히 안 보이고
+  삭제도 못 하는 유령**이 된다. 적용 3곳 — `parseDisplayDate`(신규 유입 차단), `buildRebalTargetEntry`
+  (기존 저장 손상값 + 네이티브 피커의 0001년 차단), `normalizeCalendarMemos`(로드 정규화).
+- **트리거 = dirty 게이트 + 4계열**(dirty는 App 레벨 ref — 리밸런싱 패널은 섹션 접기로 언마운트된다):
+  ① **계좌 뷰 이탈** — `switchToPortfolioWithSnapshot`/`goIntegratedDashboard` 래퍼(AccountTabBar·
+  IntegratedDashboard prop). ⚠️ `usePortfolioState`에 넘기는 **원본** `setShowIntegratedDashboard`는
+  래핑 금지(계좌 삭제 등 내부 흐름). ② 저장 3핸들러 + ③ `handleAppClose` — payload에 **동기 주입**
+  (`{...saveStateRef.current, calendarMemos: nextMemos}`; `setCalendarMemos`는 비동기라 `saveStateRef`가
+  아직 옛 값). `handleSave`는 기록이 실제 생겼을 때만 `portfolioUpdatedAt`을 올려야 STATE 저장 가드를
+  통과한다(historyVerifyKey 버그와 동류). ④ **목표 날짜 변경** — 800ms 디바운스(피커에서 여러 날짜를
+  연속 클릭하면 클릭한 날짜마다 기록이 잔재. 이전 날짜 기록은 자동 삭제하지 않는 규약이라 필수).
+  타이머에 소유 `pid`를 실어 발화 시 재검증하고, 커밋 지점은 `flushRebalTargetSnapshot`으로 회수한다.
+- **⚠️ '앱 닫기'는 `handleAppClose` 하나가 아니다**: 브라우저 X·탭 닫기·새로고침·로그아웃은 전부
+  `useDriveSync`의 `pagehide`로, alt-tab은 `visibilitychange(hidden)`로, 50분 비활동은
+  `handleInactivityLogout`으로 흐른다. 세 곳이 `saveStateRef.current`만 저장하므로 **커밋 훅이 없으면
+  기록이 영영 생성되지 않는다**(dirty ref는 메모리라 함께 소멸). → `useDriveSync({beforeExitSnapshotRef})`
+  + 내부 `snapForExit()`가 그 3지점을 한 번에 덮는다(훅 미제공 시 동작 100% 동일).
+  ⚠️ 종료 커밋은 **`saveStateRef.current`도 동기 갱신**한다 — 반환값 병합만으로는 부족하다(그 시점에
+  이미 저장 중이면 `saveAllToDrive`가 조기 반환하며 `pendingSaveRef`에 **주입 전** 스냅샷을 담고,
+  언로드라 리렌더가 없어 그대로 유실). **impersonation 탭 종료는 미커버**(`handlePageHide` admin
+  early-return은 오폴더 저장 방지 안전장치라 건드리지 않음) — 관리자 탭은 탭 이동·저장 트리거에 의존.
+- **⚠️ 커밋은 예외 격리 필수**: 저장·앱닫기·탭전환 **임계 경로의 첫 줄**에서 동기 호출되므로, 던지면
+  `window.close()`·`switchToPortfolio`에 도달하지 못해 앱이 멈춘 것처럼 보인다. 3중 방어 —
+  ① `commitRebalTargetSnapshot` 전체 try/catch(`null` 반환, ⚠️ `notify()` 금지 — 알림 최소화 정책)
+  ② upsert `Array.isArray` 가드 ③ `normalizeCalendarMemos` 로드 정규화(`applyStateData`/`applyBackupData`).
+- **⚠️ dirty 해제 규칙**: '내용 동일'이면 해제(무한 재시도 방지), **'날짜 미지정'이면 유지**(지정 시 기록).
+  `sameRebalEntry`는 `content`뿐 아니라 **`rows` JSON + `totalExpEval`까지 비교** — content에는 평가금이
+  없어 평가금만 달라진 스냅샷을 '변경 없음'으로 오판한다.
+- **⚠️ `rebalCommitRef.current = buildRebalTargetEntry`는 effect가 아니라 렌더 중 대입**: blur(setState)와
+  click 사이에 passive effect가 flush된다는 보장에 기대지 않기 위해서다(이 ref는 이벤트 핸들러·타이머
+  에서만 읽힌다). `rebalExitCommitRef`도 동일.
+- **⚠️ 값·순서는 화면 표와 1:1**: `expQty = quantity + action + extraQty`(예상 주식수 셀), `expEval =
+  d.expEval`(예상평가금 셀), `targetRatio = d.effectiveTargetRatio`(목표 셀 `baseVal`). **행 순서도**
+  리밸 정렬이 없을 때 화면과 같이 **카테고리 그룹 재배치**를 재현해야 패드의 '3.'과 표의 '3.'이 일치한다.
+  수량 포맷은 `utils.formatNumber` **공유**(자체 포매터를 두면 펀드 좌수에서 자릿수가 갈린다).
+  예적금(savings)은 수량이 없어 `curQty/expQty = null`(패드 `-`), overseas는 `currency:'USD'`로
+  **원화 환산 금지**(환율 시점이 섞여 가짜 손익).
+  ⚠️ 펀드의 `expEval` 0 문제(`usePortfolioData` `expEval`에 `evalAmount` 폴백 없음)는 **표 TOTAL·
+  퇴직연금 D/S·도넛이 이미 공유하는 선행 버그** — 기록만 폴백시키면 "표=기록" 불변식이 깨지므로 손대지 말 것.
+- **`RebalancingPanel` dirty 통지**: `reportAdminChange(opts)`가 `onAdminTargetChange`(관리자 알림,
+  impersonation 중에만 non-null)와 `onTargetEdited`(달력 기록)를 함께 발화. 목표비중 `onBlur`만 분리 호출 —
+  ⚠️ **변경 판정은 시세 파생 `baseVal`이 아니라 슬롯 원본 `slotVal`**로 한다(라이브 미러에선 `baseVal`이
+  현재 비중이라 포커스~blur 사이 시세가 움직이면 오탐). **미러 이탈**(`override` 최초 박제)은 값이 같아도
+  무조건 변경. `onAdminTargetChange`는 종전대로 **무조건** 호출(세션당 1회 규약 불변).
+- **`CalendarModal` 렌더**: 기록은 **사용자 메모 목록(`maxHeight:50px`)과 분리된 전용 행**에 emerald 칩
+  `📊 {계좌명}`으로 렌더한다 — 50px에는 칩이 2.5개만 보여 자동 기록이 사용자 메모를 밀어내고, 칸 확대는
+  규약상 금지다. ⚠️ **칩 라벨에 상수 접두(`목표비중 ·`) 금지** — 셀 텍스트 가용폭이 ≈100px(한글 10자)뿐이라
+  유일한 식별 정보인 계좌명이 truncate로 소실된다(종류는 색+📊으로 인코딩, 전문은 `title`). 개수 배지는
+  **일반 메모만** 센다. 클릭 → **읽기 전용 표 패드**(`pad.kind==='rebalTarget'`): ⚠️ memo 객체를 값 복사하지
+  말고 **`memoId` 앵커 + 라이브 재조회**(기존 편집 패드와 같은 계약) + 원본 소멸 시 자동 닫힘 effect
+  (⚠️ `if (!open) return null`보다 **위**에 둘 것 — 훅 순서). `savePad`는 rebal이면 early-return, 저장(체크)
+  버튼은 미렌더, `textarea value`는 `?? ''`. 삭제는 칩에 폭이 없어 **패드 안 '기록 삭제'** 버튼으로(창
+  위에선 confirm/notify가 가려지므로 즉시 삭제).
+- **⚠️ `onUpdateMemos`는 `calendarMemosRef`도 함께 갱신**: 미러 ref는 effect로 따라가 한 tick 뒤처질 수
+  있고, 그 사이 커밋이 옛 값 기준으로 통째 교체하면 방금 저장한 메모가 지워진다.
+- **범위 밖(의도)**: 목표 날짜를 바꿔도 **이전 날짜 기록은 자동 삭제하지 않는다**(사용자 선택 — 잘못
+  남은 건 패드에서 직접 삭제). `settings.amount`/`useDepositAmount`/`mode` 변경은 dirty를 만들지 않는다
+  (사용자가 확정한 트리거는 '비중 조정'). 기록 시점과 기록이 걸린 날짜가 다를 수 있어 패드에 `updatedAt`
+  ('… 기록')을 함께 표시한다.
+
 ---
 
 ## 다음 작업 후보 (Phase 11~)

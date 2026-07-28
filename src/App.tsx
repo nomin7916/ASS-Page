@@ -70,7 +70,7 @@ import {
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
   externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
   buildBookCostSeries, bookDeltaBetween,
-  noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks
+  noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -122,6 +122,26 @@ const normalizeHiddenDivMonths = (raw) => {
     ? [...new Set(v.filter(n => Number.isInteger(n) && n >= 0 && n <= 11))]
     : [];
   return { expected: pick(raw?.expected), actual: pick(raw?.actual) };
+};
+
+// 메모 달력 로드 정규화 — Drive STATE/백업의 calendarMemos는 지금까지 무검증으로 대입돼 왔다.
+// ⚠️ 손상값(날짜 키가 배열이 아닌 truthy)이 들어오면 `[...arr]` 계열 연산이 TypeError를 던져
+// 저장·종료·탭전환 같은 임계 경로가 통째로 죽는다(App.tsx portfolioStructureKey의 Array.isArray
+// 가드 주석과 같은 등급의 위험). 또 실제 달력에 없는 날짜 키(2026-13-45)는 CalendarModal이
+// 렌더할 수 없어 화면에 안 보이고 삭제도 못 하는 유령 기록이 되므로 여기서 버린다.
+// 변경이 없으면 원본 참조를 그대로 반환 → 불필요한 저장 트리거 방지(dedupeHistoryByDate 패턴).
+const normalizeCalendarMemos = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  let changed = false;
+  const out = {};
+  for (const [key, arr] of Object.entries(raw)) {
+    if (!isValidIsoDate(key) || !Array.isArray(arr)) { changed = true; continue; }
+    const clean = arr.filter(m => m && typeof m === 'object');
+    if (clean.length !== arr.length) changed = true;
+    if (clean.length) out[key] = clean.length === arr.length ? arr : clean;
+    else changed = true; // 빈 날짜 키는 버린다(out과 raw의 의미를 일치시켜 반환 판정이 어긋나지 않게)
+  }
+  return changed ? out : raw;
 };
 
 export default function App() {
@@ -342,6 +362,18 @@ export default function App() {
   const accountRebalExtraQtyRef = useRef<Record<string, Record<string, number>>>({}); // 계좌별 리밸런싱 '추가' 입력값 보존
   const rebalExtraQtyRef = useRef<Record<string, number>>({}); // 최신 rebalExtraQty 스냅샷 (탭 전환 저장용)
   const intDashCompStocksRef = useRef<any[]>(defaultCompStocks);
+  // ── 리밸런싱 목표비중 → 메모 달력 자동 기록 ──
+  // calendarMemos state의 최신 미러(같은 tick 연속 커밋 합성 + 저장 핸들러의 동기 조회용)
+  const calendarMemosRef = useRef<Record<string, any[]>>({});
+  // 목표 관련 변경이 있었던 계좌(portfolioId → true). 리밸런싱 패널은 섹션 접기로 언마운트될 수
+  // 있으므로 패널 state가 아니라 App 레벨 ref에 둔다.
+  const rebalTargetDirtyRef = useRef<Record<string, true>>({});
+  // 매 렌더 최신 build 클로저 유지 — blur→click 사이 리렌더 여부와 무관하게 최신 데이터를 읽는다
+  const rebalCommitRef = useRef<any>(null);
+  // 종료 경로(pagehide/visibilitychange-hidden/비활동 로그아웃)에서 useDriveSync가 동기 호출
+  const rebalExitCommitRef = useRef<(() => any) | null>(null);
+  // 목표 날짜 변경 디바운스 타이머 — 소유 계좌(pid)를 함께 실어 늦은 발화를 폐기
+  const rebalDateTimerRef = useRef<{ t: any; pid: string; date: string } | null>(null);
   const prevActivePortfolioIdRef = useRef<string | null>(null);
   // 직전 렌더의 통합 대시보드 표시 여부 — 계좌 전환 시 "대시보드에서 떠나는지" 판별용
   // (앱은 항상 대시보드로 부팅하므로 초기값 true). 배치 업데이트로 showIntegratedDashboard가
@@ -437,6 +469,10 @@ export default function App() {
     applyStockData: (...args) => applyStockDataRef.current?.(...args),
     applyBackupData: (...args) => applyBackupDataRef.current?.(...args),
     accountChartStatesRef, saveStateRef, adminViewingAsRef, adminOwnDriveTokenRef, notify, confirm,
+    // 종료 계열 저장(pagehide·visibilitychange hidden·비활동 로그아웃) 직전에 동기 호출 —
+    // 브라우저 X·새로고침·로그아웃이 '앱 닫기'의 지배적 경로이고, 그 경로는 saveStateRef만 저장하므로
+    // 여기서 커밋하지 않으면 목표비중 기록이 영영 생성되지 않는다(dirty ref는 메모리라 함께 소멸).
+    beforeExitSnapshotRef: rebalExitCommitRef,
     onForceLogout: () => {
       // 새 탭 관리자 접속 중에는 reload가 ?adminView를 유지해 재부팅 루프가 되므로 탭을 닫는다.
       if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }
@@ -689,7 +725,7 @@ export default function App() {
     if (resolvedMarketIndicators) setMarketIndicators(resolvedMarketIndicators);
     if (resolvedIndicatorHistoryMap) setIndicatorHistoryMap(resolvedIndicatorHistoryMap);
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
-    if (stateData.calendarMemos) setCalendarMemos(stateData.calendarMemos);
+    if (stateData.calendarMemos) setCalendarMemos(normalizeCalendarMemos(stateData.calendarMemos));
     if (stateData.watchlistGroups) setWatchlistGroups(stateData.watchlistGroups);
     seenAdminNotifIdsRef.current = stateData.seenAdminNotifIds || [];
     setSeenAdminNotifIds(seenAdminNotifIdsRef.current);
@@ -741,7 +777,7 @@ export default function App() {
     // 덮어쓰지 않는다. 현재 값이 있으면 유지(과거 이력으로 복원해도 메모 달력·관심종목 보존), 비어
     // 있을 때만 백업/파일 값을 채택(신규 기기 이전 시 유실 방지). ⚠️ 회귀 주의: 이 sticky 규칙은
     // applyBackupData(복원)에만 적용 — applyStateData(정식 Drive 로드)는 그대로 최신값을 불러온다.
-    setCalendarMemos(prev => (prev && Object.keys(prev).length > 0) ? prev : (stateData.calendarMemos || prev));
+    setCalendarMemos(prev => (prev && Object.keys(prev).length > 0) ? prev : (stateData.calendarMemos ? normalizeCalendarMemos(stateData.calendarMemos) : prev));
     setWatchlistGroups(prev => (Array.isArray(prev) && prev.length > 0) ? prev : (stateData.watchlistGroups || prev));
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
@@ -1417,12 +1453,183 @@ export default function App() {
   const handleDepositSort = (key) => setDepositSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
   const handleDepositSort2 = (key) => setDepositSortConfig2(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }));
 
+  // ── 리밸런싱 목표비중 → 메모 달력 자동 기록 ──
+  // 리밸런싱 표 '목표(%)' 열 헤더의 날짜(settings.targetDate) 칸에 그 시점 목표 비중 스냅샷을 남긴다.
+  // (날짜, portfolioId)당 1건 upsert. 상세 규약·회귀 주의는 CLAUDE.md 전용 섹션 참조.
+  useEffect(() => { calendarMemosRef.current = calendarMemos; }, [calendarMemos]);
+
+  const buildRebalTargetEntry = (overrideDate) => {
+    const p = activePortfolio;
+    if (!p) return null;
+    const acct = activePortfolioAccountType;
+    if (acct === 'simple' || acct === 'matong' || acct === 'gold') return null; // 리밸런싱 표 자체가 없음
+    if (p.deletedAt) return null;                                               // 삭제 계좌 신규 기록 동결
+    // ⚠️ 오늘로 폴백하지 않는다 — '헤더에 보이는 날짜 = 기록 날짜' 불변식.
+    //    날짜 미지정이면 커밋하지 않고 dirty를 유지해, 날짜를 지정하는 순간 그 날짜에 기록된다.
+    const dayKey = overrideDate || settings?.targetDate;
+    // ⚠️ 연도 범위까지 본다 — 네이티브 날짜 피커에 0001을 입력하면 isValidIsoDate는 통과하지만
+    //    달력에서 도달할 수 없어(월 이동 2000회) 렌더도 삭제도 못 하는 유령 기록이 된다.
+    if (!isValidIsoDate(dayKey)) return null;
+    const yr = parseInt(dayKey.slice(0, 4), 10);
+    if (yr < 1900 || yr > 2999) return null;
+    // ⚠️ 기록 순서는 화면 표와 같아야 한다 — 표는 리밸 정렬이 없을 때 카테고리로 재배치하고
+    //    그 순서로 행 번호를 매긴다(RebalancingPanel renderRow의 rowNum). raw rebalanceData 순서로
+    //    두면 패드의 '3.'이 화면의 '7.'을 가리켜 대조가 어긋난다.
+    const src = rebalanceData || [];
+    const ordered = rebalanceSortConfig?.key != null ? src : (() => {
+      const order = [];
+      const g = new Map();
+      src.forEach(d => {
+        const c = d.category || '기타';
+        if (!g.has(c)) { g.set(c, []); order.push(c); }
+        g.get(c).push(d);
+      });
+      return order.flatMap(c => g.get(c));
+    })();
+    // 값은 전부 화면의 리밸런싱 표와 같은 rebalanceData에서 뜬다(예상 주식수·예상평가금 셀과 동일 식).
+    const rows = ordered.map(d => {
+      const qty = cleanNum(d.quantity);
+      const extra = rebalExtraQty[d.id] || 0;
+      return {
+        name: d.name || '',
+        code: d.code || '',                      // 이름이 비슷한 종목·삭제된 종목 식별용
+        targetRatio: cleanNum(d.effectiveTargetRatio),
+        curQty: d.isSavings ? null : qty,        // 예적금은 시세·수량이 없는 고정 참고 행
+        expQty: d.isSavings ? null : qty + cleanNum(d.action) + extra,
+        expEval: cleanNum(d.expEval),
+      };
+    });
+    if (rows.length === 0) return null;
+    const accountName = String(title || p.name || '계좌').trim();
+    const totalTargetRatio = rows.reduce((s, r) => s + r.targetRatio, 0);
+    const totalExpEval = rows.reduce((s, r) => s + r.expEval, 0);
+    // content = 사람이 읽는 텍스트 사본. 백업 JSON 가독성 + firstLine(m.content) 폴백 경로용.
+    const content = [
+      `📊 목표비중 · ${accountName} (${rows.length}종목)`,
+      ...rows.map((r, i) => `${i + 1}. ${r.name} ${r.targetRatio.toFixed(2)}%` +
+        (r.curQty == null ? '' : ` ${formatNumber(r.curQty)} → ${formatNumber(r.expQty)}`)),
+      `합계 ${totalTargetRatio.toFixed(2)}%`,
+    ].join('\n');
+    return {
+      dayKey,
+      entry: {
+        kind: 'rebalTarget',
+        portfolioId: p.id,
+        accountName,
+        targetMode: settings?.targetMode === 'variable' ? 'variable' : 'fixed',
+        investMode: settings?.mode === 'rebalance' ? 'rebalance' : 'accumulate',
+        currency: acct === 'overseas' ? 'USD' : 'KRW',
+        rows, totalTargetRatio, totalExpEval, content,
+      },
+    };
+  };
+  // ⚠️ effect가 아니라 **렌더 중** 갱신 — blur(setState)와 click 사이에 passive effect가 flush된다는
+  // 보장에 기대지 않기 위해서다. 이 ref는 이벤트 핸들러·타이머에서만 읽히므로 렌더 중 대입이 안전하다.
+  rebalCommitRef.current = buildRebalTargetEntry;
+
+  // ⚠️ content(이름·목표비중·수량)만 비교하면 평가금만 달라진 스냅샷을 '변경 없음'으로 오판한다.
+  const sameRebalEntry = (a, b) => !!a && !!b
+    && a.accountName === b.accountName && a.targetMode === b.targetMode
+    && a.investMode === b.investMode && a.currency === b.currency && a.content === b.content
+    && Math.round(a.totalExpEval || 0) === Math.round(b.totalExpEval || 0)
+    && JSON.stringify(a.rows || []) === JSON.stringify(b.rows || []);
+
+  const commitRebalTargetSnapshot = (overrideDate?: string) => {
+    // ⚠️ 예외 격리 필수 — 이 함수는 저장·앱닫기·탭전환 임계 경로의 첫 줄에서 동기 호출된다.
+    // 여기서 던지면 window.close()·switchToPortfolio에 도달하지 못해 앱이 멈춘 것처럼 보인다.
+    try {
+      const pid = activePortfolioIdRef.current;
+      if (!pid || !rebalTargetDirtyRef.current[pid]) return null;
+      const built = rebalCommitRef.current?.(overrideDate);
+      if (!built || built.entry.portfolioId !== pid) return null; // 날짜 미지정 등 → dirty 유지
+      const { dayKey, entry } = built;
+      const cur = calendarMemosRef.current || {};
+      const arr = Array.isArray(cur[dayKey]) ? [...cur[dayKey]] : [];
+      const idx = arr.findIndex(m => m?.kind === 'rebalTarget' && m.portfolioId === pid);
+      if (idx !== -1 && sameRebalEntry(arr[idx], entry)) {
+        delete rebalTargetDirtyRef.current[pid]; // 기록할 내용이 없으니 dirty도 해제(무한 재시도 방지)
+        return null;
+      }
+      const now = Date.now();
+      // ⚠️ 교체 시 id·createdAt 승계 — 칩 key 안정 + 열려 있던 읽기전용 패드가 닫히지 않고 갱신된다
+      if (idx === -1) arr.push({ ...entry, id: generateId(), createdAt: now, updatedAt: now });
+      else arr[idx] = { ...entry, id: arr[idx].id, createdAt: arr[idx].createdAt ?? now, updatedAt: now };
+      const next = { ...cur, [dayKey]: arr };
+      calendarMemosRef.current = next;
+      setCalendarMemos(next);
+      delete rebalTargetDirtyRef.current[pid];
+      return next;
+    } catch (e) {
+      console.warn('[rebalTarget] 목표비중 기록 실패 — 저장/종료/전환은 계속 진행', e);
+      return null;
+    }
+  };
+
+  // 대기 중인 날짜 디바운스 타이머를 회수해 커밋에 태운다(중복 발화 방지). 계좌가 바뀌었으면 폐기.
+  const flushRebalTargetSnapshot = () => {
+    const pending = rebalDateTimerRef.current;
+    let date;
+    if (pending) {
+      clearTimeout(pending.t);
+      rebalDateTimerRef.current = null;
+      if (pending.pid === activePortfolioIdRef.current) date = pending.date;
+    }
+    return commitRebalTargetSnapshot(date);
+  };
+
+  // 리밸런싱 패널의 목표 관련 변경 통지(값이 실제 바뀐 편집만 도달). date가 오면 날짜 변경.
+  const handleTargetEdited = (opts?: { date?: string }) => {
+    const pid = activePortfolioIdRef.current;
+    if (!pid) return;
+    rebalTargetDirtyRef.current[pid] = true;
+    const date = opts?.date;
+    if (!date) return;
+    // 날짜 변경은 즉시 기록이 기대되지만, 피커에서 여러 날짜를 연속 클릭하면 클릭한 날짜마다
+    // 기록이 잔재한다(이전 날짜 기록은 자동 삭제하지 않는 규약) → 디바운스로 마지막 선택만 남긴다.
+    if (rebalDateTimerRef.current) clearTimeout(rebalDateTimerRef.current.t);
+    rebalDateTimerRef.current = { pid, date, t: setTimeout(() => {
+      rebalDateTimerRef.current = null;
+      if (pid !== activePortfolioIdRef.current) return; // 800ms 사이 계좌가 바뀌었으면 폐기
+      commitRebalTargetSnapshot(date);
+    }, 800) };
+  };
+
+  // 계좌 뷰를 떠나기 직전 커밋 — 탭/드롭다운/통합 대시보드 진입이 모두 이 래퍼를 경유한다.
+  // ⚠️ usePortfolioState에 넘기는 원본 setShowIntegratedDashboard는 래핑하지 않는다(계좌 삭제 등 내부 흐름).
+  const switchToPortfolioWithSnapshot = (id) => { flushRebalTargetSnapshot(); switchToPortfolio(id); };
+  const goIntegratedDashboard = (v) => { if (v) flushRebalTargetSnapshot(); setShowIntegratedDashboard(v); };
+
+  // 종료 계열 저장(pagehide·visibilitychange hidden·비활동 로그아웃) 직전에 useDriveSync가 동기 호출.
+  // ⚠️ 언로드 중에는 리렌더가 보장되지 않아 setCalendarMemos만으로는 저장 payload에 안 실린다 →
+  //    반환값을 그대로 스냅샷에 병합시키고, portfolioUpdatedAt을 올려 STATE 저장 가드를 통과시킨다.
+  rebalExitCommitRef.current = () => {
+    const next = flushRebalTargetSnapshot();
+    if (!next) return null;
+    const ts = Date.now();
+    portfolioUpdatedAtRef.current = ts;
+    // ⚠️ saveStateRef도 **동기 갱신** — 반환값 병합만으로는 부족하다. pagehide 시점에 이미 저장이
+    // 진행 중이면 saveAllToDrive가 조기 반환하며 pendingSaveRef에 saveStateRef.current를 담는데,
+    // 언로드라 리렌더가 없어 그 값이 기록 없는 옛 스냅샷이면 그대로 유실된다. 또 visibilitychange가
+    // dirty를 먼저 소진한 뒤 pagehide가 발화하는 순서에서도 이 갱신이 기록을 살려 둔다.
+    saveStateRef.current = { ...saveStateRef.current, calendarMemos: next, portfolioUpdatedAt: ts };
+    return { calendarMemos: next, portfolioUpdatedAt: ts };
+  };
+
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·watchlistGroups·seenAdminNotifIds 등 신규 필드가 PC 백업·Drive STATE에서 유실됨
     // (handleDownloadStateFile·handleAppClose와 동일 패턴).
-    const state = { ...saveStateRef.current, portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    // 리밸런싱 목표비중 기록을 먼저 커밋해 이 저장본에 포함(setCalendarMemos는 비동기라 saveStateRef가
+    // 아직 옛 값 → 명시 주입 필요). ⚠️ 기록이 실제 생겼을 때만 portfolioUpdatedAt을 올려야
+    // useDriveSync의 STATE 저장 가드(portfolioUpdatedAt > lastSaved)를 통과한다(historyVerifyKey 버그와 동류).
+    const nextMemos = flushRebalTargetSnapshot();
+    const memoTs = Date.now();
+    if (nextMemos) {
+      portfolioUpdatedAtRef.current = memoTs;
+      lastDriveSavedPortfolioUpdatedAtRef.current = 0;
+    }
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos, portfolioUpdatedAt: memoTs } : {}), portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -1598,6 +1805,7 @@ export default function App() {
 
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
+    const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     // portfolioUpdatedAt이 없으면 saveAllToDrive의 guard(0 > 0)가 항상 false → STATE 저장 안됨
     // 수동 저장은 항상 강제 저장되어야 하므로 새 타임스탬프 생성 후 guard 초기화
     const newUpdatedAt = Date.now();
@@ -1606,7 +1814,7 @@ export default function App() {
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·watchlistGroups·seenAdminNotifIds 등 신규 필드가 Drive STATE·수동 백업에서
     // 유실된다(과거 '저장' 버튼이 메모 달력을 지우던 원인 — handleAppClose와 동일 패턴으로 보장).
-    const state = { ...saveStateRef.current, portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
@@ -1616,11 +1824,12 @@ export default function App() {
 
   const handleDownloadStateFile = () => {
     const currentPortfolios = buildPortfoliosState();
+    const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·seenAdminNotifIds·intDashCompStocks 등 신규/추가 필드가 누락되어
     // PC 백업 파일에서 유실된다(handleAppClose와 동일 패턴으로 메인 저장 필드 보장).
-    const state = { ...saveStateRef.current, portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1633,11 +1842,12 @@ export default function App() {
 
   const handleAppClose = async () => {
     const currentPortfolios = buildPortfoliosState();
+    const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 저장 — 부분 state를 손으로 재구성하면
     // chartPrefs.intDashCompStocks(통합 대시보드 비교종목)·seenAdminNotifIds 등이 누락되어
     // "앱 닫기"로 종료할 때마다 비교종목이 초기화되던 버그 방지 (메인 저장과 동일 필드 보장)
-    const state = { ...saveStateRef.current, portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const minWait = new Promise<void>(r => setTimeout(r, 2000));
     if (driveTokenRef.current) {
       const token = driveTokenRef.current;
@@ -2514,10 +2724,10 @@ export default function App() {
         <AccountTabBar
           portfolios={portfolios}
           showIntegratedDashboard={showIntegratedDashboard}
-          setShowIntegratedDashboard={setShowIntegratedDashboard}
+          setShowIntegratedDashboard={goIntegratedDashboard}
           activePortfolioId={activePortfolioId}
           title={title}
-          switchToPortfolio={switchToPortfolio}
+          switchToPortfolio={switchToPortfolioWithSnapshot}
           hideAmounts={hideAmounts}
           setHideAmounts={setHideAmounts}
           setUnlockPinDigits={setUnlockPinDigits}
@@ -2889,6 +3099,7 @@ export default function App() {
             targetEditAuthorized={targetEditAuthorized}
             setTargetEditAuthorized={setTargetEditAuthorized}
             onAdminTargetChange={adminViewingAs ? notifyUserOfAdminTargetChange : null}
+            onTargetEdited={handleTargetEdited}
             onManualSave={handleDriveSave}
             driveStatus={driveStatus}
             showCalculator={showCalculator}
@@ -2957,7 +3168,7 @@ export default function App() {
             deletePortfolio={deletePortfolio}
             restorePortfolio={restorePortfolio}
             purgePortfolio={purgePortfolio}
-            switchToPortfolio={switchToPortfolio}
+            switchToPortfolio={switchToPortfolioWithSnapshot}
             movePortfolio={movePortfolio}
             updatePortfolioColor={updatePortfolioColor}
             togglePortfolioTest={togglePortfolioTest}
@@ -3050,7 +3261,9 @@ export default function App() {
         open={showCalendarModal}
         onClose={() => setShowCalendarModal(false)}
         memos={calendarMemos}
-        onUpdateMemos={setCalendarMemos}
+        // ⚠️ 미러 ref도 함께 갱신 — calendarMemosRef는 effect로 따라가므로 한 tick 뒤처질 수 있고,
+        // 그 사이 목표비중 커밋이 옛 값 기준으로 통째 교체하면 방금 저장한 메모가 지워질 수 있다.
+        onUpdateMemos={(next) => { calendarMemosRef.current = next; setCalendarMemos(next); }}
         holidays={marketHolidays}
         notify={notify}
         confirm={confirm}

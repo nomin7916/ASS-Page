@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2 } from 'lucide-react';
 import { BG } from '../design';
-import { generateId } from '../utils';
+import { generateId, formatNumber } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
@@ -35,6 +35,14 @@ const fmtAbbrev = (n) => {
   return `${sign}₩${nfmt(a)}`;
 };
 const fmtPct = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+// 목표비중 기록용 — 수량은 소수(펀드 좌수) 가능, 금액은 계좌 통화(overseas=USD) 따라 표기.
+// ⚠️ 원화 환산 금지(환율 시점이 섞여 가짜 손익이 생긴다 — CLAUDE.md 해외계좌 규약).
+// ⚠️ 수량은 리밸런싱 표와 **같은 포매터**를 써야 한다 — 자체 포매터를 두면 펀드 좌수처럼 소수
+// 수량에서 자릿수가 갈려(4자리 vs 3자리) 사용자가 "기록이 화면과 다르다"고 오인한다.
+const qfmt = (n) => formatNumber(n);
+const fmtMoney = (n, currency) => currency === 'USD'
+  ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0)
+  : `₩${nfmt(Number(n) || 0)}`;
 // 한국식 손익 색상: 이익=빨강, 손실=파랑, 0=회색.
 const pnlColor = (v) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-blue-400' : 'text-gray-400');
 
@@ -159,6 +167,15 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   const fxKeys = useMemo(() => (fxHistory ? Object.keys(fxHistory).sort() : []), [fxHistory]);
   const us10yKeys = useMemo(() => (us10yHistory ? Object.keys(us10yHistory).sort() : []), [us10yHistory]);
 
+  // 목표비중 기록 패드는 memoId 앵커 + 라이브 재조회(기존 편집 패드와 같은 계약)라 원본이 삭제되면
+  // 스스로 닫힌다. upsert는 id를 승계하므로 내용이 교체돼도 닫히지 않고 새 스냅샷으로 갱신된다.
+  // ⚠️ 아래 `if (!open) return null`은 모든 훅 뒤에 있어야 하므로 이 effect는 반드시 그 위에 둔다.
+  useEffect(() => {
+    if (!pad || pad.kind !== 'rebalTarget') return;
+    const list = memos[pad.dayKey];
+    if (!Array.isArray(list) || !list.some((m) => m && m.id === pad.memoId)) setPad(null);
+  }, [memos, pad]);
+
   if (!open) return null;
 
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
@@ -183,13 +200,21 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   // 패드 배치는 padSeq 효과가 실제 높이를 측정해 중앙 정렬 + 클램프한다(고정 오프셋 금지 — 세로가 길어 잘림).
   const openNew = (dayKey) => { setPad({ dayKey, mode: 'new', memoId: null, val: '' }); setPadSeq((s) => s + 1); };
   const openEdit = (dayKey, memo) => { setPad({ dayKey, mode: 'edit', memoId: memo.id, val: memo.content || '' }); setPadSeq((s) => s + 1); };
+  // 리밸런싱 목표비중 기록(읽기 전용) — 값 복사가 아니라 memoId만 들고 매 렌더 재조회한다.
+  const openRebal = (dayKey, memo) => { setPad({ kind: 'rebalTarget', dayKey, memoId: memo.id }); setPadSeq((s) => s + 1); };
   const closePad = () => setPad(null);
+  // 현재 패드가 가리키는 목표비중 기록(라이브 조회) — 없으면 위 effect가 패드를 닫는다.
+  const padRec = pad && pad.kind === 'rebalTarget'
+    ? (Array.isArray(memos[pad.dayKey]) ? memos[pad.dayKey] : []).find((m) => m && m.id === pad.memoId)
+    : null;
 
   const savePad = () => {
-    if (!pad || !onUpdateMemos) { setPad(null); return; }
+    // 목표비중 기록은 읽기 전용 — 저장 경로에 진입시키지 않는다(pad.val 자체가 없음).
+    if (!pad || pad.kind === 'rebalTarget' || !onUpdateMemos) { setPad(null); return; }
     const { dayKey, mode, memoId, val } = pad;
     const next = { ...memos };
-    const arr = [...(next[dayKey] || [])];
+    // ⚠️ Array.isArray 가드 — 손상된 Drive 값이 비순회 truthy면 `[...x]`가 TypeError를 던진다
+    const arr = Array.isArray(next[dayKey]) ? [...next[dayKey]] : [];
     if (mode === 'new') {
       if (!val.trim()) { setPad(null); return; } // 빈 메모는 생성 안 함
       arr.push({ id: generateId(), content: val, createdAt: Date.now() });
@@ -208,7 +233,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   const deleteMemo = (dayKey, memoId) => {
     if (!onUpdateMemos) return;
     const next = { ...memos };
-    const arr = (next[dayKey] || []).filter((m) => m.id !== memoId);
+    const arr = (Array.isArray(next[dayKey]) ? next[dayKey] : []).filter((m) => m && m.id !== memoId);
     if (arr.length) next[dayKey] = arr; else delete next[dayKey];
     onUpdateMemos(next);
   };
@@ -287,7 +312,13 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               const key = dayKeyOf(viewYear, viewMonth, dayNum);
               const isToday = key === todayStr;
               const isHol = krHol.includes(key);
-              const dayMemos = memos[key] || [];
+              // 목표비중 자동 기록은 **사용자 메모 목록(50px)과 분리**해 전용 행에 렌더한다.
+              // 같은 accountType 계좌끼리 settings.targetDate를 공유하므로 하루에 계좌별 기록이
+              // 여러 건 쌓이는 것이 기본 시나리오인데, 50px에는 칩이 2.5개만 보여 사용자 메모가
+              // 밀려난다. 칸 크기를 키우는 것은 규약상 금지(CLAUDE.md)이므로 분리로 해결.
+              const dayAll = Array.isArray(memos[key]) ? memos[key] : [];
+              const dayRebals = dayAll.filter((m) => m && m.kind === 'rebalTarget');
+              const dayMemos = dayAll.filter((m) => m && m.kind !== 'rebalTarget');
               const numColor = isHol || dow === 0 ? 'text-red-400' : dow === 6 ? 'text-blue-400' : 'text-gray-300';
               const rawMetric = metricsByDate[key];
               const metricCum = rawMetric ? ((key === latestRecDate && todayReturnRate != null) ? todayReturnRate : rawMetric.monthlyChange) : null;
@@ -318,6 +349,22 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       <div className={`text-[9px] tabular-nums truncate mt-[1px] ${pnlColor(metricCum)}`}>
                         누적 {fmtPct(metricCum)}
                       </div>
+                    </div>
+                  )}
+                  {dayRebals.length > 0 && (
+                    <div className="flex gap-0.5 shrink-0 overflow-x-auto">
+                      {dayRebals.map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={(e) => { e.stopPropagation(); openRebal(key, m); }}
+                          title={m.content}
+                          className="flex items-center rounded px-1 py-0.5 bg-emerald-500/15 hover:bg-emerald-500/30 transition-colors shrink-0 max-w-full"
+                        >
+                          {/* ⚠️ 상수 접두('목표비중 ·') 금지 — 셀 텍스트 가용폭이 ≈100px(한글 10자)뿐이라
+                              유일한 식별 정보인 계좌명이 truncate로 사라진다. 종류는 색+아이콘으로 인코딩. */}
+                          <span className="text-[10px] text-emerald-200 truncate leading-tight">📊 {m.accountName || '계좌'}</span>
+                        </button>
+                      ))}
                     </div>
                   )}
                   <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '50px' }}>
@@ -371,20 +418,22 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               >
                 <X size={10} className="text-white" />
               </button>
-              <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={savePad}
-                className="w-[18px] h-[18px] rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center transition-all"
-                title="저장 (Ctrl+Enter)"
-              >
-                <Check size={10} className="text-white" />
-              </button>
+              {pad.kind !== 'rebalTarget' && (
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={savePad}
+                  className="w-[18px] h-[18px] rounded-full bg-purple-600 hover:bg-purple-400 flex items-center justify-center transition-all"
+                  title="저장 (Ctrl+Enter)"
+                >
+                  <Check size={10} className="text-white" />
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <CalIcon size={13} className="text-gray-500" />
               <span className="text-[13px] text-gray-400 font-mono">{pad.dayKey}</span>
               <span className="text-[15px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">
-                MEMO
+                {pad.kind === 'rebalTarget' ? 'TARGET' : 'MEMO'}
               </span>
             </div>
             <div className="w-10" />
@@ -411,7 +460,64 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               </div>
             );
           })()}
-          {/* 줄선 메모 입력 */}
+          {/* 목표비중 기록 = 읽기 전용 표 (리밸런싱 표의 목표비중·예상 주식수·예상평가금 스냅샷) */}
+          {pad.kind === 'rebalTarget' ? (padRec ? (
+            <div className="bg-black px-3 py-2 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-emerald-300 text-[13px] font-bold truncate">📊 {padRec.accountName || '계좌'}</span>
+                <span className="text-[10px] text-gray-500 shrink-0">
+                  {padRec.targetMode === 'variable' ? '수시변경' : '고정'} · {padRec.investMode === 'rebalance' ? '리밸런싱' : '적립식'}
+                  {/* 기록 시각 — 이 기록이 걸린 날짜(목표 날짜)와 실제 기록 시점은 다를 수 있다 */}
+                  {padRec.updatedAt ? ` · ${new Date(padRec.updatedAt).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })} 기록` : ''}
+                </span>
+              </div>
+              <table className="w-full text-[11px] tabular-nums">
+                <thead>
+                  <tr className="text-gray-500 border-b border-gray-800">
+                    <th className="text-left font-normal py-1 pr-1">종목명</th>
+                    <th className="text-right font-normal py-1 px-1">목표</th>
+                    <th className="text-right font-normal py-1 px-1">현재수량</th>
+                    <th className="text-right font-normal py-1 px-1">이후수량</th>
+                    <th className="text-right font-normal py-1 pl-1">리밸런싱 후 평가금액</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(Array.isArray(padRec.rows) ? padRec.rows : []).map((r, i) => (
+                    <tr key={i} className="border-b border-gray-900/80">
+                      <td className="text-left text-gray-200 py-1 pr-1">
+                        {i + 1}. {r.name}
+                        {r.code ? <span className="ml-1 text-[9px] text-gray-600 font-mono">{r.code}</span> : null}
+                      </td>
+                      <td className="text-right text-green-400 py-1 px-1">{Number(r.targetRatio || 0).toFixed(2)}%</td>
+                      <td className="text-right text-gray-400 py-1 px-1">{r.curQty == null ? '-' : qfmt(r.curQty)}</td>
+                      <td className="text-right text-blue-300 py-1 px-1">{r.expQty == null ? '-' : qfmt(r.expQty)}</td>
+                      <td className="text-right text-yellow-500 py-1 pl-1">{fmtMoney(r.expEval, padRec.currency)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="font-bold border-t border-gray-700">
+                    <td className="text-left text-gray-400 py-1.5 pr-1">합계</td>
+                    <td className="text-right text-green-400 py-1.5 px-1">{Number(padRec.totalTargetRatio || 0).toFixed(2)}%</td>
+                    <td className="py-1.5 px-1" />
+                    <td className="py-1.5 px-1" />
+                    <td className="text-right text-yellow-500 py-1.5 pl-1">{fmtMoney(padRec.totalExpEval, padRec.currency)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+              <div className="flex justify-end pt-2">
+                {/* 칩에 휴지통을 넣을 폭이 없어 삭제는 여기로 — 즉시 삭제(창 위에선 confirm이 가려진다) */}
+                <button
+                  onClick={() => deleteMemo(pad.dayKey, pad.memoId)}
+                  className="flex items-center gap-1 text-[11px] text-gray-600 hover:text-red-400 transition-colors"
+                  title="이 기록 삭제"
+                >
+                  <Trash2 size={11} /> 기록 삭제
+                </button>
+              </div>
+            </div>
+          ) : null) : (
+          /* 줄선 메모 입력 */
           <textarea
             className="w-full text-gray-200 text-[15px] outline-none resize-none caret-sky-400 placeholder-gray-700"
             style={{
@@ -427,13 +533,14 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
             rows={28}
             autoFocus
             placeholder="메모를 입력하세요..."
-            value={pad.val}
+            value={pad.val ?? ''}
             onChange={(e) => setPad((prev) => ({ ...prev, val: e.target.value }))}
             onKeyDown={(e) => {
               if (e.key === 'Escape') { e.stopPropagation(); closePad(); }
               if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') savePad();
             }}
           />
+          )}
         </div>
       )}
     </>

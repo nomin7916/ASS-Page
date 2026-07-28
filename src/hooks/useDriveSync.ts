@@ -52,6 +52,10 @@ interface UseDriveSyncParams {
   adminOwnDriveTokenRef: React.MutableRefObject<string>;
   notify: (text: string, type?: string) => void;
   confirm: (message: string, confirmLabel?: string) => Promise<boolean>;
+  // 종료 계열 저장 직전에 동기 호출 — 반환값(부분 state)을 saveStateRef 스냅샷에 병합해 저장한다.
+  // 언로드 중에는 리렌더가 보장되지 않아 setState 결과가 saveStateRef에 반영되지 못하므로,
+  // "저장 직전 커밋 → 그 자리에서 payload에 주입"이 유일하게 안전한 경로다. 미제공 시 동작 불변.
+  beforeExitSnapshotRef?: React.MutableRefObject<(() => any) | null>;
   onForceLogout: () => void;
 }
 
@@ -66,6 +70,7 @@ export function useDriveSync({
   adminOwnDriveTokenRef,
   notify,
   confirm,
+  beforeExitSnapshotRef,
   onForceLogout,
 }: UseDriveSyncParams) {
   // ── Drive 상태 ──
@@ -587,12 +592,23 @@ export function useDriveSync({
     }
   };
 
+  // 종료 계열 저장용 스냅샷 — saveStateRef를 읽기 **직전에** beforeExitSnapshotRef를 동기 호출해
+  // 그 반환값(부분 state)을 병합한다. 브라우저 X·새로고침·로그아웃·비활동 로그아웃이 모두 여기로
+  // 수렴하므로, 언로드 직전 커밋이 필요한 기능(리밸런싱 목표비중 기록)은 이 한 곳만 타면 된다.
+  // ⚠️ 훅 미제공이면 기존 동작과 100% 동일(saveStateRef.current 그대로).
+  const snapForExit = () => {
+    let extra = null;
+    try { extra = beforeExitSnapshotRef?.current?.() ?? null; } catch { extra = null; }
+    const base = saveStateRef.current;
+    return extra ? { ...base, ...extra } : base;
+  };
+
   // ── 탭 활성화 시 Drive 동기화, 숨김 시 즉시 저장 ──
   useEffect(() => {
     if (!authUser) return;
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        const snap = saveStateRef.current;
+        const snap = snapForExit();
         if (snap && snap.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
           if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
           saveAllToDrive(snap);
@@ -603,7 +619,7 @@ export function useDriveSync({
     };
     const handlePageHide = () => {
       if (adminViewingAsRef.current || adminTransitioningRef.current) return;
-      const snap = saveStateRef.current;
+      const snap = snapForExit();
       if (!snap || !snap.portfolios?.length || !driveTokenRef.current || isInitialLoad.current) return;
       saveAllToDrive(snap);
     };
@@ -679,7 +695,7 @@ export function useDriveSync({
   const handleInactivityLogout = async () => {
     inactivityWarningActiveRef.current = false;
     setShowInactivityWarning(false);
-    const snap = saveStateRef.current;
+    const snap = snapForExit();
     if (snap?.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
       try { await saveAllToDrive(snap); } catch {}
     }

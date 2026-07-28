@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Plus, Maximize2, Trash2, Check } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId } from '../utils';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import LadderBuyModal from './LadderBuyModal';
@@ -71,6 +71,7 @@ export default function RebalancingPanel({
   targetEditAuthorized = false,
   setTargetEditAuthorized = () => {},
   onAdminTargetChange = null,
+  onTargetEdited = null,
   markedRebalRows = {},
   onToggleMarkedRebalRow = () => {},
   onResetAllMarkedRebalRows = () => {},
@@ -201,24 +202,33 @@ export default function RebalancingPanel({
     document.addEventListener('mouseup', onUp);
   };
   const formatDisplayDate = (iso) => {
-    if (!iso) return '날짜';
+    // ⚠️ 미지정은 '날짜 지정' — 이 칸의 날짜가 곧 메모 달력 기록 날짜라, 비어 있으면 기록이
+    // 생기지 않는다(오늘로 임의 폴백하지 않는 것이 '헤더 날짜 = 기록 날짜' 불변식).
+    if (!iso) return '날짜 지정';
     const p = iso.split('-');
     return p.length === 3 ? `${p[0].slice(2)}/${p[1]}/${p[2]}` : iso;
   };
+  // ⚠️ 실제 달력 유효성까지 검사한다 — 과거엔 범위 검사가 없어 '26/13/45'가 '2026-13-45'로 저장됐고,
+  // 그 값이 메모 달력 키가 되면 렌더도 삭제도 못 하는 유령 기록이 된다(isValidIsoDate 주석 참조).
   const parseDisplayDate = (text) => {
-    const p = text.replace(/[.\-]/g, '/').split('/');
-    if (p.length === 3) {
-      const y = p[0].length === 2 ? `20${p[0]}` : p[0];
-      return `${y}-${p[1].padStart(2,'0')}-${p[2].padStart(2,'0')}`;
-    }
-    return null;
+    const p = String(text || '').replace(/[.\-]/g, '/').split('/').filter(Boolean);
+    if (p.length !== 3) return null;
+    if (!/^\d{1,4}$/.test(p[0]) || !/^\d{1,2}$/.test(p[1]) || !/^\d{1,2}$/.test(p[2])) return null;
+    const y = p[0].length <= 2 ? `20${p[0].padStart(2, '0')}` : p[0].padStart(4, '0');
+    const iso = `${y}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+    return isValidIsoDate(iso) ? iso : null;
   };
 
   const H = (k) => hiddenColumns.includes(k);
 
   // 고정 모드 + 미인증 + 비관리자 → PIN 잠금
   const isFixedLocked = settings.targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
-  const reportAdminChange = () => { if (onAdminTargetChange) onAdminTargetChange(); };
+  // 목표 관련 변경 통지 — 관리자 알림(onAdminTargetChange, impersonation 중에만 non-null)과
+  // 메모 달력 자동 기록(onTargetEdited)을 함께 발화시킨다. opts.date를 주면 '목표 날짜 변경'.
+  const reportAdminChange = (opts) => {
+    if (onAdminTargetChange) onAdminTargetChange();
+    if (onTargetEdited) onTargetEdited(opts);
+  };
 
   const CAT_W = 80;
   const CHRATE_W = 65;
@@ -746,7 +756,7 @@ export default function RebalancingPanel({
                                 type="date"
                                 className="absolute opacity-0 w-0 h-0 pointer-events-none"
                                 value={settings.targetDate || ''}
-                                onChange={e => { updateSettingsForType({ ...settings, targetDate: e.target.value }); reportAdminChange(); }}
+                                onChange={e => { updateSettingsForType({ ...settings, targetDate: e.target.value }); reportAdminChange({ date: e.target.value }); }}
                                 tabIndex={-1}
                               />
                               {dateEditMode ? (
@@ -755,16 +765,22 @@ export default function RebalancingPanel({
                                   autoFocus
                                   className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-green-500 rounded px-1 py-0.5 w-full text-center"
                                   defaultValue={formatDisplayDate(settings.targetDate)}
-                                  onBlur={e => { const parsed = parseDisplayDate(e.target.value); if (parsed) { updateSettingsForType({ ...settings, targetDate: parsed }); reportAdminChange(); } setDateEditMode(false); }}
+                                  onBlur={e => { const parsed = parseDisplayDate(e.target.value); if (parsed) { updateSettingsForType({ ...settings, targetDate: parsed }); reportAdminChange({ date: parsed }); } setDateEditMode(false); }}
                                   onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); e.stopPropagation(); }}
                                   onClick={e => e.stopPropagation()}
                                 />
                               ) : (
                                 <span
-                                  className="block text-gray-400 text-[9px] border border-gray-600 rounded px-1 py-0.5 w-full text-center cursor-pointer hover:border-gray-500 bg-gray-800 select-none"
+                                  className={`block text-[9px] border rounded px-1 py-0.5 w-full text-center cursor-pointer bg-gray-800 select-none ${
+                                    settings.targetDate
+                                      ? 'text-gray-400 border-gray-600 hover:border-gray-500'
+                                      : 'text-amber-300/80 border-amber-500/50 hover:border-amber-400'
+                                  }`}
                                   onClick={e => { e.stopPropagation(); datePickerRef.current?.showPicker?.(); }}
                                   onDoubleClick={e => { e.stopPropagation(); setDateEditMode(true); }}
-                                  title="클릭: 달력 | 더블클릭: 직접 입력"
+                                  title={settings.targetDate
+                                    ? '목표 비중 조정일 — 이 날짜의 메모 달력에 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'
+                                    : '날짜를 지정해야 메모 달력에 목표 비중이 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'}
                                 >{formatDisplayDate(settings.targetDate)}</span>
                               )}
                             </div>
@@ -1087,12 +1103,19 @@ export default function RebalancingPanel({
                                 onChange={e => { if (!cellLocked) setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); }}
                                 onBlur={e => {
                                   if (cellLocked) return;
+                                  // ⚠️ 변경 판정은 시세 파생 baseVal이 아니라 슬롯 원본 slotVal로 한다 —
+                                  // 라이브 미러에선 baseVal이 현재비중이라 포커스~blur 사이 시세가 움직이면
+                                  // 한 글자도 안 쳤는데 '변경'으로 오판된다. 반대로 미러 이탈(override 최초
+                                  // 박제)은 값이 같아도 명백한 목표 변경이므로 무조건 변경으로 친다.
+                                  const mirrorDetach = mirrorState === 'on' && !item[overrideField];
+                                  const changed = Math.round(cleanNum(e.target.value) * 100) !== Math.round(slotVal * 100) || mirrorDetach;
                                   handleUpdate(item.id, slotField, e.target.value);
                                   if (mirrorState === 'on') {
                                     setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, [overrideField]: true } : p));
                                   }
                                   setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
-                                  reportAdminChange();
+                                  if (onAdminTargetChange) onAdminTargetChange();
+                                  if (changed && onTargetEdited) onTargetEdited(); // 실제 편집일 때만 달력 기록 대상
                                 }}
                                 onFocus={e => {
                                   if (cellLocked) {
