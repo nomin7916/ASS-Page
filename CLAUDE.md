@@ -1139,6 +1139,55 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   밤 매매가 하루 뒤 칸에 뜬다(자산검증 규약이라 변경 금지). 같은 날 여러 번 고치면 스냅샷이 덮어써져
   **그날의 순변화만** 보인다. 예적금은 수량이 없어 `investAmount`(적립 원금) 변화로 대신 본다.
 
+### 메모 달력 별도 브라우저 창 (`/?calendarWindow=1`) — postMessage 브릿지 (⚠️ 회귀 주의)
+
+인앱 달력 창 헤더의 **⧉ 버튼**(`onOpenWindow`)으로 달력을 **별도 브라우저 창**에 띄운다(듀얼 모니터·
+최대화용). 새 창에서 저장하면 앱 탭을 경유해 기존 Drive STATE 저장 경로로 흐른다.
+
+- **⚠️ 새 창은 App을 마운트하지 않는다 — 절대 '앱 통째 부팅'으로 바꾸지 말 것**: `main.tsx`가
+  `CALENDAR_WINDOW_BOOT`(URL 파라미터)를 보고 `<App/>` 대신 `<CalendarWindow/>`를 렌더한다.
+  앱을 부팅하면 ① `saveAllToDrive`가 STATE 파일을 **통째로 덮어쓰므로** 두 창이 서로의 편집을
+  지우고(payload 스프레드 규약으로도 못 막는다 — 그건 한 창 안의 필드 누락 대비다) ② `window.open`은
+  noopener를 안 쓰면 sessionStorage가 복제돼(`?adminPortal=1`이 동작하는 원리) 새 창이 **자동 재인증
+  → 두 번째 writer**가 되며 세션 충돌 감지에도 걸린다. **writer는 끝까지 앱 탭 하나**다.
+- **⚠️ `window.open`에 `noopener` 금지**(impersonation 탭과 **정반대** 규칙): opener 브릿지가 이 기능의
+  전부다. 클릭 제스처 직후 **동기** open이라야 팝업 차단을 피한다(차단 시 `calWinBlocked` → 인앱 창은
+  그대로 두고 헤더 안내만). `screen.availWidth/Height`로 화면을 꽉 채워 연다.
+- **⚠️ 렌더는 `CalendarModal` 한 컴포넌트를 공유**한다(`variant='page'`). 그리드·패드·파생 인덱스를
+  새 창용으로 복제하면 두 화면이 갈라진다. page 모드는 바깥 chrome(드래그·중앙 배치·둥근 모서리·
+  `maxHeight 92vh`)만 끄고 `position:fixed; inset:0`로 채운다.
+- **⚠️ page 모드 칸 높이는 CSS `fr`이 아니라 JS 역산**(`viewportH` state + resize 리스너):
+  `cellH = max(CELL_H, (viewportH − PAGE_CHROME_H) / 주수)`. 높이가 불확정인 컨테이너 안에서는
+  `gridAutoRows: minmax(X, 1fr)`의 fr이 늘어나지 않아(그리드 fr 트랩) 칸이 CELL_H에 머문다.
+  `CELL_H` 하한은 유지 — 그 아래로는 칸 내용(지표 3줄+칩 3줄+메모)이 어차피 안 들어간다.
+- **브릿지 프로토콜**(전부 `e.origin === location.origin` 검사 통과분만):
+  창→앱 `calendar:ping{need}` (5초) · `calendar:memos{memos}` · `calendar:notes{portfolioId,notes}` /
+  앱→창 `calendar:accounts` (무거움) · `calendar:live` (가벼움) · `calendar:pong`.
+  - **⚠️ 초기 전송의 유일한 트리거는 `ping.need`** — `window.open` 직후 보내면 새 창이 아직
+    about:blank라 메시지가 버려진다. 새 창은 데이터를 받을 때까지 `need:true`를 실어 보낸다
+    (`gotDataRef` — 핑 타이머는 마운트 시 한 번 만들어져 state를 못 보므로 **ref 미러 필수**).
+  - **재입양**: 앱 탭이 새로고침되면 `calWinRef`가 비는데, 살아 있는 새 창의 핑에서 `e.source`를
+    다시 입양하고 nonce를 올려 전량 재전송한다. 없으면 새 창이 영영 낡은 데이터를 든다.
+  - **쓰기는 입양된 창만**(`e.source === calWinRef.current`). `ping`만 입양 전에도 받는다.
+- **⚠️ 전송은 지문(fingerprint)으로 게이팅**: `portfolios`는 시세 갱신마다 새 배열이라 그대로 보내면
+  보유 스냅샷 전량이 수십 초마다 복제된다. `calWinAccountsKey`에 **투자기록 본문 + `snapshotCompositionKey`**
+  까지 담아야 '본문만 수정'·'같은 날짜 스냅샷 수량만 수정'이 새 창에 반영된다(`portfolioStructureKey`와
+  동일 클래스의 버그). 그 지문은 **새 창이 한 번이라도 붙은 뒤(nonce>0)에만** 계산한다.
+- **끊김 = 읽기 전용**: opener 소멸 또는 `LINK_TIMEOUT_MS` 무응답이면 `readOnly` — 셀 클릭(신규 메모)·
+  저장 버튼·삭제 버튼을 전부 숨기고 **textarea도 `readOnly`**로 만든다. ⚠️ 저장 버튼만 숨기면 사용자가
+  한참 쓴 뒤 아무 데도 저장되지 않고 사라진다(창 위에선 notify/confirm이 가려져 사후 경고도 불가).
+- **낙관적 반영**: 새 창은 자기 state를 먼저 갱신하고 앱 탭에 보낸다(왕복 대기 없음). 앱 탭이 적용 후
+  `calendar:live`로 되돌려 보내 수렴한다.
+- **영속화 무수정**: 새 창은 저장 필드를 만들지 않는다 — 앱 탭의 `setCalendarMemos`/
+  `updateInvestmentNotesFor`를 그대로 태우므로 `portfolioStructureKey`·`applyStateData`·
+  `applyBackupData`·저장 effect deps 전 지점 무관.
+- **알려진 한계(의도)**: 인앱 창과 새 창을 **동시에** 열어 두면 `calendarMemos` 전체 객체를 각자
+  자기 기준으로 통째 교체하므로 이론상 마지막 쓰기가 이긴다. 다만 `calendar:live` 에코가 즉시 돌아와
+  두 창의 base가 1틱 안에 수렴하고, ⧉로 새 창을 열면 인앱 창을 닫으므로(`setShowCalendarModal(false)`)
+  실사용에서 겹치는 구간은 1초 미만이다. 편집자가 한 사람이라는 전제 위의 절충.
+- **범위 밖(의도)**: 새 창은 관심종목·계산기 등 다른 플로팅 창을 띄우지 않는다. impersonation 탭에서
+  연 새 창은 그 탭이 닫히면 읽기 전용이 된다(관리자 탭은 원래 세션을 영속하지 않음).
+
 ---
 
 ## 다음 작업 후보 (Phase 11~)

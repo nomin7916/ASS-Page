@@ -1616,6 +1616,99 @@ export default function App() {
     return { calendarMemos: next, portfolioUpdatedAt: ts };
   };
 
+  // ── 메모 달력 '별도 브라우저 창' 브릿지 (`/?calendarWindow=1`) ──────────────────────────────
+  // 새 창은 로그인·Drive 없이 postMessage로만 동작하는 뷰어/에디터다. 저장은 전부 이 탭을 경유해
+  // 기존 STATE 저장 경로로 흐른다 → **writer는 끝까지 이 탭 하나**.
+  // ⚠️ 새 창에서 앱을 통째로 부팅하는 방식으로 바꾸지 말 것(상세 근거: CalendarWindow.tsx 상단).
+  const calWinRef = useRef(null);
+  const [calWinNonce, setCalWinNonce] = useState(0);   // ready/재입양 시 전체 재전송 트리거
+  const [calWinBlocked, setCalWinBlocked] = useState(false);
+  const postToCalWin = (msg) => {
+    const w = calWinRef.current;
+    if (!w || w.closed) return;
+    try { w.postMessage(msg, window.location.origin); } catch {}
+  };
+  // 새 창이 실제로 읽는 계좌 필드만 투영. 시세 갱신마다 portfolios 배열이 새로 생기므로
+  // ⚠️ 전송은 **지문**으로 게이팅한다 — 지문 없이 보내면 보유 스냅샷 전량이 수십 초마다 복제된다.
+  const calWinAccounts = useMemo(() => (portfolios || []).map(p => ({
+    id: p.id, name: p.name, accountType: p.accountType, deletedAt: p.deletedAt,
+    baselineDate: p.baselineDate,
+    investmentNotes: p.investmentNotes || [],
+    holdingSnapshots: p.holdingSnapshots || [],
+  })), [portfolios]);
+  // ⚠️ 투자기록은 본문까지, 스냅샷은 snapshotCompositionKey까지 담는다 — 건수만 보면 '본문만 수정',
+  //    '같은 날짜 스냅샷의 수량만 수정'이 새 창에 반영되지 않는다(portfolioStructureKey와 동일 이유).
+  // ⚠️ 새 창이 한 번이라도 붙기 전(nonce 0)에는 계산 자체를 건너뛴다 — snapshotCompositionKey를
+  //    전 스냅샷에 도는 비용을 시세 갱신마다 치를 이유가 없다(대다수 세션은 새 창을 안 쓴다).
+  const calWinAccountsKey = useMemo(() => (calWinNonce === 0 ? '' : JSON.stringify((portfolios || []).map(p => [
+    p.id, p.name || '', p.accountType || '', p.deletedAt || '', p.baselineDate || '',
+    (p.investmentNotes || []).map(n => `${n?.id}:${n?.date}:${n?.content || ''}`).join('|'),
+    (p.holdingSnapshots || []).map(s => `${s.date}:${s.kind}:${snapshotCompositionKey(s.items || [])}`).join('|'),
+  ]))), [portfolios, calWinNonce]);
+
+  useEffect(() => {
+    postToCalWin({ type: 'calendar:accounts', accounts: calWinAccounts, activePortfolioId, holidays: marketHolidays });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calWinAccountsKey, activePortfolioId, marketHolidays, calWinNonce]);
+
+  useEffect(() => {
+    postToCalWin({
+      type: 'calendar:live',
+      memos: calendarMemos,
+      metricsHistory: intMonthlyHistory,
+      todayReturnRate: intTotals.returnRate,
+      fxHistory: indicatorHistoryMap?.usdkrw,
+      us10yHistory: indicatorHistoryMap?.us10y,
+      liveFx: marketIndicators?.usdkrw,
+      liveUs10y: marketIndicators?.us10y,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, calWinNonce]);
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string' || !d.type.startsWith('calendar:')) return;
+      if (d.type === 'calendar:ping') {
+        // ⚠️ `d.need`(= 새 창이 아직 데이터 없음)가 **초기 전송의 유일한 트리거**다. window.open 직후
+        //    보내면 아직 로드 전(about:blank)이라 메시지가 버려지므로, 새 창의 준비 신호를 기다린다.
+        // 이 탭이 새로고침되면 calWinRef가 비므로, 살아 있는 새 창의 핑을 받아 **재입양**하고
+        // 전체 데이터를 다시 보낸다(없으면 새 창은 영영 낡은 데이터를 들고 있게 된다).
+        if (d.need || calWinRef.current !== e.source) { calWinRef.current = e.source; setCalWinNonce(n => n + 1); }
+        try { e.source?.postMessage({ type: 'calendar:pong' }, window.location.origin); } catch {}
+        return;
+      }
+      if (!calWinRef.current || e.source !== calWinRef.current) return;   // 쓰기는 입양된 창만
+      if (d.type === 'calendar:memos') {
+        if (!d.memos || typeof d.memos !== 'object') return;
+        // 인앱 창과 동일 계약 — 미러 ref도 같이 갱신(목표비중 커밋이 옛 값으로 통째 교체하는 것 방지)
+        calendarMemosRef.current = d.memos;
+        setCalendarMemos(d.memos);
+      } else if (d.type === 'calendar:notes') {
+        if (!d.portfolioId || !Array.isArray(d.notes)) return;
+        updateInvestmentNotesFor(d.portfolioId, d.notes);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [updateInvestmentNotesFor]);
+
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다(관리자 '접속' 새 탭과 동일).
+  // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다(impersonation 탭과 정반대 규칙).
+  const openCalendarWindow = () => {
+    const existing = calWinRef.current;
+    if (existing && !existing.closed) { try { existing.focus(); } catch {} setShowCalendarModal(false); return; }
+    // 칸 높이는 뷰포트에서 역산되므로 처음부터 화면을 꽉 채워 연다(칸을 키우는 것이 이 기능의 목적).
+    const sw = (window.screen && window.screen.availWidth) || 1440;
+    const sh = (window.screen && window.screen.availHeight) || 900;
+    const w = window.open('/?calendarWindow=1', 'ass-calendar', `width=${sw},height=${sh},left=0,top=0`);
+    if (!w) { setCalWinBlocked(true); return; }   // 차단 → 인앱 창을 그대로 두고 안내만 띄운다
+    calWinRef.current = w;
+    setCalWinBlocked(false);
+    setShowCalendarModal(false);
+  };
+
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
@@ -2762,7 +2855,7 @@ export default function App() {
           activeLinks={activePortfolioAccountType === 'overseas' ? (overseasLinks || []) : (customLinks || [])}
           setActiveLinks={activePortfolioAccountType === 'overseas' ? setOverseasLinks : setCustomLinks}
           marketIndicators={marketIndicators}
-          onOpenCalendar={() => setShowCalendarModal(true)}
+          onOpenCalendar={() => { setCalWinBlocked(false); setShowCalendarModal(true); }}
           onOpenWatchlist={() => setShowWatchlist(true)}
         />
         </div>
@@ -3290,6 +3383,8 @@ export default function App() {
         us10yHistory={indicatorHistoryMap?.us10y}
         liveFx={marketIndicators?.usdkrw}
         liveUs10y={marketIndicators?.us10y}
+        onOpenWindow={openCalendarWindow}
+        headerNotice={calWinBlocked ? '팝업이 차단돼 별도 창을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요.' : null}
       />
     </div>
   );

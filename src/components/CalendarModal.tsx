@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2 } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, ExternalLink } from 'lucide-react';
 import { BG } from '../design';
 import { generateId, formatNumber, cleanNum, isValidIsoDate } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
@@ -20,6 +20,12 @@ const CAL_W = 1200;      // 달력 창 폭(px). 좁은 화면은 maxWidth로 클
 const CELL_H = 180;      // 날짜 칸 최소 높이(px)
 const CELL_MEMO_H = 74;  // 칸 안 사용자 메모 목록 최대 높이(px)
 const PAD_W = 576;   // 메모 패드 폭(px)
+// variant='page'(별도 브라우저 창) 전용 — 헤더+요일줄+패딩이 먹는 세로(px).
+// ⚠️ 페이지 모드 칸 높이는 CSS `fr`이 아니라 **JS로 뷰포트에서 역산**한다: 그리드가 높이 불확정
+//    컨테이너 안에 있으면 `minmax(X, 1fr)`의 fr이 늘어나지 않아(그리드 fr 트랩) 칸이 CELL_H에
+//    그대로 머문다 — 창을 키운 의미가 사라진다.
+const PAGE_CHROME_H = 108;
+const PAGE_CELL_FIXED_H = 112;  // 페이지 모드에서 날짜줄+지표3줄+칩3줄이 쓰는 세로 — 나머지가 메모 목록
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -61,7 +67,12 @@ const pnlColor = (v) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-blue-400' : 'tex
 // ⚠️ 파생 2종(note·qty)을 calendarMemos에 **복사 금지** — 복사하면 리밸런싱 패널 메모장·자산검증
 //    스냅샷과 갈라져 두 화면이 다른 값을 보인다. 반드시 원본에서 매 렌더 재조회.
 // ⚠️ 모든 패드는 값 복사가 아니라 **앵커(id) + 라이브 재조회** — upsert·삭제 후 stale 방지.
-export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null }) {
+// variant='floating'(기본, 인앱 플로팅 창) | 'page'(별도 브라우저 창을 가득 채우는 모드).
+//   두 모드는 **같은 컴포넌트**를 쓴다 — 그리드·패드·파생 인덱스를 복제하면 두 화면이 갈라진다.
+//   page 모드는 바깥 chrome(드래그·중앙 배치·둥근 모서리)만 끄고 칸 높이를 뷰포트에서 역산한다.
+// readOnly: 앱 탭과의 브릿지가 끊긴 새 창(저장할 곳이 없음) — 입력 진입점을 전부 막는다.
+export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null, variant = 'floating', readOnly = false, headerNotice = null, onOpenWindow = null }) {
+  const isPage = variant === 'page';
   const todayStr = getTodayKST();
   const tp = todayStr.split('-');
   const ty = parseInt(tp[0], 10);
@@ -91,9 +102,18 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     }
   }, [open]);
 
+  // page 모드 칸 높이 역산용 뷰포트 세로 (창 크기 변경·최대화에 즉시 반응)
+  const [viewportH, setViewportH] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 900));
+  useEffect(() => {
+    if (!isPage) return;
+    const onResize = () => setViewportH(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [isPage]);
+
   // 열 때마다 달력 창을 화면 중앙으로 재배치 (측정 후 클램프 — FloatingCalculator와 동일 패턴)
   useEffect(() => {
-    if (!open) return;
+    if (!open || isPage) return;   // page 모드는 뷰포트를 가득 채우므로 배치 계산 자체가 없다
     const id = requestAnimationFrame(() => {
       const w = winRef.current?.offsetWidth || CAL_W;
       const h = winRef.current?.offsetHeight || 620;
@@ -294,6 +314,13 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   const firstDow = new Date(viewYear, viewMonth, 1).getDay();
   const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
   const krHol = holidays?.kr || [];
+  // page 모드는 남는 세로를 주(週) 수로 나눠 칸을 키운다(모니터가 클수록 칸도 커짐).
+  // 결과가 CELL_H보다 작으면(작은 창) CELL_H를 지켜 창 안쪽 스크롤로 넘긴다.
+  const gridRows = totalCells / 7;
+  const cellH = isPage
+    ? Math.max(CELL_H, Math.floor((viewportH - PAGE_CHROME_H - (headerNotice ? 30 : 0)) / gridRows))
+    : CELL_H;
+  const memoH = isPage ? Math.max(CELL_MEMO_H, cellH - PAGE_CELL_FIXED_H) : CELL_MEMO_H;
 
   // 드래그 시작 — 현재 렌더의 winPos/padPos를 읽어 오프셋 고정
   const startDrag = (target, cx, cy) => {
@@ -470,18 +497,20 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
 
   return (
     <>
-      {/* 달력 창 (비차단·이동 가능 플로팅) */}
+      {/* 달력 창 — floating: 비차단·이동 가능 플로팅 / page: 브라우저 창을 가득 채움 */}
       <div
         ref={winRef}
-        style={{ position: 'fixed', left: winPos.x, top: winPos.y, zIndex: CAL_Z, width: CAL_W, maxWidth: 'calc(100vw - 24px)', maxHeight: '92vh', background: BG.card }}
-        className="rounded-2xl shadow-2xl border border-gray-600/60 flex flex-col overflow-hidden"
+        style={isPage
+          ? { position: 'fixed', inset: 0, background: BG.card }
+          : { position: 'fixed', left: winPos.x, top: winPos.y, zIndex: CAL_Z, width: CAL_W, maxWidth: 'calc(100vw - 24px)', maxHeight: '92vh', background: BG.card }}
+        className={`flex flex-col overflow-hidden ${isPage ? '' : 'rounded-2xl shadow-2xl border border-gray-600/60'}`}
       >
-        {/* 헤더 (드래그 핸들) */}
+        {/* 헤더 (floating에서만 드래그 핸들) */}
         <div
-          className="flex items-center justify-between px-4 py-3 border-b border-gray-800 shrink-0 cursor-move select-none"
-          style={{ touchAction: 'none' }}
-          onMouseDown={(e) => startDrag('win', e.clientX, e.clientY)}
-          onTouchStart={(e) => startDrag('win', e.touches[0].clientX, e.touches[0].clientY)}
+          className={`flex items-center justify-between px-4 py-3 border-b border-gray-800 shrink-0 select-none ${isPage ? '' : 'cursor-move'}`}
+          style={isPage ? undefined : { touchAction: 'none' }}
+          onMouseDown={isPage ? undefined : (e) => startDrag('win', e.clientX, e.clientY)}
+          onTouchStart={isPage ? undefined : (e) => startDrag('win', e.touches[0].clientX, e.touches[0].clientY)}
         >
           <div className="flex items-center gap-2">
             <CalIcon size={16} className="text-sky-400" />
@@ -501,13 +530,26 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               오늘
             </button>
           </div>
-          <button onMouseDown={(e) => e.stopPropagation()} onClick={onClose} title="닫기" className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-white transition">
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-1">
+            {/* 별도 브라우저 창으로 확장 — 클릭 제스처 직후 동기 window.open이라야 팝업 차단을 피한다 */}
+            {onOpenWindow && (
+              <button onMouseDown={(e) => e.stopPropagation()} onClick={onOpenWindow} title="별도 창으로 열기" className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-sky-300 transition">
+                <ExternalLink size={15} />
+              </button>
+            )}
+            <button onMouseDown={(e) => e.stopPropagation()} onClick={onClose} title="닫기" className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-white transition">
+              <X size={16} />
+            </button>
+          </div>
         </div>
+        {headerNotice && (
+          <div className="shrink-0 px-4 py-1 border-b border-amber-500/20 bg-amber-500/10 text-[11px] text-amber-300 text-center">
+            {headerNotice}
+          </div>
+        )}
 
         {/* 본문 */}
-        <div className="p-3 overflow-y-auto">
+        <div className={`p-3 overflow-y-auto ${isPage ? 'flex-1 min-h-0' : ''}`}>
           {/* 요일 헤더 */}
           <div className="grid grid-cols-7 border-l border-t border-gray-800/60">
             {WD.map((w, i) => (
@@ -526,7 +568,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               const valid = dayNum >= 1 && dayNum <= daysInMonth;
               const dow = i % 7;
               if (!valid) {
-                return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: `${CELL_H}px` }} />;
+                return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: `${cellH}px` }} />;
               }
               const key = dayKeyOf(viewYear, viewMonth, dayNum);
               const isToday = key === todayStr;
@@ -545,10 +587,10 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               return (
                 <div
                   key={i}
-                  onClick={() => openNew(key)}
-                  title="클릭하여 메모 추가"
-                  className="border-r border-b border-gray-800/60 p-1 flex flex-col gap-0.5 cursor-pointer hover:bg-white/[0.03] transition-colors"
-                  style={{ minHeight: `${CELL_H}px` }}
+                  onClick={readOnly ? undefined : () => openNew(key)}
+                  title={readOnly ? undefined : '클릭하여 메모 추가'}
+                  className={`border-r border-b border-gray-800/60 p-1 flex flex-col gap-0.5 transition-colors ${readOnly ? '' : 'cursor-pointer hover:bg-white/[0.03]'}`}
+                  style={{ minHeight: `${cellH}px` }}
                 >
                   <div className="flex items-center justify-between shrink-0 px-0.5">
                     <span
@@ -584,7 +626,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                         (g) => openQty(key, g))}
                     </div>
                   )}
-                  <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: `${CELL_MEMO_H}px` }}>
+                  <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: `${memoH}px` }}>
                     {dayMemos.map((m) => (
                       <div
                         key={m.id}
@@ -595,13 +637,15 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                         <span className="flex-1 text-[10px] text-sky-200 truncate leading-tight">
                           {firstLine(m.content) || <span className="text-gray-500 italic">내용 없음</span>}
                         </span>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); deleteMemo(key, m.id); }}
-                          title="삭제"
-                          className="opacity-0 group-hover/memo:opacity-100 text-gray-500 hover:text-red-400 shrink-0 transition-opacity"
-                        >
-                          <Trash2 size={10} />
-                        </button>
+                        {!readOnly && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteMemo(key, m.id); }}
+                            title="삭제"
+                            className="opacity-0 group-hover/memo:opacity-100 text-gray-500 hover:text-red-400 shrink-0 transition-opacity"
+                          >
+                            <Trash2 size={10} />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -635,8 +679,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               >
                 <X size={10} className="text-white" />
               </button>
-              {/* 저장 버튼은 쓰기 가능한 패드에만 — 읽기 전용(rebalTarget·qty·pick)에는 렌더하지 않는다 */}
-              {(!pad.kind || pad.kind === 'note') && (
+              {/* 저장 버튼은 쓰기 가능한 패드에만 — 읽기 전용(rebalTarget·qty·pick)에는 렌더하지 않는다.
+                  readOnly(브릿지 끊긴 새 창)에서는 저장할 곳이 없으므로 어떤 패드에서도 렌더하지 않는다. */}
+              {!readOnly && (!pad.kind || pad.kind === 'note') && (
                 <button
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={savePad}
@@ -742,16 +787,18 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   </div>
                 );
               })()}
-              <div className="flex justify-end pt-2">
-                {/* 칩에 휴지통을 넣을 폭이 없어 삭제는 여기로 — 즉시 삭제(창 위에선 confirm이 가려진다) */}
-                <button
-                  onClick={() => deleteMemo(pad.dayKey, pad.memoId)}
-                  className="flex items-center gap-1 text-[11px] text-gray-600 hover:text-red-400 transition-colors"
-                  title="이 기록 삭제"
-                >
-                  <Trash2 size={11} /> 기록 삭제
-                </button>
-              </div>
+              {!readOnly && (
+                <div className="flex justify-end pt-2">
+                  {/* 칩에 휴지통을 넣을 폭이 없어 삭제는 여기로 — 즉시 삭제(창 위에선 confirm이 가려진다) */}
+                  <button
+                    onClick={() => deleteMemo(pad.dayKey, pad.memoId)}
+                    className="flex items-center gap-1 text-[11px] text-gray-600 hover:text-red-400 transition-colors"
+                    title="이 기록 삭제"
+                  >
+                    <Trash2 size={11} /> 기록 삭제
+                  </button>
+                </div>
+              )}
             </div>
           ) : null) : pad.kind === 'qty' ? (padQty ? (
             /* 종목 수량 변경 = 읽기 전용 표 (보유 스냅샷 인접 비교) */
@@ -903,7 +950,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                     title={`기록 ${i + 1}`}
                   >{i + 1}</button>
                 ))}
-                {pad.noteId && (
+                {!readOnly && pad.noteId && (
                   <button
                     onClick={() => { deleteNote(pad.portfolioId, pad.noteId); setPad(null); }}
                     className="ml-1 text-gray-600 hover:text-red-400 transition-colors"
@@ -929,7 +976,10 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
             }}
             rows={28}
             autoFocus
-            placeholder={pad.kind === 'note' || pad.newKind === 'note' ? '투자 기록을 입력하세요...' : '메모를 입력하세요...'}
+            // ⚠️ 브릿지가 끊긴 새 창에서는 입력 자체를 막는다 — 저장 버튼만 숨기면 사용자가 한참 쓴 뒤
+            //    아무 데도 저장되지 않고 사라진다(창 위에선 notify/confirm도 가려져 사후 경고 불가).
+            readOnly={readOnly}
+            placeholder={readOnly ? '앱 창과 연결되지 않아 읽기 전용입니다.' : (pad.kind === 'note' || pad.newKind === 'note' ? '투자 기록을 입력하세요...' : '메모를 입력하세요...')}
             value={padTextValue}
             onChange={(e) => setPad((prev) => ({ ...prev, val: e.target.value }))}
             onKeyDown={(e) => {
