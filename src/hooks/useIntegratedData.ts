@@ -151,12 +151,42 @@ export function useIntegratedData({
           });
         }
         // 장부액(Σ 예수금+매입원가) 시계열 — 일간 지표 보류 판정이 '원장 흐름이 그날 평가액에
-        // 반영됐는가'를 ΔV로 추측하지 않고 관측하도록 공급한다(개별 계좌 HistoryPanel과 동일 소스).
-        // ⚠️ 해외계좌는 장부가 USD인데 흐름은 ₩ 환산이라 단위가 어긋나므로 제외(미제공 → 기존 폴백).
-        const bookMap = acctType === 'overseas' ? null : buildBookCostSeries(src, [...map.keys()]);
+        // 반영됐는가'를 ΔV로 추측하지 않고 관측하도록 공급한다.
+        // ⚠️ **해외계좌도 반드시 공급한다(제외로 되돌리지 말 것)**. 통합은 평가액도(위 overseas 분기)
+        //    흐름도(아래 ① 원장 rateOf) 원화 환산이므로 장부액도 원화로 환산하면 단위가 맞는다.
+        //    한 계좌라도 장부를 못 내면 그날 합계가 통째로 무효(bookInvalid)가 되므로, 해외계좌를 빼면
+        //    **해외계좌 첫 기록일 이후 전 날짜가 무효 → 통합 일간 지표가 영구히 ΔV 추측 폴백**이 된다.
+        //    실제로 그 탓에 대형 입금일(40,000,000)이 2행 연속 '-'로 잠기고, 같은 날 개별 계좌 추이는
+        //    정상 산출되어 두 화면이 정면 모순됐다(2026-07-28).
+        //    ⚠️ 개별 계좌는 종전대로 미공급 유지 — 이유는 '단위'가 아니라 **단일 Map 공유 제약**이다.
+        //    `App.tsx activeBookByDate` 하나를 세 소비자가 나눠 쓰는데 프레임이 서로 다르다:
+        //    `accountTwrByDate`는 USD(overseasUsdEvalAt + 무환산 externalFlowInRange), `HistoryPanel`은
+        //    원화(ov.krw + 날짜별 환율 flowRate), CSV는 저장 evalAmount 폴백. 한 프레임으로 셋을 동시에
+        //    만족시킬 수 없어 해외는 미공급으로 둔다. **`HistoryPanel`이 원화라고 그쪽에만 원화 장부를
+        //    주지 말 것** — 같은 Map을 쓰는 `accountTwrByDate`(USD)와 판정이 갈려 표와 차트가 어긋난다.
+        //    ⚠️ 해외는 `rateOf`와 `costBasisOnly`를 **반드시 함께** 준다 — 해외 항목의 `investAmount`는
+        //    UI가 유지하지 않는 잔존 필드라 원화 값이 남아 있을 수 있고, 거기에 환율(≈1,390배)이
+        //    곱해지면 장부 단위가 통째로 오염된다(`bookCostOf` 주석 참조).
+        const dateKeys = [...map.keys()].sort();
+        // ⚠️ **해외 장부는 날짜별이 아니라 단일 상수 환율로 환산한다(되돌리지 말 것)**.
+        //    `bookTotal`은 어디서도 레벨로 소비되지 않고 오직 전일 대비 **차분**으로만 쓰인다
+        //    (`intTwrCumByDate`·`intMonthlyHistory`). 날짜별 환율을 쓰면
+        //      bookDelta = Δ장부(USD)×fx(d)  +  장부(전일,USD)×Δfx
+        //    가 되어 뒤 항, 즉 **외부 흐름이 아닌 환율 재평가분**이 섞인다. 그러면 이 관측의 근본 전제
+        //    ("장부액은 시세로 변하지 않고 외부 입출금으로만 변한다" — `bookCostOf` 주석)가 해외에서
+        //    깨진다: |Δfx/fx| ≥ 0.005 × 총자산/해외장부 면 흡수 판정이 뒤집혀(해외 비중 50%면 하루 1%,
+        //    100%면 0.5%로 충분) 흐름 전액이 가짜 손익이 되거나 반대로 반영된 흐름이 보류로 잠긴다.
+        //    상수 배율이면 그 항이 정확히 0이 되고, 흐름(날짜별 환율)과의 배율 차이는 기껏해야 수 %라
+        //    흡수 문턱 50%에 전혀 못 미친다. 라이브 환율 미로드 시 최신 이력 환율로 폴백.
+        const ovBookFx = acctType === 'overseas'
+          ? (marketIndicators.usdkrw || getClosestValue(indicatorHistoryMap?.usdkrw, dateKeys[dateKeys.length - 1] || '') || 1)
+          : 1;
+        const bookMap = buildBookCostSeries(src, dateKeys, acctType === 'overseas'
+          ? { rateOf: () => ovBookFx, costBasisOnly: true }
+          : undefined);
         // ⚠️ 삭제 계좌(deletedAt)도 시계열을 유지한다(과거 총자산·계좌별 현황 팝업 보존).
         //   소비자(computedIntHistory carry-forward / histDetailRows)가 d < deletedAt로 캡한다.
-        return { id: p.id, dates: [...map.keys()].sort(), map, bookMap, deletedAt: p.deletedAt || '' };
+        return { id: p.id, dates: dateKeys, map, bookMap, deletedAt: p.deletedAt || '' };
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolios, activePortfolioId, portfolio, history, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw, effectiveDateKey, krEffectiveDateKey]);

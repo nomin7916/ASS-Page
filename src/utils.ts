@@ -329,22 +329,44 @@ export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow, bookDelta) =>
 //    0이 되어 정상 반영된 입금을 '미반영'으로 오판한다. 매입가×수량을 폴백으로 반드시 둘 것.
 //    (`investAmount`가 권위인 것은 fund·savings뿐 — 그쪽은 매입가×수량 개념이 없다.)
 //    `snapshotItemsFromPortfolio`가 purchasePrice·quantity를 보존하므로 과거 날짜도 산출된다.
-export const bookCostOf = (items) => (items || []).reduce((s, it) => {
-  if (!it) return s;
-  if (it.type === 'deposit') return s + cleanNum(it.depositAmount);
-  const stored = cleanNum(it.investAmount);
-  return s + (stored > 0 ? stored : cleanNum(it.purchasePrice) * cleanNum(it.quantity));
-}, 0);
+// ⚠️ `costBasisOnly`(해외계좌 전용): 주식 항목의 `investAmount`를 **무시**하고 매입가×수량만 쓴다.
+//    해외계좌의 투자금액 칸은 `purchasePrice × quantity`(USD)를 렌더하고 blur에 `purchasePrice`만
+//    기록하며(`PortfolioTable` :674), 다른 원가 소비자도 전부 `investAmount`를 우회한다
+//    (`usePortfolioData` :41·:111, `useIntegratedData` 종목별 비중). 즉 해외 항목의 `investAmount`는
+//    UI가 유지하지 않는 잔존 필드라 **레거시·임포트 데이터에 원화 값이 남아 있을 수 있다**.
+//    통합 경로는 이 장부액에 날짜별 환율을 곱하므로(≈1,390배) 그런 항목 하나가 단위를 오염시켜
+//    흡수 판정을 통째로 무너뜨린다 → 해외는 반드시 매입원가 기준으로 좁힌다.
+//    fund·savings는 매입가×수량 개념이 없어 `investAmount`가 권위이므로 예외로 유지한다.
+export const bookCostOf = (items, opts?) => {
+  const costBasisOnly = !!(opts && opts.costBasisOnly);
+  return (items || []).reduce((s, it) => {
+    if (!it) return s;
+    if (it.type === 'deposit') return s + cleanNum(it.depositAmount);
+    const investAuthoritative = it.type === 'fund' || it.type === 'savings';
+    const stored = cleanNum(it.investAmount);
+    if (stored > 0 && (investAuthoritative || !costBasisOnly)) return s + stored;
+    return s + cleanNum(it.purchasePrice) * cleanNum(it.quantity);
+  }, 0);
+};
 
 // 계좌의 날짜별 장부액 Map. ⚠️ `resolveHoldings`가 '추정'(스냅샷 없음·미검증 pre-baseline)인 날짜는
 // 구성이 불확실하므로 **넣지 않는다** — 소비자는 미제공을 만나면 기존 ΔV 휴리스틱으로 폴백한다.
-export const buildBookCostSeries = (p, dates) => {
+// opts.rateOf(date): 장부액을 흐름·평가액과 같은 통화로 맞추는 날짜별 환산율(미전달 시 1 = 원화 계좌).
+//   ⚠️ 해외계좌는 장부가 USD다. 소비자의 V와 흐름이 원화 환산이면(통합 대시보드) 반드시 **같은
+//   소스의 날짜별 환율**(calcPortfolioEvalDetail와 동일: getClosestValue(usdkrw, date))을 넘겨야
+//   bookDelta가 흐름과 같은 단위가 된다. 넘기지 않으면 단위가 어긋나 보류 판정이 무의미해진다.
+// opts.costBasisOnly: 위 bookCostOf 참조 — 해외계좌는 반드시 true(잔존 원화 investAmount 오염 차단).
+// ⚠️ 두 옵션은 **항상 함께** 쓴다: rateOf만 주면 원화 investAmount에 환율이 곱해진다.
+export const buildBookCostSeries = (p, dates, opts?) => {
   const m = new Map();
+  const rate = opts && typeof opts.rateOf === 'function' ? opts.rateOf : null;
+  const costBasisOnly = !!(opts && opts.costBasisOnly);
   for (const d of dates || []) {
     if (!d || m.has(d)) continue;
     const r = resolveHoldings(p, d);
     if (!r || r.estimated) continue;
-    m.set(d, bookCostOf(r.items));
+    const fx = rate ? (cleanNum(rate(d)) || 1) : 1;
+    m.set(d, bookCostOf(r.items, { costBasisOnly }) * fx);
   }
   return m;
 };

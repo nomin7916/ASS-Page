@@ -8,6 +8,12 @@
 //
 // 핵심 회귀 케이스: 계좌에 ₩49,118,578이 입금된 날 전일대비가 입금액을 통째로 수익으로 계상해
 // 통합 +9.10% / 개별 계좌 +350.69%를 표시하던 버그. 실제 시장 수익은 ₩11,312,160(+1.59%)이다.
+//
+// ⚠️ 미러 방식의 한계: 함수 **본문**은 이 파일에 복제해 검증하지만 **호출부 인자**(예: 통합이 해외
+//    계좌에 bookMap 을 주는가)는 미러로 표현할 수 없어 되돌림을 못 잡는다 → #30d 가 소스 텍스트를
+//    직접 읽어(verify-market-calendar.mjs 선례) 그 계약을 단언한다.
+
+import { readFileSync } from 'node:fs';
 
 // ─── 참조 구현 (src/utils.ts 미러) ──────────────────────────────────────────
 const cleanNum = (val) => {
@@ -586,6 +592,175 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
   const same = rows.every(r => a.get(r.date).dodAbsChange === b.get(r.date).dodAbsChange);
   if (!same) { failed++; console.error('  ✗ #29d bookDelta:null이 기존 동작과 다름'); }
   else console.log('  ✓ #29d 장부 미제공 시 기존 ΔV 동작과 동일(#14b와 같은 결과)');
+}
+
+// #30 통합 장부액 집계 — 해외계좌가 있어도 그날 합계가 무효(bookInvalid)가 되면 안 된다.
+//     회귀: useIntegratedData marketSeries가 overseas의 bookMap을 null로 두면, 해외계좌를 보유한
+//     사용자는 **모든 날짜**가 bookInvalid로 떨어져 통합 일간 지표가 영구히 ΔV 추측 폴백이 된다.
+//     그러면 대형 입금일이 ΔV로 오탐 보류되고 이월까지 겹쳐 2행 연속 '-'로 잠긴다(실측 2026-07-28:
+//     40,000,000 입금 → 통합만 '-', 개별 계좌 추이는 정상 산출 → 두 화면 정면 모순).
+//     해외 장부(USD)는 통합의 평가·흐름과 **같은 날짜별 환율**로 원화 환산해 공급한다.
+{
+  // useIntegratedData computedIntHistory 의 장부 합산 루프 미러 (lastVal/lastBook/sawAny 캐리 +
+  // bookInvalid/dateToBook). ⚠️ 소스와 1:1 동기화 대상. 의도적 생략 3가지: 삭제 계좌 cutoff break,
+  // dateToTotal 누적, 그리고 accountSeries 루프 **밖**에서 더해지는 현금성 잔액(cashByDate → dateToBook,
+  // 평가=잔액=장부라 bookInvalid 를 유발하지 않는다) — 셋 다 이 테스트의 관심사(장부 유효성)와 무관하다.
+  const aggregateIntBook = (accounts, sortedDates) => {
+    const dateToBook = new Map();
+    const bookInvalid = new Set();
+    for (const { dates, map, bookMap } of accounts) {
+      let i = 0, lastVal = 0, lastBook = null, sawAny = false;
+      for (const d of sortedDates) {
+        while (i < dates.length && dates[i] <= d) {
+          lastVal = map.get(dates[i]);
+          if (bookMap) { const b = bookMap.get(dates[i]); if (b != null) { lastBook = b; sawAny = true; } }
+          i++;
+        }
+        if (lastVal > 0 && (!bookMap || !sawAny || lastBook == null)) bookInvalid.add(d);
+        else if (lastBook != null) dateToBook.set(d, (dateToBook.get(d) || 0) + lastBook);
+      }
+    }
+    return { dateToBook, bookInvalid };
+  };
+  const bookTotalOf = (agg, d) =>
+    agg.bookInvalid.has(d) ? null : (agg.dateToBook.has(d) ? agg.dateToBook.get(d) : null);
+
+  const D = ['2026-07-27', '2026-07-28'];
+  const mk = (v0, v1, b0, b1) => ({
+    dates: D,
+    map: new Map([[D[0], v0], [D[1], v1]]),
+    bookMap: b0 == null ? null : new Map([[D[0], b0], [D[1], b1]]),
+  });
+  // 국내 2계좌: 각 20,000,000 입금 + 같은 날 매수 → 장부 +40,000,000. 그날 시장은 크게 하락했다.
+  const dom1 = mk(102_115_150, 107_579_163, 131_700_000, 151_700_000);
+  const dom2 = mk(301_519_054, 297_172_623, 305_300_000, 325_300_000);
+  // 해외계좌: 흐름 없음. 원화 장부는 USD×**상수 환율**이라 흐름이 없으면 변하지 않는다(#30c).
+  const ovKrw  = mk(36_900_000, 36_714_820, 39_000_000, 39_000_000);
+  const ovNull = mk(36_900_000, 36_714_820, null, null); // 옛 동작(해외 제외)
+
+  const withOv    = aggregateIntBook([dom1, dom2, ovKrw], D);
+  const withoutOv = aggregateIntBook([dom1, dom2, ovNull], D);
+
+  if (bookTotalOf(withoutOv, D[1]) !== null) {
+    failed++; console.error('  ✗ #30 (사전조건) 해외 장부 미공급인데 무효가 아님');
+  } else console.log('  ✓ #30 옛 동작 재현 — 해외 장부 미공급이면 그날 통합 장부가 통째로 무효');
+
+  const bt0 = bookTotalOf(withOv, D[0]), bt1 = bookTotalOf(withOv, D[1]);
+  if (bt0 == null || bt1 == null) {
+    failed++; console.error('  ✗ #30 해외 장부를 원화로 공급해도 무효 — bookInvalid 회귀');
+  } else console.log('  ✓ #30 해외 원화 장부 공급 시 통합 장부 합계 유효');
+
+  const evalPrev = 102_115_150 + 301_519_054 + 36_900_000;
+  const evalCur  = 107_579_163 + 297_172_623 + 36_714_820;
+  const rowsOf = (bookDelta) => [
+    { date: D[0], evalAmount: evalPrev, flowIn: 0, flowOut: 0, bookDelta: null },
+    { date: D[1], evalAmount: evalCur, flowIn: 40_000_000, flowOut: 0, bookDelta },
+  ];
+  const mOld = computeDailyMetrics(rowsOf(null));
+  const mNew = computeDailyMetrics(rowsOf(bt0 == null || bt1 == null ? null : bt1 - bt0));
+  if (mOld.get(D[1]).dodAbsChange !== null) {
+    failed++; console.error('  ✗ #30 (사전조건) ΔV 폴백인데 보류되지 않음');
+  } else console.log("  ✓ #30 ΔV 폴백은 대형 입금일을 오탐 보류('-')");
+  if (mNew.get(D[1]).held) {
+    failed++; console.error('  ✗ #30 장부 관측이 있는데도 입금일이 보류됨');
+  } else console.log('  ✓ #30 장부 관측 시 입금일 정상 산출');
+  check('#30 입금일 일간 손익 = ΔV − 흐름', mNew.get(D[1]).dodAbsChange, evalCur - evalPrev - 40_000_000);
+  // 리터럴로 박는다 — 검사 대상과 같은 함수 호출을 기대값으로 두면 held 가 뒤집힐 때만 실패해
+  // 바로 위 단언과 중복된다. 이 값은 40,000,000 이 분자에서 빠지고 분모로 옮겨간 결과다.
+  check('#30 입금일 일간 수익률 = −8.13003%', mNew.get(D[1]).dodChange, -8.13003, 0.001);
+}
+
+// #30b 해외 장부의 **단위**. 통합은 해외 장부에 날짜별 환율(≈1,390)을 곱하므로, 주식 항목의
+//      `investAmount`(해외에서는 UI가 유지하지 않는 잔존 필드 — 레거시·임포트에 원화 값이 남을 수
+//      있다)를 채택하면 원화 값에 환율이 한 번 더 곱해져 장부가 3자릿수 규모로 오염된다.
+//      → 해외는 `costBasisOnly`로 매입가×수량(USD)만 쓴다. 원화 계좌(기본값)는 동작 불변.
+{
+  // src/utils.ts bookCostOf 미러
+  const bookCostOf = (items, opts) => {
+    const costBasisOnly = !!(opts && opts.costBasisOnly);
+    return (items || []).reduce((s, it) => {
+      if (!it) return s;
+      if (it.type === 'deposit') return s + cleanNum(it.depositAmount);
+      const investAuthoritative = it.type === 'fund' || it.type === 'savings';
+      const stored = cleanNum(it.investAmount);
+      if (stored > 0 && (investAuthoritative || !costBasisOnly)) return s + stored;
+      return s + cleanNum(it.purchasePrice) * cleanNum(it.quantity);
+    }, 0);
+  };
+  // 해외 종목: 매입가 100 USD × 300주 = 30,000 USD. 잔존 investAmount 는 원화 41,700,000.
+  const ovItems = [
+    { type: 'stock', investAmount: 41_700_000, purchasePrice: 100, quantity: 300 },
+    { type: 'deposit', depositAmount: 5_000 },
+  ];
+  check('#30b 해외 장부 = 매입원가(USD) + 예수금(USD)', bookCostOf(ovItems, { costBasisOnly: true }), 35_000);
+  check('#30b 원화 계좌 기본값은 investAmount 우선(동작 불변)', bookCostOf(ovItems), 41_705_000);
+  // 환율을 곱해도 USD 기준이라 정상 규모를 유지해야 한다(오염 시 579억이 된다)
+  check('#30b 환율 환산 후에도 규모 정상', bookCostOf(ovItems, { costBasisOnly: true }) * 1_390, 48_650_000);
+  // fund·savings는 매입가×수량 개념이 없어 investAmount가 권위 — costBasisOnly에도 예외
+  check('#30b 펀드는 costBasisOnly에도 investAmount 유지',
+    bookCostOf([{ type: 'fund', investAmount: 10_000_000, purchasePrice: 0, quantity: 12_345 }], { costBasisOnly: true }), 10_000_000);
+}
+
+// #30c 해외 장부는 **단일 상수 환율**로 환산해야 한다(날짜별 환율 금지).
+//      날짜별이면 bookDelta = Δ장부(USD)×fx(d) + 장부(전일,USD)×Δfx 라서 뒤 항, 즉 외부 흐름이 아닌
+//      **환율 재평가분**이 섞여 "장부액은 시세로 변하지 않는다"는 관측의 근본 전제가 깨진다.
+//      뒤집힘 경계: |Δfx/fx| ≥ 0.005 × 총자산/해외장부 → 해외 비중이 커질수록 실제로 발생한다.
+{
+  const bookKrwAt = (usd, fx) => usd * fx;               // 장부(USD) → 원화
+  const deltaOf = (usdPrev, usdCur, fxPrev, fxCur) =>    // 날짜별 환율 방식
+    bookKrwAt(usdCur, fxCur) - bookKrwAt(usdPrev, fxPrev);
+  const deltaConst = (usdPrev, usdCur, k) =>             // 상수 배율 방식(현행)
+    bookKrwAt(usdCur, k) - bookKrwAt(usdPrev, k);
+
+  // (1) 흐름 0인데 환율만 +2% — 날짜별이면 장부가 흐름 없이 움직이고(28,000×27.8), 상수면 정확히 0이다.
+  check('#30c 날짜별 환율은 흐름 0에도 장부를 움직인다(=결함)', deltaOf(28_000, 28_000, 1_390, 1_417.8), 778_400, 1);
+  check('#30c 상수 배율은 흐름 0이면 장부 변화 0', deltaConst(28_000, 28_000, 1_390), 0);
+
+  // (2) 해외 비중 50% 반례 — 날짜별 환율이면 **미반영 입금이 '흡수됨'으로 오판**된다.
+  //     총자산 100,000,000 / 해외 장부 50,000,000 / 환율 +2% → 표류 +1,000,000.
+  //     미반영 입금 1,500,000(전일V의 1.5% — 소액 하한 통과), 시장 ΔV +300,000, 흡수 문턱 750,000.
+  const driftBad = deltaOf(35_971.22, 35_971.22, 1_390, 1_417.8); // ≈ +1,000,000
+  if (shouldHold(100_000_000, 100_300_000, 1_500_000, driftBad)) {
+    failed++; console.error('  ✗ #30c (사전조건) 반례가 재현되지 않음 — 표류가 문턱을 못 넘김');
+  } else console.log("  ✓ #30c 날짜별 환율이면 미반영 입금이 '흡수'로 오판된다(그래서 금지)");
+  if (!shouldHold(100_000_000, 100_300_000, 1_500_000, deltaConst(35_971.22, 35_971.22, 1_390))) {
+    failed++; console.error('  ✗ #30c 상수 배율인데도 미반영 입금이 흡수로 오판됨');
+  } else console.log('  ✓ #30c 상수 배율이면 같은 상황에서 정상 보류');
+
+  // (3) 상수 배율에서도 **진짜 흐름**은 그대로 관측된다(보류가 풀려야 한다).
+  //     20,000 USD 추가 매수 × 1,390 = 27,800,000 ≥ 흐름 27,800,000 × 0.5
+  if (shouldHold(100_000_000, 100_300_000, 27_800_000, deltaConst(28_000, 48_000, 1_390))) {
+    failed++; console.error('  ✗ #30c 상수 배율이 진짜 흐름 관측까지 막았다');
+  } else console.log('  ✓ #30c 상수 배율에서도 실제 매수/입금은 정상 관측');
+}
+
+// #30d 소스 텍스트 가드 — 위 #30~#30c 는 전부 **참조 구현 미러**라, 소스를 되돌려도 통과한다
+//      (이 스크립트는 src 를 import 하지 않는다). 이번에 깨졌던 것은 함수 본문이 아니라 **호출부 인자**
+//      (해외에 bookMap 을 주는가)라서 미러로는 표현할 수 없다. `verify-market-calendar.mjs` 가 이미
+//      readFileSync 로 TS 소스를 직접 읽는 선례를 만들었으므로 같은 방식으로 되돌림을 잡는다.
+//      ⚠️ 포맷 변경에 취약하므로 **긍정 단언 위주**로 짜고, 실패 메시지에 이유를 적는다.
+{
+  const stripComments = (s) => s.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  const readSrc = (rel) => {
+    try { return stripComments(readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')); }
+    catch { return null; }
+  };
+  const guard = (label, ok) => {
+    if (ok) console.log(`  ✓ #30d ${label}`);
+    else { failed++; console.error(`  ✗ #30d ${label}`); }
+  };
+  const intg = readSrc('src/hooks/useIntegratedData.ts');
+  const utl = readSrc('src/utils.ts');
+  if (!intg || !utl) {
+    failed++; console.error('  ✗ #30d 소스 파일을 읽지 못했습니다(경로 변경?)');
+  } else {
+    guard("해외를 bookMap=null 로 되돌리지 않았다", !/overseas'\s*\?\s*null/.test(intg));
+    guard('해외 장부에 costBasisOnly:true 를 준다', /costBasisOnly:\s*true/.test(intg));
+    guard('해외 장부 환산이 상수 배율이다(날짜 인자 없음)', /rateOf:\s*\(\s*\)\s*=>/.test(intg));
+    guard('bookCostOf 가 costBasisOnly 옵션을 지원한다', /bookCostOf\s*=\s*\(items,\s*opts/.test(utl));
+    guard('buildBookCostSeries 가 opts(rateOf/costBasisOnly)를 받는다',
+      /buildBookCostSeries\s*=\s*\(p,\s*dates,\s*opts/.test(utl));
+  }
 }
 
 // ─── 결과 ───────────────────────────────────────────────────────────────────

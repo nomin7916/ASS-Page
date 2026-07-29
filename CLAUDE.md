@@ -529,9 +529,58 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   표 −2.00% vs 차트 +0.01%로 갈린다. 통합은 별도로 `useIntegratedData` `marketSeries.bookMap` →
   `computedIntHistory.bookTotal` → `intMonthlyHistory`.
   ⚠️ **미제공(null)이면 기존 ΔV 휴리스틱으로 폴백**해 동작이 100% 동일하다(하위호환 — 검증 #29d).
-  해외계좌는 장부가 USD인데 흐름 rows는 ₩ 환산이라 단위가 어긋나 **의도적으로 미공급**.
   통합은 한 계좌라도 그날 장부를 못 내면 그날 합계를 통째로 무효(`bookInvalid`)로 둔다 — 일부만 더한
   합계는 흐름과 비교할 수 없다. 현금성 계좌는 평가액=잔액=장부액이라 `cashByDate`를 그대로 더한다.
+  - **⚠️ 해외계좌 장부 = 통합은 공급(원화 환산) / 개별은 미공급 — 절대 통일하지 말 것**:
+    `buildBookCostSeries(p, dates, opts?)`의 `opts.rateOf`가 환산율이다. **통합**
+    (`useIntegratedData` `marketSeries`)은 평가액도 흐름(`rateOf`)도 이미 원화 환산이므로 장부도
+    원화로 환산해 **반드시 공급**한다.
+    ⚠️ **되돌리지 말 것(2026-07-28 실측 버그)**: 통합에서 해외를 `bookMap = null`로 두면 `bookInvalid`가
+    **해외계좌 첫 기록일 이후 모든 날짜**를 삼켜 통합 일간 지표가 **영구히 ΔV 추측 폴백**이 된다. 그러면
+    ₩40,000,000 입금일(ΔV −₩11,418,780)이 '미반영'으로 오탐 보류되고 이월까지 겹쳐 **2행 연속 `'-'`**
+    로 잠기는데, 같은 날 개별 계좌 추이(AI −11.90% / COVERD −7.57%)는 장부 관측으로 정상 산출돼
+    **두 화면이 정면 모순**된다. 검증 #30(+ 소스 텍스트 가드 #30d).
+  - **⚠️ 해외 장부 환산은 '날짜별'이 아니라 '단일 상수' 환율 — 되돌리지 말 것**: `bookTotal`은
+    어디서도 레벨로 소비되지 않고 오직 전일 대비 **차분**으로만 쓰인다(`intTwrCumByDate`·
+    `intMonthlyHistory`). 날짜별 환율을 쓰면
+    `bookDelta = Δ장부(USD)×fx(d) + 장부(전일,USD)×Δfx` 가 되어 뒤 항, 즉 **외부 흐름이 아닌 환율
+    재평가분**이 섞이고 "장부액은 시세로 변하지 않고 외부 입출금으로만 변한다"는 이 관측의 근본 전제가
+    깨진다. 뒤집힘 경계는 **`|Δfx/fx| ≥ 0.005 × 총자산 / 해외장부`** — 해외 비중 8.9%면 하루 5.7%가
+    필요해 안전하지만 **비중 50%면 하루 1%, 100%면 0.5%로 충분**하다(양방향 모두 발생: 미반영 흐름이
+    '흡수됨'으로 오판되거나, 반영된 흐름이 보류로 잠긴다). 상수 배율이면 그 항이 정확히 0이고,
+    흐름(날짜별 환율)과의 배율 차이는 기껏해야 수 %라 흡수 문턱 50%에 못 미친다. 검증 #30c.
+  - **⚠️ 개별 계좌 해외 미공급의 이유는 '단위'가 아니라 '단일 Map 공유 제약'**(주석을 단위 문제로
+    되돌리지 말 것): `App.tsx activeBookByDate` 하나를 세 소비자가 나눠 쓰는데 프레임이 서로 다르다 —
+    `accountTwrByDate`=USD(`overseasUsdEvalAt` + 무환산 `externalFlowInRange`), `HistoryPanel`=**원화**
+    (`ov.krw` + 날짜별 환율 `flowRate`), CSV=저장 evalAmount 폴백. 한 프레임으로 셋을 동시에 만족시킬 수
+    없어 해외는 미공급이다. **`HistoryPanel`이 원화라고 그쪽에만 원화 장부를 주지 말 것** — 같은 Map을
+    쓰는 `accountTwrByDate`(USD)와 판정이 갈려 표와 차트가 어긋나고, TWR은 곱셈 체인이라 영구 고정된다.
+  - **⚠️ 해외는 `rateOf`와 `costBasisOnly`를 반드시 함께 넘긴다**: `bookCostOf`는 기본적으로
+    `investAmount`를 우선하는데, **해외 항목의 `investAmount`는 UI가 유지하지 않는 잔존 필드**다
+    (`PortfolioTable` :674는 `purchasePrice×quantity`를 렌더하고 blur에 `purchasePrice`만 기록,
+    `usePortfolioData` :41·:111과 통합 종목별 비중도 전부 `investAmount`를 우회). 레거시·임포트
+    데이터에 **원화** `investAmount`가 남아 있으면 거기에 환율(≈1,390배)이 곱해져 장부 단위가
+    3자릿수 규모로 오염되고 흡수 판정이 통째로 무너진다 → `costBasisOnly:true`로 매입가×수량(USD)만
+    쓴다. `fund`·`savings`는 매입가×수량 개념이 없어 `investAmount`가 권위이므로 예외. 검증 #30b.
+  - **⚠️ 통합에서는 ACTIVE 자가치유(2행)가 꺼진다 — 의도된 맞바꿈**: `computeDailyMetricsSeries`의
+    폐기 조건이 `bookDelta == null && activeRows >= 2`라, 통합이 관측 모드로 바뀌면 `CARRY_MAX_ROWS`
+    (15행)만 남는다. 관측이 있으면 '미반영'이 확정 사실이라 폐기가 곧 가짜 손익이므로 이것이 목적이다
+    (위 'ACTIVE 폐기는 `bookDelta == null`일 때만' 항목과 동일 근거). 다만 통합 `bookTotal`은 전 계좌
+    합이라 **한 계좌의 장부 이상이 포트폴리오 전체 판정을 오염**시킬 수 있다(개별 뷰엔 없는 결합).
+  - **알려진 한계 3종(전부 개별에도 있던 기존 노출, 통합은 계좌 수만큼 확률↑ — 산식을 건드리지 말 것)**:
+    ① **게이트 비대칭**(비해외 계좌): `buildCloseEvalSeries`는 `allExact && !estimated`를 요구해 미충족 시
+    직전값을 이월하는데 `buildBookCostSeries`는 `!estimated`만 본다(종가 불필요). 신규 매수 종목의 그날
+    종가가 아직 없으면 **V는 전일 이월인데 장부만 +흐름**이 되어 흡수를 거짓 입증한다. 게이트를 통합에만
+    좁히면 개별과 규칙이 갈려 이 버그의 원인(비대칭)을 되풀이하므로 **대칭 유지**를 택했다(오늘 행은
+    스냅샷 장부 vs 라이브 V라 좁히면 오히려 당일 입금이 상시 보류된다). 해외 분기는 `buildCloseEvalSeries`
+    를 쓰지 않고 `calcPortfolioEvalDetail`의 `hasAnyPrice` 폴백을 쓰므로 게이트 자체가 더 느슨하다.
+    ② **추정 날짜는 '미제공'이 아니라 '낡은 장부 이월'로 흐른다**: `resolveHoldings().estimated`인 날짜는
+    `buildBookCostSeries`가 건너뛰는데, 집계 루프의 `lastBook` 캐리 때문에 `lastBook != null`이 유지돼
+    `bookInvalid`가 서지 않는다 → 그날 흐름이 있어도 bookDelta=0이라는 **관측처럼 보이는 오답**이 난다.
+    ③ **계좌 편입/이탈·기록 0건 계좌**: 편입/삭제 경계 흐름은 **평가액 전액**인데 장부는 **원가**만
+    움직여, 미실현이익이 원가의 100%를 넘는 계좌의 경계일에 오탐 보류가 난다. 기록 0건 계좌의
+    `currentEval`(①-b)은 today 유입으로만 잡히고 장부엔 기여하지 않아 신규 계좌 추가 당일 헤더
+    '오늘 수익'이 `'-'`로 잠길 수 있다.
   ⚠️ **`ΔV === 0`(비거래일) 규칙에는 `bookDelta`가 있어도 예외를 두지 말 것** — 장부가 바뀌었어도
   평가 시계열이 직전값 이월이면 그 흐름은 실제로 V에 없다.
   **고친 결함 2종(회귀 시 재발)**: (A) 계좌의 2%를 인출한 날 시장이 +1.5%면 ΔV로는 '미반영'으로 오탐돼
@@ -588,9 +637,16 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   이 `dodChange`가 그 곡선의 유일한 원자재다(개별=`accountTwrByDate`, 통합=`intTwrCumByDate`가
   `computeCumulativeTwrSeries`로 소비). **범위 밖(의도)**: CAGR·XIRR은 여전히 **미적용**.
   '원금대비'(`monthlyChange`)는 누적 지표로 **현행 유지**(입금일 희석은 정의상 정상).
-- 검증: `npm run verify:twr` (명세 테스트 #1~#5 + 엣지 #6~#16 + 회귀 #17~#21c + 장부액 관측 #29~#29d).
+- 검증: `npm run verify:twr` (명세 테스트 #1~#5 + 엣지 #6~#16 + 회귀 #17~#21c + 장부액 관측 #29~#29d
+  + 통합 장부 집계·해외 단위·상수환율 #30~#30c + **소스 텍스트 가드 #30d**).
+  ⚠️ #1~#30c는 전부 **참조 구현 미러**라 함수 본문 회귀만 잡는다. 이번에 깨졌던 것처럼 **호출부 인자**
+  (통합이 해외에 bookMap을 주는가·상수 배율인가)는 미러로 표현할 수 없어, `#30d`가 `readFileSync`로
+  `useIntegratedData.ts`/`utils.ts`를 직접 읽어 그 계약을 단언한다(`verify-market-calendar.mjs` 선례).
+  포맷 변경에 취약하므로 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
   `scripts/verify-twr.mjs`의 참조 구현은 `utils.ts`의 `externalFlowInRange`·`dailyFlowAdjustedRate`·
-  `shouldHoldDailyMetrics`(bookDelta 인자 포함)·`computeDailyMetricsSeries` 본문과 **항상 1:1로 동기화**할 것.
+  `shouldHoldDailyMetrics`(bookDelta 인자 포함)·`computeDailyMetricsSeries`·**`bookCostOf`**(#30b) 본문,
+  그리고 **`useIntegratedData`의 장부 합산 루프**(`lastVal`/`lastBook`/`sawAny`/`bookInvalid` — #30의
+  `aggregateIntBook`)와 **항상 1:1로 동기화**할 것.
   ⚠️ #29c의 시장 등락(+1,100,000)은 `ACTIVE_DRIFT_RATIO`(흐름의 5% = 50만)를 넘겨 폐기를 실제로
   발동시키려는 값이다 — 줄이면 옛 코드에서도 통과해 회귀를 못 잡는다.
 
