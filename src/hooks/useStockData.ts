@@ -68,6 +68,23 @@ export function useStockData({
   const krH = marketHolidays?.kr || [];
   const usH = marketHolidays?.us || [];
 
+  // 라이브 시세를 stockHistoryMap[code][date]에 stamp할 날짜 (null이면 stamp 생략).
+  // ⚠️ 이 키는 '그 날짜의 정확한 종가'(calcPortfolioEvalDetail의 allExact) 판정의 유일한
+  //    근거다 — 키만 있으면 exact로 통과하므로, 종가가 아닌 값이 들어가면 자산검증·백필
+  //    치유가 장중가를 '확정 종가'로 오인한다. 따라서 기록 창 밖이거나 비거래일이면
+  //    stamp 자체를 하지 않는다.
+  // ⚠️ 과거엔 `new Date().toISOString()`(UTC)을 써서 KST 00:00~09:00 접속 시 **전일 키**에
+  //    당일 라이브가가 박혔다(전일 종가 오염). 반드시 시장별 KST 날짜로 판정할 것.
+  // ⚠️ crypto(24시간 시장)·현금성은 isNonTradingDayForAccount가 항상 false라 그대로 통과 —
+  //    주말 라이브값이 정당하므로 절대 막지 말 것.
+  // ⚠️ overseas는 US 세션일 ≠ KST 날짜라 이번 범위 밖 — 기존 getEffectiveDate() 유지.
+  const stampDateFor = (acctType: string): string | null => {
+    if (acctType === 'overseas') return getEffectiveDate();
+    const d = getEffectiveDateForAccount(acctType);
+    if (!d) return null;
+    return isNonTradingDayForAccount(acctType, d, krH, usH) ? null : d;
+  };
+
   // 펀드 전체이력(상장일~) 광역 조회를 앱 로드당 코드별 1회로 제한 —
   // 가입일이 상장일보다 이르면 earliestStored가 영원히 미충족이라 매 새로고침
   // 재조회되는 것을 방지. 새로고침(페이지 리로드) 시 ref 초기화 → 1회 재검증.
@@ -142,8 +159,8 @@ export function useStockData({
     if (d) {
       setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
       setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
-      const today = new Date().toISOString().split('T')[0];
-      setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+      const stampD = stampDateFor(activePortfolioAccountType);
+      if (stampD) setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [stampD]: d.price } }));
       if (isOverseas && (!stockHistoryMapRef.current[code] || Object.keys(stockHistoryMapRef.current[code]).length <= 1)) {
         fetchUsStockHistory(code).then(r => {
           if (r?.data && Object.keys(r.data).length > 1) {
@@ -202,8 +219,8 @@ export function useStockData({
     if (d) {
       setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
       setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
-      const today = new Date().toISOString().split('T')[0];
-      setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+      const stampD = stampDateFor(activePortfolioAccountType);
+      if (stampD) setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [stampD]: d.price } }));
     } else {
       setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
     }
@@ -557,15 +574,23 @@ export function useStockData({
     const koreanCodes = new Set<string>();
     const overseasCodes = new Set<string>();
     const fundCodes = new Set<string>();
+    // 코드별 stamp 기준 계좌 타입. koreanCodes에는 KR 계좌와 crypto가 함께 섞이므로
+    // (분리 기준이 overseas 하나뿐) 코드 단위로 타입을 기억해 stamp 게이트를 건다.
+    // ⚠️ 같은 코드를 여러 계좌가 보유하면 **게이팅이 가장 느슨한 crypto를 우선** 채택 —
+    //    24시간 시장의 비거래일 라이브값은 정당하므로 막으면 손익이 지워진다.
+    const codeAcctType = new Map<string, string>();
 
     portfoliosRef.current.forEach(p => {
       if (p.accountType === 'simple' || p.deletedAt) return; // 삭제 계좌는 시세 수집 대상 아님(동결)
       const items = p.portfolio || [];
-      const isOverseas = p.accountType === 'overseas';
+      const acctType = p.accountType || 'portfolio';
+      const isOverseas = acctType === 'overseas';
       items.forEach(item => {
         if (item.type === 'stock' && item.code) {
           if (isOverseas) overseasCodes.add(item.code);
           else koreanCodes.add(item.code);
+          const cur = codeAcctType.get(item.code);
+          if (!cur || acctType === 'crypto') codeAcctType.set(item.code, acctType);
         } else if (item.type === 'fund' && item.code) {
           fundCodes.add(item.code);
         }
@@ -581,7 +606,10 @@ export function useStockData({
         const d = await withTimeout(fetchStockInfo(code), 10000);
         if (d) {
           priceResults[code] = d;
-          setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+          // ⚠️ today(전역 getEffectiveDate) 대신 그 코드를 보유한 계좌의 시장 기준으로 stamp.
+          //    KR 기록 창 밖·비거래일이면 null → stamp 생략(장중가가 '확정 종가'로 오인되는 것 방지).
+          const stampD = stampDateFor(codeAcctType.get(code) || 'portfolio');
+          if (stampD) setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [stampD]: d.price } }));
         } else {
           failedCodes.push(code);
         }
@@ -753,14 +781,14 @@ export function useStockData({
     stocks.forEach(p => { loadingStatus[p.code] = 'loading'; });
     setStockFetchStatus(prev => ({ ...prev, ...loadingStatus }));
 
-    const today = new Date().toISOString().split('T')[0];
+    const stampD = stampDateFor(accountType);
     const priceResults = {};
 
     await Promise.all(stocks.map(async (item) => {
       const d = isOverseas ? await fetchUsStockInfo(item.code) : await fetchStockInfo(item.code);
       if (d) {
         setStockFetchStatus(prev => ({ ...prev, [item.code]: 'success' }));
-        setStockHistoryMap(prev => ({ ...prev, [item.code]: { ...(prev[item.code] || {}), [today]: d.price } }));
+        if (stampD) setStockHistoryMap(prev => ({ ...prev, [item.code]: { ...(prev[item.code] || {}), [stampD]: d.price } }));
         priceResults[item.code] = d;
       } else {
         setStockFetchStatus(prev => ({ ...prev, [item.code]: 'fail' }));
