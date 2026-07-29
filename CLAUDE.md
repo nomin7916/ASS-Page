@@ -919,9 +919,13 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   **`App.tsx` 최상위 형제로 마운트**(`FloatingCalculator`/`WatchlistPopup` 옆) → 탭/뷰 전환에도
   언마운트 안 됨(창 내부 상태·위치·열린 패드 유지, 닫기 전까지 지속). 재오픈(open false→true) 시에만
   이번 달 리셋 + 패드 닫기 + 창 중앙 재배치.
-- **크기 & ⚠️ 세로 잘림 방지(회귀 주의)**: **달력 그리드는 기본 크기 유지** — 날짜칸 `minHeight 130px`,
-  칸 내 메모 목록 `maxHeight 50px`, 창 폭 `CAL_W 920px`/`maxHeight 92vh`(**키우지 말 것** — 칸만 커지고
-  빈 공간만 넓어져 한 화면에 한 달이 안 들어온다). **길게 쓰는 건 메모 패드뿐**: 달력 메모 `rows 28`,
+- **크기 (2026-07-29 확대 — 사용자 요청)**: `CAL_W 1200` / `CELL_H 180` / `CELL_MEMO_H 74`
+  (`CalendarModal.tsx` 모듈 상수, `maxHeight 92vh`·`maxWidth calc(100vw-24px)`는 유지). **세 값은 한 세트**다 —
+  칸이 칩 3줄(LIST/NOTE/STOCK 세로 스택) + 지표 3줄 + 메모 목록을 동시에 담아야 하므로 `CELL_H`를 줄이면
+  칩이 메모를 밀어내고, `CAL_W`를 줄이면 칩의 계좌명이 truncate로 사라진다(칸 텍스트 가용폭 ≈ `CAL_W/7` −
+  padding·border ≈ **160px**). ⚠️ 이전 규약("920/130/50에서 키우지 말 것")은 **폐기** — 그 근거였던 "칸만
+  커지고 빈 공간만 넓어진다"는 칩이 가로 스크롤이던 시절 이야기이고, 1200×180은 1080p 세로에 한 달이
+  그대로 들어온다(6주 달인 경우에만 창 내부 스크롤). **길게 쓰는 건 메모 패드뿐**: 달력 메모 `rows 28`,
   투자일기(`RebalancingPanel` noteExpandModal) `rows 30`. 패드는 세로가 길어 **고정 오프셋으로 배치하면
   아래가 화면 밖으로 잘린다** → ① textarea에 `maxHeight: calc(100vh - 160px)` 상한(초과분 내부 스크롤)
   ② `CalendarModal`은 `padSeq` 증가 → rAF에서 **실제 offsetHeight를 측정해 중앙 배치 + 뷰포트 클램프**
@@ -1050,10 +1054,8 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   ⚠️ **변경 판정은 시세 파생 `baseVal`이 아니라 슬롯 원본 `slotVal`**로 한다(라이브 미러에선 `baseVal`이
   현재 비중이라 포커스~blur 사이 시세가 움직이면 오탐). **미러 이탈**(`override` 최초 박제)은 값이 같아도
   무조건 변경. `onAdminTargetChange`는 종전대로 **무조건** 호출(세션당 1회 규약 불변).
-- **`CalendarModal` 렌더**: 기록은 **사용자 메모 목록(`maxHeight:50px`)과 분리된 전용 행**에 emerald 칩
-  `📊 {계좌명}`으로 렌더한다 — 50px에는 칩이 2.5개만 보여 자동 기록이 사용자 메모를 밀어내고, 칸 확대는
-  규약상 금지다. ⚠️ **칩 라벨에 상수 접두(`목표비중 ·`) 금지** — 셀 텍스트 가용폭이 ≈100px(한글 10자)뿐이라
-  유일한 식별 정보인 계좌명이 truncate로 소실된다(종류는 색+📊으로 인코딩, 전문은 `title`). 개수 배지는
+- **`CalendarModal` 렌더**: 기록은 **사용자 메모 목록(`CELL_MEMO_H`)과 분리된 전용 세로 스택**에 emerald 칩
+  `LIST {계좌명}`으로 렌더한다 — 한 목록에 섞으면 자동 기록이 사용자 메모를 밀어낸다. 개수 배지는
   **일반 메모만** 센다. 클릭 → **읽기 전용 표 패드**(`pad.kind==='rebalTarget'`): ⚠️ memo 객체를 값 복사하지
   말고 **`memoId` 앵커 + 라이브 재조회**(기존 편집 패드와 같은 계약) + 원본 소멸 시 자동 닫힘 effect
   (⚠️ `if (!open) return null`보다 **위**에 둘 것 — 훅 순서). `savePad`는 rebal이면 early-return, 저장(체크)
@@ -1068,14 +1070,23 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 
 ### 메모 달력 = 4종 기록 허브 (칩 버튼) (⚠️ 회귀 주의 — 파생 2종을 calendarMemos에 복사 금지)
 
-날짜 칸에 **버튼식 칩** 4종을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).
+날짜 칸에 **버튼식 칩** 3종(+사용자 메모 줄)을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).
 
-| 칩 | 종류 | 소스 | 성격 |
-|---|---|---|---|
-| 📊 emerald | `rebalTarget` | `calendarMemos[date]` | **스냅샷**(위 섹션). 그 시점 시세·수량을 사후 재현할 수 없어 유일하게 복사 저장 |
-| 📝 amber | `note` | `portfolios[].investmentNotes` | **라이브 파생** — 보기·편집·새 작성 |
-| 🔄 violet | `qty` | `portfolios[].holdingSnapshots` 인접 diff | **라이브 파생** — 읽기 전용 |
-| 🔵 sky | (kind 없음) | `calendarMemos[date]` | 기존 사용자 메모 |
+칩은 **세로로 1줄씩**(위→아래) 쌓이고 순서·라벨이 고정이다(2026-07-29 사용자 확정) — 종류가 항상 같은
+줄 위치·같은 라벨로 오므로 칸을 훑을 때 한눈에 구분된다. 패드 헤더 라벨도 같은 이름을 쓴다.
+
+| 순서 | 칩 라벨 | 종류 | 소스 | 성격 |
+|---|---|---|---|---|
+| 1 | `LIST` emerald | `rebalTarget` | `calendarMemos[date]` | **스냅샷**(위 섹션). 그 시점 시세·수량을 사후 재현할 수 없어 유일하게 복사 저장 |
+| 2 | `NOTE` amber | `note` | `portfolios[].investmentNotes` | **라이브 파생** — 보기·편집·새 작성 |
+| 3 | `STOCK` violet | `qty` | `portfolios[].holdingSnapshots` 인접 diff | **라이브 파생** — 읽기 전용 |
+| — | (라벨 없음) sky | (kind 없음) | `calendarMemos[date]` | 기존 사용자 메모 — 칩이 아니라 아래 텍스트 줄 목록 |
+
+- **⚠️ 패드 헤더 라벨은 칩 라벨과 동일**(`CalendarModal` `pad.kind` 맵): `rebalTarget:'LIST'` ·
+  `note:'NOTE'` · `qty:'STOCK'` · `pick:'PICK'` · 사용자 메모 `'MEMO'`. rebalTarget이 예전
+  `'TARGET'`을 쓰고 `pick`이 `'LIST'`를 점유하던 배치로 되돌리지 말 것 — 어느 칩에서 연 패드인지
+  대응이 끊긴다. 이모지(📊📝🔄)는 **패드 본문·pick 목록에만** 남기고 칸의 칩에서는 뺐다(텍스트 라벨과
+  중복이고 폭을 ~14px 먹는다).
 
 - **⚠️ 파생 2종(note·qty)을 `calendarMemos`에 복사하지 말 것** — 복사하면 리밸런싱 패널 '투자 기록'
   메모장·자산검증 스냅샷과 갈라져 두 화면이 다른 값을 보인다. 반드시 원본에서 매 렌더 재조회한다
@@ -1089,10 +1100,13 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   cur 배제 조건은 **① 인덱스 0 ② `cur.kind==='baseline'` ③ `cur.date <= baselineDate`의 OR**.
   ⚠️ ②만 쓰면 안 된다 — baseline 당일을 편집하면 그 kind가 `manual`로 덮여 baseline이 사라진다.
   `origin:'manual'`은 매매가 아니라 수량 정정이므로 패드에 그 사실을 명시한다.
-- **칩 압축(⚠️ 되돌리지 말 것)**: 종류당 **1건이면 계좌명, 2건 이상이면 개수**(`📊 3`)로 접고 클릭 시
-  `pick` 선택 패드를 띄운다. 셀 텍스트 가용폭이 **≈118px**(CAL_W 920 → 7열 → padding/border 차감)뿐이라
-  계좌 수만큼 칩을 늘리면 첫 칩만 보이고 나머지는 6px 스크롤바로만 접근 가능해진다. `targetDate`가 같은
-  accountType끼리 공유되므로 하루 다건은 예외가 아니라 기본 시나리오.
+- **칩 압축(⚠️ 되돌리지 말 것)**: 종류당 **1건이면 계좌명, 2건 이상이면 건수**(`LIST 3건`)로 접고 클릭 시
+  `pick` 선택 패드를 띄운다. 셀 텍스트 가용폭이 **≈160px**(CAL_W 1200 → 7열 → padding/border/라벨 차감)
+  뿐이라 계좌 수만큼 칩을 늘리면 칸 높이가 계좌 수에 비례해 터진다. `targetDate`가 같은 accountType끼리
+  공유되므로 하루 다건은 예외가 아니라 기본 시나리오.
+- **⚠️ 칩 컨테이너를 `overflow-x-auto`(가로 스크롤)로 되돌리지 말 것**: 세로 스택 이전 설계였는데,
+  칩이 2개만 넘어가도 나머지는 6px 스크롤바로만 닿을 수 있어 사실상 숨겨졌다(사용자가 직접 지적).
+  컨테이너는 `flex flex-col gap-0.5 shrink-0`, 칩은 `w-full` + 라벨 `shrink-0` / 계좌명 `flex-1 min-w-0 truncate`.
 - **⚠️ `savePad`는 allow-list(default deny)**: kind가 늘어날 때 읽기 전용 패드가 사용자 메모 저장 경로로
   새면 `memoId`를 `calendarMemos`에서 못 찾아 **조용히 닫히며 편집이 유실**된다. `note`와 `mode:'new'+
   newKind:'note'`만 통과시키고 나머지 kind는 전부 `setPad(null)`. 저장 버튼도 `(!kind || kind==='note')`에만 렌더.

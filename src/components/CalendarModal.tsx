@@ -13,7 +13,12 @@ const WD = ['일', '월', '화', '수', '목', '금', '토'];
 // - 타이틀 바만 드래그 핸들, window mousemove/touchmove 리스너로 이동, 뷰포트 클램프
 const CAL_Z = 1050;
 const PAD_Z = 1060;
-const CAL_W = 920;   // 달력 창 폭(px). 좁은 화면은 maxWidth로 클램프
+// 날짜 칸은 칩 3종을 **세로**로 쌓고(가로 스크롤 폐지) 그 아래 사용자 메모 목록을 둔다.
+// 세 값은 한 세트다 — CELL_H를 줄이면 칩이 메모를 밀어내고, CAL_W를 줄이면 칩의 계좌명이
+// truncate로 사라진다(칸 텍스트 가용폭 ≈ CAL_W/7 − padding·border).
+const CAL_W = 1200;      // 달력 창 폭(px). 좁은 화면은 maxWidth로 클램프
+const CELL_H = 180;      // 날짜 칸 최소 높이(px)
+const CELL_MEMO_H = 74;  // 칸 안 사용자 메모 목록 최대 높이(px)
 const PAD_W = 576;   // 메모 패드 폭(px)
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -417,47 +422,37 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     onUpdateMemos(next);
   };
 
-  // 자동 기록 칩 — 종류당 **1건이면 계좌명, 2건 이상이면 개수**로 접는다.
-  // ⚠️ 셀 텍스트 가용폭이 ≈118px뿐이라(CAL_W 920 → 7열 → padding/border 차감) 계좌 수만큼 칩을
-  //    늘리면 첫 칩만 보이고 나머지는 6px 스크롤바로만 접근 가능해진다. targetDate가 같은
-  //    accountType끼리 공유되므로 하루 다건은 예외가 아니라 기본 시나리오다.
+  // 자동 기록 칩 — **세로 1줄씩**(위→아래) + `라벨 + 계좌명/건수` 표기.
+  //   1. LIST(목표비중) → 2. NOTE(투자기록) → 3. STOCK(수량변경) 순서 고정.
+  // 종류가 항상 같은 줄 위치·같은 라벨로 오므로 칸을 훑을 때 한눈에 구분된다.
+  // ⚠️ 가로 스크롤(overflow-x)로 되돌리지 말 것 — 칩이 2개만 넘어가도 나머지는 6px 스크롤바로만
+  //    닿을 수 있어 사실상 숨겨졌다. targetDate가 같은 accountType끼리 공유되므로 하루 다건은
+  //    예외가 아니라 기본 시나리오다(그래서 2건 이상은 건수로 접고 pick 목록으로 넘긴다).
   const CHIP_TONE = {
     rebalTarget: 'bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-200',
     note: 'bg-amber-500/15 hover:bg-amber-500/30 text-amber-200',
     qty: 'bg-violet-500/15 hover:bg-violet-500/30 text-violet-200',
   };
   const CHIP_DELETED = 'bg-gray-500/15 hover:bg-gray-500/30 text-gray-400';
-  const CHIP_EMOJI = { rebalTarget: '📊', note: '📝', qty: '🔄' };
+  const CHIP_LABEL = { rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK' };
   const autoChip = (dayKey, chipKind, items, openOne) => {
     if (!items || items.length === 0) return null;
-    const emoji = CHIP_EMOJI[chipKind];
-    const allTitle = items.map((it) => it.chipTitle || it.accountName || '계좌').join('\n');
-    if (items.length === 1) {
-      const it = items[0];
-      return (
-        <button
-          key={chipKind}
-          onClick={(e) => { e.stopPropagation(); openOne(it); }}
-          title={it.chipTitle || it.accountName}
-          className={`flex items-center rounded px-1 py-0.5 transition-colors shrink-0 min-w-0 max-w-full ${it.deleted ? CHIP_DELETED : CHIP_TONE[chipKind]}`}
-        >
-          {/* ⚠️ 상수 접두 금지 — 가용폭이 좁아 유일한 식별 정보인 계좌명이 truncate로 사라진다.
-              종류는 색+이모지로만 인코딩하고, 전문은 title 툴팁에 둔다. */}
-          <span className="text-[10px] truncate leading-tight">{emoji} {it.accountName || '계좌'}</span>
-        </button>
-      );
-    }
+    const single = items.length === 1;
+    const first = items[0];
     // 전부 삭제 계좌일 때만 회색 강등(혼재는 원래 톤 유지 — 색을 하나 더 늘리면 4종 체계가 흐려진다).
     // 혼재 여부는 title 툴팁과 pick 목록의 '(삭제됨)' 표기로 판별한다.
-    const allDeleted = items.every((it) => it.deleted);
+    const deleted = single ? !!first.deleted : items.every((it) => it.deleted);
     return (
       <button
         key={chipKind}
-        onClick={(e) => { e.stopPropagation(); openPick(dayKey, chipKind); }}
-        title={allTitle}
-        className={`flex items-center rounded px-1 py-0.5 transition-colors shrink-0 ${allDeleted ? CHIP_DELETED : CHIP_TONE[chipKind]}`}
+        onClick={(e) => { e.stopPropagation(); if (single) openOne(first); else openPick(dayKey, chipKind); }}
+        title={items.map((it) => it.chipTitle || it.accountName || '계좌').join('\n')}
+        className={`flex items-center gap-1 w-full rounded px-1 py-0.5 transition-colors ${deleted ? CHIP_DELETED : CHIP_TONE[chipKind]}`}
       >
-        <span className="text-[10px] leading-tight tabular-nums">{emoji} {items.length}</span>
+        <span className="text-[10px] font-bold leading-tight tracking-wide shrink-0">{CHIP_LABEL[chipKind]}</span>
+        <span className="flex-1 min-w-0 text-[10px] leading-tight text-left truncate opacity-90">
+          {single ? (first.accountName || '계좌') : `${items.length}건`}
+        </span>
       </button>
     );
   };
@@ -531,15 +526,14 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               const valid = dayNum >= 1 && dayNum <= daysInMonth;
               const dow = i % 7;
               if (!valid) {
-                return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: '130px' }} />;
+                return <div key={i} className="border-r border-b border-gray-800/60 bg-black/20" style={{ minHeight: `${CELL_H}px` }} />;
               }
               const key = dayKeyOf(viewYear, viewMonth, dayNum);
               const isToday = key === todayStr;
               const isHol = krHol.includes(key);
-              // 목표비중 자동 기록은 **사용자 메모 목록(50px)과 분리**해 전용 행에 렌더한다.
+              // 자동 기록 3종(LIST/NOTE/STOCK)은 **사용자 메모 목록과 분리**해 전용 세로 스택에 렌더한다.
               // 같은 accountType 계좌끼리 settings.targetDate를 공유하므로 하루에 계좌별 기록이
-              // 여러 건 쌓이는 것이 기본 시나리오인데, 50px에는 칩이 2.5개만 보여 사용자 메모가
-              // 밀려난다. 칸 크기를 키우는 것은 규약상 금지(CLAUDE.md)이므로 분리로 해결.
+              // 여러 건 쌓이는 것이 기본 시나리오라, 한 목록에 섞으면 사용자 메모가 밀려난다.
               const dayAll = Array.isArray(memos[key]) ? memos[key] : [];
               const dayRebals = dayAll.filter((m) => m && m.kind === 'rebalTarget');
               const dayMemos = dayAll.filter((m) => m && m.kind !== 'rebalTarget');
@@ -554,7 +548,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   onClick={() => openNew(key)}
                   title="클릭하여 메모 추가"
                   className="border-r border-b border-gray-800/60 p-1 flex flex-col gap-0.5 cursor-pointer hover:bg-white/[0.03] transition-colors"
-                  style={{ minHeight: '130px' }}
+                  style={{ minHeight: `${CELL_H}px` }}
                 >
                   <div className="flex items-center justify-between shrink-0 px-0.5">
                     <span
@@ -578,7 +572,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                     </div>
                   )}
                   {(dayRebals.length > 0 || dayNotes.length > 0 || dayQty.length > 0) && (
-                    <div className="flex gap-0.5 shrink-0 overflow-x-auto">
+                    <div className="flex flex-col gap-0.5 shrink-0">
                       {autoChip(key, 'rebalTarget',
                         dayRebals.map((m) => ({ accountName: m.accountName, chipTitle: m.content, _memo: m })),
                         (it) => openRebal(key, it._memo))}
@@ -590,7 +584,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                         (g) => openQty(key, g))}
                     </div>
                   )}
-                  <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: '50px' }}>
+                  <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: `${CELL_MEMO_H}px` }}>
                     {dayMemos.map((m) => (
                       <div
                         key={m.id}
@@ -657,7 +651,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               <CalIcon size={13} className="text-gray-500" />
               <span className="text-[13px] text-gray-400 font-mono">{pad.dayKey}</span>
               <span className="text-[15px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">
-                {({ rebalTarget: 'TARGET', note: 'NOTE', qty: 'STOCK', pick: 'LIST' })[pad.kind] || 'MEMO'}
+                {/* 칸의 칩 라벨(LIST/NOTE/STOCK)과 동일한 이름 — 어느 칩에서 열린 패드인지 즉시 대응된다.
+                    다건 선택 목록은 LIST를 목표비중에 넘겨주고 PICK으로 물러난다. */}
+                {({ rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', pick: 'PICK' })[pad.kind] || 'MEMO'}
               </span>
             </div>
             <div className="w-10" />
