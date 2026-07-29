@@ -604,6 +604,7 @@ export default function App() {
     toggleHiddenTaxMonth,
     toggleHiddenDividendMonth,
     updateInvestmentNotes,
+    updateInvestmentNotesFor,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
 
@@ -2139,7 +2140,14 @@ export default function App() {
         dividendSeparateTax: p.dividendSeparateTax,
         lookupRows: p.lookupRows,
         memo: p.memo || '',
-        investmentNotesKey: (p.investmentNotes || []).map(n => `${n.id}:${n.date}`).join('|'),
+        // ⚠️ 본문(content)까지 지문에 포함해야 한다 — 과거엔 `id:date`만 담아 **본문만 고치면**
+        // portfolioUpdatedAt이 안 올라 Drive STATE 저장이 스킵됐다(historyVerifyKey·calendarMemos와
+        // 동일 클래스). 다른 구조 변경에 편승 저장되는 경우가 많아 눈에 안 띄었을 뿐, chartPrefs를
+        // 건드리지 않은 조용한 세션에서 본문만 고치고 새로고침하면 유실된다. 길이 해시 절충안은
+        // 동일 길이 편집(오타 수정)을 놓치므로 금지 — JSON 전문이 미탐 0.
+        investmentNotesKey: JSON.stringify((p.investmentNotes || []).map(n => ({
+          id: n?.id, date: n?.date, content: n?.content || '',
+        }))),
         rowColor: p.rowColor || '',
         isTest: !!p.isTest,
         deletedAt: p.deletedAt || '', // 소프트 삭제 태그 — 삭제/복원이 Drive STATE 저장을 트리거하도록 지문에 포함
@@ -2161,7 +2169,11 @@ export default function App() {
         baselineDate: p.baselineDate || '',
         preBaselineVerified: !!p.preBaselineVerified,
         manualPriceOverrides: p.manualPriceOverrides || {},
-        holdingSnapshotsKey: (p.holdingSnapshots || []).map(s => `${s.date}:${s.kind}:${(s.items || []).length}`).join('|'),
+        // ⚠️ items 구성까지 지문화 — date·kind·개수만 보면 **같은 날짜 스냅샷의 수량만 다시 고칠 때**
+        // (자산검증 모달 commitQty 등) 지문이 그대로라 Drive STATE 저장이 스킵된다. 메모 달력이 이
+        // 배열을 '수량 변경' 표시 소스로 쓰므로 "달력엔 떴는데 재접속하면 없다"로 노출된다.
+        // snapshotCompositionKey는 수량·예수금·매입금액만 보고 시세는 제외 → 시세 갱신이 저장을 유발하지 않음.
+        holdingSnapshotsKey: (p.holdingSnapshots || []).map(s => `${s.date}:${s.kind}:${snapshotCompositionKey(s.items || [])}`).join('|'),
         taxBaseKey: JSON.stringify(Object.keys(p.taxBaseHistory || {}).sort().map(code => {
           const rec = (p.taxBaseHistory || {})[code] || {};
           return { code, events: rec.events || [], exTaxBase: rec.exTaxBase || {}, avgTaxBase: rec.avgTaxBase || {}, lastFetched: rec.lastFetched || '' };
@@ -3267,6 +3279,11 @@ export default function App() {
         holidays={marketHolidays}
         notify={notify}
         confirm={confirm}
+        // 투자기록(investmentNotes)·종목 수량 변경(holdingSnapshots diff) 라이브 파생 소스.
+        // ⚠️ calendarMemos에 복사하지 않는다 — 복사하면 리밸런싱 패널 메모장·자산검증과 갈라진다.
+        portfolios={portfolios}
+        activePortfolioId={activePortfolioId}
+        onUpdateInvestmentNotes={updateInvestmentNotesFor}
         metricsHistory={intMonthlyHistory}
         todayReturnRate={intTotals.returnRate}
         fxHistory={indicatorHistoryMap?.usdkrw}

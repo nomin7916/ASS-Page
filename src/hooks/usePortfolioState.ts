@@ -717,6 +717,10 @@ export function usePortfolioState({
   }, [marketIndicators.goldKr, activePortfolioAccountType]);
 
   const updateInvestmentNotes = (notes) => patchActive({ investmentNotes: notes });
+  // 메모 달력에서 편집 — 달력은 **비활성 계좌**의 투자기록도 열어주므로 patchActive(활성 전용)로는
+  // 부족하다. id 기반으로 그 계좌만 갱신한다(RebalancingPanel 경로와 같은 필드를 쓰므로 자동 동기화).
+  const updateInvestmentNotesFor = (portfolioId, notes) =>
+    setPortfolios(prev => prev.map(p => p.id === portfolioId ? { ...p, investmentNotes: notes } : p));
 
   return {
     // 파생 상태 (읽기 전용)
@@ -809,5 +813,6 @@ export function usePortfolioState({
     toggleHiddenTaxMonth,
     toggleHiddenDividendMonth,
     updateInvestmentNotes,
+    updateInvestmentNotesFor,
   };
 }

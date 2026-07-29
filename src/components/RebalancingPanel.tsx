@@ -6,6 +6,7 @@ import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
 import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
+import { getTodayKST } from '../hooks/useMarketCalendar';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import LadderBuyModal from './LadderBuyModal';
 
@@ -151,7 +152,9 @@ export default function RebalancingPanel({
 
   const addNewNote = () => {
     if (!onUpdateInvestmentNotes) return;
-    const today = new Date().toISOString().split('T')[0];
+    // ⚠️ toISOString()은 UTC라 한국 00:00~09:00에 쓴 기록이 '어제' 날짜로 찍힌다. 투자기록은
+    // 메모 달력 칸(dayKey, KST 로컬 조립)에 매칭되므로 반드시 KST로 맞춰야 하루가 어긋나지 않는다.
+    const today = getTodayKST();
     const newNote = { id: generateId(), date: today, content: '' };
     const updated = [newNote, ...(investmentNotes || [])];
     onUpdateInvestmentNotes(updated);

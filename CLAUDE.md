@@ -1066,6 +1066,65 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   (사용자가 확정한 트리거는 '비중 조정'). 기록 시점과 기록이 걸린 날짜가 다를 수 있어 패드에 `updatedAt`
   ('… 기록')을 함께 표시한다.
 
+### 메모 달력 = 4종 기록 허브 (칩 버튼) (⚠️ 회귀 주의 — 파생 2종을 calendarMemos에 복사 금지)
+
+날짜 칸에 **버튼식 칩** 4종을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).
+
+| 칩 | 종류 | 소스 | 성격 |
+|---|---|---|---|
+| 📊 emerald | `rebalTarget` | `calendarMemos[date]` | **스냅샷**(위 섹션). 그 시점 시세·수량을 사후 재현할 수 없어 유일하게 복사 저장 |
+| 📝 amber | `note` | `portfolios[].investmentNotes` | **라이브 파생** — 보기·편집·새 작성 |
+| 🔄 violet | `qty` | `portfolios[].holdingSnapshots` 인접 diff | **라이브 파생** — 읽기 전용 |
+| 🔵 sky | (kind 없음) | `calendarMemos[date]` | 기존 사용자 메모 |
+
+- **⚠️ 파생 2종(note·qty)을 `calendarMemos`에 복사하지 말 것** — 복사하면 리밸런싱 패널 '투자 기록'
+  메모장·자산검증 스냅샷과 갈라져 두 화면이 다른 값을 보인다. 반드시 원본에서 매 렌더 재조회한다
+  (`notesByDate`/`qtyChangesByDate` `useMemo`, **`open`일 때만 계산** — `portfolios`는 시세 갱신마다 새 배열).
+- **⚠️ 삭제 계좌(`deletedAt`)를 파생에서 제외하지 말 것**: 달력은 라이브 뷰가 아니라 **과거 기록 뷰**이고
+  같은 칸의 📊 칩은 `calendarMemos`라 삭제와 무관하게 남는다. 제외하면 한 셀 안에서 규칙이 모순되고
+  계좌 하나 삭제로 과거 몇 달치 칩이 소급 증발한다. → **포함하되 칩 색만 회색으로 강등**.
+  (`qty`만 `cur.date >= deletedAt` 컷오프 — 삭제일 이후 기록 동결 규약)
+- **⚠️ 수량 변경 diff는 `kind:'manual'`을 반드시 인지할 것**: 스냅샷 종류는 baseline/auto 둘이 아니라
+  **`manual`(자산검증 `VerifyEvalModal.withManualSnapshot`)이 더 있고 과거 임의 날짜에 삽입**된다.
+  cur 배제 조건은 **① 인덱스 0 ② `cur.kind==='baseline'` ③ `cur.date <= baselineDate`의 OR**.
+  ⚠️ ②만 쓰면 안 된다 — baseline 당일을 편집하면 그 kind가 `manual`로 덮여 baseline이 사라진다.
+  `origin:'manual'`은 매매가 아니라 수량 정정이므로 패드에 그 사실을 명시한다.
+- **칩 압축(⚠️ 되돌리지 말 것)**: 종류당 **1건이면 계좌명, 2건 이상이면 개수**(`📊 3`)로 접고 클릭 시
+  `pick` 선택 패드를 띄운다. 셀 텍스트 가용폭이 **≈118px**(CAL_W 920 → 7열 → padding/border 차감)뿐이라
+  계좌 수만큼 칩을 늘리면 첫 칩만 보이고 나머지는 6px 스크롤바로만 접근 가능해진다. `targetDate`가 같은
+  accountType끼리 공유되므로 하루 다건은 예외가 아니라 기본 시나리오.
+- **⚠️ `savePad`는 allow-list(default deny)**: kind가 늘어날 때 읽기 전용 패드가 사용자 메모 저장 경로로
+  새면 `memoId`를 `calendarMemos`에서 못 찾아 **조용히 닫히며 편집이 유실**된다. `note`와 `mode:'new'+
+  newKind:'note'`만 통과시키고 나머지 kind는 전부 `setPad(null)`. 저장 버튼도 `(!kind || kind==='note')`에만 렌더.
+- **투자기록 패드의 `val` 계약**: `val === null` = 미편집 → **라이브 본문 표시**(`padTextValue`).
+  본문을 비우면 삭제(메모 패드 규약 동일).
+  ⚠️ 같은 날 다건일 때 헤더 ①②③ 전환은 **탐색이지 취소가 아니다** — 떠나는 기록의 미저장 편집을
+  `pad.drafts[noteId]`에 담아 두고 `saveNotePad`가 **누적 draft를 한 번에 커밋**한다. `val:null`로만
+  리셋하면 "2번 흘긋 보려다 1번 편집이 경고 없이 증발"한다(창 위에선 confirm/notify가 가려져 사후
+  경고도 불가). 취소 의미가 명시적인 핑크 X/Esc만 draft까지 폐기한다. `drafts`는 패드 로컬 state라
+  영속화 지점 무관.
+- **⚠️ 수량 변경 패드의 예수금은 계좌 통화로 표기**(`padQty.currency`): 해외계좌는 `depositAmount`
+  **자체가 USD**다(`calcPortfolioEvalDetail`의 deposit 분기가 fxRate를 곱하는 대상). ₩로 하드코딩하면
+  $2,000이 ₩2,000으로 보여 약 1,390배 어긋난다. 원화 환산은 금지(환율 시점이 섞인다 — 해외계좌 규약).
+- **📊 패드는 같은 날·같은 계좌의 투자기록을 함께 표시**(사용자 요구: "리밸런싱 내역을 클릭하면 계좌의
+  리밸런싱 내용과 투자 기록에 남긴 내역을 볼 수 있어야"). ⚠️ 거기서는 **읽기 전용** — 편집은 📝 칩에서만
+  (저장 경로가 둘로 갈리지 않게).
+- **⚠️ 선행 버그 3건 동시 수정(회귀 시 재발)**:
+  ① `RebalancingPanel.addNewNote`가 `new Date().toISOString()`(UTC) → 한국 **00:00~09:00에 쓴 기록이
+  '어제' 칸**에 꽂혔다. `getTodayKST()`로 통일(달력 `dayKey`도 KST 로컬 조립).
+  ② `App.tsx investmentNotesKey`가 `id:date`만 담아 **본문만 고치면** `portfolioUpdatedAt`이 안 올라
+  Drive STATE 저장이 스킵됐다 → JSON 전문 포함. ⚠️ 길이 해시 절충안 금지(동일 길이 편집을 놓친다).
+  ③ `App.tsx holdingSnapshotsKey`가 `date:kind:개수`만 담아 **같은 날짜 스냅샷의 수량만 재편집**하면
+  저장이 스킵됐다 → `snapshotCompositionKey(s.items)` 포함(시세는 제외라 갱신이 저장을 유발하지 않음).
+- **비활성 계좌 편집**: `usePortfolioState.updateInvestmentNotesFor(portfolioId, notes)` — `patchActive`는
+  활성 계좌 전용이라 달력에서 다른 계좌 기록을 고칠 수 없다. 기존 `updateInvestmentNotes`(활성)와 병존.
+- **영속화 무수정**: `investmentNotes`·`holdingSnapshots`는 계좌 내부 필드라 `...p` 스프레드로 자동 보존.
+  `_preserveStickyPersonalData`(calendarMemos·watchlistGroups 전용) 대상이 **아니다** — 백업 복원이
+  계좌 데이터를 되돌리는 것이 맞다.
+- **알려진 한계(수량 변경)**: KR 계좌 스냅샷은 21:00 이후 **내일 날짜**로 찍혀(`getBackfillBoundaryKR`)
+  밤 매매가 하루 뒤 칸에 뜬다(자산검증 규약이라 변경 금지). 같은 날 여러 번 고치면 스냅샷이 덮어써져
+  **그날의 순변화만** 보인다. 예적금은 수량이 없어 `investAmount`(적립 원금) 변화로 대신 본다.
+
 ---
 
 ## 다음 작업 후보 (Phase 11~)
