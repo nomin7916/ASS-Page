@@ -36,7 +36,9 @@ export default function RebalanceTargetPinModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[600] p-4">
+    // ⚠️ z-[1080] — 과거 목표비중 복원 모달(1070)·비차단 플로팅 창(메모 달력 1050·메모 패드 1060)
+    //    보다 위, LoadingOverlay(1100) 아래. 내리면 그 창들에 가려 잠금이 사실상 우회된다.
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[1080] p-4">
       <div className="bg-[#0f172a] border border-amber-500/40 rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 bg-amber-950/30">
           <div className="flex items-center gap-2 text-amber-300">

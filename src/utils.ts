@@ -1384,3 +1384,118 @@ export const parseSamsungFundCSV = (text) => {
   }
   return records;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 과거 목표비중 복원 (메모 달력 rebalTarget 기록 → 현재 리밸런싱 표에 적용)
+// 상세 규약·회귀 주의는 CLAUDE.md "과거 목표비중 복원" 섹션 참조.
+// ⚠️ 이 3함수는 순수 함수다 — calendarMemos를 읽기만 하고 절대 쓰지 않는다(INV-1).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 한 계좌의 rebalTarget 스냅샷 목록. (dayKey, portfolioId)당 1건 upsert라 날짜당 최대 1건.
+// 반환: [{ dayKey, memo }] — 날짜 **내림차순**(최신 우선). ISO 문자열 사전순 = 시간순.
+export const listRebalTargetSnapshots = (calendarMemos, portfolioId) => {
+  if (!calendarMemos || typeof calendarMemos !== 'object' || Array.isArray(calendarMemos) || !portfolioId) return [];
+  const out = [];
+  for (const dayKey of Object.keys(calendarMemos)) {
+    if (!isValidIsoDate(dayKey)) continue;
+    const arr = calendarMemos[dayKey];
+    if (!Array.isArray(arr)) continue;
+    // ⚠️ normalizeCalendarMemos는 "항목이 객체인가"만 보고 rows를 검증하지 않는다 → 여기서 방어.
+    const memo = arr.find(m => m && m.kind === 'rebalTarget' && m.portfolioId === portfolioId
+      && Array.isArray(m.rows) && m.rows.length > 0);
+    if (memo) out.push({ dayKey, memo });
+  }
+  out.sort((a, b) => (a.dayKey < b.dayKey ? 1 : a.dayKey > b.dayKey ? -1 : 0));
+  return out;
+};
+
+const rbCodeKey = (s) => String(s ?? '').trim().toUpperCase();
+const rbNameKey = (s) => String(s ?? '').normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase();
+
+// 스냅샷 rows[] ↔ 현재 표(rebalanceData) 1:1 매칭.
+// ⚠️ 스냅샷 rows에는 종목 **id가 없다**(App.tsx buildRebalTargetEntry) → (code, name) 2패스 휴리스틱.
+// ⚠️ 인덱스·순서 폴백 금지 — 스냅샷은 카테고리 재배치 순, 현재 표는 정렬 상태 순이라 서로 다르다.
+//    순서로 맞추면 엉뚱한 종목에 비중이 조용히 박힌다.
+// ⚠️ 애매하면(같은 코드/이름이 2행) 임의 선택 대신 **보류** — 조용한 오적용보다 명시적 미적용이 낫다.
+export const matchRebalTargetRows = (rows, items) => {
+  const src = Array.isArray(rows) ? rows : [];
+  const cur = (Array.isArray(items) ? items : []).filter(it => it && it.id != null);
+  const byCode = new Map(), byName = new Map();
+  const push = (map, key, v) => { if (!key) return; const a = map.get(key); if (a) a.push(v); else map.set(key, [v]); };
+  cur.forEach(it => { push(byCode, rbCodeKey(it.code), it); push(byName, rbNameKey(it.name), it); });
+
+  const used = new Set();
+  const matched = [], skipped = [], pending = [];
+  const freeOf = (a) => (a || []).filter(it => !used.has(it.id));
+  const take = (row, it, value, by) => {
+    used.add(it.id);
+    matched.push({
+      id: it.id, value, by,
+      code: it.code || '', curName: it.name || '', snapName: row.name || '',
+      prevRatio: cleanNum(it.effectiveTargetRatio), isSavings: it.type === 'savings',
+    });
+  };
+
+  // ① 코드 정확 일치(trim+대문자) — 후보가 유일할 때만
+  for (const row of src) {
+    if (!row || typeof row !== 'object') { skipped.push({ name: '', code: '', value: 0, why: 'bad-row' }); continue; }
+    // ⚠️ Number()로 변환하지 말 것 — Number(null)/Number('')/Number([])가 전부 0이 되어 손상된 행이
+    //    "목표비중 0%"로 조용히 적용된다. buildRebalTargetEntry는 항상 cleanNum 숫자를 쓴다.
+    const value = row.targetRatio;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1000) {
+      skipped.push({ name: row.name || '', code: row.code || '', value: 0, why: 'bad-value' });
+      continue;
+    }
+    const ck = rbCodeKey(row.code);
+    if (!ck) { pending.push({ row, value }); continue; }          // 예적금·수동 펀드·코드 미입력
+    const cand = freeOf(byCode.get(ck));
+    if (cand.length === 1) { take(row, cand[0], value, 'code'); continue; }
+    if (cand.length > 1) {                                        // 같은 코드 2행(코드 유일성 검사 없음)
+      const nk = rbNameKey(row.name);
+      const narrow = nk ? cand.filter(it => rbNameKey(it.name) === nk) : [];
+      if (narrow.length === 1) take(row, narrow[0], value, 'code+name');
+      else skipped.push({ name: row.name || '', code: row.code || '', value, why: 'ambiguous' });
+      continue;
+    }
+    pending.push({ row, value });                                 // 코드 표기 변경 → 이름 폴백
+  }
+
+  // ② 이름 정확 일치(NFC+소문자+공백정규화) — 유일할 때만 + 예적금 타입 힌트
+  //    curQty === null ⟺ savings (buildRebalTargetEntry) — 코드 없는 행끼리 오매칭을 막는 유일한 단서.
+  for (const { row, value } of pending) {
+    const nk = rbNameKey(row.name);
+    if (!nk) { skipped.push({ name: '', code: row.code || '', value, why: 'blank-key' }); continue; }
+    const wantSavings = row.curQty === null;
+    const cand = freeOf(byName.get(nk)).filter(it => (it.type === 'savings') === wantSavings);
+    if (cand.length === 1) take(row, cand[0], value, 'name');
+    else skipped.push({ name: row.name || '', code: row.code || '', value, why: cand.length ? 'ambiguous' : 'missing' });
+  }
+
+  const mid = new Set(matched.map(m => m.id));
+  const untouched = cur.filter(it => !mid.has(it.id));
+  return {
+    matched, skipped, untouched,
+    appliedSum: matched.reduce((s, m) => s + m.value, 0),
+    untouchedSum: untouched.reduce((s, it) => s + cleanNum(it.effectiveTargetRatio), 0),
+  };
+};
+
+// 매칭된 종목의 목표 슬롯에 복원값을 쓴다. 변경이 없으면 **같은 참조**를 반환(불필요한 저장 트리거 방지).
+// ⚠️ overrideField는 미러 상태와 무관하게 **항상 true** — 수동 blur(미러 'on'일 때만 override)와
+//    의도적으로 다르다. settings는 같은 accountType 계좌 전체가 공유하므로(updateSettingsForType),
+//    형제 계좌에서 미러를 켰다 끄면 override 없는 슬롯이 '현재 비중'으로 영구히 덮어써진다.
+//    복원값은 사용자가 의도적으로 채택한 목표이므로 그 사고에서 반드시 보호해야 한다.
+export const applyRebalTargetRatios = (items, ratioById, opts) => {
+  const slotField = opts?.slotField;
+  const overrideField = opts?.overrideField;
+  if (!Array.isArray(items) || !ratioById || !slotField) return items;
+  let changed = false;
+  const next = items.map(it => {
+    if (!it || it.id == null || !Object.prototype.hasOwnProperty.call(ratioById, it.id)) return it;
+    changed = true;
+    const patched = { ...it, [slotField]: ratioById[it.id] };
+    if (overrideField) patched[overrideField] = true;
+    return patched;
+  });
+  return changed ? next : items;
+};

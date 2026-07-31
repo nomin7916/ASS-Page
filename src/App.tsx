@@ -70,7 +70,8 @@ import {
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
   externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
   buildBookCostSeries, bookDeltaBetween,
-  noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate
+  noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
+  listRebalTargetSnapshots
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -1593,6 +1594,34 @@ export default function App() {
       if (pid !== activePortfolioIdRef.current) return; // 800ms 사이 계좌가 바뀌었으면 폐기
       commitRebalTargetSnapshot(date);
     }, 800) };
+  };
+
+  // ── 과거 목표비중 복원 (읽기 방향) ──
+  // 활성 계좌의 rebalTarget 스냅샷 목록(최신 우선). 리밸런싱 표 목표 열의 📅 아이콘이 소비한다.
+  const rebalTargetSnapshots = useMemo(
+    () => listRebalTargetSnapshots(calendarMemos, activePortfolioId),
+    [calendarMemos, activePortfolioId],
+  );
+
+  // 복원 적용 후 통지. **복원 자체는 calendarMemos에 아무것도 쓰지 않는다**(순수 읽기).
+  // ⚠️ dirty를 세우는 조건이 이 기능의 안전장치 전부다. 커밋은 **소스 날짜가 아니라 헤더 날짜**
+  //    (`settings.targetDate`)에 쓰이고, upsert는 `(kind, portfolioId)`만 보고 그 날짜 기록을
+  //    **통째로 교체**한다(`commitRebalTargetSnapshot`). 그러므로 **헤더 날짜에 이 계좌 기록이 이미
+  //    있으면 절대 dirty를 세우면 안 된다** — 그 원본이 복원값 + 오늘 수량·평가금으로 덮여
+  //    "그날 이 비중을 목표로 삼았다"는 **거짓 이력**이 되고, calendarMemos는 백업 복원 sticky라
+  //    되살릴 수 없다. 기록은 언제나 헤더 날짜에 만들어지므로 '헤더에 기록 있음'이 오히려 기본 상태다.
+  //    → 기록은 **헤더 날짜가 빈 날일 때만** 남긴다(그때는 파괴할 원본이 없다).
+  //    사용자가 복원을 이력으로 남기고 싶으면 헤더 날짜를 기록 없는 날로 바꾸면 된다
+  //    ('헤더에 보이는 날짜 = 기록 날짜' 불변식 그대로. 모달이 이 상태를 앰버로 사전 고지한다).
+  // ⚠️ 기존 dirty를 **지우지 말 것** — 복원과 무관한 대기 중 편집까지 소각돼 그 날짜 기록이 영영 안 생긴다.
+  const handleTargetRestored = (opts) => {
+    const pid = activePortfolioIdRef.current;
+    if (!pid || !opts || opts.portfolioId !== pid) return;
+    const headerDate = settings?.targetDate;
+    if (!headerDate || !opts.dayKey || headerDate === opts.dayKey) return;
+    const headerArr = calendarMemosRef.current?.[headerDate];
+    if (Array.isArray(headerArr) && headerArr.some(m => m?.kind === 'rebalTarget' && m.portfolioId === pid)) return;
+    rebalTargetDirtyRef.current[pid] = true;
   };
 
   // 계좌 뷰를 떠나기 직전 커밋 — 탭/드롭다운/통합 대시보드 진입이 모두 이 래퍼를 경유한다.
@@ -3205,6 +3234,9 @@ export default function App() {
             setTargetEditAuthorized={setTargetEditAuthorized}
             onAdminTargetChange={adminViewingAs ? notifyUserOfAdminTargetChange : null}
             onTargetEdited={handleTargetEdited}
+            rebalTargetSnapshots={rebalTargetSnapshots}
+            activePortfolioId={activePortfolioId}
+            onTargetRestored={handleTargetRestored}
             onManualSave={handleDriveSave}
             driveStatus={driveStatus}
             showCalculator={showCalculator}

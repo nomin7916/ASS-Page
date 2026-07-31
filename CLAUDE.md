@@ -1068,6 +1068,118 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   (사용자가 확정한 트리거는 '비중 조정'). 기록 시점과 기록이 걸린 날짜가 다를 수 있어 패드에 `updatedAt`
   ('… 기록')을 함께 표시한다.
 
+### 과거 목표비중 복원 = 달력 기록 → 현재 표 적용 (읽기 방향) (⚠️ 회귀 주의)
+
+위 섹션의 '쓰기(스냅샷 기록)'에 대응하는 **읽기/적용** 기능. 리밸런싱 표 목표(%) 헤더의
+**날짜 칩 오른쪽 📅 아이콘**(`CalendarClock`) → `RebalanceTargetRestoreModal`(미니 달력 + 기록 목록
++ 미리보기) → 날짜 선택 → `적용`. **교집합만 적용** — 현재 표에 있는 종목만 바꾸고, 기록에만 있는
+종목은 무시, 표에만 있는 종목은 현재 값 유지(사용자 정의).
+
+- **불변식 5개(전부 `npm run verify:rebal-restore` #25~#30이 소스 텍스트로 단언)**:
+  **INV-1** 복원 경로는 `setCalendarMemos`/`onUpdateMemos`를 **절대 호출하지 않는다**(순수 읽기).
+  **INV-2** `reportAdminChange`를 재사용하지 않는다 — `onTargetEdited`까지 발화해 dirty가 서면 INV-3이 깨진다.
+  관리자 공지는 `onAdminTargetChange()`를 **직접** 호출(세션당 1건 래치라 추가 비용 0).
+  **INV-3** dirty는 `handleTargetRestored`가 **헤더 날짜(`settings.targetDate`)가 비어 있지 않고,
+  소스 날짜와 다르며, 그 날짜에 이 계좌 기록이 아직 없을 때만** 세운다(아래 전용 항목).
+  **INV-4** `updateSettingsForType`를 **절대 호출하지 않는다**(같은 accountType 전 계좌에 전파된다).
+  **INV-5** 쓰기는 `setPortfolio`(=`patchActive`, 활성 계좌 전용)로만 — **by-id 라이터를 만들지 말 것**
+  (id 불일치 시 구조적 no-op이 곧 타 계좌 오적용 방어다).
+
+- **⚠️ 기존 날짜 칩(`settings.targetDate`)을 복원 진입점으로 재사용하지 말 것 — 원본이 확정 소실된다**:
+  칩 `onChange`(`RebalancingPanel.tsx`) → `reportAdminChange({date})` → `handleTargetEdited`가
+  `if (!date) return`**보다 위**에서 dirty를 세우고 → 800ms 뒤 `commitRebalTargetSnapshot(그 과거 날짜)`
+  → `findIndex`가 `(kind, portfolioId)`만 보고 그 기록의 `rows`를 **전면 교체**한다. `sameRebalEntry`는
+  `rows` JSON·`totalExpEval`까지 비교하므로 **절대 못 거른다**(복원의 전제가 '과거≠현재'), `flushRebalTargetSnapshot`
+  이 있어 800ms 회피도 불가능하다. 게다가 `updateSettingsForType`이 같은 accountType 전 계좌에 그 과거
+  날짜를 전파해 **다른 계좌 기록까지 연쇄 파괴**한다. → 칩은 손대지 않고 **옆에 별도 아이콘**을 둔다.
+
+- **⚠️ 복원은 '헤더 날짜에 기존 기록이 없을 때만' 기록한다 — 이게 이 기능의 최중요 안전장치**:
+  커밋은 **소스 날짜가 아니라 헤더 날짜**(`buildRebalTargetEntry`의 `dayKey = overrideDate || settings.targetDate`)에
+  쓰이고, upsert는 `(kind, portfolioId)`만 보고 그 날짜 기록을 **통째로 교체**한다. 그런데 기록은 언제나
+  헤더 날짜에 만들어지므로 **'헤더 날짜에 기록이 있다'가 기본 상태**다. 여기서 dirty를 세우면 과거 기록을
+  하나 불러올 때마다 **헤더 날짜의 다른 기록이 복원값 + 오늘 수량·평가금으로 덮여**, "그날 이 비중을
+  목표로 삼았다"는 **거짓 이력**이 남는다(alt-tab의 `visibilitychange` → `rebalExitCommitRef`만으로도 발화).
+  `calendarMemos`는 백업 복원 sticky라 **복구 불가**. → `handleTargetRestored`가 `calendarMemosRef.current[headerDate]`에
+  이 계좌의 `rebalTarget`이 있으면 **dirty를 세우지 않는다**(표만 바뀌고 달력은 무변). 이력으로 남기려면
+  사용자가 헤더 날짜를 **기록 없는 날**로 바꾸면 된다('헤더에 보이는 날짜 = 기록 날짜' 불변식 그대로).
+  ⚠️ 모달 경고는 반드시 **이 조건**(`byDay.has(targetDate)`)에 붙여야 한다 — 과거엔 `targetDate === sel.dayKey`
+  (파괴가 **일어나지 않는** 안전한 경우)에만 경고가 떠서 정반대였다.
+- **⚠️ `handleTargetRestored`는 기존 dirty를 지우지 않는다**(App.tsx): 지우면 복원과 무관한 **대기 중
+  편집**(blur로 dirty만 서고 아직 커밋 전)까지 소각돼 그 날짜 기록이 영영 안 생긴다(`commitRebalTargetSnapshot`
+  첫 줄 `if (!dirty[pid]) return null`). 대기 중인 날짜 디바운스 타이머(`rebalDateTimerRef`)도 폐기하지 말 것.
+  잔여 위험(복원 후 사용자가 **셀을 직접 고쳐** dirty가 서면 헤더 날짜 기록의 수량·평가금이 오늘 값으로
+  갱신)은 **복원 기능이 없어도 존재하던 기존 동작**이며(헤더 날짜를 그대로 두고 목표를 고치면 항상 그렇다),
+  모달이 앰버로 함께 고지한다.
+
+- **⚠️ 슬롯은 스냅샷의 `targetMode`가 아니라 '현재' `settings.targetMode`**: `effectiveTargetRatio`가
+  현재 모드 슬롯만 읽으므로(`usePortfolioData.ts`) 스냅샷 모드 슬롯에 쓰면 **화면이 1픽셀도 안 바뀐다**
+  (=고장으로 보임). 모드를 맞추려 `updateSettingsForType`을 부르는 것은 INV-4 위반. 불일치는 **앰버 배너**로만.
+
+- **⚠️ `overrideField = true`를 미러 상태와 무관하게 **항상** 쓴다 — 수동 blur와 의도적으로 다르다**:
+  수동 blur는 `mirror==='on'`일 때만 override를 세운다. 복원에 같은 규칙을 쓰면, settings가 같은
+  accountType 전 계좌 공유라 **형제 계좌에서 (%) 미러를 켰다 끄는 것만으로** 이 계좌의 override 없는
+  슬롯이 `cycleMirror`의 `on→off` 분기에서 **현재 비중으로 영구히 덮어써진다**. 수동 입력값은 다시 치면
+  되지만 복원값은 사용자가 의도적으로 채택한 과거 목표라 그 사고에서 보호해야 한다. 부작용은 리셋
+  아이콘(`alwaysShowReset`) 상시 노출뿐이고, 그 툴팁('수동 편집됨')은 오히려 상태를 정확히 설명한다.
+
+- **매칭 = `(code, name)` 2패스 + 1:1 유일성 강제**(`utils.ts matchRebalTargetRows`). 스냅샷 `rows[]`에
+  **`id`가 없다**(`buildRebalTargetEntry`). ① 코드 `trim().toUpperCase()` 유일 일치 → ② 실패분만 이름
+  `NFC + 소문자 + 공백정규화` 유일 일치(+ **`curQty === null` ⟺ 예적금** 타입 힌트로 savings↔stock 분리).
+  ⚠️ **인덱스·순서 폴백 금지** — 스냅샷은 카테고리 재배치 순, 현재 표는 정렬 상태 순이라 서로 다르다
+  (검증 #17이 rows를 뒤집어 단언). ⚠️ 애매하면(같은 코드·이름 2행) **임의 선택 대신 보류** —
+  조용한 오적용보다 명시적 미적용이 낫다. ⚠️ 값 검증에 **`Number()`를 쓰지 말 것** — `Number(null)`/
+  `Number('')`/`Number(false)`/`Number([])`가 전부 0이라 손상 행이 **목표비중 0%로 조용히 적용**된다.
+  `typeof === 'number'` 선행 검사 필수(검증 #14). ⚠️ `normalizeCalendarMemos`는 `rows`를 검증하지 않으므로
+  방어는 **소비 측에서만** — 로드 정규화를 강화하면 손상 판정된 기존 기록이 영구 삭제된다.
+
+- **⚠️ 합계를 100%로 재정규화하지 말 것**: 합계<100%는 이 앱의 정상 상태다(`liveRatio` 분모
+  `totals.totalEval`에 예수금 포함). 스케일링하면 패드의 `38.00%`와 표의 `39.42%`가 갈려
+  **"기록 = 화면 1:1"** 불변식이 깨진다. tfoot 앰버 `diff`가 이미 차이를 표시한다.
+
+- **⚠️ PIN 게이트**: 고정 모드는 `isFixedLocked`를 그대로 통과해야 한다(`onRequestPin` → 기존
+  `RebalanceTargetPinModal`). 분기는 **fail-closed** — `if (locked) { if (onRequestPin) onRequestPin(cb); return; }`.
+  `locked && onRequestPin`으로 묶으면 prop 하나만 빠져도 잠금이 통째로 열린다(검증 #32).
+  PIN 모달에는 Esc 핸들러가 없으므로 복원 모달은 `pinPending`일 때 Esc·백드롭 닫기를 막는다 — 안 막으면
+  뒤에서 창만 닫히고, 이어 PIN을 입력하면 **사용자가 취소했다고 믿은 복원이 그대로 적용**된다.
+- **⚠️ z-index: 복원 1070 < PIN 1080, 둘 다 비차단 플로팅 창 위**: 메모 달력 1050(폭 **1200px**)·
+  메모 패드 1060·관심종목/계산기 1050·투자기록 패드 1000/1010 **위**, `LoadingOverlay` 1100 아래.
+  과거 560/600이었는데, 그러면 메모 달력을 열어 둔 채(비차단이라 계좌 전환에도 유지된다) 아이콘을 눌러도
+  **창이 통째로 가려져 "아무 일도 안 일어난다"**. 특히 `CalendarModal` LIST 패드가 이 아이콘을 안내하므로
+  그 경로가 정확히 이 조합이다. PIN < 복원이 되면 잠금이 사실상 우회된다. 검증 #30·#31이 두 값을 뽑아 비교.
+- **⚠️ 미리보기 라벨은 원인 중립으로**: `matchRebalTargetRows`의 `skipped`에는 `missing`뿐 아니라
+  `ambiguous`(현재 표에 **있는데도** 중복이라 보류)·`bad-value`·`bad-row`·`blank-key`가 섞인다.
+  헤더를 '기록에만 있는 종목'으로 단언하면 사용자가 **미적용을 놓친다**(undo가 없어 미리보기가 유일한
+  안전망이다). → `미적용 (N) · 기록에 있으나 적용하지 못한 행` + 항목별 사유 + `missing` 외에는 앰버 강조.
+  반대편 `untouched`도 '기록에 없어서'가 아니라 단순 `현재 목표비중 그대로`로 쓴다(ambiguous 짝이 섞인다).
+
+- **영속화 신규 지점 0곳**: 목표비중 4필드(`targetRatio`/`targetRatioVar`/`targetRatioOverride`/
+  `targetRatioVarOverride`)가 이미 `portfolioStructureKey`(`App.tsx`)에 있어 복원 write만으로
+  `portfolioUpdatedAt` 상승 → Drive STATE 저장이 자동 트리거된다(검증 #28이 4필드 잔존을 단언).
+  `settings`·`calendarMemos`·state 리터럴·저장 effect deps·`applyStateData`·`applyBackupData`·
+  `_preserveStickyPersonalData`·새 창 브릿지 **전 지점 무수정**. 같은 스냅샷을 두 번 적용하면 지문
+  문자열이 동일해 저장이 재트리거되지 않는다(정상).
+
+- **되돌리기(undo) 미제공(의도)**: 사용자가 '미리보기 후 적용'을 택했다. undo 상태를 두면 Drive 폴링
+  (`applyStateData`)이 타 기기 편집을 받아온 뒤 눌렸을 때 그 최신값을 낡은 값으로 덮고, 패널이
+  언마운트되는 조건(`!sectionCollapsed.rebalancing || !sectionCollapsed.donut`)에서 무음 소멸한다.
+  미리보기가 안전망이다.
+
+- **범위 밖(의도)**: ① 메모 달력 LIST 패드의 '적용 버튼'(안내 문구만 — 달력은 비활성·삭제 계좌 기록도
+  보여주고, 별도 브라우저 창은 종목 정보를 안 받아 무반응이며, 창 위에선 PIN·확인창이 가려진다)
+  ② 별도 브라우저 창에서의 복원 ③ 비활성 계좌 복원 ④ `ambiguous` 행 수동 매핑 UI ⑤ `rebalExtraQty` 초기화
+  ⑥ 목표비중 열을 숨기면 진입점도 사라짐(그 상태에선 목표 편집 UI 자체가 없으므로 일관).
+- **모달 내부 규약**: 보고 있는 달은 **파생값 + 덮어쓰기(`viewOv`)** — state 초기값을 상수로 두고
+  effect에서 고치면 열 때마다 엉뚱한 달이 한 프레임 번쩍인다(이 컴포넌트는 `open` 토글만 되고
+  언마운트되지 않아 첫 렌더가 옛 값으로 커밋된다). 날짜 폴백은 `getTodayKST()`(로컬 TZ `new Date()` 금지),
+  날짜 키는 직접 조립(`new Date('YYYY-MM-DD')` UTC 파싱 금지). 열 때 패널에 포커스를 옮기고 닫을 때
+  되돌린다 — 안 하면 Tab이 **백드롭 뒤에 가려진 목표비중 입력**으로 들어가 수시변경 모드(잠금 없음)에서
+  보이지 않는 셀을 편집하게 된다.
+- 검증: `npm run verify:rebal-restore` (참조 구현 미러 #1~#24 + 소스 텍스트 가드 #25~#32).
+  ⚠️ 가드는 `RebalancingPanel.tsx`만 **주석을 남긴 원본**으로 읽는다 — 구간 경계가 `// #verify:` 주석이라
+  `stripComments`가 지우면 구간을 못 찾는다. 따라서 **센티넬 구간 안에는 금지 토큰**(`onTargetEdited`·
+  `reportAdminChange`·`updateSettingsForType`·`setCalendarMemos`)**을 언급하는 주석을 두지 말 것**
+  (설명 주석은 시작 센티넬 위에).
+
 ### 메모 달력 = 4종 기록 허브 (칩 버튼) (⚠️ 회귀 주의 — 파생 2종을 calendarMemos에 복사 금지)
 
 날짜 칸에 **버튼식 칩** 3종(+사용자 메모 줄)을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).

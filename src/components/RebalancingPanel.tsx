@@ -1,13 +1,14 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Plus, Maximize2, Trash2, Check } from 'lucide-react';
+import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Plus, Maximize2, Trash2, Check, CalendarClock } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate } from '../utils';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate, applyRebalTargetRatios } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
+import RebalanceTargetRestoreModal from './RebalanceTargetRestoreModal';
 import LadderBuyModal from './LadderBuyModal';
 
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
@@ -82,8 +83,12 @@ export default function RebalancingPanel({
   onToggleCalculator = null,
   investmentNotes = [],
   onUpdateInvestmentNotes = null,
+  rebalTargetSnapshots = [],
+  activePortfolioId = null,
+  onTargetRestored = null,
 }) {
   const [editingRatio, setEditingRatio] = useState({});
+  const [restoreOpen, setRestoreOpen] = useState(false);
   const [ladderModal, setLadderModal] = useState(null);
   const [dateEditMode, setDateEditMode] = useState(false);
   const [pinModal, setPinModal] = useState(null); // { onAuthorized: () => void } | null
@@ -232,6 +237,27 @@ export default function RebalancingPanel({
     if (onAdminTargetChange) onAdminTargetChange();
     if (onTargetEdited) onTargetEdited(opts);
   };
+
+  // ── 과거 목표비중 복원 (메모 달력 rebalTarget 스냅샷 → 현재 표) ──
+  // ⚠️ reportAdminChange를 재사용하지 말 것 — onTargetEdited까지 발화해 dirty가 서면, 헤더 날짜가
+  //    복원 소스와 같을 때 그 원본 기록이 오늘 수량·평가금으로 덮어써진다. 기록 여부 판정은
+  //    App의 onTargetRestored가 헤더 날짜와 비교해 결정한다(CLAUDE.md "과거 목표비중 복원").
+  // #verify:restore-apply-start
+  const applyRestoredTargets = (dayKey, memo, matched) => {
+    if (!memo || !Array.isArray(matched) || matched.length === 0) return;
+    if (activePortfolioId && memo.portfolioId && memo.portfolioId !== activePortfolioId) return;
+    const tMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
+    const slotField = tMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
+    const overrideField = tMode === 'variable' ? 'targetRatioVarOverride' : 'targetRatioOverride';
+    const ratioById = Object.create(null);
+    matched.forEach(m => { if (m && m.id != null) ratioById[m.id] = m.value; });
+    // 편집 중이던 셀의 로컬 문자열이 남아 있으면 복원값이 화면에 안 보인다(applyReset과 동일 처리).
+    setEditingRatio(prev => { const n = { ...prev }; matched.forEach(m => { delete n[m.id]; }); return n; });
+    setPortfolio(prev => applyRebalTargetRatios(prev, ratioById, { slotField, overrideField }));
+    if (onAdminTargetChange) onAdminTargetChange();
+    if (onTargetRestored) onTargetRestored({ portfolioId: activePortfolioId, dayKey });
+  };
+  // #verify:restore-apply-end
 
   const CAT_W = 80;
   const CHRATE_W = 65;
@@ -753,7 +779,7 @@ export default function RebalancingPanel({
                         <th className="py-2 px-3 min-w-[120px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap">
                           {hideStrip('targetRatio')}
                           <div className="flex flex-col items-center gap-1">
-                            <div className="relative w-full">
+                            <div className="relative w-full flex items-center gap-1">
                               <input
                                 ref={datePickerRef}
                                 type="date"
@@ -766,7 +792,7 @@ export default function RebalancingPanel({
                                 <input
                                   type="text"
                                   autoFocus
-                                  className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-green-500 rounded px-1 py-0.5 w-full text-center"
+                                  className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-green-500 rounded px-1 py-0.5 flex-1 min-w-0 text-center"
                                   defaultValue={formatDisplayDate(settings.targetDate)}
                                   onBlur={e => { const parsed = parseDisplayDate(e.target.value); if (parsed) { updateSettingsForType({ ...settings, targetDate: parsed }); reportAdminChange({ date: parsed }); } setDateEditMode(false); }}
                                   onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); e.stopPropagation(); }}
@@ -774,7 +800,7 @@ export default function RebalancingPanel({
                                 />
                               ) : (
                                 <span
-                                  className={`block text-[9px] border rounded px-1 py-0.5 w-full text-center cursor-pointer bg-gray-800 select-none ${
+                                  className={`block text-[9px] border rounded px-1 py-0.5 flex-1 min-w-0 text-center cursor-pointer bg-gray-800 select-none ${
                                     settings.targetDate
                                       ? 'text-gray-400 border-gray-600 hover:border-gray-500'
                                       : 'text-amber-300/80 border-amber-500/50 hover:border-amber-400'
@@ -786,6 +812,26 @@ export default function RebalancingPanel({
                                     : '날짜를 지정해야 메모 달력에 목표 비중이 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'}
                                 >{formatDisplayDate(settings.targetDate)}</span>
                               )}
+                              {/* 과거 목표비중 불러오기 — 기록 '쓰기'인 날짜 칩과 반대 방향(읽기/적용).
+                                  ⚠️ 날짜 칩을 재사용하면 안 된다: 칩을 과거로 바꾸면 그 날짜에 오늘 값이
+                                  다시 기록돼 원본이 소실되고, updateSettingsForType이 같은 계좌 종류
+                                  전체에 그 날짜를 전파한다. 반드시 별도 컨트롤로 둘 것.
+                                  ⚠️ relative z-20 필수 — hideStrip(z-10)이 이 영역 상단을 덮어 클릭을 가로챈다.
+                                     래퍼 전체가 아니라 버튼에만 줘야 열 숨기기 스트립이 살아남는다. */}
+                              <button
+                                type="button"
+                                disabled={!rebalTargetSnapshots.length}
+                                onMouseDown={e => e.stopPropagation()}
+                                onClick={e => { e.stopPropagation(); if (rebalTargetSnapshots.length) setRestoreOpen(true); }}
+                                className={`shrink-0 relative z-20 p-0.5 rounded transition-colors ${
+                                  rebalTargetSnapshots.length
+                                    ? 'text-emerald-500/70 hover:text-emerald-300 hover:bg-emerald-900/20'
+                                    : 'text-gray-700 cursor-not-allowed'
+                                }`}
+                                title={rebalTargetSnapshots.length
+                                  ? `과거 목표비중 불러오기 — 기록 ${rebalTargetSnapshots.length}건 (달력에서 날짜를 골라 현재 표에 적용)`
+                                  : '이 계좌에 기록된 목표비중이 없습니다'}
+                              ><CalendarClock size={11} /></button>
                             </div>
                             <div className="flex items-center justify-center gap-1.5">
                               <div className="flex flex-col items-center leading-none select-none">
@@ -1506,6 +1552,20 @@ export default function RebalancingPanel({
             </div>
           </div>
         </div>}
+        {/* ⚠️ z: 복원 1070 < PIN 1080 — 고정 모드 복원은 PIN을 통과해야 하는데 복원 모달이 위에 있으면
+            PIN 입력창이 가려져 잠금이 사실상 우회된다. 둘 다 비차단 플로팅 창(1050/1060)보다는 위. */}
+        <RebalanceTargetRestoreModal
+          open={restoreOpen}
+          onClose={() => setRestoreOpen(false)}
+          snapshots={rebalTargetSnapshots}
+          currentRows={rebalanceData}
+          targetMode={settings.targetMode === 'variable' ? 'variable' : 'fixed'}
+          targetDate={settings.targetDate || ''}
+          locked={isFixedLocked}
+          pinPending={!!pinModal}
+          onRequestPin={(cb) => setPinModal({ onAuthorized: cb })}
+          onApply={applyRestoredTargets}
+        />
         <RebalanceTargetPinModal
           open={!!pinModal}
           authUser={authUser}

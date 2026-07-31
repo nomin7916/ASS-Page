@@ -787,6 +787,13 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   </div>
                 );
               })()}
+              {/* 이 기록을 현재 표에 되돌리는 경로 안내. ⚠️ 여기에 '적용' 버튼을 두지 말 것 —
+                  달력은 비활성·삭제 계좌 기록도 보여주고, 별도 브라우저 창은 종목 정보를 받지 않아
+                  버튼이 무반응이 되며, 창 위에서는 PIN·확인창이 가려진다. */}
+              <div className="mt-2 pt-2 border-t border-gray-800 text-[10px] text-gray-600 leading-relaxed">
+                이 목표비중으로 되돌리려면 해당 계좌를 연 뒤 리밸런싱 표 <b className="text-gray-500">목표</b> 열의
+                <span className="text-emerald-500/70"> 📅 </span>아이콘에서 이 날짜를 선택하세요.
+              </div>
               {!readOnly && (
                 <div className="flex justify-end pt-2">
                   {/* 칩에 휴지통을 넣을 폭이 없어 삭제는 여기로 — 즉시 삭제(창 위에선 confirm이 가려진다) */}
