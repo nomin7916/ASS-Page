@@ -437,5 +437,41 @@ ok('#35 flowMap.ts: @ts-nocheck 금지(이 파일의 타입이 유일한 안전�
 // ⚠️ '_' 접두 런타임 필드를 두면 순환 참조로 지문이 죽는다 → 타입에 없어야 한다.
 ok('#36 flowMap.ts: FlowNode/FlowEdge 에 _ 접두 필드 없음', !/^\s+_[A-Za-z]\w*\s*[?:]/m.test(mod));
 
+// ⚠️ #37 은 흐름도 전용 계약이 아니라 **빌드 차단 사고 재발 방지**다. 이 저장소에서 두 번 났다:
+//    ① `(` 직후(표현식 위치)에 `{/* */}` 를 두어 빈 객체 리터럴로 파싱된 사고
+//    ② JSX 주석 **본문에 `*/` 를 포함**시켜(주석 안에서 주석 문법을 설명하다) 주석이 조기 종료된 사고
+//    둘 다 esbuild 파싱 에러라 `vite build` 가 통째로 죽는데, 이 환경에는 node 가 없어 빌드로는
+//    못 잡는다.
+//    ⚠️ 규칙은 "첫 `*/` 뒤가 `}` 인가" 가 **아니다** — 실제 사고가 정확히 그 형태로 통과한다
+//       (본문에 주석 문법을 적으면 첫 `*/` 가 그 안쪽 것이라 뒤에 `}` 가 오고, 남은 산문이
+//        JSX 자식이 되어 마지막 `}` 에서 터진다). 올바른 규칙: **본문에 `/*` 가 있으면 안 된다.**
+console.log('\n■ JSX 주석 안전성 (빌드 차단 사고 재발 방지)');
+{
+  const files = [
+    'src/components/FlowBoard.tsx', 'src/components/FlowCanvas.tsx',
+    'src/components/FlowInspector.tsx', 'src/components/FlowWindow.tsx',
+    'src/components/AdminPage.tsx', 'src/components/UserInfoBar.tsx',
+    'src/components/AccountTabBar.tsx', 'src/App.tsx', 'src/main.tsx',
+  ];
+  const bad = [];
+  for (const rel of files) {
+    let src;
+    try { src = readFileSync(join(ROOT, rel), 'utf8'); } catch { continue; }
+    let i = 0;
+    while ((i = src.indexOf('{/*', i)) !== -1) {
+      const end = src.indexOf('*/', i + 3);
+      if (end === -1) { bad.push(`${rel}: 닫히지 않은 JSX 주석`); break; }
+      const body = src.slice(i + 3, end);
+      const lineNo = src.slice(0, i).split('\n').length;
+      // 본문에 `/*` → 주석 문법을 산문으로 적었다는 뜻 = 조기 종료
+      if (body.includes('/*')) bad.push(`${rel}:${lineNo} — 주석 본문에 '/*'가 있어 조기 종료됨`);
+      // 첫 `*/` 뒤가 `}`도 아니고 공백/개행도 아니면 주석이 JSX 표현식을 닫지 못한 것
+      else if (src[end + 2] !== '}') bad.push(`${rel}:${lineNo} — JSX 주석이 '}'로 닫히지 않음`);
+      i = end + 2;
+    }
+  }
+  ok(`#37 JSX 주석이 조기 종료되지 않는다${bad.length ? `\n      ${bad.join('\n      ')}` : ''}`, bad.length === 0);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:flow — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
