@@ -422,8 +422,10 @@ const mod = readFileSync(join(ROOT, 'src/flowMap.ts'), 'utf8');
 ok('#27 App.tsx: flowMaps state 선언', /const\s*\[\s*flowMaps\s*,\s*setFlowMaps\s*\]\s*=\s*useState/.test(app));
 // ⚠️ 지문 누락 = portfolioUpdatedAt 미상승 = STATE 저장 통째 스킵. 이 저장소에서 5회 재발한 버그 클래스.
 ok('#28 App.tsx: portfolioStructureKey 지문에 flowFingerprint(flowMaps)', /flowFingerprint\(\s*flowMaps\s*\)/.test(app));
-// ⚠️ 미러 ref 누락 = 로드 경로가 ref 를 갱신하지 않아 종료 커밋이 빈 배열로 Drive 를 덮는다(blocker).
-ok('#29 App.tsx: flowMapsRef 미러 effect', /flowMapsRef\.current\s*=\s*flowMaps\s*;?\s*\}\s*,\s*\[\s*flowMaps\s*\]/.test(app));
+// ⚠️ 종료 커밋의 값 소스는 FlowBoard 의 localRef 다(flowFlushRef 경유). App 레벨 미러(flowMapsRef)를
+//    두면 로드 경로와 동기화할 의무만 생기고 실제로 읽히지 않아 잘못된 안전감을 준다 → 두지 않는다.
+ok('#29 App.tsx: flushFlowSnapshot 이 flowFlushRef 로 미승격 편집을 회수', /flowFlushRef\.current\s*\?\.\s*\(\s*\)/.test(app));
+ok('#29b App.tsx: 죽은 App 레벨 미러(flowMapsRef)를 되살리지 않았다', !/flowMapsRef\.current\s*=/.test(app));
 ok('#30 App.tsx: applyStateData 에서 normalizeFlowMaps 로 로드', /stateData\.flowMaps/.test(app) && /normalizeFlowMaps\(/.test(app));
 // ⚠️ 리터럴에만 쓰고 로드하지 않으면 매 저장이 빈 배열로 Drive 를 덮는 '영구 파괴'가 된다.
 ok('#31 App.tsx: 저장 payload 리터럴에 flowMaps 포함', /calendarMemos\s*,\s*watchlistGroups\s*,\s*flowMaps\s*,/.test(app));

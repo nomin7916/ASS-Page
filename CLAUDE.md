@@ -53,9 +53,10 @@ src/
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
     ├── LoginGate.tsx             # 로그인 / PIN 인증 게이트
     ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회)
-    ├── FlowBoard.tsx             # 자금 흐름도 전체화면 보드(z=990) — 로컬 사본 + idle 승격
+    ├── FlowBoard.tsx             # 자금 흐름도 보드(z=990) — 로컬 사본 + idle 승격, overlay/page 겸용
     ├── FlowCanvas.tsx            # 흐름도 SVG 캔버스(React.memo) — 드래그·리사이즈·연결
-    ├── FlowInspector.tsx         # 흐름도 속성 패널(날짜·이름·계좌연결·금액·메모)
+    ├── FlowInspector.tsx         # 흐름도 속성 패널(날짜·이름·계좌연결·금액·메모) — id 앵커 draft
+    ├── FlowWindow.tsx            # 흐름도 별도 브라우저 창(/?flowWindow=1) — postMessage 브릿지
     └── AdminPage.tsx             # 관리자 페이지
 ```
 
@@ -1307,9 +1308,25 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 
 ### 자금 흐름도(flowMaps) — 계좌 관계 다이어그램 (⚠️ 회귀 주의)
 
-헤더 **흐름도 아이콘**(AccountTabBar, 통합·개별 뷰 모두)으로 여는 **전체화면 캔버스**. 둥근 사각형·원
-도형을 만들고 자유롭게 선으로 연결하며, 선 위에 라벨을 단다. 도형에는 날짜·이름·금액·메모를 넣고,
-**계좌를 연결하면 계좌명·현재 평가액이 라이브로 표시**된다.
+상단바 **흐름도 아이콘**(`UserInfoBar` — 퀵 링크 설정과 계산기 **사이**, 인라인 SVG `FlowIcon`)으로
+여는 캔버스. 둥근 사각형·원 도형을 만들고 자유롭게 선으로 연결하며, 선 위에 라벨을 단다. 도형에는
+날짜·이름·금액·메모를 넣고, **계좌를 연결하면 계좌명·현재 평가액이 라이브로 표시**된다.
+
+- **기본 동작 = 별도 브라우저 창**(`/?flowWindow=1`). 아이콘 클릭 → `openFlowWindow`가 새 창을 연다.
+  **팝업이 차단되면 인앱 보드로 폴백**(`setShowFlowBoard(true)` + `headerNotice` 안내)하므로 최악의
+  경우가 기존 동작이다. 두 경로 모두 **같은 `FlowBoard` 컴포넌트**를 쓴다(`variant='page'|'overlay'`) —
+  새 창용 캔버스를 복제하면 두 화면이 갈라진다.
+- **⚠️ 새 창은 App을 마운트하지 않는다**(`main.tsx`가 `FLOW_WINDOW_BOOT`을 보고 `<FlowWindow/>`를 렌더).
+  앱을 부팅하면 ① `saveAllToDrive`가 STATE를 통째로 덮어써 두 창이 서로의 편집을 지우고 ② sessionStorage
+  복제로 자동 재인증돼 **두 번째 writer**가 된다. **writer는 끝까지 앱 탭 하나**.
+  `window.open`에 **`noopener` 금지**(opener 브릿지가 기능의 전부 — impersonation 탭과 정반대 규칙),
+  클릭 제스처 직후 **동기** open이라야 팝업 차단을 피한다.
+- **브릿지**(전부 `e.origin === location.origin` 검사 통과분): 창→앱 `flow:ping{need}`(5초)·`flow:maps`
+  / 앱→창 `flow:accounts`(무거움, 지문 게이팅)·`flow:live`(maps+summaries+hideAmounts)·`flow:pong`.
+  **초기 전송의 유일한 트리거는 `ping.need`** — `window.open` 직후 보내면 about:blank라 버려진다.
+  앱 탭 새로고침 시 살아 있는 창의 핑에서 **재입양**(nonce 증가 → 전량 재전송). 쓰기는 입양된 창만.
+  끊김(opener 소멸·무응답) = **`readOnly`** — 저장 버튼만 숨기면 한참 그린 뒤 아무 데도 저장되지 않는다.
+  `flow:accounts`는 계좌를 **투영**해 보낸다(id·name·accountType·deletedAt·isTest + dc-irp 예적금 항목만).
 
 - **핵심 결정: 데이터는 `portfolios[]` 밖 앱 레벨**(`calendarMemos`·`watchlistGroups`와 동급).
   ⚠️ 계좌 객체 안(`p.flowMap`)에 넣지 말 것 — `patchActive`가 `portfolios` 참조를 바꿔
@@ -1321,11 +1338,13 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   않는다**(유일한 만기는 dc-irp 전용 예적금 항목의 `item.endDate`이고 계좌당 여러 개) → 날짜·금액계획·
   메모는 전부 사용자 입력 필드이고, dc-irp 예적금 보유 계좌에만 만기 '제안' 칩을 띄운다(자동 채움 아님).
   `accountNameSnapshot`은 **바인딩 시점 1회만** 기록하는 표시 폴백(purge된 계좌용) — 갱신 금지.
-- **영속화 8지점(하나라도 빠지면 조용한 유실)**: `App.tsx` ① `useState` ② 지문 `flowFingerprint(flowMaps)`
+- **영속화 7지점(하나라도 빠지면 조용한 유실)**: `App.tsx` ① `useState` ② 지문 `flowFingerprint(flowMaps)`
   ③ 저장 payload 리터럴 ④ 저장 effect deps ⑤ `applyStateData`(`normalizeFlowMaps`) ⑥ `applyBackupData`
-  (sticky) ⑦ **`flowMapsRef` 미러 effect** + `useDriveSync.ts` ⑧ `_preserveStickyPersonalData`.
-  ⚠️ ⑦을 빠뜨리면 로드 경로가 ref를 갱신하지 않아 **종료 커밋이 빈 배열로 Drive STATE를 덮어
-  흐름도가 영구 소실**된다(인라인 갱신만으로는 못 덮는다 — `calendarMemosRef`가 미러 effect를 가진 이유).
+  (sticky) + `useDriveSync.ts` ⑦ `_preserveStickyPersonalData`.
+  ⚠️ **App 레벨 미러(`flowMapsRef`)를 두지 말 것** — 종료 커밋의 값 소스는 `FlowBoard`의 `localRef`
+  (`flowFlushRef` 경유)이지 App state가 아니다. 미러를 두면 로드 경로와 동기화할 의무만 생기고 실제로는
+  읽히지 않아 "stale-write를 막는다"는 잘못된 안전감만 준다(`calendarMemosRef`는 커밋이 App에서
+  일어나므로 사정이 다르다). 검증 #29/#29b가 이 계약을 단언한다.
 - **⚠️ sticky 판정은 `flowMapsHaveContent` 공유 함수**(`flowMap.ts`). `length > 0`으로 재지 말 것 —
   보드를 **열기만 해도** 빈 맵 1장이 생겨 백업으로 흐름도를 되살릴 길이 영구히 막힌다(`calendarMemos`는
   빈 항목이 생길 수 없어 length 기준으로도 안전했다). App.tsx와 useDriveSync가 **같은 함수**를 써야
@@ -1350,11 +1369,29 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   1050대(메모 달력·계산기·관심종목)에 두면 그 기능들이 겪은 "창 위에선 confirm/notify가 가려진다"를
   재현하고 결국 확인 없는 즉시 삭제로 후퇴하게 된다. **알려진 한계(수용)**: 벨 알림 팝업(z-999)·
   리밸런싱 투자기록 창(z-1000/1010)·관리자 공지 모달(z-300, 보드가 가림)은 이 층 관계의 결과다.
-- **⚠️ 키 입력·활동 감지**: 보드 루트 `onKeyDownCapture`는 **보드 키를 먼저 처리한 뒤** `stopPropagation`
-  한다(계산기가 열려 있으면 그 window 핸들러가 Delete·Esc·화살표를 수식으로 삼킨다 — 그쪽 가드는
-  input/textarea/select/contentEditable뿐이라 svg·button은 무방비). 그리고 `App.tsx` 비활동 감지
-  리스너는 **document 캡처 단계 + `pointerdown` 포함**으로 등록한다 — 버블이면 이 `stopPropagation`에
-  막혀 "도형 배치·장문 메모"만 하는 세션이 활동으로 집계되지 않아 50분 뒤 로그아웃 모달이 튀어나온다.
+- **⚠️ 인스펙터 draft는 'id 앵커 + 대상변경·언마운트 flush'**(`ownerRef` + `useLayoutEffect`).
+  `onBlur`만 믿고 **현재 선택**(`selNode`)에 커밋하면 두 가지가 조용히 깨진다:
+  ① 도형 A 이름을 타이핑하다 캔버스에서 B를 클릭하면 `pointerdown → onSelect(B)` 리렌더가 blur보다
+  **먼저** 처리돼(discrete 이벤트 동기 flush) A의 입력값이 **B에 기록**된다.
+  ② 배경 클릭으로 선택이 해제되면 패널이 **언마운트**되는데, 제거된 DOM에는 브라우저가 blur/focusout을
+  발화하지 않아 메모 전체가 **아무 데도 저장되지 않고 사라진다**.
+  → `FlowBoard`는 `patchNodeById`/`patchEdgeById`(**id 기준**)만 노출하고, 리셋 effect는 **passive가
+  아니라 `useLayoutEffect`**여야 한다(passive는 Scheduler 태스크라 blur보다 뒤처진다).
+  ⚠️ App의 종료 커밋(`flowFlushRef`)은 이걸 **못 덮는다** — 그건 `FlowBoard`의 `localRef`만 회수하고
+  미커밋 draft는 `FlowInspector` 로컬 state에만 있다.
+- **⚠️ 키 입력·활동 감지**: 보드 루트 `onKeyDownCapture`는 보드 키를 먼저 처리한 뒤 **실제로 소비한
+  키(Escape·Delete·Backspace)에만** `stopPropagation` 한다. 무조건 끊으면 React 18이 root에 붙인 캡처
+  리스너에서 네이티브 이벤트가 멈춰 하위의 bubble `onKeyDown`이 전부 죽고, 인스펙터의 **Enter 커밋이
+  먹통**이 된다(사용자는 커밋했다고 믿은 채 다른 도형을 눌러 위 ①을 직접 유발한다).
+  그리고 `App.tsx` 비활동 감지 리스너는 **document 캡처 단계 + `pointerdown` 포함**으로 등록한다 —
+  버블이면 이 `stopPropagation`에 막혀 "도형 배치·장문 메모"만 하는 세션이 활동으로 집계되지 않아
+  50분 뒤 로그아웃 모달이 튀어나온다.
+- **⚠️ 보드는 열 때 시드하되, 아직 dirty하지 않으면 늦게 도착한 App state를 채택한다**.
+  `LoadingOverlay`는 로드 완료와 무관하게 20초 뒤 자동 해제되므로, 느린 회선에서 Drive의 flowMaps가
+  도착하기 전에 보드를 열면 '빈 맵 1장'으로 시드되고, 도형 하나만 그려도 2.5초 뒤 승격이 **저장돼 있던
+  흐름도 전체를 빈 맵으로 대체**한다(복구 불가). 편집 중(dirty)에는 채택하지 않는다(의도된 last-writer-wins).
+- **⚠️ 금액 표시는 항상 원화**. `portfolioSummaries[].currentEval`은 해외계좌도 **원화 환산값**이라
+  `accountType === 'overseas'`에 `$`를 붙이면 약 **1,390배**로 오표시된다.
 - **⚠️ 순수성**: 노드/엣지 생성(`generateId`)·선택 변경·ref 대입을 `setState` **업데이터 안에서** 하지
   말 것. StrictMode 개발 모드의 업데이터 이중 호출에서 서로 다른 id가 만들어지고(React는 두 번째 결과만
   채택) 첫 호출의 부수효과가 남아 선택이 어긋난다. `localRef`가 로컬 사본의 단일 소스다.
@@ -1386,8 +1423,11 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 - **소프트 상한**: 맵 5 / 노드 150 / 엣지 300(≈85KB). 백업 22본·관리자 포털 순차 로드로 복제되므로
   무한 증식만 막는다. 상한 도달 시 툴바 배너로 알린다.
 - **범위 밖(의도)**: undo/redo(Drive 폴링이 타 기기 편집을 받아온 뒤 undo가 최신값을 덮는다 —
-  `RebalanceTargetRestoreModal`이 같은 이유로 포기), 별도 브라우저 창, PNG 내보내기, 자동 레이아웃,
+  `RebalanceTargetRestoreModal`이 같은 이유로 포기), PNG 내보내기, 자동 레이아웃,
   다중 캔버스 UI(데이터 모델은 배열이나 현재 1장 고정), 계좌 삭제 시 노드 캐스케이드 정리.
+  **알려진 한계**: 인앱 보드와 새 창을 동시에 열면 이론상 마지막 쓰기가 이긴다(아이콘이 새 창을 열 때
+  인앱 보드를 닫으므로 실사용에서 겹치는 구간은 짧다 — 메모 달력 창과 동일 절충).
+  계좌가 0개면 저장 effect가 조기 반환해 흐름도가 저장되지 않는다(chartPrefs와 동일한 기존 한계).
 - 검증: `npm run verify:flow` (미러 #1~#26 + 소스 텍스트 가드 #27~#36).
   참조 구현은 `flowMap.ts`의 `normalizeFlowMaps`·`flowMapsHaveContent`·`flowFingerprint`·`edgePath`·
   `removeNode`·`pruneOrphanEdges`·`roundNode`·`resolveFlowNodeView`·`countDanglingNodes` 본문과

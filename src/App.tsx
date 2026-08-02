@@ -378,11 +378,10 @@ export default function App() {
   // 종료 경로(pagehide/visibilitychange-hidden/비활동 로그아웃)에서 useDriveSync가 동기 호출
   const rebalExitCommitRef = useRef<(() => any) | null>(null);
   // ── 자금 흐름도(flowMaps) ──
-  // ⚠️ flowMaps state의 최신 미러. calendarMemosRef와 동일한 이유로 **effect 미러가 필수**다 —
-  //    인라인 갱신만 두면 applyStateData/applyBackupData(로드 경로)가 setFlowMaps만 호출하고 ref는
-  //    낡은 배열을 물고 있어, 종료 커밋이 그 낡은/빈 값을 fresh portfolioUpdatedAt과 함께 Drive에
-  //    되써 흐름도가 통째로 소멸한다.
-  const flowMapsRef = useRef<any[]>([]);
+  // ⚠️ 여기에 `flowMapsRef` 같은 App 레벨 미러를 두지 말 것. 종료 커밋의 값 소스는 **FlowBoard의
+  //    localRef**(flowFlushRef 경유)이지 App state가 아니다. App 미러를 두면 로드 경로
+  //    (applyStateData/applyBackupData)와 동기화할 의무만 생기고, 실제로 읽히지 않아 "stale-write를
+  //    막는다"는 잘못된 안전감만 준다(calendarMemosRef는 커밋이 App에서 일어나므로 사정이 다르다).
   // FlowBoard가 마운트 시 등록하고 **언마운트 시 null로 되돌린다**(ErrorBoundary fallback·게이팅 OFF 포함).
   const flowExitCommitRef = useRef<(() => any) | null>(null);
   // 종료 커밋 합성 슬롯 — useDriveSync의 beforeExitSnapshotRef는 단 하나뿐이라 리밸/흐름도를 여기서 합친다.
@@ -1487,9 +1486,6 @@ export default function App() {
   // 리밸런싱 표 '목표(%)' 열 헤더의 날짜(settings.targetDate) 칸에 그 시점 목표 비중 스냅샷을 남긴다.
   // (날짜, portfolioId)당 1건 upsert. 상세 규약·회귀 주의는 CLAUDE.md 전용 섹션 참조.
   useEffect(() => { calendarMemosRef.current = calendarMemos; }, [calendarMemos]);
-  // ⚠️ 흐름도 미러 — 로드 경로(applyStateData/applyBackupData)까지 덮으려면 effect가 필수.
-  //    이 줄을 지우면 종료 커밋이 낡은 배열로 Drive STATE를 덮어 흐름도가 영구 소실된다.
-  useEffect(() => { flowMapsRef.current = flowMaps; }, [flowMaps]);
 
   const buildRebalTargetEntry = (overrideDate) => {
     const p = activePortfolio;
@@ -1688,7 +1684,6 @@ export default function App() {
     let next: any[] | null = null;
     try { next = flowFlushRef.current?.() ?? null; } catch { next = null; }
     if (!next) return null;
-    flowMapsRef.current = next;
     setFlowMaps(next);
     return next;
   };
@@ -1808,6 +1803,83 @@ export default function App() {
     calWinRef.current = w;
     setCalWinBlocked(false);
     setShowCalendarModal(false);
+  };
+
+  // ── 자금 흐름도 '별도 브라우저 창' 브릿지 (`/?flowWindow=1`) ─────────────────────────────
+  // 메모 달력 창과 **완전히 같은 규약**: 새 창은 App을 부팅하지 않고 postMessage로만 대화하며,
+  // 저장은 전부 이 탭을 경유해 기존 STATE 저장 경로로 흐른다 → writer는 끝까지 이 탭 하나.
+  const flowWinRef = useRef(null);
+  const [flowWinNonce, setFlowWinNonce] = useState(0);
+  const [flowWinBlocked, setFlowWinBlocked] = useState(false);
+  const postToFlowWin = (msg) => {
+    const w = flowWinRef.current;
+    if (!w || w.closed) return;
+    try { w.postMessage(msg, window.location.origin); } catch {}
+  };
+  // 새 창이 실제로 읽는 계좌 필드만 투영(dc-irp 예적금은 만기 '제안'에만 쓰이므로 그 항목만).
+  // ⚠️ 전송은 **지문**으로 게이팅한다 — portfolios는 시세 갱신마다 새 배열이라 지문 없이 보내면
+  //    수십 초마다 전량이 복제된다. 새 창이 붙기 전(nonce 0)에는 계산 자체를 건너뛴다.
+  const flowWinAccounts = useMemo(() => (portfolios || []).map(p => ({
+    id: p.id, name: p.name, accountType: p.accountType,
+    deletedAt: p.deletedAt, isTest: p.isTest,
+    portfolio: (p.portfolio || [])
+      .filter(it => it && it.type === 'savings' && it.endDate)
+      .map(it => ({ id: it.id, type: 'savings', name: it.name, endDate: it.endDate })),
+  })), [portfolios]);
+  const flowWinAccountsKey = useMemo(() => (flowWinNonce === 0 ? '' : JSON.stringify(flowWinAccounts)), [flowWinAccounts, flowWinNonce]);
+  const flowWinSummaries = useMemo(() => (portfolioSummaries || []).map(s => ({
+    id: s.id, currentEval: s.currentEval, deletedAt: s.deletedAt,
+  })), [portfolioSummaries]);
+
+  useEffect(() => {
+    postToFlowWin({ type: 'flow:accounts', accounts: flowWinAccounts });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flowWinAccountsKey, flowWinNonce]);
+
+  useEffect(() => {
+    postToFlowWin({ type: 'flow:live', maps: flowMaps, summaries: flowWinSummaries, hideAmounts });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flowMaps, flowWinSummaries, hideAmounts, flowWinNonce]);
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string' || !d.type.startsWith('flow:')) return;
+      if (d.type === 'flow:ping') {
+        // `d.need`가 초기 전송의 유일한 트리거(window.open 직후 보내면 about:blank라 버려진다).
+        // 이 탭이 새로고침되면 flowWinRef가 비므로 살아 있는 창의 핑에서 **재입양**한다.
+        if (d.need || flowWinRef.current !== e.source) { flowWinRef.current = e.source; setFlowWinNonce(n => n + 1); }
+        try { e.source?.postMessage({ type: 'flow:pong' }, window.location.origin); } catch {}
+        return;
+      }
+      if (!flowWinRef.current || e.source !== flowWinRef.current) return;   // 쓰기는 입양된 창만
+      if (d.type === 'flow:maps') {
+        if (!Array.isArray(d.maps)) return;
+        setFlowMaps(normalizeFlowMaps(d.maps));
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다.
+  // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다(impersonation 탭과 정반대 규칙).
+  const openFlowWindow = () => {
+    const existing = flowWinRef.current;
+    if (existing && !existing.closed) { try { existing.focus(); } catch {} setShowFlowBoard(false); return; }
+    const sw = (window.screen && window.screen.availWidth) || 1440;
+    const sh = (window.screen && window.screen.availHeight) || 900;
+    const w = window.open('/?flowWindow=1', 'ass-flow', `width=${sw},height=${sh},left=0,top=0`);
+    if (!w) {
+      // 팝업 차단 → 인앱 보드로 폴백(최악의 경우가 기존 동작이 되게 한다)
+      setFlowWinBlocked(true);
+      setShowFlowBoard(true);
+      return;
+    }
+    flowWinRef.current = w;
+    setFlowWinBlocked(false);
+    setShowFlowBoard(false);
   };
 
   const handleSave = () => {
@@ -2917,6 +2989,8 @@ export default function App() {
           canAccessDividendTax={canAccessDividendTax}
           onOpenDividendTax={() => setShowDividendTaxPage(true)}
           onAppClose={handleAppClose}
+          canAccessFlow={flowAccess}
+          onOpenFlow={openFlowWindow}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
           youtubeUrl={youtubeAccess ? youtubeUrl : ''}
@@ -2972,8 +3046,6 @@ export default function App() {
           marketIndicators={marketIndicators}
           onOpenCalendar={() => { setCalWinBlocked(false); setShowCalendarModal(true); }}
           onOpenWatchlist={() => setShowWatchlist(true)}
-          canAccessFlow={flowAccess}
-          onOpenFlow={() => setShowFlowBoard(true)}
         />
         </div>
 
@@ -3528,6 +3600,7 @@ export default function App() {
             // 관리자 impersonation 중에는 읽기 전용 — 목표비중과 달리 흐름도는 undo도 없고
             // 백업 복원으로도 되돌릴 수 없는 sticky 데이터라, 무통지 편집을 허용하지 않는다.
             readOnly={!!adminViewingAs}
+            headerNotice={flowWinBlocked ? '팝업이 차단돼 별도 창을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : null}
           />
         </ErrorBoundary>
       )}

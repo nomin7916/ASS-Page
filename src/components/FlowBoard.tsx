@@ -47,6 +47,11 @@ export default function FlowBoard({
   hideAmounts,
   confirm,
   readOnly = false, // 관리자 impersonation 등
+  // 'overlay' = 앱 안의 전체화면 오버레이 / 'page' = 별도 브라우저 창(FlowWindow)
+  // ⚠️ page 모드에는 ConfirmDialog가 없다(App이 마운트되지 않음) → confirm 미전달 시 즉시 삭제.
+  //    메모 달력 별도 창과 동일 규약(창 위에서는 확인창을 띄울 수 없다).
+  variant = 'overlay',
+  headerNotice = null,
 }) {
   const [mapsLocal, setMapsLocal] = useState(maps);
   const [selectedId, setSelectedId] = useState(null);
@@ -77,6 +82,19 @@ export default function FlowBoard({
     setNotice(dang > 0 ? `계좌 연결 ${dang}건이 끊겨 있습니다(계좌가 삭제됐거나 백업으로 교체됨).` : '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // ⚠️ 아직 편집을 시작하지 않았으면 **늦게 도착한 App state를 채택**한다.
+  //    LoadingOverlay는 로드 완료와 무관하게 20초 뒤 자동 해제되므로, 느린 회선에서 Drive의
+  //    flowMaps가 도착하기 전에 보드를 열면 위 시딩이 '빈 맵 1장'을 만든다. 그 상태로 도형 하나만
+  //    그려도 2.5초 뒤 승격이 **저장돼 있던 흐름도 전체를 빈 맵으로 대체**한다(복구 불가).
+  //    편집 중(dirty)일 때는 채택하지 않는다 — 그건 기존의 의도된 last-writer-wins다.
+  useEffect(() => {
+    if (!open || dirtyRef.current) return;
+    if (!Array.isArray(maps) || maps.length === 0) return;
+    if (maps === localRef.current) return;
+    localRef.current = maps;
+    setMapsLocal(maps);
+  }, [open, maps]);
 
   // ⚠️ 미승격 편집이 없으면 반드시 null — 항상 값을 반환하면 alt-tab마다 4파일 write가 강제된다.
   const flush = useCallback(() => {
@@ -152,9 +170,10 @@ export default function FlowBoard({
     [portfolioById, summaryById],
   );
 
-  const formatAmount = useCallback((v, accountType) => (
-    accountType === 'overseas' ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })}` : formatCurrency(v)
-  ), []);
+  // ⚠️ 항상 원화. `portfolioSummaries[].currentEval`은 해외계좌도 **원화로 환산된 값**이라
+  //    accountType==='overseas'일 때 '$'를 붙이면 원화 금액에 달러 기호가 붙어 약 1,390배로
+  //    오표시된다(USD로 보이려면 별도 USD 소스가 필요한데 그건 이 뷰의 소스가 아니다).
+  const formatAmount = useCallback((v) => formatCurrency(v), []);
 
   // ⚠️ 노드/엣지 생성(generateId)과 선택 변경은 업데이터 **밖**에서 수행한다(위 commit 주석 참조).
   const addNode = useCallback((kind) => {
@@ -192,15 +211,30 @@ export default function FlowBoard({
   const selEdge = map && String(selectedId || '').startsWith('edge:')
     ? map.edges.find(e => e.id === String(selectedId).slice(5)) : null;
 
-  const patchNode = useCallback((o) => {
-    if (!selNode) return;
-    patchMap(cur => ({ ...cur, nodes: cur.nodes.map(n => (n.id === selNode.id ? { ...n, ...o } : n)) }));
-  }, [patchMap, selNode]);
+  // ⚠️ **id 기준** 패치 — 현재 선택(selNode)에 바인딩하면 인스펙터의 미커밋 draft가 '새로 선택된'
+  //    도형에 기록된다(타이핑 중 다른 도형 클릭 시 그쪽 이름이 덮어써짐). 대상이 이미 사라졌으면
+  //    조용히 no-op이 되는 것도 이 방식의 안전장치다.
+  const patchNodeById = useCallback((id, o) => {
+    if (!id) return;
+    patchMap(cur => {
+      const idx = cur.nodes.findIndex(n => n.id === id);
+      if (idx < 0) return cur;
+      const nodes = cur.nodes.slice();
+      nodes[idx] = { ...nodes[idx], ...o };
+      return { ...cur, nodes };
+    });
+  }, [patchMap]);
 
-  const patchEdge = useCallback((o) => {
-    if (!selEdge) return;
-    patchMap(cur => ({ ...cur, edges: cur.edges.map(e => (e.id === selEdge.id ? { ...e, ...o } : e)) }));
-  }, [patchMap, selEdge]);
+  const patchEdgeById = useCallback((id, o) => {
+    if (!id) return;
+    patchMap(cur => {
+      const idx = cur.edges.findIndex(e => e.id === id);
+      if (idx < 0) return cur;
+      const edges = cur.edges.slice();
+      edges[idx] = { ...edges[idx], ...o };
+      return { ...cur, edges };
+    });
+  }, [patchMap]);
 
   const deleteNode = useCallback(async (id) => {
     // ConfirmDialog(z-1000)가 보드(990)보다 위라 정상적으로 보인다 — 즉시 삭제로 후퇴하지 말 것.
@@ -254,7 +288,14 @@ export default function FlowBoard({
     } else if (e.key === 'Escape') {
       e.target.blur?.();
     }
-    e.stopPropagation();
+    // ⚠️ **보드가 실제로 소비한 키에만** 전파를 끊는다. 무조건 stopPropagation 하면 React 18이
+    //    root에 붙인 캡처 리스너에서 네이티브 이벤트가 멈춰 타깃까지 내려가지 못하고, 그 결과
+    //    하위의 bubble onKeyDown이 전부 죽는다 → 인스펙터의 Enter 커밋(`e.currentTarget.blur()`)이
+    //    먹통이 되고, 사용자는 커밋했다고 믿은 채 다른 도형을 눌러 편집이 새어 나간다.
+    //    계산기 window 핸들러 차단이라는 원래 목적은 이 키들만 끊어도 그대로 달성된다.
+    if (e.key === 'Escape' || (!typing && (e.key === 'Delete' || e.key === 'Backspace'))) {
+      e.stopPropagation();
+    }
   };
 
   if (!open) return null;
@@ -302,11 +343,16 @@ export default function FlowBoard({
             <Save size={12} /> {dirty ? '저장 대기' : '저장됨'}
           </button>
         )}
-        <button onClick={closeBoard} className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition" title="닫기 (Esc)">
+        <button onClick={closeBoard} className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition" title={variant === 'page' ? '창 닫기' : '닫기 (Esc)'}>
           <X size={16} />
         </button>
       </div>
 
+      {headerNotice && (
+        <div className="px-3 py-1.5 text-[11px] text-amber-300 bg-amber-900/20 border-b border-amber-800/40 shrink-0">
+          {headerNotice}
+        </div>
+      )}
       {notice && (
         <div className="px-3 py-1.5 text-[11px] text-amber-300 bg-amber-900/20 border-b border-amber-800/40 flex items-center gap-2 shrink-0">
           <span>{notice}</span>
@@ -353,8 +399,8 @@ export default function FlowBoard({
             view={selNode ? viewOf(selNode) : null}
             edge={selEdge}
             accountOptions={accountOptions}
-            onPatchNode={patchNode}
-            onPatchEdge={patchEdge}
+            onPatchNodeById={patchNodeById}
+            onPatchEdgeById={patchEdgeById}
             onDeleteNode={deleteNode}
             onDeleteEdge={deleteEdge}
             onClose={() => setSelectedId(null)}

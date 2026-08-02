@@ -4,20 +4,6 @@ import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDr
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 import HeaderMarketChips from './HeaderMarketChips';
 
-// 자금 흐름도 아이콘 — 인라인 SVG.
-// ⚠️ lucide-react의 Workflow/Share2/Network 계열을 쓰지 말 것: 이 저장소는 lucide를 정확 버전
-//    (0.577.0)으로 고정하면서 package-lock.json이 없고 node_modules도 없어, 해당 아이콘이 그
-//    버전에 실재하는지 확인할 수단이 없다. 없으면 undefined 컴포넌트 렌더로 AccountTabBar가
-//    던지고, 이 컴포넌트는 ErrorBoundary 격리 밖이라 앱 화면 전체가 오류 페이지가 된다.
-const FlowIcon = ({ size = 14 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="2" y="3" width="8" height="6" rx="1.5" />
-    <rect x="14" y="15" width="8" height="6" rx="1.5" />
-    <path d="M6 9v5a2 2 0 0 0 2 2h6" />
-  </svg>
-);
-
 export default function AccountTabBar({
   portfolios,
   showIntegratedDashboard,
@@ -49,9 +35,6 @@ export default function AccountTabBar({
   marketIndicators,
   onOpenCalendar,
   onOpenWatchlist,
-  // 자금 흐름도 — 기본값 false = fail-closed(prop 미전달 시 아이콘 미렌더)
-  canAccessFlow = false,
-  onOpenFlow,
 }) {
   const stateFileInputRef = React.useRef(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -355,16 +338,6 @@ export default function AccountTabBar({
             </button>
             <input type="file" ref={stateFileInputRef} onChange={handleImportStateFile} className="hidden" accept=".json" />
           </>
-        )}
-        {/* 자금 흐름도: 관리자 또는 flowEnabled 사용자만. OFF면 아이콘 자체를 렌더하지 않는다. */}
-        {canAccessFlow && (
-          <button
-            onClick={onOpenFlow}
-            title="자금 흐름도"
-            className="p-1.5 hover:bg-gray-800 rounded transition text-indigo-400 hover:text-indigo-300"
-          >
-            <FlowIcon size={14} />
-          </button>
         )}
         {/* 메모 달력: 통합 대시보드·개별 계좌 모두 우측 끝에 항상 노출 (어디서든 메모 가능) */}
         <button

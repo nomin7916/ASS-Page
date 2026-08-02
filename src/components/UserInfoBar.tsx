@@ -1,6 +1,20 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { Settings, Lock, Link2, LogOut, FileSpreadsheet, Power, LayoutDashboard, Calculator, Youtube, X, Bell, TrendingUp } from 'lucide-react';
+
+// 자금 흐름도 아이콘 — 인라인 SVG(도형 2개 + 연결선).
+// ⚠️ lucide-react의 Workflow/Share2/Network 계열을 쓰지 말 것: 이 저장소는 lucide를 정확 버전
+//    (0.577.0)으로 고정하면서 package-lock.json이 없고 node_modules도 없어, 그 아이콘이 이 버전에
+//    실재하는지 확인할 수단이 없다. 없으면 undefined 컴포넌트 렌더로 이 상단바가 던지는데,
+//    UserInfoBar는 ErrorBoundary 격리 밖이라 앱 화면 전체가 오류 페이지로 대체된다.
+const FlowIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="2" y="3" width="8" height="6" rx="1.5" />
+    <rect x="14" y="15" width="8" height="6" rx="1.5" />
+    <path d="M6 9v5a2 2 0 0 0 2 2h6" />
+  </svg>
+);
 import { ADMIN_EMAIL } from '../config';
 import HeaderMarketChips from './HeaderMarketChips';
 
@@ -47,6 +61,9 @@ export default function UserInfoBar({
   onAppClose,
   showCalculator,
   onToggleCalculator,
+  // 자금 흐름도 — 기본값 false = fail-closed
+  canAccessFlow = false,
+  onOpenFlow,
   youtubeUrl,
   youtubeEnabled = false,
   notebookLinks = [],
@@ -256,6 +273,17 @@ export default function UserInfoBar({
           </>
         )}
 
+        {/* 자금 흐름도 — 퀵 링크 설정과 계산기 사이. 관리자 또는 flowEnabled 사용자만 노출.
+            ⚠️ 기본값 false = fail-closed(prop 미전달 시 아이콘 미렌더) — canAccessDividendTax와 동일 패턴. */}
+        {canAccessFlow && (
+          <button
+            onClick={onOpenFlow}
+            title="자금 흐름도 (새 창)"
+            className="text-gray-500 hover:text-indigo-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+          >
+            <FlowIcon size={14} />
+          </button>
+        )}
         {onToggleCalculator && (
           <button
             onClick={onToggleCalculator}
