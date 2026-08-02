@@ -860,10 +860,12 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                         )}
                       </div>
                     </div>
-                    {/* 기능 ON/OFF 토글 — 비관리자 전용 */}
+                    {/* 기능 ON/OFF 토글 — 비관리자 전용.
+                        ⚠️ flex-wrap 필수 — 라벨 길이가 시트 헤더에서 오므로 예측 불가하고,
+                        7개가 되면 좁은 폭에서 잘려 클릭 불가가 된다(분배금 툴바와 동일 처방).
+                        ⚠️ 이 주석을 아래 `(` 안쪽으로 옮기지 말 것 — 거기는 표현식 위치라
+                        `{/* */}`가 JSX 주석이 아니라 빈 객체 리터럴로 파싱돼 빌드가 깨진다. */}
                     {!isAdminUser && (
-                      {/* ⚠️ flex-wrap 필수 — 라벨 길이가 시트 헤더에서 오므로 예측 불가하고,
-                          7개가 되면 좁은 폭에서 잘려 클릭 불가가 된다(분배금 툴바와 동일 처방). */}
                       <div className="flex flex-wrap items-center gap-1 mt-1.5 ml-4">
                         {featureDefs.map(({ feat, label, val, onCls, offCls }) => {
                           const togKey = `${u.email}:${feat}`;
