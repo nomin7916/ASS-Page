@@ -15,7 +15,8 @@
     "verify:twr": "node scripts/verify-twr.mjs",
     "verify:fx": "node scripts/verify-fx.mjs",
     "verify:brl": "node scripts/verify-brl-bond.mjs",
-    "verify:rebal-restore": "node scripts/verify-rebal-restore.mjs"
+    "verify:rebal-restore": "node scripts/verify-rebal-restore.mjs",
+    "verify:flow": "node scripts/verify-flow.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

@@ -7,6 +7,7 @@ import {
   grantAdminReadAccess, revokeAdminReadAccess,
   getManualLatestEntry,
 } from '../driveStorage';
+import { flowMapsHaveContent } from '../flowMap';
 
 function _stripStateForSave(stateData: any) {
   const { stockHistoryMap: _s, marketIndices: _m, marketIndicators: _mi, indicatorHistoryMap: _ih, ...core } = stateData;
@@ -20,11 +21,17 @@ function _stripStateForSave(stateData: any) {
 function _preserveStickyPersonalData(stateCore: any, current: any) {
   const curMemos = current?.calendarMemos;
   const curWatch = current?.watchlistGroups;
+  const curFlow = current?.flowMaps;
   const keepMemos = curMemos && Object.keys(curMemos).length > 0;
   const keepWatch = Array.isArray(curWatch) && curWatch.length > 0;
+  // ⚠️ 흐름도는 length가 아니라 flowMapsHaveContent('내용이 있는가')로 판정한다 — 보드를 열기만 해도
+  //    빈 맵 1장이 생겨 length 기준이면 백업 복원 경로가 영구히 막힌다. App.tsx applyBackupData와
+  //    **같은 함수**를 공유해야 in-memory와 Drive write가 갈리지 않는다(판정식 손복제 금지).
+  const keepFlow = flowMapsHaveContent(curFlow);
   return {
     calendarMemos: keepMemos ? curMemos : (stateCore.calendarMemos ?? curMemos),
     watchlistGroups: keepWatch ? curWatch : (stateCore.watchlistGroups ?? curWatch),
+    flowMaps: keepFlow ? curFlow : (stateCore.flowMaps ?? curFlow),
   };
 }
 import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';

@@ -46,6 +46,8 @@ import FloatingCalculator from './components/FloatingCalculator';
 import WatchlistPopup from './components/WatchlistPopup';
 import ErrorBoundary from './components/ErrorBoundary';
 import { FX_DEFAULT, FX_MIN_SLOTS, normalizeFxCurrencies, normalizeFxSlotCount } from './fxRates';
+import FlowBoard from './components/FlowBoard';
+import { normalizeFlowMaps, flowFingerprint, flowMapsHaveContent } from './flowMap';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -153,7 +155,7 @@ export default function App() {
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
-  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false });
+  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
@@ -315,6 +317,8 @@ export default function App() {
   const [calendarMemos, setCalendarMemos] = useState<Record<string, any[]>>({});
   const [showWatchlist, setShowWatchlist] = useState(false);
   const [watchlistGroups, setWatchlistGroups] = useState<any[]>([]);
+  const [showFlowBoard, setShowFlowBoard] = useState(false);
+  const [flowMaps, setFlowMaps] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
   const [rebalanceSortConfigMap, setRebalanceSortConfigMap] = useState<Record<string, { key: string | null, direction: number }>>({});
@@ -373,6 +377,16 @@ export default function App() {
   const rebalCommitRef = useRef<any>(null);
   // 종료 경로(pagehide/visibilitychange-hidden/비활동 로그아웃)에서 useDriveSync가 동기 호출
   const rebalExitCommitRef = useRef<(() => any) | null>(null);
+  // ── 자금 흐름도(flowMaps) ──
+  // ⚠️ flowMaps state의 최신 미러. calendarMemosRef와 동일한 이유로 **effect 미러가 필수**다 —
+  //    인라인 갱신만 두면 applyStateData/applyBackupData(로드 경로)가 setFlowMaps만 호출하고 ref는
+  //    낡은 배열을 물고 있어, 종료 커밋이 그 낡은/빈 값을 fresh portfolioUpdatedAt과 함께 Drive에
+  //    되써 흐름도가 통째로 소멸한다.
+  const flowMapsRef = useRef<any[]>([]);
+  // FlowBoard가 마운트 시 등록하고 **언마운트 시 null로 되돌린다**(ErrorBoundary fallback·게이팅 OFF 포함).
+  const flowExitCommitRef = useRef<(() => any) | null>(null);
+  // 종료 커밋 합성 슬롯 — useDriveSync의 beforeExitSnapshotRef는 단 하나뿐이라 리밸/흐름도를 여기서 합친다.
+  const exitCommitRef = useRef<(() => any) | null>(null);
   // 목표 날짜 변경 디바운스 타이머 — 소유 계좌(pid)를 함께 실어 늦은 발화를 폐기
   const rebalDateTimerRef = useRef<{ t: any; pid: string; date: string } | null>(null);
   const prevActivePortfolioIdRef = useRef<string | null>(null);
@@ -473,7 +487,7 @@ export default function App() {
     // 종료 계열 저장(pagehide·visibilitychange hidden·비활동 로그아웃) 직전에 동기 호출 —
     // 브라우저 X·새로고침·로그아웃이 '앱 닫기'의 지배적 경로이고, 그 경로는 saveStateRef만 저장하므로
     // 여기서 커밋하지 않으면 목표비중 기록이 영영 생성되지 않는다(dirty ref는 메모리라 함께 소멸).
-    beforeExitSnapshotRef: rebalExitCommitRef,
+    beforeExitSnapshotRef: exitCommitRef,
     onForceLogout: () => {
       // 새 탭 관리자 접속 중에는 reload가 ?adminView를 유지해 재부팅 루프가 되므로 탭을 닫는다.
       if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }
@@ -486,13 +500,21 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
     const handler = () => resetActivity();
-    document.addEventListener('mousedown', handler);
-    document.addEventListener('keydown', handler);
-    document.addEventListener('touchstart', handler);
+    // ⚠️ **캡처 단계** 등록 — 버블로 두면 하위 컴포넌트의 stopPropagation(예: 흐름도 캔버스가
+    //    계산기 전역 키 핸들러로 키가 새는 것을 막는 onKeyDownCapture)이 이 리스너까지 차단해
+    //    "도형 배치·장문 메모 입력만 하는 세션"이 활동으로 집계되지 않는다(50분 뒤 작업 중
+    //    비활동 로그아웃 모달이 튀어나옴). 캡처면 React 트리보다 먼저 발화해 항상 집계된다.
+    // ⚠️ pointerdown 추가 — 드래그 핸들러가 preventDefault를 하면 호환 mousedown이 억제된다.
+    const opts = true;
+    document.addEventListener('mousedown', handler, opts);
+    document.addEventListener('pointerdown', handler, opts);
+    document.addEventListener('keydown', handler, opts);
+    document.addEventListener('touchstart', handler, opts);
     return () => {
-      document.removeEventListener('mousedown', handler);
-      document.removeEventListener('keydown', handler);
-      document.removeEventListener('touchstart', handler);
+      document.removeEventListener('mousedown', handler, opts);
+      document.removeEventListener('pointerdown', handler, opts);
+      document.removeEventListener('keydown', handler, opts);
+      document.removeEventListener('touchstart', handler, opts);
     };
   }, [authUser]);
 
@@ -729,6 +751,7 @@ export default function App() {
     if (stateData.intHistory) setIntHistory(stateData.intHistory);
     if (stateData.calendarMemos) setCalendarMemos(normalizeCalendarMemos(stateData.calendarMemos));
     if (stateData.watchlistGroups) setWatchlistGroups(stateData.watchlistGroups);
+    if (stateData.flowMaps) setFlowMaps(normalizeFlowMaps(stateData.flowMaps));
     seenAdminNotifIdsRef.current = stateData.seenAdminNotifIds || [];
     setSeenAdminNotifIds(seenAdminNotifIdsRef.current);
   };
@@ -781,6 +804,11 @@ export default function App() {
     // applyBackupData(복원)에만 적용 — applyStateData(정식 Drive 로드)는 그대로 최신값을 불러온다.
     setCalendarMemos(prev => (prev && Object.keys(prev).length > 0) ? prev : (stateData.calendarMemos ? normalizeCalendarMemos(stateData.calendarMemos) : prev));
     setWatchlistGroups(prev => (Array.isArray(prev) && prev.length > 0) ? prev : (stateData.watchlistGroups || prev));
+    // ⚠️ 흐름도 sticky 판정은 '컨테이너가 있는가'(length>0)가 아니라 flowMapsHaveContent('내용이
+    //    있는가')를 쓴다 — 보드를 열기만 해도 빈 맵 1장이 생기므로 length 기준이면 백업으로
+    //    흐름도를 되살릴 길이 영구히 막힌다. useDriveSync의 Drive write 판정과 **같은 함수**를
+    //    공유해야 in-memory와 Drive가 갈리지 않는다.
+    setFlowMaps(prev => flowMapsHaveContent(prev) ? prev : (stateData.flowMaps ? normalizeFlowMaps(stateData.flowMaps) : prev));
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
       if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
@@ -1459,6 +1487,9 @@ export default function App() {
   // 리밸런싱 표 '목표(%)' 열 헤더의 날짜(settings.targetDate) 칸에 그 시점 목표 비중 스냅샷을 남긴다.
   // (날짜, portfolioId)당 1건 upsert. 상세 규약·회귀 주의는 CLAUDE.md 전용 섹션 참조.
   useEffect(() => { calendarMemosRef.current = calendarMemos; }, [calendarMemos]);
+  // ⚠️ 흐름도 미러 — 로드 경로(applyStateData/applyBackupData)까지 덮으려면 effect가 필수.
+  //    이 줄을 지우면 종료 커밋이 낡은 배열로 Drive STATE를 덮어 흐름도가 영구 소실된다.
+  useEffect(() => { flowMapsRef.current = flowMaps; }, [flowMaps]);
 
   const buildRebalTargetEntry = (overrideDate) => {
     const p = activePortfolio;
@@ -1645,6 +1676,47 @@ export default function App() {
     return { calendarMemos: next, portfolioUpdatedAt: ts };
   };
 
+  // ── 자금 흐름도 커밋 회수 ──
+  // FlowBoard는 편집을 **로컬 사본**에 모으고 idle(2.5초)·보드 닫기·종료 시점에만 App state로
+  // 승격한다. 드래그/타이핑마다 setFlowMaps를 하면 ① portfolioStructureKey가 전 계좌를 매 프레임
+  // 재직렬화하고 ② 제스처마다 Drive 저장(STATE+VERSION+STOCK+MARKET = HTTP 8회 + 종목 2년치
+  // 일봉 전량 재업로드)이 나간다. 여기서 그 미승격 편집을 동기 회수한다.
+  // ⚠️ flowFlushRef는 FlowBoard가 마운트 시 등록하고 **언마운트 시 null로 되돌린다**
+  //    (ErrorBoundary fallback·게이팅 OFF 포함) → 죽은 클로저가 낡은 값을 Drive에 쓰는 것을 막는다.
+  const flowFlushRef = useRef<(() => any[] | null) | null>(null);
+  const flushFlowSnapshot = () => {
+    let next: any[] | null = null;
+    try { next = flowFlushRef.current?.() ?? null; } catch { next = null; }
+    if (!next) return null;
+    flowMapsRef.current = next;
+    setFlowMaps(next);
+    return next;
+  };
+
+  // ⚠️ 미저장 편집이 없으면 반드시 null — 항상 truthy를 반환하면 alt-tab마다 4파일 write가 강제된다.
+  flowExitCommitRef.current = () => {
+    const next = flushFlowSnapshot();
+    if (!next) return null;
+    const ts = Date.now();
+    portfolioUpdatedAtRef.current = ts;
+    // saveStateRef 동기 갱신 — 언로드 중에는 리렌더가 없어 setFlowMaps만으로는 payload에 안 실린다.
+    saveStateRef.current = { ...saveStateRef.current, flowMaps: next, portfolioUpdatedAt: ts };
+    return { flowMaps: next, portfolioUpdatedAt: ts };
+  };
+
+  // 종료 커밋 합성 — beforeExitSnapshotRef 슬롯이 하나뿐이라 리밸런싱·흐름도 커밋을 여기서 합친다.
+  // ⚠️ 반환 키(calendarMemos vs flowMaps)가 겹치지 않아 병합 순서는 무관하고, 양쪽 모두
+  //    portfolioUpdatedAtRef와 saveStateRef를 동기 갱신하므로 뒤 커밋이 앞 커밋을 지우지 않는다.
+  // ⚠️ 둘 다 없으면 반드시 **null**을 반환할 것 — 항상 truthy를 반환하면 alt-tab·탭 닫기마다
+  //    STATE+VERSION+STOCK+MARKET 4파일 write가 무조건 강제된다(커밋할 게 없다는 신호가 소실).
+  exitCommitRef.current = () => {
+    let r: any = null, f: any = null;
+    try { r = rebalExitCommitRef.current?.() ?? null; } catch { r = null; }
+    try { f = flowExitCommitRef.current?.() ?? null; } catch { f = null; }
+    if (!r && !f) return null;
+    return { ...(r || {}), ...(f || {}) };
+  };
+
   // ── 메모 달력 '별도 브라우저 창' 브릿지 (`/?calendarWindow=1`) ──────────────────────────────
   // 새 창은 로그인·Drive 없이 postMessage로만 동작하는 뷰어/에디터다. 저장은 전부 이 탭을 경유해
   // 기존 STATE 저장 경로로 흐른다 → **writer는 끝까지 이 탭 하나**.
@@ -1747,12 +1819,13 @@ export default function App() {
     // 아직 옛 값 → 명시 주입 필요). ⚠️ 기록이 실제 생겼을 때만 portfolioUpdatedAt을 올려야
     // useDriveSync의 STATE 저장 가드(portfolioUpdatedAt > lastSaved)를 통과한다(historyVerifyKey 버그와 동류).
     const nextMemos = flushRebalTargetSnapshot();
+    const nextFlow = flushFlowSnapshot(); // 흐름도 미승격 편집 커밋 → payload에 명시 주입
     const memoTs = Date.now();
-    if (nextMemos) {
+    if (nextMemos || nextFlow) {
       portfolioUpdatedAtRef.current = memoTs;
       lastDriveSavedPortfolioUpdatedAtRef.current = 0;
     }
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos, portfolioUpdatedAt: memoTs } : {}), portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...((nextMemos || nextFlow) ? { portfolioUpdatedAt: memoTs } : {}), portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -1929,6 +2002,7 @@ export default function App() {
   const handleDriveSave = () => {
     const currentPortfolios = buildPortfoliosState();
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
+    const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
     // portfolioUpdatedAt이 없으면 saveAllToDrive의 guard(0 > 0)가 항상 false → STATE 저장 안됨
     // 수동 저장은 항상 강제 저장되어야 하므로 새 타임스탬프 생성 후 guard 초기화
     const newUpdatedAt = Date.now();
@@ -1937,7 +2011,7 @@ export default function App() {
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·watchlistGroups·seenAdminNotifIds 등 신규 필드가 Drive STATE·수동 백업에서
     // 유실된다(과거 '저장' 버튼이 메모 달력을 지우던 원인 — handleAppClose와 동일 패턴으로 보장).
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
@@ -1948,11 +2022,12 @@ export default function App() {
   const handleDownloadStateFile = () => {
     const currentPortfolios = buildPortfoliosState();
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
+    const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·seenAdminNotifIds·intDashCompStocks 등 신규/추가 필드가 누락되어
     // PC 백업 파일에서 유실된다(handleAppClose와 동일 패턴으로 메인 저장 필드 보장).
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1966,11 +2041,12 @@ export default function App() {
   const handleAppClose = async () => {
     const currentPortfolios = buildPortfoliosState();
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
+    const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 저장 — 부분 state를 손으로 재구성하면
     // chartPrefs.intDashCompStocks(통합 대시보드 비교종목)·seenAdminNotifIds 등이 누락되어
     // "앱 닫기"로 종료할 때마다 비교종목이 초기화되던 버그 방지 (메인 저장과 동일 필드 보장)
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const minWait = new Promise<void>(r => setTimeout(r, 2000));
     if (driveTokenRef.current) {
       const token = driveTokenRef.current;
@@ -2304,6 +2380,11 @@ export default function App() {
       activePortfolioId, customLinks, JSON.stringify(dividendLinks),
       JSON.stringify(calendarMemos),
       JSON.stringify(watchlistGroups),
+      // ⚠️ 흐름도 지문 — 없으면 portfolioUpdatedAt이 안 올라 STATE 저장이 통째로 스킵된다
+      //    (historyVerifyKey·investmentNotesKey·holdingSnapshotsKey·calendarMemos와 동일 버그 클래스).
+      //    flowFingerprint는 저장 필드만 화이트리스트로 투영하고 절대 던지지 않는다 — raw
+      //    JSON.stringify로 되돌리지 말 것(순환 참조 하나로 이 지문 계산 아래의 저장 예약이 통째로 죽는다).
+      flowFingerprint(flowMaps),
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
       // 바인더 인덱스/섹션 펼침 상태 — 사용자 토글 시에만 변경(시세 갱신 무관)
       // → 변경 시 portfolioUpdatedAt 상승시켜 Drive STATE 저장 트리거 (앱 재시작 시 상태 유지)
@@ -2327,7 +2408,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -2342,7 +2423,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -2722,6 +2803,11 @@ export default function App() {
   const youtubeAccess = isAdminUser || userFeatures.youtubeEnabled;
   const notebookAccess = isAdminUser || userFeatures.notebookEnabled;
   const reportAccess = isAdminUser || userFeatures.reportEnabled;
+  // 자금 흐름도 접근 권한. ⚠️ effectiveUserFeatures(feature1/2/3만 true로 강제하는 별개 경로)에
+  //    얹지 말 것 — 흐름도는 App.tsx에서 직접 조건 렌더하므로 `*Access` 상수 패턴이 맞다.
+  //    이 상수가 없으면 관리자 본인이 기능에 **영구히 접근 불가**하다(AdminPage 토글은 `!isAdminUser`
+  //    조건이라 관리자 행에는 렌더조차 되지 않아 시트를 손으로 고치지 않는 한 켤 방법이 없다).
+  const flowAccess = isAdminUser || userFeatures.flowEnabled;
   const gatedNotebookLinks = notebookAccess ? notebookLinks : [];
   const gatedReportLinks = reportAccess ? reportLinks : [];
   const resolveMaterial = (channel, message, refCreatedAt) => resolveNoticeMaterial(
@@ -2886,6 +2972,8 @@ export default function App() {
           marketIndicators={marketIndicators}
           onOpenCalendar={() => { setCalWinBlocked(false); setShowCalendarModal(true); }}
           onOpenWatchlist={() => setShowWatchlist(true)}
+          canAccessFlow={flowAccess}
+          onOpenFlow={() => setShowFlowBoard(true)}
         />
         </div>
 
@@ -3418,6 +3506,31 @@ export default function App() {
         onOpenWindow={openCalendarWindow}
         headerNotice={calWinBlocked ? '팝업이 차단돼 별도 창을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요.' : null}
       />
+      {/* 자금 흐름도 — App 최상위 형제(계좌 탭/뷰 전환에도 언마운트 안 됨).
+          ⚠️ ErrorBoundary label 지정 = 섹션 모드 격리. 없으면 좌표 NaN 하나가 루트 경계까지
+             올라가 앱 화면 전체가 오류 페이지로 대체된다(FloatingCalculator와 동일 2차 방어).
+          ⚠️ flowAccess가 false면 **마운트 자체를 하지 않는다** — prop만 넘기고 내부에서 숨기면
+             OFF 사용자가 파생 memo 구독 비용을 그대로 치른다. */}
+      {flowAccess && (
+        <ErrorBoundary label="자금 흐름도">
+          <FlowBoard
+            open={showFlowBoard}
+            onClose={() => setShowFlowBoard(false)}
+            maps={flowMaps}
+            // ⚠️ functional updater 계약(WatchlistPopup 선례) — 통째 교체로 되돌리면 같은 tick에
+            //    발생한 두 커밋(드래그 pointerup + 인스펙터 blur) 중 하나가 조용히 사라진다.
+            onUpdateMaps={setFlowMaps}
+            flushRef={flowFlushRef}
+            portfolios={portfolios}
+            portfolioSummaries={portfolioSummaries}
+            hideAmounts={hideAmounts}
+            confirm={confirm}
+            // 관리자 impersonation 중에는 읽기 전용 — 목표비중과 달리 흐름도는 undo도 없고
+            // 백업 복원으로도 되돌릴 수 없는 sticky 데이터라, 무통지 편집을 허용하지 않는다.
+            readOnly={!!adminViewingAs}
+          />
+        </ErrorBoundary>
+      )}
     </div>
   );
 }

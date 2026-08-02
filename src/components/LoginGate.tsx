@@ -15,7 +15,33 @@ export interface UserFeatures {
   youtubeEnabled: boolean;
   notebookEnabled: boolean;
   reportEnabled: boolean;
+  /** 자금 흐름도 — approved_users 시트 K열(index 10) */
+  flowEnabled: boolean;
 }
+
+// ⚠️ 필드 나열 지점을 1곳으로 축소한 구조적 방어.
+//    이 파일은 @ts-nocheck + esbuild(타입체크 없음)라 컴파일러가 누락을 잡아주지 못한다. 과거엔
+//    3개 로그인 경로가 각자 필드를 손으로 나열해, 새 플래그를 하나만 빠뜨려도 그 경로에서만
+//    기능이 사라지는 재현 불가 버그가 났다(무음 재인증 → '새로고침하면 사라짐',
+//    impersonation → '관리자 접속에서만 안 보임', 수동 로그인 → '신규 로그인 사용자만 OFF').
+//    새 플래그를 추가할 때는 UserFeatures / EMPTY_FEATURES / pickFeatures **세 곳만** 고칠 것.
+export const EMPTY_FEATURES: UserFeatures = {
+  name: '',
+  feature1: false, feature2: false, feature3: false,
+  youtubeEnabled: false, notebookEnabled: false, reportEnabled: false,
+  flowEnabled: false,
+};
+
+export const pickFeatures = (r: any): UserFeatures => ({
+  name: r?.name ?? '',
+  feature1: !!r?.feature1,
+  feature2: !!r?.feature2,
+  feature3: !!r?.feature3,
+  youtubeEnabled: !!r?.youtubeEnabled,
+  notebookEnabled: !!r?.notebookEnabled,
+  reportEnabled: !!r?.reportEnabled,
+  flowEnabled: !!r?.flowEnabled,
+});
 
 interface AdminViewUserCtx {
   userEmail: string;
@@ -72,23 +98,19 @@ async function checkApproval(email: string): Promise<{ approved: boolean; needsR
   try {
     const url = `${APPS_SCRIPT_URL}?action=check&email=${encodeURIComponent(email)}&cacheBust=${Date.now()}`;
     const res = await fetch(url);
-    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false };
+    if (!res.ok) return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
     const data = await res.json();
     // Apps Script returns { status: 'approved'/'not_approved', resetPassword: string|null, name, feature1, ... }
+    // ⚠️ pickFeatures의 `!!` 가 Apps Script 미배포 시 graceful degradation의 핵심 —
+    //    응답에 새 키가 없으면 조용히 false(OFF)가 되고 기존 플래그·기능에는 회귀가 없다.
     return {
       approved: data.status === 'approved',
       needsReset: data.resetPassword != null,
       adminPin: data.resetPassword ?? DEFAULT_PIN,
-      name: data.name ?? '',
-      feature1: data.feature1 ?? false,
-      feature2: data.feature2 ?? false,
-      feature3: data.feature3 ?? false,
-      youtubeEnabled: data.youtubeEnabled ?? false,
-      notebookEnabled: data.notebookEnabled ?? false,
-      reportEnabled: data.reportEnabled ?? false,
+      ...pickFeatures(data),
     };
   } catch {
-    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false };
+    return { approved: false, needsReset: false, adminPin: DEFAULT_PIN, ...EMPTY_FEATURES };
   }
 }
 
@@ -210,7 +232,9 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
   const [pinError, setPinError] = useState('');
 
   const tokenClientRef = useRef<any>(null);
-  const featuresRef = useRef<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false });
+  // ⚠️ 전 필드를 명시 초기화 — impersonation 경로의 .catch 폴백이 이 값을 그대로 쓰므로,
+  //    누락된 키가 있으면 undefined가 onApproved까지 흘러 shape이 갈린다(과거 youtube/notebook/report 누락).
+  const featuresRef = useRef<UserFeatures>({ ...EMPTY_FEATURES });
 
   // ── 구글 토큰 요청 공통 함수 ────────────────────────────────────
   const requestGoogleToken = (opts: { prompt: string; hint?: string; onSuccess: (email: string, token: string) => void; onFail: (detail?: string) => void }) => {
@@ -290,8 +314,7 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
             return;
           }
         } catch { /* 네트워크 오류 → 세션 유지하고 앱 진입 허용 */ }
-        const { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled } = await checkApproval(email);
-        onApproved(email, token, { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled });
+        onApproved(email, token, pickFeatures(await checkApproval(email)));
       },
       onFail: () => {
         sessionStorage.removeItem(SESSION_KEY);
@@ -319,8 +342,8 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         }
         return checkApproval(adminViewUserCtx.userEmail);
       })
-      .then(({ name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled }) => {
-        featuresRef.current = { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled };
+      .then((res) => {
+        featuresRef.current = pickFeatures(res);
         setStep('pin_entry');
       })
       .catch(() => {
@@ -363,12 +386,13 @@ export default function LoginGate({ onApproved, adminViewUserCtx, onCancelAdminV
         setUserEmail(email);
         setUserToken(token);
 
-        const { approved, needsReset, adminPin, name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled } = await checkApproval(email);
+        const checkRes = await checkApproval(email);
+        const { approved, needsReset, adminPin } = checkRes;
         if (!approved) {
           setStep('pending');
           return;
         }
-        featuresRef.current = { name, feature1, feature2, feature3, youtubeEnabled, notebookEnabled, reportEnabled };
+        featuresRef.current = pickFeatures(checkRes);
 
         if (needsReset) {
           const adminHash = hashPin(adminPin);

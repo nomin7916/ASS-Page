@@ -19,6 +19,7 @@ interface ApprovedUser {
   youtubeEnabled?: boolean; // H열
   notebookEnabled?: boolean; // I열
   reportEnabled?: boolean; // J열
+  flowEnabled?: boolean; // K열 — 자금 흐름도
 }
 
 interface SentNotification {
@@ -176,7 +177,10 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   };
 
   // 기능 설정 상태
-  const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트']);
+  const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도']);
+  // 기능 토글 실패 사유(사용자 행별). ⚠️ notify를 쓰지 않는다 — AdminPage는 early-return 페이지라
+  // ConfirmDialog·알림 벨이 언마운트 상태이고 notify prop도 받지 않는다(nbUploadError 패턴과 동일).
+  const [featureToggleError, setFeatureToggleError] = useState('');
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
 
   // API 진단 상태
@@ -331,8 +335,13 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
       const res = await fetch(`${APPS_SCRIPT_URL}?action=getFeatureLabels&cacheBust=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data.labels) && data.labels.length === 6) {
-          setFeatureLabels(data.labels);
+        // ⚠️ `>= 6` + 인덱스 머지 — 절대 `=== 7`로 바꾸지 말 것.
+        //    Apps Script를 아직 배포하지 않은 구간에서는 구버전이 E1:J1만 읽어 6개를 반환하는데,
+        //    `=== 7`이면 응답이 통째로 거부돼 시트에 설정해 둔 커스텀 라벨 6개가 전부 제네릭
+        //    기본값('기능1'…)으로 회귀한다. 이 기능에서 기존 사용자에게 실제 피해가 가는 유일한 경로.
+        //    머지 방식이면 6개 응답 → 앞 6개 커스텀 유지 + 7번째는 기본값으로 우아하게 degrade.
+        if (Array.isArray(data.labels) && data.labels.length >= 6) {
+          setFeatureLabels(prev => prev.map((d, i) => data.labels[i] ?? d));
         }
       }
     } catch {}
@@ -366,8 +375,16 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
         setUsers(prev => prev.map(u =>
           u.email === email ? { ...u, [feature]: !currentValue } : u
         ));
+        setFeatureToggleError('');
+      } else {
+        // ⚠️ 과거엔 실패가 완전 무음이라(로컬 state도 안 바뀌고 표시도 없음) 관리자가 '버튼이
+        //    고장났다'고 오판했다. 구버전 Apps Script에 새 feature 키를 보내면 'invalid feature'로
+        //    거부되는데 그 사실이 어디에도 드러나지 않았다.
+        setFeatureToggleError(`${email} · ${feature} 저장 실패 — Apps Script 새 버전 배포를 확인하세요`);
       }
-    } catch {}
+    } catch {
+      setFeatureToggleError(`${email} · ${feature} 저장 실패 — 네트워크 오류`);
+    }
     setTogglingKey(null);
   };
 
@@ -762,6 +779,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   { feat: 'youtubeEnabled', label: featureLabels[3], val: !!u.youtubeEnabled, onCls: 'text-red-300 border-red-700/60 bg-red-900/40',        offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                   { feat: 'notebookEnabled',label: featureLabels[4], val: !!u.notebookEnabled,onCls: 'text-violet-300 border-violet-700/60 bg-violet-900/40',offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                   { feat: 'reportEnabled',  label: featureLabels[5], val: !!u.reportEnabled,  onCls: 'text-teal-300 border-teal-700/60 bg-teal-900/40',      offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'flowEnabled',    label: featureLabels[6], val: !!u.flowEnabled,    onCls: 'text-indigo-300 border-indigo-700/60 bg-indigo-900/40',offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                 ];
                 return (
                   <li key={i} className="bg-gray-800 rounded-lg px-3 py-2">
@@ -844,7 +862,9 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                     </div>
                     {/* 기능 ON/OFF 토글 — 비관리자 전용 */}
                     {!isAdminUser && (
-                      <div className="flex items-center gap-1 mt-1.5 ml-4">
+                      {/* ⚠️ flex-wrap 필수 — 라벨 길이가 시트 헤더에서 오므로 예측 불가하고,
+                          7개가 되면 좁은 폭에서 잘려 클릭 불가가 된다(분배금 툴바와 동일 처방). */}
+                      <div className="flex flex-wrap items-center gap-1 mt-1.5 ml-4">
                         {featureDefs.map(({ feat, label, val, onCls, offCls }) => {
                           const togKey = `${u.email}:${feat}`;
                           const isToggling = togglingKey === togKey;
@@ -863,6 +883,9 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                           );
                         })}
                       </div>
+                    )}
+                    {!isAdminUser && featureToggleError.startsWith(`${u.email} ·`) && (
+                      <div className="text-[10px] text-red-400 mt-1 ml-4">{featureToggleError.replace(`${u.email} · `, '')}</div>
                     )}
                   </li>
                 );

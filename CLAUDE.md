@@ -22,8 +22,10 @@ src/
 ├── utils.ts             # 순수 유틸 (generateId, cleanNum, hexToRgba, blendWithDarkBg 등)
 ├── chartUtils.tsx       # 차트 컴포넌트/유틸 (PieLabelOutside, CustomChartTooltip 등)
 ├── driveStorage.ts      # Google Drive 저장/불러오기
+├── flowMap.ts           # 자금 흐름도 타입 + 순수 로직 (⚠️ @ts-nocheck 금지)
 ├── hooks/               # usePortfolioState, useDriveSync, useMarketData,
-│                        # useHistoryChart, useChartInteraction, useStockData, usePinManager
+│                        # useHistoryChart, useChartInteraction, useStockData, usePinManager,
+│                        # useFlowMapData
 └── components/
     ├── IntegratedDashboard.tsx   # 통합 대시보드 (멀티 계좌 합산 뷰)
     ├── DividendSummaryTable.tsx  # 분배금 현황 테이블 (compact/개별 모드)
@@ -51,6 +53,9 @@ src/
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
     ├── LoginGate.tsx             # 로그인 / PIN 인증 게이트
     ├── WatchlistPopup.tsx        # 관심종목 이동 가능 비차단 팝업(그룹·종목·미니차트·최근조회)
+    ├── FlowBoard.tsx             # 자금 흐름도 전체화면 보드(z=990) — 로컬 사본 + idle 승격
+    ├── FlowCanvas.tsx            # 흐름도 SVG 캔버스(React.memo) — 드래그·리사이즈·연결
+    ├── FlowInspector.tsx         # 흐름도 속성 패널(날짜·이름·계좌연결·금액·메모)
     └── AdminPage.tsx             # 관리자 페이지
 ```
 
@@ -1299,6 +1304,95 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   실사용에서 겹치는 구간은 1초 미만이다. 편집자가 한 사람이라는 전제 위의 절충.
 - **범위 밖(의도)**: 새 창은 관심종목·계산기 등 다른 플로팅 창을 띄우지 않는다. impersonation 탭에서
   연 새 창은 그 탭이 닫히면 읽기 전용이 된다(관리자 탭은 원래 세션을 영속하지 않음).
+
+### 자금 흐름도(flowMaps) — 계좌 관계 다이어그램 (⚠️ 회귀 주의)
+
+헤더 **흐름도 아이콘**(AccountTabBar, 통합·개별 뷰 모두)으로 여는 **전체화면 캔버스**. 둥근 사각형·원
+도형을 만들고 자유롭게 선으로 연결하며, 선 위에 라벨을 단다. 도형에는 날짜·이름·금액·메모를 넣고,
+**계좌를 연결하면 계좌명·현재 평가액이 라이브로 표시**된다.
+
+- **핵심 결정: 데이터는 `portfolios[]` 밖 앱 레벨**(`calendarMemos`·`watchlistGroups`와 동급).
+  ⚠️ 계좌 객체 안(`p.flowMap`)에 넣지 말 것 — `patchActive`가 `portfolios` 참조를 바꿔
+  `portfolioSummaries`·`marketSeries`·`computedIntHistory`·`rebalanceData`·`useHistoryBackfill` 효과#1
+  (사전체크/map 미러링 불변식이 깨지면 **렌더/저장 무한 루프**) 등 11개 파이프라인이 매 제스처
+  재실행된다. 앱 레벨이면 이 전부가 무관해진다.
+- **계좌 연결 = `portfolioId` 참조 + 라이브 재조회**(복사 금지 — CalendarModal의 note/qty 파생과 동일 계약).
+  자동으로 채워지는 것은 **계좌명·평가액 2개뿐**. ⚠️ **계좌 레벨 만기 필드는 코드베이스에 존재하지
+  않는다**(유일한 만기는 dc-irp 전용 예적금 항목의 `item.endDate`이고 계좌당 여러 개) → 날짜·금액계획·
+  메모는 전부 사용자 입력 필드이고, dc-irp 예적금 보유 계좌에만 만기 '제안' 칩을 띄운다(자동 채움 아님).
+  `accountNameSnapshot`은 **바인딩 시점 1회만** 기록하는 표시 폴백(purge된 계좌용) — 갱신 금지.
+- **영속화 8지점(하나라도 빠지면 조용한 유실)**: `App.tsx` ① `useState` ② 지문 `flowFingerprint(flowMaps)`
+  ③ 저장 payload 리터럴 ④ 저장 effect deps ⑤ `applyStateData`(`normalizeFlowMaps`) ⑥ `applyBackupData`
+  (sticky) ⑦ **`flowMapsRef` 미러 effect** + `useDriveSync.ts` ⑧ `_preserveStickyPersonalData`.
+  ⚠️ ⑦을 빠뜨리면 로드 경로가 ref를 갱신하지 않아 **종료 커밋이 빈 배열로 Drive STATE를 덮어
+  흐름도가 영구 소실**된다(인라인 갱신만으로는 못 덮는다 — `calendarMemosRef`가 미러 effect를 가진 이유).
+- **⚠️ sticky 판정은 `flowMapsHaveContent` 공유 함수**(`flowMap.ts`). `length > 0`으로 재지 말 것 —
+  보드를 **열기만 해도** 빈 맵 1장이 생겨 백업으로 흐름도를 되살릴 길이 영구히 막힌다(`calendarMemos`는
+  빈 항목이 생길 수 없어 length 기준으로도 안전했다). App.tsx와 useDriveSync가 **같은 함수**를 써야
+  in-memory와 Drive write가 갈리지 않는다(판정식 손복제 금지).
+- **⚠️ 지문은 `flowFingerprint`(화이트리스트 투영 + try/catch)**. raw `JSON.stringify(flowMaps)`로
+  되돌리지 말 것 — 런타임 필드가 하나라도 순환이면 던지고, 그 지문 계산은 저장 effect의 첫 블록이라
+  **그 세션의 Drive 저장이 통째로 멈춘다**. 길이·개수 해시 절충안도 금지(`investmentNotesKey`·
+  `holdingSnapshotsKey`가 그걸로 "동일 길이 편집을 놓치는" 버그를 냈다). `updatedAt`은 지문에서 제외.
+- **⚠️ 저장 폭주 방지 = 로컬 사본 + idle 승격**: 편집은 `FlowBoard`의 로컬 사본에 모으고 **2.5초 idle ·
+  보드 닫기 · 종료/수동저장 커밋 · 언마운트** 시점에만 App state로 승격한다. 제스처마다 승격하면
+  ① `portfolioStructureKey`가 전 계좌를 매번 재직렬화하고 ② 800ms 디바운스는 사람 손 간격(1~3초)보다
+  짧아 매번 만료되어 **제스처마다 STATE+VERSION+STOCK+MARKET = HTTP 8회 + 종목 2년치 일봉 전량
+  재업로드**가 나간다(도형 40개 배치 = 320 요청 + 수십 MB). 회수 경로: `App.tsx flowFlushRef` ←
+  FlowBoard가 마운트 시 등록하고 **언마운트 시 null**. 미승격 편집이 없으면 커밋은 **반드시 null 반환**
+  (항상 truthy면 alt-tab마다 4파일 write 강제). 언마운트 시에는 상위로 **승격**한다(그냥 사라지면 유실).
+- **⚠️ 종료 커밋은 `exitCommitRef` 합성**: `useDriveSync`의 `beforeExitSnapshotRef` 슬롯이 하나뿐이라
+  리밸런싱(`rebalExitCommitRef`)과 흐름도(`flowExitCommitRef`)를 App에서 합친다. 반환 키가 겹치지 않아
+  순서는 무관하나 **둘 다 없으면 null**을 반환해야 한다. 수동 저장 4핸들러(`handleSave`·`handleDriveSave`·
+  `handleDownloadStateFile`·`handleAppClose`)도 `flushFlowSnapshot()` **동기 주입 필수** —
+  `saveStateRef` 스프레드만으로는 '방금 blur 커밋한 값'이 안 실린다(`flushRebalTargetSnapshot`와 동일 이유).
+- **⚠️ z-index 990** — `ConfirmDialog`(1000)보다 **아래**여야 도형 삭제 확인창이 보드 위에 뜬다.
+  1050대(메모 달력·계산기·관심종목)에 두면 그 기능들이 겪은 "창 위에선 confirm/notify가 가려진다"를
+  재현하고 결국 확인 없는 즉시 삭제로 후퇴하게 된다. **알려진 한계(수용)**: 벨 알림 팝업(z-999)·
+  리밸런싱 투자기록 창(z-1000/1010)·관리자 공지 모달(z-300, 보드가 가림)은 이 층 관계의 결과다.
+- **⚠️ 키 입력·활동 감지**: 보드 루트 `onKeyDownCapture`는 **보드 키를 먼저 처리한 뒤** `stopPropagation`
+  한다(계산기가 열려 있으면 그 window 핸들러가 Delete·Esc·화살표를 수식으로 삼킨다 — 그쪽 가드는
+  input/textarea/select/contentEditable뿐이라 svg·button은 무방비). 그리고 `App.tsx` 비활동 감지
+  리스너는 **document 캡처 단계 + `pointerdown` 포함**으로 등록한다 — 버블이면 이 `stopPropagation`에
+  막혀 "도형 배치·장문 메모"만 하는 세션이 활동으로 집계되지 않아 50분 뒤 로그아웃 모달이 튀어나온다.
+- **⚠️ 순수성**: 노드/엣지 생성(`generateId`)·선택 변경·ref 대입을 `setState` **업데이터 안에서** 하지
+  말 것. StrictMode 개발 모드의 업데이터 이중 호출에서 서로 다른 id가 만들어지고(React는 두 번째 결과만
+  채택) 첫 호출의 부수효과가 남아 선택이 어긋난다. `localRef`가 로컬 사본의 단일 소스다.
+- **삭제/TEST 계좌**: 삭제 계좌는 `liveAmount = null`(⚠️ `portfolioSummaries.currentEval`은 삭제
+  계좌에서도 **실수치를 그대로 반환**한다 — 제외는 소비처 `intTotals`에서만 일어나므로 여기서 명시적으로
+  null 처리해야 '삭제 계좌 = 라이브 완전 제외' 불변식이 지켜진다) + `(삭제됨)` 접미. TEST 계좌는
+  **금액을 그대로 표시**하고 이탤릭·반투명 강등만 한다(통합 표도 평가금액은 표시하고 평가비중만 `-`).
+  `accountType`은 반드시 `portfolios`에서 읽는다(summary는 시장 계좌를 전부 `'portfolio'`로 납작하게 만듦).
+  **purge된 계좌를 가리키는 노드는 자동 삭제하지 않는다** — 앰버 테두리 + '연결 끊김' 배지로만 알린다.
+- **게이팅 = 승인 시트 K열 `flowEnabled`**(index 10). Apps Script 6지점(`check`·`listUsers`·
+  `getFeatureLabels` E1:K1·`setUserFeature` colMap·`addUser` appendRow·`setupSheet` K1/E2:K100) +
+  프론트(`LoginGate` `UserFeatures`/`EMPTY_FEATURES`/`pickFeatures`, `App.tsx` 초기값·`flowAccess`,
+  `AdminPage` 라벨·featureDefs, `AccountTabBar` `canAccessFlow`).
+  ⚠️ **배포 순서는 프론트 먼저 → Apps Script 나중**. 반대로 하면 `getFeatureLabels`가 7개를 반환하는데
+  구 프론트의 `length === 6` 가드가 응답을 통째로 거부해 **기존 커스텀 라벨 6개가 제네릭으로 회귀**한다
+  (그래서 가드를 `>= 6` + 인덱스 머지로 바꿨다 — `=== 7`로 되돌리지 말 것).
+  ⚠️ `flowAccess = isAdminUser || userFeatures.flowEnabled` — `effectiveUserFeatures`(feature1/2/3만
+  강제하는 별개 경로)에 얹지 말 것. 이게 없으면 관리자 본인이 영구 접근 불가다(AdminPage 토글은
+  `!isAdminUser` 조건이라 관리자 행에 렌더조차 안 됨).
+- **⚠️ 새 필드 나열 지점은 3곳뿐**: `LoginGate`의 `UserFeatures` / `EMPTY_FEATURES` / `pickFeatures`.
+  과거엔 3개 로그인 경로(무음 재인증·impersonation·수동 로그인)가 각자 필드를 손나열해, 하나만 빠뜨려도
+  그 경로에서만 기능이 사라지는 재현 불가 버그가 났다(@ts-nocheck + esbuild라 컴파일러가 못 잡는다).
+- **impersonation은 읽기 전용**(`readOnly={!!adminViewingAs}`) — 목표비중과 달리 흐름도는 undo도 없고
+  sticky라 백업 복원으로도 되돌릴 수 없어 무통지 편집을 허용하지 않는다.
+- **⚠️ 외부 npm 의존성 0**: 캔버스는 순수 SVG + Pointer Events 자체 구현이다. `package-lock.json`이
+  없어 Vercel이 매 배포마다 `npm install`을 재해석하고, 정확히 그 원인으로 프로덕션 흰 화면이 났던
+  이력이 있다. lucide 아이콘도 **저장소에서 이미 쓰는 것만** 사용하고 새 아이콘은 인라인 SVG로 만든다
+  (`AccountTabBar`의 `FlowIcon` — `Workflow`/`Share2`/`Network`가 이 버전에 있다는 근거가 없다).
+- **소프트 상한**: 맵 5 / 노드 150 / 엣지 300(≈85KB). 백업 22본·관리자 포털 순차 로드로 복제되므로
+  무한 증식만 막는다. 상한 도달 시 툴바 배너로 알린다.
+- **범위 밖(의도)**: undo/redo(Drive 폴링이 타 기기 편집을 받아온 뒤 undo가 최신값을 덮는다 —
+  `RebalanceTargetRestoreModal`이 같은 이유로 포기), 별도 브라우저 창, PNG 내보내기, 자동 레이아웃,
+  다중 캔버스 UI(데이터 모델은 배열이나 현재 1장 고정), 계좌 삭제 시 노드 캐스케이드 정리.
+- 검증: `npm run verify:flow` (미러 #1~#26 + 소스 텍스트 가드 #27~#36).
+  참조 구현은 `flowMap.ts`의 `normalizeFlowMaps`·`flowMapsHaveContent`·`flowFingerprint`·`edgePath`·
+  `removeNode`·`pruneOrphanEdges`·`roundNode`·`resolveFlowNodeView`·`countDanglingNodes` 본문과
+  **항상 1:1 동기화**할 것. 가드(#27~#36)는 영속화 배선을 정규식으로 단언하므로, 실패 시 **먼저
+  정규식이 낡았는지 확인**하고 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 
 ---
 
