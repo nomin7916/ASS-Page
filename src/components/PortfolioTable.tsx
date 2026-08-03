@@ -671,7 +671,27 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('investAmount') && (
                     <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
                       {isOverseas
-                        ? <input type="text" data-col="investAmountUSD" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={editingInvestId === item.id ? editingInvestVal : formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => { const usd = cleanNum(item.purchasePrice) * cleanNum(item.quantity); setEditingInvestId(item.id); setEditingInvestVal(usd > 0 ? String(usd) : ''); e.target.select(); }} onChange={e => setEditingInvestVal(e.target.value)} onBlur={() => { const usd = cleanNum(editingInvestVal); const qty = cleanNum(item.quantity); onUpdate(item.id, 'purchasePrice', qty > 0 ? usd / qty : 0); setEditingInvestId(null); }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
+                        ? <input type="text" data-col="investAmountUSD" title="투자금액 ÷ 수량으로 매입단가가 계산됩니다 (수량이 0이면 산출할 수 없어 저장되지 않습니다)" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={editingInvestId === item.id ? editingInvestVal : formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => { const usd = cleanNum(item.purchasePrice) * cleanNum(item.quantity); setEditingInvestId(item.id); setEditingInvestVal(usd > 0 ? String(usd) : ''); e.target.select(); }} onChange={e => setEditingInvestVal(e.target.value)} onBlur={() => {
+                            // ⚠️ 과거엔 조건 없이 `onUpdate(id,'purchasePrice', qty>0 ? usd/qty : 0)`를 실행했다.
+                            //    수량 0인 행의 칸을 **포커스했다 그냥 나오기만 해도** purchasePrice가 0으로
+                            //    커밋되고, 그 필드는 지문에 포함돼 즉시 Drive에 영속되며 undo가 없다.
+                            //    ↑/↓ 열 이동이 행마다 blur를 유발하므로 열을 훑는 것만으로 파괴됐다.
+                            //    RebalancingPanel의 commitAmt와 같은 규약으로 정리한다.
+                            // ⚠️ setEditingInvestId(null)은 모든 early return보다 **앞** — 뒤에 두면
+                            //    조기 반환 경로에서 셀이 초안 문자열에 갇힌다.
+                            setEditingInvestId(null);
+                            // ⚠️ cleanNum만 쓰면 '지나감(빈칸)'과 '0 입력'이 구분되지 않는다 → 숫자 센티넬.
+                            const trimmed = String(editingInvestVal ?? '').trim();
+                            if (!/\d/.test(trimmed)) return;
+                            const qty = cleanNum(item.quantity);
+                            // 수량이 없으면 총액에서 단가를 산출할 수 없다 → 쓰지 않는다(0으로 덮지 말 것).
+                            if (qty <= 0) return;
+                            const next = cleanNum(trimmed);
+                            // ⚠️ 비교는 총액 대 총액 exact — `usd/qty === item.purchasePrice` 같은 역산값
+                            //    비교는 IEEE754에서 매번 '변경됨'으로 오판해 미세 드리프트를 커밋한다.
+                            if (next === cleanNum(item.purchasePrice) * qty) return;
+                            onUpdate(item.id, 'purchasePrice', next / qty);
+                          }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
                         : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={numericVal(item.id, 'investAmount', formatNumber(item.investAmount))} onFocus={numericFocus(item.id, 'investAmount', item.investAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'investAmount')} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
                       }
                     </td>
