@@ -57,6 +57,20 @@ const isKoreanCode = (code: string) => /^[A-Za-z0-9]{6}$/.test(code) && /\d/.tes
 // ⚠️ 적용 순서를 바꾸지 말 것 — gapFill을 먼저, overwrite를 나중에 적용해야
 //    같은 날짜가 양쪽에 있을 때 최종값이 항상 실제종가가 된다.
 // 입력은 변형하지 않고 항상 새 객체를 반환한다.
+// KIS 응답이 '완전한가' 판정 — 완전하면 그 코드는 실제종가 마이그레이션 완료로 표시한다.
+//
+// ⚠️ 건수 임계값(>=100)만으로 판정하지 말 것 — 상장 직후 종목은 정상 응답이어도 건수가 적다.
+//    실측: 0219E0은 상장이 2026-07-14라 14건이 전부인데 옛 로직은 이를 '부분 응답'으로 오판했다.
+//    그러면 매 세션 재조회 + `<1500` 조건으로 fchart(수정종가) 보강이 상시 발동한다.
+// 서버(api/stock-history.ts)가 partial 플래그를 준다: DEADLINE 초과로 오래된 청크를 못 봤거나
+// 실패한 청크가 있으면 true. 이 신호가 건수보다 정확하다.
+// ⚠️ 응답이 24h 엣지 캐시되므로 구버전 캐시에는 partial이 없다 → undefined면 옛 휴리스틱으로 폴백.
+const isCompleteKisHistory = (res: { partial?: boolean } | null, dateCount: number) => {
+  if (!res) return false;
+  if (typeof res.partial === 'boolean') return !res.partial;
+  return dateCount >= 100;
+};
+
 const mergeCodeHistory = (
   base: Record<string, number>,
   sources: { overwrite?: Record<string, number> | null; gapFill?: Record<string, number> | null }
@@ -296,6 +310,8 @@ export function useStockData({
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
     const isOverseasComp = !isKoreanCode(comp.code);
     let hist = stockHistoryMap[comp.code];
+    // fchart(수정종가) 보강분 — hist(실제종가)와 분리 보관. gap-only 슬롯으로만 흘러간다.
+    let supHist: Record<string, number> | null = null;
     // 해외: 252건(약 1년) 미만이면 전체 재조회 / 국내: 3건 이상이면 증분 조회
     const hasRichHistory = hist && (isOverseasComp ? Object.keys(hist).length > 252 : Object.keys(hist).length > 3);
     // 국내 비교종목 미이전: 캐시 풍부해도 전체 재조회 강제 (수정주가 → 실제종가)
@@ -306,22 +322,39 @@ export function useStockData({
         const rUS = await fetchUsStockHistory(comp.code);
         if (rUS) hist = rUS.data;
       } else {
-        // 1순위: Naver trend API (실제 종가, 수정주가 미반영)
-        const rTrend = await fetchNaverDomesticHistory(comp.code);
-        if (rTrend) { hist = rTrend.data; trendMigratedInSession.current.add(comp.code); }
-        console.log(`[history] ${comp.code} 비교종목 trend API ${rTrend ? `성공 ${Object.keys(rTrend.data).length}건` : '실패 → fallback'}`);
-        // trend가 sparse한 경우(예: KODEX 200TR ~300건) fchart로 과거 gap 보강 — trend 값이 우선
-        if (hist) {
+        // ⚠️ 1순위는 KIS다 — 과거 전체를 실제종가로 주는 유일한 창구.
+        //    trend를 먼저 부르고 성공 시 KIS를 건너뛰던 옛 순서는 sparse한 trend(실측 490590 =
+        //    161/446건) 뒤를 fchart 수정종가로 채워, 한 종목 안에 두 가격기준이 섞이게 만들었다.
+        const rKIS = await fetchKISStockHistory(comp.code);
+        if (rKIS) {
+          hist = rKIS.data;
+          const kd = Object.keys(rKIS.data).length;
+          // 마이그레이션 표시는 '완전한 KIS 응답'에만 — trend 성공만으로 세우면
+          // refreshPrices의 KIS 경로가 이 코드를 건너뛰어 과거가 영영 실제종가로 안 채워진다.
+          if (isCompleteKisHistory(rKIS, kd)) trendMigratedInSession.current.add(comp.code);
+          console.log(`[history] ${comp.code} 비교종목 KIS 성공: ${kd}건${isCompleteKisHistory(rKIS, kd) ? '' : ' (부분 응답)'}`);
+        }
+        // 2순위: Naver trend (실제종가, KIS 실패 시)
+        if (!hist) {
+          const rTrend = await fetchNaverDomesticHistory(comp.code);
+          if (rTrend) hist = rTrend.data;
+          console.log(`[history] ${comp.code} 비교종목 trend API ${rTrend ? `성공 ${Object.keys(rTrend.data).length}건` : '실패 → fallback'}`);
+        }
+        // fchart(수정종가) 보강 — ⚠️ hist에 섞지 말고 supHist로 분리해 gap-only 슬롯으로만 흘린다.
+        if (hist && Object.keys(hist).length < 1500) {
           const rSup = await fetchNaverStockHistory(comp.code);
           if (rSup) {
-            const trendHist = hist;
-            hist = { ...rSup.data, ...trendHist };
-            const added = Object.keys(rSup.data).filter(d => trendHist[d] === undefined).length;
-            if (added > 0) console.log(`[history] ${comp.code} 비교종목 fchart 보강: +${added}건`);
+            const sup: Record<string, number> = {};
+            let added = 0;
+            for (const [d, price] of Object.entries(rSup.data)) {
+              if (hist[d] === undefined) { sup[d] = price as number; added++; }
+            }
+            if (added > 0) {
+              supHist = sup;
+              console.log(`[history] ${comp.code} 비교종목 fchart 보강 후보: +${added}건 (캐시에 없는 날짜만 반영)`);
+            }
           }
         }
-        // 2순위: KIS OpenAPI (trend 실패 시 폴백)
-        if (!hist) { const rKIS = await fetchKISStockHistory(comp.code); if (rKIS) hist = rKIS.data; }
         // 3순위: 네이버 fchart
         if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code); if (rNaver) hist = rNaver.data; }
         // 4순위: Yahoo Finance (.KS / .KQ)
@@ -329,7 +362,11 @@ export function useStockData({
         if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`); if (r2) hist = r2.data; }
       }
       if (hist) {
-        setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+        // ⚠️ 통째 교체 금지 — 실제종가는 overwrite, fchart 보강분은 캐시에 없는 날짜만.
+        setStockHistoryMap(prev => ({
+          ...prev,
+          [comp.code]: mergeCodeHistory(prev[comp.code] || {}, { overwrite: hist, gapFill: supHist }),
+        }));
         // 과거 데이터 수집 직후 Drive 즉시 백업 (페이지 재시작 시 재수집 방지)
         setTimeout(() => {
           const snap = saveStateRef.current;
@@ -360,31 +397,41 @@ export function useStockData({
           const fromYear = parseInt(latestDate.split('-')[0]);
           const daysDiff = Math.ceil((Date.now() - new Date(latestDate).getTime()) / 86400000);
           const naverCount = Math.ceil(daysDiff * 5 / 7) + 30;
-          // 미이전 코드: latestDate 무시하고 전체 재조회 (수정주가 캐시 교체)
-          const incNeedsMigration = !trendMigratedInSession.current.has(comp.code);
-          const rTrend = await fetchNaverDomesticHistory(comp.code, incNeedsMigration ? undefined : latestDate);
-          if (rTrend) { newData = rTrend.data; trendMigratedInSession.current.add(comp.code); }
+          // 이 분기는 '이미 완전한 KIS 이력을 확보한 코드'만 도달한다(그 외는 위 전체조회 분기).
+          // 따라서 순수 증분이면 충분하다. ⚠️ trend 성공만으로 마이그레이션 표시를 세우지 말 것 —
+          // 그러면 아래 REPLACE가 발동해 며칠치 증분이 전체 이력을 대체한다(옛 코드의 치명적 결함).
+          const rTrend = await fetchNaverDomesticHistory(comp.code, latestDate);
+          if (rTrend) newData = rTrend.data;
           if (!newData) { const rKIS = await fetchKISStockHistory(comp.code, fromYear); if (rKIS) newData = rKIS.data; }
           if (!newData) { const rNaver = await fetchNaverStockHistory(comp.code, naverCount); if (rNaver) newData = rNaver.data; }
           if (!newData) { const r1 = await fetchIndexData(`${comp.code}.KS`, latestDate); if (r1) newData = r1.data; }
           if (!newData) { const r2 = await fetchIndexData(`${comp.code}.KQ`, latestDate); if (r2) newData = r2.data; }
         }
         if (newData) {
-          // 미이전이면 REPLACE(수정주가 제거), 아니면 MERGE(증분)
-          hist = trendMigratedInSession.current.has(comp.code) && !isOverseasComp
-            ? newData
-            : { ...hist, ...newData };
-          // 국내 종목 sparse 캐시(< 1500) 보강: 과거 gap을 fchart 풀카운트로 채움 — trend 값 우선
+          // ⚠️ REPLACE 분기를 되살리지 말 것 — 옛 코드는 마이그레이션 표시가 선 코드에 대해
+          //    `hist = newData`로 전체를 대체했다. newData는 latestDate 이후 며칠치 증분이라,
+          //    그 순간 수년치 실제종가가 사라지고 뒤이은 fchart 보강이 과거 전체를 수정종가로 메웠다.
+          //    실측 490590(446건 중 285건이 수정종가)이 이 경로로 만들어졌을 가능성이 크다.
+          hist = { ...hist, ...newData };
+          // 국내 sparse 캐시(<1500) 보강 — ⚠️ hist에 섞지 말고 supHist로 분리(gap-only 슬롯).
           if (!isOverseasComp && Object.keys(hist).length < 1500) {
             const rSup = await fetchNaverStockHistory(comp.code);
             if (rSup) {
-              const trendHist = hist;
-              hist = { ...rSup.data, ...trendHist };
-              const added = Object.keys(rSup.data).filter(d => trendHist[d] === undefined).length;
-              if (added > 0) console.log(`[history] ${comp.code} 증분경로 fchart 보강: +${added}건`);
+              const sup: Record<string, number> = {};
+              let added = 0;
+              for (const [d, price] of Object.entries(rSup.data)) {
+                if (hist[d] === undefined) { sup[d] = price as number; added++; }
+              }
+              if (added > 0) {
+                supHist = sup;
+                console.log(`[history] ${comp.code} 증분경로 fchart 보강 후보: +${added}건 (캐시에 없는 날짜만 반영)`);
+              }
             }
           }
-          setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+          setStockHistoryMap(prev => ({
+            ...prev,
+            [comp.code]: mergeCodeHistory(prev[comp.code] || {}, { overwrite: hist, gapFill: supHist }),
+          }));
           setTimeout(() => {
             const snap = saveStateRef.current;
             if (snap && driveTokenRef.current) saveAllToDrive(snap);
@@ -458,6 +505,8 @@ export function useStockData({
 
     const isOverseasFetch = !isKoreanCode(comp.code);
     let hist: Record<string, number> | null = null;
+    // fchart(수정종가) 보강분 — hist(실제종가)와 분리 보관. gap-only 슬롯으로만 흘러간다.
+    let supHist: Record<string, number> | null = null;
 
     if (isOverseasFetch) {
       // 캐시 최초 날짜가 startDate 이전이면 증분 수집, 아니면 startDate부터 기간별 전체 수집
@@ -474,15 +523,21 @@ export function useStockData({
       // 1순위: Naver trend API (실제 종가, 수정주가 미반영)
       const rTrend = await fetchNaverDomesticHistory(comp.code, lastCachedDate ?? undefined);
       if (rTrend) hist = rTrend.data;
-      // trend가 sparse한 경우 fchart로 과거 gap 보강 — trend 값이 우선.
+      // trend가 sparse한 경우 fchart로 과거 gap 보강.
+      // ⚠️ hist에 섞지 말고 supHist로 분리 — 섞으면 아래 병합에서 수정종가가 캐시의 실제종가를 덮는다.
       // naverCount는 증분용(lastCachedDate 이후 일수)이라 작을 수 있어 풀카운트(2000) 사용.
       if (hist) {
         const rSup = await fetchNaverStockHistory(comp.code);
         if (rSup) {
-          const trendHist = hist;
-          hist = { ...rSup.data, ...trendHist };
-          const added = Object.keys(rSup.data).filter(d => trendHist[d] === undefined).length;
-          if (added > 0) console.log(`[history] ${comp.code} 조회기간 fchart 보강: +${added}건`);
+          const sup: Record<string, number> = {};
+          let added = 0;
+          for (const [d, price] of Object.entries(rSup.data)) {
+            if (hist[d] === undefined) { sup[d] = price as number; added++; }
+          }
+          if (added > 0) {
+            supHist = sup;
+            console.log(`[history] ${comp.code} 조회기간 fchart 보강 후보: +${added}건 (캐시에 없는 날짜만 반영)`);
+          }
         }
       }
       // 2순위: KIS (trend 실패 시 폴백)
@@ -495,7 +550,8 @@ export function useStockData({
     }
 
     if (hist && Object.keys(hist).length > 1) {
-      const mergedHist = existingHist ? { ...existingHist, ...hist } : hist;
+      // 실제종가(hist)는 덮어쓰기, fchart 보강분(supHist)은 캐시에 없는 날짜만.
+      const mergedHist = mergeCodeHistory(existingHist || {}, { overwrite: hist, gapFill: supHist });
       setStockHistoryMap(prev => ({ ...prev, [comp.code]: mergedHist }));
       setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
       autoFetchedCodes.current.add(comp.code); // 전체 이력 조회 완료 표시
@@ -539,33 +595,62 @@ export function useStockData({
 
     const isOverseasComp = !isKoreanCode(comp.code);
     let hist: Record<string, number> | null = null;
+    // fchart(수정종가) 보강분 — hist(실제종가)와 분리 보관. gap-only 슬롯으로만 흘러간다.
+    let supHist: Record<string, number> | null = null;
 
     if (isOverseasComp) {
       const rUS = await fetchUsStockHistory(comp.code);
       if (rUS) hist = rUS.data;
     } else {
-      const rTrend = await fetchNaverDomesticHistory(comp.code);
-      if (rTrend) { hist = rTrend.data; trendMigratedInSession.current.add(comp.code); }
-      console.log(`[history] ${comp.code} 강제재조회 trend ${rTrend ? `성공 ${Object.keys(rTrend.data).length}건` : '실패 → fallback'}`);
-      // trend가 sparse한 경우 fchart로 과거 gap 보강 — trend 값이 우선
-      if (hist) {
+      // ⚠️ 1순위는 반드시 KIS다 — 과거 전체를 실제종가로 주는 유일한 창구.
+      //    옛 코드는 trend를 먼저 부르고 성공하면 KIS를 통째로 건너뛰었는데,
+      //    trend는 sparse(실측 490590 = 161/446건)라 나머지 285건이 전부 fchart 수정종가로 채워졌다.
+      //    그 결과 이 버튼을 누를수록 과거가 수정종가로 굳었다.
+      const rKIS = await fetchKISStockHistory(comp.code);
+      if (rKIS) {
+        hist = rKIS.data;
+        const kd = Object.keys(rKIS.data).length;
+        // ⚠️ 마이그레이션 표시는 '완전한 KIS 응답'에만 — trend 성공만으로 세우면
+        //    refreshPrices의 KIS 경로(:885 게이트)가 이 코드를 건너뛰어 과거가 영영 안 채워진다.
+        if (isCompleteKisHistory(rKIS, kd)) trendMigratedInSession.current.add(comp.code);
+        console.log(`[history] ${comp.code} 강제재조회 KIS 성공: ${kd}건${isCompleteKisHistory(rKIS, kd) ? '' : ' (부분 응답)'}`);
+      } else {
+        console.warn(`[history] ${comp.code} 강제재조회 KIS 실패 → trend 폴백`);
+      }
+      // 2순위: trend(실제종가) — KIS가 못 준 날짜만 보강
+      if (!hist) {
+        const rTrend = await fetchNaverDomesticHistory(comp.code);
+        if (rTrend) hist = rTrend.data;
+        console.log(`[history] ${comp.code} 강제재조회 trend ${rTrend ? `성공 ${Object.keys(rTrend.data).length}건` : '실패 → fallback'}`);
+      }
+      // fchart(수정종가) 보강 — ⚠️ hist에 섞지 말고 supHist로 분리해 gap-only 슬롯으로만 흘린다.
+      if (hist && Object.keys(hist).length < 1500) {
         const rSup = await fetchNaverStockHistory(comp.code);
         if (rSup) {
-          const trendHist = hist;
-          hist = { ...rSup.data, ...trendHist };
-          const added = Object.keys(rSup.data).filter(d => trendHist[d] === undefined).length;
-          if (added > 0) console.log(`[history] ${comp.code} 강제재조회 fchart 보강: +${added}건`);
+          const sup: Record<string, number> = {};
+          let added = 0;
+          for (const [d, price] of Object.entries(rSup.data)) {
+            if (hist[d] === undefined) { sup[d] = price as number; added++; }
+          }
+          if (added > 0) {
+            supHist = sup;
+            console.log(`[history] ${comp.code} 강제재조회 fchart 보강 후보: +${added}건 (캐시에 없는 날짜만 반영)`);
+          }
         }
       }
-      if (!hist) { const rKIS = await fetchKISStockHistory(comp.code); if (rKIS) hist = rKIS.data; }
       if (!hist) { const rNaver = await fetchNaverStockHistory(comp.code); if (rNaver) hist = rNaver.data; }
       if (!hist) { const r1 = await fetchIndexData(`${comp.code}.KS`); if (r1) hist = r1.data; }
       if (!hist) { const r2 = await fetchIndexData(`${comp.code}.KQ`); if (r2) hist = r2.data; }
     }
 
     if (hist && Object.keys(hist).length > 1) {
-      // 기존 캐시 완전 교체
-      setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
+      // ⚠️ '기존 캐시 완전 교체'로 되돌리지 말 것 — 통째 교체는 이번에 받지 못한 과거 날짜를
+      //    통째로 날린다. 대신 실제종가(hist)를 overwrite로 넣으면 캐시에 남아 있던 수정종가가
+      //    그 날짜에서 자동으로 교정되므로, 교체 없이도 '수정주가 제거'라는 원래 목적이 달성된다.
+      setStockHistoryMap(prev => ({
+        ...prev,
+        [comp.code]: mergeCodeHistory(prev[comp.code] || {}, { overwrite: hist, gapFill: supHist }),
+      }));
       const earliest = Object.keys(hist).sort()[0];
       setStockListingDates(prev => { const n = { ...prev }; if (earliest) n[comp.code] = earliest; else delete n[comp.code]; return n; });
       autoFetchedCodes.current.add(comp.code);
@@ -943,8 +1028,9 @@ export function useStockData({
             const dates = Object.keys(rKIS.data).sort();
             // 부분 응답(청크 일부만 성공) 가드: 100건 미만이면 마이그 플래그 보류 → 다음 갱신에서 재시도 허용.
             // KIS는 13청크 × ~50거래일 = 정상 시 600~6000건. 100건 미만 = rate limit으로 대부분 청크 실패한 상태.
-            if (dates.length >= 100) trendMigratedInSession.current.add(code);
-            console.log(`[history] ${code} KIS 성공: ${dates.length}건${dates.length < 100 ? ' (부분 응답 — 재시도 대기)' : ''}, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
+            const complete = isCompleteKisHistory(rKIS, dates.length);
+            if (complete) trendMigratedInSession.current.add(code);
+            console.log(`[history] ${code} KIS 성공: ${dates.length}건${complete ? '' : ' (부분 응답 — 재시도 대기)'}, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
           } else {
             console.warn(`[history] ${code} KIS 실패 → Naver trend 폴백`);
           }
