@@ -276,10 +276,8 @@ export default function RebalancingPanel({
 
   const stickySpanKeys = ['category', 'changeRate', 'returnRate', 'name'];
   const stickySpanCount = stickySpanKeys.filter(k => !H(k)).length;
-  // ⚠️ '실제로 그리는 열 집합'에서 직접 센다 — `상수 − hiddenColumns.length` 역산은 Drive에 영속된
-  //    구 키(열을 빼거나 key를 개명한 뒤 남은 값)가 hiddenColumns에 섞이면 colSpan만 줄어들어
-  //    dc-irp 계좌의 '퇴직연금 예상 자산 비율' 행이 오른쪽에서 조용히 잘린다(에러도 경고도 없음).
-  const retirementColSpan = RB_COLS.filter(c => !H(c.key)).length;
+  // 표 하단 요약(투자가능금액·잔액)과 퇴직연금 D/S 바는 표 바깥으로 나가 colSpan을 쓰지 않는다
+  // → 열 개수 상수(과거 `16 - hiddenColumns.length`)가 필요 없어졌다. 다시 만들지 말 것.
 
   const hideStrip = (key) => (
     <div
@@ -1460,132 +1458,142 @@ export default function RebalancingPanel({
                     );
                   })()}
                   {!H('curRatio') && <td className="py-3 px-3 text-center font-bold text-gray-400">100%</td>}
-                  {H('cost') && !H('action') && <td className="py-3 px-3"></td>}
-                  {H('cost') && !H('extraQty') && <td className="py-3 px-3"></td>}
-                  {H('cost') && !H('maxAdd') && <td className="py-3 px-3"></td>}
-                  {H('cost') && !H('expQty') && <td className="py-3 px-3"></td>}
-                  {!H('cost') && (() => {
-                    const isOv = activePortfolioAccountType === 'overseas';
-                    const fxRate = marketIndicators.usdkrw || 1;
-                    const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
-                    const fmtAmt = (n) => isOv ? fmtUS(n) : formatCurrency(n);
-                    const isRebalance = settings.mode === 'rebalance';
-                    const depositLabel = isRebalance ? '예수금' : '사용예수금';
-                    const balanceColor = rebalBalance > 0 ? 'text-sky-300' : rebalBalance < 0 ? 'text-red-400' : 'text-gray-500';
-                    const absorbedCount = [!H('action'), !H('extraQty'), !H('maxAdd'), !H('expQty')].filter(Boolean).length;
-                    return (
-                      <td colSpan={absorbedCount + 1} className="py-3 px-3 text-right align-top">
-                        <div className="flex justify-end mb-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setShowCostFormula(v => !v)}
-                            className="inline-flex items-center gap-0.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors font-normal"
-                            title={showCostFormula ? '계산식 숨기기' : '계산식 보기'}
-                          >
-                            계산식
-                            {showCostFormula ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                          </button>
-                        </div>
-                        {showCostFormula ? (
-                          <div className="flex flex-col items-end gap-1 font-normal">
-                            <div className="text-[10px] text-gray-400 font-bold w-full text-right">총 구매 가능 금액</div>
-                            <div className="flex items-center justify-end gap-2 w-full">
-                              <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">매도</span>
-                              <span className="font-bold text-sky-300 text-[12px]">{fmtAmt(headerTotalSell)}</span>
-                            </div>
-                            <div className="flex items-center justify-end gap-2 w-full">
-                              <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">+ {depositLabel}</span>
-                              <span className="font-bold text-gray-300 text-[12px]">{fmtAmt(headerDepositForBuy)}</span>
-                            </div>
-                            <div className="flex items-center justify-end gap-2 w-full">
-                              <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">+ 적립금</span>
-                              <span className="font-bold text-orange-300 text-[12px]">{fmtAmt(headerAmount)}</span>
-                            </div>
-                            <div className="flex items-center justify-end gap-2 w-full border-t border-gray-700/40 pt-1">
-                              <span className="text-[10px] text-gray-400 leading-tight whitespace-nowrap font-bold">= 총 구매 가능 금액</span>
-                              <span className="font-bold text-green-300 text-[12px]">{fmtAmt(rebalTotalAvailable)}</span>
-                            </div>
-                            <div className="flex items-center justify-end gap-2 w-full mt-1">
-                              <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">− 매수금액</span>
-                              <span className="font-bold text-red-300 text-[12px]">{fmtAmt(headerTotalBuy)}</span>
-                            </div>
-                            <div className="flex items-center justify-end gap-2 w-full border-t border-gray-700/60 pt-1.5 mt-0.5">
-                              <span className="text-[10px] text-gray-400 leading-tight whitespace-nowrap font-bold">= 잔액</span>
-                              <span className={`font-bold text-[13px] ${balanceColor}`}>{fmtAmt(rebalBalance)}</span>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-[1fr_auto_auto] gap-x-2 gap-y-2 items-baseline">
-                            <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap text-right">투자가능금액 :</span>
-                            <span className="text-green-300 font-bold text-[14px] text-right whitespace-nowrap">{fmtAmt(rebalTotalAvailable)}</span>
-                            <span className="text-gray-500 text-[11px] w-2 text-center">−</span>
-
-                            <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap text-right">매수 금액 :</span>
-                            <span className="text-red-300 font-bold text-[14px] text-right whitespace-nowrap">{fmtAmt(headerTotalBuy)}</span>
-                            <span className="text-gray-500 text-[11px] w-2 text-center">=</span>
-
-                            <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap text-right">잔액</span>
-                            <span className={`font-bold text-[15px] text-right whitespace-nowrap ${balanceColor}`}>{fmtAmt(rebalBalance)}</span>
-                            <span className="w-2" />
-                          </div>
-                        )}
-                      </td>
-                    );
-                  })()}
+                  {/* 투자가능금액·매수금액·잔액 요약은 표 **바깥**(스크롤 컨테이너 밖)으로 옮겼다.
+                      여기서는 각 열의 빈 칸만 채운다 — 자세한 이유는 요약 블록 위 주석 참조. */}
+                  {!H('action') && <td className="py-3 px-3"></td>}
+                  {!H('extraQty') && <td className="py-3 px-3"></td>}
+                  {!H('maxAdd') && <td className="py-3 px-3"></td>}
+                  {!H('expQty') && <td className="py-3 px-3"></td>}
+                  {!H('cost') && <td className="py-3 px-3"></td>}
                   {!H('expEval') && (() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-center">{isOv ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
                   {!H('expRatio') && <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>}
                 </tr>
-                {showRetirementStats && (() => {
-                  const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
-                  // 예적금은 rebalanceData 고정 행으로 포함됨 → 별도 가산 금지(이중 계상).
-                  const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
-                  const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
-                  const projTotal = projD + projS;
-                  const projDRatio = projTotal > 0 ? projD / projTotal * 100 : 0;
-                  const projSRatio = projTotal > 0 ? projS / projTotal * 100 : 0;
-                  const onTarget = Math.abs(projDRatio - 70) <= 5;
-                  return (
-                    <tr className="border-t border-amber-600/30 bg-amber-950/20">
-                      <td colSpan={retirementColSpan} className="py-2.5 px-4">
-                        <div className="flex items-center gap-4 flex-wrap">
-                          <span className="text-amber-400 font-bold text-xs tracking-wide">퇴직연금 예상 자산 비율</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-red-400 font-bold text-xs">위험 D</span>
-                            <span className={`font-bold text-sm ${onTarget ? 'text-red-400' : 'text-red-300'}`}>{projDRatio.toFixed(1)}%</span>
-                            <span className="text-gray-600 text-[11px]">(목표 70%)</span>
-                            {!onTarget && (
-                              <span className="text-orange-400 text-[11px]">
-                                {projDRatio > 70 ? `+${(projDRatio - 70).toFixed(1)}%` : `${(projDRatio - 70).toFixed(1)}%`}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-emerald-400 font-bold text-xs">안전 S</span>
-                            <span className={`font-bold text-sm ${Math.abs(projSRatio - 30) <= 5 ? 'text-emerald-400' : 'text-emerald-300'}`}>{projSRatio.toFixed(1)}%</span>
-                            <span className="text-gray-600 text-[11px]">(목표 30%)</span>
-                          </div>
-                          <div className="flex-1 flex items-center gap-1 min-w-[120px]">
-                            <div className="flex-1 h-2.5 bg-gray-700 rounded-full overflow-hidden">
-                              <div
-                                className="h-full rounded-full transition-all duration-500"
-                                style={{
-                                  width: `${Math.min(projDRatio, 100)}%`,
-                                  background: onTarget
-                                    ? 'linear-gradient(90deg, #ef4444 0%, #f97316 100%)'
-                                    : 'linear-gradient(90deg, #dc2626 0%, #ea580c 100%)',
-                                }}
-                              />
-                            </div>
-                            <span className="text-[10px] text-gray-500 shrink-0">D70/S30</span>
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })()}
               </tfoot>
             </table>
           </div>
+          {/* ⚠️ 하단 요약(투자가능금액·매수금액·잔액)과 퇴직연금 D/S 바는 표 **바깥**에 둔다 —
+              가로 스크롤 컨테이너(overflow-x-auto) 밖이라 열 구성·가로 스크롤과 완전히 무관하다.
+              과거엔 요약이 '실 구매비용' 열의 colSpan td 안에 있어 ① 그 열을 숨기면 요약이 통째로
+              사라지고 ② 열이 많아 가로 스크롤이 생기면 오른쪽으로 밀려 화면에서 사라졌다.
+              퇴직연금 바도 같은 이유(colSpan 행이라 스크롤과 함께 밀림)로 함께 뺐다.
+              ⚠️ 다시 tfoot 안으로 되돌리지 말 것 — 되돌리면 두 결함이 그대로 재발한다.
+              ⚠️ 열 개수에 의존하는 값(colSpan)을 여기서 다시 만들지 말 것. */}
+          {(() => {
+            const isOv = activePortfolioAccountType === 'overseas';
+            const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
+            const fmtAmt = (n) => isOv ? fmtUS(n) : formatCurrency(n);
+            const isRebalance = settings.mode === 'rebalance';
+            const depositLabel = isRebalance ? '예수금' : '사용예수금';
+            const balanceColor = rebalBalance > 0 ? 'text-sky-300' : rebalBalance < 0 ? 'text-red-400' : 'text-gray-500';
+            return (
+              <div className="bg-[#1e293b] border-t-2 border-gray-500 px-3 py-3 flex justify-end">
+                <div className="w-full max-w-[420px] text-right">
+                  <div className="flex justify-end mb-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowCostFormula(v => !v)}
+                      className="inline-flex items-center gap-0.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors font-normal"
+                      title={showCostFormula ? '계산식 숨기기' : '계산식 보기'}
+                    >
+                      계산식
+                      {showCostFormula ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                    </button>
+                  </div>
+                  {showCostFormula ? (
+                    <div className="flex flex-col items-end gap-1 font-normal">
+                      <div className="text-[10px] text-gray-400 font-bold w-full text-right">총 구매 가능 금액</div>
+                      <div className="flex items-center justify-end gap-2 w-full">
+                        <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">매도</span>
+                        <span className="font-bold text-sky-300 text-[12px]">{fmtAmt(headerTotalSell)}</span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 w-full">
+                        <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">+ {depositLabel}</span>
+                        <span className="font-bold text-gray-300 text-[12px]">{fmtAmt(headerDepositForBuy)}</span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 w-full">
+                        <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">+ 적립금</span>
+                        <span className="font-bold text-orange-300 text-[12px]">{fmtAmt(headerAmount)}</span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 w-full border-t border-gray-700/40 pt-1">
+                        <span className="text-[10px] text-gray-400 leading-tight whitespace-nowrap font-bold">= 총 구매 가능 금액</span>
+                        <span className="font-bold text-green-300 text-[12px]">{fmtAmt(rebalTotalAvailable)}</span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 w-full mt-1">
+                        <span className="text-[10px] text-gray-500 leading-tight whitespace-nowrap">− 매수금액</span>
+                        <span className="font-bold text-red-300 text-[12px]">{fmtAmt(headerTotalBuy)}</span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 w-full border-t border-gray-700/60 pt-1.5 mt-0.5">
+                        <span className="text-[10px] text-gray-400 leading-tight whitespace-nowrap font-bold">= 잔액</span>
+                        <span className={`font-bold text-[13px] ${balanceColor}`}>{fmtAmt(rebalBalance)}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-[1fr_auto_auto] gap-x-2 gap-y-2 items-baseline">
+                      <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap text-right">투자가능금액 :</span>
+                      <span className="text-green-300 font-bold text-[14px] text-right whitespace-nowrap">{fmtAmt(rebalTotalAvailable)}</span>
+                      <span className="text-gray-500 text-[11px] w-2 text-center">−</span>
+
+                      <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap text-right">매수 금액 :</span>
+                      <span className="text-red-300 font-bold text-[14px] text-right whitespace-nowrap">{fmtAmt(headerTotalBuy)}</span>
+                      <span className="text-gray-500 text-[11px] w-2 text-center">=</span>
+
+                      <span className="text-[12px] text-gray-300 font-bold whitespace-nowrap text-right">잔액</span>
+                      <span className={`font-bold text-[15px] text-right whitespace-nowrap ${balanceColor}`}>{fmtAmt(rebalBalance)}</span>
+                      <span className="w-2" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+          {showRetirementStats && (() => {
+          const depositEval = cleanNum(portfolio.find(p => p.type === 'deposit')?.depositAmount || 0);
+          // 예적금은 rebalanceData 고정 행으로 포함됨 → 별도 가산 금지(이중 계상).
+          const projD = rebalanceData.filter(d => getAssetClass(d) === 'D').reduce((s, d) => s + d.expEval, 0);
+          const projS = rebalanceData.filter(d => getAssetClass(d) === 'S').reduce((s, d) => s + d.expEval, 0) + depositEval;
+          const projTotal = projD + projS;
+          const projDRatio = projTotal > 0 ? projD / projTotal * 100 : 0;
+          const projSRatio = projTotal > 0 ? projS / projTotal * 100 : 0;
+          const onTarget = Math.abs(projDRatio - 70) <= 5;
+          return (
+            <div className="border-t border-amber-600/30 bg-amber-950/20">
+              <div className="py-2.5 px-4">
+                <div className="flex items-center gap-4 flex-wrap">
+                  <span className="text-amber-400 font-bold text-xs tracking-wide">퇴직연금 예상 자산 비율</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-red-400 font-bold text-xs">위험 D</span>
+                    <span className={`font-bold text-sm ${onTarget ? 'text-red-400' : 'text-red-300'}`}>{projDRatio.toFixed(1)}%</span>
+                    <span className="text-gray-600 text-[11px]">(목표 70%)</span>
+                    {!onTarget && (
+                      <span className="text-orange-400 text-[11px]">
+                        {projDRatio > 70 ? `+${(projDRatio - 70).toFixed(1)}%` : `${(projDRatio - 70).toFixed(1)}%`}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-400 font-bold text-xs">안전 S</span>
+                    <span className={`font-bold text-sm ${Math.abs(projSRatio - 30) <= 5 ? 'text-emerald-400' : 'text-emerald-300'}`}>{projSRatio.toFixed(1)}%</span>
+                    <span className="text-gray-600 text-[11px]">(목표 30%)</span>
+                  </div>
+                  <div className="flex-1 flex items-center gap-1 min-w-[120px]">
+                    <div className="flex-1 h-2.5 bg-gray-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${Math.min(projDRatio, 100)}%`,
+                          background: onTarget
+                            ? 'linear-gradient(90deg, #ef4444 0%, #f97316 100%)'
+                            : 'linear-gradient(90deg, #dc2626 0%, #ea580c 100%)',
+                        }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-gray-500 shrink-0">D70/S30</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+          })()}
         </div>}
 
         {/* 리밸런싱 자산 비중 도넛 차트 */}

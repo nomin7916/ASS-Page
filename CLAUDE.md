@@ -1226,10 +1226,11 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 - **⚠️ `action`은 `rebalExtraQty`를 참조하지 말 것**: `maxAddLink` 유지 effect의 pool은
   `잔액 + Σ_linked extra×price`인데, 이 pool이 **연동 행 자신의 extra에 불변**이라는 성질이 고정점
   보장(진동·무한루프 차단)의 근거다. action이 extra를 참조하는 순간 그 불변성이 깨진다.
-- **열 추가에 따라 함께 고친 것**: `RB_COLS`(index 8, 미등록 시 열을 숨기면 **복원 칩이 없어 영구 소실**),
-  `retirementColSpan`(하드코딩 16 → `RB_COLS.length`), thead/tbody/tfoot **각 1셀씩**(tfoot을 빠뜨리면
-  TOTAL 행이 통째로 한 칸 밀린다). `cost`의 colSpan 흡수 구간(action~expQty)과는 인접하지 않아
-  `absorbedCount`는 무수정. `data-col="targetAmount"` + `handleTableKeyDown(e,'targetAmount')` 필수
+- **열 추가 시 고칠 곳 = 4군데뿐**: `RB_COLS`(index 8, 미등록 시 열을 숨기면 **복원 칩이 없어 영구 소실**)
+  + thead/tbody/tfoot **각 1셀씩**(tfoot을 빠뜨리면 TOTAL 행이 통째로 한 칸 밀린다).
+  colSpan을 쓰는 곳은 이제 없다(아래 '같이 고친 표 결함' 참조 — 하단 요약·퇴직연금 바가 표 바깥으로
+  나가면서 `retirementColSpan`·`absorbedCount`가 **삭제**됐다. 다시 만들지 말 것).
+  `data-col="targetAmount"` + `handleTableKeyDown(e,'targetAmount')` 필수
   (안 바꾸면 ↑/↓가 목표비중 칸으로 튄다).
 - **⚠️ 입력 초안(`editingTargetAmount`)에 계산값을 넣지 말 것**: 표시값은 `formatNumber`(콤마)인데
   onFocus 초안을 `String(effAmt)`(콤마 없음)로 넣으면 문자열이 달라져 React가 커밋에서 `node.value`를
@@ -1270,7 +1271,15 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   기존 우회로가 이미 있다. 잠금을 붙이려면 그 select부터 막아야 한다 — 목표금액에만 붙이는 것은
   방어가 아니라 불편만 준다.
 
-**같이 고친 표 결함 2건 (⚠️ 회귀 주의)**
+**같이 고친 표 결함 3건 (⚠️ 회귀 주의)**
+
+- **하단 요약(투자가능금액·매수 금액·잔액)과 퇴직연금 D/S 바를 표 바깥으로 이동**.
+  요약은 원래 **'실 구매비용' 열의 `<td colSpan>` 안**에 있어서 ① 그 열을 숨기면 **요약이 통째로
+  사라졌고** ② 열이 많아 가로 스크롤이 생기면 오른쪽으로 밀려 화면에서 사라졌다. 퇴직연금 바도
+  colSpan 행이라 같은 문제였다. 둘 다 `overflow-x-auto` 컨테이너 **밖의 일반 `<div>`** 로 옮겨
+  **열 구성·가로 스크롤과 완전히 무관**해졌다. tfoot TOTAL 행에는 각 열의 빈 `<td>`만 남는다.
+  ⚠️ 다시 tfoot 안으로 되돌리지 말 것 — 두 결함이 그대로 재발한다. ⚠️ 이 이동으로 `retirementColSpan`·
+  `absorbedCount`(그리고 `H('cost')`일 때 4개 빈 td를 채워 주던 보정 분기)가 전부 필요 없어져 삭제됐다.
 
 - **표 헤더가 앱 상단바 위로 새어 나오던 문제** → 표 스크롤 래퍼(`overflow-x-auto`)에 **`isolate`**.
   원인은 sticking이 아니라 **페인트 순서**다: 앱 상단바가 `sticky top-0 z-30`(`App.tsx`)인데 이 표의
