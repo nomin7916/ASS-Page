@@ -133,6 +133,19 @@ const normalizeHiddenDivMonths = (raw) => {
 // 가드 주석과 같은 등급의 위험). 또 실제 달력에 없는 날짜 키(2026-13-45)는 CalendarModal이
 // 렌더할 수 없어 화면에 안 보이고 삭제도 못 하는 유령 기록이 되므로 여기서 버린다.
 // 변경이 없으면 원본 참조를 그대로 반환 → 불필요한 저장 트리거 방지(dedupeHistoryByDate 패턴).
+// 행 색상 마킹({itemId: 'yellow'|'slate'|'rose'|'brown'}) 지문.
+// ⚠️ 키 정렬 필수 — 4색 순환의 마지막이 `delete next[itemId]`라 재마킹 시 키가 객체 끝으로
+//    재삽입된다. 정렬 없이 직렬화하면 의미가 같은 상태가 다른 문자열을 내어 가짜 지문 변경이
+//    되고, 불필요한 STATE+VERSION write가 나간다(hiddenColumnsPortfolio의 .sort()와 같은 클래스).
+// ⚠️ 인자를 지역 변수로 받아 그것만 인덱싱할 것 — Object.keys(null)은 TypeError이고, 이 지문
+//    계산이 던지면 그 아래 Drive 저장 예약이 통째로 죽어 그 세션 저장이 멈춘다.
+// ⚠️ 삭제된 종목의 stale 키는 정리하지 말 것 — 값이 변하지 않아 무해하고, 정리는 별개 동작 변경이다.
+const markedRowsKey = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
+  const m = raw;
+  return Object.keys(m).sort().map(k => `${k}:${m[k]}`).join(',');
+};
+
 const normalizeCalendarMemos = (raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   let changed = false;
@@ -2401,7 +2414,15 @@ export default function App() {
         id: p.id, name: p.name,
         startDate: p.startDate || p.portfolioStartDate,
         portfolioStartDate: p.portfolioStartDate || p.startDate,
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
+        // ⚠️ 이 화이트리스트는 항목 필드를 **손나열**한다 — 사용자가 편집할 수 있는 필드를
+        //    빠뜨리면 그 필드만 고친 세션은 portfolioUpdatedAt이 오르지 않아 STATE 저장이
+        //    통째로 스킵된다(화면은 정상이라 조용한 세션에서만 재현되는 유실).
+        //    category('구분' 셀)·assetClass(dc-irp D/S 배지)가 정확히 그렇게 빠져 있었다.
+        //    ⚠️ 시세 갱신으로 변하는 값은 절대 넣지 말 것(시세마다 Drive 저장 폭주) —
+        //    category/assetClass는 useStockData·useMarketData에 참조 0건임을 확인했다.
+        //    ⚠️ savings 스프레드의 assetClass는 그대로 둘 것(값이 같아 무해하고, 옮기다 오타가
+        //    나면 예적금 지문이 조용히 깨진다 — @ts-nocheck+esbuild라 컴파일러가 못 잡는다).
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
@@ -2436,6 +2457,10 @@ export default function App() {
         // 없으면 다른 구조 변경에 편승할 때만 저장돼, 열만 숨기고 새로고침한 세션에서 조용히 되돌아간다.
         hiddenColumnsPortfolio: (Array.isArray(p.hiddenColumnsPortfolio) ? [...p.hiddenColumnsPortfolio] : []).slice().sort(),
         hiddenColumnsRebalancing: (Array.isArray(p.hiddenColumnsRebalancing) ? [...p.hiddenColumnsRebalancing] : []).slice().sort(),
+        // 행 색상 마킹(포트폴리오 표·리밸런싱 표) — 단독 토글도 저장 트리거되도록 지문에 포함.
+        // 두 필드는 별개다(한쪽만 넣으면 다른 표의 마킹이 계속 유실) — markedRowsKey 주석 참조.
+        markedPortfolioRowsKey: markedRowsKey(p.markedPortfolioRows),
+        markedRebalRowsKey: markedRowsKey(p.markedRebalRows),
         historyLen: (p.history || []).length,
         // 자산검증 확정상태 지문: 확정(isFixed)·자동확정거부(autoConfirmDeclined)·확정값 변경을
         // 구조 변경으로 간주 → portfolioUpdatedAt 상승 → Drive STATE 저장(수동/자동 확정·확정취소
@@ -2458,7 +2483,12 @@ export default function App() {
           return { code, events: rec.events || [], exTaxBase: rec.exTaxBase || {}, avgTaxBase: rec.avgTaxBase || {}, lastFetched: rec.lastFetched || '' };
         })),
       })),
-      activePortfolioId, customLinks, JSON.stringify(dividendLinks),
+      // ⚠️ overseasLinks(해외계좌 전용 퀵링크)는 payload(:state 리터럴)·저장 effect deps에는
+      //    있었는데 이 지문에만 빠져 있었다 → 해외계좌에서 링크만 수정한 세션은
+      //    portfolioUpdatedAt이 오르지 않아 STATE 저장 가드에 막혀 조용히 유실됐다
+      //    (historyVerifyKey·investmentNotesKey·calendarMemos·targetAmount와 동일 버그 클래스).
+      //    customLinks처럼 raw로 둘 것 — 바깥 JSON.stringify가 배열을 그대로 직렬화한다.
+      activePortfolioId, customLinks, overseasLinks, JSON.stringify(dividendLinks),
       JSON.stringify(calendarMemos),
       JSON.stringify(watchlistGroups),
       // ⚠️ 흐름도 지문 — 없으면 portfolioUpdatedAt이 안 올라 STATE 저장이 통째로 스킵된다
