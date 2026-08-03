@@ -224,11 +224,19 @@ export default function VerifyEvalModal({
   const multiLineFormula = depositsOnDateAffecting.length + withdrawalsOnDateAffecting.length > 1;
   const fmtPrin = (n) => isOverseas ? `$${Math.round(n).toLocaleString('en-US')}` : formatCurrency(Math.round(n));
 
-  const handleRefetch = async (code: string) => {
+  // ⚠️ try/finally 필수 — 없으면 refetchStockHistory가 던졌을 때 스피너 해제가 건너뛰어져
+  //    그 종목의 ⟳가 모달을 닫을 때까지 영구히 회전한다(해외 분기 추가로 실패 모드가 늘었다).
+  // ⚠️ 펀드는 아직 전용 분기가 없으므로 market을 넘기지 않아 기존 국내 체인으로 떨어뜨린다 —
+  //    존재하지 않는 분기('fund')로 값을 먼저 흘리면 @ts-nocheck라 아무도 잡아 주지 않는다.
+  const handleRefetch = async (code: string, market?: 'us' | 'kr') => {
     if (!code || !refetchStockHistory || refetchingCodes.has(code)) return;
     setRefetchingCodes(prev => new Set(prev).add(code));
-    const ok = await refetchStockHistory(code);
-    setRefetchingCodes(prev => { const n = new Set(prev); n.delete(code); return n; });
+    let ok = false;
+    try {
+      ok = await refetchStockHistory(code, market);
+    } finally {
+      setRefetchingCodes(prev => { const n = new Set(prev); n.delete(code); return n; });
+    }
     if (!ok) notify(`${code} 종가 데이터를 찾을 수 없습니다 (신규 상장 또는 API 일시 불가)`, 'warning');
   };
 
@@ -471,9 +479,9 @@ export default function VerifyEvalModal({
                           {(r.source === 'none' || r.source === 'approximate') && !r.isDeposit && r.item?.code && refetchStockHistory && (
                             <button
                               className="text-gray-500 hover:text-sky-400 disabled:opacity-40 transition-colors"
-                              title={`${r.item.code} 종가 재조회 (KIS → Naver)`}
+                              title={`${r.item.code} 종가 재조회 (${isOverseas && !r.isFund ? 'Yahoo → KIS 해외 → Naver' : 'KIS → Naver'})`}
                               disabled={refetchingCodes.has(r.item.code)}
-                              onClick={() => handleRefetch(r.item.code)}
+                              onClick={() => handleRefetch(r.item.code, r.isFund ? undefined : (isOverseas ? 'us' : 'kr'))}
                             >
                               <RefreshCw size={11} className={refetchingCodes.has(r.item.code) ? 'animate-spin' : ''} />
                             </button>

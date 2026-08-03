@@ -1324,9 +1324,27 @@ export function useStockData({
   }, []);
 
   // 자산검증 모달에서 특정 종목 1개를 즉시 재조회해 stockHistoryMap에 병합.
-  // KIS(원주가) → Naver fchart 순으로 시도. 성공 시 true 반환.
-  const refetchStockHistory = async (code: string): Promise<boolean> => {
+  // market==='us' → 해외(worldstock) 단독 1콜 / 그 외·미지정 → 국내 체인(KIS → fchart → trend).
+  // ⚠️ 과거엔 국내 3소스만 시도해 **해외 티커는 100% 실패**했고, 사용자에게는 "신규 상장 또는
+  //    API 일시 불가"로 표시돼 원인(조회 경로 부재)을 오도했다. 게다가 5자 이상 티커(GOOGL 등)는
+  //    KIS 청크 조회로 최대 22초를 태우고 국내 수집과 rate-limit 예산을 나눠 썼다.
+  // ⚠️ 시장은 **호출부가 알려주게** 할 것 — code만으로는 국내 최신 ETF(0190C0 같은 영숫자 6자)와
+  //    해외 티커를 구분할 수 없다. detectMarket(watchlistQuote)은 정확히 그 오분류 이슈가 있어
+  //    import하지 않는다.
+  // ⚠️ 분기는 `=== 'us'` fail-safe 형태 — 미지정·미구현 값('fund' 등)이 흘러들어와도 기존 국내
+  //    체인으로 떨어져 동작이 100% 하위호환이다(@ts-nocheck + esbuild라 오타를 잡을 컴파일러가 없다).
+  const refetchStockHistory = async (code: string, market?: 'us' | 'kr'): Promise<boolean> => {
     if (!code) return false;
+    if (market === 'us') {
+      // ⚠️ KIS를 앞에 두고 해외를 폴백으로 붙이지 말 것 — 단순 지연이 아니라 국내 수집 방해다.
+      //    /api/history?key=worldstock 이 이미 Yahoo → KIS 해외 → Naver 3단 폴백을 돈다.
+      const r = await fetchUsStockHistory(code);
+      // 대량 수집 경로(위 usCodesNeedingHistory 병합)와 동일한 `> 1` 임계 — worldstock 3순위
+      // Naver는 1건 응답도 채택하므로, 1건짜리를 성공으로 보고하면 "성공했다는데 값이 안 변함"이 된다.
+      if (!r?.data || Object.keys(r.data).length <= 1) return false;
+      setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
+      return true;
+    }
     let hist: Record<string, number> | null = null;
     const rKIS = await fetchKISStockHistory(code);
     if (rKIS && Object.keys(rKIS.data).length > 0) hist = rKIS.data;
