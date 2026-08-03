@@ -138,6 +138,7 @@ export default function IntegratedDashboard({
   handleToggleComp,
   handleCompStockBlur,
   handleFetchCompHistory,
+  handleForceRefetchComp,
   handleRemoveCompStock,
   customLinks = [],
   setCustomLinks,
@@ -1025,6 +1026,7 @@ export default function IntegratedDashboard({
                         handleToggleComp={handleToggleComp}
                         handleCompStockBlur={handleCompStockBlur}
                         handleFetchCompHistory={handleFetchCompHistory}
+                        handleForceRefetchComp={handleForceRefetchComp}
                         handleRemoveCompStock={handleRemoveCompStock}
                       />
                     </div>
@@ -1147,9 +1149,9 @@ export default function IntegratedDashboard({
                           }}
                         />
                       ))}
-                      <Area yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={false} />
-                      <Area yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={false} />
-                      <Area yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} fill="url(#intEvalGrad)" dot={false} activeDot={false} />
+                      <Area isAnimationActive={false} yAxisId="right" type="monotone" dataKey="costAmount" name="투자원금" stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#intCostGrad)" dot={false} activeDot={false} />
+                      <Area isAnimationActive={false} yAxisId="left" type="monotone" dataKey="returnRate" name="수익률" stroke="#ef4444" strokeWidth={2} fill="url(#intReturnGrad)" dot={false} activeDot={false} />
+                      <Area isAnimationActive={false} yAxisId="right" type="monotone" dataKey="evalAmount" name="총평가금액" stroke="#60a5fa" strokeWidth={2} fill="url(#intEvalGrad)" dot={false} activeDot={false} />
                       {compStocks.map((comp, ci) => (
                         comp?.active && comp?.code ? (
                           <Line

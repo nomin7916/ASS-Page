@@ -86,7 +86,7 @@ export default function CompStockChips({
             )}
             {comp.active && (
               <button
-                onClick={() => handleForceRefetchComp(idx)}
+                onClick={() => handleForceRefetchComp?.(idx)}
                 className={`px-1.5 py-1.5 transition-colors border-l ${hasIssue ? 'text-orange-400 hover:text-orange-200 hover:bg-orange-900/30 border-orange-700/40' : 'text-gray-600 hover:text-gray-300 hover:bg-gray-700/40 border-gray-700/40'}`}
                 title="종가 재조회 (캐시 초기화 후 전체 이력 새로 수집, Drive 저장)"
               >
