@@ -44,6 +44,38 @@ const COMP_STOCK_EXTRA_COLORS = ['#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#8
 // (해외 티커는 대부분 5자 이하 또는 6자 전부 알파벳 → /\d/에서 걸러짐)
 const isKoreanCode = (code: string) => /^[A-Za-z0-9]{6}$/.test(code) && /\d/.test(code);
 
+// 종목별 종가 캐시 병합 — 가격 기준(基準)이 다른 두 소스를 한 번에 안전하게 합친다.
+//
+// ⚠️ 회귀 주의 — 이 앱의 종가 소스는 두 종류이고 **같은 날짜에 다른 숫자**를 준다.
+//   · 실제종가(KIS FID_ORG_ADJ_PRC=1 / 네이버 trend): 그날 실제로 찍힌 가격 → `overwrite`
+//   · 수정종가(네이버 fchart / Yahoo): 이후 배당·분할을 소급 반영해 과거를 낮춘 가격 → `gapFill`
+//   실측 예: 490590(월배당 커버드콜) 2026-03-09 실제 12,380원 vs 수정 11,222원(배당 5회 소급, -9.4%).
+//   두 기준이 한 종목 안에 섞이면 그 경계에서 차트에 인공적인 급등이 생기고, 누적 수익률은
+//   곱셈 체인이라 그 하루가 이후 전 구간을 영구히 어긋나게 만든다.
+//
+// 규칙: gapFill은 **캐시에 그 날짜가 없을 때만** 채우고, overwrite는 무조건 덮어쓴다.
+// ⚠️ 적용 순서를 바꾸지 말 것 — gapFill을 먼저, overwrite를 나중에 적용해야
+//    같은 날짜가 양쪽에 있을 때 최종값이 항상 실제종가가 된다.
+// 입력은 변형하지 않고 항상 새 객체를 반환한다.
+const mergeCodeHistory = (
+  base: Record<string, number>,
+  sources: { overwrite?: Record<string, number> | null; gapFill?: Record<string, number> | null }
+): Record<string, number> => {
+  const merged: Record<string, number> = { ...(base || {}) };
+  const { overwrite, gapFill } = sources || {};
+  if (gapFill) {
+    for (const [d, price] of Object.entries(gapFill)) {
+      if (merged[d] === undefined) merged[d] = price as number;
+    }
+  }
+  if (overwrite) {
+    for (const [d, price] of Object.entries(overwrite)) {
+      merged[d] = price as number;
+    }
+  }
+  return merged;
+};
+
 export function useStockData({
   portfolio, setPortfolio,
   portfolios, setPortfolios,
@@ -899,6 +931,10 @@ export function useStockData({
         const korTasks = korCodesNeedingHistory.map(code => async () => {
           let hist: Record<string, number> | null = null;
           let fromRealPrice = false;
+          // fchart(수정종가) 보강분 — ⚠️ hist(실제종가)와 절대 섞지 말 것.
+          // hist는 아래 병합에서 '무조건 덮어쓰기' 대상이라, 여기에 수정종가가 들어가면
+          // 캐시에 있던 실제종가가 파괴된다. 이 변수는 gap-only 슬롯으로만 흘러간다.
+          let supHist: Record<string, number> | null = null;
           // 1순위: KIS 실제종가 (FID_ORG_ADJ_PRC=1, 수정주가 미반영)
           const rKIS = await fetchKISStockHistory(code);
           if (rKIS) {
@@ -936,30 +972,34 @@ export function useStockData({
             const rSup = await fetchNaverStockHistory(code);
             if (rSup) {
               const supData = rSup.data;
+              const sup: Record<string, number> = {};
               let added = 0;
+              // ⚠️ hist에 대입하지 말 것 — 별도 객체(sup)에만 모은다.
+              //    `hist[d] === undefined` 필터는 유지: 실제종가가 이미 있는 날짜는 후보에서 제외해
+              //    병합 순서 실수에도 수정종가가 실제종가를 이길 수 없게 한다(이중 안전).
               for (const [d, price] of Object.entries(supData)) {
-                if (hist[d] === undefined) { hist[d] = price as number; added++; }
+                if (hist[d] === undefined) { sup[d] = price as number; added++; }
               }
-              if (added > 0) console.log(`[history] ${code} fchart 보강 성공: +${added}건`);
+              if (added > 0) {
+                supHist = sup;
+                console.log(`[history] ${code} fchart 보강 후보: +${added}건 (캐시에 없는 날짜만 반영)`);
+              }
             }
           }
           if (hist) {
-            if (fromRealPrice) {
-              // KIS/Naver trend는 실제종가. 응답에 포함된 날짜만 갱신하고
-              // 응답에 없는 날짜는 기존 캐시 보존 — KIS 청크 부분 실패 시 데이터 손실 방지.
-              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...hist! } }));
-            } else {
-              // fchart/Yahoo는 수정종가 위험 — 기존 값은 절대 덮어쓰지 않고
-              // 캐시에 없는 날짜(gap)만 채움.
-              setStockHistoryMap(prev => {
-                const existing = prev[code] || {};
-                const filled = { ...existing };
-                for (const [d, price] of Object.entries(hist!)) {
-                  if (existing[d] === undefined) filled[d] = price;
-                }
-                return { ...prev, [code]: filled };
-              });
-            }
+            // 두 경로를 하나의 병합 규칙으로 통일한다.
+            //  · fromRealPrice(KIS/trend): hist=실제종가는 덮어쓰기, supHist=fchart 보강분은 캐시에 없는 날짜만.
+            //    응답에 없는 날짜는 기존 캐시 보존 — KIS 청크 부분 실패 시 데이터 손실 방지.
+            //  · 그 외(fchart/Yahoo 폴백): hist 자체가 수정종가 위험이라 통째로 gap-only.
+            // ⚠️ fromRealPrice 경로에서 hist를 그대로 spread하던 옛 코드로 되돌리지 말 것 —
+            //    그 시절엔 보강분이 hist 안에 주입돼 있어서 수정종가가 캐시의 실제종가를 덮었다.
+            setStockHistoryMap(prev => ({
+              ...prev,
+              [code]: mergeCodeHistory(
+                prev[code] || {},
+                fromRealPrice ? { overwrite: hist, gapFill: supHist } : { gapFill: hist }
+              ),
+            }));
           } else {
             korFailed.push(code);
           }
