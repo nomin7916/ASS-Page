@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useMemo, useState, useRef, useCallback } from 'react';
 import { Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Eye } from 'lucide-react';
-import { generateId, cleanNum, formatCurrency, resolveHoldings, buildHeldNameMap } from '../utils';
+import { generateId, cleanNum, formatCurrency, formatPercent, resolveHoldings, buildHeldNameMap } from '../utils';
 import {
   getKrEtfStocks,
   getCodeTaxBase,
@@ -159,12 +159,23 @@ export default function KrEtfTaxMatrix({
     const computedQtyMap = computeMonthlyQtyForGrid(events, monthYms);
     const hasQtyEvents = Object.keys(computedQtyMap).length > 0;
     const sortedEventsWithAvg = buildSortedEventsWithAvg(events);
+    // 현재가 — 포트폴리오 테이블과 같은 라이브 시세(item.currentPrice). 삭제된 종목(유령 행)이나
+    // 시세 미로드면 0 → 평가금액·손익은 '-'로 두고 계산하지 않는다.
+    const curPrice = cleanNum(stock.currentPrice);
     // 매수 요약: 매입단가>0 인 매수 이벤트 기준 매수일·총 매수수량·총 매입금액·평균 매입단가
     const buyEvts = (events || [])
       .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) > 0 && safeNum(e.purchasePrice) > 0)
       .sort((a, b) => a.date.localeCompare(b.date));
     const buyQtyTotal = buyEvts.reduce((s, e) => s + safeNum(e.change), 0);
     const buyAmountTotal = buyEvts.reduce((s, e) => s + safeNum(e.change) * safeNum(e.purchasePrice), 0);
+    // 매입단가가 비어 있는 매수 행은 합계에서 빠진다 — '요약 = 행별 값의 단순 합' 불변식을 지키되
+    // 빠진 건수를 요약에 명시해 사용자가 누락을 알아채게 한다.
+    const buyNoPriceCount = (events || [])
+      .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) > 0 && !(safeNum(e.purchasePrice) > 0))
+      .length;
+    // 손익 = 현재가 × 총 매수수량 − 총 매입금액 (매수 이벤트 전체 기준 — 중간 매도분도 포함)
+    const buyEvalTotal = curPrice > 0 ? curPrice * buyQtyTotal : 0;
+    const buyProfitTotal = buyEvalTotal - buyAmountTotal;
     const buySummary = {
       count: buyEvts.length,
       firstDate: buyEvts[0]?.date || '',
@@ -172,6 +183,11 @@ export default function KrEtfTaxMatrix({
       qtyTotal: buyQtyTotal,
       amountTotal: buyAmountTotal,
       avgPrice: buyQtyTotal > 0 ? buyAmountTotal / buyQtyTotal : 0,
+      noPriceCount: buyNoPriceCount,
+      hasCurPrice: curPrice > 0,
+      evalTotal: buyEvalTotal,
+      profitTotal: curPrice > 0 ? buyProfitTotal : 0,
+      profitRate: curPrice > 0 && buyAmountTotal > 0 ? (buyProfitTotal / buyAmountTotal) * 100 : 0,
     };
     const currentQty = cleanNum(stock.quantity || 0);
     const monthData = monthYms.map(ym => {
@@ -187,7 +203,7 @@ export default function KrEtfTaxMatrix({
       return { ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty };
     });
     const annualExpected = monthData.reduce((s, d) => s + d.expected, 0);
-    return { stock, events, sortedEventsWithAvg, buySummary, purchases, sales, currentQty, monthData, annualExpected };
+    return { stock, events, sortedEventsWithAvg, buySummary, purchases, sales, currentQty, curPrice, monthData, annualExpected };
   });
 
   const monthlyExpected = monthYms.map((_, i) =>
@@ -264,7 +280,7 @@ export default function KrEtfTaxMatrix({
           </tr>
         </thead>
         <tbody>
-          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, purchases, sales, currentQty, monthData, annualExpected }) => {
+          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, purchases, sales, currentQty, curPrice, monthData, annualExpected }) => {
             const isExpanded = expandedCode === stock.code;
             return (
               <React.Fragment key={stock.code}>
@@ -396,139 +412,183 @@ export default function KrEtfTaxMatrix({
                             이벤트가 없습니다. '행 추가'로 매입/매도를 입력하세요.
                           </div>
                         ) : (
-                          <div>
-                            <table className="text-[10px] border-collapse">
-                              <thead className="text-gray-500 border-b border-gray-700/50">
-                                <tr>
-                                  <th className="text-left py-1 pl-2 pr-1 font-normal w-[108px]">일자</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[84px]">
-                                    전일 수량
-                                    <span className="text-gray-600 font-normal ml-0.5" title="자산검증 전일 수량 자동 조회">↺</span>
-                                  </th>
-                                  <th className="text-right py-1 px-1 font-normal w-[68px]">매도/매수</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[84px] text-orange-400/70">매입단가</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[64px]">조정 수량</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[88px]">과표기준가</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[80px]">평균 과표</th>
-                                  <th className="text-right py-1 px-1 font-normal w-[96px] text-emerald-400/70" title="매도 시 과세: (과표기준가 − 평균 과표) × 매도주식수, 0 이하면 비과세">과세 금액</th>
-                                  <th className="py-1 px-1 w-[20px]"></th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {sortedEventsWithAvg.map(({ evt, runningAvg }) => {
-                                  const prevQtyNum = safeNum(evt.prevQty);
-                                  const changeNum = safeNum(evt.change);
-                                  const adjustedQty = prevQtyNum + changeNum;
-                                  const isSell = changeNum < 0;
-                                  const isBuy = changeNum > 0;
-                                  const sellTaxBasePrice = safeNum(evt.taxBasePrice); // 매도시 과표기준가
-                                  const sellPerShareTax = sellTaxBasePrice - runningAvg; // 과표기준가 − 평균 과표 (1주당)
-                                  const soldQty = -changeNum; // 매도 주식수 (양수)
-                                  const canCalcSellTax = isSell && sellTaxBasePrice > 0 && runningAvg > 0;
-                                  const sellTaxAmount = sellPerShareTax > 0 ? sellPerShareTax * soldQty : 0; // 과세표준 (세율 미적용)
-                                  return (
-                                    <tr key={evt.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/10">
-                                      <td className="py-1 pl-2 pr-0.5">
-                                        <input
-                                          type="date"
-                                          value={evt.date || ''}
-                                          onChange={e => handleEventDateChange(stock, events, evt.id, e.target.value)}
-                                          className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none w-[100px]"
-                                        />
-                                      </td>
-                                      <td className="py-1 px-1">
-                                        <div className="flex items-center gap-0.5">
+                          <>
+                            {/* 가로 스크롤은 표에만 — 하단 요약 바를 이 컨테이너에 넣으면 열이 많을 때 함께 밀린다 */}
+                            <div className="overflow-x-auto">
+                              <table className="text-[10px] border-collapse">
+                                <thead className="text-gray-500 border-b border-gray-700/50">
+                                  <tr>
+                                    <th className="text-left py-1 pl-2 pr-1 font-normal w-[108px]">일자</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[84px]">
+                                      전일 수량
+                                      <span className="text-gray-600 font-normal ml-0.5" title="자산검증 전일 수량 자동 조회">↺</span>
+                                    </th>
+                                    <th className="text-right py-1 px-1 font-normal w-[68px]" title="매수=양수 / 매도=음수">매매수량</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[84px] text-orange-400/70">매입단가</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[100px]" title="매입금액 = 매매수량 × 매입단가 (매수 행만)">매입금액</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[120px]" title="현재가격 × 매매수량 — 그 매입 수량의 현재 평가금액. 아랫줄은 손익 · 수익률(이익 빨강 / 손실 파랑)">
+                                      현재가 × 매매수량
+                                      <div className="text-[8px] text-gray-600 font-normal tabular-nums">
+                                        {curPrice > 0 ? `현재가 ${curPrice.toLocaleString()}원` : '현재가 없음'}
+                                      </div>
+                                    </th>
+                                    <th className="text-right py-1 px-1 font-normal w-[64px]">조정 수량</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[88px]">과표기준가</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[80px]">평균 과표</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[96px] text-emerald-400/70" title="매도 시 과세: (과표기준가 − 평균 과표) × 매도주식수, 0 이하면 비과세">과세 금액</th>
+                                    <th className="py-1 px-1 w-[20px]"></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {sortedEventsWithAvg.map(({ evt, runningAvg }) => {
+                                    const prevQtyNum = safeNum(evt.prevQty);
+                                    const changeNum = safeNum(evt.change);
+                                    const adjustedQty = prevQtyNum + changeNum;
+                                    const isSell = changeNum < 0;
+                                    const isBuy = changeNum > 0;
+                                    // 매입금액 = 매매수량 × 매입단가 / 현재 평가 = 현재가 × 매매수량 (둘 다 매수 행만)
+                                    const buyPrice = safeNum(evt.purchasePrice);
+                                    const buyAmount = isBuy && buyPrice > 0 ? changeNum * buyPrice : 0;
+                                    const buyEval = isBuy && curPrice > 0 ? changeNum * curPrice : 0;
+                                    const rowProfit = buyAmount > 0 && curPrice > 0 ? buyEval - buyAmount : null;
+                                    const rowProfitRate = rowProfit !== null ? (rowProfit / buyAmount) * 100 : null;
+                                    const sellTaxBasePrice = safeNum(evt.taxBasePrice); // 매도시 과표기준가
+                                    const sellPerShareTax = sellTaxBasePrice - runningAvg; // 과표기준가 − 평균 과표 (1주당)
+                                    const soldQty = -changeNum; // 매도 주식수 (양수)
+                                    const canCalcSellTax = isSell && sellTaxBasePrice > 0 && runningAvg > 0;
+                                    const sellTaxAmount = sellPerShareTax > 0 ? sellPerShareTax * soldQty : 0; // 과세표준 (세율 미적용)
+                                    return (
+                                      <tr key={evt.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/10">
+                                        <td className="py-1 pl-2 pr-0.5">
+                                          <input
+                                            type="date"
+                                            value={evt.date || ''}
+                                            onChange={e => handleEventDateChange(stock, events, evt.id, e.target.value)}
+                                            className="bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none w-[100px]"
+                                          />
+                                        </td>
+                                        <td className="py-1 px-1">
+                                          <div className="flex items-center gap-0.5">
+                                            <input
+                                              type="text"
+                                              inputMode="numeric"
+                                              value={evt.prevQty !== undefined && evt.prevQty !== null && evt.prevQty !== '' ? evt.prevQty : ''}
+                                              onChange={e => updateEvent(stock.code, events, evt.id, 'prevQty', e.target.value)}
+                                              placeholder="0"
+                                              className={numInputCls + ' flex-1 min-w-0'}
+                                              title="전일 보유 수량 (직접 입력 가능)"
+                                            />
+                                            <button
+                                              onClick={() => refetchPrevQty(stock, events, evt)}
+                                              className="text-gray-600 hover:text-sky-400 p-0.5 rounded shrink-0 transition"
+                                              title="자산검증에서 전일 수량 재조회"
+                                            ><RotateCcw size={9} /></button>
+                                          </div>
+                                        </td>
+                                        <td className="py-1 px-1">
                                           <input
                                             type="text"
                                             inputMode="numeric"
-                                            value={evt.prevQty !== undefined && evt.prevQty !== null && evt.prevQty !== '' ? evt.prevQty : ''}
-                                            onChange={e => updateEvent(stock.code, events, evt.id, 'prevQty', e.target.value)}
+                                            value={evt.change !== undefined && evt.change !== '' ? evt.change : ''}
+                                            onChange={e => updateEvent(stock.code, events, evt.id, 'change', e.target.value)}
                                             placeholder="0"
-                                            className={numInputCls + ' flex-1 min-w-0'}
-                                            title="전일 보유 수량 (직접 입력 가능)"
+                                            className={numInputCls + (isSell ? ' !text-rose-400' : isBuy ? ' !text-emerald-400' : '')}
+                                            title="매수=양수, 매도=음수"
                                           />
-                                          <button
-                                            onClick={() => refetchPrevQty(stock, events, evt)}
-                                            className="text-gray-600 hover:text-sky-400 p-0.5 rounded shrink-0 transition"
-                                            title="자산검증에서 전일 수량 재조회"
-                                          ><RotateCcw size={9} /></button>
-                                        </div>
-                                      </td>
-                                      <td className="py-1 px-1">
-                                        <input
-                                          type="text"
-                                          inputMode="numeric"
-                                          value={evt.change !== undefined && evt.change !== '' ? evt.change : ''}
-                                          onChange={e => updateEvent(stock.code, events, evt.id, 'change', e.target.value)}
-                                          placeholder="0"
-                                          className={numInputCls + (isSell ? ' !text-rose-400' : isBuy ? ' !text-emerald-400' : '')}
-                                          title="매수=양수, 매도=음수"
-                                        />
-                                      </td>
-                                      <td className="py-1 px-1">
-                                        {isBuy ? (
-                                          <input
-                                            type="text"
-                                            inputMode="numeric"
-                                            value={evt.purchasePrice !== undefined && evt.purchasePrice !== '' ? evt.purchasePrice : ''}
-                                            onChange={e => updateEvent(stock.code, events, evt.id, 'purchasePrice', e.target.value)}
-                                            placeholder="0"
-                                            className={numInputCls + ' !text-orange-300'}
-                                            title="실제 매입단가 (차트 평균단가 기준 수익률 계산용)"
-                                          />
-                                        ) : (
-                                          <div className="text-[10px] text-gray-700 text-right px-1">-</div>
-                                        )}
-                                      </td>
-                                      <td className="py-1 px-1 text-right tabular-nums text-gray-300">
-                                        {adjustedQty !== 0 || prevQtyNum !== 0
-                                          ? adjustedQty.toLocaleString()
-                                          : <span className="text-gray-700">-</span>}
-                                      </td>
-                                      <td className="py-1 px-1">
-                                        <input
-                                          type="text"
-                                          inputMode="decimal"
-                                          value={evt.taxBasePrice !== undefined && evt.taxBasePrice !== '' ? evt.taxBasePrice : ''}
-                                          onChange={e => updateEvent(stock.code, events, evt.id, 'taxBasePrice', e.target.value)}
-                                          placeholder="0.00"
-                                          className={numInputCls}
-                                        />
-                                      </td>
-                                      <td className="py-1 px-1 text-right tabular-nums text-sky-300">
-                                        {runningAvg > 0 ? fmtTaxBase(runningAvg) : <span className="text-gray-700">-</span>}
-                                      </td>
-                                      <td className="py-1 px-1 text-right tabular-nums">
-                                        {canCalcSellTax ? (
-                                          sellPerShareTax > 0 ? (
+                                        </td>
+                                        <td className="py-1 px-1">
+                                          {isBuy ? (
+                                            <input
+                                              type="text"
+                                              inputMode="numeric"
+                                              value={evt.purchasePrice !== undefined && evt.purchasePrice !== '' ? evt.purchasePrice : ''}
+                                              onChange={e => updateEvent(stock.code, events, evt.id, 'purchasePrice', e.target.value)}
+                                              placeholder="0"
+                                              className={numInputCls + ' !text-orange-300'}
+                                              title="실제 매입단가 (차트 평균단가 기준 수익률 계산용)"
+                                            />
+                                          ) : (
+                                            <div className="text-[10px] text-gray-700 text-right px-1">-</div>
+                                          )}
+                                        </td>
+                                        <td className="py-1 px-1 text-right tabular-nums text-gray-300" title={buyAmount > 0 ? `${changeNum.toLocaleString()}주 × ${buyPrice.toLocaleString()}원` : undefined}>
+                                          {buyAmount > 0
+                                            ? formatCurrency(Math.round(buyAmount))
+                                            : <span className="text-gray-700">-</span>}
+                                        </td>
+                                        <td className="py-1 px-1 text-right tabular-nums">
+                                          {isBuy && curPrice > 0 ? (
                                             <>
-                                              <div className="text-emerald-400 font-medium" title="과세금액 = (과표기준가 − 평균 과표) × 매도주식수">
-                                                {formatCurrency(sellTaxAmount)}
+                                              <div className="text-gray-100" title={`${changeNum.toLocaleString()}주 × ${curPrice.toLocaleString()}원 (현재가)`}>
+                                                {formatCurrency(Math.round(buyEval))}
                                               </div>
-                                              <div className="text-[8px] text-gray-500">+{fmtTaxBase(sellPerShareTax)}/주 × {soldQty.toLocaleString()}</div>
+                                              {rowProfit !== null ? (
+                                                <div
+                                                  className={`text-[8px] font-medium ${rowProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}
+                                                  title="손익 = 현재가 × 매매수량 − 매입금액"
+                                                >
+                                                  {(rowProfit >= 0 ? '+' : '') + formatCurrency(Math.round(rowProfit))}
+                                                  {' · '}
+                                                  {(rowProfitRate >= 0 ? '+' : '') + formatPercent(rowProfitRate)}
+                                                </div>
+                                              ) : (
+                                                <div className="text-[8px] text-gray-600" title="매입단가를 입력하면 손익·수익률이 계산됩니다">매입단가 미입력</div>
+                                              )}
                                             </>
                                           ) : (
-                                            <>
-                                              <div className="text-gray-400" title="과표기준가 ≤ 평균 과표 → 비과세">비과세</div>
-                                              <div className="text-[8px] text-gray-600">{fmtTaxBase(sellPerShareTax)}/주</div>
-                                            </>
-                                          )
-                                        ) : (
-                                          <span className="text-gray-700">-</span>
-                                        )}
-                                      </td>
-                                      <td className="py-1 px-1 text-center">
-                                        <button
-                                          onClick={() => deleteEvent(stock.code, events, evt.id)}
-                                          className="text-gray-600 hover:text-red-400 p-0.5 rounded transition"
-                                          title="삭제"
-                                        ><Trash2 size={10} /></button>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
+                                            <span className="text-gray-700">-</span>
+                                          )}
+                                        </td>
+                                        <td className="py-1 px-1 text-right tabular-nums text-gray-300">
+                                          {adjustedQty !== 0 || prevQtyNum !== 0
+                                            ? adjustedQty.toLocaleString()
+                                            : <span className="text-gray-700">-</span>}
+                                        </td>
+                                        <td className="py-1 px-1">
+                                          <input
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={evt.taxBasePrice !== undefined && evt.taxBasePrice !== '' ? evt.taxBasePrice : ''}
+                                            onChange={e => updateEvent(stock.code, events, evt.id, 'taxBasePrice', e.target.value)}
+                                            placeholder="0.00"
+                                            className={numInputCls}
+                                          />
+                                        </td>
+                                        <td className="py-1 px-1 text-right tabular-nums text-sky-300">
+                                          {runningAvg > 0 ? fmtTaxBase(runningAvg) : <span className="text-gray-700">-</span>}
+                                        </td>
+                                        <td className="py-1 px-1 text-right tabular-nums">
+                                          {canCalcSellTax ? (
+                                            sellPerShareTax > 0 ? (
+                                              <>
+                                                <div className="text-emerald-400 font-medium" title="과세금액 = (과표기준가 − 평균 과표) × 매도주식수">
+                                                  {formatCurrency(sellTaxAmount)}
+                                                </div>
+                                                <div className="text-[8px] text-gray-500">+{fmtTaxBase(sellPerShareTax)}/주 × {soldQty.toLocaleString()}</div>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <div className="text-gray-400" title="과표기준가 ≤ 평균 과표 → 비과세">비과세</div>
+                                                <div className="text-[8px] text-gray-600">{fmtTaxBase(sellPerShareTax)}/주</div>
+                                              </>
+                                            )
+                                          ) : (
+                                            <span className="text-gray-700">-</span>
+                                          )}
+                                        </td>
+                                        <td className="py-1 px-1 text-center">
+                                          <button
+                                            onClick={() => deleteEvent(stock.code, events, evt.id)}
+                                            className="text-gray-600 hover:text-red-400 p-0.5 rounded transition"
+                                            title="삭제"
+                                          ><Trash2 size={10} /></button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
                             {buySummary.count > 0 && (
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 border-t border-gray-700/50 bg-gray-900/40 text-[10px]">
                                 <span className="text-gray-500">매수일
@@ -547,14 +607,49 @@ export default function KrEtfTaxMatrix({
                                 <span className="text-gray-500">매입 평균 단가
                                   <span className="text-orange-300 font-bold ml-1 tabular-nums">{buySummary.avgPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}원</span>
                                 </span>
+                                {buySummary.hasCurPrice ? (
+                                  <>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-gray-500">현재 평가
+                                      <span className="text-gray-200 font-semibold ml-1 tabular-nums" title={`${buySummary.qtyTotal.toLocaleString()}주 × ${curPrice.toLocaleString()}원 (현재가)`}>
+                                        {formatCurrency(Math.round(buySummary.evalTotal))}
+                                      </span>
+                                    </span>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-gray-500">손익
+                                      <span
+                                        className={`font-bold ml-1 tabular-nums ${buySummary.profitTotal >= 0 ? 'text-red-400' : 'text-blue-400'}`}
+                                        title="손익 = 현재가 × 총 매수수량 − 총 매입금액 (매수 이벤트 전체 기준)"
+                                      >
+                                        {(buySummary.profitTotal >= 0 ? '+' : '') + formatCurrency(Math.round(buySummary.profitTotal))}
+                                        <span className="ml-1">({(buySummary.profitRate >= 0 ? '+' : '') + formatPercent(buySummary.profitRate)})</span>
+                                      </span>
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-gray-600" title="포트폴리오에 현재가가 없어(삭제된 종목·시세 미로드) 평가·손익을 계산할 수 없습니다">현재가 없음 → 손익 계산 불가</span>
+                                  </>
+                                )}
+                                {buySummary.noPriceCount > 0 && (
+                                  <>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-amber-400/70" title="매입단가가 비어 있는 매수 행은 매입금액·현재 평가·손익 합계에서 제외됩니다">매입단가 미입력 {buySummary.noPriceCount}건 제외</span>
+                                  </>
+                                )}
                               </div>
                             )}
-                          </div>
+                          </>
                         )}
                         <div className="px-3 py-1 text-[9px] text-gray-600 border-t border-gray-800/50">
                           일자 선택 시 자산검증 전일 수량 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨
                           <br />
                           <span className="text-orange-400/60">매입단가</span> 는 아래 매수 요약(평균 매입단가) 산출에 사용됩니다 · 차트 '일일 수익률'(🎯)은 포트폴리오 테이블 매입금액 기준으로 증권사 수익률과 일치
+                          <br />
+                          <span className="text-gray-500">매입금액</span> = 매매수량 × 매입단가 &nbsp;·&nbsp; <span className="text-gray-500">현재가 × 매매수량</span> = 그 매입 수량의 현재 평가금액(포트폴리오 테이블과 같은 라이브 시세)이며 아랫줄에 손익·수익률(<span className="text-red-400/70">이익</span>/<span className="text-blue-400/70">손실</span>)을 표시 &nbsp;·&nbsp; 매도 행은 <span className="text-gray-500">-</span>
+                          <br />
+                          하단 요약 <span className="text-gray-500">손익</span> = 현재가 × 총 매수수량 − 총 매입금액 &nbsp;·&nbsp; 매수 이벤트 전체 기준(중간 매도분 포함)이라 위 행별 값의 단순 합과 같음
                           <br />
                           <span className="text-emerald-400/70">과세 금액</span> = 매도 시 (매도 과표기준가 − 평균 과표) × 매도주식수 · 0 이하면 <span className="text-gray-400">비과세</span> (세율 미적용 과세표준)
                         </div>
