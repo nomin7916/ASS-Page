@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, savingsEval, savingsInvest } from '../utils';
+import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function usePortfolioData({
@@ -85,12 +85,10 @@ export function usePortfolioData({
     //    ('deposit-only')이 기존처럼 적립식 식으로 떨어지게 하기 위함(폴백 극성 보존).
     const isAmountMode = settings.mode === 'targetAmount';
     const isLevelBase = settings.mode === 'rebalance' || isAmountMode;
-    const isVariableMode = settings.targetMode === 'variable';
-    const mirrorState = isVariableMode
-      ? (settings.targetMirrorVar || 'off')
-      : (settings.targetMirrorFixed || 'off');
-    const slotField = isVariableMode ? 'targetRatioVar' : 'targetRatio';
-    const overrideField = isVariableMode ? 'targetRatioVarOverride' : 'targetRatioOverride';
+    // ⚠️ 슬롯은 반드시 utils.resolveTargetSlots로 결정한다(적립식은 별도 슬롯).
+    //    여기서 손으로 다시 고르면 화면 편집과 계산이 다른 슬롯을 읽어 값이 갈린다.
+    const { slotField, overrideField, mirrorField } = resolveTargetSlots(settings);
+    const mirrorState = settings[mirrorField] || 'off';
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund' || p.type === 'savings').map(item => {
       // 예적금(savings): 시세·수량이 없어 리밸런싱 매매 대상이 아님 — 고정 참고 행.
       // 평가금은 savingsEval(단리 누적)로 산출, 평가금 그대로 예상평가금에 이월(매매 0).

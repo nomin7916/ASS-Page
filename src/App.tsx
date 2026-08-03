@@ -1523,6 +1523,9 @@ export default function App() {
         name: d.name || '',
         code: d.code || '',                      // 이름이 비슷한 종목·삭제된 종목 식별용
         targetRatio: cleanNum(d.effectiveTargetRatio),
+        // 목표금액을 **명시 입력한 행만** 기록한다. 미입력 행은 비중에서 파생된 힌트라 저장하면
+        // 나중에 불러올 때 '사용자가 지정한 금액'과 구분되지 않는다(구버전 기록은 undefined).
+        targetAmount: d.hasTargetAmount ? cleanNum(d.effectiveTargetAmount) : null,
         curQty: d.isSavings ? null : qty,        // 예적금은 시세·수량이 없는 고정 참고 행
         expQty: d.isSavings ? null : qty + cleanNum(d.action) + extra,
         expEval: cleanNum(d.expEval),
@@ -2398,7 +2401,7 @@ export default function App() {
         id: p.id, name: p.name,
         startDate: p.startDate || p.portfolioStartDate,
         portfolioStartDate: p.portfolioStartDate || p.startDate,
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,

@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Plus, Maximize2, Trash2, Check, CalendarClock } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate, applyRebalTargetRatios } from '../utils';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
@@ -235,7 +235,38 @@ export default function RebalancingPanel({
     return isValidIsoDate(iso) ? iso : null;
   };
 
-  const H = (k) => hiddenColumns.includes(k);
+  // 투자선택 3모드. '목표금액'은 수량 산출만 금액 기준이고 **자금 축은 리밸런싱과 동일**
+  // (총평가금 기준 · 예수금 전액 사용). 그래서 자금 관련 분기는 전부 isLevelMode로 묶는다.
+  const isAmountMode = settings.mode === 'targetAmount';
+  const isLevelMode = settings.mode === 'rebalance' || isAmountMode;
+
+  // ── 투자선택에 따른 열 자동 숨김/비활성 ──
+  // 목표금액 모드면 목표비중이, 리밸런싱·적립식이면 목표금액이 '지금 안 쓰는 열'이다.
+  // ⚠️ 저장된 hiddenColumns(계좌 필드)는 **건드리지 않는다** — 모드 전환이 사용자의 수동 숨김 설정을
+  //    덮어쓰지 않게, 그리고 settings는 같은 accountType 전 계좌 공유인데 hiddenColumns는 계좌별이라
+  //    두 축이 어긋나는 것을 막기 위함. 화면에서만 감추고, 칩으로 되살리면 '보이되 비활성'이 된다.
+  const modeHiddenKey = isAmountMode ? 'targetRatio' : 'targetAmount';
+  const [revealedCols, setRevealedCols] = useState({}); // 사용자가 칩으로 되살린 mode-hidden 열
+  const isModeHidden = (k) => k === modeHiddenKey && !hiddenColumns.includes(k) && !revealedCols[k];
+  const H = (k) => hiddenColumns.includes(k) || isModeHidden(k);
+  // 칩/스트립 클릭: mode-hidden 열은 저장 목록 대신 reveal 토글로 처리(저장 상태 오염 방지).
+  // ⚠️ '수동 숨김 + 모드 숨김'이 겹친 열을 단순히 onToggleColumn으로 보내면, 저장 목록에서만 빠지고
+  //    모드 숨김이 그대로라 **화면은 그대로인데 저장 상태만 조용히 바뀐다**(첫 클릭 무반응).
+  //    한 번의 클릭으로 반드시 보이거나 숨겨지도록 두 축을 함께 맞춘다.
+  const toggleColumnSmart = (k) => {
+    if (k !== modeHiddenKey) { onToggleColumn(k); return; }
+    const userHidden = hiddenColumns.includes(k);
+    const visible = !userHidden && !!revealedCols[k];
+    if (visible) {
+      setRevealedCols(prev => ({ ...prev, [k]: false }));
+    } else {
+      if (userHidden) onToggleColumn(k);
+      setRevealedCols(prev => ({ ...prev, [k]: true }));
+    }
+  };
+  // 지금 편집이 막혀야 하는 열(보이더라도 읽기 전용)
+  const ratioDisabled = isAmountMode;
+  const amountDisabled = !isAmountMode;
 
   // 고정 모드 + 미인증 + 비관리자 → PIN 잠금
   const isFixedLocked = settings.targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
@@ -254,14 +285,26 @@ export default function RebalancingPanel({
   const applyRestoredTargets = (dayKey, memo, matched) => {
     if (!memo || !Array.isArray(matched) || matched.length === 0) return;
     if (activePortfolioId && memo.portfolioId && memo.portfolioId !== activePortfolioId) return;
-    const tMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
-    const slotField = tMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
-    const overrideField = tMode === 'variable' ? 'targetRatioVarOverride' : 'targetRatioOverride';
+    const { slotField, overrideField } = resolveTargetSlots(settings);
     const ratioById = Object.create(null);
     matched.forEach(m => { if (m && m.id != null) ratioById[m.id] = m.value; });
+    // 기록에 남은 목표금액도 함께 되돌린다.
+    // ⚠️ '금액을 아는 기록'(한 행이라도 amount가 있음)일 때만 금액 축을 건드린다 — 그때는 기록에
+    //    금액이 없던 행을 ''로 비워야 그 시점 상태가 그대로 재현된다. 구버전 기록은 전 행이 null이라
+    //    금액 축을 아예 손대지 않는다(옛 기록을 불러왔다고 현재 금액이 통째로 지워지면 안 된다).
+    const amountById = Object.create(null);
+    const hasAmounts = matched.some(m => m && m.amount != null);
+    if (hasAmounts) matched.forEach(m => { if (m && m.id != null) amountById[m.id] = m.amount != null ? m.amount : ''; });
     // 편집 중이던 셀의 로컬 문자열이 남아 있으면 복원값이 화면에 안 보인다(applyReset과 동일 처리).
     setEditingRatio(prev => { const n = { ...prev }; matched.forEach(m => { delete n[m.id]; }); return n; });
-    setPortfolio(prev => applyRebalTargetRatios(prev, ratioById, { slotField, overrideField }));
+    setEditingTargetAmount(prev => { const n = { ...prev }; matched.forEach(m => { delete n[m.id]; }); return n; });
+    setPortfolio(prev => {
+      const withRatios = applyRebalTargetRatios(prev, ratioById, { slotField, overrideField });
+      if (!hasAmounts) return withRatios;
+      return withRatios.map(it => (it && it.id != null && Object.prototype.hasOwnProperty.call(amountById, it.id))
+        ? { ...it, targetAmount: amountById[it.id] }
+        : it);
+    });
     if (onAdminTargetChange) onAdminTargetChange();
     if (onTargetRestored) onTargetRestored({ portfolioId: activePortfolioId, dayKey });
   };
@@ -282,9 +325,71 @@ export default function RebalancingPanel({
   const hideStrip = (key) => (
     <div
       className="absolute top-0 left-0 right-0 h-3 cursor-pointer z-10 hover:bg-indigo-400/25 transition-colors"
-      onClick={e => { e.stopPropagation(); onToggleColumn(key); }}
+      onClick={e => { e.stopPropagation(); toggleColumnSmart(key); }}
       title="클릭하여 열 숨기기"
     />
+  );
+
+  // 목표 날짜 칩 + 📅 과거 목표비중 불러오기 — **활성 목표 열의 헤더**에 붙인다.
+  // ⚠️ 이 두 컨트롤은 목표비중 열에만 두면 안 된다: 목표금액 모드에서 그 열이 접히면 th 자체가
+  //    사라져 **복원 진입점과 기록 날짜 지정 수단이 통째로 없어진다**. 복원은 금액까지 되돌리고,
+  //    날짜는 달력 기록 대상이라 모드와 무관하게 항상 닿을 수 있어야 한다.
+  // ⚠️ datePickerRef는 하나뿐이라 두 헤더에서 동시에 렌더하면 안 된다 — 모드로 배타 렌더할 것.
+  const renderTargetDateBar = () => (
+    <div className="relative w-full flex items-center gap-1">
+      <input
+        ref={datePickerRef}
+        type="date"
+        className="absolute opacity-0 w-0 h-0 pointer-events-none"
+        value={settings.targetDate || ''}
+        onChange={e => { updateSettingsForType({ ...settings, targetDate: e.target.value }); reportAdminChange({ date: e.target.value }); }}
+        tabIndex={-1}
+      />
+      {dateEditMode ? (
+        <input
+          type="text"
+          autoFocus
+          className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-green-500 rounded px-1 py-0.5 flex-1 min-w-0 text-center"
+          defaultValue={formatDisplayDate(settings.targetDate)}
+          onBlur={e => { const parsed = parseDisplayDate(e.target.value); if (parsed) { updateSettingsForType({ ...settings, targetDate: parsed }); reportAdminChange({ date: parsed }); } setDateEditMode(false); }}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); e.stopPropagation(); }}
+          onClick={e => e.stopPropagation()}
+        />
+      ) : (
+        <span
+          className={`block text-[9px] border rounded px-1 py-0.5 flex-1 min-w-0 text-center cursor-pointer bg-gray-800 select-none ${
+            settings.targetDate
+              ? 'text-gray-400 border-gray-600 hover:border-gray-500'
+              : 'text-amber-300/80 border-amber-500/50 hover:border-amber-400'
+          }`}
+          onClick={e => { e.stopPropagation(); datePickerRef.current?.showPicker?.(); }}
+          onDoubleClick={e => { e.stopPropagation(); setDateEditMode(true); }}
+          title={settings.targetDate
+            ? '목표 비중 조정일 — 이 날짜의 메모 달력에 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'
+            : '날짜를 지정해야 메모 달력에 목표 비중이 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'}
+        >{formatDisplayDate(settings.targetDate)}</span>
+      )}
+      {/* 과거 목표비중 불러오기 — 기록 '쓰기'인 날짜 칩과 반대 방향(읽기/적용).
+          ⚠️ 날짜 칩을 재사용하면 안 된다: 칩을 과거로 바꾸면 그 날짜에 오늘 값이
+          다시 기록돼 원본이 소실되고, updateSettingsForType이 같은 계좌 종류
+          전체에 그 날짜를 전파한다. 반드시 별도 컨트롤로 둘 것.
+          ⚠️ relative z-20 필수 — hideStrip(z-10)이 이 영역 상단을 덮어 클릭을 가로챈다.
+             래퍼 전체가 아니라 버튼에만 줘야 열 숨기기 스트립이 살아남는다. */}
+      <button
+        type="button"
+        disabled={!rebalTargetSnapshots.length}
+        onMouseDown={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); if (rebalTargetSnapshots.length) setRestoreOpen(true); }}
+        className={`shrink-0 relative z-20 p-0.5 rounded transition-colors ${
+          rebalTargetSnapshots.length
+            ? 'text-emerald-500/70 hover:text-emerald-300 hover:bg-emerald-900/20'
+            : 'text-gray-700 cursor-not-allowed'
+        }`}
+        title={rebalTargetSnapshots.length
+          ? `과거 목표비중 불러오기 — 기록 ${rebalTargetSnapshots.length}건 (달력에서 날짜를 골라 현재 표에 적용)`
+          : '이 계좌에 기록된 목표비중이 없습니다'}
+      ><CalendarClock size={11} /></button>
+    </div>
   );
 
   const renderCompactPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
@@ -301,10 +406,6 @@ export default function RebalancingPanel({
     );
   };
 
-  // 투자선택 3모드. '목표금액'은 수량 산출만 금액 기준이고 **자금 축은 리밸런싱과 동일**
-  // (총평가금 기준 · 예수금 전액 사용). 그래서 아래 자금 관련 분기는 전부 isLevelMode로 묶는다.
-  const isAmountMode = settings.mode === 'targetAmount';
-  const isLevelMode = settings.mode === 'rebalance' || isAmountMode;
   const isOverseasHeader = activePortfolioAccountType === 'overseas';
   const headerFx = marketIndicators.usdkrw || 1;
   const headerNativeTotalEval = isOverseasHeader ? totals.totalEval / headerFx : totals.totalEval;
@@ -665,15 +766,21 @@ export default function RebalancingPanel({
               )}
             </div>
           )}
-          {(hiddenColumns.length > 0 || onManualSave || onToggleCalculator) && (
+          {(RB_COLS.some(c => H(c.key)) || onManualSave || onToggleCalculator) && (
             <div className="flex items-end justify-between gap-2 px-3 pt-2 pb-0 bg-[#080e1c]">
               <div className="flex items-end gap-1 flex-wrap min-w-0">
-                {RB_COLS.filter(c => hiddenColumns.includes(c.key)).map(col => (
+                {RB_COLS.filter(c => H(c.key)).map(col => (
                   <button
                     key={col.key}
-                    onClick={() => onToggleColumn(col.key)}
-                    className="px-2.5 py-1 text-[10px] font-bold text-gray-400 border border-gray-600 border-b-0 rounded-t-md bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200 transition-colors"
-                    title={`${col.label} 열 표시`}
+                    onClick={() => toggleColumnSmart(col.key)}
+                    className={`px-2.5 py-1 text-[10px] font-bold border border-b-0 rounded-t-md transition-colors ${
+                      isModeHidden(col.key)
+                        ? 'text-gray-500 border-gray-700 bg-gray-900/70 hover:bg-gray-800 hover:text-gray-300'
+                        : 'text-gray-400 border-gray-600 bg-gray-800/80 hover:bg-gray-700 hover:text-gray-200'
+                    }`}
+                    title={isModeHidden(col.key)
+                      ? `${col.label} — 현재 투자선택에서는 쓰이지 않아 자동으로 접힘. 클릭하면 표에 보이지만 편집은 잠깁니다`
+                      : `${col.label} 열 표시`}
                   >
                     {col.label}
                   </button>
@@ -797,76 +904,28 @@ export default function RebalancingPanel({
                       )}
                       {!H('targetRatio') && (() => {
                         const targetMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
-                        const isTargetSorted = sk === 'targetRatio';
+                        // ⚠️ 정렬 키는 화면에 보이는 값(effectiveTargetRatio)이어야 한다 — raw 'targetRatio'로
+                        //    정렬하면 수시변경·적립식처럼 **다른 슬롯을 표시 중일 때 보이지 않는 값 기준**으로
+                        //    줄이 섞이고, 라이브 미러 행도 어긋난다.
+                        const isTargetSorted = sk === 'effectiveTargetRatio';
                         return (
                         <th className="py-2 px-3 min-w-[120px] text-green-400 font-bold text-center sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap">
                           {hideStrip('targetRatio')}
                           <div className="flex flex-col items-center gap-1">
-                            <div className="relative w-full flex items-center gap-1">
-                              <input
-                                ref={datePickerRef}
-                                type="date"
-                                className="absolute opacity-0 w-0 h-0 pointer-events-none"
-                                value={settings.targetDate || ''}
-                                onChange={e => { updateSettingsForType({ ...settings, targetDate: e.target.value }); reportAdminChange({ date: e.target.value }); }}
-                                tabIndex={-1}
-                              />
-                              {dateEditMode ? (
-                                <input
-                                  type="text"
-                                  autoFocus
-                                  className="bg-gray-800 text-gray-400 text-[9px] outline-none border border-green-500 rounded px-1 py-0.5 flex-1 min-w-0 text-center"
-                                  defaultValue={formatDisplayDate(settings.targetDate)}
-                                  onBlur={e => { const parsed = parseDisplayDate(e.target.value); if (parsed) { updateSettingsForType({ ...settings, targetDate: parsed }); reportAdminChange({ date: parsed }); } setDateEditMode(false); }}
-                                  onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); e.stopPropagation(); }}
-                                  onClick={e => e.stopPropagation()}
-                                />
-                              ) : (
-                                <span
-                                  className={`block text-[9px] border rounded px-1 py-0.5 flex-1 min-w-0 text-center cursor-pointer bg-gray-800 select-none ${
-                                    settings.targetDate
-                                      ? 'text-gray-400 border-gray-600 hover:border-gray-500'
-                                      : 'text-amber-300/80 border-amber-500/50 hover:border-amber-400'
-                                  }`}
-                                  onClick={e => { e.stopPropagation(); datePickerRef.current?.showPicker?.(); }}
-                                  onDoubleClick={e => { e.stopPropagation(); setDateEditMode(true); }}
-                                  title={settings.targetDate
-                                    ? '목표 비중 조정일 — 이 날짜의 메모 달력에 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'
-                                    : '날짜를 지정해야 메모 달력에 목표 비중이 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'}
-                                >{formatDisplayDate(settings.targetDate)}</span>
-                              )}
-                              {/* 과거 목표비중 불러오기 — 기록 '쓰기'인 날짜 칩과 반대 방향(읽기/적용).
-                                  ⚠️ 날짜 칩을 재사용하면 안 된다: 칩을 과거로 바꾸면 그 날짜에 오늘 값이
-                                  다시 기록돼 원본이 소실되고, updateSettingsForType이 같은 계좌 종류
-                                  전체에 그 날짜를 전파한다. 반드시 별도 컨트롤로 둘 것.
-                                  ⚠️ relative z-20 필수 — hideStrip(z-10)이 이 영역 상단을 덮어 클릭을 가로챈다.
-                                     래퍼 전체가 아니라 버튼에만 줘야 열 숨기기 스트립이 살아남는다. */}
-                              <button
-                                type="button"
-                                disabled={!rebalTargetSnapshots.length}
-                                onMouseDown={e => e.stopPropagation()}
-                                onClick={e => { e.stopPropagation(); if (rebalTargetSnapshots.length) setRestoreOpen(true); }}
-                                className={`shrink-0 relative z-20 p-0.5 rounded transition-colors ${
-                                  rebalTargetSnapshots.length
-                                    ? 'text-emerald-500/70 hover:text-emerald-300 hover:bg-emerald-900/20'
-                                    : 'text-gray-700 cursor-not-allowed'
-                                }`}
-                                title={rebalTargetSnapshots.length
-                                  ? `과거 목표비중 불러오기 — 기록 ${rebalTargetSnapshots.length}건 (달력에서 날짜를 골라 현재 표에 적용)`
-                                  : '이 계좌에 기록된 목표비중이 없습니다'}
-                              ><CalendarClock size={11} /></button>
-                            </div>
+                            {/* ⚠️ 모드로 배타 렌더 — 목표금액 모드에서는 목표금액 헤더가 이 바를 갖는다
+                                (datePickerRef가 하나뿐이라 동시 렌더 금지). */}
+                            {!isAmountMode && renderTargetDateBar()}
                             <div className="flex items-center justify-center gap-1.5">
                               <div className="flex flex-col items-center leading-none select-none">
                                 <button
                                   type="button"
-                                  onClick={e => { e.stopPropagation(); handleRebalanceSort('targetRatio', 1); }}
+                                  onClick={e => { e.stopPropagation(); handleRebalanceSort('effectiveTargetRatio', 1); }}
                                   className={`text-[10px] leading-none transition-colors hover:text-green-300 ${isTargetSorted && sd === 1 ? 'text-green-400' : 'text-gray-500'}`}
                                   title="오름차순 정렬"
                                 >▲</button>
                                 <button
                                   type="button"
-                                  onClick={e => { e.stopPropagation(); handleRebalanceSort('targetRatio', -1); }}
+                                  onClick={e => { e.stopPropagation(); handleRebalanceSort('effectiveTargetRatio', -1); }}
                                   className={`text-[10px] leading-none transition-colors hover:text-green-300 ${isTargetSorted && sd === -1 ? 'text-green-400' : 'text-gray-500'}`}
                                   title="내림차순 정렬"
                                 >▼</button>
@@ -888,9 +947,8 @@ export default function RebalancingPanel({
                                 </select>
                               </div>
                               {(() => {
-                                const mirrorField = targetMode === 'variable' ? 'targetMirrorVar' : 'targetMirrorFixed';
-                                const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
-                                const overrideField = targetMode === 'variable' ? 'targetRatioVarOverride' : 'targetRatioOverride';
+                                // ⚠️ 슬롯·미러 필드는 resolveTargetSlots 하나로만 정한다(적립식 별도 슬롯).
+                                const { slotField, overrideField, mirrorField } = resolveTargetSlots(settings);
                                 const mirrorState = settings[mirrorField] || 'off';
                                 const cycleMirror = () => {
                                   const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
@@ -924,14 +982,18 @@ export default function RebalancingPanel({
                                   }
                                   reportAdminChange();
                                 };
-                                const btnColor = isFixedLocked
+                                const btnColor = ratioDisabled
+                                  ? 'text-gray-700 cursor-not-allowed'
+                                  : isFixedLocked
                                   ? 'text-gray-600 hover:text-amber-400'
                                   : mirrorState === 'on'
                                     ? 'text-green-400 hover:text-green-300 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]'
                                     : mirrorState === 'seeded'
                                       ? 'text-emerald-300/70 hover:text-green-400'
                                       : 'text-gray-500 hover:text-green-400';
-                                const btnTitle = isFixedLocked
+                                const btnTitle = ratioDisabled
+                                  ? "투자선택이 '목표금액'이라 목표비중 편집이 잠겨 있습니다"
+                                  : isFixedLocked
                                   ? '잠금 — 클릭하여 비밀번호 입력'
                                   : mirrorState === 'on'
                                     ? '라이브 미러 ON — 클릭하여 해제 (현재 비중 박제)'
@@ -943,6 +1005,7 @@ export default function RebalancingPanel({
                                     type="button"
                                     onClick={e => {
                                       e.stopPropagation();
+                                      if (ratioDisabled) return;
                                       if (totals.totalEval <= 0) return;
                                       if (targetMode !== 'variable' && !targetEditAuthorized && !isAdmin) {
                                         setPinModal({ onAuthorized: cycleMirror });
@@ -961,9 +1024,19 @@ export default function RebalancingPanel({
                         );
                       })()}
                       {!H('targetAmount') && (
-                        <th className={`py-3 px-3 min-w-[110px] text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap ${isAmountMode ? 'text-emerald-300' : 'text-gray-500'}`} onClick={() => handleRebalanceSort('effectiveTargetAmount')} title={isAmountMode ? '종목별 목표 평가금액 — 이 금액으로 수량을 계산합니다' : "지금은 목표비중 기준 — 우측 상단 '투자선택'을 '목표금액'으로 바꾸면 적용됩니다"}>
+                        <th className={`py-2 px-3 min-w-[110px] text-center sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap ${isAmountMode ? 'text-emerald-300' : 'text-gray-500'}`}>
                           {hideStrip('targetAmount')}
-                          목표금액{isOverseasHeader && <span className="ml-0.5 text-[9px] text-gray-500 font-normal">($)</span>}{arr('effectiveTargetAmount')}
+                          <div className="flex flex-col items-center gap-1">
+                            {/* 목표금액 모드에서는 이 헤더가 목표 날짜·복원 진입점을 갖는다(위 주석 참조) */}
+                            {isAmountMode && renderTargetDateBar()}
+                            <div
+                              className="cursor-pointer hover:text-emerald-200 transition-colors"
+                              onClick={() => handleRebalanceSort('effectiveTargetAmount')}
+                              title={isAmountMode ? '종목별 목표 평가금액 — 이 금액으로 수량을 계산합니다 (클릭: 정렬)' : "지금은 목표비중 기준 — 우측 상단 '투자선택'을 '목표금액'으로 바꾸면 적용됩니다"}
+                            >
+                              목표금액{isOverseasHeader && <span className="ml-0.5 text-[9px] text-gray-500 font-normal">($)</span>}{arr('effectiveTargetAmount')}
+                            </div>
+                          </div>
                         </th>
                       )}
                       {!H('curRatio') && (
@@ -1137,9 +1210,7 @@ export default function RebalancingPanel({
                           const threshold = isOverseas ? 0.005 : 0.05;
                           const isDifferent = Math.abs((item.effectiveTargetRatio || 0) - itemCurRatio) > threshold;
                           const targetMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
-                          const slotField = targetMode === 'variable' ? 'targetRatioVar' : 'targetRatio';
-                          const overrideField = targetMode === 'variable' ? 'targetRatioVarOverride' : 'targetRatioOverride';
-                          const mirrorField = targetMode === 'variable' ? 'targetMirrorVar' : 'targetMirrorFixed';
+                          const { slotField, overrideField, mirrorField } = resolveTargetSlots(settings);
                           const mirrorState = settings[mirrorField] || 'off';
                           const isLiveMirror = mirrorState === 'on' && !item[overrideField];
                           const slotVal = cleanNum(item[slotField]) || 0;
@@ -1152,11 +1223,12 @@ export default function RebalancingPanel({
                             : targetMode === 'variable'
                               ? (isDifferent ? 'text-red-400' : 'text-amber-300')
                               : (isDifferent ? 'text-red-400' : 'text-green-400');
-                          // 투자선택이 '목표금액'이고 그 행에 금액이 지정돼 있으면 이 비중은 수량 계산에
-                          // 쓰이지 않는다 → 흐리게 표시해 '값은 남아 있지만 지금은 효력이 없다'를 알린다.
-                          // ⚠️ 금액 미입력 행은 그 모드에서도 비중이 (힌트를 통해) 그대로 적용되므로 흐리게 하지 않는다.
-                          const ratioMuted = isAmountMode && !!item.hasTargetAmount;
+                          // 투자선택이 '목표금액'이면 이 열 전체가 비활성(값은 남고 편집만 잠김).
+                          // ⚠️ ratioDisabled는 PIN 잠금(cellLocked)과 성격이 다르다 — 풀 수 있는 잠금이
+                          //    아니라 모드가 정한 상태라, 클릭해도 PIN 모달을 띄우지 않는다.
+                          const ratioMuted = ratioDisabled;
                           const cellLocked = targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
+                          const ratioReadOnly = cellLocked || ratioDisabled;
                           const showResetIcon = !isLiveMirror && (item[overrideField] || Math.abs(baseVal - itemCurRatio) > threshold);
                           const alwaysShowReset = !!item[overrideField];
                           const applyReset = () => {
@@ -1168,8 +1240,8 @@ export default function RebalancingPanel({
                             reportAdminChange();
                           };
                           return (
-                            <td className={`p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500 relative ${cellLocked ? 'cursor-pointer' : ''}`}
-                              onClick={cellLocked ? (e => {
+                            <td className={`p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500 relative ${cellLocked && !ratioDisabled ? 'cursor-pointer' : ''}`}
+                              onClick={cellLocked && !ratioDisabled ? (e => {
                                 e.preventDefault();
                                 const tr = e.currentTarget.closest('tr');
                                 const focusBack = () => {
@@ -1181,10 +1253,10 @@ export default function RebalancingPanel({
                             >
                               <input type="text" data-col="targetRatio" data-item-id={item.id} className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-blue-400 ${textColor} ${ratioMuted ? 'opacity-40 focus:opacity-100' : ''} ${cellLocked ? 'cursor-pointer focus:bg-amber-900/10' : 'focus:bg-blue-900/20'}`}
                                 value={displayVal}
-                                readOnly={cellLocked}
-                                onChange={e => { if (!cellLocked) setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); }}
+                                readOnly={ratioReadOnly}
+                                onChange={e => { if (!ratioReadOnly) setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); }}
                                 onBlur={e => {
-                                  if (cellLocked) return;
+                                  if (ratioReadOnly) return;
                                   // ⚠️ 변경 판정은 시세 파생 baseVal이 아니라 슬롯 원본 slotVal로 한다 —
                                   // 라이브 미러에선 baseVal이 현재비중이라 포커스~blur 사이 시세가 움직이면
                                   // 한 글자도 안 쳤는데 '변경'으로 오판된다. 반대로 미러 이탈(override 최초
@@ -1200,7 +1272,7 @@ export default function RebalancingPanel({
                                   if (changed && onTargetEdited) onTargetEdited(); // 실제 편집일 때만 달력 기록 대상
                                 }}
                                 onFocus={e => {
-                                  if (cellLocked) {
+                                  if (ratioReadOnly) {
                                     e.target.blur();
                                     return;
                                   }
@@ -1208,13 +1280,13 @@ export default function RebalancingPanel({
                                   e.target.select();
                                 }}
                                 onKeyDown={e => {
-                                  if (cellLocked) { e.preventDefault(); return; }
+                                  if (ratioReadOnly) { e.preventDefault(); return; }
                                   if (e.key === 'Enter') e.target.blur();
                                   handleTableKeyDown(e, 'targetRatio');
                                 }}
-                                title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : ratioMuted ? "투자선택이 '목표금액'이고 이 종목에 금액이 지정돼 있어 이 비중은 수량 계산에 쓰이지 않습니다" : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
+                                title={ratioDisabled ? "투자선택이 '목표금액'이라 목표비중은 비활성입니다 (수량은 목표금액으로 계산)" : cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
                               />
-                              {showResetIcon && (
+                              {showResetIcon && !ratioDisabled && (
                                 <button
                                   type="button"
                                   tabIndex={-1}
@@ -1282,34 +1354,39 @@ export default function RebalancingPanel({
                                 inputMode="decimal"
                                 data-col="targetAmount"
                                 data-item-id={item.id}
-                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${hasAmt ? 'text-emerald-300' : 'text-gray-400'} ${hasAmt && !isAmountMode ? 'opacity-40 focus:opacity-100' : ''}`}
+                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${hasAmt ? 'text-emerald-300' : 'text-gray-400'} ${amountDisabled ? 'opacity-40' : ''}`}
                                 value={displayAmt}
                                 placeholder={hintText}
-                                title={!isAmountMode
-                                  ? "지금은 목표비중 기준입니다 — 우측 상단 '투자선택'을 '목표금액'으로 바꾸면 이 금액이 수량을 만듭니다"
+                                readOnly={amountDisabled}
+                                title={amountDisabled
+                                  ? "투자선택이 목표비중 기준이라 이 열은 비활성입니다 — '투자선택'을 '목표금액'으로 바꾸면 이 금액이 수량을 만듭니다"
                                   : hasAmt
                                     ? (isOverseas ? `목표 평가금액 ${formatCurrency(effAmt * usdkrw)} (원화 환산) — 이 행은 목표비중 대신 금액으로 수량을 계산합니다` : '이 행은 목표비중 대신 목표금액으로 수량을 계산합니다')
                                     : `비어 있으면 목표비중 기준 (참고: 비중대로 매매하면 ${hintText}${isOverseas ? '' : '원'})`}
                                 onChange={e => {
+                                  if (amountDisabled) return;
                                   const cleaned = e.target.value.replace(/[^0-9.]/g, '');
                                   const parts = cleaned.split('.');
                                   const raw = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
                                   setEditingTargetAmount(prev => ({ ...prev, [item.id]: raw }));
                                 }}
                                 onFocus={e => {
+                                  if (amountDisabled) { e.target.blur(); return; }
                                   setEditingTargetAmount(prev => ({ ...prev, [item.id]: e.target.value }));
                                   e.target.select();
                                 }}
                                 onBlur={e => {
+                                  if (amountDisabled) return;
                                   commitAmt(e.target.value);
                                   setEditingTargetAmount(prev => { const n = { ...prev }; delete n[item.id]; return n; });
                                 }}
                                 onKeyDown={e => {
+                                  if (amountDisabled) { e.preventDefault(); return; }
                                   if (e.key === 'Enter') e.target.blur();
                                   handleTableKeyDown(e, 'targetAmount');
                                 }}
                               />
-                              {hasAmt && (
+                              {hasAmt && !amountDisabled && (
                                 <button
                                   type="button"
                                   tabIndex={-1}
@@ -1736,7 +1813,7 @@ export default function RebalancingPanel({
           onClose={() => setRestoreOpen(false)}
           snapshots={rebalTargetSnapshots}
           currentRows={rebalanceData}
-          amountModeActive={isAmountMode}
+          investMode={settings.mode || 'rebalance'}
           targetMode={settings.targetMode === 'variable' ? 'variable' : 'fixed'}
           targetDate={settings.targetDate || ''}
           locked={isFixedLocked}

@@ -25,7 +25,7 @@ export default function RebalanceTargetRestoreModal({
   onClose,
   snapshots = [],        // [{ dayKey, memo }] — 날짜 내림차순
   currentRows = [],      // rebalanceData (현재 리밸런싱 표)
-  amountModeActive = false, // 투자선택이 '목표금액'인가 — 그때만 금액이 비중을 무력화한다
+  investMode = 'rebalance', // 현재 settings.mode ('accumulate' | 'rebalance' | 'targetAmount')
   targetMode = 'fixed',  // 현재 settings.targetMode
   targetDate = '',       // 현재 settings.targetDate — 소스와 같으면 경고
   locked = false,        // isFixedLocked
@@ -102,6 +102,9 @@ export default function RebalanceTargetRestoreModal({
   //    ⚠️ 리밸런싱·적립식에서는 금액이 무시되고 비중이 그대로 적용되므로 배지를 띄우면 거짓말이 된다.
   //    ⚠️ matchRebalTargetRows(utils.ts)를 고쳐 플래그를 실어 보내지 말 것 — 그 함수는
   //    verify:rebal-restore가 참조 구현으로 미러링하므로 본문을 바꾸면 스크립트도 함께 고쳐야 한다.
+  // ⚠️ 이 선언을 아래(early return 뒤)로 내리지 말 것 — useMemo의 deps 배열은 렌더 중 즉시 평가되므로
+  //    const가 뒤에 있으면 TDZ ReferenceError로 모달이 통째로 죽는다.
+  const amountModeActive = investMode === 'targetAmount';
   const amtOverrideIds = useMemo(
     () => (amountModeActive
       ? new Set((currentRows || []).filter(it => it?.hasTargetAmount).map(it => it.id))
@@ -124,6 +127,13 @@ export default function RebalanceTargetRestoreModal({
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
   const modeMismatch = !!sel && (sel.memo?.targetMode === 'variable' ? 'variable' : 'fixed') !== targetMode;
+  // 기록이 어느 '투자선택'에서 만들어졌는지 — 지금과 다르면 복원 결과의 의미가 달라진다.
+  const snapInvest = sel?.memo?.investMode === 'rebalance' || sel?.memo?.investMode === 'targetAmount'
+    ? sel.memo.investMode : (sel ? 'accumulate' : null);
+  const curInvest = investMode === 'accumulate' || investMode === 'targetAmount' ? investMode : 'rebalance';
+  const investMismatch = !!sel && !!snapInvest && snapInvest !== curInvest;
+  // 기록에 목표금액이 함께 남아 있는가(구버전 기록에는 없음)
+  const restoredAmountCount = (result?.matched || []).filter(m => m.amount != null).length;
   const sameAsTargetDate = !!sel && !!targetDate && targetDate === sel.dayKey;
   // 헤더 날짜에 이미 기록이 있으면 이 복원은 달력에 기록되지 않는다(App handleTargetRestored가
   // 그 원본을 덮어쓰지 않으려고 dirty를 세우지 않는다). 표만 바뀐다는 사실을 **적용 전에** 알린다.
@@ -229,6 +239,9 @@ export default function RebalanceTargetRestoreModal({
                     <span className="text-[10px] text-gray-500 shrink-0">{(s.memo?.rows || []).length}종목</span>
                     <span className="text-[10px] text-gray-500 ml-auto shrink-0 tabular-nums">합계 {Number(s.memo?.totalTargetRatio || 0).toFixed(2)}%</span>
                     <span className="text-[9px] text-gray-600 shrink-0">{s.memo?.targetMode === 'variable' ? '수시변경' : '고정'}</span>
+                    <span className="text-[9px] shrink-0 text-gray-500">
+                      {s.memo?.investMode === 'targetAmount' ? '목표금액' : s.memo?.investMode === 'rebalance' ? '리밸런싱' : '적립식'}
+                    </span>
                   </button>
                 );
               })}
@@ -236,8 +249,23 @@ export default function RebalanceTargetRestoreModal({
           </div>
 
           {/* 경고 */}
-          {(modeMismatch || headerHasRecord || !targetDate) && !!sel && (
+          {(modeMismatch || investMismatch || restoredAmountCount > 0 || headerHasRecord || !targetDate) && !!sel && (
             <div className="px-3 py-2 space-y-1 border-b border-gray-800">
+              {/* ⚠️ 투자선택이 다르면 '같은 비중'이라도 수량 산식이 달라진다(적립식=증분 / 리밸런싱·목표금액=레벨).
+                  게다가 적립식은 목표비중 슬롯 자체가 별도라, 지금 화면의 슬롯에 적용된다는 점을 알려야 한다. */}
+              {investMismatch && (
+                <div className="text-[10.5px] text-amber-300/90">
+                  ⚠️ 이 기록은 <b>{snapInvest === 'targetAmount' ? '목표금액' : snapInvest === 'rebalance' ? '리밸런싱' : '적립식'}</b>에서
+                  만들어졌는데 지금 투자선택은 <b>{curInvest === 'targetAmount' ? '목표금액' : curInvest === 'rebalance' ? '리밸런싱' : '적립식'}</b>입니다 —
+                  값은 <b>현재 투자선택의 목표비중 열</b>에 적용되며, 수량 산식도 현재 투자선택을 따릅니다.
+                </div>
+              )}
+              {restoredAmountCount > 0 && (
+                <div className="text-[10.5px] text-emerald-300/80">
+                  💵 이 기록에는 <b>목표금액 {restoredAmountCount}종목</b>이 함께 남아 있어 금액도 같이 복원됩니다
+                  {!amountModeActive && " — 다만 지금 투자선택에서는 금액이 수량에 쓰이지 않습니다('목표금액'으로 바꾸면 적용)"}.
+                </div>
+              )}
               {modeMismatch && (
                 <div className="text-[10.5px] text-amber-300/90">
                   ⚠️ 이 기록은 <b>{sel.memo?.targetMode === 'variable' ? '수시변경' : '고정'}</b> 목표입니다 —
@@ -294,9 +322,23 @@ export default function RebalanceTargetRestoreModal({
                               {m.by === 'name' && <span className="ml-1 text-[9px] text-amber-400/70">이름 대조</span>}
                               {amtOverrideIds.has(m.id) && <span className="ml-1 text-[9px] text-amber-400/90" title="이 종목은 목표금액이 지정돼 있어, 비중을 복원해도 수량이 바뀌지 않습니다 (표에서 목표금액 칸을 비우면 적용)">목표금액 우선</span>}
                             </td>
-                            <td className="text-right text-gray-500 py-1 px-1">{m.prevRatio.toFixed(2)}</td>
+                            <td className="text-right text-gray-500 py-1 px-1">
+                              <div>{m.prevRatio.toFixed(2)}</div>
+                              {m.amount != null && (
+                                <div className="text-[9px] text-gray-600 tabular-nums">
+                                  {m.prevAmount != null ? m.prevAmount.toLocaleString('ko-KR') : '—'}
+                                </div>
+                              )}
+                            </td>
                             <td className="text-center text-gray-700 py-1 px-1">→</td>
-                            <td className="text-right text-green-400 py-1 px-1 font-bold">{m.value.toFixed(2)}</td>
+                            <td className="text-right text-green-400 py-1 px-1 font-bold">
+                              <div>{m.value.toFixed(2)}</div>
+                              {m.amount != null && (
+                                <div className="text-[9px] text-emerald-300/80 font-normal tabular-nums">
+                                  {m.amount.toLocaleString('ko-KR')}
+                                </div>
+                              )}
+                            </td>
                             <td className={`text-right py-1 pl-1 ${Math.abs(diff) < 0.005 ? 'text-gray-600' : diff > 0 ? 'text-red-400' : 'text-blue-400'}`}>
                               {Math.abs(diff) < 0.005 ? '0.00' : `${diff > 0 ? '+' : ''}${diff.toFixed(2)}`}
                             </td>

@@ -1433,6 +1433,10 @@ export const matchRebalTargetRows = (rows, items) => {
       id: it.id, value, by,
       code: it.code || '', curName: it.name || '', snapName: row.name || '',
       prevRatio: cleanNum(it.effectiveTargetRatio), isSavings: it.type === 'savings',
+      // 기록된 목표금액(숫자일 때만). 구버전 기록에는 없으므로 null이 정상 — 소비 측에서 건너뛴다.
+      amount: typeof row.targetAmount === 'number' && Number.isFinite(row.targetAmount) && row.targetAmount >= 0
+        ? row.targetAmount : null,
+      prevAmount: it.hasTargetAmount ? cleanNum(it.effectiveTargetAmount) : null,
     });
   };
 
@@ -1477,6 +1481,29 @@ export const matchRebalTargetRows = (rows, items) => {
     matched, skipped, untouched,
     appliedSum: matched.reduce((s, m) => s + m.value, 0),
     untouchedSum: untouched.reduce((s, it) => s + cleanNum(it.effectiveTargetRatio), 0),
+  };
+};
+
+// 투자선택(settings.mode) × 목표모드(settings.targetMode) 조합으로 목표비중 슬롯을 고른다.
+// ⚠️ 적립식은 '이번 적립금을 어떻게 나눌지'라 리밸런싱·목표금액의 '자산 전체 목표 배분'과 의미가
+//    다르다 → 슬롯을 분리해 두 모드가 서로의 값을 덮지 않게 한다(적립식으로 처음 가면 자연히 0%,
+//    리밸런싱으로 돌아오면 쓰던 비중이 그대로). 값을 실제로 0으로 지우는 방식은 되돌릴 수 없어 폐기.
+// ⚠️ 미러 상태(mirrorField)도 같이 분리해야 한다 — 공유하면 리밸런싱에서 켠 라이브 미러가 적립식
+//    슬롯까지 현재 비중으로 추종시켜 '적립식은 0%에서 시작' 규약이 깨진다.
+// ⚠️ 이 함수가 유일한 슬롯 결정 지점이다. usePortfolioData(계산)·RebalancingPanel(편집·미러·복원)이
+//    반드시 공유할 것 — 한쪽만 손복제하면 화면과 계산이 서로 다른 슬롯을 읽는다.
+export const resolveTargetSlots = (settings) => {
+  const acc = settings?.mode === 'accumulate';
+  const varMode = settings?.targetMode === 'variable';
+  return {
+    isAccumulateSlot: acc,
+    slotField: acc ? (varMode ? 'targetRatioAccVar' : 'targetRatioAcc') : (varMode ? 'targetRatioVar' : 'targetRatio'),
+    overrideField: acc
+      ? (varMode ? 'targetRatioAccVarOverride' : 'targetRatioAccOverride')
+      : (varMode ? 'targetRatioVarOverride' : 'targetRatioOverride'),
+    mirrorField: acc
+      ? (varMode ? 'targetMirrorAccVar' : 'targetMirrorAccFixed')
+      : (varMode ? 'targetMirrorVar' : 'targetMirrorFixed'),
   };
 };
 

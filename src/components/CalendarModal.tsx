@@ -741,6 +741,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   <tr className="text-gray-500 border-b border-gray-800">
                     <th className="text-left font-normal py-1 pr-1">종목명</th>
                     <th className="text-right font-normal py-1 px-1">목표</th>
+                    <th className="text-right font-normal py-1 px-1">목표금액</th>
                     <th className="text-right font-normal py-1 px-1">현재수량</th>
                     <th className="text-right font-normal py-1 px-1">이후수량</th>
                     <th className="text-right font-normal py-1 pl-1">리밸런싱 후 평가금액</th>
@@ -754,6 +755,8 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                         {r.code ? <span className="ml-1 text-[9px] text-gray-600 font-mono">{r.code}</span> : null}
                       </td>
                       <td className="text-right text-green-400 py-1 px-1">{Number(r.targetRatio || 0).toFixed(2)}%</td>
+                      {/* 목표금액은 사용자가 명시 입력한 행만 기록된다(구버전 기록·미지정 행은 '-') */}
+                      <td className="text-right text-emerald-300/80 py-1 px-1">{r.targetAmount == null ? '-' : fmtMoney(r.targetAmount, padRec.currency)}</td>
                       <td className="text-right text-gray-400 py-1 px-1">{r.curQty == null ? '-' : qfmt(r.curQty)}</td>
                       <td className="text-right text-blue-300 py-1 px-1">{r.expQty == null ? '-' : qfmt(r.expQty)}</td>
                       <td className="text-right text-yellow-500 py-1 pl-1">{fmtMoney(r.expEval, padRec.currency)}</td>
@@ -764,6 +767,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   <tr className="font-bold border-t border-gray-700">
                     <td className="text-left text-gray-400 py-1.5 pr-1">합계</td>
                     <td className="text-right text-green-400 py-1.5 px-1">{Number(padRec.totalTargetRatio || 0).toFixed(2)}%</td>
+                    <td className="py-1.5 px-1" />
                     <td className="py-1.5 px-1" />
                     <td className="py-1.5 px-1" />
                     <td className="text-right text-yellow-500 py-1.5 pl-1">{fmtMoney(padRec.totalExpEval, padRec.currency)}</td>

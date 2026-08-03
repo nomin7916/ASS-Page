@@ -67,6 +67,9 @@ const matchRebalTargetRows = (rows, items) => {
       id: it.id, value, by,
       code: it.code || '', curName: it.name || '', snapName: row.name || '',
       prevRatio: cleanNum(it.effectiveTargetRatio), isSavings: it.type === 'savings',
+      amount: typeof row.targetAmount === 'number' && Number.isFinite(row.targetAmount) && row.targetAmount >= 0
+        ? row.targetAmount : null,
+      prevAmount: it.hasTargetAmount ? cleanNum(it.effectiveTargetAmount) : null,
     });
   };
 
