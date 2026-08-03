@@ -432,7 +432,6 @@ export default function KrEtfTaxMatrix({
                                         {curPrice > 0 ? `현재가 ${curPrice.toLocaleString()}원` : '현재가 없음'}
                                       </div>
                                     </th>
-                                    <th className="text-right py-1 px-1 font-normal w-[64px]">조정 수량</th>
                                     <th className="text-right py-1 px-1 font-normal w-[88px]">과표기준가</th>
                                     <th className="text-right py-1 px-1 font-normal w-[80px]">평균 과표</th>
                                     <th className="text-right py-1 px-1 font-normal w-[96px] text-emerald-400/70" title="매도 시 과세: (과표기준가 − 평균 과표) × 매도주식수, 0 이하면 비과세">과세 금액</th>
@@ -441,9 +440,7 @@ export default function KrEtfTaxMatrix({
                                 </thead>
                                 <tbody>
                                   {sortedEventsWithAvg.map(({ evt, runningAvg }) => {
-                                    const prevQtyNum = safeNum(evt.prevQty);
                                     const changeNum = safeNum(evt.change);
-                                    const adjustedQty = prevQtyNum + changeNum;
                                     const isSell = changeNum < 0;
                                     const isBuy = changeNum > 0;
                                     // 매입금액 = 매매수량 × 매입단가 / 현재 평가 = 현재가 × 매매수량 (둘 다 매수 행만)
@@ -538,11 +535,6 @@ export default function KrEtfTaxMatrix({
                                           ) : (
                                             <span className="text-gray-700">-</span>
                                           )}
-                                        </td>
-                                        <td className="py-1 px-1 text-right tabular-nums text-gray-300">
-                                          {adjustedQty !== 0 || prevQtyNum !== 0
-                                            ? adjustedQty.toLocaleString()
-                                            : <span className="text-gray-700">-</span>}
                                         </td>
                                         <td className="py-1 px-1">
                                           <input
