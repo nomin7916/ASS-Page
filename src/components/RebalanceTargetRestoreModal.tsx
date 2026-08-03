@@ -25,6 +25,7 @@ export default function RebalanceTargetRestoreModal({
   onClose,
   snapshots = [],        // [{ dayKey, memo }] — 날짜 내림차순
   currentRows = [],      // rebalanceData (현재 리밸런싱 표)
+  amountModeActive = false, // 투자선택이 '목표금액'인가 — 그때만 금액이 비중을 무력화한다
   targetMode = 'fixed',  // 현재 settings.targetMode
   targetDate = '',       // 현재 settings.targetDate — 소스와 같으면 경고
   locked = false,        // isFixedLocked
@@ -95,14 +96,17 @@ export default function RebalanceTargetRestoreModal({
     [currentRows],
   );
 
-  // ⚠️ 목표금액이 지정된 행은 비중을 복원해도 수량이 1주도 바뀌지 않는다(금액 우선).
+  // ⚠️ 투자선택이 '목표금액'일 때, 금액이 지정된 행은 비중을 복원해도 수량이 1주도 바뀌지 않는다.
   //    이 기능은 undo가 없고 미리보기가 유일한 안전망이라, '적용됨'으로만 보이면 사용자가
   //    아무 일도 안 일어난 이유를 알 길이 없다 → 해당 행에 배지로 고지한다.
+  //    ⚠️ 리밸런싱·적립식에서는 금액이 무시되고 비중이 그대로 적용되므로 배지를 띄우면 거짓말이 된다.
   //    ⚠️ matchRebalTargetRows(utils.ts)를 고쳐 플래그를 실어 보내지 말 것 — 그 함수는
   //    verify:rebal-restore가 참조 구현으로 미러링하므로 본문을 바꾸면 스크립트도 함께 고쳐야 한다.
   const amtOverrideIds = useMemo(
-    () => new Set((currentRows || []).filter(it => it?.hasTargetAmount).map(it => it.id)),
-    [currentRows],
+    () => (amountModeActive
+      ? new Set((currentRows || []).filter(it => it?.hasTargetAmount).map(it => it.id))
+      : new Set()),
+    [currentRows, amountModeActive],
   );
 
   if (!open) return null;

@@ -1546,7 +1546,9 @@ export default function App() {
         portfolioId: p.id,
         accountName,
         targetMode: settings?.targetMode === 'variable' ? 'variable' : 'fixed',
-        investMode: settings?.mode === 'rebalance' ? 'rebalance' : 'accumulate',
+        // 투자선택 3모드를 그대로 기록한다(미지원 레거시 값은 적립식으로 정규화).
+        // ⚠️ CalendarModal의 라벨 매핑도 3값을 알아야 한다 — 한쪽만 고치면 '목표금액' 기록이 '적립식'으로 보인다.
+        investMode: settings?.mode === 'rebalance' || settings?.mode === 'targetAmount' ? settings.mode : 'accumulate',
         currency: acct === 'overseas' ? 'USD' : 'KRW',
         rows, totalTargetRatio, totalExpEval, content,
       },

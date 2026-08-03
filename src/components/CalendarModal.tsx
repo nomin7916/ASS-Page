@@ -731,7 +731,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               <div className="flex items-center justify-between gap-2 mb-2">
                 <span className="text-emerald-300 text-[13px] font-bold truncate">📊 {padRec.accountName || '계좌'}</span>
                 <span className="text-[10px] text-gray-500 shrink-0">
-                  {padRec.targetMode === 'variable' ? '수시변경' : '고정'} · {padRec.investMode === 'rebalance' ? '리밸런싱' : '적립식'}
+                  {padRec.targetMode === 'variable' ? '수시변경' : '고정'} · {padRec.investMode === 'rebalance' ? '리밸런싱' : padRec.investMode === 'targetAmount' ? '목표금액' : '적립식'}
                   {/* 기록 시각 — 이 기록이 걸린 날짜(목표 날짜)와 실제 기록 시점은 다를 수 있다 */}
                   {padRec.updatedAt ? ` · ${new Date(padRec.updatedAt).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })} 기록` : ''}
                 </span>

@@ -79,6 +79,12 @@ export function usePortfolioData({
       ? Math.min(Math.max(0, cleanNum(settings.useDepositAmount)), depositAmount)
       : depositAmount;
     const allocBase = cleanNum(settings.amount) + useDeposit;
+    // 투자선택(settings.mode) = 'rebalance' | 'accumulate' | 'targetAmount'
+    // ⚠️ 'targetAmount'만 수량을 금액에서 뽑는다. 자금 축(총평가금 기준·예수금 전액)은 리밸런싱과 동일.
+    // ⚠️ 비-금액 모드의 분기는 `=== 'rebalance'` 그대로 둔다 — 마이그레이션 전 레거시 값
+    //    ('deposit-only')이 기존처럼 적립식 식으로 떨어지게 하기 위함(폴백 극성 보존).
+    const isAmountMode = settings.mode === 'targetAmount';
+    const isLevelBase = settings.mode === 'rebalance' || isAmountMode;
     const isVariableMode = settings.targetMode === 'variable';
     const mirrorState = isVariableMode
       ? (settings.targetMirrorVar || 'off')
@@ -137,10 +143,14 @@ export function usePortfolioData({
       const hasTargetAmount = typeof rawTargetAmount === 'number'
         ? Number.isFinite(rawTargetAmount)
         : (typeof rawTargetAmount === 'string' && /\d/.test(rawTargetAmount));
-      const targetAmountHint = settings.mode === 'rebalance' ? overallExp * tRatio : curEval + allocBase * tRatio;
+      const targetAmountHint = isLevelBase ? overallExp * tRatio : curEval + allocBase * tRatio;
       const effectiveTargetAmount = hasTargetAmount ? cleanNum(rawTargetAmount) : targetAmountHint;
+      // ⚠️ 금액 기준은 **투자선택이 '목표금액'일 때만** 적용된다(모드 게이팅). 리밸런싱·적립식에서는
+      //    금액이 입력돼 있어도 무시하고 목표비중이 적용된다 — 사용자가 정한 규약이다.
+      //    금액 미입력 행은 effectiveTargetAmount가 힌트(=비중대로 도달하는 평가금)라
+      //    '목표금액' 모드에서도 리밸런싱과 **완전히 같은 수량**이 나온다(대수적 항등).
       let action = price > 0
-        ? (hasTargetAmount
+        ? (isAmountMode
           ? Math.trunc((effectiveTargetAmount - curEval) / price)
           : (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((allocBase * tRatio) / price)))
         : 0;

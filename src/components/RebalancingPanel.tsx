@@ -301,6 +301,10 @@ export default function RebalancingPanel({
     );
   };
 
+  // 투자선택 3모드. '목표금액'은 수량 산출만 금액 기준이고 **자금 축은 리밸런싱과 동일**
+  // (총평가금 기준 · 예수금 전액 사용). 그래서 아래 자금 관련 분기는 전부 isLevelMode로 묶는다.
+  const isAmountMode = settings.mode === 'targetAmount';
+  const isLevelMode = settings.mode === 'rebalance' || isAmountMode;
   const isOverseasHeader = activePortfolioAccountType === 'overseas';
   const headerFx = marketIndicators.usdkrw || 1;
   const headerNativeTotalEval = isOverseasHeader ? totals.totalEval / headerFx : totals.totalEval;
@@ -311,7 +315,7 @@ export default function RebalancingPanel({
     : headerDepositAmount;
   const headerBaseCost = rebalanceData.reduce((s, d) => s + d.cost, 0);
   const headerExtraCost = rebalanceData.reduce((s, d) => s + (rebalExtraQty[d.id] || 0) * cleanNum(d.currentPrice), 0);
-  const headerInvestable = settings.mode === 'rebalance' ? headerAmount : (headerUseDeposit + headerAmount);
+  const headerInvestable = isLevelMode ? headerAmount : (headerUseDeposit + headerAmount);
   const headerTotalBuy = rebalanceData.reduce((s, d) => {
     const q = d.action + (rebalExtraQty[d.id] || 0);
     return s + (q > 0 ? q * cleanNum(d.currentPrice) : 0);
@@ -320,7 +324,7 @@ export default function RebalancingPanel({
     const q = d.action + (rebalExtraQty[d.id] || 0);
     return s + (q < 0 ? -q * cleanNum(d.currentPrice) : 0);
   }, 0);
-  const headerDepositForBuy = settings.mode === 'rebalance' ? headerDepositAmount : headerUseDeposit;
+  const headerDepositForBuy = isLevelMode ? headerDepositAmount : headerUseDeposit;
   const rebalTotalAvailable = headerDepositForBuy + headerAmount + headerTotalSell;
   const rebalBalance = rebalTotalAvailable - headerTotalBuy;
   const rebalRemaining = Math.max(0, rebalBalance);
@@ -377,12 +381,11 @@ export default function RebalancingPanel({
 
   const applyRemainingToDeposit = () => {
     if (rebalRemaining <= 0) return;
-    const isRebalance = settings.mode === 'rebalance';
-    const newDeposit = isRebalance
+    const newDeposit = isLevelMode
       ? Math.round(rebalRemaining)
       : Math.round(headerDepositAmount - headerUseDeposit + rebalRemaining);
     setPortfolio(prev => prev.map(p => p.type === 'deposit' ? { ...p, depositAmount: newDeposit } : p));
-    if (!isRebalance && settings.useDepositAmount != null) {
+    if (!isLevelMode && settings.useDepositAmount != null) {
       updateSettingsForType({ ...settings, useDepositAmount: null });
     }
   };
@@ -476,21 +479,22 @@ export default function RebalancingPanel({
                 const fmtPlain = (n) => isOverseasHeader
                   ? new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cleanNum(n))
                   : formatNumber(Math.round(cleanNum(n)));
-                const isRebalance = settings.mode === 'rebalance';
-                const leftLabel = isRebalance ? '총평가금액' : '예수금';
-                const leftVal = isRebalance ? headerNativeTotalEval : headerDepositAmount;
+                const leftLabel = isLevelMode ? '총평가금액' : '예수금';
+                const leftVal = isLevelMode ? headerNativeTotalEval : headerDepositAmount;
                 const useDepositLabel = '사용할 예수금';
                 const isUseDepositExplicit = settings.useDepositAmount != null;
-                const investable = isRebalance ? (leftVal + headerAmount) : (headerUseDeposit + headerAmount);
+                const investable = isLevelMode ? (leftVal + headerAmount) : (headerUseDeposit + headerAmount);
                 const totalCost = headerBaseCost + headerExtraCost;
                 const displayCost = -totalCost;
+                // ⚠️ '목표금액'은 수량만 금액 기준이고 자금 축은 리밸런싱과 같다(isLevelMode).
                 const modeOptions = [
                   { value: 'accumulate', label: '적립식', color: '#facc15' },
                   { value: 'rebalance', label: '리밸런싱', color: '#22c55e' },
+                  { value: 'targetAmount', label: '목표금액', color: '#34d399' },
                 ];
                 const currentOpt = modeOptions.find(o => o.value === settings.mode) || modeOptions[0];
-                const investableSourceLabel = isRebalance ? leftLabel : useDepositLabel;
-                const investableSourceVal = isRebalance ? leftVal : headerUseDeposit;
+                const investableSourceLabel = isLevelMode ? leftLabel : useDepositLabel;
+                const investableSourceVal = isLevelMode ? leftVal : headerUseDeposit;
                 const inputBlockWidth = 'w-[184px]';
                 return (
                   <div className="bg-gray-800/80 px-4 py-3 rounded-lg border border-gray-700 shadow-inner flex flex-col gap-1.5 text-[12px] min-w-0">
@@ -512,7 +516,7 @@ export default function RebalancingPanel({
                         </select>
                       </div>
                     </div>
-                    {isRebalance ? (
+                    {isLevelMode ? (
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-gray-400 shrink-0">{leftLabel}</span>
                         <span className="text-gray-200 font-bold text-right truncate">{fmtAmount(leftVal)}</span>
@@ -612,7 +616,7 @@ export default function RebalancingPanel({
                         </span>
                       </div>
                       <div className="text-right text-[10px] text-gray-500 leading-tight">
-                        ({isRebalance ? '예수금' : '사용예수금'} + 적립금 + 매도 − 매수 = 잔액)
+                        ({isLevelMode ? '예수금' : '사용예수금'} + 적립금 + 매도 − 매수 = 잔액)
                       </div>
                     </div>
                     {rebalRemaining > 0 && (
@@ -957,7 +961,7 @@ export default function RebalancingPanel({
                         );
                       })()}
                       {!H('targetAmount') && (
-                        <th className="py-3 px-3 min-w-[110px] text-emerald-300 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('effectiveTargetAmount')} title="종목별 목표 평가금액 — 입력하면 그 행은 비중 대신 금액으로 수량을 계산합니다">
+                        <th className={`py-3 px-3 min-w-[110px] text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap ${isAmountMode ? 'text-emerald-300' : 'text-gray-500'}`} onClick={() => handleRebalanceSort('effectiveTargetAmount')} title={isAmountMode ? '종목별 목표 평가금액 — 이 금액으로 수량을 계산합니다' : "지금은 목표비중 기준 — 우측 상단 '투자선택'을 '목표금액'으로 바꾸면 적용됩니다"}>
                           {hideStrip('targetAmount')}
                           목표금액{isOverseasHeader && <span className="ml-0.5 text-[9px] text-gray-500 font-normal">($)</span>}{arr('effectiveTargetAmount')}
                         </th>
@@ -1148,9 +1152,10 @@ export default function RebalancingPanel({
                             : targetMode === 'variable'
                               ? (isDifferent ? 'text-red-400' : 'text-amber-300')
                               : (isDifferent ? 'text-red-400' : 'text-green-400');
-                          // 목표금액이 지정된 행은 이 비중이 수량 계산에 쓰이지 않는다 → 흐리게 표시해
-                          // '값은 남아 있지만 지금은 효력이 없다'를 눈으로 알린다(포커스하면 원래 밝기).
-                          const ratioMuted = !!item.hasTargetAmount;
+                          // 투자선택이 '목표금액'이고 그 행에 금액이 지정돼 있으면 이 비중은 수량 계산에
+                          // 쓰이지 않는다 → 흐리게 표시해 '값은 남아 있지만 지금은 효력이 없다'를 알린다.
+                          // ⚠️ 금액 미입력 행은 그 모드에서도 비중이 (힌트를 통해) 그대로 적용되므로 흐리게 하지 않는다.
+                          const ratioMuted = isAmountMode && !!item.hasTargetAmount;
                           const cellLocked = targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
                           const showResetIcon = !isLiveMirror && (item[overrideField] || Math.abs(baseVal - itemCurRatio) > threshold);
                           const alwaysShowReset = !!item[overrideField];
@@ -1207,7 +1212,7 @@ export default function RebalancingPanel({
                                   if (e.key === 'Enter') e.target.blur();
                                   handleTableKeyDown(e, 'targetRatio');
                                 }}
-                                title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : ratioMuted ? '목표금액이 지정되어 이 비중은 수량 계산에 쓰이지 않습니다 (목표금액 칸을 비우면 다시 적용)' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
+                                title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : ratioMuted ? "투자선택이 '목표금액'이고 이 종목에 금액이 지정돼 있어 이 비중은 수량 계산에 쓰이지 않습니다" : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
                               />
                               {showResetIcon && (
                                 <button
@@ -1277,12 +1282,14 @@ export default function RebalancingPanel({
                                 inputMode="decimal"
                                 data-col="targetAmount"
                                 data-item-id={item.id}
-                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${hasAmt ? 'text-emerald-300' : 'text-gray-400'}`}
+                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${hasAmt ? 'text-emerald-300' : 'text-gray-400'} ${hasAmt && !isAmountMode ? 'opacity-40 focus:opacity-100' : ''}`}
                                 value={displayAmt}
                                 placeholder={hintText}
-                                title={hasAmt
-                                  ? (isOverseas ? `목표 평가금액 ${formatCurrency(effAmt * usdkrw)} (원화 환산) — 이 행은 목표비중 대신 금액으로 수량을 계산합니다` : '이 행은 목표비중 대신 목표금액으로 수량을 계산합니다')
-                                  : `비어 있으면 목표비중 기준 (참고: 비중대로 매매하면 ${hintText}${isOverseas ? '' : '원'})`}
+                                title={!isAmountMode
+                                  ? "지금은 목표비중 기준입니다 — 우측 상단 '투자선택'을 '목표금액'으로 바꾸면 이 금액이 수량을 만듭니다"
+                                  : hasAmt
+                                    ? (isOverseas ? `목표 평가금액 ${formatCurrency(effAmt * usdkrw)} (원화 환산) — 이 행은 목표비중 대신 금액으로 수량을 계산합니다` : '이 행은 목표비중 대신 목표금액으로 수량을 계산합니다')
+                                    : `비어 있으면 목표비중 기준 (참고: 비중대로 매매하면 ${hintText}${isOverseas ? '' : '원'})`}
                                 onChange={e => {
                                   const cleaned = e.target.value.replace(/[^0-9.]/g, '');
                                   const parts = cleaned.split('.');
@@ -1449,10 +1456,10 @@ export default function RebalancingPanel({
                       ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n))
                       : formatCurrency(n);
                     return (
-                      <td className="py-3 px-3 text-center font-bold text-emerald-300">
+                      <td className={`py-3 px-3 text-center font-bold ${isAmountMode ? 'text-emerald-300' : 'text-gray-500'}`}>
                         <div>{fmtAmt(amtSum)}</div>
                         <div className="text-[10px] font-normal mt-0.5 text-gray-500">
-                          {setCount > 0 ? `금액 지정 ${setCount}종목` : '전부 비중 기준'}
+                          {!isAmountMode ? '비중 기준 · 미적용' : setCount > 0 ? `금액 지정 ${setCount}종목` : '전부 비중 기준'}
                         </div>
                       </td>
                     );
@@ -1482,8 +1489,7 @@ export default function RebalancingPanel({
             const isOv = activePortfolioAccountType === 'overseas';
             const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
             const fmtAmt = (n) => isOv ? fmtUS(n) : formatCurrency(n);
-            const isRebalance = settings.mode === 'rebalance';
-            const depositLabel = isRebalance ? '예수금' : '사용예수금';
+            const depositLabel = isLevelMode ? '예수금' : '사용예수금';
             const balanceColor = rebalBalance > 0 ? 'text-sky-300' : rebalBalance < 0 ? 'text-red-400' : 'text-gray-500';
             return (
               <div className="bg-[#1e293b] border-t-2 border-gray-500 px-3 py-3 flex justify-end">
@@ -1730,6 +1736,7 @@ export default function RebalancingPanel({
           onClose={() => setRestoreOpen(false)}
           snapshots={rebalTargetSnapshots}
           currentRows={rebalanceData}
+          amountModeActive={isAmountMode}
           targetMode={settings.targetMode === 'variable' ? 'variable' : 'fixed'}
           targetDate={settings.targetDate || ''}
           locked={isFixedLocked}
@@ -1869,15 +1876,17 @@ export default function RebalancingPanel({
                     '액션(수량) = ⌊ (목표 평가금 − 현재 평가금) ÷ 종목가격 ⌋',
                     '액션 + 이면 매수, − 이면 매도.',
                   ] },
-                  { icon: '💵', color: 'text-emerald-300', title: '목표금액 (비중 대신 금액으로 지정)', lines: [
-                    '목표금액 칸에 금액을 넣으면 그 행만 비중 대신 금액이 수량을 만든다.',
+                  { icon: '💵', color: 'text-emerald-300', title: "목표금액 (투자선택 = '목표금액'일 때 적용)", lines: [
+                    "우측 상단 '투자선택'을 목표금액으로 바꿔야 금액이 수량을 만든다.",
+                    '리밸런싱·적립식에서는 금액이 입력돼 있어도 무시되고 목표비중이 적용된다.',
                     '수량 = (목표금액 − 현재 평가금) ÷ 종목가격, 소수점 버림(0 방향) → + 매수 / − 매도',
-                    '비워 두면 회색 참고값(비중대로 매매했을 때 도달하는 평가금)만 표시되고 계산은 기존 비중 기준.',
-                    '그 회색 값을 그대로 입력하면 수량은 변하지 않는다(두 모드 모두 동일).',
+                    '칸이 비면 회색 참고값(비중대로 매매했을 때 도달하는 평가금)이 그대로 기준이 된다',
+                    '  → 금액을 하나도 안 넣으면 목표금액 모드의 수량 = 리밸런싱 수량(완전 동일).',
                     '금액을 지정한 행은 목표비중(%)이 흐리게 표시된다 — 값은 남아 있고 효력만 정지.',
                     '0을 넣으면 사실상 전량 매도(펀드는 1좌 미만 단수가 남을 수 있음).',
                     '지우려면 칸을 비우거나 ↺ 아이콘 클릭.',
                     '예적금은 시세·수량이 없어 참고값만 표시(매매 대상 아님).',
+                    '자금 계산(투자가능금·잔액)은 리밸런싱과 동일하게 총평가금·예수금 전액 기준.',
                   ] },
                   { icon: '💸', color: 'text-sky-300', title: '실 구매비용 (행별 / TOTAL)', lines: [
                     '행별 = −(액션 × 종목가격)',
