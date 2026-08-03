@@ -101,6 +101,15 @@ export function useDriveSync({
   const tokenClientRef = useRef(null);
   const pendingTokenResolveRef = useRef<((token: string | null) => void) | null>(null);
   const isInitialLoad = useRef(true);
+  // STOCK 파일(종목별 과거 종가) 하이드레이션 완료 플래그.
+  // ⚠️ 이 플래그가 false인 동안에는 STOCK 파일을 **절대 쓰지 않는다**.
+  //    STOCK 저장은 in-memory 맵으로 파일 전체를 교체하므로(saveAllToDrive의 STOCK 분기),
+  //    Drive 병합 전에 저장이 끼면 이번 세션에 조회된 코드만 든 부분 맵이 전체 캐시를 덮어써
+  //    과거 종가가 영구 소실된다(STOCK은 앱 내 백업이 0개 — 버전 백업·수동 최신본 모두
+  //    stockHistoryMap이 제거된 stateCore를 저장하므로 복구 경로가 없다).
+  //    App.tsx의 isInitialLoad 해제가 loadStockFromDrive보다 먼저 풀리고,
+  //    saveAllToDrive를 직접 부르는 지점이 useStockData에만 9곳이라 부팅 순서 교정만으로는 못 막는다.
+  const stockHydratedRef = useRef(false);
   const driveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const portfolioUpdatedAtRef = useRef<number>(0);
   const prevPortfolioStructureRef = useRef<string>('');
@@ -292,7 +301,9 @@ export function useDriveSync({
         saveDriveFile(token, folderId, DRIVE_FILES.MANUAL_LATEST, { ...stateCore, manualSavedAt: Date.now() }).catch(() => {});
       }
       await Promise.all([
-        Object.keys(shm || {}).length > 0
+        // ⚠️ stockHydratedRef 가드를 제거하지 말 것 — Drive 병합 전 부분 맵이 전체 캐시를 truncate한다.
+        //    가드는 반드시 여기(saveAllToDrive 본문)에 둔다. 호출부(useStockData 9곳 등)에 나눠 달면 누락된다.
+        Object.keys(shm || {}).length > 0 && stockHydratedRef.current
           ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm })
           : Promise.resolve(),
         saveDriveFile(token, folderId, DRIVE_FILES.MARKET, { marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }),
@@ -357,8 +368,14 @@ export function useDriveSync({
       if (stockData?.stockHistoryMap) {
         applyStockData(stockData.stockHistoryMap);
       }
+      // ⚠️ 하이드레이션 완료 표시는 if 블록 **밖**이다 — loadDriveFile은 '파일 없음'만 null을 반환하고
+      //    401/5xx/네트워크 오류는 throw하므로, 여기 도달했다는 것은 "Drive 상태를 확인했다"는 뜻이다.
+      //    신규 사용자(파일 없음)도 저장이 허용돼야 첫 종가 캐시가 만들어진다.
+      //    반대로 예외로 catch에 빠지면 플래그는 false로 남아 이번 세션 STOCK 쓰기가 통째로 보류된다
+      //    (그 세션에 받은 종가는 다음 세션에 다시 조회되므로 손실이 아니다 — 캐시 파괴보다 안전).
+      stockHydratedRef.current = true;
     } catch (err) {
-      console.warn('[Drive] STOCK 백그라운드 로드 실패:', err);
+      console.warn('[Drive] STOCK 백그라운드 로드 실패 — 이번 세션 STOCK 저장 보류:', err);
     }
   };
 
