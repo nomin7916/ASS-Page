@@ -1186,6 +1186,109 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   `reportAdminChange`·`updateSettingsForType`·`setCalendarMemos`)**을 언급하는 주석을 두지 말 것**
   (설명 주석은 시작 센티넬 위에).
 
+### 목표금액(targetAmount) — 비중 대신 금액으로 수량 지정 (⚠️ 회귀 주의)
+
+리밸런싱 표 **목표비중 바로 오른쪽**에 종목별 목표 평가금액 열을 둔다. 값이 있으면 그 행의 수량이
+비중이 아니라 **금액**에서 나온다: `수량 = Math.trunc((목표금액 − 현재평가금) ÷ 종목가격)`
+(양수 매수 / 음수 매도). 미입력 행은 기존 비중 기반 계산을 그대로 쓰고, 칸에는 회색 힌트(placeholder)만 뜬다.
+⚠️ `trunc`(0 방향 버림)이지 `floor`가 아니다 — 기존 비중 경로와 같은 규약을 쓰되, 이 열은 **매도(음수)가
+상시 발생**하는 경로라 둘의 차이가 실제로 드러난다(소수 좌수 펀드는 목표 0원에도 1좌 미만 단수가 남는다).
+
+- **저장 = 종목 필드 `item.targetAmount`**(Drive STATE 영속, `targetRatio`와 같은 등급).
+  ⚠️ **`App.tsx portfolioStructureKey`의 항목 화이트리스트에 `targetAmount: item.targetAmount` 필수** —
+  이 지문은 필드를 **손나열**하므로 빠뜨리면 목표금액만 고친 세션에서 `portfolioUpdatedAt`이 오르지
+  않아 `useDriveSync`의 STATE 저장 가드가 저장을 통째로 스킵한다(historyVerifyKey·investmentNotesKey·
+  calendarMemos와 **동일 버그 클래스** — 화면은 정상이라 며칠 뒤 조용한 세션에서만 재현된다).
+  로드·정렬·계좌전환은 `...p`/`...item` 스프레드라 무수정.
+- **⚠️ 커밋은 `handleUpdate`가 아니라 `setPortfolio` 직접** (`RebalancingPanel` 목표금액 셀):
+  `handleUpdate`는 `cleanNum(value)`를 거쳐 **빈칸을 0으로** 만든다. 그러면 '미입력'과 '목표 0원
+  (=전량 매도)'을 구분할 수 없어 둘 중 하나를 영영 표현하지 못한다. 저장값은 `''`(미입력) 또는 숫자이고,
+  판정(`hasTargetAmount`)은 **저장 원시값의 타입**으로 한다(`number`면 `Number.isFinite`, `string`이면
+  숫자 포함 여부). ⚠️ `String(x).trim() !== ''`만 쓰면 손상된 Drive 값(`true`·객체·`'abc'`)이 전부
+  '입력됨'으로 통과하고 `cleanNum`이 그걸 0으로 만들어 **조용히 전량 매도**가 된다.
+- **⚠️ 값이 그대로면 아무것도 쓰지 말 것**(`commitAmt` 조기 return): 빈 칸을 Tab으로 지나가기만 해도
+  `targetAmount: ''`가 새로 박혀 지문이 바뀌고 **Drive 전량 저장이 돌며** `portfolio` 참조가 갈려 표
+  전체가 재계산된다. blur마다 무조건 `setPortfolio`를 부르는 형태로 되돌리지 말 것.
+- **⚠️ 힌트는 '비중대로 매매하면 도달하는 평가금액'** (`targetAmountHint`, `usePortfolioData`):
+  리밸런싱 모드 `overallExp × 비중`, 적립식 모드 `curEval + allocBase × 비중`. 두 모드의 기존 action 식이
+  **레벨(목표 도달) vs 증분(이번 투입금 배분)** 으로 축이 다르기 때문이다. 이 정의라야 **힌트를 그대로
+  입력해도 수량이 1주도 바뀌지 않는다**(양 모드 대수적 항등 — 표시값은 읽기 편하도록 반올림하므로
+  정수 경계에서 1주 어긋날 수 있다). 적립식에 레벨 힌트(`overallExp × 비중`)를 쓰면 회색 값을 옮겨 적는
+  순간 수량이 전혀 달라져 "금액을 넣으면 값이 튄다"가 된다. **예적금은 매매 자체가 없어 두 모드 모두
+  힌트 = `curEval`**(비중을 곱하면 닿을 수 없는 금액이 Σ목표금액에 섞여 합계가 과대 표시된다).
+- **⚠️ `price > 0` 가드는 분기 바깥에 유지**: 기준가 미로드 펀드(price 0)에서 Infinity/NaN이
+  `cost`→`expEval`→`headerTotalBuy/Sell`→`rebalBalance`→`maxAdd`→`maxAddLink` effect의 `floor(pool/price)`를
+  타고 **`rebalExtraQty`에 박히고**, 그 값은 계좌 전환에도 `accountRebalExtraQtyRef`에 보존된다.
+- **⚠️ 예적금(savings)은 조기 반환 분기 그대로** — 시세·수량이 없어 매매 대상이 아니다(`action:0`,
+  `expEval = curEval` 이월). 셀은 회색 참고값만 렌더하되 **반드시 `td[tabIndex=0]`** 로 둘 것:
+  `utils.getRowFocusables`가 행 내 **위치 인덱스**로 ←/→ 이동을 계산하므로, 한 행만 포커서블 수가
+  다르면 그 행부터 좌우 이동이 한 칸씩 어긋난다(`extraQty`의 savings 분기가 같은 이유로 `td[tabIndex=0]`).
+- **⚠️ `action`은 `rebalExtraQty`를 참조하지 말 것**: `maxAddLink` 유지 effect의 pool은
+  `잔액 + Σ_linked extra×price`인데, 이 pool이 **연동 행 자신의 extra에 불변**이라는 성질이 고정점
+  보장(진동·무한루프 차단)의 근거다. action이 extra를 참조하는 순간 그 불변성이 깨진다.
+- **열 추가에 따라 함께 고친 것**: `RB_COLS`(index 8, 미등록 시 열을 숨기면 **복원 칩이 없어 영구 소실**),
+  `retirementColSpan`(하드코딩 16 → `RB_COLS.length`), thead/tbody/tfoot **각 1셀씩**(tfoot을 빠뜨리면
+  TOTAL 행이 통째로 한 칸 밀린다). `cost`의 colSpan 흡수 구간(action~expQty)과는 인접하지 않아
+  `absorbedCount`는 무수정. `data-col="targetAmount"` + `handleTableKeyDown(e,'targetAmount')` 필수
+  (안 바꾸면 ↑/↓가 목표비중 칸으로 튄다).
+- **⚠️ 입력 초안(`editingTargetAmount`)에 계산값을 넣지 말 것**: 표시값은 `formatNumber`(콤마)인데
+  onFocus 초안을 `String(effAmt)`(콤마 없음)로 넣으면 문자열이 달라져 React가 커밋에서 `node.value`를
+  다시 쓰고, 그 대입이 **방금 건 전체선택을 풀어 캐럿을 끝으로 보낸다** → `1,000,000`에 `5`를 치면
+  `10000005`가 된다. `e.target.value`(DOM 값 그대로)를 담아야 재대입이 없다(목표비중 셀과 동일 패턴).
+- **표시 규약**: 금액이 지정된 행은 **목표비중(%) 셀을 `opacity-40`으로 흐리게**(포커스 시 원복) +
+  툴팁으로 "효력 정지"를 알린다 — 값은 남아 있고 계산에만 안 쓰인다. tfoot은 Σ목표금액(각 행의 도달
+  평가금 = 입력값 또는 힌트)과 '금액 지정 N종목'을 표시한다. 행 집합은 목표비중 TOTAL과 **동일**
+  (예적금 포함·예수금 미포함)이나 예적금 몫만 비중이 아니라 평가금 그대로 들어간다.
+- **⚠️ 과거 목표비중 복원과의 상호작용**: 금액이 지정된 행은 비중을 복원해도 **수량이 1주도 안 바뀐다**
+  (금액 우선). 이 기능은 undo가 없고 미리보기가 유일한 안전망이므로,
+  `RebalanceTargetRestoreModal`이 해당 행에 앰버 **`목표금액 우선` 배지**를 띄운다. ⚠️ 이 플래그를
+  `matchRebalTargetRows`(utils.ts)에 실어 보내지 말 것 — 그 함수는 `verify:rebal-restore`가 **참조 구현으로
+  미러링**하므로 본문을 고치면 스크립트도 함께 고쳐야 한다. 모달은 `currentRows`(=`rebalanceData`)에서
+  직접 파생한다(복원 불변식 INV-1~INV-5 무영향 — 달력 쓰기·dirty·settings에 손대지 않는다).
+- **해외계좌**: `rebalanceData`의 `curEval`/`currentPrice`가 **USD(native)** 이고 `overallExp`도
+  `nativeTotalEval + settings.amount`라 목표금액도 **USD**로 입력한다(헤더에 `($)` 표기, 툴팁에 원화 환산).
+  ⚠️ 원화로 환산해 저장하지 말 것(환율 시점이 섞여 가짜 손익이 생긴다).
+- **영속화 무관**: `hasTargetAmount`/`targetAmountHint`/`effectiveTargetAmount`는 전부 매 렌더 파생값이다
+  (`rebalanceData` 내부). 저장되는 것은 `item.targetAmount` 하나뿐.
+- **⚠️ 관리자 공지는 발화, 달력 dirty는 미발화**: 값이 실제로 바뀐 커밋과 ↺ 지우기에서
+  **`onAdminTargetChange()`만 직접 호출**한다(impersonation 중에만 non-null, 세션당 1회 래치라 비용 0).
+  목표금액은 목표비중을 무효화하는 상위 값이라 "관리자가 금액으로만 조정하고 나가면 통지 0건"이 되어선
+  안 된다. ⚠️ `reportAdminChange` 래퍼를 재사용하지 말 것 — `onTargetEdited`까지 발화해 dirty가 서면
+  **헤더 날짜의 달력 기록이 통째로 덮인다**(복원 섹션 INV-2와 같은 근거). 달력 자동기록의 확정 트리거는
+  '비중 조정'이라는 기존 규약을 유지한다.
+- **범위 밖(의도)**: ① `buildRebalTargetEntry`의 달력 스냅샷 `rows`에 `targetAmount`를 **넣지 않는다**
+  (`CalendarModal` LIST 패드가 5열 고정이고 복원 경로에 값 채널이 없다) → 금액 구동 행은 기록의
+  `targetRatio`만으로는 그 수량이 재현되지 않는다(수량·평가금 자체는 화면과 1:1 유지).
+  ② 펀드에서 `curEval`이 `evalAmount` 폴백인 경우(수량·기준가 미로드) `expEval`에는 폴백이 없어
+  예상평가금이 목표금액과 어긋나고 보유 초과 매도가 나올 수 있다 — CLAUDE.md가 '손대지 말 것'으로 못 박은
+  **선행 버그**라 산식을 고치지 않는다. ③ 목표금액 열을 숨기면 저장된 값은 계속 수량을 지배하는데, 단서는
+  흐려진 목표비중 셀뿐이다(두 열을 동시에 숨기면 단서가 없다).
+  ④ **PIN 잠금(`cellLocked`) 미적용 — 사용자 결정(2026-08)**. 고정 모드에서 목표비중 셀이 잠겨 있어도
+  목표금액 칸은 열려 있고, 금액이 비중을 무효화하므로 **잠금은 실질적으로 우회 가능**하다. 그럼에도
+  열어 두는 근거: 이 PIN은 접근 통제가 아니라 오조작 방지 마찰이고(같은 로그인 PIN 해시를 다시 확인할
+  뿐), **고정/수시변경 select에는 원래 PIN 게이트가 없어** 한 번의 클릭으로 목표비중 칸 자체를 여는
+  기존 우회로가 이미 있다. 잠금을 붙이려면 그 select부터 막아야 한다 — 목표금액에만 붙이는 것은
+  방어가 아니라 불편만 준다.
+
+**같이 고친 표 결함 2건 (⚠️ 회귀 주의)**
+
+- **표 헤더가 앱 상단바 위로 새어 나오던 문제** → 표 스크롤 래퍼(`overflow-x-auto`)에 **`isolate`**.
+  원인은 sticking이 아니라 **페인트 순서**다: 앱 상단바가 `sticky top-0 z-30`(`App.tsx`)인데 이 표의
+  좌측 고정 헤더도 `z-30`이라, 동률에서는 **DOM 뒤쪽인 표가 위에** 그려졌다(스크롤 중 `종목명` 헤더가
+  상단바를 뚫고 보임). `isolate`가 래퍼에 스태킹 컨텍스트를 만들어 표 내부 z를 통째로 격리하면서도
+  **내부 서열(고정 헤더 z-30 > 일반 헤더 z-20 > 본문 z-5)은 그대로** 유지한다.
+  ⚠️ **개별 th의 z를 낮추는 방식으로 되돌리지 말 것** — 고정 헤더를 z-20으로 내리면 가로 스크롤 시
+  DOM 뒤쪽의 일반 헤더(z-20)와 동률이 되어 종목명 헤더가 가려진다(세로 스크롤만 테스트하면 못 잡는다).
+  ⚠️ `isolate`는 **표 래퍼에만** — 카드 div에 걸면 그 안의 요소까지 갇힌다(모달 4종은 이 래퍼 밖이라 무관).
+- **'추가' 칸에 마이너스를 못 치던 문제** → 문자열 초안 `editingExtra` 도입. `parseInt('-')`가 `NaN → 0`이
+  되고 controlled value가 즉시 `''`로 되돌려 **부호를 찍는 것 자체가 불가능**했다(도움말에는 "음수 입력
+  가능"이라고 적혀 있었는데 실제로는 안 됐다). ⚠️ `rebalExtraQty`에 저장하는 값은 **반드시 number** —
+  문자열로 두면 `(수량 + action + extraQty) * price`가 문자열 결합이 되어 예상평가금·매수/매도 합계·
+  추가가능 풀이 전부 오염된다(타입체크 없는 빌드라 컴파일러가 못 잡는다).
+  ⚠️ onChange는 **유니코드 마이너스류(`−`·`–`·`—`·`－`)를 ASCII `-`로 먼저 정규화**한다 — 안 하면
+  붙여넣은 `−5`에서 부호만 사라져 **매도가 매수로 뒤집힌다**. 연동(`maxAddLink`) 토글 시에는 초안을
+  폐기해야 연동으로 채운 값이 낡은 초안에 가려지지 않는다.
+
 ### 메모 달력 = 4종 기록 허브 (칩 버튼) (⚠️ 회귀 주의 — 파생 2종을 calendarMemos에 복사 금지)
 
 날짜 칸에 **버튼식 칩** 3종(+사용자 메모 줄)을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).

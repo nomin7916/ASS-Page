@@ -2396,7 +2396,7 @@ export default function App() {
         id: p.id, name: p.name,
         startDate: p.startDate || p.portfolioStartDate,
         portfolioStartDate: p.portfolioStartDate || p.startDate,
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
@@ -2427,6 +2427,10 @@ export default function App() {
         // 분배금 표 월 숨김(탭별) — 단독 토글도 Drive STATE 저장을 트리거하도록 지문에 포함
         hiddenDivMonthsExpected: (Array.isArray(p.hiddenDivMonthsExpected) ? [...p.hiddenDivMonthsExpected] : []).sort((a, b) => a - b),
         hiddenDivMonthsActual: (Array.isArray(p.hiddenDivMonthsActual) ? [...p.hiddenDivMonthsActual] : []).sort((a, b) => a - b),
+        // 표 열 숨김(포트폴리오·리밸런싱) — 단독 토글도 Drive STATE 저장을 트리거하도록 지문에 포함.
+        // 없으면 다른 구조 변경에 편승할 때만 저장돼, 열만 숨기고 새로고침한 세션에서 조용히 되돌아간다.
+        hiddenColumnsPortfolio: (Array.isArray(p.hiddenColumnsPortfolio) ? [...p.hiddenColumnsPortfolio] : []).slice().sort(),
+        hiddenColumnsRebalancing: (Array.isArray(p.hiddenColumnsRebalancing) ? [...p.hiddenColumnsRebalancing] : []).slice().sort(),
         historyLen: (p.history || []).length,
         // 자산검증 확정상태 지문: 확정(isFixed)·자동확정거부(autoConfirmDeclined)·확정값 변경을
         // 구조 변경으로 간주 → portfolioUpdatedAt 상승 → Drive STATE 저장(수동/자동 확정·확정취소

@@ -98,7 +98,10 @@ export function usePortfolioData({
         const effectiveTargetRatio = isLiveMirror ? liveRatio : (cleanNum(item[slotField]) || 0);
         const expEval = curEval;
         const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
-        return { ...item, curEval, action: 0, cost: 0, expEval, expRatio, effectiveTargetRatio, returnRate, isSavings: true };
+        // 목표금액 힌트는 '비중대로 매매했을 때 도달하는 평가금액'인데, 예적금은 매매 자체가 없어
+        // 어떤 모드에서도 도달값이 현재 평가금(=expEval 이월)이다. 목표비중을 곱해 보여주면
+        // 닿을 수 없는 금액이 Σ목표금액에 섞여 합계가 과대 표시된다.
+        return { ...item, curEval, action: 0, cost: 0, expEval, expRatio, effectiveTargetRatio, returnRate, isSavings: true, hasTargetAmount: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
       }
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
@@ -117,12 +120,35 @@ export function usePortfolioData({
         ? liveRatio
         : (cleanNum(item[slotField]) || 0);
       const tRatio = effectiveTargetRatio / 100;
-      let action = price > 0 ? (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((allocBase * tRatio) / price)) : 0;
+      // ── 목표금액(targetAmount) — 입력된 행은 비중이 아니라 금액이 수량을 만든다 ──
+      // 수량 = ⌊(목표 평가금액 − 현재 평가금액) ÷ 종목가격⌋ → 양수 매수 / 음수 매도.
+      // ⚠️ 미입력 판정에 cleanNum을 쓰지 말 것. cleanNum('')이 0이라 '0 = 미입력'으로 규정하면
+      //    '목표 0원(전량 매도)'을 표현할 길이 사라진다 → 저장 원시값의 타입으로 판정한다.
+      // ⚠️ 힌트(targetAmountHint)는 '비중대로 매매했을 때 **도달하는** 평가금액'으로 정의한다 —
+      //    리밸런싱 모드는 목표 평가금(overallExp×비중), 적립식 모드는 현재 평가금 + 이번 배분액
+      //    (curEval + allocBase×비중). 이래야 힌트를 그대로 입력해도 수량이 1주도 바뀌지 않는다
+      //    (두 모드 모두 대수적 항등). 적립식에 레벨 식(overallExp×비중)만 쓰면 힌트를 옮겨 적는 순간
+      //    수량이 전혀 달라져 사용자가 '금액을 넣으면 값이 튄다'고 느낀다.
+      // ⚠️ `price > 0` 가드는 반드시 바깥에 유지 — 기준가 미로드 펀드에서 Infinity/NaN이 cost·expEval·
+      //    rebalBalance·maxAdd를 거쳐 rebalExtraQty(계좌 전환에도 보존됨)까지 오염된다.
+      // ⚠️ 타입까지 본다 — String(x).trim() !== '' 만으로는 손상된 Drive 값(true/객체/'abc')이
+      //    전부 '입력됨'으로 통과하고 cleanNum이 그걸 0으로 만들어 **조용히 전량 매도**가 된다.
+      const rawTargetAmount = item.targetAmount;
+      const hasTargetAmount = typeof rawTargetAmount === 'number'
+        ? Number.isFinite(rawTargetAmount)
+        : (typeof rawTargetAmount === 'string' && /\d/.test(rawTargetAmount));
+      const targetAmountHint = settings.mode === 'rebalance' ? overallExp * tRatio : curEval + allocBase * tRatio;
+      const effectiveTargetAmount = hasTargetAmount ? cleanNum(rawTargetAmount) : targetAmountHint;
+      let action = price > 0
+        ? (hasTargetAmount
+          ? Math.trunc((effectiveTargetAmount - curEval) / price)
+          : (settings.mode === 'rebalance' ? Math.trunc(((overallExp * tRatio) - curEval) / price) : Math.trunc((allocBase * tRatio) / price)))
+        : 0;
       const extraQty = rebalExtraQty[item.id] || 0;
       const expEval = (qty + action + extraQty) * price;
       const cost = action * price;
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
-      return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio, returnRate };
+      return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio, returnRate, hasTargetAmount, targetAmountHint, effectiveTargetAmount };
     });
     if (rebalanceSortConfig.key === 'code-global') {
       data.sort((a, b) => (a.code || '').localeCompare(b.code || '') * rebalanceSortConfig.direction);

@@ -32,6 +32,7 @@ const RB_COLS = [
   { key: 'curEval', label: '평가금' },
   { key: 'currentPrice', label: '현재가' },
   { key: 'targetRatio', label: '목표비중' },
+  { key: 'targetAmount', label: '목표금액' },
   { key: 'curRatio', label: '현재비중' },
   { key: 'action', label: '수량' },
   { key: 'extraQty', label: '추가' },
@@ -88,6 +89,13 @@ export default function RebalancingPanel({
   onTargetRestored = null,
 }) {
   const [editingRatio, setEditingRatio] = useState({});
+  // 목표금액 입력 초안 — 목표비중(editingRatio)과 같은 패턴. onChange마다 setPortfolio를 부르면
+  // 타건마다 rebalanceData·portfolioStructureKey가 재계산되고 maxAddLink 유지 effect가 재실행된다.
+  const [editingTargetAmount, setEditingTargetAmount] = useState({});
+  // '추가' 입력 초안 — 상태값(rebalExtraQty)은 반드시 number로 유지하고 타이핑 중 문자열만 여기 담는다.
+  // ⚠️ 이게 없으면 '-' 한 글자가 parseInt에서 NaN→0이 되고 controlled value가 즉시 ''로 되돌려
+  //    **마이너스 부호를 입력하는 것 자체가 불가능**하다(음수 매도 수량 직접 조절 불가).
+  const [editingExtra, setEditingExtra] = useState({});
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [ladderModal, setLadderModal] = useState(null);
   const [dateEditMode, setDateEditMode] = useState(false);
@@ -268,7 +276,10 @@ export default function RebalancingPanel({
 
   const stickySpanKeys = ['category', 'changeRate', 'returnRate', 'name'];
   const stickySpanCount = stickySpanKeys.filter(k => !H(k)).length;
-  const retirementColSpan = 16 - hiddenColumns.length;
+  // ⚠️ '실제로 그리는 열 집합'에서 직접 센다 — `상수 − hiddenColumns.length` 역산은 Drive에 영속된
+  //    구 키(열을 빼거나 key를 개명한 뒤 남은 값)가 hiddenColumns에 섞이면 colSpan만 줄어들어
+  //    dc-irp 계좌의 '퇴직연금 예상 자산 비율' 행이 오른쪽에서 조용히 잘린다(에러도 경고도 없음).
+  const retirementColSpan = RB_COLS.filter(c => !H(c.key)).length;
 
   const hideStrip = (key) => (
     <div
@@ -333,6 +344,8 @@ export default function RebalancingPanel({
       return next;
     });
     setRebalExtraQty(prev => ({ ...prev, [id]: wasLinked ? 0 : Math.max(0, Math.floor(capacity)) }));
+    // 연동으로 채운 값이 남아 있던 입력 초안에 가려지지 않도록 폐기
+    setEditingExtra(prev => { if (prev[id] === undefined) return prev; const n = { ...prev }; delete n[id]; return n; });
   };
 
   // 연동된 행 유지: "잔액 + 그 행이 이미 쓴 금액(extra×현재가)"(자기 소비 환원)을 풀(pool)로
@@ -709,7 +722,15 @@ export default function RebalancingPanel({
               </div>
             </div>
           )}
-          <div className="overflow-x-auto bg-[#0f172a]">
+          {/* ⚠️ isolate(isolation:isolate) 필수 — 이 표의 좌측 고정 헤더가 z-30인데 앱 상단바
+              (App.tsx의 sticky top-0 z-30)와 값이 같아, 동률에서는 DOM 뒤쪽인 표가 위에 그려진다.
+              그래서 스크롤 중 표 헤더가 상단바를 뚫고 올라와 보였다. isolate가 여기서 스태킹
+              컨텍스트를 만들어 표 내부 z를 통째로 격리하므로 **표 내부 서열(고정 헤더 z-30 >
+              일반 헤더 z-20 > 본문 z-5)은 그대로 유지**된다.
+              ⚠️ 개별 th의 z를 낮추는 방식으로 되돌리지 말 것 — 고정 헤더를 z-20으로 내리면
+              가로 스크롤 시 DOM 뒤쪽의 일반 헤더(z-20)와 동률이 되어 종목명 헤더가 가려진다.
+              ⚠️ isolate는 이 표 래퍼에만 — 카드 div에 걸면 그 안의 요소까지 갇힌다(모달들은 이 래퍼 밖). */}
+          <div className="overflow-x-auto bg-[#0f172a] isolate">
             <table className="w-full text-right text-[13px]">
               <thead className="bg-[#1e293b] text-gray-300 border-b border-gray-600 font-bold text-center">
                 {(() => {
@@ -937,6 +958,12 @@ export default function RebalancingPanel({
                         </th>
                         );
                       })()}
+                      {!H('targetAmount') && (
+                        <th className="py-3 px-3 min-w-[110px] text-emerald-300 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('effectiveTargetAmount')} title="종목별 목표 평가금액 — 입력하면 그 행은 비중 대신 금액으로 수량을 계산합니다">
+                          {hideStrip('targetAmount')}
+                          목표금액{isOverseasHeader && <span className="ml-0.5 text-[9px] text-gray-500 font-normal">($)</span>}{arr('effectiveTargetAmount')}
+                        </th>
+                      )}
                       {!H('curRatio') && (
                         <th className="py-3 px-3 min-w-[80px] text-gray-400 text-center cursor-pointer hover:bg-gray-700 sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap" onClick={() => handleRebalanceSort('curEval')}>
                           {hideStrip('curRatio')}
@@ -1123,6 +1150,9 @@ export default function RebalancingPanel({
                             : targetMode === 'variable'
                               ? (isDifferent ? 'text-red-400' : 'text-amber-300')
                               : (isDifferent ? 'text-red-400' : 'text-green-400');
+                          // 목표금액이 지정된 행은 이 비중이 수량 계산에 쓰이지 않는다 → 흐리게 표시해
+                          // '값은 남아 있지만 지금은 효력이 없다'를 눈으로 알린다(포커스하면 원래 밝기).
+                          const ratioMuted = !!item.hasTargetAmount;
                           const cellLocked = targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
                           const showResetIcon = !isLiveMirror && (item[overrideField] || Math.abs(baseVal - itemCurRatio) > threshold);
                           const alwaysShowReset = !!item[overrideField];
@@ -1146,7 +1176,7 @@ export default function RebalancingPanel({
                                 setPinModal({ onAuthorized: () => setTimeout(focusBack, 80) });
                               }) : undefined}
                             >
-                              <input type="text" data-col="targetRatio" data-item-id={item.id} className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-blue-400 ${textColor} ${cellLocked ? 'cursor-pointer focus:bg-amber-900/10' : 'focus:bg-blue-900/20'}`}
+                              <input type="text" data-col="targetRatio" data-item-id={item.id} className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-blue-400 ${textColor} ${ratioMuted ? 'opacity-40 focus:opacity-100' : ''} ${cellLocked ? 'cursor-pointer focus:bg-amber-900/10' : 'focus:bg-blue-900/20'}`}
                                 value={displayVal}
                                 readOnly={cellLocked}
                                 onChange={e => { if (!cellLocked) setEditingRatio(prev => ({ ...prev, [item.id]: e.target.value })); }}
@@ -1179,7 +1209,7 @@ export default function RebalancingPanel({
                                   if (e.key === 'Enter') e.target.blur();
                                   handleTableKeyDown(e, 'targetRatio');
                                 }}
-                                title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
+                                title={cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : ratioMuted ? '목표금액이 지정되어 이 비중은 수량 계산에 쓰이지 않습니다 (목표금액 칸을 비우면 다시 적용)' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
                               />
                               {showResetIcon && (
                                 <button
@@ -1203,6 +1233,97 @@ export default function RebalancingPanel({
                             </td>
                           );
                         })()}
+                        {!H('targetAmount') && (() => {
+                          // 목표금액 셀 — 값이 있으면 그 행의 수량이 비중이 아니라 금액에서 나온다.
+                          // ⚠️ 예적금(savings)도 반드시 **포커서블 1개**를 내야 한다(읽기전용 td[tabIndex=0]).
+                          //    utils.getRowFocusables가 행 내 '위치 인덱스'로 위/아래 이동을 계산하므로,
+                          //    한 행만 포커서블 수가 다르면 그 행부터 세로 이동이 한 칸씩 어긋난다.
+                          const hasAmt = !!item.hasTargetAmount;
+                          const hintAmt = cleanNum(item.targetAmountHint);
+                          const effAmt = cleanNum(item.effectiveTargetAmount);
+                          const hintText = isOverseas ? (hintAmt ? hintAmt.toFixed(2) : '0') : formatNumber(Math.round(hintAmt));
+                          if (isSavings) {
+                            return (
+                              <td className="py-3 px-3 text-center text-gray-600 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav} title="예적금은 시세·수량이 없어 매매 대상이 아닙니다 — 평가금이 그대로 이월됩니다">{hintText}</td>
+                            );
+                          }
+                          // ⚠️ onFocus 초안에 계산값(String(effAmt))을 넣지 말 것 — 표시값은 formatNumber라
+                          //    콤마 유무로 문자열이 달라지고, React가 커밋에서 node.value를 다시 쓰면서
+                          //    방금 건 전체선택이 풀린다(캐럿 끝으로 이동) → 타이핑이 기존 값 뒤에 이어붙어
+                          //    1,000,000에 5를 치면 10000005가 된다. DOM 값 그대로 담아야 재대입이 없다.
+                          const draft = editingTargetAmount[item.id];
+                          const displayAmt = draft !== undefined
+                            ? draft
+                            : (hasAmt ? (isOverseas ? String(effAmt) : formatNumber(effAmt)) : '');
+                          // ⚠️ 커밋은 handleUpdate가 아니라 setPortfolio로 한다 — handleUpdate는 cleanNum을
+                          //    거쳐 빈칸을 0으로 바꾸므로 '미입력'과 '목표 0원(전량 매도)'을 구분할 수 없다.
+                          // ⚠️ 값이 그대로면 아무것도 쓰지 말 것 — 빈 칸을 탭으로 지나가기만 해도
+                          //    targetAmount:''가 새로 박혀 지문이 바뀌고 Drive 전량 저장이 도는 데다,
+                          //    portfolio 참조가 갈려 표 전체가 재계산된다.
+                          const commitAmt = (raw) => {
+                            const trimmed = String(raw ?? '').trim();
+                            const next = /\d/.test(trimmed) ? cleanNum(trimmed) : '';
+                            const prevNorm = hasAmt ? effAmt : '';
+                            if (prevNorm === next) return;
+                            setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetAmount: next } : p));
+                            // 관리자 접속(impersonation) 중 목표 변경 통지 — 목표금액은 목표비중을 무효화하는
+                            // 상위 값이라 비중 편집과 같은 등급으로 알린다(세션당 1회 래치라 추가 비용 0).
+                            // ⚠️ reportAdminChange 재사용 금지 — onTargetEdited까지 발화하면 헤더 날짜의
+                            //    달력 기록이 함께 덮인다(복원 섹션 INV-2와 같은 이유).
+                            if (onAdminTargetChange) onAdminTargetChange();
+                          };
+                          return (
+                            <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-emerald-500 relative">
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                data-col="targetAmount"
+                                data-item-id={item.id}
+                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${hasAmt ? 'text-emerald-300' : 'text-gray-400'}`}
+                                value={displayAmt}
+                                placeholder={hintText}
+                                title={hasAmt
+                                  ? (isOverseas ? `목표 평가금액 ${formatCurrency(effAmt * usdkrw)} (원화 환산) — 이 행은 목표비중 대신 금액으로 수량을 계산합니다` : '이 행은 목표비중 대신 목표금액으로 수량을 계산합니다')
+                                  : `비어 있으면 목표비중 기준 (참고: 비중대로 매매하면 ${hintText}${isOverseas ? '' : '원'})`}
+                                onChange={e => {
+                                  const cleaned = e.target.value.replace(/[^0-9.]/g, '');
+                                  const parts = cleaned.split('.');
+                                  const raw = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
+                                  setEditingTargetAmount(prev => ({ ...prev, [item.id]: raw }));
+                                }}
+                                onFocus={e => {
+                                  setEditingTargetAmount(prev => ({ ...prev, [item.id]: e.target.value }));
+                                  e.target.select();
+                                }}
+                                onBlur={e => {
+                                  commitAmt(e.target.value);
+                                  setEditingTargetAmount(prev => { const n = { ...prev }; delete n[item.id]; return n; });
+                                }}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') e.target.blur();
+                                  handleTableKeyDown(e, 'targetAmount');
+                                }}
+                              />
+                              {hasAmt && (
+                                <button
+                                  type="button"
+                                  tabIndex={-1}
+                                  onMouseDown={e => e.preventDefault()}
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    setEditingTargetAmount(prev => { const n = { ...prev }; delete n[item.id]; return n; });
+                                    setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetAmount: '' } : p));
+                                    if (onAdminTargetChange) onAdminTargetChange();
+                                  }}
+                                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-gray-500 hover:text-emerald-300 hover:bg-emerald-900/20 transition-all opacity-80 hover:!opacity-100"
+                                  title="목표금액 지우기 — 다시 목표비중 기준으로 계산"
+                                >
+                                  <RotateCcw size={11} />
+                                </button>
+                              )}
+                            </td>
+                          );
+                        })()}
                         {!H('curRatio') && (
                           <td className="py-3 px-3 text-center text-gray-400 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{(totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0).toFixed(isOverseas ? 2 : 1)}%</td>
                         )}
@@ -1213,7 +1334,31 @@ export default function RebalancingPanel({
                           <td className="py-3 px-3 text-center text-gray-600 focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>-</td>
                         ) : (
                           <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-orange-500">
-                            <input type="text" className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 caret-orange-400 min-w-[65px] ${isLinked ? 'text-cyan-300 focus:bg-cyan-900/20' : 'text-orange-300 focus:bg-orange-900/20'}`} value={extraQty !== 0 ? extraQty : ''} placeholder="0" title={isLinked ? '추가 가능 연동 중 — 직접 입력하면 연동 해제' : undefined} onChange={e => { const val = parseInt(e.target.value.replace(/[^\-\d]/g, '')) || 0; if (maxAddLink[item.id]) setMaxAddLink(prev => { const n = { ...prev }; delete n[item.id]; return n; }); setRebalExtraQty(prev => ({ ...prev, [item.id]: val })); }} onFocus={e => e.target.select()} />
+                            {/* ⚠️ 초안(editingExtra) 경유 필수 — value를 숫자 상태에 직결하면 '-' 한 글자가
+                                parseInt에서 NaN→0이 되어 controlled value가 즉시 ''로 되돌아가고,
+                                **마이너스 부호를 찍는 것 자체가 불가능**해진다(음수 매도 수량 직접 입력 불가).
+                                ⚠️ rebalExtraQty에 저장하는 값은 반드시 number — 문자열로 두면
+                                (수량 + action + extraQty) * price 가 문자열 결합이 되어 예상평가금·
+                                매수/매도 합계·추가가능 풀이 전부 오염된다(타입체크 없는 빌드라 못 잡는다). */}
+                            <input type="text" className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 caret-orange-400 min-w-[65px] ${isLinked ? 'text-cyan-300 focus:bg-cyan-900/20' : 'text-orange-300 focus:bg-orange-900/20'}`}
+                              value={editingExtra[item.id] !== undefined ? editingExtra[item.id] : (extraQty !== 0 ? String(extraQty) : '')}
+                              placeholder="0"
+                              title={isLinked ? '추가 가능 연동 중 — 직접 입력하면 연동 해제' : '매수는 그대로, 매도는 -를 붙여 입력 (예: -3)'}
+                              onChange={e => {
+                                // ⚠️ 유니코드 마이너스류를 먼저 ASCII '-'로 정규화 — 안 하면 붙여넣은
+                                //    '−5'(U+2212)에서 부호만 사라져 **매도가 매수로 뒤집힌다**.
+                                const src = e.target.value.replace(/[−–—－]/g, '-').trim();
+                                const digits = src.replace(/[^\d]/g, '');
+                                const raw = (src.startsWith('-') ? '-' : '') + digits;
+                                const parsed = parseInt(raw, 10);
+                                const val = Number.isFinite(parsed) ? parsed : 0;
+                                setEditingExtra(prev => ({ ...prev, [item.id]: raw }));
+                                if (maxAddLink[item.id]) setMaxAddLink(prev => { const n = { ...prev }; delete n[item.id]; return n; });
+                                setRebalExtraQty(prev => ({ ...prev, [item.id]: val }));
+                              }}
+                              onFocus={e => e.target.select()}
+                              onBlur={() => setEditingExtra(prev => { const n = { ...prev }; delete n[item.id]; return n; })}
+                            />
                           </td>
                         ))}
                         {!H('maxAdd') && (
@@ -1292,6 +1437,24 @@ export default function RebalancingPanel({
                         <div>{targetSum.toFixed(2)}%</div>
                         <div className={`text-[10px] font-normal mt-0.5 ${isMatch ? 'text-green-300' : 'text-amber-300'}`}>
                           {diff >= 0 ? '+' : ''}{diff.toFixed(2)}%
+                        </div>
+                      </td>
+                    );
+                  })()}
+                  {!H('targetAmount') && (() => {
+                    // Σ목표금액 = 입력값(있는 행) + 목표비중 파생 힌트(없는 행). 목표비중 TOTAL과 같은
+                    // 집합을 더하므로 두 합계가 서로 대응한다(예적금 포함, 예수금은 양쪽 다 미포함).
+                    const amtSum = rebalanceData.reduce((s, d) => s + cleanNum(d.effectiveTargetAmount), 0);
+                    const setCount = rebalanceData.filter(d => d.hasTargetAmount).length;
+                    const isOv = activePortfolioAccountType === 'overseas';
+                    const fmtAmt = (n) => isOv
+                      ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n))
+                      : formatCurrency(n);
+                    return (
+                      <td className="py-3 px-3 text-center font-bold text-emerald-300">
+                        <div>{fmtAmt(amtSum)}</div>
+                        <div className="text-[10px] font-normal mt-0.5 text-gray-500">
+                          {setCount > 0 ? `금액 지정 ${setCount}종목` : '전부 비중 기준'}
                         </div>
                       </td>
                     );
@@ -1697,6 +1860,16 @@ export default function RebalancingPanel({
                     '목표 평가금 = 투자가능금 × 목표비중(%)',
                     '액션(수량) = ⌊ (목표 평가금 − 현재 평가금) ÷ 종목가격 ⌋',
                     '액션 + 이면 매수, − 이면 매도.',
+                  ] },
+                  { icon: '💵', color: 'text-emerald-300', title: '목표금액 (비중 대신 금액으로 지정)', lines: [
+                    '목표금액 칸에 금액을 넣으면 그 행만 비중 대신 금액이 수량을 만든다.',
+                    '수량 = (목표금액 − 현재 평가금) ÷ 종목가격, 소수점 버림(0 방향) → + 매수 / − 매도',
+                    '비워 두면 회색 참고값(비중대로 매매했을 때 도달하는 평가금)만 표시되고 계산은 기존 비중 기준.',
+                    '그 회색 값을 그대로 입력하면 수량은 변하지 않는다(두 모드 모두 동일).',
+                    '금액을 지정한 행은 목표비중(%)이 흐리게 표시된다 — 값은 남아 있고 효력만 정지.',
+                    '0을 넣으면 사실상 전량 매도(펀드는 1좌 미만 단수가 남을 수 있음).',
+                    '지우려면 칸을 비우거나 ↺ 아이콘 클릭.',
+                    '예적금은 시세·수량이 없어 참고값만 표시(매매 대상 아님).',
                   ] },
                   { icon: '💸', color: 'text-sky-300', title: '실 구매비용 (행별 / TOTAL)', lines: [
                     '행별 = −(액션 × 종목가격)',

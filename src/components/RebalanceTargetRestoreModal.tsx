@@ -95,6 +95,16 @@ export default function RebalanceTargetRestoreModal({
     [currentRows],
   );
 
+  // ⚠️ 목표금액이 지정된 행은 비중을 복원해도 수량이 1주도 바뀌지 않는다(금액 우선).
+  //    이 기능은 undo가 없고 미리보기가 유일한 안전망이라, '적용됨'으로만 보이면 사용자가
+  //    아무 일도 안 일어난 이유를 알 길이 없다 → 해당 행에 배지로 고지한다.
+  //    ⚠️ matchRebalTargetRows(utils.ts)를 고쳐 플래그를 실어 보내지 말 것 — 그 함수는
+  //    verify:rebal-restore가 참조 구현으로 미러링하므로 본문을 바꾸면 스크립트도 함께 고쳐야 한다.
+  const amtOverrideIds = useMemo(
+    () => new Set((currentRows || []).filter(it => it?.hasTargetAmount).map(it => it.id)),
+    [currentRows],
+  );
+
   if (!open) return null;
 
   const shiftMonth = (d) => {
@@ -278,6 +288,7 @@ export default function RebalanceTargetRestoreModal({
                                 <span className="ml-1 text-[9px] text-gray-600">(기록: {m.snapName})</span>
                               )}
                               {m.by === 'name' && <span className="ml-1 text-[9px] text-amber-400/70">이름 대조</span>}
+                              {amtOverrideIds.has(m.id) && <span className="ml-1 text-[9px] text-amber-400/90" title="이 종목은 목표금액이 지정돼 있어, 비중을 복원해도 수량이 바뀌지 않습니다 (표에서 목표금액 칸을 비우면 적용)">목표금액 우선</span>}
                             </td>
                             <td className="text-right text-gray-500 py-1 px-1">{m.prevRatio.toFixed(2)}</td>
                             <td className="text-center text-gray-700 py-1 px-1">→</td>
