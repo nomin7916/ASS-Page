@@ -91,12 +91,18 @@ export default async function handler(request: Request): Promise<Response> {
   };
 
   const result: Record<string, number> = {};
+  // 응답 완전성 추적 — 클라이언트가 '신규 상장이라 건수가 적은 것'과
+  // '수집이 잘려서 건수가 적은 것'을 구분할 수 있어야 한다.
+  // (건수 임계값만으로 판정하면 상장 직후 종목이 영구히 '실패'로 오판된다.)
+  let truncated = false;   // DEADLINE 초과로 오래된 청크를 아예 시도하지 못함
+  let failedChunks = 0;    // 시도했으나 실패한 청크 — 구간 중간에 구멍이 생긴다
 
   // CONCURRENCY 단위 배치 병렬 처리 — 최신 데이터부터 수집하므로
   // DEADLINE 초과 시 부분 결과(최근 N년)라도 반환 가능
   for (let i = 0; i < chunks.length; i += CONCURRENCY) {
     if (Date.now() - startTime > DEADLINE_MS) {
       console.warn(`[stock-history] ${code} deadline at batch ${Math.floor(i / CONCURRENCY)}, returning partial (${Object.keys(result).length} days)`);
+      truncated = true;
       break;
     }
 
@@ -106,7 +112,7 @@ export default async function handler(request: Request): Promise<Response> {
     );
 
     for (const r of settled) {
-      if (r.status !== 'fulfilled' || !r.value) continue;
+      if (r.status !== 'fulfilled' || !r.value) { failedChunks++; continue; }
       for (const item of r.value) {
         const d     = item.stck_bsop_date as string;
         const close = parseInt(item.stck_clpr, 10);
@@ -121,7 +127,12 @@ export default async function handler(request: Request): Promise<Response> {
     return new Response('No data', { status: 404 });
   }
 
-  return new Response(JSON.stringify({ data: result, source: 'KIS-OpenAPI' }), {
+  // partial=false 는 "요청 범위를 끝까지 훑었고 실패 청크가 없다"는 뜻이다.
+  // 이때 건수가 적으면 그것은 수집 실패가 아니라 **상장 직후라 데이터가 그만큼뿐**인 것이다.
+  // ⚠️ 응답이 24h 엣지 캐시되므로 구버전 캐시에는 이 필드가 없다 → 클라이언트는 반드시
+  //    `partial === undefined`일 때 기존 건수 휴리스틱으로 폴백해야 한다.
+  const partial = truncated || failedChunks > 0;
+  return new Response(JSON.stringify({ data: result, source: 'KIS-OpenAPI', partial, truncated, failedChunks }), {
     headers: {
       'Content-Type':                'application/json',
       'Access-Control-Allow-Origin': '*',

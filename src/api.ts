@@ -19,12 +19,19 @@ export const fetchUsStockHistory = async (
 // ── KIS 종목 히스토리: 서버사이드 Edge Function 경유 ─────────────────────
 // (인증 정보는 서버 env에만 보관 — 브라우저 번들에 미포함)
 
+// 국내 종목코드 정규화 — 영문이 섞인 최신 ETF 코드(0190C0 등)는 대문자가 정본이다.
+// ⚠️ 소문자로 요청하면 KIS·네이버가 0건을 반환해 /api/stock-history가 404로 응답하고,
+//    그 종목은 실제종가 창구를 전부 놓친 채 fchart(수정종가)로만 채워진다.
+//    실측: 0190C0은 KIS 성공(57건)인데 0190c0은 KIS·trend 모두 404 → fchart 폴백.
+// 캐시 키는 호출부(item.code)가 정하므로 여기서 대문자로 바꿔도 조회 경로는 영향받지 않는다.
+const normalizeKrCode = (code: string) => (code || '').trim().toUpperCase();
+
 export const fetchKISStockHistory = async (
   code: string,
   fromYear: number = 2000
-): Promise<{ data: Record<string, number>; source: string } | null> => {
+): Promise<{ data: Record<string, number>; source: string; partial?: boolean } | null> => {
   try {
-    const params = new URLSearchParams({ code, fromYear: String(fromYear) });
+    const params = new URLSearchParams({ code: normalizeKrCode(code), fromYear: String(fromYear) });
     const res = await fetch(`/api/stock-history?${params}`, {
       // 서버 maxDuration: 60s와 일치. 동시성 제한(4)로 KIS rate limit 폭주 방지 + 청크별 재시도.
       signal: AbortSignal.timeout(60000),
@@ -42,7 +49,7 @@ export const fetchNaverDomesticHistory = async (
   fromDate?: string
 ): Promise<{ data: Record<string, number>; source: string } | null> => {
   try {
-    const params = new URLSearchParams({ key: 'domestic', code });
+    const params = new URLSearchParams({ key: 'domestic', code: normalizeKrCode(code) });
     if (fromDate) params.set('start', fromDate.replace(/-/g, ''));
     const res = await fetch(`/api/history?${params}`, {
       signal: AbortSignal.timeout(60000),
@@ -62,7 +69,7 @@ export const fetchNaverStockHistory = async (
   count: number = 2000
 ): Promise<{ data: Record<string, number>; source: string } | null> => {
   try {
-    const params = new URLSearchParams({ key: 'stock', code, count: String(count) });
+    const params = new URLSearchParams({ key: 'stock', code: normalizeKrCode(code), count: String(count) });
     const res = await fetch(`/api/history?${params}`, {
       signal: AbortSignal.timeout(15000),
     });
