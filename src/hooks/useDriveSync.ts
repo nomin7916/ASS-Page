@@ -124,6 +124,12 @@ export function useDriveSync({
   const adminTransitioningRef = useRef(false);
   // 저장 차단 시 최신 상태를 보관 — 현재 저장 완료 후 즉시 재실행
   const pendingSaveRef = useRef<any>(null);
+  // 저장 실패 알림 래치 — 연속 실패 구간당 벨 알림 1건만 남긴다(성공 시 해제).
+  // ⚠️ notify()의 5초 텍스트 dedup으로는 누적을 못 막는다. 저장 트리거는 사용자 조작마다
+  //    800ms 디바운스로 발화하므로, Drive가 지속 실패하면 동일 오류가 벨 이력(상한 200건,
+  //    Drive 영속)을 밀어내 **관리자 공지·자료 등록 이력이 영구 소실**된다(자료 공지는 벨
+  //    이력을 클릭해야 열리므로 이력 소실 = 자료 접근 수단 소실). console.error는 매번 남긴다.
+  const saveFailNotifiedRef = useRef(false);
   // 세션 관리 — 단일 기기 강제 로그아웃
   const sessionIdRef = useRef('');           // 이 기기의 세션 ID
   const ownFolderIdRef = useRef('');         // 관리자가 타인 페이지 볼 때도 자신의 폴더 ID 유지
@@ -267,6 +273,12 @@ export function useDriveSync({
     const token = driveTokenRef.current;
     if (!token) { setDriveStatus('auth_needed'); return; }
     const isAdminEdit = !!adminViewingAsRef.current;
+    // 백업(버전 이력·수동 최신본)을 이미 한 번 냈는지 — 재시도에서 중복 생성을 막는다.
+    // ⚠️ 백업은 STOCK/MARKET 저장보다 **앞**이라, MARKET만 실패해 재시도하면 같은 저장에 대해
+    //    백업이 2본 쌓이고 상한(auto 6·manual 10) 때문에 오래된 백업이 밀려난다. 반대로 STATE
+    //    저장 자체가 실패한 경우엔 백업에 도달하지 못했으므로 재시도에서 versioned를 살려야
+    //    수동 저장이 백업 없이 끝나지 않는다 → 무조건 false가 아니라 이 플래그로 분기한다.
+    let backupDone = false;
     try {
       setSS('saving');
       setDriveStatus('saving');
@@ -300,6 +312,7 @@ export function useDriveSync({
       if (versioned === 'manual') {
         saveDriveFile(token, folderId, DRIVE_FILES.MANUAL_LATEST, { ...stateCore, manualSavedAt: Date.now() }).catch(() => {});
       }
+      backupDone = true;
       await Promise.all([
         // ⚠️ stockHydratedRef 가드를 제거하지 말 것 — Drive 병합 전 부분 맵이 전체 캐시를 truncate한다.
         //    가드는 반드시 여기(saveAllToDrive 본문)에 둔다. 호출부(useStockData 9곳 등)에 나눠 달면 누락된다.
@@ -310,6 +323,7 @@ export function useDriveSync({
       ]);
       setSS('ready');
       setDriveStatus('saved');
+      saveFailNotifiedRef.current = false;   // 실패 스트릭 종료 → 다음 실패는 다시 1건 알린다
       // 저장 중 차단된 최신 상태가 있으면 즉시 재실행
       const pending = pendingSaveRef.current;
       if (pending) {
@@ -329,7 +343,11 @@ export function useDriveSync({
           driveTokenRef.current = newToken;
           setDriveToken(newToken);
           setSS('ready');
-          return saveAllToDrive(state, versioned, true);
+          // ⚠️ 캡처된 state가 아니라 **실행 시점의 최신 스냅샷**으로 재시도할 것.
+          //    STOCK 저장 가드(stockHydratedRef)는 실행 시점을 보는데 payload만 옛 것이면,
+          //    부팅 창에서 실패했을 때 하이드레이션 전 부분 맵이 STOCK 전체를 덮어쓴다
+          //    (STOCK은 백업 0본 → 복구 불가). pendingSaveRef가 이미 같은 패턴을 쓴다.
+          return saveAllToDrive(saveStateRef.current ?? state, backupDone ? false : versioned, true);
         }
         // 갱신 실패(세션 만료·권한 거부) → auth_needed 유지, 재시도 무의미
         setSS('error');
@@ -345,7 +363,11 @@ export function useDriveSync({
       }
       setDriveStatus('error');
       if (!isRetry) {
-        notify('Drive 저장에 실패했습니다. 잠시 후 재시도합니다...', 'error');
+        // 연속 실패 구간당 1건만 — 상세는 위 console.error가 매번 남긴다(래치 근거는 선언부 주석).
+        if (!saveFailNotifiedRef.current) {
+          saveFailNotifiedRef.current = true;
+          notify('Drive 저장에 실패했습니다. 잠시 후 재시도합니다...', 'error');
+        }
         // Fix 3: 실패 시점의 컨텍스트 캡처 — 15초 후 사용자 전환이 일어났으면 재시도 취소
         const retryViewingAs = adminViewingAsRef.current;
         const retryFolderId = driveFolderIdRef.current;
@@ -354,7 +376,8 @@ export function useDriveSync({
           if (adminTransitioningRef.current) return;
           if (adminViewingAsRef.current !== retryViewingAs) return;
           if (driveFolderIdRef.current !== retryFolderId) return;
-          saveAllToDrive(state, versioned, true);
+          // ⚠️ 캡처된 state가 아니라 실행 시점의 최신 스냅샷으로 — 근거는 위 401 재시도 주석.
+          saveAllToDrive(saveStateRef.current ?? state, backupDone ? false : versioned, true);
         }, 15000);
       }
     }
@@ -579,12 +602,16 @@ export function useDriveSync({
     setApplyingBackupId(fileId);
     setSS('loading');
     setDriveStatus('loading');
+    // applyBackupData(로컬 교체)가 Drive write보다 **먼저**라, write만 실패하면 화면은 이미
+    // 백업 시점으로 바뀐 뒤다. 그때 "적용에 실패했습니다"는 거짓이므로 문구를 갈라 쓴다.
+    let appliedLocally = false;
     try {
       const stateData = await loadBackupById(driveTokenRef.current, fileId) as any;
       if (!stateData) throw new Error('empty');
       // 2초 디바운스 타이머의 Drive 저장 guard를 초기화 → 백업 적용 후 반드시 Drive에 저장되도록 보장
       lastDriveSavedPortfolioUpdatedAtRef.current = 0;
       applyBackupData(stateData, accountChartStatesRef);
+      appliedLocally = true;
       // Drive STATE에 백업 내용 즉시 반영
       const { stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, ...stateCore } = stateData;
       // portfolioStartDate가 ''인 백업도 정규화하여 Drive STATE에 항상 올바른 값 저장
@@ -607,8 +634,14 @@ export function useDriveSync({
       setSS('ready');
       setDriveStatus('saved');
       setShowBackupModal(false);
-    } catch {
-      notify('백업 적용에 실패했습니다.', 'error');
+    } catch (err) {
+      console.error('[handleApplyBackup] 실패:', err);
+      notify(
+        appliedLocally
+          ? '백업이 화면에는 적용됐지만 Drive 저장에 실패했습니다. 새로고침하면 되돌아가니 Drive 연결을 확인하고 다시 저장해 주세요.'
+          : '백업 적용에 실패했습니다.',
+        'error'
+      );
       setSS('error');
       setDriveStatus('error');
     } finally {

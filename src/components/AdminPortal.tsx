@@ -575,8 +575,11 @@ export default function AdminPortal({ adminEmail, onClose, onViewUser, notify }:
       }
 
       const finalCache: AdminCache = { users, refreshedAt: Date.now() };
-      await saveAdminUserCache(tok, folderId, finalCache);
+      // ⚠️ 화면 반영을 캐시 저장보다 **먼저** — saveDriveFile이 업로드 실패에도 throw하게 되면서,
+      //    캐시 저장만 실패해도 방금 조회한 전 사용자 데이터가 화면에 안 뜨고(setCache 스킵)
+      //    "데이터 로드에 실패했습니다"가 뜬다(조회는 성공했는데). 재조회는 순차 로드라 매우 느리다.
       setCache(finalCache);
+      await saveAdminUserCache(tok, folderId, finalCache);
     } catch (err) {
       notify('데이터 로드에 실패했습니다.', 'error');
       console.error('[AdminPortal]', err);

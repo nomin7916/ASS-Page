@@ -274,8 +274,25 @@ export async function saveDriveFile(
     ].join('\r\n');
   };
 
+  // ⚠️ 업로드 응답을 반드시 검사할 것 — 과거엔 `await fetch(...)`만 하고 res.ok를 보지 않아
+  //    403(용량 초과·권한)·404(파일이 휴지통으로 감)·5xx가 전부 '성공'으로 흘렀다. 그러면
+  //    saveAllToDrive의 catch에 도달하지 못해 재시도·상태 표시·알림이 통째로 죽고, 화면에는
+  //    '저장됨'이 뜬 채 그 세션 데이터가 사라진다(STOCK 파일은 앱 내 백업이 0본이라 복구 경로도 없다).
+  // ⚠️ 메시지에 res.status 숫자를 반드시 포함할 것 — useDriveSync의 저장 실패 처리가
+  //    `msg.includes('401')`로 무음 토큰 재발급을 분기한다. 숫자를 빼면 업로드 401이 일반 오류로
+  //    굳어 만료된 토큰으로 재시도만 반복하는 자기지속형 오류가 된다(검사를 넣기 전보다 나빠짐).
+  // ⚠️ PATCH·POST 양쪽 모두에 걸 것 — 한쪽만 걸면 신규 파일 생성 실패가 계속 무음으로 남는다.
+  //    응답 본문 전문은 로그에 남기지 말 것(토큰·경로가 섞일 수 있음 — error.message만).
+  const assertUploadOk = async (res: Response, phase: string) => {
+    if (res.ok) return;
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      `[Drive] 파일 ${phase} 실패 ${res.status}: ${(err as any)?.error?.message || res.statusText}`
+    );
+  };
+
   if (fileId) {
-    await fetch(`${UPLOAD_API}/files/${fileId}?uploadType=multipart`, {
+    const res = await fetch(`${UPLOAD_API}/files/${fileId}?uploadType=multipart`, {
       method: 'PATCH',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -283,8 +300,9 @@ export async function saveDriveFile(
       },
       body: makeBody(),
     });
+    await assertUploadOk(res, `덮어쓰기(${fileName})`);
   } else {
-    await fetch(`${UPLOAD_API}/files?uploadType=multipart`, {
+    const res = await fetch(`${UPLOAD_API}/files?uploadType=multipart`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -292,6 +310,7 @@ export async function saveDriveFile(
       },
       body: makeBody([folderId]),
     });
+    await assertUploadOk(res, `생성(${fileName})`);
   }
 }
 
