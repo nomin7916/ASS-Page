@@ -1,6 +1,6 @@
 // ============================================================
 //  Google Apps Script — 계정 관리 (arui114501@gmail.com 전용)
-//  최종 갱신: 2026-08-01 (자금 흐름도 기능 추가 — K열)
+//  최종 갱신: 2026-08-04 (백테스트 기능 추가 — L열)
 //
 //  [구글 보안 정책 준수 사항]
 //  - 구글 시트를 비공개로 유지 (공개 링크 불필요)
@@ -18,8 +18,9 @@
 //    H(7): youtubeEnabled  — 유튜브 링크 표시
 //    I(8): notebookEnabled — 학습자료 표시
 //    J(9): reportEnabled   — 시장동향 리포트 표시
-//    K(10): flowEnabled    — 자금 흐름도 표시  ★신규
-//  ※ E~K 값은 'ON' / 'OFF' 또는 체크박스(TRUE/FALSE) 모두 인식. 비어 있으면 OFF.
+//    K(10): flowEnabled    — 자금 흐름도 표시
+//    L(11): backtestEnabled — 백테스트 표시  ★신규
+//  ※ E~L 값은 'ON' / 'OFF' 또는 체크박스(TRUE/FALSE) 모두 인식. 비어 있으면 OFF.
 //
 //  [settings 시트: A=key  B=value]
 //    youtubeUrl / notebookLinks / reportLinks / youtubeUrlHistory
@@ -27,7 +28,7 @@
 //  [적용 방법]
 //  1. script.google.com → 기존 프로젝트 열기
 //  2. 아래 전체 코드로 교체
-//  3. (최초 1회) setupSheet 실행 → K열 헤더·검증 추가 (기존 E~J 커스텀 라벨은 보존됨)
+//  3. (최초 1회) setupSheet 실행 → L열 헤더·검증 추가 (기존 E~K 커스텀 라벨은 보존됨)
 //  4. [저장] → [배포] → [배포 관리] → [새 버전으로 업데이트]
 // ============================================================
 
@@ -110,6 +111,7 @@ function handleCheckApproval(email) {
         notebookEnabled: parseBool(row[8]),
         reportEnabled:   parseBool(row[9]),
         flowEnabled:     parseBool(row[10]),
+        backtestEnabled: parseBool(row[11]),
       });
     }
     return jsonResponse({ status: 'not_approved' });
@@ -139,6 +141,7 @@ function handleListUsers() {
         notebookEnabled: parseBool(row[8]),
         reportEnabled:   parseBool(row[9]),
         flowEnabled:     parseBool(row[10]),
+        backtestEnabled: parseBool(row[11]),
       });
     }
     return jsonResponse({ users });
@@ -171,15 +174,15 @@ function handleGetSettings() {
 function handleGetFeatureLabels() {
   try {
     const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
-    const fallbacks = ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도'];
+    const fallbacks = ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트'];
     if (!sheet) return jsonResponse({ labels: fallbacks });
-    const headers = sheet.getRange('E1:K1').getValues()[0];
+    const headers = sheet.getRange('E1:L1').getValues()[0];
     const labels = headers.map(function(h, i) {
       return extractLabel(h, fallbacks[i]);
     });
     return jsonResponse({ labels: labels });
   } catch (err) {
-    return jsonResponse({ labels: ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도'], error: err.toString() });
+    return jsonResponse({ labels: ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트'], error: err.toString() });
   }
 }
 
@@ -234,7 +237,7 @@ function handleAddUser(email, name) {
     }
     const today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
     // A~K (11열): reset, email, name, registeredAt, feature1~3, youtube, notebook, report, flow
-    sheet.appendRow(['', normalEmail, name || '', today, 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF']);
+    sheet.appendRow(['', normalEmail, name || '', today, 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF']);
     return jsonResponse({ success: true });
   } catch (err) {
     return jsonResponse({ success: false, error: err.toString() });
@@ -303,7 +306,7 @@ function handleSetSettings(key, value) {
 
 function handleSetUserFeature(email, feature, value) {
   // 0-indexed 열: E=4, F=5, G=6, H=7, I=8, J=9, K=10
-  const colMap = { feature1: 4, feature2: 5, feature3: 6, youtubeEnabled: 7, notebookEnabled: 8, reportEnabled: 9, flowEnabled: 10 };
+  const colMap = { feature1: 4, feature2: 5, feature3: 6, youtubeEnabled: 7, notebookEnabled: 8, reportEnabled: 9, flowEnabled: 10, backtestEnabled: 11 };
   if (!colMap.hasOwnProperty(feature)) {
     return jsonResponse({ success: false, error: 'invalid feature: ' + feature });
   }
@@ -399,18 +402,20 @@ function setupSheet() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
-    // 신규 시트만 전체 헤더 작성. 기존 시트의 커스텀 헤더(E~J)는 절대 덮어쓰지 않음.
+    // 신규 시트만 전체 헤더 작성. 기존 시트의 커스텀 헤더(E~K)는 절대 덮어쓰지 않음.
     sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(['RESET', 'email', 'name', 'registeredAt', '기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도']);
+    sheet.appendRow(['RESET', 'email', 'name', 'registeredAt', '기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트']);
   } else {
-    // 기존 시트: 비어 있는 J1·K1에만 헤더 추가 (E~J 커스텀 라벨 보존 — 비파괴 규약)
+    // 기존 시트: 비어 있는 K1·L1에만 헤더 추가 (E~K 커스텀 라벨 보존 — 비파괴 규약)
     var j1 = sheet.getRange('J1');
     if (!String(j1.getValue() || '').trim()) j1.setValue('시장리포트');
     var k1 = sheet.getRange('K1');
     if (!String(k1.getValue() || '').trim()) k1.setValue('자금흐름도');
+    var l1 = sheet.getRange('L1');
+    if (!String(l1.getValue() || '').trim()) l1.setValue('백테스트');
   }
-  // E2:K100 ON/OFF 데이터 검증 + 빈 셀 OFF 채우기
-  var range = sheet.getRange('E2:K100');
+  // E2:L100 ON/OFF 데이터 검증 + 빈 셀 OFF 채우기
+  var range = sheet.getRange('E2:L100');
   var rule = SpreadsheetApp.newDataValidation()
     .requireValueInList(['ON', 'OFF'], true)
     .setAllowInvalid(false)
@@ -423,7 +428,7 @@ function setupSheet() {
     }
   }
   range.setValues(values);
-  Logger.log('Sheet setup complete (A~K, E2:K100 validation)');
+  Logger.log('Sheet setup complete (A~L, E2:L100 validation)');
 }
 
 // ──────────────────────────────────────────────────────────

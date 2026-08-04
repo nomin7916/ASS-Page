@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   ClipboardPaste, Plus,
   X, Trash2, Download, Calendar,
@@ -49,6 +49,12 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { FX_DEFAULT, FX_MIN_SLOTS, normalizeFxCurrencies, normalizeFxSlotCount } from './fxRates';
 import FlowBoard from './components/FlowBoard';
 import { normalizeFlowMaps, flowFingerprint, flowMapsHaveContent } from './flowMap';
+import BacktestPage from './components/BacktestPage';
+import {
+  normalizeBacktestScenarios, backtestFingerprint, backtestScenariosHaveContent,
+  buildBtCatalog, collectDividendHistory, collectNameByCode,
+} from './backtest';
+import { fetchBacktestSeries } from './backtestFetch';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -170,7 +176,7 @@ export default function App() {
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
-  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false });
+  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false, backtestEnabled: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
@@ -336,6 +342,16 @@ export default function App() {
   const [watchlistGroups, setWatchlistGroups] = useState<any[]>([]);
   const [showFlowBoard, setShowFlowBoard] = useState(false);
   const [flowMaps, setFlowMaps] = useState<any[]>([]);
+  // ── 백테스트 ──
+  // 시나리오는 flowMaps·calendarMemos와 동급의 **앱 레벨 개인 데이터**다(계좌 객체 안에 넣지 말 것 —
+  // patchActive가 portfolios 참조를 바꿔 11개 파생 파이프라인이 매 제스처 재실행된다).
+  const [showBacktestPage, setShowBacktestPage] = useState(false);
+  const [backtestScenarios, setBacktestScenarios] = useState<any[]>([]);
+  // ⚠️ 백테스트용으로 조회한 종가는 **여기에만** 담는다. stockHistoryMap에 병합하면
+  //    buildCloseEvalSeries(보유 평가액 재계산)·useAutoConfirmHistory 데이터완비 가드의 권위
+  //    소스가 오염돼 보유+백테스트 중복 코드의 과거 평가액이 영구히 틀어진다(WatchlistPopup 불변식).
+  const [btFetched, setBtFetched] = useState<Record<string, Record<string, number>>>({});
+  const [btFetching, setBtFetching] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
   const [rebalanceSortConfigMap, setRebalanceSortConfigMap] = useState<Record<string, { key: string | null, direction: number }>>({});
@@ -769,6 +785,7 @@ export default function App() {
     if (stateData.calendarMemos) setCalendarMemos(normalizeCalendarMemos(stateData.calendarMemos));
     if (stateData.watchlistGroups) setWatchlistGroups(stateData.watchlistGroups);
     if (stateData.flowMaps) setFlowMaps(normalizeFlowMaps(stateData.flowMaps));
+    if (stateData.backtestScenarios) setBacktestScenarios(normalizeBacktestScenarios(stateData.backtestScenarios));
     seenAdminNotifIdsRef.current = stateData.seenAdminNotifIds || [];
     setSeenAdminNotifIds(seenAdminNotifIdsRef.current);
   };
@@ -826,6 +843,10 @@ export default function App() {
     //    흐름도를 되살릴 길이 영구히 막힌다. useDriveSync의 Drive write 판정과 **같은 함수**를
     //    공유해야 in-memory와 Drive가 갈리지 않는다.
     setFlowMaps(prev => flowMapsHaveContent(prev) ? prev : (stateData.flowMaps ? normalizeFlowMaps(stateData.flowMaps) : prev));
+    // ⚠️ 백테스트 시나리오도 같은 sticky 규칙 — 판정은 length가 아니라 backtestScenariosHaveContent
+    //    ('내용이 있는가'). 페이지를 열기만 해도 빈 시나리오가 생길 수 있어 length 기준이면 백업으로
+    //    되살릴 길이 영구히 막힌다. useDriveSync의 Drive write와 **같은 함수**를 공유해야 갈리지 않는다.
+    setBacktestScenarios(prev => backtestScenariosHaveContent(prev) ? prev : (stateData.backtestScenarios ? normalizeBacktestScenarios(stateData.backtestScenarios) : prev));
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
       if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
@@ -1825,17 +1846,42 @@ export default function App() {
     return { flowMaps: next, portfolioUpdatedAt: ts };
   };
 
-  // 종료 커밋 합성 — beforeExitSnapshotRef 슬롯이 하나뿐이라 리밸런싱·흐름도 커밋을 여기서 합친다.
-  // ⚠️ 반환 키(calendarMemos vs flowMaps)가 겹치지 않아 병합 순서는 무관하고, 양쪽 모두
+  // ── 백테스트 커밋 회수 (흐름도와 동일 규약) ──
+  // BacktestPage도 편집을 로컬 사본에 모으고 idle(2.5초)·닫기·언마운트에만 승격한다. 목표금액·
+  // 기간을 타이핑할 때마다 setBacktestScenarios를 하면 글자마다 Drive 4파일 write가 나간다.
+  const backtestFlushRef = useRef<(() => any[] | null) | null>(null);
+  const flushBacktestSnapshot = () => {
+    let next: any[] | null = null;
+    try { next = backtestFlushRef.current?.() ?? null; } catch { next = null; }
+    if (!next) return null;
+    setBacktestScenarios(next);
+    return next;
+  };
+
+  // ⚠️ 미저장 편집이 없으면 반드시 null — 항상 truthy를 반환하면 alt-tab마다 4파일 write가 강제된다.
+  const backtestExitCommitRef = useRef<(() => any) | null>(null);
+  backtestExitCommitRef.current = () => {
+    const next = flushBacktestSnapshot();
+    if (!next) return null;
+    const ts = Date.now();
+    portfolioUpdatedAtRef.current = ts;
+    // saveStateRef 동기 갱신 — 언로드 중에는 리렌더가 없어 setBacktestScenarios만으로는 payload에 안 실린다.
+    saveStateRef.current = { ...saveStateRef.current, backtestScenarios: next, portfolioUpdatedAt: ts };
+    return { backtestScenarios: next, portfolioUpdatedAt: ts };
+  };
+
+  // 종료 커밋 합성 — beforeExitSnapshotRef 슬롯이 하나뿐이라 리밸런싱·흐름도·백테스트 커밋을 여기서 합친다.
+  // ⚠️ 반환 키(calendarMemos / flowMaps / backtestScenarios)가 겹치지 않아 병합 순서는 무관하고, 셋 모두
   //    portfolioUpdatedAtRef와 saveStateRef를 동기 갱신하므로 뒤 커밋이 앞 커밋을 지우지 않는다.
-  // ⚠️ 둘 다 없으면 반드시 **null**을 반환할 것 — 항상 truthy를 반환하면 alt-tab·탭 닫기마다
+  // ⚠️ 전부 없으면 반드시 **null**을 반환할 것 — 항상 truthy를 반환하면 alt-tab·탭 닫기마다
   //    STATE+VERSION+STOCK+MARKET 4파일 write가 무조건 강제된다(커밋할 게 없다는 신호가 소실).
   exitCommitRef.current = () => {
-    let r: any = null, f: any = null;
+    let r: any = null, f: any = null, b: any = null;
     try { r = rebalExitCommitRef.current?.() ?? null; } catch { r = null; }
     try { f = flowExitCommitRef.current?.() ?? null; } catch { f = null; }
-    if (!r && !f) return null;
-    return { ...(r || {}), ...(f || {}) };
+    try { b = backtestExitCommitRef.current?.() ?? null; } catch { b = null; }
+    if (!r && !f && !b) return null;
+    return { ...(r || {}), ...(f || {}), ...(b || {}) };
   };
 
   // ── 메모 달력 '별도 브라우저 창' 브릿지 (`/?calendarWindow=1`) ──────────────────────────────
@@ -2016,6 +2062,150 @@ export default function App() {
     setShowFlowBoard(false);
   };
 
+  // ── 백테스트 데이터 · 조회 · '별도 브라우저 창' 브릿지 (`/?backtestWindow=1`) ─────────────
+  // 흐름도/메모 달력 창과 **완전히 같은 규약**: 새 창은 App을 부팅하지 않고 postMessage로만
+  // 대화하며, 저장은 전부 이 탭을 경유해 기존 STATE 저장 경로로 흐른다 → writer는 이 탭 하나.
+  const btWinRef = useRef(null);
+  const [btWinNonce, setBtWinNonce] = useState(0);   // ready/재입양 시 전체 재전송 트리거
+  const [btWinBlocked, setBtWinBlocked] = useState(false);
+  // ⚠️ 아래 세 memo는 **백테스트를 실제로 연 뒤에만** 계산한다. deps에 portfolios·stockHistoryMap이
+  //    있어 시세 갱신(수십 초 간격)마다 전 계좌 스냅샷과 전 종목 일봉을 훑는데, 백테스트를 쓰지
+  //    않는 사용자가 그 비용을 치를 이유가 없다(FlowBoard를 flowAccess 안에 둔 것과 같은 근거).
+  const btActive = showBacktestPage || btWinNonce > 0;
+  // ⚠️ `marketHolidays?.kr || []` 를 prop으로 **직접** 넘기지 말 것 — 매 렌더 새 배열이라
+  //    BacktestPage의 결과 useMemo 의존성이 매번 깨져, 시세가 갱신될 때마다(수십 초) 백테스트
+  //    전 구간이 재계산된다.
+  const btHolidays = useMemo(() => marketHolidays?.kr || [], [marketHolidays]);
+  const btDividends = useMemo(() => (btActive ? collectDividendHistory(portfolios) : {}), [btActive, portfolios]);
+  const btNameByCode = useMemo(() => (btActive ? collectNameByCode(portfolios) : {}), [btActive, portfolios]);
+  const btCatalog = useMemo(
+    () => (btActive ? buildBtCatalog(stockHistoryMap, btNameByCode, btDividends) : []),
+    [btActive, stockHistoryMap, btNameByCode, btDividends],
+  );
+  // 시나리오가 실제로 참조하는 코드만 추린다 — stockHistoryMap 전량을 새 창에 보내면
+  // 수십 초마다 수 MB가 복제된다(flowWinAccountsKey와 동일한 지문 게이팅 이유).
+  // ⚠️ btRequested를 합집합에 반드시 포함할 것 — BacktestPage는 편집을 로컬 사본에 모으고
+  //    2.5초 idle에만 승격하므로, 방금 추가한 종목의 코드는 그때까지 backtestScenarios에 없다.
+  //    이 합집합이 없으면 "종목을 추가했는데 이미 저장된 종가조차 몇 초간 안 뜬다".
+  const [btRequested, setBtRequested] = useState<string[]>([]);
+  const btCodes = useMemo(() => {
+    const s = new Set<string>(btRequested);
+    for (const sc of backtestScenarios || []) {
+      for (const a of (sc?.assets || [])) if (a?.code) s.add(a.code);
+    }
+    return Array.from(s).sort();
+  }, [backtestScenarios, btRequested]);
+  // ⚠️ 조회분(btFetched)이 저장분(stockHistoryMap)보다 **우선**한다 — 사용자가 "종가 다시 조회"나
+  //    붙여넣기로 명시적으로 넣은 값이 낡은 저장값에 가려지면 고친 줄 모른다.
+  const btPrices = useMemo(() => {
+    const out: Record<string, Record<string, number>> = {};
+    for (const c of btCodes) {
+      const merged = { ...(stockHistoryMap[c] || {}), ...(btFetched[c] || {}) };
+      if (Object.keys(merged).length) out[c] = merged;
+    }
+    return out;
+  }, [btCodes, stockHistoryMap, btFetched]);
+
+  const btFetchingRef = useRef<string[]>([]);
+  btFetchingRef.current = btFetching;
+  const btStateRef = useRef<any>({});
+  btStateRef.current = { stockHistoryMap, btFetched };
+  /**
+   * 종목 종가 조회(또는 붙여넣기 주입).
+   * ⚠️ 결과는 절대 stockHistoryMap에 병합하지 않는다(평가액 재계산 권위 소스 오염 금지).
+   * @param force true면 이미 데이터가 있어도 다시 조회(표의 ⟳ 버튼). 종목 추가 시에는 false —
+   *        저장된 종가가 이미 있는데 매번 네트워크를 치면 코드 하나 넣을 때마다 수 초씩 걸린다.
+   */
+  const handleBacktestFetch = useCallback(async (code: string, pasted?: Record<string, number>, force?: boolean) => {
+    const c = String(code || '').trim().toUpperCase();
+    if (!c) return;
+    // 요청된 코드는 즉시 등록 — 승격(2.5초) 전에도 btPrices에 실려 화면에 뜬다.
+    setBtRequested(prev => (prev.includes(c) ? prev : [...prev, c]));
+    if (pasted && typeof pasted === 'object') {
+      setBtFetched(prev => ({ ...prev, [c]: { ...(prev[c] || {}), ...pasted } }));
+      return;
+    }
+    if (btFetchingRef.current.includes(c)) return;
+    if (!force) {
+      const { stockHistoryMap: shm, btFetched: bf } = btStateRef.current;
+      const have = Object.keys(shm?.[c] || {}).length + Object.keys(bf?.[c] || {}).length;
+      if (have >= 2) return;   // 이미 쓸 만한 종가가 있다 → 네트워크 생략
+    }
+    setBtFetching(prev => (prev.includes(c) ? prev : [...prev, c]));
+    try {
+      const data = await fetchBacktestSeries(c);
+      if (data) setBtFetched(prev => ({ ...prev, [c]: { ...(prev[c] || {}), ...data } }));
+      // 실패는 화면 배지('종가 데이터 없음')로만 알린다 — 시세 계층은 벨 알림에 남기지 않는다.
+    } finally {
+      setBtFetching(prev => prev.filter(x => x !== c));
+    }
+  }, []);
+
+  const postToBtWin = (msg) => {
+    const w = btWinRef.current;
+    if (!w || w.closed) return;
+    try { w.postMessage(msg, window.location.origin); } catch {}
+  };
+  // 무거운 페이로드(카탈로그·분배금·휴장일)는 지문으로 게이팅. 새 창이 붙기 전(nonce 0)엔 계산 자체를 건너뛴다.
+  const btWinDataKey = useMemo(
+    () => (btWinNonce === 0 ? '' : `${btCatalog.length}|${Object.keys(btDividends).length}|${btHolidays.length}`),
+    [btWinNonce, btCatalog, btDividends, btHolidays],
+  );
+  useEffect(() => {
+    if (btWinNonce === 0) return;
+    postToBtWin({ type: 'backtest:data', catalog: btCatalog, dividends: btDividends, holidays: btHolidays });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [btWinDataKey, btWinNonce]);
+  useEffect(() => {
+    if (btWinNonce === 0) return;
+    postToBtWin({ type: 'backtest:live', scenarios: backtestScenarios, prices: btPrices, fetchingCodes: btFetching });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backtestScenarios, btPrices, btFetching, btWinNonce]);
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string' || !d.type.startsWith('backtest:')) return;
+      if (d.type === 'backtest:ping') {
+        // `d.need`가 초기 전송의 유일한 트리거(window.open 직후 보내면 about:blank라 버려진다).
+        // 이 탭이 새로고침되면 btWinRef가 비므로 살아 있는 창의 핑에서 **재입양**한다.
+        if (d.need || btWinRef.current !== e.source) { btWinRef.current = e.source; setBtWinNonce(n => n + 1); }
+        try { e.source?.postMessage({ type: 'backtest:pong' }, window.location.origin); } catch {}
+        return;
+      }
+      if (!btWinRef.current || e.source !== btWinRef.current) return;   // 쓰기는 입양된 창만
+      if (d.type === 'backtest:scenarios') {
+        if (!Array.isArray(d.scenarios)) return;
+        setBacktestScenarios(normalizeBacktestScenarios(d.scenarios));
+      } else if (d.type === 'backtest:want') {
+        if (typeof d.code !== 'string') return;
+        handleBacktestFetch(d.code, d.data || undefined, !!d.force);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [handleBacktestFetch]);
+
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다.
+  // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다(impersonation 탭과 정반대 규칙).
+  const openBacktestWindow = () => {
+    const existing = btWinRef.current;
+    if (existing && !existing.closed) { try { existing.focus(); } catch {} setShowBacktestPage(false); return; }
+    const sw = (window.screen && window.screen.availWidth) || 1440;
+    const sh = (window.screen && window.screen.availHeight) || 900;
+    const w = window.open('/?backtestWindow=1', 'ass-backtest', `width=${sw},height=${sh},left=0,top=0`);
+    if (!w) {
+      // 팝업 차단 → 인앱 페이지로 폴백(최악의 경우가 기존 동작이 되게 한다)
+      setBtWinBlocked(true);
+      setShowBacktestPage(true);
+      return;
+    }
+    btWinRef.current = w;
+    setBtWinBlocked(false);
+    setShowBacktestPage(false);
+  };
+
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
@@ -2026,12 +2216,13 @@ export default function App() {
     // useDriveSync의 STATE 저장 가드(portfolioUpdatedAt > lastSaved)를 통과한다(historyVerifyKey 버그와 동류).
     const nextMemos = flushRebalTargetSnapshot();
     const nextFlow = flushFlowSnapshot(); // 흐름도 미승격 편집 커밋 → payload에 명시 주입
+    const nextBt = flushBacktestSnapshot(); // 백테스트 미승격 편집 커밋 → payload에 명시 주입
     const memoTs = Date.now();
-    if (nextMemos || nextFlow) {
+    if (nextMemos || nextFlow || nextBt) {
       portfolioUpdatedAtRef.current = memoTs;
       lastDriveSavedPortfolioUpdatedAtRef.current = 0;
     }
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...((nextMemos || nextFlow) ? { portfolioUpdatedAt: memoTs } : {}), portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), ...((nextMemos || nextFlow || nextBt) ? { portfolioUpdatedAt: memoTs } : {}), portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -2209,6 +2400,7 @@ export default function App() {
     const currentPortfolios = buildPortfoliosState();
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
+    const nextBt = flushBacktestSnapshot();       // 백테스트 미승격 편집 커밋 → 아래 payload에 명시 주입
     // portfolioUpdatedAt이 없으면 saveAllToDrive의 guard(0 > 0)가 항상 false → STATE 저장 안됨
     // 수동 저장은 항상 강제 저장되어야 하므로 새 타임스탬프 생성 후 guard 초기화
     const newUpdatedAt = Date.now();
@@ -2217,7 +2409,7 @@ export default function App() {
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·watchlistGroups·seenAdminNotifIds 등 신규 필드가 Drive STATE·수동 백업에서
     // 유실된다(과거 '저장' 버튼이 메모 달력을 지우던 원인 — handleAppClose와 동일 패턴으로 보장).
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
@@ -2229,11 +2421,12 @@ export default function App() {
     const currentPortfolios = buildPortfoliosState();
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
+    const nextBt = flushBacktestSnapshot();       // 백테스트 미승격 편집 커밋 → 아래 payload에 명시 주입
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·seenAdminNotifIds·intDashCompStocks 등 신규/추가 필드가 누락되어
     // PC 백업 파일에서 유실된다(handleAppClose와 동일 패턴으로 메인 저장 필드 보장).
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2248,11 +2441,12 @@ export default function App() {
     const currentPortfolios = buildPortfoliosState();
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
+    const nextBt = flushBacktestSnapshot();       // 백테스트 미승격 편집 커밋 → 아래 payload에 명시 주입
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 저장 — 부분 state를 손으로 재구성하면
     // chartPrefs.intDashCompStocks(통합 대시보드 비교종목)·seenAdminNotifIds 등이 누락되어
     // "앱 닫기"로 종료할 때마다 비교종목이 초기화되던 버그 방지 (메인 저장과 동일 필드 보장)
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const minWait = new Promise<void>(r => setTimeout(r, 2000));
     if (driveTokenRef.current) {
       const token = driveTokenRef.current;
@@ -2612,6 +2806,9 @@ export default function App() {
       //    flowFingerprint는 저장 필드만 화이트리스트로 투영하고 절대 던지지 않는다 — raw
       //    JSON.stringify로 되돌리지 말 것(순환 참조 하나로 이 지문 계산 아래의 저장 예약이 통째로 죽는다).
       flowFingerprint(flowMaps),
+      // ⚠️ 백테스트 시나리오 지문 — 없으면 portfolioUpdatedAt이 안 올라 STATE 저장이 통째로 스킵된다
+      //    (flowFingerprint와 동일 버그 클래스). backtestFingerprint도 절대 던지지 않는다.
+      backtestFingerprint(backtestScenarios),
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
       // 바인더 인덱스/섹션 펼침 상태 — 사용자 토글 시에만 변경(시세 갱신 무관)
       // → 변경 시 portfolioUpdatedAt 상승시켜 Drive STATE 저장 트리거 (앱 재시작 시 상태 유지)
@@ -2635,7 +2832,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -2650,7 +2847,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -3035,6 +3232,8 @@ export default function App() {
   //    이 상수가 없으면 관리자 본인이 기능에 **영구히 접근 불가**하다(AdminPage 토글은 `!isAdminUser`
   //    조건이라 관리자 행에는 렌더조차 되지 않아 시트를 손으로 고치지 않는 한 켤 방법이 없다).
   const flowAccess = isAdminUser || userFeatures.flowEnabled;
+  // 백테스트 접근 권한 — flowAccess와 완전히 같은 근거(관리자 본인이 영구 접근 불가가 되지 않게).
+  const backtestAccess = isAdminUser || userFeatures.backtestEnabled;
   const gatedNotebookLinks = notebookAccess ? notebookLinks : [];
   const gatedReportLinks = reportAccess ? reportLinks : [];
   const resolveMaterial = (channel, message, refCreatedAt) => resolveNoticeMaterial(
@@ -3146,6 +3345,8 @@ export default function App() {
           onAppClose={handleAppClose}
           canAccessFlow={flowAccess}
           onOpenFlow={openFlowWindow}
+          canAccessBacktest={backtestAccess}
+          onOpenBacktest={openBacktestWindow}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
           youtubeUrl={youtubeAccess ? youtubeUrl : ''}
@@ -3770,6 +3971,32 @@ export default function App() {
             // 백업 복원으로도 되돌릴 수 없는 sticky 데이터라, 무통지 편집을 허용하지 않는다.
             readOnly={!!adminViewingAs}
             headerNotice={flowWinBlocked ? '팝업이 차단돼 별도 창을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : null}
+          />
+        </ErrorBoundary>
+      )}
+      {/* 백테스트 — 기본은 별도 브라우저 창이고, 이 인앱 렌더는 **팝업 차단 시 폴백**이다.
+          ⚠️ 게이팅 밖에 두지 말 것: 접근 권한이 없는 사용자가 파생 memo 구독 비용을 그대로 치른다.
+          ⚠️ ErrorBoundary label 지정 필수 — App 최상위 형제라 렌더 예외가 루트까지 올라가면
+             앱 화면 전체가 오류 페이지로 대체된다(FloatingCalculator·FlowBoard와 동일 2차 방어). */}
+      {backtestAccess && showBacktestPage && (
+        <ErrorBoundary label="백테스트">
+          <BacktestPage
+            open
+            variant="overlay"
+            onClose={() => setShowBacktestPage(false)}
+            scenarios={backtestScenarios}
+            onUpdateScenarios={setBacktestScenarios}
+            flushRef={backtestFlushRef}
+            catalog={btCatalog}
+            prices={btPrices}
+            dividends={btDividends}
+            holidays={btHolidays}
+            fetchingCodes={btFetching}
+            onFetchCode={handleBacktestFetch}
+            onOpenWindow={openBacktestWindow}
+            // 관리자 impersonation 중에는 읽기 전용 — 흐름도와 같은 근거(undo 없음 + sticky 데이터).
+            readOnly={!!adminViewingAs}
+            notice={btWinBlocked ? '팝업이 차단돼 별도 창을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''}
           />
         </ErrorBoundary>
       )}

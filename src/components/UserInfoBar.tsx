@@ -15,6 +15,15 @@ const FlowIcon = ({ size = 14 }) => (
     <path d="M6 9v5a2 2 0 0 0 2 2h6" />
   </svg>
 );
+
+// 백테스트 아이콘 — 인라인 SVG(축 + 상승 꺾은선). FlowIcon과 같은 이유로 lucide 신규 아이콘 금지.
+const BacktestIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 3v16a2 2 0 0 0 2 2h16" />
+    <path d="M7 15l4-5 3 3 5-7" />
+  </svg>
+);
 import { ADMIN_EMAIL } from '../config';
 import HeaderMarketChips from './HeaderMarketChips';
 
@@ -64,6 +73,9 @@ export default function UserInfoBar({
   // 자금 흐름도 — 기본값 false = fail-closed
   canAccessFlow = false,
   onOpenFlow,
+  // 백테스트 — 기본값 false = fail-closed (자금 흐름도 바로 오른쪽에 배치)
+  canAccessBacktest = false,
+  onOpenBacktest,
   youtubeUrl,
   youtubeEnabled = false,
   notebookLinks = [],
@@ -282,6 +294,17 @@ export default function UserInfoBar({
             className="text-gray-500 hover:text-indigo-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
           >
             <FlowIcon size={14} />
+          </button>
+        )}
+        {/* 백테스트 — 자금 흐름도 **바로 오른쪽**(사용자 지정 위치). 관리자 또는 backtestEnabled만 노출.
+            ⚠️ 기본값 false = fail-closed(prop 미전달 시 아이콘 미렌더) — canAccessFlow와 동일 패턴. */}
+        {canAccessBacktest && (
+          <button
+            onClick={onOpenBacktest}
+            title="백테스트 (새 창)"
+            className="text-gray-500 hover:text-emerald-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+          >
+            <BacktestIcon size={14} />
           </button>
         )}
         {onToggleCalculator && (

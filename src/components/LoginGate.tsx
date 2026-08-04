@@ -17,6 +17,8 @@ export interface UserFeatures {
   reportEnabled: boolean;
   /** 자금 흐름도 — approved_users 시트 K열(index 10) */
   flowEnabled: boolean;
+  /** 백테스트 — approved_users 시트 L열(index 11) */
+  backtestEnabled: boolean;
 }
 
 // ⚠️ 필드 나열 지점을 1곳으로 축소한 구조적 방어.
@@ -29,7 +31,7 @@ export const EMPTY_FEATURES: UserFeatures = {
   name: '',
   feature1: false, feature2: false, feature3: false,
   youtubeEnabled: false, notebookEnabled: false, reportEnabled: false,
-  flowEnabled: false,
+  flowEnabled: false, backtestEnabled: false,
 };
 
 export const pickFeatures = (r: any): UserFeatures => ({
@@ -41,6 +43,7 @@ export const pickFeatures = (r: any): UserFeatures => ({
   notebookEnabled: !!r?.notebookEnabled,
   reportEnabled: !!r?.reportEnabled,
   flowEnabled: !!r?.flowEnabled,
+  backtestEnabled: !!r?.backtestEnabled,
 });
 
 interface AdminViewUserCtx {

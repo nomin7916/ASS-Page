@@ -429,7 +429,9 @@ ok('#29b App.tsx: 죽은 App 레벨 미러(flowMapsRef)를 되살리지 않았�
 ok('#30 App.tsx: applyStateData 에서 normalizeFlowMaps 로 로드', /stateData\.flowMaps/.test(app) && /normalizeFlowMaps\(/.test(app));
 // ⚠️ 리터럴에만 쓰고 로드하지 않으면 매 저장이 빈 배열로 Drive 를 덮는 '영구 파괴'가 된다.
 ok('#31 App.tsx: 저장 payload 리터럴에 flowMaps 포함', /calendarMemos\s*,\s*watchlistGroups\s*,\s*flowMaps\s*,/.test(app));
-ok('#32 App.tsx: 저장 effect deps 에 flowMaps', /watchlistGroups\s*,\s*flowMaps\s*\]\s*\)\s*;/.test(app));
+// ⚠️ flowMaps 를 deps 배열의 **마지막 항목**으로 고정하지 말 것 — 뒤에 새 항목(backtestScenarios 등)이
+//    추가되면 계약은 멀쩡한데 이 단언만 깨진다. 존재 + 인접만 본다.
+ok('#32 App.tsx: 저장 effect deps 에 flowMaps', /watchlistGroups\s*,\s*flowMaps\s*[,\]]/.test(app));
 // ⚠️ sticky 판정을 손으로 복제하면 in-memory 와 Drive write 가 갈린다 → 반드시 공유 함수.
 ok('#33 App.tsx: applyBackupData sticky 가 flowMapsHaveContent 공유', /flowMapsHaveContent\(/.test(app));
 ok('#34 useDriveSync.ts: _preserveStickyPersonalData 가 flowMaps 를 다룬다', /flowMaps/.test(sync) && /flowMapsHaveContent/.test(sync));

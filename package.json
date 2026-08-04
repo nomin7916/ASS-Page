@@ -17,7 +17,8 @@
     "verify:brl": "node scripts/verify-brl-bond.mjs",
     "verify:rebal-restore": "node scripts/verify-rebal-restore.mjs",
     "verify:transfer": "node scripts/verify-transfer.mjs",
-    "verify:flow": "node scripts/verify-flow.mjs"
+    "verify:flow": "node scripts/verify-flow.mjs",
+    "verify:backtest": "node scripts/verify-backtest.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

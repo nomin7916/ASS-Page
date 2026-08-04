@@ -23,6 +23,8 @@ src/
 ├── chartUtils.tsx       # 차트 컴포넌트/유틸 (PieLabelOutside, CustomChartTooltip 등)
 ├── driveStorage.ts      # Google Drive 저장/불러오기
 ├── flowMap.ts           # 자금 흐름도 타입 + 순수 로직 (⚠️ @ts-nocheck 금지)
+├── backtest.ts          # 백테스트 엔진: 타입 + 순수 로직 (⚠️ @ts-nocheck 금지, verify-backtest 미러)
+├── backtestFetch.ts     # 백테스트 전용 종가 조회 래퍼 (⚠️ stockHistoryMap 병합 금지)
 ├── hooks/               # usePortfolioState, useDriveSync, useMarketData,
 │                        # useHistoryChart, useChartInteraction, useStockData, usePinManager,
 │                        # useFlowMapData
@@ -58,6 +60,8 @@ src/
     ├── FlowCanvas.tsx            # 흐름도 SVG 캔버스(React.memo) — 드래그·리사이즈·연결
     ├── FlowInspector.tsx         # 흐름도 속성 패널(날짜·이름·계좌연결·금액·메모) — id 앵커 draft
     ├── FlowWindow.tsx            # 흐름도 별도 브라우저 창(/?flowWindow=1) — postMessage 브릿지
+    ├── BacktestPage.tsx          # 리밸런싱 백테스트 페이지(z=1090, body 포털) — overlay/page 겸용
+    ├── BacktestWindow.tsx        # 백테스트 별도 브라우저 창(/?backtestWindow=1) — postMessage 브릿지
     └── AdminPage.tsx             # 관리자 페이지
 ```
 
@@ -1694,6 +1698,109 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   `removeNode`·`pruneOrphanEdges`·`roundNode`·`resolveFlowNodeView`·`countDanglingNodes` 본문과
   **항상 1:1 동기화**할 것. 가드(#27~#36)는 영속화 배선을 정규식으로 단언하므로, 실패 시 **먼저
   정규식이 낡았는지 확인**하고 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+
+### 리밸런싱 백테스트(backtestScenarios) — 분배락 전 리밸런싱 시뮬레이터 (⚠️ 회귀 주의)
+
+상단바 **백테스트 아이콘**(`UserInfoBar` — 자금 흐름도 **바로 오른쪽**, 인라인 SVG `BacktestIcon`)으로
+여는 별도 페이지. 기간·초기투자금·종목·목표(금액/비중)·리밸런싱 정책을 넣으면 앱에 저장된 일별 종가와
+계좌 분배금 이력으로 월별 매매일지를 재현한다. 설계 원본은 사용자가 제공한
+"커버드콜 포트폴리오 실전 리밸런싱 백테스트" PDF다.
+
+- **일정 규칙 = PDF에서 역산**(요청서 서술과 하루 차이가 나므로 반드시 이쪽): 지급기준일 = 월중
+  **15일** / 월말 **말일**(휴장이면 직전 영업일) → **분배락 = 기준일 −1영업일** → **리밸런싱 =
+  분배락 −1영업일 = 기준일 −2영업일**(분배금을 받을 수 있는 마지막 매수일, T+2 결제) → **지급 =
+  기준일 +2영업일**. 2026 KRX 캘린더로 돌리면 PDF의 리밸런싱일 **14개 중 12개가 정확히 일치**하고,
+  어긋나는 2개(3/29·6/28)는 **PDF가 일요일을 쓴 오류**다. 오프셋 3개는 화면에서 조정 가능.
+- **⚠️ 최대 발견 — 구조 변경 매매는 '리밸런싱 차익'에 계상하지 않는다**: PDF 4월 합계
+  `25,859,200`이 산술적으로 안 맞아 보이지만 **회색 음영 3행(4/21 종목 재편)을 빼면 정확히 일치**한다
+  (`2,068,000 + 1,286,200 + 22,505,000`). → `BtTrade.structural` 플래그로 분리해 `tradeNet`(정기)와
+  `structuralNet`(재편)을 따로 집계한다. 재편 잔돈(매도 152,963,200 − 신규매수 150,000,000 =
+  2,963,200)은 현금으로 편입된다. **합치지 말 것.**
+- **PDF 자체 오류 3건**(엔진은 정확히 계산): ① 2월 누적 분배금이 1월분을 빠뜨려 7월까지 전파
+  (최종 `36,815,305` → 정답 `42,417,182`) ② 3/29·6/28이 일요일 ③ 4/28 TIGER만 유일하게 반올림
+  (다른 19건은 전부 내림) + 매도금액 500원 불일치.
+- **⚠️ `rounding:'floor'`는 `Math.floor`가 아니라 `Math.trunc`(0 방향)**: 매도(음수)에 `Math.floor`를
+  쓰면 `−594.66 → −595`가 되어 매도량이 1주 늘고 이후 전 구간 수량이 어긋난다. PDF 20건 중 19건이
+  trunc로 정확히 재현된다.
+
+- **⚠️ 분배 일정과 리밸런싱 일정은 완전히 독립**(`buildDividendSlots`는 `config.policy`를 절대 보지
+  않는다): 리밸런싱을 월말로 몰아도 월중 분배 종목은 여전히 15일 기준으로 분배받는다. 한 함수로
+  합치면 `policy:'allEom'`에서 월중 종목의 분배락이 통째로 월말로 밀린다.
+- **⚠️ 월별 오버라이드는 `rebalDate`만 옮긴다** — 분배락·지급일은 시장이 정하는 값이라 사용자가
+  옮기면 권리 확정 수량이 실제와 달라진다.
+- **⚠️ 표는 분배락월 / 현금은 지급월**: `BtMonth.dividends`·`divAccrued`는 **분배락 기준 월**(PDF의
+  '지급 분배금' 열이 리밸런싱 행 옆에 붙는 형식, 앱 전체 `dividendHistory` 저장 키 규약과 동일),
+  예수금은 `divPaid`(지급일 기준)로만 움직인다. 월말 분배는 지급일이 다음 달 초라 **한 달 어긋나는
+  것이 정상**이다. 하나로 합치면 PDF 재현(1월 5,601,877)이 깨지거나 현금 흐름이 틀린다.
+- **⚠️ 비중 모드 초기매수의 분모는 `ratioBase`와 무관하게 투입 자본**: `ratioBase:'equity'`를 그대로
+  쓰면 그 시점 평가액이 0이라 목표가 전부 0 → **아무것도 사지 않는다**(비중 모드가 통째로 죽는다).
+- **⚠️ 매도/매수 분할은 실행 전에 확정**(`plans` 배열): 실행 중 다시 판정하면 방금 매도해 목표에
+  맞춰진 종목이 매수 패스에 또 걸리고, 재원이 마련되기 전에 매수가 예수금 한도에 막혀 조용히
+  목표 미달로 끝난다(PDF 4/21 재편이 정확히 이 형태다).
+- **⚠️ `shiftBusinessDays(s, 0)`은 `onOrBefore`**(onOrAfter 아님) — 오프셋 0 설정에서 백테스트가
+  미래 종가를 당겨 쓰지 않게 하는 보수적 기본값(`priceAt`의 carry-back 금지와 같은 원칙).
+- **⚠️ `priceAt`은 carry-forward만**(직전 종가 이월). carry-back을 허용하면 백테스트가 미래 정보를 쓴다.
+
+- **⚠️ 조회한 종가를 `stockHistoryMap`에 절대 병합하지 말 것**: 그 맵은 `buildCloseEvalSeries`(보유
+  평가액 재계산)와 `useAutoConfirmHistory` 데이터완비 가드의 권위 소스라, 백테스트용 수정주가/펀드
+  NAV가 섞이면 보유+백테스트 중복 코드의 과거 평가액이 **영구히 오염**된다(WatchlistPopup 불변식과
+  동일). 조회 결과는 App의 **`btFetched` 로컬 맵**에만 담는다(`src/backtestFetch.ts` 상단 주석).
+  `btPrices = {...stockHistoryMap[c], ...btFetched[c]}` — **조회분이 우선**(사용자가 ⟳로 고친 값이
+  낡은 저장값에 가려지면 안 된다).
+- **⚠️ 편집은 로컬 사본 + 2.5초 idle 승격**(FlowBoard와 동일): 목표금액·기간을 타이핑할 때마다
+  `setBacktestScenarios`를 하면 **글자마다** `portfolioStructureKey`가 전 계좌를 재직렬화하고
+  STATE+VERSION+STOCK+MARKET 4파일 write가 나간다. 회수는 `App.tsx backtestFlushRef` ←
+  BacktestPage가 마운트 시 등록·**언마운트 시 null**. 미승격 편집이 없으면 커밋은 **반드시 null 반환**.
+- **⚠️ 종료 커밋 합성 3원**: `exitCommitRef`가 리밸런싱·흐름도·백테스트를 합친다. 반환 키가 겹치지
+  않아 순서는 무관하나 **셋 다 없으면 null**을 반환해야 alt-tab마다 4파일 write가 강제되지 않는다.
+  수동 저장 4핸들러(`handleSave`·`handleDriveSave`·`handleDownloadStateFile`·`handleAppClose`)도
+  `flushBacktestSnapshot()` **동기 주입 필수**.
+- **영속화 7지점**: `App.tsx` ① `useState` ② 지문 `backtestFingerprint(backtestScenarios)` ③ 저장
+  payload 리터럴 ④ 저장 effect deps ⑤ `applyStateData`(`normalizeBacktestScenarios`) ⑥
+  `applyBackupData`(sticky) + `useDriveSync.ts` ⑦ `_preserveStickyPersonalData`.
+  sticky 판정은 **`backtestScenariosHaveContent` 공유 함수**(length 금지 — 페이지를 열기만 해도 빈
+  시나리오가 생겨 백업 복원 경로가 영구히 막힌다). `backtestFingerprint`는 화이트리스트 투영 +
+  try/catch로 **절대 던지지 않는다**(던지면 그 세션 Drive 저장이 통째로 멈춘다).
+  ⚠️ **`BtConfig`에 시세 시계열을 넣지 말 것** — STATE는 백업 22본으로 복제된다. 코드 참조만 저장.
+
+- **⚠️ 파생 memo는 `btActive`(페이지를 연 뒤)에만 계산**: `btDividends`·`btNameByCode`·`btCatalog`는
+  deps에 `portfolios`·`stockHistoryMap`이 있어 시세 갱신마다 전 계좌 스냅샷과 전 종목 일봉을 훑는다.
+  백테스트를 안 쓰는 사용자가 그 비용을 치를 이유가 없다(FlowBoard를 `flowAccess` 안에 둔 것과 동일).
+- **⚠️ `holidays` prop에 `marketHolidays?.kr || []`를 직접 넘기지 말 것** — 매 렌더 새 배열이라
+  결과 `useMemo` 의존성이 매번 깨져 **시세 갱신마다 백테스트 전 구간이 재계산**된다(`btHolidays` memo).
+- **⚠️ 주당 분배금 셀은 로컬 draft 입력**(`DivInput`): 표시값이 220ms 디바운스된 계산 결과라
+  onChange로 곧장 커밋하면 controlled value가 옛 값으로 되돌아가 `"170"`을 치면 `"1"`만 남는다.
+- **⚠️ lucide 아이콘은 저장소에 이미 쓰는 것만**: `package-lock.json`도 `node_modules`도 없어 새
+  아이콘이 0.577.0에 실재하는지 확인할 수단이 없고, 없으면 undefined 컴포넌트 렌더로 페이지가 죽는다.
+  특히 **`AlertTriangle`은 lucide 0.4x에서 `TriangleAlert`로 개명**됐다 → `AlertCircle`을 쓴다.
+  상단바 아이콘은 `UserInfoBar`의 인라인 SVG `BacktestIcon`(FlowIcon과 동일 근거).
+
+- **PDF 저장 = 브라우저 인쇄**(외부 npm 의존성 0 — `package-lock.json` 부재로 의존성 추가가
+  프로덕션 흰 화면을 낸 이력). **⚠️ `createPortal(content, document.body)` 필수** — 인쇄 규칙
+  `body > *:not(.bt-shell){display:none}`이 성립하려면 두 모드(새 창/오버레이) 모두에서 `.bt-shell`이
+  body 직계 자식이어야 한다. visibility 토글로 우회하면 숨겨진 앱 본문이 자리를 차지해 **빈 페이지
+  수십 장**이 딸려 나온다. 인쇄 CSS는 다크 테마를 **검정 글씨+흰 배경으로 뒤집고** 손익 색만
+  진한 인쇄색으로 되살린다(그대로 인쇄하면 흰 종이에 밝은 회색 글씨라 판독 불가).
+- **별도 브라우저 창** `/?backtestWindow=1` — `main.tsx` `BACKTEST_WINDOW_BOOT`. 흐름도 창과 **완전히
+  같은 규약**(App 미마운트 · `noopener` 금지 · `ping.need`가 초기 전송의 유일한 트리거 · 재입양 ·
+  끊기면 `readOnly`). 프로토콜: 창→앱 `backtest:ping{need}`·`backtest:scenarios`·`backtest:want{code,data,force}`
+  / 앱→창 `backtest:data`(카탈로그·분배금·휴장일, 지문 게이팅)·`backtest:live`(시나리오·시세·조회중)·`backtest:pong`.
+  시세는 **교체가 아니라 병합**(지문 게이팅 때문에 부분 전송이 정상 경로).
+- **게이팅 = 승인 시트 L열 `backtestEnabled`**(index 11). Apps Script 6지점(`check`·`listUsers`·
+  `getFeatureLabels` E1:L1·`setUserFeature` colMap·`addUser` appendRow·`setupSheet` L1/E2:L100) +
+  프론트(`LoginGate` `UserFeatures`/`EMPTY_FEATURES`/`pickFeatures` **3곳만**, `App.tsx` 초기값·
+  `backtestAccess`, `AdminPage` 라벨·featureDefs, `UserInfoBar` `canAccessBacktest`).
+  ⚠️ **배포 순서는 프론트 먼저 → Apps Script 나중**(`loadFeatureSettings`의 `>= 6` 인덱스 머지가
+  구버전 응답을 우아하게 처리한다). ⚠️ `backtestAccess = isAdminUser || userFeatures.backtestEnabled` —
+  없으면 관리자 본인이 영구 접근 불가(AdminPage 토글은 `!isAdminUser` 조건이라 관리자 행에 미렌더).
+- **impersonation은 읽기 전용**(`readOnly={!!adminViewingAs}`) — 흐름도와 같은 근거(undo 없음 + sticky).
+- **소프트 상한**: 시나리오 10 / 종목 20 / 이벤트 40 / 오버라이드 120.
+- **범위 밖(의도)**: 세금·거래수수료·슬리피지·분배금 재투자 지연·해외종목(원화 단일 통화)·
+  undo/redo·시나리오 비교 뷰. **알려진 한계**: 인앱 오버레이 인쇄는 앱 본문 높이만큼 빈 페이지가
+  뒤에 붙을 수 있다(주 경로인 별도 창은 깨끗하다). 인앱과 새 창을 동시에 열면 마지막 쓰기가 이긴다.
+- 검증: `npm run verify:backtest` (참조 구현 미러 #1~#58 + 소스 텍스트 가드 #59~#68).
+  `src/backtest.ts`의 순수 함수 본문과 **항상 1:1 동기화**할 것. #23~#42가 PDF 전체를 숫자로 재현하므로
+  산식을 바꾸면 여기서 잡힌다.
 
 ---
 
