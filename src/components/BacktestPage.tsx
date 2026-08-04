@@ -394,6 +394,23 @@ export default function BacktestPage({
       rows.push([`${m.ym} 누적`, '', '', '', '', '', Math.round(m.cumTradeNet), '', '', '', '', '', Math.round(m.cumDivAccrued)]);
       rows.push([`${m.ym} 현금`, '', '', '', '', '', Math.round(m.cashDelta), '', Math.round(m.evalEnd), '', '', '', Math.round(m.cashEnd)]);
     }
+    // 기말 보유 + 예수금 원천별 세분화 — 화면 '기말 보유 현황' 표와 같은 소스.
+    for (const h of result.finalHoldings) {
+      rows.push(['기말보유', result.summary.endDate, `${h.name}(${h.code})`, h.price, '', '', '',
+        h.qty, Math.round(h.evalAmount), '', '', '', '']);
+    }
+    // ⚠️ 합이 정확히 기말 예수금이 되는 항등식(검증 #110). 분배금은 **지급 기준**을 쓴다.
+    for (const [label, value] of [
+      ['초기 매수 후 잔여', result.initialCashAfter],
+      ['누적 매매차익', result.summary.cumTradeNet],
+      ['종목 재편 순현금', result.summary.cumStructuralNet],
+      ['누적 분배금', result.summary.cumDivPaid],
+    ]) {
+      if (Math.round(value) === 0) continue;
+      rows.push(['기말예수금 내역', '', label, '', '', '', '', '', Math.round(value), '', '', '', '']);
+    }
+    rows.push(['기말 합계', result.summary.endDate, '', '', '', '', '', '', Math.round(result.summary.finalEval),
+      '', '', '', Math.round(result.summary.finalCash)]);
     // ⚠️ BOM은 '\ufeff' 이스케이프로 — 소스에 보이지 않는 문자를 직접 넣으면 편집·머지 중 조용히
     //    사라져 엑셀에서 한글이 깨진다(원인 추적이 매우 어렵다).
     const csv = '\ufeff' + rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
@@ -1385,18 +1402,42 @@ export default function BacktestPage({
                         </tr>
                       ))}
                       <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
-                        <td className="px-2 py-1 text-gray-300">
-                          예수금
-                          {result.summary.finalCashDiv > 0.5 && (
-                            <span className="ml-1 font-normal text-gray-600 text-[10px]">
-                              매매 {won(result.summary.finalCashTrade)} · 분배금 {won(result.summary.finalCashDiv)}
-                            </span>
-                          )}
-                        </td>
+                        <td className="px-2 py-1 text-gray-300">예수금</td>
                         <td colSpan={2} className="px-2 py-1 text-right text-gray-600">-</td>
                         <td className="px-2 py-1 text-right text-emerald-300">{won(result.summary.finalCash)}</td>
                         <td className="px-2 py-1 text-right text-gray-600">-</td>
                       </tr>
+                      {/* 예수금 원천별 세분화 — ⚠️ 합이 정확히 기말 예수금이 되는 항등식이다(검증 #110):
+                          초기 매수 후 잔여 + 누적 매매차익 + 종목 재편 순현금 + 누적 분배금(지급 기준).
+                          ⚠️ 분배금은 반드시 **지급 기준**(cumDivPaid) — 분배락 기준(cumDivAccrued)에는
+                          아직 현금이 안 된 몫이 섞여 있어 소계가 예수금과 어긋난다(검증 #110b). */}
+                      {[
+                        { key: 'init', label: '초기 매수 후 잔여', value: result.initialCashAfter, signed: false },
+                        { key: 'trade', label: '누적 매매차익', value: result.summary.cumTradeNet, signed: true },
+                        { key: 'struct', label: '종목 재편 순현금', value: result.summary.cumStructuralNet, signed: true },
+                        { key: 'div', label: '누적 분배금', value: result.summary.cumDivPaid, signed: false },
+                      ].filter((p) => Math.round(p.value) !== 0).map((p) => (
+                        <tr key={p.key} className="border-t border-gray-800/40">
+                          <td className="px-2 py-1 pl-6 text-gray-500 text-[10px]">
+                            └ {p.label}
+                            {p.key === 'div' && Math.abs(result.summary.cumDivAccrued - result.summary.cumDivPaid) > 0.5 && (
+                              <span className="text-gray-600" title="분배락 기준 누적 분배금 — 지급일이 종료일 이후인 몫은 아직 현금이 아니다">
+                                {' '}(분배락 기준 {won(result.summary.cumDivAccrued)})
+                              </span>
+                            )}
+                            {p.key === 'div' && result.summary.cumDivPaid - result.summary.finalCashDiv > 0.5 && (
+                              <span className="text-gray-600">
+                                {' '}· 이 중 {won(result.summary.cumDivPaid - result.summary.finalCashDiv)}는 매수에 사용
+                              </span>
+                            )}
+                          </td>
+                          <td colSpan={2} className="px-2 py-1 text-right text-gray-700">-</td>
+                          <td className={`px-2 py-1 text-right text-[11px] ${p.signed ? pnlCls(p.value) : 'text-gray-300'}`}>
+                            {p.signed ? wonSigned(p.value) : won(p.value)}
+                          </td>
+                          <td className="px-2 py-1 text-right text-gray-700">-</td>
+                        </tr>
+                      ))}
                       <tr className="border-t border-gray-700 bg-gray-800/60 font-bold">
                         <td className="px-2 py-1 text-gray-200">총자산</td>
                         <td colSpan={2} className="px-2 py-1 text-right text-gray-600">-</td>

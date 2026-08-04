@@ -1530,6 +1530,27 @@ console.log('\n── 파트④-h 목표 기준 totalWithDiv / 예수금 두 주
   ok('#109b totalWithDiv 는 정규화에서 보존된다(레거시 값은 equity 로 폴백)',
     makeBtConfig({ ratioBase: 'totalWithDiv' }).ratioBase === 'totalWithDiv'
       && makeBtConfig({ ratioBase: 'bogus' }).ratioBase === 'equity');
+
+  // ⚠️ #110 — 기말 예수금 **원천별 분해 항등식**. 기말 보유 표가 이 분해를 그대로 렌더하므로,
+  //    항등식이 깨지면 화면의 소계가 예수금과 안 맞는다.
+  //      기말 예수금 = 초기 매수 후 잔여 + 누적 매매차익 + 종목 재편 순현금 + 누적 분배금(지급 기준)
+  //    ⚠️ 분배금은 **cumDivPaid**(지급 기준)를 써야 한다 — cumDivAccrued(분배락 기준)는 아직
+  //       현금이 되지 않은 몫을 포함해 항등식이 깨진다.
+  const idOk = (r) => Math.abs(
+    (r.initialCashAfter + r.summary.cumTradeNet + r.summary.cumStructuralNet + r.summary.cumDivPaid)
+    - r.summary.finalCash) < 1e-6;
+  ok('#110 ⚠️ 기말 예수금 = 초기잔여 + 누적매매차익 + 재편순현금 + 누적분배금(지급)',
+    [runPdf(), eq, twd, dTwd, runPdf({ contribution: { mode: 'pctOfCash', value: 40, split: 'ratio' } })].every(idOk));
+  const pdf = runPdf();
+  ok('#110b ⚠️ 분배락 기준(cumDivAccrued)으로 바꾸면 항등식이 깨진다 — 지급 기준을 쓸 것',
+    Math.abs(pdf.summary.cumDivAccrued - pdf.summary.cumDivPaid) > 1
+      && Math.abs((pdf.initialCashAfter + pdf.summary.cumTradeNet + pdf.summary.cumStructuralNet
+        + pdf.summary.cumDivAccrued) - pdf.summary.finalCash) > 1);
+  console.log(`      · PDF 시나리오 분해: 초기잔여 ${Math.round(pdf.initialCashAfter).toLocaleString('ko-KR')}`
+    + ` + 매매차익 ${Math.round(pdf.summary.cumTradeNet).toLocaleString('ko-KR')}`
+    + ` + 재편 ${Math.round(pdf.summary.cumStructuralNet).toLocaleString('ko-KR')}`
+    + ` + 분배금 ${Math.round(pdf.summary.cumDivPaid).toLocaleString('ko-KR')}`
+    + ` = ${Math.round(pdf.summary.finalCash).toLocaleString('ko-KR')}`);
 }
 
 console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');
