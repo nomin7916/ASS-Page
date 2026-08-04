@@ -266,7 +266,7 @@ function makeBtConfig(partial = {}) {
     initialCapital: Math.max(0, asNum(partial.initialCapital, 0)),
     extraCash: Math.max(0, asNum(partial.extraCash, 0)),
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
-    ratioBase: base === 'total' || base === 'initial' ? base : 'equity',
+    ratioBase: base === 'total' || base === 'initial' || base === 'totalWithDiv' ? base : 'equity',
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
     policy: policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' ? policy : 'perCycle',
     fixedDay: clampInt(asNum(partial.fixedDay, 15), 1, 31),
@@ -469,7 +469,7 @@ function runBacktest(input) {
     initialCashAfter: 0, months: [], curve: [], finalHoldings: [],
     summary: { startDate: config.startDate, endDate: config.endDate, initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
-      cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0, maxDrawdown: 0, months: 0 },
+      cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0, finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0 },
   });
   if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return empty('기간(시작일·종료일)을 선택해 주세요.');
   if (config.startDate > config.endDate) return empty('시작일이 종료일보다 늦습니다.');
@@ -513,6 +513,30 @@ function runBacktest(input) {
   if (!usable.length) return empty('선택한 종목 중 종가 데이터가 있는 종목이 없습니다. 종목을 조회하거나 데이터를 붙여넣어 주세요.');
 
   let cash = config.initialCapital + config.extraCash;
+  let cashTrade = cash;
+  let cashDiv = 0;
+  const bucketLog = [];
+  const logBuckets = (date) => {
+    const last = bucketLog[bucketLog.length - 1];
+    if (last && last.date === date) { last.t = cashTrade; last.d = cashDiv; return; }
+    bucketLog.push({ date, t: cashTrade, d: cashDiv });
+  };
+  const applyCash = (delta, date) => {
+    cash += delta;
+    if (delta >= 0) { cashTrade += delta; logBuckets(date); return; }
+    let need = -delta;
+    const fromTrade = Math.max(0, Math.min(cashTrade, need));
+    cashTrade -= fromTrade;
+    need -= fromTrade;
+    if (need > 0) {
+      const fromDiv = Math.max(0, Math.min(cashDiv, need));
+      cashDiv -= fromDiv;
+      need -= fromDiv;
+      if (need > 0) cashTrade -= need;
+    }
+    logBuckets(date);
+  };
+  const applyDividend = (amount, date) => { cash += amount; cashDiv += amount; logBuckets(date); };
   const totalEvalAt = (date) => {
     let s = 0;
     for (const p of positions) { if (p.qty > QTY_EPS) { const h = priceAt(prices[p.asset.code], date); if (!h.missing) s += p.qty * h.price; } }
@@ -522,7 +546,13 @@ function runBacktest(input) {
   const ratioBaseAt = (date) => {
     if (config.ratioBase === 'initial') return config.initialCapital + config.extraCash + contribBase;
     const eq = totalEvalAt(date);
-    return config.ratioBase === 'total' ? eq + cash : eq;
+    if (config.ratioBase === 'total') return eq + cash;
+    if (config.ratioBase === 'totalWithDiv') {
+      const invested = config.initialCapital + config.extraCash;
+      if (eq >= invested) return eq;
+      return Math.min(invested, eq + Math.max(0, cash));
+    }
+    return eq;
   };
   const adjustTo = (p, date, target, structural) => {
     const hit = priceAt(prices[p.asset.code], date);
@@ -541,7 +571,7 @@ function runBacktest(input) {
     if (p.qty + qty !== 0 && Math.abs(p.qty + qty) < QTY_EPS) qty = -p.qty;
     if (qty === 0) return null;
     const cashDelta = -qty * hit.price;
-    cash += cashDelta;
+    applyCash(cashDelta, date);
     const qtyBefore = p.qty;
     p.qty += qty;
     return { date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name, price: hit.price,
@@ -628,7 +658,7 @@ function runBacktest(input) {
     if (!m) {
       m = { ym, trades: [], dividends: [], tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
-        cashDelta: 0, cashEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
+        cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
         lastDate: '', holdings: [], contribution: null, cumContribution: 0 };
       monthMap.set(ym, m);
     }
@@ -673,7 +703,7 @@ function runBacktest(input) {
       if (!rows) continue;
       pendingDiv.delete(`${step.div.ym}|${step.div.cycle}`);
       const m = monthOf(ymOf(step.date));
-      for (const r of rows) { m.divPaid += r.amount; cash += r.amount; }
+      for (const r of rows) { m.divPaid += r.amount; applyDividend(r.amount, step.date); }
       continue;
     }
     if (step.kind === 'contrib') {
@@ -826,6 +856,12 @@ function runBacktest(input) {
         qty: q, price: hit.price, priceExact: hit.exact, evalAmount: amount, weight: 0 });
     }
     for (const h of hold) h.weight = ev > 0 ? (h.evalAmount / ev) * 100 : 0;
+    {
+      let t = config.initialCapital + config.extraCash;
+      let d = 0;
+      for (const bkt of bucketLog) { if (bkt.date > lastBiz) break; t = bkt.t; d = bkt.d; }
+      m.cashTradeEnd = t; m.cashDivEnd = d;
+    }
     m.lastDate = lastBiz;
     m.holdings = hold;
     m.evalEnd = ev;
@@ -875,7 +911,7 @@ function runBacktest(input) {
     summary: { startDate: startBiz, endDate: endBiz, initialCapital: config.initialCapital,
       finalEval, finalCash: cash, finalTotal, profit: finalTotal - invested,
       profitRate: invested > 0 ? ((finalTotal - invested) / invested) * 100 : 0,
-      cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumDivAccrued, cumDivPaid, cumContribution: cumContrib,
+      cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumDivAccrued, cumDivPaid, cumContribution: cumContrib, finalCashTrade: cashTrade, finalCashDiv: cashDiv,
       maxDrawdown: maxDd, months: months.length },
   };
 }
@@ -1419,6 +1455,81 @@ console.log('\n── 파트④-g 적대적 리뷰 확정 결함 회귀 ──')
   });
   ok('#104 기간 밖 증액 예외는 경고한다', orphanOv.warnings.some((w) => w.includes('2029-01')));
   ok('#104b 같은 달 중복 예외는 경고한다', orphanOv.warnings.some((w) => w.includes('중복 지정')));
+}
+
+console.log('\n── 파트④-h 목표 기준 totalWithDiv / 예수금 두 주머니 ──');
+
+{
+  const mkRatio = (ratioBase) => makeBtConfig({
+    startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+    targetMode: 'ratio', ratioBase, rounding: 'floor', policy: 'perCycle',
+    assets: [{ id: 'w1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
+             { id: 'w2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
+  });
+  const run = (rb) => runBacktest({ config: mkRatio(rb), prices: PRICES, dividends: DIVS, holidays: KR26 });
+  const eq = run('equity');
+  const twd = run('totalWithDiv');
+
+  // ⚠️ 불변식 — 두 주머니 합은 언제나 총 예수금과 같아야 한다(분배금을 따로 더하면 이중 계상).
+  const bucketOk = twd.months.every((m) => Math.abs((m.cashTradeEnd + m.cashDivEnd) - m.cashEnd) < 1e-6);
+  ok('#105 ⚠️ 매매 주머니 + 분배금 주머니 = 예수금 (전 월)', bucketOk);
+  ok('#105b 기말도 동일', Math.abs((twd.summary.finalCashTrade + twd.summary.finalCashDiv) - twd.summary.finalCash) < 1e-6);
+
+  // 평가액이 초기 투자금 이상인 구간에서는 equity 와 완전히 같아야 한다(현금이 쌓인다).
+  const upMonths = twd.months.filter((m) => m.evalEnd >= 450000000);
+  ok('#106 평가액이 초기 투자금 이상이면 equity 기준과 동일하게 동작한다',
+    upMonths.length > 0 && upMonths.every((m) => {
+      const e = eq.months.find((x) => x.ym === m.ym);
+      return Math.abs(m.evalEnd - e.evalEnd) < 1e-6;
+    }));
+
+  // ⚠️ PDF 픽스처는 7개월 내내 평가액이 초기 투자금(4.5억) 위에 있어 되메우기가 발동하지 않는다.
+  //    (그래서 #106이 성립한다.) 하락장을 실제로 만들려면 전용 픽스처가 필요하다.
+  const DROP = { DP: {} };
+  for (const d of ['2026-01-02', '2026-01-28', '2026-02-25', '2026-03-27', '2026-04-28']) DROP.DP[d] = 10000;
+  DROP.DP['2026-05-27'] = 6000;   // −40% 급락
+  DROP.DP['2026-06-26'] = 6000;
+  DROP.DP['2026-07-29'] = 6000;
+  const DROPDIV = { DP: { '2026-01': 500, '2026-02': 500, '2026-03': 500, '2026-04': 500, '2026-05': 500, '2026-06': 500, '2026-07': 500 } };
+  const mkDrop = (ratioBase) => makeBtConfig({
+    startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 100000000,
+    targetMode: 'ratio', ratioBase, rounding: 'floor', policy: 'perCycle',
+    assets: [{ id: 'z1', code: 'DP', name: '급락주', payCycle: 'eom', targetRatio: 100 }],
+  });
+  const runDrop = (rb) => runBacktest({ config: mkDrop(rb), prices: DROP, dividends: DROPDIV, holidays: KR26 });
+  const dEq = runDrop('equity');
+  const dTwd = runDrop('totalWithDiv');
+
+  const dropMonths = dTwd.months.filter((m) => m.evalEnd > 0 && m.evalEnd < 100000000);
+  ok('#107 ⚠️ 평가액이 초기 투자금 아래로 내려간 달에 현금을 투입해 equity 기준보다 더 산다',
+    dropMonths.length > 0 && dTwd.summary.finalEval > dEq.summary.finalEval
+      && dTwd.summary.finalCash < dEq.summary.finalCash);
+
+  // 되메우기는 초기 투자금을 상한으로 한다(레버리지가 아니다).
+  ok('#107b 되메우기 후에도 평가액이 초기 투자금을 넘지 않는다',
+    dTwd.months.every((m) => m.evalEnd <= 100000000 + 1));
+
+  // ⚠️ 초기 매수로 매매 주머니가 비어 있으므로, 되메우기 매수는 **분배금 주머니**에서 나간다.
+  const usedDiv = dTwd.months.some((m, i) => i > 0 && m.cashDivEnd < dTwd.months[i - 1].cashDivEnd - 0.5);
+  ok('#108 ⚠️ 예수금이 모자라면 누적 분배금 주머니에서 꺼내 쓴다(사용 순서 관측)',
+    usedDiv && dTwd.summary.finalCashDiv < dTwd.summary.cumDivPaid);
+  ok('#108c 총액은 종전과 동일하게 유지된다(주머니는 분해일 뿐)',
+    Math.abs((dTwd.summary.finalCashTrade + dTwd.summary.finalCashDiv) - dTwd.summary.finalCash) < 1e-6);
+
+  // 매도 대금은 매매 주머니로만 들어간다 → 분배금 주머니는 지급으로만 늘어난다.
+  const divOnlyGrows = twd.months.every((m, i) => {
+    const prev = i === 0 ? 0 : twd.months[i - 1].cashDivEnd;
+    return m.cashDivEnd <= prev + m.divPaid + 1e-6;
+  });
+  ok('#108b 분배금 주머니는 지급으로만 늘어난다(매도 대금은 매매 주머니로)', divOnlyGrows);
+
+  // 기존 3개 기준은 이 변경으로 1원도 달라지지 않아야 한다(하위호환).
+  const base3 = ['equity', 'total', 'initial'].map((rb) => run(rb).summary.finalTotal);
+  ok('#109 기존 분모 3종은 두 주머니 도입 후에도 결과가 유한하고 서로 구분된다',
+    base3.every((v) => Number.isFinite(v)) && new Set(base3.map((v) => Math.round(v))).size >= 2);
+  ok('#109b totalWithDiv 는 정규화에서 보존된다(레거시 값은 equity 로 폴백)',
+    makeBtConfig({ ratioBase: 'totalWithDiv' }).ratioBase === 'totalWithDiv'
+      && makeBtConfig({ ratioBase: 'bogus' }).ratioBase === 'equity');
 }
 
 console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');

@@ -54,8 +54,16 @@ export type BtPolicy = 'perCycle' | 'allMid' | 'allEom' | 'fixedDay';
 /** 목표 해석. amount=종목별 목표금액 / ratio=비중(%) × ratioBase */
 export type BtTargetMode = 'amount' | 'ratio';
 
-/** 비중 모드의 분모. equity=활성 종목 평가액 합 / total=평가액+현금 / initial=초기 투자금 고정 */
-export type BtRatioBase = 'equity' | 'total' | 'initial';
+/**
+ * 비중 모드의 분모.
+ *  equity       — 종목 평가액 합계(현금 제외 → 차익이 현금으로 계속 쌓인다)
+ *  total        — 평가액 + 예수금(쌓인 현금도 매달 재투자)
+ *  initial      — 초기 투자금 고정(목표금액 불변)
+ *  totalWithDiv — 평가액 + 예수금 + 누적분배금. 평상시엔 equity와 같고, **평가액이 초기
+ *                 투자금 아래로 내려가면** 그 부족분을 보유 현금(예수금 → 누적분배금 순)으로
+ *                 메워 초기 수준까지 되산다.
+ */
+export type BtRatioBase = 'equity' | 'total' | 'initial' | 'totalWithDiv';
 
 /** 수량 산출 규칙. floor=0 방향 버림(PDF 규약) / round=반올림 / exact=소수 허용(펀드 좌수) */
 export type BtRounding = 'floor' | 'round' | 'exact';
@@ -365,6 +373,10 @@ export interface BtMonth {
   cashDelta: number;
   /** 월말 시점 예수금 */
   cashEnd: number;
+  /** 월말 예수금 중 매매(리밸런싱 차익) 몫. cashTradeEnd + cashDivEnd = cashEnd */
+  cashTradeEnd: number;
+  /** 월말 예수금 중 아직 쓰지 않은 누적 분배금 몫 */
+  cashDivEnd: number;
   /** 월말 시점 종목 평가액 합 */
   evalEnd: number;
   /** evalEnd + cashEnd */
@@ -450,6 +462,9 @@ export interface BtResult {
     cumDivPaid: number;
     /** 매월 증액(재투자)으로 목표에 더한 누적 금액 */
     cumContribution: number;
+    /** 기말 예수금 중 매매 몫 / 미사용 분배금 몫 (합 = finalCash) */
+    finalCashTrade: number;
+    finalCashDiv: number;
     /** 최고 자산 대비 최대 낙폭(%) */
     maxDrawdown: number;
     months: number;
@@ -747,7 +762,7 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
     initialCapital: Math.max(0, asNum(partial.initialCapital, 0)),
     extraCash: Math.max(0, asNum(partial.extraCash, 0)),
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
-    ratioBase: base === 'total' || base === 'initial' ? base : 'equity',
+    ratioBase: base === 'total' || base === 'initial' || base === 'totalWithDiv' ? base : 'equity',
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
     policy:
       policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' ? policy : 'perCycle',
@@ -1141,7 +1156,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
       cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0,
-      maxDrawdown: 0, months: 0,
+      finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0,
     },
   });
 
@@ -1207,6 +1222,41 @@ export function runBacktest(input: BtRunInput): BtResult {
   if (!usable.length) return empty('선택한 종목 중 종가 데이터가 있는 종목이 없습니다. 종목을 조회하거나 데이터를 붙여넣어 주세요.');
 
   let cash = config.initialCapital + config.extraCash;
+  // ── 예수금 두 주머니 ──
+  // ⚠️ 불변식: `cashTrade + cashDiv === cash` (항상). 총액은 종전과 1원도 다르지 않고,
+  //    "예수금을 먼저 쓰고 모자라면 누적 분배금을 쓴다"는 사용 순서를 **보이게** 하려는 분해다.
+  //    분배금을 cash와 별도로 더하면 이중 계상이 되므로 절대 그렇게 바꾸지 말 것.
+  let cashTrade = cash;   // 초기 잔돈 + 매매(리밸런싱·구조변경) 순현금
+  let cashDiv = 0;        // 지급받은 분배금 중 아직 쓰지 않은 몫
+  /** 월말 주머니 잔액 복원용 스냅샷(날짜 오름차순). */
+  const bucketLog: { date: string; t: number; d: number }[] = [];
+  const logBuckets = (date: string) => {
+    const last = bucketLog[bucketLog.length - 1];
+    if (last && last.date === date) { last.t = cashTrade; last.d = cashDiv; return; }
+    bucketLog.push({ date, t: cashTrade, d: cashDiv });
+  };
+  /** 매도(+)는 매매 주머니로, 매수(−)는 **매매 → 분배금** 순으로 꺼낸다. */
+  const applyCash = (delta: number, date: string) => {
+    cash += delta;
+    if (delta >= 0) { cashTrade += delta; logBuckets(date); return; }
+    let need = -delta;
+    const fromTrade = Math.max(0, Math.min(cashTrade, need));
+    cashTrade -= fromTrade;
+    need -= fromTrade;
+    if (need > 0) {
+      const fromDiv = Math.max(0, Math.min(cashDiv, need));
+      cashDiv -= fromDiv;
+      need -= fromDiv;
+      // 둘 다 바닥나면(allowNegativeCash) 초과분은 매매 주머니가 음수로 진다.
+      if (need > 0) cashTrade -= need;
+    }
+    logBuckets(date);
+  };
+  const applyDividend = (amount: number, date: string) => {
+    cash += amount;
+    cashDiv += amount;
+    logBuckets(date);
+  };
 
   const evalOf = (p: Pos, date: string): { amount: number; hit: BtPriceHit } => {
     const hit = priceAt(prices[p.asset.code], date);
@@ -1225,7 +1275,17 @@ export function runBacktest(input: BtRunInput): BtResult {
   const ratioBaseAt = (date: string): number => {
     if (config.ratioBase === 'initial') return config.initialCapital + config.extraCash + contribBase;
     const eq = totalEvalAt(date);
-    return config.ratioBase === 'total' ? eq + cash : eq;
+    if (config.ratioBase === 'total') return eq + cash;
+    if (config.ratioBase === 'totalWithDiv') {
+      // 평상시엔 평가액 기준(차익은 현금으로 쌓임)이고, **평가액이 초기 투자금 아래로 내려가면**
+      // 그 부족분만큼 보유 현금을 투입해 초기 수준까지 되메운다.
+      // ⚠️ 재원은 예수금 + 누적 분배금 **합계**다(둘을 따로 더하면 이중 계상 — 분배금은 이미
+      //    예수금 안에 있다). 사용 순서(예수금 먼저 → 분배금)는 applyCash가 주머니로 표현한다.
+      const invested = config.initialCapital + config.extraCash;
+      if (eq >= invested) return eq;
+      return Math.min(invested, eq + Math.max(0, cash));
+    }
+    return eq;
   };
 
   /**
@@ -1254,7 +1314,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (qty === 0) return null;
 
     const cashDelta = -qty * hit.price;
-    cash += cashDelta;
+    applyCash(cashDelta, date);
     const qtyBefore = p.qty;
     p.qty += qty;
 
@@ -1389,7 +1449,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         ym, trades: [], dividends: [],
         tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
-        cashDelta: 0, cashEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
+        cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
         lastDate: '', holdings: [], contribution: null, cumContribution: 0,
       };
       monthMap.set(ym, m);
@@ -1457,7 +1517,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       const m = monthOf(ymOf(step.date));
       for (const r of rows) {
         m.divPaid += r.amount;
-        cash += r.amount;
+        applyDividend(r.amount, step.date);
       }
       continue;
     }
@@ -1699,6 +1759,18 @@ export function runBacktest(input: BtRunInput): BtResult {
       });
     }
     for (const h of hold) h.weight = ev > 0 ? (h.evalAmount / ev) * 100 : 0;
+    // 월말 주머니 잔액 — 시뮬레이션 중 남긴 스냅샷에서 그 달 마지막 영업일 이하 최신값을 집는다.
+    // (runCash처럼 월별 합계로 재구성할 수 없다 — 매수가 어느 주머니에서 나갔는지는 실행 순서가 정한다.)
+    {
+      let t = config.initialCapital + config.extraCash;
+      let d = 0;
+      for (const bkt of bucketLog) {
+        if (bkt.date > lastBiz) break;
+        t = bkt.t; d = bkt.d;
+      }
+      m.cashTradeEnd = t;
+      m.cashDivEnd = d;
+    }
     m.lastDate = lastBiz;
     m.holdings = hold;
     m.evalEnd = ev;
@@ -1790,6 +1862,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       cumDivAccrued,
       cumDivPaid,
       cumContribution: cumContrib,
+      finalCashTrade: cashTrade, finalCashDiv: cashDiv,
       maxDrawdown: maxDd,
       months: months.length,
     },

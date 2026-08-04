@@ -1823,6 +1823,23 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   `tfoot`(colSpan 3 포함) **네 곳을 모두** 고쳐야 한다. 한 곳만 놓치면 그 행부터 표 정렬이 통째로
   어긋난다(분배금 표 '렌더 지점 23곳' 사고와 동일 클래스). CSV 헤더(13열)와 모든 `rows.push` 길이도
   같이 맞출 것 — 짧으면 엑셀에서 열이 조용히 밀린다.
+- **비중 모드 분모 `ratioBase` 4종 — `totalWithDiv`는 '하락 시 되메우기' (⚠️ 회귀 주의)**:
+  `equity`(평가액만) / `total`(평가액+예수금) / `initial`(초기 투자금 고정) /
+  **`totalWithDiv`(평가액 + 예수금 + 누적분배금)**. 마지막 것은 평상시 `equity`와 같고,
+  **평가액이 초기 투자금 아래로 내려가면** 부족분을 보유 현금으로 메워 초기 수준까지 되산다:
+  `eq >= invested ? eq : min(invested, eq + max(0, cash))`.
+  - ⚠️ **재원은 예수금 '합계'다** — 분배금은 지급 순간 이미 예수금에 들어가 있으므로
+    `평가액 + 예수금 + 누적분배금`을 **문자 그대로 더하면 이중 계상**이다. 사용자가 말한
+    "예수금 먼저 → 모자라면 누적분배금" 순서는 **주머니 분해**로 표현한다(아래).
+  - ⚠️ 상한이 `invested`라 **되메우기지 레버리지가 아니다**(검증 #107b). 매월 증액(`contribBase`)은
+    이 분모에 반영되지 않는다 — `'initial'` 전용이고, 그 경고 문구가 그대로 뜬다.
+- **예수금 두 주머니 `cashTrade` / `cashDiv` (⚠️ 불변식: 합 = `cash`)**:
+  총액은 종전과 1원도 다르지 않고, "예수금을 먼저 쓰고 모자라면 누적 분배금을 쓴다"는 **사용
+  순서를 보이게** 하려는 분해다. 매도(+)는 `cashTrade`로, 매수(−)는 `cashTrade → cashDiv` 순으로
+  꺼낸다(`applyCash`). 분배금 지급은 `cashDiv`로만 들어간다(`applyDividend`).
+  - ⚠️ `cash += …`를 직접 쓰지 말 것 — 두 헬퍼를 우회하면 불변식이 조용히 깨진다(검증 #105·#108c).
+  - ⚠️ 월말 잔액은 `runCash`처럼 월별 합계로 **재구성할 수 없다**(매수가 어느 주머니에서 나갔는지는
+    실행 순서가 정한다) → 시뮬레이션 중 `bucketLog` 스냅샷을 남기고 월말 이하 최신값을 집는다.
 - **매월 목표 증액(재투자) `BtContribution` — 유휴 예수금을 목표에 얹는다 (⚠️ 회귀 주의)**:
   `{mode:'none'|'pctOfCash'|'amount', value, split:'ratio'|'even'}` + `contribOverrides[]`(특정 월만).
   그 달 **첫 리밸런싱일**에 `contrib` 스텝으로 실행 — `KIND_ORDER`에서 **pay 뒤**(그날 받은 분배금까지
@@ -1860,7 +1877,7 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   **`qty` 자체를 `-p.qty`로 스냅**한다(`p.qty`만 나중에 보정하면 `runQty`가 `t.qty`를 더하므로 갈린다).
   보유 판정 4곳(`totalEvalAt`·월말 holdings·curve·finalHoldings)도 `QTY_EPS` 기준으로 통일(검증 #76).
 - 검증: `npm run verify:backtest` (참조 구현 미러 #1~#58·#69~#77·#81~#104b + 소스 텍스트 가드
-  #59~#68·#78~#80). ⚠️ 미러(`scripts/verify-backtest.mjs`)의 **`backtestFingerprint` 투영**은 특히
+  #59~#68·#78~#80, 신규 #105~#109b). ⚠️ 미러(`scripts/verify-backtest.mjs`)의 **`backtestFingerprint` 투영**은 특히
   드리프트가 잘 난다 — 신규 필드를 `src/backtest.ts`에만 넣고 미러를 잊으면, 지문 테스트가 통과하는데도
   실제 저장 누락을 못 잡는다(실측 사고: `rebalMode`/`rebalDay`/`rebalDates` 3필드 누락).
   `src/backtest.ts`의 순수 함수 본문과 **항상 1:1 동기화**할 것. #23~#42가 PDF 전체를 숫자로 재현하므로

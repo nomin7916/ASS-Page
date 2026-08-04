@@ -46,6 +46,14 @@ const pctText = (n) => `${cleanNum(n) >= 0 ? '+' : '−'}${Math.abs(cleanNum(n))
 /** 한국식 손익 색상 — 이익 red / 손실 blue */
 const pnlCls = (n) => (cleanNum(n) > 0 ? 'text-red-400' : cleanNum(n) < 0 ? 'text-blue-400' : 'text-gray-400');
 
+/** 비중 모드 분모 라벨 — 화면 곳곳이 같은 이름을 쓰도록 한 곳에 모은다. */
+const RATIO_BASE_LABEL = {
+  equity: '종목 평가액 합계',
+  total: '평가액 + 예수금',
+  totalWithDiv: '평가액 + 예수금 + 누적분배금',
+  initial: '초기 투자금 고정',
+};
+
 const INPUT = 'bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 outline-none focus:border-sky-500 w-full';
 const LABEL = 'text-[10px] text-gray-500 font-bold';
 const BTN = 'px-2 py-1 rounded text-[11px] font-bold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
@@ -543,8 +551,22 @@ export default function BacktestPage({
                       onChange={(e) => patchActive({ ratioBase: e.target.value })}>
                       <option value="equity">종목 평가액 합계 (현금 제외 — 현금이 계속 쌓임)</option>
                       <option value="total">종목 평가액 + 예수금 (쌓인 현금도 재투자)</option>
+                      <option value="totalWithDiv">종목 평가액 + 예수금 + 누적분배금 (하락 시 현금 투입)</option>
                       <option value="initial">초기 투자금 고정 (목표금액 불변)</option>
                     </select>
+                    {active.ratioBase === 'totalWithDiv' && (
+                      <p className="text-[10px] text-gray-500 leading-relaxed">
+                        평상시에는 <b className="text-gray-400">종목 평가액</b> 기준으로 돌다가, 평가액이
+                        <b className="text-gray-400"> 초기 투자금</b>보다 작아지면 그 부족분만큼 보유 현금을
+                        넣어 초기 수준까지 되삽니다. 재원은 <b className="text-gray-400">예수금을 먼저</b> 쓰고
+                        모자라면 <b className="text-gray-400">누적 분배금</b>을 씁니다.
+                        <br />
+                        <span className="text-gray-600">
+                          ※ 분배금은 지급되는 순간 예수금에 들어오므로, 결과의 예수금 칸은 두 몫을 나눠 표시합니다
+                          (따로 더하면 이중 계상).
+                        </span>
+                      </p>
+                    )}
                     <p className="text-[10px] text-gray-600 leading-relaxed">
                       첨부 PDF와 가장 가까운 것은 <b className="text-gray-400">목표 금액</b> 모드입니다(2.25억 → 4월부터 1.5억).
                     </p>
@@ -604,7 +626,7 @@ export default function BacktestPage({
                     </p>
                     {active.targetMode === 'ratio' && active.ratioBase !== 'initial' && (
                       <p className="text-[10px] text-amber-400/90 leading-relaxed">
-                        ⚠️ 비중 모드에서 분모가 '{active.ratioBase === 'equity' ? '종목 평가액 합계' : '평가액 + 예수금'}'이면
+                        ⚠️ 비중 모드에서 분모가 '{RATIO_BASE_LABEL[active.ratioBase]}'이면
                         증액이 효과가 없습니다 — 목표가 이미 파생값이기 때문입니다. 분모를
                         <b> 초기 투자금 고정</b>으로 바꾸거나 목표 <b>금액</b> 모드를 쓰세요.
                       </p>
@@ -662,7 +684,7 @@ export default function BacktestPage({
                   <span className={LABEL}>전체 정책</span>
                   <select className={INPUT} value={active.policy} disabled={readOnly}
                     onChange={(e) => patchActive({ policy: e.target.value })}>
-                    <option value="perCycle">종목별 — 각자 자기 분배락 전 (첨부 PDF 방식)</option>
+                    <option value="perCycle">종목별 — 각자 자기 분배락 전</option>
                     <option value="allMid">일괄 — 전 종목을 월중 분배락 전에</option>
                     <option value="allEom">일괄 — 전 종목을 월말 분배락 전에</option>
                     <option value="fixedDay">일괄 — 매월 지정일</option>
@@ -1061,7 +1083,7 @@ export default function BacktestPage({
                 <p className="text-[11px] text-gray-500 mt-0.5">
                   기간 {result.summary.startDate} ~ {result.summary.endDate} · 초기 투자금 {won(active.initialCapital)}
                   {active.extraCash > 0 && ` (+ 예수금 ${won(active.extraCash)})`} ·
-                  {' '}{active.targetMode === 'amount' ? '목표금액' : `목표비중(${active.ratioBase === 'equity' ? '평가액 기준' : active.ratioBase === 'total' ? '평가액+현금' : '초기자본 고정'})`} ·
+                  {' '}{active.targetMode === 'amount' ? '목표금액' : `목표비중(${RATIO_BASE_LABEL[active.ratioBase]})`} ·
                   {' '}수량 {active.rounding === 'floor' ? '내림' : active.rounding === 'round' ? '반올림' : '소수 허용'}
                 </p>
               </div>
@@ -1312,7 +1334,13 @@ export default function BacktestPage({
                       <span className="text-gray-500">월 분배금 <b className="text-emerald-300">{won(m.divAccrued)}</b></span>
                       <span className="text-gray-500">누적 분배금 <b className="text-emerald-300">{won(m.cumDivAccrued)}</b></span>
                       <span className="text-gray-500">월 현금 증감 <b className={pnlCls(m.cashDelta)}>{wonSigned(m.cashDelta)}</b></span>
-                      <span className="text-gray-500">월말 예수금 <b className="text-gray-300">{won(m.cashEnd)}</b></span>
+                      <span className="text-gray-500">
+                        월말 예수금 <b className="text-gray-300">{won(m.cashEnd)}</b>
+                        {/* 분배금 몫이 남아 있을 때만 분해를 보여 준다(합 = 예수금, 이중 계상 아님) */}
+                        {m.cashDivEnd > 0.5 && (
+                          <span className="text-gray-600"> (매매 {won(m.cashTradeEnd)} · 분배금 {won(m.cashDivEnd)})</span>
+                        )}
+                      </span>
                       <span className="text-gray-500">월말 총자산 <b className="text-gray-200">{won(m.totalEnd)}</b></span>
                       {m.cumContribution > 0 && (
                         <span className="text-gray-500">누적 증액 <b className="text-sky-300">{won(m.cumContribution)}</b></span>
@@ -1357,7 +1385,14 @@ export default function BacktestPage({
                         </tr>
                       ))}
                       <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
-                        <td className="px-2 py-1 text-gray-300">예수금</td>
+                        <td className="px-2 py-1 text-gray-300">
+                          예수금
+                          {result.summary.finalCashDiv > 0.5 && (
+                            <span className="ml-1 font-normal text-gray-600 text-[10px]">
+                              매매 {won(result.summary.finalCashTrade)} · 분배금 {won(result.summary.finalCashDiv)}
+                            </span>
+                          )}
+                        </td>
                         <td colSpan={2} className="px-2 py-1 text-right text-gray-600">-</td>
                         <td className="px-2 py-1 text-right text-emerald-300">{won(result.summary.finalCash)}</td>
                         <td className="px-2 py-1 text-right text-gray-600">-</td>
