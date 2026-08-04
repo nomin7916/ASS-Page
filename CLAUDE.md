@@ -48,6 +48,7 @@ src/
     ├── DriveBackupModal.tsx      # Drive 백업 관리 모달
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
+    ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)
     ├── CustomDatePicker.tsx      # 날짜 선택기
     ├── LoadingOverlay.tsx        # 앱 시작 블로킹 오버레이 (z-1100)
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
@@ -777,7 +778,8 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 `switchToPortfolio`, `addPortfolio`, `deletePortfolio`, `addSimpleAccount`,
 `updateSimpleAccountField`, `updatePortfolioStartDate`, `updatePortfolioName`,
 `updatePortfolioColor`, `resetAllPortfolioColors`, `updateSettingsForType`,
-`updatePortfolioMemo`, `movePortfolio`, `handleUpdate`, `handleDeleteStock`,
+`updatePortfolioMemo`, `movePortfolio`, `handleUpdate`, `handleDeleteStock`(async+confirm),
+`transferStockToPortfolio` (종목 계좌 간 이관 — 전용 섹션 참조),
 `handleAddStock`, `handleAddFund`,
 `handleAddSavings`, `updateSavingsField`, `addSavingsDeposit`, `removeSavingsDeposit` (예적금, dc-irp 전용),
 `updateDividendHistory`, `updatePortfolioDividendHistory`, `updatePortfolioActualDividend`,
@@ -1358,9 +1360,9 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   붙여넣은 `−5`에서 부호만 사라져 **매도가 매수로 뒤집힌다**. 연동(`maxAddLink`) 토글 시에는 초안을
   폐기해야 연동으로 채운 값이 낡은 초안에 가려지지 않는다.
 
-### 메모 달력 = 4종 기록 허브 (칩 버튼) (⚠️ 회귀 주의 — 파생 2종을 calendarMemos에 복사 금지)
+### 메모 달력 = 5종 기록 허브 (칩 버튼) (⚠️ 회귀 주의 — 파생 3종을 calendarMemos에 복사 금지)
 
-날짜 칸에 **버튼식 칩** 3종(+사용자 메모 줄)을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).
+날짜 칸에 **버튼식 칩** 4종(+사용자 메모 줄)을 띄워 "누르면 내역을 보거나 기록할 수 있게" 한다(사용자 요구).
 
 칩은 **세로로 1줄씩**(위→아래) 쌓이고 순서·라벨이 고정이다(2026-07-29 사용자 확정) — 종류가 항상 같은
 줄 위치·같은 라벨로 오므로 칸을 훑을 때 한눈에 구분된다. 패드 헤더 라벨도 같은 이름을 쓴다.
@@ -1370,17 +1372,21 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 | 1 | `LIST` emerald | `rebalTarget` | `calendarMemos[date]` | **스냅샷**(위 섹션). 그 시점 시세·수량을 사후 재현할 수 없어 유일하게 복사 저장 |
 | 2 | `NOTE` amber | `note` | `portfolios[].investmentNotes` | **라이브 파생** — 보기·편집·새 작성 |
 | 3 | `STOCK` violet | `qty` | `portfolios[].holdingSnapshots` 인접 diff | **라이브 파생** — 읽기 전용 |
+| 4 | `MOVE` cyan | `transfer` | `portfolios[].depositHistory(2)`의 `transfer` 태그 | **라이브 파생** — 읽기 전용(아래 '종목 계좌 간 이관') |
 | — | (라벨 없음) sky | (kind 없음) | `calendarMemos[date]` | 기존 사용자 메모 — 칩이 아니라 아래 텍스트 줄 목록 |
 
 - **⚠️ 패드 헤더 라벨은 칩 라벨과 동일**(`CalendarModal` `pad.kind` 맵): `rebalTarget:'LIST'` ·
-  `note:'NOTE'` · `qty:'STOCK'` · `pick:'PICK'` · 사용자 메모 `'MEMO'`. rebalTarget이 예전
-  `'TARGET'`을 쓰고 `pick`이 `'LIST'`를 점유하던 배치로 되돌리지 말 것 — 어느 칩에서 연 패드인지
-  대응이 끊긴다. 이모지(📊📝🔄)는 **패드 본문·pick 목록에만** 남기고 칸의 칩에서는 뺐다(텍스트 라벨과
+  `note:'NOTE'` · `qty:'STOCK'` · `transfer:'MOVE'` · `pick:'PICK'` · 사용자 메모 `'MEMO'`. rebalTarget이
+  예전 `'TARGET'`을 쓰고 `pick`이 `'LIST'`를 점유하던 배치로 되돌리지 말 것 — 어느 칩에서 연 패드인지
+  대응이 끊긴다. 이모지(📊📝🔄🔁)는 **패드 본문·pick 목록에만** 남기고 칸의 칩에서는 뺐다(텍스트 라벨과
   중복이고 폭을 ~14px 먹는다).
+- **칩 4줄이 되면 칸이 빡빡하다**(지표 3줄 + 칩 4줄 + 메모 74px ≈ CELL_H 180). 칸은 `minHeight`라
+  넘치면 늘어나고, 4종이 한 날에 모두 뜨는 것은 드문 경우다. 5번째 칩을 더 늘린다면 `CELL_H`를 함께 올릴 것.
 
-- **⚠️ 파생 2종(note·qty)을 `calendarMemos`에 복사하지 말 것** — 복사하면 리밸런싱 패널 '투자 기록'
-  메모장·자산검증 스냅샷과 갈라져 두 화면이 다른 값을 보인다. 반드시 원본에서 매 렌더 재조회한다
-  (`notesByDate`/`qtyChangesByDate` `useMemo`, **`open`일 때만 계산** — `portfolios`는 시세 갱신마다 새 배열).
+- **⚠️ 파생 3종(note·qty·transfer)을 `calendarMemos`에 복사하지 말 것** — 복사하면 리밸런싱 패널 '투자 기록'
+  메모장·자산검증 스냅샷·입출금 원장과 갈라져 두 화면이 다른 값을 보인다. 반드시 원본에서 매 렌더 재조회한다
+  (`notesByDate`/`qtyChangesByDate`/`transfersByDate` `useMemo`, **`open`일 때만 계산** — `portfolios`는
+  시세 갱신마다 새 배열).
 - **⚠️ 삭제 계좌(`deletedAt`)를 파생에서 제외하지 말 것**: 달력은 라이브 뷰가 아니라 **과거 기록 뷰**이고
   같은 칸의 📊 칩은 `calendarMemos`라 삭제와 무관하게 남는다. 제외하면 한 셀 안에서 규칙이 모순되고
   계좌 하나 삭제로 과거 몇 달치 칩이 소급 증발한다. → **포함하되 칩 색만 회색으로 강등**.
@@ -1428,6 +1434,79 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 - **알려진 한계(수량 변경)**: KR 계좌 스냅샷은 21:00 이후 **내일 날짜**로 찍혀(`getBackfillBoundaryKR`)
   밤 매매가 하루 뒤 칸에 뜬다(자산검증 규약이라 변경 금지). 같은 날 여러 번 고치면 스냅샷이 덮어써져
   **그날의 순변화만** 보인다. 예적금은 수량이 없어 `investAmount`(적립 원금) 변화로 대신 본다.
+
+### 종목 계좌 간 이관 (transfer) — 원장 3행 구성 (⚠️ 회귀 주의 — 종목만 옮기지 말 것)
+
+포트폴리오 표 종목 행의 **이관 아이콘**(휴지통 왼쪽, `PortfolioTable` 인라인 `TransferIcon`)으로
+종목 + 그 종목에 귀속된 계좌별 기록을 다른 계좌로 옮긴다. 진입점은 `StockTransferModal`
+(**미리보기 후 적용** — undo 없음, z **1070**: 메모 달력 1050·패드 1060 위 / LoadingOverlay 1100 아래).
+
+- **⚠️ 이 기능의 위험은 UI가 아니라 회계다.** 종목만 옮기면 이관일에 원계좌는 평가액 전액이 **가짜 손실**,
+  대상계좌는 **가짜 이익**으로 찍히고, 수익률 라인이 누적 TWR(곱셈 체인)이라 그 하루가 **이후 전 구간에
+  영구 고정**된다. 그래서 이관을 "원계좌 출금 + 대상계좌 입금"이라는 **실제 자금 이동**으로 원장에 기록한다.
+- **원장 3행 (⚠️ `utils.buildTransferLedgerRows` — 조합을 바꾸지 말 것)**. M=시가, C=매입원가, G=M−C:
+
+  | 계좌 | 원장 | amount | principalDeducted | principal 필드 |
+  |---|---|---|---|---|
+  | 원계좌 | 출금 | **M** | **C** | `−= C` |
+  | 대상계좌 | 입금 | **M** | — | `+= C` |
+  | 대상계좌 | 출금 | **0** | **G** | 변동 없음 |
+
+  출금 행은 `principalDeducted`로 "흐름 M · 원금 C" 분리를 네이티브 지원하지만 **입금 행에는 대응 필드가
+  없어** amount 하나가 둘을 동시에 결정한다 → 입금은 M으로 넣고 차액 G를 **금액 0 · principalDeducted=G**
+  행으로 상쇄한다. 금액이 0이라 흐름에 전혀 기여하지 않고(`externalFlowInRange`·통합 ①의 `v>0/v<0` 어느
+  분기에도 안 걸린다) `cumDepositsUpTo`만 G를 빼 원금이 M−G=C가 된다. G=0이면 행을 만들지 않는다.
+  ⚠️ **보정 행을 `amount: -G`(음수 출금)로 되돌리지 말 것** — 이익 포지션에서는 유입 C+G=M으로 맞지만
+  **손실 포지션(G<0)에서는 양수 출금**이 되어 유입 C·유출 |G|로 갈라진다. 순흐름은 M이라 일간 '손익'은
+  맞지만 일간 '수익률' 분모가 `전일V+M`이 아니라 `전일V+C`가 되어 이익/손실 규약이 갈리고 TWR에 고정된다.
+  ⚠️ `noPrincipal`을 쓰지 말 것 — 입금의 noPrincipal은 흐름 IN에서도 빠지고(배당·이자 규약), 출금의
+  noPrincipal은 원금에서만 빠져 흐름엔 전액 남는다. 둘 다 이관 의미와 다르다.
+- **이 구성이 지키는 것**: 원금 산출 4경로(`finalChartData` epochBase 역산 / `computeEffectivePrincipal` /
+  `overseasPrincipalAt` / `useIntegratedData effectivePrincipal`)의 **과거 값 전부 불변**, 통합
+  effectivePrincipal의 원계좌 +G와 대상계좌 −G가 **정확히 상쇄**, 이관일 일간 손익 = 개별 시장분만 / 통합 0.
+- **⚠️ 기록일 = `getBackfillBoundaryForAccount(accountType)`** (자동 스냅샷 효과가 쓰는 그 날짜).
+  `getTodayKST`·`effectiveDateKey` state 금지 — 원장/스냅샷/평가액이 같은 날 함께 움직여야 한다.
+  21:00 이후 KR 이관을 오늘로 찍으면 그날 `bookDelta=0` vs 흐름 −M → 오탐 보류 → **다음 날 이월이 한 번 더
+  차감돼 부호가 뒤집힌다**(CLAUDE.md '고친 결함 (A)' 재현).
+- **⚠️ 이관 금액 M = 수량 × '직전 기록일 종가'**(`App.tsx buildTransferPlan` → `calcPortfolioEvalDetail`).
+  화면의 실시간 평가금액이 아니다 — 장중 이관이면 그 종목은 당일 V에서 통째로 빠지므로 마지막 기여분이
+  직전 기록일 종가다. 실시간가를 쓰면 그날 장중 등락분이 양쪽에 반대 부호의 가짜 손익으로 남는다.
+  ⚠️ **해외계좌는 `calcPortfolioEvalDetail`이 내부에서 그 날짜 환율로 원화 환산**하므로 `r.total / r.fxRate`로
+  USD를 되돌려야 한다(원장·principal·`bookCostOf`가 전부 USD — 안 하면 약 1,390배).
+- **⚠️ 원가 C는 `bookCostOf`** — `buildBookCostSeries`가 관측하는 장부액과 **같은 정의**라야
+  `shouldHoldDailyMetrics`의 흡수 판정(bookDelta vs 흐름)이 맞물린다. 해외·금은 `costBasisOnly: true` 필수.
+- **데이터 이동/복제/유지**: 코드별 **분배금 맵 8종 + `taxBaseHistory`는 이동**(금액성 — 복제하면 통합
+  분배금 표에서 이중 계상). **`manualPriceOverrides[code]`는 복제**(원계좌의 과거 스냅샷에 그 종목이 남아
+  있어 과거 평가액 재계산에 계속 필요 — ⚠️ 원계좌에서 지우지 말 것). `history`·`holdingSnapshots`는
+  **무수정**(자동 스냅샷 효과가 양쪽에 새 스냅샷을 만들어 과거가 자동 보존된다).
+- **⚠️ 쓰기는 단일 `setPortfolios`** — `portfolios[]`가 단일 소스이고 `patchActive`/`setPortfolio`는 활성
+  계좌 전용이라 대상계좌에 닿지 못한다. **id 생성은 updater 밖**(StrictMode 이중 호출 방어), updater 안에서
+  `prev`의 항목 존재를 재확인해 **멱등**. 원본 항목은 반드시 `portfolios[]`의 raw item — `PortfolioTable`에
+  넘어가는 `totals.calcPortfolio` 행은 investAmount/evalAmount에 **환율이 이미 곱해져** 있다.
+- **⚠️ 양쪽 계좌의 `dividendHistoryUpdatedAt` 갱신 필수** — `dividendHistory`·`dividendExDate`·
+  `dividendTaxAmounts`·`actualDividendQty`는 `portfolioStructureKey` 지문에 직접 없어서, 이걸 빠뜨리면
+  Drive STATE 저장이 통째로 스킵된다(`deletePortfolioDividendData`와 동일 이유). 그 외 **영속화 신규 지점 0곳**
+  (`depositHistory(2)`·`principal`·항목 화이트리스트·`taxBaseKey`·`manualPriceOverrides`는 이미 지문에 포함).
+- **대상 계좌 게이팅(fail-closed)**: 현금성(simple/matong)·금현물·삭제 계좌 제외, **통화 불일치**
+  (해외↔국내)·**시장 불일치**(crypto↔그 외) 차단, savings→dc-irp만·fund→dc-irp/pension만,
+  **동일 코드 보유 계좌 차단**(⚠️ `actualDividend[code][ym]`·`taxBaseHistory[code]` 병합이 한쪽을 조용히
+  지운다 — 조용한 오적용보다 명시적 미적용). 부적격 계좌는 목록에서 지우지 않고 **사유를 달아 노출**한다.
+- **메모 달력 표시**: 원장의 `transfer` 태그에서 **라이브 파생**(`utils.collectTransferRows` →
+  `CalendarModal transfersByDate` → **MOVE 칩**). 원계좌(→ 나감)·대상계좌(← 들어옴) **양쪽 칸**에 뜨고
+  패드는 읽기 전용(종목명·수량·방향·이관금액·매입원가·평가차익). ⚠️ `calendarMemos`에 복사 금지.
+  ⚠️ `role:'gain'`(원가 보정 행)은 `collectTransferRows`가 제외한다 — 같은 이관이 한 칸에 두 번 뜬다.
+  별도 브라우저 창은 `calWinAccounts`가 **transfer 태그 행만 투영**(원장 전량 복제 금지)하고
+  `calWinAccountsKey` 지문에 `collectTransferRows`를 포함해야 갱신된다.
+- **종목 삭제 확인창**: 이관 버튼 바로 옆이라 오클릭이 쉬워 `handleDeleteStock`을 async + `confirm`으로
+  바꿨다(주식·펀드·예적금이 같은 `onDelete`를 쓰므로 한 곳이면 셋 다 보호).
+- **알려진 한계(의도)**: ① 통합 '전일대비 %'가 이관일 하루만 희석된다(`(V+M)/(V_prev+M)−1` — 일간 손익
+  금액·총자산은 정확, Modified Dietz 가중 규약의 결과) ② 수익률 +100% 초과 포지션은 흡수 판정(원가 vs 시가,
+  50% 문턱)에서 그날이 `'-'`로 보류될 수 있다(기존 '알려진 한계 ③'과 동일 원인) ③ 이관 원장 행을
+  `DepositPanel`에서 편집하면 프로라타 재계산이 `principalDeducted`를 덮어써 정합이 깨진다(`[이관]` 메모
+  태그로 식별만 제공) ④ 부분 이관·해외↔국내 이관·펀드/예적금 행의 이관 버튼은 **미지원**(핸들러는 지원하나
+  진입점을 주식 행에만 둠) ⑤ 원계좌 `principal`이 매입원가보다 작으면 0으로 클램프된다(데이터 이상 상황).
+- 검증: `npm run verify:transfer` (참조 구현 미러 #1~#16 + 소스 텍스트 가드 #17~#29).
+  `utils.ts`의 `buildTransferLedgerRows`·`collectTransferRows` 본문과 **항상 1:1 동기화**할 것.
 
 ### 메모 달력 별도 브라우저 창 (`/?calendarWindow=1`) — postMessage 브릿지 (⚠️ 회귀 주의)
 

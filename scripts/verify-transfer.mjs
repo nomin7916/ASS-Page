@@ -1,0 +1,381 @@
+#!/usr/bin/env node
+// 종목 계좌 간 이관(transfer) 검증 — src/utils.ts 의 참조 구현과 1:1 동기화할 것.
+//
+// 이 기능의 위험은 UI가 아니라 회계다. 종목만 옮기고 끝내면 이관일에 원계좌는 평가액 전액이
+// 가짜 손실, 대상계좌는 가짜 이익으로 찍히고, 수익률 라인이 누적 TWR(곱셈 체인)이라 그 오류가
+// 이후 전 구간에 **영구 고정**된다. 그래서 이관을 '출금 + 입금' 원장 쌍으로 기록하는데,
+// 그 3행 구성(원계좌 출금 1행 / 대상계좌 입금 + 음수출금 2행)이 정확히 다음을 만족해야 한다:
+//
+//   파트① 참조 구현 미러 (#1~#16)
+//     #1~#4   흐름  — 원계좌 유출 = 대상계좌 유입 = M(시가). 손실 포지션·차익 0에서도 성립
+//     #5~#6   원금  — 양쪽 모두 C(매입원가)만 이동 (cumDepositsUpTo = anchor 경로)
+//     #7~#8   개별 계좌 과거 원금 불변 (finalChartData epochBase 역산)
+//     #9      통합 과거 원금 불변 (effectivePrincipal back-out에서 +G와 −G가 상쇄)
+//     #10~#12 일간 지표 — 통합 손익 0 / 개별은 시장분만
+//     #13~#16 collectTransferRows 계약 · noPrincipal 미사용
+//   파트② 소스 텍스트 가드 (#17~#27)
+//     미러는 함수 본문 회귀만 잡는다. 배선(단일 setPortfolios·지문 갱신·기록일 소스·읽기 전용
+//     패드)은 미러로 표현할 수 없어 소스를 직접 읽어 계약을 단언한다
+//     (verify-twr.mjs #30d · verify-flow.mjs #27~#36 선례).
+//     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
+
+let pass = 0, fail = 0;
+const ok = (name, cond) => {
+  if (cond) { pass++; console.log(`  ✓ ${name}`); }
+  else { fail++; console.log(`  ✗ ${name}`); }
+};
+const near = (name, got, want, tol = 1e-6) => {
+  const good = Math.abs(got - want) <= tol;
+  if (good) { pass++; console.log(`  ✓ ${name}`); }
+  else { fail++; console.log(`  ✗ ${name}\n      got  ${got}\n      want ${want}`); }
+};
+
+// ───────── 참조 구현 (src/utils.ts 미러) ─────────
+const cleanNum = (v) => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  if (typeof v === 'string') { const n = parseFloat(v.replace(/,/g, '')); return Number.isFinite(n) ? n : 0; }
+  return 0;
+};
+let idSeq = 0;
+const generateId = () => `gen${++idSeq}`;
+const formatNumber = (n) => new Intl.NumberFormat('ko-KR').format(cleanNum(n));
+
+// utils.ts buildTransferLedgerRows 미러
+function buildTransferLedgerRows(args) {
+  const a = args || {};
+  const M = cleanNum(a.market);
+  const C = cleanNum(a.cost);
+  const G = M - C;
+  const qty = cleanNum(a.quantity);
+  const srcName = String(a.sourceName || '').trim() || '계좌';
+  const tgtName = String(a.targetName || '').trim() || '계좌';
+  const meta = {
+    id: a.transferId || '', code: String(a.code || ''), name: String(a.name || ''),
+    quantity: qty, market: M, cost: C, itemType: a.itemType || 'stock',
+    fromId: a.sourceId || '', fromName: srcName, toId: a.targetId || '', toName: tgtName,
+  };
+  const unit = a.itemType === 'fund' ? '좌' : a.itemType === 'savings' ? '' : '주';
+  const label = `${meta.name || meta.code || '종목'}${qty > 0 && unit ? ` ${formatNumber(qty)}${unit}` : ''}`;
+  const ids = Array.isArray(a.rowIds) ? a.rowIds : [];
+  return {
+    srcWithdrawal: {
+      id: ids[0] || generateId(), date: a.dateSrc, amount: M, principalDeducted: C,
+      fxRate: 1, noPrincipal: false, memo: `[이관→${tgtName}] ${label}`,
+      transfer: { ...meta, role: 'out' },
+    },
+    tgtDeposit: {
+      id: ids[1] || generateId(), date: a.dateTgt, amount: M,
+      fxRate: 1, noPrincipal: false, memo: `[이관←${srcName}] ${label}`,
+      transfer: { ...meta, role: 'in' },
+    },
+    tgtGainRow: Math.round(G) === 0 ? null : {
+      id: ids[2] || generateId(), date: a.dateTgt, amount: 0, principalDeducted: G,
+      fxRate: 1, noPrincipal: false,
+      memo: `[이관←${srcName}] ${label} 평가차익 ${G > 0 ? '+' : ''}${formatNumber(Math.round(G))} — 원금 보정(금액 이동 없음)`,
+      transfer: { ...meta, role: 'gain' },
+    },
+  };
+}
+
+// utils.ts collectTransferRows 미러
+function collectTransferRows(p) {
+  const out = [];
+  const scan = (list) => (Array.isArray(list) ? list : []).forEach((r) => {
+    const t = r && r.transfer;
+    if (!t || typeof t !== 'object' || t.role === 'gain') return;
+    if (!r.date || typeof r.date !== 'string') return;
+    out.push({ ...t, date: r.date, rowId: r.id, amount: cleanNum(r.amount) });
+  });
+  scan(p?.depositHistory);
+  scan(p?.depositHistory2);
+  return out;
+}
+
+// utils.ts externalFlowInRange 미러 (개별 계좌 흐름)
+function externalFlowInRange(deps, wds, fromExclusive, toInclusive) {
+  let inFlow = 0, outFlow = 0;
+  const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
+  for (const d of deps || []) {
+    if (!d || d.noPrincipal || !inRange(d.date || '')) continue;
+    const v = cleanNum(d.amount);
+    if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
+  }
+  for (const w of wds || []) {
+    if (!w || !inRange(w.date || '')) continue;
+    const v = cleanNum(w.amount);
+    if (v > 0) outFlow += v; else if (v < 0) inFlow += -v;
+  }
+  return { in: inFlow, out: outFlow, net: inFlow - outFlow };
+}
+
+// utils.ts cumDepositsUpTo 미러 (원금 anchor 경로)
+function cumDepositsUpTo(date, deps, wds) {
+  let cum = 0;
+  for (const d of deps || []) {
+    if ((d.date || '') > date) continue;
+    if (!d.noPrincipal) cum += cleanNum(d.amount);
+  }
+  for (const w of wds || []) {
+    if ((w.date || '') > date) continue;
+    if (!w.noPrincipal) cum -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount));
+  }
+  return cum;
+}
+
+// utils.ts dailyFlowAdjustedRate 미러
+const dailyFlowAdjustedRate = (prevEval, curEval, flowIn, flowOut) => {
+  const base = (prevEval || 0) + (flowIn || 0);
+  if (!(base > 0)) return 0;
+  const r = (((curEval || 0) + (flowOut || 0)) / base - 1) * 100;
+  return Number.isFinite(r) ? r : 0;
+};
+
+// App.tsx finalChartData 의 epochBase 역산 미러 (개별 계좌 과거 원금)
+//   principal 필드는 '현재 원금'이고, post-start 원장을 되빼서 시작 시점 원금을 복원한다.
+function epochBase(principalField, deps, wds, startDate) {
+  let post = 0;
+  for (const d of deps || []) { if (d.date <= startDate) continue; if (!d.noPrincipal) post += cleanNum(d.amount); }
+  for (const w of wds || []) { if (w.date <= startDate) continue; if (!w.noPrincipal) post -= (w.principalDeducted != null ? cleanNum(w.principalDeducted) : cleanNum(w.amount)); }
+  return Math.max(0, cleanNum(principalField) - post);
+}
+
+// useIntegratedData effectivePrincipal 의 back-out 미러 (통합 과거 원금)
+//   ⚠️ 이 소비자는 raw amount만 본다(noPrincipal·principalDeducted 미반영) — 기존 동작 그대로 미러링.
+function intPastPrincipal(currentPrincipal, deps, wds, date) {
+  const futureDeps = (deps || []).filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0), 0);
+  const futureWds = (wds || []).filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0), 0);
+  return Math.max(0, currentPrincipal - futureDeps + futureWds);
+}
+
+// useIntegratedData ① 원장 집계 미러 (통합 흐름 — 부호 라우팅이 externalFlowInRange와 동일해야 한다)
+function intLedgerFlow(deps, wds, onDate) {
+  let inF = 0, outF = 0;
+  (deps || []).forEach(d => {
+    if (!d || !d.date || d.noPrincipal || d.date !== onDate) return;
+    const v = cleanNum(d.amount);
+    if (v > 0) inF += v; else if (v < 0) outF += -v;
+  });
+  (wds || []).forEach(w => {
+    if (!w || !w.date || w.date !== onDate) return;
+    const v = cleanNum(w.amount);
+    if (v > 0) outF += v; else if (v < 0) inF += -v;
+  });
+  return { in: inF, out: outF };
+}
+
+// ───────── 시나리오 ─────────
+// 스크린샷 실측: KODEX 미국배당커버드콜액티브 704주 · 매입원가 8,276,752 · 평가 9,127,360
+const C = 8276752, M = 9127360, G = M - C;   // G = 850,608
+const D = '2026-08-05';
+const mk = (opts = {}) => buildTransferLedgerRows({
+  transferId: 'tr1', code: '441640', name: 'KODEX 미국배당커버드콜액티브', quantity: 704,
+  itemType: 'stock', market: opts.market ?? M, cost: opts.cost ?? C,
+  dateSrc: D, dateTgt: D, sourceId: 'A', sourceName: '일반', targetId: 'B', targetName: 'ISA',
+  rowIds: ['r-out', 'r-in', 'r-gain'],
+});
+
+console.log('\n── 파트① 참조 구현 미러 ──');
+{
+  const r = mk();
+  // 이관 후 각 계좌의 원장 (이관 전에는 둘 다 비어 있다고 두어 delta를 그대로 읽는다)
+  const aWds = [r.srcWithdrawal], aDeps = [];
+  const bDeps = [r.tgtDeposit], bWds = r.tgtGainRow ? [r.tgtGainRow] : [];
+
+  const fa = externalFlowInRange(aDeps, aWds, '2026-08-04', D);
+  near('#1 원계좌 유출 = 시가 M', fa.out, M);
+  near('#1b 원계좌 유입 = 0', fa.in, 0);
+
+  const fb = externalFlowInRange(bDeps, bWds, '2026-08-04', D);
+  near('#2 대상계좌 유입 = 시가 M', fb.in, M);
+  near('#2b 대상계좌 유출 = 0 (원가 보정 행은 금액 0이라 흐름 기여 없음)', fb.out, 0);
+
+  // 통합 ① 집계도 같은 부호 라우팅이어야 한다(개별과 통합이 갈리면 두 화면이 정면 모순)
+  const ia = intLedgerFlow(aDeps, aWds, D), ib = intLedgerFlow(bDeps, bWds, D);
+  ok('#2c 통합 집계도 동일 (유출 M / 유입 M)', Math.abs(ia.out - M) < 1e-6 && Math.abs(ib.in - M) < 1e-6);
+
+  near('#5 원계좌 원금 delta = −매입원가 C', cumDepositsUpTo(D, aDeps, aWds), -C);
+  near('#6 대상계좌 원금 delta = +매입원가 C', cumDepositsUpTo(D, bDeps, bWds), C);
+
+  ok('#15 세 행 모두 noPrincipal 미사용', [r.srcWithdrawal, r.tgtDeposit, r.tgtGainRow].every(x => x && x.noPrincipal === false));
+  ok('#16 대상계좌 입금 행에는 principalDeducted가 없다', !('principalDeducted' in r.tgtDeposit));
+  ok('#16b 원가 보정 행은 금액 0 · principalDeducted = G', r.tgtGainRow.amount === 0 && Math.abs(r.tgtGainRow.principalDeducted - G) < 1e-6);
+}
+
+// #3 손실 포지션 — 부호가 뒤집혀도 유입/유출 규약이 이익 포지션과 **동일**해야 한다.
+//    (amount: -G 방식이면 여기서 유입 C · 유출 |G|로 갈라져 일간 수익률 분모가 prev+C가 된다)
+{
+  const lossM = 7000000;
+  const r = mk({ market: lossM });
+  const fb = externalFlowInRange([r.tgtDeposit], r.tgtGainRow ? [r.tgtGainRow] : [], '', D);
+  near('#3 손실 포지션에서도 대상계좌 유입 = M', fb.in, lossM);
+  near('#3b 손실 포지션에서도 대상계좌 유출 = 0 (이익 포지션과 동일 규약)', fb.out, 0);
+  near('#3c 손실 포지션 원금 delta = +C (평가손실은 원금 무관)', cumDepositsUpTo(D, [r.tgtDeposit], [r.tgtGainRow]), C);
+  // 일간 수익률 분모가 prev + M 이어야 한다(prev + C가 되면 이익/손실 규약이 갈린다)
+  const prev = 40000000, m = 400000;
+  const cur = prev + lossM + m;
+  near('#3d 손실 포지션 일간 수익률 분모 = 전일V + M', dailyFlowAdjustedRate(prev, cur, fb.in, fb.out), (m / (prev + lossM)) * 100, 1e-9);
+}
+
+// #4 평가차익 0 — 노이즈 행을 만들지 않는다
+{
+  const r = mk({ market: C });
+  ok('#4 평가차익 0이면 보정 행을 만들지 않는다', r.tgtGainRow === null);
+  near('#4b 그래도 대상계좌 유입 = M', externalFlowInRange([r.tgtDeposit], [], '', D).in, C);
+}
+
+// #7~#9 과거 원금 불변
+{
+  const r = mk();
+  const START = '2026-01-01';
+  const PA = 50000000, PB = 30000000;   // 이관 전 각 계좌의 principal 필드
+  // 이관 후: A는 −C, B는 +C
+  const aP = PA - C, bP = PB + C;
+  const aDeps = [], aWds = [r.srcWithdrawal];
+  const bDeps = [r.tgtDeposit], bWds = r.tgtGainRow ? [r.tgtGainRow] : [];
+
+  near('#7 개별 원계좌 과거 원금 불변 (epochBase 역산)', epochBase(aP, aDeps, aWds, START), PA);
+  near('#8 개별 대상계좌 과거 원금 불변 (epochBase 역산)', epochBase(bP, bDeps, bWds, START), PB);
+
+  const past = '2026-07-01';
+  const sumBefore = PA + PB;
+  const sumAfter = intPastPrincipal(aP, aDeps, aWds, past) + intPastPrincipal(bP, bDeps, bWds, past);
+  near('#9 통합 과거 원금 불변 (+G와 −G가 상쇄)', sumAfter, sumBefore);
+  // 상쇄가 우연이 아님을 명시: 계좌별로는 어긋난다
+  near('#9b 원계좌만 보면 +G 만큼 어긋난다(상쇄 전제)', intPastPrincipal(aP, aDeps, aWds, past) - PA, G);
+}
+
+// #10~#12 일간 지표
+{
+  const r = mk();
+  const prevA = 60000000, prevB = 40000000;
+  const mktA = 300000, mktB = 200000;              // 그날 각 계좌의 시장 손익
+  const curA = prevA - M + mktA;                    // 이관으로 M 빠짐
+  const curB = prevB + M + mktB;                    // 이관으로 M 들어옴
+
+  const fa = externalFlowInRange([], [r.srcWithdrawal], '', D);
+  const fb = externalFlowInRange([r.tgtDeposit], r.tgtGainRow ? [r.tgtGainRow] : [], '', D);
+
+  near('#11 개별 원계좌 일간 손익 = 시장분만', (curA - prevA) - (fa.in - fa.out), mktA);
+  near('#12 개별 대상계좌 일간 손익 = 시장분만', (curB - prevB) - (fb.in - fb.out), mktB);
+
+  // 통합: ΔV는 시장분 합계뿐이고 IN=OUT=M 이라 흐름이 정확히 상쇄된다
+  const prevT = prevA + prevB, curT = curA + curB;
+  const inT = fa.in + fb.in, outT = fa.out + fb.out;
+  near('#10 통합 일간 손익 = 시장분 합계 (이관 기여 0)', (curT - prevT) - (inT - outT), mktA + mktB);
+  near('#10b 통합 유입 = 유출 = M', inT - outT, 0);
+
+  // 원장 없이 종목만 옮겼다면 얼마나 틀리는가 — 이 기능이 막는 결함의 크기
+  const naive = dailyFlowAdjustedRate(prevA, curA, 0, 0);
+  ok('#10c (대조군) 원장이 없으면 원계좌 일간 수익률이 −10% 이하로 붕괴', naive < -10);
+}
+
+// #13~#14 collectTransferRows
+{
+  const r = mk();
+  const p = {
+    name: 'ISA',
+    depositHistory: [r.tgtDeposit, { id: 'x', date: '2026-07-01', amount: 100 }],
+    depositHistory2: [r.tgtGainRow, { id: 'y', date: '2026-07-02', amount: 50 }, { id: 'z', transfer: { role: 'in' } }],
+  };
+  const rows = collectTransferRows(p);
+  ok('#13 평가차익 행(role gain)은 제외된다', rows.every(x => x.role !== 'gain'));
+  ok('#13b 이관 행만 남는다 (일반 원장 행 제외)', rows.length === 1 && rows[0].role === 'in');
+  ok('#14 날짜 없는 손상 행은 무시된다', rows.every(x => typeof x.date === 'string' && x.date));
+
+  const a = collectTransferRows({ depositHistory2: [r.srcWithdrawal] });
+  ok('#14b 출금 원장(depositHistory2)도 스캔한다', a.length === 1 && a[0].role === 'out');
+  ok('#14c 수량·상대 계좌명이 실려 온다', a[0].quantity === 704 && a[0].toName === 'ISA');
+  ok('#14d 손상 입력에 throw하지 않는다', collectTransferRows(null).length === 0 && collectTransferRows({ depositHistory: 'x' }).length === 0);
+}
+
+// ───────── 파트② 소스 텍스트 가드 ─────────
+console.log('\n── 파트② 소스 텍스트 가드 ──');
+{
+  const ups = read('src/hooks/usePortfolioState.ts');
+  const app = read('src/App.tsx');
+  const cal = read('src/components/CalendarModal.tsx');
+  const utils = read('src/utils.ts');
+
+  const tfn = ups.slice(ups.indexOf('const transferStockToPortfolio'), ups.indexOf('const handleAddStock'));
+  ok('#17 이관은 setPortfolios를 단 한 번만 호출한다 (두 계좌 원자적 갱신)',
+    tfn.length > 200 && (tfn.match(/setPortfolios\(/g) || []).length === 1);
+  ok('#17b patchActive/setPortfolio(활성 전용)를 쓰지 않는다',
+    !/\bpatchActive\(/.test(tfn) && !/\bsetPortfolio\(/.test(tfn));
+  ok('#18 양쪽 계좌의 dividendHistoryUpdatedAt을 갱신한다 (STATE 저장 트리거)',
+    (tfn.match(/dividendHistoryUpdatedAt:\s*stamp/g) || []).length === 2);
+  ok('#19 manualPriceOverrides는 원계좌 제거 목록(CODE_MAPS)에 없다 — 과거 스냅샷 재계산에 필요',
+    /const CODE_MAPS = \[[^\]]*\]/s.test(tfn) && !/CODE_MAPS = \[[^\]]*manualPriceOverrides/s.test(tfn));
+  ok('#19b 대상계좌에는 manualPriceOverrides를 복제한다',
+    /next\.manualPriceOverrides = \{ \.\.\.\(p\.manualPriceOverrides \|\| \{\}\), \[code\]: carried\.manualPriceOverrides \}/.test(tfn));
+  ok('#20 id 생성은 setPortfolios updater 밖에서 (StrictMode 이중 호출 방어)',
+    tfn.indexOf('const movedItemId = generateId()') > 0
+    && tfn.indexOf('const movedItemId = generateId()') < tfn.indexOf('setPortfolios('));
+  ok('#21 updater 안에서 prev의 항목을 재확인해 멱등이다', /if \(!it\) return prev;/.test(tfn));
+  ok('#22 기록일은 getBackfillBoundaryForAccount (effectiveDateKey state·getTodayKST 아님)',
+    /getBackfillBoundaryForAccount\(src\.accountType/.test(tfn)
+    && /getBackfillBoundaryForAccount\(tgt\.accountType/.test(tfn));
+
+  const del = ups.slice(ups.indexOf('const handleDeleteStock'), ups.indexOf('const transferStockToPortfolio'));
+  ok('#23 종목 삭제가 확인 창을 거친다 (이관 버튼 옆이라 오클릭 방지)',
+    /await confirm\(/.test(del) && /setPortfolio\(prev => prev\.filter/.test(del));
+
+  const plan = app.slice(app.indexOf('const buildTransferPlan'), app.indexOf('const handleTransferStock'));
+  ok('#24 이관 금액은 직전 기록일 종가 (calcPortfolioEvalDetail)', /calcPortfolioEvalDetail\(\[transferItem\]/.test(plan));
+  ok('#24b 원가는 bookCostOf — buildBookCostSeries의 장부액 정의와 일치',
+    /bookCostOf\(\[transferItem\], \{ costBasisOnly: isOv \|\| srcType === 'gold' \}\)/.test(plan));
+  ok('#24c 기록일은 getBackfillBoundaryForAccount', (plan.match(/getBackfillBoundaryForAccount\(/g) || []).length === 2);
+  // ⚠️ calcPortfolioEvalDetail은 해외계좌를 내부에서 원화 환산한다 → USD로 되돌리지 않으면 약 1,390배
+  ok('#24d 해외계좌 이관 금액은 USD로 되돌린다 (원장·원금과 단위 일치)',
+    /isOv \? r\.total \/ \(r\.fxRate \|\| 1\) : r\.total/.test(plan));
+
+  ok('#25 동일 코드 대상 계좌는 차단된다 (분배금·과표 맵 무음 덮어쓰기 방지)',
+    /reason = '이미 보유'/.test(app));
+  ok('#25b 통화·시장이 다른 계좌도 차단된다', /reason = '통화 불일치'/.test(app) && /reason = '시장 불일치'/.test(app));
+
+  ok('#26 새 창 투영에 이관 원장 행이 실린다', /depositHistory: \(p\.depositHistory \|\| \[\]\)\.filter\(r => r && r\.transfer\)/.test(app));
+  ok('#26b 새 창 지문에 이관 기록이 포함된다 (없으면 MOVE 칩이 갱신 안 됨)',
+    /collectTransferRows\(p\)\.map\(r => `\$\{r\.date\}:\$\{r\.rowId\}:\$\{r\.role\}`\)/.test(app));
+
+  ok('#27 달력은 원장에서 라이브 파생한다 (calendarMemos 복사 금지)',
+    /const transfersByDate = useMemo/.test(cal) && /collectTransferRows\(p\)/.test(cal));
+  const tbd = cal.slice(cal.indexOf('const transfersByDate'), cal.indexOf('// 패드는 전부 앵커'));
+  ok('#27b transfersByDate는 memos/onUpdateMemos를 건드리지 않는다',
+    !/onUpdateMemos/.test(tbd) && !/setPad/.test(tbd));
+  ok('#27c MOVE 패드는 읽기 전용 (savePad allow-list 밖)',
+    /if \(pad\.kind\) \{ setPad\(null\); return; \}/.test(cal)
+    && !/pad\.kind === 'transfer'.*savePad/s.test(cal.slice(cal.indexOf('const savePad'), cal.indexOf('const savePad') + 900)));
+  ok('#27d MOVE 칩·패드 라벨이 일치한다',
+    /transfer: 'MOVE'/.test(cal) && (cal.match(/transfer: 'MOVE'/g) || []).length === 2);
+
+  ok('#28 utils가 이관 헬퍼 2종을 내보낸다',
+    /export const buildTransferLedgerRows/.test(utils) && /export const collectTransferRows/.test(utils));
+}
+
+// #29 JSX 주석 무결성 — 이 저장소에서 실제로 빌드를 두 번 죽인 원인
+{
+  const bad = [];
+  for (const rel of ['src/App.tsx', 'src/components/CalendarModal.tsx', 'src/components/PortfolioTable.tsx', 'src/components/StockTransferModal.tsx']) {
+    const src = read(rel);
+    let i = 0;
+    while ((i = src.indexOf('{/*', i)) !== -1) {
+      const end = src.indexOf('*/', i + 3);
+      if (end === -1) { bad.push(`${rel}: 닫히지 않은 JSX 주석`); break; }
+      const body = src.slice(i + 3, end);
+      const lineNo = src.slice(0, i).split('\n').length;
+      if (body.includes('/*')) bad.push(`${rel}:${lineNo} — 주석 본문에 '/*'가 있어 조기 종료됨`);
+      else if (src[end + 2] !== '}') bad.push(`${rel}:${lineNo} — JSX 주석이 '}'로 닫히지 않음`);
+      i = end + 2;
+    }
+  }
+  ok(`#29 JSX 주석이 조기 종료되지 않는다${bad.length ? `\n      ${bad.join('\n      ')}` : ''}`, bad.length === 0);
+}
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} verify:transfer — ${pass} passed, ${fail} failed\n`);
+process.exit(fail === 0 ? 0 : 1);

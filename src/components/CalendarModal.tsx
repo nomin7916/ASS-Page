@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, ExternalLink } from 'lucide-react';
 import { BG } from '../design';
-import { generateId, formatNumber, cleanNum, isValidIsoDate } from '../utils';
+import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
@@ -291,6 +291,36 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     return out;
   }, [portfolios, open]);
 
+  // ── 🔁 종목 계좌 간 이관 — 입출금 원장의 transfer 태그에서 **라이브 파생**(복사 금지) ──
+  // ⚠️ calendarMemos에 복사하지 말 것(투자기록·수량변경 파생과 동일 계약) — 원장이 유일한 원본이라
+  //    복사하면 DepositPanel에서 원장을 고쳤을 때 달력만 옛 값을 들고 있어 두 화면이 갈린다.
+  // 원계좌(나감)·대상계좌(들어옴) 양쪽 칸에 각각 뜬다 — 같은 날 어느 계좌를 봐도 이관 사실이 보인다.
+  // ⚠️ 삭제 계좌도 **포함**한다(과거 기록 뷰 — notesByDate·qtyChangesByDate와 동일 규칙, 색만 강등).
+  const transfersByDate = useMemo(() => {
+    const out = {};
+    if (!open) return out;
+    (portfolios || []).forEach((p) => {
+      if (!p) return;
+      const rows = collectTransferRows(p);
+      if (rows.length === 0) return;
+      const accountName = String(p.name || '계좌').trim();
+      const byDate = {};
+      rows.forEach((r) => {
+        if (!isValidIsoDate(r.date)) return; // 손상 날짜는 렌더 불가 = 유령이므로 제외
+        (byDate[r.date] = byDate[r.date] || []).push(r);
+      });
+      Object.keys(byDate).forEach((d) => {
+        (out[d] = out[d] || []).push({
+          portfolioId: p.id, accountName, rows: byDate[d],
+          // 해외계좌 원장은 USD다 — ₩로 하드코딩하면 약 1,390배 어긋난다(qty 패드와 동일 규약)
+          currency: p.accountType === 'overseas' ? 'USD' : 'KRW',
+          deleted: !!p.deletedAt,
+        });
+      });
+    });
+    return out;
+  }, [portfolios, open]);
+
   // 패드는 전부 앵커(id) + 라이브 재조회 계약이라 원본이 삭제되면 스스로 닫힌다.
   // (rebalTarget upsert는 id를 승계하므로 내용이 교체돼도 닫히지 않고 새 스냅샷으로 갱신된다)
   // ⚠️ 아래 `if (!open) return null`은 모든 훅 뒤에 있어야 하므로 이 effect는 반드시 그 위에 둔다.
@@ -305,8 +335,11 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     } else if (pad.kind === 'qty') {
       const g = (qtyChangesByDate[pad.dayKey] || []).find((x) => x.portfolioId === pad.portfolioId);
       if (!g) setPad(null);
+    } else if (pad.kind === 'transfer') {
+      const g = (transfersByDate[pad.dayKey] || []).find((x) => x.portfolioId === pad.portfolioId);
+      if (!g) setPad(null);
     }
-  }, [memos, pad, notesByDate, qtyChangesByDate]);
+  }, [memos, pad, notesByDate, qtyChangesByDate, transfersByDate]);
 
   if (!open) return null;
 
@@ -346,6 +379,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     setPadSeq((s) => s + 1);
   };
   const openQty = (dayKey, g) => { setPad({ kind: 'qty', dayKey, portfolioId: g.portfolioId }); setPadSeq((s) => s + 1); };
+  const openTransfer = (dayKey, g) => { setPad({ kind: 'transfer', dayKey, portfolioId: g.portfolioId }); setPadSeq((s) => s + 1); };
   // 같은 종류가 2건 이상이면 칩을 개수로 접고, 클릭 시 이 선택 목록을 먼저 띄운다.
   const openPick = (dayKey, pickKind) => { setPad({ kind: 'pick', dayKey, pickKind }); setPadSeq((s) => s + 1); };
   const closePad = () => setPad(null);
@@ -367,6 +401,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     : null;
   const padQty = pad && pad.kind === 'qty'
     ? (qtyChangesByDate[pad.dayKey] || []).find((g) => g.portfolioId === pad.portfolioId) || null
+    : null;
+  const padTransfer = pad && pad.kind === 'transfer'
+    ? (transfersByDate[pad.dayKey] || []).find((g) => g.portfolioId === pad.portfolioId) || null
     : null;
   // 텍스트 입력값: 투자기록은 `val === null`이면 아직 미편집 → 라이브 본문을 보여준다.
   const padTextValue = !pad ? ''
@@ -459,9 +496,10 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     rebalTarget: 'bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-200',
     note: 'bg-amber-500/15 hover:bg-amber-500/30 text-amber-200',
     qty: 'bg-violet-500/15 hover:bg-violet-500/30 text-violet-200',
+    transfer: 'bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-200',
   };
   const CHIP_DELETED = 'bg-gray-500/15 hover:bg-gray-500/30 text-gray-400';
-  const CHIP_LABEL = { rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK' };
+  const CHIP_LABEL = { rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE' };
   const autoChip = (dayKey, chipKind, items, openOne) => {
     if (!items || items.length === 0) return null;
     const single = items.length === 1;
@@ -581,6 +619,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               const dayMemos = dayAll.filter((m) => m && m.kind !== 'rebalTarget');
               const dayNotes = notesByDate[key] || [];
               const dayQty = qtyChangesByDate[key] || [];
+              const dayMove = transfersByDate[key] || [];
               const numColor = isHol || dow === 0 ? 'text-red-400' : dow === 6 ? 'text-blue-400' : 'text-gray-300';
               const rawMetric = metricsByDate[key];
               const metricCum = rawMetric ? ((key === latestRecDate && todayReturnRate != null) ? todayReturnRate : rawMetric.monthlyChange) : null;
@@ -613,7 +652,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       </div>
                     </div>
                   )}
-                  {(dayRebals.length > 0 || dayNotes.length > 0 || dayQty.length > 0) && (
+                  {(dayRebals.length > 0 || dayNotes.length > 0 || dayQty.length > 0 || dayMove.length > 0) && (
                     <div className="flex flex-col gap-0.5 shrink-0">
                       {autoChip(key, 'rebalTarget',
                         dayRebals.map((m) => ({ accountName: m.accountName, chipTitle: m.content, _memo: m })),
@@ -624,6 +663,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       {autoChip(key, 'qty',
                         dayQty.map((g) => ({ ...g, chipTitle: `${g.accountName}${g.deleted ? ' (삭제됨)' : ''} — 수량 변경 ${g.rows.length}종목${g.origin === 'manual' ? ' (자산검증 보정)' : ''}` })),
                         (g) => openQty(key, g))}
+                      {autoChip(key, 'transfer',
+                        dayMove.map((g) => ({ ...g, chipTitle: `${g.accountName}${g.deleted ? ' (삭제됨)' : ''}\n${g.rows.map((r) => `${r.role === 'out' ? `→ ${r.toName}` : `← ${r.fromName}`} ${r.name || r.code || '종목'}${r.quantity > 0 ? ` ${formatNumber(r.quantity)}주` : ''}`).join('\n')}` })),
+                        (g) => openTransfer(key, g))}
                     </div>
                   )}
                   <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: `${memoH}px` }}>
@@ -698,7 +740,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               <span className="text-[15px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">
                 {/* 칸의 칩 라벨(LIST/NOTE/STOCK)과 동일한 이름 — 어느 칩에서 열린 패드인지 즉시 대응된다.
                     다건 선택 목록은 LIST를 목표비중에 넘겨주고 PICK으로 물러난다. */}
-                {({ rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', pick: 'PICK' })[pad.kind] || 'MEMO'}
+                {({ rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE', pick: 'PICK' })[pad.kind] || 'MEMO'}
               </span>
             </div>
             <div className="w-10" />
@@ -871,15 +913,68 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                 같은 날 여러 번 고치면 그날의 순변화만 표시됩니다.
               </div>
             </div>
+          ) : null) : pad.kind === 'transfer' ? (padTransfer ? (
+            /* 종목 계좌 간 이관 = 읽기 전용 표 (입출금 원장의 transfer 태그에서 파생) */
+            <div className="bg-black px-3 py-2 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-cyan-300 text-[13px] font-bold truncate">🔁 {padTransfer.accountName}</span>
+                <span className="text-[10px] text-gray-500 shrink-0">{pad.dayKey}</span>
+              </div>
+              <table className="w-full text-[11px] tabular-nums">
+                <thead>
+                  <tr className="text-gray-500 border-b border-gray-800">
+                    <th className="text-left font-normal py-1 pr-1">종목명</th>
+                    <th className="text-right font-normal py-1 px-1">수량</th>
+                    <th className="text-left font-normal py-1 px-1">방향</th>
+                    <th className="text-right font-normal py-1 pl-1">이관금액</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {padTransfer.rows.map((r, i) => (
+                    <tr key={r.rowId || i} className="border-b border-gray-900/80">
+                      <td className="text-left text-gray-200 py-1 pr-1">
+                        {r.name || r.code || '종목'}
+                        {r.code ? <span className="ml-1 text-[9px] text-gray-600 font-mono">{r.code}</span> : null}
+                      </td>
+                      <td className="text-right text-gray-300 py-1 px-1">{r.quantity > 0 ? qfmt(r.quantity) : '-'}</td>
+                      <td className={`text-left py-1 px-1 truncate ${r.role === 'out' ? 'text-blue-300' : 'text-red-300'}`}>
+                        {r.role === 'out' ? `→ ${r.toName || '계좌'}` : `← ${r.fromName || '계좌'}`}
+                      </td>
+                      <td className="text-right text-gray-200 py-1 pl-1">{fmtMoney(r.market, padTransfer.currency)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {padTransfer.rows.some((r) => Math.round(r.market - r.cost) !== 0) && (
+                <div className="pt-2 mt-1 border-t border-gray-800 space-y-0.5">
+                  {padTransfer.rows.map((r, i) => (
+                    <div key={`c${r.rowId || i}`} className="flex items-center justify-between text-[10px] text-gray-500">
+                      <span className="truncate">{r.name || r.code || '종목'} 매입원가</span>
+                      <span className="shrink-0 text-gray-400">
+                        {fmtMoney(r.cost, padTransfer.currency)}
+                        <span className={`ml-2 ${r.market - r.cost > 0 ? 'text-red-400' : r.market - r.cost < 0 ? 'text-blue-400' : ''}`}>
+                          {r.market - r.cost > 0 ? '+' : ''}{fmtMoney(r.market - r.cost, padTransfer.currency)}
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="text-[9px] text-gray-600 pt-2 leading-relaxed">
+                입출금 원장의 이관 기록에서 자동 산출됩니다. 원금은 매입원가만 이동하고, 이관금액은
+                직전 기록일 종가 기준입니다(국내 계좌는 21:00 이후 이관이 다음 날 칸에 기록됩니다).
+              </div>
+            </div>
           ) : null) : pad.kind === 'pick' ? (
             /* 같은 종류 다건 — 계좌 선택 목록 */
             <div className="bg-black px-3 py-2 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
               <div className="text-[11px] text-gray-500 mb-2">
-                {({ rebalTarget: '📊 목표비중 기록', note: '📝 투자 기록', qty: '🔄 종목 수량 변경' })[pad.pickKind]} — 계좌 선택
+                {({ rebalTarget: '📊 목표비중 기록', note: '📝 투자 기록', qty: '🔄 종목 수량 변경', transfer: '🔁 종목 이관' })[pad.pickKind]} — 계좌 선택
               </div>
               {(pad.pickKind === 'rebalTarget'
                 ? (Array.isArray(memos[pad.dayKey]) ? memos[pad.dayKey] : []).filter((m) => m && m.kind === 'rebalTarget')
                 : pad.pickKind === 'note' ? (notesByDate[pad.dayKey] || [])
+                : pad.pickKind === 'transfer' ? (transfersByDate[pad.dayKey] || [])
                 : (qtyChangesByDate[pad.dayKey] || [])
               ).map((it, i) => (
                 <button
@@ -887,6 +982,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   onClick={() => {
                     if (pad.pickKind === 'rebalTarget') openRebal(pad.dayKey, it);
                     else if (pad.pickKind === 'note') openNote(pad.dayKey, it);
+                    else if (pad.pickKind === 'transfer') openTransfer(pad.dayKey, it);
                     else openQty(pad.dayKey, it);
                   }}
                   className="w-full flex items-center justify-between gap-2 text-left px-2 py-2 rounded hover:bg-gray-800/80 transition-colors border-b border-gray-900/80"

@@ -1,8 +1,8 @@
 // @ts-nocheck
 import { useState, useEffect, useMemo } from 'react';
 import { UI_CONFIG } from '../config';
-import { generateId, cleanNum } from '../utils';
-import { getTodayKST } from './useMarketCalendar';
+import { generateId, cleanNum, formatNumber, buildTransferLedgerRows } from '../utils';
+import { getTodayKST, getBackfillBoundaryForAccount } from './useMarketCalendar';
 
 interface UsePortfolioStateParams {
   marketIndicators: { goldKr?: number; goldKrChg?: number; [key: string]: any };
@@ -633,7 +633,127 @@ export function usePortfolioState({
       p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass'].includes(field) ? value : cleanNum(value) } : p
     ));
 
-  const handleDeleteStock = (id) => setPortfolio(prev => prev.filter(p => p.id !== id));
+  // 삭제는 되돌릴 수 없고(보유 수량·매입금액 소실) 이관 버튼 바로 옆이라 오클릭이 쉽다 → 확인 필수.
+  // 주식·펀드·예적금 행이 전부 이 한 핸들러(onDelete)를 쓰므로 여기 한 곳이면 셋 다 보호된다.
+  const handleDeleteStock = async (id) => {
+    const item = (activePortfolio?.portfolio || []).find(p => p && p.id === id);
+    if (!item) return;
+    const kind = item.type === 'fund' ? '펀드' : item.type === 'savings' ? '예적금' : '종목';
+    const nm = String(item.name || item.code || '').trim();
+    const qty = cleanNum(item.quantity);
+    const detail = item.type === 'savings'
+      ? (cleanNum(item.investAmount) > 0 ? ` (적립 ${formatNumber(item.investAmount)})` : '')
+      : (qty > 0 ? ` ${formatNumber(qty)}${item.type === 'fund' ? '좌' : '주'}` : '');
+    const head = nm ? `${nm}${detail}` : `이름 없는 ${kind}`;
+    const tail = item.type === 'stock'
+      ? "\n분배금·과표 입력은 '삭제됨' 행으로 남습니다."
+      : '';
+    if (!await confirm(`${head}\n\n이 ${kind}을(를) 삭제하시겠습니까?\n보유 수량·매입금액은 되돌릴 수 없습니다.${tail}`, '삭제')) return;
+    setPortfolio(prev => prev.filter(p => p.id !== id));
+  };
+
+  // ── 종목 계좌 간 이관 ──────────────────────────────────────────────────────────
+  // 종목 행 + 그 종목에 귀속된 계좌별 기록(분배금 8종·과표)을 대상계좌로 옮기고, 자금 이동을
+  // 입출금 원장에 기록한다(utils.buildTransferLedgerRows — 3행 구성 근거는 그 주석 참조).
+  //
+  // ⚠️ 반드시 **단일 setPortfolios**로 두 계좌를 동시에 갱신한다. portfolios[]가 단일 소스이고
+  //    patchActive/setPortfolio는 활성 계좌 전용이라 대상계좌에 닿지 못한다.
+  // ⚠️ 원본 항목은 updater 안의 `prev`에서 읽는다 — 호출부가 PortfolioTable에 넘어간
+  //    totals.calcPortfolio 행을 넘기면 investAmount/evalAmount가 이미 환율이 곱해진 값이라
+  //    해외계좌에서 약 1,390배로 오염된다.
+  // ⚠️ id 생성(generateId)은 updater **밖**에서 — StrictMode의 업데이터 이중 호출에서 서로 다른
+  //    id가 만들어져 원장 행과 항목이 어긋난다(FlowBoard 순수성 규약과 동일).
+  // ⚠️ manualPriceOverrides[code]는 원계좌에서 **지우지 않고 복제**한다 — 원계좌의 과거 스냅샷에
+  //    그 종목이 그대로 남아 있어 과거 평가액 재계산에 계속 필요하다.
+  // ⚠️ 양쪽 계좌의 dividendHistoryUpdatedAt을 갱신해야 Drive STATE 저장이 트리거된다 —
+  //    dividendHistory/dividendExDate/dividendTaxAmounts/actualDividendQty는 portfolioStructureKey
+  //    지문에 직접 들어 있지 않다(deletePortfolioDividendData와 동일 이유).
+  const transferStockToPortfolio = (plan) => {
+    const { sourceId, targetId, itemId } = plan || {};
+    if (!sourceId || !targetId || !itemId || sourceId === targetId) return false;
+    const src = portfolios.find(p => p && p.id === sourceId);
+    const tgt = portfolios.find(p => p && p.id === targetId);
+    if (!src || !tgt || tgt.deletedAt) return false;
+    const srcItem = (src.portfolio || []).find(it => it && it.id === itemId);
+    if (!srcItem || srcItem.type === 'deposit') return false;
+
+    const code = String(srcItem.code || '').trim();
+    const dateSrc = plan.dateSrc || getBackfillBoundaryForAccount(src.accountType || 'portfolio');
+    const dateTgt = plan.dateTgt || getBackfillBoundaryForAccount(tgt.accountType || 'portfolio');
+    const rows = buildTransferLedgerRows({
+      transferId: generateId(),
+      code, name: srcItem.name, quantity: srcItem.quantity, itemType: srcItem.type || 'stock',
+      market: plan.market, cost: plan.cost,
+      dateSrc, dateTgt,
+      sourceId, sourceName: src.name, targetId, targetName: tgt.name,
+      rowIds: [generateId(), generateId(), generateId()],
+    });
+    const cost = cleanNum(plan.cost);
+    const movedItemId = generateId();
+    const stamp = Date.now();
+    // 코드별 맵 8종 + 과표 — 금액성 데이터라 **이동**(복제 시 통합 분배금 표에서 이중 계상).
+    const CODE_MAPS = [
+      'actualDividend', 'actualDividendUsd', 'actualDividendQty', 'dividendTaxAmounts',
+      'actualAfterTaxUsd', 'actualAfterTaxKrw', 'dividendHistory', 'dividendExDate',
+      'taxBaseHistory',
+    ];
+
+    setPortfolios(prev => {
+      const s = prev.find(p => p && p.id === sourceId);
+      const t = prev.find(p => p && p.id === targetId);
+      if (!s || !t) return prev;
+      const it = (s.portfolio || []).find(x => x && x.id === itemId);
+      if (!it) return prev;   // 이미 이관/삭제됨 — 이중 실행 방지(멱등)
+      const carried = {};
+      if (code) {
+        CODE_MAPS.forEach(k => { const m = s[k]; if (m && typeof m === 'object' && code in m) carried[k] = m[code]; });
+        const mpo = s.manualPriceOverrides;
+        if (mpo && typeof mpo === 'object' && code in mpo) carried.manualPriceOverrides = mpo[code];
+      }
+      const movedItem = { ...it, id: movedItemId };
+      return prev.map(p => {
+        if (p.id === sourceId) {
+          const next = {
+            ...p,
+            portfolio: (p.portfolio || []).filter(x => x && x.id !== itemId),
+            principal: Math.max(0, cleanNum(p.principal) - cost),
+            depositHistory2: [rows.srcWithdrawal, ...(p.depositHistory2 || [])],
+            dividendHistoryUpdatedAt: stamp,
+          };
+          CODE_MAPS.forEach(k => {
+            const m = p[k];
+            if (!m || typeof m !== 'object' || !code || !(code in m)) return;
+            const copy = { ...m };
+            delete copy[code];
+            next[k] = copy;
+          });
+          return next;
+        }
+        if (p.id === targetId) {
+          const next = {
+            ...p,
+            portfolio: [movedItem, ...(p.portfolio || [])],
+            principal: cleanNum(p.principal) + cost,
+            depositHistory: [rows.tgtDeposit, ...(p.depositHistory || [])],
+            depositHistory2: rows.tgtGainRow
+              ? [rows.tgtGainRow, ...(p.depositHistory2 || [])]
+              : (p.depositHistory2 || []),
+            dividendHistoryUpdatedAt: stamp,
+          };
+          CODE_MAPS.forEach(k => {
+            if (!(k in carried)) return;
+            next[k] = { ...(p[k] || {}), [code]: carried[k] };
+          });
+          if ('manualPriceOverrides' in carried) {
+            next.manualPriceOverrides = { ...(p.manualPriceOverrides || {}), [code]: carried.manualPriceOverrides };
+          }
+          return next;
+        }
+        return p;
+      });
+    });
+    return true;
+  };
 
   const handleAddStock = () =>
     setPortfolio(prev => [
@@ -783,6 +903,7 @@ export function usePortfolioState({
     movePortfolio,
     handleUpdate,
     handleDeleteStock,
+    transferStockToPortfolio,
     handleAddStock,
     handleAddFund,
     handleAddSavings,

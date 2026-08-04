@@ -30,6 +30,7 @@ import PinChangeModal from './components/PinChangeModal';
 import ScaleSettingModal from './components/ScaleSettingModal';
 import DriveBackupModal from './components/DriveBackupModal';
 import CalendarModal from './components/CalendarModal';
+import StockTransferModal from './components/StockTransferModal';
 import UnlockPinModal from './components/UnlockPinModal';
 import PasteModal from './components/PasteModal';
 import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
@@ -61,7 +62,7 @@ import { useAutoConfirmHistory } from './hooks/useAutoConfirmHistory';
 import { useIndexImport } from './hooks/useIndexImport';
 import { usePortfolioData } from './hooks/usePortfolioData';
 import { useIntegratedData } from './hooks/useIntegratedData';
-import { useMarketCalendar, getTodayKST, getEffectiveDate, getEffectiveDateKR, getEffectiveDateForAccount, getBackfillBoundaryKR, isKrCutoffAccount, getMsUntilNextBoundary } from './hooks/useMarketCalendar';
+import { useMarketCalendar, getTodayKST, getEffectiveDate, getEffectiveDateKR, getEffectiveDateForAccount, getBackfillBoundaryKR, getBackfillBoundaryForAccount, isKrCutoffAccount, getMsUntilNextBoundary } from './hooks/useMarketCalendar';
 import {
   generateId, cleanNum, formatCurrency, formatPercent, formatNumber,
   formatChangeRate, formatShortDate, formatVeryShortDate, getSeededRandom,
@@ -73,7 +74,8 @@ import {
   externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
   buildBookCostSeries, bookDeltaBetween,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
-  listRebalTargetSnapshots
+  listRebalTargetSnapshots,
+  bookCostOf, calcPortfolioEvalDetail, collectTransferRows
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -327,6 +329,8 @@ export default function App() {
   const [isLinkSettingsOpen, setIsLinkSettingsOpen] = useState(false);
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
+  // 종목 계좌 간 이관 — 대상 항목 id(모달 열림 여부 겸용)
+  const [transferItemId, setTransferItemId] = useState(null);
   const [calendarMemos, setCalendarMemos] = useState<Record<string, any[]>>({});
   const [showWatchlist, setShowWatchlist] = useState(false);
   const [watchlistGroups, setWatchlistGroups] = useState<any[]>([]);
@@ -609,6 +613,7 @@ export default function App() {
     movePortfolio,
     handleUpdate,
     handleDeleteStock,
+    transferStockToPortfolio,
     handleAddStock,
     handleAddFund,
     handleAddSavings,
@@ -1092,6 +1097,109 @@ export default function App() {
     if (['overseas', 'simple', 'matong'].includes(activePortfolioAccountType) || !activePortfolio) return null;
     return buildBookCostSeries(activePortfolio, history.map(h => h?.date));
   }, [activePortfolio, history, activePortfolioAccountType]);
+
+  // ── 종목 계좌 간 이관 ─────────────────────────────────────────────────────────
+  // 이관은 '출금 + 입금' 원장 쌍으로 기록해야 일간 지표가 정확히 상쇄된다(근거·3행 구성은
+  // utils.buildTransferLedgerRows 주석 참조). 여기서는 미리보기 값 산출만 담당한다.
+  const transferItem = useMemo(
+    () => (transferItemId ? (activePortfolio?.portfolio || []).find(it => it && it.id === transferItemId) || null : null),
+    [transferItemId, activePortfolio]
+  );
+
+  // 대상 계좌 후보 — 통화·시장·항목 타입이 맞는 계좌만. 부적격은 사유를 달아 그대로 노출한다
+  // (목록에서 지워 버리면 "왜 안 보이지"가 되고, 사용자가 잘못된 계좌를 고를 위험도 없다).
+  const transferTargets = useMemo(() => {
+    if (!transferItem || !activePortfolio) return [];
+    const srcType = activePortfolioAccountType;
+    const code = String(transferItem.code || '').trim();
+    const TYPE_LABEL = {
+      portfolio: '일반', isa: 'ISA', 'dc-irp': '퇴직연금', pension: '연금저축',
+      dividend: '배당형', crypto: 'CRYPTO', overseas: '해외',
+    };
+    return (portfolios || [])
+      .filter(p => p && p.id !== activePortfolioId && !p.deletedAt)
+      .map(p => {
+        const t = p.accountType || 'portfolio';
+        let reason = '';
+        if (t === 'simple' || t === 'matong') reason = '현금성';
+        else if (t === 'gold') reason = '금현물';
+        // 통화·시장이 다르면 원가·원장 단위가 어긋난다(해외는 USD 기준, crypto는 24시간 시장)
+        else if ((t === 'overseas') !== (srcType === 'overseas')) reason = '통화 불일치';
+        else if ((t === 'crypto') !== (srcType === 'crypto')) reason = '시장 불일치';
+        else if (transferItem.type === 'savings' && t !== 'dc-irp') reason = '예적금 불가';
+        else if (transferItem.type === 'fund' && t !== 'dc-irp' && t !== 'pension') reason = '펀드 불가';
+        // ⚠️ 동일 코드는 차단한다 — actualDividend[code][ym]·taxBaseHistory[code]가 양쪽에 있으면
+        //    병합이 한쪽을 조용히 지운다. 조용한 오적용보다 명시적 미적용(복원 모달과 같은 규약).
+        else if (code && (p.portfolio || []).some(x => x && String(x.code || '').trim() === code)) reason = '이미 보유';
+        return { id: p.id, name: p.name, isTest: !!p.isTest, typeLabel: TYPE_LABEL[t] || t, blocked: !!reason, reason };
+      })
+      .sort((a, b) => (a.blocked === b.blocked ? 0 : a.blocked ? 1 : -1));
+  }, [transferItem, portfolios, activePortfolioId, activePortfolio, activePortfolioAccountType]);
+
+  // 함께 이동하는 코드별 기록 건수(미리보기 표시용)
+  const transferMoves = useMemo(() => {
+    if (!transferItem || !activePortfolio) return null;
+    const code = String(transferItem.code || '').trim();
+    if (!code) return { dividend: 0, tax: 0, price: 0 };
+    const cnt = (m) => (m && typeof m === 'object' && m[code] && typeof m[code] === 'object' ? Object.keys(m[code]).length : 0);
+    const dividend = ['actualDividend', 'actualDividendUsd', 'actualDividendQty', 'dividendTaxAmounts', 'actualAfterTaxUsd', 'actualAfterTaxKrw', 'dividendHistory']
+      .reduce((s, k) => s + cnt(activePortfolio[k]), 0);
+    const tb = (activePortfolio.taxBaseHistory || {})[code];
+    const tax = tb ? ((tb.events || []).length + (tb.purchases || []).length + (tb.sales || []).length
+      + Object.keys(tb.exTaxBase || {}).length + Object.keys(tb.avgTaxBase || {}).length) : 0;
+    return { dividend, tax, price: cnt(activePortfolio.manualPriceOverrides) };
+  }, [transferItem, activePortfolio]);
+
+  // ⚠️ 기록일은 실행 시점에 getBackfillBoundaryForAccount를 **직접** 호출한다(effectiveDateKey state
+  //    금지 — 타이머 드리프트 자가보정). 이 날짜라야 원장·보유 스냅샷·평가액이 같은 날 함께 움직인다.
+  // ⚠️ 이관 금액 M = 수량 × '직전 기록일 종가'. 실시간 평가금액이 아니다 — 장중 이관이면 그 종목은
+  //    당일 V에서 통째로 빠지므로 마지막 기여분이 직전 기록일 종가이고, 실시간가를 쓰면 그날 장중
+  //    등락분이 양쪽 계좌에 반대 부호의 가짜 손익으로 남는다(TWR 곱셈 체인이 영구 고정).
+  // ⚠️ 원가 C는 반드시 bookCostOf — buildBookCostSeries가 관측하는 장부액과 같은 정의라야
+  //    shouldHoldDailyMetrics의 흡수 판정(bookDelta vs 흐름)이 정확히 맞물린다.
+  const buildTransferPlan = (targetId) => {
+    const tgt = (portfolios || []).find(p => p && p.id === targetId);
+    if (!transferItem || !activePortfolio || !tgt) return null;
+    const srcType = activePortfolioAccountType;
+    const dateSrc = getBackfillBoundaryForAccount(srcType);
+    const dateTgt = getBackfillBoundaryForAccount(tgt.accountType || 'portfolio');
+    let prevDate = '';
+    (history || []).forEach(h => {
+      const d = h && h.date;
+      if (d && d < dateSrc && d > prevDate) prevDate = d;
+    });
+    // ⚠️ 해외계좌는 calcPortfolioEvalDetail이 **내부에서 그 날짜 환율로 원화 환산**한다(utils.ts).
+    //    원장 amount·principal·bookCostOf는 전부 USD이므로 반드시 되나눠 USD로 돌려야 한다 —
+    //    안 그러면 이관 금액만 약 1,390배가 되어 원금·흐름이 통째로 오염된다.
+    const isOv = srcType === 'overseas';
+    let market = 0, exact = false;
+    if (prevDate) {
+      const r = calcPortfolioEvalDetail([transferItem], srcType, prevDate, stockHistoryMap, indicatorHistoryMap || {}, 1, activePortfolio.manualPriceOverrides);
+      if (r.hasAnyPrice && r.total > 0) { market = isOv ? r.total / (r.fxRate || 1) : r.total; exact = !!r.allExact; }
+    }
+    if (!(market > 0)) {
+      // 폴백: 라이브 평가액(직전 기록일 종가 미확보) — 그날 장중 등락분만큼 오차가 남을 수 있다
+      prevDate = '';
+      const qty = cleanNum(transferItem.quantity);
+      const px = cleanNum(transferItem.currentPrice);
+      market = transferItem.type === 'savings' ? savingsEval(transferItem)
+        : (transferItem.type === 'fund' && !(qty > 0 && px > 0)) ? cleanNum(transferItem.evalAmount)
+        : qty * px;
+    }
+    // ⚠️ costBasisOnly는 해외·금 계좌에 필수 — 그쪽 항목의 investAmount는 UI가 유지하지 않는
+    //    잔존 필드라, 레거시 원화 값이 남아 있으면 장부 단위가 통째로 어긋난다(CLAUDE.md 검증 #30b).
+    const cost = bookCostOf([transferItem], { costBasisOnly: isOv || srcType === 'gold' });
+    return { market, cost, dateSrc, dateTgt, prevDate, exact };
+  };
+
+  const handleTransferStock = (targetId, plan) => {
+    if (!transferItem || !plan || !activePortfolioId) return;
+    const ok = transferStockToPortfolio({
+      sourceId: activePortfolioId, targetId, itemId: transferItem.id,
+      market: plan.market, cost: plan.cost, dateSrc: plan.dateSrc, dateTgt: plan.dateTgt,
+    });
+    if (ok) setTransferItemId(null);
+  };
 
   // 개별 계좌 누적 TWR — '조회시작 0%' 모드 라인의 소스. 입출금이 있어도 곡선이 왜곡되지 않는다.
   // ⚠️ 전체 이력에서 한 번 누적한다(조회구간으로 자르지 않는다). 구간 재베이스는 finalChartData가
@@ -1749,6 +1857,12 @@ export default function App() {
     baselineDate: p.baselineDate,
     investmentNotes: p.investmentNotes || [],
     holdingSnapshots: p.holdingSnapshots || [],
+    // 메모 달력 '종목 이관(MOVE)' 칩 소스 — transfer 태그가 붙은 원장 행만 투영한다.
+    // ⚠️ 잘린 원장이다. CalendarModal은 이 두 배열을 오직 collectTransferRows로만 읽으므로
+    //    동작이 동일하지만, 새 창 쪽에서 입출금 원장 전체가 필요한 소비자를 추가하면 안 된다
+    //    (전량 복제하면 시세 갱신마다 원장이 통째로 postMessage로 나간다).
+    depositHistory: (p.depositHistory || []).filter(r => r && r.transfer),
+    depositHistory2: (p.depositHistory2 || []).filter(r => r && r.transfer),
   })), [portfolios]);
   // ⚠️ 투자기록은 본문까지, 스냅샷은 snapshotCompositionKey까지 담는다 — 건수만 보면 '본문만 수정',
   //    '같은 날짜 스냅샷의 수량만 수정'이 새 창에 반영되지 않는다(portfolioStructureKey와 동일 이유).
@@ -1758,6 +1872,8 @@ export default function App() {
     p.id, p.name || '', p.accountType || '', p.deletedAt || '', p.baselineDate || '',
     (p.investmentNotes || []).map(n => `${n?.id}:${n?.date}:${n?.content || ''}`).join('|'),
     (p.holdingSnapshots || []).map(s => `${s.date}:${s.kind}:${snapshotCompositionKey(s.items || [])}`).join('|'),
+    // 이관 기록 — 없으면 새 창의 MOVE 칩이 갱신되지 않는다(위 두 지문과 동일 이유)
+    collectTransferRows(p).map(r => `${r.date}:${r.rowId}:${r.role}`).join('|'),
   ]))), [portfolios, calWinNonce]);
 
   useEffect(() => {
@@ -3153,6 +3269,7 @@ export default function App() {
             onUpdate={handleUpdate}
             onBlur={handleStockBlur}
             onDelete={handleDeleteStock}
+            onTransfer={(id) => setTransferItemId(id)}
             onAddStock={handleAddStock}
             onAddFund={handleAddFund}
             onAddSavings={handleAddSavings}
@@ -3592,6 +3709,19 @@ export default function App() {
         groups={watchlistGroups}
         onUpdateGroups={setWatchlistGroups}
       />
+      {/* 종목 계좌 간 이관 — '미리보기 후 적용'(undo 없음). 항목이 사라지면 transferItem이 null이 되어 자동 닫힘 */}
+      {transferItem && (
+        <StockTransferModal
+          item={transferItem}
+          sourceName={title}
+          currency={activePortfolioAccountType === 'overseas' ? 'USD' : 'KRW'}
+          targets={transferTargets}
+          getPlan={buildTransferPlan}
+          moves={transferMoves}
+          onConfirm={handleTransferStock}
+          onClose={() => setTransferItemId(null)}
+        />
+      )}
       {/* 메모 달력 (비차단·이동 가능 플로팅 창) — App 최상위 형제로 마운트해 탭/뷰 전환에도 언마운트 안 됨 */}
       <CalendarModal
         open={showCalendarModal}

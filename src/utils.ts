@@ -569,6 +569,97 @@ export const overseasPrincipalAt = (date, sortedDeposits, sortedWithdrawals, pri
   return amount;
 };
 
+// ── 종목 계좌 간 이관 (transfer) ─────────────────────────────────────────────────
+// 이관은 "원계좌 출금 + 대상계좌 입금"이라는 **실제 자금 이동**으로 기록한다. 그래야
+// Modified Dietz 일간 지표(computeDailyMetricsSeries)가 그 흐름을 정확히 상쇄해, 이관일에
+// 원계좌 −평가액 / 대상계좌 +평가액이 가짜 손익으로 찍히는 것을 막는다(수익률 라인이 누적
+// TWR = 곱셈 체인이라 하루짜리 오류가 이후 전 구간에 **영구 고정**된다).
+//
+// ⚠️ 3행 구성인 이유 — "흐름은 시가(M) · 원금은 매입원가(C)"를 신규 저장 필드 없이 동시에 만족시킨다.
+//   · 출금 행은 principalDeducted로 그 분리를 네이티브 지원한다 → 원계좌는 1행이면 충분
+//     (amount = M → 유출 M / principalDeducted = C → 원금 −C).
+//   · 입금 행에는 대응 필드가 없어 amount 하나가 흐름과 원금을 동시에 결정한다. 그래서 입금은
+//     M(유입 M)으로 넣고, 차액 G = M − C를 **금액 0 · principalDeducted = G 인 출금 행**으로 상쇄한다.
+//     금액이 0이라 흐름에는 전혀 기여하지 않고(externalFlowInRange·통합 ①의 `v > 0 / v < 0` 어느
+//     분기에도 안 걸린다), cumDepositsUpTo만 principalDeducted를 빼 원금이 M − G = C가 된다.
+//   ⚠️ 이 보정 행을 `amount: -G`(음수 출금)로 되돌리지 말 것 — 이익 포지션에서는 유입이 C + G = M으로
+//      맞지만, **손실 포지션(G < 0)에서는 양수 출금**이 되어 유입 C · 유출 |G|로 갈라진다. 순흐름은
+//      여전히 M이라 일간 '손익'은 맞지만, 일간 '수익률'의 분모가 prev + M이 아니라 prev + C가 되어
+//      이익/손실 포지션의 규약이 갈리고 그 차이가 누적 TWR(곱셈 체인)에 영구 고정된다.
+//   이 구성으로 원금 산출 4경로(App.tsx finalChartData epochBase 역산 / computeEffectivePrincipal /
+//   overseasPrincipalAt / useIntegratedData effectivePrincipal)의 **과거 값이 전부 불변**이고,
+//   통합 effectivePrincipal의 원계좌 +G와 대상계좌 −G가 정확히 상쇄된다.
+// ⚠️ 세 행의 (amount, principalDeducted) 조합을 바꾸지 말 것 — 하나만 흔들려도 어느 한 화면의
+//    과거 원금 라인이 미실현손익만큼 소급 이동한다. 검증: `npm run verify:transfer`.
+// ⚠️ noPrincipal을 쓰지 말 것 — 입금의 noPrincipal은 흐름 IN에서도 제외되고(배당·이자 규약),
+//    출금의 noPrincipal은 원금에서만 빠져 흐름에는 전액 남는다. 둘 다 이관 의미와 다르다.
+//
+// M(시가)은 '이관 기록일 직전 기록일의 종가 × 수량'이다 — 화면의 실시간 평가금액이 아니다.
+// 장중 이관이면 그 종목은 당일 V에서 통째로 빠지므로 마지막 기여분이 직전 기록일 종가이고,
+// 실시간가를 쓰면 그날 장중 등락분이 양쪽 계좌에 반대 부호의 가짜 손익으로 남는다.
+export const buildTransferLedgerRows = (args: any) => {
+  const a = args || {};
+  const M = cleanNum(a.market);
+  const C = cleanNum(a.cost);
+  const G = M - C;
+  const qty = cleanNum(a.quantity);
+  const srcName = String(a.sourceName || '').trim() || '계좌';
+  const tgtName = String(a.targetName || '').trim() || '계좌';
+  const meta = {
+    id: a.transferId || '',
+    code: String(a.code || ''),
+    name: String(a.name || ''),
+    quantity: qty,
+    market: M,
+    cost: C,
+    itemType: a.itemType || 'stock',
+    fromId: a.sourceId || '', fromName: srcName,
+    toId: a.targetId || '', toName: tgtName,
+  };
+  const unit = a.itemType === 'fund' ? '좌' : a.itemType === 'savings' ? '' : '주';
+  const label = `${meta.name || meta.code || '종목'}${qty > 0 && unit ? ` ${formatNumber(qty)}${unit}` : ''}`;
+  const ids = Array.isArray(a.rowIds) ? a.rowIds : [];
+  return {
+    srcWithdrawal: {
+      id: ids[0] || generateId(), date: a.dateSrc, amount: M, principalDeducted: C,
+      fxRate: 1, noPrincipal: false,
+      memo: `[이관→${tgtName}] ${label}`,
+      transfer: { ...meta, role: 'out' },
+    },
+    tgtDeposit: {
+      id: ids[1] || generateId(), date: a.dateTgt, amount: M,
+      fxRate: 1, noPrincipal: false,
+      memo: `[이관←${srcName}] ${label}`,
+      transfer: { ...meta, role: 'in' },
+    },
+    // 평가차익이 0이면 행을 만들지 않는다(원장 노이즈 방지 — 흐름·원금 모두 이미 정확).
+    // 금액 0 = 현금 이동 없음(흐름 기여 0), principalDeducted = G 만큼 원금만 되돌린다.
+    tgtGainRow: Math.round(G) === 0 ? null : {
+      id: ids[2] || generateId(), date: a.dateTgt, amount: 0, principalDeducted: G,
+      fxRate: 1, noPrincipal: false,
+      memo: `[이관←${srcName}] ${label} 평가차익 ${G > 0 ? '+' : ''}${formatNumber(Math.round(G))} — 원금 보정(금액 이동 없음)`,
+      transfer: { ...meta, role: 'gain' },
+    },
+  };
+};
+
+// 계좌의 이관 기록 수집 — 메모 달력이 '언제·어떤 종목·몇 주가 이관됐는지'를 라이브 파생하는 소스.
+// ⚠️ calendarMemos에 복사하지 말 것(투자기록·수량변경 파생과 동일 계약) — 원장이 유일한 원본이다.
+//    복사하면 DepositPanel에서 원장을 고쳤을 때 달력만 옛 값을 들고 있어 두 화면이 갈린다.
+// ⚠️ role 'gain'(평가차익 보정 행)은 제외한다 — 같은 이관이 한 칸에 두 번 뜬다.
+export const collectTransferRows = (p: any): any[] => {
+  const out: any[] = [];
+  const scan = (list: any) => (Array.isArray(list) ? list : []).forEach((r: any) => {
+    const t = r && r.transfer;
+    if (!t || typeof t !== 'object' || t.role === 'gain') return;
+    if (!r.date || typeof r.date !== 'string') return;
+    out.push({ ...t, date: r.date, rowId: r.id, amount: cleanNum(r.amount) });
+  });
+  scan(p?.depositHistory);
+  scan(p?.depositHistory2);
+  return out;
+};
+
 export const formatCurrency = (n) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(cleanNum(n));
 export const formatPercent = (n) => cleanNum(n).toFixed(2) + '%';
 export const formatNumber = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR').format(cleanNum(n));

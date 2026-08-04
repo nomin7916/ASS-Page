@@ -16,6 +16,7 @@
     "verify:fx": "node scripts/verify-fx.mjs",
     "verify:brl": "node scripts/verify-brl-bond.mjs",
     "verify:rebal-restore": "node scripts/verify-rebal-restore.mjs",
+    "verify:transfer": "node scripts/verify-transfer.mjs",
     "verify:flow": "node scripts/verify-flow.mjs"
   },
   "dependencies": {

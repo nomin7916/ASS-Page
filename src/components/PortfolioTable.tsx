@@ -19,6 +19,16 @@ const formatUSD = (n) => {
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
 const getAssetClass = (cat) => SAFE_CATEGORIES.includes(cat) ? 'S' : 'D';
 
+// 이관 아이콘 — 저장소에서 한 번도 쓰이지 않은 lucide 아이콘은 이 버전에 존재한다는 근거가 없어
+// 인라인 SVG로 둔다(AccountTabBar의 FlowIcon 선례 — CLAUDE.md '외부 의존성' 규약과 같은 취지).
+const TransferIcon = ({ size = 13 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" />
+    <path d="M10 17l5-5-5-5" />
+    <path d="M15 12H3" />
+  </svg>
+);
+
 const CELL_FOCUS = 'focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500';
 const RO_FOCUS = 'focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none';
 
@@ -174,7 +184,7 @@ const CategoryCell = ({ item, portfolio, showAssetClass, onUpdate }) => {
 // 계좌 타입별 기능 게이팅 (혼동/회귀 방지 — CLAUDE.md "계좌 타입별 D/S·펀드 게이팅" 참조)
 //  · isRetirement   : 펀드 행 + "펀드 추가" 버튼 — 퇴직연금(DC/IRP) + 개인연금(pension)
 //  · showAssetClass : 위험/안전(D/S) 자산 구분 배지 — 퇴직연금(DC/IRP) 전용 (개인연금 제외)
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {} }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {} }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -716,7 +726,27 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {!H('profit') && (
                     <td className={`${td} font-bold text-right ${item.profit > 0 ? 'text-red-400' : 'text-blue-400'} ${RO_FOCUS}`} tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? fmtDual(item.profit) : formatCurrency(item.profit)}</td>
                   )}
-                  <td className="text-center py-2.5"><button onClick={() => onDelete(item.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1"><Trash2 size={14} /></button></td>
+                  {/* 액션: 이관 + 삭제 (펀드·예적금 행과 동일한 2버튼 패턴 — 열 개수는 그대로 1칸) */}
+                  <td className="p-0 align-middle">
+                    {onTransfer ? (
+                      <div className="flex items-stretch justify-center h-full min-h-[36px]">
+                        <button
+                          onClick={() => onTransfer(item.id)}
+                          className="flex-1 flex items-center justify-center text-sky-400 hover:text-sky-100 hover:bg-sky-600/40 border-r border-gray-600/60 transition-colors"
+                          title="다른 계좌로 이관"
+                        ><TransferIcon size={13} /></button>
+                        <button
+                          onClick={() => onDelete(item.id)}
+                          className="flex-1 flex items-center justify-center text-gray-500 hover:text-red-200 hover:bg-red-600/40 transition-colors"
+                          title="종목 삭제"
+                        ><Trash2 size={13} /></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center py-2.5">
+                        <button onClick={() => onDelete(item.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1"><Trash2 size={14} /></button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               );
             })}
