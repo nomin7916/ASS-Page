@@ -12,7 +12,8 @@ import {
 import {
   runBacktest, makeBtConfig, makeBtAsset, joinTradeDividends, parsePastedSeries,
   seriesRange, monthsBetween,
-  MAX_BT_SCENARIOS, MAX_BT_ASSETS, MAX_BT_EVENTS, MAX_BT_OVERRIDES, BT_COLORS,
+  MAX_BT_SCENARIOS, MAX_BT_ASSETS, MAX_BT_EVENTS, MAX_BT_OVERRIDES,
+  MAX_BT_CONTRIB_OVERRIDES, MAX_BT_REBAL_DATES, BT_COLORS,
 } from '../backtest';
 import { generateId, formatNumber, cleanNum } from '../utils';
 
@@ -314,6 +315,10 @@ export default function BacktestPage({
         removeAssets: e.removeAssets.filter((x) => x !== id),
         targets: e.targets.filter((t) => t.assetId !== id),
       })),
+      // ⚠️ 그 종목만 겨냥한 월별 오버라이드도 같이 지운다 — 남겨 두면 select 의 값
+      //    `a:<삭제된 id>` 에 대응하는 option 이 없어 브라우저가 첫 항목('월중 일괄' 등)을
+      //    표시하고, 사용자가 다른 칸을 건드리는 순간 조용히 그 그룹 일괄로 바뀐다.
+      overrides: active.overrides.filter((o) => o.assetId !== id),
     });
   };
 
@@ -362,6 +367,17 @@ export default function BacktestPage({
       for (const t of m.trades) { if (dup.has(t.assetId)) { dupTraded = true; break; } dup.add(t.assetId); }
       rows.push([`${m.ym} 합계`, '', '', '', dupTraded ? '' : Math.round(m.evalBeforeSum), '', Math.round(m.tradeNet), '',
         dupTraded ? '' : Math.round(joined.reduce((s, r) => s + r.trade.evalAfter, 0)), '', '', '', Math.round(m.divAccrued)]);
+      // 매월 목표 증액 — 화면 sky 블록과 동일 소스
+      if (m.contribution && m.contribution.amount > 0) {
+        const c = m.contribution;
+        rows.push([`${m.ym} 목표증액`, c.date, c.mode === 'pctOfCash' ? `예수금 ${c.value}%` : '고정 금액',
+          '', Math.round(c.cashBefore), '', Math.round(c.amount), '', '', '', '', '', '']);
+        for (const x of c.perAsset) {
+          if (!(x.added > 0)) continue;
+          rows.push([`${m.ym} 증액배분`, c.date, `${x.name}(${x.code})`, '', '', '',
+            Math.round(x.added), '', Math.round(x.targetAfter), '', '', '', '']);
+        }
+      }
       // 월말 보유 — 그 달에 거래가 없던 종목도 포함(화면 '월말 보유 현황'과 동일 소스)
       for (const h of m.holdings) {
         rows.push([`${m.ym} 월말보유`, m.lastDate, `${h.name}(${h.code})`, h.price, '', '', '',
@@ -539,6 +555,108 @@ export default function BacktestPage({
                 </button>
               </Section>
 
+              <Section title="②-b 매월 목표 증액 (현금 재투자)" defaultOpen={active.contribution.mode !== 'none'}>
+                <p className="text-[10px] text-gray-600 leading-relaxed">
+                  리밸런싱 매도 차익·분배금으로 쌓인 <b className="text-gray-400">예수금</b>을 매월 다시 투자에
+                  넣습니다. 그 달 <b className="text-gray-400">첫 리밸런싱 직전</b>에 종목 목표를 올리면
+                  바로 이어지는 리밸런싱이 실제로 매수합니다.
+                </p>
+                <div className="flex flex-col gap-1">
+                  <span className={LABEL}>증액 방식</span>
+                  {/* ⚠️ 방식을 바꾸면 값을 0으로 되돌린다 — %와 원은 단위가 달라서 값을 남기면
+                      '예수금의 50%'가 '매월 50원'으로 조용히 바뀐다(자릿수 7자리 차이). */}
+                  <select className={INPUT} value={active.contribution.mode} disabled={readOnly}
+                    onChange={(e) => patchActive({
+                      contribution: {
+                        ...active.contribution,
+                        mode: e.target.value,
+                        value: e.target.value === active.contribution.mode ? active.contribution.value : 0,
+                      },
+                    })}>
+                    <option value="none">증액 없음 (현금을 그대로 쌓아 둠)</option>
+                    <option value="pctOfCash">보유 예수금의 % 만큼</option>
+                    <option value="amount">매월 고정 금액</option>
+                  </select>
+                </div>
+                {/* ⚠️ 값 입력·배분은 mode가 'none'이면 숨기되, **예외 규칙 목록은 항상 보여준다** —
+                    엔진은 mode='none'이어도 월별 예외를 그대로 실행하므로, 숨기면 사용자가 이유를
+                    모르는 증액이 결과에 나타난다(설정과 동작이 갈리는 숨은 상태). */}
+                {active.contribution.mode !== 'none' && (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="flex flex-col gap-1">
+                        <span className={LABEL}>{active.contribution.mode === 'pctOfCash' ? '비율 (%)' : '금액 (원)'}</span>
+                        <NumInput value={active.contribution.value} disabled={readOnly}
+                          onCommit={(v) => patchActive({ contribution: { ...active.contribution, value: Math.max(0, v) } })} />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className={LABEL}>종목별 배분</span>
+                        <select className={INPUT} value={active.contribution.split} disabled={readOnly}
+                          onChange={(e) => patchActive({ contribution: { ...active.contribution, split: e.target.value } })}>
+                          <option value="ratio">현재 목표 비율대로</option>
+                          <option value="even">활성 종목에 균등</option>
+                        </select>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-gray-600 leading-relaxed">
+                      증액액은 <b className="text-gray-400">보유 예수금을 넘지 않게</b> 잘립니다(넘기면 곧바로
+                      '예수금 부족'이 되기 때문). 리밸런싱이 없는 달은 건너뜁니다.
+                    </p>
+                    {active.targetMode === 'ratio' && active.ratioBase !== 'initial' && (
+                      <p className="text-[10px] text-amber-400/90 leading-relaxed">
+                        ⚠️ 비중 모드에서 분모가 '{active.ratioBase === 'equity' ? '종목 평가액 합계' : '평가액 + 예수금'}'이면
+                        증액이 효과가 없습니다 — 목표가 이미 파생값이기 때문입니다. 분모를
+                        <b> 초기 투자금 고정</b>으로 바꾸거나 목표 <b>금액</b> 모드를 쓰세요.
+                      </p>
+                    )}
+
+                  </>
+                )}
+
+                {/* 특정 월만 다른 증액 */}
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-1">
+                    <span className={LABEL}>특정 월만 다르게</span>
+                    <span className="text-[10px] text-gray-600">({active.contribOverrides.length})</span>
+                    <button className={`${BTN} ml-auto text-gray-300 border-gray-700 hover:bg-gray-800`}
+                      disabled={readOnly || !active.startDate || active.contribOverrides.length >= MAX_BT_CONTRIB_OVERRIDES}
+                      onClick={() => {
+                        const ms = monthsBetween(active.startDate, active.endDate);
+                        if (!ms.length) return;
+                        patchActive({
+                          contribOverrides: [...active.contribOverrides, {
+                            id: generateId(), ym: ms[0],
+                            mode: active.contribution.mode, value: active.contribution.value,
+                          }],
+                        });
+                      }}>
+                      <Plus size={10} className="inline -mt-0.5" /> 추가
+                    </button>
+                  </div>
+                  {active.contribOverrides.map((o) => (
+                    <div key={o.id} className="flex items-center gap-1">
+                      <select className={`${INPUT} w-[88px]`} value={o.ym} disabled={readOnly}
+                        onChange={(e) => patchActive({ contribOverrides: active.contribOverrides.map((x) => x.id === o.id ? { ...x, ym: e.target.value } : x) })}>
+                        {monthsBetween(active.startDate, active.endDate).map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                      {/* 방식 전환 시 값 초기화 — 위 기본 규칙과 같은 이유(% ↔ 원 단위 혼동 방지) */}
+                      <select className={`${INPUT} w-[104px]`} value={o.mode} disabled={readOnly}
+                        onChange={(e) => patchActive({ contribOverrides: active.contribOverrides.map((x) => x.id === o.id ? { ...x, mode: e.target.value, value: e.target.value === x.mode ? x.value : 0 } : x) })}>
+                        <option value="none">증액 없음</option>
+                        <option value="pctOfCash">예수금 %</option>
+                        <option value="amount">고정 금액</option>
+                      </select>
+                      <NumInput value={o.value} disabled={readOnly || o.mode === 'none'}
+                        onCommit={(v) => patchActive({ contribOverrides: active.contribOverrides.map((x) => x.id === o.id ? { ...x, value: Math.max(0, v) } : x) })} />
+                      <button className="p-1 text-gray-600 hover:text-red-400 shrink-0" disabled={readOnly}
+                        onClick={() => patchActive({ contribOverrides: active.contribOverrides.filter((x) => x.id !== o.id) })}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+
               <Section title="③ 리밸런싱 일정">
                 <div className="flex flex-col gap-1">
                   <span className={LABEL}>전체 정책</span>
@@ -598,7 +716,7 @@ export default function BacktestPage({
                           overrides: [...active.overrides, {
                             id: generateId(), ym: ms[0],
                             group: active.policy === 'perCycle' ? 'eom' : 'all',
-                            date: `${ms[0]}-15`,
+                            date: `${ms[0]}-15`, assetId: '',
                           }],
                         });
                       }}>
@@ -611,11 +729,22 @@ export default function BacktestPage({
                         onChange={(e) => patchActive({ overrides: active.overrides.map((x) => x.id === o.id ? { ...x, ym: e.target.value } : x) })}>
                         {monthsBetween(active.startDate, active.endDate).map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
-                      <select className={`${INPUT} w-[74px]`} value={o.group} disabled={readOnly}
-                        onChange={(e) => patchActive({ overrides: active.overrides.map((x) => x.id === o.id ? { ...x, group: e.target.value } : x) })}>
+                      {/* 대상: 그룹 일괄 / 특정 종목 하나. 값 접두사로 두 축을 한 select에 담는다. */}
+                      <select className={`${INPUT} w-[112px]`} value={o.assetId ? `a:${o.assetId}` : `g:${o.group}`} disabled={readOnly}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          patchActive({
+                            overrides: active.overrides.map((x) => x.id === o.id
+                              ? (v.startsWith('a:') ? { ...x, assetId: v.slice(2) } : { ...x, assetId: '', group: v.slice(2) })
+                              : x),
+                          });
+                        }}>
                         {active.policy === 'perCycle'
-                          ? <><option value="mid">월중</option><option value="eom">월말</option></>
-                          : <option value="all">전체</option>}
+                          ? <><option value="g:mid">월중 일괄</option><option value="g:eom">월말 일괄</option></>
+                          : <option value="g:all">전체 일괄</option>}
+                        {active.assets.map((a) => (
+                          <option key={a.id} value={`a:${a.id}`}>{(a.name || a.code)}만</option>
+                        ))}
                       </select>
                       <input type="date" className={INPUT} value={o.date} disabled={readOnly}
                         onChange={(e) => patchActive({ overrides: active.overrides.map((x) => x.id === o.id ? { ...x, date: e.target.value } : x) })} />
@@ -627,7 +756,9 @@ export default function BacktestPage({
                   ))}
                   <p className="text-[10px] text-gray-600 leading-relaxed">
                     ⚠️ 오버라이드는 <b className="text-gray-400">리밸런싱일만</b> 옮깁니다. 분배락·지급일은
-                    시장이 정하는 값이라 그대로입니다.
+                    시장이 정하는 값이라 그대로입니다. <b className="text-gray-400">일괄</b> 항목은
+                    '전역 정책 따름' 종목에만 적용되고, 종목별 일정을 따로 지정한 종목은
+                    <b className="text-gray-400"> ○○만</b> 항목으로 옮깁니다.
                   </p>
                 </div>
               </Section>
@@ -698,6 +829,56 @@ export default function BacktestPage({
                             onCommit={(v) => patchAsset(a.id, { targetRatio: v })} />
                         )}
                       </div>
+                      {/* 종목별 리밸런싱 일정 — 분배가 불규칙한 종목을 전역 정책과 다르게 돌린다.
+                          ⚠️ '전역 정책 따름'이 아닌 종목은 월별 **일괄** 오버라이드에 끌려가지 않는다. */}
+                      <div className="grid grid-cols-2 gap-1">
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-[9px] text-gray-600">리밸런싱 일정</span>
+                          <select className={INPUT} value={a.rebalMode} disabled={readOnly}
+                            onChange={(e) => patchAsset(a.id, { rebalMode: e.target.value })}>
+                            <option value="follow">전역 정책 따름</option>
+                            <option value="mid">이 종목만 · 월중 분배락 전</option>
+                            <option value="eom">이 종목만 · 월말 분배락 전</option>
+                            <option value="day">이 종목만 · 매월 지정일</option>
+                            <option value="dates">이 종목만 · 지정 날짜에만</option>
+                            <option value="none">리밸런싱 안 함</option>
+                          </select>
+                        </label>
+                        {a.rebalMode === 'day' ? (
+                          <label className="flex flex-col gap-0.5">
+                            <span className="text-[9px] text-gray-600">매월 며칠 (휴장이면 직전 영업일)</span>
+                            <NumInput value={a.rebalDay} disabled={readOnly}
+                              onCommit={(v) => patchAsset(a.id, { rebalDay: Math.min(31, Math.max(1, Math.round(v))) })} />
+                          </label>
+                        ) : a.rebalMode === 'dates' ? (
+                          <label className="flex flex-col gap-0.5">
+                            <span className="text-[9px] text-gray-600">날짜 추가</span>
+                            <input type="date" className={INPUT} value="" disabled={readOnly || a.rebalDates.length >= MAX_BT_REBAL_DATES}
+                              onChange={(e) => {
+                                const d = e.target.value;
+                                // ⚠️ 상한을 여기서 막지 않으면 초과분이 저장은 되고 **다음 로드에서
+                                //    조용히 절삭**돼(정규화) 그때 결과가 달라진다.
+                                if (!d || a.rebalDates.includes(d) || a.rebalDates.length >= MAX_BT_REBAL_DATES) return;
+                                patchAsset(a.id, { rebalDates: [...a.rebalDates, d].sort() });
+                              }} />
+                          </label>
+                        ) : <span />}
+                      </div>
+                      {a.rebalMode === 'dates' && (
+                        <div className="flex flex-wrap gap-1">
+                          {a.rebalDates.length === 0 && (
+                            <span className="text-[9px] text-amber-400/90">날짜를 하나도 지정하지 않으면 이 종목은 리밸런싱되지 않습니다.</span>
+                          )}
+                          {a.rebalDates.map((d) => (
+                            <button key={d} disabled={readOnly}
+                              title="클릭하여 제거"
+                              className="px-1 py-0.5 rounded text-[9px] border border-gray-700 text-gray-400 hover:border-red-700 hover:text-red-300"
+                              onClick={() => patchAsset(a.id, { rebalDates: a.rebalDates.filter((x) => x !== d) })}>
+                              {d} ✕
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-1">
                         <label className="flex flex-col gap-0.5">
                           <span className="text-[9px] text-gray-600">편입일 (비우면 자동)</span>
@@ -1069,6 +1250,37 @@ export default function BacktestPage({
                       </table>
                     </div>
                     )}
+                    {/* 매월 목표 증액 — 리밸런싱 직전에 예수금을 목표로 옮긴 내역.
+                        위 표의 매수 수량이 왜 늘었는지를 설명하는 값이라 표 바로 아래에 둔다. */}
+                    {m.contribution && m.contribution.amount > 0 && (
+                      <div className="mt-1 border border-sky-900/60 rounded-lg bg-sky-950/30 px-2 py-1.5">
+                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[10px]">
+                          <span className="text-sky-300 font-bold">
+                            목표 증액 {won(m.contribution.amount)}
+                            {m.contribution.overridden && <span className="ml-1 text-amber-400 font-normal">(이 달 전용 규칙)</span>}
+                          </span>
+                          <span className="text-gray-500">
+                            {m.contribution.date} · 예수금 {won(m.contribution.cashBefore)}의{' '}
+                            {m.contribution.mode === 'pctOfCash' ? `${m.contribution.value}%` : '고정 금액'}
+                          </span>
+                          {m.contribution.note && <span className="text-amber-400/90">{m.contribution.note}</span>}
+                          {Math.round(m.contribution.requested) !== m.contribution.amount && (
+                            <span className="text-gray-600">요청 {won(m.contribution.requested)}</span>
+                          )}
+                        </div>
+                        {m.contribution.perAsset.some((x) => x.added > 0) && (
+                          <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
+                            {m.contribution.perAsset.filter((x) => x.added > 0).map((x) => (
+                              <span key={x.assetId} className="text-[10px] whitespace-nowrap">
+                                <span className="text-gray-400">{x.name}</span>
+                                <span className="text-sky-300"> +{won(x.added)}</span>
+                                <span className="text-gray-600"> → 목표 {won(x.targetAfter)}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {/* 월말 보유 — ⚠️ 위 표는 '그 달 거래된 종목'만 행이 생기므로, 이 블록이 없으면
                         이번 달에 손대지 않은 종목의 수량·평가금액을 확인할 길이 없다. 모든 보유 종목을
                         같은 시점(월말 영업일)의 종가로 평가한 값이라 합계가 월말 총자산과 정합한다. */}
@@ -1102,6 +1314,9 @@ export default function BacktestPage({
                       <span className="text-gray-500">월 현금 증감 <b className={pnlCls(m.cashDelta)}>{wonSigned(m.cashDelta)}</b></span>
                       <span className="text-gray-500">월말 예수금 <b className="text-gray-300">{won(m.cashEnd)}</b></span>
                       <span className="text-gray-500">월말 총자산 <b className="text-gray-200">{won(m.totalEnd)}</b></span>
+                      {m.cumContribution > 0 && (
+                        <span className="text-gray-500">누적 증액 <b className="text-sky-300">{won(m.cumContribution)}</b></span>
+                      )}
                       {m.structuralNet !== 0 && (
                         <span className="text-amber-400/80 col-span-2">
                           ※ 종목 재편 순현금 {wonSigned(m.structuralNet)} — 매매차익에는 포함하지 않습니다

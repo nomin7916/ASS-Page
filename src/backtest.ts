@@ -69,12 +69,31 @@ export type BtFunding =
   /** 목표만 바꾸고 매매는 다음 정기 리밸런싱까지 대기. */
   | 'defer';
 
+/**
+ * 종목별 리밸런싱 일정.
+ *  follow — 전역 정책(config.policy)을 따른다(기본).
+ *  mid/eom — 그 종목만 월중/월말 분배락 전에.
+ *  day   — 그 종목만 매월 지정일(asset.rebalDay).
+ *  dates — 그 종목만 지정한 날짜 목록(asset.rebalDates)에만. 분배가 불규칙한 종목용.
+ *  none  — 리밸런싱하지 않음(최초 매수 후 방치).
+ * ⚠️ follow가 아닌 종목은 **전역 월별 오버라이드에 끌려가지 않는다** — "일괄지정과 별개로
+ *    종목을 지정해 다르게 리밸런싱"이라는 요구가 이 분리에서 나온다. 그 종목을 특정 월만
+ *    옮기려면 assetId를 지정한 개별 오버라이드를 쓴다.
+ */
+export type BtAssetRebal = 'follow' | 'mid' | 'eom' | 'day' | 'dates' | 'none';
+
 export interface BtAsset {
   id: string;
   /** 종목코드(국내 6자 영숫자 등). 시세·분배금 조회의 유일한 키. */
   code: string;
   name: string;
   payCycle: BtPayCycle;
+  /** 리밸런싱 일정(기본 'follow' = 전역 정책). */
+  rebalMode: BtAssetRebal;
+  /** rebalMode==='day'일 때 매월 며칠(1~31, 휴장이면 직전 영업일). */
+  rebalDay: number;
+  /** rebalMode==='dates'일 때 리밸런싱할 날짜 목록('YYYY-MM-DD', 휴장이면 직전 영업일). */
+  rebalDates: string[];
   /** 목표금액(원). targetMode='amount'일 때 사용. null=미지정 */
   targetAmount: number | null;
   /** 목표비중(%). targetMode='ratio'일 때 사용. null=미지정 */
@@ -122,6 +141,35 @@ export interface BtOverride {
   group: BtGroup;
   /** 임의 리밸런싱일. 휴장이면 직전 영업일로 스냅. */
   date: string;
+  /**
+   * 비우면 그 그룹 전체(기존 동작), 값이 있으면 **그 종목만** 이 날짜로 옮긴다.
+   * ⚠️ 종목 지정 오버라이드는 rebalMode가 'follow'가 아닌 종목에도 적용된다(그 종목의
+   *    그 달 일정 전체를 이 날짜 하나로 대체).
+   */
+  assetId: string;
+}
+
+/**
+ * 매월 목표 증액(재투자) 규칙.
+ * 리밸런싱 매도 차익·분배금으로 쌓인 **예수금을 다시 투자에 투입**하기 위해, 그 달 첫
+ * 리밸런싱 직전에 종목별 목표금액을 올린다.
+ * ⚠️ 증액 자체는 현금을 움직이지 않는다 — 목표가 올라가면 그 직후 리밸런싱이 실제로 매수한다.
+ *    그래서 증액액은 **보유 예수금을 넘지 않게 잘린다**(넘기면 곧바로 '예수금 부족'이 된다).
+ */
+export interface BtContribution {
+  /** none=증액 없음 / pctOfCash=보유 예수금의 N% / amount=고정 금액 */
+  mode: 'none' | 'pctOfCash' | 'amount';
+  value: number;
+  /** ratio=현재 목표 비율대로 배분 / even=활성 종목에 균등 배분 */
+  split: 'ratio' | 'even';
+}
+
+/** 특정 월만 다른 증액 규칙(월별 미세조정). */
+export interface BtContribOverride {
+  id: string;
+  ym: string;
+  mode: 'none' | 'pctOfCash' | 'amount';
+  value: number;
 }
 
 export interface BtConfig {
@@ -147,6 +195,10 @@ export interface BtConfig {
   payOffset: number;
   /** true면 현금이 부족해도 매수(마이너스 예수금 허용). 기본 false = 가능한 수량만. */
   allowNegativeCash: boolean;
+  /** 매월 목표 증액(재투자) 기본 규칙. */
+  contribution: BtContribution;
+  /** 특정 월만 다른 증액 규칙. */
+  contribOverrides: BtContribOverride[];
   assets: BtAsset[];
   events: BtEvent[];
   overrides: BtOverride[];
@@ -165,6 +217,9 @@ export const MAX_BT_SCENARIOS = 10;
 export const MAX_BT_ASSETS = 20;
 export const MAX_BT_EVENTS = 40;
 export const MAX_BT_OVERRIDES = 120;
+export const MAX_BT_CONTRIB_OVERRIDES = 120;
+/** rebalMode==='dates'일 때 종목당 지정 가능한 날짜 수 */
+export const MAX_BT_REBAL_DATES = 120;
 
 export const BT_COLORS = [
   '#60A5FA', '#F472B6', '#34D399', '#FBBF24', '#A78BFA',
@@ -264,6 +319,25 @@ export interface BtDivSlot {
   assetIds: string[];
 }
 
+/** 그 달 실제로 실행된 목표 증액(재투자) 1건. */
+export interface BtContribRow {
+  ym: string;
+  /** 증액을 적용한 날(그 달 첫 리밸런싱일) */
+  date: string;
+  /** 적용 직전 예수금 */
+  cashBefore: number;
+  /** 규칙상 증액하려던 금액 */
+  requested: number;
+  /** 실제 증액한 금액(예수금 한도로 잘릴 수 있음) */
+  amount: number;
+  mode: 'pctOfCash' | 'amount';
+  value: number;
+  /** 그 달 전용 규칙이 적용됐는가 */
+  overridden: boolean;
+  perAsset: { assetId: string; code: string; name: string; added: number; targetAfter: number }[];
+  note: string;
+}
+
 export interface BtMonth {
   ym: string;
   trades: BtTrade[];
@@ -306,6 +380,10 @@ export interface BtMonth {
    *    weight 분모는 evalEnd(종목만, 예수금 제외) — 기말 보유 현황 표와 같은 정의.
    */
   holdings: BtHolding[];
+  /** 그 달 실행된 목표 증액(없으면 null) */
+  contribution: BtContribRow | null;
+  /** 그 달까지 누적 증액 총액 */
+  cumContribution: number;
 }
 
 export interface BtHolding {
@@ -370,6 +448,8 @@ export interface BtResult {
     cumDivAccrued: number;
     /** 실제 입금된 누적 분배금(지급일 기준). 기말 예수금에 반영된 값. */
     cumDivPaid: number;
+    /** 매월 증액(재투자)으로 목표에 더한 누적 금액 */
+    cumContribution: number;
     /** 최고 자산 대비 최대 낙폭(%) */
     maxDrawdown: number;
     months: number;
@@ -620,13 +700,19 @@ const asArr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
 const clampInt = (v: number, lo: number, hi: number) =>
   Math.min(hi, Math.max(lo, Math.round(v)));
 
+const REBAL_MODES: BtAssetRebal[] = ['follow', 'mid', 'eom', 'day', 'dates', 'none'];
+
 export function makeBtAsset(partial: Partial<BtAsset> = {}, idx = 0): BtAsset {
   const cycle = partial.payCycle;
+  const rm = partial.rebalMode;
   return {
     id: partial.id || generateId(),
     code: asStr(partial.code).trim().toUpperCase(),
     name: asStr(partial.name),
     payCycle: cycle === 'mid' || cycle === 'eom' || cycle === 'none' ? cycle : 'eom',
+    rebalMode: REBAL_MODES.includes(rm as BtAssetRebal) ? (rm as BtAssetRebal) : 'follow',
+    rebalDay: clampInt(asNum(partial.rebalDay, 15), 1, 31),
+    rebalDates: Array.from(new Set(asArr(partial.rebalDates).filter(isIsoDate))).sort().slice(0, MAX_BT_REBAL_DATES),
     targetAmount: asNumOrNull(partial.targetAmount),
     targetRatio: asNumOrNull(partial.targetRatio),
     startDate: isIsoDate(partial.startDate) ? partial.startDate : '',
@@ -670,6 +756,9 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
     rebalOffset: clampInt(asNum(partial.rebalOffset, -1), -10, 0),
     payOffset: clampInt(asNum(partial.payOffset, 2), 0, 10),
     allowNegativeCash: !!partial.allowNegativeCash,
+    contribution: normalizeContribution(partial.contribution),
+    contribOverrides: asArr(partial.contribOverrides).slice(0, MAX_BT_CONTRIB_OVERRIDES)
+      .map(normalizeContribOverride).filter(Boolean) as BtContribOverride[],
     assets: asArr(partial.assets).slice(0, MAX_BT_ASSETS).map((a, i) => makeBtAsset(a, i)),
     events: asArr(partial.events).slice(0, MAX_BT_EVENTS).map(normalizeEvent),
     overrides: asArr(partial.overrides).slice(0, MAX_BT_OVERRIDES).map(normalizeOverride).filter(Boolean) as BtOverride[],
@@ -707,6 +796,31 @@ function normalizeOverride(raw: any): BtOverride | null {
     ym,
     group: g === 'mid' || g === 'all' ? g : g === 'eom' ? 'eom' : 'all',
     date: raw.date,
+    assetId: asStr(raw?.assetId),
+  };
+}
+
+const CONTRIB_MODES = ['none', 'pctOfCash', 'amount'];
+
+function normalizeContribution(raw: any): BtContribution {
+  const m = raw?.mode;
+  const s = raw?.split;
+  return {
+    mode: CONTRIB_MODES.includes(m) ? m : 'none',
+    value: Math.max(0, asNum(raw?.value, 0)),
+    split: s === 'even' ? 'even' : 'ratio',
+  };
+}
+
+function normalizeContribOverride(raw: any): BtContribOverride | null {
+  const ym = asStr(raw?.ym);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return null;
+  const m = raw?.mode;
+  return {
+    id: asStr(raw?.id) || generateId(),
+    ym,
+    mode: CONTRIB_MODES.includes(m) ? m : 'none',
+    value: Math.max(0, asNum(raw?.value, 0)),
   };
 }
 
@@ -746,11 +860,16 @@ export function backtestFingerprint(scenarios: unknown): string {
           s?.targetMode ?? '', s?.ratioBase ?? '', s?.rounding ?? '', s?.policy ?? '',
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
           s?.allowNegativeCash ? 1 : 0,
+          // 매월 증액 규칙 — 결과를 통째로 바꾸는 사용자 설정이라 반드시 지문에 포함
+          s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? '',
         ],
+        c: asArr(s?.contribOverrides).map((o: any) => [o?.id ?? '', o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
         a: asArr(s?.assets).map((a: any) => [
           a?.id ?? '', a?.code ?? '', a?.name ?? '', a?.payCycle ?? '',
           a?.targetAmount ?? null, a?.targetRatio ?? null,
           a?.startDate ?? '', a?.endDate ?? '', a?.color ?? '',
+          // 종목별 리밸런싱 일정 — 지정 날짜 목록까지 포함해야 단독 편집이 저장된다
+          a?.rebalMode ?? '', a?.rebalDay ?? 0, asArr(a?.rebalDates).join(','),
           // ⚠️ 주당 분배금 수동 입력은 결과를 바꾸는 사용자 데이터다 — 키 정렬로 안정화해 포함.
           Object.keys(a?.divOverride ?? {}).sort().map(k => `${k}:${a.divOverride[k]}`).join(','),
         ]),
@@ -759,7 +878,7 @@ export function backtestFingerprint(scenarios: unknown): string {
           asArr(e?.addAssets).join(','), asArr(e?.removeAssets).join(','),
           asArr(e?.targets).map((t: any) => `${t?.assetId ?? ''}:${t?.amount ?? ''}:${t?.ratio ?? ''}`).join('|'),
         ]),
-        o: asArr(s?.overrides).map((o: any) => [o?.id ?? '', o?.ym ?? '', o?.group ?? '', o?.date ?? '']),
+        o: asArr(s?.overrides).map((o: any) => [o?.id ?? '', o?.ym ?? '', o?.group ?? '', o?.date ?? '', o?.assetId ?? '']),
       })),
     );
   } catch {
@@ -794,62 +913,126 @@ export function normalizeBacktestScenarios(raw: unknown): BtScenarios {
  * I. 일정 생성
  * =========================================================================== */
 
-/** 정책이 요구하는 리밸런싱 그룹 목록. */
-function groupsForPolicy(policy: BtPolicy): BtGroup[] {
-  if (policy === 'perCycle') return ['mid', 'eom'];
-  return ['all'];
+/**
+ * 그 종목이 실제로 따를 리밸런싱 방식.
+ * rebalMode가 'follow'면 전역 정책을 그 종목에 투영한다 — perCycle에서 **분배 없는 종목**
+ * ('none')이 월말 그룹에 붙는 배정까지 종전과 동일하다.
+ */
+export function resolveAssetRebal(
+  asset: BtAsset,
+  config: BtConfig,
+): { mode: 'mid' | 'eom' | 'day' | 'dates' | 'none'; day: number; follows: boolean } {
+  const rm = asset.rebalMode || 'follow';
+  if (rm !== 'follow') {
+    return { mode: rm, day: clampInt(asNum(asset.rebalDay, 15), 1, 31), follows: false };
+  }
+  switch (config.policy) {
+    case 'allMid': return { mode: 'mid', day: 0, follows: true };
+    case 'allEom': return { mode: 'eom', day: 0, follows: true };
+    case 'fixedDay': return { mode: 'day', day: clampInt(config.fixedDay, 1, 31), follows: true };
+    default: return { mode: asset.payCycle === 'mid' ? 'mid' : 'eom', day: 0, follows: true };
+  }
 }
 
-/** 그 그룹에서 리밸런싱되는 종목. */
-function assetsInGroup(assets: BtAsset[], group: BtGroup): string[] {
-  if (group === 'all') return assets.map(a => a.id);
-  if (group === 'mid') return assets.filter(a => a.payCycle === 'mid').map(a => a.id);
-  // 'eom' — 분배 없는 종목('none')도 월말 그룹에서 리밸런싱한다.
-  return assets.filter(a => a.payCycle === 'eom' || a.payCycle === 'none').map(a => a.id);
+/** 전역 정책에서 그 종목이 속하는 그룹 = 월별 **일괄** 오버라이드의 대상 단위. */
+function groupOfFollow(config: BtConfig, asset: BtAsset): BtGroup {
+  if (config.policy !== 'perCycle') return 'all';
+  return asset.payCycle === 'mid' ? 'mid' : 'eom';
 }
 
 /**
- * 리밸런싱 슬롯 생성.
+ * 리밸런싱 슬롯 생성 — **종목별로 날짜를 먼저 구한 뒤 (날짜, 그룹)으로 묶는다.**
+ *
  * ⚠️ 오버라이드는 **rebalDate만** 옮긴다(recordDate·exDate·payDate 불변) — 분배 일정은
  *    시장이 정하는 값이라 사용자가 옮기면 권리 확정 수량이 실제와 달라진다.
+ * ⚠️ 월별 **일괄** 오버라이드(assetId 없음)는 `rebalMode==='follow'` 종목에만 적용한다.
+ *    개별 지정한 종목까지 끌고 가면 "일괄과 별개로 종목을 다르게" 라는 요구가 깨진다.
+ *    개별 종목을 특정 월만 옮기려면 assetId를 지정한 오버라이드를 쓴다(그 달 일정을 통째로 대체).
+ * ⚠️ 슬롯의 recordDate/exDate/payDate는 **표시·검증용 라벨**이다. 실제 분배 권리는
+ *    buildDividendSlots가 종목의 payCycle로 따로 계산한다(정책과 독립).
  */
 export function buildSlots(config: BtConfig, holidays: Set<string>): BtSlot[] {
   const out: BtSlot[] = [];
   if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return out;
-  const ovMap = new Map<string, BtOverride>();
-  for (const o of config.overrides) ovMap.set(`${o.ym}|${o.group}`, o);
+  const groupOv = new Map<string, BtOverride>();
+  const assetOv = new Map<string, BtOverride>();
+  for (const o of config.overrides) {
+    if (o.assetId) assetOv.set(`${o.ym}|${o.assetId}`, o);
+    else groupOv.set(`${o.ym}|${o.group}`, o);
+  }
 
   for (const ym of monthsBetween(config.startDate, config.endDate)) {
-    for (const group of groupsForPolicy(config.policy)) {
-      // 분배 기준일은 정책과 무관하게 그 그룹의 사이클을 따른다.
-      const cycle: 'mid' | 'eom' =
-        group === 'mid' ? 'mid'
-        : group === 'eom' ? 'eom'
-        : config.policy === 'allMid' ? 'mid'
-        : 'eom';
+    // ⚠️ 병합 키는 **날짜 하나**다(그룹을 섞지 말 것). 같은 날짜를 그룹별로 쪼개면 그 날
+    //    리밸런싱 스텝이 2회 돌면서 '전 종목 매도 → 그 다음 매수' 불변식이 깨진다:
+    //    1패스의 매수가 아직 오지 않은 2패스 매도 대금을 못 써 예수금 부족으로 잘리고,
+    //    비중 모드의 ratioBaseAt도 패스 사이에 값이 달라져 결과가 그룹 순서에 의존하게 된다.
+    const byKey = new Map<string, { date: string; group: BtGroup; cycle: 'mid' | 'eom' | null; overridden: boolean; assetIds: string[]; groups: Set<BtGroup> }>();
+    const add = (date: string, group: BtGroup, cycle: 'mid' | 'eom' | null, overridden: boolean, assetId: string) => {
+      if (!isIsoDate(date)) return;
+      const cur = byKey.get(date);
+      if (cur) {
+        if (!cur.assetIds.includes(assetId)) cur.assetIds.push(assetId);
+        if (cycle && !cur.cycle) cur.cycle = cycle;
+        if (overridden) cur.overridden = true;
+        cur.groups.add(group);
+      } else {
+        byKey.set(date, { date, group, cycle, overridden, assetIds: [assetId], groups: new Set([group]) });
+      }
+    };
+
+    for (const a of config.assets) {
+      const r = resolveAssetRebal(a, config);
+      const group = r.follows ? groupOfFollow(config, a) : 'all';
+
+      // 라벨용 사이클 — 사이클이 없는 모드에서도 그 종목의 분배 주기를 실어 보낸다.
+      // (안 그러면 월중 분배 종목을 개별 지정했을 때 슬롯 라벨이 월말 기준으로 찍힌다.)
+      const labelCycle: 'mid' | 'eom' = a.payCycle === 'mid' ? 'mid' : 'eom';
+
+      // 종목 지정 오버라이드 — 그 달 그 종목의 일정을 이 날짜 하나로 대체(모드 무관).
+      const ao = assetOv.get(`${ym}|${a.id}`);
+      if (ao) { add(onOrBeforeBusinessDay(ao.date, holidays), group, labelCycle, true, a.id); continue; }
+
+      if (r.mode === 'none') continue;
+
+      if (r.mode === 'dates') {
+        for (const raw of a.rebalDates) {
+          if (ymOf(raw) !== ym) continue;
+          add(onOrBeforeBusinessDay(raw, holidays), group, labelCycle, false, a.id);
+        }
+        continue;
+      }
+
+      // 일괄 오버라이드는 follow 종목에만
+      const go = r.follows ? groupOv.get(`${ym}|${group}`) : undefined;
+
+      if (r.mode === 'day') {
+        const raw = `${ym}-${pad2(clampInt(r.day, 1, 31))}`;
+        const capped = isIsoDate(raw) ? raw : lastDayOfMonth(ym);
+        const d = go ? onOrBeforeBusinessDay(go.date, holidays) : onOrBeforeBusinessDay(capped, holidays);
+        add(d, group, labelCycle, !!go, a.id);
+        continue;
+      }
+
+      const cycle: 'mid' | 'eom' = r.mode;
       const recordDate = recordDateFor(ym, cycle, holidays);
       if (!recordDate) continue;
       const exDate = shiftBusinessDays(recordDate, config.exDivOffset, holidays);
-      const payDate = shiftBusinessDays(recordDate, config.payOffset, holidays);
+      const d = go ? onOrBeforeBusinessDay(go.date, holidays) : shiftBusinessDays(exDate, config.rebalOffset, holidays);
+      add(d, group, cycle, !!go, a.id);
+    }
 
-      let rebalDate: string;
-      if (config.policy === 'fixedDay') {
-        const raw = `${ym}-${pad2(clampInt(config.fixedDay, 1, 31))}`;
-        const capped = isIsoDate(raw) ? raw : lastDayOfMonth(ym);
-        rebalDate = onOrBeforeBusinessDay(capped, holidays);
-      } else {
-        rebalDate = shiftBusinessDays(exDate, config.rebalOffset, holidays);
-      }
-
-      const ov = ovMap.get(`${ym}|${group}`);
-      const overridden = !!ov;
-      if (ov) rebalDate = onOrBeforeBusinessDay(ov.date, holidays);
-
-      if (rebalDate < config.startDate || rebalDate > config.endDate) continue;
-
+    for (const v of byKey.values()) {
+      if (v.date < config.startDate || v.date > config.endDate) continue;
+      // 라벨용 기준일 — 사이클이 없는 모드(day/dates/개별 오버라이드)는 그 종목의 payCycle을
+      // 실어 보내므로 여기 폴백은 남은 예외(전 종목 payCycle:'none')에만 걸린다.
+      const cycle: 'mid' | 'eom' = v.cycle ?? 'eom';
+      const recordDate = recordDateFor(ym, cycle, holidays);
       out.push({
-        ym, group, recordDate, exDate, payDate, rebalDate, overridden,
-        assetIds: assetsInGroup(config.assets, group),
+        // 그룹이 섞인 날짜는 'all'로 라벨링(실행은 한 슬롯으로 함께 돈다).
+        ym, group: v.groups.size > 1 ? 'all' : v.group, recordDate,
+        exDate: shiftBusinessDays(recordDate, config.exDivOffset, holidays),
+        payDate: shiftBusinessDays(recordDate, config.payOffset, holidays),
+        rebalDate: v.date, overridden: v.overridden, assetIds: v.assetIds,
       });
     }
   }
@@ -957,7 +1140,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       startDate: config.startDate, endDate: config.endDate,
       initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
-      cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0,
+      cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0,
       maxDrawdown: 0, months: 0,
     },
   });
@@ -1037,8 +1220,10 @@ export function runBacktest(input: BtRunInput): BtResult {
   };
 
   /** 비중 모드의 분모. */
+  // 비중 모드 'initial' 분모에 누적되는 매월 증액분(목표금액 모드에서는 쓰이지 않는다).
+  let contribBase = 0;
   const ratioBaseAt = (date: string): number => {
-    if (config.ratioBase === 'initial') return config.initialCapital + config.extraCash;
+    if (config.ratioBase === 'initial') return config.initialCapital + config.extraCash + contribBase;
     const eq = totalEvalAt(date);
     return config.ratioBase === 'total' ? eq + cash : eq;
   };
@@ -1108,14 +1293,70 @@ export function runBacktest(input: BtRunInput): BtResult {
   const slots = buildSlots(config, holidays);
   const divSlots = buildDividendSlots(config, holidays);
 
+  // ⚠️ 리밸런싱 슬롯이 하나도 없는 종목은 **중간 편입 경로가 통째로 사라진다** — 종목을
+  //    활성화하는 계기는 초기매수·리밸런싱 슬롯·이벤트 addAssets 셋뿐이라, 조회기간 중간에
+  //    상장한 종목에 'none'/빈 날짜 목록을 주면 매수 자체가 일어나지 않는다.
+  {
+    const slotted = new Set<string>();
+    for (const s of slots) for (const id of s.assetIds) slotted.add(id);
+    for (const p of positions) {
+      if (slotted.has(p.asset.id)) continue;
+      const nm = p.asset.name || p.asset.code;
+      if (p.effectiveStart > startBiz) {
+        warnings.push(`${nm}: 리밸런싱 일정이 없어(‘리밸런싱 안 함’ 또는 지정 날짜 없음) 기간 중간 편입이 실행되지 않습니다 — 매수가 한 번도 일어나지 않습니다.`);
+      } else {
+        warnings.push(`${nm}: 리밸런싱 일정이 없어 최초 매수 후 수량이 고정됩니다(의도한 설정이면 무시하세요).`);
+      }
+    }
+  }
+
   type Step =
     | { date: string; kind: 'exdiv'; div: BtDivSlot }
     | { date: string; kind: 'pay'; div: BtDivSlot }
     | { date: string; kind: 'rebal'; slot: BtSlot }
-    | { date: string; kind: 'event'; event: BtEvent };
+    | { date: string; kind: 'event'; event: BtEvent }
+    | { date: string; kind: 'contrib'; ym: string };
 
   const steps: Step[] = [];
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
+
+  // ── 매월 목표 증액(재투자) ──
+  // ⚠️ 그 달 **첫 리밸런싱일**에 건다 — 목표를 올려 두면 바로 이어지는 리밸런싱이 실제로 매수한다.
+  //    리밸런싱이 없는 달은 증액해도 그 달에 집행할 수단이 없으므로 건너뛴다.
+  const contribOvByYm = new Map<string, BtContribOverride>();
+  for (const o of config.contribOverrides) {
+    if (contribOvByYm.has(o.ym)) warnings.push(`증액 예외 규칙에 ${o.ym}이(가) 중복 지정돼 마지막 것만 적용됩니다.`);
+    contribOvByYm.set(o.ym, o);
+  }
+  // ⚠️ 월 귀속은 슬롯 라벨(s.ym)이 아니라 **실제 집행일(rebalDate)의 달**로 잡는다.
+  //    오프셋·휴장 스냅으로 rebalDate가 라벨과 다른 달로 나갈 수 있는데(fixedDay 1~3, 큰 음수
+  //    오프셋), s.ym을 쓰면 거래가 없는 달에 증액 행이 뜨고 실제 집행 달은 0으로 표시된다.
+  //    거래(pushTrade)·분배 적재가 전부 ymOf(실제 날짜) 기준이라 여기만 다르면 내부 불일치다.
+  // ⚠️ 그 달 리밸런싱에 **실제로 참여하는 종목 집합**도 함께 만든다 — 슬롯이 없는 종목
+  //    (rebalMode:'none', 그 달 지정 날짜 없음)에 증액을 배분하면 목표만 오르고 영원히 매수되지
+  //    않아, 예수금 한도를 갉아먹으면서 '누적 증액'이 재투자되지 않은 돈을 보고하게 된다.
+  const contribAssetsByYm = new Map<string, Set<string>>();
+  {
+    const firstRebalOfYm = new Map<string, string>();
+    for (const s of slots) {
+      const ym = ymOf(s.rebalDate);
+      if (!ym) continue;
+      const cur = firstRebalOfYm.get(ym);
+      if (!cur || s.rebalDate < cur) firstRebalOfYm.set(ym, s.rebalDate);
+      let set = contribAssetsByYm.get(ym);
+      if (!set) { set = new Set(); contribAssetsByYm.set(ym, set); }
+      for (const id of s.assetIds) set.add(id);
+    }
+    if (config.contribution.mode !== 'none' || contribOvByYm.size > 0) {
+      for (const [ym, d] of firstRebalOfYm) steps.push({ date: d, kind: 'contrib', ym });
+    }
+    // 집행할 리밸런싱이 없는 달을 겨냥한 예외 규칙은 조용히 버려지므로 알린다.
+    for (const o of config.contribOverrides) {
+      if (o.mode !== 'none' && o.value > 0 && !firstRebalOfYm.has(o.ym)) {
+        warnings.push(`${o.ym}의 증액 예외 규칙은 그 달에 리밸런싱이 없어 적용되지 않습니다.`);
+      }
+    }
+  }
   for (const d of divSlots) {
     steps.push({ date: d.exDate, kind: 'exdiv', div: d });
     // 지급일이 종료일 이후면 pay 스텝을 만들지 않는다 → pendingDiv에 남아 경고로 보고된다.
@@ -1131,7 +1372,8 @@ export function runBacktest(input: BtRunInput): BtResult {
     steps.push({ date: d, kind: 'event', event: { ...e, date: d } });
   }
 
-  const KIND_ORDER: Record<string, number> = { exdiv: 0, pay: 1, event: 2, rebal: 3 };
+  // ⚠️ contrib은 pay 뒤(그날 받은 분배금까지 재원에 포함) · rebal 앞(올린 목표로 바로 매수).
+  const KIND_ORDER: Record<string, number> = { exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4 };
   steps.sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind],
   );
@@ -1148,7 +1390,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
         cashDelta: 0, cashEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
-        lastDate: '', holdings: [],
+        lastDate: '', holdings: [], contribution: null, cumContribution: 0,
       };
       monthMap.set(ym, m);
     }
@@ -1217,6 +1459,90 @@ export function runBacktest(input: BtRunInput): BtResult {
         m.divPaid += r.amount;
         cash += r.amount;
       }
+      continue;
+    }
+
+    if (step.kind === 'contrib') {
+      const rule = contribOvByYm.get(step.ym) ?? config.contribution;
+      if (rule.mode === 'none' || !(rule.value > 0)) continue;
+      const cashBefore = cash;
+      const requested = rule.mode === 'pctOfCash' ? (cashBefore * rule.value) / 100 : rule.value;
+      let amount = requested;
+      let note = '';
+      // ⚠️ 예수금을 넘겨 증액하면 곧바로 이어지는 리밸런싱이 '예수금 부족'으로 잘린다 —
+      //    목표만 부풀고 실제로는 못 사는 상태가 되므로 여기서 미리 자른다.
+      if (!config.allowNegativeCash && amount > cashBefore) {
+        amount = Math.max(0, cashBefore);
+        note = '예수금 한도';
+      }
+      amount = Math.floor(amount);
+      if (!(amount > 0)) continue;
+
+      // ⚠️ '활성'만으로 거르지 말 것 — 그 달 리밸런싱 슬롯에 실제로 들어 있는 종목만 대상이다.
+      //    슬롯 없는 종목(rebalMode:'none' 등)에 배분하면 목표만 오르고 매수는 영원히 없다.
+      const slotAssets = contribAssetsByYm.get(step.ym) ?? new Set<string>();
+      const live = positions.filter(
+        p => p.active && step.date >= p.effectiveStart && step.date <= p.effectiveEnd,
+      );
+      const elig = live.filter(p => slotAssets.has(p.asset.id));
+      if (!elig.length) continue;
+      if (elig.length < live.length) {
+        warnings.push(`${step.ym}: 리밸런싱 일정이 없는 종목은 증액 대상에서 제외했습니다(목표만 오르고 매수되지 않기 때문).`);
+      }
+
+      const perAsset: BtContribRow['perAsset'] = [];
+      if (config.targetMode === 'amount') {
+        const ws = elig.map(p =>
+          config.contribution.split === 'even' ? 1 : Math.max(0, p.targetAmount ?? 0),
+        );
+        let totalW = ws.reduce((s, x) => s + x, 0);
+        if (!(totalW > 0)) { ws.fill(1); totalW = elig.length; }
+        let left = amount;
+        elig.forEach((p, i) => {
+          // 마지막 종목이 잔여를 받아 배분 합 = amount 를 정확히 만든다(원 단위 오차 방지).
+          const share = i === elig.length - 1 ? left : Math.floor((amount * ws[i]) / totalW);
+          left -= share;
+          p.targetAmount = (p.targetAmount ?? 0) + share;
+          perAsset.push({
+            assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+            added: share, targetAfter: p.targetAmount,
+          });
+        });
+      } else {
+        // 비중 모드에서 목표는 '분모 × 비중'이라 종목별로 더할 대상이 없고, 분모를 키우면
+        // **비중을 가진 모든 활성 종목**의 목표가 함께 오른다.
+        // ⚠️ `contribBase += amount` 로 두지 말 것 — 실제 목표 증가는 `Δ분모 × Σ비중/100` 이라
+        //    Σ비중이 100%가 아니면(현금 버퍼용 80% 등 정상 설정) '누적 증액'이 실제 증가와
+        //    100/Σ 배만큼 어긋나고, 예수금 클램프도 엉뚱한 양을 자르게 된다.
+        //    Σ목표 증가 = amount 가 되도록 분모 증가분을 역산한다.
+        const ratioSum = live.reduce((s, p) => s + Math.max(0, p.targetRatio ?? 0), 0);
+        if (!(ratioSum > 0)) {
+          warnings.push(`${step.ym}: 목표비중이 모두 0이라 증액을 적용할 수 없습니다.`);
+          continue;
+        }
+        contribBase += (amount * 100) / ratioSum;
+        if (config.ratioBase !== 'initial') {
+          note = note ? `${note} · 비중 모드(분모 ${config.ratioBase})에서는 효과 없음` : `비중 모드(분모 ${config.ratioBase})에서는 효과 없음`;
+          warnings.push('비중 모드에서 매월 증액은 분모를 "초기 투자금 고정"으로 두었을 때만 반영됩니다.');
+        }
+        const baseAfter = ratioBaseAt(step.date);
+        for (const p of live) {
+          perAsset.push({
+            assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+            // 비중 모드의 종목별 증가분 = Δ분모 × 그 종목 비중/100
+            added: Math.round((amount * Math.max(0, p.targetRatio ?? 0)) / ratioSum),
+            targetAfter: targetOf(p, config, baseAfter),
+          });
+        }
+      }
+
+      const m = monthOf(step.ym);
+      m.contribution = {
+        ym: step.ym, date: step.date, cashBefore, requested, amount,
+        mode: rule.mode, value: rule.value,
+        overridden: contribOvByYm.has(step.ym),
+        perAsset, note,
+      };
       continue;
     }
 
@@ -1327,6 +1653,7 @@ export function runBacktest(input: BtRunInput): BtResult {
   let cumDivAccrued = 0;
   let cumDivPaid = 0;
   let cumStructural = 0;
+  let cumContrib = 0;
   let runCash = config.initialCapital + config.extraCash;
   // 초기 매수 반영
   for (const t of initialTrades) runCash += t.cashDelta;
@@ -1344,9 +1671,11 @@ export function runBacktest(input: BtRunInput): BtResult {
     cumStructural += m.structuralNet;
     cumDivAccrued += m.divAccrued;
     cumDivPaid += m.divPaid;
+    cumContrib += m.contribution ? m.contribution.amount : 0;
     m.cumTradeNet = cumTrade;
     m.cumDivAccrued = cumDivAccrued;
     m.cumDivPaid = cumDivPaid;
+    m.cumContribution = cumContrib;
     m.cashDelta = m.tradeNet + m.structuralNet + m.divPaid;
     runCash += m.cashDelta;
     m.cashEnd = runCash;
@@ -1460,6 +1789,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       cumStructuralNet: cumStructural,
       cumDivAccrued,
       cumDivPaid,
+      cumContribution: cumContrib,
       maxDrawdown: maxDd,
       months: months.length,
     },

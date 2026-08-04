@@ -199,13 +199,30 @@ function normalizeDivOverride(raw) {
   }
   return out;
 }
+const REBAL_MODES = ['follow', 'mid', 'eom', 'day', 'dates', 'none'];
+const CONTRIB_MODES = ['none', 'pctOfCash', 'amount'];
+const MAX_BT_CONTRIB_OVERRIDES = 120, MAX_BT_REBAL_DATES = 120;
+function normalizeContribution(raw) {
+  const m = raw?.mode, sp = raw?.split;
+  return { mode: CONTRIB_MODES.includes(m) ? m : 'none', value: Math.max(0, asNum(raw?.value, 0)), split: sp === 'even' ? 'even' : 'ratio' };
+}
+function normalizeContribOverride(raw) {
+  const ym = asStr(raw?.ym);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return null;
+  const m = raw?.mode;
+  return { id: asStr(raw?.id) || generateId(), ym, mode: CONTRIB_MODES.includes(m) ? m : 'none', value: Math.max(0, asNum(raw?.value, 0)) };
+}
 function makeBtAsset(partial = {}, idx = 0) {
   const cycle = partial.payCycle;
+  const rm = partial.rebalMode;
   return {
     id: partial.id || generateId(),
     code: asStr(partial.code).trim().toUpperCase(),
     name: asStr(partial.name),
     payCycle: cycle === 'mid' || cycle === 'eom' || cycle === 'none' ? cycle : 'eom',
+    rebalMode: REBAL_MODES.includes(rm) ? rm : 'follow',
+    rebalDay: clampInt(asNum(partial.rebalDay, 15), 1, 31),
+    rebalDates: Array.from(new Set(asArr(partial.rebalDates).filter(isIsoDate))).sort().slice(0, MAX_BT_REBAL_DATES),
     targetAmount: asNumOrNull(partial.targetAmount),
     targetRatio: asNumOrNull(partial.targetRatio),
     startDate: isIsoDate(partial.startDate) ? partial.startDate : '',
@@ -235,7 +252,7 @@ function normalizeOverride(raw) {
   const g = raw?.group;
   return {
     id: asStr(raw?.id) || generateId(),
-    ym, group: g === 'mid' || g === 'all' ? g : g === 'eom' ? 'eom' : 'all', date: raw.date,
+    ym, group: g === 'mid' || g === 'all' ? g : g === 'eom' ? 'eom' : 'all', date: raw.date, assetId: asStr(raw?.assetId),
   };
 }
 function makeBtConfig(partial = {}) {
@@ -257,6 +274,8 @@ function makeBtConfig(partial = {}) {
     rebalOffset: clampInt(asNum(partial.rebalOffset, -1), -10, 0),
     payOffset: clampInt(asNum(partial.payOffset, 2), 0, 10),
     allowNegativeCash: !!partial.allowNegativeCash,
+    contribution: normalizeContribution(partial.contribution),
+    contribOverrides: asArr(partial.contribOverrides).slice(0, MAX_BT_CONTRIB_OVERRIDES).map(normalizeContribOverride).filter(Boolean),
     assets: asArr(partial.assets).slice(0, MAX_BT_ASSETS).map((a, i) => makeBtAsset(a, i)),
     events: asArr(partial.events).slice(0, MAX_BT_EVENTS).map(normalizeEvent),
     overrides: asArr(partial.overrides).slice(0, MAX_BT_OVERRIDES).map(normalizeOverride).filter(Boolean),
@@ -278,10 +297,13 @@ function backtestFingerprint(scenarios) {
       p: [s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
           s?.targetMode ?? '', s?.ratioBase ?? '', s?.rounding ?? '', s?.policy ?? '',
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
-          s?.allowNegativeCash ? 1 : 0],
+          s?.allowNegativeCash ? 1 : 0,
+          s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? ''],
+      c: asArr(s?.contribOverrides).map((o) => [o?.id ?? '', o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
       a: asArr(s?.assets).map((a) => [
         a?.id ?? '', a?.code ?? '', a?.name ?? '', a?.payCycle ?? '',
         a?.targetAmount ?? null, a?.targetRatio ?? null, a?.startDate ?? '', a?.endDate ?? '', a?.color ?? '',
+        a?.rebalMode ?? '', a?.rebalDay ?? 0, asArr(a?.rebalDates).join(','),
         Object.keys(a?.divOverride ?? {}).sort().map((k) => `${k}:${a.divOverride[k]}`).join(','),
       ]),
       e: asArr(s?.events).map((e) => [
@@ -289,7 +311,7 @@ function backtestFingerprint(scenarios) {
         asArr(e?.addAssets).join(','), asArr(e?.removeAssets).join(','),
         asArr(e?.targets).map((t) => `${t?.assetId ?? ''}:${t?.amount ?? ''}:${t?.ratio ?? ''}`).join('|'),
       ]),
-      o: asArr(s?.overrides).map((o) => [o?.id ?? '', o?.ym ?? '', o?.group ?? '', o?.date ?? '']),
+      o: asArr(s?.overrides).map((o) => [o?.id ?? '', o?.ym ?? '', o?.group ?? '', o?.date ?? '', o?.assetId ?? '']),
     })));
   } catch { return 'ERR'; }
 }
@@ -311,38 +333,83 @@ function normalizeBacktestScenarios(raw) {
   return changed ? out : raw;
 }
 
-function groupsForPolicy(policy) { return policy === 'perCycle' ? ['mid', 'eom'] : ['all']; }
-function assetsInGroup(assets, group) {
-  if (group === 'all') return assets.map((a) => a.id);
-  if (group === 'mid') return assets.filter((a) => a.payCycle === 'mid').map((a) => a.id);
-  return assets.filter((a) => a.payCycle === 'eom' || a.payCycle === 'none').map((a) => a.id);
+function resolveAssetRebal(asset, config) {
+  const rm = asset.rebalMode || 'follow';
+  if (rm !== 'follow') return { mode: rm, day: clampInt(asNum(asset.rebalDay, 15), 1, 31), follows: false };
+  switch (config.policy) {
+    case 'allMid': return { mode: 'mid', day: 0, follows: true };
+    case 'allEom': return { mode: 'eom', day: 0, follows: true };
+    case 'fixedDay': return { mode: 'day', day: clampInt(config.fixedDay, 1, 31), follows: true };
+    default: return { mode: asset.payCycle === 'mid' ? 'mid' : 'eom', day: 0, follows: true };
+  }
+}
+function groupOfFollow(config, asset) {
+  if (config.policy !== 'perCycle') return 'all';
+  return asset.payCycle === 'mid' ? 'mid' : 'eom';
 }
 
 function buildSlots(config, holidays) {
   const out = [];
   if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return out;
-  const ovMap = new Map();
-  for (const o of config.overrides) ovMap.set(`${o.ym}|${o.group}`, o);
+  const groupOv = new Map();
+  const assetOv = new Map();
+  for (const o of config.overrides) {
+    if (o.assetId) assetOv.set(`${o.ym}|${o.assetId}`, o);
+    else groupOv.set(`${o.ym}|${o.group}`, o);
+  }
   for (const ym of monthsBetween(config.startDate, config.endDate)) {
-    for (const group of groupsForPolicy(config.policy)) {
-      const cycle = group === 'mid' ? 'mid' : group === 'eom' ? 'eom' : config.policy === 'allMid' ? 'mid' : 'eom';
+    const byKey = new Map();
+    const add = (date, group, cycle, overridden, assetId) => {
+      if (!isIsoDate(date)) return;
+      const cur = byKey.get(date);
+      if (cur) {
+        if (!cur.assetIds.includes(assetId)) cur.assetIds.push(assetId);
+        if (cycle && !cur.cycle) cur.cycle = cycle;
+        if (overridden) cur.overridden = true;
+        cur.groups.add(group);
+      } else {
+        byKey.set(date, { date, group, cycle, overridden, assetIds: [assetId], groups: new Set([group]) });
+      }
+    };
+    for (const a of config.assets) {
+      const r = resolveAssetRebal(a, config);
+      const group = r.follows ? groupOfFollow(config, a) : 'all';
+      const labelCycle = a.payCycle === 'mid' ? 'mid' : 'eom';
+      const ao = assetOv.get(`${ym}|${a.id}`);
+      if (ao) { add(onOrBeforeBusinessDay(ao.date, holidays), group, labelCycle, true, a.id); continue; }
+      if (r.mode === 'none') continue;
+      if (r.mode === 'dates') {
+        for (const raw of a.rebalDates) {
+          if (ymOf(raw) !== ym) continue;
+          add(onOrBeforeBusinessDay(raw, holidays), group, labelCycle, false, a.id);
+        }
+        continue;
+      }
+      const go = r.follows ? groupOv.get(`${ym}|${group}`) : undefined;
+      if (r.mode === 'day') {
+        const raw = `${ym}-${pad2(clampInt(r.day, 1, 31))}`;
+        const capped = isIsoDate(raw) ? raw : lastDayOfMonth(ym);
+        const d = go ? onOrBeforeBusinessDay(go.date, holidays) : onOrBeforeBusinessDay(capped, holidays);
+        add(d, group, labelCycle, !!go, a.id);
+        continue;
+      }
+      const cycle = r.mode;
       const recordDate = recordDateFor(ym, cycle, holidays);
       if (!recordDate) continue;
       const exDate = shiftBusinessDays(recordDate, config.exDivOffset, holidays);
-      const payDate = shiftBusinessDays(recordDate, config.payOffset, holidays);
-      let rebalDate;
-      if (config.policy === 'fixedDay') {
-        const raw = `${ym}-${pad2(clampInt(config.fixedDay, 1, 31))}`;
-        const capped = isIsoDate(raw) ? raw : lastDayOfMonth(ym);
-        rebalDate = onOrBeforeBusinessDay(capped, holidays);
-      } else {
-        rebalDate = shiftBusinessDays(exDate, config.rebalOffset, holidays);
-      }
-      const ov = ovMap.get(`${ym}|${group}`);
-      const overridden = !!ov;
-      if (ov) rebalDate = onOrBeforeBusinessDay(ov.date, holidays);
-      if (rebalDate < config.startDate || rebalDate > config.endDate) continue;
-      out.push({ ym, group, recordDate, exDate, payDate, rebalDate, overridden, assetIds: assetsInGroup(config.assets, group) });
+      const d = go ? onOrBeforeBusinessDay(go.date, holidays) : shiftBusinessDays(exDate, config.rebalOffset, holidays);
+      add(d, group, cycle, !!go, a.id);
+    }
+    for (const v of byKey.values()) {
+      if (v.date < config.startDate || v.date > config.endDate) continue;
+      const cycle = v.cycle ?? 'eom';
+      const recordDate = recordDateFor(ym, cycle, holidays);
+      out.push({
+        ym, group: v.groups.size > 1 ? 'all' : v.group, recordDate,
+        exDate: shiftBusinessDays(recordDate, config.exDivOffset, holidays),
+        payDate: shiftBusinessDays(recordDate, config.payOffset, holidays),
+        rebalDate: v.date, overridden: v.overridden, assetIds: v.assetIds,
+      });
     }
   }
   out.sort((a, b) => (a.rebalDate < b.rebalDate ? -1 : a.rebalDate > b.rebalDate ? 1 : 0));
@@ -402,7 +469,7 @@ function runBacktest(input) {
     initialCashAfter: 0, months: [], curve: [], finalHoldings: [],
     summary: { startDate: config.startDate, endDate: config.endDate, initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
-      cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0, maxDrawdown: 0, months: 0 },
+      cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0, maxDrawdown: 0, months: 0 },
   });
   if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return empty('기간(시작일·종료일)을 선택해 주세요.');
   if (config.startDate > config.endDate) return empty('시작일이 종료일보다 늦습니다.');
@@ -451,8 +518,9 @@ function runBacktest(input) {
     for (const p of positions) { if (p.qty > QTY_EPS) { const h = priceAt(prices[p.asset.code], date); if (!h.missing) s += p.qty * h.price; } }
     return s;
   };
+  let contribBase = 0;
   const ratioBaseAt = (date) => {
-    if (config.ratioBase === 'initial') return config.initialCapital + config.extraCash;
+    if (config.ratioBase === 'initial') return config.initialCapital + config.extraCash + contribBase;
     const eq = totalEvalAt(date);
     return config.ratioBase === 'total' ? eq + cash : eq;
   };
@@ -499,8 +567,47 @@ function runBacktest(input) {
 
   const slots = buildSlots(config, holidays);
   const divSlots = buildDividendSlots(config, holidays);
+  {
+    const slotted = new Set();
+    for (const s of slots) for (const id of s.assetIds) slotted.add(id);
+    for (const p of positions) {
+      if (slotted.has(p.asset.id)) continue;
+      const nm = p.asset.name || p.asset.code;
+      if (p.effectiveStart > startBiz) {
+        warnings.push(`${nm}: 리밸런싱 일정이 없어(‘리밸런싱 안 함’ 또는 지정 날짜 없음) 기간 중간 편입이 실행되지 않습니다 — 매수가 한 번도 일어나지 않습니다.`);
+      } else {
+        warnings.push(`${nm}: 리밸런싱 일정이 없어 최초 매수 후 수량이 고정됩니다(의도한 설정이면 무시하세요).`);
+      }
+    }
+  }
   const steps = [];
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
+  const contribOvByYm = new Map();
+  for (const o of config.contribOverrides) {
+    if (contribOvByYm.has(o.ym)) warnings.push(`증액 예외 규칙에 ${o.ym}이(가) 중복 지정돼 마지막 것만 적용됩니다.`);
+    contribOvByYm.set(o.ym, o);
+  }
+  const contribAssetsByYm = new Map();
+  {
+    const firstRebalOfYm = new Map();
+    for (const s of slots) {
+      const ym = ymOf(s.rebalDate);
+      if (!ym) continue;
+      const cur = firstRebalOfYm.get(ym);
+      if (!cur || s.rebalDate < cur) firstRebalOfYm.set(ym, s.rebalDate);
+      let set = contribAssetsByYm.get(ym);
+      if (!set) { set = new Set(); contribAssetsByYm.set(ym, set); }
+      for (const id of s.assetIds) set.add(id);
+    }
+    if (config.contribution.mode !== 'none' || contribOvByYm.size > 0) {
+      for (const [ym, d] of firstRebalOfYm) steps.push({ date: d, kind: 'contrib', ym });
+    }
+    for (const o of config.contribOverrides) {
+      if (o.mode !== 'none' && o.value > 0 && !firstRebalOfYm.has(o.ym)) {
+        warnings.push(`${o.ym}의 증액 예외 규칙은 그 달에 리밸런싱이 없어 적용되지 않습니다.`);
+      }
+    }
+  }
   for (const d of divSlots) {
     steps.push({ date: d.exDate, kind: 'exdiv', div: d });
     if (d.payDate >= startBiz && d.payDate <= endBiz) steps.push({ date: d.payDate, kind: 'pay', div: d });
@@ -511,7 +618,7 @@ function runBacktest(input) {
     if (d < startBiz || d > endBiz) { warnings.push(`이벤트 "${e.label || e.date}"의 날짜가 백테스트 기간 밖이라 무시됩니다.`); continue; }
     steps.push({ date: d, kind: 'event', event: { ...e, date: d } });
   }
-  const KIND_ORDER = { exdiv: 0, pay: 1, event: 2, rebal: 3 };
+  const KIND_ORDER = { exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4 };
   steps.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind]));
 
   const pendingDiv = new Map();
@@ -522,7 +629,7 @@ function runBacktest(input) {
       m = { ym, trades: [], dividends: [], tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
         cashDelta: 0, cashEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
-        lastDate: '', holdings: [] };
+        lastDate: '', holdings: [], contribution: null, cumContribution: 0 };
       monthMap.set(ym, m);
     }
     return m;
@@ -569,6 +676,59 @@ function runBacktest(input) {
       for (const r of rows) { m.divPaid += r.amount; cash += r.amount; }
       continue;
     }
+    if (step.kind === 'contrib') {
+      const rule = contribOvByYm.get(step.ym) ?? config.contribution;
+      if (rule.mode === 'none' || !(rule.value > 0)) continue;
+      const cashBefore = cash;
+      const requested = rule.mode === 'pctOfCash' ? (cashBefore * rule.value) / 100 : rule.value;
+      let amount = requested;
+      let note = '';
+      if (!config.allowNegativeCash && amount > cashBefore) { amount = Math.max(0, cashBefore); note = '예수금 한도'; }
+      amount = Math.floor(amount);
+      if (!(amount > 0)) continue;
+      const slotAssets = contribAssetsByYm.get(step.ym) ?? new Set();
+      const live = positions.filter((p) => p.active && step.date >= p.effectiveStart && step.date <= p.effectiveEnd);
+      const elig = live.filter((p) => slotAssets.has(p.asset.id));
+      if (!elig.length) continue;
+      if (elig.length < live.length) {
+        warnings.push(`${step.ym}: 리밸런싱 일정이 없는 종목은 증액 대상에서 제외했습니다(목표만 오르고 매수되지 않기 때문).`);
+      }
+      const perAsset = [];
+      if (config.targetMode === 'amount') {
+        const ws = elig.map((p) => (config.contribution.split === 'even' ? 1 : Math.max(0, p.targetAmount ?? 0)));
+        let totalW = ws.reduce((s, x) => s + x, 0);
+        if (!(totalW > 0)) { ws.fill(1); totalW = elig.length; }
+        let left = amount;
+        elig.forEach((p, i) => {
+          const share = i === elig.length - 1 ? left : Math.floor((amount * ws[i]) / totalW);
+          left -= share;
+          p.targetAmount = (p.targetAmount ?? 0) + share;
+          perAsset.push({ assetId: p.asset.id, code: p.asset.code, name: p.asset.name, added: share, targetAfter: p.targetAmount });
+        });
+      } else {
+        const ratioSum = live.reduce((s, p) => s + Math.max(0, p.targetRatio ?? 0), 0);
+        if (!(ratioSum > 0)) {
+          warnings.push(`${step.ym}: 목표비중이 모두 0이라 증액을 적용할 수 없습니다.`);
+          continue;
+        }
+        contribBase += (amount * 100) / ratioSum;
+        if (config.ratioBase !== 'initial') {
+          note = note ? `${note} · 비중 모드(분모 ${config.ratioBase})에서는 효과 없음` : `비중 모드(분모 ${config.ratioBase})에서는 효과 없음`;
+          warnings.push('비중 모드에서 매월 증액은 분모를 "초기 투자금 고정"으로 두었을 때만 반영됩니다.');
+        }
+        const baseAfter = ratioBaseAt(step.date);
+        for (const p of live) {
+          perAsset.push({ assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+            added: Math.round((amount * Math.max(0, p.targetRatio ?? 0)) / ratioSum),
+            targetAfter: targetOf(p, config, baseAfter) });
+        }
+      }
+      const m = monthOf(step.ym);
+      m.contribution = { ym: step.ym, date: step.date, cashBefore, requested, amount,
+        mode: rule.mode, value: rule.value, overridden: contribOvByYm.has(step.ym), perAsset, note };
+      continue;
+    }
+
     if (step.kind === 'event') {
       const e = step.event;
       for (const aid of e.removeAssets) {
@@ -636,7 +796,7 @@ function runBacktest(input) {
   }
 
   const months = monthsBetween(startBiz, endBiz).map((ym) => monthOf(ym));
-  let cumTrade = 0, cumDivAccrued = 0, cumDivPaid = 0, cumStructural = 0;
+  let cumTrade = 0, cumDivAccrued = 0, cumDivPaid = 0, cumStructural = 0, cumContrib = 0;
   let runCash = config.initialCapital + config.extraCash;
   for (const t of initialTrades) runCash += t.cashDelta;
   const runQty = new Map();
@@ -647,7 +807,8 @@ function runBacktest(input) {
     m.dividends.sort((a, b) => (a.exDate < b.exDate ? -1 : a.exDate > b.exDate ? 1 : 0));
     cumTrade += m.tradeNet; cumStructural += m.structuralNet;
     cumDivAccrued += m.divAccrued; cumDivPaid += m.divPaid;
-    m.cumTradeNet = cumTrade; m.cumDivAccrued = cumDivAccrued; m.cumDivPaid = cumDivPaid;
+    cumContrib += m.contribution ? m.contribution.amount : 0;
+    m.cumTradeNet = cumTrade; m.cumDivAccrued = cumDivAccrued; m.cumDivPaid = cumDivPaid; m.cumContribution = cumContrib;
     m.cashDelta = m.tradeNet + m.structuralNet + m.divPaid;
     runCash += m.cashDelta;
     m.cashEnd = runCash;
@@ -714,7 +875,7 @@ function runBacktest(input) {
     summary: { startDate: startBiz, endDate: endBiz, initialCapital: config.initialCapital,
       finalEval, finalCash: cash, finalTotal, profit: finalTotal - invested,
       profitRate: invested > 0 ? ((finalTotal - invested) / invested) * 100 : 0,
-      cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumDivAccrued, cumDivPaid,
+      cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumDivAccrued, cumDivPaid, cumContribution: cumContrib,
       maxDrawdown: maxDd, months: months.length },
   };
 }
@@ -1028,6 +1189,236 @@ console.log('\n── 파트④-d 월말 보유(수량·평가금액) ──');
     ok('#77 매매·분배가 없는 달에도 엔진은 월말 보유를 채운다',
       noTradeMonths.length > 0 && noTradeMonths.every((m) => m.holdings.length > 0 && m.lastDate));
   }
+}
+
+console.log('\n── 파트④-e 매월 목표 증액(현금 재투자) ──');
+
+{
+  // 증액 없음이 기본이고, 기존 결과와 완전히 동일해야 한다(하위호환).
+  const base = runPdf();
+  const same = runPdf({ contribution: { mode: 'none', value: 0, split: 'ratio' } });
+  eq('#81 증액 기본값(none)은 기존 결과와 완전히 동일', JSON.stringify(base.months.map((m) => m.tradeNet)),
+    JSON.stringify(same.months.map((m) => m.tradeNet)));
+
+  const pct = runPdf({ contribution: { mode: 'pctOfCash', value: 50, split: 'ratio' } });
+  const feb = pct.months.find((m) => m.ym === '2026-02');
+  ok('#82 예수금 % 증액이 그 달 첫 리밸런싱일에 걸린다',
+    !!feb.contribution && feb.contribution.date === '2026-02-11' && feb.contribution.mode === 'pctOfCash');
+  ok('#83 증액액 = 그 시점 예수금 × 비율 (내림)',
+    Math.abs(feb.contribution.amount - Math.floor(feb.contribution.cashBefore * 0.5)) < 1);
+  eq('#84 종목별 배분 합 = 증액 총액 (원 단위 오차 없음)',
+    feb.contribution.perAsset.reduce((s, x) => s + x.added, 0), feb.contribution.amount);
+  ok('#85 ⚠️ 증액은 현금을 움직이지 않고 목표만 올린다 → 그 직후 리밸런싱이 실제로 매수한다',
+    pct.months.find((m) => m.ym === '2026-02').tradeNet < base.months.find((m) => m.ym === '2026-02').tradeNet);
+  ok('#86 증액 후 기말 예수금이 줄고 종목 평가액이 는다(현금 재투자)',
+    pct.summary.finalCash < base.summary.finalCash && pct.summary.finalEval > base.summary.finalEval);
+
+  // ⚠️ 예수금 한도 — 넘겨 증액하면 곧바로 '예수금 부족'이 되므로 미리 자른다.
+  // ⚠️ `om.amount !== undefined ||` 같은 단락을 두지 말 것 — BtMonth 에 amount 필드가 없어
+  //    영구히 false 인 죽은 항이고, 언젠가 필드가 생기면 어서션을 통째로 무력화한다.
+  const over = runPdf({ contribution: { mode: 'amount', value: 999999999999, split: 'even' } });
+  const oms = over.months.filter((m) => !!m.contribution);
+  ok('#87 ⚠️ 증액은 보유 예수금을 넘지 않게 잘린다 (전 월)',
+    oms.length > 0 && oms.every((m) => m.contribution.amount <= m.contribution.cashBefore && m.contribution.note === '예수금 한도'));
+
+  // 월별 오버라이드
+  const ovc = runPdf({
+    contribution: { mode: 'none', value: 0, split: 'ratio' },
+    contribOverrides: [{ id: 'c1', ym: '2026-03', mode: 'amount', value: 5000000 }],
+  });
+  const withC = ovc.months.filter((m) => !!m.contribution);
+  ok('#88 특정 월 오버라이드만 증액된다(기본이 none이어도)',
+    withC.length === 1 && withC[0].ym === '2026-03' && withC[0].contribution.amount === 5000000
+      && withC[0].contribution.overridden === true);
+  eq('#89 누적 증액이 월별로 누적된다', ovc.months[ovc.months.length - 1].cumContribution, 5000000);
+
+  // 비중 모드 — 분모가 initial 일 때만 효과
+  const rInit = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
+      targetMode: 'ratio', ratioBase: 'initial', rounding: 'floor',
+      contribution: { mode: 'amount', value: 10000000, split: 'ratio' },
+      assets: [{ id: 'r1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
+               { id: 'r2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  // ⚠️ `cumContribution > 0` 만 보면 contribBase 를 통째로 제거해도 통과한다(죽은 단언).
+  //    분모가 실제로 커졌는지를 **증액 없는 대조군과의 결과 차이**로 확인한다.
+  const rInitNo = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
+      targetMode: 'ratio', ratioBase: 'initial', rounding: 'floor',
+      contribution: { mode: 'none', value: 0, split: 'ratio' },
+      assets: [{ id: 'r1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
+               { id: 'r2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  ok('#90 비중 모드 initial — 증액이 분모를 키워 실제 매수를 늘린다',
+    rInit.summary.cumContribution > 0 && rInit.summary.finalEval > rInitNo.summary.finalEval
+      && rInit.summary.finalCash < rInitNo.summary.finalCash);
+  const rEq = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
+      targetMode: 'ratio', ratioBase: 'equity', rounding: 'floor',
+      contribution: { mode: 'amount', value: 10000000, split: 'ratio' },
+      assets: [{ id: 'r1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
+               { id: 'r2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  ok('#91 ⚠️ 비중 모드 equity에서는 증액이 무효임을 경고로 알린다',
+    rEq.warnings.some((w) => w.includes('초기 투자금 고정')));
+}
+
+console.log('\n── 파트④-f 종목별 리밸런싱 일정 ──');
+
+{
+  // 종목별 개별 지정: TIGER만 매월 20일
+  const perAsset = mkPdfConfig();
+  perAsset.assets[2].rebalMode = 'day';
+  perAsset.assets[2].rebalDay = 20;
+  const slots = buildSlots(perAsset, HOL);
+  const tigerDates = slots.filter((s) => s.assetIds.includes('a3')).map((s) => s.rebalDate).sort();
+  ok('#92 종목별 지정일 — TIGER만 매월 20일(휴장이면 직전 영업일)로 분리된다',
+    tigerDates.length === 7 && tigerDates.every((d) => +d.slice(8) <= 20 && +d.slice(8) >= 16));
+  const otherDates = slots.filter((s) => s.assetIds.includes('a2')).map((s) => s.rebalDate);
+  ok('#93 다른 종목은 전역 정책(월말 분배락 전)을 그대로 유지한다',
+    otherDates.includes('2026-01-28') && otherDates.includes('2026-07-29'));
+
+  // ⚠️ 일괄 오버라이드는 개별 지정 종목을 끌고 가지 않는다
+  const mix = mkPdfConfig({ overrides: [{ id: 'o1', ym: '2026-06', group: 'eom', date: '2026-06-10' }] });
+  mix.assets[2].rebalMode = 'day';
+  mix.assets[2].rebalDay = 20;
+  const ms = buildSlots(mix, HOL).filter((s) => s.ym === '2026-06');
+  const kfinJun = ms.find((s) => s.assetIds.includes('a2'));
+  const tigerJun = ms.find((s) => s.assetIds.includes('a3'));
+  ok('#94 ⚠️ 월별 일괄 오버라이드는 follow 종목만 옮기고 개별 지정 종목은 건드리지 않는다',
+    kfinJun.rebalDate === '2026-06-10' && tigerJun.rebalDate === '2026-06-19');
+
+  // 종목 지정 오버라이드는 개별 지정 종목도 옮긴다
+  const aov = mkPdfConfig({ overrides: [{ id: 'o2', ym: '2026-06', group: 'all', date: '2026-06-05', assetId: 'a3' }] });
+  aov.assets[2].rebalMode = 'day';
+  aov.assets[2].rebalDay = 20;
+  const aslots = buildSlots(aov, HOL).filter((s) => s.ym === '2026-06' && s.assetIds.includes('a3'));
+  deep('#95 종목 지정 오버라이드는 그 달 그 종목 일정을 통째로 대체한다',
+    aslots.map((s) => s.rebalDate), ['2026-06-05']);
+
+  // 'dates' 모드
+  const dts = mkPdfConfig();
+  dts.assets[2].rebalMode = 'dates';
+  dts.assets[2].rebalDates = ['2026-05-11', '2026-07-06'];
+  const dslots = buildSlots(dts, HOL).filter((s) => s.assetIds.includes('a3'));
+  deep('#96 지정 날짜 모드 — 그 날짜에만 리밸런싱한다',
+    dslots.map((s) => s.rebalDate).sort(), ['2026-05-11', '2026-07-06']);
+
+  // 'none' 모드
+  const nn = mkPdfConfig();
+  nn.assets[2].rebalMode = 'none';
+  ok('#97 none 모드 종목은 리밸런싱 슬롯에 아예 들어가지 않는다',
+    buildSlots(nn, HOL).every((s) => !s.assetIds.includes('a3')));
+
+  // ⚠️ 분배 일정은 리밸런싱 방식과 독립 — payCycle 만 따른다
+  const dv = buildDividendSlots(nn, HOL).filter((d) => d.assetIds.includes('a3'));
+  ok('#98 ⚠️ 리밸런싱을 끄거나 옮겨도 분배락 일정은 payCycle 그대로다',
+    dv.length === 7 && dv.every((d) => d.cycle === 'eom'));
+
+  // follow 기본값은 기존과 완전히 동일해야 한다(하위호환)
+  const legacy = mkPdfConfig();
+  for (const a of legacy.assets) { delete a.rebalMode; delete a.rebalDay; delete a.rebalDates; }
+  const relegacy = makeBtConfig(legacy);
+  deep('#99 rebalMode 미지정(레거시 시나리오)은 follow로 정규화돼 기존 일정과 동일',
+    buildSlots(relegacy, HOL).map((s) => s.rebalDate),
+    buildSlots(mkPdfConfig(), HOL).map((s) => s.rebalDate));
+}
+
+console.log('\n── 파트④-g 적대적 리뷰 확정 결함 회귀 ──');
+
+{
+  // ⚠️ #100 — 같은 날짜는 **한 슬롯**이어야 한다. 그룹별로 쪼개면 그 날 리밸런싱이 2패스로 돌아
+  //    '전 종목 매도 → 그 다음 매수' 불변식이 깨진다(1패스 매수가 2패스 매도 대금을 못 쓴다).
+  const sameDay = mkPdfConfig();
+  sameDay.assets[0].rebalMode = 'day';   // KODEX 200(mid, follow였음) → 개별 지정
+  sameDay.assets[0].rebalDay = 28;
+  sameDay.assets[1].rebalMode = 'day';
+  sameDay.assets[1].rebalDay = 28;
+  const sdSlots = buildSlots(sameDay, HOL).filter((s) => s.ym === '2026-01');
+  ok('#100 ⚠️ 같은 날짜에 걸린 종목은 그룹이 달라도 한 슬롯으로 합쳐진다(매도 후 매수 불변식)',
+    sdSlots.length === 1 && sdSlots[0].assetIds.length >= 2);
+
+  const mixGroup = mkPdfConfig();
+  mixGroup.assets[2].rebalMode = 'eom';   // follow(all 아님) → group 'all', 나머지는 'eom'
+  const mg = buildSlots(mixGroup, HOL).filter((s) => s.ym === '2026-01' && s.rebalDate === '2026-01-28');
+  ok('#100b 그룹이 섞인 날짜는 슬롯 1개로 합쳐지고 라벨만 all 이 된다',
+    mg.length === 1 && mg[0].group === 'all');
+
+  // ⚠️ #101 — 증액 월 귀속은 슬롯 라벨(ym)이 아니라 **실제 집행일의 달**이어야 한다.
+  //    fixedDay 1 이면 rebalDate 가 전월로 스냅돼 라벨과 달이 갈린다.
+  const shifted = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-04-30', initialCapital: 450000000,
+      targetMode: 'amount', rounding: 'floor', policy: 'fixedDay', fixedDay: 1,
+      contribution: { mode: 'amount', value: 5000000, split: 'ratio' },
+      assets: [{ id: 's1', code: K200, name: 'K', payCycle: 'mid', targetAmount: 225000000 },
+               { id: 's2', code: KFIN, name: 'F', payCycle: 'eom', targetAmount: 225000000 }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  const badMonth = shifted.months.find((m) => m.contribution && ymOf(m.contribution.date) !== m.ym);
+  ok('#101 ⚠️ 증액 행의 달과 실제 집행일의 달이 항상 일치한다', !badMonth);
+  const noTradeButContrib = shifted.months.find((m) => m.contribution && m.contribution.amount > 0 && m.trades.length === 0);
+  ok('#101b 거래가 없는 달에 증액 행만 뜨는 일이 없다', !noTradeButContrib);
+
+  // ⚠️ #102 — 리밸런싱 슬롯이 없는 종목에 증액을 배분하면 목표만 오르고 영원히 매수되지 않는다.
+  const dead = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+      targetMode: 'amount', rounding: 'floor', policy: 'perCycle',
+      contribution: { mode: 'amount', value: 20000000, split: 'ratio' },
+      assets: [{ id: 'd1', code: K200, name: 'K', payCycle: 'mid', targetAmount: 225000000 },
+               { id: 'd2', code: KFIN, name: 'F', payCycle: 'eom', targetAmount: 225000000, rebalMode: 'none' }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  const deadShare = dead.months.flatMap((m) => (m.contribution ? m.contribution.perAsset : []))
+    .filter((x) => x.assetId === 'd2').reduce((s, x) => s + x.added, 0);
+  ok('#102 ⚠️ 리밸런싱 일정이 없는 종목에는 증액을 배분하지 않는다', deadShare === 0);
+  ok('#102b 그 사실을 경고로 알린다',
+    dead.warnings.some((w) => w.includes('증액 대상에서 제외')) ||
+    dead.warnings.some((w) => w.includes('수량이 고정')));
+
+  // ⚠️ #103 — 비중 모드에서 '누적 증액' = 실제 Σ목표 증가액이어야 한다(Σ비중≠100%에서 깨졌었다).
+  const partial = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+      targetMode: 'ratio', ratioBase: 'initial', rounding: 'floor',
+      contribution: { mode: 'amount', value: 10000000, split: 'ratio' },
+      assets: [{ id: 'p1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 40 },
+               { id: 'p2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 40 }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  // 각 달 perAsset.added 합 = 그 달 amount (Σ비중 80%여도)
+  const allMatch = partial.months.filter((m) => m.contribution).every((m) =>
+    Math.abs(m.contribution.perAsset.reduce((s, x) => s + x.added, 0) - m.contribution.amount) <= 1);
+  ok('#103 ⚠️ 비중 모드에서 Σ비중이 100%가 아니어도 종목별 증가분 합 = 증액액', allMatch);
+  const first = partial.months.find((m) => m.contribution);
+  const lastM = [...partial.months].reverse().find((m) => m.contribution);
+  ok('#103b Σ비중 80%에서도 목표 증가가 실제로 일어난다(분모 역산)',
+    !!first && !!lastM && lastM.contribution.perAsset[0].targetAfter > first.contribution.perAsset[0].targetAfter);
+
+  // ⚠️ #104 — 집행할 수 없는 증액 예외 규칙은 조용히 버리지 말고 경고한다.
+  const orphanOv = runPdf({
+    contribution: { mode: 'none', value: 0, split: 'ratio' },
+    contribOverrides: [
+      { id: 'x1', ym: '2029-01', mode: 'amount', value: 1000000 },
+      { id: 'x2', ym: '2026-03', mode: 'amount', value: 1000000 },
+      { id: 'x3', ym: '2026-03', mode: 'amount', value: 2000000 },
+    ],
+  });
+  ok('#104 기간 밖 증액 예외는 경고한다', orphanOv.warnings.some((w) => w.includes('2029-01')));
+  ok('#104b 같은 달 중복 예외는 경고한다', orphanOv.warnings.some((w) => w.includes('중복 지정')));
 }
 
 console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');
