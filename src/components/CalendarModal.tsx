@@ -35,6 +35,10 @@ const firstLine = (s) => {
   const i = t.indexOf('\n');
   return i === -1 ? t : t.slice(0, i);
 };
+// PICK(계좌 선택 목록) 패드 형태 — 상세에서 ✕/Esc로 뒤로 갈 때도 **이 형태로 재구성**한다.
+// ⚠️ 목록 스냅샷을 값으로 들고 뒤로 가지 말 것 — note·qty·transfer는 라이브 파생이라 복사본을
+//    들면 원본이 바뀐 뒤 돌아왔을 때 목록만 옛 값으로 갈라진다(모든 패드의 앵커 계약과 동일 근거).
+const pickPad = (dayKey, pickKind) => ({ kind: 'pick', dayKey, pickKind });
 
 // 포트폴리오 스냅샷 표시용 포맷터 (달력 칸 = 억/만 축약, 메모장 = 풀 숫자).
 const nfmt = (n) => Math.round(n).toLocaleString('en-US');
@@ -81,6 +85,8 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   const [viewYear, setViewYear] = useState(ty);
   const [viewMonth, setViewMonth] = useState(tm);
   // pad: null | { dayKey, mode: 'new'|'edit', memoId, val }
+  // backPick: PICK 목록을 거쳐 열린 상세 패드에만 실린다(= 되돌아갈 목록의 pickKind).
+  //           1건 칩에서 바로 연 상세·PICK 자신·사용자 메모에는 없다 → 그 경우 ✕/Esc는 완전 닫기.
   const [pad, setPad] = useState(null);
 
   // 플로팅 창 위치 (달력 창 / 메모 패드 각각 독립 이동)
@@ -174,10 +180,22 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     };
   }, []);
 
+  // 핑크 ✕ / Esc 공통 — **한 단계 뒤로**(2026-08 사용자 확정). PICK 목록에서 연 상세 패드
+  // (`backPick` 보유)는 그 목록으로 돌아가고, 그 외(1건 칩에서 바로 연 상세·PICK 자신·사용자 메모)는
+  // 종전대로 완전히 닫는다. 목록으로 돌아갈 때도 padSeq를 올려 실제 높이 기준 중앙 재배치를 태운다
+  // (목록↔상세는 세로가 크게 달라 위치를 그대로 두면 화면 밖으로 밀린다).
+  // ⚠️ 저장(퍼플 체크)·삭제는 '완료' 동작이라 여기 묶지 말 것 — 그대로 완전 닫기다.
+  const dismissPad = () => {
+    if (pad && pad.backPick) { setPad(pickPad(pad.dayKey, pad.backPick)); setPadSeq((s) => s + 1); return; }
+    setPad(null);
+  };
+
   // Esc: 패드가 열려 있으면 패드만 닫는다 (비차단 배경 창을 전역 Esc로 통째 닫지 않음).
+  // ⚠️ ✕와 반드시 같은 `dismissPad`를 공유할 것 — 갈라지면 "키는 닫히고 버튼은 목록으로"가 되어
+  //    같은 취소 제스처가 두 결과를 낸다.
   useEffect(() => {
     if (!open) return;
-    const h = (e) => { if (e.key === 'Escape' && pad) setPad(null); };
+    const h = (e) => { if (e.key === 'Escape' && pad) dismissPad(); };
     document.addEventListener('keydown', h);
     return () => document.removeEventListener('keydown', h);
   }, [open, pad]);
@@ -373,16 +391,17 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   const openNew = (dayKey) => { setPad({ dayKey, mode: 'new', memoId: null, val: '' }); setPadSeq((s) => s + 1); };
   const openEdit = (dayKey, memo) => { setPad({ dayKey, mode: 'edit', memoId: memo.id, val: memo.content || '' }); setPadSeq((s) => s + 1); };
   // 자동 기록 3종 — 값 복사가 아니라 앵커(id)만 들고 매 렌더 재조회한다.
-  const openRebal = (dayKey, memo) => { setPad({ kind: 'rebalTarget', dayKey, memoId: memo.id }); setPadSeq((s) => s + 1); };
-  const openNote = (dayKey, g) => {
-    setPad({ kind: 'note', dayKey, portfolioId: g.portfolioId, noteId: (g.notes[0] && g.notes[0].id) || null, val: null });
+  // backPick: PICK 목록을 거쳐 열렸으면 그 목록 종류(✕/Esc가 되돌아갈 곳). 1건 칩에서 바로 열면 null.
+  const openRebal = (dayKey, memo, backPick = null) => { setPad({ kind: 'rebalTarget', dayKey, memoId: memo.id, backPick }); setPadSeq((s) => s + 1); };
+  const openNote = (dayKey, g, backPick = null) => {
+    setPad({ kind: 'note', dayKey, portfolioId: g.portfolioId, noteId: (g.notes[0] && g.notes[0].id) || null, val: null, backPick });
     setPadSeq((s) => s + 1);
   };
-  const openQty = (dayKey, g) => { setPad({ kind: 'qty', dayKey, portfolioId: g.portfolioId }); setPadSeq((s) => s + 1); };
-  const openTransfer = (dayKey, g) => { setPad({ kind: 'transfer', dayKey, portfolioId: g.portfolioId }); setPadSeq((s) => s + 1); };
+  const openQty = (dayKey, g, backPick = null) => { setPad({ kind: 'qty', dayKey, portfolioId: g.portfolioId, backPick }); setPadSeq((s) => s + 1); };
+  const openTransfer = (dayKey, g, backPick = null) => { setPad({ kind: 'transfer', dayKey, portfolioId: g.portfolioId, backPick }); setPadSeq((s) => s + 1); };
   // 같은 종류가 2건 이상이면 칩을 개수로 접고, 클릭 시 이 선택 목록을 먼저 띄운다.
-  const openPick = (dayKey, pickKind) => { setPad({ kind: 'pick', dayKey, pickKind }); setPadSeq((s) => s + 1); };
-  const closePad = () => setPad(null);
+  const openPick = (dayKey, pickKind) => { setPad(pickPad(dayKey, pickKind)); setPadSeq((s) => s + 1); };
+  const closePad = dismissPad;
 
   // 투자기록을 쓸 수 있는 계좌(삭제·현금성 제외) — 새 기록 작성 토글의 계좌 선택지
   const writablePortfolios = (portfolios || []).filter(
@@ -713,13 +732,19 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
             onTouchStart={(e) => startDrag('pad', e.touches[0].clientX, e.touches[0].clientY)}
           >
             <div className="flex items-center gap-3">
+              {/* 핑크 버튼 = '한 단계 뒤로'. 목록에서 연 상세면 ← 글리프로 바꿔 "닫힘"이 아니라
+                  "목록 복귀"임을 알린다(같은 자리·같은 크기라 버튼이 늘지는 않는다). */}
               <button
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={closePad}
                 className="w-[18px] h-[18px] rounded-full bg-pink-600 hover:bg-pink-400 flex items-center justify-center transition-all"
-                title="취소 (Esc)"
+                title={pad.backPick
+                  ? (pad.kind === 'note' ? '편집 취소하고 목록으로 (Esc)' : '목록으로 돌아가기 (Esc)')
+                  : '취소 (Esc)'}
               >
-                <X size={10} className="text-white" />
+                {pad.backPick
+                  ? <ChevronLeft size={12} className="text-white" />
+                  : <X size={10} className="text-white" />}
               </button>
               {/* 저장 버튼은 쓰기 가능한 패드에만 — 읽기 전용(rebalTarget·qty·pick)에는 렌더하지 않는다.
                   readOnly(브릿지 끊긴 새 창)에서는 저장할 곳이 없으므로 어떤 패드에서도 렌더하지 않는다. */}
@@ -980,10 +1005,11 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                 <button
                   key={it.id || it.portfolioId || i}
                   onClick={() => {
-                    if (pad.pickKind === 'rebalTarget') openRebal(pad.dayKey, it);
-                    else if (pad.pickKind === 'note') openNote(pad.dayKey, it);
-                    else if (pad.pickKind === 'transfer') openTransfer(pad.dayKey, it);
-                    else openQty(pad.dayKey, it);
+                    // 되돌아올 목록(pickKind)을 상세 패드에 실어 보낸다 — ✕/Esc가 이 목록으로 복귀.
+                    if (pad.pickKind === 'rebalTarget') openRebal(pad.dayKey, it, 'rebalTarget');
+                    else if (pad.pickKind === 'note') openNote(pad.dayKey, it, 'note');
+                    else if (pad.pickKind === 'transfer') openTransfer(pad.dayKey, it, 'transfer');
+                    else openQty(pad.dayKey, it, 'qty');
                   }}
                   className="w-full flex items-center justify-between gap-2 text-left px-2 py-2 rounded hover:bg-gray-800/80 transition-colors border-b border-gray-900/80"
                 >
