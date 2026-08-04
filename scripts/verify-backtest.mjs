@@ -12,10 +12,11 @@
 //     초기매수·월별 매매금액·조정후수량·분배금을 PDF와 대조. 여기서 고정하는 최대 발견은
 //     **구조 변경(종목 재편) 매매는 리밸런싱 차익에 계상하지 않는다**는 규칙이다
 //     (PDF 4월 합계 25,859,200 = 정기 3건만. 회색 음영 3행 제외).
-//   파트④ 회귀 가드 (#39~#48)
+//   파트④ 회귀 가드 (#39~#48) / 정규화·지문·sticky (#49~#56) / 데이터 수집 (#57~#58)
 //     비중 모드 초기매수 0원 붕괴 / 분배 일정이 리밸런싱 정책에 끌려가는 결함 /
 //     매도·매수 순서 / 지급월 vs 분배락월 / 정규화·지문·sticky 판정.
-//   파트⑤ 소스 텍스트 가드 (#49~#58)
+//   파트④-d 월말 보유 (#69~#74) — 무거래 종목 포함·Σholdings=evalEnd·비중 100%·lastDate 캡
+//   파트⑤ 소스 텍스트 가드 (#59~#68)
 //     미러 테스트는 함수 본문 회귀만 잡는다. 영속화 배선(호출부)은 미러로 표현할 수 없어
 //     App.tsx·useDriveSync.ts·backtest.ts 를 직접 읽어 계약을 단언한다
 //     (verify-flow.mjs #27~#36 · verify-twr.mjs #30d 선례).
@@ -174,6 +175,7 @@ function seriesRange(series) {
   }
   return { first, last, count };
 }
+const QTY_EPS = 1e-9;
 function roundQty(raw, mode) {
   if (!Number.isFinite(raw)) return 0;
   if (mode === 'exact') return raw;
@@ -446,7 +448,7 @@ function runBacktest(input) {
   let cash = config.initialCapital + config.extraCash;
   const totalEvalAt = (date) => {
     let s = 0;
-    for (const p of positions) { if (p.qty > 0) { const h = priceAt(prices[p.asset.code], date); if (!h.missing) s += p.qty * h.price; } }
+    for (const p of positions) { if (p.qty > QTY_EPS) { const h = priceAt(prices[p.asset.code], date); if (!h.missing) s += p.qty * h.price; } }
     return s;
   };
   const ratioBaseAt = (date) => {
@@ -468,6 +470,7 @@ function runBacktest(input) {
         if (afford < qty) { qty = Math.max(0, afford); note = '예수금 부족'; }
       }
     }
+    if (p.qty + qty !== 0 && Math.abs(p.qty + qty) < QTY_EPS) qty = -p.qty;
     if (qty === 0) return null;
     const cashDelta = -qty * hit.price;
     cash += cashDelta;
@@ -518,7 +521,8 @@ function runBacktest(input) {
     if (!m) {
       m = { ym, trades: [], dividends: [], tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
-        cashDelta: 0, cashEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0 };
+        cashDelta: 0, cashEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
+        lastDate: '', holdings: [] };
       monthMap.set(ym, m);
     }
     return m;
@@ -635,6 +639,9 @@ function runBacktest(input) {
   let cumTrade = 0, cumDivAccrued = 0, cumDivPaid = 0, cumStructural = 0;
   let runCash = config.initialCapital + config.extraCash;
   for (const t of initialTrades) runCash += t.cashDelta;
+  const runQty = new Map();
+  for (const p of positions) runQty.set(p.asset.id, 0);
+  for (const t of initialTrades) runQty.set(t.assetId, (runQty.get(t.assetId) ?? 0) + t.qty);
   for (const m of months) {
     m.trades.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     m.dividends.sort((a, b) => (a.exDate < b.exDate ? -1 : a.exDate > b.exDate ? 1 : 0));
@@ -645,20 +652,21 @@ function runBacktest(input) {
     runCash += m.cashDelta;
     m.cashEnd = runCash;
     const lastBiz = onOrBeforeBusinessDay(lastDayOfMonth(m.ym) > endBiz ? endBiz : lastDayOfMonth(m.ym), holidays);
-    const qtyAt = new Map();
-    for (const p of positions) qtyAt.set(p.asset.id, 0);
-    for (const t of initialTrades) qtyAt.set(t.assetId, (qtyAt.get(t.assetId) ?? 0) + t.qty);
-    for (const mm of months) {
-      if (mm.ym > m.ym) break;
-      for (const t of mm.trades) qtyAt.set(t.assetId, (qtyAt.get(t.assetId) ?? 0) + t.qty);
-    }
+    for (const t of m.trades) runQty.set(t.assetId, (runQty.get(t.assetId) ?? 0) + t.qty);
+    const hold = [];
     let ev = 0;
     for (const p of positions) {
-      const q = qtyAt.get(p.asset.id) ?? 0;
-      if (q <= 0) continue;
+      const q = runQty.get(p.asset.id) ?? 0;
+      if (q <= QTY_EPS) continue;
       const hit = priceAt(prices[p.asset.code], lastBiz);
-      if (!hit.missing) ev += q * hit.price;
+      const amount = hit.missing ? 0 : q * hit.price;
+      ev += amount;
+      hold.push({ assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+        qty: q, price: hit.price, priceExact: hit.exact, evalAmount: amount, weight: 0 });
     }
+    for (const h of hold) h.weight = ev > 0 ? (h.evalAmount / ev) * 100 : 0;
+    m.lastDate = lastBiz;
+    m.holdings = hold;
     m.evalEnd = ev;
     m.totalEnd = ev + runCash;
   }
@@ -681,7 +689,7 @@ function runBacktest(input) {
       let ev = 0;
       for (const p of positions) {
         const q = qty.get(p.asset.id) ?? 0;
-        if (q <= 0) continue;
+        if (q <= QTY_EPS) continue;
         const hit = priceAt(prices[p.asset.code], d);
         if (!hit.missing) ev += q * hit.price;
       }
@@ -690,7 +698,7 @@ function runBacktest(input) {
   }
 
   const finalEval = totalEvalAt(endBiz);
-  const finalHoldings = positions.filter((p) => p.qty > 0).map((p) => {
+  const finalHoldings = positions.filter((p) => p.qty > QTY_EPS).map((p) => {
     const hit = priceAt(prices[p.asset.code], endBiz);
     const amount = hit.missing ? 0 : p.qty * hit.price;
     return { assetId: p.asset.id, code: p.asset.code, name: p.asset.name, qty: p.qty, price: hit.price,
@@ -924,6 +932,104 @@ console.log('\n── 파트④ 회귀 가드 ──');
   eq('#48 월별 cashEnd 누적 = 시뮬레이션 최종 예수금', Math.round(cashCheck), Math.round(r2.summary.finalCash));
 }
 
+console.log('\n── 파트④-d 월말 보유(수량·평가금액) ──');
+
+{
+  const r = runPdf();
+  const M = Object.fromEntries(r.months.map((m) => [m.ym, m]));
+
+  // ⚠️ 그 달에 **거래가 없던 종목도** 월말 보유에 잡혀야 한다 — 리밸런싱 표에는 행이 안 생기므로
+  //    이 블록이 없으면 "이번 달에 안 건드린 종목이 몇 주인지" 확인할 길이 없다.
+  const may = M['2026-05'];
+  const tradedInMay = new Set(may.trades.map((t) => t.assetId));
+  ok('#69 5월에 매매가 0주였던 TIGER도 월말 보유에 포함된다',
+    !tradedInMay.has('a3') && may.holdings.some((h) => h.assetId === 'a3' && h.qty > 0));
+
+  // 월말 보유 평가액 합 = evalEnd (총자산 정합의 근거)
+  let allMatch = true;
+  for (const m of r.months) {
+    const sum = m.holdings.reduce((s, h) => s + h.evalAmount, 0);
+    if (Math.abs(sum - m.evalEnd) > 1e-6) allMatch = false;
+    if (Math.abs((m.evalEnd + m.cashEnd) - m.totalEnd) > 1e-6) allMatch = false;
+  }
+  ok('#70 Σ월말보유 평가금액 = evalEnd 이고 evalEnd + cashEnd = totalEnd (전 월)', allMatch);
+
+  // 비중은 종목 평가액 합(예수금 제외) 기준 — 기말 보유 현황 표와 같은 정의
+  const jul = M['2026-07'];
+  const wsum = jul.holdings.reduce((s, h) => s + h.weight, 0);
+  ok('#71 월말 보유 비중 합 = 100% (분모는 종목 평가액, 예수금 제외)', Math.abs(wsum - 100) < 1e-6);
+
+  // 러닝 누적으로 바꾼 뒤에도 "그 달까지의 매매 누적"이어야 한다(종료 상태 스냅샷이 아님)
+  const janQty = Object.fromEntries(M['2026-01'].holdings.map((h) => [h.assetId, h.qty]));
+  deep('#72 ⚠️ 1월 말 보유수량은 1월까지의 누적 — 시뮬레이션 종료 상태가 아니다',
+    [janQty.a1, janQty.a2, janQty.a3 ?? null], [11139, 20834, null]);
+
+  // 월말 종가는 그 달 마지막 영업일 기준 (1월 말일 토요일 → 01-30, 5월 말일 일요일 → 05-29,
+  // 7월 말일 2026-07-31은 금요일이라 그대로)
+  deep('#73 lastDate = 그 달 마지막 영업일',
+    [M['2026-01'].lastDate, M['2026-05'].lastDate, M['2026-07'].lastDate],
+    ['2026-01-30', '2026-05-29', '2026-07-31']);
+  // ⚠️ 마지막 달은 **기간 끝을 넘지 않아야** 한다 — 넘으면 조회기간 밖 종가로 평가하게 된다.
+  const capped = runPdf({ endDate: '2026-07-15' });
+  const cm = capped.months[capped.months.length - 1];
+  deep('#73b 마지막 달 lastDate는 종료일로 캡된다', [cm.ym, cm.lastDate], ['2026-07', '2026-07-15']);
+
+  // 표의 '조정 후 평가액' 원자재
+  const t0 = M['2026-01'].trades[0];
+  eq('#74 조정 후 평가액 = 조정 후 수량 × 그날 종가', t0.evalAfter, t0.qtyAfter * t0.price);
+
+  // ⚠️ #75 — 화면 tfoot 합계가 '거래 단위 Σ'면 안 되는 이유를 수치로 고정한다.
+  //    evalBefore/evalAfter는 '포지션 전체 평가액'이라 한 종목이 그 달에 두 번 거래되면
+  //    중복 계상된다(재편 + 정기 리밸런싱이 겹친 4월). 화면·CSV는 그런 달의 합계를 비운다.
+  const apr = M['2026-04'];
+  const seen = new Set();
+  let dup = false;
+  for (const t of apr.trades) { if (seen.has(t.assetId)) { dup = true; break; } seen.add(t.assetId); }
+  const naiveAfter = apr.trades.reduce((s, t) => s + t.evalAfter, 0);
+  ok('#75 ⚠️ 같은 종목 2회 거래된 달의 거래단위 Σ는 실제 월말 평가액과 2배 이상 벌어진다 → 합계 비우기',
+    dup && naiveAfter > apr.evalEnd * 2 && Math.round(apr.evalEnd) === 450022400);
+  const jan = M['2026-01'];
+  const janSeen = new Set();
+  let janDup = false;
+  for (const t of jan.trades) { if (janSeen.has(t.assetId)) { janDup = true; break; } janSeen.add(t.assetId); }
+  ok('#75b 중복이 없는 달은 합계를 그대로 쓸 수 있다(1월)', !janDup);
+
+  // ⚠️ #76 — rounding:'exact' 전량 매도 후 부동소수 잔여가 '유령 보유'로 남지 않아야 한다.
+  //    잔여가 남으면 그 종목이 유일 보유일 때 `0주 · ₩0 (100.0%)`가 매달 렌더된다.
+  {
+    const P = { FX: {} };
+    // 나누어떨어지지 않는 가격으로 소수 좌수를 만든다
+    for (const d of ['2026-01-02', '2026-01-30', '2026-02-13', '2026-02-27', '2026-03-13', '2026-03-31']) P.FX[d] = 1234.56;
+    P.FX['2026-02-27'] = 43210.5;
+    const cfg = makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 1000003,
+      targetMode: 'amount', rounding: 'exact', policy: 'perCycle',
+      assets: [{ id: 'f1', code: 'FX', name: '펀드', payCycle: 'none', targetAmount: 1000003 }],
+      events: [{ id: 'ev', date: '2026-02-27', label: '전량 매도', funding: 'reallocate',
+        addAssets: [], removeAssets: ['f1'], targets: [] }],
+    });
+    const rr = runBacktest({ config: cfg, prices: P, dividends: {}, holidays: KR26 });
+    const ghosts = rr.months.flatMap((m) => m.holdings).filter((h) => h.qty > 0 && h.qty < 1e-6);
+    ok('#76 ⚠️ 전량 매도 후 1e-13 규모 잔여가 월말 보유에 유령 행으로 남지 않는다', ghosts.length === 0);
+  }
+
+  // ⚠️ #77 — 거래·분배가 없어도 보유가 있으면 그 달을 렌더해야 한다(화면/CSV 일관).
+  //    엔진이 그런 달에도 holdings 를 채우는지 확인(렌더 조건은 소스 가드 #79가 본다).
+  {
+    const quiet = runBacktest({
+      config: makeBtConfig({
+        startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 100000000,
+        targetMode: 'amount', rounding: 'floor', policy: 'fixedDay', fixedDay: 5,
+        assets: [{ id: 'q1', code: K200, name: 'K', payCycle: 'none', targetAmount: 100000000 }],
+      }),
+      prices: PRICES, dividends: {}, holidays: KR26,
+    });
+    const noTradeMonths = quiet.months.filter((m) => m.trades.length === 0 && m.dividends.length === 0);
+    ok('#77 매매·분배가 없는 달에도 엔진은 월말 보유를 채운다',
+      noTradeMonths.length > 0 && noTradeMonths.every((m) => m.holdings.length > 0 && m.lastDate));
+  }
+}
+
 console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');
 
 {
@@ -996,6 +1102,17 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     !/setStockHistoryMap[^\n]*bt(Series|Prices)/i.test(app));
   ok('#68 App.tsx — backtestAccess = 관리자 또는 backtestEnabled',
     /const backtestAccess = isAdminUser \|\| userFeatures\.backtestEnabled/.test(app));
+
+  const page = strip(read('src/components/BacktestPage.tsx'));
+  // ⚠️ 아래 3건은 미러(순수 함수)로 표현할 수 없는 **렌더 계약**이라 소스 텍스트로 단언한다.
+  ok('#78 ⚠️ 월 tfoot 평가액 합계는 같은 종목 2회 거래 시 비운다(dupTraded 분기)',
+    /let dupTraded = false;/.test(page) && /dupTraded \?[^\n]*-[^\n]*: won\(m\.evalBeforeSum\)/.test(page)
+      && /dupTraded \?[^\n]*-[^\n]*: won\(rows\.reduce/.test(page));
+  ok('#79 ⚠️ 보유가 있으면 거래·분배가 없는 달도 렌더한다(CSV와 일관)',
+    /if \(!rows\.length && !orphans\.length && !m\.holdings\.length\) return null;/.test(page));
+  ok('#80 ⚠️ CSV도 화면과 같은 dupTraded 규칙을 쓴다',
+    /dupTraded \? '' : Math\.round\(m\.evalBeforeSum\)/.test(page)
+      && /dupTraded \? '' : Math\.round\(joined\.reduce/.test(page));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  통과 ${pass} / 실패 ${fail}\n`);

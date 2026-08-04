@@ -336,27 +336,39 @@ export default function BacktestPage({
   // ── 결과 CSV ────────────────────────────────────────────────────────────
   const downloadCsv = () => {
     if (!result?.ok || !active) return;
+    // ⚠️ 열 구성은 화면 표와 1:1로 유지할 것 — 갈리면 "화면과 CSV가 다르다"가 된다.
     const rows = [[
       '구분', '리밸런싱일', '종목', '종가', '리밸런싱 전 평가액', '매수/매도 수량',
-      '리밸런싱 매매금액', '조정 후 수량', '분배락일', '지급일', '주당 분배금', '지급 분배금',
+      '리밸런싱 매매금액', '조정 후 수량', '조정 후 평가액', '분배락일', '지급일', '주당 분배금', '지급 분배금',
     ]];
     for (const t of result.initialTrades) {
       rows.push(['초기매수', t.date, `${t.name}(${t.code})`, t.price, Math.round(t.evalBefore),
-        t.qty, Math.round(t.cashDelta), t.qtyAfter, '', '', '', '']);
+        t.qty, Math.round(t.cashDelta), t.qtyAfter, Math.round(t.evalAfter), '', '', '', '']);
     }
     for (const m of result.months) {
       const { rows: joined, orphans } = joinTradeDividends(m.trades, m.dividends);
       for (const { trade: t, dividend: d } of joined) {
         rows.push([t.structural ? '구조변경' : '리밸런싱', t.date, `${t.name}(${t.code})`, t.price,
-          Math.round(t.evalBefore), t.qty, Math.round(t.cashDelta), t.qtyAfter,
+          Math.round(t.evalBefore), t.qty, Math.round(t.cashDelta), t.qtyAfter, Math.round(t.evalAfter),
           d?.exDate || '', d?.payDate || '', d?.perShare ?? '', d ? Math.round(d.amount) : '']);
       }
       for (const d of orphans) {
-        rows.push(['분배금만', '', `${d.name}(${d.code})`, '', '', '', '', d.qty, d.exDate, d.payDate, d.perShare, Math.round(d.amount)]);
+        rows.push(['분배금만', '', `${d.name}(${d.code})`, '', '', '', '', d.qty, '', d.exDate, d.payDate, d.perShare, Math.round(d.amount)]);
       }
-      rows.push([`${m.ym} 합계`, '', '', '', Math.round(m.evalBeforeSum), '', Math.round(m.tradeNet), '', '', '', '', Math.round(m.divAccrued)]);
-      rows.push([`${m.ym} 누적`, '', '', '', '', '', Math.round(m.cumTradeNet), '', '', '', '', Math.round(m.cumDivAccrued)]);
-      rows.push([`${m.ym} 현금`, '', '', '', '', '', Math.round(m.cashDelta), '', '', '', '', Math.round(m.cashEnd)]);
+      // ⚠️ 화면 tfoot과 **같은 규칙** — 같은 종목이 그 달에 두 번 이상 거래되면 평가액 합은
+      //    중복 계상이므로 비운다(정확한 시점 정합 총액은 바로 아래 '월말보유' 행들의 합).
+      const dup = new Set<string>();
+      let dupTraded = false;
+      for (const t of m.trades) { if (dup.has(t.assetId)) { dupTraded = true; break; } dup.add(t.assetId); }
+      rows.push([`${m.ym} 합계`, '', '', '', dupTraded ? '' : Math.round(m.evalBeforeSum), '', Math.round(m.tradeNet), '',
+        dupTraded ? '' : Math.round(joined.reduce((s, r) => s + r.trade.evalAfter, 0)), '', '', '', Math.round(m.divAccrued)]);
+      // 월말 보유 — 그 달에 거래가 없던 종목도 포함(화면 '월말 보유 현황'과 동일 소스)
+      for (const h of m.holdings) {
+        rows.push([`${m.ym} 월말보유`, m.lastDate, `${h.name}(${h.code})`, h.price, '', '', '',
+          h.qty, Math.round(h.evalAmount), '', '', '', '']);
+      }
+      rows.push([`${m.ym} 누적`, '', '', '', '', '', Math.round(m.cumTradeNet), '', '', '', '', '', Math.round(m.cumDivAccrued)]);
+      rows.push([`${m.ym} 현금`, '', '', '', '', '', Math.round(m.cashDelta), '', Math.round(m.evalEnd), '', '', '', Math.round(m.cashEnd)]);
     }
     // ⚠️ BOM은 '\ufeff' 이스케이프로 — 소스에 보이지 않는 문자를 직접 넣으면 편집·머지 중 조용히
     //    사라져 엑셀에서 한글이 깨진다(원인 추적이 매우 어렵다).
@@ -945,12 +957,27 @@ export default function BacktestPage({
               {/* 월별 */}
               {result.months.map((m) => {
                 const { rows, orphans } = joinTradeDividends(m.trades, m.dividends);
-                if (!rows.length && !orphans.length) return null;
+                // ⚠️ 보유가 있으면 거래·분배가 없는 달도 렌더한다 — 이 기능의 목적이 "이번 달에
+                //    손대지 않은 종목이 몇 주인지"이고, CSV는 이미 그 달을 무조건 내보내므로
+                //    여기서만 스킵하면 화면과 CSV가 갈린다.
+                if (!rows.length && !orphans.length && !m.holdings.length) return null;
+                const hasTable = rows.length > 0 || orphans.length > 0;
+                // 같은 종목이 두 번 이상 거래된 달인가(합계 셀 중복 계상 판정)
+                const seenAsset = new Set<string>();
+                let dupTraded = false;
+                for (const t of m.trades) {
+                  if (seenAsset.has(t.assetId)) { dupTraded = true; break; }
+                  seenAsset.add(t.assetId);
+                }
                 return (
                   <div key={m.ym} className="mb-4 bt-month">
-                    <h3 className="text-xs font-bold text-gray-300 mb-1">📅 {m.ym.replace('-', '년 ')}월</h3>
+                    <h3 className="text-xs font-bold text-gray-300 mb-1">
+                      📅 {m.ym.replace('-', '년 ')}월
+                      {!hasTable && <span className="ml-1 font-normal text-gray-600 text-[10px]">— 이 달은 매매·분배가 없습니다</span>}
+                    </h3>
+                    {hasTable && (
                     <div className="overflow-x-auto border border-gray-800 rounded-lg">
-                      <table className="w-full text-[11px] min-w-[980px]">
+                      <table className="w-full text-[11px] min-w-[1090px]">
                         <thead className="bg-gray-800/70 text-gray-400">
                           <tr>
                             <th className="px-2 py-1 text-left font-bold">리밸런싱일</th>
@@ -960,6 +987,7 @@ export default function BacktestPage({
                             <th className="px-2 py-1 text-right font-bold">매수/매도</th>
                             <th className="px-2 py-1 text-right font-bold">매매 금액</th>
                             <th className="px-2 py-1 text-right font-bold">조정 후 수량</th>
+                            <th className="px-2 py-1 text-right font-bold">조정 후 평가액</th>
                             <th className="px-2 py-1 text-center font-bold">분배락일</th>
                             <th className="px-2 py-1 text-center font-bold">지급일</th>
                             <th className="px-2 py-1 text-right font-bold">주당 분배금</th>
@@ -983,6 +1011,8 @@ export default function BacktestPage({
                               </td>
                               <td className={`px-2 py-1 text-right ${pnlCls(t.cashDelta)}`}>{wonSigned(t.cashDelta)}</td>
                               <td className="px-2 py-1 text-right text-gray-200">{qtyText(t.qtyAfter)}주</td>
+                              {/* 조정 후 평가액 = 조정 후 수량 × 그날 종가 (BtTrade.evalAfter) */}
+                              <td className="px-2 py-1 text-right text-gray-200">{won(t.evalAfter)}</td>
                               <td className="px-2 py-1 text-center text-gray-500 text-[10px] whitespace-nowrap">{d?.exDate || '-'}</td>
                               <td className="px-2 py-1 text-center text-gray-500 text-[10px] whitespace-nowrap">{d?.payDate || '-'}</td>
                               <td className="px-2 py-1 text-right">
@@ -1007,6 +1037,7 @@ export default function BacktestPage({
                               <td className="px-2 py-1 text-gray-300">{d.name}</td>
                               <td colSpan={4} className="px-2 py-1 text-right text-gray-700">-</td>
                               <td className="px-2 py-1 text-right text-gray-300">{qtyText(d.qty)}주</td>
+                              <td className="px-2 py-1 text-right text-gray-700">-</td>
                               <td className="px-2 py-1 text-center text-gray-500 text-[10px]">{d.exDate}</td>
                               <td className="px-2 py-1 text-center text-gray-500 text-[10px]">{d.payDate}</td>
                               <td className="px-2 py-1 text-right text-gray-300">{formatNumber(d.perShare)}</td>
@@ -1017,15 +1048,52 @@ export default function BacktestPage({
                             <td className="px-2 py-1 text-gray-300">합계</td>
                             <td className="px-2 py-1 text-gray-600">-</td>
                             <td className="px-2 py-1 text-right text-gray-600">-</td>
-                            <td className="px-2 py-1 text-right text-gray-200">{won(m.evalBeforeSum)}</td>
+                            {/* ⚠️ 평가액 합계는 **한 종목이 그 달에 두 번 이상 거래되면 렌더하지 않는다**.
+                                evalBefore/evalAfter는 거래 시점의 '포지션 전체 평가액'이라 거래 단위로 더하면
+                                같은 종목이 중복 계상된다(재편+정기 리밸런싱이 겹친 달에서 실측 2.17배).
+                                첨부 PDF도 정확히 그런 달(4월)의 합계를 '-'로 비워 뒀다 — 그 규약을 따른다.
+                                시점 정합 총액은 아래 '월말 보유 현황 · 종목 합계'가 담당한다. */}
+                            <td className="px-2 py-1 text-right text-gray-200" title={dupTraded ? '같은 종목이 이 달에 두 번 이상 거래되어 단순 합이 중복 계상됩니다 — 아래 월말 보유 현황을 참고하세요.' : undefined}>
+                              {dupTraded ? <span className="text-gray-600 font-normal">-</span> : won(m.evalBeforeSum)}
+                            </td>
                             <td className="px-2 py-1 text-right text-gray-600">-</td>
                             <td className={`px-2 py-1 text-right ${pnlCls(m.tradeNet)}`}>{wonSigned(m.tradeNet)}</td>
-                            <td colSpan={4} className="px-2 py-1 text-right text-gray-600">-</td>
+                            <td className="px-2 py-1 text-right text-gray-600">-</td>
+                            <td className="px-2 py-1 text-right text-gray-200" title={dupTraded ? '같은 종목이 이 달에 두 번 이상 거래되어 단순 합이 중복 계상됩니다 — 아래 월말 보유 현황을 참고하세요.' : undefined}>
+                              {dupTraded ? <span className="text-gray-600 font-normal">-</span> : won(rows.reduce((s, r) => s + r.trade.evalAfter, 0))}
+                            </td>
+                            <td colSpan={3} className="px-2 py-1 text-right text-gray-600">-</td>
                             <td className="px-2 py-1 text-right text-emerald-300">{won(m.divAccrued)}</td>
                           </tr>
                         </tbody>
                       </table>
                     </div>
+                    )}
+                    {/* 월말 보유 — ⚠️ 위 표는 '그 달 거래된 종목'만 행이 생기므로, 이 블록이 없으면
+                        이번 달에 손대지 않은 종목의 수량·평가금액을 확인할 길이 없다. 모든 보유 종목을
+                        같은 시점(월말 영업일)의 종가로 평가한 값이라 합계가 월말 총자산과 정합한다. */}
+                    {m.holdings.length > 0 && (
+                      <div className="mt-1 border border-gray-800/70 rounded-lg bg-gray-900/30 px-2 py-1.5">
+                        <div className="text-[10px] text-gray-500 font-bold mb-1">
+                          월말 보유 현황 <span className="font-normal text-gray-600">({m.lastDate} 종가 기준)</span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-5 gap-y-1">
+                          {m.holdings.map((h) => (
+                            <span key={h.assetId} className="text-[10px] whitespace-nowrap">
+                              <b className="text-gray-300">{h.name}</b>
+                              <span className="text-gray-500"> {qtyText(h.qty)}주 · </span>
+                              <b className="text-gray-200">{won(h.evalAmount)}</b>
+                              <span className="text-gray-600"> ({h.weight.toFixed(1)}%)</span>
+                              {!h.priceExact && <span className="text-amber-400" title="그 날짜 종가가 없어 직전 종가를 사용">≈</span>}
+                            </span>
+                          ))}
+                          <span className="text-[10px] whitespace-nowrap">
+                            <span className="text-gray-500">종목 합계 </span>
+                            <b className="text-gray-100">{won(m.evalEnd)}</b>
+                          </span>
+                        </div>
+                      </div>
+                    )}
                     {/* 월 요약 줄 */}
                     <div className="mt-1 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-x-4 gap-y-0.5 text-[10px] px-1">
                       <span className="text-gray-500">누적 매매차익 <b className={pnlCls(m.cumTradeNet)}>{wonSigned(m.cumTradeNet)}</b></span>

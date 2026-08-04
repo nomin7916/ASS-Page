@@ -297,6 +297,15 @@ export interface BtMonth {
   totalEnd: number;
   /** 리밸런싱 직전 평가액 합계 (PDF '리밸런싱 전 평가액' 합계 행) */
   evalBeforeSum: number;
+  /** evalEnd 산출에 쓴 그 달의 마지막 영업일(기간 끝을 넘지 않음) */
+  lastDate: string;
+  /**
+   * 월말 시점 **종목별** 보유 수량·평가금액.
+   * ⚠️ trades와 달리 **그 달에 매매가 없던 종목도 포함**한다 — 리밸런싱 표에는 그 달 거래된
+   *    종목만 행이 생기므로, 이것이 없으면 "이번 달에 안 건드린 종목은 몇 주 남았는지" 알 길이 없다.
+   *    weight 분모는 evalEnd(종목만, 예수금 제외) — 기말 보유 현황 표와 같은 정의.
+   */
+  holdings: BtHolding[];
 }
 
 export interface BtHolding {
@@ -588,6 +597,15 @@ export function roundQty(raw: number, mode: BtRounding): number {
   if (mode === 'round') return Math.round(raw);
   return Math.trunc(raw);
 }
+
+/**
+ * '보유 없음'으로 볼 수량 임계값.
+ * ⚠️ `rounding:'exact'`(소수 좌수)에서 전량 매도 수량은 `(0 − qty×price) / price`로 구해지는데
+ *    IEEE754에서 이 값이 원 수량보다 미세하게 작게 나오는 조합이 있다. 그러면 보유수량 한도
+ *    가드가 발동하지 않아 1e-13 규모 잔여가 남고, 러닝 누적 맵에 실려 **이후 모든 달**의 월말
+ *    보유에 `0주 · ₩0 (100.0%)` 유령 행으로 나타난다. 근원(adjustTo)에서 전량으로 스냅한다.
+ */
+export const QTY_EPS = 1e-9;
 
 /* ===========================================================================
  * H. 정규화 / 지문 / sticky 판정
@@ -1014,7 +1032,7 @@ export function runBacktest(input: BtRunInput): BtResult {
 
   const totalEvalAt = (date: string): number => {
     let s = 0;
-    for (const p of positions) { if (p.qty > 0) s += evalOf(p, date).amount; }
+    for (const p of positions) { if (p.qty > QTY_EPS) s += evalOf(p, date).amount; }
     return s;
   };
 
@@ -1045,6 +1063,9 @@ export function runBacktest(input: BtRunInput): BtResult {
         if (afford < qty) { qty = Math.max(0, afford); note = '예수금 부족'; }
       }
     }
+    // ⚠️ 결과가 0에 수렴하면 **정확히 전량**으로 스냅한다(QTY_EPS 주석 참조). p.qty를 나중에
+    //    보정하면 러닝 누적 맵(runQty)은 t.qty를 더하므로 둘이 갈린다 — 반드시 qty 자체를 고친다.
+    if (p.qty + qty !== 0 && Math.abs(p.qty + qty) < QTY_EPS) qty = -p.qty;
     if (qty === 0) return null;
 
     const cashDelta = -qty * hit.price;
@@ -1127,6 +1148,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
         cashDelta: 0, cashEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
+        lastDate: '', holdings: [],
       };
       monthMap.set(ym, m);
     }
@@ -1309,6 +1331,12 @@ export function runBacktest(input: BtRunInput): BtResult {
   // 초기 매수 반영
   for (const t of initialTrades) runCash += t.cashDelta;
 
+  // 월말 보유수량은 시뮬레이션 **종료 상태**가 아니라 그 달까지의 매매 누적이어야 한다.
+  // ⚠️ 달마다 처음부터 다시 더하지 말 것(O(월²×거래)) — months가 오름차순이므로 러닝 맵으로 누적한다.
+  const runQty = new Map<string, number>();
+  for (const p of positions) runQty.set(p.asset.id, 0);
+  for (const t of initialTrades) runQty.set(t.assetId, (runQty.get(t.assetId) ?? 0) + t.qty);
+
   for (const m of months) {
     m.trades.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     m.dividends.sort((a, b) => (a.exDate < b.exDate ? -1 : a.exDate > b.exDate ? 1 : 0));
@@ -1326,21 +1354,24 @@ export function runBacktest(input: BtRunInput): BtResult {
       lastDayOfMonth(m.ym) > endBiz ? endBiz : lastDayOfMonth(m.ym),
       holidays,
     );
-    // 월말 시점 보유수량은 시뮬레이션 종료 상태가 아니라 **그 달까지의 매매 누적**이어야 한다.
-    const qtyAt = new Map<string, number>();
-    for (const p of positions) qtyAt.set(p.asset.id, 0);
-    for (const t of initialTrades) qtyAt.set(t.assetId, (qtyAt.get(t.assetId) ?? 0) + t.qty);
-    for (const mm of months) {
-      if (mm.ym > m.ym) break;
-      for (const t of mm.trades) qtyAt.set(t.assetId, (qtyAt.get(t.assetId) ?? 0) + t.qty);
-    }
+    for (const t of m.trades) runQty.set(t.assetId, (runQty.get(t.assetId) ?? 0) + t.qty);
+
+    const hold: BtHolding[] = [];
     let ev = 0;
     for (const p of positions) {
-      const q = qtyAt.get(p.asset.id) ?? 0;
-      if (q <= 0) continue;
+      const q = runQty.get(p.asset.id) ?? 0;
+      if (q <= QTY_EPS) continue;
       const hit = priceAt(prices[p.asset.code], lastBiz);
-      if (!hit.missing) ev += q * hit.price;
+      const amount = hit.missing ? 0 : q * hit.price;
+      ev += amount;
+      hold.push({
+        assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+        qty: q, price: hit.price, priceExact: hit.exact, evalAmount: amount, weight: 0,
+      });
     }
+    for (const h of hold) h.weight = ev > 0 ? (h.evalAmount / ev) * 100 : 0;
+    m.lastDate = lastBiz;
+    m.holdings = hold;
     m.evalEnd = ev;
     m.totalEnd = ev + runCash;
   }
@@ -1371,7 +1402,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       let ev = 0;
       for (const p of positions) {
         const q = qty.get(p.asset.id) ?? 0;
-        if (q <= 0) continue;
+        if (q <= QTY_EPS) continue;
         const hit = priceAt(prices[p.asset.code], d);
         if (!hit.missing) ev += q * hit.price;
       }
@@ -1382,7 +1413,7 @@ export function runBacktest(input: BtRunInput): BtResult {
   // ── 최종 보유 ────────────────────────────────────────────────────────────
   const finalEval = totalEvalAt(endBiz);
   const finalHoldings: BtHolding[] = positions
-    .filter(p => p.qty > 0)
+    .filter(p => p.qty > QTY_EPS)
     .map(p => {
       const hit = priceAt(prices[p.asset.code], endBiz);
       const amount = hit.missing ? 0 : p.qty * hit.price;
