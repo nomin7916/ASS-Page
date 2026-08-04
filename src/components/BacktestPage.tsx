@@ -1355,7 +1355,14 @@ export default function BacktestPage({
                         월말 예수금 <b className="text-gray-300">{won(m.cashEnd)}</b>
                         {/* 분배금 몫이 남아 있을 때만 분해를 보여 준다(합 = 예수금, 이중 계상 아님) */}
                         {m.cashDivEnd > 0.5 && (
-                          <span className="text-gray-600"> (매매 {won(m.cashTradeEnd)} · 분배금 {won(m.cashDivEnd)})</span>
+                          <span
+                            className="text-gray-600"
+                            title={m.cashTradeEnd <= 0.5
+                              ? `매매 주머니가 0인 이유: 초기 잔여 + 누적 매매차익(${wonSigned(m.cumTradeNet)})이 매수 대금을 못 채워 부족분을 분배금에서 꺼냈습니다.`
+                              : '매매 = 초기 잔여 + 누적 매매차익 중 남은 몫 / 분배금 = 지급받은 분배금 중 아직 쓰지 않은 몫'}
+                          >
+                            {' '}(매매 {won(m.cashTradeEnd)} · 분배금 {won(m.cashDivEnd)})
+                          </span>
                         )}
                       </span>
                       <span className="text-gray-500">월말 총자산 <b className="text-gray-200">{won(m.totalEnd)}</b></span>
@@ -1370,6 +1377,16 @@ export default function BacktestPage({
                       {Math.abs(m.divPaid - m.divAccrued) > 0.5 && (
                         <span className="text-gray-600 col-span-2 xl:col-span-4">
                           ※ 이 달에 실제 입금된 분배금은 {won(m.divPaid)} (월말 분배는 지급일이 다음 달 초)
+                        </span>
+                      )}
+                      {/* ⚠️ 매수 대금을 무엇으로 충당했는지 — 누적 매매차익이 마이너스인 달에는
+                          이 줄이 없으면 "이 돈이 어디서 나왔나"를 화면에서 추적할 수 없다.
+                          분배금 주머니를 실제로 헐었을 때만(=설명이 필요할 때만) 띄운다. */}
+                      {m.cashUsedDiv > 0.5 && (
+                        <span className="text-amber-400/90 col-span-2 xl:col-span-6">
+                          ※ 이 달 매수 대금 <b>{won(m.cashUsedTrade + m.cashUsedDiv)}</b> ={' '}
+                          예수금(매매차익) <b>{won(m.cashUsedTrade)}</b> + 누적 분배금 <b>{won(m.cashUsedDiv)}</b>
+                          {' '}— 매매차익이 모자라 분배금에서 충당했습니다.
                         </span>
                       )}
                     </div>

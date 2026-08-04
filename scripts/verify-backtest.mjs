@@ -521,6 +521,7 @@ function runBacktest(input) {
     if (last && last.date === date) { last.t = cashTrade; last.d = cashDiv; return; }
     bucketLog.push({ date, t: cashTrade, d: cashDiv });
   };
+  const drawByYm = new Map();
   const applyCash = (delta, date) => {
     cash += delta;
     if (delta >= 0) { cashTrade += delta; logBuckets(date); return; }
@@ -528,11 +529,18 @@ function runBacktest(input) {
     const fromTrade = Math.max(0, Math.min(cashTrade, need));
     cashTrade -= fromTrade;
     need -= fromTrade;
+    let fromDiv = 0;
     if (need > 0) {
-      const fromDiv = Math.max(0, Math.min(cashDiv, need));
+      fromDiv = Math.max(0, Math.min(cashDiv, need));
       cashDiv -= fromDiv;
       need -= fromDiv;
       if (need > 0) cashTrade -= need;
+    }
+    const ym = ymOf(date);
+    if (ym) {
+      const cur = drawByYm.get(ym);
+      if (cur) { cur.fromTrade += fromTrade + need; cur.fromDiv += fromDiv; }
+      else drawByYm.set(ym, { fromTrade: fromTrade + need, fromDiv });
     }
     logBuckets(date);
   };
@@ -658,7 +666,7 @@ function runBacktest(input) {
     if (!m) {
       m = { ym, trades: [], dividends: [], tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
-        cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
+        cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, cashUsedTrade: 0, cashUsedDiv: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
         lastDate: '', holdings: [], contribution: null, cumContribution: 0 };
       monthMap.set(ym, m);
     }
@@ -861,6 +869,11 @@ function runBacktest(input) {
       let d = 0;
       for (const bkt of bucketLog) { if (bkt.date > lastBiz) break; t = bkt.t; d = bkt.d; }
       m.cashTradeEnd = t; m.cashDivEnd = d;
+    }
+    {
+      const dr = drawByYm.get(m.ym);
+      m.cashUsedTrade = dr ? dr.fromTrade : 0;
+      m.cashUsedDiv = dr ? dr.fromDiv : 0;
     }
     m.lastDate = lastBiz;
     m.holdings = hold;
@@ -1546,6 +1559,34 @@ console.log('\n── 파트④-h 목표 기준 totalWithDiv / 예수금 두 주
     Math.abs(pdf.summary.cumDivAccrued - pdf.summary.cumDivPaid) > 1
       && Math.abs((pdf.initialCashAfter + pdf.summary.cumTradeNet + pdf.summary.cumStructuralNet
         + pdf.summary.cumDivAccrued) - pdf.summary.finalCash) > 1);
+  // ⚠️ #111 — 매수 대금을 어느 주머니에서 꺼냈는지(화면의 '이 달 매수 대금 = 예수금 + 분배금' 줄).
+  //    누적 매매차익이 마이너스인 달에 "이 돈이 어디서 나왔나"를 답하는 값이라, 합이 그 달
+  //    **총 매수 대금**(매도 제외)과 정확히 같아야 한다.
+  const drawOk = (r) => r.months.every((m) => {
+    const buys = m.trades.filter((t) => t.cashDelta < 0).reduce((s, t) => s - t.cashDelta, 0);
+    const init = m === r.months[0]
+      ? r.initialTrades.filter((t) => t.cashDelta < 0).reduce((s, t) => s - t.cashDelta, 0) : 0;
+    return Math.abs((m.cashUsedTrade + m.cashUsedDiv) - (buys + init)) < 1e-6;
+  });
+  ok('#111 ⚠️ 주머니별 사용액 합 = 그 달 총 매수 대금(초기매수 포함, 매도 제외)',
+    [runPdf(), twd, dTwd, runPdf({ contribution: { mode: 'pctOfCash', value: 60, split: 'ratio' } })].every(drawOk));
+
+  // 실제 보고된 사례 재현: 매매 주머니가 바닥나 분배금에서 충당하는 달이 실제로 생긴다.
+  const tapped = dTwd.months.filter((m) => m.cashUsedDiv > 0.5);
+  ok('#111b 매매 주머니가 모자라면 분배금에서 꺼낸 금액이 기록된다',
+    tapped.length > 0 && tapped.every((m) => m.cashTradeEnd <= m.cashUsedTrade + 1e-6));
+
+  // ⚠️ #112 — 부족분 항등식: 분배금에서 꺼낸 누적액 = max(0, −(초기잔여 + 누적매매차익 + 재편))
+  //    (사용자가 보고한 2024-09 사례: 초기잔여 7,000 + 누적매매차익 −486,791 = −479,791 →
+  //     분배금에서 정확히 479,791을 헐었다.)
+  const shortfallOk = (r) => {
+    const used = r.months.reduce((s, m) => s + m.cashUsedDiv, 0);
+    const tradePot = r.initialCashAfter + r.summary.cumTradeNet + r.summary.cumStructuralNet;
+    return Math.abs(used - Math.max(0, -tradePot)) < 1e-6;
+  };
+  ok('#112 ⚠️ 분배금에서 헐어 쓴 누적액 = max(0, −(초기잔여 + 누적매매차익 + 재편순현금))',
+    [runPdf(), twd, dTwd].every(shortfallOk));
+
   console.log(`      · PDF 시나리오 분해: 초기잔여 ${Math.round(pdf.initialCashAfter).toLocaleString('ko-KR')}`
     + ` + 매매차익 ${Math.round(pdf.summary.cumTradeNet).toLocaleString('ko-KR')}`
     + ` + 재편 ${Math.round(pdf.summary.cumStructuralNet).toLocaleString('ko-KR')}`

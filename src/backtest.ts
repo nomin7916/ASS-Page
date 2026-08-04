@@ -377,6 +377,12 @@ export interface BtMonth {
   cashTradeEnd: number;
   /** 월말 예수금 중 아직 쓰지 않은 누적 분배금 몫 */
   cashDivEnd: number;
+  /**
+   * 그 달 **매수 대금**을 어느 주머니에서 꺼냈는지 (합 = 그 달 총 매수 대금, 매도는 제외).
+   * ⚠️ 누적 매매차익이 마이너스인 달에 "이 매수를 무엇으로 충당했는가"를 답하는 값이다.
+   */
+  cashUsedTrade: number;
+  cashUsedDiv: number;
   /** 월말 시점 종목 평가액 합 */
   evalEnd: number;
   /** evalEnd + cashEnd */
@@ -1235,6 +1241,12 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (last && last.date === date) { last.t = cashTrade; last.d = cashDiv; return; }
     bucketLog.push({ date, t: cashTrade, d: cashDiv });
   };
+  /**
+   * 그 달 매수 대금을 **어느 주머니에서 얼마씩** 꺼냈는지.
+   * ⚠️ 누적 매매차익이 마이너스인 달에는 "이 매수를 무엇으로 충당했는가"가 화면에서
+   *    보이지 않으면 사용자가 추적할 수 없다 — 그 근거를 남기는 기록이다.
+   */
+  const drawByYm = new Map<string, { fromTrade: number; fromDiv: number }>();
   /** 매도(+)는 매매 주머니로, 매수(−)는 **매매 → 분배금** 순으로 꺼낸다. */
   const applyCash = (delta: number, date: string) => {
     cash += delta;
@@ -1243,12 +1255,20 @@ export function runBacktest(input: BtRunInput): BtResult {
     const fromTrade = Math.max(0, Math.min(cashTrade, need));
     cashTrade -= fromTrade;
     need -= fromTrade;
+    let fromDiv = 0;
     if (need > 0) {
-      const fromDiv = Math.max(0, Math.min(cashDiv, need));
+      fromDiv = Math.max(0, Math.min(cashDiv, need));
       cashDiv -= fromDiv;
       need -= fromDiv;
       // 둘 다 바닥나면(allowNegativeCash) 초과분은 매매 주머니가 음수로 진다.
       if (need > 0) cashTrade -= need;
+    }
+    const ym = ymOf(date);
+    if (ym) {
+      const cur = drawByYm.get(ym);
+      // 초과분(need)은 매매 주머니가 마이너스로 떠안았으므로 매매 몫에 함께 계상한다.
+      if (cur) { cur.fromTrade += fromTrade + need; cur.fromDiv += fromDiv; }
+      else drawByYm.set(ym, { fromTrade: fromTrade + need, fromDiv });
     }
     logBuckets(date);
   };
@@ -1449,7 +1469,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         ym, trades: [], dividends: [],
         tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
-        cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
+        cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, cashUsedTrade: 0, cashUsedDiv: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
         lastDate: '', holdings: [], contribution: null, cumContribution: 0,
       };
       monthMap.set(ym, m);
@@ -1770,6 +1790,11 @@ export function runBacktest(input: BtRunInput): BtResult {
       }
       m.cashTradeEnd = t;
       m.cashDivEnd = d;
+    }
+    {
+      const dr = drawByYm.get(m.ym);
+      m.cashUsedTrade = dr ? dr.fromTrade : 0;
+      m.cashUsedDiv = dr ? dr.fromDiv : 0;
     }
     m.lastDate = lastBiz;
     m.holdings = hold;
