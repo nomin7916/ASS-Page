@@ -356,6 +356,38 @@ console.log('\n── 파트② 소스 텍스트 가드 ──');
 
   ok('#28 utils가 이관 헬퍼 2종을 내보낸다',
     /export const buildTransferLedgerRows/.test(utils) && /export const collectTransferRows/.test(utils));
+
+  // ── #30~#33 '비운 계좌의 평가액 0' 배선 (이관 이중 계상 방지) ────────────────────
+  // 종목을 전부 옮겨 비운 계좌가 과거 구성을 carry-forward로 유지하면, 대상계좌는 같은 날 그
+  // 종목을 이미 반영하므로 그날 총자산이 이관 금액만큼 부풀려진다(2026-08 실측: 8/4 총자산이
+  // ₩877,810,911로 표시, 정상값 대비 +₩112,511,543). 아래 4개 배선이 그 경로를 막는다.
+  const intg = read('src/hooks/useIntegratedData.ts');
+  const hp = read('src/components/HistoryPanel.tsx');
+
+  const bces = utils.slice(utils.indexOf('export const buildCloseEvalSeries'), utils.indexOf('export const calcPortfolioEvalForDate'));
+  ok('#30 buildCloseEvalSeries: 평가 포지션이 0건이면 이월이 아니라 exact 0',
+    /r\.items\.length === 0\) closeVal = 0/.test(bces));
+
+  ok('#30b utils가 evalSeriesDates(기록일 ∪ 구성 변경일)를 내보낸다',
+    /export const evalSeriesDates/.test(utils) && /holdingSnapshots/.test(utils.slice(utils.indexOf('export const evalSeriesDates'), utils.indexOf('export const buildCloseEvalSeries'))));
+
+  const ms = intg.slice(intg.indexOf('const marketSeries = useMemo'), intg.indexOf('const computedIntHistory'));
+  ok('#31 marketSeries는 평가액 0을 버리지 않는다 (`v > 0` 게이트 금지)',
+    ms.length > 200 && !/if \(v > 0\) map\.set/.test(ms) && /if \(cb != null\) \{ map\.set/.test(ms));
+  ok('#31b marketSeries는 구성 변경일도 평가한다 (evalSeriesDates 사용)',
+    /evalSeriesDates\(src,/.test(ms));
+  ok('#31c 계좌 편입일은 평가액이 0을 넘는 첫 날짜다 (dates[0] 금지)',
+    /const d0 = dates\.find\(d => \(map\.get\(d\) \|\| 0\) > 0\)/.test(intg));
+
+  ok('#32 개별 계좌 차트·추이 표도 같은 날짜 집합을 쓴다 (통합과 값이 갈리지 않게)',
+    /buildCloseEvalSeries\(activePortfolio, evalSeriesDates\(activePortfolio,/.test(app)
+    && /buildCloseEvalSeries\(activePortfolio, evalSeriesDates\(activePortfolio,/.test(hp));
+
+  const snapEff = app.slice(app.indexOf('// ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──'), app.indexOf('if (changed) setPortfolios(next);'));
+  ok('#33 빈 구성 스냅샷은 baseline 부트스트랩에서만 막는다 (비워진 계좌는 기록)',
+    snapEff.length > 200
+    && /items\.length === 0 && snaps\.length === 0\) return null/.test(snapEff)
+    && !/^\s*if \(items\.length === 0\) return null;/m.test(snapEff));
 }
 
 // #29 JSX 주석 무결성 — 이 저장소에서 실제로 빌드를 두 번 죽인 원인

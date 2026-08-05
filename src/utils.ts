@@ -1027,6 +1027,26 @@ export const calcPortfolioEvalDetail = (
   return { total: hasAnyPrice ? totalEval : 0, fxRate, items: detail, hasAnyPrice, allExact: hasAnyPrice && allExact };
 };
 
+// 평가액 시계열을 계산할 날짜 집합 = 기록일(history) ∪ 구성 변경일(holdingSnapshots).
+// ⚠️ 구성 변경일을 빼지 말 것(회귀 주의 — 종목 이관 이중 계상): 종목을 전부 다른 계좌로 옮겨
+//    비운 계좌는 currentEval이 0이라 그날 라이브 기록이 만들어지지 않는다(useHistoryBackfill
+//    효과#1의 `currentEval === 0` skip). 기록일만 평가하면 '비운 날'이 시계열에서 통째로 빠져
+//    직전 구성이 carry-forward로 살아남고, 대상계좌는 같은 날 그 종목을 이미 반영하므로 그날
+//    총자산이 이관 금액만큼 부풀려진다.
+// ⚠️ 상한(effectiveDateKey): 21:00 이후 KR 구성 변경 스냅샷은 '내일' 날짜로 찍히므로
+//    (getBackfillBoundaryKR) 미래 날짜가 시계열에 들어오지 않게 자른다.
+// ⚠️ 통합(useIntegratedData marketSeries)·개별 차트(App activeCloseEvalByDate)·추이 표
+//    (HistoryPanel displayEvalByDate)가 **같은 함수**를 써야 세 화면의 그날 평가액이 일치한다.
+export const evalSeriesDates = (p: any, histDates: string[], effectiveDateKey: string): string[] => {
+  const hd = [...new Set((histDates || []).filter(Boolean))];
+  if (hd.length === 0) return [];
+  const first = hd.slice().sort()[0];
+  const snaps = (p?.holdingSnapshots || [])
+    .map((s: any) => s?.date)
+    .filter((d: string) => d && d > first && (!effectiveDateKey || d < effectiveDateKey));
+  return [...new Set([...hd, ...snaps])].sort();
+};
+
 // 종가 확정 기반 평가액 시계열(carry-forward). 자산 평가액 추이·차트·통합 대시보드가 공용으로 사용해
 // '저장된 라이브 값'이 아니라 항상 '수량 × 종가'를 표시하기 위한 단일 소스.
 //  각 날짜에 대해:
@@ -1055,6 +1075,12 @@ export const buildCloseEvalSeries = (
     if (!resolved.estimated) {
       const r = calcPortfolioEvalDetail(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap || {}, fxRate, mpo);
       if (r.hasAnyPrice && r.allExact) closeVal = r.total;
+      // ⚠️ '평가할 포지션이 하나도 없음'과 '가격을 못 구함'을 구분한다(이월 금지 — 회귀 주의).
+      //    종목을 전부 다른 계좌로 이관/매도해 비운 계좌는 그날부터 평가액이 **진짜 0**인데,
+      //    hasAnyPrice=false(가격 종목 0건)를 '데이터 공백'으로 보고 직전 값을 이월하면 이미
+      //    옮겨간 종목이 원계좌에 영구히 남아 대상계좌와 **이중 계상**된다.
+      //    detail이 비었다 = 예수금·펀드·예적금·수량>0 종목이 전부 없다 = 평가 대상 자체가 없다.
+      else if (r.items.length === 0) closeVal = 0;
     }
     if (closeVal != null) { lastClose = closeVal; map.set(date, closeVal); }
     else if (lastClose != null) map.set(date, lastClose);

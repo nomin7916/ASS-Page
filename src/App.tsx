@@ -76,7 +76,7 @@ import {
   hexToRgba, blendWithDarkBg, downloadCSV, buildHistoryCSV, buildLookupCSV, buildDepositCSV,
   fillWeekendGaps, fillNonTradingGaps, calcPeriodStart,
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
-  computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries,
+  computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries, evalSeriesDates,
   externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
   buildBookCostSeries, bookDeltaBetween,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
@@ -1104,7 +1104,9 @@ export default function App() {
   const activeCloseEvalByDate = useMemo(() => {
     if (['overseas', 'simple', 'matong'].includes(activePortfolioAccountType)) return new Map();
     const edk = isKrCutoffAccount(activePortfolioAccountType) ? krEffectiveDateKey : effectiveDateKey;
-    return buildCloseEvalSeries(activePortfolio, history.map(h => h?.date), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, edk);
+    // 날짜 집합은 통합 대시보드(useIntegratedData marketSeries)와 **같은 함수**를 쓴다 —
+    // 구성 변경일(계좌를 비운 날)이 빠지면 이관한 종목이 이 계좌에 계속 계상된다(evalSeriesDates 주석).
+    return buildCloseEvalSeries(activePortfolio, evalSeriesDates(activePortfolio, history.map(h => h?.date), edk), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, edk);
   }, [activePortfolio, history, activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, krEffectiveDateKey, effectiveDateKey]);
 
   // 활성 계좌의 날짜별 장부액(Σ 예수금+매입원가) — 일간 지표 보류 판정이 '원장 흐름이 그날 평가액에
@@ -2862,9 +2864,13 @@ export default function App() {
       // (accountType 미설정 레거시 계좌는 'portfolio' 취급 — 앱 전역 컨벤션)
       const today = isKrCutoffAccount(p.accountType || 'portfolio') ? getBackfillBoundaryKR() : effectiveDateKey;
       const items = snapshotItemsFromPortfolio(p.portfolio || []);
-      if (items.length === 0) return null;
       const compKey = snapshotCompositionKey(p.portfolio || []);
       const snaps = Array.isArray(p.holdingSnapshots) ? p.holdingSnapshots : [];
+      // 빈 구성은 baseline 부트스트랩만 막는다(기록할 과거가 없음). 이미 스냅샷이 있는 계좌가
+      // ⚠️ **비워진 것은 반드시 기록**해야 한다(회귀 주의 — 종목 이관 이중 계상): 안 그러면
+      //    resolveHoldings가 영원히 직전(종목 보유) 스냅샷을 돌려줘 이미 다른 계좌로 옮긴 종목이
+      //    원계좌의 과거·현재 평가액에 계속 계상된다.
+      if (items.length === 0 && snaps.length === 0) return null;
       const baselineDate = p.baselineDate || today;
       if (snaps.length === 0) {
         return [{ date: baselineDate, kind: 'baseline', items }];

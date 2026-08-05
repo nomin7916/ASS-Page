@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, externalFlowInRange, computeDailyMetricsSeries, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum } from '../utils';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
@@ -106,7 +106,9 @@ export default function HistoryPanel({
   const useCloseRecompute = !['overseas', 'simple', 'matong'].includes(activePortfolioAccountType);
   const displayEvalByDate = useMemo(() => {
     if (!useCloseRecompute || !activePortfolio) return null;
-    return buildCloseEvalSeries(activePortfolio, sortedHistoryDesc.map(h => h?.date), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey);
+    // 날짜 집합은 차트(App activeCloseEvalByDate)·통합(useIntegratedData)과 **같은 함수**를 쓴다 —
+    // 구성 변경일(계좌를 비운 날)이 빠지면 이관한 종목이 이 계좌에 계속 계상된다(evalSeriesDates 주석).
+    return buildCloseEvalSeries(activePortfolio, evalSeriesDates(activePortfolio, sortedHistoryDesc.map(h => h?.date), effectiveDateKey), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey);
   }, [useCloseRecompute, activePortfolio, sortedHistoryDesc, activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey]);
 
   // 일간 지표(전일대비·일간 손익) — 통합 대시보드·CSV와 **같은 공용 함수**를 써야 화면이 어긋나지 않는다.

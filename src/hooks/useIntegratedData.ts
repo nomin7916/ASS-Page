@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, computeDailyMetricsSeries, computeCumulativeTwrSeries, rebaseTwr, buildBookCostSeries } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, computeCumulativeTwrSeries, rebaseTwr, buildBookCostSeries } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -133,21 +133,29 @@ export function useIntegratedData({
         const src = isActive ? { ...p, portfolio } : p;
         const mpo = p.manualPriceOverrides || {};
         const map = new Map();
+        const edk = isKrCutoffAccount(acctType) ? (krEffectiveDateKey || globalToday) : globalToday;
+        // 평가 대상 날짜 = 기록일 ∪ 구성 변경일(utils.evalSeriesDates — 근거는 그 주석 참조).
+        // 개별 계좌 차트·추이 표와 **같은 함수**를 써야 세 화면의 그날 평가액이 일치한다.
+        const storedByDate = new Map();
+        hist.forEach(h => { if (h && h.date) storedByDate.set(h.date, cleanNum(h.evalAmount)); });
+        const evalDates = evalSeriesDates(src, hist.map(h => h?.date), edk);
+        // ⚠️ 평가액 0을 '데이터 없음'으로 버리지 말 것(회귀 주의): 재계산이 권위값을 냈으면 그 값이
+        //    0이어도 map에 넣어야 아래 carry-forward(lastVal)가 0으로 갱신된다. 예전처럼 `v > 0`으로
+        //    거르면 비운 계좌의 마지막 양수 평가액이 영원히 이월된다.
         if (acctType === 'overseas') {
-          hist.forEach(h => {
-            if (!h || !h.date) return;
-            const r = calcPortfolioEvalDetail(resolveHoldings(src, h.date).items, 'overseas', h.date, stockHistoryMap, indicatorHistoryMap || {}, liveFx, mpo);
-            const v = r.hasAnyPrice ? r.total : (h.evalAmount > 0 ? h.evalAmount : 0);
-            if (v > 0) map.set(h.date, v);
+          evalDates.forEach(date => {
+            const r = calcPortfolioEvalDetail(resolveHoldings(src, date).items, 'overseas', date, stockHistoryMap, indicatorHistoryMap || {}, liveFx, mpo);
+            if (r.hasAnyPrice || r.items.length === 0) { map.set(date, r.total); return; }
+            const sv = storedByDate.get(date) || 0;
+            if (sv > 0) map.set(date, sv);
           });
         } else {
-          const edk = isKrCutoffAccount(acctType) ? (krEffectiveDateKey || globalToday) : globalToday;
-          const closeSeries = buildCloseEvalSeries(src, hist.map(h => h?.date), acctType, stockHistoryMap, indicatorHistoryMap || {}, edk);
-          hist.forEach(h => {
-            if (!h || !h.date) return;
-            const cb = closeSeries.get(h.date);
-            const v = cb != null ? cb : (h.evalAmount > 0 ? h.evalAmount : 0);
-            if (v > 0) map.set(h.date, v);
+          const closeSeries = buildCloseEvalSeries(src, evalDates, acctType, stockHistoryMap, indicatorHistoryMap || {}, edk);
+          evalDates.forEach(date => {
+            const cb = closeSeries.get(date);
+            if (cb != null) { map.set(date, cb); return; }
+            const sv = storedByDate.get(date) || 0;
+            if (sv > 0) map.set(date, sv);
           });
         }
         // 장부액(Σ 예수금+매입원가) 시계열 — 일간 지표 보류 판정이 '원장 흐름이 그날 평가액에
@@ -316,7 +324,10 @@ export function useIntegratedData({
     const firstSeenById = new Map();
     accountSeries.forEach(({ id, dates, map, deletedAt }) => {
       const cutoff = cutoffOf(deletedAt);
-      const d0 = dates[0];
+      // ⚠️ '편입일' = 평가액이 처음으로 0을 넘는 날. dates에는 평가액 0인 날짜도 들어올 수 있어
+      //    (종목을 전부 비운 계좌·구성 변경일) dates[0]를 그대로 쓰면 편입 유입이 0으로 잡히고,
+      //    나중에 값이 생기는 날의 ΔV가 통째로 가짜 수익이 된다.
+      const d0 = dates.find(d => (map.get(d) || 0) > 0);
       if (!d0 || (cutoff && d0 >= cutoff)) return;
       firstSeenById.set(id, d0);
       addIn(d0, map.get(d0) || 0);
