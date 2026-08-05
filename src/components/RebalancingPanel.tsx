@@ -1075,10 +1075,9 @@ export default function RebalancingPanel({
                                 //       → 클릭: off    (그 시점 평가금을 박제하고 해제)
                                 // ⚠️ PIN 게이트를 붙이지 말 것 — 목표금액 축은 사용자 결정(2026-08)으로 잠금
                                 //    미적용이고, 셀은 열려 있는데 미러만 잠그면 방어가 아니라 불편만 준다.
-                                // ⚠️ reportAdminChange를 재사용하지 말 것 — onTargetEdited까지 발화하면 헤더
-                                //    날짜의 달력 기록이 통째로 덮인다. 달력 자동기록의 확정 트리거는 '비중
-                                //    조정'이라는 기존 규약을 유지하고, 관리자 공지만 직접 발화한다
-                                //    (목표금액 셀 커밋과 동일 — CLAUDE.md 목표금액 섹션).
+                                // 사이클 3전이는 전부 **금액을 실제로 write**하거나(seed·해제 박제) 수량을
+                                // 만드는 축을 바꾸므로((%) 미러와 동일) 목표비중 cycleMirror처럼
+                                // reportAdminChange()로 관리자 공지 + 메모 달력 기록을 함께 발화한다.
                                 const amtMirrorState = settings.targetAmountMirror || 'off';
                                 // 미러 상태 전이는 stock/fund 전 행을 건드리되, **금액 write는 시세가 확보된
                                 // 행에만** 한다(mirrorEvalOf가 null이면 값은 그대로 두고 override만 정리).
@@ -1108,7 +1107,7 @@ export default function RebalancingPanel({
                                   }
                                   // 편집 중이던 셀의 로컬 초안이 남아 있으면 새 값이 화면에 안 보인다.
                                   setEditingTargetAmount({});
-                                  if (onAdminTargetChange) onAdminTargetChange();
+                                  reportAdminChange();
                                 };
                                 const btnColor = amountDisabled
                                   ? 'text-gray-700 cursor-not-allowed'
@@ -1443,6 +1442,21 @@ export default function RebalancingPanel({
                               : (isOverseas ? String(effAmt) : formatNumber(effAmt)))
                             : '';
                           const displayAmt = draft !== undefined ? draft : baseAmtText;
+                          // ── 색 규약 = 목표비중 열과 동일 ──
+                          //   미러 추종(에메랄드 이탤릭) / 사용자 지정 & 매매 필요(빨강) /
+                          //   사용자 지정 & 목표 도달(초록) / 미입력(회색 = 비중 파생 힌트).
+                          // ⚠️ 미러 추종과 수동 지정을 같은 에메랄드로 두지 말 것 — 이탤릭 차이만으로는
+                          //    "(₩)를 켠 뒤 내가 직접 고친 종목이 어느 것인지"를 화면에서 읽을 수 없다.
+                          // ⚠️ 문턱은 **1주 값** — action = trunc((목표금액 − 평가금) ÷ 가격)이라 차이가
+                          //    1주 값 미만이면 실제 매매가 0이다. 절대 epsilon(1원)으로 두면 시세가 한 틱만
+                          //    움직여도 시드 직후 전 행이 빨강이 되어 신호가 죽는다.
+                          const amtThreshold = Math.max(itemPrice, isOverseas ? 0.005 : 0.5);
+                          const isAmtDifferent = Math.abs(effAmt - cleanNum(item.curEval)) > amtThreshold;
+                          const amtTextColor = isAmtMirror
+                            ? 'text-emerald-300/80 italic'
+                            : hasAmt
+                              ? (isAmtDifferent ? 'text-red-400' : 'text-green-400')
+                              : 'text-gray-400';
                           // ⚠️ 커밋은 handleUpdate가 아니라 setPortfolio로 한다 — handleUpdate는 cleanNum을
                           //    거쳐 빈칸을 0으로 바꾸므로 '미입력'과 '목표 0원(전량 매도)'을 구분할 수 없다.
                           // ⚠️ 값이 그대로면 아무것도 쓰지 말 것 — 빈 칸을 탭으로 지나가기만 해도
@@ -1469,11 +1483,15 @@ export default function RebalancingPanel({
                                 targetAmountOverride: next === '' ? false : (amtMirrorOn ? true : p.targetAmountOverride),
                               }
                               : p));
-                            // 관리자 접속(impersonation) 중 목표 변경 통지 — 목표금액은 목표비중을 무효화하는
-                            // 상위 값이라 비중 편집과 같은 등급으로 알린다(세션당 1회 래치라 추가 비용 0).
-                            // ⚠️ reportAdminChange 재사용 금지 — onTargetEdited까지 발화하면 헤더 날짜의
-                            //    달력 기록이 함께 덮인다(복원 섹션 INV-2와 같은 이유).
-                            if (onAdminTargetChange) onAdminTargetChange();
+                            // 목표금액은 목표비중을 무효화하는 상위 값이라 **비중 편집과 완전히 같은 등급**으로
+                            // 통지한다 — 관리자 공지(세션당 1회 래치) + 메모 달력 자동 기록(onTargetEdited).
+                            // ⚠️ 달력 dirty를 빼지 말 것(2026-08 사용자 요청) — 목표금액만 조정한 세션은
+                            //    그 조정이 헤더 날짜 칸에 한 건도 남지 않아, 나중에 "언제 무엇을 얼마로
+                            //    바꿨는지" 추적할 방법이 사라진다. 값이 실제로 바뀐 커밋만 여기 도달한다
+                            //    (위 두 조기 return이 '한 글자도 안 침'·'같은 값'을 걸러낸다).
+                            // ⚠️ 복원 경로(applyRestoredTargets)는 여전히 예외 — 그쪽은 dirty를 세우면
+                            //    헤더 날짜의 원본 기록이 덮인다(INV-2, 센티넬 구간 무수정).
+                            reportAdminChange();
                           };
                           return (
                             <td className="p-0 border-r border-gray-700/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-emerald-500 relative">
@@ -1482,7 +1500,7 @@ export default function RebalancingPanel({
                                 inputMode="decimal"
                                 data-col="targetAmount"
                                 data-item-id={item.id}
-                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${isAmtMirror ? 'text-emerald-300/80 italic' : hasAmt ? 'text-emerald-300' : 'text-gray-400'} ${amountDisabled ? 'opacity-40' : ''}`}
+                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${amtTextColor} ${amountDisabled ? 'opacity-40' : ''}`}
                                 value={displayAmt}
                                 placeholder={hintText}
                                 readOnly={amountDisabled}
@@ -1490,9 +1508,11 @@ export default function RebalancingPanel({
                                   ? "투자선택이 목표비중 기준이라 이 열은 비활성입니다 — '투자선택'을 '목표금액'으로 바꾸면 이 금액이 수량을 만듭니다"
                                   : isAmtMirror
                                     ? '라이브 미러 추종 중 — 목표금액 = 현재 평가금(매매 0). 직접 입력하면 이 종목만 수동 고정'
-                                    : hasAmt
-                                      ? (isOverseas ? `목표 평가금액 ${formatCurrency(effAmt * usdkrw)} (원화 환산) — 이 행은 목표비중 대신 금액으로 수량을 계산합니다` : '이 행은 목표비중 대신 목표금액으로 수량을 계산합니다')
-                                      : `비어 있으면 목표비중 기준 (참고: 비중대로 매매하면 ${hintText}${isOverseas ? '' : '원'})`}
+                                    : amtMirrorOn && item.targetAmountOverride
+                                      ? '수동 고정 — 라이브 미러에서 이탈한 종목입니다 (↺로 평가금 연동 복귀)'
+                                      : hasAmt
+                                        ? (isOverseas ? `목표 평가금액 ${formatCurrency(effAmt * usdkrw)} (원화 환산) — 이 행은 목표비중 대신 금액으로 수량을 계산합니다` : '이 행은 목표비중 대신 목표금액으로 수량을 계산합니다')
+                                        : `비어 있으면 목표비중 기준 (참고: 비중대로 매매하면 ${hintText}${isOverseas ? '' : '원'})`}
                                 onChange={e => {
                                   if (amountDisabled) return;
                                   const cleaned = e.target.value.replace(/[^0-9.]/g, '');
@@ -1528,7 +1548,8 @@ export default function RebalancingPanel({
                                     e.stopPropagation();
                                     setEditingTargetAmount(prev => { const n = { ...prev }; delete n[item.id]; return n; });
                                     setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetAmount: '', targetAmountOverride: false } : p));
-                                    if (onAdminTargetChange) onAdminTargetChange();
+                                    // 지우기도 명백한 목표 변경 — 목표비중 ↺(applyReset)와 같이 달력 기록 대상.
+                                    reportAdminChange();
                                   }}
                                   className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-gray-500 hover:text-emerald-300 hover:bg-emerald-900/20 transition-all opacity-80 hover:!opacity-100"
                                   title={amtMirrorOn && item.targetAmountOverride
