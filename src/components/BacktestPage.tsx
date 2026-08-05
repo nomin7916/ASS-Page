@@ -712,6 +712,33 @@ export default function BacktestPage({
     return m;
   }, [catalog]);
 
+  // 종목명이 **뒤늦게** 해석되면(코드만 입력한 신규 종목) 자산 이름을 채운다.
+  // ⚠️ addAsset은 추가 시점의 카탈로그를 스냅샷하므로, 조회가 비동기로 끝나는 코드는 이름이
+  //    코드인 채로 굳는다("포트폴리오 테이블에 먼저 넣어야 이름이 뜬다"의 마지막 조각).
+  // ⚠️ 이름은 사용자가 직접 고칠 수 있는 필드라(아래 name input) **아직 코드 그대로인 행만**
+  //    건드린다. 바뀐 게 없으면 setLocal이 같은 참조를 받아 dirty를 세우지 않는다(저장 폭주 방지).
+  useEffect(() => {
+    if (readOnly) return;
+    setLocal((prev) => {
+      let changed = false;
+      const next = prev.map((s) => {
+        if (!Array.isArray(s?.assets)) return s;
+        let touched = false;
+        const assets = s.assets.map((a) => {
+          if (!a?.code || (a.name && a.name !== a.code)) return a;
+          const nm = catalogByCode[a.code]?.name;
+          if (!nm || nm === a.code) return a;
+          touched = true;
+          return { ...a, name: nm };
+        });
+        if (!touched) return s;
+        changed = true;
+        return { ...s, assets, updatedAt: Date.now() };
+      });
+      return changed ? next : prev;
+    });
+  }, [catalogByCode, readOnly, setLocal]);
+
   const addAsset = (code) => {
     const c = String(code || '').trim().toUpperCase();
     if (!c || !active) return;

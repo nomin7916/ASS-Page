@@ -54,7 +54,7 @@ import {
   normalizeBacktestScenarios, backtestFingerprint, backtestScenariosHaveContent,
   buildBtCatalog, collectDividendHistory, collectNameByCode,
 } from './backtest';
-import { fetchBacktestSeries } from './backtestFetch';
+import { fetchBacktestSeries, fetchBacktestName, fetchBacktestDividends } from './backtestFetch';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useMarketData, defaultCompStocks } from './hooks/useMarketData';
 import { usePortfolioState } from './hooks/usePortfolioState';
@@ -351,6 +351,14 @@ export default function App() {
   //    buildCloseEvalSeries(보유 평가액 재계산)·useAutoConfirmHistory 데이터완비 가드의 권위
   //    소스가 오염돼 보유+백테스트 중복 코드의 과거 평가액이 영구히 틀어진다(WatchlistPopup 불변식).
   const [btFetched, setBtFetched] = useState<Record<string, Record<string, number>>>({});
+  // 백테스트용으로 조회한 종목명·분배 이력. 종가(btFetched)와 같은 이유로 **계좌 데이터에 병합
+  // 금지** — 보유하지도 않은 종목이 계좌의 dividendHistory에 섞이면 분배금 현황 표에 유령 행으로
+  // 새어 나온다. 파생값이라 Drive에 저장하지도 않는다(다음 세션에 다시 조회).
+  const [btFetchedNames, setBtFetchedNames] = useState<Record<string, string>>({});
+  const [btFetchedDivs, setBtFetchedDivs] = useState<Record<string, Record<string, number>>>({});
+  // 별도 창 전송 게이팅용 단조 증가 카운터 — 이름/분배금은 '코드 수'가 그대로여도 내용만 바뀔 수
+  // 있어(강제 재조회) 개수 기반 지문으로는 갱신을 놓친다.
+  const [btMetaSeq, setBtMetaSeq] = useState(0);
   const [btFetching, setBtFetching] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 1 });
@@ -395,7 +403,7 @@ export default function App() {
   const applyBackupDataRef = useRef<Function | null>(null);
   const refreshPricesRef = useRef<Function | null>(null);
   // 계좌별 차트 상태 독립 관리
-  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false });
+  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false, showTotalEval: true, showReturnRate: true });
   const accountChartStatesRef = useRef<Record<string, any>>({});
   const accountRebalExtraQtyRef = useRef<Record<string, Record<string, number>>>({}); // 계좌별 리밸런싱 '추가' 입력값 보존
   const rebalExtraQtyRef = useRef<Record<string, number>>({}); // 최신 rebalExtraQty 스냅샷 (탭 전환 저장용)
@@ -742,6 +750,12 @@ export default function App() {
         if (activeSaved?.chartPeriod) setChartPeriod(activeSaved.chartPeriod);
         if (activeSaved?.dateRange) setDateRange(activeSaved.dateRange);
         if (activeSaved?.appliedRange) setAppliedRange(activeSaved.appliedRange);
+        // 평가자산·수익률도 계좌별 값이 앱 레벨 값을 이긴다(위 chartPrefs.showTotalEval/
+        // showReturnRate 복원보다 **뒤에** 와야 한다 — 순서가 바뀌면 앱 레벨 값이 이긴다).
+        // ⚠️ 여기서는 `?? true` 폴백을 쓰지 말 것 — 부팅 시점엔 계좌가 하나뿐이라 누수가 없고,
+        //    필드가 없는 옛 저장본은 앱 레벨 값(직전에 쓰던 값)이 가장 자연스러운 복원이다.
+        if (activeSaved?.showTotalEval !== undefined) setShowTotalEval(activeSaved.showTotalEval);
+        if (activeSaved?.showReturnRate !== undefined) setShowReturnRate(activeSaved.showReturnRate);
       }
       if (stateData.chartPrefs.showMarketPanel !== undefined) setShowMarketPanel(stateData.chartPrefs.showMarketPanel);
       if (stateData.chartPrefs.hideAmounts !== undefined) setHideAmounts(stateData.chartPrefs.hideAmounts);
@@ -916,8 +930,13 @@ export default function App() {
       appliedRange,
       backtestColor,
       showBacktest,
+      // ⚠️ 평가자산·수익률 토글은 **반드시 여기 있어야** 계좌별로 분리된다. 과거엔 app 레벨
+      //    chartPrefs에만 있어서, A계좌에서 켠 버튼이 B계좌로 그대로 새어 나갔다(계좌 전환
+      //    이펙트가 저장도 복원도 하지 않았다). 비교종목·시장지표·조회기간과 같은 등급이다.
+      showTotalEval,
+      showReturnRate,
     };
-  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, compStocks, chartPeriod, dateRange, appliedRange, backtestColor, showBacktest]);
+  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, compStocks, chartPeriod, dateRange, appliedRange, backtestColor, showBacktest, showTotalEval, showReturnRate]);
 
   // 차트 설정 변경 시 chartPrefsUpdatedAt 갱신 — Drive STATE 저장 트리거용
   useEffect(() => {
@@ -957,6 +976,11 @@ export default function App() {
         // 백테스트 색상 복원
         if (saved.backtestColor) setBacktestColor(saved.backtestColor);
         if (saved.showBacktest !== undefined) setShowBacktest(saved.showBacktest);
+        // 평가자산·수익률 복원 — 필드가 없는 옛 저장본은 컴포넌트 기본값(둘 다 true)으로 폴백해야
+        // 한다. `saved.showTotalEval`(undefined)을 그대로 넣으면 버튼이 꺼진 채로 뜨고,
+        // '그대로 두기'로 폴백하면 마이그레이션 첫 한 바퀴 동안 원래의 누수가 그대로 보인다.
+        setShowTotalEval(saved.showTotalEval ?? true);
+        setShowReturnRate(saved.showReturnRate ?? true);
       } else {
         // 처음 방문하는 계좌 — 계좌 타입별 기본값
         const accountType = portfolios.find(p => p.id === activePortfolioId)?.accountType;
@@ -968,6 +992,9 @@ export default function App() {
         setAppliedRange({ start: '', end: '' });
         setBacktestColor('#f97316');
         setShowBacktest(false);
+        // 처음 방문하는 계좌는 직전 계좌의 토글을 물려받지 않는다(useHistoryChart 기본값과 동일).
+        setShowTotalEval(true);
+        setShowReturnRate(true);
         if (accountType === 'gold') {
           setGoldIndicators({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
           setGoldIndicatorColors({ goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' });
@@ -2078,11 +2105,39 @@ export default function App() {
   //    BacktestPage의 결과 useMemo 의존성이 매번 깨져, 시세가 갱신될 때마다(수십 초) 백테스트
   //    전 구간이 재계산된다.
   const btHolidays = useMemo(() => marketHolidays?.kr || [], [marketHolidays]);
-  const btDividends = useMemo(() => (btActive ? collectDividendHistory(portfolios) : {}), [btActive, portfolios]);
-  const btNameByCode = useMemo(() => (btActive ? collectNameByCode(portfolios) : {}), [btActive, portfolios]);
+  // ⚠️ 조회분과 계좌분을 **합친다** — 계좌에 없는 종목(백테스트에서 처음 넣은 코드)은
+  //    collectDividendHistory가 아무것도 주지 않아 과거엔 분배금이 통째로 0이었다.
+  //    ym 단위 병합에서 조회분이 우선(btPrices와 같은 규약 — 사용자가 ⟳로 새로 받은 값이
+  //    낡은 계좌 저장값에 가려지면 고친 줄 모른다).
+  const btDividends = useMemo(() => {
+    if (!btActive) return {};
+    const base = collectDividendHistory(portfolios);
+    const out: Record<string, Record<string, number>> = { ...base };
+    for (const [c, m] of Object.entries(btFetchedDivs)) {
+      if (m && Object.keys(m).length) out[c] = { ...(base[c] || {}), ...m };
+    }
+    return out;
+  }, [btActive, portfolios, btFetchedDivs]);
+  // ⚠️ 이름은 반대로 **계좌분이 우선** — 사용자가 포트폴리오 테이블에서 손으로 고친 종목명을
+  //    API 이름이 덮으면 안 된다. 조회분은 계좌에 없는 코드의 빈칸만 채운다.
+  const btNameByCode = useMemo(
+    () => (btActive ? { ...btFetchedNames, ...collectNameByCode(portfolios) } : {}),
+    [btActive, portfolios, btFetchedNames],
+  );
+  // ⚠️ 카탈로그의 코드 집합은 `종가 맵 ∪ 분배금 맵`이다(buildBtCatalog). 저장분(stockHistoryMap)만
+  //    넘기면 **백테스트에서 처음 입력한 코드가 카탈로그에 아예 없어** 조회해 둔 종목명이 화면에
+  //    닿지 못한다 → 조회분(btFetched)도 합치고, 종가 조회가 실패해 이름만 확보된 코드는 빈 맵으로
+  //    자리를 만들어 둔다.
+  const btCatalogPrices = useMemo(() => {
+    if (!btActive) return {};
+    const out: Record<string, Record<string, number>> = { ...stockHistoryMap };
+    for (const [c, m] of Object.entries(btFetched)) out[c] = { ...(out[c] || {}), ...m };
+    for (const c of Object.keys(btFetchedNames)) if (!out[c]) out[c] = {};
+    return out;
+  }, [btActive, stockHistoryMap, btFetched, btFetchedNames]);
   const btCatalog = useMemo(
-    () => (btActive ? buildBtCatalog(stockHistoryMap, btNameByCode, btDividends) : []),
-    [btActive, stockHistoryMap, btNameByCode, btDividends],
+    () => (btActive ? buildBtCatalog(btCatalogPrices, btNameByCode, btDividends) : []),
+    [btActive, btCatalogPrices, btNameByCode, btDividends],
   );
   // 시나리오가 실제로 참조하는 코드만 추린다 — stockHistoryMap 전량을 새 창에 보내면
   // 수십 초마다 수 MB가 복제된다(flowWinAccountsKey와 동일한 지문 게이팅 이유).
@@ -2111,12 +2166,20 @@ export default function App() {
   const btFetchingRef = useRef<string[]>([]);
   btFetchingRef.current = btFetching;
   const btStateRef = useRef<any>({});
-  btStateRef.current = { stockHistoryMap, btFetched };
+  btStateRef.current = { stockHistoryMap, btFetched, btNameByCode, btDividends };
+  // 이번 세션에 이미 시도한 코드. 무배당 종목은 조회가 성공해도 결과가 비어 있어 '아직 없음'과
+  // 구분되지 않으므로, 시도 자체를 기억해 매 호출마다 같은 API를 다시 치는 것을 막는다.
+  // (⟳ 강제 조회는 이 집합을 무시한다.)
+  const btMetaTriedRef = useRef<{ names: Set<string>; divs: Set<string> }>({ names: new Set(), divs: new Set() });
   /**
-   * 종목 종가 조회(또는 붙여넣기 주입).
-   * ⚠️ 결과는 절대 stockHistoryMap에 병합하지 않는다(평가액 재계산 권위 소스 오염 금지).
+   * 종목 **종가 + 종목명 + 분배 이력** 조회(또는 종가 붙여넣기 주입).
+   *
+   * ⚠️ 결과는 절대 stockHistoryMap / 계좌 dividendHistory에 병합하지 않는다(평가액 재계산 권위
+   *    소스 오염 금지 · 보유하지 않은 종목이 계좌 분배금 데이터에 섞이는 것 금지).
+   * ⚠️ 세 갈래를 **각각** 필요 여부로 판정한다 — 옛 코드는 '종가가 이미 있으면' 통째로 조기
+   *    반환해, 저장된 종가만 있고 이름·분배금이 없는 코드는 영영 채워지지 않았다.
    * @param force true면 이미 데이터가 있어도 다시 조회(표의 ⟳ 버튼). 종목 추가 시에는 false —
-   *        저장된 종가가 이미 있는데 매번 네트워크를 치면 코드 하나 넣을 때마다 수 초씩 걸린다.
+   *        저장된 데이터가 이미 있는데 매번 네트워크를 치면 코드 하나 넣을 때마다 수 초씩 걸린다.
    */
   const handleBacktestFetch = useCallback(async (code: string, pasted?: Record<string, number>, force?: boolean) => {
     const c = String(code || '').trim().toUpperCase();
@@ -2128,16 +2191,31 @@ export default function App() {
       return;
     }
     if (btFetchingRef.current.includes(c)) return;
-    if (!force) {
-      const { stockHistoryMap: shm, btFetched: bf } = btStateRef.current;
-      const have = Object.keys(shm?.[c] || {}).length + Object.keys(bf?.[c] || {}).length;
-      if (have >= 2) return;   // 이미 쓸 만한 종가가 있다 → 네트워크 생략
-    }
+    const { stockHistoryMap: shm, btFetched: bf, btNameByCode: nm, btDividends: dv } = btStateRef.current;
+    const havePrices = Object.keys(shm?.[c] || {}).length + Object.keys(bf?.[c] || {}).length;
+    // 이름은 '코드와 다른 값'일 때만 해결된 것으로 본다(buildBtCatalog가 미해결이면 코드를 넣는다).
+    const resolvedName = nm?.[c];
+    const tried = btMetaTriedRef.current;
+    const needPrices = !!force || havePrices < 2;
+    const needName = !!force || (!tried.names.has(c) && (!resolvedName || String(resolvedName).toUpperCase() === c));
+    const needDivs = !!force || (!tried.divs.has(c) && (!dv?.[c] || Object.keys(dv[c]).length === 0));
+    if (!needPrices && !needName && !needDivs) return;
+    if (needName) tried.names.add(c);
+    if (needDivs) tried.divs.add(c);
     setBtFetching(prev => (prev.includes(c) ? prev : [...prev, c]));
     try {
-      const data = await fetchBacktestSeries(c);
-      if (data) setBtFetched(prev => ({ ...prev, [c]: { ...(prev[c] || {}), ...data } }));
-      // 실패는 화면 배지('종가 데이터 없음')로만 알린다 — 시세 계층은 벨 알림에 남기지 않는다.
+      // 실패는 화면 배지('종가 데이터 없음')·이름 미해결로만 알린다 — 시세 계층은 벨에 남기지 않는다.
+      await Promise.all([
+        needPrices
+          ? fetchBacktestSeries(c).then(d => { if (d) setBtFetched(prev => ({ ...prev, [c]: { ...(prev[c] || {}), ...d } })); }).catch(() => {})
+          : Promise.resolve(),
+        needName
+          ? fetchBacktestName(c).then(n => { if (n) { setBtFetchedNames(prev => ({ ...prev, [c]: n })); setBtMetaSeq(s => s + 1); } }).catch(() => {})
+          : Promise.resolve(),
+        needDivs
+          ? fetchBacktestDividends(c).then(m => { if (m) { setBtFetchedDivs(prev => ({ ...prev, [c]: { ...(prev[c] || {}), ...m } })); setBtMetaSeq(s => s + 1); } }).catch(() => {})
+          : Promise.resolve(),
+      ]);
     } finally {
       setBtFetching(prev => prev.filter(x => x !== c));
     }
@@ -2149,9 +2227,11 @@ export default function App() {
     try { w.postMessage(msg, window.location.origin); } catch {}
   };
   // 무거운 페이로드(카탈로그·분배금·휴장일)는 지문으로 게이팅. 새 창이 붙기 전(nonce 0)엔 계산 자체를 건너뛴다.
+  // ⚠️ btMetaSeq를 반드시 포함할 것 — 이름/분배금은 **코드 수가 그대로여도 내용만** 바뀔 수 있어
+  //    (강제 재조회, 미해결 이름의 뒤늦은 해석) 개수 기반 지문만으로는 새 창이 갱신을 놓친다.
   const btWinDataKey = useMemo(
-    () => (btWinNonce === 0 ? '' : `${btCatalog.length}|${Object.keys(btDividends).length}|${btHolidays.length}`),
-    [btWinNonce, btCatalog, btDividends, btHolidays],
+    () => (btWinNonce === 0 ? '' : `${btCatalog.length}|${Object.keys(btDividends).length}|${btHolidays.length}|${btMetaSeq}`),
+    [btWinNonce, btCatalog, btDividends, btHolidays, btMetaSeq],
   );
   useEffect(() => {
     if (btWinNonce === 0) return;

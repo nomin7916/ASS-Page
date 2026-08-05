@@ -1643,3 +1643,22 @@ export const applyRebalTargetRatios = (items, ratioById, opts) => {
   });
   return changed ? next : items;
 };
+
+// 네이버 배당 이력 API 응답(`result[]`) → `{ amounts: {YYYY-MM: 주당분배금}, exDates: {YYYY-MM: YYYY-MM-DD} }`.
+// ⚠️ 분배금 현황 표(DividendSummaryTable)와 백테스트 종목 조회(backtestFetch)가 **같은 함수를
+//    공유**한다 — 각자 파서를 두면 같은 종목이 화면마다 다른 주당분배금으로 뜬다.
+// 저장 키는 앱 전체 규약대로 **배당락월**(지급월 아님)이다.
+export const parseDividendApiResult = (result) => {
+  const amounts = {};
+  const exDates = {};
+  (Array.isArray(result) ? result : []).forEach(({ dividendAmount, exDividendAt }) => {
+    // Naver 배당락일 형식: "YYYY.MM.DD" — 형식이 어긋난 항목은 건너뜀
+    const m = /^(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(exDividendAt || '').trim());
+    if (!m) return;
+    const ds = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    const key = `${m[1]}-${m[2].padStart(2, '0')}`;
+    amounts[key] = (amounts[key] || 0) + dividendAmount;
+    if (!exDates[key] || ds > exDates[key]) exDates[key] = ds;
+  });
+  return { amounts, exDates };
+};

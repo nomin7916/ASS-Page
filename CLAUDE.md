@@ -782,6 +782,33 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   `computeDailyMetricsSeries`)은 시그니처·본문 불변 → 통일이 이 함수들을 안 바꿔 검증 무영향.
 - **범위 밖(의도)**: CAGR·XIRR은 **미적용**.
 
+### 차트 토글은 계좌별로 독립 — 화이트리스트는 `currentChartStateRef` 하나 (⚠️ 회귀 주의)
+
+개별 계좌 수익률 차트의 토글 5종(**비교종목 · 시장지표 · 조회기간 · 수익률 · 평가자산**)은
+계좌마다 마지막 상태를 유지하고 **다른 계좌에 절대 새어 나가지 않는다**. 저장소는 앱 레벨
+`accountChartStatesRef`(`{ [portfolioId]: {...} }` → `chartPrefs.accountChartStates`로 Drive 영속)이고,
+**무엇을 계좌별로 볼지는 `App.tsx` `currentChartStateRef`의 필드 목록이 단독으로 정한다**.
+
+- **⚠️ 새 차트 토글을 추가하면 반드시 4곳을 같이 고칠 것** — 하나라도 빠지면 그 토글만 앱 레벨로
+  남아 계좌 간 누수가 난다: ① `currentChartStateRef` **기본값 리터럴** ② 최신값 동기화 effect의
+  객체 + **deps** ③ 계좌 전환 effect의 `saved` **복원 분기** ④ 같은 effect의 **처음 방문 기본값 분기**.
+  (①②만 하면 저장은 되는데 복원이 없어 값이 그대로 남고, ③만 하면 신규 계좌가 직전 계좌를 물려받는다.)
+- **과거 버그**: `showTotalEval`(평가자산)·`showReturnRate`(수익률)가 `chartPrefs` **최상위 키에만**
+  있고 이 화이트리스트에 없었다. 전환 effect가 저장도 복원도 하지 않아, A계좌에서 켠 버튼이
+  B계좌에서도 켜진 채로 떴다(나머지 3종은 원래부터 계좌별이라 정상이었다).
+- **⚠️ 마이그레이션 폴백은 지점마다 다르다(둘 다 의도)**: 계좌 전환 복원은 필드가 없으면
+  **`?? true`**(컴포넌트 기본값) — '앱 레벨 값 그대로 두기'로 폴백하면 저장본이 한 바퀴 갱신될
+  때까지 원래의 누수가 그대로 보인다. 반대로 `applyStateData`의 **부팅 시 활성 계좌 복원**은
+  `!== undefined` 가드만 둔다 — 부팅 시점엔 계좌가 하나뿐이라 누수가 없고, 앱 레벨 값(직전에 쓰던
+  값)이 가장 자연스럽다. ⚠️ 이 복원은 `chartPrefs.showTotalEval/showReturnRate` 복원보다 **뒤에**
+  와야 계좌별 값이 이긴다.
+- **앱 레벨로 남는 것(의도)**: `showMarketPanel`·`indicatorScales`·`hideAmounts`(전역 표시 설정),
+  통합 대시보드 계열(`int*`). `PortfolioChart`의 `showPrincipal`(투자원금)은 **컴포넌트 로컬**이라
+  계좌 간 누수가 있고 저장도 안 된다 — 기존 동작 유지(이번 범위 밖).
+- **영속화 신규 지점 0곳**: `accountChartStatesRef`는 이미 `chartPrefs`에 실려 있고
+  `showTotalEval`/`showReturnRate`는 이미 `chartPrefsUpdatedAt` effect deps·STATE 저장 effect deps에
+  있다. 계좌 전환이 두 값을 바꾸므로 저장이 자동 트리거된다.
+
 ### usePortfolioState 훅 (모든 포트폴리오 상태 + CRUD)
 `switchToPortfolio`, `addPortfolio`, `deletePortfolio`, `addSimpleAccount`,
 `updateSimpleAccountField`, `updatePortfolioStartDate`, `updatePortfolioName`,
@@ -2101,6 +2128,56 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   실제 저장 누락을 못 잡는다(실측 사고: `rebalMode`/`rebalDay`/`rebalDates` 3필드 누락).
   `src/backtest.ts`의 순수 함수 본문과 **항상 1:1 동기화**할 것. #23~#42가 PDF 전체를 숫자로 재현하므로
   산식을 바꾸면 여기서 잡힌다.
+
+### 종목코드 입력 → 이름·종가(·분배금)를 **그 자리에서** 확보 (⚠️ 회귀 주의)
+
+코드를 넣는 화면은 3곳(포트폴리오 테이블 · 비교종목 칩 · 백테스트 종목)인데, 과거엔 **테이블만**
+네트워크로 실제 데이터를 받아왔다. 그래서 나머지 두 곳은 "일단 포트폴리오 테이블에 그 코드를 넣고
+(분배금은 표에서 '새로고침'까지 눌러) 계좌 데이터를 만든 뒤에야" 동작했다. 세 경로 모두 코드 입력만으로
+완결되게 맞췄다. **어느 경로도 조회 결과를 계좌 데이터에 쓰지 않는다.**
+
+- **비교종목(`useStockData`)** — `handleCompStockBlur`가 **이름 + 종가 이력까지** 확보한다.
+  - **⚠️ 이력 fetch 체인은 `ensureCompHistory` 하나뿐**(blur·toggle 공유). 두 경로가 각자 체인을 가지면
+    실제종가/수정종가 우선순위가 갈려 한 종목 안에 두 가격기준이 섞인다(`mergeCodeHistory` 주석).
+    `ensureCompHistory`는 **절대 reject하지 않고**(`catch → false`) 코드별 in-flight 프로미스를 공유한다 —
+    칩의 `loading` 플래그로 중복을 막으면 어느 경로가 예외로 죽을 때 그 플래그가 true로 굳어 **버튼이
+    영구히 죽는다**.
+  - **⚠️ blur는 칩을 자동 활성화하지 않는다** — 어떤 칩을 그릴지는 사용자가 고른다. 확보만 해 두고
+    클릭 시 즉시 그려지게 한다.
+  - **⚠️ `stockFetchStatus`는 포트폴리오 테이블과 공유하는 맵**이라 **보유 종목이면 쓰지 않는다**
+    (비교 이력 조회 실패가 그 종목 행에 '갱신 실패' 빨간 점을 찍으면 안 된다). 상태점은 **종가 확보
+    여부만** 반영한다 — 이름만 못 구한 경우까지 빨간 점을 찍으면 선이 정상인 종목이 실패로 보인다.
+  - **⚠️ `compBlurEnsuredRef`(세션 재조회 억제)와 `compNameCacheRef`(코드→이름)는 한 쌍**이다. 캐시가
+    없으면 "A 입력 → B 입력 → 다시 A"에서 A가 이미 ensured라 조기 반환하고 **칩에 B의 이름이 남는다**.
+    실패한 이름은 캐시에 넣지 않는다(다음 blur가 재시도해야 한다).
+  - `await` 뒤 칩 갱신은 전부 `patchComp(index, expectedCode, patch)` — 인덱스만 믿으면 그 사이 칩을
+    추가·삭제·재입력했을 때 **엉뚱한 칩에 결과가 꽂힌다**.
+- **백테스트(`backtestFetch` + `App.handleBacktestFetch`)** — `fetchBacktestName`·`fetchBacktestDividends`
+  신설. 시장 판정은 관심종목과 같은 `detectMarket`(kr/us/fund).
+  - **⚠️ 세 갈래(종가·이름·분배금)를 각각 필요 여부로 판정**한다. 옛 코드는 '종가가 이미 있으면'
+    통째로 조기 반환해, **저장된 종가만 있고 이름·분배금이 없는 코드는 영영 안 채워졌다**.
+    무배당 종목은 성공해도 결과가 비어 '아직 없음'과 구분되지 않으므로 `btMetaTriedRef`로 **시도 자체를
+    기억**한다(⟳ 강제 조회는 무시).
+  - **⚠️ 병합 방향이 이름과 분배금이 반대다(둘 다 의도)**: 분배금은 **조회분 우선**(ym 단위 —
+    `btPrices` 규약과 동일, ⟳로 새로 받은 값이 낡은 계좌 저장값에 가리면 안 된다), 이름은 **계좌분
+    우선**(사용자가 테이블에서 손으로 고친 종목명을 API가 덮으면 안 된다).
+  - **⚠️ `buildBtCatalog`에 `stockHistoryMap`만 넘기지 말 것** — 카탈로그 코드 집합이 `종가 맵 ∪ 분배금
+    맵`이라, 백테스트에서 처음 입력한 코드가 **카탈로그에 아예 없어** 조회해 둔 이름이 화면에 닿지
+    못한다. `btCatalogPrices`(저장분 ∪ 조회분 + 이름만 확보된 코드의 빈 자리)를 넘긴다.
+  - **⚠️ 자산 이름은 `BacktestPage`의 백필 effect가 채운다** — `addAsset`은 추가 시점 카탈로그를
+    스냅샷하므로 비동기 조회가 끝나면 이름이 코드인 채 굳는다. 이름은 사용자가 직접 고치는 필드라
+    **아직 코드 그대로인 행만** 건드리고, 바뀐 게 없으면 `setLocal`이 같은 참조를 받아 dirty를 세우지
+    않는다(저장 폭주 방지).
+  - **⚠️ 별도 창 지문(`btWinDataKey`)에 `btMetaSeq` 필수** — 이름/분배금은 **코드 수가 그대로여도 내용만**
+    바뀔 수 있어 개수 기반 지문만으로는 새 창이 갱신을 놓친다.
+- **⚠️ 조회 결과를 되돌려 쓰지 말 것(두 경로 공통)**: 백테스트 종가는 `btFetched`, 이름은
+  `btFetchedNames`, 분배금은 `btFetchedDivs` — **`stockHistoryMap`·계좌 `dividendHistory` 병합 금지**.
+  전자는 보유 평가액 재계산의 권위 소스가 오염되고, 후자는 보유하지도 않은 종목이 분배금 현황 표에
+  **유령 행**으로 새어 나온다. 셋 다 파생값이라 Drive 저장 지점도 **0곳**이다(다음 세션에 재조회).
+- **`parseDividendApiResult`는 `utils.ts`로 승격**해 분배금 현황 표와 백테스트가 **같은 함수**를 쓴다 —
+  각자 파서를 두면 같은 종목이 화면마다 다른 주당분배금으로 뜬다.
+- **범위 밖(의도)**: 비교종목은 펀드(MA:/URL) 미지원(이름·이력 라우팅이 kr/us 2분기), 백테스트 분배금도
+  펀드는 API가 없어 사용자가 `divOverride`로 직접 입력한다.
 
 ---
 

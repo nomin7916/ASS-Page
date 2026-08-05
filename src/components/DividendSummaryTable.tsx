@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { cleanNum, formatCurrency, dividendPayDate, buildHeldNameMap } from '../utils';
+import { cleanNum, formatCurrency, dividendPayDate, buildHeldNameMap, parseDividendApiResult } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
 import KrEtfTaxMatrix from './KrEtfTaxMatrix';
 import ErrorBoundary from './ErrorBoundary';
@@ -217,21 +217,6 @@ function DivMeta({ d, isOverseas }) {
       </span>
     </>
   );
-}
-
-function parseDividendApiResult(result) {
-  const amounts = {};
-  const exDates = {};
-  result.forEach(({ dividendAmount, exDividendAt }) => {
-    // Naver 배당락일 형식: "YYYY.MM.DD" — 형식이 어긋난 항목은 건너뜀
-    const m = /^(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(exDividendAt || '').trim());
-    if (!m) return;
-    const ds = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
-    const key = `${m[1]}-${m[2].padStart(2, '0')}`;
-    amounts[key] = (amounts[key] || 0) + dividendAmount;
-    if (!exDates[key] || ds > exDates[key]) exDates[key] = ds;
-  });
-  return { amounts, exDates };
 }
 
 // 분배금 현황 헤더 사이트 링크 바 — 7개 버튼(사용자 정의 이니셜 1자 + URL) + 편집 팝오버.

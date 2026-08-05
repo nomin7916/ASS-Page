@@ -16,8 +16,11 @@ import {
   fetchNaverDomesticHistory,
   fetchNaverStockHistory,
   fetchUsStockHistory,
+  fetchDividendHistory,
+  fetchYahooDividendHistory,
 } from './api';
-import { detectMarket, fetchWatchDaily } from './watchlistQuote';
+import { detectMarket, fetchWatchDaily, fetchWatchQuote } from './watchlistQuote';
+import { parseDividendApiResult } from './utils';
 
 const isValidSeries = (d: unknown): d is Record<string, number> =>
   !!d && typeof d === 'object' && Object.keys(d as object).length >= 2;
@@ -66,4 +69,59 @@ export async function fetchBacktestSeries(
     return null;
   }
   return null;
+}
+
+/**
+ * 종목코드 → 종목명. 실패하면 null.
+ *
+ * ⚠️ 과거엔 백테스트가 이름을 **네트워크에서 전혀 받아오지 않았다** — 계좌에 이미 보유(또는
+ *    과거 스냅샷에 존재)한 코드만 `collectNameByCode`로 이름이 붙고, 그 외에는 코드가 그대로
+ *    이름이 됐다. 그래서 "포트폴리오 테이블에 먼저 넣어야 이름이 뜬다"가 됐다.
+ * 계좌 컨텍스트가 없으므로 관심종목과 동일하게 코드 포맷으로 시장을 판정한다(kr/us/fund 전부 지원).
+ */
+export async function fetchBacktestName(code: string): Promise<string | null> {
+  const c = (code || '').trim();
+  if (!c) return null;
+  try {
+    const q = await fetchWatchQuote(detectMarket(c), c).catch(() => null);
+    const name = q?.name ? String(q.name).trim() : '';
+    // fetchWatchQuote는 이름을 못 구하면 코드를 그대로 돌려준다 → '해결됨'으로 오인하지 않는다.
+    if (!name || name.toUpperCase() === c.toUpperCase()) return null;
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 종목코드 → `{ 'YYYY-MM'(배당락월): 주당분배금 }`. 실패/무배당이면 null.
+ *
+ * ⚠️ 과거엔 백테스트의 분배금 소스가 `collectDividendHistory(portfolios)` **하나뿐**이라,
+ *    계좌에 없는 종목은 분배금이 0이었다(사용자가 포트폴리오 테이블에 넣고 분배금 표에서
+ *    '새로고침'까지 눌러야 채워졌다). 여기서 직접 받아 백테스트 전용 맵에 담는다.
+ * ⚠️ 저장 키는 앱 전체 규약대로 **배당락월**이다(지급월 재배치는 표시 계층에서만 한다).
+ * ⚠️ 결과를 계좌의 `dividendHistory`에 되돌려 쓰지 말 것 — 보유하지도 않은 종목의 분배 이력이
+ *    계좌 데이터에 섞이고, 분배금 현황 표에 유령 행으로 새어 나온다.
+ */
+export async function fetchBacktestDividends(code: string): Promise<Record<string, number> | null> {
+  const c = (code || '').trim();
+  if (!c) return null;
+  const market = detectMarket(c);
+  try {
+    if (market === 'us') {
+      const y = await fetchYahooDividendHistory(c).catch(() => null);
+      const amounts = y?.amounts;
+      return amounts && Object.keys(amounts).length ? amounts : null;
+    }
+    if (market === 'kr') {
+      const data = await fetchDividendHistory(c).catch(() => null);
+      if (!data?.result?.length) return null;
+      const { amounts } = parseDividendApiResult(data.result);
+      return amounts && Object.keys(amounts).length ? amounts : null;
+    }
+    // 펀드(MA:/URL)는 분배 이력 API가 없다 — 사용자가 표에서 직접 입력한다(divOverride).
+    return null;
+  } catch {
+    return null;
+  }
 }

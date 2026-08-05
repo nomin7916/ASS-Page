@@ -284,7 +284,38 @@ export function useStockData({
     setCompStocks(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleCompStockBlur = async (index, code) => {
+  // 비교종목 칩 안전 갱신 — await 뒤에는 사용자가 칩을 추가·삭제하거나 코드를 다시 고쳤을 수
+  // 있어, 인덱스만 믿고 쓰면 **엉뚱한 칩에 결과가 꽂힌다**. 코드가 그대로일 때만 반영한다.
+  const patchComp = (index: number, expectedCode: string, patch: Record<string, any>) => {
+    setCompStocks(prev => {
+      if (!prev[index] || prev[index].code !== expectedCode) return prev;
+      const n = [...prev];
+      n[index] = { ...n[index], ...patch };
+      return n;
+    });
+  };
+
+  // 이번 세션에서 '코드 입력만으로' 이력까지 확보한 코드. 코드를 바꾸지 않고 칸을 지나가기만
+  // 해도 매번 전체 이력을 다시 긁는 것을 막는다(칩 활성화 경로는 종전대로 항상 갱신 시도).
+  const compBlurEnsuredRef = useRef<Set<string>>(new Set());
+  // 코드→종목명 세션 캐시. ⚠️ 위 ensured 조기 반환과 **한 쌍**이다 — 캐시가 없으면
+  // "A 입력 → B 입력 → 다시 A" 에서 A가 이미 ensured라 조기 반환하고, 칩에는 B의 이름이 남는다.
+  const compNameCacheRef = useRef<Record<string, string>>({});
+  // 진행 중인 이력 조회(코드→프로미스). 같은 코드의 중복 네트워크를 막는다.
+  const compHistInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
+
+  /**
+   * 코드 입력(blur) → 종목명 + 종가 이력을 **즉시** 확보한다.
+   *
+   * ⚠️ 과거엔 이름만 조회하고 이력은 칩을 눌러 활성화할 때(handleToggleComp)만 받아왔다.
+   *    그래서 ① 이미 활성인 칩의 코드를 바꾸면 새 코드의 이력이 영영 안 들어와 선이 비었고,
+   *    ② 조회 중 표시가 없어 "종목명이 바로 안 뜬다"로 보였으며, ③ 포트폴리오 테이블에 같은
+   *    코드를 넣어 refreshPrices가 이력을 채워야 비로소 동작했다. 포트폴리오 테이블처럼
+   *    코드만 넣으면 바로 데이터가 나오도록 **이력까지 여기서** 확보한다.
+   * ⚠️ 자동 활성화는 하지 않는다 — 어떤 칩을 차트에 그릴지는 사용자가 고른다.
+   */
+  const handleCompStockBlur = async (index, rawCode) => {
+    const code = String(rawCode || '').trim();
     if (!code) return;
     // 포트폴리오에 같은 코드가 있으면 저장된 종목명 재사용 (API 호출 불필요)
     let resolvedName: string | null = null;
@@ -292,22 +323,70 @@ export function useStockData({
       const match = (p.portfolio || []).find((item: any) => item.code === code && item.name);
       if (match) { resolvedName = match.name; break; }
     }
-    if (!resolvedName) {
-      // 6자리 순수 숫자 또는 6자리 영숫자 혼합(한국 ETF 코드) → 한국 API.
-      // 이력 조회 경로(handleToggleComp 등)와 동일한 판별식 공유 — 이름/이력 라우팅 불일치 방지.
-      const isKorean = isKoreanCode(code);
-      const d = isKorean ? await fetchStockInfo(code) : await fetchUsStockInfo(code);
-      resolvedName = d?.name || code;
+    // ⚠️ stockFetchStatus는 포트폴리오 테이블과 **공유하는 맵**이다. 보유 종목이면 상태를
+    //    건드리지 않는다 — 비교종목 이력 조회가 실패했다고 그 종목 행에 '갱신 실패' 빨간 점이
+    //    찍히면 안 된다. 비보유(비교 전용) 코드에만 상태점을 남긴다.
+    const heldInPortfolio = !!resolvedName;
+    const markStatus = (v: string) => {
+      if (!heldInPortfolio) setStockFetchStatus(prev => ({ ...prev, [code]: v }));
+    };
+    if (!resolvedName) resolvedName = compNameCacheRef.current[code] || null;
+    if (resolvedName) patchComp(index, code, { name: resolvedName });
+    if (compBlurEnsuredRef.current.has(code)) {
+      // 이전 시도에서 이름을 못 구한 코드 — 이름 칸이 옛 종목 이름으로 남지 않게 코드로 되돌린다.
+      if (!resolvedName) patchComp(index, code, { name: code });
+      return;
     }
-    setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], name: resolvedName }; return n; });
+
+    patchComp(index, code, { loading: true });
+    markStatus('loading');
+    try {
+      if (!resolvedName) {
+        // 6자리 순수 숫자 또는 6자리 영숫자 혼합(한국 ETF 코드) → 한국 API.
+        // 이력 조회 경로(ensureCompHistory)와 동일한 판별식 공유 — 이름/이력 라우팅 불일치 방지.
+        const isKorean = isKoreanCode(code);
+        let d = isKorean ? await fetchStockInfo(code) : await fetchUsStockInfo(code);
+        // 판별식이 빗나간 코드(6자 전부 알파벳 티커 등)를 위한 반대편 폴백.
+        if (!d) d = isKorean ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
+        resolvedName = d?.name || null;
+        // ⚠️ 실패한 이름을 세션 캐시에 넣지 말 것 — 다음 blur가 재시도할 수 있어야 한다.
+        if (resolvedName) compNameCacheRef.current[code] = resolvedName;
+        patchComp(index, code, { name: resolvedName || code });
+      }
+      const ok = await ensureCompHistory({ code });
+      if (ok) compBlurEnsuredRef.current.add(code);
+      // ⚠️ 상태점은 **종가 이력 확보 여부**만 본다. 이름만 못 구한 경우까지 빨간 점을 찍으면
+      //    선이 정상으로 그려지는 종목에 '갱신 실패'가 떠 오히려 오해를 준다(이름 미해결은
+      //    칩에 코드가 그대로 보이는 것으로 이미 드러난다).
+      markStatus(ok ? 'success' : 'fail');
+    } finally {
+      patchComp(index, code, { loading: false });
+    }
   };
 
-  const handleToggleComp = async (index) => {
-    const comp = compStocks[index];
-    if (!comp.code) return;
+  /**
+   * 비교종목 종가 이력 확보 — **코드 입력(blur)과 칩 활성화(toggle)가 이 한 함수를 공유**한다.
+   * ⚠️ 두 경로가 각자 fetch 체인을 갖게 하지 말 것 — 실제종가/수정종가 우선순위가 갈리면 한
+   *    종목 안에 두 가격기준이 섞여 차트에 인공 급등이 생긴다(mergeCodeHistory 주석 참조).
+   * @param comp `{ code }` — 칩 객체를 그대로 넘겨도 된다.
+   * @returns 이력 확보 성공 여부(단일 포인트 폴백 포함). false면 호출부가 칩을 활성화하지 않는다.
+   */
+  const ensureCompHistory = (comp: { code: string }): Promise<boolean> => {
+    if (!comp?.code) return Promise.resolve(false);
+    // ⚠️ 같은 코드의 동시 요청은 **같은 프로미스를 공유**한다 — blur 프리페치가 도는 중에 칩을
+    //    누르면 수 초짜리 전체 이력 조회가 두 번 나간다. 칩의 loading 플래그로 막지 않는 이유는,
+    //    어느 경로가 예외로 죽으면 그 플래그가 true로 굳어 **버튼이 영구히 죽기** 때문이다.
+    //    여기서는 절대 reject하지 않고(catch → false) finally로 반드시 정리한다.
+    const running = compHistInFlightRef.current.get(comp.code);
+    if (running) return running;
+    const p = ensureCompHistoryInner(comp)
+      .catch(() => false)
+      .finally(() => { compHistInFlightRef.current.delete(comp.code); });
+    compHistInFlightRef.current.set(comp.code, p);
+    return p;
+  };
 
-    if (comp.active) { setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: false }; return n; }); return; }
-    setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
+  const ensureCompHistoryInner = async (comp: { code: string }): Promise<boolean> => {
     const isOverseasComp = !isKoreanCode(comp.code);
     let hist = stockHistoryMap[comp.code];
     // fchart(수정종가) 보강분 — hist(실제종가)와 분리 보관. gap-only 슬롯으로만 흘러간다.
@@ -379,8 +458,7 @@ export function useStockData({
           hist = { [todayStr]: info.price };
           setStockHistoryMap(prev => ({ ...prev, [comp.code]: hist }));
         } else {
-          setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: false }; return n; });
-          return;
+          return false;
         }
       }
     } else {
@@ -476,7 +554,18 @@ export function useStockData({
       const earliest = Object.keys(hist).sort()[0];
       if (earliest) setStockListingDates(prev => ({ ...prev, [comp.code]: earliest }));
     }
-    setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: true, loading: false }; return n; });
+    return true;
+  };
+
+  const handleToggleComp = async (index) => {
+    const comp = compStocks[index];
+    if (!comp.code) return;
+
+    if (comp.active) { setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], active: false }; return n; }); return; }
+    setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
+    const ok = await ensureCompHistory(comp);
+    // 실패 시엔 종전대로 비활성 유지 — 빈 선을 그리지 않는다.
+    patchComp(index, comp.code, ok ? { active: true, loading: false } : { loading: false });
   };
 
   // 조회기간 기반으로 비교 종목 데이터를 강제 재조회
