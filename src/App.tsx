@@ -3373,6 +3373,8 @@ export default function App() {
           onClearNotifications={handleClearNotificationLog}
           onDeleteNotificationEntry={handleDeleteNotificationEntry}
           marketIndicators={marketIndicators}
+          fetchMarketIndicators={fetchMarketIndicators}
+          indicatorLoading={indicatorLoading}
           onOpenMaterial={openMaterial}
           resolveMaterial={resolveMaterial}
         />
@@ -3403,6 +3405,7 @@ export default function App() {
           onPaste={() => setIsPasteModalOpen(true)}
           activePortfolioAccountType={activePortfolioAccountType}
           fetchMarketIndicators={fetchMarketIndicators}
+          indicatorLoading={indicatorLoading}
           activeLinks={activePortfolioAccountType === 'overseas' ? (overseasLinks || []) : (customLinks || [])}
           setActiveLinks={activePortfolioAccountType === 'overseas' ? setOverseasLinks : setCustomLinks}
           marketIndicators={marketIndicators}
@@ -3461,7 +3464,7 @@ export default function App() {
             goldIntl={marketIndicators.goldIntl}
             usdkrw={marketIndicators.usdkrw}
             onUpdate={handleUpdate}
-            onRefresh={fetchMarketIndicators}
+            onRefresh={() => fetchMarketIndicators({ fresh: true })}
             isRefreshing={indicatorLoading}
             goldFetchStatus={indicatorFetchStatus?.goldKr?.status}
             goldIntlFetchStatus={indicatorFetchStatus?.goldIntl?.status}

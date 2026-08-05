@@ -177,7 +177,11 @@ async function fetchCoinGecko(coinId: string) {
     : { price: null, change: null, source: 'CoinGecko' };
 }
 
-export default async function handler(_req: Request): Promise<Response> {
+export default async function handler(req: Request): Promise<Response> {
+  // ?fresh=1 — 사용자가 직접 누른 갱신(헤더 시장지표 칩·새로고침 버튼). 엣지 캐시(s-maxage=300)를
+  // 건너뛰고 항상 업스트림에서 다시 수집한다. 자동 수집(앱 시작)은 파라미터 없이 캐시 경로를 그대로 쓴다.
+  const fresh = new URL(req.url).searchParams.get('fresh') === '1';
+
   // 모든 지표를 병렬 수집 — 개별 실패가 전체에 영향 없음
   const [
     us10yFred, us10yYahoo, us10yNaver, fedRate,
@@ -259,7 +263,11 @@ export default async function handler(_req: Request): Promise<Response> {
     headers: {
       'Content-Type':                 'application/json',
       'Access-Control-Allow-Origin':  '*',
-      'Cache-Control':                's-maxage=300, stale-while-revalidate=600',
+      // fresh=1은 no-store — 엣지가 저장하지 않아 다음 클릭도 다시 업스트림을 탄다.
+      // (쿼리 문자열이 고정이라 캐시 키가 늘어나지 않는다)
+      'Cache-Control':                fresh
+        ? 'no-store, max-age=0'
+        : 's-maxage=300, stale-while-revalidate=600',
     },
   });
 }

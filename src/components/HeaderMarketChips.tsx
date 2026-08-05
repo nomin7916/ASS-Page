@@ -25,17 +25,20 @@ const GROUPS = [
   },
 ];
 
-export default function HeaderMarketChips({ marketIndicators }) {
+export default function HeaderMarketChips({ marketIndicators, onRefresh, isRefreshing }) {
   const [indices, setIndices] = useState([0, 0, 0]);
 
   if (!marketIndicators) return null;
 
+  // 칩 클릭 = 표시 지표 순환 + 최신 시세 재수집.
+  // 재수집은 fire-and-forget(순환은 즉시 반영) — 연타 시 중첩 요청은 훅의 in-flight 가드가 막는다.
   const cycle = (gi) => {
     setIndices(prev => {
       const next = [...prev];
       next[gi] = (next[gi] + 1) % 3;
       return next;
     });
+    onRefresh?.({ fresh: true });
   };
 
   return (
@@ -49,12 +52,14 @@ export default function HeaderMarketChips({ marketIndicators }) {
           <button
             key={gi}
             onClick={() => cycle(gi)}
-            className="flex flex-col items-end px-1.5 py-0.5 rounded hover:bg-gray-800/70 transition-colors cursor-pointer select-none"
+            className={`flex flex-col items-end px-1.5 py-0.5 rounded hover:bg-gray-800/70 transition-colors cursor-pointer select-none
+              ${isRefreshing ? 'opacity-60' : ''}`}
             style={{ minWidth: 58 }}
-            title={`클릭: ${group.items.map(i => i.label).join(' → ')}`}
+            title={`클릭: ${group.items.map(i => i.label).join(' → ')}${onRefresh ? '\n(클릭할 때마다 최신 시세로 갱신)' : ''}`}
           >
-            <span className="text-[9px] font-bold leading-none" style={{ color: item.color }}>
+            <span className="text-[9px] font-bold leading-none flex items-center gap-0.5" style={{ color: item.color }}>
               {item.label}
+              {isRefreshing && <span className="w-1 h-1 rounded-full bg-yellow-400 animate-pulse" />}
             </span>
             <span className="text-[11px] font-bold font-mono text-white leading-none mt-[2px]">
               {formatted ?? '-'}

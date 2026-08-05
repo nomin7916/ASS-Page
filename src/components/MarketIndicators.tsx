@@ -340,7 +340,7 @@ export default function MarketIndicators({
             }
           </button>
           <button
-            onClick={fetchMarketIndicators}
+            onClick={() => fetchMarketIndicators({ fresh: true })}
             disabled={indicatorLoading}
             className="p-1 hover:bg-gray-800 rounded transition text-teal-400 hover:text-white"
             title="시장 지표 새로고침"

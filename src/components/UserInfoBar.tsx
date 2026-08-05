@@ -94,6 +94,9 @@ export default function UserInfoBar({
   onClearNotifications,
   onDeleteNotificationEntry,
   marketIndicators,
+  // 헤더 시장지표 칩 — 클릭할 때마다 최신 시세 재수집(미전달 시 순환만)
+  fetchMarketIndicators,
+  indicatorLoading = false,
   onOpenMaterial,
   resolveMaterial,
 }) {
@@ -195,7 +198,11 @@ export default function UserInfoBar({
         )}
         {marketIndicators && (
           <div className="hidden md:flex items-center">
-            <HeaderMarketChips marketIndicators={marketIndicators} />
+            <HeaderMarketChips
+              marketIndicators={marketIndicators}
+              onRefresh={fetchMarketIndicators}
+              isRefreshing={indicatorLoading}
+            />
           </div>
         )}
       </div>

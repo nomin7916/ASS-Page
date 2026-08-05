@@ -30,6 +30,7 @@ export default function AccountTabBar({
   onPaste,
   activePortfolioAccountType,
   fetchMarketIndicators,
+  indicatorLoading = false,
   activeLinks = [],
   setActiveLinks,
   marketIndicators,
@@ -66,8 +67,10 @@ export default function AccountTabBar({
 
   const isOverseasLinks = activePortfolioAccountType === 'overseas';
 
+  // 사용자가 직접 누른 갱신 → fresh(엣지 캐시 우회). onClick에 직접 넘기면 이벤트 객체가 인자로 들어가
+  // fresh 판정이 false가 되므로 반드시 래핑한다.
   const handleRefresh = !showIntegratedDashboard && activePortfolioAccountType === 'gold'
-    ? fetchMarketIndicators
+    ? () => fetchMarketIndicators({ fresh: true })
     : refreshPrices;
 
   const visiblePortfolios = portfolios.filter(p => p.accountType !== 'simple' && p.accountType !== 'matong' && !p.deletedAt);
@@ -119,7 +122,13 @@ export default function AccountTabBar({
             </div>
           )}
         </div>
-        {marketIndicators && <HeaderMarketChips marketIndicators={marketIndicators} />}
+        {marketIndicators && (
+          <HeaderMarketChips
+            marketIndicators={marketIndicators}
+            onRefresh={fetchMarketIndicators}
+            isRefreshing={indicatorLoading}
+          />
+        )}
         </div>
         {showLinksOnNarrow && (
           <div className="flex items-center gap-1 relative" ref={linkEditRef}>

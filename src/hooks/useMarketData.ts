@@ -333,7 +333,20 @@ export function useMarketData({
   };
 
   // 재시도 큐 매니저
+  // ⚠️ 동시 실행 금지: fetchMarketIndicators가 await 없이 호출하므로(finally에서 loading은 이미 해제)
+  // 클릭 갱신이 실패를 반복하면 재시도 루프가 겹겹이 쌓인다.
+  const retryRunningRef = useRef(false);
   const retryFailedIndicators = async (failedKeys, currentStatusMap, maxRetries = 10) => {
+    if (retryRunningRef.current) return;
+    retryRunningRef.current = true;
+    try {
+      await runRetryLoop(failedKeys, currentStatusMap, maxRetries);
+    } finally {
+      retryRunningRef.current = false;
+    }
+  };
+
+  const runRetryLoop = async (failedKeys, currentStatusMap, maxRetries) => {
     let currentAttempt = 0;
     let pendingKeys = [...failedKeys];
 
@@ -537,13 +550,24 @@ export function useMarketData({
     reader.readAsText(file);
   };
 
-  const fetchMarketIndicators = async () => {
+  // opts.fresh — 사용자가 직접 누른 갱신(헤더 시장지표 칩 클릭·새로고침 버튼)은 엣지 캐시(300s)를
+  // 건너뛰고 업스트림에서 다시 수집한다. 앱 시작 시 자동 수집은 캐시 경로 유지(응답 속도·업스트림 부하).
+  // ⚠️ onClick에 직접 넘겨도 안전하도록 opts는 이벤트 객체일 수 있다 — `=== true`로만 판정.
+  const indicatorInFlightRef = useRef(false);
+  const fetchMarketIndicators = async (opts?: { fresh?: boolean }) => {
+    // 진행 중인 수집이 있으면 건너뛴다(칩 연타 → 요청 중첩 방지). 진행 중 수집이 곧 최신값을 채운다.
+    if (indicatorInFlightRef.current) return;
+    indicatorInFlightRef.current = true;
+    const fresh = opts?.fresh === true;
     setIndicatorLoading(true);
     const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
     const statusMap = {};
 
     try {
-      const res = await fetch('/api/indicators', { signal: AbortSignal.timeout(20000) });
+      const res = await fetch(fresh ? '/api/indicators?fresh=1' : '/api/indicators', {
+        signal: AbortSignal.timeout(20000),
+        ...(fresh ? { cache: 'no-store' as RequestCache } : {}),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
@@ -591,6 +615,7 @@ export function useMarketData({
     } finally {
       setIndicatorFetchStatus(statusMap);
       setIndicatorLoading(false);
+      indicatorInFlightRef.current = false;
     }
   };
 
