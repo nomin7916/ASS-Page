@@ -48,8 +48,10 @@ export type BtGroup = 'mid' | 'eom' | 'all';
  *  allMid   — 전 종목을 월중 분배락 전에 일괄
  *  allEom   — 전 종목을 월말 분배락 전에 일괄
  *  fixedDay — 매월 지정일(휴장이면 직전 영업일)에 전 종목 일괄
+ *  none     — **리밸런싱하지 않음**. 초기 매수 후 수량을 그대로 둔다(Buy & Hold 기준선).
+ *             종목별 rebalMode가 'follow'가 아닌 종목은 그 지정을 그대로 따른다.
  */
-export type BtPolicy = 'perCycle' | 'allMid' | 'allEom' | 'fixedDay';
+export type BtPolicy = 'perCycle' | 'allMid' | 'allEom' | 'fixedDay' | 'none';
 
 /** 목표 해석. amount=종목별 목표금액 / ratio=비중(%) × ratioBase */
 export type BtTargetMode = 'amount' | 'ratio';
@@ -67,6 +69,28 @@ export type BtRatioBase = 'equity' | 'total' | 'initial' | 'totalWithDiv';
 
 /** 수량 산출 규칙. floor=0 방향 버림(PDF 규약) / round=반올림 / exact=소수 허용(펀드 좌수) */
 export type BtRounding = 'floor' | 'round' | 'exact';
+
+/**
+ * 지급받은 분배금을 어떻게 처리할 것인가.
+ *  hold    — 예수금에 그대로 쌓아 둔다(기본, 종전 동작). 리밸런싱이 매수 재원으로 쓸 때만 줄어든다.
+ *  payDate — **지급일 당일**에 즉시 재매수한다.
+ *  mid     — 매월 **월중** 분배락 직전 영업일에 모아서 재매수한다.
+ *  eom     — 매월 **월말** 분배락 직전 영업일에 모아서 재매수한다.
+ *
+ * ⚠️ mid/eom의 날짜 규칙은 리밸런싱과 **같다**(기준일 + exDivOffset + rebalOffset = 분배락 직전
+ *    영업일). 그날 사면 그 달 분배 권리까지 확보되므로 '분배금으로 다시 분배를 받는' 복리가
+ *    자연스럽게 잡힌다 — 기준일 당일(15일/말일)에 사면 분배락이 이미 지나 그 달 권리를 놓친다.
+ * ⚠️ 리밸런싱 정책과 **완전히 독립**이다. 리밸런싱을 끈(policy:'none') 상태에서도 재투자는 돈다.
+ */
+export type BtDivReinvest = 'hold' | 'payDate' | 'mid' | 'eom';
+
+/**
+ * 분배금 재투자 매수의 종목별 배분 기준.
+ *  target — 목표 비중대로(목표금액 모드에서는 종목별 목표금액 비율대로). 기본값.
+ *  source — 그 분배금을 **준 종목**을 그대로 되산다(전통적 DRIP).
+ *  even   — 그 시점 매수 가능한 종목에 균등 배분.
+ */
+export type BtDivSplit = 'target' | 'source' | 'even';
 
 /** 중도 이벤트의 재원 조달 방식. */
 export type BtFunding =
@@ -203,6 +227,16 @@ export interface BtConfig {
   payOffset: number;
   /** true면 현금이 부족해도 매수(마이너스 예수금 허용). 기본 false = 가능한 수량만. */
   allowNegativeCash: boolean;
+  /** 지급받은 분배금의 처리 방식. 기본 'hold'(예수금 보유 — 종전 동작). */
+  divReinvest: BtDivReinvest;
+  /** 분배금 재투자 매수의 종목별 배분 기준. 기본 'target'(목표 비중대로). */
+  divReinvestSplit: BtDivSplit;
+  /**
+   * '전체 백테스트 비교 종합' 화면에 이 시나리오를 포함할지.
+   * ⚠️ 결과에 영향을 주지 않는 **표시 전용** 필드지만, 사용자가 고른 조합이 유지돼야 하므로
+   *    지문(backtestFingerprint)에 포함해 Drive에 저장한다. 기본값은 true(신규·레거시 모두 포함).
+   */
+  compareOn: boolean;
   /** 매월 목표 증액(재투자) 기본 규칙. */
   contribution: BtContribution;
   /** 특정 월만 다른 증액 규칙. */
@@ -279,6 +313,14 @@ export interface BtTrade {
    *    PDF 4월 합계 25,859,200은 회색 음영 3행(4/21 재편)을 뺀 값과 정확히 일치한다.
    */
   structural: boolean;
+  /**
+   * 분배금 재투자 매수인가.
+   * ⚠️ structural과 마찬가지로 **리밸런싱 차익(tradeNet)에서 제외**한다 — 재투자는 목표를 맞추는
+   *    매매가 아니라 '받은 현금을 다시 넣는' 행위라, 여기에 섞으면 '누적 매매차익'이 재투자 대금만큼
+   *    마이너스로 부풀어 지표의 의미가 사라진다. 대신 reinvestNet으로 따로 센다.
+   * ⚠️ reinvest와 structural은 상호배타다(재투자 매수는 절대 structural로 찍지 않는다).
+   */
+  reinvest: boolean;
   /** 현금 부족으로 목표에 못 미쳤을 때의 사유 */
   note: string;
 }
@@ -327,6 +369,19 @@ export interface BtDivSlot {
   assetIds: string[];
 }
 
+/**
+ * 분배금 재투자 실행일 슬롯.
+ * ⚠️ 리밸런싱 슬롯(buildSlots)·분배 슬롯(buildDividendSlots)과 **완전히 독립**이다.
+ *    리밸런싱을 끄든 옮기든 재투자 일정은 config.divReinvest만 따른다.
+ */
+export interface BtReinvestSlot {
+  ym: string;
+  /** 실제 매수 실행일 */
+  date: string;
+  /** 이 날짜를 만들어 낸 규칙(표시용) */
+  label: 'pay' | 'mid' | 'eom';
+}
+
 /** 그 달 실제로 실행된 목표 증액(재투자) 1건. */
 export interface BtContribRow {
   ym: string;
@@ -355,10 +410,15 @@ export interface BtMonth {
    *    실제 현금이 들어온 달은 divPaid가 따로 센다.
    */
   dividends: BtDividendRow[];
-  /** 그 달 정기 리밸런싱 매매금액 합 (structural 제외) — PDF '합계' 열 */
+  /** 그 달 정기 리밸런싱 매매금액 합 (structural·reinvest 제외) — PDF '합계' 열 */
   tradeNet: number;
   /** 구조 변경 매매금액 합 (참고 표시용, 차익에 미포함) */
   structuralNet: number;
+  /**
+   * 그 달 분배금 재투자 매수 대금 합(항상 ≤ 0). 차익에 미포함.
+   * ⚠️ 이 값의 절댓값이 곧 '그 달 분배금으로 실제 다시 산 금액'이다.
+   */
+  reinvestNet: number;
   cumTradeNet: number;
   /** 분배락 기준 그 달에 확정된 분배금 합 — PDF '지급 분배금' 합계와 일치 */
   divAccrued: number;
@@ -369,7 +429,9 @@ export interface BtMonth {
    */
   divPaid: number;
   cumDivPaid: number;
-  /** 그 달 현금 증감 (정기차익 + 구조매매 + 입금 분배금) */
+  /** 그 달까지 누적 재투자 매수 대금(≤ 0) */
+  cumReinvestNet: number;
+  /** 그 달 현금 증감 (정기차익 + 구조매매 + 분배금 재투자 + 입금 분배금) */
   cashDelta: number;
   /** 월말 시점 예수금 */
   cashEnd: number;
@@ -462,13 +524,24 @@ export interface BtResult {
     profitRate: number;
     cumTradeNet: number;
     cumStructuralNet: number;
+    /**
+     * 누적 분배금 재투자 매수 대금(≤ 0). 절댓값 = 분배금으로 다시 산 총액.
+     * ⚠️ 기말 예수금 분해 항등식의 한 항이다(아래 finalCashTrade 주석 참조).
+     */
+    cumReinvestNet: number;
     /** 분배락 기준 누적 분배금 — PDF의 '누적 분배금 합계'와 같은 정의 */
     cumDivAccrued: number;
     /** 실제 입금된 누적 분배금(지급일 기준). 기말 예수금에 반영된 값. */
     cumDivPaid: number;
     /** 매월 증액(재투자)으로 목표에 더한 누적 금액 */
     cumContribution: number;
-    /** 기말 예수금 중 매매 몫 / 미사용 분배금 몫 (합 = finalCash) */
+    /**
+     * 기말 예수금 중 매매 몫 / 미사용 분배금 몫 (합 = finalCash).
+     * ⚠️ 원천별 분해 항등식(화면 '기말 보유 현황' 표가 그대로 렌더한다):
+     *      finalCash = initialCashAfter + cumTradeNet + cumStructuralNet + cumReinvestNet + cumDivPaid
+     *    분배금은 반드시 **지급 기준(cumDivPaid)** — 분배락 기준(cumDivAccrued)에는 아직 현금이
+     *    되지 않은 몫이 섞여 항등식이 깨진다.
+     */
     finalCashTrade: number;
     finalCashDiv: number;
     /** 최고 자산 대비 최대 낙폭(%) */
@@ -760,6 +833,8 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
   const mode = partial.targetMode;
   const base = partial.ratioBase;
   const rounding = partial.rounding;
+  const reinv = partial.divReinvest;
+  const divSplit = partial.divReinvestSplit;
   return {
     id: partial.id || generateId(),
     name: asStr(partial.name) || '백테스트',
@@ -771,12 +846,21 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
     ratioBase: base === 'total' || base === 'initial' || base === 'totalWithDiv' ? base : 'equity',
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
     policy:
-      policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' ? policy : 'perCycle',
+      policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none'
+        ? policy : 'perCycle',
     fixedDay: clampInt(asNum(partial.fixedDay, 15), 1, 31),
     exDivOffset: clampInt(asNum(partial.exDivOffset, -1), -10, 0),
     rebalOffset: clampInt(asNum(partial.rebalOffset, -1), -10, 0),
     payOffset: clampInt(asNum(partial.payOffset, 2), 0, 10),
     allowNegativeCash: !!partial.allowNegativeCash,
+    // ⚠️ 레거시(필드 부재)는 반드시 'hold' / 'target'으로 떨어져야 한다 — 기존 시나리오의
+    //    결과가 이 기능 도입만으로 1원도 달라지면 안 된다.
+    divReinvest:
+      reinv === 'payDate' || reinv === 'mid' || reinv === 'eom' ? reinv : 'hold',
+    divReinvestSplit: divSplit === 'source' || divSplit === 'even' ? divSplit : 'target',
+    // ⚠️ `!!partial.compareOn`으로 두지 말 것 — 필드가 없는 기존 시나리오가 전부 비교에서
+    //    빠져 '전체 비교'가 빈 화면이 된다. 명시적 false만 제외한다.
+    compareOn: partial.compareOn !== false,
     contribution: normalizeContribution(partial.contribution),
     contribOverrides: asArr(partial.contribOverrides).slice(0, MAX_BT_CONTRIB_OVERRIDES)
       .map(normalizeContribOverride).filter(Boolean) as BtContribOverride[],
@@ -881,6 +965,10 @@ export function backtestFingerprint(scenarios: unknown): string {
           s?.targetMode ?? '', s?.ratioBase ?? '', s?.rounding ?? '', s?.policy ?? '',
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
           s?.allowNegativeCash ? 1 : 0,
+          // 분배금 처리 — 결과를 통째로 바꾸는 사용자 설정
+          s?.divReinvest ?? '', s?.divReinvestSplit ?? '',
+          // 비교 종합 포함 여부 — 결과에는 영향이 없지만 사용자가 고른 조합이라 저장한다
+          s?.compareOn === false ? 0 : 1,
           // 매월 증액 규칙 — 결과를 통째로 바꾸는 사용자 설정이라 반드시 지문에 포함
           s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? '',
         ],
@@ -951,6 +1039,10 @@ export function resolveAssetRebal(
     case 'allMid': return { mode: 'mid', day: 0, follows: true };
     case 'allEom': return { mode: 'eom', day: 0, follows: true };
     case 'fixedDay': return { mode: 'day', day: clampInt(config.fixedDay, 1, 31), follows: true };
+    // ⚠️ 전역 '리밸런싱 안 함' — follows는 true 그대로 둔다. 슬롯을 만들지 않으므로 그룹·
+    //    월별 일괄 오버라이드 경로에는 어차피 닿지 않고, false로 두면 '종목이 개별 지정을
+    //    했다'는 뜻이 되어 buildSlots의 개별/일괄 구분 의미가 흐려진다.
+    case 'none': return { mode: 'none', day: 0, follows: true };
     default: return { mode: asset.payCycle === 'mid' ? 'mid' : 'eom', day: 0, follows: true };
   }
 }
@@ -1091,6 +1183,46 @@ export function buildDividendSlots(config: BtConfig, holidays: Set<string>): BtD
 }
 
 /**
+ * 분배금 재투자 실행일 생성.
+ *
+ * ⚠️ `config.policy`를 절대 보지 말 것 — 재투자는 리밸런싱과 독립이다(리밸런싱을 꺼도 돌아야
+ *    하는 것이 이 기능의 존재 이유다).
+ * ⚠️ mid/eom의 날짜는 리밸런싱과 **같은 식**(기준일 + exDivOffset + rebalOffset)으로 구한다.
+ *    분배락 직전 영업일이라 그날 산 수량이 그 달 분배 권리를 그대로 받는다.
+ * ⚠️ 같은 날짜가 두 번 나오면 하나로 합친다 — 재투자는 '주머니 전액'을 쓰므로 두 번 돌아도
+ *    두 번째는 빈 주머니를 보고 아무 일도 안 하지만, 스텝이 중복되면 표에 유령 행이 남는다.
+ */
+export function buildReinvestSlots(config: BtConfig, holidays: Set<string>): BtReinvestSlot[] {
+  const out: BtReinvestSlot[] = [];
+  const mode = config.divReinvest;
+  if (mode !== 'payDate' && mode !== 'mid' && mode !== 'eom') return out;
+  if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return out;
+
+  const seen = new Set<string>();
+  const add = (ym: string, date: string, label: BtReinvestSlot['label']) => {
+    if (!isIsoDate(date)) return;
+    if (date < config.startDate || date > config.endDate) return;
+    if (seen.has(date)) return;
+    seen.add(date);
+    out.push({ ym, date, label });
+  };
+
+  if (mode === 'payDate') {
+    for (const d of buildDividendSlots(config, holidays)) add(ymOf(d.payDate), d.payDate, 'pay');
+  } else {
+    const cycle: 'mid' | 'eom' = mode === 'mid' ? 'mid' : 'eom';
+    for (const ym of monthsBetween(config.startDate, config.endDate)) {
+      const recordDate = recordDateFor(ym, cycle, holidays);
+      if (!recordDate) continue;
+      const exDate = shiftBusinessDays(recordDate, config.exDivOffset, holidays);
+      add(ym, shiftBusinessDays(exDate, config.rebalOffset, holidays), cycle);
+    }
+  }
+  out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return out;
+}
+
+/**
  * 표시용 조인 — PDF처럼 "리밸런싱 행 오른쪽에 그 종목의 주당/지급 분배금"을 붙인다.
  * 같은 달, 같은 종목의 분배 중 **그 리밸런싱일 이후 첫 분배락**을 짝지운다
  * (리밸런싱은 분배락 직전에 하므로 정상 설정에서는 1:1로 붙는다).
@@ -1123,6 +1255,13 @@ interface Pos {
   asset: BtAsset;
   qty: number;
   active: boolean;
+  /**
+   * 이벤트 `removeAssets`로 **의도적으로 제외**된 종목인가.
+   * ⚠️ `!active`와 반드시 구분해야 한다 — `active:false`는 '아직 편입 전'(중간 상장 대기)도
+   *    포함하고 그쪽은 매수 대상이 **맞다**. 이 플래그가 없으면 분배금 재투자·리밸런싱이
+   *    사용자가 뺀 종목을 조용히 되사서 되살린다(기말 보유·수익률에 계속 남는다).
+   */
+  removed: boolean;
   targetAmount: number | null;
   targetRatio: number | null;
   /** 데이터 기준 실제 편입 가능일 */
@@ -1161,7 +1300,8 @@ export function runBacktest(input: BtRunInput): BtResult {
       startDate: config.startDate, endDate: config.endDate,
       initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
-      cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0,
+      cumTradeNet: 0, cumStructuralNet: 0, cumReinvestNet: 0,
+      cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0,
       finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0,
     },
   });
@@ -1217,7 +1357,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (gapCount > 0) warnings.push(`${a.name || a.code}: 기간 안에 종가 결측 구간이 ${gapCount}곳 있어 직전 종가로 이월됩니다.`);
 
     positions.push({
-      asset: a, qty: 0, active: false,
+      asset: a, qty: 0, active: false, removed: false,
       targetAmount: a.targetAmount, targetRatio: a.targetRatio,
       effectiveStart, effectiveEnd,
     });
@@ -1247,22 +1387,58 @@ export function runBacktest(input: BtRunInput): BtResult {
    *    보이지 않으면 사용자가 추적할 수 없다 — 그 근거를 남기는 기록이다.
    */
   const drawByYm = new Map<string, { fromTrade: number; fromDiv: number }>();
-  /** 매도(+)는 매매 주머니로, 매수(−)는 **매매 → 분배금** 순으로 꺼낸다. */
-  const applyCash = (delta: number, date: string) => {
+  /**
+   * 분배금 주머니의 **종목별 출처**. 합은 항상 cashDiv와 같다.
+   * ⚠️ divReinvestSplit='source'(DRIP)에서만 쓰이지만, 주머니가 줄어들 때마다 함께 줄여
+   *    합=cashDiv 불변식을 유지해야 한다 — 안 그러면 이미 써 버린 분배금의 출처가 남아
+   *    다음 재투자에서 유령 가중치가 된다.
+   */
+  const divPocket = new Map<string, number>();
+  /** cashDiv에서 x원이 빠질 때 출처 맵을 비례 축소한다(합 = cashDiv 유지). */
+  const drainPocket = (x: number) => {
+    if (!(x > 0)) return;
+    let total = 0;
+    for (const v of divPocket.values()) total += v;
+    if (!(total > 0)) { divPocket.clear(); return; }
+    const keep = Math.max(0, 1 - x / total);
+    if (keep <= 0) { divPocket.clear(); return; }
+    for (const [k, v] of divPocket) divPocket.set(k, v * keep);
+  };
+  /**
+   * 매도(+)는 매매 주머니로, 매수(−)는 주머니에서 꺼낸다.
+   * @param prefer 'trade'(기본) = 매매 → 분배금 순 / 'div' = 분배금 → 매매 순.
+   * ⚠️ 분배금 재투자 매수는 반드시 'div'로 꺼낸다 — 기본값으로 꺼내면 cashDiv가 줄지 않아
+   *    **다음 회차가 같은 분배금을 또 투입**한다(무한 재투자로 예수금이 통째로 빨려 들어간다).
+   */
+  const applyCash = (delta: number, date: string, prefer: 'trade' | 'div' = 'trade') => {
     cash += delta;
     if (delta >= 0) { cashTrade += delta; logBuckets(date); return; }
     let need = -delta;
-    const fromTrade = Math.max(0, Math.min(cashTrade, need));
-    cashTrade -= fromTrade;
-    need -= fromTrade;
+    let fromTrade = 0;
     let fromDiv = 0;
-    if (need > 0) {
+    if (prefer === 'div') {
       fromDiv = Math.max(0, Math.min(cashDiv, need));
       cashDiv -= fromDiv;
+      drainPocket(fromDiv);
       need -= fromDiv;
-      // 둘 다 바닥나면(allowNegativeCash) 초과분은 매매 주머니가 음수로 진다.
-      if (need > 0) cashTrade -= need;
+      if (need > 0) {
+        fromTrade = Math.max(0, Math.min(cashTrade, need));
+        cashTrade -= fromTrade;
+        need -= fromTrade;
+      }
+    } else {
+      fromTrade = Math.max(0, Math.min(cashTrade, need));
+      cashTrade -= fromTrade;
+      need -= fromTrade;
+      if (need > 0) {
+        fromDiv = Math.max(0, Math.min(cashDiv, need));
+        cashDiv -= fromDiv;
+        drainPocket(fromDiv);
+        need -= fromDiv;
+      }
     }
+    // 둘 다 바닥나면(allowNegativeCash) 초과분은 매매 주머니가 음수로 진다.
+    if (need > 0) cashTrade -= need;
     const ym = ymOf(date);
     if (ym) {
       const cur = drawByYm.get(ym);
@@ -1272,9 +1448,10 @@ export function runBacktest(input: BtRunInput): BtResult {
     }
     logBuckets(date);
   };
-  const applyDividend = (amount: number, date: string) => {
+  const applyDividend = (amount: number, date: string, assetId?: string) => {
     cash += amount;
     cashDiv += amount;
+    if (assetId && amount > 0) divPocket.set(assetId, (divPocket.get(assetId) ?? 0) + amount);
     logBuckets(date);
   };
 
@@ -1344,8 +1521,95 @@ export function runBacktest(input: BtRunInput): BtResult {
       qtyBefore, evalBefore, target,
       qty, cashDelta,
       qtyAfter: p.qty, evalAfter: p.qty * hit.price,
-      structural, note,
+      structural, reinvest: false, note,
     };
+  };
+
+  /**
+   * 주어진 **예산 안에서** 사는 매수 1건 (분배금 재투자 전용).
+   *
+   * ⚠️ 반올림은 config.rounding이 'round'여도 항상 **0 방향 버림**이다 — 예산을 넘겨 사면
+   *    분배금이 아니라 매매 주머니를 헐게 되어 "분배금만 재투자한다"는 전제가 깨진다.
+   *    소수 좌수(exact)만 그대로 통과시킨다(adjustTo의 '예수금 부족' 폴백과 같은 규약).
+   * ⚠️ 1주 값에 못 미치는 잔돈은 **사지 않고 주머니에 남긴다** — 다음 재투자 회차로 이월돼
+   *    누적된다(버리면 분배금이 조용히 증발한다).
+   */
+  const buyWithBudget = (p: Pos, date: string, budget: number): BtTrade | null => {
+    if (!(budget > 0)) return null;
+    const hit = priceAt(prices[p.asset.code], date);
+    if (hit.missing || hit.price <= 0) return null;
+    const floorMode: BtRounding = config.rounding === 'exact' ? 'exact' : 'floor';
+    let qty = roundQty(budget / hit.price, floorMode);
+    if (!(qty > 0)) return null;
+    if (!config.allowNegativeCash && qty * hit.price > cash) {
+      qty = roundQty(cash / hit.price, floorMode);
+      if (!(qty > 0)) return null;
+    }
+    const evalBefore = p.qty * hit.price;
+    const cashDelta = -qty * hit.price;
+    applyCash(cashDelta, date, 'div');
+    const qtyBefore = p.qty;
+    p.qty += qty;
+    return {
+      date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+      price: hit.price, priceExact: hit.exact,
+      qtyBefore, evalBefore,
+      // '목표'는 레벨이 아니라 **배분받은 분배금을 전부 썼을 때 도달할 평가액**이다.
+      // 실제 evalAfter와의 차이가 곧 1주 미만 잔돈(다음 회차로 이월).
+      target: evalBefore + budget,
+      qty, cashDelta,
+      qtyAfter: p.qty, evalAfter: p.qty * hit.price,
+      structural: false, reinvest: true, note: '',
+    };
+  };
+
+  /**
+   * 분배금 재투자 1회. 실행한 매매를 **반환**한다(적재는 호출부의 pushTrade가 한다 —
+   * adjustTo와 같은 계약이라 월별 집계 경로가 하나로 유지된다).
+   *
+   * ⚠️ 재원은 **cashDiv 주머니 전액**(지급받았지만 아직 쓰지 않은 분배금)이다. 리밸런싱이
+   *    이미 헐어 쓴 몫은 주머니에서 빠져 있으므로 이중 투입이 없고, 1주 미만 잔돈은 남아
+   *    다음 회차에 합쳐진다.
+   * ⚠️ 배분 후 각 종목이 쓰는 금액의 합은 예산을 넘지 않는다(share의 합 = budget, 각 매수는
+   *    floor라 share 이하) → cashDiv가 음수로 내려가지 않는다.
+   */
+  const runReinvest = (date: string): BtTrade[] => {
+    const done: BtTrade[] = [];
+    const budget = cashDiv;
+    if (!(budget > 0)) return done;
+    // 그날 실제로 살 수 있는 종목만 — 편입 구간 안 + 쓸 수 있는 종가가 있는 종목.
+    // ⚠️ `p.removed`(이벤트로 뺀 종목)는 반드시 제외한다. `p.active`로 거르면 안 된다 —
+    //    '아직 편입 전'인 중간 상장 종목까지 빠져 재투자가 유일한 편입 경로라는 설계가 죽는다.
+    const live = positions.filter(
+      p => !p.removed
+        && date >= p.effectiveStart && date <= p.effectiveEnd
+        && !priceAt(prices[p.asset.code], date).missing,
+    );
+    if (!live.length) return done;
+
+    const weightOf = (p: Pos): number => {
+      if (config.divReinvestSplit === 'even') return 1;
+      if (config.divReinvestSplit === 'source') return Math.max(0, divPocket.get(p.asset.id) ?? 0);
+      return config.targetMode === 'amount'
+        ? Math.max(0, p.targetAmount ?? 0)
+        : Math.max(0, p.targetRatio ?? 0);
+    };
+    let ws = live.map(weightOf);
+    let totalW = ws.reduce((s, x) => s + x, 0);
+    // ⚠️ 가중치가 전부 0이면(목표 미설정 / 분배금을 준 종목이 이미 빠짐) 균등으로 폴백한다.
+    //    여기서 그냥 반환하면 분배금이 영원히 현금으로 남아 사용자가 켠 '재투자' 설정이
+    //    아무 경고도 없이 무시된다.
+    if (!(totalW > 0)) { ws = live.map(() => 1); totalW = live.length; }
+
+    for (let i = 0; i < live.length; i++) {
+      if (!(ws[i] > 0)) continue;
+      const t = buyWithBudget(live[i], date, (budget * ws[i]) / totalW);
+      if (!t) continue;
+      // 재투자 매수가 곧 편입이다 — 리밸런싱을 끈 시나리오에서 중간 상장 종목이 들어오는 유일한 경로.
+      live[i].active = true;
+      done.push(t);
+    }
+    return done;
   };
 
   // ── Phase 0: 초기 매수 ───────────────────────────────────────────────────
@@ -1376,17 +1640,46 @@ export function runBacktest(input: BtRunInput): BtResult {
   // ⚠️ 리밸런싱 슬롯이 하나도 없는 종목은 **중간 편입 경로가 통째로 사라진다** — 종목을
   //    활성화하는 계기는 초기매수·리밸런싱 슬롯·이벤트 addAssets 셋뿐이라, 조회기간 중간에
   //    상장한 종목에 'none'/빈 날짜 목록을 주면 매수 자체가 일어나지 않는다.
+  //    ⚠️ 단, 분배금 재투자가 켜져 있으면 그 매수가 편입 경로 역할을 하므로 문구가 달라진다.
+  //    ⚠️ 전역 '리밸런싱 안 함'은 **사용자가 명시적으로 고른 설정**이라 종목 수만큼 경고를
+  //       쏟지 않는다(Buy & Hold 기준선을 만들 때마다 경고가 도배되면 진짜 경고가 묻힌다).
+  const reinvestSlots = buildReinvestSlots(config, holidays);
   {
     const slotted = new Set<string>();
     for (const s of slots) for (const id of s.assetIds) slotted.add(id);
+    const reinvestOn = reinvestSlots.length > 0;
+    // ⚠️ 'source'(DRIP) 배분은 가중치가 **그 종목이 준 분배금**이라, 아직 한 번도 분배한 적 없는
+    //    신규 편입 종목은 가중치가 영구히 0이라 재투자로도 절대 매수되지 않는다(균등 폴백은
+    //    totalW===0일 때만 도는데 기존 종목이 분배금을 계속 넣어 발동하지 않는다).
+    const sourceSplit = config.divReinvestSplit === 'source';
     for (const p of positions) {
       if (slotted.has(p.asset.id)) continue;
       const nm = p.asset.name || p.asset.code;
       if (p.effectiveStart > startBiz) {
-        warnings.push(`${nm}: 리밸런싱 일정이 없어(‘리밸런싱 안 함’ 또는 지정 날짜 없음) 기간 중간 편입이 실행되지 않습니다 — 매수가 한 번도 일어나지 않습니다.`);
-      } else {
+        warnings.push(
+          !reinvestOn
+            ? `${nm}: 리밸런싱 일정이 없어(‘리밸런싱 안 함’ 또는 지정 날짜 없음) 기간 중간 편입이 실행되지 않습니다 — 매수가 한 번도 일어나지 않습니다.`
+            : sourceSplit
+              ? `${nm}: 리밸런싱 일정이 없고 분배금 배분 기준이 ‘분배금 준 종목(DRIP)’이라 이 종목은 매수되지 않습니다 — 자기 분배 이력이 없으면 배분 몫이 0입니다(배분 기준을 ‘목표 비중’이나 ‘균등’으로 바꾸세요).`
+              : `${nm}: 리밸런싱 일정이 없어 기간 중간 편입은 분배금 재투자 매수 시점에만 일어납니다(재투자할 분배금이 없으면 매수되지 않습니다).`,
+        );
+      } else if (config.policy !== 'none') {
         warnings.push(`${nm}: 리밸런싱 일정이 없어 최초 매수 후 수량이 고정됩니다(의도한 설정이면 무시하세요).`);
       }
+    }
+    // ⚠️ 목표가 **레벨**(고정 금액 / 고정 분모)인 모드에서는 리밸런싱이 재투자분을 그대로 되판다.
+    //    실질 효과는 거의 0인데 되판 대금이 tradeNet(‘누적 매매차익’)에 들어가 지표만 부푼다
+    //    (재투자 매수는 reinvestNet으로 빠지므로 매수/매도가 비대칭이 된다). 조용히 두면
+    //    비교 표에서 시나리오 순위가 뒤바뀐다.
+    const levelTarget = config.targetMode === 'amount'
+      || config.ratioBase === 'initial' || config.ratioBase === 'total';
+    if (reinvestOn && slots.length > 0 && levelTarget) {
+      warnings.push(
+        '목표가 고정 수준인 모드(목표금액 · 분모 “초기 투자금 고정”/“평가액+예수금”)에서는 '
+        + '분배금 재투자로 산 수량을 다음 리밸런싱이 목표에 맞춰 되팝니다 — 재투자 효과가 거의 없고, '
+        + '되판 대금이 ‘누적 매매차익’에 잡혀 실제보다 커 보입니다. '
+        + '재투자를 살리려면 리밸런싱을 끄거나(‘리밸런싱 안 함’) 분모를 “종목 평가액 합계”로 바꾸세요.',
+      );
     }
   }
 
@@ -1395,10 +1688,15 @@ export function runBacktest(input: BtRunInput): BtResult {
     | { date: string; kind: 'pay'; div: BtDivSlot }
     | { date: string; kind: 'rebal'; slot: BtSlot }
     | { date: string; kind: 'event'; event: BtEvent }
-    | { date: string; kind: 'contrib'; ym: string };
+    | { date: string; kind: 'contrib'; ym: string }
+    | { date: string; kind: 'reinvest'; slot: BtReinvestSlot };
 
   const steps: Step[] = [];
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
+  for (const rs of reinvestSlots) {
+    if (rs.date < startBiz || rs.date > endBiz) continue;
+    steps.push({ date: rs.date, kind: 'reinvest', slot: rs });
+  }
 
   // ── 매월 목표 증액(재투자) ──
   // ⚠️ 그 달 **첫 리밸런싱일**에 건다 — 목표를 올려 두면 바로 이어지는 리밸런싱이 실제로 매수한다.
@@ -1430,6 +1728,11 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (config.contribution.mode !== 'none' || contribOvByYm.size > 0) {
       for (const [ym, d] of firstRebalOfYm) steps.push({ date: d, kind: 'contrib', ym });
     }
+    // ⚠️ 기본 증액 규칙은 리밸런싱이 하나도 없으면 **결과·경고 어디에도 흔적 없이 사라진다**
+    //    (예외 규칙만 아래에서 경고했다). 사용자가 설정한 값이 조용히 무시되면 안 된다.
+    if (config.contribution.mode !== 'none' && config.contribution.value > 0 && firstRebalOfYm.size === 0) {
+      warnings.push('리밸런싱이 한 번도 없어 매월 목표 증액이 전혀 집행되지 않습니다(증액은 그 달 첫 리밸런싱 직전에만 걸립니다).');
+    }
     // 집행할 리밸런싱이 없는 달을 겨냥한 예외 규칙은 조용히 버려지므로 알린다.
     for (const o of config.contribOverrides) {
       if (o.mode !== 'none' && o.value > 0 && !firstRebalOfYm.has(o.ym)) {
@@ -1453,7 +1756,12 @@ export function runBacktest(input: BtRunInput): BtResult {
   }
 
   // ⚠️ contrib은 pay 뒤(그날 받은 분배금까지 재원에 포함) · rebal 앞(올린 목표로 바로 매수).
-  const KIND_ORDER: Record<string, number> = { exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4 };
+  // ⚠️ reinvest는 **맨 뒤**다 — 리밸런싱은 '목표 수준 맞추기'이고 재투자는 '그러고도 남은
+  //    분배금 현금을 추가 투입'이라 나중에 와야 의미가 맞는다. 앞에 두면 재투자가 방금 산
+  //    수량을 같은 날 리밸런싱이 되팔아(목표 초과) 매매만 늘고 결과는 그대로가 된다.
+  const KIND_ORDER: Record<string, number> = {
+    exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4, reinvest: 5,
+  };
   steps.sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind],
   );
@@ -1467,8 +1775,8 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (!m) {
       m = {
         ym, trades: [], dividends: [],
-        tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
-        divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
+        tradeNet: 0, structuralNet: 0, reinvestNet: 0, cumTradeNet: 0,
+        divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0, cumReinvestNet: 0,
         cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, cashUsedTrade: 0, cashUsedDiv: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
         lastDate: '', holdings: [], contribution: null, cumContribution: 0,
       };
@@ -1478,10 +1786,14 @@ export function runBacktest(input: BtRunInput): BtResult {
   };
   for (const ym of monthsBetween(startBiz, endBiz)) monthOf(ym);
 
+  // ⚠️ 세 갈래는 상호배타다 — 재투자 매수를 tradeNet에 섞으면 '누적 매매차익'이 재투자 대금
+  //    만큼 마이너스로 부풀어(리밸런싱을 끈 시나리오에서는 매매가 재투자뿐이라 통째로) 지표가
+  //    의미를 잃는다. structural과 같은 이유로 따로 센다.
   const pushTrade = (t: BtTrade) => {
     const m = monthOf(ymOf(t.date));
     m.trades.push(t);
-    if (t.structural) m.structuralNet += t.cashDelta;
+    if (t.reinvest) m.reinvestNet += t.cashDelta;
+    else if (t.structural) m.structuralNet += t.cashDelta;
     else m.tradeNet += t.cashDelta;
     m.evalBeforeSum += t.evalBefore;
   };
@@ -1537,8 +1849,13 @@ export function runBacktest(input: BtRunInput): BtResult {
       const m = monthOf(ymOf(step.date));
       for (const r of rows) {
         m.divPaid += r.amount;
-        applyDividend(r.amount, step.date);
+        applyDividend(r.amount, step.date, r.assetId);
       }
+      continue;
+    }
+
+    if (step.kind === 'reinvest') {
+      for (const t of runReinvest(step.date)) pushTrade(t);
       continue;
     }
 
@@ -1629,14 +1946,17 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (step.kind === 'event') {
       const e = step.event;
       // 1) 제외 종목 전량 매도 (구조 변경)
+      // ⚠️ 이미 비활성이어도 `removed`는 세운다 — '이 이벤트에서 제외하기로 했다'는 사용자
+      //    의사 표시이고, 그래야 이후 리밸런싱·분배금 재투자가 되사지 않는다.
       for (const aid of e.removeAssets) {
         const p = posById.get(aid);
-        if (!p || !p.active) continue;
-        if (p.qty > 0) {
+        if (!p) continue;
+        if (p.active && p.qty > 0) {
           const t = adjustTo(p, e.date, 0, true);
           if (t) pushTrade(t);
         }
         p.active = false;
+        p.removed = true;
       }
       // 2) 새 목표 반영
       for (const t of e.targets) {
@@ -1645,7 +1965,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         if (t.amount !== null) p.targetAmount = t.amount;
         if (t.ratio !== null) p.targetRatio = t.ratio;
       }
-      // 3) 편입
+      // 3) 편입 — 다시 넣으면 제외 표시를 해제한다(같은 이벤트에서 remove→add도 add가 이긴다).
       for (const aid of e.addAssets) {
         const p = posById.get(aid);
         if (!p) continue;
@@ -1654,6 +1974,7 @@ export function runBacktest(input: BtRunInput): BtResult {
           continue;
         }
         p.active = true;
+        p.removed = false;
       }
       // 4) 재원 조달
       if (e.funding === 'reallocate') {
@@ -1694,6 +2015,10 @@ export function runBacktest(input: BtRunInput): BtResult {
       for (const aid of s.assetIds) {
         const p = posById.get(aid);
         if (!p) continue;
+        // ⚠️ 이벤트로 뺀 종목은 슬롯에 남아 있어도 되사지 않는다 — `removeAssets`의 계약이
+        //    '전량 매도 후 비활성화'인데, 다음 리밸런싱이 옛 목표로 다시 사면 제외가 무의미해진다.
+        //    (`!p.active`는 '아직 편입 전'도 포함하므로 그것만으로는 구분할 수 없다.)
+        if (p.removed) continue;
         if (s.rebalDate < p.effectiveStart || s.rebalDate > p.effectiveEnd) continue;
         // 데이터가 생긴 시점부터 자동 편입 — 중간 상장 종목이 첫 리밸런싱에서 들어온다.
         if (!p.active) p.active = true;
@@ -1733,6 +2058,7 @@ export function runBacktest(input: BtRunInput): BtResult {
   let cumDivAccrued = 0;
   let cumDivPaid = 0;
   let cumStructural = 0;
+  let cumReinvest = 0;
   let cumContrib = 0;
   let runCash = config.initialCapital + config.extraCash;
   // 초기 매수 반영
@@ -1749,14 +2075,17 @@ export function runBacktest(input: BtRunInput): BtResult {
     m.dividends.sort((a, b) => (a.exDate < b.exDate ? -1 : a.exDate > b.exDate ? 1 : 0));
     cumTrade += m.tradeNet;
     cumStructural += m.structuralNet;
+    cumReinvest += m.reinvestNet;
     cumDivAccrued += m.divAccrued;
     cumDivPaid += m.divPaid;
     cumContrib += m.contribution ? m.contribution.amount : 0;
     m.cumTradeNet = cumTrade;
+    m.cumReinvestNet = cumReinvest;
     m.cumDivAccrued = cumDivAccrued;
     m.cumDivPaid = cumDivPaid;
     m.cumContribution = cumContrib;
-    m.cashDelta = m.tradeNet + m.structuralNet + m.divPaid;
+    // ⚠️ reinvestNet을 빠뜨리면 runCash가 실제 cash와 갈려 월말 예수금·총자산이 전부 틀어진다.
+    m.cashDelta = m.tradeNet + m.structuralNet + m.reinvestNet + m.divPaid;
     runCash += m.cashDelta;
     m.cashEnd = runCash;
     const lastBiz = onOrBeforeBusinessDay(
@@ -1884,6 +2213,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       profitRate: invested > 0 ? ((finalTotal - invested) / invested) * 100 : 0,
       cumTradeNet: cumTrade,
       cumStructuralNet: cumStructural,
+      cumReinvestNet: cumReinvest,
       cumDivAccrued,
       cumDivPaid,
       cumContribution: cumContrib,

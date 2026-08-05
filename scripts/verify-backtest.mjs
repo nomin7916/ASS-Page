@@ -258,6 +258,7 @@ function normalizeOverride(raw) {
 function makeBtConfig(partial = {}) {
   const ts = 1000;
   const policy = partial.policy, mode = partial.targetMode, base = partial.ratioBase, rounding = partial.rounding;
+  const reinv = partial.divReinvest, divSplit = partial.divReinvestSplit;
   return {
     id: partial.id || generateId(),
     name: asStr(partial.name) || '백테스트',
@@ -268,12 +269,15 @@ function makeBtConfig(partial = {}) {
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
     ratioBase: base === 'total' || base === 'initial' || base === 'totalWithDiv' ? base : 'equity',
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
-    policy: policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' ? policy : 'perCycle',
+    policy: policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none' ? policy : 'perCycle',
     fixedDay: clampInt(asNum(partial.fixedDay, 15), 1, 31),
     exDivOffset: clampInt(asNum(partial.exDivOffset, -1), -10, 0),
     rebalOffset: clampInt(asNum(partial.rebalOffset, -1), -10, 0),
     payOffset: clampInt(asNum(partial.payOffset, 2), 0, 10),
     allowNegativeCash: !!partial.allowNegativeCash,
+    divReinvest: reinv === 'payDate' || reinv === 'mid' || reinv === 'eom' ? reinv : 'hold',
+    divReinvestSplit: divSplit === 'source' || divSplit === 'even' ? divSplit : 'target',
+    compareOn: partial.compareOn !== false,
     contribution: normalizeContribution(partial.contribution),
     contribOverrides: asArr(partial.contribOverrides).slice(0, MAX_BT_CONTRIB_OVERRIDES).map(normalizeContribOverride).filter(Boolean),
     assets: asArr(partial.assets).slice(0, MAX_BT_ASSETS).map((a, i) => makeBtAsset(a, i)),
@@ -298,6 +302,8 @@ function backtestFingerprint(scenarios) {
           s?.targetMode ?? '', s?.ratioBase ?? '', s?.rounding ?? '', s?.policy ?? '',
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
           s?.allowNegativeCash ? 1 : 0,
+          s?.divReinvest ?? '', s?.divReinvestSplit ?? '',
+          s?.compareOn === false ? 0 : 1,
           s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? ''],
       c: asArr(s?.contribOverrides).map((o) => [o?.id ?? '', o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
       a: asArr(s?.assets).map((a) => [
@@ -340,6 +346,7 @@ function resolveAssetRebal(asset, config) {
     case 'allMid': return { mode: 'mid', day: 0, follows: true };
     case 'allEom': return { mode: 'eom', day: 0, follows: true };
     case 'fixedDay': return { mode: 'day', day: clampInt(config.fixedDay, 1, 31), follows: true };
+    case 'none': return { mode: 'none', day: 0, follows: true };
     default: return { mode: asset.payCycle === 'mid' ? 'mid' : 'eom', day: 0, follows: true };
   }
 }
@@ -438,6 +445,34 @@ function buildDividendSlots(config, holidays) {
   return out;
 }
 
+function buildReinvestSlots(config, holidays) {
+  const out = [];
+  const mode = config.divReinvest;
+  if (mode !== 'payDate' && mode !== 'mid' && mode !== 'eom') return out;
+  if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return out;
+  const seen = new Set();
+  const add = (ym, date, label) => {
+    if (!isIsoDate(date)) return;
+    if (date < config.startDate || date > config.endDate) return;
+    if (seen.has(date)) return;
+    seen.add(date);
+    out.push({ ym, date, label });
+  };
+  if (mode === 'payDate') {
+    for (const d of buildDividendSlots(config, holidays)) add(ymOf(d.payDate), d.payDate, 'pay');
+  } else {
+    const cycle = mode === 'mid' ? 'mid' : 'eom';
+    for (const ym of monthsBetween(config.startDate, config.endDate)) {
+      const recordDate = recordDateFor(ym, cycle, holidays);
+      if (!recordDate) continue;
+      const exDate = shiftBusinessDays(recordDate, config.exDivOffset, holidays);
+      add(ym, shiftBusinessDays(exDate, config.rebalOffset, holidays), cycle);
+    }
+  }
+  out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return out;
+}
+
 function joinTradeDividends(trades, dividends) {
   const used = new Set();
   const rows = trades.map((trade) => {
@@ -469,7 +504,7 @@ function runBacktest(input) {
     initialCashAfter: 0, months: [], curve: [], finalHoldings: [],
     summary: { startDate: config.startDate, endDate: config.endDate, initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
-      cumTradeNet: 0, cumStructuralNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0, finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0 },
+      cumTradeNet: 0, cumStructuralNet: 0, cumReinvestNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0, finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0 },
   });
   if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return empty('기간(시작일·종료일)을 선택해 주세요.');
   if (config.startDate > config.endDate) return empty('시작일이 종료일보다 늦습니다.');
@@ -506,7 +541,7 @@ function runBacktest(input) {
     else if (first > startBiz) warnings.push(`${a.name || a.code}: 종가 기록이 ${first}부터 있어 그날부터 편입됩니다.`);
     if (last && last < endBiz) warnings.push(`${a.name || a.code}: 종가 기록이 ${last}에서 끊겨 이후는 마지막 종가로 이월됩니다.`);
     if (gapCount > 0) warnings.push(`${a.name || a.code}: 기간 안에 종가 결측 구간이 ${gapCount}곳 있어 직전 종가로 이월됩니다.`);
-    positions.push({ asset: a, qty: 0, active: false, targetAmount: a.targetAmount, targetRatio: a.targetRatio, effectiveStart, effectiveEnd });
+    positions.push({ asset: a, qty: 0, active: false, removed: false, targetAmount: a.targetAmount, targetRatio: a.targetRatio, effectiveStart, effectiveEnd });
   }
   const posById = new Map(positions.map((p) => [p.asset.id, p]));
   const usable = positions.filter((p) => !!prices[p.asset.code] && seriesRange(prices[p.asset.code]).count > 0);
@@ -522,20 +557,44 @@ function runBacktest(input) {
     bucketLog.push({ date, t: cashTrade, d: cashDiv });
   };
   const drawByYm = new Map();
-  const applyCash = (delta, date) => {
+  const divPocket = new Map();
+  const drainPocket = (x) => {
+    if (!(x > 0)) return;
+    let total = 0;
+    for (const v of divPocket.values()) total += v;
+    if (!(total > 0)) { divPocket.clear(); return; }
+    const keep = Math.max(0, 1 - x / total);
+    if (keep <= 0) { divPocket.clear(); return; }
+    for (const [k, v] of divPocket) divPocket.set(k, v * keep);
+  };
+  const applyCash = (delta, date, prefer = 'trade') => {
     cash += delta;
     if (delta >= 0) { cashTrade += delta; logBuckets(date); return; }
     let need = -delta;
-    const fromTrade = Math.max(0, Math.min(cashTrade, need));
-    cashTrade -= fromTrade;
-    need -= fromTrade;
+    let fromTrade = 0;
     let fromDiv = 0;
-    if (need > 0) {
+    if (prefer === 'div') {
       fromDiv = Math.max(0, Math.min(cashDiv, need));
       cashDiv -= fromDiv;
+      drainPocket(fromDiv);
       need -= fromDiv;
-      if (need > 0) cashTrade -= need;
+      if (need > 0) {
+        fromTrade = Math.max(0, Math.min(cashTrade, need));
+        cashTrade -= fromTrade;
+        need -= fromTrade;
+      }
+    } else {
+      fromTrade = Math.max(0, Math.min(cashTrade, need));
+      cashTrade -= fromTrade;
+      need -= fromTrade;
+      if (need > 0) {
+        fromDiv = Math.max(0, Math.min(cashDiv, need));
+        cashDiv -= fromDiv;
+        drainPocket(fromDiv);
+        need -= fromDiv;
+      }
     }
+    if (need > 0) cashTrade -= need;
     const ym = ymOf(date);
     if (ym) {
       const cur = drawByYm.get(ym);
@@ -544,7 +603,12 @@ function runBacktest(input) {
     }
     logBuckets(date);
   };
-  const applyDividend = (amount, date) => { cash += amount; cashDiv += amount; logBuckets(date); };
+  const applyDividend = (amount, date, assetId) => {
+    cash += amount;
+    cashDiv += amount;
+    if (assetId && amount > 0) divPocket.set(assetId, (divPocket.get(assetId) ?? 0) + amount);
+    logBuckets(date);
+  };
   const totalEvalAt = (date) => {
     let s = 0;
     for (const p of positions) { if (p.qty > QTY_EPS) { const h = priceAt(prices[p.asset.code], date); if (!h.missing) s += p.qty * h.price; } }
@@ -584,7 +648,56 @@ function runBacktest(input) {
     p.qty += qty;
     return { date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name, price: hit.price,
       priceExact: hit.exact, qtyBefore, evalBefore, target, qty, cashDelta,
-      qtyAfter: p.qty, evalAfter: p.qty * hit.price, structural, note };
+      qtyAfter: p.qty, evalAfter: p.qty * hit.price, structural, reinvest: false, note };
+  };
+
+  const buyWithBudget = (p, date, budget) => {
+    if (!(budget > 0)) return null;
+    const hit = priceAt(prices[p.asset.code], date);
+    if (hit.missing || hit.price <= 0) return null;
+    const floorMode = config.rounding === 'exact' ? 'exact' : 'floor';
+    let qty = roundQty(budget / hit.price, floorMode);
+    if (!(qty > 0)) return null;
+    if (!config.allowNegativeCash && qty * hit.price > cash) {
+      qty = roundQty(cash / hit.price, floorMode);
+      if (!(qty > 0)) return null;
+    }
+    const evalBefore = p.qty * hit.price;
+    const cashDelta = -qty * hit.price;
+    applyCash(cashDelta, date, 'div');
+    const qtyBefore = p.qty;
+    p.qty += qty;
+    return { date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name, price: hit.price,
+      priceExact: hit.exact, qtyBefore, evalBefore, target: evalBefore + budget, qty, cashDelta,
+      qtyAfter: p.qty, evalAfter: p.qty * hit.price, structural: false, reinvest: true, note: '' };
+  };
+
+  const runReinvest = (date) => {
+    const done = [];
+    const budget = cashDiv;
+    if (!(budget > 0)) return done;
+    const live = positions.filter(
+      (p) => !p.removed && date >= p.effectiveStart && date <= p.effectiveEnd && !priceAt(prices[p.asset.code], date).missing,
+    );
+    if (!live.length) return done;
+    const weightOf = (p) => {
+      if (config.divReinvestSplit === 'even') return 1;
+      if (config.divReinvestSplit === 'source') return Math.max(0, divPocket.get(p.asset.id) ?? 0);
+      return config.targetMode === 'amount'
+        ? Math.max(0, p.targetAmount ?? 0)
+        : Math.max(0, p.targetRatio ?? 0);
+    };
+    let ws = live.map(weightOf);
+    let totalW = ws.reduce((s, x) => s + x, 0);
+    if (!(totalW > 0)) { ws = live.map(() => 1); totalW = live.length; }
+    for (let i = 0; i < live.length; i++) {
+      if (!(ws[i] > 0)) continue;
+      const t = buyWithBudget(live[i], date, (budget * ws[i]) / totalW);
+      if (!t) continue;
+      live[i].active = true;
+      done.push(t);
+    }
+    return done;
   };
 
   const initialTrades = [];
@@ -605,21 +718,44 @@ function runBacktest(input) {
 
   const slots = buildSlots(config, holidays);
   const divSlots = buildDividendSlots(config, holidays);
+  const reinvestSlots = buildReinvestSlots(config, holidays);
   {
     const slotted = new Set();
     for (const s of slots) for (const id of s.assetIds) slotted.add(id);
+    const reinvestOn = reinvestSlots.length > 0;
+    const sourceSplit = config.divReinvestSplit === 'source';
     for (const p of positions) {
       if (slotted.has(p.asset.id)) continue;
       const nm = p.asset.name || p.asset.code;
       if (p.effectiveStart > startBiz) {
-        warnings.push(`${nm}: 리밸런싱 일정이 없어(‘리밸런싱 안 함’ 또는 지정 날짜 없음) 기간 중간 편입이 실행되지 않습니다 — 매수가 한 번도 일어나지 않습니다.`);
-      } else {
+        warnings.push(
+          !reinvestOn
+            ? `${nm}: 리밸런싱 일정이 없어(‘리밸런싱 안 함’ 또는 지정 날짜 없음) 기간 중간 편입이 실행되지 않습니다 — 매수가 한 번도 일어나지 않습니다.`
+            : sourceSplit
+              ? `${nm}: 리밸런싱 일정이 없고 분배금 배분 기준이 ‘분배금 준 종목(DRIP)’이라 이 종목은 매수되지 않습니다 — 자기 분배 이력이 없으면 배분 몫이 0입니다(배분 기준을 ‘목표 비중’이나 ‘균등’으로 바꾸세요).`
+              : `${nm}: 리밸런싱 일정이 없어 기간 중간 편입은 분배금 재투자 매수 시점에만 일어납니다(재투자할 분배금이 없으면 매수되지 않습니다).`,
+        );
+      } else if (config.policy !== 'none') {
         warnings.push(`${nm}: 리밸런싱 일정이 없어 최초 매수 후 수량이 고정됩니다(의도한 설정이면 무시하세요).`);
       }
+    }
+    const levelTarget = config.targetMode === 'amount'
+      || config.ratioBase === 'initial' || config.ratioBase === 'total';
+    if (reinvestOn && slots.length > 0 && levelTarget) {
+      warnings.push(
+        '목표가 고정 수준인 모드(목표금액 · 분모 “초기 투자금 고정”/“평가액+예수금”)에서는 '
+        + '분배금 재투자로 산 수량을 다음 리밸런싱이 목표에 맞춰 되팝니다 — 재투자 효과가 거의 없고, '
+        + '되판 대금이 ‘누적 매매차익’에 잡혀 실제보다 커 보입니다. '
+        + '재투자를 살리려면 리밸런싱을 끄거나(‘리밸런싱 안 함’) 분모를 “종목 평가액 합계”로 바꾸세요.',
+      );
     }
   }
   const steps = [];
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
+  for (const rs of reinvestSlots) {
+    if (rs.date < startBiz || rs.date > endBiz) continue;
+    steps.push({ date: rs.date, kind: 'reinvest', slot: rs });
+  }
   const contribOvByYm = new Map();
   for (const o of config.contribOverrides) {
     if (contribOvByYm.has(o.ym)) warnings.push(`증액 예외 규칙에 ${o.ym}이(가) 중복 지정돼 마지막 것만 적용됩니다.`);
@@ -640,6 +776,9 @@ function runBacktest(input) {
     if (config.contribution.mode !== 'none' || contribOvByYm.size > 0) {
       for (const [ym, d] of firstRebalOfYm) steps.push({ date: d, kind: 'contrib', ym });
     }
+    if (config.contribution.mode !== 'none' && config.contribution.value > 0 && firstRebalOfYm.size === 0) {
+      warnings.push('리밸런싱이 한 번도 없어 매월 목표 증액이 전혀 집행되지 않습니다(증액은 그 달 첫 리밸런싱 직전에만 걸립니다).');
+    }
     for (const o of config.contribOverrides) {
       if (o.mode !== 'none' && o.value > 0 && !firstRebalOfYm.has(o.ym)) {
         warnings.push(`${o.ym}의 증액 예외 규칙은 그 달에 리밸런싱이 없어 적용되지 않습니다.`);
@@ -656,7 +795,7 @@ function runBacktest(input) {
     if (d < startBiz || d > endBiz) { warnings.push(`이벤트 "${e.label || e.date}"의 날짜가 백테스트 기간 밖이라 무시됩니다.`); continue; }
     steps.push({ date: d, kind: 'event', event: { ...e, date: d } });
   }
-  const KIND_ORDER = { exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4 };
+  const KIND_ORDER = { exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4, reinvest: 5 };
   steps.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind]));
 
   const pendingDiv = new Map();
@@ -664,8 +803,8 @@ function runBacktest(input) {
   const monthOf = (ym) => {
     let m = monthMap.get(ym);
     if (!m) {
-      m = { ym, trades: [], dividends: [], tradeNet: 0, structuralNet: 0, cumTradeNet: 0,
-        divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0,
+      m = { ym, trades: [], dividends: [], tradeNet: 0, structuralNet: 0, reinvestNet: 0, cumTradeNet: 0,
+        divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0, cumReinvestNet: 0,
         cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, cashUsedTrade: 0, cashUsedDiv: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
         lastDate: '', holdings: [], contribution: null, cumContribution: 0 };
       monthMap.set(ym, m);
@@ -676,7 +815,9 @@ function runBacktest(input) {
   const pushTrade = (t) => {
     const m = monthOf(ymOf(t.date));
     m.trades.push(t);
-    if (t.structural) m.structuralNet += t.cashDelta; else m.tradeNet += t.cashDelta;
+    if (t.reinvest) m.reinvestNet += t.cashDelta;
+    else if (t.structural) m.structuralNet += t.cashDelta;
+    else m.tradeNet += t.cashDelta;
     m.evalBeforeSum += t.evalBefore;
   };
 
@@ -711,7 +852,11 @@ function runBacktest(input) {
       if (!rows) continue;
       pendingDiv.delete(`${step.div.ym}|${step.div.cycle}`);
       const m = monthOf(ymOf(step.date));
-      for (const r of rows) { m.divPaid += r.amount; applyDividend(r.amount, step.date); }
+      for (const r of rows) { m.divPaid += r.amount; applyDividend(r.amount, step.date, r.assetId); }
+      continue;
+    }
+    if (step.kind === 'reinvest') {
+      for (const t of runReinvest(step.date)) pushTrade(t);
       continue;
     }
     if (step.kind === 'contrib') {
@@ -771,9 +916,10 @@ function runBacktest(input) {
       const e = step.event;
       for (const aid of e.removeAssets) {
         const p = posById.get(aid);
-        if (!p || !p.active) continue;
-        if (p.qty > 0) { const t = adjustTo(p, e.date, 0, true); if (t) pushTrade(t); }
+        if (!p) continue;
+        if (p.active && p.qty > 0) { const t = adjustTo(p, e.date, 0, true); if (t) pushTrade(t); }
         p.active = false;
+        p.removed = true;
       }
       for (const t of e.targets) {
         const p = posById.get(t.assetId);
@@ -786,6 +932,7 @@ function runBacktest(input) {
         if (!p) continue;
         if (e.date < p.effectiveStart) { warnings.push(`${p.asset.name || p.asset.code}: ${e.date}에는 종가 기록이 없어 ${p.effectiveStart}부터 편입됩니다.`); continue; }
         p.active = true;
+        p.removed = false;
       }
       if (e.funding === 'reallocate') {
         const base = ratioBaseAt(e.date);
@@ -815,6 +962,7 @@ function runBacktest(input) {
       for (const aid of s.assetIds) {
         const p = posById.get(aid);
         if (!p) continue;
+        if (p.removed) continue;
         if (s.rebalDate < p.effectiveStart || s.rebalDate > p.effectiveEnd) continue;
         if (!p.active) p.active = true;
         eligible.push(p);
@@ -834,7 +982,7 @@ function runBacktest(input) {
   }
 
   const months = monthsBetween(startBiz, endBiz).map((ym) => monthOf(ym));
-  let cumTrade = 0, cumDivAccrued = 0, cumDivPaid = 0, cumStructural = 0, cumContrib = 0;
+  let cumTrade = 0, cumDivAccrued = 0, cumDivPaid = 0, cumStructural = 0, cumReinvest = 0, cumContrib = 0;
   let runCash = config.initialCapital + config.extraCash;
   for (const t of initialTrades) runCash += t.cashDelta;
   const runQty = new Map();
@@ -843,11 +991,12 @@ function runBacktest(input) {
   for (const m of months) {
     m.trades.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     m.dividends.sort((a, b) => (a.exDate < b.exDate ? -1 : a.exDate > b.exDate ? 1 : 0));
-    cumTrade += m.tradeNet; cumStructural += m.structuralNet;
+    cumTrade += m.tradeNet; cumStructural += m.structuralNet; cumReinvest += m.reinvestNet;
     cumDivAccrued += m.divAccrued; cumDivPaid += m.divPaid;
     cumContrib += m.contribution ? m.contribution.amount : 0;
-    m.cumTradeNet = cumTrade; m.cumDivAccrued = cumDivAccrued; m.cumDivPaid = cumDivPaid; m.cumContribution = cumContrib;
-    m.cashDelta = m.tradeNet + m.structuralNet + m.divPaid;
+    m.cumTradeNet = cumTrade; m.cumReinvestNet = cumReinvest;
+    m.cumDivAccrued = cumDivAccrued; m.cumDivPaid = cumDivPaid; m.cumContribution = cumContrib;
+    m.cashDelta = m.tradeNet + m.structuralNet + m.reinvestNet + m.divPaid;
     runCash += m.cashDelta;
     m.cashEnd = runCash;
     const lastBiz = onOrBeforeBusinessDay(lastDayOfMonth(m.ym) > endBiz ? endBiz : lastDayOfMonth(m.ym), holidays);
@@ -924,7 +1073,7 @@ function runBacktest(input) {
     summary: { startDate: startBiz, endDate: endBiz, initialCapital: config.initialCapital,
       finalEval, finalCash: cash, finalTotal, profit: finalTotal - invested,
       profitRate: invested > 0 ? ((finalTotal - invested) / invested) * 100 : 0,
-      cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumDivAccrued, cumDivPaid, cumContribution: cumContrib, finalCashTrade: cashTrade, finalCashDiv: cashDiv,
+      cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumReinvestNet: cumReinvest, cumDivAccrued, cumDivPaid, cumContribution: cumContrib, finalCashTrade: cashTrade, finalCashDiv: cashDiv,
       maxDrawdown: maxDd, months: months.length },
   };
 }
@@ -1594,6 +1743,369 @@ console.log('\n── 파트④-h 목표 기준 totalWithDiv / 예수금 두 주
     + ` = ${Math.round(pdf.summary.finalCash).toLocaleString('ko-KR')}`);
 }
 
+console.log('\n── 파트④-i 리밸런싱 안 함 / 분배금 재투자 (#113~#133) ──');
+
+{
+  // 단일 종목 · 종가 고정(10,000, priceAt이 이후로 이월) · 매월 주당 500원 분배.
+  // 재투자 효과만 분리해서 보기 위한 최소 픽스처다(가격이 안 변하므로 평가액 증가 = 수량 증가).
+  const RC = 'RA', RC2 = 'RB';
+  const RPRICES = { [RC]: { '2026-01-02': 10000 }, [RC2]: { '2026-01-02': 10000 } };
+  const RDIVS = { [RC]: {}, [RC2]: {} };
+  for (const mm of ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']) {
+    RDIVS[RC][`2026-${mm}`] = 500;   // RB는 분배 없음 — 'source' 배분 검증용
+  }
+  const mkR = (over = {}) => makeBtConfig({
+    id: 'r', name: 'R', startDate: '2026-01-02', endDate: '2026-11-30',
+    initialCapital: 100000000, targetMode: 'amount', rounding: 'floor', policy: 'none',
+    assets: [{ id: 'r1', code: RC, name: 'R자산', payCycle: 'eom', targetAmount: 100000000 }],
+    ...over,
+  });
+  const runR = (over) => runBacktest({ config: mkR(over), prices: RPRICES, dividends: RDIVS, holidays: KR26 });
+
+  // ── 정규화 / 하위호환 ──
+  const legacy = makeBtConfig({ id: 'x', name: 'x' });
+  ok('#113 레거시(필드 부재)는 hold / target / compareOn=true 로 떨어진다',
+    legacy.divReinvest === 'hold' && legacy.divReinvestSplit === 'target' && legacy.compareOn === true);
+  ok('#113b 손상값도 안전한 기본값으로 폴백한다',
+    makeBtConfig({ divReinvest: 'bogus', divReinvestSplit: 'bogus' }).divReinvest === 'hold'
+      && makeBtConfig({ divReinvestSplit: 'bogus' }).divReinvestSplit === 'target');
+  ok('#113c compareOn은 명시적 false만 제외한다(전체 비교가 빈 화면이 되지 않게)',
+    makeBtConfig({ compareOn: false }).compareOn === false && makeBtConfig({ compareOn: true }).compareOn === true);
+  ok('#113d policy "none"이 정규화에서 보존된다', makeBtConfig({ policy: 'none' }).policy === 'none');
+
+  // ── 전역 '리밸런싱 안 함' ──
+  const holdCfg = mkR();
+  ok('#114 policy "none" — 리밸런싱 슬롯이 하나도 생기지 않는다',
+    buildSlots(holdCfg, HOL).length === 0);
+  const hold = runR();
+  ok('#115 policy "none" — 초기 매수 이후 매매가 한 건도 없다(수량 고정)',
+    hold.ok && hold.initialTrades.length === 1
+      && hold.months.every((m) => m.trades.length === 0)
+      && hold.finalHoldings[0].qty === hold.initialTrades[0].qty);
+  ok('#116 ⚠️ 전역 "리밸런싱 안 함"은 종목마다 "수량 고정" 경고를 쏟지 않는다(진짜 경고가 묻힌다)',
+    !hold.warnings.some((w) => w.includes('최초 매수 후 수량이 고정')));
+  ok('#116b 종목별 지정으로 슬롯이 없는 경우에는 종전대로 경고한다',
+    runBacktest({
+      config: mkR({ policy: 'perCycle', assets: [{ id: 'r1', code: RC, name: 'R자산', payCycle: 'eom', targetAmount: 100000000, rebalMode: 'none' }] }),
+      prices: RPRICES, dividends: RDIVS, holidays: KR26,
+    }).warnings.some((w) => w.includes('최초 매수 후 수량이 고정')));
+
+  // ── buildReinvestSlots ──
+  ok('#117 hold 이면 재투자 슬롯이 없다', buildReinvestSlots(mkR(), HOL).length === 0);
+  const eomSlots = buildReinvestSlots(mkR({ divReinvest: 'eom' }), HOL);
+  const midSlots = buildReinvestSlots(mkR({ divReinvest: 'mid' }), HOL);
+  ok('#118 ⚠️ 월중/월말 재투자일 = 리밸런싱과 같은 날짜 규칙(분배락 직전 영업일)',
+    (() => {
+      const rebalEom = buildSlots(mkR({ policy: 'allEom' }), HOL).map((s) => s.rebalDate);
+      const rebalMid = buildSlots(mkR({ policy: 'allMid' }), HOL).map((s) => s.rebalDate);
+      return JSON.stringify(eomSlots.map((s) => s.date)) === JSON.stringify(rebalEom)
+        && JSON.stringify(midSlots.map((s) => s.date)) === JSON.stringify(rebalMid);
+    })());
+  ok('#119 ⚠️ 재투자 일정은 리밸런싱 정책에 끌려가지 않는다(완전 독립)',
+    JSON.stringify(buildReinvestSlots(mkR({ divReinvest: 'eom', policy: 'allMid' }), HOL))
+      === JSON.stringify(buildReinvestSlots(mkR({ divReinvest: 'eom', policy: 'none' }), HOL)));
+  ok('#120 payDate 재투자일 = 분배 슬롯의 지급일(기간 안, 중복 제거)',
+    (() => {
+      const cfg = mkR({ divReinvest: 'payDate' });
+      const want = Array.from(new Set(
+        buildDividendSlots(cfg, HOL).map((d) => d.payDate)
+          .filter((d) => d >= cfg.startDate && d <= cfg.endDate),
+      )).sort();
+      return JSON.stringify(buildReinvestSlots(cfg, HOL).map((s) => s.date)) === JSON.stringify(want);
+    })());
+
+  // ── 재투자 회계 ──
+  const reEom = runR({ divReinvest: 'eom' });
+  const rePay = runR({ divReinvest: 'payDate' });
+  ok('#121 ⚠️ 재투자 후 분배금 주머니 = 받은 분배금 − 재투자로 쓴 금액 (정확히)',
+    Math.abs(reEom.summary.finalCashDiv - (reEom.summary.cumDivPaid + reEom.summary.cumReinvestNet)) < 1e-6);
+  ok('#122 ⚠️ 무한 재투자 방지 — 재투자 매수 총액은 누적 지급 분배금을 넘지 않는다',
+    -reEom.summary.cumReinvestNet > 0
+      && -reEom.summary.cumReinvestNet <= reEom.summary.cumDivPaid + 1e-6
+      && -rePay.summary.cumReinvestNet <= rePay.summary.cumDivPaid + 1e-6);
+  ok('#123 ⚠️ 재투자 매수는 누적 매매차익에 섞이지 않는다(hold와 동일)',
+    Math.abs(reEom.summary.cumTradeNet - hold.summary.cumTradeNet) < 1e-6
+      && reEom.months.every((m) => m.tradeNet === 0));
+  ok('#123b 재투자 매매는 reinvest 플래그로만 구분되고 structural과 배타다',
+    reEom.months.flatMap((m) => m.trades).every((t) => t.reinvest === true && t.structural === false)
+      && reEom.months.flatMap((m) => m.trades).length > 0);
+  ok('#124 재투자를 켜면 수량·평가액이 실제로 늘어난다(복리 작동)',
+    reEom.summary.finalEval > hold.summary.finalEval
+      && rePay.summary.finalEval > hold.summary.finalEval);
+  // ⚠️ #124b — 고정가 픽스처에서는 payDate와 eom이 **정확히 같은 결과**라 부등호가 항상 참인
+  //    동어반복이 된다(적대적 리뷰 지적). 값이 갈리려면 두 매수 시점 사이에 가격이 움직여야 한다.
+  {
+    const UP = { UPC: {} };
+    // 매수 시점마다 오르는 가격 — 먼저 사는 payDate 가 더 많은 수량을 잡는다.
+    const days = ['2026-01-02', '2026-02-03', '2026-02-24', '2026-03-04', '2026-03-27',
+      '2026-04-02', '2026-04-28', '2026-05-06', '2026-05-27', '2026-06-03', '2026-06-26'];
+    days.forEach((d, i) => { UP.UPC[d] = 10000 + i * 400; });
+    const UPDIV = { UPC: {} };
+    for (const mm of ['01', '02', '03', '04', '05', '06']) UPDIV.UPC[`2026-${mm}`] = 800;
+    const mkUp = (over) => makeBtConfig({
+      id: 'u', name: 'U', startDate: '2026-01-02', endDate: '2026-06-30',
+      initialCapital: 100000000, targetMode: 'amount', rounding: 'floor', policy: 'none',
+      assets: [{ id: 'u1', code: 'UPC', name: '상승주', payCycle: 'eom', targetAmount: 100000000 }],
+      ...over,
+    });
+    const upRun = (over) => runBacktest({ config: mkUp(over), prices: UP, dividends: UPDIV, holidays: KR26 });
+    const upPay = upRun({ divReinvest: 'payDate' });
+    const upEom = upRun({ divReinvest: 'eom' });
+    ok('#124b ⚠️ 상승장에서는 지급일 재투자가 월말 모아 사기보다 **엄격히** 유리하다(동어반복 아님)',
+      upPay.summary.finalEval > upEom.summary.finalEval
+        && upPay.summary.finalTotal > upEom.summary.finalTotal);
+  }
+
+  // ⚠️ #122c~#122e — 재투자 전용 픽스처(mkR)는 targetAmount === initialCapital 이라 초기 매수가
+  //    자본을 전부 쓰고, policy:'none'이라 매도도 없어 **cashTrade가 항상 0**이다. 그래서
+  //    buyWithBudget의 `applyCash(..., 'div')`에서 'div'를 지워도 (매매 주머니가 비어 있어
+  //    어차피 분배금에서 나가므로) 164개 테스트가 전부 통과한다 — 이 기능의 핵심 가드가
+  //    통째로 미검증이었다(적대적 리뷰가 변이 테스트로 입증). 매매 주머니에 잔액이 남는
+  //    픽스처라야 그 변이가 잡힌다.
+  const mkRCash = (over = {}) => makeBtConfig({
+    id: 'rc', name: 'RC', startDate: '2026-01-02', endDate: '2026-11-30',
+    initialCapital: 100000000, targetMode: 'amount', rounding: 'floor', policy: 'none',
+    // 목표를 자본의 60%만 잡아 ₩40,000,000을 **매매 주머니**에 남긴다.
+    assets: [{ id: 'rc1', code: RC, name: 'R자산', payCycle: 'eom', targetAmount: 60000000 }],
+    ...over,
+  });
+  const rcHold = runBacktest({ config: mkRCash(), prices: RPRICES, dividends: RDIVS, holidays: KR26 });
+  const rcEom = runBacktest({ config: mkRCash({ divReinvest: 'eom' }), prices: RPRICES, dividends: RDIVS, holidays: KR26 });
+  ok('#122c 픽스처 전제 — 매매 주머니에 잔액이 실제로 남아 있다(그래야 아래 가드가 의미를 갖는다)',
+    rcHold.initialCashAfter === 40000000 && rcEom.summary.finalCashTrade > 0);
+  // ⚠️ 첫 달의 cashUsedTrade는 **초기 매수**라 0이 아니다 — 그래서 '전 월 0'이 아니라
+  //    '보유만 했을 때와 월별로 동일'로 잰다(재투자가 매매 주머니 사용을 1원도 늘리지 않았는가).
+  ok('#122d ⚠️ 재투자는 매매 주머니를 **1원도 건드리지 않는다**(prefer="div"를 지우면 여기서 깨진다)',
+    Math.abs(rcEom.summary.finalCashTrade - rcHold.summary.finalCashTrade) < 1e-6
+      && rcEom.months.every((m, i) => Math.abs(m.cashUsedTrade - rcHold.months[i].cashUsedTrade) < 1e-6));
+  ok('#122e ⚠️ 매매 주머니가 넉넉해도 재투자 총액은 누적 지급 분배금을 넘지 않는다(무한 재투자 방지)',
+    -rcEom.summary.cumReinvestNet > 0
+      && -rcEom.summary.cumReinvestNet <= rcEom.summary.cumDivPaid + 1e-6
+      && Math.abs(rcEom.summary.finalCashDiv - (rcEom.summary.cumDivPaid + rcEom.summary.cumReinvestNet)) < 1e-6);
+
+  // ⚠️ #125 — 기말 예수금 원천별 분해. 재투자 항이 빠지면 화면 소계가 예수금과 안 맞는다.
+  const idOk2 = (r) => Math.abs(
+    (r.initialCashAfter + r.summary.cumTradeNet + r.summary.cumStructuralNet
+      + r.summary.cumReinvestNet + r.summary.cumDivPaid) - r.summary.finalCash) < 1e-6;
+  ok('#125 ⚠️ 기말 예수금 = 초기잔여 + 매매차익 + 재편 + 재투자매수 + 분배금(지급)',
+    [hold, reEom, rePay, runR({ divReinvest: 'mid' })].every(idOk2));
+  ok('#125b 재투자 항을 빼면 항등식이 실제로 깨진다(항이 필요하다는 증거)',
+    Math.abs((reEom.initialCashAfter + reEom.summary.cumTradeNet + reEom.summary.cumStructuralNet
+      + reEom.summary.cumDivPaid) - reEom.summary.finalCash) > 1);
+  ok('#126 ⚠️ 매매 주머니 + 분배금 주머니 = 예수금 (재투자 켠 상태에서도)',
+    [reEom, rePay].every((r) => r.months.every((m) => Math.abs((m.cashTradeEnd + m.cashDivEnd) - m.cashEnd) < 1e-6)
+      && Math.abs((r.summary.finalCashTrade + r.summary.finalCashDiv) - r.summary.finalCash) < 1e-6));
+  ok('#127 ⚠️ 주머니별 사용액 합 = 그 달 총 매수 대금(재투자 매수 포함)',
+    [reEom, rePay].every((r) => r.months.every((m) => {
+      const buys = m.trades.filter((t) => t.cashDelta < 0).reduce((s, t) => s - t.cashDelta, 0);
+      const init = m === r.months[0]
+        ? r.initialTrades.filter((t) => t.cashDelta < 0).reduce((s, t) => s - t.cashDelta, 0) : 0;
+      return Math.abs((m.cashUsedTrade + m.cashUsedDiv) - (buys + init)) < 1e-6;
+    })));
+  ok('#127b 재투자 매수 대금은 **분배금 주머니**에서 나간다(매매 주머니를 헐지 않는다)',
+    reEom.months.every((m) => m.reinvestNet === 0 || m.cashUsedDiv > 0)
+      && Math.abs(reEom.months.reduce((s, m) => s + m.cashUsedDiv, 0) + reEom.summary.cumReinvestNet) < 1e-6);
+  ok('#127c 월 현금 증감에 재투자가 반영된다(runCash가 실제 cash와 갈리지 않게)',
+    reEom.months.every((m) => Math.abs(m.cashDelta - (m.tradeNet + m.structuralNet + m.reinvestNet + m.divPaid)) < 1e-6)
+      && Math.abs(reEom.months[reEom.months.length - 1].cashEnd - reEom.summary.finalCash) < 1e-6);
+
+  // ── 배분 기준 ──
+  const two = (split) => runBacktest({
+    config: mkR({
+      divReinvest: 'eom', divReinvestSplit: split,
+      assets: [
+        { id: 'r1', code: RC, name: '분배O', payCycle: 'eom', targetAmount: 50000000 },
+        { id: 'r2', code: RC2, name: '분배X', payCycle: 'eom', targetAmount: 50000000 },
+      ],
+    }),
+    prices: RPRICES, dividends: RDIVS, holidays: KR26,
+  });
+  const boughtBy = (r, id) => r.months.flatMap((m) => m.trades).filter((t) => t.reinvest && t.assetId === id)
+    .reduce((s, t) => s + t.qty, 0);
+  const src = two('source'), tgt = two('target'), evn = two('even');
+  ok('#128 ⚠️ split "source" — 분배금을 준 종목만 되산다(DRIP)',
+    boughtBy(src, 'r1') > 0 && boughtBy(src, 'r2') === 0);
+  // ⚠️ #128b — 위 픽스처는 분배 종목이 **1개뿐**이라 'source'가 실제로 출처 비율을 쓰는지
+  //    (그냥 '분배한 종목 전부에 균등'이 아닌지) 구분하지 못한다. 분배액이 다른 두 종목이
+  //    필요하다. r1:800원 / r2:200원 = 4:1 → 재투자 수량도 4:1 이어야 한다.
+  {
+    const D2 = { [RC]: {}, [RC2]: {} };
+    for (const mm of ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11']) {
+      D2[RC][`2026-${mm}`] = 800;
+      D2[RC2][`2026-${mm}`] = 200;
+    }
+    const two2 = runBacktest({
+      config: mkR({
+        divReinvest: 'eom', divReinvestSplit: 'source',
+        assets: [
+          { id: 'r1', code: RC, name: '많이', payCycle: 'eom', targetAmount: 50000000 },
+          { id: 'r2', code: RC2, name: '적게', payCycle: 'eom', targetAmount: 50000000 },
+        ],
+      }),
+      prices: RPRICES, dividends: D2, holidays: KR26,
+    });
+    // 첫 재투자(누적 왜곡 전)만 보면 비율이 정확히 분배액 비율이다.
+    const first = two2.months.flatMap((m) => m.trades).filter((t) => t.reinvest)
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+    const d0 = first.length ? first[0].date : '';
+    const q1 = first.filter((t) => t.date === d0 && t.assetId === 'r1').reduce((s, t) => s + t.qty, 0);
+    const q2 = first.filter((t) => t.date === d0 && t.assetId === 'r2').reduce((s, t) => s + t.qty, 0);
+    ok('#128b ⚠️ split "source"는 출처 **비율**대로 나눈다(분배 800:200 → 수량 4:1, 균등이 아니다)',
+      q1 > 0 && q2 > 0 && Math.abs(q1 / q2 - 4) < 0.05);
+  }
+  ok('#129 split "target" — 목표 비율대로 두 종목에 나눠 산다',
+    boughtBy(tgt, 'r1') > 0 && boughtBy(tgt, 'r2') > 0);
+  ok('#129b split "even" — 두 종목에 균등하게 나눠 산다(같은 가격이면 수량도 같다)',
+    boughtBy(evn, 'r1') > 0 && Math.abs(boughtBy(evn, 'r1') - boughtBy(evn, 'r2')) <= 1);
+  // ⚠️ 가중치가 전부 0이 되는 **실제로 도달 가능한** 경로: split='source'인데 분배금을 준
+  //    종목이 편입 기간에서 빠진 경우. 그 뒤로도 분배는 계속 들어오는데 그 종목은 살 수 없다
+  //    → 폴백이 없으면 분배금이 영원히 현금으로 남아 사용자가 켠 재투자가 조용히 무시된다.
+  const orphanSrc = runBacktest({
+    config: mkR({
+      divReinvest: 'eom', divReinvestSplit: 'source',
+      assets: [
+        { id: 'r1', code: RC, name: '분배O(3월까지)', payCycle: 'eom', targetAmount: 50000000, endDate: '2026-03-31' },
+        { id: 'r2', code: RC2, name: '분배X', payCycle: 'eom', targetAmount: 50000000 },
+      ],
+    }),
+    prices: RPRICES, dividends: RDIVS, holidays: KR26,
+  });
+  ok('#130 ⚠️ 배분 가중치가 전부 0이면 균등으로 폴백한다(분배금이 조용히 사장되지 않게)',
+    -orphanSrc.summary.cumReinvestNet > 0
+      && orphanSrc.months.flatMap((m) => m.trades)
+        .some((t) => t.reinvest && t.assetId === 'r2' && t.date > '2026-04-01'));
+
+  // ── 스텝 순서 ──
+  ok('#131 ⚠️ 같은 날에는 리밸런싱이 먼저, 재투자가 나중이다(목표를 맞춘 뒤 남은 현금 투입)',
+    (() => {
+      const r = runBacktest({
+        config: mkR({ policy: 'allEom', divReinvest: 'eom' }),
+        prices: RPRICES, dividends: RDIVS, holidays: KR26,
+      });
+      const byDate = new Map();
+      for (const m of r.months) for (const t of m.trades) {
+        if (!byDate.has(t.date)) byDate.set(t.date, []);
+        byDate.get(t.date).push(t);
+      }
+      let sawMixed = false;
+      for (const arr of byDate.values()) {
+        if (!arr.some((t) => t.reinvest) || !arr.some((t) => !t.reinvest)) continue;
+        sawMixed = true;
+        if (arr.findIndex((t) => t.reinvest) < arr.map((t) => t.reinvest).lastIndexOf(false)) return false;
+      }
+      return sawMixed;
+    })());
+
+  // ── 지문 / 하위호환 ──
+  const base = makeBtConfig({ id: 'f2', assets: [{ id: 'a', code: 'X', name: 'A', targetAmount: 100 }] });
+  const bump = (patch) => backtestFingerprint([{ ...JSON.parse(JSON.stringify(base)), ...patch }]);
+  ok('#132 ⚠️ 지문이 divReinvest / divReinvestSplit / compareOn 단독 변경을 감지한다',
+    bump({ divReinvest: 'eom' }) !== backtestFingerprint([base])
+      && bump({ divReinvestSplit: 'source' }) !== backtestFingerprint([base])
+      && bump({ compareOn: false }) !== backtestFingerprint([base]));
+  ok('#133 ⚠️ 기존 시나리오는 이 기능 도입으로 1원도 달라지지 않는다(hold 기본값)',
+    (() => {
+      const a = runBacktest({ config: mkPdfConfig(), prices: PRICES, dividends: DIVS, holidays: KR26 });
+      const b = runBacktest({ config: mkPdfConfig({ divReinvest: 'hold', divReinvestSplit: 'target' }), prices: PRICES, dividends: DIVS, holidays: KR26 });
+      return Math.abs(a.summary.finalTotal - b.summary.finalTotal) < 1e-6
+        && a.summary.cumReinvestNet === 0 && b.summary.cumReinvestNet === 0;
+    })());
+
+  // ── 적대적 리뷰 확정 결함 회귀 (#141~#145) ──────────────────────────────
+  // ⚠️ #141~#142 — 이벤트로 뺀 종목이 되살아나던 결함. runReinvest의 live 필터가 p.active를
+  //    보지 않아 재투자가 되샀고, 리밸런싱도 옛 목표로 되사고 있었다(선행 결함). `p.active`로
+  //    거르면 '아직 편입 전'인 중간 상장 종목까지 빠지므로 **removed 플래그**로 구분해야 한다.
+  const mkEvt = (over = {}) => makeBtConfig({
+    id: 'ev', name: 'EV', startDate: '2026-01-02', endDate: '2026-08-31',
+    initialCapital: 100000000, targetMode: 'amount', rounding: 'floor',
+    assets: [
+      { id: 'e1', code: RC, name: '분배O', payCycle: 'eom', targetAmount: 50000000 },
+      { id: 'e2', code: RC2, name: '퇴출대상', payCycle: 'eom', targetAmount: 50000000 },
+    ],
+    // ⚠️ targets를 비워 둔다 — '목표를 0으로 내리지 않고 removeAssets만 지정'이 가장 흔한 사용법이고,
+    //    바로 그 경우가 되살아났다.
+    events: [{ id: 'x1', date: '2026-04-01', label: '퇴출', funding: 'defer', addAssets: [], removeAssets: ['e2'], targets: [] }],
+    ...over,
+  });
+  const evRun = (over) => runBacktest({ config: mkEvt(over), prices: RPRICES, dividends: RDIVS, holidays: KR26 });
+  const heldAfter = (r, id) => {
+    const last = r.months[r.months.length - 1];
+    const h = last.holdings.find((x) => x.assetId === id);
+    return h ? h.qty : 0;
+  };
+  for (const [label, over] of [
+    ['재투자 target', { policy: 'none', divReinvest: 'eom', divReinvestSplit: 'target' }],
+    ['재투자 even', { policy: 'none', divReinvest: 'eom', divReinvestSplit: 'even' }],
+    ['리밸런싱', { policy: 'allEom' }],
+    ['리밸런싱+재투자', { policy: 'allEom', divReinvest: 'eom', divReinvestSplit: 'even' }],
+  ]) {
+    const r = evRun(over);
+    const bought = r.months.flatMap((m) => m.trades).some((t) => t.assetId === 'e2' && t.qty > 0 && t.date > '2026-04-01');
+    ok(`#141 ⚠️ 이벤트로 뺀 종목을 되사지 않는다 — ${label}`, !bought && heldAfter(r, 'e2') === 0);
+  }
+  ok('#142 ⚠️ 그래도 "아직 편입 전"인 중간 상장 종목은 재투자로 편입된다(removed와 active를 혼동하지 않았다)',
+    (() => {
+      const r = runBacktest({
+        config: mkR({
+          divReinvest: 'eom', divReinvestSplit: 'even', endDate: '2026-08-31',
+          assets: [
+            { id: 'n1', code: RC, name: '기존', payCycle: 'eom', targetAmount: 100000000 },
+            { id: 'n2', code: RC2, name: '중간편입', payCycle: 'eom', targetAmount: 0, startDate: '2026-05-01' },
+          ],
+        }),
+        prices: RPRICES, dividends: RDIVS, holidays: KR26,
+      });
+      return r.months.flatMap((m) => m.trades).some((t) => t.assetId === 'n2' && t.reinvest && t.qty > 0);
+    })());
+
+  // ⚠️ #143 — 기본 증액 규칙이 리밸런싱 0회에서 경고 없이 사라지던 결함.
+  ok('#143 ⚠️ 리밸런싱이 없으면 매월 목표 증액이 사라진다는 사실을 경고한다',
+    (() => {
+      const r = runR({ contribution: { mode: 'amount', value: 1000000, split: 'ratio' } });
+      return r.summary.cumContribution === 0
+        && r.warnings.some((w) => w.includes('매월 목표 증액이 전혀 집행되지 않습니다'));
+    })());
+  ok('#143b 리밸런싱이 있으면 그 경고를 띄우지 않는다(거짓 경고 방지)',
+    !runR({ policy: 'allEom', contribution: { mode: 'amount', value: 1000000, split: 'ratio' } })
+      .warnings.some((w) => w.includes('매월 목표 증액이 전혀 집행되지 않습니다')));
+
+  // ⚠️ #144 — 레벨 목표(목표금액 / 분모 initial·total) + 리밸런싱 + 재투자 조합에서는 재투자분이
+  //    되팔려 실효가 없고 되판 대금이 tradeNet만 부풀린다. 조용히 두면 비교 표 순위가 뒤바뀐다.
+  const churnWarn = (r) => r.warnings.some((w) => w.includes('되팝니다'));
+  ok('#144 ⚠️ 레벨 목표 + 리밸런싱 + 재투자 조합을 경고한다(목표금액 / initial / total)',
+    churnWarn(runR({ policy: 'allEom', divReinvest: 'eom' }))
+      && churnWarn(runR({ policy: 'allEom', divReinvest: 'eom', targetMode: 'ratio', ratioBase: 'initial',
+        assets: [{ id: 'r1', code: RC, name: 'R', payCycle: 'eom', targetRatio: 100 }] }))
+      && churnWarn(runR({ policy: 'allEom', divReinvest: 'eom', targetMode: 'ratio', ratioBase: 'total',
+        assets: [{ id: 'r1', code: RC, name: 'R', payCycle: 'eom', targetRatio: 100 }] })));
+  ok('#144b 재투자가 살아 있는 조합(equity 분모 / 리밸런싱 없음)에는 그 경고를 띄우지 않는다',
+    !churnWarn(runR({ policy: 'allEom', divReinvest: 'eom', targetMode: 'ratio', ratioBase: 'equity',
+      assets: [{ id: 'r1', code: RC, name: 'R', payCycle: 'eom', targetRatio: 100 }] }))
+      && !churnWarn(runR({ divReinvest: 'eom' })));
+
+  // ⚠️ #145 — 'source'(DRIP)에서는 자기 분배 이력이 없는 신규 편입 종목이 **영원히** 매수되지
+  //    않는데, 옛 경고는 '분배금이 없으면'이라고만 해서 사실과 달랐다.
+  ok('#145 ⚠️ source 배분에서 신규 편입 종목이 매수되지 않는다는 사실을 정확히 경고한다',
+    (() => {
+      const r = runBacktest({
+        config: mkR({
+          divReinvest: 'eom', divReinvestSplit: 'source', endDate: '2026-08-31',
+          assets: [
+            { id: 's1', code: RC, name: '기존', payCycle: 'eom', targetAmount: 100000000 },
+            { id: 's2', code: RC2, name: '신규', payCycle: 'eom', targetAmount: 0, startDate: '2026-05-01' },
+          ],
+        }),
+        prices: RPRICES, dividends: RDIVS, holidays: KR26,
+      });
+      const bought = r.months.flatMap((m) => m.trades).some((t) => t.assetId === 's2' && t.qty > 0);
+      return !bought && r.warnings.some((w) => w.includes('DRIP') && w.includes('매수되지 않습니다'));
+    })());
+
+  console.log(`      · 재투자 효과(단일종목 고정가 픽스처): 보유만 ${Math.round(hold.summary.finalTotal).toLocaleString('ko-KR')}`
+    + ` / 월말 재투자 ${Math.round(reEom.summary.finalTotal).toLocaleString('ko-KR')}`
+    + ` / 지급일 재투자 ${Math.round(rePay.summary.finalTotal).toLocaleString('ko-KR')}`);
+}
+
 console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');
 
 {
@@ -1677,6 +2189,52 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   ok('#80 ⚠️ CSV도 화면과 같은 dupTraded 규칙을 쓴다',
     /dupTraded \? '' : Math\.round\(m\.evalBeforeSum\)/.test(page)
       && /dupTraded \? '' : Math\.round\(joined\.reduce/.test(page));
+
+  // ── 비교 종합 / 분배금 재투자 렌더 계약 ──
+  // ⚠️ 아래도 미러로 표현할 수 없는 **렌더·배선 계약**이라 소스 텍스트로 단언한다.
+  ok('#134 ⚠️ 요약 카드는 단일 뷰와 비교 블록이 SummaryCards 하나를 공유한다(복제 금지)',
+    /function SummaryCards\(/.test(page)
+      && (page.match(/<SummaryCards\b/g) || []).length >= 2
+      // 단일 뷰가 옛 인라인 카드 배열로 되돌아가지 않았는가
+      && !/\['최종 자산', won\(result\.summary\.finalTotal\)/.test(page));
+  ok('#135 ⚠️ 시나리오 select에 비교 종합 예약 항목이 있다(진입점)',
+    /const COMPARE_ID = '__compare__'/.test(page)
+      && /<option value=\{COMPARE_ID\}>/.test(page)
+      && /activeId === COMPARE_ID\) return;/.test(page));
+  ok('#136 ⚠️ 비교 포함 토글은 id 기준이다(patchActive는 비교 뷰에서 active가 null이라 무동작)',
+    /const toggleCompare = useCallback\(\(id\) => \{[\s\S]{0,240}s\.id === id \? \{ \.\.\.s, compareOn: s\.compareOn === false/.test(page));
+  ok('#137 ⚠️ 기말 예수금 분해와 CSV 모두 재투자 항(cumReinvestNet)을 포함한다(항등식 #125)',
+    /label: '분배금 재투자 매수', value: result\.summary\.cumReinvestNet/.test(page)
+      && /\['분배금 재투자 매수', result\.summary\.cumReinvestNet\]/.test(page));
+  ok('#138 ⚠️ 비교 실행은 compareOn 필터 + 디바운스(runAll)를 거친다(체크마다 10회 재실행 방지)',
+    /setRunAll\(local\), RUN_DEBOUNCE_MS/.test(page)
+      && /runAll[\s\S]{0,120}\.filter\(\(s\) => s\.compareOn !== false\)/.test(page));
+
+  const bt2 = strip(read('src/backtest.ts'));
+  ok('#139 ⚠️ 재투자 매수는 분배금 주머니에서 꺼낸다(prefer="div") — 무한 재투자 방지',
+    /applyCash\(cashDelta, date, 'div'\)/.test(bt2));
+  ok('#140 ⚠️ 재투자 스텝은 KIND_ORDER 맨 뒤(rebal 뒤)에 온다',
+    /exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4, reinvest: 5/.test(bt2));
+
+  // ── 적대적 리뷰 확정 결함의 렌더 계약 가드 ──
+  ok('#146 ⚠️ 시나리오 색 스와치는 인라인 SVG다 — 인쇄 CSS가 background를 죽여 PDF에서 사라지면 안 된다',
+    /function Swatch\(\{ color/.test(page)
+      && /<rect [^>]*fill=\{color\}/.test(page) && /<circle [^>]*fill=\{color\}/.test(page)
+      // 비교 뷰에 인라인 배경 스와치가 남아 있지 않은가(bt-noprint인 좌측 선택 패널은 예외)
+      && (page.match(/style=\{\{ backgroundColor:/g) || []).length <= 1);
+  ok('#147 ⚠️ "매매차익이 모자라" 안내는 재투자 몫을 뺀 나머지가 분배금을 헐었을 때만 뜬다',
+    /const otherFromDiv = Math\.max\(0, m\.cashUsedDiv - reinvBuy\);/.test(page)
+      && /if \(otherFromDiv <= 0\.5\) return null;/.test(page));
+  ok('#148 ⚠️ "증액 효과 없음" 배너 조건은 policy가 아니라 **실제 슬롯 수**를 본다',
+    /result\?\.ok && result\.slots\.length === 0 &&[\s\S]{0,120}매월 목표 증액은/.test(page));
+  ok('#149 ⚠️ 비교 뷰 첫 진입은 디바운스 없이 즉시 계산한다(빈 화면 깜빡임 방지)',
+    /if \(runAll === null\) \{ setRunAll\(local\); return; \}/.test(page));
+
+  ok('#150 ⚠️ removed(이벤트 제외)와 active(아직 편입 전)를 구분한다 — 재투자·리밸런싱 양쪽에서 게이팅',
+    /removed: boolean;/.test(bt2)
+      && /p\.removed = true;/.test(bt2)
+      && /if \(p\.removed\) continue;/.test(bt2)
+      && /p => !p\.removed\s*$/m.test(bt2));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  통과 ${pass} / 실패 ${fail}\n`);
