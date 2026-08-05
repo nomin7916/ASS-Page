@@ -1341,6 +1341,53 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   기존 우회로가 이미 있다. 잠금을 붙이려면 그 select부터 막아야 한다 — 목표금액에만 붙이는 것은
   방어가 아니라 불편만 준다.
 
+**목표금액 라이브 미러 `(₩)` — 목표금액을 현재 평가금에 연동 (⚠️ 회귀 주의)**
+
+목표금액 헤더의 **`(₩)` 버튼**(해외계좌는 `($)`)이 목표비중의 `(%)`와 **같은 3단 사이클**로 돈다:
+`off` →클릭→ `seeded`(현재 평가금을 목표금액에 복사) →클릭→ `on`(라이브 미러 — 목표금액 = 현재
+평가금이라 **매매 수량이 전 행 0**) →클릭→ `off`(그 시점 평가금을 박제하고 해제). "현재 상태에서
+출발해 필요한 종목만 금액을 고친다"가 이 기능의 용도다.
+
+- **저장 2필드**: `settings.targetAmountMirror`(`'off'|'seeded'|'on'`) + 종목별 이탈 플래그
+  `item.targetAmountOverride`. ⚠️ **`resolveTargetSlots`처럼 모드별로 나누지 않는다** — 금액 슬롯은
+  `item.targetAmount` 하나뿐이라 고정/수시변경·적립식 분리가 없다.
+  **영속화**: `settings`는 `portfolioStructureKey`에 통째로 들어가 자동, `targetAmountOverride`는
+  **항목 화이트리스트에 추가 필수**(빠뜨리면 그 필드만 바뀐 세션이 조용히 저장 안 됨).
+- **⚠️ `isAmountMode`를 반드시 함께 본다**(`usePortfolioData`): `isAmtLiveMirror = isAmountMode &&
+  mirror==='on' && !item.targetAmountOverride`. 모드 게이트를 빼면 리밸런싱·적립식에서도
+  `hasTargetAmount`가 전 행 true가 되어 **달력 스냅샷(`buildRebalTargetEntry`)이 '사용자가 지정한
+  목표금액'으로 현재 평가금을 박제**하고, 그 기록을 나중에 복원하면 실제 지정값이 덮인다.
+  판정은 `rebalanceData`가 실어 보내는 `isAmtLiveMirror`를 화면이 그대로 쓴다(손계산 금지 —
+  표시와 수량 계산이 다른 기준을 읽는다).
+- **⚠️ 시드/해제 write는 시세가 확보된 행에만**(`mirrorEvalOf` → `null`이면 금액은 건드리지 않고
+  override만 정리): `qty>0`인데 현재가 0(펀드는 저장 평가금까지 0)인 행에 0을 박으면 **나중에 시세가
+  들어온 순간 '목표 0원 = 전량 매도'** 가 된다. 라이브 미러(`on`) 자체는 매 렌더 재계산이라 안전하고,
+  위험한 것은 **write뿐**이다. 헤더 버튼에도 `(%)`와 같은 `totals.totalEval <= 0` 가드를 둔다.
+- **⚠️ 저장값은 `roundMirrorAmt`로 정리**(원화 1원 / 외화 1센트)하고, 셀 커밋 비교 기준(`prevNorm`)은
+  저장 원시값이 아니라 **화면에 보이던 문자열**(`cleanNum(baseAmtText)`)이다. `formatNumber`가 소수
+  3자리로 반올림하므로 시세 파생 실수를 원시값과 비교하면 **한 글자도 안 치고 탭으로 지나가기만 해도
+  '변경'으로 오판**돼 라이브 미러에서 조용히 이탈한다.
+- **셀 규약**: 미러 추종 행은 `text-emerald-300/80 italic`(비중 미러와 동일) + 지울 값이 없으므로
+  ↺ 리셋 아이콘 숨김. 직접 입력하면 그 종목만 `targetAmountOverride: true`로 **수동 고정**, 비우면
+  `false`로 되돌아 **미러 복귀**(이탈 행은 값이 없어도 ↺를 남겨 복귀 경로를 준다).
+  tfoot 부제는 미러 중이면 `평가금 연동 중 · 수동 N종목`(전 행이 `hasTargetAmount`라 '금액 지정
+  N종목'이 의미를 잃는다).
+- **⚠️ `reportAdminChange`를 재사용하지 말 것** — `onTargetEdited`까지 발화하면 헤더 날짜의 달력
+  기록이 통째로 덮인다. **`onAdminTargetChange()`만 직접** 호출한다(목표금액 셀 커밋과 동일 근거,
+  복원 섹션 INV-2와 같은 이유). 달력 자동기록의 확정 트리거는 '비중 조정' 규약 유지.
+- **⚠️ PIN 게이트를 붙이지 말 것** — 위 ④(목표금액 축 잠금 미적용)와 같은 근거. 셀은 열려 있는데
+  미러만 잠그면 방어가 아니라 불편만 준다. 대신 `amountDisabled`(=목표비중 기준 모드)일 때는
+  회색·no-op으로 잠근다.
+- **⚠️ 복원(`applyRestoredTargets`)은 금액에도 `targetAmountOverride: true`를 함께 쓴다** — 미러가
+  켜져 있으면 복원값이 곧바로 현재 평가금에 덮여 **"복원했는데 화면이 1픽셀도 안 바뀐다"** 가 된다
+  (비중 슬롯의 `overrideField`를 항상 true로 두는 것과 같은 근거). 센티넬 구간(`#verify:restore-apply-*`)
+  안이므로 금지 토큰(`onTargetEdited`·`reportAdminChange`·`updateSettingsForType`·`setCalendarMemos`)을
+  주석에도 넣지 말 것.
+- **알려진 한계(의도)**: `settings`가 같은 accountType 전 계좌 공유라 **미러 상태도 공유**된다
+  ((%) 미러와 동일). 첫 클릭(`seeded`)이 그 계좌의 기존 목표금액을 현재 평가금으로 덮어쓰는 것도
+  (%)와 같고 undo가 없다 — 툴팁이 "클릭 1: 현재 평가금을 목표금액에 복사"로 미리 고지한다.
+  형제 계좌의 항목을 쓰지는 않는다(`setPortfolio`=`patchActive`는 활성 계좌 전용).
+
 **같이 고친 표 결함 3건 (⚠️ 회귀 주의)**
 
 - **하단 요약(투자가능금액·매수 금액·잔액)과 퇴직연금 D/S 바를 표 바깥으로 이동**.

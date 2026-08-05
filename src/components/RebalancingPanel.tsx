@@ -23,6 +23,28 @@ const getAssetClass = (item) => (item.type === 'fund' || item.type === 'savings'
   ? (item.assetClass ?? 'S')
   : (item.assetClass ?? (SAFE_CATEGORIES.includes(item.category) ? 'S' : 'D'));
 
+// ── (₩) 목표금액 라이브 미러가 쓰는 '현재 평가금' ──
+// ⚠️ 시세가 아직 안 들어온 보유분(qty>0인데 현재가 0 · 펀드는 저장 평가금까지 0)은 **null을 돌려
+//    그 행을 건너뛴다** — 0을 목표금액으로 박아 두면 나중에 시세가 들어온 순간 '목표 0원 = 전량 매도'가
+//    되어 사용자가 지시한 적 없는 전량 청산 계획이 조용히 만들어진다. 라이브 미러(on) 자체는 매 렌더
+//    재계산이라 안전하고, 위험한 것은 시드/해제의 **write**뿐이라 여기서만 막으면 된다.
+// ⚠️ 예적금(savings)은 시세·수량이 없어 매매 대상이 아니고 목표금액 셀도 읽기 전용이라 제외한다
+//    (쓰면 화면 어디에도 안 보이는 값만 Drive에 쌓인다). 예수금(deposit) 행도 대상 아님.
+// ⚠️ 해외계좌는 targetAmount도 USD라 환율을 곱하지 않는다(원화 환산 금지 — 환율 시점이 섞인다).
+const mirrorEvalOf = (p) => {
+  if (!p || (p.type !== 'stock' && p.type !== 'fund')) return null;
+  const qty = cleanNum(p.quantity);
+  const price = cleanNum(p.currentPrice);
+  if (p.type === 'fund') {
+    const ev = (qty > 0 && price > 0) ? price * qty : cleanNum(p.evalAmount);
+    return (qty > 0 && !(ev > 0)) ? null : ev;
+  }
+  return (qty > 0 && !(price > 0)) ? null : price * qty;
+};
+// 저장값은 표시 문자열과 왕복(round-trip)이 되도록 정리한다 — 원화 1원 / 외화 1센트.
+// 안 하면 formatNumber(소수 3자리 반올림) 때문에 셀을 탭으로 지나가기만 해도 '변경'으로 오판된다.
+const roundMirrorAmt = (v, isOverseas) => (isOverseas ? Math.round(v * 100) / 100 : Math.round(v));
+
 const RB_COLS = [
   { key: 'category', label: '구분' },
   { key: 'changeRate', label: '등락률' },
@@ -92,6 +114,13 @@ export default function RebalancingPanel({
   // 목표금액 입력 초안 — 목표비중(editingRatio)과 같은 패턴. onChange마다 setPortfolio를 부르면
   // 타건마다 rebalanceData·portfolioStructureKey가 재계산되고 maxAddLink 유지 effect가 재실행된다.
   const [editingTargetAmount, setEditingTargetAmount] = useState({});
+  // 목표금액 셀에 **포커스가 들어온 순간의 표시값** — blur에서 '정말 사용자가 고쳤는가'를 판정한다.
+  // ⚠️ (₩) 라이브 미러 중에는 표시값이 시세를 따라 움직이므로, blur 시점에 재계산된 현재 평가금과
+  //    비교하면 포커스~blur 사이 시세가 한 틱만 움직여도 '변경'으로 오판돼 그 종목이 **한 글자도
+  //    안 쳤는데 조용히 미러에서 이탈**한다(목표비중 셀이 slotVal 원본으로 판정하는 것과 같은 이유).
+  // ⚠️ 초안(editingTargetAmount)과 비교하면 안 된다 — 입력이 초안으로 controlled라 타이핑해도
+  //    blur 값과 초안이 항상 같아져 모든 편집이 무시된다.
+  const amtFocusValRef = useRef({});
   // '추가' 입력 초안 — 상태값(rebalExtraQty)은 반드시 number로 유지하고 타이핑 중 문자열만 여기 담는다.
   // ⚠️ 이게 없으면 '-' 한 글자가 parseInt에서 NaN→0이 되고 controlled value가 즉시 ''로 되돌려
   //    **마이너스 부호를 입력하는 것 자체가 불가능**하다(음수 매도 수량 직접 조절 불가).
@@ -301,8 +330,10 @@ export default function RebalancingPanel({
     setPortfolio(prev => {
       const withRatios = applyRebalTargetRatios(prev, ratioById, { slotField, overrideField });
       if (!hasAmounts) return withRatios;
+      // ⚠️ 금액도 override를 함께 세운다 — (₩) 라이브 미러가 켜져 있으면 복원값이 곧바로 현재
+      //    평가금에 덮여 '복원했는데 화면이 1픽셀도 안 바뀐다'가 된다(비중 슬롯의 overrideField와 같은 근거).
       return withRatios.map(it => (it && it.id != null && Object.prototype.hasOwnProperty.call(amountById, it.id))
-        ? { ...it, targetAmount: amountById[it.id] }
+        ? { ...it, targetAmount: amountById[it.id], targetAmountOverride: true }
         : it);
     });
     if (onAdminTargetChange) onAdminTargetChange();
@@ -1024,17 +1055,90 @@ export default function RebalancingPanel({
                         );
                       })()}
                       {!H('targetAmount') && (
-                        <th className={`py-2 px-3 min-w-[110px] text-center sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap ${isAmountMode ? 'text-emerald-300' : 'text-gray-500'}`}>
+                        <th className={`py-2 px-3 min-w-[140px] text-center sticky top-0 z-20 bg-[#1e293b] relative whitespace-nowrap ${isAmountMode ? 'text-emerald-300' : 'text-gray-500'}`}>
                           {hideStrip('targetAmount')}
                           <div className="flex flex-col items-center gap-1">
                             {/* 목표금액 모드에서는 이 헤더가 목표 날짜·복원 진입점을 갖는다(위 주석 참조) */}
                             {isAmountMode && renderTargetDateBar()}
-                            <div
-                              className="cursor-pointer hover:text-emerald-200 transition-colors"
-                              onClick={() => handleRebalanceSort('effectiveTargetAmount')}
-                              title={isAmountMode ? '종목별 목표 평가금액 — 이 금액으로 수량을 계산합니다 (클릭: 정렬)' : "지금은 목표비중 기준 — 우측 상단 '투자선택'을 '목표금액'으로 바꾸면 적용됩니다"}
-                            >
-                              목표금액{isOverseasHeader && <span className="ml-0.5 text-[9px] text-gray-500 font-normal">($)</span>}{arr('effectiveTargetAmount')}
+                            <div className="flex items-center justify-center gap-1.5">
+                              <div
+                                className="cursor-pointer hover:text-emerald-200 transition-colors"
+                                onClick={() => handleRebalanceSort('effectiveTargetAmount')}
+                                title={isAmountMode ? '종목별 목표 평가금액 — 이 금액으로 수량을 계산합니다 (클릭: 정렬)' : "지금은 목표비중 기준 — 우측 상단 '투자선택'을 '목표금액'으로 바꾸면 적용됩니다"}
+                              >
+                                목표금액{isOverseasHeader && <span className="ml-0.5 text-[9px] text-gray-500 font-normal">($)</span>}{arr('effectiveTargetAmount')}
+                              </div>
+                              {(() => {
+                                // ── (₩) 목표금액 라이브 미러 — 목표비중 (%)와 같은 3단 사이클 ──
+                                //   off → 클릭: seeded (현재 평가금을 목표금액에 복사)
+                                //       → 클릭: on     (라이브 미러 — 목표금액 = 현재 평가금, 매매 0)
+                                //       → 클릭: off    (그 시점 평가금을 박제하고 해제)
+                                // ⚠️ PIN 게이트를 붙이지 말 것 — 목표금액 축은 사용자 결정(2026-08)으로 잠금
+                                //    미적용이고, 셀은 열려 있는데 미러만 잠그면 방어가 아니라 불편만 준다.
+                                // ⚠️ reportAdminChange를 재사용하지 말 것 — onTargetEdited까지 발화하면 헤더
+                                //    날짜의 달력 기록이 통째로 덮인다. 달력 자동기록의 확정 트리거는 '비중
+                                //    조정'이라는 기존 규약을 유지하고, 관리자 공지만 직접 발화한다
+                                //    (목표금액 셀 커밋과 동일 — CLAUDE.md 목표금액 섹션).
+                                const amtMirrorState = settings.targetAmountMirror || 'off';
+                                // 미러 상태 전이는 stock/fund 전 행을 건드리되, **금액 write는 시세가 확보된
+                                // 행에만** 한다(mirrorEvalOf가 null이면 값은 그대로 두고 override만 정리).
+                                const mapStockFund = (fn) => setPortfolio(prev => prev.map(p =>
+                                  (p && (p.type === 'stock' || p.type === 'fund')) ? fn(p) : p));
+                                const cycleAmtMirror = () => {
+                                  if (amtMirrorState === 'off') {
+                                    mapStockFund(p => {
+                                      const ev = mirrorEvalOf(p);
+                                      return ev === null
+                                        ? { ...p, targetAmountOverride: false }
+                                        : { ...p, targetAmount: roundMirrorAmt(ev, isOverseasHeader), targetAmountOverride: false };
+                                    });
+                                    updateSettingsForType({ ...settings, targetAmountMirror: 'seeded' });
+                                  } else if (amtMirrorState === 'seeded') {
+                                    mapStockFund(p => ({ ...p, targetAmountOverride: false }));
+                                    updateSettingsForType({ ...settings, targetAmountMirror: 'on' });
+                                  } else {
+                                    // 해제: 미러를 따르던 행만 그 시점 평가금으로 박제하고, 수동 이탈 행은
+                                    // 사용자가 직접 넣은 금액을 그대로 지킨다((%) 미러 off 분기와 동일).
+                                    mapStockFund(p => {
+                                      if (p.targetAmountOverride) return { ...p, targetAmountOverride: false };
+                                      const ev = mirrorEvalOf(p);
+                                      return ev === null ? p : { ...p, targetAmount: roundMirrorAmt(ev, isOverseasHeader) };
+                                    });
+                                    updateSettingsForType({ ...settings, targetAmountMirror: 'off' });
+                                  }
+                                  // 편집 중이던 셀의 로컬 초안이 남아 있으면 새 값이 화면에 안 보인다.
+                                  setEditingTargetAmount({});
+                                  if (onAdminTargetChange) onAdminTargetChange();
+                                };
+                                const btnColor = amountDisabled
+                                  ? 'text-gray-700 cursor-not-allowed'
+                                  : amtMirrorState === 'on'
+                                    ? 'text-emerald-400 hover:text-emerald-300 drop-shadow-[0_0_4px_rgba(16,185,129,0.6)]'
+                                    : amtMirrorState === 'seeded'
+                                      ? 'text-emerald-300/70 hover:text-emerald-400'
+                                      : 'text-gray-500 hover:text-emerald-400';
+                                const btnTitle = amountDisabled
+                                  ? "투자선택이 목표비중 기준이라 목표금액 미러가 잠겨 있습니다 — 우측 상단 '투자선택'을 '목표금액'으로 바꾸세요"
+                                  : amtMirrorState === 'on'
+                                    ? '라이브 미러 ON — 목표금액이 현재 평가금을 따라갑니다(매매 0). 클릭하여 해제 (현재 평가금 박제)'
+                                    : amtMirrorState === 'seeded'
+                                      ? '시드 완료 — 클릭하여 라이브 미러 시작(평가금 추종)'
+                                      : '클릭 1: 현재 평가금을 목표금액에 복사 | 다음 클릭: 라이브 미러(평가금 추종)';
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      if (amountDisabled) return;
+                                      // 시세가 하나도 안 들어온 상태에서 0을 박제하지 않도록 (%)와 같은 가드.
+                                      if (totals.totalEval <= 0) return;
+                                      cycleAmtMirror();
+                                    }}
+                                    className={`text-[11px] font-bold leading-none transition-colors select-none ${btnColor}`}
+                                    title={btnTitle}
+                                  >{isOverseasHeader ? '($)' : '(₩)'}</button>
+                                );
+                              })()}
                             </div>
                           </div>
                         </th>
@@ -1314,6 +1418,11 @@ export default function RebalancingPanel({
                           //    utils.getRowFocusables가 행 내 '위치 인덱스'로 위/아래 이동을 계산하므로,
                           //    한 행만 포커서블 수가 다르면 그 행부터 세로 이동이 한 칸씩 어긋난다.
                           const hasAmt = !!item.hasTargetAmount;
+                          // (₩) 라이브 미러 추종 행 — 저장값이 아니라 현재 평가금이 목표금액이다(매매 0).
+                          // ⚠️ 판정은 usePortfolioData가 실어 보낸 값을 그대로 쓴다 — 여기서 손으로 다시
+                          //    계산하면 표시와 수량 계산이 다른 기준을 읽을 수 있다.
+                          const isAmtMirror = !!item.isAmtLiveMirror;
+                          const amtMirrorOn = isAmountMode && (settings.targetAmountMirror || 'off') === 'on';
                           const hintAmt = cleanNum(item.targetAmountHint);
                           const effAmt = cleanNum(item.effectiveTargetAmount);
                           const hintText = isOverseas ? (hintAmt ? hintAmt.toFixed(2) : '0') : formatNumber(Math.round(hintAmt));
@@ -1327,20 +1436,39 @@ export default function RebalancingPanel({
                           //    방금 건 전체선택이 풀린다(캐럿 끝으로 이동) → 타이핑이 기존 값 뒤에 이어붙어
                           //    1,000,000에 5를 치면 10000005가 된다. DOM 값 그대로 담아야 재대입이 없다.
                           const draft = editingTargetAmount[item.id];
-                          const displayAmt = draft !== undefined
-                            ? draft
-                            : (hasAmt ? (isOverseas ? String(effAmt) : formatNumber(effAmt)) : '');
+                          // 미러 추종 값은 시세 파생 실수라 표시 자릿수를 정리한다(원화 1원 / 외화 1센트).
+                          const baseAmtText = hasAmt
+                            ? (isAmtMirror
+                              ? (isOverseas ? effAmt.toFixed(2) : formatNumber(Math.round(effAmt)))
+                              : (isOverseas ? String(effAmt) : formatNumber(effAmt)))
+                            : '';
+                          const displayAmt = draft !== undefined ? draft : baseAmtText;
                           // ⚠️ 커밋은 handleUpdate가 아니라 setPortfolio로 한다 — handleUpdate는 cleanNum을
                           //    거쳐 빈칸을 0으로 바꾸므로 '미입력'과 '목표 0원(전량 매도)'을 구분할 수 없다.
                           // ⚠️ 값이 그대로면 아무것도 쓰지 말 것 — 빈 칸을 탭으로 지나가기만 해도
                           //    targetAmount:''가 새로 박혀 지문이 바뀌고 Drive 전량 저장이 도는 데다,
                           //    portfolio 참조가 갈려 표 전체가 재계산된다.
+                          // ⚠️ 비교 기준은 저장 원시값(effAmt)이 아니라 **화면에 보이던 문자열**이다 —
+                          //    formatNumber가 소수 3자리로 반올림하므로, 시세 파생 실수(미러 추종 값)에서
+                          //    원시값과 비교하면 한 글자도 안 치고 탭으로 지나가기만 해도 '변경'으로 오판돼
+                          //    라이브 미러에서 조용히 이탈한다.
                           const commitAmt = (raw) => {
+                            // 1차: 포커스 시점 문자열과 그대로면 사용자가 한 글자도 안 쳤다 → 무조건 no-op.
+                            const focusVal = amtFocusValRef.current[item.id];
+                            delete amtFocusValRef.current[item.id];
+                            if (focusVal !== undefined && String(raw ?? '') === focusVal) return;
                             const trimmed = String(raw ?? '').trim();
                             const next = /\d/.test(trimmed) ? cleanNum(trimmed) : '';
-                            const prevNorm = hasAmt ? effAmt : '';
+                            const prevNorm = hasAmt ? cleanNum(baseAmtText) : '';
                             if (prevNorm === next) return;
-                            setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetAmount: next } : p));
+                            // 라이브 미러 중 직접 입력 = 이 종목만 수동 고정(override). 비우면 미러로 복귀.
+                            setPortfolio(prev => prev.map(p => p.id === item.id
+                              ? {
+                                ...p,
+                                targetAmount: next,
+                                targetAmountOverride: next === '' ? false : (amtMirrorOn ? true : p.targetAmountOverride),
+                              }
+                              : p));
                             // 관리자 접속(impersonation) 중 목표 변경 통지 — 목표금액은 목표비중을 무효화하는
                             // 상위 값이라 비중 편집과 같은 등급으로 알린다(세션당 1회 래치라 추가 비용 0).
                             // ⚠️ reportAdminChange 재사용 금지 — onTargetEdited까지 발화하면 헤더 날짜의
@@ -1354,15 +1482,17 @@ export default function RebalancingPanel({
                                 inputMode="decimal"
                                 data-col="targetAmount"
                                 data-item-id={item.id}
-                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${hasAmt ? 'text-emerald-300' : 'text-gray-400'} ${amountDisabled ? 'opacity-40' : ''}`}
+                                className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${isAmtMirror ? 'text-emerald-300/80 italic' : hasAmt ? 'text-emerald-300' : 'text-gray-400'} ${amountDisabled ? 'opacity-40' : ''}`}
                                 value={displayAmt}
                                 placeholder={hintText}
                                 readOnly={amountDisabled}
                                 title={amountDisabled
                                   ? "투자선택이 목표비중 기준이라 이 열은 비활성입니다 — '투자선택'을 '목표금액'으로 바꾸면 이 금액이 수량을 만듭니다"
-                                  : hasAmt
-                                    ? (isOverseas ? `목표 평가금액 ${formatCurrency(effAmt * usdkrw)} (원화 환산) — 이 행은 목표비중 대신 금액으로 수량을 계산합니다` : '이 행은 목표비중 대신 목표금액으로 수량을 계산합니다')
-                                    : `비어 있으면 목표비중 기준 (참고: 비중대로 매매하면 ${hintText}${isOverseas ? '' : '원'})`}
+                                  : isAmtMirror
+                                    ? '라이브 미러 추종 중 — 목표금액 = 현재 평가금(매매 0). 직접 입력하면 이 종목만 수동 고정'
+                                    : hasAmt
+                                      ? (isOverseas ? `목표 평가금액 ${formatCurrency(effAmt * usdkrw)} (원화 환산) — 이 행은 목표비중 대신 금액으로 수량을 계산합니다` : '이 행은 목표비중 대신 목표금액으로 수량을 계산합니다')
+                                      : `비어 있으면 목표비중 기준 (참고: 비중대로 매매하면 ${hintText}${isOverseas ? '' : '원'})`}
                                 onChange={e => {
                                   if (amountDisabled) return;
                                   const cleaned = e.target.value.replace(/[^0-9.]/g, '');
@@ -1372,6 +1502,7 @@ export default function RebalancingPanel({
                                 }}
                                 onFocus={e => {
                                   if (amountDisabled) { e.target.blur(); return; }
+                                  amtFocusValRef.current[item.id] = e.target.value;
                                   setEditingTargetAmount(prev => ({ ...prev, [item.id]: e.target.value }));
                                   e.target.select();
                                 }}
@@ -1386,7 +1517,9 @@ export default function RebalancingPanel({
                                   handleTableKeyDown(e, 'targetAmount');
                                 }}
                               />
-                              {hasAmt && !amountDisabled && (
+                              {/* 미러 추종 중인 행에는 지울 값이 없다 → 숨긴다. 미러에서 이탈(수동 고정)한
+                                  행은 값이 없어도 버튼을 남겨 라이브 미러로 되돌아갈 길을 준다. */}
+                              {!isAmtMirror && (hasAmt || !!item.targetAmountOverride) && !amountDisabled && (
                                 <button
                                   type="button"
                                   tabIndex={-1}
@@ -1394,11 +1527,13 @@ export default function RebalancingPanel({
                                   onClick={e => {
                                     e.stopPropagation();
                                     setEditingTargetAmount(prev => { const n = { ...prev }; delete n[item.id]; return n; });
-                                    setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetAmount: '' } : p));
+                                    setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetAmount: '', targetAmountOverride: false } : p));
                                     if (onAdminTargetChange) onAdminTargetChange();
                                   }}
                                   className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-gray-500 hover:text-emerald-300 hover:bg-emerald-900/20 transition-all opacity-80 hover:!opacity-100"
-                                  title="목표금액 지우기 — 다시 목표비중 기준으로 계산"
+                                  title={amtMirrorOn && item.targetAmountOverride
+                                    ? '수동 고정됨 — 클릭하여 라이브 미러(현재 평가금)로 복귀'
+                                    : '목표금액 지우기 — 다시 목표비중 기준으로 계산'}
                                 >
                                   <RotateCcw size={11} />
                                 </button>
@@ -1528,6 +1663,12 @@ export default function RebalancingPanel({
                     // 집합을 더하므로 두 합계가 서로 대응한다(예적금 포함, 예수금은 양쪽 다 미포함).
                     const amtSum = rebalanceData.reduce((s, d) => s + cleanNum(d.effectiveTargetAmount), 0);
                     const setCount = rebalanceData.filter(d => d.hasTargetAmount).length;
+                    // (₩) 라이브 미러 중에는 '금액 지정 N종목'이 전 행을 세어 의미가 없다 —
+                    // 무엇을 따라가는 중인지와 수동 고정 행 수를 대신 보여준다.
+                    const amtMirrorLive = isAmountMode && (settings.targetAmountMirror || 'off') === 'on';
+                    const amtOverrideCount = amtMirrorLive
+                      ? rebalanceData.filter(d => !d.isSavings && d.targetAmountOverride).length
+                      : 0;
                     const isOv = activePortfolioAccountType === 'overseas';
                     const fmtAmt = (n) => isOv
                       ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n))
@@ -1536,7 +1677,11 @@ export default function RebalancingPanel({
                       <td className={`py-3 px-3 text-center font-bold ${isAmountMode ? 'text-emerald-300' : 'text-gray-500'}`}>
                         <div>{fmtAmt(amtSum)}</div>
                         <div className="text-[10px] font-normal mt-0.5 text-gray-500">
-                          {!isAmountMode ? '비중 기준 · 미적용' : setCount > 0 ? `금액 지정 ${setCount}종목` : '전부 비중 기준'}
+                          {!isAmountMode
+                            ? '비중 기준 · 미적용'
+                            : amtMirrorLive
+                              ? `평가금 연동 중${amtOverrideCount > 0 ? ` · 수동 ${amtOverrideCount}종목` : ''}`
+                              : setCount > 0 ? `금액 지정 ${setCount}종목` : '전부 비중 기준'}
                         </div>
                       </td>
                     );

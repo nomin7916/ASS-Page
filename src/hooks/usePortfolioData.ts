@@ -89,6 +89,12 @@ export function usePortfolioData({
     //    여기서 손으로 다시 고르면 화면 편집과 계산이 다른 슬롯을 읽어 값이 갈린다.
     const { slotField, overrideField, mirrorField } = resolveTargetSlots(settings);
     const mirrorState = settings[mirrorField] || 'off';
+    // ── 목표금액 라이브 미러 ((%)의 금액판, settings.targetAmountMirror = 'off'|'seeded'|'on') ──
+    // ⚠️ resolveTargetSlots처럼 모드별로 슬롯을 나누지 않는다 — 금액 슬롯은 item.targetAmount 하나뿐이고
+    //    종목별 이탈도 item.targetAmountOverride 하나로 표현한다(비중처럼 고정/수시변경·적립식 분리 없음).
+    // ⚠️ 'on'인 행은 저장값과 무관하게 목표금액 = 현재 평가금 → action이 항상 0(매매 없음)이다.
+    //    라이브 재계산이라 시세 미로드 종목도 안전하다(0을 박제하는 건 시드·해제 write뿐 — RebalancingPanel).
+    const amtMirrorState = settings.targetAmountMirror || 'off';
     let data = portfolio.filter(p => p.type === 'stock' || p.type === 'fund' || p.type === 'savings').map(item => {
       // 예적금(savings): 시세·수량이 없어 리밸런싱 매매 대상이 아님 — 고정 참고 행.
       // 평가금은 savingsEval(단리 누적)로 산출, 평가금 그대로 예상평가금에 이월(매매 0).
@@ -105,7 +111,8 @@ export function usePortfolioData({
         // 목표금액 힌트는 '비중대로 매매했을 때 도달하는 평가금액'인데, 예적금은 매매 자체가 없어
         // 어떤 모드에서도 도달값이 현재 평가금(=expEval 이월)이다. 목표비중을 곱해 보여주면
         // 닿을 수 없는 금액이 Σ목표금액에 섞여 합계가 과대 표시된다.
-        return { ...item, curEval, action: 0, cost: 0, expEval, expRatio, effectiveTargetRatio, returnRate, isSavings: true, hasTargetAmount: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
+        // 예적금은 목표금액 셀 자체가 읽기 전용이고 도달값이 항상 현재 평가금이라 (₩) 미러 대상이 아니다.
+        return { ...item, curEval, action: 0, cost: 0, expEval, expRatio, effectiveTargetRatio, returnRate, isSavings: true, hasTargetAmount: false, isAmtLiveMirror: false, targetAmountHint: curEval, effectiveTargetAmount: curEval };
       }
       const qty = cleanNum(item.quantity);
       const price = cleanNum(item.currentPrice);
@@ -138,11 +145,23 @@ export function usePortfolioData({
       // ⚠️ 타입까지 본다 — String(x).trim() !== '' 만으로는 손상된 Drive 값(true/객체/'abc')이
       //    전부 '입력됨'으로 통과하고 cleanNum이 그걸 0으로 만들어 **조용히 전량 매도**가 된다.
       const rawTargetAmount = item.targetAmount;
-      const hasTargetAmount = typeof rawTargetAmount === 'number'
+      const hasRawTargetAmount = typeof rawTargetAmount === 'number'
         ? Number.isFinite(rawTargetAmount)
         : (typeof rawTargetAmount === 'string' && /\d/.test(rawTargetAmount));
+      // (₩) 라이브 미러 추종 행 — 저장값 대신 현재 평가금이 목표금액이 된다(→ action 0).
+      // ⚠️ 해외계좌는 curEval이 native USD이고 targetAmount도 USD라 환산하지 않는다(원화 환산 금지).
+      // ⚠️ isAmountMode를 반드시 함께 본다 — 금액 축은 '목표금액' 모드 전용이라, 리밸런싱·적립식에서
+      //    미러가 켜진 채로 남아 있어도 그 열이 저장값을 그대로 보여야 한다. 안 그러면 그 모드에서
+      //    hasTargetAmount가 전 행 true가 되어 달력 스냅샷(buildRebalTargetEntry)이 '사용자가 지정한
+      //    목표금액'으로 현재 평가금을 박제하고, 나중에 그 기록을 복원하면 실제 지정값이 덮인다.
+      const isAmtLiveMirror = isAmountMode && amtMirrorState === 'on' && !item.targetAmountOverride;
+      // hasTargetAmount = '이 행의 수량이 비중이 아니라 금액에서 나오는가'. 미러 추종 행도 참이다
+      // (셀 표시·tfoot '금액 지정 N종목'·복원 모달 '목표금액 우선' 배지가 이 의미로 읽는다).
+      const hasTargetAmount = isAmtLiveMirror ? true : hasRawTargetAmount;
       const targetAmountHint = isLevelBase ? overallExp * tRatio : curEval + allocBase * tRatio;
-      const effectiveTargetAmount = hasTargetAmount ? cleanNum(rawTargetAmount) : targetAmountHint;
+      const effectiveTargetAmount = isAmtLiveMirror
+        ? curEval
+        : (hasRawTargetAmount ? cleanNum(rawTargetAmount) : targetAmountHint);
       // ⚠️ 금액 기준은 **투자선택이 '목표금액'일 때만** 적용된다(모드 게이팅). 리밸런싱·적립식에서는
       //    금액이 입력돼 있어도 무시하고 목표비중이 적용된다 — 사용자가 정한 규약이다.
       //    금액 미입력 행은 effectiveTargetAmount가 힌트(=비중대로 도달하는 평가금)라
@@ -156,7 +175,7 @@ export function usePortfolioData({
       const expEval = (qty + action + extraQty) * price;
       const cost = action * price;
       const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
-      return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio, returnRate, hasTargetAmount, targetAmountHint, effectiveTargetAmount };
+      return { ...item, curEval, action, cost, expEval, expRatio, effectiveTargetRatio, returnRate, hasTargetAmount, isAmtLiveMirror, targetAmountHint, effectiveTargetAmount };
     });
     if (rebalanceSortConfig.key === 'code-global') {
       data.sort((a, b) => (a.code || '').localeCompare(b.code || '') * rebalanceSortConfig.direction);
