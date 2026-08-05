@@ -1714,7 +1714,31 @@ export default function RebalancingPanel({
                   {!H('extraQty') && <td className="py-3 px-3"></td>}
                   {!H('maxAdd') && <td className="py-3 px-3"></td>}
                   {!H('expQty') && <td className="py-3 px-3"></td>}
-                  {!H('cost') && <td className="py-3 px-3"></td>}
+                  {/* 실 구매비용 TOTAL = Σ(행별 표시값) = 매도총합 − 매수총합 (계산식 패널 문구와 동일).
+                      ⚠️ 여기서 합을 다시 굴리지 말 것 — headerTotalSell/Buy가 행 셀(displayAdjustedCost)과
+                      똑같이 (action + rebalExtraQty) × 현재가로 만들어지므로, 재계산하면 '추가' 수량이
+                      섞이는 순간 표와 합계가 갈린다. 예적금은 action·현재가가 0이라 자동 제외(행은 '-'). */}
+                  {!H('cost') && (() => {
+                    const totCost = headerTotalSell - headerTotalBuy;
+                    const isOv = activePortfolioAccountType === 'overseas';
+                    const fxRate = marketIndicators.usdkrw || 1;
+                    const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
+                    const fmtAmt = (n) => isOv ? fmtUS(n) : formatCurrency(n);
+                    return (
+                      <td
+                        className={`py-3 px-3 text-center font-bold ${totCost > 0 ? 'text-sky-300' : totCost < 0 ? 'text-red-400' : 'text-gray-500'}`}
+                        title={`매도 ${fmtAmt(headerTotalSell)} − 매수 ${fmtAmt(headerTotalBuy)}`}
+                      >
+                        {isOv ? (
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span>{fmtUS(totCost)}</span>
+                            <span className="text-[11px] opacity-70">{formatCurrency(totCost * fxRate)}</span>
+                          </div>
+                        ) : <div>{formatCurrency(totCost)}</div>}
+                        <div className="text-[10px] font-normal mt-0.5 text-gray-500">매도 − 매수</div>
+                      </td>
+                    );
+                  })()}
                   {!H('expEval') && (() => { const totExpEval = rebalanceData.reduce((s, d) => s + d.expEval, 0); const isOv = activePortfolioAccountType === 'overseas'; const fxRate = marketIndicators.usdkrw || 1; const fmtUS = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n)); return <td className="py-3 px-3 font-bold text-yellow-400 text-center">{isOv ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUS(totExpEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(totExpEval * fxRate)}</span></div> : formatCurrency(totExpEval)}</td>; })()}
                   {!H('expRatio') && <td className="py-3 px-3 text-center font-bold text-yellow-500">100%</td>}
                 </tr>
