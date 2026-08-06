@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom';
 //    특히 `AlertTriangle`은 lucide 0.4x에서 `TriangleAlert`로 개명됐다 → AlertCircle을 쓴다.
 import {
   BarChart3, Plus, Trash2, FileText, ExternalLink, X, Download, RefreshCw,
-  AlertCircle, ChevronDown, ChevronRight, HelpCircle,
+  AlertCircle, ChevronDown, ChevronRight, HelpCircle, PanelLeft, PanelLeftClose,
 } from 'lucide-react';
 import {
   runBacktest, makeBtConfig, makeBtAsset, joinTradeDividends, parsePastedSeries,
@@ -88,6 +88,116 @@ const INPUT = 'bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text
 const LABEL = 'text-[10px] text-gray-500 font-bold';
 const BTN = 'px-2 py-1 rounded text-[11px] font-bold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
 
+/**
+ * 결과 표 셀 규격 — 사용자 요청(2026-08): 칸이 좁고 글씨가 작아 시뮬레이션 내용을 읽기 어렵다.
+ * ⚠️ 키우는 것은 **화면뿐**이다 — 인쇄(A4 가로)는 아래 print CSS가 다시 9px/좁은 여백으로 되돌린다.
+ *    12열짜리 월별 표가 한 장에 들어가야 하기 때문이다(그대로 인쇄하면 열이 잘려 판독 불가).
+ */
+const TBL = 'w-full text-[13px] bt-tbl';
+const TH = 'px-3 py-2 font-bold whitespace-nowrap';
+const TD = 'px-3 py-2.5';
+
+/**
+ * 호버 설명 팝오버.
+ *
+ * ⚠️ 반드시 `position: fixed` + getBoundingClientRect로 좌표를 잡는다 — 설정 패널이
+ *    `overflow-y-auto`인데 CSS는 한 축만 지정해도 **다른 축이 auto로 계산**되므로, 일반
+ *    absolute 툴팁은 패널 안에서 잘려 아예 보이지 않는다.
+ * ⚠️ 스크롤·리사이즈가 나면 좌표가 낡으므로 즉시 닫는다(마우스가 요소 밖으로 나가지 않아
+ *    mouseleave가 안 뜨는 경우가 있다).
+ */
+const POP_CLS = 'fixed z-[1200] rounded-lg border border-gray-600 bg-[#111a2b] shadow-2xl px-3 py-2 leading-relaxed bt-noprint';
+
+function useHoverPop(width = 320) {
+  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  const open = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const w = Math.max(200, Math.min(width, window.innerWidth - 16));
+    const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
+    const below = window.innerHeight - r.bottom;
+    setPos(below >= 220 || below >= r.top
+      ? { left, w, top: r.bottom + 6 }
+      : { left, w, bottom: window.innerHeight - r.top + 6 });
+  }, [width]);
+  const close = useCallback(() => setPos(null), []);
+  useEffect(() => {
+    if (!pos) return;
+    const off = () => setPos(null);
+    window.addEventListener('scroll', off, true);
+    window.addEventListener('resize', off);
+    return () => { window.removeEventListener('scroll', off, true); window.removeEventListener('resize', off); };
+  }, [pos]);
+  return { ref, pos, open, close };
+}
+
+/**
+ * '?' 아이콘 — 호버(또는 키보드 포커스·클릭)에서만 상세 안내를 띄운다.
+ * ⚠️ Section 헤더 안에 놓이므로 헤더 전체를 <button>으로 두면 버튼 중첩(잘못된 DOM)이 된다 —
+ *    Section 헤더는 div + 내부 토글 버튼 구조여야 한다.
+ */
+function Hint({ children, width = 340, className = '', label = '설명 보기' }) {
+  const { ref, pos, open, close } = useHoverPop(width);
+  return (
+    <>
+      {/* ⚠️ 네이티브 title은 달지 않는다 — 1초 뒤 뜨는 브라우저 툴팁이 이 팝오버 위에 겹친다. */}
+      <button
+        ref={ref}
+        type="button"
+        aria-label={label}
+        className={`shrink-0 text-gray-600 hover:text-sky-300 focus:text-sky-300 outline-none bt-noprint ${className}`}
+        onMouseEnter={open}
+        onMouseLeave={close}
+        onFocus={open}
+        onBlur={close}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (pos) close(); else open(); }}
+      >
+        <HelpCircle size={13} />
+      </button>
+      {pos && (
+        <div role="tooltip" className={`${POP_CLS} text-[12px] text-gray-300`}
+          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.w }}>
+          {children}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * 종목 상세 페이지 링크(새 탭).
+ * ⚠️ 코드 규칙은 WatchlistPopup/CompStockChips와 같은 판정을 쓴다 — 숫자로 시작하면 국내,
+ *    영문만이면 해외, MA:는 미래에셋 펀드. 판정이 안 되면 링크 없이 평문으로 둔다.
+ */
+const stockUrl = (code) => {
+  const c = String(code || '').trim();
+  if (!c) return '';
+  if (/^MA:/i.test(c)) return `https://investments.miraeasset.com/magi/fund/view.do?fundGb=2&fundCd=${c.replace(/^MA:/i, '')}`;
+  if (/^\d/.test(c)) return `https://m.stock.naver.com/domestic/stock/${c.toUpperCase()}/total`;
+  if (/^[A-Za-z]+$/.test(c)) return `https://finance.yahoo.com/quote/${c.toUpperCase()}`;
+  return '';
+};
+const openStock = (code) => {
+  const u = stockUrl(code);
+  if (u) window.open(u, '_blank', 'noopener');
+};
+
+function StockLink({ code, name, className = '', showCode = false }) {
+  const url = stockUrl(code);
+  const text = name || code || '-';
+  if (!url) return <span className={className}>{text}{showCode && code ? <span className="ml-1 text-gray-600 font-mono text-[11px]">{code}</span> : null}</span>;
+  return (
+    <button type="button" onClick={() => openStock(code)}
+      title={`${text} 상세 페이지 열기 (새 탭)`}
+      className={`text-left hover:text-sky-300 hover:underline ${className}`}>
+      {text}
+      {showCode && <span className="ml-1 text-gray-600 font-mono text-[11px]">{code}</span>}
+    </button>
+  );
+}
+
 /** 콤마 표시 + 포커스 시 원문 편집. onCommit은 blur/Enter에서만 부른다. */
 function NumInput({ value, onCommit, placeholder = '', disabled = false, className = '', allowEmpty = false }) {
   const [draft, setDraft] = useState(null);
@@ -147,18 +257,30 @@ function DivInput({ value, unknown, disabled, title, onCommit }) {
   );
 }
 
-function Section({ title, children, defaultOpen = true, badge = null }) {
+/**
+ * 접이식 설정 섹션.
+ *
+ * ⚠️ 기본은 **닫힘**이다(사용자 요청 2026-08) — 평소에는 제목 줄만 보이고 필요한 것만 펼친다.
+ *    대신 접힌 상태에서도 무엇으로 설정돼 있는지 알 수 있도록 호출부가 `badge`에 현재 값을
+ *    요약해 넘긴다(안 그러면 '숨은 설정'이 된다).
+ * ⚠️ 헤더는 div + 내부 토글 버튼이다 — 헤더 자체를 <button>으로 두면 `?`(Hint)가 버튼 중첩이 된다.
+ */
+function Section({ title, children, defaultOpen = false, badge = null, hint = null }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border border-gray-800 rounded-lg overflow-hidden bg-gray-900/40">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-1.5 px-2.5 py-1.5 bg-gray-800/60 hover:bg-gray-800 transition-colors"
-      >
-        {open ? <ChevronDown size={12} className="text-gray-500" /> : <ChevronRight size={12} className="text-gray-500" />}
-        <span className="text-[11px] font-bold text-gray-300">{title}</span>
-        {badge !== null && <span className="ml-auto text-[10px] text-gray-500">{badge}</span>}
-      </button>
+      <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-gray-800/60">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex-1 min-w-0 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+          title={open ? '접기' : '펼치기'}
+        >
+          {open ? <ChevronDown size={12} className="text-gray-500 shrink-0" /> : <ChevronRight size={12} className="text-gray-500 shrink-0" />}
+          <span className="text-[12px] font-bold text-gray-300">{title}</span>
+          {badge !== null && <span className="ml-auto pl-2 text-[10px] text-gray-500 truncate">{badge}</span>}
+        </button>
+        {hint && <Hint>{hint}</Hint>}
+      </div>
       {open && <div className="p-2.5 flex flex-col gap-2">{children}</div>}
     </div>
   );
@@ -213,28 +335,127 @@ function Swatch({ color, shape = 'dot', className = '' }) {
 }
 
 /**
+ * 요약 카드 한 장 — 호버하면 '무엇과 무엇을 더한 값인가'를 계산식 + 실제 값으로 보여 준다.
+ * ⚠️ 팝오버는 position:fixed라 그리드 흐름에서 빠진다(그리드 칸을 하나 더 만들지 않는다).
+ */
+function SummaryCard({ label, value, cls, formula, note, compact }) {
+  const { ref, pos, open, close } = useHoverPop(380);
+  return (
+    <>
+      <div
+        ref={ref}
+        tabIndex={0}
+        onMouseEnter={open}
+        onMouseLeave={close}
+        onFocus={open}
+        onBlur={close}
+        className="border border-gray-800 rounded-lg px-3 py-2 bg-gray-900/50 outline-none cursor-help hover:border-gray-600 focus:border-sky-700 transition-colors"
+      >
+        <div className="text-[11px] text-gray-500 flex items-center gap-1">
+          {label}
+          <HelpCircle size={10} className="text-gray-700 shrink-0 bt-noprint" />
+        </div>
+        <div className={`${compact ? 'text-sm' : 'text-lg'} font-bold ${cls}`}>{value}</div>
+      </div>
+      {pos && (
+        <div role="tooltip" className={POP_CLS} style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.w }}>
+          <div className="text-[12px] font-bold text-gray-200 mb-1">{label} — 계산식</div>
+          <table className="w-full text-[12px]">
+            <tbody>
+              {formula.map(([k, v, strong], i) => (
+                <tr key={i} className={strong ? 'border-t border-gray-700' : ''}>
+                  <td className={`py-0.5 pr-3 align-top ${strong ? 'text-gray-200 font-bold' : 'text-gray-500'}`}>{k}</td>
+                  <td className={`py-0.5 text-right whitespace-nowrap align-top ${strong ? 'text-gray-100 font-bold' : 'text-gray-300'}`}>{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {note && <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">{note}</p>}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * 요약 카드 6종.
  * ⚠️ 단일 시나리오 뷰와 비교 종합의 시나리오별 블록이 **이 한 컴포넌트를 공유**한다 —
  *    복제하면 두 화면이 갈라진다(사진1의 카드 구성이 곧 비교 화면의 카드 구성이어야 한다).
+ * ⚠️ 계산식의 각 항은 result/summary의 **같은 필드**를 그대로 읽는다 — 설명에서 값을 다시
+ *    계산하면 카드 숫자와 설명이 갈리는 최악의 상태가 된다.
  */
-function SummaryCards({ summary, compact = false }) {
-  if (!summary) return null;
+function SummaryCards({ result, compact = false }) {
+  const s = result?.summary;
+  if (!s) return null;
+  // 투입 원금 = 초기 투자금 + 추가 예수금. summary.initialCapital은 추가 예수금을 빼고 담으므로
+  // 카드 값(finalTotal·profit)과 어긋나지 않도록 두 값에서 역산한다.
+  const invested = s.finalTotal - s.profit;
+  const initRest = result.initialCashAfter ?? 0;
+  const divPending = s.cumDivAccrued - s.cumDivPaid;
   const cards = [
-    ['최종 자산', won(summary.finalTotal), pnlCls(summary.profit)],
-    ['총 손익', wonSigned(summary.profit), pnlCls(summary.profit)],
-    ['수익률', pctText(summary.profitRate), pnlCls(summary.profit)],
-    ['누적 매매차익', wonSigned(summary.cumTradeNet), pnlCls(summary.cumTradeNet)],
-    ['누적 분배금', won(summary.cumDivAccrued), 'text-emerald-400'],
-    ['기말 예수금', won(summary.finalCash), 'text-gray-200'],
+    {
+      label: '최종 자산', value: won(s.finalTotal), cls: pnlCls(s.profit),
+      formula: [
+        [`기말 평가액 (${s.endDate} 종가 × 보유수량)`, won(s.finalEval)],
+        ['＋ 기말 예수금 (현금)', won(s.finalCash)],
+        ['＝ 최종 자산', won(s.finalTotal), true],
+      ],
+      note: '마지막 영업일 종가로 전 종목을 같은 시점에 평가한 값 + 남은 현금입니다. 아래 "기말 보유 현황" 표의 총자산과 같은 값입니다.',
+    },
+    {
+      label: '총 손익', value: wonSigned(s.profit), cls: pnlCls(s.profit),
+      formula: [
+        ['최종 자산', won(s.finalTotal)],
+        ['− 투입 원금 (초기 투자금 + 추가 예수금)', won(invested)],
+        ['＝ 총 손익', wonSigned(s.profit), true],
+      ],
+      note: '받은 분배금은 예수금으로 들어와 최종 자산에 이미 포함돼 있습니다(따로 더하면 이중 계상). 세금·수수료는 반영하지 않았습니다.',
+    },
+    {
+      label: '수익률', value: pctText(s.profitRate), cls: pnlCls(s.profit),
+      formula: [
+        ['총 손익', wonSigned(s.profit)],
+        ['÷ 투입 원금', won(invested)],
+        ['＝ 수익률', pctText(s.profitRate), true],
+        ['참고 · 최대 낙폭', `${s.maxDrawdown.toFixed(2)}%`],
+      ],
+      note: `${s.startDate} ~ ${s.endDate} (${s.months}개월) 전체 기간의 단순 수익률입니다 — 연환산(CAGR)이 아닙니다.`,
+    },
+    {
+      label: '누적 매매차익', value: wonSigned(s.cumTradeNet), cls: pnlCls(s.cumTradeNet),
+      formula: [
+        ['리밸런싱 매도 − 매수 누계', wonSigned(s.cumTradeNet), true],
+        ['(따로 셈) 종목 재편 순현금', wonSigned(s.cumStructuralNet)],
+        ['(따로 셈) 분배금 재투자 매수', wonSigned(s.cumReinvestNet)],
+      ],
+      note: '정기 리밸런싱으로 판 돈에서 산 돈을 뺀 누계입니다. 종목 재편(회색 행)과 분배금 재투자(초록 행)는 성격이 달라 이 값에 넣지 않고 따로 셉니다.',
+    },
+    {
+      label: '누적 분배금', value: won(s.cumDivAccrued), cls: 'text-emerald-400',
+      formula: [
+        ['분배락 기준 누계 (월별 표의 합계와 같은 기준)', won(s.cumDivAccrued), true],
+        ['이 중 실제 입금 (지급일 기준)', won(s.cumDivPaid)],
+        ['아직 미지급 (지급일이 종료일 이후)', won(divPending)],
+      ],
+      note: '예수금은 실제 지급일에만 늘어납니다. 월말 분배는 다음 달 초에 입금되므로 두 값이 다를 수 있습니다.',
+    },
+    {
+      label: '기말 예수금', value: won(s.finalCash), cls: 'text-gray-200',
+      formula: [
+        ['초기 매수 후 잔여', won(initRest)],
+        ['＋ 누적 매매차익', wonSigned(s.cumTradeNet)],
+        ['＋ 종목 재편 순현금', wonSigned(s.cumStructuralNet)],
+        ['＋ 분배금 재투자 매수', wonSigned(s.cumReinvestNet)],
+        ['＋ 누적 분배금 (지급 기준)', won(s.cumDivPaid)],
+        ['＝ 기말 예수금', won(s.finalCash), true],
+        ['· 매매 몫 / 분배금 몫', `${won(s.finalCashTrade)} / ${won(s.finalCashDiv)}`],
+      ],
+      note: '다섯 항의 합이 정확히 기말 예수금이 됩니다. 매수 대금은 매매 몫을 먼저 쓰고 모자라면 분배금 몫에서 꺼냅니다.',
+    },
   ];
   return (
     <div className={`grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 ${compact ? 'mb-2' : 'mb-3'}`}>
-      {cards.map(([label, val, cls]) => (
-        <div key={label} className="border border-gray-800 rounded-lg px-2.5 py-2 bg-gray-900/50">
-          <div className="text-[10px] text-gray-500">{label}</div>
-          <div className={`${compact ? 'text-xs' : 'text-sm'} font-bold ${cls}`}>{val}</div>
-        </div>
-      ))}
+      {cards.map((c) => <SummaryCard key={c.label} {...c} compact={compact} />)}
     </div>
   );
 }
@@ -362,13 +583,13 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
     if (r.summary.profitRate > bestRate) { bestRate = r.summary.profitRate; bestId = cfg.id; }
   }
 
-  const COL = 'px-2 py-1 text-right whitespace-nowrap';
+  const COL = `${TD} text-right whitespace-nowrap`;
 
   return (
     <>
       <div className="mb-3">
-        <h2 className="text-base font-bold text-gray-100">📊 전체 백테스트 비교 종합</h2>
-        <p className="text-[11px] text-gray-500 mt-0.5">
+        <h2 className="text-lg font-bold text-gray-100">📊 전체 백테스트 비교 종합</h2>
+        <p className="text-[12px] text-gray-500 mt-0.5">
           선택한 {runs.length}개 시나리오 (저장된 시나리오 {total}개)
           {capitalsDiffer && (
             <span className="text-amber-400/90"> · 초기 투자금이 서로 달라 최종 자산 대신 <b>수익률</b>로 비교하세요</span>
@@ -378,18 +599,18 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
 
       {/* ① 비교 표 */}
       <div className="overflow-x-auto border border-gray-800 rounded-lg mb-3 bt-month">
-        <table className="w-full text-[11px] min-w-[900px]">
+        <table className={`${TBL} min-w-[1080px]`}>
           <thead className="bg-gray-800/70 text-gray-400">
             <tr>
-              <th className="px-2 py-1 text-left font-bold">시나리오</th>
-              <th className="px-2 py-1 text-right font-bold">최종 자산</th>
-              <th className="px-2 py-1 text-right font-bold">총 손익</th>
-              <th className="px-2 py-1 text-right font-bold">수익률</th>
-              <th className="px-2 py-1 text-right font-bold">누적 매매차익</th>
-              <th className="px-2 py-1 text-right font-bold">누적 분배금</th>
-              <th className="px-2 py-1 text-right font-bold">분배금 재투자</th>
-              <th className="px-2 py-1 text-right font-bold">기말 예수금</th>
-              <th className="px-2 py-1 text-right font-bold">최대 낙폭</th>
+              <th className={`${TH} text-left`}>시나리오</th>
+              <th className={`${TH} text-right`}>최종 자산</th>
+              <th className={`${TH} text-right`}>총 손익</th>
+              <th className={`${TH} text-right`}>수익률</th>
+              <th className={`${TH} text-right`}>누적 매매차익</th>
+              <th className={`${TH} text-right`}>누적 분배금</th>
+              <th className={`${TH} text-right`}>분배금 재투자</th>
+              <th className={`${TH} text-right`}>기말 예수금</th>
+              <th className={`${TH} text-right`}>최대 낙폭</th>
             </tr>
           </thead>
           <tbody>
@@ -397,24 +618,24 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
               const s = r?.summary;
               return (
                 <tr key={cfg.id} className={`border-t border-gray-800/70 ${cfg.id === bestId ? 'bg-emerald-950/25' : ''}`}>
-                  <td className="px-2 py-1 align-top">
+                  <td className={`${TD} align-top`}>
                     <button
                       className="flex items-start gap-1.5 text-left hover:underline"
                       onClick={() => onOpen(cfg.id)}
                       title="이 시나리오의 상세 결과를 연다"
                     >
-                      <Swatch color={colorOf(cfg.id)} className="mt-1" />
+                      <Swatch color={colorOf(cfg.id)} className="mt-1.5" />
                       <span className="min-w-0">
                         <span className="block text-gray-200 font-bold">
                           {cfg.name}
-                          {cfg.id === bestId && <span className="ml-1 text-[9px] text-emerald-400 font-normal">최고 수익률</span>}
+                          {cfg.id === bestId && <span className="ml-1 text-[10px] text-emerald-400 font-normal">최고 수익률</span>}
                         </span>
-                        <span className="block text-[9px] text-gray-600 leading-tight">{scenarioSubtitle(cfg, s)}</span>
+                        <span className="block text-[10px] text-gray-600 leading-tight">{scenarioSubtitle(cfg, s)}</span>
                       </span>
                     </button>
                   </td>
                   {!r?.ok || !s ? (
-                    <td colSpan={8} className="px-2 py-1 text-amber-300/90 text-[10px]">
+                    <td colSpan={8} className={`${TD} text-amber-300/90 text-[11px]`}>
                       <AlertCircle size={10} className="inline -mt-0.5 mr-1" />
                       {r?.fatal || '실행할 수 없는 설정입니다.'}
                     </td>
@@ -468,27 +689,27 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
         <div key={cfg.id} className="mb-4 bt-month">
           <div className="flex items-center gap-1.5 mb-1">
             <Swatch color={colorOf(cfg.id)} />
-            <h3 className="text-xs font-bold text-gray-200">{cfg.name}</h3>
-            <button className="text-[10px] text-sky-400 hover:underline bt-noprint" onClick={() => onOpen(cfg.id)}>
+            <h3 className="text-sm font-bold text-gray-200">{cfg.name}</h3>
+            <button className="text-[11px] text-sky-400 hover:underline bt-noprint" onClick={() => onOpen(cfg.id)}>
               상세 보기
             </button>
             {r.warnings.length > 0 && (
-              <span className="text-[10px] text-amber-400/90" title={r.warnings.join('\n')}>
-                <AlertCircle size={10} className="inline -mt-0.5" /> 확인 {r.warnings.length}건
+              <span className="text-[11px] text-amber-400/90" title={r.warnings.join('\n')}>
+                <AlertCircle size={11} className="inline -mt-0.5" /> 확인 {r.warnings.length}건
               </span>
             )}
           </div>
-          <p className="text-[10px] text-gray-600 mb-1.5">{scenarioSubtitle(cfg, r.summary)}</p>
-          <SummaryCards summary={r.summary} compact />
+          <p className="text-[11px] text-gray-600 mb-1.5">{scenarioSubtitle(cfg, r.summary)}</p>
+          <SummaryCards result={r} compact />
           <div className="border border-gray-800 rounded-lg p-2 bg-gray-900/40">
             <CurveChart curve={r.curve} />
           </div>
         </div>
       ))}
 
-      <div className="border-t border-gray-800 pt-2 text-[10px] text-gray-600 leading-relaxed">
+      <div className="border-t border-gray-800 pt-2 text-[12px] text-gray-600 leading-relaxed">
         <div className="flex items-start gap-1">
-          <HelpCircle size={11} className="mt-0.5 shrink-0" />
+          <HelpCircle size={12} className="mt-0.5 shrink-0" />
           <div>
             <p>
               모든 값은 각 시나리오 상세 화면의 요약 카드와 <b>같은 계산 결과</b>입니다.
@@ -623,6 +844,8 @@ export default function BacktestPage({
     //    만들어지고 React는 두 번째 결과만 채택해 선택이 어긋난다(FlowBoard 순수성 규약).
     setLocal((prev) => [...prev, base]);
     setActiveId(base.id);
+    // 새 시나리오는 곧바로 설정해야 하므로, 접어 둔 상태였다면 자동으로 펼친다.
+    setSettingsOpen(true);
   };
 
   const removeScenario = (id) => {
@@ -698,6 +921,11 @@ export default function BacktestPage({
     })),
     [compareOk, colorOfScenario],
   );
+
+  // ── 설정 패널 접기 ───────────────────────────────────────────────────────
+  // ⚠️ 세션 로컬 상태다(Drive 저장 지점 0곳) — 저장하려면 chartPrefs 5지점을 모두 손대야 하는데
+  //    이건 '지금 화면을 넓게 볼까'라는 순간 선호도라 그 비용을 치를 값이 아니다.
+  const [settingsOpen, setSettingsOpen] = useState(true);
 
   // ── 종목 추가 ────────────────────────────────────────────────────────────
   const [newCode, setNewCode] = useState('');
@@ -946,6 +1174,11 @@ export default function BacktestPage({
   .bt-shell [class*="text-amber-"]   { color: #b45309 !important; }
   .bt-shell [class*="text-gray-6"], .bt-shell [class*="text-gray-7"] { color: #555 !important; }
   .bt-shell thead th { background: #eee !important; }
+  /* ⚠️ 화면은 크게(13px·넉넉한 행 높이), 인쇄는 종전 밀도로 되돌린다 — 12열짜리 월별 표가
+        A4 가로 한 장에 들어가야 한다. 이 두 줄을 지우면 인쇄본에서 열이 잘려 판독 불가가 된다.
+        값(10px / 3px 6px)은 화면을 키우기 전의 인쇄 밀도(11px / 4px 8px)에 맞춘 것이다. */
+  .bt-shell .bt-tbl { font-size: 10px !important; }
+  .bt-shell .bt-tbl th, .bt-shell .bt-tbl td { padding: 3px 6px !important; }
   .bt-shell table { page-break-inside: auto; width: 100% !important; min-width: 0 !important; }
   .bt-shell tr { page-break-inside: avoid; page-break-after: auto; }
   .bt-shell .bt-month { page-break-inside: avoid; }
@@ -961,7 +1194,7 @@ export default function BacktestPage({
       )}
 
       {/* ── 상단 바 ── */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800 bg-gray-900/70 shrink-0 bt-noprint">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-gray-800 bg-gray-900/70 shrink-0 bt-noprint">
         <BarChart3 size={14} className="text-emerald-400 shrink-0" />
         <span className="text-sm font-bold text-gray-100 shrink-0">백테스트</span>
 
@@ -983,6 +1216,18 @@ export default function BacktestPage({
         </button>
         <button className={`${BTN} text-red-300 border-red-900 hover:bg-red-900/30`} onClick={() => active && removeScenario(active.id)} disabled={readOnly || !active}>
           <Trash2 size={11} className="inline -mt-0.5" /> 삭제
+        </button>
+
+        {/* 설정 패널 접기/펴기 — 좁은 화면(세로 배치)에서는 '위로', 넓은 화면에서는 '왼쪽으로' 접힌다.
+            설정을 끝낸 뒤 시뮬레이션 결과를 넓게 보기 위한 것이라 항상 상단 바에 노출한다. */}
+        <button
+          className={`${BTN} shrink-0 ${settingsOpen ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : 'text-sky-300 border-sky-700 bg-sky-900/30'}`}
+          onClick={() => setSettingsOpen((v) => !v)}
+          title={settingsOpen ? '설정을 접고 결과를 넓게 봅니다' : '설정 패널을 다시 엽니다'}
+        >
+          {settingsOpen
+            ? <><PanelLeftClose size={11} className="inline -mt-0.5" /> 설정 숨기기</>
+            : <><PanelLeft size={11} className="inline -mt-0.5" /> 설정 보기</>}
         </button>
 
         <div className="flex-1" />
@@ -1011,14 +1256,65 @@ export default function BacktestPage({
       </div>
 
       <div className="bt-body flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+        {/* ── 설정 패널 (접혔을 때) ──
+            ⚠️ 완전히 없애지 않고 얇은 띠를 남긴다 — 상단 바 버튼만으로는 "설정이 어디 갔나"가 된다.
+               세로 배치에서는 가로 띠, 가로 배치에서는 왼쪽 세로 띠가 된다. */}
+        {!settingsOpen && (
+          <button
+            onClick={() => setSettingsOpen(true)}
+            title="시뮬레이션 조건 열기"
+            className="shrink-0 w-full lg:w-9 flex lg:flex-col items-center justify-center lg:justify-start gap-1 py-1 lg:py-3 border-b lg:border-b-0 lg:border-r border-gray-800 bg-gray-900/50 hover:bg-gray-800/70 text-gray-400 hover:text-sky-300 transition-colors bt-noprint"
+          >
+            <PanelLeft size={14} />
+            <span className="text-[11px] font-bold lg:hidden">시뮬레이션 조건 열기</span>
+          </button>
+        )}
+
         {/* ── 설정 패널 ── */}
-        <div className="w-full lg:w-[400px] shrink-0 border-b lg:border-b-0 lg:border-r border-gray-800 overflow-y-auto p-2.5 flex flex-col gap-2 bt-noprint max-h-[45vh] lg:max-h-none">
-          {isCompare ? (
-            <Section title="비교할 시나리오 고르기" badge={`${local.filter((s) => s.compareOn !== false).length} / ${local.length}`}>
-              <p className="text-[10px] text-gray-600 leading-relaxed">
-                체크한 시나리오만 오른쪽 비교 표·차트에 들어갑니다. 선택은
-                <b className="text-gray-400"> 시나리오와 함께 저장</b>되어 다음에 열어도 그대로입니다.
+        <div className={`${settingsOpen ? 'flex' : 'hidden'} w-full lg:w-[420px] shrink-0 border-b lg:border-b-0 lg:border-r border-gray-800 flex-col min-h-0 max-h-[60vh] lg:max-h-none bt-noprint`}>
+          {/* 패널 자체 헤더 — 스크롤과 무관하게 항상 '숨기기'에 닿을 수 있어야 한다. */}
+          <div className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 border-b border-gray-800 bg-gray-900/60">
+            <span className="text-[12px] font-bold text-gray-400">시뮬레이션 조건</span>
+            <Hint width={320} label="설정 패널 안내">
+              <p>
+                각 항목은 <b className="text-gray-300">제목 줄을 누르면 펼쳐집니다</b>. 평소에는 접혀 있고,
+                접힌 상태에서도 오른쪽에 현재 설정값이 요약돼 보입니다.
               </p>
+              <p className="mt-1">
+                설정을 마쳤으면 <b className="text-gray-300">숨기기</b>를 눌러 결과를 넓게 보세요
+                (넓은 화면에서는 왼쪽으로, 좁은 화면에서는 위로 접힙니다).
+              </p>
+            </Hint>
+            <div className="flex-1" />
+            <button
+              onClick={() => setSettingsOpen(false)}
+              title="설정을 접고 결과를 넓게 봅니다"
+              className={`${BTN} text-gray-400 border-gray-700 hover:bg-gray-800`}
+            >
+              <PanelLeftClose size={11} className="inline -mt-0.5" /> 숨기기
+            </button>
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto p-2.5 flex flex-col gap-2">
+          {isCompare ? (
+            <Section
+              title="비교할 시나리오 고르기"
+              defaultOpen
+              badge={`${local.filter((s) => s.compareOn !== false).length} / ${local.length}`}
+              hint={(
+                <>
+                  <p>
+                    체크한 시나리오만 오른쪽 비교 표·차트에 들어갑니다. 선택은
+                    <b className="text-gray-300"> 시나리오와 함께 저장</b>되어 다음에 열어도 그대로입니다.
+                  </p>
+                  <p className="mt-1">
+                    설정을 바꾸려면 위 드롭다운에서 그 시나리오를 고르세요. 리밸런싱 없이 분배금만
+                    쌓는 기준선을 만들려면 <b className="text-gray-300">③ 리밸런싱 일정 → 리밸런싱 안 함</b> +
+                    <b className="text-gray-300"> ④ 분배금 처리 → 현금 보유</b>로 두면 됩니다.
+                  </p>
+                </>
+              )}
+            >
               {local.map((s) => {
                 const on = s.compareOn !== false;
                 return (
@@ -1052,11 +1348,6 @@ export default function BacktestPage({
                   전체 해제
                 </button>
               </div>
-              <p className="text-[10px] text-gray-600 leading-relaxed">
-                설정을 바꾸려면 위 드롭다운에서 그 시나리오를 고르세요. 리밸런싱 없이 분배금만
-                쌓는 기준선을 만들려면 <b className="text-gray-400">③ 리밸런싱 일정 → 리밸런싱 안 함</b> +
-                <b className="text-gray-400"> ④ 분배금 처리 → 현금 보유</b>로 두면 됩니다.
-              </p>
             </Section>
           ) : !active ? (
             <div className="text-center text-gray-500 text-xs py-8">
@@ -1064,7 +1355,22 @@ export default function BacktestPage({
             </div>
           ) : (
             <>
-              <Section title="① 기본 설정">
+              <Section
+                title="① 기본 설정"
+                badge={active.startDate && active.endDate ? `${active.startDate} ~ ${active.endDate}` : '기간 미지정'}
+                hint={(
+                  <>
+                    <p>
+                      백테스트를 돌릴 <b className="text-gray-300">기간</b>과 <b className="text-gray-300">투입 원금</b>을 정합니다.
+                      시작일에 초기 투자금 전액으로 목표에 맞춰 매수한 뒤 시뮬레이션이 시작됩니다.
+                    </p>
+                    <p className="mt-1">
+                      1주 단위로 딱 떨어지지 않아 <b className="text-gray-300">남는 잔돈은 자동으로 예수금</b>이 됩니다
+                      (첨부 PDF의 15,000원). '추가 예수금'은 처음부터 현금으로 들고 시작할 금액입니다.
+                    </p>
+                  </>
+                )}
+              >
                 <div className="flex flex-col gap-1">
                   <span className={LABEL}>시나리오 이름</span>
                   <input className={INPUT} value={active.name} disabled={readOnly}
@@ -1094,12 +1400,25 @@ export default function BacktestPage({
                       onCommit={(v) => patchActive({ extraCash: Math.max(0, v) })} />
                   </div>
                 </div>
-                <p className="text-[10px] text-gray-600 leading-relaxed">
-                  초기 매수 후 남는 잔돈은 자동으로 예수금이 됩니다(첨부 PDF의 15,000원).
-                </p>
               </Section>
 
-              <Section title="② 목표 기준">
+              <Section
+                title="② 목표 기준"
+                badge={active.targetMode === 'amount' ? '목표 금액' : `목표 비중 · ${RATIO_BASE_LABEL[active.ratioBase]}`}
+                hint={(
+                  <>
+                    <p>
+                      리밸런싱이 <b className="text-gray-300">무엇에 맞춰 수량을 조정할지</b>를 정합니다.
+                      <b className="text-gray-300"> 목표 금액</b>은 종목마다 "이 금액이 되게" 맞추고,
+                      <b className="text-gray-300"> 목표 비중 %</b>는 아래 분모에 비중을 곱한 금액에 맞춥니다.
+                    </p>
+                    <p className="mt-1">
+                      첨부 PDF와 가장 가까운 것은 <b className="text-gray-300">목표 금액</b> 모드입니다
+                      (2.25억 → 4월부터 1.5억).
+                    </p>
+                  </>
+                )}
+              >
                 <div className="flex gap-1">
                   {[['amount', '목표 금액'], ['ratio', '목표 비중 %']].map(([v, l]) => (
                     <button key={v} disabled={readOnly}
@@ -1109,7 +1428,23 @@ export default function BacktestPage({
                 </div>
                 {active.targetMode === 'ratio' && (
                   <div className="flex flex-col gap-1">
-                    <span className={LABEL}>비중을 곱할 기준(분모)</span>
+                    <div className="flex items-center gap-1">
+                      <span className={LABEL}>비중을 곱할 기준(분모)</span>
+                      <Hint label="분모 설명">
+                        <p><b className="text-gray-300">종목 평가액 합계</b> — 현금을 빼고 종목만 본다. 매도 대금·분배금이 계속 쌓인다.</p>
+                        <p className="mt-1"><b className="text-gray-300">평가액 + 예수금</b> — 쌓인 현금까지 다시 투자에 넣는다.</p>
+                        <p className="mt-1">
+                          <b className="text-gray-300">평가액 + 예수금 + 누적분배금</b> — 평상시엔 평가액 기준으로 돌다가,
+                          평가액이 <b className="text-gray-300">초기 투자금</b>보다 작아지면 그 부족분만큼 보유 현금을 넣어
+                          초기 수준까지 되산다(재원은 예수금 먼저, 모자라면 누적 분배금).
+                        </p>
+                        <p className="mt-1"><b className="text-gray-300">초기 투자금 고정</b> — 목표 금액이 시장과 무관하게 고정된다.</p>
+                        <p className="mt-1 text-gray-500">
+                          ※ 분배금은 지급되는 순간 예수금에 들어오므로, 결과의 예수금 칸은 두 몫을 나눠 표시합니다
+                          (따로 더하면 이중 계상).
+                        </p>
+                      </Hint>
+                    </div>
                     <select className={INPUT} value={active.ratioBase} disabled={readOnly}
                       onChange={(e) => patchActive({ ratioBase: e.target.value })}>
                       <option value="equity">종목 평가액 합계 (현금 제외 — 현금이 계속 쌓임)</option>
@@ -1117,22 +1452,6 @@ export default function BacktestPage({
                       <option value="totalWithDiv">종목 평가액 + 예수금 + 누적분배금 (하락 시 현금 투입)</option>
                       <option value="initial">초기 투자금 고정 (목표금액 불변)</option>
                     </select>
-                    {active.ratioBase === 'totalWithDiv' && (
-                      <p className="text-[10px] text-gray-500 leading-relaxed">
-                        평상시에는 <b className="text-gray-400">종목 평가액</b> 기준으로 돌다가, 평가액이
-                        <b className="text-gray-400"> 초기 투자금</b>보다 작아지면 그 부족분만큼 보유 현금을
-                        넣어 초기 수준까지 되삽니다. 재원은 <b className="text-gray-400">예수금을 먼저</b> 쓰고
-                        모자라면 <b className="text-gray-400">누적 분배금</b>을 씁니다.
-                        <br />
-                        <span className="text-gray-600">
-                          ※ 분배금은 지급되는 순간 예수금에 들어오므로, 결과의 예수금 칸은 두 몫을 나눠 표시합니다
-                          (따로 더하면 이중 계상).
-                        </span>
-                      </p>
-                    )}
-                    <p className="text-[10px] text-gray-600 leading-relaxed">
-                      첨부 PDF와 가장 가까운 것은 <b className="text-gray-400">목표 금액</b> 모드입니다(2.25억 → 4월부터 1.5억).
-                    </p>
                   </div>
                 )}
                 <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`} onClick={splitEven} disabled={readOnly || !active.assets.length}>
@@ -1140,12 +1459,27 @@ export default function BacktestPage({
                 </button>
               </Section>
 
-              <Section title="②-b 매월 목표 증액 (현금 재투자)" defaultOpen={active.contribution.mode !== 'none'}>
-                <p className="text-[10px] text-gray-600 leading-relaxed">
-                  리밸런싱 매도 차익·분배금으로 쌓인 <b className="text-gray-400">예수금</b>을 매월 다시 투자에
-                  넣습니다. 그 달 <b className="text-gray-400">첫 리밸런싱 직전</b>에 종목 목표를 올리면
-                  바로 이어지는 리밸런싱이 실제로 매수합니다.
-                </p>
+              <Section
+                title="②-b 매월 목표 증액 (현금 재투자)"
+                badge={active.contribution.mode === 'none'
+                  ? '증액 없음'
+                  : active.contribution.mode === 'pctOfCash'
+                    ? `예수금의 ${formatNumber(active.contribution.value)}%`
+                    : `매월 ${won(active.contribution.value)}`}
+                hint={(
+                  <>
+                    <p>
+                      리밸런싱 매도 차익·분배금으로 쌓인 <b className="text-gray-300">예수금</b>을 매월 다시 투자에
+                      넣습니다. 그 달 <b className="text-gray-300">첫 리밸런싱 직전</b>에 종목 목표를 올리면
+                      바로 이어지는 리밸런싱이 실제로 매수합니다.
+                    </p>
+                    <p className="mt-1">
+                      증액액은 <b className="text-gray-300">보유 예수금을 넘지 않게</b> 잘립니다(넘기면 곧바로
+                      '예수금 부족'이 되기 때문). 리밸런싱이 없는 달은 건너뜁니다.
+                    </p>
+                  </>
+                )}
+              >
                 <div className="flex flex-col gap-1">
                   <span className={LABEL}>증액 방식</span>
                   {/* ⚠️ 방식을 바꾸면 값을 0으로 되돌린다 — %와 원은 단위가 달라서 값을 남기면
@@ -1183,10 +1517,6 @@ export default function BacktestPage({
                         </select>
                       </div>
                     </div>
-                    <p className="text-[10px] text-gray-600 leading-relaxed">
-                      증액액은 <b className="text-gray-400">보유 예수금을 넘지 않게</b> 잘립니다(넘기면 곧바로
-                      '예수금 부족'이 되기 때문). 리밸런싱이 없는 달은 건너뜁니다.
-                    </p>
                     {active.targetMode === 'ratio' && active.ratioBase !== 'initial' && (
                       <p className="text-[10px] text-amber-400/90 leading-relaxed">
                         ⚠️ 비중 모드에서 분모가 '{RATIO_BASE_LABEL[active.ratioBase]}'이면
@@ -1242,7 +1572,25 @@ export default function BacktestPage({
                 </div>
               </Section>
 
-              <Section title="③ 리밸런싱 일정">
+              <Section
+                title="③ 리밸런싱 일정"
+                badge={POLICY_LABEL[active.policy] || active.policy}
+                hint={(
+                  <>
+                    <p>
+                      <b className="text-gray-300">언제</b> 목표에 맞춰 수량을 조정할지 정합니다. 기본 규칙은
+                      지급기준일(월중 15일 / 월말 말일, 휴장이면 직전 영업일) →
+                      <b className="text-gray-300"> 분배락 = 기준일 −1영업일</b> →
+                      <b className="text-gray-300"> 리밸런싱 = 분배락 −1영업일</b>(분배금을 받을 수 있는 마지막 매수일)입니다.
+                    </p>
+                    <p className="mt-1">
+                      <b className="text-gray-300">종목별</b>은 각 종목이 자기 분배 주기를 따르고,
+                      <b className="text-gray-300"> 일괄</b>은 전 종목을 같은 날 함께 조정합니다.
+                      <b className="text-gray-300"> 리밸런싱 안 함</b>은 초기 매수 후 수량을 그대로 두는 기준선(Buy &amp; Hold)입니다.
+                    </p>
+                  </>
+                )}
+              >
                 <div className="flex flex-col gap-1">
                   <span className={LABEL}>전체 정책</span>
                   <select className={INPUT} value={active.policy} disabled={readOnly}
@@ -1255,22 +1603,25 @@ export default function BacktestPage({
                   </select>
                 </div>
                 {active.policy === 'none' && (
-                  <p className="text-[10px] text-gray-500 leading-relaxed border border-gray-800 rounded bg-gray-900/40 px-2 py-1.5">
-                    초기 매수 후 <b className="text-gray-400">수량을 그대로 둡니다</b>(Buy &amp; Hold).
-                    분배금은 아래 <b className="text-gray-400">④ 분배금 처리</b>가 정하는 대로 쌓이거나 재투자됩니다.
-                    <br />
-                    <span className="text-gray-600">
-                      ※ 종목별로 <b>다르게</b> 지정한 리밸런싱(종목 목록의 '리밸런싱' 칸)은 그대로 실행됩니다 —
-                      전 종목을 멈추려면 그 칸도 모두 '전체 정책 따름'이어야 합니다.
-                      {/* ⚠️ 조건을 policy==='none'으로 두면 양방향으로 거짓말을 한다 — 종목별
-                          rebalMode를 하나라도 지정하면 증액이 정상 집행되는데 '효과 없음'이라 하고,
-                          반대로 policy는 none이 아닌데 전 종목 rebalMode:'none'이면 아무 안내도 없다.
-                          실제 조건은 '리밸런싱 슬롯이 하나도 없다'이므로 결과에서 직접 읽는다. */}
-                      {active.contribution.mode !== 'none' && result?.ok && result.slots.length === 0 && (
-                        <><br />※ 매월 목표 증액은 <b className="text-amber-400/90">리밸런싱이 있는 달에만</b> 집행되므로 이 설정에서는 효과가 없습니다.</>
-                      )}
-                    </span>
-                  </p>
+                  <div className="text-[11px] text-gray-500 leading-relaxed border border-gray-800 rounded bg-gray-900/40 px-2 py-1.5">
+                    <div className="flex items-start gap-1">
+                      <span className="flex-1">초기 매수 후 <b className="text-gray-400">수량을 그대로 둡니다</b>(Buy &amp; Hold).</span>
+                      <Hint label="리밸런싱 안 함 설명">
+                        <p>분배금은 <b className="text-gray-300">④ 분배금 처리</b>가 정하는 대로 쌓이거나 재투자됩니다.</p>
+                        <p className="mt-1">
+                          ※ 종목별로 <b className="text-gray-300">다르게</b> 지정한 리밸런싱(종목 목록의 '리밸런싱' 칸)은
+                          그대로 실행됩니다 — 전 종목을 멈추려면 그 칸도 모두 '전체 정책 따름'이어야 합니다.
+                        </p>
+                      </Hint>
+                    </div>
+                    {/* ⚠️ 조건을 policy==='none'으로 두면 양방향으로 거짓말을 한다 — 종목별
+                        rebalMode를 하나라도 지정하면 증액이 정상 집행되는데 '효과 없음'이라 하고,
+                        반대로 policy는 none이 아닌데 전 종목 rebalMode:'none'이면 아무 안내도 없다.
+                        실제 조건은 '리밸런싱 슬롯이 하나도 없다'이므로 결과에서 직접 읽는다. */}
+                    {active.contribution.mode !== 'none' && result?.ok && result.slots.length === 0 && (
+                      <div className="mt-1 text-amber-400/90">※ 매월 목표 증액은 <b>리밸런싱이 있는 달에만</b> 집행되므로 이 설정에서는 효과가 없습니다.</div>
+                    )}
+                  </div>
                 )}
                 {active.policy === 'fixedDay' && (
                   <div className="flex items-center gap-2">
@@ -1281,7 +1632,17 @@ export default function BacktestPage({
                   </div>
                 )}
 
-                <Section title="분배 일정 오프셋 (고급)" defaultOpen={false}>
+                <Section
+                  title="분배 일정 오프셋 (고급)"
+                  badge={`${active.exDivOffset} · ${active.rebalOffset} · +${active.payOffset}`}
+                  hint={(
+                    <p>
+                      기준일 = 월중 15일 / 월말 말일(휴장이면 직전 영업일). 기본값 −1·−1·+2는 첨부 PDF의
+                      리밸런싱일 14개 중 12개를 정확히 재현합니다(나머지 2개는 PDF가 일요일을 쓴 오류).
+                      단위는 <b className="text-gray-300">영업일</b>입니다.
+                    </p>
+                  )}
+                >
                   <div className="grid grid-cols-3 gap-2">
                     <div className="flex flex-col gap-1">
                       <span className={LABEL}>분배락 (기준일 대비)</span>
@@ -1299,11 +1660,6 @@ export default function BacktestPage({
                         onCommit={(v) => patchActive({ payOffset: Math.min(10, Math.max(0, Math.round(v))) })} />
                     </div>
                   </div>
-                  <p className="text-[10px] text-gray-600 leading-relaxed">
-                    기준일 = 월중 15일 / 월말 말일(휴장이면 직전 영업일). 기본값 −1·−1·+2는 첨부 PDF의
-                    리밸런싱일 14개 중 12개를 정확히 재현합니다(나머지 2개는 PDF가 일요일을 쓴 오류).
-                    단위는 <b className="text-gray-400">영업일</b>입니다.
-                  </p>
                 </Section>
 
                 {/* 월별 오버라이드 */}
@@ -1311,6 +1667,16 @@ export default function BacktestPage({
                   <div className="flex items-center gap-1">
                     <span className={LABEL}>특정 월만 다른 날짜에</span>
                     <span className="text-[10px] text-gray-600">({active.overrides.length})</span>
+                    <Hint label="월별 예외 설명">
+                      <p>
+                        ⚠️ 오버라이드는 <b className="text-gray-300">리밸런싱일만</b> 옮깁니다. 분배락·지급일은
+                        시장이 정하는 값이라 그대로입니다.
+                      </p>
+                      <p className="mt-1">
+                        <b className="text-gray-300">일괄</b> 항목은 '전역 정책 따름' 종목에만 적용되고,
+                        종목별 일정을 따로 지정한 종목은 <b className="text-gray-300">○○만</b> 항목으로 옮깁니다.
+                      </p>
+                    </Hint>
                     <button className={`${BTN} ml-auto text-gray-300 border-gray-700 hover:bg-gray-800`}
                       disabled={readOnly || !active.startDate || active.overrides.length >= MAX_BT_OVERRIDES}
                       onClick={() => {
@@ -1358,17 +1724,32 @@ export default function BacktestPage({
                       </button>
                     </div>
                   ))}
-                  <p className="text-[10px] text-gray-600 leading-relaxed">
-                    ⚠️ 오버라이드는 <b className="text-gray-400">리밸런싱일만</b> 옮깁니다. 분배락·지급일은
-                    시장이 정하는 값이라 그대로입니다. <b className="text-gray-400">일괄</b> 항목은
-                    '전역 정책 따름' 종목에만 적용되고, 종목별 일정을 따로 지정한 종목은
-                    <b className="text-gray-400"> ○○만</b> 항목으로 옮깁니다.
-                  </p>
                 </div>
               </Section>
 
-              <Section title="④ 분배금 처리" defaultOpen={active.divReinvest !== 'hold'}
-                badge={DIV_REINVEST_LABEL[active.divReinvest]}>
+              <Section
+                title="④ 분배금 처리"
+                badge={DIV_REINVEST_LABEL[active.divReinvest]
+                  + (active.divReinvest !== 'hold' ? ` · ${DIV_SPLIT_LABEL[active.divReinvestSplit] || ''}` : '')}
+                hint={(
+                  <>
+                    <p>
+                      지급받은 분배금을 <b className="text-gray-300">현금으로 둘지, 다시 매수할지</b> 정합니다.
+                      현금으로 두면 리밸런싱 매수 재원으로만 쓰이고, 리밸런싱까지 끄면 현금이 그대로 쌓이는
+                      기준선(Buy &amp; Hold)이 됩니다.
+                    </p>
+                    <p className="mt-1">
+                      <b className="text-gray-300">월중·월말 매수</b>는 리밸런싱과 같은 날짜 규칙(분배락 직전 영업일)이라
+                      그날 사면 <b className="text-gray-300">그 달 분배 권리까지 확보</b>되어 분배금이 다시 분배를 받습니다.
+                    </p>
+                    <p className="mt-1">
+                      재원은 <b className="text-gray-300">아직 쓰지 않은 누적 분배금 전액</b>입니다(리밸런싱이 이미 헐어 쓴
+                      몫은 자동으로 빠집니다). 1주 값에 못 미치는 잔돈은 버리지 않고 다음 회차로 이월됩니다.
+                      재투자 매수 대금은 결과의 '누적 매매차익'에 <b className="text-gray-300">넣지 않고</b> 따로 셉니다.
+                    </p>
+                  </>
+                )}
+              >
                 <div className="flex flex-col gap-1">
                   <span className={LABEL}>지급받은 분배금을</span>
                   <select className={INPUT} value={active.divReinvest} disabled={readOnly}
@@ -1392,34 +1773,6 @@ export default function BacktestPage({
                     </select>
                   </div>
                 )}
-                <p className="text-[10px] text-gray-600 leading-relaxed">
-                  {active.divReinvest === 'hold' ? (
-                    <>
-                      분배금은 예수금으로 들어와 <b className="text-gray-400">리밸런싱 매수 재원</b>으로만
-                      쓰입니다. 리밸런싱까지 끄면(③ 리밸런싱 안 함) 현금이 그대로 쌓이는
-                      <b className="text-gray-400"> 기준선(Buy &amp; Hold)</b>이 됩니다.
-                    </>
-                  ) : active.divReinvest === 'payDate' ? (
-                    <>
-                      분배금이 <b className="text-gray-400">들어온 날 바로</b> 매수합니다. 아직 쓰지 않은
-                      분배금이 남아 있으면 그 몫까지 함께 투입합니다.
-                    </>
-                  ) : (
-                    <>
-                      매월 <b className="text-gray-400">{active.divReinvest === 'mid' ? '월중' : '월말'} 분배락 직전
-                      영업일</b>(리밸런싱과 같은 날짜 규칙)에 모아서 매수합니다. 그날 사면
-                      <b className="text-gray-400"> 그 달 분배 권리까지 확보</b>되어 분배금이 다시 분배를 받습니다.
-                    </>
-                  )}
-                </p>
-                {active.divReinvest !== 'hold' && (
-                  <p className="text-[10px] text-gray-600 leading-relaxed">
-                    재원은 <b className="text-gray-400">아직 쓰지 않은 누적 분배금 전액</b>입니다(리밸런싱이 이미
-                    헐어 쓴 몫은 자동으로 빠집니다). 1주 값에 못 미치는 잔돈은 버리지 않고
-                    <b className="text-gray-400"> 다음 회차로 이월</b>됩니다. 재투자 매수 대금은 결과의
-                    '누적 매매차익'에 <b className="text-gray-400">넣지 않고</b> 따로 셉니다.
-                  </p>
-                )}
                 {active.divReinvest !== 'hold' && active.divReinvestSplit === 'target'
                   && active.targetMode === 'ratio'
                   && active.assets.length > 0
@@ -1430,7 +1783,22 @@ export default function BacktestPage({
                 )}
               </Section>
 
-              <Section title="⑤ 수량·현금 규칙">
+              <Section
+                title="⑤ 수량·현금 규칙"
+                badge={`${active.rounding === 'floor' ? '내림' : active.rounding === 'round' ? '반올림' : '소수 허용'}${active.allowNegativeCash ? ' · 마이너스 예수금 허용' : ''}`}
+                hint={(
+                  <>
+                    <p>
+                      매매 수량을 <b className="text-gray-300">1주 단위로 어떻게 자를지</b>와, 예수금이 모자랄 때
+                      어떻게 할지를 정합니다. 첨부 PDF는 <b className="text-gray-300">내림(0 방향)</b> 규약입니다.
+                    </p>
+                    <p className="mt-1">
+                      '마이너스 예수금 허용'을 끄면 보유 현금 한도까지만 매수하고 그 행에
+                      <b className="text-gray-300"> "예수금 부족"</b>으로 표시합니다.
+                    </p>
+                  </>
+                )}
+              >
                 <div className="flex flex-col gap-1">
                   <span className={LABEL}>매매 수량</span>
                   <select className={INPUT} value={active.rounding} disabled={readOnly}
@@ -1445,12 +1813,25 @@ export default function BacktestPage({
                     onChange={(e) => patchActive({ allowNegativeCash: e.target.checked })} />
                   예수금이 부족해도 매수 (마이너스 예수금 허용)
                 </label>
-                <p className="text-[10px] text-gray-600 leading-relaxed">
-                  끄면 보유 현금 한도까지만 매수하고 그 행에 "예수금 부족"으로 표시합니다.
-                </p>
               </Section>
 
-              <Section title="⑥ 종목" badge={`${active.assets.length}/${MAX_BT_ASSETS}`}>
+              <Section
+                title="⑥ 종목"
+                badge={`${active.assets.length}/${MAX_BT_ASSETS}`}
+                hint={(
+                  <>
+                    <p>
+                      종목코드를 넣으면 앱에 저장된 일별 종가·분배금 이력을 그대로 씁니다.
+                      저장된 게 없으면 자동으로 조회하며, 그래도 없으면 아래
+                      <b className="text-gray-300"> '종가 직접 붙여넣기'</b>로 넣을 수 있습니다.
+                    </p>
+                    <p className="mt-1">
+                      종목명 옆 <b className="text-gray-300">종목코드</b>나 <b className="text-gray-300">↗ 아이콘</b>을 누르면
+                      네이버 금융 상세 페이지가 새 탭에서 열립니다.
+                    </p>
+                  </>
+                )}
+              >
                 <div className="flex gap-1">
                   <input className={INPUT} placeholder="종목코드 (예: 498400)" value={newCode} disabled={readOnly}
                     list="bt-catalog"
@@ -1473,7 +1854,16 @@ export default function BacktestPage({
                         <span className="w-2 h-2 rounded-full shrink-0" style={{ background: a.color || BT_COLORS[i % BT_COLORS.length] }} />
                         <input className={`${INPUT} flex-1`} value={a.name} disabled={readOnly}
                           onChange={(e) => patchAsset(a.id, { name: e.target.value })} placeholder="종목명" />
-                        <span className="text-[10px] text-gray-500 font-mono shrink-0">{a.code}</span>
+                        {/* ⚠️ 종목명 칸은 사용자가 고칠 수 있는 input이라 링크로 만들 수 없다 —
+                            대신 코드와 ↗ 아이콘을 상세 페이지 진입점으로 둔다. */}
+                        <button type="button" className="text-[11px] text-gray-500 font-mono shrink-0 hover:text-sky-300 hover:underline"
+                          title={`${a.name || a.code} 상세 페이지 열기 (새 탭)`} onClick={() => openStock(a.code)}>
+                          {a.code}
+                        </button>
+                        <button type="button" className="p-0.5 text-gray-600 hover:text-sky-300 shrink-0"
+                          title={`${a.name || a.code} 상세 페이지 열기 (새 탭)`} onClick={() => openStock(a.code)}>
+                          <ExternalLink size={11} />
+                        </button>
                         <button className="p-0.5 text-gray-600 hover:text-sky-300 shrink-0" title="종가 다시 조회"
                           disabled={readOnly || loading || !onFetchCode} onClick={() => onFetchCode?.(a.code, undefined, true)}>
                           <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
@@ -1617,7 +2007,17 @@ export default function BacktestPage({
                 )}
               </Section>
 
-              <Section title="⑦ 중도 종목 변경 / 추가" badge={`${active.events.length}/${MAX_BT_EVENTS}`} defaultOpen={active.events.length > 0}>
+              <Section
+                title="⑦ 중도 종목 변경 / 추가"
+                badge={`${active.events.length}/${MAX_BT_EVENTS}`}
+                hint={(
+                  <p>
+                    기간 도중에 종목을 <b className="text-gray-300">갈아타거나 새로 편입</b>할 때 씁니다.
+                    이 매매는 정기 리밸런싱과 성격이 달라 결과 표에 <b className="text-gray-300">회색 '재편' 행</b>으로
+                    구분되고, <b className="text-gray-300">누적 매매차익에는 넣지 않습니다</b>(별도 집계).
+                  </p>
+                )}
+              >
                 <button className={`${BTN} text-sky-300 border-sky-800 hover:bg-sky-900/30 w-full`}
                   disabled={readOnly || active.events.length >= MAX_BT_EVENTS}
                   onClick={() => patchActive({
@@ -1709,6 +2109,7 @@ export default function BacktestPage({
               </Section>
             </>
           )}
+          </div>
         </div>
 
         {/* ── 결과 ── */}
@@ -1736,8 +2137,8 @@ export default function BacktestPage({
             <>
               {/* 표제 */}
               <div className="mb-3">
-                <h2 className="text-base font-bold text-gray-100">📊 {active.name} — 리밸런싱 백테스트</h2>
-                <p className="text-[11px] text-gray-500 mt-0.5">
+                <h2 className="text-lg font-bold text-gray-100">📊 {active.name} — 리밸런싱 백테스트</h2>
+                <p className="text-[12px] text-gray-500 mt-0.5">
                   기간 {result.summary.startDate} ~ {result.summary.endDate} · 초기 투자금 {won(active.initialCapital)}
                   {active.extraCash > 0 && ` (+ 예수금 ${won(active.extraCash)})`} ·
                   {' '}{active.targetMode === 'amount' ? '목표금액' : `목표비중(${RATIO_BASE_LABEL[active.ratioBase]})`} ·
@@ -1746,7 +2147,7 @@ export default function BacktestPage({
               </div>
 
               {/* 요약 카드 — ⚠️ 비교 종합의 시나리오별 블록과 같은 컴포넌트를 쓴다(복제 금지). */}
-              <SummaryCards summary={result.summary} />
+              <SummaryCards result={result} />
 
               <div className="border border-gray-800 rounded-lg p-2 bg-gray-900/40 mb-3">
                 <CurveChart curve={result.curve} />
@@ -1755,10 +2156,10 @@ export default function BacktestPage({
               {/* 경고 */}
               {result.warnings.length > 0 && (
                 <div className="border border-amber-800/50 bg-amber-900/15 rounded-lg p-2 mb-3">
-                  <div className="flex items-center gap-1 text-[11px] font-bold text-amber-300 mb-1">
-                    <AlertCircle size={11} /> 확인이 필요한 항목 ({result.warnings.length})
+                  <div className="flex items-center gap-1 text-[12px] font-bold text-amber-300 mb-1">
+                    <AlertCircle size={12} /> 확인이 필요한 항목 ({result.warnings.length})
                   </div>
-                  <ul className="text-[10px] text-amber-200/80 leading-relaxed list-disc pl-4">
+                  <ul className="text-[12px] text-amber-200/80 leading-relaxed list-disc pl-4">
                     {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
                   </ul>
                 </div>
@@ -1766,34 +2167,34 @@ export default function BacktestPage({
 
               {/* Phase 0 */}
               <div className="mb-4 bt-month">
-                <h3 className="text-xs font-bold text-gray-300 mb-1">🏁 [Phase 0] 초기 자본 투입 — {result.initialDate}</h3>
+                <h3 className="text-sm font-bold text-gray-300 mb-1">🏁 [Phase 0] 초기 자본 투입 — {result.initialDate}</h3>
                 <div className="overflow-x-auto border border-gray-800 rounded-lg">
-                  <table className="w-full text-[11px] min-w-[560px]">
+                  <table className={`${TBL} min-w-[680px]`}>
                     <thead className="bg-gray-800/70 text-gray-400">
                       <tr>
-                        <th className="px-2 py-1 text-left font-bold">종목명</th>
-                        <th className="px-2 py-1 text-right font-bold">당일 종가</th>
-                        <th className="px-2 py-1 text-right font-bold">매수 수량</th>
-                        <th className="px-2 py-1 text-right font-bold">매수 금액</th>
-                        <th className="px-2 py-1 text-right font-bold">비고</th>
+                        <th className={`${TH} text-left`}>종목명</th>
+                        <th className={`${TH} text-right`}>당일 종가</th>
+                        <th className={`${TH} text-right`}>매수 수량</th>
+                        <th className={`${TH} text-right`}>매수 금액</th>
+                        <th className={`${TH} text-right`}>비고</th>
                       </tr>
                     </thead>
                     <tbody>
                       {result.initialTrades.map((t) => (
                         <tr key={t.assetId} className="border-t border-gray-800/70">
-                          <td className="px-2 py-1 text-gray-200">{t.name} <span className="text-gray-600 font-mono text-[10px]">{t.code}</span></td>
-                          <td className="px-2 py-1 text-right text-gray-300">{won(t.price)}</td>
-                          <td className="px-2 py-1 text-right text-gray-200">{qtyText(t.qty)}주</td>
-                          <td className="px-2 py-1 text-right text-gray-200">{won(Math.abs(t.cashDelta))}</td>
-                          <td className="px-2 py-1 text-right text-gray-500 text-[10px]">목표 {won(t.target)}{t.note && ` · ${t.note}`}</td>
+                          <td className={`${TD} text-gray-200`}><StockLink code={t.code} name={t.name} showCode /></td>
+                          <td className={`${TD} text-right text-gray-300`}>{won(t.price)}</td>
+                          <td className={`${TD} text-right text-gray-200`}>{qtyText(t.qty)}주</td>
+                          <td className={`${TD} text-right text-gray-200`}>{won(Math.abs(t.cashDelta))}</td>
+                          <td className={`${TD} text-right text-gray-500 text-[11px]`}>목표 {won(t.target)}{t.note && ` · ${t.note}`}</td>
                         </tr>
                       ))}
                       <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
-                        <td className="px-2 py-1 text-gray-300">합계</td>
-                        <td className="px-2 py-1 text-right text-gray-600">-</td>
-                        <td className="px-2 py-1 text-right text-gray-200">{qtyText(result.initialTrades.reduce((s, t) => s + t.qty, 0))}주</td>
-                        <td className="px-2 py-1 text-right text-gray-200">{won(result.initialTrades.reduce((s, t) => s + Math.abs(t.cashDelta), 0))}</td>
-                        <td className="px-2 py-1 text-right text-emerald-300">잔여 예수금 {won(result.initialCashAfter)}</td>
+                        <td className={`${TD} text-gray-300`}>합계</td>
+                        <td className={`${TD} text-right text-gray-600`}>-</td>
+                        <td className={`${TD} text-right text-gray-200`}>{qtyText(result.initialTrades.reduce((s, t) => s + t.qty, 0))}주</td>
+                        <td className={`${TD} text-right text-gray-200`}>{won(result.initialTrades.reduce((s, t) => s + Math.abs(t.cashDelta), 0))}</td>
+                        <td className={`${TD} text-right text-emerald-300`}>잔여 예수금 {won(result.initialCashAfter)}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1817,52 +2218,52 @@ export default function BacktestPage({
                 }
                 return (
                   <div key={m.ym} className="mb-4 bt-month">
-                    <h3 className="text-xs font-bold text-gray-300 mb-1">
+                    <h3 className="text-sm font-bold text-gray-300 mb-1">
                       📅 {m.ym.replace('-', '년 ')}월
-                      {!hasTable && <span className="ml-1 font-normal text-gray-600 text-[10px]">— 이 달은 매매·분배가 없습니다</span>}
+                      {!hasTable && <span className="ml-1 font-normal text-gray-600 text-[11px]">— 이 달은 매매·분배가 없습니다</span>}
                     </h3>
                     {hasTable && (
                     <div className="overflow-x-auto border border-gray-800 rounded-lg">
-                      <table className="w-full text-[11px] min-w-[1090px]">
+                      <table className={`${TBL} min-w-[1320px]`}>
                         <thead className="bg-gray-800/70 text-gray-400">
                           <tr>
-                            <th className="px-2 py-1 text-left font-bold">리밸런싱일</th>
-                            <th className="px-2 py-1 text-left font-bold">대상 종목</th>
-                            <th className="px-2 py-1 text-right font-bold">종가</th>
-                            <th className="px-2 py-1 text-right font-bold">리밸런싱 전 평가액</th>
-                            <th className="px-2 py-1 text-right font-bold">매수/매도</th>
-                            <th className="px-2 py-1 text-right font-bold">매매 금액</th>
-                            <th className="px-2 py-1 text-right font-bold">조정 후 수량</th>
-                            <th className="px-2 py-1 text-right font-bold">조정 후 평가액</th>
-                            <th className="px-2 py-1 text-center font-bold">분배락일</th>
-                            <th className="px-2 py-1 text-center font-bold">지급일</th>
-                            <th className="px-2 py-1 text-right font-bold">주당 분배금</th>
-                            <th className="px-2 py-1 text-right font-bold">지급 분배금</th>
+                            <th className={`${TH} text-left`}>리밸런싱일</th>
+                            <th className={`${TH} text-left`}>대상 종목</th>
+                            <th className={`${TH} text-right`}>종가</th>
+                            <th className={`${TH} text-right`}>리밸런싱 전 평가액</th>
+                            <th className={`${TH} text-right`}>매수/매도</th>
+                            <th className={`${TH} text-right`}>매매 금액</th>
+                            <th className={`${TH} text-right`}>조정 후 수량</th>
+                            <th className={`${TH} text-right`}>조정 후 평가액</th>
+                            <th className={`${TH} text-center`}>분배락일</th>
+                            <th className={`${TH} text-center`}>지급일</th>
+                            <th className={`${TH} text-right`}>주당 분배금</th>
+                            <th className={`${TH} text-right`}>지급 분배금</th>
                           </tr>
                         </thead>
                         <tbody>
                           {rows.map(({ trade: t, dividend: d }, i) => (
                             <tr key={`${t.assetId}-${t.date}-${i}`}
                               className={`border-t border-gray-800/70 ${t.structural ? 'bg-gray-800/40' : t.reinvest ? 'bg-emerald-950/25' : ''}`}>
-                              <td className="px-2 py-1 text-gray-300 whitespace-nowrap">
+                              <td className={`${TD} text-gray-300 whitespace-nowrap`}>
                                 {t.date}
-                                {t.structural && <span className="ml-1 text-[9px] text-amber-400">재편</span>}
-                                {t.reinvest && <span className="ml-1 text-[9px] text-emerald-400" title="분배금 재투자 매수 — 누적 매매차익에는 포함하지 않습니다">재투자</span>}
-                                {!t.priceExact && <span className="ml-1 text-[9px] text-amber-400" title="그 날짜 종가가 없어 직전 종가를 사용">≈</span>}
+                                {t.structural && <span className="ml-1 text-[10px] text-amber-400">재편</span>}
+                                {t.reinvest && <span className="ml-1 text-[10px] text-emerald-400" title="분배금 재투자 매수 — 누적 매매차익에는 포함하지 않습니다">재투자</span>}
+                                {!t.priceExact && <span className="ml-1 text-[10px] text-amber-400" title="그 날짜 종가가 없어 직전 종가를 사용">≈</span>}
                               </td>
-                              <td className="px-2 py-1 text-gray-200 whitespace-nowrap">{t.name}</td>
-                              <td className="px-2 py-1 text-right text-gray-300">{won(t.price)}</td>
-                              <td className="px-2 py-1 text-right text-gray-300">{won(t.evalBefore)}</td>
-                              <td className={`px-2 py-1 text-right font-bold ${t.qty < 0 ? 'text-blue-300' : 'text-red-300'}`}>
+                              <td className={`${TD} text-gray-200 whitespace-nowrap`}><StockLink code={t.code} name={t.name} /></td>
+                              <td className={`${TD} text-right text-gray-300`}>{won(t.price)}</td>
+                              <td className={`${TD} text-right text-gray-300`}>{won(t.evalBefore)}</td>
+                              <td className={`${TD} text-right font-bold ${t.qty < 0 ? 'text-blue-300' : 'text-red-300'}`}>
                                 {qtyText(Math.abs(t.qty))}주 {t.qty < 0 ? '매도' : '매수'}
                               </td>
-                              <td className={`px-2 py-1 text-right ${pnlCls(t.cashDelta)}`}>{wonSigned(t.cashDelta)}</td>
-                              <td className="px-2 py-1 text-right text-gray-200">{qtyText(t.qtyAfter)}주</td>
+                              <td className={`${TD} text-right ${pnlCls(t.cashDelta)}`}>{wonSigned(t.cashDelta)}</td>
+                              <td className={`${TD} text-right text-gray-200`}>{qtyText(t.qtyAfter)}주</td>
                               {/* 조정 후 평가액 = 조정 후 수량 × 그날 종가 (BtTrade.evalAfter) */}
-                              <td className="px-2 py-1 text-right text-gray-200">{won(t.evalAfter)}</td>
-                              <td className="px-2 py-1 text-center text-gray-500 text-[10px] whitespace-nowrap">{d?.exDate || '-'}</td>
-                              <td className="px-2 py-1 text-center text-gray-500 text-[10px] whitespace-nowrap">{d?.payDate || '-'}</td>
-                              <td className="px-2 py-1 text-right">
+                              <td className={`${TD} text-right text-gray-200`}>{won(t.evalAfter)}</td>
+                              <td className={`${TD} text-center text-gray-500 text-[11px] whitespace-nowrap`}>{d?.exDate || '-'}</td>
+                              <td className={`${TD} text-center text-gray-500 text-[11px] whitespace-nowrap`}>{d?.payDate || '-'}</td>
+                              <td className={`${TD} text-right`}>
                                 {d ? (
                                   <DivInput
                                     value={d.perShare}
@@ -1875,42 +2276,42 @@ export default function BacktestPage({
                                   />
                                 ) : <span className="text-gray-700">-</span>}
                               </td>
-                              <td className="px-2 py-1 text-right text-emerald-300">{d ? won(d.amount) : <span className="text-gray-700">-</span>}</td>
+                              <td className={`${TD} text-right text-emerald-300`}>{d ? won(d.amount) : <span className="text-gray-700">-</span>}</td>
                             </tr>
                           ))}
                           {orphans.map((d, i) => (
                             <tr key={`orphan-${i}`} className="border-t border-gray-800/70">
-                              <td className="px-2 py-1 text-gray-600 text-[10px]">(리밸런싱 없음)</td>
-                              <td className="px-2 py-1 text-gray-300">{d.name}</td>
-                              <td colSpan={4} className="px-2 py-1 text-right text-gray-700">-</td>
-                              <td className="px-2 py-1 text-right text-gray-300">{qtyText(d.qty)}주</td>
-                              <td className="px-2 py-1 text-right text-gray-700">-</td>
-                              <td className="px-2 py-1 text-center text-gray-500 text-[10px]">{d.exDate}</td>
-                              <td className="px-2 py-1 text-center text-gray-500 text-[10px]">{d.payDate}</td>
-                              <td className="px-2 py-1 text-right text-gray-300">{formatNumber(d.perShare)}</td>
-                              <td className="px-2 py-1 text-right text-emerald-300">{won(d.amount)}</td>
+                              <td className={`${TD} text-gray-600 text-[11px]`}>(리밸런싱 없음)</td>
+                              <td className={`${TD} text-gray-300`}><StockLink code={d.code} name={d.name} /></td>
+                              <td colSpan={4} className={`${TD} text-right text-gray-700`}>-</td>
+                              <td className={`${TD} text-right text-gray-300`}>{qtyText(d.qty)}주</td>
+                              <td className={`${TD} text-right text-gray-700`}>-</td>
+                              <td className={`${TD} text-center text-gray-500 text-[11px]`}>{d.exDate}</td>
+                              <td className={`${TD} text-center text-gray-500 text-[11px]`}>{d.payDate}</td>
+                              <td className={`${TD} text-right text-gray-300`}>{formatNumber(d.perShare)}</td>
+                              <td className={`${TD} text-right text-emerald-300`}>{won(d.amount)}</td>
                             </tr>
                           ))}
                           <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
-                            <td className="px-2 py-1 text-gray-300">합계</td>
-                            <td className="px-2 py-1 text-gray-600">-</td>
-                            <td className="px-2 py-1 text-right text-gray-600">-</td>
+                            <td className={`${TD} text-gray-300`}>합계</td>
+                            <td className={`${TD} text-gray-600`}>-</td>
+                            <td className={`${TD} text-right text-gray-600`}>-</td>
                             {/* ⚠️ 평가액 합계는 **한 종목이 그 달에 두 번 이상 거래되면 렌더하지 않는다**.
                                 evalBefore/evalAfter는 거래 시점의 '포지션 전체 평가액'이라 거래 단위로 더하면
                                 같은 종목이 중복 계상된다(재편+정기 리밸런싱이 겹친 달에서 실측 2.17배).
                                 첨부 PDF도 정확히 그런 달(4월)의 합계를 '-'로 비워 뒀다 — 그 규약을 따른다.
                                 시점 정합 총액은 아래 '월말 보유 현황 · 종목 합계'가 담당한다. */}
-                            <td className="px-2 py-1 text-right text-gray-200" title={dupTraded ? '같은 종목이 이 달에 두 번 이상 거래되어 단순 합이 중복 계상됩니다 — 아래 월말 보유 현황을 참고하세요.' : undefined}>
+                            <td className={`${TD} text-right text-gray-200`} title={dupTraded ? '같은 종목이 이 달에 두 번 이상 거래되어 단순 합이 중복 계상됩니다 — 아래 월말 보유 현황을 참고하세요.' : undefined}>
                               {dupTraded ? <span className="text-gray-600 font-normal">-</span> : won(m.evalBeforeSum)}
                             </td>
-                            <td className="px-2 py-1 text-right text-gray-600">-</td>
-                            <td className={`px-2 py-1 text-right ${pnlCls(m.tradeNet)}`}>{wonSigned(m.tradeNet)}</td>
-                            <td className="px-2 py-1 text-right text-gray-600">-</td>
-                            <td className="px-2 py-1 text-right text-gray-200" title={dupTraded ? '같은 종목이 이 달에 두 번 이상 거래되어 단순 합이 중복 계상됩니다 — 아래 월말 보유 현황을 참고하세요.' : undefined}>
+                            <td className={`${TD} text-right text-gray-600`}>-</td>
+                            <td className={`${TD} text-right ${pnlCls(m.tradeNet)}`}>{wonSigned(m.tradeNet)}</td>
+                            <td className={`${TD} text-right text-gray-600`}>-</td>
+                            <td className={`${TD} text-right text-gray-200`} title={dupTraded ? '같은 종목이 이 달에 두 번 이상 거래되어 단순 합이 중복 계상됩니다 — 아래 월말 보유 현황을 참고하세요.' : undefined}>
                               {dupTraded ? <span className="text-gray-600 font-normal">-</span> : won(rows.reduce((s, r) => s + r.trade.evalAfter, 0))}
                             </td>
-                            <td colSpan={3} className="px-2 py-1 text-right text-gray-600">-</td>
-                            <td className="px-2 py-1 text-right text-emerald-300">{won(m.divAccrued)}</td>
+                            <td colSpan={3} className={`${TD} text-right text-gray-600`}>-</td>
+                            <td className={`${TD} text-right text-emerald-300`}>{won(m.divAccrued)}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -1919,8 +2320,8 @@ export default function BacktestPage({
                     {/* 매월 목표 증액 — 리밸런싱 직전에 예수금을 목표로 옮긴 내역.
                         위 표의 매수 수량이 왜 늘었는지를 설명하는 값이라 표 바로 아래에 둔다. */}
                     {m.contribution && m.contribution.amount > 0 && (
-                      <div className="mt-1 border border-sky-900/60 rounded-lg bg-sky-950/30 px-2 py-1.5">
-                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[10px]">
+                      <div className="mt-1 border border-sky-900/60 rounded-lg bg-sky-950/30 px-2.5 py-2">
+                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[12px]">
                           <span className="text-sky-300 font-bold">
                             목표 증액 {won(m.contribution.amount)}
                             {m.contribution.overridden && <span className="ml-1 text-amber-400 font-normal">(이 달 전용 규칙)</span>}
@@ -1935,9 +2336,9 @@ export default function BacktestPage({
                           )}
                         </div>
                         {m.contribution.perAsset.some((x) => x.added > 0) && (
-                          <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
                             {m.contribution.perAsset.filter((x) => x.added > 0).map((x) => (
-                              <span key={x.assetId} className="text-[10px] whitespace-nowrap">
+                              <span key={x.assetId} className="text-[12px] whitespace-nowrap">
                                 <span className="text-gray-400">{x.name}</span>
                                 <span className="text-sky-300"> +{won(x.added)}</span>
                                 <span className="text-gray-600"> → 목표 {won(x.targetAfter)}</span>
@@ -1951,21 +2352,21 @@ export default function BacktestPage({
                         이번 달에 손대지 않은 종목의 수량·평가금액을 확인할 길이 없다. 모든 보유 종목을
                         같은 시점(월말 영업일)의 종가로 평가한 값이라 합계가 월말 총자산과 정합한다. */}
                     {m.holdings.length > 0 && (
-                      <div className="mt-1 border border-gray-800/70 rounded-lg bg-gray-900/30 px-2 py-1.5">
-                        <div className="text-[10px] text-gray-500 font-bold mb-1">
+                      <div className="mt-1 border border-gray-800/70 rounded-lg bg-gray-900/30 px-2.5 py-2">
+                        <div className="text-[12px] text-gray-500 font-bold mb-1">
                           월말 보유 현황 <span className="font-normal text-gray-600">({m.lastDate} 종가 기준)</span>
                         </div>
-                        <div className="flex flex-wrap gap-x-5 gap-y-1">
+                        <div className="flex flex-wrap gap-x-5 gap-y-1.5">
                           {m.holdings.map((h) => (
-                            <span key={h.assetId} className="text-[10px] whitespace-nowrap">
-                              <b className="text-gray-300">{h.name}</b>
+                            <span key={h.assetId} className="text-[12px] whitespace-nowrap">
+                              <StockLink code={h.code} name={h.name} className="text-gray-300 font-bold" />
                               <span className="text-gray-500"> {qtyText(h.qty)}주 · </span>
                               <b className="text-gray-200">{won(h.evalAmount)}</b>
                               <span className="text-gray-600"> ({h.weight.toFixed(1)}%)</span>
                               {!h.priceExact && <span className="text-amber-400" title="그 날짜 종가가 없어 직전 종가를 사용">≈</span>}
                             </span>
                           ))}
-                          <span className="text-[10px] whitespace-nowrap">
+                          <span className="text-[12px] whitespace-nowrap">
                             <span className="text-gray-500">종목 합계 </span>
                             <b className="text-gray-100">{won(m.evalEnd)}</b>
                           </span>
@@ -1973,7 +2374,7 @@ export default function BacktestPage({
                       </div>
                     )}
                     {/* 월 요약 줄 */}
-                    <div className="mt-1 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-x-4 gap-y-0.5 text-[10px] px-1">
+                    <div className="mt-1.5 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-x-4 gap-y-1 text-[12px] px-1">
                       <span className="text-gray-500">누적 매매차익 <b className={pnlCls(m.cumTradeNet)}>{wonSigned(m.cumTradeNet)}</b></span>
                       <span className="text-gray-500">월 분배금 <b className="text-emerald-300">{won(m.divAccrued)}</b></span>
                       <span className="text-gray-500">누적 분배금 <b className="text-emerald-300">{won(m.cumDivAccrued)}</b></span>
@@ -2039,33 +2440,33 @@ export default function BacktestPage({
 
               {/* 최종 보유 */}
               <div className="mb-4 bt-month">
-                <h3 className="text-xs font-bold text-gray-300 mb-1">🏁 기말 보유 현황 — {result.summary.endDate}</h3>
+                <h3 className="text-sm font-bold text-gray-300 mb-1">🏁 기말 보유 현황 — {result.summary.endDate}</h3>
                 <div className="overflow-x-auto border border-gray-800 rounded-lg">
-                  <table className="w-full text-[11px] min-w-[560px]">
+                  <table className={`${TBL} min-w-[680px]`}>
                     <thead className="bg-gray-800/70 text-gray-400">
                       <tr>
-                        <th className="px-2 py-1 text-left font-bold">종목명</th>
-                        <th className="px-2 py-1 text-right font-bold">기말 종가</th>
-                        <th className="px-2 py-1 text-right font-bold">보유 수량</th>
-                        <th className="px-2 py-1 text-right font-bold">평가금액</th>
-                        <th className="px-2 py-1 text-right font-bold">비중</th>
+                        <th className={`${TH} text-left`}>종목명</th>
+                        <th className={`${TH} text-right`}>기말 종가</th>
+                        <th className={`${TH} text-right`}>보유 수량</th>
+                        <th className={`${TH} text-right`}>평가금액</th>
+                        <th className={`${TH} text-right`}>비중</th>
                       </tr>
                     </thead>
                     <tbody>
                       {result.finalHoldings.map((h) => (
                         <tr key={h.assetId} className="border-t border-gray-800/70">
-                          <td className="px-2 py-1 text-gray-200">{h.name} <span className="text-gray-600 font-mono text-[10px]">{h.code}</span></td>
-                          <td className="px-2 py-1 text-right text-gray-300">{won(h.price)}{!h.priceExact && <span className="text-amber-400 ml-0.5">≈</span>}</td>
-                          <td className="px-2 py-1 text-right text-gray-200">{qtyText(h.qty)}주</td>
-                          <td className="px-2 py-1 text-right text-gray-200">{won(h.evalAmount)}</td>
-                          <td className="px-2 py-1 text-right text-gray-400">{h.weight.toFixed(1)}%</td>
+                          <td className={`${TD} text-gray-200`}><StockLink code={h.code} name={h.name} showCode /></td>
+                          <td className={`${TD} text-right text-gray-300`}>{won(h.price)}{!h.priceExact && <span className="text-amber-400 ml-0.5">≈</span>}</td>
+                          <td className={`${TD} text-right text-gray-200`}>{qtyText(h.qty)}주</td>
+                          <td className={`${TD} text-right text-gray-200`}>{won(h.evalAmount)}</td>
+                          <td className={`${TD} text-right text-gray-400`}>{h.weight.toFixed(1)}%</td>
                         </tr>
                       ))}
                       <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
-                        <td className="px-2 py-1 text-gray-300">예수금</td>
-                        <td colSpan={2} className="px-2 py-1 text-right text-gray-600">-</td>
-                        <td className="px-2 py-1 text-right text-emerald-300">{won(result.summary.finalCash)}</td>
-                        <td className="px-2 py-1 text-right text-gray-600">-</td>
+                        <td className={`${TD} text-gray-300`}>예수금</td>
+                        <td colSpan={2} className={`${TD} text-right text-gray-600`}>-</td>
+                        <td className={`${TD} text-right text-emerald-300`}>{won(result.summary.finalCash)}</td>
+                        <td className={`${TD} text-right text-gray-600`}>-</td>
                       </tr>
                       {/* 예수금 원천별 세분화 — ⚠️ 합이 정확히 기말 예수금이 되는 항등식이다(검증 #110):
                           초기 매수 후 잔여 + 누적 매매차익 + 종목 재편 순현금 + 분배금 재투자 매수(≤0)
@@ -2080,7 +2481,7 @@ export default function BacktestPage({
                         { key: 'div', label: '누적 분배금', value: result.summary.cumDivPaid, signed: false },
                       ].filter((p) => Math.round(p.value) !== 0).map((p) => (
                         <tr key={p.key} className="border-t border-gray-800/40">
-                          <td className="px-2 py-1 pl-6 text-gray-500 text-[10px]">
+                          <td className={`${TD} pl-7 text-gray-500 text-[12px]`}>
                             └ {p.label}
                             {p.key === 'div' && Math.abs(result.summary.cumDivAccrued - result.summary.cumDivPaid) > 0.5 && (
                               <span className="text-gray-600" title="분배락 기준 누적 분배금 — 지급일이 종료일 이후인 몫은 아직 현금이 아니다">
@@ -2093,28 +2494,35 @@ export default function BacktestPage({
                               </span>
                             )}
                           </td>
-                          <td colSpan={2} className="px-2 py-1 text-right text-gray-700">-</td>
-                          <td className={`px-2 py-1 text-right text-[11px] ${p.signed ? pnlCls(p.value) : 'text-gray-300'}`}>
+                          <td colSpan={2} className={`${TD} text-right text-gray-700`}>-</td>
+                          <td className={`${TD} text-right text-[12px] ${p.signed ? pnlCls(p.value) : 'text-gray-300'}`}>
                             {p.signed ? wonSigned(p.value) : won(p.value)}
                           </td>
-                          <td className="px-2 py-1 text-right text-gray-700">-</td>
+                          <td className={`${TD} text-right text-gray-700`}>-</td>
                         </tr>
                       ))}
                       <tr className="border-t border-gray-700 bg-gray-800/60 font-bold">
-                        <td className="px-2 py-1 text-gray-200">총자산</td>
-                        <td colSpan={2} className="px-2 py-1 text-right text-gray-600">-</td>
-                        <td className="px-2 py-1 text-right text-gray-100">{won(result.summary.finalTotal)}</td>
-                        <td className={`px-2 py-1 text-right ${pnlCls(result.summary.profit)}`}>{pctText(result.summary.profitRate)}</td>
+                        <td className={`${TD} text-gray-200`}
+                          title={`총자산 = 기말 평가액 ${won(result.summary.finalEval)} + 기말 예수금 ${won(result.summary.finalCash)} = ${won(result.summary.finalTotal)}`}>
+                          총자산
+                        </td>
+                        <td colSpan={2} className={`${TD} text-right text-gray-600`}>-</td>
+                        <td className={`${TD} text-right text-gray-100`}>{won(result.summary.finalTotal)}</td>
+                        <td className={`${TD} text-right ${pnlCls(result.summary.profit)}`}
+                          title={`수익률 = (총자산 − 투입 원금 ${won(result.summary.finalTotal - result.summary.profit)}) ÷ 투입 원금`}>
+                          {pctText(result.summary.profitRate)}
+                        </td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
               </div>
 
-              {/* 각주 */}
-              <div className="border-t border-gray-800 pt-2 text-[10px] text-gray-600 leading-relaxed">
+              {/* 각주 — ⚠️ 이 블록은 호버 Hint로 접지 않는다. PDF만 받아 본 사람이 계산 규약을
+                  확인할 수 있는 유일한 자리라 인쇄본에 반드시 글자로 남아야 한다. */}
+              <div className="border-t border-gray-800 pt-2 text-[12px] text-gray-600 leading-relaxed">
                 <div className="flex items-start gap-1">
-                  <HelpCircle size={11} className="mt-0.5 shrink-0" />
+                  <HelpCircle size={12} className="mt-0.5 shrink-0" />
                   <div>
                     <p>
                       지급기준일 = 월중 15일 / 월말 말일(휴장이면 직전 영업일) · <b>분배락 = 기준일 {active.exDivOffset}영업일</b> ·
