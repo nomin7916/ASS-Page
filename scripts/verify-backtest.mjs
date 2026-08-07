@@ -257,7 +257,7 @@ function normalizeOverride(raw) {
 }
 function makeBtConfig(partial = {}) {
   const ts = 1000;
-  const policy = partial.policy, mode = partial.targetMode, base = partial.ratioBase, rounding = partial.rounding;
+  const policy = partial.policy, mode = partial.targetMode, rounding = partial.rounding;
   const reinv = partial.divReinvest, divSplit = partial.divReinvestSplit;
   return {
     id: partial.id || generateId(),
@@ -267,7 +267,6 @@ function makeBtConfig(partial = {}) {
     initialCapital: Math.max(0, asNum(partial.initialCapital, 0)),
     extraCash: Math.max(0, asNum(partial.extraCash, 0)),
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
-    ratioBase: base === 'total' || base === 'initial' || base === 'totalWithDiv' ? base : 'equity',
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
     policy: policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none' ? policy : 'perCycle',
     fixedDay: clampInt(asNum(partial.fixedDay, 15), 1, 31),
@@ -299,7 +298,7 @@ function backtestFingerprint(scenarios) {
     return JSON.stringify(scenarios.map((s) => ({
       i: s?.id ?? '', n: s?.name ?? '',
       p: [s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
-          s?.targetMode ?? '', s?.ratioBase ?? '', s?.rounding ?? '', s?.policy ?? '',
+          s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '',
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
           s?.allowNegativeCash ? 1 : 0,
           s?.divReinvest ?? '', s?.divReinvestSplit ?? '',
@@ -614,18 +613,6 @@ function runBacktest(input) {
     for (const p of positions) { if (p.qty > QTY_EPS) { const h = priceAt(prices[p.asset.code], date); if (!h.missing) s += p.qty * h.price; } }
     return s;
   };
-  let contribBase = 0;
-  const ratioBaseAt = (date) => {
-    if (config.ratioBase === 'initial') return config.initialCapital + config.extraCash + contribBase;
-    const eq = totalEvalAt(date);
-    if (config.ratioBase === 'total') return eq + cash;
-    if (config.ratioBase === 'totalWithDiv') {
-      const invested = config.initialCapital + config.extraCash;
-      if (eq >= invested) return eq;
-      return Math.min(invested, eq + Math.max(0, cash));
-    }
-    return eq;
-  };
   const adjustTo = (p, date, target, structural) => {
     const hit = priceAt(prices[p.asset.code], date);
     if (hit.missing || hit.price <= 0) return null;
@@ -739,15 +726,22 @@ function runBacktest(input) {
         warnings.push(`${nm}: 리밸런싱 일정이 없어 최초 매수 후 수량이 고정됩니다(의도한 설정이면 무시하세요).`);
       }
     }
-    const levelTarget = config.targetMode === 'amount'
-      || config.ratioBase === 'initial' || config.ratioBase === 'total';
-    if (reinvestOn && slots.length > 0 && levelTarget) {
+    if (reinvestOn && slots.length > 0 && config.targetMode === 'amount') {
       warnings.push(
-        '목표가 고정 수준인 모드(목표금액 · 분모 “초기 투자금 고정”/“평가액+예수금”)에서는 '
-        + '분배금 재투자로 산 수량을 다음 리밸런싱이 목표에 맞춰 되팝니다 — 재투자 효과가 거의 없고, '
-        + '되판 대금이 ‘누적 매매차익’에 잡혀 실제보다 커 보입니다. '
-        + '재투자를 살리려면 리밸런싱을 끄거나(‘리밸런싱 안 함’) 분모를 “종목 평가액 합계”로 바꾸세요.',
+        '목표 금액 모드에서는 분배금 재투자로 산 수량을 다음 리밸런싱이 목표 금액에 맞춰 되팝니다 — '
+        + '재투자 효과가 거의 없고, 되판 대금이 ‘누적 매매차익’에 잡혀 실제보다 커 보입니다. '
+        + '재투자를 살리려면 리밸런싱을 끄거나(‘리밸런싱 안 함’) 목표를 ‘목표 비중 %’로 바꾸세요.',
       );
+    }
+    if (config.targetMode === 'ratio') {
+      const ratioSum = config.assets.reduce((s, a) => s + Math.max(0, a.targetRatio ?? 0), 0);
+      if (ratioSum > 0 && Math.abs(ratioSum - 100) > 0.01) {
+        warnings.push(
+          `목표 비중 합이 ${Math.round(ratioSum * 100) / 100}%입니다(100% 아님) — 분모가 ‘종목 평가액 합계’라 `
+          + '리밸런싱마다 그 차이만큼 사고팝니다. 100%보다 작으면 매번 팔아 현금이 쌓이고(평가액이 계속 줄어듭니다), '
+          + '크면 예수금을 헐어 더 삽니다. ⑦ 중도 종목 변경으로 비중을 바꿨다면 무시해도 됩니다.',
+        );
+      }
     }
   }
   const steps = [];
@@ -778,6 +772,15 @@ function runBacktest(input) {
     }
     if (config.contribution.mode !== 'none' && config.contribution.value > 0 && firstRebalOfYm.size === 0) {
       warnings.push('리밸런싱이 한 번도 없어 매월 목표 증액이 전혀 집행되지 않습니다(증액은 그 달 첫 리밸런싱 직전에만 걸립니다).');
+    }
+    const anyContrib = (config.contribution.mode !== 'none' && config.contribution.value > 0)
+      || config.contribOverrides.some(o => o.mode !== 'none' && o.value > 0);
+    if (anyContrib && config.targetMode === 'ratio') {
+      warnings.push(
+        '비중 모드에서는 매월 목표 증액이 반영되지 않습니다 — 목표가 “종목 평가액 합계 × 비중”이라 '
+        + '늘릴 대상이 없습니다. 쌓인 현금을 다시 투입하려면 목표 금액 모드를 쓰거나, '
+        + '④ 분배금 처리를 재투자로 두거나, 목표 비중 합을 100%보다 크게 잡으세요.',
+      );
     }
     for (const o of config.contribOverrides) {
       if (o.mode !== 'none' && o.value > 0 && !firstRebalOfYm.has(o.ym)) {
@@ -862,6 +865,7 @@ function runBacktest(input) {
     if (step.kind === 'contrib') {
       const rule = contribOvByYm.get(step.ym) ?? config.contribution;
       if (rule.mode === 'none' || !(rule.value > 0)) continue;
+      if (config.targetMode === 'ratio') continue;
       const cashBefore = cash;
       const requested = rule.mode === 'pctOfCash' ? (cashBefore * rule.value) / 100 : rule.value;
       let amount = requested;
@@ -877,35 +881,16 @@ function runBacktest(input) {
         warnings.push(`${step.ym}: 리밸런싱 일정이 없는 종목은 증액 대상에서 제외했습니다(목표만 오르고 매수되지 않기 때문).`);
       }
       const perAsset = [];
-      if (config.targetMode === 'amount') {
-        const ws = elig.map((p) => (config.contribution.split === 'even' ? 1 : Math.max(0, p.targetAmount ?? 0)));
-        let totalW = ws.reduce((s, x) => s + x, 0);
-        if (!(totalW > 0)) { ws.fill(1); totalW = elig.length; }
-        let left = amount;
-        elig.forEach((p, i) => {
-          const share = i === elig.length - 1 ? left : Math.floor((amount * ws[i]) / totalW);
-          left -= share;
-          p.targetAmount = (p.targetAmount ?? 0) + share;
-          perAsset.push({ assetId: p.asset.id, code: p.asset.code, name: p.asset.name, added: share, targetAfter: p.targetAmount });
-        });
-      } else {
-        const ratioSum = live.reduce((s, p) => s + Math.max(0, p.targetRatio ?? 0), 0);
-        if (!(ratioSum > 0)) {
-          warnings.push(`${step.ym}: 목표비중이 모두 0이라 증액을 적용할 수 없습니다.`);
-          continue;
-        }
-        contribBase += (amount * 100) / ratioSum;
-        if (config.ratioBase !== 'initial') {
-          note = note ? `${note} · 비중 모드(분모 ${config.ratioBase})에서는 효과 없음` : `비중 모드(분모 ${config.ratioBase})에서는 효과 없음`;
-          warnings.push('비중 모드에서 매월 증액은 분모를 "초기 투자금 고정"으로 두었을 때만 반영됩니다.');
-        }
-        const baseAfter = ratioBaseAt(step.date);
-        for (const p of live) {
-          perAsset.push({ assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-            added: Math.round((amount * Math.max(0, p.targetRatio ?? 0)) / ratioSum),
-            targetAfter: targetOf(p, config, baseAfter) });
-        }
-      }
+      const ws = elig.map((p) => (config.contribution.split === 'even' ? 1 : Math.max(0, p.targetAmount ?? 0)));
+      let totalW = ws.reduce((s, x) => s + x, 0);
+      if (!(totalW > 0)) { ws.fill(1); totalW = elig.length; }
+      let left = amount;
+      elig.forEach((p, i) => {
+        const share = i === elig.length - 1 ? left : Math.floor((amount * ws[i]) / totalW);
+        left -= share;
+        p.targetAmount = (p.targetAmount ?? 0) + share;
+        perAsset.push({ assetId: p.asset.id, code: p.asset.code, name: p.asset.name, added: share, targetAfter: p.targetAmount });
+      });
       const m = monthOf(step.ym);
       m.contribution = { ym: step.ym, date: step.date, cashBefore, requested, amount,
         mode: rule.mode, value: rule.value, overridden: contribOvByYm.has(step.ym), perAsset, note };
@@ -935,7 +920,7 @@ function runBacktest(input) {
         p.removed = false;
       }
       if (e.funding === 'reallocate') {
-        const base = ratioBaseAt(e.date);
+        const base = totalEvalAt(e.date);
         const acts = positions.filter((p) => p.active);
         const plans = acts.map((p) => {
           const hit = priceAt(prices[p.asset.code], e.date);
@@ -945,7 +930,7 @@ function runBacktest(input) {
         for (const pl of plans.filter((x) => x.delta < 0)) { const t = adjustTo(pl.p, e.date, pl.target, true); if (t) pushTrade(t); }
         for (const pl of plans.filter((x) => x.delta > 0)) { const t = adjustTo(pl.p, e.date, pl.target, true); if (t) pushTrade(t); }
       } else if (e.funding === 'cash') {
-        const base = ratioBaseAt(e.date);
+        const base = totalEvalAt(e.date);
         for (const aid of e.addAssets) {
           const p = posById.get(aid);
           if (!p || !p.active) continue;
@@ -957,7 +942,7 @@ function runBacktest(input) {
     }
     {
       const s = step.slot;
-      const base = ratioBaseAt(s.rebalDate);
+      const base = totalEvalAt(s.rebalDate);
       const eligible = [];
       for (const aid of s.assetIds) {
         const p = posById.get(aid);
@@ -1255,13 +1240,13 @@ console.log('\n── 파트④ 회귀 가드 ──');
   const ratio = runBacktest({
     config: makeBtConfig({
       startDate: '2026-01-02', endDate: '2026-01-31', initialCapital: 450000000,
-      targetMode: 'ratio', ratioBase: 'equity', rounding: 'floor',
+      targetMode: 'ratio', rounding: 'floor',
       assets: [{ id: 'b1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
                { id: 'b2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
     }),
     prices: PRICES, dividends: DIVS, holidays: KR26,
   });
-  ok('#43 ⚠️ 비중 모드 초기매수 — ratioBase=equity라도 투입자본을 분모로 써야 한다(0원 붕괴 방지)',
+  ok('#43 ⚠️ 비중 모드 초기매수 — 분모가 평가액 합계(=0)여도 투입자본을 써야 한다(0원 붕괴 방지)',
     ratio.initialTrades.length === 2 && ratio.initialTrades[0].qty === 11538);
 
   // 분배 일정이 리밸런싱 정책에 끌려가지 않는가
@@ -1430,44 +1415,40 @@ console.log('\n── 파트④-e 매월 목표 증액(현금 재투자) ──'
       && withC[0].contribution.overridden === true);
   eq('#89 누적 증액이 월별로 누적된다', ovc.months[ovc.months.length - 1].cumContribution, 5000000);
 
-  // 비중 모드 — 분모가 initial 일 때만 효과
-  const rInit = runBacktest({
-    config: makeBtConfig({
-      startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
-      targetMode: 'ratio', ratioBase: 'initial', rounding: 'floor',
-      contribution: { mode: 'amount', value: 10000000, split: 'ratio' },
-      assets: [{ id: 'r1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
-               { id: 'r2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
-    }),
-    prices: PRICES, dividends: DIVS, holidays: KR26,
+  // ⚠️ 비중 모드 — 증액은 **집행되지 않는다**(2026-08). 목표가 '종목 평가액 합계 × 비중'이라
+  //    분모를 키울 수단이 없다(그걸 유일하게 반영하던 분모 'initial' 선택지가 제거됐다).
+  //    실행한 척(행·누적 카드는 찍고 매수는 0)하면 사용자가 결과를 정반대로 읽는다.
+  const mkRatioContrib = (contribution) => makeBtConfig({
+    startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
+    targetMode: 'ratio', rounding: 'floor', contribution,
+    assets: [{ id: 'r1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
+             { id: 'r2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
   });
-  // ⚠️ `cumContribution > 0` 만 보면 contribBase 를 통째로 제거해도 통과한다(죽은 단언).
-  //    분모가 실제로 커졌는지를 **증액 없는 대조군과의 결과 차이**로 확인한다.
-  const rInitNo = runBacktest({
-    config: makeBtConfig({
-      startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
-      targetMode: 'ratio', ratioBase: 'initial', rounding: 'floor',
-      contribution: { mode: 'none', value: 0, split: 'ratio' },
-      assets: [{ id: 'r1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
-               { id: 'r2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
-    }),
-    prices: PRICES, dividends: DIVS, holidays: KR26,
+  const runRC = (contribution) => runBacktest({
+    config: mkRatioContrib(contribution), prices: PRICES, dividends: DIVS, holidays: KR26,
   });
-  ok('#90 비중 모드 initial — 증액이 분모를 키워 실제 매수를 늘린다',
-    rInit.summary.cumContribution > 0 && rInit.summary.finalEval > rInitNo.summary.finalEval
-      && rInit.summary.finalCash < rInitNo.summary.finalCash);
-  const rEq = runBacktest({
-    config: makeBtConfig({
-      startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
-      targetMode: 'ratio', ratioBase: 'equity', rounding: 'floor',
-      contribution: { mode: 'amount', value: 10000000, split: 'ratio' },
-      assets: [{ id: 'r1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
-               { id: 'r2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
-    }),
-    prices: PRICES, dividends: DIVS, holidays: KR26,
-  });
-  ok('#91 ⚠️ 비중 모드 equity에서는 증액이 무효임을 경고로 알린다',
-    rEq.warnings.some((w) => w.includes('초기 투자금 고정')));
+  const rContrib = runRC({ mode: 'amount', value: 10000000, split: 'ratio' });
+  const rNoContrib = runRC({ mode: 'none', value: 0, split: 'ratio' });
+  ok('#90 ⚠️ 비중 모드에서 증액은 집행되지 않는다 — 결과가 증액 없음과 1원도 다르지 않다',
+    rContrib.summary.cumContribution === 0
+      && rContrib.months.every((m) => !m.contribution)
+      && rContrib.summary.finalEval === rNoContrib.summary.finalEval
+      && rContrib.summary.finalCash === rNoContrib.summary.finalCash);
+  ok('#91 ⚠️ 그 사실을 경고로 알린다(조용히 무시 금지)',
+    rContrib.warnings.some((w) => w.includes('비중 모드에서는 매월 목표 증액이 반영되지 않습니다')));
+  ok('#91b 리밸런싱이 없는 비중 시나리오에서도 같은 경고가 뜬다(증액 스텝이 아예 안 생기므로)',
+    (() => {
+      const r = runBacktest({
+        config: makeBtConfig({
+          startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
+          targetMode: 'ratio', rounding: 'floor', policy: 'none',
+          contribution: { mode: 'amount', value: 10000000, split: 'ratio' },
+          assets: [{ id: 'r1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 100 }],
+        }),
+        prices: PRICES, dividends: DIVS, holidays: KR26,
+      });
+      return r.warnings.some((w) => w.includes('비중 모드에서는 매월 목표 증액이 반영되지 않습니다'));
+    })());
 }
 
 console.log('\n── 파트④-f 종목별 리밸런싱 일정 ──');
@@ -1586,25 +1567,35 @@ console.log('\n── 파트④-g 적대적 리뷰 확정 결함 회귀 ──')
     dead.warnings.some((w) => w.includes('증액 대상에서 제외')) ||
     dead.warnings.some((w) => w.includes('수량이 고정')));
 
-  // ⚠️ #103 — 비중 모드에서 '누적 증액' = 실제 Σ목표 증가액이어야 한다(Σ비중≠100%에서 깨졌었다).
-  const partial = runBacktest({
+  // ⚠️ #103 — 목표 금액 모드의 배분 규칙(비중 모드는 집행 자체가 없으므로 이제 여기만 남는다).
+  //    목표금액을 일부러 3:1로 어긋나게 두어 even/ratio가 실제로 갈리는지 본다.
+  const runSplit = (split) => runBacktest({
     config: makeBtConfig({
-      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
-      targetMode: 'ratio', ratioBase: 'initial', rounding: 'floor',
-      contribution: { mode: 'amount', value: 10000000, split: 'ratio' },
-      assets: [{ id: 'p1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 40 },
-               { id: 'p2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 40 }],
+      startDate: '2026-01-02', endDate: '2026-03-31', initialCapital: 450000000,
+      targetMode: 'amount', rounding: 'floor', policy: 'perCycle',
+      contribution: { mode: 'amount', value: 30000000, split },
+      assets: [{ id: 'q1', code: K200, name: 'K', payCycle: 'mid', targetAmount: 300000000 },
+               { id: 'q2', code: KFIN, name: 'F', payCycle: 'eom', targetAmount: 100000000 }],
     }),
     prices: PRICES, dividends: DIVS, holidays: KR26,
   });
-  // 각 달 perAsset.added 합 = 그 달 amount (Σ비중 80%여도)
-  const allMatch = partial.months.filter((m) => m.contribution).every((m) =>
-    Math.abs(m.contribution.perAsset.reduce((s, x) => s + x.added, 0) - m.contribution.amount) <= 1);
-  ok('#103 ⚠️ 비중 모드에서 Σ비중이 100%가 아니어도 종목별 증가분 합 = 증액액', allMatch);
-  const first = partial.months.find((m) => m.contribution);
-  const lastM = [...partial.months].reverse().find((m) => m.contribution);
-  ok('#103b Σ비중 80%에서도 목표 증가가 실제로 일어난다(분모 역산)',
-    !!first && !!lastM && lastM.contribution.perAsset[0].targetAfter > first.contribution.perAsset[0].targetAfter);
+  const firstContrib = (r) => r.months.find((m) => !!m.contribution && m.contribution.perAsset.length > 1);
+  ok('#103 split=even — 대상 종목에 균등 배분한다(잔여 1원은 마지막 종목이 흡수)',
+    (() => {
+      const m = firstContrib(runSplit('even'));
+      if (!m) return false;
+      const adds = m.contribution.perAsset.map((x) => x.added);
+      return Math.max(...adds) - Math.min(...adds) <= 1
+        && adds.reduce((s, x) => s + x, 0) === m.contribution.amount;
+    })());
+  ok('#103b split=ratio — 목표금액이 큰 종목이 더 많이 받는다(3:1)',
+    (() => {
+      const m = firstContrib(runSplit('ratio'));
+      if (!m) return false;
+      const by = new Map(m.contribution.perAsset.map((x) => [x.assetId, x.added]));
+      return (by.get('q1') ?? 0) === 3 * (by.get('q2') ?? 0)
+        && [...by.values()].reduce((s, x) => s + x, 0) === m.contribution.amount;
+    })());
 
   // ⚠️ #104 — 집행할 수 없는 증액 예외 규칙은 조용히 버리지 말고 경고한다.
   const orphanOv = runPdf({
@@ -1619,79 +1610,85 @@ console.log('\n── 파트④-g 적대적 리뷰 확정 결함 회귀 ──')
   ok('#104b 같은 달 중복 예외는 경고한다', orphanOv.warnings.some((w) => w.includes('중복 지정')));
 }
 
-console.log('\n── 파트④-h 목표 기준 totalWithDiv / 예수금 두 주머니 ──');
+console.log('\n── 파트④-h 목표 기준(비중 분모 = 종목 평가액 합계) / 예수금 두 주머니 ──');
 
 {
-  const mkRatio = (ratioBase) => makeBtConfig({
+  // ⚠️ 2026-08 사용자 정의: 비중의 분모는 **종목 평가액 합계 하나**다. 예수금·매매차익·누적
+  //    분배금은 분모에 들어가지 않는다(분모를 고르던 4종 선택지는 제거).
+  const mkRatio = (over = {}) => makeBtConfig({
     startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
-    targetMode: 'ratio', ratioBase, rounding: 'floor', policy: 'perCycle',
+    targetMode: 'ratio', rounding: 'floor', policy: 'perCycle',
     assets: [{ id: 'w1', code: K200, name: 'K', payCycle: 'mid', targetRatio: 50 },
              { id: 'w2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 50 }],
+    ...over,
   });
-  const run = (rb) => runBacktest({ config: mkRatio(rb), prices: PRICES, dividends: DIVS, holidays: KR26 });
-  const eq = run('equity');
-  const twd = run('totalWithDiv');
+  const run = (over, dividends = DIVS) => runBacktest({
+    config: mkRatio(over), prices: PRICES, dividends, holidays: KR26,
+  });
+  const main = run();
 
   // ⚠️ 불변식 — 두 주머니 합은 언제나 총 예수금과 같아야 한다(분배금을 따로 더하면 이중 계상).
-  const bucketOk = twd.months.every((m) => Math.abs((m.cashTradeEnd + m.cashDivEnd) - m.cashEnd) < 1e-6);
-  ok('#105 ⚠️ 매매 주머니 + 분배금 주머니 = 예수금 (전 월)', bucketOk);
-  ok('#105b 기말도 동일', Math.abs((twd.summary.finalCashTrade + twd.summary.finalCashDiv) - twd.summary.finalCash) < 1e-6);
+  ok('#105 ⚠️ 매매 주머니 + 분배금 주머니 = 예수금 (전 월)',
+    main.months.every((m) => Math.abs((m.cashTradeEnd + m.cashDivEnd) - m.cashEnd) < 1e-6));
+  ok('#105b 기말도 동일', Math.abs((main.summary.finalCashTrade + main.summary.finalCashDiv) - main.summary.finalCash) < 1e-6);
 
-  // 평가액이 초기 투자금 이상인 구간에서는 equity 와 완전히 같아야 한다(현금이 쌓인다).
-  const upMonths = twd.months.filter((m) => m.evalEnd >= 450000000);
-  ok('#106 평가액이 초기 투자금 이상이면 equity 기준과 동일하게 동작한다',
-    upMonths.length > 0 && upMonths.every((m) => {
-      const e = eq.months.find((x) => x.ym === m.ym);
-      return Math.abs(m.evalEnd - e.evalEnd) < 1e-6;
-    }));
+  // ⚠️ #106 — 이 규약의 핵심 단언. 분배금이 아무리 쌓여도 **수량이 1주도 달라지면 안 된다**.
+  //    분모에 현금이 섞이면(옛 'total'/'totalWithDiv') 목표가 커져 곧바로 수량이 갈린다.
+  //    ⚠️ allowNegativeCash로 '예수금 부족' 절단을 없앤 채 비교한다 — 그게 남아 있으면 현금이
+  //       많은 쪽이 덜 잘려서, 분모와 무관한 이유로 수량이 갈릴 수 있다(가짜 실패/가짜 통과).
+  const freeDiv = run({ allowNegativeCash: true });
+  const freeNoDiv = run({ allowNegativeCash: true }, {});
+  ok('#106 ⚠️ 예수금은 분모가 아니다 — 분배금 유무가 수량·평가액을 1원도 바꾸지 않는다',
+    freeDiv.summary.finalEval === freeNoDiv.summary.finalEval
+      && JSON.stringify(freeDiv.months.map((m) => m.holdings.map((h) => h.qty)))
+         === JSON.stringify(freeNoDiv.months.map((m) => m.holdings.map((h) => h.qty))));
+  ok('#106b 차이는 예수금에만 나타난다(쌓인 분배금 = 현금 증가분)',
+    freeDiv.summary.cumDivPaid > 0
+      && Math.abs((freeDiv.summary.finalCash - freeNoDiv.summary.finalCash) - freeDiv.summary.cumDivPaid) < 1e-6);
 
-  // ⚠️ PDF 픽스처는 7개월 내내 평가액이 초기 투자금(4.5억) 위에 있어 되메우기가 발동하지 않는다.
-  //    (그래서 #106이 성립한다.) 하락장을 실제로 만들려면 전용 픽스처가 필요하다.
-  const DROP = { DP: {} };
-  for (const d of ['2026-01-02', '2026-01-28', '2026-02-25', '2026-03-27', '2026-04-28']) DROP.DP[d] = 10000;
-  DROP.DP['2026-05-27'] = 6000;   // −40% 급락
-  DROP.DP['2026-06-26'] = 6000;
-  DROP.DP['2026-07-29'] = 6000;
-  const DROPDIV = { DP: { '2026-01': 500, '2026-02': 500, '2026-03': 500, '2026-04': 500, '2026-05': 500, '2026-06': 500, '2026-07': 500 } };
-  const mkDrop = (ratioBase) => makeBtConfig({
-    startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 100000000,
-    targetMode: 'ratio', ratioBase, rounding: 'floor', policy: 'perCycle',
-    assets: [{ id: 'z1', code: 'DP', name: '급락주', payCycle: 'eom', targetRatio: 100 }],
+  // ⚠️ #107 — 비중 합이 100%가 아닐 때의 귀결(화면 안내·엔진 경고와 같은 규약).
+  //    분모가 평가액이라 합이 100%가 아니면 **리밸런싱마다** 그 차이만큼 사고판다(1회성이 아니다).
+  const solo = (targetRatio) => runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+      targetMode: 'ratio', rounding: 'floor', policy: 'allEom',
+      assets: [{ id: 's1', code: K200, name: 'K', payCycle: 'eom', targetRatio }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
   });
-  const runDrop = (rb) => runBacktest({ config: mkDrop(rb), prices: DROP, dividends: DROPDIV, holidays: KR26 });
-  const dEq = runDrop('equity');
-  const dTwd = runDrop('totalWithDiv');
-
-  const dropMonths = dTwd.months.filter((m) => m.evalEnd > 0 && m.evalEnd < 100000000);
-  ok('#107 ⚠️ 평가액이 초기 투자금 아래로 내려간 달에 현금을 투입해 equity 기준보다 더 산다',
-    dropMonths.length > 0 && dTwd.summary.finalEval > dEq.summary.finalEval
-      && dTwd.summary.finalCash < dEq.summary.finalCash);
-
-  // 되메우기는 초기 투자금을 상한으로 한다(레버리지가 아니다).
-  ok('#107b 되메우기 후에도 평가액이 초기 투자금을 넘지 않는다',
-    dTwd.months.every((m) => m.evalEnd <= 100000000 + 1));
-
-  // ⚠️ 초기 매수로 매매 주머니가 비어 있으므로, 되메우기 매수는 **분배금 주머니**에서 나간다.
-  const usedDiv = dTwd.months.some((m, i) => i > 0 && m.cashDivEnd < dTwd.months[i - 1].cashDivEnd - 0.5);
-  ok('#108 ⚠️ 예수금이 모자라면 누적 분배금 주머니에서 꺼내 쓴다(사용 순서 관측)',
-    usedDiv && dTwd.summary.finalCashDiv < dTwd.summary.cumDivPaid);
-  ok('#108c 총액은 종전과 동일하게 유지된다(주머니는 분해일 뿐)',
-    Math.abs((dTwd.summary.finalCashTrade + dTwd.summary.finalCashDiv) - dTwd.summary.finalCash) < 1e-6);
+  const s100 = solo(100), s80 = solo(80), s120 = solo(120);
+  ok('#107 ⚠️ 합 100%(단일 종목)면 매매가 아예 없다 — 목표가 곧 현재 평가액이다',
+    s100.months.every((m) => m.trades.length === 0) && s100.summary.finalEval > 0);
+  ok('#107b 합 80% — 리밸런싱마다 그 차이만큼 팔아 현금이 쌓인다(반복되면 평가액이 계속 준다)',
+    s80.months.filter((m) => m.trades.some((t) => t.qty < 0)).length >= 5
+      && s80.summary.finalEval < s100.summary.finalEval
+      && s80.summary.finalCash > s100.summary.finalCash);
+  ok('#107c 합 120% — 현금은 분모가 아니지만 매수 재원은 되므로 예수금을 헐어 더 산다',
+    s120.months.filter((m) => m.trades.some((t) => t.qty > 0)).length >= 5
+      && s120.summary.finalEval > s100.summary.finalEval
+      && s120.summary.finalCash < s100.summary.finalCash);
+  ok('#107d ⚠️ 비중 합이 100%가 아니면 경고한다(합계 오타를 조용히 실행하지 않게)',
+    s80.warnings.some((w) => w.includes('목표 비중 합'))
+      && s120.warnings.some((w) => w.includes('목표 비중 합'))
+      && !s100.warnings.some((w) => w.includes('목표 비중 합')));
 
   // 매도 대금은 매매 주머니로만 들어간다 → 분배금 주머니는 지급으로만 늘어난다.
-  const divOnlyGrows = twd.months.every((m, i) => {
-    const prev = i === 0 ? 0 : twd.months[i - 1].cashDivEnd;
-    return m.cashDivEnd <= prev + m.divPaid + 1e-6;
-  });
-  ok('#108b 분배금 주머니는 지급으로만 늘어난다(매도 대금은 매매 주머니로)', divOnlyGrows);
+  ok('#108b 분배금 주머니는 지급으로만 늘어난다(매도 대금은 매매 주머니로)',
+    main.months.every((m, i) => {
+      const prev = i === 0 ? 0 : main.months[i - 1].cashDivEnd;
+      return m.cashDivEnd <= prev + m.divPaid + 1e-6;
+    }));
+  ok('#108c 총액은 주머니 분해와 무관하게 유지된다',
+    Math.abs((s120.summary.finalCashTrade + s120.summary.finalCashDiv) - s120.summary.finalCash) < 1e-6);
 
-  // 기존 3개 기준은 이 변경으로 1원도 달라지지 않아야 한다(하위호환).
-  const base3 = ['equity', 'total', 'initial'].map((rb) => run(rb).summary.finalTotal);
-  ok('#109 기존 분모 3종은 두 주머니 도입 후에도 결과가 유한하고 서로 구분된다',
-    base3.every((v) => Number.isFinite(v)) && new Set(base3.map((v) => Math.round(v))).size >= 2);
-  ok('#109b totalWithDiv 는 정규화에서 보존된다(레거시 값은 equity 로 폴백)',
-    makeBtConfig({ ratioBase: 'totalWithDiv' }).ratioBase === 'totalWithDiv'
-      && makeBtConfig({ ratioBase: 'bogus' }).ratioBase === 'equity');
+  // ⚠️ #109 — 레거시 시나리오 마이그레이션. 저장돼 있던 옛 분모 값은 조용히 버려져야 하고,
+  //    결과에도 지문에도 흔적이 남으면 안 된다(남으면 같은 설정이 두 결과를 낸다).
+  const legacy = makeBtConfig({ ratioBase: 'totalWithDiv', targetMode: 'ratio' });
+  ok('#109 ⚠️ 옛 ratioBase 값은 정규화에서 사라진다(분모 선택 부활 금지)',
+    !('ratioBase' in legacy) && legacy.targetMode === 'ratio');
+  ok('#109b 지문에도 남지 않는다(옛 값이 달라도 같은 지문)',
+    backtestFingerprint([makeBtConfig({ id: 'x', ratioBase: 'total', targetMode: 'ratio' })])
+      === backtestFingerprint([makeBtConfig({ id: 'x', ratioBase: 'initial', targetMode: 'ratio' })]));
 
   // ⚠️ #110 — 기말 예수금 **원천별 분해 항등식**. 기말 보유 표가 이 분해를 그대로 렌더하므로,
   //    항등식이 깨지면 화면의 소계가 예수금과 안 맞는다.
@@ -1702,7 +1699,7 @@ console.log('\n── 파트④-h 목표 기준 totalWithDiv / 예수금 두 주
     (r.initialCashAfter + r.summary.cumTradeNet + r.summary.cumStructuralNet + r.summary.cumDivPaid)
     - r.summary.finalCash) < 1e-6;
   ok('#110 ⚠️ 기말 예수금 = 초기잔여 + 누적매매차익 + 재편순현금 + 누적분배금(지급)',
-    [runPdf(), eq, twd, dTwd, runPdf({ contribution: { mode: 'pctOfCash', value: 40, split: 'ratio' } })].every(idOk));
+    [runPdf(), main, s80, s120, runPdf({ contribution: { mode: 'pctOfCash', value: 40, split: 'ratio' } })].every(idOk));
   const pdf = runPdf();
   ok('#110b ⚠️ 분배락 기준(cumDivAccrued)으로 바꾸면 항등식이 깨진다 — 지급 기준을 쓸 것',
     Math.abs(pdf.summary.cumDivAccrued - pdf.summary.cumDivPaid) > 1
@@ -1718,10 +1715,11 @@ console.log('\n── 파트④-h 목표 기준 totalWithDiv / 예수금 두 주
     return Math.abs((m.cashUsedTrade + m.cashUsedDiv) - (buys + init)) < 1e-6;
   });
   ok('#111 ⚠️ 주머니별 사용액 합 = 그 달 총 매수 대금(초기매수 포함, 매도 제외)',
-    [runPdf(), twd, dTwd, runPdf({ contribution: { mode: 'pctOfCash', value: 60, split: 'ratio' } })].every(drawOk));
+    [runPdf(), main, s120, runPdf({ contribution: { mode: 'pctOfCash', value: 60, split: 'ratio' } })].every(drawOk));
 
   // 실제 보고된 사례 재현: 매매 주머니가 바닥나 분배금에서 충당하는 달이 실제로 생긴다.
-  const tapped = dTwd.months.filter((m) => m.cashUsedDiv > 0.5);
+  // (초기 매수가 예수금을 다 쓴 뒤 비중 합 120%가 매달 분배금까지 헐어 사는 시나리오)
+  const tapped = s120.months.filter((m) => m.cashUsedDiv > 0.5);
   ok('#111b 매매 주머니가 모자라면 분배금에서 꺼낸 금액이 기록된다',
     tapped.length > 0 && tapped.every((m) => m.cashTradeEnd <= m.cashUsedTrade + 1e-6));
 
@@ -1734,7 +1732,7 @@ console.log('\n── 파트④-h 목표 기준 totalWithDiv / 예수금 두 주
     return Math.abs(used - Math.max(0, -tradePot)) < 1e-6;
   };
   ok('#112 ⚠️ 분배금에서 헐어 쓴 누적액 = max(0, −(초기잔여 + 누적매매차익 + 재편순현금))',
-    [runPdf(), twd, dTwd].every(shortfallOk));
+    [runPdf(), main, s80, s120].every(shortfallOk));
 
   console.log(`      · PDF 시나리오 분해: 초기잔여 ${Math.round(pdf.initialCashAfter).toLocaleString('ko-KR')}`
     + ` + 매매차익 ${Math.round(pdf.summary.cumTradeNet).toLocaleString('ko-KR')}`
@@ -2069,17 +2067,14 @@ console.log('\n── 파트④-i 리밸런싱 안 함 / 분배금 재투자 (#1
     !runR({ policy: 'allEom', contribution: { mode: 'amount', value: 1000000, split: 'ratio' } })
       .warnings.some((w) => w.includes('매월 목표 증액이 전혀 집행되지 않습니다')));
 
-  // ⚠️ #144 — 레벨 목표(목표금액 / 분모 initial·total) + 리밸런싱 + 재투자 조합에서는 재투자분이
-  //    되팔려 실효가 없고 되판 대금이 tradeNet만 부풀린다. 조용히 두면 비교 표 순위가 뒤바뀐다.
+  // ⚠️ #144 — 레벨 목표(목표 금액) + 리밸런싱 + 재투자 조합에서는 재투자분이 되팔려 실효가 없고
+  //    되판 대금이 tradeNet만 부풀린다. 조용히 두면 비교 표 순위가 뒤바뀐다.
+  //    ⚠️ 비중 모드는 분모가 평가액이라 재투자가 분모를 함께 키운다 → 되팔리지 않는다(경고 없음).
   const churnWarn = (r) => r.warnings.some((w) => w.includes('되팝니다'));
-  ok('#144 ⚠️ 레벨 목표 + 리밸런싱 + 재투자 조합을 경고한다(목표금액 / initial / total)',
-    churnWarn(runR({ policy: 'allEom', divReinvest: 'eom' }))
-      && churnWarn(runR({ policy: 'allEom', divReinvest: 'eom', targetMode: 'ratio', ratioBase: 'initial',
-        assets: [{ id: 'r1', code: RC, name: 'R', payCycle: 'eom', targetRatio: 100 }] }))
-      && churnWarn(runR({ policy: 'allEom', divReinvest: 'eom', targetMode: 'ratio', ratioBase: 'total',
-        assets: [{ id: 'r1', code: RC, name: 'R', payCycle: 'eom', targetRatio: 100 }] })));
-  ok('#144b 재투자가 살아 있는 조합(equity 분모 / 리밸런싱 없음)에는 그 경고를 띄우지 않는다',
-    !churnWarn(runR({ policy: 'allEom', divReinvest: 'eom', targetMode: 'ratio', ratioBase: 'equity',
+  ok('#144 ⚠️ 목표 금액 + 리밸런싱 + 재투자 조합을 경고한다',
+    churnWarn(runR({ policy: 'allEom', divReinvest: 'eom' })));
+  ok('#144b 재투자가 살아 있는 조합(비중 모드 / 리밸런싱 없음)에는 그 경고를 띄우지 않는다',
+    !churnWarn(runR({ policy: 'allEom', divReinvest: 'eom', targetMode: 'ratio',
       assets: [{ id: 'r1', code: RC, name: 'R', payCycle: 'eom', targetRatio: 100 }] }))
       && !churnWarn(runR({ divReinvest: 'eom' })));
 
@@ -2235,6 +2230,30 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /p\.removed = true;/.test(bt2)
       && /if \(p\.removed\) continue;/.test(bt2)
       && /p => !p\.removed\s*$/m.test(bt2));
+
+  // ── 목표 기준: 비중 분모 = 종목 평가액 합계 (2026-08 사용자 정의) ──
+  // ⚠️ 미러 테스트는 '분모 선택지가 되살아났는가'를 못 잡는다(미러도 같이 되살리면 통과) —
+  //    엔진·화면·타입에서 그 개념이 사라졌다는 사실 자체를 소스로 단언한다.
+  ok('#151 ⚠️ 엔진에 분모 선택 개념이 없다(ratioBase/BtRatioBase/totalWithDiv 식별자 부재)',
+    !/\bratioBase\b/.test(bt2) && !/\bBtRatioBase\b/.test(bt2)
+      && !/['"]totalWithDiv['"]/.test(bt2)
+      // 비중 분모는 '종목 평가액 합계'(totalEvalAt)로만 산출한다
+      && /const base = totalEvalAt\(s\.rebalDate\);/.test(bt2));
+  ok('#152 ⚠️ 화면에도 분모 드롭다운이 없다(라벨·select·option 전부 제거)',
+    !/RATIO_BASE_LABEL/.test(page) && !/ratioBase/.test(page)
+      && !/비중을 곱할 기준/.test(page)
+      && /const TARGET_MODE_LABEL = \{/.test(page));
+  ok('#153 ⚠️ 비중 모드에서는 매월 목표 증액을 실행하지 않는다(조기 반환) + 화면도 그렇게 안내',
+    /if \(config\.targetMode === 'ratio'\) continue;/.test(bt2)
+      && /집행되지 않습니다/.test(page));
+  // ⚠️ 설정 패널은 flex 컬럼 스크롤 영역이라 shrink-0이 없으면 브라우저 확대 시 섹션이 눌려 겹친다.
+  ok('#154 ⚠️ Section 루트에 shrink-0 (확대 시 설정 항목 겹침 방지)',
+    /function Section\(\{[\s\S]{0,300}?<div className="shrink-0 border border-gray-800 rounded-lg overflow-hidden/.test(page));
+  // ⚠️ 호버 설명은 화면 밖으로 흘러 잘리면 안 되고, 내부 스크롤로 닫혀서도 안 된다.
+  ok('#155 ⚠️ 호버 팝오버는 높이 상한 + 내부 스크롤(닫힘 예외)로 확대 화면에서도 읽힌다',
+    /maxHeight: pos\.maxH, overflowY: 'auto'/.test(page)
+      && /const maxH = Math\.max\(120,/.test(page)
+      && /closest\('\[data-bt-pop\]'\)\) return;/.test(page));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  통과 ${pass} / 실패 ${fail}\n`);

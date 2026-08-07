@@ -46,12 +46,15 @@ const pctText = (n) => `${cleanNum(n) >= 0 ? '+' : '−'}${Math.abs(cleanNum(n))
 /** 한국식 손익 색상 — 이익 red / 손실 blue */
 const pnlCls = (n) => (cleanNum(n) > 0 ? 'text-red-400' : cleanNum(n) < 0 ? 'text-blue-400' : 'text-gray-400');
 
-/** 비중 모드 분모 라벨 — 화면 곳곳이 같은 이름을 쓰도록 한 곳에 모은다. */
-const RATIO_BASE_LABEL = {
-  equity: '종목 평가액 합계',
-  total: '평가액 + 예수금',
-  totalWithDiv: '평가액 + 예수금 + 누적분배금',
-  initial: '초기 투자금 고정',
+/**
+ * 목표 기준 라벨 — 설정 배지·표제·비교 표·CSV가 같은 이름을 쓴다.
+ *
+ * ⚠️ 비중의 분모는 **종목 평가액 합계 하나로 고정**이다(사용자 정의 2026-08) — 분모를 고르던
+ *    옛 드롭다운(RATIO_BASE_LABEL 4종)은 제거됐다. 되살리지 말 것.
+ */
+const TARGET_MODE_LABEL = {
+  amount: '목표금액',
+  ratio: '목표비중',
 };
 
 /** 리밸런싱 정책 라벨 — 설정 드롭다운·표제·비교 표가 같은 이름을 쓴다. */
@@ -108,6 +111,15 @@ const TD = 'px-3 py-2.5';
  */
 const POP_CLS = 'fixed z-[1200] rounded-lg border border-gray-600 bg-[#111a2b] shadow-2xl px-3 py-2 leading-relaxed bt-noprint';
 
+/**
+ * 팝오버 배치 스타일 — Hint와 SummaryCard가 **같은 함수**를 쓴다(손복제 금지).
+ * maxHeight/overflowY가 빠지면 아래 useHoverPop의 상한이 화면에 반영되지 않는다.
+ */
+const popStyle = (pos) => ({
+  left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.w,
+  maxHeight: pos.maxH, overflowY: 'auto',
+});
+
 function useHoverPop(width = 320) {
   const ref = useRef(null);
   const [pos, setPos] = useState(null);
@@ -118,14 +130,24 @@ function useHoverPop(width = 320) {
     const w = Math.max(200, Math.min(width, window.innerWidth - 16));
     const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
     const below = window.innerHeight - r.bottom;
-    setPos(below >= 220 || below >= r.top
-      ? { left, w, top: r.bottom + 6 }
-      : { left, w, bottom: window.innerHeight - r.top + 6 });
+    const placeBelow = below >= 220 || below >= r.top;
+    // ⚠️ 높이 상한이 없으면 브라우저를 확대했을 때(= CSS px 뷰포트가 짧아졌을 때) 긴 설명이
+    //    화면 밖으로 흘러 아래가 통째로 잘린다. 남는 공간에 맞춰 자르고 내부 스크롤로 넘긴다.
+    const maxH = Math.max(120, (placeBelow ? below : r.top) - 14);
+    setPos(placeBelow
+      ? { left, w, top: r.bottom + 6, maxH }
+      : { left, w, bottom: window.innerHeight - r.top + 6, maxH });
   }, [width]);
   const close = useCallback(() => setPos(null), []);
   useEffect(() => {
     if (!pos) return;
-    const off = () => setPos(null);
+    // ⚠️ 팝오버 **내부** 스크롤로는 닫지 않는다 — 상한이 걸린 긴 설명은 안에서 스크롤해야
+    //    끝까지 읽을 수 있는데, 캡처 리스너가 그것까지 잡으면 읽을 방법이 사라진다.
+    const off = (e) => {
+      const t = e?.target;
+      if (t && t.nodeType === 1 && typeof t.closest === 'function' && t.closest('[data-bt-pop]')) return;
+      setPos(null);
+    };
     window.addEventListener('scroll', off, true);
     window.addEventListener('resize', off);
     return () => { window.removeEventListener('scroll', off, true); window.removeEventListener('resize', off); };
@@ -157,8 +179,8 @@ function Hint({ children, width = 340, className = '', label = '설명 보기' }
         <HelpCircle size={13} />
       </button>
       {pos && (
-        <div role="tooltip" className={`${POP_CLS} text-[12px] text-gray-300`}
-          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.w }}>
+        <div role="tooltip" data-bt-pop className={`${POP_CLS} text-[12px] text-gray-300`}
+          style={popStyle(pos)}>
           {children}
         </div>
       )}
@@ -264,11 +286,16 @@ function DivInput({ value, unknown, disabled, title, onCommit }) {
  *    대신 접힌 상태에서도 무엇으로 설정돼 있는지 알 수 있도록 호출부가 `badge`에 현재 값을
  *    요약해 넘긴다(안 그러면 '숨은 설정'이 된다).
  * ⚠️ 헤더는 div + 내부 토글 버튼이다 — 헤더 자체를 <button>으로 두면 `?`(Hint)가 버튼 중첩이 된다.
+ * ⚠️ 루트에 **shrink-0 필수**(2026-08 사용자 보고: 브라우저를 확대하면 항목이 겹쳐 보임).
+ *    설정 패널의 스크롤 영역이 `flex flex-col`이라, 내용이 패널 높이를 넘으면 flex 기본값
+ *    `flex-shrink:1`이 각 섹션을 자연 높이 아래로 눌러 버린다. 루트가 `overflow-hidden`이라
+ *    눌린 만큼 제목 줄이 잘려 위아래 섹션과 겹쳐 보였다(확대할수록 CSS px 높이가 줄어 심해진다).
+ *    shrink-0이면 눌리지 않고 패널이 그냥 스크롤된다.
  */
 function Section({ title, children, defaultOpen = false, badge = null, hint = null }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border border-gray-800 rounded-lg overflow-hidden bg-gray-900/40">
+    <div className="shrink-0 border border-gray-800 rounded-lg overflow-hidden bg-gray-900/40">
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-gray-800/60">
         <button
           onClick={() => setOpen((o) => !o)}
@@ -358,7 +385,7 @@ function SummaryCard({ label, value, cls, formula, note, compact }) {
         <div className={`${compact ? 'text-sm' : 'text-lg'} font-bold ${cls}`}>{value}</div>
       </div>
       {pos && (
-        <div role="tooltip" className={POP_CLS} style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.w }}>
+        <div role="tooltip" data-bt-pop className={POP_CLS} style={popStyle(pos)}>
           <div className="text-[12px] font-bold text-gray-200 mb-1">{label} — 계산식</div>
           <table className="w-full text-[12px]">
             <tbody>
@@ -546,7 +573,7 @@ function scenarioSubtitle(cfg, summary) {
   const parts = [
     summary ? `${summary.startDate} ~ ${summary.endDate}` : `${cfg.startDate || '?'} ~ ${cfg.endDate || '?'}`,
     `초기 ${won(cfg.initialCapital)}${cfg.extraCash > 0 ? ` (+예수금 ${won(cfg.extraCash)})` : ''}`,
-    cfg.targetMode === 'amount' ? '목표금액' : `목표비중(${RATIO_BASE_LABEL[cfg.ratioBase]})`,
+    TARGET_MODE_LABEL[cfg.targetMode] || cfg.targetMode,
     POLICY_LABEL[cfg.policy] || cfg.policy,
     `분배금 ${DIV_REINVEST_LABEL[cfg.divReinvest] || '현금 보유'}`
       + (cfg.divReinvest !== 'hold' ? ` · ${DIV_SPLIT_LABEL[cfg.divReinvestSplit] || ''}` : ''),
@@ -1123,7 +1150,7 @@ export default function BacktestPage({
         POLICY_LABEL[cfg.policy] || cfg.policy,
         DIV_REINVEST_LABEL[cfg.divReinvest] || cfg.divReinvest,
         cfg.divReinvest === 'hold' ? '-' : (DIV_SPLIT_LABEL[cfg.divReinvestSplit] || cfg.divReinvestSplit),
-        cfg.targetMode === 'amount' ? '목표금액' : `목표비중(${RATIO_BASE_LABEL[cfg.ratioBase]})`,
+        TARGET_MODE_LABEL[cfg.targetMode] || cfg.targetMode,
         s ? Math.round(s.finalTotal) : '',
         s ? Math.round(s.profit) : '',
         s ? s.profitRate.toFixed(2) : '',
@@ -1350,7 +1377,7 @@ export default function BacktestPage({
               </div>
             </Section>
           ) : !active ? (
-            <div className="text-center text-gray-500 text-xs py-8">
+            <div className="shrink-0 text-center text-gray-500 text-xs py-8">
               "새 시나리오"를 눌러 백테스트를 시작하세요.
             </div>
           ) : (
@@ -1404,16 +1431,31 @@ export default function BacktestPage({
 
               <Section
                 title="② 목표 기준"
-                badge={active.targetMode === 'amount' ? '목표 금액' : `목표 비중 · ${RATIO_BASE_LABEL[active.ratioBase]}`}
+                badge={active.targetMode === 'amount' ? '목표 금액' : '목표 비중 %'}
                 hint={(
                   <>
                     <p>
                       리밸런싱이 <b className="text-gray-300">무엇에 맞춰 수량을 조정할지</b>를 정합니다.
-                      <b className="text-gray-300"> 목표 금액</b>은 종목마다 "이 금액이 되게" 맞추고,
-                      <b className="text-gray-300"> 목표 비중 %</b>는 아래 분모에 비중을 곱한 금액에 맞춥니다.
+                      값은 아래 <b className="text-gray-300">⑥ 종목</b>에서 종목마다 직접 적어 넣습니다.
                     </p>
                     <p className="mt-1">
-                      첨부 PDF와 가장 가까운 것은 <b className="text-gray-300">목표 금액</b> 모드입니다
+                      <b className="text-gray-300">목표 금액</b> — 종목마다 "이 금액이 되게" 맞춥니다
+                      (예: 종목A 1,000만원 · 종목B 2,000만원).
+                    </p>
+                    <p className="mt-1">
+                      <b className="text-gray-300">목표 비중 %</b> — <b className="text-gray-300">종목 평가액 합계</b>를
+                      100으로 보고 그 안에서의 배분을 정합니다(예: 종목A 50% · 종목B 50%).
+                      분모에 <b className="text-gray-300">예수금·매매차익·누적 분배금은 넣지 않습니다</b> —
+                      현금 잔고에 따라 사용자가 정한 비율이 흔들리면 안 되기 때문입니다.
+                    </p>
+                    <p className="mt-1 text-gray-500">
+                      ※ 비중 합은 <b className="text-gray-400">100%로 맞추는 것이 기본</b>입니다. 100%가 아니면
+                      <b className="text-gray-400"> 리밸런싱마다</b> 그 차이만큼 사고팝니다 — 작으면 매번 팔아
+                      현금이 쌓이고(평가액이 계속 줄어듭니다), 크면 예수금을 헐어 더 삽니다.
+                      현금은 분모는 아니지만 <b className="text-gray-400">매수 재원</b>은 됩니다.
+                    </p>
+                    <p className="mt-1 text-gray-500">
+                      ※ 첨부 PDF와 가장 가까운 것은 <b className="text-gray-400">목표 금액</b> 모드입니다
                       (2.25억 → 4월부터 1.5억).
                     </p>
                   </>
@@ -1426,35 +1468,17 @@ export default function BacktestPage({
                       onClick={() => patchActive({ targetMode: v })}>{l}</button>
                   ))}
                 </div>
-                {active.targetMode === 'ratio' && (
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-1">
-                      <span className={LABEL}>비중을 곱할 기준(분모)</span>
-                      <Hint label="분모 설명">
-                        <p><b className="text-gray-300">종목 평가액 합계</b> — 현금을 빼고 종목만 본다. 매도 대금·분배금이 계속 쌓인다.</p>
-                        <p className="mt-1"><b className="text-gray-300">평가액 + 예수금</b> — 쌓인 현금까지 다시 투자에 넣는다.</p>
-                        <p className="mt-1">
-                          <b className="text-gray-300">평가액 + 예수금 + 누적분배금</b> — 평상시엔 평가액 기준으로 돌다가,
-                          평가액이 <b className="text-gray-300">초기 투자금</b>보다 작아지면 그 부족분만큼 보유 현금을 넣어
-                          초기 수준까지 되산다(재원은 예수금 먼저, 모자라면 누적 분배금).
-                        </p>
-                        <p className="mt-1"><b className="text-gray-300">초기 투자금 고정</b> — 목표 금액이 시장과 무관하게 고정된다.</p>
-                        <p className="mt-1 text-gray-500">
-                          ※ 분배금은 지급되는 순간 예수금에 들어오므로, 결과의 예수금 칸은 두 몫을 나눠 표시합니다
-                          (따로 더하면 이중 계상).
-                        </p>
-                      </Hint>
-                    </div>
-                    <select className={INPUT} value={active.ratioBase} disabled={readOnly}
-                      onChange={(e) => patchActive({ ratioBase: e.target.value })}>
-                      <option value="equity">종목 평가액 합계 (현금 제외 — 현금이 계속 쌓임)</option>
-                      <option value="total">종목 평가액 + 예수금 (쌓인 현금도 재투자)</option>
-                      <option value="totalWithDiv">종목 평가액 + 예수금 + 누적분배금 (하락 시 현금 투입)</option>
-                      <option value="initial">초기 투자금 고정 (목표금액 불변)</option>
-                    </select>
-                  </div>
-                )}
-                <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`} onClick={splitEven} disabled={readOnly || !active.assets.length}>
+                {/* ⚠️ 분모 선택 드롭다운은 없다(2026-08 사용자 정의) — 비중의 기준은 '종목 평가액
+                    합계' 하나로 고정이다. 대신 그 사실을 여기 한 줄로 always-on 표시한다. */}
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  {active.targetMode === 'amount'
+                    ? '종목마다 적어 넣은 금액이 되도록 매수·매도합니다. 남는 돈은 예수금으로 남습니다.'
+                    : '기준(분모)은 종목 평가액 합계입니다 — 예수금·매매차익·누적 분배금은 포함하지 않습니다.'}
+                </p>
+                <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`} onClick={splitEven} disabled={readOnly || !active.assets.length}
+                  title={active.targetMode === 'amount'
+                    ? '초기 투자금(+추가 예수금)을 종목 수로 나눠 목표 금액에 채웁니다'
+                    : '100%를 종목 수로 나눠 목표 비중에 채웁니다'}>
                   종목 수로 균등 분배
                 </button>
               </Section>
@@ -1517,11 +1541,12 @@ export default function BacktestPage({
                         </select>
                       </div>
                     </div>
-                    {active.targetMode === 'ratio' && active.ratioBase !== 'initial' && (
+                    {active.targetMode === 'ratio' && (
                       <p className="text-[10px] text-amber-400/90 leading-relaxed">
-                        ⚠️ 비중 모드에서 분모가 '{RATIO_BASE_LABEL[active.ratioBase]}'이면
-                        증액이 효과가 없습니다 — 목표가 이미 파생값이기 때문입니다. 분모를
-                        <b> 초기 투자금 고정</b>으로 바꾸거나 목표 <b>금액</b> 모드를 쓰세요.
+                        ⚠️ <b>목표 비중 %</b> 모드에서는 증액이 <b>집행되지 않습니다</b> — 목표가
+                        '종목 평가액 합계 × 비중'이라 늘릴 대상이 없기 때문입니다. 쌓인 현금을
+                        다시 넣으려면 <b>목표 금액</b> 모드를 쓰거나, <b>④ 분배금 처리</b>를 재투자로
+                        두거나, 목표 비중 합을 100%보다 크게 잡으세요.
                       </p>
                     )}
 
@@ -2141,7 +2166,7 @@ export default function BacktestPage({
                 <p className="text-[12px] text-gray-500 mt-0.5">
                   기간 {result.summary.startDate} ~ {result.summary.endDate} · 초기 투자금 {won(active.initialCapital)}
                   {active.extraCash > 0 && ` (+ 예수금 ${won(active.extraCash)})`} ·
-                  {' '}{active.targetMode === 'amount' ? '목표금액' : `목표비중(${RATIO_BASE_LABEL[active.ratioBase]})`} ·
+                  {' '}{TARGET_MODE_LABEL[active.targetMode] || active.targetMode} ·
                   {' '}수량 {active.rounding === 'floor' ? '내림' : active.rounding === 'round' ? '반올림' : '소수 허용'}
                 </p>
               </div>

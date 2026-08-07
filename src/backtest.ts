@@ -53,19 +53,18 @@ export type BtGroup = 'mid' | 'eom' | 'all';
  */
 export type BtPolicy = 'perCycle' | 'allMid' | 'allEom' | 'fixedDay' | 'none';
 
-/** 목표 해석. amount=종목별 목표금액 / ratio=비중(%) × ratioBase */
-export type BtTargetMode = 'amount' | 'ratio';
-
 /**
- * 비중 모드의 분모.
- *  equity       — 종목 평가액 합계(현금 제외 → 차익이 현금으로 계속 쌓인다)
- *  total        — 평가액 + 예수금(쌓인 현금도 매달 재투자)
- *  initial      — 초기 투자금 고정(목표금액 불변)
- *  totalWithDiv — 평가액 + 예수금 + 누적분배금. 평상시엔 equity와 같고, **평가액이 초기
- *                 투자금 아래로 내려가면** 그 부족분을 보유 현금(예수금 → 누적분배금 순)으로
- *                 메워 초기 수준까지 되산다.
+ * 목표 해석.
+ *  amount — 종목별로 사용자가 적어 넣은 **목표 금액**에 맞춘다.
+ *  ratio  — 사용자가 정한 **비중(%) × 종목 평가액 합계**에 맞춘다.
+ *
+ * ⚠️ 비중의 분모는 **종목 평가액 합계 하나로 고정**이다(사용자 정의 2026-08).
+ *    예수금·매매차익·누적분배금은 절대 분모에 넣지 않는다 — 비중은 "들고 있는 종목들
+ *    사이의 배분"이라 현금이 섞이면 A 50% / B 50% 라는 사용자의 지시와 뜻이 달라진다.
+ *    과거엔 분모를 4종(equity/total/initial/totalWithDiv) 중에 고르게 했으나 제거됐다.
+ *    되살리지 말 것.
  */
-export type BtRatioBase = 'equity' | 'total' | 'initial' | 'totalWithDiv';
+export type BtTargetMode = 'amount' | 'ratio';
 
 /** 수량 산출 규칙. floor=0 방향 버림(PDF 규약) / round=반올림 / exact=소수 허용(펀드 좌수) */
 export type BtRounding = 'floor' | 'round' | 'exact';
@@ -214,7 +213,6 @@ export interface BtConfig {
   /** 초기 투자금과 별도로 들고 시작할 현금(선택, 기본 0). */
   extraCash: number;
   targetMode: BtTargetMode;
-  ratioBase: BtRatioBase;
   rounding: BtRounding;
   policy: BtPolicy;
   /** policy='fixedDay'일 때 매월 며칠(1~31) */
@@ -831,7 +829,6 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
   const ts = Date.now();
   const policy = partial.policy;
   const mode = partial.targetMode;
-  const base = partial.ratioBase;
   const rounding = partial.rounding;
   const reinv = partial.divReinvest;
   const divSplit = partial.divReinvestSplit;
@@ -843,7 +840,6 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
     initialCapital: Math.max(0, asNum(partial.initialCapital, 0)),
     extraCash: Math.max(0, asNum(partial.extraCash, 0)),
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
-    ratioBase: base === 'total' || base === 'initial' || base === 'totalWithDiv' ? base : 'equity',
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
     policy:
       policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none'
@@ -962,7 +958,7 @@ export function backtestFingerprint(scenarios: unknown): string {
         n: s?.name ?? '',
         p: [
           s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
-          s?.targetMode ?? '', s?.ratioBase ?? '', s?.rounding ?? '', s?.policy ?? '',
+          s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '',
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
           s?.allowNegativeCash ? 1 : 0,
           // 분배금 처리 — 결과를 통째로 바꾸는 사용자 설정
@@ -1078,7 +1074,7 @@ export function buildSlots(config: BtConfig, holidays: Set<string>): BtSlot[] {
     // ⚠️ 병합 키는 **날짜 하나**다(그룹을 섞지 말 것). 같은 날짜를 그룹별로 쪼개면 그 날
     //    리밸런싱 스텝이 2회 돌면서 '전 종목 매도 → 그 다음 매수' 불변식이 깨진다:
     //    1패스의 매수가 아직 오지 않은 2패스 매도 대금을 못 써 예수금 부족으로 잘리고,
-    //    비중 모드의 ratioBaseAt도 패스 사이에 값이 달라져 결과가 그룹 순서에 의존하게 된다.
+    //    비중 모드의 분모(종목 평가액 합계)도 패스 사이에 값이 달라져 결과가 그룹 순서에 의존하게 된다.
     const byKey = new Map<string, { date: string; group: BtGroup; cycle: 'mid' | 'eom' | null; overridden: boolean; assetIds: string[]; groups: Set<BtGroup> }>();
     const add = (date: string, group: BtGroup, cycle: 'mid' | 'eom' | null, overridden: boolean, assetId: string) => {
       if (!isIsoDate(date)) return;
@@ -1460,29 +1456,18 @@ export function runBacktest(input: BtRunInput): BtResult {
     return { amount: hit.missing ? 0 : p.qty * hit.price, hit };
   };
 
+  /**
+   * 종목 평가액 합계. **비중 모드의 분모이기도 하다**(BtTargetMode 주석 참조).
+   *
+   * ⚠️ 여기에 `cash`(예수금)나 누적 분배금·매매차익을 더하지 말 것 — 비중은 "들고 있는
+   *    종목들 사이의 배분"이고, 현금이 분모에 섞이면 사용자가 정한 A 50% / B 50%가
+   *    현금 잔고에 따라 흔들린다. 분모를 고르는 옵션(total/initial/totalWithDiv)은
+   *    2026-08 사용자 정의로 제거됐다.
+   */
   const totalEvalAt = (date: string): number => {
     let s = 0;
     for (const p of positions) { if (p.qty > QTY_EPS) s += evalOf(p, date).amount; }
     return s;
-  };
-
-  /** 비중 모드의 분모. */
-  // 비중 모드 'initial' 분모에 누적되는 매월 증액분(목표금액 모드에서는 쓰이지 않는다).
-  let contribBase = 0;
-  const ratioBaseAt = (date: string): number => {
-    if (config.ratioBase === 'initial') return config.initialCapital + config.extraCash + contribBase;
-    const eq = totalEvalAt(date);
-    if (config.ratioBase === 'total') return eq + cash;
-    if (config.ratioBase === 'totalWithDiv') {
-      // 평상시엔 평가액 기준(차익은 현금으로 쌓임)이고, **평가액이 초기 투자금 아래로 내려가면**
-      // 그 부족분만큼 보유 현금을 투입해 초기 수준까지 되메운다.
-      // ⚠️ 재원은 예수금 + 누적 분배금 **합계**다(둘을 따로 더하면 이중 계상 — 분배금은 이미
-      //    예수금 안에 있다). 사용 순서(예수금 먼저 → 분배금)는 applyCash가 주머니로 표현한다.
-      const invested = config.initialCapital + config.extraCash;
-      if (eq >= invested) return eq;
-      return Math.min(invested, eq + Math.max(0, cash));
-    }
-    return eq;
   };
 
   /**
@@ -1620,8 +1605,8 @@ export function runBacktest(input: BtRunInput): BtResult {
     p.active = true;
   }
   {
-    // ⚠️ 초기 매수의 비중 분모는 ratioBase와 무관하게 **투입 자본**이다.
-    //    ratioBase='equity'를 그대로 쓰면 그 시점 평가액이 0이라 목표가 전부 0이 되어
+    // ⚠️ 초기 매수만은 비중 분모가 평가액이 아니라 **투입 자본**이다.
+    //    평소 분모(종목 평가액 합계)를 그대로 쓰면 그 시점 평가액이 0이라 목표가 전부 0이 되어
     //    아무것도 사지 않는다(비중 모드가 통째로 죽는 회귀).
     const base = config.initialCapital + config.extraCash;
     for (const p of positions) {
@@ -1667,19 +1652,30 @@ export function runBacktest(input: BtRunInput): BtResult {
         warnings.push(`${nm}: 리밸런싱 일정이 없어 최초 매수 후 수량이 고정됩니다(의도한 설정이면 무시하세요).`);
       }
     }
-    // ⚠️ 목표가 **레벨**(고정 금액 / 고정 분모)인 모드에서는 리밸런싱이 재투자분을 그대로 되판다.
+    // ⚠️ 목표가 **레벨(고정 금액)** 인 모드에서는 리밸런싱이 재투자분을 그대로 되판다.
     //    실질 효과는 거의 0인데 되판 대금이 tradeNet(‘누적 매매차익’)에 들어가 지표만 부푼다
     //    (재투자 매수는 reinvestNet으로 빠지므로 매수/매도가 비대칭이 된다). 조용히 두면
     //    비교 표에서 시나리오 순위가 뒤바뀐다.
-    const levelTarget = config.targetMode === 'amount'
-      || config.ratioBase === 'initial' || config.ratioBase === 'total';
-    if (reinvestOn && slots.length > 0 && levelTarget) {
+    //    ⚠️ 비중 모드는 분모가 평가액이라 재투자가 분모를 키워 목표도 같이 오른다 → 되팔리지 않는다.
+    if (reinvestOn && slots.length > 0 && config.targetMode === 'amount') {
       warnings.push(
-        '목표가 고정 수준인 모드(목표금액 · 분모 “초기 투자금 고정”/“평가액+예수금”)에서는 '
-        + '분배금 재투자로 산 수량을 다음 리밸런싱이 목표에 맞춰 되팝니다 — 재투자 효과가 거의 없고, '
-        + '되판 대금이 ‘누적 매매차익’에 잡혀 실제보다 커 보입니다. '
-        + '재투자를 살리려면 리밸런싱을 끄거나(‘리밸런싱 안 함’) 분모를 “종목 평가액 합계”로 바꾸세요.',
+        '목표 금액 모드에서는 분배금 재투자로 산 수량을 다음 리밸런싱이 목표 금액에 맞춰 되팝니다 — '
+        + '재투자 효과가 거의 없고, 되판 대금이 ‘누적 매매차익’에 잡혀 실제보다 커 보입니다. '
+        + '재투자를 살리려면 리밸런싱을 끄거나(‘리밸런싱 안 함’) 목표를 ‘목표 비중 %’로 바꾸세요.',
       );
+    }
+    // ⚠️ 분모가 '종목 평가액 합계'로 고정되면서 **비중 합이 100%가 아닌 것의 뜻이 달라졌다** —
+    //    1회성 현금 버퍼가 아니라 리밸런싱 **때마다** 그 차이만큼 사고파는 지시가 된다(80%면
+    //    매번 20%씩 팔아 평가액이 복리로 줄어든다). 오타 한 번이 조용히 그렇게 돌면 안 된다.
+    if (config.targetMode === 'ratio') {
+      const ratioSum = config.assets.reduce((s, a) => s + Math.max(0, a.targetRatio ?? 0), 0);
+      if (ratioSum > 0 && Math.abs(ratioSum - 100) > 0.01) {
+        warnings.push(
+          `목표 비중 합이 ${Math.round(ratioSum * 100) / 100}%입니다(100% 아님) — 분모가 ‘종목 평가액 합계’라 `
+          + '리밸런싱마다 그 차이만큼 사고팝니다. 100%보다 작으면 매번 팔아 현금이 쌓이고(평가액이 계속 줄어듭니다), '
+          + '크면 예수금을 헐어 더 삽니다. ⑦ 중도 종목 변경으로 비중을 바꿨다면 무시해도 됩니다.',
+        );
+      }
     }
   }
 
@@ -1732,6 +1728,18 @@ export function runBacktest(input: BtRunInput): BtResult {
     //    (예외 규칙만 아래에서 경고했다). 사용자가 설정한 값이 조용히 무시되면 안 된다.
     if (config.contribution.mode !== 'none' && config.contribution.value > 0 && firstRebalOfYm.size === 0) {
       warnings.push('리밸런싱이 한 번도 없어 매월 목표 증액이 전혀 집행되지 않습니다(증액은 그 달 첫 리밸런싱 직전에만 걸립니다).');
+    }
+    // ⚠️ 비중 모드에서는 증액이 **원리적으로** 집행되지 않는다(아래 contrib 스텝의 조기 반환).
+    //    리밸런싱 유무와 무관하므로 스텝 안이 아니라 여기서 한 번 알린다 — 스텝은 리밸런싱이
+    //    있는 달에만 생겨서, 거기서만 경고하면 '리밸런싱 없음' 시나리오가 사실과 다른 안내를 받는다.
+    const anyContrib = (config.contribution.mode !== 'none' && config.contribution.value > 0)
+      || config.contribOverrides.some(o => o.mode !== 'none' && o.value > 0);
+    if (anyContrib && config.targetMode === 'ratio') {
+      warnings.push(
+        '비중 모드에서는 매월 목표 증액이 반영되지 않습니다 — 목표가 “종목 평가액 합계 × 비중”이라 '
+        + '늘릴 대상이 없습니다. 쌓인 현금을 다시 투입하려면 목표 금액 모드를 쓰거나, '
+        + '④ 분배금 처리를 재투자로 두거나, 목표 비중 합을 100%보다 크게 잡으세요.',
+      );
     }
     // 집행할 리밸런싱이 없는 달을 겨냥한 예외 규칙은 조용히 버려지므로 알린다.
     for (const o of config.contribOverrides) {
@@ -1862,6 +1870,13 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (step.kind === 'contrib') {
       const rule = contribOvByYm.get(step.ym) ?? config.contribution;
       if (rule.mode === 'none' || !(rule.value > 0)) continue;
+      // ⚠️ 비중 모드에서는 목표가 '종목 평가액 합계 × 비중'이라 **증액할 대상 자체가 없다** —
+      //    현금을 더 넣겠다고 해도 분모가 그대로라 목표가 1원도 오르지 않는다(분모를 '초기
+      //    투자금 고정'으로 두던 옛 선택지만 이걸 반영했는데 2026-08에 제거됐다).
+      //    ⚠️ 실행한 척하지 말 것 — 과거엔 '증액 N원' 행과 '누적 증액' 카드가 그대로 찍히면서
+      //       실제 매수는 0이라, 경고를 놓친 사용자가 결과를 정반대로 읽었다.
+      //    경고는 위 슬롯 준비 블록에서 **한 번만** 띄운다(리밸런싱 유무와 무관한 사실이므로).
+      if (config.targetMode === 'ratio') continue;
       const cashBefore = cash;
       const requested = rule.mode === 'pctOfCash' ? (cashBefore * rule.value) / 100 : rule.value;
       let amount = requested;
@@ -1887,51 +1902,24 @@ export function runBacktest(input: BtRunInput): BtResult {
         warnings.push(`${step.ym}: 리밸런싱 일정이 없는 종목은 증액 대상에서 제외했습니다(목표만 오르고 매수되지 않기 때문).`);
       }
 
+      // 여기 도달하는 것은 목표 금액 모드뿐이다(비중 모드는 위에서 조기 반환).
       const perAsset: BtContribRow['perAsset'] = [];
-      if (config.targetMode === 'amount') {
-        const ws = elig.map(p =>
-          config.contribution.split === 'even' ? 1 : Math.max(0, p.targetAmount ?? 0),
-        );
-        let totalW = ws.reduce((s, x) => s + x, 0);
-        if (!(totalW > 0)) { ws.fill(1); totalW = elig.length; }
-        let left = amount;
-        elig.forEach((p, i) => {
-          // 마지막 종목이 잔여를 받아 배분 합 = amount 를 정확히 만든다(원 단위 오차 방지).
-          const share = i === elig.length - 1 ? left : Math.floor((amount * ws[i]) / totalW);
-          left -= share;
-          p.targetAmount = (p.targetAmount ?? 0) + share;
-          perAsset.push({
-            assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-            added: share, targetAfter: p.targetAmount,
-          });
+      const ws = elig.map(p =>
+        config.contribution.split === 'even' ? 1 : Math.max(0, p.targetAmount ?? 0),
+      );
+      let totalW = ws.reduce((s, x) => s + x, 0);
+      if (!(totalW > 0)) { ws.fill(1); totalW = elig.length; }
+      let left = amount;
+      elig.forEach((p, i) => {
+        // 마지막 종목이 잔여를 받아 배분 합 = amount 를 정확히 만든다(원 단위 오차 방지).
+        const share = i === elig.length - 1 ? left : Math.floor((amount * ws[i]) / totalW);
+        left -= share;
+        p.targetAmount = (p.targetAmount ?? 0) + share;
+        perAsset.push({
+          assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+          added: share, targetAfter: p.targetAmount,
         });
-      } else {
-        // 비중 모드에서 목표는 '분모 × 비중'이라 종목별로 더할 대상이 없고, 분모를 키우면
-        // **비중을 가진 모든 활성 종목**의 목표가 함께 오른다.
-        // ⚠️ `contribBase += amount` 로 두지 말 것 — 실제 목표 증가는 `Δ분모 × Σ비중/100` 이라
-        //    Σ비중이 100%가 아니면(현금 버퍼용 80% 등 정상 설정) '누적 증액'이 실제 증가와
-        //    100/Σ 배만큼 어긋나고, 예수금 클램프도 엉뚱한 양을 자르게 된다.
-        //    Σ목표 증가 = amount 가 되도록 분모 증가분을 역산한다.
-        const ratioSum = live.reduce((s, p) => s + Math.max(0, p.targetRatio ?? 0), 0);
-        if (!(ratioSum > 0)) {
-          warnings.push(`${step.ym}: 목표비중이 모두 0이라 증액을 적용할 수 없습니다.`);
-          continue;
-        }
-        contribBase += (amount * 100) / ratioSum;
-        if (config.ratioBase !== 'initial') {
-          note = note ? `${note} · 비중 모드(분모 ${config.ratioBase})에서는 효과 없음` : `비중 모드(분모 ${config.ratioBase})에서는 효과 없음`;
-          warnings.push('비중 모드에서 매월 증액은 분모를 "초기 투자금 고정"으로 두었을 때만 반영됩니다.');
-        }
-        const baseAfter = ratioBaseAt(step.date);
-        for (const p of live) {
-          perAsset.push({
-            assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-            // 비중 모드의 종목별 증가분 = Δ분모 × 그 종목 비중/100
-            added: Math.round((amount * Math.max(0, p.targetRatio ?? 0)) / ratioSum),
-            targetAfter: targetOf(p, config, baseAfter),
-          });
-        }
-      }
+      });
 
       const m = monthOf(step.ym);
       m.contribution = {
@@ -1978,7 +1966,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       }
       // 4) 재원 조달
       if (e.funding === 'reallocate') {
-        const base = ratioBaseAt(e.date);
+        const base = totalEvalAt(e.date);
         // ⚠️ 매도를 먼저 전부 처리한 뒤 매수 — 순서가 섞이면 재원이 마련되기 전에 매수가
         //    예수금 한도에 걸려 조용히 목표 미달로 끝난다(PDF 4/21이 정확히 이 형태다).
         const acts = positions.filter(p => p.active);
@@ -1996,7 +1984,7 @@ export function runBacktest(input: BtRunInput): BtResult {
           if (t) pushTrade(t);
         }
       } else if (e.funding === 'cash') {
-        const base = ratioBaseAt(e.date);
+        const base = totalEvalAt(e.date);
         for (const aid of e.addAssets) {
           const p = posById.get(aid);
           if (!p || !p.active) continue;
@@ -2010,7 +1998,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     // kind === 'rebal'
     {
       const s = step.slot;
-      const base = ratioBaseAt(s.rebalDate);
+      const base = totalEvalAt(s.rebalDate);
       const eligible: Pos[] = [];
       for (const aid of s.assetIds) {
         const p = posById.get(aid);
