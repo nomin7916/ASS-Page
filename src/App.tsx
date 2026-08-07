@@ -86,22 +86,41 @@ import {
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
 
-// 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만,
-// '__report__'(시장리포트 등록 알림)은 시장리포트 ON 사용자만 수신.
+// 공지 수신 대상 판정 — '__notebook__'(학습자료 등록 알림)은 학습자료 ON 사용자만 수신.
 // '__all__'은 전체, 그 외는 해당 이메일만. (관리자는 호출 전에 이미 제외됨)
-function notifTargetsUser(targetEmail: string, email: string, notebookEnabled: boolean, reportEnabled: boolean): boolean {
+// ⚠️ 옛 '__report__' 센티넬은 의도적으로 없다 — 시장동향 리포트가 '단일 URL 바로가기'로 바뀌며
+// 공지 채널이 폐지됐다. 시트에 남은 옛 리포트 공지는 여기서 false로 떨어져 더는 발송되지 않는다.
+function notifTargetsUser(targetEmail: string, email: string, notebookEnabled: boolean): boolean {
   if (targetEmail === '__notebook__') return notebookEnabled === true;
-  if (targetEmail === '__report__') return reportEnabled === true;
+  if (targetEmail === '__report__') return false;
   return targetEmail === '__all__' || targetEmail?.toLowerCase() === email.toLowerCase();
 }
 
-// 자료 등록 시 사용자 공지 발송 여부(채널별 '공지 ON/OFF' 토글) — app_settings.json 로드값 정규화.
+// 자료 등록 시 사용자 공지 발송 여부('공지 ON/OFF' 토글) — app_settings.json 로드값 정규화.
 // 미지정/손상값은 ON으로 해석(기존 동작 유지) — OFF는 명시적으로 false일 때만.
-const NOTICE_FLAGS_DEFAULT = { notebook: true, report: true };
+// 리포트 채널 폐지로 학습자료 하나만 남았다(옛 파일의 report 키는 로드 시 조용히 버려진다).
+const NOTICE_FLAGS_DEFAULT = { notebook: true };
 const normalizeNoticeFlags = (raw: any) => ({
   notebook: raw?.notebook !== false,
-  report: raw?.report !== false,
 });
+
+// ── 시장동향 리포트 = 유튜브식 단일 URL 바로가기 ──
+// ⚠️ 저장은 기존 settings 키 'reportLinks'를 그대로 재사용한다(Apps Script의 setSettings/getSettings는
+//    키 화이트리스트가 있어 새 키를 거부 → 새 키를 쓰면 재배포 전까지 일반 사용자에게 전달되지 않는다).
+//    그래서 프론트 상태는 문자열 하나(reportUrl)지만 wire 포맷은 계속 배열이다.
+// ⚠️ reportLinksFromUrl은 순수 함수여야 한다(타임스탬프 금지) — 유튜브/학습자료 저장 경로가 공동 기록
+//    (co-write)으로 이 값을 매번 다시 만들기 때문에, 매 호출 다른 값이 나오면 무의미한 저장 churn이 난다.
+const REPORT_LINK_TITLE = '시장동향 리포트';
+const reportUrlFromLinks = (links: any): string => {
+  if (!Array.isArray(links)) return '';
+  // 레거시 다중 링크/HTML 파일 항목은 첫 URL만 승계(파일 전용 항목은 url이 없어 자연 탈락).
+  const hit = links.find(l => l && typeof l.url === 'string' && l.url.trim());
+  return hit ? hit.url.trim() : '';
+};
+const reportLinksFromUrl = (url: string) => {
+  const u = (url || '').trim();
+  return u ? [{ title: REPORT_LINK_TITLE, url: u }] : [];
+};
 
 // 새 탭 관리자 접속(impersonation): "접속" 버튼이 window.open('/?adminView=<email>')로 새 탭을 연다.
 // 이 상수는 새 탭 콜드부팅 시 1회 산출 — 관리자 포털 탭(파라미터 없음)에서는 null이라 영향 없음.
@@ -194,10 +213,11 @@ export default function App() {
   const [dividendTaxHistory, setDividendTaxHistory] = useState<Record<string, any>>({});
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [notebookLinks, setNotebookLinks] = useState<{title: string, url?: string, fileId?: string, createdAt: number}[]>([]);
-  const [reportLinks, setReportLinks] = useState<{title: string, url?: string, fileId?: string, createdAt: number}[]>([]);
-  // 자료 등록 시 사용자 공지 발송 여부 — 관리자 페이지 각 섹션 헤더의 '공지 ON/OFF' 토글.
-  // 관리자 Drive app_settings.json에 영속(채널별 독립). 기본 ON = 기존 동작.
-  const [noticeFlags, setNoticeFlags] = useState<{ notebook: boolean; report: boolean }>(NOTICE_FLAGS_DEFAULT);
+  // 시장동향 리포트 — 유튜브 채널처럼 URL 하나. 저장 wire 포맷만 'reportLinks' 배열(위 헬퍼 주석 참조).
+  const [reportUrl, setReportUrl] = useState('');
+  // 자료 등록 시 사용자 공지 발송 여부 — 관리자 페이지 학습자료 섹션 헤더의 '공지 ON/OFF' 토글.
+  // 관리자 Drive app_settings.json에 영속. 기본 ON = 기존 동작.
+  const [noticeFlags, setNoticeFlags] = useState<{ notebook: boolean }>(NOTICE_FLAGS_DEFAULT);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
   const adminTargetNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2347,7 +2367,7 @@ export default function App() {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks, reportLinks, noticeFlags });
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks, reportLinks: reportLinksFromUrl(reportUrl), noticeFlags });
       setYoutubeUrl(url);
     } catch {
       notify('YouTube 링크 저장 실패 (Drive 오류)', 'error');
@@ -2384,7 +2404,7 @@ export default function App() {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links, reportLinks, noticeFlags });
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links, reportLinks: reportLinksFromUrl(reportUrl), noticeFlags });
       setNotebookLinks(links);
     } catch {
       notify('링크 저장 실패 (Drive 오류)', 'error');
@@ -2398,17 +2418,21 @@ export default function App() {
     }).catch(() => {});
   };
 
-  // 시장동향 리포트 링크 — 학습자료와 동일 구조(외부 링크 + HTML 파일). 별도 settings 키 reportLinks.
-  const handleSetReportLinks = async (links: {title: string, url?: string, fileId?: string, createdAt: number}[]) => {
+  // 시장동향 리포트 URL — 유튜브 채널 링크와 동일한 '단일 URL 바로가기'.
+  // ⚠️ 저장 키는 기존 'reportLinks'를 재사용한다(Apps Script 화이트리스트 — 재배포 불필요). 상세는
+  //    reportLinksFromUrl 주석 참조. 빈 문자열이면 빈 배열이 저장돼 사용자 아이콘이 비활성으로 떨어진다.
+  const handleSetReportUrl = async (url: string) => {
+    const links = reportLinksFromUrl(url);
+    const next = reportUrlFromLinks(links);
     // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
     try {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
       await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks: links, noticeFlags });
-      setReportLinks(links);
+      setReportUrl(next);
     } catch {
-      notify('링크 저장 실패 (Drive 오류)', 'error');
+      notify('시장동향 리포트 링크 저장 실패 (Drive 오류)', 'error');
       return;
     }
     // Apps Script 배포 — 일반 사용자에게 전달 (비차단, 실패 무시)
@@ -2419,15 +2443,15 @@ export default function App() {
     }).catch(() => {});
   };
 
-  // 자료 등록 시 사용자 공지 발송 여부(채널별 '공지 ON/OFF') — 관리자 Drive app_settings.json에만 저장.
+  // 학습자료 등록 시 사용자 공지 발송 여부('공지 ON/OFF') — 관리자 Drive app_settings.json에만 저장.
   // 일반 사용자는 읽지 않는 관리자 전용 설정이라 Apps Script 배포는 하지 않는다
   // (setSettings는 키 화이트리스트가 있어 새 키를 받지도 않는다 — 시트/재배포 불필요).
-  const handleSetNoticeFlags = async (flags: { notebook: boolean; report: boolean }) => {
+  const handleSetNoticeFlags = async (flags: { notebook: boolean }) => {
     try {
       const token = driveTokenRef.current;
       if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks, noticeFlags: flags });
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks: reportLinksFromUrl(reportUrl), noticeFlags: flags });
       setNoticeFlags(flags);
     } catch {
       notify('공지 설정 저장 실패 (Drive 오류)', 'error');
@@ -2634,7 +2658,7 @@ export default function App() {
         if (driveSettings) {
           if (driveSettings.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
           if (Array.isArray(driveSettings.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
-          if (Array.isArray(driveSettings.reportLinks)) setReportLinks(driveSettings.reportLinks);
+          if (Array.isArray(driveSettings.reportLinks)) setReportUrl(reportUrlFromLinks(driveSettings.reportLinks));
           loadedNoticeFlags = normalizeNoticeFlags(driveSettings.noticeFlags);
           setNoticeFlags(loadedNoticeFlags);
           // 실제 데이터가 있을 때만 "찾음"으로 처리 — 빈 배열만 있으면 Apps Script 폴백 허용
@@ -2652,9 +2676,10 @@ export default function App() {
             const nl: any[] | null = rawNl ? (Array.isArray(rawNl) ? rawNl : (() => { try { return JSON.parse(rawNl); } catch { return null; } })()) : null;
             const rawRl = settingsData.reportLinks;
             const rl: any[] | null = rawRl ? (Array.isArray(rawRl) ? rawRl : (() => { try { return JSON.parse(rawRl); } catch { return null; } })()) : null;
+            const ru = reportUrlFromLinks(rl);
             setYoutubeUrl(yu);
             if (Array.isArray(nl)) setNotebookLinks(nl);
-            if (Array.isArray(rl)) setReportLinks(rl);
+            if (Array.isArray(rl)) setReportUrl(ru);
             // 관리자: Drive에 저장 (이후 Drive가 정본으로 동작)
             // 일반 사용자: Drive에 캐시 저장
             // ⚠️ 읽기가 실패한 세션에서는 저장을 건너뛴다 — 파일 내용을 모르는 채로 전체 교체하면
@@ -2663,7 +2688,8 @@ export default function App() {
             try {
               if (settingsReadOk) {
                 const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-                await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [], reportLinks: Array.isArray(rl) ? rl : [], noticeFlags: loadedNoticeFlags });
+                // 리포트는 단일 URL로 정규화해 저장한다 — 레거시 다중 링크는 첫 URL만 승계(의도).
+                await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [], reportLinks: reportLinksFromUrl(ru), noticeFlags: loadedNoticeFlags });
               }
             } catch {}
           }
@@ -2680,7 +2706,7 @@ export default function App() {
             const notifsData = await notifsRes.json();
             const all: AdminNotification[] = notifsData.notifications || [];
             const myAll = all.filter(n =>
-              notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled, userFeatures.reportEnabled)
+              notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled)
             );
             const myNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
             if (myNotifs.length > 0) {
@@ -2728,7 +2754,7 @@ export default function App() {
           setNotebookLinks(settings.notebookLinks); found = true;
         }
         if (Array.isArray(settings?.reportLinks) && settings.reportLinks.length > 0) {
-          setReportLinks(settings.reportLinks); found = true;
+          setReportUrl(reportUrlFromLinks(settings.reportLinks)); found = true;
         }
         // 공지 ON/OFF는 Drive 전용 값 — 파일이 있으면 항상 반영(없으면 기본 ON).
         // found 판정에는 넣지 않는다: 링크가 비어 있으면 Apps Script 폴백은 그대로 진행돼야 한다.
@@ -2745,8 +2771,8 @@ export default function App() {
               else { try { setNotebookLinks(JSON.parse(d.notebookLinks)); } catch {} }
             }
             if (d.reportLinks) {
-              if (Array.isArray(d.reportLinks)) setReportLinks(d.reportLinks);
-              else { try { setReportLinks(JSON.parse(d.reportLinks)); } catch {} }
+              if (Array.isArray(d.reportLinks)) setReportUrl(reportUrlFromLinks(d.reportLinks));
+              else { try { setReportUrl(reportUrlFromLinks(JSON.parse(d.reportLinks))); } catch {} }
             }
           }
         } catch {}
@@ -2766,7 +2792,7 @@ export default function App() {
         const data = await res.json();
         const all: AdminNotification[] = data.notifications || [];
         const myAll = all.filter(n =>
-          notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled, userFeatures.reportEnabled)
+          notifTargetsUser(n.targetEmail, authUser.email, userFeatures.notebookEnabled)
         );
         const newNotifs = myAll.filter(n => !seenAdminNotifIdsRef.current.includes(n.id));
         if (newNotifs.length > 0) {
@@ -2779,7 +2805,7 @@ export default function App() {
     };
     const interval = setInterval(poll, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [authUser, userFeatures.notebookEnabled, userFeatures.reportEnabled]);
+  }, [authUser, userFeatures.notebookEnabled]);
 
   // 알림 로그 변경 시 Drive에 자동 저장 (5초 디바운스)
   useEffect(() => {
@@ -3266,7 +3292,7 @@ export default function App() {
     return <AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportLinks={reportLinks} onSetReportLinks={handleSetReportLinks} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportUrl={reportUrl} onSetReportUrl={handleSetReportUrl} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨
@@ -3304,7 +3330,8 @@ export default function App() {
   const isDcIrpAccount = activePortfolioAccountType === 'dc-irp';
   const investmentNotes = activePortfolio?.investmentNotes ?? [];
 
-  // ── 관리자 공지/벨 이력 클릭 → 학습자료·리포트 열기 ──
+  // ── 관리자 공지/벨 이력 클릭 → 학습자료 열기 ──
+  // 시장동향 리포트는 단일 URL 바로가기라 복원할 자료 목록이 없다 → 학습자료 채널만 남는다.
   // ⚠️ resolveMaterial은 반드시 '기능 게이팅된' 배열만 사용한다(권한 OFF 사용자는 복원 0 → 접근 차단).
   //    UserInfoBar에 넘기는 게이팅 배열(아래 props)과 동일 소스를 써서 모달/벨/드롭다운이 한 기준으로 동작.
   //    isAdminUser는 위(관리자 자동 허용)에서 이미 선언됨 — 재선언 금지(중복 const = SyntaxError).
@@ -3321,10 +3348,11 @@ export default function App() {
   // 백테스트 접근 권한 — flowAccess와 완전히 같은 근거(관리자 본인이 영구 접근 불가가 되지 않게).
   const backtestAccess = isAdminUser || userFeatures.backtestEnabled;
   const gatedNotebookLinks = notebookAccess ? notebookLinks : [];
-  const gatedReportLinks = reportAccess ? reportLinks : [];
+  const gatedReportUrl = reportAccess ? reportUrl : '';
+  // 옛 벨 이력에 남은 materialChannel:'report' 태그는 빈 배열 + null 채널로 떨어져 평문 표시된다(클릭 불가).
   const resolveMaterial = (channel, message, refCreatedAt) => resolveNoticeMaterial(
-    channel === 'notebook' ? gatedNotebookLinks : channel === 'report' ? gatedReportLinks : [],
-    message, channel, refCreatedAt,
+    channel === 'notebook' ? gatedNotebookLinks : [],
+    message, channel === 'notebook' ? 'notebook' : null, refCreatedAt,
   );
   const openMaterial = (link) => {
     if (!link) return;
@@ -3439,7 +3467,7 @@ export default function App() {
           youtubeEnabled={youtubeAccess}
           notebookLinks={gatedNotebookLinks}
           notebookEnabled={notebookAccess}
-          reportLinks={gatedReportLinks}
+          reportUrl={gatedReportUrl}
           reportEnabled={reportAccess}
           title={title}
           setTitle={setTitle}

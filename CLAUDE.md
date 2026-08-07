@@ -2301,47 +2301,61 @@ markAsRead() / clearNotificationLog()
   `AdminPage.tsx` 업로드 UI(`handleUploadStudyMaterialFile`). 저장/로드 경로는 배열을 그대로 통과시켜
   fileId 보존(별도 정규화 없음).
 
-### 시장동향 리포트(reportLinks) — 학습자료와 병렬인 별도 기능 (⚠️ 회귀 주의)
+### 시장동향 리포트 = 유튜브식 '단일 URL 바로가기' (⚠️ 회귀 주의 — 자료 목록으로 되돌리지 말 것)
 
-학습자료(notebook)와 **완전히 동일한 구조**의 두 번째 자료 채널. 관리자가 선별한 시장 동향
-리포트를 올리는 용도. notebook과 **데이터·플래그·센티넬·UI를 절대 공유하지 않고 병렬 복제**한다.
+상단바 **📈 TrendingUp 아이콘**(teal)은 관리자가 넣은 **URL 하나**로 바로 이동한다(새 탭).
+`youtubeUrl`과 **완전히 같은 등급**의 기능 — 드롭다운·자료 목록·HTML 업로드·등록 공지가 전부 없다.
+2026-08 전환(그 전에는 학습자료를 병렬 복제한 다중 자료 채널이었다).
 
-- **사용자 플래그**: `userFeatures.reportEnabled` ← approved_users 시트 **J열(index 9)**.
-  Apps Script `check`/`listUsers` 응답 + `setUserFeature` colMap에 `reportEnabled:9` 추가됨.
-  `getFeatureLabels`는 E1:J1(6개) 읽음 → AdminPage `featureLabels` 6번째(`시장리포트`)·
-  `loadFeatureSettings` 길이 가드 `=== 6`·featureDefs 6번째 토글(teal).
-- **데이터**: settings 키 `reportLinks`(`{title,url?,fileId?,createdAt}[]`) — notebook과 동일 shape.
-  Drive `app_settings.json`에 `youtubeUrl`/`notebookLinks`와 **함께** 저장.
-  ⚠️ **app_settings 저장 경로 3곳(`handleSetYoutubeUrl`·`handleSetNotebookLinks`·`handleSetReportLinks`)
-  + Apps Script 마이그레이션 저장(1곳)은 반드시 세 배열(youtubeUrl·notebookLinks·reportLinks)을
-  모두 포함**해야 함 — 한 곳이라도 누락하면 다른 채널 데이터를 빈 값으로 덮어씀(상호 유실).
-- **알림 센티넬**: `__report__` (notebook의 `__notebook__` 대응). `notifTargetsUser(...,notebookEnabled,
-  reportEnabled)` 4번째 인자로 게이팅. 신규 등록 시 `📈 …리포트가 등록되었습니다` 발송(시장리포트 ON만 수신).
-- **HTML 업로드/뷰어는 학습자료와 공용**: `handleUploadStudyMaterial`/`handleDeleteStudyMaterialFile`·
-  `/api/study-material` 프록시·UserInfoBar `openStudyMaterial`(sandbox iframe) 그대로 재사용.
-  업로드 폼만 AdminPage에 별도(rp* state). 상단바는 **별도 📈 TrendingUp 드롭다운**(teal, `reportOpen`).
-- **Apps Script**: `_downloads/AppsScript_계정관리_arui114501.js`가 정본. 코드 교체 후 **새 버전 배포**
-  필요(미배포 시 J열·reportLinks 미반영 → 프론트는 기본 OFF/빈 배열로 안전 동작). `setupSheet`는
-  비파괴(기존 E~I 커스텀 헤더 보존, 빈 J1만 `시장리포트` 세팅 + E2:J100 ON/OFF 검증·기본 OFF).
+- **사용자 플래그(변경 없음)**: `userFeatures.reportEnabled` ← approved_users 시트 **J열(index 9)**.
+  Apps Script `check`/`listUsers` 응답 + `setUserFeature` colMap `reportEnabled:9`,
+  `getFeatureLabels` E1:J1 → AdminPage `featureLabels` 6번째(`시장리포트`)·featureDefs 토글(teal).
+  `reportAccess = isAdminUser || userFeatures.reportEnabled` (관리자 본인이 영구 접근 불가가 되지 않게).
+- **⚠️ 저장 키는 기존 `reportLinks`를 그대로 재사용한다(Apps Script 재배포 불필요) — 새 키를 만들지 말 것**:
+  Apps Script `handleSetSettings`/`handleGetSettings`는 **키 화이트리스트**(`youtubeUrl`/`notebookLinks`/
+  `reportLinks`/`youtubeUrlHistory`/`feature1Label`)라 `reportUrl` 같은 새 키를 **거부**한다. 일반 사용자는
+  Apps Script `getSettings`가 정본이므로, 새 키를 쓰면 **시트 재배포 전까지 링크가 전달되지 않는다**.
+  → 프론트 상태는 문자열 하나(`reportUrl`)지만 **wire 포맷은 계속 배열**이다.
+- **변환 2함수(`App.tsx` 모듈 스코프)**: `reportUrlFromLinks(links)` = 배열에서 **url이 있는 첫 항목**만 승계
+  (레거시 다중 링크·fileId 전용 항목은 자연 탈락) / `reportLinksFromUrl(url)` = `[{title:'시장동향 리포트', url}]`
+  또는 빈 배열. ⚠️ **`reportLinksFromUrl`은 순수해야 한다(`createdAt` 등 타임스탬프 금지)** — 유튜브·학습자료
+  저장 경로가 co-write로 이 값을 매번 다시 만들기 때문에, 호출마다 값이 달라지면 무의미한 저장 churn이 난다.
+- **⚠️ co-write 규약(종전과 동일)**: `DRIVE_FILES.SETTINGS`에 쓰는 **모든 지점**(`handleSetYoutubeUrl`·
+  `handleSetNotebookLinks`·`handleSetReportUrl`·`handleSetNoticeFlags` + 로드 실패 시 Apps Script
+  **마이그레이션 저장**)이 `youtubeUrl`·`notebookLinks`·`reportLinks`·`noticeFlags` **네 값을 모두** 실어야
+  한다 — 하나라도 빠지면 그 필드가 빈 값으로 덮인다. 리포트는 `reportLinksFromUrl(reportUrl)`로 싣는다.
+- **로드 3경로**가 전부 `reportUrlFromLinks`를 통과한다: 정상 Drive 로드 · Apps Script 폴백(+ 그 안의
+  마이그레이션 저장은 **단일 URL로 정규화해** 기록 — 레거시 다중 링크는 첫 URL만 승계, 의도) ·
+  관리자 페이지 전용 로드. `driveSettingsFound` 판정(`reportLinks?.length > 0`)은 배열이라 그대로 동작.
+- **공지 없음(유튜브와 동일)**: `__report__` 센티넬 발송 경로·리포트 '공지 ON/OFF' 토글·
+  `reportNoticeMessage`가 **전부 제거**됐다. `notifTargetsUser`는 `__report__`를 명시적으로 `false`로 떨어뜨려
+  **시트에 남은 옛 리포트 공지가 더는 발송되지 않는다**(관리자 알림 목록의 라벨만 '폐지된 채널'로 남김).
+- **HTML 업로드/뷰어는 학습자료 전용으로 환원**: `handleUploadStudyMaterial`/`handleDeleteStudyMaterialFile`·
+  `/api/study-material` 프록시·`StudyMaterialViewer`는 그대로지만 **리포트는 더 이상 쓰지 않는다**
+  (fileId 자료 = 앱 내 sandbox 뷰어 / 리포트 = 그냥 새 탭).
+- **Apps Script 무수정**: J열·`reportLinks` 키가 이미 배포돼 있어 **이번 변경에는 재배포가 필요 없다**.
+  (시트 값의 형태만 다중 링크 → 단일 링크 배열로 바뀐다.)
+- **범위 밖(의도)**: URL 이력(유튜브에는 있음)·리포트 HTML 업로드·다중 리포트.
 
 ### 공지 발송 제어 — 자료 채널 '공지 ON/OFF' + 목표 비중 공지 세션당 1회 (⚠️ 회귀 주의)
 
 관리자가 **언제 공지를 보낼지** 고르는 두 장치. 서로 독립이며(플래그 공유 없음) 합치지 말 것.
 
-- **자료 채널 '공지 ON/OFF'**(`AdminPage`): '노트북 LM 슬라이드'·'시장동향 리포트' **섹션 헤더 우측
-  알약 버튼**(`renderNoticeToggle`, notebook=sky / report=teal, OFF=회색). OFF면 **등록·업로드 시
-  `sendNotification` 발송만 건너뛴다** — 자료 등록·Drive 저장·Apps Script 배포·사용자 드롭다운 노출은
-  그대로다(조용히 올리기). 게이트는 **발송 4지점 전부**(`handleAddNotebookLink`·
-  `handleUploadStudyMaterialFile`·`handleAddReportLink`·`handleUploadReportFile`)에 `noticeOn(channel)`으로
-  걸린다 — 새 자료 등록 경로를 추가하면 이 게이트도 같이 달 것. ⚠️ 채널 교차 금지(notebook 플래그가
-  report 발송을 막으면 안 됨).
-- **저장 위치 = 관리자 Drive `app_settings.json`의 `noticeFlags: {notebook, report}`**
+- **학습자료 '공지 ON/OFF'**(`AdminPage`): '노트북 LM 슬라이드' **섹션 헤더 우측 알약 버튼**
+  (`renderNoticeToggle`, sky / OFF=회색). OFF면 **등록·업로드 시 `sendNotification` 발송만 건너뛴다** —
+  자료 등록·Drive 저장·Apps Script 배포·사용자 드롭다운 노출은 그대로다(조용히 올리기). 게이트는
+  **발송 2지점 전부**(`handleAddNotebookLink`·`handleUploadStudyMaterialFile`)에 `noticeOn(channel)`으로
+  걸린다 — 새 자료 등록 경로를 추가하면 이 게이트도 같이 달 것.
+  ⚠️ **시장동향 리포트에는 공지가 없다**(단일 URL 바로가기 = 유튜브처럼 조용히 바뀜) — 토글을 되살리지 말 것.
+- **저장 위치 = 관리자 Drive `app_settings.json`의 `noticeFlags: {notebook}`**
   (`App.tsx` `handleSetNoticeFlags`). Apps Script `setSettings`는 **키 화이트리스트**가 있어 새 키를
   거부하므로 배포하지 않는다(관리자 전용 설정이라 일반 사용자는 읽을 필요 없음 → **Apps Script 재배포
-  불필요**). ⚠️ **co-write 규약 확장**: `DRIVE_FILES.SETTINGS`에 쓰는 **모든 지점**(youtubeUrl·
-  notebookLinks·reportLinks 3핸들러 + `handleSetNoticeFlags` + 로드 실패 시 Apps Script **마이그레이션
-  저장**)이 이제 **네 값**을 모두 실어야 한다 — 하나라도 빠지면 그 필드가 빈 값으로 덮인다.
+  불필요**). ⚠️ **co-write 규약**: `DRIVE_FILES.SETTINGS`에 쓰는 **모든 지점**(`handleSetYoutubeUrl`·
+  `handleSetNotebookLinks`·`handleSetReportUrl` 3핸들러 + `handleSetNoticeFlags` + 로드 실패 시 Apps Script
+  **마이그레이션 저장**)이 **네 값**(youtubeUrl·notebookLinks·reportLinks·noticeFlags)을 모두 실어야 한다 —
+  하나라도 빠지면 그 필드가 빈 값으로 덮인다.
   마이그레이션 저장은 `setNoticeFlags` 클로저가 stale하므로 **지역 변수 `loadedNoticeFlags`**를 쓴다.
+  옛 파일의 `noticeFlags.report`는 `normalizeNoticeFlags`가 조용히 버린다(무해).
 - **로드 2경로**(정상 로드 · 관리자 페이지 전용 로드)가 모두 `normalizeNoticeFlags`로 읽는다.
   **미지정/손상값 = ON**(`!== false`) → 구버전 파일·일반 사용자에게 기존 동작 그대로. `driveSettingsFound`
   판정에는 **넣지 않는다**(링크가 비면 Apps Script 폴백이 그대로 돌아야 함).
@@ -2369,28 +2383,31 @@ markAsRead() / clearNotificationLog()
   `applyStateData`·`applyBackupData`·`saveStateRef` 스프레드와 **무관**(STATE 계열 아님). 목표 비중 래치는
   ref라 저장 대상 자체가 아니다.
 
-### 관리자 공지 클릭 → 학습자료/리포트 열기 (⚠️ 회귀 주의 — 부분문자열·이모지 매칭 금지)
+### 관리자 공지 클릭 → 학습자료 열기 (⚠️ 회귀 주의 — 부분문자열·이모지 매칭 금지)
 
-자료(학습자료/리포트) 등록 공지(`AdminNotificationModal`)와 **벨 알림이력**(`UserInfoBar`)에서 공지를
+학습자료 등록 공지(`AdminNotificationModal`)와 **벨 알림이력**(`UserInfoBar`)에서 공지를
 누르면 해당 자료를 연다(fileId 자료 → 앱 내 sandbox 뷰어, url 자료 → 새 탭). 알림 레코드
 (`{id,targetEmail,message,type,createdAt}`)에는 자료 fileId/url 참조 필드가 없으므로(시트 스키마 고정),
 **메시지에 박힌 제목으로 클라이언트에서 복원**한다(Apps Script 변경 불필요).
 
 - **복원 규칙(`utils.ts`)**: `resolveNoticeMaterial(links, message, channel, refCreatedAt)`.
   ⚠️ **부분문자열(`includes`) 매칭 절대 금지** — `📚 ${title}가 등록되었습니다.`는 조사 '가'가 제목에
-  공백 없이 붙고('신규' vs '신규가' 오매칭), 리포트는 보일러플레이트 '리포트'가 항상 들어가 다른 자료를
-  오매칭한다. → `parseNoticeTitle`이 **정확 템플릿 정규식**으로 제목 추출(`[관리자 공지] ` 접두사 허용,
-  NFC+trim) + **정확 일치**. 동일 제목 다수면 `refCreatedAt`(공지 발송시각) 최근접 createdAt 선택.
+  공백 없이 붙어 '신규' 공지가 '신규가' 자료를 오매칭한다. → `parseNoticeTitle`이 **정확 템플릿 정규식**
+  으로 제목 추출(`[관리자 공지] ` 접두사 허용, NFC+trim) + **정확 일치**. 동일 제목 다수면
+  `refCreatedAt`(공지 발송시각) 최근접 createdAt 선택.
   ⚠️ **채널은 권위 소스로만 판정**(이모지 추정 금지): 모달=`targetEmail` 센티넬(`noticeChannelOf`),
   벨 이력=`NotificationEntry.materialChannel`(확인 시 `n.targetEmail`에서 파생해 박음). 임의 텍스트·
   수동 브로드캐스트는 템플릿 불일치 → null(클릭 불가).
-- **발송측과 공유(드리프트 방지)**: `notebookNoticeMessage`/`reportNoticeMessage`(utils.ts)를
-  `AdminPage`의 4개 발송지점이 사용하고, `parseNoticeTitle`이 같은 템플릿을 역파싱한다. 문구 수정 시
-  양쪽이 같이 바뀌어야 함. 검증: `npm run verify:notice`(조사·보일러플레이트·중복·NFC·접두사 케이스).
-- **권한 게이트(⚠️ 필수)**: `resolveMaterial`은 **기능 게이팅된 배열**(`gatedNotebookLinks`/
-  `gatedReportLinks` = 관리자 또는 `userFeatures.*Enabled`일 때만 채움)만 사용 — UserInfoBar에 넘기는
-  배열과 동일 소스. raw `notebookLinks`/`reportLinks`를 쓰면 권한 OFF 사용자가 옛 공지로 자료를 여는
-  접근 우회 발생.
+- **⚠️ 채널은 `'notebook'` 하나뿐**(리포트 = 단일 URL 바로가기라 복원할 자료 목록이 없다):
+  `noticeChannelOf`는 `'notebook' | null`, `parseNoticeTitle`은 `channel !== 'notebook'`이면 즉시 null.
+  시트에 남은 옛 `__report__` 공지와 벨 이력의 `materialChannel:'report'` 태그는 전부 null로 떨어져
+  **평문으로만 표시**된다(클릭 불가 — 의도된 graceful degradation). `verify:notice` §3이 이를 단언한다.
+- **발송측과 공유(드리프트 방지)**: `notebookNoticeMessage`(utils.ts)를 `AdminPage`의 2개 발송지점이
+  사용하고, `parseNoticeTitle`이 같은 템플릿을 역파싱한다. 문구 수정 시 양쪽이 같이 바뀌어야 함.
+  검증: `npm run verify:notice`(조사·폐지채널·중복·NFC·접두사 케이스).
+- **권한 게이트(⚠️ 필수)**: `resolveMaterial`은 **기능 게이팅된 배열**(`gatedNotebookLinks` = 관리자 또는
+  `userFeatures.notebookEnabled`일 때만 채움)만 사용 — UserInfoBar에 넘기는 배열과 동일 소스.
+  raw `notebookLinks`를 쓰면 권한 OFF 사용자가 옛 공지로 자료를 여는 접근 우회 발생.
 - **클릭 가능 표시는 매 렌더 라이브 복원** — 자료가 늦게 로드되면 그때 활성화, 삭제됐으면 plain text로
   자연 강등(죽은 클릭/오류 토스트 반복 방지). 복원 불가 공지엔 클릭 핸들러 미부착.
 - **단일 뷰어**: `StudyMaterialViewer`(App 최상위, `materialViewerLink` state, z-[1150] > LoadingOverlay
