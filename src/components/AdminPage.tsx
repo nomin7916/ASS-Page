@@ -38,6 +38,25 @@ interface NotebookLink {
   createdAt: number;
 }
 
+// 설정 저장 결과. ⚠️ AdminPage는 early-return 전체화면이라 ConfirmDialog·알림 벨이 언마운트 상태이고
+// notify prop도 받지 않는다 → App의 저장 실패를 화면에 띄울 유일한 수단이 이 반환값이다.
+// (과거엔 void라 '저장 실패'와 '아무 일도 안 일어남'이 화면상 완전히 같았다 — 이번 버그의 근본 원인.)
+interface SettingsSaveResult {
+  ok: boolean;
+  message?: string;   // 실패 사유 (ok=false)
+  warning?: string;   // Drive는 저장됐지만 사용자 배포(설정 시트)에 실패
+}
+
+type SaveMsg = { type: 'error' | 'warn' | 'ok'; text: string } | null;
+
+// 링크 카드 하단 인라인 결과 표시 (nbUploadError·featureToggleError와 같은 패턴)
+function SaveMsgLine({ msg }: { msg: SaveMsg }) {
+  if (!msg) return null;
+  const cls = msg.type === 'error' ? 'text-red-400' : msg.type === 'warn' ? 'text-amber-400' : 'text-green-400';
+  const mark = msg.type === 'error' ? '✗ ' : msg.type === 'warn' ? '⚠ ' : '✓ ';
+  return <p className={`${cls} text-[11px] leading-relaxed`}>{mark}{msg.text}</p>;
+}
+
 interface Props {
   adminEmail: string;
   onClose: () => void;
@@ -49,13 +68,13 @@ interface Props {
   userDriveStatus?: Record<string, 'found' | 'not_found' | 'error' | 'checking'>;
   onRefreshUserSessions?: (emails: string[]) => Promise<void>;
   youtubeUrl?: string;
-  onSetYoutubeUrl?: (url: string) => Promise<void>;
+  onSetYoutubeUrl?: (url: string) => Promise<SettingsSaveResult | void>;
   notebookLinks?: NotebookLink[];
-  onSetNotebookLinks?: (links: NotebookLink[]) => Promise<void>;
+  onSetNotebookLinks?: (links: NotebookLink[]) => Promise<SettingsSaveResult | void>;
   reportUrl?: string;   // 시장동향 리포트 — YouTube 채널처럼 URL 하나(자료 목록 아님)
-  onSetReportUrl?: (url: string) => Promise<void>;
+  onSetReportUrl?: (url: string) => Promise<SettingsSaveResult | void>;
   noticeFlags?: { notebook: boolean }; // 학습자료 등록 시 사용자 공지 발송 여부
-  onSetNoticeFlags?: (flags: { notebook: boolean }) => Promise<void>;
+  onSetNoticeFlags?: (flags: { notebook: boolean }) => Promise<SettingsSaveResult | void>;
   onUploadStudyMaterial?: (file: File) => Promise<string>; // HTML 업로드 → fileId (학습자료 전용)
   onDeleteStudyMaterialFile?: (fileId: string) => Promise<void>; // Drive 원본 정리
 }
@@ -106,6 +125,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   const [youtubeInput, setYoutubeInput] = useState(youtubeUrl);
   const [youtubeSaving, setYoutubeSaving] = useState(false);
   const [youtubeHistory, setYoutubeHistory] = useState<{url: string, savedAt: number}[]>([]);
+  const [youtubeMsg, setYoutubeMsg] = useState<SaveMsg>(null);
 
   // 노트북LM 링크 상태
   const [nbTitle, setNbTitle] = useState('');
@@ -123,6 +143,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   // 시장동향 리포트 URL 상태 (YouTube 채널 링크와 동일 — 입력 1칸 + 저장)
   const [reportInput, setReportInput] = useState(reportUrl);
   const [reportSaving, setReportSaving] = useState(false);
+  const [reportMsg, setReportMsg] = useState<SaveMsg>(null);
   // 관리자 페이지 직접 진입(driveLoadReady=false) 경로에서는 settings가 마운트 뒤에 도착한다 →
   // 입력칸이 빈 채로 남고, 그 상태로 '저장'을 누르면 저장돼 있던 링크가 지워진다.
   // 입력이 비어 있을 때만 채워 넣어(사용자가 친 값은 절대 덮지 않음) 그 경로를 막는다.
@@ -467,12 +488,51 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
     setDeletingNbIds(prev => { const next = new Set(prev); next.delete(createdAt); return next; });
   };
 
+  // ── 설정 저장 공통 실행기 ──
+  // ⚠️ 결과를 인라인 메시지로 바꾸고 **성공 여부를 반환**한다. 호출부는 이 값이 true일 때만 입력칸을
+  //    비우는 등 낙관적 UI를 적용해야 한다(실패했는데 입력만 비면 '삭제도 안 되고 입력도 잃는' 상태가 된다).
+  const runSettingsSave = async (
+    fn: () => Promise<SettingsSaveResult | void>,
+    setBusy: (v: boolean) => void,
+    setMsg: (m: SaveMsg) => void,
+    okText: string,
+  ): Promise<boolean> => {
+    setBusy(true);
+    setMsg(null);
+    let res: SettingsSaveResult | void;
+    try {
+      res = await fn();
+    } catch (e: any) {
+      setBusy(false);
+      setMsg({ type: 'error', text: e?.message || '알 수 없는 오류로 저장하지 못했습니다.' });
+      return false;
+    }
+    setBusy(false);
+    if (res && res.ok === false) { setMsg({ type: 'error', text: res.message || '저장하지 못했습니다.' }); return false; }
+    if (res && res.warning) { setMsg({ type: 'warn', text: res.warning }); return true; }
+    setMsg({ type: 'ok', text: okText });
+    return true;
+  };
+
   // ── 시장동향 리포트 URL 저장 (YouTube 채널 링크와 동일한 단일 값. 공지·이력·HTML 업로드 없음) ──
-  const handleSaveReportUrl = async (url: string) => {
-    if (!onSetReportUrl) return;
-    setReportSaving(true);
-    try { await onSetReportUrl(url); } catch {}
-    setReportSaving(false);
+  const handleSaveReportUrl = async (url: string): Promise<boolean> => {
+    if (!onSetReportUrl) return false;
+    return runSettingsSave(
+      () => onSetReportUrl(url),
+      setReportSaving,
+      setReportMsg,
+      url ? '저장했습니다. 사용자 상단 바 📈 버튼이 이 주소로 연결됩니다.' : '삭제했습니다.',
+    );
+  };
+
+  const handleSaveYoutubeUrl = async (url: string): Promise<boolean> => {
+    if (!onSetYoutubeUrl) return false;
+    return runSettingsSave(
+      () => onSetYoutubeUrl(url),
+      setYoutubeSaving,
+      setYoutubeMsg,
+      url ? '저장했습니다.' : '삭제했습니다.',
+    );
   };
 
   const handleDeleteYoutubeHistory = async (savedAt: number) => {
@@ -1067,19 +1127,17 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               <input
                 type="url"
                 value={youtubeInput}
-                onChange={e => setYoutubeInput(e.target.value)}
+                onChange={e => { setYoutubeInput(e.target.value); if (youtubeMsg) setYoutubeMsg(null); }}
                 placeholder="https://www.youtube.com/@channel"
                 className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-red-500"
               />
               <button
                 onClick={async () => {
                   const newUrl = youtubeInput.trim();
-                  setYoutubeSaving(true);
-                  await onSetYoutubeUrl(newUrl);
-                  if (newUrl) await saveYoutubeHistoryEntry(newUrl, youtubeHistory);
-                  setYoutubeSaving(false);
+                  const ok = await handleSaveYoutubeUrl(newUrl);
+                  if (ok && newUrl) await saveYoutubeHistoryEntry(newUrl, youtubeHistory);
                 }}
-                disabled={youtubeSaving || youtubeInput.trim() === youtubeUrl}
+                disabled={youtubeSaving || (youtubeInput.trim() === youtubeUrl && youtubeMsg?.type !== 'error' && youtubeMsg?.type !== 'warn')}
                 className="flex items-center gap-1.5 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
               >
                 {youtubeSaving ? (
@@ -1094,12 +1152,8 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   {youtubeUrl}
                 </a>
                 <button
-                  onClick={async () => {
-                    setYoutubeInput('');
-                    setYoutubeSaving(true);
-                    await onSetYoutubeUrl('');
-                    setYoutubeSaving(false);
-                  }}
+                  /* 리포트 카드와 동일 — 저장이 성공했을 때만 입력칸을 비운다. */
+                  onClick={async () => { if (await handleSaveYoutubeUrl('')) setYoutubeInput(''); }}
                   disabled={youtubeSaving}
                   className="text-gray-600 hover:text-red-400 text-xs transition-colors shrink-0"
                 >
@@ -1107,6 +1161,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                 </button>
               </div>
             )}
+            <SaveMsgLine msg={youtubeMsg} />
 
             {/* YouTube 링크 이력 */}
             {youtubeHistory.length > 0 && (
@@ -1142,11 +1197,10 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                         {!isCurrent && (
                           <button
                             onClick={async () => {
+                              const ok = await handleSaveYoutubeUrl(h.url);
+                              if (!ok) return;
                               setYoutubeInput(h.url);
-                              setYoutubeSaving(true);
-                              await onSetYoutubeUrl(h.url);
                               await saveYoutubeHistoryEntry(h.url, youtubeHistory);
-                              setYoutubeSaving(false);
                             }}
                             disabled={youtubeSaving}
                             className="text-gray-600 hover:text-red-400 text-xs transition-colors flex-shrink-0 disabled:opacity-40"
@@ -1360,13 +1414,15 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
               <input
                 type="url"
                 value={reportInput}
-                onChange={e => setReportInput(e.target.value)}
+                onChange={e => { setReportInput(e.target.value); if (reportMsg) setReportMsg(null); }}
                 placeholder="https://..."
                 className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-xs placeholder-gray-600 focus:outline-none focus:border-teal-500"
               />
               <button
                 onClick={() => handleSaveReportUrl(reportInput.trim())}
-                disabled={reportSaving || reportInput.trim() === reportUrl}
+                /* ⚠️ 실패·경고 뒤에는 같은 URL로도 재시도할 수 있어야 한다. 값 비교만으로 잠그면
+                   Drive는 됐는데 시트 배포만 실패한 경우 재시도 수단이 아예 없어진다. */
+                disabled={reportSaving || (reportInput.trim() === reportUrl && reportMsg?.type !== 'error' && reportMsg?.type !== 'warn')}
                 className="flex items-center gap-1.5 bg-teal-700 hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold py-2 px-4 rounded-lg transition-colors whitespace-nowrap"
               >
                 {reportSaving ? (
@@ -1381,7 +1437,9 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   {reportUrl}
                 </a>
                 <button
-                  onClick={() => { setReportInput(''); handleSaveReportUrl(''); }}
+                  /* ⚠️ 성공했을 때만 입력칸을 비운다 — 결과를 기다리지 않고 먼저 비우면, 저장이 실패한 경우
+                     '현재:' 줄은 그대로 남고 사용자가 친 URL만 사라져 삭제도 안 되고 입력도 잃는다. */
+                  onClick={async () => { if (await handleSaveReportUrl('')) setReportInput(''); }}
                   disabled={reportSaving}
                   className="text-gray-600 hover:text-red-400 text-xs transition-colors shrink-0"
                 >
@@ -1389,6 +1447,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                 </button>
               </div>
             )}
+            <SaveMsgLine msg={reportMsg} />
           </div>
         )}
 

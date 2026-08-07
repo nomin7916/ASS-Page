@@ -122,6 +122,17 @@ const reportLinksFromUrl = (url: string) => {
   return u ? [{ title: REPORT_LINK_TITLE, url: u }] : [];
 };
 
+// ── app_settings.json 정본 마커 ──
+// ⚠️ 이 마커가 없으면 "링크가 전부 비어 있음"과 "파일이 없음"을 구분할 수 없어, 관리자가 마지막 링크를
+//    삭제한 순간 로드가 Apps Script 시트로 폴백해 **방금 지운 옛 링크를 되살리고 Drive에 되쓴다**
+//    (유튜브·학습자료가 함께 비어 있는 관리자에게서 재현 — 삭제가 영구히 먹지 않는다).
+//    마커가 찍힌 파일은 값이 전부 비어 있어도 Drive가 정본이다. 마커 없는 레거시 파일은 종전대로
+//    1회 마이그레이션(시트 → Drive)을 거치며 그때 마커가 찍힌다.
+const SETTINGS_SCHEMA = 2;
+const isAuthoritativeSettings = (s: any) => !!s && typeof s === 'object' && (s.settingsSchema ?? 0) >= SETTINGS_SCHEMA;
+// Apps Script 설정 시트 기록 실패 안내 — 관리자 Drive에는 저장됐지만 일반 사용자에게는 전달되지 않은 상태.
+const SHEET_DEPLOY_WARN = '관리자 화면에는 반영됐지만 사용자 배포(설정 시트) 기록에 실패했습니다. 잠시 후 [저장]을 다시 눌러 주세요.';
+
 // 새 탭 관리자 접속(impersonation): "접속" 버튼이 window.open('/?adminView=<email>')로 새 탭을 연다.
 // 이 상수는 새 탭 콜드부팅 시 1회 산출 — 관리자 포털 탭(파라미터 없음)에서는 null이라 영향 없음.
 // noopener 새 탭은 보통 opener의 sessionStorage를 상속하지 않지만, 일부 브라우저가 복제할 경우
@@ -218,6 +229,10 @@ export default function App() {
   // 자료 등록 시 사용자 공지 발송 여부 — 관리자 페이지 학습자료 섹션 헤더의 '공지 ON/OFF' 토글.
   // 관리자 Drive app_settings.json에 영속. 기본 ON = 기존 동작.
   const [noticeFlags, setNoticeFlags] = useState<{ notebook: boolean }>(NOTICE_FLAGS_DEFAULT);
+  // ⚠️ 이 세션에서 관리자가 app_settings를 이미 저장했는가. settings 로드 effect 2곳은 비동기라,
+  //    로드가 끝나기 전에 저장하면 **늦게 도착한 로드가 방금 저장한 값을 저장 이전 값으로 되돌린다**
+  //    (관리자 페이지 진입 직후 URL을 붙여넣고 바로 저장하면 재현). 저장 이후에는 로드 반영을 건너뛴다.
+  const settingsWrittenRef = useRef(false);
   const [adminViewingAs, setAdminViewingAs] = useState<string | null>(null);
   const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
   const adminTargetNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2361,24 +2376,74 @@ export default function App() {
     }
   };
 
-  const handleSetYoutubeUrl = async (url: string) => {
-    // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
+  // ── 관리자 앱 설정(app_settings.json) 공동 기록 — 4개 설정 저장 경로의 단일 진입점 ──
+  // ⚠️ co-write 규약: 이 파일은 통째로 덮어써지므로 4값(youtubeUrl·notebookLinks·reportLinks·noticeFlags)을
+  //    항상 함께 실어야 한다. 지점마다 손나열하면 하나가 빠져 그 필드가 빈 값으로 지워지므로 여기 한 곳에 모은다.
+  // ⚠️ 401(토큰 만료) 무음 갱신 후 1회 재시도 — 과거엔 재시도가 없어 토큰이 만료된 관리자 세션에서
+  //    저장·삭제가 전부 실패했다. 게다가 실패는 notify(벨 이력)로만 알렸는데 관리자 페이지는 App이
+  //    <AdminPage/>만 early-return하는 전체화면이라 **벨·토스트가 아예 렌더되지 않는다** → 화면상
+  //    '저장 실패'와 '아무 일도 안 일어남'이 완전히 동일했다(이번 버그의 근본 원인).
+  //    그래서 실패 사유를 문자열로 반환해 호출부(AdminPage)가 카드 안에 인라인으로 띄운다.
+  // 반환: 성공이면 null, 실패면 화면에 보여줄 오류 메시지
+  const writeAppSettings = async (patch: Record<string, any>, isRetry = false): Promise<string | null> => {
+    const token = driveTokenRef.current;
+    if (!token) return 'Drive 인증이 필요합니다. 페이지를 새로고침해 다시 로그인하세요.';
     try {
-      const token = driveTokenRef.current;
-      if (!token) { notify('Drive 인증 필요', 'error'); return; }
       const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: url, notebookLinks, reportLinks: reportLinksFromUrl(reportUrl), noticeFlags });
-      setYoutubeUrl(url);
-    } catch {
-      notify('YouTube 링크 저장 실패 (Drive 오류)', 'error');
-      return;
+      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, {
+        youtubeUrl,
+        notebookLinks,
+        reportLinks: reportLinksFromUrl(reportUrl),
+        noticeFlags,
+        settingsSchema: SETTINGS_SCHEMA,
+        ...patch,
+      });
+      settingsWrittenRef.current = true;   // 늦게 도착한 로드가 방금 저장한 값을 되돌리지 못하게
+      return null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[설정] Drive 저장 실패:', msg);
+      if (msg.includes('401') && !isRetry && tokenClientRef.current) {
+        const newToken = await new Promise<string | null>(resolve => {
+          pendingTokenResolveRef.current = resolve;
+          tokenClientRef.current.requestAccessToken({ prompt: '' });
+        });
+        if (newToken) {
+          driveTokenRef.current = newToken;
+          setDriveToken(newToken);
+          return writeAppSettings(patch, true);
+        }
+      }
+      if (msg.includes('401')) return '로그인이 만료되었습니다. 페이지를 새로고침해 다시 로그인한 뒤 저장하세요.';
+      if (msg.includes('403')) return 'Drive 권한 오류(403)로 저장하지 못했습니다. 다시 로그인해도 계속되면 관리자 계정 권한을 확인하세요.';
+      return `Drive 저장 실패 — ${msg}`;
     }
-    // Apps Script 배포 — 일반 사용자에게 전달 (비차단, 실패 무시)
-    fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ action: 'setSettings', key: 'youtubeUrl', value: url }),
-    }).catch(() => {});
+  };
+
+  // Apps Script 설정 시트 배포 — 일반 사용자에게 전달되는 유일한 경로.
+  // ⚠️ Apps Script는 거부도 HTTP 200 + {success:false}로 답하므로 res.ok만 봐서는 실패를 놓친다.
+  //    과거엔 fire-and-forget이라, 시트 기록이 실패하면 관리자 화면만 새 링크로 바뀌고 **모든 사용자는
+  //    옛 링크에 무기한 묶였다**(어느 쪽에도 표시 없음). 이제 결과를 돌려 호출부가 경고를 띄운다.
+  const deploySettingToSheet = async (key: string, value: string): Promise<boolean> => {
+    try {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'setSettings', key, value }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json().catch(() => null);
+      return !data || data.success !== false;   // 본문 파싱 실패는 성공으로 간주(응답 형식 변화 대비)
+    } catch { return false; }
+  };
+
+  const handleSetYoutubeUrl = async (url: string) => {
+    // 관리자 Drive가 정본 — Apps Script 상태와 무관하게 즉시 반영
+    const err = await writeAppSettings({ youtubeUrl: url });
+    if (err) { notify(`YouTube 링크 저장 실패 — ${err}`, 'error'); return { ok: false, message: err }; }
+    setYoutubeUrl(url);
+    const deployed = await deploySettingToSheet('youtubeUrl', url);
+    return { ok: true, warning: deployed ? undefined : SHEET_DEPLOY_WARN };
   };
 
   // 학습자료 HTML 파일을 관리자 Drive에 업로드(공개 권한 부여) → fileId 반환. AdminPage가 notebookLinks에 등록.
@@ -2399,23 +2464,12 @@ export default function App() {
   };
 
   const handleSetNotebookLinks = async (links: {title: string, url?: string, fileId?: string, createdAt: number}[]) => {
-    // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
-    try {
-      const token = driveTokenRef.current;
-      if (!token) { notify('Drive 인증 필요', 'error'); return; }
-      const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks: links, reportLinks: reportLinksFromUrl(reportUrl), noticeFlags });
-      setNotebookLinks(links);
-    } catch {
-      notify('링크 저장 실패 (Drive 오류)', 'error');
-      return;
-    }
-    // Apps Script 배포 — 일반 사용자에게 전달 (비차단, 실패 무시)
-    fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ action: 'setSettings', key: 'notebookLinks', value: JSON.stringify(links) }),
-    }).catch(() => {});
+    // 관리자 Drive가 정본 — Apps Script 상태와 무관하게 즉시 반영
+    const err = await writeAppSettings({ notebookLinks: links });
+    if (err) { notify(`학습자료 링크 저장 실패 — ${err}`, 'error'); return { ok: false, message: err }; }
+    setNotebookLinks(links);
+    const deployed = await deploySettingToSheet('notebookLinks', JSON.stringify(links));
+    return { ok: true, warning: deployed ? undefined : SHEET_DEPLOY_WARN };
   };
 
   // 시장동향 리포트 URL — 유튜브 채널 링크와 동일한 '단일 URL 바로가기'.
@@ -2424,38 +2478,22 @@ export default function App() {
   const handleSetReportUrl = async (url: string) => {
     const links = reportLinksFromUrl(url);
     const next = reportUrlFromLinks(links);
-    // 관리자 Drive에 직접 저장 (정본) — Apps Script 상태와 무관하게 즉시 반영
-    try {
-      const token = driveTokenRef.current;
-      if (!token) { notify('Drive 인증 필요', 'error'); return; }
-      const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks: links, noticeFlags });
-      setReportUrl(next);
-    } catch {
-      notify('시장동향 리포트 링크 저장 실패 (Drive 오류)', 'error');
-      return;
-    }
-    // Apps Script 배포 — 일반 사용자에게 전달 (비차단, 실패 무시)
-    fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ action: 'setSettings', key: 'reportLinks', value: JSON.stringify(links) }),
-    }).catch(() => {});
+    // 관리자 Drive가 정본 — Apps Script 상태와 무관하게 즉시 반영
+    const err = await writeAppSettings({ reportLinks: links });
+    if (err) { notify(`시장동향 리포트 링크 저장 실패 — ${err}`, 'error'); return { ok: false, message: err }; }
+    setReportUrl(next);
+    const deployed = await deploySettingToSheet('reportLinks', JSON.stringify(links));
+    return { ok: true, warning: deployed ? undefined : SHEET_DEPLOY_WARN };
   };
 
   // 학습자료 등록 시 사용자 공지 발송 여부('공지 ON/OFF') — 관리자 Drive app_settings.json에만 저장.
   // 일반 사용자는 읽지 않는 관리자 전용 설정이라 Apps Script 배포는 하지 않는다
   // (setSettings는 키 화이트리스트가 있어 새 키를 받지도 않는다 — 시트/재배포 불필요).
   const handleSetNoticeFlags = async (flags: { notebook: boolean }) => {
-    try {
-      const token = driveTokenRef.current;
-      if (!token) { notify('Drive 인증 필요', 'error'); return; }
-      const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
-      await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl, notebookLinks, reportLinks: reportLinksFromUrl(reportUrl), noticeFlags: flags });
-      setNoticeFlags(flags);
-    } catch {
-      notify('공지 설정 저장 실패 (Drive 오류)', 'error');
-    }
+    const err = await writeAppSettings({ noticeFlags: flags });
+    if (err) { notify(`공지 설정 저장 실패 — ${err}`, 'error'); return { ok: false, message: err }; }
+    setNoticeFlags(flags);
+    return { ok: true };
   };
 
   // 관리자가 사용자의 목표 비중을 변경했을 때 호출 — 관리자 접속(impersonation) 세션당 알림 1건만 발송.
@@ -2656,16 +2694,22 @@ export default function App() {
         const driveSettings = await loadDriveFile(token, settingsFolderId, DRIVE_FILES.SETTINGS) as any;
         settingsReadOk = true;
         if (driveSettings) {
-          if (driveSettings.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
-          if (Array.isArray(driveSettings.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
-          if (Array.isArray(driveSettings.reportLinks)) setReportUrl(reportUrlFromLinks(driveSettings.reportLinks));
+          // ⚠️ 이 세션에서 관리자가 이미 설정을 저장했다면 반영을 건너뛴다 — 늦게 도착한 로드가
+          //    방금 저장한 값을 저장 이전 값으로 되돌린다(로드 중 저장 시 재현).
+          if (!settingsWrittenRef.current) {
+            if (driveSettings.youtubeUrl) setYoutubeUrl(driveSettings.youtubeUrl);
+            if (Array.isArray(driveSettings.notebookLinks)) setNotebookLinks(driveSettings.notebookLinks);
+            if (Array.isArray(driveSettings.reportLinks)) setReportUrl(reportUrlFromLinks(driveSettings.reportLinks));
+          }
           loadedNoticeFlags = normalizeNoticeFlags(driveSettings.noticeFlags);
-          setNoticeFlags(loadedNoticeFlags);
-          // 실제 데이터가 있을 때만 "찾음"으로 처리 — 빈 배열만 있으면 Apps Script 폴백 허용
-          driveSettingsFound = !!(driveSettings.youtubeUrl || driveSettings.notebookLinks?.length > 0 || driveSettings.reportLinks?.length > 0);
+          if (!settingsWrittenRef.current) setNoticeFlags(loadedNoticeFlags);
+          // 정본 마커가 있으면 값이 전부 비어 있어도 Drive가 정본(= 관리자가 링크를 지운 상태).
+          // 마커 없는 레거시 파일만 종전대로 "값이 비면 Apps Script 폴백 허용".
+          driveSettingsFound = isAuthoritativeSettings(driveSettings)
+            || !!(driveSettings.youtubeUrl || driveSettings.notebookLinks?.length > 0 || driveSettings.reportLinks?.length > 0);
         }
       } catch {}
-      if (!isAdmin || !driveSettingsFound) {
+      if (!settingsWrittenRef.current && (!isAdmin || !driveSettingsFound)) {
         // 일반 사용자는 항상, 관리자는 Drive 파일 없을 때만 (최초 마이그레이션)
         try {
           const settingsRes = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
@@ -2689,7 +2733,9 @@ export default function App() {
               if (settingsReadOk) {
                 const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
                 // 리포트는 단일 URL로 정규화해 저장한다 — 레거시 다중 링크는 첫 URL만 승계(의도).
-                await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [], reportLinks: reportLinksFromUrl(ru), noticeFlags: loadedNoticeFlags });
+                // ⚠️ settingsSchema 마커 필수 — 이 마이그레이션이 곧 "이후 Drive가 정본" 선언이다.
+                //    빠뜨리면 링크를 전부 지운 순간 다시 시트 폴백이 돌아 옛 링크가 되살아난다.
+                await saveDriveFile(token, folderId, DRIVE_FILES.SETTINGS, { youtubeUrl: yu, notebookLinks: Array.isArray(nl) ? nl : [], reportLinks: reportLinksFromUrl(ru), noticeFlags: loadedNoticeFlags, settingsSchema: SETTINGS_SCHEMA });
               }
             } catch {}
           }
@@ -2744,11 +2790,18 @@ export default function App() {
     if (!showAdminPage || !authUser || driveLoadReady) return;
     const token = driveTokenRef.current;
     if (!token) return;
+    // ⚠️ 이 경로는 메인 로드 effect(driveLoadReady 게이트)를 타지 않아 initTokenClient()가 한 번도
+    //    호출되지 않았다 → tokenClientRef가 null이라 401 무음 갱신이 통째로 no-op이 되고, 액세스
+    //    토큰(1시간) 만료 후 관리자 페이지의 **모든 설정 저장이 새로고침 전까지 영구 실패**했다.
+    initTokenClient();
     (async () => {
+      // 이 세션에서 이미 저장했으면 늦게 도착한 로드가 되돌리지 않게 통째로 건너뛴다(메인 로드와 동일 규칙).
+      if (settingsWrittenRef.current) return;
       let found = false;
       try {
         const folderId = driveFolderIdRef.current || await ensureDriveFolder(token);
         const settings = await loadDriveFile(token, folderId, DRIVE_FILES.SETTINGS) as any;
+        if (settingsWrittenRef.current) return;   // 로드 중 저장이 끼어들었으면 반영하지 않는다
         if (settings?.youtubeUrl) { setYoutubeUrl(settings.youtubeUrl); found = true; }
         if (Array.isArray(settings?.notebookLinks) && settings.notebookLinks.length > 0) {
           setNotebookLinks(settings.notebookLinks); found = true;
@@ -2756,15 +2809,18 @@ export default function App() {
         if (Array.isArray(settings?.reportLinks) && settings.reportLinks.length > 0) {
           setReportUrl(reportUrlFromLinks(settings.reportLinks)); found = true;
         }
+        // 정본 마커가 있으면 값이 비어 있어도 폴백하지 않는다 — 폴백하면 방금 지운 링크가 시트에서 되살아난다.
+        if (isAuthoritativeSettings(settings)) found = true;
         // 공지 ON/OFF는 Drive 전용 값 — 파일이 있으면 항상 반영(없으면 기본 ON).
-        // found 판정에는 넣지 않는다: 링크가 비어 있으면 Apps Script 폴백은 그대로 진행돼야 한다.
+        // found 판정에는 넣지 않는다: 마커 없는 레거시 파일에서 링크가 비면 Apps Script 폴백이 그대로 진행돼야 한다.
         if (settings) setNoticeFlags(normalizeNoticeFlags(settings.noticeFlags));
       } catch {}
-      if (!found) {
+      if (!found && !settingsWrittenRef.current) {
         try {
           const res = await fetch(`${APPS_SCRIPT_URL}?action=getSettings&cacheBust=${Date.now()}`);
           if (res.ok) {
             const d = await res.json();
+            if (settingsWrittenRef.current) return;   // 폴백 응답이 늦게 와도 방금 저장한 값을 덮지 않는다
             if (d.youtubeUrl) setYoutubeUrl(d.youtubeUrl);
             if (d.notebookLinks) {
               if (Array.isArray(d.notebookLinks)) setNotebookLinks(d.notebookLinks);

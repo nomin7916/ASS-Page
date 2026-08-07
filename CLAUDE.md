@@ -2320,13 +2320,43 @@ markAsRead() / clearNotificationLog()
   (레거시 다중 링크·fileId 전용 항목은 자연 탈락) / `reportLinksFromUrl(url)` = `[{title:'시장동향 리포트', url}]`
   또는 빈 배열. ⚠️ **`reportLinksFromUrl`은 순수해야 한다(`createdAt` 등 타임스탬프 금지)** — 유튜브·학습자료
   저장 경로가 co-write로 이 값을 매번 다시 만들기 때문에, 호출마다 값이 달라지면 무의미한 저장 churn이 난다.
-- **⚠️ co-write 규약(종전과 동일)**: `DRIVE_FILES.SETTINGS`에 쓰는 **모든 지점**(`handleSetYoutubeUrl`·
-  `handleSetNotebookLinks`·`handleSetReportUrl`·`handleSetNoticeFlags` + 로드 실패 시 Apps Script
-  **마이그레이션 저장**)이 `youtubeUrl`·`notebookLinks`·`reportLinks`·`noticeFlags` **네 값을 모두** 실어야
-  한다 — 하나라도 빠지면 그 필드가 빈 값으로 덮인다. 리포트는 `reportLinksFromUrl(reportUrl)`로 싣는다.
+- **⚠️ co-write 규약 = `App.tsx` `writeAppSettings(patch)` 단일 진입점**: `DRIVE_FILES.SETTINGS`는 통째로
+  덮어써지므로 `youtubeUrl`·`notebookLinks`·`reportLinks`·`noticeFlags` **네 값을 항상 함께** 실어야 한다
+  (하나라도 빠지면 그 필드가 빈 값으로 지워진다). 과거엔 4핸들러가 각자 손나열했는데, 이제 헬퍼가 현재
+  state로 기본값을 채우고 `patch`만 덮어쓴다 → **저장 경로를 추가할 때 `saveDriveFile`을 직접 부르지 말고
+  이 헬퍼를 쓸 것**. 유일한 예외는 로드 실패 시 **마이그레이션 저장**(state가 아직 갱신 전이라 지역 변수로
+  기록 — 여기서도 네 값 + `settingsSchema` 필수).
+- **⚠️ 저장 실패는 반드시 화면에 띄운다(`notify` 금지 아님, 부족함)**: 관리자 페이지는 App이 `<AdminPage/>`만
+  early-return하는 **전체화면**이라 알림 벨·`ConfirmDialog`가 언마운트 상태이고 `notify`는 토스트를 렌더하지
+  않는다 → 저장·삭제 실패가 **'아무 일도 안 일어남'과 화면상 완전히 동일**했다(2026-08 실측 버그: 새 링크를
+  넣어도 '현재:'가 안 바뀌고 [삭제]도 먹지 않음). → `writeAppSettings`는 **실패 사유 문자열**을, 4핸들러는
+  `{ok, message?, warning?}`(`SettingsSaveResult`)을 반환하고 `AdminPage`가 카드 안 `SaveMsgLine`으로 띄운다.
+  `nbUploadError`·`featureToggleError`와 같은 패턴이다.
+- **⚠️ 401 무음 갱신 + 1회 재시도**: `writeAppSettings`는 `saveAllToDrive`와 같은 패턴으로 401이면 토큰을
+  재발급해 한 번 더 시도한다. 그리고 **관리자 페이지 직접 진입 경로(`driveLoadReady=false`)는 메인 로드
+  effect를 타지 않아 `initTokenClient()`가 한 번도 불리지 않았다** → `tokenClientRef`가 null이라 무음 갱신이
+  통째로 no-op이었고, 액세스 토큰(1시간) 만료 후 **모든 설정 저장이 새로고침 전까지 영구 실패**했다.
+  관리자 페이지 전용 로드 effect 상단에서 `initTokenClient()`를 부르는 이유가 이것이다(지우지 말 것).
+- **⚠️ Apps Script 배포는 await + `success` 검사**: 시트가 **일반 사용자에게 전달되는 유일한 경로**인데
+  fire-and-forget이라, 시트 기록이 실패하면 관리자 화면만 새 링크로 바뀌고 사용자는 옛 링크에 무기한 묶였다
+  (양쪽 모두 무표시). `deploySettingToSheet`가 결과를 돌려 경고(`SHEET_DEPLOY_WARN`)를 띄운다. ⚠️ Apps
+  Script는 **거부도 HTTP 200 + `{success:false}`** 로 답하므로 `res.ok`만 보면 실패를 놓친다. 이때 [저장]
+  버튼이 값 비교(`input === reportUrl`)로 잠기면 **재시도 수단이 사라지므로**, 실패·경고 상태에서는 같은
+  URL로도 다시 누를 수 있어야 한다.
+- **⚠️ 정본 마커 `settingsSchema`(=`SETTINGS_SCHEMA`)**: 마커가 없으면 "링크가 전부 비어 있음"과 "파일 없음"을
+  구분할 수 없어, 관리자가 **마지막 링크를 삭제한 순간** 로드가 Apps Script 시트로 폴백해 **방금 지운 옛 링크를
+  되살리고 Drive에 되쓴다**(유튜브·학습자료도 함께 비어 있는 관리자에게서 재현 — 삭제가 영구히 안 먹는다).
+  마커가 찍힌 파일은 값이 비어도 Drive가 정본(`isAuthoritativeSettings`), 마커 없는 레거시 파일은 종전대로
+  1회 마이그레이션하며 그때 마커가 찍힌다. `driveSettingsFound`(메인)·`found`(관리자 페이지) 양쪽에 적용.
+- **⚠️ 늦게 도착한 로드가 방금 저장한 값을 되돌리지 못하게**: settings 로드 effect 2곳은 비동기라, 로드 완료
+  전에 저장하면 그 응답이 저장 이전 값으로 state를 덮는다(관리자 페이지 진입 직후 붙여넣고 바로 저장 시 재현).
+  → `settingsWrittenRef`가 서면 두 로드 effect가 반영·마이그레이션 저장을 **모두** 건너뛴다.
 - **로드 3경로**가 전부 `reportUrlFromLinks`를 통과한다: 정상 Drive 로드 · Apps Script 폴백(+ 그 안의
   마이그레이션 저장은 **단일 URL로 정규화해** 기록 — 레거시 다중 링크는 첫 URL만 승계, 의도) ·
   관리자 페이지 전용 로드. `driveSettingsFound` 판정(`reportLinks?.length > 0`)은 배열이라 그대로 동작.
+- **⚠️ 삭제 버튼은 성공했을 때만 입력칸을 비운다**: 결과를 기다리지 않고 먼저 `setReportInput('')`을 하면,
+  저장이 실패한 경우 '현재:' 줄은 그대로 남고 사용자가 친 URL만 사라져 **삭제도 안 되고 입력도 잃는다**
+  (시드 effect는 `reportUrl`이 안 바뀌어 재실행되지 않으므로 복원도 없다). YouTube 카드도 동일 규칙.
 - **공지 없음(유튜브와 동일)**: `__report__` 센티넬 발송 경로·리포트 '공지 ON/OFF' 토글·
   `reportNoticeMessage`가 **전부 제거**됐다. `notifTargetsUser`는 `__report__`를 명시적으로 `false`로 떨어뜨려
   **시트에 남은 옛 리포트 공지가 더는 발송되지 않는다**(관리자 알림 목록의 라벨만 '폐지된 채널'로 남김).
@@ -2350,9 +2380,9 @@ markAsRead() / clearNotificationLog()
 - **저장 위치 = 관리자 Drive `app_settings.json`의 `noticeFlags: {notebook}`**
   (`App.tsx` `handleSetNoticeFlags`). Apps Script `setSettings`는 **키 화이트리스트**가 있어 새 키를
   거부하므로 배포하지 않는다(관리자 전용 설정이라 일반 사용자는 읽을 필요 없음 → **Apps Script 재배포
-  불필요**). ⚠️ **co-write 규약**: `DRIVE_FILES.SETTINGS`에 쓰는 **모든 지점**(`handleSetYoutubeUrl`·
-  `handleSetNotebookLinks`·`handleSetReportUrl` 3핸들러 + `handleSetNoticeFlags` + 로드 실패 시 Apps Script
-  **마이그레이션 저장**)이 **네 값**(youtubeUrl·notebookLinks·reportLinks·noticeFlags)을 모두 실어야 한다 —
+  불필요**). ⚠️ **co-write 규약**: `DRIVE_FILES.SETTINGS` 쓰기는 **`writeAppSettings(patch)` 한 곳으로 모였다**
+  (4핸들러 전부 경유 — 위 '시장동향 리포트' 섹션 참조). 유일한 예외인 **마이그레이션 저장**만 지역 변수로
+  **네 값**(youtubeUrl·notebookLinks·reportLinks·noticeFlags) + `settingsSchema`를 직접 나열한다 —
   하나라도 빠지면 그 필드가 빈 값으로 덮인다.
   마이그레이션 저장은 `setNoticeFlags` 클로저가 stale하므로 **지역 변수 `loadedNoticeFlags`**를 쓴다.
   옛 파일의 `noticeFlags.report`는 `normalizeNoticeFlags`가 조용히 버린다(무해).
