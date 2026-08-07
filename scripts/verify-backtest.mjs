@@ -613,6 +613,37 @@ function runBacktest(input) {
     for (const p of positions) { if (p.qty > QTY_EPS) { const h = priceAt(prices[p.asset.code], date); if (!h.missing) s += p.qty * h.price; } }
     return s;
   };
+  const targetBaseAt = (date) => {
+    const eq = totalEvalAt(date);
+    return eq > 0 ? eq : Math.max(0, cash);
+  };
+  const RATIO_SUM_TOL = 0.05;
+  let ratioSumWarned = false;
+  const checkRatioSum = (date) => {
+    if (config.targetMode !== 'ratio' || ratioSumWarned) return;
+    const live = positions.filter(
+      (p) => p.active && !p.removed && date >= p.effectiveStart && date <= p.effectiveEnd,
+    );
+    if (!live.length) return;
+    const sum = live.reduce((s, p) => s + Math.max(0, p.targetRatio ?? 0), 0);
+    if (!(sum > 0)) {
+      ratioSumWarned = true;
+      warnings.push(
+        '목표 비중이 전부 0%라 아무것도 사지 않습니다 — ⑥ 종목에서 종목별 목표 비중을 입력하세요'
+        + '(목표 금액 모드에서 전환했다면 비중 칸이 비어 있습니다).',
+      );
+      return;
+    }
+    if (Math.abs(sum - 100) > RATIO_SUM_TOL) {
+      ratioSumWarned = true;
+      const scope = live.length < positions.length ? ` ${date} 기준 편입된 ${live.length}/${positions.length}종목의 합입니다.` : '';
+      warnings.push(
+        `목표 비중 합이 ${Math.round(sum * 100) / 100}%입니다(100% 아님).${scope} 분모가 ‘종목 평가액 합계’라 `
+        + '리밸런싱마다 그 차이만큼 사고팝니다 — 100%보다 작으면 매번 팔아 현금이 쌓이고(평가액이 계속 줄어듭니다), '
+        + '크면 예수금을 헐어 더 삽니다.',
+      );
+    }
+  };
   const adjustTo = (p, date, target, structural) => {
     const hit = priceAt(prices[p.asset.code], date);
     if (hit.missing || hit.price <= 0) return null;
@@ -694,6 +725,7 @@ function runBacktest(input) {
     p.active = true;
   }
   {
+    checkRatioSum(startBiz);
     const base = config.initialCapital + config.extraCash;
     for (const p of positions) {
       if (!p.active) continue;
@@ -732,16 +764,6 @@ function runBacktest(input) {
         + '재투자 효과가 거의 없고, 되판 대금이 ‘누적 매매차익’에 잡혀 실제보다 커 보입니다. '
         + '재투자를 살리려면 리밸런싱을 끄거나(‘리밸런싱 안 함’) 목표를 ‘목표 비중 %’로 바꾸세요.',
       );
-    }
-    if (config.targetMode === 'ratio') {
-      const ratioSum = config.assets.reduce((s, a) => s + Math.max(0, a.targetRatio ?? 0), 0);
-      if (ratioSum > 0 && Math.abs(ratioSum - 100) > 0.01) {
-        warnings.push(
-          `목표 비중 합이 ${Math.round(ratioSum * 100) / 100}%입니다(100% 아님) — 분모가 ‘종목 평가액 합계’라 `
-          + '리밸런싱마다 그 차이만큼 사고팝니다. 100%보다 작으면 매번 팔아 현금이 쌓이고(평가액이 계속 줄어듭니다), '
-          + '크면 예수금을 헐어 더 삽니다. ⑦ 중도 종목 변경으로 비중을 바꿨다면 무시해도 됩니다.',
-        );
-      }
     }
   }
   const steps = [];
@@ -920,7 +942,7 @@ function runBacktest(input) {
         p.removed = false;
       }
       if (e.funding === 'reallocate') {
-        const base = totalEvalAt(e.date);
+        const base = targetBaseAt(e.date);
         const acts = positions.filter((p) => p.active);
         const plans = acts.map((p) => {
           const hit = priceAt(prices[p.asset.code], e.date);
@@ -930,7 +952,7 @@ function runBacktest(input) {
         for (const pl of plans.filter((x) => x.delta < 0)) { const t = adjustTo(pl.p, e.date, pl.target, true); if (t) pushTrade(t); }
         for (const pl of plans.filter((x) => x.delta > 0)) { const t = adjustTo(pl.p, e.date, pl.target, true); if (t) pushTrade(t); }
       } else if (e.funding === 'cash') {
-        const base = totalEvalAt(e.date);
+        const base = targetBaseAt(e.date);
         for (const aid of e.addAssets) {
           const p = posById.get(aid);
           if (!p || !p.active) continue;
@@ -942,7 +964,7 @@ function runBacktest(input) {
     }
     {
       const s = step.slot;
-      const base = totalEvalAt(s.rebalDate);
+      const base = targetBaseAt(s.rebalDate);
       const eligible = [];
       for (const aid of s.assetIds) {
         const p = posById.get(aid);
@@ -952,6 +974,7 @@ function runBacktest(input) {
         if (!p.active) p.active = true;
         eligible.push(p);
       }
+      checkRatioSum(s.rebalDate);
       const plans = eligible.map((p) => {
         const hit = priceAt(prices[p.asset.code], s.rebalDate);
         const target = targetOf(p, config, base);
@@ -1667,10 +1690,77 @@ console.log('\n── 파트④-h 목표 기준(비중 분모 = 종목 평가액
     s120.months.filter((m) => m.trades.some((t) => t.qty > 0)).length >= 5
       && s120.summary.finalEval > s100.summary.finalEval
       && s120.summary.finalCash < s100.summary.finalCash);
+  const sumWarn = (r) => r.warnings.some((w) => w.includes('목표 비중 합'));
   ok('#107d ⚠️ 비중 합이 100%가 아니면 경고한다(합계 오타를 조용히 실행하지 않게)',
-    s80.warnings.some((w) => w.includes('목표 비중 합'))
-      && s120.warnings.some((w) => w.includes('목표 비중 합'))
-      && !s100.warnings.some((w) => w.includes('목표 비중 합')));
+    sumWarn(s80) && sumWarn(s120) && !sumWarn(s100));
+
+  // ⚠️ #107e/#107f — 판정은 **그 시점 살아 있는 종목** 기준이다(정적 config.assets 합이 아니다).
+  //    정적 합으로 재면 ①편입 기간이 갈린 정상 구성이 상시 오탐하고 ②이벤트가 런타임에 바꾼
+  //    비중의 진짜 오타는 영영 미탐이다. 둘 다 실측으로 확인한 결함이었다.
+  const staged = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+      targetMode: 'ratio', rounding: 'floor', policy: 'allEom',
+      assets: [{ id: 'g1', code: K200, name: 'K', payCycle: 'eom', targetRatio: 100, endDate: '2026-04-21' },
+               { id: 'g2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 100, startDate: '2026-04-21' }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  ok('#107e ⚠️ 편입 기간이 갈린 구성(정적 합 200%)은 오탐하지 않는다 — 동시 보유 시점이 없다',
+    !sumWarn(staged));
+  const evented = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+      targetMode: 'ratio', rounding: 'floor', policy: 'allEom',
+      assets: [{ id: 'g1', code: K200, name: 'K', payCycle: 'eom', targetRatio: 100 }],
+      events: [{ id: 'ev', date: '2026-03-11', label: '비중 하향', funding: 'reallocate',
+        addAssets: [], removeAssets: [], targets: [{ assetId: 'g1', ratio: 80 }] }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  ok('#107f ⚠️ ⑦ 이벤트가 런타임에 바꾼 비중(100→80%)도 잡는다 — 정적 합만 보면 미탐이다',
+    sumWarn(evented));
+  const zeroRatio = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+      targetMode: 'ratio', rounding: 'floor', policy: 'allEom',
+      assets: [{ id: 'z1', code: K200, name: 'K', payCycle: 'eom' },
+               { id: 'z2', code: KFIN, name: 'F', payCycle: 'eom', targetRatio: 0 }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  ok('#107g ⚠️ 비중이 전부 0%(목표 금액→비중 전환 직후)면 경고한다 — 피해가 가장 큰데 조용했다',
+    zeroRatio.summary.finalEval === 0
+      && zeroRatio.warnings.some((w) => w.includes('목표 비중이 전부 0%')));
+
+  // ⚠️ #108/#108d — 분모 자기잠금(base 0 → 목표 0 → 매매 0 → 보유 0) 방지.
+  //    보유가 하나도 없으면 그 시점 가용 현금으로 부트스트랩한다(초기 매수와 같은 원리).
+  const lateAll = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+      targetMode: 'ratio', rounding: 'floor', policy: 'allEom',
+      assets: [{ id: 'l1', code: TIGER, name: 'T', payCycle: 'eom', targetRatio: 100, startDate: '2026-04-21' }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  ok('#108 ⚠️ 전 종목이 기간 중간 편입이어도 산다(시작 시점 보유 0 → 분모 자기잠금 금지)',
+    lateAll.summary.finalEval > 0
+      && lateAll.months.some((m) => m.trades.some((t) => t.qty > 0)));
+  const swapAll = runBacktest({
+    config: makeBtConfig({
+      startDate: '2026-01-02', endDate: '2026-07-31', initialCapital: 450000000,
+      targetMode: 'ratio', rounding: 'floor', policy: 'allEom',
+      assets: [{ id: 'x1', code: K200, name: 'K', payCycle: 'eom', targetRatio: 100 },
+               { id: 'x2', code: TIGER, name: 'T', payCycle: 'eom', targetRatio: 0, startDate: '2026-04-21' }],
+      events: [{ id: 'sw', date: '2026-04-28', label: '전면 교체', funding: 'reallocate',
+        addAssets: ['x2'], removeAssets: ['x1'],
+        targets: [{ assetId: 'x1', ratio: 0 }, { assetId: 'x2', ratio: 100 }] }],
+    }),
+    prices: PRICES, dividends: DIVS, holidays: KR26,
+  });
+  ok('#108d ⚠️ 전면 교체 이벤트(전량 매도가 분모 산출보다 먼저)에서도 신규 종목을 산다',
+    swapAll.summary.finalEval > 0
+      && swapAll.months.some((m) => m.trades.some((t) => t.assetId === 'x2' && t.qty > 0)));
 
   // 매도 대금은 매매 주머니로만 들어간다 → 분배금 주머니는 지급으로만 늘어난다.
   ok('#108b 분배금 주머니는 지급으로만 늘어난다(매도 대금은 매매 주머니로)',
@@ -1686,9 +1776,11 @@ console.log('\n── 파트④-h 목표 기준(비중 분모 = 종목 평가액
   const legacy = makeBtConfig({ ratioBase: 'totalWithDiv', targetMode: 'ratio' });
   ok('#109 ⚠️ 옛 ratioBase 값은 정규화에서 사라진다(분모 선택 부활 금지)',
     !('ratioBase' in legacy) && legacy.targetMode === 'ratio');
-  ok('#109b 지문에도 남지 않는다(옛 값이 달라도 같은 지문)',
-    backtestFingerprint([makeBtConfig({ id: 'x', ratioBase: 'total', targetMode: 'ratio' })])
-      === backtestFingerprint([makeBtConfig({ id: 'x', ratioBase: 'initial', targetMode: 'ratio' })]));
+  // ⚠️ 인자는 **정규화를 거치지 않은 raw 객체**여야 한다 — makeBtConfig 출력을 넣으면 필드가
+  //    이미 사라진 뒤라 지문 투영이 되살아나도 통과하는 죽은 단언이 된다(#109의 동어반복).
+  ok('#109b 지문 투영에도 남지 않는다(정규화 전 raw 객체로 검사)',
+    backtestFingerprint([{ id: 'x', name: 'x', targetMode: 'ratio', ratioBase: 'total', assets: [] }])
+      === backtestFingerprint([{ id: 'x', name: 'x', targetMode: 'ratio', ratioBase: 'initial', assets: [] }]));
 
   // ⚠️ #110 — 기말 예수금 **원천별 분해 항등식**. 기말 보유 표가 이 분해를 그대로 렌더하므로,
   //    항등식이 깨지면 화면의 소계가 예수금과 안 맞는다.
@@ -2237,8 +2329,9 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   ok('#151 ⚠️ 엔진에 분모 선택 개념이 없다(ratioBase/BtRatioBase/totalWithDiv 식별자 부재)',
     !/\bratioBase\b/.test(bt2) && !/\bBtRatioBase\b/.test(bt2)
       && !/['"]totalWithDiv['"]/.test(bt2)
-      // 비중 분모는 '종목 평가액 합계'(totalEvalAt)로만 산출한다
-      && /const base = totalEvalAt\(s\.rebalDate\);/.test(bt2));
+      // 비중 분모는 targetBaseAt(= 평가액 합계, 보유 0이면 현금 부트스트랩)로만 산출한다
+      && /const base = targetBaseAt\(s\.rebalDate\);/.test(bt2)
+      && /return eq > 0 \? eq : Math\.max\(0, cash\);/.test(bt2));
   ok('#152 ⚠️ 화면에도 분모 드롭다운이 없다(라벨·select·option 전부 제거)',
     !/RATIO_BASE_LABEL/.test(page) && !/ratioBase/.test(page)
       && !/비중을 곱할 기준/.test(page)
@@ -2254,6 +2347,11 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     /maxHeight: pos\.maxH, overflowY: 'auto'/.test(page)
       && /const maxH = Math\.max\(120,/.test(page)
       && /closest\('\[data-bt-pop\]'\)\) return;/.test(page));
+  // ⚠️ 앱 자신의 버튼이 엔진 경고를 유발하면 안 된다 — 균등 분배는 잔여를 마지막 종목이 흡수해
+  //    합을 정확히 100%로 맞춘다(안 그러면 3·6·7·9·12…종목에서 '비중 합 100% 아님'이 상시 뜬다).
+  ok('#156 ⚠️ 종목 수 균등 분배는 반올림 잔여를 흡수해 합을 100%로 맞춘다',
+    /const last = Math\.round\(\(100 - each \* \(n - 1\)\) \* 100\) \/ 100;/.test(page)
+      && /targetRatio: i === n - 1 \? last : each/.test(page));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  통과 ${pass} / 실패 ${fail}\n`);

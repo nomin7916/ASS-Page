@@ -1471,6 +1471,64 @@ export function runBacktest(input: BtRunInput): BtResult {
   };
 
   /**
+   * 비중 모드 분모. 평소에는 종목 평가액 합계 그대로다.
+   *
+   * ⚠️ **보유가 하나도 없으면 그 시점 가용 현금으로 부트스트랩**한다 — 안 그러면 분모 0 →
+   *    목표 0 → 매매 0 → 보유 0 이 스스로를 잠가(self-locking) 한 주도 사지 못한다.
+   *    실제로 걸리는 경로가 둘 있다: ① 전 종목이 기간 중간 편입(시작일에 보유가 없다)
+   *    ② ⑦ 이벤트의 전면 교체(1단계 전량 매도가 4단계 분모 산출보다 먼저 실행된다).
+   *    초기 매수가 투입 자본을 분모로 쓰는 것과 **같은 원리**다(그 시점 cash = 투입 자본).
+   * ⚠️ 평가액이 있으면 현금은 절대 섞이지 않는다 — '예수금은 분모가 아니다'(검증 #106)는
+   *    그대로다. `eq + cash` 같은 형태로 바꾸지 말 것.
+   */
+  const targetBaseAt = (date: string): number => {
+    const eq = totalEvalAt(date);
+    return eq > 0 ? eq : Math.max(0, cash);
+  };
+
+  /**
+   * 비중 합 점검(1회 경고). 분모가 '종목 평가액 합계'로 고정되면서 **합이 100%가 아닌 것의 뜻이
+   * 달라졌다** — 1회성 현금 버퍼가 아니라 리밸런싱 **때마다** 그 차이만큼 사고파는 지시가 된다
+   * (80%면 매번 20%씩 팔아 평가액이 복리로 줄어든다). 오타 한 번이 조용히 그렇게 돌면 안 된다.
+   *
+   * ⚠️ 판정은 **그 시점 살아 있는 종목**의 비중 합이다 — `config.assets` 정적 합으로 재지 말 것.
+   *    ① 편입 기간이 갈린 정상 구성(A 100% → B 100%)이 정적 합 200%로 **상시 오탐**하고
+   *    ② ⑦ 이벤트가 런타임에 바꾼 비중(`p.targetRatio` 덮어쓰기)의 진짜 오타는 **영영 미탐**이다.
+   * ⚠️ 합 0%(목표 금액 → 비중 모드 전환 시 비중 칸이 전부 비어 있는 흔한 상태)는 피해가 가장
+   *    큰데 `sum > 0` 게이트를 두면 **정확히 그 경우만 건너뛴다**. 별도 문구로 반드시 알린다.
+   * ⚠️ 허용 오차는 반올림 잔차용이다(33.33×3=99.99). 이보다 넓히면 진짜 오타 가드가 죽는다.
+   */
+  const RATIO_SUM_TOL = 0.05;
+  let ratioSumWarned = false;
+  const checkRatioSum = (date: string): void => {
+    if (config.targetMode !== 'ratio' || ratioSumWarned) return;
+    const live = positions.filter(
+      p => p.active && !p.removed && date >= p.effectiveStart && date <= p.effectiveEnd,
+    );
+    if (!live.length) return;
+    const sum = live.reduce((s, p) => s + Math.max(0, p.targetRatio ?? 0), 0);
+    if (!(sum > 0)) {
+      ratioSumWarned = true;
+      warnings.push(
+        '목표 비중이 전부 0%라 아무것도 사지 않습니다 — ⑥ 종목에서 종목별 목표 비중을 입력하세요'
+        + '(목표 금액 모드에서 전환했다면 비중 칸이 비어 있습니다).',
+      );
+      return;
+    }
+    if (Math.abs(sum - 100) > RATIO_SUM_TOL) {
+      ratioSumWarned = true;
+      // ⚠️ 합이 어긋나는 흔한 원인이 '아직 편입 전/이미 이탈한 종목'이라, 몇 종목의 합인지를
+      //    함께 밝힌다 — 안 그러면 100%를 정확히 입력한 사용자가 이유를 알 수 없다.
+      const scope = live.length < positions.length ? ` ${date} 기준 편입된 ${live.length}/${positions.length}종목의 합입니다.` : '';
+      warnings.push(
+        `목표 비중 합이 ${Math.round(sum * 100) / 100}%입니다(100% 아님).${scope} 분모가 ‘종목 평가액 합계’라 `
+        + '리밸런싱마다 그 차이만큼 사고팝니다 — 100%보다 작으면 매번 팔아 현금이 쌓이고(평가액이 계속 줄어듭니다), '
+        + '크면 예수금을 헐어 더 삽니다.',
+      );
+    }
+  };
+
+  /**
    * 한 종목을 목표금액까지 맞추는 매매 1건.
    * ⚠️ 현금 한도 검사는 **반올림 후** 한다 — 먼저 자르면 수량이 목표를 넘겨 잡힌 뒤
    *    현금이 마이너스가 되거나, 반대로 1주 덜 사게 된다.
@@ -1607,7 +1665,9 @@ export function runBacktest(input: BtRunInput): BtResult {
   {
     // ⚠️ 초기 매수만은 비중 분모가 평가액이 아니라 **투입 자본**이다.
     //    평소 분모(종목 평가액 합계)를 그대로 쓰면 그 시점 평가액이 0이라 목표가 전부 0이 되어
-    //    아무것도 사지 않는다(비중 모드가 통째로 죽는 회귀).
+    //    아무것도 사지 않는다(비중 모드가 통째로 죽는 회귀). `targetBaseAt`의 현금 부트스트랩과
+    //    같은 원리이고 그 시점 cash와도 값이 같다.
+    checkRatioSum(startBiz);
     const base = config.initialCapital + config.extraCash;
     for (const p of positions) {
       if (!p.active) continue;
@@ -1663,19 +1723,6 @@ export function runBacktest(input: BtRunInput): BtResult {
         + '재투자 효과가 거의 없고, 되판 대금이 ‘누적 매매차익’에 잡혀 실제보다 커 보입니다. '
         + '재투자를 살리려면 리밸런싱을 끄거나(‘리밸런싱 안 함’) 목표를 ‘목표 비중 %’로 바꾸세요.',
       );
-    }
-    // ⚠️ 분모가 '종목 평가액 합계'로 고정되면서 **비중 합이 100%가 아닌 것의 뜻이 달라졌다** —
-    //    1회성 현금 버퍼가 아니라 리밸런싱 **때마다** 그 차이만큼 사고파는 지시가 된다(80%면
-    //    매번 20%씩 팔아 평가액이 복리로 줄어든다). 오타 한 번이 조용히 그렇게 돌면 안 된다.
-    if (config.targetMode === 'ratio') {
-      const ratioSum = config.assets.reduce((s, a) => s + Math.max(0, a.targetRatio ?? 0), 0);
-      if (ratioSum > 0 && Math.abs(ratioSum - 100) > 0.01) {
-        warnings.push(
-          `목표 비중 합이 ${Math.round(ratioSum * 100) / 100}%입니다(100% 아님) — 분모가 ‘종목 평가액 합계’라 `
-          + '리밸런싱마다 그 차이만큼 사고팝니다. 100%보다 작으면 매번 팔아 현금이 쌓이고(평가액이 계속 줄어듭니다), '
-          + '크면 예수금을 헐어 더 삽니다. ⑦ 중도 종목 변경으로 비중을 바꿨다면 무시해도 됩니다.',
-        );
-      }
     }
   }
 
@@ -1966,7 +2013,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       }
       // 4) 재원 조달
       if (e.funding === 'reallocate') {
-        const base = totalEvalAt(e.date);
+        const base = targetBaseAt(e.date);
         // ⚠️ 매도를 먼저 전부 처리한 뒤 매수 — 순서가 섞이면 재원이 마련되기 전에 매수가
         //    예수금 한도에 걸려 조용히 목표 미달로 끝난다(PDF 4/21이 정확히 이 형태다).
         const acts = positions.filter(p => p.active);
@@ -1984,7 +2031,7 @@ export function runBacktest(input: BtRunInput): BtResult {
           if (t) pushTrade(t);
         }
       } else if (e.funding === 'cash') {
-        const base = totalEvalAt(e.date);
+        const base = targetBaseAt(e.date);
         for (const aid of e.addAssets) {
           const p = posById.get(aid);
           if (!p || !p.active) continue;
@@ -1998,7 +2045,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     // kind === 'rebal'
     {
       const s = step.slot;
-      const base = totalEvalAt(s.rebalDate);
+      const base = targetBaseAt(s.rebalDate);
       const eligible: Pos[] = [];
       for (const aid of s.assetIds) {
         const p = posById.get(aid);
@@ -2012,6 +2059,8 @@ export function runBacktest(input: BtRunInput): BtResult {
         if (!p.active) p.active = true;
         eligible.push(p);
       }
+      // ⚠️ 편입 처리(위 루프)가 끝난 뒤에 점검한다 — 중간 상장 종목이 이 슬롯에서 막 활성화되므로.
+      checkRatioSum(s.rebalDate);
       // ⚠️ 매도/매수 분할은 **실행 전에** 확정해야 한다. 실행 중 다시 판정하면 방금 매도해
       //    목표에 맞춰진 종목이 매수 패스에 또 걸리고(중복 처리), 반대로 매수 재원이 마련되기
       //    전에 매수가 예수금 한도에 막혀 조용히 목표 미달로 끝난다.

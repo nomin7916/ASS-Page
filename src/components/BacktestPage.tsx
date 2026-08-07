@@ -1042,8 +1042,12 @@ export default function BacktestPage({
       const each = Math.floor((active.initialCapital + active.extraCash) / n);
       patchActive({ assets: active.assets.map((a) => ({ ...a, targetAmount: each })) });
     } else {
+      // ⚠️ 마지막 종목이 반올림 잔여를 흡수해 합을 정확히 100%로 맞춘다 — 안 그러면 3·6·7·9·12…
+      //    종목에서 합이 99.99/100.02/100.03이 되어, 사용자가 손댄 적 없는 **앱 자신의 버튼**이
+      //    엔진의 '비중 합 100% 아님' 경고를 띄운다(경고 도배로 진짜 경고가 묻힌다).
       const each = Math.round((100 / n) * 100) / 100;
-      patchActive({ assets: active.assets.map((a) => ({ ...a, targetRatio: each })) });
+      const last = Math.round((100 - each * (n - 1)) * 100) / 100;
+      patchActive({ assets: active.assets.map((a, i) => ({ ...a, targetRatio: i === n - 1 ? last : each })) });
     }
   };
 
