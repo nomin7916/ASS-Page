@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import {
   runBacktest, makeBtConfig, makeBtAsset, joinTradeDividends, parsePastedSeries,
-  seriesRange, monthsBetween,
+  seriesRange, monthsBetween, backtestFingerprint,
   MAX_BT_SCENARIOS, MAX_BT_ASSETS, MAX_BT_EVENTS, MAX_BT_OVERRIDES,
   MAX_BT_CONTRIB_OVERRIDES, MAX_BT_REBAL_DATES, BT_COLORS, DEFAULT_DIP_LEVELS, MAX_BT_DIP_LEVELS,
 } from '../backtest';
@@ -35,6 +35,11 @@ import { generateId, formatNumber, cleanNum } from '../utils';
 
 const IDLE_MS = 2500;
 const RUN_DEBOUNCE_MS = 220;
+/**
+ * 승격한 값이 상위에서 되돌아오기를 기다리는 유예시간.
+ * ⚠️ 별도 브라우저 창의 **낡은 에코**를 무시하기 위한 값이다(아래 pendingEchoRef 주석 참조).
+ */
+const ECHO_GRACE_MS = 12000;
 
 const won = (n) => `₩${formatNumber(Math.round(cleanNum(n)))}`;
 const wonSigned = (n) => {
@@ -99,6 +104,16 @@ const dipOf = (cfg) => (cfg && cfg.dip) || { enabled: false, levels: DEFAULT_DIP
 const annualOf = (cfg) =>
   (cfg && cfg.annualReview) || { mode: 'none', value: 0, reserve: 0, everyMonths: 12, split: 'ratio' };
 const numOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/**
+ * 종목별 목표값 접근자 — "사용자가 이 칸에 값을 넣었는가"와 "그 값이 얼마인가"를 분리한다.
+ *
+ * ⚠️ `0`도 엄연한 입력이다(전량 청산 목표). `!a.targetAmount` 같은 truthy 판정으로 재면
+ *    0을 '미입력'으로 오판해 '빈 종목에 잔여 채우기'가 그 칸을 덮어쓴다.
+ */
+const hasTargetOf = (asset, mode) =>
+  typeof (mode === 'amount' ? asset?.targetAmount : asset?.targetRatio) === 'number';
+const targetValOf = (asset, mode) => numOf(mode === 'amount' ? asset?.targetAmount : asset?.targetRatio);
 
 /**
  * 켜져 있는 전략 보조 규칙만 짧게 나열한다 — 설정 배지·시나리오 부제·CSV가 같은 문구를 쓴다.
@@ -277,8 +292,15 @@ function NumInput({ value, onCommit, placeholder = '', disabled = false, classNa
     if (draft === null) return;
     const raw = draft.trim();
     setDraft(null);
-    if (allowEmpty && raw === '') { onCommit(null); return; }
-    onCommit(cleanNum(raw));
+    const next = allowEmpty && raw === '' ? null : cleanNum(raw);
+    // ⚠️ 값이 그대로면 아무것도 쓰지 않는다(RebalancingPanel commitAmt의 조기 return과 같은 규약).
+    //    포커스만 스치고 지나가도 커밋하면 patchActive가 updatedAt을 갱신해 ① 지문이 바뀌어
+    //    Drive 4파일 write가 나가고 ② 불필요한 승격이 별도 창의 에코 경합을 만든다.
+    const cur = allowEmpty
+      ? (value === null || value === undefined || value === '' ? null : cleanNum(value))
+      : cleanNum(value);
+    if (next === cur) return;
+    onCommit(next);
   };
   return (
     <input
@@ -979,11 +1001,31 @@ export default function BacktestPage({
   const dirtyRef = useRef(false);
   const idleRef = useRef(null);
 
+  /**
+   * 승격 직후 되돌아오는 **낡은 에코**를 무시하기 위한 대기표 `{ fp, until }`.
+   *
+   * 별도 브라우저 창은 편집을 postMessage로 앱 탭에 보내고, 앱 탭은 `backtest:live`로 시나리오를
+   * 되돌려 보낸다. 그런데 ① 앱 탭은 백그라운드라 타이머·렌더가 스로틀되고 ② 시세 조회 완료
+   * (btPrices·btFetching 변경)도 **같은 backtest:live를 쏜다**. 그래서 승격 **이전** 상태로 만들어진
+   * 메시지가 승격 직후(dirty=false)에 도착해, 방금 입력한 종목별 목표값을 직전 상태(대개
+   * '종목 수로 균등 분배'를 눌렀던 값)로 통째로 되돌릴 수 있다.
+   * → 승격한 값이 한 번 되돌아오기 전까지(또는 유예시간이 지나기 전까지)는 다른 값을 채택하지 않는다.
+   *
+   * ⚠️ **승격한 적이 없으면(pending null) 종전대로 즉시 채택**한다 — Drive 로드가 LoadingOverlay
+   *    해제(20초)보다 늦게 도착하는 경로를 막는 안전장치라 절대 없애지 말 것(FlowBoard 선례).
+   * ⚠️ 인앱 오버레이는 onUpdateScenarios가 setBacktestScenarios라 다음 렌더에 참조가 그대로
+   *    돌아오고, 아래 fast path가 대기표를 즉시 지운다 → 이 가드는 사실상 **별도 창 전용**이다.
+   */
+  const pendingEchoRef = useRef(null);
+
   const promote = useCallback(() => {
     if (idleRef.current) { clearTimeout(idleRef.current); idleRef.current = null; }
     if (!dirtyRef.current) return null;      // ⚠️ 승격할 게 없으면 반드시 null (종료 커밋 강제 방지)
     dirtyRef.current = false;
     const next = localRef.current;
+    let fp = '';
+    try { fp = backtestFingerprint(next); } catch { fp = ''; }
+    pendingEchoRef.current = fp ? { fp, until: Date.now() + ECHO_GRACE_MS } : null;
     onUpdateScenarios?.(next);
     return next;
   }, [onUpdateScenarios]);
@@ -1005,7 +1047,18 @@ export default function BacktestPage({
   //    않으면 도형 하나 그리자마자 저장돼 있던 시나리오 전체가 빈 배열로 대체된다(FlowBoard 선례).
   useEffect(() => {
     if (dirtyRef.current) return;
-    if (scenarios === localRef.current) return;
+    if (scenarios === localRef.current) { pendingEchoRef.current = null; return; }
+    const pend = pendingEchoRef.current;
+    if (pend) {
+      if (Date.now() > pend.until) {
+        pendingEchoRef.current = null;              // 유예 만료 — 종전 동작으로 복귀
+      } else {
+        let fp = '';
+        try { fp = backtestFingerprint(scenarios); } catch { fp = ''; }
+        if (fp !== pend.fp) return;                 // 낡은 에코 — 방금 입력한 목표값을 지키고 무시
+        pendingEchoRef.current = null;              // 내가 올린 값이 되돌아왔다 — 정상 수렴
+      }
+    }
     localRef.current = scenarios;
     setLocalState(scenarios);
   }, [scenarios]);
@@ -1236,8 +1289,60 @@ export default function BacktestPage({
     });
   };
 
+  /**
+   * ⑥ 종목의 목표 합계 요약 — "내가 넣은 값이 재원(또는 100%)에 대해 어디쯤인가".
+   *
+   * ⚠️ 순수 **표시용**이다. 엔진은 합이 100%가 아니어도, 재원을 넘겨도 그대로 실행한다(경고만) —
+   *    합계가 맞아야만 실행되는 것처럼 보이면 사용자가 자유 입력을 포기한다.
+   */
+  const targetSummary = useMemo(() => {
+    if (!active) return null;
+    const mode = active.targetMode;
+    const isAmt = mode === 'amount';
+    const assets = active.assets || [];
+    const filled = assets.filter((a) => hasTargetOf(a, mode));
+    const sum = filled.reduce((s, a) => s + targetValOf(a, mode), 0);
+    const capital = numOf(active.initialCapital) + numOf(active.extraCash);
+    const goal = isAmt ? capital : 100;
+    const diff = sum - goal;
+    // 허용 오차 — 금액은 1원, 비중은 반올림 잔차(엔진 RATIO_SUM_TOL과 같은 0.05%p).
+    const tol = isAmt ? 1 : 0.05;
+    const level = assets.length === 0 || Math.abs(diff) <= tol
+      ? 'ok'
+      : diff > 0 ? 'over' : 'under';
+    return {
+      mode, isAmt, sum, goal, diff, capital, level,
+      count: assets.length, filledCount: filled.length, emptyCount: assets.length - filled.length,
+    };
+  }, [active]);
+
+  /** 이미 입력된 목표값이 하나라도 있는가 — 균등 분배가 '덮어쓰기'가 되는지 판정. */
+  const hasAnyTarget = !!targetSummary && targetSummary.filledCount > 0;
+
+  /** 균등 분배 덮어쓰기 확인 단계. 모드·시나리오가 바뀌면 반드시 초기화한다. */
+  const [evenConfirm, setEvenConfirm] = useState(false);
+  useEffect(() => { setEvenConfirm(false); }, [active?.id, active?.targetMode]);
+
+  /**
+   * 비어 있는(미입력) 종목에만 남은 재원을 균등 배분한다 — 금액 모드 전용.
+   * ⚠️ **이미 입력된 값은 절대 건드리지 않는다.** 이 버튼의 존재 이유가 그것이다
+   *    ('종목 수로 균등 분배'는 전부 덮어쓰므로 확인을 받고, 이쪽은 확인이 필요 없다).
+   */
+  const fillEmptyTargets = () => {
+    if (!active || active.targetMode !== 'amount') return;
+    const assets = active.assets || [];
+    const empties = assets.filter((a) => !hasTargetOf(a, 'amount'));
+    if (!empties.length) return;
+    const used = assets.reduce((s, a) => s + (hasTargetOf(a, 'amount') ? Math.max(0, targetValOf(a, 'amount')) : 0), 0);
+    const remain = Math.max(0, numOf(active.initialCapital) + numOf(active.extraCash) - used);
+    const each = Math.floor(remain / empties.length);
+    if (!(each > 0)) return;
+    patchActive({ assets: assets.map((a) => (hasTargetOf(a, 'amount') ? a : { ...a, targetAmount: each })) });
+  };
+
   /** 목표를 균등 분배 — 금액 모드는 초기자본/N, 비중 모드는 100/N */
   const splitEven = () => {
+    setEvenConfirm(false);
     if (!active || !active.assets.length) return;
     const n = active.assets.length;
     if (active.targetMode === 'amount') {
@@ -1696,12 +1801,20 @@ export default function BacktestPage({
 
               <Section
                 title="② 목표 기준"
-                badge={active.targetMode === 'amount' ? '목표 금액' : '목표 비중 %'}
+                badge={targetSummary && targetSummary.count > 0
+                  ? `${active.targetMode === 'amount' ? '목표 금액' : '목표 비중 %'} · 합계 ${
+                      targetSummary.isAmt ? won(targetSummary.sum) : `${formatNumber(Math.round(targetSummary.sum * 100) / 100)}%`}`
+                  : (active.targetMode === 'amount' ? '목표 금액' : '목표 비중 %')}
                 hint={(
                   <>
                     <p>
                       리밸런싱이 <b className="text-gray-300">무엇에 맞춰 수량을 조정할지</b>를 정합니다.
                       값은 아래 <b className="text-gray-300">⑥ 종목</b>에서 종목마다 직접 적어 넣습니다.
+                    </p>
+                    <p className="mt-1 text-amber-300/90">
+                      각 종목 칸에 원하는 <b>금액·비중을 직접 입력</b>할 수 있습니다. 종목마다 다른 값을
+                      넣어도 되고, 일부만 넣어도 됩니다. 아래 <b>'종목 수로 균등 분배'는 편의 버튼일 뿐</b>이며
+                      누를 때만 동작합니다(기본값이 균등 분배인 것이 아닙니다).
                     </p>
                     <p className="mt-1">
                       <b className="text-gray-300">목표 금액</b> — 종목마다 "이 금액이 되게" 맞춥니다
@@ -1740,12 +1853,36 @@ export default function BacktestPage({
                     ? '종목마다 적어 넣은 금액이 되도록 매수·매도합니다. 남는 돈은 예수금으로 남습니다.'
                     : '기준(분모)은 종목 평가액 합계입니다 — 예수금·매매차익·누적 분배금은 포함하지 않습니다.'}
                 </p>
-                <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`} onClick={splitEven} disabled={readOnly || !active.assets.length}
-                  title={active.targetMode === 'amount'
-                    ? '초기 투자금(+추가 예수금)을 종목 수로 나눠 목표 금액에 채웁니다'
-                    : '100%를 종목 수로 나눠 목표 비중에 채웁니다'}>
-                  종목 수로 균등 분배
-                </button>
+                <p className="text-[10px] text-sky-300/80 leading-relaxed">
+                  값은 <b>⑥ 종목</b>의 각 칸에 <b>직접 입력</b>합니다. 아래 버튼은 편의 기능일 뿐이며,
+                  누르지 않는 한 입력한 값은 그대로 유지됩니다.
+                </p>
+                {/* ⚠️ 확인은 2단계 인라인 버튼이다 — App의 confirm()/notify()를 쓰지 말 것.
+                    이 컴포넌트는 **별도 브라우저 창**(App 미마운트)에서도 그대로 렌더되므로
+                    거기에는 ConfirmDialog도 알림 토스트도 존재하지 않는다. */}
+                {evenConfirm ? (
+                  <div className="flex flex-col gap-1 border border-amber-800 rounded p-1.5 bg-amber-900/20">
+                    <span className="text-[10px] text-amber-300 leading-relaxed">
+                      이미 입력한 목표값 {targetSummary?.filledCount ?? 0}종목을 <b>모두 덮어씁니다.</b>
+                      {' '}되돌리기는 없습니다. 계속할까요?
+                    </span>
+                    <div className="flex gap-1">
+                      <button className={`${BTN} flex-1 text-amber-200 border-amber-700 hover:bg-amber-900/40`}
+                        onClick={splitEven}>덮어쓰기</button>
+                      <button className={`${BTN} flex-1 text-gray-300 border-gray-700 hover:bg-gray-800`}
+                        onClick={() => setEvenConfirm(false)}>취소</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`}
+                    onClick={() => { if (hasAnyTarget) setEvenConfirm(true); else splitEven(); }}
+                    disabled={readOnly || !active.assets.length}
+                    title={active.targetMode === 'amount'
+                      ? '초기 투자금(+추가 예수금)을 종목 수로 나눠 목표 금액에 채웁니다 (이미 입력한 값도 덮어씁니다)'
+                      : '100%를 종목 수로 나눠 목표 비중에 채웁니다 (이미 입력한 값도 덮어씁니다)'}>
+                    종목 수로 균등 분배
+                  </button>
+                )}
               </Section>
 
               <Section
@@ -2469,20 +2606,31 @@ export default function BacktestPage({
                         <button className="p-0.5 text-gray-600 hover:text-red-400 shrink-0" disabled={readOnly}
                           onClick={() => removeAsset(a.id)}><Trash2 size={11} /></button>
                       </div>
+                      {/* ⚠️ 목표 칸에는 반드시 라벨을 둔다 — 라벨 없이 두면 이 칸이 '내가 값을 넣는
+                          자리'로 읽히지 않아, ② 목표 기준의 '종목 수로 균등 분배' 버튼이 유일한
+                          조작 수단처럼 보인다("균등분배로 고정돼 있다"는 사용자 보고의 실체). */}
                       <div className="grid grid-cols-2 gap-1">
-                        <select className={INPUT} value={a.payCycle} disabled={readOnly}
-                          onChange={(e) => patchAsset(a.id, { payCycle: e.target.value })}>
-                          <option value="mid">월중 분배 (15일 기준)</option>
-                          <option value="eom">월말 분배 (말일 기준)</option>
-                          <option value="none">분배 없음</option>
-                        </select>
-                        {active.targetMode === 'amount' ? (
-                          <NumInput value={a.targetAmount} allowEmpty placeholder="목표금액" disabled={readOnly}
-                            onCommit={(v) => patchAsset(a.id, { targetAmount: v })} />
-                        ) : (
-                          <NumInput value={a.targetRatio} allowEmpty placeholder="목표비중 %" disabled={readOnly}
-                            onCommit={(v) => patchAsset(a.id, { targetRatio: v })} />
-                        )}
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-[9px] text-gray-600">분배 주기</span>
+                          <select className={INPUT} value={a.payCycle} disabled={readOnly}
+                            onChange={(e) => patchAsset(a.id, { payCycle: e.target.value })}>
+                            <option value="mid">월중 분배 (15일 기준)</option>
+                            <option value="eom">월말 분배 (말일 기준)</option>
+                            <option value="none">분배 없음</option>
+                          </select>
+                        </label>
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-[9px] text-gray-600">
+                            {active.targetMode === 'amount' ? '목표 금액 (직접 입력)' : '목표 비중 % (직접 입력)'}
+                          </span>
+                          {active.targetMode === 'amount' ? (
+                            <NumInput value={a.targetAmount} allowEmpty placeholder="목표금액" disabled={readOnly}
+                              onCommit={(v) => patchAsset(a.id, { targetAmount: v })} />
+                          ) : (
+                            <NumInput value={a.targetRatio} allowEmpty placeholder="목표비중 %" disabled={readOnly}
+                              onCommit={(v) => patchAsset(a.id, { targetRatio: v })} />
+                          )}
+                        </label>
                       </div>
                       {/* 종목별 리밸런싱 일정 — 분배가 불규칙한 종목을 전역 정책과 다르게 돌린다.
                           ⚠️ '전역 정책 따름'이 아닌 종목은 월별 **일괄** 오버라이드에 끌려가지 않는다. */}
@@ -2578,6 +2726,74 @@ export default function BacktestPage({
                     </div>
                   );
                 })}
+
+                {/* 목표 합계 줄 — 종목마다 자유롭게 넣은 값이 재원(또는 100%)에 대해 어디쯤인지 항상 보여 준다.
+                    ⚠️ 색으로 경고만 하고 **실행은 절대 막지 않는다**. 합이 100%가 아닌 것도, 재원보다
+                       적은 것도 엔진이 그대로 실행하는 정상 상태다(각각의 뜻은 ② 도움말 참조). */}
+                {targetSummary && targetSummary.count > 0 && (
+                  <div className={`rounded border px-2 py-1.5 flex flex-col gap-1 ${
+                    targetSummary.level === 'over' ? 'border-red-800 bg-red-900/20'
+                      : targetSummary.level === 'under' ? 'border-amber-800 bg-amber-900/20'
+                        : 'border-gray-800 bg-gray-900/60'}`}>
+                    <div className="flex items-baseline justify-between gap-2 text-[10px]">
+                      <span className="text-gray-400 shrink-0">
+                        {targetSummary.isAmt ? '목표 합계' : '비중 합계'}
+                      </span>
+                      <span className={`font-mono text-right ${
+                        targetSummary.level === 'over' ? 'text-red-300'
+                          : targetSummary.level === 'under' ? 'text-amber-300' : 'text-gray-200'}`}>
+                        {targetSummary.isAmt
+                          ? `${won(targetSummary.sum)} / ${won(targetSummary.goal)}`
+                          : `${formatNumber(Math.round(targetSummary.sum * 100) / 100)}% / 100%`}
+                      </span>
+                    </div>
+                    <div className="text-[9px] text-gray-500 leading-relaxed">
+                      {targetSummary.filledCount === 0 ? (
+                        <span className="text-amber-300">
+                          아직 입력된 목표가 없습니다 — 위 각 종목의
+                          {targetSummary.isAmt ? " '목표 금액'" : " '목표 비중 %'"} 칸에 직접 입력하세요.
+                        </span>
+                      ) : targetSummary.isAmt ? (
+                        <>
+                          재원 = 초기 투자금 + 추가 예수금 · 차액{' '}
+                          <span className={targetSummary.level === 'over' ? 'text-red-300' : targetSummary.level === 'under' ? 'text-amber-300' : 'text-gray-400'}>
+                            {wonSigned(targetSummary.diff)}
+                          </span>
+                          {targetSummary.level === 'over'
+                            ? ' — 재원을 넘어섭니다(예수금이 모자라면 살 수 있는 만큼만 삽니다).'
+                            : targetSummary.level === 'under'
+                              ? ' — 남는 돈은 예수금으로 남습니다.'
+                              : ' — 재원과 일치합니다.'}
+                        </>
+                      ) : (
+                        <>
+                          차액{' '}
+                          <span className={targetSummary.level === 'over' ? 'text-red-300' : targetSummary.level === 'under' ? 'text-amber-300' : 'text-gray-400'}>
+                            {`${targetSummary.diff > 0 ? '+' : targetSummary.diff < 0 ? '−' : ''}${formatNumber(Math.abs(Math.round(targetSummary.diff * 100) / 100))}%p`}
+                          </span>
+                          {targetSummary.level === 'ok'
+                            ? ' — 100%와 일치합니다.'
+                            : ' — 리밸런싱마다 그 차이만큼 사고팝니다(100%가 아니어도 실행됩니다).'}
+                        </>
+                      )}
+                      {targetSummary.filledCount > 0 && targetSummary.emptyCount > 0 && (
+                        <span className="text-gray-500">{` · 미입력 ${targetSummary.emptyCount}종목`}</span>
+                      )}
+                    </div>
+                    {/* ⚠️ 이 버튼은 **미입력 칸만** 채운다 — 이미 넣은 값은 건드리지 않는다.
+                        전부 덮어쓰는 '종목 수로 균등 분배'(② 목표 기준)와 혼동하지 말 것. */}
+                    {targetSummary.isAmt && targetSummary.emptyCount > 0 && (
+                      <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`}
+                        onClick={fillEmptyTargets}
+                        disabled={readOnly || !(targetSummary.diff < -1)}
+                        title={targetSummary.diff < -1
+                          ? `남은 재원 ${won(-targetSummary.diff)}을 미입력 ${targetSummary.emptyCount}종목에 균등 배분합니다 (이미 입력한 값은 그대로)`
+                          : '남은 재원이 없습니다'}>
+                        빈 종목에 잔여 채우기 ({targetSummary.emptyCount}종목)
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 <button className={`${BTN} text-gray-400 border-gray-700 hover:bg-gray-800 w-full`}
                   onClick={() => setPasteOpen((v) => !v)}>
