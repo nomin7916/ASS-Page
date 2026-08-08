@@ -2721,6 +2721,16 @@ export function runBacktest(input: BtRunInput): BtResult {
       //    매도 시그널·재조정 매도는 매매 주머니로만 들어가므로 이 값을 바꾸지 않는다.
       const pocket = Math.max(0, cashDiv);
       const tradeOnly = config.buyFunding === 'tradeOnly';
+      /**
+       * 비중 모드 분모는 **이 스텝에서 단 한 번만** 잡는다(정기 리밸런싱이 plans를 실행 전에
+       * 확정하는 것과 같은 규약).
+       * ⚠️ 매도마다 다시 재면 **캐스케이드**가 난다 — 같은 날 A·B에 매도 시그널이 뜨면 A를 판
+       *    직후 평가액 합계가 줄어 B의 목표까지 내려가고, B는 원래보다 더 팔게 된다(그 매도가
+       *    다시 C의 목표를 내린다). 매수 재원 계산·현금 바닥선도 같은 base를 써야 하루 안에서
+       *    목표가 흔들리지 않는다. 편입(`p.active = true`)은 수량을 바꾸지 않아 base와 무관하다.
+       */
+      checkRatioSum(date);
+      const base = targetBaseAt(date);
       const mkEvent = (t: SigTrig, p: Pos): BtSignalEvent => {
         const ev: BtSignalEvent = {
           date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
@@ -2743,8 +2753,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         if (!p.active || p.qty <= QTY_EPS) { ev.note = '보유 없음'; continue; }
         const hit = priceAt(prices[p.asset.code], date);
         if (hit.missing || hit.price <= 0) { ev.note = '종가 없음'; continue; }
-        checkRatioSum(date);
-        const target = targetOf(p, config, targetBaseAt(date));
+        const target = targetOf(p, config, base);
         // ⚠️ 아래 두 줄은 **의도적으로 중복된 방어선**이다(변이 테스트로 확인: 하나만 지우면
         //    다른 하나가 잡아 검증이 통과한다). 둘 다 지우면 목표에 못 미치는 보유 상태에서
         //    반등 시그널이 **매수로 뒤집혀** '매도 시그널'이 자산을 늘린다(검증 #308b).
@@ -2784,12 +2793,7 @@ export function runBacktest(input: BtRunInput): BtResult {
           list[i].note = `동시 발동 — 체결·개방은 ${list[0].step}단계 행에 합산`;
         }
       }
-      checkRatioSum(date);
 
-      // ⚠️ 분모(base)는 **한 번만** 잡는다 — 재조정 매도가 평가액 합계를 줄이는데 그때마다 다시
-      //    재면 목표가 함께 내려가 재원과 필요액이 서로를 쫓는 되먹임이 생긴다(비중 모드).
-      //    정기 리밸런싱이 plans를 실행 전에 확정하는 것과 같은 규약이다.
-      const base = targetBaseAt(date);
       const planOf = (p: Pos) => {
         const hit = priceAt(prices[p.asset.code], date);
         const target = targetOf(p, config, base);

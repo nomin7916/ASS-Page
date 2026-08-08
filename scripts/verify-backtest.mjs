@@ -1176,6 +1176,8 @@ function runBacktest(input) {
       };
       const pocket = Math.max(0, cashDiv);
       const tradeOnly = config.buyFunding === 'tradeOnly';
+      checkRatioSum(date);
+      const base = targetBaseAt(date);
       const mkEvent = (t, p) => {
         const ev = {
           date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
@@ -1196,8 +1198,7 @@ function runBacktest(input) {
         if (!p.active || p.qty <= QTY_EPS) { ev.note = '보유 없음'; continue; }
         const hit = priceAt(prices[p.asset.code], date);
         if (hit.missing || hit.price <= 0) { ev.note = '종가 없음'; continue; }
-        checkRatioSum(date);
-        const target = targetOf(p, config, targetBaseAt(date));
+        const target = targetOf(p, config, base);
         if (p.qty * hit.price - target <= 0) { ev.note = '목표 이하 — 팔 것 없음'; continue; }
         const tr = adjustTo(p, date, target, false);
         if (!tr || tr.qty >= 0) { ev.note = '매도 수량 0(반올림)'; continue; }
@@ -1228,9 +1229,7 @@ function runBacktest(input) {
           list[i].note = `동시 발동 — 체결·개방은 ${list[0].step}단계 행에 합산`;
         }
       }
-      checkRatioSum(date);
 
-      const base = targetBaseAt(date);
       const planOf = (p) => {
         const hit = priceAt(prices[p.asset.code], date);
         const target = targetOf(p, config, base);
@@ -2990,6 +2989,44 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
       ok('#316 ⚠️ 재조정 총액이 그날 첫 매수 이벤트에 기록된다', (() => {
         const ev = R.summary.signalEvents.filter((e) => e.kind === 'buy');
         return ev.some((e) => e.reallocAmount > 0);
+      })());
+      /* ── C-5. 비중 모드: 분모(base)는 스텝당 1회 ──────────────────────────────
+       * ⚠️ 매도마다 targetBaseAt을 다시 재면 **캐스케이드**가 난다 — 같은 날 A·B에 매도
+       *    시그널이 뜨면 A를 판 직후 평가액 합계가 줄어 B의 목표까지 내려가고, B는 원래보다
+       *    더 팔게 된다. 아래는 두 종목이 같은 날 함께 반등하는 픽스처로 그것을 고정한다.
+       * ===================================================================== */
+      ok('#318 ⚠️ 비중 모드에서 같은 날 두 종목이 매도 시그널이면 서로의 목표를 끌어내리지 않는다', (() => {
+        const SC3 = 'CCC';
+        // 두 종목 모두 저점 8000 → 같은 날 +25% 반등. 비중 50/50.
+        const UPUP = mkSeries((i) => (i < 30 ? 12000 : i < 60 ? 8000 : 10000));
+        const cfg3 = makeBtConfig({
+          id: 's', name: '캐스케이드', startDate: '2026-01-02', endDate: '2026-12-31',
+          initialCapital: 60000000, targetMode: 'ratio', rounding: 'floor', policy: 'none',
+          // ⚠️ 비중 합을 **80%**로 둔다 — 100%면 총 초과분 = 총 부족분이라 초과 종목만 팔게 되어
+          //    같은 날 두 종목이 동시에 매도하는 상황(캐스케이드가 드러나는 유일한 조건)이 안 만들어진다.
+          assets: [
+            { id: 'a1', code: SC, name: 'A', payCycle: 'eom', targetRatio: 40 },
+            { id: 'a2', code: SC3, name: 'C', payCycle: 'eom', targetRatio: 40 },
+          ],
+          dip: { enabled: true, levels: DEFAULT_DIP_LEVELS, sellLevels: [{ rise: 10 }] },
+        });
+        const r3 = runBacktest({
+          config: cfg3, prices: { [SC]: UPUP, [SC3]: UPUP }, dividends: {}, holidays: KR26,
+        });
+        const sells = r3.months.flatMap((m) => m.trades).filter((t) => t.signal === 'sell');
+        if (sells.length < 2) return false;
+        // 같은 날 · 같은 가격 · 같은 비중 → 두 종목의 목표가 **정확히 같아야** 한다(캐스케이드면 갈린다).
+        const byDate = new Map();
+        for (const t of sells) {
+          if (!byDate.has(t.date)) byDate.set(t.date, []);
+          byDate.get(t.date).push(t);
+        }
+        for (const list of byDate.values()) {
+          if (list.length < 2) continue;
+          const t0 = list[0].target;
+          if (!list.every((t) => Math.abs(t.target - t0) < 1e-6)) return false;
+        }
+        return true;
       })());
       ok('#317 ⚠️ 재조정 조합에서도 주머니 불변식·기말 분해 항등식이 성립한다', (() => {
         const s = R.summary;
