@@ -942,7 +942,18 @@ function ScenarioReviewCard({ cfg, result, readOnly, onPatch, onAddNote, registe
   };
 
   const shownVerdict = draft.verdict !== undefined ? draft.verdict : review.verdict;
-  const empty = !hasReviewContent(cfg) && !String(shownVerdict || '').trim();
+  /**
+   * '아직 아무것도 안 쓴 카드'인가 — 인쇄에서 뺄지 판정한다.
+   *
+   * ⚠️ **커밋된 값만 보지 말 것**(`hasReviewContent(cfg)` 단독 금지). `addNote`가 만드는 메모는
+   *    title·body가 ''이라, 붙여넣고 blur 없이 Ctrl+P를 누르면 `empty=true`가 되어 카드 루트에
+   *    `bt-noprint`가 붙고, 인쇄 CSS가 카드를 통째로 감추면서 **아래 `.bt-printonly` 미러까지
+   *    함께 사라진다**(자손의 `display:block !important`는 `display:none` 조상을 되살리지 못한다).
+   *    그 미러는 바로 그 경로("blur가 나지 않는 인쇄에서도 방금 친 내용이 실린다")를 위해 존재하므로,
+   *    커밋된 값만 보는 순간 미러의 존재 이유가 통째로 무효화된다. draft **전체**를 함께 본다.
+   */
+  const draftHasText = Object.keys(draft).some((k) => !!String(draft[k] ?? '').trim());
+  const empty = !hasReviewContent(cfg) && !draftHasText;
 
   return (
     // ⚠️ 아무것도 안 쓴 카드는 인쇄에서 통째로 뺀다 — 안 그러면 PDF 첫 장에 빈 상자가 찍힌다.
@@ -1778,7 +1789,18 @@ export default function BacktestPage({
   const addNote = useCallback((kind) => {
     if (!active || readOnly) return;
     if (notesOf(active).length >= MAX_BT_NOTES) return;
-    const s = result?.ok ? result.summary : null;
+    // ⚠️ 조건(conditions·fp)과 숫자(summary)는 **반드시 같은 config**에서 가져온다.
+    //    설정 칸을 고친 직후 곧바로 [AI 분석]을 누르면 그 클릭의 mousedown이 blur→커밋을 먼저
+    //    태워 `active`는 이미 새 값인데, `result`는 220ms 디바운스라 아직 **옛 실행분**이다.
+    //    섞으면 "새 조건 + 옛 숫자"가 영구 박제되고, `fp`도 현재와 같아져 '설정이 바뀌었습니다'
+    //    배지마저 뜨지 않는다 — 배지의 존재 이유(분석이 조용히 거짓이 되는 것 방지)가 무력화된다.
+    //    → 결과를 낸 그 config(`runCfg`)를 그대로 박제한다. 그러면 설정이 앞서 나간 경우 지문이
+    //    자연히 어긋나 배지가 즉시 켜진다(= 정확히 의도한 동작).
+    // ⚠️ `runCfg.id === active.id` 확인 필수 — 시나리오를 막 바꾼 220ms 동안 runCfg는 **직전
+    //    시나리오**를 가리킨다(그 config를 이 시나리오의 메모에 박으면 전혀 다른 설정이 남는다).
+    const ranCfg = runCfg && runCfg.id === active.id ? runCfg : null;
+    const s = ranCfg && result?.ok ? result.summary : null;
+    const src = s ? ranCfg : active;
     const ts = Date.now();
     const note = {
       id: generateId(),
@@ -1786,18 +1808,18 @@ export default function BacktestPage({
       title: '',
       body: '',
       snapshot: {
-        conditions: scenarioSubtitle(active, s),
-        fp: (() => { try { return backtestSettingsFingerprint(active); } catch { return ''; } })(),
+        conditions: scenarioSubtitle(src, s),
+        fp: (() => { try { return backtestSettingsFingerprint(src); } catch { return ''; } })(),
         finalTotal: s ? s.finalTotal : null,
         profit: s ? s.profit : null,
         profitRate: s ? s.profitRate : null,
-        period: s ? `${s.startDate} ~ ${s.endDate}` : `${active.startDate || '?'} ~ ${active.endDate || '?'}`,
+        period: s ? `${s.startDate} ~ ${s.endDate}` : `${src.startDate || '?'} ~ ${src.endDate || '?'}`,
       },
       createdAt: ts,
       updatedAt: ts,
     };
     patchScenarioById(active.id, (cur) => ({ notes: [...notesOf(cur), note] }));
-  }, [active, readOnly, result, patchScenarioById]);
+  }, [active, readOnly, result, runCfg, patchScenarioById]);
 
   // ── 인쇄 ────────────────────────────────────────────────────────────────
   // ⚠️ 첫 줄에서 draft를 커밋한다 — 인쇄 자체는 아래 `.bt-printonly` 미러가 draft를 그대로 읽어
@@ -3435,10 +3457,26 @@ export default function BacktestPage({
           ) : !active ? null : !result ? (
             <div className="text-center text-gray-500 text-xs py-10">계산 중…</div>
           ) : !result.ok ? (
-            <div className="max-w-lg mx-auto mt-10 border border-amber-800/60 bg-amber-900/20 rounded-lg p-4 text-center">
-              <AlertCircle size={20} className="text-amber-400 mx-auto mb-2" />
-              <p className="text-sm text-amber-200">{result.fatal}</p>
-            </div>
+            /* ⚠️ 실행 불가 상태에서도 평가·메모는 **반드시** 보여야 한다. 이 분기는 종목을 지운
+                  경우만이 아니라 **저장된 시나리오를 새 세션에서 여는 흔한 경로**로도 들어온다
+                  (btFetched는 메모리 전용이라 보유하지 않은 코드는 ⟳를 누르기 전까지 '종가 데이터가
+                  있는 종목이 없습니다'로 떨어진다). 여기서 카드를 빼면 상단 바 칩은 '메모 3'을
+                  광고하는데 눌러도 갈 곳이 없고, 저장해 둔 AI 분석에 닿는 경로가 하나도 없다. */
+            <>
+              <ScenarioReviewCard
+                key={active.id}
+                cfg={active}
+                result={result}
+                readOnly={readOnly}
+                onPatch={patchScenarioById}
+                onAddNote={addNote}
+                registerFlush={registerReviewFlush}
+              />
+              <div className="max-w-lg mx-auto mt-10 border border-amber-800/60 bg-amber-900/20 rounded-lg p-4 text-center">
+                <AlertCircle size={20} className="text-amber-400 mx-auto mb-2" />
+                <p className="text-sm text-amber-200">{result.fatal}</p>
+              </div>
+            </>
           ) : (
             <>
               {/* 표제 */}

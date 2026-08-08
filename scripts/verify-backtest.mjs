@@ -3508,10 +3508,38 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   //    **새로 선택된 시나리오에 커밋**된다(FlowInspector가 겪은 '도형 A 타이핑 중 B 클릭' 사고).
   ok('#275 ⚠️ 평가 카드는 결과 표제 바로 아래에 key={active.id}로 렌더된다', (() => {
     const i = page.indexOf('리밸런싱 백테스트</h2>');
-    const j = page.indexOf('<ScenarioReviewCard');
+    // ⚠️ 렌더 지점이 2곳(정상/실행 불가)이라 첫 번째가 아니라 **표제 뒤의 것**을 찾아야 한다.
+    const j = page.indexOf('<ScenarioReviewCard', i);
     const k = page.indexOf('<SummaryCards result={result} />');
-    return i > 0 && j > i && k > j && /<ScenarioReviewCard\s+key=\{active\.id\}/.test(page);
+    const cards = page.match(/<ScenarioReviewCard\s+key=\{active\.id\}/g) || [];
+    return i > 0 && j > i && k > j && cards.length === 2;
   })());
+  // ⚠️ 이 분기는 종목을 지운 경우만이 아니라 **저장된 시나리오를 새 세션에서 여는 흔한 경로**로도
+  //    들어온다(btFetched는 메모리 전용 → 보유하지 않은 코드는 ⟳ 전까지 fatal). 카드를 빼면 상단 바
+  //    칩은 '메모 N'을 광고하는데 눌러도 갈 곳이 없고, 저장된 AI 분석에 닿는 경로가 0개가 된다.
+  ok('#291 ⚠️ 실행 불가(result.ok=false) 상태에서도 평가·메모 카드가 렌더된다', (() => {
+    const i = page.indexOf(') : !result.ok ? (');
+    const j = page.indexOf('{result.fatal}');
+    if (i < 0 || j < i) return false;
+    const seg = page.slice(i, j);
+    return seg.includes('<ScenarioReviewCard') && /key=\{active\.id\}/.test(seg);
+  })());
+  // ⚠️ addNote가 만드는 메모는 title·body가 ''이라, 커밋값만 보면 붙여넣고 blur 없이 Ctrl+P를
+  //    누른 순간 카드에 bt-noprint가 붙고 인쇄 CSS가 카드를 감춰 .bt-printonly 미러까지 함께
+  //    사라진다(미러의 존재 이유가 통째로 무효화된다).
+  ok('#292 ⚠️ 인쇄 제외 판정(empty)은 draft **전체**를 함께 본다(커밋값 단독 판정 금지)',
+    /const draftHasText = Object\.keys\(draft\)\.some\(\(k\) => !!String\(draft\[k\] \?\? ''\)\.trim\(\)\);/.test(page)
+      && /const empty = !hasReviewContent\(cfg\) && !draftHasText;/.test(page));
+  // ⚠️ 설정 칸 편집 직후 [AI 분석]을 누르면 blur 커밋으로 active는 새 값인데 result는 220ms
+  //    디바운스라 옛 실행분이다 — 섞으면 '새 조건 + 옛 숫자'가 박제되고 fp가 현재와 같아져
+  //    '설정이 바뀌었습니다' 배지마저 뜨지 않는다(배지의 존재 이유가 무력화된다).
+  ok('#293 ⚠️ 메모 스냅샷은 조건과 숫자를 **같은 config**에서 가져온다(runCfg 박제)',
+    /const ranCfg = runCfg && runCfg\.id === active\.id \? runCfg : null;/.test(page)
+      && /const s = ranCfg && result\?\.ok \? result\.summary : null;/.test(page)
+      && /const src = s \? ranCfg : active;/.test(page)
+      && /conditions: scenarioSubtitle\(src, s\)/.test(page)
+      && /backtestSettingsFingerprint\(src\)/.test(page)
+      && !/scenarioSubtitle\(active, s\)/.test(page));
 
   // ⚠️ 늦게 커밋하는 UI가 patchActive를 쓰면 렌더 시점 active?.id에 묶여 다른 시나리오에 기록된다.
   ok('#276 ⚠️ 평가 카드의 쓰기는 id 기준 patchScenarioById다(patchActive 금지)',
@@ -3564,7 +3592,8 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   // ⚠️ 메모 스냅샷 지문에 backtestFingerprint를 쓰면 그 지문에 notes 자신이 들어 있어, 메모를
   //    추가하는 순간 지문이 달라져 **모든 메모가 영구히 '설정이 바뀜'** 으로 표시된다.
   ok('#284 ⚠️ 메모 스냅샷 지문은 backtestSettingsFingerprint(설정 전용)로 만든다',
-    /fp: \(\(\) => \{ try \{ return backtestSettingsFingerprint\(active\); \}/.test(page)
+    // ⚠️ 인자는 `active`가 아니라 `src`다(#293 — 조건과 숫자를 같은 config에서 가져오기 위해).
+    /fp: \(\(\) => \{ try \{ return backtestSettingsFingerprint\(src\); \}/.test(page)
       && /backtestSettingsFingerprint\(cfg\)/.test(page));
   // ⚠️ 긴 분석을 오클릭으로 잃으면 복구 불가다. 이 화면은 z-1090이고 별도 창에는 App조차 없어
   //    ConfirmDialog(z-1000)도 알림 토스트도 뜨지 않는다 → 인라인 2단계 확인이 유일한 방어다.
