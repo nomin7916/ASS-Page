@@ -215,25 +215,52 @@ export interface BtContribOverride {
  */
 export type BtBuyFunding = 'both' | 'tradeOnly';
 
-/** 급락 분할투입 1단계. drop=고점 대비 낙폭(%), unlockPct=그 시점 cashDiv에서 개방할 비율(%). */
+/** 매수 시그널 1단계. drop=가격 고점 대비 낙폭(%), unlockPct=그 시점 cashDiv에서 개방할 비율(%). */
 export interface BtDipLevel {
   drop: number;
   unlockPct: number;
 }
 
 /**
- * 급락 분할투입.
- * 종목별 **가격 고점**(백테스트 구간 내 최고 종가) 대비 당일 종가 낙폭이 각 단계에 **처음 도달**하면,
- * 그 종목의 **다음 정기 리밸런싱 1회**에 한해 분배금 주머니를 `발동 시점 cashDiv × unlockPct/100`
- * 만큼 개방한다(여러 단계가 겹치면 합산하되 cashDiv 잔액을 넘지 못한다).
+ * 매도 시그널 1단계. rise=가격 **저점** 대비 상승률(%).
+ * ⚠️ 매도는 재원이 필요 없으므로 개방 비율 인자가 없다(판 대금은 전액 매매 주머니로 간다).
+ */
+export interface BtSellLevel {
+  rise: number;
+}
+
+/**
+ * 시그널 리밸런싱 — 매수 시그널(급락 분할투입) + 매도 시그널(반등 차익실현).
  *
- * ⚠️ **평가액 고점이 아니라 가격 고점**이다 — 리밸런싱으로 수량이 계속 변하므로 평가액 고점은 왜곡된다.
- * ⚠️ 각 단계는 **고점이 갱신되기 전까지 1회만** 발동한다(새 고점 = 전 단계 재무장).
- * ⚠️ 발동한 종목은 그 회차에 리밸런싱 밴드(band) 검사를 **건너뛴다** — 급락 시에는 밴드로 매수를 막지 않는다.
+ * 종목별 **가격 고점/저점**(백테스트 구간 내 최고·최저 종가) 대비 당일 종가가 각 단계에
+ * **처음 도달**하면, 그 **발동일 종가로 즉시** 그 종목을 목표까지 맞춘다.
+ *
+ * ── 매수 시그널(levels) 발동 시 재원 조달 3단계 ──
+ *   ① 매매 주머니(cashTrade)로 산다.
+ *   ② 모자라면(`reallocate`) **목표를 초과한 다른 보유 종목**을 목표까지 팔아 재원을 만든다
+ *      (= 사용자가 정한 비율/금액대로의 재조정).
+ *   ③ 그래도 모자라면 분배금 주머니를 `발동 시점 cashDiv × unlockPct/100` 만큼 열어 쓴다
+ *      (여러 단계·여러 종목이 같은 날 겹치면 합산하되 cashDiv 잔액을 넘지 못한다).
+ *   ⚠️ ③의 한도는 `buyFunding:'tradeOnly'`일 때만 실효가 있다 — `'both'`(기본)는 애초에
+ *      분배금 주머니가 열려 있어 단계 비율이 적용되지 않는다(그 경우 개방액 = 주머니 전액으로 기록).
+ *
+ * ── 매도 시그널(sellLevels) 발동 시 ──
+ *   그 종목 평가액이 목표를 **넘는 만큼만** 판다(목표 이하면 아무 일도 없다). 대금은 매매 주머니로.
+ *
+ * ⚠️ **평가액 고점이 아니라 가격 고점/저점**이다 — 리밸런싱으로 수량이 계속 변하므로 평가액 극값은 왜곡된다.
+ * ⚠️ 각 단계는 **극값이 갱신되기 전까지 1회만** 발동한다(새 고점 = 매수 전 단계 재무장 / 새 저점 = 매도 전 단계 재무장).
+ * ⚠️ **정기 리밸런싱 일정(③)과 완전히 독립**이다 — `policy:'none'`(리밸런싱 안 함)이어도 시그널은 돈다.
+ *    둘 다 켜면 둘 다 실행된다(같은 날이면 KIND_ORDER상 signal → rebal 순).
+ * ⚠️ 리밸런싱 밴드(band)는 **정기 리밸런싱 전용**이라 시그널 매매에는 걸리지 않는다.
  */
 export interface BtDip {
   enabled: boolean;
+  /** 매수 시그널 단계(가격 고점 대비 낙폭). */
   levels: BtDipLevel[];
+  /** 매도 시그널 단계(가격 저점 대비 반등). 기본 [] = 매도 시그널 없음. */
+  sellLevels: BtSellLevel[];
+  /** 매매 예수금이 모자랄 때 ②(다른 종목의 목표 초과분 매도)로 재원을 마련할지. 기본 true. */
+  reallocate: boolean;
 }
 
 /**
@@ -411,8 +438,10 @@ export const MAX_BT_OVERRIDES = 120;
 export const MAX_BT_CONTRIB_OVERRIDES = 120;
 /** rebalMode==='dates'일 때 종목당 지정 가능한 날짜 수 */
 export const MAX_BT_REBAL_DATES = 120;
-/** 급락 분할투입 단계 수 상한 */
+/** 매수 시그널(급락) 단계 수 상한 */
 export const MAX_BT_DIP_LEVELS = 5;
+/** 매도 시그널(반등) 단계 수 상한 */
+export const MAX_BT_SELL_LEVELS = 5;
 /**
  * 시나리오당 메모 수 / 본문 길이 / 제목 길이 / 한 줄 결론 길이 상한.
  * ⚠️ 상한 없이 긴 텍스트를 허용하지 말 것 — STATE는 백업 22본으로 복제되고, `backtest:live`
@@ -434,6 +463,17 @@ export const DEFAULT_DIP_LEVELS: BtDipLevel[] = [
   { drop: 10, unlockPct: 34 },
   { drop: 20, unlockPct: 33 },
   { drop: 30, unlockPct: 33 },
+];
+
+/**
+ * 매도 시그널 기본 단계 — 저점 대비 +10%/+20%에서 목표 초과분을 판다.
+ * ⚠️ 매수(levels)와 달리 **기본값이 채워져 있어도 `sellLevels: []`가 정상**이다 — 이 상수는
+ *    사용자가 '매도 시그널 추가' 버튼을 눌렀을 때 시드로만 쓴다(빈 배열 = 매도 시그널 없음).
+ *    그래서 normalizeSellLevels는 빈 배열을 기본값으로 되돌리지 **않는다**(매수 쪽과 반대).
+ */
+export const DEFAULT_SELL_LEVELS: BtSellLevel[] = [
+  { rise: 10 },
+  { rise: 20 },
 ];
 
 export const BT_COLORS = [
@@ -494,6 +534,19 @@ export interface BtTrade {
    * ⚠️ reinvest와 structural은 상호배타다(재투자 매수는 절대 structural로 찍지 않는다).
    */
   reinvest: boolean;
+  /**
+   * 시그널 리밸런싱으로 발생한 매매인가(표시 전용 라벨).
+   *  buy     — 매수 시그널(가격 고점 대비 낙폭)이 발동해 목표까지 채운 매수
+   *  sell    — 매도 시그널(가격 저점 대비 반등)이 발동해 목표까지 줄인 매도
+   *  realloc — 매수 시그널의 재원을 마련하려고 목표 초과분을 판 **다른 종목**의 매도
+   *
+   * ⚠️ `note`를 덮어쓰지 말 것 — 화면(`BacktestPage`)이 `t.note === '바닥선'` / `'예수금 부족'`
+   *    **정확 일치**로 툴팁을 고르므로, 시그널 라벨을 note에 접두어로 붙이면 그 툴팁이 죽는다.
+   *    그래서 별도 필드로 둔다(값이 없으면 종전과 100% 동일).
+   * ⚠️ 집계상으로는 **평범한 정기 매매**다 — tradeNet에 그대로 들어간다(structural·reinvest와
+   *    달리 따로 세지 않는다). 기말 예수금 분해 항등식(#125)에 새 항이 생기지 않는 이유다.
+   */
+  signal?: 'buy' | 'sell' | 'realloc';
   /** 현금 부족으로 목표에 못 미쳤을 때의 사유 */
   note: string;
 }
@@ -577,23 +630,53 @@ export interface BtContribRow {
   reserve?: number;
 }
 
-/** 급락 분할투입 발동 1건. */
-export interface BtDipEvent {
-  /** 발동일(그 종가로 낙폭 단계에 처음 도달한 날) */
+/**
+ * 시그널 리밸런싱 발동 1건 — **화면이 계산식을 그대로 재현할 수 있도록** 밑변까지 남긴다.
+ * (사용자 요청: "‘개방’이라는 표현을 `1단계 · 적립 분배금 ₩A × 34% = ₩B` 처럼 상세히 표시")
+ */
+export interface BtSignalEvent {
+  /** 발동일(그 종가로 단계에 처음 도달한 날). **체결일과 같다**(당일 종가로 즉시 실행). */
   date: string;
   assetId: string;
   code: string;
   name: string;
-  /** 발동 단계 = 고점 대비 낙폭(%) */
+  /** buy=매수 시그널(낙폭) / sell=매도 시그널(반등) */
+  kind: 'buy' | 'sell';
+  /** 1부터 시작하는 단계 번호(작은 낙폭·작은 반등이 1단계) — 화면의 "1단계" 표기용. */
+  step: number;
+  /** 발동 단계 값 = 고점 대비 낙폭(%) 또는 저점 대비 상승률(%) */
   level: number;
+  /** 매수 전용. 매도는 0. */
   unlockPct: number;
-  /** 발동 시점 cashDiv × unlockPct/100 */
+  /** 발동 시점 분배금 주머니 잔액 — 개방액 계산식의 **밑변**. */
+  divPocketAt: number;
+  /** 발동 시점 매매 주머니 잔액 — "이 돈으로 먼저 산다"의 밑변. */
+  cashTradeAt: number;
+  /**
+   * 이 시그널이 연 분배금 한도.
+   *  tradeOnly → `divPocketAt × unlockPct/100`
+   *  both      → `divPocketAt` 전액(단계 비율 미적용 — 평시에 이미 열려 있다)
+   */
   unlocked: number;
-  /** 개방 한도 안에서 **실제로 매수에 쓴** 금액 */
+  /** 개방 한도 안에서 **실제로 매수에 쓴** 금액(분배금 주머니에서 나간 몫). */
   used: number;
-  /** 발동 시점의 가격 고점 / 당일 종가 */
-  peak: number;
+  /** 발동 시점의 기준 극값 — buy=가격 고점 / sell=가격 저점 */
+  ref: number;
+  /** 발동일 종가 */
   price: number;
+  /** 그 시그널로 실제 체결된 수량(+매수 / −매도). 0이면 체결 없음. */
+  tradeQty: number;
+  /** 그 시그널로 실제 체결된 금액(절댓값). */
+  tradeAmount: number;
+  /** 매수 대금 중 매매 주머니에서 나간 몫(= tradeAmount − used, 음수 예수금 포함). */
+  fromTrade: number;
+  /**
+   * ②(다른 종목 목표 초과분 매도)로 **그날** 마련한 재원 총액.
+   * ⚠️ 날짜 단위 값이라 그날 첫 매수 이벤트에만 싣는다(같은 날 여러 이벤트에 중복 표시하지 않기 위해).
+   */
+  reallocAmount: number;
+  /** 체결이 없었거나 잘린 사유(표시용). */
+  note: string;
 }
 
 export interface BtMonth {
@@ -795,8 +878,8 @@ export interface BtResult {
     /** 리밸런싱 밴드로 생략한 총 건수 / 총 매매 예정 금액 */
     bandSkipCount: number;
     bandSkipAmount: number;
-    /** 급락 분할투입 발동 로그(시간순) */
-    dipEvents: BtDipEvent[];
+    /** 시그널 리밸런싱(매수·매도) 발동 로그(시간순). 발동일 = 체결일. */
+    signalEvents: BtSignalEvent[];
     /** 매수가 재원 한도('예수금 부족'·'바닥선')로 잘린 달의 수 */
     shortfallMonths: number;
   };
@@ -1218,8 +1301,37 @@ function normalizeDipLevels(raw: unknown): BtDipLevel[] {
   return out;
 }
 
+/**
+ * 매도 시그널 단계 정규화 — 상승률 오름차순 + 중복 제거 + 상한.
+ * ⚠️ 매수(normalizeDipLevels)와 달리 **빈 배열을 기본값으로 되돌리지 않는다** — 매도 시그널은
+ *    "안 쓰는 것"이 정상 상태이고(레거시 시나리오는 필드 자체가 없다), 기본 단계를 밀어 넣으면
+ *    **켜 놓은 적 없는 매도가 조용히 실행돼** 기존 결과가 달라진다.
+ */
+function normalizeSellLevels(raw: unknown): BtSellLevel[] {
+  const arr = asArr(raw)
+    .map((l: any) => ({ rise: asNum(l?.rise, NaN) }))
+    .filter(l => Number.isFinite(l.rise) && l.rise > 0 && l.rise <= 1000);
+  arr.sort((a, b) => a.rise - b.rise);
+  const seen = new Set<number>();
+  const out: BtSellLevel[] = [];
+  for (const l of arr) {
+    if (seen.has(l.rise)) continue;
+    seen.add(l.rise);
+    out.push(l);
+    if (out.length >= MAX_BT_SELL_LEVELS) break;
+  }
+  return out;
+}
+
 function normalizeDip(raw: any): BtDip {
-  return { enabled: !!raw?.enabled, levels: normalizeDipLevels(raw?.levels) };
+  return {
+    enabled: !!raw?.enabled,
+    levels: normalizeDipLevels(raw?.levels),
+    sellLevels: normalizeSellLevels(raw?.sellLevels),
+    // ⚠️ 레거시(필드 부재)는 true로 떨어진다 — 재원이 모자랄 때 재조정으로 채우는 것이
+    //    사양의 기본 동작이다(사용자 확정 2026-08). 끄려면 명시적으로 false를 저장한다.
+    reallocate: raw?.reallocate !== false,
+  };
 }
 
 function normalizeAnnualReview(raw: any): BtAnnualReview {
@@ -1351,6 +1463,8 @@ export function backtestSettingsFingerprint(cfg: unknown): string {
         s.band ?? 0, s.buyFunding ?? '', s.cashFloorPct ?? 0, s.divTaxPct ?? 0,
         s.dip?.enabled ? 1 : 0,
         asArr(s.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
+        asArr(s.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}`).join(','),
+        s.dip?.reallocate === false ? 0 : 1,
         s.annualReview?.mode ?? '', s.annualReview?.value ?? 0, s.annualReview?.reserve ?? 0,
         s.annualReview?.everyMonths ?? 0, s.annualReview?.split ?? '',
       ],
@@ -1403,9 +1517,11 @@ export function backtestFingerprint(scenarios: unknown): string {
           s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? '',
           // 전략 보조 규칙(밴드·재원·바닥선·원천징수) — 전부 결과를 바꾸므로 반드시 포함
           s?.band ?? 0, s?.buyFunding ?? '', s?.cashFloorPct ?? 0, s?.divTaxPct ?? 0,
-          // 급락 분할투입 — 단계 목록까지 포함해야 단계만 고친 편집이 저장된다
+          // 시그널 리밸런싱 — 단계 목록까지 포함해야 단계만 고친 편집이 저장된다
           s?.dip?.enabled ? 1 : 0,
           asArr(s?.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
+          asArr(s?.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}`).join(','),
+          s?.dip?.reallocate === false ? 0 : 1,
           // 연간 가드레일 증액
           s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
           s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? '',
@@ -1754,7 +1870,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0,
       minCash: { value: 0, date: '' }, minCashDiv: { value: 0, date: '' },
       divMonthlyAvg: 0, divMonthlyStdev: 0,
-      bandSkipCount: 0, bandSkipAmount: 0, dipEvents: [], shortfallMonths: 0,
+      bandSkipCount: 0, bandSkipAmount: 0, signalEvents: [], shortfallMonths: 0,
     },
   });
 
@@ -1977,39 +2093,14 @@ export function runBacktest(input: BtRunInput): BtResult {
     return s;
   };
 
-  /* ── 급락 분할투입 상태 ─────────────────────────────────────────────────
-   * dipUnlock  : assetId → 아직 쓰지 않은 개방 한도(원). **키의 존재 자체**가 '이번 회차 밴드 면제'다
-   *              (개방액이 0이어도 급락은 급락이므로 밴드로 매수를 막지 않는다).
-   * dipPending : assetId → 그 한도를 만든 dipEvents 인덱스들(실제 사용액을 비례 배분해 되채운다).
-   * ⚠️ dip.enabled=false면 셋 다 영원히 비어 있어 아무 분기도 타지 않는다.
+  /* ── 시그널 리밸런싱 상태 ───────────────────────────────────────────────
+   * 발동일 종가로 **즉시** 체결하므로 회차를 넘겨 들고 다니는 상태가 없다 —
+   * 기록(signalEvents)만 남는다. dip.enabled=false면 영원히 비어 있어 아무 분기도 타지 않는다.
+   * ⚠️ 옛 설계(개방 한도를 dipUnlock/dipPending에 담아 **다음 정기 리밸런싱**까지 들고 가던 것)로
+   *    되돌리지 말 것 — `policy:'none'`(리밸런싱 안 함)에서는 쓸 회차가 영영 오지 않아
+   *    "개방 ₩0 → 사용 ₩0"만 찍히고 기능이 통째로 죽는다(2026-08 사용자 보고).
    * ========================================================================= */
-  const dipEvents: BtDipEvent[] = [];
-  const dipUnlock = new Map<string, number>();
-  const dipPending = new Map<string, number[]>();
-  /**
-   * 그 종목의 개방을 소진(만료)시킨다. `used`는 실제로 분배금 주머니에서 나간 금액.
-   * ⚠️ 개방은 **다음 정기 리밸런싱 1회 한정**이라, 매수가 없었거나 매도였어도 그 회차가 지나면 만료된다.
-   */
-  const consumeDip = (assetId: string, used: number) => {
-    const idxs = dipPending.get(assetId);
-    if (idxs && idxs.length) {
-      let totalUnlocked = 0;
-      for (const i of idxs) totalUnlocked += dipEvents[i].unlocked;
-      // ⚠️ 'both' 재원 모드에서는 divCap이 무한이라 개방 한도보다 더 꺼낼 수 있다 —
-      //    로그의 '사용액'이 '개방액'을 넘지 않도록 한도로 자른다.
-      const eff = Math.min(Math.max(0, used), totalUnlocked);
-      if (eff > 0 && totalUnlocked > 0) {
-        let left = eff;
-        idxs.forEach((i, k) => {
-          const share = k === idxs.length - 1 ? left : (eff * dipEvents[i].unlocked) / totalUnlocked;
-          left -= share;
-          dipEvents[i].used += share;
-        });
-      }
-    }
-    dipPending.delete(assetId);
-    dipUnlock.delete(assetId);
-  };
+  const signalEvents: BtSignalEvent[] = [];
 
   /**
    * 그 시점 **뒤이은 정기 리밸런싱이 실제로 쓸 수 있는 매수 재원** — 목표 증액(매월·연간)의 상한.
@@ -2303,51 +2394,89 @@ export function runBacktest(input: BtRunInput): BtResult {
     }
   }
 
-  /* ── 급락 분할투입: '고점 대비 −N% 첫 도달' 사전 탐지 ─────────────────────
-   * ⚠️ **가격 고점** 기준이다(평가액 아님) — 리밸런싱으로 수량이 계속 변하므로 평가액 고점은 왜곡된다.
-   * ⚠️ 새 고점이 서면 모든 단계를 재무장한다(각 단계는 고점 갱신 전까지 1회만).
-   * ⚠️ carry-forward 종가(priceAt)를 쓰되 값이 아예 없는 날은 건너뛴다 — 이월된 날은 낙폭이
+  /* ── 시그널 사전 탐지: '고점 대비 −N%'(매수) / '저점 대비 +N%'(매도) 첫 도달 ─────
+   * ⚠️ **가격 고점/저점** 기준이다(평가액 아님) — 리밸런싱으로 수량이 계속 변하므로 평가액 극값은 왜곡된다.
+   * ⚠️ 새 고점이 서면 **매수** 단계를, 새 저점이 서면 **매도** 단계를 재무장한다(각 단계는 그 전까지 1회만).
+   * ⚠️ carry-forward 종가(priceAt)를 쓰되 값이 아예 없는 날은 건너뛴다 — 이월된 날은 등락이
    *    직전일과 같아 어차피 새로 발동하지 않는다.
-   * 여기서는 **발동일만** 확정한다. 개방액은 런타임 cashDiv에 달려 있어 dip 스텝에서 계산한다.
+   * ⚠️ 고점 갱신일에는 매수 판정을 건너뛴다(낙폭 0). 저점 갱신일에는 매도 판정을 건너뛴다(상승 0).
+   *    두 판정은 **서로 독립**이다 — 신고가일에 매도가 발동하는 것은 정상이고(저점 대비 상승률이
+   *    최대인 날), 신저가일에 매수가 발동하는 것도 정상이다(옛 코드가 `continue`로 하루를 통째로
+   *    건너뛰던 것은 매수 판정 하나뿐이었으므로 **매수 동작은 문자 그대로 보존**된다).
+   * 여기서는 **발동일만** 확정한다. 개방액은 런타임 cashDiv에 달려 있어 signal 스텝에서 계산한다.
    * =========================================================================== */
-  type DipTrig = { assetId: string; level: number; unlockPct: number; peak: number; price: number };
-  const dipTrigByDate = new Map<string, DipTrig[]>();
-  // ⚠️ 단계 목록은 **반드시 정규화한 사본**으로 돈다(정렬·중복 낙폭 제거·상한).
+  type SigTrig = {
+    assetId: string; kind: 'buy' | 'sell';
+    step: number; level: number; unlockPct: number;
+    ref: number; price: number;
+  };
+  const sigTrigByDate = new Map<string, SigTrig[]>();
+  // ⚠️ 단계 목록은 **반드시 정규화한 사본**으로 돈다(정렬·중복 제거·상한).
   //    화면은 로컬 사본을 2.5초 idle에만 승격하므로, 같은 낙폭을 두 번 적으면 저장 전에는
   //    그 단계가 **두 번 발동해 개방액이 2배**가 되고, 저장·재로드 뒤에는 normalizeDipLevels가
   //    dedup해 결과가 달라진다 — **같은 시나리오가 세션에 따라 다른 결과**를 내는 최악의 상태다.
   //    여기서 정규화하면 런타임과 영속 표현이 항상 일치한다(적대적 리뷰 확정 결함).
   const dipLevels = config.dip.enabled ? normalizeDipLevels(config.dip.levels) : [];
-  if (dipLevels.length > 0) {
+  const sellLevels = config.dip.enabled ? normalizeSellLevels(config.dip.sellLevels) : [];
+  if (dipLevels.length > 0 || sellLevels.length > 0) {
     for (const p of positions) {
       const series = prices[p.asset.code];
       if (!series) continue;
       let peak = 0;
-      const fired = new Set<number>();
+      let trough = Infinity;
+      const firedBuy = new Set<number>();
+      const firedSell = new Set<number>();
       for (const d of allBiz) {
         const hit = priceAt(series, d);
         if (hit.missing) continue;
         const px = hit.price;
-        if (px > peak) { peak = px; fired.clear(); continue; }
-        if (!(peak > 0)) continue;
-        const dropPct = ((peak - px) / peak) * 100;
-        for (let i = 0; i < dipLevels.length; i++) {
-          const lv = dipLevels[i];
-          if (fired.has(i)) continue;
-          if (dropPct < lv.drop) continue;
-          fired.add(i);
-          const rec: DipTrig = { assetId: p.asset.id, level: lv.drop, unlockPct: lv.unlockPct, peak, price: px };
-          const arr = dipTrigByDate.get(d);
-          if (arr) arr.push(rec); else dipTrigByDate.set(d, [rec]);
+        const newPeak = px > peak;
+        const newTrough = px < trough;
+        if (newPeak) { peak = px; firedBuy.clear(); }
+        if (newTrough) { trough = px; firedSell.clear(); }
+        const push = (rec: SigTrig) => {
+          const arr = sigTrigByDate.get(d);
+          if (arr) arr.push(rec); else sigTrigByDate.set(d, [rec]);
+        };
+        if (!newPeak && peak > 0) {
+          const dropPct = ((peak - px) / peak) * 100;
+          for (let i = 0; i < dipLevels.length; i++) {
+            const lv = dipLevels[i];
+            if (firedBuy.has(i)) continue;
+            if (dropPct < lv.drop) continue;
+            firedBuy.add(i);
+            push({
+              assetId: p.asset.id, kind: 'buy', step: i + 1,
+              level: lv.drop, unlockPct: lv.unlockPct, ref: peak, price: px,
+            });
+          }
+        }
+        if (!newTrough && trough > 0 && Number.isFinite(trough)) {
+          const risePct = ((px - trough) / trough) * 100;
+          for (let i = 0; i < sellLevels.length; i++) {
+            const lv = sellLevels[i];
+            if (firedSell.has(i)) continue;
+            if (risePct < lv.rise) continue;
+            firedSell.add(i);
+            push({
+              assetId: p.asset.id, kind: 'sell', step: i + 1,
+              level: lv.rise, unlockPct: 0, ref: trough, price: px,
+            });
+          }
         }
       }
     }
+  }
+  // ⚠️ '켰는데 단계가 하나도 없다'가 조용히 아무 일도 안 하는 상태가 되지 않게 알린다.
+  //    (매수 단계는 normalizeDipLevels가 기본값으로 되돌리므로 실제로는 매도만 비어 있을 수 있다.)
+  if (config.dip.enabled && dipLevels.length === 0 && sellLevels.length === 0) {
+    warnings.push('시그널 리밸런싱을 켰지만 매수·매도 단계가 하나도 없어 아무 일도 일어나지 않습니다.');
   }
 
   type Step =
     | { date: string; kind: 'exdiv'; div: BtDivSlot }
     | { date: string; kind: 'pay'; div: BtDivSlot }
-    | { date: string; kind: 'dip'; trigs: DipTrig[] }
+    | { date: string; kind: 'signal'; trigs: SigTrig[] }
     | { date: string; kind: 'rebal'; slot: BtSlot }
     | { date: string; kind: 'event'; event: BtEvent }
     | { date: string; kind: 'contrib'; ym: string }
@@ -2355,7 +2484,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     | { date: string; kind: 'reinvest'; slot: BtReinvestSlot };
 
   const steps: Step[] = [];
-  for (const [d, trigs] of dipTrigByDate) steps.push({ date: d, kind: 'dip', trigs });
+  for (const [d, trigs] of sigTrigByDate) steps.push({ date: d, kind: 'signal', trigs });
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
   for (const rs of reinvestSlots) {
     if (rs.date < startBiz || rs.date > endBiz) continue;
@@ -2461,13 +2590,17 @@ export function runBacktest(input: BtRunInput): BtResult {
   // ⚠️ reinvest는 **맨 뒤**다 — 리밸런싱은 '목표 수준 맞추기'이고 재투자는 '그러고도 남은
   //    분배금 현금을 추가 투입'이라 나중에 와야 의미가 맞는다. 앞에 두면 재투자가 방금 산
   //    수량을 같은 날 리밸런싱이 되팔아(목표 초과) 매매만 늘고 결과는 그대로가 된다.
-  // ⚠️ dip은 pay **뒤**다 — 개방 한도가 '발동 시점 cashDiv'라 그날 받은 분배금까지 포함해야 한다.
-  //    그리고 rebal **앞**이라 같은 날 급락이면 그날 리밸런싱부터 개방이 적용된다.
-  // ⚠️ annual은 contrib **뒤** · rebal **앞**으로 고정한다 — 같은 날 둘 다 도래하면
-  //    매월 증액을 먼저 반영한 뒤 그 결과 예수금에서 연간 잉여를 계산한다(사양 확정 순서).
-  // ⚠️ 기존 5종의 **상대 순서는 그대로**다(exdiv<pay<event<contrib<rebal<reinvest) — 번호만 밀렸다.
+  // ⚠️ signal은 pay **뒤**다 — 개방 한도가 '발동 시점 cashDiv'라 그날 받은 분배금까지 포함해야 한다.
+  // ⚠️ signal은 event **뒤**다 — 같은 날 구조 변경(종목 재편)이 있으면 그 결과 구성 위에서
+  //    시그널을 실행해야 한다(앞에 두면 곧 빠질 종목을 사들인다).
+  // ⚠️ signal은 contrib·annual **뒤**다 — 그날 올린 목표를 반영해 매수해야 증액이 실제로 집행된다.
+  // ⚠️ signal은 rebal **앞**이다 — 시그널이 먼저 목표를 맞추면 이어지는 정기 리밸런싱은 자연히
+  //    할 일이 없어 no-op이 된다(반대 순서면 결과는 같지만 매매 행이 정기 쪽으로 잡혀 추적이 흐려진다).
+  // ⚠️ annual은 contrib **뒤**로 고정한다 — 같은 날 둘 다 도래하면 매월 증액을 먼저 반영한 뒤
+  //    그 결과 예수금에서 연간 잉여를 계산한다(사양 확정 순서).
+  // ⚠️ 기존 5종의 **상대 순서는 그대로**다(exdiv<pay<event<contrib<annual<rebal<reinvest).
   const KIND_ORDER: Record<string, number> = {
-    exdiv: 0, pay: 1, dip: 2, event: 3, contrib: 4, annual: 5, rebal: 6, reinvest: 7,
+    exdiv: 0, pay: 1, event: 2, contrib: 3, annual: 4, signal: 5, rebal: 6, reinvest: 7,
   };
   steps.sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind],
@@ -2569,22 +2702,187 @@ export function runBacktest(input: BtRunInput): BtResult {
       continue;
     }
 
-    if (step.kind === 'dip') {
-      // ⚠️ 개방액은 **발동 시점 cashDiv** 기준이다(사양). 이 스텝이 pay 뒤라 그날 받은 분배금도 포함된다.
-      for (const tg of step.trigs) {
-        const p = posById.get(tg.assetId);
+    if (step.kind === 'signal') {
+      /* ── 시그널 리밸런싱 — **발동일 종가로 즉시 체결** ────────────────────────
+       * 매수 재원 조달 3단계: ① 매매 주머니 → ② 다른 종목의 목표 초과분 매도(재조정)
+       *                      → ③ 분배금 주머니 개방(단계 비율).
+       * ⚠️ 리밸런싱 밴드(band)는 **정기 리밸런싱 전용**이라 여기서는 보지 않는다 — 시그널은
+       *    "지금 사라/팔라"는 명시적 지시라 밴드로 억눌러선 안 된다.
+       * ⚠️ 정기 리밸런싱 일정(③ 정책)과 **완전히 독립**이다. policy:'none'이어도 여기는 돈다.
+       * ===================================================================== */
+      const date = step.date;
+      const liveOf = (assetId: string): Pos | null => {
+        const p = posById.get(assetId);
+        if (!p || p.removed) return null;
+        if (date < p.effectiveStart || date > p.effectiveEnd) return null;
+        return p;
+      };
+      // ⚠️ 개방액의 밑변은 **발동 시점 cashDiv**다(사양). 이 스텝이 pay 뒤라 그날 받은 분배금도 포함된다.
+      //    매도 시그널·재조정 매도는 매매 주머니로만 들어가므로 이 값을 바꾸지 않는다.
+      const pocket = Math.max(0, cashDiv);
+      const tradeOnly = config.buyFunding === 'tradeOnly';
+      const mkEvent = (t: SigTrig, p: Pos): BtSignalEvent => {
+        const ev: BtSignalEvent = {
+          date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+          kind: t.kind, step: t.step, level: t.level, unlockPct: t.unlockPct,
+          divPocketAt: pocket, cashTradeAt: cashTrade,
+          unlocked: 0, used: 0,
+          ref: t.ref, price: t.price,
+          tradeQty: 0, tradeAmount: 0, fromTrade: 0, reallocAmount: 0, note: '',
+        };
+        signalEvents.push(ev);
+        return ev;
+      };
+
+      /* ── ① 매도 시그널 — 목표를 **넘는 만큼만** 판다. 대금은 매매 주머니로. ── */
+      for (const t of step.trigs) {
+        if (t.kind !== 'sell') continue;
+        const p = liveOf(t.assetId);
         if (!p) continue;
-        // 사용자가 뺀 종목(removed)·편입 구간 밖 종목은 어차피 매수 대상이 아니므로 개방하지 않는다.
-        if (p.removed) continue;
-        if (step.date < p.effectiveStart || step.date > p.effectiveEnd) continue;
-        const unlocked = Math.max(0, (Math.max(0, cashDiv) * tg.unlockPct) / 100);
-        dipPending.set(tg.assetId, [...(dipPending.get(tg.assetId) ?? []), dipEvents.length]);
-        dipEvents.push({
-          date: step.date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-          level: tg.level, unlockPct: tg.unlockPct, unlocked, used: 0,
-          peak: tg.peak, price: tg.price,
-        });
-        dipUnlock.set(tg.assetId, (dipUnlock.get(tg.assetId) ?? 0) + unlocked);
+        const ev = mkEvent(t, p);
+        if (!p.active || p.qty <= QTY_EPS) { ev.note = '보유 없음'; continue; }
+        const hit = priceAt(prices[p.asset.code], date);
+        if (hit.missing || hit.price <= 0) { ev.note = '종가 없음'; continue; }
+        checkRatioSum(date);
+        const target = targetOf(p, config, targetBaseAt(date));
+        // ⚠️ 아래 두 줄은 **의도적으로 중복된 방어선**이다(변이 테스트로 확인: 하나만 지우면
+        //    다른 하나가 잡아 검증이 통과한다). 둘 다 지우면 목표에 못 미치는 보유 상태에서
+        //    반등 시그널이 **매수로 뒤집혀** '매도 시그널'이 자산을 늘린다(검증 #308b).
+        //    둘 중 하나를 지우고 싶더라도 그대로 둘 것 — "매도 시그널은 매도만 한다"가 계약이다.
+        if (p.qty * hit.price - target <= 0) { ev.note = '목표 이하 — 팔 것 없음'; continue; }
+        const tr = adjustTo(p, date, target, false);
+        if (!tr || tr.qty >= 0) { ev.note = '매도 수량 0(반올림)'; continue; }
+        tr.signal = 'sell';
+        pushTrade(tr);
+        ev.tradeQty = tr.qty;
+        ev.tradeAmount = Math.abs(tr.cashDelta);
+        if (tr.note) ev.note = tr.note;
+      }
+
+      /* ── ② 매수 시그널 ─────────────────────────────────────────────────── */
+      const buyTrigs = step.trigs.filter(t => t.kind === 'buy');
+      if (!buyTrigs.length) continue;
+
+      // 같은 종목에서 여러 단계가 같은 날 겹칠 수 있다(갭 하락). 이벤트는 단계별로 남기되
+      // 체결·개방은 **그 종목의 첫 이벤트(carrier)에 합산**한다 — 행마다 나눠 실으면 같은 체결이
+      // 두 번 표시된다.
+      const evsByAsset = new Map<string, BtSignalEvent[]>();
+      const buyPos: Pos[] = [];
+      for (const t of buyTrigs) {
+        const p = liveOf(t.assetId);
+        if (!p) continue;
+        const ev = mkEvent(t, p);
+        const list = evsByAsset.get(p.asset.id);
+        if (list) list.push(ev);
+        else { evsByAsset.set(p.asset.id, [ev]); buyPos.push(p); }
+        // 데이터가 생긴 시점부터 자동 편입 — 정기 리밸런싱·분배금 재투자와 같은 규약.
+        if (!p.active) p.active = true;
+      }
+      if (!buyPos.length) continue;
+      for (const list of evsByAsset.values()) {
+        for (let i = 1; i < list.length; i++) {
+          list[i].note = `동시 발동 — 체결·개방은 ${list[0].step}단계 행에 합산`;
+        }
+      }
+      checkRatioSum(date);
+
+      // ⚠️ 분모(base)는 **한 번만** 잡는다 — 재조정 매도가 평가액 합계를 줄이는데 그때마다 다시
+      //    재면 목표가 함께 내려가 재원과 필요액이 서로를 쫓는 되먹임이 생긴다(비중 모드).
+      //    정기 리밸런싱이 plans를 실행 전에 확정하는 것과 같은 규약이다.
+      const base = targetBaseAt(date);
+      const planOf = (p: Pos) => {
+        const hit = priceAt(prices[p.asset.code], date);
+        const target = targetOf(p, config, base);
+        return { p, hit, evalBefore: hit.missing ? 0 : p.qty * hit.price, target };
+      };
+      const buyPlans: ReturnType<typeof planOf>[] = [];
+      for (const p of buyPos) {
+        const pl = planOf(p);
+        if (pl.hit.missing || pl.hit.price <= 0) {
+          const list = evsByAsset.get(p.asset.id);
+          if (list) list[0].note = '종가 없음';
+          continue;
+        }
+        buyPlans.push(pl);
+      }
+      let needTotal = 0;
+      for (const b of buyPlans) needTotal += Math.max(0, b.target - b.evalBefore);
+
+      /* ②-a 재조정 — 매매 주머니가 필요액에 못 미치면 **목표를 초과한 다른 보유 종목**을
+       *      목표까지 팔아 재원을 만든다(= 사용자가 정한 비율/금액대로의 재조정).
+       * ⚠️ 초과분이 없으면(전 종목이 함께 하락) 아무것도 팔지 않고 ②-b로 넘어간다 — 그것이
+       *    "보유 종목 전체가 하락했고 예수금이 없으면 누적 분배금을 쓴다"는 사양의 경로다. */
+      // ⚠️ `!== false`로 읽는다(normalizeDip과 같은 규약) — 화면은 정규화를 거치지 않은 로컬
+      //    사본을 그대로 넘길 수 있어, `config.dip.reallocate`가 undefined면 재조정이 조용히
+      //    꺼진다(저장 전후 결과가 갈리는 최악의 상태 — 중복 낙폭 사고와 같은 부류).
+      let realloc = 0;
+      if (needTotal > 0 && config.dip.reallocate !== false && Math.max(0, cashTrade) < needTotal) {
+        const buyIds = new Set(buyPos.map(p => p.asset.id));
+        const donors = positions
+          .filter(p => p.active && !p.removed && !buyIds.has(p.asset.id)
+            && date >= p.effectiveStart && date <= p.effectiveEnd && p.qty > QTY_EPS)
+          .map(planOf)
+          .filter(x => !x.hit.missing && x.hit.price > 0 && x.evalBefore - x.target > 0)
+          // 초과분이 큰 종목부터 — 필요액을 가장 적은 매매 건수로 채운다.
+          .sort((a, b) => (b.evalBefore - b.target) - (a.evalBefore - a.target));
+        for (const dp of donors) {
+          if (Math.max(0, cashTrade) >= needTotal) break;
+          const tr = adjustTo(dp.p, date, dp.target, false);
+          if (!tr || tr.qty >= 0) continue;
+          tr.signal = 'realloc';
+          pushTrade(tr);
+          realloc += tr.cashDelta;
+        }
+      }
+      // ⚠️ 날짜 단위 값이라 그날 첫 매수 이벤트에만 싣는다(행마다 실으면 중복으로 읽힌다).
+      {
+        const first = evsByAsset.get(buyPos[0].asset.id);
+        if (first) first[0].reallocAmount = realloc;
+      }
+
+      /* ②-b 분배금 개방 + 실제 매수.
+       * ⚠️ 개방 한도는 **종목별**이다(그 종목 단계들의 합) — 여러 종목이 같은 날 발동해도 서로의
+       *    몫을 빼앗지 않아 "사용 ≤ 개방" 표시 불변식이 성립한다(옛 dipUnlock과 같은 규약).
+       * ⚠️ 'both'(기본)는 평시에 이미 분배금 주머니가 열려 있어 단계 비율이 실효가 없다 —
+       *    개방액을 '주머니 전액'으로 기록해 화면이 사실대로 설명하게 한다. */
+      const floorAmount = config.cashFloorPct > 0
+        ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
+        : 0;
+      for (const list of evsByAsset.values()) {
+        let sum = 0;
+        for (const ev of list) sum += (pocket * ev.unlockPct) / 100;
+        list[0].unlocked = tradeOnly ? sum : pocket;
+        for (let i = 1; i < list.length; i++) list[i].unlocked = 0;
+      }
+      // 필요액이 큰 종목부터 — 재원이 모자랄 때 큰 구멍부터 메운다.
+      const ordered = [...buyPlans].sort(
+        (x, y) => (y.target - y.evalBefore) - (x.target - x.evalBefore),
+      );
+      for (const b of ordered) {
+        const list = evsByAsset.get(b.p.asset.id);
+        if (!list) continue;
+        const carrier = list[0];
+        if (b.target - b.evalBefore <= 0) {
+          if (!carrier.note) carrier.note = '목표 이상 — 살 것 없음';
+          continue;
+        }
+        const divCap = tradeOnly ? Math.min(carrier.unlocked, Math.max(0, cashDiv)) : Infinity;
+        const budget = tradeOnly ? Math.max(0, cashTrade) + divCap : cash;
+        const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
+        const tr = adjustTo(b.p, date, b.target, false, { budget, divCap, floorCap });
+        if (!tr) {
+          if (!carrier.note) carrier.note = tradeOnly && divCap <= 0 && cashTrade <= 0 ? '재원 없음' : '매수 수량 0';
+          continue;
+        }
+        tr.signal = 'buy';
+        pushTrade(tr);
+        carrier.tradeQty += tr.qty;
+        carrier.tradeAmount += Math.abs(tr.cashDelta);
+        if (tr.qty > 0) {
+          carrier.used += lastDraw.fromDiv;
+          carrier.fromTrade += lastDraw.fromTrade;
+        }
+        if (tr.note) carrier.note = tr.note;
       }
       continue;
     }
@@ -2826,13 +3124,13 @@ export function runBacktest(input: BtRunInput): BtResult {
       //    아래 `target > 0` 줄은 그 사실을 눈에 보이게 적어 둔 **방어적 중복**이라 지워도 동작은
       //    같다(변이 테스트에서 equivalent mutant로 확인됨). 지우지 말고 그대로 둘 것 —
       //    "청산은 항상 완결한다"가 이 코드의 계약임을 읽는 사람에게 알리는 유일한 단서다.
-      // ⚠️ 급락(dip)이 발동한 종목은 건너뛴다: 급락 시에는 밴드로 매수를 막지 않는다.
+      // ⚠️ 시그널 리밸런싱은 **자기 발동일에 이미 체결**돼 여기 도달하지 않는다 — 옛 설계처럼
+      //    '급락 발동 종목은 밴드 면제'를 여기서 다시 판정하지 말 것(그 상태 자체가 사라졌다).
       // ⚠️ 밴드 안이라도 반올림 결과 매매가 0주면 원래 아무 일도 없었으므로 '생략'으로 세지 않는다.
       const banded = new Set<string>();
       if (bandPct > 0) {
         for (const pl of plans) {
           if (pl.hit.missing || pl.hit.price <= 0) continue;
-          if (dipUnlock.has(pl.p.asset.id)) continue;
           if (!(pl.target > 0)) continue;
           if (Math.abs(pl.evalBefore - pl.target) > (pl.target * bandPct) / 100) continue;
           banded.add(pl.p.asset.id);
@@ -2848,29 +3146,17 @@ export function runBacktest(input: BtRunInput): BtResult {
       const runPlan = (pl: (typeof plans)[number]) => {
         const id = pl.p.asset.id;
         if (banded.has(id)) return;
-        const armed = dipUnlock.has(id);
-        // 급락 개방 한도 — 잔액을 넘을 수 없다(여러 단계가 겹쳐 합산됐어도 마찬가지).
-        const dipRoom = armed ? Math.min(Math.max(0, dipUnlock.get(id) ?? 0), Math.max(0, cashDiv)) : 0;
         // ⚠️ 'both'(기본)면 종전 그대로 전체 예수금이 재원이고 분배금 상한도 없다 — 이 두 줄이
-        //    기본값 하위호환의 전부다. 'tradeOnly'만 매매 주머니 + 개방분으로 제한된다.
-        const budget = tradeOnly ? Math.max(0, cashTrade) + dipRoom : cash;
-        const divCap = tradeOnly ? dipRoom : Infinity;
+        //    기본값 하위호환의 전부다. 'tradeOnly'는 평시에 분배금 주머니를 잠근다
+        //    (열리는 것은 시그널 발동일뿐이고, 그 매수는 signal 스텝에서 이미 끝난다).
+        const budget = tradeOnly ? Math.max(0, cashTrade) : cash;
+        const divCap = tradeOnly ? 0 : Infinity;
         const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
         const t = adjustTo(pl.p, s.rebalDate, pl.target, false, { budget, divCap, floorCap });
         if (t) pushTrade(t);
-        // 개방은 **이 회차 한정**이다 — 매수가 없었거나 매도였어도 여기서 만료시킨다.
-        if (armed) consumeDip(id, t && t.qty > 0 ? lastDraw.fromDiv : 0);
       };
       for (const pl of plans.filter(x => x.delta < 0)) runPlan(pl);
       for (const pl of plans.filter(x => x.delta > 0)) runPlan(pl);
-      // ⚠️ 위 두 필터는 **delta가 정확히 0인 plan을 어디에도 넣지 않는다**(이미 목표에 맞아떨어졌거나
-      //    그날 종가가 없어 delta를 0으로 둔 경우). 그 종목의 개방을 여기서 만료시키지 않으면
-      //    '다음 정기 리밸런싱 1회 한정' 계약이 깨져 **개방액과 밴드 면제가 다음 회차까지 살아남는다**
-      //    (적대적 리뷰 확정 결함: rounding:'exact'로 목표에 정확히 맞은 뒤 종가가 이월되면 재현).
-      //    runPlan이 처리한 종목은 이미 지워졌으므로 여기서는 남은 것만 걸린다(멱등).
-      for (const pl of plans) {
-        if (dipUnlock.has(pl.p.asset.id)) consumeDip(pl.p.asset.id, 0);
-      }
     }
   }
 
@@ -3105,7 +3391,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       minCash, minCashDiv,
       divMonthlyAvg, divMonthlyStdev,
       bandSkipCount, bandSkipAmount,
-      dipEvents,
+      signalEvents,
       shortfallMonths,
     },
   };

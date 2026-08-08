@@ -12,13 +12,13 @@ import {
 import {
   runBacktest, makeBtConfig, makeBtAsset, joinTradeDividends, parsePastedSeries,
   seriesRange, monthsBetween, backtestFingerprint, backtestSettingsFingerprint,
-  BT_COLORS, DEFAULT_DIP_LEVELS,
+  BT_COLORS, DEFAULT_DIP_LEVELS, DEFAULT_SELL_LEVELS,
 } from '../backtest';
 // 소프트 상한 — ⚠️ 화면 maxLength는 backtest.ts 정규화와 **같은 값**을 써야 잘림이 사용자에게
 //    보인다(정규화에서만 자르면 붙여넣은 분석의 뒤가 조용히 사라진다).
 import {
   MAX_BT_SCENARIOS, MAX_BT_ASSETS, MAX_BT_EVENTS, MAX_BT_OVERRIDES, MAX_BT_CONTRIB_OVERRIDES,
-  MAX_BT_REBAL_DATES, MAX_BT_DIP_LEVELS,
+  MAX_BT_REBAL_DATES, MAX_BT_DIP_LEVELS, MAX_BT_SELL_LEVELS,
   MAX_BT_NOTES, MAX_BT_NOTE_LEN, MAX_BT_NOTE_TITLE_LEN, MAX_BT_VERDICT_LEN,
 } from '../backtest';
 import { generateId, formatNumber, cleanNum } from '../utils';
@@ -106,7 +106,22 @@ const BUY_FUNDING_LABEL = {
  *    루트 ErrorBoundary까지 올라가 화면이 통째로 오류 페이지가 된다(runBacktest는 try/catch로
  *    감싸여 있지만 **화면 렌더는 감싸여 있지 않다**).
  */
-const dipOf = (cfg) => (cfg && cfg.dip) || { enabled: false, levels: DEFAULT_DIP_LEVELS };
+const dipOf = (cfg) => {
+  const d = (cfg && cfg.dip) || null;
+  // ⚠️ 하위 배열도 반드시 접근자에서 채운다 — 레거시 시나리오에는 sellLevels가 아예 없어
+  //    `dipOf(cfg).sellLevels.map(...)`이 그대로 TypeError가 된다(위 주석의 사고 그대로).
+  return {
+    enabled: !!(d && d.enabled),
+    levels: (d && Array.isArray(d.levels) && d.levels.length) ? d.levels : DEFAULT_DIP_LEVELS,
+    sellLevels: (d && Array.isArray(d.sellLevels)) ? d.sellLevels : [],
+    reallocate: !d || d.reallocate !== false,
+  };
+};
+/** 시그널 리밸런싱이 실제로 일을 하는가(단계가 하나라도 있는가). */
+const sigOn = (cfg) => {
+  const d = dipOf(cfg);
+  return d.enabled && (d.levels.length > 0 || d.sellLevels.length > 0);
+};
 const annualOf = (cfg) =>
   (cfg && cfg.annualReview) || { mode: 'none', value: 0, reserve: 0, everyMonths: 12, split: 'ratio' };
 const numOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -133,12 +148,60 @@ function strategyTags(cfg) {
   const ar = annualOf(cfg);
   if (numOf(cfg.band) > 0) out.push(`밴드 ±${formatNumber(cfg.band)}%`);
   if (cfg.buyFunding === 'tradeOnly') out.push('매매 예수금만');
-  if (dip.enabled) out.push(`급락 ${dip.levels.length}단계`);
+  if (dip.enabled) {
+    out.push(`시그널 매수 ${dip.levels.length}단계`);
+    if (dip.sellLevels.length) out.push(`매도 ${dip.sellLevels.length}단계`);
+    if (!dip.reallocate) out.push('재조정 끔');
+  }
   if (numOf(cfg.cashFloorPct) > 0) out.push(`바닥선 ${formatNumber(cfg.cashFloorPct)}%`);
   if (ar.mode === 'pctOfSurplus' && numOf(ar.value) > 0) out.push(`${ar.everyMonths}개월 증액 ${formatNumber(ar.value)}%`);
   if (numOf(cfg.divTaxPct) > 0) out.push(`원천징수 ${formatNumber(cfg.divTaxPct)}%`);
   return out;
 }
+
+/* ── 시그널 1건을 사람이 읽는 문장으로 ────────────────────────────────────────
+ * ⚠️ 화면(KPI 카드·월별 블록)과 CSV가 **같은 함수**를 쓴다 — 문구를 각자 만들면 같은 사건이
+ *    화면과 파일에서 다르게 설명된다. 사용자 요청("‘개방’을 계산식과 금액으로 상세히")의 구현부다.
+ * ========================================================================= */
+
+/** `매수 1단계 −10%` / `매도 2단계 +20%` */
+const sigLabel = (e) =>
+  `${e.kind === 'sell' ? '매도' : '매수'} ${formatNumber(e.step)}단계 `
+  + `${e.kind === 'sell' ? '+' : '−'}${formatNumber(e.level)}%`;
+
+/** `고점 ₩27,825 → 종가 ₩23,595 (−15.2%)` — 실제 등락률까지 밝혀 '왜 지금 발동했는가'를 남긴다. */
+const sigRefText = (e) => {
+  const ref = numOf(e.ref);
+  const pct = ref > 0 ? ((numOf(e.price) - ref) / ref) * 100 : 0;
+  return `${e.kind === 'sell' ? '저점' : '고점'} ${won(e.ref)} → 종가 ${won(e.price)}`
+    + ` (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%)`;
+};
+
+/**
+ * 매수 시그널의 **개방 계산식**. 사용자가 '개방 ₩642,005'만 보고는 34%인지 잔액인지 알 수 없어
+ * 밑변(발동 시점 적립 분배금)과 비율을 함께 적는다.
+ * ⚠️ 평시 매수 재원이 '예수금 전부'(both)면 분배금 주머니가 애초에 열려 있어 단계 비율이
+ *    적용되지 않는다 — 그 사실을 숨기지 말고 문장을 갈라 준다.
+ */
+const sigUnlockText = (e, cfg) => {
+  if (e.kind !== 'buy') return '';
+  if ((cfg?.buyFunding || 'both') !== 'tradeOnly') {
+    return `적립 분배금 ${won(e.divPocketAt)} 전액 개방 (평시 재원이 ‘예수금 전부’라 단계 비율 ${formatNumber(e.unlockPct)}% 미적용)`;
+  }
+  return `적립 분배금 ${won(e.divPocketAt)} × ${formatNumber(e.unlockPct)}% = ${won(e.unlocked)} 개방`;
+};
+
+/** `매매 예수금 ₩120,000 + 적립 분배금 ₩642,005 = ₩762,005 투입` */
+const sigFundText = (e) =>
+  `매매 예수금 ${won(e.fromTrade)} + 적립 분배금 ${won(e.used)} = ${won(e.tradeAmount)} 투입`;
+
+/** 체결 결과 한 줄. 미체결이면 사유를 그대로 보여 준다(왜 0원인지 알 수 없는 것이 옛 화면의 문제였다). */
+const sigOutcomeText = (e, cfg) => {
+  if (!numOf(e.tradeQty)) return e.note || '체결 없음';
+  if (e.kind === 'sell') return `${formatNumber(Math.abs(e.tradeQty))}주 매도 → 매매 예수금 +${won(e.tradeAmount)}`;
+  return `${formatNumber(e.tradeQty)}주 매수 · ${sigFundText(e)}`
+    + (numOf(e.used) > 0 ? ` · ${sigUnlockText(e, cfg)}` : '');
+};
 
 /**
  * Section 배지용 축약 — ⚠️ 6개를 다 이어 붙이면 배지가 제목을 밀어낸다.
@@ -587,10 +650,10 @@ function StrategyKpis({ result, cfg, compact = false }) {
   const dip = dipOf(cfg);
   const ar = annualOf(cfg);
   const bandOn = numOf(cfg?.band) > 0 || numOf(s.bandSkipCount) > 0;
-  const dipOn = dip.enabled || (s.dipEvents || []).length > 0;
+  const dipOn = dip.enabled || (s.signalEvents || []).length > 0;
   const annualOn = ar.mode === 'pctOfSurplus' && numOf(ar.value) > 0;
   const taxOn = numOf(cfg?.divTaxPct) > 0 || numOf(s.cumDivTax) > 0.5;
-  const events = s.dipEvents || [];
+  const events = s.signalEvents || [];
   const shortMonths = (result.months || []).filter((m) => numOf(m.shortfallCount) > 0);
   // 변동계수 — 평균이 0이면 정의되지 않는다(분배금이 아예 없는 시나리오).
   const cv = numOf(s.divMonthlyAvg) > 0 ? (s.divMonthlyStdev / s.divMonthlyAvg) * 100 : null;
@@ -629,28 +692,34 @@ function StrategyKpis({ result, cfg, compact = false }) {
         ['생략된 매매 예정 금액', won(s.bandSkipAmount)],
       ],
       note: '목표에 이미 충분히 가까워 그 회차 매매를 건너뛴 횟수입니다(세금·수수료 절약). '
-        + '급락이 발동한 종목은 밴드를 건너뛰고 매수를 강행하므로 여기에 잡히지 않습니다.',
+        + '시그널 리밸런싱은 자기 발동일에 체결되므로 밴드의 적용을 받지 않고, 여기에도 잡히지 않습니다.',
     }] : []),
     ...(dipOn ? [{
-      label: '급락 투입', value: `${formatNumber(events.length)}건`,
-      cls: events.some((e) => e.used > 0.5) ? 'text-amber-300' : 'text-gray-500',
+      label: '시그널 체결',
+      value: `${formatNumber(events.filter((e) => e.tradeQty !== 0).length)}/${formatNumber(events.length)}건`,
+      cls: events.some((e) => e.tradeQty !== 0) ? 'text-amber-300' : 'text-gray-500',
       formula: [
         ...(events.length
-          ? events.slice(0, 30).map((e) => [
-            `${e.date} · ${e.name || e.code} −${formatNumber(e.level)}%`,
-            `개방 ${won(e.unlocked)} → 사용 ${won(e.used)}`,
+          ? events.slice(0, 24).map((e) => [
+            `${e.date} · ${e.name || e.code} · ${sigLabel(e)}`,
+            sigOutcomeText(e, cfg),
           ])
-          : [['발동 없음 — 아직 단계 낙폭에 도달하지 않았습니다', '-']]),
-        ...(events.length > 30 ? [[`… 외 ${events.length - 30}건`, '-']] : []),
+          : [['발동 없음 — 아직 단계에 도달하지 않았습니다', '-']]),
+        ...(events.length > 24 ? [[`… 외 ${events.length - 24}건`, '-']] : []),
         ...(events.length ? [[
-          '합계 (개방 / 사용)',
-          `${won(events.reduce((a, e) => a + e.unlocked, 0))} / ${won(events.reduce((a, e) => a + e.used, 0))}`,
+          '합계 (매수 체결 / 매도 체결)',
+          `${won(events.filter((e) => e.tradeQty > 0).reduce((a, e) => a + e.tradeAmount, 0))}`
+          + ` / ${won(events.filter((e) => e.tradeQty < 0).reduce((a, e) => a + e.tradeAmount, 0))}`,
           true,
+        ], [
+          '이 중 적립 분배금에서 꺼낸 몫 (개방 / 사용)',
+          `${won(events.reduce((a, e) => a + e.unlocked, 0))} / ${won(events.reduce((a, e) => a + e.used, 0))}`,
         ]] : []),
       ],
-      note: '종목별 ‘가격 고점’ 대비 낙폭이 각 단계에 처음 닿은 날, 그 시점 누적 분배금의 일부를 열어 '
-        + '다음 리밸런싱 매수 1회에 쓴 내역입니다. 새 고점이 서면 전 단계가 다시 무장됩니다. '
-        + '‘사용’이 0이면 그 회차에 매매 예수금만으로 충분했다는 뜻입니다.',
+      note: '매수 시그널은 종목별 ‘가격 고점’ 대비 낙폭이, 매도 시그널은 ‘가격 저점’ 대비 상승률이 '
+        + '각 단계에 처음 닿은 날 발동하고, **그날 종가로 즉시** 그 종목을 목표까지 맞춥니다. '
+        + '새 고점(매수)·새 저점(매도)이 서면 전 단계가 다시 무장됩니다. '
+        + '매수 재원은 매매 예수금 → 목표 초과 종목 매도(재조정) → 적립 분배금 개방 순으로 씁니다.',
     }] : []),
     {
       label: '부족 발생', value: `${formatNumber(s.shortfallMonths)}개월`,
@@ -1882,10 +1951,13 @@ export default function BacktestPage({
             Math.round(x.added), '', Math.round(x.targetAfter), '', '', '', '']);
         }
       }
-      // 급락 분할투입 — 화면 amber 블록과 동일 소스(summary.dipEvents를 그 달 것만 필터)
-      for (const e of (result.summary.dipEvents || []).filter((x) => x.date.slice(0, 7) === m.ym)) {
-        rows.push([`${m.ym} 급락투입`, e.date, `${e.name}(${e.code}) −${e.level}%`, Math.round(e.price),
-          Math.round(e.peak), '', Math.round(e.used), '', Math.round(e.unlocked), '', '', '', '']);
+      // 시그널 리밸런싱 — 화면 amber 블록과 **같은 소스·같은 문구**(sigLabel/sigOutcomeText 공유).
+      // ⚠️ 13열 고정. 열 수가 어긋나면 엑셀에서 조용히 밀린다.
+      for (const e of (result.summary.signalEvents || []).filter((x) => x.date.slice(0, 7) === m.ym)) {
+        rows.push([`${m.ym} 시그널`, e.date, `${e.name}(${e.code}) ${sigLabel(e)}`, Math.round(e.price),
+          Math.round(e.ref), Math.round(e.tradeQty), Math.round(e.tradeAmount), '',
+          Math.round(e.unlocked), Math.round(e.used), Math.round(e.reallocAmount), '',
+          sigOutcomeText(e, cfgNow)]);
       }
       // 밴드 생략 — 화면 월 요약과 동일 소스(생략은 거래 행이 남지 않으므로 이 줄이 유일한 흔적)
       if (m.bandSkipCount > 0) {
@@ -1929,7 +2001,10 @@ export default function BacktestPage({
       ['월 분배금 평균', Math.round(result.summary.divMonthlyAvg)],
       ['월 분배금 표준편차', Math.round(result.summary.divMonthlyStdev)],
       ['밴드 생략', `${result.summary.bandSkipCount}건 / ${Math.round(result.summary.bandSkipAmount)}`],
-      ['급락 투입 발동', `${result.summary.dipEvents.length}건`],
+      ['시그널 발동', `${result.summary.signalEvents.length}건`
+        + ` (매수 ${result.summary.signalEvents.filter((e) => e.kind === 'buy').length}`
+        + ` / 매도 ${result.summary.signalEvents.filter((e) => e.kind === 'sell').length}`
+        + ` · 체결 ${result.summary.signalEvents.filter((e) => e.tradeQty !== 0).length})`],
       ['부족 발생', `${result.summary.shortfallMonths}개월`],
       ['누적 연간증액', Math.round(result.summary.cumAnnualReview)],
       ...(taxedCsv ? [['원천징수 세금(참고 · 위 합계에 미포함)', Math.round(result.summary.cumDivTax)]] : []),
@@ -1981,15 +2056,22 @@ export default function BacktestPage({
       //    하드코딩 열 수를 **함께** 고칠 것.
       '시나리오', '평가', '한 줄 결론',
       '기간', '초기 투자금', '리밸런싱', '분배금 처리', '배분 기준', '목표 기준',
-      '밴드(%)', '평시 매수 재원', '급락 분할투입', '현금 바닥선(%)', '연간 증액', '원천징수(%)',
+      '밴드(%)', '평시 매수 재원', '시그널 리밸런싱', '현금 바닥선(%)', '연간 증액', '원천징수(%)',
       '최종 자산', '총 손익', '수익률(%)', '누적 매매차익', '누적 분배금', '분배금 재투자', '기말 예수금',
-      '최저 예수금', '최저 예수금일', '월분배 평균', '월분배 표준편차', '밴드 생략(건)', '급락 발동(건)', '부족 발생(개월)',
+      '최저 예수금', '최저 예수금일', '월분배 평균', '월분배 표준편차', '밴드 생략(건)', '시그널 발동(건)', '부족 발생(개월)',
       '기말 평가액', '최대 낙폭(%)', '비고',
     ]];
     for (const { cfg, result: r } of compareRuns) {
       const s = r?.summary;
       const dip = dipOf(cfg);
       const ar = annualOf(cfg);
+      // ⚠️ 한 줄로 만들어 둔다 — 검증 #247이 `rows.push([` 안의 **줄 수**로 열 수를 세므로,
+      //    셀 하나를 여러 줄에 걸쳐 쓰면 열 수가 부풀어 가드가 깨진다.
+      const dipCell = dip.enabled
+        ? [`매수 ${dip.levels.map((l) => `-${l.drop}%/${l.unlockPct}%`).join(' ')}`,
+          dip.sellLevels.length ? `매도 ${dip.sellLevels.map((l) => `+${l.rise}%`).join(' ')}` : '',
+          dip.reallocate ? '' : '재조정 끔'].filter(Boolean).join(' · ')
+        : '-';
       rows.push([
         cfg.name,
         RATING_LABEL[ratingKey(reviewOf(cfg).rating)],
@@ -2002,7 +2084,7 @@ export default function BacktestPage({
         TARGET_MODE_LABEL[cfg.targetMode] || cfg.targetMode,
         numOf(cfg.band) > 0 ? cfg.band : '-',
         BUY_FUNDING_LABEL[cfg.buyFunding || 'both'],
-        dip.enabled ? dip.levels.map((l) => `-${l.drop}%/${l.unlockPct}%`).join(' ') : '-',
+        dipCell,
         numOf(cfg.cashFloorPct) > 0 ? cfg.cashFloorPct : '-',
         ar.mode === 'pctOfSurplus' && numOf(ar.value) > 0
           ? `${ar.everyMonths}개월마다 잉여의 ${ar.value}% (예약금 ${Math.round(ar.reserve)})` : '-',
@@ -2019,7 +2101,7 @@ export default function BacktestPage({
         s ? Math.round(s.divMonthlyAvg) : '',
         s ? Math.round(s.divMonthlyStdev) : '',
         s ? s.bandSkipCount : '',
-        s ? s.dipEvents.length : '',
+        s ? s.signalEvents.length : '',
         s ? s.shortfallMonths : '',
         s ? Math.round(s.finalEval) : '',
         s ? s.maxDrawdown.toFixed(2) : '',
@@ -2766,15 +2848,17 @@ export default function BacktestPage({
                     <p>
                       <b className="text-gray-300">목표 평가금을 고정</b>해 두고(오르면 팔고 내리면 사서 복원),
                       분배금은 따로 모아 두었다가 <b className="text-gray-300">급락할 때만</b> 푸는 운용을 위한
-                      보조 규칙 6종입니다.
+                      보조 규칙 6종입니다. 그중 <b className="text-gray-300">시그널 리밸런싱</b>은
+                      ③ 리밸런싱 일정과 <b className="text-gray-300">별개의 매매 트리거</b>라 둘을 동시에 켤 수 있습니다.
                     </p>
                     <p className="mt-1 text-gray-500">
                       ※ <b className="text-gray-400">전부 꺼 두는 것이 기본값</b>이고, 그 상태에서는 기존 시나리오의
                       결과가 1원도 달라지지 않습니다. 필요한 것만 켜세요.
                     </p>
                     <p className="mt-1 text-gray-500">
-                      ※ 여섯 규칙은 모두 <b className="text-gray-400">정기 리밸런싱에만</b> 걸립니다 —
+                      ※ 밴드·재원·바닥선·증액은 <b className="text-gray-400">정기 리밸런싱에만</b> 걸립니다 —
                       초기 매수·종목 재편(이벤트)·분배금 재투자는 종전 규칙 그대로 돕니다.
+                      <b className="text-gray-400"> 시그널 리밸런싱만</b> 자기 발동일에 독립적으로 매매합니다.
                     </p>
                   </>
                 )}
@@ -2794,8 +2878,11 @@ export default function BacktestPage({
                       </p>
                       <p className="mt-1 text-gray-500">
                         ※ <b className="text-gray-400">0이면 밴드 없음</b>(종전 동작). 목표가 0인 종목(전량 청산)은
-                        밴드와 무관하게 항상 실행하고, <b className="text-gray-400">급락이 발동한 종목</b>도
-                        밴드를 건너뛰고 매수를 강행합니다.
+                        밴드와 무관하게 항상 실행합니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 밴드는 <b className="text-gray-400">정기 리밸런싱 전용</b>입니다 —
+                        ⑤-b 시그널 리밸런싱은 자기 발동일에 체결되므로 밴드가 막지 않습니다.
                       </p>
                       <p className="mt-1 text-gray-500">
                         ※ 종목 재편(이벤트) 매매와 분배금 재투자에는 적용하지 않습니다.
@@ -2821,7 +2908,7 @@ export default function BacktestPage({
                       </p>
                       <p className="mt-1">
                         <b className="text-gray-300">매매 예수금만</b> — 분배금은 <b className="text-gray-300">손대지 않고 적립</b>하고,
-                        아래 <b className="text-gray-300">급락 분할투입</b>이 열어 준 한도 안에서만 씁니다.
+                        아래 <b className="text-gray-300">시그널 리밸런싱</b>이 열어 준 한도 안에서만 씁니다.
                       </p>
                       <p className="mt-1 text-gray-500">
                         ※ <b className="text-gray-400">④ 분배금 처리</b>를 재투자로 둔 경우의 재투자 매수는 원래
@@ -2838,45 +2925,49 @@ export default function BacktestPage({
                   </div>
                 </div>
 
-                {/* ── C. 급락 분할투입 ── */}
+                {/* ── C. 시그널 리밸런싱 (매수 = 급락 분할투입 / 매도 = 반등 차익실현) ── */}
                 <div className="flex flex-col gap-1.5 border-t border-gray-800 pt-2">
                   {/* ⚠️ Hint(=<button>)를 <label> **안**에 두지 말 것 — label의 활성화 동작이
-                          내부 체크박스를 함께 토글해, ? 아이콘을 누를 때마다 급락 분할투입이
+                          내부 체크박스를 함께 토글해, ? 아이콘을 누를 때마다 시그널 리밸런싱이
                           켜졌다 꺼진다(Section 헤더의 '버튼 중첩 금지'와 같은 부류). */}
                   <div className="flex items-center gap-1.5">
                     <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer">
                       <input type="checkbox" checked={dipOf(active).enabled} disabled={readOnly}
                         onChange={(e) => patchActive({ dip: { ...dipOf(active), enabled: e.target.checked } })} />
-                      급락 분할투입 (적립 분배금을 단계적으로 푼다)
+                      시그널 리밸런싱 (발동일 종가로 즉시 매매)
                     </label>
-                    <Hint width={380}>
+                    <Hint width={400}>
                       <p>
-                        종목별 <b className="text-gray-300">가격 고점</b>(백테스트 구간 내 최고 종가) 대비 당일 종가
-                        낙폭이 각 단계에 <b className="text-gray-300">처음 닿으면</b>, 그 시점 적립 분배금의
-                        일부를 열어 <b className="text-gray-300">그 종목의 다음 리밸런싱 매수 1회</b>에 씁니다.
+                        종목별 <b className="text-gray-300">가격 고점</b> 대비 낙폭(매수 시그널) 또는
+                        <b className="text-gray-300"> 가격 저점</b> 대비 상승률(매도 시그널)이 각 단계에
+                        <b className="text-gray-300"> 처음 닿는 날</b>, <b className="text-gray-300">그날 종가로 즉시</b>
+                        {' '}그 종목을 목표까지 맞춥니다.
                       </p>
                       <p className="mt-1">
-                        평가액이 아니라 <b className="text-gray-300">가격</b> 고점을 쓰는 이유는, 리밸런싱으로 수량이
-                        계속 변해 평가액 고점은 왜곡되기 때문입니다.
+                        평가액이 아니라 <b className="text-gray-300">가격</b> 극값을 쓰는 이유는, 리밸런싱으로 수량이
+                        계속 변해 평가액 고점·저점은 왜곡되기 때문입니다.
+                      </p>
+                      <p className="mt-1">
+                        <b className="text-gray-300">매수 재원은 3단계</b>로 조달합니다 —
+                        ① 매매 예수금 → ② 목표를 초과한 다른 종목을 팔아 재조정 → ③ 적립 분배금 개방(단계 비율).
                       </p>
                       <p className="mt-1 text-gray-500">
-                        ※ 각 단계는 <b className="text-gray-400">고점이 갱신되기 전까지 1회만</b> 발동하고,
-                        새 고점이 서면 전 단계가 다시 무장됩니다.
+                        ※ 각 단계는 <b className="text-gray-400">극값이 갱신되기 전까지 1회만</b> 발동하고,
+                        새 고점(매수)·새 저점(매도)이 서면 전 단계가 다시 무장됩니다.
                       </p>
                       <p className="mt-1 text-gray-500">
-                        ※ 발동한 종목은 그 회차에 <b className="text-gray-400">밴드 검사를 건너뜁니다</b>(급락 시에는
-                        밴드로 매수를 막지 않습니다).
+                        ※ <b className="text-gray-400">③ 리밸런싱 일정과 완전히 독립</b>입니다 —
+                        ‘리밸런싱 안 함’으로 두어도 시그널은 그대로 돌고, 둘 다 켜면 둘 다 실행됩니다.
                       </p>
                       <p className="mt-1 text-gray-500">
-                        ※ 매수는 <b className="text-gray-400">매매 예수금을 먼저 쓰고</b> 모자란 만큼만 열린 분배금에서
-                        꺼냅니다 — 그래서 ‘사용’이 0일 수 있습니다.
+                        ※ 리밸런싱 밴드는 <b className="text-gray-400">정기 리밸런싱 전용</b>이라 시그널 매매를 막지 않습니다.
                       </p>
                     </Hint>
                   </div>
                   {dipOf(active).enabled && (
                     <div className="flex flex-col gap-1">
                       <div className="grid grid-cols-[1fr_1fr] gap-2">
-                        <span className={LABEL}>고점 대비 낙폭 (%)</span>
+                        <span className={LABEL}>매수 시그널 — 고점 대비 낙폭 (%)</span>
                         <span className={LABEL}>이때 풀 비율 (적립 분배금의 %)</span>
                       </div>
                       {dipOf(active).levels.map((lv, i) => (
@@ -2928,8 +3019,82 @@ export default function BacktestPage({
                           </p>
                         );
                       })()}
+
+                      {/* ── 매도 시그널 (저점 대비 반등) ── */}
+                      <div className="grid grid-cols-[1fr_auto] gap-2 mt-2">
+                        <span className={LABEL}>매도 시그널 — 저점 대비 반등 (%)</span>
+                        <span className="text-[10px] text-gray-600">목표 초과분만 매도</span>
+                      </div>
+                      {dipOf(active).sellLevels.length === 0 && (
+                        <p className="text-[10px] text-gray-500 leading-relaxed">
+                          비어 있으면 매도 시그널을 쓰지 않습니다(기본값). 단계를 추가하면 저점 대비 그만큼
+                          오른 날 <b className="text-gray-400">목표를 넘는 만큼만</b> 팔고, 대금은 매매 예수금으로 갑니다.
+                        </p>
+                      )}
+                      {dipOf(active).sellLevels.map((lv, i) => (
+                        <div key={`s${i}`} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                          <NumInput value={lv.rise} disabled={readOnly}
+                            onCommit={(v) => patchActive({
+                              dip: {
+                                ...dipOf(active),
+                                sellLevels: dipOf(active).sellLevels.map((x, j) => (j === i ? { rise: Math.min(1000, Math.max(0.1, v)) } : x)),
+                              },
+                            })} />
+                          <span className="text-[10px] text-gray-600">목표까지 매도</span>
+                          <button className="p-1 text-gray-600 hover:text-red-400 shrink-0 disabled:opacity-30"
+                            title="이 매도 단계 삭제"
+                            disabled={readOnly}
+                            onClick={() => patchActive({
+                              dip: { ...dipOf(active), sellLevels: dipOf(active).sellLevels.filter((_, j) => j !== i) },
+                            })}>
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`}
+                        disabled={readOnly || dipOf(active).sellLevels.length >= MAX_BT_SELL_LEVELS}
+                        onClick={() => {
+                          const cur = dipOf(active).sellLevels;
+                          const next = cur.length
+                            ? Math.min(1000, cur[cur.length - 1].rise + 10)
+                            : DEFAULT_SELL_LEVELS[0].rise;
+                          patchActive({ dip: { ...dipOf(active), sellLevels: [...cur, { rise: next }] } });
+                        }}>
+                        <Plus size={10} className="inline -mt-0.5" /> 매도 단계 추가 ({dipOf(active).sellLevels.length}/{MAX_BT_SELL_LEVELS})
+                      </button>
+                      {(() => {
+                        const rs = dipOf(active).sellLevels.map((x) => x.rise);
+                        if (new Set(rs).size === rs.length) return null;
+                        return (
+                          <p className="text-[10px] text-amber-400/90 leading-relaxed">
+                            ⚠️ 같은 상승률이 겹칩니다 — <b>저장하면 하나만 남습니다</b>. 값을 서로 다르게 고치세요.
+                          </p>
+                        );
+                      })()}
+
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+                          <input type="checkbox" checked={dipOf(active).reallocate} disabled={readOnly}
+                            onChange={(e) => patchActive({ dip: { ...dipOf(active), reallocate: e.target.checked } })} />
+                          예수금이 모자라면 다른 종목을 팔아 재원 마련 (재조정)
+                        </label>
+                        <Hint width={360}>
+                          <p>
+                            매수 시그널의 필요액이 매매 예수금보다 크면, <b className="text-gray-300">목표를 초과한
+                            다른 보유 종목</b>을 목표까지 팔아 재원을 만듭니다(초과분이 큰 종목부터).
+                          </p>
+                          <p className="mt-1 text-gray-500">
+                            ※ 보유 종목이 <b className="text-gray-400">전부 함께 하락</b>해 팔 초과분이 없으면
+                            아무것도 팔지 않고 적립 분배금 개방으로 넘어갑니다.
+                          </p>
+                          <p className="mt-1 text-gray-500">
+                            ※ 목표 아래로는 팔지 않습니다 — 사용자가 정한 비율/금액이 곧 하한입니다.
+                          </p>
+                        </Hint>
+                      </div>
+
                       <p className="text-[10px] text-gray-500 leading-relaxed">
-                        낙폭이 작은 단계부터 순서대로 정렬됩니다. 개방 비율의 합은 100%를 넘지 않게 잡는 것이
+                        낙폭·상승률이 작은 단계부터 순서대로 정렬됩니다. 개방 비율의 합은 100%를 넘지 않게 잡는 것이
                         보통이지만(합이 크면 나중 단계에서 잔액만큼만 열립니다) 강제하지는 않습니다.
                       </p>
                     </div>
@@ -3750,29 +3915,56 @@ export default function BacktestPage({
                         )}
                       </div>
                     )}
-                    {/* 급락 분할투입 — 그 달에 발동한 단계. ⚠️ dipEvents는 월별이 아니라 summary에
-                        모여 있으므로 날짜의 앞 7자로 그 달 것만 고른다(월별로 복제 저장하지 않는다). */}
+                    {/* 시그널 리밸런싱 — 그 달에 발동한 단계. ⚠️ signalEvents는 월별이 아니라 summary에
+                        모여 있으므로 날짜의 앞 7자로 그 달 것만 고른다(월별로 복제 저장하지 않는다).
+                        ⚠️ 옛 화면은 `개방 ₩0 → 사용 ₩0` 한 줄이라 **왜 0인지** 알 수 없었다(사용자 보고).
+                           밑변(그 시점 적립 분배금)·비율·재원 내역·체결 결과를 전부 적는다. */}
                     {(() => {
-                      const evs = (result.summary.dipEvents || []).filter((e) => e.date.slice(0, 7) === m.ym);
+                      const evs = (result.summary.signalEvents || []).filter((e) => e.date.slice(0, 7) === m.ym);
                       if (!evs.length) return null;
                       return (
                         <div className="mt-1 border border-amber-900/60 rounded-lg bg-amber-950/25 px-2.5 py-2">
                           <div className="text-[12px] text-amber-300 font-bold mb-1">
-                            급락 분할투입 {evs.length}건
-                            <span className="ml-1 text-gray-500 font-normal">(고점 대비 낙폭이 단계에 처음 닿은 날)</span>
+                            시그널 리밸런싱 {evs.length}건
+                            <span className="ml-1 text-gray-500 font-normal">
+                              (매수 = 고점 대비 낙폭 · 매도 = 저점 대비 반등 · 발동일 종가로 즉시 체결)
+                            </span>
                           </div>
-                          <div className="flex flex-wrap gap-x-5 gap-y-1.5">
-                            {evs.map((e, i) => (
-                              <span key={`${e.assetId}-${e.date}-${i}`} className="text-[12px] whitespace-nowrap">
-                                <span className="text-gray-500">{e.date} </span>
-                                <StockLink code={e.code} name={e.name} className="text-gray-300 font-bold" />
-                                <span className="text-amber-300"> −{formatNumber(e.level)}%</span>
-                                <span className="text-gray-600">
-                                  {' '}(고점 {won(e.peak)} → {won(e.price)}) · 개방 {won(e.unlocked)} → 사용{' '}
-                                </span>
-                                <b className={e.used > 0.5 ? 'text-amber-200' : 'text-gray-600'}>{won(e.used)}</b>
-                              </span>
-                            ))}
+                          <div className="flex flex-col gap-1.5">
+                            {evs.map((e, i) => {
+                              const sell = e.kind === 'sell';
+                              const done = numOf(e.tradeQty) !== 0;
+                              return (
+                                <div key={`${e.assetId}-${e.date}-${e.kind}-${i}`} className="text-[12px] leading-relaxed">
+                                  <div>
+                                    <span className="text-gray-500">{e.date} </span>
+                                    <span className={`px-1 rounded ${sell ? 'text-sky-300' : 'text-amber-300'} font-bold`}>
+                                      {sigLabel(e)}
+                                    </span>
+                                    {' '}
+                                    <StockLink code={e.code} name={e.name} className="text-gray-300 font-bold" />
+                                    <span className="text-gray-600"> · {sigRefText(e)}</span>
+                                  </div>
+                                  {/* 매수는 '개방' 계산식을 반드시 밑변까지 펼쳐 보여 준다 */}
+                                  {!sell && (
+                                    <div className="text-gray-500 pl-3">
+                                      개방 · {sigUnlockText(e, active)}
+                                    </div>
+                                  )}
+                                  {!sell && numOf(e.reallocAmount) > 0 && (
+                                    <div className="text-gray-500 pl-3">
+                                      재조정 · 목표 초과 종목을 팔아 {won(e.reallocAmount)}을(를) 매매 예수금에 편입
+                                    </div>
+                                  )}
+                                  <div className="pl-3">
+                                    <span className="text-gray-600">체결 · </span>
+                                    <b className={done ? (sell ? 'text-sky-200' : 'text-amber-200') : 'text-gray-600'}>
+                                      {sigOutcomeText(e, active)}
+                                    </b>
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       );
@@ -4004,8 +4196,9 @@ export default function BacktestPage({
                     )}
                     {active.policy === 'none' && (
                       <p>
-                        <b>리밸런싱 안 함</b> 설정이라 초기 매수 이후 목표를 맞추는 매매는 일어나지 않습니다
+                        <b>리밸런싱 안 함</b> 설정이라 초기 매수 이후 <b>정기</b> 리밸런싱은 일어나지 않습니다
                         (종목별로 따로 지정한 일정은 그대로 실행됩니다).
+                        {sigOn(active) && ' ⑤-b 시그널 리밸런싱은 이 설정과 무관하게 발동일마다 실행됩니다.'}
                       </p>
                     )}
                     {/* 전략 보조 규칙 — ⚠️ 켠 것만 적는다. 인쇄본만 받아 본 사람이 "왜 이 달엔 매매가
@@ -4014,23 +4207,30 @@ export default function BacktestPage({
                       <p>
                         <b>리밸런싱 밴드 ±{formatNumber(active.band)}%</b> — 리밸런싱 전 평가액이 목표금액의 이 범위
                         안이면 그 회차 매매를 생략했습니다(생략 {formatNumber(result.summary.bandSkipCount)}건 ·
-                        예정 금액 {won(result.summary.bandSkipAmount)}). 목표 0(전량 청산)과 급락 발동 종목은 예외입니다.
+                        예정 금액 {won(result.summary.bandSkipAmount)}). 목표 0(전량 청산)은 예외이고,
+                        <b>시그널 리밸런싱</b>은 자기 발동일에 체결되므로 밴드의 적용을 받지 않습니다.
                       </p>
                     )}
                     {active.buyFunding === 'tradeOnly' && (
                       <p>
                         <b>평시 매수 재원 = 매매 예수금만</b> — 적립된 분배금은 평상시 매수에 쓰지 않고,
-                        급락 분할투입이 열어 준 한도 안에서만 씁니다
-                        {dipOf(active).enabled ? '' : ' (급락 분할투입이 꺼져 있어 사실상 전혀 쓰지 않습니다)'}.
+                        시그널 리밸런싱이 열어 준 한도 안에서만 씁니다
+                        {dipOf(active).enabled ? '' : ' (시그널 리밸런싱이 꺼져 있어 사실상 전혀 쓰지 않습니다)'}.
                         분배금 재투자(④)는 이 설정과 무관하게 그대로 돕니다.
                       </p>
                     )}
                     {dipOf(active).enabled && (
                       <p>
-                        <b>급락 분할투입</b> — 종목별 <b>가격 고점</b> 대비 낙폭이{' '}
-                        {dipOf(active).levels.map((l) => `−${formatNumber(l.drop)}%(${formatNumber(l.unlockPct)}%)`).join(' · ')}
-                        에 처음 닿으면 그 시점 적립 분배금의 해당 비율을 열어 다음 리밸런싱 매수 1회에 씁니다.
-                        각 단계는 고점이 갱신되기 전까지 1회만 발동합니다(발동 {result.summary.dipEvents.length}건).
+                        <b>시그널 리밸런싱</b> — 매수는 종목별 <b>가격 고점</b> 대비 낙폭{' '}
+                        {dipOf(active).levels.map((l) => `−${formatNumber(l.drop)}%(${formatNumber(l.unlockPct)}%)`).join(' · ') || '없음'}
+                        {dipOf(active).sellLevels.length
+                          ? `, 매도는 가격 저점 대비 반등 ${dipOf(active).sellLevels.map((l) => `+${formatNumber(l.rise)}%`).join(' · ')}`
+                          : ''}
+                        에 처음 닿는 날 <b>그날 종가로 즉시</b> 그 종목을 목표까지 맞춥니다
+                        (발동 {result.summary.signalEvents.length}건 · 체결{' '}
+                        {result.summary.signalEvents.filter((e) => e.tradeQty !== 0).length}건).
+                        매수 재원은 <b>매매 예수금 → 목표 초과 종목 매도(재조정{dipOf(active).reallocate ? '' : ' 끔'})
+                        → 적립 분배금 개방</b> 순입니다. 각 단계는 고점(매수)·저점(매도)이 갱신되기 전까지 1회만 발동합니다.
                       </p>
                     )}
                     {numOf(active.cashFloorPct) > 0 && (

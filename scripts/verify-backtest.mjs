@@ -215,9 +215,10 @@ function normalizeDivOverride(raw) {
 }
 const REBAL_MODES = ['follow', 'mid', 'eom', 'day', 'dates', 'none'];
 const CONTRIB_MODES = ['none', 'pctOfCash', 'amount'];
-const MAX_BT_CONTRIB_OVERRIDES = 120, MAX_BT_REBAL_DATES = 120, MAX_BT_DIP_LEVELS = 5;
+const MAX_BT_CONTRIB_OVERRIDES = 120, MAX_BT_REBAL_DATES = 120, MAX_BT_DIP_LEVELS = 5, MAX_BT_SELL_LEVELS = 5;
 const MAX_BT_NOTES = 12, MAX_BT_NOTE_LEN = 8000, MAX_BT_NOTE_TITLE_LEN = 80, MAX_BT_VERDICT_LEN = 200;
 const DEFAULT_DIP_LEVELS = [{ drop: 10, unlockPct: 34 }, { drop: 20, unlockPct: 33 }, { drop: 30, unlockPct: 33 }];
+const DEFAULT_SELL_LEVELS = [{ rise: 10 }, { rise: 20 }];
 function normalizeDipLevels(raw) {
   const arr = asArr(raw)
     .map((l) => ({ drop: asNum(l?.drop, NaN), unlockPct: asNum(l?.unlockPct, NaN) }))
@@ -236,8 +237,28 @@ function normalizeDipLevels(raw) {
   }
   return out;
 }
+function normalizeSellLevels(raw) {
+  const arr = asArr(raw)
+    .map((l) => ({ rise: asNum(l?.rise, NaN) }))
+    .filter((l) => Number.isFinite(l.rise) && l.rise > 0 && l.rise <= 1000);
+  arr.sort((a, b) => a.rise - b.rise);
+  const seen = new Set();
+  const out = [];
+  for (const l of arr) {
+    if (seen.has(l.rise)) continue;
+    seen.add(l.rise);
+    out.push(l);
+    if (out.length >= MAX_BT_SELL_LEVELS) break;
+  }
+  return out;
+}
 function normalizeDip(raw) {
-  return { enabled: !!raw?.enabled, levels: normalizeDipLevels(raw?.levels) };
+  return {
+    enabled: !!raw?.enabled,
+    levels: normalizeDipLevels(raw?.levels),
+    sellLevels: normalizeSellLevels(raw?.sellLevels),
+    reallocate: raw?.reallocate !== false,
+  };
 }
 function normalizeAnnualReview(raw) {
   const m = raw?.mode, s = raw?.split;
@@ -399,6 +420,8 @@ function backtestSettingsFingerprint(cfg) {
           s.band ?? 0, s.buyFunding ?? '', s.cashFloorPct ?? 0, s.divTaxPct ?? 0,
           s.dip?.enabled ? 1 : 0,
           asArr(s.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
+          asArr(s.dip?.sellLevels).map((l) => `${l?.rise ?? ''}`).join(','),
+          s.dip?.reallocate === false ? 0 : 1,
           s.annualReview?.mode ?? '', s.annualReview?.value ?? 0, s.annualReview?.reserve ?? 0,
           s.annualReview?.everyMonths ?? 0, s.annualReview?.split ?? ''],
       c: asArr(s.contribOverrides).map((o) => [o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
@@ -433,6 +456,8 @@ function backtestFingerprint(scenarios) {
           s?.band ?? 0, s?.buyFunding ?? '', s?.cashFloorPct ?? 0, s?.divTaxPct ?? 0,
           s?.dip?.enabled ? 1 : 0,
           asArr(s?.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
+          asArr(s?.dip?.sellLevels).map((l) => `${l?.rise ?? ''}`).join(','),
+          s?.dip?.reallocate === false ? 0 : 1,
           s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
           s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? '',
           s?.review?.rating ?? '', s?.review?.verdict ?? ''],
@@ -645,7 +670,7 @@ function runBacktest(input) {
       cumContribution: 0, cumAnnualReview: 0, finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0,
       minCash: { value: 0, date: '' }, minCashDiv: { value: 0, date: '' },
       divMonthlyAvg: 0, divMonthlyStdev: 0,
-      bandSkipCount: 0, bandSkipAmount: 0, dipEvents: [], shortfallMonths: 0 },
+      bandSkipCount: 0, bandSkipAmount: 0, signalEvents: [], shortfallMonths: 0 },
   });
   if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return empty('기간(시작일·종료일)을 선택해 주세요.');
   if (config.startDate > config.endDate) return empty('시작일이 종료일보다 늦습니다.');
@@ -775,27 +800,8 @@ function runBacktest(input) {
     }
     return s;
   };
-  const dipEvents = [];
-  const dipUnlock = new Map();
-  const dipPending = new Map();
-  const consumeDip = (assetId, used) => {
-    const idxs = dipPending.get(assetId);
-    if (idxs && idxs.length) {
-      let totalUnlocked = 0;
-      for (const i of idxs) totalUnlocked += dipEvents[i].unlocked;
-      const eff = Math.min(Math.max(0, used), totalUnlocked);
-      if (eff > 0 && totalUnlocked > 0) {
-        let left = eff;
-        idxs.forEach((i, k) => {
-          const share = k === idxs.length - 1 ? left : (eff * dipEvents[i].unlocked) / totalUnlocked;
-          left -= share;
-          dipEvents[i].used += share;
-        });
-      }
-    }
-    dipPending.delete(assetId);
-    dipUnlock.delete(assetId);
-  };
+  // 시그널 리밸런싱은 발동일 종가로 즉시 체결하므로 회차를 넘겨 들고 다니는 상태가 없다.
+  const signalEvents = [];
   const deployableCash = (date) => {
     let cap = config.buyFunding === 'tradeOnly' ? Math.max(0, cashTrade) : Math.max(0, cash);
     if (config.cashFloorPct > 0) {
@@ -965,36 +971,58 @@ function runBacktest(input) {
       );
     }
   }
-  const dipTrigByDate = new Map();
+  const sigTrigByDate = new Map();
   const dipLevels = config.dip.enabled ? normalizeDipLevels(config.dip.levels) : [];
-  if (dipLevels.length > 0) {
+  const sellLevels = config.dip.enabled ? normalizeSellLevels(config.dip.sellLevels) : [];
+  if (dipLevels.length > 0 || sellLevels.length > 0) {
     for (const p of positions) {
       const series = prices[p.asset.code];
       if (!series) continue;
       let peak = 0;
-      const fired = new Set();
+      let trough = Infinity;
+      const firedBuy = new Set();
+      const firedSell = new Set();
       for (const d of allBiz) {
         const hit = priceAt(series, d);
         if (hit.missing) continue;
         const px = hit.price;
-        if (px > peak) { peak = px; fired.clear(); continue; }
-        if (!(peak > 0)) continue;
-        const dropPct = ((peak - px) / peak) * 100;
-        for (let i = 0; i < dipLevels.length; i++) {
-          const lv = dipLevels[i];
-          if (fired.has(i)) continue;
-          if (dropPct < lv.drop) continue;
-          fired.add(i);
-          const rec = { assetId: p.asset.id, level: lv.drop, unlockPct: lv.unlockPct, peak, price: px };
-          const arr = dipTrigByDate.get(d);
-          if (arr) arr.push(rec); else dipTrigByDate.set(d, [rec]);
+        const newPeak = px > peak;
+        const newTrough = px < trough;
+        if (newPeak) { peak = px; firedBuy.clear(); }
+        if (newTrough) { trough = px; firedSell.clear(); }
+        const push = (rec) => {
+          const arr = sigTrigByDate.get(d);
+          if (arr) arr.push(rec); else sigTrigByDate.set(d, [rec]);
+        };
+        if (!newPeak && peak > 0) {
+          const dropPct = ((peak - px) / peak) * 100;
+          for (let i = 0; i < dipLevels.length; i++) {
+            const lv = dipLevels[i];
+            if (firedBuy.has(i)) continue;
+            if (dropPct < lv.drop) continue;
+            firedBuy.add(i);
+            push({ assetId: p.asset.id, kind: 'buy', step: i + 1, level: lv.drop, unlockPct: lv.unlockPct, ref: peak, price: px });
+          }
+        }
+        if (!newTrough && trough > 0 && Number.isFinite(trough)) {
+          const risePct = ((px - trough) / trough) * 100;
+          for (let i = 0; i < sellLevels.length; i++) {
+            const lv = sellLevels[i];
+            if (firedSell.has(i)) continue;
+            if (risePct < lv.rise) continue;
+            firedSell.add(i);
+            push({ assetId: p.asset.id, kind: 'sell', step: i + 1, level: lv.rise, unlockPct: 0, ref: trough, price: px });
+          }
         }
       }
     }
   }
+  if (config.dip.enabled && dipLevels.length === 0 && sellLevels.length === 0) {
+    warnings.push('시그널 리밸런싱을 켰지만 매수·매도 단계가 하나도 없어 아무 일도 일어나지 않습니다.');
+  }
 
   const steps = [];
-  for (const [d, trigs] of dipTrigByDate) steps.push({ date: d, kind: 'dip', trigs });
+  for (const [d, trigs] of sigTrigByDate) steps.push({ date: d, kind: 'signal', trigs });
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
   for (const rs of reinvestSlots) {
     if (rs.date < startBiz || rs.date > endBiz) continue;
@@ -1070,7 +1098,7 @@ function runBacktest(input) {
     if (d < startBiz || d > endBiz) { warnings.push(`이벤트 "${e.label || e.date}"의 날짜가 백테스트 기간 밖이라 무시됩니다.`); continue; }
     steps.push({ date: d, kind: 'event', event: { ...e, date: d } });
   }
-  const KIND_ORDER = { exdiv: 0, pay: 1, dip: 2, event: 3, contrib: 4, annual: 5, rebal: 6, reinvest: 7 };
+  const KIND_ORDER = { exdiv: 0, pay: 1, event: 2, contrib: 3, annual: 4, signal: 5, rebal: 6, reinvest: 7 };
   steps.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind]));
 
   const pendingDiv = new Map();
@@ -1138,17 +1166,149 @@ function runBacktest(input) {
       }
       continue;
     }
-    if (step.kind === 'dip') {
-      for (const tg of step.trigs) {
-        const p = posById.get(tg.assetId);
+    if (step.kind === 'signal') {
+      const date = step.date;
+      const liveOf = (assetId) => {
+        const p = posById.get(assetId);
+        if (!p || p.removed) return null;
+        if (date < p.effectiveStart || date > p.effectiveEnd) return null;
+        return p;
+      };
+      const pocket = Math.max(0, cashDiv);
+      const tradeOnly = config.buyFunding === 'tradeOnly';
+      const mkEvent = (t, p) => {
+        const ev = {
+          date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+          kind: t.kind, step: t.step, level: t.level, unlockPct: t.unlockPct,
+          divPocketAt: pocket, cashTradeAt: cashTrade,
+          unlocked: 0, used: 0, ref: t.ref, price: t.price,
+          tradeQty: 0, tradeAmount: 0, fromTrade: 0, reallocAmount: 0, note: '',
+        };
+        signalEvents.push(ev);
+        return ev;
+      };
+
+      for (const t of step.trigs) {
+        if (t.kind !== 'sell') continue;
+        const p = liveOf(t.assetId);
         if (!p) continue;
-        if (p.removed) continue;
-        if (step.date < p.effectiveStart || step.date > p.effectiveEnd) continue;
-        const unlocked = Math.max(0, (Math.max(0, cashDiv) * tg.unlockPct) / 100);
-        dipPending.set(tg.assetId, [...(dipPending.get(tg.assetId) ?? []), dipEvents.length]);
-        dipEvents.push({ date: step.date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-          level: tg.level, unlockPct: tg.unlockPct, unlocked, used: 0, peak: tg.peak, price: tg.price });
-        dipUnlock.set(tg.assetId, (dipUnlock.get(tg.assetId) ?? 0) + unlocked);
+        const ev = mkEvent(t, p);
+        if (!p.active || p.qty <= QTY_EPS) { ev.note = '보유 없음'; continue; }
+        const hit = priceAt(prices[p.asset.code], date);
+        if (hit.missing || hit.price <= 0) { ev.note = '종가 없음'; continue; }
+        checkRatioSum(date);
+        const target = targetOf(p, config, targetBaseAt(date));
+        if (p.qty * hit.price - target <= 0) { ev.note = '목표 이하 — 팔 것 없음'; continue; }
+        const tr = adjustTo(p, date, target, false);
+        if (!tr || tr.qty >= 0) { ev.note = '매도 수량 0(반올림)'; continue; }
+        tr.signal = 'sell';
+        pushTrade(tr);
+        ev.tradeQty = tr.qty;
+        ev.tradeAmount = Math.abs(tr.cashDelta);
+        if (tr.note) ev.note = tr.note;
+      }
+
+      const buyTrigs = step.trigs.filter((t) => t.kind === 'buy');
+      if (!buyTrigs.length) continue;
+
+      const evsByAsset = new Map();
+      const buyPos = [];
+      for (const t of buyTrigs) {
+        const p = liveOf(t.assetId);
+        if (!p) continue;
+        const ev = mkEvent(t, p);
+        const list = evsByAsset.get(p.asset.id);
+        if (list) list.push(ev);
+        else { evsByAsset.set(p.asset.id, [ev]); buyPos.push(p); }
+        if (!p.active) p.active = true;
+      }
+      if (!buyPos.length) continue;
+      for (const list of evsByAsset.values()) {
+        for (let i = 1; i < list.length; i++) {
+          list[i].note = `동시 발동 — 체결·개방은 ${list[0].step}단계 행에 합산`;
+        }
+      }
+      checkRatioSum(date);
+
+      const base = targetBaseAt(date);
+      const planOf = (p) => {
+        const hit = priceAt(prices[p.asset.code], date);
+        const target = targetOf(p, config, base);
+        return { p, hit, evalBefore: hit.missing ? 0 : p.qty * hit.price, target };
+      };
+      const buyPlans = [];
+      for (const p of buyPos) {
+        const pl = planOf(p);
+        if (pl.hit.missing || pl.hit.price <= 0) {
+          const list = evsByAsset.get(p.asset.id);
+          if (list) list[0].note = '종가 없음';
+          continue;
+        }
+        buyPlans.push(pl);
+      }
+      let needTotal = 0;
+      for (const b of buyPlans) needTotal += Math.max(0, b.target - b.evalBefore);
+
+      let realloc = 0;
+      if (needTotal > 0 && config.dip.reallocate !== false && Math.max(0, cashTrade) < needTotal) {
+        const buyIds = new Set(buyPos.map((p) => p.asset.id));
+        const donors = positions
+          .filter((p) => p.active && !p.removed && !buyIds.has(p.asset.id)
+            && date >= p.effectiveStart && date <= p.effectiveEnd && p.qty > QTY_EPS)
+          .map(planOf)
+          .filter((x) => !x.hit.missing && x.hit.price > 0 && x.evalBefore - x.target > 0)
+          .sort((a, b) => (b.evalBefore - b.target) - (a.evalBefore - a.target));
+        for (const dp of donors) {
+          if (Math.max(0, cashTrade) >= needTotal) break;
+          const tr = adjustTo(dp.p, date, dp.target, false);
+          if (!tr || tr.qty >= 0) continue;
+          tr.signal = 'realloc';
+          pushTrade(tr);
+          realloc += tr.cashDelta;
+        }
+      }
+      {
+        const first = evsByAsset.get(buyPos[0].asset.id);
+        if (first) first[0].reallocAmount = realloc;
+      }
+
+      const floorAmount = config.cashFloorPct > 0
+        ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
+        : 0;
+      for (const list of evsByAsset.values()) {
+        let sum = 0;
+        for (const ev of list) sum += (pocket * ev.unlockPct) / 100;
+        list[0].unlocked = tradeOnly ? sum : pocket;
+        for (let i = 1; i < list.length; i++) list[i].unlocked = 0;
+      }
+      const ordered = [...buyPlans].sort(
+        (x, y) => (y.target - y.evalBefore) - (x.target - x.evalBefore),
+      );
+      for (const b of ordered) {
+        const list = evsByAsset.get(b.p.asset.id);
+        if (!list) continue;
+        const carrier = list[0];
+        if (b.target - b.evalBefore <= 0) {
+          if (!carrier.note) carrier.note = '목표 이상 — 살 것 없음';
+          continue;
+        }
+        const divCap = tradeOnly ? Math.min(carrier.unlocked, Math.max(0, cashDiv)) : Infinity;
+        const budget = tradeOnly ? Math.max(0, cashTrade) + divCap : cash;
+        const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
+        const tr = adjustTo(b.p, date, b.target, false, { budget, divCap, floorCap });
+        if (!tr) {
+          if (!carrier.note) carrier.note = tradeOnly && divCap <= 0 && cashTrade <= 0 ? '재원 없음' : '매수 수량 0';
+          continue;
+        }
+        tr.signal = 'buy';
+        pushTrade(tr);
+        carrier.tradeQty += tr.qty;
+        carrier.tradeAmount += Math.abs(tr.cashDelta);
+        if (tr.qty > 0) {
+          carrier.used += lastDraw.fromDiv;
+          carrier.fromTrade += lastDraw.fromTrade;
+        }
+        if (tr.note) carrier.note = tr.note;
       }
       continue;
     }
@@ -1302,7 +1462,6 @@ function runBacktest(input) {
       if (bandPct > 0) {
         for (const pl of plans) {
           if (pl.hit.missing || pl.hit.price <= 0) continue;
-          if (dipUnlock.has(pl.p.asset.id)) continue;
           if (!(pl.target > 0)) continue;
           if (Math.abs(pl.evalBefore - pl.target) > (pl.target * bandPct) / 100) continue;
           banded.add(pl.p.asset.id);
@@ -1317,20 +1476,14 @@ function runBacktest(input) {
       const runPlan = (pl) => {
         const id = pl.p.asset.id;
         if (banded.has(id)) return;
-        const armed = dipUnlock.has(id);
-        const dipRoom = armed ? Math.min(Math.max(0, dipUnlock.get(id) ?? 0), Math.max(0, cashDiv)) : 0;
-        const budget = tradeOnly ? Math.max(0, cashTrade) + dipRoom : cash;
-        const divCap = tradeOnly ? dipRoom : Infinity;
+        const budget = tradeOnly ? Math.max(0, cashTrade) : cash;
+        const divCap = tradeOnly ? 0 : Infinity;
         const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
         const t = adjustTo(pl.p, s.rebalDate, pl.target, false, { budget, divCap, floorCap });
         if (t) pushTrade(t);
-        if (armed) consumeDip(id, t && t.qty > 0 ? lastDraw.fromDiv : 0);
       };
       for (const pl of plans.filter((x) => x.delta < 0)) runPlan(pl);
       for (const pl of plans.filter((x) => x.delta > 0)) runPlan(pl);
-      for (const pl of plans) {
-        if (dipUnlock.has(pl.p.asset.id)) consumeDip(pl.p.asset.id, 0);
-      }
     }
   }
 
@@ -1466,7 +1619,7 @@ function runBacktest(input) {
       finalCashTrade: cashTrade, finalCashDiv: cashDiv,
       maxDrawdown: maxDd, months: months.length,
       minCash, minCashDiv, divMonthlyAvg, divMonthlyStdev,
-      bandSkipCount, bandSkipAmount, dipEvents, shortfallMonths },
+      bandSkipCount, bandSkipAmount, signalEvents, shortfallMonths },
   };
 }
 
@@ -2666,42 +2819,184 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
     ok('#171 재원 제한 조합에서도 주머니 불변식 유지', pocketOk(both) && pocketOk(only));
   }
 
-  // ── C. 급락 분할투입 ──
+  // ── C. 시그널 리밸런싱(매수 = 급락 분할투입 / 매도 = 반등) ──
   {
-    // ⚠️ 매매 주머니에 여유가 있으면 개방분을 쓸 일이 없다(설계상 매매 → 개방분 순).
+    // ⚠️ 매매 주머니에 여유가 있으면 개방분을 쓸 일이 없다(설계상 매매 → 재조정 → 개방분 순).
     //    초기 투자금을 목표에 바짝 붙여 cashTrade가 마르는 상황을 만든다.
     const dipCfg = { buyFunding: 'tradeOnly', initialCapital: 50200000,
       dip: { enabled: true, levels: DEFAULT_DIP_LEVELS } };
     const D = runS(dipCfg, CRASH);
     const DOff = runS({ ...dipCfg, dip: { enabled: false, levels: DEFAULT_DIP_LEVELS } }, CRASH);
-    const ev = D.summary.dipEvents;
+    const buys = D.summary.signalEvents.filter((e) => e.kind === 'buy');
     ok('#172 ⚠️ dip 기본 enabled:false = 무영향(발동 0건)',
-      DOff.summary.dipEvents.length === 0 && runS({}, CRASH).summary.dipEvents.length === 0);
-    deep('#173 고점 대비 −10/−20/−30 3단계가 순서대로 발동한다', ev.map((e) => e.level), [10, 20, 30]);
+      DOff.summary.signalEvents.length === 0 && runS({}, CRASH).summary.signalEvents.length === 0);
+    deep('#173 고점 대비 −10/−20/−30 3단계가 순서대로 발동한다', buys.map((e) => e.level), [10, 20, 30]);
     ok('#174 발동일 종가가 실제로 그 낙폭에 도달했다',
-      ev.every((e) => ((e.peak - e.price) / e.peak) * 100 >= e.level - 1e-9));
-    ok('#175 개방액 = 발동 시점 cashDiv × unlockPct/100 (0보다 크다)', ev.every((e) => e.unlocked > 0));
-    ok('#176 실제 사용액 ≤ 개방액', ev.every((e) => e.used <= e.unlocked + 1e-6));
+      buys.every((e) => ((e.ref - e.price) / e.ref) * 100 >= e.level - 1e-9));
+    ok('#175 개방액 = 발동 시점 cashDiv × unlockPct/100 (0보다 크다)', buys.every((e) => e.unlocked > 0));
+    ok('#176 실제 사용액 ≤ 개방액', buys.every((e) => e.used <= e.unlocked + 1e-6));
     ok('#177 개방분이 실제로 매수에 쓰였다(tradeOnly인데도 cashDiv가 줄었다)',
-      ev.some((e) => e.used > 0) && D.months.some((m) => m.cashUsedDiv > 0));
+      buys.some((e) => e.used > 0) && D.months.some((m) => m.cashUsedDiv > 0));
     // ⚠️ 목표 금액이 고정이라 finalEval은 dip 유무와 무관하게 목표로 수렴한다 —
     //    바닥에서 더 산 몫은 회복 구간에 되팔려 **총자산**으로 나타난다.
     ok('#178 dip이 실제로 결과를 바꾼다(바닥 매수 → 총자산 증가)',
       D.summary.finalTotal > DOff.summary.finalTotal);
     // ⚠️ 고점 갱신 전에는 단계당 1회. 새 고점이 서면 재무장(같은 단계가 다시 발동).
     ok('#179 ⚠️ 고점 갱신 전에는 같은 단계가 두 번 발동하지 않는다',
-      runS({ ...dipCfg, dip: { enabled: true, levels: [{ drop: 10, unlockPct: 50 }] } }, CRASH).summary.dipEvents.length === 1);
+      runS({ ...dipCfg, dip: { enabled: true, levels: [{ drop: 10, unlockPct: 50 }] } }, CRASH).summary.signalEvents.length === 1);
     {
       // 고점10000 → −15% → 신고가12000 → −12.5% : −10% 단계가 재무장돼 두 번 발동해야 한다.
       const REARM = mkSeries((i) => (i < 30 ? 10000 : i < 60 ? 8500 : i < 90 ? 12000 : 10500));
       ok('#180 ⚠️ 새 고점이 서면 전 단계가 재무장돼 다시 발동한다',
-        runS({ ...dipCfg, dip: { enabled: true, levels: [{ drop: 10, unlockPct: 50 }] } }, REARM).summary.dipEvents.length === 2);
+        runS({ ...dipCfg, dip: { enabled: true, levels: [{ drop: 10, unlockPct: 50 }] } }, REARM).summary.signalEvents.length === 2);
     }
-    // ⚠️ 급락 시에는 밴드로 매수를 막지 않는다.
-    ok('#181 ⚠️ 급락 발동 종목은 band=100이어도 매수를 강행한다(밴드 면제)',
+    // ⚠️ 밴드는 **정기 리밸런싱 전용**이라 시그널 매매를 막지 못한다(시그널은 자기 발동일에 체결된다).
+    ok('#181 ⚠️ band=100이어도 시그널 매수는 그대로 체결된다(밴드는 정기 리밸런싱 전용)',
       nTrades(runS({ ...dipCfg, band: 100 }, CRASH)) > 0
         && nTrades(runS({ ...dipCfg, band: 100, dip: { enabled: false, levels: DEFAULT_DIP_LEVELS } }, CRASH)) === 0);
     ok('#182 dip 조합에서도 주머니 불변식 유지', pocketOk(D));
+
+    /* ── C-2. 시그널 당일 실행 (2026-08 전환) ────────────────────────────────
+     * 옛 설계는 개방만 하고 **다음 정기 리밸런싱**에서 매수했다 — policy:'none'이면 그 회차가
+     * 영영 오지 않아 "개방 ₩0 → 사용 ₩0"만 찍히고 기능이 통째로 죽었다(사용자 보고).
+     * ===================================================================== */
+    ok('#300 ⚠️ 체결일 = 발동일 (그날 종가로 즉시 매매한다)', (() => {
+      const trades = D.months.flatMap((m) => m.trades).filter((t) => t.signal === 'buy');
+      if (!trades.length) return false;
+      const evDates = new Set(buys.map((e) => e.date));
+      return trades.every((t) => evDates.has(t.date))
+        && buys.filter((e) => e.tradeQty > 0).every((e) => e.price > 0);
+    })());
+    ok('#301 ⚠️ policy:"none"(리밸런싱 안 함)에서도 시그널이 실제로 매수한다', (() => {
+      const r = runS({ ...dipCfg, policy: 'none' }, CRASH);
+      return r.summary.signalEvents.some((e) => e.kind === 'buy' && e.tradeQty > 0)
+        && r.months.flatMap((m) => m.trades).some((t) => t.signal === 'buy')
+        && pocketOk(r);
+    })());
+    ok('#302 ⚠️ 분배락 전 리밸런싱과 시그널을 **동시에** 켤 수 있다(둘 다 체결된다)', (() => {
+      const r = runS({ ...dipCfg, policy: 'allEom' }, CRASH);
+      const ts = r.months.flatMap((m) => m.trades);
+      return ts.some((t) => t.signal === 'buy') && ts.some((t) => !t.signal && !t.structural && !t.reinvest);
+    })());
+    ok('#303 ⚠️ 시그널 매매는 tradeNet에 들어간다(structural·reinvest로 새지 않는다)', (() => {
+      const ts = D.months.flatMap((m) => m.trades).filter((t) => t.signal);
+      return ts.length > 0 && ts.every((t) => !t.structural && !t.reinvest);
+    })());
+    ok('#304 ⚠️ 시그널 조합에서도 기말 예수금 분해 항등식이 성립한다', (() => {
+      const s = D.summary;
+      const lhs = s.finalCash;
+      const rhs = D.initialCashAfter + s.cumTradeNet + s.cumStructuralNet + s.cumReinvestNet + s.cumDivPaid;
+      return Math.abs(lhs - rhs) < 1e-6;
+    })());
+
+    /* ── C-3. 매도 시그널 (가격 저점 대비 +N% 반등) ── */
+    {
+      // 저점 8000 → +25% 반등(10000) → 다시 하락. +10%/+20% 두 단계가 순서대로 발동한다.
+      const REB = mkSeries((i) => (i < 30 ? 12000 : i < 60 ? 8000 : i < 90 ? 8000 + (i - 60) * 80 : 9000));
+      const sellCfg = {
+        initialCapital: 100000000,
+        assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 30000000 }],
+        dip: { enabled: true, levels: DEFAULT_DIP_LEVELS, sellLevels: [{ rise: 10 }, { rise: 20 }] },
+      };
+      const S = runS(sellCfg, REB);
+      const sells = S.summary.signalEvents.filter((e) => e.kind === 'sell');
+      ok('#305 ⚠️ 매도 시그널 기본값은 빈 배열 = 무영향(레거시 결과 불변)', (() => {
+        const off = runS({ ...sellCfg, dip: { enabled: true, levels: DEFAULT_DIP_LEVELS } }, REB);
+        return off.summary.signalEvents.every((e) => e.kind === 'buy')
+          && makeBtConfig({}).dip.sellLevels.length === 0;
+      })());
+      deep('#306 저점 대비 +10/+20% 두 단계가 순서대로 발동한다', sells.map((e) => e.level), [10, 20]);
+      ok('#307 발동일 종가가 실제로 그 상승률에 도달했다(기준 = 가격 저점)',
+        sells.every((e) => ((e.price - e.ref) / e.ref) * 100 >= e.level - 1e-9));
+      ok('#308 ⚠️ 매도 시그널은 목표를 넘는 만큼만 판다(매수로 뒤집히지 않는다)', (() => {
+        const ts = S.months.flatMap((m) => m.trades).filter((t) => t.signal === 'sell');
+        return ts.length > 0 && ts.every((t) => t.qty < 0 && t.evalBefore > t.target - 1e-6);
+      })());
+      // ⚠️ 이 케이스가 없으면 '매도 시그널이 매수로 뒤집히지 않는다'는 가드가 **도달 불가**가 되어
+      //    지워도 통과하는 죽은 단언이 된다(변이 테스트로 실측). 목표에 한참 못 미치는 보유 상태를
+      //    만들어(초기 자본 < 목표) 반등 시그널이 매수 방향으로 계산되게 한 뒤, 매매가 0건임을 본다.
+      ok('#308b ⚠️ 목표 미달 보유에서 반등 시그널이 떠도 **매수하지 않는다**(매도 전용)', (() => {
+        const r = runS({
+          ...sellCfg, policy: 'none', initialCapital: 10000000,
+          assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 30000000 }],
+        }, REB);
+        const sellEv = r.summary.signalEvents.filter((e) => e.kind === 'sell');
+        return sellEv.length > 0
+          && sellEv.every((e) => e.tradeQty === 0)
+          && r.months.flatMap((m) => m.trades).every((t) => t.signal !== 'sell');
+      })());
+      ok('#309 ⚠️ 매도 대금은 **매매 주머니**로 간다(분배금 주머니를 늘리지 않는다)', (() => {
+        const ts = S.months.flatMap((m) => m.trades).filter((t) => t.signal === 'sell');
+        return ts.length > 0 && pocketOk(S)
+          && S.summary.finalCashDiv <= S.summary.cumDivPaid + 1e-6;
+      })());
+      ok('#310 ⚠️ 새 저점이 서면 매도 전 단계가 재무장된다', (() => {
+        // 저점8000 → +12.5%(9000) → 새 저점 7000 → +14.3%(8000): +10% 단계가 두 번 발동.
+        const RE2 = mkSeries((i) => (i < 30 ? 8000 : i < 60 ? 9000 : i < 90 ? 7000 : 8000));
+        const r = runS({ ...sellCfg, dip: { enabled: true, levels: DEFAULT_DIP_LEVELS, sellLevels: [{ rise: 10 }] } }, RE2);
+        return r.summary.signalEvents.filter((e) => e.kind === 'sell').length === 2;
+      })());
+      ok('#311 ⚠️ 보유가 없으면 매도 시그널은 아무 일도 하지 않는다(빈 이벤트로 기록만)', (() => {
+        const r = runS({
+          ...sellCfg,
+          assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 0 }],
+        }, REB);
+        const ts = r.months.flatMap((m) => m.trades).filter((t) => t.signal === 'sell');
+        return ts.length === 0 && pocketOk(r);
+      })());
+      ok('#312 ⚠️ 매도 시그널 단계 정규화 — 오름차순 + 중복 제거 + 범위 밖 제외 + 빈 배열 유지', (() => {
+        const c = makeBtConfig({ dip: { enabled: true, sellLevels: [{ rise: 20 }, { rise: 10 }, { rise: 20 }, { rise: 0 }, { rise: -5 }] } });
+        return JSON.stringify(c.dip.sellLevels) === JSON.stringify([{ rise: 10 }, { rise: 20 }])
+          && makeBtConfig({ dip: { enabled: true, sellLevels: [{ rise: 0 }] } }).dip.sellLevels.length === 0;
+      })());
+    }
+
+    /* ── C-4. 재원 조달 3단계 (매매 주머니 → 재조정 → 분배금 개방) ── */
+    {
+      // A는 급락, B는 급등 — A를 채우려면 목표를 초과한 B를 팔아야 한다.
+      const SC2 = 'BBB';
+      const DOWN = mkSeries((i) => (i < 40 ? 10000 : 6000));
+      const UP = mkSeries((i) => (i < 40 ? 10000 : 20000));
+      const cfg2 = makeBtConfig({
+        id: 's', name: '재조정', startDate: '2026-01-02', endDate: '2026-12-31',
+        initialCapital: 40000000, targetMode: 'amount', rounding: 'floor', policy: 'none',
+        buyFunding: 'tradeOnly',
+        assets: [
+          { id: 'a1', code: SC, name: 'A', payCycle: 'eom', targetAmount: 20000000 },
+          { id: 'a2', code: SC2, name: 'B', payCycle: 'eom', targetAmount: 20000000 },
+        ],
+        dip: { enabled: true, levels: [{ drop: 20, unlockPct: 50 }] },
+      });
+      const run2 = (over) => runBacktest({
+        config: { ...cfg2, ...(over || {}) },
+        prices: { [SC]: DOWN, [SC2]: UP }, dividends: {}, holidays: KR26,
+      });
+      const R = run2();
+      ok('#313 ⚠️ 예수금이 모자라면 목표 초과 종목을 팔아 재원을 만든다(재조정)', (() => {
+        const ts = R.months.flatMap((m) => m.trades);
+        const re = ts.filter((t) => t.signal === 'realloc');
+        return re.length > 0 && re.every((t) => t.qty < 0 && t.code === SC2)
+          && ts.some((t) => t.signal === 'buy' && t.code === SC && t.qty > 0);
+      })());
+      ok('#314 ⚠️ reallocate:false면 재조정하지 않는다(기본값은 true)', (() => {
+        const off = run2({ dip: { ...cfg2.dip, reallocate: false } });
+        return off.months.flatMap((m) => m.trades).every((t) => t.signal !== 'realloc')
+          && cfg2.dip.reallocate === true;
+      })());
+      ok('#315 ⚠️ 재조정 매도는 목표까지만 판다(목표 아래로 팔지 않는다)', (() => {
+        const re = R.months.flatMap((m) => m.trades).filter((t) => t.signal === 'realloc');
+        return re.every((t) => t.evalAfter >= t.target - t.price - 1e-6);
+      })());
+      ok('#316 ⚠️ 재조정 총액이 그날 첫 매수 이벤트에 기록된다', (() => {
+        const ev = R.summary.signalEvents.filter((e) => e.kind === 'buy');
+        return ev.some((e) => e.reallocAmount > 0);
+      })());
+      ok('#317 ⚠️ 재조정 조합에서도 주머니 불변식·기말 분해 항등식이 성립한다', (() => {
+        const s = R.summary;
+        return pocketOk(R)
+          && Math.abs(s.finalCash - (R.initialCashAfter + s.cumTradeNet + s.cumStructuralNet + s.cumReinvestNet + s.cumDivPaid)) < 1e-6;
+      })());
+    }
   }
 
   // ── D. 현금 바닥선 ──
@@ -2902,12 +3197,12 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
   // ── 적대적 리뷰 확정 결함 회귀 (#250~#256) ──
   // ⚠️ 아래 4건은 리뷰어 3명 중 2명 이상이 **독립적으로** 지목한 확정 결함이다. 되돌리면 재발한다.
   {
-    // (A) delta가 정확히 0인 회차에서 급락 개방이 만료되지 않아 다음 회차까지 살아남던 결함.
-    //     두 매도/매수 필터 어디에도 안 들어가 consumeDip이 호출되지 않았다.
-    //     재현: 목표에 이미 맞아떨어진 상태 + 종가 이월 → delta === 0.
+    // (A) 옛 설계에서는 급락 '개방'이 다음 정기 리밸런싱까지 살아남아, 그 회차의 밴드 면제까지
+    //     끌고 갔다(delta===0 회차는 만료 루프가 없어 그 다음 회차로도 샜다). 2026-08 전환으로
+    //     시그널이 **자기 발동일에 체결**되면서 그 수명 모델 자체가 사라졌다 — 대신 "시그널이
+    //     정기 리밸런싱 쪽으로 새지 않는다"를 단언한다(밴드가 정기 매매를 여전히 전부 막아야 한다).
     //     ⚠️ 가격이 완전히 고정이면 delta가 늘 0이라 **밴드가 생략할 매매 자체가 없어**
-    //        이 결함이 드러나지 않는다(bandSkipCount는 반올림 수량 0인 건을 세지 않는다).
-    //        급락일 → 목표에 정확히 맞는 회차(delta 0) → 값이 움직이는 회차 순서가 필요하다.
+    //        이 계약이 드러나지 않는다(bandSkipCount는 반올림 수량 0인 건을 세지 않는다).
     const DIPD = mkSeries((i, d) => (d === '2026-06-02' ? 7000 : d <= '2026-06-26' ? 10000 : 10250));
     const cfgD = {
       initialCapital: 50000000, band: 100, buyFunding: 'tradeOnly', policy: 'allEom',
@@ -2915,13 +3210,13 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
       dip: { enabled: true, levels: [{ drop: 20, unlockPct: 100 }] },
     };
     const rD = runS(cfgD, DIPD);
-    ok('#250 ⚠️ delta===0 회차에서도 급락 개방이 만료된다(밴드 면제가 다음 회차로 새지 않는다)',
-      // 밴드 100%라 정상이면 정기 매매가 한 건도 없어야 한다. 개방이 살아남으면 밴드 면제가
-      // 다음 회차까지 이어져 매매가 실행되고 bandSkipCount가 줄어든다.
-      rD.months.reduce((s2, m) => s2 + m.trades.filter((t) => !t.structural && !t.reinvest).length, 0) === 0
+    ok('#250 ⚠️ 시그널은 자기 발동일에만 체결되고 정기 리밸런싱으로 새지 않는다(밴드가 정기 매매를 전부 막는다)',
+      rD.months.reduce(
+        (s2, m) => s2 + m.trades.filter((t) => !t.structural && !t.reinvest && !t.signal).length, 0,
+      ) === 0
         && rD.summary.bandSkipCount > 0);
-    ok('#250b ⚠️ 개방 만료는 멱등이다(같은 종목을 두 번 소진해도 사용액이 중복 가산되지 않는다)',
-      rD.summary.dipEvents.every((e) => e.used <= e.unlocked + 1e-6));
+    ok('#250b ⚠️ 사용액은 개방액을 넘지 않는다(종목별 한도라 여러 종목이 서로의 몫을 뺏지 않는다)',
+      rD.summary.signalEvents.every((e) => e.used <= e.unlocked + 1e-6));
 
     // (B) 증액 상한이 총 cash라 tradeOnly·바닥선에서 무력화되던 결함 —
     //     쓸 수 없는 돈까지 목표에 얹혀 매달 복리로 부풀었다.
@@ -2975,18 +3270,18 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
       const dupLv = [{ drop: 20, unlockPct: 33 }, { drop: 20, unlockPct: 33 }, { drop: 30, unlockPct: 33 }];
       const raw = rawDipRun(dupLv);
       const norm = rawDipRun(normalizeDipLevels(dupLv));
-      return raw.summary.dipEvents.filter((e) => e.level === 20).length === 1
-        && JSON.stringify(raw.summary.dipEvents) === JSON.stringify(norm.summary.dipEvents)
+      return raw.summary.signalEvents.filter((e) => e.level === 20).length === 1
+        && JSON.stringify(raw.summary.signalEvents) === JSON.stringify(norm.summary.signalEvents)
         && raw.summary.finalTotal === norm.summary.finalTotal;
     })());
     ok('#255 ⚠️ 정렬되지 않은 단계 목록도 낙폭 오름차순으로 발동한다(역시 정규화 없는 주입 경로)',
       JSON.stringify(
         rawDipRun([{ drop: 30, unlockPct: 33 }, { drop: 10, unlockPct: 34 }, { drop: 20, unlockPct: 33 }])
-          .summary.dipEvents.map((e) => e.level),
+          .summary.signalEvents.map((e) => e.level),
       ) === JSON.stringify([10, 20, 30]));
     ok('#255b ⚠️ 상한을 넘는 단계 목록도 런타임에서 잘린다(정규화 없는 주입)',
       rawDipRun([1, 2, 3, 4, 5, 6, 7].map((k) => ({ drop: k * 3, unlockPct: 10 })))
-        .summary.dipEvents.length <= MAX_BT_DIP_LEVELS);
+        .summary.signalEvents.length <= MAX_BT_DIP_LEVELS);
 
     // (D) 화면이 '아직 미지급'을 accrued − paid 로 구하면 **세금까지 미지급으로** 표시된다.
     ok('#256 ⚠️ 세전 누계 = 세후 입금 + 세금 + 미지급 (accrued − paid 를 세금으로 읽지 말 것)', (() => {
@@ -3299,7 +3594,7 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   // ⚠️ KIND_ORDER는 보조 규칙 도입으로 **번호가 밀렸다**(dip·annual 삽입). 리터럴을 그대로 박으면
   //    스텝이 하나 늘 때마다 이 가드가 죽으므로, **계약 자체**(상대 순서)를 파싱해서 단언한다.
   //    계약: 기존 5종의 상대 순서 보존 + reinvest가 유일한 최댓값 + contrib < annual < rebal.
-  ok('#140 ⚠️ KIND_ORDER — 재투자가 맨 뒤 · contrib < annual < rebal · dip은 pay 뒤/rebal 앞', (() => {
+  ok('#140 ⚠️ KIND_ORDER — 재투자가 맨 뒤 · contrib < annual < rebal · signal은 annual 뒤/rebal 앞', (() => {
     const m = bt2.match(/const KIND_ORDER[^=]*=\s*\{([^}]*)\}/);
     if (!m) return false;
     const o = {};
@@ -3308,12 +3603,14 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       if (kv.length !== 2) continue;
       o[kv[0].trim()] = Number(kv[1].trim());
     }
-    const need = ['exdiv', 'pay', 'dip', 'event', 'contrib', 'annual', 'rebal', 'reinvest'];
+    const need = ['exdiv', 'pay', 'signal', 'event', 'contrib', 'annual', 'rebal', 'reinvest'];
     if (need.some((k) => !Number.isFinite(o[k]))) return false;
     return o.exdiv < o.pay && o.pay < o.event && o.event < o.contrib && o.contrib < o.rebal
       && o.reinvest === Math.max(...Object.values(o))
       && Object.values(o).filter((v) => v === o.reinvest).length === 1
-      && o.pay < o.dip && o.dip < o.rebal
+      // ⚠️ signal은 pay 뒤(그날 받은 분배금까지 개방 밑변) · event 뒤(재편 결과 위에서 실행)
+      //    · contrib/annual 뒤(올린 목표를 반영) · rebal 앞(정기 회차가 자연히 no-op이 되게).
+      && o.pay < o.signal && o.event < o.signal && o.annual < o.signal && o.signal < o.rebal
       && o.contrib < o.annual && o.annual < o.rebal;
   })());
 
@@ -3346,16 +3643,36 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /adjustTo\(p, e\.date, targetOf\(p, config, base\), true\)/.test(bt2)
       && /adjustTo\(p, e\.date, 0, true\)/.test(bt2)
       && /adjustTo\(p, startBiz, targetOf\(p, config, base\), false\)/.test(bt2));
-  ok('#232 ⚠️ 급락은 가격 고점 기준이고 새 고점이 서면 전 단계를 재무장한다',
-    /if \(px > peak\) \{ peak = px; fired\.clear\(\); continue; \}/.test(bt2)
-      && /const dropPct = \(\(peak - px\) \/ peak\) \* 100;/.test(bt2));
-  // ⚠️ 두 번째 조건이 핵심이다 — runPlan은 `delta !== 0`인 plan에만 불리므로, 목표에 이미
-  //    맞아떨어진 회차(delta===0)를 훑는 **마무리 만료 루프**가 없으면 개방과 밴드 면제가
-  //    다음 회차까지 살아남는다(적대적 리뷰 확정 결함, 미러 회귀 #250).
-  ok('#233 ⚠️ 급락 개방은 그 회차 리밸런싱 1회 한정이다(delta===0 회차도 반드시 만료)',
-    /if \(armed\) consumeDip\(id, t && t\.qty > 0 \? lastDraw\.fromDiv : 0\);/.test(bt2)
-      && /for \(const pl of plans\) \{\s*if \(dipUnlock\.has\(pl\.p\.asset\.id\)\) consumeDip\(pl\.p\.asset\.id, 0\);\s*\}/.test(bt2)
-      && /dipUnlock\.delete\(assetId\);/.test(bt2));
+  // ⚠️ 매수는 **가격 고점** 대비 낙폭, 매도는 **가격 저점** 대비 상승률이고 극값이 갱신되면
+  //    그쪽 단계만 재무장한다. 두 판정이 서로 독립이어야(newPeak/newTrough 각각) 신고가일의
+  //    매도·신저가일의 매수가 정상 발동한다 — 옛 코드의 `continue`(하루를 통째로 건너뜀)로
+  //    되돌리면 매도 시그널이 **가장 크게 오른 날**에 발동하지 못한다.
+  ok('#232 ⚠️ 매수=가격 고점 / 매도=가격 저점 기준이고 극값이 갱신되면 그쪽 단계를 재무장한다',
+    /if \(newPeak\) \{ peak = px; firedBuy\.clear\(\); \}/.test(bt2)
+      && /if \(newTrough\) \{ trough = px; firedSell\.clear\(\); \}/.test(bt2)
+      && /const dropPct = \(\(peak - px\) \/ peak\) \* 100;/.test(bt2)
+      && /const risePct = \(\(px - trough\) \/ trough\) \* 100;/.test(bt2)
+      && !/fired\.clear\(\); continue;/.test(bt2));
+  // ⚠️ 2026-08 전환: 시그널은 **발동일 종가로 즉시 체결**한다. 옛 설계(개방만 하고 다음 정기
+  //    리밸런싱에서 매수)로 되돌리면 `policy:'none'`에서 쓸 회차가 영영 오지 않아 기능이
+  //    통째로 죽는다(사용자 보고: "개방 ₩0 → 사용 ₩0"). 미러 회귀 #300·#301.
+  ok('#233 ⚠️ 시그널은 발동일에 즉시 체결한다(개방 상태를 다음 회차로 들고 가지 않는다)',
+    /if \(step\.kind === 'signal'\) \{/.test(bt2)
+      && /tr\.signal = 'buy';/.test(bt2) && /tr\.signal = 'sell';/.test(bt2)
+      && /tr\.signal = 'realloc';/.test(bt2)
+      // 옛 수명 모델의 흔적이 하나도 남아 있으면 안 된다
+      && !/dipUnlock/.test(bt2) && !/dipPending/.test(bt2) && !/consumeDip/.test(bt2)
+      // 정기 리밸런싱은 더 이상 급락 개방을 참조하지 않는다(tradeOnly면 평시 분배금은 잠김)
+      && /const divCap = tradeOnly \? 0 : Infinity;/.test(bt2));
+  ok('#233b ⚠️ 매수 재원은 매매 주머니 → 재조정 → 분배금 개방 3단계다(재조정 기본 ON)',
+    /config\.dip\.reallocate !== false/.test(bt2)
+      && /tr\.signal = 'realloc'/.test(bt2)
+      && /const divCap = tradeOnly \? Math\.min\(carrier\.unlocked, Math\.max\(0, cashDiv\)\) : Infinity;/.test(bt2)
+      && /const budget = tradeOnly \? Math\.max\(0, cashTrade\) \+ divCap : cash;/.test(bt2));
+  ok('#233c ⚠️ 시그널 사전탐지도 정규화한 단계 목록으로 돈다(매도 단계 포함)',
+    /const sellLevels = config\.dip\.enabled \? normalizeSellLevels\(config\.dip\.sellLevels\) : \[\];/.test(bt2)
+      && /for \(let i = 0; i < sellLevels\.length; i\+\+\)/.test(bt2)
+      && !/config\.dip\.sellLevels\[i\]/.test(bt2));
   // ── 화면(BacktestPage) 렌더 계약 ──
   // ⚠️ 아래는 미러(순수 함수)로 표현할 수 없는 **렌더 계약**이라 소스 텍스트로 단언한다.
   ok('#241 ⚠️ 비교 표의 지표 열 수 = 실행 불가 행의 colSpan (열을 더하고 colSpan을 안 고치면 정렬이 깨진다)', (() => {
@@ -3433,6 +3750,27 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   ok('#258 ⚠️ 화면의 "아직 미지급"은 세금을 빼고 구한다(cumDivAccrued − cumDivPaid − cumDivTax)',
     /const divPending = s\.cumDivAccrued - s\.cumDivPaid - numOf\(s\.cumDivTax\);/.test(page));
   // ⚠️ 정규화가 중복 낙폭 행을 지운 뒤 되돌릴 UI가 없으면 그 단계가 영구히 사라진다.
+  // ⚠️ 옛 화면은 `개방 ₩0 → 사용 ₩0` 한 줄이라 **왜 0인지** 알 수 없었다(사용자 보고).
+  //    밑변(그 시점 적립 분배금)·비율·재원 내역·체결 결과를 문장으로 남기는 것이 계약이고,
+  //    그 문장은 화면과 CSV가 **같은 함수**를 써야 갈리지 않는다.
+  ok('#259b ⚠️ 시그널 ‘개방’은 계산식(밑변 × 비율 = 금액)으로 표시하고 화면·CSV가 같은 함수를 쓴다',
+    /const sigUnlockText = \(e, cfg\) =>/.test(page)
+      && /적립 분배금 \$\{won\(e\.divPocketAt\)\} × \$\{formatNumber\(e\.unlockPct\)\}% = \$\{won\(e\.unlocked\)\} 개방/.test(page)
+      && /const sigOutcomeText = \(e, cfg\) =>/.test(page)
+      && /const sigLabel = \(e\) =>/.test(page)
+      // 화면(월별 블록)과 CSV가 같은 포매터를 호출한다
+      && (page.match(/sigOutcomeText\(/g) || []).length >= 3
+      && /sigOutcomeText\(e, cfgNow\)/.test(page)
+      // 미체결 사유를 그대로 보여 준다 — '왜 0원인가'가 옛 화면의 결함이었다
+      && /return e\.note \|\| '체결 없음';/.test(page));
+  ok('#259c ⚠️ 매도 시그널 단계 UI가 있고 기본값(빈 배열)을 안내한다 · 재조정 토글이 있다',
+    /매도 단계 추가 \(\{dipOf\(active\)\.sellLevels\.length\}\/\{MAX_BT_SELL_LEVELS\}\)/.test(page)
+      && /title="이 매도 단계 삭제"/.test(page)
+      && /sellLevels: dipOf\(active\)\.sellLevels\.filter/.test(page)
+      && /reallocate: e\.target\.checked/.test(page)
+      // 안전 접근자가 sellLevels·reallocate까지 채운다(레거시 config에서 TypeError 방지)
+      && /sellLevels: \(d && Array\.isArray\(d\.sellLevels\)\) \? d\.sellLevels : \[\]/.test(page)
+      && /reallocate: !d \|\| d\.reallocate !== false/.test(page));
   ok('#259 ⚠️ 급락 단계는 행 추가·삭제가 가능하고 중복 낙폭을 입력 즉시 경고한다',
     /title="이 단계 삭제"/.test(page)
       && /단계 추가 \(\{dipOf\(active\)\.levels\.length\}\/\{MAX_BT_DIP_LEVELS\}\)/.test(page)
