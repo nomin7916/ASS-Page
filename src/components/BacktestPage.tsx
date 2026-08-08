@@ -257,10 +257,31 @@ const popStyle = (pos) => ({
   maxHeight: pos.maxH, overflowY: 'auto',
 });
 
+/**
+ * 팝오버 지연 닫기 유예(ms).
+ *
+ * 팝오버는 앵커의 **형제**라 마우스를 팝오버로 옮기는 순간 앵커의 onMouseLeave가 뜬다 —
+ * 그래서 옛 코드에서는 팝오버 위로 갈 수가 없었고, 아래 '[data-bt-pop]' 스크롤 예외는
+ * 마우스 경로에서 死코드였다(내용이 maxH를 넘으면 읽을 방법이 아예 없었다).
+ *
+ * ⚠️ 아래 4가지가 **한 세트**다 — 하나라도 빠지면 팝오버가 고착되거나 스스로 닫힌다:
+ *    ① open()이 대기 중인 타이머를 **먼저 취소**(앵커를 잠깐 벗어났다 되돌아오면 예약된
+ *       타이머가 그대로 발화해 '호버 중인데 닫힌 채'로 남는다 — 카드 간격이 8px이라 흔하다)
+ *    ② 팝오버 onMouseEnter → cancel  ③ 팝오버 onMouseLeave → close(재예약)
+ *       (③이 빠지면 z-1200 패널이 화면에 영구 고착돼 아래 표의 클릭을 삼킨다)
+ *    ④ scroll/resize·blur·Hint 클릭·언마운트는 closeNow(즉시) — 유예를 두면 잔상이 겹친다
+ */
+const POP_GRACE_MS = 140;
+
 function useHoverPop(width = 320) {
   const ref = useRef(null);
   const [pos, setPos] = useState(null);
+  const timerRef = useRef(null);
+  const cancel = useCallback(() => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+  }, []);
   const open = useCallback(() => {
+    cancel();
     const el = ref.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
@@ -274,8 +295,14 @@ function useHoverPop(width = 320) {
     setPos(placeBelow
       ? { left, w, top: r.bottom + 6, maxH }
       : { left, w, bottom: window.innerHeight - r.top + 6, maxH });
-  }, [width]);
-  const close = useCallback(() => setPos(null), []);
+  }, [width, cancel]);
+  const closeNow = useCallback(() => { cancel(); setPos(null); }, [cancel]);
+  const close = useCallback(() => {
+    cancel();
+    timerRef.current = setTimeout(() => { timerRef.current = null; setPos(null); }, POP_GRACE_MS);
+  }, [cancel]);
+  // ⚠️ 언마운트 시 대기 타이머 정리 — 남으면 사라진 컴포넌트에 setState가 걸린다.
+  useEffect(() => cancel, [cancel]);
   useEffect(() => {
     if (!pos) return;
     // ⚠️ 팝오버 **내부** 스크롤로는 닫지 않는다 — 상한이 걸린 긴 설명은 안에서 스크롤해야
@@ -283,13 +310,13 @@ function useHoverPop(width = 320) {
     const off = (e) => {
       const t = e?.target;
       if (t && t.nodeType === 1 && typeof t.closest === 'function' && t.closest('[data-bt-pop]')) return;
-      setPos(null);
+      closeNow();
     };
     window.addEventListener('scroll', off, true);
     window.addEventListener('resize', off);
     return () => { window.removeEventListener('scroll', off, true); window.removeEventListener('resize', off); };
-  }, [pos]);
-  return { ref, pos, open, close };
+  }, [pos, closeNow]);
+  return { ref, pos, open, close, closeNow, cancel };
 }
 
 /**
@@ -298,7 +325,7 @@ function useHoverPop(width = 320) {
  *    Section 헤더는 div + 내부 토글 버튼 구조여야 한다.
  */
 function Hint({ children, width = 340, className = '', label = '설명 보기' }) {
-  const { ref, pos, open, close } = useHoverPop(width);
+  const { ref, pos, open, close, closeNow, cancel } = useHoverPop(width);
   return (
     <>
       {/* ⚠️ 네이티브 title은 달지 않는다 — 1초 뒤 뜨는 브라우저 툴팁이 이 팝오버 위에 겹친다. */}
@@ -310,14 +337,14 @@ function Hint({ children, width = 340, className = '', label = '설명 보기' }
         onMouseEnter={open}
         onMouseLeave={close}
         onFocus={open}
-        onBlur={close}
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (pos) close(); else open(); }}
+        onBlur={closeNow}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (pos) closeNow(); else open(); }}
       >
         <HelpCircle size={13} />
       </button>
       {pos && (
         <div role="tooltip" data-bt-pop className={`${POP_CLS} text-[12px] text-gray-300`}
-          style={popStyle(pos)}>
+          style={popStyle(pos)} onMouseEnter={cancel} onMouseLeave={close}>
           {children}
         </div>
       )}
@@ -506,20 +533,37 @@ function Swatch({ color, shape = 'dot', className = '' }) {
 }
 
 /**
+ * 팝오버 id 채번 — 앵커의 aria-describedby와 잇는 용도라 **유일하기만** 하면 된다.
+ * ⚠️ React.useId를 쓰지 않는다: node_modules가 없어 이 저장소의 React 버전에서 그 API가
+ *    실재하는지 확인할 수단이 없다(lucide 아이콘과 같은 근거 — undefined면 렌더가 죽는다).
+ */
+let popSeq = 0;
+
+/**
  * 요약 카드 한 장 — 호버하면 '무엇과 무엇을 더한 값인가'를 계산식 + 실제 값으로 보여 준다.
  * ⚠️ 팝오버는 position:fixed라 그리드 흐름에서 빠진다(그리드 칸을 하나 더 만들지 않는다).
+ * ⚠️ `popRender(w)`는 2열 계산식 표로 감당이 안 되는 카드(시그널 체결)를 위한 탈출구다 —
+ *    **측정된 실제 팝오버 폭**을 받아 자기 레이아웃을 정한다. 이 분기가 없으면 긴 문장을
+ *    2열 표의 nowrap 값 셀에 넣게 되고, 그 열이 고유폭을 전부 요구해 라벨 열이 최소폭으로
+ *    압축된다 → 한글이 **글자 하나당 한 줄**로 무너진다(2026-08 사용자 보고).
+ * ⚠️ popRender를 쓰는 카드는 formula를 넘기지 않는다 → `(formula || [])` 방어 필수.
+ *    @ts-nocheck + esbuild라 컴파일러가 못 막고, 팝오버는 `{pos && …}` 안이라 호버하기
+ *    전까지 아무 게이트에도 걸리지 않은 채 **호버 순간 화면 전체가 오류 페이지**가 된다.
  */
-function SummaryCard({ label, value, cls, formula, note, compact }) {
-  const { ref, pos, open, close } = useHoverPop(380);
+function SummaryCard({ label, value, cls, formula, note, compact, popWidth = 380, popRender }) {
+  const { ref, pos, open, close, closeNow, cancel } = useHoverPop(popWidth);
+  const idRef = useRef(null);
+  if (idRef.current === null) idRef.current = `bt-pop-${++popSeq}`;
   return (
     <>
       <div
         ref={ref}
         tabIndex={0}
+        aria-describedby={pos ? idRef.current : undefined}
         onMouseEnter={open}
         onMouseLeave={close}
         onFocus={open}
-        onBlur={close}
+        onBlur={closeNow}
         className="border border-gray-800 rounded-lg px-3 py-2 bg-gray-900/50 outline-none cursor-help hover:border-gray-600 focus:border-sky-700 transition-colors"
       >
         <div className="text-[11px] text-gray-500 flex items-center gap-1">
@@ -529,18 +573,21 @@ function SummaryCard({ label, value, cls, formula, note, compact }) {
         <div className={`${compact ? 'text-sm' : 'text-lg'} font-bold ${cls}`}>{value}</div>
       </div>
       {pos && (
-        <div role="tooltip" data-bt-pop className={POP_CLS} style={popStyle(pos)}>
+        <div role="tooltip" id={idRef.current} data-bt-pop className={POP_CLS} style={popStyle(pos)}
+          onMouseEnter={cancel} onMouseLeave={close}>
           <div className="text-[12px] font-bold text-gray-200 mb-1">{label} — 계산식</div>
-          <table className="w-full text-[12px]">
-            <tbody>
-              {formula.map(([k, v, strong], i) => (
-                <tr key={i} className={strong ? 'border-t border-gray-700' : ''}>
-                  <td className={`py-0.5 pr-3 align-top ${strong ? 'text-gray-200 font-bold' : 'text-gray-500'}`}>{k}</td>
-                  <td className={`py-0.5 text-right whitespace-nowrap align-top ${strong ? 'text-gray-100 font-bold' : 'text-gray-300'}`}>{v}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {popRender ? popRender(pos.w) : (
+            <table className="w-full text-[12px]">
+              <tbody>
+                {(formula || []).map(([k, v, strong], i) => (
+                  <tr key={i} className={strong ? 'border-t border-gray-700' : ''}>
+                    <td className={`py-0.5 pr-3 align-top ${strong ? 'text-gray-200 font-bold' : 'text-gray-500'}`}>{k}</td>
+                    <td className={`py-0.5 text-right whitespace-nowrap align-top ${strong ? 'text-gray-100 font-bold' : 'text-gray-300'}`}>{v}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           {note && <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">{note}</p>}
         </div>
       )}
@@ -640,6 +687,134 @@ function SummaryCards({ result, compact = false }) {
 }
 
 /**
+ * 시그널 체결 팝오버 본문 — 한 사건 = 한 행.
+ *
+ * ⚠️ 2열 계산식 표(값 셀이 whitespace-nowrap)에 이 문장들을 넣으면 안 된다. 매도는 28자,
+ *    매수는 90자가 넘어(sigOutcomeText가 재원·개방 계산식까지 이어 붙인다) nowrap 열이 고유폭을
+ *    전부 요구하고, auto 레이아웃이라 라벨 열이 최소폭으로 압축된다 → 한글은 아무 데서나
+ *    줄바꿈되므로 **글자 하나당 한 줄**이 되고 값은 팝오버 밖으로 잘린다(2026-08 사용자 보고).
+ *    → 열 폭을 **px로 못 박은 table-fixed**로 그려 고유폭 경쟁 자체를 없앤다.
+ *
+ * ⚠️ 폭이 SIG_WIDE_MIN 미만이면 표를 포기하고 **사건별 블록**으로 떨어진다. 퍼센트 열이든 px
+ *    열이든 좁은 폭에서는 날짜('2026-01-16')가 하이픈에서 쪼개져 같은 증상이 재현되기 때문이다
+ *    (이 페이지는 좁은 폭을 정식 지원한다 — 설정 패널 `w-full lg:w-[420px]`, 브라우저 확대도
+ *    CSS px 뷰포트를 짧게 만든다). 블록 흐름은 어떤 폭에서도 무너지지 않는다.
+ *
+ * ⚠️ 문장은 sigLabel·sigRefText·sigOutcomeText를 **그대로** 쓴다 — 화면(월별 블록)·CSV와 같은
+ *    함수를 써야 같은 사건이 화면과 파일에서 다르게 설명되지 않는다(가드 #259b).
+ * ⚠️ 종목명은 평문이다(StockLink 금지) — 팝오버 안에 버튼을 두면 Tab이 그 버튼으로 가는 순간
+ *    앵커 onBlur가 먼저 팝오버를 언마운트해 포커스가 body로 날아간다.
+ * ⚠️ 셀 패딩은 결과 표 상수(TD, py-2.5)가 아니라 py-1이다 — 9건이 maxH 안에 스크롤 없이
+ *    들어가야 한다는 것이 이 재설계의 목표다.
+ */
+const SIG_WIDE_MIN = 720;
+
+function SignalPopBody({ events, cfg, limit, moreHint, w }) {
+  const kindCls = (e) => (e.kind === 'sell' ? 'text-sky-300' : 'text-amber-300');
+  const outCls = (e) => (numOf(e.tradeQty)
+    ? (e.kind === 'sell' ? 'text-sky-200 font-bold' : 'text-amber-200 font-bold')
+    : 'text-gray-500');
+  if (!events.length) {
+    return <p className="text-[12px] text-gray-500">발동 없음 — 아직 단계에 도달하지 않았습니다.</p>;
+  }
+  // ⚠️ 목록만 자르고 **합계는 전 건**으로 낸다 — 잘린 24건으로 합을 내면 25건째부터 표의
+  //    합계가 조용히 줄어든다(카드 값 'N/M건'과도 어긋난다).
+  const shown = events.slice(0, limit);
+  const more = Math.max(0, events.length - limit);
+  const buySum = events.filter((e) => numOf(e.tradeQty) > 0).reduce((a, e) => a + numOf(e.tradeAmount), 0);
+  const sellSum = events.filter((e) => numOf(e.tradeQty) < 0).reduce((a, e) => a + numOf(e.tradeAmount), 0);
+  const usedSum = events.reduce((a, e) => a + numOf(e.used), 0);
+  // ⚠️ '개방' 합계는 **매매 예수금만** 모드에서만 뜻이 있다. '예수금 전부'(기본)는 주머니가 이미
+  //    열려 있어 개방액이 0으로 기록되므로, 합계를 내면 "₩0 개방 / ₩N 사용"이라는 깨진 줄이 된다.
+  const tradeOnly = (cfg?.buyFunding || 'both') === 'tradeOnly';
+  const poolLabel = tradeOnly
+    ? '이 중 적립 분배금에서 꺼낸 몫 (개방 / 사용)'
+    : '이 중 적립 분배금에서 꺼낸 몫 (개방 한도 없음)';
+  const poolValue = tradeOnly
+    ? `${won(events.reduce((a, e) => a + numOf(e.unlocked), 0))} / ${won(usedSum)}`
+    : won(usedSum);
+
+  if (w < SIG_WIDE_MIN) {
+    return (
+      <div className="flex flex-col gap-1.5 text-[12px] leading-snug">
+        {shown.map((e, i) => (
+          <div key={`${e.assetId}-${e.date}-${e.kind}-${e.step}-${i}`} className="border-t border-gray-800 pt-1">
+            <div>
+              <span className="text-gray-500">{e.date} </span>
+              <b className={kindCls(e)}>{sigLabel(e)}</b>{' '}
+              <span className="text-gray-300">{e.name || e.code}</span>
+            </div>
+            <div className="text-gray-600">{sigRefText(e)}</div>
+            <div className={outCls(e)}>{sigOutcomeText(e, cfg)}</div>
+          </div>
+        ))}
+        {more > 0 && <p className="text-gray-500">… 외 {formatNumber(more)}건 — {moreHint}</p>}
+        <div className="border-t border-gray-700 pt-1 text-gray-200 font-bold">
+          합계 (매수 체결 / 매도 체결) · {won(buySum)} / {won(sellSum)}
+        </div>
+        <div className="text-gray-500">{poolLabel} · {poolValue}</div>
+      </div>
+    );
+  }
+
+  // ⚠️ 폭을 퍼센트가 아니라 **측정된 실폭에서 px로** 계산한다. 날짜·단계는 고정(내용 폭이
+  //    정해져 있다), 나머지 셋만 남은 폭을 나눈다. 퍼센트로 두면 좁아질 때 날짜 열이 61px
+  //    아래로 떨어져 '2026-\n01-\n16'이 그대로 재현된다.
+  const inner = Math.max(320, w - 26);
+  const dateW = 96;
+  const stepW = 118;
+  const rest = Math.max(180, inner - dateW - stepW);
+  const nameW = Math.round(rest * 0.28);
+  const refW = Math.round(rest * 0.30);
+  const outW = rest - nameW - refW;
+  const TDC = 'px-2 py-1 align-top';
+  return (
+    <table className="w-full text-[12px] leading-snug" style={{ tableLayout: 'fixed' }}>
+      <colgroup>
+        <col style={{ width: dateW }} />
+        <col style={{ width: nameW }} />
+        <col style={{ width: stepW }} />
+        <col style={{ width: refW }} />
+        <col style={{ width: outW }} />
+      </colgroup>
+      <thead>
+        <tr className="text-gray-500 border-b border-gray-700">
+          <th className={`${TDC} text-left font-normal`}>날짜</th>
+          <th className={`${TDC} text-left font-normal`}>종목</th>
+          <th className={`${TDC} text-left font-normal`}>단계</th>
+          <th className={`${TDC} text-left font-normal`}>발동 근거 (고점·저점 → 종가)</th>
+          <th className={`${TDC} text-left font-normal`}>체결 결과</th>
+        </tr>
+      </thead>
+      <tbody>
+        {shown.map((e, i) => (
+          <tr key={`${e.assetId}-${e.date}-${e.kind}-${e.step}-${i}`} className="border-b border-gray-800/70">
+            <td className={`${TDC} text-gray-500 whitespace-nowrap`}>{e.date}</td>
+            <td className={`${TDC} text-gray-300`}>{e.name || e.code}</td>
+            <td className={`${TDC} font-bold whitespace-nowrap ${kindCls(e)}`}>{sigLabel(e)}</td>
+            <td className={`${TDC} text-gray-500`}>{sigRefText(e)}</td>
+            <td className={`${TDC} ${outCls(e)}`}>{sigOutcomeText(e, cfg)}</td>
+          </tr>
+        ))}
+        {more > 0 && (
+          <tr><td colSpan={5} className={`${TDC} text-gray-500`}>… 외 {formatNumber(more)}건 — {moreHint}</td></tr>
+        )}
+      </tbody>
+      <tfoot>
+        <tr className="border-t border-gray-700">
+          <td colSpan={4} className={`${TDC} text-gray-200 font-bold`}>합계 (매수 체결 / 매도 체결)</td>
+          <td className={`${TDC} text-gray-100 font-bold`}>{won(buySum)} / {won(sellSum)}</td>
+        </tr>
+        <tr>
+          <td colSpan={4} className={`${TDC} text-gray-500`}>{poolLabel}</td>
+          <td className={`${TDC} text-gray-300`}>{poolValue}</td>
+        </tr>
+      </tfoot>
+    </table>
+  );
+}
+
+/**
  * 전략(평가금 고정 + 현금 버퍼) 생존 판정 지표.
  *
  * ⚠️ 요약 카드와 **같은 SummaryCard 컴포넌트**를 쓴다 — 팝오버 배치·스크롤 상한·인쇄 규칙을
@@ -702,31 +877,20 @@ function StrategyKpis({ result, cfg, compact = false }) {
       label: '시그널 체결',
       value: `${formatNumber(events.filter((e) => e.tradeQty !== 0).length)}/${formatNumber(events.length)}건`,
       cls: events.some((e) => e.tradeQty !== 0) ? 'text-amber-300' : 'text-gray-500',
-      formula: [
-        ...(events.length
-          ? events.slice(0, 24).map((e) => [
-            `${e.date} · ${e.name || e.code} · ${sigLabel(e)}`,
-            sigOutcomeText(e, cfg),
-          ])
-          : [['발동 없음 — 아직 단계에 도달하지 않았습니다', '-']]),
-        ...(events.length > 24 ? [[`… 외 ${events.length - 24}건`, '-']] : []),
-        ...(events.length ? [[
-          '합계 (매수 체결 / 매도 체결)',
-          `${won(events.filter((e) => e.tradeQty > 0).reduce((a, e) => a + e.tradeAmount, 0))}`
-          + ` / ${won(events.filter((e) => e.tradeQty < 0).reduce((a, e) => a + e.tradeAmount, 0))}`,
-          true,
-        ], [
-          // ⚠️ '개방' 합계는 **매매 예수금만** 모드에서만 뜻이 있다. '예수금 전부'(기본)는 주머니가
-          //    이미 열려 있어 개방액이 0으로 기록되므로, 합계를 내면 "₩0 개방 / ₩N 사용"이라는
-          //    깨진 줄이 된다(옛 코드는 종목마다 주머니 전액을 실어 **N배 과대 집계**했다).
-          (cfg?.buyFunding === 'tradeOnly'
-            ? '이 중 적립 분배금에서 꺼낸 몫 (개방 / 사용)'
-            : '이 중 적립 분배금에서 꺼낸 몫 (개방 한도 없음)'),
-          cfg?.buyFunding === 'tradeOnly'
-            ? `${won(events.reduce((a, e) => a + e.unlocked, 0))} / ${won(events.reduce((a, e) => a + e.used, 0))}`
-            : won(events.reduce((a, e) => a + e.used, 0)),
-        ]] : []),
-      ],
+      // ⚠️ 2열 계산식 표가 아니라 전용 표로 그린다(SignalPopBody 주석 참조) — 이 카드의 값은
+      //    ₩ 한 덩어리가 아니라 사건별 문장이라, nowrap 2열에 넣으면 라벨 열이 무너진다.
+      popWidth: 980,
+      popRender: (w) => (
+        <SignalPopBody
+          events={events}
+          limit={24}
+          // ⚠️ 비교 종합의 시나리오 블록에는 월별 표가 없다(요약 카드·지표·곡선만 렌더된다) —
+          //    거기서 '월별 표에서 보라'고 하면 같은 화면에 없는 곳을 가리키는 거짓말이 된다.
+          moreHint={compact ? '‘상세 보기’로 열면 전체를 볼 수 있습니다' : '월별 표의 시그널 블록에서 전체를 볼 수 있습니다'}
+          cfg={cfg}
+          w={w}
+        />
+      ),
       note: '매수 시그널은 종목별 ‘가격 고점’ 대비 낙폭이, 매도 시그널은 ‘가격 저점’ 대비 상승률이 '
         + '각 단계에 처음 닿은 날 발동하고, **그날 종가로 즉시** 그 종목을 목표까지 맞춥니다. '
         + '새 고점(매수)·새 저점(매도)이 서면 전 단계가 다시 무장됩니다. '
@@ -751,9 +915,12 @@ function StrategyKpis({ result, cfg, compact = false }) {
         ['주기', `${ar.everyMonths}개월마다`],
         ['잉여의', `${formatNumber(ar.value)}%`],
         ['생활비 예약금 (투자 제외)', won(ar.reserve)],
+        // ⚠️ 사유(r.note)는 **왼쪽 라벨**에 붙인다 — 값 셀은 whitespace-nowrap이라 '+₩… (사유)'를
+        //    넣으면 그 열이 고유폭을 전부 요구하고 라벨 열이 최소폭으로 압축돼, 시그널 카드가
+        //    겪은 '글자 하나당 한 줄' 붕괴가 380px 팝오버에서 그대로 재현된다.
         ...(result.annualRows || []).slice(0, 24).map((r) => [
-          `${r.ym} · 예수금 ${won(r.cashBefore)}`,
-          `+${won(r.amount)}${r.note ? ` (${r.note})` : ''}`,
+          `${r.ym} · 예수금 ${won(r.cashBefore)}${r.note ? ` · ${r.note}` : ''}`,
+          `+${won(r.amount)}`,
         ]),
         ['누적 증액', won(s.cumAnnualReview), true],
       ],

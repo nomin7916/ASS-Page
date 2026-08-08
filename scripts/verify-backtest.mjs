@@ -3940,6 +3940,41 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       // 안전 접근자가 sellLevels·reallocate까지 채운다(레거시 config에서 TypeError 방지)
       && /sellLevels: \(d && Array\.isArray\(d\.sellLevels\)\) \? d\.sellLevels : \[\]/.test(page)
       && /reallocate: !d \|\| d\.reallocate !== false/.test(page));
+  /* ⚠️ 시그널 체결 팝오버는 2열 계산식 표(값 셀 whitespace-nowrap)로 그리면 안 된다 —
+   *    사건 문장이 28~90자라 nowrap 열이 고유폭을 전부 요구하고 라벨 열이 최소폭으로 압축돼
+   *    한글이 **글자 하나당 한 줄**로 무너진다(2026-08 사용자 보고). 전용 렌더러 + px 고정 열이
+   *    계약이고, 좁은 폭에서는 표를 포기하고 블록으로 떨어져야 같은 증상이 재발하지 않는다. */
+  ok('#259f ⚠️ 시그널 체결 팝오버는 popRender + table-fixed(px 열)로 그리고 좁은 폭에서는 블록으로 떨어진다',
+    /function SummaryCard\(\{ label, value, cls, formula, note, compact, popWidth = 380, popRender \}\)/.test(page)
+      && /popRender \? popRender\(pos\.w\) : \(/.test(page)
+      // ⚠️ popRender 카드는 formula를 넘기지 않는다 — 무방비 .map은 호버 순간 렌더 크래시다
+      //    (@ts-nocheck + esbuild라 컴파일러가 없고, {pos && …} 안이라 게이트도 못 잡는다).
+      && /\{\(formula \|\| \[\]\)\.map\(/.test(page)
+      && /function SignalPopBody\(/.test(page)
+      && /const SIG_WIDE_MIN = 720;/.test(page)
+      && /if \(w < SIG_WIDE_MIN\) \{/.test(page)
+      && /style=\{\{ tableLayout: 'fixed' \}\}/.test(page)
+      && /const dateW = 96;/.test(page) && /const stepW = 118;/.test(page)
+      && /popWidth: 980,/.test(page)
+      // 문구는 화면·CSV 공유 포매터 그대로(가드 #259b와 같은 근거)
+      && /<SignalPopBody/.test(page)
+      // 비교 뷰에는 월별 표가 없다 — 안내를 뷰별로 갈라야 거짓말이 되지 않는다
+      && /moreHint=\{compact \?/.test(page));
+  /* ⚠️ 팝오버는 앵커의 **형제**라 마우스를 올리는 순간 앵커 onMouseLeave가 뜬다. 아래 4가지가
+   *    한 세트로 있어야 팝오버 안으로 마우스를 옮길 수 있고(=maxH 초과분을 읽을 수 있고),
+   *    동시에 z-1200 패널이 화면에 고착되지 않는다. 하나라도 빠지면 정확히 그 반대가 된다. */
+  ok('#259g ⚠️ 팝오버 지연 닫기 4경로(open 취소 · 팝오버 enter 취소 · 팝오버 leave 재예약 · closeNow 즉시)',
+    /const POP_GRACE_MS = \d+;/.test(page)
+      && /const open = useCallback\(\(\) => \{\s*cancel\(\);/.test(page)
+      && /const closeNow = useCallback\(\(\) => \{ cancel\(\); setPos\(null\); \}/.test(page)
+      && /timerRef\.current = setTimeout\(\(\) => \{ timerRef\.current = null; setPos\(null\); \}, POP_GRACE_MS\);/.test(page)
+      // Hint · SummaryCard 두 팝오버 모두 enter=취소 / leave=재예약
+      && (page.match(/onMouseEnter=\{cancel\} onMouseLeave=\{close\}/g) || []).length >= 2
+      // scroll/resize 캡처와 blur·Hint 클릭은 유예 없이 즉시 닫는다(잔상 겹침 방지)
+      && /onBlur=\{closeNow\}/.test(page) && /if \(pos\) closeNow\(\); else open\(\);/.test(page)
+      && /return \{ ref, pos, open, close, closeNow, cancel \};/.test(page)
+      // 언마운트 정리 — 남은 타이머가 사라진 컴포넌트에 setState를 건다
+      && /useEffect\(\(\) => cancel, \[cancel\]\);/.test(page));
   ok('#259 ⚠️ 급락 단계는 행 추가·삭제가 가능하고 중복 낙폭을 입력 즉시 경고한다',
     /title="이 단계 삭제"/.test(page)
       && /단계 추가 \(\{dipOf\(active\)\.levels\.length\}\/\{MAX_BT_DIP_LEVELS\}\)/.test(page)
