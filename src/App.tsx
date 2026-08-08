@@ -2306,12 +2306,14 @@ export default function App() {
 
   // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다.
   // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다(impersonation 탭과 정반대 규칙).
+  // ⚠️ **features(3번째 인자)를 넣지 말 것** — width/height를 주면 크롬이 이 창을 '팝업'으로 열어
+  //    주소창·즐겨찾기 막대·확장프로그램 아이콘이 통째로 사라진다(브라우저 확장을 이 화면에서
+  //    쓸 수 없게 된다). features를 생략하면 **일반 탭**으로 열리고 opener 브릿지는 그대로다.
+  //    ⚠️ 이름('ass-backtest')은 유지 — 같은 탭 재사용이 중복 열기를 막는 유일한 장치다.
   const openBacktestWindow = () => {
     const existing = btWinRef.current;
     if (existing && !existing.closed) { try { existing.focus(); } catch {} setShowBacktestPage(false); return; }
-    const sw = (window.screen && window.screen.availWidth) || 1440;
-    const sh = (window.screen && window.screen.availHeight) || 900;
-    const w = window.open('/?backtestWindow=1', 'ass-backtest', `width=${sw},height=${sh},left=0,top=0`);
+    const w = window.open('/?backtestWindow=1', 'ass-backtest');
     if (!w) {
       // 팝업 차단 → 인앱 페이지로 폴백(최악의 경우가 기존 동작이 되게 한다)
       setBtWinBlocked(true);
@@ -2319,6 +2321,10 @@ export default function App() {
       return;
     }
     btWinRef.current = w;
+    // 이름이 같은 탭이 이미 있으면 window.open이 그 탭을 **재사용**하는데, 브라우저가 항상
+    // 앞으로 가져오지는 않는다(이 탭의 btWinRef가 새로고침으로 비어 위 early-return을 못 탄 경우).
+    // → 버튼을 눌렀는데 아무 일도 안 일어난 것처럼 보이지 않게 여기서도 focus를 보강한다.
+    try { w.focus(); } catch {}
     setBtWinBlocked(false);
     setShowBacktestPage(false);
   };

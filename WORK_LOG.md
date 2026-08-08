@@ -6,6 +6,60 @@
 
 ---
 
+## 2026-08-08 — [백테스트] 별도 창 → 일반 탭 전환
+
+**대상 파일**: `src/App.tsx` (`openBacktestWindow`, +9 / −3)
+
+### 배경
+
+`window.open`에 `width`/`height` features를 주면 크롬이 그 창을 **'팝업'으로 취급**해
+주소창·즐겨찾기 막대·**확장프로그램 아이콘**이 통째로 사라진다. 그래서 백테스트 별도 창에서는
+브라우저 확장(Claude in Chrome)을 쓸 수 없었다.
+
+### 변경 내용
+
+- `window.open('/?backtestWindow=1', 'ass-backtest', \`width=…,height=…,left=0,top=0\`)`
+  → **3번째 인자(features)만 제거** → `window.open('/?backtestWindow=1', 'ass-backtest')`.
+  features가 없으면 **일반 탭**으로 열리고 `window.opener`는 그대로 유지된다.
+- features 제거로 쓰이지 않게 된 `sw`/`sh`(`screen.availWidth/Height`) 지역변수 삭제.
+- 재사용 탭 focus 보강 — 이름이 같은 탭이 이미 있으면 `window.open`이 그 탭을 재사용하는데
+  브라우저가 항상 앞으로 가져오지는 않는다(이 탭의 `btWinRef`가 새로고침으로 비어 상단
+  early-return을 못 탄 경우). `try { w.focus(); } catch {}` 추가.
+- 재발 방지 주석 4줄 추가(features 금지 근거 + 이름 유지 근거).
+
+### 지킨 규약
+
+- **창 이름 `'ass-backtest'` 유지** — 같은 탭 재사용이 중복 열기를 막는 유일한 장치.
+- **`noopener`/`noreferrer` 미추가** — opener 브릿지(`backtest:data`/`live`/`pong`)가 이 기능의
+  전부다(impersonation 탭과 정반대 규칙, CLAUDE.md 명시).
+- **클릭 제스처 직후 동기 `window.open`** 구조 그대로(팝업 차단 회피) + 차단 시 인앱 폴백 유지.
+- `CalendarWindow`(`ass-calendar`)·`FlowWindow`(`ass-flow`)는 **손대지 않았다**.
+
+### 확인 사항
+
+- `/?backtestWindow=1`을 여는 지점은 `App.tsx openBacktestWindow` **한 곳뿐**이고,
+  두 진입점(상단바 백테스트 아이콘 `onOpenBacktest`, `BacktestPage`의 ⧉ `onOpenWindow`)이
+  모두 이 함수를 호출한다 → 통일할 다른 경로 없음.
+- **AI 관련 코드는 저장소에 존재하지 않는다**(`api/ai.ts`·`src/aiClient.ts`·`aiBacktest`·`aiSchema`
+  전부 없고 `ANTHROPIC`/`AI_ADMIN_CODE` 식별자도 0건). 2~4단계 미진행 결정에 따른 것이라
+  "AI 기능도 탭에서 동작" 항목은 해당 없음.
+
+### 검증
+
+- `npm run build` **실행 불가**(`node_modules` 없음) — Vercel push가 사실상의 빌드 검증.
+- verify 11종 전부 통과(`backtest` 303/303 포함). `verify:calendar`는 외부 API 의존이라 제외.
+  ⚠️ verify 스크립트 중 `window.open` 형태를 단언하는 가드는 없음(grep 확인).
+- `jsxcheck` src 전체 82파일 통과 · `undefcheck` 0건.
+- 중괄호 1539/1539(HEAD와 동일), 괄호 2763/2763(HEAD 2760/2760 대비 양쪽 +3 → 균형 유지),
+  JSX 주석 16개로 불변, `={false)` 류 오타 없음.
+
+### 남은 사항(범위 밖)
+
+UI 문구가 아직 "별도 브라우저 창"·"⧉ 별도 창"으로 되어 있다(`BacktestPage` 버튼 title,
+팝업 차단 안내). 동작에는 영향이 없어 이번 커밋에서는 건드리지 않았다.
+
+---
+
 ## 2026-08-08 — [백테스트] 1단계: ② 목표 기준 자유 입력 보장
 
 **대상 파일**: `src/components/BacktestPage.tsx` (단일 파일, +240 / −24)
