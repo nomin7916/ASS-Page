@@ -3834,7 +3834,7 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && (page.match(/<StrategyKpis\b/g) || []).length >= 2);
   // ⚠️ 엔진 경고가 '⑥ 종목에서 …'을 가리키므로 ⑥을 ⑦로 밀면 화면 번호와 안내가 갈린다.
   ok('#243 ⚠️ 새 설정 섹션은 ⑤-b이고 ⑥ 종목 번호를 밀지 않았다',
-    /title="⑤-b 전략 옵션 — 평가금 고정 보조 규칙"/.test(page)
+    /title="⑤-b 전략 옵션 — 매매 시그널 설정"/.test(page)
       && /title="⑥ 종목"/.test(page) && !/title="⑦ 종목"/.test(page));
   // ⚠️ @ts-nocheck 파일이라 컴파일러가 못 막는다 — 정규화를 우회한 config가 한 번이라도 들어오면
   //    렌더 중 TypeError가 루트 ErrorBoundary까지 올라가 화면이 통째로 오류 페이지가 된다.

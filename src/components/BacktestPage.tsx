@@ -3031,7 +3031,7 @@ export default function BacktestPage({
               {/* ⚠️ 번호를 '⑤-b'로 둔 이유 — ⑥ 종목을 ⑦로 밀면 **엔진 경고 문구**('⑥ 종목에서 목표
                       비중을 입력하세요')와 화면 번호가 갈린다. ②-b(매월 증액)와 같은 선례를 따른다. */}
               <Section
-                title="⑤-b 전략 옵션 — 평가금 고정 보조 규칙"
+                title="⑤-b 전략 옵션 — 매매 시그널 설정"
                 badge={strategyBadge(active)}
                 hint={(
                   <>
