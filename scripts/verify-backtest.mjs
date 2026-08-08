@@ -3913,6 +3913,19 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   // ⚠️ 엔진이 심는 t.signal을 아무 데서도 안 읽으면 policy:'none'에서 각주는 "정기 리밸런싱은
   //    일어나지 않습니다"라고 하는데 표는 설명 없는 매매 행으로 가득 찬다. 특히 **재조정 매도**는
   //    시그널이 뜬 적 없는 다른 종목이 팔린 것이라 출처가 화면 어디에도 없다(적대적 리뷰 확정).
+  /* ⚠️ 인쇄 CSS는 JS **템플릿 리터럴**이다. 그 안(주석 포함)에 역따옴표를 하나라도 쓰면 문자열이
+   *    거기서 끊기고 뒤가 JS로 파싱된다 — `.bt` 멤버접근 − `shell` 식별자가 되어 **빌드는 통과하는데**
+   *    렌더에서 `shell is not defined`로 화면이 통째로 죽는다(2026-08 실측, 사용자 보고).
+   * ⚠️ 이 파일의 다른 가드는 .tsx를 **텍스트로만** 읽고 jsxcheck/undefcheck도 평가를 하지 않아
+   *    이 부류를 구조적으로 못 잡는다. 그래서 원본(주석 미제거)에서 직접 센다. */
+  ok('#259e ⚠️ 인쇄 CSS 템플릿 리터럴 안에 역따옴표가 없다(문자열 조기 종료 → 렌더 크래시 방지)', (() => {
+    const raw = read('src/components/BacktestPage.tsx');
+    const i = raw.indexOf('<style>{`');
+    if (i < 0) return false;
+    const j = raw.indexOf('`}</style>', i);
+    if (j <= i) return false;
+    return !raw.slice(i + '<style>{`'.length, j).includes('`');
+  })());
   ok('#259d ⚠️ 시그널·재조정 매매는 월별 표 배지와 CSV 구분 열에서 정기 리밸런싱과 구분된다',
     /t\.signal === 'buy' &&/.test(page) && /t\.signal === 'sell' &&/.test(page)
       && /t\.signal === 'realloc' &&/.test(page)
