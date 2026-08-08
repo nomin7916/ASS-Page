@@ -102,9 +102,9 @@ export default function BacktestWindow() {
   }, [post]);
 
   const notice = !linked
-    ? '앱 창과 연결이 끊겨 읽기 전용입니다. 앱 창을 다시 열면 자동으로 이어집니다.'
+    ? '앱 탭과 연결이 끊겨 읽기 전용입니다. 앱 탭을 다시 열면 자동으로 이어집니다.'
     : !gotData
-      ? '앱 창에서 데이터를 불러오는 중입니다…'
+      ? '앱 탭에서 데이터를 불러오는 중입니다…'
       : '';
 
   return (

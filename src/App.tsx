@@ -4175,7 +4175,7 @@ export default function App() {
             onOpenWindow={openBacktestWindow}
             // 관리자 impersonation 중에는 읽기 전용 — 흐름도와 같은 근거(undo 없음 + sticky 데이터).
             readOnly={!!adminViewingAs}
-            notice={btWinBlocked ? '팝업이 차단돼 별도 창을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''}
+            notice={btWinBlocked ? '팝업이 차단돼 별도 탭을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''}
           />
         </ErrorBoundary>
       )}

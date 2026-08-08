@@ -1641,8 +1641,8 @@ export default function BacktestPage({
           <Download size={11} className="inline -mt-0.5" /> CSV
         </button>
         {onOpenWindow && (
-          <button className={`${BTN} text-indigo-300 border-indigo-800 hover:bg-indigo-900/30`} onClick={onOpenWindow} title="별도 브라우저 창에서 크게 보기">
-            <ExternalLink size={11} className="inline -mt-0.5" /> 새 창
+          <button className={`${BTN} text-indigo-300 border-indigo-800 hover:bg-indigo-900/30`} onClick={onOpenWindow} title="별도 탭에서 크게 보기 (주소창·확장프로그램 사용 가능)">
+            <ExternalLink size={11} className="inline -mt-0.5" /> 새 탭
           </button>
         )}
         {onClose && (
