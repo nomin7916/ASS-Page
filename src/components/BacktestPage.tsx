@@ -2149,6 +2149,10 @@ export default function BacktestPage({
   .bt-shell [class*="text-blue-"]    { color: #1d4ed8 !important; }
   .bt-shell [class*="text-emerald-"] { color: #047857 !important; }
   .bt-shell [class*="text-amber-"]   { color: #b45309 !important; }
+  /* ⚠️ 시그널 리밸런싱의 매수(amber)/매도(sky) 구분은 배경이 아니라 **글자색**으로만 표현된다
+        (`.bt-shell *`의 background:transparent가 인라인 배경까지 이긴다 — Swatch가 인라인 SVG인 것과
+        같은 근거). sky 규칙이 없으면 매도가 본문과 같은 검정으로 인쇄돼 PDF에서 구분이 사라진다. */
+  .bt-shell [class*="text-sky-"]     { color: #0369a1 !important; }
   .bt-shell [class*="text-gray-6"], .bt-shell [class*="text-gray-7"] { color: #555 !important; }
   .bt-shell thead th { background: #eee !important; }
   /* ⚠️ 화면은 크게(13px·넉넉한 행 높이), 인쇄는 종전 밀도로 되돌린다 — 12열짜리 월별 표가
