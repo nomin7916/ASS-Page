@@ -1,21 +1,25 @@
 import { Component, ErrorInfo, ReactNode } from 'react';
 
 interface Props { children: ReactNode; label?: string; }
-interface State { error: Error | null; }
+interface State { error: Error | null; stack: string }
 
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, stack: '' };
 
   static getDerivedStateFromError(error: Error): State {
-    return { error };
+    return { error, stack: '' };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[ErrorBoundary]', this.props.label ?? 'root', error, info.componentStack);
+    // ⚠️ 루트 오류는 화면을 통째로 대체하므로, 메시지를 감추면 사용자가 **DevTools를 열지 않는 한**
+    //    원인을 전할 방법이 없다(스크린샷만으로는 진단 불가). 앱 안에 알림/토스트가 살아 있지 않은
+    //    유일한 상태라 여기 인라인으로 남긴다.
+    this.setState({ stack: (info?.componentStack || '').split('\n').slice(0, 6).join('\n').trim() });
   }
 
   render() {
-    const { error } = this.state;
+    const { error, stack } = this.state;
     const { label } = this.props;
     if (error) {
       const isSection = !!label;
@@ -31,8 +35,12 @@ export default class ErrorBoundary extends Component<Props, State> {
             <p className="text-gray-200 font-semibold text-sm">
               {label ? `${label} 오류` : '일시적인 오류가 발생했습니다'}
             </p>
-            {isSection && (
-              <p className="text-red-400 text-[10px] font-mono break-all">{error.message}</p>
+            {/* ⚠️ 루트에서도 메시지를 보여 준다 — 감추면 스크린샷만으로는 원인을 알 수 없다. */}
+            <p className="text-red-400 text-[10px] font-mono break-all text-left">{error.message}</p>
+            {!isSection && stack && (
+              <pre className="text-gray-500 text-[9px] font-mono whitespace-pre-wrap break-all text-left max-h-32 overflow-auto">
+                {stack}
+              </pre>
             )}
             <p className="text-gray-500 text-xs leading-relaxed">
               {isSection

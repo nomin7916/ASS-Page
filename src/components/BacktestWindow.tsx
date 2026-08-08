@@ -1,6 +1,7 @@
 // @ts-nocheck
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import BacktestPage from './BacktestPage';
+import ErrorBoundary from './ErrorBoundary';
 
 /**
  * 백테스트 **별도 브라우저 창** (`/?backtestWindow=1`).
@@ -107,21 +108,27 @@ export default function BacktestWindow() {
       ? '앱 탭에서 데이터를 불러오는 중입니다…'
       : '';
 
+  // ⚠️ 별도 창은 App을 마운트하지 않아 `main.tsx`의 **루트** ErrorBoundary가 유일한 그물이다 —
+  //    BacktestPage의 렌더 예외 하나가 창 전체를 "일시적인 오류가 발생했습니다"로 바꾸고
+  //    **원인 메시지도 안 보인다**(루트 모드). App.tsx는 이미 `label="백테스트"`로 감싸 두었는데
+  //    이 창만 빠져 있었다(계산기·자금 흐름도와 동일한 2차 방어).
   return (
-    <BacktestPage
-      open
-      variant="page"
-      scenarios={scenarios}
-      onUpdateScenarios={onUpdateScenarios}
-      catalog={catalog}
-      prices={prices}
-      dividends={dividends}
-      holidays={holidays}
-      fetchingCodes={fetchingCodes}
-      onFetchCode={writable ? onFetchCode : undefined}
-      readOnly={!writable}
-      notice={notice}
-      onClose={() => { try { window.close(); } catch { /* 브라우저가 막으면 그대로 둔다 */ } }}
-    />
+    <ErrorBoundary label="백테스트">
+      <BacktestPage
+        open
+        variant="page"
+        scenarios={scenarios}
+        onUpdateScenarios={onUpdateScenarios}
+        catalog={catalog}
+        prices={prices}
+        dividends={dividends}
+        holidays={holidays}
+        fetchingCodes={fetchingCodes}
+        onFetchCode={writable ? onFetchCode : undefined}
+        readOnly={!writable}
+        notice={notice}
+        onClose={() => { try { window.close(); } catch { /* 브라우저가 막으면 그대로 둔다 */ } }}
+      />
+    </ErrorBoundary>
   );
 }
