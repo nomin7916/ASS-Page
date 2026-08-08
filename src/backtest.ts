@@ -646,8 +646,14 @@ export interface BtSignalEvent {
   step: number;
   /** 발동 단계 값 = 고점 대비 낙폭(%) 또는 저점 대비 상승률(%) */
   level: number;
-  /** 매수 전용. 매도는 0. */
+  /** 이 **단계 하나**의 개방 비율(%). 매수 전용, 매도는 0. */
   unlockPct: number;
+  /**
+   * `unlocked`를 만든 비율의 **합**(carrier에만 채운다. 같은 종목 여러 단계가 같은 날 겹칠 때 합산).
+   * ⚠️ 화면 계산식(`밑변 × 비율 = 금액`)은 반드시 이 값을 써야 산술적으로 성립한다 —
+   *    단계별 `unlockPct`를 쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 거짓 계산식이 찍힌다.
+   */
+  unlockPctSum: number;
   /** 발동 시점 분배금 주머니 잔액 — 개방액 계산식의 **밑변**. */
   divPocketAt: number;
   /** 발동 시점 매매 주머니 잔액 — "이 돈으로 먼저 산다"의 밑변. */
@@ -2734,7 +2740,8 @@ export function runBacktest(input: BtRunInput): BtResult {
       const mkEvent = (t: SigTrig, p: Pos): BtSignalEvent => {
         const ev: BtSignalEvent = {
           date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-          kind: t.kind, step: t.step, level: t.level, unlockPct: t.unlockPct,
+          kind: t.kind, step: t.step, level: t.level,
+          unlockPct: t.unlockPct, unlockPctSum: 0,
           divPocketAt: pocket, cashTradeAt: cashTrade,
           unlocked: 0, used: 0,
           ref: t.ref, price: t.price,
@@ -2812,15 +2819,60 @@ export function runBacktest(input: BtRunInput): BtResult {
       let needTotal = 0;
       for (const b of buyPlans) needTotal += Math.max(0, b.target - b.evalBefore);
 
-      /* ②-a 재조정 — 매매 주머니가 필요액에 못 미치면 **목표를 초과한 다른 보유 종목**을
+      /* ②-a 분배금 개방액 확정.
+       * ⚠️ **매수 계획이 살아 있는 종목만** 개방한다 — 종가가 없어 계획에서 탈락한 종목까지
+       *    개방액을 채우면 화면에 "실제로 열린 적 없는 개방 계산식"이 렌더된다(적대적 리뷰 확정).
+       * ⚠️ 개방 한도는 **종목별**이다(그 종목 단계들의 합) — 여러 종목이 같은 날 발동해도 서로의
+       *    몫을 빼앗지 않아 "사용 ≤ 개방" 표시 불변식이 성립한다(옛 dipUnlock과 같은 규약).
+       * ⚠️ 같은 종목의 여러 단계가 겹치면 `unlocked`는 **합**이므로 비율도 **합**(`unlockPctSum`)을
+       *    함께 남겨야 화면 계산식(밑변 × 비율 = 금액)이 산술적으로 성립한다. 단계별 `unlockPct`를
+       *    그대로 쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 **거짓 계산식**이 찍힌다(적대적 리뷰 확정).
+       * ⚠️ 'both'(기본)는 평시에 이미 분배금 주머니가 열려 있어 **개방이라는 개념 자체가 없다** —
+       *    여기서 '주머니 전액'을 종목마다 기록하면 같은 날 N종목이 발동했을 때 KPI 합계가
+       *    존재한 적 없는 N배 금액을 보고한다. 그래서 0으로 두고 화면이 문장으로 설명한다. */
+      const floorAmount = config.cashFloorPct > 0
+        ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
+        : 0;
+      for (const b of buyPlans) {
+        const list = evsByAsset.get(b.p.asset.id);
+        if (!list) continue;
+        let pctSum = 0;
+        for (const ev of list) pctSum += ev.unlockPct;
+        list[0].unlockPctSum = pctSum;
+        list[0].unlocked = tradeOnly ? (pocket * pctSum) / 100 : 0;
+        for (let i = 1; i < list.length; i++) { list[i].unlocked = 0; list[i].unlockPctSum = 0; }
+      }
+      let divRoomTotal = 0;
+      for (const b of buyPlans) {
+        const list = evsByAsset.get(b.p.asset.id);
+        if (list) divRoomTotal += list[0].unlocked;
+      }
+      divRoomTotal = tradeOnly ? Math.min(divRoomTotal, Math.max(0, cashDiv)) : Math.max(0, cashDiv);
+
+      /**
+       * 이 시그널 매수가 **지금 실제로 쓸 수 있는 재원**(+`extra`만큼 더 팔았다고 가정).
+       * ⚠️ 재조정 발동 판정을 `cashTrade`만으로 하면 두 방향으로 틀린다:
+       *    ① 기본 재원 모드('both')에서는 분배금 주머니가 이미 매수 재원인데 그것을 못 보고
+       *       **쓸 필요가 없는 다른 종목을 팔아 치운다**(적대적 리뷰 확정).
+       *    ② 현금 바닥선이 있으면 판 돈이 바닥선에 막혀 매수에 못 쓰이는데도 팔아 버려
+       *       **매도만 남는 '나체 매도'**가 된다(같은 리뷰 확정).
+       */
+      const usableFor = (extra: number): number => {
+        const avail = tradeOnly ? Math.max(0, cashTrade) + divRoomTotal : Math.max(0, cash);
+        const withExtra = avail + extra;
+        if (floorAmount <= 0) return withExtra;
+        return Math.min(withExtra, Math.max(0, cash + extra - floorAmount));
+      };
+
+      /* ②-b 재조정 — 재원이 필요액에 못 미치면 **목표를 초과한 다른 보유 종목**을
        *      목표까지 팔아 재원을 만든다(= 사용자가 정한 비율/금액대로의 재조정).
-       * ⚠️ 초과분이 없으면(전 종목이 함께 하락) 아무것도 팔지 않고 ②-b로 넘어간다 — 그것이
+       * ⚠️ 초과분이 없으면(전 종목이 함께 하락) 아무것도 팔지 않고 ②-c로 넘어간다 — 그것이
        *    "보유 종목 전체가 하락했고 예수금이 없으면 누적 분배금을 쓴다"는 사양의 경로다. */
       // ⚠️ `!== false`로 읽는다(normalizeDip과 같은 규약) — 화면은 정규화를 거치지 않은 로컬
       //    사본을 그대로 넘길 수 있어, `config.dip.reallocate`가 undefined면 재조정이 조용히
       //    꺼진다(저장 전후 결과가 갈리는 최악의 상태 — 중복 낙폭 사고와 같은 부류).
       let realloc = 0;
-      if (needTotal > 0 && config.dip.reallocate !== false && Math.max(0, cashTrade) < needTotal) {
+      if (needTotal > 0 && config.dip.reallocate !== false && usableFor(0) < needTotal) {
         const buyIds = new Set(buyPos.map(p => p.asset.id));
         const donors = positions
           .filter(p => p.active && !p.removed && !buyIds.has(p.asset.id)
@@ -2829,13 +2881,19 @@ export function runBacktest(input: BtRunInput): BtResult {
           .filter(x => !x.hit.missing && x.hit.price > 0 && x.evalBefore - x.target > 0)
           // 초과분이 큰 종목부터 — 필요액을 가장 적은 매매 건수로 채운다.
           .sort((a, b) => (b.evalBefore - b.target) - (a.evalBefore - a.target));
-        for (const dp of donors) {
-          if (Math.max(0, cashTrade) >= needTotal) break;
-          const tr = adjustTo(dp.p, date, dp.target, false);
-          if (!tr || tr.qty >= 0) continue;
-          tr.signal = 'realloc';
-          pushTrade(tr);
-          realloc += tr.cashDelta;
+        let totalExcess = 0;
+        for (const dp of donors) totalExcess += dp.evalBefore - dp.target;
+        // ⚠️ **다 팔아도 쓸 수 있는 돈이 1원도 안 늘면 한 주도 팔지 않는다** — 바닥선에 막혀
+        //    매수가 0주로 잘리는데 매도만 실행되는 '나체 매도'를 막는 유일한 방어선이다.
+        if (usableFor(totalExcess) > usableFor(0)) {
+          for (const dp of donors) {
+            if (usableFor(0) >= needTotal) break;
+            const tr = adjustTo(dp.p, date, dp.target, false);
+            if (!tr || tr.qty >= 0) continue;
+            tr.signal = 'realloc';
+            pushTrade(tr);
+            realloc += tr.cashDelta;
+          }
         }
       }
       // ⚠️ 날짜 단위 값이라 그날 첫 매수 이벤트에만 싣는다(행마다 실으면 중복으로 읽힌다).
@@ -2844,20 +2902,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         if (first) first[0].reallocAmount = realloc;
       }
 
-      /* ②-b 분배금 개방 + 실제 매수.
-       * ⚠️ 개방 한도는 **종목별**이다(그 종목 단계들의 합) — 여러 종목이 같은 날 발동해도 서로의
-       *    몫을 빼앗지 않아 "사용 ≤ 개방" 표시 불변식이 성립한다(옛 dipUnlock과 같은 규약).
-       * ⚠️ 'both'(기본)는 평시에 이미 분배금 주머니가 열려 있어 단계 비율이 실효가 없다 —
-       *    개방액을 '주머니 전액'으로 기록해 화면이 사실대로 설명하게 한다. */
-      const floorAmount = config.cashFloorPct > 0
-        ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
-        : 0;
-      for (const list of evsByAsset.values()) {
-        let sum = 0;
-        for (const ev of list) sum += (pocket * ev.unlockPct) / 100;
-        list[0].unlocked = tradeOnly ? sum : pocket;
-        for (let i = 1; i < list.length; i++) list[i].unlocked = 0;
-      }
+      /* ②-c 실제 매수. */
       // 필요액이 큰 종목부터 — 재원이 모자랄 때 큰 구멍부터 메운다.
       const ordered = [...buyPlans].sort(
         (x, y) => (y.target - y.evalBefore) - (x.target - x.evalBefore),

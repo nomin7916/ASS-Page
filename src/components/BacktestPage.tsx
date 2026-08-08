@@ -186,9 +186,13 @@ const sigRefText = (e) => {
 const sigUnlockText = (e, cfg) => {
   if (e.kind !== 'buy') return '';
   if ((cfg?.buyFunding || 'both') !== 'tradeOnly') {
-    return `적립 분배금 ${won(e.divPocketAt)} 전액 개방 (평시 재원이 ‘예수금 전부’라 단계 비율 ${formatNumber(e.unlockPct)}% 미적용)`;
+    // ⚠️ 'both'는 평시에 이미 주머니가 열려 있어 **개방이라는 개념 자체가 없다** — 단계 비율을
+    //    적용한 것처럼 쓰면 거짓말이고, 금액을 개방액으로 집계하면 KPI 합계가 부풀려진다.
+    return `적립 분배금 ${won(e.divPocketAt)} 전액이 이미 매수 재원 (평시 재원이 ‘예수금 전부’라 단계 비율 미적용)`;
   }
-  return `적립 분배금 ${won(e.divPocketAt)} × ${formatNumber(e.unlockPct)}% = ${won(e.unlocked)} 개방`;
+  // ⚠️ 반드시 `unlockPctSum` — 같은 종목의 여러 단계가 같은 날 겹치면 `unlocked`가 합이라
+  //    단계별 `unlockPct`로 쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 거짓 계산식이 된다.
+  return `적립 분배금 ${won(e.divPocketAt)} × ${formatNumber(numOf(e.unlockPctSum))}% = ${won(e.unlocked)} 개방`;
 };
 
 /** `매매 예수금 ₩120,000 + 적립 분배금 ₩642,005 = ₩762,005 투입` */
@@ -712,8 +716,15 @@ function StrategyKpis({ result, cfg, compact = false }) {
           + ` / ${won(events.filter((e) => e.tradeQty < 0).reduce((a, e) => a + e.tradeAmount, 0))}`,
           true,
         ], [
-          '이 중 적립 분배금에서 꺼낸 몫 (개방 / 사용)',
-          `${won(events.reduce((a, e) => a + e.unlocked, 0))} / ${won(events.reduce((a, e) => a + e.used, 0))}`,
+          // ⚠️ '개방' 합계는 **매매 예수금만** 모드에서만 뜻이 있다. '예수금 전부'(기본)는 주머니가
+          //    이미 열려 있어 개방액이 0으로 기록되므로, 합계를 내면 "₩0 개방 / ₩N 사용"이라는
+          //    깨진 줄이 된다(옛 코드는 종목마다 주머니 전액을 실어 **N배 과대 집계**했다).
+          (cfg?.buyFunding === 'tradeOnly'
+            ? '이 중 적립 분배금에서 꺼낸 몫 (개방 / 사용)'
+            : '이 중 적립 분배금에서 꺼낸 몫 (개방 한도 없음)'),
+          cfg?.buyFunding === 'tradeOnly'
+            ? `${won(events.reduce((a, e) => a + e.unlocked, 0))} / ${won(events.reduce((a, e) => a + e.used, 0))}`
+            : won(events.reduce((a, e) => a + e.used, 0)),
         ]] : []),
       ],
       note: '매수 시그널은 종목별 ‘가격 고점’ 대비 낙폭이, 매도 시그널은 ‘가격 저점’ 대비 상승률이 '
@@ -1914,7 +1925,11 @@ export default function BacktestPage({
     for (const m of result.months) {
       const { rows: joined, orphans } = joinTradeDividends(m.trades, m.dividends);
       for (const { trade: t, dividend: d } of joined) {
-        rows.push([t.reinvest ? '분배금재투자' : t.structural ? '구조변경' : '리밸런싱',
+        // ⚠️ 시그널 매매를 '리밸런싱'으로 뭉뚱그리면 CSV만 받아 본 사람은 policy:'none'인데도
+        //    매매 행이 가득한 이유를 알 수 없고, 재조정 매도는 출처가 통째로 사라진다.
+        rows.push([t.reinvest ? '분배금재투자' : t.structural ? '구조변경'
+          : t.signal === 'buy' ? '시그널매수' : t.signal === 'sell' ? '시그널매도'
+            : t.signal === 'realloc' ? '시그널재조정' : '리밸런싱',
           t.date, `${t.name}(${t.code})`, t.price,
           Math.round(t.evalBefore), t.qty, Math.round(t.cashDelta), t.qtyAfter, Math.round(t.evalAfter),
           d?.exDate || '', d?.payDate || '', d?.perShare ?? '', d ? Math.round(d.amount) : '']);
@@ -2960,6 +2975,13 @@ export default function BacktestPage({
                         새 고점(매수)·새 저점(매도)이 서면 전 단계가 다시 무장됩니다.
                       </p>
                       <p className="mt-1 text-gray-500">
+                        ※ 그래서 <b className="text-gray-400">한 방향으로만 가는 장에서는 반대편 시그널이
+                        사실상 1회성</b>이 됩니다 — 계속 오르기만 하면 저점이 갱신되지 않아 매도 단계가
+                        처음 도달할 때만 발동하고(그 뒤로는 목표 초과분이 계속 쌓입니다), 계속 내리기만
+                        하면 고점이 갱신되지 않아 매수 단계도 마찬가지입니다. 주기적으로 되돌리려면
+                        ③ 리밸런싱 일정을 함께 켜세요.
+                      </p>
+                      <p className="mt-1 text-gray-500">
                         ※ <b className="text-gray-400">③ 리밸런싱 일정과 완전히 독립</b>입니다 —
                         ‘리밸런싱 안 함’으로 두어도 시그널은 그대로 돌고, 둘 다 켜면 둘 다 실행됩니다.
                       </p>
@@ -3777,6 +3799,14 @@ export default function BacktestPage({
                                 {t.date}
                                 {t.structural && <span className="ml-1 text-[10px] text-amber-400">재편</span>}
                                 {t.reinvest && <span className="ml-1 text-[10px] text-emerald-400" title="분배금 재투자 매수 — 누적 매매차익에는 포함하지 않습니다">재투자</span>}
+                                {/* ⚠️ 시그널 매매에 라벨이 없으면 policy:'none'(리밸런싱 안 함)에서
+                                        각주는 "정기 리밸런싱은 일어나지 않습니다"라고 하는데 표는
+                                        설명 없는 매매 행으로 가득 찬다. 특히 **재조정 매도**는
+                                        시그널이 뜬 적 없는 다른 종목이 팔린 것이라 출처를 밝히지
+                                        않으면 화면 어디에도 근거가 없다(적대적 리뷰 확정 결함). */}
+                                {t.signal === 'buy' && <span className="ml-1 text-[10px] text-amber-300" title="매수 시그널 — 발동일 종가로 목표까지 매수">시그널 매수</span>}
+                                {t.signal === 'sell' && <span className="ml-1 text-[10px] text-sky-300" title="매도 시그널 — 발동일 종가로 목표 초과분 매도">시그널 매도</span>}
+                                {t.signal === 'realloc' && <span className="ml-1 text-[10px] text-sky-300" title="시그널 매수 재원을 만들려고 목표 초과분을 매도했습니다(재조정)">재조정 매도</span>}
                                 {!t.priceExact && <span className="ml-1 text-[10px] text-amber-400" title="그 날짜 종가가 없어 직전 종가를 사용">≈</span>}
                                 {/* ⚠️ 이 표에는 '비고' 열이 없어 t.note가 어디에도 보이지 않았다 —
                                         '예수금 부족'·'바닥선'·'보유수량 한도'로 매매가 잘린 사실이 화면에서
@@ -3949,8 +3979,11 @@ export default function BacktestPage({
                                     <StockLink code={e.code} name={e.name} className="text-gray-300 font-bold" />
                                     <span className="text-gray-600"> · {sigRefText(e)}</span>
                                   </div>
-                                  {/* 매수는 '개방' 계산식을 반드시 밑변까지 펼쳐 보여 준다 */}
-                                  {!sell && (
+                                  {/* 매수는 '개방' 계산식을 반드시 밑변까지 펼쳐 보여 준다.
+                                      ⚠️ 같은 종목의 2단계 이상이 같은 날 겹치면 개방·체결이 첫 행에
+                                         합산되므로(엔진 규약) 나머지 행에는 개방 줄을 렌더하지 않는다 —
+                                         `₩1,000,000 × 33% = ₩0` 같은 성립하지 않는 계산식이 찍힌다. */}
+                                  {!sell && numOf(e.unlockPctSum) > 0 && (
                                     <div className="text-gray-500 pl-3">
                                       개방 · {sigUnlockText(e, active)}
                                     </div>

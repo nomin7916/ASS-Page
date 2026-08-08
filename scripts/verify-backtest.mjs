@@ -1181,7 +1181,8 @@ function runBacktest(input) {
       const mkEvent = (t, p) => {
         const ev = {
           date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-          kind: t.kind, step: t.step, level: t.level, unlockPct: t.unlockPct,
+          kind: t.kind, step: t.step, level: t.level,
+          unlockPct: t.unlockPct, unlockPctSum: 0,
           divPocketAt: pocket, cashTradeAt: cashTrade,
           unlocked: 0, used: 0, ref: t.ref, price: t.price,
           tradeQty: 0, tradeAmount: 0, fromTrade: 0, reallocAmount: 0, note: '',
@@ -1248,8 +1249,34 @@ function runBacktest(input) {
       let needTotal = 0;
       for (const b of buyPlans) needTotal += Math.max(0, b.target - b.evalBefore);
 
+      const floorAmount = config.cashFloorPct > 0
+        ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
+        : 0;
+      for (const b of buyPlans) {
+        const list = evsByAsset.get(b.p.asset.id);
+        if (!list) continue;
+        let pctSum = 0;
+        for (const ev of list) pctSum += ev.unlockPct;
+        list[0].unlockPctSum = pctSum;
+        list[0].unlocked = tradeOnly ? (pocket * pctSum) / 100 : 0;
+        for (let i = 1; i < list.length; i++) { list[i].unlocked = 0; list[i].unlockPctSum = 0; }
+      }
+      let divRoomTotal = 0;
+      for (const b of buyPlans) {
+        const list = evsByAsset.get(b.p.asset.id);
+        if (list) divRoomTotal += list[0].unlocked;
+      }
+      divRoomTotal = tradeOnly ? Math.min(divRoomTotal, Math.max(0, cashDiv)) : Math.max(0, cashDiv);
+
+      const usableFor = (extra) => {
+        const avail = tradeOnly ? Math.max(0, cashTrade) + divRoomTotal : Math.max(0, cash);
+        const withExtra = avail + extra;
+        if (floorAmount <= 0) return withExtra;
+        return Math.min(withExtra, Math.max(0, cash + extra - floorAmount));
+      };
+
       let realloc = 0;
-      if (needTotal > 0 && config.dip.reallocate !== false && Math.max(0, cashTrade) < needTotal) {
+      if (needTotal > 0 && config.dip.reallocate !== false && usableFor(0) < needTotal) {
         const buyIds = new Set(buyPos.map((p) => p.asset.id));
         const donors = positions
           .filter((p) => p.active && !p.removed && !buyIds.has(p.asset.id)
@@ -1257,28 +1284,22 @@ function runBacktest(input) {
           .map(planOf)
           .filter((x) => !x.hit.missing && x.hit.price > 0 && x.evalBefore - x.target > 0)
           .sort((a, b) => (b.evalBefore - b.target) - (a.evalBefore - a.target));
-        for (const dp of donors) {
-          if (Math.max(0, cashTrade) >= needTotal) break;
-          const tr = adjustTo(dp.p, date, dp.target, false);
-          if (!tr || tr.qty >= 0) continue;
-          tr.signal = 'realloc';
-          pushTrade(tr);
-          realloc += tr.cashDelta;
+        let totalExcess = 0;
+        for (const dp of donors) totalExcess += dp.evalBefore - dp.target;
+        if (usableFor(totalExcess) > usableFor(0)) {
+          for (const dp of donors) {
+            if (usableFor(0) >= needTotal) break;
+            const tr = adjustTo(dp.p, date, dp.target, false);
+            if (!tr || tr.qty >= 0) continue;
+            tr.signal = 'realloc';
+            pushTrade(tr);
+            realloc += tr.cashDelta;
+          }
         }
       }
       {
         const first = evsByAsset.get(buyPos[0].asset.id);
         if (first) first[0].reallocAmount = realloc;
-      }
-
-      const floorAmount = config.cashFloorPct > 0
-        ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
-        : 0;
-      for (const list of evsByAsset.values()) {
-        let sum = 0;
-        for (const ev of list) sum += (pocket * ev.unlockPct) / 100;
-        list[0].unlocked = tradeOnly ? sum : pocket;
-        for (let i = 1; i < list.length; i++) list[i].unlocked = 0;
       }
       const ordered = [...buyPlans].sort(
         (x, y) => (y.target - y.evalBefore) - (x.target - x.evalBefore),
@@ -3028,6 +3049,90 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
         }
         return true;
       })());
+      /* ── C-6. 적대적 리뷰 확정 결함 4건 회귀 (#319~#322) ──────────────────── */
+      // (a) 기본 재원 모드('both')에서 재조정 게이트가 cashTrade만 봐서, 쓸 수 있는 분배금이
+      //     충분한데도 **쓸 필요 없는 다른 종목을 팔아 치웠다**.
+      ok('#319 ⚠️ both 모드에서 분배금이 충분하면 재조정하지 않는다(게이트가 cashTrade만 보면 안 된다)', (() => {
+        const SC4 = 'DDD';
+        const DOWN2 = mkSeries((i) => (i < 40 ? 10000 : 6000));
+        const UP2 = mkSeries((i) => (i < 40 ? 10000 : 20000));
+        const cfg4 = makeBtConfig({
+          id: 's', name: 'both재원', startDate: '2026-01-02', endDate: '2026-12-31',
+          initialCapital: 40000000, targetMode: 'amount', rounding: 'floor', policy: 'none',
+          buyFunding: 'both',
+          assets: [
+            { id: 'a1', code: SC, name: 'A', payCycle: 'eom', targetAmount: 20000000,
+              divOverride: { '2026-01': 5000, '2026-02': 5000 } },
+            { id: 'a2', code: SC4, name: 'D', payCycle: 'eom', targetAmount: 20000000 },
+          ],
+          dip: { enabled: true, levels: [{ drop: 20, unlockPct: 50 }] },
+        });
+        const r4 = runBacktest({
+          config: cfg4, prices: { [SC]: DOWN2, [SC4]: UP2 }, dividends: {}, holidays: KR26,
+        });
+        // 분배금이 쌓여 매수 재원이 충분하므로 D는 한 주도 팔리지 않아야 한다.
+        const sold = r4.months.flatMap((m) => m.trades).filter((t) => t.signal === 'realloc');
+        return r4.summary.cumDivPaid > 0 && sold.length === 0 && pocketOk(r4);
+      })());
+      // (b) 현금 바닥선에 막혀 0주를 사는데도 재조정 매도만 실행되던 '나체 매도'.
+      ok('#320 ⚠️ 팔아도 바닥선에 막혀 못 사면 한 주도 팔지 않는다(나체 매도 금지)', (() => {
+        const SC5 = 'EEE';
+        const DOWN3 = mkSeries((i) => (i < 40 ? 10000 : 9000));
+        const UP3 = mkSeries((i) => (i < 40 ? 10000 : 11000));
+        const cfg5 = makeBtConfig({
+          id: 's', name: '바닥선', startDate: '2026-01-02', endDate: '2026-12-31',
+          initialCapital: 20000000, targetMode: 'amount', rounding: 'floor', policy: 'none',
+          cashFloorPct: 50,   // 바닥선 = 목표합(2,000만) × 50% = 1,000만 → 어떤 매수도 불가
+          assets: [
+            { id: 'a1', code: SC, name: 'A', payCycle: 'eom', targetAmount: 10000000 },
+            { id: 'a2', code: SC5, name: 'E', payCycle: 'eom', targetAmount: 10000000 },
+          ],
+          dip: { enabled: true, levels: [{ drop: 5, unlockPct: 50 }] },
+        });
+        const r5 = runBacktest({
+          config: cfg5, prices: { [SC]: DOWN3, [SC5]: UP3 }, dividends: {}, holidays: KR26,
+        });
+        const ts = r5.months.flatMap((m) => m.trades);
+        // 매수가 0주면 재조정 매도도 0건이어야 한다(팔아 봐야 못 쓴다).
+        const bought = ts.filter((t) => t.signal === 'buy' && t.qty > 0);
+        const sold = ts.filter((t) => t.signal === 'realloc');
+        return bought.length === 0 && sold.length === 0 && pocketOk(r5);
+      })());
+      // (c) 같은 종목 2단계 동시 발동 시 unlocked는 합인데 비율은 1단계 값이라 계산식이 거짓이었다.
+      ok('#321 ⚠️ 같은 날 2단계 동시 발동이면 개방 비율도 합(unlockPctSum)으로 남는다', (() => {
+        // 하루에 −5%→−25%로 갭하락 → 10%·20% 두 단계가 같은 날 발동한다.
+        const GAP = mkSeries((i, d) => (i < 40 ? 10000 : d < '2026-04-01' ? 9500 : 7500));
+        const r6 = runS({
+          buyFunding: 'tradeOnly', initialCapital: 50200000,
+          dip: { enabled: true, levels: [{ drop: 10, unlockPct: 34 }, { drop: 20, unlockPct: 33 }] },
+        }, GAP);
+        const byDate = new Map();
+        for (const e of r6.summary.signalEvents.filter((x) => x.kind === 'buy')) {
+          if (!byDate.has(e.date)) byDate.set(e.date, []);
+          byDate.get(e.date).push(e);
+        }
+        let sawDual = false;
+        for (const list of byDate.values()) {
+          if (list.length < 2) continue;
+          sawDual = true;
+          const carrier = list.find((e) => e.unlocked > 0) || list[0];
+          // 개방액 = 밑변 × 비율합 이 **산술적으로 성립**해야 한다(화면 계산식의 근거).
+          if (Math.abs(carrier.unlocked - (carrier.divPocketAt * carrier.unlockPctSum) / 100) > 1e-6) return false;
+          if (Math.abs(carrier.unlockPctSum - list.reduce((a, e) => a + e.unlockPct, 0)) > 1e-9) return false;
+          // 나머지 행은 개방 줄을 렌더하지 않도록 0이어야 한다.
+          if (list.filter((e) => e !== carrier).some((e) => e.unlockPctSum !== 0 || e.unlocked !== 0)) return false;
+        }
+        return sawDual;
+      })());
+      // (d) 'both'에서 종목마다 주머니 전액을 개방액으로 기록해 KPI 합계가 N배로 부풀었다.
+      ok('#322 ⚠️ both 모드는 개방액을 0으로 기록한다(종목마다 주머니 전액 → N배 과대집계 금지)', (() => {
+        const both = runS({ buyFunding: 'both', initialCapital: 50200000,
+          dip: { enabled: true, levels: DEFAULT_DIP_LEVELS } }, CRASH);
+        const ev = both.summary.signalEvents.filter((e) => e.kind === 'buy');
+        return ev.length > 0 && ev.every((e) => e.unlocked === 0)
+          // 그래도 분배금은 실제로 쓰인다(개방 개념이 없을 뿐)
+          && ev.some((e) => e.used >= 0) && pocketOk(both);
+      })());
       ok('#317 ⚠️ 재조정 조합에서도 주머니 불변식·기말 분해 항등식이 성립한다', (() => {
         const s = R.summary;
         return pocketOk(R)
@@ -3792,7 +3897,12 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   //    그 문장은 화면과 CSV가 **같은 함수**를 써야 갈리지 않는다.
   ok('#259b ⚠️ 시그널 ‘개방’은 계산식(밑변 × 비율 = 금액)으로 표시하고 화면·CSV가 같은 함수를 쓴다',
     /const sigUnlockText = \(e, cfg\) =>/.test(page)
-      && /적립 분배금 \$\{won\(e\.divPocketAt\)\} × \$\{formatNumber\(e\.unlockPct\)\}% = \$\{won\(e\.unlocked\)\} 개방/.test(page)
+      // ⚠️ 반드시 unlockPctSum(단계 합) — 단계별 unlockPct를 쓰면 같은 종목 2단계 동시 발동에서
+      //    `₩1,000,000 × 34% = ₩670,000` 같은 **거짓 계산식**이 찍힌다(적대적 리뷰 확정 결함).
+      && /적립 분배금 \$\{won\(e\.divPocketAt\)\} × \$\{formatNumber\(numOf\(e\.unlockPctSum\)\)\}% = \$\{won\(e\.unlocked\)\} 개방/.test(page)
+      && !/formatNumber\(e\.unlockPct\)\}% = /.test(page)
+      // 비-carrier 행·계획 탈락 종목은 개방 줄 자체를 렌더하지 않는다(unlockPctSum === 0)
+      && /\{!sell && numOf\(e\.unlockPctSum\) > 0 && \(/.test(page)
       && /const sigOutcomeText = \(e, cfg\) =>/.test(page)
       && /const sigLabel = \(e\) =>/.test(page)
       // 화면(월별 블록)과 CSV가 같은 포매터를 호출한다
@@ -3800,6 +3910,15 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /sigOutcomeText\(e, cfgNow\)/.test(page)
       // 미체결 사유를 그대로 보여 준다 — '왜 0원인가'가 옛 화면의 결함이었다
       && /return e\.note \|\| '체결 없음';/.test(page));
+  // ⚠️ 엔진이 심는 t.signal을 아무 데서도 안 읽으면 policy:'none'에서 각주는 "정기 리밸런싱은
+  //    일어나지 않습니다"라고 하는데 표는 설명 없는 매매 행으로 가득 찬다. 특히 **재조정 매도**는
+  //    시그널이 뜬 적 없는 다른 종목이 팔린 것이라 출처가 화면 어디에도 없다(적대적 리뷰 확정).
+  ok('#259d ⚠️ 시그널·재조정 매매는 월별 표 배지와 CSV 구분 열에서 정기 리밸런싱과 구분된다',
+    /t\.signal === 'buy' &&/.test(page) && /t\.signal === 'sell' &&/.test(page)
+      && /t\.signal === 'realloc' &&/.test(page)
+      && /재조정 매도/.test(page)
+      && /t\.signal === 'buy' \? '시그널매수'/.test(page)
+      && /t\.signal === 'realloc' \? '시그널재조정'/.test(page));
   ok('#259c ⚠️ 매도 시그널 단계 UI가 있고 기본값(빈 배열)을 안내한다 · 재조정 토글이 있다',
     /매도 단계 추가 \(\{dipOf\(active\)\.sellLevels\.length\}\/\{MAX_BT_SELL_LEVELS\}\)/.test(page)
       && /title="이 매도 단계 삭제"/.test(page)
