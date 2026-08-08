@@ -255,6 +255,10 @@ const POP_CLS = 'fixed z-[1200] rounded-lg border border-gray-600 bg-[#111a2b] s
 const popStyle = (pos) => ({
   left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.w,
   maxHeight: pos.maxH, overflowY: 'auto',
+  // ⚠️ 스크롤 체이닝 차단 — 없으면 팝오버를 끝까지 굴린 다음 틱이 조상 스크롤러로 넘어가고,
+  //    그 scroll 이벤트를 아래 캡처 리스너가 잡아 **읽던 팝오버가 닫히며 페이지까지 튄다**.
+  //    maxH 초과분을 읽게 하는 것이 이 팝오버의 목적이라 마지막 화면에서 끊기면 안 된다.
+  overscrollBehavior: 'contain',
 });
 
 /**
@@ -267,23 +271,40 @@ const popStyle = (pos) => ({
  * ⚠️ 아래 4가지가 **한 세트**다 — 하나라도 빠지면 팝오버가 고착되거나 스스로 닫힌다:
  *    ① open()이 대기 중인 타이머를 **먼저 취소**(앵커를 잠깐 벗어났다 되돌아오면 예약된
  *       타이머가 그대로 발화해 '호버 중인데 닫힌 채'로 남는다 — 카드 간격이 8px이라 흔하다)
- *    ② 팝오버 onMouseEnter → cancel  ③ 팝오버 onMouseLeave → close(재예약)
+ *    ② 팝오버 onMouseEnter → enter(cancel)  ③ 팝오버 onMouseLeave → leave(close 재예약)
  *       (③이 빠지면 z-1200 패널이 화면에 영구 고착돼 아래 표의 클릭을 삼킨다)
  *    ④ scroll/resize·blur·Hint 클릭·언마운트는 closeNow(즉시) — 유예를 두면 잔상이 겹친다
  */
 const POP_GRACE_MS = 140;
 
+/**
+ * 지금 열려 있는 팝오버의 closeNow. 열려 있는 팝오버는 화면에 **하나뿐**이어야 한다 —
+ * 지연 닫기가 생기면서 인접 카드로 마우스를 옮기는 상시 동작에서 이전 팝오버가 140ms 남아
+ * z-1200 패널 두 장이 겹친다(포커스+호버 조합으로는 지연 닫기 이전에도 겹칠 수 있었다).
+ */
+let closeOpenPop = null;
+
 function useHoverPop(width = 320) {
   const ref = useRef(null);
   const [pos, setPos] = useState(null);
   const timerRef = useRef(null);
+  // 마우스가 팝오버 위에 있는지 — 앵커가 포커스를 쥔 채 팝오버 안을 클릭(드래그 선택)하면
+  // focusout이 떠서 onBlur가 팝오버를 즉시 지워 버린다. 그때만 blur를 무시한다.
+  const overRef = useRef(false);
   const cancel = useCallback(() => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
   }, []);
+  const closeNow = useCallback(() => { cancel(); setPos(null); }, [cancel]);
+  const close = useCallback(() => {
+    cancel();
+    timerRef.current = setTimeout(() => { timerRef.current = null; setPos(null); }, POP_GRACE_MS);
+  }, [cancel]);
   const open = useCallback(() => {
     cancel();
     const el = ref.current;
     if (!el) return;
+    if (closeOpenPop && closeOpenPop !== closeNow) closeOpenPop();
+    closeOpenPop = closeNow;
     const r = el.getBoundingClientRect();
     const w = Math.max(200, Math.min(width, window.innerWidth - 16));
     const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
@@ -295,14 +316,16 @@ function useHoverPop(width = 320) {
     setPos(placeBelow
       ? { left, w, top: r.bottom + 6, maxH }
       : { left, w, bottom: window.innerHeight - r.top + 6, maxH });
-  }, [width, cancel]);
-  const closeNow = useCallback(() => { cancel(); setPos(null); }, [cancel]);
-  const close = useCallback(() => {
+  }, [width, cancel, closeNow]);
+  const enter = useCallback(() => { overRef.current = true; cancel(); }, [cancel]);
+  const leave = useCallback(() => { overRef.current = false; close(); }, [close]);
+  const blur = useCallback(() => { if (overRef.current) return; closeNow(); }, [closeNow]);
+  // ⚠️ 언마운트 정리 — 대기 타이머가 남으면 사라진 컴포넌트에 setState가 걸리고,
+  //    전역 등록이 남으면 다음 팝오버가 죽은 인스턴스를 닫으려 든다.
+  useEffect(() => () => {
     cancel();
-    timerRef.current = setTimeout(() => { timerRef.current = null; setPos(null); }, POP_GRACE_MS);
-  }, [cancel]);
-  // ⚠️ 언마운트 시 대기 타이머 정리 — 남으면 사라진 컴포넌트에 setState가 걸린다.
-  useEffect(() => cancel, [cancel]);
+    if (closeOpenPop === closeNow) closeOpenPop = null;
+  }, [cancel, closeNow]);
   useEffect(() => {
     if (!pos) return;
     // ⚠️ 팝오버 **내부** 스크롤로는 닫지 않는다 — 상한이 걸린 긴 설명은 안에서 스크롤해야
@@ -316,7 +339,7 @@ function useHoverPop(width = 320) {
     window.addEventListener('resize', off);
     return () => { window.removeEventListener('scroll', off, true); window.removeEventListener('resize', off); };
   }, [pos, closeNow]);
-  return { ref, pos, open, close, closeNow, cancel };
+  return { ref, pos, open, close, closeNow, enter, leave, blur };
 }
 
 /**
@@ -325,7 +348,7 @@ function useHoverPop(width = 320) {
  *    Section 헤더는 div + 내부 토글 버튼 구조여야 한다.
  */
 function Hint({ children, width = 340, className = '', label = '설명 보기' }) {
-  const { ref, pos, open, close, closeNow, cancel } = useHoverPop(width);
+  const { ref, pos, open, close, closeNow, enter, leave, blur } = useHoverPop(width);
   return (
     <>
       {/* ⚠️ 네이티브 title은 달지 않는다 — 1초 뒤 뜨는 브라우저 툴팁이 이 팝오버 위에 겹친다. */}
@@ -337,14 +360,14 @@ function Hint({ children, width = 340, className = '', label = '설명 보기' }
         onMouseEnter={open}
         onMouseLeave={close}
         onFocus={open}
-        onBlur={closeNow}
+        onBlur={blur}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (pos) closeNow(); else open(); }}
       >
         <HelpCircle size={13} />
       </button>
       {pos && (
         <div role="tooltip" data-bt-pop className={`${POP_CLS} text-[12px] text-gray-300`}
-          style={popStyle(pos)} onMouseEnter={cancel} onMouseLeave={close}>
+          style={popStyle(pos)} onMouseEnter={enter} onMouseLeave={leave}>
           {children}
         </div>
       )}
@@ -551,7 +574,7 @@ let popSeq = 0;
  *    전까지 아무 게이트에도 걸리지 않은 채 **호버 순간 화면 전체가 오류 페이지**가 된다.
  */
 function SummaryCard({ label, value, cls, formula, note, compact, popWidth = 380, popRender }) {
-  const { ref, pos, open, close, closeNow, cancel } = useHoverPop(popWidth);
+  const { ref, pos, open, close, enter, leave, blur } = useHoverPop(popWidth);
   const idRef = useRef(null);
   if (idRef.current === null) idRef.current = `bt-pop-${++popSeq}`;
   return (
@@ -563,7 +586,7 @@ function SummaryCard({ label, value, cls, formula, note, compact, popWidth = 380
         onMouseEnter={open}
         onMouseLeave={close}
         onFocus={open}
-        onBlur={closeNow}
+        onBlur={blur}
         className="border border-gray-800 rounded-lg px-3 py-2 bg-gray-900/50 outline-none cursor-help hover:border-gray-600 focus:border-sky-700 transition-colors"
       >
         <div className="text-[11px] text-gray-500 flex items-center gap-1">
@@ -574,7 +597,7 @@ function SummaryCard({ label, value, cls, formula, note, compact, popWidth = 380
       </div>
       {pos && (
         <div role="tooltip" id={idRef.current} data-bt-pop className={POP_CLS} style={popStyle(pos)}
-          onMouseEnter={cancel} onMouseLeave={close}>
+          onMouseEnter={enter} onMouseLeave={leave}>
           <div className="text-[12px] font-bold text-gray-200 mb-1">{label} — 계산식</div>
           {popRender ? popRender(pos.w) : (
             <table className="w-full text-[12px]">
@@ -760,7 +783,13 @@ function SignalPopBody({ events, cfg, limit, moreHint, w }) {
   // ⚠️ 폭을 퍼센트가 아니라 **측정된 실폭에서 px로** 계산한다. 날짜·단계는 고정(내용 폭이
   //    정해져 있다), 나머지 셋만 남은 폭을 나눈다. 퍼센트로 두면 좁아질 때 날짜 열이 61px
   //    아래로 떨어져 '2026-\n01-\n16'이 그대로 재현된다.
-  const inner = Math.max(320, w - 26);
+  // ⚠️ 세로 스크롤바 자리를 반드시 뺀다. 이 앱의 스크롤바는 오버레이가 아니라 **자리를 차지**하고
+  //    (src/index.css `::-webkit-scrollbar { width: 6px }`), 이 팝오버는 내용이 maxH를 넘으면
+  //    스크롤되는 것이 기본 경로다(24건 상한). 콘텐츠 폭과 열 폭 합이 정확히 같으면 스크롤바가
+  //    뜨는 순간 그만큼 넘쳐 가로 스크롤바가 함께 생기고 마지막 열이 잘린다 — 그 가로 스크롤바는
+  //    팝오버 밖에서는 닿을 수도 없다. 여유분은 보이지 않으므로(배경 투명) 넉넉히 잡는다.
+  const POP_SCROLLBAR_RESERVE = 16;
+  const inner = Math.max(320, w - 26 - POP_SCROLLBAR_RESERVE);
   const dateW = 96;
   const stepW = 118;
   const rest = Math.max(180, inner - dateW - stepW);

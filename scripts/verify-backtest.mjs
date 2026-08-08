@@ -3955,6 +3955,18 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /if \(w < SIG_WIDE_MIN\) \{/.test(page)
       && /style=\{\{ tableLayout: 'fixed' \}\}/.test(page)
       && /const dateW = 96;/.test(page) && /const stepW = 118;/.test(page)
+      // ⚠️ 상수 **선언**만 보면 죽은 단언이다 — colgroup을 통째로 지우거나 `width: '10%'`로
+      //    되돌려도 통과했다(적대적 리뷰가 변이 테스트로 실증). 실제 **사용부**를 단언한다.
+      && /<col style=\{\{ width: dateW \}\} \/>/.test(page)
+      && /<col style=\{\{ width: nameW \}\} \/>/.test(page)
+      && /<col style=\{\{ width: stepW \}\} \/>/.test(page)
+      && /<col style=\{\{ width: refW \}\} \/>/.test(page)
+      && /<col style=\{\{ width: outW \}\} \/>/.test(page)
+      // 퍼센트·문자열 폭 금지(좁아지면 날짜 열이 61px 아래로 떨어져 '2026-\n01-\n16'이 재현된다)
+      && !/<col style=\{\{ width: '/.test(page)
+      // 세로 스크롤바 자리를 빼지 않으면 스크롤되는 순간 마지막 열이 잘린다
+      && /const POP_SCROLLBAR_RESERVE = \d+;/.test(page)
+      && /w - 26 - POP_SCROLLBAR_RESERVE/.test(page)
       && /popWidth: 980,/.test(page)
       // 문구는 화면·CSV 공유 포매터 그대로(가드 #259b와 같은 근거)
       && /<SignalPopBody/.test(page)
@@ -3969,12 +3981,22 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /const closeNow = useCallback\(\(\) => \{ cancel\(\); setPos\(null\); \}/.test(page)
       && /timerRef\.current = setTimeout\(\(\) => \{ timerRef\.current = null; setPos\(null\); \}, POP_GRACE_MS\);/.test(page)
       // Hint · SummaryCard 두 팝오버 모두 enter=취소 / leave=재예약
-      && (page.match(/onMouseEnter=\{cancel\} onMouseLeave=\{close\}/g) || []).length >= 2
-      // scroll/resize 캡처와 blur·Hint 클릭은 유예 없이 즉시 닫는다(잔상 겹침 방지)
-      && /onBlur=\{closeNow\}/.test(page) && /if \(pos\) closeNow\(\); else open\(\);/.test(page)
-      && /return \{ ref, pos, open, close, closeNow, cancel \};/.test(page)
-      // 언마운트 정리 — 남은 타이머가 사라진 컴포넌트에 setState를 건다
-      && /useEffect\(\(\) => cancel, \[cancel\]\);/.test(page));
+      && (page.match(/onMouseEnter=\{enter\} onMouseLeave=\{leave\}/g) || []).length >= 2
+      // ⚠️ blur는 **두 앵커 모두**여야 한다 — 존재만 보면 한쪽만 되돌려도 통과한다(변이 실증).
+      && (page.match(/onBlur=\{blur\}/g) || []).length >= 2
+      // 앵커가 포커스를 쥔 채 팝오버 안을 클릭해도 살아남는다(드래그 선택·복사)
+      && /const blur = useCallback\(\(\) => \{ if \(overRef\.current\) return; closeNow\(\); \}/.test(page)
+      && /if \(pos\) closeNow\(\); else open\(\);/.test(page)
+      // ⚠️ scroll/resize 캡처는 **유예 없이 즉시** — 좌표가 낡은 채 140ms 남으면 안 된다.
+      //    (가드가 off 본문을 안 보면 close()로 되돌려도 통과했다 — 변이 실증)
+      && /closest\('\[data-bt-pop\]'\)\) return;\s*closeNow\(\);/.test(page)
+      // 열린 팝오버는 하나뿐 — 인접 카드로 옮길 때 z-1200 패널 두 장이 겹치지 않는다
+      && /let closeOpenPop = null;/.test(page)
+      && /if \(closeOpenPop && closeOpenPop !== closeNow\) closeOpenPop\(\);/.test(page)
+      && /if \(closeOpenPop === closeNow\) closeOpenPop = null;/.test(page)
+      // 스크롤 체이닝 차단 — 끝까지 굴린 다음 틱이 조상으로 넘어가면 읽던 팝오버가 닫힌다
+      && /overscrollBehavior: 'contain'/.test(page)
+      && /return \{ ref, pos, open, close, closeNow, enter, leave, blur \};/.test(page));
   ok('#259 ⚠️ 급락 단계는 행 추가·삭제가 가능하고 중복 낙폭을 입력 즉시 경고한다',
     /title="이 단계 삭제"/.test(page)
       && /단계 추가 \(\{dipOf\(active\)\.levels\.length\}\/\{MAX_BT_DIP_LEVELS\}\)/.test(page)
