@@ -13,7 +13,7 @@ import {
   runBacktest, makeBtConfig, makeBtAsset, joinTradeDividends, parsePastedSeries,
   seriesRange, monthsBetween,
   MAX_BT_SCENARIOS, MAX_BT_ASSETS, MAX_BT_EVENTS, MAX_BT_OVERRIDES,
-  MAX_BT_CONTRIB_OVERRIDES, MAX_BT_REBAL_DATES, BT_COLORS,
+  MAX_BT_CONTRIB_OVERRIDES, MAX_BT_REBAL_DATES, BT_COLORS, DEFAULT_DIP_LEVELS, MAX_BT_DIP_LEVELS,
 } from '../backtest';
 import { generateId, formatNumber, cleanNum } from '../utils';
 
@@ -80,6 +80,55 @@ const DIV_SPLIT_LABEL = {
   source: '분배금 준 종목',
   even: '균등',
 };
+
+/** 정기 리밸런싱 매수 재원 라벨. */
+const BUY_FUNDING_LABEL = {
+  both: '예수금 전부',
+  tradeOnly: '매매 예수금만',
+};
+
+/**
+ * 전략 보조 규칙(밴드·재원·급락·바닥선·연간증액·원천징수)의 기본값 안전 접근자.
+ *
+ * ⚠️ `cfg.dip.enabled`처럼 곧바로 파고들지 말 것 — 이 파일은 `@ts-nocheck`라 컴파일러가
+ *    막아 주지 않는데, 정규화를 우회한 config가 한 번이라도 들어오면 **렌더 중 TypeError**가
+ *    루트 ErrorBoundary까지 올라가 화면이 통째로 오류 페이지가 된다(runBacktest는 try/catch로
+ *    감싸여 있지만 **화면 렌더는 감싸여 있지 않다**).
+ */
+const dipOf = (cfg) => (cfg && cfg.dip) || { enabled: false, levels: DEFAULT_DIP_LEVELS };
+const annualOf = (cfg) =>
+  (cfg && cfg.annualReview) || { mode: 'none', value: 0, reserve: 0, everyMonths: 12, split: 'ratio' };
+const numOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/**
+ * 켜져 있는 전략 보조 규칙만 짧게 나열한다 — 설정 배지·시나리오 부제·CSV가 같은 문구를 쓴다.
+ * ⚠️ **기본값은 한 글자도 내보내지 않는다**. 안 쓰는 사람에게 6개 태그가 상시 붙으면
+ *    "무엇을 켰는지"라는 이 표기의 목적이 사라진다.
+ */
+function strategyTags(cfg) {
+  if (!cfg) return [];
+  const out = [];
+  const dip = dipOf(cfg);
+  const ar = annualOf(cfg);
+  if (numOf(cfg.band) > 0) out.push(`밴드 ±${formatNumber(cfg.band)}%`);
+  if (cfg.buyFunding === 'tradeOnly') out.push('매매 예수금만');
+  if (dip.enabled) out.push(`급락 ${dip.levels.length}단계`);
+  if (numOf(cfg.cashFloorPct) > 0) out.push(`바닥선 ${formatNumber(cfg.cashFloorPct)}%`);
+  if (ar.mode === 'pctOfSurplus' && numOf(ar.value) > 0) out.push(`${ar.everyMonths}개월 증액 ${formatNumber(ar.value)}%`);
+  if (numOf(cfg.divTaxPct) > 0) out.push(`원천징수 ${formatNumber(cfg.divTaxPct)}%`);
+  return out;
+}
+
+/**
+ * Section 배지용 축약 — ⚠️ 6개를 다 이어 붙이면 배지가 제목을 밀어낸다.
+ *    Section 헤더의 배지 span은 `truncate`(white-space:nowrap)라 flex에서 min-width가 auto가 되어
+ *    스스로 줄지 않는다. 태그 수 자체를 여기서 자른다.
+ */
+function strategyBadge(cfg) {
+  const tags = strategyTags(cfg);
+  if (!tags.length) return '사용 안 함 (기본)';
+  return tags.length > 3 ? `${tags.slice(0, 3).join(' · ')} 외 ${tags.length - 3}` : tags.join(' · ');
+}
 
 /**
  * '전체 백테스트 비교 종합' 뷰를 가리키는 예약 id.
@@ -418,7 +467,10 @@ function SummaryCards({ result, compact = false }) {
   // 카드 값(finalTotal·profit)과 어긋나지 않도록 두 값에서 역산한다.
   const invested = s.finalTotal - s.profit;
   const initRest = result.initialCashAfter ?? 0;
-  const divPending = s.cumDivAccrued - s.cumDivPaid;
+  // ⚠️ 원천징수를 켜면 accrued − paid 에 **세금**까지 섞인다 — 세금을 빼야 진짜 미지급분이다.
+  //    (엔진 주석: cumDivAccrued = cumDivPaid + cumDivTax + 미지급 세전분)
+  const divPending = s.cumDivAccrued - s.cumDivPaid - numOf(s.cumDivTax);
+  const taxed = numOf(s.cumDivTax) > 0.5;
   const cards = [
     {
       label: '최종 자산', value: won(s.finalTotal), cls: pnlCls(s.profit),
@@ -461,10 +513,13 @@ function SummaryCards({ result, compact = false }) {
       label: '누적 분배금', value: won(s.cumDivAccrued), cls: 'text-emerald-400',
       formula: [
         ['분배락 기준 누계 (월별 표의 합계와 같은 기준)', won(s.cumDivAccrued), true],
-        ['이 중 실제 입금 (지급일 기준)', won(s.cumDivPaid)],
+        // ⚠️ 원천징수를 켜면 '입금'은 세후다 — 세전 누계(divAccrued)는 그대로 두고 현금 흐름만 세후로 바꿨다.
+        ...(taxed ? [['원천징수 세금 (지급분에서 차감)', `− ${won(s.cumDivTax)}`]] : []),
+        [`이 중 실제 입금 (지급일 기준${taxed ? ' · 세후' : ''})`, won(s.cumDivPaid)],
         ['아직 미지급 (지급일이 종료일 이후)', won(divPending)],
       ],
-      note: '예수금은 실제 지급일에만 늘어납니다. 월말 분배는 다음 달 초에 입금되므로 두 값이 다를 수 있습니다.',
+      note: '예수금은 실제 지급일에만 늘어납니다. 월말 분배는 다음 달 초에 입금되므로 두 값이 다를 수 있습니다.'
+        + (taxed ? ' 원천징수를 켜면 예수금에는 세후 금액만 들어옵니다(세전 권리 확정액은 위 누계 그대로).' : ''),
     },
     {
       label: '기말 예수금', value: won(s.finalCash), cls: 'text-gray-200',
@@ -473,13 +528,143 @@ function SummaryCards({ result, compact = false }) {
         ['＋ 누적 매매차익', wonSigned(s.cumTradeNet)],
         ['＋ 종목 재편 순현금', wonSigned(s.cumStructuralNet)],
         ['＋ 분배금 재투자 매수', wonSigned(s.cumReinvestNet)],
-        ['＋ 누적 분배금 (지급 기준)', won(s.cumDivPaid)],
+        [`＋ 누적 분배금 (지급 기준${taxed ? ' · 세후' : ''})`, won(s.cumDivPaid)],
         ['＝ 기말 예수금', won(s.finalCash), true],
         ['· 매매 몫 / 분배금 몫', `${won(s.finalCashTrade)} / ${won(s.finalCashDiv)}`],
+        ...(taxed ? [['(참고) 원천징수 세금 — 위 항에 이미 빠져 있음', won(s.cumDivTax)]] : []),
       ],
-      note: '다섯 항의 합이 정확히 기말 예수금이 됩니다. 매수 대금은 매매 몫을 먼저 쓰고 모자라면 분배금 몫에서 꺼냅니다.',
+      note: '다섯 항의 합이 정확히 기말 예수금이 됩니다. 매수 대금은 매매 몫을 먼저 쓰고 모자라면 분배금 몫에서 꺼냅니다.'
+        + (taxed ? ' 세금은 애초에 입금되지 않은 돈이라 별도 항이 아니라 분배금 항에서 이미 빠져 있습니다.' : ''),
     },
   ];
+  return (
+    <div className={`grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 ${compact ? 'mb-2' : 'mb-3'}`}>
+      {cards.map((c) => <SummaryCard key={c.label} {...c} compact={compact} />)}
+    </div>
+  );
+}
+
+/**
+ * 전략(평가금 고정 + 현금 버퍼) 생존 판정 지표.
+ *
+ * ⚠️ 요약 카드와 **같은 SummaryCard 컴포넌트**를 쓴다 — 팝오버 배치·스크롤 상한·인쇄 규칙을
+ *    한 곳에서만 관리하기 위해서다(복제 금지, SummaryCards와 같은 규약).
+ * ⚠️ 단일 뷰와 비교 종합의 시나리오별 블록이 이 한 컴포넌트를 공유한다.
+ * ⚠️ 켜지 않은 기능의 카드는 아예 그리지 않는다 — 안 쓰는 사람에게 '0건' 카드가 상시 붙으면
+ *    이 줄의 신호가 죽는다. 반대로 **켜 놓고 0건**인 것은 의미 있는 정보라 그대로 보여 준다.
+ */
+function StrategyKpis({ result, cfg, compact = false }) {
+  const s = result?.summary;
+  if (!s) return null;
+  const dip = dipOf(cfg);
+  const ar = annualOf(cfg);
+  const bandOn = numOf(cfg?.band) > 0 || numOf(s.bandSkipCount) > 0;
+  const dipOn = dip.enabled || (s.dipEvents || []).length > 0;
+  const annualOn = ar.mode === 'pctOfSurplus' && numOf(ar.value) > 0;
+  const taxOn = numOf(cfg?.divTaxPct) > 0 || numOf(s.cumDivTax) > 0.5;
+  const events = s.dipEvents || [];
+  const shortMonths = (result.months || []).filter((m) => numOf(m.shortfallCount) > 0);
+  // 변동계수 — 평균이 0이면 정의되지 않는다(분배금이 아예 없는 시나리오).
+  const cv = numOf(s.divMonthlyAvg) > 0 ? (s.divMonthlyStdev / s.divMonthlyAvg) * 100 : null;
+
+  const cards = [
+    {
+      label: '최저 예수금', value: won(s.minCash?.value ?? 0),
+      cls: (s.minCash?.value ?? 0) < 0 ? 'text-blue-400' : 'text-gray-200',
+      formula: [
+        ['그 날짜', s.minCash?.date || '-'],
+        ['기말 예수금', won(s.finalCash)],
+        ['· 이 중 분배금 몫', won(s.finalCashDiv)],
+        ['분배금 주머니 최저점', `${won(s.minCashDiv?.value ?? 0)}${s.minCashDiv?.date ? ` (${s.minCashDiv.date})` : ''}`],
+      ],
+      note: '영업일 곡선 전 구간에서 총 예수금이 가장 낮았던 지점입니다. '
+        + '목표 평가금을 고정하는 전략은 여기가 0에 붙는 순간부터 하락분을 되메울 수 없으므로, 이 값이 곧 생존 판정 지표입니다. '
+        + '분배금 주머니 최저점은 0에서 시작하는 값이라 첫 분배금 입금 이후 구간에서만 잽니다.',
+    },
+    {
+      label: '월 분배금', value: won(s.divMonthlyAvg), cls: 'text-emerald-400',
+      formula: [
+        ['월 평균 (분배락 기준)', won(s.divMonthlyAvg), true],
+        ['표준편차 (±)', won(s.divMonthlyStdev)],
+        ['변동계수', cv === null ? '-' : `${cv.toFixed(1)}%`],
+        ['누적 분배금', won(s.cumDivAccrued)],
+      ],
+      note: '“매달 얼마씩 꾸준히 나왔는가”를 보는 값입니다. 구간은 ‘첫 분배가 있었던 달부터 마지막 달까지’로, '
+        + '앞쪽 램프업만 빼고 그 뒤의 0원 달(분배가 끊긴 달)은 그대로 포함합니다 — 그래야 “끊겼다”가 표준편차에 드러납니다.',
+    },
+    ...(bandOn ? [{
+      label: '밴드 생략', value: `${formatNumber(s.bandSkipCount)}건`,
+      cls: numOf(s.bandSkipCount) > 0 ? 'text-sky-300' : 'text-gray-500',
+      formula: [
+        ['밴드 폭', `목표 ±${formatNumber(numOf(cfg?.band))}%`],
+        ['생략 건수', `${formatNumber(s.bandSkipCount)}건`, true],
+        ['생략된 매매 예정 금액', won(s.bandSkipAmount)],
+      ],
+      note: '목표에 이미 충분히 가까워 그 회차 매매를 건너뛴 횟수입니다(세금·수수료 절약). '
+        + '급락이 발동한 종목은 밴드를 건너뛰고 매수를 강행하므로 여기에 잡히지 않습니다.',
+    }] : []),
+    ...(dipOn ? [{
+      label: '급락 투입', value: `${formatNumber(events.length)}건`,
+      cls: events.some((e) => e.used > 0.5) ? 'text-amber-300' : 'text-gray-500',
+      formula: [
+        ...(events.length
+          ? events.slice(0, 30).map((e) => [
+            `${e.date} · ${e.name || e.code} −${formatNumber(e.level)}%`,
+            `개방 ${won(e.unlocked)} → 사용 ${won(e.used)}`,
+          ])
+          : [['발동 없음 — 아직 단계 낙폭에 도달하지 않았습니다', '-']]),
+        ...(events.length > 30 ? [[`… 외 ${events.length - 30}건`, '-']] : []),
+        ...(events.length ? [[
+          '합계 (개방 / 사용)',
+          `${won(events.reduce((a, e) => a + e.unlocked, 0))} / ${won(events.reduce((a, e) => a + e.used, 0))}`,
+          true,
+        ]] : []),
+      ],
+      note: '종목별 ‘가격 고점’ 대비 낙폭이 각 단계에 처음 닿은 날, 그 시점 누적 분배금의 일부를 열어 '
+        + '다음 리밸런싱 매수 1회에 쓴 내역입니다. 새 고점이 서면 전 단계가 다시 무장됩니다. '
+        + '‘사용’이 0이면 그 회차에 매매 예수금만으로 충분했다는 뜻입니다.',
+    }] : []),
+    {
+      label: '부족 발생', value: `${formatNumber(s.shortfallMonths)}개월`,
+      cls: numOf(s.shortfallMonths) > 0 ? 'text-amber-300' : 'text-gray-500',
+      formula: [
+        ['매수가 재원 한도로 잘린 달', `${formatNumber(s.shortfallMonths)}개월`, true],
+        ...(shortMonths.length
+          ? shortMonths.slice(0, 24).map((m) => [m.ym, `${formatNumber(m.shortfallCount)}건`])
+          : [['없음 — 모든 매수가 목표대로 체결됐습니다', '-']]),
+      ],
+      note: "‘예수금 부족’ 또는 ‘바닥선’으로 매수액이 줄어든 달의 수입니다. "
+        + '잘려서 수량이 0이 되면 표에 행 자체가 남지 않기 때문에 이 카운터가 대신 알려 줍니다.',
+    },
+    ...(annualOn ? [{
+      label: '연간 증액', value: won(s.cumAnnualReview),
+      cls: numOf(s.cumAnnualReview) > 0 ? 'text-teal-300' : 'text-gray-500',
+      formula: [
+        ['주기', `${ar.everyMonths}개월마다`],
+        ['잉여의', `${formatNumber(ar.value)}%`],
+        ['생활비 예약금 (투자 제외)', won(ar.reserve)],
+        ...(result.annualRows || []).slice(0, 24).map((r) => [
+          `${r.ym} · 예수금 ${won(r.cashBefore)}`,
+          `+${won(r.amount)}${r.note ? ` (${r.note})` : ''}`,
+        ]),
+        ['누적 증액', won(s.cumAnnualReview), true],
+      ],
+      note: '예약금을 뺀 잉여 현금의 일부를 목표 평가금에 얹어 월 분배금을 키우는 가드레일입니다. '
+        + '증액 자체는 현금을 움직이지 않고 목표만 올리며, 바로 이어지는 리밸런싱이 실제로 매수합니다.',
+    }] : []),
+    ...(taxOn ? [{
+      label: '분배금 세금', value: won(s.cumDivTax), cls: 'text-gray-400',
+      formula: [
+        ['원천징수율', `${formatNumber(numOf(cfg?.divTaxPct))}%`],
+        ['세전 지급 누계', won(numOf(s.cumDivPaid) + numOf(s.cumDivTax))],
+        ['− 원천징수 세금', won(s.cumDivTax)],
+        ['＝ 실제 입금 (예수금 반영)', won(s.cumDivPaid), true],
+      ],
+      note: '지급일에 원천징수를 떼고 입금합니다. 분배락 기준 권리 확정액(누적 분배금)은 세전 그대로 두고 '
+        + '현금 흐름만 세후로 바꿉니다 — 그래야 기말 예수금 분해가 그대로 맞습니다. 매매차익 과세는 반영하지 않습니다.',
+    }] : []),
+  ];
+
   return (
     <div className={`grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 ${compact ? 'mb-2' : 'mb-3'}`}>
       {cards.map((c) => <SummaryCard key={c.label} {...c} compact={compact} />)}
@@ -577,6 +762,8 @@ function scenarioSubtitle(cfg, summary) {
     POLICY_LABEL[cfg.policy] || cfg.policy,
     `분배금 ${DIV_REINVEST_LABEL[cfg.divReinvest] || '현금 보유'}`
       + (cfg.divReinvest !== 'hold' ? ` · ${DIV_SPLIT_LABEL[cfg.divReinvestSplit] || ''}` : ''),
+    // ⚠️ 켠 보조 규칙만 붙는다(기본값은 한 글자도 안 나온다) — 안 그러면 부제가 상시 두 줄이 된다.
+    ...strategyTags(cfg),
   ];
   return parts.join(' · ');
 }
@@ -637,6 +824,10 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
               <th className={`${TH} text-right`}>누적 분배금</th>
               <th className={`${TH} text-right`}>분배금 재투자</th>
               <th className={`${TH} text-right`}>기말 예수금</th>
+              {/* ⚠️ 이 두 열이 이 작업의 목적이다 — '평가금 고정 + 현금 버퍼' 전략은 최종 수익률보다
+                      **버텼는가(최저 예수금)**와 **월 분배가 일정했는가(표준편차)**로 우열이 갈린다. */}
+              <th className={`${TH} text-right`} title="영업일 곡선 전 구간에서 총 예수금이 가장 낮았던 값 — 0에 붙으면 목표를 복원할 수 없다">최저 예수금</th>
+              <th className={`${TH} text-right`} title="월별 분배금(분배락 기준)의 표준편차 — 작을수록 월 수입이 일정했다">월분배 표준편차</th>
               <th className={`${TH} text-right`}>최대 낙폭</th>
             </tr>
           </thead>
@@ -661,8 +852,10 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
                       </span>
                     </button>
                   </td>
+                  {/* ⚠️ colSpan은 위 thead의 **지표 열 수와 반드시 같아야 한다**(시나리오 열 제외).
+                          열을 더하고 여기를 안 고치면 실행 불가 행부터 표 정렬이 통째로 어긋난다. */}
                   {!r?.ok || !s ? (
-                    <td colSpan={8} className={`${TD} text-amber-300/90 text-[11px]`}>
+                    <td colSpan={10} className={`${TD} text-amber-300/90 text-[11px]`}>
                       <AlertCircle size={10} className="inline -mt-0.5 mr-1" />
                       {r?.fatal || '실행할 수 없는 설정입니다.'}
                     </td>
@@ -677,6 +870,14 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
                         {s.cumReinvestNet ? won(-s.cumReinvestNet) : '-'}
                       </td>
                       <td className={`${COL} text-gray-300`}>{won(s.finalCash)}</td>
+                      <td className={`${COL} ${(s.minCash?.value ?? 0) < 0 ? 'text-blue-400 font-bold' : 'text-gray-300'}`}
+                        title={s.minCash?.date ? `${s.minCash.date} 기준` : undefined}>
+                        {won(s.minCash?.value ?? 0)}
+                      </td>
+                      <td className={`${COL} text-gray-400`}
+                        title={`월 평균 ${won(s.divMonthlyAvg)} · 표준편차 ${won(s.divMonthlyStdev)}`}>
+                        {won(s.divMonthlyStdev)}
+                      </td>
                       <td className={`${COL} text-gray-400`}>{s.maxDrawdown.toFixed(2)}%</td>
                     </>
                   )}
@@ -728,6 +929,7 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
           </div>
           <p className="text-[11px] text-gray-600 mb-1.5">{scenarioSubtitle(cfg, r.summary)}</p>
           <SummaryCards result={r} compact />
+          <StrategyKpis result={r} cfg={cfg} compact />
           <div className="border border-gray-800 rounded-lg p-2 bg-gray-900/40">
             <CurveChart curve={r.curve} />
           </div>
@@ -1095,6 +1297,26 @@ export default function BacktestPage({
             Math.round(x.added), '', Math.round(x.targetAfter), '', '', '', '']);
         }
       }
+      // 연간 가드레일 증액 — 화면 teal 블록과 동일 소스(매월 증액과 별개 행)
+      if (m.annualReview && m.annualReview.amount > 0) {
+        const a = m.annualReview;
+        rows.push([`${m.ym} 연간증액`, a.date, `잉여의 ${a.value}% (예약금 ${Math.round(a.reserve || 0)})`,
+          '', Math.round(a.cashBefore), '', Math.round(a.amount), '', '', '', '', '', '']);
+        for (const x of a.perAsset) {
+          if (!(x.added > 0)) continue;
+          rows.push([`${m.ym} 연간배분`, a.date, `${x.name}(${x.code})`, '', '', '',
+            Math.round(x.added), '', Math.round(x.targetAfter), '', '', '', '']);
+        }
+      }
+      // 급락 분할투입 — 화면 amber 블록과 동일 소스(summary.dipEvents를 그 달 것만 필터)
+      for (const e of (result.summary.dipEvents || []).filter((x) => x.date.slice(0, 7) === m.ym)) {
+        rows.push([`${m.ym} 급락투입`, e.date, `${e.name}(${e.code}) −${e.level}%`, Math.round(e.price),
+          Math.round(e.peak), '', Math.round(e.used), '', Math.round(e.unlocked), '', '', '', '']);
+      }
+      // 밴드 생략 — 화면 월 요약과 동일 소스(생략은 거래 행이 남지 않으므로 이 줄이 유일한 흔적)
+      if (m.bandSkipCount > 0) {
+        rows.push([`${m.ym} 밴드생략`, '', `${m.bandSkipCount}건`, '', '', '', Math.round(m.bandSkipAmount), '', '', '', '', '', '']);
+      }
       // 월말 보유 — 그 달에 거래가 없던 종목도 포함(화면 '월말 보유 현황'과 동일 소스)
       for (const h of m.holdings) {
         rows.push([`${m.ym} 월말보유`, m.lastDate, `${h.name}(${h.code})`, h.price, '', '', '',
@@ -1110,18 +1332,37 @@ export default function BacktestPage({
     }
     // ⚠️ 합이 정확히 기말 예수금이 되는 항등식(검증 #110). 분배금은 **지급 기준**을 쓴다.
     //    ⚠️ 분배금 재투자를 켜면 cumReinvestNet 항이 빠질 수 없다 — 없으면 소계가 어긋난다.
+    //    ⚠️ 원천징수를 켜면 '누적 분배금' 항은 **세후**다 — 세금은 애초에 입금되지 않은 돈이라
+    //       이 그룹에 항을 더하면 합이 예수금과 어긋난다. 세금은 아래 '참고' 행으로 따로 적는다.
+    const taxedCsv = result.summary.cumDivTax > 0.5;
     for (const [label, value] of [
       ['초기 매수 후 잔여', result.initialCashAfter],
       ['누적 매매차익', result.summary.cumTradeNet],
       ['종목 재편 순현금', result.summary.cumStructuralNet],
       ['분배금 재투자 매수', result.summary.cumReinvestNet],
-      ['누적 분배금', result.summary.cumDivPaid],
+      [`누적 분배금${taxedCsv ? '(세후)' : ''}`, result.summary.cumDivPaid],
     ]) {
       if (Math.round(value) === 0) continue;
       rows.push(['기말예수금 내역', '', label, '', '', '', '', '', Math.round(value), '', '', '', '']);
     }
     rows.push(['기말 합계', result.summary.endDate, '', '', '', '', '', '', Math.round(result.summary.finalEval),
       '', '', '', Math.round(result.summary.finalCash)]);
+    // 전략 지표 + 설정 요약 — ⚠️ 위 항등식 그룹 **밖**이다(합계에 섞이면 안 된다).
+    //    파일만 받아 본 사람이 "어떤 조건으로 돌린 결과인가"를 알 수 있어야 한다.
+    for (const [label, value] of [
+      ['최저 예수금', `${Math.round(result.summary.minCash?.value ?? 0)} (${result.summary.minCash?.date || '-'})`],
+      ['분배금 주머니 최저점', `${Math.round(result.summary.minCashDiv?.value ?? 0)} (${result.summary.minCashDiv?.date || '-'})`],
+      ['월 분배금 평균', Math.round(result.summary.divMonthlyAvg)],
+      ['월 분배금 표준편차', Math.round(result.summary.divMonthlyStdev)],
+      ['밴드 생략', `${result.summary.bandSkipCount}건 / ${Math.round(result.summary.bandSkipAmount)}`],
+      ['급락 투입 발동', `${result.summary.dipEvents.length}건`],
+      ['부족 발생', `${result.summary.shortfallMonths}개월`],
+      ['누적 연간증액', Math.round(result.summary.cumAnnualReview)],
+      ...(taxedCsv ? [['원천징수 세금(참고 · 위 합계에 미포함)', Math.round(result.summary.cumDivTax)]] : []),
+      ['전략 옵션', strategyTags(active).join(' · ') || '사용 안 함(기본)'],
+    ]) {
+      rows.push(['참고 지표', '', label, '', '', '', '', '', value, '', '', '', '']);
+    }
     // ⚠️ BOM은 '\ufeff' 이스케이프로 — 소스에 보이지 않는 문자를 직접 넣으면 편집·머지 중 조용히
     //    사라져 엑셀에서 한글이 깨진다(원인 추적이 매우 어렵다).
     const csv = '\ufeff' + rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
@@ -1140,13 +1381,19 @@ export default function BacktestPage({
    */
   const downloadCompareCsv = () => {
     if (!compareRuns.length) return;
+    // ⚠️ 열 구성은 화면 비교 표와 1:1이어야 한다. 설정 요약 열은 화면 부제(scenarioSubtitle)가
+    //    담고 있는 정보를 CSV에서도 **열로 분해**해 필터·정렬이 가능하게 한 것이다.
     const rows = [[
       '시나리오', '기간', '초기 투자금', '리밸런싱', '분배금 처리', '배분 기준', '목표 기준',
+      '밴드(%)', '평시 매수 재원', '급락 분할투입', '현금 바닥선(%)', '연간 증액', '원천징수(%)',
       '최종 자산', '총 손익', '수익률(%)', '누적 매매차익', '누적 분배금', '분배금 재투자', '기말 예수금',
+      '최저 예수금', '최저 예수금일', '월분배 평균', '월분배 표준편차', '밴드 생략(건)', '급락 발동(건)', '부족 발생(개월)',
       '기말 평가액', '최대 낙폭(%)', '비고',
     ]];
     for (const { cfg, result: r } of compareRuns) {
       const s = r?.summary;
+      const dip = dipOf(cfg);
+      const ar = annualOf(cfg);
       rows.push([
         cfg.name,
         s ? `${s.startDate} ~ ${s.endDate}` : `${cfg.startDate} ~ ${cfg.endDate}`,
@@ -1155,6 +1402,13 @@ export default function BacktestPage({
         DIV_REINVEST_LABEL[cfg.divReinvest] || cfg.divReinvest,
         cfg.divReinvest === 'hold' ? '-' : (DIV_SPLIT_LABEL[cfg.divReinvestSplit] || cfg.divReinvestSplit),
         TARGET_MODE_LABEL[cfg.targetMode] || cfg.targetMode,
+        numOf(cfg.band) > 0 ? cfg.band : '-',
+        BUY_FUNDING_LABEL[cfg.buyFunding || 'both'],
+        dip.enabled ? dip.levels.map((l) => `-${l.drop}%/${l.unlockPct}%`).join(' ') : '-',
+        numOf(cfg.cashFloorPct) > 0 ? cfg.cashFloorPct : '-',
+        ar.mode === 'pctOfSurplus' && numOf(ar.value) > 0
+          ? `${ar.everyMonths}개월마다 잉여의 ${ar.value}% (예약금 ${Math.round(ar.reserve)})` : '-',
+        numOf(cfg.divTaxPct) > 0 ? cfg.divTaxPct : '-',
         s ? Math.round(s.finalTotal) : '',
         s ? Math.round(s.profit) : '',
         s ? s.profitRate.toFixed(2) : '',
@@ -1162,6 +1416,13 @@ export default function BacktestPage({
         s ? Math.round(s.cumDivAccrued) : '',
         s ? Math.round(-s.cumReinvestNet) : '',
         s ? Math.round(s.finalCash) : '',
+        s ? Math.round(s.minCash?.value ?? 0) : '',
+        s ? (s.minCash?.date || '') : '',
+        s ? Math.round(s.divMonthlyAvg) : '',
+        s ? Math.round(s.divMonthlyStdev) : '',
+        s ? s.bandSkipCount : '',
+        s ? s.dipEvents.length : '',
+        s ? s.shortfallMonths : '',
         s ? Math.round(s.finalEval) : '',
         s ? s.maxDrawdown.toFixed(2) : '',
         r?.ok ? (r.warnings.length ? `확인 필요 ${r.warnings.length}건` : '') : (r?.fatal || '실행 불가'),
@@ -1844,6 +2105,314 @@ export default function BacktestPage({
                 </label>
               </Section>
 
+              {/* ⚠️ 번호를 '⑤-b'로 둔 이유 — ⑥ 종목을 ⑦로 밀면 **엔진 경고 문구**('⑥ 종목에서 목표
+                      비중을 입력하세요')와 화면 번호가 갈린다. ②-b(매월 증액)와 같은 선례를 따른다. */}
+              <Section
+                title="⑤-b 전략 옵션 — 평가금 고정 보조 규칙"
+                badge={strategyBadge(active)}
+                hint={(
+                  <>
+                    <p>
+                      <b className="text-gray-300">목표 평가금을 고정</b>해 두고(오르면 팔고 내리면 사서 복원),
+                      분배금은 따로 모아 두었다가 <b className="text-gray-300">급락할 때만</b> 푸는 운용을 위한
+                      보조 규칙 6종입니다.
+                    </p>
+                    <p className="mt-1 text-gray-500">
+                      ※ <b className="text-gray-400">전부 꺼 두는 것이 기본값</b>이고, 그 상태에서는 기존 시나리오의
+                      결과가 1원도 달라지지 않습니다. 필요한 것만 켜세요.
+                    </p>
+                    <p className="mt-1 text-gray-500">
+                      ※ 여섯 규칙은 모두 <b className="text-gray-400">정기 리밸런싱에만</b> 걸립니다 —
+                      초기 매수·종목 재편(이벤트)·분배금 재투자는 종전 규칙 그대로 돕니다.
+                    </p>
+                  </>
+                )}
+              >
+                {/* ── A. 리밸런싱 밴드 ── */}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-1">
+                    <span className={LABEL}>리밸런싱 밴드 (%)</span>
+                    <Hint width={360}>
+                      <p>
+                        리밸런싱 전 평가액이 목표금액의 <b className="text-gray-300">±이 비율 안</b>이면
+                        그 종목의 <b className="text-gray-300">그 회차 매매를 생략</b>합니다. 목표 근처에서
+                        몇 주씩 사고파는 잔매매를 줄여 세금·수수료를 아끼는 장치입니다.
+                      </p>
+                      <p className="mt-1">
+                        예) 목표 1,000만원 · 밴드 3% → 평가액이 970만~1,030만원이면 그냥 둡니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">0이면 밴드 없음</b>(종전 동작). 목표가 0인 종목(전량 청산)은
+                        밴드와 무관하게 항상 실행하고, <b className="text-gray-400">급락이 발동한 종목</b>도
+                        밴드를 건너뛰고 매수를 강행합니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 종목 재편(이벤트) 매매와 분배금 재투자에는 적용하지 않습니다.
+                      </p>
+                    </Hint>
+                  </div>
+                  <NumInput value={numOf(active.band) || ''} disabled={readOnly} placeholder="0 = 밴드 없음"
+                    onCommit={(v) => patchActive({ band: Math.max(0, v) })} />
+                </div>
+
+                {/* ── B. 평시 매수 재원 ── */}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-1">
+                    <span className={LABEL}>평시 매수 재원</span>
+                    <Hint width={360}>
+                      <p>
+                        정기 리밸런싱 <b className="text-gray-300">매수</b>가 어느 돈을 쓸지 정합니다.
+                        예수금은 내부적으로 <b className="text-gray-300">매매 몫</b>(매도 차익)과
+                        <b className="text-gray-300"> 분배금 몫</b>(지급받아 아직 안 쓴 분배금) 두 주머니로 나뉩니다.
+                      </p>
+                      <p className="mt-1">
+                        <b className="text-gray-300">예수금 전부</b> — 매매 몫을 먼저 쓰고 모자라면 분배금 몫도 씁니다(기본).
+                      </p>
+                      <p className="mt-1">
+                        <b className="text-gray-300">매매 예수금만</b> — 분배금은 <b className="text-gray-300">손대지 않고 적립</b>하고,
+                        아래 <b className="text-gray-300">급락 분할투입</b>이 열어 준 한도 안에서만 씁니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">④ 분배금 처리</b>를 재투자로 둔 경우의 재투자 매수는 원래
+                        분배금 주머니에서 나가므로 이 설정과 무관합니다.
+                      </p>
+                    </Hint>
+                  </div>
+                  <div className="flex gap-1">
+                    {[['both', '예수금 전부'], ['tradeOnly', '매매 예수금만']].map(([v, l]) => (
+                      <button key={v} disabled={readOnly}
+                        className={`${BTN} flex-1 ${(active.buyFunding || 'both') === v ? 'text-sky-200 border-sky-600 bg-sky-900/40' : 'text-gray-400 border-gray-700 hover:bg-gray-800'}`}
+                        onClick={() => patchActive({ buyFunding: v })}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ── C. 급락 분할투입 ── */}
+                <div className="flex flex-col gap-1.5 border-t border-gray-800 pt-2">
+                  {/* ⚠️ Hint(=<button>)를 <label> **안**에 두지 말 것 — label의 활성화 동작이
+                          내부 체크박스를 함께 토글해, ? 아이콘을 누를 때마다 급락 분할투입이
+                          켜졌다 꺼진다(Section 헤더의 '버튼 중첩 금지'와 같은 부류). */}
+                  <div className="flex items-center gap-1.5">
+                    <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+                      <input type="checkbox" checked={dipOf(active).enabled} disabled={readOnly}
+                        onChange={(e) => patchActive({ dip: { ...dipOf(active), enabled: e.target.checked } })} />
+                      급락 분할투입 (적립 분배금을 단계적으로 푼다)
+                    </label>
+                    <Hint width={380}>
+                      <p>
+                        종목별 <b className="text-gray-300">가격 고점</b>(백테스트 구간 내 최고 종가) 대비 당일 종가
+                        낙폭이 각 단계에 <b className="text-gray-300">처음 닿으면</b>, 그 시점 적립 분배금의
+                        일부를 열어 <b className="text-gray-300">그 종목의 다음 리밸런싱 매수 1회</b>에 씁니다.
+                      </p>
+                      <p className="mt-1">
+                        평가액이 아니라 <b className="text-gray-300">가격</b> 고점을 쓰는 이유는, 리밸런싱으로 수량이
+                        계속 변해 평가액 고점은 왜곡되기 때문입니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 각 단계는 <b className="text-gray-400">고점이 갱신되기 전까지 1회만</b> 발동하고,
+                        새 고점이 서면 전 단계가 다시 무장됩니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 발동한 종목은 그 회차에 <b className="text-gray-400">밴드 검사를 건너뜁니다</b>(급락 시에는
+                        밴드로 매수를 막지 않습니다).
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 매수는 <b className="text-gray-400">매매 예수금을 먼저 쓰고</b> 모자란 만큼만 열린 분배금에서
+                        꺼냅니다 — 그래서 ‘사용’이 0일 수 있습니다.
+                      </p>
+                    </Hint>
+                  </div>
+                  {dipOf(active).enabled && (
+                    <div className="flex flex-col gap-1">
+                      <div className="grid grid-cols-[1fr_1fr] gap-2">
+                        <span className={LABEL}>고점 대비 낙폭 (%)</span>
+                        <span className={LABEL}>이때 풀 비율 (적립 분배금의 %)</span>
+                      </div>
+                      {dipOf(active).levels.map((lv, i) => (
+                        <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                          <NumInput value={lv.drop} disabled={readOnly}
+                            onCommit={(v) => patchActive({
+                              dip: {
+                                ...dipOf(active),
+                                levels: dipOf(active).levels.map((x, j) => (j === i ? { ...x, drop: Math.min(100, Math.max(0.1, v)) } : x)),
+                              },
+                            })} />
+                          <NumInput value={lv.unlockPct} disabled={readOnly}
+                            onCommit={(v) => patchActive({
+                              dip: {
+                                ...dipOf(active),
+                                levels: dipOf(active).levels.map((x, j) => (j === i ? { ...x, unlockPct: Math.min(100, Math.max(0, v)) } : x)),
+                              },
+                            })} />
+                          {/* ⚠️ 삭제·추가 버튼이 없으면 중복 낙폭을 적었을 때 정규화가 행을 지운 뒤
+                                  **되돌릴 수단이 사라진다**(적대적 리뷰 확정 결함). */}
+                          <button className="p-1 text-gray-600 hover:text-red-400 shrink-0 disabled:opacity-30"
+                            title="이 단계 삭제"
+                            disabled={readOnly || dipOf(active).levels.length <= 1}
+                            onClick={() => patchActive({
+                              dip: { ...dipOf(active), levels: dipOf(active).levels.filter((_, j) => j !== i) },
+                            })}>
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`}
+                        disabled={readOnly || dipOf(active).levels.length >= MAX_BT_DIP_LEVELS}
+                        onClick={() => {
+                          const cur = dipOf(active).levels;
+                          const next = Math.min(100, (cur.length ? cur[cur.length - 1].drop : 0) + 10);
+                          patchActive({ dip: { ...dipOf(active), levels: [...cur, { drop: next, unlockPct: 0 }] } });
+                        }}>
+                        <Plus size={10} className="inline -mt-0.5" /> 단계 추가 ({dipOf(active).levels.length}/{MAX_BT_DIP_LEVELS})
+                      </button>
+                      {/* ⚠️ 중복 낙폭은 정규화가 하나만 남기므로 **입력하는 순간** 알려야 한다 —
+                              모르고 저장하면 그 단계가 영구히 사라진다. */}
+                      {(() => {
+                        const ds = dipOf(active).levels.map((x) => x.drop);
+                        if (new Set(ds).size === ds.length) return null;
+                        return (
+                          <p className="text-[10px] text-amber-400/90 leading-relaxed">
+                            ⚠️ 같은 낙폭이 겹칩니다 — <b>저장하면 하나만 남습니다</b>(그 전까지는 두 번 발동해
+                            개방액이 두 배가 됩니다). 낙폭을 서로 다르게 고치세요.
+                          </p>
+                        );
+                      })()}
+                      <p className="text-[10px] text-gray-500 leading-relaxed">
+                        낙폭이 작은 단계부터 순서대로 정렬됩니다. 개방 비율의 합은 100%를 넘지 않게 잡는 것이
+                        보통이지만(합이 크면 나중 단계에서 잔액만큼만 열립니다) 강제하지는 않습니다.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── D. 현금 바닥선 ── */}
+                <div className="flex flex-col gap-1 border-t border-gray-800 pt-2">
+                  <div className="flex items-center gap-1">
+                    <span className={LABEL}>현금 바닥선 (목표금액 합계의 %)</span>
+                    <Hint width={360}>
+                      <p>
+                        정기 리밸런싱 매수가 끝난 뒤 총 예수금이 이 선 아래로 내려가지 않도록
+                        <b className="text-gray-300"> 매수액을 줄입니다</b>. 바닥선 금액 =
+                        <b className="text-gray-300"> 그 시점 활성 종목 목표금액 합계 × 이 비율</b>.
+                      </p>
+                      <p className="mt-1">
+                        예) 목표금액 합계 1억 · 바닥선 5% → 예수금이 500만원 아래로 내려가는 매수는 그만큼만 체결.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">0이면 바닥선 없음</b>(종전 동작). 줄어든 행은 표에
+                        <b className="text-gray-400"> ‘바닥선’</b>으로 표시되고 결과의 ‘부족 발생’에 집계됩니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 바닥선은 <b className="text-gray-400">‘마이너스 예수금 허용’보다 우선</b>합니다 —
+                        바닥선이 0보다 크면 예수금은 음수가 되지 않습니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 매도와 분배금 재투자에는 적용하지 않습니다.
+                      </p>
+                    </Hint>
+                  </div>
+                  <NumInput value={numOf(active.cashFloorPct) || ''} disabled={readOnly} placeholder="0 = 바닥선 없음"
+                    onCommit={(v) => patchActive({ cashFloorPct: Math.max(0, v) })} />
+                  {numOf(active.cashFloorPct) > 0 && active.allowNegativeCash && (
+                    <p className="text-[10px] text-gray-500 leading-relaxed">
+                      ⑤의 ‘마이너스 예수금 허용’이 켜져 있지만 <b className="text-gray-400">바닥선이 우선</b>이라
+                      예수금은 음수가 되지 않습니다.
+                    </p>
+                  )}
+                </div>
+
+                {/* ── E. 연간 가드레일 증액 ── */}
+                <div className="flex flex-col gap-1.5 border-t border-gray-800 pt-2">
+                  <div className="flex items-center gap-1">
+                    <span className={LABEL}>연간 가드레일 증액</span>
+                    <Hint width={380}>
+                      <p>
+                        일정 주기마다 <b className="text-gray-300">생활비 예약금을 뺀 잉여 현금</b>의 일부를
+                        종목 목표금액에 얹어 <b className="text-gray-300">월 분배금을 키웁니다</b>.
+                        시작월 + 주기 × N 이 되는 달의 <b className="text-gray-300">첫 리밸런싱일</b>에 실행합니다.
+                      </p>
+                      <p className="mt-1">
+                        증액액 = (그 시점 예수금 − 예약금) × 비율. 예약금은 <b className="text-gray-300">절대 투자에 쓰지
+                        않습니다</b>(비율을 100%보다 크게 잡아도 예약금은 남습니다).
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">②-b 매월 목표 증액과 완전히 독립</b>입니다. 같은 날 겹치면
+                        매월 증액이 먼저, 연간 증액이 나중입니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">목표 금액 모드 전용</b>입니다 — 목표 비중 % 모드는 목표가
+                        ‘평가액 합계 × 비중’이라 올릴 대상이 없습니다.
+                      </p>
+                    </Hint>
+                  </div>
+                  <select className={INPUT} value={annualOf(active).mode} disabled={readOnly}
+                    onChange={(e) => patchActive({ annualReview: { ...annualOf(active), mode: e.target.value } })}>
+                    <option value="none">사용 안 함</option>
+                    <option value="pctOfSurplus">잉여 현금(예수금 − 예약금)의 % 만큼</option>
+                  </select>
+                  {annualOf(active).mode === 'pctOfSurplus' && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex flex-col gap-1">
+                          <span className={LABEL}>잉여의 비율 (%)</span>
+                          <NumInput value={annualOf(active).value} disabled={readOnly}
+                            onCommit={(v) => patchActive({ annualReview: { ...annualOf(active), value: Math.max(0, v) } })} />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className={LABEL}>주기 (개월)</span>
+                          <NumInput value={annualOf(active).everyMonths} disabled={readOnly}
+                            onCommit={(v) => patchActive({ annualReview: { ...annualOf(active), everyMonths: Math.min(120, Math.max(1, Math.round(v))) } })} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex flex-col gap-1">
+                          <span className={LABEL}>생활비 예약금 (원)</span>
+                          <NumInput value={annualOf(active).reserve} disabled={readOnly}
+                            onCommit={(v) => patchActive({ annualReview: { ...annualOf(active), reserve: Math.max(0, v) } })} />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className={LABEL}>종목별 배분</span>
+                          <select className={INPUT} value={annualOf(active).split} disabled={readOnly}
+                            onChange={(e) => patchActive({ annualReview: { ...annualOf(active), split: e.target.value } })}>
+                            <option value="ratio">현재 목표금액 비율대로</option>
+                            <option value="even">대상 종목에 균등</option>
+                          </select>
+                        </div>
+                      </div>
+                      {active.targetMode === 'ratio' && (
+                        <p className="text-[10px] text-amber-400/90 leading-relaxed">
+                          ⚠️ <b>목표 비중 %</b> 모드에서는 연간 증액이 <b>집행되지 않습니다</b> — 목표가
+                          '종목 평가액 합계 × 비중'이라 늘릴 대상이 없기 때문입니다(②-b 매월 증액과 같은 이유).
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {/* ── F. 분배금 원천징수 ── */}
+                <div className="flex flex-col gap-1 border-t border-gray-800 pt-2">
+                  <div className="flex items-center gap-1">
+                    <span className={LABEL}>분배금 원천징수 (%)</span>
+                    <Hint width={360}>
+                      <p>
+                        지급일에 분배금이 예수금으로 들어올 때 이 비율만큼 <b className="text-gray-300">세금을 떼고</b>
+                        입금합니다(예: 국내 배당소득세 15.4).
+                      </p>
+                      <p className="mt-1">
+                        <b className="text-gray-300">분배락 기준 권리 확정액(누적 분배금)은 세전 그대로</b> 두고
+                        현금 흐름만 세후로 바꿉니다 — 그래야 ‘기말 예수금’ 분해가 그대로 맞습니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">0이면 세금 없음</b>(종전 동작).
+                        매매차익 과세는 반영하지 않습니다(국내주식형 ETF 비과세 전제).
+                      </p>
+                    </Hint>
+                  </div>
+                  <NumInput value={numOf(active.divTaxPct) || ''} disabled={readOnly} placeholder="0 = 세금 없음"
+                    onCommit={(v) => patchActive({ divTaxPct: Math.min(100, Math.max(0, v)) })} />
+                </div>
+              </Section>
+
               <Section
                 title="⑥ 종목"
                 badge={`${active.assets.length}/${MAX_BT_ASSETS}`}
@@ -2177,6 +2746,8 @@ export default function BacktestPage({
 
               {/* 요약 카드 — ⚠️ 비교 종합의 시나리오별 블록과 같은 컴포넌트를 쓴다(복제 금지). */}
               <SummaryCards result={result} />
+              {/* 전략 지표 — 켠 보조 규칙에 해당하는 카드만 나온다(안 켰으면 최저 예수금·월 분배금·부족 발생 3장). */}
+              <StrategyKpis result={result} cfg={active} />
 
               <div className="border border-gray-800 rounded-lg p-2 bg-gray-900/40 mb-3">
                 <CurveChart curve={result.curve} />
@@ -2279,6 +2850,20 @@ export default function BacktestPage({
                                 {t.structural && <span className="ml-1 text-[10px] text-amber-400">재편</span>}
                                 {t.reinvest && <span className="ml-1 text-[10px] text-emerald-400" title="분배금 재투자 매수 — 누적 매매차익에는 포함하지 않습니다">재투자</span>}
                                 {!t.priceExact && <span className="ml-1 text-[10px] text-amber-400" title="그 날짜 종가가 없어 직전 종가를 사용">≈</span>}
+                                {/* ⚠️ 이 표에는 '비고' 열이 없어 t.note가 어디에도 보이지 않았다 —
+                                        '예수금 부족'·'바닥선'·'보유수량 한도'로 매매가 잘린 사실이 화면에서
+                                        통째로 사라진다. 열을 늘리면 12열 정합(thead·orphan·tfoot·CSV)을
+                                        전부 손봐야 하므로 날짜 셀의 배지로 붙인다. */}
+                                {t.note && (
+                                  <span className="ml-1 text-[10px] text-amber-400"
+                                    title={t.note === '바닥선'
+                                      ? '현금 바닥선을 지키기 위해 매수액을 줄였습니다'
+                                      : t.note === '예수금 부족'
+                                        ? '재원 한도까지만 매수했습니다'
+                                        : '보유수량을 넘겨 매도할 수 없어 전량 매도로 줄였습니다'}>
+                                    {t.note}
+                                  </span>
+                                )}
                               </td>
                               <td className={`${TD} text-gray-200 whitespace-nowrap`}><StockLink code={t.code} name={t.name} /></td>
                               <td className={`${TD} text-right text-gray-300`}>{won(t.price)}</td>
@@ -2377,6 +2962,62 @@ export default function BacktestPage({
                         )}
                       </div>
                     )}
+                    {/* 연간 가드레일 증액 — 매월 증액과 **완전히 별개**라 블록도 따로 둔다(색도 teal로 분리).
+                        같은 달에 둘 다 있으면 위(sky)가 매월, 아래(teal)가 연간이다. */}
+                    {m.annualReview && m.annualReview.amount > 0 && (
+                      <div className="mt-1 border border-teal-900/60 rounded-lg bg-teal-950/30 px-2.5 py-2">
+                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[12px]">
+                          <span className="text-teal-300 font-bold">
+                            연간 증액 {won(m.annualReview.amount)}
+                            <span className="ml-1 text-gray-500 font-normal">({annualOf(active).everyMonths}개월 주기)</span>
+                          </span>
+                          <span className="text-gray-500">
+                            {m.annualReview.date} · 예수금 {won(m.annualReview.cashBefore)}
+                            {m.annualReview.reserve > 0 && ` − 예약금 ${won(m.annualReview.reserve)}`}
+                            {' '}의 {formatNumber(m.annualReview.value)}%
+                          </span>
+                          {m.annualReview.note && <span className="text-amber-400/90">{m.annualReview.note}</span>}
+                        </div>
+                        {m.annualReview.perAsset.some((x) => x.added > 0) && (
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                            {m.annualReview.perAsset.filter((x) => x.added > 0).map((x) => (
+                              <span key={x.assetId} className="text-[12px] whitespace-nowrap">
+                                <span className="text-gray-400">{x.name}</span>
+                                <span className="text-teal-300"> +{won(x.added)}</span>
+                                <span className="text-gray-600"> → 목표 {won(x.targetAfter)}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* 급락 분할투입 — 그 달에 발동한 단계. ⚠️ dipEvents는 월별이 아니라 summary에
+                        모여 있으므로 날짜의 앞 7자로 그 달 것만 고른다(월별로 복제 저장하지 않는다). */}
+                    {(() => {
+                      const evs = (result.summary.dipEvents || []).filter((e) => e.date.slice(0, 7) === m.ym);
+                      if (!evs.length) return null;
+                      return (
+                        <div className="mt-1 border border-amber-900/60 rounded-lg bg-amber-950/25 px-2.5 py-2">
+                          <div className="text-[12px] text-amber-300 font-bold mb-1">
+                            급락 분할투입 {evs.length}건
+                            <span className="ml-1 text-gray-500 font-normal">(고점 대비 낙폭이 단계에 처음 닿은 날)</span>
+                          </div>
+                          <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+                            {evs.map((e, i) => (
+                              <span key={`${e.assetId}-${e.date}-${i}`} className="text-[12px] whitespace-nowrap">
+                                <span className="text-gray-500">{e.date} </span>
+                                <StockLink code={e.code} name={e.name} className="text-gray-300 font-bold" />
+                                <span className="text-amber-300"> −{formatNumber(e.level)}%</span>
+                                <span className="text-gray-600">
+                                  {' '}(고점 {won(e.peak)} → {won(e.price)}) · 개방 {won(e.unlocked)} → 사용{' '}
+                                </span>
+                                <b className={e.used > 0.5 ? 'text-amber-200' : 'text-gray-600'}>{won(e.used)}</b>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                     {/* 월말 보유 — ⚠️ 위 표는 '그 달 거래된 종목'만 행이 생기므로, 이 블록이 없으면
                         이번 달에 손대지 않은 종목의 수량·평가금액을 확인할 길이 없다. 모든 보유 종목을
                         같은 시점(월말 영업일)의 종가로 평가한 값이라 합계가 월말 총자산과 정합한다. */}
@@ -2426,6 +3067,22 @@ export default function BacktestPage({
                       {m.cumContribution > 0 && (
                         <span className="text-gray-500">누적 증액 <b className="text-sky-300">{won(m.cumContribution)}</b></span>
                       )}
+                      {m.cumAnnualReview > 0 && (
+                        <span className="text-gray-500">누적 연간증액 <b className="text-teal-300">{won(m.cumAnnualReview)}</b></span>
+                      )}
+                      {m.bandSkipCount > 0 && (
+                        <span className="text-gray-500"
+                          title="목표에 이미 충분히 가까워 그 회차 매매를 건너뛴 건수 — 괄호는 생략된 매매 예정 금액입니다">
+                          밴드 생략 <b className="text-sky-300">{formatNumber(m.bandSkipCount)}건</b>
+                          <span className="text-gray-600"> ({won(m.bandSkipAmount)})</span>
+                        </span>
+                      )}
+                      {m.divTax > 0.5 && (
+                        <span className="text-gray-500"
+                          title="지급일에 원천징수한 세금 — 위 '월 분배금'(분배락 기준)은 세전이고, 예수금에는 세후만 들어옵니다">
+                          원천징수 <b className="text-gray-400">−{won(m.divTax)}</b>
+                        </span>
+                      )}
                       {m.reinvestNet !== 0 && (
                         <span className="text-gray-500">
                           분배금 재투자 <b className="text-emerald-300">{won(-m.reinvestNet)}</b>
@@ -2439,7 +3096,8 @@ export default function BacktestPage({
                       )}
                       {Math.abs(m.divPaid - m.divAccrued) > 0.5 && (
                         <span className="text-gray-600 col-span-2 xl:col-span-4">
-                          ※ 이 달에 실제 입금된 분배금은 {won(m.divPaid)} (월말 분배는 지급일이 다음 달 초)
+                          ※ 이 달에 실제 입금된 분배금은 {won(m.divPaid)}
+                          {m.divTax > 0.5 ? ' (원천징수 후 · 월말 분배는 지급일이 다음 달 초)' : ' (월말 분배는 지급일이 다음 달 초)'}
                         </span>
                       )}
                       {/* ⚠️ 매수 대금을 무엇으로 충당했는지 — 누적 매매차익이 마이너스인 달에는
@@ -2507,13 +3165,24 @@ export default function BacktestPage({
                         { key: 'trade', label: '누적 매매차익', value: result.summary.cumTradeNet, signed: true },
                         { key: 'struct', label: '종목 재편 순현금', value: result.summary.cumStructuralNet, signed: true },
                         { key: 'reinv', label: '분배금 재투자 매수', value: result.summary.cumReinvestNet, signed: true },
-                        { key: 'div', label: '누적 분배금', value: result.summary.cumDivPaid, signed: false },
+                        // ⚠️ 원천징수를 켜면 이 항은 **세후**다 — 세금은 애초에 입금되지 않은 돈이라
+                        //    별도 항으로 더하면 항등식이 깨진다(주석·검증 #204와 같은 정의).
+                        {
+                          key: 'div',
+                          label: `누적 분배금${result.summary.cumDivTax > 0.5 ? ' (세후)' : ''}`,
+                          value: result.summary.cumDivPaid, signed: false,
+                        },
                       ].filter((p) => Math.round(p.value) !== 0).map((p) => (
                         <tr key={p.key} className="border-t border-gray-800/40">
                           <td className={`${TD} pl-7 text-gray-500 text-[12px]`}>
                             └ {p.label}
+                            {p.key === 'div' && result.summary.cumDivTax > 0.5 && (
+                              <span className="text-gray-600" title="지급일에 원천징수한 세금 — 입금되지 않았으므로 위 금액에서 이미 빠져 있다">
+                                {' '}· 원천징수 −{won(result.summary.cumDivTax)}
+                              </span>
+                            )}
                             {p.key === 'div' && Math.abs(result.summary.cumDivAccrued - result.summary.cumDivPaid) > 0.5 && (
-                              <span className="text-gray-600" title="분배락 기준 누적 분배금 — 지급일이 종료일 이후인 몫은 아직 현금이 아니다">
+                              <span className="text-gray-600" title="분배락 기준 누적 분배금(세전) — 지급일이 종료일 이후인 몫은 아직 현금이 아니다">
                                 {' '}(분배락 기준 {won(result.summary.cumDivAccrued)})
                               </span>
                             )}
@@ -2580,9 +3249,59 @@ export default function BacktestPage({
                         (종목별로 따로 지정한 일정은 그대로 실행됩니다).
                       </p>
                     )}
+                    {/* 전략 보조 규칙 — ⚠️ 켠 것만 적는다. 인쇄본만 받아 본 사람이 "왜 이 달엔 매매가
+                        없지?"·"왜 매수가 잘렸지?"를 확인할 수 있는 유일한 자리라 반드시 글자로 남긴다. */}
+                    {numOf(active.band) > 0 && (
+                      <p>
+                        <b>리밸런싱 밴드 ±{formatNumber(active.band)}%</b> — 리밸런싱 전 평가액이 목표금액의 이 범위
+                        안이면 그 회차 매매를 생략했습니다(생략 {formatNumber(result.summary.bandSkipCount)}건 ·
+                        예정 금액 {won(result.summary.bandSkipAmount)}). 목표 0(전량 청산)과 급락 발동 종목은 예외입니다.
+                      </p>
+                    )}
+                    {active.buyFunding === 'tradeOnly' && (
+                      <p>
+                        <b>평시 매수 재원 = 매매 예수금만</b> — 적립된 분배금은 평상시 매수에 쓰지 않고,
+                        급락 분할투입이 열어 준 한도 안에서만 씁니다
+                        {dipOf(active).enabled ? '' : ' (급락 분할투입이 꺼져 있어 사실상 전혀 쓰지 않습니다)'}.
+                        분배금 재투자(④)는 이 설정과 무관하게 그대로 돕니다.
+                      </p>
+                    )}
+                    {dipOf(active).enabled && (
+                      <p>
+                        <b>급락 분할투입</b> — 종목별 <b>가격 고점</b> 대비 낙폭이{' '}
+                        {dipOf(active).levels.map((l) => `−${formatNumber(l.drop)}%(${formatNumber(l.unlockPct)}%)`).join(' · ')}
+                        에 처음 닿으면 그 시점 적립 분배금의 해당 비율을 열어 다음 리밸런싱 매수 1회에 씁니다.
+                        각 단계는 고점이 갱신되기 전까지 1회만 발동합니다(발동 {result.summary.dipEvents.length}건).
+                      </p>
+                    )}
+                    {numOf(active.cashFloorPct) > 0 && (
+                      <p>
+                        <b>현금 바닥선 {formatNumber(active.cashFloorPct)}%</b>(활성 종목 목표금액 합계 기준) —
+                        정기 리밸런싱 매수 후 예수금이 이 아래로 내려가지 않게 매수액을 줄였습니다
+                        (표의 <b>'바닥선'</b> 표시). 마이너스 예수금 허용보다 <b>바닥선이 우선</b>이며,
+                        매도·분배금 재투자에는 적용하지 않습니다.
+                      </p>
+                    )}
+                    {annualOf(active).mode === 'pctOfSurplus' && numOf(annualOf(active).value) > 0 && (
+                      <p>
+                        <b>연간 가드레일 증액</b> — {annualOf(active).everyMonths}개월마다 그 달 첫 리밸런싱일에
+                        (예수금 − 예약금 {won(annualOf(active).reserve)}) × {formatNumber(annualOf(active).value)}%
+                        만큼 목표금액을 올렸습니다(누적 {won(result.summary.cumAnnualReview)}).
+                        예약금은 투자에 쓰지 않습니다. 목표 금액 모드 전용입니다.
+                      </p>
+                    )}
                     <p>
-                      세금·거래수수료·슬리피지는 반영하지 않았습니다. 종가는 앱에 저장된
-                      일별 종가를 사용하며, 그 날짜 기록이 없으면 직전 종가로 이월합니다(≈ 표시).
+                      {numOf(active.divTaxPct) > 0
+                        ? (
+                          <>
+                            분배금 <b>원천징수 {formatNumber(active.divTaxPct)}%</b>를 지급일에 떼고 입금했습니다
+                            (누적 세금 {won(result.summary.cumDivTax)}). '지급 분배금' 열과 '누적 분배금'은
+                            <b> 세전</b>이고, 예수금에 반영된 금액은 <b>세후</b>입니다.
+                            매매차익 과세·거래수수료·슬리피지는 반영하지 않았습니다.
+                          </>
+                        )
+                        : '세금·거래수수료·슬리피지는 반영하지 않았습니다.'}
+                      {' '}종가는 앱에 저장된 일별 종가를 사용하며, 그 날짜 기록이 없으면 직전 종가로 이월합니다(≈ 표시).
                     </p>
                   </div>
                 </div>

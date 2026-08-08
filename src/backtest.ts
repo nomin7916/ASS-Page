@@ -203,6 +203,64 @@ export interface BtContribOverride {
   value: number;
 }
 
+/**
+ * 정기 리밸런싱 **매수**의 재원.
+ *  both      — 매매 주머니 → 분배금 주머니 순으로 쓴다(기본 = 종전 동작).
+ *  tradeOnly — 매매 주머니(cashTrade)만 쓴다. 적립된 분배금(cashDiv)은 평상시에 손대지 않고
+ *              **급락 분할투입(dip)이 개방한 한도 안에서만** 쓴다.
+ *
+ * ⚠️ 분배금 재투자 매수(divReinvest)는 원래 'div' 출금이라 이 설정의 영향을 받지 않는다.
+ * ⚠️ allowNegativeCash와 함께 쓰면 **cashTrade만 음수로 진다**(cashDiv는 음수 불가).
+ * ⚠️ 이벤트(구조 변경)·초기 매수는 종전대로 전체 예수금을 쓴다 — 이 설정은 **정기 리밸런싱 전용**.
+ */
+export type BtBuyFunding = 'both' | 'tradeOnly';
+
+/** 급락 분할투입 1단계. drop=고점 대비 낙폭(%), unlockPct=그 시점 cashDiv에서 개방할 비율(%). */
+export interface BtDipLevel {
+  drop: number;
+  unlockPct: number;
+}
+
+/**
+ * 급락 분할투입.
+ * 종목별 **가격 고점**(백테스트 구간 내 최고 종가) 대비 당일 종가 낙폭이 각 단계에 **처음 도달**하면,
+ * 그 종목의 **다음 정기 리밸런싱 1회**에 한해 분배금 주머니를 `발동 시점 cashDiv × unlockPct/100`
+ * 만큼 개방한다(여러 단계가 겹치면 합산하되 cashDiv 잔액을 넘지 못한다).
+ *
+ * ⚠️ **평가액 고점이 아니라 가격 고점**이다 — 리밸런싱으로 수량이 계속 변하므로 평가액 고점은 왜곡된다.
+ * ⚠️ 각 단계는 **고점이 갱신되기 전까지 1회만** 발동한다(새 고점 = 전 단계 재무장).
+ * ⚠️ 발동한 종목은 그 회차에 리밸런싱 밴드(band) 검사를 **건너뛴다** — 급락 시에는 밴드로 매수를 막지 않는다.
+ */
+export interface BtDip {
+  enabled: boolean;
+  levels: BtDipLevel[];
+}
+
+/**
+ * 연간 가드레일 증액.
+ * 시작일로부터 everyMonths개월이 지난 뒤 도래하는 달의 **첫 정기 리밸런싱일**에,
+ * 생활비 예약금(reserve)을 뺀 잉여 현금의 value%만큼 종목 목표금액을 올린다(이후 매 everyMonths개월 반복).
+ *
+ * ⚠️ 매월 증액(contribution)과 **완전히 독립**이다. 같은 날 겹치면 **contribution 먼저 → annualReview 나중**
+ *    (KIND_ORDER가 contrib < annual 로 고정).
+ * ⚠️ **목표 금액 모드 전용**이다 — 비중 모드는 목표가 '종목 평가액 합계 × 비중'이라 올릴 대상이 없다
+ *    (contribution과 같은 이유로 조기 반환 + 경고. 화면에서도 비활성화한다).
+ * ⚠️ reserve는 **이 증액의 재원에서 제외**될 뿐 예수금의 하한이 아니다 — 증액액만 surplus(=cash−reserve)로
+ *    잘린다. 기존 목표를 복원하는 평소 매수는 예약금이든 아니든 그냥 예수금을 쓴다.
+ *    예수금 자체에 하한을 두려면 **`cashFloorPct`(현금 바닥선)** 를 쓸 것(그쪽이 매수 자체를 자른다).
+ */
+export interface BtAnnualReview {
+  mode: 'none' | 'pctOfSurplus';
+  /** 잉여 현금의 N% */
+  value: number;
+  /** 생활비 예약금(원) — 이 증액의 재원에서 제외한다(예수금 하한은 cashFloorPct가 담당). */
+  reserve: number;
+  /** 반복 주기(개월). 기본 12 */
+  everyMonths: number;
+  /** ratio=현재 목표금액 비율대로 배분 / even=대상 종목에 균등 배분 */
+  split: 'ratio' | 'even';
+}
+
 export interface BtConfig {
   id: string;
   name: string;
@@ -239,6 +297,36 @@ export interface BtConfig {
   contribution: BtContribution;
   /** 특정 월만 다른 증액 규칙. */
   contribOverrides: BtContribOverride[];
+  /* ── 평가금 고정 전략 보조 규칙 (전부 기본값 = 종전 동작) ────────────────────
+   * ⚠️ 여기 6개는 **정기 리밸런싱에만** 걸린다. 초기 매수·이벤트(구조 변경)·분배금 재투자는
+   *    종전 규약 그대로다 — 새 옵션이 그쪽까지 번지면 PDF 재현(#23~#42)이 깨진다.
+   * =========================================================================== */
+  /**
+   * 리밸런싱 밴드(%). 기본 0 = 밴드 없음(종전 동작).
+   * `|리밸런싱 전 평가액 − 목표금액| ≤ 목표금액 × band/100` 이면 **그 종목의 그 회차 매매를 생략**한다.
+   * ⚠️ 목표가 0(전량 청산)인 종목은 밴드와 무관하게 항상 실행한다.
+   */
+  band: number;
+  /** 정기 리밸런싱 매수의 재원. 기본 'both'(매매 → 분배금 순 = 종전 동작). */
+  buyFunding: BtBuyFunding;
+  /** 급락 분할투입. 기본 enabled:false. */
+  dip: BtDip;
+  /**
+   * 현금 바닥선(%). 기본 0 = 바닥선 없음.
+   * 바닥선 금액 = **그 시점 활성 종목 목표금액 합계 × pct/100**.
+   * 정기 리밸런싱 매수(급락 개방 매수 포함)가 끝난 뒤 총 예수금이 이 아래로 내려가지 않도록 매수액을 줄인다.
+   * ⚠️ **allowNegativeCash보다 우선**한다(바닥선이 0보다 크면 음수 예수금 진입 불가).
+   * ⚠️ 매도·분배금 재투자에는 적용하지 않는다.
+   */
+  cashFloorPct: number;
+  /** 연간 가드레일 증액. 기본 mode:'none'. */
+  annualReview: BtAnnualReview;
+  /**
+   * 분배금 원천징수율(%). 기본 0 = 종전 동작.
+   * ⚠️ **현금 흐름만 세후로 바꾼다** — divAccrued(분배락 기준 권리 확정액)는 세전 그대로 두고,
+   *    지급일에 입금되는 divPaid를 세후로 정의한다(BtMonth.divPaid 주석의 항등식 참조).
+   */
+  divTaxPct: number;
   assets: BtAsset[];
   events: BtEvent[];
   overrides: BtOverride[];
@@ -260,6 +348,19 @@ export const MAX_BT_OVERRIDES = 120;
 export const MAX_BT_CONTRIB_OVERRIDES = 120;
 /** rebalMode==='dates'일 때 종목당 지정 가능한 날짜 수 */
 export const MAX_BT_REBAL_DATES = 120;
+/** 급락 분할투입 단계 수 상한 */
+export const MAX_BT_DIP_LEVELS = 5;
+
+/**
+ * 급락 분할투입 기본 단계 — −10%/−20%/−30%에서 적립 분배금을 34/33/33%씩 푼다.
+ * ⚠️ `dip.enabled=false`(기본)면 이 값이 들어 있어도 **아무 일도 일어나지 않는다** — 토글을 켰을 때
+ *    바로 쓸 수 있게 기본값을 채워 둘 뿐이다.
+ */
+export const DEFAULT_DIP_LEVELS: BtDipLevel[] = [
+  { drop: 10, unlockPct: 34 },
+  { drop: 20, unlockPct: 33 },
+  { drop: 30, unlockPct: 33 },
+];
 
 export const BT_COLORS = [
   '#60A5FA', '#F472B6', '#34D399', '#FBBF24', '#A78BFA',
@@ -391,12 +492,34 @@ export interface BtContribRow {
   requested: number;
   /** 실제 증액한 금액(예수금 한도로 잘릴 수 있음) */
   amount: number;
-  mode: 'pctOfCash' | 'amount';
+  /** ⚠️ 'pctOfSurplus'는 **연간 가드레일 증액**(annualReview) 전용이다. */
+  mode: 'pctOfCash' | 'amount' | 'pctOfSurplus';
   value: number;
   /** 그 달 전용 규칙이 적용됐는가 */
   overridden: boolean;
   perAsset: { assetId: string; code: string; name: string; added: number; targetAfter: number }[];
   note: string;
+  /** annualReview 전용 — 그때 남겨 둔 생활비 예약금(표시용). */
+  reserve?: number;
+}
+
+/** 급락 분할투입 발동 1건. */
+export interface BtDipEvent {
+  /** 발동일(그 종가로 낙폭 단계에 처음 도달한 날) */
+  date: string;
+  assetId: string;
+  code: string;
+  name: string;
+  /** 발동 단계 = 고점 대비 낙폭(%) */
+  level: number;
+  unlockPct: number;
+  /** 발동 시점 cashDiv × unlockPct/100 */
+  unlocked: number;
+  /** 개방 한도 안에서 **실제로 매수에 쓴** 금액 */
+  used: number;
+  /** 발동 시점의 가격 고점 / 당일 종가 */
+  peak: number;
+  price: number;
 }
 
 export interface BtMonth {
@@ -424,9 +547,15 @@ export interface BtMonth {
   /**
    * 그 달에 **실제로 입금된** 분배금 합(지급일 기준). 현금 잔고는 이 값으로만 움직인다.
    * ⚠️ 월말 분배는 지급일(기준일+2영업일)이 다음 달 초라 divAccrued와 한 달 어긋나는 것이 정상이다.
+   * ⚠️ **원천징수(divTaxPct)를 뺀 세후 금액**이다(2026-08). 세전 권리 확정액은 divAccrued가,
+   *    세금은 divTax가 따로 센다. 이 정의라야 기말 예수금 분해 항등식이 종전 그대로 성립한다:
+   *      finalCash = initialCashAfter + cumTradeNet + cumStructuralNet + cumReinvestNet + cumDivPaid
    */
   divPaid: number;
   cumDivPaid: number;
+  /** 그 달 원천징수된 분배금 세금(세전 − 세후). divTaxPct=0이면 항상 0. */
+  divTax: number;
+  cumDivTax: number;
   /** 그 달까지 누적 재투자 매수 대금(≤ 0) */
   cumReinvestNet: number;
   /** 그 달 현금 증감 (정기차익 + 구조매매 + 분배금 재투자 + 입금 분배금) */
@@ -462,6 +591,18 @@ export interface BtMonth {
   contribution: BtContribRow | null;
   /** 그 달까지 누적 증액 총액 */
   cumContribution: number;
+  /** 그 달 실행된 **연간 가드레일 증액**(없으면 null). contribution과 완전히 별개다. */
+  annualReview: BtContribRow | null;
+  /** 그 달까지 누적 연간 증액 총액 */
+  cumAnnualReview: number;
+  /** 그 달 리밸런싱 밴드로 **생략한** 매매 건수 / 생략된 매매 예정 금액(절댓값 합) */
+  bandSkipCount: number;
+  bandSkipAmount: number;
+  /**
+   * 그 달 매수가 재원 한도로 잘린 건수('예수금 부족'·'바닥선').
+   * ⚠️ 잘려서 수량이 0이 되면 거래 행 자체가 남지 않으므로, 표에서 사라지는 부족을 여기서 센다.
+   */
+  shortfallCount: number;
 }
 
 export interface BtHolding {
@@ -510,6 +651,8 @@ export interface BtResult {
   /** 영업일 단위 자산 추이 */
   curve: { date: string; evalAmount: number; cash: number; total: number }[];
   finalHoldings: BtHolding[];
+  /** 실행된 연간 가드레일 증액 목록(시간순). 월별로도 BtMonth.annualReview에 실린다. */
+  annualRows: BtContribRow[];
   summary: {
     startDate: string;
     endDate: string;
@@ -529,10 +672,20 @@ export interface BtResult {
     cumReinvestNet: number;
     /** 분배락 기준 누적 분배금 — PDF의 '누적 분배금 합계'와 같은 정의 */
     cumDivAccrued: number;
-    /** 실제 입금된 누적 분배금(지급일 기준). 기말 예수금에 반영된 값. */
+    /**
+     * 실제 입금된 누적 분배금(지급일 기준, **세후**). 기말 예수금에 반영된 값.
+     * ⚠️ `cumDivAccrued − cumDivPaid`를 세금으로 읽지 말 것 — 그 차이에는 **지급일이 종료일 이후라
+     *    아직 현금이 되지 않은 몫**도 섞여 있다(월말 사이클은 마지막 달이 항상 그렇다).
+     *    정확히는 `cumDivAccrued = cumDivPaid + cumDivTax + 미지급 세전분` 이다.
+     *    따라서 화면의 '아직 미지급'은 반드시 `cumDivAccrued − cumDivPaid − cumDivTax`로 구한다.
+     */
     cumDivPaid: number;
+    /** 원천징수된 누적 분배금 세금. divTaxPct=0이면 0. */
+    cumDivTax: number;
     /** 매월 증액(재투자)으로 목표에 더한 누적 금액 */
     cumContribution: number;
+    /** 연간 가드레일 증액으로 목표에 더한 누적 금액 */
+    cumAnnualReview: number;
     /**
      * 기말 예수금 중 매매 몫 / 미사용 분배금 몫 (합 = finalCash).
      * ⚠️ 원천별 분해 항등식(화면 '기말 보유 현황' 표가 그대로 렌더한다):
@@ -545,6 +698,33 @@ export interface BtResult {
     /** 최고 자산 대비 최대 낙폭(%) */
     maxDrawdown: number;
     months: number;
+    /* ── 평가금 고정 전략 생존 판정 지표 ─────────────────────────────────── */
+    /**
+     * 영업일 곡선(curve) 기준 **총 예수금 최저점**과 그 날짜.
+     * ⚠️ 이 전략(목표 평가금 고정 + 하락 시 매수)의 생존 판정 핵심 지표다 — 여기가 0에 붙으면
+     *    그 시점부터 목표를 복원하지 못한다.
+     */
+    minCash: { value: number; date: string };
+    /**
+     * 분배금 주머니(cashDiv) 최저점과 그 날짜.
+     * ⚠️ cashDiv는 0에서 시작하므로 **첫 분배금 입금 이후** 구간에서만 잰다(안 그러면 항상 0).
+     *    분배금이 한 번도 없으면 `{0, ''}`.
+     */
+    minCashDiv: { value: number; date: string };
+    /**
+     * 월별 divAccrued(분배락 기준)의 평균 / 모표준편차.
+     * ⚠️ 구간은 **첫 분배가 있었던 달부터 마지막 달까지**(연속) — 앞쪽 램프업 달을 빼되
+     *    이후의 진짜 0원 달('분배가 끊겼다')은 그대로 포함해야 변동성이 드러난다.
+     */
+    divMonthlyAvg: number;
+    divMonthlyStdev: number;
+    /** 리밸런싱 밴드로 생략한 총 건수 / 총 매매 예정 금액 */
+    bandSkipCount: number;
+    bandSkipAmount: number;
+    /** 급락 분할투입 발동 로그(시간순) */
+    dipEvents: BtDipEvent[];
+    /** 매수가 재원 한도('예수금 부족'·'바닥선')로 잘린 달의 수 */
+    shortfallMonths: number;
   };
 }
 
@@ -687,6 +867,19 @@ export function monthsBetween(startDate: string, endDate: string): string[] {
     guard++;
   }
   return out;
+}
+
+/**
+ * 'YYYY-MM'에 n개월을 더한다(n≥0). 연간 가드레일 증액의 도래월 계산용.
+ * ⚠️ 날짜가 아니라 **월** 산술이다 — 말일 보정 같은 함정이 없다.
+ */
+export function addMonthsToYm(ym: string, n: number): string {
+  if (!/^\d{4}-\d{2}$/.test(ym) || !Number.isFinite(n)) return '';
+  const y = +ym.slice(0, 4);
+  const m = +ym.slice(5, 7) + Math.trunc(n);
+  const ny = y + Math.floor((m - 1) / 12);
+  const nm = ((((m - 1) % 12) + 12) % 12) + 1;
+  return `${ny}-${pad2(nm)}`;
 }
 
 /**
@@ -860,6 +1053,14 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
     contribution: normalizeContribution(partial.contribution),
     contribOverrides: asArr(partial.contribOverrides).slice(0, MAX_BT_CONTRIB_OVERRIDES)
       .map(normalizeContribOverride).filter(Boolean) as BtContribOverride[],
+    // ── 전략 보조 규칙 ──
+    // ⚠️ 전부 '기본값 = 종전 동작'이어야 한다(레거시 시나리오 결과 불변).
+    band: Math.max(0, asNum(partial.band, 0)),
+    buyFunding: partial.buyFunding === 'tradeOnly' ? 'tradeOnly' : 'both',
+    dip: normalizeDip(partial.dip),
+    cashFloorPct: Math.max(0, asNum(partial.cashFloorPct, 0)),
+    annualReview: normalizeAnnualReview(partial.annualReview),
+    divTaxPct: Math.min(100, Math.max(0, asNum(partial.divTaxPct, 0))),
     assets: asArr(partial.assets).slice(0, MAX_BT_ASSETS).map((a, i) => makeBtAsset(a, i)),
     events: asArr(partial.events).slice(0, MAX_BT_EVENTS).map(normalizeEvent),
     overrides: asArr(partial.overrides).slice(0, MAX_BT_OVERRIDES).map(normalizeOverride).filter(Boolean) as BtOverride[],
@@ -909,6 +1110,48 @@ function normalizeContribution(raw: any): BtContribution {
   return {
     mode: CONTRIB_MODES.includes(m) ? m : 'none',
     value: Math.max(0, asNum(raw?.value, 0)),
+    split: s === 'even' ? 'even' : 'ratio',
+  };
+}
+
+/**
+ * 급락 단계 정규화 — 낙폭 오름차순 + 중복 낙폭 제거 + 상한.
+ * ⚠️ 유효한 단계가 하나도 없으면 **기본 3단계로 되돌린다** — 'enabled인데 단계 0개'는 조용히
+ *    아무 일도 안 하는 상태라, 사용자가 켜 놓고 이유를 알 수 없게 된다.
+ */
+function normalizeDipLevels(raw: unknown): BtDipLevel[] {
+  const arr = asArr(raw)
+    .map((l: any) => ({ drop: asNum(l?.drop, NaN), unlockPct: asNum(l?.unlockPct, NaN) }))
+    .filter(l =>
+      Number.isFinite(l.drop) && l.drop > 0 && l.drop <= 100
+      && Number.isFinite(l.unlockPct) && l.unlockPct >= 0 && l.unlockPct <= 100);
+  if (!arr.length) return DEFAULT_DIP_LEVELS.map(l => ({ ...l }));
+  arr.sort((a, b) => a.drop - b.drop);
+  const seen = new Set<number>();
+  const out: BtDipLevel[] = [];
+  for (const l of arr) {
+    if (seen.has(l.drop)) continue;
+    seen.add(l.drop);
+    out.push(l);
+    if (out.length >= MAX_BT_DIP_LEVELS) break;
+  }
+  return out;
+}
+
+function normalizeDip(raw: any): BtDip {
+  return { enabled: !!raw?.enabled, levels: normalizeDipLevels(raw?.levels) };
+}
+
+function normalizeAnnualReview(raw: any): BtAnnualReview {
+  const m = raw?.mode;
+  const s = raw?.split;
+  return {
+    // ⚠️ 레거시(필드 부재)는 반드시 'none'으로 떨어져야 한다 — 기존 시나리오 결과가 이 기능
+    //    도입만으로 1원도 달라지면 안 된다.
+    mode: m === 'pctOfSurplus' ? 'pctOfSurplus' : 'none',
+    value: Math.max(0, asNum(raw?.value, 0)),
+    reserve: Math.max(0, asNum(raw?.reserve, 0)),
+    everyMonths: clampInt(asNum(raw?.everyMonths, 12), 1, 120),
     split: s === 'even' ? 'even' : 'ratio',
   };
 }
@@ -967,6 +1210,14 @@ export function backtestFingerprint(scenarios: unknown): string {
           s?.compareOn === false ? 0 : 1,
           // 매월 증액 규칙 — 결과를 통째로 바꾸는 사용자 설정이라 반드시 지문에 포함
           s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? '',
+          // 전략 보조 규칙(밴드·재원·바닥선·원천징수) — 전부 결과를 바꾸므로 반드시 포함
+          s?.band ?? 0, s?.buyFunding ?? '', s?.cashFloorPct ?? 0, s?.divTaxPct ?? 0,
+          // 급락 분할투입 — 단계 목록까지 포함해야 단계만 고친 편집이 저장된다
+          s?.dip?.enabled ? 1 : 0,
+          asArr(s?.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
+          // 연간 가드레일 증액
+          s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
+          s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? '',
         ],
         c: asArr(s?.contribOverrides).map((o: any) => [o?.id ?? '', o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
         a: asArr(s?.assets).map((a: any) => [
@@ -1291,14 +1542,17 @@ export function runBacktest(input: BtRunInput): BtResult {
   const empty = (fatal: string): BtResult => ({
     ok: false, fatal, warnings, slots: [], assetMeta: [],
     initialDate: '', initialTrades: [], initialCashAfter: 0, months: [], curve: [],
-    finalHoldings: [],
+    finalHoldings: [], annualRows: [],
     summary: {
       startDate: config.startDate, endDate: config.endDate,
       initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
       cumTradeNet: 0, cumStructuralNet: 0, cumReinvestNet: 0,
-      cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0,
+      cumDivAccrued: 0, cumDivPaid: 0, cumDivTax: 0, cumContribution: 0, cumAnnualReview: 0,
       finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0,
+      minCash: { value: 0, date: '' }, minCashDiv: { value: 0, date: '' },
+      divMonthlyAvg: 0, divMonthlyStdev: 0,
+      bandSkipCount: 0, bandSkipAmount: 0, dipEvents: [], shortfallMonths: 0,
     },
   });
 
@@ -1363,6 +1617,9 @@ export function runBacktest(input: BtRunInput): BtResult {
   const usable = positions.filter(p => !!prices[p.asset.code] && seriesRange(prices[p.asset.code]).count > 0);
   if (!usable.length) return empty('선택한 종목 중 종가 데이터가 있는 종목이 없습니다. 종목을 조회하거나 데이터를 붙여넣어 주세요.');
 
+  /** 분배금 원천징수율(0~1). 0이면 이 기능 전체가 무동작(세후 = 세전). */
+  const divTaxRate = Math.min(1, Math.max(0, config.divTaxPct / 100)) || 0;
+
   let cash = config.initialCapital + config.extraCash;
   // ── 예수금 두 주머니 ──
   // ⚠️ 불변식: `cashTrade + cashDiv === cash` (항상). 총액은 종전과 1원도 다르지 않고,
@@ -1401,19 +1658,32 @@ export function runBacktest(input: BtRunInput): BtResult {
     for (const [k, v] of divPocket) divPocket.set(k, v * keep);
   };
   /**
+   * 직전 applyCash가 **어느 주머니에서 얼마씩** 꺼냈는가.
+   * ⚠️ 급락 분할투입(dip)의 '실제 사용액'을 채우기 위한 것이다 — 매수 직후에만 읽고,
+   *    매도(delta≥0)는 {0,0}으로 초기화되므로 앞선 매수 값이 새어 나오지 않는다.
+   */
+  let lastDraw = { fromTrade: 0, fromDiv: 0 };
+  /**
    * 매도(+)는 매매 주머니로, 매수(−)는 주머니에서 꺼낸다.
    * @param prefer 'trade'(기본) = 매매 → 분배금 순 / 'div' = 분배금 → 매매 순.
+   * @param divCap 이 출금에서 **분배금 주머니에서 꺼낼 수 있는 상한**. 기본 Infinity = 종전 동작.
+   *   ⚠️ `buyFunding:'tradeOnly'`가 평시 매수에 0을 넘겨 cashDiv를 잠그고, 급락이 개방한 만큼만
+   *      열어 준다. 상한을 넘긴 잔여는 종전대로 **매매 주머니**가 음수로 떠안는다(cashDiv는 음수 불가).
    * ⚠️ 분배금 재투자 매수는 반드시 'div'로 꺼낸다 — 기본값으로 꺼내면 cashDiv가 줄지 않아
    *    **다음 회차가 같은 분배금을 또 투입**한다(무한 재투자로 예수금이 통째로 빨려 들어간다).
    */
-  const applyCash = (delta: number, date: string, prefer: 'trade' | 'div' = 'trade') => {
+  const applyCash = (
+    delta: number, date: string,
+    prefer: 'trade' | 'div' = 'trade', divCap: number = Infinity,
+  ) => {
     cash += delta;
-    if (delta >= 0) { cashTrade += delta; logBuckets(date); return; }
+    if (delta >= 0) { cashTrade += delta; lastDraw = { fromTrade: 0, fromDiv: 0 }; logBuckets(date); return; }
     let need = -delta;
     let fromTrade = 0;
     let fromDiv = 0;
+    const divRoom = Math.max(0, Math.min(cashDiv, divCap));
     if (prefer === 'div') {
-      fromDiv = Math.max(0, Math.min(cashDiv, need));
+      fromDiv = Math.max(0, Math.min(divRoom, need));
       cashDiv -= fromDiv;
       drainPocket(fromDiv);
       need -= fromDiv;
@@ -1427,7 +1697,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       cashTrade -= fromTrade;
       need -= fromTrade;
       if (need > 0) {
-        fromDiv = Math.max(0, Math.min(cashDiv, need));
+        fromDiv = Math.max(0, Math.min(divRoom, need));
         cashDiv -= fromDiv;
         drainPocket(fromDiv);
         need -= fromDiv;
@@ -1435,6 +1705,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     }
     // 둘 다 바닥나면(allowNegativeCash) 초과분은 매매 주머니가 음수로 진다.
     if (need > 0) cashTrade -= need;
+    lastDraw = { fromTrade: fromTrade + need, fromDiv };
     const ym = ymOf(date);
     if (ym) {
       const cur = drawByYm.get(ym);
@@ -1444,9 +1715,12 @@ export function runBacktest(input: BtRunInput): BtResult {
     }
     logBuckets(date);
   };
+  /** 첫 분배금 입금일 — minCashDiv를 잴 구간의 시작(cashDiv가 0에서 시작하기 때문). */
+  let firstDivDate = '';
   const applyDividend = (amount: number, date: string, assetId?: string) => {
     cash += amount;
     cashDiv += amount;
+    if (amount > 0 && !firstDivDate) firstDivDate = date;
     if (assetId && amount > 0) divPocket.set(assetId, (divPocket.get(assetId) ?? 0) + amount);
     logBuckets(date);
   };
@@ -1485,6 +1759,83 @@ export function runBacktest(input: BtRunInput): BtResult {
     const eq = totalEvalAt(date);
     return eq > 0 ? eq : Math.max(0, cash);
   };
+
+  /**
+   * 그 시점 **활성 종목 목표금액 합계** — 현금 바닥선(cashFloorPct)의 기준.
+   * ⚠️ 비중 모드에서도 targetOf로 환산해 같은 정의를 쓴다(목표 = 분모 × 비중).
+   *    그래서 base(분모)를 인자로 받는다 — 호출부가 이미 구한 값을 재사용해 중복 계산을 막는다.
+   */
+  const activeTargetSum = (date: string, base: number): number => {
+    let s = 0;
+    for (const p of positions) {
+      if (!p.active || p.removed) continue;
+      if (date < p.effectiveStart || date > p.effectiveEnd) continue;
+      s += targetOf(p, config, base);
+    }
+    return s;
+  };
+
+  /* ── 급락 분할투입 상태 ─────────────────────────────────────────────────
+   * dipUnlock  : assetId → 아직 쓰지 않은 개방 한도(원). **키의 존재 자체**가 '이번 회차 밴드 면제'다
+   *              (개방액이 0이어도 급락은 급락이므로 밴드로 매수를 막지 않는다).
+   * dipPending : assetId → 그 한도를 만든 dipEvents 인덱스들(실제 사용액을 비례 배분해 되채운다).
+   * ⚠️ dip.enabled=false면 셋 다 영원히 비어 있어 아무 분기도 타지 않는다.
+   * ========================================================================= */
+  const dipEvents: BtDipEvent[] = [];
+  const dipUnlock = new Map<string, number>();
+  const dipPending = new Map<string, number[]>();
+  /**
+   * 그 종목의 개방을 소진(만료)시킨다. `used`는 실제로 분배금 주머니에서 나간 금액.
+   * ⚠️ 개방은 **다음 정기 리밸런싱 1회 한정**이라, 매수가 없었거나 매도였어도 그 회차가 지나면 만료된다.
+   */
+  const consumeDip = (assetId: string, used: number) => {
+    const idxs = dipPending.get(assetId);
+    if (idxs && idxs.length) {
+      let totalUnlocked = 0;
+      for (const i of idxs) totalUnlocked += dipEvents[i].unlocked;
+      // ⚠️ 'both' 재원 모드에서는 divCap이 무한이라 개방 한도보다 더 꺼낼 수 있다 —
+      //    로그의 '사용액'이 '개방액'을 넘지 않도록 한도로 자른다.
+      const eff = Math.min(Math.max(0, used), totalUnlocked);
+      if (eff > 0 && totalUnlocked > 0) {
+        let left = eff;
+        idxs.forEach((i, k) => {
+          const share = k === idxs.length - 1 ? left : (eff * dipEvents[i].unlocked) / totalUnlocked;
+          left -= share;
+          dipEvents[i].used += share;
+        });
+      }
+    }
+    dipPending.delete(assetId);
+    dipUnlock.delete(assetId);
+  };
+
+  /**
+   * 그 시점 **뒤이은 정기 리밸런싱이 실제로 쓸 수 있는 매수 재원** — 목표 증액(매월·연간)의 상한.
+   *
+   * ⚠️ '보유 예수금(cash)'으로 자르면 안 된다 — `buyFunding:'tradeOnly'`는 분배금 주머니가 잠겨 있고
+   *    현금 바닥선이 있으면 그만큼 못 쓴다. 총 cash로 자르면 **쓸 수 없는 돈까지 목표에 얹혀**
+   *    매달 복리로 부풀고, '누적 증액' 카드가 실제로 투입되지 않은 돈을 보고한다
+   *    (적대적 리뷰 확정 결함: tradeOnly + pctOfCash 100%에서 목표 5,000만 → 3억 4천만, 평가액은 9,386만).
+   * ⚠️ 기본값(`both` + 바닥선 0)에서는 `Math.max(0, cash)`라 종전 `cashBefore` 컷과 **결과가 동일**하다
+   *    (cash<0이면 옛 코드도 `Math.max(0, cashBefore)`로 0을 만들었다).
+   * ⚠️ 같은 회차의 매도 대금이 cashTrade를 불려 줄 수 있지만 그건 옛 컷도 무시하던 2차 효과다 —
+   *    이 값은 '목표만 부풀지 않게' 막는 보수적 상한이지 정확한 예산이 아니다.
+   */
+  const deployableCash = (date: string): number => {
+    let cap = config.buyFunding === 'tradeOnly' ? Math.max(0, cashTrade) : Math.max(0, cash);
+    if (config.cashFloorPct > 0) {
+      const fl = (activeTargetSum(date, targetBaseAt(date)) * config.cashFloorPct) / 100;
+      cap = Math.min(cap, Math.max(0, cash - fl));
+    }
+    return cap;
+  };
+
+  /**
+   * 매수가 재원 한도로 잘린 건수(월별). '예수금 부족'·'바닥선' 둘 다 센다.
+   * ⚠️ 잘려서 수량이 0이 되면 adjustTo가 null을 반환해 **거래 행 자체가 남지 않는다** —
+   *    표에서 사라지는 부족을 이 카운터가 대신 증언한다(summary.shortfallMonths의 원자재).
+   */
+  const shortfallByYm = new Map<string, number>();
 
   /**
    * 비중 합 점검(1회 경고). 분모가 '종목 평가액 합계'로 고정되면서 **합이 100%가 아닌 것의 뜻이
@@ -1533,7 +1884,17 @@ export function runBacktest(input: BtRunInput): BtResult {
    * ⚠️ 현금 한도 검사는 **반올림 후** 한다 — 먼저 자르면 수량이 목표를 넘겨 잡힌 뒤
    *    현금이 마이너스가 되거나, 반대로 1주 덜 사게 된다.
    */
-  const adjustTo = (p: Pos, date: string, target: number, structural: boolean): BtTrade | null => {
+  const adjustTo = (
+    p: Pos, date: string, target: number, structural: boolean,
+    opts?: {
+      /** 매수 재원 상한. 미지정이면 종전대로 전체 예수금(cash). */
+      budget?: number;
+      /** 현금 바닥선을 지키기 위한 매수 상한(= cash − 바닥선). 미지정이면 Infinity. */
+      floorCap?: number;
+      /** 이 매수에서 분배금 주머니에서 꺼낼 수 있는 상한. 미지정이면 Infinity(종전). */
+      divCap?: number;
+    },
+  ): BtTrade | null => {
     const hit = priceAt(prices[p.asset.code], date);
     if (hit.missing || hit.price <= 0) return null;
     const evalBefore = p.qty * hit.price;
@@ -1541,11 +1902,25 @@ export function runBacktest(input: BtRunInput): BtResult {
     let note = '';
 
     if (qty < 0 && -qty > p.qty) { qty = -p.qty; note = '보유수량 한도'; }
-    if (qty > 0 && !config.allowNegativeCash) {
-      const cost = qty * hit.price;
-      if (cost > cash) {
-        const afford = roundQty(cash / hit.price, config.rounding === 'exact' ? 'exact' : 'floor');
-        if (afford < qty) { qty = Math.max(0, afford); note = '예수금 부족'; }
+    if (qty > 0) {
+      // ⚠️ 기본값(opts 미지정)이면 rawBudget=cash · floorCap=Infinity · limited=!allowNegativeCash
+      //    라서 종전 코드와 **문자 그대로 동일**하다. 새 옵션은 전부 opts를 넘기는 정기 리밸런싱에서만 산다.
+      const rawBudget = opts?.budget ?? cash;
+      const floorCap = opts?.floorCap ?? Infinity;
+      const budget = Math.min(rawBudget, floorCap);
+      // ⚠️ 바닥선은 allowNegativeCash보다 **우선**한다 — 바닥선이 걸린 매수는 음수 예수금을 허용해도 자른다.
+      const limited = !config.allowNegativeCash || floorCap < Infinity;
+      if (limited) {
+        const cost = qty * hit.price;
+        if (cost > budget) {
+          const afford = roundQty(budget / hit.price, config.rounding === 'exact' ? 'exact' : 'floor');
+          if (afford < qty) {
+            qty = Math.max(0, afford);
+            note = budget === floorCap && floorCap < rawBudget ? '바닥선' : '예수금 부족';
+            const sym = ymOf(date);
+            if (sym) shortfallByYm.set(sym, (shortfallByYm.get(sym) ?? 0) + 1);
+          }
+        }
       }
     }
     // ⚠️ 결과가 0에 수렴하면 **정확히 전량**으로 스냅한다(QTY_EPS 주석 참조). p.qty를 나중에
@@ -1554,7 +1929,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (qty === 0) return null;
 
     const cashDelta = -qty * hit.price;
-    applyCash(cashDelta, date);
+    applyCash(cashDelta, date, 'trade', opts?.divCap ?? Infinity);
     const qtyBefore = p.qty;
     p.qty += qty;
 
@@ -1726,15 +2101,59 @@ export function runBacktest(input: BtRunInput): BtResult {
     }
   }
 
+  /* ── 급락 분할투입: '고점 대비 −N% 첫 도달' 사전 탐지 ─────────────────────
+   * ⚠️ **가격 고점** 기준이다(평가액 아님) — 리밸런싱으로 수량이 계속 변하므로 평가액 고점은 왜곡된다.
+   * ⚠️ 새 고점이 서면 모든 단계를 재무장한다(각 단계는 고점 갱신 전까지 1회만).
+   * ⚠️ carry-forward 종가(priceAt)를 쓰되 값이 아예 없는 날은 건너뛴다 — 이월된 날은 낙폭이
+   *    직전일과 같아 어차피 새로 발동하지 않는다.
+   * 여기서는 **발동일만** 확정한다. 개방액은 런타임 cashDiv에 달려 있어 dip 스텝에서 계산한다.
+   * =========================================================================== */
+  type DipTrig = { assetId: string; level: number; unlockPct: number; peak: number; price: number };
+  const dipTrigByDate = new Map<string, DipTrig[]>();
+  // ⚠️ 단계 목록은 **반드시 정규화한 사본**으로 돈다(정렬·중복 낙폭 제거·상한).
+  //    화면은 로컬 사본을 2.5초 idle에만 승격하므로, 같은 낙폭을 두 번 적으면 저장 전에는
+  //    그 단계가 **두 번 발동해 개방액이 2배**가 되고, 저장·재로드 뒤에는 normalizeDipLevels가
+  //    dedup해 결과가 달라진다 — **같은 시나리오가 세션에 따라 다른 결과**를 내는 최악의 상태다.
+  //    여기서 정규화하면 런타임과 영속 표현이 항상 일치한다(적대적 리뷰 확정 결함).
+  const dipLevels = config.dip.enabled ? normalizeDipLevels(config.dip.levels) : [];
+  if (dipLevels.length > 0) {
+    for (const p of positions) {
+      const series = prices[p.asset.code];
+      if (!series) continue;
+      let peak = 0;
+      const fired = new Set<number>();
+      for (const d of allBiz) {
+        const hit = priceAt(series, d);
+        if (hit.missing) continue;
+        const px = hit.price;
+        if (px > peak) { peak = px; fired.clear(); continue; }
+        if (!(peak > 0)) continue;
+        const dropPct = ((peak - px) / peak) * 100;
+        for (let i = 0; i < dipLevels.length; i++) {
+          const lv = dipLevels[i];
+          if (fired.has(i)) continue;
+          if (dropPct < lv.drop) continue;
+          fired.add(i);
+          const rec: DipTrig = { assetId: p.asset.id, level: lv.drop, unlockPct: lv.unlockPct, peak, price: px };
+          const arr = dipTrigByDate.get(d);
+          if (arr) arr.push(rec); else dipTrigByDate.set(d, [rec]);
+        }
+      }
+    }
+  }
+
   type Step =
     | { date: string; kind: 'exdiv'; div: BtDivSlot }
     | { date: string; kind: 'pay'; div: BtDivSlot }
+    | { date: string; kind: 'dip'; trigs: DipTrig[] }
     | { date: string; kind: 'rebal'; slot: BtSlot }
     | { date: string; kind: 'event'; event: BtEvent }
     | { date: string; kind: 'contrib'; ym: string }
+    | { date: string; kind: 'annual'; ym: string }
     | { date: string; kind: 'reinvest'; slot: BtReinvestSlot };
 
   const steps: Step[] = [];
+  for (const [d, trigs] of dipTrigByDate) steps.push({ date: d, kind: 'dip', trigs });
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
   for (const rs of reinvestSlots) {
     if (rs.date < startBiz || rs.date > endBiz) continue;
@@ -1794,6 +2213,32 @@ export function runBacktest(input: BtRunInput): BtResult {
         warnings.push(`${o.ym}의 증액 예외 규칙은 그 달에 리밸런싱이 없어 적용되지 않습니다.`);
       }
     }
+
+    // ── 연간 가드레일 증액 ──
+    // ⚠️ 시작월 + everyMonths × k 의 **첫 리밸런싱일**에 건다(매월 증액과 같은 배치 규약).
+    //    그 달에 리밸런싱이 없으면 집행 수단이 없으므로 조용히 버리지 않고 경고한다.
+    const ar = config.annualReview;
+    if (ar.mode === 'pctOfSurplus' && ar.value > 0) {
+      if (config.targetMode === 'ratio') {
+        warnings.push(
+          '비중 모드에서는 연간 가드레일 증액이 반영되지 않습니다 — 목표가 “종목 평가액 합계 × 비중”이라 '
+          + '올릴 대상이 없습니다(매월 목표 증액과 같은 이유). 목표 금액 모드에서 사용하세요.',
+        );
+      } else if (firstRebalOfYm.size === 0) {
+        warnings.push('리밸런싱이 한 번도 없어 연간 가드레일 증액이 전혀 집행되지 않습니다.');
+      } else {
+        const endYm = ymOf(endBiz);
+        let k = 1;
+        while (k < 2000) {
+          const ym = addMonthsToYm(ymOf(startBiz), ar.everyMonths * k);
+          if (!ym || ym > endYm) break;
+          const d = firstRebalOfYm.get(ym);
+          if (d) steps.push({ date: d, kind: 'annual', ym });
+          else warnings.push(`${ym}: 연간 가드레일 증액 시점이지만 그 달에 리밸런싱이 없어 집행되지 않습니다.`);
+          k++;
+        }
+      }
+    }
   }
   for (const d of divSlots) {
     steps.push({ date: d.exDate, kind: 'exdiv', div: d });
@@ -1814,8 +2259,13 @@ export function runBacktest(input: BtRunInput): BtResult {
   // ⚠️ reinvest는 **맨 뒤**다 — 리밸런싱은 '목표 수준 맞추기'이고 재투자는 '그러고도 남은
   //    분배금 현금을 추가 투입'이라 나중에 와야 의미가 맞는다. 앞에 두면 재투자가 방금 산
   //    수량을 같은 날 리밸런싱이 되팔아(목표 초과) 매매만 늘고 결과는 그대로가 된다.
+  // ⚠️ dip은 pay **뒤**다 — 개방 한도가 '발동 시점 cashDiv'라 그날 받은 분배금까지 포함해야 한다.
+  //    그리고 rebal **앞**이라 같은 날 급락이면 그날 리밸런싱부터 개방이 적용된다.
+  // ⚠️ annual은 contrib **뒤** · rebal **앞**으로 고정한다 — 같은 날 둘 다 도래하면
+  //    매월 증액을 먼저 반영한 뒤 그 결과 예수금에서 연간 잉여를 계산한다(사양 확정 순서).
+  // ⚠️ 기존 5종의 **상대 순서는 그대로**다(exdiv<pay<event<contrib<rebal<reinvest) — 번호만 밀렸다.
   const KIND_ORDER: Record<string, number> = {
-    exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4, reinvest: 5,
+    exdiv: 0, pay: 1, dip: 2, event: 3, contrib: 4, annual: 5, rebal: 6, reinvest: 7,
   };
   steps.sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind],
@@ -1823,6 +2273,8 @@ export function runBacktest(input: BtRunInput): BtResult {
 
   // 분배락 시점 권리 확정 수량 — exdiv 스텝에서 채우고 pay 스텝에서 현금화한다.
   const pendingDiv = new Map<string, BtDividendRow[]>();
+  /** 실행된 연간 가드레일 증액(시간순). */
+  const annualRows: BtContribRow[] = [];
 
   const monthMap = new Map<string, BtMonth>();
   const monthOf = (ym: string): BtMonth => {
@@ -1831,9 +2283,11 @@ export function runBacktest(input: BtRunInput): BtResult {
       m = {
         ym, trades: [], dividends: [],
         tradeNet: 0, structuralNet: 0, reinvestNet: 0, cumTradeNet: 0,
-        divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0, cumReinvestNet: 0,
+        divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0, divTax: 0, cumDivTax: 0, cumReinvestNet: 0,
         cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, cashUsedTrade: 0, cashUsedDiv: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
         lastDate: '', holdings: [], contribution: null, cumContribution: 0,
+        annualReview: null, cumAnnualReview: 0,
+        bandSkipCount: 0, bandSkipAmount: 0, shortfallCount: 0,
       };
       monthMap.set(ym, m);
     }
@@ -1901,10 +2355,34 @@ export function runBacktest(input: BtRunInput): BtResult {
       pendingDiv.delete(`${step.div.ym}|${step.div.cycle}`);
       // 현금은 **지급일**에만 늘어난다. 월말 분배는 지급일이 다음 달 초라 divAccrued와
       // 한 달 어긋나는 것이 정상이다(표는 분배락월, 현금은 지급월).
+      // ⚠️ 원천징수는 **여기서만** 뗀다 — divAccrued(권리 확정액)는 세전 그대로 두고
+      //    실제 입금(divPaid)만 세후로 정의해야 기말 예수금 분해 항등식이 종전 그대로 성립한다.
       const m = monthOf(ymOf(step.date));
       for (const r of rows) {
-        m.divPaid += r.amount;
-        applyDividend(r.amount, step.date, r.assetId);
+        const net = r.amount * (1 - divTaxRate);
+        m.divPaid += net;
+        m.divTax += r.amount - net;
+        applyDividend(net, step.date, r.assetId);
+      }
+      continue;
+    }
+
+    if (step.kind === 'dip') {
+      // ⚠️ 개방액은 **발동 시점 cashDiv** 기준이다(사양). 이 스텝이 pay 뒤라 그날 받은 분배금도 포함된다.
+      for (const tg of step.trigs) {
+        const p = posById.get(tg.assetId);
+        if (!p) continue;
+        // 사용자가 뺀 종목(removed)·편입 구간 밖 종목은 어차피 매수 대상이 아니므로 개방하지 않는다.
+        if (p.removed) continue;
+        if (step.date < p.effectiveStart || step.date > p.effectiveEnd) continue;
+        const unlocked = Math.max(0, (Math.max(0, cashDiv) * tg.unlockPct) / 100);
+        dipPending.set(tg.assetId, [...(dipPending.get(tg.assetId) ?? []), dipEvents.length]);
+        dipEvents.push({
+          date: step.date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+          level: tg.level, unlockPct: tg.unlockPct, unlocked, used: 0,
+          peak: tg.peak, price: tg.price,
+        });
+        dipUnlock.set(tg.assetId, (dipUnlock.get(tg.assetId) ?? 0) + unlocked);
       }
       continue;
     }
@@ -1930,9 +2408,12 @@ export function runBacktest(input: BtRunInput): BtResult {
       let note = '';
       // ⚠️ 예수금을 넘겨 증액하면 곧바로 이어지는 리밸런싱이 '예수금 부족'으로 잘린다 —
       //    목표만 부풀고 실제로는 못 사는 상태가 되므로 여기서 미리 자른다.
-      if (!config.allowNegativeCash && amount > cashBefore) {
-        amount = Math.max(0, cashBefore);
-        note = '예수금 한도';
+      // ⚠️ 자르는 기준은 cashBefore가 아니라 **deployableCash**다(위 주석 참조) — tradeOnly·바닥선에서
+      //    총 예수금으로 자르면 이 컷이 통째로 무력화된다. 기본값에서는 값이 같아 결과가 동일하다.
+      const deployable = deployableCash(step.date);
+      if ((!config.allowNegativeCash || config.cashFloorPct > 0) && amount > deployable) {
+        amount = Math.max(0, deployable);
+        note = config.buyFunding === 'tradeOnly' || config.cashFloorPct > 0 ? '가용 재원 한도' : '예수금 한도';
       }
       amount = Math.floor(amount);
       if (!(amount > 0)) continue;
@@ -1975,6 +2456,64 @@ export function runBacktest(input: BtRunInput): BtResult {
         overridden: contribOvByYm.has(step.ym),
         perAsset, note,
       };
+      continue;
+    }
+
+    if (step.kind === 'annual') {
+      // ⚠️ 매월 증액(contrib)과 **완전히 독립**이다. KIND_ORDER가 contrib < annual 이라
+      //    같은 날 둘 다 도래하면 매월 증액이 먼저 반영된 뒤의 예수금에서 잉여를 계산한다.
+      const ar = config.annualReview;
+      if (ar.mode !== 'pctOfSurplus' || !(ar.value > 0)) continue;
+      // ⚠️ 비중 모드는 목표가 '평가액 합계 × 비중'이라 올릴 대상이 없다(매월 증액과 같은 이유).
+      //    경고는 위 슬롯 준비 블록에서 한 번만 띄운다.
+      if (config.targetMode === 'ratio') continue;
+      const cashBefore = cash;
+      // ⚠️ reserve(생활비 예약금)는 **절대 투자에 쓰지 않는다** — surplus로 상한을 둬서 잘라 낸다.
+      const surplus = Math.max(0, cashBefore - Math.max(0, ar.reserve));
+      const requested = (surplus * ar.value) / 100;
+      let amount = Math.min(requested, surplus);
+      let note = amount < requested ? '예약금 한도' : '';
+      // 매월 증액과 같은 컷 규약을 그대로 재사용한다 — 기준은 **deployableCash**(위 주석 참조).
+      // ⚠️ tradeOnly·바닥선에서 총 예수금으로 자르면 컷이 무력화돼 목표만 부푼다(매월 증액과 동일 결함).
+      const deployableA = deployableCash(step.date);
+      if ((!config.allowNegativeCash || config.cashFloorPct > 0) && amount > deployableA) {
+        amount = Math.max(0, deployableA);
+        note = config.buyFunding === 'tradeOnly' || config.cashFloorPct > 0 ? '가용 재원 한도' : '예수금 한도';
+      }
+      amount = Math.floor(amount);
+      if (!(amount > 0)) continue;
+
+      // 매월 증액과 동일하게 **그 달 리밸런싱 슬롯에 실제로 든 종목**만 대상이다
+      // (슬롯 없는 종목에 배분하면 목표만 오르고 영원히 매수되지 않는다).
+      const slotAssets = contribAssetsByYm.get(step.ym) ?? new Set<string>();
+      const live = positions.filter(
+        p => p.active && !p.removed && step.date >= p.effectiveStart && step.date <= p.effectiveEnd,
+      );
+      const elig = live.filter(p => slotAssets.has(p.asset.id));
+      if (!elig.length) continue;
+
+      const perAsset: BtContribRow['perAsset'] = [];
+      const ws = elig.map(p => (ar.split === 'even' ? 1 : Math.max(0, p.targetAmount ?? 0)));
+      let totalW = ws.reduce((s, x) => s + x, 0);
+      if (!(totalW > 0)) { ws.fill(1); totalW = elig.length; }
+      let left = amount;
+      elig.forEach((p, i) => {
+        const share = i === elig.length - 1 ? left : Math.floor((amount * ws[i]) / totalW);
+        left -= share;
+        p.targetAmount = (p.targetAmount ?? 0) + share;
+        perAsset.push({
+          assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+          added: share, targetAfter: p.targetAmount,
+        });
+      });
+
+      const row: BtContribRow = {
+        ym: step.ym, date: step.date, cashBefore, requested, amount,
+        mode: 'pctOfSurplus', value: ar.value, overridden: false,
+        perAsset, note, reserve: Math.max(0, ar.reserve),
+      };
+      monthOf(step.ym).annualReview = row;
+      annualRows.push(row);
       continue;
     }
 
@@ -2061,21 +2600,74 @@ export function runBacktest(input: BtRunInput): BtResult {
       }
       // ⚠️ 편입 처리(위 루프)가 끝난 뒤에 점검한다 — 중간 상장 종목이 이 슬롯에서 막 활성화되므로.
       checkRatioSum(s.rebalDate);
+
+      // ⚠️ 현금 바닥선의 기준은 **활성 종목 목표금액 합계**다. 슬롯에 든 종목만이 아니라
+      //    그 시점 살아 있는 전 종목이 기준이어야 "포트폴리오 규모 대비 N%"라는 뜻이 유지된다.
+      const floorAmount = config.cashFloorPct > 0
+        ? (activeTargetSum(s.rebalDate, base) * config.cashFloorPct) / 100
+        : 0;
+      const bandPct = Math.max(0, config.band);
+      const tradeOnly = config.buyFunding === 'tradeOnly';
+
       // ⚠️ 매도/매수 분할은 **실행 전에** 확정해야 한다. 실행 중 다시 판정하면 방금 매도해
       //    목표에 맞춰진 종목이 매수 패스에 또 걸리고(중복 처리), 반대로 매수 재원이 마련되기
       //    전에 매수가 예수금 한도에 막혀 조용히 목표 미달로 끝난다.
       const plans = eligible.map(p => {
         const hit = priceAt(prices[p.asset.code], s.rebalDate);
+        const evalBefore = hit.missing ? 0 : p.qty * hit.price;
         const target = targetOf(p, config, base);
-        return { p, target, delta: hit.missing ? 0 : target - p.qty * hit.price };
+        return { p, hit, evalBefore, target, delta: hit.missing ? 0 : target - evalBefore };
       });
-      for (const pl of plans.filter(x => x.delta < 0)) {
-        const t = adjustTo(pl.p, s.rebalDate, pl.target, false);
-        if (t) pushTrade(t);
+
+      // ── 리밸런싱 밴드 — 목표 대비 ±band% 안이면 그 회차 매매를 생략한다 ──
+      // ⚠️ 목표 0(전량 청산)은 밴드 폭도 0이라 산술적으로 이미 예외다(`|평가액−0| > 0`).
+      //    아래 `target > 0` 줄은 그 사실을 눈에 보이게 적어 둔 **방어적 중복**이라 지워도 동작은
+      //    같다(변이 테스트에서 equivalent mutant로 확인됨). 지우지 말고 그대로 둘 것 —
+      //    "청산은 항상 완결한다"가 이 코드의 계약임을 읽는 사람에게 알리는 유일한 단서다.
+      // ⚠️ 급락(dip)이 발동한 종목은 건너뛴다: 급락 시에는 밴드로 매수를 막지 않는다.
+      // ⚠️ 밴드 안이라도 반올림 결과 매매가 0주면 원래 아무 일도 없었으므로 '생략'으로 세지 않는다.
+      const banded = new Set<string>();
+      if (bandPct > 0) {
+        for (const pl of plans) {
+          if (pl.hit.missing || pl.hit.price <= 0) continue;
+          if (dipUnlock.has(pl.p.asset.id)) continue;
+          if (!(pl.target > 0)) continue;
+          if (Math.abs(pl.evalBefore - pl.target) > (pl.target * bandPct) / 100) continue;
+          banded.add(pl.p.asset.id);
+          const wouldQty = roundQty(pl.delta / pl.hit.price, config.rounding);
+          if (wouldQty !== 0) {
+            const bm = monthOf(ymOf(s.rebalDate));
+            bm.bandSkipCount++;
+            bm.bandSkipAmount += Math.abs(wouldQty * pl.hit.price);
+          }
+        }
       }
-      for (const pl of plans.filter(x => x.delta > 0)) {
-        const t = adjustTo(pl.p, s.rebalDate, pl.target, false);
+
+      const runPlan = (pl: (typeof plans)[number]) => {
+        const id = pl.p.asset.id;
+        if (banded.has(id)) return;
+        const armed = dipUnlock.has(id);
+        // 급락 개방 한도 — 잔액을 넘을 수 없다(여러 단계가 겹쳐 합산됐어도 마찬가지).
+        const dipRoom = armed ? Math.min(Math.max(0, dipUnlock.get(id) ?? 0), Math.max(0, cashDiv)) : 0;
+        // ⚠️ 'both'(기본)면 종전 그대로 전체 예수금이 재원이고 분배금 상한도 없다 — 이 두 줄이
+        //    기본값 하위호환의 전부다. 'tradeOnly'만 매매 주머니 + 개방분으로 제한된다.
+        const budget = tradeOnly ? Math.max(0, cashTrade) + dipRoom : cash;
+        const divCap = tradeOnly ? dipRoom : Infinity;
+        const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
+        const t = adjustTo(pl.p, s.rebalDate, pl.target, false, { budget, divCap, floorCap });
         if (t) pushTrade(t);
+        // 개방은 **이 회차 한정**이다 — 매수가 없었거나 매도였어도 여기서 만료시킨다.
+        if (armed) consumeDip(id, t && t.qty > 0 ? lastDraw.fromDiv : 0);
+      };
+      for (const pl of plans.filter(x => x.delta < 0)) runPlan(pl);
+      for (const pl of plans.filter(x => x.delta > 0)) runPlan(pl);
+      // ⚠️ 위 두 필터는 **delta가 정확히 0인 plan을 어디에도 넣지 않는다**(이미 목표에 맞아떨어졌거나
+      //    그날 종가가 없어 delta를 0으로 둔 경우). 그 종목의 개방을 여기서 만료시키지 않으면
+      //    '다음 정기 리밸런싱 1회 한정' 계약이 깨져 **개방액과 밴드 면제가 다음 회차까지 살아남는다**
+      //    (적대적 리뷰 확정 결함: rounding:'exact'로 목표에 정확히 맞은 뒤 종가가 이월되면 재현).
+      //    runPlan이 처리한 종목은 이미 지워졌으므로 여기서는 남은 것만 걸린다(멱등).
+      for (const pl of plans) {
+        if (dipUnlock.has(pl.p.asset.id)) consumeDip(pl.p.asset.id, 0);
       }
     }
   }
@@ -2097,6 +2689,8 @@ export function runBacktest(input: BtRunInput): BtResult {
   let cumStructural = 0;
   let cumReinvest = 0;
   let cumContrib = 0;
+  let cumAnnual = 0;
+  let cumDivTax = 0;
   let runCash = config.initialCapital + config.extraCash;
   // 초기 매수 반영
   for (const t of initialTrades) runCash += t.cashDelta;
@@ -2115,12 +2709,17 @@ export function runBacktest(input: BtRunInput): BtResult {
     cumReinvest += m.reinvestNet;
     cumDivAccrued += m.divAccrued;
     cumDivPaid += m.divPaid;
+    cumDivTax += m.divTax;
     cumContrib += m.contribution ? m.contribution.amount : 0;
+    cumAnnual += m.annualReview ? m.annualReview.amount : 0;
     m.cumTradeNet = cumTrade;
     m.cumReinvestNet = cumReinvest;
     m.cumDivAccrued = cumDivAccrued;
     m.cumDivPaid = cumDivPaid;
+    m.cumDivTax = cumDivTax;
     m.cumContribution = cumContrib;
+    m.cumAnnualReview = cumAnnual;
+    m.shortfallCount = shortfallByYm.get(m.ym) ?? 0;
     // ⚠️ reinvestNet을 빠뜨리면 runCash가 실제 cash와 갈려 월말 예수금·총자산이 전부 틀어진다.
     m.cashDelta = m.tradeNet + m.structuralNet + m.reinvestNet + m.divPaid;
     runCash += m.cashDelta;
@@ -2182,7 +2781,8 @@ export function runBacktest(input: BtRunInput): BtResult {
     for (const t of initialTrades) push(tradesByDate, t.date, t);
     for (const m of months) {
       for (const t of m.trades) push(tradesByDate, t.date, t);
-      for (const d of m.dividends) divByDate.set(d.payDate, (divByDate.get(d.payDate) ?? 0) + d.amount);
+      // ⚠️ 곡선의 현금도 **세후**로 들어와야 실제 cash와 갈리지 않는다(divTaxRate=0이면 종전과 동일).
+      for (const d of m.dividends) divByDate.set(d.payDate, (divByDate.get(d.payDate) ?? 0) + d.amount * (1 - divTaxRate));
     }
     let c = config.initialCapital + config.extraCash;
     for (const d of allBiz) {
@@ -2230,6 +2830,46 @@ export function runBacktest(input: BtRunInput): BtResult {
   const invested = config.initialCapital + config.extraCash;
   const finalTotal = finalEval + cash;
 
+  /* ── 생존 판정 지표 ─────────────────────────────────────────────────────── */
+  // 총 예수금 최저점 — 이 전략에서 "언제 목표 복원이 불가능해졌는가"를 답하는 값.
+  let minCash = { value: 0, date: '' };
+  for (const c of curve) {
+    if (!minCash.date || c.cash < minCash.value) minCash = { value: c.cash, date: c.date };
+  }
+  // 분배금 주머니 최저점 — cashDiv는 0에서 시작하므로 **첫 입금 이후**만 잰다(안 그러면 항상 0).
+  let minCashDiv = { value: 0, date: '' };
+  if (firstDivDate) {
+    for (const b of bucketLog) {
+      if (b.date < firstDivDate) continue;
+      if (!minCashDiv.date || b.d < minCashDiv.value) minCashDiv = { value: b.d, date: b.date };
+    }
+  }
+  // 월 분배금 평균 / 모표준편차 — 첫 분배가 있었던 달부터 마지막 달까지(연속 구간).
+  // ⚠️ 이후의 진짜 0원 달('분배가 끊겼다')은 반드시 포함해야 변동성이 드러난다.
+  let divMonthlyAvg = 0;
+  let divMonthlyStdev = 0;
+  {
+    let firstIdx = -1;
+    for (let i = 0; i < months.length; i++) {
+      if (months[i].divAccrued > 0) { firstIdx = i; break; }
+    }
+    if (firstIdx >= 0) {
+      const vals = months.slice(firstIdx).map(m => m.divAccrued);
+      divMonthlyAvg = vals.reduce((s, x) => s + x, 0) / vals.length;
+      divMonthlyStdev = Math.sqrt(
+        vals.reduce((s, x) => s + (x - divMonthlyAvg) * (x - divMonthlyAvg), 0) / vals.length,
+      );
+    }
+  }
+  let bandSkipCount = 0;
+  let bandSkipAmount = 0;
+  let shortfallMonths = 0;
+  for (const m of months) {
+    bandSkipCount += m.bandSkipCount;
+    bandSkipAmount += m.bandSkipAmount;
+    if (m.shortfallCount > 0) shortfallMonths++;
+  }
+
   return {
     ok: true,
     fatal: '',
@@ -2242,6 +2882,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     months,
     curve,
     finalHoldings,
+    annualRows,
     summary: {
       startDate: startBiz, endDate: endBiz,
       initialCapital: config.initialCapital,
@@ -2253,10 +2894,17 @@ export function runBacktest(input: BtRunInput): BtResult {
       cumReinvestNet: cumReinvest,
       cumDivAccrued,
       cumDivPaid,
+      cumDivTax,
       cumContribution: cumContrib,
+      cumAnnualReview: cumAnnual,
       finalCashTrade: cashTrade, finalCashDiv: cashDiv,
       maxDrawdown: maxDd,
       months: months.length,
+      minCash, minCashDiv,
+      divMonthlyAvg, divMonthlyStdev,
+      bandSkipCount, bandSkipAmount,
+      dipEvents,
+      shortfallMonths,
     },
   };
 }

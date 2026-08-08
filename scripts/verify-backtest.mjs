@@ -16,7 +16,13 @@
 //     비중 모드 초기매수 0원 붕괴 / 분배 일정이 리밸런싱 정책에 끌려가는 결함 /
 //     매도·매수 순서 / 지급월 vs 분배락월 / 정규화·지문·sticky 판정.
 //   파트④-d 월말 보유 (#69~#74) — 무거래 종목 포함·Σholdings=evalEnd·비중 100%·lastDate 캡
-//   파트⑤ 소스 텍스트 가드 (#59~#68)
+//   파트④-j 평가금 고정 보조 규칙 (#157~#226)
+//     리밸런싱 밴드 / 평시 매수 재원 제한 / 급락 분할투입 / 현금 바닥선 /
+//     연간 가드레일 증액 / 분배금 원천징수. ⚠️ 기능마다 **'동작'과 '기본값 무영향'을 쌍으로** 둔다 —
+//     무영향 케이스가 없으면 "새 옵션 기본값에서 기존 시나리오 결과가 1원도 달라지지 않는다"는
+//     하위호환 계약이 무방비다. 원천징수는 divPaid를 **세후**로 정의했으므로 기말 예수금 분해
+//     항등식(#125)이 그대로 성립해야 한다(#204).
+//   파트⑤ 소스 텍스트 가드 (#59~#68, #227~#234)
 //     미러 테스트는 함수 본문 회귀만 잡는다. 영속화 배선(호출부)은 미러로 표현할 수 없어
 //     App.tsx·useDriveSync.ts·backtest.ts 를 직접 읽어 계약을 단언한다
 //     (verify-flow.mjs #27~#36 · verify-twr.mjs #30d 선례).
@@ -120,6 +126,14 @@ function businessDaysBetween(from, to, holidays) {
   return out;
 }
 const ymOf = (s) => (isIsoDate(s) ? s.slice(0, 7) : '');
+function addMonthsToYm(ym, n) {
+  if (!/^\d{4}-\d{2}$/.test(ym) || !Number.isFinite(n)) return '';
+  const y = +ym.slice(0, 4);
+  const m = +ym.slice(5, 7) + Math.trunc(n);
+  const ny = y + Math.floor((m - 1) / 12);
+  const nm = ((((m - 1) % 12) + 12) % 12) + 1;
+  return `${ny}-${pad2(nm)}`;
+}
 function lastDayOfMonth(ym) {
   if (!/^\d{4}-\d{2}$/.test(ym)) return '';
   const y = +ym.slice(0, 4), m = +ym.slice(5, 7);
@@ -201,7 +215,39 @@ function normalizeDivOverride(raw) {
 }
 const REBAL_MODES = ['follow', 'mid', 'eom', 'day', 'dates', 'none'];
 const CONTRIB_MODES = ['none', 'pctOfCash', 'amount'];
-const MAX_BT_CONTRIB_OVERRIDES = 120, MAX_BT_REBAL_DATES = 120;
+const MAX_BT_CONTRIB_OVERRIDES = 120, MAX_BT_REBAL_DATES = 120, MAX_BT_DIP_LEVELS = 5;
+const DEFAULT_DIP_LEVELS = [{ drop: 10, unlockPct: 34 }, { drop: 20, unlockPct: 33 }, { drop: 30, unlockPct: 33 }];
+function normalizeDipLevels(raw) {
+  const arr = asArr(raw)
+    .map((l) => ({ drop: asNum(l?.drop, NaN), unlockPct: asNum(l?.unlockPct, NaN) }))
+    .filter((l) =>
+      Number.isFinite(l.drop) && l.drop > 0 && l.drop <= 100
+      && Number.isFinite(l.unlockPct) && l.unlockPct >= 0 && l.unlockPct <= 100);
+  if (!arr.length) return DEFAULT_DIP_LEVELS.map((l) => ({ ...l }));
+  arr.sort((a, b) => a.drop - b.drop);
+  const seen = new Set();
+  const out = [];
+  for (const l of arr) {
+    if (seen.has(l.drop)) continue;
+    seen.add(l.drop);
+    out.push(l);
+    if (out.length >= MAX_BT_DIP_LEVELS) break;
+  }
+  return out;
+}
+function normalizeDip(raw) {
+  return { enabled: !!raw?.enabled, levels: normalizeDipLevels(raw?.levels) };
+}
+function normalizeAnnualReview(raw) {
+  const m = raw?.mode, s = raw?.split;
+  return {
+    mode: m === 'pctOfSurplus' ? 'pctOfSurplus' : 'none',
+    value: Math.max(0, asNum(raw?.value, 0)),
+    reserve: Math.max(0, asNum(raw?.reserve, 0)),
+    everyMonths: clampInt(asNum(raw?.everyMonths, 12), 1, 120),
+    split: s === 'even' ? 'even' : 'ratio',
+  };
+}
 function normalizeContribution(raw) {
   const m = raw?.mode, sp = raw?.split;
   return { mode: CONTRIB_MODES.includes(m) ? m : 'none', value: Math.max(0, asNum(raw?.value, 0)), split: sp === 'even' ? 'even' : 'ratio' };
@@ -279,6 +325,12 @@ function makeBtConfig(partial = {}) {
     compareOn: partial.compareOn !== false,
     contribution: normalizeContribution(partial.contribution),
     contribOverrides: asArr(partial.contribOverrides).slice(0, MAX_BT_CONTRIB_OVERRIDES).map(normalizeContribOverride).filter(Boolean),
+    band: Math.max(0, asNum(partial.band, 0)),
+    buyFunding: partial.buyFunding === 'tradeOnly' ? 'tradeOnly' : 'both',
+    dip: normalizeDip(partial.dip),
+    cashFloorPct: Math.max(0, asNum(partial.cashFloorPct, 0)),
+    annualReview: normalizeAnnualReview(partial.annualReview),
+    divTaxPct: Math.min(100, Math.max(0, asNum(partial.divTaxPct, 0))),
     assets: asArr(partial.assets).slice(0, MAX_BT_ASSETS).map((a, i) => makeBtAsset(a, i)),
     events: asArr(partial.events).slice(0, MAX_BT_EVENTS).map(normalizeEvent),
     overrides: asArr(partial.overrides).slice(0, MAX_BT_OVERRIDES).map(normalizeOverride).filter(Boolean),
@@ -303,7 +355,12 @@ function backtestFingerprint(scenarios) {
           s?.allowNegativeCash ? 1 : 0,
           s?.divReinvest ?? '', s?.divReinvestSplit ?? '',
           s?.compareOn === false ? 0 : 1,
-          s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? ''],
+          s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? '',
+          s?.band ?? 0, s?.buyFunding ?? '', s?.cashFloorPct ?? 0, s?.divTaxPct ?? 0,
+          s?.dip?.enabled ? 1 : 0,
+          asArr(s?.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
+          s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
+          s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? ''],
       c: asArr(s?.contribOverrides).map((o) => [o?.id ?? '', o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
       a: asArr(s?.assets).map((a) => [
         a?.id ?? '', a?.code ?? '', a?.name ?? '', a?.payCycle ?? '',
@@ -501,9 +558,14 @@ function runBacktest(input) {
   const empty = (fatal) => ({
     ok: false, fatal, warnings, slots: [], assetMeta: [], initialDate: '', initialTrades: [],
     initialCashAfter: 0, months: [], curve: [], finalHoldings: [],
+    annualRows: [],
     summary: { startDate: config.startDate, endDate: config.endDate, initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
-      cumTradeNet: 0, cumStructuralNet: 0, cumReinvestNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumContribution: 0, finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0 },
+      cumTradeNet: 0, cumStructuralNet: 0, cumReinvestNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumDivTax: 0,
+      cumContribution: 0, cumAnnualReview: 0, finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0,
+      minCash: { value: 0, date: '' }, minCashDiv: { value: 0, date: '' },
+      divMonthlyAvg: 0, divMonthlyStdev: 0,
+      bandSkipCount: 0, bandSkipAmount: 0, dipEvents: [], shortfallMonths: 0 },
   });
   if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return empty('기간(시작일·종료일)을 선택해 주세요.');
   if (config.startDate > config.endDate) return empty('시작일이 종료일보다 늦습니다.');
@@ -546,6 +608,8 @@ function runBacktest(input) {
   const usable = positions.filter((p) => !!prices[p.asset.code] && seriesRange(prices[p.asset.code]).count > 0);
   if (!usable.length) return empty('선택한 종목 중 종가 데이터가 있는 종목이 없습니다. 종목을 조회하거나 데이터를 붙여넣어 주세요.');
 
+  const divTaxRate = Math.min(1, Math.max(0, config.divTaxPct / 100)) || 0;
+
   let cash = config.initialCapital + config.extraCash;
   let cashTrade = cash;
   let cashDiv = 0;
@@ -566,14 +630,16 @@ function runBacktest(input) {
     if (keep <= 0) { divPocket.clear(); return; }
     for (const [k, v] of divPocket) divPocket.set(k, v * keep);
   };
-  const applyCash = (delta, date, prefer = 'trade') => {
+  let lastDraw = { fromTrade: 0, fromDiv: 0 };
+  const applyCash = (delta, date, prefer = 'trade', divCap = Infinity) => {
     cash += delta;
-    if (delta >= 0) { cashTrade += delta; logBuckets(date); return; }
+    if (delta >= 0) { cashTrade += delta; lastDraw = { fromTrade: 0, fromDiv: 0 }; logBuckets(date); return; }
     let need = -delta;
     let fromTrade = 0;
     let fromDiv = 0;
+    const divRoom = Math.max(0, Math.min(cashDiv, divCap));
     if (prefer === 'div') {
-      fromDiv = Math.max(0, Math.min(cashDiv, need));
+      fromDiv = Math.max(0, Math.min(divRoom, need));
       cashDiv -= fromDiv;
       drainPocket(fromDiv);
       need -= fromDiv;
@@ -587,13 +653,14 @@ function runBacktest(input) {
       cashTrade -= fromTrade;
       need -= fromTrade;
       if (need > 0) {
-        fromDiv = Math.max(0, Math.min(cashDiv, need));
+        fromDiv = Math.max(0, Math.min(divRoom, need));
         cashDiv -= fromDiv;
         drainPocket(fromDiv);
         need -= fromDiv;
       }
     }
     if (need > 0) cashTrade -= need;
+    lastDraw = { fromTrade: fromTrade + need, fromDiv };
     const ym = ymOf(date);
     if (ym) {
       const cur = drawByYm.get(ym);
@@ -602,9 +669,11 @@ function runBacktest(input) {
     }
     logBuckets(date);
   };
+  let firstDivDate = '';
   const applyDividend = (amount, date, assetId) => {
     cash += amount;
     cashDiv += amount;
+    if (amount > 0 && !firstDivDate) firstDivDate = date;
     if (assetId && amount > 0) divPocket.set(assetId, (divPocket.get(assetId) ?? 0) + amount);
     logBuckets(date);
   };
@@ -617,6 +686,45 @@ function runBacktest(input) {
     const eq = totalEvalAt(date);
     return eq > 0 ? eq : Math.max(0, cash);
   };
+  const activeTargetSum = (date, base) => {
+    let s = 0;
+    for (const p of positions) {
+      if (!p.active || p.removed) continue;
+      if (date < p.effectiveStart || date > p.effectiveEnd) continue;
+      s += targetOf(p, config, base);
+    }
+    return s;
+  };
+  const dipEvents = [];
+  const dipUnlock = new Map();
+  const dipPending = new Map();
+  const consumeDip = (assetId, used) => {
+    const idxs = dipPending.get(assetId);
+    if (idxs && idxs.length) {
+      let totalUnlocked = 0;
+      for (const i of idxs) totalUnlocked += dipEvents[i].unlocked;
+      const eff = Math.min(Math.max(0, used), totalUnlocked);
+      if (eff > 0 && totalUnlocked > 0) {
+        let left = eff;
+        idxs.forEach((i, k) => {
+          const share = k === idxs.length - 1 ? left : (eff * dipEvents[i].unlocked) / totalUnlocked;
+          left -= share;
+          dipEvents[i].used += share;
+        });
+      }
+    }
+    dipPending.delete(assetId);
+    dipUnlock.delete(assetId);
+  };
+  const deployableCash = (date) => {
+    let cap = config.buyFunding === 'tradeOnly' ? Math.max(0, cashTrade) : Math.max(0, cash);
+    if (config.cashFloorPct > 0) {
+      const fl = (activeTargetSum(date, targetBaseAt(date)) * config.cashFloorPct) / 100;
+      cap = Math.min(cap, Math.max(0, cash - fl));
+    }
+    return cap;
+  };
+  const shortfallByYm = new Map();
   const RATIO_SUM_TOL = 0.05;
   let ratioSumWarned = false;
   const checkRatioSum = (date) => {
@@ -644,24 +752,35 @@ function runBacktest(input) {
       );
     }
   };
-  const adjustTo = (p, date, target, structural) => {
+  const adjustTo = (p, date, target, structural, opts) => {
     const hit = priceAt(prices[p.asset.code], date);
     if (hit.missing || hit.price <= 0) return null;
     const evalBefore = p.qty * hit.price;
     let qty = roundQty((target - evalBefore) / hit.price, config.rounding);
     let note = '';
     if (qty < 0 && -qty > p.qty) { qty = -p.qty; note = '보유수량 한도'; }
-    if (qty > 0 && !config.allowNegativeCash) {
-      const cost = qty * hit.price;
-      if (cost > cash) {
-        const afford = roundQty(cash / hit.price, config.rounding === 'exact' ? 'exact' : 'floor');
-        if (afford < qty) { qty = Math.max(0, afford); note = '예수금 부족'; }
+    if (qty > 0) {
+      const rawBudget = opts?.budget ?? cash;
+      const floorCap = opts?.floorCap ?? Infinity;
+      const budget = Math.min(rawBudget, floorCap);
+      const limited = !config.allowNegativeCash || floorCap < Infinity;
+      if (limited) {
+        const cost = qty * hit.price;
+        if (cost > budget) {
+          const afford = roundQty(budget / hit.price, config.rounding === 'exact' ? 'exact' : 'floor');
+          if (afford < qty) {
+            qty = Math.max(0, afford);
+            note = budget === floorCap && floorCap < rawBudget ? '바닥선' : '예수금 부족';
+            const sym = ymOf(date);
+            if (sym) shortfallByYm.set(sym, (shortfallByYm.get(sym) ?? 0) + 1);
+          }
+        }
       }
     }
     if (p.qty + qty !== 0 && Math.abs(p.qty + qty) < QTY_EPS) qty = -p.qty;
     if (qty === 0) return null;
     const cashDelta = -qty * hit.price;
-    applyCash(cashDelta, date);
+    applyCash(cashDelta, date, 'trade', opts?.divCap ?? Infinity);
     const qtyBefore = p.qty;
     p.qty += qty;
     return { date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name, price: hit.price,
@@ -766,7 +885,36 @@ function runBacktest(input) {
       );
     }
   }
+  const dipTrigByDate = new Map();
+  const dipLevels = config.dip.enabled ? normalizeDipLevels(config.dip.levels) : [];
+  if (dipLevels.length > 0) {
+    for (const p of positions) {
+      const series = prices[p.asset.code];
+      if (!series) continue;
+      let peak = 0;
+      const fired = new Set();
+      for (const d of allBiz) {
+        const hit = priceAt(series, d);
+        if (hit.missing) continue;
+        const px = hit.price;
+        if (px > peak) { peak = px; fired.clear(); continue; }
+        if (!(peak > 0)) continue;
+        const dropPct = ((peak - px) / peak) * 100;
+        for (let i = 0; i < dipLevels.length; i++) {
+          const lv = dipLevels[i];
+          if (fired.has(i)) continue;
+          if (dropPct < lv.drop) continue;
+          fired.add(i);
+          const rec = { assetId: p.asset.id, level: lv.drop, unlockPct: lv.unlockPct, peak, price: px };
+          const arr = dipTrigByDate.get(d);
+          if (arr) arr.push(rec); else dipTrigByDate.set(d, [rec]);
+        }
+      }
+    }
+  }
+
   const steps = [];
+  for (const [d, trigs] of dipTrigByDate) steps.push({ date: d, kind: 'dip', trigs });
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
   for (const rs of reinvestSlots) {
     if (rs.date < startBiz || rs.date > endBiz) continue;
@@ -809,6 +957,28 @@ function runBacktest(input) {
         warnings.push(`${o.ym}의 증액 예외 규칙은 그 달에 리밸런싱이 없어 적용되지 않습니다.`);
       }
     }
+    const ar = config.annualReview;
+    if (ar.mode === 'pctOfSurplus' && ar.value > 0) {
+      if (config.targetMode === 'ratio') {
+        warnings.push(
+          '비중 모드에서는 연간 가드레일 증액이 반영되지 않습니다 — 목표가 “종목 평가액 합계 × 비중”이라 '
+          + '올릴 대상이 없습니다(매월 목표 증액과 같은 이유). 목표 금액 모드에서 사용하세요.',
+        );
+      } else if (firstRebalOfYm.size === 0) {
+        warnings.push('리밸런싱이 한 번도 없어 연간 가드레일 증액이 전혀 집행되지 않습니다.');
+      } else {
+        const endYm = ymOf(endBiz);
+        let k = 1;
+        while (k < 2000) {
+          const ym = addMonthsToYm(ymOf(startBiz), ar.everyMonths * k);
+          if (!ym || ym > endYm) break;
+          const d = firstRebalOfYm.get(ym);
+          if (d) steps.push({ date: d, kind: 'annual', ym });
+          else warnings.push(`${ym}: 연간 가드레일 증액 시점이지만 그 달에 리밸런싱이 없어 집행되지 않습니다.`);
+          k++;
+        }
+      }
+    }
   }
   for (const d of divSlots) {
     steps.push({ date: d.exDate, kind: 'exdiv', div: d });
@@ -820,18 +990,21 @@ function runBacktest(input) {
     if (d < startBiz || d > endBiz) { warnings.push(`이벤트 "${e.label || e.date}"의 날짜가 백테스트 기간 밖이라 무시됩니다.`); continue; }
     steps.push({ date: d, kind: 'event', event: { ...e, date: d } });
   }
-  const KIND_ORDER = { exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4, reinvest: 5 };
+  const KIND_ORDER = { exdiv: 0, pay: 1, dip: 2, event: 3, contrib: 4, annual: 5, rebal: 6, reinvest: 7 };
   steps.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind]));
 
   const pendingDiv = new Map();
+  const annualRows = [];
   const monthMap = new Map();
   const monthOf = (ym) => {
     let m = monthMap.get(ym);
     if (!m) {
       m = { ym, trades: [], dividends: [], tradeNet: 0, structuralNet: 0, reinvestNet: 0, cumTradeNet: 0,
-        divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0, cumReinvestNet: 0,
+        divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0, divTax: 0, cumDivTax: 0, cumReinvestNet: 0,
         cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, cashUsedTrade: 0, cashUsedDiv: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
-        lastDate: '', holdings: [], contribution: null, cumContribution: 0 };
+        lastDate: '', holdings: [], contribution: null, cumContribution: 0,
+        annualReview: null, cumAnnualReview: 0,
+        bandSkipCount: 0, bandSkipAmount: 0, shortfallCount: 0 };
       monthMap.set(ym, m);
     }
     return m;
@@ -877,7 +1050,26 @@ function runBacktest(input) {
       if (!rows) continue;
       pendingDiv.delete(`${step.div.ym}|${step.div.cycle}`);
       const m = monthOf(ymOf(step.date));
-      for (const r of rows) { m.divPaid += r.amount; applyDividend(r.amount, step.date, r.assetId); }
+      for (const r of rows) {
+        const net = r.amount * (1 - divTaxRate);
+        m.divPaid += net;
+        m.divTax += r.amount - net;
+        applyDividend(net, step.date, r.assetId);
+      }
+      continue;
+    }
+    if (step.kind === 'dip') {
+      for (const tg of step.trigs) {
+        const p = posById.get(tg.assetId);
+        if (!p) continue;
+        if (p.removed) continue;
+        if (step.date < p.effectiveStart || step.date > p.effectiveEnd) continue;
+        const unlocked = Math.max(0, (Math.max(0, cashDiv) * tg.unlockPct) / 100);
+        dipPending.set(tg.assetId, [...(dipPending.get(tg.assetId) ?? []), dipEvents.length]);
+        dipEvents.push({ date: step.date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+          level: tg.level, unlockPct: tg.unlockPct, unlocked, used: 0, peak: tg.peak, price: tg.price });
+        dipUnlock.set(tg.assetId, (dipUnlock.get(tg.assetId) ?? 0) + unlocked);
+      }
       continue;
     }
     if (step.kind === 'reinvest') {
@@ -892,7 +1084,11 @@ function runBacktest(input) {
       const requested = rule.mode === 'pctOfCash' ? (cashBefore * rule.value) / 100 : rule.value;
       let amount = requested;
       let note = '';
-      if (!config.allowNegativeCash && amount > cashBefore) { amount = Math.max(0, cashBefore); note = '예수금 한도'; }
+      const deployable = deployableCash(step.date);
+      if ((!config.allowNegativeCash || config.cashFloorPct > 0) && amount > deployable) {
+        amount = Math.max(0, deployable);
+        note = config.buyFunding === 'tradeOnly' || config.cashFloorPct > 0 ? '가용 재원 한도' : '예수금 한도';
+      }
       amount = Math.floor(amount);
       if (!(amount > 0)) continue;
       const slotAssets = contribAssetsByYm.get(step.ym) ?? new Set();
@@ -916,6 +1112,44 @@ function runBacktest(input) {
       const m = monthOf(step.ym);
       m.contribution = { ym: step.ym, date: step.date, cashBefore, requested, amount,
         mode: rule.mode, value: rule.value, overridden: contribOvByYm.has(step.ym), perAsset, note };
+      continue;
+    }
+
+    if (step.kind === 'annual') {
+      const ar = config.annualReview;
+      if (ar.mode !== 'pctOfSurplus' || !(ar.value > 0)) continue;
+      if (config.targetMode === 'ratio') continue;
+      const cashBefore = cash;
+      const surplus = Math.max(0, cashBefore - Math.max(0, ar.reserve));
+      const requested = (surplus * ar.value) / 100;
+      let amount = Math.min(requested, surplus);
+      let note = amount < requested ? '예약금 한도' : '';
+      const deployableA = deployableCash(step.date);
+      if ((!config.allowNegativeCash || config.cashFloorPct > 0) && amount > deployableA) {
+        amount = Math.max(0, deployableA);
+        note = config.buyFunding === 'tradeOnly' || config.cashFloorPct > 0 ? '가용 재원 한도' : '예수금 한도';
+      }
+      amount = Math.floor(amount);
+      if (!(amount > 0)) continue;
+      const slotAssets = contribAssetsByYm.get(step.ym) ?? new Set();
+      const live = positions.filter((p) => p.active && !p.removed && step.date >= p.effectiveStart && step.date <= p.effectiveEnd);
+      const elig = live.filter((p) => slotAssets.has(p.asset.id));
+      if (!elig.length) continue;
+      const perAsset = [];
+      const ws = elig.map((p) => (ar.split === 'even' ? 1 : Math.max(0, p.targetAmount ?? 0)));
+      let totalW = ws.reduce((s, x) => s + x, 0);
+      if (!(totalW > 0)) { ws.fill(1); totalW = elig.length; }
+      let left = amount;
+      elig.forEach((p, i) => {
+        const share = i === elig.length - 1 ? left : Math.floor((amount * ws[i]) / totalW);
+        left -= share;
+        p.targetAmount = (p.targetAmount ?? 0) + share;
+        perAsset.push({ assetId: p.asset.id, code: p.asset.code, name: p.asset.name, added: share, targetAfter: p.targetAmount });
+      });
+      const row = { ym: step.ym, date: step.date, cashBefore, requested, amount,
+        mode: 'pctOfSurplus', value: ar.value, overridden: false, perAsset, note, reserve: Math.max(0, ar.reserve) };
+      monthOf(step.ym).annualReview = row;
+      annualRows.push(row);
       continue;
     }
 
@@ -975,13 +1209,48 @@ function runBacktest(input) {
         eligible.push(p);
       }
       checkRatioSum(s.rebalDate);
+      const floorAmount = config.cashFloorPct > 0 ? (activeTargetSum(s.rebalDate, base) * config.cashFloorPct) / 100 : 0;
+      const bandPct = Math.max(0, config.band);
+      const tradeOnly = config.buyFunding === 'tradeOnly';
       const plans = eligible.map((p) => {
         const hit = priceAt(prices[p.asset.code], s.rebalDate);
+        const evalBefore = hit.missing ? 0 : p.qty * hit.price;
         const target = targetOf(p, config, base);
-        return { p, target, delta: hit.missing ? 0 : target - p.qty * hit.price };
+        return { p, hit, evalBefore, target, delta: hit.missing ? 0 : target - evalBefore };
       });
-      for (const pl of plans.filter((x) => x.delta < 0)) { const t = adjustTo(pl.p, s.rebalDate, pl.target, false); if (t) pushTrade(t); }
-      for (const pl of plans.filter((x) => x.delta > 0)) { const t = adjustTo(pl.p, s.rebalDate, pl.target, false); if (t) pushTrade(t); }
+      const banded = new Set();
+      if (bandPct > 0) {
+        for (const pl of plans) {
+          if (pl.hit.missing || pl.hit.price <= 0) continue;
+          if (dipUnlock.has(pl.p.asset.id)) continue;
+          if (!(pl.target > 0)) continue;
+          if (Math.abs(pl.evalBefore - pl.target) > (pl.target * bandPct) / 100) continue;
+          banded.add(pl.p.asset.id);
+          const wouldQty = roundQty(pl.delta / pl.hit.price, config.rounding);
+          if (wouldQty !== 0) {
+            const bm = monthOf(ymOf(s.rebalDate));
+            bm.bandSkipCount++;
+            bm.bandSkipAmount += Math.abs(wouldQty * pl.hit.price);
+          }
+        }
+      }
+      const runPlan = (pl) => {
+        const id = pl.p.asset.id;
+        if (banded.has(id)) return;
+        const armed = dipUnlock.has(id);
+        const dipRoom = armed ? Math.min(Math.max(0, dipUnlock.get(id) ?? 0), Math.max(0, cashDiv)) : 0;
+        const budget = tradeOnly ? Math.max(0, cashTrade) + dipRoom : cash;
+        const divCap = tradeOnly ? dipRoom : Infinity;
+        const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
+        const t = adjustTo(pl.p, s.rebalDate, pl.target, false, { budget, divCap, floorCap });
+        if (t) pushTrade(t);
+        if (armed) consumeDip(id, t && t.qty > 0 ? lastDraw.fromDiv : 0);
+      };
+      for (const pl of plans.filter((x) => x.delta < 0)) runPlan(pl);
+      for (const pl of plans.filter((x) => x.delta > 0)) runPlan(pl);
+      for (const pl of plans) {
+        if (dipUnlock.has(pl.p.asset.id)) consumeDip(pl.p.asset.id, 0);
+      }
     }
   }
 
@@ -991,6 +1260,7 @@ function runBacktest(input) {
 
   const months = monthsBetween(startBiz, endBiz).map((ym) => monthOf(ym));
   let cumTrade = 0, cumDivAccrued = 0, cumDivPaid = 0, cumStructural = 0, cumReinvest = 0, cumContrib = 0;
+  let cumAnnual = 0, cumDivTax = 0;
   let runCash = config.initialCapital + config.extraCash;
   for (const t of initialTrades) runCash += t.cashDelta;
   const runQty = new Map();
@@ -1000,10 +1270,13 @@ function runBacktest(input) {
     m.trades.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     m.dividends.sort((a, b) => (a.exDate < b.exDate ? -1 : a.exDate > b.exDate ? 1 : 0));
     cumTrade += m.tradeNet; cumStructural += m.structuralNet; cumReinvest += m.reinvestNet;
-    cumDivAccrued += m.divAccrued; cumDivPaid += m.divPaid;
+    cumDivAccrued += m.divAccrued; cumDivPaid += m.divPaid; cumDivTax += m.divTax;
     cumContrib += m.contribution ? m.contribution.amount : 0;
+    cumAnnual += m.annualReview ? m.annualReview.amount : 0;
     m.cumTradeNet = cumTrade; m.cumReinvestNet = cumReinvest;
-    m.cumDivAccrued = cumDivAccrued; m.cumDivPaid = cumDivPaid; m.cumContribution = cumContrib;
+    m.cumDivAccrued = cumDivAccrued; m.cumDivPaid = cumDivPaid; m.cumDivTax = cumDivTax;
+    m.cumContribution = cumContrib; m.cumAnnualReview = cumAnnual;
+    m.shortfallCount = shortfallByYm.get(m.ym) ?? 0;
     m.cashDelta = m.tradeNet + m.structuralNet + m.reinvestNet + m.divPaid;
     runCash += m.cashDelta;
     m.cashEnd = runCash;
@@ -1047,7 +1320,7 @@ function runBacktest(input) {
     for (const t of initialTrades) push(tradesByDate, t.date, t);
     for (const m of months) {
       for (const t of m.trades) push(tradesByDate, t.date, t);
-      for (const d of m.dividends) divByDate.set(d.payDate, (divByDate.get(d.payDate) ?? 0) + d.amount);
+      for (const d of m.dividends) divByDate.set(d.payDate, (divByDate.get(d.payDate) ?? 0) + d.amount * (1 - divTaxRate));
     }
     let c = config.initialCapital + config.extraCash;
     for (const d of allBiz) {
@@ -1075,14 +1348,45 @@ function runBacktest(input) {
   for (const c of curve) { if (c.total > peak) peak = c.total; if (peak > 0) { const dd = ((peak - c.total) / peak) * 100; if (dd > maxDd) maxDd = dd; } }
   const invested = config.initialCapital + config.extraCash;
   const finalTotal = finalEval + cash;
+
+  let minCash = { value: 0, date: '' };
+  for (const c of curve) { if (!minCash.date || c.cash < minCash.value) minCash = { value: c.cash, date: c.date }; }
+  let minCashDiv = { value: 0, date: '' };
+  if (firstDivDate) {
+    for (const b of bucketLog) {
+      if (b.date < firstDivDate) continue;
+      if (!minCashDiv.date || b.d < minCashDiv.value) minCashDiv = { value: b.d, date: b.date };
+    }
+  }
+  let divMonthlyAvg = 0, divMonthlyStdev = 0;
+  {
+    let firstIdx = -1;
+    for (let i = 0; i < months.length; i++) { if (months[i].divAccrued > 0) { firstIdx = i; break; } }
+    if (firstIdx >= 0) {
+      const vals = months.slice(firstIdx).map((m) => m.divAccrued);
+      divMonthlyAvg = vals.reduce((s, x) => s + x, 0) / vals.length;
+      divMonthlyStdev = Math.sqrt(vals.reduce((s, x) => s + (x - divMonthlyAvg) * (x - divMonthlyAvg), 0) / vals.length);
+    }
+  }
+  let bandSkipCount = 0, bandSkipAmount = 0, shortfallMonths = 0;
+  for (const m of months) {
+    bandSkipCount += m.bandSkipCount;
+    bandSkipAmount += m.bandSkipAmount;
+    if (m.shortfallCount > 0) shortfallMonths++;
+  }
+
   return {
     ok: true, fatal: '', warnings: Array.from(new Set(warnings)), slots, assetMeta,
-    initialDate: startBiz, initialTrades, initialCashAfter, months, curve, finalHoldings,
+    initialDate: startBiz, initialTrades, initialCashAfter, months, curve, finalHoldings, annualRows,
     summary: { startDate: startBiz, endDate: endBiz, initialCapital: config.initialCapital,
       finalEval, finalCash: cash, finalTotal, profit: finalTotal - invested,
       profitRate: invested > 0 ? ((finalTotal - invested) / invested) * 100 : 0,
-      cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumReinvestNet: cumReinvest, cumDivAccrued, cumDivPaid, cumContribution: cumContrib, finalCashTrade: cashTrade, finalCashDiv: cashDiv,
-      maxDrawdown: maxDd, months: months.length },
+      cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumReinvestNet: cumReinvest,
+      cumDivAccrued, cumDivPaid, cumDivTax, cumContribution: cumContrib, cumAnnualReview: cumAnnual,
+      finalCashTrade: cashTrade, finalCashDiv: cashDiv,
+      maxDrawdown: maxDd, months: months.length,
+      minCash, minCashDiv, divMonthlyAvg, divMonthlyStdev,
+      bandSkipCount, bandSkipAmount, dipEvents, shortfallMonths },
   };
 }
 
@@ -2193,6 +2497,448 @@ console.log('\n── 파트④-i 리밸런싱 안 함 / 분배금 재투자 (#1
     + ` / 지급일 재투자 ${Math.round(rePay.summary.finalTotal).toLocaleString('ko-KR')}`);
 }
 
+console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ──');
+// 밴드 / 매수 재원 / 급락 분할투입 / 현금 바닥선 / 연간 가드레일 증액 / 분배금 원천징수.
+// ⚠️ 각 기능마다 **'동작 케이스'와 '기본값 무영향 케이스'를 쌍으로** 둔다 — 무영향 케이스가
+//    없으면 "기본값에서 기존 시나리오 결과가 1원도 달라지지 않는다"는 하위호환 계약이 무방비다.
+{
+  const SC = 'SS';
+  const bizAll = businessDaysBetween('2026-01-02', '2027-12-31', HOL);
+  const mkSeries = (fn) => Object.fromEntries(bizAll.map((d, i) => [d, fn(i, d)]));
+  // 파동형 — 목표 금액 고정 리밸런싱이 매달 실제로 매매하도록.
+  const WAVE = mkSeries((i) => 10000 + (i % 20) * 250);
+  // 급락형 — 고점 10000 → −35% → 신고가까지 회복(급락 3단계가 순서대로 발동한다).
+  const CRASH = mkSeries((i) => (i < 60 ? 10000 : i < 120 ? Math.round(10000 * (1 - (i - 60) * 0.006)) : Math.round(6500 * (1 + (i - 120) * 0.006))));
+  const FLAT = mkSeries(() => 10000);
+  const allYms = (() => { const o = []; for (let y = 2026; y <= 2027; y++) for (let m = 1; m <= 12; m++) o.push(`${y}-${pad2(m)}`); return o; })();
+  const SDIV = { [SC]: Object.fromEntries(allYms.map((y) => [y, 100])) };
+
+  const mkS = (over = {}) => makeBtConfig({
+    id: 's', name: '보조규칙', startDate: '2026-01-02', endDate: '2026-12-31',
+    initialCapital: 100000000, targetMode: 'amount', rounding: 'floor', policy: 'allEom',
+    assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 50000000 }],
+    ...over,
+  });
+  const runS = (over = {}, prices = WAVE, dividends = SDIV) =>
+    runBacktest({ config: mkS(over), prices: { [SC]: prices }, dividends, holidays: KR26 });
+  const nTrades = (r) => r.months.reduce((s, m) => s + m.trades.length, 0);
+  // ⚠️ 예수금 두 주머니 불변식은 새 옵션 **전 조합**에서 성립해야 한다.
+  const pocketOk = (r) => Math.abs(r.summary.finalCashTrade + r.summary.finalCashDiv - r.summary.finalCash) < 1e-6;
+
+  const S0 = runS();
+  ok('#157 픽스처 sanity — 기준 시나리오가 매매도 하고 분배금도 받는다',
+    nTrades(S0) > 0 && S0.summary.cumDivAccrued > 0);
+
+  // ── A. 리밸런싱 밴드 ──
+  {
+    const b100 = runS({ band: 100 });
+    const b3 = runS({ band: 3 });
+    ok('#158 ⚠️ band 기본 0 = 무영향(생략 0건 · 결과가 종전과 동일)',
+      S0.summary.bandSkipCount === 0 && S0.summary.bandSkipAmount === 0
+        && JSON.stringify(S0.months.map((m) => m.trades.length)) === JSON.stringify(runS({ band: 0 }).months.map((m) => m.trades.length)));
+    ok('#159 band=100 → 정기 리밸런싱 매매가 전부 생략된다', nTrades(b100) === 0 && nTrades(S0) > 0);
+    ok('#160 생략 집계(건수·금액)가 잡힌다', b100.summary.bandSkipCount > 0 && b100.summary.bandSkipAmount > 0);
+    ok('#161 밴드 폭이 좁으면 일부만 생략된다(0 < 생략 < 전체)',
+      b3.summary.bandSkipCount > 0 && nTrades(b3) > 0 && nTrades(b3) < nTrades(S0));
+    eq('#162 summary 집계 = Σ 월별 집계', b100.summary.bandSkipCount,
+      b100.months.reduce((s, m) => s + m.bandSkipCount, 0));
+    // ⚠️ 목표 0(전량 청산)은 밴드 폭도 0이라 자동 예외다 — 청산은 반드시 완결돼야 한다.
+    ok('#163 ⚠️ 목표 0(전량 청산)은 밴드와 무관하게 실행된다',
+      runS({ band: 100, events: [{ id: 'e', date: '2026-06-15', label: '청산', funding: 'defer', addAssets: [], removeAssets: [], targets: [{ assetId: 's1', amount: 0 }] }] })
+        .months.some((m) => m.trades.some((t) => t.qty < 0)));
+    // ⚠️ 밴드는 **정기 리밸런싱 전용**이다. 이벤트(구조 변경) 매매까지 막으면 재편이 조용히 실패한다.
+    ok('#164 ⚠️ 밴드는 이벤트(구조 변경) 매매를 막지 않는다',
+      runS({ band: 100, events: [{ id: 'e2', date: '2026-06-15', label: '재편', funding: 'reallocate', addAssets: [], removeAssets: [], targets: [{ assetId: 's1', amount: 20000000 }] }] })
+        .months.some((m) => m.trades.some((t) => t.structural)));
+    ok('#165 밴드 조합에서도 주머니 불변식 유지', pocketOk(b100) && pocketOk(b3));
+  }
+
+  // ── B. 평시 매수 재원 제한 ──
+  {
+    const over = { contribution: { mode: 'pctOfCash', value: 100, split: 'ratio' } };
+    const both = runS(over);
+    const only = runS({ ...over, buyFunding: 'tradeOnly' });
+    ok('#166 ⚠️ buyFunding 기본 both = 무영향(분배금 주머니를 종전대로 헐어 쓴다)',
+      both.months.some((m) => m.cashUsedDiv > 0));
+    ok('#167 tradeOnly → 정기 매수가 분배금 주머니를 1원도 쓰지 않는다',
+      only.months.every((m) => m.cashUsedDiv === 0));
+    ok('#168 tradeOnly의 기말 cashDiv = 누적 입금 분배금(한 푼도 안 썼다)',
+      Math.abs(only.summary.finalCashDiv - only.summary.cumDivPaid) < 1e-6 && only.summary.cumDivPaid > 0);
+    // ⚠️ 재투자 매수는 원래 'div' 출금이라 이 설정과 무관해야 한다.
+    ok('#169 ⚠️ 분배금 재투자는 buyFunding과 무관하게 그대로 돈다',
+      Math.abs(runS({ divReinvest: 'payDate' }).summary.cumReinvestNet
+             - runS({ divReinvest: 'payDate', buyFunding: 'tradeOnly' }).summary.cumReinvestNet) < 1e-6
+        && runS({ divReinvest: 'payDate' }).summary.cumReinvestNet < 0);
+    // ⚠️ allowNegativeCash와 함께 쓰면 cashTrade만 음수로 진다(cashDiv는 손도 대지 않는다).
+    //    ⚠️ 이 조합이 `applyCash`의 **divCap 인자가 유일하게 일하는 경로**다 — 음수 허용이면
+    //       adjustTo의 예산 상한(limited)이 통째로 꺼져 출금 시점의 divCap만이 분배금 주머니를 지킨다.
+    //       그래서 `finalCashDiv >= 0`(주머니가 비어도 통과)이 아니라 **한 푼도 안 줄었다**로 단언한다.
+    {
+      const neg = runS({ buyFunding: 'tradeOnly', allowNegativeCash: true,
+        assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 300000000 }] });
+      ok('#170 ⚠️ tradeOnly + 음수 허용 → cashTrade만 음수, 분배금 주머니는 그대로',
+        neg.summary.finalCashTrade < 0
+          && neg.summary.cumDivPaid > 0
+          && Math.abs(neg.summary.finalCashDiv - neg.summary.cumDivPaid) < 1e-6
+          && neg.months.every((m) => m.cashUsedDiv === 0)
+          && pocketOk(neg));
+    }
+    ok('#171 재원 제한 조합에서도 주머니 불변식 유지', pocketOk(both) && pocketOk(only));
+  }
+
+  // ── C. 급락 분할투입 ──
+  {
+    // ⚠️ 매매 주머니에 여유가 있으면 개방분을 쓸 일이 없다(설계상 매매 → 개방분 순).
+    //    초기 투자금을 목표에 바짝 붙여 cashTrade가 마르는 상황을 만든다.
+    const dipCfg = { buyFunding: 'tradeOnly', initialCapital: 50200000,
+      dip: { enabled: true, levels: DEFAULT_DIP_LEVELS } };
+    const D = runS(dipCfg, CRASH);
+    const DOff = runS({ ...dipCfg, dip: { enabled: false, levels: DEFAULT_DIP_LEVELS } }, CRASH);
+    const ev = D.summary.dipEvents;
+    ok('#172 ⚠️ dip 기본 enabled:false = 무영향(발동 0건)',
+      DOff.summary.dipEvents.length === 0 && runS({}, CRASH).summary.dipEvents.length === 0);
+    deep('#173 고점 대비 −10/−20/−30 3단계가 순서대로 발동한다', ev.map((e) => e.level), [10, 20, 30]);
+    ok('#174 발동일 종가가 실제로 그 낙폭에 도달했다',
+      ev.every((e) => ((e.peak - e.price) / e.peak) * 100 >= e.level - 1e-9));
+    ok('#175 개방액 = 발동 시점 cashDiv × unlockPct/100 (0보다 크다)', ev.every((e) => e.unlocked > 0));
+    ok('#176 실제 사용액 ≤ 개방액', ev.every((e) => e.used <= e.unlocked + 1e-6));
+    ok('#177 개방분이 실제로 매수에 쓰였다(tradeOnly인데도 cashDiv가 줄었다)',
+      ev.some((e) => e.used > 0) && D.months.some((m) => m.cashUsedDiv > 0));
+    // ⚠️ 목표 금액이 고정이라 finalEval은 dip 유무와 무관하게 목표로 수렴한다 —
+    //    바닥에서 더 산 몫은 회복 구간에 되팔려 **총자산**으로 나타난다.
+    ok('#178 dip이 실제로 결과를 바꾼다(바닥 매수 → 총자산 증가)',
+      D.summary.finalTotal > DOff.summary.finalTotal);
+    // ⚠️ 고점 갱신 전에는 단계당 1회. 새 고점이 서면 재무장(같은 단계가 다시 발동).
+    ok('#179 ⚠️ 고점 갱신 전에는 같은 단계가 두 번 발동하지 않는다',
+      runS({ ...dipCfg, dip: { enabled: true, levels: [{ drop: 10, unlockPct: 50 }] } }, CRASH).summary.dipEvents.length === 1);
+    {
+      // 고점10000 → −15% → 신고가12000 → −12.5% : −10% 단계가 재무장돼 두 번 발동해야 한다.
+      const REARM = mkSeries((i) => (i < 30 ? 10000 : i < 60 ? 8500 : i < 90 ? 12000 : 10500));
+      ok('#180 ⚠️ 새 고점이 서면 전 단계가 재무장돼 다시 발동한다',
+        runS({ ...dipCfg, dip: { enabled: true, levels: [{ drop: 10, unlockPct: 50 }] } }, REARM).summary.dipEvents.length === 2);
+    }
+    // ⚠️ 급락 시에는 밴드로 매수를 막지 않는다.
+    ok('#181 ⚠️ 급락 발동 종목은 band=100이어도 매수를 강행한다(밴드 면제)',
+      nTrades(runS({ ...dipCfg, band: 100 }, CRASH)) > 0
+        && nTrades(runS({ ...dipCfg, band: 100, dip: { enabled: false, levels: DEFAULT_DIP_LEVELS } }, CRASH)) === 0);
+    ok('#182 dip 조합에서도 주머니 불변식 유지', pocketOk(D));
+  }
+
+  // ── D. 현금 바닥선 ──
+  {
+    // 목표를 자본에 바짝 붙여 급락 구간의 목표 복원 매수가 현금 제약을 받게 한다.
+    const fl = { initialCapital: 100000000, allowNegativeCash: true,
+      assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 90000000 }] };
+    const F0 = runS(fl, CRASH);
+    const F5 = runS({ ...fl, cashFloorPct: 5 }, CRASH);
+    ok('#183 ⚠️ cashFloorPct 기본 0 = 무영향(음수 예수금이 종전대로 허용된다)',
+      Math.min(...F0.curve.map((c) => c.cash)) < 0);
+    ok('#184 바닥선이 예수금 최저점을 끌어올린다', F5.summary.minCash.value > F0.summary.minCash.value);
+    // ⚠️ 바닥선은 allowNegativeCash보다 **우선**한다.
+    ok('#185 ⚠️ allowNegativeCash여도 바닥선이 있으면 예수금이 음수가 되지 않는다',
+      Math.min(...F5.curve.map((c) => c.cash)) >= -1e-6);
+    ok("#186 '바닥선' 사유가 거래 행에 기록된다",
+      F5.months.some((m) => m.trades.some((t) => t.note === '바닥선')));
+    ok('#187 shortfallMonths가 그 달을 센다', F5.summary.shortfallMonths > 0
+      && F5.summary.shortfallMonths === F5.months.filter((m) => m.shortfallCount > 0).length);
+    // ⚠️ 매도·분배금 재투자에는 적용하지 않는다.
+    ok('#188 ⚠️ 매도에는 바닥선이 걸리지 않는다(매도 행에 바닥선 사유가 없다)',
+      F5.months.every((m) => m.trades.every((t) => !(t.qty < 0 && t.note === '바닥선'))));
+    ok('#189 ⚠️ 분배금 재투자 매수에는 바닥선이 걸리지 않는다',
+      runS({ ...fl, cashFloorPct: 90, divReinvest: 'payDate' }, CRASH)
+        .months.every((m) => m.trades.every((t) => !(t.reinvest && t.note))));
+    ok('#190 바닥선 조합에서도 주머니 불변식 유지', pocketOk(F0) && pocketOk(F5));
+  }
+
+  // ── E. 연간 가드레일 증액 ──
+  {
+    const P2 = FLAT;
+    const mkA = (ar, extra = {}) => runBacktest({
+      config: makeBtConfig({
+        id: 's', name: '연간', startDate: '2026-01-02', endDate: '2027-12-31',
+        initialCapital: 100000000, targetMode: 'amount', rounding: 'floor', policy: 'allEom',
+        assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 50000000 }],
+        annualReview: ar, ...extra,
+      }),
+      prices: { [SC]: P2 }, dividends: { [SC]: Object.fromEntries(allYms.map((y) => [y, 300])) }, holidays: KR26,
+    });
+    const AR = mkA({ mode: 'pctOfSurplus', value: 50, reserve: 10000000, everyMonths: 6, split: 'ratio' });
+    ok('#191 ⚠️ annualReview 기본 mode:"none" = 무영향(실행 0건)',
+      mkA({ mode: 'none', value: 0, reserve: 0, everyMonths: 12, split: 'ratio' }).annualRows.length === 0);
+    deep('#192 시작월 + everyMonths×k 의 그 달 첫 리밸런싱일에 실행된다',
+      AR.annualRows.map((x) => x.ym), ['2026-07', '2027-01', '2027-07']);
+    ok('#193 증액액 = floor((cash − reserve) × value/100)',
+      AR.annualRows.every((x) => x.amount === Math.floor(Math.max(0, x.cashBefore - 10000000) * 0.5))
+        && AR.annualRows.every((x) => x.mode === 'pctOfSurplus'));
+    // ⚠️ 예약금은 절대 투자에 쓰지 않는다 — value>100%여도 surplus로 잘린다.
+    ok('#194 ⚠️ value가 100%를 넘어도 예약금은 남는다(surplus 상한)',
+      mkA({ mode: 'pctOfSurplus', value: 500, reserve: 10000000, everyMonths: 6, split: 'ratio' })
+        .annualRows.every((x) => x.amount <= Math.max(0, x.cashBefore - 10000000) + 1e-6));
+    eq('#195 cumAnnualReview = Σ annualRows.amount', AR.summary.cumAnnualReview,
+      AR.annualRows.reduce((s, x) => s + x.amount, 0));
+    // ⚠️ 매월 증액과 완전히 독립 — 같은 날 겹치면 contrib 먼저(KIND_ORDER contrib < annual).
+    {
+      const both = mkA({ mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 6, split: 'ratio' },
+        { contribution: { mode: 'amount', value: 2000000, split: 'ratio' } });
+      const jul = both.months.find((m) => m.ym === '2026-07');
+      // ⚠️ 증액은 목표만 올리고 **현금을 움직이지 않으므로** 두 cashBefore는 같아야 한다.
+      //    순서(contrib 먼저 → annual 나중)는 **목표금액 누적**으로 증명한다 —
+      //    annual의 targetAfter가 contrib의 targetAfter 위에 얹혀야 한다.
+      ok('#196 ⚠️ 같은 날 겹치면 contrib 먼저 → annual 나중(annual이 contrib의 목표 위에 얹힌다)',
+        !!jul && !!jul.contribution && !!jul.annualReview
+          && jul.annualReview.cashBefore === jul.contribution.cashBefore
+          && jul.annualReview.perAsset[0].targetAfter
+             === jul.contribution.perAsset[0].targetAfter + jul.annualReview.amount);
+    }
+    // ⚠️ 목표 금액 모드 전용 — 비중 모드는 조기 반환 + 경고(매월 증액과 같은 이유).
+    ok('#197 ⚠️ 비중 모드에서는 집행하지 않고 경고한다', (() => {
+      const r = mkA({ mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 6, split: 'ratio' },
+        { targetMode: 'ratio', assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetRatio: 100 }] });
+      return r.annualRows.length === 0 && r.warnings.some((w) => w.includes('연간 가드레일 증액이 반영되지 않습니다'));
+    })());
+    ok('#198 ⚠️ 리밸런싱이 하나도 없으면 조용히 버리지 않고 경고한다', (() => {
+      const r = mkA({ mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 6, split: 'ratio' }, { policy: 'none' });
+      return r.annualRows.length === 0 && r.warnings.some((w) => w.includes('연간 가드레일 증액이 전혀 집행되지 않습니다'));
+    })());
+    ok('#199 연간 증액 조합에서도 주머니 불변식 유지', pocketOk(AR));
+  }
+
+  // ── F. 분배금 원천징수 ──
+  {
+    const T0 = runS();
+    const T = runS({ divTaxPct: 15.4 });
+    ok('#200 ⚠️ divTaxPct 기본 0 = 무영향(세금 0 · 입금액이 종전과 동일)',
+      T0.summary.cumDivTax === 0 && T0.summary.cumDivPaid > 0);
+    ok('#201 ⚠️ divAccrued(권리 확정액)는 세전 그대로 둔다',
+      Math.abs(T.summary.cumDivAccrued - T0.summary.cumDivAccrued) < 1e-6 && T.summary.cumDivAccrued > 0);
+    ok('#202 divPaid는 세후(= 세전 × 84.6%)',
+      Math.abs(T.summary.cumDivPaid - T0.summary.cumDivPaid * 0.846) < 1e-6);
+    ok('#203 cumDivTax = 세전 입금 − 세후 입금',
+      Math.abs(T.summary.cumDivTax - (T0.summary.cumDivPaid - T.summary.cumDivPaid)) < 1e-6
+        && Math.abs(T.summary.cumDivTax - T.months.reduce((s, m) => s + m.divTax, 0)) < 1e-6);
+    // ⚠️ divPaid를 세후로 정의했으므로 기말 예수금 분해 항등식(#125)이 **그대로** 성립해야 한다.
+    ok('#204 ⚠️ 기말 예수금 분해 항등식이 세금 도입 후에도 성립한다', (() => {
+      const s = T.summary;
+      return Math.abs(T.initialCashAfter + s.cumTradeNet + s.cumStructuralNet + s.cumReinvestNet + s.cumDivPaid - s.finalCash) < 1e-6;
+    })());
+    // ⚠️ curve의 현금도 세후로 들어와야 실제 cash와 갈리지 않는다.
+    ok('#205 ⚠️ 자산 곡선의 기말 현금 = finalCash',
+      Math.abs(T.curve[T.curve.length - 1].cash - T.summary.finalCash) < 1e-6);
+    ok('#206 세율 100%면 입금 0 · 세금 = 세전 전액',
+      Math.abs(runS({ divTaxPct: 100 }).summary.cumDivPaid) < 1e-6
+        && Math.abs(runS({ divTaxPct: 100 }).summary.cumDivTax - T0.summary.cumDivPaid) < 1e-6);
+    ok('#207 원천징수 조합에서도 주머니 불변식 유지', pocketOk(T));
+  }
+
+  // ── 생존 판정 지표 ──
+  {
+    const R = runS({ divReinvest: 'payDate' });
+    ok('#208 minCash = curve의 예수금 최저점(값·날짜)', (() => {
+      let best = null;
+      for (const c of R.curve) if (!best || c.cash < best.cash) best = c;
+      return Math.abs(R.summary.minCash.value - best.cash) < 1e-6 && R.summary.minCash.date === best.date;
+    })());
+    // ⚠️ cashDiv는 0에서 시작하므로 첫 입금 이후 구간에서만 잰다 — 전 구간으로 재면 **항상 0**이
+    //    나와 지표가 죽는다. tradeOnly는 주머니를 한 번도 헐지 않아 단조증가하므로, 최저점은
+    //    **첫 지급액 그 자체**여야 한다(전 구간으로 재면 0이 되어 이 단언이 깨진다).
+    {
+      const mono = runS({ buyFunding: 'tradeOnly' });
+      const firstPaidYm = mono.months.find((m) => m.divPaid > 0);
+      ok('#209 ⚠️ minCashDiv는 첫 분배금 입금 이후 구간에서만 잰다(0으로 뭉개지지 않는다)',
+        !!R.summary.minCashDiv.date
+          && !!firstPaidYm
+          && mono.summary.minCashDiv.value > 0
+          && Math.abs(mono.summary.minCashDiv.value - firstPaidYm.divPaid) < 1e-6);
+    }
+    ok('#210 분배금이 아예 없으면 minCashDiv는 빈 값 · 월 분배 통계 0',
+      (() => { const n = runS({}, WAVE, {}); return n.summary.minCashDiv.date === '' && n.summary.divMonthlyAvg === 0 && n.summary.divMonthlyStdev === 0; })());
+    ok('#211 월 분배금이 일정하면 표준편차가 0에 가깝다',
+      runS({}, FLAT).summary.divMonthlyStdev < 1 && runS({}, FLAT).summary.divMonthlyAvg > 0);
+    // ⚠️ 구간은 '첫 분배 달 ~ 마지막 달' 연속이다 — 앞쪽 램프업만 제외하고 이후의 0원 달은 포함한다.
+    ok('#212 ⚠️ divMonthlyAvg 구간 = 첫 분배 달부터 마지막 달까지', (() => {
+      const r = runS({}, FLAT);
+      let i = 0; while (i < r.months.length && !(r.months[i].divAccrued > 0)) i++;
+      const vals = r.months.slice(i).map((m) => m.divAccrued);
+      return Math.abs(r.summary.divMonthlyAvg - vals.reduce((s, x) => s + x, 0) / vals.length) < 1e-6;
+    })());
+  }
+
+  // ── 정규화 / 지문 ──
+  {
+    // ⚠️ 필드가 아예 없는 레거시 시나리오는 반드시 '종전 동작' 기본값으로 떨어져야 한다.
+    const legacy = makeBtConfig({});
+    ok('#213 ⚠️ 레거시(필드 부재) 기본값 = 종전 동작',
+      legacy.band === 0 && legacy.buyFunding === 'both' && legacy.cashFloorPct === 0
+        && legacy.divTaxPct === 0 && legacy.dip.enabled === false
+        && legacy.annualReview.mode === 'none' && legacy.annualReview.everyMonths === 12);
+    deep('#214 dip 단계 기본값 = −10/−20/−30 (34/33/33%)', legacy.dip.levels, DEFAULT_DIP_LEVELS);
+    // 정렬 · 중복 낙폭 제거 · 범위 밖 제외 · 전부 무효면 기본값 복귀
+    deep('#215 dip 단계 정규화 — 낙폭 오름차순 + 중복 제거 + 범위 밖 제외',
+      makeBtConfig({ dip: { enabled: true, levels: [
+        { drop: 30, unlockPct: 20 }, { drop: 10, unlockPct: 50 }, { drop: 30, unlockPct: 99 },
+        { drop: 0, unlockPct: 10 }, { drop: 101, unlockPct: 10 }, { drop: 20, unlockPct: 150 },
+      ] } }).dip.levels,
+      [{ drop: 10, unlockPct: 50 }, { drop: 30, unlockPct: 20 }]);
+    ok('#216 ⚠️ 유효한 단계가 하나도 없으면 기본 3단계로 되돌린다(조용히 무동작 방지)',
+      JSON.stringify(makeBtConfig({ dip: { enabled: true, levels: [{ drop: -1, unlockPct: 5 }] } }).dip.levels)
+        === JSON.stringify(DEFAULT_DIP_LEVELS));
+    ok('#217 값 정규화 — band/cashFloorPct 음수 차단 · divTaxPct 0~100 · everyMonths 1~120',
+      makeBtConfig({ band: -5 }).band === 0
+        && makeBtConfig({ cashFloorPct: -1 }).cashFloorPct === 0
+        && makeBtConfig({ divTaxPct: 500 }).divTaxPct === 100
+        && makeBtConfig({ divTaxPct: -1 }).divTaxPct === 0
+        && makeBtConfig({ annualReview: { mode: 'pctOfSurplus', value: 1, reserve: 0, everyMonths: 0, split: 'ratio' } }).annualReview.everyMonths === 1
+        && makeBtConfig({ annualReview: { mode: 'pctOfSurplus', value: 1, reserve: 0, everyMonths: 999, split: 'ratio' } }).annualReview.everyMonths === 120);
+    ok('#218 ⚠️ 알 수 없는 값은 기본값으로(buyFunding/annualReview.mode/split)',
+      makeBtConfig({ buyFunding: 'weird' }).buyFunding === 'both'
+        && makeBtConfig({ annualReview: { mode: 'weird', value: 1, reserve: 0, everyMonths: 12, split: 'x' } }).annualReview.mode === 'none'
+        && makeBtConfig({ annualReview: { mode: 'pctOfSurplus', value: 1, reserve: 0, everyMonths: 12, split: 'x' } }).annualReview.split === 'ratio');
+    // ⚠️ 결과를 바꾸는 설정은 **전부** 지문에 들어가야 한다 — 빠지면 그 설정만 고친 세션이
+    //    portfolioUpdatedAt을 올리지 못해 Drive 저장이 통째로 스킵된다(contribution 선례).
+    const b = makeBtConfig({ id: 'fp' });
+    const fp = (o) => backtestFingerprint([makeBtConfig({ id: 'fp', ...o })]);
+    const base = backtestFingerprint([b]);
+    ok('#219 ⚠️ 지문에 6개 설정이 전부 포함된다(각각 바꾸면 지문이 달라진다)',
+      fp({ band: 3 }) !== base
+        && fp({ buyFunding: 'tradeOnly' }) !== base
+        && fp({ cashFloorPct: 5 }) !== base
+        && fp({ divTaxPct: 15.4 }) !== base
+        && fp({ dip: { enabled: true, levels: DEFAULT_DIP_LEVELS } }) !== base
+        && fp({ annualReview: { mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 12, split: 'ratio' } }) !== base);
+    ok('#220 ⚠️ dip 단계 목록·annualReview 세부까지 지문에 실린다(단계만 고친 편집도 저장된다)',
+      fp({ dip: { enabled: true, levels: [{ drop: 10, unlockPct: 34 }, { drop: 20, unlockPct: 33 }, { drop: 30, unlockPct: 33 }] } })
+        !== fp({ dip: { enabled: true, levels: [{ drop: 15, unlockPct: 34 }, { drop: 20, unlockPct: 33 }, { drop: 30, unlockPct: 33 }] } })
+        && fp({ annualReview: { mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 12, split: 'ratio' } })
+          !== fp({ annualReview: { mode: 'pctOfSurplus', value: 50, reserve: 1, everyMonths: 12, split: 'ratio' } })
+        && fp({ annualReview: { mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 12, split: 'ratio' } })
+          !== fp({ annualReview: { mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 6, split: 'ratio' } })
+        && fp({ annualReview: { mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 12, split: 'ratio' } })
+          !== fp({ annualReview: { mode: 'pctOfSurplus', value: 50, reserve: 0, everyMonths: 12, split: 'even' } }));
+    eq('#221 addMonthsToYm — 연 경계를 넘는다', addMonthsToYm('2026-08', 12), '2027-08');
+    eq('#222 addMonthsToYm — 12로 나누어떨어지지 않는 주기', addMonthsToYm('2026-11', 3), '2027-02');
+    eq('#223 addMonthsToYm — 잘못된 입력은 빈 문자열', addMonthsToYm('2026-8', 3), '');
+  }
+
+  // ── 적대적 리뷰 확정 결함 회귀 (#250~#256) ──
+  // ⚠️ 아래 4건은 리뷰어 3명 중 2명 이상이 **독립적으로** 지목한 확정 결함이다. 되돌리면 재발한다.
+  {
+    // (A) delta가 정확히 0인 회차에서 급락 개방이 만료되지 않아 다음 회차까지 살아남던 결함.
+    //     두 매도/매수 필터 어디에도 안 들어가 consumeDip이 호출되지 않았다.
+    //     재현: 목표에 이미 맞아떨어진 상태 + 종가 이월 → delta === 0.
+    //     ⚠️ 가격이 완전히 고정이면 delta가 늘 0이라 **밴드가 생략할 매매 자체가 없어**
+    //        이 결함이 드러나지 않는다(bandSkipCount는 반올림 수량 0인 건을 세지 않는다).
+    //        급락일 → 목표에 정확히 맞는 회차(delta 0) → 값이 움직이는 회차 순서가 필요하다.
+    const DIPD = mkSeries((i, d) => (d === '2026-06-02' ? 7000 : d <= '2026-06-26' ? 10000 : 10250));
+    const cfgD = {
+      initialCapital: 50000000, band: 100, buyFunding: 'tradeOnly', policy: 'allEom',
+      assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 50000000 }],
+      dip: { enabled: true, levels: [{ drop: 20, unlockPct: 100 }] },
+    };
+    const rD = runS(cfgD, DIPD);
+    ok('#250 ⚠️ delta===0 회차에서도 급락 개방이 만료된다(밴드 면제가 다음 회차로 새지 않는다)',
+      // 밴드 100%라 정상이면 정기 매매가 한 건도 없어야 한다. 개방이 살아남으면 밴드 면제가
+      // 다음 회차까지 이어져 매매가 실행되고 bandSkipCount가 줄어든다.
+      rD.months.reduce((s2, m) => s2 + m.trades.filter((t) => !t.structural && !t.reinvest).length, 0) === 0
+        && rD.summary.bandSkipCount > 0);
+    ok('#250b ⚠️ 개방 만료는 멱등이다(같은 종목을 두 번 소진해도 사용액이 중복 가산되지 않는다)',
+      rD.summary.dipEvents.every((e) => e.used <= e.unlocked + 1e-6));
+
+    // (B) 증액 상한이 총 cash라 tradeOnly·바닥선에서 무력화되던 결함 —
+    //     쓸 수 없는 돈까지 목표에 얹혀 매달 복리로 부풀었다.
+    const infl = (over) => {
+      const r = runS({ contribution: { mode: 'pctOfCash', value: 100, split: 'ratio' }, ...over }, WAVE);
+      // 마지막 달 목표금액 합계(증액 누계 + 초기 목표) 대비 실제 평가액
+      return { target: 50000000 + r.summary.cumContribution, evalEnd: r.summary.finalEval, r };
+    };
+    {
+      const a = infl({ buyFunding: 'tradeOnly' });
+      ok('#251 ⚠️ tradeOnly에서 증액 상한이 매매 주머니로 잘린다(목표만 부풀지 않는다)',
+        // 도달 불가 목표(= 목표 − 평가액)가 초기 목표의 3배를 넘지 않아야 한다.
+        a.target - a.evalEnd < 50000000 * 3);
+      const b = infl({ cashFloorPct: 20 });
+      ok('#252 ⚠️ 현금 바닥선이 있어도 증액 상한이 바닥선을 반영한다',
+        b.target - b.evalEnd < 50000000 * 3);
+      // ⚠️ 기본값에서는 종전 컷과 **결과가 완전히 같아야** 한다(하위호환).
+      const base0 = infl({});
+      ok('#253 ⚠️ 기본값(both · 바닥선 0)에서는 종전 "예수금 한도" 컷과 결과가 동일하다',
+        base0.r.months.every((m) => !m.contribution || m.contribution.note === '' || m.contribution.note === '예수금 한도'));
+    }
+    ok('#253b ⚠️ 연간 증액도 같은 상한을 쓴다(tradeOnly에서 도달 불가 목표를 만들지 않는다)', (() => {
+      const P3 = mkSeries(() => 10000);
+      const mkA2 = (over) => runBacktest({
+        config: makeBtConfig({
+          id: 's', name: '연간', startDate: '2026-01-02', endDate: '2027-12-31',
+          initialCapital: 100000000, targetMode: 'amount', rounding: 'floor', policy: 'allEom',
+          assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 50000000 }],
+          annualReview: { mode: 'pctOfSurplus', value: 100, reserve: 0, everyMonths: 6, split: 'ratio' },
+          ...over,
+        }),
+        prices: { [SC]: P3 }, dividends: { [SC]: Object.fromEntries(allYms.map((y) => [y, 300])) }, holidays: KR26,
+      });
+      const t = mkA2({ buyFunding: 'tradeOnly' });
+      // 매매 주머니만 쓰므로 증액분은 분배금 주머니를 넘지 못한다.
+      return t.annualRows.every((x) => x.amount <= Math.max(0, x.cashBefore) + 1e-6)
+        && t.summary.cumAnnualReview <= mkA2({}).summary.cumAnnualReview + 1e-6;
+    })());
+
+    // (C) 같은 낙폭이 두 번 적히면 런타임에 두 번 발동해 개방액이 2배가 되고,
+    //     저장·재로드 뒤에는 정규화가 dedup해 **같은 시나리오가 세션마다 다른 결과**를 냈다.
+    //     ⚠️ **makeBtConfig를 태워서 테스트하면 안 된다** — 거기서 이미 정규화되므로 런타임 경로가
+    //        전혀 실행되지 않는 죽은 단언이 된다(실제로 그랬다). 화면은 `patchActive`가 스프레드로
+    //        만든 **정규화되지 않은 로컬 사본**을 그대로 runBacktest에 넘기므로, 그 경로를 재현한다.
+    const rawDipRun = (levels, over = {}) => {
+      const cfg = mkS({ buyFunding: 'tradeOnly', initialCapital: 50200000, ...over });
+      cfg.dip = { enabled: true, levels };   // ← 화면의 patchActive와 같은 '정규화 없는' 주입
+      return runBacktest({ config: cfg, prices: { [SC]: CRASH }, dividends: SDIV, holidays: KR26 });
+    };
+    ok('#254 ⚠️ 중복 낙폭 단계는 런타임에도 한 번만 발동한다(저장 전후 결과가 갈리지 않는다)', (() => {
+      const dupLv = [{ drop: 20, unlockPct: 33 }, { drop: 20, unlockPct: 33 }, { drop: 30, unlockPct: 33 }];
+      const raw = rawDipRun(dupLv);
+      const norm = rawDipRun(normalizeDipLevels(dupLv));
+      return raw.summary.dipEvents.filter((e) => e.level === 20).length === 1
+        && JSON.stringify(raw.summary.dipEvents) === JSON.stringify(norm.summary.dipEvents)
+        && raw.summary.finalTotal === norm.summary.finalTotal;
+    })());
+    ok('#255 ⚠️ 정렬되지 않은 단계 목록도 낙폭 오름차순으로 발동한다(역시 정규화 없는 주입 경로)',
+      JSON.stringify(
+        rawDipRun([{ drop: 30, unlockPct: 33 }, { drop: 10, unlockPct: 34 }, { drop: 20, unlockPct: 33 }])
+          .summary.dipEvents.map((e) => e.level),
+      ) === JSON.stringify([10, 20, 30]));
+    ok('#255b ⚠️ 상한을 넘는 단계 목록도 런타임에서 잘린다(정규화 없는 주입)',
+      rawDipRun([1, 2, 3, 4, 5, 6, 7].map((k) => ({ drop: k * 3, unlockPct: 10 })))
+        .summary.dipEvents.length <= MAX_BT_DIP_LEVELS);
+
+    // (D) 화면이 '아직 미지급'을 accrued − paid 로 구하면 **세금까지 미지급으로** 표시된다.
+    ok('#256 ⚠️ 세전 누계 = 세후 입금 + 세금 + 미지급 (accrued − paid 를 세금으로 읽지 말 것)', (() => {
+      const t = runS({ divTaxPct: 15.4 });
+      const pending = t.summary.cumDivAccrued - t.summary.cumDivPaid - t.summary.cumDivTax;
+      const t0 = runS({});
+      // 무세금 시나리오의 미지급분과 정확히 같아야 한다(세금은 미지급이 아니다).
+      return pending > 0.5
+        && Math.abs(pending - (t0.summary.cumDivAccrued - t0.summary.cumDivPaid)) < 1e-6
+        && t.summary.cumDivAccrued - t.summary.cumDivPaid > pending;
+    })());
+  }
+
+  // ── 전 기능 동시 사용 ──
+  {
+    const ALL = runS({
+      band: 2, buyFunding: 'tradeOnly', cashFloorPct: 5, divTaxPct: 15.4,
+      dip: { enabled: true, levels: DEFAULT_DIP_LEVELS },
+      contribution: { mode: 'pctOfCash', value: 30, split: 'ratio' },
+      divReinvest: 'eom',
+    }, CRASH);
+    ok('#224 ⚠️ 6기능 동시 사용에서도 실행이 성사되고 주머니 불변식이 유지된다',
+      ALL.ok && pocketOk(ALL));
+    ok('#225 ⚠️ 6기능 동시 사용에서도 기말 예수금 분해 항등식이 성립한다', (() => {
+      const s = ALL.summary;
+      return Math.abs(ALL.initialCashAfter + s.cumTradeNet + s.cumStructuralNet + s.cumReinvestNet + s.cumDivPaid - s.finalCash) < 1e-6;
+    })());
+    ok('#226 ⚠️ 6기능 동시 사용에서도 월별 러닝 예수금이 실제 예수금과 갈리지 않는다',
+      Math.abs(ALL.months[ALL.months.length - 1].cashEnd - ALL.summary.finalCash) < 1e-6);
+  }
+}
+
 console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');
 
 {
@@ -2217,6 +2963,52 @@ console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');
   const c4 = JSON.parse(JSON.stringify(c1)); c4.assets[0].divOverride = { '2026-05': 170 };
   ok('#56 ⚠️ 주당 분배금 수동 입력은 결과를 바꾸므로 지문에 포함된다',
     backtestFingerprint([c1]) !== backtestFingerprint([c4]));
+
+  // ── 레거시 시나리오 로드 (전략 보조 규칙 도입 전에 저장된 STATE) ──
+  // ⚠️ applyStateData는 Drive 버전 변경 폴링마다 이 함수를 다시 태운다. 첫 로드에서 **한 번만**
+  //    새 배열을 돌려주고 그 뒤로는 **같은 참조**를 돌려줘야 한다 — 매번 새 배열이면
+  //    ① portfolioUpdatedAt이 계속 올라 Drive 저장이 반복되고 ② BacktestPage의 시드 effect
+  //    (`scenarios === localRef.current`)가 매 폴링마다 로컬 사본을 갈아엎어 **미승격 편집이 사라진다**.
+  {
+    // 새 필드가 하나도 없는 옛 저장본(그 시절 필드만).
+    const legacyRaw = [{
+      id: 'L', name: '옛 시나리오', startDate: '2026-01-02', endDate: '2026-07-31',
+      initialCapital: 450000000, extraCash: 0, targetMode: 'amount', rounding: 'floor',
+      policy: 'perCycle', fixedDay: 15, exDivOffset: -1, rebalOffset: -1, payOffset: 2,
+      allowNegativeCash: false, divReinvest: 'hold', divReinvestSplit: 'target', compareOn: true,
+      contribution: { mode: 'none', value: 0, split: 'ratio' }, contribOverrides: [],
+      assets: [{ id: 'a1', code: 'A498400', name: 'KODEX 200', payCycle: 'mid', targetAmount: 225000000,
+        targetRatio: null, startDate: '', endDate: '', divOverride: {}, color: '#60A5FA',
+        rebalMode: 'follow', rebalDay: 15, rebalDates: [] }],
+      events: [], overrides: [], createdAt: 1000, updatedAt: 1000,
+    }];
+    const pass1 = normalizeBacktestScenarios(legacyRaw);
+    const s1 = pass1[0];
+    ok('#235 ⚠️ 레거시 시나리오는 6개 보조 규칙이 전부 "종전 동작" 기본값으로 채워진다',
+      s1.band === 0 && s1.buyFunding === 'both' && s1.cashFloorPct === 0 && s1.divTaxPct === 0
+        && s1.dip.enabled === false && s1.dip.levels.length === 3
+        && s1.annualReview.mode === 'none' && s1.annualReview.everyMonths === 12);
+    ok('#236 ⚠️ 레거시는 새 배열로 반환된다(첫 로드에서 지문이 바뀌어 Drive 저장이 트리거된다)',
+      pass1 !== legacyRaw && backtestFingerprint(legacyRaw) !== backtestFingerprint(pass1));
+    // ⚠️ 이게 이 기능의 수렴 불변식이다 — 저장된 뒤로는 정규화가 아무것도 바꾸지 않아야 한다.
+    ok('#237 ⚠️ 정규화는 멱등이다 — 두 번째부터는 같은 참조를 그대로 돌려준다(무한 재저장·로컬 편집 리셋 방지)',
+      normalizeBacktestScenarios(pass1) === pass1
+        && backtestFingerprint(normalizeBacktestScenarios(pass1)) === backtestFingerprint(pass1));
+    ok('#238 ⚠️ 레거시 시나리오의 **실행 결과**는 정규화 후에도 그대로다(하위호환의 최종 관문)', (() => {
+      const before = runBacktest({ config: makeBtConfig(legacyRaw[0]), prices: PRICES, dividends: DIVS, holidays: KR26 });
+      const after = runBacktest({ config: s1, prices: PRICES, dividends: DIVS, holidays: KR26 });
+      return JSON.stringify(before) === JSON.stringify(after) && before.ok;
+    })());
+    // ⚠️ 지문은 저장 effect의 첫 블록에서 계산된다 — 여기서 던지면 그 세션의 Drive 저장이 통째로 멈춘다.
+    ok('#239 ⚠️ 손상된 새 필드에도 지문이 던지지 않는다',
+      backtestFingerprint([{ id: 'x', band: 'bad', dip: 'nope', annualReview: 7, buyFunding: {}, assets: [] }]) !== undefined
+        && (() => { try { normalizeBacktestScenarios([{ id: 'y', dip: { enabled: 1, levels: 'x' }, annualReview: [] }]); return true; } catch { return false; } })());
+    ok('#240 ⚠️ 손상된 새 필드는 기본값으로 치유된다(실행이 죽지 않는다)', (() => {
+      const fixed = normalizeBacktestScenarios([{ id: 'y', dip: { enabled: 1, levels: 'x' }, annualReview: [], band: NaN, divTaxPct: 'x' }])[0];
+      return fixed.dip.enabled === true && fixed.dip.levels.length === 3
+        && fixed.annualReview.mode === 'none' && fixed.band === 0 && fixed.divTaxPct === 0;
+    })());
+  }
 }
 
 console.log('\n── 파트④-c 데이터 수집 ──');
@@ -2300,8 +3092,156 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   const bt2 = strip(read('src/backtest.ts'));
   ok('#139 ⚠️ 재투자 매수는 분배금 주머니에서 꺼낸다(prefer="div") — 무한 재투자 방지',
     /applyCash\(cashDelta, date, 'div'\)/.test(bt2));
-  ok('#140 ⚠️ 재투자 스텝은 KIND_ORDER 맨 뒤(rebal 뒤)에 온다',
-    /exdiv: 0, pay: 1, event: 2, contrib: 3, rebal: 4, reinvest: 5/.test(bt2));
+  // ⚠️ KIND_ORDER는 보조 규칙 도입으로 **번호가 밀렸다**(dip·annual 삽입). 리터럴을 그대로 박으면
+  //    스텝이 하나 늘 때마다 이 가드가 죽으므로, **계약 자체**(상대 순서)를 파싱해서 단언한다.
+  //    계약: 기존 5종의 상대 순서 보존 + reinvest가 유일한 최댓값 + contrib < annual < rebal.
+  ok('#140 ⚠️ KIND_ORDER — 재투자가 맨 뒤 · contrib < annual < rebal · dip은 pay 뒤/rebal 앞', (() => {
+    const m = bt2.match(/const KIND_ORDER[^=]*=\s*\{([^}]*)\}/);
+    if (!m) return false;
+    const o = {};
+    for (const part of m[1].split(',')) {
+      const kv = part.split(':');
+      if (kv.length !== 2) continue;
+      o[kv[0].trim()] = Number(kv[1].trim());
+    }
+    const need = ['exdiv', 'pay', 'dip', 'event', 'contrib', 'annual', 'rebal', 'reinvest'];
+    if (need.some((k) => !Number.isFinite(o[k]))) return false;
+    return o.exdiv < o.pay && o.pay < o.event && o.event < o.contrib && o.contrib < o.rebal
+      && o.reinvest === Math.max(...Object.values(o))
+      && Object.values(o).filter((v) => v === o.reinvest).length === 1
+      && o.pay < o.dip && o.dip < o.rebal
+      && o.contrib < o.annual && o.annual < o.rebal;
+  })());
+
+  // ── 평가금 고정 보조 규칙: 하위호환 배선 가드 ──
+  // ⚠️ 미러 테스트는 '기본값이 종전 동작인가'를 함수 본문으로만 잡는다. 아래 3건은 **기본값이
+  //    코드에 그렇게 적혀 있는가**를 직접 단언한다 — 하나라도 바뀌면 저장된 시나리오의 결과가
+  //    사용자 행동 없이 달라진다.
+  ok('#227 ⚠️ applyCash의 divCap 기본값은 Infinity다(기존 호출부가 분배금 주머니를 종전대로 쓴다)',
+    /applyCash\s*=\s*\([\s\S]{0,200}?divCap\s*:?\s*(number)?\s*=\s*Infinity/.test(bt2));
+  ok('#228 ⚠️ adjustTo의 매수 한도 기본값은 전체 예수금(cash)·바닥선 없음(Infinity)이다',
+    /const rawBudget = opts\?\.budget \?\? cash;/.test(bt2)
+      && /const floorCap = opts\?\.floorCap \?\? Infinity;/.test(bt2)
+      && /applyCash\(cashDelta, date, 'trade', opts\?\.divCap \?\? Infinity\)/.test(bt2));
+  ok('#229 ⚠️ 현금 바닥선은 allowNegativeCash보다 우선한다(바닥선이 있으면 음수 진입 불가)',
+    /const limited = !config\.allowNegativeCash \|\| floorCap < Infinity;/.test(bt2));
+  ok('#230 ⚠️ 원천징수는 지급(pay) 스텝에서만 떼고 divAccrued는 세전 그대로 둔다',
+    /const net = r\.amount \* \(1 - divTaxRate\);/.test(bt2)
+      && /m\.divPaid \+= net;/.test(bt2)
+      && /m\.divTax \+= r\.amount - net;/.test(bt2)
+      && /applyDividend\(net, step\.date, r\.assetId\)/.test(bt2)
+      // 곡선의 현금도 세후여야 실제 cash와 갈리지 않는다
+      && /divByDate\.set\(d\.payDate,[^\n]*d\.amount \* \(1 - divTaxRate\)\)/.test(bt2)
+      // divAccrued 적재부는 세전(r.amount) 그대로
+      && /am\.divAccrued \+= r\.amount;/.test(bt2));
+  ok('#231 ⚠️ 밴드·재원·바닥선은 **정기 리밸런싱 전용**이다(이벤트·초기매수 adjustTo는 opts 미전달)',
+    // 정기 리밸런싱만 4번째 인자 뒤에 opts를 넘긴다
+    /adjustTo\(pl\.p, s\.rebalDate, pl\.target, false, \{ budget, divCap, floorCap \}\)/.test(bt2)
+      // 이벤트 재편/편입·제외 매도·초기 매수는 종전대로 opts 없이 호출
+      && /adjustTo\(pl\.p, e\.date, pl\.target, true\)/.test(bt2)
+      && /adjustTo\(p, e\.date, targetOf\(p, config, base\), true\)/.test(bt2)
+      && /adjustTo\(p, e\.date, 0, true\)/.test(bt2)
+      && /adjustTo\(p, startBiz, targetOf\(p, config, base\), false\)/.test(bt2));
+  ok('#232 ⚠️ 급락은 가격 고점 기준이고 새 고점이 서면 전 단계를 재무장한다',
+    /if \(px > peak\) \{ peak = px; fired\.clear\(\); continue; \}/.test(bt2)
+      && /const dropPct = \(\(peak - px\) \/ peak\) \* 100;/.test(bt2));
+  // ⚠️ 두 번째 조건이 핵심이다 — runPlan은 `delta !== 0`인 plan에만 불리므로, 목표에 이미
+  //    맞아떨어진 회차(delta===0)를 훑는 **마무리 만료 루프**가 없으면 개방과 밴드 면제가
+  //    다음 회차까지 살아남는다(적대적 리뷰 확정 결함, 미러 회귀 #250).
+  ok('#233 ⚠️ 급락 개방은 그 회차 리밸런싱 1회 한정이다(delta===0 회차도 반드시 만료)',
+    /if \(armed\) consumeDip\(id, t && t\.qty > 0 \? lastDraw\.fromDiv : 0\);/.test(bt2)
+      && /for \(const pl of plans\) \{\s*if \(dipUnlock\.has\(pl\.p\.asset\.id\)\) consumeDip\(pl\.p\.asset\.id, 0\);\s*\}/.test(bt2)
+      && /dipUnlock\.delete\(assetId\);/.test(bt2));
+  // ── 화면(BacktestPage) 렌더 계약 ──
+  // ⚠️ 아래는 미러(순수 함수)로 표현할 수 없는 **렌더 계약**이라 소스 텍스트로 단언한다.
+  ok('#241 ⚠️ 비교 표의 지표 열 수 = 실행 불가 행의 colSpan (열을 더하고 colSpan을 안 고치면 정렬이 깨진다)', (() => {
+    // 비교 표 thead 블록만 잘라 <th> 수를 센다(시나리오 열 1개를 뺀 값이 지표 열 수).
+    // ⚠️ 앵커로 JSX 주석을 쓰지 말 것 — 위 strip()이 주석을 지운 사본에서 검사하므로 못 찾는다.
+    const i = page.indexOf('>시나리오</th>');
+    if (i < 0) return false;
+    const seg = page.slice(Math.max(0, i - 400), i + 3500);
+    const head = seg.slice(seg.indexOf('<thead'), seg.indexOf('</thead>'));
+    const ths = (head.match(/<th\b/g) || []).length;
+    const m = seg.match(/<td colSpan=\{(\d+)\}[^>]*>[\s\S]{0,200}?실행할 수 없는 설정입니다/);
+    return ths > 0 && !!m && ths - 1 === Number(m[1]);
+  })());
+  ok('#242 ⚠️ 전략 지표는 SummaryCard를 공유하고 단일 뷰·비교 블록 **양쪽**에 렌더된다(복제 금지)',
+    /function StrategyKpis\(\{ result, cfg, compact = false \}\)/.test(page)
+      && /cards\.map\(\(c\) => <SummaryCard key=\{c\.label\} \{\.\.\.c\} compact=\{compact\} \/>\)/.test(page)
+      && (page.match(/<StrategyKpis\b/g) || []).length >= 2);
+  // ⚠️ 엔진 경고가 '⑥ 종목에서 …'을 가리키므로 ⑥을 ⑦로 밀면 화면 번호와 안내가 갈린다.
+  ok('#243 ⚠️ 새 설정 섹션은 ⑤-b이고 ⑥ 종목 번호를 밀지 않았다',
+    /title="⑤-b 전략 옵션 — 평가금 고정 보조 규칙"/.test(page)
+      && /title="⑥ 종목"/.test(page) && !/title="⑦ 종목"/.test(page));
+  // ⚠️ @ts-nocheck 파일이라 컴파일러가 못 막는다 — 정규화를 우회한 config가 한 번이라도 들어오면
+  //    렌더 중 TypeError가 루트 ErrorBoundary까지 올라가 화면이 통째로 오류 페이지가 된다.
+  ok('#244 ⚠️ 화면은 dip/annualReview를 안전 접근자로만 읽는다(active.dip.enabled 직접 접근 금지)',
+    /const dipOf = \(cfg\) =>/.test(page) && /const annualOf = \(cfg\) =>/.test(page)
+      && !/\bactive\.dip\./.test(page) && !/\bactive\.annualReview\./.test(page)
+      && !/\bcfg\.dip\./.test(page) && !/\bcfg\.annualReview\./.test(page));
+  // ⚠️ 세금은 애초에 입금되지 않은 돈이라 분해 그룹에 항을 더하면 합이 예수금과 어긋난다(#204).
+  ok('#245 ⚠️ 기말 예수금 분해에 세금 항을 더하지 않는다(화면·CSV 모두 분배금 항을 세후로 라벨링만)',
+    /label: `누적 분배금\$\{result\.summary\.cumDivTax > 0\.5 \? ' \(세후\)' : ''\}`/.test(page)
+      && /\[`누적 분배금\$\{taxedCsv \? '\(세후\)' : ''\}`, result\.summary\.cumDivPaid\]/.test(page)
+      && /원천징수 세금\(참고 · 위 합계에 미포함\)/.test(page));
+  // ⚠️ 월별 표는 12열 고정이라 '비고' 열이 없다 — note를 배지로 붙이지 않으면 '바닥선'·'예수금 부족'이
+  //    화면 어디에도 보이지 않는다(열을 늘리면 thead·orphan·tfoot·CSV 4곳을 전부 고쳐야 한다).
+  ok('#246 ⚠️ 매매 note(바닥선·예수금 부족)가 날짜 셀 배지로 보인다 + 12열 유지',
+    /\{t\.note && \(/.test(page) && /t\.note === '바닥선'/.test(page)
+      && (() => {
+        const i = page.indexOf('min-w-[1320px]');
+        if (i < 0) return false;
+        const seg = page.slice(i, i + 1400);
+        return (seg.slice(seg.indexOf('<thead'), seg.indexOf('</thead>')).match(/<th\b/g) || []).length === 12;
+      })());
+  ok('#247 ⚠️ 비교 CSV 헤더 열 수 = 데이터 행 열 수 (짧으면 엑셀에서 열이 조용히 밀린다)', (() => {
+    const i = page.indexOf('const downloadCompareCsv');
+    if (i < 0) return false;
+    const seg = page.slice(i, i + 4200);
+    const head = seg.slice(seg.indexOf('const rows = [['), seg.indexOf(']];'));
+    const headCols = (head.match(/'/g) || []).length / 2;
+    const body = seg.slice(seg.indexOf('rows.push(['), seg.indexOf('\n      ]);'));
+    const bodyCols = body.split('\n').filter((l) => /,\s*$/.test(l.trim()) && !/^\s*(rows\.push|\/\/|\/\*)/.test(l)).length;
+    return headCols === 30 && bodyCols === 30;
+  })());
+  // ⚠️ <label> 안의 <button>은 label 활성화 동작이 내부 체크박스를 함께 토글한다 —
+  //    ? 아이콘을 누를 때마다 그 옵션이 켜졌다 꺼진다(Section 헤더 '버튼 중첩 금지'와 같은 부류).
+  ok('#249 ⚠️ <label> 안에 Hint(button)를 두지 않는다(? 클릭이 체크박스를 토글하는 사고 방지)', (() => {
+    let i = 0;
+    while ((i = page.indexOf('<label', i)) >= 0) {
+      const e = page.indexOf('</label>', i);
+      if (e < 0) break;
+      if (/<Hint\b|<button\b/.test(page.slice(i, e))) return false;
+      i = e + 1;
+    }
+    return true;
+  })());
+  // ── 적대적 리뷰 확정 결함의 소스 계약 (미러 테스트로는 잡히지 않는 지점) ──
+  // ⚠️ #254는 **미러**의 runBacktest를 돌리므로 엔진 본문 변이를 못 본다 — 엔진이 실제로
+  //    normalizeDipLevels를 태우는지는 소스로 단언해야 한다.
+  ok('#257 ⚠️ 엔진의 급락 사전탐지는 정규화한 단계 목록으로 돈다(중복 낙폭 2회 발동·세션 간 결과 불일치 방지)',
+    /const dipLevels = config\.dip\.enabled \? normalizeDipLevels\(config\.dip\.levels\) : \[\];/.test(bt2)
+      && /for \(let i = 0; i < dipLevels\.length; i\+\+\)/.test(bt2)
+      && !/config\.dip\.levels\[i\]/.test(bt2));
+  // ⚠️ accrued − paid 에는 **세금**도 섞여 있다(엔진 cumDivPaid 주석 참조) — 그대로 '미지급'으로
+  //    표시하면 원천징수를 켠 사용자에게 미지급액이 세금만큼 부풀어 보인다.
+  ok('#258 ⚠️ 화면의 "아직 미지급"은 세금을 빼고 구한다(cumDivAccrued − cumDivPaid − cumDivTax)',
+    /const divPending = s\.cumDivAccrued - s\.cumDivPaid - numOf\(s\.cumDivTax\);/.test(page));
+  // ⚠️ 정규화가 중복 낙폭 행을 지운 뒤 되돌릴 UI가 없으면 그 단계가 영구히 사라진다.
+  ok('#259 ⚠️ 급락 단계는 행 추가·삭제가 가능하고 중복 낙폭을 입력 즉시 경고한다',
+    /title="이 단계 삭제"/.test(page)
+      && /단계 추가 \(\{dipOf\(active\)\.levels\.length\}\/\{MAX_BT_DIP_LEVELS\}\)/.test(page)
+      && /new Set\(ds\)\.size === ds\.length/.test(page)
+      && /저장하면 하나만 남습니다/.test(page));
+  ok('#248 ⚠️ 설정 배지는 태그 수를 잘라 제목을 밀지 않는다(헤더 배지 span은 truncate=nowrap)',
+    /function strategyBadge\(cfg\)/.test(page)
+      && /tags\.length > 3 \?/.test(page)
+      && /badge=\{strategyBadge\(active\)\}/.test(page));
+  ok('#234 ⚠️ 연간 증액은 목표 금액 모드 전용이고 예약금을 surplus 상한으로 보호한다',
+    /const surplus = Math\.max\(0, cashBefore - Math\.max\(0, ar\.reserve\)\);/.test(bt2)
+      && /let amount = Math\.min\(requested, surplus\);/.test(bt2)
+      // contrib과 같은 조기 반환(비중 모드) 규약을 공유한다
+      && (bt2.match(/if \(config\.targetMode === 'ratio'\) continue;/g) || []).length >= 2);
 
   // ── 적대적 리뷰 확정 결함의 렌더 계약 가드 ──
   ok('#146 ⚠️ 시나리오 색 스와치는 인라인 SVG다 — 인쇄 CSS가 background를 죽여 PDF에서 사라지면 안 된다',
