@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 // ⚠️ 여기 있는 아이콘은 **이 저장소가 이미 쓰고 있어 lucide 0.577.0에 실재가 확인된 것**만이다.
 //    package-lock.json도 node_modules도 없어 새 아이콘이 이 버전에 있는지 확인할 수단이 없고,
@@ -11,9 +11,15 @@ import {
 } from 'lucide-react';
 import {
   runBacktest, makeBtConfig, makeBtAsset, joinTradeDividends, parsePastedSeries,
-  seriesRange, monthsBetween, backtestFingerprint,
-  MAX_BT_SCENARIOS, MAX_BT_ASSETS, MAX_BT_EVENTS, MAX_BT_OVERRIDES,
-  MAX_BT_CONTRIB_OVERRIDES, MAX_BT_REBAL_DATES, BT_COLORS, DEFAULT_DIP_LEVELS, MAX_BT_DIP_LEVELS,
+  seriesRange, monthsBetween, backtestFingerprint, backtestSettingsFingerprint,
+  BT_COLORS, DEFAULT_DIP_LEVELS,
+} from '../backtest';
+// 소프트 상한 — ⚠️ 화면 maxLength는 backtest.ts 정규화와 **같은 값**을 써야 잘림이 사용자에게
+//    보인다(정규화에서만 자르면 붙여넣은 분석의 뒤가 조용히 사라진다).
+import {
+  MAX_BT_SCENARIOS, MAX_BT_ASSETS, MAX_BT_EVENTS, MAX_BT_OVERRIDES, MAX_BT_CONTRIB_OVERRIDES,
+  MAX_BT_REBAL_DATES, MAX_BT_DIP_LEVELS,
+  MAX_BT_NOTES, MAX_BT_NOTE_LEN, MAX_BT_NOTE_TITLE_LEN, MAX_BT_VERDICT_LEN,
 } from '../backtest';
 import { generateId, formatNumber, cleanNum } from '../utils';
 
@@ -790,6 +796,337 @@ function scenarioSubtitle(cfg, summary) {
   return parts.join(' · ');
 }
 
+/* ===========================================================================
+ * 시나리오 평가 · 메모 (결과에 영향이 없는 **기록 전용** 기능)
+ * =========================================================================== */
+
+/**
+ * 평가 등급 표기.
+ * ⚠️ 색은 **반드시 text-* 클래스**로 낼 것 — 인쇄 CSS `.bt-shell * { background: transparent
+ *    !important }`(작성자 !important)가 인라인 backgroundColor를 이겨서, 배경으로 칠한 배지는
+ *    PDF에서 통째로 사라진다(Swatch가 인라인 SVG인 것과 같은 근거). 아래 4색은 인쇄 CSS의
+ *    text-emerald-/text-amber-/text-red- 되살림 규칙에 그대로 걸린다.
+ */
+const RATING_ORDER = ['good', 'watch', 'bad', 'none'];
+const RATING_LABEL = { good: '좋음', watch: '보통', bad: '나쁨', none: '미평가' };
+const RATING_MARK = { good: '◎', watch: '△', bad: '✕', none: '·' };
+const RATING_CLS = {
+  good: 'text-emerald-300',
+  watch: 'text-amber-300',
+  bad: 'text-red-400',
+  none: 'text-gray-500',
+};
+
+/**
+ * 평가·메모의 기본값 안전 접근자.
+ * ⚠️ `cfg.review.rating`처럼 곧바로 파고들지 말 것 — 이 파일은 `@ts-nocheck`라 컴파일러가 막지
+ *    않는데, 정규화를 우회한 config가 한 번이라도 들어오면 **렌더 중 TypeError**가 루트
+ *    ErrorBoundary까지 올라가 화면이 통째로 오류 페이지가 된다(dipOf·annualOf와 같은 규약).
+ */
+const reviewOf = (cfg) => (cfg && cfg.review) || { rating: 'none', verdict: '', updatedAt: 0 };
+const notesOf = (cfg) => (Array.isArray(cfg?.notes) ? cfg.notes : []);
+const ratingKey = (r) => (RATING_LABEL[r] ? r : 'none');
+/** 평가·메모에 실제로 쓴 내용이 하나라도 있는가(빈 카드를 PDF에 찍지 않기 위한 판정). */
+const hasReviewContent = (cfg) => {
+  const rv = reviewOf(cfg);
+  return ratingKey(rv.rating) !== 'none'
+    || !!String(rv.verdict || '').trim()
+    || notesOf(cfg).some((n) => !!(String(n?.title || '').trim() || String(n?.body || '').trim()));
+};
+
+function RatingChip({ rating, className = '' }) {
+  const r = ratingKey(rating);
+  return (
+    <span className={`font-bold ${RATING_CLS[r]} ${className}`}>{RATING_MARK[r]} {RATING_LABEL[r]}</span>
+  );
+}
+
+/**
+ * 시나리오 평가 카드 — 결과 표제 **바로 아래(= 헤더 상단)** 에 놓이고 PDF에도 그대로 실린다.
+ *
+ * 구성 = ① 등급(좋음/보통/나쁨/미평가) + 한 줄 결론  ② 메모 목록(AI 분석 / 내 메모).
+ * 각 메모는 **작성 시점의 조건 요약과 헤드라인 결과를 함께 박제**한다 — AI 분석은 특정 설정의
+ * 결과를 두고 쓴 글이라, 나중에 설정을 바꾸면 그 글이 조용히 거짓이 되기 때문이다. 지금 설정과
+ * 지문이 다르면 '작성 이후 설정이 바뀌었습니다' 배지를 띄운다(조용한 오적용보다 명시적 고지).
+ *
+ * ⚠️ **로컬 draft + blur 커밋**이다(NumInput·DivInput과 같은 계약). 매 keystroke 커밋하면
+ *    `active` 참조가 바뀌어 220ms 뒤 백테스트 전 구간이 재실행되고 결과 표 전체가 리렌더된다.
+ * ⚠️ draft를 두는 순간 유실·오적용 경로가 새로 생기므로 FlowInspector 규약을 그대로 이식한다:
+ *    ① 쓰기는 **id 기준**(`onPatch(ownerId, …)`) — 렌더 시점 `active.id`를 클로저로 잡으면
+ *       타이핑 중 시나리오를 바꿨을 때 draft가 **다른 시나리오에 기록**된다.
+ *    ② 소유자 변경·언마운트 flush는 **useLayoutEffect**로 — passive effect는 discrete 이벤트인
+ *       blur보다 뒤처져 그 오적용을 못 막는다.
+ *    ③ `registerFlush`로 커밋 훅을 부모에 등록한다 — 부모의 `promote()`는 `localRef`만 회수하므로
+ *       draft를 전혀 보지 못한다(앱 종료 커밋에서 본문이 통째로 유실된다).
+ */
+function ScenarioReviewCard({ cfg, result, readOnly, onPatch, onAddNote, registerFlush }) {
+  const [draft, setDraft] = useState({});
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const ownerRef = useRef(cfg.id);
+  const [folded, setFolded] = useState({});
+  const [delId, setDelId] = useState('');
+
+  const review = reviewOf(cfg);
+  const notes = notesOf(cfg);
+  const rating = ratingKey(review.rating);
+
+  /** 지금 설정의 지문 — 메모 스냅샷과 비교해 '작성 이후 바뀌었는가'를 판정한다. */
+  const curFp = useMemo(() => {
+    try { return backtestSettingsFingerprint(cfg); } catch { return ''; }
+  }, [cfg]);
+
+  const flush = useCallback(() => {
+    const d = draftRef.current;
+    const owner = ownerRef.current;
+    const keys = Object.keys(d || {});
+    if (!owner || !keys.length) return;
+    draftRef.current = {};
+    setDraft({});
+    onPatch(owner, (s) => {
+      const out = {};
+      if (d.verdict !== undefined) {
+        const cur = reviewOf(s);
+        const next = String(d.verdict).slice(0, MAX_BT_VERDICT_LEN);
+        // ⚠️ 값이 그대로면 아무것도 쓰지 않는다(NumInput 조기 return과 같은 규약) — 포커스만
+        //    스치고 지나가도 커밋하면 updatedAt이 올라 지문이 바뀌고 Drive 4파일 write가 나간다.
+        if (next !== cur.verdict) out.review = { ...cur, verdict: next, updatedAt: Date.now() };
+      }
+      const ids = new Set(
+        keys.filter((k) => k.length > 2 && k[1] === ':' && (k[0] === 't' || k[0] === 'b')).map((k) => k.slice(2)),
+      );
+      if (ids.size) {
+        let touched = false;
+        const ts = Date.now();
+        const list = notesOf(s).map((n) => {
+          if (!ids.has(n.id)) return n;
+          const t = d[`t:${n.id}`];
+          const b = d[`b:${n.id}`];
+          const title = t === undefined ? n.title : String(t).slice(0, MAX_BT_NOTE_TITLE_LEN);
+          const body = b === undefined ? n.body : String(b).slice(0, MAX_BT_NOTE_LEN);
+          if (title === n.title && body === n.body) return n;
+          touched = true;
+          return { ...n, title, body, updatedAt: ts };
+        });
+        if (touched) out.notes = list;
+      }
+      return out;
+    });
+  }, [onPatch]);
+
+  // 소유 시나리오가 바뀌면 **이전 소유자**에게 먼저 커밋한다.
+  // ⚠️ 호출부가 key={cfg.id}로 리마운트시키므로 평상시엔 도달하지 않는 2차 방어선이다(둘 다 유지).
+  useLayoutEffect(() => {
+    if (ownerRef.current !== cfg.id) { flush(); ownerRef.current = cfg.id; }
+  });
+  // ⚠️ 언마운트된 DOM에는 브라우저가 blur/focusout을 발화하지 않는다 — 이 cleanup이 없으면
+  //    시나리오 전환·페이지 닫기에서 방금 붙여넣은 분석이 아무 데도 저장되지 않고 사라진다.
+  useLayoutEffect(() => () => { flush(); }, [flush]);
+
+  useEffect(() => {
+    registerFlush?.(flush);
+    return () => registerFlush?.(null);
+  }, [registerFlush, flush]);
+
+  const setRating = (r) => {
+    if (readOnly) return;
+    const cur = reviewOf(cfg);
+    const next = ratingKey(cur.rating) === r ? 'none' : r;
+    if (next === ratingKey(cur.rating)) return;
+    onPatch(cfg.id, (s) => ({ review: { ...reviewOf(s), rating: next, updatedAt: Date.now() } }));
+  };
+
+  const removeNote = (id) => {
+    setDelId('');
+    onPatch(cfg.id, (s) => ({ notes: notesOf(s).filter((n) => n.id !== id) }));
+  };
+
+  const shownVerdict = draft.verdict !== undefined ? draft.verdict : review.verdict;
+  const empty = !hasReviewContent(cfg) && !String(shownVerdict || '').trim();
+
+  return (
+    // ⚠️ 아무것도 안 쓴 카드는 인쇄에서 통째로 뺀다 — 안 그러면 PDF 첫 장에 빈 상자가 찍힌다.
+    // ⚠️ 여기에 `bt-month`(page-break-inside: avoid)를 붙이지 말 것 — 긴 AI 분석은 페이지를
+    //    넘어가며 이어져야 한다. 붙이면 한 장에 욱여넣으려다 뒤가 잘린다.
+    <div className={`border border-gray-800 rounded-lg bg-gray-900/40 p-2.5 mb-3 ${empty ? 'bt-noprint' : ''}`}>
+      <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+        <span className="text-[12px] font-bold text-gray-300">📝 시나리오 평가</span>
+        <Hint width={340} label="시나리오 평가 안내">
+          <p>
+            이 시나리오를 돌려 보고 내린 <b className="text-gray-300">결론</b>과, AI에게 받은
+            <b className="text-gray-300"> 분석 내용</b>을 여기에 적어 두면 시나리오와 함께 저장됩니다.
+            다음에 열어도, 다른 기기에서 열어도 그대로 남아 있고 <b className="text-gray-300">PDF·CSV에도 함께</b> 나갑니다.
+          </p>
+          <p className="mt-1">
+            메모마다 <b className="text-gray-300">그때의 조건과 결과가 함께 기록</b>됩니다. 나중에 설정을
+            바꾸면 그 메모에 <span className="text-amber-300">설정이 바뀌었습니다</span> 표시가 붙어,
+            지금 화면의 숫자와 메모의 내용이 다른 조건의 것임을 알 수 있습니다.
+          </p>
+        </Hint>
+        <div className="flex-1" />
+        <span className="text-[10px] text-gray-600 bt-noprint">메모 {notes.length} / {MAX_BT_NOTES}</span>
+        <button
+          className={`${BTN} text-sky-300 border-sky-800 hover:bg-sky-900/30 bt-noprint`}
+          disabled={readOnly || notes.length >= MAX_BT_NOTES}
+          onClick={() => onAddNote('ai')}
+          title="AI에게 받은 분석을 붙여넣습니다. 지금 조건과 결과가 함께 기록됩니다."
+        >
+          <Plus size={11} className="inline -mt-0.5" /> AI 분석
+        </button>
+        <button
+          className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 bt-noprint`}
+          disabled={readOnly || notes.length >= MAX_BT_NOTES}
+          onClick={() => onAddNote('user')}
+        >
+          <Plus size={11} className="inline -mt-0.5" /> 내 메모
+        </button>
+      </div>
+
+      {/* 등급 + 한 줄 결론 — 편집 UI는 화면 전용, 인쇄에는 바로 아래 정적 미러가 나간다. */}
+      <div className="flex flex-wrap items-center gap-1 mb-1 bt-noprint">
+        {RATING_ORDER.map((r) => (
+          <button
+            key={r}
+            disabled={readOnly}
+            onClick={() => setRating(r)}
+            className={`${BTN} ${rating === r
+              ? `${RATING_CLS[r]} border-gray-500 bg-gray-800`
+              : 'text-gray-600 border-gray-700 hover:bg-gray-800'}`}
+          >
+            {RATING_MARK[r]} {RATING_LABEL[r]}
+          </button>
+        ))}
+        <input
+          className={`${INPUT} flex-1 min-w-[200px]`}
+          disabled={readOnly}
+          maxLength={MAX_BT_VERDICT_LEN}
+          placeholder="한 줄 결론 (예: 급락 방어는 좋으나 반등 구간에서 뒤처짐)"
+          value={shownVerdict}
+          onChange={(e) => setDraft((p) => ({ ...p, verdict: e.target.value }))}
+          onBlur={flush}
+          onKeyDown={(e) => { if (e.key === 'Enter') { flush(); e.currentTarget.blur(); } }}
+        />
+      </div>
+      <div className="bt-printonly text-[12px] mb-1">
+        <RatingChip rating={rating} />
+        {String(shownVerdict || '').trim() && <span className="text-gray-200"> — {shownVerdict}</span>}
+      </div>
+
+      {notes.length === 0 ? (
+        <p className="text-[11px] text-gray-600 bt-noprint">
+          결과를 보고 느낀 점이나 AI에게 받은 분석을 <b className="text-gray-500">AI 분석</b> 버튼으로 붙여넣어 두세요.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {notes.map((n) => {
+            const shownTitle = draft[`t:${n.id}`] !== undefined ? draft[`t:${n.id}`] : (n.title || '');
+            const shownBody = draft[`b:${n.id}`] !== undefined ? draft[`b:${n.id}`] : (n.body || '');
+            const snap = n.snapshot || {};
+            const stale = !!snap.fp && !!curFp && snap.fp !== curFp;
+            const open = folded[n.id] !== true;
+            return (
+              <div key={n.id} className="border border-gray-800 rounded p-2 bg-gray-900/30">
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[11px] font-bold shrink-0 ${n.kind === 'user' ? 'text-gray-400' : 'text-sky-300'}`}>
+                    {n.kind === 'user' ? '✍ 내 메모' : '🤖 AI 분석'}
+                  </span>
+                  <input
+                    className={`${INPUT} flex-1 min-w-0 bt-noprint`}
+                    disabled={readOnly}
+                    maxLength={MAX_BT_NOTE_TITLE_LEN}
+                    placeholder="제목 (예: 급락 분할투입 개방 비율 비교)"
+                    value={shownTitle}
+                    onChange={(e) => setDraft((p) => ({ ...p, [`t:${n.id}`]: e.target.value }))}
+                    onBlur={flush}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { flush(); e.currentTarget.blur(); } }}
+                  />
+                  <span className="bt-printonly text-[12px] font-bold text-gray-200">{shownTitle || '(제목 없음)'}</span>
+                  <button
+                    className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-800 shrink-0 bt-noprint"
+                    onClick={() => setFolded((p) => ({ ...p, [n.id]: open }))}
+                    title={open ? '접기' : '펼치기'}
+                  >
+                    {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </button>
+                  {/* ⚠️ 삭제 확인은 **인라인 2단계**다 — 이 화면은 z-1090이고 별도 브라우저 창에서는
+                          App조차 마운트되지 않아, ConfirmDialog(z-1000)도 알림 토스트도 뜨지 않는다
+                          (splitEven의 evenConfirm과 같은 근거). 긴 분석을 오클릭으로 잃으면 복구 불가다. */}
+                  {delId === n.id ? (
+                    <span className="flex items-center gap-1 shrink-0 bt-noprint">
+                      <button className={`${BTN} text-red-200 border-red-700 hover:bg-red-900/40`} onClick={() => removeNote(n.id)}>
+                        정말 삭제
+                      </button>
+                      <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800`} onClick={() => setDelId('')}>
+                        취소
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      className="p-1 rounded text-gray-600 hover:text-red-300 hover:bg-red-900/20 shrink-0 bt-noprint disabled:opacity-40"
+                      disabled={readOnly}
+                      onClick={() => setDelId(n.id)}
+                      title="이 메모 삭제"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+
+                {stale && (
+                  <div className="text-[11px] text-amber-300 mt-1">
+                    <AlertCircle size={11} className="inline -mt-0.5 mr-0.5" />
+                    이 메모를 쓴 뒤 <b>설정이 바뀌었습니다</b> — 아래 '작성 시점' 조건과 지금 화면의 숫자는 서로 다른 조건의 결과입니다.
+                  </div>
+                )}
+
+                {/* '세부적인 조건' — 이 메모가 어떤 설정·어떤 결과를 두고 쓴 글인지. PDF에도 나간다. */}
+                <div className="text-[10px] text-gray-600 mt-1 leading-relaxed">
+                  작성 시점 {snap.period || '-'}
+                  {snap.finalTotal != null && <> · 총자산 {won(snap.finalTotal)}</>}
+                  {snap.profit != null && <> · <span className={pnlCls(snap.profit)}>{wonSigned(snap.profit)}</span></>}
+                  {snap.profitRate != null && <> · <span className={pnlCls(snap.profit)}>{pctText(snap.profitRate)}</span></>}
+                  {snap.conditions && <div className="text-gray-700 break-words">{snap.conditions}</div>}
+                </div>
+
+                {open && (
+                  <textarea
+                    className={`${INPUT} mt-1 bt-noprint leading-relaxed resize-y`}
+                    rows={8}
+                    disabled={readOnly}
+                    maxLength={MAX_BT_NOTE_LEN}
+                    placeholder="여기에 AI 분석 결과나 메모를 붙여넣으세요."
+                    value={shownBody}
+                    onChange={(e) => setDraft((p) => ({ ...p, [`b:${n.id}`]: e.target.value }))}
+                    onBlur={flush}
+                  />
+                )}
+                {!open && shownBody && (
+                  <p className="text-[11px] text-gray-500 mt-1 truncate bt-noprint">{shownBody}</p>
+                )}
+                {/* ⚠️ 인쇄 미러 — textarea는 내부 스크롤이라 **보이는 만큼만** 인쇄된다(긴 분석의
+                        뒤가 통째로 잘린다). 접힌 메모도 PDF에는 전문이 나가야 하므로, 두 경우 모두
+                        이 정적 블록 하나가 인쇄를 담당한다. draft를 그대로 읽으므로 Ctrl+P처럼
+                        blur가 나지 않는 인쇄 경로에서도 방금 친 내용이 그대로 실린다. */}
+                {!!String(shownBody || '').trim() && (
+                  <div className="bt-printonly text-[12px] text-gray-200 whitespace-pre-wrap break-words leading-relaxed mt-1">
+                    {shownBody}
+                  </div>
+                )}
+                {open && (
+                  <div className="text-[9px] text-gray-700 text-right bt-noprint">
+                    {shownBody.length} / {MAX_BT_NOTE_LEN}
+                    {shownBody.length >= MAX_BT_NOTE_LEN && <span className="text-amber-400"> · 길이 상한에 도달했습니다</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * 전체 백테스트 비교 종합.
  *
@@ -870,6 +1207,17 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
                           {cfg.name}
                           {cfg.id === bestId && <span className="ml-1 text-[10px] text-emerald-400 font-normal">최고 수익률</span>}
                         </span>
+                        {/* 시나리오 평가 — ⚠️ **열을 늘리지 않고** 이 셀 안에 넣는다. 열을 더하면
+                            thead·실행불가 행 colSpan·비교 CSV를 모두 맞춰야 하고, 한 줄 결론은
+                            표 셀에 담기엔 길다(검증 #241이 열 수와 colSpan을 대조한다). */}
+                        {(ratingKey(reviewOf(cfg).rating) !== 'none' || String(reviewOf(cfg).verdict || '').trim()) && (
+                          <span className="block text-[10px] leading-tight">
+                            <RatingChip rating={reviewOf(cfg).rating} />
+                            {String(reviewOf(cfg).verdict || '').trim() && (
+                              <span className="text-gray-400"> {reviewOf(cfg).verdict}</span>
+                            )}
+                          </span>
+                        )}
                         <span className="block text-[10px] text-gray-600 leading-tight">{scenarioSubtitle(cfg, s)}</span>
                       </span>
                     </button>
@@ -950,6 +1298,15 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
             )}
           </div>
           <p className="text-[11px] text-gray-600 mb-1.5">{scenarioSubtitle(cfg, r.summary)}</p>
+          {/* 시나리오 평가 — 비교 PDF에서도 각 블록에 결론이 함께 실린다(읽기 전용).
+              ⚠️ 편집은 단일 뷰에서만 한다 — 비교 뷰는 active가 null이라 patchActive가 무동작이고,
+                 카드의 draft 소유자 판정(ownerRef)도 여기서는 성립하지 않는다. */}
+          {(ratingKey(reviewOf(cfg).rating) !== 'none' || String(reviewOf(cfg).verdict || '').trim()) && (
+            <p className="text-[12px] mb-1.5">
+              <RatingChip rating={reviewOf(cfg).rating} />
+              {String(reviewOf(cfg).verdict || '').trim() && <span className="text-gray-300"> — {reviewOf(cfg).verdict}</span>}
+            </p>
+          )}
           <SummaryCards result={r} compact />
           <StrategyKpis result={r} cfg={cfg} compact />
           <div className="border border-gray-800 rounded-lg p-2 bg-gray-900/40">
@@ -1018,7 +1375,23 @@ export default function BacktestPage({
    */
   const pendingEchoRef = useRef(null);
 
+  /**
+   * 시나리오 평가 카드의 **미커밋 draft 커밋 훅**(ScenarioReviewCard가 등록).
+   * ⚠️ promote는 `localRef`(이미 커밋된 로컬 사본)만 회수하므로 자식 state에 있는 draft를 전혀
+   *    보지 못한다 — 이 훅이 없으면 앱 종료 커밋·페이지 언마운트에서 방금 붙여넣은 AI 분석이
+   *    통째로 유실된다(App.tsx의 flushRebalTargetSnapshot 동기 주입과 같은 근거).
+   */
+  const reviewFlushRef = useRef(null);
+  const registerReviewFlush = useCallback((fn) => { reviewFlushRef.current = fn; }, []);
+  /** draft → 로컬 사본. 승격·인쇄·CSV처럼 '지금 값'을 읽어야 하는 지점의 첫 줄에서 부른다. */
+  const flushReview = useCallback(() => {
+    try { reviewFlushRef.current?.(); } catch {}
+  }, []);
+
   const promote = useCallback(() => {
+    // ⚠️ 순서 고정 — flush가 setLocal을 태워 idle 타이머를 다시 걸므로 **flush → 타이머 정리 →
+    //    dirty 판정** 이어야 한다. 반대로 두면 승격 직후 빈 타이머가 남는다.
+    flushReview();
     if (idleRef.current) { clearTimeout(idleRef.current); idleRef.current = null; }
     if (!dirtyRef.current) return null;      // ⚠️ 승격할 게 없으면 반드시 null (종료 커밋 강제 방지)
     dirtyRef.current = false;
@@ -1028,7 +1401,7 @@ export default function BacktestPage({
     pendingEchoRef.current = fp ? { fp, until: Date.now() + ECHO_GRACE_MS } : null;
     onUpdateScenarios?.(next);
     return next;
-  }, [onUpdateScenarios]);
+  }, [onUpdateScenarios, flushReview]);
 
   const setLocal = useCallback((updater) => {
     if (readOnly) return;
@@ -1072,6 +1445,18 @@ export default function BacktestPage({
   // 언마운트 시 승격 — 그냥 사라지면 편집이 유실된다.
   useEffect(() => () => { promote(); }, [promote]);
 
+  // ⚠️ 별도 브라우저 창(variant='page')에는 App의 종료 커밋 체인(backtestExitCommitRef)이 없다 —
+  //    창을 닫으면 최대 2.5초분의 미승격 편집이 **어떤 저장 경로로도 회수되지 않는다**. 짧은
+  //    설정값 편집에서는 체감이 없었지만, AI 분석을 붙여넣고 곧바로 창을 닫는 것이 이 기능의
+  //    주 사용 시나리오라 유실 체감이 완전히 다르다. promote는 dirty가 없으면 null을 반환하고
+  //    아무것도 하지 않으므로 부작용이 없다(종료 커밋 강제 방지 규약 그대로).
+  useEffect(() => {
+    if (variant !== 'page') return;
+    const onHide = () => { try { promote(); } catch {} };
+    window.addEventListener('pagehide', onHide);
+    return () => window.removeEventListener('pagehide', onHide);
+  }, [variant, promote]);
+
   // ── 활성 시나리오 ────────────────────────────────────────────────────────
   const [activeId, setActiveId] = useState('');
   /** 비교 종합 뷰인가. 시나리오가 하나도 없으면 비교할 것도 없으므로 자동 해제된다. */
@@ -1100,6 +1485,29 @@ export default function BacktestPage({
   const patchActive = useCallback((patch) => {
     setLocal((prev) => prev.map((s) => (s.id === (active?.id) ? { ...s, ...patch, updatedAt: Date.now() } : s)));
   }, [setLocal, active?.id]);
+
+  /**
+   * **id 기준** 시나리오 패치. patch는 객체 또는 `(s) => 부분객체` 함수.
+   *
+   * ⚠️ 평가 카드처럼 **늦게(blur/언마운트에) 커밋**하는 UI는 patchActive를 쓰면 안 된다 —
+   *    patchActive는 렌더 시점의 `active?.id`를 클로저로 잡으므로, 타이핑 중 시나리오를 바꾸면
+   *    draft가 **새로 선택된 시나리오에 기록**된다(흐름도 patchNodeById와 같은 근거).
+   * ⚠️ 계산된 패치가 비면 **아무것도 쓰지 않는다** — 빈 패치라도 updatedAt을 올리면 지문이 바뀌어
+   *    Drive 4파일 write가 나가고 별도 창의 에코 경합이 무의미하게 발생한다(NumInput 조기 return).
+   */
+  const patchScenarioById = useCallback((id, patch) => {
+    setLocal((prev) => {
+      let changed = false;
+      const next = prev.map((s) => {
+        if (s.id !== id) return s;
+        const p = typeof patch === 'function' ? patch(s) : patch;
+        if (!p || Object.keys(p).length === 0) return s;
+        changed = true;
+        return { ...s, ...p, updatedAt: Date.now() };
+      });
+      return changed ? next : prev;
+    });
+  }, [setLocal]);
 
   /**
    * 비교 종합 포함 토글.
@@ -1358,12 +1766,51 @@ export default function BacktestPage({
     }
   };
 
+  // ── 시나리오 평가 · 메모 ─────────────────────────────────────────────────
+  /**
+   * 메모 추가 — **작성 시점의 조건 요약과 헤드라인 결과를 함께 박제**한다.
+   * ⚠️ 스냅샷 지문은 `backtestSettingsFingerprint`(결과에 영향 주는 필드만)를 쓴다.
+   *    `backtestFingerprint`를 쓰면 그 안에 notes 자신이 들어 있어 메모를 추가하는 순간 지문이
+   *    달라지고, 결과적으로 **모든 메모가 영구히 '설정이 바뀜'** 으로 표시된다.
+   * ⚠️ id 생성은 setLocal 업데이터 **밖**에서 — StrictMode의 업데이터 이중 호출에서 서로 다른
+   *    id가 만들어진다(addScenario와 같은 순수성 규약).
+   */
+  const addNote = useCallback((kind) => {
+    if (!active || readOnly) return;
+    if (notesOf(active).length >= MAX_BT_NOTES) return;
+    const s = result?.ok ? result.summary : null;
+    const ts = Date.now();
+    const note = {
+      id: generateId(),
+      kind: kind === 'user' ? 'user' : 'ai',
+      title: '',
+      body: '',
+      snapshot: {
+        conditions: scenarioSubtitle(active, s),
+        fp: (() => { try { return backtestSettingsFingerprint(active); } catch { return ''; } })(),
+        finalTotal: s ? s.finalTotal : null,
+        profit: s ? s.profit : null,
+        profitRate: s ? s.profitRate : null,
+        period: s ? `${s.startDate} ~ ${s.endDate}` : `${active.startDate || '?'} ~ ${active.endDate || '?'}`,
+      },
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    patchScenarioById(active.id, (cur) => ({ notes: [...notesOf(cur), note] }));
+  }, [active, readOnly, result, patchScenarioById]);
+
   // ── 인쇄 ────────────────────────────────────────────────────────────────
-  const doPrint = () => { try { window.print(); } catch {} };
+  // ⚠️ 첫 줄에서 draft를 커밋한다 — 인쇄 자체는 아래 `.bt-printonly` 미러가 draft를 그대로 읽어
+  //    안전하지만, 인쇄 직후 화면·CSV가 방금 친 내용과 어긋나 보이는 것을 막는다.
+  const doPrint = () => { flushReview(); try { window.print(); } catch {} };
 
   // ── 결과 CSV ────────────────────────────────────────────────────────────
   const downloadCsv = () => {
     if (!result?.ok || !active) return;
+    // ⚠️ 평가 카드의 draft를 먼저 커밋하고, **로컬 사본에서 다시 읽는다** — flushReview는
+    //    setState라 이 렌더의 `active`에는 반영되지 않는다(그대로 쓰면 방금 친 메모가 빠진다).
+    flushReview();
+    const cfgNow = (localRef.current || []).find((s) => s.id === active.id) || active;
     // ⚠️ 열 구성은 화면 표와 1:1로 유지할 것 — 갈리면 "화면과 CSV가 다르다"가 된다.
     const rows = [[
       '구분', '리밸런싱일', '종목', '종가', '리밸런싱 전 평가액', '매수/매도 수량',
@@ -1468,6 +1915,23 @@ export default function BacktestPage({
     ]) {
       rows.push(['참고 지표', '', label, '', '', '', '', '', value, '', '', '', '']);
     }
+    // 시나리오 평가 · 메모 — ⚠️ 위 '기말예수금 내역' 항등식 그룹 **밖**이다(합계에 섞이면 안 된다).
+    //    ⚠️ 모든 행이 13열이어야 한다 — 하나라도 짧으면 엑셀에서 그 행부터 열이 조용히 밀린다.
+    {
+      const rv = reviewOf(cfgNow);
+      if (ratingKey(rv.rating) !== 'none' || String(rv.verdict || '').trim()) {
+        rows.push(['시나리오 평가', '', RATING_LABEL[ratingKey(rv.rating)], '', '', '', '', '', rv.verdict || '', '', '', '', '']);
+      }
+      for (const n of notesOf(cfgNow)) {
+        const snap = n.snapshot || {};
+        rows.push([n.kind === 'user' ? '메모(내 메모)' : '메모(AI 분석)', '', n.title || '(제목 없음)',
+          '', '', '', '', '', n.body || '', '', '', '', '']);
+        if (snap.conditions || snap.period) {
+          rows.push(['메모 작성시점', snap.period || '', n.title || '(제목 없음)', '', '', '', '', '',
+            snap.conditions || '', '', '', '', snap.finalTotal != null ? Math.round(snap.finalTotal) : '']);
+        }
+      }
+    }
     // ⚠️ BOM은 '\ufeff' 이스케이프로 — 소스에 보이지 않는 문자를 직접 넣으면 편집·머지 중 조용히
     //    사라져 엑셀에서 한글이 깨진다(원인 추적이 매우 어렵다).
     const csv = '\ufeff' + rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
@@ -1486,10 +1950,15 @@ export default function BacktestPage({
    */
   const downloadCompareCsv = () => {
     if (!compareRuns.length) return;
+    flushReview();
     // ⚠️ 열 구성은 화면 비교 표와 1:1이어야 한다. 설정 요약 열은 화면 부제(scenarioSubtitle)가
     //    담고 있는 정보를 CSV에서도 **열로 분해**해 필터·정렬이 가능하게 한 것이다.
     const rows = [[
-      '시나리오', '기간', '초기 투자금', '리밸런싱', '분배금 처리', '배분 기준', '목표 기준',
+      // ⚠️ 평가 2열은 화면 비교 표에서 **시나리오 셀 안**에 들어 있는 정보를 열로 분해한 것이다
+      //    (부제→설정 요약 열과 같은 규약). 여기 열 수를 바꾸면 아래 rows.push와 검증 #247의
+      //    하드코딩 열 수를 **함께** 고칠 것.
+      '시나리오', '평가', '한 줄 결론',
+      '기간', '초기 투자금', '리밸런싱', '분배금 처리', '배분 기준', '목표 기준',
       '밴드(%)', '평시 매수 재원', '급락 분할투입', '현금 바닥선(%)', '연간 증액', '원천징수(%)',
       '최종 자산', '총 손익', '수익률(%)', '누적 매매차익', '누적 분배금', '분배금 재투자', '기말 예수금',
       '최저 예수금', '최저 예수금일', '월분배 평균', '월분배 표준편차', '밴드 생략(건)', '급락 발동(건)', '부족 발생(개월)',
@@ -1501,6 +1970,8 @@ export default function BacktestPage({
       const ar = annualOf(cfg);
       rows.push([
         cfg.name,
+        RATING_LABEL[ratingKey(reviewOf(cfg).rating)],
+        reviewOf(cfg).verdict || '',
         s ? `${s.startDate} ~ ${s.endDate}` : `${cfg.startDate} ~ ${cfg.endDate}`,
         Math.round(cfg.initialCapital + cfg.extraCash),
         POLICY_LABEL[cfg.policy] || cfg.policy,
@@ -1555,7 +2026,12 @@ export default function BacktestPage({
               사실상 판독 불가다(브라우저 기본값이 배경색을 버리기 때문). 검정 글씨 + 흰 배경으로
               뒤집고, 손익 의미가 있는 색만 인쇄용 진한 색으로 되살린다. */}
       <style>{`
+/* ⚠️ 인쇄 전용 미러(평가·메모 본문). textarea는 내부 스크롤이라 화면에 보이는 만큼만 인쇄되고,
+      접어 둔 메모는 아예 렌더되지 않는다 — 정적 텍스트 사본을 화면에서만 숨겨 두고 인쇄에서
+      되살린다. 이 두 줄이 짝이므로 한쪽만 지우지 말 것. */
+.bt-shell .bt-printonly { display: none; }
 @media print {
+  .bt-shell .bt-printonly { display: block !important; }
   html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
   body > *:not(.bt-shell) { display: none !important; }
   .bt-shell { position: static !important; display: block !important; height: auto !important;
@@ -1628,6 +2104,22 @@ export default function BacktestPage({
         </button>
 
         <div className="flex-1" />
+
+        {/* 시나리오 평가 요약 — 결과를 아래로 스크롤해도 헤더에서 결론이 보이게 한다.
+            누르면 결과 영역 맨 위(평가 카드)로 돌아간다. ⚠️ 비교 뷰에서는 active가 null이라 숨긴다. */}
+        {!isCompare && active && (
+          <button
+            className={`${BTN} border-gray-700 hover:bg-gray-800 max-w-[280px] truncate ${RATING_CLS[ratingKey(reviewOf(active).rating)]}`}
+            onClick={() => { try { document.getElementById('bt-print')?.scrollTo({ top: 0, behavior: 'smooth' }); } catch {} }}
+            title="시나리오 평가로 이동"
+          >
+            {RATING_MARK[ratingKey(reviewOf(active).rating)]}{' '}
+            {String(reviewOf(active).verdict || '').trim() || RATING_LABEL[ratingKey(reviewOf(active).rating)]}
+            {notesOf(active).length > 0 && (
+              <span className="text-gray-500 font-normal"> · 메모 {notesOf(active).length}</span>
+            )}
+          </button>
+        )}
 
         {/* ⚠️ 인쇄·CSV 활성 조건은 **보고 있는 뷰**를 따라야 한다 — 비교 뷰에서 단일 result를
             보면 시나리오가 다 정상인데도 버튼이 죽어 있는 상태가 나온다. */}
@@ -2959,6 +3451,19 @@ export default function BacktestPage({
                   {' '}수량 {active.rounding === 'floor' ? '내림' : active.rounding === 'round' ? '반올림' : '소수 허용'}
                 </p>
               </div>
+
+              {/* 시나리오 평가 — 표제 **바로 아래(헤더 상단)**. PDF에서도 첫 장 맨 위에 실린다.
+                  ⚠️ key={active.id} — 시나리오를 바꾸면 리마운트되어 카드의 미커밋 draft가
+                     언마운트 cleanup에서 **이전 시나리오**에 커밋된다(다른 시나리오 오적용 방지). */}
+              <ScenarioReviewCard
+                key={active.id}
+                cfg={active}
+                result={result}
+                readOnly={readOnly}
+                onPatch={patchScenarioById}
+                onAddNote={addNote}
+                registerFlush={registerReviewFlush}
+              />
 
               {/* 요약 카드 — ⚠️ 비교 종합의 시나리오별 블록과 같은 컴포넌트를 쓴다(복제 금지). */}
               <SummaryCards result={result} />

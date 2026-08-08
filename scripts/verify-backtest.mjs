@@ -216,6 +216,7 @@ function normalizeDivOverride(raw) {
 const REBAL_MODES = ['follow', 'mid', 'eom', 'day', 'dates', 'none'];
 const CONTRIB_MODES = ['none', 'pctOfCash', 'amount'];
 const MAX_BT_CONTRIB_OVERRIDES = 120, MAX_BT_REBAL_DATES = 120, MAX_BT_DIP_LEVELS = 5;
+const MAX_BT_NOTES = 12, MAX_BT_NOTE_LEN = 8000, MAX_BT_NOTE_TITLE_LEN = 80, MAX_BT_VERDICT_LEN = 200;
 const DEFAULT_DIP_LEVELS = [{ drop: 10, unlockPct: 34 }, { drop: 20, unlockPct: 33 }, { drop: 30, unlockPct: 33 }];
 function normalizeDipLevels(raw) {
   const arr = asArr(raw)
@@ -257,6 +258,39 @@ function normalizeContribOverride(raw) {
   if (!/^\d{4}-\d{2}$/.test(ym)) return null;
   const m = raw?.mode;
   return { id: asStr(raw?.id) || generateId(), ym, mode: CONTRIB_MODES.includes(m) ? m : 'none', value: Math.max(0, asNum(raw?.value, 0)) };
+}
+const RATINGS = ['good', 'watch', 'bad', 'none'];
+const cut = (v, max) => { const s = asStr(v); return s.length > max ? s.slice(0, max) : s; };
+function normalizeReview(raw) {
+  const r = raw?.rating;
+  return {
+    rating: RATINGS.includes(r) ? r : 'none',
+    verdict: cut(raw?.verdict, MAX_BT_VERDICT_LEN),
+    updatedAt: asNum(raw?.updatedAt, 0),
+  };
+}
+function normalizeNoteSnapshot(raw) {
+  return {
+    conditions: cut(raw?.conditions, 400),
+    fp: asStr(raw?.fp),
+    finalTotal: asNumOrNull(raw?.finalTotal),
+    profit: asNumOrNull(raw?.profit),
+    profitRate: asNumOrNull(raw?.profitRate),
+    period: cut(raw?.period, 40),
+  };
+}
+function normalizeNote(raw) {
+  const k = raw?.kind;
+  const ts = asNum(raw?.createdAt, 0);
+  return {
+    id: asStr(raw?.id) || generateId(),
+    kind: k === 'user' ? 'user' : 'ai',
+    title: cut(raw?.title, MAX_BT_NOTE_TITLE_LEN),
+    body: cut(raw?.body, MAX_BT_NOTE_LEN),
+    snapshot: normalizeNoteSnapshot(raw?.snapshot),
+    createdAt: ts,
+    updatedAt: asNum(raw?.updatedAt, ts),
+  };
 }
 function makeBtAsset(partial = {}, idx = 0) {
   const cycle = partial.payCycle;
@@ -331,6 +365,8 @@ function makeBtConfig(partial = {}) {
     cashFloorPct: Math.max(0, asNum(partial.cashFloorPct, 0)),
     annualReview: normalizeAnnualReview(partial.annualReview),
     divTaxPct: Math.min(100, Math.max(0, asNum(partial.divTaxPct, 0))),
+    review: normalizeReview(partial.review),
+    notes: asArr(partial.notes).slice(0, MAX_BT_NOTES).map(normalizeNote),
     assets: asArr(partial.assets).slice(0, MAX_BT_ASSETS).map((a, i) => makeBtAsset(a, i)),
     events: asArr(partial.events).slice(0, MAX_BT_EVENTS).map(normalizeEvent),
     overrides: asArr(partial.overrides).slice(0, MAX_BT_OVERRIDES).map(normalizeOverride).filter(Boolean),
@@ -341,7 +377,45 @@ function makeBtConfig(partial = {}) {
 
 function backtestScenariosHaveContent(scenarios) {
   if (!Array.isArray(scenarios)) return false;
-  return scenarios.some((s) => !!s && (asArr(s.assets).length > 0 || asArr(s.events).length > 0 || asArr(s.overrides).length > 0));
+  return scenarios.some((s) => !!s && (
+    asArr(s.assets).length > 0 || asArr(s.events).length > 0 || asArr(s.overrides).length > 0
+    || !!asStr(s.review?.verdict).trim()
+    || (s.review?.rating && s.review.rating !== 'none')
+    || asArr(s.notes).some((n) => !!(asStr(n?.title).trim() || asStr(n?.body).trim()))
+  ));
+}
+
+function backtestSettingsFingerprint(cfg) {
+  try {
+    const s = cfg;
+    if (!s || typeof s !== 'object') return '';
+    return JSON.stringify({
+      p: [s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
+          s.targetMode ?? '', s.rounding ?? '', s.policy ?? '',
+          s.fixedDay ?? 0, s.exDivOffset ?? 0, s.rebalOffset ?? 0, s.payOffset ?? 0,
+          s.allowNegativeCash ? 1 : 0,
+          s.divReinvest ?? '', s.divReinvestSplit ?? '',
+          s.contribution?.mode ?? '', s.contribution?.value ?? 0, s.contribution?.split ?? '',
+          s.band ?? 0, s.buyFunding ?? '', s.cashFloorPct ?? 0, s.divTaxPct ?? 0,
+          s.dip?.enabled ? 1 : 0,
+          asArr(s.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
+          s.annualReview?.mode ?? '', s.annualReview?.value ?? 0, s.annualReview?.reserve ?? 0,
+          s.annualReview?.everyMonths ?? 0, s.annualReview?.split ?? ''],
+      c: asArr(s.contribOverrides).map((o) => [o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
+      a: asArr(s.assets).map((a) => [
+        a?.id ?? '', a?.code ?? '', a?.payCycle ?? '',
+        a?.targetAmount ?? null, a?.targetRatio ?? null, a?.startDate ?? '', a?.endDate ?? '',
+        a?.rebalMode ?? '', a?.rebalDay ?? 0, asArr(a?.rebalDates).join(','),
+        Object.keys(a?.divOverride ?? {}).sort().map((k) => `${k}:${a.divOverride[k]}`).join(','),
+      ]),
+      e: asArr(s.events).map((e) => [
+        e?.date ?? '', e?.funding ?? '',
+        asArr(e?.addAssets).join(','), asArr(e?.removeAssets).join(','),
+        asArr(e?.targets).map((t) => `${t?.assetId ?? ''}:${t?.amount ?? ''}:${t?.ratio ?? ''}`).join('|'),
+      ]),
+      o: asArr(s.overrides).map((o) => [o?.ym ?? '', o?.group ?? '', o?.date ?? '', o?.assetId ?? '']),
+    });
+  } catch { return 'ERR'; }
 }
 
 function backtestFingerprint(scenarios) {
@@ -360,7 +434,13 @@ function backtestFingerprint(scenarios) {
           s?.dip?.enabled ? 1 : 0,
           asArr(s?.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
           s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
-          s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? ''],
+          s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? '',
+          s?.review?.rating ?? '', s?.review?.verdict ?? ''],
+      m: asArr(s?.notes).map((n) => [
+        n?.id ?? '', n?.kind ?? '', n?.title ?? '', n?.body ?? '', n?.snapshot?.fp ?? '',
+        n?.snapshot?.conditions ?? '', n?.snapshot?.period ?? '',
+        n?.snapshot?.finalTotal ?? null, n?.snapshot?.profit ?? null, n?.snapshot?.profitRate ?? null,
+      ]),
       c: asArr(s?.contribOverrides).map((o) => [o?.id ?? '', o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
       a: asArr(s?.assets).map((a) => [
         a?.id ?? '', a?.code ?? '', a?.name ?? '', a?.payCycle ?? '',
@@ -2987,7 +3067,9 @@ console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');
     ok('#235 ⚠️ 레거시 시나리오는 6개 보조 규칙이 전부 "종전 동작" 기본값으로 채워진다',
       s1.band === 0 && s1.buyFunding === 'both' && s1.cashFloorPct === 0 && s1.divTaxPct === 0
         && s1.dip.enabled === false && s1.dip.levels.length === 3
-        && s1.annualReview.mode === 'none' && s1.annualReview.everyMonths === 12);
+        && s1.annualReview.mode === 'none' && s1.annualReview.everyMonths === 12
+        // 평가·메모도 같은 규약 — 레거시는 '미평가 / 메모 없음'으로 떨어져야 한다.
+        && s1.review.rating === 'none' && s1.review.verdict === '' && s1.notes.length === 0);
     ok('#236 ⚠️ 레거시는 새 배열로 반환된다(첫 로드에서 지문이 바뀌어 Drive 저장이 트리거된다)',
       pass1 !== legacyRaw && backtestFingerprint(legacyRaw) !== backtestFingerprint(pass1));
     // ⚠️ 이게 이 기능의 수렴 불변식이다 — 저장된 뒤로는 정규화가 아무것도 바꾸지 않아야 한다.
@@ -3007,6 +3089,128 @@ console.log('\n── 파트④-b 정규화 / 지문 / sticky ──');
       const fixed = normalizeBacktestScenarios([{ id: 'y', dip: { enabled: 1, levels: 'x' }, annualReview: [], band: NaN, divTaxPct: 'x' }])[0];
       return fixed.dip.enabled === true && fixed.dip.levels.length === 3
         && fixed.annualReview.mode === 'none' && fixed.band === 0 && fixed.divTaxPct === 0;
+    })());
+  }
+
+  // ── 시나리오 평가 · 메모 (기록 전용 저장 필드) ────────────────────────────
+  // 규약: ① 결과에 1원도 영향이 없다 ② 그러나 **사용자가 쓴 글**이라 지문·sticky·정규화 전 지점에서
+  //       1급 저장 데이터로 다뤄야 한다 ③ 기본값은 언제나 '미평가 / 메모 없음'.
+  {
+    const mkNote = (o = {}) => ({
+      id: 'n1', kind: 'ai', title: '제목', body: '본문',
+      snapshot: { conditions: 'c', fp: 'FP1', finalTotal: 100, profit: 10, profitRate: 1, period: 'p' },
+      createdAt: 5, updatedAt: 5, ...o,
+    });
+    const base = makeBtConfig({ id: 'rv', assets: [{ id: 'a1', code: 'X', targetAmount: 100 }] });
+
+    ok('#260 신규 시나리오의 기본값은 미평가 · 메모 없음',
+      base.review.rating === 'none' && base.review.verdict === '' && Array.isArray(base.notes) && base.notes.length === 0);
+
+    // ⚠️ 이게 이 기능의 1급 계약이다 — 메모를 고쳤더니 수익률이 달라지면 기록으로서 신뢰가 사라진다.
+    ok('#261 ⚠️ 평가·메모는 **실행 결과에 전혀 영향을 주지 않는다**', (() => {
+      const cfg = makeBtConfig({ ...JSON.parse(JSON.stringify(mkPdfConfig())) });
+      const withNote = makeBtConfig({
+        ...JSON.parse(JSON.stringify(cfg)),
+        review: { rating: 'bad', verdict: '별로', updatedAt: 9 },
+        notes: [mkNote(), mkNote({ id: 'n2', kind: 'user', body: '두 번째' })],
+      });
+      const a = runBacktest({ config: cfg, prices: PRICES, dividends: DIVS, holidays: KR26 });
+      const b = runBacktest({ config: withNote, prices: PRICES, dividends: DIVS, holidays: KR26 });
+      return a.ok && JSON.stringify(a) === JSON.stringify(b);
+    })());
+
+    // ⚠️ 지문에서 빠지면 '평가/메모만 고친 세션'이 Drive에 저장되지 않는다
+    //    (historyVerifyKey·investmentNotesKey·targetAmount와 동일 버그 클래스 — 화면은 정상이고
+    //     다음 로드에서만 사라지므로 재현이 극히 어렵다).
+    const fp = (o) => backtestFingerprint([makeBtConfig({ id: 'rv', assets: [{ id: 'a1', code: 'X' }], ...o })]);
+    const fpBase = fp({});
+    ok('#262 ⚠️ 지문 — 등급만 바꿔도 감지된다', fp({ review: { rating: 'good' } }) !== fpBase);
+    ok('#263 ⚠️ 지문 — 한 줄 결론만 바꿔도 감지된다', fp({ review: { verdict: '좋다' } }) !== fpBase);
+    ok('#264 ⚠️ 지문 — 메모 **본문만** 고쳐도 감지된다(길이·개수 해시 절충 금지)',
+      fp({ notes: [mkNote({ body: 'AAAA' })] }) !== fp({ notes: [mkNote({ body: 'BBBB' })] }));
+    ok('#264b 지문 — 같은 길이 본문 편집도 감지된다',
+      fp({ notes: [mkNote({ body: '가나다라' })] }) !== fp({ notes: [mkNote({ body: '가나다마' })] }));
+    ok('#265 지문 — 메모 제목·종류·스냅샷 지문도 포함된다',
+      fp({ notes: [mkNote({ title: 'T2' })] }) !== fpBase
+        && fp({ notes: [mkNote({ kind: 'user' })] }) !== fp({ notes: [mkNote({ kind: 'ai' })] })
+        && fp({ notes: [mkNote({ snapshot: { fp: 'FP2' } })] }) !== fp({ notes: [mkNote({ snapshot: { fp: 'FP3' } })] }));
+    // ⚠️ #55와 같은 근거 — 커밋 시각만 바뀌어도 지문이 흔들리면 Drive 저장이 무한 재트리거된다.
+    //    #55는 최상위 updatedAt만 검사하므로 하위 객체는 여기서 따로 막는다.
+    ok('#266 ⚠️ 지문에 review.updatedAt / note.createdAt·updatedAt은 넣지 않는다',
+      fp({ review: { rating: 'good', verdict: 'v', updatedAt: 1 } })
+        === fp({ review: { rating: 'good', verdict: 'v', updatedAt: 999999 } })
+        && fp({ notes: [mkNote({ createdAt: 1, updatedAt: 2 })] })
+        === fp({ notes: [mkNote({ createdAt: 777, updatedAt: 888 })] }));
+
+    // sticky 복원 — '내용이 있는가'로 재야 한다.
+    ok('#267 ⚠️ 빈 시나리오 1개는 여전히 "내용 없음"이다(백업 복원 경로 보존 — #51과 같은 계약)',
+      backtestScenariosHaveContent([makeBtConfig({ id: 'e' })]) === false);
+    ok('#268 ⚠️ 종목이 없어도 평가·메모가 있으면 "내용 있음"(백업 복원이 AI 분석을 되돌리지 않게)',
+      backtestScenariosHaveContent([makeBtConfig({ id: 'e', review: { rating: 'good' } })]) === true
+        && backtestScenariosHaveContent([makeBtConfig({ id: 'e', review: { verdict: '결론' } })]) === true
+        && backtestScenariosHaveContent([makeBtConfig({ id: 'e', notes: [mkNote({ title: '', body: '분석' })] })]) === true);
+    ok('#268b 제목·본문이 모두 빈 메모는 "내용 없음"(껍데기만 만든 메모가 복원 경로를 막지 않게)',
+      backtestScenariosHaveContent([makeBtConfig({ id: 'e', notes: [mkNote({ title: '  ', body: '' })] })]) === false);
+
+    // 정규화 — 손상값 치유 + 상한 + 멱등.
+    ok('#269 ⚠️ 손상된 평가·메모는 기본값으로 치유된다(렌더 중 TypeError → 화면 전체 오류 페이지 방지)', (() => {
+      const f = makeBtConfig({ id: 'z', review: 7, notes: 'nope' });
+      const g = makeBtConfig({ id: 'z', review: { rating: 'AWESOME', verdict: 5 }, notes: [null, 3, { body: 1 }] });
+      return f.review.rating === 'none' && f.review.verdict === '' && f.notes.length === 0
+        && g.review.rating === 'none' && g.review.verdict === ''
+        && g.notes.length === 3 && g.notes.every((n) => typeof n.body === 'string' && typeof n.id === 'string' && !!n.id)
+        && g.notes.every((n) => n.kind === 'ai' && n.snapshot && n.snapshot.finalTotal === null);
+    })());
+    ok('#270 ⚠️ 상한 — 메모 수 · 본문 · 제목 · 한 줄 결론을 자른다(STATE는 백업 22본으로 복제된다)', (() => {
+      const many = Array.from({ length: MAX_BT_NOTES + 5 }, (_, i) => mkNote({ id: `n${i}` }));
+      const f = makeBtConfig({
+        id: 'z', notes: [...many, mkNote({ id: 'long', body: 'x'.repeat(MAX_BT_NOTE_LEN + 100), title: 'y'.repeat(200) })],
+        review: { verdict: 'v'.repeat(MAX_BT_VERDICT_LEN + 50) },
+      });
+      const g = makeBtConfig({ id: 'z', notes: [mkNote({ body: 'x'.repeat(MAX_BT_NOTE_LEN + 100), title: 'y'.repeat(200) })] });
+      return f.notes.length === MAX_BT_NOTES
+        && f.review.verdict.length === MAX_BT_VERDICT_LEN
+        && g.notes[0].body.length === MAX_BT_NOTE_LEN && g.notes[0].title.length === MAX_BT_NOTE_TITLE_LEN;
+    })());
+    // ⚠️ 비결정적 정규화(매번 새 id·시각)는 Drive 폴링마다 재저장 + 2.5초 idle 승격 전 편집 소실로 이어진다.
+    ok('#271 ⚠️ 평가·메모가 있어도 정규화는 멱등이다', (() => {
+      const raw = [makeBtConfig({ id: 'k', review: { rating: 'watch', verdict: 'v' }, notes: [mkNote()], assets: [{ id: 'a', code: 'X' }] })];
+      const p1 = normalizeBacktestScenarios(raw);
+      return p1 === raw && normalizeBacktestScenarios(p1) === p1;
+    })());
+    ok('#271b ⚠️ id 없는 메모는 **한 번만** 새 id를 받고 그 뒤로는 안정된다', (() => {
+      const raw = [{ id: 'k', assets: [], notes: [{ kind: 'ai', title: 't', body: 'b' }] }];
+      const p1 = normalizeBacktestScenarios(raw);
+      if (p1 === raw || !p1[0].notes[0].id) return false;
+      const p2 = normalizeBacktestScenarios(p1);
+      return p2 === p1;
+    })());
+
+    // 설정 지문 — 메모 스냅샷의 '작성 이후 설정이 바뀌었는가' 판정.
+    // ⚠️ 여기에 backtestFingerprint를 쓰면 그 지문에 notes 자신이 들어 있어, 메모를 추가하는 순간
+    //    지문이 달라져 **모든 메모가 영구히 '설정이 바뀜'** 으로 표시된다. 그래서 별도 함수다.
+    ok('#272 ⚠️ 설정 지문은 평가·메모·이름·비교체크·시각에 반응하지 않는다', (() => {
+      const a = makeBtConfig({ id: 'p', assets: [{ id: 'a1', code: 'X', targetAmount: 100 }] });
+      const b = makeBtConfig({
+        ...JSON.parse(JSON.stringify(a)), name: '다른 이름', compareOn: false,
+        review: { rating: 'bad', verdict: '나쁨' }, notes: [mkNote()], updatedAt: 999999,
+      });
+      return backtestSettingsFingerprint(a) === backtestSettingsFingerprint(b);
+    })());
+    ok('#273 설정 지문은 결과를 바꾸는 설정에는 반드시 반응한다', (() => {
+      const a = makeBtConfig({ id: 'p', assets: [{ id: 'a1', code: 'X', targetAmount: 100 }] });
+      const chg = (o) => backtestSettingsFingerprint(makeBtConfig({ ...JSON.parse(JSON.stringify(a)), ...o }));
+      const f0 = backtestSettingsFingerprint(a);
+      return chg({ band: 3 }) !== f0 && chg({ policy: 'none' }) !== f0 && chg({ divTaxPct: 15 }) !== f0
+        && chg({ targetMode: 'ratio' }) !== f0 && chg({ startDate: '2026-02-02' }) !== f0
+        && chg({ dip: { enabled: true, levels: DEFAULT_DIP_LEVELS } }) !== f0
+        && chg({ assets: [{ id: 'a1', code: 'X', targetAmount: 200 }] }) !== f0
+        && chg({ contribution: { mode: 'amount', value: 100, split: 'ratio' } }) !== f0;
+    })());
+    ok('#274 ⚠️ 설정 지문도 절대 던지지 않는다(카드 렌더 중 예외 = 화면 전체 오류 페이지)', (() => {
+      const a = { id: 'x' }; a.self = a;
+      return backtestSettingsFingerprint(a) !== undefined
+        && backtestSettingsFingerprint(null) === '' && backtestSettingsFingerprint(7) === '';
     })());
   }
 }
@@ -3202,7 +3406,8 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     const headCols = (head.match(/'/g) || []).length / 2;
     const body = seg.slice(seg.indexOf('rows.push(['), seg.indexOf('\n      ]);'));
     const bodyCols = body.split('\n').filter((l) => /,\s*$/.test(l.trim()) && !/^\s*(rows\.push|\/\/|\/\*)/.test(l)).length;
-    return headCols === 30 && bodyCols === 30;
+    // ⚠️ 30 → 32: '평가' · '한 줄 결론' 2열 추가(시나리오 평가). 열을 바꾸면 여기도 함께 고칠 것.
+    return headCols === 32 && bodyCols === 32;
   })());
   // ⚠️ <label> 안의 <button>은 label 활성화 동작이 내부 체크박스를 함께 토글한다 —
   //    ? 아이콘을 누를 때마다 그 옵션이 켜졌다 꺼진다(Section 헤더 '버튼 중첩 금지'와 같은 부류).
@@ -3292,6 +3497,136 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   ok('#156 ⚠️ 종목 수 균등 분배는 반올림 잔여를 흡수해 합을 100%로 맞춘다',
     /const last = Math\.round\(\(100 - each \* \(n - 1\)\) \* 100\) \/ 100;/.test(page)
       && /targetRatio: i === n - 1 \? last : each/.test(page));
+
+  // ── 시나리오 평가 · 메모 배선 ────────────────────────────────────────────
+  // ⚠️ 미러 테스트(#260~#274)는 순수 함수만 검사한다. 아래는 **화면·브릿지 배선**이라 미러로는
+  //    표현할 수 없어 소스 텍스트로 단언한다(실패하면 먼저 정규식이 낡았는지 확인할 것).
+  const win = strip(read('src/components/BacktestWindow.tsx'));
+
+  // ⚠️ 이 카드가 표제 **아래(헤더 상단)** 에 있어야 PDF 첫 장 맨 위에 결론이 실린다.
+  //    key={active.id}가 없으면 시나리오를 바꿔도 카드가 리마운트되지 않아, 미커밋 draft가
+  //    **새로 선택된 시나리오에 커밋**된다(FlowInspector가 겪은 '도형 A 타이핑 중 B 클릭' 사고).
+  ok('#275 ⚠️ 평가 카드는 결과 표제 바로 아래에 key={active.id}로 렌더된다', (() => {
+    const i = page.indexOf('리밸런싱 백테스트</h2>');
+    const j = page.indexOf('<ScenarioReviewCard');
+    const k = page.indexOf('<SummaryCards result={result} />');
+    return i > 0 && j > i && k > j && /<ScenarioReviewCard\s+key=\{active\.id\}/.test(page);
+  })());
+
+  // ⚠️ 늦게 커밋하는 UI가 patchActive를 쓰면 렌더 시점 active?.id에 묶여 다른 시나리오에 기록된다.
+  ok('#276 ⚠️ 평가 카드의 쓰기는 id 기준 patchScenarioById다(patchActive 금지)',
+    /const patchScenarioById = useCallback\(\(id, patch\)/.test(page)
+      && /onPatch=\{patchScenarioById\}/.test(page)
+      && !/<ScenarioReviewCard[\s\S]{0,400}?onPatch=\{patchActive\}/.test(page));
+  // ⚠️ 빈 패치에도 updatedAt을 올리면 지문이 바뀌어 Drive 4파일 write가 나간다(NumInput 조기 return).
+  ok('#276b ⚠️ 값이 그대로면 아무것도 쓰지 않는다(빈 패치 조기 return)',
+    /if \(!p \|\| Object\.keys\(p\)\.length === 0\) return s;/.test(page)
+      && /return changed \? next : prev;/.test(page));
+
+  // ⚠️ passive useEffect는 discrete 이벤트인 blur보다 뒤처져 오적용을 못 막는다.
+  //    그리고 언마운트된 DOM에는 blur가 발화하지 않아 cleanup flush가 없으면 본문이 통째로 사라진다.
+  ok('#277 ⚠️ draft flush는 useLayoutEffect(소유자 변경 + 언마운트)로 건다',
+    /useLayoutEffect\(\(\) => \{\s*if \(ownerRef\.current !== cfg\.id\) \{ flush\(\); ownerRef\.current = cfg\.id; \}/.test(page)
+      && /useLayoutEffect\(\(\) => \(\) => \{ flush\(\); \}, \[flush\]\);/.test(page));
+  // ⚠️ promote는 localRef만 회수한다 — 커밋 훅이 없으면 앱 종료 커밋에서 draft가 통째로 유실된다.
+  ok('#278 ⚠️ promote는 첫 줄에서 평가 draft를 커밋한다',
+    /const promote = useCallback\(\(\) => \{[\s\S]{0,400}?flushReview\(\);[\s\S]{0,200}?if \(idleRef\.current\)/.test(page)
+      && /registerFlush=\{registerReviewFlush\}/.test(page));
+  // ⚠️ flushReview는 setState라 이 렌더의 active에는 반영되지 않는다 — 로컬 사본에서 다시 읽어야
+  //    방금 친 메모가 CSV에 들어간다.
+  ok('#279 ⚠️ CSV는 flush 후 로컬 사본에서 다시 읽는다',
+    /flushReview\(\);\s*const cfgNow = \(localRef\.current \|\| \[\]\)\.find\(\(s\) => s\.id === active\.id\) \|\| active;/.test(page)
+      && /reviewOf\(cfgNow\)/.test(page) && /notesOf\(cfgNow\)/.test(page));
+
+  // ⚠️ textarea는 내부 스크롤이라 보이는 만큼만 인쇄되고, 접은 메모는 렌더조차 되지 않는다.
+  //    두 줄(화면 숨김 / 인쇄 표시)이 짝이므로 한쪽만 지우면 PDF에서 본문이 사라지거나 잘린다.
+  ok('#280 ⚠️ 인쇄 미러 .bt-printonly는 화면 숨김 + 인쇄 표시 두 규칙이 짝이다',
+    /\.bt-shell \.bt-printonly \{ display: none; \}/.test(page)
+      && /\.bt-shell \.bt-printonly \{ display: block !important; \}/.test(page)
+      && /className="bt-printonly text-\[12px\] text-gray-200 whitespace-pre-wrap/.test(page));
+  // ⚠️ 카드 전체에 bt-noprint를 붙이면 평가가 PDF에서 통째로 사라진다 — 편집 UI에만 붙인다.
+  //    그리고 bt-month(page-break-inside: avoid)를 붙이면 긴 분석이 한 장에 욱여넣어져 뒤가 잘린다.
+  ok('#281 ⚠️ 평가 카드는 내용이 있으면 인쇄된다(빈 카드만 bt-noprint, bt-month 금지)',
+    /\$\{empty \? 'bt-noprint' : ''\}/.test(page)
+      && !/rounded-lg bg-gray-900\/40 p-2\.5 mb-3 bt-month/.test(page));
+  // ⚠️ 인쇄 CSS `.bt-shell * { background: transparent !important }`가 인라인 배경을 이긴다 —
+  //    등급을 배경색으로 칠하면 PDF에서 통째로 사라진다(Swatch가 인라인 SVG인 것과 같은 근거).
+  ok('#282 ⚠️ 평가 등급 색은 text-* 클래스다(인라인 backgroundColor 금지)',
+    /good: 'text-emerald-300'/.test(page) && /bad: 'text-red-400'/.test(page)
+      && !/RATING_CLS[\s\S]{0,200}?backgroundColor/.test(page));
+  // ⚠️ 정규화를 우회한 config가 한 번이라도 들어오면 렌더 중 TypeError가 루트 ErrorBoundary까지
+  //    올라가 화면이 통째로 오류 페이지가 된다(dipOf·annualOf와 같은 규약, #244의 자매 가드).
+  ok('#283 ⚠️ 화면은 review/notes를 안전 접근자로만 읽는다(cfg.review.rating 직접 접근 금지)',
+    /const reviewOf = \(cfg\) =>/.test(page) && /const notesOf = \(cfg\) =>/.test(page)
+      && !/\bactive\.review\.rating\b/.test(page) && !/\bactive\.notes\.length\b/.test(page)
+      && !/\bcfg\.review\.rating\b/.test(page));
+
+  // ⚠️ 메모 스냅샷 지문에 backtestFingerprint를 쓰면 그 지문에 notes 자신이 들어 있어, 메모를
+  //    추가하는 순간 지문이 달라져 **모든 메모가 영구히 '설정이 바뀜'** 으로 표시된다.
+  ok('#284 ⚠️ 메모 스냅샷 지문은 backtestSettingsFingerprint(설정 전용)로 만든다',
+    /fp: \(\(\) => \{ try \{ return backtestSettingsFingerprint\(active\); \}/.test(page)
+      && /backtestSettingsFingerprint\(cfg\)/.test(page));
+  // ⚠️ 긴 분석을 오클릭으로 잃으면 복구 불가다. 이 화면은 z-1090이고 별도 창에는 App조차 없어
+  //    ConfirmDialog(z-1000)도 알림 토스트도 뜨지 않는다 → 인라인 2단계 확인이 유일한 방어다.
+  ok('#285 ⚠️ 메모 삭제는 인라인 2단계 확인이다(창 위에서는 ConfirmDialog가 가려진다)',
+    /delId === n\.id \? \(/.test(page) && /정말 삭제/.test(page)
+      && /onClick=\{\(\) => setDelId\(n\.id\)\}/.test(page));
+  // ⚠️ 정규화에서만 자르면 붙여넣은 분석의 뒤가 조용히 사라진다 — 화면에서 잘림이 보여야 한다.
+  ok('#286 ⚠️ 화면 maxLength는 backtest.ts 상한과 같은 상수를 쓴다',
+    /maxLength=\{MAX_BT_NOTE_LEN\}/.test(page) && /maxLength=\{MAX_BT_NOTE_TITLE_LEN\}/.test(page)
+      && /maxLength=\{MAX_BT_VERDICT_LEN\}/.test(page)
+      && /notes\.length >= MAX_BT_NOTES/.test(page));
+
+  // ⚠️ 별도 창에는 App의 종료 커밋 체인(backtestExitCommitRef)이 없다 — 창을 닫으면 최대 2.5초분
+  //    편집이 어떤 저장 경로로도 회수되지 않는다. AI 분석을 붙여넣고 바로 닫는 것이 주 사용 시나리오다.
+  ok('#287 ⚠️ 별도 창(variant=page)은 pagehide에서 승격한다',
+    /if \(variant !== 'page'\) return;[\s\S]{0,200}?addEventListener\('pagehide', onHide\)/.test(page));
+  // ⚠️ 별도 창의 왕복은 시나리오 객체를 통째로 실어 나른다(필드별 나열 금지) — 나열하면 새 필드가
+  //    창에서만 조용히 사라진다. 앱 탭 수신은 반드시 정규화를 거친다(손상 데이터 차단).
+  ok('#288 ⚠️ 별도 창 브릿지는 시나리오를 통째로 주고받는다(review/notes 자동 동행)',
+    /type: 'backtest:scenarios', scenarios: next/.test(win)
+      && /scenarios=\{scenarios\}/.test(win)
+      && /d\.type === 'backtest:scenarios'/.test(app)
+      && /setBacktestScenarios\(normalizeBacktestScenarios\(d\.scenarios\)\)/.test(app));
+  // ⚠️ #260~#274는 **미러**를 검사하므로 src/backtest.ts만 고치면(또는 미러만 고치면) 통과하면서
+  //    실제 저장 누락을 놓친다 — CLAUDE.md가 기록한 rebalMode 3필드 실측 사고가 정확히 그것이다.
+  //    아래 두 가드가 src 쪽 등록을 텍스트로 직접 단언한다.
+  ok('#290 ⚠️ src 지문·정규화에 review/notes가 등록돼 있다(미러만 고치는 드리프트 방지)',
+    /review: normalizeReview\(partial\.review\)/.test(bt2)
+      && /notes: asArr\(partial\.notes\)\.slice\(0, MAX_BT_NOTES\)\.map\(normalizeNote\)/.test(bt2)
+      && /s\?\.review\?\.rating \?\? '', s\?\.review\?\.verdict \?\? ''/.test(bt2)
+      && /m: asArr\(s\?\.notes\)\.map/.test(bt2) && /n\?\.body \?\? ''/.test(bt2));
+  ok('#290b ⚠️ src sticky 판정에도 평가·메모가 들어 있다(백업 복원이 AI 분석을 되돌리지 않게)', (() => {
+    const i = bt2.indexOf('export function backtestScenariosHaveContent');
+    if (i < 0) return false;
+    const seg = bt2.slice(i, i + 900);
+    return /asStr\(s\.review\?\.verdict\)\.trim\(\)/.test(seg)
+      && /s\.review\.rating !== 'none'/.test(seg)
+      && /asArr\(s\.notes\)\.some/.test(seg);
+  })());
+  ok('#290c ⚠️ src에 backtestSettingsFingerprint가 export돼 있고 review/notes를 투영하지 않는다', (() => {
+    const i = bt2.indexOf('export function backtestSettingsFingerprint');
+    if (i < 0) return false;
+    const seg = bt2.slice(i, bt2.indexOf('export function', i + 10));
+    return !/review/.test(seg) && !/notes/.test(seg) && !/\.name/.test(seg) && !/compareOn/.test(seg);
+  })());
+
+  // ⚠️ 별도 창에서 readOnly면 setLocal이 조용히 무시된다 — 입력을 열어 두면 긴 분석을 다 쓰고
+  //    blur해도 아무 데도 저장되지 않는다(창 위에서는 사후 경고도 불가능하다).
+  ok('#289 ⚠️ 읽기 전용이면 평가·메모 입력이 전부 잠긴다',
+    (() => {
+      const i = page.indexOf('function ScenarioReviewCard');
+      const j = page.indexOf('function CompareView');
+      if (i < 0 || j < i) return false;
+      const seg = page.slice(i, j);
+      // ⚠️ `disabled={readOnly}` 총 개수로 재지 말 것 — 등급·추가·삭제 버튼에도 붙어 있어서
+      //    입력 한 곳에서 빠져도 총합은 여유롭게 통과한다(실측으로 확인한 죽은 단언).
+      //    반드시 **입력 요소별 속성 블록**을 하나씩 본다.
+      const tags = seg.match(/<(?:input|textarea)\b[\s\S]{0,900}?\/>/g) || [];
+      return tags.length >= 3
+        && tags.every((t) => t.includes('disabled={readOnly}'))
+        && /if \(readOnly\) return;/.test(seg);
+    })());
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  통과 ${pass} / 실패 ${fail}\n`);

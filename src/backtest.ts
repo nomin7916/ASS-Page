@@ -261,6 +261,61 @@ export interface BtAnnualReview {
   split: 'ratio' | 'even';
 }
 
+/* ── 시나리오 평가 · 메모 (결과에 전혀 영향을 주지 않는 **기록 전용** 필드) ─────────────
+ * ⚠️ runBacktest는 이 두 필드를 **읽지 않는다**. 읽는 순간 "메모를 고쳤더니 수익률이 달라졌다"가
+ *    되어 기록으로서의 신뢰가 사라진다(검증 #262가 결과 불변을 단언한다).
+ * =========================================================================== */
+
+/** 평가 등급. 'none' = 아직 평가하지 않음(레거시·신규 기본값). */
+export type BtRating = 'good' | 'watch' | 'bad' | 'none';
+
+/**
+ * 시나리오 한 줄 결론 — 결과 화면 표제 바로 아래(= 헤더 상단)에 항상 보이고 PDF에도 그대로 실린다.
+ * ⚠️ updatedAt은 지문에서 제외한다(커밋 시각만 바뀌어도 Drive 저장이 재트리거되는 것 방지 — flowFingerprint 규약).
+ */
+export interface BtReview {
+  rating: BtRating;
+  /** 한 줄 결론. 길면 카드가 표제를 밀어내므로 MAX_BT_VERDICT_LEN에서 자른다. */
+  verdict: string;
+  updatedAt: number;
+}
+
+/**
+ * 메모가 **어떤 조건에서 나온 평가인가**를 박제한 스냅샷.
+ *
+ * AI 분석은 특정 설정의 결과를 두고 쓴 글이라, 나중에 설정을 바꾸면 그 글이 조용히 거짓이 된다.
+ * → 작성 시점의 조건 요약(사람이 읽는 문장)과 **설정 지문**을 함께 남기고, 지금 설정과 지문이
+ *   다르면 화면에 '설정이 바뀌었습니다' 배지를 띄운다(조용한 오적용보다 명시적 고지).
+ *
+ * ⚠️ fp는 반드시 `backtestSettingsFingerprint`(결과에 영향 주는 필드만)로 만든다.
+ *    `backtestFingerprint`를 쓰면 그 지문에 notes 자신이 들어가 있어, 메모를 추가하는 순간
+ *    지문이 달라져 **모든 메모가 영구히 '설정이 바뀜'으로 표시**된다.
+ */
+export interface BtNoteSnapshot {
+  /** 작성 시점 조건 요약(한 줄) */
+  conditions: string;
+  /** 작성 시점 설정 지문 — 현재 설정과 같은지 판정하는 데만 쓴다(표시 전용) */
+  fp: string;
+  /** 작성 시점 헤드라인 결과. 실행 불가였으면 null */
+  finalTotal: number | null;
+  profit: number | null;
+  profitRate: number | null;
+  /** 'YYYY-MM-DD ~ YYYY-MM-DD' */
+  period: string;
+}
+
+/** 메모 한 건. kind='ai'는 AI 분석 붙여넣기, 'user'는 직접 쓴 메모(라벨만 다르다). */
+export interface BtNote {
+  id: string;
+  kind: 'ai' | 'user';
+  title: string;
+  /** 본문(긴 AI 분석). MAX_BT_NOTE_LEN에서 자른다 — STATE는 백업 22본으로 복제된다. */
+  body: string;
+  snapshot: BtNoteSnapshot;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface BtConfig {
   id: string;
   name: string;
@@ -327,6 +382,14 @@ export interface BtConfig {
    *    지급일에 입금되는 divPaid를 세후로 정의한다(BtMonth.divPaid 주석의 항등식 참조).
    */
   divTaxPct: number;
+  /**
+   * 시나리오 결과 평가(한 줄 결론 + 등급). 기본 `{rating:'none', verdict:'', updatedAt:0}`.
+   * ⚠️ 결과에 영향을 주지 않는 기록 전용 필드지만, 사용자가 쓴 글이라 **반드시 지문에 포함**한다
+   *    — 빠지면 "평가만 고친 세션이 Drive에 저장되지 않는다"(historyVerifyKey·investmentNotesKey류).
+   */
+  review: BtReview;
+  /** 시나리오별 메모(AI 분석 등). 기본 []. 지문 포함 규약은 review와 동일. */
+  notes: BtNote[];
   assets: BtAsset[];
   events: BtEvent[];
   overrides: BtOverride[];
@@ -350,6 +413,17 @@ export const MAX_BT_CONTRIB_OVERRIDES = 120;
 export const MAX_BT_REBAL_DATES = 120;
 /** 급락 분할투입 단계 수 상한 */
 export const MAX_BT_DIP_LEVELS = 5;
+/**
+ * 시나리오당 메모 수 / 본문 길이 / 제목 길이 / 한 줄 결론 길이 상한.
+ * ⚠️ 상한 없이 긴 텍스트를 허용하지 말 것 — STATE는 백업 22본으로 복제되고, `backtest:live`
+ *    브릿지가 시세 조회 한 건이 끝날 때마다 시나리오 전량을 새 창으로 재직렬화한다.
+ * ⚠️ 화면 textarea/input에도 **같은 값으로 maxLength**를 걸어 잘림이 사용자에게 보이게 할 것
+ *    — 정규화에서만 자르면 붙여넣은 분석이 조용히 뒤가 잘린다.
+ */
+export const MAX_BT_NOTES = 12;
+export const MAX_BT_NOTE_LEN = 8000;
+export const MAX_BT_NOTE_TITLE_LEN = 80;
+export const MAX_BT_VERDICT_LEN = 200;
 
 /**
  * 급락 분할투입 기본 단계 — −10%/−20%/−30%에서 적립 분배금을 34/33/33%씩 푼다.
@@ -1061,6 +1135,12 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
     cashFloorPct: Math.max(0, asNum(partial.cashFloorPct, 0)),
     annualReview: normalizeAnnualReview(partial.annualReview),
     divTaxPct: Math.min(100, Math.max(0, asNum(partial.divTaxPct, 0))),
+    // ── 평가 · 메모 (기록 전용) ──
+    // ⚠️ makeBtConfig는 **화이트리스트 재구축기**라 여기 등록하지 않으면 네 경로에서 통째로 사라진다:
+    //    Drive 로드(applyStateData) · 백업 복원 · 별도 창 수신(normalizeBacktestScenarios) ·
+    //    **시나리오 복제**(BacktestPage addScenario는 makeBtConfig로 사본을 만든다).
+    review: normalizeReview(partial.review),
+    notes: asArr(partial.notes).slice(0, MAX_BT_NOTES).map(normalizeNote),
     assets: asArr(partial.assets).slice(0, MAX_BT_ASSETS).map((a, i) => makeBtAsset(a, i)),
     events: asArr(partial.events).slice(0, MAX_BT_EVENTS).map(normalizeEvent),
     overrides: asArr(partial.overrides).slice(0, MAX_BT_OVERRIDES).map(normalizeOverride).filter(Boolean) as BtOverride[],
@@ -1156,6 +1236,59 @@ function normalizeAnnualReview(raw: any): BtAnnualReview {
   };
 }
 
+const RATINGS: BtRating[] = ['good', 'watch', 'bad', 'none'];
+
+/** 문자열 자르기 — 상한을 넘지 않으면 **같은 참조**를 돌려준다(불필요한 지문 변화 방지). */
+const cut = (v: unknown, max: number): string => {
+  const s = asStr(v);
+  return s.length > max ? s.slice(0, max) : s;
+};
+
+function normalizeReview(raw: any): BtReview {
+  const r = raw?.rating;
+  return {
+    // ⚠️ 레거시(필드 부재)는 반드시 'none' / '' 로 떨어져야 한다 — 기존 시나리오가 이 기능
+    //    도입만으로 '평가 있음'이 되면 아래 backtestScenariosHaveContent가 통째로 true가 되어
+    //    백업 복원 경로가 영구히 막힌다.
+    rating: RATINGS.includes(r) ? r : 'none',
+    verdict: cut(raw?.verdict, MAX_BT_VERDICT_LEN),
+    updatedAt: asNum(raw?.updatedAt, 0),
+  };
+}
+
+function normalizeNoteSnapshot(raw: any): BtNoteSnapshot {
+  return {
+    conditions: cut(raw?.conditions, 400),
+    fp: asStr(raw?.fp),
+    finalTotal: asNumOrNull(raw?.finalTotal),
+    profit: asNumOrNull(raw?.profit),
+    profitRate: asNumOrNull(raw?.profitRate),
+    period: cut(raw?.period, 40),
+  };
+}
+
+/**
+ * 메모 정규화.
+ * ⚠️ **결정적이어야 한다** — id가 없을 때만 generateId를 부르고(그 한 번은 지문을 바꿔
+ *    `changed=true`로 새 배열이 채택된 뒤 다음 패스부터 안정된다, normalizeContribOverride와 동일),
+ *    createdAt/updatedAt은 지문에서 제외한다. 매 정규화가 지문을 흔들면 Drive 폴링마다 재저장되고
+ *    BacktestPage의 시드 effect가 2.5초 idle 승격 전의 편집을 갈아엎는다(검증 #237).
+ * ⚠️ 손상 항목도 **버리지 않는다** — 사용자가 쓴 글이라 조용한 삭제가 가장 나쁘다. 빈 문자열로 치유한다.
+ */
+function normalizeNote(raw: any): BtNote {
+  const k = raw?.kind;
+  const ts = asNum(raw?.createdAt, 0);
+  return {
+    id: asStr(raw?.id) || generateId(),
+    kind: k === 'user' ? 'user' : 'ai',
+    title: cut(raw?.title, MAX_BT_NOTE_TITLE_LEN),
+    body: cut(raw?.body, MAX_BT_NOTE_LEN),
+    snapshot: normalizeNoteSnapshot(raw?.snapshot),
+    createdAt: ts,
+    updatedAt: asNum(raw?.updatedAt, ts),
+  };
+}
+
 function normalizeContribOverride(raw: any): BtContribOverride | null {
   const ym = asStr(raw?.ym);
   if (!/^\d{4}-\d{2}$/.test(ym)) return null;
@@ -1179,8 +1312,66 @@ function normalizeContribOverride(raw: any): BtContribOverride | null {
 export function backtestScenariosHaveContent(scenarios: unknown): boolean {
   if (!Array.isArray(scenarios)) return false;
   return scenarios.some(
-    (s: any) => !!s && (asArr(s.assets).length > 0 || asArr(s.events).length > 0 || asArr(s.overrides).length > 0),
+    (s: any) => !!s && (
+      asArr(s.assets).length > 0 || asArr(s.events).length > 0 || asArr(s.overrides).length > 0
+      // ⚠️ 평가·메모도 '내용'이다 — 종목을 다 지우고 분석만 남긴 시나리오(또는 종목을 넣기 전에
+      //    AI 분석부터 붙여 둔 시나리오)가 백업 복원에서 조용히 사라지면 되돌릴 방법이 없다.
+      // ⚠️ 단 **'값이 실제로 있는가'로만** 잰다 — `!!s.review` / `s.notes !== undefined` 같은
+      //    존재 판정으로 쓰면 makeBtConfig가 모든 시나리오에 기본값을 물리므로 전부 true가 되어
+      //    "빈 시나리오 1개는 내용 없음"(검증 #51) 계약이 깨지고 복원 경로가 영구히 막힌다.
+      || !!asStr(s.review?.verdict).trim()
+      || (s.review?.rating && s.review.rating !== 'none')
+      || asArr(s.notes).some((n: any) => !!(asStr(n?.title).trim() || asStr(n?.body).trim()))
+    ),
   );
+}
+
+/**
+ * **결과에 영향을 주는 설정만** 투영한 지문. 메모 스냅샷의 '작성 이후 설정이 바뀌었는가' 판정 전용.
+ *
+ * ⚠️ 이 판정에 `backtestFingerprint`를 쓰지 말 것 — 그 지문에는 notes 자신이 들어 있어서
+ *    메모를 한 건 추가하는 순간 지문이 달라지고, 그 결과 **모든 메모가 영구히 '설정이 바뀜'**
+ *    으로 표시된다(배지가 상시 켜지면 진짜 변경을 알리는 기능이 죽는다).
+ * ⚠️ 제외 대상: id · name · review · notes · compareOn · createdAt · updatedAt.
+ *    (name과 compareOn은 표시 전용이라 바뀌어도 결과가 1원도 달라지지 않는다.)
+ * ⚠️ backtestFingerprint와 같은 이유로 **절대 던지지 않는다**.
+ */
+export function backtestSettingsFingerprint(cfg: unknown): string {
+  try {
+    const s: any = cfg;
+    if (!s || typeof s !== 'object') return '';
+    return JSON.stringify({
+      p: [
+        s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
+        s.targetMode ?? '', s.rounding ?? '', s.policy ?? '',
+        s.fixedDay ?? 0, s.exDivOffset ?? 0, s.rebalOffset ?? 0, s.payOffset ?? 0,
+        s.allowNegativeCash ? 1 : 0,
+        s.divReinvest ?? '', s.divReinvestSplit ?? '',
+        s.contribution?.mode ?? '', s.contribution?.value ?? 0, s.contribution?.split ?? '',
+        s.band ?? 0, s.buyFunding ?? '', s.cashFloorPct ?? 0, s.divTaxPct ?? 0,
+        s.dip?.enabled ? 1 : 0,
+        asArr(s.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
+        s.annualReview?.mode ?? '', s.annualReview?.value ?? 0, s.annualReview?.reserve ?? 0,
+        s.annualReview?.everyMonths ?? 0, s.annualReview?.split ?? '',
+      ],
+      c: asArr(s.contribOverrides).map((o: any) => [o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
+      a: asArr(s.assets).map((a: any) => [
+        a?.id ?? '', a?.code ?? '', a?.payCycle ?? '',
+        a?.targetAmount ?? null, a?.targetRatio ?? null,
+        a?.startDate ?? '', a?.endDate ?? '',
+        a?.rebalMode ?? '', a?.rebalDay ?? 0, asArr(a?.rebalDates).join(','),
+        Object.keys(a?.divOverride ?? {}).sort().map((k) => `${k}:${a.divOverride[k]}`).join(','),
+      ]),
+      e: asArr(s.events).map((e: any) => [
+        e?.date ?? '', e?.funding ?? '',
+        asArr(e?.addAssets).join(','), asArr(e?.removeAssets).join(','),
+        asArr(e?.targets).map((t: any) => `${t?.assetId ?? ''}:${t?.amount ?? ''}:${t?.ratio ?? ''}`).join('|'),
+      ]),
+      o: asArr(s.overrides).map((o: any) => [o?.ym ?? '', o?.group ?? '', o?.date ?? '', o?.assetId ?? '']),
+    });
+  } catch {
+    return 'ERR';
+  }
 }
 
 /**
@@ -1218,7 +1409,18 @@ export function backtestFingerprint(scenarios: unknown): string {
           // 연간 가드레일 증액
           s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
           s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? '',
+          // 시나리오 평가 — 결과에는 영향이 없지만 **사용자가 쓴 글**이라 반드시 포함한다
+          // (빠지면 '평가만 고친 세션'이 Drive에 저장되지 않는다). updatedAt은 제외.
+          s?.review?.rating ?? '', s?.review?.verdict ?? '',
         ],
+        // ⚠️ 메모는 **본문 전문**을 넣는다 — 길이·개수 해시 절충안은 '본문만 고치면 저장 안 됨'
+        //    (investmentNotesKey)과 '같은 날짜 수량만 재편집하면 저장 안 됨'(holdingSnapshotsKey)
+        //    버그가 정확히 그것이었다. createdAt/updatedAt은 제외(#55 규약).
+        m: asArr(s?.notes).map((n: any) => [
+          n?.id ?? '', n?.kind ?? '', n?.title ?? '', n?.body ?? '', n?.snapshot?.fp ?? '',
+          n?.snapshot?.conditions ?? '', n?.snapshot?.period ?? '',
+          n?.snapshot?.finalTotal ?? null, n?.snapshot?.profit ?? null, n?.snapshot?.profitRate ?? null,
+        ]),
         c: asArr(s?.contribOverrides).map((o: any) => [o?.id ?? '', o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
         a: asArr(s?.assets).map((a: any) => [
           a?.id ?? '', a?.code ?? '', a?.name ?? '', a?.payCycle ?? '',
