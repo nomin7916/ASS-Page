@@ -2543,8 +2543,20 @@ console.log('\n── 파트④-i 예비금 주머니(추가 예수금 = 시그�
     }));
 
   // ⑧ ⚠️ 하위호환 — extraCash === 0이면 결과가 1바이트도 달라지지 않는다.
-  deep('#377 ⚠️ extraCash가 0이면 PDF 시나리오 결과가 완전히 동일하다',
-    runPdf(), runBacktest({ config: mkPdfConfig({ extraCash: 0 }), prices: PRICES, dividends: DIVS, holidays: KR26 }));
+  // ⚠️ 옛 #377은 `mkPdfConfig({extraCash:0})` vs `mkPdfConfig()`를 비교했는데 픽스처에 extraCash가
+  //    없어 **완전히 같은 config**였다 — 예비금 로직을 어떻게 바꿔도 통과하는 자기참조 단언이었다.
+  //    '하위호환'의 실질 근거는 "extraCash가 0이면 예비금 기계장치가 **전부 무동작**"이고, 그건 falsifiable하다.
+  {
+    const z = runBacktest({ config: mkPdfConfig({ extraCash: 0 }), prices: PRICES, dividends: DIVS, holidays: KR26 });
+    ok('#377 ⚠️ extraCash가 0이면 예비금 기계장치가 완전히 무동작이다(하위호환의 실질 근거)',
+      z.summary.finalCashReserve === 0 && z.summary.cumReserveDrawn === 0
+        && z.months.every((m) => m.cashReserveEnd === 0 && m.cashUsedReserve === 0)
+        && z.summary.signalEvents.every((e) => !e.fromReserve)
+        && !z.warnings.some((w) => w.includes('매매 시그널 발동 시에만')));
+    ok('#377b ⚠️ 그 상태에서 매매 주머니 시드가 초기 투자금과 같다(예비금이 섞이지 않았다)',
+      Math.abs(z.initialCashAfter - (z.summary.finalCashReserve + z.months[0].cashTradeEnd
+        + z.months[0].cashDivEnd - z.months[0].cashDelta)) < 1e-6 || z.months.length === 0);
+  }
 
   // ⑨ 예비금이 있는데 시그널이 꺼져 있으면 그 돈은 영영 안 쓰인다 → 반드시 알린다.
   // ⚠️ 종목명이 경고 문구에 섞여 들어가면 공허한 단언이 된다(실제로 '예비금종목'이라는 이름
@@ -4514,11 +4526,22 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /직전체결 매수 \$\{dip\.anchorLevels\.length\}단계/.test(page));
 
   // ⚠️ 화면이 2주머니 전제로 남아 있으면 카드 소계가 예수금과 안 맞고 시그널 문장이 틀린 등식을 찍는다.
-  ok('#381 ⚠️ 화면의 예수금 분해가 3주머니다(예비금 항 누락 시 소계·등식이 어긋난다)',
+  // ⚠️ 카드 한 장만 검사하면 정작 항등식을 렌더하는 **기말 보유 현황 표**와 **CSV**의 누락을
+  //    통과시킨다(적대적 리뷰 확정). 네 지점을 각각 고유 문자열로 못 박는다.
+  ok('#381 ⚠️ 화면·CSV의 예수금 분해가 3주머니다(예비금 항 누락 시 소계·등식이 어긋난다)',
+    // ① 최종 자산 카드  ② 기말 예수금 카드 분해
     /＋ 예비금 \(추가 예수금 중 아직 안 쓴 몫\)/.test(page)
-      && /won\(s\.finalCashReserve\)/.test(page)
+      && /\['＋ 예비금이 대신 낸 매수 대금', won\(s\.cumReserveDrawn\)\]/.test(page)
+      // ③ 기말 보유 현황 표 — 예비금 그룹 + 총자산 툴팁
+      && /추가 예수금 \(초기 매수·정기 리밸런싱에는 쓰지 않음\)/.test(page)
+      && /\+ 예비금 \$\{won\(result\.summary\.finalCashReserve\)\}/.test(page)
+      // ④ CSV — 예수금 그룹의 예비금 항 + 예비금 그룹
+      && /'예비금이 대신 낸 매수 대금', result\.summary\.cumReserveDrawn/.test(page)
+      && /'예비금 내역'/.test(page)
+      // ⑤ 시그널 문장 · 월말 툴팁 · 월 요약 매수 대금
       && /예비금 \$\{won\(e\.fromReserve\)\}/.test(page)
-      && /won\(m\.cashReserveEnd\)/.test(page));
+      && /won\(m\.cashReserveEnd\)/.test(page)
+      && /numOf\(m\.cashUsedReserve\)/.test(page));
   ok('#381b ⚠️ 추가 예수금 칸이 의미 변경을 고지한다(사용자 행동 없이 결과가 달라지는 유일한 통로)',
     /추가 예수금 = 예비금/.test(page) && /뜻이 바뀌었습니다/.test(page));
 
@@ -4546,6 +4569,14 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /anchorSellLevels: normalizeAnchorLevels\(raw\?\.anchorSellLevels\)/.test(bt2));
   // ⚠️ 조기 탈출 위치는 **성능 계약**이다 — targetBaseAt→totalEvalAt이 종목마다 priceAt을 부르고
   //    그 미스 경로는 선형 스캔이라 `영업일 × 종목 × |시계열|`로 폭발한다. 순서를 바꾸지 말 것.
+  // ⚠️ #359는 **미러 사본**의 지문 함수만 호출한다 — src의 투영을 통째로 지워도 통과한다
+  //    (CLAUDE.md가 기록한 rebalMode 3필드 드리프트 사고와 동일 클래스, 적대적 리뷰가 변이로 실증).
+  //    src를 직접 읽어 두 지문 모두에 앵커 4필드가 들어 있는지 못 박는다.
+  ok('#360c ⚠️ 앵커 4필드가 **src** 지문 2곳에 전부 투영돼 있다(미러만 고치는 드리프트 방지)',
+    (bt2.match(/s\??\.dip\?\.extremeOn === false \? 0 : 1/g) || []).length === 2
+      && (bt2.match(/s\??\.dip\?\.anchorSource \?\? ''/g) || []).length === 2
+      && (bt2.match(/asArr\(s\??\.dip\?\.anchorLevels\)/g) || []).length === 2
+      && (bt2.match(/asArr\(s\??\.dip\?\.anchorSellLevels\)/g) || []).length === 2);
   ok('#360b ⚠️ 앵커 판정·조기 탈출은 checkRatioSum·targetBaseAt보다 **앞**이다(성능 계약)',
     (() => {
       const sig = bt2.slice(bt2.indexOf("if (step.kind === 'signal')"));
@@ -4895,9 +4926,12 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /<rect [^>]*fill=\{color\}/.test(page) && /<circle [^>]*fill=\{color\}/.test(page)
       // 비교 뷰에 인라인 배경 스와치가 남아 있지 않은가(bt-noprint인 좌측 선택 패널은 예외)
       && (page.match(/style=\{\{ backgroundColor:/g) || []).length <= 1);
+  // ⚠️ 예비금이 생기면서 줄 자체는 '예비금만 쓴 달'에도 뜨지만, **"매매차익이 모자라" 문구**는
+  //    여전히 `otherFromDiv > 0.5`일 때만 붙어야 한다(재투자를 켠 모든 달에 거짓 설명이 붙는 것 방지).
   ok('#147 ⚠️ "매매차익이 모자라" 안내는 재투자 몫을 뺀 나머지가 분배금을 헐었을 때만 뜬다',
     /const otherFromDiv = Math\.max\(0, m\.cashUsedDiv - reinvBuy\);/.test(page)
-      && /if \(otherFromDiv <= 0\.5\) return null;/.test(page));
+      && /if \(otherFromDiv <= 0\.5 && fromReserve <= 0\.5\) return null;/.test(page)
+      && /otherFromDiv > 0\.5\s*\?\s*' — 예수금이 모자라 적립 분배금에서 충당했습니다\.'/.test(page));
   ok('#148 ⚠️ "증액 효과 없음" 배너 조건은 policy가 아니라 **실제 슬롯 수**를 본다',
     /result\?\.ok && result\.slots\.length === 0 &&[\s\S]{0,120}매월 목표 증액은/.test(page));
   ok('#149 ⚠️ 비교 뷰 첫 진입은 디바운스 없이 즉시 계산한다(빈 화면 깜빡임 방지)',

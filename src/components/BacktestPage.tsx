@@ -256,9 +256,12 @@ const sigSizeText = (e, cfg) => {
       : `목표 초과분 ${won(e.excessAt)} × ${formatNumber(pct)}% = `
         + capped((numOf(e.excessAt) * pct) / 100, '초과분 전량');
   }
+  // ⚠️ 예비금은 재원 모드와 무관하게 **시그널 매수에서 항상** 열린다 — 라벨에서 빼면
+  //    tradeOnly에서 '매매 예수금'이라는 이름으로 예비금이 섞인 밑변을 표시하게 된다.
+  const withReserve = numOf(cfg?.extraCash) > 0 ? ' + 예비금' : '';
   const poolLabel = (cfg?.buyFunding || 'both') === 'tradeOnly'
-    ? '매수 재원(매매 예수금)'
-    : '매수 재원(예수금 + 적립 분배금)';
+    ? `매수 재원(매매 예수금${withReserve})`
+    : `매수 재원(예수금 + 적립 분배금${withReserve})`;
   return toTarget
     ? `목표까지 ${won(e.planned)} · ${poolLabel} ${won(e.poolAt)}`
     : `${poolLabel} ${won(e.poolAt)} × ${formatNumber(pct)}% = `
@@ -714,6 +717,10 @@ function SummaryCards({ result, compact = false }) {
   // 카드 값(finalTotal·profit)과 어긋나지 않도록 두 값에서 역산한다.
   const invested = s.finalTotal - s.profit;
   const initRest = result.initialCashAfter ?? 0;
+  // ⚠️ 예수금 분해의 시드는 이제 **초기 투자금 잔여만**이다(예비금은 별도 주머니).
+  //    extraCash는 summary에 없지만 항등식 finalCashReserve + cumReserveDrawn === extraCash 로 정확히 복원된다.
+  const reserveInit = numOf(s.finalCashReserve) + numOf(s.cumReserveDrawn);
+  const initTradeRest = initRest - reserveInit;
   // ⚠️ 원천징수를 켜면 accrued − paid 에 **세금**까지 섞인다 — 세금을 빼야 진짜 미지급분이다.
   //    (엔진 주석: cumDivAccrued = cumDivPaid + cumDivTax + 미지급 세전분)
   const divPending = s.cumDivAccrued - s.cumDivPaid - numOf(s.cumDivTax);
@@ -775,15 +782,16 @@ function SummaryCards({ result, compact = false }) {
       //    합계(finalCash)를 여기 넣지 말 것 — 옆의 '적립 분배금' 카드와 이중 계상으로 읽힌다.
       label: '기말 예수금', value: won(s.finalCashTrade), cls: 'text-gray-200',
       formula: [
-        ['초기 매수 후 잔여 + 추가 예수금', won(initRest)],
+        ['초기 매수 후 잔여', won(initTradeRest)],
         ['＋ 누적 매매차익', wonSigned(s.cumTradeNet)],
         ['＋ 종목 재편 순현금', wonSigned(s.cumStructuralNet)],
         ['＋ 분배금 재투자 매수', wonSigned(s.cumReinvestNet)],
         ['＋ 적립 분배금이 대신 낸 매수 대금', won(s.cumDivDrawn)],
+        ['＋ 예비금이 대신 낸 매수 대금', won(s.cumReserveDrawn)],
         ['＝ 기말 예수금', won(s.finalCashTrade), true],
       ],
-      note: '매매차익 + 초기 매수 잔여 + 추가 예수금으로만 이루어진 돈입니다 — 분배금은 여기 합산하지 않고 옆 카드에서 따로 셉니다. '
-        + '마지막 항이 ＋인 이유는, 분배금이 대신 낸 매수 대금만큼 예수금이 덜 나갔기 때문입니다.',
+      note: '매매차익 + 초기 매수 잔여로만 이루어진 돈입니다 — 적립 분배금과 예비금(추가 예수금)은 여기 합산하지 않고 각각 따로 셉니다. '
+        + '마지막 두 항이 ＋인 이유는, 분배금·예비금이 대신 낸 매수 대금만큼 예수금이 덜 나갔기 때문입니다.',
     },
     {
       label: '적립 분배금', value: won(s.finalCashDiv), cls: 'text-emerald-300',
@@ -2299,11 +2307,13 @@ export default function BacktestPage({
     //       이 그룹에 항을 더하면 합이 어긋난다. 세금은 아래 '참고' 행으로 따로 적는다.
     const taxedCsv = result.summary.cumDivTax > 0.5;
     for (const [label, value] of [
-      ['초기 매수 후 잔여 + 추가 예수금', result.initialCashAfter],
+      ['초기 매수 후 잔여', (result.initialCashAfter ?? 0)
+        - (result.summary.finalCashReserve + result.summary.cumReserveDrawn)],
       ['누적 매매차익', result.summary.cumTradeNet],
       ['종목 재편 순현금', result.summary.cumStructuralNet],
       ['분배금 재투자 매수', result.summary.cumReinvestNet],
       ['적립 분배금이 대신 낸 매수 대금', result.summary.cumDivDrawn],
+      ['예비금이 대신 낸 매수 대금', result.summary.cumReserveDrawn],
     ]) {
       if (Math.round(value) === 0) continue;
       rows.push(['기말예수금 내역', '', label, '', '', '', '', '', Math.round(value), '', '', '', '']);
@@ -2316,6 +2326,17 @@ export default function BacktestPage({
     ]) {
       if (Math.round(value) === 0) continue;
       rows.push(['적립분배금 내역', '', label, '', '', '', '', '', Math.round(value), '', '', '', '']);
+    }
+    for (const [label, value] of [
+      ['추가 예수금', result.summary.finalCashReserve + result.summary.cumReserveDrawn],
+      ['시그널이 쓴 예비금', -result.summary.cumReserveDrawn],
+    ]) {
+      if (Math.round(value) === 0) continue;
+      rows.push(['예비금 내역', '', label, '', '', '', '', '', Math.round(value), '', '', '', '']);
+    }
+    if (Math.round(result.summary.finalCashReserve + result.summary.cumReserveDrawn) !== 0) {
+      rows.push(['예비금 내역', '', '＝ 기말 예비금', '', '', '', '', '',
+        Math.round(result.summary.finalCashReserve), '', '', '', '']);
     }
     rows.push(['적립분배금 내역', '', '＝ 적립 분배금', '', '', '', '', '',
       Math.round(result.summary.finalCashDiv), '', '', '', '']);
@@ -4657,14 +4678,20 @@ export default function BacktestPage({
                       {(() => {
                         const reinvBuy = -m.reinvestNet;
                         const otherFromDiv = Math.max(0, m.cashUsedDiv - reinvBuy);
-                        if (otherFromDiv <= 0.5) return null;
+                        const fromReserve = numOf(m.cashUsedReserve);
+                        if (otherFromDiv <= 0.5 && fromReserve <= 0.5) return null;
                         const otherFromTrade = m.cashUsedTrade;
+                        // ⚠️ 예비금 항이 빠지면 총액과 등식이 **둘 다** 틀린다(엔진 #376의 3항 합계 계약).
                         return (
                           <span className="text-amber-400/90 col-span-2 xl:col-span-6">
                             ※ 이 달 {reinvBuy > 0.5 ? '재투자 외 ' : ''}매수 대금{' '}
-                            <b>{won(otherFromTrade + otherFromDiv)}</b> ={' '}
-                            예수금 <b>{won(otherFromTrade)}</b> + 적립 분배금 <b>{won(otherFromDiv)}</b>
-                            {' '}— 예수금이 모자라 적립 분배금에서 충당했습니다.
+                            <b>{won(otherFromTrade + otherFromDiv + fromReserve)}</b> ={' '}
+                            예수금 <b>{won(otherFromTrade)}</b>
+                            {fromReserve > 0.5 && <> + 예비금 <b>{won(fromReserve)}</b></>}
+                            {otherFromDiv > 0.5 && <> + 적립 분배금 <b>{won(otherFromDiv)}</b></>}
+                            {otherFromDiv > 0.5
+                              ? ' — 예수금이 모자라 적립 분배금에서 충당했습니다.'
+                              : ' — 매매 시그널이 예비금을 썼습니다.'}
                           </span>
                         );
                       })()}
@@ -4706,17 +4733,18 @@ export default function BacktestPage({
                           ⚠️ 마지막 항이 ＋인 이유 — 분배금이 대신 낸 매수 대금만큼 예수금이 덜 나갔다. */}
                       <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
                         <td className={`${TD} text-gray-300`}
-                          title="매매차익 + 초기 매수 잔여 + 추가 예수금 (적립 분배금은 아래 행에 따로)">예수금</td>
+                          title="매매차익 + 초기 매수 잔여 (적립 분배금·예비금은 아래 그룹에 따로)">예수금</td>
                         <td colSpan={2} className={`${TD} text-right text-gray-600`}>-</td>
                         <td className={`${TD} text-right text-gray-200`}>{won(result.summary.finalCashTrade)}</td>
                         <td className={`${TD} text-right text-gray-600`}>-</td>
                       </tr>
                       {[
-                        { key: 'init', label: '초기 매수 후 잔여 + 추가 예수금', value: result.initialCashAfter, signed: false },
+                        { key: 'init', label: '초기 매수 후 잔여', value: initTradeRest, signed: false },
                         { key: 'trade', label: '누적 매매차익', value: result.summary.cumTradeNet, signed: true },
                         { key: 'struct', label: '종목 재편 순현금', value: result.summary.cumStructuralNet, signed: true },
                         { key: 'reinv', label: '분배금 재투자 매수', value: result.summary.cumReinvestNet, signed: true },
                         { key: 'drawn', label: '적립 분배금이 대신 낸 매수 대금', value: result.summary.cumDivDrawn, signed: false },
+                        { key: 'rdrawn', label: '예비금이 대신 낸 매수 대금', value: result.summary.cumReserveDrawn, signed: false },
                       ].filter((p) => Math.round(p.value) !== 0).map((p) => (
                         <tr key={p.key} className="border-t border-gray-800/40">
                           <td className={`${TD} pl-7 text-gray-500 text-[12px]`}>
@@ -4775,9 +4803,35 @@ export default function BacktestPage({
                           <td className={`${TD} text-right text-gray-700`}>-</td>
                         </tr>
                       ))}
+                      {/* ── 예비금 = 추가 예수금 − 시그널이 쓴 몫 ──
+                          ⚠️ 이 그룹이 없으면 (평가액 + 예수금 + 적립 분배금) ≠ 총자산 이 된다. */}
+                      {Math.round(result.summary.finalCashReserve + result.summary.cumReserveDrawn) !== 0 && (
+                        <>
+                          <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
+                            <td className={`${TD} text-gray-300`}
+                              title="추가 예수금 중 아직 쓰지 않은 잔액 — 매매 시그널 발동 시에만 쓰인다">예비금</td>
+                            <td colSpan={2} className={`${TD} text-right text-gray-600`}>-</td>
+                            <td className={`${TD} text-right text-sky-300`}>{won(result.summary.finalCashReserve)}</td>
+                            <td className={`${TD} text-right text-gray-600`}>-</td>
+                          </tr>
+                          {[
+                            { key: 'rinit', label: '추가 예수금 (초기 매수·정기 리밸런싱에는 쓰지 않음)', value: result.summary.finalCashReserve + result.summary.cumReserveDrawn, signed: false },
+                            { key: 'rused', label: '− 시그널이 쓴 예비금', value: -result.summary.cumReserveDrawn, signed: true },
+                          ].filter((p) => Math.round(p.value) !== 0).map((p) => (
+                            <tr key={p.key} className="border-t border-gray-800/40">
+                              <td className={`${TD} pl-7 text-gray-500 text-[12px]`}>└ {p.label}</td>
+                              <td colSpan={2} className={`${TD} text-right text-gray-700`}>-</td>
+                              <td className={`${TD} text-right text-[12px] ${p.signed ? pnlCls(p.value) : 'text-gray-300'}`}>
+                                {p.signed ? wonSigned(p.value) : won(p.value)}
+                              </td>
+                              <td className={`${TD} text-right text-gray-700`}>-</td>
+                            </tr>
+                          ))}
+                        </>
+                      )}
                       <tr className="border-t border-gray-700 bg-gray-800/60 font-bold">
                         <td className={`${TD} text-gray-200`}
-                          title={`총자산 = 기말 평가액 ${won(result.summary.finalEval)} + 예수금 ${won(result.summary.finalCashTrade)} + 적립 분배금 ${won(result.summary.finalCashDiv)} = ${won(result.summary.finalTotal)}`}>
+                          title={`총자산 = 기말 평가액 ${won(result.summary.finalEval)} + 예수금 ${won(result.summary.finalCashTrade)} + 적립 분배금 ${won(result.summary.finalCashDiv)} + 예비금 ${won(result.summary.finalCashReserve)} = ${won(result.summary.finalTotal)}`}>
                           총자산
                         </td>
                         <td colSpan={2} className={`${TD} text-right text-gray-600`}>-</td>
