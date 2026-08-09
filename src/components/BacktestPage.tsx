@@ -122,7 +122,89 @@ const dipOf = (cfg) => {
     anchorLevels: (d && Array.isArray(d.anchorLevels)) ? d.anchorLevels : [],
     anchorSellLevels: (d && Array.isArray(d.anchorSellLevels)) ? d.anchorSellLevels : [],
     anchorSource: (d && d.anchorSource === 'lastRebal') ? 'lastRebal' : 'lastFill',
+    // ── A-3 / A-4 / A-6 / C / D — 전부 '기본값 = 무동작' ──
+    deviationCap: numOf(d && d.deviationCap),
+    baseline: baselineOf(d),
+    buyCapMode: (d && (d.buyCapMode === 'amount' || d.buyCapMode === 'pctOfInitial')) ? d.buyCapMode : 'none',
+    buyCapValue: numOf(d && d.buyCapValue),
+    alloc: allocOf(d),
+    conflict: (d && (d.conflict === 'regularFirst' || d.conflict === 'skipSignal')) ? d.conflict : 'signalFirst',
+    cooldownDays: numOf(d && d.cooldownDays),
+    excludeRegularDays: numOf(d && d.excludeRegularDays),
+    anchorOnNoFill: (d && d.anchorOnNoFill === 'update') ? 'update' : 'keep',
   };
+};
+/**
+ * A-4 기준 평가액 축 / A-6 배분 규칙의 안전 접근자.
+ * ⚠️ `dipOf`가 dip 쓰기의 **스프레드 베이스**이므로 이 둘도 반드시 여기서 채운다 — 빠지면
+ *    옆 토글 한 번에 dip에서 삭제됐다가 재로드 시 기본값으로 되살아난다(고친 적 없는 설정이 바뀐다).
+ */
+const baselineOf = (d) => {
+  const b = (d && d.baseline) || null;
+  const ax = b && b.axis;
+  return {
+    axis: (ax === 'prevMonthEnd' || ax === 'peakEval' || ax === 'manual') ? ax : 'lastFill',
+    amount: numOf(b && b.amount),
+    resetOnFill: !!(b && b.resetOnFill),
+    maxReuse: numOf(b && b.maxReuse),
+  };
+};
+const allocOf = (d) => {
+  const a = (d && d.alloc) || null;
+  const bs = a && a.basis;
+  const lo = a && a.leftover;
+  return {
+    mode: (a && a.mode === 'weighted') ? 'weighted' : 'sequential',
+    basis: (bs === 'need' || bs === 'underGap') ? bs : 'targetRatio',
+    leftover: (lo === 'topWeight' || lo === 'refill') ? lo : 'cash',
+    minOrderAmount: numOf(a && a.minOrderAmount),
+    minOrderQty: numOf(a && a.minOrderQty),
+  };
+};
+
+/* ── A-1 사이징 모드 라벨 — 화면·CSV·설명 팝오버가 **같은 표**를 쓴다 ────────────────
+ * ⚠️ 라벨을 각 화면에서 손으로 적으면 같은 모드가 다르게 설명된다(sigLabel 공유 규약과 동일).
+ * ⚠️ `toTargetCapped`/`pctOfExcess`가 **레거시 계열**이다 — 저장된 시나리오가 여기로 떨어지고,
+ *    이 둘만 목표 비중 캡을 받는다(A-2). 라벨에 '(현행)'을 붙여 그 사실을 드러낸다.
+ * ========================================================================= */
+const BUY_SIZING_OPTS = [
+  ['toTarget', '목표까지 — 목표 미달액 전부'],
+  ['toTargetCapped', '목표까지 (재원의 N% 한도) — 현행'],
+  ['pctOfPool', '재원의 % — 목표 캡 없음'],
+  ['fixedAmount', '고정 금액 — 목표 캡 없음'],
+  ['pctOfTotal', '총자산의 % — 목표 캡 없음'],
+  ['restoreBase', '기준 평가액 복원 — 목표 캡 없음'],
+];
+const SELL_SIZING_OPTS = [
+  ['toTarget', '목표 초과분 전량 — 현행'],
+  ['pctOfExcess', '목표 초과분의 % — 현행'],
+  ['pctOfEval', '보유 평가액의 % — 목표 캡 없음'],
+  ['pctOfQty', '보유 수량의 % — 목표 캡 없음'],
+  ['fixedAmount', '고정 금액 — 목표 캡 없음'],
+  ['excessOverBase', '기준 평가액 초과분 — 목표 캡 없음'],
+];
+const SIZING_LABEL = Object.fromEntries([...BUY_SIZING_OPTS, ...SELL_SIZING_OPTS]);
+/** 그 모드가 **비율(%)** 입력을 쓰는가 / **금액** 입력을 쓰는가. */
+const SIZING_USES_PCT = ['toTargetCapped', 'pctOfPool', 'pctOfTotal', 'pctOfExcess', 'pctOfEval', 'pctOfQty'];
+const SIZING_USES_AMOUNT = ['fixedAmount'];
+/** 저장된 단계에서 실제 모드를 읽는다(미지정 = 레거시 파생). */
+const buySizingOf = (lv) => (BUY_SIZING_OPTS.some(([v]) => v === lv?.sizing)
+  ? lv.sizing : (lv?.buyPct === null || lv?.buyPct === undefined ? 'toTarget' : 'toTargetCapped'));
+const sellSizingOf = (lv) => (SELL_SIZING_OPTS.some(([v]) => v === lv?.sizing)
+  ? lv.sizing : (lv?.sellPct === null || lv?.sellPct === undefined ? 'toTarget' : 'pctOfExcess'));
+const BASE_AXIS_OPTS = [
+  ['lastFill', '직전 체결 시점 평가액'],
+  ['prevMonthEnd', '전월말 평가액'],
+  ['peakEval', '기간 내 최고 평가액'],
+  ['manual', '수동 입력 금액'],
+];
+const ALLOC_BASIS_LABEL = { targetRatio: '목표 비중 비례', need: '필요액 비례', underGap: '언더타깃 갭 비례' };
+const ALLOC_LEFTOVER_LABEL = { cash: '현금 보유', topWeight: '가중치 큰 종목에 1주 추가', refill: '재원 소진까지 재반복' };
+const REASON_LABEL = {
+  CAP_TARGET: '목표 캡', CAP_DEVIATION: '이탈 한도', NO_CASH: '재원 없음',
+  PARTIAL_NO_CASH: '부분 체결(재원 부족)', ROUNDING: '수량 내림', COOLDOWN: '쿨다운',
+  NO_POSITION: '보유 없음', CAP_ASSET_BUDGET: '종목 누적 한도', CAP_BASE_REUSE: '기준축 재사용 상한',
+  NO_PRICE: '종가 없음', OTHER: '기타',
 };
 /** 앵커 축이 실제로 일을 하는가. */
 const anchorOnOf = (cfg) => {
@@ -190,7 +272,22 @@ function strategyTags(cfg) {
     if (dip.anchorSellLevels.length) out.push(`직전체결 매도 ${dip.anchorSellLevels.length}단계`);
     if (anchorOnOf(cfg) && dip.anchorSource === 'lastRebal') out.push('기준=리밸런싱');
     if (!dip.reallocate) out.push('재조정 끔');
+    // ── A~D 신규 옵션 — **기본값은 한 글자도 내보내지 않는다**(strategyTags 규약) ──
+    const sizings = [
+      ...dip.levels.map(buySizingOf).filter((x) => x !== 'toTarget' && x !== 'toTargetCapped'),
+      ...dip.sellLevels.map(sellSizingOf).filter((x) => x !== 'toTarget' && x !== 'pctOfExcess'),
+    ];
+    for (const x of Array.from(new Set(sizings))) out.push(`사이징 ${(SIZING_LABEL[x] || x).split(' —')[0]}`);
+    if (numOf(dip.deviationCap) > 0) out.push(`이탈 한도 ±${formatNumber(dip.deviationCap)}%p`);
+    if (dip.buyCapMode !== 'none') out.push('종목 매수 한도');
+    if (dip.alloc.mode === 'weighted') out.push(`가중 배분(${ALLOC_BASIS_LABEL[dip.alloc.basis]})`);
+    if (dip.conflict !== 'signalFirst') out.push(dip.conflict === 'skipSignal' ? '겹치면 시그널 무시' : '정기 우선');
+    if (numOf(dip.cooldownDays) > 0) out.push(`쿨다운 ${formatNumber(dip.cooldownDays)}일`);
+    if (numOf(dip.excludeRegularDays) > 0) out.push(`정기 제외 ${formatNumber(dip.excludeRegularDays)}일`);
+    if (dip.anchorOnNoFill === 'update') out.push('미체결 시 기준 갱신');
   }
+  if (cfg.ratioBase === 'equityCash') out.push('분모=총자산');
+  if (numOf(cfg.minCashReserve) > 0) out.push(`유보 ${formatNumber(cfg.minCashReserve)}원`);
   if (numOf(cfg.cashFloorPct) > 0) out.push(`바닥선 ${formatNumber(cfg.cashFloorPct)}%`);
   if (ar.mode === 'pctOfSurplus' && numOf(ar.value) > 0) out.push(`${ar.everyMonths}개월 증액 ${formatNumber(ar.value)}%`);
   if (numOf(cfg.divTaxPct) > 0) out.push(`원천징수 ${formatNumber(cfg.divTaxPct)}%`);
@@ -241,6 +338,28 @@ const sigIsToTarget = (e) => e?.pctSum === null || e?.pctSum === undefined;
  *    쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 거짓 계산식이 된다(적대적 리뷰 확정 결함).
  */
 const sigSizeText = (e, cfg) => {
+  /* ── A-1 신규 사이징 모드 ─────────────────────────────────────────────────
+   * ⚠️ 엔진이 실어 보낸 `basisKind`/`basisAmount`/`ordered`로 **그대로** 그린다 — 화면에서 다시
+   *    계산하면 캡(A-2/A-3)에 잘린 뒤의 값과 어긋나 거짓 계산식이 된다.
+   * ⚠️ 레거시 두 모드(`toTarget`·`toTargetCapped`/`pctOfExcess`)는 아래 종전 문장을 그대로 쓴다. */
+  const siz = e?.sizing;
+  if (siz && siz !== 'toTarget' && siz !== 'toTargetCapped' && siz !== 'pctOfExcess') {
+    const pctNow = numOf(e.pctSum);
+    const cut = numOf(e.ordered) > numOf(e.planned) + 0.5
+      ? ` → ${won(e.planned)}로 축소(${(e.caps || []).map((c) => REASON_LABEL[c] || c).join('·') || '한도'})`
+      : '';
+    const head = siz === 'restoreBase'
+      ? `기준 평가액 ${won(e.basisAmount)} − 현재 평가액 ${won(numOf(e.basisAmount) - numOf(e.ordered))} = ${won(e.ordered)}`
+      : siz === 'excessOverBase'
+        ? `현재 평가액 ${won(numOf(e.basisAmount) + numOf(e.ordered))} − 기준 평가액 ${won(e.basisAmount)} = ${won(e.ordered)}`
+        : siz === 'fixedAmount'
+          ? `고정 금액 ${won(e.ordered)}`
+          : siz === 'pctOfQty'
+            ? `보유 ${formatNumber(e.basisAmount)}주 × ${formatNumber(pctNow)}% × ${won(e.price)} = ${won(e.ordered)}`
+            : `${siz === 'pctOfPool' ? '매수 재원' : siz === 'pctOfTotal' ? '총자산' : '보유 평가액'} `
+              + `${won(e.basisAmount)} × ${formatNumber(pctNow)}% = ${won(e.ordered)}`;
+    return `${SIZING_LABEL[siz] || siz} · ${head}${cut}`;
+  }
   const toTarget = sigIsToTarget(e);
   const pct = numOf(e.pctSum);
   // ⚠️ `밑변 × 비율 = planned`는 **상한에 걸리지 않았을 때만** 참이다 — planned는 매수면 목표
@@ -658,7 +777,7 @@ let popSeq = 0;
  *    @ts-nocheck + esbuild라 컴파일러가 못 막고, 팝오버는 `{pos && …}` 안이라 호버하기
  *    전까지 아무 게이트에도 걸리지 않은 채 **호버 순간 화면 전체가 오류 페이지**가 된다.
  */
-function SummaryCard({ label, value, cls, formula, note, compact, popWidth = 380, popRender }) {
+function SummaryCard({ label, value, cls, sub, formula, note, compact, popWidth = 380, popRender }) {
   const { ref, pos, open, close, enter, leave, blur } = useHoverPop(popWidth);
   const idRef = useRef(null);
   if (idRef.current === null) idRef.current = `bt-pop-${++popSeq}`;
@@ -679,6 +798,8 @@ function SummaryCard({ label, value, cls, formula, note, compact, popWidth = 380
           <HelpCircle size={10} className="text-gray-700 shrink-0 bt-noprint" />
         </div>
         <div className={`${compact ? 'text-sm' : 'text-lg'} font-bold ${cls}`}>{value}</div>
+        {/* F-2 — 미체결 사유별 집계는 **호버 없이도** 보여야 한다("왜 안 샀는가"가 이 카드의 핵심이다). */}
+        {sub ? <div className="text-[10px] text-gray-500 leading-tight mt-0.5">{sub}</div> : null}
       </div>
       {pos && (
         <div role="tooltip" id={idRef.current} data-bt-pop className={POP_CLS} style={popStyle(pos)}
@@ -981,6 +1102,10 @@ function StrategyKpis({ result, cfg, compact = false }) {
   const annualOn = ar.mode === 'pctOfSurplus' && numOf(ar.value) > 0;
   const taxOn = numOf(cfg?.divTaxPct) > 0 || numOf(s.cumDivTax) > 0.5;
   const events = s.signalEvents || [];
+  // F-2 — 엔진이 낸 집계를 그대로 읽는다(화면에서 다시 세면 carrier 규약이 갈려 건수가 어긋난다).
+  const stats = s.signalStats || { buyFired: 0, buyFilled: 0, sellFired: 0, sellFilled: 0, reasons: {} };
+  const reasonRows = Object.entries(stats.reasons || {}).sort((a, b) => b[1] - a[1]);
+  const allocBlocks = s.allocBlocks || [];
   const shortMonths = (result.months || []).filter((m) => numOf(m.shortfallCount) > 0);
   // 변동계수 — 평균이 0이면 정의되지 않는다(분배금이 아예 없는 시나리오).
   const cv = numOf(s.divMonthlyAvg) > 0 ? (s.divMonthlyStdev / s.divMonthlyAvg) * 100 : null;
@@ -1027,9 +1152,15 @@ function StrategyKpis({ result, cfg, compact = false }) {
         + '시그널 리밸런싱은 자기 발동일에 체결되므로 밴드의 적용을 받지 않고, 여기에도 잡히지 않습니다.',
     }] : []),
     ...(dipOn ? [{
+      // F-2 — 매수/매도를 **분리**해 보여 준다. 합계 하나로는 "매수 로직이 죽어 있다"가 보이지 않는다
+      //       (실측: 체결 7건이 전부 매도였고 매수 2건은 모두 미체결이었다).
       label: '시그널 체결',
-      value: `${formatNumber(events.filter((e) => e.tradeQty !== 0).length)}/${formatNumber(events.length)}건`,
+      value: `매수 ${formatNumber(stats.buyFilled)}/${formatNumber(stats.buyFired)} · `
+        + `매도 ${formatNumber(stats.sellFilled)}/${formatNumber(stats.sellFired)}건`,
       cls: events.some((e) => e.tradeQty !== 0) ? 'text-amber-300' : 'text-gray-500',
+      sub: reasonRows.length
+        ? `미체결 ${reasonRows.map(([k, v]) => `${REASON_LABEL[k] || k} ${v}`).join(' · ')}`
+        : '',
       // ⚠️ 2열 계산식 표가 아니라 전용 표로 그린다(SignalPopBody 주석 참조) — 이 카드의 값은
       //    ₩ 한 덩어리가 아니라 사건별 문장이라, nowrap 2열에 넣으면 라벨 열이 무너진다.
       popWidth: 980,
@@ -1049,6 +1180,64 @@ function StrategyKpis({ result, cfg, compact = false }) {
         + '새 고점(매수)·새 저점(매도)이 서면 전 단계가 다시 무장됩니다. '
         + '규모는 단계의 비율 칸이 정합니다 — 매수는 매수 재원 × 비율(목표에서 자름), 매도는 목표 초과분 × 비율, '
         + '비우면 목표까지입니다. 재원은 ⑤-b ‘매수 재원’ 설정을 그대로 따릅니다.',
+    }] : []),
+    ...(allocBlocks.length ? [{
+      // A-6-8 — 배분 표는 카드 팝오버로 그린다. 월별 12열 표에 끼워 넣으면 정렬이 통째로 무너진다.
+      label: '재원 배분', value: `${formatNumber(allocBlocks.length)}일`,
+      cls: 'text-sky-300',
+      sub: `${ALLOC_BASIS_LABEL[allocBlocks[0].basis]} · 잔액 ${ALLOC_LEFTOVER_LABEL[allocBlocks[0].leftoverRule]}`,
+      popWidth: 900,
+      popRender: (w) => (
+        <div className="flex flex-col gap-2" style={{ minWidth: Math.min(w, 860) }}>
+          {allocBlocks.slice(0, 12).map((blk) => (
+            <div key={blk.date} className="border border-gray-800 rounded p-1.5">
+              <div className="text-[11px] text-gray-300 font-bold">
+                {blk.date} · 재원 {won(blk.pool)} · 워터폴 {formatNumber(blk.iterations)}회
+                {numOf(blk.redistributed) > 0 ? ` · 재배분 ${won(blk.redistributed)}` : ''}
+              </div>
+              <table className="w-full mt-1">
+                <thead>
+                  <tr className="text-[10px] text-gray-600">
+                    <th className="text-left">종목</th><th className="text-right">필요액</th>
+                    <th className="text-right">가중치</th><th className="text-right">배분액</th>
+                    <th className="text-right">체결 수량</th><th className="text-right">체결액</th>
+                    <th className="text-right">미달액</th><th className="text-left pl-2">사유</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {blk.rows.map((r) => (
+                    <tr key={r.assetId} className="text-[11px] text-gray-300">
+                      <td className="text-left truncate">{r.name || r.code}</td>
+                      <td className="text-right">{won(r.need)}</td>
+                      <td className="text-right">{formatNumber(Math.round(r.weight * 10) / 10)}%</td>
+                      <td className="text-right">{won(r.alloc)}</td>
+                      <td className="text-right">{formatNumber(r.qty)}</td>
+                      <td className="text-right">{won(r.amount)}</td>
+                      <td className="text-right text-gray-500">{won(r.shortfall)}</td>
+                      <td className="text-left pl-2 text-amber-300/90">{REASON_LABEL[r.reason] || r.reason || ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="text-[11px] text-gray-400 border-t border-gray-800">
+                    <td className="text-left">합계</td><td /><td />
+                    <td className="text-right">{won(blk.pool)}</td><td />
+                    <td className="text-right">{won(blk.totalFilled)}</td>
+                    <td className="text-right">{won(blk.leftoverCash)}</td>
+                    <td className="text-left pl-2 text-gray-600">잔여 현금</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          ))}
+          {allocBlocks.length > 12 && (
+            <div className="text-[10px] text-gray-600">… 외 {formatNumber(allocBlocks.length - 12)}일 (CSV에 전부 들어 있습니다)</div>
+          )}
+        </div>
+      ),
+      note: '같은 영업일에 여러 종목이 동시에 발동했을 때의 재원 배분 내역입니다. '
+        + '가중치를 정규화해 나누고, 필요액을 넘긴 몫은 남은 종목에 다시 배분합니다(워터폴). '
+        + '종목 나열 순서와 무관하게 항상 같은 결과가 나옵니다.',
     }] : []),
     {
       label: '부족 발생', value: `${formatNumber(s.shortfallMonths)}개월`,
@@ -2299,7 +2488,24 @@ export default function BacktestPage({
         rows.push([`${m.ym} 시그널`, e.date, `${e.name}(${e.code}) ${sigLabel(e)}`, Math.round(e.price),
           Math.round(e.ref), Math.round(e.tradeQty), Math.round(e.tradeAmount), '',
           Math.round(e.planned), Math.round(e.used), Math.round(e.reallocAmount), '',
-          e.carrier ? sigSizeText(e, cfgNow) + ' · ' + sigOutcomeText(e, cfgNow) : sigOutcomeText(e, cfgNow)]);
+          // F-1 — 사유 코드와 기준일까지 남긴다(화면 로그와 같은 정보량이라야 CSV로 추적이 된다).
+          (e.carrier ? sigSizeText(e, cfgNow) + ' · ' + sigOutcomeText(e, cfgNow) : sigOutcomeText(e, cfgNow))
+          + (e.refDate ? ` · 기준일 ${e.refDate}` : '')
+          + (e.reason ? ` · [${e.reason}] ${REASON_LABEL[e.reason] || ''}` : '')]);
+      }
+      // A-6-8 — 동일 영업일 다중 발동 배분 표. 화면 카드 팝오버와 **같은 소스**다.
+      for (const blk of (result.summary.allocBlocks || []).filter((b) => b.date.slice(0, 7) === m.ym)) {
+        for (const r of blk.rows) {
+          rows.push([`${m.ym} 배분`, blk.date, `${r.name}(${r.code})`, '', '',
+            Math.round(r.qty), Math.round(r.amount), '', Math.round(r.need), '', Math.round(r.alloc), '',
+            `가중치 ${Math.round(r.weight * 10) / 10}% · 미달 ${Math.round(r.shortfall)}`
+            + (r.reason ? ` · [${r.reason}] ${REASON_LABEL[r.reason] || ''}` : '')]);
+        }
+        rows.push([`${m.ym} 배분`, blk.date, '합계', '', '', '', Math.round(blk.totalFilled), '',
+          Math.round(blk.pool), '', '', '',
+          `재원 ${Math.round(blk.pool)} · 잔여 현금 ${Math.round(blk.leftoverCash)} · 워터폴 ${blk.iterations}회`
+          + ` · 재배분 ${Math.round(blk.redistributed)} · 기준 ${ALLOC_BASIS_LABEL[blk.basis]}`
+          + ` · 잔액 ${ALLOC_LEFTOVER_LABEL[blk.leftoverRule]}`]);
       }
       // 밴드 생략 — 화면 월 요약과 동일 소스(생략은 거래 행이 남지 않으므로 이 줄이 유일한 흔적)
       if (m.bandSkipCount > 0) {
@@ -2366,10 +2572,13 @@ export default function BacktestPage({
       ['월 분배금 평균', Math.round(result.summary.divMonthlyAvg)],
       ['월 분배금 표준편차', Math.round(result.summary.divMonthlyStdev)],
       ['밴드 생략', `${result.summary.bandSkipCount}건 / ${Math.round(result.summary.bandSkipAmount)}`],
-      ['시그널 발동', `${result.summary.signalEvents.length}건`
-        + ` (매수 ${result.summary.signalEvents.filter((e) => e.kind === 'buy').length}`
-        + ` / 매도 ${result.summary.signalEvents.filter((e) => e.kind === 'sell').length}`
-        + ` · 체결 ${result.summary.signalEvents.filter((e) => e.tradeQty !== 0).length})`],
+      // F-2 — 매수/매도 분리 + 미체결 사유별 집계. 엔진 집계(signalStats)를 그대로 쓴다.
+      ['시그널 체결(매수)', `${result.summary.signalStats?.buyFilled ?? 0} / ${result.summary.signalStats?.buyFired ?? 0}건`],
+      ['시그널 체결(매도)', `${result.summary.signalStats?.sellFilled ?? 0} / ${result.summary.signalStats?.sellFired ?? 0}건`],
+      ['시그널 미체결 사유', Object.entries(result.summary.signalStats?.reasons || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${REASON_LABEL[k] || k} ${v}`).join(' · ') || '없음'],
+      ['시그널 발동(전체)', `${result.summary.signalEvents.length}건`],
       ['부족 발생', `${result.summary.shortfallMonths}개월`],
       ['누적 연간증액', Math.round(result.summary.cumAnnualReview)],
       ...(taxedCsv ? [['원천징수 세금(참고 · 위 합계에 미포함)', Math.round(result.summary.cumDivTax)]] : []),
@@ -2841,12 +3050,53 @@ export default function BacktestPage({
                       onClick={() => patchActive({ targetMode: v })}>{l}</button>
                   ))}
                 </div>
-                {/* ⚠️ 분모 선택 드롭다운은 없다(2026-08 사용자 정의) — 비중의 기준은 '종목 평가액
-                    합계' 하나로 고정이다. 대신 그 사실을 여기 한 줄로 always-on 표시한다. */}
+                {/* ── B. 목표 비중 분모 ──────────────────────────────────────────────
+                    ⚠️ 선택지는 **2종뿐**이다. 옛 4종(equity/total/initial/totalWithDiv)을 되살리지 말 것 —
+                       'initial'·'totalWithDiv'는 2026-08에 폐기됐고 저장값이 남아 있어도 equity로 떨어진다. */}
+                {active.targetMode === 'ratio' && (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-1">
+                      <span className={LABEL}>비중의 분모</span>
+                      <Hint width={400}>
+                        <p>
+                          목표 비중 %를 <b className="text-gray-300">무엇에 곱할지</b>입니다. 여기서 고른 분모가
+                          <b className="text-gray-300"> 정기 리밸런싱 · 매매 시그널의 목표 · 리밸런싱 밴드 판정 ·
+                          현금 바닥선 기준</b>에 **일관되게** 적용됩니다.
+                        </p>
+                        <p className="mt-1">
+                          <b className="text-gray-300">종목 평가액 합계</b>(기본) — 들고 있는 종목들 사이의 배분만
+                          정합니다. 현금 잔고가 아무리 늘어도 목표가 흔들리지 않습니다.
+                        </p>
+                        <p className="mt-1">
+                          <b className="text-gray-300">종목 평가액 + 예수금(총자산)</b> — 예수금도 배분 대상이 됩니다.
+                          가격이 내려 평가액이 줄면 <b className="text-gray-300">쌓인 예수금이 언더타깃으로 드러나</b>
+                          {' '}정기 리밸런싱일에 실제로 재투입이 일어납니다.
+                        </p>
+                        <p className="mt-1 text-gray-500">
+                          ※ <b className="text-gray-400">초기 매수만은 예외</b>로 분모가 초기 투자금입니다
+                          (그 시점 평가액이 0이라 목표가 전부 0이 되는 자기잠금을 피하기 위해서입니다).
+                        </p>
+                        <p className="mt-1 text-gray-500">
+                          ※ 기본값은 <b className="text-gray-400">종목 평가액 합계</b>이고, 그 상태에서는 기존
+                          시나리오의 결과가 1원도 달라지지 않습니다.
+                        </p>
+                      </Hint>
+                    </div>
+                    <div className="flex gap-1">
+                      {[['equity', '종목 평가액 합계'], ['equityCash', '종목 평가액 + 예수금']].map(([v, l]) => (
+                        <button key={v} disabled={readOnly}
+                          className={`${BTN} flex-1 ${(active.ratioBase || 'equity') === v ? 'text-sky-200 border-sky-600 bg-sky-900/40' : 'text-gray-400 border-gray-700 hover:bg-gray-800'}`}
+                          onClick={() => patchActive({ ratioBase: v })}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <p className="text-[10px] text-gray-500 leading-relaxed">
                   {active.targetMode === 'amount'
                     ? '종목마다 적어 넣은 금액이 되도록 매수·매도합니다. 남는 돈은 예수금으로 남습니다.'
-                    : '기준(분모)은 종목 평가액 합계입니다 — 예수금·매매차익·누적 분배금은 포함하지 않습니다.'}
+                    : (active.ratioBase === 'equityCash'
+                      ? '기준(분모)은 종목 평가액 합계 + 예수금(총자산)입니다 — 예수금도 배분 대상이 됩니다.'
+                      : '기준(분모)은 종목 평가액 합계입니다 — 예수금·매매차익·누적 분배금은 포함하지 않습니다.')}
                 </p>
                 <p className="text-[10px] text-sky-300/80 leading-relaxed">
                   값은 <b>⑥ 종목</b>의 각 칸에 <b>직접 입력</b>합니다. 아래 버튼은 편의 기능일 뿐이며,
@@ -3429,6 +3679,25 @@ export default function BacktestPage({
                         onClick={() => patchActive({ buyFunding: v })}>{l}</button>
                     ))}
                   </div>
+                  {/* ── E. 최소 유보 현금 ── */}
+                  <div className="flex items-center gap-1 mt-1">
+                    <span className={LABEL}>최소 유보 현금 (원)</span>
+                    <Hint width={360}>
+                      <p>
+                        매수가 끝난 뒤 총 예수금이 <b className="text-gray-300">이 금액 아래로 내려가지 않도록</b>
+                        {' '}매수액을 줄입니다. 재원이 모자라면 <b className="text-gray-300">가능한 수량까지 부분 체결</b>
+                        하고 부족액을 로그에 남깁니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">현금 바닥선(%)</b>과 **둘 중 큰 값**이 실제 하한이 됩니다.
+                        매도·분배금 재투자에는 걸리지 않고, 가중 배분에서는 <b className="text-gray-400">배분 전에
+                        재원에서 먼저 차감</b>됩니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">※ 0이면 없음(기본, 종전 동작).</p>
+                    </Hint>
+                  </div>
+                  <NumInput value={numOf(active.minCashReserve) || ''} disabled={readOnly} placeholder="0 = 없음"
+                    onCommit={(v) => patchActive({ minCashReserve: Math.max(0, v) })} />
                 </div>
 
                 {/* ── C. 시그널 리밸런싱 (매수 = 급락 분할투입 / 매도 = 반등 차익실현) ── */}
@@ -3487,40 +3756,63 @@ export default function BacktestPage({
                     <div className="flex flex-col gap-1">
                       <div className="grid grid-cols-[1fr_1fr] gap-2">
                         <span className={LABEL}>매수 시그널 — 고점 대비 낙폭 (%)</span>
-                        <span className={LABEL}>이때 매수 비율 (매수 재원의 %)</span>
+                        <span className={LABEL}>이때 얼마를 살 것인가 (A-1)</span>
                       </div>
-                      {dipOf(active).levels.map((lv, i) => (
-                        <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-                          <NumInput value={lv.drop} disabled={readOnly}
-                            onCommit={(v) => patchActive({
-                              dip: {
-                                ...dipOf(active),
-                                levels: dipOf(active).levels.map((x, j) => (j === i ? { ...x, drop: Math.min(100, Math.max(0.1, v)) } : x)),
-                              },
-                            })} />
-                          {/* ⚠️ allowEmpty — 빈칸(null)이 '목표까지 매수'다. 0(재원의 0% = 한 주도 안 삼)과
-                                  **반드시 구분**돼야 하므로 0으로 강제하지 말 것. */}
-                          <NumInput value={lv.buyPct} disabled={readOnly} allowEmpty placeholder="목표까지"
-                            onCommit={(v) => patchActive({
-                              dip: {
-                                ...dipOf(active),
-                                levels: dipOf(active).levels.map((x, j) => (j === i
-                                  ? { ...x, buyPct: v === null ? null : Math.min(100, Math.max(0, v)) }
-                                  : x)),
-                              },
-                            })} />
-                          {/* ⚠️ 삭제·추가 버튼이 없으면 중복 낙폭을 적었을 때 정규화가 행을 지운 뒤
-                                  **되돌릴 수단이 사라진다**(적대적 리뷰 확정 결함). */}
-                          <button className="p-1 text-gray-600 hover:text-red-400 shrink-0 disabled:opacity-30"
-                            title="이 단계 삭제"
-                            disabled={readOnly || dipOf(active).levels.length <= 1}
-                            onClick={() => patchActive({
-                              dip: { ...dipOf(active), levels: dipOf(active).levels.filter((_, j) => j !== i) },
-                            })}>
-                            <Trash2 size={12} />
-                          </button>
+                      {dipOf(active).levels.map((lv, i) => {
+                        const siz = buySizingOf(lv);
+                        const patchLv = (patch) => patchActive({
+                          dip: {
+                            ...dipOf(active),
+                            levels: dipOf(active).levels.map((x, j) => (j === i ? { ...x, ...patch } : x)),
+                          },
+                        });
+                        return (
+                        <div key={i} className="flex flex-col gap-1 border-b border-gray-800/60 pb-1.5">
+                          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                            <NumInput value={lv.drop} disabled={readOnly}
+                              onCommit={(v) => patchLv({ drop: Math.min(100, Math.max(0.1, v)) })} />
+                            {/* ⚠️ 사이징 모드가 곧 **목표 캡 해제 스위치**다(A-2) — '목표까지' 계열이 아니면
+                                    목표 비중과 무관하게 체결된다. */}
+                            <select className={INPUT} value={siz} disabled={readOnly}
+                              onChange={(e) => patchLv({
+                                sizing: e.target.value,
+                                // ⚠️ 모드를 바꿀 때 값 칸의 의미가 달라지므로 비워 둔다 — 옛 34%가
+                                //    '재원의 34%'로 조용히 넘어가면 사용자가 의도하지 않은 매매가 난다.
+                                ...(SIZING_USES_PCT.includes(e.target.value) ? {} : { buyPct: null }),
+                              })}>
+                              {BUY_SIZING_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                            {/* ⚠️ 삭제·추가 버튼이 없으면 중복 낙폭을 적었을 때 정규화가 행을 지운 뒤
+                                    **되돌릴 수단이 사라진다**(적대적 리뷰 확정 결함). */}
+                            <button className="p-1 text-gray-600 hover:text-red-400 shrink-0 disabled:opacity-30"
+                              title="이 단계 삭제"
+                              disabled={readOnly || dipOf(active).levels.length <= 1}
+                              onClick={() => patchActive({
+                                dip: { ...dipOf(active), levels: dipOf(active).levels.filter((_, j) => j !== i) },
+                              })}>
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                          {SIZING_USES_PCT.includes(siz) && (
+                            /* ⚠️ allowEmpty — 빈칸(null)이 '목표까지 매수'다. 0(재원의 0% = 한 주도 안 삼)과
+                                    **반드시 구분**돼야 하므로 0으로 강제하지 말 것. */
+                            <NumInput value={lv.buyPct} disabled={readOnly} allowEmpty
+                              placeholder={siz === 'toTargetCapped' ? '비우면 목표까지' : '비율 %'}
+                              onCommit={(v) => patchLv({ buyPct: v === null ? null : Math.min(100, Math.max(0, v)) })} />
+                          )}
+                          {SIZING_USES_AMOUNT.includes(siz) && (
+                            <NumInput value={numOf(lv.amount) || ''} disabled={readOnly} placeholder="주문 금액(원)"
+                              onCommit={(v) => patchLv({ amount: Math.max(0, v) })} />
+                          )}
+                          {siz === 'restoreBase' && (
+                            <p className="text-[10px] text-sky-300/80 leading-relaxed">
+                              기준 평가액까지 되돌립니다 — 기준축은 아래 <b>기준 평가액 축</b>에서 정합니다.
+                              재원이 모자라면 <b>가능한 수량까지 부분 체결</b>하고 복원율을 로그에 남깁니다.
+                            </p>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                       <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`}
                         disabled={readOnly || dipOf(active).levels.length >= MAX_BT_DIP_LEVELS}
                         onClick={() => {
@@ -3548,7 +3840,7 @@ export default function BacktestPage({
                       {/* ── 매도 시그널 (저점 대비 반등) ── */}
                       <div className="grid grid-cols-[1fr_1fr] gap-2 mt-2">
                         <span className={LABEL}>매도 시그널 — 저점 대비 반등 (%)</span>
-                        <span className={LABEL}>이때 매도 비율 (목표 초과분의 %)</span>
+                        <span className={LABEL}>이때 얼마를 팔 것인가 (A-1)</span>
                       </div>
                       {dipOf(active).sellLevels.length === 0 && (
                         <p className="text-[10px] text-gray-500 leading-relaxed">
@@ -3557,35 +3849,48 @@ export default function BacktestPage({
                           대금은 예수금으로 갑니다.
                         </p>
                       )}
-                      {dipOf(active).sellLevels.map((lv, i) => (
-                        <div key={`s${i}`} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-                          <NumInput value={lv.rise} disabled={readOnly}
-                            onCommit={(v) => patchActive({
-                              dip: {
-                                ...dipOf(active),
-                                sellLevels: dipOf(active).sellLevels.map((x, j) => (j === i ? { ...x, rise: Math.min(1000, Math.max(0.1, v)) } : x)),
-                              },
-                            })} />
-                          {/* ⚠️ 빈칸(null) = '목표까지 전량 매도'(종전 동작). 0(초과분의 0% = 안 팜)과 구분된다. */}
-                          <NumInput value={lv.sellPct} disabled={readOnly} allowEmpty placeholder="목표까지 전량"
-                            onCommit={(v) => patchActive({
-                              dip: {
-                                ...dipOf(active),
-                                sellLevels: dipOf(active).sellLevels.map((x, j) => (j === i
-                                  ? { ...x, sellPct: v === null ? null : Math.min(100, Math.max(0, v)) }
-                                  : x)),
-                              },
-                            })} />
-                          <button className="p-1 text-gray-600 hover:text-red-400 shrink-0 disabled:opacity-30"
-                            title="이 매도 단계 삭제"
-                            disabled={readOnly}
-                            onClick={() => patchActive({
-                              dip: { ...dipOf(active), sellLevels: dipOf(active).sellLevels.filter((_, j) => j !== i) },
-                            })}>
-                            <Trash2 size={12} />
-                          </button>
+                      {dipOf(active).sellLevels.map((lv, i) => {
+                        const siz = sellSizingOf(lv);
+                        const patchLv = (patch) => patchActive({
+                          dip: {
+                            ...dipOf(active),
+                            sellLevels: dipOf(active).sellLevels.map((x, j) => (j === i ? { ...x, ...patch } : x)),
+                          },
+                        });
+                        return (
+                        <div key={`s${i}`} className="flex flex-col gap-1 border-b border-gray-800/60 pb-1.5">
+                          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                            <NumInput value={lv.rise} disabled={readOnly}
+                              onCommit={(v) => patchLv({ rise: Math.min(1000, Math.max(0.1, v)) })} />
+                            <select className={INPUT} value={siz} disabled={readOnly}
+                              onChange={(e) => patchLv({
+                                sizing: e.target.value,
+                                ...(SIZING_USES_PCT.includes(e.target.value) ? {} : { sellPct: null }),
+                              })}>
+                              {SELL_SIZING_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                            <button className="p-1 text-gray-600 hover:text-red-400 shrink-0 disabled:opacity-30"
+                              title="이 매도 단계 삭제"
+                              disabled={readOnly}
+                              onClick={() => patchActive({
+                                dip: { ...dipOf(active), sellLevels: dipOf(active).sellLevels.filter((_, j) => j !== i) },
+                              })}>
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                          {SIZING_USES_PCT.includes(siz) && (
+                            /* ⚠️ 빈칸(null) = '목표까지 전량 매도'(종전 동작). 0(초과분의 0% = 안 팜)과 구분된다. */
+                            <NumInput value={lv.sellPct} disabled={readOnly} allowEmpty
+                              placeholder={siz === 'pctOfExcess' ? '비우면 목표까지 전량' : '비율 %'}
+                              onCommit={(v) => patchLv({ sellPct: v === null ? null : Math.min(100, Math.max(0, v)) })} />
+                          )}
+                          {SIZING_USES_AMOUNT.includes(siz) && (
+                            <NumInput value={numOf(lv.amount) || ''} disabled={readOnly} placeholder="주문 금액(원)"
+                              onCommit={(v) => patchLv({ amount: Math.max(0, v) })} />
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                       <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`}
                         disabled={readOnly || dipOf(active).sellLevels.length >= MAX_BT_SELL_LEVELS}
                         onClick={() => {
@@ -3716,6 +4021,210 @@ export default function BacktestPage({
                         ‘목표까지’</b>(매수=목표 미달액 전부 / 매도=초과분 전량)이고, 채우면 그 비율만큼만 매매합니다.
                         같은 날 두 단계가 함께 발동하면 비율은 합산됩니다.
                       </p>
+
+                      {/* ── A-3. 시그널 이탈 한도 ── */}
+                      <div className="flex flex-col gap-1 border-t border-gray-800 pt-2 mt-1">
+                        <div className="flex items-center gap-1">
+                          <span className={LABEL}>시그널 이탈 한도 (±%p)</span>
+                          <Hint width={380}>
+                            <p>
+                              시그널 매매 <b className="text-gray-300">후</b> 그 종목 비중이 목표 ±이 값(%포인트)을
+                              넘지 않도록 <b className="text-gray-300">주문을 축소</b>합니다. 목표 캡을 푼(A-2) 모드에서
+                              유일하게 남는 안전장치입니다.
+                            </p>
+                            <p className="mt-1">
+                              예) 목표 80% · 한도 5%p → 매수는 85%까지, 매도는 75%까지만 움직입니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ 축소되면 로그에 <b className="text-gray-400">축소 전 주문액 · 축소 후 · 사유
+                              CAP_DEVIATION</b>이 남습니다. 0이면 한도 없음(기본).
+                            </p>
+                          </Hint>
+                        </div>
+                        <NumInput value={numOf(dipOf(active).deviationCap) || ''} disabled={readOnly} placeholder="0 = 한도 없음"
+                          onCommit={(v) => patchActive({ dip: { ...dipOf(active), deviationCap: Math.max(0, v) } })} />
+                      </div>
+
+                      {/* ── A-4. 기준 평가액 축 + 폭주 방지 ── */}
+                      <div className="flex flex-col gap-1 border-t border-gray-800 pt-2">
+                        <div className="flex items-center gap-1">
+                          <span className={LABEL}>기준 평가액 축 (복원·초과분 모드용)</span>
+                          <Hint width={400}>
+                            <p>
+                              <b className="text-gray-300">기준 평가액 복원</b>(매수)과
+                              <b className="text-gray-300"> 기준 평가액 초과분</b>(매도)이 무엇을 기준으로 삼을지입니다.
+                              종목마다 다르게 쓰려면 <b className="text-gray-300">⑥ 종목</b>의 기준축 칸에서 덮어씁니다.
+                            </p>
+                            <p className="mt-1 text-amber-300/90">
+                              ⚠️ 복원 모드는 <b>하락이 이어지면 요구 금액이 계속 커져 재원이 고갈되는 구조</b>입니다.
+                              아래 두 장치로 폭주를 막으세요.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ <b className="text-gray-400">복원 후 기준 리셋</b> — 체결 시점 평가액으로 기준을 옮겨
+                              같은 자리에서 반복 복원하지 않게 합니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ <b className="text-gray-400">같은 기준 재사용 상한</b> — 같은 기준 평가액으로 N회까지만
+                              복원을 시도합니다(초과분은 CAP_BASE_REUSE).
+                            </p>
+                          </Hint>
+                        </div>
+                        <select className={INPUT} value={dipOf(active).baseline.axis} disabled={readOnly}
+                          onChange={(e) => patchActive({ dip: { ...dipOf(active), baseline: { ...dipOf(active).baseline, axis: e.target.value } } })}>
+                          {BASE_AXIS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                        </select>
+                        {dipOf(active).baseline.axis === 'manual' && (
+                          <NumInput value={numOf(dipOf(active).baseline.amount) || ''} disabled={readOnly} placeholder="기준 금액(원)"
+                            onCommit={(v) => patchActive({ dip: { ...dipOf(active), baseline: { ...dipOf(active).baseline, amount: Math.max(0, v) } } })} />
+                        )}
+                        <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+                          <input type="checkbox" checked={dipOf(active).baseline.resetOnFill} disabled={readOnly}
+                            onChange={(e) => patchActive({ dip: { ...dipOf(active), baseline: { ...dipOf(active).baseline, resetOnFill: e.target.checked } } })} />
+                          복원 체결 후 기준축을 그 시점 평가액으로 리셋
+                        </label>
+                        <div className="grid grid-cols-[1fr_1fr] gap-2">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-600">같은 기준 재사용 상한 (회)</span>
+                            <NumInput value={numOf(dipOf(active).baseline.maxReuse) || ''} disabled={readOnly} placeholder="0 = 무제한"
+                              onCommit={(v) => patchActive({ dip: { ...dipOf(active), baseline: { ...dipOf(active).baseline, maxReuse: Math.max(0, Math.round(v)) } } })} />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-600">종목별 누적 시그널 매수 한도</span>
+                            <select className={INPUT} value={dipOf(active).buyCapMode} disabled={readOnly}
+                              onChange={(e) => patchActive({ dip: { ...dipOf(active), buyCapMode: e.target.value } })}>
+                              <option value="none">제한 없음</option>
+                              <option value="amount">금액(원)</option>
+                              <option value="pctOfInitial">초기 투자금의 %</option>
+                            </select>
+                          </div>
+                        </div>
+                        {dipOf(active).buyCapMode !== 'none' && (
+                          <NumInput value={numOf(dipOf(active).buyCapValue) || ''} disabled={readOnly}
+                            placeholder={dipOf(active).buyCapMode === 'amount' ? '종목당 누적 상한(원)' : '초기 투자금의 %'}
+                            onCommit={(v) => patchActive({ dip: { ...dipOf(active), buyCapValue: Math.max(0, v) } })} />
+                        )}
+                      </div>
+
+                      {/* ── A-6. 동일 영업일 다중 발동 재원 배분 ── */}
+                      <div className="flex flex-col gap-1 border-t border-gray-800 pt-2">
+                        <div className="flex items-center gap-1">
+                          <span className={LABEL}>같은 날 여러 종목이 발동하면 (A-6)</span>
+                          <Hint width={400}>
+                            <p>
+                              같은 영업일에 두 종목 이상이 발동하고 재원이 모자라면, 먼저 처리된 종목이 재원을
+                              대부분 소진해 <b className="text-gray-300">결과가 ⑥ 종목 나열 순서라는 임의의 값에
+                              좌우</b>됩니다.
+                            </p>
+                            <p className="mt-1">
+                              <b className="text-gray-300">가중 배분</b>을 고르면 가중치를 정규화해 나누고, 필요액을
+                              넘긴 몫은 <b className="text-gray-300">남은 종목에 다시 배분</b>합니다(워터폴, 최대 10회).
+                              가중치가 같으면 ⑥ 등록 순서로 타이브레이크해 <b className="text-gray-300">항상 같은 결과</b>가 나옵니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ 최소 유보 현금·현금 바닥선은 <b className="text-gray-400">배분 전에 재원에서 먼저 차감</b>됩니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ 배분액이 1주 값(또는 최소 주문)에 미달하면 그 종목은 빠지고 그 몫이 재배분됩니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ <b className="text-gray-400">매도 동시 발동은 재원 제약이 없어</b> 배분 없이 각각 독립 처리합니다.
+                            </p>
+                          </Hint>
+                        </div>
+                        <div className="flex gap-1">
+                          {[['sequential', '순차 처리 (기본)'], ['weighted', '가중 배분']].map(([v, l]) => (
+                            <button key={v} disabled={readOnly}
+                              className={`${BTN} flex-1 ${dipOf(active).alloc.mode === v ? 'text-sky-200 border-sky-600 bg-sky-900/40' : 'text-gray-400 border-gray-700 hover:bg-gray-800'}`}
+                              onClick={() => patchActive({ dip: { ...dipOf(active), alloc: { ...dipOf(active).alloc, mode: v } } })}>{l}</button>
+                          ))}
+                        </div>
+                        {dipOf(active).alloc.mode === 'weighted' && (
+                          <>
+                            <select className={INPUT} value={dipOf(active).alloc.basis} disabled={readOnly}
+                              onChange={(e) => patchActive({ dip: { ...dipOf(active), alloc: { ...dipOf(active).alloc, basis: e.target.value } } })}>
+                              {Object.entries(ALLOC_BASIS_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                            <select className={INPUT} value={dipOf(active).alloc.leftover} disabled={readOnly}
+                              onChange={(e) => patchActive({ dip: { ...dipOf(active), alloc: { ...dipOf(active).alloc, leftover: e.target.value } } })}>
+                              {Object.entries(ALLOC_LEFTOVER_LABEL).map(([v, l]) => <option key={v} value={v}>내림 잔액 — {l}</option>)}
+                            </select>
+                            <div className="grid grid-cols-[1fr_1fr] gap-2">
+                              <NumInput value={numOf(dipOf(active).alloc.minOrderAmount) || ''} disabled={readOnly} placeholder="최소 주문 금액(원)"
+                                onCommit={(v) => patchActive({ dip: { ...dipOf(active), alloc: { ...dipOf(active).alloc, minOrderAmount: Math.max(0, v) } } })} />
+                              <NumInput value={numOf(dipOf(active).alloc.minOrderQty) || ''} disabled={readOnly} placeholder="최소 주문 수량(주)"
+                                onCommit={(v) => patchActive({ dip: { ...dipOf(active), alloc: { ...dipOf(active).alloc, minOrderQty: Math.max(0, Math.round(v)) } } })} />
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* ── C. 두 레이어의 충돌 규칙 + 휩소 방지 ── */}
+                      <div className="flex flex-col gap-1 border-t border-gray-800 pt-2">
+                        <div className="flex items-center gap-1">
+                          <span className={LABEL}>정기 리밸런싱과 겹칠 때 (C)</span>
+                          <Hint width={400}>
+                            <p>
+                              시그널 체결은 <b className="text-gray-300">절대로 다른 종목의 수량을 건드리지 않습니다</b>
+                              (해당 종목 단독 매매). 목표 비중 복원은 ③에서 지정한 정기 리밸런싱일에만 일어납니다.
+                            </p>
+                            <p className="mt-1">
+                              같은 날 둘이 겹칠 때의 순서만 여기서 정합니다 —
+                              <b className="text-gray-300"> 시그널 우선</b>(기본)이면 시그널이 먼저 맞춘 뒤 정기가
+                              돌아 자연히 할 일이 없어집니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ <b className="text-gray-400">쿨다운</b> — 같은 종목이 N영업일 안에 다시 발동하지
+                              않게 막습니다(막힌 발동은 COOLDOWN으로 로그에만 남습니다).
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ <b className="text-gray-400">정기 제외</b> — 시그널로 막 조정한 종목을 곧바로
+                              정기 리밸런싱이 되돌리는 것을 막습니다.
+                            </p>
+                          </Hint>
+                        </div>
+                        <select className={INPUT} value={dipOf(active).conflict} disabled={readOnly}
+                          onChange={(e) => patchActive({ dip: { ...dipOf(active), conflict: e.target.value } })}>
+                          <option value="signalFirst">시그널 우선 (기본)</option>
+                          <option value="regularFirst">정기 리밸런싱 우선</option>
+                          <option value="skipSignal">그날 시그널 무시</option>
+                        </select>
+                        <div className="grid grid-cols-[1fr_1fr] gap-2">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-600">쿨다운 (영업일)</span>
+                            <NumInput value={numOf(dipOf(active).cooldownDays) || ''} disabled={readOnly} placeholder="0 = 없음"
+                              onCommit={(v) => patchActive({ dip: { ...dipOf(active), cooldownDays: Math.max(0, Math.round(v)) } })} />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-600">정기 제외 (영업일)</span>
+                            <NumInput value={numOf(dipOf(active).excludeRegularDays) || ''} disabled={readOnly} placeholder="0 = 없음"
+                              onCommit={(v) => patchActive({ dip: { ...dipOf(active), excludeRegularDays: Math.max(0, Math.round(v)) } })} />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-gray-600">미체결 시 직전 체결가 기준 (D)</span>
+                          <Hint width={360}>
+                            <p>
+                              시그널이 발동했는데 <b className="text-gray-300">체결이 0</b>일 때 직전 체결가(앵커)
+                              축의 기준가를 어떻게 할지입니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ <b className="text-gray-400">유지</b>(기본) — 원래 기준을 그대로 두어 낙폭이 계속 누적됩니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ <b className="text-gray-400">갱신</b> — 그날 종가를 새 기준으로 삼아 같은 자리에서
+                              매번 다시 발동하는 것을 막습니다(대신 낙폭 누적이 끊깁니다).
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ 판정에 쓴 기준가와 그 날짜는 <b className="text-gray-400">항상 로그에 함께</b> 표시됩니다.
+                            </p>
+                          </Hint>
+                        </div>
+                        <select className={INPUT} value={dipOf(active).anchorOnNoFill} disabled={readOnly}
+                          onChange={(e) => patchActive({ dip: { ...dipOf(active), anchorOnNoFill: e.target.value } })}>
+                          <option value="keep">유지 (기본)</option>
+                          <option value="update">그날 종가로 갱신</option>
+                        </select>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -3992,6 +4501,27 @@ export default function BacktestPage({
                             onChange={(e) => patchAsset(a.id, { endDate: e.target.value })} />
                         </label>
                       </div>
+                      {/* A-4-2 — 기준 평가액 축을 **종목별로** 덮어쓴다(비우면 ⑤-b 전역 설정을 따른다).
+                          ⚠️ 복원·초과분 사이징을 실제로 쓰는 시나리오에서만 노출한다 — 안 쓰는 사용자에게는
+                             의미 없는 칸이고, ⑥ 종목 카드가 그만큼 길어진다. */}
+                      {(dipOf(active).levels.some((lv) => buySizingOf(lv) === 'restoreBase')
+                        || dipOf(active).sellLevels.some((lv) => sellSizingOf(lv) === 'excessOverBase')) && (
+                        <div className="grid grid-cols-2 gap-1">
+                          <label className="flex flex-col gap-0.5">
+                            <span className="text-[9px] text-gray-600">기준 평가액 축 (비우면 전역)</span>
+                            <select className={INPUT} value={a.baseAxis || ''} disabled={readOnly}
+                              onChange={(e) => patchAsset(a.id, { baseAxis: e.target.value })}>
+                              <option value="">전역 설정 따름</option>
+                              {BASE_AXIS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                          </label>
+                          <label className="flex flex-col gap-0.5">
+                            <span className="text-[9px] text-gray-600">수동 기준 금액 (원)</span>
+                            <NumInput value={a.baseAmount} disabled={readOnly} allowEmpty placeholder="전역 금액"
+                              onCommit={(v) => patchAsset(a.id, { baseAmount: v })} />
+                          </label>
+                        </div>
+                      )}
                       {/* 데이터 범위 배지 — 조회기간 중간 상장/결측을 눈에 띄게 */}
                       <div className="flex flex-wrap items-center gap-1 text-[9px]">
                         {loading ? (
@@ -4623,6 +5153,16 @@ export default function BacktestPage({
                           <span className="text-[12px] whitespace-nowrap">
                             <span className="text-gray-500">종목 합계 </span>
                             <b className="text-gray-100">{won(m.evalEnd)}</b>
+                          </span>
+                          {/* F-3 — 현금 비중(예수금 ÷ 총자산). 종목 비중이 100%로 정규화돼 있어서
+                              "이 달에 현금이 얼마나 쌓였는가"가 위 목록만으로는 보이지 않는다. */}
+                          <span className="text-[12px] whitespace-nowrap"
+                            title={`현금 ${won(m.cashEnd)} = 예수금 ${won(m.cashTradeEnd)} + 적립 분배금 ${won(m.cashDivEnd)} + 예비금 ${won(m.cashReserveEnd)}`}>
+                            <span className="text-gray-500">현금 비중 </span>
+                            <b className={numOf(m.totalEnd) > 0 && m.cashEnd / m.totalEnd >= 0.3 ? 'text-amber-300' : 'text-gray-300'}>
+                              {numOf(m.totalEnd) > 0 ? `${((m.cashEnd / m.totalEnd) * 100).toFixed(1)}%` : '-'}
+                            </b>
+                            <span className="text-gray-600"> ({won(m.cashEnd)})</span>
                           </span>
                         </div>
                       </div>

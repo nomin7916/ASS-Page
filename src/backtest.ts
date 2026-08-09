@@ -142,6 +142,13 @@ export interface BtAsset {
    * ⚠️ 저장 키는 앱 전체 규약과 같은 **배당락월**이다(지급월 아님).
    */
   divOverride: Record<string, number>;
+  /**
+   * A-4-2 **종목별 기준 평가액 축** 덮어쓰기. `''`(기본)이면 전역 `BtDip.baseline.axis`를 따른다.
+   * ⚠️ `restoreBase`(매수) / `excessOverBase`(매도) 모드에서만 읽는다.
+   */
+  baseAxis: BtBaselineAxis | '';
+  /** `baseAxis==='manual'`일 때 그 종목의 기준 금액(원). null이면 전역 `BtBaseline.amount`. */
+  baseAmount: number | null;
   color: string;
 }
 
@@ -233,6 +240,14 @@ export type BtBuyFunding = 'both' | 'tradeOnly';
 export interface BtDipLevel {
   drop: number;
   buyPct: number | null;
+  /**
+   * 사이징 모드(A-1). **미지정(레거시) = `buyPct===null ? 'toTarget' : 'toTargetCapped'`**.
+   * ⚠️ 이 파생이 하위호환의 전부다 — 레거시 `buyPct:34`가 `pctOfPool`로 떨어지면 목표 캡이
+   *    풀려 저장된 시나리오의 결과가 통째로 달라진다(요구사항 5 위반).
+   */
+  sizing?: BtBuySizing;
+  /** `sizing==='fixedAmount'`일 때의 주문 금액(원). 그 외 모드에서는 무시된다. */
+  amount?: number;
 }
 
 /**
@@ -248,6 +263,135 @@ export interface BtDipLevel {
 export interface BtSellLevel {
   rise: number;
   sellPct: number | null;
+  /**
+   * 사이징 모드(A-1). **미지정(레거시) = `sellPct===null ? 'toTarget' : 'pctOfExcess'`**.
+   * ⚠️ 매수와 같은 이유로 이 파생이 하위호환의 전부다.
+   */
+  sizing?: BtSellSizing;
+  /** `sizing==='fixedAmount'`일 때의 주문 금액(원). */
+  amount?: number;
+}
+
+/* ── A-1/A-2. 시그널 사이징 모드 — "얼마를 사고팔지"를 목표 격차에서 분리한다 ──────────
+ *
+ * 문제(사용자 실측): 시그널이 발동해도 그 종목 비중이 이미 목표를 넘고 있으면 `목표까지 = ₩0`이라
+ * 매수가 통째로 미체결되고, 목표 이하면 `목표 초과분 = ₩0`이라 매도가 미체결된다. 두 종목이
+ * 동반 하락하면 평가액은 줄어도 **비중은 그대로**라 하락이 매수 여력을 만들지 못한다
+ * → 전 구간 체결이 매도뿐이고 예수금이 단조 증가하는 편향이 생긴다.
+ *
+ * 해법: 시그널은 **전술 레이어**(그 종목 단독 매매), 목표 비중 복원은 **정기 리밸런싱 레이어**로
+ * 완전히 분리한다. 아래 모드 중 '목표 계열'이 아닌 것을 고르면 **목표 비중 캡을 적용하지 않는다**(A-2).
+ * =========================================================================== */
+
+/**
+ * 매수 시그널 사이징.
+ *  toTarget       — 목표 미달액 전부(재원 한도 내). 목표 캡이 곧 정의. **레거시 `buyPct:null`**
+ *  toTargetCapped — `min(목표 미달액, 재원 × N%)`. **레거시 `buyPct:number`의 정확한 의미**
+ *  pctOfPool      — `매수 재원 × N%`. **목표 캡 없음**
+ *  fixedAmount    — 고정 금액. **목표 캡 없음**
+ *  pctOfTotal     — `(종목 평가액 합계 + 예수금) × N%`. **목표 캡 없음**
+ *  restoreBase    — 기준 평가액 복원(A-4). **목표 캡 없음**
+ *
+ * ⚠️ `toTarget`/`toTargetCapped`가 **레거시 계열**이다 — 이 둘만 목표 캡을 쓴다.
+ *    저장된 시나리오는 반드시 이 둘 중 하나로 마이그레이션돼야 결과가 1원도 달라지지 않는다.
+ */
+export type BtBuySizing =
+  | 'toTarget' | 'toTargetCapped' | 'pctOfPool' | 'fixedAmount' | 'pctOfTotal' | 'restoreBase';
+
+/**
+ * 매도 시그널 사이징.
+ *  toTarget       — 목표 초과분 전량. **레거시 `sellPct:null`**
+ *  pctOfExcess    — `목표 초과분 × N%`. **레거시 `sellPct:number`**
+ *  pctOfEval      — `보유 평가액 × N%`. **목표 캡 없음**
+ *  pctOfQty       — `보유 수량 × N%`(주). **목표 캡 없음**
+ *  fixedAmount    — 고정 금액. **목표 캡 없음**
+ *  excessOverBase — 기준 평가액 초과분(A-5). **목표 캡 없음**
+ *
+ * ⚠️ 목표 캡이 없어도 **보유 수량 한도는 항상** 걸린다(공매도 없음). 보유가 0이면 `NO_POSITION`.
+ */
+export type BtSellSizing =
+  | 'toTarget' | 'pctOfExcess' | 'pctOfEval' | 'pctOfQty' | 'fixedAmount' | 'excessOverBase';
+
+/**
+ * A-4/A-5 기준 평가액 축 — '복원/초과분'이 무엇을 기준으로 하는가.
+ *  lastFill     — 직전 체결 시점 평가액(체결 직후 `수량 × 그날 종가`)
+ *  prevMonthEnd — 전월 마지막 영업일 평가액
+ *  peakEval     — 기간 내 최고 평가액(관측일 기준으로 갱신)
+ *  manual       — 사용자가 적어 넣은 금액
+ * ⚠️ 종목별로 덮어쓸 수 있다(`BtAsset.baseAxis`) — 비어 있으면 전역 설정을 따른다.
+ */
+export type BtBaselineAxis = 'lastFill' | 'prevMonthEnd' | 'peakEval' | 'manual';
+
+/**
+ * A-6 동일 영업일 다중 발동 시 재원 배분.
+ *  sequential — 목표 매수액이 큰 종목부터 순차 처리(**기본값 = 종전 동작**)
+ *  weighted   — 가중치 정규화 후 워터폴 배분(순서 무관·결정론)
+ */
+export type BtAllocMode = 'sequential' | 'weighted';
+
+/** A-6-2 가중 배분의 기준. */
+export type BtAllocBasis = 'targetRatio' | 'need' | 'underGap';
+
+/** A-6-4 내림 잔액 처리. */
+export type BtAllocLeftover = 'cash' | 'topWeight' | 'refill';
+
+/**
+ * C-2 같은 날 시그널과 정기 리밸런싱이 겹칠 때의 순서.
+ *  signalFirst  — 시그널 → 정기(**기본값 = 종전 동작**, KIND_ORDER signal < rebal)
+ *  regularFirst — 정기 → 시그널
+ *  skipSignal   — 그날 시그널을 통째로 무시
+ */
+export type BtSignalConflict = 'signalFirst' | 'regularFirst' | 'skipSignal';
+
+/**
+ * B. 목표 비중(%)의 분모.
+ *  equity     — 종목 평가액 합계(**기본값 = 종전 동작**)
+ *  equityCash — 종목 평가액 합계 + 예수금(= 총자산). 가격이 내리면 예수금 몫이 언더타깃으로 잡혀
+ *               정기 리밸런싱일에 실제로 재투입이 일어난다.
+ */
+export type BtRatioBase = 'equity' | 'equityCash';
+
+/**
+ * D. 시그널이 발동했으나 **체결이 0**일 때 직전 체결가(앵커) 축의 기준가를 어떻게 할 것인가.
+ *  keep   — 유지(**기본값 = 종전 동작**)
+ *  update — 그날 종가로 갱신(다음 판정 기준이 그날 종가가 된다)
+ */
+export type BtAnchorOnNoFill = 'keep' | 'update';
+
+/** F-1 미체결·축소 사유 코드. */
+export type BtSignalReason =
+  '' | 'CAP_TARGET' | 'CAP_DEVIATION' | 'NO_CASH' | 'PARTIAL_NO_CASH'
+  | 'ROUNDING' | 'COOLDOWN' | 'NO_POSITION' | 'CAP_ASSET_BUDGET' | 'CAP_BASE_REUSE' | 'NO_PRICE';
+
+/** A-4 기준 평가액 축 설정(전역 기본). */
+export interface BtBaseline {
+  axis: BtBaselineAxis;
+  /** `axis==='manual'`일 때 전역 기준 금액(원). 종목별 `BtAsset.baseAmount`가 우선. */
+  amount: number;
+  /**
+   * A-4-5 폭주 방지 ①: 복원 체결 후 기준축을 그 시점 평가액으로 **리셋**할지.
+   * false(기본)면 기준을 유지해 다음 하락에서 또 복원을 시도한다.
+   */
+  resetOnFill: boolean;
+  /**
+   * A-4-5 폭주 방지 ②: **같은 기준 평가액**으로 복원을 시도할 수 있는 최대 횟수. 0 = 무제한(기본).
+   * 초과하면 `CAP_BASE_REUSE`로 미체결 처리한다.
+   */
+  maxReuse: number;
+}
+
+/**
+ * A-6 재원 배분 규칙.
+ * ⚠️ 기본값(`sequential`)은 종전 동작과 **문자 그대로 동일**하다 — 배분 코드를 타지 않는다.
+ */
+export interface BtAlloc {
+  mode: BtAllocMode;
+  basis: BtAllocBasis;
+  leftover: BtAllocLeftover;
+  /** A-6-5 최소 주문 금액(원). 0 = 제한 없음. */
+  minOrderAmount: number;
+  /** A-6-5 최소 주문 수량(주). 0 = 제한 없음. */
+  minOrderQty: number;
 }
 
 /**
@@ -321,6 +465,40 @@ export interface BtDip {
   anchorSellLevels: BtAnchorLevel[];
   /** 앵커 기준 소스. 기본 'lastFill'. */
   anchorSource: BtAnchorSource;
+  /* ── A-3 · A-4 · A-6 · C · D (전부 기본값 = 종전 동작) ────────────────────── */
+  /**
+   * A-3 **시그널 이탈 한도(±Xp%)**. 시그널 매매 **후** 그 종목 비중이 목표 ±X%p를 넘지 않도록
+   * 주문을 축소한다. 0 = 한도 없음(기본).
+   * ⚠️ 목표 캡을 푼(A-2) 모드에서 유일하게 남는 안전장치다 — 축소되면 `CAP_DEVIATION`을 남긴다.
+   */
+  deviationCap: number;
+  /** A-4/A-5 기준 평가액 축 설정. */
+  baseline: BtBaseline;
+  /**
+   * A-4-5 폭주 방지 ③: **종목별 누적 시그널 매수 한도**.
+   *  none          — 제한 없음(기본)
+   *  amount        — 종목당 누적 시그널 매수 대금 상한(원)
+   *  pctOfInitial  — 초기 투자금의 N%
+   * 초과분은 잘라 부분 체결하고 `CAP_ASSET_BUDGET`을 남긴다.
+   */
+  buyCapMode: 'none' | 'amount' | 'pctOfInitial';
+  buyCapValue: number;
+  /** A-6 재원 배분 규칙. */
+  alloc: BtAlloc;
+  /** C-2 같은 날 정기 리밸런싱과 겹칠 때의 순서. 기본 'signalFirst'. */
+  conflict: BtSignalConflict;
+  /**
+   * C-3 **쿨다운(영업일)** — 같은 종목이 N영업일 안에 다시 발동하지 않게 막는다. 0 = 없음(기본).
+   * 막힌 발동은 `COOLDOWN` 사유로 로그에만 남는다.
+   */
+  cooldownDays: number;
+  /**
+   * C-3 **최근 시그널 종목 정기 리밸런싱 제외(N영업일)**. 0 = 없음(기본).
+   * 시그널로 막 조정한 종목을 곧바로 정기 리밸런싱이 되돌리는 것을 막는다.
+   */
+  excludeRegularDays: number;
+  /** D 미체결 시 앵커 기준가 갱신 여부. 기본 'keep'. */
+  anchorOnNoFill: BtAnchorOnNoFill;
 }
 
 /**
@@ -423,7 +601,25 @@ export interface BtConfig {
    */
   extraCash: number;
   targetMode: BtTargetMode;
+  /**
+   * B. 목표 비중(%)의 분모. 기본 `'equity'`(종목 평가액 합계 = 종전 동작).
+   *
+   * ⚠️ 여기서 고른 분모가 **정기 리밸런싱 · 시그널 목표 · 리밸런싱 밴드 판정 · 현금 바닥선 기준**에
+   *    일관되게 쓰인다(전부 `targetBaseAt` 한 함수를 지난다). 화면 비중 표시에도 라벨을 붙여
+   *    어떤 분모인지 밝힌다.
+   * ⚠️ 초기 매수만은 예외로 분모가 **초기 투자금**이다(그 시점 평가액이 0이라 목표가 전부 0이 되는
+   *    자기잠금을 피하기 위한 기존 규약 — 분모 옵션과 무관하게 유지된다).
+   */
+  ratioBase: BtRatioBase;
   rounding: BtRounding;
+  /**
+   * E. **최소 유보 현금**(원). 기본 0 = 없음(종전 동작).
+   * 매수가 끝난 뒤 총 예수금이 이 금액 아래로 내려가지 않게 매수액을 줄인다.
+   * ⚠️ 현금 바닥선(`cashFloorPct`)과 **둘 중 큰 값**이 실제 하한이 된다(같은 자리에서 합쳐진다).
+   * ⚠️ 바닥선과 마찬가지로 `allowNegativeCash`보다 **우선**하고, 매도·분배금 재투자에는 걸리지 않는다.
+   * ⚠️ A-6-7 — 가중 배분의 재원에서도 **배분 전에 먼저 차감**된다.
+   */
+  minCashReserve: number;
   /**
    * 정기 리밸런싱 스위치(③ 체크박스). 기본 true = 종전 동작.
    *
@@ -808,6 +1004,73 @@ export interface BtSignalEvent {
   reallocAmount: number;
   /** 체결이 없었거나 잘린 사유(표시용). */
   note: string;
+  /* ── F-1 상세 로그 (전부 기본값이 있으므로 옛 소비자는 그대로 동작한다) ────────── */
+  /**
+   * 이 발동에 적용된 사이징 모드. 레거시 계열이면 `'toTarget'`/`'toTargetCapped'`
+   * (매도는 `'toTarget'`/`'pctOfExcess'`)로 채워진다.
+   */
+  sizing: BtBuySizing | BtSellSizing | '';
+  /**
+   * 사이징 계산식의 **밑변**과 그 종류. 화면·CSV가 `밑변 × 비율 = 금액`을 그대로 재현한다.
+   *  pool=매수 재원 / total=총자산 / excess=목표 초과분 / eval=보유 평가액 / qty=보유 수량(주) /
+   *  fixed=고정 금액 / base=기준 평가액 / target=목표 미달액
+   */
+  basisKind: 'pool' | 'total' | 'excess' | 'eval' | 'qty' | 'fixed' | 'base' | 'target' | '';
+  basisAmount: number;
+  /** 캡·한도를 적용하기 **전**의 산출 주문액. `planned`는 캡 적용 후 값이다. */
+  ordered: number;
+  /** 적용된 캡 코드 목록(`CAP_TARGET`·`CAP_DEVIATION`·`CAP_ASSET_BUDGET`·`NO_CASH` 등). */
+  caps: BtSignalReason[];
+  /** F-1 대표 사유 코드. 체결이 온전하면 `''`. */
+  reason: BtSignalReason;
+  /** 기준가(`ref`)가 만들어진 날짜. extreme=고점/저점이 선 날, anchor=`anchorDate`와 같다. */
+  refDate: string;
+  /** A-4/A-5 기준 평가액(모드가 restoreBase·excessOverBase일 때만). */
+  baseEval: number;
+  /** A-4-4 복원율(%) = 체결액 ÷ 필요액 × 100. 복원 모드가 아니면 0. */
+  restoreRate: number;
+  /** 목표 주문액 대비 미달액(= planned − tradeAmount, 0 이상). */
+  shortfall: number;
+  /** A-6 가중 배분에서 이 종목이 받은 정규화 가중치(%)와 배분액. 순차 처리면 0. */
+  allocWeight: number;
+  allocAmount: number;
+}
+
+/**
+ * A-6-8 **동일 영업일 다중 발동 배분 표** 1행.
+ * ⚠️ 매도는 재원 제약이 없어 배분 없이 각각 독립 처리하므로 이 표에 나타나지 않는다.
+ */
+export interface BtAllocRow {
+  assetId: string;
+  code: string;
+  name: string;
+  /** 사이징·캡을 마친 목표 매수액 */
+  need: number;
+  /** 정규화 가중치(%) */
+  weight: number;
+  /** 워터폴 배분액 */
+  alloc: number;
+  /** 실제 체결 수량 / 금액 */
+  qty: number;
+  amount: number;
+  /** need − amount (0 이상) */
+  shortfall: number;
+  reason: BtSignalReason;
+}
+
+/** A-6-8 배분 블록(하루 = 한 블록). */
+export interface BtAllocBlock {
+  date: string;
+  basis: BtAllocBasis;
+  leftoverRule: BtAllocLeftover;
+  /** 최소 유보 현금(E)을 차감한 뒤의 배분 재원 총액 */
+  pool: number;
+  totalFilled: number;
+  leftoverCash: number;
+  /** 워터폴 반복 횟수 / 2회차 이후 재배분된 금액 합 */
+  iterations: number;
+  redistributed: number;
+  rows: BtAllocRow[];
 }
 
 export interface BtMonth {
@@ -1037,6 +1300,21 @@ export interface BtResult {
     bandSkipAmount: number;
     /** 시그널 리밸런싱(매수·매도) 발동 로그(시간순). 발동일 = 체결일. */
     signalEvents: BtSignalEvent[];
+    /**
+     * A-6-8 동일 영업일 다중 발동 배분 블록(시간순). `alloc.mode==='sequential'`(기본)이면 항상 빈 배열.
+     */
+    allocBlocks: BtAllocBlock[];
+    /**
+     * F-2 시그널 집계 — 매수/매도 **분리** 발동·체결 건수와 미체결 사유별 건수.
+     * ⚠️ carrier 행(= 그 종목·그날의 대표 행)만 센다. 같은 날 겹친 단계까지 세면 건수가 부풀어
+     *    화면의 '체결 7/9건'이 실제 매매 건수와 어긋난다.
+     */
+    signalStats: {
+      buyFired: number; buyFilled: number;
+      sellFired: number; sellFilled: number;
+      /** 사유 코드 → 건수(체결 0건인 carrier 행 기준). */
+      reasons: Record<string, number>;
+    };
     /** 매수가 재원 한도('예수금 부족'·'바닥선')로 잘린 달의 수 */
     shortfallMonths: number;
   };
@@ -1317,8 +1595,77 @@ export function makeBtAsset(partial: Partial<BtAsset> = {}, idx = 0): BtAsset {
     startDate: isIsoDate(partial.startDate) ? partial.startDate : '',
     endDate: isIsoDate(partial.endDate) ? partial.endDate : '',
     divOverride: normalizeDivOverride(partial.divOverride),
+    // ⚠️ 레거시(필드 부재)는 '' / null — 전역 기준축을 따르는 상태다. 여기에 기본 축을 박으면
+    //    전역 설정을 바꿔도 종목이 따라오지 않는다.
+    baseAxis: BASE_AXES.includes(partial.baseAxis as BtBaselineAxis) ? (partial.baseAxis as BtBaselineAxis) : '',
+    baseAmount: asNumOrNull(partial.baseAmount),
     color: asStr(partial.color) || BT_COLORS[idx % BT_COLORS.length],
   };
+}
+
+const BASE_AXES: BtBaselineAxis[] = ['lastFill', 'prevMonthEnd', 'peakEval', 'manual'];
+const BUY_SIZINGS: BtBuySizing[] = ['toTarget', 'toTargetCapped', 'pctOfPool', 'fixedAmount', 'pctOfTotal', 'restoreBase'];
+const SELL_SIZINGS: BtSellSizing[] = ['toTarget', 'pctOfExcess', 'pctOfEval', 'pctOfQty', 'fixedAmount', 'excessOverBase'];
+
+/**
+ * **레거시 파생 규칙** — 저장된 단계에 `sizing`이 없을 때의 모드.
+ * ⚠️ 이 두 함수가 요구사항 5(“저장된 기존 시나리오의 결과 수치가 바뀌면 안 된다”)의 전부다.
+ *    `buyPct:34`를 `pctOfPool`로 떨어뜨리면 목표 캡이 풀려 결과가 통째로 달라진다.
+ */
+export const legacyBuySizing = (buyPct: number | null | undefined): BtBuySizing =>
+  (buyPct === null || buyPct === undefined ? 'toTarget' : 'toTargetCapped');
+export const legacySellSizing = (sellPct: number | null | undefined): BtSellSizing =>
+  (sellPct === null || sellPct === undefined ? 'toTarget' : 'pctOfExcess');
+
+/** 목표 캡을 **쓰는** 모드인가(A-2). 이 계열이 아니면 목표 비중과 무관하게 체결한다. */
+/** `buyUsesTargetCap`/`sellUsesTargetCap` 시그니처 — 인라인 함수 타입을 쓰면 스코프 검사기가 파라미터를 못 본다. */
+export type LegacyCapCheck = (s: any) => boolean;
+export const buyUsesTargetCap = (s: BtBuySizing): boolean => s === 'toTarget' || s === 'toTargetCapped';
+export const sellUsesTargetCap = (s: BtSellSizing): boolean => s === 'toTarget' || s === 'pctOfExcess';
+
+/**
+ * A-6-3 **워터폴 배분** — 가중치대로 나눠 주되 각자의 필요액에서 자르고, 남은 재원을 다시 나눈다.
+ *
+ *  1) 살아 있는 종목의 가중치를 정규화한다.
+ *  2) 배분액 = 잔여 재원 × 정규화 가중치.
+ *  3) 필요액을 넘으면 필요액까지만 쓰고 그 종목을 집합에서 뺀 뒤 1)로 되돌아간다.
+ *  4) 모두 채우거나 재원이 소진되면 종료(최대 `maxIter`회 — 무한 루프 방지).
+ *
+ * ⚠️ **순수 함수**로 분리한 이유는 T11~T14(순서 무관·재배분·실수량)가 이 한 함수의 산술이기 때문이다.
+ *    호출부는 `items`를 ⑥ 종목 등록 순서로 넘긴다(A-6-6 결정론 — 가중치가 같아도 결과가 고정된다).
+ */
+export function waterfallAllocate(
+  items: { id: string; weight: number; need: number }[],
+  pool: number,
+  maxIter = 10,
+): { alloc: Record<string, number>; leftover: number; iterations: number; redistributed: number } {
+  const alloc: Record<string, number> = {};
+  for (const it of items) alloc[it.id] = 0;
+  let remaining = Number.isFinite(pool) ? Math.max(0, pool) : 0;
+  let iterations = 0;
+  let redistributed = 0;
+  const EPS = 1e-6;
+  let active = items.filter(it => it.need > EPS && it.weight > 0);
+  while (remaining > EPS && active.length > 0 && iterations < maxIter) {
+    iterations++;
+    const W = active.reduce((s, it) => s + it.weight, 0);
+    if (!(W > 0)) break;
+    let used = 0;
+    const next: typeof active = [];
+    for (const it of active) {
+      const share = (remaining * it.weight) / W;
+      const room = it.need - alloc[it.id];
+      const take = Math.min(share, room);
+      if (take > 0) { alloc[it.id] += take; used += take; }
+      if (room - take > EPS) next.push(it);
+    }
+    if (!(used > EPS)) break;
+    remaining -= used;
+    // 2회차부터의 사용액이 곧 '재배분된 금액'이다(T12의 300).
+    if (iterations > 1) redistributed += used;
+    active = next;
+  }
+  return { alloc, leftover: remaining, iterations, redistributed };
 }
 
 function normalizeDivOverride(raw: unknown): Record<string, number> {
@@ -1358,6 +1705,10 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
     initialCapital: Math.max(0, asNum(partial.initialCapital, 0)),
     extraCash: Math.max(0, asNum(partial.extraCash, 0)),
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
+    // ⚠️ 레거시(필드 부재)는 반드시 'equity' — 분모에 예수금이 섞이면 저장된 시나리오의
+    //    모든 목표가 달라진다(요구사항 5).
+    ratioBase: partial.ratioBase === 'equityCash' ? 'equityCash' : 'equity',
+    minCashReserve: Math.max(0, asNum(partial.minCashReserve, 0)),
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
     // ⚠️ 레거시(필드 부재)는 반드시 true — 명시적 false만 정기를 끈다.
     regularOn: partial.regularOn !== false,
@@ -1481,9 +1832,21 @@ function normalizeDipLevels(raw: unknown): BtDipLevel[] {
       buyPct: l?.buyPct !== undefined
         ? asPctOrNull(l.buyPct)
         : (asPctOrNull(l?.unlockPct) || null),
+      // ⚠️ 미지정(레거시)은 반드시 buyPct에서 파생한다 — 여기서 'pctOfPool' 같은 새 모드로
+      //    떨어뜨리면 목표 캡이 풀려 저장된 시나리오의 결과가 통째로 달라진다(요구사항 5).
+      sizing: BUY_SIZINGS.includes(l?.sizing) ? (l.sizing as BtBuySizing) : undefined,
+      amount: Math.max(0, asNum(l?.amount, 0)),
+    }))
+    .map((l: any) => ({
+      drop: l.drop,
+      buyPct: l.buyPct,
+      sizing: (l.sizing ?? legacyBuySizing(l.buyPct)) as BtBuySizing,
+      amount: l.amount,
     }))
     .filter(l => Number.isFinite(l.drop) && l.drop > 0 && l.drop <= 100);
-  if (!arr.length) return DEFAULT_DIP_LEVELS.map(l => ({ ...l }));
+  if (!arr.length) {
+    return DEFAULT_DIP_LEVELS.map(l => ({ ...l, sizing: legacyBuySizing(l.buyPct), amount: 0 }));
+  }
   arr.sort((a, b) => a.drop - b.drop);
   const seen = new Set<number>();
   const out: BtDipLevel[] = [];
@@ -1505,7 +1868,16 @@ function normalizeDipLevels(raw: unknown): BtDipLevel[] {
 function normalizeSellLevels(raw: unknown): BtSellLevel[] {
   const arr = asArr(raw)
     // ⚠️ 레거시는 `sellPct` 필드가 아예 없다 → null(목표까지 전량) = **종전 동작 그대로**.
-    .map((l: any) => ({ rise: asNum(l?.rise, NaN), sellPct: asPctOrNull(l?.sellPct) }))
+    //    `sizing`도 같은 이유로 sellPct에서 파생한다(매수와 동일 규약).
+    .map((l: any) => {
+      const sellPct = asPctOrNull(l?.sellPct);
+      return {
+        rise: asNum(l?.rise, NaN),
+        sellPct,
+        sizing: (SELL_SIZINGS.includes(l?.sizing) ? l.sizing : legacySellSizing(sellPct)) as BtSellSizing,
+        amount: Math.max(0, asNum(l?.amount, 0)),
+      };
+    })
     .filter(l => Number.isFinite(l.rise) && l.rise > 0 && l.rise <= 1000);
   arr.sort((a, b) => a.rise - b.rise);
   const seen = new Set<number>();
@@ -1556,6 +1928,40 @@ function normalizeDip(raw: any): BtDip {
     // ⚠️ 레거시(필드 부재)는 true로 떨어진다 — 재원이 모자랄 때 재조정으로 채우는 것이
     //    사양의 기본 동작이다(사용자 확정 2026-08). 끄려면 명시적으로 false를 저장한다.
     reallocate: raw?.reallocate !== false,
+    // ── A-3 / A-4 / A-6 / C / D — 전부 **레거시 = 무동작** 기본값 ──
+    deviationCap: Math.max(0, asNum(raw?.deviationCap, 0)),
+    baseline: normalizeBaseline(raw?.baseline),
+    buyCapMode: raw?.buyCapMode === 'amount' || raw?.buyCapMode === 'pctOfInitial' ? raw.buyCapMode : 'none',
+    buyCapValue: Math.max(0, asNum(raw?.buyCapValue, 0)),
+    alloc: normalizeAlloc(raw?.alloc),
+    conflict: raw?.conflict === 'regularFirst' || raw?.conflict === 'skipSignal' ? raw.conflict : 'signalFirst',
+    cooldownDays: clampInt(asNum(raw?.cooldownDays, 0), 0, 250),
+    excludeRegularDays: clampInt(asNum(raw?.excludeRegularDays, 0), 0, 250),
+    anchorOnNoFill: raw?.anchorOnNoFill === 'update' ? 'update' : 'keep',
+  };
+}
+
+function normalizeBaseline(raw: any): BtBaseline {
+  return {
+    // ⚠️ 레거시(필드 부재)는 'lastFill' — 축을 고르지 않은 상태에서도 restoreBase가 의미를 갖는
+    //    유일한 기본값이다(직전 체결 시점 평가액). 모드 자체를 켜지 않으면 어차피 읽히지 않는다.
+    axis: BASE_AXES.includes(raw?.axis) ? raw.axis : 'lastFill',
+    amount: Math.max(0, asNum(raw?.amount, 0)),
+    resetOnFill: !!raw?.resetOnFill,
+    maxReuse: clampInt(asNum(raw?.maxReuse, 0), 0, 99),
+  };
+}
+
+function normalizeAlloc(raw: any): BtAlloc {
+  const b = raw?.basis;
+  const lo = raw?.leftover;
+  return {
+    // ⚠️ 레거시(필드 부재)는 'sequential' — 배분 코드를 통째로 우회해 종전 동작과 동일하다(T15).
+    mode: raw?.mode === 'weighted' ? 'weighted' : 'sequential',
+    basis: b === 'need' || b === 'underGap' ? b : 'targetRatio',
+    leftover: lo === 'topWeight' || lo === 'refill' ? lo : 'cash',
+    minOrderAmount: Math.max(0, asNum(raw?.minOrderAmount, 0)),
+    minOrderQty: Math.max(0, asNum(raw?.minOrderQty, 0)),
   };
 }
 
@@ -1682,12 +2088,86 @@ export function backtestScenariosHaveContent(scenarios: unknown): boolean {
  */
 const SETTINGS_FP_SCHEMA = 2;
 
+/* ── 지문 토큰 헬퍼 ──────────────────────────────────────────────────────────
+ * ⚠️ **레거시 파생값과 같으면 한 글자도 덧붙이지 않는다.** 무조건 `sizing`을 이어 붙이면
+ *    ① 저장된 모든 시나리오의 설정 지문이 이 기능 도입만으로 달라져 **모든 메모에
+ *      '설정이 바뀌었습니다' 배지가 상시 켜지고**(배지 기능이 죽는다),
+ *    ② `normalizeBacktestScenarios`가 첫 로드에서 changed=true를 내 불필요한 Drive 재저장이 돈다.
+ *    실제로 값이 바뀐 편집(모드 변경·금액 입력)은 토큰이 달라지므로 정상적으로 저장된다.
+ * ⚠️ 두 지문(`backtestSettingsFingerprint`·`backtestFingerprint`)이 **같은 헬퍼**를 써야
+ *    "저장은 되는데 배지는 안 뜬다" 같은 어긋남이 생기지 않는다.
+ * ========================================================================== */
+const dipLevelToken = (l: any): string => {
+  const buyPct = l?.buyPct ?? null;
+  const base = `${l?.drop ?? ''}:${buyPct ?? ''}`;
+  const legacy = legacyBuySizing(buyPct);
+  const siz = l?.sizing ?? legacy;
+  if (siz === legacy) return base;
+  return `${base}:${siz}${siz === 'fixedAmount' ? `@${l?.amount ?? 0}` : ''}`;
+};
+const sellLevelToken = (l: any): string => {
+  const sellPct = l?.sellPct ?? null;
+  const base = `${l?.rise ?? ''}:${sellPct ?? ''}`;
+  const legacy = legacySellSizing(sellPct);
+  const siz = l?.sizing ?? legacy;
+  if (siz === legacy) return base;
+  return `${base}:${siz}${siz === 'fixedAmount' ? `@${l?.amount ?? 0}` : ''}`;
+};
+/**
+ * A/B/C/D/E 확장 설정의 지문 조각 — **기본값이 아닌 항목만** `키=값`으로 담는다.
+ *
+ * ⚠️ 지문 배열에 새 칸을 그냥 끼워 넣으면(값이 기본값이어도) 저장된 모든 시나리오의 지문 문자열이
+ *    달라져 **모든 메모에 '설정이 바뀌었습니다' 배지가 상시 켜진다** — 그러면 진짜 변경을 알리는
+ *    기능이 죽는다(SETTINGS_FP_SCHEMA를 올리는 것도 같은 결과라 여기서는 부적절하다:
+ *    이번 변경은 '같은 저장값의 뜻이 바뀐' 경우가 **아니다**. 레거시 값은 뜻도 결과도 그대로다).
+ * ⚠️ 반환이 비면 호출부가 키 자체를 넣지 않는다 → 레거시 지문이 **바이트 단위로 동일**하다.
+ */
+function fpExtras(s: any): string[] {
+  const out: string[] = [];
+  /**
+   * ⚠️ **정규화가 실제로 채택하는 값만** 토큰으로 낸다. 값을 그대로 흘려보내면 옛 분모 값
+   *    (`'total'`·`'initial'`·`'totalWithDiv'`)처럼 **엔진이 버리는 문자열이 지문만 흔들어**
+   *    같은 설정이 서로 다른 지문을 갖게 된다(검증 #109b).
+   */
+  const putEnum = (k: string, v: any, allowed: string[]) => { if (allowed.includes(v)) out.push(`${k}=${v}`); };
+  const putNum = (k: string, v: any) => {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) out.push(`${k}=${v}`);
+  };
+  const d = s?.dip;
+  putEnum('rb', s?.ratioBase, ['equityCash']);
+  putNum('mcr', s?.minCashReserve);
+  putNum('dev', d?.deviationCap);
+  putEnum('bax', d?.baseline?.axis, ['prevMonthEnd', 'peakEval', 'manual']);
+  putNum('bam', d?.baseline?.amount);
+  if (d?.baseline?.resetOnFill) out.push('brf=1');
+  putNum('bmr', d?.baseline?.maxReuse);
+  putEnum('bcm', d?.buyCapMode, ['amount', 'pctOfInitial']);
+  putNum('bcv', d?.buyCapValue);
+  putEnum('am', d?.alloc?.mode, ['weighted']);
+  putEnum('ab', d?.alloc?.basis, ['need', 'underGap']);
+  putEnum('al', d?.alloc?.leftover, ['topWeight', 'refill']);
+  putNum('aoa', d?.alloc?.minOrderAmount);
+  putNum('aoq', d?.alloc?.minOrderQty);
+  putEnum('cf', d?.conflict, ['regularFirst', 'skipSignal']);
+  putNum('cd', d?.cooldownDays);
+  putNum('xr', d?.excludeRegularDays);
+  putEnum('anf', d?.anchorOnNoFill, ['update']);
+  for (const a of asArr(s?.assets)) {
+    if (BASE_AXES.includes(a?.baseAxis)) out.push(`ax:${a?.id ?? ''}=${a.baseAxis}`);
+    if (typeof a?.baseAmount === 'number' && Number.isFinite(a.baseAmount)) out.push(`aa:${a?.id ?? ''}=${a.baseAmount}`);
+  }
+  return out;
+}
+
 export function backtestSettingsFingerprint(cfg: unknown): string {
   try {
     const s: any = cfg;
     if (!s || typeof s !== 'object') return '';
+    // ⚠️ 비어 있으면 키 자체를 넣지 않는다 — 레거시 지문이 바이트 단위로 유지돼야 한다(fpExtras 주석).
+    const x = fpExtras(s);
     return JSON.stringify({
       v: SETTINGS_FP_SCHEMA,
+      ...(x.length ? { x } : {}),
       p: [
         s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
         s.targetMode ?? '', s.rounding ?? '', s.policy ?? '', s.regularOn === false ? 0 : 1,
@@ -1700,8 +2180,8 @@ export function backtestSettingsFingerprint(cfg: unknown): string {
         s.band ?? 0, s.buyFunding ?? '', s.cashFloorPct ?? 0, s.divTaxPct ?? 0,
         s.dip?.enabled ? 1 : 0,
         // ⚠️ `?? ''`라야 null(목표까지)과 0(재원의 0%)이 서로 다른 지문이 된다 — 둘은 결과가 정반대다.
-        asArr(s.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
-        asArr(s.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
+        asArr(s.dip?.levels).map(dipLevelToken).join(','),
+        asArr(s.dip?.sellLevels).map(sellLevelToken).join(','),
         s.dip?.reallocate === false ? 0 : 1,
         // 앵커 축 — 축 on/off · 두 단계 목록 · 기준 소스가 전부 결과를 바꾼다
         s.dip?.extremeOn === false ? 0 : 1, s.dip?.anchorSource ?? '',
@@ -1743,9 +2223,14 @@ export function backtestFingerprint(scenarios: unknown): string {
   try {
     if (!Array.isArray(scenarios)) return '';
     return JSON.stringify(
-      scenarios.map((s: any) => ({
+      scenarios.map((s: any) => {
+        // ⚠️ 설정 지문과 **같은 헬퍼**를 쓴다 — 여기만 무조건 새 칸을 넣으면 레거시 로드에서
+        //    normalizeBacktestScenarios가 매번 changed=true를 내 불필요한 Drive 재저장이 돈다.
+        const x = fpExtras(s);
+        return {
         i: s?.id ?? '',
         n: s?.name ?? '',
+        ...(x.length ? { x } : {}),
         p: [
           s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
           s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '', s?.regularOn === false ? 0 : 1,
@@ -1763,8 +2248,8 @@ export function backtestFingerprint(scenarios: unknown): string {
           s?.band ?? 0, s?.buyFunding ?? '', s?.cashFloorPct ?? 0, s?.divTaxPct ?? 0,
           // 시그널 리밸런싱 — 단계 목록까지 포함해야 단계만 고친 편집이 저장된다
           s?.dip?.enabled ? 1 : 0,
-          asArr(s?.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
-          asArr(s?.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
+          asArr(s?.dip?.levels).map(dipLevelToken).join(','),
+          asArr(s?.dip?.sellLevels).map(sellLevelToken).join(','),
           s?.dip?.reallocate === false ? 0 : 1,
           // 앵커 축 — 단계만 고친 편집도 저장돼야 한다
           s?.dip?.extremeOn === false ? 0 : 1, s?.dip?.anchorSource ?? '',
@@ -1801,7 +2286,8 @@ export function backtestFingerprint(scenarios: unknown): string {
           asArr(e?.targets).map((t: any) => `${t?.assetId ?? ''}:${t?.amount ?? ''}:${t?.ratio ?? ''}`).join('|'),
         ]),
         o: asArr(s?.overrides).map((o: any) => [o?.id ?? '', o?.ym ?? '', o?.group ?? '', o?.date ?? '', o?.assetId ?? '']),
-      })),
+        };
+      }),
     );
   } catch {
     return 'ERR';
@@ -2132,7 +2618,9 @@ export function runBacktest(input: BtRunInput): BtResult {
       finalCashTrade: 0, finalCashDiv: 0, finalCashReserve: 0, cumDivDrawn: 0, cumReserveDrawn: 0, maxDrawdown: 0, months: 0,
       minCash: { value: 0, date: '' }, minCashDiv: { value: 0, date: '' },
       divMonthlyAvg: 0, divMonthlyStdev: 0,
-      bandSkipCount: 0, bandSkipAmount: 0, signalEvents: [], shortfallMonths: 0,
+      bandSkipCount: 0, bandSkipAmount: 0, signalEvents: [], allocBlocks: [],
+      signalStats: { buyFired: 0, buyFilled: 0, sellFired: 0, sellFilled: 0, reasons: {} },
+      shortfallMonths: 0,
     },
   });
 
@@ -2342,7 +2830,25 @@ export function runBacktest(input: BtRunInput): BtResult {
    */
   const targetBaseAt = (date: string): number => {
     const eq = totalEvalAt(date);
+    // ── B. 분모 옵션 ──
+    // ⚠️ `'equityCash'`(총자산)를 고르면 예수금이 분모에 들어가므로, 가격이 내려 평가액이 줄면
+    //    **예수금 몫이 언더타깃으로 드러나** 정기 리밸런싱일에 실제 재투입이 일어난다. 이 한 줄이
+    //    ‘분모는 종목 평가액 합계 하나로 고정’이라는 종전 규약의 **유일한** 예외이고, 기본값
+    //    `'equity'`에서는 아래 종전 코드가 그대로 실행된다(레거시 결과 불변).
+    // ⚠️ 여기 하나만 고치면 정기 리밸런싱·시그널 목표·밴드 판정·현금 바닥선 기준이 **동시에**
+    //    같은 분모를 쓰게 된다(전부 이 함수를 지난다) — 요구사항 B의 '일관 적용'이 그 구조다.
+    if (config.ratioBase === 'equityCash') return Math.max(0, eq + cash);
     return eq > 0 ? eq : Math.max(0, cash - cashReserve);
+  };
+
+  /**
+   * 그 시점 **매수 현금 하한** — 현금 바닥선(`cashFloorPct`)과 최소 유보 현금(E, `minCashReserve`)
+   * 중 **큰 값**. 둘은 같은 것을 다른 단위로 표현한 규칙이라 한 자리에서 합친다.
+   * ⚠️ 기본값(둘 다 0)이면 0을 반환해 `floorCap`이 Infinity로 남고 종전 코드와 동일하다.
+   */
+  const cashFloorAt = (date: string, base: number): number => {
+    const pct = config.cashFloorPct > 0 ? (activeTargetSum(date, base) * config.cashFloorPct) / 100 : 0;
+    return Math.max(pct, Math.max(0, config.minCashReserve || 0));
   };
 
   /**
@@ -2368,6 +2874,134 @@ export function runBacktest(input: BtRunInput): BtResult {
    *    "개방 ₩0 → 사용 ₩0"만 찍히고 기능이 통째로 죽는다(2026-08 사용자 보고).
    * ========================================================================= */
   const signalEvents: BtSignalEvent[] = [];
+  /** A-6-8 동일 영업일 다중 발동 배분 표(가중 배분에서만 채워진다). */
+  const allocBlocks: BtAllocBlock[] = [];
+
+  /* ── A/C/D 확장 상태 ─────────────────────────────────────────────────────
+   * ⚠️ 여기 있는 값은 **전부 기본값에서 무동작**이다. `usesBaseline`/`cooldownDays`/
+   *    `excludeRegularDays`/`deviationCap`/`alloc.mode` 가 기본이면 아래 맵들은 한 번도
+   *    읽히지 않아 레거시 시나리오의 결과가 1원도 달라지지 않는다.
+   * ========================================================================= */
+  /**
+   * 시그널 이벤트 1건의 **단일 생성기**(F-1).
+   * ⚠️ 새 로그 필드를 더할 때 여기 하나만 고치면 모든 경로(정상 발동·쿨다운 차단·배분)가 함께
+   *    채워진다 — 경로마다 객체 리터럴을 손으로 복제하면 한 곳이 `undefined`로 남아 화면에서
+   *    `NaN`·빈칸이 뜬다.
+   */
+  const makeSignalEvent = (
+    t: SigTrig, p: Pos, date: string, pocket: number, cashTradeAt: number,
+    extra: Partial<BtSignalEvent> = {},
+  ): BtSignalEvent => ({
+    date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+    kind: t.kind, step: t.step, level: t.level,
+    axis: t.axis, anchorDate: t.anchorDate,
+    pct: t.pct, pctSum: null, carrier: false,
+    poolAt: 0, excessAt: 0, planned: 0,
+    divPocketAt: pocket, cashTradeAt,
+    used: 0,
+    ref: t.ref, price: t.price,
+    tradeQty: 0, tradeAmount: 0, fromTrade: 0, fromReserve: 0, reallocAmount: 0, note: '',
+    sizing: t.sizing, basisKind: '', basisAmount: 0, ordered: 0, caps: [], reason: '',
+    refDate: t.refDate, baseEval: 0, restoreRate: 0, shortfall: 0,
+    allocWeight: 0, allocAmount: 0,
+    ...extra,
+  });
+
+  /**
+   * ⚠️ `dip`의 **중첩 객체는 반드시 정규화해서 읽는다.** 화면(`BacktestPage`)은 `patchActive`가
+   *    스프레드로 만든 **정규화되지 않은 로컬 사본**을 그대로 넘기므로 `config.dip.alloc.mode`처럼
+   *    파고들면 그 순간 TypeError로 실행이 죽는다(검증 #254의 raw 주입 경로가 정확히 그것이다).
+   *    스칼라 필드(`deviationCap`·`cooldownDays`·`conflict` 등)는 `|| 0` / `=== '값'` 비교라 안전하다.
+   */
+  const dipAlloc = normalizeAlloc(config.dip.alloc);
+  const dipBaseline = normalizeBaseline(config.dip.baseline);
+
+  /** 영업일 인덱스 — 쿨다운(C-3)의 '영업일 거리'를 재는 유일한 소스. */
+  const bizIndex = new Map<string, number>();
+  allBiz.forEach((d, i) => bizIndex.set(d, i));
+  /** 두 날짜의 영업일 거리. 한쪽이라도 기간 밖이면 Infinity(= 규칙이 막지 않음). */
+  const bizDist = (later: string, earlier: string): number => {
+    const li = bizIndex.get(later);
+    const ei = bizIndex.get(earlier);
+    if (li === undefined || ei === undefined) return Infinity;
+    return li - ei;
+  };
+  /** 종목별 **마지막 시그널 발동일**(체결 여부 무관) — 쿨다운과 정기 제외에 함께 쓴다. */
+  const lastSignalDate = new Map<string, string>();
+  /** A-4 기준축 원자재 — 직전 체결 시점 평가액 / 전월말 평가액 / 기간 내 최고 평가액. */
+  const lastFillEval = new Map<string, number>();
+  const monthEndEval = new Map<string, number>();
+  const peakEvalMap = new Map<string, number>();
+  /** A-4-5 `resetOnFill` — 복원 체결 후 박제한 기준 평가액(있으면 축보다 우선). */
+  const baseOverride = new Map<string, number>();
+  /** A-4-5 `maxReuse` — 같은 기준 평가액으로 복원을 시도한 횟수. */
+  const baseUse = new Map<string, { base: number; n: number }>();
+  /** A-4-5 종목별 누적 시그널 매수 대금(양수). */
+  const sigBuyByAsset = new Map<string, number>();
+
+  /**
+   * 시그널 단계 목록의 **사이징 모드**만 미리 훑는다(기준축 원자재를 모을지 결정).
+   * ⚠️ 아래 `dipLevels`/`sellLevels` 선언(소스 가드 #233c·#257이 리터럴로 단언한다)과 **같은 값**이지만
+   *    그쪽은 Phase 0보다 뒤라 여기서 쓸 수 없다. 정규화는 결정적이라 두 번 불러도 결과가 같다.
+   */
+  const preBuyLevels = config.dip.enabled ? normalizeDipLevels(config.dip.levels) : [];
+  const preSellLevels = config.dip.enabled ? normalizeSellLevels(config.dip.sellLevels) : [];
+  const usesBaseline = config.dip.enabled && config.dip.extremeOn !== false
+    && (preBuyLevels.some(l => l.sizing === 'restoreBase')
+      || preSellLevels.some(l => l.sizing === 'excessOverBase'));
+  /** 기준축 중 하나라도 '기간 내 최고 평가액'이면 매 영업일 관측이 필요하다. */
+  const baseAxisOf = (p: Pos): BtBaselineAxis =>
+    ((p.asset.baseAxis || dipBaseline.axis) as BtBaselineAxis);
+  const needDailyEval = usesBaseline && positions.some(p => baseAxisOf(p) === 'peakEval');
+  const needMonthEndBase = usesBaseline && positions.some(p => baseAxisOf(p) === 'prevMonthEnd');
+
+  /** 그 종목의 **기준 평가액**(A-4/A-5). 종목 축 > 전역 축, 단 resetOnFill 박제가 가장 우선. */
+  const baselineEvalOf = (p: Pos): number => {
+    const ov = baseOverride.get(p.asset.id);
+    if (ov !== undefined) return ov;
+    const axis = baseAxisOf(p);
+    if (axis === 'manual') {
+      const a = p.asset.baseAmount;
+      return typeof a === 'number' && Number.isFinite(a)
+        ? Math.max(0, a) : Math.max(0, dipBaseline.amount);
+    }
+    if (axis === 'prevMonthEnd') return Math.max(0, monthEndEval.get(p.asset.id) ?? 0);
+    if (axis === 'peakEval') return Math.max(0, peakEvalMap.get(p.asset.id) ?? 0);
+    return Math.max(0, lastFillEval.get(p.asset.id) ?? 0);
+  };
+
+  /**
+   * 전월말 평가액 스냅샷 — 스텝이 **새로운 달로 넘어가는 순간** 직전 달 마지막 영업일 기준으로 찍는다.
+   * ⚠️ 그 시점 `p.qty`는 직전 달 말일까지의 매매가 전부 반영된 값이다(스텝이 날짜 오름차순이므로).
+   *    나중에 다시 계산하려면 거래를 재생해야 하므로 이 '경계에서 한 번' 방식이 유일하게 싸다.
+   */
+  let monthEndYm = '';
+  const syncMonthEndBase = (date: string): void => {
+    if (!needMonthEndBase) return;
+    const ym = ymOf(date);
+    if (!ym || ym === monthEndYm) return;
+    monthEndYm = ym;
+    const prev = addMonthsToYm(ym, -1);
+    if (!prev) return;
+    const d = onOrBeforeBusinessDay(lastDayOfMonth(prev), holidays);
+    if (!isIsoDate(d) || d >= date) return;
+    for (const p of positions) {
+      monthEndEval.set(p.asset.id, p.qty > QTY_EPS ? evalOf(p, d).amount : 0);
+    }
+  };
+
+  /**
+   * 체결 시점 평가액 박제 — A-4의 `lastFill` 축 원자재.
+   * ⚠️ 제외 규칙은 앵커(`touchAnchor`)와 **같다** — 분배금 재투자·재조정 매도·종목 재편은
+   *    그 종목에 대한 '내 판단'이 아니므로 기준을 옮기지 않는다.
+   */
+  const touchFillBase = (t: BtTrade): void => {
+    if (!usesBaseline) return;
+    if (t.reinvest || t.structural) return;
+    if (t.signal === 'realloc') return;
+    if (!(t.price > 0)) return;
+    lastFillEval.set(t.assetId, t.qtyAfter * t.price);
+  };
 
   /* ── 앵커 축(직전 체결 종가 기준) 상태 ────────────────────────────────────
    * 앵커는 **체결 결과에 의존**해 사전 탐지가 불가능하다 → 런타임에 매 영업일 판정한다.
@@ -2410,6 +3044,22 @@ export function runBacktest(input: BtRunInput): BtResult {
   };
 
   /**
+   * D. **미체결 시 기준가 축 갱신** — 시그널이 발동했는데 체결이 0일 때 앵커를 그날 종가로 옮긴다.
+   * ⚠️ 기본값은 `'keep'`(유지)이라 이 함수는 호출되지 않는다. `'update'`를 고르면 판정 기준이
+   *    그날 종가가 되어, 같은 자리에서 매번 다시 발동하는 것을 막는 대신 낙폭 누적이 끊긴다.
+   * ⚠️ `touchAnchor`와 달리 `anchorSource` 규칙을 보지 않는다 — 이건 '체결'이 아니라 사용자가
+   *    명시적으로 고른 **기준 재설정**이다.
+   */
+  const forceAnchor = (assetId: string, price: number, date: string): void => {
+    if (!anchorOn || !(price > 0)) return;
+    if (anchorPx.get(assetId) === price) return;
+    anchorPx.set(assetId, price);
+    anchorDateOf.set(assetId, date);
+    firedAnchorBuy.get(assetId)?.clear();
+    firedAnchorSell.get(assetId)?.clear();
+  };
+
+  /**
    * 그 시점 **뒤이은 정기 리밸런싱이 실제로 쓸 수 있는 매수 재원** — 목표 증액(매월·연간)의 상한.
    *
    * ⚠️ '보유 예수금(cash)'으로 자르면 안 된다 — `buyFunding:'tradeOnly'`는 분배금 주머니가 잠겨 있고
@@ -2425,9 +3075,11 @@ export function runBacktest(input: BtRunInput): BtResult {
     // ⚠️ 예비금은 목표 증액의 재원이 아니다 — 시그널 발동 시에만 쓰는 돈이라 목표에 얹으면
     //    매달 복리로 부풀고 '누적 증액' 카드가 투입되지 않은 돈을 보고한다.
     let cap = config.buyFunding === 'tradeOnly' ? Math.max(0, cashTrade) : Math.max(0, cash - cashReserve);
-    if (config.cashFloorPct > 0) {
-      const fl = (activeTargetSum(date, targetBaseAt(date)) * config.cashFloorPct) / 100;
-      cap = Math.min(cap, Math.max(0, cash - cashReserve - fl));
+    // ⚠️ E(최소 유보 현금)도 같은 컷을 받아야 한다 — 안 그러면 유보하기로 한 돈까지 목표에 얹혀
+    //    매달 복리로 부풀고, 이어지는 리밸런싱은 그 목표를 '예수금 부족'으로 잘라 낸다.
+    if (config.cashFloorPct > 0 || config.minCashReserve > 0) {
+      const fl = cashFloorAt(date, targetBaseAt(date));
+      if (fl > 0) cap = Math.min(cap, Math.max(0, cash - cashReserve - fl));
     }
     return cap;
   };
@@ -2666,7 +3318,9 @@ export function runBacktest(input: BtRunInput): BtResult {
       });
       // ⚠️ initialTrades는 pushTrade를 타지 않는다 — 여기서 앵커를 시드하지 않으면 초기 보유
       //    종목의 앵커가 미설정이라 첫 앵커 발동의 기준가가 영영 없다.
-      if (t) { touchAnchor(t); initialTrades.push(t); initRemain += t.cashDelta; }
+      // ⚠️ 기준 평가액(A-4)도 같은 이유로 여기서 시드한다 — 초기 보유 종목의 `lastFill` 기준이
+      //    비어 있으면 첫 복원 시그널의 기준 평가액이 0이 되어 아무것도 사지 않는다.
+      if (t) { touchAnchor(t); touchFillBase(t); initialTrades.push(t); initRemain += t.cashDelta; }
     }
   }
   const initialCashAfter = cash;
@@ -2747,6 +3401,12 @@ export function runBacktest(input: BtRunInput): BtResult {
     axis: 'extreme' | 'anchor';
     /** 앵커 축일 때 그 앵커를 만든 체결일(표시용). extreme이면 ''. */
     anchorDate: string;
+    /** A-1 사이징 모드. 앵커 축은 항상 '목표까지' 계열이다. */
+    sizing: BtBuySizing | BtSellSizing;
+    /** `sizing==='fixedAmount'`일 때의 주문 금액. */
+    amount: number;
+    /** F-1 — 기준가(`ref`)가 만들어진 날짜(고점/저점이 선 날 또는 앵커 체결일). */
+    refDate: string;
   };
   const sigTrigByDate = new Map<string, SigTrig[]>();
   // ⚠️ 단계 목록은 **반드시 정규화한 사본**으로 돈다(정렬·중복 제거·상한).
@@ -2764,6 +3424,9 @@ export function runBacktest(input: BtRunInput): BtResult {
       if (!series) continue;
       let peak = 0;
       let trough = Infinity;
+      // F-1 — 그 극값이 **언제** 섰는지를 로그에 남긴다("판정에 쓴 기준가와 그 날짜").
+      let peakDate = '';
+      let troughDate = '';
       const firedBuy = new Set<number>();
       const firedSell = new Set<number>();
       for (const d of allBiz) {
@@ -2772,8 +3435,8 @@ export function runBacktest(input: BtRunInput): BtResult {
         const px = hit.price;
         const newPeak = px > peak;
         const newTrough = px < trough;
-        if (newPeak) { peak = px; firedBuy.clear(); }
-        if (newTrough) { trough = px; firedSell.clear(); }
+        if (newPeak) { peak = px; peakDate = d; firedBuy.clear(); }
+        if (newTrough) { trough = px; troughDate = d; firedSell.clear(); }
         const push = (rec: SigTrig) => {
           const arr = sigTrigByDate.get(d);
           if (arr) arr.push(rec); else sigTrigByDate.set(d, [rec]);
@@ -2789,6 +3452,8 @@ export function runBacktest(input: BtRunInput): BtResult {
               assetId: p.asset.id, kind: 'buy', step: i + 1,
               level: lv.drop, pct: lv.buyPct, ref: peak, price: px,
               axis: 'extreme', anchorDate: '',
+              sizing: (lv.sizing ?? legacyBuySizing(lv.buyPct)),
+              amount: Math.max(0, lv.amount ?? 0), refDate: peakDate,
             });
           }
         }
@@ -2803,6 +3468,8 @@ export function runBacktest(input: BtRunInput): BtResult {
               assetId: p.asset.id, kind: 'sell', step: i + 1,
               level: lv.rise, pct: lv.sellPct, ref: trough, price: px,
               axis: 'extreme', anchorDate: '',
+              sizing: (lv.sizing ?? legacySellSizing(lv.sellPct)),
+              amount: Math.max(0, lv.amount ?? 0), refDate: troughDate,
             });
           }
         }
@@ -2865,6 +3532,8 @@ export function runBacktest(input: BtRunInput): BtResult {
           //    화면 계산식과 실제 체결이 어긋나는 것을 원천 차단한다.
           pct: null,
           ref: anchor, price: hit.price, axis: 'anchor', anchorDate: aDate,
+          // 앵커 축은 비율도 금액도 없다 — 항상 '목표까지' 계열이다.
+          sizing: 'toTarget', amount: 0, refDate: aDate,
         });
       };
       fire(anchorLevels, -chgPct, 'buy', firedAnchorBuy);
@@ -2886,7 +3555,8 @@ export function runBacktest(input: BtRunInput): BtResult {
   const steps: Step[] = [];
   // ⚠️ 앵커 축은 체결 결과에 의존해 사전 탐지가 불가능하므로 **매 영업일** 스텝을 세우고 런타임에
   //    판정한다. 앵커가 꺼져 있으면 이 분기를 타지 않아 steps 배열이 종전과 1바이트도 다르지 않다.
-  if (anchorOn) {
+  // ⚠️ `needDailyEval`(기준축 = 기간 내 최고 평가액)도 매 영업일 관측이 필요하므로 같은 분기를 탄다.
+  if (anchorOn || needDailyEval) {
     for (const d of allBiz) steps.push({ date: d, kind: 'signal', trigs: sigTrigByDate.get(d) ?? [] });
   } else {
     for (const [d, trigs] of sigTrigByDate) steps.push({ date: d, kind: 'signal', trigs });
@@ -3008,9 +3678,24 @@ export function runBacktest(input: BtRunInput): BtResult {
   const KIND_ORDER: Record<string, number> = {
     exdiv: 0, pay: 1, event: 2, contrib: 3, annual: 4, signal: 5, rebal: 6, reinvest: 7,
   };
+  /**
+   * C-2 — 같은 날 시그널과 정기 리밸런싱이 겹칠 때의 순서.
+   * ⚠️ `KIND_ORDER` **리터럴은 건드리지 않는다**(소스 가드가 그 리터럴을 단언한다). 기본값
+   *    `'signalFirst'`면 아래 함수가 그대로 `KIND_ORDER[k]`를 돌려주므로 종전 정렬과 동일하다.
+   * ⚠️ `'skipSignal'`은 순서가 아니라 **실행 자체를 건너뛰는** 규칙이라 signal 스텝 안에서 처리한다.
+   */
+  const stepOrderOf = (k: string): number => {
+    if (config.dip.conflict === 'regularFirst') {
+      if (k === 'signal') return KIND_ORDER.rebal;
+      if (k === 'rebal') return KIND_ORDER.signal;
+    }
+    return KIND_ORDER[k];
+  };
   steps.sort((a, b) =>
-    a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind],
+    a.date < b.date ? -1 : a.date > b.date ? 1 : stepOrderOf(a.kind) - stepOrderOf(b.kind),
   );
+  /** C-2 `'skipSignal'` 판정용 — 정기 리밸런싱이 실제로 실행되는 날짜 집합. */
+  const rebalDateSet = new Set(slots.map(s => s.rebalDate));
 
   // 분배락 시점 권리 확정 수량 — exdiv 스텝에서 채우고 pay 스텝에서 현금화한다.
   const pendingDiv = new Map<string, BtDividendRow[]>();
@@ -3045,6 +3730,7 @@ export function runBacktest(input: BtRunInput): BtResult {
     //    각 호출부에 흩으면 경로 하나만 빠져도 그 종목 앵커가 영구히 낡은 가격을 가리켜 매일 발동한다.
     //    (초기 매수는 pushTrade를 타지 않으므로 Phase 0에서 별도로 건다.)
     touchAnchor(t);
+    touchFillBase(t);
     const m = monthOf(ymOf(t.date));
     m.trades.push(t);
     if (t.reinvest) m.reinvestNet += t.cashDelta;
@@ -3124,6 +3810,24 @@ export function runBacktest(input: BtRunInput): BtResult {
        * ⚠️ 정기 리밸런싱 일정(③ 정책)과 **완전히 독립**이다. policy:'none'이어도 여기는 돈다.
        * ===================================================================== */
       const date = step.date;
+
+      /* ── S0 수집 ─────────────────────────────────────────────────────────
+       * 그날 발동한 트리거를 모으고, 실행 전 규칙(기준축 관측·충돌·쿨다운)으로 거른다.
+       * ==================================================================== */
+      // A-4 기준축 원자재 — '기간 내 최고 평가액' 축은 매 영업일 관측이 필요하다.
+      // ⚠️ 조기 탈출보다 **앞**이다(트리거가 없는 날에도 고점은 갱신돼야 한다). 기본값에서는
+      //    `needDailyEval`이 false라 이 블록을 통째로 건너뛴다.
+      if (needDailyEval) {
+        for (const p of positions) {
+          if (p.qty <= QTY_EPS) continue;
+          const h = priceAt(prices[p.asset.code], date);
+          if (h.missing) continue;
+          const v = p.qty * h.price;
+          if (v > (peakEvalMap.get(p.asset.id) ?? 0)) peakEvalMap.set(p.asset.id, v);
+        }
+      }
+      // A-4 기준축 원자재 — '전월말 평가액'은 달이 바뀌는 첫 스텝에서 한 번 찍는다.
+      syncMonthEndBase(date);
       /**
        * 앵커 축 판정은 **여기서 한 번만** 스냅샷한다(사전 탐지분과 합류).
        * ⚠️ 조기 탈출은 반드시 `checkRatioSum`·`targetBaseAt`보다 **앞**이다.
@@ -3131,8 +3835,37 @@ export function runBacktest(input: BtRunInput): BtResult {
        *    ② `targetBaseAt`→`totalEvalAt`이 종목마다 `priceAt`을 부르는데 그 미스 경로는
        *       `for (const d in series)` 선형 스캔이라 `영업일 × 종목 × |시계열|`로 폭발한다.
        */
-      const trigs = anchorOn ? [...step.trigs, ...anchorTrigsAt(date)] : step.trigs;
+      const rawTrigs = anchorOn ? [...step.trigs, ...anchorTrigsAt(date)] : step.trigs;
+      if (!rawTrigs.length) continue;
+      // C-2 `'skipSignal'` — 정기 리밸런싱이 도는 날은 시그널을 통째로 건너뛴다.
+      // ⚠️ 고점/저점 축 트리거는 사전 탐지에서 이미 소진됐으므로 **나중에 되살아나지 않는다**
+      //    (사용자가 "그날 시그널 무시"를 고른 의미 그대로다).
+      if (config.dip.conflict === 'skipSignal' && rebalDateSet.has(date)) continue;
+      // C-3 쿨다운 — 같은 종목이 N영업일 안에 다시 발동하지 못하게 막는다.
+      let trigs = rawTrigs;
+      const cooldown = Math.max(0, config.dip.cooldownDays || 0);
+      if (cooldown > 0) {
+        const blocked = new Set<string>();
+        trigs = rawTrigs.filter(t => {
+          const last = lastSignalDate.get(t.assetId);
+          if (!last) return true;
+          if (bizDist(date, last) >= cooldown) return true;
+          blocked.add(t.assetId);
+          return false;
+        });
+        // ⚠️ 막힌 발동도 **로그에는 남긴다** — 조용히 사라지면 사용자는 왜 매매가 없는지 알 수 없다.
+        for (const t of rawTrigs) {
+          if (!blocked.has(t.assetId)) continue;
+          const p = posById.get(t.assetId);
+          if (!p) continue;
+          signalEvents.push(makeSignalEvent(t, p, date, 0, cashTrade, {
+            carrier: true, reason: 'COOLDOWN',
+            note: `쿨다운 ${cooldown}영업일 — ${lastSignalDate.get(t.assetId)} 발동 이후`,
+          }));
+        }
+      }
       if (!trigs.length) continue;
+      for (const t of trigs) lastSignalDate.set(t.assetId, date);
       const liveOf = (assetId: string): Pos | null => {
         const p = posById.get(assetId);
         if (!p || p.removed) return null;
@@ -3153,34 +3886,52 @@ export function runBacktest(input: BtRunInput): BtResult {
       checkRatioSum(date);
       const base = targetBaseAt(date);
       const mkEvent = (t: SigTrig, p: Pos): BtSignalEvent => {
-        const ev: BtSignalEvent = {
-          date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-          kind: t.kind, step: t.step, level: t.level,
-          axis: t.axis, anchorDate: t.anchorDate,
-          pct: t.pct, pctSum: null, carrier: false,
-          poolAt: 0, excessAt: 0, planned: 0,
-          divPocketAt: pocket, cashTradeAt: cashTrade,
-          used: 0,
-          ref: t.ref, price: t.price,
-          tradeQty: 0, tradeAmount: 0, fromTrade: 0, fromReserve: 0, reallocAmount: 0, note: '',
-        };
+        const ev = makeSignalEvent(t, p, date, pocket, cashTrade);
         signalEvents.push(ev);
         return ev;
       };
+      /** 그 종목·그날의 이탈 한도(A-3) 여유폭(원). 0이면 한도 없음. */
+      const devRoom = Math.max(0, config.dip.deviationCap || 0) > 0 && base > 0
+        ? (base * Math.max(0, config.dip.deviationCap)) / 100
+        : 0;
+      /** A-4-5 종목별 누적 시그널 매수 한도(원). Infinity면 제한 없음. */
+      const assetBuyCap = config.dip.buyCapMode === 'amount'
+        ? Math.max(0, config.dip.buyCapValue || 0)
+        : config.dip.buyCapMode === 'pctOfInitial'
+          ? Math.max(0, (config.initialCapital * Math.max(0, config.dip.buyCapValue || 0)) / 100)
+          : Infinity;
       /**
-       * 같은 종목의 여러 단계가 같은 날 겹칠 때 비율을 합친다(carrier 규약).
-       * ⚠️ 하나라도 '목표까지'(null)면 결과도 null — 비율과 목표까지를 섞어 두 번 체결하면
-       *    같은 시그널이 두 번 표시되고 목표를 넘겨 산다.
-       * ⚠️ 합이 100%를 넘어도 자르지 않는다(밑변 × 비율 = 금액 계산식이 화면에 그대로 찍히므로
-       *    산술이 맞아야 한다). 매수는 목표에서, 매도는 초과분 전량에서 자연히 잘린다.
+       * S1 — 같은 종목·같은 날 겹친 단계들의 **사이징 모드**를 하나로 정한다.
+       * ⚠️ 전부 레거시 계열이면 종전 규약 그대로(비율 합산 · 하나라도 '목표까지'면 목표까지).
+       *    모드가 섞이면 **가장 깊은 단계**(낙폭/반등이 큰 쪽)가 이긴다 — 결정론적이고,
+       *    "더 크게 빠졌을 때의 규칙"을 의도했다고 보는 것이 자연스럽다.
        */
-      const sumPct = (list: BtSignalEvent[]): number | null => {
-        let s = 0;
-        for (const ev of list) {
-          if (ev.pct === null) return null;
-          s += ev.pct;
+      const resolveMode = (group: SigTrig[], legacyOf: LegacyCapCheck) => {
+        if (group.every(t => legacyOf(t.sizing))) {
+          let s = 0;
+          let anyNull = false;
+          for (const t of group) { if (t.pct === null) anyNull = true; else s += t.pct; }
+          const pct = anyNull ? null : s;
+          return {
+            sizing: (pct === null
+              ? 'toTarget'
+              : (group[0].kind === 'sell' ? 'pctOfExcess' : 'toTargetCapped')) as any,
+            pct, amount: 0,
+          };
         }
-        return s;
+        let best = group[0];
+        for (const t of group) if (t.level > best.level) best = t;
+        return { sizing: best.sizing as any, pct: best.pct, amount: best.amount };
+      };
+      /**
+       * `pctOfTotal`(총자산의 %)의 밑변 — 종목마다 **같은 값**이라야 화면 계산식이 성립한다.
+       * ⚠️ 지연 계산이다. `totalEvalAt`은 종목마다 `priceAt`을 부르고 그 미스 경로가 선형 스캔이라,
+       *    쓰지 않는 시나리오에서 매 발동일마다 부르면 그대로 비용이 된다.
+       */
+      let totalAssetsMemo = -1;
+      const totalAssetsAt = (): number => {
+        if (totalAssetsMemo < 0) totalAssetsMemo = Math.max(0, totalEvalAt(date) + cash);
+        return totalAssetsMemo;
       };
 
       /* ── ① 매도 시그널 — 목표 **초과분**에서만 판다. 대금은 전액 매매 주머니로. ──
@@ -3190,6 +3941,7 @@ export function runBacktest(input: BtRunInput): BtResult {
        *    화면의 `초과분 × 비율` 계산식과 실제 체결이 어긋난다. */
       {
         const sellEvs = new Map<string, BtSignalEvent[]>();
+        const sellTrigs = new Map<string, SigTrig[]>();
         const sellPos: Pos[] = [];
         for (const t of trigs) {
           if (t.kind !== 'sell') continue;
@@ -3197,8 +3949,8 @@ export function runBacktest(input: BtRunInput): BtResult {
           if (!p) continue;
           const ev = mkEvent(t, p);
           const list = sellEvs.get(p.asset.id);
-          if (list) list.push(ev);
-          else { sellEvs.set(p.asset.id, [ev]); sellPos.push(p); }
+          if (list) { list.push(ev); sellTrigs.get(p.asset.id)!.push(t); }
+          else { sellEvs.set(p.asset.id, [ev]); sellTrigs.set(p.asset.id, [t]); sellPos.push(p); }
         }
         for (const p of sellPos) {
           const list = sellEvs.get(p.asset.id)!;
@@ -3206,9 +3958,15 @@ export function runBacktest(input: BtRunInput): BtResult {
           for (let i = 1; i < list.length; i++) {
             list[i].note = `동시 발동 — 체결은 ${carrier.step}단계 행에 합산`;
           }
-          if (!p.active || p.qty <= QTY_EPS) { carrier.note = '보유 없음'; continue; }
+          // ── S1 사이징 모드 확정 ──
+          const mode = resolveMode(sellTrigs.get(p.asset.id)!, sellUsesTargetCap);
+          carrier.sizing = mode.sizing;
+          if (!p.active || p.qty <= QTY_EPS) {
+            // A-2 — 목표 캡을 풀어도 **보유가 없으면 팔 수 없다**. 유일하게 남는 구조적 미체결이다.
+            carrier.note = '보유 없음'; carrier.reason = 'NO_POSITION'; continue;
+          }
           const hit = priceAt(prices[p.asset.code], date);
-          if (hit.missing || hit.price <= 0) { carrier.note = '종가 없음'; continue; }
+          if (hit.missing || hit.price <= 0) { carrier.note = '종가 없음'; carrier.reason = 'NO_PRICE'; continue; }
           // ⚠️ 밑변(excessAt)이 실제로 산출된 뒤에만 대표 행으로 표시한다 — 종가가 없어 여기까지
           //    못 온 행까지 carrier로 두면 화면에 "실제로 성립한 적 없는 계산식"이 렌더된다.
           carrier.carrier = true;
@@ -3219,27 +3977,72 @@ export function runBacktest(input: BtRunInput): BtResult {
           // ⚠️ `pctSum`은 **초과분 가드보다 먼저** 채운다 — 뒤에 두면 '목표 이하'로 조기 반환한
           //    행의 pctSum이 null로 남아, 사용자가 30%를 지정했는데도 화면이 '목표 초과분 ₩0
           //    전량'(= 목표까지)이라고 설명한다(적대적 리뷰 확정 결함).
-          carrier.pctSum = sumPct(list);
+          carrier.pctSum = mode.pct;
+          const capsHit: BtSignalReason[] = [];
           // ⚠️ 아래 가드와 `tr.qty >= 0` 가드는 **의도적으로 중복된 방어선**이다(변이 테스트로 확인:
           //    하나만 지우면 다른 하나가 잡아 검증이 통과한다). 둘 다 지우면 목표에 못 미치는 보유
           //    상태에서 반등 시그널이 **매수로 뒤집혀** '매도 시그널'이 자산을 늘린다(검증 #308b).
           //    둘 중 하나를 지우고 싶더라도 그대로 둘 것 — "매도 시그널은 매도만 한다"가 계약이다.
-          if (excess <= 0) { carrier.note = '목표 이하 — 팔 것 없음'; continue; }
-          const pctSum = carrier.pctSum;
-          // ⚠️ 비율 매도의 목표선은 `target`이 아니라 **초과분을 pct%만 덜어낸 수준**이다.
-          //    이 식이라야 목표 아래로 절대 내려가지 않는다(pct=100이면 정확히 target).
-          const sellAmount = pctSum === null
-            ? excess
-            : Math.min(excess, (excess * pctSum) / 100);
-          carrier.planned = sellAmount;
-          if (!(sellAmount > 0)) { carrier.note = '매도 비율 0% — 팔지 않음'; continue; }
-          const tr = adjustTo(p, date, evalBefore - sellAmount, false);
-          if (!tr || tr.qty >= 0) { carrier.note = '매도 수량 0(반올림)'; continue; }
+          // ⚠️ **단, 목표 캡 계열(`toTarget`/`pctOfExcess`)에만 건다**(A-2) — 그 외 모드는 목표
+          //    이하에서도 팔아야 한다("목표 이하 — 팔 것 없음" 금지가 이번 수정의 핵심이다).
+          if (sellUsesTargetCap(mode.sizing) && excess <= 0) {
+            carrier.note = '목표 이하 — 팔 것 없음'; carrier.reason = 'CAP_TARGET'; continue;
+          }
+          /* ── S1 주문액 산출 (A-1) ── */
+          const baseEvalS = (mode.sizing === 'excessOverBase') ? baselineEvalOf(p) : 0;
+          let ordered = 0;
+          if (mode.sizing === 'toTarget') {
+            ordered = excess; carrier.basisKind = 'excess'; carrier.basisAmount = Math.max(0, excess);
+          } else if (mode.sizing === 'pctOfExcess') {
+            // ⚠️ 비율 매도의 목표선은 `target`이 아니라 **초과분을 pct%만 덜어낸 수준**이다.
+            //    이 식이라야 목표 아래로 절대 내려가지 않는다(pct=100이면 정확히 target).
+            ordered = mode.pct === null ? excess : Math.min(excess, (excess * mode.pct) / 100);
+            carrier.basisKind = 'excess'; carrier.basisAmount = Math.max(0, excess);
+          } else if (mode.sizing === 'pctOfEval') {
+            ordered = (evalBefore * (mode.pct ?? 0)) / 100;
+            carrier.basisKind = 'eval'; carrier.basisAmount = evalBefore;
+          } else if (mode.sizing === 'pctOfQty') {
+            ordered = ((p.qty * (mode.pct ?? 0)) / 100) * hit.price;
+            carrier.basisKind = 'qty'; carrier.basisAmount = p.qty;
+          } else if (mode.sizing === 'fixedAmount') {
+            ordered = Math.max(0, mode.amount);
+            carrier.basisKind = 'fixed'; carrier.basisAmount = Math.max(0, mode.amount);
+          } else if (mode.sizing === 'excessOverBase') {
+            ordered = Math.max(0, evalBefore - baseEvalS);
+            carrier.basisKind = 'base'; carrier.basisAmount = baseEvalS; carrier.baseEval = baseEvalS;
+          }
+          carrier.ordered = ordered;
+          /* ── S2 캡·한도 ──
+           * A-3 이탈 한도: 매도 후 비중이 목표 −X%p 아래로 내려가지 않게 주문을 줄인다. */
+          if (devRoom > 0) {
+            const lowLimit = Math.max(0, target - devRoom);
+            const room = Math.max(0, evalBefore - lowLimit);
+            if (ordered > room) { ordered = room; capsHit.push('CAP_DEVIATION'); }
+          }
+          // 보유 수량 한도 — 공매도는 없다.
+          if (ordered > evalBefore) { ordered = evalBefore; capsHit.push('NO_POSITION'); }
+          carrier.caps = capsHit;
+          carrier.planned = ordered;
+          if (!(ordered > 0)) {
+            carrier.note = mode.sizing === 'excessOverBase'
+              ? '기준 평가액 이하 — 팔 것 없음'
+              : (capsHit.includes('CAP_DEVIATION') ? '이탈 한도 — 팔 것 없음' : '매도 비율 0% — 팔지 않음');
+            carrier.reason = capsHit[0] ?? 'CAP_TARGET';
+            continue;
+          }
+          /* ── S4 체결 ── */
+          const tr = adjustTo(p, date, evalBefore - ordered, false);
+          if (!tr || tr.qty >= 0) {
+            carrier.note = '매도 수량 0(반올림)'; carrier.reason = 'ROUNDING'; continue;
+          }
           tr.signal = 'sell';
           pushTrade(tr);
           carrier.tradeQty = tr.qty;
           carrier.tradeAmount = Math.abs(tr.cashDelta);
+          carrier.shortfall = Math.max(0, ordered - carrier.tradeAmount);
           if (tr.note) carrier.note = tr.note;
+          /* ── S6 사유 코드 ── */
+          carrier.reason = carrier.shortfall > hit.price ? 'ROUNDING' : (capsHit[0] ?? '');
         }
       }
 
@@ -3251,14 +4054,15 @@ export function runBacktest(input: BtRunInput): BtResult {
       // 체결·개방은 **그 종목의 첫 이벤트(carrier)에 합산**한다 — 행마다 나눠 실으면 같은 체결이
       // 두 번 표시된다.
       const evsByAsset = new Map<string, BtSignalEvent[]>();
+      const trigsByAsset = new Map<string, SigTrig[]>();
       const buyPos: Pos[] = [];
       for (const t of buyTrigs) {
         const p = liveOf(t.assetId);
         if (!p) continue;
         const ev = mkEvent(t, p);
         const list = evsByAsset.get(p.asset.id);
-        if (list) list.push(ev);
-        else { evsByAsset.set(p.asset.id, [ev]); buyPos.push(p); }
+        if (list) { list.push(ev); trigsByAsset.get(p.asset.id)!.push(t); }
+        else { evsByAsset.set(p.asset.id, [ev]); trigsByAsset.set(p.asset.id, [t]); buyPos.push(p); }
         // 데이터가 생긴 시점부터 자동 편입 — 정기 리밸런싱·분배금 재투자와 같은 규약.
         if (!p.active) p.active = true;
       }
@@ -3279,14 +4083,14 @@ export function runBacktest(input: BtRunInput): BtResult {
         const pl = planOf(p);
         if (pl.hit.missing || pl.hit.price <= 0) {
           const list = evsByAsset.get(p.asset.id);
-          if (list) list[0].note = '종가 없음';
+          if (list) { list[0].note = '종가 없음'; list[0].reason = 'NO_PRICE'; }
           continue;
         }
         buyPlans.push(pl);
       }
-      const floorAmount = config.cashFloorPct > 0
-        ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
-        : 0;
+      // ⚠️ E(최소 유보 현금)와 현금 바닥선을 **한 자리에서** 합친다(cashFloorAt) — 둘 다 0이면
+      //    0을 반환해 종전과 동일하고, A-6-7('배분 전에 재원에서 먼저 차감')도 이 값 하나로 걸린다.
+      const floorAmount = cashFloorAt(date, base);
 
       /* ②-a 매수 재원 스냅샷 + 종목별 목표 매수액(`planned`) 확정.
        * ⚠️ 스냅샷은 **매도 시그널 처리 뒤 · 재조정 앞** 값이다 — 같은 날 매도 시그널이 만든 현금은
@@ -3305,17 +4109,73 @@ export function runBacktest(input: BtRunInput): BtResult {
         if (!list) continue;
         const carrier = list[0];
         const need = Math.max(0, b.target - b.evalBefore);
-        const pctSum = sumPct(list);
+        // ── S1 사이징 모드 확정 ──
+        const mode = resolveMode(trigsByAsset.get(b.p.asset.id)!, buyUsesTargetCap);
+        const pctSum = mode.pct;
         carrier.carrier = true;
+        carrier.sizing = mode.sizing;
         carrier.pctSum = pctSum;
         carrier.poolAt = poolAt;
-        // ⚠️ 비율 매수는 **목표에서 자른다**(사용자 확정 2026-08) — "축소된 비중을 일정하게
-        //    유지하는 것이 목적"이라 목표를 넘겨 사면 다음 회차가 되팔아 매매만 늘어난다.
-        carrier.planned = pctSum === null ? need : Math.min(need, (poolAt * pctSum) / 100);
+        /* ── S1 주문액 산출 (A-1) ──
+         * ⚠️ `toTarget`/`toTargetCapped`(레거시 계열)만 **목표 미달액에서 자른다**. 그 외 모드는
+         *    목표 비중과 무관하게 산출한다(A-2) — 이것이 "비중이 이미 목표를 넘어 ₩0으로 미체결"
+         *    이라는 실측 문제를 푸는 지점이다. */
+        const capsHit: BtSignalReason[] = [];
+        let ordered = 0;
+        if (mode.sizing === 'toTarget') {
+          ordered = need; carrier.basisKind = 'target'; carrier.basisAmount = need;
+        } else if (mode.sizing === 'toTargetCapped') {
+          // ⚠️ 비율 매수는 **목표에서 자른다**(사용자 확정 2026-08) — "축소된 비중을 일정하게
+          //    유지하는 것이 목적"이라 목표를 넘겨 사면 다음 회차가 되팔아 매매만 늘어난다.
+          const raw = (poolAt * (pctSum ?? 0)) / 100;
+          ordered = Math.min(need, raw);
+          if (raw > need) capsHit.push('CAP_TARGET');
+          carrier.basisKind = 'pool'; carrier.basisAmount = poolAt;
+        } else if (mode.sizing === 'pctOfPool') {
+          ordered = (poolAt * (pctSum ?? 0)) / 100;
+          carrier.basisKind = 'pool'; carrier.basisAmount = poolAt;
+        } else if (mode.sizing === 'pctOfTotal') {
+          const tot = totalAssetsAt();
+          ordered = (tot * (pctSum ?? 0)) / 100;
+          carrier.basisKind = 'total'; carrier.basisAmount = tot;
+        } else if (mode.sizing === 'fixedAmount') {
+          ordered = Math.max(0, mode.amount);
+          carrier.basisKind = 'fixed'; carrier.basisAmount = Math.max(0, mode.amount);
+        } else if (mode.sizing === 'restoreBase') {
+          // A-4 — 기준 평가액까지 되돌리는 데 필요한 금액.
+          const be = baselineEvalOf(b.p);
+          carrier.baseEval = be;
+          ordered = Math.max(0, be - b.evalBefore);
+          carrier.basisKind = 'base'; carrier.basisAmount = be;
+          // A-4-5 ② 같은 기준으로 반복 시도하는 폭주를 막는다.
+          const mr = Math.max(0, dipBaseline.maxReuse || 0);
+          if (mr > 0) {
+            const rec = baseUse.get(b.p.asset.id);
+            if (rec && Math.abs(rec.base - be) < 1 && rec.n >= mr) {
+              ordered = 0; capsHit.push('CAP_BASE_REUSE');
+            }
+          }
+        }
+        carrier.ordered = ordered;
+        /* ── S2 캡·한도 ──
+         * A-3 이탈 한도: 매수 후 비중이 목표 +X%p를 넘지 않게 주문을 줄인다. */
+        if (devRoom > 0) {
+          const room = Math.max(0, (b.target + devRoom) - b.evalBefore);
+          if (ordered > room) { ordered = room; capsHit.push('CAP_DEVIATION'); }
+        }
+        // A-4-5 ③ 종목별 누적 시그널 매수 한도.
+        if (assetBuyCap < Infinity) {
+          const room = Math.max(0, assetBuyCap - (sigBuyByAsset.get(b.p.asset.id) ?? 0));
+          if (ordered > room) { ordered = room; capsHit.push('CAP_ASSET_BUDGET'); }
+        }
+        carrier.caps = capsHit;
+        carrier.planned = ordered;
         for (let i = 1; i < list.length; i++) {
           list[i].pctSum = null; list[i].poolAt = 0; list[i].planned = 0;
         }
-        if (pctSum === null) needTotal += need;
+        // ⚠️ 재조정(②-b)은 **'목표까지'(toTarget) 단계에만** 재원을 마련한다 — 레거시에서
+        //    `pctSum === null`이던 조건과 정확히 같은 집합이다(resolveMode가 null → 'toTarget').
+        if (mode.sizing === 'toTarget') needTotal += need;
       }
 
       /**
@@ -3374,46 +4234,67 @@ export function runBacktest(input: BtRunInput): BtResult {
         if (first) first[0].reallocAmount = realloc;
       }
 
-      /* ②-c 실제 매수. */
-      // 목표 매수액이 큰 종목부터 — 재원이 모자랄 때 큰 구멍부터 메운다.
-      const ordered = [...buyPlans].sort((x, y) => {
-        const px = evsByAsset.get(x.p.asset.id)?.[0].planned ?? 0;
-        const py = evsByAsset.get(y.p.asset.id)?.[0].planned ?? 0;
-        return py - px;
-      });
-      for (const b of ordered) {
+      /* ── S3 배분 (A-6) ────────────────────────────────────────────────────
+       * 같은 영업일에 여러 종목이 발동하고 재원이 모자라면, 먼저 처리된 종목이 재원을 다 써 버려
+       * 결과가 **⑥ 종목 나열 순서**라는 임의의 값에 좌우된다. `weighted`를 고르면 워터폴로
+       * 나눠 순서와 무관한 결정론적 결과를 만든다. 기본값 `sequential`은 종전 코드 그대로다.
+       * ==================================================================== */
+      // ⚠️ `tradeOnly`는 분배금 주머니를 **완전히 잠근다**(사용자 확정 2026-08:
+      //    "매매 예수금만 = 누적 매매현금 + 초기 예수금"). 옛 설계의 '단계 비율만큼 개방'은 폐기.
+      //    정기 리밸런싱 runPlan과 **문자 그대로 같은 두 줄**이라야 두 경로가 갈리지 않는다.
+      const divCap = tradeOnly ? 0 : Infinity;
+      // ⚠️ 예비금은 **시그널 매수에서만** 열린다(사용자 정의). 재원 사다리는
+      //    ① 매매 주머니 → ② 예비금 → ③ 재조정 매도 → ④ 분배금 개방 순이다.
+      const reserveCapAll = Math.max(0, cashReserve);
+      const floorCapAll = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
+
+      /** A-6-6 결정론 — 실행·타이브레이크는 언제나 **⑥ 종목 등록 순서**다. */
+      const regIndex = new Map<string, number>();
+      config.assets.forEach((a, i) => regIndex.set(a.id, i));
+      const byRegistration = [...buyPlans].sort(
+        (x, y) => (regIndex.get(x.p.asset.id) ?? 0) - (regIndex.get(y.p.asset.id) ?? 0),
+      );
+
+      /** S4 — 한 종목을 실제로 체결한다. `cap`이 있으면 그 금액을 상한으로 쓴다(배분 모드). */
+      const fillOne = (b: (typeof buyPlans)[number], cap: number | null): void => {
         const list = evsByAsset.get(b.p.asset.id);
-        if (!list) continue;
+        if (!list) return;
         const carrier = list[0];
-        if (b.target - b.evalBefore <= 0) {
+        // ⚠️ **목표 캡 계열에만** '살 것 없음' 가드를 건다(A-2). 그 외 모드는 목표를 넘긴
+        //    상태에서도 체결돼야 한다 — 이것이 이번 수정의 핵심이다.
+        if (buyUsesTargetCap(carrier.sizing as BtBuySizing) && b.target - b.evalBefore <= 0) {
           if (!carrier.note) carrier.note = '목표 이상 — 살 것 없음';
-          continue;
+          if (!carrier.reason) carrier.reason = 'CAP_TARGET';
+          return;
         }
-        if (!(carrier.planned > 0)) {
+        const want = cap === null ? carrier.planned : Math.min(carrier.planned, cap);
+        if (!(want > 0)) {
           // ⚠️ '비율이 0%라 안 산다'와 '재원이 0원이라 못 산다'는 완전히 다른 사건이다 —
           //    뭉뚱그리면 사용자가 40%를 넣었는데 화면이 "매수 비율 0%"라고 단언한다
           //    (아래 `budget <= 0 → '재원 없음'` 분기는 이 가드에 가려 도달하지 못한다).
           if (!carrier.note) {
-            carrier.note = carrier.pctSum === 0 ? '매수 비율 0% — 사지 않음'
+            // ⚠️ '비율 0%' · '재원 0원' · '배분 0원'은 서로 다른 사건이다 — 뭉뚱그리면 사용자가
+            //    40%를 넣었는데 화면이 "매수 비율 0%"라고 단언한다.
+            carrier.note = cap !== null && !(cap > 0) ? '배분액 0원 — 다른 종목이 재원을 다 씀'
+              : carrier.pctSum === 0 ? '매수 비율 0% — 사지 않음'
               : poolAt <= 0 ? '재원 없음' : '매수 수량 0';
           }
-          continue;
+          if (!carrier.reason) {
+            carrier.reason = carrier.caps[0] ?? (poolAt <= 0 ? 'NO_CASH' : 'ROUNDING');
+          }
+          return;
         }
-        // ⚠️ `tradeOnly`는 분배금 주머니를 **완전히 잠근다**(사용자 확정 2026-08:
-        //    "매매 예수금만 = 누적 매매현금 + 초기 예수금"). 옛 설계의 '단계 비율만큼 개방'은 폐기.
-        //    정기 리밸런싱 runPlan과 **문자 그대로 같은 두 줄**이라야 두 경로가 갈리지 않는다.
-        const divCap = tradeOnly ? 0 : Infinity;
-        // ⚠️ 예비금은 **시그널 매수에서만** 열린다(사용자 정의). 재원 사다리는
-        //    ① 매매 주머니 → ② 예비금 → ③ 재조정 매도 → ④ 분배금 개방 순이다.
-        const reserveCap = Math.max(0, cashReserve);
-        const budget = (tradeOnly ? Math.max(0, cashTrade) : cash - cashReserve) + reserveCap;
-        const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
+        const budget = cap === null
+          ? (tradeOnly ? Math.max(0, cashTrade) : cash - cashReserve) + reserveCapAll
+          : Math.min(cap, (tradeOnly ? Math.max(0, cashTrade) : cash - cashReserve) + reserveCapAll);
         // ⚠️ 매수 상한은 목표가 아니라 **planned**다 — 비율 매수는 목표에 못 미치게 사는 것이 정상이고,
         //    목표를 그대로 넘기면 비율이 통째로 무시된다.
-        const tr = adjustTo(b.p, date, b.evalBefore + carrier.planned, false, { budget, divCap, floorCap, reserveCap });
+        const tr = adjustTo(b.p, date, b.evalBefore + want, false,
+          { budget, divCap, floorCap: floorCapAll, reserveCap: reserveCapAll });
         if (!tr) {
           if (!carrier.note) carrier.note = budget <= 0 ? '재원 없음' : '매수 수량 0';
-          continue;
+          if (!carrier.reason) carrier.reason = budget <= 0 ? 'NO_CASH' : 'ROUNDING';
+          return;
         }
         tr.signal = 'buy';
         pushTrade(tr);
@@ -3423,8 +4304,145 @@ export function runBacktest(input: BtRunInput): BtResult {
           carrier.used += lastDraw.fromDiv;
           carrier.fromTrade += lastDraw.fromTrade;
           carrier.fromReserve += lastDraw.fromReserve;
+          sigBuyByAsset.set(b.p.asset.id, (sigBuyByAsset.get(b.p.asset.id) ?? 0) + Math.abs(tr.cashDelta));
         }
         if (tr.note) carrier.note = tr.note;
+      };
+
+      const allocOn = dipAlloc.mode === 'weighted' && buyPlans.length >= 2;
+      if (!allocOn) {
+        /* ②-c 순차 처리(기본) — 목표 매수액이 큰 종목부터. 재원이 모자랄 때 큰 구멍부터 메운다. */
+        const ordered = [...buyPlans].sort((x, y) => {
+          const px = evsByAsset.get(x.p.asset.id)?.[0].planned ?? 0;
+          const py = evsByAsset.get(y.p.asset.id)?.[0].planned ?? 0;
+          return py - px;
+        });
+        for (const b of ordered) fillOne(b, null);
+      } else {
+        /* A-6-3 워터폴 배분.
+         * ⚠️ A-6-7 — 최소 유보 현금(E)·현금 바닥선은 **배분 전에** 재원에서 먼저 뺀다. */
+        const rawPool = (tradeOnly ? Math.max(0, cashTrade) : Math.max(0, cash - cashReserve)) + reserveCapAll;
+        const pool = Math.max(0, Math.min(rawPool, floorCapAll));
+        const weightOfPlan = (b: (typeof buyPlans)[number]): number => {
+          if (dipAlloc.basis === 'need') {
+            return Math.max(0, evsByAsset.get(b.p.asset.id)?.[0].planned ?? 0);
+          }
+          if (dipAlloc.basis === 'underGap') return Math.max(0, b.target - b.evalBefore);
+          return Math.max(0, b.target);   // targetRatio — 목표(=분모×비중)에 비례
+        };
+        let items = byRegistration.map(b => ({
+          id: b.p.asset.id,
+          weight: weightOfPlan(b),
+          need: Math.max(0, evsByAsset.get(b.p.asset.id)?.[0].planned ?? 0),
+          b,
+        }));
+        const priceOf = (it: (typeof items)[number]) => it.b.hit.price;
+        const minAmt = Math.max(0, dipAlloc.minOrderAmount || 0);
+        const minQty = Math.max(0, dipAlloc.minOrderQty || 0);
+        const dropped = new Map<string, BtSignalReason>();
+        let res = waterfallAllocate(items, pool);
+        // A-6-5 — 1주 값·최소 주문에 미달한 배분은 `ROUNDING`으로 빼고 **그 몫을 재원으로 되돌려**
+        //         나머지 종목에 다시 나눈다. 종목 수만큼만 반복하면 반드시 수렴한다.
+        for (let guard = 0; guard <= items.length; guard++) {
+          const bad = items.filter(it => {
+            const a = res.alloc[it.id] ?? 0;
+            const q = roundQty(a / priceOf(it), config.rounding === 'exact' ? 'exact' : 'floor');
+            return !(q > 0) || (minQty > 0 && q < minQty) || (minAmt > 0 && q * priceOf(it) < minAmt);
+          });
+          if (!bad.length || bad.length === items.length) {
+            for (const it of bad) dropped.set(it.id, 'ROUNDING');
+            break;
+          }
+          for (const it of bad) dropped.set(it.id, 'ROUNDING');
+          items = items.filter(it => !dropped.has(it.id));
+          res = waterfallAllocate(items, pool);
+        }
+        // A-6-4 내림 잔액 — `cash`(기본)는 그대로 두고, 나머지 두 규칙만 추가 매수를 시도한다.
+        if (dipAlloc.leftover !== 'cash' && res.leftover > 0) {
+          const byWeight = [...items].sort((x, y) => (y.weight - x.weight)
+            || ((regIndex.get(x.id) ?? 0) - (regIndex.get(y.id) ?? 0)));
+          const passes = dipAlloc.leftover === 'refill' ? 50 : 1;
+          for (let k = 0; k < passes; k++) {
+            let added = false;
+            for (const it of byWeight) {
+              const px = priceOf(it);
+              if (!(px > 0) || res.leftover < px) continue;
+              res.alloc[it.id] = (res.alloc[it.id] ?? 0) + px;
+              res.leftover -= px;
+              added = true;
+              // 'topWeight'는 **1주만** 시도한다(가중치가 가장 큰 종목 하나).
+              if (dipAlloc.leftover === 'topWeight') break;
+            }
+            if (!added || dipAlloc.leftover === 'topWeight') break;
+          }
+        }
+        // S4 체결 — 등록 순서대로. Σ배분 ≤ 재원이라 앞 종목이 뒤 종목의 몫을 빼앗지 않는다.
+        const rows: BtAllocRow[] = [];
+        let totalFilled = 0;
+        const totalW = items.reduce((s, it) => s + it.weight, 0);
+        for (const b of byRegistration) {
+          const it = items.find(x => x.id === b.p.asset.id);
+          const list = evsByAsset.get(b.p.asset.id);
+          const carrier = list ? list[0] : null;
+          const allocAmt = it ? (res.alloc[it.id] ?? 0) : 0;
+          const w = it && totalW > 0 ? (it.weight / totalW) * 100 : 0;
+          if (carrier) { carrier.allocWeight = w; carrier.allocAmount = allocAmt; }
+          if (it) fillOne(b, allocAmt);
+          else if (carrier && !carrier.note) {
+            carrier.note = '배분액이 1주 값에 미달 — 재원을 다른 종목에 재배분';
+            carrier.reason = 'ROUNDING';
+          }
+          const filled = carrier ? carrier.tradeAmount : 0;
+          totalFilled += filled;
+          rows.push({
+            assetId: b.p.asset.id, code: b.p.asset.code, name: b.p.asset.name,
+            need: carrier ? carrier.planned : 0,
+            weight: w, alloc: allocAmt,
+            qty: carrier ? carrier.tradeQty : 0,
+            amount: filled,
+            shortfall: Math.max(0, (carrier ? carrier.planned : 0) - filled),
+            reason: (carrier ? carrier.reason : '') || (dropped.get(b.p.asset.id) ?? ''),
+          });
+        }
+        allocBlocks.push({
+          date, basis: dipAlloc.basis, leftoverRule: dipAlloc.leftover,
+          pool, totalFilled, leftoverCash: Math.max(0, pool - totalFilled),
+          iterations: res.iterations, redistributed: res.redistributed, rows,
+        });
+      }
+
+      /* ── S5 기준축 갱신 ───────────────────────────────────────────────────
+       * 체결분의 앵커·기준 평가액은 pushTrade가 이미 옮겼다. 여기서는 **체결이 0인 발동**의
+       * 후처리만 한다(D: 미체결 시 기준가 갱신 / A-4-5 ①: 복원 후 기준축 리셋·재사용 카운트).
+       * ==================================================================== */
+      for (const list of evsByAsset.values()) {
+        const carrier = list[0];
+        if (!carrier.carrier) continue;
+        const p = posById.get(carrier.assetId);
+        if (!p) continue;
+        if (carrier.tradeQty === 0) {
+          if (config.dip.anchorOnNoFill === 'update') forceAnchor(carrier.assetId, carrier.price, date);
+        } else if (carrier.sizing === 'restoreBase') {
+          // A-4-5 ① 복원 체결 후 기준축을 그 시점 평가액으로 리셋한다(설정 시).
+          if (dipBaseline.resetOnFill) {
+            baseOverride.set(carrier.assetId, p.qty * carrier.price);
+          }
+        }
+        if (carrier.sizing === 'restoreBase' && carrier.baseEval > 0 && carrier.reason !== 'CAP_BASE_REUSE') {
+          const rec = baseUse.get(carrier.assetId);
+          if (rec && Math.abs(rec.base - carrier.baseEval) < 1) rec.n++;
+          else baseUse.set(carrier.assetId, { base: carrier.baseEval, n: 1 });
+        }
+        /* ── S6 로그 — 사유 코드·미달액·복원율 확정 ── */
+        carrier.shortfall = Math.max(0, carrier.planned - carrier.tradeAmount);
+        if (carrier.tradeQty > 0) {
+          // 1주 값 이상 모자라면 재원 부족으로 부분 체결된 것이다(A-4-4의 `PARTIAL_NO_CASH`).
+          if (carrier.shortfall >= carrier.price) carrier.reason = 'PARTIAL_NO_CASH';
+          else if (!carrier.reason) carrier.reason = carrier.caps[0] ?? '';
+          if (carrier.sizing === 'restoreBase' && carrier.ordered > 0) {
+            carrier.restoreRate = (carrier.tradeAmount / carrier.ordered) * 100;
+          }
+        }
       }
       continue;
     }
@@ -3637,6 +4655,15 @@ export function runBacktest(input: BtRunInput): BtResult {
         //    (`!p.active`는 '아직 편입 전'도 포함하므로 그것만으로는 구분할 수 없다.)
         if (p.removed) continue;
         if (s.rebalDate < p.effectiveStart || s.rebalDate > p.effectiveEnd) continue;
+        // C-3 — 최근 N영업일 안에 시그널로 조정한 종목은 이번 정기 회차에서 제외한다.
+        // ⚠️ **편입(`p.active = true`)보다 먼저** 판정한다 — 제외된 종목까지 활성화하면
+        //    다음 회차 목표 합계·현금 바닥선 기준이 달라져 '제외'의 의미가 흐려진다.
+        //    기본값(0)에서는 이 분기를 타지 않아 종전과 동일하다.
+        const xr = Math.max(0, config.dip.excludeRegularDays || 0);
+        if (xr > 0) {
+          const last = lastSignalDate.get(p.asset.id);
+          if (last && bizDist(s.rebalDate, last) < xr) continue;
+        }
         // 데이터가 생긴 시점부터 자동 편입 — 중간 상장 종목이 첫 리밸런싱에서 들어온다.
         if (!p.active) p.active = true;
         eligible.push(p);
@@ -3646,9 +4673,8 @@ export function runBacktest(input: BtRunInput): BtResult {
 
       // ⚠️ 현금 바닥선의 기준은 **활성 종목 목표금액 합계**다. 슬롯에 든 종목만이 아니라
       //    그 시점 살아 있는 전 종목이 기준이어야 "포트폴리오 규모 대비 N%"라는 뜻이 유지된다.
-      const floorAmount = config.cashFloorPct > 0
-        ? (activeTargetSum(s.rebalDate, base) * config.cashFloorPct) / 100
-        : 0;
+      // ⚠️ E(최소 유보 현금)와 같은 자리에서 합친다(cashFloorAt) — 둘 다 0이면 종전과 동일하다.
+      const floorAmount = cashFloorAt(s.rebalDate, base);
       const bandPct = Math.max(0, config.band);
       const tradeOnly = config.buyFunding === 'tradeOnly';
 
@@ -3911,6 +4937,26 @@ export function runBacktest(input: BtRunInput): BtResult {
     if (m.shortfallCount > 0) shortfallMonths++;
   }
 
+  /* ── F-2 시그널 집계 — 매수/매도 **분리** 발동·체결 건수 + 미체결 사유별 건수 ──────────
+   * ⚠️ carrier 행만 센다. 같은 날 겹친 단계까지 세면 '체결 7/9건'이 실제 매매 건수와 어긋난다.
+   * ⚠️ 쿨다운으로 막힌 발동도 carrier로 남기므로 '발동'에는 포함되고 '체결'에는 빠진다 —
+   *    그 사실이 사유별 집계(COOLDOWN)에 그대로 드러나야 한다.
+   * ========================================================================= */
+  const signalStats = {
+    buyFired: 0, buyFilled: 0, sellFired: 0, sellFilled: 0,
+    reasons: {} as Record<string, number>,
+  };
+  for (const e of signalEvents) {
+    if (!e.carrier) continue;
+    const filled = e.tradeQty !== 0;
+    if (e.kind === 'sell') { signalStats.sellFired++; if (filled) signalStats.sellFilled++; }
+    else { signalStats.buyFired++; if (filled) signalStats.buyFilled++; }
+    if (!filled) {
+      const key = e.reason || 'OTHER';
+      signalStats.reasons[key] = (signalStats.reasons[key] ?? 0) + 1;
+    }
+  }
+
   return {
     ok: true,
     fatal: '',
@@ -3945,6 +4991,8 @@ export function runBacktest(input: BtRunInput): BtResult {
       divMonthlyAvg, divMonthlyStdev,
       bandSkipCount, bandSkipAmount,
       signalEvents,
+      allocBlocks,
+      signalStats,
       shortfallMonths,
     },
   };

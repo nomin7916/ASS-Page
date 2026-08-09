@@ -226,14 +226,51 @@ const asPctOrNull = (v) => {
   if (!Number.isFinite(n)) return null;
   return Math.min(100, Math.max(0, n));
 };
+const BASE_AXES = ['lastFill', 'prevMonthEnd', 'peakEval', 'manual'];
+const BUY_SIZINGS = ['toTarget', 'toTargetCapped', 'pctOfPool', 'fixedAmount', 'pctOfTotal', 'restoreBase'];
+const SELL_SIZINGS = ['toTarget', 'pctOfExcess', 'pctOfEval', 'pctOfQty', 'fixedAmount', 'excessOverBase'];
+const legacyBuySizing = (buyPct) => (buyPct === null || buyPct === undefined ? 'toTarget' : 'toTargetCapped');
+const legacySellSizing = (sellPct) => (sellPct === null || sellPct === undefined ? 'toTarget' : 'pctOfExcess');
+const buyUsesTargetCap = (s) => s === 'toTarget' || s === 'toTargetCapped';
+const sellUsesTargetCap = (s) => s === 'toTarget' || s === 'pctOfExcess';
+function waterfallAllocate(items, pool, maxIter = 10) {
+  const alloc = {};
+  for (const it of items) alloc[it.id] = 0;
+  let remaining = Number.isFinite(pool) ? Math.max(0, pool) : 0;
+  let iterations = 0, redistributed = 0;
+  const EPS = 1e-6;
+  let active = items.filter((it) => it.need > EPS && it.weight > 0);
+  while (remaining > EPS && active.length > 0 && iterations < maxIter) {
+    iterations++;
+    const W = active.reduce((s, it) => s + it.weight, 0);
+    if (!(W > 0)) break;
+    let used = 0;
+    const next = [];
+    for (const it of active) {
+      const share = (remaining * it.weight) / W;
+      const room = it.need - alloc[it.id];
+      const take = Math.min(share, room);
+      if (take > 0) { alloc[it.id] += take; used += take; }
+      if (room - take > EPS) next.push(it);
+    }
+    if (!(used > EPS)) break;
+    remaining -= used;
+    if (iterations > 1) redistributed += used;
+    active = next;
+  }
+  return { alloc, leftover: remaining, iterations, redistributed };
+}
 function normalizeDipLevels(raw) {
   const arr = asArr(raw)
     .map((l) => ({
       drop: asNum(l?.drop, NaN),
       buyPct: l?.buyPct !== undefined ? asPctOrNull(l.buyPct) : (asPctOrNull(l?.unlockPct) || null),
+      sizing: BUY_SIZINGS.includes(l?.sizing) ? l.sizing : undefined,
+      amount: Math.max(0, asNum(l?.amount, 0)),
     }))
+    .map((l) => ({ drop: l.drop, buyPct: l.buyPct, sizing: l.sizing ?? legacyBuySizing(l.buyPct), amount: l.amount }))
     .filter((l) => Number.isFinite(l.drop) && l.drop > 0 && l.drop <= 100);
-  if (!arr.length) return DEFAULT_DIP_LEVELS.map((l) => ({ ...l }));
+  if (!arr.length) return DEFAULT_DIP_LEVELS.map((l) => ({ ...l, sizing: legacyBuySizing(l.buyPct), amount: 0 }));
   arr.sort((a, b) => a.drop - b.drop);
   const seen = new Set();
   const out = [];
@@ -247,7 +284,15 @@ function normalizeDipLevels(raw) {
 }
 function normalizeSellLevels(raw) {
   const arr = asArr(raw)
-    .map((l) => ({ rise: asNum(l?.rise, NaN), sellPct: asPctOrNull(l?.sellPct) }))
+    .map((l) => {
+      const sellPct = asPctOrNull(l?.sellPct);
+      return {
+        rise: asNum(l?.rise, NaN),
+        sellPct,
+        sizing: SELL_SIZINGS.includes(l?.sizing) ? l.sizing : legacySellSizing(sellPct),
+        amount: Math.max(0, asNum(l?.amount, 0)),
+      };
+    })
     .filter((l) => Number.isFinite(l.rise) && l.rise > 0 && l.rise <= 1000);
   arr.sort((a, b) => a.rise - b.rise);
   const seen = new Set();
@@ -279,6 +324,33 @@ function normalizeDip(raw) {
     anchorLevels: normalizeAnchorLevels(raw?.anchorLevels),
     anchorSellLevels: normalizeAnchorLevels(raw?.anchorSellLevels),
     anchorSource: raw?.anchorSource === 'lastRebal' ? 'lastRebal' : 'lastFill',
+    deviationCap: Math.max(0, asNum(raw?.deviationCap, 0)),
+    baseline: normalizeBaseline(raw?.baseline),
+    buyCapMode: raw?.buyCapMode === 'amount' || raw?.buyCapMode === 'pctOfInitial' ? raw.buyCapMode : 'none',
+    buyCapValue: Math.max(0, asNum(raw?.buyCapValue, 0)),
+    alloc: normalizeAlloc(raw?.alloc),
+    conflict: raw?.conflict === 'regularFirst' || raw?.conflict === 'skipSignal' ? raw.conflict : 'signalFirst',
+    cooldownDays: clampInt(asNum(raw?.cooldownDays, 0), 0, 250),
+    excludeRegularDays: clampInt(asNum(raw?.excludeRegularDays, 0), 0, 250),
+    anchorOnNoFill: raw?.anchorOnNoFill === 'update' ? 'update' : 'keep',
+  };
+}
+function normalizeBaseline(raw) {
+  return {
+    axis: BASE_AXES.includes(raw?.axis) ? raw.axis : 'lastFill',
+    amount: Math.max(0, asNum(raw?.amount, 0)),
+    resetOnFill: !!raw?.resetOnFill,
+    maxReuse: clampInt(asNum(raw?.maxReuse, 0), 0, 99),
+  };
+}
+function normalizeAlloc(raw) {
+  const b = raw?.basis, lo = raw?.leftover;
+  return {
+    mode: raw?.mode === 'weighted' ? 'weighted' : 'sequential',
+    basis: b === 'need' || b === 'underGap' ? b : 'targetRatio',
+    leftover: lo === 'topWeight' || lo === 'refill' ? lo : 'cash',
+    minOrderAmount: Math.max(0, asNum(raw?.minOrderAmount, 0)),
+    minOrderQty: Math.max(0, asNum(raw?.minOrderQty, 0)),
   };
 }
 function normalizeAnnualReview(raw) {
@@ -350,6 +422,8 @@ function makeBtAsset(partial = {}, idx = 0) {
     startDate: isIsoDate(partial.startDate) ? partial.startDate : '',
     endDate: isIsoDate(partial.endDate) ? partial.endDate : '',
     divOverride: normalizeDivOverride(partial.divOverride),
+    baseAxis: BASE_AXES.includes(partial.baseAxis) ? partial.baseAxis : '',
+    baseAmount: asNumOrNull(partial.baseAmount),
     color: asStr(partial.color) || BT_COLORS[idx % BT_COLORS.length],
   };
 }
@@ -394,6 +468,8 @@ function makeBtConfig(partial = {}) {
     initialCapital: Math.max(0, asNum(partial.initialCapital, 0)),
     extraCash: Math.max(0, asNum(partial.extraCash, 0)),
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
+    ratioBase: partial.ratioBase === 'equityCash' ? 'equityCash' : 'equity',
+    minCashReserve: Math.max(0, asNum(partial.minCashReserve, 0)),
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
     regularOn: partial.regularOn !== false,
     policy: policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none' ? policy : 'perCycle',
@@ -435,13 +511,60 @@ function backtestScenariosHaveContent(scenarios) {
 }
 
 // ⚠️ '같은 저장값의 뜻이 바뀐' 릴리스에서만 올린다(src/backtest.ts 주석 참조).
+const dipLevelToken = (l) => {
+  const buyPct = l?.buyPct ?? null;
+  const base = `${l?.drop ?? ''}:${buyPct ?? ''}`;
+  const legacy = legacyBuySizing(buyPct);
+  const siz = l?.sizing ?? legacy;
+  if (siz === legacy) return base;
+  return `${base}:${siz}${siz === 'fixedAmount' ? `@${l?.amount ?? 0}` : ''}`;
+};
+const sellLevelToken = (l) => {
+  const sellPct = l?.sellPct ?? null;
+  const base = `${l?.rise ?? ''}:${sellPct ?? ''}`;
+  const legacy = legacySellSizing(sellPct);
+  const siz = l?.sizing ?? legacy;
+  if (siz === legacy) return base;
+  return `${base}:${siz}${siz === 'fixedAmount' ? `@${l?.amount ?? 0}` : ''}`;
+};
+function fpExtras(s) {
+  const out = [];
+  const putEnum = (k, v, allowed) => { if (allowed.includes(v)) out.push(`${k}=${v}`); };
+  const putNum = (k, v) => { if (typeof v === 'number' && Number.isFinite(v) && v > 0) out.push(`${k}=${v}`); };
+  const d = s?.dip;
+  putEnum('rb', s?.ratioBase, ['equityCash']);
+  putNum('mcr', s?.minCashReserve);
+  putNum('dev', d?.deviationCap);
+  putEnum('bax', d?.baseline?.axis, ['prevMonthEnd', 'peakEval', 'manual']);
+  putNum('bam', d?.baseline?.amount);
+  if (d?.baseline?.resetOnFill) out.push('brf=1');
+  putNum('bmr', d?.baseline?.maxReuse);
+  putEnum('bcm', d?.buyCapMode, ['amount', 'pctOfInitial']);
+  putNum('bcv', d?.buyCapValue);
+  putEnum('am', d?.alloc?.mode, ['weighted']);
+  putEnum('ab', d?.alloc?.basis, ['need', 'underGap']);
+  putEnum('al', d?.alloc?.leftover, ['topWeight', 'refill']);
+  putNum('aoa', d?.alloc?.minOrderAmount);
+  putNum('aoq', d?.alloc?.minOrderQty);
+  putEnum('cf', d?.conflict, ['regularFirst', 'skipSignal']);
+  putNum('cd', d?.cooldownDays);
+  putNum('xr', d?.excludeRegularDays);
+  putEnum('anf', d?.anchorOnNoFill, ['update']);
+  for (const a of asArr(s?.assets)) {
+    if (BASE_AXES.includes(a?.baseAxis)) out.push(`ax:${a?.id ?? ''}=${a.baseAxis}`);
+    if (typeof a?.baseAmount === 'number' && Number.isFinite(a.baseAmount)) out.push(`aa:${a?.id ?? ''}=${a.baseAmount}`);
+  }
+  return out;
+}
 const SETTINGS_FP_SCHEMA = 2;
 function backtestSettingsFingerprint(cfg) {
   try {
     const s = cfg;
     if (!s || typeof s !== 'object') return '';
+    const x = fpExtras(s);
     return JSON.stringify({
       v: SETTINGS_FP_SCHEMA,
+      ...(x.length ? { x } : {}),
       p: [s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
           s.targetMode ?? '', s.rounding ?? '', s.policy ?? '', s.regularOn === false ? 0 : 1,
           s.fixedDay ?? 0, s.exDivOffset ?? 0, s.rebalOffset ?? 0, s.payOffset ?? 0,
@@ -451,8 +574,8 @@ function backtestSettingsFingerprint(cfg) {
           s.contribution?.mode ?? '', s.contribution?.value ?? 0, s.contribution?.split ?? '',
           s.band ?? 0, s.buyFunding ?? '', s.cashFloorPct ?? 0, s.divTaxPct ?? 0,
           s.dip?.enabled ? 1 : 0,
-          asArr(s.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
-          asArr(s.dip?.sellLevels).map((l) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
+          asArr(s.dip?.levels).map(dipLevelToken).join(','),
+          asArr(s.dip?.sellLevels).map(sellLevelToken).join(','),
           s.dip?.reallocate === false ? 0 : 1,
           s.dip?.extremeOn === false ? 0 : 1, s.dip?.anchorSource ?? '',
           asArr(s.dip?.anchorLevels).map((l) => `${l?.move ?? ''}`).join(','),
@@ -479,8 +602,11 @@ function backtestSettingsFingerprint(cfg) {
 function backtestFingerprint(scenarios) {
   try {
     if (!Array.isArray(scenarios)) return '';
-    return JSON.stringify(scenarios.map((s) => ({
+    return JSON.stringify(scenarios.map((s) => {
+      const x = fpExtras(s);
+      return {
       i: s?.id ?? '', n: s?.name ?? '',
+      ...(x.length ? { x } : {}),
       p: [s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
           s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '', s?.regularOn === false ? 0 : 1,
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
@@ -491,8 +617,8 @@ function backtestFingerprint(scenarios) {
           s?.contribution?.mode ?? '', s?.contribution?.value ?? 0, s?.contribution?.split ?? '',
           s?.band ?? 0, s?.buyFunding ?? '', s?.cashFloorPct ?? 0, s?.divTaxPct ?? 0,
           s?.dip?.enabled ? 1 : 0,
-          asArr(s?.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
-          asArr(s?.dip?.sellLevels).map((l) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
+          asArr(s?.dip?.levels).map(dipLevelToken).join(','),
+          asArr(s?.dip?.sellLevels).map(sellLevelToken).join(','),
           s?.dip?.reallocate === false ? 0 : 1,
           s?.dip?.extremeOn === false ? 0 : 1, s?.dip?.anchorSource ?? '',
           asArr(s?.dip?.anchorLevels).map((l) => `${l?.move ?? ''}`).join(','),
@@ -518,7 +644,8 @@ function backtestFingerprint(scenarios) {
         asArr(e?.targets).map((t) => `${t?.assetId ?? ''}:${t?.amount ?? ''}:${t?.ratio ?? ''}`).join('|'),
       ]),
       o: asArr(s?.overrides).map((o) => [o?.id ?? '', o?.ym ?? '', o?.group ?? '', o?.date ?? '', o?.assetId ?? '']),
-    })));
+      };
+    }));
   } catch { return 'ERR'; }
 }
 
@@ -718,7 +845,9 @@ function runBacktest(input) {
       cumContribution: 0, cumAnnualReview: 0, finalCashTrade: 0, finalCashDiv: 0, finalCashReserve: 0, cumDivDrawn: 0, cumReserveDrawn: 0, maxDrawdown: 0, months: 0,
       minCash: { value: 0, date: '' }, minCashDiv: { value: 0, date: '' },
       divMonthlyAvg: 0, divMonthlyStdev: 0,
-      bandSkipCount: 0, bandSkipAmount: 0, signalEvents: [], shortfallMonths: 0 },
+      bandSkipCount: 0, bandSkipAmount: 0, signalEvents: [], allocBlocks: [],
+      signalStats: { buyFired: 0, buyFilled: 0, sellFired: 0, sellFilled: 0, reasons: {} },
+      shortfallMonths: 0 },
   });
   if (!isIsoDate(config.startDate) || !isIsoDate(config.endDate)) return empty('기간(시작일·종료일)을 선택해 주세요.');
   if (config.startDate > config.endDate) return empty('시작일이 종료일보다 늦습니다.');
@@ -825,7 +954,12 @@ function runBacktest(input) {
   };
   const targetBaseAt = (date) => {
     const eq = totalEvalAt(date);
+    if (config.ratioBase === 'equityCash') return Math.max(0, eq + cash);
     return eq > 0 ? eq : Math.max(0, cash - cashReserve);
+  };
+  const cashFloorAt = (date, base) => {
+    const pct = config.cashFloorPct > 0 ? (activeTargetSum(date, base) * config.cashFloorPct) / 100 : 0;
+    return Math.max(pct, Math.max(0, config.minCashReserve || 0));
   };
   const activeTargetSum = (date, base) => {
     let s = 0;
@@ -838,6 +972,80 @@ function runBacktest(input) {
   };
   // 시그널 리밸런싱은 발동일 종가로 즉시 체결하므로 회차를 넘겨 들고 다니는 상태가 없다.
   const signalEvents = [];
+  const allocBlocks = [];
+  const makeSignalEvent = (t, p, date, pocket, cashTradeAt, extra = {}) => ({
+    date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
+    kind: t.kind, step: t.step, level: t.level,
+    axis: t.axis, anchorDate: t.anchorDate,
+    pct: t.pct, pctSum: null, carrier: false,
+    poolAt: 0, excessAt: 0, planned: 0,
+    divPocketAt: pocket, cashTradeAt,
+    used: 0, ref: t.ref, price: t.price,
+    tradeQty: 0, tradeAmount: 0, fromTrade: 0, fromReserve: 0, reallocAmount: 0, note: '',
+    sizing: t.sizing, basisKind: '', basisAmount: 0, ordered: 0, caps: [], reason: '',
+    refDate: t.refDate, baseEval: 0, restoreRate: 0, shortfall: 0,
+    allocWeight: 0, allocAmount: 0,
+    ...extra,
+  });
+  // ⚠️ dip의 중첩 객체는 정규화해서 읽는다(화면이 정규화 없는 로컬 사본을 그대로 넘긴다).
+  const dipAlloc = normalizeAlloc(config.dip.alloc);
+  const dipBaseline = normalizeBaseline(config.dip.baseline);
+  const bizIndex = new Map();
+  allBiz.forEach((d, i) => bizIndex.set(d, i));
+  const bizDist = (later, earlier) => {
+    const li = bizIndex.get(later), ei = bizIndex.get(earlier);
+    if (li === undefined || ei === undefined) return Infinity;
+    return li - ei;
+  };
+  const lastSignalDate = new Map();
+  const lastFillEval = new Map();
+  const monthEndEval = new Map();
+  const peakEvalMap = new Map();
+  const baseOverride = new Map();
+  const baseUse = new Map();
+  const sigBuyByAsset = new Map();
+  const preBuyLevels = config.dip.enabled ? normalizeDipLevels(config.dip.levels) : [];
+  const preSellLevels = config.dip.enabled ? normalizeSellLevels(config.dip.sellLevels) : [];
+  const usesBaseline = config.dip.enabled && config.dip.extremeOn !== false
+    && (preBuyLevels.some((l) => l.sizing === 'restoreBase')
+      || preSellLevels.some((l) => l.sizing === 'excessOverBase'));
+  const baseAxisOf = (p) => (p.asset.baseAxis || dipBaseline.axis);
+  const needDailyEval = usesBaseline && positions.some((p) => baseAxisOf(p) === 'peakEval');
+  const needMonthEndBase = usesBaseline && positions.some((p) => baseAxisOf(p) === 'prevMonthEnd');
+  const baselineEvalOf = (p) => {
+    const ov = baseOverride.get(p.asset.id);
+    if (ov !== undefined) return ov;
+    const axis = baseAxisOf(p);
+    if (axis === 'manual') {
+      const a = p.asset.baseAmount;
+      return typeof a === 'number' && Number.isFinite(a) ? Math.max(0, a) : Math.max(0, dipBaseline.amount);
+    }
+    if (axis === 'prevMonthEnd') return Math.max(0, monthEndEval.get(p.asset.id) ?? 0);
+    if (axis === 'peakEval') return Math.max(0, peakEvalMap.get(p.asset.id) ?? 0);
+    return Math.max(0, lastFillEval.get(p.asset.id) ?? 0);
+  };
+  let monthEndYm = '';
+  const syncMonthEndBase = (date) => {
+    if (!needMonthEndBase) return;
+    const ym = ymOf(date);
+    if (!ym || ym === monthEndYm) return;
+    monthEndYm = ym;
+    const prev = addMonthsToYm(ym, -1);
+    if (!prev) return;
+    const d = onOrBeforeBusinessDay(lastDayOfMonth(prev), holidays);
+    if (!isIsoDate(d) || d >= date) return;
+    for (const p of positions) {
+      const h = priceAt(prices[p.asset.code], d);
+      monthEndEval.set(p.asset.id, p.qty > QTY_EPS && !h.missing ? p.qty * h.price : 0);
+    }
+  };
+  const touchFillBase = (t) => {
+    if (!usesBaseline) return;
+    if (t.reinvest || t.structural) return;
+    if (t.signal === 'realloc') return;
+    if (!(t.price > 0)) return;
+    lastFillEval.set(t.assetId, t.qtyAfter * t.price);
+  };
   const anchorLevels = config.dip.enabled ? normalizeAnchorLevels(config.dip.anchorLevels) : [];
   const anchorSellLevels = config.dip.enabled ? normalizeAnchorLevels(config.dip.anchorSellLevels) : [];
   const anchorOn = anchorLevels.length > 0 || anchorSellLevels.length > 0;
@@ -859,11 +1067,19 @@ function runBacktest(input) {
     firedAnchorBuy.get(t.assetId)?.clear();
     firedAnchorSell.get(t.assetId)?.clear();
   };
+  const forceAnchor = (assetId, price, date) => {
+    if (!anchorOn || !(price > 0)) return;
+    if (anchorPx.get(assetId) === price) return;
+    anchorPx.set(assetId, price);
+    anchorDateOf.set(assetId, date);
+    firedAnchorBuy.get(assetId)?.clear();
+    firedAnchorSell.get(assetId)?.clear();
+  };
   const deployableCash = (date) => {
     let cap = config.buyFunding === 'tradeOnly' ? Math.max(0, cashTrade) : Math.max(0, cash - cashReserve);
-    if (config.cashFloorPct > 0) {
-      const fl = (activeTargetSum(date, targetBaseAt(date)) * config.cashFloorPct) / 100;
-      cap = Math.min(cap, Math.max(0, cash - cashReserve - fl));
+    if (config.cashFloorPct > 0 || config.minCashReserve > 0) {
+      const fl = cashFloorAt(date, targetBaseAt(date));
+      if (fl > 0) cap = Math.min(cap, Math.max(0, cash - cashReserve - fl));
     }
     return cap;
   };
@@ -993,7 +1209,7 @@ function runBacktest(input) {
     for (const p of positions) {
       if (!p.active) continue;
       const t = adjustTo(p, startBiz, targetOf(p, config, base), false, { budget: Math.max(0, initRemain) });
-      if (t) { touchAnchor(t); initialTrades.push(t); initRemain += t.cashDelta; }
+      if (t) { touchAnchor(t); touchFillBase(t); initialTrades.push(t); initRemain += t.cashDelta; }
     }
   }
   const initialCashAfter = cash;
@@ -1038,6 +1254,8 @@ function runBacktest(input) {
       if (!series) continue;
       let peak = 0;
       let trough = Infinity;
+      let peakDate = '';
+      let troughDate = '';
       const firedBuy = new Set();
       const firedSell = new Set();
       for (const d of allBiz) {
@@ -1046,8 +1264,8 @@ function runBacktest(input) {
         const px = hit.price;
         const newPeak = px > peak;
         const newTrough = px < trough;
-        if (newPeak) { peak = px; firedBuy.clear(); }
-        if (newTrough) { trough = px; firedSell.clear(); }
+        if (newPeak) { peak = px; peakDate = d; firedBuy.clear(); }
+        if (newTrough) { trough = px; troughDate = d; firedSell.clear(); }
         const push = (rec) => {
           const arr = sigTrigByDate.get(d);
           if (arr) arr.push(rec); else sigTrigByDate.set(d, [rec]);
@@ -1059,7 +1277,8 @@ function runBacktest(input) {
             if (firedBuy.has(i)) continue;
             if (dropPct < lv.drop) continue;
             firedBuy.add(i);
-            push({ assetId: p.asset.id, kind: 'buy', step: i + 1, level: lv.drop, pct: lv.buyPct, ref: peak, price: px, axis: 'extreme', anchorDate: '' });
+            push({ assetId: p.asset.id, kind: 'buy', step: i + 1, level: lv.drop, pct: lv.buyPct, ref: peak, price: px, axis: 'extreme', anchorDate: '',
+              sizing: lv.sizing ?? legacyBuySizing(lv.buyPct), amount: Math.max(0, lv.amount ?? 0), refDate: peakDate });
           }
         }
         if (!newTrough && trough > 0 && Number.isFinite(trough)) {
@@ -1069,7 +1288,8 @@ function runBacktest(input) {
             if (firedSell.has(i)) continue;
             if (risePct < lv.rise) continue;
             firedSell.add(i);
-            push({ assetId: p.asset.id, kind: 'sell', step: i + 1, level: lv.rise, pct: lv.sellPct, ref: trough, price: px, axis: 'extreme', anchorDate: '' });
+            push({ assetId: p.asset.id, kind: 'sell', step: i + 1, level: lv.rise, pct: lv.sellPct, ref: trough, price: px, axis: 'extreme', anchorDate: '',
+              sizing: lv.sizing ?? legacySellSizing(lv.sellPct), amount: Math.max(0, lv.amount ?? 0), refDate: troughDate });
           }
         }
       }
@@ -1108,14 +1328,15 @@ function runBacktest(input) {
         if (fired.has(deepest)) return;
         for (let i = 0; i <= deepest; i++) fired.add(i);
         out.push({ assetId: p.asset.id, kind, step: deepest + 1, level: levels[deepest].move,
-          pct: null, ref: anchor, price: hit.price, axis: 'anchor', anchorDate: aDate });
+          pct: null, ref: anchor, price: hit.price, axis: 'anchor', anchorDate: aDate,
+          sizing: 'toTarget', amount: 0, refDate: aDate });
       };
       fire(anchorLevels, -chgPct, 'buy', firedAnchorBuy);
       fire(anchorSellLevels, chgPct, 'sell', firedAnchorSell);
     }
     return out;
   };
-  if (anchorOn) {
+  if (anchorOn || needDailyEval) {
     for (const d of allBiz) steps.push({ date: d, kind: 'signal', trigs: sigTrigByDate.get(d) ?? [] });
   } else {
     for (const [d, trigs] of sigTrigByDate) steps.push({ date: d, kind: 'signal', trigs });
@@ -1196,7 +1417,15 @@ function runBacktest(input) {
     steps.push({ date: d, kind: 'event', event: { ...e, date: d } });
   }
   const KIND_ORDER = { exdiv: 0, pay: 1, event: 2, contrib: 3, annual: 4, signal: 5, rebal: 6, reinvest: 7 };
-  steps.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : KIND_ORDER[a.kind] - KIND_ORDER[b.kind]));
+  const stepOrderOf = (k) => {
+    if (config.dip.conflict === 'regularFirst') {
+      if (k === 'signal') return KIND_ORDER.rebal;
+      if (k === 'rebal') return KIND_ORDER.signal;
+    }
+    return KIND_ORDER[k];
+  };
+  steps.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : stepOrderOf(a.kind) - stepOrderOf(b.kind)));
+  const rebalDateSet = new Set(slots.map((s2) => s2.rebalDate));
 
   const pendingDiv = new Map();
   const annualRows = [];
@@ -1217,6 +1446,7 @@ function runBacktest(input) {
   for (const ym of monthsBetween(startBiz, endBiz)) monthOf(ym);
   const pushTrade = (t) => {
     touchAnchor(t);
+    touchFillBase(t);
     const m = monthOf(ymOf(t.date));
     m.trades.push(t);
     if (t.reinvest) m.reinvestNet += t.cashDelta;
@@ -1266,8 +1496,42 @@ function runBacktest(input) {
     }
     if (step.kind === 'signal') {
       const date = step.date;
-      const trigs = anchorOn ? [...step.trigs, ...anchorTrigsAt(date)] : step.trigs;
+      if (needDailyEval) {
+        for (const p of positions) {
+          if (p.qty <= QTY_EPS) continue;
+          const h = priceAt(prices[p.asset.code], date);
+          if (h.missing) continue;
+          const v = p.qty * h.price;
+          if (v > (peakEvalMap.get(p.asset.id) ?? 0)) peakEvalMap.set(p.asset.id, v);
+        }
+      }
+      syncMonthEndBase(date);
+      const rawTrigs = anchorOn ? [...step.trigs, ...anchorTrigsAt(date)] : step.trigs;
+      if (!rawTrigs.length) continue;
+      if (config.dip.conflict === 'skipSignal' && rebalDateSet.has(date)) continue;
+      let trigs = rawTrigs;
+      const cooldown = Math.max(0, config.dip.cooldownDays || 0);
+      if (cooldown > 0) {
+        const blocked = new Set();
+        trigs = rawTrigs.filter((t) => {
+          const last = lastSignalDate.get(t.assetId);
+          if (!last) return true;
+          if (bizDist(date, last) >= cooldown) return true;
+          blocked.add(t.assetId);
+          return false;
+        });
+        for (const t of rawTrigs) {
+          if (!blocked.has(t.assetId)) continue;
+          const p = posById.get(t.assetId);
+          if (!p) continue;
+          signalEvents.push(makeSignalEvent(t, p, date, 0, cashTrade, {
+            carrier: true, reason: 'COOLDOWN',
+            note: `쿨다운 ${cooldown}영업일 — ${lastSignalDate.get(t.assetId)} 발동 이후`,
+          }));
+        }
+      }
       if (!trigs.length) continue;
+      for (const t of trigs) lastSignalDate.set(t.assetId, date);
       const liveOf = (assetId) => {
         const p = posById.get(assetId);
         if (!p || p.removed) return null;
@@ -1279,30 +1543,37 @@ function runBacktest(input) {
       checkRatioSum(date);
       const base = targetBaseAt(date);
       const mkEvent = (t, p) => {
-        const ev = {
-          date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
-          kind: t.kind, step: t.step, level: t.level,
-          axis: t.axis, anchorDate: t.anchorDate,
-          pct: t.pct, pctSum: null, carrier: false,
-          poolAt: 0, excessAt: 0, planned: 0,
-          divPocketAt: pocket, cashTradeAt: cashTrade,
-          used: 0, ref: t.ref, price: t.price,
-          tradeQty: 0, tradeAmount: 0, fromTrade: 0, fromReserve: 0, reallocAmount: 0, note: '',
-        };
+        const ev = makeSignalEvent(t, p, date, pocket, cashTrade);
         signalEvents.push(ev);
         return ev;
       };
-      const sumPct = (list) => {
-        let s = 0;
-        for (const ev of list) {
-          if (ev.pct === null) return null;
-          s += ev.pct;
+      const devRoom = Math.max(0, config.dip.deviationCap || 0) > 0 && base > 0
+        ? (base * Math.max(0, config.dip.deviationCap)) / 100 : 0;
+      const assetBuyCap = config.dip.buyCapMode === 'amount'
+        ? Math.max(0, config.dip.buyCapValue || 0)
+        : config.dip.buyCapMode === 'pctOfInitial'
+          ? Math.max(0, (config.initialCapital * Math.max(0, config.dip.buyCapValue || 0)) / 100)
+          : Infinity;
+      const resolveMode = (group, legacyOf) => {
+        if (group.every((t) => legacyOf(t.sizing))) {
+          let sum = 0, anyNull = false;
+          for (const t of group) { if (t.pct === null) anyNull = true; else sum += t.pct; }
+          const pct = anyNull ? null : sum;
+          return { sizing: pct === null ? 'toTarget' : (group[0].kind === 'sell' ? 'pctOfExcess' : 'toTargetCapped'), pct, amount: 0 };
         }
-        return s;
+        let best = group[0];
+        for (const t of group) if (t.level > best.level) best = t;
+        return { sizing: best.sizing, pct: best.pct, amount: best.amount };
+      };
+      let totalAssetsMemo = -1;
+      const totalAssetsAt = () => {
+        if (totalAssetsMemo < 0) totalAssetsMemo = Math.max(0, totalEvalAt(date) + cash);
+        return totalAssetsMemo;
       };
 
       {
         const sellEvs = new Map();
+        const sellTrigs = new Map();
         const sellPos = [];
         for (const t of trigs) {
           if (t.kind !== 'sell') continue;
@@ -1310,8 +1581,8 @@ function runBacktest(input) {
           if (!p) continue;
           const ev = mkEvent(t, p);
           const list = sellEvs.get(p.asset.id);
-          if (list) list.push(ev);
-          else { sellEvs.set(p.asset.id, [ev]); sellPos.push(p); }
+          if (list) { list.push(ev); sellTrigs.get(p.asset.id).push(t); }
+          else { sellEvs.set(p.asset.id, [ev]); sellTrigs.set(p.asset.id, [t]); sellPos.push(p); }
         }
         for (const p of sellPos) {
           const list = sellEvs.get(p.asset.id);
@@ -1319,27 +1590,66 @@ function runBacktest(input) {
           for (let i = 1; i < list.length; i++) {
             list[i].note = `동시 발동 — 체결은 ${carrier.step}단계 행에 합산`;
           }
-          if (!p.active || p.qty <= QTY_EPS) { carrier.note = '보유 없음'; continue; }
+          const mode = resolveMode(sellTrigs.get(p.asset.id), sellUsesTargetCap);
+          carrier.sizing = mode.sizing;
+          if (!p.active || p.qty <= QTY_EPS) { carrier.note = '보유 없음'; carrier.reason = 'NO_POSITION'; continue; }
           const hit = priceAt(prices[p.asset.code], date);
-          if (hit.missing || hit.price <= 0) { carrier.note = '종가 없음'; continue; }
+          if (hit.missing || hit.price <= 0) { carrier.note = '종가 없음'; carrier.reason = 'NO_PRICE'; continue; }
           carrier.carrier = true;
           const target = targetOf(p, config, base);
           const evalBefore = p.qty * hit.price;
           const excess = evalBefore - target;
           carrier.excessAt = Math.max(0, excess);
-          carrier.pctSum = sumPct(list);
-          if (excess <= 0) { carrier.note = '목표 이하 — 팔 것 없음'; continue; }
-          const pctSum = carrier.pctSum;
-          const sellAmount = pctSum === null ? excess : Math.min(excess, (excess * pctSum) / 100);
-          carrier.planned = sellAmount;
-          if (!(sellAmount > 0)) { carrier.note = '매도 비율 0% — 팔지 않음'; continue; }
-          const tr = adjustTo(p, date, evalBefore - sellAmount, false);
-          if (!tr || tr.qty >= 0) { carrier.note = '매도 수량 0(반올림)'; continue; }
+          carrier.pctSum = mode.pct;
+          const capsHit = [];
+          if (sellUsesTargetCap(mode.sizing) && excess <= 0) {
+            carrier.note = '목표 이하 — 팔 것 없음'; carrier.reason = 'CAP_TARGET'; continue;
+          }
+          const baseEvalS = (mode.sizing === 'excessOverBase') ? baselineEvalOf(p) : 0;
+          let ordered = 0;
+          if (mode.sizing === 'toTarget') {
+            ordered = excess; carrier.basisKind = 'excess'; carrier.basisAmount = Math.max(0, excess);
+          } else if (mode.sizing === 'pctOfExcess') {
+            ordered = mode.pct === null ? excess : Math.min(excess, (excess * mode.pct) / 100);
+            carrier.basisKind = 'excess'; carrier.basisAmount = Math.max(0, excess);
+          } else if (mode.sizing === 'pctOfEval') {
+            ordered = (evalBefore * (mode.pct ?? 0)) / 100;
+            carrier.basisKind = 'eval'; carrier.basisAmount = evalBefore;
+          } else if (mode.sizing === 'pctOfQty') {
+            ordered = ((p.qty * (mode.pct ?? 0)) / 100) * hit.price;
+            carrier.basisKind = 'qty'; carrier.basisAmount = p.qty;
+          } else if (mode.sizing === 'fixedAmount') {
+            ordered = Math.max(0, mode.amount);
+            carrier.basisKind = 'fixed'; carrier.basisAmount = Math.max(0, mode.amount);
+          } else if (mode.sizing === 'excessOverBase') {
+            ordered = Math.max(0, evalBefore - baseEvalS);
+            carrier.basisKind = 'base'; carrier.basisAmount = baseEvalS; carrier.baseEval = baseEvalS;
+          }
+          carrier.ordered = ordered;
+          if (devRoom > 0) {
+            const lowLimit = Math.max(0, target - devRoom);
+            const room = Math.max(0, evalBefore - lowLimit);
+            if (ordered > room) { ordered = room; capsHit.push('CAP_DEVIATION'); }
+          }
+          if (ordered > evalBefore) { ordered = evalBefore; capsHit.push('NO_POSITION'); }
+          carrier.caps = capsHit;
+          carrier.planned = ordered;
+          if (!(ordered > 0)) {
+            carrier.note = mode.sizing === 'excessOverBase'
+              ? '기준 평가액 이하 — 팔 것 없음'
+              : (capsHit.includes('CAP_DEVIATION') ? '이탈 한도 — 팔 것 없음' : '매도 비율 0% — 팔지 않음');
+            carrier.reason = capsHit[0] ?? 'CAP_TARGET';
+            continue;
+          }
+          const tr = adjustTo(p, date, evalBefore - ordered, false);
+          if (!tr || tr.qty >= 0) { carrier.note = '매도 수량 0(반올림)'; carrier.reason = 'ROUNDING'; continue; }
           tr.signal = 'sell';
           pushTrade(tr);
           carrier.tradeQty = tr.qty;
           carrier.tradeAmount = Math.abs(tr.cashDelta);
+          carrier.shortfall = Math.max(0, ordered - carrier.tradeAmount);
           if (tr.note) carrier.note = tr.note;
+          carrier.reason = carrier.shortfall > hit.price ? 'ROUNDING' : (capsHit[0] ?? '');
         }
       }
 
@@ -1347,14 +1657,15 @@ function runBacktest(input) {
       if (!buyTrigs.length) continue;
 
       const evsByAsset = new Map();
+      const trigsByAsset = new Map();
       const buyPos = [];
       for (const t of buyTrigs) {
         const p = liveOf(t.assetId);
         if (!p) continue;
         const ev = mkEvent(t, p);
         const list = evsByAsset.get(p.asset.id);
-        if (list) list.push(ev);
-        else { evsByAsset.set(p.asset.id, [ev]); buyPos.push(p); }
+        if (list) { list.push(ev); trigsByAsset.get(p.asset.id).push(t); }
+        else { evsByAsset.set(p.asset.id, [ev]); trigsByAsset.set(p.asset.id, [t]); buyPos.push(p); }
         if (!p.active) p.active = true;
       }
       if (!buyPos.length) continue;
@@ -1374,14 +1685,12 @@ function runBacktest(input) {
         const pl = planOf(p);
         if (pl.hit.missing || pl.hit.price <= 0) {
           const list = evsByAsset.get(p.asset.id);
-          if (list) list[0].note = '종가 없음';
+          if (list) { list[0].note = '종가 없음'; list[0].reason = 'NO_PRICE'; }
           continue;
         }
         buyPlans.push(pl);
       }
-      const floorAmount = config.cashFloorPct > 0
-        ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
-        : 0;
+      const floorAmount = cashFloorAt(date, base);
 
       const poolAt = tradeOnly ? Math.max(0, cashTrade) + Math.max(0, cashReserve) : Math.max(0, cash);
       let needTotal = 0;
@@ -1390,15 +1699,57 @@ function runBacktest(input) {
         if (!list) continue;
         const carrier = list[0];
         const need = Math.max(0, b.target - b.evalBefore);
-        const pctSum = sumPct(list);
+        const mode = resolveMode(trigsByAsset.get(b.p.asset.id), buyUsesTargetCap);
+        const pctSum = mode.pct;
         carrier.carrier = true;
+        carrier.sizing = mode.sizing;
         carrier.pctSum = pctSum;
         carrier.poolAt = poolAt;
-        carrier.planned = pctSum === null ? need : Math.min(need, (poolAt * pctSum) / 100);
+        const capsHit = [];
+        let ordered = 0;
+        if (mode.sizing === 'toTarget') {
+          ordered = need; carrier.basisKind = 'target'; carrier.basisAmount = need;
+        } else if (mode.sizing === 'toTargetCapped') {
+          const raw = (poolAt * (pctSum ?? 0)) / 100;
+          ordered = Math.min(need, raw);
+          if (raw > need) capsHit.push('CAP_TARGET');
+          carrier.basisKind = 'pool'; carrier.basisAmount = poolAt;
+        } else if (mode.sizing === 'pctOfPool') {
+          ordered = (poolAt * (pctSum ?? 0)) / 100;
+          carrier.basisKind = 'pool'; carrier.basisAmount = poolAt;
+        } else if (mode.sizing === 'pctOfTotal') {
+          const tot = totalAssetsAt();
+          ordered = (tot * (pctSum ?? 0)) / 100;
+          carrier.basisKind = 'total'; carrier.basisAmount = tot;
+        } else if (mode.sizing === 'fixedAmount') {
+          ordered = Math.max(0, mode.amount);
+          carrier.basisKind = 'fixed'; carrier.basisAmount = Math.max(0, mode.amount);
+        } else if (mode.sizing === 'restoreBase') {
+          const be = baselineEvalOf(b.p);
+          carrier.baseEval = be;
+          ordered = Math.max(0, be - b.evalBefore);
+          carrier.basisKind = 'base'; carrier.basisAmount = be;
+          const mr = Math.max(0, dipBaseline.maxReuse || 0);
+          if (mr > 0) {
+            const rec = baseUse.get(b.p.asset.id);
+            if (rec && Math.abs(rec.base - be) < 1 && rec.n >= mr) { ordered = 0; capsHit.push('CAP_BASE_REUSE'); }
+          }
+        }
+        carrier.ordered = ordered;
+        if (devRoom > 0) {
+          const room = Math.max(0, (b.target + devRoom) - b.evalBefore);
+          if (ordered > room) { ordered = room; capsHit.push('CAP_DEVIATION'); }
+        }
+        if (assetBuyCap < Infinity) {
+          const room = Math.max(0, assetBuyCap - (sigBuyByAsset.get(b.p.asset.id) ?? 0));
+          if (ordered > room) { ordered = room; capsHit.push('CAP_ASSET_BUDGET'); }
+        }
+        carrier.caps = capsHit;
+        carrier.planned = ordered;
         for (let i = 1; i < list.length; i++) {
           list[i].pctSum = null; list[i].poolAt = 0; list[i].planned = 0;
         }
-        if (pctSum === null) needTotal += need;
+        if (mode.sizing === 'toTarget') needTotal += need;
       }
 
       const usableFor = (extra) => {
@@ -1434,35 +1785,42 @@ function runBacktest(input) {
         const first = evsByAsset.get(buyPos[0].asset.id);
         if (first) first[0].reallocAmount = realloc;
       }
-      const ordered = [...buyPlans].sort((x, y) => {
-        const px = evsByAsset.get(x.p.asset.id)?.[0].planned ?? 0;
-        const py = evsByAsset.get(y.p.asset.id)?.[0].planned ?? 0;
-        return py - px;
-      });
-      for (const b of ordered) {
+      const divCap = tradeOnly ? 0 : Infinity;
+      // ⚠️ 예비금은 시그널 매수에서만 열린다(재원 사다리 ② 단계).
+      const reserveCapAll = Math.max(0, cashReserve);
+      const floorCapAll = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
+      const regIndex = new Map();
+      config.assets.forEach((a, i) => regIndex.set(a.id, i));
+      const byRegistration = [...buyPlans].sort(
+        (x, y) => (regIndex.get(x.p.asset.id) ?? 0) - (regIndex.get(y.p.asset.id) ?? 0));
+      const fillOne = (b, cap) => {
         const list = evsByAsset.get(b.p.asset.id);
-        if (!list) continue;
+        if (!list) return;
         const carrier = list[0];
-        if (b.target - b.evalBefore <= 0) {
+        if (buyUsesTargetCap(carrier.sizing) && b.target - b.evalBefore <= 0) {
           if (!carrier.note) carrier.note = '목표 이상 — 살 것 없음';
-          continue;
+          if (!carrier.reason) carrier.reason = 'CAP_TARGET';
+          return;
         }
-        if (!(carrier.planned > 0)) {
+        const want = cap === null ? carrier.planned : Math.min(carrier.planned, cap);
+        if (!(want > 0)) {
           if (!carrier.note) {
-            carrier.note = carrier.pctSum === 0 ? '매수 비율 0% — 사지 않음'
+            carrier.note = cap !== null && !(cap > 0) ? '배분액 0원 — 다른 종목이 재원을 다 씀'
+              : carrier.pctSum === 0 ? '매수 비율 0% — 사지 않음'
               : poolAt <= 0 ? '재원 없음' : '매수 수량 0';
           }
-          continue;
+          if (!carrier.reason) carrier.reason = carrier.caps[0] ?? (poolAt <= 0 ? 'NO_CASH' : 'ROUNDING');
+          return;
         }
-        const divCap = tradeOnly ? 0 : Infinity;
-        // ⚠️ 예비금은 시그널 매수에서만 열린다(재원 사다리 ② 단계).
-        const reserveCap = Math.max(0, cashReserve);
-        const budget = (tradeOnly ? Math.max(0, cashTrade) : cash - cashReserve) + reserveCap;
-        const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
-        const tr = adjustTo(b.p, date, b.evalBefore + carrier.planned, false, { budget, divCap, floorCap, reserveCap });
+        const budget = cap === null
+          ? (tradeOnly ? Math.max(0, cashTrade) : cash - cashReserve) + reserveCapAll
+          : Math.min(cap, (tradeOnly ? Math.max(0, cashTrade) : cash - cashReserve) + reserveCapAll);
+        const tr = adjustTo(b.p, date, b.evalBefore + want, false,
+          { budget, divCap, floorCap: floorCapAll, reserveCap: reserveCapAll });
         if (!tr) {
           if (!carrier.note) carrier.note = budget <= 0 ? '재원 없음' : '매수 수량 0';
-          continue;
+          if (!carrier.reason) carrier.reason = budget <= 0 ? 'NO_CASH' : 'ROUNDING';
+          return;
         }
         tr.signal = 'buy';
         pushTrade(tr);
@@ -1472,8 +1830,124 @@ function runBacktest(input) {
           carrier.used += lastDraw.fromDiv;
           carrier.fromTrade += lastDraw.fromTrade;
           carrier.fromReserve += lastDraw.fromReserve;
+          sigBuyByAsset.set(b.p.asset.id, (sigBuyByAsset.get(b.p.asset.id) ?? 0) + Math.abs(tr.cashDelta));
         }
         if (tr.note) carrier.note = tr.note;
+      };
+      const allocOn = dipAlloc.mode === 'weighted' && buyPlans.length >= 2;
+      if (!allocOn) {
+        const ordered = [...buyPlans].sort((x, y) => {
+          const px = evsByAsset.get(x.p.asset.id)?.[0].planned ?? 0;
+          const py = evsByAsset.get(y.p.asset.id)?.[0].planned ?? 0;
+          return py - px;
+        });
+        for (const b of ordered) fillOne(b, null);
+      } else {
+        const rawPool = (tradeOnly ? Math.max(0, cashTrade) : Math.max(0, cash - cashReserve)) + reserveCapAll;
+        const pool = Math.max(0, Math.min(rawPool, floorCapAll));
+        const weightOfPlan = (b) => {
+          if (dipAlloc.basis === 'need') return Math.max(0, evsByAsset.get(b.p.asset.id)?.[0].planned ?? 0);
+          if (dipAlloc.basis === 'underGap') return Math.max(0, b.target - b.evalBefore);
+          return Math.max(0, b.target);
+        };
+        let items = byRegistration.map((b) => ({
+          id: b.p.asset.id,
+          weight: weightOfPlan(b),
+          need: Math.max(0, evsByAsset.get(b.p.asset.id)?.[0].planned ?? 0),
+          b,
+        }));
+        const priceOf = (it) => it.b.hit.price;
+        const minAmt = Math.max(0, dipAlloc.minOrderAmount || 0);
+        const minQty = Math.max(0, dipAlloc.minOrderQty || 0);
+        const dropped = new Map();
+        let res = waterfallAllocate(items, pool);
+        for (let guard = 0; guard <= items.length; guard++) {
+          const bad = items.filter((it) => {
+            const a = res.alloc[it.id] ?? 0;
+            const q = roundQty(a / priceOf(it), config.rounding === 'exact' ? 'exact' : 'floor');
+            return !(q > 0) || (minQty > 0 && q < minQty) || (minAmt > 0 && q * priceOf(it) < minAmt);
+          });
+          if (!bad.length || bad.length === items.length) {
+            for (const it of bad) dropped.set(it.id, 'ROUNDING');
+            break;
+          }
+          for (const it of bad) dropped.set(it.id, 'ROUNDING');
+          items = items.filter((it) => !dropped.has(it.id));
+          res = waterfallAllocate(items, pool);
+        }
+        if (dipAlloc.leftover !== 'cash' && res.leftover > 0) {
+          const byWeight = [...items].sort((x, y) => (y.weight - x.weight)
+            || ((regIndex.get(x.id) ?? 0) - (regIndex.get(y.id) ?? 0)));
+          const passes = dipAlloc.leftover === 'refill' ? 50 : 1;
+          for (let k = 0; k < passes; k++) {
+            let added = false;
+            for (const it of byWeight) {
+              const px = priceOf(it);
+              if (!(px > 0) || res.leftover < px) continue;
+              res.alloc[it.id] = (res.alloc[it.id] ?? 0) + px;
+              res.leftover -= px;
+              added = true;
+              if (dipAlloc.leftover === 'topWeight') break;
+            }
+            if (!added || dipAlloc.leftover === 'topWeight') break;
+          }
+        }
+        const rows = [];
+        let totalFilled = 0;
+        const totalW = items.reduce((sum, it) => sum + it.weight, 0);
+        for (const b of byRegistration) {
+          const it = items.find((x) => x.id === b.p.asset.id);
+          const list = evsByAsset.get(b.p.asset.id);
+          const carrier = list ? list[0] : null;
+          const allocAmt = it ? (res.alloc[it.id] ?? 0) : 0;
+          const w = it && totalW > 0 ? (it.weight / totalW) * 100 : 0;
+          if (carrier) { carrier.allocWeight = w; carrier.allocAmount = allocAmt; }
+          if (it) fillOne(b, allocAmt);
+          else if (carrier && !carrier.note) {
+            carrier.note = '배분액이 1주 값에 미달 — 재원을 다른 종목에 재배분';
+            carrier.reason = 'ROUNDING';
+          }
+          const filled = carrier ? carrier.tradeAmount : 0;
+          totalFilled += filled;
+          rows.push({
+            assetId: b.p.asset.id, code: b.p.asset.code, name: b.p.asset.name,
+            need: carrier ? carrier.planned : 0,
+            weight: w, alloc: allocAmt,
+            qty: carrier ? carrier.tradeQty : 0,
+            amount: filled,
+            shortfall: Math.max(0, (carrier ? carrier.planned : 0) - filled),
+            reason: (carrier ? carrier.reason : '') || (dropped.get(b.p.asset.id) ?? ''),
+          });
+        }
+        allocBlocks.push({
+          date, basis: dipAlloc.basis, leftoverRule: dipAlloc.leftover,
+          pool, totalFilled, leftoverCash: Math.max(0, pool - totalFilled),
+          iterations: res.iterations, redistributed: res.redistributed, rows,
+        });
+      }
+      for (const list of evsByAsset.values()) {
+        const carrier = list[0];
+        if (!carrier.carrier) continue;
+        const p = posById.get(carrier.assetId);
+        if (!p) continue;
+        if (carrier.tradeQty === 0) {
+          if (config.dip.anchorOnNoFill === 'update') forceAnchor(carrier.assetId, carrier.price, date);
+        } else if (carrier.sizing === 'restoreBase') {
+          if (dipBaseline.resetOnFill) baseOverride.set(carrier.assetId, p.qty * carrier.price);
+        }
+        if (carrier.sizing === 'restoreBase' && carrier.baseEval > 0 && carrier.reason !== 'CAP_BASE_REUSE') {
+          const rec = baseUse.get(carrier.assetId);
+          if (rec && Math.abs(rec.base - carrier.baseEval) < 1) rec.n++;
+          else baseUse.set(carrier.assetId, { base: carrier.baseEval, n: 1 });
+        }
+        carrier.shortfall = Math.max(0, carrier.planned - carrier.tradeAmount);
+        if (carrier.tradeQty > 0) {
+          if (carrier.shortfall >= carrier.price) carrier.reason = 'PARTIAL_NO_CASH';
+          else if (!carrier.reason) carrier.reason = carrier.caps[0] ?? '';
+          if (carrier.sizing === 'restoreBase' && carrier.ordered > 0) {
+            carrier.restoreRate = (carrier.tradeAmount / carrier.ordered) * 100;
+          }
+        }
       }
       continue;
     }
@@ -1610,11 +2084,16 @@ function runBacktest(input) {
         if (!p) continue;
         if (p.removed) continue;
         if (s.rebalDate < p.effectiveStart || s.rebalDate > p.effectiveEnd) continue;
+        const xr = Math.max(0, config.dip.excludeRegularDays || 0);
+        if (xr > 0) {
+          const last = lastSignalDate.get(p.asset.id);
+          if (last && bizDist(s.rebalDate, last) < xr) continue;
+        }
         if (!p.active) p.active = true;
         eligible.push(p);
       }
       checkRatioSum(s.rebalDate);
-      const floorAmount = config.cashFloorPct > 0 ? (activeTargetSum(s.rebalDate, base) * config.cashFloorPct) / 100 : 0;
+      const floorAmount = cashFloorAt(s.rebalDate, base);
       const bandPct = Math.max(0, config.band);
       const tradeOnly = config.buyFunding === 'tradeOnly';
       const plans = eligible.map((p) => {
@@ -1776,6 +2255,17 @@ function runBacktest(input) {
     cumReserveDrawn += m.cashUsedReserve;
     if (m.shortfallCount > 0) shortfallMonths++;
   }
+  const signalStats = { buyFired: 0, buyFilled: 0, sellFired: 0, sellFilled: 0, reasons: {} };
+  for (const e of signalEvents) {
+    if (!e.carrier) continue;
+    const filled = e.tradeQty !== 0;
+    if (e.kind === 'sell') { signalStats.sellFired++; if (filled) signalStats.sellFilled++; }
+    else { signalStats.buyFired++; if (filled) signalStats.buyFilled++; }
+    if (!filled) {
+      const key = e.reason || 'OTHER';
+      signalStats.reasons[key] = (signalStats.reasons[key] ?? 0) + 1;
+    }
+  }
 
   return {
     ok: true, fatal: '', warnings: Array.from(new Set(warnings)), slots, assetMeta,
@@ -1788,7 +2278,7 @@ function runBacktest(input) {
       finalCashTrade: cashTrade, finalCashDiv: cashDiv, finalCashReserve: cashReserve, cumDivDrawn, cumReserveDrawn,
       maxDrawdown: maxDd, months: months.length,
       minCash, minCashDiv, divMonthlyAvg, divMonthlyStdev,
-      bandSkipCount, bandSkipAmount, signalEvents, shortfallMonths },
+      bandSkipCount, bandSkipAmount, signalEvents, allocBlocks, signalStats, shortfallMonths },
   };
 }
 
@@ -2827,11 +3317,15 @@ console.log('\n── 파트④-h 목표 기준(비중 분모 = 종목 평가액
   // ⚠️ #109 — 레거시 시나리오 마이그레이션. 저장돼 있던 옛 분모 값은 조용히 버려져야 하고,
   //    결과에도 지문에도 흔적이 남으면 안 된다(남으면 같은 설정이 두 결과를 낸다).
   const legacy = makeBtConfig({ ratioBase: 'totalWithDiv', targetMode: 'ratio' });
-  ok('#109 ⚠️ 옛 ratioBase 값은 정규화에서 사라진다(분모 선택 부활 금지)',
-    !('ratioBase' in legacy) && legacy.targetMode === 'ratio');
+  ok('#109 ⚠️ 옛 분모 값(total/initial/totalWithDiv)은 전부 equity로 떨어진다',
+    legacy.ratioBase === 'equity' && legacy.targetMode === 'ratio'
+      && makeBtConfig({ ratioBase: 'total' }).ratioBase === 'equity'
+      && makeBtConfig({ ratioBase: 'initial' }).ratioBase === 'equity'
+      // 새 옵션은 'equityCash' **하나뿐**이다(B).
+      && makeBtConfig({ ratioBase: 'equityCash' }).ratioBase === 'equityCash');
   // ⚠️ 인자는 **정규화를 거치지 않은 raw 객체**여야 한다 — makeBtConfig 출력을 넣으면 필드가
   //    이미 사라진 뒤라 지문 투영이 되살아나도 통과하는 죽은 단언이 된다(#109의 동어반복).
-  ok('#109b 지문 투영에도 남지 않는다(정규화 전 raw 객체로 검사)',
+  ok('#109b 옛 분모 값은 지문에도 남지 않는다(정규화 전 raw 객체로 검사)',
     backtestFingerprint([{ id: 'x', name: 'x', targetMode: 'ratio', ratioBase: 'total', assets: [] }])
       === backtestFingerprint([{ id: 'x', name: 'x', targetMode: 'ratio', ratioBase: 'initial', assets: [] }]));
 
@@ -3628,7 +4122,9 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
       })());
       ok('#312 ⚠️ 매도 시그널 단계 정규화 — 오름차순 + 중복 제거 + 범위 밖 제외 + 빈 배열 유지', (() => {
         const c = makeBtConfig({ dip: { enabled: true, sellLevels: [{ rise: 20 }, { rise: 10 }, { rise: 20 }, { rise: 0 }, { rise: -5 }] } });
-        return JSON.stringify(c.dip.sellLevels) === JSON.stringify([{ rise: 10, sellPct: null }, { rise: 20, sellPct: null }])
+        return JSON.stringify(c.dip.sellLevels) === JSON.stringify([
+          { rise: 10, sellPct: null, sizing: 'toTarget', amount: 0 },
+          { rise: 20, sellPct: null, sizing: 'toTarget', amount: 0 }])
           && makeBtConfig({ dip: { enabled: true, sellLevels: [{ rise: 0 }] } }).dip.sellLevels.length === 0;
       })());
       /* ── 매도 비율 (사용자 확정 2026-08: "초과 평가금액에 대한 비율로 매도") ──────
@@ -4049,7 +4545,9 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
       legacy.band === 0 && legacy.buyFunding === 'both' && legacy.cashFloorPct === 0
         && legacy.divTaxPct === 0 && legacy.dip.enabled === false
         && legacy.annualReview.mode === 'none' && legacy.annualReview.everyMonths === 12);
-    deep('#214 dip 단계 기본값 = −10/−20/−30 (34/33/33%)', legacy.dip.levels, DEFAULT_DIP_LEVELS);
+    deep('#214 dip 단계 기본값 = −10/−20/−30 (34/33/33%) + 레거시 파생 사이징',
+      legacy.dip.levels,
+      DEFAULT_DIP_LEVELS.map((l) => ({ ...l, sizing: 'toTargetCapped', amount: 0 })));
     // 정렬 · 중복 낙폭 제거 · 범위 밖 제외 · 전부 무효면 기본값 복귀
     // ⚠️ 비율은 손상돼도 **행을 버리지 않고** 0~100으로 클램프한다(빈칸만 null=목표까지).
     //    낙폭이 범위 밖인 행만 버린다.
@@ -4058,17 +4556,21 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
         { drop: 30, buyPct: 20 }, { drop: 10, buyPct: 50 }, { drop: 30, buyPct: 99 },
         { drop: 0, buyPct: 10 }, { drop: 101, buyPct: 10 }, { drop: 20, buyPct: 150 },
       ] } }).dip.levels,
-      [{ drop: 10, buyPct: 50 }, { drop: 20, buyPct: 100 }, { drop: 30, buyPct: 20 }]);
+      [{ drop: 10, buyPct: 50, sizing: 'toTargetCapped', amount: 0 },
+       { drop: 20, buyPct: 100, sizing: 'toTargetCapped', amount: 0 },
+       { drop: 30, buyPct: 20, sizing: 'toTargetCapped', amount: 0 }]);
     // ⚠️ 레거시 마이그레이션 — 옛 필드 unlockPct의 값을 승계하되 **0은 null(목표까지)로** 옮긴다
     //    (옛 '단계 추가' 버튼이 0을 넣었고, 새 의미에서 0은 '한 주도 안 삼'으로 뒤집힌다).
     deep('#215b ⚠️ 레거시 unlockPct → buyPct 마이그레이션 (0은 null=목표까지로)',
       makeBtConfig({ dip: { enabled: true, levels: [
         { drop: 10, unlockPct: 34 }, { drop: 20, unlockPct: 0 }, { drop: 30 },
       ] } }).dip.levels,
-      [{ drop: 10, buyPct: 34 }, { drop: 20, buyPct: null }, { drop: 30, buyPct: null }]);
+      [{ drop: 10, buyPct: 34, sizing: 'toTargetCapped', amount: 0 },
+       { drop: 20, buyPct: null, sizing: 'toTarget', amount: 0 },
+       { drop: 30, buyPct: null, sizing: 'toTarget', amount: 0 }]);
     ok('#216 ⚠️ 유효한 단계가 하나도 없으면 기본 3단계로 되돌린다(조용히 무동작 방지)',
       JSON.stringify(makeBtConfig({ dip: { enabled: true, levels: [{ drop: -1, buyPct: 5 }] } }).dip.levels)
-        === JSON.stringify(DEFAULT_DIP_LEVELS));
+        === JSON.stringify(DEFAULT_DIP_LEVELS.map((l) => ({ ...l, sizing: 'toTargetCapped', amount: 0 }))));
     ok('#217 값 정규화 — band/cashFloorPct 음수 차단 · divTaxPct 0~100 · everyMonths 1~120',
       makeBtConfig({ band: -5 }).band === 0
         && makeBtConfig({ cashFloorPct: -1 }).cashFloorPct === 0
@@ -4595,7 +5097,7 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   ok('#360b ⚠️ 앵커 판정·조기 탈출은 checkRatioSum·targetBaseAt보다 **앞**이다(성능 계약)',
     (() => {
       const sig = bt2.slice(bt2.indexOf("if (step.kind === 'signal')"));
-      const i = sig.indexOf('const trigs = anchorOn ?');
+      const i = sig.indexOf('const rawTrigs = anchorOn ?');
       const j = sig.indexOf('checkRatioSum(date);');
       const k = sig.indexOf('targetBaseAt(date)');
       return i > 0 && j > i && k > i && /if \(!trigs\.length\) continue;/.test(sig.slice(0, j));
@@ -4673,8 +5175,9 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   //    매도·신저가일의 매수가 정상 발동한다 — 옛 코드의 `continue`(하루를 통째로 건너뜀)로
   //    되돌리면 매도 시그널이 **가장 크게 오른 날**에 발동하지 못한다.
   ok('#232 ⚠️ 매수=가격 고점 / 매도=가격 저점 기준이고 극값이 갱신되면 그쪽 단계를 재무장한다',
-    /if \(newPeak\) \{ peak = px; firedBuy\.clear\(\); \}/.test(bt2)
-      && /if \(newTrough\) \{ trough = px; firedSell\.clear\(\); \}/.test(bt2)
+    // F-1 — 극값이 선 **날짜**도 함께 기록한다(로그의 '판정 기준가와 그 날짜').
+    /if \(newPeak\) \{ peak = px; peakDate = d; firedBuy\.clear\(\); \}/.test(bt2)
+      && /if \(newTrough\) \{ trough = px; troughDate = d; firedSell\.clear\(\); \}/.test(bt2)
       && /const dropPct = \(\(peak - px\) \/ peak\) \* 100;/.test(bt2)
       && /const risePct = \(\(px - trough\) \/ trough\) \* 100;/.test(bt2)
       && !/fired\.clear\(\); continue;/.test(bt2));
@@ -4698,10 +5201,11 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && (bt2.match(/const divCap = tradeOnly \? 0 : Infinity;/g) || []).length === 2
       // 재원 모드(buyFunding) 규칙은 두 경로가 같고, **예비금만 시그널에서 추가로 열린다**.
       && /const budget = tradeOnly \? Math\.max\(0, cashTrade\) : cash - cashReserve;/.test(bt2)
-      && /const budget = \(tradeOnly \? Math\.max\(0, cashTrade\) : cash - cashReserve\) \+ reserveCap;/.test(bt2)
-      && /const reserveCap = Math\.max\(0, cashReserve\);/.test(bt2)
-      // 재조정 필요액은 '목표까지'(pctSum === null) 종목만 센다 — 비율 매수는 재원 부족 개념이 없다.
-      && /if \(pctSum === null\) needTotal \+= need;/.test(bt2)
+      && /\(tradeOnly \? Math\.max\(0, cashTrade\) : cash - cashReserve\) \+ reserveCapAll/.test(bt2)
+      && /const reserveCapAll = Math\.max\(0, cashReserve\);/.test(bt2)
+      // 재조정 필요액은 '목표까지' 종목만 센다 — 비율 매수는 재원 부족 개념이 없다.
+      // ⚠️ resolveMode가 레거시 `pctSum === null`을 정확히 'toTarget'으로 떨어뜨리므로 집합이 동일하다.
+      && /if \(mode\.sizing === 'toTarget'\) needTotal \+= need;/.test(bt2)
       // ⚠️ 재원 스냅샷과 재조정 발동 판정은 **같은 정의**를 써야 '나체 매도'가 막힌다.
       && /const poolAt = tradeOnly \? Math\.max\(0, cashTrade\) \+ Math\.max\(0, cashReserve\) : Math\.max\(0, cash\);/.test(bt2)
       && /const avail = tradeOnly \? Math\.max\(0, cashTrade\) \+ Math\.max\(0, cashReserve\) : Math\.max\(0, cash\);/.test(bt2));
@@ -4867,7 +5371,9 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
    *    한글이 **글자 하나당 한 줄**로 무너진다(2026-08 사용자 보고). 전용 렌더러 + px 고정 열이
    *    계약이고, 좁은 폭에서는 표를 포기하고 블록으로 떨어져야 같은 증상이 재발하지 않는다. */
   ok('#259f ⚠️ 시그널 체결 팝오버는 popRender + table-fixed(px 열)로 그리고 좁은 폭에서는 블록으로 떨어진다',
-    /function SummaryCard\(\{ label, value, cls, formula, note, compact, popWidth = 380, popRender \}\)/.test(page)
+    // ⚠️ `sub`(F-2 미체결 사유 요약 줄)가 시그니처에 추가됐다 — 카드 값 아래에 **호버 없이** 뜬다.
+    /function SummaryCard\(\{ label, value, cls, sub, formula, note, compact, popWidth = 380, popRender \}\)/.test(page)
+      && /\{sub \? <div className="text-\[10px\] text-gray-500 leading-tight mt-0\.5">\{sub\}<\/div> : null\}/.test(page)
       && /popRender \? popRender\(pos\.w\) : \(/.test(page)
       // ⚠️ popRender 카드는 formula를 넘기지 않는다 — 무방비 .map은 호버 순간 렌더 크래시다
       //    (@ts-nocheck + esbuild라 컴파일러가 없고, {pos && …} 안이라 게이트도 못 잡는다).
@@ -4958,20 +5464,22 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /if \(p\.removed\) continue;/.test(bt2)
       && /p => !p\.removed\s*$/m.test(bt2));
 
-  // ── 목표 기준: 비중 분모 = 종목 평가액 합계 (2026-08 사용자 정의) ──
-  // ⚠️ 미러 테스트는 '분모 선택지가 되살아났는가'를 못 잡는다(미러도 같이 되살리면 통과) —
-  //    엔진·화면·타입에서 그 개념이 사라졌다는 사실 자체를 소스로 단언한다.
-  ok('#151 ⚠️ 엔진에 분모 선택 개념이 없다(ratioBase/BtRatioBase/totalWithDiv 식별자 부재)',
-    !/\bratioBase\b/.test(bt2) && !/\bBtRatioBase\b/.test(bt2)
+  // ── 목표 기준: 비중 분모 = equity(기본) / equityCash(총자산) **2종뿐** (요구사항 B) ──
+  // ⚠️ 미러 테스트는 '옛 4종 선택지가 되살아났는가'를 못 잡는다(미러도 같이 되살리면 통과) —
+  //    소스에서 그 값들이 없다는 사실과, 분기가 **한 곳에만** 있다는 사실을 직접 단언한다.
+  ok('#151 ⚠️ 분모는 equity/equityCash 2종뿐이고 분기는 targetBaseAt 한 곳뿐이다',
+    /export type BtRatioBase = 'equity' \| 'equityCash';/.test(bt2)
       && !/['"]totalWithDiv['"]/.test(bt2)
+      // B — 총자산 분모는 targetBaseAt **안에서만** 갈라진다(다른 곳에 분기를 복제하면 화면과 계산이 갈린다)
+      && (bt2.match(/config\.ratioBase === 'equityCash'/g) || []).length === 1
+      && /if \(config\.ratioBase === 'equityCash'\) return Math\.max\(0, eq \+ cash\);/.test(bt2)
       // 비중 분모는 targetBaseAt(= 평가액 합계, 보유 0이면 현금 부트스트랩)로만 산출한다
       && /const base = targetBaseAt\(s\.rebalDate\);/.test(bt2)
       // ⚠️ 부트스트랩 현금에서 **예비금을 뺀다**(시그널 전용 재원이라 비중 분모가 아니다).
-      //    이 변경을 '분모 선택지 부활'로 오독하지 말 것 — 분모는 여전히 targetBaseAt 하나뿐이다.
       && /return eq > 0 \? eq : Math\.max\(0, cash - cashReserve\);/.test(bt2));
-  ok('#152 ⚠️ 화면에도 분모 드롭다운이 없다(라벨·select·option 전부 제거)',
-    !/RATIO_BASE_LABEL/.test(page) && !/ratioBase/.test(page)
-      && !/비중을 곱할 기준/.test(page)
+  ok('#152 ⚠️ 화면에 분모 토글이 있고 옛 4종 선택지는 없다(B)',
+    /ratioBase/.test(page) && /equityCash/.test(page)
+      && !/totalWithDiv/.test(page)
       && /const TARGET_MODE_LABEL = \{/.test(page));
   ok('#153 ⚠️ 비중 모드에서는 매월 목표 증액을 실행하지 않는다(조기 반환) + 화면도 그렇게 안내',
     /if \(config\.targetMode === 'ratio'\) continue;/.test(bt2)
@@ -5164,6 +5672,555 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
         && tags.every((t) => t.includes('disabled={readOnly}'))
         && /if \(readOnly\) return;/.test(seg);
     })());
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 파트⑦ — 시그널 사이징 분리 · 재원 배분 · 목표 비중 분모 (#400~#443)
+ *
+ *  A(사이징 분리) · A-6(배분) · B(분모) · C(충돌·쿨다운) · D(기준가 축) · E(유보 현금) ·
+ *  F(로그·집계)는 **서로 독립적으로 켜고 끌 수 있어야 한다**. 그래서 모든 기능마다
+ *  '동작 케이스'와 '기본값 무영향 케이스'를 쌍으로 둔다 — 무영향 케이스가 없으면
+ *  "저장된 시나리오의 결과가 1원도 달라지지 않는다"(요구사항 5)가 무방비다.
+ *
+ *  ⚠️ 픽스처 숫자는 사용자 실측 시나리오(T2~T5)의 **입력을 그대로** 재현하도록 잡았다.
+ *     보유 18,015주 · 종가 ₩14,855 · 예수금 ₩13,352,955 · 전월말 평가액 ₩331,656,150 …
+ *     단순화하면(1종목·얇은 재원) 목표 캡 해제나 배분이 가려져 죽은 단언이 된다.
+ * ═════════════════════════════════════════════════════════════════════════ */
+{
+  console.log('\n── 파트⑦ 시그널 사이징 분리 / 재원 배분 / 목표 비중 분모 ──');
+
+  /** 주말만 쉬는 달력에서 [from,to] 영업일에 f(i)를 종가로 깐다. */
+  const mkPrices = (from, to, f) => {
+    const out = {};
+    let d = from, i = 0;
+    while (d <= to) {
+      if (isBusinessDay(d, [])) { out[d] = f(d, i); i++; }
+      d = addDays(d, 1);
+    }
+    return out;
+  };
+  const run = (cfg, prices) => runBacktest({ config: makeBtConfig(cfg), prices, dividends: {}, holidays: [] });
+  const carriers = (r, kind) => r.summary.signalEvents.filter((e) => e.carrier && (!kind || e.kind === kind));
+
+  /* ── 픽스처 A — T2·T3·T7 (단일 종목, 3/4 급락) ─────────────────────────── */
+  // 2026-02-02(월) 18,410 매수 → 2/27(금) 월말 18,410 → 3/4(수) 14,855(−19.3%) → 3/31 15,755
+  const PA = { K: mkPrices('2026-02-02', '2026-03-31', (d) => (d < '2026-03-04' ? 18410 : d === '2026-03-04' ? 14855 : 15755)) };
+  const baseA = (over = {}) => ({
+    startDate: '2026-02-02', endDate: '2026-03-31',
+    // 331,656,150(=18,015 × 18,410) + 13,352,955 → 초기 매수 후 예수금이 정확히 실측값이 된다.
+    initialCapital: 345009105, targetMode: 'amount', policy: 'none',
+    assets: [{ id: 'k', code: 'K', name: 'KODEX', payCycle: 'none', targetAmount: 331656150 }],
+    // 3/2에 목표만 267,000,000으로 낮춘다(매매 없음) → 3/4 평가액 267,612,825이 목표를 **초과**한다.
+    events: [{ id: 'e', date: '2026-03-02', label: '목표 하향', funding: 'defer', addAssets: [], removeAssets: [], targets: [{ assetId: 'k', amount: 267000000, ratio: null }] }],
+    ...over,
+  });
+
+  // ── T2 [매수 캡 해제] ────────────────────────────────────────────────────
+  const t2Legacy = run(baseA({ dip: { enabled: true, levels: [{ drop: 10, buyPct: 100 }] } }), PA);
+  ok('#400 [as-is] 레거시 비율 매수는 목표를 넘긴 상태에서 ₩0으로 미체결된다(고치려는 문제)',
+    (() => {
+      const e = carriers(t2Legacy, 'buy')[0];
+      return !!e && e.tradeQty === 0 && e.note === '목표 이상 — 살 것 없음' && e.reason === 'CAP_TARGET';
+    })());
+  const t2 = run(baseA({ dip: { enabled: true, levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }] } }), PA);
+  ok('#401 T2 ⚠️ `재원의 %`는 목표 비중 캡을 받지 않는다 — 898주 / ₩13,339,790 체결 · 잔여 ₩13,165',
+    (() => {
+      const e = carriers(t2, 'buy')[0];
+      return !!e && e.tradeQty === 898 && Math.round(e.tradeAmount) === 13339790
+        && Math.round(e.poolAt) === 13352955 && Math.round(t2.summary.finalCash) === 13165;
+    })());
+  ok('#401b ⚠️ 체결 후 비중이 목표를 넘어도 자동 되팔기가 없다(정기 리밸런싱이 꺼져 있으면)',
+    t2.months.flatMap((m) => m.trades).filter((t) => t.qty < 0).length === 0
+      && t2.finalHoldings[0].qty === 18913);
+
+  // ── T3 [기준 평가액 복원 / 전월말] ───────────────────────────────────────
+  const t3 = run(baseA({
+    dip: {
+      enabled: true, levels: [{ drop: 10, buyPct: null, sizing: 'restoreBase' }],
+      baseline: { axis: 'prevMonthEnd', amount: 0, resetOnFill: false, maxReuse: 0 },
+    },
+  }), PA);
+  ok('#402 T3 ⚠️ 복원 목표 = 전월말 평가액 ₩331,656,150 · 필요액 ₩64,043,325 · 필요 수량 4,311주',
+    (() => {
+      const e = carriers(t3, 'buy')[0];
+      return !!e && Math.round(e.baseEval) === 331656150 && Math.round(e.ordered) === 64043325
+        && Math.trunc(e.ordered / e.price) === 4311 && e.sizing === 'restoreBase';
+    })());
+  ok('#402b T3 ⚠️ 재원 ₩13,352,955 한도로 898주 부분 체결 · 복원율 20.8% · 사유 PARTIAL_NO_CASH',
+    (() => {
+      const e = carriers(t3, 'buy')[0];
+      return !!e && e.tradeQty === 898 && Math.round(e.tradeAmount) === 13339790
+        && Math.round(e.restoreRate * 10) / 10 === 20.8
+        && Math.round(e.shortfall) === 50703535 && e.reason === 'PARTIAL_NO_CASH';
+    })());
+  ok('#402c T3 ⚠️ 체결 후 18,913주 · ₩280,952,615 · 잔여 현금 ₩13,165 · 3월말 ₩297,974,315',
+    (() => {
+      const mar = t3.months.find((m) => m.ym === '2026-03');
+      return Math.round(t3.summary.finalCash) === 13165
+        && mar.holdings[0].qty === 18913 && Math.round(mar.holdings[0].evalAmount) === 297974315
+        && Math.round(18913 * 14855) === 280952615;
+    })());
+
+  // ── T7 [이탈 한도 ±5%p] ─────────────────────────────────────────────────
+  const t7 = run(baseA({
+    dip: { enabled: true, deviationCap: 5, levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }] },
+  }), PA);
+  ok('#403 T7 ⚠️ 이탈 한도가 주문을 축소하고 CAP_DEVIATION을 남긴다(축소 전 ordered도 보존)',
+    (() => {
+      const e = carriers(t7, 'buy')[0];
+      if (!e) return false;
+      const base = 18015 * 14855;                       // 그날 종목 평가액 합계 = 비중 분모
+      const room = (267000000 + base * 0.05) - base;    // 목표 +5%p 까지 남은 여유
+      return Math.round(e.ordered) === 13352955 && Math.abs(e.planned - room) < 1
+        && e.caps.includes('CAP_DEVIATION') && e.reason === 'CAP_DEVIATION'
+        && e.tradeQty === Math.trunc(room / 14855) && e.tradeQty < 898;
+    })());
+  ok('#403b ⚠️ 이탈 한도 0(기본)은 아무것도 자르지 않는다',
+    carriers(t2, 'buy')[0].caps.length === 0);
+
+  /* ── 픽스처 B — T4·T5 (매도 캡 해제) ──────────────────────────────────── */
+  const mkSell = (p0, p1, qty, target2, over = {}) => {
+    const prices = { M: mkPrices('2026-02-02', '2026-03-31', (d) => (d < '2026-03-04' ? p0 : p1)) };
+    const cfg = {
+      startDate: '2026-02-02', endDate: '2026-03-31',
+      initialCapital: qty * p0, targetMode: 'amount', policy: 'none',
+      assets: [{ id: 'm', code: 'M', name: 'KODEX금융', payCycle: 'none', targetAmount: qty * p0 }],
+      // 매도일 전에 목표를 올려 **목표 초과분을 0으로** 만든다(as-is에서 미체결이던 상황).
+      events: [{ id: 'e', date: '2026-03-02', label: '목표 상향', funding: 'defer', addAssets: [], removeAssets: [], targets: [{ assetId: 'm', amount: target2, ratio: null }] }],
+      ...over,
+    };
+    return run(cfg, prices);
+  };
+  const sellLv = (sizing, pct) => ({ enabled: true, levels: [{ drop: 99, buyPct: null }], sellLevels: [{ rise: 10, sellPct: pct, sizing }] });
+
+  const t4Legacy = mkSell(10746, 11928, 5583, 70000000, { dip: sellLv('toTarget', null) });
+  ok('#404 [as-is] 목표 초과분이 0이면 레거시 매도는 "목표 이하 — 팔 것 없음"으로 미체결된다',
+    (() => {
+      const e = carriers(t4Legacy, 'sell')[0];
+      return !!e && e.tradeQty === 0 && e.note === '목표 이하 — 팔 것 없음' && e.reason === 'CAP_TARGET';
+    })());
+  const t4 = mkSell(10746, 11928, 5583, 70000000, { dip: sellLv('pctOfQty', 10) });
+  ok('#405 T4 ⚠️ `보유 수량의 10%`는 목표 이하에서도 체결된다 — 558주 · +₩6,655,824 · 잔여 5,025주',
+    (() => {
+      const e = carriers(t4, 'sell')[0];
+      return !!e && e.tradeQty === -558 && Math.round(e.tradeAmount) === 6655824
+        && t4.finalHoldings[0].qty === 5025 && e.basisKind === 'qty' && e.basisAmount === 5583;
+    })());
+  ok('#406 T5 ⚠️ 같은 규칙 — 18,508주 @₩15,698 → 1,850주 / ₩29,041,300 (잔여 16,658주)',
+    (() => {
+      const r = mkSell(14000, 15698, 18508, 400000000, { dip: sellLv('pctOfQty', 10) });
+      const e = carriers(r, 'sell')[0];
+      return !!e && e.tradeQty === -1850 && Math.round(e.tradeAmount) === 29041300
+        && r.finalHoldings[0].qty === 16658;
+    })());
+  ok('#406b T5 ⚠️ 18,167주 @₩17,507 → 1,816주 / ₩31,792,712 (잔여 16,351주)',
+    (() => {
+      const r = mkSell(14000, 17507, 18167, 400000000, { dip: sellLv('pctOfQty', 10) });
+      const e = carriers(r, 'sell')[0];
+      return !!e && e.tradeQty === -1816 && Math.round(e.tradeAmount) === 31792712
+        && r.finalHoldings[0].qty === 16351;
+    })());
+  ok('#407 ⚠️ 보유가 0이면 캡을 풀어도 팔 수 없다 — NO_POSITION',
+    (() => {
+      const prices = { M: mkPrices('2026-02-02', '2026-03-31', (d) => (d < '2026-03-04' ? 10000 : 12000)) };
+      const r = run({
+        startDate: '2026-02-02', endDate: '2026-03-31', initialCapital: 10000000,
+        targetMode: 'amount', policy: 'none',
+        assets: [{ id: 'm', code: 'M', name: 'M', payCycle: 'none', targetAmount: 0 }],
+        dip: sellLv('pctOfQty', 50),
+      }, prices);
+      // ⚠️ '보유 없음'은 밑변이 산출되기 전이라 carrier 플래그가 서지 않는다(계산식이 없으므로) —
+      //    그래도 사유는 남아야 한다.
+      const e = r.summary.signalEvents.filter((x) => x.kind === 'sell')[0];
+      return !!e && e.tradeQty === 0 && e.reason === 'NO_POSITION' && e.note === '보유 없음';
+    })());
+  ok('#408 ⚠️ 매도 사이징 4종 — 평가액의 % / 고정 금액 / 기준 평가액 초과분이 각각 다르게 산출된다',
+    (() => {
+      const evalAt = 5583 * 11928;
+      const a = carriers(mkSell(10746, 11928, 5583, 70000000, { dip: sellLv('pctOfEval', 10) }), 'sell')[0];
+      const b = carriers(mkSell(10746, 11928, 5583, 70000000, { dip: sellLv('fixedAmount', null) }), 'sell')[0];
+      const c = carriers(mkSell(10746, 11928, 5583, 70000000, {
+        dip: { ...sellLv('excessOverBase', null), baseline: { axis: 'lastFill', amount: 0, resetOnFill: false, maxReuse: 0 } },
+      }), 'sell')[0];
+      return Math.abs(a.ordered - evalAt * 0.1) < 1 && a.basisKind === 'eval'
+        && b.ordered === 0 && b.basisKind === 'fixed'          // amount 미지정 → 0원 주문
+        // lastFill 기준 = 초기 매수 직후 평가액(5,583 × 10,746). 지금 평가액과의 차이를 판다.
+        && Math.abs(c.ordered - (evalAt - 5583 * 10746)) < 1 && c.basisKind === 'base';
+    })());
+
+  /* ── A-4-5 폭주 방지 ──────────────────────────────────────────────────── */
+  ok('#409 ⚠️ 종목별 누적 시그널 매수 한도(초기 투자금의 %)가 주문을 자른다 — CAP_ASSET_BUDGET',
+    (() => {
+      const r = run(baseA({
+        dip: {
+          enabled: true, levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }],
+          buyCapMode: 'pctOfInitial', buyCapValue: 1,   // 345,009,105 × 1% = 3,450,091.05
+        },
+      }), PA);
+      const e = carriers(r, 'buy')[0];
+      return !!e && e.caps.includes('CAP_ASSET_BUDGET')
+        && e.tradeQty === Math.trunc(3450091.05 / 14855) && e.tradeQty < 898;
+    })());
+  ok('#409b ⚠️ 한도 기본값(none)은 아무것도 자르지 않는다',
+    carriers(t2, 'buy')[0].tradeQty === 898);
+
+  /* ── C-3 쿨다운 / 정기 제외 ───────────────────────────────────────────── */
+  // 3/4 −19.3% (1·2단계 동시) → 3/5 −25%(3단계). 쿨다운 3영업일이면 3/5은 막힌다.
+  const PC = { K: mkPrices('2026-02-02', '2026-03-31', (d) => (
+    d < '2026-03-04' ? 20000 : d === '2026-03-04' ? 17000 : d === '2026-03-05' ? 14000 : 15000)) };
+  const cdCfg = (over = {}) => ({
+    startDate: '2026-02-02', endDate: '2026-03-31', initialCapital: 300000000,
+    targetMode: 'amount', policy: 'none',
+    assets: [{ id: 'k', code: 'K', name: 'K', payCycle: 'none', targetAmount: 200000000 }],
+    dip: { enabled: true, levels: [{ drop: 10, buyPct: 10, sizing: 'pctOfPool' }, { drop: 25, buyPct: 10, sizing: 'pctOfPool' }], ...over },
+  });
+  ok('#410 T9 ⚠️ 쿨다운 3영업일 — 다음 영업일 재발동은 COOLDOWN으로 스킵된다',
+    (() => {
+      const off = run(cdCfg(), PC);
+      const on = run(cdCfg({ cooldownDays: 3 }), PC);
+      const offFills = carriers(off, 'buy').filter((e) => e.tradeQty > 0).length;
+      const onFills = carriers(on, 'buy').filter((e) => e.tradeQty > 0).length;
+      return offFills === 2 && onFills === 1
+        && on.summary.signalEvents.some((e) => e.reason === 'COOLDOWN')
+        && on.summary.signalStats.reasons.COOLDOWN === 1;
+    })());
+  ok('#410b ⚠️ 쿨다운 0(기본)은 결과를 바꾸지 않는다',
+    JSON.stringify(run(cdCfg(), PC).summary.signalEvents)
+      === JSON.stringify(run(cdCfg({ cooldownDays: 0 }), PC).summary.signalEvents));
+
+  /* ── C-2 충돌 규칙 ────────────────────────────────────────────────────── */
+  ok('#411 ⚠️ 같은 날 정기 리밸런싱과 겹칠 때 — 시그널 우선(기본) / 정기 우선 / 그날 시그널 무시',
+    (() => {
+      const mk = (conflict) => run({
+        startDate: '2026-02-02', endDate: '2026-03-31', initialCapital: 300000000,
+        targetMode: 'amount', policy: 'fixedDay', fixedDay: 4,
+        assets: [{ id: 'k', code: 'K', name: 'K', payCycle: 'none', targetAmount: 200000000 }],
+        dip: { enabled: true, levels: [{ drop: 10, buyPct: 10, sizing: 'pctOfPool' }], conflict },
+      }, PC);
+      const a = mk('signalFirst'), b = mk('regularFirst'), c = mk('skipSignal');
+      const sigFilled = (r) => carriers(r, 'buy').filter((e) => e.tradeQty > 0).length;
+      // '그날 시그널 무시'는 3/4 발동을 통째로 버린다.
+      return sigFilled(c) === 0 && sigFilled(a) >= 1
+        // 순서가 바뀌면 그날 매매 순서(=거래 배열 순서)가 달라진다.
+        && JSON.stringify(a.months.flatMap((m) => m.trades).map((t) => t.signal ?? ''))
+          !== JSON.stringify(b.months.flatMap((m) => m.trades).map((t) => t.signal ?? ''));
+    })());
+  ok('#411b ⚠️ 최근 시그널 종목은 N영업일 동안 정기 리밸런싱에서 제외된다',
+    (() => {
+      const mk = (xr) => run({
+        startDate: '2026-02-02', endDate: '2026-03-31', initialCapital: 300000000,
+        targetMode: 'amount', policy: 'fixedDay', fixedDay: 6,
+        assets: [{ id: 'k', code: 'K', name: 'K', payCycle: 'none', targetAmount: 200000000 }],
+        dip: { enabled: true, levels: [{ drop: 10, buyPct: 10, sizing: 'pctOfPool' }], excludeRegularDays: xr },
+      }, PC);
+      const reg = (r) => r.months.flatMap((m) => m.trades).filter((t) => !t.signal).length;
+      return reg(mk(0)) > reg(mk(10));
+    })());
+
+  /* ── D 기준가 축 갱신 ─────────────────────────────────────────────────── */
+  ok('#412 T10 ⚠️ 미체결 시 앵커 기준가 — 유지(기본)와 갱신이 서로 다른 기준으로 판정한다',
+    (() => {
+      // 재원 0원이라 앵커 매수가 절대 체결되지 않는다 → 기준가 갱신 규칙만 관측된다.
+      const PD = { K: mkPrices('2026-02-02', '2026-03-31', (d) => (
+        d < '2026-03-04' ? 20000 : d < '2026-03-11' ? 17000 : 14000)) };
+      const mk = (anchorOnNoFill) => run({
+        startDate: '2026-02-02', endDate: '2026-03-31', initialCapital: 200000000,
+        targetMode: 'amount', policy: 'none',
+        assets: [{ id: 'k', code: 'K', name: 'K', payCycle: 'none', targetAmount: 200000000 }],
+        dip: { enabled: true, extremeOn: false, anchorLevels: [{ move: 10 }], anchorOnNoFill },
+      }, PD);
+      const refs = (r) => r.summary.signalEvents.filter((e) => e.axis === 'anchor').map((e) => Math.round(e.ref));
+      const keep = refs(mk('keep')), upd = refs(mk('update'));
+      return keep.length >= 1 && upd.length >= 1 && JSON.stringify(keep) !== JSON.stringify(upd)
+        && keep.every((x) => x === 20000) && upd.includes(17000);
+    })());
+
+  /* ── B 목표 비중 분모 ─────────────────────────────────────────────────── */
+  ok('#413 T8 ⚠️ 분모를 총자산으로 바꾸면 예수금이 언더타깃으로 잡혀 정기 리밸런싱일에 재투입된다',
+    (() => {
+      // 초기 매수 후 예수금 4,000만이 남고, 3월에 가격이 20% 내려 평가액만 줄어드는 픽스처.
+      const PB = { K: mkPrices('2026-02-02', '2026-03-31', (d) => (d < '2026-03-01' ? 10000 : 8000)) };
+      const mk = (ratioBase) => run({
+        startDate: '2026-02-02', endDate: '2026-03-31', initialCapital: 200000000,
+        targetMode: 'ratio', ratioBase, policy: 'fixedDay', fixedDay: 10,
+        assets: [{ id: 'k', code: 'K', name: 'K', payCycle: 'none', targetRatio: 80 }],
+      }, PB);
+      const eq = mk('equity'), tot = mk('equityCash');
+      // equity     : 목표 = 평가액 × 80% → 회차마다 20%씩 팔아 현금이 쌓이기만 한다(매수 0건).
+      // equityCash : 목표 = (평가액 + 예수금) × 80% → 하락분만큼 예수금이 언더타깃으로 잡혀 되산다.
+      return tot.summary.finalEval > eq.summary.finalEval
+        && eq.months.flatMap((m) => m.trades).every((t) => t.qty < 0)
+        && tot.months.flatMap((m) => m.trades).some((t) => t.qty > 0);
+    })());
+  ok('#413b ⚠️ 분모 기본값(equity)은 종전 결과와 동일하다(필드 부재 = equity)',
+    (() => {
+      const PB = { K: mkPrices('2026-02-02', '2026-03-31', () => 10000) };
+      const cfg = {
+        startDate: '2026-02-02', endDate: '2026-03-31', initialCapital: 200000000,
+        targetMode: 'ratio', policy: 'fixedDay', fixedDay: 10,
+        assets: [{ id: 'k', code: 'K', name: 'K', payCycle: 'none', targetRatio: 50 }],
+      };
+      return JSON.stringify(run(cfg, PB).summary) === JSON.stringify(run({ ...cfg, ratioBase: 'equity' }, PB).summary);
+    })());
+
+  /* ── E 최소 유보 현금 ─────────────────────────────────────────────────── */
+  ok('#414 ⚠️ 최소 유보 현금은 매수를 자르고 예수금이 그 아래로 내려가지 않는다',
+    (() => {
+      const r = run(baseA({
+        minCashReserve: 10000000,
+        dip: { enabled: true, levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }] },
+      }), PA);
+      const e = carriers(r, 'buy')[0];
+      return r.summary.finalCash >= 10000000 && e.tradeQty > 0 && e.tradeQty < 898;
+    })());
+  ok('#414b ⚠️ 최소 유보 현금 0(기본)은 결과를 바꾸지 않는다',
+    JSON.stringify(run(baseA({ minCashReserve: 0, dip: { enabled: true, levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }] } }), PA).summary.finalCash)
+      === JSON.stringify(t2.summary.finalCash));
+
+  /* ── A-6 재원 배분 (워터폴) ───────────────────────────────────────────── */
+  ok('#420 T11 ⚠️ 목표 비중 비례 배분 — 재원 1,000 · 80:20 → 800 : 200',
+    (() => {
+      const r = waterfallAllocate([{ id: 'a', weight: 80, need: 9999 }, { id: 'b', weight: 20, need: 9999 }], 1000);
+      return Math.abs(r.alloc.a - 800) < 1e-6 && Math.abs(r.alloc.b - 200) < 1e-6 && r.iterations === 1;
+    })());
+  ok('#421 T12 ⚠️ 워터폴 재배분 — A 필요액 500 · B 900 → 500 : 500 (반복 2회 · 재배분 300)',
+    (() => {
+      const r = waterfallAllocate([{ id: 'a', weight: 80, need: 500 }, { id: 'b', weight: 20, need: 900 }], 1000);
+      return Math.abs(r.alloc.a - 500) < 1e-6 && Math.abs(r.alloc.b - 500) < 1e-6
+        && r.iterations === 2 && Math.abs(r.redistributed - 300) < 1e-6;
+    })());
+  ok('#421b ⚠️ 가중치가 같으면 균등 배분이고, 순서를 바꿔도 결과가 같다(A-6-6 결정론)',
+    (() => {
+      const a = waterfallAllocate([{ id: 'x', weight: 1, need: 9999 }, { id: 'y', weight: 1, need: 9999 }], 1000);
+      const b = waterfallAllocate([{ id: 'y', weight: 1, need: 9999 }, { id: 'x', weight: 1, need: 9999 }], 1000);
+      return JSON.stringify(a.alloc) === JSON.stringify({ x: 500, y: 500 })
+        && a.alloc.x === b.alloc.x && a.alloc.y === b.alloc.y;
+    })());
+
+  // T13/T14 — 엔진 전체를 통과하는 실수량 배분.
+  const PW = {
+    X: mkPrices('2026-02-02', '2026-03-31', (d) => (d < '2026-03-04' ? 20000 : 14855)),
+    Y: mkPrices('2026-02-02', '2026-03-31', (d) => (d < '2026-03-04' ? 20000 : 12400)),
+  };
+  const AX = { id: 'x', code: 'X', name: 'X', payCycle: 'none', targetAmount: 160000000 };
+  const AY = { id: 'y', code: 'Y', name: 'Y', payCycle: 'none', targetAmount: 40000000 };
+  const allocCfg = (assets, over = {}) => ({
+    startDate: '2026-02-02', endDate: '2026-03-31',
+    // 160,000,000 + 40,000,000 + 13,352,955 → 초기 매수 후 예수금이 실측값과 같아진다.
+    initialCapital: 213352955, targetMode: 'amount', policy: 'none', assets,
+    dip: {
+      enabled: true,
+      levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }],
+      alloc: { mode: 'weighted', basis: 'targetRatio', leftover: 'cash', minOrderAmount: 0, minOrderQty: 0 },
+      ...over,
+    },
+  });
+  const t13 = run(allocCfg([AX, AY]), PW);
+  ok('#422 T13 ⚠️ 실수량 배분 — ₩10,682,364/₩2,670,591 → 719주/215주 · 총 ₩13,346,745 · 잔여 ₩6,210',
+    (() => {
+      const blk = t13.summary.allocBlocks[0];
+      if (!blk || blk.rows.length !== 2) return false;
+      const [x, y] = blk.rows;
+      return Math.round(blk.pool) === 13352955
+        && Math.round(x.alloc) === 10682364 && Math.round(y.alloc) === 2670591
+        && x.qty === 719 && y.qty === 215
+        && Math.round(x.amount) === 10680745 && Math.round(y.amount) === 2666000
+        && Math.round(blk.totalFilled) === 13346745 && Math.round(blk.leftoverCash) === 6210
+        && Math.round(x.weight) === 80 && Math.round(y.weight) === 20;
+    })());
+  ok('#423 T14 ⚠️ ⑥ 종목 순서를 뒤집어도 수량·잔여 현금이 같다(순서 의존 제거)',
+    (() => {
+      const rev = run(allocCfg([AY, AX]), PW);
+      // ⚠️ finalHoldings의 **배열 순서**는 ⑥ 등록 순서를 따르므로 코드로 정렬해 비교한다.
+      const q = (r) => JSON.stringify(r.finalHoldings.map((h) => [h.code, h.qty]).sort());
+      return q(t13) === q(rev)
+        && Math.round(t13.summary.finalCash) === Math.round(rev.summary.finalCash)
+        && Math.round(rev.summary.finalCash) === 6210;
+    })());
+  ok('#424 T15 ⚠️ `순차 처리`(기본값)는 배분 코드를 타지 않고 배분 표도 만들지 않는다',
+    (() => {
+      const seq = run(allocCfg([AX, AY], { alloc: undefined }), PW);
+      return seq.summary.allocBlocks.length === 0
+        // 순차 처리는 목표 매수액이 큰 종목부터 재원을 다 쓴다 → 배분 결과와 다르다.
+        && JSON.stringify(seq.finalHoldings.map((h) => h.qty)) !== JSON.stringify(t13.finalHoldings.map((h) => h.qty));
+    })());
+  ok('#425 ⚠️ 배분 기준 3종(목표 비중 / 필요액 / 언더타깃 갭)이 서로 다른 가중치를 만든다',
+    (() => {
+      const w = (basis) => run(allocCfg([AX, AY], {
+        alloc: { mode: 'weighted', basis, leftover: 'cash', minOrderAmount: 0, minOrderQty: 0 },
+      }), PW).summary.allocBlocks[0].rows.map((r) => Math.round(r.weight));
+      const a = w('targetRatio'), b = w('need'), c = w('underGap');
+      // 필요액은 두 종목이 같은 재원 스냅샷 × 100%라 50:50이 된다.
+      return JSON.stringify(a) === JSON.stringify([80, 20]) && JSON.stringify(b) === JSON.stringify([50, 50])
+        && JSON.stringify(c) !== JSON.stringify(a);
+    })());
+  ok('#426 ⚠️ A-6-5 최소 주문 미달은 ROUNDING으로 빼고 그 배분액을 나머지에 재배분한다',
+    (() => {
+      const r = run(allocCfg([AX, AY], {
+        alloc: { mode: 'weighted', basis: 'targetRatio', leftover: 'cash', minOrderAmount: 0, minOrderQty: 300 },
+      }), PW);
+      const blk = r.summary.allocBlocks[0];
+      const y = blk.rows.find((x) => x.code === 'Y');
+      const x = blk.rows.find((x2) => x2.code === 'X');
+      // Y는 215주라 최소 300주에 미달 → 통째로 빠지고 재원 전부가 X로 간다.
+      return y.qty === 0 && y.reason === 'ROUNDING' && x.qty === Math.trunc(13352955 / 14855);
+    })());
+  ok('#427 ⚠️ A-6-4 내림 잔액 규칙 — `현금 보유`(기본) / `1주 추가` / `재원 소진까지`',
+    (() => {
+      const fin = (leftover) => run(allocCfg([AX, AY], {
+        alloc: { mode: 'weighted', basis: 'targetRatio', leftover, minOrderAmount: 0, minOrderQty: 0 },
+      }), PW).summary.finalCash;
+      const cash0 = fin('cash'), top = fin('topWeight'), refill = fin('refill');
+      // 잔여 6,210은 X(14,855)·Y(12,400) 어느 쪽 1주에도 못 미쳐 세 규칙이 같은 결과를 낸다.
+      // ⚠️ 그래서 '규칙이 적용됐는가'는 잔여가 1주 값을 넘는 별도 픽스처로 확인한다(아래).
+      const big = (leftover) => run(allocCfg([AX, AY], {
+        alloc: { mode: 'weighted', basis: 'targetRatio', leftover, minOrderAmount: 0, minOrderQty: 200 },
+      }), PW).summary.finalCash;
+      return Math.round(cash0) === 6210 && Math.round(top) === 6210 && Math.round(refill) === 6210
+        && big('refill') <= big('cash');
+    })());
+
+  /* ── F-2 집계 ─────────────────────────────────────────────────────────── */
+  ok('#430 F-2 ⚠️ 시그널 집계는 매수/매도를 분리하고 미체결 사유별로 센다(carrier 행만)',
+    (() => {
+      const st = t2Legacy.summary.signalStats;
+      return st.buyFired === 1 && st.buyFilled === 0 && st.sellFired === 0
+        && st.reasons.CAP_TARGET === 1
+        && t2.summary.signalStats.buyFilled === 1
+        && Object.keys(t2.summary.signalStats.reasons).length === 0;
+    })());
+  ok('#431 F-1 ⚠️ 로그 한 줄에 기준가·기준일·사이징 모드·밑변·주문액·캡·체결·사유가 모두 있다',
+    (() => {
+      const e = carriers(t3, 'buy')[0];
+      return e.ref === 18410 && e.refDate === '2026-02-02'
+        && e.sizing === 'restoreBase' && e.basisKind === 'base' && e.basisAmount > 0
+        && e.ordered > 0 && Array.isArray(e.caps) && e.tradeQty === 898 && e.reason === 'PARTIAL_NO_CASH';
+    })());
+
+  /* ── 하위호환 — 지문·정규화 ───────────────────────────────────────────── */
+  ok('#440 ⚠️ 레거시 단계(sizing 없음)의 지문은 **바이트 단위로** 종전과 같다(메모 배지 오작동 방지)',
+    (() => {
+      const raw = { id: 'z', name: 'z', assets: [], dip: { enabled: true, levels: [{ drop: 10, buyPct: 34 }], sellLevels: [{ rise: 10, sellPct: null }] } };
+      // 같은 설정을 '명시적 레거시 사이징'으로 적어도 지문이 **한 글자도** 달라지지 않아야 한다.
+      const explicit = { ...raw, dip: { ...raw.dip,
+        levels: [{ drop: 10, buyPct: 34, sizing: 'toTargetCapped', amount: 0 }],
+        sellLevels: [{ rise: 10, sellPct: null, sizing: 'toTarget', amount: 0 }] } };
+      return backtestFingerprint([raw]) === backtestFingerprint([explicit])
+        && backtestSettingsFingerprint(raw) === backtestSettingsFingerprint(explicit)
+        // 단계 목록을 정규화해도 지문이 흔들리지 않는다(첫 로드에서 불필요한 Drive 재저장 방지).
+        // ⚠️ dip **전체**를 정규화해서 비교하면 안 된다 — `anchorSource`(레거시 '' → 'lastFill')처럼
+        //    이 기능과 무관한 기존 필드가 이미 달라져서, 실제로는 통과할 수 없는 단언이 된다.
+        && backtestFingerprint([raw]) === backtestFingerprint([{
+          ...raw,
+          dip: { ...raw.dip, levels: normalizeDipLevels(raw.dip.levels), sellLevels: normalizeSellLevels(raw.dip.sellLevels) },
+        }]);
+    })());
+  ok('#441 ⚠️ 사이징을 실제로 바꾸면 지문이 달라진다(그 편집이 Drive에 저장된다)',
+    (() => {
+      const a = { id: 'z', name: 'z', assets: [], dip: { enabled: true, levels: [{ drop: 10, buyPct: 34 }] } };
+      const b = { id: 'z', name: 'z', assets: [], dip: { enabled: true, levels: [{ drop: 10, buyPct: 34, sizing: 'pctOfPool' }] } };
+      const c = { id: 'z', name: 'z', assets: [], dip: { enabled: true, levels: [{ drop: 10, buyPct: 34, sizing: 'fixedAmount', amount: 5000000 }] } };
+      return backtestFingerprint([a]) !== backtestFingerprint([b])
+        && backtestFingerprint([b]) !== backtestFingerprint([c])
+        && backtestSettingsFingerprint(a) !== backtestSettingsFingerprint(b);
+    })());
+  ok('#442 ⚠️ A/B/C/D/E 신규 설정이 전부 지문에 실린다(하나만 고친 세션도 저장된다)',
+    (() => {
+      const base = { id: 'z', name: 'z', assets: [], dip: {} };
+      const fp = (o) => backtestFingerprint([{ ...base, ...o }]);
+      const dfp = (o) => backtestFingerprint([{ ...base, dip: { ...o } }]);
+      const b0 = fp({});
+      return fp({ ratioBase: 'equityCash' }) !== b0 && fp({ minCashReserve: 100 }) !== b0
+        && dfp({ deviationCap: 5 }) !== b0 && dfp({ cooldownDays: 3 }) !== b0
+        && dfp({ excludeRegularDays: 3 }) !== b0 && dfp({ conflict: 'skipSignal' }) !== b0
+        && dfp({ anchorOnNoFill: 'update' }) !== b0 && dfp({ buyCapMode: 'amount', buyCapValue: 5 }) !== b0
+        && dfp({ alloc: { mode: 'weighted' } }) !== b0
+        && dfp({ alloc: { mode: 'weighted', basis: 'need' } }) !== dfp({ alloc: { mode: 'weighted' } })
+        && dfp({ alloc: { mode: 'weighted', leftover: 'refill' } }) !== dfp({ alloc: { mode: 'weighted' } })
+        && dfp({ alloc: { mode: 'weighted', minOrderQty: 10 } }) !== dfp({ alloc: { mode: 'weighted' } })
+        && dfp({ baseline: { axis: 'peakEval' } }) !== b0
+        && dfp({ baseline: { resetOnFill: true } }) !== b0
+        && dfp({ baseline: { maxReuse: 2 } }) !== b0
+        && backtestFingerprint([{ ...base, assets: [{ id: 'a', baseAxis: 'manual', baseAmount: 7 }] }])
+          !== backtestFingerprint([{ ...base, assets: [{ id: 'a' }] }]);
+    })());
+  ok('#443 ⚠️ 정규화는 멱등이다(두 번 돌려도 지문이 흔들리지 않는다 — Drive 재저장·편집 소실 방지)',
+    (() => {
+      const raw = [{ id: 'z', name: 'z', assets: [{ id: 'a', code: 'K' }], dip: { enabled: true, levels: [{ drop: 10, buyPct: 34, sizing: 'pctOfPool' }], alloc: { mode: 'weighted' }, baseline: { axis: 'peakEval' } }, ratioBase: 'equityCash', minCashReserve: 5 }];
+      const once = normalizeBacktestScenarios(raw);
+      const twice = normalizeBacktestScenarios(once);
+      return twice === once && backtestFingerprint(once) === backtestFingerprint(twice);
+    })());
+
+  /* ── A-4-5 재사용 상한 / 기준축 리셋 ──────────────────────────────────── */
+  ok('#444 ⚠️ 같은 기준 평가액으로 N회를 넘겨 복원하지 않는다(CAP_BASE_REUSE)',
+    (() => {
+      // 두 번 발동하는 낙폭 2단계 · 기준축은 수동 고정(항상 같은 값)
+      const mk = (maxReuse) => run({
+        startDate: '2026-02-02', endDate: '2026-03-31', initialCapital: 400000000,
+        targetMode: 'amount', policy: 'none',
+        assets: [{ id: 'k', code: 'K', name: 'K', payCycle: 'none', targetAmount: 200000000, baseAxis: 'manual', baseAmount: 260000000 }],
+        dip: {
+          enabled: true,
+          levels: [{ drop: 10, buyPct: null, sizing: 'restoreBase' }, { drop: 25, buyPct: null, sizing: 'restoreBase' }],
+          baseline: { axis: 'manual', amount: 0, resetOnFill: false, maxReuse },
+        },
+      }, PC);
+      const off = carriers(mk(0), 'buy').filter((e) => e.tradeQty > 0).length;
+      const on = mk(1);
+      return off === 2 && carriers(on, 'buy').filter((e) => e.tradeQty > 0).length === 1
+        && on.summary.signalEvents.some((e) => e.reason === 'CAP_BASE_REUSE');
+    })());
+
+  /* ── 실모듈 드리프트 가드 ─────────────────────────────────────────────── */
+  // ⚠️ 위 미러 테스트는 **미러만** 검사한다 — src/backtest.ts에만(또는 미러에만) 반영한 변경은
+  //    전부 통과한다. 실제 모듈을 로드해 같은 픽스처를 돌리고 결과를 대조해 그 구멍을 막는다.
+  //    (Node 22.6+ 타입 스트리핑 필요. 지원하지 않는 런타임에서는 명시적으로 건너뛴다.)
+  await (async () => {
+    const canStrip = typeof process.features?.typescript === 'string';
+    if (!canStrip) {
+      console.log('  – #450 실모듈 드리프트 가드: 이 런타임은 .ts 스트리핑을 지원하지 않아 건너뜁니다');
+      return;
+    }
+    let real = null;
+    try {
+      const os = await import('node:os');
+      const { mkdtempSync, copyFileSync, writeFileSync: wf } = await import('node:fs');
+      const { pathToFileURL } = await import('node:url');
+      const dir = mkdtempSync(join(os.tmpdir(), 'btdrift-'));
+      copyFileSync(join(ROOT, 'src/utils.ts'), join(dir, 'utils.ts'));
+      wf(join(dir, 'backtest.ts'),
+        readFileSync(join(ROOT, 'src/backtest.ts'), 'utf8').replace(/from '\.\/utils'/g, "from './utils.ts'"));
+      real = await import(pathToFileURL(join(dir, 'backtest.ts')).href);
+    } catch (e) {
+      ok(`#450 실모듈 로드 실패 — ${String(e && e.message).slice(0, 120)}`, false);
+      return;
+    }
+    const CASES = [
+      ['레거시 기본', baseA({})],
+      ['T2 캡 해제', baseA({ dip: { enabled: true, levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }] } })],
+      ['T3 복원', baseA({ dip: { enabled: true, levels: [{ drop: 10, buyPct: null, sizing: 'restoreBase' }], baseline: { axis: 'prevMonthEnd', amount: 0, resetOnFill: false, maxReuse: 0 } } })],
+      ['T7 이탈 한도', baseA({ dip: { enabled: true, deviationCap: 5, levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }] } })],
+      ['E 유보 현금', baseA({ minCashReserve: 10000000, dip: { enabled: true, levels: [{ drop: 10, buyPct: 100, sizing: 'pctOfPool' }] } })],
+    ];
+    let same = 0;
+    for (const [nm, cfg] of CASES) {
+      const a = JSON.stringify(run(cfg, PA));
+      const b = JSON.stringify(real.runBacktest({ config: real.makeBtConfig(cfg), prices: PA, dividends: {}, holidays: [] }));
+      if (a === b) same++;
+      else console.log(`      드리프트: ${nm}`);
+    }
+    const t13real = real.runBacktest({ config: real.makeBtConfig(allocCfg([AX, AY])), prices: PW, dividends: {}, holidays: [] });
+    ok('#450 ⚠️ src/backtest.ts 실모듈과 미러 runBacktest의 결과가 완전히 일치한다(미러 드리프트 방지)',
+      same === CASES.length
+        && JSON.stringify(t13real.summary.allocBlocks) === JSON.stringify(t13.summary.allocBlocks));
+    ok('#450b ⚠️ 지문·정규화도 실모듈과 일치한다',
+      real.backtestFingerprint([{ id: 'z', dip: { levels: [{ drop: 10, buyPct: 34 }] } }])
+        === backtestFingerprint([{ id: 'z', dip: { levels: [{ drop: 10, buyPct: 34 }] } }])
+        && JSON.stringify(real.waterfallAllocate([{ id: 'a', weight: 80, need: 500 }, { id: 'b', weight: 20, need: 900 }], 1000))
+          === JSON.stringify(waterfallAllocate([{ id: 'a', weight: 80, need: 500 }, { id: 'b', weight: 20, need: 900 }], 1000)));
+  })();
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  통과 ${pass} / 실패 ${fail}\n`);
