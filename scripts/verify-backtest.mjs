@@ -363,6 +363,11 @@ function normalizeOverride(raw) {
     ym, group: g === 'mid' || g === 'all' ? g : g === 'eom' ? 'eom' : 'all', date: raw.date, assetId: asStr(raw?.assetId),
   };
 }
+/** 전역 지정일 정규화 — 빈 배열 보존(기본값 복원 금지) + dedupe + 정렬 + 상한. */
+function normalizeRebalDates(raw) {
+  return Array.from(new Set(asArr(raw).filter(isIsoDate))).sort().slice(0, MAX_BT_REBAL_DATES);
+}
+
 function makeBtConfig(partial = {}) {
   const ts = 1000;
   const policy = partial.policy, mode = partial.targetMode, rounding = partial.rounding;
@@ -378,6 +383,7 @@ function makeBtConfig(partial = {}) {
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
     policy: policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none' ? policy : 'perCycle',
     fixedDay: clampInt(asNum(partial.fixedDay, 15), 1, 31),
+    rebalDates: normalizeRebalDates(partial.rebalDates),
     exDivOffset: clampInt(asNum(partial.exDivOffset, -1), -10, 0),
     rebalOffset: clampInt(asNum(partial.rebalOffset, -1), -10, 0),
     payOffset: clampInt(asNum(partial.payOffset, 2), 0, 10),
@@ -424,6 +430,7 @@ function backtestSettingsFingerprint(cfg) {
       p: [s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
           s.targetMode ?? '', s.rounding ?? '', s.policy ?? '',
           s.fixedDay ?? 0, s.exDivOffset ?? 0, s.rebalOffset ?? 0, s.payOffset ?? 0,
+          asArr(s.rebalDates).join(','),
           s.allowNegativeCash ? 1 : 0,
           s.divReinvest ?? '', s.divReinvestSplit ?? '',
           s.contribution?.mode ?? '', s.contribution?.value ?? 0, s.contribution?.split ?? '',
@@ -459,6 +466,7 @@ function backtestFingerprint(scenarios) {
       p: [s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
           s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '',
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
+          asArr(s?.rebalDates).join(','),
           s?.allowNegativeCash ? 1 : 0,
           s?.divReinvest ?? '', s?.divReinvestSplit ?? '',
           s?.compareOn === false ? 0 : 1,
@@ -553,6 +561,13 @@ function buildSlots(config, holidays) {
       const r = resolveAssetRebal(a, config);
       const group = r.follows ? groupOfFollow(config, a) : 'all';
       const labelCycle = a.payCycle === 'mid' ? 'mid' : 'eom';
+      // 전역 지정일 — 정기 정책에 **추가**되는 축이라 아래 두 continue보다 앞. follow 종목에만.
+      if (r.follows) {
+        for (const raw of config.rebalDates) {
+          if (ymOf(raw) !== ym) continue;
+          add(onOrBeforeBusinessDay(raw, holidays), group, labelCycle, false, a.id);
+        }
+      }
       const ao = assetOv.get(`${ym}|${a.id}`);
       if (ao) { add(onOrBeforeBusinessDay(ao.date, holidays), group, labelCycle, true, a.id); continue; }
       if (r.mode === 'none') continue;
@@ -2143,6 +2158,67 @@ console.log('\n── 파트④-f 종목별 리밸런싱 일정 ──');
   deep('#99 rebalMode 미지정(레거시 시나리오)은 follow로 정규화돼 기존 일정과 동일',
     buildSlots(relegacy, HOL).map((s) => s.rebalDate),
     buildSlots(mkPdfConfig(), HOL).map((s) => s.rebalDate));
+}
+
+console.log('\n── 파트④-f2 전역 지정일 리밸런싱 ──');
+
+{
+  const DATES = ['2026-03-20', '2026-06-10'];
+  const want = DATES.map((d) => onOrBeforeBusinessDay(d, HOL));
+
+  const g = mkPdfConfig({ rebalDates: DATES });
+  const hit = buildSlots(g, HOL).filter((s) => want.includes(s.rebalDate));
+  ok('#330 전역 지정일이 정기 일정에 **추가**된다(follow 전 종목이 한 슬롯에)',
+    hit.length === 2 && hit.every((s) => s.assetIds.length === 3));
+
+  // ⚠️ buildSlots에서 `r.mode==='none'` continue보다 **앞**이어야 성립한다.
+  //    '정기는 끄고 지정일만'이 이 기능의 주 사용 시나리오다.
+  const gn = mkPdfConfig({ rebalDates: DATES, policy: 'none' });
+  deep('#331 ⚠️ 정기 리밸런싱을 꺼도(policy:none) 지정일 슬롯은 그대로 생긴다',
+    buildSlots(gn, HOL).map((s) => s.rebalDate).sort(), want.slice().sort());
+
+  // ⚠️ 종목 지정 오버라이드 continue보다 **앞**이어야 성립한다.
+  const gov = mkPdfConfig({
+    rebalDates: ['2026-06-10'],
+    overrides: [{ id: 'o9', ym: '2026-06', group: 'all', date: '2026-06-05', assetId: 'a2' }],
+  });
+  const jun = buildSlots(gov, HOL).filter((s) => s.ym === '2026-06' && s.assetIds.includes('a2'));
+  ok('#332 ⚠️ 종목 오버라이드가 있는 달에도 그 종목이 전역 지정일 슬롯에 남는다',
+    jun.some((s) => s.rebalDate === onOrBeforeBusinessDay('2026-06-10', HOL))
+      && jun.some((s) => s.rebalDate === '2026-06-05'));
+
+  const gi = mkPdfConfig({ rebalDates: ['2026-06-10'] });
+  gi.assets[2].rebalMode = 'day';
+  gi.assets[2].rebalDay = 20;
+  const giSlot = buildSlots(gi, HOL).find((s) => s.rebalDate === onOrBeforeBusinessDay('2026-06-10', HOL));
+  ok('#333 ⚠️ 전역 지정일은 follow 종목에만 — 개별 지정 종목은 끌려가지 않는다',
+    !!giSlot && !giSlot.assetIds.includes('a3') && giSlot.assetIds.includes('a1'));
+
+  const gh = mkPdfConfig({ rebalDates: ['2026-02-15', '2025-12-20', '2027-01-05'] });
+  const ghs = buildSlots(gh, HOL).map((s) => s.rebalDate);
+  ok('#334 휴장일은 직전 영업일로 스냅되고 기간 밖 지정일은 무시된다',
+    ghs.includes('2026-02-13') && !ghs.some((d) => d < '2026-01-02' || d > '2026-07-31'));
+
+  deep('#335 ⚠️ 지정일 기본값([])이면 슬롯이 종전과 완전히 동일하다',
+    buildSlots(mkPdfConfig({ rebalDates: [] }), HOL).map((s) => s.rebalDate),
+    buildSlots(mkPdfConfig(), HOL).map((s) => s.rebalDate));
+
+  const n1 = makeBtConfig({ rebalDates: ['2026-06-10', '2026-03-20', '2026-06-10', 'x', null, 5] });
+  deep('#336 정규화 — 유효 날짜만 + 중복 제거 + 정렬', n1.rebalDates, ['2026-03-20', '2026-06-10']);
+  deep('#336b ⚠️ 빈 배열은 보존한다(기본값 복원 금지 — 없던 리밸런싱이 생기면 안 된다)',
+    makeBtConfig({}).rebalDates, []);
+  deep('#336c 정규화는 멱등이다(#237 — 폴링마다 재저장/편집 소실 방지)',
+    makeBtConfig(n1).rebalDates, n1.rebalDates);
+
+  const base = mkPdfConfig();
+  const withD = mkPdfConfig({ rebalDates: ['2026-06-10'] });
+  ok('#337 ⚠️ 전역 지정일은 저장 지문·설정 지문에 모두 들어간다(지정일만 고친 세션이 저장돼야 한다)',
+    backtestFingerprint([base]) !== backtestFingerprint([withD])
+      && backtestSettingsFingerprint(base) !== backtestSettingsFingerprint(withD));
+
+  deep('#338 ⚠️ 전역 지정일은 분배락·지급 일정을 건드리지 않는다(분배는 payCycle만 따른다)',
+    buildDividendSlots(withD, HOL).map((d) => d.exDate),
+    buildDividendSlots(base, HOL).map((d) => d.exDate));
 }
 
 console.log('\n── 파트④-g 적대적 리뷰 확정 결함 회귀 ──');
@@ -4064,6 +4140,20 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /runAll[\s\S]{0,120}\.filter\(\(s\) => s\.compareOn !== false\)/.test(page));
 
   const bt2 = strip(read('src/backtest.ts'));
+  // ⚠️ 전역 지정일이 두 continue보다 **앞**에서 만들어지는지는 미러로 표현할 수 없다(미러도 같이
+  //    틀리면 통과한다) — src를 직접 읽어 위치 관계를 단언한다.
+  ok('#339 ⚠️ 전역 지정일은 buildSlots에서 오버라이드·none continue보다 앞에서 생성되고 등록 3곳에 들어 있다',
+    (() => {
+      const i = bt2.indexOf('for (const raw of config.rebalDates)');
+      const j = bt2.indexOf('const ao = assetOv.get(');
+      const k = bt2.indexOf("if (r.mode === 'none') continue;");
+      return i > 0 && j > i && k > i;
+    })()
+      && /rebalDates: normalizeRebalDates\(partial\.rebalDates\)/.test(bt2)
+      && /asArr\(s\.rebalDates\)\.join\(','\)/.test(bt2)
+      && /asArr\(s\?\.rebalDates\)\.join\(','\)/.test(bt2));
+  ok('#339b ⚠️ 전역 지정일은 follow 종목에만 걸린다(개별 지정 종목을 끌고 가지 않는다)',
+    /if \(r\.follows\) \{\s*for \(const raw of config\.rebalDates\)/.test(bt2));
   ok('#139 ⚠️ 재투자 매수는 분배금 주머니에서 꺼낸다(prefer="div") — 무한 재투자 방지',
     /applyCash\(cashDelta, date, 'div'\)/.test(bt2));
   // ⚠️ KIND_ORDER는 보조 규칙 도입으로 **번호가 밀렸다**(dip·annual 삽입). 리터럴을 그대로 박으면

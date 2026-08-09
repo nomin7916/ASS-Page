@@ -395,6 +395,19 @@ export interface BtConfig {
   policy: BtPolicy;
   /** policy='fixedDay'일 때 매월 며칠(1~31) */
   fixedDay: number;
+  /**
+   * 전역 **지정일 리밸런싱** — 정기 정책에 **추가**되는 날짜 목록
+   * ('YYYY-MM-DD', 휴장이면 직전 영업일로 스냅). 기본 [] = 없음(종전 동작).
+   *
+   * ⚠️ `rebalMode === 'follow'` 종목에만 걸린다 — 월별 **일괄** 오버라이드와 같은 규약이다.
+   *    종목별로 일정을 따로 지정한 종목까지 끌고 가면 "일괄과 별개로 종목을 다르게"라는 기존
+   *    계약이 깨지고, '이 종목은 리밸런싱 안 함'으로 둔 종목이 지정일 하나로 그 설정을 잃는다.
+   *    특정 종목만 그 날짜에 넣고 싶으면 그 종목의 `rebalMode:'dates'`를 쓴다.
+   * ⚠️ 정기 정책과 **완전히 독립**이다 — 정기를 꺼도(policy:'none') 지정일은 그대로 돈다.
+   *    그래서 buildSlots에서 `r.mode==='none'` continue보다 **앞**에서 만들어야 한다.
+   * ⚠️ 분배 일정(buildDividendSlots)은 이 값을 보지 않는다 — 분배락·지급일은 시장이 정한다.
+   */
+  rebalDates: string[];
   /** 기준일 대비 분배락 오프셋(영업일). 기본 −1 */
   exDivOffset: number;
   /** 분배락 대비 리밸런싱 오프셋(영업일). 기본 −1 */
@@ -1247,6 +1260,17 @@ function normalizeDivOverride(raw: unknown): Record<string, number> {
   return out;
 }
 
+/**
+ * 전역 지정일 정규화 — 유효 날짜만 + 중복 제거 + 정렬 + 상한.
+ * ⚠️ **빈 배열을 보존한다**(기본값 복원 금지) — 지정일은 '안 쓰는 것'이 정상 상태이고,
+ *    되살리면 레거시 시나리오에 없던 리밸런싱이 생겨 결과가 달라진다(normalizeSellLevels와 같은 규약).
+ * ⚠️ 정렬·dedupe가 있어야 **멱등**이다(#237) — 매 정규화가 새 순서를 내면 Drive 폴링마다
+ *    재저장되고 BacktestPage 시드 effect가 2.5초 idle 승격 전의 편집을 갈아엎는다.
+ */
+function normalizeRebalDates(raw: unknown): string[] {
+  return Array.from(new Set(asArr(raw).filter(isIsoDate))).sort().slice(0, MAX_BT_REBAL_DATES);
+}
+
 export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
   const ts = Date.now();
   const policy = partial.policy;
@@ -1267,6 +1291,9 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
       policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none'
         ? policy : 'perCycle',
     fixedDay: clampInt(asNum(partial.fixedDay, 15), 1, 31),
+    // ⚠️ 화이트리스트 재구축기라 여기 등록을 빠뜨리면 Drive 로드·백업 복원·별도 창 수신·
+    //    시나리오 복제 4경로에서 지정일이 통째로 사라진다.
+    rebalDates: normalizeRebalDates(partial.rebalDates),
     exDivOffset: clampInt(asNum(partial.exDivOffset, -1), -10, 0),
     rebalOffset: clampInt(asNum(partial.rebalOffset, -1), -10, 0),
     payOffset: clampInt(asNum(partial.payOffset, 2), 0, 10),
@@ -1562,6 +1589,8 @@ export function backtestSettingsFingerprint(cfg: unknown): string {
         s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
         s.targetMode ?? '', s.rounding ?? '', s.policy ?? '',
         s.fixedDay ?? 0, s.exDivOffset ?? 0, s.rebalOffset ?? 0, s.payOffset ?? 0,
+        // 전역 지정일 — 슬롯을 만드는 사용자 설정이라 반드시 포함(빠지면 '지정일만 고친 세션'이 저장 안 됨)
+        asArr(s.rebalDates).join(','),
         s.allowNegativeCash ? 1 : 0,
         s.divReinvest ?? '', s.divReinvestSplit ?? '',
         s.contribution?.mode ?? '', s.contribution?.value ?? 0, s.contribution?.split ?? '',
@@ -1614,6 +1643,8 @@ export function backtestFingerprint(scenarios: unknown): string {
           s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
           s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '',
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
+          // 전역 지정일 — 슬롯을 만드는 사용자 설정이라 반드시 포함
+          asArr(s?.rebalDates).join(','),
           s?.allowNegativeCash ? 1 : 0,
           // 분배금 처리 — 결과를 통째로 바꾸는 사용자 설정
           s?.divReinvest ?? '', s?.divReinvestSplit ?? '',
@@ -1771,6 +1802,17 @@ export function buildSlots(config: BtConfig, holidays: Set<string>): BtSlot[] {
       // 라벨용 사이클 — 사이클이 없는 모드에서도 그 종목의 분배 주기를 실어 보낸다.
       // (안 그러면 월중 분배 종목을 개별 지정했을 때 슬롯 라벨이 월말 기준으로 찍힌다.)
       const labelCycle: 'mid' | 'eom' = a.payCycle === 'mid' ? 'mid' : 'eom';
+
+      // 전역 지정일 — 정기 정책에 **추가**되는 축이라 아래 두 continue보다 **앞**에서 만든다.
+      // ⚠️ 뒤에 두면 정기를 끈 달(policy:'none')이나 종목 오버라이드가 있는 달에서 지정일이
+      //    통째로 사라진다 — '정기는 끄고 지정일만'이 이 기능의 주 사용 시나리오다.
+      // ⚠️ follow 종목에만 건다(월별 일괄 오버라이드와 같은 규약, BtConfig.rebalDates 주석 참조).
+      if (r.follows) {
+        for (const raw of config.rebalDates) {
+          if (ymOf(raw) !== ym) continue;
+          add(onOrBeforeBusinessDay(raw, holidays), group, labelCycle, false, a.id);
+        }
+      }
 
       // 종목 지정 오버라이드 — 그 달 그 종목의 일정을 이 날짜 하나로 대체(모드 무관).
       const ao = assetOv.get(`${ym}|${a.id}`);

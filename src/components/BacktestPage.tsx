@@ -117,6 +117,13 @@ const dipOf = (cfg) => {
     reallocate: !d || d.reallocate !== false,
   };
 };
+/**
+ * 전역 지정일 안전 접근자.
+ * ⚠️ 반드시 이걸 통해서만 읽는다 — 정규화를 우회한 config(별도 창 수신·구버전 브릿지)가 한 번이라도
+ *    들어오면 `active.rebalDates.length`가 렌더 중 TypeError가 되고, @ts-nocheck라 컴파일러가 못 막아
+ *    루트 ErrorBoundary까지 올라가 **화면이 통째로 오류 페이지**가 된다(dipOf와 같은 근거).
+ */
+const rebalDatesOf = (cfg) => (cfg && Array.isArray(cfg.rebalDates) ? cfg.rebalDates : []);
 /** 시그널 리밸런싱이 실제로 일을 하는가(단계가 하나라도 있는가). */
 const sigOn = (cfg) => {
   const d = dipOf(cfg);
@@ -2882,7 +2889,7 @@ export default function BacktestPage({
 
               <Section
                 title="③ 리밸런싱 일정"
-                badge={POLICY_LABEL[active.policy] || active.policy}
+                badge={`${POLICY_LABEL[active.policy] || active.policy}${rebalDatesOf(active).length ? ` · 지정일 ${rebalDatesOf(active).length}` : ''}`}
                 hint={(
                   <>
                     <p>
@@ -2939,6 +2946,62 @@ export default function BacktestPage({
                     <span className="text-[10px] text-gray-500">일 (휴장이면 직전 영업일)</span>
                   </div>
                 )}
+
+                {/* ── 전역 지정일 리밸런싱 — 전체 정책에 **추가**되는 축 ──
+                    ⚠️ 체크박스로 만들지 말 것: 끄는 유일한 표현이 배열 비우기가 되어 입력이 통째로
+                       소실된다(백테스트는 undo가 없고 sticky 복원 대상도 아니다). 개수 배지 + 칩
+                       개별 삭제로 표현한다. */}
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-1">
+                    <span className={LABEL}>지정일 리밸런싱</span>
+                    <span className="text-[10px] text-gray-600">({rebalDatesOf(active).length}건)</span>
+                    <Hint width={380}>
+                      <p>
+                        <b className="text-gray-300">특정 날짜</b>를 찍어 그날 전 종목을 목표에 맞춥니다.
+                        위 <b className="text-gray-300">전체 정책에 더해지는</b> 축이라 둘을 함께 쓸 수 있고,
+                        전체 정책을 <b className="text-gray-300">‘리밸런싱 안 함’</b>으로 두면 지정한 날짜에만 리밸런싱합니다.
+                      </p>
+                      <p className="mt-1">
+                        휴장·주말이면 <b className="text-gray-300">직전 영업일</b>로 옮겨 실행하고,
+                        조회기간 밖 날짜는 무시합니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">‘전체 정책 따름’ 종목에만</b> 걸립니다 — ⑥ 종목 목록의
+                        ‘리밸런싱’ 칸에서 일정을 따로 지정한 종목은 그 지정을 그대로 유지합니다
+                        (그 종목만 특정 날짜에 넣으려면 그 종목의 ‘지정 날짜’ 모드를 쓰세요).
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 분배락·지급일은 시장이 정하는 값이라 지정일과 무관하게 그대로입니다.
+                      </p>
+                    </Hint>
+                    <input type="date" className={`${INPUT} ml-auto w-[132px]`} value=""
+                      disabled={readOnly || rebalDatesOf(active).length >= MAX_BT_REBAL_DATES}
+                      onChange={(e) => {
+                        const d = e.target.value;
+                        // ⚠️ 중복·상한을 여기서 막지 않으면 초과분이 저장은 되고 **다음 로드에서
+                        //    조용히 절삭**돼(정규화) 그때 결과가 달라진다.
+                        const cur = rebalDatesOf(active);
+                        if (!d || cur.includes(d) || cur.length >= MAX_BT_REBAL_DATES) return;
+                        patchActive({ rebalDates: [...cur, d].sort() });
+                      }} />
+                  </div>
+                  {rebalDatesOf(active).length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {rebalDatesOf(active).map((d) => (
+                        <button key={d} disabled={readOnly} title="클릭하여 제거"
+                          className="px-1 py-0.5 rounded text-[9px] border border-gray-700 text-gray-400 hover:border-red-700 hover:text-red-300"
+                          onClick={() => patchActive({ rebalDates: rebalDatesOf(active).filter((x) => x !== d) })}>
+                          {d} ✕
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {rebalDatesOf(active).length >= MAX_BT_REBAL_DATES && (
+                    <span className="text-[9px] text-amber-400/90">
+                      지정일은 최대 {MAX_BT_REBAL_DATES}건까지 넣을 수 있습니다.
+                    </span>
+                  )}
+                </div>
 
                 <Section
                   title="분배 일정 오프셋 (고급)"
