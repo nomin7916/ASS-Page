@@ -4550,6 +4550,15 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /현금 합계\(예수금 \+ 적립 분배금 \+ 예비금\)/.test(page));
   ok('#381b ⚠️ 추가 예수금 칸이 의미 변경을 고지한다(사용자 행동 없이 결과가 달라지는 유일한 통로)',
     /추가 예수금 = 예비금/.test(page) && /뜻이 바뀌었습니다/.test(page));
+  // ⚠️ '초기 매수 후 잔여(예비금 제외)'를 세 화면이 각자 계산하면 값이 갈린다. 그리고 실제로는
+  //    표가 요약 카드의 **지역 변수**를 그대로 참조해 프로덕션에서 ReferenceError로 백테스트
+  //    페이지 전체가 오류 화면이 됐다(2026-08, 커밋 eac4840). @ts-nocheck + esbuild 빌드라
+  //    컴파일러도 `npm run build`도 이 부류를 잡지 못하므로 여기서 배선을 못 박는다.
+  ok('#382 ⚠️ 초기 매수 후 잔여는 모듈 스코프 initTradeRestOf 하나를 카드·표·CSV가 공유한다',
+    /const initTradeRestOf = \(result\)/.test(page)
+      && (page.match(/initTradeRestOf\(result\)/g) || []).length >= 3
+      && /value: initTradeRestOf\(result\)/.test(page)
+      && /\['초기 매수 후 잔여', initTradeRestOf\(result\)\]/.test(page));
 
   const bt2 = strip(read('src/backtest.ts'));
   // ⚠️ 전역 지정일이 두 continue보다 **앞**에서 만들어지는지는 미러로 표현할 수 없다(미러도 같이

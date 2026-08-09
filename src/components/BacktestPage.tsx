@@ -704,6 +704,23 @@ function SummaryCard({ label, value, cls, formula, note, compact, popWidth = 380
 }
 
 /**
+ * 초기 매수 후 잔여 중 **매매 몫**(= 예비금 시드를 뺀 값).
+ *
+ * ⚠️ `result.initialCashAfter`는 3주머니 **합계**라 예비금 시드(extraCash)가 섞여 있다 —
+ *    예수금 분해에 그대로 쓰면 소계가 정확히 예비금만큼 어긋난다. 예비금 시드는 summary에
+ *    없지만 항등식 `finalCashReserve + cumReserveDrawn === extraCash`로 정확히 복원된다.
+ * ⚠️ **요약 카드 · 기말 보유 현황 표 · CSV 3지점이 이 함수를 공유**한다(검증 #382).
+ *    각자 계산하면 같은 항목이 화면마다 갈리고, 실제로 표가 요약 카드의 **지역 변수**를
+ *    그대로 참조해 `ReferenceError: initTradeRest is not defined`로 백테스트 페이지 전체가
+ *    오류 화면이 된 이력이 있다(2026-08 프로덕션). @ts-nocheck + 타입체크 없는 esbuild
+ *    빌드라 컴파일러도 빌드도 이 부류를 잡지 못한다 — 반드시 모듈 스코프에 둘 것.
+ */
+const initTradeRestOf = (result) => {
+  const s = result?.summary;
+  return numOf(result?.initialCashAfter) - (numOf(s?.finalCashReserve) + numOf(s?.cumReserveDrawn));
+};
+
+/**
  * 요약 카드 6종.
  * ⚠️ 단일 시나리오 뷰와 비교 종합의 시나리오별 블록이 **이 한 컴포넌트를 공유**한다 —
  *    복제하면 두 화면이 갈라진다(사진1의 카드 구성이 곧 비교 화면의 카드 구성이어야 한다).
@@ -716,11 +733,9 @@ function SummaryCards({ result, compact = false }) {
   // 투입 원금 = 초기 투자금 + 추가 예수금. summary.initialCapital은 추가 예수금을 빼고 담으므로
   // 카드 값(finalTotal·profit)과 어긋나지 않도록 두 값에서 역산한다.
   const invested = s.finalTotal - s.profit;
-  const initRest = result.initialCashAfter ?? 0;
-  // ⚠️ 예수금 분해의 시드는 이제 **초기 투자금 잔여만**이다(예비금은 별도 주머니).
-  //    extraCash는 summary에 없지만 항등식 finalCashReserve + cumReserveDrawn === extraCash 로 정확히 복원된다.
-  const reserveInit = numOf(s.finalCashReserve) + numOf(s.cumReserveDrawn);
-  const initTradeRest = initRest - reserveInit;
+  // ⚠️ 예수금 분해의 시드는 **초기 투자금 잔여만**이다(예비금은 별도 주머니) — 표·CSV와 같은
+  //    함수를 쓴다(initTradeRestOf 주석 참조).
+  const initTradeRest = initTradeRestOf(result);
   // ⚠️ 원천징수를 켜면 accrued − paid 에 **세금**까지 섞인다 — 세금을 빼야 진짜 미지급분이다.
   //    (엔진 주석: cumDivAccrued = cumDivPaid + cumDivTax + 미지급 세전분)
   const divPending = s.cumDivAccrued - s.cumDivPaid - numOf(s.cumDivTax);
@@ -2309,8 +2324,7 @@ export default function BacktestPage({
     //       이 그룹에 항을 더하면 합이 어긋난다. 세금은 아래 '참고' 행으로 따로 적는다.
     const taxedCsv = result.summary.cumDivTax > 0.5;
     for (const [label, value] of [
-      ['초기 매수 후 잔여', (result.initialCashAfter ?? 0)
-        - (result.summary.finalCashReserve + result.summary.cumReserveDrawn)],
+      ['초기 매수 후 잔여', initTradeRestOf(result)],
       ['누적 매매차익', result.summary.cumTradeNet],
       ['종목 재편 순현금', result.summary.cumStructuralNet],
       ['분배금 재투자 매수', result.summary.cumReinvestNet],
@@ -4741,7 +4755,7 @@ export default function BacktestPage({
                         <td className={`${TD} text-right text-gray-600`}>-</td>
                       </tr>
                       {[
-                        { key: 'init', label: '초기 매수 후 잔여', value: initTradeRest, signed: false },
+                        { key: 'init', label: '초기 매수 후 잔여', value: initTradeRestOf(result), signed: false },
                         { key: 'trade', label: '누적 매매차익', value: result.summary.cumTradeNet, signed: true },
                         { key: 'struct', label: '종목 재편 순현금', value: result.summary.cumStructuralNet, signed: true },
                         { key: 'reinv', label: '분배금 재투자 매수', value: result.summary.cumReinvestNet, signed: true },
