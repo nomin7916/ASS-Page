@@ -192,17 +192,27 @@ const sigIsToTarget = (e) => e?.pctSum === null || e?.pctSum === undefined;
  */
 const sigSizeText = (e, cfg) => {
   const toTarget = sigIsToTarget(e);
+  const pct = numOf(e.pctSum);
+  // ⚠️ `밑변 × 비율 = planned`는 **상한에 걸리지 않았을 때만** 참이다 — planned는 매수면 목표
+  //    미달액에서, 매도면 초과분 전량에서 한 번 더 잘린다. 그대로 등호를 찍으면
+  //    `₩60,000,000 × 100% = ₩6,000,000` 같은 **거짓 계산식**이 된다(적대적 리뷰 확정 결함).
+  //    잘린 경우에는 곱의 결과를 그대로 보여 주고 어디서 잘렸는지를 이어 붙인다.
+  const capped = (raw, capLabel) => (raw > numOf(e.planned) + 0.5
+    ? `${won(raw)} → ${capLabel}에서 자름 = ${won(e.planned)}`
+    : `${won(e.planned)}`);
   if (e.kind === 'sell') {
     return toTarget
       ? `목표 초과분 ${won(e.excessAt)} 전량`
-      : `목표 초과분 ${won(e.excessAt)} × ${formatNumber(numOf(e.pctSum))}% = ${won(e.planned)}`;
+      : `목표 초과분 ${won(e.excessAt)} × ${formatNumber(pct)}% = `
+        + capped((numOf(e.excessAt) * pct) / 100, '초과분 전량');
   }
   const poolLabel = (cfg?.buyFunding || 'both') === 'tradeOnly'
     ? '매수 재원(매매 예수금)'
     : '매수 재원(예수금 + 적립 분배금)';
   return toTarget
     ? `목표까지 ${won(e.planned)} · ${poolLabel} ${won(e.poolAt)}`
-    : `${poolLabel} ${won(e.poolAt)} × ${formatNumber(numOf(e.pctSum))}% = ${won(e.planned)}`;
+    : `${poolLabel} ${won(e.poolAt)} × ${formatNumber(pct)}% = `
+      + capped((numOf(e.poolAt) * pct) / 100, '목표 미달액');
 };
 
 /**
@@ -896,7 +906,10 @@ function StrategyKpis({ result, cfg, compact = false }) {
 
   const cards = [
     {
-      label: '최저 예수금', value: won(s.minCash?.value ?? 0),
+      // ⚠️ 값은 `curve.cash` 최저점 = **예수금 + 적립 분배금 합계**다. 이번 재정의로 '예수금'이
+      //    매매 몫만 가리키게 됐으므로 라벨을 '최저 현금'으로 맞춘다 — 비교 표·CSV와도 같은 이름이다.
+      //    '최저 예수금'으로 되돌리면 같은 카드 안에서 '예수금'이 두 가지 뜻으로 쓰인다(적대적 리뷰 확정).
+      label: '최저 현금', value: won(s.minCash?.value ?? 0),
       cls: (s.minCash?.value ?? 0) < 0 ? 'text-blue-400' : 'text-gray-200',
       formula: [
         ['그 날짜', s.minCash?.date || '-'],
@@ -3119,7 +3132,7 @@ export default function BacktestPage({
                   <>
                     <p>
                       <b className="text-gray-300">목표 평가금을 고정</b>해 두고(오르면 팔고 내리면 사서 복원),
-                      분배금은 따로 모아 두었다가 <b className="text-gray-300">급락할 때만</b> 푸는 운용을 위한
+                      분배금은 <b className="text-gray-300">예수금과 따로 적립</b>해 두는 운용을 위한
                       보조 규칙 6종입니다. 그중 <b className="text-gray-300">시그널 리밸런싱</b>은
                       ③ 리밸런싱 일정과 <b className="text-gray-300">별개의 매매 트리거</b>라 둘을 동시에 켤 수 있습니다.
                     </p>
@@ -3128,8 +3141,10 @@ export default function BacktestPage({
                       결과가 1원도 달라지지 않습니다. 필요한 것만 켜세요.
                     </p>
                     <p className="mt-1 text-gray-500">
-                      ※ 밴드·재원·바닥선·증액은 <b className="text-gray-400">정기 리밸런싱에만</b> 걸립니다 —
-                      초기 매수·종목 재편(이벤트)·분배금 재투자는 종전 규칙 그대로 돕니다.
+                      ※ <b className="text-gray-400">매수 재원</b>은 <b className="text-gray-400">정기 리밸런싱과
+                      매매 시그널이 함께</b> 씁니다. 밴드·바닥선·증액은 정기 리밸런싱에만 걸리고,
+                      종목 재편(이벤트)·분배금 재투자는 종전 규칙 그대로 돕니다.
+                      초기 매수는 <b className="text-gray-400">초기 투자금만</b> 쓰고 추가 예수금은 남겨 둡니다.
                       <b className="text-gray-400"> 시그널 리밸런싱만</b> 자기 발동일에 독립적으로 매매합니다.
                     </p>
                   </>

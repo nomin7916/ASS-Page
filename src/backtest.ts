@@ -1542,12 +1542,22 @@ export function backtestScenariosHaveContent(scenarios: unknown): boolean {
  * ⚠️ 제외 대상: id · name · review · notes · compareOn · createdAt · updatedAt.
  *    (name과 compareOn은 표시 전용이라 바뀌어도 결과가 1원도 달라지지 않는다.)
  * ⚠️ backtestFingerprint와 같은 이유로 **절대 던지지 않는다**.
+ *
+ * ⚠️ **`SETTINGS_FP_SCHEMA`는 '같은 저장값의 뜻이 바뀐' 릴리스에서만 올린다**(적대적 리뷰 확정).
+ *    2026-08 재정의에서 `unlockPct: 34`가 `buyPct: 34`로 이관됐는데, 지문 투영이 둘 다 `10:34`라
+ *    **문자열이 완전히 동일**했다 — 사용자가 아무것도 안 건드렸는데 결과 숫자만 달라지고
+ *    메모의 '설정이 바뀌었습니다' 배지는 뜨지 않아, 옛 해석으로 쓴 AI 분석이 조용히 거짓이 된다.
+ *    저장 지문(`backtestFingerprint`)에는 **넣지 말 것** — 그쪽은 Drive 저장 트리거이자
+ *    `normalizeBacktestScenarios`의 멱등 판정이라, 상수를 넣어도 양변에 똑같이 붙어 무의미하다.
  */
+const SETTINGS_FP_SCHEMA = 2;
+
 export function backtestSettingsFingerprint(cfg: unknown): string {
   try {
     const s: any = cfg;
     if (!s || typeof s !== 'object') return '';
     return JSON.stringify({
+      v: SETTINGS_FP_SCHEMA,
       p: [
         s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
         s.targetMode ?? '', s.rounding ?? '', s.policy ?? '',
@@ -2900,13 +2910,16 @@ export function runBacktest(input: BtRunInput): BtResult {
           const evalBefore = p.qty * hit.price;
           const excess = evalBefore - target;
           carrier.excessAt = Math.max(0, excess);
+          // ⚠️ `pctSum`은 **초과분 가드보다 먼저** 채운다 — 뒤에 두면 '목표 이하'로 조기 반환한
+          //    행의 pctSum이 null로 남아, 사용자가 30%를 지정했는데도 화면이 '목표 초과분 ₩0
+          //    전량'(= 목표까지)이라고 설명한다(적대적 리뷰 확정 결함).
+          carrier.pctSum = sumPct(list);
           // ⚠️ 아래 가드와 `tr.qty >= 0` 가드는 **의도적으로 중복된 방어선**이다(변이 테스트로 확인:
           //    하나만 지우면 다른 하나가 잡아 검증이 통과한다). 둘 다 지우면 목표에 못 미치는 보유
           //    상태에서 반등 시그널이 **매수로 뒤집혀** '매도 시그널'이 자산을 늘린다(검증 #308b).
           //    둘 중 하나를 지우고 싶더라도 그대로 둘 것 — "매도 시그널은 매도만 한다"가 계약이다.
           if (excess <= 0) { carrier.note = '목표 이하 — 팔 것 없음'; continue; }
-          const pctSum = sumPct(list);
-          carrier.pctSum = pctSum;
+          const pctSum = carrier.pctSum;
           // ⚠️ 비율 매도의 목표선은 `target`이 아니라 **초과분을 pct%만 덜어낸 수준**이다.
           //    이 식이라야 목표 아래로 절대 내려가지 않는다(pct=100이면 정확히 target).
           const sellAmount = pctSum === null
@@ -3071,7 +3084,13 @@ export function runBacktest(input: BtRunInput): BtResult {
           continue;
         }
         if (!(carrier.planned > 0)) {
-          if (!carrier.note) carrier.note = '매수 비율 0% — 사지 않음';
+          // ⚠️ '비율이 0%라 안 산다'와 '재원이 0원이라 못 산다'는 완전히 다른 사건이다 —
+          //    뭉뚱그리면 사용자가 40%를 넣었는데 화면이 "매수 비율 0%"라고 단언한다
+          //    (아래 `budget <= 0 → '재원 없음'` 분기는 이 가드에 가려 도달하지 못한다).
+          if (!carrier.note) {
+            carrier.note = carrier.pctSum === 0 ? '매수 비율 0% — 사지 않음'
+              : poolAt <= 0 ? '재원 없음' : '매수 수량 0';
+          }
           continue;
         }
         // ⚠️ `tradeOnly`는 분배금 주머니를 **완전히 잠근다**(사용자 확정 2026-08:

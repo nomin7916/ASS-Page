@@ -413,11 +413,14 @@ function backtestScenariosHaveContent(scenarios) {
   ));
 }
 
+// ⚠️ '같은 저장값의 뜻이 바뀐' 릴리스에서만 올린다(src/backtest.ts 주석 참조).
+const SETTINGS_FP_SCHEMA = 2;
 function backtestSettingsFingerprint(cfg) {
   try {
     const s = cfg;
     if (!s || typeof s !== 'object') return '';
     return JSON.stringify({
+      v: SETTINGS_FP_SCHEMA,
       p: [s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
           s.targetMode ?? '', s.rounding ?? '', s.policy ?? '',
           s.fixedDay ?? 0, s.exDivOffset ?? 0, s.rebalOffset ?? 0, s.payOffset ?? 0,
@@ -1234,9 +1237,9 @@ function runBacktest(input) {
           const evalBefore = p.qty * hit.price;
           const excess = evalBefore - target;
           carrier.excessAt = Math.max(0, excess);
+          carrier.pctSum = sumPct(list);
           if (excess <= 0) { carrier.note = '목표 이하 — 팔 것 없음'; continue; }
-          const pctSum = sumPct(list);
-          carrier.pctSum = pctSum;
+          const pctSum = carrier.pctSum;
           const sellAmount = pctSum === null ? excess : Math.min(excess, (excess * pctSum) / 100);
           carrier.planned = sellAmount;
           if (!(sellAmount > 0)) { carrier.note = '매도 비율 0% — 팔지 않음'; continue; }
@@ -1355,7 +1358,10 @@ function runBacktest(input) {
           continue;
         }
         if (!(carrier.planned > 0)) {
-          if (!carrier.note) carrier.note = '매수 비율 0% — 사지 않음';
+          if (!carrier.note) {
+            carrier.note = carrier.pctSum === 0 ? '매수 비율 0% — 사지 않음'
+              : poolAt <= 0 ? '재원 없음' : '매수 수량 0';
+          }
           continue;
         }
         const divCap = tradeOnly ? 0 : Infinity;
@@ -2954,6 +2960,25 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
         && pocketOk(only) && pocketOk(all);
     })());
     // ⚠️ 비율 칸을 비우면(null) '목표까지' — 종전 동작이자 재조정이 도는 유일한 모드다.
+    // ⚠️ 적대적 리뷰 확정 결함 — '비율이 0%라 안 산다'와 '재원이 0원이라 못 산다'를 뭉뚱그리면
+    //    40%를 넣은 사용자에게 화면이 "매수 비율 0%"라고 단언한다. KPI 팝오버는 이 note가 유일한 설명이다.
+    ok('#175c ⚠️ 미체결 사유가 ‘비율 0%’와 ‘재원 없음’으로 갈린다', (() => {
+      // (a) 재원 0원 — 초기 투자금을 목표에 딱 맞춰 예수금이 마르고, tradeOnly라 분배금도 잠겨 있다.
+      const dry = runS({
+        policy: 'none', buyFunding: 'tradeOnly', initialCapital: 50000000,
+        dip: { enabled: true, levels: [{ drop: 10, buyPct: 40 }] },
+      }, CRASH);
+      const dryEv = dry.summary.signalEvents.filter((e) => e.kind === 'buy' && e.carrier);
+      // (b) 비율 0% — 재원은 넉넉한데 사용자가 0%를 적었다.
+      const zero = runS({
+        policy: 'none', extraCash: 30000000,
+        dip: { enabled: true, levels: [{ drop: 10, buyPct: 0 }] },
+      }, CRASH);
+      const zeroEv = zero.summary.signalEvents.filter((e) => e.kind === 'buy' && e.carrier);
+      return dryEv.length > 0 && zeroEv.length > 0
+        && dryEv.every((e) => e.poolAt === 0 && e.pctSum === 40 && e.note === '재원 없음')
+        && zeroEv.every((e) => e.poolAt > 0 && e.pctSum === 0 && e.note === '매수 비율 0% — 사지 않음');
+    })());
     ok('#177c ⚠️ 비율 칸이 비면(null) 목표까지 매수한다(재원 한도 안에서)', (() => {
       const r = runS({ ...dipCfg, dip: { enabled: true, levels: [{ drop: 10, buyPct: null }] } }, CRASH);
       const cs = r.summary.signalEvents.filter((e) => e.kind === 'buy' && e.carrier);
@@ -3215,6 +3240,19 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
         // 그날 그 종목의 매도 체결은 **1건**이어야 한다(연쇄 적용이면 2건이 된다).
         const dates = r.months.flatMap((m) => m.trades).filter((t) => t.signal === 'sell').map((t) => t.date);
         return sawDual && new Set(dates).size === dates.length;
+      })());
+      // ⚠️ 적대적 리뷰 확정 결함 — '목표 이하'로 조기 반환한 행의 pctSum이 null로 남으면
+      //    사용자가 30%를 지정했는데 화면이 '목표 초과분 ₩0 전량'(= 목표까지)이라고 설명한다.
+      ok('#312f ⚠️ ‘목표 이하 — 팔 것 없음’ 행도 지정한 매도 비율을 그대로 싣는다(pctSum null 금지)', (() => {
+        // 목표(1억)에 한참 못 미치는 보유(초기 1,000만) → 반등 시그널은 뜨지만 팔 초과분이 없다.
+        const r = runS({
+          ...sellCfg, policy: 'none', initialCapital: 10000000,
+          assets: [{ id: 's1', code: SC, name: 'SS', payCycle: 'eom', targetAmount: 100000000 }],
+          dip: { enabled: true, levels: DEFAULT_DIP_LEVELS, sellLevels: [{ rise: 10, sellPct: 30 }] },
+        }, REB);
+        const ev = r.summary.signalEvents.filter((e) => e.kind === 'sell' && e.carrier);
+        return ev.length > 0
+          && ev.every((e) => e.note === '목표 이하 — 팔 것 없음' && e.pctSum === 30 && e.excessAt === 0);
       })());
       ok('#312d ⚠️ 매도 대금은 예수금으로만 간다(적립 분배금을 늘리지 않는다)', (() => {
         const r = runS({ ...sellCfg, policy: 'none',
@@ -4156,9 +4194,21 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     /label: `누적 분배금 \(지급 기준\$\{result\.summary\.cumDivTax > 0\.5 \? ' · 세후' : ''\}\)`/.test(page)
       && /\[`누적 분배금\(지급 기준\$\{taxedCsv \? ' · 세후' : ''\}\)`, result\.summary\.cumDivPaid\]/.test(page)
       && /원천징수 세금\(참고 · 위 합계에 미포함\)/.test(page)
-      // 예수금 그룹의 연결 항(분배금이 대신 낸 매수 대금) — 이게 빠지면 항등식이 성립하지 않는다
-      && /적립 분배금이 대신 낸 매수 대금/.test(page)
-      && /result\.summary\.cumDivDrawn/.test(page));
+      // ⚠️ 연결 항(cumDivDrawn)은 화면 표와 **CSV 양쪽**에 있어야 소계가 맞는다. 문자열이 page
+      //    어딘가에 있기만 하면 통과하는 형태로 두면, CSV 쪽 한 줄만 지워도 가드가 놓친다
+      //    (적대적 리뷰가 변이 테스트로 실증). 두 블록을 **각각** 잘라 확인한다.
+      && (() => {
+        const csvI = page.indexOf('기말예수금 내역');
+        // ⚠️ 표 앵커는 h3의 🏁 붙은 쪽이어야 한다 — 그냥 '기말 보유 현황'은 요약 카드 note 본문이
+        //    먼저 걸려 엉뚱한 구간을 검사한다.
+        const tblI = page.indexOf('🏁 기말 보유 현황');
+        if (csvI < 0 || tblI < 0) return false;
+        const csvSeg = page.slice(csvI - 1200, csvI + 1200);
+        const tblSeg = page.slice(tblI, tblI + 4000);
+        const hasLink = (seg) => /적립 분배금이 대신 낸 매수 대금/.test(seg)
+          && /(result\.)?summary\.cumDivDrawn/.test(seg);
+        return hasLink(csvSeg) && hasLink(tblSeg);
+      })());
   // ⚠️ 월별 표는 12열 고정이라 '비고' 열이 없다 — note를 배지로 붙이지 않으면 '바닥선'·'예수금 부족'이
   //    화면 어디에도 보이지 않는다(열을 늘리면 thead·orphan·tfoot·CSV 4곳을 전부 고쳐야 한다).
   ok('#246 ⚠️ 매매 note(바닥선·예수금 부족)가 날짜 셀 배지로 보인다 + 12열 유지',
@@ -4212,8 +4262,15 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     /const sigSizeText = \(e, cfg\) =>/.test(page)
       // ⚠️ 반드시 pctSum(단계 합) — 단계별 pct를 쓰면 같은 종목 2단계 동시 발동에서
       //    `₩1,000,000 × 34% = ₩670,000` 같은 **거짓 계산식**이 찍힌다(적대적 리뷰 확정 결함).
-      && /\$\{poolLabel\} \$\{won\(e\.poolAt\)\} × \$\{formatNumber\(numOf\(e\.pctSum\)\)\}% = \$\{won\(e\.planned\)\}/.test(page)
-      && /목표 초과분 \$\{won\(e\.excessAt\)\} × \$\{formatNumber\(numOf\(e\.pctSum\)\)\}% = \$\{won\(e\.planned\)\}/.test(page)
+      && /\$\{poolLabel\} \$\{won\(e\.poolAt\)\} × \$\{formatNumber\(pct\)\}% = /.test(page)
+      && /목표 초과분 \$\{won\(e\.excessAt\)\} × \$\{formatNumber\(pct\)\}% = /.test(page)
+      // ⚠️ planned는 목표 미달액(매수)·초과분 전량(매도)에서 한 번 더 잘린다 — 등호 우변에 planned를
+      //    바로 찍으면 `₩60,000,000 × 100% = ₩6,000,000` 같은 거짓 계산식이 된다(적대적 리뷰 확정).
+      //    잘린 경우를 `capped()`가 '→ …에서 자름 ='으로 갈라 준다.
+      && /const capped = \(raw, capLabel\) => \(raw > numOf\(e\.planned\) \+ 0\.5/.test(page)
+      && /에서 자름 = \$\{won\(e\.planned\)\}/.test(page)
+      && /capped\(\(numOf\(e\.poolAt\) \* pct\) \/ 100, '목표 미달액'\)/.test(page)
+      && /capped\(\(numOf\(e\.excessAt\) \* pct\) \/ 100, '초과분 전량'\)/.test(page)
       && !/formatNumber\(numOf\(e\.pct\)\)\}% = /.test(page)
       // ⚠️ 계산식 줄은 **엔진이 실어 보낸 carrier 플래그**로 그린다 — planned>0 같은 값으로 판정하면
       //    비율 0%·재원 0원이라 금액이 0인 대표 행(=설명이 가장 필요한 행)이 통째로 사라진다.
@@ -4518,6 +4575,22 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     if (i < 0) return false;
     const seg = bt2.slice(i, bt2.indexOf('export function', i + 10));
     return !/review/.test(seg) && !/notes/.test(seg) && !/\.name/.test(seg) && !/compareOn/.test(seg);
+  })());
+  // ⚠️ 2026-08 재정의에서 `unlockPct: 34` → `buyPct: 34` 이관은 지문 투영이 **양쪽 다 `10:34`**라
+  //    문자열이 완전히 동일했다 — 사용자가 아무것도 안 건드렸는데 결과 숫자만 달라지고 메모의
+  //    '설정이 바뀌었습니다' 배지는 뜨지 않아, 옛 해석으로 쓴 AI 분석이 조용히 거짓이 된다
+  //    (적대적 리뷰 확정 결함). 스키마 토큰이 그 한 줄짜리 방어선이다.
+  //    ⚠️ **저장 지문(backtestFingerprint)에는 넣지 말 것** — 양변에 똑같이 붙어 무의미하고,
+  //       normalizeBacktestScenarios의 멱등 판정만 흔든다.
+  ok('#290d ⚠️ 설정 지문에 스키마 토큰이 있다(같은 저장값의 뜻이 바뀐 릴리스에서 메모 배지가 뜬다)', (() => {
+    const i = bt2.indexOf('export function backtestSettingsFingerprint');
+    if (i < 0) return false;
+    const seg = bt2.slice(i, bt2.indexOf('export function', i + 10));
+    const fpI = bt2.indexOf('export function backtestFingerprint');
+    const fpSeg = fpI < 0 ? '' : bt2.slice(fpI, bt2.indexOf('export function', fpI + 10));
+    return /const SETTINGS_FP_SCHEMA = \d+;/.test(bt2)
+      && /v: SETTINGS_FP_SCHEMA,/.test(seg)
+      && !/SETTINGS_FP_SCHEMA/.test(fpSeg);
   })());
 
   // ⚠️ 별도 창에서 readOnly면 setLocal이 조용히 무시된다 — 입력을 열어 두면 긴 분석을 다 쓰고
