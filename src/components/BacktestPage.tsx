@@ -177,34 +177,49 @@ const sigRefText = (e) => {
     + ` (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%)`;
 };
 
+/** 그 시그널이 '목표까지'인가(= 단계 비율이 비어 있는가). */
+const sigIsToTarget = (e) => e?.pctSum === null || e?.pctSum === undefined;
+
 /**
- * 매수 시그널의 **개방 계산식**. 사용자가 '개방 ₩642,005'만 보고는 34%인지 잔액인지 알 수 없어
- * 밑변(발동 시점 적립 분배금)과 비율을 함께 적는다.
- * ⚠️ 평시 매수 재원이 '예수금 전부'(both)면 분배금 주머니가 애초에 열려 있어 단계 비율이
- *    적용되지 않는다 — 그 사실을 숨기지 말고 문장을 갈라 준다.
+ * 시그널의 **규모 계산식**. '얼마를 사고팔기로 했는가'와 그 밑변·비율을 그대로 적는다
+ * (사용자가 금액만 보고는 비율이 먹은 건지 잔액이 모자란 건지 알 수 없다).
+ *  매수 · 비율   → `매수 재원 ₩A × 34% = ₩B`
+ *  매수 · 목표까지 → `목표까지 ₩B (재원 ₩A)`
+ *  매도 · 비율   → `목표 초과분 ₩A × 30% = ₩B`
+ *  매도 · 목표까지 → `목표 초과분 ₩A 전량`
+ * ⚠️ 비율은 반드시 `pctSum` — 같은 종목의 여러 단계가 같은 날 겹치면 금액이 합이라, 단계별 `pct`로
+ *    쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 거짓 계산식이 된다(적대적 리뷰 확정 결함).
  */
-const sigUnlockText = (e, cfg) => {
-  if (e.kind !== 'buy') return '';
-  if ((cfg?.buyFunding || 'both') !== 'tradeOnly') {
-    // ⚠️ 'both'는 평시에 이미 주머니가 열려 있어 **개방이라는 개념 자체가 없다** — 단계 비율을
-    //    적용한 것처럼 쓰면 거짓말이고, 금액을 개방액으로 집계하면 KPI 합계가 부풀려진다.
-    return `적립 분배금 ${won(e.divPocketAt)} 전액이 이미 매수 재원 (평시 재원이 ‘예수금 전부’라 단계 비율 미적용)`;
+const sigSizeText = (e, cfg) => {
+  const toTarget = sigIsToTarget(e);
+  if (e.kind === 'sell') {
+    return toTarget
+      ? `목표 초과분 ${won(e.excessAt)} 전량`
+      : `목표 초과분 ${won(e.excessAt)} × ${formatNumber(numOf(e.pctSum))}% = ${won(e.planned)}`;
   }
-  // ⚠️ 반드시 `unlockPctSum` — 같은 종목의 여러 단계가 같은 날 겹치면 `unlocked`가 합이라
-  //    단계별 `unlockPct`로 쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 거짓 계산식이 된다.
-  return `적립 분배금 ${won(e.divPocketAt)} × ${formatNumber(numOf(e.unlockPctSum))}% = ${won(e.unlocked)} 개방`;
+  const poolLabel = (cfg?.buyFunding || 'both') === 'tradeOnly'
+    ? '매수 재원(매매 예수금)'
+    : '매수 재원(예수금 + 적립 분배금)';
+  return toTarget
+    ? `목표까지 ${won(e.planned)} · ${poolLabel} ${won(e.poolAt)}`
+    : `${poolLabel} ${won(e.poolAt)} × ${formatNumber(numOf(e.pctSum))}% = ${won(e.planned)}`;
 };
 
-/** `매매 예수금 ₩120,000 + 적립 분배금 ₩642,005 = ₩762,005 투입` */
-const sigFundText = (e) =>
-  `매매 예수금 ${won(e.fromTrade)} + 적립 분배금 ${won(e.used)} = ${won(e.tradeAmount)} 투입`;
+/**
+ * 매수 대금의 **출처 분해**. `매매 예수금 ₩120,000 + 적립 분배금 ₩642,005 = ₩762,005 투입`
+ * ⚠️ `매매 예수금만` 모드에서는 적립 분배금 몫이 구조적으로 항상 0이라 그 항을 아예 빼고 적는다 —
+ *    `+ 적립 분배금 ₩0`을 상시 렌더하면 "왜 0인가"를 매번 되묻게 만든다.
+ */
+const sigFundText = (e, cfg) =>
+  (cfg?.buyFunding || 'both') === 'tradeOnly'
+    ? `매매 예수금 ${won(e.tradeAmount)} 투입 (적립 분배금 미사용)`
+    : `매매 예수금 ${won(e.fromTrade)} + 적립 분배금 ${won(e.used)} = ${won(e.tradeAmount)} 투입`;
 
 /** 체결 결과 한 줄. 미체결이면 사유를 그대로 보여 준다(왜 0원인지 알 수 없는 것이 옛 화면의 문제였다). */
 const sigOutcomeText = (e, cfg) => {
   if (!numOf(e.tradeQty)) return e.note || '체결 없음';
   if (e.kind === 'sell') return `${formatNumber(Math.abs(e.tradeQty))}주 매도 → 매매 예수금 +${won(e.tradeAmount)}`;
-  return `${formatNumber(e.tradeQty)}주 매수 · ${sigFundText(e)}`
-    + (numOf(e.used) > 0 ? ` · ${sigUnlockText(e, cfg)}` : '');
+  return `${formatNumber(e.tradeQty)}주 매수 · ${sigFundText(e, cfg)}`;
 };
 
 /**
@@ -641,10 +656,11 @@ function SummaryCards({ result, compact = false }) {
       label: '최종 자산', value: won(s.finalTotal), cls: pnlCls(s.profit),
       formula: [
         [`기말 평가액 (${s.endDate} 종가 × 보유수량)`, won(s.finalEval)],
-        ['＋ 기말 예수금 (현금)', won(s.finalCash)],
+        ['＋ 기말 예수금 (매매차익 + 초기 잔여 + 추가 예수금)', won(s.finalCashTrade)],
+        ['＋ 적립 분배금 (지급받아 아직 안 쓴 몫)', won(s.finalCashDiv)],
         ['＝ 최종 자산', won(s.finalTotal), true],
       ],
-      note: '마지막 영업일 종가로 전 종목을 같은 시점에 평가한 값 + 남은 현금입니다. 아래 "기말 보유 현황" 표의 총자산과 같은 값입니다.',
+      note: '마지막 영업일 종가로 전 종목을 같은 시점에 평가한 값 + 남은 현금입니다. 예수금과 적립 분배금은 따로 관리하지만 둘 다 현금이라 총자산에는 함께 들어갑니다. 아래 "기말 보유 현황" 표의 총자산과 같은 값입니다.',
     },
     {
       label: '총 손익', value: wonSigned(s.profit), cls: pnlCls(s.profit),
@@ -653,7 +669,7 @@ function SummaryCards({ result, compact = false }) {
         ['− 투입 원금 (초기 투자금 + 추가 예수금)', won(invested)],
         ['＝ 총 손익', wonSigned(s.profit), true],
       ],
-      note: '받은 분배금은 예수금으로 들어와 최종 자산에 이미 포함돼 있습니다(따로 더하면 이중 계상). 세금·수수료는 반영하지 않았습니다.',
+      note: '받은 분배금은 적립 분배금으로 들어와 최종 자산에 이미 포함돼 있습니다(따로 더하면 이중 계상). 매매차익 과세·수수료는 반영하지 않았습니다.',
     },
     {
       label: '수익률', value: pctText(s.profitRate), cls: pnlCls(s.profit),
@@ -683,27 +699,41 @@ function SummaryCards({ result, compact = false }) {
         [`이 중 실제 입금 (지급일 기준${taxed ? ' · 세후' : ''})`, won(s.cumDivPaid)],
         ['아직 미지급 (지급일이 종료일 이후)', won(divPending)],
       ],
-      note: '예수금은 실제 지급일에만 늘어납니다. 월말 분배는 다음 달 초에 입금되므로 두 값이 다를 수 있습니다.'
-        + (taxed ? ' 원천징수를 켜면 예수금에는 세후 금액만 들어옵니다(세전 권리 확정액은 위 누계 그대로).' : ''),
+      note: '적립 분배금은 실제 지급일에만 늘어납니다. 월말 분배는 다음 달 초에 입금되므로 두 값이 다를 수 있습니다.'
+        + (taxed ? ' 원천징수를 켜면 세후 금액만 들어옵니다(세전 권리 확정액은 위 누계 그대로).' : ''),
     },
     {
-      label: '기말 예수금', value: won(s.finalCash), cls: 'text-gray-200',
+      // ⚠️ '예수금'은 **매매 몫만** 가리킨다(사용자 정의 2026-08: 분배금은 예수금에 합산하지 않는다).
+      //    합계(finalCash)를 여기 넣지 말 것 — 옆의 '적립 분배금' 카드와 이중 계상으로 읽힌다.
+      label: '기말 예수금', value: won(s.finalCashTrade), cls: 'text-gray-200',
       formula: [
-        ['초기 매수 후 잔여', won(initRest)],
+        ['초기 매수 후 잔여 + 추가 예수금', won(initRest)],
         ['＋ 누적 매매차익', wonSigned(s.cumTradeNet)],
         ['＋ 종목 재편 순현금', wonSigned(s.cumStructuralNet)],
         ['＋ 분배금 재투자 매수', wonSigned(s.cumReinvestNet)],
-        [`＋ 누적 분배금 (지급 기준${taxed ? ' · 세후' : ''})`, won(s.cumDivPaid)],
-        ['＝ 기말 예수금', won(s.finalCash), true],
-        ['· 매매 몫 / 분배금 몫', `${won(s.finalCashTrade)} / ${won(s.finalCashDiv)}`],
+        ['＋ 적립 분배금이 대신 낸 매수 대금', won(s.cumDivDrawn)],
+        ['＝ 기말 예수금', won(s.finalCashTrade), true],
+      ],
+      note: '매매차익 + 초기 매수 잔여 + 추가 예수금으로만 이루어진 돈입니다 — 분배금은 여기 합산하지 않고 옆 카드에서 따로 셉니다. '
+        + '마지막 항이 ＋인 이유는, 분배금이 대신 낸 매수 대금만큼 예수금이 덜 나갔기 때문입니다.',
+    },
+    {
+      label: '적립 분배금', value: won(s.finalCashDiv), cls: 'text-emerald-300',
+      formula: [
+        [`누적 분배금 (지급 기준${taxed ? ' · 세후' : ''})`, won(s.cumDivPaid)],
+        ['− 매수에 사용한 분배금', won(s.cumDivDrawn)],
+        ['＝ 적립 분배금 (기말 잔액)', won(s.finalCashDiv), true],
         ...(taxed ? [['(참고) 원천징수 세금 — 위 항에 이미 빠져 있음', won(s.cumDivTax)]] : []),
       ],
-      note: '다섯 항의 합이 정확히 기말 예수금이 됩니다. 매수 대금은 매매 몫을 먼저 쓰고 모자라면 분배금 몫에서 꺼냅니다.'
+      note: '지급받은 분배금을 예수금과 **따로** 쌓아 둔 잔액입니다. ⑤-b 매수 재원을 ‘매매 예수금만’으로 두면 '
+        + '매수에 쓰이지 않고 계속 쌓이고, ‘예수금 전부’로 두면 예수금이 모자랄 때 여기서 꺼내 씁니다.'
         + (taxed ? ' 세금은 애초에 입금되지 않은 돈이라 별도 항이 아니라 분배금 항에서 이미 빠져 있습니다.' : ''),
     },
   ];
+  // ⚠️ 카드가 7장이 되면서 xl 6열 → 4열로 바꿨다. 7열로 늘리면 카드 폭이 100px 아래로 떨어져
+  //    `₩381,666,374`(text-lg)가 줄바꿈된다 — 2행이 되더라도 4열이 읽기에 낫다.
   return (
-    <div className={`grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 ${compact ? 'mb-2' : 'mb-3'}`}>
+    <div className={`grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2 ${compact ? 'mb-2' : 'mb-3'}`}>
       {cards.map((c) => <SummaryCard key={c.label} {...c} compact={compact} />)}
     </div>
   );
@@ -747,15 +777,13 @@ function SignalPopBody({ events, cfg, limit, moreHint, w }) {
   const buySum = events.filter((e) => numOf(e.tradeQty) > 0).reduce((a, e) => a + numOf(e.tradeAmount), 0);
   const sellSum = events.filter((e) => numOf(e.tradeQty) < 0).reduce((a, e) => a + numOf(e.tradeAmount), 0);
   const usedSum = events.reduce((a, e) => a + numOf(e.used), 0);
-  // ⚠️ '개방' 합계는 **매매 예수금만** 모드에서만 뜻이 있다. '예수금 전부'(기본)는 주머니가 이미
-  //    열려 있어 개방액이 0으로 기록되므로, 합계를 내면 "₩0 개방 / ₩N 사용"이라는 깨진 줄이 된다.
+  // ⚠️ '매매 예수금만'에서는 적립 분배금 몫이 **구조적으로 항상 0**이다(주머니가 통째로 잠긴다).
+  //    합계를 `₩0`으로 찍으면 "왜 0인가"를 되묻게 되므로 그 사실을 문장으로 밝힌다.
   const tradeOnly = (cfg?.buyFunding || 'both') === 'tradeOnly';
   const poolLabel = tradeOnly
-    ? '이 중 적립 분배금에서 꺼낸 몫 (개방 / 사용)'
-    : '이 중 적립 분배금에서 꺼낸 몫 (개방 한도 없음)';
-  const poolValue = tradeOnly
-    ? `${won(events.reduce((a, e) => a + numOf(e.unlocked), 0))} / ${won(usedSum)}`
-    : won(usedSum);
+    ? '이 중 적립 분배금에서 꺼낸 몫'
+    : '이 중 적립 분배금에서 꺼낸 몫 (예수금 전부 모드)';
+  const poolValue = tradeOnly ? '사용 안 함 (매매 예수금만)' : won(usedSum);
 
   if (w < SIG_WIDE_MIN) {
     return (
@@ -872,13 +900,13 @@ function StrategyKpis({ result, cfg, compact = false }) {
       cls: (s.minCash?.value ?? 0) < 0 ? 'text-blue-400' : 'text-gray-200',
       formula: [
         ['그 날짜', s.minCash?.date || '-'],
-        ['기말 예수금', won(s.finalCash)],
-        ['· 이 중 분배금 몫', won(s.finalCashDiv)],
-        ['분배금 주머니 최저점', `${won(s.minCashDiv?.value ?? 0)}${s.minCashDiv?.date ? ` (${s.minCashDiv.date})` : ''}`],
+        ['기말 예수금', won(s.finalCashTrade)],
+        ['기말 적립 분배금', won(s.finalCashDiv)],
+        ['적립 분배금 최저점', `${won(s.minCashDiv?.value ?? 0)}${s.minCashDiv?.date ? ` (${s.minCashDiv.date})` : ''}`],
       ],
-      note: '영업일 곡선 전 구간에서 총 예수금이 가장 낮았던 지점입니다. '
+      note: '영업일 곡선 전 구간에서 현금 합계(예수금 + 적립 분배금)가 가장 낮았던 지점입니다. '
         + '목표 평가금을 고정하는 전략은 여기가 0에 붙는 순간부터 하락분을 되메울 수 없으므로, 이 값이 곧 생존 판정 지표입니다. '
-        + '분배금 주머니 최저점은 0에서 시작하는 값이라 첫 분배금 입금 이후 구간에서만 잽니다.',
+        + '적립 분배금 최저점은 0에서 시작하는 값이라 첫 분배금 입금 이후 구간에서만 잽니다.',
     },
     {
       label: '월 분배금', value: won(s.divMonthlyAvg), cls: 'text-emerald-400',
@@ -921,9 +949,10 @@ function StrategyKpis({ result, cfg, compact = false }) {
         />
       ),
       note: '매수 시그널은 종목별 ‘가격 고점’ 대비 낙폭이, 매도 시그널은 ‘가격 저점’ 대비 상승률이 '
-        + '각 단계에 처음 닿은 날 발동하고, **그날 종가로 즉시** 그 종목을 목표까지 맞춥니다. '
+        + '각 단계에 처음 닿은 날 발동하고, **그날 종가로 즉시** 체결합니다. '
         + '새 고점(매수)·새 저점(매도)이 서면 전 단계가 다시 무장됩니다. '
-        + '매수 재원은 매매 예수금 → 목표 초과 종목 매도(재조정) → 적립 분배금 개방 순으로 씁니다.',
+        + '규모는 단계의 비율 칸이 정합니다 — 매수는 매수 재원 × 비율(목표에서 자름), 매도는 목표 초과분 × 비율, '
+        + '비우면 목표까지입니다. 재원은 ⑤-b ‘매수 재원’ 설정을 그대로 따릅니다.',
     }] : []),
     {
       label: '부족 발생', value: `${formatNumber(s.shortfallMonths)}개월`,
@@ -1469,10 +1498,11 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
               <th className={`${TH} text-right`}>누적 매매차익</th>
               <th className={`${TH} text-right`}>누적 분배금</th>
               <th className={`${TH} text-right`}>분배금 재투자</th>
-              <th className={`${TH} text-right`}>기말 예수금</th>
+              <th className={`${TH} text-right`} title="매매차익 + 초기 매수 잔여 + 추가 예수금 (적립 분배금은 옆 열에 따로)">기말 예수금</th>
+              <th className={`${TH} text-right`} title="지급받은 분배금 중 아직 쓰지 않은 잔액 — 예수금과 별도로 쌓인다">적립 분배금</th>
               {/* ⚠️ 이 두 열이 이 작업의 목적이다 — '평가금 고정 + 현금 버퍼' 전략은 최종 수익률보다
                       **버텼는가(최저 예수금)**와 **월 분배가 일정했는가(표준편차)**로 우열이 갈린다. */}
-              <th className={`${TH} text-right`} title="영업일 곡선 전 구간에서 총 예수금이 가장 낮았던 값 — 0에 붙으면 목표를 복원할 수 없다">최저 예수금</th>
+              <th className={`${TH} text-right`} title="영업일 곡선 전 구간에서 현금 합계(예수금 + 적립 분배금)가 가장 낮았던 값 — 0에 붙으면 목표를 복원할 수 없다">최저 현금</th>
               <th className={`${TH} text-right`} title="월별 분배금(분배락 기준)의 표준편차 — 작을수록 월 수입이 일정했다">월분배 표준편차</th>
               <th className={`${TH} text-right`}>최대 낙폭</th>
             </tr>
@@ -1512,7 +1542,7 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
                   {/* ⚠️ colSpan은 위 thead의 **지표 열 수와 반드시 같아야 한다**(시나리오 열 제외).
                           열을 더하고 여기를 안 고치면 실행 불가 행부터 표 정렬이 통째로 어긋난다. */}
                   {!r?.ok || !s ? (
-                    <td colSpan={10} className={`${TD} text-amber-300/90 text-[11px]`}>
+                    <td colSpan={11} className={`${TD} text-amber-300/90 text-[11px]`}>
                       <AlertCircle size={10} className="inline -mt-0.5 mr-1" />
                       {r?.fatal || '실행할 수 없는 설정입니다.'}
                     </td>
@@ -1526,7 +1556,8 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
                       <td className={`${COL} ${s.cumReinvestNet ? 'text-sky-300' : 'text-gray-700'}`}>
                         {s.cumReinvestNet ? won(-s.cumReinvestNet) : '-'}
                       </td>
-                      <td className={`${COL} text-gray-300`}>{won(s.finalCash)}</td>
+                      <td className={`${COL} text-gray-300`}>{won(s.finalCashTrade)}</td>
+                      <td className={`${COL} text-emerald-300`}>{won(s.finalCashDiv)}</td>
                       <td className={`${COL} ${(s.minCash?.value ?? 0) < 0 ? 'text-blue-400 font-bold' : 'text-gray-300'}`}
                         title={s.minCash?.date ? `${s.minCash.date} 기준` : undefined}>
                         {won(s.minCash?.value ?? 0)}
@@ -1997,7 +2028,9 @@ export default function BacktestPage({
     const assets = active.assets || [];
     const filled = assets.filter((a) => hasTargetOf(a, mode));
     const sum = filled.reduce((s, a) => s + targetValOf(a, mode), 0);
-    const capital = numOf(active.initialCapital) + numOf(active.extraCash);
+    // ⚠️ 목표 금액의 기준은 **초기 투자금뿐**이다 — 추가 예수금은 초기 매수에 쓰지 않으므로
+    //    (사용자 확정 2026-08) 여기에 더하면 도달할 수 없는 목표 합계를 'ok'로 표시하게 된다.
+    const capital = numOf(active.initialCapital);
     const goal = isAmt ? capital : 100;
     const diff = sum - goal;
     // 허용 오차 — 금액은 1원, 비중은 반올림 잔차(엔진 RATIO_SUM_TOL과 같은 0.05%p).
@@ -2029,19 +2062,19 @@ export default function BacktestPage({
     const empties = assets.filter((a) => !hasTargetOf(a, 'amount'));
     if (!empties.length) return;
     const used = assets.reduce((s, a) => s + (hasTargetOf(a, 'amount') ? Math.max(0, targetValOf(a, 'amount')) : 0), 0);
-    const remain = Math.max(0, numOf(active.initialCapital) + numOf(active.extraCash) - used);
+    const remain = Math.max(0, numOf(active.initialCapital) - used);
     const each = Math.floor(remain / empties.length);
     if (!(each > 0)) return;
     patchActive({ assets: assets.map((a) => (hasTargetOf(a, 'amount') ? a : { ...a, targetAmount: each })) });
   };
 
-  /** 목표를 균등 분배 — 금액 모드는 초기자본/N, 비중 모드는 100/N */
+  /** 목표를 균등 분배 — 금액 모드는 초기 투자금 ÷ N (추가 예수금 제외), 비중 모드는 100 ÷ N */
   const splitEven = () => {
     setEvenConfirm(false);
     if (!active || !active.assets.length) return;
     const n = active.assets.length;
     if (active.targetMode === 'amount') {
-      const each = Math.floor((active.initialCapital + active.extraCash) / n);
+      const each = Math.floor(numOf(active.initialCapital) / n);
       patchActive({ assets: active.assets.map((a) => ({ ...a, targetAmount: each })) });
     } else {
       // ⚠️ 마지막 종목이 반올림 잔여를 흡수해 합을 정확히 100%로 맞춘다 — 안 그러면 3·6·7·9·12…
@@ -2165,10 +2198,12 @@ export default function BacktestPage({
       // 시그널 리밸런싱 — 화면 amber 블록과 **같은 소스·같은 문구**(sigLabel/sigOutcomeText 공유).
       // ⚠️ 13열 고정. 열 수가 어긋나면 엑셀에서 조용히 밀린다.
       for (const e of (result.summary.signalEvents || []).filter((x) => x.date.slice(0, 7) === m.ym)) {
+        // ⚠️ 규모 계산식은 **열을 늘리지 않고** 마지막 '비고' 열에 체결 결과와 함께 적는다 —
+        //    13열 고정이라 새 열을 끼우면 엑셀에서 뒤 열이 통째로 밀린다.
         rows.push([`${m.ym} 시그널`, e.date, `${e.name}(${e.code}) ${sigLabel(e)}`, Math.round(e.price),
           Math.round(e.ref), Math.round(e.tradeQty), Math.round(e.tradeAmount), '',
-          Math.round(e.unlocked), Math.round(e.used), Math.round(e.reallocAmount), '',
-          sigOutcomeText(e, cfgNow)]);
+          Math.round(e.planned), Math.round(e.used), Math.round(e.reallocAmount), '',
+          e.carrier ? sigSizeText(e, cfgNow) + ' · ' + sigOutcomeText(e, cfgNow) : sigOutcomeText(e, cfgNow)]);
       }
       // 밴드 생략 — 화면 월 요약과 동일 소스(생략은 거래 행이 남지 않으므로 이 줄이 유일한 흔적)
       if (m.bandSkipCount > 0) {
@@ -2187,28 +2222,39 @@ export default function BacktestPage({
       rows.push(['기말보유', result.summary.endDate, `${h.name}(${h.code})`, h.price, '', '', '',
         h.qty, Math.round(h.evalAmount), '', '', '', '']);
     }
-    // ⚠️ 합이 정확히 기말 예수금이 되는 항등식(검증 #110). 분배금은 **지급 기준**을 쓴다.
+    // ⚠️ 두 그룹의 합이 각각 예수금·적립 분배금이 되는 항등식(검증 #110). 화면 '기말 보유 현황'과 같은 소스.
     //    ⚠️ 분배금 재투자를 켜면 cumReinvestNet 항이 빠질 수 없다 — 없으면 소계가 어긋난다.
     //    ⚠️ 원천징수를 켜면 '누적 분배금' 항은 **세후**다 — 세금은 애초에 입금되지 않은 돈이라
-    //       이 그룹에 항을 더하면 합이 예수금과 어긋난다. 세금은 아래 '참고' 행으로 따로 적는다.
+    //       이 그룹에 항을 더하면 합이 어긋난다. 세금은 아래 '참고' 행으로 따로 적는다.
     const taxedCsv = result.summary.cumDivTax > 0.5;
     for (const [label, value] of [
-      ['초기 매수 후 잔여', result.initialCashAfter],
+      ['초기 매수 후 잔여 + 추가 예수금', result.initialCashAfter],
       ['누적 매매차익', result.summary.cumTradeNet],
       ['종목 재편 순현금', result.summary.cumStructuralNet],
       ['분배금 재투자 매수', result.summary.cumReinvestNet],
-      [`누적 분배금${taxedCsv ? '(세후)' : ''}`, result.summary.cumDivPaid],
+      ['적립 분배금이 대신 낸 매수 대금', result.summary.cumDivDrawn],
     ]) {
       if (Math.round(value) === 0) continue;
       rows.push(['기말예수금 내역', '', label, '', '', '', '', '', Math.round(value), '', '', '', '']);
     }
+    rows.push(['기말예수금 내역', '', '＝ 기말 예수금', '', '', '', '', '',
+      Math.round(result.summary.finalCashTrade), '', '', '', '']);
+    for (const [label, value] of [
+      [`누적 분배금(지급 기준${taxedCsv ? ' · 세후' : ''})`, result.summary.cumDivPaid],
+      ['매수에 사용한 분배금', -result.summary.cumDivDrawn],
+    ]) {
+      if (Math.round(value) === 0) continue;
+      rows.push(['적립분배금 내역', '', label, '', '', '', '', '', Math.round(value), '', '', '', '']);
+    }
+    rows.push(['적립분배금 내역', '', '＝ 적립 분배금', '', '', '', '', '',
+      Math.round(result.summary.finalCashDiv), '', '', '', '']);
     rows.push(['기말 합계', result.summary.endDate, '', '', '', '', '', '', Math.round(result.summary.finalEval),
       '', '', '', Math.round(result.summary.finalCash)]);
     // 전략 지표 + 설정 요약 — ⚠️ 위 항등식 그룹 **밖**이다(합계에 섞이면 안 된다).
     //    파일만 받아 본 사람이 "어떤 조건으로 돌린 결과인가"를 알 수 있어야 한다.
     for (const [label, value] of [
-      ['최저 예수금', `${Math.round(result.summary.minCash?.value ?? 0)} (${result.summary.minCash?.date || '-'})`],
-      ['분배금 주머니 최저점', `${Math.round(result.summary.minCashDiv?.value ?? 0)} (${result.summary.minCashDiv?.date || '-'})`],
+      ['최저 현금(예수금+적립 분배금)', `${Math.round(result.summary.minCash?.value ?? 0)} (${result.summary.minCash?.date || '-'})`],
+      ['적립 분배금 최저점', `${Math.round(result.summary.minCashDiv?.value ?? 0)} (${result.summary.minCashDiv?.date || '-'})`],
       ['월 분배금 평균', Math.round(result.summary.divMonthlyAvg)],
       ['월 분배금 표준편차', Math.round(result.summary.divMonthlyStdev)],
       ['밴드 생략', `${result.summary.bandSkipCount}건 / ${Math.round(result.summary.bandSkipAmount)}`],
@@ -2267,9 +2313,9 @@ export default function BacktestPage({
       //    하드코딩 열 수를 **함께** 고칠 것.
       '시나리오', '평가', '한 줄 결론',
       '기간', '초기 투자금', '리밸런싱', '분배금 처리', '배분 기준', '목표 기준',
-      '밴드(%)', '평시 매수 재원', '시그널 리밸런싱', '현금 바닥선(%)', '연간 증액', '원천징수(%)',
-      '최종 자산', '총 손익', '수익률(%)', '누적 매매차익', '누적 분배금', '분배금 재투자', '기말 예수금',
-      '최저 예수금', '최저 예수금일', '월분배 평균', '월분배 표준편차', '밴드 생략(건)', '시그널 발동(건)', '부족 발생(개월)',
+      '밴드(%)', '매수 재원', '시그널 리밸런싱', '현금 바닥선(%)', '연간 증액', '원천징수(%)',
+      '최종 자산', '총 손익', '수익률(%)', '누적 매매차익', '누적 분배금', '분배금 재투자', '기말 예수금', '적립 분배금',
+      '최저 현금', '최저 현금일', '월분배 평균', '월분배 표준편차', '밴드 생략(건)', '시그널 발동(건)', '부족 발생(개월)',
       '기말 평가액', '최대 낙폭(%)', '비고',
     ]];
     for (const { cfg, result: r } of compareRuns) {
@@ -2278,9 +2324,10 @@ export default function BacktestPage({
       const ar = annualOf(cfg);
       // ⚠️ 한 줄로 만들어 둔다 — 검증 #247이 `rows.push([` 안의 **줄 수**로 열 수를 세므로,
       //    셀 하나를 여러 줄에 걸쳐 쓰면 열 수가 부풀어 가드가 깨진다.
+      const pctCell = (v) => (v === null || v === undefined ? '목표까지' : `${v}%`);
       const dipCell = dip.enabled
-        ? [`매수 ${dip.levels.map((l) => `-${l.drop}%/${l.unlockPct}%`).join(' ')}`,
-          dip.sellLevels.length ? `매도 ${dip.sellLevels.map((l) => `+${l.rise}%`).join(' ')}` : '',
+        ? [`매수 ${dip.levels.map((l) => `-${l.drop}%/${pctCell(l.buyPct)}`).join(' ')}`,
+          dip.sellLevels.length ? `매도 ${dip.sellLevels.map((l) => `+${l.rise}%/${pctCell(l.sellPct)}`).join(' ')}` : '',
           dip.reallocate ? '' : '재조정 끔'].filter(Boolean).join(' · ')
         : '-';
       rows.push([
@@ -2306,7 +2353,8 @@ export default function BacktestPage({
         s ? Math.round(s.cumTradeNet) : '',
         s ? Math.round(s.cumDivAccrued) : '',
         s ? Math.round(-s.cumReinvestNet) : '',
-        s ? Math.round(s.finalCash) : '',
+        s ? Math.round(s.finalCashTrade) : '',
+        s ? Math.round(s.finalCashDiv) : '',
         s ? Math.round(s.minCash?.value ?? 0) : '',
         s ? (s.minCash?.date || '') : '',
         s ? Math.round(s.divMonthlyAvg) : '',
@@ -2574,11 +2622,16 @@ export default function BacktestPage({
                   <>
                     <p>
                       백테스트를 돌릴 <b className="text-gray-300">기간</b>과 <b className="text-gray-300">투입 원금</b>을 정합니다.
-                      시작일에 초기 투자금 전액으로 목표에 맞춰 매수한 뒤 시뮬레이션이 시작됩니다.
+                      시작일에 <b className="text-gray-300">초기 투자금</b>으로 목표에 맞춰 매수한 뒤 시뮬레이션이 시작됩니다.
                     </p>
                     <p className="mt-1">
                       1주 단위로 딱 떨어지지 않아 <b className="text-gray-300">남는 잔돈은 자동으로 예수금</b>이 됩니다
-                      (첨부 PDF의 15,000원). '추가 예수금'은 처음부터 현금으로 들고 시작할 금액입니다.
+                      (첨부 PDF의 15,000원).
+                    </p>
+                    <p className="mt-1">
+                      <b className="text-gray-300">추가 예수금</b>은 초기 투자금과 <b className="text-gray-300">별개</b>로 들고
+                      시작할 현금입니다 — <b className="text-gray-300">초기 매수에는 쓰지 않고</b>, 이후 정기 리밸런싱·
+                      매매 시그널의 매수 재원으로만 씁니다.
                     </p>
                   </>
                 )}
@@ -2693,7 +2746,7 @@ export default function BacktestPage({
                     onClick={() => { if (hasAnyTarget) setEvenConfirm(true); else splitEven(); }}
                     disabled={readOnly || !active.assets.length}
                     title={active.targetMode === 'amount'
-                      ? '초기 투자금(+추가 예수금)을 종목 수로 나눠 목표 금액에 채웁니다 (이미 입력한 값도 덮어씁니다)'
+                      ? '초기 투자금을 종목 수로 나눠 목표 금액에 채웁니다 (추가 예수금은 제외 · 이미 입력한 값도 덮어씁니다)'
                       : '100%를 종목 수로 나눠 목표 비중에 채웁니다 (이미 입력한 값도 덮어씁니다)'}>
                     종목 수로 균등 분배
                   </button>
@@ -3112,26 +3165,31 @@ export default function BacktestPage({
                     onCommit={(v) => patchActive({ band: Math.max(0, v) })} />
                 </div>
 
-                {/* ── B. 평시 매수 재원 ── */}
+                {/* ── B. 매수 재원 ── */}
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-1">
-                    <span className={LABEL}>평시 매수 재원</span>
-                    <Hint width={360}>
+                    <span className={LABEL}>매수 재원</span>
+                    <Hint width={380}>
                       <p>
-                        정기 리밸런싱 <b className="text-gray-300">매수</b>가 어느 돈을 쓸지 정합니다.
-                        예수금은 내부적으로 <b className="text-gray-300">매매 몫</b>(매도 차익)과
-                        <b className="text-gray-300"> 분배금 몫</b>(지급받아 아직 안 쓴 분배금) 두 주머니로 나뉩니다.
+                        <b className="text-gray-300">정기 리밸런싱과 매매 시그널이 함께 쓰는</b> 매수 재원입니다.
+                        현금은 <b className="text-gray-300">예수금</b>(매매차익 + 초기 매수 잔여 + 추가 예수금)과
+                        <b className="text-gray-300"> 적립 분배금</b>(지급받아 아직 안 쓴 분배금)으로 **따로** 관리됩니다.
                       </p>
                       <p className="mt-1">
-                        <b className="text-gray-300">예수금 전부</b> — 매매 몫을 먼저 쓰고 모자라면 분배금 몫도 씁니다(기본).
+                        <b className="text-gray-300">예수금 전부</b> — 예수금 + 적립 분배금. 예수금을 먼저 쓰고
+                        모자라면 적립 분배금에서 꺼냅니다(기본).
                       </p>
                       <p className="mt-1">
-                        <b className="text-gray-300">매매 예수금만</b> — 분배금은 <b className="text-gray-300">손대지 않고 적립</b>하고,
-                        아래 <b className="text-gray-300">시그널 리밸런싱</b>이 열어 준 한도 안에서만 씁니다.
+                        <b className="text-gray-300">매매 예수금만</b> — 예수금만 씁니다. 적립 분배금은
+                        <b className="text-gray-300"> 1원도 쓰지 않고</b> 계속 쌓입니다.
                       </p>
                       <p className="mt-1 text-gray-500">
                         ※ <b className="text-gray-400">④ 분배금 처리</b>를 재투자로 둔 경우의 재투자 매수는 원래
-                        분배금 주머니에서 나가므로 이 설정과 무관합니다.
+                        적립 분배금에서 나가므로 이 설정과 무관합니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ <b className="text-gray-400">초기 매수</b>는 초기 투자금만 쓰고, <b className="text-gray-400">종목 재편</b>(⑦)은
+                        종전대로 현금 전체를 씁니다.
                       </p>
                     </Hint>
                   </div>
@@ -3167,8 +3225,14 @@ export default function BacktestPage({
                         계속 변해 평가액 고점·저점은 왜곡되기 때문입니다.
                       </p>
                       <p className="mt-1">
-                        <b className="text-gray-300">매수 재원은 3단계</b>로 조달합니다 —
-                        ① 매매 예수금 → ② 목표를 초과한 다른 종목을 팔아 재조정 → ③ 적립 분배금 개방(단계 비율).
+                        <b className="text-gray-300">매매 규모는 단계의 비율 칸</b>이 정합니다 —
+                        매수는 <b className="text-gray-300">매수 재원 × 비율</b>(목표를 넘지 않게 자름),
+                        매도는 <b className="text-gray-300">목표 초과분 × 비율</b>. 비율 칸을 비우면
+                        <b className="text-gray-300"> 목표까지</b> 채우거나 팝니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 재원은 위 <b className="text-gray-400">매수 재원</b> 설정을 그대로 따릅니다.
+                        ‘매매 예수금만’이면 적립 분배금은 시그널에서도 쓰지 않습니다.
                       </p>
                       <p className="mt-1 text-gray-500">
                         ※ 각 단계는 <b className="text-gray-400">극값이 갱신되기 전까지 1회만</b> 발동하고,
@@ -3194,7 +3258,7 @@ export default function BacktestPage({
                     <div className="flex flex-col gap-1">
                       <div className="grid grid-cols-[1fr_1fr] gap-2">
                         <span className={LABEL}>매수 시그널 — 고점 대비 낙폭 (%)</span>
-                        <span className={LABEL}>이때 풀 비율 (적립 분배금의 %)</span>
+                        <span className={LABEL}>이때 매수 비율 (매수 재원의 %)</span>
                       </div>
                       {dipOf(active).levels.map((lv, i) => (
                         <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
@@ -3205,11 +3269,15 @@ export default function BacktestPage({
                                 levels: dipOf(active).levels.map((x, j) => (j === i ? { ...x, drop: Math.min(100, Math.max(0.1, v)) } : x)),
                               },
                             })} />
-                          <NumInput value={lv.unlockPct} disabled={readOnly}
+                          {/* ⚠️ allowEmpty — 빈칸(null)이 '목표까지 매수'다. 0(재원의 0% = 한 주도 안 삼)과
+                                  **반드시 구분**돼야 하므로 0으로 강제하지 말 것. */}
+                          <NumInput value={lv.buyPct} disabled={readOnly} allowEmpty placeholder="목표까지"
                             onCommit={(v) => patchActive({
                               dip: {
                                 ...dipOf(active),
-                                levels: dipOf(active).levels.map((x, j) => (j === i ? { ...x, unlockPct: Math.min(100, Math.max(0, v)) } : x)),
+                                levels: dipOf(active).levels.map((x, j) => (j === i
+                                  ? { ...x, buyPct: v === null ? null : Math.min(100, Math.max(0, v)) }
+                                  : x)),
                               },
                             })} />
                           {/* ⚠️ 삭제·추가 버튼이 없으면 중복 낙폭을 적었을 때 정규화가 행을 지운 뒤
@@ -3229,7 +3297,9 @@ export default function BacktestPage({
                         onClick={() => {
                           const cur = dipOf(active).levels;
                           const next = Math.min(100, (cur.length ? cur[cur.length - 1].drop : 0) + 10);
-                          patchActive({ dip: { ...dipOf(active), levels: [...cur, { drop: next, unlockPct: 0 }] } });
+                          // ⚠️ 새 단계의 기본은 **목표까지(null)** 다 — 0을 넣으면 '재원의 0%'라
+                          //    한 주도 사지 않는 단계가 조용히 생긴다.
+                          patchActive({ dip: { ...dipOf(active), levels: [...cur, { drop: next, buyPct: null }] } });
                         }}>
                         <Plus size={10} className="inline -mt-0.5" /> 단계 추가 ({dipOf(active).levels.length}/{MAX_BT_DIP_LEVELS})
                       </button>
@@ -3241,20 +3311,21 @@ export default function BacktestPage({
                         return (
                           <p className="text-[10px] text-amber-400/90 leading-relaxed">
                             ⚠️ 같은 낙폭이 겹칩니다 — <b>저장하면 하나만 남습니다</b>(그 전까지는 두 번 발동해
-                            개방액이 두 배가 됩니다). 낙폭을 서로 다르게 고치세요.
+                            매수 비율이 두 배로 합산됩니다). 낙폭을 서로 다르게 고치세요.
                           </p>
                         );
                       })()}
 
                       {/* ── 매도 시그널 (저점 대비 반등) ── */}
-                      <div className="grid grid-cols-[1fr_auto] gap-2 mt-2">
+                      <div className="grid grid-cols-[1fr_1fr] gap-2 mt-2">
                         <span className={LABEL}>매도 시그널 — 저점 대비 반등 (%)</span>
-                        <span className="text-[10px] text-gray-600">목표 초과분만 매도</span>
+                        <span className={LABEL}>이때 매도 비율 (목표 초과분의 %)</span>
                       </div>
                       {dipOf(active).sellLevels.length === 0 && (
                         <p className="text-[10px] text-gray-500 leading-relaxed">
                           비어 있으면 매도 시그널을 쓰지 않습니다(기본값). 단계를 추가하면 저점 대비 그만큼
-                          오른 날 <b className="text-gray-400">목표를 넘는 만큼만</b> 팔고, 대금은 매매 예수금으로 갑니다.
+                          오른 날 <b className="text-gray-400">목표 초과분</b>에서 매도 비율만큼 팔고,
+                          대금은 예수금으로 갑니다.
                         </p>
                       )}
                       {dipOf(active).sellLevels.map((lv, i) => (
@@ -3263,10 +3334,19 @@ export default function BacktestPage({
                             onCommit={(v) => patchActive({
                               dip: {
                                 ...dipOf(active),
-                                sellLevels: dipOf(active).sellLevels.map((x, j) => (j === i ? { rise: Math.min(1000, Math.max(0.1, v)) } : x)),
+                                sellLevels: dipOf(active).sellLevels.map((x, j) => (j === i ? { ...x, rise: Math.min(1000, Math.max(0.1, v)) } : x)),
                               },
                             })} />
-                          <span className="text-[10px] text-gray-600">목표까지 매도</span>
+                          {/* ⚠️ 빈칸(null) = '목표까지 전량 매도'(종전 동작). 0(초과분의 0% = 안 팜)과 구분된다. */}
+                          <NumInput value={lv.sellPct} disabled={readOnly} allowEmpty placeholder="목표까지 전량"
+                            onCommit={(v) => patchActive({
+                              dip: {
+                                ...dipOf(active),
+                                sellLevels: dipOf(active).sellLevels.map((x, j) => (j === i
+                                  ? { ...x, sellPct: v === null ? null : Math.min(100, Math.max(0, v)) }
+                                  : x)),
+                              },
+                            })} />
                           <button className="p-1 text-gray-600 hover:text-red-400 shrink-0 disabled:opacity-30"
                             title="이 매도 단계 삭제"
                             disabled={readOnly}
@@ -3284,7 +3364,7 @@ export default function BacktestPage({
                           const next = cur.length
                             ? Math.min(1000, cur[cur.length - 1].rise + 10)
                             : DEFAULT_SELL_LEVELS[0].rise;
-                          patchActive({ dip: { ...dipOf(active), sellLevels: [...cur, { rise: next }] } });
+                          patchActive({ dip: { ...dipOf(active), sellLevels: [...cur, { rise: next, sellPct: null }] } });
                         }}>
                         <Plus size={10} className="inline -mt-0.5" /> 매도 단계 추가 ({dipOf(active).sellLevels.length}/{MAX_BT_SELL_LEVELS})
                       </button>
@@ -3304,14 +3384,18 @@ export default function BacktestPage({
                             onChange={(e) => patchActive({ dip: { ...dipOf(active), reallocate: e.target.checked } })} />
                           예수금이 모자라면 다른 종목을 팔아 재원 마련 (재조정)
                         </label>
-                        <Hint width={360}>
+                        <Hint width={380}>
                           <p>
-                            매수 시그널의 필요액이 매매 예수금보다 크면, <b className="text-gray-300">목표를 초과한
+                            매수 시그널의 필요액이 매수 재원보다 크면, <b className="text-gray-300">목표를 초과한
                             다른 보유 종목</b>을 목표까지 팔아 재원을 만듭니다(초과분이 큰 종목부터).
+                          </p>
+                          <p className="mt-1 text-amber-300/90">
+                            ※ <b>매수 비율 칸을 비운(‘목표까지’) 단계에만</b> 적용됩니다 — 비율 매수는
+                            “가진 현금의 일부만 투입”이 규칙이라 재원 부족이라는 개념 자체가 없습니다.
                           </p>
                           <p className="mt-1 text-gray-500">
                             ※ 보유 종목이 <b className="text-gray-400">전부 함께 하락</b>해 팔 초과분이 없으면
-                            아무것도 팔지 않고 적립 분배금 개방으로 넘어갑니다.
+                            아무것도 팔지 않고 가진 재원만큼만 삽니다.
                           </p>
                           <p className="mt-1 text-gray-500">
                             ※ 목표 아래로는 팔지 않습니다 — 사용자가 정한 비율/금액이 곧 하한입니다.
@@ -3320,8 +3404,9 @@ export default function BacktestPage({
                       </div>
 
                       <p className="text-[10px] text-gray-500 leading-relaxed">
-                        낙폭·상승률이 작은 단계부터 순서대로 정렬됩니다. 개방 비율의 합은 100%를 넘지 않게 잡는 것이
-                        보통이지만(합이 크면 나중 단계에서 잔액만큼만 열립니다) 강제하지는 않습니다.
+                        낙폭·상승률이 작은 단계부터 순서대로 정렬됩니다. 비율 칸을 <b className="text-gray-400">비우면
+                        ‘목표까지’</b>(매수=목표 미달액 전부 / 매도=초과분 전량)이고, 채우면 그 비율만큼만 매매합니다.
+                        같은 날 두 단계가 함께 발동하면 비율은 합산됩니다.
                       </p>
                     </div>
                   )}
@@ -3660,7 +3745,7 @@ export default function BacktestPage({
                         </span>
                       ) : targetSummary.isAmt ? (
                         <>
-                          재원 = 초기 투자금 + 추가 예수금 · 차액{' '}
+                          재원 = 초기 투자금 (추가 예수금 제외) · 차액{' '}
                           <span className={targetSummary.level === 'over' ? 'text-red-300' : targetSummary.level === 'under' ? 'text-amber-300' : 'text-gray-400'}>
                             {wonSigned(targetSummary.diff)}
                           </span>
@@ -4179,18 +4264,21 @@ export default function BacktestPage({
                                     <StockLink code={e.code} name={e.name} className="text-gray-300 font-bold" />
                                     <span className="text-gray-600"> · {sigRefText(e)}</span>
                                   </div>
-                                  {/* 매수는 '개방' 계산식을 반드시 밑변까지 펼쳐 보여 준다.
-                                      ⚠️ 같은 종목의 2단계 이상이 같은 날 겹치면 개방·체결이 첫 행에
-                                         합산되므로(엔진 규약) 나머지 행에는 개방 줄을 렌더하지 않는다 —
-                                         `₩1,000,000 × 33% = ₩0` 같은 성립하지 않는 계산식이 찍힌다. */}
-                                  {!sell && numOf(e.unlockPctSum) > 0 && (
+                                  {/* 규모 계산식을 밑변까지 펼쳐 보여 준다(왜 이 금액인가).
+                                      ⚠️ 같은 종목의 2단계 이상이 같은 날 겹치면 규모·체결이 첫 행(carrier)에
+                                         합산되므로(엔진 규약) 나머지 행에는 이 줄을 렌더하지 않는다 —
+                                         `₩1,000,000 × 33% = ₩0` 같은 성립하지 않는 계산식이 찍힌다.
+                                      ⚠️ carrier 판정은 `planned > 0`이 아니라 **엔진이 실어 보낸 플래그**로 한다:
+                                         비율 0%·목표 이하·재원 0원이라 planned가 0인 대표 행이야말로
+                                         "왜 0원인가"를 설명해야 하는 행이다(이 화면이 존재하는 이유). */}
+                                  {e.carrier && (
                                     <div className="text-gray-500 pl-3">
-                                      개방 · {sigUnlockText(e, active)}
+                                      규모 · {sigSizeText(e, active)}
                                     </div>
                                   )}
                                   {!sell && numOf(e.reallocAmount) > 0 && (
                                     <div className="text-gray-500 pl-3">
-                                      재조정 · 목표 초과 종목을 팔아 {won(e.reallocAmount)}을(를) 매매 예수금에 편입
+                                      재조정 · 목표 초과 종목을 팔아 {won(e.reallocAmount)}을(를) 예수금에 편입
                                     </div>
                                   )}
                                   <div className="pl-3">
@@ -4237,21 +4325,22 @@ export default function BacktestPage({
                       <span className="text-gray-500">월 분배금 <b className="text-emerald-300">{won(m.divAccrued)}</b></span>
                       <span className="text-gray-500">누적 분배금 <b className="text-emerald-300">{won(m.cumDivAccrued)}</b></span>
                       <span className="text-gray-500">월 현금 증감 <b className={pnlCls(m.cashDelta)}>{wonSigned(m.cashDelta)}</b></span>
-                      <span className="text-gray-500">
-                        월말 예수금 <b className="text-gray-300">{won(m.cashEnd)}</b>
-                        {/* 분배금 몫이 남아 있을 때만 분해를 보여 준다(합 = 예수금, 이중 계상 아님) */}
-                        {m.cashDivEnd > 0.5 && (
-                          <span
-                            className="text-gray-600"
-                            title={m.cashTradeEnd <= 0.5
-                              ? `매매 주머니가 0인 이유: 초기 잔여 + 누적 매매차익(${wonSigned(m.cumTradeNet)})이 매수 대금을 못 채워 부족분을 분배금에서 꺼냈습니다.`
-                              : '매매 = 초기 잔여 + 누적 매매차익 중 남은 몫 / 분배금 = 지급받은 분배금 중 아직 쓰지 않은 몫'}
-                          >
-                            {' '}(매매 {won(m.cashTradeEnd)} · 분배금 {won(m.cashDivEnd)})
-                          </span>
-                        )}
+                      {/* ⚠️ 예수금과 적립 분배금은 **따로** 표시한다(사용자 정의 2026-08) —
+                          합계(m.cashEnd)를 '예수금'이라 부르면 분배금을 예수금에 합산한 것이 된다. */}
+                      <span className="text-gray-500"
+                        title={m.cashTradeEnd <= 0.5 && m.cashDivEnd > 0.5
+                          ? `예수금이 0인 이유: 초기 잔여 + 누적 매매차익(${wonSigned(m.cumTradeNet)})이 매수 대금을 못 채워 부족분을 적립 분배금에서 꺼냈습니다.`
+                          : '매매차익 + 초기 매수 잔여 + 추가 예수금 중 남은 몫'}>
+                        월말 예수금 <b className="text-gray-300">{won(m.cashTradeEnd)}</b>
                       </span>
-                      <span className="text-gray-500">월말 총자산 <b className="text-gray-200">{won(m.totalEnd)}</b></span>
+                      <span className="text-gray-500"
+                        title="지급받은 분배금 중 아직 쓰지 않은 잔액 — 예수금과 별도로 쌓입니다">
+                        적립 분배금 <b className="text-emerald-300">{won(m.cashDivEnd)}</b>
+                      </span>
+                      <span className="text-gray-500"
+                        title={`월말 총자산 = 종목 합계 ${won(m.evalEnd)} + 예수금 ${won(m.cashTradeEnd)} + 적립 분배금 ${won(m.cashDivEnd)}`}>
+                        월말 총자산 <b className="text-gray-200">{won(m.totalEnd)}</b>
+                      </span>
                       {m.cumContribution > 0 && (
                         <span className="text-gray-500">누적 증액 <b className="text-sky-300">{won(m.cumContribution)}</b></span>
                       )}
@@ -4303,8 +4392,8 @@ export default function BacktestPage({
                           <span className="text-amber-400/90 col-span-2 xl:col-span-6">
                             ※ 이 달 {reinvBuy > 0.5 ? '재투자 외 ' : ''}매수 대금{' '}
                             <b>{won(otherFromTrade + otherFromDiv)}</b> ={' '}
-                            예수금(매매차익) <b>{won(otherFromTrade)}</b> + 누적 분배금 <b>{won(otherFromDiv)}</b>
-                            {' '}— 매매차익이 모자라 분배금에서 충당했습니다.
+                            예수금 <b>{won(otherFromTrade)}</b> + 적립 분배금 <b>{won(otherFromDiv)}</b>
+                            {' '}— 예수금이 모자라 적립 분배금에서 충당했습니다.
                           </span>
                         );
                       })()}
@@ -4337,46 +4426,74 @@ export default function BacktestPage({
                           <td className={`${TD} text-right text-gray-400`}>{h.weight.toFixed(1)}%</td>
                         </tr>
                       ))}
+                      {/* ── 예수금(매매 몫) + 원천별 분해 ──
+                          ⚠️ 사용자 정의(2026-08): '예수금'은 매매차익 + 초기 매수 잔여 + 추가 예수금만
+                             가리키고 분배금은 합산하지 않는다. 아래 '적립 분배금' 행이 따로 선다.
+                          ⚠️ 합이 정확히 기말 예수금이 되는 항등식이다(검증 #110):
+                             초기 매수 후 잔여(+추가 예수금) + 누적 매매차익 + 종목 재편 순현금
+                             + 분배금 재투자 매수(≤0) + 적립 분배금이 대신 낸 매수 대금.
+                          ⚠️ 마지막 항이 ＋인 이유 — 분배금이 대신 낸 매수 대금만큼 예수금이 덜 나갔다. */}
                       <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
-                        <td className={`${TD} text-gray-300`}>예수금</td>
+                        <td className={`${TD} text-gray-300`}
+                          title="매매차익 + 초기 매수 잔여 + 추가 예수금 (적립 분배금은 아래 행에 따로)">예수금</td>
                         <td colSpan={2} className={`${TD} text-right text-gray-600`}>-</td>
-                        <td className={`${TD} text-right text-emerald-300`}>{won(result.summary.finalCash)}</td>
+                        <td className={`${TD} text-right text-gray-200`}>{won(result.summary.finalCashTrade)}</td>
                         <td className={`${TD} text-right text-gray-600`}>-</td>
                       </tr>
-                      {/* 예수금 원천별 세분화 — ⚠️ 합이 정확히 기말 예수금이 되는 항등식이다(검증 #110):
-                          초기 매수 후 잔여 + 누적 매매차익 + 종목 재편 순현금 + 분배금 재투자 매수(≤0)
-                          + 누적 분배금(지급 기준).
-                          ⚠️ 분배금은 반드시 **지급 기준**(cumDivPaid) — 분배락 기준(cumDivAccrued)에는
-                          아직 현금이 안 된 몫이 섞여 있어 소계가 예수금과 어긋난다(검증 #110b). */}
                       {[
-                        { key: 'init', label: '초기 매수 후 잔여', value: result.initialCashAfter, signed: false },
+                        { key: 'init', label: '초기 매수 후 잔여 + 추가 예수금', value: result.initialCashAfter, signed: false },
                         { key: 'trade', label: '누적 매매차익', value: result.summary.cumTradeNet, signed: true },
                         { key: 'struct', label: '종목 재편 순현금', value: result.summary.cumStructuralNet, signed: true },
                         { key: 'reinv', label: '분배금 재투자 매수', value: result.summary.cumReinvestNet, signed: true },
-                        // ⚠️ 원천징수를 켜면 이 항은 **세후**다 — 세금은 애초에 입금되지 않은 돈이라
-                        //    별도 항으로 더하면 항등식이 깨진다(주석·검증 #204와 같은 정의).
-                        {
-                          key: 'div',
-                          label: `누적 분배금${result.summary.cumDivTax > 0.5 ? ' (세후)' : ''}`,
-                          value: result.summary.cumDivPaid, signed: false,
-                        },
+                        { key: 'drawn', label: '적립 분배금이 대신 낸 매수 대금', value: result.summary.cumDivDrawn, signed: false },
                       ].filter((p) => Math.round(p.value) !== 0).map((p) => (
                         <tr key={p.key} className="border-t border-gray-800/40">
                           <td className={`${TD} pl-7 text-gray-500 text-[12px]`}>
                             └ {p.label}
-                            {p.key === 'div' && result.summary.cumDivTax > 0.5 && (
+                            {p.key === 'drawn' && (
+                              <span className="text-gray-600" title="예수금이 모자라 적립 분배금에서 꺼내 낸 매수 대금 — 그만큼 예수금이 덜 나갔으므로 ＋로 들어간다">
+                                {' '}(예수금이 그만큼 덜 나감)
+                              </span>
+                            )}
+                          </td>
+                          <td colSpan={2} className={`${TD} text-right text-gray-700`}>-</td>
+                          <td className={`${TD} text-right text-[12px] ${p.signed ? pnlCls(p.value) : 'text-gray-300'}`}>
+                            {p.signed ? wonSigned(p.value) : won(p.value)}
+                          </td>
+                          <td className={`${TD} text-right text-gray-700`}>-</td>
+                        </tr>
+                      ))}
+                      {/* ── 적립 분배금 = 누적 분배금(지급 기준) − 매수에 사용한 분배금 ──
+                          ⚠️ 분배금은 반드시 **지급 기준**(cumDivPaid) — 분배락 기준(cumDivAccrued)에는
+                             아직 현금이 안 된 몫이 섞여 있어 소계가 어긋난다(검증 #110b).
+                          ⚠️ 원천징수를 켜면 이 항은 **세후**다 — 세금은 애초에 입금되지 않은 돈이라
+                             별도 항으로 더하면 항등식이 깨진다(검증 #204와 같은 정의). */}
+                      <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
+                        <td className={`${TD} text-gray-300`}
+                          title="지급받은 분배금 중 아직 쓰지 않은 잔액 — 예수금과 별도로 쌓인다">적립 분배금</td>
+                        <td colSpan={2} className={`${TD} text-right text-gray-600`}>-</td>
+                        <td className={`${TD} text-right text-emerald-300`}>{won(result.summary.finalCashDiv)}</td>
+                        <td className={`${TD} text-right text-gray-600`}>-</td>
+                      </tr>
+                      {[
+                        {
+                          key: 'divpaid',
+                          label: `누적 분배금 (지급 기준${result.summary.cumDivTax > 0.5 ? ' · 세후' : ''})`,
+                          value: result.summary.cumDivPaid, signed: false,
+                        },
+                        { key: 'divused', label: '− 매수에 사용한 분배금', value: -result.summary.cumDivDrawn, signed: true },
+                      ].filter((p) => Math.round(p.value) !== 0).map((p) => (
+                        <tr key={p.key} className="border-t border-gray-800/40">
+                          <td className={`${TD} pl-7 text-gray-500 text-[12px]`}>
+                            └ {p.label}
+                            {p.key === 'divpaid' && result.summary.cumDivTax > 0.5 && (
                               <span className="text-gray-600" title="지급일에 원천징수한 세금 — 입금되지 않았으므로 위 금액에서 이미 빠져 있다">
                                 {' '}· 원천징수 −{won(result.summary.cumDivTax)}
                               </span>
                             )}
-                            {p.key === 'div' && Math.abs(result.summary.cumDivAccrued - result.summary.cumDivPaid) > 0.5 && (
+                            {p.key === 'divpaid' && Math.abs(result.summary.cumDivAccrued - result.summary.cumDivPaid) > 0.5 && (
                               <span className="text-gray-600" title="분배락 기준 누적 분배금(세전) — 지급일이 종료일 이후인 몫은 아직 현금이 아니다">
                                 {' '}(분배락 기준 {won(result.summary.cumDivAccrued)})
-                              </span>
-                            )}
-                            {p.key === 'div' && result.summary.cumDivPaid - result.summary.finalCashDiv > 0.5 && (
-                              <span className="text-gray-600">
-                                {' '}· 이 중 {won(result.summary.cumDivPaid - result.summary.finalCashDiv)}는 매수에 사용
                               </span>
                             )}
                           </td>
@@ -4389,7 +4506,7 @@ export default function BacktestPage({
                       ))}
                       <tr className="border-t border-gray-700 bg-gray-800/60 font-bold">
                         <td className={`${TD} text-gray-200`}
-                          title={`총자산 = 기말 평가액 ${won(result.summary.finalEval)} + 기말 예수금 ${won(result.summary.finalCash)} = ${won(result.summary.finalTotal)}`}>
+                          title={`총자산 = 기말 평가액 ${won(result.summary.finalEval)} + 예수금 ${won(result.summary.finalCashTrade)} + 적립 분배금 ${won(result.summary.finalCashDiv)} = ${won(result.summary.finalTotal)}`}>
                           총자산
                         </td>
                         <td colSpan={2} className={`${TD} text-right text-gray-600`}>-</td>
@@ -4448,26 +4565,29 @@ export default function BacktestPage({
                         <b>시그널 리밸런싱</b>은 자기 발동일에 체결되므로 밴드의 적용을 받지 않습니다.
                       </p>
                     )}
-                    {active.buyFunding === 'tradeOnly' && (
-                      <p>
-                        <b>평시 매수 재원 = 매매 예수금만</b> — 적립된 분배금은 평상시 매수에 쓰지 않고,
-                        시그널 리밸런싱이 열어 준 한도 안에서만 씁니다
-                        {dipOf(active).enabled ? '' : ' (시그널 리밸런싱이 꺼져 있어 사실상 전혀 쓰지 않습니다)'}.
-                        분배금 재투자(④)는 이 설정과 무관하게 그대로 돕니다.
-                      </p>
-                    )}
+                    <p>
+                      <b>매수 재원 = {active.buyFunding === 'tradeOnly' ? '매매 예수금만' : '예수금 전부'}</b> —{' '}
+                      {active.buyFunding === 'tradeOnly'
+                        ? '정기 리밸런싱과 매매 시그널이 예수금(매매차익 + 초기 매수 잔여 + 추가 예수금)만 씁니다. 적립 분배금은 1원도 쓰지 않고 계속 쌓입니다.'
+                        : '정기 리밸런싱과 매매 시그널이 예수금을 먼저 쓰고, 모자라면 적립 분배금에서 꺼내 씁니다.'}
+                      {' '}분배금 재투자(④)는 이 설정과 무관하게 그대로 돕니다.
+                      {numOf(active.extraCash) > 0
+                        && ` 추가 예수금 ${won(active.extraCash)}은 초기 매수에 쓰지 않고 예수금으로 남겨 두었습니다.`}
+                    </p>
                     {dipOf(active).enabled && (
                       <p>
                         <b>시그널 리밸런싱</b> — 매수는 종목별 <b>가격 고점</b> 대비 낙폭{' '}
-                        {dipOf(active).levels.map((l) => `−${formatNumber(l.drop)}%(${formatNumber(l.unlockPct)}%)`).join(' · ') || '없음'}
+                        {dipOf(active).levels.map((l) => `−${formatNumber(l.drop)}%(${l.buyPct === null || l.buyPct === undefined ? '목표까지' : `재원의 ${formatNumber(l.buyPct)}%`})`).join(' · ') || '없음'}
                         {dipOf(active).sellLevels.length
-                          ? `, 매도는 가격 저점 대비 반등 ${dipOf(active).sellLevels.map((l) => `+${formatNumber(l.rise)}%`).join(' · ')}`
+                          ? `, 매도는 가격 저점 대비 반등 ${dipOf(active).sellLevels.map((l) => `+${formatNumber(l.rise)}%(${l.sellPct === null || l.sellPct === undefined ? '초과분 전량' : `초과분의 ${formatNumber(l.sellPct)}%`})`).join(' · ')}`
                           : ''}
-                        에 처음 닿는 날 <b>그날 종가로 즉시</b> 그 종목을 목표까지 맞춥니다
+                        에 처음 닿는 날 <b>그날 종가로 즉시</b> 체결합니다
                         (발동 {result.summary.signalEvents.length}건 · 체결{' '}
                         {result.summary.signalEvents.filter((e) => e.tradeQty !== 0).length}건).
-                        매수 재원은 <b>매매 예수금 → 목표 초과 종목 매도(재조정{dipOf(active).reallocate ? '' : ' 끔'})
-                        → 적립 분배금 개방</b> 순입니다. 각 단계는 고점(매수)·저점(매도)이 갱신되기 전까지 1회만 발동합니다.
+                        비율이 있으면 <b>매수 = 매수 재원 × 비율</b>(목표에서 자름) · <b>매도 = 목표 초과분 × 비율</b>이고,
+                        비우면 목표까지입니다. ‘목표까지’ 매수만 재원이 모자랄 때 다른 종목을 팔아
+                        재조정{dipOf(active).reallocate ? '합니다' : '하지 않습니다(끔)'}.
+                        각 단계는 고점(매수)·저점(매도)이 갱신되기 전까지 1회만 발동합니다.
                       </p>
                     )}
                     {numOf(active.cashFloorPct) > 0 && (

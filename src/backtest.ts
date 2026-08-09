@@ -204,29 +204,50 @@ export interface BtContribOverride {
 }
 
 /**
- * 정기 리밸런싱 **매수**의 재원.
- *  both      — 매매 주머니 → 분배금 주머니 순으로 쓴다(기본 = 종전 동작).
- *  tradeOnly — 매매 주머니(cashTrade)만 쓴다. 적립된 분배금(cashDiv)은 평상시에 손대지 않고
- *              **급락 분할투입(dip)이 개방한 한도 안에서만** 쓴다.
+ * **매수 재원** — 정기 리밸런싱 매수와 시그널 매수가 **같은 규칙을 공유**한다(사용자 확정 2026-08).
  *
+ *  both      — '예수금 전부' = 매매 예수금 + 적립 분배금.
+ *              매매 몫을 먼저 쓰고 모자라면 분배금 몫에서 꺼낸다(기본 = 종전 동작).
+ *  tradeOnly — '매매 예수금만' = 매매차익 + 초기 매수 잔여 + 추가 예수금.
+ *              적립 분배금(cashDiv)은 **1원도 쓰지 않는다**.
+ *
+ * ⚠️ 옛 설계는 tradeOnly에서도 시그널이 `적립 분배금 × 단계 비율`만큼 **개방**해 썼다. 사용자 정의가
+ *    "매매 예수금만 = 누적 매매현금 + 초기 예수금"으로 확정되면서 그 개방 메커니즘은 폐기됐다 —
+ *    `BtDipLevel.buyPct`는 이제 '분배금 개방 비율'이 아니라 **매수 재원의 투입 비율**이다.
  * ⚠️ 분배금 재투자 매수(divReinvest)는 원래 'div' 출금이라 이 설정의 영향을 받지 않는다.
  * ⚠️ allowNegativeCash와 함께 쓰면 **cashTrade만 음수로 진다**(cashDiv는 음수 불가).
- * ⚠️ 이벤트(구조 변경)·초기 매수는 종전대로 전체 예수금을 쓴다 — 이 설정은 **정기 리밸런싱 전용**.
+ * ⚠️ 이벤트(구조 변경)는 종전대로 전체 예수금을 쓴다. 초기 매수는 **초기 투자금 한도**만 쓴다
+ *    (추가 예수금은 손대지 않는다 — BtConfig.extraCash 주석 참조).
  */
 export type BtBuyFunding = 'both' | 'tradeOnly';
 
-/** 매수 시그널 1단계. drop=가격 고점 대비 낙폭(%), unlockPct=그 시점 cashDiv에서 개방할 비율(%). */
+/**
+ * 매수 시그널 1단계.
+ *  drop   = 가격 고점 대비 낙폭(%)
+ *  buyPct = 이때 투입할 **매수 재원의 비율(%)**. 매수액 = `min(재원 × buyPct%, 목표 미달액)`.
+ *           `null`이면 **'목표까지'** — 목표 미달액 전부를 재원 한도 안에서 채운다(종전 동작).
+ *
+ * ⚠️ 레거시 필드명은 `unlockPct`('적립 분배금 개방 비율')였다. 값은 그대로 승계하되 **뜻이 바뀌었다**
+ *    (normalizeDipLevels가 마이그레이션한다).
+ */
 export interface BtDipLevel {
   drop: number;
-  unlockPct: number;
+  buyPct: number | null;
 }
 
 /**
- * 매도 시그널 1단계. rise=가격 **저점** 대비 상승률(%).
- * ⚠️ 매도는 재원이 필요 없으므로 개방 비율 인자가 없다(판 대금은 전액 매매 주머니로 간다).
+ * 매도 시그널 1단계.
+ *  rise    = 가격 **저점** 대비 상승률(%)
+ *  sellPct = 이때 팔 **목표 초과분의 비율(%)**. 매도액 = `(평가액 − 목표) × sellPct%`.
+ *            `null`이면 **'목표까지 전량'**(종전 동작).
+ *
+ * ⚠️ 밑변은 평가액이 아니라 **초과분**이다 — 그래야 목표 아래로 절대 내려가지 않는다
+ *    ("매도 시그널은 매도만 한다 · 목표가 하한"이라는 계약).
+ * ⚠️ 판 대금은 전액 매매 주머니로 간다(적립 분배금을 늘리지 않는다).
  */
 export interface BtSellLevel {
   rise: number;
+  sellPct: number | null;
 }
 
 /**
@@ -235,17 +256,24 @@ export interface BtSellLevel {
  * 종목별 **가격 고점/저점**(백테스트 구간 내 최고·최저 종가) 대비 당일 종가가 각 단계에
  * **처음 도달**하면, 그 **발동일 종가로 즉시** 그 종목을 목표까지 맞춘다.
  *
- * ── 매수 시그널(levels) 발동 시 재원 조달 3단계 ──
- *   ① 매매 주머니(cashTrade)로 산다.
- *   ② 모자라면(`reallocate`) **목표를 초과한 다른 보유 종목**을 목표까지 팔아 재원을 만든다
- *      (= 사용자가 정한 비율/금액대로의 재조정).
- *   ③ 그래도 모자라면 분배금 주머니를 `발동 시점 cashDiv × unlockPct/100` 만큼 열어 쓴다
- *      (여러 단계·여러 종목이 같은 날 겹치면 합산하되 cashDiv 잔액을 넘지 못한다).
- *   ⚠️ ③의 한도는 `buyFunding:'tradeOnly'`일 때만 실효가 있다 — `'both'`(기본)는 애초에
- *      분배금 주머니가 열려 있어 단계 비율이 적용되지 않는다(그 경우 개방액 = 주머니 전액으로 기록).
+ * ── 매수 시그널(levels) 발동 시 ──
+ *   재원 = `buyFunding`이 정한다(`tradeOnly` → 매매 예수금만 / `both` → 예수금 전부).
+ *   매수액은 그 단계의 `buyPct`가 정한다:
+ *     · `buyPct = P`  → `min(재원 스냅샷 × P%, 목표 미달액)`. **재조정을 하지 않는다**
+ *                       ("가진 현금의 일부만 투입"이 규칙이라 재원 부족이라는 개념이 없다).
+ *     · `buyPct = null` → 목표 미달액 전부(종전 동작). 재원이 모자라면 `reallocate`가
+ *                       **목표를 초과한 다른 보유 종목**을 목표까지 팔아 재원을 만든다.
+ *   ⚠️ 재원 스냅샷은 **매도 시그널 처리 뒤 · 재조정 앞**에서 1회 잡는다 — 같은 날 매도 시그널이
+ *      만든 현금은 재원에 포함하고(실제로 쓸 수 있는 돈이다), 재조정 대금은 포함하지 않는다
+ *      (재조정은 '목표까지' 매수를 위한 것이라 비율 매수의 밑변을 부풀리면 안 된다).
  *
  * ── 매도 시그널(sellLevels) 발동 시 ──
- *   그 종목 평가액이 목표를 **넘는 만큼만** 판다(목표 이하면 아무 일도 없다). 대금은 매매 주머니로.
+ *   `sellPct = P` → `(평가액 − 목표) × P%` 만큼 판다. `null`이면 목표까지 전량(종전 동작).
+ *   목표 이하면 아무 일도 없다. 대금은 전액 매매 주머니로.
+ *
+ * ⚠️ 같은 종목의 여러 단계가 같은 날 겹치면(갭 하락/급등) **비율은 합산**한다(carrier 규약).
+ *    단 하나라도 `null`(목표까지)이면 그 종목은 그날 '목표까지'로 처리한다 — 비율과 목표까지를
+ *    섞어 두 번 체결하면 같은 시그널이 두 번 표시되고 목표를 넘겨 산다.
  *
  * ⚠️ **평가액 고점이 아니라 가격 고점/저점**이다 — 리밸런싱으로 수량이 계속 변하므로 평가액 극값은 왜곡된다.
  * ⚠️ 각 단계는 **극값이 갱신되기 전까지 1회만** 발동한다(새 고점 = 매수 전 단계 재무장 / 새 저점 = 매도 전 단계 재무장).
@@ -348,9 +376,19 @@ export interface BtConfig {
   name: string;
   startDate: string;
   endDate: string;
-  /** 초기 투자금(원). 초기 매수 후 남는 잔돈은 자동으로 예수금이 된다. */
+  /**
+   * 초기 투자금(원) — **초기에 종목을 전부 매수하는 데 쓰는 돈**. 초기 매수의 예산 상한이자
+   * 비중 모드 분모다. 1주 단위로 딱 떨어지지 않아 남는 잔돈은 자동으로 예수금이 된다.
+   */
   initialCapital: number;
-  /** 초기 투자금과 별도로 들고 시작할 현금(선택, 기본 0). */
+  /**
+   * 추가(초기) 예수금 — 초기 투자금과 **별개**로 들고 시작할 현금(선택, 기본 0).
+   *
+   * ⚠️ **초기 매수에 쓰지 않는다**(사용자 확정 2026-08). 매매 시그널·정기 리밸런싱이 쓸 수 있게
+   *    예수금(cashTrade)으로 남겨 둔다. 옛 코드는 초기 매수 예산·비중 분모를
+   *    `initialCapital + extraCash`로 잡아 이 돈을 첫날 다 써 버렸다.
+   * ⚠️ `extraCash === 0`이면 결과가 종전과 1원도 다르지 않다(하위호환).
+   */
   extraCash: number;
   targetMode: BtTargetMode;
   rounding: BtRounding;
@@ -455,14 +493,14 @@ export const MAX_BT_NOTE_TITLE_LEN = 80;
 export const MAX_BT_VERDICT_LEN = 200;
 
 /**
- * 급락 분할투입 기본 단계 — −10%/−20%/−30%에서 적립 분배금을 34/33/33%씩 푼다.
+ * 매수 시그널 기본 단계 — 고점 대비 −10%/−20%/−30%에서 매수 재원을 34/33/33%씩 투입한다.
  * ⚠️ `dip.enabled=false`(기본)면 이 값이 들어 있어도 **아무 일도 일어나지 않는다** — 토글을 켰을 때
  *    바로 쓸 수 있게 기본값을 채워 둘 뿐이다.
  */
 export const DEFAULT_DIP_LEVELS: BtDipLevel[] = [
-  { drop: 10, unlockPct: 34 },
-  { drop: 20, unlockPct: 33 },
-  { drop: 30, unlockPct: 33 },
+  { drop: 10, buyPct: 34 },
+  { drop: 20, buyPct: 33 },
+  { drop: 30, buyPct: 33 },
 ];
 
 /**
@@ -472,8 +510,8 @@ export const DEFAULT_DIP_LEVELS: BtDipLevel[] = [
  *    그래서 normalizeSellLevels는 빈 배열을 기본값으로 되돌리지 **않는다**(매수 쪽과 반대).
  */
 export const DEFAULT_SELL_LEVELS: BtSellLevel[] = [
-  { rise: 10 },
-  { rise: 20 },
+  { rise: 10, sellPct: null },
+  { rise: 20, sellPct: null },
 ];
 
 export const BT_COLORS = [
@@ -632,7 +670,7 @@ export interface BtContribRow {
 
 /**
  * 시그널 리밸런싱 발동 1건 — **화면이 계산식을 그대로 재현할 수 있도록** 밑변까지 남긴다.
- * (사용자 요청: "‘개방’이라는 표현을 `1단계 · 적립 분배금 ₩A × 34% = ₩B` 처럼 상세히 표시")
+ * (사용자 요청: "`1단계 · 매수 재원 ₩A × 34% = ₩B` 처럼 상세히 표시")
  */
 export interface BtSignalEvent {
   /** 발동일(그 종가로 단계에 처음 도달한 날). **체결일과 같다**(당일 종가로 즉시 실행). */
@@ -646,25 +684,39 @@ export interface BtSignalEvent {
   step: number;
   /** 발동 단계 값 = 고점 대비 낙폭(%) 또는 저점 대비 상승률(%) */
   level: number;
-  /** 이 **단계 하나**의 개방 비율(%). 매수 전용, 매도는 0. */
-  unlockPct: number;
   /**
-   * `unlocked`를 만든 비율의 **합**(carrier에만 채운다. 같은 종목 여러 단계가 같은 날 겹칠 때 합산).
+   * 이 **단계 하나**의 비율(%). 매수=매수 재원의 %, 매도=목표 초과분의 %.
+   * `null`이면 '목표까지'(매수=목표 미달액 전부 / 매도=목표까지 전량).
+   */
+  pct: number | null;
+  /**
+   * 같은 종목·같은 날 겹친 단계들의 **대표 행인가**. 규모·체결·재원은 이 행에만 합산해 싣는다.
+   * ⚠️ 화면은 이 플래그로 계산식 줄을 그릴지 정한다 — `planned > 0` 같은 값으로 대신 판정하지 말 것.
+   *    비율 0%·목표 이하·재원 0원이라 금액이 0인 대표 행이야말로 "왜 0원인가"를 설명해야 하는 행이다.
+   */
+  carrier: boolean;
+  /**
+   * `planned`를 만든 비율의 **합**(carrier에만 채운다. 같은 종목 여러 단계가 같은 날 겹칠 때 합산).
    * ⚠️ 화면 계산식(`밑변 × 비율 = 금액`)은 반드시 이 값을 써야 산술적으로 성립한다 —
-   *    단계별 `unlockPct`를 쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 거짓 계산식이 찍힌다.
+   *    단계별 `pct`를 쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 거짓 계산식이 찍힌다.
+   * ⚠️ 하나라도 '목표까지'가 섞이면 그 종목은 그날 목표까지로 처리하므로 여기도 `null`이다.
    */
-  unlockPctSum: number;
-  /** 발동 시점 분배금 주머니 잔액 — 개방액 계산식의 **밑변**. */
-  divPocketAt: number;
-  /** 발동 시점 매매 주머니 잔액 — "이 돈으로 먼저 산다"의 밑변. */
-  cashTradeAt: number;
+  pctSum: number | null;
   /**
-   * 이 시그널이 연 분배금 한도.
-   *  tradeOnly → `divPocketAt × unlockPct/100`
-   *  both      → `divPocketAt` 전액(단계 비율 미적용 — 평시에 이미 열려 있다)
+   * 매수 전용 — 발동 시점 **매수 재원 스냅샷**(계산식의 밑변).
+   * `buyFunding:'tradeOnly'`면 매매 예수금, `'both'`면 예수금 전부(매매+적립 분배금).
+   * ⚠️ 매도 시그널 처리 뒤·재조정 앞 값이다(BtDip 주석 참조). 매도 이벤트는 0.
    */
-  unlocked: number;
-  /** 개방 한도 안에서 **실제로 매수에 쓴** 금액(분배금 주머니에서 나간 몫). */
+  poolAt: number;
+  /** 매도 전용 — 발동 시점 **목표 초과 평가액**(계산식의 밑변). 매수 이벤트는 0. */
+  excessAt: number;
+  /** 비율·목표 상한을 적용한 뒤의 **목표 매매금액**(반올림 전). 실제 체결은 tradeAmount. */
+  planned: number;
+  /** 발동 시점 적립 분배금 잔액(표시용). */
+  divPocketAt: number;
+  /** 발동 시점 매매 예수금 잔액 — "이 돈으로 먼저 산다"의 밑변. */
+  cashTradeAt: number;
+  /** 매수 대금 중 **적립 분배금에서 나간** 몫(`buyFunding:'tradeOnly'`면 항상 0). */
   used: number;
   /** 발동 시점의 기준 극값 — buy=가격 고점 / sell=가격 저점 */
   ref: number;
@@ -850,14 +902,28 @@ export interface BtResult {
     /** 연간 가드레일 증액으로 목표에 더한 누적 금액 */
     cumAnnualReview: number;
     /**
-     * 기말 예수금 중 매매 몫 / 미사용 분배금 몫 (합 = finalCash).
-     * ⚠️ 원천별 분해 항등식(화면 '기말 보유 현황' 표가 그대로 렌더한다):
+     * 기말 **예수금**(매매 몫) / **적립 분배금**(미사용 분배금 몫). 합 = finalCash.
+     *
+     * ⚠️ 사용자 정의(2026-08): '예수금'은 `매매차익 + 초기 매수 잔여 + 추가 예수금`만 가리키고
+     *    분배금은 **합산하지 않는다**. 화면·CSV는 두 값을 나란히 따로 표시한다.
+     *
+     * ⚠️ 원천별 분해 항등식 **2개**(화면 '기말 보유 현황' 표가 그대로 렌더한다):
+     *      finalCashTrade = initialCashAfter + cumTradeNet + cumStructuralNet + cumReinvestNet + cumDivDrawn
+     *      finalCashDiv   = cumDivPaid − cumDivDrawn
+     *    두 식을 더하면 종전 항등식이 그대로 복원된다(검증 #110):
      *      finalCash = initialCashAfter + cumTradeNet + cumStructuralNet + cumReinvestNet + cumDivPaid
      *    분배금은 반드시 **지급 기준(cumDivPaid)** — 분배락 기준(cumDivAccrued)에는 아직 현금이
      *    되지 않은 몫이 섞여 항등식이 깨진다.
      */
     finalCashTrade: number;
     finalCashDiv: number;
+    /**
+     * 매수 대금 중 **적립 분배금 주머니에서 꺼낸** 누적 총액(≥ 0) = Σ `BtMonth.cashUsedDiv`.
+     * ⚠️ 위 분해 항등식 2개를 성립시키는 연결 항이다. 예수금 쪽에 `+`로 들어가는 이유는
+     *    "분배금이 대신 낸 매수 대금만큼 매매 예수금이 덜 나갔다"이기 때문.
+     * ⚠️ `buyFunding:'tradeOnly'`면 분배금 재투자(divReinvest) 매수 외에는 0이다.
+     */
+    cumDivDrawn: number;
     /** 최고 자산 대비 최대 낙폭(%) */
     maxDrawdown: number;
     months: number;
@@ -1284,16 +1350,38 @@ function normalizeContribution(raw: any): BtContribution {
 }
 
 /**
- * 급락 단계 정규화 — 낙폭 오름차순 + 중복 낙폭 제거 + 상한.
+ * 단계 비율(%) 정규화. **`null`(= 목표까지)을 1급 값으로 다룬다.**
+ * ⚠️ 숫자가 아니거나 범위를 벗어나면 null이 아니라 0~100으로 **클램프**한다 — 150을 적었다고
+ *    조용히 '목표까지'로 바뀌면 사용자가 이유를 알 수 없다(빈칸만 목표까지다).
+ * ⚠️ `asNum`은 `typeof v === 'number'`만 통과시키므로 `null`/`''`/문자열은 전부 여기서 걸린다.
+ */
+const asPctOrNull = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = asNum(v, NaN);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(100, Math.max(0, n));
+};
+
+/**
+ * 매수 시그널 단계 정규화 — 낙폭 오름차순 + 중복 낙폭 제거 + 상한.
  * ⚠️ 유효한 단계가 하나도 없으면 **기본 3단계로 되돌린다** — 'enabled인데 단계 0개'는 조용히
  *    아무 일도 안 하는 상태라, 사용자가 켜 놓고 이유를 알 수 없게 된다.
+ * ⚠️ 비율이 손상돼도 **행을 버리지 않는다**(옛 코드는 필터로 지웠다) — 사용자가 적은 낙폭이
+ *    조용히 사라지는 것이 가장 나쁜 실패다. 비율만 치유한다.
  */
 function normalizeDipLevels(raw: unknown): BtDipLevel[] {
   const arr = asArr(raw)
-    .map((l: any) => ({ drop: asNum(l?.drop, NaN), unlockPct: asNum(l?.unlockPct, NaN) }))
-    .filter(l =>
-      Number.isFinite(l.drop) && l.drop > 0 && l.drop <= 100
-      && Number.isFinite(l.unlockPct) && l.unlockPct >= 0 && l.unlockPct <= 100);
+    .map((l: any) => ({
+      drop: asNum(l?.drop, NaN),
+      // ⚠️ 레거시 마이그레이션 — 옛 필드 `unlockPct`('적립 분배금 개방 비율')의 값을 승계한다.
+      //    단 **0은 null(목표까지)로** 옮긴다: 옛 '단계 추가' 버튼이 0을 넣었고, 옛 의미로 0은
+      //    '분배금을 안 연다'(= 매매 예수금으로 목표까지 매수)였다. 0을 그대로 두면 새 의미에서
+      //    '재원의 0%' = **한 주도 안 사는** 단계로 뒤집힌다.
+      buyPct: l?.buyPct !== undefined
+        ? asPctOrNull(l.buyPct)
+        : (asPctOrNull(l?.unlockPct) || null),
+    }))
+    .filter(l => Number.isFinite(l.drop) && l.drop > 0 && l.drop <= 100);
   if (!arr.length) return DEFAULT_DIP_LEVELS.map(l => ({ ...l }));
   arr.sort((a, b) => a.drop - b.drop);
   const seen = new Set<number>();
@@ -1315,7 +1403,8 @@ function normalizeDipLevels(raw: unknown): BtDipLevel[] {
  */
 function normalizeSellLevels(raw: unknown): BtSellLevel[] {
   const arr = asArr(raw)
-    .map((l: any) => ({ rise: asNum(l?.rise, NaN) }))
+    // ⚠️ 레거시는 `sellPct` 필드가 아예 없다 → null(목표까지 전량) = **종전 동작 그대로**.
+    .map((l: any) => ({ rise: asNum(l?.rise, NaN), sellPct: asPctOrNull(l?.sellPct) }))
     .filter(l => Number.isFinite(l.rise) && l.rise > 0 && l.rise <= 1000);
   arr.sort((a, b) => a.rise - b.rise);
   const seen = new Set<number>();
@@ -1468,8 +1557,9 @@ export function backtestSettingsFingerprint(cfg: unknown): string {
         s.contribution?.mode ?? '', s.contribution?.value ?? 0, s.contribution?.split ?? '',
         s.band ?? 0, s.buyFunding ?? '', s.cashFloorPct ?? 0, s.divTaxPct ?? 0,
         s.dip?.enabled ? 1 : 0,
-        asArr(s.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
-        asArr(s.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}`).join(','),
+        // ⚠️ `?? ''`라야 null(목표까지)과 0(재원의 0%)이 서로 다른 지문이 된다 — 둘은 결과가 정반대다.
+        asArr(s.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
+        asArr(s.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
         s.dip?.reallocate === false ? 0 : 1,
         s.annualReview?.mode ?? '', s.annualReview?.value ?? 0, s.annualReview?.reserve ?? 0,
         s.annualReview?.everyMonths ?? 0, s.annualReview?.split ?? '',
@@ -1525,8 +1615,8 @@ export function backtestFingerprint(scenarios: unknown): string {
           s?.band ?? 0, s?.buyFunding ?? '', s?.cashFloorPct ?? 0, s?.divTaxPct ?? 0,
           // 시그널 리밸런싱 — 단계 목록까지 포함해야 단계만 고친 편집이 저장된다
           s?.dip?.enabled ? 1 : 0,
-          asArr(s?.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.unlockPct ?? ''}`).join(','),
-          asArr(s?.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}`).join(','),
+          asArr(s?.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
+          asArr(s?.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
           s?.dip?.reallocate === false ? 0 : 1,
           // 연간 가드레일 증액
           s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
@@ -1873,7 +1963,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
       cumTradeNet: 0, cumStructuralNet: 0, cumReinvestNet: 0,
       cumDivAccrued: 0, cumDivPaid: 0, cumDivTax: 0, cumContribution: 0, cumAnnualReview: 0,
-      finalCashTrade: 0, finalCashDiv: 0, maxDrawdown: 0, months: 0,
+      finalCashTrade: 0, finalCashDiv: 0, cumDivDrawn: 0, maxDrawdown: 0, months: 0,
       minCash: { value: 0, date: '' }, minCashDiv: { value: 0, date: '' },
       divMonthlyAvg: 0, divMonthlyStdev: 0,
       bandSkipCount: 0, bandSkipAmount: 0, signalEvents: [], shortfallMonths: 0,
@@ -2340,13 +2430,21 @@ export function runBacktest(input: BtRunInput): BtResult {
     // ⚠️ 초기 매수만은 비중 분모가 평가액이 아니라 **투입 자본**이다.
     //    평소 분모(종목 평가액 합계)를 그대로 쓰면 그 시점 평가액이 0이라 목표가 전부 0이 되어
     //    아무것도 사지 않는다(비중 모드가 통째로 죽는 회귀). `targetBaseAt`의 현금 부트스트랩과
-    //    같은 원리이고 그 시점 cash와도 값이 같다.
+    //    같은 원리다.
+    // ⚠️ 그 투입 자본은 **초기 투자금뿐**이다(사용자 확정 2026-08) — 추가 예수금은 "매매 시그널
+    //    때 매수할 수 있는 자금"이라 첫날 써 버리면 안 된다. 분모(base)만 바꾸면 목표 금액 모드에서
+    //    목표 합계가 초기 투자금을 넘을 때 여전히 추가 예수금을 헐어 쓰므로, **예산도 함께 캡**한다.
+    // ⚠️ `extraCash === 0`이면 initRemain이 cash와 항상 같아 종전과 문자 그대로 동일하다(하위호환).
+    // ⚠️ allowNegativeCash는 종전대로 살아 있다 — adjustTo의 `limited`가 false면 budget을 무시한다.
     checkRatioSum(startBiz);
-    const base = config.initialCapital + config.extraCash;
+    const base = config.initialCapital;
+    let initRemain = config.initialCapital;
     for (const p of positions) {
       if (!p.active) continue;
-      const t = adjustTo(p, startBiz, targetOf(p, config, base), false);
-      if (t) initialTrades.push(t);
+      const t = adjustTo(p, startBiz, targetOf(p, config, base), false, {
+        budget: Math.max(0, initRemain),
+      });
+      if (t) { initialTrades.push(t); initRemain += t.cashDelta; }
     }
   }
   const initialCashAfter = cash;
@@ -2409,11 +2507,12 @@ export function runBacktest(input: BtRunInput): BtResult {
    *    두 판정은 **서로 독립**이다 — 신고가일에 매도가 발동하는 것은 정상이고(저점 대비 상승률이
    *    최대인 날), 신저가일에 매수가 발동하는 것도 정상이다(옛 코드가 `continue`로 하루를 통째로
    *    건너뛰던 것은 매수 판정 하나뿐이었으므로 **매수 동작은 문자 그대로 보존**된다).
-   * 여기서는 **발동일만** 확정한다. 개방액은 런타임 cashDiv에 달려 있어 signal 스텝에서 계산한다.
+   * 여기서는 **발동일만** 확정한다. 매매 규모는 런타임 재원·평가액에 달려 있어 signal 스텝에서 계산한다.
    * =========================================================================== */
   type SigTrig = {
     assetId: string; kind: 'buy' | 'sell';
-    step: number; level: number; unlockPct: number;
+    /** 그 단계의 비율(%). 매수=매수 재원의 %, 매도=목표 초과분의 %. null이면 '목표까지'. */
+    step: number; level: number; pct: number | null;
     ref: number; price: number;
   };
   const sigTrigByDate = new Map<string, SigTrig[]>();
@@ -2453,7 +2552,7 @@ export function runBacktest(input: BtRunInput): BtResult {
             firedBuy.add(i);
             push({
               assetId: p.asset.id, kind: 'buy', step: i + 1,
-              level: lv.drop, unlockPct: lv.unlockPct, ref: peak, price: px,
+              level: lv.drop, pct: lv.buyPct, ref: peak, price: px,
             });
           }
         }
@@ -2466,7 +2565,7 @@ export function runBacktest(input: BtRunInput): BtResult {
             firedSell.add(i);
             push({
               assetId: p.asset.id, kind: 'sell', step: i + 1,
-              level: lv.rise, unlockPct: 0, ref: trough, price: px,
+              level: lv.rise, pct: lv.sellPct, ref: trough, price: px,
             });
           }
         }
@@ -2710,8 +2809,10 @@ export function runBacktest(input: BtRunInput): BtResult {
 
     if (step.kind === 'signal') {
       /* ── 시그널 리밸런싱 — **발동일 종가로 즉시 체결** ────────────────────────
-       * 매수 재원 조달 3단계: ① 매매 주머니 → ② 다른 종목의 목표 초과분 매도(재조정)
-       *                      → ③ 분배금 주머니 개방(단계 비율).
+       * 매수 재원은 `buyFunding` 하나가 정한다(tradeOnly → 매매 예수금만 / both → 예수금 전부).
+       * 매매 규모는 단계의 비율이 정한다(`buyPct`/`sellPct`, null이면 목표까지).
+       *   매수: `min(재원 스냅샷 × pct%, 목표 미달액)` · pct=null이면 목표 미달액 + 재조정 허용
+       *   매도: `초과분 × pct%`                        · pct=null이면 목표까지 전량
        * ⚠️ 리밸런싱 밴드(band)는 **정기 리밸런싱 전용**이라 여기서는 보지 않는다 — 시그널은
        *    "지금 사라/팔라"는 명시적 지시라 밴드로 억눌러선 안 된다.
        * ⚠️ 정기 리밸런싱 일정(③ 정책)과 **완전히 독립**이다. policy:'none'이어도 여기는 돈다.
@@ -2723,8 +2824,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         if (date < p.effectiveStart || date > p.effectiveEnd) return null;
         return p;
       };
-      // ⚠️ 개방액의 밑변은 **발동 시점 cashDiv**다(사양). 이 스텝이 pay 뒤라 그날 받은 분배금도 포함된다.
-      //    매도 시그널·재조정 매도는 매매 주머니로만 들어가므로 이 값을 바꾸지 않는다.
+      // 표시용 스냅샷 — 이 스텝이 pay 뒤라 그날 받은 분배금도 포함된다.
       const pocket = Math.max(0, cashDiv);
       const tradeOnly = config.buyFunding === 'tradeOnly';
       /**
@@ -2741,38 +2841,87 @@ export function runBacktest(input: BtRunInput): BtResult {
         const ev: BtSignalEvent = {
           date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
           kind: t.kind, step: t.step, level: t.level,
-          unlockPct: t.unlockPct, unlockPctSum: 0,
+          pct: t.pct, pctSum: null, carrier: false,
+          poolAt: 0, excessAt: 0, planned: 0,
           divPocketAt: pocket, cashTradeAt: cashTrade,
-          unlocked: 0, used: 0,
+          used: 0,
           ref: t.ref, price: t.price,
           tradeQty: 0, tradeAmount: 0, fromTrade: 0, reallocAmount: 0, note: '',
         };
         signalEvents.push(ev);
         return ev;
       };
+      /**
+       * 같은 종목의 여러 단계가 같은 날 겹칠 때 비율을 합친다(carrier 규약).
+       * ⚠️ 하나라도 '목표까지'(null)면 결과도 null — 비율과 목표까지를 섞어 두 번 체결하면
+       *    같은 시그널이 두 번 표시되고 목표를 넘겨 산다.
+       * ⚠️ 합이 100%를 넘어도 자르지 않는다(밑변 × 비율 = 금액 계산식이 화면에 그대로 찍히므로
+       *    산술이 맞아야 한다). 매수는 목표에서, 매도는 초과분 전량에서 자연히 잘린다.
+       */
+      const sumPct = (list: BtSignalEvent[]): number | null => {
+        let s = 0;
+        for (const ev of list) {
+          if (ev.pct === null) return null;
+          s += ev.pct;
+        }
+        return s;
+      };
 
-      /* ── ① 매도 시그널 — 목표를 **넘는 만큼만** 판다. 대금은 매매 주머니로. ── */
-      for (const t of step.trigs) {
-        if (t.kind !== 'sell') continue;
-        const p = liveOf(t.assetId);
-        if (!p) continue;
-        const ev = mkEvent(t, p);
-        if (!p.active || p.qty <= QTY_EPS) { ev.note = '보유 없음'; continue; }
-        const hit = priceAt(prices[p.asset.code], date);
-        if (hit.missing || hit.price <= 0) { ev.note = '종가 없음'; continue; }
-        const target = targetOf(p, config, base);
-        // ⚠️ 아래 두 줄은 **의도적으로 중복된 방어선**이다(변이 테스트로 확인: 하나만 지우면
-        //    다른 하나가 잡아 검증이 통과한다). 둘 다 지우면 목표에 못 미치는 보유 상태에서
-        //    반등 시그널이 **매수로 뒤집혀** '매도 시그널'이 자산을 늘린다(검증 #308b).
-        //    둘 중 하나를 지우고 싶더라도 그대로 둘 것 — "매도 시그널은 매도만 한다"가 계약이다.
-        if (p.qty * hit.price - target <= 0) { ev.note = '목표 이하 — 팔 것 없음'; continue; }
-        const tr = adjustTo(p, date, target, false);
-        if (!tr || tr.qty >= 0) { ev.note = '매도 수량 0(반올림)'; continue; }
-        tr.signal = 'sell';
-        pushTrade(tr);
-        ev.tradeQty = tr.qty;
-        ev.tradeAmount = Math.abs(tr.cashDelta);
-        if (tr.note) ev.note = tr.note;
+      /* ── ① 매도 시그널 — 목표 **초과분**에서만 판다. 대금은 전액 매매 주머니로. ──
+       * ⚠️ 매수와 같은 carrier 규약으로 **종목별로 묶어 한 번만 체결**한다. 옛 코드는 트리거마다
+       *    독립 실행했는데(목표까지 전량이라 두 번째는 초과분 0으로 자연 종료), 비율 매도가
+       *    생기면 그대로 두면 같은 날 단계들이 **연쇄 적용**돼(10% 판 뒤 남은 초과분의 20%)
+       *    화면의 `초과분 × 비율` 계산식과 실제 체결이 어긋난다. */
+      {
+        const sellEvs = new Map<string, BtSignalEvent[]>();
+        const sellPos: Pos[] = [];
+        for (const t of step.trigs) {
+          if (t.kind !== 'sell') continue;
+          const p = liveOf(t.assetId);
+          if (!p) continue;
+          const ev = mkEvent(t, p);
+          const list = sellEvs.get(p.asset.id);
+          if (list) list.push(ev);
+          else { sellEvs.set(p.asset.id, [ev]); sellPos.push(p); }
+        }
+        for (const p of sellPos) {
+          const list = sellEvs.get(p.asset.id)!;
+          const carrier = list[0];
+          for (let i = 1; i < list.length; i++) {
+            list[i].note = `동시 발동 — 체결은 ${carrier.step}단계 행에 합산`;
+          }
+          if (!p.active || p.qty <= QTY_EPS) { carrier.note = '보유 없음'; continue; }
+          const hit = priceAt(prices[p.asset.code], date);
+          if (hit.missing || hit.price <= 0) { carrier.note = '종가 없음'; continue; }
+          // ⚠️ 밑변(excessAt)이 실제로 산출된 뒤에만 대표 행으로 표시한다 — 종가가 없어 여기까지
+          //    못 온 행까지 carrier로 두면 화면에 "실제로 성립한 적 없는 계산식"이 렌더된다.
+          carrier.carrier = true;
+          const target = targetOf(p, config, base);
+          const evalBefore = p.qty * hit.price;
+          const excess = evalBefore - target;
+          carrier.excessAt = Math.max(0, excess);
+          // ⚠️ 아래 가드와 `tr.qty >= 0` 가드는 **의도적으로 중복된 방어선**이다(변이 테스트로 확인:
+          //    하나만 지우면 다른 하나가 잡아 검증이 통과한다). 둘 다 지우면 목표에 못 미치는 보유
+          //    상태에서 반등 시그널이 **매수로 뒤집혀** '매도 시그널'이 자산을 늘린다(검증 #308b).
+          //    둘 중 하나를 지우고 싶더라도 그대로 둘 것 — "매도 시그널은 매도만 한다"가 계약이다.
+          if (excess <= 0) { carrier.note = '목표 이하 — 팔 것 없음'; continue; }
+          const pctSum = sumPct(list);
+          carrier.pctSum = pctSum;
+          // ⚠️ 비율 매도의 목표선은 `target`이 아니라 **초과분을 pct%만 덜어낸 수준**이다.
+          //    이 식이라야 목표 아래로 절대 내려가지 않는다(pct=100이면 정확히 target).
+          const sellAmount = pctSum === null
+            ? excess
+            : Math.min(excess, (excess * pctSum) / 100);
+          carrier.planned = sellAmount;
+          if (!(sellAmount > 0)) { carrier.note = '매도 비율 0% — 팔지 않음'; continue; }
+          const tr = adjustTo(p, date, evalBefore - sellAmount, false);
+          if (!tr || tr.qty >= 0) { carrier.note = '매도 수량 0(반올림)'; continue; }
+          tr.signal = 'sell';
+          pushTrade(tr);
+          carrier.tradeQty = tr.qty;
+          carrier.tradeAmount = Math.abs(tr.cashDelta);
+          if (tr.note) carrier.note = tr.note;
+        }
       }
 
       /* ── ② 매수 시그널 ─────────────────────────────────────────────────── */
@@ -2797,7 +2946,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       if (!buyPos.length) continue;
       for (const list of evsByAsset.values()) {
         for (let i = 1; i < list.length; i++) {
-          list[i].note = `동시 발동 — 체결·개방은 ${list[0].step}단계 행에 합산`;
+          list[i].note = `동시 발동 — 체결은 ${list[0].step}단계 행에 합산`;
         }
       }
 
@@ -2816,38 +2965,39 @@ export function runBacktest(input: BtRunInput): BtResult {
         }
         buyPlans.push(pl);
       }
-      let needTotal = 0;
-      for (const b of buyPlans) needTotal += Math.max(0, b.target - b.evalBefore);
-
-      /* ②-a 분배금 개방액 확정.
-       * ⚠️ **매수 계획이 살아 있는 종목만** 개방한다 — 종가가 없어 계획에서 탈락한 종목까지
-       *    개방액을 채우면 화면에 "실제로 열린 적 없는 개방 계산식"이 렌더된다(적대적 리뷰 확정).
-       * ⚠️ 개방 한도는 **종목별**이다(그 종목 단계들의 합) — 여러 종목이 같은 날 발동해도 서로의
-       *    몫을 빼앗지 않아 "사용 ≤ 개방" 표시 불변식이 성립한다(옛 dipUnlock과 같은 규약).
-       * ⚠️ 같은 종목의 여러 단계가 겹치면 `unlocked`는 **합**이므로 비율도 **합**(`unlockPctSum`)을
-       *    함께 남겨야 화면 계산식(밑변 × 비율 = 금액)이 산술적으로 성립한다. 단계별 `unlockPct`를
-       *    그대로 쓰면 `₩1,000,000 × 34% = ₩670,000` 같은 **거짓 계산식**이 찍힌다(적대적 리뷰 확정).
-       * ⚠️ 'both'(기본)는 평시에 이미 분배금 주머니가 열려 있어 **개방이라는 개념 자체가 없다** —
-       *    여기서 '주머니 전액'을 종목마다 기록하면 같은 날 N종목이 발동했을 때 KPI 합계가
-       *    존재한 적 없는 N배 금액을 보고한다. 그래서 0으로 두고 화면이 문장으로 설명한다. */
       const floorAmount = config.cashFloorPct > 0
         ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
         : 0;
+
+      /* ②-a 매수 재원 스냅샷 + 종목별 목표 매수액(`planned`) 확정.
+       * ⚠️ 스냅샷은 **매도 시그널 처리 뒤 · 재조정 앞** 값이다 — 같은 날 매도 시그널이 만든 현금은
+       *    실제로 쓸 수 있으므로 포함하고, 재조정 대금은 '목표까지' 매수를 위한 것이라 비율 매수의
+       *    밑변을 부풀리지 않게 제외한다(BtDip 주석).
+       * ⚠️ 밑변은 **종목별로 같은 스냅샷**이다 — 여러 종목이 같은 날 발동해도 서로의 몫을 빼앗지
+       *    않아 화면 계산식(밑변 × 비율 = 금액)이 종목마다 성립한다. 합이 재원을 넘으면 뒤 종목이
+       *    실제 예산에서 잘리고 그 사실은 note('예수금 부족')로 남는다.
+       * ⚠️ **매수 계획이 살아 있는 종목만** 채운다 — 종가가 없어 계획에서 탈락한 종목까지 채우면
+       *    화면에 "실제로 열린 적 없는 계산식"이 렌더된다(적대적 리뷰 확정 결함의 회귀). */
+      const poolAt = tradeOnly ? Math.max(0, cashTrade) : Math.max(0, cash);
+      /** '목표까지'(pct=null) 종목들의 필요액 합 — 재조정은 이 몫에 대해서만 돈다. */
+      let needTotal = 0;
       for (const b of buyPlans) {
         const list = evsByAsset.get(b.p.asset.id);
         if (!list) continue;
-        let pctSum = 0;
-        for (const ev of list) pctSum += ev.unlockPct;
-        list[0].unlockPctSum = pctSum;
-        list[0].unlocked = tradeOnly ? (pocket * pctSum) / 100 : 0;
-        for (let i = 1; i < list.length; i++) { list[i].unlocked = 0; list[i].unlockPctSum = 0; }
+        const carrier = list[0];
+        const need = Math.max(0, b.target - b.evalBefore);
+        const pctSum = sumPct(list);
+        carrier.carrier = true;
+        carrier.pctSum = pctSum;
+        carrier.poolAt = poolAt;
+        // ⚠️ 비율 매수는 **목표에서 자른다**(사용자 확정 2026-08) — "축소된 비중을 일정하게
+        //    유지하는 것이 목적"이라 목표를 넘겨 사면 다음 회차가 되팔아 매매만 늘어난다.
+        carrier.planned = pctSum === null ? need : Math.min(need, (poolAt * pctSum) / 100);
+        for (let i = 1; i < list.length; i++) {
+          list[i].pctSum = null; list[i].poolAt = 0; list[i].planned = 0;
+        }
+        if (pctSum === null) needTotal += need;
       }
-      let divRoomTotal = 0;
-      for (const b of buyPlans) {
-        const list = evsByAsset.get(b.p.asset.id);
-        if (list) divRoomTotal += list[0].unlocked;
-      }
-      divRoomTotal = tradeOnly ? Math.min(divRoomTotal, Math.max(0, cashDiv)) : Math.max(0, cashDiv);
 
       /**
        * 이 시그널 매수가 **지금 실제로 쓸 수 있는 재원**(+`extra`만큼 더 팔았다고 가정).
@@ -2858,7 +3008,7 @@ export function runBacktest(input: BtRunInput): BtResult {
        *       **매도만 남는 '나체 매도'**가 된다(같은 리뷰 확정).
        */
       const usableFor = (extra: number): number => {
-        const avail = tradeOnly ? Math.max(0, cashTrade) + divRoomTotal : Math.max(0, cash);
+        const avail = tradeOnly ? Math.max(0, cashTrade) : Math.max(0, cash);
         const withExtra = avail + extra;
         if (floorAmount <= 0) return withExtra;
         return Math.min(withExtra, Math.max(0, cash + extra - floorAmount));
@@ -2866,6 +3016,9 @@ export function runBacktest(input: BtRunInput): BtResult {
 
       /* ②-b 재조정 — 재원이 필요액에 못 미치면 **목표를 초과한 다른 보유 종목**을
        *      목표까지 팔아 재원을 만든다(= 사용자가 정한 비율/금액대로의 재조정).
+       * ⚠️ **'목표까지'(pct=null) 단계에만 적용한다**(사용자 확정 2026-08) — 비율 매수는
+       *    "가진 현금의 일부만 투입"이 규칙이라 재원 부족이라는 개념 자체가 없다. 비율 매수의
+       *    필요액까지 needTotal에 넣으면 팔 이유가 없는 종목을 팔게 된다.
        * ⚠️ 초과분이 없으면(전 종목이 함께 하락) 아무것도 팔지 않고 ②-c로 넘어간다 — 그것이
        *    "보유 종목 전체가 하락했고 예수금이 없으면 누적 분배금을 쓴다"는 사양의 경로다. */
       // ⚠️ `!== false`로 읽는다(normalizeDip과 같은 규약) — 화면은 정규화를 거치지 않은 로컬
@@ -2903,10 +3056,12 @@ export function runBacktest(input: BtRunInput): BtResult {
       }
 
       /* ②-c 실제 매수. */
-      // 필요액이 큰 종목부터 — 재원이 모자랄 때 큰 구멍부터 메운다.
-      const ordered = [...buyPlans].sort(
-        (x, y) => (y.target - y.evalBefore) - (x.target - x.evalBefore),
-      );
+      // 목표 매수액이 큰 종목부터 — 재원이 모자랄 때 큰 구멍부터 메운다.
+      const ordered = [...buyPlans].sort((x, y) => {
+        const px = evsByAsset.get(x.p.asset.id)?.[0].planned ?? 0;
+        const py = evsByAsset.get(y.p.asset.id)?.[0].planned ?? 0;
+        return py - px;
+      });
       for (const b of ordered) {
         const list = evsByAsset.get(b.p.asset.id);
         if (!list) continue;
@@ -2915,12 +3070,21 @@ export function runBacktest(input: BtRunInput): BtResult {
           if (!carrier.note) carrier.note = '목표 이상 — 살 것 없음';
           continue;
         }
-        const divCap = tradeOnly ? Math.min(carrier.unlocked, Math.max(0, cashDiv)) : Infinity;
-        const budget = tradeOnly ? Math.max(0, cashTrade) + divCap : cash;
+        if (!(carrier.planned > 0)) {
+          if (!carrier.note) carrier.note = '매수 비율 0% — 사지 않음';
+          continue;
+        }
+        // ⚠️ `tradeOnly`는 분배금 주머니를 **완전히 잠근다**(사용자 확정 2026-08:
+        //    "매매 예수금만 = 누적 매매현금 + 초기 예수금"). 옛 설계의 '단계 비율만큼 개방'은 폐기.
+        //    정기 리밸런싱 runPlan과 **문자 그대로 같은 두 줄**이라야 두 경로가 갈리지 않는다.
+        const divCap = tradeOnly ? 0 : Infinity;
+        const budget = tradeOnly ? Math.max(0, cashTrade) : cash;
         const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
-        const tr = adjustTo(b.p, date, b.target, false, { budget, divCap, floorCap });
+        // ⚠️ 매수 상한은 목표가 아니라 **planned**다 — 비율 매수는 목표에 못 미치게 사는 것이 정상이고,
+        //    목표를 그대로 넘기면 비율이 통째로 무시된다.
+        const tr = adjustTo(b.p, date, b.evalBefore + carrier.planned, false, { budget, divCap, floorCap });
         if (!tr) {
-          if (!carrier.note) carrier.note = tradeOnly && divCap <= 0 && cashTrade <= 0 ? '재원 없음' : '매수 수량 0';
+          if (!carrier.note) carrier.note = budget <= 0 ? '재원 없음' : '매수 수량 0';
           continue;
         }
         tr.signal = 'buy';
@@ -3401,9 +3565,14 @@ export function runBacktest(input: BtRunInput): BtResult {
   let bandSkipCount = 0;
   let bandSkipAmount = 0;
   let shortfallMonths = 0;
+  // 매수 대금 중 적립 분배금 주머니에서 꺼낸 총액 — 기말 현금 분해 항등식 2개의 연결 항.
+  // ⚠️ `drawByYm`이 아니라 **months를 돌아** 합산한다(둘은 같은 값이지만 표에 렌더되는 값과
+  //    합계가 같은 소스에서 나와야 화면과 카드가 갈리지 않는다).
+  let cumDivDrawn = 0;
   for (const m of months) {
     bandSkipCount += m.bandSkipCount;
     bandSkipAmount += m.bandSkipAmount;
+    cumDivDrawn += m.cashUsedDiv;
     if (m.shortfallCount > 0) shortfallMonths++;
   }
 
@@ -3434,7 +3603,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       cumDivTax,
       cumContribution: cumContrib,
       cumAnnualReview: cumAnnual,
-      finalCashTrade: cashTrade, finalCashDiv: cashDiv,
+      finalCashTrade: cashTrade, finalCashDiv: cashDiv, cumDivDrawn,
       maxDrawdown: maxDd,
       months: months.length,
       minCash, minCashDiv,
