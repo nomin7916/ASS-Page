@@ -270,10 +270,17 @@ const sigSizeText = (e, cfg) => {
  * ⚠️ `매매 예수금만` 모드에서는 적립 분배금 몫이 구조적으로 항상 0이라 그 항을 아예 빼고 적는다 —
  *    `+ 적립 분배금 ₩0`을 상시 렌더하면 "왜 0인가"를 매번 되묻게 만든다.
  */
-const sigFundText = (e, cfg) =>
-  (cfg?.buyFunding || 'both') === 'tradeOnly'
-    ? `매매 예수금 ${won(e.tradeAmount)} 투입 (적립 분배금 미사용)`
-    : `매매 예수금 ${won(e.fromTrade)} + 적립 분배금 ${won(e.used)} = ${won(e.tradeAmount)} 투입`;
+// ⚠️ 예비금 항이 빠지면 화면에 **틀린 등식**이 그대로 렌더된다
+//    (계약: fromTrade + fromReserve + used = tradeAmount). 0원인 항은 적지 않아 평소 문장은 종전과 같다.
+const sigFundText = (e, cfg) => {
+  const parts = [`매매 예수금 ${won(e.fromTrade)}`];
+  if (numOf(e.fromReserve) > 0.5) parts.push(`예비금 ${won(e.fromReserve)}`);
+  if (numOf(e.used) > 0.5) parts.push(`적립 분배금 ${won(e.used)}`);
+  if (parts.length === 1 && (cfg?.buyFunding || 'both') === 'tradeOnly') {
+    return `매매 예수금 ${won(e.tradeAmount)} 투입 (적립 분배금 미사용)`;
+  }
+  return `${parts.join(' + ')} = ${won(e.tradeAmount)} 투입`;
+};
 
 /** 체결 결과 한 줄. 미체결이면 사유를 그대로 보여 준다(왜 0원인지 알 수 없는 것이 옛 화면의 문제였다). */
 const sigOutcomeText = (e, cfg) => {
@@ -716,11 +723,12 @@ function SummaryCards({ result, compact = false }) {
       label: '최종 자산', value: won(s.finalTotal), cls: pnlCls(s.profit),
       formula: [
         [`기말 평가액 (${s.endDate} 종가 × 보유수량)`, won(s.finalEval)],
-        ['＋ 기말 예수금 (매매차익 + 초기 잔여 + 추가 예수금)', won(s.finalCashTrade)],
+        ['＋ 기말 예수금 (매매차익 + 초기 매수 잔여)', won(s.finalCashTrade)],
         ['＋ 적립 분배금 (지급받아 아직 안 쓴 몫)', won(s.finalCashDiv)],
+        ['＋ 예비금 (추가 예수금 중 아직 안 쓴 몫)', won(s.finalCashReserve)],
         ['＝ 최종 자산', won(s.finalTotal), true],
       ],
-      note: '마지막 영업일 종가로 전 종목을 같은 시점에 평가한 값 + 남은 현금입니다. 예수금과 적립 분배금은 따로 관리하지만 둘 다 현금이라 총자산에는 함께 들어갑니다. 아래 "기말 보유 현황" 표의 총자산과 같은 값입니다.',
+      note: '마지막 영업일 종가로 전 종목을 같은 시점에 평가한 값 + 남은 현금입니다. 예수금·적립 분배금·예비금은 따로 관리하지만 셋 다 현금이라 총자산에는 함께 들어갑니다. 아래 "기말 보유 현황" 표의 총자산과 같은 값입니다.',
     },
     {
       label: '총 손익', value: wonSigned(s.profit), cls: pnlCls(s.profit),
@@ -2723,7 +2731,26 @@ export default function BacktestPage({
                       onCommit={(v) => patchActive({ initialCapital: Math.max(0, v) })} />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className={LABEL}>추가 예수금 (선택)</span>
+                    <div className="flex items-center gap-1">
+                      <span className={LABEL}>추가 예수금 = 예비금 (선택)</span>
+                      <Hint width={380}>
+                        <p>
+                          <b className="text-gray-300">매매 시그널이 발동할 때만</b> 쓰는 돈입니다.
+                          초기 매수·정기 리밸런싱·종목 재편·분배금 재투자는 이 돈에 손대지 않습니다.
+                        </p>
+                        <p className="mt-1">
+                          목표 비중의 분모(초기 매수)도 <b className="text-gray-300">초기 투자금만</b> 씁니다 —
+                          "예수금은 목표비중에 포함되지 않는다"는 규칙입니다.
+                        </p>
+                        <p className="mt-1 text-amber-400/90">
+                          ※ 이 칸의 <b>뜻이 바뀌었습니다</b>. 예전에는 첫날부터 매수에 함께 쓰이는 돈이었습니다 —
+                          값을 넣어 둔 기존 시나리오는 결과가 달라집니다.
+                        </p>
+                        <p className="mt-1 text-gray-500">
+                          ※ 시그널 리밸런싱(⑤-b)이 꺼져 있으면 이 돈은 <b className="text-gray-400">한 번도 쓰이지 않습니다</b>.
+                        </p>
+                      </Hint>
+                    </div>
                     <NumInput value={active.extraCash} disabled={readOnly}
                       onCommit={(v) => patchActive({ extraCash: Math.max(0, v) })} />
                   </div>
@@ -4582,7 +4609,7 @@ export default function BacktestPage({
                         적립 분배금 <b className="text-emerald-300">{won(m.cashDivEnd)}</b>
                       </span>
                       <span className="text-gray-500"
-                        title={`월말 총자산 = 종목 합계 ${won(m.evalEnd)} + 예수금 ${won(m.cashTradeEnd)} + 적립 분배금 ${won(m.cashDivEnd)}`}>
+                        title={`월말 총자산 = 종목 합계 ${won(m.evalEnd)} + 예수금 ${won(m.cashTradeEnd)} + 적립 분배금 ${won(m.cashDivEnd)} + 예비금 ${won(m.cashReserveEnd)}`}>
                         월말 총자산 <b className="text-gray-200">{won(m.totalEnd)}</b>
                       </span>
                       {m.cumContribution > 0 && (

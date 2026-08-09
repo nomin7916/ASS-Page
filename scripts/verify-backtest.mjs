@@ -715,7 +715,7 @@ function runBacktest(input) {
     summary: { startDate: config.startDate, endDate: config.endDate, initialCapital: config.initialCapital,
       finalEval: 0, finalCash: 0, finalTotal: 0, profit: 0, profitRate: 0,
       cumTradeNet: 0, cumStructuralNet: 0, cumReinvestNet: 0, cumDivAccrued: 0, cumDivPaid: 0, cumDivTax: 0,
-      cumContribution: 0, cumAnnualReview: 0, finalCashTrade: 0, finalCashDiv: 0, cumDivDrawn: 0, maxDrawdown: 0, months: 0,
+      cumContribution: 0, cumAnnualReview: 0, finalCashTrade: 0, finalCashDiv: 0, finalCashReserve: 0, cumDivDrawn: 0, cumReserveDrawn: 0, maxDrawdown: 0, months: 0,
       minCash: { value: 0, date: '' }, minCashDiv: { value: 0, date: '' },
       divMonthlyAvg: 0, divMonthlyStdev: 0,
       bandSkipCount: 0, bandSkipAmount: 0, signalEvents: [], shortfallMonths: 0 },
@@ -764,13 +764,14 @@ function runBacktest(input) {
   const divTaxRate = Math.min(1, Math.max(0, config.divTaxPct / 100)) || 0;
 
   let cash = config.initialCapital + config.extraCash;
-  let cashTrade = cash;
+  let cashTrade = config.initialCapital;
+  let cashReserve = config.extraCash;
   let cashDiv = 0;
   const bucketLog = [];
   const logBuckets = (date) => {
     const last = bucketLog[bucketLog.length - 1];
-    if (last && last.date === date) { last.t = cashTrade; last.d = cashDiv; return; }
-    bucketLog.push({ date, t: cashTrade, d: cashDiv });
+    if (last && last.date === date) { last.t = cashTrade; last.d = cashDiv; last.r = cashReserve; return; }
+    bucketLog.push({ date, t: cashTrade, d: cashDiv, r: cashReserve });
   };
   const drawByYm = new Map();
   const divPocket = new Map();
@@ -783,42 +784,29 @@ function runBacktest(input) {
     if (keep <= 0) { divPocket.clear(); return; }
     for (const [k, v] of divPocket) divPocket.set(k, v * keep);
   };
-  let lastDraw = { fromTrade: 0, fromDiv: 0 };
-  const applyCash = (delta, date, prefer = 'trade', divCap = Infinity) => {
+  let lastDraw = { fromTrade: 0, fromDiv: 0, fromReserve: 0 };
+  const applyCash = (delta, date, prefer = 'trade', divCap = Infinity, reserveCap = 0) => {
     cash += delta;
-    if (delta >= 0) { cashTrade += delta; lastDraw = { fromTrade: 0, fromDiv: 0 }; logBuckets(date); return; }
+    if (delta >= 0) { cashTrade += delta; lastDraw = { fromTrade: 0, fromDiv: 0, fromReserve: 0 }; logBuckets(date); return; }
     let need = -delta;
     let fromTrade = 0;
     let fromDiv = 0;
+    let fromReserve = 0;
     const divRoom = Math.max(0, Math.min(cashDiv, divCap));
-    if (prefer === 'div') {
-      fromDiv = Math.max(0, Math.min(divRoom, need));
-      cashDiv -= fromDiv;
-      drainPocket(fromDiv);
-      need -= fromDiv;
-      if (need > 0) {
-        fromTrade = Math.max(0, Math.min(cashTrade, need));
-        cashTrade -= fromTrade;
-        need -= fromTrade;
-      }
-    } else {
-      fromTrade = Math.max(0, Math.min(cashTrade, need));
-      cashTrade -= fromTrade;
-      need -= fromTrade;
-      if (need > 0) {
-        fromDiv = Math.max(0, Math.min(divRoom, need));
-        cashDiv -= fromDiv;
-        drainPocket(fromDiv);
-        need -= fromDiv;
-      }
-    }
+    const reserveRoom = Math.max(0, Math.min(cashReserve, reserveCap));
+    const takeTrade = () => { const x = Math.max(0, Math.min(cashTrade, need)); if (x > 0) { fromTrade += x; cashTrade -= x; need -= x; } };
+    const takeDiv = () => { const x = Math.max(0, Math.min(divRoom, need)); if (x > 0) { fromDiv += x; cashDiv -= x; drainPocket(x); need -= x; } };
+    const takeReserve = () => { const x = Math.max(0, Math.min(reserveRoom, need)); if (x > 0) { fromReserve += x; cashReserve -= x; need -= x; } };
+    // ⚠️ 인출 순서는 매매 → 예비금 → 분배금. 재투자 경로(prefer==='div')는 예비금에 닿지 않는다.
+    if (prefer === 'div') { takeDiv(); takeTrade(); }
+    else { takeTrade(); takeReserve(); takeDiv(); }
     if (need > 0) cashTrade -= need;
-    lastDraw = { fromTrade: fromTrade + need, fromDiv };
+    lastDraw = { fromTrade: fromTrade + need, fromDiv, fromReserve };
     const ym = ymOf(date);
     if (ym) {
       const cur = drawByYm.get(ym);
-      if (cur) { cur.fromTrade += fromTrade + need; cur.fromDiv += fromDiv; }
-      else drawByYm.set(ym, { fromTrade: fromTrade + need, fromDiv });
+      if (cur) { cur.fromTrade += fromTrade + need; cur.fromDiv += fromDiv; cur.fromReserve += fromReserve; }
+      else drawByYm.set(ym, { fromTrade: fromTrade + need, fromDiv, fromReserve });
     }
     logBuckets(date);
   };
@@ -837,7 +825,7 @@ function runBacktest(input) {
   };
   const targetBaseAt = (date) => {
     const eq = totalEvalAt(date);
-    return eq > 0 ? eq : Math.max(0, cash);
+    return eq > 0 ? eq : Math.max(0, cash - cashReserve);
   };
   const activeTargetSum = (date, base) => {
     let s = 0;
@@ -872,10 +860,10 @@ function runBacktest(input) {
     firedAnchorSell.get(t.assetId)?.clear();
   };
   const deployableCash = (date) => {
-    let cap = config.buyFunding === 'tradeOnly' ? Math.max(0, cashTrade) : Math.max(0, cash);
+    let cap = config.buyFunding === 'tradeOnly' ? Math.max(0, cashTrade) : Math.max(0, cash - cashReserve);
     if (config.cashFloorPct > 0) {
       const fl = (activeTargetSum(date, targetBaseAt(date)) * config.cashFloorPct) / 100;
-      cap = Math.min(cap, Math.max(0, cash - fl));
+      cap = Math.min(cap, Math.max(0, cash - cashReserve - fl));
     }
     return cap;
   };
@@ -915,7 +903,7 @@ function runBacktest(input) {
     let note = '';
     if (qty < 0 && -qty > p.qty) { qty = -p.qty; note = '보유수량 한도'; }
     if (qty > 0) {
-      const rawBudget = opts?.budget ?? cash;
+      const rawBudget = opts?.budget ?? (cash - cashReserve);
       const floorCap = opts?.floorCap ?? Infinity;
       const budget = Math.min(rawBudget, floorCap);
       const limited = !config.allowNegativeCash || floorCap < Infinity;
@@ -935,7 +923,7 @@ function runBacktest(input) {
     if (p.qty + qty !== 0 && Math.abs(p.qty + qty) < QTY_EPS) qty = -p.qty;
     if (qty === 0) return null;
     const cashDelta = -qty * hit.price;
-    applyCash(cashDelta, date, 'trade', opts?.divCap ?? Infinity);
+    applyCash(cashDelta, date, 'trade', opts?.divCap ?? Infinity, opts?.reserveCap ?? 0);
     const qtyBefore = p.qty;
     p.qty += qty;
     return { date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name, price: hit.price,
@@ -950,8 +938,8 @@ function runBacktest(input) {
     const floorMode = config.rounding === 'exact' ? 'exact' : 'floor';
     let qty = roundQty(budget / hit.price, floorMode);
     if (!(qty > 0)) return null;
-    if (!config.allowNegativeCash && qty * hit.price > cash) {
-      qty = roundQty(cash / hit.price, floorMode);
+    if (!config.allowNegativeCash && qty * hit.price > cash - cashReserve) {
+      qty = roundQty((cash - cashReserve) / hit.price, floorMode);
       if (!(qty > 0)) return null;
     }
     const evalBefore = p.qty * hit.price;
@@ -1090,6 +1078,12 @@ function runBacktest(input) {
   if (config.dip.enabled && dipLevels.length === 0 && sellLevels.length === 0) {
     warnings.push('시그널 리밸런싱을 켰지만 매수·매도 단계가 하나도 없어 아무 일도 일어나지 않습니다.');
   }
+  if (config.dip.enabled && config.dip.extremeOn === false && !anchorOn) {
+    warnings.push('시그널 리밸런싱을 켰지만 고점/저점 축을 끄고 직전 체결가 축 단계도 비어 있어 아무 일도 일어나지 않습니다.');
+  }
+  if (config.extraCash > 0 && !config.dip.enabled) {
+    warnings.push(`추가 예수금 ${Math.round(config.extraCash).toLocaleString('ko-KR')}원은 **매매 시그널 발동 시에만** 쓰입니다 — ⑤-b 시그널 리밸런싱이 꺼져 있어 이 돈은 한 번도 쓰이지 않습니다(초기 매수·정기 리밸런싱은 초기 투자금만 씁니다).`);
+  }
 
   const steps = [];
   const anchorTrigsAt = (date) => {
@@ -1212,7 +1206,7 @@ function runBacktest(input) {
     if (!m) {
       m = { ym, trades: [], dividends: [], tradeNet: 0, structuralNet: 0, reinvestNet: 0, cumTradeNet: 0,
         divAccrued: 0, cumDivAccrued: 0, divPaid: 0, cumDivPaid: 0, divTax: 0, cumDivTax: 0, cumReinvestNet: 0,
-        cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, cashUsedTrade: 0, cashUsedDiv: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
+        cashDelta: 0, cashEnd: 0, cashTradeEnd: 0, cashDivEnd: 0, cashReserveEnd: 0, cashUsedTrade: 0, cashUsedDiv: 0, cashUsedReserve: 0, evalEnd: 0, totalEnd: 0, evalBeforeSum: 0,
         lastDate: '', holdings: [], contribution: null, cumContribution: 0,
         annualReview: null, cumAnnualReview: 0,
         bandSkipCount: 0, bandSkipAmount: 0, shortfallCount: 0 };
@@ -1293,7 +1287,7 @@ function runBacktest(input) {
           poolAt: 0, excessAt: 0, planned: 0,
           divPocketAt: pocket, cashTradeAt: cashTrade,
           used: 0, ref: t.ref, price: t.price,
-          tradeQty: 0, tradeAmount: 0, fromTrade: 0, reallocAmount: 0, note: '',
+          tradeQty: 0, tradeAmount: 0, fromTrade: 0, fromReserve: 0, reallocAmount: 0, note: '',
         };
         signalEvents.push(ev);
         return ev;
@@ -1389,7 +1383,7 @@ function runBacktest(input) {
         ? (activeTargetSum(date, base) * config.cashFloorPct) / 100
         : 0;
 
-      const poolAt = tradeOnly ? Math.max(0, cashTrade) : Math.max(0, cash);
+      const poolAt = tradeOnly ? Math.max(0, cashTrade) + Math.max(0, cashReserve) : Math.max(0, cash);
       let needTotal = 0;
       for (const b of buyPlans) {
         const list = evsByAsset.get(b.p.asset.id);
@@ -1408,7 +1402,7 @@ function runBacktest(input) {
       }
 
       const usableFor = (extra) => {
-        const avail = tradeOnly ? Math.max(0, cashTrade) : Math.max(0, cash);
+        const avail = tradeOnly ? Math.max(0, cashTrade) + Math.max(0, cashReserve) : Math.max(0, cash);
         const withExtra = avail + extra;
         if (floorAmount <= 0) return withExtra;
         return Math.min(withExtra, Math.max(0, cash + extra - floorAmount));
@@ -1461,9 +1455,11 @@ function runBacktest(input) {
           continue;
         }
         const divCap = tradeOnly ? 0 : Infinity;
-        const budget = tradeOnly ? Math.max(0, cashTrade) : cash;
+        // ⚠️ 예비금은 시그널 매수에서만 열린다(재원 사다리 ② 단계).
+        const reserveCap = Math.max(0, cashReserve);
+        const budget = (tradeOnly ? Math.max(0, cashTrade) : cash - cashReserve) + reserveCap;
         const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
-        const tr = adjustTo(b.p, date, b.evalBefore + carrier.planned, false, { budget, divCap, floorCap });
+        const tr = adjustTo(b.p, date, b.evalBefore + carrier.planned, false, { budget, divCap, floorCap, reserveCap });
         if (!tr) {
           if (!carrier.note) carrier.note = budget <= 0 ? '재원 없음' : '매수 수량 0';
           continue;
@@ -1475,6 +1471,7 @@ function runBacktest(input) {
         if (tr.qty > 0) {
           carrier.used += lastDraw.fromDiv;
           carrier.fromTrade += lastDraw.fromTrade;
+          carrier.fromReserve += lastDraw.fromReserve;
         }
         if (tr.note) carrier.note = tr.note;
       }
@@ -1528,7 +1525,7 @@ function runBacktest(input) {
       if (ar.mode !== 'pctOfSurplus' || !(ar.value > 0)) continue;
       if (config.targetMode === 'ratio') continue;
       const cashBefore = cash;
-      const surplus = Math.max(0, cashBefore - Math.max(0, ar.reserve));
+      const surplus = Math.max(0, cashBefore - cashReserve - Math.max(0, ar.reserve));
       const requested = (surplus * ar.value) / 100;
       let amount = Math.min(requested, surplus);
       let note = amount < requested ? '예약금 한도' : '';
@@ -1644,7 +1641,7 @@ function runBacktest(input) {
       const runPlan = (pl) => {
         const id = pl.p.asset.id;
         if (banded.has(id)) return;
-        const budget = tradeOnly ? Math.max(0, cashTrade) : cash;
+        const budget = tradeOnly ? Math.max(0, cashTrade) : cash - cashReserve;
         const divCap = tradeOnly ? 0 : Infinity;
         const floorCap = floorAmount > 0 ? Math.max(0, cash - floorAmount) : Infinity;
         const t = adjustTo(pl.p, s.rebalDate, pl.target, false, { budget, divCap, floorCap });
@@ -1696,15 +1693,17 @@ function runBacktest(input) {
     }
     for (const h of hold) h.weight = ev > 0 ? (h.evalAmount / ev) * 100 : 0;
     {
-      let t = config.initialCapital + config.extraCash;
+      let t = config.initialCapital;
       let d = 0;
-      for (const bkt of bucketLog) { if (bkt.date > lastBiz) break; t = bkt.t; d = bkt.d; }
-      m.cashTradeEnd = t; m.cashDivEnd = d;
+      let rr = config.extraCash;
+      for (const bkt of bucketLog) { if (bkt.date > lastBiz) break; t = bkt.t; d = bkt.d; rr = bkt.r; }
+      m.cashTradeEnd = t; m.cashDivEnd = d; m.cashReserveEnd = rr;
     }
     {
       const dr = drawByYm.get(m.ym);
       m.cashUsedTrade = dr ? dr.fromTrade : 0;
       m.cashUsedDiv = dr ? dr.fromDiv : 0;
+      m.cashUsedReserve = dr ? dr.fromReserve : 0;
     }
     m.lastDate = lastBiz;
     m.holdings = hold;
@@ -1769,11 +1768,12 @@ function runBacktest(input) {
       divMonthlyStdev = Math.sqrt(vals.reduce((s, x) => s + (x - divMonthlyAvg) * (x - divMonthlyAvg), 0) / vals.length);
     }
   }
-  let bandSkipCount = 0, bandSkipAmount = 0, shortfallMonths = 0, cumDivDrawn = 0;
+  let bandSkipCount = 0, bandSkipAmount = 0, shortfallMonths = 0, cumDivDrawn = 0, cumReserveDrawn = 0;
   for (const m of months) {
     bandSkipCount += m.bandSkipCount;
     bandSkipAmount += m.bandSkipAmount;
     cumDivDrawn += m.cashUsedDiv;
+    cumReserveDrawn += m.cashUsedReserve;
     if (m.shortfallCount > 0) shortfallMonths++;
   }
 
@@ -1785,7 +1785,7 @@ function runBacktest(input) {
       profitRate: invested > 0 ? ((finalTotal - invested) / invested) * 100 : 0,
       cumTradeNet: cumTrade, cumStructuralNet: cumStructural, cumReinvestNet: cumReinvest,
       cumDivAccrued, cumDivPaid, cumDivTax, cumContribution: cumContrib, cumAnnualReview: cumAnnual,
-      finalCashTrade: cashTrade, finalCashDiv: cashDiv, cumDivDrawn,
+      finalCashTrade: cashTrade, finalCashDiv: cashDiv, finalCashReserve: cashReserve, cumDivDrawn, cumReserveDrawn,
       maxDrawdown: maxDd, months: months.length,
       minCash, minCashDiv, divMonthlyAvg, divMonthlyStdev,
       bandSkipCount, bandSkipAmount, signalEvents, shortfallMonths },
@@ -2464,6 +2464,116 @@ console.log('\n── 파트④-h 앵커 시그널 축(직전 체결 종가 기�
       && backtestSettingsFingerprint(fpA) !== backtestSettingsFingerprint(fpB)
       && backtestSettingsFingerprint(fpA) !== backtestSettingsFingerprint(fpC)
       && backtestSettingsFingerprint(fpA) !== backtestSettingsFingerprint(fpD));
+}
+
+console.log('\n── 파트④-i 예비금 주머니(추가 예수금 = 시그널 전용) ──');
+
+{
+  // ⚠️ 이 파트가 생기기 전까지 전 픽스처가 `extraCash: 0`이라 예비금 로직이 스위트에
+  //    **원리적으로 보이지 않았다**. 픽스처를 먼저 세우고 변이로 검출을 확인한 뒤 구현했다.
+  const CODE = 'RSV';
+  const BD = businessDaysBetween('2026-01-02', '2026-03-31', HOL);
+  const flat = {}; BD.forEach((d) => { flat[d] = 10000; });
+  const drop = {}; BD.forEach((d, i) => { drop[d] = i < 30 ? 10000 : 8000; });
+
+  const mkR = (over = {}, dip = {}) => makeBtConfig({
+    id: 'rsv', name: '예비금', startDate: '2026-01-02', endDate: '2026-03-31',
+    initialCapital: 10000000, extraCash: 5000000,
+    targetMode: 'amount', rounding: 'floor', policy: 'none', regularOn: false,
+    assets: [{ id: 'r1', code: CODE, name: '알에스브이', payCycle: 'eom', targetAmount: 12000000 }],
+    dip: { enabled: false, extremeOn: true, levels: [], sellLevels: [], reallocate: true, ...dip },
+    ...over,
+  });
+  const runR = (prices, over = {}, dip = {}) =>
+    runBacktest({ config: mkR(over, dip), prices: { [CODE]: prices }, dividends: {}, holidays: KR26 });
+
+  // ① 시그널이 없으면 예비금은 한 푼도 쓰이지 않는다.
+  const rIdle = runR(flat);
+  eq('#370 시그널이 없으면 예비금은 그대로 남는다', rIdle.summary.finalCashReserve, 5000000);
+  eq('#370b 초기 매수 잔돈은 매매 주머니 몫이다(초기 투자금 10,000,000 전액 매수)',
+    rIdle.summary.finalCashTrade, 0);
+
+  // ② 주머니 3분할 항등식 — 어느 것 하나라도 어긋나면 화면 소계가 예수금과 안 맞는다.
+  ok('#371 ⚠️ 기말 항등식: 매매 + 분배금 + 예비금 = 기말 예수금',
+    Math.abs((rIdle.summary.finalCashTrade + rIdle.summary.finalCashDiv
+      + rIdle.summary.finalCashReserve) - rIdle.summary.finalCash) < 1e-6);
+  const monthIdOk = (r) => r.months.every((m) => Math.abs((m.cashTradeEnd + m.cashDivEnd + m.cashReserveEnd) - m.cashEnd) < 1e-6);
+  ok('#371b ⚠️ 월말 항등식: cashTradeEnd + cashDivEnd + cashReserveEnd = cashEnd',
+    monthIdOk(rIdle));
+
+  // ③ 예비금은 **시그널 발동 시에만** 쓰인다.
+  const rSig = runBacktest({
+    config: mkR({}, { enabled: true, levels: [{ drop: 10, buyPct: null }] }),
+    prices: { [CODE]: drop }, dividends: { [CODE]: { '2026-01': 300 } }, holidays: KR26,
+  });
+  ok('#371c ⚠️ 예비금이 실제로 줄어드는 실행에서도 월말 항등식이 성립한다', monthIdOk(rSig));
+  ok('#372 ⚠️ 시그널이 발동하면 예비금에서 매수 대금이 나간다',
+    rSig.summary.finalCashReserve < 5000000
+      && rSig.summary.signalEvents.some((e) => e.fromReserve > 0));
+
+  // ④ 정기 리밸런싱은 예비금을 건드리지 못한다(시그널 없이 목표만 큰 구성).
+  const rReg = runR(flat, { policy: 'allEom', regularOn: true });
+  eq('#373 ⚠️ 정기 리밸런싱은 예비금을 쓰지 않는다', rReg.summary.finalCashReserve, 5000000);
+  // ⚠️ 잔액만 보면 예산 변이가 안 잡힌다 — 예비금을 못 쓰면 **매수 자체가 일어나지 않아야** 한다
+  //    (목표 12,000,000 > 초기 투자금 10,000,000이라 정기 회차마다 매수를 시도한다).
+  ok('#373b ⚠️ 예비금을 못 쓰므로 정기 회차에서 매수가 한 건도 일어나지 않는다',
+    rReg.months.every((m) => m.trades.length === 0) && rReg.summary.finalCashTrade >= 0);
+
+  // ⑤ allowNegativeCash:true여도 예비금은 시그널 외 경로로 줄지 않는다.
+  //    (adjustTo의 `limited`가 false라 예산 검사가 꺼지므로, 보호는 **인출 한도**가 담당한다.)
+  const rNeg = runR(flat, { allowNegativeCash: true, policy: 'allEom', regularOn: true });
+  eq('#374 ⚠️ allowNegativeCash에서도 예비금은 시그널 외 경로로 줄지 않는다',
+    rNeg.summary.finalCashReserve, 5000000);
+
+  // ⑥ 기말 예수금 분해 항등식(#125)은 **항이 늘지 않는다** — A는 cash 총액을 바꾸지 않고 분해만 한다.
+  for (const [nm, r] of [['유휴', rIdle], ['시그널', rSig], ['정기', rReg]]) {
+    ok(`#375 ⚠️ 기말 분해 항등식이 종전 그대로 성립한다(${nm})`,
+      Math.abs(r.summary.finalCash - (r.initialCashAfter + r.summary.cumTradeNet
+        + r.summary.cumStructuralNet + r.summary.cumReinvestNet + r.summary.cumDivPaid)) < 1e-6);
+  }
+
+  // ⑦ 매수 대금 출처 3항 합계 = 그 달 총 매수 대금.
+  ok('#376 ⚠️ cashUsedTrade + cashUsedDiv + cashUsedReserve = 그 달 총 매수 대금',
+    rSig.months.every((m) => {
+      // ⚠️ 초기 매수는 m.trades가 아니라 result.initialTrades에 담기지만 drawByYm에는 잡힌다.
+      const init = m.ym === ymOf(rSig.initialDate)
+        ? rSig.initialTrades.filter((t) => t.cashDelta < 0).reduce((s, t) => s - t.cashDelta, 0) : 0;
+      const buys = init + m.trades.filter((t) => t.cashDelta < 0).reduce((s, t) => s - t.cashDelta, 0);
+      return Math.abs((m.cashUsedTrade + m.cashUsedDiv + m.cashUsedReserve) - buys) < 1e-6;
+    }));
+
+  // ⑧ ⚠️ 하위호환 — extraCash === 0이면 결과가 1바이트도 달라지지 않는다.
+  deep('#377 ⚠️ extraCash가 0이면 PDF 시나리오 결과가 완전히 동일하다',
+    runPdf(), runBacktest({ config: mkPdfConfig({ extraCash: 0 }), prices: PRICES, dividends: DIVS, holidays: KR26 }));
+
+  // ⑨ 예비금이 있는데 시그널이 꺼져 있으면 그 돈은 영영 안 쓰인다 → 반드시 알린다.
+  // ⚠️ 종목명이 경고 문구에 섞여 들어가면 공허한 단언이 된다(실제로 '예비금종목'이라는 이름
+  //    때문에 분배금 경고가 매칭돼 통과했다). 문구의 **고유 구절**로 단언한다.
+  ok('#378 ⚠️ 예비금이 있는데 시그널이 꺼져 있으면 경고한다(쓰이지 않는 돈)',
+    rIdle.warnings.some((w) => w.includes('매매 시그널 발동 시에만')));
+
+  // ⑨-b ⚠️ 종목 재편(이벤트)도 예비금을 쓰지 못한다 — 이벤트는 adjustTo에 opts를 넘기지 않으므로
+  //      **기본 예산(cash − cashReserve)** 이 그 경로의 유일한 보호막이다(#228이 그 줄을 못 박는다).
+  const rEvent = runR(flat, {
+    events: [{
+      id: 'e9', date: BD[20], label: '목표 상향', funding: 'reallocate',
+      addAssets: [], removeAssets: [], targets: [{ assetId: 'r1', amount: 14000000 }],
+    }],
+  });
+  ok('#380 ⚠️ 종목 재편(이벤트)도 예비금을 쓰지 못한다(기본 예산에서 제외)',
+    rEvent.summary.finalCashReserve === 5000000 && rEvent.summary.finalCashTrade >= 0);
+
+  // ⑩ ⚠️ 인출 순서 — **매매 → 예비금 → 분배금**. 예비금을 분배금 뒤에 두면 buyFunding:'both'
+  //    (기본, divCap=Infinity)에서 분배금이 먼저 소진되고, drainPocket이 divPocket을 비워
+  //    이후 'source' 배분 가중치까지 소실된다(설계 검증 blocker).
+  //    ⚠️ 이 단언은 **분배금 잔액이 있는 시점**에 시그널이 발동해야 판별력이 있다 —
+  //       앞선 픽스처는 cashDiv가 0이라 순서를 구분하지 못한다.
+  const rOrder = rSig;
+  const evOrder = rOrder.summary.signalEvents.filter((e) => e.kind === 'buy' && e.carrier);
+  ok('#379 ⚠️ 시그널 매수는 분배금보다 **예비금을 먼저** 쓴다(분배금 주머니 보존)',
+    rOrder.summary.cumDivPaid > 0
+      && evOrder.some((e) => e.fromReserve > 0)
+      && evOrder.every((e) => e.used === 0));
 }
 
 console.log('\n── 파트④-g 적대적 리뷰 확정 결함 회귀 ──');
@@ -3368,19 +3478,23 @@ console.log('\n── 파트④-j 평가금 고정 보조 규칙 (#157~#199) ─
      *    두 식을 더하면 종전 #110 항등식이 그대로 복원된다(그래서 #304가 계속 성립한다).
      * ===================================================================== */
     ok('#304b ⚠️ 기말 현금 분해 항등식 2개(예수금 / 적립 분배금)가 각각 성립한다', (() => {
-      const chk = (r) => {
+      // ⚠️ 예비금 주머니가 생기면서 분해가 **3개**가 됐다. cashTrade의 시드가 initialCapital로
+      //    줄었고(−extraCash), 예비금이 대신 낸 매수 대금만큼 cashTrade가 덜 나갔다(+cumReserveDrawn).
+      const chk = (r, extra = 0) => {
         const s = r.summary;
-        return s.cumDivDrawn >= -1e-9
+        return s.cumDivDrawn >= -1e-9 && s.cumReserveDrawn >= -1e-9
           && Math.abs(s.finalCashTrade
-            - (r.initialCashAfter + s.cumTradeNet + s.cumStructuralNet + s.cumReinvestNet + s.cumDivDrawn)) < 1e-6
-          && Math.abs(s.finalCashDiv - (s.cumDivPaid - s.cumDivDrawn)) < 1e-6;
+            - ((r.initialCashAfter - extra) + s.cumTradeNet + s.cumStructuralNet + s.cumReinvestNet
+               + s.cumDivDrawn + s.cumReserveDrawn)) < 1e-6
+          && Math.abs(s.finalCashDiv - (s.cumDivPaid - s.cumDivDrawn)) < 1e-6
+          && Math.abs(s.finalCashReserve - (extra - s.cumReserveDrawn)) < 1e-6;
       };
       return chk(D)
         && chk(runS({}, WAVE))
         && chk(runS({ divReinvest: 'eom' }, WAVE))
         && chk(runS({ divTaxPct: 15.4 }, WAVE))
         && chk(runS({ buyFunding: 'tradeOnly' }, WAVE))
-        && chk(runS({ extraCash: 30000000 }, WAVE));
+        && chk(runS({ extraCash: 30000000 }, WAVE), 30000000);
     })());
     // ⚠️ 이 픽스처가 없으면 cumDivDrawn이 항상 0이라 위 항등식이 **자명하게** 성립해
     //    연결 항을 지워도 통과하는 죽은 단언이 된다(변이 테스트로 확인할 것).
@@ -4399,6 +4513,15 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     /const anchor = d\.anchorLevels\.length > 0 \|\| d\.anchorSellLevels\.length > 0;/.test(page)
       && /직전체결 매수 \$\{dip\.anchorLevels\.length\}단계/.test(page));
 
+  // ⚠️ 화면이 2주머니 전제로 남아 있으면 카드 소계가 예수금과 안 맞고 시그널 문장이 틀린 등식을 찍는다.
+  ok('#381 ⚠️ 화면의 예수금 분해가 3주머니다(예비금 항 누락 시 소계·등식이 어긋난다)',
+    /＋ 예비금 \(추가 예수금 중 아직 안 쓴 몫\)/.test(page)
+      && /won\(s\.finalCashReserve\)/.test(page)
+      && /예비금 \$\{won\(e\.fromReserve\)\}/.test(page)
+      && /won\(m\.cashReserveEnd\)/.test(page));
+  ok('#381b ⚠️ 추가 예수금 칸이 의미 변경을 고지한다(사용자 행동 없이 결과가 달라지는 유일한 통로)',
+    /추가 예수금 = 예비금/.test(page) && /뜻이 바뀌었습니다/.test(page));
+
   const bt2 = strip(read('src/backtest.ts'));
   // ⚠️ 전역 지정일이 두 continue보다 **앞**에서 만들어지는지는 미러로 표현할 수 없다(미러도 같이
   //    틀리면 통과한다) — src를 직접 읽어 위치 관계를 단언한다.
@@ -4468,10 +4591,13 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
   //    사용자 행동 없이 달라진다.
   ok('#227 ⚠️ applyCash의 divCap 기본값은 Infinity다(기존 호출부가 분배금 주머니를 종전대로 쓴다)',
     /applyCash\s*=\s*\([\s\S]{0,200}?divCap\s*:?\s*(number)?\s*=\s*Infinity/.test(bt2));
-  ok('#228 ⚠️ adjustTo의 매수 한도 기본값은 전체 예수금(cash)·바닥선 없음(Infinity)이다',
-    /const rawBudget = opts\?\.budget \?\? cash;/.test(bt2)
+  // ⚠️ 예비금 보호는 **예산이 아니라 인출 한도(reserveCap 기본 0)** 가 담당한다 —
+  //    allowNegativeCash면 limited가 false라 예산 컷이 통째로 꺼지지만 예비금은 1원도 줄지 않는다.
+  ok('#228 ⚠️ adjustTo 기본 한도 = 예비금을 뺀 예수금 · 예비금 인출 기본 0(시그널 매수만 연다)',
+    /const rawBudget = opts\?\.budget \?\? \(cash - cashReserve\);/.test(bt2)
       && /const floorCap = opts\?\.floorCap \?\? Infinity;/.test(bt2)
-      && /applyCash\(cashDelta, date, 'trade', opts\?\.divCap \?\? Infinity\)/.test(bt2));
+      && /applyCash\(cashDelta, date, 'trade', opts\?\.divCap \?\? Infinity, opts\?\.reserveCap \?\? 0\)/.test(bt2)
+      && /reserveCap: number = 0,/.test(bt2));
   ok('#229 ⚠️ 현금 바닥선은 allowNegativeCash보다 우선한다(바닥선이 있으면 음수 진입 불가)',
     /const limited = !config\.allowNegativeCash \|\| floorCap < Infinity;/.test(bt2));
   ok('#230 ⚠️ 원천징수는 지급(pay) 스텝에서만 떼고 divAccrued는 세전 그대로 둔다',
@@ -4524,11 +4650,15 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     /config\.dip\.reallocate !== false/.test(bt2)
       && /tr\.signal = 'realloc'/.test(bt2)
       && (bt2.match(/const divCap = tradeOnly \? 0 : Infinity;/g) || []).length === 2
-      && (bt2.match(/const budget = tradeOnly \? Math\.max\(0, cashTrade\) : cash;/g) || []).length === 2
+      // 재원 모드(buyFunding) 규칙은 두 경로가 같고, **예비금만 시그널에서 추가로 열린다**.
+      && /const budget = tradeOnly \? Math\.max\(0, cashTrade\) : cash - cashReserve;/.test(bt2)
+      && /const budget = \(tradeOnly \? Math\.max\(0, cashTrade\) : cash - cashReserve\) \+ reserveCap;/.test(bt2)
+      && /const reserveCap = Math\.max\(0, cashReserve\);/.test(bt2)
       // 재조정 필요액은 '목표까지'(pctSum === null) 종목만 센다 — 비율 매수는 재원 부족 개념이 없다.
       && /if \(pctSum === null\) needTotal \+= need;/.test(bt2)
-      // 재원 스냅샷은 매도 시그널 처리 뒤·재조정 앞에서 1회
-      && /const poolAt = tradeOnly \? Math\.max\(0, cashTrade\) : Math\.max\(0, cash\);/.test(bt2));
+      // ⚠️ 재원 스냅샷과 재조정 발동 판정은 **같은 정의**를 써야 '나체 매도'가 막힌다.
+      && /const poolAt = tradeOnly \? Math\.max\(0, cashTrade\) \+ Math\.max\(0, cashReserve\) : Math\.max\(0, cash\);/.test(bt2)
+      && /const avail = tradeOnly \? Math\.max\(0, cashTrade\) \+ Math\.max\(0, cashReserve\) : Math\.max\(0, cash\);/.test(bt2));
   ok('#233c ⚠️ 시그널 사전탐지도 정규화한 단계 목록으로 돈다(매도 단계 포함)',
     /const sellLevels = config\.dip\.enabled \? normalizeSellLevels\(config\.dip\.sellLevels\) : \[\];/.test(bt2)
       && /for \(let i = 0; i < sellLevels\.length; i\+\+\)/.test(bt2)
@@ -4753,7 +4883,8 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /tags\.length > 3 \?/.test(page)
       && /badge=\{strategyBadge\(active\)\}/.test(page));
   ok('#234 ⚠️ 연간 증액은 목표 금액 모드 전용이고 예약금을 surplus 상한으로 보호한다',
-    /const surplus = Math\.max\(0, cashBefore - Math\.max\(0, ar\.reserve\)\);/.test(bt2)
+    // ⚠️ 예비금과 예약금은 성격이 다르지만 둘 다 이 증액의 재원이 아니다 — 함께 뺀다.
+    /const surplus = Math\.max\(0, cashBefore - cashReserve - Math\.max\(0, ar\.reserve\)\);/.test(bt2)
       && /let amount = Math\.min\(requested, surplus\);/.test(bt2)
       // contrib과 같은 조기 반환(비중 모드) 규약을 공유한다
       && (bt2.match(/if \(config\.targetMode === 'ratio'\) continue;/g) || []).length >= 2);
@@ -4786,7 +4917,9 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && !/['"]totalWithDiv['"]/.test(bt2)
       // 비중 분모는 targetBaseAt(= 평가액 합계, 보유 0이면 현금 부트스트랩)로만 산출한다
       && /const base = targetBaseAt\(s\.rebalDate\);/.test(bt2)
-      && /return eq > 0 \? eq : Math\.max\(0, cash\);/.test(bt2));
+      // ⚠️ 부트스트랩 현금에서 **예비금을 뺀다**(시그널 전용 재원이라 비중 분모가 아니다).
+      //    이 변경을 '분모 선택지 부활'로 오독하지 말 것 — 분모는 여전히 targetBaseAt 하나뿐이다.
+      && /return eq > 0 \? eq : Math\.max\(0, cash - cashReserve\);/.test(bt2));
   ok('#152 ⚠️ 화면에도 분모 드롭다운이 없다(라벨·select·option 전부 제거)',
     !/RATIO_BASE_LABEL/.test(page) && !/ratioBase/.test(page)
       && !/비중을 곱할 기준/.test(page)
