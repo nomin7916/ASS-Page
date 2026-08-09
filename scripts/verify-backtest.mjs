@@ -216,6 +216,7 @@ function normalizeDivOverride(raw) {
 const REBAL_MODES = ['follow', 'mid', 'eom', 'day', 'dates', 'none'];
 const CONTRIB_MODES = ['none', 'pctOfCash', 'amount'];
 const MAX_BT_CONTRIB_OVERRIDES = 120, MAX_BT_REBAL_DATES = 120, MAX_BT_DIP_LEVELS = 5, MAX_BT_SELL_LEVELS = 5;
+const MAX_BT_ANCHOR_LEVELS = 5;
 const MAX_BT_NOTES = 12, MAX_BT_NOTE_LEN = 8000, MAX_BT_NOTE_TITLE_LEN = 80, MAX_BT_VERDICT_LEN = 200;
 const DEFAULT_DIP_LEVELS = [{ drop: 10, buyPct: 34 }, { drop: 20, buyPct: 33 }, { drop: 30, buyPct: 33 }];
 const DEFAULT_SELL_LEVELS = [{ rise: 10, sellPct: null }, { rise: 20, sellPct: null }];
@@ -259,12 +260,25 @@ function normalizeSellLevels(raw) {
   }
   return out;
 }
+/** 앵커 축 단계 정규화 — 빈 배열 보존(기본값 복원 금지) + 오름차순 + 중복 제거 + 상한. */
+function normalizeAnchorLevels(raw) {
+  const arr = asArr(raw).map((l) => ({ move: asNum(l?.move, NaN) }))
+    .filter((l) => Number.isFinite(l.move) && l.move > 0 && l.move <= 1000);
+  arr.sort((a, b) => a.move - b.move);
+  const seen = new Set(); const out = [];
+  for (const l of arr) { if (seen.has(l.move)) continue; seen.add(l.move); out.push(l); if (out.length >= MAX_BT_ANCHOR_LEVELS) break; }
+  return out;
+}
 function normalizeDip(raw) {
   return {
     enabled: !!raw?.enabled,
     levels: normalizeDipLevels(raw?.levels),
     sellLevels: normalizeSellLevels(raw?.sellLevels),
     reallocate: raw?.reallocate !== false,
+    extremeOn: raw?.extremeOn !== false,
+    anchorLevels: normalizeAnchorLevels(raw?.anchorLevels),
+    anchorSellLevels: normalizeAnchorLevels(raw?.anchorSellLevels),
+    anchorSource: raw?.anchorSource === 'lastRebal' ? 'lastRebal' : 'lastFill',
   };
 }
 function normalizeAnnualReview(raw) {
@@ -440,6 +454,9 @@ function backtestSettingsFingerprint(cfg) {
           asArr(s.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
           asArr(s.dip?.sellLevels).map((l) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
           s.dip?.reallocate === false ? 0 : 1,
+          s.dip?.extremeOn === false ? 0 : 1, s.dip?.anchorSource ?? '',
+          asArr(s.dip?.anchorLevels).map((l) => `${l?.move ?? ''}`).join(','),
+          asArr(s.dip?.anchorSellLevels).map((l) => `${l?.move ?? ''}`).join(','),
           s.annualReview?.mode ?? '', s.annualReview?.value ?? 0, s.annualReview?.reserve ?? 0,
           s.annualReview?.everyMonths ?? 0, s.annualReview?.split ?? ''],
       c: asArr(s.contribOverrides).map((o) => [o?.ym ?? '', o?.mode ?? '', o?.value ?? 0]),
@@ -477,6 +494,9 @@ function backtestFingerprint(scenarios) {
           asArr(s?.dip?.levels).map((l) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
           asArr(s?.dip?.sellLevels).map((l) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
           s?.dip?.reallocate === false ? 0 : 1,
+          s?.dip?.extremeOn === false ? 0 : 1, s?.dip?.anchorSource ?? '',
+          asArr(s?.dip?.anchorLevels).map((l) => `${l?.move ?? ''}`).join(','),
+          asArr(s?.dip?.anchorSellLevels).map((l) => `${l?.move ?? ''}`).join(','),
           s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
           s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? '',
           s?.review?.rating ?? '', s?.review?.verdict ?? ''],
@@ -830,6 +850,27 @@ function runBacktest(input) {
   };
   // 시그널 리밸런싱은 발동일 종가로 즉시 체결하므로 회차를 넘겨 들고 다니는 상태가 없다.
   const signalEvents = [];
+  const anchorLevels = config.dip.enabled ? normalizeAnchorLevels(config.dip.anchorLevels) : [];
+  const anchorSellLevels = config.dip.enabled ? normalizeAnchorLevels(config.dip.anchorSellLevels) : [];
+  const anchorOn = anchorLevels.length > 0 || anchorSellLevels.length > 0;
+  const anchorSrc = config.dip.anchorSource === 'lastRebal' ? 'lastRebal' : 'lastFill';
+  const anchorPx = new Map();
+  const anchorDateOf = new Map();
+  const firedAnchorBuy = new Map();
+  const firedAnchorSell = new Map();
+  // ⚠️ 재투자·재조정·구조변경은 앵커를 옮기지 않는다(사용자가 지명한 사건은 리밸런싱·시그널 둘뿐).
+  const touchAnchor = (t) => {
+    if (!anchorOn) return;
+    if (t.reinvest || t.structural) return;
+    if (t.signal === 'realloc') return;
+    if (anchorSrc === 'lastRebal' && (t.signal === 'buy' || t.signal === 'sell')) return;
+    if (!(t.price > 0)) return;
+    if (anchorPx.get(t.assetId) === t.price) return;
+    anchorPx.set(t.assetId, t.price);
+    anchorDateOf.set(t.assetId, t.date);
+    firedAnchorBuy.get(t.assetId)?.clear();
+    firedAnchorSell.get(t.assetId)?.clear();
+  };
   const deployableCash = (date) => {
     let cap = config.buyFunding === 'tradeOnly' ? Math.max(0, cashTrade) : Math.max(0, cash);
     if (config.cashFloorPct > 0) {
@@ -964,7 +1005,7 @@ function runBacktest(input) {
     for (const p of positions) {
       if (!p.active) continue;
       const t = adjustTo(p, startBiz, targetOf(p, config, base), false, { budget: Math.max(0, initRemain) });
-      if (t) { initialTrades.push(t); initRemain += t.cashDelta; }
+      if (t) { touchAnchor(t); initialTrades.push(t); initRemain += t.cashDelta; }
     }
   }
   const initialCashAfter = cash;
@@ -1003,7 +1044,7 @@ function runBacktest(input) {
   const sigTrigByDate = new Map();
   const dipLevels = config.dip.enabled ? normalizeDipLevels(config.dip.levels) : [];
   const sellLevels = config.dip.enabled ? normalizeSellLevels(config.dip.sellLevels) : [];
-  if (dipLevels.length > 0 || sellLevels.length > 0) {
+  if (config.dip.extremeOn !== false && (dipLevels.length > 0 || sellLevels.length > 0)) {
     for (const p of positions) {
       const series = prices[p.asset.code];
       if (!series) continue;
@@ -1030,7 +1071,7 @@ function runBacktest(input) {
             if (firedBuy.has(i)) continue;
             if (dropPct < lv.drop) continue;
             firedBuy.add(i);
-            push({ assetId: p.asset.id, kind: 'buy', step: i + 1, level: lv.drop, pct: lv.buyPct, ref: peak, price: px });
+            push({ assetId: p.asset.id, kind: 'buy', step: i + 1, level: lv.drop, pct: lv.buyPct, ref: peak, price: px, axis: 'extreme', anchorDate: '' });
           }
         }
         if (!newTrough && trough > 0 && Number.isFinite(trough)) {
@@ -1040,7 +1081,7 @@ function runBacktest(input) {
             if (firedSell.has(i)) continue;
             if (risePct < lv.rise) continue;
             firedSell.add(i);
-            push({ assetId: p.asset.id, kind: 'sell', step: i + 1, level: lv.rise, pct: lv.sellPct, ref: trough, price: px });
+            push({ assetId: p.asset.id, kind: 'sell', step: i + 1, level: lv.rise, pct: lv.sellPct, ref: trough, price: px, axis: 'extreme', anchorDate: '' });
           }
         }
       }
@@ -1051,7 +1092,40 @@ function runBacktest(input) {
   }
 
   const steps = [];
-  for (const [d, trigs] of sigTrigByDate) steps.push({ date: d, kind: 'signal', trigs });
+  const anchorTrigsAt = (date) => {
+    if (!anchorOn) return [];
+    const out = [];
+    for (const p of positions) {
+      if (p.removed) continue;
+      if (date < p.effectiveStart || date > p.effectiveEnd) continue;
+      const anchor = anchorPx.get(p.asset.id);
+      if (!(anchor > 0)) continue;
+      const hit = priceAt(prices[p.asset.code], date);
+      if (hit.missing || hit.price <= 0) continue;
+      const chgPct = ((hit.price - anchor) / anchor) * 100;
+      const aDate = anchorDateOf.get(p.asset.id) ?? '';
+      const fire = (levels, mag, kind, firedMap) => {
+        if (!levels.length || !(mag > 0)) return;
+        let deepest = -1;
+        for (let i = 0; i < levels.length; i++) if (mag >= levels[i].move) deepest = i;
+        if (deepest < 0) return;
+        let fired = firedMap.get(p.asset.id);
+        if (!fired) { fired = new Set(); firedMap.set(p.asset.id, fired); }
+        if (fired.has(deepest)) return;
+        for (let i = 0; i <= deepest; i++) fired.add(i);
+        out.push({ assetId: p.asset.id, kind, step: deepest + 1, level: levels[deepest].move,
+          pct: null, ref: anchor, price: hit.price, axis: 'anchor', anchorDate: aDate });
+      };
+      fire(anchorLevels, -chgPct, 'buy', firedAnchorBuy);
+      fire(anchorSellLevels, chgPct, 'sell', firedAnchorSell);
+    }
+    return out;
+  };
+  if (anchorOn) {
+    for (const d of allBiz) steps.push({ date: d, kind: 'signal', trigs: sigTrigByDate.get(d) ?? [] });
+  } else {
+    for (const [d, trigs] of sigTrigByDate) steps.push({ date: d, kind: 'signal', trigs });
+  }
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
   for (const rs of reinvestSlots) {
     if (rs.date < startBiz || rs.date > endBiz) continue;
@@ -1148,6 +1222,7 @@ function runBacktest(input) {
   };
   for (const ym of monthsBetween(startBiz, endBiz)) monthOf(ym);
   const pushTrade = (t) => {
+    touchAnchor(t);
     const m = monthOf(ymOf(t.date));
     m.trades.push(t);
     if (t.reinvest) m.reinvestNet += t.cashDelta;
@@ -1197,6 +1272,8 @@ function runBacktest(input) {
     }
     if (step.kind === 'signal') {
       const date = step.date;
+      const trigs = anchorOn ? [...step.trigs, ...anchorTrigsAt(date)] : step.trigs;
+      if (!trigs.length) continue;
       const liveOf = (assetId) => {
         const p = posById.get(assetId);
         if (!p || p.removed) return null;
@@ -1211,6 +1288,7 @@ function runBacktest(input) {
         const ev = {
           date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
           kind: t.kind, step: t.step, level: t.level,
+          axis: t.axis, anchorDate: t.anchorDate,
           pct: t.pct, pctSum: null, carrier: false,
           poolAt: 0, excessAt: 0, planned: 0,
           divPocketAt: pocket, cashTradeAt: cashTrade,
@@ -1232,7 +1310,7 @@ function runBacktest(input) {
       {
         const sellEvs = new Map();
         const sellPos = [];
-        for (const t of step.trigs) {
+        for (const t of trigs) {
           if (t.kind !== 'sell') continue;
           const p = liveOf(t.assetId);
           if (!p) continue;
@@ -1271,7 +1349,7 @@ function runBacktest(input) {
         }
       }
 
-      const buyTrigs = step.trigs.filter((t) => t.kind === 'buy');
+      const buyTrigs = trigs.filter((t) => t.kind === 'buy');
       if (!buyTrigs.length) continue;
 
       const evsByAsset = new Map();
@@ -2276,6 +2354,116 @@ console.log('\n── 파트④-f3 정기 리밸런싱 스위치(regularOn) ─�
     backtestFingerprint([mkPdfConfig()]) !== backtestFingerprint([mkPdfConfig({ regularOn: false })])
       && backtestSettingsFingerprint(mkPdfConfig())
          !== backtestSettingsFingerprint(mkPdfConfig({ regularOn: false })));
+}
+
+console.log('\n── 파트④-h 앵커 시그널 축(직전 체결 종가 기준) ──');
+
+{
+  // 합성 픽스처 — 앵커 이동을 통제하려면 종가를 직접 만들어야 한다.
+  //   bd[0..9] 10,000 (초기 매수 · 앵커 10,000)
+  //   bd[10..29] 9,000  (−10%)      ← 여기서 1단계 발동
+  //   bd[30..]  7,900  (초기 대비 −21% / 9,000 대비 −12.2%)
+  const CODE = 'ANCH';
+  const BD = businessDaysBetween('2026-01-02', '2026-03-31', HOL);
+  const series = {};
+  BD.forEach((d, i) => { series[d] = i < 10 ? 10000 : i < 30 ? 9000 : 7900; });
+  const P = { [CODE]: series };
+
+  const mkAnchor = (dip, over = {}) => makeBtConfig({
+    id: 'anch', name: '앵커', startDate: '2026-01-02', endDate: '2026-03-31',
+    initialCapital: 12000000, targetMode: 'amount', rounding: 'floor',
+    policy: 'none', regularOn: false,
+    assets: [{ id: 'x1', code: CODE, name: '앵커종목', payCycle: 'eom', targetAmount: 10000000 }],
+    dip: { enabled: true, extremeOn: false, levels: [], sellLevels: [], reallocate: true, ...dip },
+    ...over,
+  });
+  const runAnchor = (dip, over = {}, divs = {}) =>
+    runBacktest({ config: mkAnchor(dip, over), prices: P, dividends: divs, holidays: KR26 });
+
+  const LV2 = [{ move: 10 }, { move: 20 }];
+
+  // ① lastFill(기본) — 시그널 체결이 앵커를 옮겨 **1단계가 재무장**된다(트레일링).
+  const rFill = runAnchor({ anchorLevels: LV2, anchorSource: 'lastFill' });
+  const evFill = rFill.summary.signalEvents.filter((e) => e.axis === 'anchor');
+  deep('#350 lastFill — 시그널 체결이 앵커를 옮겨 같은 단계가 다시 발동한다(트레일링)',
+    evFill.map((e) => e.step), [1, 1]);
+
+  // ② lastRebal — 시그널 체결은 앵커를 **옮기지 않아** 한 기준에서 10% → 20%가 순차 발동한다.
+  //    (사용자 요청문의 "리밸런싱 이후 10%, 20%"가 정확히 이 의미다.)
+  const rReb = runAnchor({ anchorLevels: LV2, anchorSource: 'lastRebal' });
+  const evReb = rReb.summary.signalEvents.filter((e) => e.axis === 'anchor');
+  deep('#351 ⚠️ lastRebal — 한 기준에서 10% → 20%가 순차 발동한다(시그널 체결은 앵커 불변)',
+    evReb.map((e) => e.step), [1, 2]);
+
+  ok('#352 앵커 이벤트는 축과 기준 체결일을 함께 실어 보낸다(화면이 거짓 기준을 찍지 않게)',
+    evReb.length > 0 && evReb.every((e) => e.axis === 'anchor' && isIsoDate(e.anchorDate))
+      && evReb[0].ref === 10000);
+
+  // ③ ⚠️ 분배금 재투자 체결은 앵커를 옮기지 않는다 — 설계 검증이 잡은 확정 결함.
+  //    옮기면 재투자가 일어난 9,000이 새 기준이 되어 7,900이 −12.2%가 되고 2단계가 영영 안 뜬다.
+  const rDiv = runAnchor(
+    { anchorLevels: LV2, anchorSource: 'lastRebal' },
+    { divReinvest: 'payDate' },
+    { [CODE]: { '2026-01': 500 } },
+  );
+  const evDiv = rDiv.summary.signalEvents.filter((e) => e.axis === 'anchor');
+  ok('#353 ⚠️ 분배금 재투자 체결은 앵커를 옮기지 않는다(재투자를 켜도 2단계가 그대로 발동)',
+    rDiv.summary.cumDivPaid > 0 && evDiv.map((e) => e.step).join(',') === '1,2');
+
+  // ④ 체결이 0인 날에도 이벤트가 매일 쌓이지 않는다(fired Set).
+  ok('#354 ⚠️ 같은 앵커 아래에서 한 단계는 1회만 발동한다(이벤트 폭주 방지)',
+    evFill.length === 2 && evReb.length === 2);
+
+  // ⑤ 매도 축 — 저가 구간에서 반등하면 목표 초과분을 판다.
+  const upSeries = {};
+  BD.forEach((d, i) => { upSeries[d] = i < 10 ? 10000 : 12000; });
+  const rSell = runBacktest({
+    config: mkAnchor({ anchorSellLevels: [{ move: 15 }], anchorSource: 'lastRebal' }),
+    prices: { [CODE]: upSeries }, dividends: {}, holidays: KR26,
+  });
+  const evSell = rSell.summary.signalEvents.filter((e) => e.axis === 'anchor');
+  ok('#355 앵커 매도 축 — 직전 체결가 대비 +N%에서 목표 초과분을 판다',
+    evSell.length === 1 && evSell[0].kind === 'sell' && evSell[0].tradeQty < 0);
+
+  // ⑥ 하위호환 — 앵커 배열이 비면 결과가 종전과 완전히 동일하다.
+  // ⚠️ 레거시 시나리오의 dip에는 앵커 필드가 **아예 없다** — 그 모양 그대로 넣어 결과가
+  //    1바이트도 다르지 않은지 본다(길이 비교가 아니라 전체 JSON 동등).
+  const b0 = mkPdfConfig();
+  const legacyDip = {
+    enabled: b0.dip.enabled, levels: b0.dip.levels,
+    sellLevels: b0.dip.sellLevels, reallocate: b0.dip.reallocate,
+  };
+  deep('#356 ⚠️ 앵커 필드가 없는 레거시 dip은 PDF 시나리오 결과가 완전히 동일하다',
+    runBacktest({ config: mkPdfConfig({ dip: legacyDip }), prices: PRICES, dividends: DIVS, holidays: KR26 }),
+    runPdf());
+  ok('#356b ⚠️ 앵커가 꺼져 있으면 signal 스텝을 매 영업일 만들지 않는다(고점 축 이벤트 수 불변)',
+    runPdf({ dip: { enabled: true, levels: [{ drop: 10, buyPct: null }], sellLevels: [], reallocate: true } })
+      .summary.signalEvents.every((e) => e.axis === 'extreme'));
+
+  // ⑦ extremeOn — 고점/저점 축만 끄고 앵커만 쓸 수 있다.
+  ok('#357 ⚠️ extremeOn:false면 고점/저점 축이 돌지 않는다(앵커 전용 구성)',
+    rFill.summary.signalEvents.every((e) => e.axis === 'anchor'));
+
+  // ⑧ 정규화 · 지문
+  const n = normalizeDip({ enabled: true, anchorLevels: [{ move: 20 }, { move: 10 }, { move: 20 }, { move: 0 }, 'x'] });
+  deep('#358 앵커 단계 정규화 — 유효값만 + 중복 제거 + 오름차순', n.anchorLevels, [{ move: 10 }, { move: 20 }]);
+  deep('#358b ⚠️ 빈 배열은 보존한다(기본값 복원 금지 — 레거시에서 앵커가 저절로 켜지면 안 된다)',
+    normalizeDip({ enabled: true }).anchorLevels, []);
+  deep('#358c 레거시 기본값 — extremeOn:true · anchorSource:lastFill',
+    [normalizeDip({}).extremeOn, normalizeDip({}).anchorSource], [true, 'lastFill']);
+  deep('#358d 정규화는 멱등이다', normalizeDip(n).anchorLevels, n.anchorLevels);
+
+  const fpA = mkPdfConfig();
+  const fpB = mkPdfConfig({ dip: { ...fpA.dip, anchorLevels: [{ move: 10 }] } });
+  const fpC = mkPdfConfig({ dip: { ...fpA.dip, anchorSource: 'lastRebal' } });
+  const fpD = mkPdfConfig({ dip: { ...fpA.dip, extremeOn: false } });
+  ok('#359 ⚠️ 앵커 단계·기준·축 on/off가 저장 지문·설정 지문에 모두 들어간다',
+    backtestFingerprint([fpA]) !== backtestFingerprint([fpB])
+      && backtestFingerprint([fpA]) !== backtestFingerprint([fpC])
+      && backtestFingerprint([fpA]) !== backtestFingerprint([fpD])
+      && backtestSettingsFingerprint(fpA) !== backtestSettingsFingerprint(fpB)
+      && backtestSettingsFingerprint(fpA) !== backtestSettingsFingerprint(fpC)
+      && backtestSettingsFingerprint(fpA) !== backtestSettingsFingerprint(fpD));
 }
 
 console.log('\n── 파트④-g 적대적 리뷰 확정 결함 회귀 ──');
@@ -4196,6 +4384,21 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     /setRunAll\(local\), RUN_DEBOUNCE_MS/.test(page)
       && /runAll[\s\S]{0,120}\.filter\(\(s\) => s\.compareOn !== false\)/.test(page));
 
+  // ⚠️ dipOf는 dip 쓰기 6곳의 **스프레드 베이스**다 — 빠진 필드는 옆 토글 한 번으로 dip에서
+  //    삭제됐다가 재로드 시 기본값으로 되살아난다(끈 적 없는 축이 다시 켜진다, undo 없음).
+  ok('#361 ⚠️ dipOf가 BtDip의 모든 필드를 채운다(스프레드 베이스 계약)',
+    /extremeOn: !d \|\| d\.extremeOn !== false/.test(page)
+      && /anchorLevels: \(d && Array\.isArray\(d\.anchorLevels\)\) \? d\.anchorLevels : \[\]/.test(page)
+      && /anchorSellLevels: \(d && Array\.isArray\(d\.anchorSellLevels\)\) \? d\.anchorSellLevels : \[\]/.test(page)
+      && /anchorSource: \(d && d\.anchorSource === 'lastRebal'\) \? 'lastRebal' : 'lastFill'/.test(page));
+  ok('#361b ⚠️ 화면 문구는 kind가 아니라 axis로 기준을 고른다(앵커가 "고점"으로 표시되면 거짓말)',
+    /const label = e\?\.axis === 'anchor'/.test(page)
+      && /직전 체결가/.test(page)
+      && /e\?\.axis === 'anchor' \?/.test(page));
+  ok('#361c ⚠️ sigOn·strategyTags가 앵커 축을 반영한다(앵커만 쓰는 설정이 "일 안 함"으로 판정되면 안 된다)',
+    /const anchor = d\.anchorLevels\.length > 0 \|\| d\.anchorSellLevels\.length > 0;/.test(page)
+      && /직전체결 매수 \$\{dip\.anchorLevels\.length\}단계/.test(page));
+
   const bt2 = strip(read('src/backtest.ts'));
   // ⚠️ 전역 지정일이 두 continue보다 **앞**에서 만들어지는지는 미러로 표현할 수 없다(미러도 같이
   //    틀리면 통과한다) — src를 직접 읽어 위치 관계를 단언한다.
@@ -4211,6 +4414,23 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /asArr\(s\?\.rebalDates\)\.join\(','\)/.test(bt2));
   ok('#339b ⚠️ 전역 지정일은 follow 종목에만 걸린다(개별 지정 종목을 끌고 가지 않는다)',
     /if \(r\.follows\) \{\s*for \(const raw of config\.rebalDates\)/.test(bt2));
+  ok('#360 ⚠️ 앵커 축 — 재투자·재조정·구조변경은 기준을 옮기지 않는다(사용자가 지명한 사건은 둘뿐)',
+    /if \(t\.reinvest \|\| t\.structural\) return;/.test(bt2)
+      && /if \(t\.signal === 'realloc'\) return;/.test(bt2)
+      && /if \(anchorSrc === 'lastRebal' && \(t\.signal === 'buy' \|\| t\.signal === 'sell'\)\) return;/.test(bt2)
+      && /extremeOn: raw\?\.extremeOn !== false/.test(bt2)
+      && /anchorLevels: normalizeAnchorLevels\(raw\?\.anchorLevels\)/.test(bt2)
+      && /anchorSellLevels: normalizeAnchorLevels\(raw\?\.anchorSellLevels\)/.test(bt2));
+  // ⚠️ 조기 탈출 위치는 **성능 계약**이다 — targetBaseAt→totalEvalAt이 종목마다 priceAt을 부르고
+  //    그 미스 경로는 선형 스캔이라 `영업일 × 종목 × |시계열|`로 폭발한다. 순서를 바꾸지 말 것.
+  ok('#360b ⚠️ 앵커 판정·조기 탈출은 checkRatioSum·targetBaseAt보다 **앞**이다(성능 계약)',
+    (() => {
+      const sig = bt2.slice(bt2.indexOf("if (step.kind === 'signal')"));
+      const i = sig.indexOf('const trigs = anchorOn ?');
+      const j = sig.indexOf('checkRatioSum(date);');
+      const k = sig.indexOf('targetBaseAt(date)');
+      return i > 0 && j > i && k > i && /if \(!trigs\.length\) continue;/.test(sig.slice(0, j));
+    })());
   ok('#347 ⚠️ 정기 스위치는 policy를 보존하고(조기 반환) 경고 게이트도 두 표현을 함께 본다',
     /if \(config\.regularOn === false\) return \{ mode: 'none', day: 0, follows: true \};/.test(bt2)
       && /config\.policy !== 'none' && config\.regularOn !== false/.test(bt2)

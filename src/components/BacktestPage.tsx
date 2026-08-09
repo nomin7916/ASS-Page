@@ -18,7 +18,7 @@ import {
 //    보인다(정규화에서만 자르면 붙여넣은 분석의 뒤가 조용히 사라진다).
 import {
   MAX_BT_SCENARIOS, MAX_BT_ASSETS, MAX_BT_EVENTS, MAX_BT_OVERRIDES, MAX_BT_CONTRIB_OVERRIDES,
-  MAX_BT_REBAL_DATES, MAX_BT_DIP_LEVELS, MAX_BT_SELL_LEVELS,
+  MAX_BT_REBAL_DATES, MAX_BT_DIP_LEVELS, MAX_BT_SELL_LEVELS, MAX_BT_ANCHOR_LEVELS,
   MAX_BT_NOTES, MAX_BT_NOTE_LEN, MAX_BT_NOTE_TITLE_LEN, MAX_BT_VERDICT_LEN,
 } from '../backtest';
 import { generateId, formatNumber, cleanNum } from '../utils';
@@ -115,7 +115,19 @@ const dipOf = (cfg) => {
     levels: (d && Array.isArray(d.levels) && d.levels.length) ? d.levels : DEFAULT_DIP_LEVELS,
     sellLevels: (d && Array.isArray(d.sellLevels)) ? d.sellLevels : [],
     reallocate: !d || d.reallocate !== false,
+    // ⚠️ dipOf는 dip 쓰기 6곳(`patchActive({ dip: { ...dipOf(active), … } })`)의 **스프레드 베이스**다.
+    //    여기 빠진 필드는 옆 토글 한 번으로 dip에서 삭제됐다가 재로드 시 normalizeDip의 기본값으로
+    //    되살아난다 — 끈 적 없는 축이 다시 켜진다(undo 없음). BtDip에 필드를 더하면 예외 없이 추가할 것.
+    extremeOn: !d || d.extremeOn !== false,
+    anchorLevels: (d && Array.isArray(d.anchorLevels)) ? d.anchorLevels : [],
+    anchorSellLevels: (d && Array.isArray(d.anchorSellLevels)) ? d.anchorSellLevels : [],
+    anchorSource: (d && d.anchorSource === 'lastRebal') ? 'lastRebal' : 'lastFill',
   };
+};
+/** 앵커 축이 실제로 일을 하는가. */
+const anchorOnOf = (cfg) => {
+  const d = dipOf(cfg);
+  return d.anchorLevels.length > 0 || d.anchorSellLevels.length > 0;
 };
 /**
  * 전역 지정일 안전 접근자.
@@ -136,7 +148,11 @@ const policyLabelOf = (cfg) =>
 /** 시그널 리밸런싱이 실제로 일을 하는가(단계가 하나라도 있는가). */
 const sigOn = (cfg) => {
   const d = dipOf(cfg);
-  return d.enabled && (d.levels.length > 0 || d.sellLevels.length > 0);
+  // ⚠️ 앵커 배열도 봐야 한다 — 앵커 단계만 쓰는 설정이 '시그널이 일하지 않는다'로 판정되면
+  //    '발동일마다 실행됩니다' 안내가 통째로 사라진다.
+  const extreme = d.extremeOn && (d.levels.length > 0 || d.sellLevels.length > 0);
+  const anchor = d.anchorLevels.length > 0 || d.anchorSellLevels.length > 0;
+  return d.enabled && (extreme || anchor);
 };
 const annualOf = (cfg) =>
   (cfg && cfg.annualReview) || { mode: 'none', value: 0, reserve: 0, everyMonths: 12, split: 'ratio' };
@@ -165,8 +181,14 @@ function strategyTags(cfg) {
   if (numOf(cfg.band) > 0) out.push(`밴드 ±${formatNumber(cfg.band)}%`);
   if (cfg.buyFunding === 'tradeOnly') out.push('매매 예수금만');
   if (dip.enabled) {
-    out.push(`시그널 매수 ${dip.levels.length}단계`);
-    if (dip.sellLevels.length) out.push(`매도 ${dip.sellLevels.length}단계`);
+    // ⚠️ 비어 있으면 한 글자도 내보내지 않는다 — 이 결과가 Section 배지·시나리오 부제·비교 CSV에
+    //    동시에 쓰이므로, 쓰지 않는 축까지 적으면 어느 화면에서도 실제 구성을 알 수 없다.
+    if (dip.extremeOn && dip.levels.length) out.push(`시그널 매수 ${dip.levels.length}단계`);
+    if (dip.extremeOn && dip.sellLevels.length) out.push(`매도 ${dip.sellLevels.length}단계`);
+    if (!dip.extremeOn) out.push('고점축 끔');
+    if (dip.anchorLevels.length) out.push(`직전체결 매수 ${dip.anchorLevels.length}단계`);
+    if (dip.anchorSellLevels.length) out.push(`직전체결 매도 ${dip.anchorSellLevels.length}단계`);
+    if (anchorOnOf(cfg) && dip.anchorSource === 'lastRebal') out.push('기준=리밸런싱');
     if (!dip.reallocate) out.push('재조정 끔');
   }
   if (numOf(cfg.cashFloorPct) > 0) out.push(`바닥선 ${formatNumber(cfg.cashFloorPct)}%`);
@@ -181,15 +203,27 @@ function strategyTags(cfg) {
  * ========================================================================= */
 
 /** `매수 1단계 −10%` / `매도 2단계 +20%` */
+/**
+ * ⚠️ 축을 반드시 병기한다 — 이 한 함수를 월별 표·팝오버 표·CSV가 **공유**하므로, 여기서 축을
+ *    안 밝히면 세 화면 모두에서 두 축의 행이 구분 불가능해진다(#259b 공유 계약).
+ */
 const sigLabel = (e) =>
   `${e.kind === 'sell' ? '매도' : '매수'} ${formatNumber(e.step)}단계 `
-  + `${e.kind === 'sell' ? '+' : '−'}${formatNumber(e.level)}%`;
+  + `${e.kind === 'sell' ? '+' : '−'}${formatNumber(e.level)}%`
+  + (e?.axis === 'anchor' ? ' · 직전 체결가' : '');
 
-/** `고점 ₩27,825 → 종가 ₩23,595 (−15.2%)` — 실제 등락률까지 밝혀 '왜 지금 발동했는가'를 남긴다. */
+/**
+ * `고점 ₩27,825 → 종가 ₩23,595 (−15.2%)` — 실제 등락률까지 밝혀 '왜 지금 발동했는가'를 남긴다.
+ * ⚠️ 기준 라벨은 `kind`가 아니라 **`axis`**로 고른다 — kind만 보면 앵커 발동이 존재한 적 없는
+ *    '고점'을 근거로 제시하는 명백한 거짓말이 된다. 앵커일에는 그 기준을 만든 체결일도 함께 적는다.
+ */
 const sigRefText = (e) => {
   const ref = numOf(e.ref);
   const pct = ref > 0 ? ((numOf(e.price) - ref) / ref) * 100 : 0;
-  return `${e.kind === 'sell' ? '저점' : '고점'} ${won(e.ref)} → 종가 ${won(e.price)}`
+  const label = e?.axis === 'anchor'
+    ? `직전 체결가${e?.anchorDate ? ` (${e.anchorDate})` : ''}`
+    : (e.kind === 'sell' ? '저점' : '고점');
+  return `${label} ${won(e.ref)} → 종가 ${won(e.price)}`
     + ` (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%)`;
 };
 
@@ -3508,6 +3542,85 @@ export default function BacktestPage({
                           </p>
                         );
                       })()}
+
+                      {/* ── 축 B. 직전 체결가(앵커) 기준 ── */}
+                      <div className="border-t border-gray-800 pt-2 mt-1 flex flex-col gap-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className={LABEL}>직전 체결가 기준 축</span>
+                          <Hint width={400}>
+                            <p>
+                              고점/저점이 아니라 <b className="text-gray-300">그 종목이 마지막으로 매매된 날의 종가</b>를
+                              기준으로 ±N%를 잽니다. "리밸런싱 이후 10%, 20% 빠지면 더 산다" 같은 운용을 위한 축입니다.
+                            </p>
+                            <p className="mt-1">
+                              <b className="text-gray-300">기준을 옮기는 체결</b>은 아래 '기준 갱신'이 정합니다.
+                              <b className="text-gray-300"> 분배금 재투자·재조정 매도·종목 재편은 기준을 옮기지 않습니다</b>
+                              (그것까지 기준이 되면 재투자를 켠 순간 매달 기준이 갈아엎어져 이 축이 사실상 죽습니다).
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ 앵커 매수는 항상 <b className="text-gray-400">목표까지</b>입니다(비율 칸 없음) — 두 축이 같은 날
+                              겹칠 때 비율 합이 100%를 넘어 화면 계산식과 실제 체결이 어긋나는 것을 막기 위해서입니다.
+                            </p>
+                            <p className="mt-1 text-gray-500">
+                              ※ 정기 리밸런싱·지정일이 잦을수록 기준이 계속 재설정돼 이 축의 발동 빈도가 낮아집니다.
+                            </p>
+                          </Hint>
+                        </div>
+                        {[['anchorLevels', '매수 — 직전 체결가 대비 하락 (%)', MAX_BT_ANCHOR_LEVELS],
+                          ['anchorSellLevels', '매도 — 직전 체결가 대비 상승 (%)', MAX_BT_ANCHOR_LEVELS]].map(([key, label, cap]) => (
+                          <div key={key} className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-600">{label}</span>
+                            {dipOf(active)[key].map((lv, i) => (
+                              <div key={i} className="flex items-center gap-1">
+                                <NumInput value={lv.move} className="w-20" disabled={readOnly}
+                                  onCommit={(v) => patchActive({ dip: { ...dipOf(active),
+                                    [key]: dipOf(active)[key].map((x, j) => (j === i ? { move: Math.min(1000, Math.max(0.1, v)) } : x)),
+                                  } })} />
+                                <span className="text-[10px] text-gray-600">%</span>
+                                <button className="p-1 text-gray-600 hover:text-red-400 shrink-0" disabled={readOnly}
+                                  onClick={() => patchActive({ dip: { ...dipOf(active),
+                                    [key]: dipOf(active)[key].filter((_, j) => j !== i),
+                                  } })}>
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            ))}
+                            <button className={`${BTN} text-gray-300 border-gray-700 hover:bg-gray-800 w-full`}
+                              disabled={readOnly || dipOf(active)[key].length >= cap}
+                              onClick={() => {
+                                const cur = dipOf(active)[key];
+                                const next = cur.length ? Math.min(1000, cur[cur.length - 1].move + 10) : 10;
+                                patchActive({ dip: { ...dipOf(active), [key]: [...cur, { move: next }] } });
+                              }}>
+                              <Plus size={10} className="inline -mt-0.5" /> 단계 추가 ({dipOf(active)[key].length}/{cap})
+                            </button>
+                            {(() => {
+                              const ms = dipOf(active)[key].map((x) => x.move);
+                              if (new Set(ms).size === ms.length) return null;
+                              return (
+                                <p className="text-[10px] text-amber-400/90 leading-relaxed">
+                                  ⚠️ 같은 비율이 겹칩니다 — <b>저장하면 하나만 남습니다</b>. 값을 서로 다르게 고치세요.
+                                </p>
+                              );
+                            })()}
+                          </div>
+                        ))}
+                        {anchorOnOf(active) && (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-600">기준 갱신 — 무엇이 '직전 체결'인가</span>
+                            <select className={INPUT} value={dipOf(active).anchorSource} disabled={readOnly}
+                              onChange={(e) => patchActive({ dip: { ...dipOf(active), anchorSource: e.target.value } })}>
+                              <option value="lastFill">리밸런싱 + 시그널 체결 (기준이 계속 따라감)</option>
+                              <option value="lastRebal">리밸런싱 체결만 (한 기준에서 10% → 20% 순차)</option>
+                            </select>
+                          </div>
+                        )}
+                        <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+                          <input type="checkbox" checked={dipOf(active).extremeOn} disabled={readOnly}
+                            onChange={(e) => patchActive({ dip: { ...dipOf(active), extremeOn: e.target.checked } })} />
+                          위쪽 고점/저점 기준 축도 함께 사용
+                        </label>
+                      </div>
 
                       <div className="flex items-center gap-1.5 mt-1">
                         <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer">

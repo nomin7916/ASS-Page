@@ -281,6 +281,25 @@ export interface BtSellLevel {
  *    둘 다 켜면 둘 다 실행된다(같은 날이면 KIND_ORDER상 signal → rebal 순).
  * ⚠️ 리밸런싱 밴드(band)는 **정기 리밸런싱 전용**이라 시그널 매매에는 걸리지 않는다.
  */
+/**
+ * 앵커 축 단계. `move` = **직전 체결 종가(앵커) 대비** 하락%(매수) 또는 상승%(매도).
+ * ⚠️ 비율(`buyPct`/`sellPct`)이 없다 — 앵커 매수는 항상 '목표까지'다. 비율을 주면 같은 날 두 축이
+ *    겹칠 때 `pctSum`이 100%를 넘어 화면 계산식(밑변 × 비율 = 금액)과 실제 체결이 어긋난다.
+ */
+export interface BtAnchorLevel {
+  move: number;
+}
+
+/**
+ * 앵커를 **무엇이** 갱신하는가. 사용자 요청문에 기준이 둘("이전 매매시그널", "이전 리밸런싱")이라
+ * 둘 다 표현할 수 있어야 한다.
+ *  lastFill  — 리밸런싱 **또는 시그널** 체결이 앵커를 옮긴다(기본). 등락을 반복하면 계속 발동하는
+ *              트레일링 ±N% 그리드가 된다.
+ *  lastRebal — **리밸런싱 체결만** 앵커를 옮긴다. 한 기준에서 10% → 20%가 순차 발동한다
+ *              (lastFill에서는 10%가 체결되면 앵커가 이동해 20%가 원 기준 −28%가 되어야 닿는다).
+ */
+export type BtAnchorSource = 'lastFill' | 'lastRebal';
+
 export interface BtDip {
   enabled: boolean;
   /** 매수 시그널 단계(가격 고점 대비 낙폭). */
@@ -289,6 +308,19 @@ export interface BtDip {
   sellLevels: BtSellLevel[];
   /** 매매 예수금이 모자랄 때 ②(다른 종목의 목표 초과분 매도)로 재원을 마련할지. 기본 true. */
   reallocate: boolean;
+  /**
+   * 고점/저점 축을 쓸지. 기본 true = 종전 동작.
+   * ⚠️ 이 스위치가 없으면 `enabled`를 켜는 순간 `normalizeDipLevels`가 기본 3단계를 복원해
+   *    고점 축이 **항상** 함께 무장된다 — 앵커 축만 쓰려는 사용자가 끌 방법이 없다.
+   *    (`normalizeDipLevels`의 기본값 복원 규칙 자체는 '켰는데 아무 일도 안 함'을 막는 장치라 유지한다.)
+   */
+  extremeOn: boolean;
+  /** 앵커 축 매수 단계(앵커 대비 하락%). 기본 [] = 미사용. */
+  anchorLevels: BtAnchorLevel[];
+  /** 앵커 축 매도 단계(앵커 대비 상승%). 기본 [] = 미사용. */
+  anchorSellLevels: BtAnchorLevel[];
+  /** 앵커 기준 소스. 기본 'lastFill'. */
+  anchorSource: BtAnchorSource;
 }
 
 /**
@@ -503,6 +535,8 @@ export const MAX_BT_CONTRIB_OVERRIDES = 120;
 export const MAX_BT_REBAL_DATES = 120;
 /** 매수 시그널(급락) 단계 수 상한 */
 export const MAX_BT_DIP_LEVELS = 5;
+/** 앵커 축 단계 수 상한(매수·매도 각각) */
+export const MAX_BT_ANCHOR_LEVELS = 5;
 /** 매도 시그널(반등) 단계 수 상한 */
 export const MAX_BT_SELL_LEVELS = 5;
 /**
@@ -707,8 +741,16 @@ export interface BtSignalEvent {
   kind: 'buy' | 'sell';
   /** 1부터 시작하는 단계 번호(작은 낙폭·작은 반등이 1단계) — 화면의 "1단계" 표기용. */
   step: number;
-  /** 발동 단계 값 = 고점 대비 낙폭(%) 또는 저점 대비 상승률(%) */
+  /** 발동 단계 값 = 기준가 대비 낙폭(%) 또는 상승률(%) */
   level: number;
+  /**
+   * 어느 축이 발동시켰는가. extreme=전 구간 가격 고점/저점 / anchor=직전 체결 종가.
+   * ⚠️ 화면 `sigRefText`는 **이 값으로** 기준 문구를 고른다 — `kind`만 보고 '고점'/'저점'을 찍으면
+   *    앵커 발동이 존재한 적 없는 고점을 근거로 제시하는 명백한 거짓말이 된다.
+   */
+  axis: 'extreme' | 'anchor';
+  /** 앵커 축일 때 그 앵커를 만든 체결일(어느 체결이 기준인지 확인할 유일한 수단). extreme이면 ''. */
+  anchorDate: string;
   /**
    * 이 **단계 하나**의 비율(%). 매수=매수 재원의 %, 매도=목표 초과분의 %.
    * `null`이면 '목표까지'(매수=목표 미달액 전부 / 매도=목표까지 전량).
@@ -1459,11 +1501,40 @@ function normalizeSellLevels(raw: unknown): BtSellLevel[] {
   return out;
 }
 
+/**
+ * 앵커 축 단계 정규화 — 오름차순 + 중복 제거 + 상한.
+ * ⚠️ **빈 배열을 보존한다**(`normalizeSellLevels` 계열). `normalizeDipLevels`(빈 배열 → 기본 3단계
+ *    복원)를 재사용하면 **레거시 시나리오 전부에서 앵커 축이 저절로 켜지고**, 정규화가 매번 새 배열을
+ *    반환해 멱등(#237)·Drive 재저장·2.5초 idle 승격 전 편집 소실이 동시에 터진다.
+ */
+function normalizeAnchorLevels(raw: unknown): BtAnchorLevel[] {
+  const arr = asArr(raw)
+    .map((l: any) => ({ move: asNum(l?.move, NaN) }))
+    .filter(l => Number.isFinite(l.move) && l.move > 0 && l.move <= 1000);
+  arr.sort((a, b) => a.move - b.move);
+  const seen = new Set<number>();
+  const out: BtAnchorLevel[] = [];
+  for (const l of arr) {
+    if (seen.has(l.move)) continue;
+    seen.add(l.move);
+    out.push(l);
+    if (out.length >= MAX_BT_ANCHOR_LEVELS) break;
+  }
+  return out;
+}
+
 function normalizeDip(raw: any): BtDip {
   return {
     enabled: !!raw?.enabled,
     levels: normalizeDipLevels(raw?.levels),
     sellLevels: normalizeSellLevels(raw?.sellLevels),
+    // ⚠️ 레거시(필드 부재)는 extremeOn:true · 앵커 배열 [] · anchorSource:'lastFill'로 떨어져야
+    //    기존 결과가 1원도 달라지지 않는다. normalizeDip은 **필드별 재구축기**라 여기 등록을
+    //    빠뜨리면 Drive 로드·백업 복원·별도 창 수신·시나리오 복제 4경로에서 통째로 사라진다.
+    extremeOn: raw?.extremeOn !== false,
+    anchorLevels: normalizeAnchorLevels(raw?.anchorLevels),
+    anchorSellLevels: normalizeAnchorLevels(raw?.anchorSellLevels),
+    anchorSource: raw?.anchorSource === 'lastRebal' ? 'lastRebal' : 'lastFill',
     // ⚠️ 레거시(필드 부재)는 true로 떨어진다 — 재원이 모자랄 때 재조정으로 채우는 것이
     //    사양의 기본 동작이다(사용자 확정 2026-08). 끄려면 명시적으로 false를 저장한다.
     reallocate: raw?.reallocate !== false,
@@ -1614,6 +1685,10 @@ export function backtestSettingsFingerprint(cfg: unknown): string {
         asArr(s.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
         asArr(s.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
         s.dip?.reallocate === false ? 0 : 1,
+        // 앵커 축 — 축 on/off · 두 단계 목록 · 기준 소스가 전부 결과를 바꾼다
+        s.dip?.extremeOn === false ? 0 : 1, s.dip?.anchorSource ?? '',
+        asArr(s.dip?.anchorLevels).map((l: any) => `${l?.move ?? ''}`).join(','),
+        asArr(s.dip?.anchorSellLevels).map((l: any) => `${l?.move ?? ''}`).join(','),
         s.annualReview?.mode ?? '', s.annualReview?.value ?? 0, s.annualReview?.reserve ?? 0,
         s.annualReview?.everyMonths ?? 0, s.annualReview?.split ?? '',
       ],
@@ -1673,6 +1748,10 @@ export function backtestFingerprint(scenarios: unknown): string {
           asArr(s?.dip?.levels).map((l: any) => `${l?.drop ?? ''}:${l?.buyPct ?? ''}`).join(','),
           asArr(s?.dip?.sellLevels).map((l: any) => `${l?.rise ?? ''}:${l?.sellPct ?? ''}`).join(','),
           s?.dip?.reallocate === false ? 0 : 1,
+          // 앵커 축 — 단계만 고친 편집도 저장돼야 한다
+          s?.dip?.extremeOn === false ? 0 : 1, s?.dip?.anchorSource ?? '',
+          asArr(s?.dip?.anchorLevels).map((l: any) => `${l?.move ?? ''}`).join(','),
+          asArr(s?.dip?.anchorSellLevels).map((l: any) => `${l?.move ?? ''}`).join(','),
           // 연간 가드레일 증액
           s?.annualReview?.mode ?? '', s?.annualReview?.value ?? 0, s?.annualReview?.reserve ?? 0,
           s?.annualReview?.everyMonths ?? 0, s?.annualReview?.split ?? '',
@@ -2267,6 +2346,46 @@ export function runBacktest(input: BtRunInput): BtResult {
    * ========================================================================= */
   const signalEvents: BtSignalEvent[] = [];
 
+  /* ── 앵커 축(직전 체결 종가 기준) 상태 ────────────────────────────────────
+   * 앵커는 **체결 결과에 의존**해 사전 탐지가 불가능하다 → 런타임에 매 영업일 판정한다.
+   * ⚠️ 앵커 배열이 비면(`anchorOn === false`) 아래 어떤 분기도 타지 않아 기존 결과가 1바이트도
+   *    달라지지 않는다 — 매 영업일 signal 스텝도 만들지 않는다.
+   * ========================================================================= */
+  const anchorLevels = config.dip.enabled ? normalizeAnchorLevels(config.dip.anchorLevels) : [];
+  const anchorSellLevels = config.dip.enabled ? normalizeAnchorLevels(config.dip.anchorSellLevels) : [];
+  const anchorOn = anchorLevels.length > 0 || anchorSellLevels.length > 0;
+  const anchorSrc: BtAnchorSource = config.dip.anchorSource === 'lastRebal' ? 'lastRebal' : 'lastFill';
+  /** 종목별 앵커 가격(직전 체결 종가)과 그 체결일. */
+  const anchorPx = new Map<string, number>();
+  const anchorDateOf = new Map<string, string>();
+  /** 그 앵커 아래에서 이미 발동한 단계 인덱스(앵커가 **실제로 이동**할 때만 비운다). */
+  const firedAnchorBuy = new Map<string, Set<number>>();
+  const firedAnchorSell = new Map<string, Set<number>>();
+
+  /**
+   * 앵커 갱신 — 어떤 체결이 기준을 옮기는지는 `anchorSource`가 정한다.
+   *
+   * ⚠️ **분배금 재투자·재조정 매도·종목 재편은 절대 앵커를 옮기지 않는다.** 사용자가 지명한
+   *    사건은 '이전 리밸런싱'과 '이전 매매시그널' 둘뿐인데, 재투자를 켜면(`divReinvest:'payDate'`)
+   *    매달 체결이 생겨 앵커가 갈아엎어져 **앵커 축이 사실상 죽는다** — 1월 대비 −17%까지 빠져도
+   *    새 앵커 대비 −9%라 10% 단계가 끝내 발동하지 않는다(설계 검증 확정 결함).
+   * ⚠️ 재조정 매도(`signal==='realloc'`)는 **다른 종목의 시그널 때문에** 팔린 것이라 그 종목의
+   *    기준을 옮길 이유가 없다.
+   * ⚠️ 값이 그대로면 재무장하지 않는다 — 같은 가격에 두 번 체결돼도 단계가 되살아나면 안 된다.
+   */
+  const touchAnchor = (t: BtTrade): void => {
+    if (!anchorOn) return;
+    if (t.reinvest || t.structural) return;
+    if (t.signal === 'realloc') return;
+    if (anchorSrc === 'lastRebal' && (t.signal === 'buy' || t.signal === 'sell')) return;
+    if (!(t.price > 0)) return;
+    if (anchorPx.get(t.assetId) === t.price) return;
+    anchorPx.set(t.assetId, t.price);
+    anchorDateOf.set(t.assetId, t.date);
+    firedAnchorBuy.get(t.assetId)?.clear();
+    firedAnchorSell.get(t.assetId)?.clear();
+  };
+
   /**
    * 그 시점 **뒤이은 정기 리밸런싱이 실제로 쓸 수 있는 매수 재원** — 목표 증액(매월·연간)의 상한.
    *
@@ -2513,7 +2632,9 @@ export function runBacktest(input: BtRunInput): BtResult {
       const t = adjustTo(p, startBiz, targetOf(p, config, base), false, {
         budget: Math.max(0, initRemain),
       });
-      if (t) { initialTrades.push(t); initRemain += t.cashDelta; }
+      // ⚠️ initialTrades는 pushTrade를 타지 않는다 — 여기서 앵커를 시드하지 않으면 초기 보유
+      //    종목의 앵커가 미설정이라 첫 앵커 발동의 기준가가 영영 없다.
+      if (t) { touchAnchor(t); initialTrades.push(t); initRemain += t.cashDelta; }
     }
   }
   const initialCashAfter = cash;
@@ -2586,6 +2707,14 @@ export function runBacktest(input: BtRunInput): BtResult {
     /** 그 단계의 비율(%). 매수=매수 재원의 %, 매도=목표 초과분의 %. null이면 '목표까지'. */
     step: number; level: number; pct: number | null;
     ref: number; price: number;
+    /**
+     * 어느 축이 발동시켰는가. extreme=전 구간 가격 고점/저점 / anchor=직전 체결 종가.
+     * ⚠️ 두 축이 같은 날 같은 종목에서 겹치면 `ref`(고점·저점 또는 앵커가)만으로는 구분이
+     *    불가능해 화면 문장이 거짓이 된다 — 축을 반드시 실어 보낸다.
+     */
+    axis: 'extreme' | 'anchor';
+    /** 앵커 축일 때 그 앵커를 만든 체결일(표시용). extreme이면 ''. */
+    anchorDate: string;
   };
   const sigTrigByDate = new Map<string, SigTrig[]>();
   // ⚠️ 단계 목록은 **반드시 정규화한 사본**으로 돈다(정렬·중복 제거·상한).
@@ -2595,7 +2724,9 @@ export function runBacktest(input: BtRunInput): BtResult {
   //    여기서 정규화하면 런타임과 영속 표현이 항상 일치한다(적대적 리뷰 확정 결함).
   const dipLevels = config.dip.enabled ? normalizeDipLevels(config.dip.levels) : [];
   const sellLevels = config.dip.enabled ? normalizeSellLevels(config.dip.sellLevels) : [];
-  if (dipLevels.length > 0 || sellLevels.length > 0) {
+  // ⚠️ `extremeOn` 게이트는 여기(루프 진입)에 둔다 — 위 두 선언줄은 소스 가드 #233c·#257이
+  //    리터럴로 단언하므로 건드리지 말 것.
+  if (config.dip.extremeOn !== false && (dipLevels.length > 0 || sellLevels.length > 0)) {
     for (const p of positions) {
       const series = prices[p.asset.code];
       if (!series) continue;
@@ -2625,6 +2756,7 @@ export function runBacktest(input: BtRunInput): BtResult {
             push({
               assetId: p.asset.id, kind: 'buy', step: i + 1,
               level: lv.drop, pct: lv.buyPct, ref: peak, price: px,
+              axis: 'extreme', anchorDate: '',
             });
           }
         }
@@ -2638,6 +2770,7 @@ export function runBacktest(input: BtRunInput): BtResult {
             push({
               assetId: p.asset.id, kind: 'sell', step: i + 1,
               level: lv.rise, pct: lv.sellPct, ref: trough, price: px,
+              axis: 'extreme', anchorDate: '',
             });
           }
         }
@@ -2649,6 +2782,56 @@ export function runBacktest(input: BtRunInput): BtResult {
   if (config.dip.enabled && dipLevels.length === 0 && sellLevels.length === 0) {
     warnings.push('시그널 리밸런싱을 켰지만 매수·매도 단계가 하나도 없어 아무 일도 일어나지 않습니다.');
   }
+  // ⚠️ 고점 축을 껐는데 앵커 축도 없으면 '켰는데 아무 일도 안 함'이 된다 — 조용히 두지 않는다.
+  if (config.dip.enabled && config.dip.extremeOn === false && !anchorOn) {
+    warnings.push('시그널 리밸런싱을 켰지만 고점/저점 축을 끄고 직전 체결가 축 단계도 비어 있어 아무 일도 일어나지 않습니다.');
+  }
+
+  /**
+   * 앵커 축 발동 판정 — **그 스텝 진입 시 한 번만** 계산한다(같은 날 체결이 판정을 바꾸지 않게).
+   *
+   * 규칙: 그날 도달한 **가장 깊은 단계 1건만** 발동시키고, 그보다 얕은 미발동 단계는 함께 소진 처리한다.
+   * ⚠️ `fired` Set이 없으면 체결이 0인 날(이미 목표라 매매 없음)에 앵커가 안 바뀌어 **다음 날 또
+   *    발동**한다 — 이벤트가 매일 쌓인다.
+   * ⚠️ 앵커가 없는 종목(아직 한 번도 체결 안 됨)은 판정하지 않는다.
+   */
+  const anchorTrigsAt = (date: string): SigTrig[] => {
+    if (!anchorOn) return [];
+    const out: SigTrig[] = [];
+    for (const p of positions) {
+      if (p.removed) continue;
+      if (date < p.effectiveStart || date > p.effectiveEnd) continue;
+      const anchor = anchorPx.get(p.asset.id);
+      if (!(anchor > 0)) continue;
+      const hit = priceAt(prices[p.asset.code], date);
+      if (hit.missing || hit.price <= 0) continue;
+      const chgPct = ((hit.price - anchor) / anchor) * 100;
+      const aDate = anchorDateOf.get(p.asset.id) ?? '';
+      const fire = (
+        levels: BtAnchorLevel[], mag: number, kind: 'buy' | 'sell',
+        firedMap: Map<string, Set<number>>,
+      ) => {
+        if (!levels.length || !(mag > 0)) return;
+        let deepest = -1;
+        for (let i = 0; i < levels.length; i++) if (mag >= levels[i].move) deepest = i;
+        if (deepest < 0) return;
+        let fired = firedMap.get(p.asset.id);
+        if (!fired) { fired = new Set<number>(); firedMap.set(p.asset.id, fired); }
+        if (fired.has(deepest)) return;
+        for (let i = 0; i <= deepest; i++) fired.add(i);
+        out.push({
+          assetId: p.asset.id, kind, step: deepest + 1, level: levels[deepest].move,
+          // ⚠️ 앵커 축은 비율이 없다(항상 '목표까지') — 두 축이 겹칠 때 pctSum이 100%를 넘어
+          //    화면 계산식과 실제 체결이 어긋나는 것을 원천 차단한다.
+          pct: null,
+          ref: anchor, price: hit.price, axis: 'anchor', anchorDate: aDate,
+        });
+      };
+      fire(anchorLevels, -chgPct, 'buy', firedAnchorBuy);
+      fire(anchorSellLevels, chgPct, 'sell', firedAnchorSell);
+    }
+    return out;
+  };
 
   type Step =
     | { date: string; kind: 'exdiv'; div: BtDivSlot }
@@ -2661,7 +2844,13 @@ export function runBacktest(input: BtRunInput): BtResult {
     | { date: string; kind: 'reinvest'; slot: BtReinvestSlot };
 
   const steps: Step[] = [];
-  for (const [d, trigs] of sigTrigByDate) steps.push({ date: d, kind: 'signal', trigs });
+  // ⚠️ 앵커 축은 체결 결과에 의존해 사전 탐지가 불가능하므로 **매 영업일** 스텝을 세우고 런타임에
+  //    판정한다. 앵커가 꺼져 있으면 이 분기를 타지 않아 steps 배열이 종전과 1바이트도 다르지 않다.
+  if (anchorOn) {
+    for (const d of allBiz) steps.push({ date: d, kind: 'signal', trigs: sigTrigByDate.get(d) ?? [] });
+  } else {
+    for (const [d, trigs] of sigTrigByDate) steps.push({ date: d, kind: 'signal', trigs });
+  }
   for (const s of slots) steps.push({ date: s.rebalDate, kind: 'rebal', slot: s });
   for (const rs of reinvestSlots) {
     if (rs.date < startBiz || rs.date > endBiz) continue;
@@ -2811,6 +3000,10 @@ export function runBacktest(input: BtRunInput): BtResult {
   //    만큼 마이너스로 부풀어(리밸런싱을 끈 시나리오에서는 매매가 재투자뿐이라 통째로) 지표가
   //    의미를 잃는다. structural과 같은 이유로 따로 센다.
   const pushTrade = (t: BtTrade) => {
+    // ⚠️ 정기·시그널·재조정·이벤트·재투자 매매가 **전부 이 한 함수를 통과**한다 — 앵커 갱신을
+    //    각 호출부에 흩으면 경로 하나만 빠져도 그 종목 앵커가 영구히 낡은 가격을 가리켜 매일 발동한다.
+    //    (초기 매수는 pushTrade를 타지 않으므로 Phase 0에서 별도로 건다.)
+    touchAnchor(t);
     const m = monthOf(ymOf(t.date));
     m.trades.push(t);
     if (t.reinvest) m.reinvestNet += t.cashDelta;
@@ -2890,6 +3083,15 @@ export function runBacktest(input: BtRunInput): BtResult {
        * ⚠️ 정기 리밸런싱 일정(③ 정책)과 **완전히 독립**이다. policy:'none'이어도 여기는 돈다.
        * ===================================================================== */
       const date = step.date;
+      /**
+       * 앵커 축 판정은 **여기서 한 번만** 스냅샷한다(사전 탐지분과 합류).
+       * ⚠️ 조기 탈출은 반드시 `checkRatioSum`·`targetBaseAt`보다 **앞**이다.
+       *    ① 빈 스텝이 `checkRatioSum`을 부르면 경고 문구의 날짜·편입 종목 수가 달라지고
+       *    ② `targetBaseAt`→`totalEvalAt`이 종목마다 `priceAt`을 부르는데 그 미스 경로는
+       *       `for (const d in series)` 선형 스캔이라 `영업일 × 종목 × |시계열|`로 폭발한다.
+       */
+      const trigs = anchorOn ? [...step.trigs, ...anchorTrigsAt(date)] : step.trigs;
+      if (!trigs.length) continue;
       const liveOf = (assetId: string): Pos | null => {
         const p = posById.get(assetId);
         if (!p || p.removed) return null;
@@ -2913,6 +3115,7 @@ export function runBacktest(input: BtRunInput): BtResult {
         const ev: BtSignalEvent = {
           date, assetId: p.asset.id, code: p.asset.code, name: p.asset.name,
           kind: t.kind, step: t.step, level: t.level,
+          axis: t.axis, anchorDate: t.anchorDate,
           pct: t.pct, pctSum: null, carrier: false,
           poolAt: 0, excessAt: 0, planned: 0,
           divPocketAt: pocket, cashTradeAt: cashTrade,
@@ -2947,7 +3150,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       {
         const sellEvs = new Map<string, BtSignalEvent[]>();
         const sellPos: Pos[] = [];
-        for (const t of step.trigs) {
+        for (const t of trigs) {
           if (t.kind !== 'sell') continue;
           const p = liveOf(t.assetId);
           if (!p) continue;
@@ -3000,7 +3203,7 @@ export function runBacktest(input: BtRunInput): BtResult {
       }
 
       /* ── ② 매수 시그널 ─────────────────────────────────────────────────── */
-      const buyTrigs = step.trigs.filter(t => t.kind === 'buy');
+      const buyTrigs = trigs.filter(t => t.kind === 'buy');
       if (!buyTrigs.length) continue;
 
       // 같은 종목에서 여러 단계가 같은 날 겹칠 수 있다(갭 하락). 이벤트는 단계별로 남기되
