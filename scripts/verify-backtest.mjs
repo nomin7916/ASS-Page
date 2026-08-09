@@ -381,6 +381,7 @@ function makeBtConfig(partial = {}) {
     extraCash: Math.max(0, asNum(partial.extraCash, 0)),
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
+    regularOn: partial.regularOn !== false,
     policy: policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none' ? policy : 'perCycle',
     fixedDay: clampInt(asNum(partial.fixedDay, 15), 1, 31),
     rebalDates: normalizeRebalDates(partial.rebalDates),
@@ -428,7 +429,7 @@ function backtestSettingsFingerprint(cfg) {
     return JSON.stringify({
       v: SETTINGS_FP_SCHEMA,
       p: [s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
-          s.targetMode ?? '', s.rounding ?? '', s.policy ?? '',
+          s.targetMode ?? '', s.rounding ?? '', s.policy ?? '', s.regularOn === false ? 0 : 1,
           s.fixedDay ?? 0, s.exDivOffset ?? 0, s.rebalOffset ?? 0, s.payOffset ?? 0,
           asArr(s.rebalDates).join(','),
           s.allowNegativeCash ? 1 : 0,
@@ -464,7 +465,7 @@ function backtestFingerprint(scenarios) {
     return JSON.stringify(scenarios.map((s) => ({
       i: s?.id ?? '', n: s?.name ?? '',
       p: [s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
-          s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '',
+          s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '', s?.regularOn === false ? 0 : 1,
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
           asArr(s?.rebalDates).join(','),
           s?.allowNegativeCash ? 1 : 0,
@@ -521,6 +522,8 @@ function normalizeBacktestScenarios(raw) {
 function resolveAssetRebal(asset, config) {
   const rm = asset.rebalMode || 'follow';
   if (rm !== 'follow') return { mode: rm, day: clampInt(asNum(asset.rebalDay, 15), 1, 31), follows: false };
+  // ⚠️ 정기 스위치가 꺼지면 policy를 보존한 채 정기 일정만 멈춘다(policy:'none'과 동치).
+  if (config.regularOn === false) return { mode: 'none', day: 0, follows: true };
   switch (config.policy) {
     case 'allMid': return { mode: 'mid', day: 0, follows: true };
     case 'allEom': return { mode: 'eom', day: 0, follows: true };
@@ -985,7 +988,7 @@ function runBacktest(input) {
               ? `${nm}: 리밸런싱 일정이 없고 분배금 배분 기준이 ‘분배금 준 종목(DRIP)’이라 이 종목은 매수되지 않습니다 — 자기 분배 이력이 없으면 배분 몫이 0입니다(배분 기준을 ‘목표 비중’이나 ‘균등’으로 바꾸세요).`
               : `${nm}: 리밸런싱 일정이 없어 기간 중간 편입은 분배금 재투자 매수 시점에만 일어납니다(재투자할 분배금이 없으면 매수되지 않습니다).`,
         );
-      } else if (config.policy !== 'none') {
+      } else if (config.policy !== 'none' && config.regularOn !== false) {
         warnings.push(`${nm}: 리밸런싱 일정이 없어 최초 매수 후 수량이 고정됩니다(의도한 설정이면 무시하세요).`);
       }
     }
@@ -2219,6 +2222,60 @@ console.log('\n── 파트④-f2 전역 지정일 리밸런싱 ──');
   deep('#338 ⚠️ 전역 지정일은 분배락·지급 일정을 건드리지 않는다(분배는 payCycle만 따른다)',
     buildDividendSlots(withD, HOL).map((d) => d.exDate),
     buildDividendSlots(base, HOL).map((d) => d.exDate));
+}
+
+console.log('\n── 파트④-f3 정기 리밸런싱 스위치(regularOn) ──');
+
+{
+  const gNone = mkPdfConfig({ policy: 'none' });
+  const gOff = mkPdfConfig({ policy: 'allEom', regularOn: false });
+  const gOn = mkPdfConfig({ policy: 'allEom' });
+
+  ok('#340 정기 체크를 끄면 정기 슬롯이 사라지고 policy 값은 보존된다',
+    buildSlots(gOff, HOL).length === 0 && buildSlots(gOn, HOL).length > 0 && gOff.policy === 'allEom');
+
+  // ⚠️ 같은 뜻의 두 설정이 경고 개수가 다르면 안 된다(#116 계약) — 설계 검증이 잡은 결함.
+  const rNone = runBacktest({ config: gNone, prices: PRICES, dividends: DIVS, holidays: KR26 });
+  const rOff = runBacktest({ config: gOff, prices: PRICES, dividends: DIVS, holidays: KR26 });
+  deep('#341 ⚠️ 정기 체크 해제와 policy:none은 경고까지 완전히 같다(#116 계약)',
+    rOff.warnings, rNone.warnings);
+
+  const gBack = makeBtConfig({ ...gOff, regularOn: true });
+  deep('#342 ⚠️ 정기를 껐다 켜면 원래 방식(월말 일괄)이 그대로 돌아온다(policy 미파괴)',
+    buildSlots(gBack, HOL).map((s) => s.rebalDate),
+    buildSlots(gOn, HOL).map((s) => s.rebalDate));
+
+  const gInd = mkPdfConfig({ policy: 'allEom', regularOn: false });
+  gInd.assets[2].rebalMode = 'day';
+  gInd.assets[2].rebalDay = 20;
+  const indSlots = buildSlots(gInd, HOL);
+  ok('#343 ⚠️ 정기를 꺼도 종목별로 지정한 일정은 그대로 실행된다',
+    indSlots.length > 0 && indSlots.every((s) => s.assetIds.length === 1 && s.assetIds[0] === 'a3'));
+
+  const gBoth = mkPdfConfig({ policy: 'allEom', regularOn: false, rebalDates: ['2026-06-10'] });
+  deep('#344 ⚠️ 정기를 꺼도 전역 지정일은 그대로 돈다(두 축은 독립)',
+    buildSlots(gBoth, HOL).map((s) => s.rebalDate), [onOrBeforeBusinessDay('2026-06-10', HOL)]);
+
+  const legacy = { ...mkPdfConfig() };
+  delete legacy.regularOn;
+  const legacySlots = buildSlots(makeBtConfig(legacy), HOL).map((s) => s.rebalDate);
+  // ⚠️ 기대값을 `mkPdfConfig()`로 두면 **양쪽이 같은 정규화를 거쳐** 정규화가 깨져도 둘 다 빈
+  //    배열이 되어 통과한다(변이 테스트로 실제 확인한 죽은 단언). 기대값은 `regularOn: true`를
+  //    명시해 독립적으로 고정하고, 결과가 비어 있지 않은지도 함께 단언한다.
+  deep('#345 ⚠️ regularOn 미지정(레거시)은 true로 정규화돼 기존 일정과 완전히 동일',
+    legacySlots, buildSlots(mkPdfConfig({ regularOn: true }), HOL).map((s) => s.rebalDate));
+  ok('#345b ⚠️ 그 기존 일정이 실제로 비어 있지 않다(둘 다 빈 배열이라 통과하는 것 방지)',
+    legacySlots.length > 0);
+  // ⚠️ 슬롯 비교만으로는 부족하다 — 정규화 계약을 **직접** 단언한다(구조상 공허할 수 없다).
+  //    레거시 기본값을 깨는 변이는 mkPdfConfig가 regularOn을 넘기지 않아 전 픽스처를 무너뜨리므로
+  //    스위트 전체 붕괴로 검출되지만, 이 줄은 그 계약이 무엇인지 코드로 남긴다.
+  ok('#345c ⚠️ 정규화 계약 — 미지정은 true, 명시 false만 정기를 끈다',
+    makeBtConfig({}).regularOn === true && makeBtConfig({ regularOn: false }).regularOn === false);
+
+  ok('#346 ⚠️ regularOn은 저장 지문·설정 지문에 모두 들어간다(체크만 고친 세션이 저장돼야 한다)',
+    backtestFingerprint([mkPdfConfig()]) !== backtestFingerprint([mkPdfConfig({ regularOn: false })])
+      && backtestSettingsFingerprint(mkPdfConfig())
+         !== backtestSettingsFingerprint(mkPdfConfig({ regularOn: false })));
 }
 
 console.log('\n── 파트④-g 적대적 리뷰 확정 결함 회귀 ──');
@@ -4154,6 +4211,12 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /asArr\(s\?\.rebalDates\)\.join\(','\)/.test(bt2));
   ok('#339b ⚠️ 전역 지정일은 follow 종목에만 걸린다(개별 지정 종목을 끌고 가지 않는다)',
     /if \(r\.follows\) \{\s*for \(const raw of config\.rebalDates\)/.test(bt2));
+  ok('#347 ⚠️ 정기 스위치는 policy를 보존하고(조기 반환) 경고 게이트도 두 표현을 함께 본다',
+    /if \(config\.regularOn === false\) return \{ mode: 'none', day: 0, follows: true \};/.test(bt2)
+      && /config\.policy !== 'none' && config\.regularOn !== false/.test(bt2)
+      && /regularOn: partial\.regularOn !== false/.test(bt2)
+      && /s\.regularOn === false \? 0 : 1/.test(bt2)
+      && /s\?\.regularOn === false \? 0 : 1/.test(bt2));
   ok('#139 ⚠️ 재투자 매수는 분배금 주머니에서 꺼낸다(prefer="div") — 무한 재투자 방지',
     /applyCash\(cashDelta, date, 'div'\)/.test(bt2));
   // ⚠️ KIND_ORDER는 보조 규칙 도입으로 **번호가 밀렸다**(dip·annual 삽입). 리터럴을 그대로 박으면

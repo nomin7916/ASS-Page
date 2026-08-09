@@ -124,6 +124,15 @@ const dipOf = (cfg) => {
  *    루트 ErrorBoundary까지 올라가 **화면이 통째로 오류 페이지**가 된다(dipOf와 같은 근거).
  */
 const rebalDatesOf = (cfg) => (cfg && Array.isArray(cfg.rebalDates) ? cfg.rebalDates : []);
+/**
+ * 정기 리밸런싱이 켜져 있는가.
+ * ⚠️ 레거시 `policy:'none'`도 '꺼짐'으로 읽어야 한다 — 엔진(`resolveAssetRebal`)이 두 표현을
+ *    똑같이 mode:'none'으로 떨어뜨리므로, 화면만 '켜짐'으로 보이면 거짓 설명이 된다.
+ */
+const regularOnOf = (cfg) => !!cfg && cfg.regularOn !== false && cfg.policy !== 'none';
+/** ③ 요약 라벨 — 정기가 꺼져 있으면 방식과 무관하게 '리밸런싱 안 함'이다. */
+const policyLabelOf = (cfg) =>
+  (regularOnOf(cfg) ? (POLICY_LABEL[cfg && cfg.policy] || (cfg && cfg.policy) || '') : POLICY_LABEL.none);
 /** 시그널 리밸런싱이 실제로 일을 하는가(단계가 하나라도 있는가). */
 const sigOn = (cfg) => {
   const d = dipOf(cfg);
@@ -1112,7 +1121,7 @@ function scenarioSubtitle(cfg, summary) {
     summary ? `${summary.startDate} ~ ${summary.endDate}` : `${cfg.startDate || '?'} ~ ${cfg.endDate || '?'}`,
     `초기 ${won(cfg.initialCapital)}${cfg.extraCash > 0 ? ` (+예수금 ${won(cfg.extraCash)})` : ''}`,
     TARGET_MODE_LABEL[cfg.targetMode] || cfg.targetMode,
-    POLICY_LABEL[cfg.policy] || cfg.policy,
+    policyLabelOf(cfg),
     `분배금 ${DIV_REINVEST_LABEL[cfg.divReinvest] || '현금 보유'}`
       + (cfg.divReinvest !== 'hold' ? ` · ${DIV_SPLIT_LABEL[cfg.divReinvestSplit] || ''}` : ''),
     // ⚠️ 켠 보조 규칙만 붙는다(기본값은 한 글자도 안 나온다) — 안 그러면 부제가 상시 두 줄이 된다.
@@ -2356,7 +2365,7 @@ export default function BacktestPage({
         reviewOf(cfg).verdict || '',
         s ? `${s.startDate} ~ ${s.endDate}` : `${cfg.startDate} ~ ${cfg.endDate}`,
         Math.round(cfg.initialCapital + cfg.extraCash),
-        POLICY_LABEL[cfg.policy] || cfg.policy,
+        policyLabelOf(cfg),
         DIV_REINVEST_LABEL[cfg.divReinvest] || cfg.divReinvest,
         cfg.divReinvest === 'hold' ? '-' : (DIV_SPLIT_LABEL[cfg.divReinvestSplit] || cfg.divReinvestSplit),
         TARGET_MODE_LABEL[cfg.targetMode] || cfg.targetMode,
@@ -2612,7 +2621,7 @@ export default function BacktestPage({
                     <span className="min-w-0 flex-1">
                       <span className={`block text-[11px] font-bold truncate ${on ? 'text-gray-200' : 'text-gray-500'}`}>{s.name}</span>
                       <span className="block text-[9px] text-gray-600 truncate">
-                        {POLICY_LABEL[s.policy] || s.policy} · 분배금 {DIV_REINVEST_LABEL[s.divReinvest] || '현금 보유'}
+                        {policyLabelOf(s)} · 분배금 {DIV_REINVEST_LABEL[s.divReinvest] || '현금 보유'}
                       </span>
                     </span>
                   </button>
@@ -2889,7 +2898,7 @@ export default function BacktestPage({
 
               <Section
                 title="③ 리밸런싱 일정"
-                badge={`${POLICY_LABEL[active.policy] || active.policy}${rebalDatesOf(active).length ? ` · 지정일 ${rebalDatesOf(active).length}` : ''}`}
+                badge={`${dipOf(active).enabled ? '시그널 · ' : ''}${policyLabelOf(active)}${rebalDatesOf(active).length ? ` · 지정일 ${rebalDatesOf(active).length}` : ''}`}
                 hint={(
                   <>
                     <p>
@@ -2906,18 +2915,62 @@ export default function BacktestPage({
                   </>
                 )}
               >
-                <div className="flex flex-col gap-1">
-                  <span className={LABEL}>전체 정책</span>
-                  <select className={INPUT} value={active.policy} disabled={readOnly}
-                    onChange={(e) => patchActive({ policy: e.target.value })}>
-                    <option value="perCycle">종목별 — 각자 자기 분배락 전</option>
-                    <option value="allMid">일괄 — 전 종목을 월중 분배락 전에</option>
-                    <option value="allEom">일괄 — 전 종목을 월말 분배락 전에</option>
-                    <option value="fixedDay">일괄 — 매월 지정일</option>
-                    <option value="none">리밸런싱 안 함 (최초 매수 후 그대로 보유)</option>
-                  </select>
+                {/* ── 트리거 2축 — 시그널(발동일 즉시)과 정기는 서로 독립이라 함께 켤 수 있다.
+                    ⚠️ Hint(=<button>)를 <label> **안**에 두지 말 것 — label 활성화가 내부 체크박스를
+                       함께 토글해 ? 아이콘을 누를 때마다 그 옵션이 켜졌다 꺼진다. */}
+                <div className="flex flex-col gap-1.5">
+                  <span className={LABEL}>실행 트리거</span>
+                  <div className="flex items-center gap-1.5">
+                    <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+                      <input type="checkbox" checked={dipOf(active).enabled} disabled={readOnly}
+                        onChange={(e) => patchActive({ dip: { ...dipOf(active), enabled: e.target.checked } })} />
+                      매매 시그널 발생 즉시
+                    </label>
+                    <Hint width={360}>
+                      <p>
+                        종목별 시그널이 발동한 <b className="text-gray-300">그날 종가로 즉시</b> 그 종목만 매매합니다.
+                        단계·기준은 <b className="text-gray-300">⑤-b 매매 시그널 설정</b>에서 정합니다(같은 설정입니다).
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 아래 <b className="text-gray-400">정기 리밸런싱과 완전히 독립</b>입니다 — 둘 다 꺼도 되고,
+                        둘 다 켜면 둘 다 실행됩니다(같은 날이면 시그널 → 정기 순).
+                      </p>
+                    </Hint>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+                      <input type="checkbox" checked={regularOnOf(active)} disabled={readOnly}
+                        onChange={(e) => patchActive(e.target.checked
+                          // 레거시 policy:'none'을 켤 때만 기본 방식으로 승격한다(그 외에는 policy 보존).
+                          ? { regularOn: true, ...(active.policy === 'none' ? { policy: 'perCycle' } : {}) }
+                          : { regularOn: false })} />
+                      정기 리밸런싱
+                    </label>
+                    <Hint width={360}>
+                      <p>
+                        정해진 주기마다 전 종목을 목표에 맞춥니다. 끄면 초기 매수 후
+                        <b className="text-gray-300"> 수량을 그대로 둡니다</b>(Buy &amp; Hold).
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 껐다 켜도 <b className="text-gray-400">고른 방식은 그대로 보존</b>됩니다.
+                      </p>
+                      <p className="mt-1 text-gray-500">
+                        ※ 종목별로 <b className="text-gray-400">다르게</b> 지정한 리밸런싱(⑥ 종목 목록의 '리밸런싱' 칸)은
+                        이 체크와 무관하게 그대로 실행됩니다 — 전 종목을 멈추려면 그 칸도 모두 '전체 정책 따름'이어야 합니다.
+                      </p>
+                    </Hint>
+                  </div>
+                  {regularOnOf(active) && (
+                    <select className={INPUT} value={active.policy === 'none' ? 'perCycle' : active.policy} disabled={readOnly}
+                      onChange={(e) => patchActive({ policy: e.target.value })}>
+                      <option value="perCycle">종목별 — 각자 자기 분배락 전</option>
+                      <option value="allMid">일괄 — 전 종목을 월중 분배락 전에</option>
+                      <option value="allEom">일괄 — 전 종목을 월말 분배락 전에</option>
+                      <option value="fixedDay">일괄 — 매월 지정일</option>
+                    </select>
+                  )}
                 </div>
-                {active.policy === 'none' && (
+                {!regularOnOf(active) && (
                   <div className="text-[11px] text-gray-500 leading-relaxed border border-gray-800 rounded bg-gray-900/40 px-2 py-1.5">
                     <div className="flex items-start gap-1">
                       <span className="flex-1">초기 매수 후 <b className="text-gray-400">수량을 그대로 둡니다</b>(Buy &amp; Hold).</span>
@@ -2938,7 +2991,7 @@ export default function BacktestPage({
                     )}
                   </div>
                 )}
-                {active.policy === 'fixedDay' && (
+                {regularOnOf(active) && active.policy === 'fixedDay' && (
                   <div className="flex items-center gap-2">
                     <span className={LABEL}>매월</span>
                     <NumInput value={active.fixedDay} className="w-16" disabled={readOnly}

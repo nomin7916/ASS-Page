@@ -392,6 +392,18 @@ export interface BtConfig {
   extraCash: number;
   targetMode: BtTargetMode;
   rounding: BtRounding;
+  /**
+   * 정기 리밸런싱 스위치(③ 체크박스). 기본 true = 종전 동작.
+   *
+   * ⚠️ **`policy`를 덮어쓰지 말 것** — 체크를 끌 때 `policy:'none'`으로 바꾸면 사용자가 고른
+   *    '월말 일괄'이 조용히 사라진다(백테스트는 undo가 없다). 이 플래그만 내리고 policy는 보존한다.
+   * ⚠️ 레거시 `policy:'none'`과 **결과가 같아야** 한다 — `resolveAssetRebal`이 둘 다 mode:'none'으로
+   *    떨어뜨리고, '수량 고정' 경고 게이트도 둘을 같이 봐야 한다(안 그러면 같은 뜻의 두 설정이
+   *    경고 개수가 달라진다 — 검증 #116 계약).
+   * ⚠️ 종목별로 일정을 지정한 종목(`rebalMode !== 'follow'`)은 이 스위치와 무관하게 그 지정을 따른다.
+   * ⚠️ 전역 지정일(`rebalDates`)도 이 스위치와 무관하다 — 정기와 독립된 축이다.
+   */
+  regularOn: boolean;
   policy: BtPolicy;
   /** policy='fixedDay'일 때 매월 며칠(1~31) */
   fixedDay: number;
@@ -1287,6 +1299,8 @@ export function makeBtConfig(partial: Partial<BtConfig> = {}): BtConfig {
     extraCash: Math.max(0, asNum(partial.extraCash, 0)),
     targetMode: mode === 'ratio' ? 'ratio' : 'amount',
     rounding: rounding === 'round' || rounding === 'exact' ? rounding : 'floor',
+    // ⚠️ 레거시(필드 부재)는 반드시 true — 명시적 false만 정기를 끈다.
+    regularOn: partial.regularOn !== false,
     policy:
       policy === 'allMid' || policy === 'allEom' || policy === 'fixedDay' || policy === 'none'
         ? policy : 'perCycle',
@@ -1587,7 +1601,7 @@ export function backtestSettingsFingerprint(cfg: unknown): string {
       v: SETTINGS_FP_SCHEMA,
       p: [
         s.startDate ?? '', s.endDate ?? '', s.initialCapital ?? 0, s.extraCash ?? 0,
-        s.targetMode ?? '', s.rounding ?? '', s.policy ?? '',
+        s.targetMode ?? '', s.rounding ?? '', s.policy ?? '', s.regularOn === false ? 0 : 1,
         s.fixedDay ?? 0, s.exDivOffset ?? 0, s.rebalOffset ?? 0, s.payOffset ?? 0,
         // 전역 지정일 — 슬롯을 만드는 사용자 설정이라 반드시 포함(빠지면 '지정일만 고친 세션'이 저장 안 됨)
         asArr(s.rebalDates).join(','),
@@ -1641,7 +1655,7 @@ export function backtestFingerprint(scenarios: unknown): string {
         n: s?.name ?? '',
         p: [
           s?.startDate ?? '', s?.endDate ?? '', s?.initialCapital ?? 0, s?.extraCash ?? 0,
-          s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '',
+          s?.targetMode ?? '', s?.rounding ?? '', s?.policy ?? '', s?.regularOn === false ? 0 : 1,
           s?.fixedDay ?? 0, s?.exDivOffset ?? 0, s?.rebalOffset ?? 0, s?.payOffset ?? 0,
           // 전역 지정일 — 슬롯을 만드는 사용자 설정이라 반드시 포함
           asArr(s?.rebalDates).join(','),
@@ -1737,6 +1751,9 @@ export function resolveAssetRebal(
   if (rm !== 'follow') {
     return { mode: rm, day: clampInt(asNum(asset.rebalDay, 15), 1, 31), follows: false };
   }
+  // ⚠️ 정기 스위치가 꺼지면 policy 값을 **보존한 채** 정기 일정만 멈춘다(policy:'none'과 동치).
+  //    follows:true를 유지하는 근거는 아래 'none' 분기 주석과 같다.
+  if (config.regularOn === false) return { mode: 'none', day: 0, follows: true };
   switch (config.policy) {
     case 'allMid': return { mode: 'mid', day: 0, follows: true };
     case 'allEom': return { mode: 'eom', day: 0, follows: true };
@@ -2532,7 +2549,10 @@ export function runBacktest(input: BtRunInput): BtResult {
               ? `${nm}: 리밸런싱 일정이 없고 분배금 배분 기준이 ‘분배금 준 종목(DRIP)’이라 이 종목은 매수되지 않습니다 — 자기 분배 이력이 없으면 배분 몫이 0입니다(배분 기준을 ‘목표 비중’이나 ‘균등’으로 바꾸세요).`
               : `${nm}: 리밸런싱 일정이 없어 기간 중간 편입은 분배금 재투자 매수 시점에만 일어납니다(재투자할 분배금이 없으면 매수되지 않습니다).`,
         );
-      } else if (config.policy !== 'none') {
+      // ⚠️ '정기를 명시적으로 껐는가'로 판정한다 — `policy !== 'none'`만 보면 체크박스로 끈 경우
+      //    (policy는 'allEom' 그대로) 종목 수만큼 경고가 도배돼, 같은 뜻의 두 설정이 경고 개수가
+      //    달라진다(검증 #116 계약 위반).
+      } else if (config.policy !== 'none' && config.regularOn !== false) {
         warnings.push(`${nm}: 리밸런싱 일정이 없어 최초 매수 후 수량이 고정됩니다(의도한 설정이면 무시하세요).`);
       }
     }
