@@ -4542,6 +4542,12 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
       && /예비금 \$\{won\(e\.fromReserve\)\}/.test(page)
       && /won\(m\.cashReserveEnd\)/.test(page)
       && /numOf\(m\.cashUsedReserve\)/.test(page));
+  // ⚠️ 숫자를 고쳐도 **설명 문구**가 옛 회계로 남아 있으면 화면이 사용자에게 거짓말을 한다
+  //    (적대적 리뷰 확정: '최저 현금' 카드 값은 현금 합계인데 구성 항목이 2주머니였다).
+  ok('#381c ⚠️ 옛 2주머니 정의("예수금 = … + 추가 예수금")가 화면에 한 곳도 남아 있지 않다',
+    !/초기 매수 잔여 \+ 추가 예수금/.test(page)
+      && /\['기말 예비금', won\(s\.finalCashReserve\)\]/.test(page)
+      && /현금 합계\(예수금 \+ 적립 분배금 \+ 예비금\)/.test(page));
   ok('#381b ⚠️ 추가 예수금 칸이 의미 변경을 고지한다(사용자 행동 없이 결과가 달라지는 유일한 통로)',
     /추가 예수금 = 예비금/.test(page) && /뜻이 바뀌었습니다/.test(page));
 

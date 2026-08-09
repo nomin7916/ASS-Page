@@ -981,9 +981,11 @@ function StrategyKpis({ result, cfg, compact = false }) {
         ['그 날짜', s.minCash?.date || '-'],
         ['기말 예수금', won(s.finalCashTrade)],
         ['기말 적립 분배금', won(s.finalCashDiv)],
+        // ⚠️ 카드 값은 현금 **합계**(curve.cash)라 예비금 항이 빠지면 값과 구성이 모순된다.
+        ['기말 예비금', won(s.finalCashReserve)],
         ['적립 분배금 최저점', `${won(s.minCashDiv?.value ?? 0)}${s.minCashDiv?.date ? ` (${s.minCashDiv.date})` : ''}`],
       ],
-      note: '영업일 곡선 전 구간에서 현금 합계(예수금 + 적립 분배금)가 가장 낮았던 지점입니다. '
+      note: '영업일 곡선 전 구간에서 현금 합계(예수금 + 적립 분배금 + 예비금)가 가장 낮았던 지점입니다. '
         + '목표 평가금을 고정하는 전략은 여기가 0에 붙는 순간부터 하락분을 되메울 수 없으므로, 이 값이 곧 생존 판정 지표입니다. '
         + '적립 분배금 최저점은 0에서 시작하는 값이라 첫 분배금 입금 이후 구간에서만 잽니다.',
     },
@@ -1577,11 +1579,11 @@ function CompareView({ runs, okRuns, series, mode, onMode, capitalsDiffer, color
               <th className={`${TH} text-right`}>누적 매매차익</th>
               <th className={`${TH} text-right`}>누적 분배금</th>
               <th className={`${TH} text-right`}>분배금 재투자</th>
-              <th className={`${TH} text-right`} title="매매차익 + 초기 매수 잔여 + 추가 예수금 (적립 분배금은 옆 열에 따로)">기말 예수금</th>
+              <th className={`${TH} text-right`} title="매매차익 + 초기 매수 잔여 (적립 분배금·예비금은 별도 주머니)">기말 예수금</th>
               <th className={`${TH} text-right`} title="지급받은 분배금 중 아직 쓰지 않은 잔액 — 예수금과 별도로 쌓인다">적립 분배금</th>
               {/* ⚠️ 이 두 열이 이 작업의 목적이다 — '평가금 고정 + 현금 버퍼' 전략은 최종 수익률보다
                       **버텼는가(최저 예수금)**와 **월 분배가 일정했는가(표준편차)**로 우열이 갈린다. */}
-              <th className={`${TH} text-right`} title="영업일 곡선 전 구간에서 현금 합계(예수금 + 적립 분배금)가 가장 낮았던 값 — 0에 붙으면 목표를 복원할 수 없다">최저 현금</th>
+              <th className={`${TH} text-right`} title="영업일 곡선 전 구간에서 현금 합계(예수금 + 적립 분배금 + 예비금)가 가장 낮았던 값 — 0에 붙으면 목표를 복원할 수 없다">최저 현금</th>
               <th className={`${TH} text-right`} title="월별 분배금(분배락 기준)의 표준편차 — 작을수록 월 수입이 일정했다">월분배 표준편차</th>
               <th className={`${TH} text-right`}>최대 낙폭</th>
             </tr>
@@ -2345,7 +2347,7 @@ export default function BacktestPage({
     // 전략 지표 + 설정 요약 — ⚠️ 위 항등식 그룹 **밖**이다(합계에 섞이면 안 된다).
     //    파일만 받아 본 사람이 "어떤 조건으로 돌린 결과인가"를 알 수 있어야 한다.
     for (const [label, value] of [
-      ['최저 현금(예수금+적립 분배금)', `${Math.round(result.summary.minCash?.value ?? 0)} (${result.summary.minCash?.date || '-'})`],
+      ['최저 현금(예수금+적립 분배금+예비금)', `${Math.round(result.summary.minCash?.value ?? 0)} (${result.summary.minCash?.date || '-'})`],
       ['적립 분배금 최저점', `${Math.round(result.summary.minCashDiv?.value ?? 0)} (${result.summary.minCashDiv?.date || '-'})`],
       ['월 분배금 평균', Math.round(result.summary.divMonthlyAvg)],
       ['월 분배금 표준편차', Math.round(result.summary.divMonthlyStdev)],
@@ -3385,7 +3387,7 @@ export default function BacktestPage({
                     <Hint width={380}>
                       <p>
                         <b className="text-gray-300">정기 리밸런싱과 매매 시그널이 함께 쓰는</b> 매수 재원입니다.
-                        현금은 <b className="text-gray-300">예수금</b>(매매차익 + 초기 매수 잔여 + 추가 예수금)과
+                        현금은 <b className="text-gray-300">예수금</b>(매매차익 + 초기 매수 잔여)과
                         <b className="text-gray-300"> 적립 분배금</b>(지급받아 아직 안 쓴 분배금)으로 **따로** 관리됩니다.
                       </p>
                       <p className="mt-1">
@@ -4622,7 +4624,7 @@ export default function BacktestPage({
                       <span className="text-gray-500"
                         title={m.cashTradeEnd <= 0.5 && m.cashDivEnd > 0.5
                           ? `예수금이 0인 이유: 초기 잔여 + 누적 매매차익(${wonSigned(m.cumTradeNet)})이 매수 대금을 못 채워 부족분을 적립 분배금에서 꺼냈습니다.`
-                          : '매매차익 + 초기 매수 잔여 + 추가 예수금 중 남은 몫'}>
+                          : '매매차익 + 초기 매수 잔여 중 남은 몫 (추가 예수금은 예비금으로 따로)'}>
                         월말 예수금 <b className="text-gray-300">{won(m.cashTradeEnd)}</b>
                       </span>
                       <span className="text-gray-500"
@@ -4725,10 +4727,10 @@ export default function BacktestPage({
                         </tr>
                       ))}
                       {/* ── 예수금(매매 몫) + 원천별 분해 ──
-                          ⚠️ 사용자 정의(2026-08): '예수금'은 매매차익 + 초기 매수 잔여 + 추가 예수금만
+                          ⚠️ 사용자 정의(2026-08): '예수금'은 매매차익 + 초기 매수 잔여만
                              가리키고 분배금은 합산하지 않는다. 아래 '적립 분배금' 행이 따로 선다.
                           ⚠️ 합이 정확히 기말 예수금이 되는 항등식이다(검증 #110):
-                             초기 매수 후 잔여(+추가 예수금) + 누적 매매차익 + 종목 재편 순현금
+                             초기 매수 후 잔여(예비금 제외) + 누적 매매차익 + 종목 재편 순현금
                              + 분배금 재투자 매수(≤0) + 적립 분배금이 대신 낸 매수 대금.
                           ⚠️ 마지막 항이 ＋인 이유 — 분배금이 대신 낸 매수 대금만큼 예수금이 덜 나갔다. */}
                       <tr className="border-t border-gray-700 bg-gray-800/40 font-bold">
@@ -4893,11 +4895,11 @@ export default function BacktestPage({
                     <p>
                       <b>매수 재원 = {active.buyFunding === 'tradeOnly' ? '매매 예수금만' : '예수금 전부'}</b> —{' '}
                       {active.buyFunding === 'tradeOnly'
-                        ? '정기 리밸런싱과 매매 시그널이 예수금(매매차익 + 초기 매수 잔여 + 추가 예수금)만 씁니다. 적립 분배금은 1원도 쓰지 않고 계속 쌓입니다.'
+                        ? '정기 리밸런싱은 예수금(매매차익 + 초기 매수 잔여)만 씁니다. 적립 분배금은 1원도 쓰지 않고 계속 쌓이며, 예비금은 매매 시그널 발동 시에만 열립니다.'
                         : '정기 리밸런싱과 매매 시그널이 예수금을 먼저 쓰고, 모자라면 적립 분배금에서 꺼내 씁니다.'}
                       {' '}분배금 재투자(④)는 이 설정과 무관하게 그대로 돕니다.
                       {numOf(active.extraCash) > 0
-                        && ` 추가 예수금 ${won(active.extraCash)}은 초기 매수에 쓰지 않고 예수금으로 남겨 두었습니다.`}
+                        && ` 추가 예수금 ${won(active.extraCash)}은 예비금으로 따로 두어 **매매 시그널 발동 시에만** 씁니다(초기 매수·정기 리밸런싱·종목 재편·분배금 재투자는 손대지 않습니다).`}
                     </p>
                     {dipOf(active).enabled && (
                       <p>
