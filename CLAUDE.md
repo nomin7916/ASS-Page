@@ -1056,6 +1056,23 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   `2026-13-45`가 통과하고, `CalendarModal`은 실제 날짜로만 셀을 그리므로 그 기록은 **화면에 영원히 안 보이고
   삭제도 못 하는 유령**이 된다. 적용 3곳 — `parseDisplayDate`(신규 유입 차단), `buildRebalTargetEntry`
   (기존 저장 손상값 + 네이티브 피커의 0001년 차단), `normalizeCalendarMemos`(로드 정규화).
+- **목표 날짜 칩 = 세 구역**(⚠️ '단일 클릭=피커 / 더블클릭=직접 입력'으로 되돌리지 말 것):
+  **왼쪽 여백(💾) = 즉시 기록** · **가운데 날짜 = 직접 입력** · **오른쪽 여백(▾) = 달력 피커**.
+  과거엔 기록을 남기는 통로가 '날짜를 다시 커밋해 dirty를 세우는' **더블클릭뿐**이었는데, 그 **첫
+  클릭이 네이티브 피커를 열어** 두 번째 클릭이 피커의 날짜 칸에 떨어져 의도한 적 없는 날짜로 바뀌었다
+  (사용자 보고 2026-08). 저장 경로를 왼쪽 구역으로 분리해 없앤 문제다.
+  - **`App.tsx handleTargetSaveNow`**(prop `onTargetSaveNow`) — **dirty 여부와 무관하게** 기록한다.
+    dirty는 '값이 실제 바뀐 편집'에서만 서므로, 목표는 그대로고 시세·수량만 움직인 **지금 상태를
+    남기고 싶을 때 기존 경로로는 아무 일도 일어나지 않는다**. 대기 중인 날짜 디바운스는
+    `flushRebalTargetSnapshot`으로 회수하므로 중복 발화가 없고, 날짜 유효성(`isValidIsoDate` + 연도
+    1900~2999)은 `buildRebalTargetEntry`와 **같은 검사**를 미리 돌려 '헤더 날짜 = 기록 날짜' 불변식을
+    지킨다(오늘 폴백 금지). ⚠️ 빌드 실패(행 0건 등)면 **dirty를 원상 복구**한다 — 명시 저장이
+    실패했는데 dirty만 남으면 나중에 엉뚱한 시점에 기록된다.
+  - **피드백은 칩 텍스트 1.5초 플래시**(`saved`✓기록됨 / `nochange`✓최신 / `nodate`날짜 먼저 /
+    `fail`기록 불가). ⚠️ `notify()` 금지 — 알림 최소화 정책상 성공은 벨에 남기지 않는다(화면 변화가
+    피드백). 타이머는 언마운트에서 정리한다(섹션 접기로 패널이 사라진다).
+  - ⚠️ **칩에 `z-20`을 주지 말 것** — `hideStrip`(z-10)이 덮는 상단 4px이 열 숨기기 스트립의 몫이다
+    (복원 아이콘만 z-20인 이유와 동일).
 - **트리거 = dirty 게이트 + 4계열**(dirty는 App 레벨 ref — 리밸런싱 패널은 섹션 접기로 언마운트된다):
   ① **계좌 뷰 이탈** — `switchToPortfolioWithSnapshot`/`goIntegratedDashboard` 래퍼(AccountTabBar·
   IntegratedDashboard prop). ⚠️ `usePortfolioState`에 넘기는 **원본** `setShowIntegratedDashboard`는

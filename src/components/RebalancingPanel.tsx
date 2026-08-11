@@ -104,6 +104,7 @@ export default function RebalancingPanel({
   setTargetEditAuthorized = () => {},
   onAdminTargetChange = null,
   onTargetEdited = null,
+  onTargetSaveNow = null,
   markedRebalRows = {},
   onToggleMarkedRebalRow = () => {},
   onResetAllMarkedRebalRows = () => {},
@@ -135,6 +136,10 @@ export default function RebalancingPanel({
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [ladderModal, setLadderModal] = useState(null);
   const [dateEditMode, setDateEditMode] = useState(false);
+  // 목표 날짜 칩 왼쪽 구역(즉시 기록)의 결과 표시 — 'saved' | 'nochange' | 'nodate' | 'fail'.
+  // ⚠️ notify를 쓰지 않는다(알림 최소화 정책 — 성공은 벨에 남기지 않음). 칩 자체가 유일한 피드백이다.
+  const [dateFlash, setDateFlash] = useState(null);
+  const dateFlashTimerRef = useRef(null);
   const [pinModal, setPinModal] = useState(null); // { onAuthorized: () => void } | null
   const [hoveredCurDSSlice, setHoveredCurDSSlice] = useState(null);
   const [hoveredProjDSSlice, setHoveredProjDSSlice] = useState(null);
@@ -368,12 +373,39 @@ export default function RebalancingPanel({
     />
   );
 
+  // 목표 날짜 칩 왼쪽 구역 = 즉시 기록. 결과는 칩 텍스트로 1.5초 표시한다(위 dateFlash 주석 참조).
+  const saveTargetSnapshotNow = () => {
+    const r = (onTargetSaveNow ? onTargetSaveNow() : null) || 'fail';
+    if (dateFlashTimerRef.current) clearTimeout(dateFlashTimerRef.current);
+    setDateFlash(r);
+    dateFlashTimerRef.current = setTimeout(() => { dateFlashTimerRef.current = null; setDateFlash(null); }, 1500);
+  };
+  // 패널은 섹션을 접으면 언마운트된다 → 남은 타이머 정리(언마운트 후 setState 방지).
+  useEffect(() => () => { if (dateFlashTimerRef.current) clearTimeout(dateFlashTimerRef.current); }, []);
+
   // 목표 날짜 칩 + 📅 과거 목표비중 불러오기 — **활성 목표 열의 헤더**에 붙인다.
   // ⚠️ 이 두 컨트롤은 목표비중 열에만 두면 안 된다: 목표금액 모드에서 그 열이 접히면 th 자체가
   //    사라져 **복원 진입점과 기록 날짜 지정 수단이 통째로 없어진다**. 복원은 금액까지 되돌리고,
   //    날짜는 달력 기록 대상이라 모드와 무관하게 항상 닿을 수 있어야 한다.
   // ⚠️ datePickerRef는 하나뿐이라 두 헤더에서 동시에 렌더하면 안 된다 — 모드로 배타 렌더할 것.
-  const renderTargetDateBar = () => (
+  //
+  // 칩은 **세 구역**이다: 왼쪽 여백(💾 즉시 기록) · 가운데 날짜(직접 입력) · 오른쪽 여백(▾ 달력 피커).
+  // ⚠️ '단일 클릭=피커 / 더블클릭=직접 입력'으로 되돌리지 말 것 — 그 시절엔 기록을 남기는 통로가
+  //    '날짜를 다시 커밋해 dirty를 세우는' 더블클릭뿐이었는데, **첫 클릭이 네이티브 피커를 열어**
+  //    두 번째 클릭이 피커의 날짜 칸에 떨어져 사용자가 의도한 적 없는 날짜로 바뀌었다(사용자 보고).
+  const renderTargetDateBar = () => {
+    const flashText = dateFlash === 'saved' ? '✓ 기록됨'
+      : dateFlash === 'nochange' ? '✓ 최신'
+      : dateFlash === 'nodate' ? '날짜 먼저'
+      : dateFlash === 'fail' ? '기록 불가' : null;
+    const chipTone = dateFlash === 'saved' || dateFlash === 'nochange'
+      ? 'text-emerald-300 border-emerald-500'
+      : dateFlash
+        ? 'text-amber-300 border-amber-500'
+        : settings.targetDate
+          ? 'text-gray-400 border-gray-600'
+          : 'text-amber-300/80 border-amber-500/50';
+    return (
     <div className="relative w-full flex items-center gap-1">
       <input
         ref={datePickerRef}
@@ -394,18 +426,37 @@ export default function RebalancingPanel({
           onClick={e => e.stopPropagation()}
         />
       ) : (
-        <span
-          className={`block text-[9px] border rounded px-1 py-0.5 flex-1 min-w-0 text-center cursor-pointer bg-gray-800 select-none ${
-            settings.targetDate
-              ? 'text-gray-400 border-gray-600 hover:border-gray-500'
-              : 'text-amber-300/80 border-amber-500/50 hover:border-amber-400'
-          }`}
-          onClick={e => { e.stopPropagation(); datePickerRef.current?.showPicker?.(); }}
-          onDoubleClick={e => { e.stopPropagation(); setDateEditMode(true); }}
-          title={settings.targetDate
-            ? '목표 비중 조정일 — 이 날짜의 메모 달력에 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'
-            : '날짜를 지정해야 메모 달력에 목표 비중이 기록됩니다 (클릭: 달력 | 더블클릭: 직접 입력)'}
-        >{formatDisplayDate(settings.targetDate)}</span>
+        <span className={`flex items-stretch text-[9px] border rounded flex-1 min-w-0 bg-gray-800 select-none overflow-hidden transition-colors ${chipTone}`}>
+          {/* 왼쪽 여백 = 이 날짜의 메모 달력에 지금 표 내용을 기록 */}
+          <button
+            type="button"
+            disabled={!onTargetSaveNow}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); if (onTargetSaveNow) saveTargetSnapshotNow(); }}
+            className={`flex-1 min-w-0 flex items-center justify-start pl-1 py-0.5 transition-colors ${
+              onTargetSaveNow ? 'text-emerald-400/60 hover:text-emerald-300 hover:bg-emerald-500/20' : 'text-gray-700 cursor-not-allowed'
+            }`}
+            title={settings.targetDate
+              ? `클릭: ${formatDisplayDate(settings.targetDate)} 메모 달력에 지금 목표비중을 기록합니다 (그 날짜의 기존 기록은 교체)`
+              : '먼저 오른쪽 ▾로 날짜를 지정해야 기록됩니다'}
+          ><Save size={8} className="shrink-0" /></button>
+          {/* 가운데 날짜 = 직접 입력(피커를 열지 않는다 — 위 ⚠️ 참조) */}
+          <span
+            className="px-0.5 py-0.5 text-center cursor-text whitespace-nowrap"
+            onClick={e => { e.stopPropagation(); setDateEditMode(true); }}
+            title={settings.targetDate
+              ? '목표 비중 조정일 — 이 날짜의 메모 달력에 기록됩니다 (클릭: 직접 입력)'
+              : '날짜를 지정해야 메모 달력에 목표 비중이 기록됩니다 (클릭: 직접 입력)'}
+          >{flashText || formatDisplayDate(settings.targetDate)}</span>
+          {/* 오른쪽 여백 = 달력 피커로 기록할 날짜 선택 */}
+          <button
+            type="button"
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); datePickerRef.current?.showPicker?.(); }}
+            className="flex-1 min-w-0 flex items-center justify-end pr-1 py-0.5 text-gray-500 hover:text-gray-200 hover:bg-gray-600/40 transition-colors"
+            title="클릭: 달력에서 기록할 날짜 선택"
+          ><ChevronDown size={9} className="shrink-0" /></button>
+        </span>
       )}
       {/* 과거 목표비중 불러오기 — 기록 '쓰기'인 날짜 칩과 반대 방향(읽기/적용).
           ⚠️ 날짜 칩을 재사용하면 안 된다: 칩을 과거로 바꾸면 그 날짜에 오늘 값이
@@ -428,7 +479,8 @@ export default function RebalancingPanel({
           : '이 계좌에 기록된 목표비중이 없습니다'}
       ><CalendarClock size={11} /></button>
     </div>
-  );
+    );
+  };
 
   const renderCompactPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
     if (percent < 0.07) return null;

@@ -1834,6 +1834,35 @@ export default function App() {
     }, 800) };
   };
 
+  // 목표 날짜 칸 **왼쪽 여백 클릭 = 즉시 기록**(사용자 명시 액션).
+  // ⚠️ 과거엔 기록을 남기는 통로가 '날짜를 다시 커밋해 dirty를 세우는' 우회로뿐이었고(칩 더블클릭 →
+  //    직접 입력 → blur), 그 **첫 클릭이 네이티브 피커를 함께 열어** 두 번째 클릭이 피커의 날짜 칸에
+  //    떨어져 엉뚱한 날짜로 바뀌었다. 저장 경로를 칩 왼쪽 구역으로 분리한 것이 이 핸들러다.
+  // ⚠️ dirty 여부와 무관하게 기록한다 — dirty는 '값이 실제 바뀐 편집'에서만 서므로, 목표는 그대로고
+  //    시세·수량만 움직인 지금 상태를 남기고 싶을 때 기존 경로로는 아무 일도 일어나지 않는다.
+  // ⚠️ 반환값은 패널의 **인라인 피드백 전용**이다(알림 최소화 정책 — 성공 notify 금지, 화면 변화가 피드백).
+  const handleTargetSaveNow = () => {
+    const pid = activePortfolioIdRef.current;
+    if (!pid) return 'fail';
+    // 대기 중인 날짜 디바운스가 있으면 그 날짜가 기록 대상이다(flush가 아래에서 회수해 커밋에 태운다).
+    const pending = rebalDateTimerRef.current;
+    const dayKey = (pending && pending.pid === pid ? pending.date : '') || settings?.targetDate;
+    // '헤더에 보이는 날짜 = 기록 날짜' 불변식 — 오늘로 폴백하지 않는다(빌드와 같은 유효성 검사).
+    if (!isValidIsoDate(dayKey)) return 'nodate';
+    const yr = parseInt(dayKey.slice(0, 4), 10);
+    if (yr < 1900 || yr > 2999) return 'nodate';
+    const wasDirty = !!rebalTargetDirtyRef.current[pid];
+    rebalTargetDirtyRef.current[pid] = true;
+    const next = flushRebalTargetSnapshot();
+    if (next) return 'saved';
+    // 커밋이 null인 경우는 둘 — ① 내용이 같아 기록할 게 없음(dirty 해제됨) ② 빌드 실패(dirty 잔존).
+    if (rebalTargetDirtyRef.current[pid]) {
+      if (!wasDirty) delete rebalTargetDirtyRef.current[pid]; // 명시 저장이 실패했으면 dirty도 원상 복구
+      return 'fail';
+    }
+    return 'nochange';
+  };
+
   // ── 과거 목표비중 복원 (읽기 방향) ──
   // 활성 계좌의 rebalTarget 스냅샷 목록(최신 우선). 리밸런싱 표 목표 열의 📅 아이콘이 소비한다.
   const rebalTargetSnapshots = useMemo(
@@ -3930,6 +3959,7 @@ export default function App() {
             setTargetEditAuthorized={setTargetEditAuthorized}
             onAdminTargetChange={adminViewingAs ? notifyUserOfAdminTargetChange : null}
             onTargetEdited={handleTargetEdited}
+            onTargetSaveNow={handleTargetSaveNow}
             rebalTargetSnapshots={rebalTargetSnapshots}
             activePortfolioId={activePortfolioId}
             onTargetRestored={handleTargetRestored}
