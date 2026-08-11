@@ -1603,18 +1603,28 @@ export const matchRebalTargetRows = (rows, items) => {
 
 // 투자선택(settings.mode) × 목표모드(settings.targetMode) 조합으로 목표비중 슬롯을 고른다.
 // ⚠️ 적립식은 '이번 적립금을 어떻게 나눌지'라 리밸런싱·목표금액의 '자산 전체 목표 배분'과 의미가
-//    다르다 → 슬롯을 분리해 두 모드가 서로의 값을 덮지 않게 한다(적립식으로 처음 가면 자연히 0%,
-//    리밸런싱으로 돌아오면 쓰던 비중이 그대로). 값을 실제로 0으로 지우는 방식은 되돌릴 수 없어 폐기.
+//    다르다 → 슬롯을 분리해 두 모드가 서로의 값을 덮지 않게 한다. 값을 실제로 0으로 지우는 방식은
+//    되돌릴 수 없어 폐기.
 // ⚠️ 미러 상태(mirrorField)도 같이 분리해야 한다 — 공유하면 리밸런싱에서 켠 라이브 미러가 적립식
-//    슬롯까지 현재 비중으로 추종시켜 '적립식은 0%에서 시작' 규약이 깨진다.
+//    슬롯까지 현재 비중으로 추종시킨다.
 // ⚠️ 이 함수가 유일한 슬롯 결정 지점이다. usePortfolioData(계산)·RebalancingPanel(편집·미러·복원)이
 //    반드시 공유할 것 — 한쪽만 손복제하면 화면과 계산이 서로 다른 슬롯을 읽는다.
+// ⚠️ readFields = '읽기 폴백' 우선순위. 현재 슬롯이 **미설정**이면 이웃 슬롯에서 이어받아 읽는다
+//    (readTargetRatio). 쓰기는 **절대 폴백하지 않는다**(항상 slotField) — 저장값 무수정 규약.
+//    이게 없으면 슬롯 축(투자선택·고정/수시변경)이 바뀌는 순간, 사용자가 정한 목표가 그대로 살아
+//    있는데도 화면·계산이 0%가 된다. 리밸런싱 모드에서 0%는 '전량 매도' 지시라 위험하고, 그 0%가
+//    달력 스냅샷(buildRebalTargetEntry)에 박제되면 유일한 복구 기록까지 잃는다.
+//    ⚠️ 실제 사고: 2026-08-03 슬롯 분리 배포(ed78d5e)가 targetRatioAcc를 신설하면서, 이미 적립식이던
+//    계좌들의 기존 목표비중(targetRatio)이 **사용자 조작 0회로** 화면에서 0%가 됐다.
+//    우선순위 = 같은 투자선택의 반대 목표모드(고정↔수시변경 = 잠금 상태 차이일 뿐) → 반대 투자선택.
 export const resolveTargetSlots = (settings) => {
   const acc = settings?.mode === 'accumulate';
   const varMode = settings?.targetMode === 'variable';
+  const slotOf = (a, v) => (a ? (v ? 'targetRatioAccVar' : 'targetRatioAcc') : (v ? 'targetRatioVar' : 'targetRatio'));
   return {
     isAccumulateSlot: acc,
-    slotField: acc ? (varMode ? 'targetRatioAccVar' : 'targetRatioAcc') : (varMode ? 'targetRatioVar' : 'targetRatio'),
+    slotField: slotOf(acc, varMode),
+    readFields: [slotOf(acc, varMode), slotOf(acc, !varMode), slotOf(!acc, varMode), slotOf(!acc, !varMode)],
     overrideField: acc
       ? (varMode ? 'targetRatioAccVarOverride' : 'targetRatioAccOverride')
       : (varMode ? 'targetRatioVarOverride' : 'targetRatioOverride'),
@@ -1622,6 +1632,25 @@ export const resolveTargetSlots = (settings) => {
       ? (varMode ? 'targetMirrorAccVar' : 'targetMirrorAccFixed')
       : (varMode ? 'targetMirrorVar' : 'targetMirrorFixed'),
   };
+};
+
+// 목표비중 슬롯이 '설정됨'인가. ⚠️ cleanNum(x) || 0 으로 판정하지 말 것 — 그러면 '미설정'과
+// '사용자가 명시적으로 넣은 0%'가 같은 값이 되어, 0% 목표가 폴백에 조용히 덮인다.
+// 목표금액의 hasRawTargetAmount(usePortfolioData)와 **같은 타입 기반 규약**이다.
+export const hasRatio = (v) => (
+  typeof v === 'number' ? Number.isFinite(v) : (typeof v === 'string' ? /\d/.test(v) : false)
+);
+
+// 항목의 실효 목표비중을 읽는다(라이브 미러 판정은 호출부 책임). readFields를 순서대로 훑어
+// 처음 '설정됨'인 슬롯을 채택하고, 하나도 없으면 0.
+// ⚠️ 이 함수는 **읽기 전용**이다. 반환된 field로 되쓰지 말 것 — 쓰기는 항상 slotField다.
+export const readTargetRatio = (item, slots) => {
+  const fields = (slots && slots.readFields) || [];
+  for (let i = 0; i < fields.length; i++) {
+    const v = item ? item[fields[i]] : undefined;
+    if (hasRatio(v)) return { value: cleanNum(v) || 0, field: fields[i], inherited: i > 0 };
+  }
+  return { value: 0, field: fields[0], inherited: false };
 };
 
 // 매칭된 종목의 목표 슬롯에 복원값을 쓴다. 변경이 없으면 **같은 참조**를 반환(불필요한 저장 트리거 방지).

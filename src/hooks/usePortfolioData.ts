@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots } from '../utils';
+import { cleanNum, savingsEval, savingsInvest, resolveTargetSlots, readTargetRatio } from '../utils';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
 export function usePortfolioData({
@@ -87,7 +87,10 @@ export function usePortfolioData({
     const isLevelBase = settings.mode === 'rebalance' || isAmountMode;
     // ⚠️ 슬롯은 반드시 utils.resolveTargetSlots로 결정한다(적립식은 별도 슬롯).
     //    여기서 손으로 다시 고르면 화면 편집과 계산이 다른 슬롯을 읽어 값이 갈린다.
-    const { slotField, overrideField, mirrorField } = resolveTargetSlots(settings);
+    // ⚠️ 읽기는 readTargetRatio(폴백 포함)로만 한다 — item[slotField]를 직접 읽으면 슬롯 축이
+    //    바뀐 순간 살아 있는 목표가 0%(=리밸런싱 모드에선 전량 매도 지시)로 보인다.
+    const targetSlots = resolveTargetSlots(settings);
+    const { overrideField, mirrorField } = targetSlots;
     const mirrorState = settings[mirrorField] || 'off';
     // ── 목표금액 라이브 미러 ((%)의 금액판, settings.targetAmountMirror = 'off'|'seeded'|'on') ──
     // ⚠️ resolveTargetSlots처럼 모드별로 슬롯을 나누지 않는다 — 금액 슬롯은 item.targetAmount 하나뿐이고
@@ -105,7 +108,7 @@ export function usePortfolioData({
         const returnRate = invForReturn > 0 ? ((curEval - invForReturn) / invForReturn) * 100 : 0;
         const isLiveMirror = mirrorState === 'on' && !item[overrideField];
         const liveRatio = totals.totalEval > 0 ? (curEval / totals.totalEval * 100) : 0;
-        const effectiveTargetRatio = isLiveMirror ? liveRatio : (cleanNum(item[slotField]) || 0);
+        const effectiveTargetRatio = isLiveMirror ? liveRatio : readTargetRatio(item, targetSlots).value;
         const expEval = curEval;
         const expRatio = overallExp > 0 ? (expEval / overallExp * 100) : 0;
         // 목표금액 힌트는 '비중대로 매매했을 때 도달하는 평가금액'인데, 예적금은 매매 자체가 없어
@@ -129,7 +132,7 @@ export function usePortfolioData({
       const liveRatio = totals.totalEval > 0 ? (curEval * rebalFxRate / totals.totalEval * 100) : 0;
       const effectiveTargetRatio = isLiveMirror
         ? liveRatio
-        : (cleanNum(item[slotField]) || 0);
+        : readTargetRatio(item, targetSlots).value;
       const tRatio = effectiveTargetRatio / 100;
       // ── 목표금액(targetAmount) — 입력된 행은 비중이 아니라 금액이 수량을 만든다 ──
       // 수량 = ⌊(목표 평가금액 − 현재 평가금액) ÷ 종목가격⌋ → 양수 매수 / 음수 매도.

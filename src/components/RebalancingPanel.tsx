@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Plus, Maximize2, Trash2, Check, CalendarClock } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots } from '../utils';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
@@ -40,6 +40,13 @@ const mirrorEvalOf = (p) => {
     return (qty > 0 && !(ev > 0)) ? null : ev;
   }
   return (qty > 0 && !(price > 0)) ? null : price * qty;
+};
+// 목표비중 슬롯의 사람이 읽는 이름 — '이어받은 값' 툴팁 전용(어느 칸에서 왔는지 밝힌다).
+const RATIO_SLOT_LABEL = {
+  targetRatio: '리밸런싱 · 고정',
+  targetRatioVar: '리밸런싱 · 수시변경',
+  targetRatioAcc: '적립식 · 고정',
+  targetRatioAccVar: '적립식 · 수시변경',
 };
 // 저장값은 표시 문자열과 왕복(round-trip)이 되도록 정리한다 — 원화 1원 / 외화 1센트.
 // 안 하면 formatNumber(소수 3자리 반올림) 때문에 셀을 탭으로 지나가기만 해도 '변경'으로 오판된다.
@@ -1321,10 +1328,16 @@ export default function RebalancingPanel({
                           const threshold = isOverseas ? 0.005 : 0.05;
                           const isDifferent = Math.abs((item.effectiveTargetRatio || 0) - itemCurRatio) > threshold;
                           const targetMode = settings.targetMode === 'variable' ? 'variable' : 'fixed';
-                          const { slotField, overrideField, mirrorField } = resolveTargetSlots(settings);
+                          const targetSlots = resolveTargetSlots(settings);
+                          const { slotField, overrideField, mirrorField } = targetSlots;
                           const mirrorState = settings[mirrorField] || 'off';
                           const isLiveMirror = mirrorState === 'on' && !item[overrideField];
-                          const slotVal = cleanNum(item[slotField]) || 0;
+                          // ⚠️ 읽기는 readTargetRatio(폴백 포함) — 현재 슬롯이 미설정이면 이웃 슬롯에서
+                          //    이어받는다. raw item[slotField]로 되돌리면 슬롯 축이 바뀐 순간 살아 있는
+                          //    목표가 0%로 보이고, 아래 changed 판정이 항상 true가 되어 칸을 클릭했다
+                          //    나가기만 해도 달력 기록이 덮인다. 쓰기는 여전히 slotField 하나뿐이다.
+                          const slotRead = readTargetRatio(item, targetSlots);
+                          const slotVal = slotRead.value;
                           const baseVal = isLiveMirror ? itemCurRatio : slotVal;
                           const displayVal = editingRatio[item.id] !== undefined
                             ? editingRatio[item.id]
@@ -1372,11 +1385,18 @@ export default function RebalancingPanel({
                                   // 라이브 미러에선 baseVal이 현재비중이라 포커스~blur 사이 시세가 움직이면
                                   // 한 글자도 안 쳤는데 '변경'으로 오판된다. 반대로 미러 이탈(override 최초
                                   // 박제)은 값이 같아도 명백한 목표 변경이므로 무조건 변경으로 친다.
+                                  // (slotVal은 폴백까지 반영한 값이라 '이어받은 목표'도 변경으로 오판하지 않는다)
                                   const mirrorDetach = mirrorState === 'on' && !item[overrideField];
                                   const changed = Math.round(cleanNum(e.target.value) * 100) !== Math.round(slotVal * 100) || mirrorDetach;
-                                  handleUpdate(item.id, slotField, e.target.value);
-                                  if (mirrorState === 'on') {
-                                    setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, [overrideField]: true } : p));
+                                  // ⚠️ 값이 그대로면 아무것도 쓰지 않는다(목표금액 셀 commitAmt와 같은 규약).
+                                  //    무조건 쓰면 칸을 Tab으로 지나가기만 해도 이어받은 값이 현재 슬롯에
+                                  //    박제돼 폴백 링크가 끊기고, portfolioStructureKey가 바뀌어 Drive 전량
+                                  //    저장이 헛돈다.
+                                  if (changed) {
+                                    handleUpdate(item.id, slotField, e.target.value);
+                                    if (mirrorState === 'on') {
+                                      setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, [overrideField]: true } : p));
+                                    }
                                   }
                                   setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
                                   if (onAdminTargetChange) onAdminTargetChange();
@@ -1395,7 +1415,7 @@ export default function RebalancingPanel({
                                   if (e.key === 'Enter') e.target.blur();
                                   handleTableKeyDown(e, 'targetRatio');
                                 }}
-                                title={ratioDisabled ? "투자선택이 '목표금액'이라 목표비중은 비활성입니다 (수량은 목표금액으로 계산)" : cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : undefined}
+                                title={ratioDisabled ? "투자선택이 '목표금액'이라 목표비중은 비활성입니다 (수량은 목표금액으로 계산)" : cellLocked ? '잠금 — 클릭하여 비밀번호 입력' : isLiveMirror ? '라이브 미러 추종 중 — 편집 시 이 종목만 수동 고정' : slotRead.inherited ? `'${RATIO_SLOT_LABEL[slotRead.field] || slotRead.field}'에서 이어받은 목표비중입니다 — 이 칸에 직접 입력하면 현재 투자선택 전용 값으로 고정됩니다` : undefined}
                               />
                               {showResetIcon && !ratioDisabled && (
                                 <button
