@@ -9,7 +9,7 @@ import { PieLabelOutside } from '../chartUtils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import RebalanceTargetRestoreModal from './RebalanceTargetRestoreModal';
-import LadderBuyModal from './LadderBuyModal';
+import LadderTradeModal from './LadderTradeModal';
 
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
 const getItemUrl = (item) => {
@@ -1284,30 +1284,38 @@ export default function RebalancingPanel({
                         {!H('curEval') && (
                           <td className="py-3 px-3 text-gray-400 text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none" tabIndex={0} onKeyDown={handleReadonlyCellNav}>{isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.curEval)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.curEval * usdkrw)}</span></div> : formatCurrency(item.curEval)}</td>
                         )}
-                        {!H('currentPrice') && (
+                        {!H('currentPrice') && (() => {
+                          // 매수(+)·매도(−) 모두 분할 계산기를 연다. 가격이 0인 행(예적금·기준가 미로드
+                          // 펀드)은 사다리가 만들어지지 않으므로 빈 모달 대신 클릭 자체를 막는다.
+                          const ladderOpenable = totalAction !== 0 && itemPrice > 0;
+                          const isSellAction = totalAction < 0;
+                          return (
                           <td
-                            className={`py-3 px-3 font-mono text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none transition-colors ${totalAction > 0 ? 'text-gray-300 cursor-pointer hover:bg-blue-900/30 hover:text-blue-300' : 'text-gray-500'}`}
+                            className={`py-3 px-3 font-mono text-center focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none transition-colors ${ladderOpenable ? (isSellAction ? 'text-gray-300 cursor-pointer hover:bg-red-900/30 hover:text-red-300' : 'text-gray-300 cursor-pointer hover:bg-blue-900/30 hover:text-blue-300') : 'text-gray-500'}`}
                             tabIndex={0}
                             onKeyDown={handleReadonlyCellNav}
-                            onClick={totalAction > 0 ? (e) => {
+                            onClick={ladderOpenable ? (e) => {
                               const rect = e.currentTarget.getBoundingClientRect();
                               const x = Math.max(8, Math.min(rect.right + 8, window.innerWidth - 416));
                               const y = Math.max(8, Math.min(rect.top - 20, window.innerHeight - 540));
                               setLadderModal({
+                                side: isSellAction ? 'sell' : 'buy',
                                 itemName: item.name,
                                 currentPrice: itemPrice,
                                 totalAction,
-                                rebalFund: totalAction * itemPrice,
+                                // 매수=투입 자금 / 매도=현재가 기준 매도금액. 매수는 totalAction>0이라 종전과 동일.
+                                rebalFund: Math.abs(totalAction) * itemPrice,
                                 currency: isOverseas ? 'USD' : 'KRW',
                                 fxRate: isOverseas ? usdkrw : 1,
                                 pos: { x, y },
                               });
                             } : undefined}
-                            title={totalAction > 0 ? '클릭하여 분할매수 계산기 열기' : undefined}
+                            title={ladderOpenable ? (isSellAction ? '클릭하여 분할매도 계산기 열기' : '클릭하여 분할매수 계산기 열기') : undefined}
                           >
                             {isSavings ? <span className="text-gray-600">-</span> : isOverseas ? <div className="flex flex-col items-center gap-0.5"><span>{fmtUSD(item.currentPrice)}</span><span className="text-[11px] text-gray-500">{formatCurrency(item.currentPrice * usdkrw)}</span></div> : formatNumber(item.currentPrice)}
                           </td>
-                        )}
+                          );
+                        })()}
                         {!H('targetRatio') && (() => {
                           const itemCurRatio = totals.totalEval > 0 ? (isOverseas ? item.curEval * usdkrw : item.curEval) / totals.totalEval * 100 : 0;
                           const threshold = isOverseas ? 0.005 : 0.05;
@@ -2023,7 +2031,8 @@ export default function RebalancingPanel({
           onClose={() => setPinModal(null)}
         />
         {ladderModal && (
-          <LadderBuyModal
+          <LadderTradeModal
+            side={ladderModal.side}
             itemName={ladderModal.itemName}
             currentPrice={ladderModal.currentPrice}
             totalAction={ladderModal.totalAction}
