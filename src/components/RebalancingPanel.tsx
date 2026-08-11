@@ -373,6 +373,18 @@ export default function RebalancingPanel({
     />
   );
 
+  // ── 목표 날짜 칩 잠금 ──
+  // ⚠️ isFixedLocked(고정 모드 전용)와 달리 **targetMode와 무관하게** 잠근다(사용자 요청 2026-08):
+  //    날짜는 updateSettingsForType으로 같은 accountType 전 계좌에 전파되고, 왼쪽 구역의 기록은 그
+  //    날짜의 기존 기록을 **교체**하는데 undo가 없다 — 오클릭 한 번의 대가가 다른 셀보다 크다.
+  // ⚠️ 인증은 세션 단위(targetEditAuthorized) 공유 — 목표비중 셀에서 이미 인증했으면 여기도 열린다.
+  const dateLocked = !targetEditAuthorized && !isAdmin;
+  // fail-closed — 잠겨 있으면 어떤 구역을 눌러도 실행 대신 PIN을 요구한다.
+  const runDateAction = (fn) => { if (dateLocked) { setPinModal({ onAuthorized: fn }); return; } fn(); };
+  // ⚠️ PIN 인증 직후 호출되는 경로가 있어 try/catch 필수 — showPicker는 사용자 제스처가 만료되면
+  //    던진다(그때는 잠금이 이미 풀렸으니 다시 클릭하면 열린다).
+  const openDatePicker = () => { try { datePickerRef.current?.showPicker?.(); } catch {} };
+
   // 목표 날짜 칩 왼쪽 구역 = 즉시 기록. 결과는 칩 텍스트로 1.5초 표시한다(위 dateFlash 주석 참조).
   const saveTargetSnapshotNow = () => {
     const r = (onTargetSaveNow ? onTargetSaveNow() : null) || 'fail';
@@ -389,10 +401,12 @@ export default function RebalancingPanel({
   //    날짜는 달력 기록 대상이라 모드와 무관하게 항상 닿을 수 있어야 한다.
   // ⚠️ datePickerRef는 하나뿐이라 두 헤더에서 동시에 렌더하면 안 된다 — 모드로 배타 렌더할 것.
   //
-  // 칩은 **세 구역**이다: 왼쪽 여백(💾 즉시 기록) · 가운데 날짜(직접 입력) · 오른쪽 여백(▾ 달력 피커).
+  // 칩은 **세 구역**이다: 왼쪽 여백(즉시 기록) · 가운데 날짜(직접 입력) · 오른쪽 여백(달력 피커).
   // ⚠️ '단일 클릭=피커 / 더블클릭=직접 입력'으로 되돌리지 말 것 — 그 시절엔 기록을 남기는 통로가
   //    '날짜를 다시 커밋해 dirty를 세우는' 더블클릭뿐이었는데, **첫 클릭이 네이티브 피커를 열어**
   //    두 번째 클릭이 피커의 날짜 칸에 떨어져 사용자가 의도한 적 없는 날짜로 바뀌었다(사용자 보고).
+  // ⚠️ 좌우 구역에 아이콘을 넣지 말 것(사용자 요청) — 날짜가 작아 보이고 칩이 커진다. 여백은 비워
+  //    두고 hover 배경으로만 구역을 알린다. 유일한 예외가 잠금 🔒(왼쪽)이다.
   const renderTargetDateBar = () => {
     const flashText = dateFlash === 'saved' ? '✓ 기록됨'
       : dateFlash === 'nochange' ? '✓ 최신'
@@ -427,35 +441,40 @@ export default function RebalancingPanel({
         />
       ) : (
         <span className={`flex items-stretch text-[9px] border rounded flex-1 min-w-0 bg-gray-800 select-none overflow-hidden transition-colors ${chipTone}`}>
-          {/* 왼쪽 여백 = 이 날짜의 메모 달력에 지금 표 내용을 기록 */}
+          {/* 왼쪽 여백 = 이 날짜의 메모 달력에 지금 표 내용을 기록 (아이콘 없음 — 잠금 🔒만 예외) */}
           <button
             type="button"
             disabled={!onTargetSaveNow}
             onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); if (onTargetSaveNow) saveTargetSnapshotNow(); }}
-            className={`flex-1 min-w-0 flex items-center justify-start pl-1 py-0.5 transition-colors ${
-              onTargetSaveNow ? 'text-emerald-400/60 hover:text-emerald-300 hover:bg-emerald-500/20' : 'text-gray-700 cursor-not-allowed'
+            onClick={e => { e.stopPropagation(); if (onTargetSaveNow) runDateAction(saveTargetSnapshotNow); }}
+            className={`flex-1 min-w-0 flex items-center justify-start pl-1 transition-colors ${
+              !onTargetSaveNow ? 'cursor-not-allowed' : dateLocked ? 'hover:bg-amber-500/15' : 'hover:bg-emerald-500/20'
             }`}
-            title={settings.targetDate
-              ? `클릭: ${formatDisplayDate(settings.targetDate)} 메모 달력에 지금 목표비중을 기록합니다 (그 날짜의 기존 기록은 교체)`
-              : '먼저 오른쪽 ▾로 날짜를 지정해야 기록됩니다'}
-          ><Save size={8} className="shrink-0" /></button>
-          {/* 가운데 날짜 = 직접 입력(피커를 열지 않는다 — 위 ⚠️ 참조) */}
+            title={dateLocked
+              ? '잠김 — 클릭하여 비밀번호 입력 후 기록'
+              : settings.targetDate
+                ? `클릭: ${formatDisplayDate(settings.targetDate)} 메모 달력에 지금 목표비중을 기록합니다 (그 날짜의 기존 기록은 교체)`
+                : '먼저 오른쪽 여백을 클릭해 날짜를 지정하세요'}
+          >{dateLocked && <Lock size={8} className="shrink-0 text-amber-400" />}</button>
+          {/* 가운데 날짜 = 직접 입력(피커를 열지 않는다 — 위 ⚠️ 참조).
+              ⚠️ shrink-0 필수 — 칩이 overflow-hidden이라 좁은 화면에서 날짜가 잘린다. */}
           <span
-            className="px-0.5 py-0.5 text-center cursor-text whitespace-nowrap"
-            onClick={e => { e.stopPropagation(); setDateEditMode(true); }}
-            title={settings.targetDate
-              ? '목표 비중 조정일 — 이 날짜의 메모 달력에 기록됩니다 (클릭: 직접 입력)'
-              : '날짜를 지정해야 메모 달력에 목표 비중이 기록됩니다 (클릭: 직접 입력)'}
+            className="shrink-0 px-1 py-0.5 text-center cursor-text whitespace-nowrap"
+            onClick={e => { e.stopPropagation(); runDateAction(() => setDateEditMode(true)); }}
+            title={dateLocked
+              ? '잠김 — 클릭하여 비밀번호 입력 후 날짜 직접 입력'
+              : settings.targetDate
+                ? '목표 비중 조정일 — 이 날짜의 메모 달력에 기록됩니다 (클릭: 직접 입력)'
+                : '날짜를 지정해야 메모 달력에 목표 비중이 기록됩니다 (클릭: 직접 입력)'}
           >{flashText || formatDisplayDate(settings.targetDate)}</span>
-          {/* 오른쪽 여백 = 달력 피커로 기록할 날짜 선택 */}
+          {/* 오른쪽 여백 = 달력 피커로 기록할 날짜 선택 (아이콘 없음) */}
           <button
             type="button"
             onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); datePickerRef.current?.showPicker?.(); }}
-            className="flex-1 min-w-0 flex items-center justify-end pr-1 py-0.5 text-gray-500 hover:text-gray-200 hover:bg-gray-600/40 transition-colors"
-            title="클릭: 달력에서 기록할 날짜 선택"
-          ><ChevronDown size={9} className="shrink-0" /></button>
+            onClick={e => { e.stopPropagation(); runDateAction(openDatePicker); }}
+            className={`flex-1 min-w-0 transition-colors ${dateLocked ? 'hover:bg-amber-500/15' : 'hover:bg-gray-600/40'}`}
+            title={dateLocked ? '잠김 — 클릭하여 비밀번호 입력 후 날짜 선택' : '클릭: 달력에서 기록할 날짜 선택'}
+          />
         </span>
       )}
       {/* 과거 목표비중 불러오기 — 기록 '쓰기'인 날짜 칩과 반대 방향(읽기/적용).
