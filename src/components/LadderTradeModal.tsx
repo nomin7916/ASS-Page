@@ -34,17 +34,23 @@ function roundTo(n: number, decimals: number): number {
 // ⚠️ 매수/매도는 방향(dir)만 다른 같은 사다리다 — 복제하지 말 것.
 //    매수 dir=-1: 현재가에서 호가를 내리며 배치(쌀수록 많이 산다).
 //    매도 dir=+1: 현재가에서 호가를 올리며 배치(비쌀수록 많이 판다).
-//    수량은 양쪽 모두 1,2,3,… 삼각수 가중 = '호가 가중방식'.
-function buildLadder(basePrice: number, tickSize: number, totalQty: number, floor: number, decimals: number, dir: number): LadderRow[] {
+//    수량은 양쪽 모두 mult,2·mult,3·mult,… 삼각수 가중 = '호가 가중방식'.
+//    mult(배수)는 사용자 설정이며 기본 1 — mult=2면 2,4,6,8… 로 늘어난다.
+// ⚠️ mult 기본값 1은 하위호환의 축이다. 인자를 뺀 기존 호출은 종전 1,2,3,4… 그대로다.
+function buildLadder(basePrice: number, tickSize: number, totalQty: number, floor: number, decimals: number, dir: number, mult: number = 1): LadderRow[] {
   if (totalQty <= 0 || tickSize <= 0 || basePrice <= 0) return [];
+  const m = mult > 0 ? mult : 1;
   let N = 1;
-  while (tri(N) < totalQty) N++;
+  while (m * tri(N) < totalQty) N++;
   const rows: LadderRow[] = [];
   let rem = totalQty;
   for (let i = 0; i < N; i++) {
     const price = roundTo(basePrice + dir * i * tickSize, decimals);
     if (price < floor) break;
-    const qty = i < N - 1 ? i + 1 : rem;
+    // 마지막 행이 나머지를 흡수해 Σ수량 === totalQty 를 만든다(목표 초과 매매 없음).
+    // N은 m*tri(N) >= totalQty 를 만족하는 **최소값**이라 i < N-1 구간에서는
+    // m*tri(i+1) <= m*tri(N-1) < totalQty — 즉 rem이 항상 남는다(상한 클램프 불필요).
+    const qty = i < N - 1 ? m * (i + 1) : rem;
     rows.push({ id: `r${i}`, price, qty, locked: false });
     rem -= qty;
     if (rem <= 0) break;
@@ -53,11 +59,11 @@ function buildLadder(basePrice: number, tickSize: number, totalQty: number, floo
 }
 
 // 매수 전용 — 매도는 수량(목표 매도량)이 이미 정해져 있어 자금 탐색이 필요 없다.
-function maxAffordableQty(basePrice: number, tickSize: number, fund: number, floor: number, decimals: number): number {
+function maxAffordableQty(basePrice: number, tickSize: number, fund: number, floor: number, decimals: number, mult: number = 1): number {
   if (tickSize <= 0 || basePrice <= 0 || fund <= 0) return 0;
   let Q = 0;
   while (Q < 100000) {
-    const rows = buildLadder(basePrice, tickSize, Q + 1, floor, decimals, -1);
+    const rows = buildLadder(basePrice, tickSize, Q + 1, floor, decimals, -1, mult);
     if (!rows.length) break;
     const cost = rows.reduce((s, r) => s + r.price * r.qty, 0);
     if (cost > fund || rows[rows.length - 1].price < floor) break;
@@ -81,21 +87,23 @@ function recalcAllPrices(rows: LadderRow[], basePrice: number, tickSize: number,
   });
 }
 
-function redistribute(rows: LadderRow[], target: number): LadderRow[] {
+function redistribute(rows: LadderRow[], target: number, mult: number = 1): LadderRow[] {
   const lockedQty = rows.filter(r => r.locked).reduce((s, r) => s + r.qty, 0);
   const remaining = Math.max(0, target - lockedQty);
   const unlocked = rows.filter(r => !r.locked);
   const N = unlocked.length;
   if (!N) return rows;
+  const m = mult > 0 ? mult : 1;
 
   let M = 0;
-  while (M < N && tri(M) < remaining) M++;
+  while (M < N && m * tri(M) < remaining) M++;
   M = Math.min(M, N);
 
   const qtys: number[] = new Array(N).fill(0);
   let rem = remaining;
+  // buildLadder와 같은 이유로 상한 클램프가 필요 없다 — M이 최소값이라 i < M-1 에서는 rem이 남는다.
   for (let i = 0; i < M; i++) {
-    if (i < M - 1) { qtys[i] = i + 1; rem -= i + 1; }
+    if (i < M - 1) { qtys[i] = m * (i + 1); rem -= m * (i + 1); }
     else { qtys[i] = rem; }
   }
 
@@ -125,22 +133,24 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
 
   const [tickInput, setTickInput] = useState(String(defaultTick));
   const [tickSize, setTickSize] = useState(defaultTick);
+  const [multInput, setMultInput] = useState('1');
+  const [mult, setMult] = useState(1);
   const [rows, setRows] = useState<LadderRow[]>([]);
   const [targetQty, setTargetQty] = useState(0);
   const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
   const [position, setPosition] = useState(pos);
   const drag = useRef({ active: false, ox: 0, oy: 0 });
 
-  const doRegenerate = (price: number, tick: number, fund: number) => {
-    const Q = isSell ? sellTarget : maxAffordableQty(price, tick, fund, priceFloor, decimals);
+  const doRegenerate = (price: number, tick: number, fund: number, m: number) => {
+    const Q = isSell ? sellTarget : maxAffordableQty(price, tick, fund, priceFloor, decimals, m);
     setTargetQty(Q);
-    setRows(buildLadder(price, tick, Q, priceFloor, decimals, dir));
+    setRows(buildLadder(price, tick, Q, priceFloor, decimals, dir, m));
     setPriceEdits({});
   };
 
   useEffect(() => {
-    doRegenerate(currentPrice, tickSize, rebalFund);
-  }, [currentPrice, tickSize, rebalFund, side, sellTarget]);
+    doRegenerate(currentPrice, tickSize, rebalFund, mult);
+  }, [currentPrice, tickSize, rebalFund, side, sellTarget, mult]);
 
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);
   const totalCost = rows.reduce((s, r) => s + r.price * r.qty, 0);
@@ -165,10 +175,23 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
     setTickInput(String(t));
   };
 
+  // ⚠️ 배수는 '주식 수'를 곱하므로 1 이상 정수여야 한다 — 1.5면 1.5주가 나온다.
+  //    호가 간격과 같은 규약으로 커밋 시 스냅하고 입력칸도 되돌린다.
+  const normalizeMult = (raw: number) => {
+    const snapped = Math.round(raw);
+    return snapped >= 1 ? snapped : 1;
+  };
+
+  const applyMult = (val: string) => {
+    const m = normalizeMult(cleanNum(val));
+    setMult(m);
+    setMultInput(String(m));
+  };
+
   const handleRowQtyChange = (id: string, val: string) => {
     const newQty = Math.max(0, parseInt(val.replace(/[^\d]/g, '')) || 0);
     const updated = rows.map(r => r.id === id ? { ...r, qty: newQty, locked: true } : r);
-    setRows(redistribute(updated, targetQty));
+    setRows(redistribute(updated, targetQty, mult));
   };
 
   const handleRowPriceChange = (id: string, val: string) => {
@@ -194,7 +217,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
     setRows(prev => {
       const unlocked = prev.map(r => r.id === id ? { ...r, locked: false } : r);
       const priceFixed = recalcAllPrices(unlocked, currentPrice, tickSize, priceFloor, decimals, dir);
-      return redistribute(priceFixed, targetQty);
+      return redistribute(priceFixed, targetQty, mult);
     });
   };
 
@@ -234,7 +257,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
         </span>
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={() => doRegenerate(currentPrice, tickSize, rebalFund)}
+            onClick={() => doRegenerate(currentPrice, tickSize, rebalFund, mult)}
             className="text-gray-500 hover:text-amber-300 transition-colors"
             title="초기화"
           >
@@ -266,6 +289,19 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
               <span className="block text-[9px] text-amber-400 font-normal leading-tight">목표 {formatNumber(targetQty)}주</span>
             )}
           </span>
+
+          <span className="text-gray-500 whitespace-nowrap">배수</span>
+          <input
+            className="bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-right text-amber-300 font-bold outline-none focus:border-amber-400 text-[11px] select-text"
+            title={`수량이 늘어나는 배수 — 1이면 1,2,3,4… / 2면 2,4,6,8… (1 이상 정수)`}
+            value={multInput}
+            onChange={e => setMultInput(e.target.value)}
+            onBlur={e => applyMult(e.target.value)}
+            onFocus={e => e.target.select()}
+            onKeyDown={e => { if (e.key === 'Enter') { applyMult(multInput); (e.target as HTMLInputElement).blur(); } }}
+          />
+          <span className="text-gray-500 whitespace-nowrap">분할 단계</span>
+          <span className="text-gray-300 font-bold text-right">{rows.length}단계</span>
 
           <span className="text-gray-500 whitespace-nowrap">현재가격</span>
           <span className="text-gray-300 font-bold">{fmtCurPrice(currentPrice)}{wonLine(currentPrice)}</span>

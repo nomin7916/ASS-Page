@@ -177,27 +177,111 @@ console.log('\n■ 호가 간격 — 소수점 금지 (가격 격자의 배수)'
     collapsed.length > 1 && new Set(collapsed.map(r => r.price)).size < collapsed.length, J(collapsed.map(r => r.price)));
 }
 
+console.log('\n■ 배수(mult) — 수량 증가폭 사용자 설정');
+{
+  // ① 기본 1 = 종전 동작 (하위호환의 축)
+  for (const dir of [1, -1]) for (const q of QTYS) {
+    const a = F.buildLadder(50000, 10, q, 1, 0, dir);        // 인자 생략
+    const b = F.buildLadder(50000, 10, q, 1, 0, dir, 1);     // 명시 1
+    quiet(`mult 기본=1 동일 (dir=${dir},q=${q})`, J(a) === J(b));
+  }
+  ok('#31 mult 생략 = mult 1 (기존 호출 무영향)', true);
+
+  // ② 배수 2 → 2,4,6,8
+  {
+    const rows = F.buildLadder(7815, 10, 156, 1, 0, 1, 2);
+    ok('#32 배수 2 → 수량 2,4,6,8…', J(rows.slice(0, 4).map(r => r.qty)) === J([2, 4, 6, 8]), J(rows.map(r => r.qty)));
+    ok('#33 배수 2 · 156주 → Σ 보존', rows.reduce((s, r) => s + r.qty, 0) === 156, `sum=${rows.reduce((s, r) => s + r.qty, 0)}`);
+    ok('#34 가격은 배수와 무관 (호가 간격만 따른다)',
+      rows.every((r, i) => r.price === 7815 + i * 10), J(rows.map(r => r.price)));
+  }
+  {
+    const one = F.buildLadder(7815, 10, 156, 1, 0, 1, 1);
+    const two = F.buildLadder(7815, 10, 156, 1, 0, 1, 2);
+    ok('#35 배수가 크면 단계 수가 준다', two.length < one.length, `mult1=${one.length}단계 mult2=${two.length}단계`);
+  }
+
+  // ③ Σ수량 === 목표 (배수 무관) + 목표 초과 금지
+  for (const m of [1, 2, 3, 5, 10, 100]) for (const dir of [1, -1]) for (const q of QTYS) {
+    const rows = F.buildLadder(50000, 10, q, 1, 0, dir, m);
+    const sum = rows.reduce((s, r) => s + r.qty, 0);
+    quiet(`배수 Σ=목표 (m=${m},dir=${dir},q=${q})`, Math.abs(sum - q) < 1e-9, `sum=${sum} target=${q} rows=${J(rows.map(r => r.qty))}`);
+    quiet(`배수 행 수량>0 (m=${m},dir=${dir},q=${q})`, rows.every(r => r.qty > 0), J(rows.map(r => r.qty)));
+  }
+  ok('#36 배수와 무관하게 Σ수량 = 목표 수량 (목표 초과 매매 없음)', true);
+  ok('#37 빈 수량 행이 생기지 않는다', true);
+
+  // ④ 배수가 목표보다 크면 1단계로 끝난다(과매도 방지) — Math.min 흡수가 없으면 여기서 깨진다
+  {
+    const rows = F.buildLadder(50000, 10, 3, 1, 0, 1, 10);
+    ok('#38 배수 > 목표 → 1단계 · 목표만큼만', rows.length === 1 && rows[0].qty === 3, J(rows.map(r => r.qty)));
+  }
+  {
+    const rows = F.buildLadder(50000, 10, 10, 1, 0, 1, 4);
+    ok('#39 마지막 행이 나머지를 흡수(초과 금지)',
+      rows.reduce((s, r) => s + r.qty, 0) === 10 && rows.every(r => r.qty > 0), J(rows.map(r => r.qty)));
+  }
+
+  // ⑤ redistribute도 같은 배수를 따른다
+  {
+    const rows = F.buildLadder(50000, 10, 30, 1, 0, 1, 2);
+    const edited = rows.map((r, i) => i === 0 ? { ...r, qty: 6, locked: true } : r);
+    const out = F.redistribute(edited, 30, 2);
+    ok('#40 redistribute 배수 반영 · Σ=목표',
+      out.reduce((s, r) => s + r.qty, 0) === 30 && out[0].qty === 6, J(out.map(r => r.qty)));
+    ok('#41 redistribute 잠금 이후 행이 배수 간격', out[1].qty === 2 && out[2].qty === 4, J(out.map(r => r.qty)));
+    const legacy = F.redistribute(edited, 30);
+    ok('#42 redistribute mult 생략 = 1', J(legacy) === J(F.redistribute(edited, 30, 1)));
+  }
+
+  // ⑥ 매수 자금 탐색도 배수를 따른다
+  {
+    const q1 = F.maxAffordableQty(1000, 10, 100000, 1, 0, 1);
+    const q2 = F.maxAffordableQty(1000, 10, 100000, 1, 0, 2);
+    ok('#43 maxAffordableQty가 배수를 반영', q1 > 0 && q2 > 0 && q2 !== q1, `mult1=${q1} mult2=${q2}`);
+    ok('#44 maxAffordableQty mult 생략 = 1', F.maxAffordableQty(1000, 10, 100000, 1, 0) === q1);
+  }
+
+  // ⑦ 방어: 0·음수·소수 배수가 들어와도 사다리가 깨지지 않는다(엔진 측 하한)
+  for (const bad of [0, -1, -10]) {
+    const rows = F.buildLadder(50000, 10, 10, 1, 0, 1, bad);
+    quiet(`배수 방어 ${bad}`, rows.reduce((s, r) => s + r.qty, 0) === 10 && rows.every(r => r.qty > 0), J(rows.map(r => r.qty)));
+  }
+  ok('#45 배수 0/음수 → 1로 폴백 (사다리 붕괴 없음)', true);
+}
+
 console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가 dir/side를 실제로 넘기는가)');
 {
   // ⚠️ 위 산술 테스트는 dir을 '인자로' 받으므로, 컴포넌트가 방향을 거꾸로 넘겨도 잡지 못한다.
   //    그 계약은 원문 정규식으로만 단언할 수 있다. 실패 시 먼저 정규식이 낡았는지 확인할 것.
-  ok('#31 매도 dir=+1 / 매수 dir=-1', /const dir = isSell \? 1 : -1;/.test(src));
-  ok('#32 buildLadder 호출이 dir을 넘긴다', /buildLadder\(price, tick, Q, priceFloor, decimals, dir\)/.test(src));
-  ok('#33 recalcAllPrices 호출 2곳 모두 dir을 넘긴다',
+  ok('#46 매도 dir=+1 / 매수 dir=-1', /const dir = isSell \? 1 : -1;/.test(src));
+  ok('#47 buildLadder 호출이 dir·mult를 넘긴다', /buildLadder\(price, tick, Q, priceFloor, decimals, dir, m\)/.test(src));
+  ok('#48 recalcAllPrices 호출 2곳 모두 dir을 넘긴다',
     (src.match(/recalcAllPrices\([^)]*, dir\)/g) || []).length === 2,
     J((src.match(/recalcAllPrices\([^)]*dir\)/g) || [])));
-  ok('#34 매도 목표는 자금이 아니라 |totalAction|',
+  ok('#49 매도 목표는 자금이 아니라 |totalAction|',
     /const sellTarget = Math\.abs\(cleanNum\(totalAction\)\);/.test(src)
-    && /const Q = isSell \? sellTarget : maxAffordableQty\(/.test(src));
+    && /const Q = isSell \? sellTarget : maxAffordableQty\(price, tick, fund, priceFloor, decimals, m\);/.test(src));
+
+  // 배수 배선 — 세 소비자가 전부 mult를 받아야 화면과 계산이 갈리지 않는다
+  ok('#50 normalizeMult 정의 (1 이상 정수)', /const normalizeMult = \(raw[\s\S]{0,140}Math\.round\(raw\)/.test(src));
+  ok('#51 applyMult이 normalizeMult 경유 + 입력칸 동기화',
+    /const applyMult = \(val[^)]*\) => \{\s*const m = normalizeMult\(cleanNum\(val\)\);/.test(src)
+    && /const applyMult[\s\S]{0,200}setMultInput\(String\(m\)\)/.test(src));
+  ok('#52 redistribute 호출 2곳 모두 mult를 넘긴다',
+    (src.match(/redistribute\([^)]*, mult\)/g) || []).length === 2,
+    J((src.match(/redistribute\([^)]*\)/g) || [])));
+  ok('#53 mult 변경이 사다리를 재생성한다 (effect deps)',
+    /\}, \[currentPrice, tickSize, rebalFund, side, sellTarget, mult\]\);/.test(src));
 
   const panel = readFileSync(join(ROOT, 'src/components/RebalancingPanel.tsx'), 'utf8');
-  ok('#35 현재가 셀이 매도(−)에서도 열린다', /const ladderOpenable = totalAction !== 0 && itemPrice > 0;/.test(panel));
-  ok('#36 side를 방향에 맞게 넘긴다',
+  ok('#54 현재가 셀이 매도(−)에서도 열린다', /const ladderOpenable = totalAction !== 0 && itemPrice > 0;/.test(panel));
+  ok('#55 side를 방향에 맞게 넘긴다',
     /side: isSellAction \? 'sell' : 'buy',/.test(panel)
     && /const isSellAction = totalAction < 0;/.test(panel));
-  ok('#37 매도 금액은 부호 없는 절대액(현재가 기준 매도금액)',
+  ok('#56 매도 금액은 부호 없는 절대액(현재가 기준 매도금액)',
     /rebalFund: Math\.abs\(totalAction\) \* itemPrice,/.test(panel));
-  ok('#38 단일 컴포넌트 유지 — 매도 전용 모달 복제 금지',
+  ok('#57 단일 컴포넌트 유지 — 매도 전용 모달 복제 금지',
     /import LadderTradeModal from '\.\/LadderTradeModal';/.test(panel) && !/LadderSellModal|LadderBuyModal/.test(panel));
 }
 
