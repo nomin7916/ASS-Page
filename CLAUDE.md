@@ -909,6 +909,26 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 - 적용 범위: expectedRows / actualRows / compactExpectedRows / compactActualRows
   (빈 미래월 폴백은 actualRows / compactActualRows 에만 적용)
 
+### 분배율 행 = 통화별 2행(달러/원화) — 해외계좌 원금은 USD (⚠️ 회귀 주의)
+
+`renderDistRateRow`(`DividendSummaryTable`)의 분모는 **통화를 맞춰야** 한다. **해외계좌(overseas)의
+`p.principal`은 USD**(원금·평가 모두 USD 기준 — '해외계좌 투자금액' 섹션)인데, 과거엔 그 값을 원화
+분배금 합계의 분모로 그대로 써서 분배율이 **환율 배수(≈1,390배)만큼 부풀었다**(원금 $28,304 · 12월
+₩346,802 → **1328.79%**). 단일 `totalPrincipal`로 되돌리지 말 것.
+
+- **분모 2종**: `principalUsd` = overseas 계좌 principal 합(USD) / `totalPrincipal` = 국내 계좌
+  principal 합 + `principalUsd × usdkrw`(원화 환산). 환율 미확보(`usdkrw <= 0`)면 원화 분모를 **0**으로
+  두어 `'-'`로 표시한다(부풀린 값을 단언하지 않는다).
+- **표시**: `principalUsd > 0` + USD 배열이 전달되면 셀이 2행 — **달러 기준(굵게) 위 · 원화 기준
+  (작게·흐리게) 아래**. 그 외에는 종전처럼 원화 1행.
+- **⚠️ 두 값이 다른 것이 정상** — 원화 분배금은 사용자가 **실제 입금 시점 환율로 입력**한 값이고
+  원화 환산 원금은 **현재 환율**로 환산하기 때문이다. 하나로 합치지 말 것.
+- **호출 3지점 전부 USD 배열을 넘길 것**(빠뜨리면 그 화면만 조용히 1행으로 강등): compact 통합
+  (`compact*MonthlyUsd`/`compact*AnnualUsd`, 탭별) · 월 예상 분배금(`monthlyUsdTotals`/`annualUsdTotal`) ·
+  월 입금 내역(`actualMonthlyGrossUsd`/`actualAnnualGrossUsd` — KRW도 **gross**라 세전끼리 짝을 맞춤).
+- 3번째 인자 `hasOverseas`는 **colSpan 전용**(세전/세후 2열 여부)이고 2행 표시 여부와 무관하다 —
+  compact는 열이 1개라 `false`를 넘기면서도 2행을 표시한다.
+
 ### DividendSummaryTable
 - `compact=false` (기본): 개별 계좌 뷰, 종목 행 표시, 셀 직접 편집 가능
 - `compact=true`: 통합 대시보드 뷰, 계좌별 월 합계만 표시, rowColor 그라데이션 텍스트
