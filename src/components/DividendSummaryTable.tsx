@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { cleanNum, formatCurrency, dividendPayDate, buildHeldNameMap, parseDividendApiResult } from '../utils';
+import { cleanNum, formatCurrency, dividendPayDate, buildHeldNameMap, parseDividendApiResult, overseasInvestAmount } from '../utils';
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
 import KrEtfTaxMatrix from './KrEtfTaxMatrix';
 import ErrorBoundary from './ErrorBoundary';
@@ -449,6 +449,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           cadence: classifyCadence(divHistory[item.code], exHistory, hol),
           hasDivData: Object.keys(pred).length > 0,
           monthData,
+          // 종목별 분배율의 분모(USD). ⚠️ 해외는 `item.investAmount`(원화 잔존값 가능 → ≈1,390배 오염)가
+          // 아니라 반드시 `overseasInvestAmount`(investAmountUsd ?? 매입가×수량)를 쓴다.
+          investUsd: isOverseas ? overseasInvestAmount(item) : 0,
           annual: monthData.reduce((s, d) => s + d.amount, 0),
           annualUsd: isOverseas ? monthData.reduce((s, d) => s + d.amountUsd, 0) : 0,
         });
@@ -563,6 +566,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           cadence: classifyCadence(divHistory[item.code], exHistoryAll[item.code] || {}, hol),
           hasDivData: Object.keys(pred).length > 0,
           monthData,
+          // 종목별 분배율의 분모(USD). ⚠️ 해외는 `item.investAmount`(원화 잔존값 가능 → ≈1,390배 오염)가
+          // 아니라 반드시 `overseasInvestAmount`를 쓴다. 유령 행(__orphan)은 필드가 없어 0 → '-'로 표시.
+          investUsd: isOverseas ? overseasInvestAmount(item) : 0,
           annual: isOverseas
             ? monthData.reduce((s, d) => s + (d.hasManual ? d.grossKrw : 0), 0)
             : monthData.reduce((s, d) => s + (d.hasManual ? d.amount : 0), 0),
@@ -1004,6 +1010,72 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       </tr>
     );
   };
+
+  // ── 종목별 분배율 (해외계좌 전용) — 계좌 총원금이 아니라 '그 종목의 투자금액'이 분모 ──
+  // 사용자 요청(2026-08): "실제 분배금을 지급하는 종목에 대한 분배율이 더 정확하고 유용하다".
+  // 계좌 총원금(principal)에는 분배금을 한 푼도 주지 않는 종목·예수금·현금이 섞여 있어 분배율을
+  // 구조적으로 희석시킨다. 종목 단위로 나누면 "이 종목에 넣은 돈이 매달 몇 % 를 돌려주는가"가 된다.
+  // 규약(⚠️ 되돌리지 말 것):
+  //  · 분자 = **세후(net) USD** — 실수령 기준(사용자 확정). 세전으로 바꾸면 같은 표의 세후 열과 갈린다.
+  //  · 분모 = `overseasInvestAmount(item)` (USD, 사용자 입력 investAmountUsd 우선).
+  //  · 통화는 **달러 1가지만** — 원화 병기 금지(입금 시점 환율과 현재 환율이 섞여 의미가 흐려진다).
+  //  · 월 셀 = `세후분배금 / 투자금` 위, `월분배율 (연환산=월×12)` 아래. 연간 셀은 이미 연간이라 괄호 없음.
+  // ⚠️ `hasOverseas`는 반드시 **인자로** 받는다 — `expectedHasOverseas`는 탭 IIFE 지역 변수라
+  //    컴포넌트 스코프에서 그냥 참조하면 런타임 ReferenceError로 표 전체가 ErrorBoundary 화면이 된다
+  //    (@ts-nocheck + esbuild라 컴파일러가 못 잡는다 — CLAUDE.md initTradeRest 장애와 동일 부류).
+  // showAnnualized=true면 `0.82% (9.84%)`처럼 괄호에 연환산(월 분배율 × 12)을 붙인다.
+  // 연간합계 셀은 이미 1년치라 연환산이 무의미하므로 false로 부른다.
+  const stockRateCell = (net, investUsd, showAnnualized) => net > 0 ? (
+    <div className="flex flex-col items-center leading-[1.25]">
+      <span className="text-[9px] text-gray-500 whitespace-nowrap">
+        {formatUsd(net)} / {investUsd > 0 ? formatUsd(investUsd) : '-'}
+      </span>
+      <span className="text-[10px] whitespace-nowrap">
+        <span className={investUsd > 0 ? 'font-bold text-teal-300' : 'text-gray-600'}>
+          {investUsd > 0 ? fmtRate(net, investUsd) : '-'}
+        </span>
+        {investUsd > 0 && showAnnualized && (
+          <span className="ml-1 text-[9px] font-normal text-teal-300/50">({fmtRate(net * 12, investUsd)})</span>
+        )}
+      </span>
+    </div>
+  ) : <span className="text-[10px] text-gray-600">-</span>;
+
+  const renderStockRateRows = (rateRows, hasOverseas) => rateRows.map((r, ri) => (
+    <tr key={`rate-${r.portfolioId}-${r.code}`} className={ri === 0 ? 'border-t border-gray-700/40' : ''}>
+      <td className="py-1.5 px-3 text-left sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+        {ri === 0 && <div className="text-[9px] text-teal-400/70 font-normal">분배율 · 종목 투자금 대비</div>}
+        <div className="text-[11px] font-bold text-teal-300 truncate" title={`${r.name || r.code}${r.investUsd > 0 ? ` · 투자금 ${formatUsd(r.investUsd)}` : ' · 투자금액 미입력'}`}>{r.code}</div>
+      </td>
+      {/* ⚠️ 12칸 원본 배열을 그대로 순회하고 반환값만 거른다 — .filter().map()으로 바꾸면 인덱스가 밀린다 */}
+      {r.monthly.map((net, i) => !isMonthHidden(i) && (
+        <td key={i} colSpan={hasOverseas ? 2 : 1} className="py-1.5 px-1 text-center">
+          {stockRateCell(net, r.investUsd, true)}
+        </td>
+      ))}
+      <td colSpan={hasOverseas ? 2 : 1} className="py-1.5 px-2 text-center">
+        {stockRateCell(r.annual, r.investUsd, false)}
+      </td>
+    </tr>
+  ));
+
+  // 월 예상 분배금 탭 — 세후 = 세전 × (1 − 세율/100). tbody 종목 행(:afterTaxUsd)·연간 셀과 **동일 산식**.
+  const expectedStockRates = expectedRows.filter(r => r.isOverseas).map(r => {
+    const net = 1 - getTaxRate(r.portfolioId) / 100;
+    return {
+      portfolioId: r.portfolioId, code: r.code, name: r.name, investUsd: r.investUsd,
+      monthly: r.monthData.map(d => d.amountUsd * net),
+      annual: r.annualUsd * net,
+    };
+  }).filter(r => r.annual > 0);
+
+  // 월 입금 내역 탭 — 실입력(hasManual)된 세후 USD만. tbody 세후 셀·연간 셀과 **동일 소스**.
+  // ⚠️ extraActualRows(수동 추가 행)는 수량·투자금액 개념이 구조적으로 없어 제외한다.
+  const actualStockRates = actualRows.filter(r => r.isOverseas).map(r => ({
+    portfolioId: r.portfolioId, code: r.code, name: r.name, investUsd: r.investUsd,
+    monthly: r.monthData.map(d => d.hasManual ? d.afterTaxUsd : 0),
+    annual: r.annualAfterUsd,
+  })).filter(r => r.annual > 0);
 
   // ── 월 예상 분배금 탭 totals ──
   const monthlyTotals = Array.from({ length: 12 }, (_, i) =>
@@ -1738,13 +1810,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       </td>
                     )}
                   </tr>
-                  {renderDistRateRow(monthlyTotals, annualTotal, expectedHasOverseas, monthlyUsdTotals, annualUsdTotal)}
+                  {/* 해외계좌는 종목별 분배율(달러·세후·종목 투자금 대비), 국내는 종전 계좌 총원금 기준 1행 */}
+                  {expectedHasOverseas
+                    ? renderStockRateRows(expectedStockRates, expectedHasOverseas)
+                    : renderDistRateRow(monthlyTotals, annualTotal, expectedHasOverseas, monthlyUsdTotals, annualUsdTotal)}
                 </tfoot>
               </table>
             )}
             {!loading && expectedRows.length > 0 && (
               <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
                 초록 배경 = {CURRENT_YEAR}년 실제 지급 데이터 &nbsp;·&nbsp; 파란 글씨 = 직전연도 기준 예측 &nbsp;·&nbsp; 날짜 = 배당락-지급일(~ 는 직전연도 기준 추정) &nbsp;·&nbsp; <span className="text-amber-400/70">주황 수량</span> = 실지급액 역산 &nbsp;·&nbsp; 월 상단 클릭 → 숨기기
+                {expectedHasOverseas && <> &nbsp;·&nbsp; <span className="text-teal-400/70">분배율</span> = 종목 세후 분배금 ÷ 그 종목 투자금(달러), 괄호 = 연환산(월×12)</>}
               </div>
             )}
           </div>
@@ -2231,7 +2307,10 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </td>
                   )}
                 </tr>
-                {renderDistRateRow(actualMonthlyGrossKrw, actualAnnualGrossKrw, actualHasOverseas, actualMonthlyGrossUsd, actualAnnualGrossUsd)}
+                {/* 해외계좌는 종목별 분배율(달러·세후·종목 투자금 대비), 국내는 종전 계좌 총원금 기준 1행 */}
+                {actualHasOverseas
+                  ? renderStockRateRows(actualStockRates, actualHasOverseas)
+                  : renderDistRateRow(actualMonthlyGrossKrw, actualAnnualGrossKrw, actualHasOverseas, actualMonthlyGrossUsd, actualAnnualGrossUsd)}
                 {!actualHasOverseas && actualAnnualTaxTotal > 0 && (<>
                   <tr className="text-orange-300/60">
                     <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
@@ -2274,6 +2353,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           )}
           <div className="px-3 py-1.5 bg-[#0f172a]/60 text-[10px] text-gray-600 border-t border-gray-700/50">
             셀 클릭 → 실제 입금액 직접 입력 (Enter 저장 · Esc 취소) &nbsp;·&nbsp; 초록 = 직접 입력 &nbsp;·&nbsp; 파란 = 예상값 &nbsp;·&nbsp; 수량 = (세후+과세)÷주당분배금 계산값, <span className="text-amber-400/80">더블클릭 시 직접 수정</span> &nbsp;·&nbsp; 월 상단 클릭 → 숨기기
+            {actualHasOverseas && <> &nbsp;·&nbsp; <span className="text-teal-400/70">분배율</span> = 종목 세후 분배금 ÷ 그 종목 투자금(달러), 괄호 = 연환산(월×12)</>}
           </div>
         </div>
       )}

@@ -909,7 +909,45 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 - 적용 범위: expectedRows / actualRows / compactExpectedRows / compactActualRows
   (빈 미래월 폴백은 actualRows / compactActualRows 에만 적용)
 
-### 분배율 행 = 통화별 2행(달러/원화) — 해외계좌 원금은 USD (⚠️ 회귀 주의)
+### 분배율 = 해외계좌는 '종목별', 그 외는 '계좌 총원금' (⚠️ 회귀 주의 — 두 경로를 합치지 말 것)
+
+분배율 행은 **두 구현이 공존**하고 분기는 `hasOverseas` 하나가 정한다(`DividendSummaryTable`).
+
+| 화면 | 함수 | 분모 | 분자 | 통화 |
+|---|---|---|---|---|
+| **해외계좌 개별 뷰** | `renderStockRateRows` | **그 종목의 투자금** `overseasInvestAmount(item)` | **세후(net)** | **USD 1가지** |
+| 국내계좌 개별 뷰 · 통합(compact) | `renderDistRateRow` | 계좌 총원금 `p.principal` 합 | 세전(gross) | 원화(+달러 2행) |
+
+**왜 종목별인가**(사용자 요청 2026-08): 계좌 총원금에는 **분배금을 한 푼도 주지 않는 종목·예수금·
+현금이 섞여 있어** 분배율이 구조적으로 희석된다. 종목 단위로 나눠야 "이 종목에 넣은 돈이 매달 몇
+%를 돌려주는가"라는 실제로 쓸 수 있는 수치가 된다. **계좌 총원금 1행으로 되돌리지 말 것.**
+
+- **표시 규약**: 라벨 열 = **종목코드**(첫 행에만 `분배율 · 종목 투자금 대비` 캡션). 월 셀 2줄 —
+  위 `세후분배금 / 투자금`(9px 회색), 아래 **`월분배율`(굵게) + `(연환산)`**(연환산 = 월 분배율 × 12).
+  **연간합계 셀은 이미 1년치라 연환산 괄호를 붙이지 않는다**(`stockRateCell`의 `showAnnualized=false`).
+- **⚠️ 분자는 세후(net)** — 사용자 확정(실수령 기준). 그리고 **tbody 종목 행과 문자 그대로 같은 식**을
+  써야 한다: 월 예상 탭 `d.amountUsd * (1 - taxRate/100)` · 연간 `row.annualUsd * (1 - taxRate/100)` /
+  월 입금 탭 `d.hasManual ? d.afterTaxUsd : 0` · 연간 `row.annualAfterUsd`. 다른 식을 쓰면 같은 표의
+  세후 열과 분배율이 모순된다(tfoot `monthlyUsdTaxTotals`는 `Math.round`도 `perShareTaxableBase`도
+  적용하지 않아 행 단위 식과 미세하게 다르다 — 그쪽을 베끼지 말 것).
+- **⚠️ 분모는 `utils.overseasInvestAmount(item)`(USD)** — `item.investAmount`를 읽으면 **원화 잔존값**
+  (레거시·`PasteModal` 임포트)이 섞여 ≈1,390배 오염된다('해외계좌 투자금액' 섹션). 값은 `expectedRows`/
+  `actualRows`의 **`investUsd` 필드**로 실어 보낸다(파생값 — 저장 지점 0곳). 이 표가 받는 배열은
+  `allPortfoliosForDividend`라 **raw item**(환율 미적용)이므로 `totals.calcPortfolio` 함정과는 무관하다.
+- **⚠️ `hasOverseas`는 반드시 인자로 받는다** — `expectedHasOverseas`는 **탭 IIFE 지역 변수**라
+  컴포넌트 스코프 헬퍼가 그냥 참조하면 렌더 중 ReferenceError로 **표 전체가 ErrorBoundary 화면**이
+  된다(`@ts-nocheck` + esbuild라 컴파일러도 `undefcheck`도 못 잡는다 — `initTradeRest` 장애와 동일 부류.
+  `scopecheck.mjs`가 이 부류 전용 게이트다).
+- **열 수 항등식**(어기면 그 행부터 표 정렬이 통째로 깨진다): `1(sticky 라벨) + Σ_{!isMonthHidden(i)}
+  (hasOverseas?2:1) + (hasOverseas?2:1)`. **연간 셀을 빠뜨리는 사고가 잦다.** 월 순회는 12칸 원본 배열 +
+  `!isMonthHidden(i)` — `.filter().map()` 금지(인덱스가 밀려 저장 키가 옆 달로 간다).
+- **행 집합 = `rows.filter(r => r.isOverseas)` 중 `annual > 0`**. `extraActualRows`(수동 추가 행)는
+  **제외**(수량·투자금액 개념이 구조적으로 없다). 유령 행(`__orphan`, 삭제된 종목)은 **포함하되**
+  `investUsd = 0`이라 분모 없음 → `fmtRate`가 `'-'`를 반환한다(조용한 오적용보다 명시적 미적용).
+- **범위 밖(의도)**: 국내 계좌·통합 뷰는 종목별 분배율 **미적용**(아래 통화 규약 그대로). 통합은
+  계좌별 행이라 종목 단위 데이터가 없고, 국내는 사용자가 해외만 요청했다.
+
+### 분배율 행(국내·통합) = 통화별 2행(달러/원화) — 해외계좌 원금은 USD (⚠️ 회귀 주의)
 
 `renderDistRateRow`(`DividendSummaryTable`)의 분모는 **통화를 맞춰야** 한다. **해외계좌(overseas)의
 `p.principal`은 USD**(원금·평가 모두 USD 기준 — '해외계좌 투자금액' 섹션)인데, 과거엔 그 값을 원화
@@ -926,6 +964,9 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 - **호출 3지점 전부 USD 배열을 넘길 것**(빠뜨리면 그 화면만 조용히 1행으로 강등): compact 통합
   (`compact*MonthlyUsd`/`compact*AnnualUsd`, 탭별) · 월 예상 분배금(`monthlyUsdTotals`/`annualUsdTotal`) ·
   월 입금 내역(`actualMonthlyGrossUsd`/`actualAnnualGrossUsd` — KRW도 **gross**라 세전끼리 짝을 맞춤).
+  ⚠️ 개별 뷰 2지점은 **`hasOverseas`가 false일 때만 실행**되므로(해외면 위 종목별 행이 대신 렌더된다)
+  실제로 2행이 뜨는 곳은 **compact 하나뿐**이다. 그래도 USD 인자를 지우지 말 것 — 종목별 경로를
+  되돌리거나 국내·해외 혼합 계좌가 생기면 그 순간 조용히 1행으로 강등된다.
 - 3번째 인자 `hasOverseas`는 **colSpan 전용**(세전/세후 2열 여부)이고 2행 표시 여부와 무관하다 —
   compact는 열이 1개라 `false`를 넘기면서도 2행을 표시한다.
 
