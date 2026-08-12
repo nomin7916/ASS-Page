@@ -961,25 +961,49 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
   ) : null;
 
   // ── 분배율 = 월(또는 연간) 합계 ÷ 투자원금 ──
-  // 표시 계좌의 투자원금 합산(비compact는 활성 계좌 1개 → 그 계좌 원금)을 분모로 사용
-  const totalPrincipal = nonGoldPortfolios.reduce((s, p) => s + (cleanNum(p.principal) || 0), 0);
-  const fmtDistRate = (amt) => totalPrincipal > 0 ? `${(amt / totalPrincipal * 100).toFixed(2)}%` : '-';
-  const renderDistRateRow = (monthlyArr, annualVal, hasOverseas) => (
-    <tr className="border-t border-gray-700/40">
-      <td className="py-1.5 px-3 text-left sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
-        <div className="text-[11px] font-bold text-teal-300">분배율</div>
-        <div className="text-gray-500 text-[9px] font-normal">월 합계 ÷ 원금 {formatCurrency(totalPrincipal)}</div>
-      </td>
-      {monthlyArr.map((total, i) => !isMonthHidden(i) && (
-        <td key={i} colSpan={hasOverseas ? 2 : 1} className={`py-1.5 px-1 text-center text-[10px] font-semibold ${total > 0 ? 'text-teal-300/80' : 'text-gray-600'}`}>
-          {total > 0 ? fmtDistRate(total) : '-'}
+  // ⚠️ 해외계좌(overseas)의 `p.principal`은 USD다(원금·평가 모두 USD 기준 — CLAUDE.md 해외계좌 규약).
+  // 과거엔 그 USD 원금을 원화 분배금 합계의 분모로 그대로 써서 분배율이 환율 배수(≈1,390배)만큼
+  // 부풀었다(원금 $28,304 · 12월 ₩346,802 → 1328.79%). 통화를 맞춰 두 기준으로 나눠 계산한다.
+  //  · 달러 기준(굵게)  = 달러 분배금 ÷ 달러 원금
+  //  · 원화 기준(작게)  = 원화 분배금 ÷ 원화 환산 원금(현재 환율)
+  // 두 값은 일치하지 않는 것이 정상 — 원화 분배금은 사용자가 실제 입금 시점 환율로 입력한 값이고
+  // 원화 환산 원금은 현재 환율(usdkrw)로 환산하기 때문이다.
+  const principalUsd = nonGoldPortfolios.reduce((s, p) => s + (p.accountType === 'overseas' ? (cleanNum(p.principal) || 0) : 0), 0);
+  const domesticPrincipalKrw = nonGoldPortfolios.reduce((s, p) => s + (p.accountType === 'overseas' ? 0 : (cleanNum(p.principal) || 0)), 0);
+  // 환율 미확보 시 해외 원금을 원화로 환산할 수 없다 → 분모 0으로 두어 '-'로 표시(부풀린 값을 단언하지 않는다).
+  const totalPrincipal = (principalUsd > 0 && !(usdkrw > 0)) ? 0 : domesticPrincipalKrw + principalUsd * usdkrw;
+  const fmtRate = (amt, base) => base > 0 ? `${(amt / base * 100).toFixed(2)}%` : '-';
+  // usdMonthlyArr가 주어지고 달러 원금이 있으면 2줄(달러 굵게 / 원화 작게), 아니면 종전처럼 1줄.
+  const renderDistRateRow = (monthlyArr, annualVal, hasOverseas, usdMonthlyArr = null, usdAnnualVal = 0) => {
+    const dual = !!usdMonthlyArr && principalUsd > 0;
+    const rateCell = (krwAmt, usdAmt) => dual ? (
+      <div className="flex flex-col items-center leading-[1.25]">
+        <span className={`font-bold ${usdAmt > 0 ? 'text-teal-300' : 'text-gray-600'}`}>{usdAmt > 0 ? fmtRate(usdAmt, principalUsd) : '-'}</span>
+        <span className={`text-[9px] font-normal ${krwAmt > 0 ? 'text-teal-300/45' : 'text-gray-700'}`}>{krwAmt > 0 ? fmtRate(krwAmt, totalPrincipal) : '-'}</span>
+      </div>
+    ) : (krwAmt > 0 ? fmtRate(krwAmt, totalPrincipal) : '-');
+    return (
+      <tr className="border-t border-gray-700/40">
+        <td className="py-1.5 px-3 text-left sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
+          <div className="text-[11px] font-bold text-teal-300">분배율</div>
+          {dual ? (<>
+            <div className="text-gray-500 text-[9px] font-normal">$ 합계 ÷ 원금 {formatUsd(principalUsd) || '$0'}</div>
+            <div className="text-gray-600 text-[9px] font-normal">₩ 합계 ÷ 원금 {formatCurrency(totalPrincipal)}</div>
+          </>) : (
+            <div className="text-gray-500 text-[9px] font-normal">월 합계 ÷ 원금 {formatCurrency(totalPrincipal)}</div>
+          )}
         </td>
-      ))}
-      <td colSpan={hasOverseas ? 2 : 1} className={`py-1.5 px-2 text-center text-[10px] font-bold ${annualVal > 0 ? 'text-teal-300' : 'text-gray-600'}`}>
-        {annualVal > 0 ? fmtDistRate(annualVal) : '-'}
-      </td>
-    </tr>
-  );
+        {monthlyArr.map((total, i) => !isMonthHidden(i) && (
+          <td key={i} colSpan={hasOverseas ? 2 : 1} className={`py-1.5 px-1 text-center text-[10px] font-semibold ${(total > 0 || (dual && usdMonthlyArr[i] > 0)) ? 'text-teal-300/80' : 'text-gray-600'}`}>
+            {rateCell(total, dual ? (usdMonthlyArr[i] || 0) : 0)}
+          </td>
+        ))}
+        <td colSpan={hasOverseas ? 2 : 1} className={`py-1.5 px-2 text-center text-[10px] font-bold ${(annualVal > 0 || (dual && usdAnnualVal > 0)) ? 'text-teal-300' : 'text-gray-600'}`}>
+          {rateCell(annualVal, dual ? (usdAnnualVal || 0) : 0)}
+        </td>
+      </tr>
+    );
+  };
 
   // ── 월 예상 분배금 탭 totals ──
   const monthlyTotals = Array.from({ length: 12 }, (_, i) =>
@@ -1356,7 +1380,11 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </td>
                   )}
                 </tr>
-                {renderDistRateRow(compactMonthlyTotals, totalAnnual, false)}
+                {renderDistRateRow(
+                  compactMonthlyTotals, totalAnnual, false,
+                  activeTab === 'expected' ? compactExpectedMonthlyUsd : compactActualMonthlyUsd,
+                  activeTab === 'expected' ? compactExpectedAnnualUsd : compactActualAnnualUsd
+                )}
                 {activeTab === 'expected' && compactAnnualTax > 0 && (() => {
                   const monthlyTaxArr = Array.from({ length: 12 }, (_, i) =>
                     compactExpectedRows
@@ -1710,7 +1738,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       </td>
                     )}
                   </tr>
-                  {renderDistRateRow(monthlyTotals, annualTotal, expectedHasOverseas)}
+                  {renderDistRateRow(monthlyTotals, annualTotal, expectedHasOverseas, monthlyUsdTotals, annualUsdTotal)}
                 </tfoot>
               </table>
             )}
@@ -2203,7 +2231,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </td>
                   )}
                 </tr>
-                {renderDistRateRow(actualMonthlyGrossKrw, actualAnnualGrossKrw, actualHasOverseas)}
+                {renderDistRateRow(actualMonthlyGrossKrw, actualAnnualGrossKrw, actualHasOverseas, actualMonthlyGrossUsd, actualAnnualGrossUsd)}
                 {!actualHasOverseas && actualAnnualTaxTotal > 0 && (<>
                   <tr className="text-orange-300/60">
                     <td className="py-1 px-3 text-left text-[10px] sticky left-0 z-[5] bg-[#1e293b] [box-shadow:2px_0_6px_rgba(0,0,0,0.5)]">
