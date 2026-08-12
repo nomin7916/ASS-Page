@@ -8,6 +8,8 @@ import {
   safeNum,
   computeMonthlyAvgForGrid,
   computeMonthlyQtyForGrid,
+  computeSellTaxRow,
+  resolveAvgBuyPrice,
   isKrCode,
 } from '../krEtfTaxHelpers';
 const FUNETF_ORIGIN = 'https://www.funetf.co.kr';
@@ -38,6 +40,21 @@ const CURRENT_YEAR = new Date().getFullYear().toString();
 const numInputCls = 'w-full bg-gray-900 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-gray-100 outline-none tabular-nums text-right';
 const exInputCls = 'w-full bg-gray-900/60 border border-gray-700 focus:border-amber-500 rounded px-1 py-0.5 text-[10px] text-amber-300 outline-none tabular-nums text-right';
 const avgInputCls = 'w-full bg-gray-900/60 border border-gray-700 focus:border-sky-400 rounded px-1 py-0.5 text-[10px] text-sky-200 outline-none tabular-nums text-right';
+
+// 평균단가(구매단가)를 어디서 가져왔는지 — 툴팁 표기용 (resolveAvgBuyPrice의 source와 1:1)
+const AVG_SRC_LABEL = {
+  portfolio: '포트폴리오 테이블 구매단가 (투자금액 ÷ 보유수량)',
+  item: '종목의 구매단가 필드 (해외·붙여넣기 임포트)',
+  events: '계산기 매수 이벤트 평균 매입단가 (포트폴리오에 수량·투자금액이 없어 폴백)',
+  unreliable: '매입단가가 비어 있는 매수 행이 있어 계산기 매수 평균을 신뢰할 수 없음',
+  none: '',
+};
+// 헤더에 상시 노출하는 짧은 출처 라벨 — 툴팁에만 두면 호버하지 않는 사용자는 화면에 없는 값으로
+// 판정이 내려진 사실을 알 수 없다(특히 'item' 폴백은 포트폴리오 표의 구매단가와 다를 수 있다).
+const AVG_SRC_SHORT = { portfolio: '포트폴리오 구매단가', item: '임포트 매입단가', events: '계산기 매수 평균', unreliable: '', none: '' };
+// 포트폴리오 구매단가와 계산기 매수 평균이 이만큼 벌어지면 경고 — 매도를 포트폴리오 표에
+// 반영할 때 보유수량만 줄이고 투자금액을 그대로 두면 구매단가가 폭등한다.
+const AVG_BUY_MISMATCH_RATIO = 0.05;
 
 const fmtTaxBase = (v) => {
   const n = safeNum(v);
@@ -189,6 +206,32 @@ export default function KrEtfTaxMatrix({
       profitTotal: curPrice > 0 ? buyProfitTotal : 0,
       profitRate: curPrice > 0 && buyAmountTotal > 0 ? (buyProfitTotal / buyAmountTotal) * 100 : 0,
     };
+    // 평균단가(구매단가) — 단가 기준 과세 판정에 쓰는 값. ⚠️ 국내 주식 행의 포트폴리오 '구매단가'는
+    // item.purchasePrice가 아니라 투자금액 ÷ 보유수량이다(PortfolioTable 국내 분기). 자세한 폴백
+    // 순서는 resolveAvgBuyPrice 주석 참조.
+    // ⚠️ 매수 평균에서 빠진 행이 하나라도 있으면 계산기 매수 평균은 '부분 평균'이라 폴백으로
+    //    쓰지 않는다(비과세 오확정 방지). 같은 이유로 괴리가 크면 헤더에 경고를 띄운다.
+    //    빠지는 경우는 '매입단가 미입력'뿐 아니라 '날짜 미입력'도 있으므로 buyEvts의 여집합으로 센다
+    //    (buyNoPriceCount는 날짜가 유효한 행만 세므로 날짜를 지운 매수 행을 놓친다).
+    const buyExcludedCount = (events || [])
+      .filter(e => safeNum(e.change) > 0)
+      .filter(e => !(/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.purchasePrice) > 0))
+      .length;
+    const eventsAvg = buyExcludedCount === 0 ? buySummary.avgPrice : 0;
+    const avgBuyBase = resolveAvgBuyPrice(stock, buySummary.avgPrice, buyExcludedCount === 0);
+    // ⚠️ 교차검증 상태는 3값이다. 과거엔 'eventsAvg가 있고 5% 이상 다를 때'만 경고했는데, eventsAvg는
+    //    매수 행이 불완전하면 0이 되므로 **경고가 가장 필요한 계좌에서 정확히 꺼졌다**(적대적 리뷰
+    //    3렌즈 독립 확인). 비교 대상이 없는 것은 '정상'이 아니라 '교차검증 불가'로 표기해야 한다.
+    const avgBuy = {
+      ...avgBuyBase,
+      alt: eventsAvg,
+      excluded: buyExcludedCount,
+      verify: avgBuyBase.source !== 'portfolio' || !(avgBuyBase.value > 0)
+        ? 'na'
+        : !(eventsAvg > 0)
+          ? 'none'
+          : Math.abs(avgBuyBase.value - eventsAvg) / eventsAvg >= AVG_BUY_MISMATCH_RATIO ? 'mismatch' : 'ok',
+    };
     const currentQty = cleanNum(stock.quantity || 0);
     const monthData = monthYms.map(ym => {
       const exVal = exTaxBase[ym];
@@ -203,7 +246,7 @@ export default function KrEtfTaxMatrix({
       return { ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty };
     });
     const annualExpected = monthData.reduce((s, d) => s + d.expected, 0);
-    return { stock, events, sortedEventsWithAvg, buySummary, purchases, sales, currentQty, curPrice, monthData, annualExpected };
+    return { stock, events, sortedEventsWithAvg, buySummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected };
   });
 
   const monthlyExpected = monthYms.map((_, i) =>
@@ -280,7 +323,7 @@ export default function KrEtfTaxMatrix({
           </tr>
         </thead>
         <tbody>
-          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, purchases, sales, currentQty, curPrice, monthData, annualExpected }) => {
+          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected }) => {
             const isExpanded = expandedCode === stock.code;
             return (
               <React.Fragment key={stock.code}>
@@ -424,8 +467,8 @@ export default function KrEtfTaxMatrix({
                                       <span className="text-gray-600 font-normal ml-0.5" title="자산검증 전일 수량 자동 조회">↺</span>
                                     </th>
                                     <th className="text-right py-1 px-1 font-normal w-[68px]" title="매수=양수 / 매도=음수">매매수량</th>
-                                    <th className="text-right py-1 px-1 font-normal w-[84px] text-orange-400/70">매입단가</th>
-                                    <th className="text-right py-1 px-1 font-normal w-[100px]" title="매입금액 = 매매수량 × 매입단가 (매수 행만)">매입금액</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[92px] text-orange-400/70" title="매수 행 = 매입단가 / 매도 행 = 매도단가(그날의 종가)">매입/매도단가</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[104px]" title="매수 = 매매수량 × 매입단가 / 매도 = 매도수량 × 매도단가">매입/매도금액</th>
                                     <th className="text-right py-1 px-1 font-normal w-[120px]" title="현재가격 × 매매수량 — 그 매입 수량의 현재 평가금액. 아랫줄은 손익 · 수익률(이익 빨강 / 손실 파랑)">
                                       현재가 × 매매수량
                                       <div className="text-[8px] text-gray-600 font-normal tabular-nums">
@@ -434,7 +477,30 @@ export default function KrEtfTaxMatrix({
                                     </th>
                                     <th className="text-right py-1 px-1 font-normal w-[88px]">과표기준가</th>
                                     <th className="text-right py-1 px-1 font-normal w-[80px]">평균 과표</th>
-                                    <th className="text-right py-1 px-1 font-normal w-[96px] text-emerald-400/70" title="매도 시 과세: (과표기준가 − 평균 과표) × 매도주식수, 0 이하면 비과세">과세 금액</th>
+                                    <th className="text-right py-1 px-1 font-normal w-[100px] text-emerald-400/70" title="과표 기준 과세표준 = (매도 과표기준가 − 평균 과표) × 매도주식수, 0 이하면 비과세">과세 금액(과표)</th>
+                                    <th
+                                      className="text-right py-1 px-1 font-normal w-[110px] text-emerald-400/70"
+                                      title={
+                                        '단가 기준 과세표준 = (매도단가 − 평균단가) × 매도주식수, 0 이하면 비과세'
+                                        + (avgBuy.source !== 'none' ? `\n평균단가 출처: ${AVG_SRC_LABEL[avgBuy.source]}` : '')
+                                        + (avgBuy.alt > 0 ? `\n계산기 매수 평균: ${fmtTaxBase(avgBuy.alt)}원` : '')
+                                        + (avgBuy.verify === 'mismatch' ? '\n⚠ 두 값이 5% 이상 다릅니다 — 포트폴리오의 보유수량·투자금액이 매도 반영과 어긋났을 수 있습니다' : '')
+                                        + (avgBuy.verify === 'none' ? '\n⚠ 계산기 매수 평균이 없어(매수 행 없음 또는 매입단가·일자 미입력) 이 값을 교차검증할 수 없습니다 — 매도를 포트폴리오 표에 반영할 때 보유수량만 줄이고 투자금액을 그대로 두면 구매단가가 실제보다 커집니다' : '')
+                                      }
+                                    >
+                                      과세 금액(단가)
+                                      <div className={`text-[8px] font-normal tabular-nums ${avgBuy.verify === 'mismatch' ? 'text-amber-400/80' : 'text-gray-600'}`}>
+                                        {avgBuy.value > 0
+                                          ? `평균단가 ${fmtTaxBase(avgBuy.value)}원${avgBuy.verify === 'mismatch' ? ' ⚠' : ''}`
+                                          : avgBuy.source === 'unreliable' ? '평균단가 불확실' : '평균단가 없음'}
+                                      </div>
+                                      {avgBuy.value > 0 && (
+                                        <div className={`text-[8px] font-normal ${avgBuy.verify === 'none' ? 'text-amber-400/60' : 'text-gray-700'}`}>
+                                          {AVG_SRC_SHORT[avgBuy.source]}{avgBuy.verify === 'none' ? ' · 교차검증 불가' : ''}
+                                        </div>
+                                      )}
+                                    </th>
+                                    <th className="text-right py-1 px-1 font-normal w-[96px] text-amber-300/70" title="실제 과세 = 과표 기준·단가 기준이 모두 0보다 클 때만 과세. 금액은 둘 중 작은 쪽(min)">실제 과세</th>
                                     <th className="py-1 px-1 w-[20px]"></th>
                                   </tr>
                                 </thead>
@@ -449,11 +515,21 @@ export default function KrEtfTaxMatrix({
                                     const buyEval = isBuy && curPrice > 0 ? changeNum * curPrice : 0;
                                     const rowProfit = buyAmount > 0 && curPrice > 0 ? buyEval - buyAmount : null;
                                     const rowProfitRate = rowProfit !== null ? (rowProfit / buyAmount) * 100 : null;
-                                    const sellTaxBasePrice = safeNum(evt.taxBasePrice); // 매도시 과표기준가
-                                    const sellPerShareTax = sellTaxBasePrice - runningAvg; // 과표기준가 − 평균 과표 (1주당)
-                                    const soldQty = -changeNum; // 매도 주식수 (양수)
-                                    const canCalcSellTax = isSell && sellTaxBasePrice > 0 && runningAvg > 0;
-                                    const sellTaxAmount = sellPerShareTax > 0 ? sellPerShareTax * soldQty : 0; // 과세표준 (세율 미적용)
+                                    // ⚠️ 매도단가는 evt.sellPrice, 매입단가는 evt.purchasePrice — 화면은 한 칸이지만
+                                    //    저장 필드는 분리한다. 한 필드를 공유하면 매매수량 부호를 정정하는 순간
+                                    //    (예: -630 오타를 +630으로) 저장된 값이 반대 의미로 재해석돼, 입력한 적 없는
+                                    //    매입단가가 매수 요약·손익을 오염시키거나 그 반대가 된다.
+                                    const sellUnit = safeNum(evt.sellPrice);
+                                    const priceField = isSell ? 'sellPrice' : 'purchasePrice';
+                                    const priceRaw = evt[priceField];
+                                    // 매도 1건의 과세 3종(과표 기준 · 단가 기준 · 실제 과세)
+                                    const sc = computeSellTaxRow({
+                                      change: evt.change,
+                                      taxBasePrice: evt.taxBasePrice,
+                                      sellPrice: evt.sellPrice,
+                                      avgTaxBase: runningAvg,
+                                      avgBuyPrice: avgBuy.value,
+                                    });
                                     return (
                                       <tr key={evt.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/10">
                                         <td className="py-1 pl-2 pr-0.5">
@@ -494,24 +570,35 @@ export default function KrEtfTaxMatrix({
                                           />
                                         </td>
                                         <td className="py-1 px-1">
-                                          {isBuy ? (
+                                          {isBuy || isSell ? (
                                             <input
                                               type="text"
                                               inputMode="numeric"
-                                              value={evt.purchasePrice !== undefined && evt.purchasePrice !== '' ? evt.purchasePrice : ''}
-                                              onChange={e => updateEvent(stock.code, events, evt.id, 'purchasePrice', e.target.value)}
-                                              placeholder="0"
-                                              className={numInputCls + ' !text-orange-300'}
-                                              title="실제 매입단가 (차트 평균단가 기준 수익률 계산용)"
+                                              value={priceRaw !== undefined && priceRaw !== '' ? priceRaw : ''}
+                                              onChange={e => updateEvent(stock.code, events, evt.id, priceField, e.target.value)}
+                                              placeholder={isSell ? '매도단가' : '0'}
+                                              className={numInputCls + (isSell ? ' !text-rose-300' : ' !text-orange-300')}
+                                              title={isSell
+                                                ? '매도단가 (그날의 종가) — 매도금액과 단가 기준 과세 계산에 사용'
+                                                : '실제 매입단가 (차트 평균단가 기준 수익률 계산용)'}
                                             />
                                           ) : (
                                             <div className="text-[10px] text-gray-700 text-right px-1">-</div>
                                           )}
                                         </td>
-                                        <td className="py-1 px-1 text-right tabular-nums text-gray-300" title={buyAmount > 0 ? `${changeNum.toLocaleString()}주 × ${buyPrice.toLocaleString()}원` : undefined}>
+                                        <td
+                                          className="py-1 px-1 text-right tabular-nums text-gray-300"
+                                          title={buyAmount > 0
+                                            ? `${changeNum.toLocaleString()}주 × ${buyPrice.toLocaleString()}원`
+                                            : sc.sellAmount !== null
+                                              ? `매도 ${sc.soldQty.toLocaleString()}주 × ${sellUnit.toLocaleString()}원 (매도단가)`
+                                              : undefined}
+                                        >
                                           {buyAmount > 0
                                             ? formatCurrency(Math.round(buyAmount))
-                                            : <span className="text-gray-700">-</span>}
+                                            : sc.sellAmount !== null
+                                              ? <span className="text-rose-300">{formatCurrency(Math.round(sc.sellAmount))}</span>
+                                              : <span className="text-gray-700">-</span>}
                                         </td>
                                         <td className="py-1 px-1 text-right tabular-nums">
                                           {isBuy && curPrice > 0 ? (
@@ -550,20 +637,72 @@ export default function KrEtfTaxMatrix({
                                           {runningAvg > 0 ? fmtTaxBase(runningAvg) : <span className="text-gray-700">-</span>}
                                         </td>
                                         <td className="py-1 px-1 text-right tabular-nums">
-                                          {canCalcSellTax ? (
-                                            sellPerShareTax > 0 ? (
+                                          {sc.baseReady ? (
+                                            sc.basePerShare > 0 ? (
                                               <>
                                                 <div className="text-emerald-400 font-medium" title="과세금액 = (과표기준가 − 평균 과표) × 매도주식수">
-                                                  {formatCurrency(sellTaxAmount)}
+                                                  {formatCurrency(sc.baseAmount)}
                                                 </div>
-                                                <div className="text-[8px] text-gray-500">+{fmtTaxBase(sellPerShareTax)}/주 × {soldQty.toLocaleString()}</div>
+                                                <div className="text-[8px] text-gray-500">+{fmtTaxBase(sc.basePerShare)}/주 × {sc.soldQty.toLocaleString()}</div>
                                               </>
                                             ) : (
                                               <>
                                                 <div className="text-gray-400" title="과표기준가 ≤ 평균 과표 → 비과세">비과세</div>
-                                                <div className="text-[8px] text-gray-600">{fmtTaxBase(sellPerShareTax)}/주</div>
+                                                <div className="text-[8px] text-gray-600">{fmtTaxBase(sc.basePerShare)}/주</div>
                                               </>
                                             )
+                                          ) : (
+                                            <span className="text-gray-700">-</span>
+                                          )}
+                                        </td>
+                                        <td className="py-1 px-1 text-right tabular-nums">
+                                          {sc.priceReady ? (
+                                            sc.pricePerShare > 0 ? (
+                                              <>
+                                                <div className="text-emerald-400 font-medium" title="과세금액 = (매도단가 − 평균단가) × 매도주식수">
+                                                  {formatCurrency(sc.priceAmount)}
+                                                </div>
+                                                <div className="text-[8px] text-gray-500">+{fmtTaxBase(sc.pricePerShare)}/주 × {sc.soldQty.toLocaleString()}</div>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <div className="text-gray-400" title="매도단가 ≤ 평균단가 → 비과세">비과세</div>
+                                                <div className="text-[8px] text-gray-600">{fmtTaxBase(sc.pricePerShare)}/주</div>
+                                              </>
+                                            )
+                                          ) : sc.isSell ? (
+                                            <span
+                                              className={`text-[9px] ${avgBuy.source === 'unreliable' ? 'text-amber-400/70' : 'text-gray-600'}`}
+                                              title={avgBuy.value > 0
+                                                ? '매입단가 칸에 매도단가(그날의 종가)를 입력하면 계산됩니다'
+                                                : avgBuy.source === 'unreliable'
+                                                  ? `매수 평균에서 빠진 매수 행이 ${avgBuy.excluded}건(매입단가 또는 일자 미입력) 있어 평균단가를 신뢰할 수 없습니다 — 그 행을 채우거나 포트폴리오의 보유수량·투자금액을 입력하세요`
+                                                  : '평균단가(구매단가)를 구할 수 없습니다 — 포트폴리오의 보유수량·투자금액 또는 매수 이벤트의 매입단가를 입력하세요'}
+                                            >{avgBuy.value > 0 ? '매도단가 미입력' : avgBuy.source === 'unreliable' ? '평균단가 불확실' : '평균단가 없음'}</span>
+                                          ) : (
+                                            <span className="text-gray-700">-</span>
+                                          )}
+                                        </td>
+                                        <td className="py-1 px-1 text-right tabular-nums">
+                                          {sc.taxable === true ? (
+                                            <>
+                                              <div className="text-amber-300 font-semibold" title="실제 과세표준 = min(과표 기준, 단가 기준) — 둘 다 0보다 클 때만 과세">
+                                                {formatCurrency(sc.actualAmount)}
+                                              </div>
+                                              <div className="text-[8px] text-amber-500/70">과세 · min {fmtTaxBase(sc.actualPerShare)}/주</div>
+                                            </>
+                                          ) : sc.taxable === false ? (
+                                            <>
+                                              <div className="text-gray-400" title="과표 기준·단가 기준 중 하나라도 0 이하면 비과세">비과세</div>
+                                              <div className="text-[8px] text-gray-600">
+                                                {sc.exemptReason === 'both' ? '과표·단가 모두 ≤ 0' : sc.exemptReason === 'base' ? '과표 ≤ 0' : '단가 ≤ 0'}
+                                              </div>
+                                            </>
+                                          ) : sc.isSell ? (
+                                            <span
+                                              className="text-[9px] text-gray-600"
+                                              title="과표기준가·평균 과표·매도단가·평균단가가 모두 있어야 과세 여부를 확정할 수 있습니다"
+                                            >판정 불가</span>
                                           ) : (
                                             <span className="text-gray-700">-</span>
                                           )}
@@ -639,11 +778,19 @@ export default function KrEtfTaxMatrix({
                           <br />
                           <span className="text-orange-400/60">매입단가</span> 는 아래 매수 요약(평균 매입단가) 산출에 사용됩니다 · 차트 '일일 수익률'(🎯)은 포트폴리오 테이블 매입금액 기준으로 증권사 수익률과 일치
                           <br />
-                          <span className="text-gray-500">매입금액</span> = 매매수량 × 매입단가 &nbsp;·&nbsp; <span className="text-gray-500">현재가 × 매매수량</span> = 그 매입 수량의 현재 평가금액(포트폴리오 테이블과 같은 라이브 시세)이며 아랫줄에 손익·수익률(<span className="text-red-400/70">이익</span>/<span className="text-blue-400/70">손실</span>)을 표시 &nbsp;·&nbsp; 매도 행은 <span className="text-gray-500">-</span>
+                          <span className="text-gray-500">매입금액</span> = 매매수량 × 매입단가 &nbsp;·&nbsp; <span className="text-gray-500">현재가 × 매매수량</span> = 그 매입 수량의 현재 평가금액(포트폴리오 테이블과 같은 라이브 시세)이며 아랫줄에 손익·수익률(<span className="text-red-400/70">이익</span>/<span className="text-blue-400/70">손실</span>)을 표시 &nbsp;·&nbsp; 매도 행은 매입금액 칸에 <span className="text-rose-300/70">매도금액</span>을 표시하고 현재가 × 매매수량은 <span className="text-gray-500">-</span>
                           <br />
-                          하단 요약 <span className="text-gray-500">손익</span> = 현재가 × 총 매수수량 − 총 매입금액 &nbsp;·&nbsp; 매수 이벤트 전체 기준(중간 매도분 포함)이라 위 행별 값의 단순 합과 같음
+                          하단 요약 <span className="text-gray-500">손익</span> = 현재가 × 총 매수수량 − 총 매입금액 &nbsp;·&nbsp; 매수 이벤트 전체 기준(중간 매도분 포함)이라 위 행별 값의 단순 합과 같음 &nbsp;·&nbsp; 매도 행은 매수 요약에 포함되지 않음
                           <br />
-                          <span className="text-emerald-400/70">과세 금액</span> = 매도 시 (매도 과표기준가 − 평균 과표) × 매도주식수 · 0 이하면 <span className="text-gray-400">비과세</span> (세율 미적용 과세표준)
+                          <span className="text-rose-300/70">매도단가</span> = 매도 행의 매입단가 칸에 그날의 종가를 입력 → <span className="text-gray-500">매도금액</span> = 매도수량 × 매도단가
+                          <br />
+                          <span className="text-emerald-400/70">과세 금액(과표)</span> = (매도 과표기준가 − 평균 과표) × 매도주식수 &nbsp;·&nbsp; <span className="text-emerald-400/70">과세 금액(단가)</span> = (매도단가 − 평균단가) × 매도주식수 &nbsp;·&nbsp; 각각 0 이하면 <span className="text-gray-400">비과세</span> (세율 미적용 과세표준)
+                          <br />
+                          <span className="text-amber-300/70">실제 과세</span> = 위 두 값이 <b className="text-gray-400">모두</b> 0보다 클 때만 과세이며 금액은 작은 쪽(min) &nbsp;·&nbsp; 하나라도 0 이하면 <span className="text-gray-400">비과세</span> &nbsp;·&nbsp; 한쪽이 미입력이어도 나머지가 0 이하면 비과세로 확정, 둘 다 필요한 '과세'는 <span className="text-gray-500">판정 불가</span>로 표기
+                          <br />
+                          <span className="text-gray-500">평균단가</span>는 ① 포트폴리오 구매단가(투자금액 ÷ 보유수량) → ② 종목의 구매단가 필드(붙여넣기 임포트) → ③ 계산기 매수 평균 순으로 채택하며 <b className="text-gray-400">실제 사용된 출처를 헤더 아래에 표시</b>합니다 &nbsp;·&nbsp; ③은 매입단가·일자가 빠진 매수 행이 하나라도 있으면 부분 평균이라 쓰지 않고 <span className="text-amber-400/70">평균단가 불확실</span>로 두어 단가 기준 과세를 계산하지 않습니다(잘못된 비과세 확정 방지)
+                          <br />
+                          ①은 <b className="text-gray-400">현재 시점</b> 값이라 매도·추가매수를 포트폴리오 표에 반영하면 과거 매도 행의 판정도 함께 바뀝니다 &nbsp;·&nbsp; 특히 <b className="text-gray-400">보유수량만 줄이고 투자금액을 그대로 두면</b> 구매단가가 실제보다 커져 과세 건이 비과세로 뒤집힙니다 → ③과 5% 이상 벌어지면 <span className="text-amber-400/80">⚠</span>, ③이 없어 대조할 수 없으면 <span className="text-amber-400/60">교차검증 불가</span>로 헤더에 표시합니다
                         </div>
                       </div>
                       </div>

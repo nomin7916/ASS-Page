@@ -259,6 +259,285 @@ it('보유 0이면 모든 값 0', () => {
   expectEq(r.netDividend, 0, 'netDividend');
 });
 
+// ─── src/krEtfTaxHelpers.ts 참조 구현 미러 ───────────────────────────────────
+// ⚠️ 아래 3함수의 본문은 src/krEtfTaxHelpers.ts와 항상 1:1 동기화할 것.
+function safeNum(v) {
+  if (v === '' || v == null) return 0;
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function resolveAvgBuyPrice(stock, fallbackAvg, fallbackReliable = true) {
+  const qty = safeNum(stock?.quantity);
+  const inv = safeNum(stock?.investAmount);
+  if (qty > 0 && inv > 0) return { value: inv / qty, source: 'portfolio' };
+  const pp = safeNum(stock?.purchasePrice);
+  if (pp > 0) return { value: pp, source: 'item' };
+  const fb = safeNum(fallbackAvg);
+  if (fb > 0) return fallbackReliable ? { value: fb, source: 'events' } : { value: 0, source: 'unreliable' };
+  return { value: 0, source: 'none' };
+}
+
+const PER_SHARE_EPS = 1e-6;
+const snapZero = (v) => (Math.abs(v) < PER_SHARE_EPS ? 0 : v);
+
+function computeSellTaxRow({ change, taxBasePrice, sellPrice, avgTaxBase, avgBuyPrice }) {
+  const changeNum = safeNum(change);
+  const isSell = changeNum < 0;
+  const soldQty = isSell ? -changeNum : 0;
+  const sell = safeNum(sellPrice);
+  const exBase = safeNum(taxBasePrice);
+  const avgTb = safeNum(avgTaxBase);
+  const avgBuy = safeNum(avgBuyPrice);
+
+  const sellAmount = isSell && sell > 0 ? soldQty * sell : null;
+
+  const baseReady = isSell && exBase > 0 && avgTb > 0;
+  const basePerShare = baseReady ? snapZero(exBase - avgTb) : 0;
+  const baseAmount = basePerShare > 0 ? basePerShare * soldQty : 0;
+
+  const priceReady = isSell && sell > 0 && avgBuy > 0;
+  const pricePerShare = priceReady ? snapZero(sell - avgBuy) : 0;
+  const priceAmount = pricePerShare > 0 ? pricePerShare * soldQty : 0;
+
+  let taxable = null;      // true=과세 / false=비과세 / null=판정 불가(입력 부족)
+  let exemptReason = null; // 'base' | 'price' | 'both'
+  if (isSell) {
+    const baseExempt = baseReady && basePerShare <= 0;
+    const priceExempt = priceReady && pricePerShare <= 0;
+    if (baseExempt || priceExempt) {
+      taxable = false;
+      exemptReason = baseExempt && priceExempt ? 'both' : baseExempt ? 'base' : 'price';
+    } else if (baseReady && priceReady) {
+      taxable = true;
+    }
+  }
+  const actualPerShare = taxable ? Math.min(basePerShare, pricePerShare) : 0;
+  const actualAmount = taxable ? actualPerShare * soldQty : 0;
+
+  return {
+    isSell, soldQty, sellAmount,
+    baseReady, basePerShare, baseAmount,
+    priceReady, pricePerShare, priceAmount,
+    taxable, exemptReason, actualPerShare, actualAmount,
+  };
+}
+
+console.log('\n[9] resolveAvgBuyPrice — 평균단가(구매단가) 해석');
+it('국내 주식: investAmount ÷ quantity (포트폴리오 테이블 구매단가와 동일 정의)', () => {
+  const r = resolveAvgBuyPrice({ quantity: 100, investAmount: 869920, purchasePrice: 0 }, 0);
+  expectApprox(r.value, 8699.2, 0.0001, 'value');
+  expectEq(r.source, 'portfolio', 'source');
+});
+it('investAmount가 있어도 quantity 0이면 나눗셈하지 않고 폴백 (Infinity 방지)', () => {
+  const r = resolveAvgBuyPrice({ quantity: 0, investAmount: 869920, purchasePrice: 8700 }, 0);
+  expectEq(r.value, 8700, 'value');
+  expectEq(r.source, 'item', 'source');
+});
+it('해외·붙여넣기 임포트 행: purchasePrice 폴백', () => {
+  const r = resolveAvgBuyPrice({ quantity: 100, investAmount: 0, purchasePrice: 8700 }, 9999);
+  expectEq(r.value, 8700, 'value');
+  expectEq(r.source, 'item', 'source');
+});
+it('전량 매도·유령 행: 계산기 매수 평균으로 폴백', () => {
+  const r = resolveAvgBuyPrice({ quantity: 0, investAmount: 0, purchasePrice: 0 }, 8699.2);
+  expectApprox(r.value, 8699.2, 0.0001, 'value');
+  expectEq(r.source, 'events', 'source');
+});
+it('전부 없음 → 0 / none (판정 불가로 흐름)', () => {
+  const r = resolveAvgBuyPrice({}, 0);
+  expectEq(r.value, 0, 'value');
+  expectEq(r.source, 'none', 'source');
+});
+it('stock이 undefined여도 throw하지 않음', () => {
+  const r = resolveAvgBuyPrice(undefined, 0);
+  expectEq(r.source, 'none', 'source');
+});
+it('문자열·콤마 입력 정규화', () => {
+  const r = resolveAvgBuyPrice({ quantity: '100', investAmount: '869,920' }, 0);
+  expectApprox(r.value, 8699.2, 0.0001, 'value');
+  expectEq(r.source, 'portfolio', 'source');
+});
+it('폴백 신뢰 불가(매입단가 미입력 매수 행 존재) → events 폴백을 쓰지 않고 판정 보류', () => {
+  const r = resolveAvgBuyPrice({ quantity: 0, investAmount: 0 }, 10000, false);
+  expectEq(r.value, 0, 'value');
+  expectEq(r.source, 'unreliable', 'source');
+});
+it('폴백 신뢰 불가여도 포트폴리오 구매단가가 있으면 그대로 사용', () => {
+  const r = resolveAvgBuyPrice({ quantity: 100, investAmount: 869920 }, 10000, false);
+  expectApprox(r.value, 8699.2, 0.0001, 'value');
+  expectEq(r.source, 'portfolio', 'source');
+});
+it('폴백 신뢰 불가 + 폴백값도 없음 → none (unreliable로 오표기하지 않음)', () => {
+  const r = resolveAvgBuyPrice({}, 0, false);
+  expectEq(r.source, 'none', 'source');
+});
+it('부분 평균으로 비과세를 확정하던 회귀 — 미입력 행이 있으면 단가 기준이 통째로 보류된다', () => {
+  // 매수 100주@10,000(입력) + 900주(미입력) → 부분 평균 10,000. 매도단가 9,000이면
+  // 부분 평균 기준으로는 -1,000 → '비과세 확정'이지만 실제 평균(8,200) 기준으로는 +800 과세다.
+  const avg = resolveAvgBuyPrice({ quantity: 0, investAmount: 0 }, 10000, false);
+  const r = computeSellTaxRow({ change: -1000, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: 9000, avgBuyPrice: avg.value });
+  expectEq(r.priceReady, false, 'priceReady');
+  expectEq(r.taxable, null, 'taxable (비과세로 확정하지 않는다)');
+});
+
+console.log('\n[10] computeSellTaxRow — 과표 기준 · 단가 기준 · 실제 과세');
+const SELL = (o) => computeSellTaxRow({ change: 0, taxBasePrice: 0, sellPrice: 0, avgTaxBase: 0, avgBuyPrice: 0, ...o });
+
+it('매수 행은 전부 미산출 (isSell=false, taxable=null, sellAmount=null)', () => {
+  const r = SELL({ change: 100, taxBasePrice: 10100, sellPrice: 12000, avgTaxBase: 10000, avgBuyPrice: 11000 });
+  expectEq(r.isSell, false, 'isSell');
+  expectEq(r.soldQty, 0, 'soldQty');
+  expectEq(r.sellAmount, null, 'sellAmount');
+  expectEq(r.taxable, null, 'taxable');
+  expectEq(r.baseAmount, 0, 'baseAmount');
+  expectEq(r.priceAmount, 0, 'priceAmount');
+});
+it('매매수량 0 행도 미산출', () => {
+  const r = SELL({ change: 0, taxBasePrice: 10100, sellPrice: 12000, avgTaxBase: 10000, avgBuyPrice: 11000 });
+  expectEq(r.isSell, false, 'isSell');
+  expectEq(r.taxable, null, 'taxable');
+});
+it('둘 다 이익 → 과세, 실제 과세표준 = 1주당 min × 매도수량 (과표가 작은 경우)', () => {
+  const r = SELL({ change: -100, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: 12000, avgBuyPrice: 11000 });
+  expectEq(r.taxable, true, 'taxable');
+  expectApprox(r.basePerShare, 100, 1e-9, 'basePerShare');
+  expectApprox(r.pricePerShare, 1000, 1e-9, 'pricePerShare');
+  expectApprox(r.baseAmount, 10000, 1e-6, 'baseAmount');
+  expectApprox(r.priceAmount, 100000, 1e-6, 'priceAmount');
+  expectApprox(r.actualPerShare, 100, 1e-9, 'actualPerShare');
+  expectApprox(r.actualAmount, 10000, 1e-6, 'actualAmount');
+  expectEq(r.exemptReason, null, 'exemptReason');
+});
+it('둘 다 이익 → min이 단가 쪽인 경우도 정확 (방향 반대)', () => {
+  const r = SELL({ change: -100, taxBasePrice: 12000, avgTaxBase: 10000, sellPrice: 11500, avgBuyPrice: 11000 });
+  expectEq(r.taxable, true, 'taxable');
+  expectApprox(r.actualPerShare, 500, 1e-9, 'actualPerShare');
+  expectApprox(r.actualAmount, 50000, 1e-6, 'actualAmount');
+});
+it('actualAmount === min(baseAmount, priceAmount) — 둘 다 양수일 때 동치', () => {
+  for (const [tb, sp] of [[10100, 12000], [12000, 11500], [10500, 11500]]) {
+    const r = SELL({ change: -137, taxBasePrice: tb, avgTaxBase: 10000, sellPrice: sp, avgBuyPrice: 11000 });
+    expectApprox(r.actualAmount, Math.min(r.baseAmount, r.priceAmount), 1e-6, `actualAmount(${tb},${sp})`);
+  }
+});
+it('과표만 손실 → 비과세 (reason=base), 실제 금액 0', () => {
+  const r = SELL({ change: -100, taxBasePrice: 9900, avgTaxBase: 10000, sellPrice: 12000, avgBuyPrice: 11000 });
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'base', 'exemptReason');
+  expectEq(r.actualAmount, 0, 'actualAmount');
+  expectApprox(r.priceAmount, 100000, 1e-6, 'priceAmount는 그대로 표시');
+});
+it('단가만 손실 → 비과세 (reason=price)', () => {
+  const r = SELL({ change: -100, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: 10500, avgBuyPrice: 11000 });
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'price', 'exemptReason');
+  expectEq(r.actualAmount, 0, 'actualAmount');
+  expectEq(r.priceAmount, 0, 'priceAmount 음수는 0 클램프');
+});
+it('둘 다 손실 → 비과세 (reason=both)', () => {
+  const r = SELL({ change: -100, taxBasePrice: 9900, avgTaxBase: 10000, sellPrice: 10500, avgBuyPrice: 11000 });
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'both', 'exemptReason');
+});
+it('1주당 차이가 정확히 0 → 비과세 (0은 과세하지 않음, 기존 열과 같은 규약)', () => {
+  const r = SELL({ change: -100, taxBasePrice: 10000, avgTaxBase: 10000, sellPrice: 12000, avgBuyPrice: 11000 });
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'base', 'exemptReason');
+  const r2 = SELL({ change: -100, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: 11000, avgBuyPrice: 11000 });
+  expectEq(r2.taxable, false, 'taxable(단가 0)');
+  expectEq(r2.exemptReason, 'price', 'exemptReason(단가 0)');
+});
+it('매도단가 미입력 + 과표 이익 → 판정 불가 (null, 조용한 과세 확정 금지)', () => {
+  const r = SELL({ change: -100, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: 0, avgBuyPrice: 11000 });
+  expectEq(r.taxable, null, 'taxable');
+  expectEq(r.priceReady, false, 'priceReady');
+  expectApprox(r.baseAmount, 10000, 1e-6, 'baseAmount는 계속 표시');
+});
+it('매도단가 미입력 + 과표 손실 → 한쪽만으로 비과세 확정', () => {
+  const r = SELL({ change: -100, taxBasePrice: 9900, avgTaxBase: 10000, sellPrice: 0, avgBuyPrice: 11000 });
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'base', 'exemptReason');
+});
+it('과표기준가 미입력 + 단가 손실 → 한쪽만으로 비과세 확정', () => {
+  const r = SELL({ change: -100, taxBasePrice: 0, avgTaxBase: 10000, sellPrice: 10500, avgBuyPrice: 11000 });
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'price', 'exemptReason');
+  expectEq(r.baseReady, false, 'baseReady');
+});
+it('평균 과표 0(매수 이벤트에 과표 미입력) + 단가 이익 → 판정 불가', () => {
+  const r = SELL({ change: -100, taxBasePrice: 10100, avgTaxBase: 0, sellPrice: 12000, avgBuyPrice: 11000 });
+  expectEq(r.taxable, null, 'taxable');
+  expectEq(r.baseReady, false, 'baseReady');
+});
+it('둘 다 미입력 → 판정 불가', () => {
+  const r = SELL({ change: -100 });
+  expectEq(r.taxable, null, 'taxable');
+  expectEq(r.sellAmount, null, 'sellAmount');
+});
+it('평균단가 0(구매단가 산출 불가) → 단가 기준 미준비', () => {
+  const r = SELL({ change: -100, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: 12000, avgBuyPrice: 0 });
+  expectEq(r.priceReady, false, 'priceReady');
+  expectEq(r.taxable, null, 'taxable');
+});
+it('매도금액 = 매도수량 × 매도단가', () => {
+  const r = SELL({ change: -630, sellPrice: 8150 });
+  expectEq(r.soldQty, 630, 'soldQty');
+  expectEq(r.sellAmount, 5134500, 'sellAmount');
+});
+it('음수 매도단가는 미준비로 처리 (매도금액·단가 판정 없음)', () => {
+  const r = SELL({ change: -100, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: -500, avgBuyPrice: 11000 });
+  expectEq(r.sellAmount, null, 'sellAmount');
+  expectEq(r.priceReady, false, 'priceReady');
+  expectEq(r.taxable, null, 'taxable');
+});
+it('문자열·콤마 입력 정규화 (input value는 항상 문자열)', () => {
+  const r = SELL({ change: '-630', taxBasePrice: '9773.99', avgTaxBase: 9775.22, sellPrice: '8,150', avgBuyPrice: '8699.20' });
+  expectEq(r.isSell, true, 'isSell');
+  expectEq(r.sellAmount, 5134500, 'sellAmount');
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'both', 'exemptReason');
+});
+it('실데이터 회귀 (KODEX 200커버드콜액티브 2026-08-05 매도 630주)', () => {
+  const r = SELL({ change: -630, taxBasePrice: 9773.99, avgTaxBase: 9775.22, sellPrice: 8150, avgBuyPrice: 8699.20 });
+  expectApprox(r.basePerShare, -1.23, 0.001, 'basePerShare');   // 화면 표기 -1.23/주와 일치
+  expectApprox(r.pricePerShare, -549.20, 0.001, 'pricePerShare');
+  expectEq(r.baseAmount, 0, 'baseAmount');
+  expectEq(r.priceAmount, 0, 'priceAmount');
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'both', 'exemptReason');
+  expectEq(r.sellAmount, 5134500, 'sellAmount');
+});
+it('부동소수점 잔차는 0으로 스냅 — 표기 0.00인데 과세로 판정되던 회귀', () => {
+  // 같은 과표기준가로 7주 + 137주 매수 → 가중평균에 IEEE754 잔차가 남는다(수학적으로는 9773.99).
+  let qty = 0, avg = 0;
+  for (const n of [7, 137]) { const nq = qty + n; avg = (qty * avg + n * 9773.99) / nq; qty = nq; }
+  if (avg === 9773.99) throw new Error('픽스처 무효: 잔차가 생기지 않아 이 회귀를 재현하지 못함');
+  const r = computeSellTaxRow({ change: -100, taxBasePrice: 9773.99, avgTaxBase: avg, sellPrice: 9000, avgBuyPrice: 8000 });
+  expectEq(r.basePerShare, 0, 'basePerShare (잔차 스냅)');
+  expectEq(r.baseAmount, 0, 'baseAmount');
+  expectEq(r.taxable, false, 'taxable (과세 ₩0으로 단언하지 않는다)');
+  expectEq(r.exemptReason, 'base', 'exemptReason');
+});
+it('epsilon보다 큰 실제 차이는 스냅되지 않음', () => {
+  const r = computeSellTaxRow({ change: -100, taxBasePrice: 10000.01, avgTaxBase: 10000, sellPrice: 9000, avgBuyPrice: 8000 });
+  expectApprox(r.basePerShare, 0.01, 1e-9, 'basePerShare');
+  expectEq(r.taxable, true, 'taxable');
+  expectApprox(r.actualAmount, 1, 1e-6, 'actualAmount (0.01 × 100주)');
+});
+it('단가 쪽 잔차도 동일하게 스냅', () => {
+  const r = computeSellTaxRow({ change: -100, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: 8699.2, avgBuyPrice: 8699.2 + 1e-11 });
+  expectEq(r.pricePerShare, 0, 'pricePerShare');
+  expectEq(r.taxable, false, 'taxable');
+  expectEq(r.exemptReason, 'price', 'exemptReason');
+});
+it('소수 매도수량도 붕괴하지 않음', () => {
+  const r = SELL({ change: -0.5, taxBasePrice: 10100, avgTaxBase: 10000, sellPrice: 12000, avgBuyPrice: 11000 });
+  expectEq(r.soldQty, 0.5, 'soldQty');
+  expectEq(r.taxable, true, 'taxable');
+  expectApprox(r.actualAmount, 50, 1e-9, 'actualAmount');
+});
+
 // ─── 결과 출력 ────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`결과: ${pass} pass, ${fail} fail`);
