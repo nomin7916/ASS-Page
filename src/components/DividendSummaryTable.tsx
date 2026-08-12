@@ -1810,8 +1810,12 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                       </td>
                     )}
                   </tr>
-                  {/* 해외계좌는 종목별 분배율(달러·세후·종목 투자금 대비), 국내는 종전 계좌 총원금 기준 1행 */}
-                  {expectedHasOverseas
+                  {/* 해외계좌는 종목별 분배율(달러·세후·종목 투자금 대비), 국내는 종전 계좌 총원금 기준 1행.
+                      ⚠️ 게이트는 `hasOverseas`가 아니라 **종목별 행이 실제로 있는가**다 — hasOverseas로 재면
+                      종목별 행이 0개인 상태(배당 데이터 미조회 등)에서 분배율 섹션이 통째로 사라지고
+                      각주 설명만 남는다. 국내 계좌는 `expectedStockRates`가 구조적으로 항상 빈 배열이라
+                      이 조건만으로 종전 경로가 그대로 유지된다. */}
+                  {expectedStockRates.length > 0
                     ? renderStockRateRows(expectedStockRates, expectedHasOverseas)
                     : renderDistRateRow(monthlyTotals, annualTotal, expectedHasOverseas, monthlyUsdTotals, annualUsdTotal)}
                 </tfoot>
@@ -2307,8 +2311,13 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                     </td>
                   )}
                 </tr>
-                {/* 해외계좌는 종목별 분배율(달러·세후·종목 투자금 대비), 국내는 종전 계좌 총원금 기준 1행 */}
-                {actualHasOverseas
+                {/* 해외계좌는 종목별 분배율(달러·세후·종목 투자금 대비), 국내는 종전 계좌 총원금 기준 1행.
+                    ⚠️ 게이트는 `actualHasOverseas`가 아니라 **종목별 행이 실제로 있는가**다 —
+                    `actualHasOverseas`는 `extraActualRows`(수동 추가 행)까지 포함해 판정하는데
+                    `actualStockRates`는 `actualRows`만 보므로, '보유 종목 0 + 수동 행만' 계좌에서
+                    분배율 섹션이 통째로 사라지고 각주 설명만 남는다(적대적 리뷰 확정 결함).
+                    빈 배열이면 종전 계좌 기준 행으로 폴백해 수동 행의 분배금도 분모를 얻는다. */}
+                {actualStockRates.length > 0
                   ? renderStockRateRows(actualStockRates, actualHasOverseas)
                   : renderDistRateRow(actualMonthlyGrossKrw, actualAnnualGrossKrw, actualHasOverseas, actualMonthlyGrossUsd, actualAnnualGrossUsd)}
                 {!actualHasOverseas && actualAnnualTaxTotal > 0 && (<>
