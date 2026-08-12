@@ -17,6 +17,7 @@
     "verify:brl": "node scripts/verify-brl-bond.mjs",
     "verify:rebal-restore": "node scripts/verify-rebal-restore.mjs",
     "verify:transfer": "node scripts/verify-transfer.mjs",
+    "verify:overseas": "node scripts/verify-overseas-invest.mjs",
     "verify:flow": "node scripts/verify-flow.mjs",
     "verify:ladder": "node scripts/verify-ladder.mjs",
     "verify:backtest": "node scripts/verify-backtest.mjs"

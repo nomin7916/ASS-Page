@@ -238,6 +238,59 @@ Drive를 재조회**(느림)했다. 새 탭은 포털 탭을 건드리지 않아
   `showRetirementStats`로 이미 dc-irp 전용 게이팅됨 (별도 `isRetirement` prop 없음).
 - 플래그 정의 위치: `App.tsx` `isRetirementAccount` / `isDcIrpAccount` 두 줄. 조건 변경 시 이 두 줄만 수정.
 
+### 해외계좌 투자금액(USD) = 사용자 입력 저장값 `investAmountUsd` (⚠️ 회귀 주의 — 파생 표시로 되돌리지 말 것)
+
+해외 주식 행의 **'투자금액'과 '보유수량'은 사용자가 직접 입력하는 칸**이며 어느 쪽도 상대에서 자동
+산출하지 않는다(국내 행과 같은 계약). 과거엔 투자금액에 저장 필드가 없어 화면이 `purchasePrice ×
+quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기록했다. 그래서 ① `14505.01` 입력 →
+`50.36461805…` 저장 → 되곱해 **`14505.009999999998`**(IEEE754 왕복, 편집 초안에 그대로 노출)
+② **수량만 고쳐도 총액이 저절로 바뀌는** 두 증상이 났다(사용자 보고 2026-08).
+
+- **저장 = `item.investAmountUsd`(USD, 입력 그대로) / `item.purchasePrice` = 파생 미러(= 총액 ÷ 수량)**.
+  해외 원가 소비자(`usePortfolioData` :41·:128, `useIntegratedData` :711, `bookCostOf(costBasisOnly)`,
+  `handleSort` getVal, 이관 `buildTransferPlan`)는 **전부 `purchasePrice × quantity`를 읽으므로 한 줄도
+  고치지 않는다**. 이 미러가 설계의 유일한 정합성 근거다 — 금액·수량 **두 편집 경로 모두**에서 반드시
+  동시에 갱신할 것.
+- **⚠️ 저장 필드를 `investAmount`에 얹지 말 것(신규 필드인 이유 2가지 — 되돌리면 둘 다 재발)**:
+  ① 해외 항목의 `investAmount`에는 **원화 잔존값**이 남아 있을 수 있다(레거시·`PasteModal` 임포트).
+  거기에 사용자 입력을 얹으면 값만 보고 원화/USD를 구분할 수 없고, 수량 편집 시 미러 재산출이 그
+  원화값을 `purchasePrice`로 **세탁**해 `bookCostOf(costBasisOnly)` 방어선을 정확히 우회한다
+  (통합 장부 ≈1,390배 오염 → 흡수 판정·누적 TWR 영구 오염). ② `snapshotCompositionKey`는
+  `investAmount`를 담고 `purchasePrice`는 담지 않는다 → `investAmount`에 쓰면 **원가 정정만 해도 새
+  보유 스냅샷**이 생겨 원장 흐름이 0인 날 `bookDelta`가 점프하고, 그 하루가 흡수 판정을 뒤집어 이후
+  최대 15행(`CARRY_MAX_ROWS`)의 일간 지표가 `'-'`로 잠긴다. 신규 필드는 둘을 구조적으로 회피한다
+  (레거시 점유자 없음 + 구성 지문 밖). `snapshotItemsFromPortfolio`에도 **넣지 말 것**(과거 장부는
+  종전대로 미러로 산출된다).
+- **⚠️ 쓰기 지점은 `usePortfolioState.handleUpdate` 하나** — 반드시
+  `activePortfolioAccountType === 'overseas' && p.type === 'stock'`으로 좁힌다. 이 핸들러는
+  **KrxGoldTable**(금현물은 `purchasePrice`가 사용자 입력이고 `investAmountUsd`가 없어 미러가 매입단가를
+  0으로 지운다)과 **펀드 적립 모달**(`quantity` → `investAmount` 연속 호출로 펀드 행에 없던
+  `purchasePrice`가 박힌다)이 함께 쓰는 범용 라이터다.
+- **⚠️ 미러는 `qty > 0 && Number.isFinite(invest)`일 때만 쓴다** — 0으로 나누면 `Infinity`가 그대로
+  저장되고(`cleanNum`은 숫자를 통과시킨다) `JSON.stringify`가 `null`로 직렬화해 재로드 시 원가가
+  **영구 소실**된다(undo 없음). 수량 0에서는 총액만 저장하고 미러는 건드리지 않는다(나중에 수량을
+  넣으면 그때 생성). 그래서 옛 `if (qty <= 0) return`(입력을 통째로 버리던 가드)은 제거됐다.
+- **읽기는 `utils.overseasInvestAmount(item)` 단일 소스**: 저장값이 있으면 그대로(**0도 유효한 입력**),
+  없으면 레거시 폴백 `round15(purchasePrice × quantity)`. ⚠️ 폴백의 `round15`(유효숫자 15자리)를 빼지
+  말 것 — 옛 UI가 만든 행은 단가가 이미 나눗셈 결과라 되곱하면 `14505.009999999998`이 나오고, 표시는
+  `formatUSD`(2자리)라 가려지지만 **편집 초안(String)에 그대로 노출**돼 "고쳤는데 그대로다"가 된다.
+- **⚠️ `PortfolioTable`이 받는 행은 `totals.calcPortfolio`**라 `item.investAmount`가 이미 **원화 환산값**
+  으로 덮여 있다(`usePortfolioData` :47). `investAmountUsd`는 그 덮어쓰기 대상이 아니라 스프레드로
+  원본이 넘어온다 → **`usePortfolioData`는 무수정**. 셀에서 `item.investAmount`를 읽으면 ≈1,390배 오염.
+- **영속화**: `App.tsx portfolioStructureKey` 항목 화이트리스트에 **`investAmountUsd` 필수**(수량 0인
+  행은 미러를 쓰지 않아 이 필드만 바뀐다 → 빠지면 그 편집이 조용히 유실). 로드·백업·이관은 `...item`
+  스프레드라 무수정. 그 외 **영속화 신규 지점 0곳**.
+- **의미 변경(의도)**: 수량만 고치면 총액이 고정되고 **구매단가가 재산출**된다(국내와 동일). 레거시 행은
+  첫 편집에서 **직전 총액**(`purchasePrice × 옛수량`)으로 1회 시드된다. 부수효과로 "수량만 늘린 날"의
+  `bookDelta`가 0이 되므로 **매수했으면 투자금액도 함께 입력해야** 그날 흡수 판정이 정확하다.
+- **범위 밖(의도)**: 금현물(`gold`)은 매입단가가 직접 입력이라 그대로. 펀드 좌수 표시 반올림
+  (`Math.round`)도 그대로. 해외 투자금액 표시는 `formatUSD`(2자리) 유지 — 소수 3자리 이상을 입력하면
+  저장은 정확하되 표시는 센트 단위로 반올림된다.
+- 검증: `npm run verify:overseas` (참조 구현 미러 #1~#14 + 소스 텍스트 가드 #15~#26). `utils.ts`의
+  `round15`·`overseasInvestInput`·`overseasInvestAmount`와 `handleUpdate`의 해외 분기를
+  **항상 1:1 동기화**할 것. 가드는 배선을 정규식으로 단언하므로 실패 시 **먼저 정규식이 낡았는지**
+  확인하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+
 ### 예적금(savings) 항목 — 퇴직연금(dc-irp) 전용 (⚠️ 펀드/예수금과 혼동 금지)
 
 원금보장형 예적금(예: "kb손해보험 이율보증형 3년")을 위한 **별도 항목 타입 `type:'savings'`**.
@@ -571,12 +624,14 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
     없어 해외는 미공급이다. **`HistoryPanel`이 원화라고 그쪽에만 원화 장부를 주지 말 것** — 같은 Map을
     쓰는 `accountTwrByDate`(USD)와 판정이 갈려 표와 차트가 어긋나고, TWR은 곱셈 체인이라 영구 고정된다.
   - **⚠️ 해외는 `rateOf`와 `costBasisOnly`를 반드시 함께 넘긴다**: `bookCostOf`는 기본적으로
-    `investAmount`를 우선하는데, **해외 항목의 `investAmount`는 UI가 유지하지 않는 잔존 필드**다
-    (`PortfolioTable` :674는 `purchasePrice×quantity`를 렌더하고 blur에 `purchasePrice`만 기록,
-    `usePortfolioData` :41·:111과 통합 종목별 비중도 전부 `investAmount`를 우회). 레거시·임포트
+    `investAmount`를 우선하는데, **해외 항목의 `investAmount`는 어떤 UI도 쓰지 않는 잔존 필드**다
+    (해외 투자금액 칸의 저장 필드는 별도 `investAmountUsd` — 전용 섹션 참조. `usePortfolioData`
+    :41·:128과 통합 종목별 비중도 전부 `investAmount`를 우회). 레거시·`PasteModal` 임포트
     데이터에 **원화** `investAmount`가 남아 있으면 거기에 환율(≈1,390배)이 곱해져 장부 단위가
     3자릿수 규모로 오염되고 흡수 판정이 통째로 무너진다 → `costBasisOnly:true`로 매입가×수량(USD)만
     쓴다. `fund`·`savings`는 매입가×수량 개념이 없어 `investAmount`가 권위이므로 예외. 검증 #30b.
+    ⚠️ **"이제 해외도 투자금액을 저장하니 이 옵션은 불필요"는 오답** — 새 저장 필드는
+    `investAmountUsd`라 `bookCostOf`가 읽지 않고, 원화 잔존값 위험은 그대로다(`verify:overseas` #25).
   - **⚠️ 통합에서는 ACTIVE 자가치유(2행)가 꺼진다 — 의도된 맞바꿈**: `computeDailyMetricsSeries`의
     폐기 조건이 `bookDelta == null && activeRows >= 2`라, 통합이 관측 모드로 바뀌면 `CARRY_MAX_ROWS`
     (15행)만 남는다. 관측이 있으면 '미반영'이 확정 사실이라 폐기가 곧 가짜 손익이므로 이것이 목적이다
@@ -3418,7 +3473,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **게이트 = 결정적 검증 / 리뷰 = 보너스.** 둘의 역할을 절대 섞지 말 것.
 
 - **게이트**(통과 못 하면 커밋 금지): 변경 영역의 `npm run verify:*`(calendar·tax·dividend·history·
-  notice·twr·fx·brl·rebal-restore·transfer·flow·backtest 12종 중 해당분) + `memory/tools/jsxcheck.mjs`
+  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest 14종 중 해당분) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의
   지역 변수를 참조)**. `npm run build`가 가능한 환경이면 추가로 돌린다.
   ⚠️ **세 도구는 서로를 대체하지 못한다** — `undefcheck`는 파일 전체를 한 스코프로 보므로

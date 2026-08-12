@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useState, useEffect, useMemo } from 'react';
 import { UI_CONFIG } from '../config';
-import { generateId, cleanNum, formatNumber, buildTransferLedgerRows } from '../utils';
+import { generateId, cleanNum, formatNumber, buildTransferLedgerRows, overseasInvestAmount } from '../utils';
 import { getTodayKST, getBackfillBoundaryForAccount } from './useMarketCalendar';
 
 interface UsePortfolioStateParams {
@@ -628,10 +628,33 @@ export function usePortfolioState({
   };
 
   // ── 포트폴리오 항목 CRUD ──
+  // ⚠️ 해외계좌 주식 행의 '투자금액(USD)'·'보유수량'은 사용자가 직접 입력하는 칸이라 어느 쪽도
+  //    상대에서 자동 산출하지 않는다(국내 행과 같은 계약). 총액은 `investAmountUsd`에 입력 그대로
+  //    저장하고, 기존 원가 소비자가 읽는 `purchasePrice`는 파생 미러로 **함께** 갱신한다.
+  //    설계 근거·레거시 방어는 utils.overseasInvestAmount 주석과 CLAUDE.md 전용 섹션 참조.
+  // ⚠️ 반드시 `overseas && type==='stock'`으로 좁힐 것 — 이 핸들러는 KrxGoldTable(금현물은
+  //    purchasePrice가 **사용자 입력**이고 investAmountUsd가 없다 → 미러가 매입단가를 0으로 지운다)과
+  //    펀드 적립 모달(quantity→investAmount 연속 호출 → 펀드 행에 없던 purchasePrice가 박힌다)이
+  //    같이 쓰는 범용 라이터다.
+  // ⚠️ 미러는 `qty > 0`일 때만 쓴다 — 0으로 나누면 Infinity가 그대로 저장되고(cleanNum은 숫자를
+  //    통과시킨다) JSON.stringify가 null로 직렬화해 재로드 시 원가가 영구 소실된다(undo 없음).
   const handleUpdate = (id, field, value) =>
-    setPortfolio(prev => prev.map(p =>
-      p.id === id ? { ...p, [field]: ['category', 'name', 'code', 'assetClass'].includes(field) ? value : cleanNum(value) } : p
-    ));
+    setPortfolio(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      if (['category', 'name', 'code', 'assetClass'].includes(field)) return { ...p, [field]: value };
+      const num = cleanNum(value);
+      if (activePortfolioAccountType === 'overseas' && p.type === 'stock'
+        && (field === 'investAmountUsd' || field === 'quantity')) {
+        // 수량을 고쳐도 총액은 사용자가 정한 값 그대로 둔다(저장값이 없던 레거시 행은 편집 **직전**
+        // 총액 = purchasePrice × 옛수량으로 1회 시드 — overseasInvestAmount가 그 값을 돌려준다).
+        const invest = field === 'investAmountUsd' ? num : overseasInvestAmount(p);
+        const qty = field === 'quantity' ? num : cleanNum(p.quantity);
+        const next = { ...p, investAmountUsd: invest, quantity: qty };
+        if (qty > 0 && Number.isFinite(invest)) next.purchasePrice = invest / qty;
+        return next;
+      }
+      return { ...p, [field]: num };
+    }));
 
   // 삭제는 되돌릴 수 없고(보유 수량·매입금액 소실) 이관 버튼 바로 옆이라 오클릭이 쉽다 → 확인 필수.
   // 주식·펀드·예적금 행이 전부 이 한 핸들러(onDelete)를 쓰므로 여기 한 곳이면 셋 다 보호된다.

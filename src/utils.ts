@@ -227,6 +227,48 @@ export const cleanNum = (val) => {
   return isNaN(parsed) || !isFinite(parsed) ? 0 : parsed;
 };
 
+// IEEE754 왕복 잔차 정리(유효숫자 15자리). 14505.01/288*288 = 14505.009999999998 → 14505.01.
+// 15자리 이하로 표현되는 정상 값에는 no-op이다.
+export const round15 = (n) => (Number.isFinite(n) ? Number(n.toPrecision(15)) : 0);
+
+// ── 해외계좌 투자금액(USD) ────────────────────────────────────────────────────────
+// 해외 주식 행의 '투자금액'은 **사용자가 직접 입력해 저장하는 값**이다(item.investAmountUsd, USD).
+// 보유수량과 마찬가지로 상대에서 자동 산출하지 않는다(국내 행과 같은 계약).
+// 과거엔 저장 필드가 없어 화면이 `purchasePrice × quantity`를 렌더하고 blur에 purchasePrice만
+// 기록했다. 그래서 ① 14505.01 입력 → 50.36461805…를 저장했다 되곱해 14505.009999999998로 돌아오고
+// ② 수량만 고쳐도 총액이 저절로 바뀌었다. 둘 다 "직접 입력 칸" 계약 위반이라 저장값으로 전환했다.
+//
+// ⚠️ 저장 필드를 `investAmount`가 아니라 **신규 `investAmountUsd`** 로 둔 것은 의도다 — 합치지 말 것:
+//   ① 해외 항목의 `investAmount`에는 **원화 잔존값**이 남아 있을 수 있다(레거시·PasteModal 임포트).
+//      거기에 사용자 입력을 얹으면 값만 보고 원화인지 USD인지 구분할 수 없고, 수량 편집 시 미러
+//      재산출이 그 원화값을 purchasePrice로 세탁해 아래 `bookCostOf(costBasisOnly)` 방어선을 정확히
+//      우회한다(통합 장부 ≈1,390배 오염 → 흡수 판정·누적 TWR 영구 오염).
+//   ② `snapshotCompositionKey`는 `investAmount`를 담고 `purchasePrice`는 담지 않는다. `investAmount`에
+//      쓰면 **원가 정정만 해도 새 보유 스냅샷**이 생겨 원장 흐름이 0인 날 bookDelta가 점프하고,
+//      그 하루가 흡수 판정을 뒤집어 이후 최대 15행(CARRY_MAX_ROWS)의 일간 지표가 '-'로 잠긴다.
+//   신규 필드는 두 함정을 구조적으로 회피한다(레거시 점유자 없음 + 구성 지문 밖).
+//
+// ⚠️ `purchasePrice`는 **파생 미러**(= investAmountUsd / quantity)로 함께 기록된다. 해외 원가 소비자
+//    (usePortfolioData·useIntegratedData·bookCostOf costBasisOnly·handleSort·이관)는 전부
+//    `purchasePrice × quantity`를 읽으므로 그쪽은 한 줄도 고치지 않는다. 이 미러가 설계의 유일한
+//    정합성 근거다 — 금액·수량 **두 편집 경로 모두**에서 반드시 동시에 갱신할 것
+//    (`usePortfolioState.handleUpdate`가 유일한 쓰기 지점).
+
+// 저장된 사용자 입력(USD). 입력이 없으면 null(=레거시 행). 0도 유효한 입력이라 0과 미입력을 구분한다.
+export const overseasInvestInput = (item) => {
+  const v = item?.investAmountUsd;
+  if (v === null || v === undefined || v === '') return null;
+  const n = cleanNum(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+// 해외 행 투자금액(USD)의 단일 소스. 저장된 입력이 있으면 그대로, 없으면 레거시 폴백.
+// ⚠️ 폴백에 round15를 씌우는 이유: 옛 UI가 만든 행은 단가가 이미 나눗셈 결과라 되곱하면
+//    14505.009999999998이 나온다. 표시는 formatUSD(2자리)라 가려지지만 편집 초안(String)에는
+//    그대로 노출돼 "고쳤는데 그대로다"가 된다.
+export const overseasInvestAmount = (item) =>
+  overseasInvestInput(item) ?? round15(cleanNum(item?.purchasePrice) * cleanNum(item?.quantity));
+
 // 입출금 내역 누적합 — 특정 날짜까지 (포함). "anchor + delta" 모델용.
 // overseas 계좌는 amount가 USD이므로 fxRate 곱하지 않고 USD 합산.
 // 비overseas 계좌도 fxRate=1이므로 동일 결과.
@@ -330,12 +372,16 @@ export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow, bookDelta) =>
 //    (`investAmount`가 권위인 것은 fund·savings뿐 — 그쪽은 매입가×수량 개념이 없다.)
 //    `snapshotItemsFromPortfolio`가 purchasePrice·quantity를 보존하므로 과거 날짜도 산출된다.
 // ⚠️ `costBasisOnly`(해외계좌 전용): 주식 항목의 `investAmount`를 **무시**하고 매입가×수량만 쓴다.
-//    해외계좌의 투자금액 칸은 `purchasePrice × quantity`(USD)를 렌더하고 blur에 `purchasePrice`만
-//    기록하며(`PortfolioTable` :674), 다른 원가 소비자도 전부 `investAmount`를 우회한다
-//    (`usePortfolioData` :41·:111, `useIntegratedData` 종목별 비중). 즉 해외 항목의 `investAmount`는
-//    UI가 유지하지 않는 잔존 필드라 **레거시·임포트 데이터에 원화 값이 남아 있을 수 있다**.
-//    통합 경로는 이 장부액에 날짜별 환율을 곱하므로(≈1,390배) 그런 항목 하나가 단위를 오염시켜
+//    해외 항목의 `investAmount`는 **어떤 UI도 쓰지 않는 잔존 필드**다 — 해외 투자금액 칸이 쓰는
+//    저장 필드는 `investAmountUsd`(위 `overseasInvestAmount` 참조)이고, 다른 원가 소비자도 전부
+//    `investAmount`를 우회한다(`usePortfolioData` :41·:128, `useIntegratedData` 종목별 비중).
+//    즉 해외 항목의 `investAmount`에는 **레거시·PasteModal 임포트 데이터의 원화 값이 남아 있을 수
+//    있고**, 통합 경로는 이 장부액에 환율을 곱하므로(≈1,390배) 그런 항목 하나가 단위를 오염시켜
 //    흡수 판정을 통째로 무너뜨린다 → 해외는 반드시 매입원가 기준으로 좁힌다.
+//    ⚠️ '이제 해외도 투자금액을 저장하니 이 옵션은 불필요'는 **오답**이다 — 새 저장 필드는
+//    `investAmountUsd`라 여기서 읽지 않고, 원화 잔존값 위험은 그대로다. 절대 제거하지 말 것.
+//    ⚠️ 해외 장부는 `investAmountUsd`가 아니라 **미러 `purchasePrice × quantity`** 로 계산한다(의도) —
+//    스냅샷(`snapshotItemsFromPortfolio`)이 보존하는 필드가 그 둘이라 과거 날짜도 같은 식으로 산출된다.
 //    fund·savings는 매입가×수량 개념이 없어 `investAmount`가 권위이므로 예외로 유지한다.
 export const bookCostOf = (items, opts?) => {
   const costBasisOnly = !!(opts && opts.costBasisOnly);

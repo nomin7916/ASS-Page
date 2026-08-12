@@ -6,7 +6,7 @@ import { MARK_ROW_BG, MARK_STICKY_BG, MARK_STRIP_BG } from '../constants';
 import {
   cleanNum, formatCurrency, formatPercent, formatNumber, formatFundPrice,
   formatChangeRate, formatSavingsDailyRate, formatSavingsPeriod, savingsMaturity, savingsDepositEval,
-  handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav
+  handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, overseasInvestAmount
 } from '../utils';
 import CustomDatePicker from './CustomDatePicker';
 
@@ -15,6 +15,10 @@ const formatUSD = (n) => {
   if (v === 0) return '$0.00';
   return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+
+// 보유수량 표시 전용. formatNumber(Intl 기본값)는 소수 3자리에서 잘려 해외 소수점 주식의
+// 입력값이 화면에서만 달라 보인다(저장값은 온전) → 직접 입력 칸이므로 8자리까지 그대로 보여준다.
+const formatQty = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 }).format(cleanNum(n));
 
 const SAFE_CATEGORIES = ['채권', '현금', '예수금'];
 const getAssetClass = (cat) => SAFE_CATEGORIES.includes(cat) ? 'S' : 'D';
@@ -596,6 +600,11 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
             {stockItems.map((item) => {
               const fStatus = stockFetchStatus?.[item.code];
               const isRefreshing = fStatus === 'loading';
+              // 해외 투자금액(USD) — 사용자가 저장한 입력값이 단일 소스.
+              // ⚠️ `item`은 totals.calcPortfolio 행이라 `item.investAmount`가 이미 **원화 환산값**으로
+              //    덮여 있다(usePortfolioData). 신규 필드 `investAmountUsd`는 그 덮어쓰기 대상이
+              //    아니라 스프레드로 원본이 그대로 넘어오므로 헬퍼가 안전하게 읽는다.
+              const overseasInvest = isOverseas ? overseasInvestAmount(item) : 0;
               const assetClass = item.assetClass ?? getAssetClass(item.category);
               const markColor = markedPortfolioRows[item.id];
               const rowMarkClass = markColor ? MARK_ROW_BG[markColor] : 'hover:bg-gray-800/40';
@@ -674,33 +683,29 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   {/* 보유수량 */}
                   {!H('quantity') && (
                     <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
-                      <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200 caret-blue-400`} value={numericVal(item.id, 'quantity', formatNumber(item.quantity))} onFocus={numericFocus(item.id, 'quantity', item.quantity)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'quantity')} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
+                      <input type="text" data-col="quantity" className={`${inp} text-center text-blue-200 caret-blue-400`} value={numericVal(item.id, 'quantity', formatQty(item.quantity))} onFocus={numericFocus(item.id, 'quantity', item.quantity)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'quantity')} onKeyDown={e => handleTableKeyDown(e, 'quantity')} />
                     </td>
                   )}
                   {/* 투자금액 */}
                   {!H('investAmount') && (
                     <td className={`p-0 border-r border-gray-600 bg-blue-900/10 ${CELL_FOCUS}`}>
                       {isOverseas
-                        ? <input type="text" data-col="investAmountUSD" title="투자금액 ÷ 수량으로 매입단가가 계산됩니다 (수량이 0이면 산출할 수 없어 저장되지 않습니다)" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={editingInvestId === item.id ? editingInvestVal : formatUSD(cleanNum(item.purchasePrice) * cleanNum(item.quantity))} onFocus={e => { const usd = cleanNum(item.purchasePrice) * cleanNum(item.quantity); setEditingInvestId(item.id); setEditingInvestVal(usd > 0 ? String(usd) : ''); e.target.select(); }} onChange={e => setEditingInvestVal(e.target.value)} onBlur={() => {
-                            // ⚠️ 과거엔 조건 없이 `onUpdate(id,'purchasePrice', qty>0 ? usd/qty : 0)`를 실행했다.
-                            //    수량 0인 행의 칸을 **포커스했다 그냥 나오기만 해도** purchasePrice가 0으로
-                            //    커밋되고, 그 필드는 지문에 포함돼 즉시 Drive에 영속되며 undo가 없다.
-                            //    ↑/↓ 열 이동이 행마다 blur를 유발하므로 열을 훑는 것만으로 파괴됐다.
-                            //    RebalancingPanel의 commitAmt와 같은 규약으로 정리한다.
+                        ? <input type="text" data-col="investAmountUSD" title="투자금액(USD) — 직접 입력합니다. 보유수량을 바꿔도 이 값은 그대로 유지되고 구매단가(= 투자금액 ÷ 보유수량)만 다시 계산됩니다." className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={editingInvestId === item.id ? editingInvestVal : formatUSD(overseasInvest)} onFocus={e => { setEditingInvestId(item.id); setEditingInvestVal(overseasInvest ? String(overseasInvest) : ''); e.target.select(); }} onChange={e => setEditingInvestVal(e.target.value)} onBlur={() => {
+                            // ⚠️ 저장 필드는 `investAmountUsd`(사용자 입력 그대로). 파생 미러
+                            //    purchasePrice는 handleUpdate가 함께 기록한다 — 여기서 손으로 나누지 말 것
+                            //    (수량 0에서 0으로 나뉘고, 수량 편집 경로와 규약이 갈린다).
                             // ⚠️ setEditingInvestId(null)은 모든 early return보다 **앞** — 뒤에 두면
                             //    조기 반환 경로에서 셀이 초안 문자열에 갇힌다.
                             setEditingInvestId(null);
                             // ⚠️ cleanNum만 쓰면 '지나감(빈칸)'과 '0 입력'이 구분되지 않는다 → 숫자 센티넬.
                             const trimmed = String(editingInvestVal ?? '').trim();
                             if (!/\d/.test(trimmed)) return;
-                            const qty = cleanNum(item.quantity);
-                            // 수량이 없으면 총액에서 단가를 산출할 수 없다 → 쓰지 않는다(0으로 덮지 말 것).
-                            if (qty <= 0) return;
                             const next = cleanNum(trimmed);
-                            // ⚠️ 비교는 총액 대 총액 exact — `usd/qty === item.purchasePrice` 같은 역산값
-                            //    비교는 IEEE754에서 매번 '변경됨'으로 오판해 미세 드리프트를 커밋한다.
-                            if (next === cleanNum(item.purchasePrice) * qty) return;
-                            onUpdate(item.id, 'purchasePrice', next / qty);
+                            // ⚠️ 값이 그대로면 아무것도 쓰지 않는다 — 칸을 훑기만 해도 지문이 바뀌어
+                            //    Drive 전량 저장이 헛돈다(↑/↓ 열 이동이 행마다 blur를 유발한다).
+                            //    비교 기준이 저장값이라 왕복 오차로 '변경됨' 오판이 나지 않는다.
+                            if (next === overseasInvest) return;
+                            onUpdate(item.id, 'investAmountUsd', next);
                           }} onKeyDown={e => handleTableKeyDown(e, 'investAmountUSD')} />
                         : <input type="text" data-col="investAmount" className={`${inp} text-right text-blue-200 px-3 caret-blue-400`} value={numericVal(item.id, 'investAmount', formatNumber(item.investAmount))} onFocus={numericFocus(item.id, 'investAmount', item.investAmount)} onChange={e => numericChange(e.target.value)} onBlur={numericBlur(item.id, 'investAmount')} onKeyDown={e => handleTableKeyDown(e, 'investAmount')} />
                       }

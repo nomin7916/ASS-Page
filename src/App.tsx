@@ -1273,6 +1273,8 @@ export default function App() {
     }
     // ⚠️ costBasisOnly는 해외·금 계좌에 필수 — 그쪽 항목의 investAmount는 UI가 유지하지 않는
     //    잔존 필드라, 레거시 원화 값이 남아 있으면 장부 단위가 통째로 어긋난다(CLAUDE.md 검증 #30b).
+    //    해외의 사용자 입력 총액은 별도 필드 `investAmountUsd`이고 purchasePrice가 그 파생 미러라,
+    //    여기서 나오는 cost는 사용자가 입력한 투자금액과 같은 값이다(utils.overseasInvestAmount 참조).
     const cost = bookCostOf([transferItem], { costBasisOnly: isOv || srcType === 'gold' });
     return { market, cost, dateSrc, dateTgt, prevDate, exact };
   };
@@ -2931,7 +2933,9 @@ export default function App() {
         //    category/assetClass는 useStockData·useMarketData에 참조 0건임을 확인했다.
         //    ⚠️ savings 스프레드의 assetClass는 그대로 둘 것(값이 같아 무해하고, 옮기다 오타가
         //    나면 예적금 지문이 조용히 깨진다 — @ts-nocheck+esbuild라 컴파일러가 못 잡는다).
-        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
+        //    ⚠️ investAmountUsd(해외 투자금액 사용자 입력)도 필수 — 수량 0인 행에서는 미러
+        //    purchasePrice를 쓰지 않으므로 이 필드만 바뀌고, 빠지면 그 편집이 조용히 유실된다.
+        portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, investAmountUsd: item.investAmountUsd, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
