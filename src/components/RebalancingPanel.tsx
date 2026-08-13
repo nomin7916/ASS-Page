@@ -1374,7 +1374,8 @@ export default function RebalancingPanel({
                             onKeyDown={handleReadonlyCellNav}
                             onClick={ladderOpenable ? (e) => {
                               const rect = e.currentTarget.getBoundingClientRect();
-                              const x = Math.max(8, Math.min(rect.right + 8, window.innerWidth - 416));
+                              // ⚠️ 456 = 모달 폭 440 + 여백 16 — LadderTradeModal의 width를 바꾸면 이 값도 같이 바꿀 것.
+                              const x = Math.max(8, Math.min(rect.right + 8, window.innerWidth - 456));
                               const y = Math.max(8, Math.min(rect.top - 20, window.innerHeight - 540));
                               setLadderModal({
                                 side: isSellAction ? 'sell' : 'buy',
@@ -1384,6 +1385,8 @@ export default function RebalancingPanel({
                                 // ⚠️ 사다리의 앵커는 수량이 아니라 이 금액이다 — 그 종목의 증가분(매수)·
                                 // 부족분(매도). action이 이미 금액 ÷ 현재가의 버림이므로 되돌리면 원래 금액이다.
                                 targetAmount: Math.abs(totalAction) * itemPrice,
+                                // 전일 종가 복원용 — 이 표의 '등락률' 열과 같은 값. 모르면 null(0%가 아니다).
+                                changeRate: item.changeRate ?? null,
                                 currency: isOverseas ? 'USD' : 'KRW',
                                 fxRate: isOverseas ? usdkrw : 1,
                                 pos: { x, y },
@@ -2129,6 +2132,7 @@ export default function RebalancingPanel({
             currentPrice={ladderModal.currentPrice}
             totalAction={ladderModal.totalAction}
             targetAmount={ladderModal.targetAmount}
+            changeRate={ladderModal.changeRate}
             currency={ladderModal.currency}
             fxRate={ladderModal.fxRate}
             pos={ladderModal.pos}

@@ -11,6 +11,8 @@
 //        매도를 |action|으로 고정하면 목표금액을 초과 매도한다(옛 sellTarget 버그)
 //   ③ 호가 간격은 가격 격자(원화 1원 / 달러 0.01)의 배수 — 소수점 호가 금지
 //   ④ 정규화된 호가면 사다리 행 가격이 절대 중복되지 않는다
+//   ⑤ 각 호가의 등락률은 **전일 종가**(현재가 ÷ (1 + c/100)) 기준 — 전일 종가를 가격 격자로
+//      반올림하지 않는다. 반올림하면 현재가 행의 등락률이 리밸런싱 표의 등락률과 갈린다.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +42,7 @@ function sliceFns(source, names) {
   return new Function(js + '\nreturn {' + names.join(',') + '};')();
 }
 
-const F = sliceFns(src, ['tri', 'roundTo', 'buildLadder', 'solveQtyForAmount', 'recalcAllPrices', 'redistribute']);
+const F = sliceFns(src, ['tri', 'roundTo', 'buildLadder', 'solveQtyForAmount', 'recalcAllPrices', 'redistribute', 'prevCloseFrom', 'rateVsPrev']);
 
 // ⚠️ 금지 토큰 가드는 주석을 지우고 본다 — 이 파일의 설명 주석에는 옛 이름이 일부러 남아 있다.
 const stripComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -405,6 +407,97 @@ console.log('\n■ 금액 앵커 — 수량은 목표금액에서 파생된다 (
   }
 }
 
+console.log('\n■ 전일 대비 등락률 — 각 호가가 전일 종가 대비 몇 %인가');
+{
+  // 사용자 실측 화면: 현재가 11,260 · ▲6.56%. 매도 호가를 올릴수록 6.56%보다 커져야 한다.
+  const P = 11260, C = 6.56;
+  const prev = F.prevCloseFrom(P, C);
+  const at = (px) => F.rateVsPrev(px, prev);
+
+  ok('#80 현재가 행의 등락률 = 표의 등락률 (앵커 정확 일치)',
+    prev !== null && Math.abs(at(P) - C) < 1e-9, `prev=${prev} at(P)=${at(P)}`);
+
+  {
+    // ⚠️ 죽은 단언 방지 — 전일 종가를 격자로 스냅하면 앵커가 **실제로** 깨지는 조합이 있음을 보인다.
+    //    (특정 값 하나를 박아 두면 그 값이 우연히 같은 소수 2자리로 떨어질 때 단언이 죽는다.)
+    let diverge = 0, example = null;
+    for (const p of [8500, 11260, 11570, 44300, 7215, 1234]) {
+      for (let k = -1000; k <= 1000; k++) {
+        const c = +(k / 100).toFixed(2);
+        const exact = F.prevCloseFrom(p, c);
+        if (exact === null) continue;
+        const snapped = Math.round(exact);
+        if (snapped <= 0) continue;
+        const rateSnapped = (p / snapped - 1) * 100;
+        if (rateSnapped.toFixed(2) !== c.toFixed(2)) {
+          diverge++;
+          if (!example) example = `${p} · ${c}% → 스냅 ${snapped} → ${rateSnapped.toFixed(2)}%`;
+        }
+      }
+    }
+    ok('#81 [변이] 전일 종가를 반올림하면 현재가 행이 표와 갈린다 (스냅 금지의 근거)',
+      diverge > 0, `괴리 ${diverge}건 / 예: ${example}`);
+    // 반대로 반올림하지 않으면 어떤 조합에서도 절대 갈리지 않는다.
+    let mismatch = 0;
+    for (const p of [8500, 11260, 11570, 44300, 7215, 1234, 3.33, 250.75]) {
+      for (let k = -1000; k <= 1000; k++) {
+        const c = +(k / 100).toFixed(2);
+        const r = F.rateVsPrev(p, F.prevCloseFrom(p, c));
+        if (!(Math.abs(r - c) < 1e-9)) mismatch++;
+      }
+    }
+    ok('#81b 반올림하지 않으면 현재가 행이 전 조합에서 표와 일치', mismatch === 0, `불일치 ${mismatch}건`);
+  }
+
+  {
+    const rows = F.buildLadder(P, 10, 55, 1, 0, 1);
+    const rates = rows.map(r => at(r.price));
+    ok('#82 매도: 호가를 올릴수록 등락률이 커진다 (첫 행만 현재가 등락률과 같다)',
+      rates.length > 1 && Math.abs(rates[0] - C) < 1e-9
+      && rates.every((r, i) => i === 0 || (r > rates[i - 1] && r > C)),
+      J(rates.map(r => +r.toFixed(3))));
+  }
+  {
+    // 사용자 예시: 현재가가 이미 −5%인 종목을 더 아래 호가로 분할매수한다.
+    const prevB = F.prevCloseFrom(10000, -5);
+    const rowsB = F.buildLadder(10000, 100, 55, 1, 0, -1);
+    const ratesB = rowsB.map(r => F.rateVsPrev(r.price, prevB));
+    ok('#83 매수: 호가를 내릴수록 등락률이 작아진다 (−5%보다 더 큰 하락으로 표시)',
+      ratesB.length > 1 && Math.abs(ratesB[0] - (-5)) < 1e-9
+      && ratesB.every((r, i) => i === 0 || (r < ratesB[i - 1] && r < -5)),
+      J(ratesB.map(r => +r.toFixed(3))));
+  }
+  {
+    // 대수 항등식 — 등락률(가격) = (가격 × (1 + c/100) / 현재가 − 1) × 100
+    let bad = 0;
+    for (const [p, c] of [[11260, 6.56], [8500, -1.24], [250.75, 0], [3.33, 12.5], [1000000, -30]])
+      for (const px of [p, p * 1.1, p * 0.5, p + 1]) {
+        const r = F.rateVsPrev(px, F.prevCloseFrom(p, c));
+        const expect = (px * (1 + c / 100) / p - 1) * 100;
+        if (!(Math.abs(r - expect) < 1e-9)) bad++;
+      }
+    ok('#84 등락률 항등식 (전 조합)', bad === 0, `위반 ${bad}건`);
+  }
+}
+
+console.log('\n■ 등락률 null 계약 — 모르는 값을 0%로 단언하지 않는다');
+{
+  ok('#85 등락률 미확보(null/undefined)는 null',
+    F.prevCloseFrom(1000, null) === null && F.prevCloseFrom(1000, undefined) === null);
+  const JUNK = ['', ' ', true, false, [], {}, NaN, 'abc'];
+  ok('#86 손상값도 null (Number()가 0으로 만드는 값들)',
+    JUNK.every(v => F.prevCloseFrom(1000, v) === null),
+    J(JUNK.map(v => F.prevCloseFrom(1000, v))));
+  ok('#87 숫자 문자열은 허용', Math.abs(F.prevCloseFrom(1065.6, '6.56') - 1000) < 1e-9);
+  ok('#88 등락률 0은 유효한 값 — 전일 종가 = 현재가', F.prevCloseFrom(1000, 0) === 1000);
+  ok('#89 −100% 이하는 전일 종가 복원 불가 → null',
+    F.prevCloseFrom(1000, -100) === null && F.prevCloseFrom(1000, -150) === null);
+  ok('#90 현재가가 0 이하·비수치면 null',
+    F.prevCloseFrom(0, 5) === null && F.prevCloseFrom(-1, 5) === null && F.prevCloseFrom(NaN, 5) === null);
+  ok('#91 rateVsPrev는 전일 종가가 없으면 null (0% 아님)',
+    F.rateVsPrev(1000, null) === null && F.rateVsPrev(1000, 0) === null && F.rateVsPrev(NaN, 1000) === null);
+}
+
 console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가 dir/side를 실제로 넘기는가)');
 {
   // ⚠️ 위 산술 테스트는 dir을 '인자로' 받으므로, 컴포넌트가 방향을 거꾸로 넘겨도 잡지 못한다.
@@ -451,6 +544,27 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
     && !/AMOUNT_EPS/.test(src));
   ok('#79 빈 사다리는 이유를 밝힌다 (잔여·푸터가 가려지므로)',
     /!rows\.length && \(/.test(src) && /배분할 수량이 없습니다/.test(src));
+  // ── 전일 대비 등락률 열 배선 ──
+  ok('#92 컴포넌트가 changeRate를 받아 전일 종가를 복원하고 열을 조건부로 렌더한다',
+    /changeRate = null, currency = 'KRW'/.test(src)
+    && /const prevClose = prevCloseFrom\(currentPrice, changeRate\);/.test(src)
+    && /const showRate = prevClose !== null;/.test(src)
+    && /등락률\s*<\/th>/.test(src));
+  ok('#93 열 수는 단일 파생 상수 — 빈 사다리 colSpan이 그것을 쓴다 (표 정렬 붕괴 방지)',
+    /const colCount = showRate \? 6 : 5;/.test(src)
+    && /colSpan=\{colCount\}/.test(src)
+    && !/colSpan=\{5\}/.test(src));
+  ok('#94 등락률 3표시(행·현재가격·평균단가)가 같은 함수를 쓴다',
+    /const rowRate = rateVsPrev\(row\.price, prevClose\);/.test(src)
+    && /const curRate = rateVsPrev\(currentPrice, prevClose\);/.test(src)
+    && /const avgRate = avgPrice > 0 \? rateVsPrev\(avgPrice, prevClose\) : null;/.test(src));
+  ok('#95 모르면 0.00%가 아니라 - 로 표시한다 (null 계약)',
+    /const rateText = \(r[^)]*\) => r == null \? '-' : formatChangeRate\(r\);/.test(src));
+  ok('#96 리밸런싱 표가 등락률을 넘긴다 (양쪽 배선)',
+    /changeRate: item\.changeRate \?\? null,/.test(panel)
+    && /changeRate=\{ladderModal\.changeRate\}/.test(panel));
+  ok('#97 모달 폭과 열림 위치 클램프가 짝 (440 ↔ 456)',
+    /width: 440 \}\}/.test(src) && /window\.innerWidth - 456\)/.test(panel));
   ok('#57 단일 컴포넌트 유지 — 매도 전용 모달 복제 금지',
     /import LadderTradeModal from '\.\/LadderTradeModal';/.test(panel) && !/LadderSellModal|LadderBuyModal/.test(panel));
 }

@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
 import { X, RotateCcw } from 'lucide-react';
-import { formatNumber, formatCurrency, cleanNum } from '../utils';
+import { formatNumber, formatCurrency, formatChangeRate, cleanNum } from '../utils';
 
 type LadderSide = 'buy' | 'sell';
 
@@ -20,6 +20,9 @@ interface Props {
   // 목표 금액 = |리밸런싱 수량| × 현재가 = 그 종목의 증가분(매수)·부족분(매도) 금액.
   // ⚠️ 이 값이 사다리의 앵커다. 수량은 여기서 파생된다(머리주석 참조).
   targetAmount: number;
+  // 그 종목의 전일 대비 등락률(%) — 리밸런싱 표 '등락률' 열과 같은 값.
+  // 여기서 전일 종가를 복원해 각 호가가 전일 대비 몇 %인지 보여 준다. 모르면 null(0%가 아니다).
+  changeRate?: number | string | null;
   currency?: 'KRW' | 'USD';
   fxRate?: number;
   pos: { x: number; y: number };
@@ -50,6 +53,38 @@ const QTY_EPS = 1e-9;
 //    **baseQty >= 1 이면 Q >= 1 이 보장된다**. action = trunc(금액/가격)이 이미 1주분을
 //    버리므로 이 여유(최대 1원)는 그 안에 묻힌다.
 const amountTolOf = (decimals: number) => Math.pow(10, -decimals);
+
+// ── 전일 종가 대비 등락률 ──
+// 사다리의 각 호가가 **전일 종가** 대비 몇 %인지 보여 주기 위한 두 함수.
+// 목적: '오늘 전일 대비 얼마나 더 비싸게 팔 수 있는가(매도) / 더 싸게 살 수 있는가(매수)'를
+// 리밸런싱 표의 등락률 열과 **같은 축**에서 읽는 것. 매도는 호가를 올릴수록 현재가 등락률보다
+// 커지고, 매수는 호가를 내릴수록 작아진다.
+//
+// ⚠️ 전일 종가를 가격 격자로 스냅하지 말 것. changeRate는 API에서 이미 소수 2자리로 반올림된
+//    값이라 prev = 현재가 ÷ (1 + c/100)가 정수에 딱 떨어지지 않는데, 여기서 반올림하면
+//    **현재가 행의 등락률이 표의 등락률과 갈린다**(실측: 11,260 · ▲6.56% → 스냅하면 6.57%).
+//    원본 그대로 두면 rateVsPrev(현재가, prev) === c 가 대수적으로 보장돼 앵커가 항상 일치한다.
+function prevCloseFrom(currentPrice: number, changeRate: number | string | null | undefined): number | null {
+  const p = Number(currentPrice);
+  if (!Number.isFinite(p) || p <= 0) return null;
+  // ⚠️ 미확보(null/undefined/''/손상값)는 '변동 없음(0%)'이 아니라 '모름'이다 — 0으로 폴백 금지.
+  //    타입까지 본다: Number('')·Number([])·Number(false)가 전부 0이라 손상값이 0%로 통과한다.
+  const c = typeof changeRate === 'number'
+    ? changeRate
+    : (typeof changeRate === 'string' && /[0-9]/.test(changeRate) ? Number(changeRate) : NaN);
+  if (!Number.isFinite(c)) return null;
+  const k = 1 + c / 100;
+  if (!(k > 0)) return null; // −100% 이하 = 전일 종가 복원 불가
+  return p / k;
+}
+
+// 전일 종가를 모르면 null — 화면은 '-'로 표시한다(0.00%로 단언하지 않는다).
+function rateVsPrev(price: number, prevClose: number | null): number | null {
+  if (prevClose === null || !(prevClose > 0)) return null;
+  const p = Number(price);
+  if (!Number.isFinite(p)) return null;
+  return (p / prevClose - 1) * 100;
+}
 
 // ⚠️ 이 계산기의 앵커는 '수량'이 아니라 '금액'이다 — 절대 되돌리지 말 것.
 //    리밸런싱이 정하는 1차값은 '이 종목을 ₩N만큼 늘린다/줄인다'(증가분·부족분)이고,
@@ -159,7 +194,7 @@ function redistribute(rows: LadderRow[], target: number, mult: number = 1): Ladd
   return rows.map(r => r.locked ? r : { ...r, qty: qtys[ui++] ?? 0 });
 }
 
-export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, currency = 'KRW', fxRate = 1, pos, onClose }: Props) {
+export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, changeRate = null, currency = 'KRW', fxRate = 1, pos, onClose }: Props) {
   const isSell = side === 'sell';
   const dir = isSell ? 1 : -1;
   const sideLabel = isSell ? '매도' : '매수';
@@ -167,6 +202,18 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   // 사다리는 금액에서 수량을 풀고(solveQtyForAmount), 이 값은 '현재가로 그냥 거래하면 몇 주인가'를
   // 보여 주는 비교 기준으로만 쓴다. 여기에 사다리를 고정하면 목표금액을 초과 매매한다.
   const baseQty = Math.abs(cleanNum(totalAction));
+
+  // ── 전일 종가 대비 등락률 ──
+  // 각 호가가 '전일 종가' 대비 몇 %인지 = 리밸런싱 표의 등락률 열과 같은 기준.
+  // ⚠️ 등락률을 모르면(전일 종가 복원 불가) 열 자체를 렌더하지 않는다 — 모르는 값을 0.00%로
+  //    단언하지 않는다(일간 지표의 null 계약과 같은 규약).
+  const prevClose = prevCloseFrom(currentPrice, changeRate);
+  const showRate = prevClose !== null;
+  // ⚠️ 표의 열 수는 이 한 곳에서만 파생한다 — thead·빈 사다리 colSpan·tbody가 갈리면
+  //    그 행부터 표 정렬이 통째로 깨진다.
+  const colCount = showRate ? 6 : 5;
+  const rateClass = (r: number | null) => r == null ? 'text-gray-500' : r > 0 ? 'text-red-400' : r < 0 ? 'text-blue-400' : 'text-gray-500';
+  const rateText = (r: number | null) => r == null ? '-' : formatChangeRate(r);
 
   const isUSD = currency === 'USD';
   const decimals = isUSD ? 2 : 0;
@@ -206,6 +253,10 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);
   const totalCost = rows.reduce((s, r) => s + r.price * r.qty, 0);
   const avgPrice = totalQty > 0 ? totalCost / totalQty : 0;
+  // 현재가 행은 정의상 표의 등락률과 정확히 일치한다(전일 종가를 반올림하지 않기 때문).
+  const curRate = rateVsPrev(currentPrice, prevClose);
+  // 평균단가의 등락률 = '오늘 전일 대비 평균 얼마에 파는가(사는가)' — 이 계산기의 헤드라인 값.
+  const avgRate = avgPrice > 0 ? rateVsPrev(avgPrice, prevClose) : null;
   // 잔여 = 목표금액 중 사다리가 쓰지 못한 몫. 보통 1주 값 미만이지만, 호가가 지나치게 넓어
   // 사다리가 가격 하한에 먼저 닿으면(매수) 크게 남을 수 있어 반드시 화면에 노출한다.
   const residual = targetAmount - totalCost;
@@ -313,14 +364,14 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   return (
     <div
       className="fixed z-[1050] bg-[#0f172a] border border-gray-600 rounded-xl shadow-2xl select-none"
-      style={{ left: position.x, top: position.y, width: 400 }}
+      style={{ left: position.x, top: position.y, width: 440 }}
     >
       {/* Title bar */}
       <div
         className="flex items-center justify-between px-3 py-2 bg-[#1e293b] rounded-t-xl border-b border-gray-700 cursor-move"
         onMouseDown={handleDragStart}
       >
-        <span className={`text-[11px] font-bold truncate max-w-[280px] ${isSell ? 'text-red-400' : 'text-sky-400'}`}>
+        <span className={`text-[11px] font-bold truncate max-w-[320px] ${isSell ? 'text-red-400' : 'text-sky-400'}`}>
           {itemName} — 분할{sideLabel} 계산기{isUSD ? ' ($)' : ''}
         </span>
         <div className="flex items-center gap-2 shrink-0">
@@ -374,12 +425,32 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
           <span className="text-gray-300 font-bold text-right">{rows.length}단계</span>
 
           <span className="text-gray-500 whitespace-nowrap">현재가격</span>
-          <span className="text-gray-300 font-bold">{fmtCurPrice(currentPrice)}{wonLine(currentPrice)}</span>
+          <span className="text-gray-300 font-bold">
+            {fmtCurPrice(currentPrice)}{wonLine(currentPrice)}
+            {showRate && (
+              <span
+                className={`block text-[9px] font-normal leading-tight ${rateClass(curRate)}`}
+                title={`전일 종가 ${fmt(prevClose)} 대비 — 리밸런싱 표의 등락률과 같은 값입니다. 사다리의 등락률은 모두 이 전일 종가가 기준입니다.`}
+              >
+                {rateText(curRate)}
+              </span>
+            )}
+          </span>
           <span className="text-gray-500 whitespace-nowrap" title={`리밸런싱이 정한 ${isSell ? '부족분' : '증가분'} 금액 = 기준 수량 × 현재가. 사다리는 이 금액을 넘지 않는 최대 수량을 배분합니다.`}>목표 금액</span>
           <span className="text-sky-300 font-bold text-right">{fmt(targetAmount)}{wonLine(targetAmount)}</span>
 
           <span className="text-gray-500 whitespace-nowrap">평균단가</span>
-          <span className="text-yellow-400 font-bold">{avgPrice > 0 ? fmt(avgPrice) : '—'}{avgPrice > 0 && wonLine(avgPrice)}</span>
+          <span className="text-yellow-400 font-bold">
+            {avgPrice > 0 ? fmt(avgPrice) : '—'}{avgPrice > 0 && wonLine(avgPrice)}
+            {avgPrice > 0 && showRate && (
+              <span
+                className={`block text-[9px] font-normal leading-tight ${rateClass(avgRate)}`}
+                title={`평균 ${sideLabel}단가의 전일 종가(${fmt(prevClose)}) 대비 등락률 — 오늘 전일 대비 평균 얼마나 ${isSell ? '높게 파는지' : '낮게 사는지'}를 나타냅니다.`}
+              >
+                {rateText(avgRate)}
+              </span>
+            )}
+          </span>
           <span className="text-gray-500 whitespace-nowrap">{sideLabel} 금액</span>
           <span className="text-yellow-400 font-bold text-right">
             {totalCost > 0 ? fmt(totalCost) : '—'}{totalCost > 0 && wonLine(totalCost)}
@@ -398,6 +469,14 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
           <thead className="sticky top-0 bg-[#1e293b] text-gray-400 border-b border-gray-700 z-10">
             <tr>
               <th className="py-2 px-2 text-center font-semibold w-[90px]">{sideLabel}단가</th>
+              {showRate && (
+                <th
+                  className="py-2 px-1 text-center font-semibold w-[58px]"
+                  title={`각 ${sideLabel}단가의 전일 종가(${fmt(prevClose)}) 대비 등락률입니다. 호가를 ${isSell ? '올릴수록 현재가 등락률보다 커집니다' : '내릴수록 현재가 등락률보다 작아집니다'}.`}
+                >
+                  등락률
+                </th>
+              )}
               <th className="py-2 px-2 text-center font-semibold w-[60px]">수량</th>
               <th className="py-2 px-2 text-center font-semibold">{sideLabel}합계</th>
               <th className="py-2 px-2 text-center font-semibold">{sideLabel}평균</th>
@@ -409,7 +488,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
                 둘 다 가려져 옛 화면은 '0주 / — / —'만 남아 계산기가 고장 난 것처럼 보였다. */}
             {!rows.length && (
               <tr>
-                <td colSpan={5} className="py-6 px-3 text-center text-[10px] text-gray-500 leading-relaxed">
+                <td colSpan={colCount} className="py-6 px-3 text-center text-[10px] text-gray-500 leading-relaxed">
                   배분할 수량이 없습니다.
                   <span className="block text-gray-600">
                     목표 금액({fmt(targetAmount)})이 1주 값보다 작습니다.
@@ -419,6 +498,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
             )}
             {rows.map((row, idx) => {
               const rowCost = row.price * row.qty;
+              const rowRate = rateVsPrev(row.price, prevClose);
               const cumQty = rows.slice(0, idx + 1).reduce((s, r) => s + r.qty, 0);
               const cumCost = rows.slice(0, idx + 1).reduce((s, r) => s + r.price * r.qty, 0);
               const runAvg = cumQty > 0 ? cumCost / cumQty : 0;
@@ -440,6 +520,11 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
                       onFocus={e => { setPriceEdits(prev => ({ ...prev, [row.id]: String(row.price) })); e.target.select(); }}
                     />
                   </td>
+                  {showRate && (
+                    <td className={`py-1 px-1 text-center font-mono text-[10px] ${rateClass(rowRate)}`}>
+                      {rateText(rowRate)}
+                    </td>
+                  )}
                   <td className="py-1 px-1">
                     <input
                       className={`w-full bg-transparent text-center font-bold outline-none focus:bg-gray-800/60 rounded px-1 py-0.5 select-text ${
