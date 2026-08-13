@@ -204,6 +204,43 @@ export function computeSellTaxRow({ change, taxBasePrice, sellPrice, avgTaxBase,
   };
 }
 
+// ── 매도 실현손익 (평균 과표 계산기) ────────────────────────────────────────
+// "이 매도로 얼마를 벌었나" = 매도금액 − 매입원가 = (매도단가 − 기준단가) × 매도수량.
+// 매수 행이 (현재가 × 수량 − 매입금액)으로 **미실현** 평가손익을 보여주는 것과 짝을 이루는 **실현**손익이다.
+//
+// ⚠️ 기준단가(basisPrice)는 '과세 금액(단가)'가 쓰는 avgBuy.value(= 포트폴리오의 **현재 시점**
+//    구매단가)가 아니라 **매도 시점 러닝 평균 매입단가**여야 한다. 실현손익은 이미 확정된 과거
+//    사실이라 나중 매수로 소급 변경되면 안 되기 때문이다. 그래서 별도 함수로 분리했다
+//    (computeSellTaxRow는 과세 판정 전용 — 그쪽의 '현재 시점 값' 규약은 사용자 선택이라 유지).
+//    되돌리면 재발하는 오류 2종:
+//    ① 매도 후 추가매수(데이터 정상): 100주@8,000 매수 → 50주@9,000 매도 → 100주@12,000 매수.
+//       참값 +50,000인데 현재 평균(10,666.67) 기준이면 −83,333으로 **부호가 뒤집힌다**.
+//    ② 매도를 포트폴리오 표에 반영할 때 보유수량만 줄이고 투자금액을 그대로 두면 구매단가가
+//       폭등해(예 8,000 → 21,621) 이익 매도가 −8,417,822 손실로 표시된다.
+// ⚠️ 수익률 분모는 매도금액이 아니라 **매입원가** — 매수 행의 (손익 ÷ 매입금액)과 같은 규약이라야
+//    한 표에 두 정의가 공존하지 않는다. 매도금액 분모는 전액 손실에서 −∞로 발산하기도 한다.
+// ⚠️ null 계약 — 준비되지 않으면 0이 아니라 null이다. 0은 '정확히 본전'만 뜻한다.
+//    (기준단가 0에 곱해 "매도금액 전액이 수익"이라고 단언하는 것이 최악의 오적용이다.)
+// ⚠️ 1주당 차이는 computeSellTaxRow와 같은 PER_SHARE_EPS로 0에 스냅한다 — 스냅이 없으면
+//    수학적으로 본전인 매도가 +6.3e-9 이익으로 잡혀 **이익 색(빨강)**으로 표시된다.
+// ⚠️ 매도수량은 floor하지 않는다 — 같은 행의 '과세 금액(단가)'(0.5주 기준)와 값이 갈린다.
+export function computeSellRealized({ change, sellPrice, basisPrice }) {
+  const changeNum = safeNum(change);
+  const isSell = changeNum < 0;
+  const soldQty = isSell ? -changeNum : 0;
+  const sell = safeNum(sellPrice);
+  const basis = safeNum(basisPrice);
+
+  const ready = isSell && sell > 0 && basis > 0;
+  const amount = ready ? soldQty * sell : null;         // 매도금액
+  const cost = ready ? basis * soldQty : null;          // 매입원가
+  const perShare = ready ? snapZero(sell - basis) : null;
+  const profit = ready ? perShare * soldQty : null;
+  const rate = ready && cost > 0 ? (profit / cost) * 100 : null;
+
+  return { isSell, soldQty, basis: ready ? basis : null, amount, cost, perShare, profit, rate };
+}
+
 export function buildDividendEvents(portfolio, code) {
   if (!code) return [];
   const hist = portfolio?.dividendHistory?.[code] || {};

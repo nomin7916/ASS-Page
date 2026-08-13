@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 // 한국 ETF 배당 과세 계산 단위 테스트 (calculateKrEtfDividendTax).
 // 실행: npm run verify:tax
 // 차이 발생 시 종료코드 1.
@@ -111,6 +113,9 @@ function expectEq(actual, expected, label) {
 }
 function expectApprox(actual, expected, tol, label) {
   if (!approx(actual, expected, tol)) throw new Error(`${label}: ${actual} ≉ ${expected} (tol=${tol})`);
+}
+function ok(cond, label = '가드 불일치') {
+  if (!cond) throw new Error(label);
 }
 function expectThrows(fn, msgFragment) {
   try { fn(); } catch (e) {
@@ -536,6 +541,244 @@ it('소수 매도수량도 붕괴하지 않음', () => {
   expectEq(r.soldQty, 0.5, 'soldQty');
   expectEq(r.taxable, true, 'taxable');
   expectApprox(r.actualAmount, 50, 1e-9, 'actualAmount');
+});
+
+// ─── src/krEtfTaxHelpers.ts computeSellRealized 참조 미러 ────────────────────
+// ⚠️ 본문은 src/krEtfTaxHelpers.ts의 computeSellRealized와 항상 1:1 동기화할 것.
+function computeSellRealized({ change, sellPrice, basisPrice }) {
+  const changeNum = safeNum(change);
+  const isSell = changeNum < 0;
+  const soldQty = isSell ? -changeNum : 0;
+  const sell = safeNum(sellPrice);
+  const basis = safeNum(basisPrice);
+
+  const ready = isSell && sell > 0 && basis > 0;
+  const amount = ready ? soldQty * sell : null;
+  const cost = ready ? basis * soldQty : null;
+  const perShare = ready ? snapZero(sell - basis) : null;
+  const profit = ready ? perShare * soldQty : null;
+  const rate = ready && cost > 0 ? (profit / cost) * 100 : null;
+
+  return { isSell, soldQty, basis: ready ? basis : null, amount, cost, perShare, profit, rate };
+}
+
+// ⚠️ KrEtfTaxMatrix.tsx의 buildSortedEventsWithAvg가 만드는 '매도 시점 러닝 평균 매입단가'와
+//    항상 1:1 동기화할 것. 이동평균법 — 매수만 가중평균을 갱신하고 매도는 수량만 줄인다.
+const RZ_ISO = /^\d{4}-\d{2}-\d{2}$/;
+function runningBuyAvgSeries(events) {
+  const valid = (events || [])
+    .filter(e => RZ_ISO.test(String(e.date || '')))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  let buyQty = 0, buyAvg = 0;
+  return valid.map(evt => {
+    const change = safeNum(evt.change);
+    if (change > 0) {
+      const pp = safeNum(evt.purchasePrice);
+      if (pp > 0) {
+        const nq = buyQty + change;
+        buyAvg = nq > 0 ? (buyQty * buyAvg + change * pp) / nq : 0;
+        buyQty = nq;
+      }
+    } else if (change < 0) {
+      buyQty = Math.max(0, buyQty + change);
+    }
+    return { evt, runningBuyAvg: buyAvg };
+  });
+}
+const RZ = (o) => computeSellRealized({ change: 0, sellPrice: 0, basisPrice: 0, ...o });
+
+console.log('\n[11] computeSellRealized — 매도 실현손익');
+it('손실 매도 — 부호가 보존된다 (priceAmount식 0 클램프 재사용 금지)', () => {
+  const r = RZ({ change: -630, sellPrice: 8260, basisPrice: 8699.19657 });
+  expectApprox(r.profit, -276694.0, 1.0, 'profit');
+  expectApprox(r.cost, 5480493.84, 0.01, 'cost');
+  expectApprox(r.perShare, -439.19657, 1e-4, 'perShare');
+  expectApprox(r.rate, -5.0489, 1e-3, 'rate');
+});
+it('이익 매도 — 금액·주당·수익률', () => {
+  const r = RZ({ change: -100, sellPrice: 12000, basisPrice: 11000 });
+  expectApprox(r.profit, 100000, 1e-6, 'profit');
+  expectApprox(r.amount, 1200000, 1e-6, 'amount');
+  expectApprox(r.cost, 1100000, 1e-6, 'cost');
+  expectApprox(r.rate, 9.0909, 1e-3, 'rate');
+});
+it('주당 항등식 — profit / soldQty === perShare (이익·손실 양방향)', () => {
+  for (const sp of [12000, 9000]) {
+    const r = RZ({ change: -137, sellPrice: sp, basisPrice: 11000 });
+    expectApprox(r.profit / r.soldQty, r.perShare, 1e-9, 'perShare ' + sp);
+  }
+});
+it('수익률 분모는 매입원가 — 매도금액으로 바꾸면 값이 갈린다', () => {
+  const r = RZ({ change: -100, sellPrice: 12000, basisPrice: 8000 });
+  expectApprox(r.rate, 50, 1e-9, 'rate');
+  expectApprox(r.rate, (r.profit / r.cost) * 100, 1e-9, '분모 정의');
+});
+it('매도단가 미입력 → 전 필드 null (0원으로 단언하지 않는다)', () => {
+  const r = RZ({ change: -100, sellPrice: 0, basisPrice: 11000 });
+  expectEq(r.profit, null, 'profit');
+  expectEq(r.rate, null, 'rate');
+  expectEq(r.cost, null, 'cost');
+  expectEq(r.amount, null, 'amount');
+  expectEq(r.basis, null, 'basis');
+});
+it('기준단가 0/음수 → null — 매도금액 전액을 수익으로 단언하지 않는다', () => {
+  for (const b of [0, -1]) expectEq(RZ({ change: -100, sellPrice: 12000, basisPrice: b }).profit, null, 'basis ' + b);
+});
+it('매수 행·수량 0 행은 실현손익을 갖지 않는다', () => {
+  expectEq(RZ({ change: 100, sellPrice: 12000, basisPrice: 11000 }).profit, null, '매수');
+  expectEq(RZ({ change: 0, sellPrice: 12000, basisPrice: 11000 }).profit, null, '수량 0');
+});
+it('부동소수 잔차는 실현손익에도 스냅된다 (본전 매도가 이익 색으로 뜨던 부류)', () => {
+  const r = RZ({ change: -630, sellPrice: 8699.2, basisPrice: 8699.2 + 1e-11 });
+  expectEq(r.perShare, 0, 'perShare');
+  expectEq(r.profit, 0, 'profit');
+  expectEq(r.rate, 0, 'rate');
+});
+it('소수 매도수량을 floor하지 않는다 (과세 금액(단가)와 기준이 갈리지 않게)', () => {
+  const r = RZ({ change: -0.5, sellPrice: 12000, basisPrice: 11000 });
+  expectEq(r.soldQty, 0.5, 'soldQty');
+  expectApprox(r.profit, 500, 1e-9, 'profit');
+});
+it('⚠ 시점 러닝 평균 계약 — 매도 후 추가매수가 과거 실현손익을 바꾸지 않는다', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },
+    { date: '2026-03-02', change: 100, purchasePrice: 12000 },
+  ];
+  const rows = runningBuyAvgSeries(evts);
+  expectApprox(rows[1].runningBuyAvg, 8000, 1e-9, '매도 시점 러닝 평균');
+  const r = computeSellRealized({ change: rows[1].evt.change, sellPrice: rows[1].evt.sellPrice, basisPrice: rows[1].runningBuyAvg });
+  expectApprox(r.profit, 50000, 1e-9, 'profit');
+  // 현재 시점 평균(포트폴리오 구매단가)으로 계산하면 부호가 뒤집힌다는 사실을 픽스처로 고정한다.
+  const nowAvg = (100 * 8000 - 50 * 8000 + 100 * 12000) / 150;
+  const wrong = computeSellRealized({ change: -50, sellPrice: 9000, basisPrice: nowAvg });
+  ok(wrong.profit < 0 && r.profit > 0, '현재 시점 평균이면 부호가 뒤집혀야 이 픽스처가 회귀를 잡는다');
+});
+it('이동평균법 — 매도는 러닝 평균단가를 바꾸지 않는다(수량만 감소)', () => {
+  const rows = runningBuyAvgSeries([
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },
+    { date: '2026-02-03', change: -10, sellPrice: 9500 },
+  ]);
+  expectApprox(rows[1].runningBuyAvg, 8000, 1e-9, '1차 매도');
+  expectApprox(rows[2].runningBuyAvg, 8000, 1e-9, '2차 매도');
+});
+it('매입단가가 빈 매수 행은 러닝 평균을 오염시키지 않는다 (0원 매수 금지)', () => {
+  const rows = runningBuyAvgSeries([
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-01-03', change: 100 },
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },
+  ]);
+  expectApprox(rows[2].runningBuyAvg, 8000, 1e-9, '러닝 평균');
+});
+it('요약 항등식 — Σ행별 실현손익 === 총 매도금액 − Σ매입원가 (행마다 기준단가가 달라도)', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },
+    { date: '2026-03-02', change: 100, purchasePrice: 12000 },
+    { date: '2026-04-02', change: -50, sellPrice: 11000 },
+  ];
+  const rz = runningBuyAvgSeries(evts)
+    .map(r => computeSellRealized({ change: r.evt.change, sellPrice: r.evt.sellPrice, basisPrice: r.runningBuyAvg }))
+    .filter(r => r.profit !== null);
+  const amt = rz.reduce((a, r) => a + r.amount, 0);
+  const cost = rz.reduce((a, r) => a + r.cost, 0);
+  const prof = rz.reduce((a, r) => a + r.profit, 0);
+  expectApprox(prof, amt - cost, 1e-6, '항등식');
+  expectApprox(rz[0].basis, 8000, 1e-9, '1차 기준');
+  expectApprox(rz[1].basis, 10666.6667, 1e-3, '2차 기준');
+  ok(Math.abs(rz[0].basis - rz[1].basis) > 1, '기준단가가 행마다 달라야 이 픽스처가 상수-곱 회귀를 잡는다');
+});
+
+// ─── 소스 텍스트 가드 — 매도 실현손익 렌더 배선 ──────────────────────────────
+// ⚠️ 위 미러는 "값이 맞다"만 증명한다. 셀 통째 삭제·값 바꿔치기·요약의 상수-곱 회귀·각주가 옛
+//    서술로 남는 것은 하나도 못 잡으므로 렌더 지점을 직접 읽어 단언한다.
+// ⚠️ **선언이 아니라 사용부를 단언할 것** — 선언만 보는 가드는 td 삭제 변이를 통과시킨다
+//    (verify:ladder #94의 교훈). 실패 시 먼저 정규식이 낡았는지 확인하고, 계약이 바뀐 게
+//    아니면 정규식을 고칠 것.
+const MX = readFileSync(new URL('../src/components/KrEtfTaxMatrix.tsx', import.meta.url), 'utf8');
+const HL = readFileSync(new URL('../src/krEtfTaxHelpers.ts', import.meta.url), 'utf8');
+
+console.log('\n[12] 소스 텍스트 가드 — 매도 실현손익 렌더 배선');
+it('#G1 매도 셀이 부호 있는 실현손익을 렌더하고 손실 색에 바인딩한다', () => {
+  ok(/rz\.profit !== null/.test(MX), 'null 게이트 사용부');
+  ok(/\(rz\.profit >= 0 \? '\+' : ''\) \+ formatCurrency\(Math\.round\(rz\.profit\)\)/.test(MX), '금액 렌더');
+  // 색 바인딩이 핵심 — priceAmount류(항상 ≥ 0)로 바꿔치기하면 blue 분기가 도달 불가가 된다.
+  ok(/rz\.profit >= 0 \? 'text-red-400' : 'text-blue-400'/.test(MX), '이익 빨강 / 손실 파랑');
+});
+it('#G2 주당 손익·수익률 줄이 rz를 쓰고 null을 0%로 단언하지 않는다', () => {
+  ok(/fmtTaxBase\(rz\.perShare\)/.test(MX), '주당 손익');
+  ok(/rz\.rate !== null &&/.test(MX), 'rate null 가드');
+  ok(/formatPercent\(rz\.rate\)/.test(MX), 'rate 렌더');
+});
+it('#G3 기준단가는 매도 시점 러닝 평균 — 현재 시점 avgBuy 직결 금지', () => {
+  ok(/basisPrice: basis\.value/.test(MX), 'computeSellRealized 인자');
+  ok(/computeSellRealized\(\{ change: row\.evt\.change, sellPrice: row\.evt\.sellPrice, basisPrice: basis\.value \}\)/.test(MX), '호출 형태');
+  ok(/if \(buyAvgReliable && runningBuyAvg > 0\) return \{ value: runningBuyAvg, source: 'running' \};/.test(MX), '러닝 평균 1순위');
+  ok(!/basisPrice: avgBuy\.value/.test(MX), 'avgBuy 직결 금지');
+  // 과세 3열은 종전대로 avgBuy.value를 쓴다(사용자 선택 — 되돌리지 말 것).
+  ok(/avgBuyPrice: avgBuy\.value,/.test(MX), '과세열은 avgBuy 유지');
+});
+it('#G4 러닝 평균이 표 순회에서 산출되고 매도는 평균단가를 바꾸지 않는다', () => {
+  ok(/runningBuyAvg: buyAvg/.test(MX), 'buildSortedEventsWithAvg 반환');
+  ok(/buyAvg = nq > 0 \? \(buyQty \* buyAvg \+ change \* pp\) \/ nq : 0;/.test(MX), '가중평균 갱신');
+  ok(/buyQty = Math\.max\(0, buyQty \+ change\);/.test(MX), '매도는 수량만 감소');
+});
+it('#G5 매도 요약이 행별 값을 누적한다 — 상수 곱(평균단가 × 총수량) 금지', () => {
+  ok(/sellRows\.reduce\(\(a, r\) => a \+ r\.realized\.cost, 0\)/.test(MX), '매입원가 누적');
+  ok(/sellRows\.reduce\(\(a, r\) => a \+ r\.realized\.profit, 0\)/.test(MX), '실현손익 누적');
+  ok(/r\.realized\.profit !== null/.test(MX), '미산출 행 제외');
+  ok(!/avgBuy\.value \* sellQtyTotal/.test(MX), '상수 곱 금지');
+  ok(/sellSummary\.profitTotal/.test(MX), '요약 렌더');
+});
+it('#G6 요약 바 게이트가 OR — 매수 행이 없어도 매도 요약이 뜬다', () => {
+  ok(/\(buySummary\.count > 0 \|\| sellSummary\.count > 0\)/.test(MX), 'OR 게이트');
+});
+it('#G7 각주가 옛 서술을 남기지 않고 실현손익·기준단가·이중계상을 설명한다', () => {
+  ok(!/현재가 × 매매수량은 <span[^>]*>-<\/span>/.test(MX), "옛 '매도 행은 -' 서술 제거");
+  ok(/매도 행의 '현재 평가 \/ 실현손익' 칸/.test(MX), '실현손익 각주');
+  ok(/매수 요약의 .손익.과 매도 요약의 .실현손익.을 더하지 마세요/.test(MX), '각주 이중 계상 경고');
+  ok(/이 값과 겹칩니다 — 두 수를 더하지 마세요/.test(MX), '요약 툴팁 이중 계상 경고');
+  ok(/러닝 평균 매입단가/.test(MX), '기준단가 설명');
+});
+it('#G8 열 헤더가 매도 행의 의미를 함께 표기한다', () => {
+  ok(/현재 평가 \/ 실현손익/.test(MX), '헤더 라벨');
+  ok(/매도 = 실현손익/.test(MX), '서브라인');
+});
+it('#G9 ISO_DATE 상수 공유 — 인라인 정규식 복제 금지(백슬래시 소실 회귀)', () => {
+  ok(/const ISO_DATE = \/\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$\//.test(MX), 'ISO_DATE 선언');
+  ok(!/\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$\/\.test\(/.test(MX), '인라인 리터럴 사용부 0건');
+  ok(!/\/\^d\{4\}-d\{2\}-d\{2\}\$\//.test(MX), '백슬래시 소실 형태 0건');
+});
+it('#G10 과세 3열은 실현손익과 분리 유지 — computeSellTaxRow에 realized 필드 금지', () => {
+  const body = HL.slice(HL.indexOf('export function computeSellTaxRow'), HL.indexOf('export function buildDividendEvents'));
+  ok(body.indexOf('export function computeSellRealized') >= 0, 'computeSellRealized 존재');
+  const taxOnly = body.slice(0, body.indexOf('export function computeSellRealized'));
+  ok(!/realized/.test(taxOnly), 'computeSellTaxRow 본문에 realized 없음');
+  ok(/taxable, exemptReason, actualPerShare, actualAmount,/.test(taxOnly), '과세 반환 필드 보존');
+});
+
+it('#G11 미러 드리프트 — computeSellRealized 본문이 src와 문자 단위로 같다', () => {
+  // ⚠️ [11]은 **미러**를 검증하므로 src만 고치면 그대로 통과한다(이 파일의 구조적 사각지대).
+  //    본문 텍스트를 직접 대조해 "src에만 넣은 변경"·"미러에만 넣은 변경"을 둘 다 잡는다.
+  const grab = (src, name) => {
+    const at = src.indexOf('function ' + name + '(');
+    if (at < 0) throw new Error(name + ' 본문을 찾지 못함');
+    const paren = src.indexOf(')', src.indexOf('(', at));
+    let i = src.indexOf('{', paren), depth = 0, end = -1;
+    for (let k = i; k < src.length; k++) {
+      if (src[k] === '{') depth++;
+      else if (src[k] === '}') { depth--; if (depth === 0) { end = k + 1; break; } }
+    }
+    if (end < 0) throw new Error(name + ' 본문 괄호가 닫히지 않음');
+    return src.slice(i, end)
+      .replace(/\/\/[^\n]*/g, '')     // 줄 주석 제거(주석은 동기화 대상 아님)
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+  const mine = grab(readFileSync(new URL(import.meta.url), 'utf8'), 'computeSellRealized');
+  const theirs = grab(HL, 'computeSellRealized');
+  ok(mine === theirs, '미러 드리프트:\n  mirror = ' + mine + '\n  src    = ' + theirs);
 });
 
 // ─── 결과 출력 ────────────────────────────────────────────────────────────────

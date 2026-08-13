@@ -9,6 +9,7 @@ import {
   computeMonthlyAvgForGrid,
   computeMonthlyQtyForGrid,
   computeSellTaxRow,
+  computeSellRealized,
   resolveAvgBuyPrice,
   isKrCode,
 } from '../krEtfTaxHelpers';
@@ -52,9 +53,23 @@ const AVG_SRC_LABEL = {
 // 헤더에 상시 노출하는 짧은 출처 라벨 — 툴팁에만 두면 호버하지 않는 사용자는 화면에 없는 값으로
 // 판정이 내려진 사실을 알 수 없다(특히 'item' 폴백은 포트폴리오 표의 구매단가와 다를 수 있다).
 const AVG_SRC_SHORT = { portfolio: '포트폴리오 구매단가', item: '임포트 매입단가', events: '계산기 매수 평균', unreliable: '', none: '' };
+// 실현손익 기준단가의 출처 — resolveBasis의 source와 1:1. 'running'이 정상 경로이고 나머지는 폴백이라
+// 셀에 * 를 붙여 "이 행은 시점 평균이 아니라 현재 시점 값으로 계산됐다"를 알린다.
+const BASIS_SRC_LABEL = {
+  running: '계산기 매수 이벤트의 매도 시점 러닝 평균 매입단가',
+  portfolio: '포트폴리오 테이블 구매단가 (투자금액 ÷ 보유수량) — 러닝 평균이 없어 폴백',
+  item: '종목의 구매단가 필드 (해외·붙여넣기 임포트) — 러닝 평균이 없어 폴백',
+  events: '계산기 매수 이벤트 평균 매입단가 — 러닝 평균이 없어 폴백',
+};
+const BASIS_SRC_SHORT = { running: '러닝 평균', portfolio: '포트폴리오 구매단가', item: '임포트 매입단가', events: '계산기 매수 평균' };
 // 포트폴리오 구매단가와 계산기 매수 평균이 이만큼 벌어지면 경고 — 매도를 포트폴리오 표에
 // 반영할 때 보유수량만 줄이고 투자금액을 그대로 두면 구매단가가 폭등한다.
 const AVG_BUY_MISMATCH_RATIO = 0.05;
+
+// 이벤트 일자 형식. ⚠️ 인라인 정규식 리터럴을 다시 복제하지 말 것 — 신규 필터를 손으로 베끼다
+// 백슬래시가 소실된 채 복제돼(빌드는 통과한다) 날짜 매칭이 전부 실패하고 매도 요약이
+// 통째로 죽은 이력이 있다. g 플래그가 없으므로 lastIndex 상태가 없어 인스턴스 공유가 안전하다.
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const fmtTaxBase = (v) => {
   const n = safeNum(v);
@@ -139,7 +154,7 @@ export default function KrEtfTaxMatrix({
 
   // 자산검증 스냅샷에서 전일 수량 조회
   const lookupPrevQty = (date, stockCode) => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 0;
+    if (!ISO_DATE.test(date)) return 0;
     const d = new Date(date);
     d.setDate(d.getDate() - 1);
     const prevDate = d.toISOString().slice(0, 10);
@@ -148,26 +163,40 @@ export default function KrEtfTaxMatrix({
     return item ? safeNum(item.quantity) : 0;
   };
 
-  // 이벤트 목록에서 날짜순 정렬 + 누적 평균 과표 계산
+  // 이벤트 목록에서 날짜순 정렬 + 누적 평균 과표(runningAvg) + 누적 평균 매입단가(runningBuyAvg) 계산.
+  // ⚠️ runningBuyAvg는 **매도 실현손익의 기준단가**다. 별도 함수(computeRunningAvgPurchaseSnapshots)를
+  //    쓰지 않고 이 루프에서 함께 뽑는 이유: 그 함수는 change===0 행을 제외하는데 여기는 유지하므로
+  //    인덱스 조인이 한 칸씩 밀린다(그 함수는 현재 호출부 0건 · 검증 0건).
+  // ⚠️ 이동평균법 — **매도는 평균단가를 바꾸지 않고 수량만 줄인다**(매수만 가중평균 갱신).
   const buildSortedEventsWithAvg = (events) => {
     const valid = (events || [])
-      .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')))
+      .filter(e => ISO_DATE.test(String(e.date || '')))
       .sort((a, b) => a.date.localeCompare(b.date));
     let runQty = 0, runAvg = 0;
+    let buyQty = 0, buyAvg = 0;
     const withAvg = valid.map(evt => {
       const change = safeNum(evt.change);
       if (change > 0) {
         const newQty = runQty + change;
         runAvg = newQty > 0 ? (runQty * runAvg + change * safeNum(evt.taxBasePrice)) / newQty : 0;
         runQty = newQty;
+        // 매입단가가 빈 매수 행은 평균에 넣지 않는다(0원 매수로 평균이 무너진다). 그런 행이 있으면
+        // 이 러닝 평균은 '부분 평균'이므로 buyAvgReliable=false가 되어 기준단가로 채택되지 않는다.
+        const pp = safeNum(evt.purchasePrice);
+        if (pp > 0) {
+          const nq = buyQty + change;
+          buyAvg = nq > 0 ? (buyQty * buyAvg + change * pp) / nq : 0;
+          buyQty = nq;
+        }
       } else if (change < 0) {
         runQty = Math.max(0, runQty + change);
+        buyQty = Math.max(0, buyQty + change);
       }
-      return { evt, runningAvg: runAvg, runningQty: runQty };
+      return { evt, runningAvg: runAvg, runningQty: runQty, runningBuyAvg: buyAvg };
     });
     // 날짜 미입력 이벤트는 뒤에 추가
-    const invalid = (events || []).filter(e => !/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')));
-    return [...withAvg, ...invalid.map(evt => ({ evt, runningAvg: 0, runningQty: 0 }))];
+    const invalid = (events || []).filter(e => !ISO_DATE.test(String(e.date || '')));
+    return [...withAvg, ...invalid.map(evt => ({ evt, runningAvg: 0, runningQty: 0, runningBuyAvg: 0 }))];
   };
 
   const stockRows = krStocks.map(stock => {
@@ -175,20 +204,20 @@ export default function KrEtfTaxMatrix({
     const computedAvg = computeMonthlyAvgForGrid(events, monthYms);
     const computedQtyMap = computeMonthlyQtyForGrid(events, monthYms);
     const hasQtyEvents = Object.keys(computedQtyMap).length > 0;
-    const sortedEventsWithAvg = buildSortedEventsWithAvg(events);
+    const sortedEventsRaw = buildSortedEventsWithAvg(events);
     // 현재가 — 포트폴리오 테이블과 같은 라이브 시세(item.currentPrice). 삭제된 종목(유령 행)이나
     // 시세 미로드면 0 → 평가금액·손익은 '-'로 두고 계산하지 않는다.
     const curPrice = cleanNum(stock.currentPrice);
     // 매수 요약: 매입단가>0 인 매수 이벤트 기준 매수일·총 매수수량·총 매입금액·평균 매입단가
     const buyEvts = (events || [])
-      .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) > 0 && safeNum(e.purchasePrice) > 0)
+      .filter(e => ISO_DATE.test(String(e.date || '')) && safeNum(e.change) > 0 && safeNum(e.purchasePrice) > 0)
       .sort((a, b) => a.date.localeCompare(b.date));
     const buyQtyTotal = buyEvts.reduce((s, e) => s + safeNum(e.change), 0);
     const buyAmountTotal = buyEvts.reduce((s, e) => s + safeNum(e.change) * safeNum(e.purchasePrice), 0);
     // 매입단가가 비어 있는 매수 행은 합계에서 빠진다 — '요약 = 행별 값의 단순 합' 불변식을 지키되
     // 빠진 건수를 요약에 명시해 사용자가 누락을 알아채게 한다.
     const buyNoPriceCount = (events || [])
-      .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) > 0 && !(safeNum(e.purchasePrice) > 0))
+      .filter(e => ISO_DATE.test(String(e.date || '')) && safeNum(e.change) > 0 && !(safeNum(e.purchasePrice) > 0))
       .length;
     // 손익 = 현재가 × 총 매수수량 − 총 매입금액 (매수 이벤트 전체 기준 — 중간 매도분도 포함)
     const buyEvalTotal = curPrice > 0 ? curPrice * buyQtyTotal : 0;
@@ -215,7 +244,7 @@ export default function KrEtfTaxMatrix({
     //    (buyNoPriceCount는 날짜가 유효한 행만 세므로 날짜를 지운 매수 행을 놓친다).
     const buyExcludedCount = (events || [])
       .filter(e => safeNum(e.change) > 0)
-      .filter(e => !(/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.purchasePrice) > 0))
+      .filter(e => !(ISO_DATE.test(String(e.date || '')) && safeNum(e.purchasePrice) > 0))
       .length;
     const eventsAvg = buyExcludedCount === 0 ? buySummary.avgPrice : 0;
     const avgBuyBase = resolveAvgBuyPrice(stock, buySummary.avgPrice, buyExcludedCount === 0);
@@ -232,6 +261,61 @@ export default function KrEtfTaxMatrix({
           ? 'none'
           : Math.abs(avgBuyBase.value - eventsAvg) / eventsAvg >= AVG_BUY_MISMATCH_RATIO ? 'mismatch' : 'ok',
     };
+    // ── 매도 실현손익 ────────────────────────────────────────────────────────
+    // 기준단가(basis) 우선순위: ① 매도 시점 러닝 평균 매입단가 ② avgBuy.value 폴백.
+    // ⚠️ ①이 1순위인 이유 — 실현손익은 **확정된 과거 사실**이라 나중 매수로 소급 변경되면 안 된다.
+    //    avgBuy.value(포트폴리오 구매단가)는 '현재 시점' 값이라 100주@8,000 매수 → 50주@9,000 매도
+    //    → 100주@12,000 매수 순서에서 참값 +50,000을 −83,333으로 **부호까지 뒤집는다**.
+    //    (과세 3열은 종전대로 avgBuy.value 유지 — 그쪽의 '현재 시점' 규약은 사용자 선택이다.)
+    // ⚠️ 매입단가·일자가 빠진 매수 행이 하나라도 있으면 러닝 평균은 '부분 평균'이라 채택하지 않는다
+    //    (resolveAvgBuyPrice의 fallbackReliable과 같은 근거 — 잘못된 손익 확정 방지).
+    const buyAvgReliable = buyExcludedCount === 0;
+    const resolveBasis = (runningBuyAvg) => {
+      if (buyAvgReliable && runningBuyAvg > 0) return { value: runningBuyAvg, source: 'running' };
+      if (avgBuy.value > 0) return { value: avgBuy.value, source: avgBuy.source };
+      return { value: 0, source: avgBuy.source };
+    };
+    const sortedEventsWithAvg = sortedEventsRaw.map(row => {
+      const basis = resolveBasis(row.runningBuyAvg);
+      return {
+        ...row,
+        basis,
+        // 기준단가가 '과세 금액(단가)'의 평균단가와 크게 벌어지면 두 칸이 다른 손익을 말하게 되므로 고지한다.
+        basisDiverged: basis.value > 0 && avgBuy.value > 0
+          && Math.abs(basis.value - avgBuy.value) / avgBuy.value >= AVG_BUY_MISMATCH_RATIO,
+        realized: computeSellRealized({ change: row.evt.change, sellPrice: row.evt.sellPrice, basisPrice: basis.value }),
+      };
+    });
+
+    // 매도 요약 — ⚠️ 자체 산식(평균단가 × 총수량) 금지. 행마다 기준단가가 다를 수 있어
+    //    Σ(basis_i × q_i) 를 **행별 값에서 누적**해야 '요약 = 행별 값의 단순 합' 불변식이 유지된다.
+    //    (상수 하나로 곱하면 매도 후 추가매수가 있는 계좌에서 부호까지 뒤집힌다.)
+    // ⚠️ computeSellRealized의 게이트를 우회하지 않으므로 기준단가가 없을 때 매도금액 전액을
+    //    '수익'으로 단언하는 사고가 구조적으로 불가능하다.
+    const sellRowsAll = sortedEventsWithAvg.filter(r => r.realized.isSell);
+    const sellRows = sellRowsAll.filter(r => r.realized.profit !== null && ISO_DATE.test(String(r.evt.date || '')));
+    const sellQtyTotal = sellRows.reduce((a, r) => a + r.realized.soldQty, 0);
+    const sellAmountTotal = sellRows.reduce((a, r) => a + r.realized.amount, 0);
+    const sellCostTotal = sellRows.reduce((a, r) => a + r.realized.cost, 0);
+    const sellProfitTotal = sellRows.reduce((a, r) => a + r.realized.profit, 0);
+    const sellBasisSources = [...new Set(sellRows.map(r => r.basis.source))];
+    const sellDates = sellRows.map(r => r.evt.date).sort((a, b) => a.localeCompare(b));
+    const sellSummary = {
+      count: sellRows.length,
+      excluded: sellRowsAll.length - sellRows.length,
+      firstDate: sellDates[0] || '',
+      lastDate: sellDates[sellDates.length - 1] || '',
+      qtyTotal: sellQtyTotal,
+      amountTotal: sellAmountTotal,
+      costTotal: sellCostTotal,
+      profitTotal: sellProfitTotal,
+      avgPrice: sellQtyTotal > 0 ? sellAmountTotal / sellQtyTotal : 0,
+      avgBasis: sellQtyTotal > 0 ? sellCostTotal / sellQtyTotal : 0,
+      profitRate: sellCostTotal > 0 ? (sellProfitTotal / sellCostTotal) * 100 : null,
+      basisSources: sellBasisSources,
+      // 기준단가를 못 구해 실현손익을 낼 수 없는 매도 행이 있는가(사유 구분용)
+      blockedByBasis: sellRowsAll.some(r => r.realized.profit === null && r.basis.value <= 0),
+    };
     const currentQty = cleanNum(stock.quantity || 0);
     const monthData = monthYms.map(ym => {
       const exVal = exTaxBase[ym];
@@ -246,7 +330,7 @@ export default function KrEtfTaxMatrix({
       return { ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty };
     });
     const annualExpected = monthData.reduce((s, d) => s + d.expected, 0);
-    return { stock, events, sortedEventsWithAvg, buySummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected };
+    return { stock, events, sortedEventsWithAvg, buySummary, sellSummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected };
   });
 
   const monthlyExpected = monthYms.map((_, i) =>
@@ -270,14 +354,14 @@ export default function KrEtfTaxMatrix({
 
   const handleEventDateChange = (stock, events, id, newDate) => {
     const updates = { date: newDate };
-    if (/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+    if (ISO_DATE.test(newDate)) {
       updates.prevQty = lookupPrevQty(newDate, stock.code);
     }
     persistEvents(stock.code, events.map(e => e.id !== id ? e : { ...e, ...updates }));
   };
 
   const refetchPrevQty = (stock, events, evt) => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(evt.date || ''))) return;
+    if (!ISO_DATE.test(String(evt.date || ''))) return;
     const prevQty = lookupPrevQty(evt.date, stock.code);
     persistEvents(stock.code, events.map(e => e.id !== evt.id ? e : { ...e, prevQty }));
   };
@@ -323,7 +407,7 @@ export default function KrEtfTaxMatrix({
           </tr>
         </thead>
         <tbody>
-          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected }) => {
+          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, sellSummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected }) => {
             const isExpanded = expandedCode === stock.code;
             return (
               <React.Fragment key={stock.code}>
@@ -469,11 +553,18 @@ export default function KrEtfTaxMatrix({
                                     <th className="text-right py-1 px-1 font-normal w-[68px]" title="매수=양수 / 매도=음수">매매수량</th>
                                     <th className="text-right py-1 px-1 font-normal w-[92px] text-orange-400/70" title="매수 행 = 매입단가 / 매도 행 = 매도단가(그날의 종가)">매입/매도단가</th>
                                     <th className="text-right py-1 px-1 font-normal w-[104px]" title="매수 = 매매수량 × 매입단가 / 매도 = 매도수량 × 매도단가">매입/매도금액</th>
-                                    <th className="text-right py-1 px-1 font-normal w-[120px]" title="현재가격 × 매매수량 — 그 매입 수량의 현재 평가금액. 아랫줄은 손익 · 수익률(이익 빨강 / 손실 파랑)">
-                                      현재가 × 매매수량
+                                    <th
+                                      className="text-right py-1 px-1 font-normal w-[128px]"
+                                      title={`매수 행 = 현재가격 × 매매수량 (그 매입 수량의 현재 평가금액) — 아직 팔지 않은 미실현 평가손익
+매도 행 = 실현손익 = 매도금액 − 매입원가 = (매도단가 − 기준단가) × 매도수량
+기준단가는 그 매도 시점의 러닝 평균 매입단가이며, 매수 행에 매입단가가 비어 있으면 '과세 금액(단가)'의 평균단가로 폴백하고 * 를 붙입니다
+이익 빨강 / 손실 파랑`}
+                                    >
+                                      현재 평가 / 실현손익
                                       <div className="text-[8px] text-gray-600 font-normal tabular-nums">
-                                        {curPrice > 0 ? `현재가 ${curPrice.toLocaleString()}원` : '현재가 없음'}
+                                        {curPrice > 0 ? `현재가 ${curPrice.toLocaleString()}원` : '현재가 없음 (실현손익은 계산됨)'}
                                       </div>
+                                      <div className="text-[8px] font-normal text-rose-300/60">매도 = 실현손익</div>
                                     </th>
                                     <th className="text-right py-1 px-1 font-normal w-[88px]">과표기준가</th>
                                     <th className="text-right py-1 px-1 font-normal w-[80px]">평균 과표</th>
@@ -505,7 +596,7 @@ export default function KrEtfTaxMatrix({
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {sortedEventsWithAvg.map(({ evt, runningAvg }) => {
+                                  {sortedEventsWithAvg.map(({ evt, runningAvg, basis, basisDiverged, realized: rz }) => {
                                     const changeNum = safeNum(evt.change);
                                     const isSell = changeNum < 0;
                                     const isBuy = changeNum > 0;
@@ -619,6 +710,44 @@ export default function KrEtfTaxMatrix({
                                                 <div className="text-[8px] text-gray-600" title="매입단가를 입력하면 손익·수익률이 계산됩니다">매입단가 미입력</div>
                                               )}
                                             </>
+                                          ) : rz.isSell ? (
+                                            // 매도 행 = 실현손익(매도금액 − 매입원가). ⚠️ 기준단가는 '과세 금액(단가)'의
+                                            // avgBuy.value가 아니라 **매도 시점 러닝 평균**이라 두 칸의 주당 금액이 다를 수 있다
+                                            // (그래서 기준단가를 아랫줄에 상시 노출하고, 5% 이상 벌어지면 ⚠를 붙인다).
+                                            rz.profit !== null ? (
+                                              <>
+                                                <div
+                                                  className={`font-medium ${rz.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}
+                                                  title={`실현손익 = 매도금액 ${formatCurrency(Math.round(rz.amount))} − 매입원가 ${formatCurrency(Math.round(rz.cost))}
+매입원가 = 기준단가 ${fmtTaxBase(rz.basis)}원 × ${rz.soldQty.toLocaleString()}주
+기준단가 출처: ${BASIS_SRC_LABEL[basis.source] || basis.source}
+수익률 ${rz.rate !== null ? formatPercent(rz.rate) : '-'} = 실현손익 ÷ 매입원가 (매수 행의 손익 ÷ 매입금액과 같은 규약)${basisDiverged ? `
+⚠ '과세 금액(단가)'의 평균단가 ${fmtTaxBase(avgBuy.value)}원과 5% 이상 다릅니다 — 두 칸의 주당 금액이 어긋나 보입니다` : ''}`}
+                                                >
+                                                  {(rz.profit >= 0 ? '+' : '') + formatCurrency(Math.round(rz.profit))}
+                                                  {basisDiverged && <span className="text-amber-400/80 ml-0.5">⚠</span>}
+                                                </div>
+                                                <div className={`text-[8px] font-medium ${rz.profit >= 0 ? 'text-red-400/70' : 'text-blue-400/70'}`}>
+                                                  {(rz.perShare >= 0 ? '+' : '') + fmtTaxBase(rz.perShare)}/주
+                                                  {rz.rate !== null && (
+                                                    <> · {(rz.rate >= 0 ? '+' : '') + formatPercent(rz.rate)}</>
+                                                  )}
+                                                </div>
+                                                <div className="text-[8px] text-gray-600 tabular-nums" title={BASIS_SRC_LABEL[basis.source] || ''}>
+                                                  기준 {fmtTaxBase(rz.basis)}
+                                                  {basis.source !== 'running' && <span className="text-amber-400/50 ml-0.5">*</span>}
+                                                </div>
+                                              </>
+                                            ) : (
+                                              <span
+                                                className={`text-[9px] ${basis.value <= 0 ? 'text-amber-400/70' : 'text-gray-600'}`}
+                                                title={basis.value > 0
+                                                  ? '매입단가 칸에 매도단가(그날의 종가)를 입력하면 실현손익이 계산됩니다'
+                                                  : avgBuy.source === 'unreliable'
+                                                    ? `매입단가·일자가 빠진 매수 행이 ${avgBuy.excluded}건 있어 평균 매입단가를 신뢰할 수 없습니다 — 잘못된 손익을 확정하지 않도록 계산하지 않습니다`
+                                                    : '기준단가(평균 매입단가)를 구할 수 없어 실현손익을 계산할 수 없습니다 — 매수 행의 매입단가나 포트폴리오의 보유수량·투자금액을 입력하세요'}
+                                              >{basis.value > 0 ? '매도단가 미입력' : avgBuy.source === 'unreliable' ? '기준단가 불확실' : '기준단가 없음'}</span>
+                                            )
                                           ) : (
                                             <span className="text-gray-700">-</span>
                                           )}
@@ -720,8 +849,12 @@ export default function KrEtfTaxMatrix({
                                 </tbody>
                               </table>
                             </div>
+                            {/* ⚠️ 래퍼 조건은 매수·매도 OR — 매수 요약(count>0)만 보면 매수 행을 아직 안 넣은
+                                계좌에서 매도 요약이 통째로 사라진다(테두리·배경도 이 래퍼가 갖는다). */}
+                            {(buySummary.count > 0 || sellSummary.count > 0) && (
+                              <div className="border-t border-gray-700/50 bg-gray-900/40">
                             {buySummary.count > 0 && (
-                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 border-t border-gray-700/50 bg-gray-900/40 text-[10px]">
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[10px]">
                                 <span className="text-gray-500">매수일
                                   <span className="text-gray-200 font-semibold ml-1">{buySummary.firstDate}{buySummary.lastDate !== buySummary.firstDate ? ` ~ ${buySummary.lastDate}` : ''}</span>
                                   <span className="text-gray-600 ml-1">({buySummary.count}건)</span>
@@ -771,6 +904,65 @@ export default function KrEtfTaxMatrix({
                                 )}
                               </div>
                             )}
+                            {(sellSummary.count > 0 || sellSummary.excluded > 0) && (
+                              <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[10px]${buySummary.count > 0 ? ' border-t border-gray-800/60' : ''}`}>
+                                {sellSummary.count > 0 ? (
+                                  <>
+                                    <span className="text-gray-500">매도일
+                                      <span className="text-gray-200 font-semibold ml-1">{sellSummary.firstDate}{sellSummary.lastDate !== sellSummary.firstDate ? ` ~ ${sellSummary.lastDate}` : ''}</span>
+                                      <span className="text-gray-600 ml-1">({sellSummary.count}건)</span>
+                                    </span>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-gray-500">매도 합계
+                                      <span className="text-rose-300 font-semibold ml-1 tabular-nums">{sellSummary.qtyTotal.toLocaleString()}주</span>
+                                    </span>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-gray-500">매도금액
+                                      <span className="text-gray-200 font-semibold ml-1 tabular-nums">{formatCurrency(Math.round(sellSummary.amountTotal))}</span>
+                                    </span>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-gray-500">평균 매도단가
+                                      <span className="text-rose-300 font-bold ml-1 tabular-nums">{fmtTaxBase(sellSummary.avgPrice)}원</span>
+                                    </span>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-gray-500">매입원가
+                                      <span
+                                        className="text-gray-200 font-semibold ml-1 tabular-nums"
+                                        title={`Σ(행별 기준단가 × 매도수량) — 가중평균 기준단가 ${fmtTaxBase(sellSummary.avgBasis)}원 × ${sellSummary.qtyTotal.toLocaleString()}주
+기준단가 출처: ${sellSummary.basisSources.map(k => BASIS_SRC_SHORT[k] || k).join(' / ')}`}
+                                      >{formatCurrency(Math.round(sellSummary.costTotal))}</span>
+                                    </span>
+                                    <span className="text-gray-700">·</span>
+                                    <span className="text-gray-500">실현손익
+                                      <span
+                                        className={`font-bold ml-1 tabular-nums ${sellSummary.profitTotal >= 0 ? 'text-red-400' : 'text-blue-400'}`}
+                                        title={`실현손익 = 총 매도금액 − 매입원가 (행별 실현손익의 합)
+⚠ 위 '손익'(매수 요약)은 매도한 주식까지 현재가로 평가한 값이라 이 값과 겹칩니다 — 두 수를 더하지 마세요`}
+                                      >
+                                        {(sellSummary.profitTotal >= 0 ? '+' : '') + formatCurrency(Math.round(sellSummary.profitTotal))}
+                                        {sellSummary.profitRate !== null && (
+                                          <span className="ml-1">({(sellSummary.profitRate >= 0 ? '+' : '') + formatPercent(sellSummary.profitRate)})</span>
+                                        )}
+                                      </span>
+                                    </span>
+                                  </>
+                                ) : (
+                                  <span className="text-gray-500">매도 <span className="text-rose-300 font-semibold">{sellSummary.excluded}건</span></span>
+                                )}
+                                {sellSummary.excluded > 0 && (
+                                  <>
+                                    <span className="text-gray-700">·</span>
+                                    <span className={sellSummary.blockedByBasis ? 'text-amber-400/70' : 'text-gray-600'} title={sellSummary.blockedByBasis
+                                      ? '기준단가(평균 매입단가)를 구할 수 없거나 매도단가·일자가 비어 있는 매도 행은 실현손익 합계에서 제외됩니다'
+                                      : '매도단가 또는 일자가 비어 있는 매도 행은 매도금액·매입원가·실현손익 합계에서 제외됩니다'}>
+                                      실현손익 미산출 {sellSummary.excluded}건 제외
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                              </div>
+                            )}
                           </>
                         )}
                         <div className="px-3 py-1 text-[9px] text-gray-600 border-t border-gray-800/50">
@@ -778,19 +970,21 @@ export default function KrEtfTaxMatrix({
                           <br />
                           <span className="text-orange-400/60">매입단가</span> 는 아래 매수 요약(평균 매입단가) 산출에 사용됩니다 · 차트 '일일 수익률'(🎯)은 포트폴리오 테이블 매입금액 기준으로 증권사 수익률과 일치
                           <br />
-                          <span className="text-gray-500">매입금액</span> = 매매수량 × 매입단가 &nbsp;·&nbsp; <span className="text-gray-500">현재가 × 매매수량</span> = 그 매입 수량의 현재 평가금액(포트폴리오 테이블과 같은 라이브 시세)이며 아랫줄에 손익·수익률(<span className="text-red-400/70">이익</span>/<span className="text-blue-400/70">손실</span>)을 표시 &nbsp;·&nbsp; 매도 행은 매입금액 칸에 <span className="text-rose-300/70">매도금액</span>을 표시하고 현재가 × 매매수량은 <span className="text-gray-500">-</span>
+                          <span className="text-gray-500">매입금액</span> = 매매수량 × 매입단가 &nbsp;·&nbsp; <span className="text-gray-500">현재가 × 매매수량</span> = 그 매입 수량의 현재 평가금액(포트폴리오 테이블과 같은 라이브 시세)이며 아랫줄에 손익·수익률(<span className="text-red-400/70">이익</span>/<span className="text-blue-400/70">손실</span>)을 표시 &nbsp;·&nbsp; 매도 행은 매입금액 칸에 <span className="text-rose-300/70">매도금액</span>을 표시
                           <br />
                           하단 요약 <span className="text-gray-500">손익</span> = 현재가 × 총 매수수량 − 총 매입금액 &nbsp;·&nbsp; 매수 이벤트 전체 기준(중간 매도분 포함)이라 위 행별 값의 단순 합과 같음 &nbsp;·&nbsp; 매도 행은 매수 요약에 포함되지 않음
                           <br />
                           <span className="text-rose-300/70">매도단가</span> = 매도 행의 매입단가 칸에 그날의 종가를 입력 → <span className="text-gray-500">매도금액</span> = 매도수량 × 매도단가
                           <br />
-                          <span className="text-emerald-400/70">과세 금액(과표)</span> = (매도 과표기준가 − 평균 과표) × 매도주식수 &nbsp;·&nbsp; <span className="text-emerald-400/70">과세 금액(단가)</span> = (매도단가 − 평균단가) × 매도주식수 &nbsp;·&nbsp; 각각 0 이하면 <span className="text-gray-400">비과세</span> (세율 미적용 과세표준)
+                          <b className="text-gray-400">매도 행의 '현재 평가 / 실현손익' 칸 = <span className="text-rose-300/70">실현손익</span></b> = 매도금액 − 매입원가 = (매도단가 − 기준단가) × 매도수량 &nbsp;·&nbsp; 2번째 줄은 주당 손익 · 수익률(분모 = 매입원가, 매수 행의 손익 ÷ 매입금액과 같은 규약) &nbsp;·&nbsp; 3번째 줄은 그 행에 실제로 쓰인 <span className="text-gray-500">기준단가</span> &nbsp;·&nbsp; <span className="text-red-400/70">이익 빨강</span> / <span className="text-blue-400/70">손실 파랑</span>
                           <br />
-                          <span className="text-amber-300/70">실제 과세</span> = 위 두 값이 <b className="text-gray-400">모두</b> 0보다 클 때만 과세이며 금액은 작은 쪽(min) &nbsp;·&nbsp; 하나라도 0 이하면 <span className="text-gray-400">비과세</span> &nbsp;·&nbsp; 한쪽이 미입력이어도 나머지가 0 이하면 비과세로 확정, 둘 다 필요한 '과세'는 <span className="text-gray-500">판정 불가</span>로 표기
+                          <span className="text-gray-500">기준단가</span> = <b className="text-gray-400">그 매도 시점까지의 러닝 평균 매입단가</b>(이동평균법 — 매도는 평균단가를 바꾸지 않음) &nbsp;·&nbsp; 실현손익은 이미 확정된 과거 사실이라 <b className="text-gray-400">나중 매수로 소급 변경되지 않게</b> 시점 평균을 씁니다 &nbsp;·&nbsp; 매수 행에 매입단가·일자가 빠져 있으면 러닝 평균이 부분 평균이 되므로 <span className="text-emerald-400/70">과세 금액(단가)</span>의 평균단가로 폴백하고 <span className="text-amber-400/50">*</span> 를 붙입니다(그것도 없으면 <b className="text-gray-400">계산하지 않습니다</b> — 0원으로 단언하지 않음)
                           <br />
-                          <span className="text-gray-500">평균단가</span>는 ① 포트폴리오 구매단가(투자금액 ÷ 보유수량) → ② 종목의 구매단가 필드(붙여넣기 임포트) → ③ 계산기 매수 평균 순으로 채택하며 <b className="text-gray-400">실제 사용된 출처를 헤더 아래에 표시</b>합니다 &nbsp;·&nbsp; ③은 매입단가·일자가 빠진 매수 행이 하나라도 있으면 부분 평균이라 쓰지 않고 <span className="text-amber-400/70">평균단가 불확실</span>로 두어 단가 기준 과세를 계산하지 않습니다(잘못된 비과세 확정 방지)
+                          그래서 실현손익의 주당 금액은 <span className="text-emerald-400/70">과세 금액(단가)</span>의 주당 금액과 <b className="text-gray-400">다를 수 있습니다</b>(과세 판정은 현재 시점 평균단가를 쓰는 것이 사용자 선택으로 고정돼 있음) &nbsp;·&nbsp; 두 값이 5% 이상 벌어지면 <span className="text-amber-400/80">⚠</span> 로 표시합니다
                           <br />
-                          ①은 <b className="text-gray-400">현재 시점</b> 값이라 매도·추가매수를 포트폴리오 표에 반영하면 과거 매도 행의 판정도 함께 바뀝니다 &nbsp;·&nbsp; 특히 <b className="text-gray-400">보유수량만 줄이고 투자금액을 그대로 두면</b> 구매단가가 실제보다 커져 과세 건이 비과세로 뒤집힙니다 → ③과 5% 이상 벌어지면 <span className="text-amber-400/80">⚠</span>, ③이 없어 대조할 수 없으면 <span className="text-amber-400/60">교차검증 불가</span>로 헤더에 표시합니다
+                          하단 <span className="text-rose-300/70">매도 요약</span> — <span className="text-gray-500">매입원가</span> = Σ(행별 기준단가 × 매도수량) &nbsp;·&nbsp; <span className="text-gray-500">실현손익</span> = 총 매도금액 − 매입원가 &nbsp;·&nbsp; 행마다 기준단가가 다를 수 있어 <b className="text-gray-400">행별 값을 누적</b>합니다(평균단가 하나로 곱하지 않음) &nbsp;·&nbsp; 표시 반올림 때문에 행별 표시값의 합과 1원 단위 차이가 날 수 있습니다
+                          <br />
+                          <b className="text-amber-400/70">⚠ 매수 요약의 '손익'과 매도 요약의 '실현손익'을 더하지 마세요</b> — 매수 요약 손익은 <b className="text-gray-400">이미 매도한 주식까지</b> 현재가로 평가한 값이라 두 값이 겹칩니다(매도분이 이중 계상됨)
                         </div>
                       </div>
                       </div>
