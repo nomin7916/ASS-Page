@@ -1376,7 +1376,8 @@ export default function RebalancingPanel({
                               const rect = e.currentTarget.getBoundingClientRect();
                               // ⚠️ 456 = 모달 폭 440 + 여백 16 — LadderTradeModal의 width를 바꾸면 이 값도 같이 바꿀 것.
                               const x = Math.max(8, Math.min(rect.right + 8, window.innerWidth - 456));
-                              const y = Math.max(8, Math.min(rect.top - 20, window.innerHeight - 540));
+                              // ⚠️ 560 = 모달 최대 높이(요약에 등락률 줄이 붙어 ~520px) + 여유.
+                              const y = Math.max(8, Math.min(rect.top - 20, window.innerHeight - 560));
                               setLadderModal({
                                 side: isSellAction ? 'sell' : 'buy',
                                 itemName: item.name,

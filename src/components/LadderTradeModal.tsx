@@ -64,15 +64,21 @@ const amountTolOf = (decimals: number) => Math.pow(10, -decimals);
 //    값이라 prev = 현재가 ÷ (1 + c/100)가 정수에 딱 떨어지지 않는데, 여기서 반올림하면
 //    **현재가 행의 등락률이 표의 등락률과 갈린다**(실측: 11,260 · ▲6.56% → 스냅하면 6.57%).
 //    원본 그대로 두면 rateVsPrev(현재가, prev) === c 가 대수적으로 보장돼 앵커가 항상 일치한다.
-function prevCloseFrom(currentPrice: number, changeRate: number | string | null | undefined): number | null {
-  const p = Number(currentPrice);
-  if (!Number.isFinite(p) || p <= 0) return null;
-  // ⚠️ 미확보(null/undefined/''/손상값)는 '변동 없음(0%)'이 아니라 '모름'이다 — 0으로 폴백 금지.
-  //    타입까지 본다: Number('')·Number([])·Number(false)가 전부 0이라 손상값이 0%로 통과한다.
+// 등락률 원값(정규화) — 미확보면 null.
+// ⚠️ 미확보(null/undefined/''/손상값)는 '변동 없음(0%)'이 아니라 '모름'이다 — 0으로 폴백 금지.
+//    타입까지 본다: Number('')·Number([])·Number(false)가 전부 0이라 손상값이 0%로 통과한다.
+function normalizeChangeRate(changeRate: number | string | null | undefined): number | null {
   const c = typeof changeRate === 'number'
     ? changeRate
     : (typeof changeRate === 'string' && /[0-9]/.test(changeRate) ? Number(changeRate) : NaN);
-  if (!Number.isFinite(c)) return null;
+  return Number.isFinite(c) ? c : null;
+}
+
+function prevCloseFrom(currentPrice: number, changeRate: number | string | null | undefined): number | null {
+  const p = Number(currentPrice);
+  if (!Number.isFinite(p) || p <= 0) return null;
+  const c = normalizeChangeRate(changeRate);
+  if (c === null) return null;
   const k = 1 + c / 100;
   if (!(k > 0)) return null; // −100% 이하 = 전일 종가 복원 불가
   return p / k;
@@ -209,6 +215,12 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   //    단언하지 않는다(일간 지표의 null 계약과 같은 규약).
   const prevClose = prevCloseFrom(currentPrice, changeRate);
   const showRate = prevClose !== null;
+  // ⚠️ 현재가와 같은 가격의 등락률은 **복원한 전일 종가로 되계산하지 않고 원값을 그대로** 쓴다.
+  //    p → p/(1+c/100) → 다시 % 로 되돌리는 왕복은 ±1e-15 오차를 남기는데, c가 소수 3자리
+  //    이상이고 .xx5 경계면(예: 6.565) 그 오차가 toFixed(2)를 갈라 표는 ▲6.57%, 계산기는
+  //    ▲6.56%가 된다(미국 주식 changeRate는 반올림 없이 들어온다). 원값을 쓰면 대수적 보장이
+  //    아니라 **같은 값**이라 어떤 자릿수에서도 표와 문자열까지 일치한다.
+  const baseRate = normalizeChangeRate(changeRate);
   // ⚠️ 표의 열 수는 이 한 곳에서만 파생한다 — thead·빈 사다리 colSpan·tbody가 갈리면
   //    그 행부터 표 정렬이 통째로 깨진다.
   const colCount = showRate ? 6 : 5;
@@ -253,8 +265,13 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);
   const totalCost = rows.reduce((s, r) => s + r.price * r.qty, 0);
   const avgPrice = totalQty > 0 ? totalCost / totalQty : 0;
-  // 현재가 행은 정의상 표의 등락률과 정확히 일치한다(전일 종가를 반올림하지 않기 때문).
-  const curRate = rateVsPrev(currentPrice, prevClose);
+  // 현재가 행은 표의 등락률 원값을 그대로 쓴다(위 baseRate 주석 참조).
+  const curRate = showRate ? baseRate : null;
+  // ⚠️ 툴팁이 근거로 드는 전일 종가는 표시용으로 격자에 반올림된 값이라 그 숫자로 되계산하면
+  //    옆에 찍힌 등락률이 재현되지 않는다(원화 1,000 · ▼30.00% → '1,429' → 되계산 −30.02%).
+  //    계산은 반올림하지 않으므로, 문구를 '≈ … 복원한 추정값'으로 두어 단언하지 않는다.
+  //    3개 툴팁이 이 한 문자열을 공유한다 — 손복제하면 한쪽만 낡는다.
+  const prevLabel = showRate ? `전일 종가 ≈ ${fmt(prevClose)}(등락률에서 복원한 추정값)` : '';
   // 평균단가의 등락률 = '오늘 전일 대비 평균 얼마에 파는가(사는가)' — 이 계산기의 헤드라인 값.
   const avgRate = avgPrice > 0 ? rateVsPrev(avgPrice, prevClose) : null;
   // 잔여 = 목표금액 중 사다리가 쓰지 못한 몫. 보통 1주 값 미만이지만, 호가가 지나치게 넓어
@@ -430,7 +447,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
             {showRate && (
               <span
                 className={`block text-[9px] font-normal leading-tight ${rateClass(curRate)}`}
-                title={`전일 종가 ${fmt(prevClose)} 대비 — 리밸런싱 표의 등락률과 같은 값입니다. 사다리의 등락률은 모두 이 전일 종가가 기준입니다.`}
+                title={`${prevLabel} 대비 — 리밸런싱 표의 등락률과 같은 값입니다. 사다리의 등락률은 모두 이 전일 종가가 기준입니다.`}
               >
                 {rateText(curRate)}
               </span>
@@ -445,7 +462,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
             {avgPrice > 0 && showRate && (
               <span
                 className={`block text-[9px] font-normal leading-tight ${rateClass(avgRate)}`}
-                title={`평균 ${sideLabel}단가의 전일 종가(${fmt(prevClose)}) 대비 등락률 — 오늘 전일 대비 평균 얼마나 ${isSell ? '높게 파는지' : '낮게 사는지'}를 나타냅니다.`}
+                title={`평균 ${sideLabel}단가의 ${prevLabel} 대비 등락률 — 오늘 전일 대비 평균 얼마나 ${isSell ? '높게 파는지' : '낮게 사는지'}를 나타냅니다.`}
               >
                 {rateText(avgRate)}
               </span>
@@ -472,7 +489,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
               {showRate && (
                 <th
                   className="py-2 px-1 text-center font-semibold w-[58px]"
-                  title={`각 ${sideLabel}단가의 전일 종가(${fmt(prevClose)}) 대비 등락률입니다. 호가를 ${isSell ? '올릴수록 현재가 등락률보다 커집니다' : '내릴수록 현재가 등락률보다 작아집니다'}.`}
+                  title={`각 ${sideLabel}단가의 ${prevLabel} 대비 등락률입니다. 호가를 ${isSell ? '올릴수록 현재가 등락률보다 커집니다' : '내릴수록 현재가 등락률보다 작아집니다'}.`}
                 >
                   등락률
                 </th>
@@ -498,7 +515,8 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
             )}
             {rows.map((row, idx) => {
               const rowCost = row.price * row.qty;
-              const rowRate = rateVsPrev(row.price, prevClose);
+              // 현재가와 같은 호가는 원값(baseRate)을 그대로 — 위 baseRate 주석의 왕복 오차 방지.
+              const rowRate = row.price === currentPrice ? curRate : rateVsPrev(row.price, prevClose);
               const cumQty = rows.slice(0, idx + 1).reduce((s, r) => s + r.qty, 0);
               const cumCost = rows.slice(0, idx + 1).reduce((s, r) => s + r.price * r.qty, 0);
               const runAvg = cumQty > 0 ? cumCost / cumQty : 0;

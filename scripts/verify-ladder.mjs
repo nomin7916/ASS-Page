@@ -42,7 +42,7 @@ function sliceFns(source, names) {
   return new Function(js + '\nreturn {' + names.join(',') + '};')();
 }
 
-const F = sliceFns(src, ['tri', 'roundTo', 'buildLadder', 'solveQtyForAmount', 'recalcAllPrices', 'redistribute', 'prevCloseFrom', 'rateVsPrev']);
+const F = sliceFns(src, ['tri', 'roundTo', 'buildLadder', 'solveQtyForAmount', 'recalcAllPrices', 'redistribute', 'normalizeChangeRate', 'prevCloseFrom', 'rateVsPrev']);
 
 // ⚠️ 금지 토큰 가드는 주석을 지우고 본다 — 이 파일의 설명 주석에는 옛 이름이 일부러 남아 있다.
 const stripComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -478,6 +478,25 @@ console.log('\n■ 전일 대비 등락률 — 각 호가가 전일 종가 대�
       }
     ok('#84 등락률 항등식 (전 조합)', bad === 0, `위반 ${bad}건`);
   }
+  {
+    // ⚠️ 죽은 단언 방지 — 소수 3자리 이상 등락률에서 '전일 종가 왕복'이 실제로 표와 갈리는 것을
+    //    보인다(미국 주식 changeRate는 반올림 없이 들어온다). 그래서 현재가 행은 원값을 쓴다.
+    const CS = [6.565, -2.345, 0.125, 3.475, -7.005, 1.115, 4.005, -0.335, 2.225, 9.995];
+    let diverge = 0, example = null;
+    for (const p of [8500, 11260, 1234, 44300]) for (const c of CS) {
+      const round = F.rateVsPrev(p, F.prevCloseFrom(p, c));
+      if (round.toFixed(2) !== c.toFixed(2)) {
+        diverge++;
+        if (!example) example = `${p} · ${c}% → 왕복 ${round.toFixed(2)}% (표 ${c.toFixed(2)}%)`;
+      }
+    }
+    ok('#99b [변이] 왕복 계산은 .xx5 경계에서 표와 갈린다 — 현재가 행에 원값을 쓰는 근거',
+      diverge > 0, `괴리 ${diverge}건 / 예: ${example}`);
+    ok('#99c normalizeChangeRate는 원값을 자릿수 손실 없이 그대로 돌려준다',
+      [6.565, -2.345, 0, 12.3456789, -99.999].every(c => F.normalizeChangeRate(c) === c)
+      && F.normalizeChangeRate('6.565') === 6.565
+      && ['', ' ', true, false, [], {}, NaN, null, undefined, 'abc'].every(v => F.normalizeChangeRate(v) === null));
+  }
 }
 
 console.log('\n■ 등락률 null 계약 — 모르는 값을 0%로 단언하지 않는다');
@@ -554,17 +573,33 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
     /const colCount = showRate \? 6 : 5;/.test(src)
     && /colSpan=\{colCount\}/.test(src)
     && !/colSpan=\{5\}/.test(src));
-  ok('#94 등락률 3표시(행·현재가격·평균단가)가 같은 함수를 쓴다',
-    /const rowRate = rateVsPrev\(row\.price, prevClose\);/.test(src)
-    && /const curRate = rateVsPrev\(currentPrice, prevClose\);/.test(src)
-    && /const avgRate = avgPrice > 0 \? rateVsPrev\(avgPrice, prevClose\) : null;/.test(src));
+  // ⚠️ 선언만 검사하면 죽은 단언이 된다 — 실제 **사용부**(렌더 지점)를 단언한다.
+  //    적대적 리뷰가 실증한 변이 3종: ① td 통째 삭제 ② showRate 래퍼만 제거
+  //    ③ rateClass/rateText 인자를 rowRate → curRate 로 바꾸기. 셋 다 옛 가드를 통과했다.
+  ok('#94 등락률 3표시가 각자 자기 값을 렌더한다 (선언이 아니라 사용부 단언)',
+    /const rowRate = row\.price === currentPrice \? curRate : rateVsPrev\(row\.price, prevClose\);/.test(src)
+    && /const avgRate = avgPrice > 0 \? rateVsPrev\(avgPrice, prevClose\) : null;/.test(src)
+    && /rateClass\(rowRate\)/.test(src) && /\{rateText\(rowRate\)\}/.test(src)
+    && /rateClass\(curRate\)/.test(src) && /\{rateText\(curRate\)\}/.test(src)
+    && /rateClass\(avgRate\)/.test(src) && /\{rateText\(avgRate\)\}/.test(src));
+  ok('#98 등락률 th·td가 둘 다 showRate 게이트 안에 있다 (thead/tbody 열 수 어긋남 방지)',
+    /\{showRate && \(\s*<th[\s\S]{0,500}?등락률\s*<\/th>\s*\)\}/.test(src)
+    && /\{showRate && \(\s*<td[\s\S]{0,240}?\{rateText\(rowRate\)\}\s*<\/td>\s*\)\}/.test(src));
+  ok('#99 현재가 행은 등락률 원값을 그대로 쓴다 (전일 종가 왕복 오차 차단)',
+    /const baseRate = normalizeChangeRate\(changeRate\);/.test(src)
+    && /const curRate = showRate \? baseRate : null;/.test(src));
+  ok('#100 툴팁의 전일 종가는 단언이 아니라 근사 표기 — 3곳이 한 문자열을 공유',
+    /const prevLabel = showRate \? `전일 종가 ≈ \$\{fmt\(prevClose\)\}\(등락률에서 복원한 추정값\)` : '';/.test(src)
+    && (src.match(/\$\{prevLabel\}/g) || []).length === 3
+    && !/전일 종가 \$\{fmt\(prevClose\)\}/.test(src));
   ok('#95 모르면 0.00%가 아니라 - 로 표시한다 (null 계약)',
     /const rateText = \(r[^)]*\) => r == null \? '-' : formatChangeRate\(r\);/.test(src));
   ok('#96 리밸런싱 표가 등락률을 넘긴다 (양쪽 배선)',
     /changeRate: item\.changeRate \?\? null,/.test(panel)
     && /changeRate=\{ladderModal\.changeRate\}/.test(panel));
-  ok('#97 모달 폭과 열림 위치 클램프가 짝 (440 ↔ 456)',
-    /width: 440 \}\}/.test(src) && /window\.innerWidth - 456\)/.test(panel));
+  ok('#97 모달 폭·높이와 열림 위치 클램프가 짝 (440 ↔ 456 / 요약 확대 ↔ 560)',
+    /width: 440 \}\}/.test(src) && /window\.innerWidth - 456\)/.test(panel)
+    && /window\.innerHeight - 560\)/.test(panel));
   ok('#57 단일 컴포넌트 유지 — 매도 전용 모달 복제 금지',
     /import LadderTradeModal from '\.\/LadderTradeModal';/.test(panel) && !/LadderSellModal|LadderBuyModal/.test(panel));
 }
