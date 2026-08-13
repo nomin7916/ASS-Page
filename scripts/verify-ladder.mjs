@@ -360,8 +360,49 @@ console.log('\n■ 금액 앵커 — 수량은 목표금액에서 파생된다 (
     F.solveQtyForAmount(0, 10, 1000, 1, 0, 1) === 0
     && F.solveQtyForAmount(1000, 0, 1000, 1, 0, 1) === 0
     && F.solveQtyForAmount(1000, 10, -5, 1, 0, 1) === 0);
-  ok('#70 목표금액이 1주 값보다 작으면 수량 0', F.solveQtyForAmount(1000, 10, 999, 1, 0, 1) === 0);
+  // 허용 오차 경계 = 정확히 가격 격자 1칸. 999(1칸 부족)는 구제되고 998(2칸)은 안 된다.
+  ok('#70 목표금액 부족분이 격자 1칸 이내면 1주 (그 밖은 0주)',
+    F.solveQtyForAmount(1000, 10, 999, 1, 0, 1) === 1
+    && F.solveQtyForAmount(1000, 10, 998, 1, 0, 1) === 0);
   ok('#71 목표금액이 정확히 1주 값이면 1주', F.solveQtyForAmount(1000, 10, 1000, 1, 0, 1) === 1);
+
+  // ⑨ 가격 격자 양자화 — 목표금액은 원시 현재가로 계산되는데 사다리는 스냅된 가격으로 거래한다.
+  //    격자가 가격을 올려 반올림하면 1주조차 목표를 넘겨 Q=0(빈 사다리)이 되던 회귀.
+  //    실측 결함: 기준가 1,234.56 · action −1 → 첫 호가 1,235 > 목표 1,234.56 → 매도 계산기가 통째로 비었다.
+  {
+    let empty = [];
+    for (const price of [1234.56, 10500.50, 9999.90, 1000.5, 1000.99, 3.7]) {
+      for (const d of [1, -1]) for (const m of [1, 4]) {
+        const Q = F.solveQtyForAmount(price, 10, 1 * price, 1, 0, d, m);
+        if (Q < 1) empty.push(`p=${price} dir=${d} m=${m} → Q=${Q}`);
+      }
+    }
+    ok('#74 [회귀] 격자가 올려 반올림하는 가격에서도 1주는 배분된다 (빈 사다리 금지)',
+      empty.length === 0, J(empty.slice(0, 4)));
+  }
+  {
+    // 일반 계약: 기준 수량 >= 1 이면 어떤 조합에서도 Q >= 1 이다(스냅 상승폭 <= 격자의 절반).
+    let bad = [];
+    for (const price of [1234.56, 8470, 120.5, 3.7, 55555.55]) {
+      for (const t of [1, 10, 100]) for (const m of [1, 2, 8]) for (const a of [1, 2, 5]) {
+        for (const d of [1, -1]) {
+          const Q = F.solveQtyForAmount(price, t, a * price, 1, 0, d, m);
+          if (Q < 1) bad.push(`p=${price} t=${t} m=${m} a=${a} dir=${d}`);
+        }
+      }
+    }
+    ok('#75 기준 수량 >= 1 이면 항상 Q >= 1', bad.length === 0, J(bad.slice(0, 4)));
+  }
+  {
+    // 달러 격자(0.01)도 같은 규칙 — 소수 3자리 가격이 올려 반올림되는 경우
+    const Q = F.solveQtyForAmount(250.756, 0.1, 250.756, 0.01, 2, 1, 1);
+    ok('#76 달러도 격자 반올림에 막혀 빈 사다리가 되지 않는다', Q >= 1, `Q=${Q}`);
+  }
+  {
+    // 허용 오차는 '격자 1칸'이지 무제한이 아니다 — 목표가 진짜로 작으면 여전히 0이다.
+    ok('#77 목표금액이 1주 값보다 격자 이상 작으면 여전히 0주',
+      F.solveQtyForAmount(1000, 10, 900, 1, 0, 1) === 0);
+  }
 }
 
 console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가 dir/side를 실제로 넘기는가)');
@@ -404,6 +445,12 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
     /const qtyDiff = totalQty - baseQty;/.test(src) && !/const uplift/.test(src)
     && /const qtyDiffLabel = isSell/.test(src)
     && /주 절약/.test(src) && /주 추가/.test(src) && /주 부족/.test(src));
+  ok('#78 허용 오차가 가격 격자(1e-6 같은 부동소수 여유 아님)',
+    /const amountTolOf = \(decimals[^)]*\) => Math\.pow\(10, -decimals\);/.test(src)
+    && /cost <= targetAmount \+ amountTolOf\(decimals\)/.test(src)
+    && !/AMOUNT_EPS/.test(src));
+  ok('#79 빈 사다리는 이유를 밝힌다 (잔여·푸터가 가려지므로)',
+    /!rows\.length && \(/.test(src) && /배분할 수량이 없습니다/.test(src));
   ok('#57 단일 컴포넌트 유지 — 매도 전용 모달 복제 금지',
     /import LadderTradeModal from '\.\/LadderTradeModal';/.test(panel) && !/LadderSellModal|LadderBuyModal/.test(panel));
 }

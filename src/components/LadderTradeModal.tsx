@@ -39,7 +39,17 @@ function roundTo(n: number, decimals: number): number {
 // 사다리 최대 수량 — 옛 maxAffordableQty의 상한과 같은 값이라 행 수 상한(mult=1에서 ~450행)도 종전과 같다.
 const MAX_LADDER_QTY = 100000;
 const QTY_EPS = 1e-9;
-const AMOUNT_EPS = 1e-6;
+
+// ⚠️ 금액 허용 오차 = **가격 격자 1칸**(원화 1원 / 달러 $0.01). 1e-6 같은 부동소수 여유로
+//    되돌리지 말 것 — 이건 반올림 잡음이 아니라 **양자화 오차**를 덮는 값이다.
+//    목표금액은 원시 현재가로 계산되는데(|action| × price) 사다리는 격자에 스냅된 가격으로만
+//    거래하므로(buildLadder의 roundTo), 격자가 가격을 **올려** 반올림하면 1주조차 목표를 넘긴다.
+//    실측: 펀드 기준가 1,234.56 · action −1 → 첫 호가 roundTo(1234.56)=1,235 > 목표 1,234.56
+//    → Q=0 → 매도 계산기가 통째로 빈 채로 열렸다(소수부 ≥ 0.5인 가격 + |action|=1 전부 해당).
+//    스냅 상승폭은 최대 격자의 절반이라 격자 1칸이면 항상 덮이고, 그래서
+//    **baseQty >= 1 이면 Q >= 1 이 보장된다**. action = trunc(금액/가격)이 이미 1주분을
+//    버리므로 이 여유(최대 1원)는 그 안에 묻힌다.
+const amountTolOf = (decimals: number) => Math.pow(10, -decimals);
 
 // ⚠️ 이 계산기의 앵커는 '수량'이 아니라 '금액'이다 — 절대 되돌리지 말 것.
 //    리밸런싱이 정하는 1차값은 '이 종목을 ₩N만큼 늘린다/줄인다'(증가분·부족분)이고,
@@ -98,10 +108,7 @@ function solveQtyForAmount(basePrice: number, tickSize: number, targetAmount: nu
     if (!rows.length) return false;
     let sumQty = 0, cost = 0;
     for (const r of rows) { sumQty += r.qty; cost += r.price * r.qty; }
-    // AMOUNT_EPS는 달러(소수 2자리) 누적 오차에 대한 **방어적 여유**다. 원화는 정수 연산이라
-    // 무관하고, 달러도 실측 3,072조합에서 있으나 없으나 결과가 같았다(= 전용 테스트가 없는 이유).
-    // 통화 비교에 여유를 두는 관례로 남긴다 — 1e-6 통화단위라 실질 초과는 만들 수 없다.
-    return sumQty >= Q - QTY_EPS && cost <= targetAmount + AMOUNT_EPS;
+    return sumQty >= Q - QTY_EPS && cost <= targetAmount + amountTolOf(decimals);
   };
   let lo = 0, hi = 1;
   while (hi < MAX_LADDER_QTY && fits(hi)) { lo = hi; hi *= 2; }
@@ -398,6 +405,18 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
             </tr>
           </thead>
           <tbody>
+            {/* ⚠️ 빈 사다리는 반드시 이유를 밝힌다 — 잔여 줄(totalCost > 0)과 푸터(totalQty > 0)가
+                둘 다 가려져 옛 화면은 '0주 / — / —'만 남아 계산기가 고장 난 것처럼 보였다. */}
+            {!rows.length && (
+              <tr>
+                <td colSpan={5} className="py-6 px-3 text-center text-[10px] text-gray-500 leading-relaxed">
+                  배분할 수량이 없습니다.
+                  <span className="block text-gray-600">
+                    목표 금액({fmt(targetAmount)})이 1주 값보다 작습니다.
+                  </span>
+                </td>
+              </tr>
+            )}
             {rows.map((row, idx) => {
               const rowCost = row.price * row.qty;
               const cumQty = rows.slice(0, idx + 1).reduce((s, r) => s + r.qty, 0);
