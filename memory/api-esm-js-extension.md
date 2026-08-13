@@ -19,4 +19,4 @@ import { X } from './_helper.js';
 
 **How to apply:** 새 api 파일 작성 또는 import 수정 시 항상 `.js` 확장자 확인. 기존 패턴: `api/history.ts`, `api/stock-history.ts`, `api/us-stock-price.ts` 모두 `from './_kisToken.js'` 사용. tsconfig.api.json은 `moduleResolution: "bundler"`라 로컬 tsc는 통과하지만 Vercel은 실제로 ESM strict로 평가하므로 로컬 검증만으로 안심 불가.
 
-[[no-local-npm]]
+[[npm-verify-build]]
