@@ -565,11 +565,16 @@ function computeSellRealized({ change, sellPrice, basisPrice }) {
 // ⚠️ KrEtfTaxMatrix.tsx의 buildSortedEventsWithAvg가 만드는 '매도 시점 러닝 평균 매입단가'와
 //    항상 1:1 동기화할 것. 이동평균법 — 매수만 가중평균을 갱신하고 매도는 수량만 줄인다.
 const RZ_ISO = /^\d{4}-\d{2}-\d{2}$/;
+// ⚠️ buyAvgTrusted까지 미러해야 한다 — 컴포넌트 resolveBasis의 러닝 평균 분기는
+//    `row.buyAvgTrusted && row.runningBuyAvg > 0`인데 이걸 빠뜨리면 미러가 **도달 불가능한
+//    'running' 폴백**을 단언하게 되고(적대적 리뷰 확정), 컴포넌트에서 그 게이트를 지워도 통과한다.
 function runningBuyAvgSeries(events) {
   const valid = (events || [])
     .filter(e => RZ_ISO.test(String(e.date || '')))
     .sort(compareTaxEvents);
+  const undatedTrade = (events || []).some(e => safeNum(e.change) !== 0 && !RZ_ISO.test(String(e.date || '')));
   let buyQty = 0, buyAvg = 0;
+  let excludedSeen = undatedTrade;
   return valid.map(evt => {
     const change = safeNum(evt.change);
     if (change > 0) {
@@ -578,11 +583,13 @@ function runningBuyAvgSeries(events) {
         const nq = buyQty + change;
         buyAvg = nq > 0 ? (buyQty * buyAvg + change * pp) / nq : 0;
         buyQty = nq;
+      } else {
+        excludedSeen = true;
       }
     } else if (change < 0) {
       buyQty = Math.max(0, buyQty + change);
     }
-    return { evt, runningBuyAvg: buyAvg };
+    return { evt, runningBuyAvg: buyAvg, buyAvgTrusted: !excludedSeen };
   });
 }
 const RZ = (o) => computeSellRealized({ change: 0, sellPrice: 0, basisPrice: 0, ...o });
@@ -602,9 +609,9 @@ function buildLofoLotSeries(events) {
   const valid = (events || [])
     .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')))
     .sort(compareTaxEvents);
-  const undatedBuy = (events || []).some(e => safeNum(e.change) > 0 && !/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')));
+  const undatedTrade = (events || []).some(e => safeNum(e.change) !== 0 && !/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')));
   const lots = [];
-  let excludedSeen = undatedBuy;
+  let excludedSeen = undatedTrade;
   let seq = 0;
   const out = new Map();
   for (const evt of valid) {
@@ -644,16 +651,16 @@ function buildLofoLotSeries(events) {
 
 // KrEtfTaxMatrix.resolveBasis의 우선순위(최저가 매칭 → 러닝 평균 → avgBuy)를 그대로 재현한다.
 // ⚠️ 게이트 3항(trusted · shortfall 0 · basis > 0)을 빠뜨리면 없는 매수분을 싼값으로 단언한다.
-function lofoBasisOf(events, avgBuyValue = 0, avgBuySource = 'portfolio') {
+function lofoBasisOf(events, avgBuyValue = 0, avgBuySource = 'none') {
   const lofo = buildLofoLotSeries(events);
   const rows = runningBuyAvgSeries(events);
-  return rows.map(({ evt, runningBuyAvg }) => {
+  return rows.map(({ evt, runningBuyAvg, buyAvgTrusted }) => {
     const lf = lofo.get(evt);
     const short = lf ? lf.shortfallQty : 0;
     if (lf && lf.trusted && lf.shortfallQty === 0 && lf.basis > 0) {
       return { evt, value: lf.basis, source: 'lofo', lots: lf.lots, shortfallQty: 0 };
     }
-    if (runningBuyAvg > 0) return { evt, value: runningBuyAvg, source: 'running', lots: null, shortfallQty: short };
+    if (buyAvgTrusted && runningBuyAvg > 0) return { evt, value: runningBuyAvg, source: 'running', lots: null, shortfallQty: short };
     if (avgBuyValue > 0) return { evt, value: avgBuyValue, source: avgBuySource, lots: null, shortfallQty: short };
     return { evt, value: 0, source: avgBuySource, lots: null, shortfallQty: short };
   });
@@ -905,7 +912,10 @@ it('⚠ 매입단가가 빈 매수 행은 그 시점부터 신뢰도를 끈다 (
   ok(!m.get(evts[3]).lots.some(l => l.price === 0), '0원 로트가 만들어지지 않는다');
   const b = lofoBasisOf(evts);
   expectEq(b[1].source, 'lofo', '앞선 매도');
-  expectEq(b[3].source, 'running', '뒤 매도는 폴백');
+  // ⚠️ 러닝 평균도 **같은 excludedSeen**으로 꺼지므로 'running'은 이 경우 도달 불가다
+  //    (미러가 buyAvgTrusted 게이트를 빠뜨렸을 때 도달 불가능한 폴백을 단언하던 회귀).
+  expectEq(b[3].source, 'none', '뒤 매도는 러닝 평균도 건너뛰고 avgBuy 폴백(여기선 없음)');
+  expectEq(b[3].value, 0, '기준단가 없음 → 계산하지 않는다');
 });
 it('⚠ 일자 없는 매수 행이 있으면 전 구간 신뢰 불가 (순서를 정할 수 없음)', () => {
   const evts = [
@@ -915,7 +925,31 @@ it('⚠ 일자 없는 매수 행이 있으면 전 구간 신뢰 불가 (순서�
   ];
   const m = buildLofoLotSeries(evts);
   expectEq(m.get(evts[2]).trusted, false, 'trusted');
-  expectEq(lofoBasisOf(evts).find(b => b.evt === evts[2]).source, 'running', '폴백');
+  const b = lofoBasisOf(evts, 8500, 'portfolio').find(x => x.evt === evts[2]);
+  expectEq(b.source, 'portfolio', '러닝 평균도 함께 불신 → avgBuy 폴백');
+  expectApprox(b.value, 8500, 1e-9, '폴백값');
+});
+it('⚠ 일자 없는 **매도** 행도 전 구간 신뢰 불가 — 이미 팔린 최저가 로트가 풀에 남는다', () => {
+  // 적대적 리뷰 확정(HIGH): 옛 가드는 change > 0 만 봐서 무일자 매도를 놓쳤다.
+  // 5,000 로트가 소진되지 않은 채 남아 04-02 매도가 basis 5,000(+450,000)으로 확정됐다 —
+  // 참값은 그 로트가 이미 팔렸으므로 9,000 기준 +50,000. 9배 과대인데 셀에 * 도 안 붙었다.
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 5000 },
+    { date: '', change: -100, sellPrice: 9000 },              // 일자 없는 매도
+    { date: '2026-03-02', change: 100, purchasePrice: 9000 },
+    { date: '2026-04-02', change: -100, sellPrice: 9500 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(m.get(evts[3]).trusted, false, 'trusted (풀 구성을 신뢰할 수 없다)');
+  const b = lofoBasisOf(evts, 9000, 'portfolio').find(x => x.evt === evts[3]);
+  ok(b.source !== 'lofo', '최저가 매칭을 확정하지 않는다');
+  const r = computeSellRealized({ change: -100, sellPrice: 9500, basisPrice: b.value });
+  ok(r.profit < 100000, `폴백 실현손익 ${r.profit} — 5,000 로트를 배정한 +450,000이면 회귀`);
+  // 같은 픽스처의 일자를 채우면 정상적으로 최저가 매칭이 산다(가드가 과잉 차단이 아님을 고정).
+  const fixed = evts.map((e, i) => (i === 1 ? { ...e, date: '2026-02-02' } : e));
+  const fb = lofoBasisOf(fixed).find(x => x.evt === fixed[3]);
+  expectEq(fb.source, 'lofo', '일자를 채우면 최저가 매칭 복귀');
+  expectApprox(fb.value, 9000, 1e-9, '남은 로트는 9,000');
 });
 it('매수 행·수량 0 행·일자 없는 행은 Map에 담기지 않는다', () => {
   const m = buildLofoLotSeries([
@@ -949,6 +983,37 @@ it('⚠ 전량 매도의 부동소수 잔여가 유령 로트로 남지 않는�
   expectEq(lotsOf(m, evts[4]).join(','), '2026-02-03|7000|1', '잔여 5,000원 로트가 섞이지 않는다');
   expectApprox(m.get(evts[4]).basis, 7000, 1e-9, 'basis');
 });
+it('⚠ 잔여가 rest 쪽에 남는 경우도 부족으로 오판하지 않는다 (LOT_QTY_EPS — break·shortfall 임계)', () => {
+  // ⚠️ 위 픽스처는 잔여가 l.qty에 남아 rest가 정확히 0으로 끝난다 → `rest <= LOT_QTY_EPS`(break)와
+  //    `rest > LOT_QTY_EPS ? rest : 0`(shortfall) 두 임계를 **밟지 않는다**(적대적 리뷰 확정: 그 둘을
+  //    0으로 바꿔도 전 테스트가 통과했다). 여기서는 rest에 8.3e-17이 남아 두 임계를 모두 통과시킨다.
+  // ⚠️ 3번째 로트(더 비싼 것)가 있어야 break 임계가 실제로 갈린다 — 없으면 로트가 소진돼 루프가
+  //    자연 종료되므로 `rest <= 0`으로 바꿔도 결과가 같다(그 상태로는 죽은 단언).
+  const evts = [
+    { date: '2026-01-02', change: 0.7, purchasePrice: 5000 },
+    { date: '2026-01-03', change: 0.1, purchasePrice: 5000 },
+    { date: '2026-01-04', change: 1, purchasePrice: 9000 },
+    { date: '2026-02-02', change: -0.8, sellPrice: 9000 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(m.get(evts[3]).shortfallQty, 0, 'shortfallQty (임계 0이면 8.3e-17이 남아 LOFO가 폐기된다)');
+  expectApprox(m.get(evts[3]).basis, 5000, 1e-9, 'basis');
+  // 임계 0이면 9,000 로트에서 8.3e-17을 더 집어 배정 내역에 '0주 × 9,000원' 유령 행이 뜬다.
+  expectEq(lotsOf(m, evts[3]).join(','), '2026-01-02|5000|0.7,2026-01-03|5000|0.1', '배정 내역에 유령 로트 없음');
+  expectEq(lofoBasisOf(evts)[3].source, 'lofo', '최저가 매칭 유지 — 가짜 "매수 이력 부족"이 뜨면 회귀');
+});
+it('⚠ 의미 없이 작은 매도수량은 기준단가를 단정하지 않는다 (break + matchedQty 임계 합작)', () => {
+  // ⚠️ 두 임계가 서로를 가려 준다 — break가 먼저 걸리면 matchedQty가 0이 되고, break를 풀면
+  //    matchedQty 임계가 잡는다. 그래서 이 픽스처는 **둘을 동시에** 0으로 바꿀 때만 실패한다.
+  //    (`matchedQty > LOT_QTY_EPS`는 다른 두 게이트 때문에 단독으로는 도달 불가한 방어적 중복이다:
+  //     로트는 qty > EPS인 것만 쓰이고 rest > EPS일 때만 집으므로 take는 항상 EPS를 넘는다.)
+  const m = buildLofoLotSeries([
+    { date: '2026-01-02', change: 100, purchasePrice: 5000 },
+    { date: '2026-02-02', change: -1e-15, sellPrice: 9000 },
+  ]);
+  const s = [...m.values()][0];
+  expectEq(s.basis, 0, 'basis (0 나눗셈 인접 구간에서 단가를 단언하지 않는다)');
+});
 it('한 번 배정된 매수분은 다음 매도에 다시 쓰이지 않는다 (순차 소진)', () => {
   const evts = [
     { date: '2026-01-02', change: 100, purchasePrice: 7000 },
@@ -960,12 +1025,15 @@ it('한 번 배정된 매수분은 다음 매도에 다시 쓰이지 않는다 (
   expectApprox(m.get(evts[2]).basis, 7000, 1e-9, '1차 = 최저가');
   expectApprox(m.get(evts[3]).basis, 9000, 1e-9, '2차 = 다음 최저가');
 });
-it('최저가 매칭 원가 ≤ 평균법 원가 — 배정된 로트가 항상 가장 싼 조합이다', () => {
+it('실측 픽스처에서 기준단가가 평균법보다 낮다 (이 기능의 목적 — 일반 불변식은 아님)', () => {
+  // ⚠️ '최저가 매칭 원가 ≤ 평균법 원가'는 **일반적으로 참이 아니다**. 싼 로트가 먼저 소진되면
+  //    이후 매도의 기준단가는 평균법보다 높아진다(바로 위 '순차 소진' 테스트가 그 반례:
+  //    1차 7,000 / 2차 9,000 vs 러닝 평균 8,000). 그러니 이 단언을 전 픽스처로 넓히지 말 것.
   const rows = lofoBasisOf(REAL_EVENTS);
   const run = runningBuyAvgSeries(REAL_EVENTS);
   for (const r of rows.filter(x => safeNum(x.evt.change) < 0)) {
     const avg = run.find(x => x.evt === r.evt).runningBuyAvg;
-    ok(r.value <= avg + 1e-9, `기준단가 ${r.value} ≤ 러닝 평균 ${avg}`);
+    ok(r.value < avg, `기준단가 ${r.value} < 러닝 평균 ${avg}`);
   }
 });
 
@@ -1029,7 +1097,12 @@ it('#G3 기준단가 우선순위 = 최저가 매칭 → 러닝 평균 → avgBu
   ok(buyAt >= 0, '매수 분기 존재');
   const buyBody = MX.slice(buyAt, MX.indexOf('      } else if (change < 0) {', buyAt));
   ok(/excludedSeen = true;/.test(buyBody), '매입단가 빈 매수 행이 이후 행의 신뢰도를 끈다');
-  ok(/let excludedSeen = undatedBuy;/.test(MX), '일자 없는 매수 행은 전 구간 신뢰 불가');
+  // ⚠️ change > 0(매수만)으로 좁히면 **일자 없는 매도**가 로트 풀을 오염시켜도 통과한다(리뷰 HIGH).
+  //    두 순회가 같은 판정을 써야 LOFO와 러닝 평균 폴백이 함께 막힌다.
+  ok(/const undatedTrade = \(events \|\| \[\]\)\.some\(e => safeNum\(e\.change\) !== 0 &&/.test(MX), '무일자 판정은 매수·매도 모두(MX)');
+  ok(/const undatedTrade = \(events \|\| \[\]\)\.some\(e => safeNum\(e\.change\) !== 0 &&/.test(HL), '무일자 판정은 매수·매도 모두(HL)');
+  ok(/let excludedSeen = undatedTrade;/.test(MX), '일자 없는 행은 전 구간 신뢰 불가(MX)');
+  ok(/let excludedSeen = undatedTrade;/.test(HL), '일자 없는 행은 전 구간 신뢰 불가(HL)');
 });
 it('#G4 러닝 평균이 표 순회에서 산출되고 매도는 평균단가를 바꾸지 않는다', () => {
   ok(/runningBuyAvg: buyAvg/.test(MX), 'buildSortedEventsWithAvg 반환');
@@ -1075,6 +1148,13 @@ it('#G7 각주가 옛 서술을 남기지 않고 실현손익·기준단가·이
   ok(/남아 있는 매수분 중 가장 싼 것부터/.test(FOOT), '배정 규칙 서술');
   ok(/모자라면 그 다음으로 싼 매수분/.test(FOOT), '초과 매도 시 다음 최저가 서술');
   ok(/소급 변경하지 않습니다/.test(FOOT), '소급 변경 금지 서술');
+  // ⚠️ 폴백은 **사유마다 도착지가 다르다**(부족 → 러닝 평균 / 매입단가·일자 누락 → 평균단가).
+  //    한 사슬로 뭉뚱그리면 후자에서 러닝 평균을 건너뛰므로 각주가 거짓이 된다(리뷰 확정).
+  ok(/ⓐ 배정할 매수분이 모자라면/.test(FOOT), '폴백 사유 ⓐ');
+  ok(/러닝 평균도 같은 이유로 부분값이라 건너뛰고/.test(FOOT), '폴백 사유 ⓑ — 러닝 평균을 건너뛴다');
+  // ⚠️ 일자 없는 매도는 이미 팔린 로트를 풀에 남겨 기준단가를 낮춘다(리뷰 HIGH) — 사용자가
+  //    스스로 고칠 수 있는 유일한 단서라 각주에서 지우지 말 것.
+  ok(/이미 팔린 로트가 풀에 남아 이후 매도의 기준단가를 실제보다 낮춥니다/.test(FOOT), '무일자 매도 경고');
   // 열 헤더 툴팁에도 같은 계약이 있어야 한다(각주를 안 읽는 사용자의 1차 안내).
   ok(/최저가 우선 매칭/.test(TH_REALIZED), '헤더 툴팁 매칭 규칙');
   ok(/분석용 원가법입니다/.test(TH_REALIZED), '헤더 툴팁 원가법 고지');
@@ -1154,6 +1234,24 @@ it('#G13 최저가 매칭 배선 — 호출·배정 내역 노출·상시 ⚠ �
   ok(/basisDiverged: basis\.source !== 'lofo' &&/.test(MX), '최저가 매칭 행은 상시 ⚠ 억제');
   ok(/shortfallRows: sellRowsAll\.filter\(r => r\.basis\.shortfallQty > 0\)\.length,/.test(MX), '부족 행 집계');
   ok(/매수 이력 부족 \{sellSummary\.shortfallRows\}건/.test(MX), '요약 부족 안내 렌더');
+  // ⚠️ shortfallRows는 실현손익이 아예 산출되지 않은(profit === null) 행까지 센다 — 그 행엔 * 도
+  //    기준단가 줄도 없으므로 툴팁이 "대체 계산됐고 * 가 붙습니다"로 단언하면 거짓이다(리뷰 확정).
+  ok(/실현손익이 산출된 행은 러닝 평균·평균단가로 대체 계산되고/.test(MX), '부족 안내 툴팁이 과잉 단언하지 않는다');
+});
+
+it('#G14 계산 규약·각주는 ? 토글로 접히되 상시 고지 2곳은 남는다', () => {
+  ok(/const \[showTaxHelp, setShowTaxHelp\] = useState\(false\);/.test(MX), '기본 접힘');
+  ok(/onClick=\{\(\) => setShowTaxHelp\(v => !v\)\}/.test(MX), '토글 버튼');
+  // ⚠️ 각주 본문이 게이트 안에 있어야 실제로 접힌다(버튼만 달고 본문을 남기는 변이 차단).
+  const gate = MX.indexOf('{showTaxHelp && (');
+  const foot = MX.indexOf('일자 선택 시 자산검증 전일 수량 자동 조회');
+  ok(gate >= 0, '펼침 게이트 존재');
+  ok(gate < foot, '각주 본문이 게이트 안에 있다');
+  // ⚠️ 접힌 상태에서도 '분석용 원가법'을 알 수 있어야 한다 — 각주가 유일한 고지가 되면
+  //    사용자가 실현손익을 과세 근거로 오해한다. 토글 줄 요약 + 열 헤더 서브라인/툴팁 3중.
+  ok(/분석용\(세법상 이동평균법 아님\)/.test(MX), '토글 줄 상시 요약');
+  ok(/매도 = 실현손익 · 최저가 우선/.test(MX), '열 헤더 서브라인(상시)');
+  ok(/분석용 원가법입니다/.test(TH_REALIZED), '열 헤더 툴팁(상시)');
 });
 
 // ─── 결과 출력 ────────────────────────────────────────────────────────────────

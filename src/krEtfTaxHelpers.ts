@@ -272,6 +272,12 @@ export function computeSellRealized({ change, sellPrice, basisPrice }) {
 // ⚠️ 매입단가가 빈 매수 행은 로트를 만들지 못하므로 그 시점부터 풀 구성이 불완전해진다
 //    → excludedSeen을 세워 이후 행을 trusted:false로 내리고 호출부가 폴백하게 한다
 //    (resolveAvgBuyPrice의 fallbackReliable, buildSortedEventsWithAvg의 buyAvgTrusted와 같은 근거).
+// ⚠️ 일자 없는 행은 **매수·매도 둘 다** 전 구간 신뢰 불가로 본다(`undatedTrade`, change !== 0).
+//    매수만 검사하던 옛 가드는 **일자 없는 매도**를 놓쳐, 이미 팔린 최저가 로트가 풀에 그대로 남아
+//    이후 매도의 기준단가를 낮추는데도 `trusted:true`로 확정했다(적대적 리뷰 실측: 100주@5,000 매수 →
+//    무일자 100주 매도 → 100주@9,000 매수 → 100주 매도에서 참값 +50,000이 **+450,000**, 9배 과대.
+//    게다가 셀 툴팁이 '2026-01-02 100주 × 5,000원'을 근거로 적극 단언한다).
+//    무일자 행은 순서를 알 수 없어 어느 로트가 소진됐는지 정할 수 없다 — 폴백이 유일한 정답이다.
 // ⚠️ 배정이 모자라면(매수 이력 부족) shortfallQty > 0으로 알리고 basis를 **단정하지 않는다** —
 //    매칭된 몫의 원가를 전체 수량에 퍼뜨리면 없는 매수분을 0원 또는 싼값으로 단언하게 된다.
 // ⚠️ 반환은 이벤트 **객체 식별자** 키 Map이다. 인덱스 조인은 호출부(buildSortedEventsWithAvg)가
@@ -282,9 +288,9 @@ export function buildLofoLotSeries(events) {
   const valid = (events || [])
     .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')))
     .sort(compareTaxEvents);
-  const undatedBuy = (events || []).some(e => safeNum(e.change) > 0 && !/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')));
+  const undatedTrade = (events || []).some(e => safeNum(e.change) !== 0 && !/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')));
   const lots = [];
-  let excludedSeen = undatedBuy;
+  let excludedSeen = undatedTrade;
   let seq = 0;
   const out = new Map();
   for (const evt of valid) {

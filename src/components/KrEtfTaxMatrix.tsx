@@ -109,6 +109,10 @@ export default function KrEtfTaxMatrix({
   notify,
 }) {
   const [expandedCode, setExpandedCode] = useState(null);
+  // 계산 규약·각주 펼침 — 기본은 접힘(사용자 요청 2026-08 "평소에는 숨기고 확인이 필요할 때만").
+  // ⚠️ 세션 로컬이다. Drive 저장 지점 0곳 — 뷰 선호도이고, 영속화하면 계좌 필드(hiddenTaxMonths)나
+  //    chartPrefs 5지점을 새로 걸어야 하는데 '?' 한 번 클릭으로 복구되는 상태라 값이 없다.
+  const [showTaxHelp, setShowTaxHelp] = useState(false);
 
   // 가로 스크롤 시 '평균 과표 계산기'(확장 행)를 왼쪽에 고정(엑셀 틀 고정)하기 위해, 스크롤
   // 컨테이너의 가시 폭을 측정해 sticky 패널 너비로 사용한다. 콜백 ref + ResizeObserver로
@@ -182,16 +186,20 @@ export default function KrEtfTaxMatrix({
     const valid = (events || [])
       .filter(e => ISO_DATE.test(String(e.date || '')))
       .sort(compareTaxEvents);
-    // 날짜가 없는 매수 행은 순서를 알 수 없어 러닝 평균의 어느 지점에 들어갈지 정할 수 없다
+    // 날짜가 없는 행은 순서를 알 수 없어 러닝 평균의 어느 지점에 들어갈지 정할 수 없다
     // → 전 구간을 신뢰 불가로 본다(시점별 판정으로 좁힐 수 없는 유일한 경우).
-    const undatedBuy = (events || []).some(e => safeNum(e.change) > 0 && !ISO_DATE.test(String(e.date || '')));
+    // ⚠️ **매수·매도 둘 다** 본다(change !== 0). 매수만 검사하던 옛 가드는 일자 없는 **매도**가
+    //    buyQty를 줄이지 않아 가중평균이 왜곡되는데도 신뢰로 통과시켰다(실측 7,000 vs 참값 9,000).
+    //    `buildLofoLotSeries`의 `undatedTrade`와 **같은 판정**이라야 두 경로가 함께 폴백한다 —
+    //    한쪽만 고치면 LOFO는 막히는데 러닝 평균 폴백이 같은 오염값을 그대로 내보낸다.
+    const undatedTrade = (events || []).some(e => safeNum(e.change) !== 0 && !ISO_DATE.test(String(e.date || '')));
     let runQty = 0, runAvg = 0;
     let buyQty = 0, buyAvg = 0;
     // ⚠️ 신뢰도는 **그 행 시점까지**로 판정한다. 전체 이벤트 기준(buyExcludedCount === 0)으로 재면
     //    매도보다 **뒤에 있는** 불완전 매수 행 1건이 그 매도의 완전한 러닝 평균을 폐기시켜
     //    현재 시점 avgBuy로 폴백하고, 이 기능이 막으려던 부호 뒤집힘이 그대로 재현된다
     //    ('행 추가' 직후 매입단가를 아직 안 넣은 상태만으로도 발동한다).
-    let excludedSeen = undatedBuy;
+    let excludedSeen = undatedTrade;
     const withAvg = valid.map(evt => {
       const change = safeNum(evt.change);
       if (change > 0) {
@@ -595,7 +603,7 @@ export default function KrEtfTaxMatrix({
 매도 행 = 실현손익 = 매도금액 − 매입원가 = (매도단가 − 기준단가) × 매도수량
 기준단가 = 최저가 우선 매칭 — 그 매도 시점까지 남아 있는 매수분 중 가장 싼 것부터 매도수량만큼 배정하고, 모자라면 그 다음으로 싼 매수분을 씁니다
 ⚠ 분석용 원가법입니다 — 세법상 이동평균법이 아니므로 오른쪽 과세 3열과 결론이 다를 수 있습니다(실현손익 '이익' + 과세 '비과세'가 정상)
-배정할 매수분이 모자라거나 매수 행에 매입단가·일자가 비어 있으면 러닝 평균 → '과세 금액(단가)'의 평균단가 순으로 폴백하고 * 를 붙입니다
+배정할 매수분이 모자라면(매수 이력 부족) 러닝 평균 매입단가로, 매수 행에 매입단가·일자가 비어 있으면 '과세 금액(단가)'의 평균단가로 폴백하고 * 를 붙입니다
 이익 빨강 / 손실 파랑`}
                                     >
                                       현재 평가 / 실현손익
@@ -750,8 +758,9 @@ export default function KrEtfTaxMatrix({
                                             </>
                                           ) : rz.isSell ? (
                                             // 매도 행 = 실현손익(매도금액 − 매입원가). ⚠️ 기준단가는 '과세 금액(단가)'의
-                                            // avgBuy.value가 아니라 **매도 시점 러닝 평균**이라 두 칸의 주당 금액이 다를 수 있다
-                                            // (그래서 기준단가를 아랫줄에 상시 노출하고, 5% 이상 벌어지면 ⚠를 붙인다).
+                                            // avgBuy.value가 아니라 **최저가 우선 매칭**(폴백 시 러닝 평균)이라 두 칸의 주당
+                                            // 금액이 다를 수 있다 — 그래서 기준단가와 **배정된 매수분**을 아랫줄에 상시 노출한다.
+                                            // ⚠️ basisDiverged ⚠는 lofo 행에서 억제한다(설계상 상시 발동이라 경보가 죽는다).
                                             rz.profit !== null ? (
                                               <>
                                                 <div
@@ -1009,7 +1018,7 @@ ${lotsDetailText(basis.lots)}` : ''}${basis.shortfallQty > 0 ? `
                                 {sellSummary.shortfallRows > 0 && (
                                   <>
                                     <span className="text-gray-700">·</span>
-                                    <span className="text-amber-400/70" title="배정할 매수분이 모자라(매수 이력 부족) 최저가 우선 매칭을 쓰지 못한 매도 행입니다 — 러닝 평균 또는 평균단가로 대체 계산됐고 셀에 * 가 붙습니다">
+                                    <span className="text-amber-400/70" title="배정할 매수분이 모자라(매수 이력 부족) 최저가 우선 매칭을 쓰지 못한 매도 행입니다 — 실현손익이 산출된 행은 러닝 평균·평균단가로 대체 계산되고 셀에 * 가 붙습니다(기준단가를 아예 못 구한 행은 '합계 제외'로 함께 표시됩니다)">
                                       매수 이력 부족 {sellSummary.shortfallRows}건
                                     </span>
                                   </>
@@ -1020,7 +1029,27 @@ ${lotsDetailText(basis.lots)}` : ''}${basis.shortfallQty > 0 ? `
                             )}
                           </>
                         )}
-                        <div className="px-3 py-1 text-[9px] text-gray-600 border-t border-gray-800/50">
+                        {/* 계산 규약·각주 — 평소엔 접어 두고 '?' 로 펼친다(사용자 요청 2026-08).
+                            ⚠️ 접어도 **항상 보이는** 두 곳이 '분석용 원가법' 고지를 계속 진다:
+                            열 헤더 서브라인(`매도 = 실현손익 · 최저가 우선`)과 그 헤더 title 툴팁.
+                            셋 다 지우면 실현손익이 과세 근거로 오해된다(#G7·#G8이 각각 단언). */}
+                        <div className="border-t border-gray-800/50">
+                          <button
+                            onClick={() => setShowTaxHelp(v => !v)}
+                            className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-gray-800/30 transition-colors"
+                            title={showTaxHelp ? '계산 규약·각주 접기' : '계산 규약·각주 펼치기 — 각 열의 정의, 기준단가 배정 규칙, 폴백·주의사항'}
+                          >
+                            <span className={`inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border text-[8px] font-bold leading-none shrink-0 ${showTaxHelp ? 'border-amber-500/70 text-amber-400' : 'border-gray-600 text-gray-500'}`}>?</span>
+                            <span>계산 규약 · 각주</span>
+                            {showTaxHelp
+                              ? <ChevronDown size={10} className="text-amber-400/70 shrink-0" />
+                              : <ChevronRight size={10} className="text-gray-600 shrink-0" />}
+                            <span className="ml-auto text-gray-600 text-right">
+                              실현손익 = <span className="text-rose-300/60">최저가 우선 매칭</span> · 분석용(세법상 이동평균법 아님)
+                            </span>
+                          </button>
+                        {showTaxHelp && (
+                        <div className="px-3 pb-2 text-[9px] text-gray-600">
                           일자 선택 시 자산검증 전일 수량 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨
                           <br />
                           <span className="text-orange-400/60">매입단가</span> 는 아래 매수 요약(평균 매입단가) 산출에 사용됩니다 · 차트 '일일 수익률'(🎯)은 포트폴리오 테이블 매입금액 기준으로 증권사 수익률과 일치
@@ -1037,7 +1066,7 @@ ${lotsDetailText(basis.lots)}` : ''}${basis.shortfallQty > 0 ? `
                           <br />
                           과세 판정의 <span className="text-gray-500">평균단가</span>는 ① 포트폴리오 구매단가(투자금액 ÷ 보유수량) → ② 종목의 구매단가 필드(붙여넣기 임포트) → ③ 계산기 매수 평균 순으로 채택하며 <b className="text-gray-400">실제 사용된 출처를 헤더 아래에 표시</b>합니다 &nbsp;·&nbsp; ③은 매입단가·일자가 빠진 매수 행이 하나라도 있으면 부분 평균이라 쓰지 않고 <span className="text-amber-400/70">평균단가 불확실</span>로 두어 단가 기준 과세를 계산하지 않습니다(잘못된 비과세 확정 방지)
                           <br />
-                          ①은 <b className="text-gray-400">현재 시점</b> 값이라 매도·추가매수를 포트폴리오 표에 반영하면 과거 매도 행의 <b className="text-gray-400">과세 판정</b>도 함께 바뀝니다 &nbsp;·&nbsp; 특히 <b className="text-gray-400">보유수량만 줄이고 투자금액을 그대로 두면</b> 구매단가가 실제보다 커져 과세 건이 비과세로 뒤집힙니다 → ③과 5% 이상 벌어지면 <span className="text-amber-400/80">⚠</span>, ③이 없어 대조할 수 없으면 <span className="text-amber-400/60">교차검증 불가</span>로 헤더에 표시합니다 &nbsp;·&nbsp; <b className="text-gray-400">실현손익은 이 소급성을 피하려고 시점 평균을 쓰므로 위 ①~③과 다를 수 있습니다</b>
+                          ①은 <b className="text-gray-400">현재 시점</b> 값이라 매도·추가매수를 포트폴리오 표에 반영하면 과거 매도 행의 <b className="text-gray-400">과세 판정</b>도 함께 바뀝니다 &nbsp;·&nbsp; 특히 <b className="text-gray-400">보유수량만 줄이고 투자금액을 그대로 두면</b> 구매단가가 실제보다 커져 과세 건이 비과세로 뒤집힙니다 → ③과 5% 이상 벌어지면 <span className="text-amber-400/80">⚠</span>, ③이 없어 대조할 수 없으면 <span className="text-amber-400/60">교차검증 불가</span>로 헤더에 표시합니다 &nbsp;·&nbsp; <b className="text-gray-400">실현손익은 이 소급성을 피하려고 아래의 최저가 우선 매칭을 쓰므로 위 ①~③과 다를 수 있습니다</b>
                           <br />
                                                     <b className="text-gray-400">매도 행의 '현재 평가 / 실현손익' 칸 = <span className="text-rose-300/70">실현손익</span></b> = 매도금액 − 매입원가 = (매도단가 − 기준단가) × 매도수량 &nbsp;·&nbsp; 2번째 줄은 주당 손익 · 수익률(분모 = 매입원가, 매수 행의 손익 ÷ 매입금액과 같은 규약) &nbsp;·&nbsp; 3번째 줄은 그 행에 실제로 쓰인 <span className="text-gray-500">기준단가</span>와 <span className="text-emerald-400/60">배정된 매수분</span>(1건이면 그 매수일 <span className="text-emerald-400/60">MM-DD</span>, 여러 건이면 <span className="text-emerald-400/60">N건</span> — 마우스를 올리면 매수일·수량·단가 내역) &nbsp;·&nbsp; <span className="text-red-400/70">이익 빨강</span> / <span className="text-blue-400/70">손실 파랑</span>
                           <br />
@@ -1045,11 +1074,15 @@ ${lotsDetailText(basis.lots)}` : ''}${basis.shortfallQty > 0 ? `
                           <br />
                           <b className="text-amber-400/70">⚠ 이 실현손익은 분석용 원가법입니다</b> — 세법상 원가법(이동평균법)이 아니므로 오른쪽 <span className="text-emerald-400/70">과세 금액(과표)</span>·<span className="text-emerald-400/70">과세 금액(단가)</span>·<span className="text-amber-300/70">실제 과세</span> 3열과 <b className="text-gray-400">결론이 다를 수 있습니다</b>(과세 3열은 종전대로 평균단가를 씁니다) &nbsp;·&nbsp; 같은 행에서 실현손익 <span className="text-red-400/70">이익</span> + 과세 <span className="text-gray-400">비과세</span>로 표시되는 것이 <b className="text-gray-400">정상</b>입니다
                           <br />
-                          배정할 매수분이 모자라거나(<span className="text-amber-400/70">매수 이력 부족</span>) 그 매도 시점까지의 매수 행에 매입단가·일자가 빠져 있으면 <b className="text-gray-400">그 매도 시점까지의 러닝 평균 매입단가</b>(이동평균법 — 매도는 평균단가를 바꾸지 않음) → <span className="text-emerald-400/70">과세 금액(단가)</span>의 평균단가 순으로 폴백하고 <span className="text-amber-400/50">*</span> 를 붙입니다(그것도 없으면 <b className="text-gray-400">계산하지 않습니다</b> — 0원으로 단언하지 않음) &nbsp;·&nbsp; 폴백 값이 평균단가와 5% 이상 벌어지면 <span className="text-amber-400/80">⚠</span> 로 표시합니다
+                          <b className="text-gray-400">폴백은 사유에 따라 갈립니다</b> &nbsp;·&nbsp; ⓐ 배정할 매수분이 모자라면(<span className="text-amber-400/70">매수 이력 부족</span>) <b className="text-gray-400">그 매도 시점까지의 러닝 평균 매입단가</b>(이동평균법 — 매도는 평균단가를 바꾸지 않음)로 &nbsp;·&nbsp; ⓑ 그 매도 시점까지의 매수 행에 <b className="text-gray-400">매입단가·일자가 빠져 있으면</b> 러닝 평균도 같은 이유로 부분값이라 건너뛰고 <span className="text-emerald-400/70">과세 금액(단가)</span>의 평균단가로 &nbsp;·&nbsp; 어느 쪽이든 셀에 <span className="text-amber-400/50">*</span> 를 붙이고 <b className="text-gray-400">실제 출처를 툴팁에 표시</b>합니다(그것도 없으면 <b className="text-gray-400">계산하지 않습니다</b> — 0원으로 단언하지 않음) &nbsp;·&nbsp; 폴백 값이 평균단가와 5% 이상 벌어지면 <span className="text-amber-400/80">⚠</span> 로 표시합니다
+                          <br />
+                          <b className="text-gray-400">일자를 비운 행</b>은 매수·매도 <b className="text-gray-400">모두</b> 순서를 정할 수 없어 전 구간을 폴백으로 돌립니다 &nbsp;·&nbsp; 특히 일자 없는 <b className="text-gray-400">매도</b> 행은 이미 팔린 로트가 풀에 남아 이후 매도의 기준단가를 실제보다 낮춥니다 → 반드시 일자를 채우세요
                           <br />
                           하단 <span className="text-rose-300/70">매도 요약</span> — <span className="text-gray-500">매입원가</span> = Σ(행별 기준단가 × 매도수량) &nbsp;·&nbsp; <span className="text-gray-500">실현손익</span> = 총 매도금액 − 매입원가 &nbsp;·&nbsp; 행마다 기준단가가 다를 수 있어 <b className="text-gray-400">행별 값을 누적</b>합니다(평균단가 하나로 곱하지 않음) &nbsp;·&nbsp; 표시 반올림 때문에 행별 표시값의 합과 1원 단위 차이가 날 수 있습니다
                           <br />
                           <b className="text-amber-400/70">⚠ 매수 요약의 '손익'과 매도 요약의 '실현손익'을 더하지 마세요</b> — 매수 요약 손익은 <b className="text-gray-400">이미 매도한 주식까지</b> 현재가로 평가한 값이라 두 값이 겹칩니다(매도분이 이중 계상됨)
+                        </div>
+                        )}
                         </div>
                       </div>
                       </div>
