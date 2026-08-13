@@ -711,18 +711,42 @@ it('#G2 주당 손익·수익률 줄이 rz를 쓰고 null을 0%로 단언하지 
   ok(/rz\.rate !== null &&/.test(MX), 'rate null 가드');
   ok(/formatPercent\(rz\.rate\)/.test(MX), 'rate 렌더');
 });
-it('#G3 기준단가는 매도 시점 러닝 평균 — 현재 시점 avgBuy 직결 금지', () => {
+it('#G3 기준단가는 매도 시점 러닝 평균 — 현재 시점 avgBuy 직결·우선순위 역전 금지', () => {
   ok(/basisPrice: basis\.value/.test(MX), 'computeSellRealized 인자');
   ok(/computeSellRealized\(\{ change: row\.evt\.change, sellPrice: row\.evt\.sellPrice, basisPrice: basis\.value \}\)/.test(MX), '호출 형태');
-  ok(/if \(buyAvgReliable && runningBuyAvg > 0\) return \{ value: runningBuyAvg, source: 'running' \};/.test(MX), '러닝 평균 1순위');
   ok(!/basisPrice: avgBuy\.value/.test(MX), 'avgBuy 직결 금지');
-  // 과세 3열은 종전대로 avgBuy.value를 쓴다(사용자 선택 — 되돌리지 말 것).
   ok(/avgBuyPrice: avgBuy\.value,/.test(MX), '과세열은 avgBuy 유지');
+  // ⚠️ '존재'만 보면 두 return 줄을 **맞바꾸는** 변이가 통과한다(리뷰 확정 지적) → 순서를 단언한다.
+  const run = MX.indexOf("if (row.buyAvgTrusted && row.runningBuyAvg > 0) return { value: row.runningBuyAvg, source: 'running' };");
+  const fb = MX.indexOf('if (avgBuy.value > 0) return { value: avgBuy.value, source: avgBuy.source };');
+  ok(run >= 0, '러닝 평균 분기 존재');
+  ok(fb >= 0, 'avgBuy 폴백 분기 존재');
+  ok(run < fb, '러닝 평균이 avgBuy 폴백보다 먼저 와야 한다(우선순위 역전 금지)');
+  // ⚠️ 전역 판정(buyExcludedCount)으로 되돌리면 매도 뒤의 불완전 매수 1건이 과거 손익 부호를 뒤집는다.
+  ok(!/buyAvgReliable/.test(MX), '전역 신뢰도 판정 부활 금지 — 행별 buyAvgTrusted 사용');
+  ok(/buyAvgTrusted: !excludedSeen/.test(MX), '행별 신뢰도 산출');
+  // ⚠️ 플래그를 '읽는' 곳만 보면 '쓰는' 곳(else 분기)을 지우는 변이가 통과한다(2차 변이 N4로 실증).
+  //    매수 분기 본문을 잘라 excludedSeen 갱신이 실제로 있는지 단언한다.
+  const buyAt = MX.indexOf('      if (change > 0) {');
+  ok(buyAt >= 0, '매수 분기 존재');
+  const buyBody = MX.slice(buyAt, MX.indexOf('      } else if (change < 0) {', buyAt));
+  ok(/excludedSeen = true;/.test(buyBody), '매입단가 빈 매수 행이 이후 행의 신뢰도를 끈다');
+  ok(/let excludedSeen = undatedBuy;/.test(MX), '일자 없는 매수 행은 전 구간 신뢰 불가');
 });
 it('#G4 러닝 평균이 표 순회에서 산출되고 매도는 평균단가를 바꾸지 않는다', () => {
   ok(/runningBuyAvg: buyAvg/.test(MX), 'buildSortedEventsWithAvg 반환');
   ok(/buyAvg = nq > 0 \? \(buyQty \* buyAvg \+ change \* pp\) \/ nq : 0;/.test(MX), '가중평균 갱신');
   ok(/buyQty = Math\.max\(0, buyQty \+ change\);/.test(MX), '매도는 수량만 감소');
+  // ⚠️ '존재'만 보면 매도 분기에 buyAvg = 0 을 **추가**하는 변이가 통과한다(리뷰 확정 지적).
+  //    매도 분기 본문을 잘라 buyAvg 재대입이 0건인지 단언한다.
+  const at = MX.indexOf('      } else if (change < 0) {');
+  ok(at >= 0, '매도 분기 존재');
+  const body = MX.slice(at, MX.indexOf('return { evt, runningAvg: runAvg', at));
+  ok(!/buyAvg\s*=/.test(body), '매도 분기에서 buyAvg 재대입 금지(이동평균법)');
+  // 같은 날짜 타이브레이커 — 배열 삽입 순서에 손익 부호가 의존하지 않게.
+  ok(/\.sort\(compareTaxEvents\)/.test(MX), '결정적 정렬');
+  ok(/export function compareTaxEvents/.test(HL), '공유 비교자');
+  ok((HL.match(/\.sort\(compareTaxEvents\)/g) || []).length >= 2, '러닝 평균 순회 전부가 같은 비교자를 공유');
 });
 it('#G5 매도 요약이 행별 값을 누적한다 — 상수 곱(평균단가 × 총수량) 금지', () => {
   ok(/sellRows\.reduce\(\(a, r\) => a \+ r\.realized\.cost, 0\)/.test(MX), '매입원가 누적');
@@ -731,8 +755,12 @@ it('#G5 매도 요약이 행별 값을 누적한다 — 상수 곱(평균단가 
   ok(!/avgBuy\.value \* sellQtyTotal/.test(MX), '상수 곱 금지');
   ok(/sellSummary\.profitTotal/.test(MX), '요약 렌더');
 });
-it('#G6 요약 바 게이트가 OR — 매수 행이 없어도 매도 요약이 뜬다', () => {
-  ok(/\(buySummary\.count > 0 \|\| sellSummary\.count > 0\)/.test(MX), 'OR 게이트');
+it('#G6 요약 바 래퍼 게이트가 내부 매도 줄 게이트를 전부 포함한다', () => {
+  // ⚠️ 래퍼가 내부보다 좁으면 내부 분기가 도달 불가가 된다(리뷰 확정 지적:
+  //    매수 0건 + 매도 전부 미산출이면 '합계 제외 N건' 진단이 통째로 사라졌다).
+  ok(/\(buySummary\.count > 0 \|\| sellSummary\.count > 0 \|\| sellSummary\.excluded > 0\) && \(/.test(MX), '래퍼 OR 3항');
+  ok(/\(sellSummary\.count > 0 \|\| sellSummary\.excluded > 0\) && \(/.test(MX), '내부 매도 줄 게이트');
+  ok(/합계 제외 \{sellSummary\.excluded\}건/.test(MX), '제외 안내 렌더');
 });
 it('#G7 각주가 옛 서술을 남기지 않고 실현손익·기준단가·이중계상을 설명한다', () => {
   ok(!/현재가 × 매매수량은 <span[^>]*>-<\/span>/.test(MX), "옛 '매도 행은 -' 서술 제거");
@@ -740,6 +768,11 @@ it('#G7 각주가 옛 서술을 남기지 않고 실현손익·기준단가·이
   ok(/매수 요약의 .손익.과 매도 요약의 .실현손익.을 더하지 마세요/.test(MX), '각주 이중 계상 경고');
   ok(/이 값과 겹칩니다 — 두 수를 더하지 마세요/.test(MX), '요약 툴팁 이중 계상 경고');
   ok(/러닝 평균 매입단가/.test(MX), '기준단가 설명');
+  // ⚠️ 실현손익 각주를 끼워 넣다 과세 3열 각주 4줄이 통째로 사라진 이력이 있다(리뷰 확정 지적).
+  ok(/계산기 매수 평균 순으로 채택하며/.test(MX), '평균단가 폴백 3단계 각주');
+  ok(/실제 사용된 출처를 헤더 아래에 표시/.test(MX), '출처 표시 각주');
+  ok(/판정 불가<\/span>로 표기/.test(MX), '실제 과세 각주');
+  ok(/과세 금액\(과표\)<\/span> = \(매도 과표기준가/.test(MX), '과세 금액 정의 각주');
 });
 it('#G8 열 헤더가 매도 행의 의미를 함께 표기한다', () => {
   ok(/현재 평가 \/ 실현손익/.test(MX), '헤더 라벨');

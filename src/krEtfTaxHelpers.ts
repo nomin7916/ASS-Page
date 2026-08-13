@@ -9,6 +9,19 @@ export function safeNum(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// 같은 날짜 이벤트의 상대 순서 — **매수 우선**.
+// ⚠️ localeCompare만 쓰면 같은 날짜에서 비교값이 0이라 Array.sort의 안정 정렬이 '배열 삽입 순서'를
+//    그대로 채택한다. 사용자에게 행 재정렬 UI가 없으므로 결정 요인이 화면에 존재하지 않는데,
+//    실현손익은 부호까지 갈린다(같은 날 매수 100@20,000 + 매도 50@12,000 → 기준 15,000이면 −150,000,
+//    10,000이면 +100,000). 이동평균법 관례대로 그날 매수를 먼저 반영해 결정적으로 만든다.
+// ⚠️ 러닝 평균을 만드는 **모든** 순회가 이 비교자를 공유해야 한다 — 계산기 행(buildSortedEventsWithAvg)과
+//    월별 그리드(computeRunningAvgSnapshots)가 다른 순서를 쓰면 같은 달의 평균 과표가 두 값이 된다.
+export function compareTaxEvents(a, b) {
+  const byDate = String(a?.date || '').localeCompare(String(b?.date || ''));
+  if (byDate !== 0) return byDate;
+  return (safeNum(b?.change) > 0 ? 1 : 0) - (safeNum(a?.change) > 0 ? 1 : 0);
+}
+
 export function getKrEtfStocks(portfolio) {
   return (portfolio?.portfolio || []).filter(it => it.type === 'stock' && isKrCode(it.code));
 }
@@ -30,7 +43,7 @@ export function getCodeTaxBase(portfolio, code) {
 export function computeRunningAvgPurchaseSnapshots(events) {
   const valid = (events || [])
     .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) !== 0)
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .sort(compareTaxEvents);
   let qty = 0;
   let avgPurchasePrice = 0;
   const result = [];
@@ -58,7 +71,7 @@ export function computeRunningAvgPurchaseSnapshots(events) {
 export function computeRunningAvgSnapshots(events) {
   const valid = (events || [])
     .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) !== 0)
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .sort(compareTaxEvents);
   let qty = 0;
   let avg = 0;
   return valid.map(e => {
