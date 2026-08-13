@@ -568,7 +568,7 @@ const RZ_ISO = /^\d{4}-\d{2}-\d{2}$/;
 function runningBuyAvgSeries(events) {
   const valid = (events || [])
     .filter(e => RZ_ISO.test(String(e.date || '')))
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .sort(compareTaxEvents);
   let buyQty = 0, buyAvg = 0;
   return valid.map(evt => {
     const change = safeNum(evt.change);
@@ -586,6 +586,91 @@ function runningBuyAvgSeries(events) {
   });
 }
 const RZ = (o) => computeSellRealized({ change: 0, sellPrice: 0, basisPrice: 0, ...o });
+
+// ─── src/krEtfTaxHelpers.ts buildLofoLotSeries 참조 미러 ─────────────────────
+// ⚠️ 본문은 src/krEtfTaxHelpers.ts의 compareTaxEvents·buildLofoLotSeries와 항상 1:1 동기화할 것
+//    (#G12가 buildLofoLotSeries 본문을 문자 단위로 대조한다).
+function compareTaxEvents(a, b) {
+  const byDate = String(a?.date || '').localeCompare(String(b?.date || ''));
+  if (byDate !== 0) return byDate;
+  return (safeNum(b?.change) > 0 ? 1 : 0) - (safeNum(a?.change) > 0 ? 1 : 0);
+}
+
+const LOT_QTY_EPS = 1e-9;
+
+function buildLofoLotSeries(events) {
+  const valid = (events || [])
+    .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')))
+    .sort(compareTaxEvents);
+  const undatedBuy = (events || []).some(e => safeNum(e.change) > 0 && !/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')));
+  const lots = [];
+  let excludedSeen = undatedBuy;
+  let seq = 0;
+  const out = new Map();
+  for (const evt of valid) {
+    const change = safeNum(evt.change);
+    if (change > 0) {
+      const pp = safeNum(evt.purchasePrice);
+      if (pp > 0) lots.push({ price: pp, qty: change, date: String(evt.date || ''), seq: seq++ });
+      else excludedSeen = true;
+      continue;
+    }
+    if (change === 0) continue;
+    const order = lots
+      .filter(l => l.qty > LOT_QTY_EPS)
+      .sort((a, b) => (a.price - b.price) || (a.seq - b.seq));
+    let rest = -change;
+    const matched = [];
+    for (const l of order) {
+      if (rest <= LOT_QTY_EPS) break;
+      const take = Math.min(l.qty, rest);
+      l.qty -= take;
+      rest -= take;
+      matched.push({ date: l.date, price: l.price, qty: take });
+    }
+    const matchedQty = -change - rest;
+    const cost = matched.reduce((s, m) => s + m.price * m.qty, 0);
+    out.set(evt, {
+      basis: matchedQty > LOT_QTY_EPS ? cost / matchedQty : 0,
+      cost,
+      lots: matched,
+      matchedQty,
+      shortfallQty: rest > LOT_QTY_EPS ? rest : 0,
+      trusted: !excludedSeen,
+    });
+  }
+  return out;
+}
+
+// KrEtfTaxMatrix.resolveBasis의 우선순위(최저가 매칭 → 러닝 평균 → avgBuy)를 그대로 재현한다.
+// ⚠️ 게이트 3항(trusted · shortfall 0 · basis > 0)을 빠뜨리면 없는 매수분을 싼값으로 단언한다.
+function lofoBasisOf(events, avgBuyValue = 0, avgBuySource = 'portfolio') {
+  const lofo = buildLofoLotSeries(events);
+  const rows = runningBuyAvgSeries(events);
+  return rows.map(({ evt, runningBuyAvg }) => {
+    const lf = lofo.get(evt);
+    const short = lf ? lf.shortfallQty : 0;
+    if (lf && lf.trusted && lf.shortfallQty === 0 && lf.basis > 0) {
+      return { evt, value: lf.basis, source: 'lofo', lots: lf.lots, shortfallQty: 0 };
+    }
+    if (runningBuyAvg > 0) return { evt, value: runningBuyAvg, source: 'running', lots: null, shortfallQty: short };
+    if (avgBuyValue > 0) return { evt, value: avgBuyValue, source: avgBuySource, lots: null, shortfallQty: short };
+    return { evt, value: 0, source: avgBuySource, lots: null, shortfallQty: short };
+  });
+}
+
+// 사용자 실측 픽스처 (KODEX 200커버드콜액티브 — 화면 캡처 2026-08-13)
+const REAL_EVENTS = [
+  { id: 'b1', date: '2026-07-14', change: 10000, purchasePrice: 8524 },
+  { id: 'b2', date: '2026-07-15', change: 6860, purchasePrice: 9405 },
+  { id: 'b3', date: '2026-07-20', change: 120, purchasePrice: 8451.67 },
+  { id: 'b4', date: '2026-07-21', change: 146, purchasePrice: 8745 },
+  { id: 'b5', date: '2026-07-28', change: 2113, purchasePrice: 7778 },
+  { id: 'b6', date: '2026-07-29', change: 761, purchasePrice: 7227 },
+  { id: 's1', date: '2026-08-05', change: -630, sellPrice: 8260 },
+  { id: 's2', date: '2026-08-11', change: -20, sellPrice: 7820 },
+  { id: 's3', date: '2026-08-12', change: -421, sellPrice: 8071 },
+];
 
 console.log('\n[11] computeSellRealized — 매도 실현손익');
 it('손실 매도 — 부호가 보존된다 (priceAmount식 0 클램프 재사용 금지)', () => {
@@ -690,6 +775,200 @@ it('요약 항등식 — Σ행별 실현손익 === 총 매도금액 − Σ매입
   ok(Math.abs(rz[0].basis - rz[1].basis) > 1, '기준단가가 행마다 달라야 이 픽스처가 상수-곱 회귀를 잡는다');
 });
 
+console.log('\n[13] buildLofoLotSeries — 최저가 우선(LOFO) 로트 매칭');
+const lotsOf = (map, evt) => (map.get(evt)?.lots || []).map(l => `${l.date}|${l.price}|${l.qty}`);
+
+it('사용자 실측 재현 — 8/5 630주는 전부 7/29 7,227원 로트에 배정된다', () => {
+  const m = buildLofoLotSeries(REAL_EVENTS);
+  const s1 = m.get(REAL_EVENTS[6]);
+  expectApprox(s1.basis, 7227, 1e-9, 'basis');
+  expectEq(s1.shortfallQty, 0, 'shortfallQty');
+  expectEq(s1.trusted, true, 'trusted');
+  expectEq(lotsOf(m, REAL_EVENTS[6]).join(','), '2026-07-29|7227|630', '배정 내역');
+  const r = computeSellRealized({ change: -630, sellPrice: 8260, basisPrice: s1.basis });
+  expectApprox(r.profit, 650790, 1e-6, 'profit');
+  expectApprox(r.perShare, 1033, 1e-9, 'perShare');
+  // 평균법(8,699.20)이면 −276,694 — 부호가 뒤집혀야 이 픽스처가 회귀를 잡는다(화면 캡처값).
+  const avg = computeSellRealized({ change: -630, sellPrice: 8260, basisPrice: 8699.19657 });
+  ok(avg.profit < 0 && r.profit > 0, '평균법과 부호가 갈려야 이 기능이 의미를 갖는다');
+});
+it('사용자 실측 재현 — 최저가 로트가 소진되면 다음 최저가로 넘어간다 (8/12 421주)', () => {
+  const m = buildLofoLotSeries(REAL_EVENTS);
+  // 7/29 761주 중 630(8/5) + 20(8/11) 소진 → 111주 남음 → 나머지 310주는 7/28 7,778원
+  expectEq(lotsOf(m, REAL_EVENTS[8]).join(','), '2026-07-29|7227|111,2026-07-28|7778|310', '배정 내역');
+  const s3 = m.get(REAL_EVENTS[8]);
+  expectApprox(s3.cost, 111 * 7227 + 310 * 7778, 1e-6, 'cost');
+  expectApprox(s3.basis, (111 * 7227 + 310 * 7778) / 421, 1e-9, 'basis');
+  const r = computeSellRealized({ change: -421, sellPrice: 8071, basisPrice: s3.basis });
+  expectApprox(r.amount, 3397891, 1e-6, 'amount (화면 표시값)');
+  expectApprox(r.profit, 184514, 1e-6, 'profit');
+});
+it('사용자 실측 재현 — 3건 합계', () => {
+  const rows = lofoBasisOf(REAL_EVENTS)
+    .map(b => ({ b, rz: computeSellRealized({ change: b.evt.change, sellPrice: b.evt.sellPrice, basisPrice: b.value }) }))
+    .filter(x => x.rz.profit !== null);
+  expectEq(rows.length, 3, '매도 3건');
+  ok(rows.every(x => x.b.source === 'lofo'), '전 행이 최저가 매칭');
+  const amt = rows.reduce((a, x) => a + x.rz.amount, 0);
+  const cost = rows.reduce((a, x) => a + x.rz.cost, 0);
+  const prof = rows.reduce((a, x) => a + x.rz.profit, 0);
+  expectApprox(amt, 8758091, 1e-6, '매도금액 합계 (화면 표시값)');
+  expectApprox(cost, 7910927, 1e-6, '매입원가 합계');
+  expectApprox(prof, 847164, 1e-6, '실현손익 합계');
+  expectApprox(prof, amt - cost, 1e-6, '요약 항등식');
+});
+it('⚠ 매도 시점 이후의 매수는 배정되지 않는다 — 나중 매수가 과거 실현손익을 소급 변경 금지', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },
+    { date: '2026-03-02', change: 100, purchasePrice: 3000 }, // 훨씬 싸지만 매도 이후
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectApprox(m.get(evts[1]).basis, 8000, 1e-9, 'basis (3000이 아니어야 한다)');
+  expectEq(lotsOf(m, evts[1]).join(','), '2026-01-02|8000|50', '배정 내역');
+});
+it('같은 날짜 매수는 그 매도에 배정된다 (compareTaxEvents 매수 우선)', () => {
+  const evts = [
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },
+    { date: '2026-02-02', change: 100, purchasePrice: 7000 },
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectApprox(m.get(evts[0]).basis, 7000, 1e-9, 'basis');
+});
+it('같은 단가 로트는 먼저 매수한 것부터 배정 — 배정 내역이 결정적이어야 한다', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-01-03', change: 100, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -150, sellPrice: 9000 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(lotsOf(m, evts[2]).join(','), '2026-01-02|8000|100,2026-01-03|8000|50', '배정 순서');
+});
+it('여러 매수 로트를 낮은 가격 순으로 가로지른다', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 9000 },
+    { date: '2026-01-03', change: 100, purchasePrice: 7000 },
+    { date: '2026-01-04', change: 100, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -250, sellPrice: 10000 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(lotsOf(m, evts[3]).join(','), '2026-01-03|7000|100,2026-01-04|8000|100,2026-01-02|9000|50', '가격 오름차순 배정');
+  expectApprox(m.get(evts[3]).basis, (100 * 7000 + 100 * 8000 + 50 * 9000) / 250, 1e-9, 'basis');
+});
+it('⚠ 매수 이력 부족 → shortfallQty로 알리고 호출부가 폴백한다 (싼값 단언 금지)', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 5000 },
+    { date: '2026-02-02', change: -150, sellPrice: 9000 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(m.get(evts[1]).shortfallQty, 50, 'shortfallQty');
+  expectEq(m.get(evts[1]).matchedQty, 100, 'matchedQty');
+  const b = lofoBasisOf(evts)[1];
+  expectEq(b.source, 'running', '최저가 매칭을 쓰지 않고 러닝 평균으로 폴백');
+  expectApprox(b.value, 5000, 1e-9, '폴백값');
+  expectEq(b.shortfallQty, 50, '부족 수량은 계속 노출');
+});
+it('⚠ 매수분이 전부 소진된 뒤의 매도도 부족으로 잡힌다', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -100, sellPrice: 9000 },
+    { date: '2026-03-02', change: -50, sellPrice: 9500 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(m.get(evts[1]).shortfallQty, 0, '1차 매도는 정상');
+  expectEq(m.get(evts[2]).shortfallQty, 50, '2차 매도는 전량 부족');
+  expectEq(m.get(evts[2]).basis, 0, 'basis를 단정하지 않는다');
+});
+it('⚠ 부족 행은 이후 행의 최저가 매칭을 오염시키지 않는다 (poison 금지)', () => {
+  const evts = [
+    { date: '2026-01-02', change: 10, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },   // 부족
+    { date: '2026-03-02', change: 100, purchasePrice: 6000 },
+    { date: '2026-04-02', change: -40, sellPrice: 9500 },   // 정상 — 최저가 매칭 유지
+  ];
+  const b = lofoBasisOf(evts);
+  expectEq(b[1].source, 'running', '부족 행은 폴백');
+  expectEq(b[3].source, 'lofo', '이후 행은 최저가 매칭 유지');
+  expectApprox(b[3].value, 6000, 1e-9, '이후 행 기준단가');
+});
+it('⚠ 매입단가가 빈 매수 행은 그 시점부터 신뢰도를 끈다 (0원 로트 금지)', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },   // 아직 신뢰
+    { date: '2026-03-02', change: 100 },                    // 매입단가 없음
+    { date: '2026-04-02', change: -50, sellPrice: 9500 },   // 신뢰 불가
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(m.get(evts[1]).trusted, true, '앞선 매도는 신뢰');
+  expectEq(m.get(evts[3]).trusted, false, '뒤 매도는 신뢰 불가');
+  ok(!m.get(evts[3]).lots.some(l => l.price === 0), '0원 로트가 만들어지지 않는다');
+  const b = lofoBasisOf(evts);
+  expectEq(b[1].source, 'lofo', '앞선 매도');
+  expectEq(b[3].source, 'running', '뒤 매도는 폴백');
+});
+it('⚠ 일자 없는 매수 행이 있으면 전 구간 신뢰 불가 (순서를 정할 수 없음)', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '', change: 100, purchasePrice: 3000 },
+    { date: '2026-02-02', change: -50, sellPrice: 9000 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(m.get(evts[2]).trusted, false, 'trusted');
+  expectEq(lofoBasisOf(evts).find(b => b.evt === evts[2]).source, 'running', '폴백');
+});
+it('매수 행·수량 0 행·일자 없는 행은 Map에 담기지 않는다', () => {
+  const m = buildLofoLotSeries([
+    { date: '2026-01-02', change: 100, purchasePrice: 8000 },
+    { date: '2026-01-03', change: 0 },
+    { date: '', change: -10, sellPrice: 9000 },
+  ]);
+  expectEq(m.size, 0, 'Map size');
+});
+it('소수 매도수량·소수 로트도 붕괴하지 않는다', () => {
+  const evts = [
+    { date: '2026-01-02', change: 0.5, purchasePrice: 8000 },
+    { date: '2026-01-03', change: 0.5, purchasePrice: 6000 },
+    { date: '2026-02-02', change: -0.75, sellPrice: 9000 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectApprox(m.get(evts[2]).basis, (0.5 * 6000 + 0.25 * 8000) / 0.75, 1e-9, 'basis');
+  expectEq(m.get(evts[2]).shortfallQty, 0, 'shortfallQty');
+});
+it('⚠ 전량 매도의 부동소수 잔여가 유령 로트로 남지 않는다 (LOT_QTY_EPS)', () => {
+  // 0.1 + 0.2 !== 0.3 — 전량 매도 후 잔여 ~5.5e-17이 남아 다음 매도에 배정되면 값이 튄다.
+  const evts = [
+    { date: '2026-01-02', change: 0.1, purchasePrice: 5000 },
+    { date: '2026-01-03', change: 0.2, purchasePrice: 5000 },
+    { date: '2026-02-02', change: -0.3, sellPrice: 9000 },
+    { date: '2026-02-03', change: 1, purchasePrice: 7000 },
+    { date: '2026-02-04', change: -1, sellPrice: 9500 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectEq(m.get(evts[2]).shortfallQty, 0, '전량 매도는 부족 아님');
+  expectEq(lotsOf(m, evts[4]).join(','), '2026-02-03|7000|1', '잔여 5,000원 로트가 섞이지 않는다');
+  expectApprox(m.get(evts[4]).basis, 7000, 1e-9, 'basis');
+});
+it('한 번 배정된 매수분은 다음 매도에 다시 쓰이지 않는다 (순차 소진)', () => {
+  const evts = [
+    { date: '2026-01-02', change: 100, purchasePrice: 7000 },
+    { date: '2026-01-03', change: 100, purchasePrice: 9000 },
+    { date: '2026-02-02', change: -100, sellPrice: 10000 },
+    { date: '2026-02-03', change: -100, sellPrice: 10000 },
+  ];
+  const m = buildLofoLotSeries(evts);
+  expectApprox(m.get(evts[2]).basis, 7000, 1e-9, '1차 = 최저가');
+  expectApprox(m.get(evts[3]).basis, 9000, 1e-9, '2차 = 다음 최저가');
+});
+it('최저가 매칭 원가 ≤ 평균법 원가 — 배정된 로트가 항상 가장 싼 조합이다', () => {
+  const rows = lofoBasisOf(REAL_EVENTS);
+  const run = runningBuyAvgSeries(REAL_EVENTS);
+  for (const r of rows.filter(x => safeNum(x.evt.change) < 0)) {
+    const avg = run.find(x => x.evt === r.evt).runningBuyAvg;
+    ok(r.value <= avg + 1e-9, `기준단가 ${r.value} ≤ 러닝 평균 ${avg}`);
+  }
+});
+
 // ─── 소스 텍스트 가드 — 매도 실현손익 렌더 배선 ──────────────────────────────
 // ⚠️ 위 미러는 "값이 맞다"만 증명한다. 셀 통째 삭제·값 바꿔치기·요약의 상수-곱 회귀·각주가 옛
 //    서술로 남는 것은 하나도 못 잡으므로 렌더 지점을 직접 읽어 단언한다.
@@ -698,6 +977,21 @@ it('요약 항등식 — Σ행별 실현손익 === 총 매도금액 − Σ매입
 //    아니면 정규식을 고칠 것.
 const MX = readFileSync(new URL('../src/components/KrEtfTaxMatrix.tsx', import.meta.url), 'utf8');
 const HL = readFileSync(new URL('../src/krEtfTaxHelpers.ts', import.meta.url), 'utf8');
+
+// ⚠️ 각주 가드는 반드시 **각주 블록만** 잘라서 단언한다. 파일 전역 정규식으로 재면 같은 문구가
+//    열 헤더 title 툴팁에도 있어 **각주에서 통째로 지워도 통과**한다(변이 M10·M17로 실증).
+//    각주는 마우스를 올리지 않는 사용자가 이 값의 성격을 알 수 있는 유일한 자리라 별도 단언이 필요하다.
+const sliceBlock = (src, from, to) => {
+  const at = src.indexOf(from);
+  if (at < 0) throw new Error(`구간 시작을 찾지 못함: ${from}`);
+  const end = src.indexOf(to, at);
+  if (end < 0) throw new Error(`구간 끝을 찾지 못함: ${to}`);
+  return src.slice(at, end);
+};
+// 표 하단 각주 블록 (`일자 선택 시 …` ~ 그 div가 닫힐 때까지 — 내부에 중첩 div 없음)
+const FOOT = sliceBlock(MX, '일자 선택 시 자산검증 전일 수량 자동 조회', '</div>');
+// '현재 평가 / 실현손익' 열 헤더의 title 툴팁
+const TH_REALIZED = sliceBlock(MX, '매수 행 = 현재가격 × 매매수량', '</th>');
 
 console.log('\n[12] 소스 텍스트 가드 — 매도 실현손익 렌더 배선');
 it('#G1 매도 셀이 부호 있는 실현손익을 렌더하고 손실 색에 바인딩한다', () => {
@@ -711,17 +1005,21 @@ it('#G2 주당 손익·수익률 줄이 rz를 쓰고 null을 0%로 단언하지 
   ok(/rz\.rate !== null &&/.test(MX), 'rate null 가드');
   ok(/formatPercent\(rz\.rate\)/.test(MX), 'rate 렌더');
 });
-it('#G3 기준단가는 매도 시점 러닝 평균 — 현재 시점 avgBuy 직결·우선순위 역전 금지', () => {
+it('#G3 기준단가 우선순위 = 최저가 매칭 → 러닝 평균 → avgBuy (역전·직결 금지)', () => {
   ok(/basisPrice: basis\.value/.test(MX), 'computeSellRealized 인자');
   ok(/computeSellRealized\(\{ change: row\.evt\.change, sellPrice: row\.evt\.sellPrice, basisPrice: basis\.value \}\)/.test(MX), '호출 형태');
   ok(!/basisPrice: avgBuy\.value/.test(MX), 'avgBuy 직결 금지');
   ok(/avgBuyPrice: avgBuy\.value,/.test(MX), '과세열은 avgBuy 유지');
-  // ⚠️ '존재'만 보면 두 return 줄을 **맞바꾸는** 변이가 통과한다(리뷰 확정 지적) → 순서를 단언한다.
-  const run = MX.indexOf("if (row.buyAvgTrusted && row.runningBuyAvg > 0) return { value: row.runningBuyAvg, source: 'running' };");
-  const fb = MX.indexOf('if (avgBuy.value > 0) return { value: avgBuy.value, source: avgBuy.source };');
+  // ⚠️ '존재'만 보면 return 줄을 **맞바꾸는** 변이가 통과한다(리뷰 확정 지적) → 순서를 단언한다.
+  const lofo = MX.indexOf("return { value: lf.basis, source: 'lofo', lots: lf.lots, shortfallQty: 0 };");
+  const run = MX.indexOf("if (row.buyAvgTrusted && row.runningBuyAvg > 0) return { value: row.runningBuyAvg, source: 'running', lots: null, shortfallQty: short };");
+  const fb = MX.indexOf('if (avgBuy.value > 0) return { value: avgBuy.value, source: avgBuy.source, lots: null, shortfallQty: short };');
+  ok(lofo >= 0, '최저가 매칭 분기 존재');
   ok(run >= 0, '러닝 평균 분기 존재');
   ok(fb >= 0, 'avgBuy 폴백 분기 존재');
-  ok(run < fb, '러닝 평균이 avgBuy 폴백보다 먼저 와야 한다(우선순위 역전 금지)');
+  ok(lofo < run && run < fb, '최저가 매칭 → 러닝 평균 → avgBuy 순서(우선순위 역전 금지)');
+  // ⚠️ 게이트 3항 중 하나만 빠져도 '없는 매수분'이나 '부분 풀'을 싼값으로 단언하게 된다.
+  ok(/if \(lf && lf\.trusted && lf\.shortfallQty === 0 && lf\.basis > 0\) \{/.test(MX), '최저가 매칭 게이트 3항');
   // ⚠️ 전역 판정(buyExcludedCount)으로 되돌리면 매도 뒤의 불완전 매수 1건이 과거 손익 부호를 뒤집는다.
   ok(!/buyAvgReliable/.test(MX), '전역 신뢰도 판정 부활 금지 — 행별 buyAvgTrusted 사용');
   ok(/buyAvgTrusted: !excludedSeen/.test(MX), '행별 신뢰도 산출');
@@ -767,16 +1065,28 @@ it('#G7 각주가 옛 서술을 남기지 않고 실현손익·기준단가·이
   ok(/매도 행의 '현재 평가 \/ 실현손익' 칸/.test(MX), '실현손익 각주');
   ok(/매수 요약의 .손익.과 매도 요약의 .실현손익.을 더하지 마세요/.test(MX), '각주 이중 계상 경고');
   ok(/이 값과 겹칩니다 — 두 수를 더하지 마세요/.test(MX), '요약 툴팁 이중 계상 경고');
-  ok(/러닝 평균 매입단가/.test(MX), '기준단가 설명');
+  // ⚠️ 아래 4줄은 **각주 블록만** 잘라 단언한다 — 전역 정규식이면 열 헤더 툴팁이 대신 통과시켜
+  //    각주에서 통째로 사라져도 초록이 된다(변이 M10·M17로 실증한 죽은 단언).
+  ok(/러닝 평균 매입단가/.test(FOOT), '기준단가 폴백 설명');
+  // ⚠️ 최저가 매칭은 **분석용**이다. 세법상 원가법이 아니라는 고지가 사라지면 사용자가 이 값을
+  //    과세 근거로 오해한다(같은 행에서 '이익' + '비과세'가 동시에 나오는 것이 정상인 이유).
+  ok(/최저가 우선 매칭/.test(FOOT), '최저가 매칭 각주');
+  ok(/분석용 원가법입니다/.test(FOOT), '세법상 원가법 아님 고지');
+  ok(/남아 있는 매수분 중 가장 싼 것부터/.test(FOOT), '배정 규칙 서술');
+  ok(/모자라면 그 다음으로 싼 매수분/.test(FOOT), '초과 매도 시 다음 최저가 서술');
+  ok(/소급 변경하지 않습니다/.test(FOOT), '소급 변경 금지 서술');
+  // 열 헤더 툴팁에도 같은 계약이 있어야 한다(각주를 안 읽는 사용자의 1차 안내).
+  ok(/최저가 우선 매칭/.test(TH_REALIZED), '헤더 툴팁 매칭 규칙');
+  ok(/분석용 원가법입니다/.test(TH_REALIZED), '헤더 툴팁 원가법 고지');
   // ⚠️ 실현손익 각주를 끼워 넣다 과세 3열 각주 4줄이 통째로 사라진 이력이 있다(리뷰 확정 지적).
   ok(/계산기 매수 평균 순으로 채택하며/.test(MX), '평균단가 폴백 3단계 각주');
   ok(/실제 사용된 출처를 헤더 아래에 표시/.test(MX), '출처 표시 각주');
   ok(/판정 불가<\/span>로 표기/.test(MX), '실제 과세 각주');
   ok(/과세 금액\(과표\)<\/span> = \(매도 과표기준가/.test(MX), '과세 금액 정의 각주');
 });
-it('#G8 열 헤더가 매도 행의 의미를 함께 표기한다', () => {
+it('#G8 열 헤더가 매도 행의 의미와 원가법을 함께 표기한다', () => {
   ok(/현재 평가 \/ 실현손익/.test(MX), '헤더 라벨');
-  ok(/매도 = 실현손익/.test(MX), '서브라인');
+  ok(/매도 = 실현손익 · 최저가 우선/.test(MX), '서브라인 — 어떤 원가법인지 상시 노출');
 });
 it('#G9 ISO_DATE 상수 공유 — 인라인 정규식 복제 금지(백슬래시 소실 회귀)', () => {
   ok(/const ISO_DATE = \/\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$\//.test(MX), 'ISO_DATE 선언');
@@ -791,27 +1101,59 @@ it('#G10 과세 3열은 실현손익과 분리 유지 — computeSellTaxRow에 r
   ok(/taxable, exemptReason, actualPerShare, actualAmount,/.test(taxOnly), '과세 반환 필드 보존');
 });
 
+// ⚠️ [11]·[13]은 **미러**를 검증하므로 src만 고치면 그대로 통과한다(이 파일의 구조적 사각지대).
+//    본문 텍스트를 직접 대조해 "src에만 넣은 변경"·"미러에만 넣은 변경"을 둘 다 잡는다.
+// ⚠️ 파라미터 구조분해(`{ change, ... }`)를 본문으로 오인하면 어떤 드리프트도 못 잡는다 →
+//    반드시 파라미터 괄호를 먼저 지나 본문 여는 중괄호를 찾는다.
+const SELF = readFileSync(new URL(import.meta.url), 'utf8');
+const grabBody = (src, name) => {
+  const at = src.indexOf('function ' + name + '(');
+  if (at < 0) throw new Error(name + ' 본문을 찾지 못함');
+  const paren = src.indexOf(')', src.indexOf('(', at));
+  let i = src.indexOf('{', paren), depth = 0, end = -1;
+  for (let k = i; k < src.length; k++) {
+    if (src[k] === '{') depth++;
+    else if (src[k] === '}') { depth--; if (depth === 0) { end = k + 1; break; } }
+  }
+  if (end < 0) throw new Error(name + ' 본문 괄호가 닫히지 않음');
+  return src.slice(i, end)
+    .replace(/\/\/[^\n]*/g, '')     // 줄 주석 제거(주석은 동기화 대상 아님)
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+const expectMirror = (name) => {
+  const mine = grabBody(SELF, name);
+  const theirs = grabBody(HL, name);
+  ok(mine === theirs, `${name} 미러 드리프트:\n  mirror = ${mine}\n  src    = ${theirs}`);
+};
+
 it('#G11 미러 드리프트 — computeSellRealized 본문이 src와 문자 단위로 같다', () => {
-  // ⚠️ [11]은 **미러**를 검증하므로 src만 고치면 그대로 통과한다(이 파일의 구조적 사각지대).
-  //    본문 텍스트를 직접 대조해 "src에만 넣은 변경"·"미러에만 넣은 변경"을 둘 다 잡는다.
-  const grab = (src, name) => {
-    const at = src.indexOf('function ' + name + '(');
-    if (at < 0) throw new Error(name + ' 본문을 찾지 못함');
-    const paren = src.indexOf(')', src.indexOf('(', at));
-    let i = src.indexOf('{', paren), depth = 0, end = -1;
-    for (let k = i; k < src.length; k++) {
-      if (src[k] === '{') depth++;
-      else if (src[k] === '}') { depth--; if (depth === 0) { end = k + 1; break; } }
-    }
-    if (end < 0) throw new Error(name + ' 본문 괄호가 닫히지 않음');
-    return src.slice(i, end)
-      .replace(/\/\/[^\n]*/g, '')     // 줄 주석 제거(주석은 동기화 대상 아님)
-      .replace(/\s+/g, ' ')
-      .trim();
-  };
-  const mine = grab(readFileSync(new URL(import.meta.url), 'utf8'), 'computeSellRealized');
-  const theirs = grab(HL, 'computeSellRealized');
-  ok(mine === theirs, '미러 드리프트:\n  mirror = ' + mine + '\n  src    = ' + theirs);
+  expectMirror('computeSellRealized');
+});
+
+it('#G12 미러 드리프트 — buildLofoLotSeries·compareTaxEvents 본문이 src와 문자 단위로 같다', () => {
+  expectMirror('buildLofoLotSeries');
+  expectMirror('compareTaxEvents');
+  ok(/export const LOT_QTY_EPS = 1e-9;/.test(HL), '로트 소진 epsilon 상수');
+  ok(/const LOT_QTY_EPS = 1e-9;/.test(SELF), '미러 epsilon 동일');
+});
+
+it('#G13 최저가 매칭 배선 — 호출·배정 내역 노출·상시 ⚠ 억제', () => {
+  ok(/const lofoByEvt = buildLofoLotSeries\(events\);/.test(MX), '종목별 1회 호출');
+  // ⚠️ 인덱스 조인 금지 — buildSortedEventsWithAvg가 날짜 없는 행을 뒤에 덧붙이는 순간 한 칸씩 밀린다.
+  ok(/const lf = lofoByEvt\.get\(row\.evt\);/.test(MX), '이벤트 객체 식별자 조인');
+  // ⚠️ 배정 내역이 이 기능의 근거다 — 어디에도 없으면 "왜 기준단가가 7,227원인가"를 추적할 수 없다.
+  ok((MX.match(/lotsDetailText\(basis\.lots\)/g) || []).length >= 2, '행 툴팁 + 기준 줄 툴팁 양쪽에 배정 내역');
+  // ⚠️ 호출부만 보면 포매터 본문을 빈 배열로 바꾸는 변이가 통과한다(M15로 실증) → 본문을 단언한다.
+  ok(/const lotsDetailText = \(lots\) => \(lots \|\| \[\]\)[\s\S]{0,120}?l\.date[\s\S]{0,60}?l\.qty[\s\S]{0,80}?fmtTaxBase\(l\.price\)/.test(MX),
+    '배정 내역 포매터가 매수일·수량·단가를 낸다');
+  ok(/basis\.lots\.length === 1 \? basis\.lots\[0\]\.date\.slice\(5\) : `\$\{basis\.lots\.length\}건`/.test(MX), '기준 줄 배정 요약(매수일 / N건)');
+  // ⚠️ * 는 '폴백으로 계산됨' 표시다. 게이트가 'running'으로 되돌아가면 정상 행 전부에 * 가 붙는다.
+  ok(/\{basis\.source !== 'lofo' && <span className="text-amber-400\/50 ml-0\.5">\*<\/span>\}/.test(MX), '폴백 행에만 * 표기');
+  // ⚠️ 최저가 매칭은 평균단가와 벌어지는 것이 설계상 상시 — ⚠를 전 행에 띄우면 경보가 죽는다.
+  ok(/basisDiverged: basis\.source !== 'lofo' &&/.test(MX), '최저가 매칭 행은 상시 ⚠ 억제');
+  ok(/shortfallRows: sellRowsAll\.filter\(r => r\.basis\.shortfallQty > 0\)\.length,/.test(MX), '부족 행 집계');
+  ok(/매수 이력 부족 \{sellSummary\.shortfallRows\}건/.test(MX), '요약 부족 안내 렌더');
 });
 
 // ─── 결과 출력 ────────────────────────────────────────────────────────────────

@@ -254,6 +254,74 @@ export function computeSellRealized({ change, sellPrice, basisPrice }) {
   return { isSell, soldQty, basis: ready ? basis : null, amount, cost, perShare, profit, rate };
 }
 
+// ── 매도 실현손익 기준단가 = '최저가 우선(LOFO)' 로트 매칭 ──────────────────
+// 사용자 정의(2026-08): "최저점 매수가격과 매수수량으로 매도일에 대한 수익을 표시. 매수수량을
+// 초과한 매도시에는 다음 최저 가격을 기준으로." → 매도수량을 **그 시점까지 남아 있는 매수분 중
+// 가장 싼 로트부터** 차례로 소진시켜 원가를 구한다(lowest-cost-first-out).
+// 예) 7/28 2,113주@7,778 + 7/29 761주@7,227 보유 상태에서 8/5 630주@8,260 매도
+//     → 7,227 로트에서 630주 배정 → 기준단가 7,227 → +650,790(평균법 8,699.20 기준이면 −276,694).
+//
+// ⚠️ 이것은 **분석용 원가법**이다. 세법상 원가법(이동평균법)이 아니므로 과세 3열
+//    (computeSellTaxRow)에는 절대 연결하지 말 것 — 그쪽은 종전대로 평균단가를 쓴다.
+//    같은 행에서 실현손익 '이익' + 과세 '비과세'가 동시에 나오는 것이 정상이다.
+// ⚠️ 로트 풀은 반드시 compareTaxEvents 순서로 **순차 소진**한다(같은 날짜는 매수 우선).
+//    매도 시점 이후의 매수는 풀에 아직 없으므로, 나중 매수가 과거 실현손익을 소급 변경하지
+//    못한다 — 러닝 평균 설계가 지키던 '확정된 과거 사실' 불변식을 그대로 유지한다.
+// ⚠️ 같은 단가 로트는 **먼저 매수한 것부터**(seq) 배정한다. 원가 합은 같지만 배정 내역이
+//    화면에 표시되므로 결정적이어야 한다(compareTaxEvents 타이브레이커와 같은 근거).
+// ⚠️ 매입단가가 빈 매수 행은 로트를 만들지 못하므로 그 시점부터 풀 구성이 불완전해진다
+//    → excludedSeen을 세워 이후 행을 trusted:false로 내리고 호출부가 폴백하게 한다
+//    (resolveAvgBuyPrice의 fallbackReliable, buildSortedEventsWithAvg의 buyAvgTrusted와 같은 근거).
+// ⚠️ 배정이 모자라면(매수 이력 부족) shortfallQty > 0으로 알리고 basis를 **단정하지 않는다** —
+//    매칭된 몫의 원가를 전체 수량에 퍼뜨리면 없는 매수분을 0원 또는 싼값으로 단언하게 된다.
+// ⚠️ 반환은 이벤트 **객체 식별자** 키 Map이다. 인덱스 조인은 호출부(buildSortedEventsWithAvg)가
+//    날짜 없는 행을 뒤에 덧붙이는 순간 한 칸씩 밀린다(id는 중복·누락 가능).
+export const LOT_QTY_EPS = 1e-9;
+
+export function buildLofoLotSeries(events) {
+  const valid = (events || [])
+    .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')))
+    .sort(compareTaxEvents);
+  const undatedBuy = (events || []).some(e => safeNum(e.change) > 0 && !/^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')));
+  const lots = [];
+  let excludedSeen = undatedBuy;
+  let seq = 0;
+  const out = new Map();
+  for (const evt of valid) {
+    const change = safeNum(evt.change);
+    if (change > 0) {
+      const pp = safeNum(evt.purchasePrice);
+      if (pp > 0) lots.push({ price: pp, qty: change, date: String(evt.date || ''), seq: seq++ });
+      else excludedSeen = true;
+      continue;
+    }
+    if (change === 0) continue;
+    const order = lots
+      .filter(l => l.qty > LOT_QTY_EPS)
+      .sort((a, b) => (a.price - b.price) || (a.seq - b.seq));
+    let rest = -change;
+    const matched = [];
+    for (const l of order) {
+      if (rest <= LOT_QTY_EPS) break;
+      const take = Math.min(l.qty, rest);
+      l.qty -= take;
+      rest -= take;
+      matched.push({ date: l.date, price: l.price, qty: take });
+    }
+    const matchedQty = -change - rest;
+    const cost = matched.reduce((s, m) => s + m.price * m.qty, 0);
+    out.set(evt, {
+      basis: matchedQty > LOT_QTY_EPS ? cost / matchedQty : 0,
+      cost,
+      lots: matched,
+      matchedQty,
+      shortfallQty: rest > LOT_QTY_EPS ? rest : 0,
+      trusted: !excludedSeen,
+    });
+  }
+  return out;
+}
+
 export function buildDividendEvents(portfolio, code) {
   if (!code) return [];
   const hist = portfolio?.dividendHistory?.[code] || {};
