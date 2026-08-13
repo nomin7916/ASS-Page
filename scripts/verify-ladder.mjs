@@ -6,7 +6,9 @@
 //
 // 고정하는 계약
 //   ① 매수 dir=-1 / 매도 dir=+1 — 방향만 다른 같은 사다리(복제 금지)
-//   ② 매도 Σ수량 === 목표 수량 (매수는 자금 제약, 매도는 수량 제약)
+//   ②-a buildLadder Σ수량 === 요청 수량 (배분 항등식)
+//   ②-b 사다리의 앵커는 '금액' — 매수·매도 모두 총액이 목표금액을 넘지 않는 최대 수량을 푼다.
+//        매도를 |action|으로 고정하면 목표금액을 초과 매도한다(옛 sellTarget 버그)
 //   ③ 호가 간격은 가격 격자(원화 1원 / 달러 0.01)의 배수 — 소수점 호가 금지
 //   ④ 정규화된 호가면 사다리 행 가격이 절대 중복되지 않는다
 
@@ -26,13 +28,22 @@ if (typeof nodeModule.stripTypeScriptTypes !== 'function') {
 
 function sliceFns(source, names) {
   const start = source.indexOf('function tri');
-  const end = source.indexOf('export default');
-  if (start < 0 || end < 0) throw new Error('순수 함수 구간을 찾지 못했습니다 — 파일 구조가 바뀌었는지 확인하세요.');
-  const js = nodeModule.stripTypeScriptTypes(source.slice(start, end), { mode: 'strip' });
+  // ⚠️ lastIndexOf — 구간 안 주석이 컴포넌트 선언 키워드를 그대로 적으면 indexOf가 거기서 잘려
+  //    상수 선언이 통째로 빠지고 ReferenceError만 남는다(실제로 한 번 그랬다).
+  const end = source.lastIndexOf('export default');
+  if (start < 0 || end < 0 || end <= start) throw new Error('순수 함수 구간을 찾지 못했습니다 — 파일 구조가 바뀌었는지 확인하세요.');
+  const body = source.slice(start, end);
+  // 잘린 구간을 조용한 ReferenceError가 아니라 명시적 실패로 바꾼다.
+  const missing = names.filter(n => !body.includes(n));
+  if (missing.length) throw new Error('순수 함수 구간에 없는 이름: ' + missing.join(', ') + ' — 선언이 구간 밖으로 나갔는지 확인하세요.');
+  const js = nodeModule.stripTypeScriptTypes(body, { mode: 'strip' });
   return new Function(js + '\nreturn {' + names.join(',') + '};')();
 }
 
-const F = sliceFns(src, ['tri', 'roundTo', 'buildLadder', 'maxAffordableQty', 'recalcAllPrices', 'redistribute']);
+const F = sliceFns(src, ['tri', 'roundTo', 'buildLadder', 'solveQtyForAmount', 'recalcAllPrices', 'redistribute']);
+
+// ⚠️ 금지 토큰 가드는 주석을 지우고 본다 — 이 파일의 설명 주석에는 옛 이름이 일부러 남아 있다.
+const stripComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 
 let pass = 0, fail = 0;
 const J = (v) => JSON.stringify(v);
@@ -68,7 +79,7 @@ console.log('\n■ 방향 — 매수는 내리고 매도는 올린다');
     J(buy.map(r => r.qty)) === J(sell.map(r => r.qty)));
 }
 
-console.log('\n■ 매도 목표 수량 보존 (수량 제약)');
+console.log('\n■ buildLadder 배분 항등식 (요청 수량을 정확히 나눈다)');
 {
   const TICKS_FOR = (d) => d === 2 ? [0.01, 0.1, 1, 2.5] : [1, 5, 10, 100];
   for (const p of [1000, 50000, 3.33, 250.75]) for (const d of [0, 2]) for (const t of TICKS_FOR(d)) for (const q of QTYS) {
@@ -236,10 +247,10 @@ console.log('\n■ 배수(mult) — 수량 증가폭 사용자 설정');
 
   // ⑥ 매수 자금 탐색도 배수를 따른다
   {
-    const q1 = F.maxAffordableQty(1000, 10, 100000, 1, 0, 1);
-    const q2 = F.maxAffordableQty(1000, 10, 100000, 1, 0, 2);
-    ok('#43 maxAffordableQty가 배수를 반영', q1 > 0 && q2 > 0 && q2 !== q1, `mult1=${q1} mult2=${q2}`);
-    ok('#44 maxAffordableQty mult 생략 = 1', F.maxAffordableQty(1000, 10, 100000, 1, 0) === q1);
+    const q1 = F.solveQtyForAmount(1000, 10, 100000, 1, 0, -1, 1);
+    const q2 = F.solveQtyForAmount(1000, 10, 100000, 1, 0, -1, 2);
+    ok('#43 solveQtyForAmount가 배수를 반영', q1 > 0 && q2 > 0 && q2 !== q1, `mult1=${q1} mult2=${q2}`);
+    ok('#44 solveQtyForAmount mult 생략 = 1', F.solveQtyForAmount(1000, 10, 100000, 1, 0, -1) === q1);
   }
 
   // ⑦ 방어: 0·음수·소수 배수가 들어와도 사다리가 깨지지 않는다(엔진 측 하한)
@@ -248,6 +259,109 @@ console.log('\n■ 배수(mult) — 수량 증가폭 사용자 설정');
     quiet(`배수 방어 ${bad}`, rows.reduce((s, r) => s + r.qty, 0) === 10 && rows.every(r => r.qty > 0), J(rows.map(r => r.qty)));
   }
   ok('#45 배수 0/음수 → 1로 폴백 (사다리 붕괴 없음)', true);
+}
+
+console.log('\n■ 금액 앵커 — 수량은 목표금액에서 파생된다 (이 기능의 존재 이유)');
+{
+  const sum = (r) => r.reduce((a, x) => a + x.qty, 0);
+  const amt = (r) => r.reduce((a, x) => a + x.price * x.qty, 0);
+  const P = 8470, BASE = 940, TARGET = BASE * P;   // 스크린샷 실측: KODEX 200커버드콜액티브
+
+  // ① 옛 버그 재현 — 수량을 고정하면 목표금액을 초과 매도한다
+  {
+    const fixed = F.buildLadder(P, 100, BASE, 1, 0, 1, 4);
+    ok('#58 [옛 버그] 수량 고정 매도는 목표금액을 초과한다',
+      amt(fixed) > TARGET * 1.15, `매도금액=${amt(fixed)} 목표=${TARGET}`);
+  }
+
+  // ② 새 계약 — 목표금액 이하 + 최대성(한 주 더하면 반드시 초과) + 사다리 안 잘림
+  let viol = 0;
+  for (const price of [8470, 50000, 1000, 120]) {
+    for (const t of [1, 10, 50, 100, 400]) {
+      for (const m of [1, 2, 4, 8]) {
+        for (const a of [1, 10, 100, 940]) {
+          for (const d of [1, -1]) {
+            const target = a * price;
+            const Q = F.solveQtyForAmount(price, t, target, 1, 0, d, m);
+            if (Q <= 0) continue;
+            const rows = F.buildLadder(price, t, Q, 1, 0, d, m);
+            const nxt = F.buildLadder(price, t, Q + 1, 1, 0, d, m);
+            const overshoot = amt(rows) > target + 1e-6;
+            const truncated = Math.abs(sum(rows) - Q) > 1e-9;
+            const maximal = !nxt.length || amt(nxt) > target + 1e-6 || Math.abs(sum(nxt) - (Q + 1)) > 1e-9;
+            if (overshoot || truncated || !maximal) {
+              viol++;
+              if (viol <= 3) console.log(`    위반 p=${price} t=${t} m=${m} a=${a} d=${d} Q=${Q} 금액=${amt(rows)} 목표=${target}`);
+            }
+          }
+        }
+      }
+    }
+  }
+  ok('#59 목표금액 이하 · 최대성 · 잘리지 않음 (전 조합)', viol === 0, `위반 ${viol}건`);
+
+  // ③ 방향 — 매도는 덜 팔고, 매수는 더 산다 (같은 목표금액)
+  {
+    const qS = F.solveQtyForAmount(P, 100, TARGET, 1, 0, 1, 4);
+    const rS = F.buildLadder(P, 100, qS, 1, 0, 1, 4);
+    ok('#60 매도: 같은 금액을 더 적은 수량으로 채운다',
+      qS < BASE && amt(rS) <= TARGET, `${BASE}주 → ${qS}주 · 금액 ${amt(rS)}/${TARGET}`);
+    ok('#61 매도 평균단가 > 현재가 (그래서 수량이 준다)', amt(rS) / qS > P);
+
+    const qB = F.solveQtyForAmount(P, 10, TARGET, 1, 0, -1, 1);
+    const rB = F.buildLadder(P, 10, qB, 1, 0, -1, 1);
+    ok('#62 매수: 같은 금액으로 더 많은 수량을 담는다',
+      qB > BASE && amt(rB) <= TARGET, `${BASE}주 → ${qB}주 · 금액 ${amt(rB)}/${TARGET}`);
+    ok('#63 매수 평균단가 < 현재가', amt(rB) / qB < P);
+  }
+
+  // ④ 매도 수량은 절대 기준 수량을 넘지 않는다 (평균단가 >= 현재가의 필연적 귀결)
+  {
+    let bad = 0;
+    for (const t of [1, 10, 50, 100, 400]) for (const m of [1, 2, 4, 8]) for (const a of [1, 7, 100, 940]) {
+      const Q = F.solveQtyForAmount(P, t, a * P, 1, 0, 1, m);
+      if (Q > a) bad++;
+    }
+    ok('#64 매도 수량 <= 기준 수량 (초과 매도 없음)', bad === 0, `초과 ${bad}건`);
+  }
+
+  // ⑤ 호가가 넓어질수록 매도 수량이 준다 = 사용자가 요구한 동작
+  {
+    const qs = [10, 50, 100, 200, 400].map(t => F.solveQtyForAmount(P, t, TARGET, 1, 0, 1, 1));
+    ok('#65 호가 확대 → 매도 수량 단조감소', qs.every((q, i) => i === 0 || q < qs[i - 1]), J(qs));
+  }
+
+  // ⑥ 폭주 회귀 — 옛 선형탐색은 여기서 상한 100000을 반환했다(잘린 사다리 탓에 cost가 안 늘어서).
+  //    이분탐색 + '잘린 사다리 거부'가 그 경로를 막는다. 실측 정답 210.
+  {
+    const Q = F.solveQtyForAmount(1000, 50, 100 * 1000, 1, 0, -1, 1);
+    const rows = F.buildLadder(1000, 50, Q, 1, 0, -1, 1);
+    ok('#66 [회귀] 가격 하한에 닿는 매수가 상한까지 폭주하지 않는다',
+      Q > 0 && Q < 100000 && Math.abs(sum(rows) - Q) < 1e-9, `Q=${Q}`);
+    ok('#67 그 사다리의 모든 행이 가격 하한 이상', rows.every(r => r.price >= 1));
+  }
+
+  // ⑦ 달러 — 소수 2자리 누적 오차로 목표를 넘지 않는다
+  {
+    let bad = 0;
+    for (const t of [0.01, 0.1, 1]) for (const m of [1, 4]) for (const a of [1, 13, 250]) {
+      for (const d of [1, -1]) {
+        const target = a * 250.75;
+        const Q = F.solveQtyForAmount(250.75, t, target, 0.01, 2, d, m);
+        if (Q <= 0) continue;
+        if (amt(F.buildLadder(250.75, t, Q, 0.01, 2, d, m)) > target + 1e-6) bad++;
+      }
+    }
+    ok('#68 달러(소수 2자리)도 목표금액을 넘지 않는다', bad === 0, `초과 ${bad}건`);
+  }
+
+  // ⑧ 방어 입력
+  ok('#69 목표금액/가격/호가가 0 이하면 수량 0',
+    F.solveQtyForAmount(0, 10, 1000, 1, 0, 1) === 0
+    && F.solveQtyForAmount(1000, 0, 1000, 1, 0, 1) === 0
+    && F.solveQtyForAmount(1000, 10, -5, 1, 0, 1) === 0);
+  ok('#70 목표금액이 1주 값보다 작으면 수량 0', F.solveQtyForAmount(1000, 10, 999, 1, 0, 1) === 0);
+  ok('#71 목표금액이 정확히 1주 값이면 1주', F.solveQtyForAmount(1000, 10, 1000, 1, 0, 1) === 1);
 }
 
 console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가 dir/side를 실제로 넘기는가)');
@@ -259,9 +373,9 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
   ok('#48 recalcAllPrices 호출 2곳 모두 dir을 넘긴다',
     (src.match(/recalcAllPrices\([^)]*, dir\)/g) || []).length === 2,
     J((src.match(/recalcAllPrices\([^)]*dir\)/g) || [])));
-  ok('#49 매도 목표는 자금이 아니라 |totalAction|',
-    /const sellTarget = Math\.abs\(cleanNum\(totalAction\)\);/.test(src)
-    && /const Q = isSell \? sellTarget : maxAffordableQty\(price, tick, fund, priceFloor, decimals, m\);/.test(src));
+  ok('#49 매수·매도가 같은 금액 솔버 한 줄을 쓴다 (수량 고정 분기 부활 금지)',
+    /const Q = solveQtyForAmount\(price, tick, amount, priceFloor, decimals, dir, m\);/.test(src)
+    && !/sellTarget/.test(stripComments(src)));
 
   // 배수 배선 — 세 소비자가 전부 mult를 받아야 화면과 계산이 갈리지 않는다
   ok('#50 normalizeMult 정의 (1 이상 정수)', /const normalizeMult = \(raw[\s\S]{0,140}Math\.round\(raw\)/.test(src));
@@ -271,16 +385,25 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
   ok('#52 redistribute 호출 2곳 모두 mult를 넘긴다',
     (src.match(/redistribute\([^)]*, mult\)/g) || []).length === 2,
     J((src.match(/redistribute\([^)]*\)/g) || [])));
-  ok('#53 mult 변경이 사다리를 재생성한다 (effect deps)',
-    /\}, \[currentPrice, tickSize, rebalFund, side, sellTarget, mult\]\);/.test(src));
+  ok('#53 목표금액·배수 변경이 사다리를 재생성한다 (effect deps)',
+    /\}, \[currentPrice, tickSize, targetAmount, side, mult\]\);/.test(src));
 
   const panel = readFileSync(join(ROOT, 'src/components/RebalancingPanel.tsx'), 'utf8');
   ok('#54 현재가 셀이 매도(−)에서도 열린다', /const ladderOpenable = totalAction !== 0 && itemPrice > 0;/.test(panel));
   ok('#55 side를 방향에 맞게 넘긴다',
     /side: isSellAction \? 'sell' : 'buy',/.test(panel)
     && /const isSellAction = totalAction < 0;/.test(panel));
-  ok('#56 매도 금액은 부호 없는 절대액(현재가 기준 매도금액)',
-    /rebalFund: Math\.abs\(totalAction\) \* itemPrice,/.test(panel));
+  ok('#56 앵커는 목표 금액 = |수량| × 현재가 (증가분·부족분)',
+    /targetAmount: Math\.abs\(totalAction\) \* itemPrice,/.test(panel)
+    && /targetAmount=\{ladderModal\.targetAmount\}/.test(panel)
+    && !/rebalFund/.test(panel));
+  ok('#72 화면이 목표 금액과 잔여를 노출한다 (사다리가 목표를 못 채운 것을 숨기지 않음)',
+    /목표 금액/.test(src) && /const residual = targetAmount - totalCost;/.test(src)
+    && /잔여 \$\{fmt\(residual\)\}/.test(src) && /초과 \$\{fmt\(-residual\)\}/.test(src));
+  ok('#73 푸터는 금액 우위가 아니라 기준 수량 대비 수량 이득을 보여 준다',
+    /const qtyDiff = totalQty - baseQty;/.test(src) && !/const uplift/.test(src)
+    && /const qtyDiffLabel = isSell/.test(src)
+    && /주 절약/.test(src) && /주 추가/.test(src) && /주 부족/.test(src));
   ok('#57 단일 컴포넌트 유지 — 매도 전용 모달 복제 금지',
     /import LadderTradeModal from '\.\/LadderTradeModal';/.test(panel) && !/LadderSellModal|LadderBuyModal/.test(panel));
 }
@@ -293,7 +416,7 @@ console.log('\n■ 방어 입력');
     }
   }
   ok('#28 가격/호가/수량이 0 이하면 빈 사다리', true);
-  ok('#29 매수 자금 0 → 수량 0', F.maxAffordableQty(1000, 10, 0, 1, 0) === 0);
+  ok('#29 목표금액 0 → 수량 0', F.solveQtyForAmount(1000, 10, 0, 1, 0, -1) === 0 && F.solveQtyForAmount(1000, 10, 0, 1, 0, 1) === 0);
   ok('#30 매수 자금이 커도 floor 아래로는 안 내려간다', F.buildLadder(30, 10, 100, 1, 0, -1).every(r => r.price >= 1));
 }
 

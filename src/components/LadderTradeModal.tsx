@@ -17,7 +17,9 @@ interface Props {
   itemName: string;
   currentPrice: number;
   totalAction: number;
-  rebalFund: number;
+  // 목표 금액 = |리밸런싱 수량| × 현재가 = 그 종목의 증가분(매수)·부족분(매도) 금액.
+  // ⚠️ 이 값이 사다리의 앵커다. 수량은 여기서 파생된다(머리주석 참조).
+  targetAmount: number;
   currency?: 'KRW' | 'USD';
   fxRate?: number;
   pos: { x: number; y: number };
@@ -31,6 +33,23 @@ function roundTo(n: number, decimals: number): number {
   return Math.round(n * f) / f;
 }
 
+// ⚠️ verify:ladder는 이 파일의 순수 함수 구간(tri 선언부터 컴포넌트 직전까지)만 잘라 평가한다.
+//    이 상수들을 그 구간 위로 올리면 테스트가 ReferenceError로 죽는다.
+//    같은 이유로 이 구간 안 주석에 컴포넌트 선언 키워드를 그대로 적지 말 것 — 구간이 잘린다.
+// 사다리 최대 수량 — 옛 maxAffordableQty의 상한과 같은 값이라 행 수 상한(mult=1에서 ~450행)도 종전과 같다.
+const MAX_LADDER_QTY = 100000;
+const QTY_EPS = 1e-9;
+const AMOUNT_EPS = 1e-6;
+
+// ⚠️ 이 계산기의 앵커는 '수량'이 아니라 '금액'이다 — 절대 되돌리지 말 것.
+//    리밸런싱이 정하는 1차값은 '이 종목을 ₩N만큼 늘린다/줄인다'(증가분·부족분)이고,
+//    표의 수량은 그 금액의 파생값이다 — usePortfolioData.ts의
+//      action = Math.trunc((목표금액 − 현재평가금) / price)
+//    따라서 사다리도 **금액을 고정하고 수량을 푼다**: 호가를 올려 팔면 같은 금액에 더 적은
+//    수량이, 호가를 내려 사면 같은 금액에 더 많은 수량이 필요하다. 수량을 고정하면 사다리가
+//    목표금액을 그만큼 초과 매매한다(옛 매도 경로는 목표 ₩7,961,800을 ₩9,227,400으로
+//    +15.9% 초과 매도했다 — 호가를 올려 팔면서 수량 940주를 그대로 뒀기 때문).
+//
 // ⚠️ 매수/매도는 방향(dir)만 다른 같은 사다리다 — 복제하지 말 것.
 //    매수 dir=-1: 현재가에서 호가를 내리며 배치(쌀수록 많이 산다).
 //    매도 dir=+1: 현재가에서 호가를 올리며 배치(비쌀수록 많이 판다).
@@ -58,18 +77,40 @@ function buildLadder(basePrice: number, tickSize: number, totalQty: number, floo
   return rows;
 }
 
-// 매수 전용 — 매도는 수량(목표 매도량)이 이미 정해져 있어 자금 탐색이 필요 없다.
-function maxAffordableQty(basePrice: number, tickSize: number, fund: number, floor: number, decimals: number, mult: number = 1): number {
-  if (tickSize <= 0 || basePrice <= 0 || fund <= 0) return 0;
-  let Q = 0;
-  while (Q < 100000) {
-    const rows = buildLadder(basePrice, tickSize, Q + 1, floor, decimals, -1, mult);
-    if (!rows.length) break;
-    const cost = rows.reduce((s, r) => s + r.price * r.qty, 0);
-    if (cost > fund || rows[rows.length - 1].price < floor) break;
-    Q++;
+// 사다리 총액이 목표금액을 넘지 않는 **최대 수량**을 푼다 — 매수·매도 공용.
+// 이 함수가 '금액 앵커'의 구현체다(위 머리주석 참조). 매도를 |action|으로 고정하던
+// 옛 sellTarget 분기로 되돌리지 말 것.
+//
+// ⚠️ 잘린 사다리(Σ수량 < Q)는 거부한다. 매수는 호가를 내리다 가격 하한(floor)에 닿으면
+//    buildLadder가 남은 행을 버리는데, 그러면 총액이 더 늘지 않아
+//      ① 옛 선형탐색은 `cost > fund` 조건이 영영 참이 되지 않아 상한 100000까지 폭주했고
+//         (실측: 현재가 1,000 · 호가 50 · 목표 100,000원 → Q=100000 반환, 정답 210)
+//         그 탐색이 렌더 이펙트에서 동기 실행돼 화면이 수 초간 멈췄다.
+//      ② targetQty가 실제 배치 수량보다 커져 요약의 '수량'이 거짓이 된다.
+//
+// ⚠️ 이분탐색이 성립하는 근거 — 술어 P(Q) = (총액 ≤ 목표 ∧ 사다리 안 잘림)는 Q에 대해
+//    단조감소한다: ① 모든 행 가격 > 0 이라 총액은 Q에 단조증가 ② 잘림은 한 번 발생하면
+//    그보다 큰 Q에서 계속 발생. 선형탐색으로 되돌리지 말 것(위 폭주가 재발한다).
+function solveQtyForAmount(basePrice: number, tickSize: number, targetAmount: number, floor: number, decimals: number, dir: number, mult: number = 1): number {
+  if (tickSize <= 0 || basePrice <= 0 || targetAmount <= 0) return 0;
+  const fits = (Q: number): boolean => {
+    const rows = buildLadder(basePrice, tickSize, Q, floor, decimals, dir, mult);
+    if (!rows.length) return false;
+    let sumQty = 0, cost = 0;
+    for (const r of rows) { sumQty += r.qty; cost += r.price * r.qty; }
+    // AMOUNT_EPS는 달러(소수 2자리) 누적 오차에 대한 **방어적 여유**다. 원화는 정수 연산이라
+    // 무관하고, 달러도 실측 3,072조합에서 있으나 없으나 결과가 같았다(= 전용 테스트가 없는 이유).
+    // 통화 비교에 여유를 두는 관례로 남긴다 — 1e-6 통화단위라 실질 초과는 만들 수 없다.
+    return sumQty >= Q - QTY_EPS && cost <= targetAmount + AMOUNT_EPS;
+  };
+  let lo = 0, hi = 1;
+  while (hi < MAX_LADDER_QTY && fits(hi)) { lo = hi; hi *= 2; }
+  if (hi > MAX_LADDER_QTY) hi = MAX_LADDER_QTY;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(mid)) lo = mid; else hi = mid - 1;
   }
-  return Q;
+  return lo;
 }
 
 function recalcAllPrices(rows: LadderRow[], basePrice: number, tickSize: number, floor: number, decimals: number, dir: number): LadderRow[] {
@@ -111,12 +152,14 @@ function redistribute(rows: LadderRow[], target: number, mult: number = 1): Ladd
   return rows.map(r => r.locked ? r : { ...r, qty: qtys[ui++] ?? 0 });
 }
 
-export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, rebalFund, currency = 'KRW', fxRate = 1, pos, onClose }: Props) {
+export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, currency = 'KRW', fxRate = 1, pos, onClose }: Props) {
   const isSell = side === 'sell';
   const dir = isSell ? 1 : -1;
   const sideLabel = isSell ? '매도' : '매수';
-  // 매도 목표 수량 = |리밸런싱 매도수량|. 매수와 달리 자금이 아니라 수량이 제약이다.
-  const sellTarget = Math.abs(cleanNum(totalAction));
+  // 기준 수량 = 리밸런싱 표의 수량 = 목표금액 ÷ 현재가. **사다리 수량을 정하지 않는다** —
+  // 사다리는 금액에서 수량을 풀고(solveQtyForAmount), 이 값은 '현재가로 그냥 거래하면 몇 주인가'를
+  // 보여 주는 비교 기준으로만 쓴다. 여기에 사다리를 고정하면 목표금액을 초과 매매한다.
+  const baseQty = Math.abs(cleanNum(totalAction));
 
   const isUSD = currency === 'USD';
   const decimals = isUSD ? 2 : 0;
@@ -141,23 +184,41 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   const [position, setPosition] = useState(pos);
   const drag = useRef({ active: false, ox: 0, oy: 0 });
 
-  const doRegenerate = (price: number, tick: number, fund: number, m: number) => {
-    const Q = isSell ? sellTarget : maxAffordableQty(price, tick, fund, priceFloor, decimals, m);
+  // ⚠️ 매수·매도가 **같은 한 줄**을 쓴다. 매도만 수량으로 분기하던 옛 삼항으로 되돌리지 말 것.
+  const doRegenerate = (price: number, tick: number, amount: number, m: number) => {
+    const Q = solveQtyForAmount(price, tick, amount, priceFloor, decimals, dir, m);
     setTargetQty(Q);
     setRows(buildLadder(price, tick, Q, priceFloor, decimals, dir, m));
     setPriceEdits({});
   };
 
   useEffect(() => {
-    doRegenerate(currentPrice, tickSize, rebalFund, mult);
-  }, [currentPrice, tickSize, rebalFund, side, sellTarget, mult]);
+    doRegenerate(currentPrice, tickSize, targetAmount, mult);
+  }, [currentPrice, tickSize, targetAmount, side, mult]);
 
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);
   const totalCost = rows.reduce((s, r) => s + r.price * r.qty, 0);
   const avgPrice = totalQty > 0 ? totalCost / totalQty : 0;
-  const remaining = rebalFund - totalCost;
-  // 매도: 사다리로 올려 판 금액 − 같은 수량을 현재가에 판 금액(= 호가를 올려 얻는 추가 수령액).
-  const uplift = totalCost - totalQty * cleanNum(currentPrice);
+  // 잔여 = 목표금액 중 사다리가 쓰지 못한 몫. 보통 1주 값 미만이지만, 호가가 지나치게 넓어
+  // 사다리가 가격 하한에 먼저 닿으면(매수) 크게 남을 수 있어 반드시 화면에 노출한다.
+  const residual = targetAmount - totalCost;
+  // 표시 하한 = 가격 격자. 달러에서 residual이 1e-13로 남는 부동소수 잡음에 '잔여 0.00'을 띄우지 않는다.
+  const residualUnit = isUSD ? 0.01 : 1;
+  const residualShown = Math.abs(residual) >= residualUnit;
+  // 자동 배분은 목표를 넘지 않지만, 행 수량·단가를 수동 편집하면 넘을 수 있다 → 그때는 '초과'로 경고한다.
+  const residualOver = residual < 0;
+  const residualBig = targetAmount > 0 && residual > targetAmount * 0.01;
+  // 사다리가 주는 이득 = 같은 금액에 대한 수량 차이.
+  //   매도(−): 호가를 올려 파니 더 적은 수량으로 목표금액을 채운다 → 그만큼 보유를 아낀다.
+  //   매수(+): 호가를 내려 사니 같은 금액으로 더 많은 수량을 담는다.
+  const qtyDiff = totalQty - baseQty;
+  const qtyDiffValue = Math.abs(qtyDiff) * cleanNum(currentPrice);
+  // 이득이 음(매수인데 수량이 오히려 적음)이면 사다리가 목표금액을 못 담은 것이다(잔여 큼).
+  const diffGood = isSell ? qtyDiff <= 0 : qtyDiff >= 0;
+  // 매도는 '덜 파는 것'이, 매수는 '더 사는 것'이 이득이라 라벨이 방향마다 다르다.
+  const qtyDiffLabel = isSell
+    ? (qtyDiff < 0 ? `${formatNumber(-qtyDiff)}주 절약` : `${formatNumber(qtyDiff)}주 초과`)
+    : (qtyDiff > 0 ? `${formatNumber(qtyDiff)}주 추가` : `${formatNumber(-qtyDiff)}주 부족`);
   const qtyGap = roundTo(targetQty - totalQty, 6);
 
   // ⚠️ 호가 간격은 가격 격자(원화 1원 / 달러 0.01)의 배수여야 한다 — 소수점 호가는 없다.
@@ -257,7 +318,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
         </span>
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={() => doRegenerate(currentPrice, tickSize, rebalFund, mult)}
+            onClick={() => doRegenerate(currentPrice, tickSize, targetAmount, mult)}
             className="text-gray-500 hover:text-amber-300 transition-colors"
             title="초기화"
           >
@@ -285,9 +346,11 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
           <span className="text-gray-500 whitespace-nowrap">{sideLabel} 수량</span>
           <span className={`font-bold text-right ${isSell ? 'text-red-400' : 'text-green-400'}`}>
             {formatNumber(totalQty)}주
-            {isSell && qtyGap !== 0 && (
-              <span className="block text-[9px] text-amber-400 font-normal leading-tight">목표 {formatNumber(targetQty)}주</span>
-            )}
+            {qtyGap !== 0 ? (
+              <span className="block text-[9px] text-amber-400 font-normal leading-tight">배분 {formatNumber(targetQty)}주</span>
+            ) : baseQty > 0 && qtyDiff !== 0 ? (
+              <span className="block text-[9px] text-gray-500 font-normal leading-tight">기준 {formatNumber(baseQty)}주 · {qtyDiff > 0 ? '+' : ''}{formatNumber(qtyDiff)}</span>
+            ) : null}
           </span>
 
           <span className="text-gray-500 whitespace-nowrap">배수</span>
@@ -305,13 +368,20 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
 
           <span className="text-gray-500 whitespace-nowrap">현재가격</span>
           <span className="text-gray-300 font-bold">{fmtCurPrice(currentPrice)}{wonLine(currentPrice)}</span>
-          <span className="text-gray-500 whitespace-nowrap">{isSell ? '현재가 기준' : '리밸런싱 자금'}</span>
-          <span className="text-sky-300 font-bold text-right">{fmt(rebalFund)}{wonLine(rebalFund)}</span>
+          <span className="text-gray-500 whitespace-nowrap" title={`리밸런싱이 정한 ${isSell ? '부족분' : '증가분'} 금액 = 기준 수량 × 현재가. 사다리는 이 금액을 넘지 않는 최대 수량을 배분합니다.`}>목표 금액</span>
+          <span className="text-sky-300 font-bold text-right">{fmt(targetAmount)}{wonLine(targetAmount)}</span>
 
           <span className="text-gray-500 whitespace-nowrap">평균단가</span>
           <span className="text-yellow-400 font-bold">{avgPrice > 0 ? fmt(avgPrice) : '—'}{avgPrice > 0 && wonLine(avgPrice)}</span>
           <span className="text-gray-500 whitespace-nowrap">{sideLabel} 금액</span>
-          <span className="text-yellow-400 font-bold text-right">{totalCost > 0 ? fmt(totalCost) : '—'}{totalCost > 0 && wonLine(totalCost)}</span>
+          <span className="text-yellow-400 font-bold text-right">
+            {totalCost > 0 ? fmt(totalCost) : '—'}{totalCost > 0 && wonLine(totalCost)}
+            {totalCost > 0 && residualShown && (
+              <span className={`block text-[9px] font-normal leading-tight ${residualOver ? 'text-red-400' : residualBig ? 'text-amber-400' : 'text-gray-500'}`}>
+                {residualOver ? `초과 ${fmt(-residual)}` : `잔여 ${fmt(residual)}`}
+              </span>
+            )}
+          </span>
         </div>
       </div>
 
@@ -387,20 +457,21 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
 
       {/* Footer */}
       <div className="px-3 py-2 border-t border-gray-700/60 flex items-center justify-between text-[10px] rounded-b-xl">
-        {isSell ? (
-          <>
-            <span className="text-gray-500" title="사다리 매도금액 − (매도 수량 × 현재가)">현재가 대비</span>
-            <span className={`font-bold ${uplift >= 0 ? 'text-sky-400' : 'text-red-400'}`}>
-              {uplift > 0 ? '+' : ''}{fmt(uplift)}
-            </span>
-          </>
+        <span
+          className="text-gray-500"
+          title={`같은 목표 금액을 현재가로 한 번에 ${sideLabel}하면 ${formatNumber(baseQty)}주입니다. 사다리는 ${isSell ? '더 비싸게 팔아 더 적은' : '더 싸게 사서 더 많은'} 수량으로 같은 금액을 채웁니다.`}
+        >
+          현재가 대비
+        </span>
+        {baseQty > 0 && totalQty > 0 ? (
+          <span className={`font-bold ${qtyDiff === 0 ? 'text-gray-400' : diffGood ? 'text-sky-400' : 'text-red-400'}`}>
+            {formatNumber(baseQty)}주 → {formatNumber(totalQty)}주
+            {qtyDiff !== 0 && (
+              <span className="ml-1">{`(${qtyDiffLabel} · ${fmt(qtyDiffValue)})`}</span>
+            )}
+          </span>
         ) : (
-          <>
-            <span className="text-gray-500">남은 자금</span>
-            <span className={`font-bold ${remaining >= 0 ? 'text-sky-400' : 'text-red-400'}`}>
-              {fmt(remaining)}
-            </span>
-          </>
+          <span className="font-bold text-gray-500">—</span>
         )}
       </div>
     </div>

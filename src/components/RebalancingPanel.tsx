@@ -1381,8 +1381,9 @@ export default function RebalancingPanel({
                                 itemName: item.name,
                                 currentPrice: itemPrice,
                                 totalAction,
-                                // 매수=투입 자금 / 매도=현재가 기준 매도금액. 매수는 totalAction>0이라 종전과 동일.
-                                rebalFund: Math.abs(totalAction) * itemPrice,
+                                // ⚠️ 사다리의 앵커는 수량이 아니라 이 금액이다 — 그 종목의 증가분(매수)·
+                                // 부족분(매도). action이 이미 금액 ÷ 현재가의 버림이므로 되돌리면 원래 금액이다.
+                                targetAmount: Math.abs(totalAction) * itemPrice,
                                 currency: isOverseas ? 'USD' : 'KRW',
                                 fxRate: isOverseas ? usdkrw : 1,
                                 pos: { x, y },
@@ -2127,7 +2128,7 @@ export default function RebalancingPanel({
             itemName={ladderModal.itemName}
             currentPrice={ladderModal.currentPrice}
             totalAction={ladderModal.totalAction}
-            rebalFund={ladderModal.rebalFund}
+            targetAmount={ladderModal.targetAmount}
             currency={ladderModal.currency}
             fxRate={ladderModal.fxRate}
             pos={ladderModal.pos}
