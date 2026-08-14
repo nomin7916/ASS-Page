@@ -4,6 +4,9 @@ import { Plus, Download, Trash2, Calendar, Maximize2, X, Check, HelpCircle } fro
 import { generateId, formatCurrency, formatNumber, formatVeryShortDate, cleanNum, handleTableKeyDown, handleReadonlyCellNav } from '../utils';
 import { sortArrow } from '../chartUtils';
 
+// 헤더 환율 배지(평균·현재) 표기 — 입력 환율이 소수 2자리라 반올림하면 그 값이 사라진다
+const formatFxRate = (n) => cleanNum(n).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 export default function DepositPanel({
   depositHistory,
   setDepositHistory,
@@ -150,8 +153,8 @@ export default function DepositPanel({
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 입금 내역</span>
               <div className="flex items-center gap-2">
-                {isOverseas && depositAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(depositAvgFx).toLocaleString()}</span>}
-                {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+                {isOverseas && depositAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px] whitespace-nowrap">평균 ₩{formatFxRate(depositAvgFx)}</span>}
+                {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px] whitespace-nowrap">현재 ₩{formatFxRate(marketIndicators.usdkrw)}</span>}
                 <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={12} /></button>
                 <button onClick={handleDepositDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="입금 내역 CSV 다운로드"><Download size={12} /></button>
               </div>
@@ -219,8 +222,8 @@ export default function DepositPanel({
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 출금 내역</span>
               <div className="flex items-center gap-2">
-                {isOverseas && withdrawAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px]">평균 ₩{Math.round(withdrawAvgFx).toLocaleString()}</span>}
-                {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px]">현재 ₩{Math.round(marketIndicators.usdkrw).toLocaleString()}</span>}
+                {isOverseas && withdrawAvgFx > 0 && <span className="text-emerald-400 font-bold text-[11px] whitespace-nowrap">평균 ₩{formatFxRate(withdrawAvgFx)}</span>}
+                {isOverseas && marketIndicators.usdkrw > 0 && <span className="text-sky-400 font-bold text-[11px] whitespace-nowrap">현재 ₩{formatFxRate(marketIndicators.usdkrw)}</span>}
                 <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={12} /></button>
                 <button onClick={handleWithdrawDownloadCSV} className="text-gray-400 hover:text-white transition-colors" title="출금 내역 CSV 다운로드"><Download size={12} /></button>
               </div>
