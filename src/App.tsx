@@ -2073,7 +2073,10 @@ export default function App() {
   //    얹지는 말 것(그쪽은 패드가 닫혀 있어도 시세 틱마다 전 계좌 행을 무조건 복제한다).
   useEffect(() => {
     const d = calWinDetailDateRef.current;
-    if (!d) return;
+    // ⚠️ 생존 확인을 **계산 앞**에 둔다 — postToCalWin 안의 closed 검사만 믿으면, 사용자가 새 창을
+    //    브라우저 X로 닫아도(구독 해제 메시지가 못 온다) 전 계좌 시계열 스캔이 세션 내내 계속 돈다.
+    const w = calWinRef.current;
+    if (!d || !w || w.closed) return;
     let detail = null;
     try { detail = buildHistDetail(d); } catch { detail = null; }
     postToCalWin({ type: 'calendar:detail', date: d, ...(detail || EMPTY_HIST_DETAIL) });

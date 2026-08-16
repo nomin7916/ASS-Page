@@ -1570,7 +1570,9 @@ export default function IntegratedDashboard({
                       <td className={`py-2 px-2 text-right font-bold border-r border-gray-700 ${histDetailRows.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                         {hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalProfit)}
                       </td>
-                      <td className={`py-2 px-2 text-right font-bold ${(histDetailRows.totalReturnRate ?? 0) >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                      {/* ⚠️ 색도 값과 **같은 null 계약**을 따른다 — `?? 0`으로 뭉뚱그리면 산출 불가('-')가
+                          이익(빨강)으로 색칠된다(원금이 전부 0으로 클램프되는 초기 날짜에서 실제로 발생). */}
+                      <td className={`py-2 px-2 text-right font-bold ${histDetailRows.totalReturnRate == null ? 'text-gray-400' : (histDetailRows.totalReturnRate >= 0 ? 'text-red-400' : 'text-blue-400')}`}>
                         {histDetailRows.totalReturnRate == null ? '-' : formatPercent(histDetailRows.totalReturnRate)}
                       </td>
                     </tr>

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, ExternalLink } from 'lucide-react';
 import { BG } from '../design';
-import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows } from '../utils';
+import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, EMPTY_HIST_DETAIL } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
@@ -54,15 +54,17 @@ const fmtAbbrev = (n) => {
   return `${sign}₩${nfmt(a)}`;
 };
 const fmtPct = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
-// ⚠️ fmtPct는 null-safe가 **아니다** — `null >= 0`이 true라 그대로 `null.toFixed(2)`에서 던진다
-//    (utils.formatPercent는 cleanNum을 거쳐 안전하다 — 두 파일의 포매터가 다르다).
-//    buildHistDetailRows의 `weight`·`totalReturnRate`는 null 계약이므로 계좌별 현황 표의 모든 %
-//    출력은 반드시 이 헬퍼를 지난다. ⚠️ fmtPct 자체를 널 안전으로 바꾸지 말 것 — 기존 호출부
-//    4곳(칸 dodChange·누적, 밴드 2곳)의 인자는 전부 number라 이득이 없고 '-'가 예상치 못한
-//    자리에 새는 실패 모드만 늘어난다.
-const pctCell = (v) => (v == null || !Number.isFinite(v) ? '-' : fmtPct(v));
-// 금액 가리기(전역 표시 설정)를 존중하는 원화 표기 — 계좌별 현황 표·칸 스냅샷·패드 밴드가 공유.
-const maskMoney = (n, hidden) => (hidden ? '••••••' : `₩${nfmt(Number(n) || 0)}`);
+// 계좌별 현황 표 전용 포매터 — 통합 대시보드 팝업과 **문자 단위로 같은 표기**를 낸다
+// (utils.formatCurrency/formatPercent 공유). '같은 표'라고 고지한 두 화면이 손실 계좌에서
+// `-₩1,234,567` vs `₩-1,234,567`, 수익률에서 `12.34%` vs `+12.34%`로 갈리면 안 된다.
+// ⚠️ 같은 파일의 `fmtPct`(칸·밴드용, `+` 부호 표기)를 이 표에 쓰지 말 것 — 표기가 갈릴 뿐 아니라
+//    **null-safe가 아니다**(`null >= 0`이 true라 `null.toFixed(2)`에서 던진다).
+// ⚠️ 반대로 `formatPercent`는 `cleanNum`을 거쳐 null을 `0.00%`로 만든다 — `buildHistDetailRows`의
+//    `weight`·`totalReturnRate`는 **산출 불가 시 null** 계약이므로 그 가드를 여기서 지킨다
+//    (`0.00%`로 단언하면 '변동 없음'과 구분되지 않는다 — dodAbsChange 규약과 동일).
+const pctCell = (v) => (v == null || !Number.isFinite(v) ? '-' : formatPercent(v));
+// 금액 가리기(전역 표시 설정)를 존중하는 원화 표기.
+const maskMoney = (n, hidden) => (hidden ? '••••••' : formatCurrency(n));
 // 목표비중 기록용 — 수량은 소수(펀드 좌수) 가능, 금액은 계좌 통화(overseas=USD) 따라 표기.
 // ⚠️ 원화 환산 금지(환율 시점이 섞여 가짜 손익이 생긴다 — CLAUDE.md 해외계좌 규약).
 // ⚠️ 수량은 리밸런싱 표와 **같은 포매터**를 써야 한다 — 자체 포매터를 두면 펀드 좌수처럼 소수
@@ -389,9 +391,17 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   //    CalendarModal은 App 최상위 형제라 항상 마운트돼 있어, 게이트가 없으면 달력을 닫은 뒤에도
   //    시세 갱신마다 전 계좌 시계열을 영구히 재계산한다(notesByDate·qtyChangesByDate·
   //    transfersByDate가 전부 `if (!open) return`인 것과 같은 규약).
+  // ⚠️ try/catch — App 쪽 두 호출부(브릿지 응답·구독 푸시)와 방어 수준을 맞춘다. 손상된 Drive 값
+  //    (예: h.date가 문자열이 아닌 기록)이면 정렬 비교에서 던지는데, 여기서 새면 예외가
+  //    <ErrorBoundary label="메모 달력">까지 올라가 **달력이 통째로 오류 박스로 래치**된다
+  //    (닫았다 열어도 복구되지 않는다). 빈 결과로 떨어뜨려 '해당 날짜 데이터 없음'으로 안내한다.
   const padDetail = useMemo(() => {
     if (!open || !pad || pad.kind !== 'detail') return null;
-    if (buildHistDetail) return { status: 'ready', date: pad.dayKey, ...buildHistDetail(pad.dayKey) };
+    if (buildHistDetail) {
+      let r = null;
+      try { r = buildHistDetail(pad.dayKey); } catch { r = null; }
+      return { status: 'ready', date: pad.dayKey, ...(r || EMPTY_HIST_DETAIL) };
+    }
     if (accountDetail && accountDetail.date === pad.dayKey) return accountDetail;
     return { status: onRequestAccountDetail ? 'loading' : 'offline', date: pad.dayKey, rows: [] };
   }, [open, pad, buildHistDetail, accountDetail, onRequestAccountDetail]);

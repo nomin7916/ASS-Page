@@ -267,6 +267,21 @@ console.log('\n── 파트① 참조 구현 미러 ──');
   const r18 = buildHistDetailRows({ ...mkBase(), date: '2026-04-10' });
   ok('#18 realtime 날짜는 summary.currentEval 합 = liveTotalEval',
     near(r18.totalEval, 9999 + 800));
+
+  // #19 활성 계좌는 p.history가 아니라 activeHistory를 읽는다.
+  // ⚠️ mkBase()를 고쳐서 이 케이스를 만들지 말 것 — #1~#18이 그 픽스처의 값(1200/500/700)을
+  //    하드코딩하고 있어 소계 기대치가 통째로 어긋난다. 반드시 덮어쓰기로 만든다.
+  // (현재 usePortfolioState가 현금성 계좌의 활성화를 막아 실행상 도달 불가하지만, 그 게이트가
+  //  완화되는 순간 팝업 소계만 stale한 p.history를 읽는지 여부를 게이트가 판정해야 한다.)
+  const f19 = { ...mkBase(), activePortfolioId: 'C', activeHistory: [{ date: '2026-04-02', evalAmount: 900 }] };
+  const r19 = buildHistDetailRows({ ...f19, date: '2026-04-02' });
+  ok('#19 활성 계좌는 activeHistory 우선 (p.history의 500이 아니라 900)',
+    near(r19.rows.find(x => x.id === 'C').evalAmount, 900));
+
+  // #19b activeHistory가 없으면 p.history 폴백 (원본 useMemo와 동일 동작)
+  const r19b = buildHistDetailRows({ ...mkBase(), activePortfolioId: 'C', date: '2026-04-02' });
+  ok('#19b activeHistory 미제공이면 p.history 폴백',
+    near(r19b.rows.find(x => x.id === 'C').evalAmount, 500));
 }
 
 console.log('\n── 파트② 교차검증 (달력 칸 총자산 = 팝업 소계) ──');
@@ -384,6 +399,7 @@ console.log('\n── 파트②-b 미러 드리프트 가드 (실제 모듈 vs �
       realtimeDate: '', liveTotalEval: 0,
     });
     push('empty', { date: '', portfolios: [] });
+    push('active-cash', { ...mkBase(), activePortfolioId: 'C', activeHistory: [{ date: '2026-04-02', evalAmount: 900 }], date: '2026-04-02' });
 
     const drift = cases.filter(({ opts }) =>
       JSON.stringify(buildHistDetailRows(opts)) !== JSON.stringify(real.buildHistDetailRows(opts)));
@@ -418,6 +434,12 @@ console.log('\n── 파트③ 소스 텍스트 가드 ──');
     && /histDetailRows\.totalProfit/.test(idPopup)
     && /histDetailRows\.totalReturnRate == null \? '-' :/.test(idPopup)
     && !/r\.evalAmount \/ histDetailRows\.totalEval/.test(idPopup));
+
+  // ⚠️ '값'만 단언하면 색 판정이 `?? 0`으로 되돌아가도 통과한다(변이 N5로 실증한 죽은 단언) —
+  //    그때 산출 불가('-')가 이익(빨강)으로 색칠되고 같은 날짜의 ASSET 패드(회색)와도 갈린다.
+  ok('#G2b tfoot 수익률은 **색도** null 계약을 따른다 (`?? 0` 뭉뚱그리기 차단)',
+    /totalReturnRate == null \? 'text-gray-400'/.test(idPopup)
+    && !/\(histDetailRows\.totalReturnRate \?\? 0\)/.test(idPopup));
 
   // ── App: 단일 소스 · 렌더 중 ref 대입 · 입양 게이트 순서 ──
   ok('#G3 App이 utils 함수를 import하고 histDetailFnRef를 렌더 중 대입한다',
@@ -455,6 +477,19 @@ console.log('\n── 파트③ 소스 텍스트 가드 ──');
   const winReconnect = win.slice(win.indexOf('const was = prevLinkedRef.current'), win.indexOf('}, [linked, requestDetail]);'));
   ok('#G10 재연결 시 무조건 재구독한다 (ready면 건너뛰기 금지)',
     winReconnect.length > 40 && !/status !== 'ready'/.test(winReconnect) && /requestDetail\(detailDateRef\.current\)/.test(winReconnect));
+
+  const reqFn = stripComments(win.slice(win.indexOf('const requestDetail = useCallback'), win.indexOf('}, [post]);', win.indexOf('const requestDetail = useCallback'))));
+  ok('#G18 requestDetail(null)이 해제 메시지를 먼저 보낸다 (조기 반환 복귀 차단)',
+    reqFn.length > 100 && /if \(!date\) \{[^}]*calendar:wantDetail[^}]*date: null/.test(reqFn));
+
+  ok('#G18b 앱 재입양(calendar:accounts)도 재구독 트리거다 (13초 미만 새로고침에서 표가 어는 것 차단)',
+    /setAccountsSeq\(\(s\) => s \+ 1\)/.test(win)
+    && /if \(accountsSeq > 0 && detailDateRef\.current\) requestDetail\(detailDateRef\.current\)/.test(win)
+    && /\}, \[accountsSeq, requestDetail\]\)/.test(win));
+
+  const pushEff = stripComments(app.slice(app.indexOf('const d = calWinDetailDateRef.current;'), app.indexOf('}, [buildHistDetail, calWinNonce]);')));
+  ok('#G18c 구독 푸시는 창 생존 확인을 **계산 앞**에서 한다 (닫힌 창을 위한 영구 재계산 차단)',
+    pushEff.length > 80 && pushEff.indexOf('w.closed') < pushEff.indexOf('buildHistDetail(d)'));
 
   ok('#G10b 새 창은 <CalendarModal>을 label 있는 ErrorBoundary로 감싸고 구독 prop을 전달한다',
     /<ErrorBoundary label="메모 달력">/.test(win)

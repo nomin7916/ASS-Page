@@ -64,6 +64,8 @@ export default function CalendarWindow() {
   const detailDateRef = useRef(null);   // 구독 중인 날짜 — 늦게 온 옛 응답의 폐기 기준
   const detailTimerRef = useRef(null);
   const prevLinkedRef = useRef(true);
+  // calendar:accounts 수신 횟수 — 재입양·계좌 지문 변경 시점을 재구독 트리거로 쓴다(아래 effect).
+  const [accountsSeq, setAccountsSeq] = useState(0);
 
   // 앱 탭으로 보내기. opener가 사라졌으면 조용히 무시(호출부는 이미 readOnly로 막혀 있다).
   const post = useCallback((msg) => {
@@ -100,6 +102,7 @@ export default function CalendarWindow() {
           activePortfolioId: d.activePortfolioId ?? null,
           holidays: d.holidays || prev.holidays,
         }));
+        setAccountsSeq((s) => s + 1);   // 재입양·지문 변경 → 열려 있는 계좌별 현황 재구독(아래 effect)
         markGotData();
       } else if (d.type === 'calendar:live') {
         setData((prev) => ({
@@ -172,7 +175,11 @@ export default function CalendarWindow() {
   const requestDetail = useCallback((date) => {
     detailDateRef.current = date || null;
     if (detailTimerRef.current) { clearTimeout(detailTimerRef.current); detailTimerRef.current = null; }
-    if (!date) { setDetail(null); return; }
+    // ⚠️ 해제(date=null)도 **반드시 앱에 알린다** — post를 건너뛰고 조기 반환하면 앱의
+    //    calWinDetailDateRef가 마지막 날짜를 든 채 남아, 패드를 닫아도(창을 닫아도) 앱이 시세
+    //    갱신마다 전 계좌 시계열을 재계산하고 아무도 읽지 않는 행을 계속 보낸다. App의 null 처리
+    //    분기가 죽은 코드가 되지 않게 하는 유일한 발신 지점이다.
+    if (!date) { post({ type: 'calendar:wantDetail', date: null }); setDetail(null); return; }
     if (!post({ type: 'calendar:wantDetail', date })) { setDetail({ date, status: 'offline', rows: [] }); return; }
     setDetail({ date, status: 'loading', rows: [] });
     detailTimerRef.current = setTimeout(() => {
@@ -188,6 +195,18 @@ export default function CalendarWindow() {
     prevLinkedRef.current = linked;
     if (!was && linked && detailDateRef.current) requestDetail(detailDateRef.current);
   }, [linked, requestDetail]);
+
+  // ⚠️ 위 `linked` 엣지만으로는 **앱 탭 새로고침을 잡지 못한다** — 리로드 중에도 opener는 살아
+  //    있어 post가 성공하고, 리로드가 LINK_TIMEOUT_MS(13초) 안에 끝나면 linked가 한 번도 false로
+  //    떨어지지 않는다. 그런데 앱의 구독 ref는 리로드로 비어 있어, 밴드(calendar:live)만 갱신되고
+  //    표는 옛 값에 영구히 얼어붙는다. `calendar:accounts`는 **재입양 시점**(nonce 증가)과 계좌
+  //    지문 변경 시에만 오므로 — 둘 다 표가 낡을 수 있는 순간이다 — 그 수신을 재구독 트리거로 쓴다.
+  // ⚠️ 메시지 핸들러 안에서 requestDetail을 직접 부르지 말 것(그 effect는 deps []라 선언보다 위에
+  //    있다). 카운터를 올려 이 effect로 넘긴다. 앱의 nonce 값을 비교하지 않는 이유: 앱이 새로고침
+  //    되면 그 카운터도 0부터 다시 시작해 같은 값이 재사용되므로 '변했는지'로는 판별할 수 없다.
+  useEffect(() => {
+    if (accountsSeq > 0 && detailDateRef.current) requestDetail(detailDateRef.current);
+  }, [accountsSeq, requestDetail]);
 
   useEffect(() => () => { if (detailTimerRef.current) clearTimeout(detailTimerRef.current); }, []);
 
