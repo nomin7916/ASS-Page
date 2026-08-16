@@ -20,7 +20,8 @@
     "verify:overseas": "node scripts/verify-overseas-invest.mjs",
     "verify:flow": "node scripts/verify-flow.mjs",
     "verify:ladder": "node scripts/verify-ladder.mjs",
-    "verify:backtest": "node scripts/verify-backtest.mjs"
+    "verify:backtest": "node scripts/verify-backtest.mjs",
+    "verify:cal-detail": "node scripts/verify-calendar-detail.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

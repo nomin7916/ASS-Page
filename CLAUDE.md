@@ -1851,7 +1851,8 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 | — | (라벨 없음) sky | (kind 없음) | `calendarMemos[date]` | 기존 사용자 메모 — 칩이 아니라 아래 텍스트 줄 목록 |
 
 - **⚠️ 패드 헤더 라벨은 칩 라벨과 동일**(`CalendarModal` `pad.kind` 맵): `rebalTarget:'LIST'` ·
-  `note:'NOTE'` · `qty:'STOCK'` · `transfer:'MOVE'` · `pick:'PICK'` · 사용자 메모 `'MEMO'`. rebalTarget이
+  `note:'NOTE'` · `qty:'STOCK'` · `transfer:'MOVE'` · `pick:'PICK'` · **`detail:'ASSET'`**(칩이 아니라
+  칸의 자산 스냅샷에서 연다 — 아래 전용 섹션) · 사용자 메모 `'MEMO'`. rebalTarget이
   예전 `'TARGET'`을 쓰고 `pick`이 `'LIST'`를 점유하던 배치로 되돌리지 말 것 — 어느 칩에서 연 패드인지
   대응이 끊긴다. 이모지(📊📝🔄🔁)는 **패드 본문·pick 목록에만** 남기고 칸의 칩에서는 뺐다(텍스트 라벨과
   중복이고 폭을 ~14px 먹는다).
@@ -2019,6 +2020,100 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   평가액 0' 배선 #30~#33**). `utils.ts`의 `buildTransferLedgerRows`·`collectTransferRows` 본문과
   **항상 1:1 동기화**할 것. #30~#33은 미러가 아니라 정규식으로 배선을 단언하므로, 실패 시 **먼저
   정규식이 낡았는지 확인**하고 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+
+### 메모 달력 자산 스냅샷 클릭 → 날짜별 '계좌별 현황'(ASSET 패드) (⚠️ 회귀 주의)
+
+날짜 칸의 **자산 스냅샷 3줄 블록**(총자산 / 일간손익 / 누적%)을 누르면 그날의 계좌별 현황이 뜬다 —
+통합 대시보드 '평가액 추이'에서 날짜를 눌렀을 때와 **같은 표**(계좌·투자원금·평가금액·비중·예수금·
+수익·수익률 7열 + 소계). 사용자 요청 2026-08. 칩이 아니라 스냅샷 블록이 진입점이고, 나머지 칸 여백은
+종전대로 '클릭하여 메모 추가'다(⚠️ `stopPropagation` 필수 — 없으면 메모 패드가 즉시 덮는다).
+
+- **⚠️ 행 산출은 `utils.buildHistDetailRows` 단일 소스**. 원래 `IntegratedDashboard`의 `histDetailRows`
+  useMemo 본문이었고, 대시보드는 이제 그 함수를 **직접 import해** 호출한다(prop 아님 — prop으로 두면
+  전달을 빠뜨렸을 때 '배선 끊김'과 '그날 자산 없음'이 화면상 동일해지는 fail-open 표면이 생긴다).
+  ⚠️ 어느 화면에서도 다시 손계산하지 말 것 — 같은 날짜에 두 화면의 소계가 갈리면
+  "달력 칸 총자산 = 팝업 소계 = 추이 차트 그날 값" 불변식이 깨진 걸 아무도 알아채지 못한다.
+- **⚠️ 파생값(`weight`·`totalProfit`·`totalReturnRate`)도 그 함수가 낸다** — 두 렌더러가 '순수
+  포매팅'만 하게 되어 비중 분모·소계 산식을 한쪽만 바꾸는 사고가 구조적으로 불가능해진다.
+  누적 3개(`totalEval`/`totalPrincipal`/`totalDeposit`)는 반드시 `rows.push`와 **같은 분기 안**에서
+  올린다(사후 reduce로 바꾸면 제외된 계좌가 분모에 섞여 tfoot '100%'가 조용히 깨진다).
+- **⚠️ null 계약 — `weight`·`totalReturnRate`는 산출 불가 시 null**(0.00%로 단언 금지). 소비자 2곳이
+  **각자 다른 포매터**를 쓴다: `IntegratedDashboard`는 `formatPercent`(cleanNum 경유 = null-safe),
+  `CalendarModal`은 `fmtPct`(**null-safe 아님** — `null >= 0`이 true라 `null.toFixed`로 던진다).
+  → 달력 쪽 % 출력은 전부 **`pctCell`** 을 지난다. ⚠️ `fmtPct` 자체를 널 안전으로 바꾸지 말 것
+  (기존 호출부 4곳의 인자는 전부 number라 이득 없이 `'-'`가 새는 실패 모드만 늘어난다).
+  ⚠️ 도달 경로가 실재한다: `effPrincipal = Math.max(0, 원금 − 미래입금 + 미래출금)`이라 그 날짜
+  **이후** 입금이 원금 대부분인 초기 날짜는 전 계좌가 0으로 클램프돼 `totalPrincipal === 0`인데
+  `evalAmt > 0`이라 행은 남고 tfoot이 렌더된다(검증 #16이 이 픽스처를 고정한다).
+- **패드 인프라 재사용(kind `'detail'`)**: z=PAD_Z(1060, 달력 1050 위)·드래그·`padSeq` 실측 중앙배치·
+  `dismissPad`(✕/Esc)·`savePad` default-deny(`if (pad.kind) { setPad(null); return; }`)·저장 버튼 자동
+  숨김·page 모드를 **수정 0줄로** 상속한다. 폭만 `PAD_W_DETAIL(760)`로 파생 — 7열 통화 표가 576px에선
+  줄바꿈된다(배치·클램프는 `padRef.offsetWidth` 실측이라 무수정).
+- **⚠️ `padDetail` useMemo에 `open` 게이트 필수**(deps에도 `open`) — 달력을 닫아도 `pad`는 남고
+  (재오픈 리셋 effect는 `open===true`에서만 돈다) `CalendarModal`은 App 최상위 형제라 항상 마운트돼
+  있어, 게이트가 없으면 닫은 뒤에도 시세 갱신마다 전 계좌 시계열을 영구히 재계산한다
+  (`notesByDate`·`qtyChangesByDate`·`transfersByDate`와 동일 규약).
+- **⚠️ 신규 훅 3개(`padDetail` memo·구독 effect·재측정 effect)는 반드시 `// 패드는 전부 앵커` 주석
+  **아래** · `if (!open) return null` **위**에 둔다**. `verify:transfer #27b`가 `const transfersByDate`
+  ~ 그 주석 구간에 `setPad` 부재를 단언하는데, 그 정규식은 **`setPadSeq`도 매치**한다.
+- **⚠️ 자동 닫힘 effect에 `detail` 분기를 넣지 말 것** — 앵커가 날짜뿐이라 삭제될 원본이 없고, 행
+  0건은 정상 상태다. 넣으면 별도 창의 '불러오는 중' 프레임에서 곧바로 닫힌다.
+- **별도 브라우저 창 = 구독형 브릿지**(그 창은 App을 마운트하지 않고 잘린 원장만 받아 스스로 계산
+  불가): 창→앱 `calendar:wantDetail {date|null}` / 앱→창 `calendar:detail {date, rows, …}`.
+  - ⚠️ **`CalendarWindow`의 수신 화이트리스트에 `'calendar:detail'` 추가 필수** — 앱은 `'calendar:'`
+    접두사 검사인데 창은 **열거형**이라 비대칭이다. 빠뜨리면 앱이 완벽해도 응답이 조용히 폐기돼
+    '영원히 로딩'이 되고 컴파일러·`undefcheck` 어느 것도 못 잡는다(이 변경의 최대 지뢰).
+  - ⚠️ **`calendar:detail` 수신에서 `markGotData()`를 절대 부르지 말 것** — `writable = linked &&
+    gotData`라 accounts/live 도착 전에 쓰기가 열리면 그 시점 `memos`는 `{}`이고, 저장 한 번이 앱의
+    `setCalendarMemos({})`로 흘러 저장된 메모 **전량**을 지운다(`calendarMemos`는 백업 복원 sticky라
+    복구 불가). 다른 분기와 '통일'하려는 리팩토링이 정확히 이걸 되돌린다.
+  - ⚠️ **App 쪽 분기는 입양 게이트(`e.source !== calWinRef.current`) 뒤**에 둔다 — 입양되지 않은
+    창·iframe이 임의 날짜의 계좌별 자산을 뽑아가는 통로가 되면 안 된다(ping만 그 앞이 의도된 예외).
+  - ⚠️ **응답은 핸들러 안에서 즉시 전송**한다(지문 게이팅 effect로 만들면 같은 날짜 재클릭 시
+    지문이 같아 재발화하지 않아 응답이 영영 안 온다). 반대로 **`calendar:live` payload에는 얹지
+    말 것** — 그쪽 deps에 `marketIndicators`가 있어 패드가 닫혀 있어도 시세 틱마다 전 계좌 행이 복제된다.
+  - ⚠️ **1회성 스냅샷이 아니라 구독**이다: App은 `buildHistDetail` identity가 바뀔 때마다(=표가
+    달라질 수 있는 유일한 시점) 구독 중인 날짜를 **다시 밀어 준다**. 얼려 두면 같은 패드 상단의
+    지표 밴드(`metricsByDate`, `calendar:live`로 갱신)와 40px 거리에서 총자산이 두 값으로 보인다.
+    창은 **재연결 시 무조건 재구독**한다(⚠️ `status !== 'ready'` 조건을 넣지 말 것 — 앱 새로고침으로
+    구독 ref가 비면 이미 ready인 표만 옛 값으로 영영 남는다). 날짜가 곧 상관 키라 늦게 온 옛 응답은
+    `d.date !== detailDateRef.current`로 폐기된다(reqId 불필요).
+  - ⚠️ **응답 확정 시 `padSeq`를 한 번 더 올린다** — 배치 effect는 rAF 1회만 `offsetHeight`를 재는데
+    별도 창은 '불러오는 중'(≈120px) → 표(≈550px) **2단계 렌더**라 재측정이 없으면 패드 하단이 화면
+    밖으로 밀리고(fixed + maxHeight라 내부 스크롤도 안 생긴다) 소계를 볼 방법이 없다.
+  - 상태 4종을 구분해 표시한다: `loading`(불러오는 중) / `offline`(연결 끊김) / `timeout`(4초 무응답
+    + 다시 시도) / `ready`. ⚠️ '연결 끊김'을 '데이터 없음'으로 뭉뚱그리지 말 것.
+- **⚠️ `<CalendarModal>`을 App·CalendarWindow **양쪽 모두** `<ErrorBoundary label="메모 달력">`으로
+  감싼다** — 한쪽만 감싸면 격리 없는 쪽에서 전체 화면이 죽는다. 특히 별도 창은 `main.tsx`의 루트
+  경계가 **label 없음**이라 `isSection=false` → 창 전체가 오류 페이지로 대체된다(BacktestWindow 선례).
+- **표시 정합 2종(값을 통일하려 들지 말 것 — 라벨·배너로만 분리)**:
+  ① **시세 미로드 이상치 날**: `computedIntHistory`가 `intTotals.totalEval < 전일 × 10%`면 그날을
+  전일값으로 되돌리므로 칸·밴드 총자산은 **직전 거래일 값**인데 팝업 소계는 라이브 합이다 →
+  `rawMetric.flowSuspect`를 읽어 앰버 배너로 고지한다(숫자는 손대지 않는다).
+  ② **밴드 '수익율' vs tfoot '수익률'**: 밴드는 `effectivePrincipal`(startDate 게이트·오늘 원금 폴백
+  포함) 대비, tfoot은 **표에 포함된 계좌의 원금 합** 대비라 과거 날짜에서 부호까지 갈릴 수 있다 →
+  tfoot `title` + 각주로 근거를 명시한다. 두 산식은 각각 추이 차트 costAmount·100% 비중 분모와
+  짝이라 어느 한쪽을 바꾸면 그 화면이 통째로 어긋난다.
+- **`hideAmounts` 적용(범위 확장 — 의도)**: 새 팝업뿐 아니라 **칸 스냅샷 3줄·패드 밴드**에도 적용한다.
+  팝업만 마스킹하면 3cm 위 칸은 실금액이라 '금액 숨기기'가 반쪽이 되어 지금보다 나쁘다. 금액만
+  가리고 `%`는 노출한다(대시보드 팝업과 동일 범위). 되돌리려면 그 지점들의 `hideAmounts ?` 삼항만
+  제거하면 된다. `calendar:live` payload와 deps **양쪽에** `hideAmounts`를 넣을 것.
+- **영속화 지점 0곳** — `pad`는 컴포넌트 세션 로컬, 행은 매 렌더 파생값이다. `portfolioStructureKey`·
+  `applyStateData`·`applyBackupData`·저장 effect deps·`_preserveStickyPersonalData` **전 지점 무수정**.
+- **범위 밖(의도)**: ① 두 수익률 산식 통일 ② `buildHistDetailRows`에 startDate 게이트 추가(원금
+  산식이 바뀌어 100% 분모가 흔들린다) ③ `futureDeposits`의 `noPrincipal` 필터(과거 수익률 소급 변경)
+  ④ 이상치 날짜의 값 정합(배너로 고지만) ⑤ 상세 패드에서의 편집·삭제·확인창(z-1060 위에서는
+  `ConfirmDialog`·토스트가 가려진다) ⑥ 과거 날짜의 별도 창 실시간 갱신은 구독으로 자동 처리되나
+  인앱/별도 창 동시 사용은 기존 절충 그대로.
+- 검증: `npm run verify:cal-detail` (참조 구현 미러 #1~#18 + **교차검증 #X1~#X3**(달력 칸 총자산 =
+  팝업 소계 = 차트 그날 값) + **드리프트 가드 #D1~#D2**(실제 `src/utils.ts`를 import해 미러와 대조 —
+  utils.ts는 import가 없어 Node가 타입만 벗겨 실행할 수 있다) + 소스 텍스트 가드 #G0~#G17).
+  ⚠️ 가드는 전부 **선언이 아니라 사용부**를 단언하고, **변이 15종**(화이트리스트 삭제·`markGotData`
+  추가·입양 게이트 순서 뒤집기·`open` 게이트 제거·`pctCell`→`fmtPct`·즉석 계산 부활·prop 삭제·
+  `stopPropagation` 제거·null 계약 0으로 변경·`status !== 'ready'` 부활·마스킹 제거·열 삭제·센티넬
+  구간 침범)으로 **실제 검출을 확인**했다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+  ⚠️ '금지 토큰 부재' 가드는 **주석을 걷어낸 뒤**(줄 주석 + `{/* */}` 블록) 본다 — 이 저장소는 금지
+  이유를 바로 그 자리 주석에 적으므로 원문으로 재면 가드가 영구히 실패한다.
 
 ### 메모 달력 별도 브라우저 창 (`/?calendarWindow=1`) — postMessage 브릿지 (⚠️ 회귀 주의)
 
@@ -3781,7 +3876,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **게이트 = 결정적 검증 / 리뷰 = 보너스.** 둘의 역할을 절대 섞지 말 것.
 
 - **게이트**(통과 못 하면 커밋 금지): 변경 영역의 `npm run verify:*`(calendar·tax·dividend·history·
-  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest 14종 중 해당분) + `memory/tools/jsxcheck.mjs`
+  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail 15종 중 해당분) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의
   지역 변수를 참조)**. `npm run build`가 가능한 환경이면 추가로 돌린다.
   ⚠️ **세 도구는 서로를 대체하지 못한다** — `undefcheck`는 파일 전체를 한 스코프로 보므로

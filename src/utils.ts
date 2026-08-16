@@ -1737,3 +1737,105 @@ export const parseDividendApiResult = (result) => {
   });
   return { amounts, exDates };
 };
+
+// ── 날짜별 '계좌별 현황' 행 — 통합 대시보드 추이표 팝업과 메모 달력 팝업의 **단일 소스** ─────────
+// 원래 IntegratedDashboard의 histDetailRows useMemo 본문이었다. 메모 달력 날짜 칸의 자산 스냅샷을
+// 클릭해도 같은 표를 띄우게 되면서 순수 함수로 승격했다.
+// ⚠️ 두 화면이 **각자 계산하도록 되돌리지 말 것** — 같은 날짜에 다른 소계가 나오면
+//    "달력 칸의 총자산 = 팝업 소계 = 추이 차트 그날 값" 불변식이 깨진다.
+// 규칙(전부 종전 그대로 — 아래 4분기의 판정 순서를 바꾸지 말 것):
+//  ① isTest 계좌 제외(차트 값과 일치) / 삭제 계좌는 라이브 시점 및 `date >= deletedAt` 제외
+//  ② 오늘(realtimeDate + 라이브 자산>0)은 summary.currentEval — 통합 표 합계와 일치
+//  ③ 현금성(matong·simple)은 p.history 스냅샷 carry-forward(0 포함), 원금=예수금=평가(수익 0)
+//  ④ 시장 계좌는 accountSeriesById(= marketSeries, '수량 × 종가')를 carry-forward
+//     — 저장된 라이브 evalAmount가 아니다(buildCloseEvalSeries 단일 소스 규약).
+// ⚠️ 빈 결과도 **같은 형태**여야 소비자 가드가 균일해진다(rows/weight/totalReturnRate 접근이
+//    분기마다 갈리면 한쪽만 null 가드를 빠뜨린다).
+export const EMPTY_HIST_DETAIL = { rows: [], totalEval: 0, totalPrincipal: 0, totalDeposit: 0, totalProfit: 0, totalReturnRate: null };
+export const buildHistDetailRows = (opts) => {
+  const o = opts || {};
+  const date = o.date;
+  const portfolios = o.portfolios;
+  if (!date || !Array.isArray(portfolios)) return EMPTY_HIST_DETAIL;
+  const summaries = Array.isArray(o.portfolioSummaries) ? o.portfolioSummaries : [];
+  const seriesById = o.accountSeriesById || {};
+  const activePortfolioId = o.activePortfolioId ?? null;
+  const activeHistory = Array.isArray(o.activeHistory) ? o.activeHistory : null;
+  // realtimeDate = intMonthlyHistory[0].date(오늘 = 실시간 값을 쓰는 날짜).
+  // ⚠️ 라이브 자산이 0(예: 유일 계좌 삭제 → 빈 계좌 자동생성)이면 computedIntHistory가 today를
+  //    추가하지 않아 그 date가 '과거' 최신점이 된다 → 이때 realtime 취급하면 그 과거점에서 삭제
+  //    계좌를 잘못 제외해 차트와 어긋난다. 따라서 라이브 자산이 있을 때만 realtime(오늘)으로 판정.
+  const isRealtimeDate = !!o.realtimeDate && date === o.realtimeDate && (o.liveTotalEval || 0) > 0;
+
+  let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
+  const rows = [];
+  portfolios.forEach(p => {
+    if (!p) return;
+    if (p.isTest) return; // TEST 계좌는 추이 팝업 소계에서 제외(차트 값과 일치)
+    // 삭제 계좌: 삭제일 이후(및 라이브 시점)는 제외 — 삭제일 이전 과거 날짜만 표시(차트 값과 일치)
+    if (p.deletedAt && (isRealtimeDate || date >= p.deletedAt)) return;
+    const summary = summaries.find(s => s.id === p.id);
+    const isCash = p.accountType === 'matong' || p.accountType === 'simple';
+    let evalAmt = 0;
+    if (isRealtimeDate) {
+      // 오늘은 실시간 평가금 사용 → 테이블 합계와 일치
+      evalAmt = summary?.currentEval || 0;
+    } else if (isCash) {
+      // 현금성 계좌(마통·직접입력): 일별 자동 스냅샷(p.history)을 carry-forward로 복원해 그날의
+      // 잔액을 그대로 표시한다(현재값을 과거 날짜에 소급하지 않음). 추이 차트(computedIntHistory)와
+      // 동일 규칙(스냅샷 carry-forward, 0 포함) → 소계가 차트 그날 값과 일치.
+      const startDate = summary?.startDate || p.portfolioStartDate || p.startDate || '';
+      if (startDate && startDate > date) return;
+      const hist = (activeHistory && p.id === activePortfolioId) ? activeHistory : (p.history || []);
+      const sorted = [...hist].filter(h => h?.date && typeof h.evalAmount === 'number' && h.evalAmount >= 0).sort((a, b) => a.date.localeCompare(b.date));
+      const rec = sorted.filter(h => h.date <= date).pop();
+      evalAmt = rec ? rec.evalAmount : 0;
+    } else {
+      // 시장 계좌: 통합 추이 차트(computedIntHistory)와 '동일한' 시계열(marketSeries)을 재사용한다.
+      const series = seriesById[p.id];
+      if (!series || !series.dates || series.dates.length === 0) return;
+      let last = 0;
+      for (const d of series.dates) {
+        if (d <= date) last = series.map.get(d);
+        else break;
+      }
+      if (!(last > 0)) return;
+      evalAmt = last;
+    }
+    if (evalAmt <= 0) return;
+    totalEval += evalAmt;
+    const isOverseas = p.accountType === 'overseas';
+    const fxRate = isOverseas ? (p.avgExchangeRate || 1) : 1;
+    const currentPrincipalKRW = (p.principal || 0) * fxRate;
+    const deps = p.depositHistory || [];
+    const wds = p.depositHistory2 || [];
+    const futureDeposits = deps.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+    const futureWithdrawals = wds.filter(d => d.date > date).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
+    // 현금성 계좌는 투자원금=평가금액=예수금 불변 → 수익·수익률 항상 0. 그 외는 입출금 시점 보정식 유지.
+    const effPrincipal = isCash
+      ? evalAmt
+      : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
+    totalPrincipal += effPrincipal;
+    const depositAmt = isCash ? effPrincipal : (summary?.depositAmount || 0);
+    totalDeposit += depositAmt;
+    const name = (summary?.name || p.name || p.id) + (p.deletedAt ? ' (삭제됨)' : '');
+    const profit = evalAmt - effPrincipal;
+    const returnRate = effPrincipal > 0 ? (profit / effPrincipal) * 100 : 0;
+    rows.push({ id: p.id, name, evalAmount: evalAmt, principal: effPrincipal, profit, returnRate, depositAmount: depositAmt, rowColor: p.rowColor || '' });
+  });
+  // ⚠️ 비중·소계 수익·소계 수익률까지 **여기서** 낸다 — 두 렌더러(통합 대시보드 팝업 · 메모 달력
+  //    팝업)가 '순수 포매팅'만 하게 되어 분모를 한쪽만 바꾸는 사고가 구조적으로 불가능해진다.
+  // ⚠️ 누적 3개는 rows.push와 **같은 분기 안**에서만 올린다(사후 reduce로 바꾸면 제외된 계좌가
+  //    분모에 섞여 tfoot '100%'가 조용히 깨진다).
+  // ⚠️ null 계약: 산출 불가는 null이다(0.00%로 단언 금지 — dodAbsChange 규약과 동일).
+  //    소비자는 반드시 `== null ? '-' : …` 가드를 통과시킬 것 — CalendarModal의 fmtPct는
+  //    null-safe가 아니다(`null >= 0`이 true라 `null.toFixed`로 폭발한다. utils.formatPercent는
+  //    cleanNum을 거쳐 안전하다 — 두 파일의 포매터가 다르다는 사실이 이 계약의 근거다).
+  const totalProfit = totalEval - totalPrincipal;
+  return {
+    rows: rows.map(r => ({ ...r, weight: totalEval > 0 ? (r.evalAmount / totalEval) * 100 : null })),
+    totalEval, totalPrincipal, totalDeposit,
+    totalProfit,
+    totalReturnRate: totalPrincipal > 0 ? (totalProfit / totalPrincipal) * 100 : null,
+  };
+};

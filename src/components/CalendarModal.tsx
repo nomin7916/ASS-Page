@@ -20,6 +20,10 @@ const CAL_W = 1200;      // 달력 창 폭(px). 좁은 화면은 maxWidth로 클
 const CELL_H = 180;      // 날짜 칸 최소 높이(px)
 const CELL_MEMO_H = 74;  // 칸 안 사용자 메모 목록 최대 높이(px)
 const PAD_W = 576;   // 메모 패드 폭(px)
+// 계좌별 현황 패드만 넓게 — 7열(계좌·투자원금·평가금액·비중·예수금·수익·수익률) 표라 576px에서는
+// 원화 금액(₩612,856,076 = 12자)이 줄바꿈된다. 드래그 클램프(:164)·중앙 배치(:141)는
+// padRef.offsetWidth를 실측하므로 이 값만 바꿔도 자동으로 따라온다.
+const PAD_W_DETAIL = 760;
 // variant='page'(별도 브라우저 창) 전용 — 헤더+요일줄+패딩이 먹는 세로(px).
 // ⚠️ 페이지 모드 칸 높이는 CSS `fr`이 아니라 **JS로 뷰포트에서 역산**한다: 그리드가 높이 불확정
 //    컨테이너 안에 있으면 `minmax(X, 1fr)`의 fr이 늘어나지 않아(그리드 fr 트랩) 칸이 CELL_H에
@@ -50,6 +54,15 @@ const fmtAbbrev = (n) => {
   return `${sign}₩${nfmt(a)}`;
 };
 const fmtPct = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+// ⚠️ fmtPct는 null-safe가 **아니다** — `null >= 0`이 true라 그대로 `null.toFixed(2)`에서 던진다
+//    (utils.formatPercent는 cleanNum을 거쳐 안전하다 — 두 파일의 포매터가 다르다).
+//    buildHistDetailRows의 `weight`·`totalReturnRate`는 null 계약이므로 계좌별 현황 표의 모든 %
+//    출력은 반드시 이 헬퍼를 지난다. ⚠️ fmtPct 자체를 널 안전으로 바꾸지 말 것 — 기존 호출부
+//    4곳(칸 dodChange·누적, 밴드 2곳)의 인자는 전부 number라 이득이 없고 '-'가 예상치 못한
+//    자리에 새는 실패 모드만 늘어난다.
+const pctCell = (v) => (v == null || !Number.isFinite(v) ? '-' : fmtPct(v));
+// 금액 가리기(전역 표시 설정)를 존중하는 원화 표기 — 계좌별 현황 표·칸 스냅샷·패드 밴드가 공유.
+const maskMoney = (n, hidden) => (hidden ? '••••••' : `₩${nfmt(Number(n) || 0)}`);
 // 목표비중 기록용 — 수량은 소수(펀드 좌수) 가능, 금액은 계좌 통화(overseas=USD) 따라 표기.
 // ⚠️ 원화 환산 금지(환율 시점이 섞여 가짜 손익이 생긴다 — CLAUDE.md 해외계좌 규약).
 // ⚠️ 수량은 리밸런싱 표와 **같은 포매터**를 써야 한다 — 자체 포매터를 두면 펀드 좌수처럼 소수
@@ -67,6 +80,8 @@ const pnlColor = (v) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-blue-400' : 'tex
 //   📝 note        : 리밸런싱 패널 '투자 기록'(portfolios[].investmentNotes) — **라이브 파생**.
 //                    보기·편집·새 작성 모두 가능하고 패널 스트립과 즉시 동기화된다.
 //   🔄 qty         : 종목 수량 변경(portfolios[].holdingSnapshots 인접 diff) — **라이브 파생**.
+//   📊 assets      : 그 날짜의 계좌별 현황(통합 대시보드 추이표 팝업과 동일 표) — **라이브 파생**.
+//                    칩이 아니라 **날짜 칸의 자산 스냅샷 3줄 블록**을 눌러 연다. 읽기 전용.
 //   🔵 memo        : calendarMemos의 사용자 메모 { id, content, createdAt }.
 // ⚠️ 파생 2종(note·qty)을 calendarMemos에 **복사 금지** — 복사하면 리밸런싱 패널 메모장·자산검증
 //    스냅샷과 갈라져 두 화면이 다른 값을 보인다. 반드시 원본에서 매 렌더 재조회.
@@ -75,7 +90,14 @@ const pnlColor = (v) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-blue-400' : 'tex
 //   두 모드는 **같은 컴포넌트**를 쓴다 — 그리드·패드·파생 인덱스를 복제하면 두 화면이 갈라진다.
 //   page 모드는 바깥 chrome(드래그·중앙 배치·둥근 모서리)만 끄고 칸 높이를 뷰포트에서 역산한다.
 // readOnly: 앱 탭과의 브릿지가 끊긴 새 창(저장할 곳이 없음) — 입력 진입점을 전부 막는다.
-export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null, variant = 'floating', readOnly = false, headerNotice = null, onOpenWindow = null }) {
+// 계좌별 현황(ASSET 패드) 공급 2모드 — 인앱과 별도 창은 **다른 경로로 같은 utils 함수**를 쓴다.
+//   ① 인앱   : buildHistDetail(dayKey) 를 **동기 호출**(App이 utils.buildHistDetailRows를 바인딩).
+//              값 복사가 없어 패드의 '앵커 + 라이브 재조회' 계약이 그대로 지켜진다.
+//   ② 별도 창 : 그 창은 App을 마운트하지 않고 **잘린 원장만** 받으므로 스스로 계산할 수 없다 →
+//              onRequestAccountDetail(dayKey|null)로 앱 탭에 구독을 등록/해제하고, 앱이 보내 준
+//              accountDetail({date,status,rows,…})을 그대로 렌더한다.
+//   둘 다 없으면 클릭 진입점 자체를 만들지 않는다(hover 강조도 없음 → 죽은 클릭 방지).
+export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null, variant = 'floating', readOnly = false, headerNotice = null, onOpenWindow = null, buildHistDetail = null, accountDetail = null, onRequestAccountDetail = null, hideAmounts = false }) {
   const isPage = variant === 'page';
   const todayStr = getTodayKST();
   const tp = todayStr.split('-');
@@ -357,7 +379,39 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
       const g = (transfersByDate[pad.dayKey] || []).find((x) => x.portfolioId === pad.portfolioId);
       if (!g) setPad(null);
     }
+    // ⚠️ 'detail'(계좌별 현황) 분기는 **두지 않는다** — 앵커가 날짜뿐이라 삭제될 원본이 없고,
+    //    행 0건은 오류가 아니라 정상 상태다(그날 자산이 없던 날). 닫아 버리면 사용자는 왜 닫혔는지
+    //    알 수 없고, 별도 창의 '불러오는 중' 프레임에서도 곧바로 닫혀 버린다.
   }, [memos, pad, notesByDate, qtyChangesByDate, transfersByDate]);
+
+  // ── 📊 계좌별 현황(ASSET 패드) — 인앱은 동기 재조회, 별도 창은 앱이 보낸 구독 응답 ──────────
+  // ⚠️ `open` 게이트 필수 — 달력을 닫아도 pad는 남는다(재오픈 리셋 effect는 open===true에서만 돈다).
+  //    CalendarModal은 App 최상위 형제라 항상 마운트돼 있어, 게이트가 없으면 달력을 닫은 뒤에도
+  //    시세 갱신마다 전 계좌 시계열을 영구히 재계산한다(notesByDate·qtyChangesByDate·
+  //    transfersByDate가 전부 `if (!open) return`인 것과 같은 규약).
+  const padDetail = useMemo(() => {
+    if (!open || !pad || pad.kind !== 'detail') return null;
+    if (buildHistDetail) return { status: 'ready', date: pad.dayKey, ...buildHistDetail(pad.dayKey) };
+    if (accountDetail && accountDetail.date === pad.dayKey) return accountDetail;
+    return { status: onRequestAccountDetail ? 'loading' : 'offline', date: pad.dayKey, rows: [] };
+  }, [open, pad, buildHistDetail, accountDetail, onRequestAccountDetail]);
+
+  // 별도 창 전용 구독 등록/해제 — 열기·날짜 변경·닫기·자동 닫힘을 이 한 지점이 전부 커버한다.
+  // ⚠️ openDetail 안에서 요청하는 방식으로 되돌리지 말 것 — 닫힘 경로가 누락돼 패드가 없는데도
+  //    앱이 데이터 변경마다 계속 밀어 준다(구독이 영영 해제되지 않는다).
+  const detailKey = open && pad && pad.kind === 'detail' ? pad.dayKey : null;
+  useEffect(() => {
+    if (buildHistDetail || !onRequestAccountDetail) return;   // 인앱은 동기 계산이라 요청 불필요
+    onRequestAccountDetail(detailKey);
+  }, [detailKey, buildHistDetail, onRequestAccountDetail]);
+
+  // ⚠️ 배치 effect(padSeq)는 rAF 1회만 offsetHeight를 잰다. 별도 창은 '불러오는 중'(≈120px) →
+  //    표(≈550px) **2단계 렌더**라 재측정이 없으면 패드 하단이 화면 밖으로 밀리고(fixed + maxHeight라
+  //    내부 스크롤도 안 생긴다) 소계를 볼 방법이 없다. 인앱은 첫 렌더부터 ready라 실질 no-op.
+  useEffect(() => {
+    if (pad && pad.kind === 'detail' && padDetail && padDetail.status === 'ready') setPadSeq((s) => s + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pad && pad.kind, pad && pad.dayKey, padDetail && padDetail.status]);
 
   if (!open) return null;
 
@@ -401,6 +455,12 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   const openTransfer = (dayKey, g, backPick = null) => { setPad({ kind: 'transfer', dayKey, portfolioId: g.portfolioId, backPick }); setPadSeq((s) => s + 1); };
   // 같은 종류가 2건 이상이면 칩을 개수로 접고, 클릭 시 이 선택 목록을 먼저 띄운다.
   const openPick = (dayKey, pickKind) => { setPad(pickPad(dayKey, pickKind)); setPadSeq((s) => s + 1); };
+  // 📊 계좌별 현황 — 칩이 아니라 **날짜 칸의 자산 스냅샷 3줄 블록**에서 연다(backPick 없음 → ✕/Esc는
+  // 완전 닫기). 구독 등록은 위 effect가 맡으므로 여기서 요청하지 않는다.
+  const openDetail = (dayKey) => { setPad({ kind: 'detail', dayKey }); setPadSeq((s) => s + 1); };
+  const canOpenDetail = !!(buildHistDetail || onRequestAccountDetail);
+  // 계좌별 현황만 7열 표라 폭이 다르다. 나머지 패드는 종전 그대로.
+  const padWidth = pad && pad.kind === 'detail' ? PAD_W_DETAIL : PAD_W;
   const closePad = dismissPad;
 
   // 투자기록을 쓸 수 있는 계좌(삭제·현금성 제외) — 새 기록 작성 토글의 계좌 선택지
@@ -658,12 +718,21 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                     </span>
                     {dayMemos.length > 0 && <span className="text-[9px] text-gray-600 tabular-nums">{dayMemos.length}</span>}
                   </div>
+                  {/* 자산 스냅샷 3줄 = 그 날짜의 계좌별 현황 진입점(사용자 요청 2026-08).
+                      ⚠️ stopPropagation 필수 — 없으면 칸 루트의 openNew(메모 추가)가 함께 발화해
+                         팝업이 즉시 메모 패드로 덮인다(칩·메모 줄과 같은 패턴).
+                      ⚠️ readOnly로 게이팅하지 않는다 — 읽기 전용 패드는 읽기 전용에서도 열려야 한다.
+                         공급자(buildHistDetail/onRequestAccountDetail)가 없을 때만 진입점을 없앤다. */}
                   {rawMetric && (
-                    <div className="shrink-0 px-0.5 leading-none">
-                      <div className="text-[10px] font-semibold text-gray-200 tabular-nums truncate">{fmtAbbrev(rawMetric.evalAmount)}</div>
+                    <div
+                      onClick={canOpenDetail ? (e) => { e.stopPropagation(); openDetail(key); } : undefined}
+                      title={canOpenDetail ? '클릭하여 이 날짜의 계좌별 현황 보기' : undefined}
+                      className={`shrink-0 px-0.5 leading-none rounded ${canOpenDetail ? 'cursor-pointer hover:bg-sky-500/15 transition-colors' : ''}`}
+                    >
+                      <div className="text-[10px] font-semibold text-gray-200 tabular-nums truncate">{hideAmounts ? '••••••' : fmtAbbrev(rawMetric.evalAmount)}</div>
                       {rawMetric.dodAbsChange != null && (
                         <div className={`text-[9px] tabular-nums truncate mt-[1px] ${pnlColor(rawMetric.dodAbsChange)}`}>
-                          {fmtAbbrev(rawMetric.dodAbsChange)} {fmtPct(rawMetric.dodChange)}
+                          {hideAmounts ? '••••' : fmtAbbrev(rawMetric.dodAbsChange)} {fmtPct(rawMetric.dodChange)}
                         </div>
                       )}
                       <div className={`text-[9px] tabular-nums truncate mt-[1px] ${pnlColor(metricCum)}`}>
@@ -722,7 +791,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
         <div
           ref={padRef}
           className="fixed shadow-2xl overflow-hidden rounded-lg"
-          style={{ left: padPos.x, top: padPos.y, zIndex: PAD_Z, width: PAD_W, maxWidth: 'calc(100vw - 16px)' }}
+          style={{ left: padPos.x, top: padPos.y, zIndex: PAD_Z, width: padWidth, maxWidth: 'calc(100vw - 16px)' }}
         >
           {/* 헤더 (드래그 핸들) */}
           <div
@@ -765,7 +834,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               <span className="text-[15px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">
                 {/* 칸의 칩 라벨(LIST/NOTE/STOCK)과 동일한 이름 — 어느 칩에서 열린 패드인지 즉시 대응된다.
                     다건 선택 목록은 LIST를 목표비중에 넘겨주고 PICK으로 물러난다. */}
-                {({ rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE', pick: 'PICK' })[pad.kind] || 'MEMO'}
+                {({ rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE', pick: 'PICK', detail: 'ASSET' })[pad.kind] || 'MEMO'}
               </span>
             </div>
             <div className="w-10" />
@@ -781,9 +850,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
             return (
               <div className="bg-black px-3 py-1.5 border-b border-gray-900 text-center select-none leading-snug">
                 <span className="text-[11px] font-semibold tabular-nums text-gray-300">
-                  총자산: <span className="text-gray-100">{nfmt(raw.evalAmount)}</span>
+                  총자산: <span className="text-gray-100">{hideAmounts ? '••••••' : nfmt(raw.evalAmount)}</span>
                   {' / '}수익: {raw.dodAbsChange != null
-                    ? <span className={pnlColor(raw.dodAbsChange)}>{raw.dodAbsChange < 0 ? '-' : ''}₩{nfmt(Math.abs(raw.dodAbsChange))}({fmtPct(raw.dodChange)})</span>
+                    ? <span className={pnlColor(raw.dodAbsChange)}>{hideAmounts ? '••••' : `${raw.dodAbsChange < 0 ? '-' : ''}₩${nfmt(Math.abs(raw.dodAbsChange))}`}({fmtPct(raw.dodChange)})</span>
                     : <span className="text-gray-500">-</span>}
                   {' / '}수익율: <span className={pnlColor(cum)}>{fmtPct(cum)}</span>
                   {' / '}환율 :<span className="text-gray-100">{fx != null ? String(Math.round(fx)) : '-'}</span>
@@ -990,7 +1059,93 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                 직전 기록일 종가 기준입니다(국내 계좌는 21:00 이후 이관이 다음 날 칸에 기록됩니다).
               </div>
             </div>
-          ) : null) : pad.kind === 'pick' ? (
+          ) : null) : pad.kind === 'detail' ? (
+            /* 계좌별 현황 = 읽기 전용 표. 통합 대시보드 '평가액 추이' 팝업과 **같은 utils 함수**
+               (buildHistDetailRows)가 낸 값을 순수 포매팅만 한다 — 비중·소계를 여기서 다시 계산하지 말 것.
+               ⚠️ 이 분기 안에 confirm()·notify()·저장/삭제 동작을 넣지 말 것: z-1060 위에서는
+                  ConfirmDialog(1000)·토스트(999)가 가려져 피드백이 보이지 않는다. */
+            <div className="bg-black px-3 py-2 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-sky-300 text-[13px] font-bold truncate">📊 계좌별 현황</span>
+                <span className="text-[10px] text-gray-500 shrink-0">{pad.dayKey}</span>
+              </div>
+              {/* 시세 미로드 이상치 가드가 발동한 날은 칸·밴드의 총자산이 '직전 거래일 값'이고
+                  아래 소계는 라이브 합이라 구조적으로 다르다. 조용히 두 숫자를 나란히 보여주지 않는다. */}
+              {metricsByDate[pad.dayKey] && metricsByDate[pad.dayKey].flowSuspect && (
+                <div className="text-[10px] text-amber-300/80 mb-1.5 leading-relaxed">
+                  ⚠️ 시세를 다 불러오지 못해 위 총자산은 직전 거래일 값입니다 — 아래 소계는 현재 라이브 값이라 다를 수 있습니다.
+                </div>
+              )}
+              {!padDetail || padDetail.status === 'loading' ? (
+                <div className="py-6 text-center text-[11px] text-gray-500">앱 창에서 불러오는 중…</div>
+              ) : padDetail.status === 'offline' ? (
+                <div className="py-6 text-center text-[11px] text-gray-500">앱 창과 연결이 끊겨 계좌별 현황을 표시할 수 없습니다.</div>
+              ) : padDetail.status === 'timeout' ? (
+                <div className="py-6 text-center text-[11px] text-gray-500">
+                  앱 창이 응답하지 않습니다.
+                  {onRequestAccountDetail && (
+                    <button onClick={() => onRequestAccountDetail(pad.dayKey)} className="ml-2 px-2 py-0.5 rounded border border-gray-700 text-gray-300 hover:bg-gray-800 transition">
+                      다시 시도
+                    </button>
+                  )}
+                </div>
+              ) : !padDetail.rows || padDetail.rows.length === 0 ? (
+                <div className="py-6 text-center text-[11px] text-gray-500">해당 날짜 데이터 없음</div>
+              ) : (
+                <table className="w-full text-[11px] tabular-nums">
+                  <thead>
+                    <tr className="text-gray-500 border-b border-gray-800">
+                      <th className="text-left font-normal py-1 pr-1">계좌</th>
+                      <th className="text-right font-normal py-1 px-1">투자원금</th>
+                      <th className="text-right font-normal py-1 px-1">평가금액</th>
+                      <th className="text-center font-normal py-1 px-1">비중</th>
+                      <th className="text-right font-normal py-1 px-1">예수금</th>
+                      <th className="text-right font-normal py-1 px-1">수익</th>
+                      <th className="text-right font-normal py-1 pl-1">수익률</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {padDetail.rows.map((r) => (
+                      <tr key={r.id} className="border-b border-gray-900/80">
+                        <td className="text-left text-gray-200 py-1 pr-1">
+                          <span className="flex items-center gap-1.5">
+                            {r.rowColor && <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: r.rowColor }} />}
+                            <span className="truncate">{r.name}</span>
+                          </span>
+                        </td>
+                        <td className="text-right text-gray-400 py-1 px-1">{maskMoney(r.principal, hideAmounts)}</td>
+                        <td className="text-right text-gray-100 font-bold py-1 px-1">{maskMoney(r.evalAmount, hideAmounts)}</td>
+                        <td className="text-center text-gray-300 py-1 px-1">{r.weight == null ? '-' : `${r.weight.toFixed(2)}%`}</td>
+                        <td className="text-right text-gray-400 py-1 px-1">{maskMoney(r.depositAmount, hideAmounts)}</td>
+                        <td className={`text-right font-bold py-1 px-1 ${pnlColor(r.profit)}`}>{maskMoney(r.profit, hideAmounts)}</td>
+                        <td className={`text-right font-bold py-1 pl-1 ${pnlColor(r.returnRate)}`}>{pctCell(r.returnRate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-bold border-t border-gray-700">
+                      <td className="text-left text-gray-400 py-1.5 pr-1">소계</td>
+                      <td className="text-right text-gray-300 py-1.5 px-1">{maskMoney(padDetail.totalPrincipal, hideAmounts)}</td>
+                      <td className="text-right text-yellow-500 py-1.5 px-1">{maskMoney(padDetail.totalEval, hideAmounts)}</td>
+                      <td className="text-center text-gray-300 py-1.5 px-1">100%</td>
+                      <td className="text-right text-gray-400 py-1.5 px-1">{maskMoney(padDetail.totalDeposit, hideAmounts)}</td>
+                      <td className={`text-right py-1.5 px-1 ${pnlColor(padDetail.totalProfit)}`}>{maskMoney(padDetail.totalProfit, hideAmounts)}</td>
+                      {/* ⚠️ pctCell 경유 필수 — totalReturnRate는 null 계약이고 fmtPct는 null-safe가 아니다 */}
+                      <td className={`text-right py-1.5 pl-1 ${pnlColor(padDetail.totalReturnRate)}`} title="이 표에 포함된 계좌의 원금 합계 기준">
+                        {pctCell(padDetail.totalReturnRate)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+              <div className="text-[9px] text-gray-600 pt-2 leading-relaxed">
+                통합 대시보드 &apos;평가액 추이&apos;에서 날짜를 눌렀을 때와 같은 계산입니다. 시장 계좌는 그날의
+                &apos;수량 × 종가&apos;, 현금성 계좌는 그날의 잔액 스냅샷 기준이며, TEST 계좌는 제외되고 삭제된 계좌는
+                삭제일 이전 날짜에만 표시됩니다. 위 밴드의 &apos;수익율&apos;은 전체 누적 원금 대비이고 이 표의 소계
+                수익률은 표에 포함된 계좌의 원금 합계 기준이라 값이 다를 수 있습니다.
+              </div>
+            </div>
+          ) : pad.kind === 'pick' ? (
             /* 같은 종류 다건 — 계좌 선택 목록 */
             <div className="bg-black px-3 py-2 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
               <div className="text-[11px] text-gray-500 mb-2">

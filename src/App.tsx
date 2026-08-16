@@ -81,7 +81,8 @@ import {
   buildBookCostSeries, bookDeltaBetween,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
-  bookCostOf, calcPortfolioEvalDetail, collectTransferRows
+  bookCostOf, calcPortfolioEvalDetail, collectTransferRows,
+  buildHistDetailRows, EMPTY_HIST_DETAIL
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -1979,11 +1980,36 @@ export default function App() {
     return { ...(r || {}), ...(f || {}), ...(b || {}) };
   };
 
+  // 메모 달력 날짜 칸의 자산 스냅샷(총자산/일간/누적) 클릭 → 그날의 '계좌별 현황'.
+  // ⚠️ 통합 대시보드 추이표 팝업(IntegratedDashboard가 utils를 직접 import)과 **같은 함수**를 쓴다 —
+  //    달력 쪽에서 따로 계산하도록 되돌리면 같은 날짜에 두 화면의 소계가 갈린다.
+  // ⚠️ 값 복사가 아니라 **호출마다 재계산**한다(달력 패드의 '앵커 + 라이브 재조회' 계약과 동일) —
+  //    스냅샷을 들고 있으면 시세·계좌 변경 뒤에도 팝업만 옛 값을 보여준다.
+  const buildHistDetail = useCallback((date) => buildHistDetailRows({
+    date,
+    portfolios: allPortfoliosForDividend,
+    portfolioSummaries,
+    accountSeriesById: intAccountSeriesById,
+    realtimeDate: intMonthlyHistory.length > 0 ? intMonthlyHistory[0].date : '',
+    liveTotalEval: intTotals?.totalEval,
+    activePortfolioId,
+    activeHistory: history,
+  }), [allPortfoliosForDividend, portfolioSummaries, intAccountSeriesById, intMonthlyHistory, intTotals?.totalEval, activePortfolioId, history]);
+
   // ── 메모 달력 '별도 브라우저 창' 브릿지 (`/?calendarWindow=1`) ──────────────────────────────
   // 새 창은 로그인·Drive 없이 postMessage로만 동작하는 뷰어/에디터다. 저장은 전부 이 탭을 경유해
   // 기존 STATE 저장 경로로 흐른다 → **writer는 끝까지 이 탭 하나**.
   // ⚠️ 새 창에서 앱을 통째로 부팅하는 방식으로 바꾸지 말 것(상세 근거: CalendarWindow.tsx 상단).
   const calWinRef = useRef(null);
+  // 새 창에서 열려 있는 '계좌별 현황' 패드의 날짜(없으면 null = 구독 해제). 그 창은 App을
+  // 마운트하지 않고 잘린 원장만 받으므로 스스로 계산할 수 없다 → 이 탭이 계산해 밀어 준다.
+  const calWinDetailDateRef = useRef(null);
+  // ⚠️ **렌더 중 대입**(핸들러·effect에서만 읽는다) — message 핸들러 effect의 deps는
+  //    [updateInvestmentNotesFor] 하나라, buildHistDetail을 그대로 클로저로 잡으면 그 함수가
+  //    언젠가 useCallback으로 감싸이는 순간 핸들러가 마운트 시점 값에 얼어붙어 **영구히 낡은
+  //    행**을 응답한다(rebalCommitRef·flowFlushRef와 동일 패턴).
+  const histDetailFnRef = useRef(null);
+  histDetailFnRef.current = buildHistDetail;
   const [calWinNonce, setCalWinNonce] = useState(0);   // ready/재입양 시 전체 재전송 트리거
   const [calWinBlocked, setCalWinBlocked] = useState(false);
   const postToCalWin = (msg) => {
@@ -2032,9 +2058,27 @@ export default function App() {
       us10yHistory: indicatorHistoryMap?.us10y,
       liveFx: marketIndicators?.usdkrw,
       liveUs10y: marketIndicators?.us10y,
+      // ⚠️ payload와 deps **양쪽**에 넣을 것 — 한쪽만 하면 새 창이 토글 변경을 놓친다.
+      hideAmounts,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, calWinNonce]);
+  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, hideAmounts, calWinNonce]);
+
+  // 새 창의 '계좌별 현황' 패드가 열려 있는 동안 소스 데이터가 바뀌면 **다시 밀어 준다**(구독).
+  // ⚠️ 1회성 스냅샷으로 되돌리지 말 것 — 같은 패드 상단의 지표 밴드(metricsByDate)는 calendar:live로
+  //    시세 틱마다 갱신되므로, 표만 얼면 40px 거리에서 같은 날짜의 총자산이 두 값으로 보인다
+  //    (패드의 '앵커 + 라이브 재조회' 계약 위반 + 인앱 경로와 갈림).
+  // ⚠️ deps는 buildHistDetail 하나면 충분하다 — 그 useCallback의 deps가 곧 이 표의 입력 전부라
+  //    identity가 바뀌는 시점 = 표가 달라질 수 있는 시점이다. 반대로 calendar:live payload에
+  //    얹지는 말 것(그쪽은 패드가 닫혀 있어도 시세 틱마다 전 계좌 행을 무조건 복제한다).
+  useEffect(() => {
+    const d = calWinDetailDateRef.current;
+    if (!d) return;
+    let detail = null;
+    try { detail = buildHistDetail(d); } catch { detail = null; }
+    postToCalWin({ type: 'calendar:detail', date: d, ...(detail || EMPTY_HIST_DETAIL) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildHistDetail, calWinNonce]);
 
   useEffect(() => {
     const onMsg = (e) => {
@@ -2059,6 +2103,21 @@ export default function App() {
       } else if (d.type === 'calendar:notes') {
         if (!d.portfolioId || !Array.isArray(d.notes)) return;
         updateInvestmentNotesFor(d.portfolioId, d.notes);
+      } else if (d.type === 'calendar:wantDetail') {
+        // 새 창의 자산 스냅샷 클릭 → 그 날짜의 '계좌별 현황' **구독 등록**. date가 null이면 패드가
+        // 닫힌 것이라 구독을 해제하고 응답하지 않는다(열려 있는 동안은 위 effect가 재전송한다).
+        // ⚠️ 이 분기는 반드시 위의 입양 게이트(e.source !== calWinRef.current) **뒤**에 있어야 한다 —
+        //    입양되지 않은 창·iframe이 임의 날짜의 계좌별 자산을 뽑아가는 통로가 되면 안 된다
+        //    (ping만 그 앞에 있는 것이 의도된 유일한 예외).
+        // ⚠️ 응답은 여기서 **즉시** 보낸다. 지문 게이팅 effect로 만들면 같은 날짜를 두 번째로
+        //    클릭할 때 지문이 같아 재발화하지 않아 응답이 영영 오지 않는다.
+        if (d.date != null && (typeof d.date !== 'string' || !isValidIsoDate(d.date))) return;
+        calWinDetailDateRef.current = d.date || null;
+        if (!d.date) return;
+        let detail = null;
+        // ⚠️ 절대 던지지 않게 — 이 핸들러가 죽으면 그 창의 메모·투자기록 쓰기까지 함께 멈춘다.
+        try { detail = histDetailFnRef.current ? histDetailFnRef.current(d.date) : null; } catch { detail = null; }
+        postToCalWin({ type: 'calendar:detail', date: d.date, ...(detail || EMPTY_HIST_DETAIL) });
       }
     };
     window.addEventListener('message', onMsg);
@@ -4136,7 +4195,10 @@ export default function App() {
           onClose={() => setTransferItemId(null)}
         />
       )}
-      {/* 메모 달력 (비차단·이동 가능 플로팅 창) — App 최상위 형제로 마운트해 탭/뷰 전환에도 언마운트 안 됨 */}
+      {/* 메모 달력 (비차단·이동 가능 플로팅 창) — App 최상위 형제로 마운트해 탭/뷰 전환에도 언마운트 안 됨.
+          ⚠️ ErrorBoundary label 지정 = 섹션 모드 격리. 없으면 렌더 예외 하나가 루트 경계까지 올라가
+             앱 화면 전체가 오류 페이지로 대체된다(계산기·자금 흐름도와 동일한 2차 방어). */}
+      <ErrorBoundary label="메모 달력">
       <CalendarModal
         open={showCalendarModal}
         onClose={() => setShowCalendarModal(false)}
@@ -4160,7 +4222,11 @@ export default function App() {
         liveUs10y={marketIndicators?.us10y}
         onOpenWindow={openCalendarWindow}
         headerNotice={calWinBlocked ? '팝업이 차단돼 별도 창을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요.' : null}
+        // 날짜 칸 자산 스냅샷 클릭 → 계좌별 현황. 인앱은 **동기 재조회**라 브릿지 prop이 필요 없다.
+        buildHistDetail={buildHistDetail}
+        hideAmounts={hideAmounts}
       />
+      </ErrorBoundary>
       {/* 자금 흐름도 — App 최상위 형제(계좌 탭/뷰 전환에도 언마운트 안 됨).
           ⚠️ ErrorBoundary label 지정 = 섹션 모드 격리. 없으면 좌표 NaN 하나가 루트 경계까지
              올라가 앱 화면 전체가 오류 페이지로 대체된다(FloatingCalculator와 동일 2차 방어).

@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
-import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, buildHistDetailRows } from '../utils';
 
 const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
 const nextRowColor = (cur: string): string => {
@@ -190,78 +190,19 @@ export default function IntegratedDashboard({
     return () => document.removeEventListener('keydown', handler);
   }, [histDetailDate]);
 
-  const histDetailRows = useMemo(() => {
-    if (!histDetailDate || !allPortfoliosForDividend) return { rows: [], totalEval: 0, totalPrincipal: 0, totalDeposit: 0 };
-    // intMonthlyHistory[0]가 오늘(실시간 값 사용 날짜)이므로 그 date와 비교.
-    // ⚠️ 라이브 자산이 0(예: 유일 계좌 삭제 → 빈 계좌 자동생성)이면 computedIntHistory가 today를 추가하지
-    //   않아 intMonthlyHistory[0].date가 '과거' 최신점이 된다 → 이때 realtime 취급하면 그 과거점에서 삭제
-    //   계좌를 잘못 제외해 차트와 어긋난다. 따라서 라이브 자산이 있을 때만 realtime(오늘)으로 판정.
-    const realtimeDate = intMonthlyHistory.length > 0 ? intMonthlyHistory[0].date : '';
-    const isRealtimeDate = histDetailDate === realtimeDate && (intTotals?.totalEval || 0) > 0;
-    let totalEval = 0, totalPrincipal = 0, totalDeposit = 0;
-    const rows = [];
-    allPortfoliosForDividend.forEach(p => {
-      if (p.isTest) return; // TEST 계좌는 추이 팝업 소계에서 제외(차트 값과 일치)
-      // 삭제 계좌: 삭제일 이후(및 라이브 시점)는 제외 — 삭제일 이전 과거 날짜만 표시(차트 값과 일치)
-      if (p.deletedAt && (isRealtimeDate || histDetailDate >= p.deletedAt)) return;
-      const summary = portfolioSummaries.find(s => s.id === p.id);
-      const isCash = p.accountType === 'matong' || p.accountType === 'simple';
-      let evalAmt = 0;
-      if (isRealtimeDate) {
-        // 오늘은 실시간 평가금 사용 → 테이블 합계와 일치
-        evalAmt = summary?.currentEval || 0;
-      } else if (isCash) {
-        // 현금성 계좌(마통·직접입력): 일별 자동 스냅샷(p.history)을 carry-forward로 복원해
-        // 그날의 잔액을 그대로 표시한다(현재값을 과거 날짜에 소급하지 않음). 오늘은 위 isRealtimeDate
-        // 분기가 현재값을 쓰므로 여기는 항상 과거 날짜 → 스냅샷 기준. 추이 차트(computedIntHistory)와
-        // 동일 규칙(스냅샷 carry-forward, 0 포함) → 소계가 차트 그날 값과 일치.
-        const startDate = summary?.startDate || p.portfolioStartDate || p.startDate || '';
-        if (startDate && startDate > histDetailDate) return;
-        const hist = p.id === activePortfolioId ? activeHistory : (p.history || []);
-        const sorted = [...hist].filter(h => h?.date && typeof h.evalAmount === 'number' && h.evalAmount >= 0).sort((a, b) => a.date.localeCompare(b.date));
-        const rec = sorted.filter(h => h.date <= histDetailDate).pop();
-        evalAmt = rec ? rec.evalAmount : 0;
-      } else {
-        // 시장 계좌: 통합 추이 차트(computedIntHistory)와 '동일한' 시계열(marketSeries)을 재사용한다.
-        // 저장된 라이브 evalAmount가 아니라 '수량 × 종가'(확정 종가) carry-forward 값 → 팝업 소계가
-        // 차트 그날 값·개별 계좌 추이와 정확히 일치(정확한 일별 자산 추적). 차트 dateToTotal과
-        // 동일하게 histDetailDate 이하 최신 기록값을 이월(carry-forward)한다.
-        const series = intAccountSeriesById[p.id];
-        if (!series || !series.dates || series.dates.length === 0) return;
-        let last = 0;
-        for (const d of series.dates) {
-          if (d <= histDetailDate) last = series.map.get(d);
-          else break;
-        }
-        if (!(last > 0)) return;
-        evalAmt = last;
-      }
-      if (evalAmt <= 0) return;
-      totalEval += evalAmt;
-      const isOverseas = p.accountType === 'overseas';
-      const fxRate = isOverseas ? (p.avgExchangeRate || 1) : 1;
-      const currentPrincipalKRW = (p.principal || 0) * fxRate;
-      const deps = p.depositHistory || [];
-      const wds = p.depositHistory2 || [];
-      const futureDeposits = deps.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
-      const futureWithdrawals = wds.filter(d => d.date > histDetailDate).reduce((s, d) => s + (d.amount || 0) * (isOverseas ? (d.fxRate || 1) : 1), 0);
-      // 현금성 계좌(마통·직접입력): 투자원금=평가금액=예수금 불변 → 수익·수익률 항상 0.
-      //   원금은 그날 잔액(=평가 스냅샷)과 동일하게 둔다(입출금 시점 보정식 미적용).
-      // 그 외 계좌(주식 포트폴리오 등)는 입출금 시점 보정식 유지.
-      const effPrincipal = isCash
-        ? evalAmt
-        : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
-      totalPrincipal += effPrincipal;
-      // 현금성 계좌: 예수금도 잔액(=평가=원금)과 동일 유지.
-      const depositAmt = isCash ? effPrincipal : (summary?.depositAmount || 0);
-      totalDeposit += depositAmt;
-      const name = (summary?.name || p.name || p.id) + (p.deletedAt ? ' (삭제됨)' : '');
-      const profit = evalAmt - effPrincipal;
-      const returnRate = effPrincipal > 0 ? (profit / effPrincipal) * 100 : 0;
-      rows.push({ id: p.id, name, evalAmount: evalAmt, principal: effPrincipal, profit, returnRate, depositAmount: depositAmt, rowColor: p.rowColor || '' });
-    });
-    return { rows, totalEval, totalPrincipal, totalDeposit };
-  }, [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries, intAccountSeriesById, intTotals?.totalEval]);
+  // ⚠️ 산출은 utils.buildHistDetailRows **단일 소스**다 — 메모 달력의 자산 스냅샷 클릭 팝업이
+  //    같은 함수를 쓴다. 여기서 다시 손계산으로 되돌리면 같은 날짜에 두 화면의 소계가 갈린다
+  //    ("달력 칸의 총자산 = 팝업 소계 = 추이 차트 그날 값" 불변식).
+  const histDetailRows = useMemo(() => buildHistDetailRows({
+    date: histDetailDate,
+    portfolios: allPortfoliosForDividend,
+    portfolioSummaries,
+    accountSeriesById: intAccountSeriesById,
+    realtimeDate: intMonthlyHistory.length > 0 ? intMonthlyHistory[0].date : '',
+    liveTotalEval: intTotals?.totalEval,
+    activePortfolioId,
+    activeHistory,
+  }), [histDetailDate, intMonthlyHistory, allPortfoliosForDividend, activePortfolioId, activeHistory, portfolioSummaries, intAccountSeriesById, intTotals?.totalEval]);
 
   // 앱 기록 시작일: 모든 계좌의 가장 이른 '실제 기록일'(실시간 isFixed:false / 사용자 확정 adjustedAmount).
   // 순수 백필(isFixed:true + adjustedAmount 없음)은 역추산이라 제외 — 그 이전 구간은 전부 역추산이므로
@@ -1606,7 +1547,9 @@ export default function IntegratedDashboard({
                       </td>
                       <td className="py-2 px-2 text-right text-gray-400 border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(r.principal)}</td>
                       <td className="py-2 px-2 text-right text-white font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(r.evalAmount)}</td>
-                      <td className="py-2 px-2 text-center text-gray-300 border-r border-gray-700">{histDetailRows.totalEval > 0 ? formatPercent(r.evalAmount / histDetailRows.totalEval * 100) : '-'}</td>
+                      {/* ⚠️ 비중·소계 수익·소계 수익률은 buildHistDetailRows가 낸 값을 그대로 쓴다 —
+                          여기서 다시 계산하면 메모 달력 팝업과 분모가 갈릴 수 있다. */}
+                      <td className="py-2 px-2 text-center text-gray-300 border-r border-gray-700">{r.weight == null ? '-' : formatPercent(r.weight)}</td>
                       <td className="py-2 px-2 text-right text-gray-400 border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(r.depositAmount)}</td>
                       <td className={`py-2 px-2 text-right border-r border-gray-700 font-bold ${r.profit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{hideAmounts ? '••••••' : formatCurrency(r.profit)}</td>
                       <td className={`py-2 px-2 text-right font-bold ${r.returnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>{formatPercent(r.returnRate)}</td>
@@ -1624,11 +1567,11 @@ export default function IntegratedDashboard({
                       <td className="py-2 px-2 text-right text-yellow-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalEval)}</td>
                       <td className="py-2 px-2 text-center text-gray-300 font-bold border-r border-gray-700">100%</td>
                       <td className="py-2 px-2 text-right text-gray-400 font-bold border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalDeposit)}</td>
-                      <td className={`py-2 px-2 text-right font-bold border-r border-gray-700 ${histDetailRows.totalEval - histDetailRows.totalPrincipal >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                        {hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalEval - histDetailRows.totalPrincipal)}
+                      <td className={`py-2 px-2 text-right font-bold border-r border-gray-700 ${histDetailRows.totalProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {hideAmounts ? '••••••' : formatCurrency(histDetailRows.totalProfit)}
                       </td>
-                      <td className={`py-2 px-2 text-right font-bold ${histDetailRows.totalPrincipal > 0 && (histDetailRows.totalEval - histDetailRows.totalPrincipal) / histDetailRows.totalPrincipal * 100 >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
-                        {histDetailRows.totalPrincipal > 0 ? formatPercent((histDetailRows.totalEval - histDetailRows.totalPrincipal) / histDetailRows.totalPrincipal * 100) : '-'}
+                      <td className={`py-2 px-2 text-right font-bold ${(histDetailRows.totalReturnRate ?? 0) >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+                        {histDetailRows.totalReturnRate == null ? '-' : formatPercent(histDetailRows.totalReturnRate)}
                       </td>
                     </tr>
                   </tfoot>
