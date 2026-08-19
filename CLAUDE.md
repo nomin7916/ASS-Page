@@ -3506,6 +3506,138 @@ App의 `handleSingleStockRefresh`). 목표 금액이 현재가에서 파생되�
 - **범위 밖(의도)**: 비교종목은 펀드(MA:/URL) 미지원(이름·이력 라우팅이 kr/us 2분기), 백테스트 분배금도
   펀드는 API가 없어 사용자가 `divOverride`로 직접 입력한다.
 
+### 계좌 카드 '별도 브라우저 창' (`/?cardWindow=1&card=…&pid=…`) (⚠️ 회귀 주의)
+
+계좌 화면의 카드를 각각 별도 브라우저 창에서 열고 **편집까지** 한다. 카드 헤더의 **⧉ 확장 버튼**
+(`CardExpandButton`)이 진입점이고, 창 제목은 `"COVERD 4 - 분배금 현황"` 형식이다(`cardWindowTitle`).
+지원 카드 5종 — `summary`(포트폴리오 요약) · `stats`(통계·히스토리) · `dividend`(분배금 현황) ·
+`rebalancing`(리밸런싱 표) · `donut`(자산비중비교). **`chart`(수익률 차트)는 범위 밖**(아래 참조).
+
+- **⚠️ 창은 App을 마운트하지 않는다**(`main.tsx` `CARD_WINDOW_BOOT`). 메모 달력·흐름도·백테스트 창과
+  **같은 규약** — Drive STATE는 통째 덮어쓰기라 writer가 둘이면 서로의 편집을 지운다. writer는 끝까지
+  앱 탭 하나. `window.open`에 **`noopener` 금지**(opener 브릿지가 기능의 전부), 클릭 직후 **동기** open.
+- **⚠️ 기존 3창과 결정적으로 다른 점: 단일 ref가 아니라 Map 레지스트리**(`cardWinsRef`). 카드 창은
+  (계좌 × 카드)마다 열리므로 단일 ref로 두면 **뒤에 핑을 보낸 창만** 데이터를 받고 앞 창은 영구히
+  낡는다. 창 하나당 `<CardWinFeed>`를 하나씩 마운트해(가변 훅 호출 회피) **계좌 객체 identity**로
+  전송을 게이팅한다. ⚠️ 피더 JSX는 **early return보다 위에서** 만들어 관리자 페이지·포털·배당세
+  페이지 분기에도 함께 렌더한다 — 메인 대시보드 return 안에만 두면 앱 탭이 그쪽으로 이동하는
+  순간 피더가 언마운트돼 창은 갱신이 멈추는데도 ping/pong은 계속 오가 '연결됨·편집 가능'으로 남는다 — `setPortfolios`의 map이 바뀌지 않은 계좌의 참조를 보존하므로 JSON 지문보다
+  정확하고 공짜다. 같은 (계좌,카드) 재클릭은 `window.open`의 name 재사용으로 **기존 창을 포커스**한다.
+
+**불변식(INV) — `src/cardWindow.ts` 상단에도 같은 목록이 있다**
+- **INV-1** writer는 앱 탭 하나. 창은 App을 import조차 하지 않는다.
+- **INV-2** 창은 **원자재**(계좌 객체 + 시장지표 + 종가 이력 부분집합)만 받고 파생은 **앱과 같은 코드**
+  (`usePortfolioData`·`buildBookCostSeries`)로 **창에서** 계산한다. 파생값을 push하면 창 로컬 상태
+  (정렬·'추가' 수량)를 반영할 수 없어 화면과 계산이 갈린다.
+- **INV-3** 창의 모든 쓰기는 **by-id 커맨드**(`card:cmd`). `patchActive` 계열을 프록시하면 앱 탭의
+  **활성 계좌**에 착지해 엉뚱한 계좌를 파괴한다.
+- **INV-4** 통째 교체는 **기대값**을 함께 보내고 앱이 다르면 배치 전체를 거부한다 — 계좌 필드
+  배치는 `expect.principal`(원금을 안 건드리는 배치에도 **항상** 싣는다: 앱 탭의
+  `transferStockToPortfolio`가 이관 행을 prepend하며 원금도 바꾸므로, 이 값이 '메모만 고치는
+  편집이 이관 행을 지우는 것'까지 막는 유일한 방어선이다), 투자기록은 `baseKeyOf(notes)`
+  (앱 탭 **메모 달력 NOTE 패드**가 같은 배열을 동시에 편집한다).
+  ⚠️ **과표 이벤트(`updateTaxBaseEvents`)는 미적용** — `dividendCall`이 20종을 fn 이름으로
+  라우팅하는 범용 통로라 개별 base를 얹으려면 라우터를 깨야 하고, 그 배열을 자동으로 쓰는
+  앱 경로가 없어 위험이 '앱 탭과 창에서 같은 종목을 동시에 편집'으로 한정된다(문서된 절충).
+- **INV-5** 창은 자기 `ConfirmDialog`·인라인 토스트·`ErrorBoundary(label)`를 갖는다. App의 `confirm`은
+  App이 렌더하는 다이얼로그가 resolve하므로 프록시가 **원리적으로 불가능**하고, `notify`는 애초에
+  토스트를 그리지 않아(벨 로그만) 프록시해도 창 사용자에겐 피드백이 **0**이다.
+- **INV-6** 메시지 화이트리스트는 **양쪽 모두 접두사 검사**(`card:`). 열거형 금지 — `CalendarWindow`가
+  열거형 비대칭으로 응답을 조용히 폐기한 사고가 있다.
+- **INV-7** 창의 조작은 앱 탭 비활동 타이머를 리셋한다. ⚠️ `resetActivity`만으로는 부족 — 경고가
+  **이미 뜬 뒤**에는 체크 루프가 `lastActivityAt`을 보지 않아 60초 뒤 무조건 로그아웃한다(그 모달은
+  창 뒤 앱 탭에 있어 보이지도 않는다) → `showInactivityWarning`이면 `handleInactivityContinue()`.
+- **INV-8** 끊김(opener 소멸·13초 무응답)·삭제 계좌 = **읽기 전용**. 저장 버튼만 숨기면 한참 고친 뒤 사라진다.
+- **INV-9** 창은 계좌 id를 **열 때 박제**한다 — 앱 탭이 다른 계좌로 가도 자기 계좌를 계속 편집한다.
+
+**by-id 라이터 계층(`usePortfolioState`) — 이 기능의 바닥**
+`patchById(pid, patch)` 신설 + `patchActive = patch => patchById(activePortfolioId, patch)` 위임
+(렌더 스코프 클로저 동일 → 앱 탭 동작·타이밍 무변). 신설: `applyItemPatchesFor` ·
+**`applyCardWriteFor(pid, {itemPatches, settingsFields, accountFields, expect})`**(단일 `setPortfolios`로
+원자적) · `handleUpdateFor` · `updateSettingsForTypeOf`(accountType을 **pid**에서 해석) ·
+`patchSettingsForTypeOf`(필드 병합) · `setPrincipalFor`/`addPrincipalFor`/`setAvgExchangeRateFor` ·
+열 숨김·행 마킹 by-id 변형. 4색 사이클·열 토글은 순수 헬퍼(`cycleMarkedRow`·`toggleInList`)를 공유한다.
+`useStockData`에는 **`handleSingleStockRefreshFor(pid, id, code)`** — 옛 구현은 항목 조회·시장 라우팅·
+쓰기·`stampDateFor` **넷 다** 활성 계좌에 묶여 있어, 다른 계좌를 보는 창에서 누르면 **잘못된 확정일로
+전역 `stockHistoryMap`을 스탬프**했다(그 맵은 `buildCloseEvalSeries`의 `allExact` 판정과 자동확정
+데이터완비 가드의 권위 소스이고 Drive에 영속 → 한 번 오염되면 과거 평가액이 영구히 어긋난다).
+
+**커맨드 프로토콜** — 창→앱 `card:ping{winId,card,pid,need}`(5초·`need`가 초기 전송의 유일한 트리거·
+재입양) · `card:cmd{winId,reqId,op,args}` · `card:activity` / 앱→창 `card:pong` · `card:data`(원자재) ·
+`card:ack{reqId,ok,result,reason}` · `card:teardown`.
+- **⚠️ 쓰기는 입양된 창만**(`entry.win === e.source`), ping만 그 앞의 의도된 예외.
+- **⚠️ `switch` 진입 **전에** `pidOk(a.pid)`를 한 번 검사**한다 — 개별 case가 빠뜨려도 타 계좌로 새지
+  않는다(fail-closed). 분배금 라우팅도 `args[0] === entry.pid`를 재확인한다. 창은 URL 파라미터로
+  열리므로 조작 가능하다는 전제.
+- **⚠️ `CARD_OPS`는 문서가 아니라 계약** — App 핸들러와 **1:1**이어야 한다(가드 #G3g가 양방향 단언).
+  목록에만 있고 구현이 없는 op은 default-deny에 걸려 '버튼이 고장난 것'으로 보인다.
+- **⚠️ 응답이 필요한 op은 `reqId` 상관 + 타임아웃**(`saveTargetSnapshot`·`verifyPin`). postMessage는
+  fire-and-forget이라 동기 반환값 계약을 그대로 쓰면 성공해도 실패로 표시된다.
+
+**카드별 규약**
+- **분배금**: 라이터 20종이 **이미 전부 by-id + 원시 인자**라 `dividendCall`로 그대로 프록시한다.
+  ⚠️ `onToggleHiddenMonth`의 **시그니처는 `(tab, monthIndex)` 그대로** 두고 pid는 호출부가 바인딩한다 —
+  넓히면 통합 대시보드 compact 경로(앱 레벨 저장, pid 없음)의 인자가 밀려 버킷이 뒤바뀐다.
+- **리밸런싱**: 항목 쓰기가 `writeTargets(itemPatches, settingsFields)` 하나로 모였다. `cardWrite`가
+  주어지면 그쪽으로만 보낸다(인앱은 종전 `setPortfolio`+`updateSettingsForType`).
+  **⚠️ 미러 3전이((%)·(₩))와 '잔액→예수금'은 항목 patch와 settings를 반드시 한 번에 쓴다** — 쪼개면
+  반쪽 적용이 남고 재클릭이 같은 전이를 또 타서 목표금액이 현재 평가금으로 **두 번** 덮인다(undo 없음).
+  **⚠️ 과거 목표비중 복원은 창에서 구조적 no-op** — `setPortfolio`를 넘기지 않고 `rebalTargetSnapshots=[]`
+  라 버튼도 잠긴다(CLAUDE.md '복원' INV-5: id 불일치 시 no-op이 곧 타 계좌 오적용 방어).
+  PIN 검증은 앱 탭에 위임한다(창의 `sessionStorage`는 **열린 시점 사본**이라 낡는다).
+- **달력 목표비중 스냅샷**: `buildRebalTargetEntryFrom`·`sameRebalTargetEntry`·`upsertRebalTargetMemo`를
+  `utils.ts`로 추출해 App과 창이 공유한다. **⚠️ 창이 자기 화면 값으로 만든 엔트리를 보내고 앱은 upsert만
+  한다** — 앱이 활성 계좌 스코프로 재빌드하면 그 순간 '기록 = 화면 표 1:1'이 깨지고, 앱 탭이 다른 계좌를
+  보고 있으면 **그 계좌의 기존 기록을 거짓 내용으로 교체**한다(`calendarMemos`는 백업 복원 sticky라
+  복구 불가). 부수 효과로 창 로컬 정렬·'추가' 수량이 기록에 그대로 반영돼 오히려 정확해진다.
+- **통계·히스토리**: **⚠️ 계좌 필드 쓰기는 마이크로태스크로 모아 하나의 `cardWrite`로** 보낸다 —
+  `DepositPanel`은 한 클릭에서 `setDepositHistory`와 `setPrincipal`을 따로 부르므로, 쪼개지면 원장은
+  지워졌는데 원금은 그대로인 중간 상태가 Drive에 저장된다(컴포넌트 수정 0줄).
+  **⚠️ 배치에는 언제나 `expect.principal`을 싣는다**(원금을 안 건드리는 배치라도) — 앱 탭의
+  `transferStockToPortfolio`가 이관 행을 prepend하며 원금도 바꾸므로, 이 기대값이 **메모만 고치는 편집이
+  이관 행을 지우는 것**까지 막는 유일한 방어선이다.
+  **⚠️ history 편집(자산검증 확정·수량/종가)·전체 시세 새로고침·CSV는 창에서 명시적 미지원** — history는
+  앱 탭이 백필·자동확정·today-effect로 **동시에** 쓰는 배열이라 창의 스냅샷을 통째로 되보내면 그 사이
+  생긴 기록이 소실된다. 조용히 무시하지 않고 창 안 인라인 안내로 사유를 밝히고, 종가 재조회는
+  `Promise<false>`를 돌려준다(undefined면 모달 스피너가 영구 회전).
+  `activeBookByDate`는 앱과 **같은 정책**(해외·현금성 `null`)으로 창이 직접 계산한다.
+  기록 확정일(KR 21:00 / 글로벌 07:30)은 **앱이 계좌 타입별로 해석해 보낸다**(창 재계산 금지).
+
+**세션·보안**
+- **⚠️ 로그아웃·세션 충돌 시 `card:teardown` 브로드캐스트 + 창은 화면 내용을 비운다**(단순 읽기 전용으로는
+  이전 사용자의 금융 데이터가 남는다 — 다중 계정 오염 방지 정책). `onForceLogout`·수동 로그아웃 **둘 다**
+  `ADMIN_VIEW_EMAIL` 가드보다 **앞**에서 정리해야 한다(impersonation 탭에서 연 창에는 피조사 사용자의
+  데이터가 떠 있다). `authEpoch`(로그인 이메일) 불일치도 같은 처리.
+
+**영속화 신규 지점 0곳** — 창은 저장 필드를 만들지 않는다. 모든 쓰기가 앱 탭의 기존 by-id 라이터를 타고
+`portfolioStructureKey` → `portfolioUpdatedAt` → `useDriveSync` 경로로 흐른다. 예외는 **선행 결함 1건**:
+`actualDividendQty`·`dividendTaxAmounts`가 지문에 없고 라이터도 `dividendHistoryUpdatedAt`을 올리지 않아
+그 필드만 고친 세션이 조용히 유실됐다(분배금 전용 창의 주 사용 시나리오) → 지문에 추가했다.
+'숨긴 카드 1회 펼침'도 `sectionCollapsedMap` **안의 예약 키**(`__cardWindowUnhide_v1__`)로 표현해
+chartPrefs 5지점을 새로 만들지 않는다 — ⚠️ 로드마다 비우는 방식은 '숨기기 유지'를 사실상 제거하므로 금지.
+
+**범위 밖(의도)**
+- **수익률 차트**: `finalChartData`(App.tsx 219줄 memo) + 선행 memo 4개(`activeCloseEvalByDate`·
+  `activeBookByDate`·`accountTwrByDate`·`filteredDates`)가 전부 활성 계좌 전용이고, 그 체인이 누적 TWR
+  **곱셈 체인**이라 리팩터링 중 하루라도 값이 갈리면 이후 전 구간이 영구히 어긋난다. 조회기간
+  (`chartPeriod`/`appliedRange`)도 앱 레벨 단일값이라 창별 기간을 표현할 수 없다.
+- 앱 탭을 닫으면 창은 읽기 전용(구조적 — writer가 하나뿐이므로 우회 불가).
+- 같은 계좌를 앱 탭과 창에서 동시에 편집하면 **필드 단위** last-write-wins(달력·흐름도 창과 같은 절충).
+- `settings`는 같은 accountType 전 계좌 공유라 창의 설정 변경도 형제 계좌에 전파된다(기존 앱 동작 그대로).
+- 창의 정렬·'추가' 수량은 **창 로컬**(둘 다 세션 스크래치). `rebalanceSortConfig`는 앱에서만 영속된다.
+
+검증: `npm run verify:card-window` — 순수 함수는 `src/cardWindow.ts`를 **직접 import**해 테스트하고
+(미러 금지 — src/미러 한쪽만 고친 변경이 둘 다 통과하는 구멍을 만든다), 배선은 소스 텍스트 가드다.
+⚠️ 가드는 **선언이 아니라 사용부**를 단언한다. **변이 49종으로 검출을 실증**했다
+(그중 14종은 적대적 검증이 실제로 잡은 결함의 회귀 가드다 — `rebalCommitRef` 등록 소실로
+**인앱 메모 달력 목표비중 자동 기록이 전면 중단**된 blocker, 창의 입출금 정렬 dead 배선,
+끊긴 창에서 쓰기가 새던 것, impersonation 무통지 편집 경로, 피더 언마운트, 투자기록 무가드
+전량 교체, `settings` 폴백 자기모순, 계약 파일의 **NUL 바이트**(git이 바이너리로 취급해
+diff·`-S` 검색이 통째로 막혔다) 등) — 그중 미러 원자성
+가드는 처음에 **죽은 단언**이었다(갭 정규식이 문장 경계를 넘어 다음 호출의 인자를 집었다). 사이클 함수
+본문을 잘라 '호출 횟수 = 전이 수(3)'로 세도록 고쳐 검출을 확인했다. 가드를 손볼 때 같은 변이가 여전히
+잡히는지 반드시 다시 확인할 것.
+
 ---
 
 ## 다음 작업 후보 (Phase 11~)

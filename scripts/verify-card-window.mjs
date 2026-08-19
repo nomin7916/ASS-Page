@@ -136,6 +136,19 @@ ok('#G2c 창은 origin과 opener를 검사한다',
     && !/buildRebalTargetEntry\(/.test(body));
   ok('#G3d ⚠️ patchActive 계열을 프록시하지 않는다',
     !/\bpatchActive\(/.test(body) && !/\bsetPortfolio\(/.test(body));
+  // ⚠️ CARD_OPS는 '문서'가 아니라 **계약**이다 — 목록에만 있고 구현이 없으면 창이 보낸 커맨드가
+  //    default-deny에 걸려 사용자에겐 '버튼이 고장난 것'으로 보이고, 구현만 있고 목록에 없으면
+  //    이 게이트가 그 경로를 영영 보지 못한다. 양방향으로 1:1을 단언한다.
+  if (CW) {
+    const impl = new Set();
+    for (const m of body.matchAll(/case '([a-zA-Z]+)':/g)) impl.add(m[1]);
+    if (/op === 'dividendCall'/.test(body)) impl.add('dividendCall');
+    const listed = new Set(CW.CARD_OPS);
+    const onlyListed = [...listed].filter(x => !impl.has(x));
+    const onlyImpl = [...impl].filter(x => !listed.has(x));
+    ok(`#G3g ⚠️ CARD_OPS ↔ 앱 핸들러가 1:1이다 (목록만 있는 op: ${onlyListed.join(',') || '없음'} / 구현만 있는 op: ${onlyImpl.join(',') || '없음'})`,
+      onlyListed.length === 0 && onlyImpl.length === 0 && listed.size > 5);
+  }
 }
 ok('#G4 ⚠️ 쓰기 커맨드는 입양된 창만 (ping만 그 앞의 의도된 예외)',
   /const entry = d\.winId \? cardWinsRef\.current\.get\(d\.winId\) : null;[\s\S]{0,120}?if \(!entry \|\| entry\.win !== e\.source\) return;/.test(stripComments(app)));
@@ -214,8 +227,13 @@ ok('#G11d ⚠️ ErrorBoundary label 필수 (루트 경계는 label이 없어 �
   /<ErrorBoundary label=\{CARD_LABELS\[CARD\] \|\| '카드'\}>/.test(win));
 
 // ── 끊김 = 읽기 전용 ──
-ok('#G12 끊김·미수신이면 writable이 false다',
-  /const writable = linked && gotData && !tornDown && !!account;/.test(win));
+ok('#G12 끊김·미수신·삭제 계좌면 writable이 false다',
+  // ⚠️ 삭제(소프트) 계좌 포함 — 앱 탭에서는 탭바·표에서 숨겨져 편집 진입점이 없는데 창만
+  //    계속 편집할 수 있으면 '지웠다고 믿는 계좌'가 조용히 바뀐다.
+  /const writable = linked && gotData && !tornDown && !!account && !accountDeleted;/.test(win)
+  && /const accountDeleted = !!acct\.deletedAt;/.test(win));
+ok('#G12c 데이터 수신 전과 "받아 봤더니 없음"을 구분한다 (purge된 계좌가 영영 로딩으로 남지 않게)',
+  /gotData\s*\n?\s*\? '계좌를 찾을 수 없습니다/.test(win));
 ok('#G12b ping의 need가 초기 전송의 유일한 트리거다',
   /need: !gotDataRef\.current/.test(win) && /if \(d\.need \|\| !cur \|\| cur\.win !== e\.source\)/.test(app));
 
@@ -258,6 +276,8 @@ ok('#G14g 통계·히스토리 카드 헤더에 확장 버튼이 붙어 있다',
     && /fire\('cardWrite', \{ pid: PID, ops: \{ accountFields: b\.fields, expect: b\.expect \} \}\)/.test(s2));
   ok('#G21b ⚠️ 원금은 기대값(expect)과 함께 보낸다 (앱 탭의 이관·입금을 조용히 덮지 않게)',
     /const principalSetter = useCallback\(\(v\) => \{[\s\S]{0,320}?queueAccountWrite\(\{ principal: next \}, \{ expect: \{ principal: cur \} \}\);/.test(s2));
+  ok('#G21b2 ⚠️ 원금을 안 건드리는 배치에도 기대값이 실린다 (원장 메모만 고쳐도 이관 행을 못 지우게)',
+    /acctBatchRef\.current = \{ fields: \{\}, expect: \{ principal: acctPrincipalRef\.current \} \};/.test(s2));
   ok('#G21c ⚠️ history 편집은 창에서 **명시적으로 미지원** (앱 탭이 백필·자동확정으로 동시에 쓰는 배열)',
     /setHistory=\{blocked\('자산검증 확정은 앱 창에서만 가능합니다\.'\)\}/.test(s2)
     && /patchActivePortfolio=\{blocked\('보유 수량·종가 수정은 앱 창에서만 가능합니다\.'\)\}/.test(s2));
@@ -362,9 +382,58 @@ ok('#G16b 활성 경로는 위임이라 App 배선이 그대로다 (verify:ladde
   ok('#G19e 창을 닫을 때 미커밋 기록을 한 번 커밋한다 (앱의 종료 커밋 체인이 창엔 없다)',
     /window\.addEventListener\('pagehide', onHide\)/.test(s) && /snapshotDirtyRef\.current/.test(s));
   ok('#G19f ⚠️ PIN 검증은 앱 탭에 위임한다 (창 sessionStorage는 열린 시점 사본이라 낡는다)',
-    /pinVerify=\{async \(pin\) => \{ const r = await send\('verifyPin', \{ pid: PID, pin \}\); return !!\(r && r\.ok && r\.result\); \}\}/.test(s));
+    /pinVerify=\{async \(pin\) => \{[\s\S]{0,360}?await send\('verifyPin', \{ pid: PID, pin \}\)[\s\S]{0,360}?return !!r\.result;/.test(s));
   ok('#G19g 끊기면 편집을 막는다', /readOnly=\{!writable\}/.test(s));
 }
+// ⚠️ 아래 5건은 전부 **적대적 검증이 실제로 잡은 결함**의 회귀 가드다. 지우지 말 것.
+ok('#G24 ⚠️ rebalCommitRef 등록이 살아 있다 (인앱 메모 달력 목표비중 자동 기록의 유일한 배선)',
+  // utils 추출 리팩터링에서 이 한 줄이 소실돼 인앱 기록이 전면 중단된 적이 있다. 선언은 살아
+  // 있고 참조만 0이 되므로 undefcheck·scopecheck·esbuild 어느 것도 잡지 못한다.
+  /rebalCommitRef\.current = buildRebalTargetEntry;/.test(app));
+ok('#G25 ⚠️ 창의 입출금 정렬 state가 파생(usePortfolioData)에 실제로 전달된다',
+  // 리터럴 { key: null }을 넘기면 헤더를 눌러도 행 순서가 절대 바뀌지 않는다(죽은 정렬).
+  /rebalanceSortConfig,\s*\n[\s\S]{0,320}?depositSortConfig,\s*\n\s*depositSortConfig2,\s*\n\s*rebalExtraQty,/.test(win)
+  && !/depositSortConfig: \{ key: null/.test(win));
+ok('#G26 ⚠️ 끊기면 **전송 단계에서** 쓰기를 막는다 (카드별 입력 잠금으로는 새는 경로가 남는다)',
+  /const fire = useCallback\(\(op, args\) => \{\s*\n\s*if \(!writableRef\.current\) \{/.test(win)
+  && /writableRef\.current = writable;/.test(win)
+  && /if \(!writableRef\.current\) return 'fail';/.test(win));
+ok('#G26b 끊김 판정이 커맨드 타임아웃보다 빠르다 (배지가 먼저 뜨게)',
+  (() => {
+    const l = win.match(/const LINK_TIMEOUT_MS = (\d+);/);
+    const c = win.match(/const CMD_TIMEOUT_MS = (\d+);/);
+    return !!l && !!c && Number(l[1]) < Number(c[1]);
+  })());
+ok('#G27 ⚠️ 관리자 접속 중 목표 변경은 창에서도 공지된다 (창이 더 조용한 통로가 되지 않게)',
+  /onAdminTargetChange=\{isAdmin \? \(\) => fire\('adminTargetChange', \{ pid: PID \}\) : null\}/.test(win)
+  && /case 'adminTargetChange':[\s\S]{0,200}?if \(adminViewingAs\) notifyUserOfAdminTargetChange\(\);/.test(stripComments(app)));
+ok('#G28 ⚠️ 1회 펼침 플래그를 심은 세션은 저장을 예약한다 (안 하면 다음 로드에서 또 풀린다)',
+  /if \(_secMap !== stateData\.chartPrefs\.sectionCollapsedMap\) chartPrefsUpdatedAtRef\.current = Date\.now\(\);/.test(app));
+ok('#G29 ⚠️ 피더는 early return보다 **위에서** 만들고 모든 화면 분기에 렌더한다',
+  // 메인 대시보드 return 안에만 두면 앱 탭이 관리자·배당세 페이지로 이동하는 순간 피더가
+  // 언마운트돼 창은 갱신이 멈추는데도 ping/pong은 계속 오가 '연결됨·편집 가능'으로 남는다.
+  /const cardWinFeeds = \(/.test(app)
+  && stripComments(app).indexOf('const cardWinFeeds = (') < stripComments(app).indexOf('if (adminPendingChoice) {')
+  && (stripComments(app).match(/\{cardWinFeeds\}/g) || []).length === 5);
+ok('#G30 ⚠️ 투자기록 통째 교체는 base 지문 검사를 지난다 (앱 탭 메모 달력이 같은 배열을 동시 편집)',
+  /fire\('updateInvestmentNotes', \{ pid: PID, notes, base: baseKeyOf\(acct\.investmentNotes \|\| \[\]\) \}\)/.test(win)
+  && /if \(baseKeyOf\(cur\?\.investmentNotes \|\| \[\]\) !== a\.base\) \{/.test(stripComments(app)));
+ok('#G31 settings 폴백이 계산·화면 한 곳에서만 만들어진다 (레거시 계좌에서 표와 수량이 갈리지 않게)',
+  /const DEFAULT_SETTINGS = \{ mode: 'rebalance', amount: 1000000 \};/.test(win)
+  && /settings: acct\.settings \?\? DEFAULT_SETTINGS,/.test(win)
+  && /settings=\{acct\.settings \?\? DEFAULT_SETTINGS\}/.test(win)
+  && !/settings=\{acct\.settings \|\| \{\}\}/.test(win));
+ok('#G32 PIN 검증 실패와 통신 실패를 구분한다 (연결 끊김이 "비밀번호가 틀렸습니다"로 표시되지 않게)',
+  /if \(!r \|\| r\.ok === false\) \{ notify\(r\?\.reason \|\| '앱 창과 통신하지 못했습니다\.', 'error'\); return false; \}/.test(win));
+{
+  // ⚠️ 계약 파일에 NUL 바이트가 섞이면 git이 **바이너리로 취급**해 diff·`git log -p`·`-S` 검색이
+  //    통째로 막힌다(실제로 한 번 그랬다 — 불변식이 전부 적힌 파일이 리뷰 불가가 됐다).
+  const files = ['src/cardWindow.ts', 'src/components/CardWindow.tsx', 'src/components/CardWinFeed.tsx',
+    'src/components/CardExpandButton.tsx'];
+  ok('#G33 ⚠️ 신규 파일에 NUL 바이트가 없다 (git이 바이너리로 취급 → 리뷰 불가)',
+    files.every(f => readFileSync(join(ROOT, f)).indexOf(0) === -1));
+}
+
 ok('#G20 App의 스냅샷 빌더는 공유 순수 함수 위임이다 (창과 값·행 순서가 갈리지 않게)',
   /const buildRebalTargetEntry = \(overrideDate\) => buildRebalTargetEntryFrom\(\{/.test(app)
   && /const sameRebalEntry = sameRebalTargetEntry;/.test(app));
@@ -379,7 +448,8 @@ ok('#G23 숨긴 카드 1회 펼침은 **예약 키**로 멱등이다 (매 로드
   && /if \(m\[CARD_WIN_UNHIDE_KEY\]\) return m;/.test(app)
   && /return \{ \[CARD_WIN_UNHIDE_KEY\]: true \};/.test(app));
 ok('#G23b 로드 2경로(정식·백업)가 모두 그 함수를 지난다',
-  (stripComments(app).match(/setSectionCollapsedMap\(unhideCardsOnce\(stateData\.chartPrefs\.sectionCollapsedMap\)\)/g) || []).length === 2);
+  (stripComments(app).match(/const _secMap = unhideCardsOnce\(stateData\.chartPrefs\.sectionCollapsedMap\);/g) || []).length === 2
+  && (stripComments(app).match(/setSectionCollapsedMap\(_secMap\);/g) || []).length === 2);
 
 // ── 영속화(선행 결함) ──
 ok('#G17 ⚠️ 지문에 actualDividendQty·dividendTaxAmounts가 있다 (분배금 전용 창의 무음 유실 방지)',

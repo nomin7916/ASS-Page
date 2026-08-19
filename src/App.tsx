@@ -51,7 +51,7 @@ import FlowBoard from './components/FlowBoard';
 import { normalizeFlowMaps, flowFingerprint, flowMapsHaveContent } from './flowMap';
 import BacktestPage from './components/BacktestPage';
 import CardWinFeed from './components/CardWinFeed';
-import { isCardKey, isCardWindowSupported, cardWindowUrl, cardWindowName } from './cardWindow';
+import { isCardKey, isCardWindowSupported, cardWindowUrl, cardWindowName, baseKeyOf } from './cardWindow';
 import {
   normalizeBacktestScenarios, backtestFingerprint, backtestScenariosHaveContent,
   buildBtCatalog, collectDividendHistory, collectNameByCode,
@@ -213,7 +213,7 @@ const normalizeCalendarMemos = (raw) => {
 const CARD_WIN_UNHIDE_KEY = '__cardWindowUnhide_v1__';
 const unhideCardsOnce = (map) => {
   const m = (map && typeof map === 'object') ? map : {};
-  if (m[CARD_WIN_UNHIDE_KEY]) return m;
+  if (m[CARD_WIN_UNHIDE_KEY]) return m;   // 이미 마이그레이션됨 — **같은 참조**를 돌려준다
   // _SEC_DEFAULT가 전부 false(=보임)라, 계좌별 항목을 비우면 그것이 곧 '전부 보이기'다.
   return { [CARD_WIN_UNHIDE_KEY]: true };
 };
@@ -829,7 +829,14 @@ export default function App() {
       if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
       if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
       if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
-      if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(unhideCardsOnce(stateData.chartPrefs.sectionCollapsedMap));
+      if (stateData.chartPrefs.sectionCollapsedMap) {
+        const _secMap = unhideCardsOnce(stateData.chartPrefs.sectionCollapsedMap);
+        setSectionCollapsedMap(_secMap);
+        // 마이그레이션이 실제로 값을 바꿨으면 그 세션에 반드시 저장돼야 한다 — 로드 시점엔
+        // 구조 지문 effect(첫 실행 스킵)도 chartPrefs effect(isInitialLoad 가드)도 저장을
+        // 예약하지 않아, 플래그가 Drive에 안 남으면 다음 로드에서 접힘이 또 풀린다.
+        if (_secMap !== stateData.chartPrefs.sectionCollapsedMap) chartPrefsUpdatedAtRef.current = Date.now();
+      }
       if (stateData.chartPrefs.intSec) setIntSec(stateData.chartPrefs.intSec);
       if (stateData.chartPrefs.intChartPeriod) setIntChartPeriod(stateData.chartPrefs.intChartPeriod);
       if (stateData.chartPrefs.intDateRange) setIntDateRange(stateData.chartPrefs.intDateRange);
@@ -940,7 +947,14 @@ export default function App() {
       if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
       if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
       if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
-      if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(unhideCardsOnce(stateData.chartPrefs.sectionCollapsedMap));
+      if (stateData.chartPrefs.sectionCollapsedMap) {
+        const _secMap = unhideCardsOnce(stateData.chartPrefs.sectionCollapsedMap);
+        setSectionCollapsedMap(_secMap);
+        // 마이그레이션이 실제로 값을 바꿨으면 그 세션에 반드시 저장돼야 한다 — 로드 시점엔
+        // 구조 지문 effect(첫 실행 스킵)도 chartPrefs effect(isInitialLoad 가드)도 저장을
+        // 예약하지 않아, 플래그가 Drive에 안 남으면 다음 로드에서 접힘이 또 풀린다.
+        if (_secMap !== stateData.chartPrefs.sectionCollapsedMap) chartPrefsUpdatedAtRef.current = Date.now();
+      }
       if (stateData.chartPrefs.intSec) setIntSec(stateData.chartPrefs.intSec);
       if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
       if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
@@ -1740,6 +1754,17 @@ export default function App() {
     overrideDate,
   });
 
+  // ⚠️ effect가 아니라 **렌더 중 대입**이다 — blur(setState)와 click 사이에 passive effect가
+  //    flush된다는 보장에 기대지 않기 위해서다(이 ref는 이벤트 핸들러·타이머에서만 읽힌다).
+  // ⚠️ 이 한 줄이 인앱 메모 달력 목표비중 자동 기록의 **유일한 배선**이다. 없으면
+  //    commitRebalTargetSnapshot의 `built`가 항상 undefined가 되어 트리거 4계열(뷰 이탈·저장 3핸들러·
+  //    종료 커밋·날짜 디바운스)이 전부 조용히 no-op이 되고, '즉시 기록' 칩은 언제나 '기록 불가'를
+  //    표시하며 dirty 플래그가 영구히 남는다. RebalancingPanel은 이 ref를 모르므로(FlowBoard/
+  //    BacktestPage의 flushRef prop과 달리) 등록자가 여기밖에 없다.
+  //    ⚠️ 실제로 utils 추출 리팩터링에서 이 줄이 소실된 적이 있다 — undefcheck·scopecheck·esbuild
+  //    어느 것도 못 잡는다(선언은 살아 있고 참조만 0이 된다). verify:card-window #G24가 단언한다.
+  rebalCommitRef.current = buildRebalTargetEntry;
+
   const sameRebalEntry = sameRebalTargetEntry;   // utils 공유 — 창 경로와 판정이 갈리지 않게
 
   const commitRebalTargetSnapshot = (overrideDate?: string) => {
@@ -2305,13 +2330,26 @@ export default function App() {
         if (a.table === 'rebalancing') resetAllMarkedRebalRowsFor(a.pid);
         else resetAllMarkedPortfolioRowsFor(a.pid);
         return { ok: true };
-      case 'updateInvestmentNotes':
+      case 'updateInvestmentNotes': {
         if (!Array.isArray(a.notes)) return { ok: false, reason: '투자 기록 형식이 올바르지 않습니다.' };
+        // ⚠️ 통째 교체 + 앱 탭 메모 달력이 같은 배열을 동시에 편집 → base 지문 검사(INV-4).
+        //    불일치면 거부하고 창은 사유를 인라인으로 알린다(조용한 덮어쓰기 금지).
+        if (a.base !== undefined) {
+          const cur = (portfoliosRef.current || []).find(x => x && x.id === a.pid);
+          if (baseKeyOf(cur?.investmentNotes || []) !== a.base) {
+            return { ok: false, reason: '앱 창(또는 메모 달력)에서 투자 기록이 먼저 바뀌었습니다. 화면이 갱신된 뒤 다시 시도하세요.' };
+          }
+        }
         updateInvestmentNotesFor(a.pid, a.notes);
         return { ok: true };
+      }
       case 'refreshPrice':
         // by-pid — 시장 라우팅·stockHistoryMap 스탬프 날짜를 그 계좌 타입으로 해석한다.
         handleSingleStockRefreshFor(a.pid, a.id, a.code);
+        return { ok: true };
+      case 'adminTargetChange':
+        // 관리자 접속 중에만 실제 발송(앱 탭의 세션당 1회 래치를 그대로 탄다).
+        if (adminViewingAs) notifyUserOfAdminTargetChange();
         return { ok: true };
       case 'verifyPin':
         // ⚠️ 창의 sessionStorage는 **열린 시점 사본**이라 앱 탭에서 PIN을 바꾸면 낡는다 →
@@ -3605,20 +3643,60 @@ export default function App() {
     );
   }
 
+  // ⚠️ 카드 별도 창 피더는 **early return보다 위에서** 만들고 모든 화면 분기에 함께 렌더한다 —
+  //    메인 대시보드 return 안에만 두면 앱 탭이 관리자 페이지·배당세 페이지로 이동하는 순간
+  //    피더가 언마운트돼 창은 갱신이 멈추는데도 ping/pong은 계속 오가 '연결됨·편집 가능'으로 남는다
+  //    (창은 낡은 화면을 보며 편집하게 된다). 렌더 출력이 없으므로 어느 분기에 있어도 무해하다.
+  const cardWinFeeds = (
+    <>
+      {/* 카드 별도 창 피더 — 렌더 출력 없음. 창 하나당 하나씩 마운트돼 그 계좌의 원자재를
+          identity 게이팅으로 push한다(창이 닫히면 sweep이 레지스트리에서 지워 언마운트된다). */}
+      {cardWinKeys.map(k => {
+        const entry = cardWinsRef.current.get(k);
+        return entry ? (
+          <CardWinFeed
+            key={k}
+            entry={entry}
+            portfolios={portfolios}
+            marketIndicators={marketIndicators}
+            marketHolidays={marketHolidays}
+            dividendTaxHistory={dividendTaxHistory}
+            dividendLinks={dividendLinks}
+            stockHistoryMap={stockHistoryMap}
+            indicatorHistoryMap={indicatorHistoryMap}
+            stockFetchStatus={stockFetchStatus}
+            hideAmounts={hideAmounts}
+            isAdmin={!!adminViewingAs || (authUser && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase())}
+            authEpoch={cardAuthEpoch}
+            nonce={cardWinNonce}
+            effectiveDateKey={isKrCutoffAccount(
+              (portfolios.find(p => p && p.id === entry.pid) || {}).accountType || 'portfolio',
+            ) ? krEffectiveDateKey : effectiveDateKey}
+          />
+        ) : null;
+      })}
+    </>
+  );
+
   // 관리자 로그인 직후 — Drive 로딩 전 페이지 선택
   if (adminPendingChoice) {
     return (
+      <>
+      {cardWinFeeds}
       <AdminChoiceModal
         adminEmail={authUser.email}
         onSelectPortfolio={() => { setAdminPendingChoice(false); setDriveLoadReady(true); }}
         onSelectAdmin={() => { setAdminPendingChoice(false); setShowAdminPage(true); }}
       />
+      </>
     );
   }
 
   // 관리자 포털
   if (showAdminPortal && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
     return (
+      <>
+      {cardWinFeeds}
       <AdminPortal
         adminEmail={authUser.email}
         onClose={() => {
@@ -3629,15 +3707,16 @@ export default function App() {
         onViewUser={handleAdminViewUser}
         notify={notify}
       />
+      </>
     );
   }
 
   // 관리자 페이지
   if (showAdminPage && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-    return <AdminPage adminEmail={authUser.email} onClose={() => {
+    return <>{cardWinFeeds}<AdminPage adminEmail={authUser.email} onClose={() => {
       sessionStorage.removeItem(SESSION_KEY);
       window.location.reload();
-    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportUrl={reportUrl} onSetReportUrl={handleSetReportUrl} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} />;
+    }} onViewUser={handleAdminViewUser} onOpenPortal={() => { window.open(`${window.location.origin}/?adminPortal=1`, '_blank'); }} userAccessStatus={userAccessStatus} switching={adminSwitching} userLastSeen={userLastSeen} userDriveStatus={userDriveStatus} onRefreshUserSessions={handleRefreshUserSessions} youtubeUrl={youtubeUrl} onSetYoutubeUrl={handleSetYoutubeUrl} notebookLinks={notebookLinks} onSetNotebookLinks={handleSetNotebookLinks} reportUrl={reportUrl} onSetReportUrl={handleSetReportUrl} noticeFlags={noticeFlags} onSetNoticeFlags={handleSetNoticeFlags} onUploadStudyMaterial={handleUploadStudyMaterial} onDeleteStudyMaterialFile={handleDeleteStudyMaterialFile} /></>;
   }
 
   // 관리자는 모든 feature 자동 허용 — 컴포넌트에 admin 여부를 별도로 전달하지 않아도 됨
@@ -3650,6 +3729,8 @@ export default function App() {
   const canAccessDividendTax = isAdminUser || userFeatures.feature2;
   if (showDividendTaxPage && canAccessDividendTax) {
     return (
+      <>
+      {cardWinFeeds}
       <DividendTaxPage
         onLoad={async () => {
           const folderId = driveFolderIdRef.current || await ensureDriveFolder(driveTokenRef.current);
@@ -3665,6 +3746,7 @@ export default function App() {
         isAdmin={authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()}
         onUpdate={setDividendTaxHistory}
       />
+      </>
     );
   }
 
@@ -3735,32 +3817,7 @@ export default function App() {
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
-      {/* 카드 별도 창 피더 — 렌더 출력 없음. 창 하나당 하나씩 마운트돼 그 계좌의 원자재를
-          identity 게이팅으로 push한다(창이 닫히면 sweep이 레지스트리에서 지워 언마운트된다). */}
-      {cardWinKeys.map(k => {
-        const entry = cardWinsRef.current.get(k);
-        return entry ? (
-          <CardWinFeed
-            key={k}
-            entry={entry}
-            portfolios={portfolios}
-            marketIndicators={marketIndicators}
-            marketHolidays={marketHolidays}
-            dividendTaxHistory={dividendTaxHistory}
-            dividendLinks={dividendLinks}
-            stockHistoryMap={stockHistoryMap}
-            indicatorHistoryMap={indicatorHistoryMap}
-            stockFetchStatus={stockFetchStatus}
-            hideAmounts={hideAmounts}
-            isAdmin={!!adminViewingAs || (authUser && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase())}
-            authEpoch={cardAuthEpoch}
-            nonce={cardWinNonce}
-            effectiveDateKey={isKrCutoffAccount(
-              (portfolios.find(p => p && p.id === entry.pid) || {}).accountType || 'portfolio',
-            ) ? krEffectiveDateKey : effectiveDateKey}
-          />
-        ) : null;
-      })}
+      {cardWinFeeds}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
       <LoadingOverlay visible={isInitialLoading} notificationLog={notificationLog} onDismiss={() => setIsInitialLoading(false)} />
       {showInactivityWarning && <InactivityModal onContinue={handleInactivityContinue} onLogout={handleInactivityLogout} />}

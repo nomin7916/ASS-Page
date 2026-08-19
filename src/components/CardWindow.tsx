@@ -9,7 +9,7 @@ import PortfolioStatsPanel from './PortfolioStatsPanel';
 import HistoryPanel from './HistoryPanel';
 import DepositPanel from './DepositPanel';
 import DividendSummaryTable from './DividendSummaryTable';
-import { CARD_LABELS, cardWindowTitle, isCardKey, isCardWindowSupported } from '../cardWindow';
+import { CARD_LABELS, cardWindowTitle, isCardKey, isCardWindowSupported, baseKeyOf } from '../cardWindow';
 import { buildRebalTargetEntryFrom, buildBookCostSeries, cleanNum } from '../utils';
 
 /**
@@ -34,7 +34,9 @@ import { buildRebalTargetEntryFrom, buildBookCostSeries, cleanNum } from '../uti
  */
 
 const PING_MS = 3000;
-const LINK_TIMEOUT_MS = 12000;
+// ⚠️ 끊김 판정(LINK)이 커맨드 타임아웃(CMD)보다 **빨라야** 한다 — 반대면 '읽기 전용' 배지가 뜨기 전
+//    12초 동안 UI가 편집을 정상처럼 받아들이고, 9초 뒤에야 실패 토스트만 뜬다.
+const LINK_TIMEOUT_MS = 8000;
 const CMD_TIMEOUT_MS = 9000;
 
 const params = new URLSearchParams(window.location.search);
@@ -44,7 +46,10 @@ const PID = params.get('pid') || '';
 // 앱 탭이 새로고침돼도 같은 id로 재입양되므로 별도 난수가 필요 없다.
 const WIN_ID = `${CARD}:${PID}`;
 
-const EMPTY_ACCOUNT = { id: PID, name: '', accountType: 'portfolio', portfolio: [], history: [], depositHistory: [], depositHistory2: [], settings: { mode: 'rebalance', amount: 1000000 } };
+// ⚠️ settings 폴백은 **한 곳**에서만 만든다 — 계산(usePortfolioData)과 화면(RebalancingPanel)이
+//    다른 기본값을 쓰면 settings가 없는 레거시 계좌에서 표의 투자선택과 수량 계산이 어긋난다.
+const DEFAULT_SETTINGS = { mode: 'rebalance', amount: 1000000 };
+const EMPTY_ACCOUNT = { id: PID, name: '', accountType: 'portfolio', portfolio: [], history: [], depositHistory: [], depositHistory2: [], settings: DEFAULT_SETTINGS };
 
 export default function CardWindow() {
   const [account, setAccount] = useState(null);
@@ -125,7 +130,15 @@ export default function CardWindow() {
   }), [post]);
 
   // 결과를 기다리지 않는 쓰기 — 실패만 인라인으로 알린다(성공은 화면 변화가 피드백).
+  // ⚠️ INV-8은 **전송 단계에서** 막아야 실효가 있다 — 카드마다 입력을 잠그는 방식으로는 투자기록·
+  //    settings·열 숨김·분배금 셀처럼 잠그지 못한 경로가 반드시 남고, 사용자는 한참 편집한 뒤에야
+  //    실패를 안다. 여기 한 곳이 창의 모든 쓰기가 지나는 관문이다.
+  const writableRef = useRef(false);
   const fire = useCallback((op, args) => {
+    if (!writableRef.current) {
+      notify('앱 창과 연결이 끊겨 저장할 수 없습니다. 앱 창을 다시 열면 이어집니다.', 'error');
+      return;
+    }
     send(op, args).then(r => { if (r && r.ok === false && r.reason) notify(r.reason, 'error'); });
   }, [send, notify]);
 
@@ -217,7 +230,12 @@ export default function CardWindow() {
 
   const acct = account || EMPTY_ACCOUNT;
   const accountType = acct.accountType || 'portfolio';
-  const writable = linked && gotData && !tornDown && !!account;
+  // ⚠️ 삭제된(소프트) 계좌는 읽기 전용 — 앱 탭에서는 탭바·표에서 숨겨져 편집 진입점이 없는데,
+  //    창만 그 계좌를 계속 편집할 수 있으면 사용자가 '지웠다고 믿는 계좌'가 조용히 바뀐다.
+  //    (달력 스냅샷은 buildRebalTargetEntryFrom이 이미 deletedAt에서 null을 반환해 막고 있다.)
+  const accountDeleted = !!acct.deletedAt;
+  const writable = linked && gotData && !tornDown && !!account && !accountDeleted;
+  writableRef.current = writable;
 
   // ── 파생 — 앱과 **같은 훅**으로 창에서 계산(INV-2) ─────────────────────────
   const data = usePortfolioData({
@@ -227,7 +245,7 @@ export default function CardWindow() {
     principal: acct.principal ?? 0,
     avgExchangeRate: acct.avgExchangeRate ?? 0,
     portfolioStartDate: acct.portfolioStartDate || acct.startDate || '',
-    settings: acct.settings ?? { mode: 'rebalance', amount: 1000000 },
+    settings: acct.settings ?? DEFAULT_SETTINGS,
     depositHistory: acct.depositHistory ?? [],
     depositHistory2: acct.depositHistory2 ?? [],
     portfolios: [acct],
@@ -235,8 +253,10 @@ export default function CardWindow() {
     history: acct.history ?? [],
     historyLimit: 100000,
     rebalanceSortConfig,
-    depositSortConfig: { key: null, direction: 1 },
-    depositSortConfig2: { key: null, direction: 1 },
+    // ⚠️ 창 로컬 정렬 state를 그대로 넘긴다 — 리터럴을 넘기면 헤더를 눌러도 행 순서가 절대
+    //    바뀌지 않는다(파생을 만드는 곳은 usePortfolioData 하나뿐이다).
+    depositSortConfig,
+    depositSortConfig2,
     rebalExtraQty,
   });
 
@@ -267,6 +287,7 @@ export default function CardWindow() {
   }), [acct, accountType, data.rebalanceData, rebalanceSortConfig, rebalExtraQty]);
 
   const saveSnapshotNow = useCallback(async (overrideDate) => {
+    if (!writableRef.current) return 'fail';
     const built = buildSnapshot(overrideDate);
     if (!built) return 'nodate';
     const r = await send('saveTargetSnapshot', { pid: PID, built });
@@ -292,9 +313,15 @@ export default function CardWindow() {
   //    낡은 채 절대값을 보내면 그 사이 앱 탭이 만든 이관·입금이 조용히 사라지므로, 기대값
   //    (expect.principal)을 함께 보내 앱이 다르면 **거부**하게 한다.
   const acctBatchRef = useRef(null);
+  // ⚠️ 계좌 필드 배치에는 **언제나** 원금 기대값을 싣는다(원금을 안 건드리는 배치라도).
+  //    원장(depositHistory)은 배열 통째 교체인데, 앱 탭의 `transferStockToPortfolio`가 이관 행을
+  //    prepend하면서 **원금도 함께** 바꾼다. 원금 기대값이 그 이관을 감지해 배치를 거부하므로,
+  //    메모만 고치는 편집도 이관 행을 조용히 지우지 못한다(원금 write가 없는 경로의 유일한 방어선).
+  const acctPrincipalRef = useRef(0);
+  acctPrincipalRef.current = cleanNum(acct.principal);
   const queueAccountWrite = useCallback((fields, opts) => {
     if (!acctBatchRef.current) {
-      acctBatchRef.current = { fields: {}, expect: null };
+      acctBatchRef.current = { fields: {}, expect: { principal: acctPrincipalRef.current } };
       Promise.resolve().then(() => {
         const b = acctBatchRef.current;
         acctBatchRef.current = null;
@@ -331,7 +358,11 @@ export default function CardWindow() {
     if (!validCard) return <Notice text={`알 수 없는 카드입니다 (card=${CARD}).`} />;
     if (!PID) return <Notice text="계좌가 지정되지 않았습니다." />;
     if (tornDown) return <Notice text="세션이 종료되어 내용을 지웠습니다. 앱 창에서 다시 열어 주세요." />;
-    if (!account) return <Notice text="앱 창에서 데이터를 불러오는 중입니다…" />;
+    // ⚠️ '아직 안 왔다'와 '와 봤더니 없다'를 구분한다 — 영구삭제(purge)된 계좌를 가리키는 창이
+    //    영원히 '불러오는 중'으로 남으면 사용자는 연결이 끊긴 줄로 안다.
+    if (!account) return <Notice text={gotData
+      ? '계좌를 찾을 수 없습니다. 앱 창에서 영구 삭제되었을 수 있습니다.'
+      : '앱 창에서 데이터를 불러오는 중입니다…'} />;
 
     if (CARD === 'summary') {
       return (
@@ -406,7 +437,7 @@ export default function CardWindow() {
         <RebalancingPanel
           activePortfolioAccountType={accountType}
           portfolio={acct.portfolio || []}
-          settings={acct.settings || {}}
+          settings={acct.settings ?? DEFAULT_SETTINGS}
           updateSettingsForType={(next) => fire('patchSettings', { pid: PID, fields: settingsDiff(next) })}
           rebalanceData={data.rebalanceData}
           rebalanceSortConfig={rebalanceSortConfig}
@@ -441,8 +472,15 @@ export default function CardWindow() {
           targetEditAuthorized={targetEditAuthorized}
           setTargetEditAuthorized={setTargetEditAuthorized}
           // PIN 검증은 앱 탭에 위임한다(창의 sessionStorage는 열린 시점 사본이라 낡는다).
-          pinVerify={async (pin) => { const r = await send('verifyPin', { pid: PID, pin }); return !!(r && r.ok && r.result); }}
-          onAdminTargetChange={null}
+          // ⚠️ 연결 실패를 '비밀번호가 틀렸습니다'로 뭉뚱그리지 않는다 — 사유를 토스트로 밝힌다.
+          pinVerify={async (pin) => {
+            const r = await send('verifyPin', { pid: PID, pin });
+            if (!r || r.ok === false) { notify(r?.reason || '앱 창과 통신하지 못했습니다.', 'error'); return false; }
+            return !!r.result;
+          }}
+          // ⚠️ 관리자 접속(impersonation) 중 목표 변경은 인앱과 **같은 등급**으로 사용자에게 알린다.
+          //    null로 두면 창이 인앱보다 '조용한' 편집 통로가 된다(세션당 1회 래치는 앱 탭이 담당).
+          onAdminTargetChange={isAdmin ? () => fire('adminTargetChange', { pid: PID }) : null}
           onTargetEdited={() => { snapshotDirtyRef.current = true; }}
           onTargetSaveNow={() => { snapshotDirtyRef.current = false; return saveSnapshotNow(); }}
           rebalTargetSnapshots={[]}
@@ -453,7 +491,10 @@ export default function CardWindow() {
           showCalculator={false}
           onToggleCalculator={null}
           investmentNotes={acct.investmentNotes || []}
-          onUpdateInvestmentNotes={(notes) => fire('updateInvestmentNotes', { pid: PID, notes })}
+          // ⚠️ 투자기록은 배열 통째 교체인데 앱 탭의 **메모 달력 NOTE 패드**가 같은 배열을
+          //    updateInvestmentNotesFor로 동시에 편집한다(CLAUDE.md 명시) → base 지문을 함께
+          //    보내고 앱이 불일치를 감지하면 거부한다(INV-4).
+          onUpdateInvestmentNotes={(notes) => fire('updateInvestmentNotes', { pid: PID, notes, base: baseKeyOf(acct.investmentNotes || []) })}
           onRefreshPrice={(id, code) => fire('refreshPrice', { pid: PID, id, code })}
           stockFetchStatus={stockFetchStatus}
           readOnly={!writable}
@@ -537,7 +578,7 @@ export default function CardWindow() {
 
     return <Notice text="이 카드는 아직 별도 창을 지원하지 않습니다." />;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [validCard, tornDown, account, acct, data, hideAmounts, hoveredPortCatSlice, hoveredPortStkSlice,
+  }, [validCard, tornDown, gotData, accountDeleted, account, acct, data, hideAmounts, hoveredPortCatSlice, hoveredPortStkSlice,
       hoveredRebalCatSlice, hoveredCurCatSlice, rebalExtraQty, rebalanceSortConfig, marketIndicators,
       marketHolidays, dividendTaxHistory, dividendLinks, stockFetchStatus, isAdmin, writable,
       confirm, notify, fire, send, handleRebalanceSort, accountType, settingsDiff, saveSnapshotNow,
@@ -546,6 +587,8 @@ export default function CardWindow() {
 
   const notice = tornDown
     ? '세션이 종료되었습니다.'
+    : accountDeleted
+      ? '앱 창에서 삭제된 계좌입니다 — 읽기 전용입니다. 복원 후 다시 열어 주세요.'
     : !linked
       ? '앱 창과 연결이 끊겨 읽기 전용입니다. 앱 창을 다시 열면 자동으로 이어집니다.'
       : !gotData
