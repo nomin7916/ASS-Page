@@ -3007,6 +3007,15 @@ export default function App() {
         actualDividendUsd: p.actualDividendUsd,
         actualAfterTaxUsd: p.actualAfterTaxUsd,
         actualAfterTaxKrw: p.actualAfterTaxKrw,
+        // ⚠️ actualDividendQty·dividendTaxAmounts 필수 — 두 라이터
+        //    (updatePortfolioActualDividendQty·updatePortfolioDividendTaxAmount)는
+        //    `dividendHistoryUpdatedAt`을 올리지 않으므로, 이 지문이 유일한 저장 트리거다.
+        //    빠뜨리면 '월 입금 내역'의 보유수량이나 세금 금액만 고친 세션이 portfolioUpdatedAt
+        //    미상승 → useDriveSync의 STATE 저장 가드에 막혀 조용히 유실된다
+        //    (historyVerifyKey·investmentNotesKey·targetAmount와 동일 버그 클래스).
+        //    둘 다 사용자 입력 전용 맵이라 시세 갱신으로는 변하지 않는다(저장 폭주 없음).
+        actualDividendQty: p.actualDividendQty,
+        dividendTaxAmounts: p.dividendTaxAmounts,
         dividendTaxRate: p.dividendTaxRate,
         dividendSeparateTax: p.dividendSeparateTax,
         lookupRows: p.lookupRows,

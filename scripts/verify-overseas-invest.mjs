@@ -191,12 +191,21 @@ console.log('\n── 파트② 소스 텍스트 가드 ──');
   const upd = read('src/hooks/usePortfolioData.ts');
   const uid = read('src/hooks/useIntegratedData.ts');
 
-  const hu = ups.slice(ups.indexOf('const handleUpdate = (id, field, value)'), ups.indexOf('const handleDeleteStock'));
+  // ⚠️ 앵커는 `handleUpdateFor`(by-id 구현체)다 — 카드 별도 창이 비활성 계좌를 편집하려면 쓰기의
+  //    바닥이 by-id여야 해서, 옛 `handleUpdate`는 활성 계좌를 넘기는 한 줄 위임으로 남았다.
+  //    계약(해외 미러 규칙 = 유일한 쓰기 경로)은 그대로이고 위치·accountType 소스만 바뀌었다.
+  //    accountType은 이제 활성 계좌가 아니라 **대상 계좌(pf)**에서 해석한다(`acctType`).
+  const hu = ups.slice(ups.indexOf('const handleUpdateFor = (pid, id, field, value)'), ups.indexOf('const handleDeleteStock'));
 
-  ok('#15 쓰기 경로는 handleUpdate 하나뿐 — 해외 분기가 존재한다',
-    hu.length > 200 && /activePortfolioAccountType === 'overseas'/.test(hu) && /investAmountUsd/.test(hu));
+  ok('#15 쓰기 경로는 handleUpdateFor 하나뿐 — 해외 분기가 존재한다',
+    hu.length > 200 && /acctType === 'overseas'/.test(hu) && /investAmountUsd/.test(hu)
+    // 옛 활성 계좌 전용 경로가 되살아나지 않았는지도 함께 단언(by-id 회귀 방지)
+    && /const acctType = pf\.accountType \|\| 'portfolio';/.test(hu)
+    && !/activePortfolioAccountType/.test(hu));
   ok('#16 미러 재산출이 accountType + type 으로 좁혀져 있다 (금현물·펀드 파괴 방지)',
-    /activePortfolioAccountType === 'overseas'\s*&&\s*p\.type === 'stock'/.test(hu));
+    /acctType === 'overseas'\s*&&\s*p\.type === 'stock'/.test(hu));
+  ok('#15b 활성 계좌 경로는 handleUpdateFor에 pid를 넘기는 위임이다 (앱 탭 동작 불변)',
+    /const handleUpdate = \(id, field, value\) => handleUpdateFor\(activePortfolioId, id, field, value\);/.test(ups));
   ok('#17 미러는 qty > 0 일 때만 쓴다 (0 나눗셈 → Infinity 영속 방지)',
     /if \(qty > 0 && Number\.isFinite\(invest\)\) next\.purchasePrice = invest \/ qty;/.test(hu));
   ok('#18 수량 편집의 총액 소스는 overseasInvestAmount (레거시 1회 시드 + 원화값 차단)',

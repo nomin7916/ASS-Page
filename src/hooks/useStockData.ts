@@ -219,8 +219,21 @@ export function useStockData({
     }
   };
 
-  const handleSingleStockRefresh = async (id, code) => {
-    const item = portfolio.find(p => p.id === id);
+  // ⚠️ 단일 종목 재조회는 **계좌 id로** 동작해야 한다(카드 별도 창은 비활성 계좌를 띄운다).
+  //    옛 구현은 ① 항목 조회(`portfolio.find`) ② 시장 라우팅(`activePortfolioAccountType`)
+  //    ③ 쓰기(`setPortfolio`) ④ `stampDateFor` **넷 다** 활성 계좌에 묶여 있었다. 그래서 창이
+  //    다른 계좌를 보고 있으면 국내 종목을 해외 API로 조회하거나(그 반대), 무엇보다
+  //    **잘못된 확정일에 전역 stockHistoryMap을 스탬프**했다 — 그 맵은 buildCloseEvalSeries의
+  //    allExact 판정과 자동확정 데이터완비 가드의 권위 소스이고 Drive에 영속되므로, 한 번
+  //    오염되면 과거 평가액이 영구히 어긋난다. 활성 계좌 경로는 아래 위임으로 동작 불변.
+  const handleSingleStockRefreshFor = async (pid, id, code) => {
+    const acct = (portfoliosRef.current || []).find(p => p && p.id === pid);
+    if (!acct) return;                       // 구조적 no-op — 없는 계좌에 쓰지 않는다
+    const acctType = acct.accountType || 'portfolio';
+    const item = (acct.portfolio || []).find(p => p && p.id === id);
+    const setPortfolio = (updater) => setPortfolios(prev => prev.map(p => p.id !== pid ? p : ({
+      ...p, portfolio: typeof updater === 'function' ? updater(p.portfolio ?? []) : updater,
+    })));
     if (item?.type === 'fund') {
       if (!code) return;
       const fundCode = extractFundCode(code);
@@ -258,19 +271,22 @@ export function useStockData({
       }
       return;
     }
-    const isOverseas = activePortfolioAccountType === 'overseas';
+    const isOverseas = acctType === 'overseas';
     if (!code || (!isOverseas && code.length < 5)) return;
     setStockFetchStatus(prev => ({ ...prev, [code]: 'loading' }));
     const d = isOverseas ? await fetchUsStockInfo(code) : await fetchStockInfo(code);
     if (d) {
       setPortfolio(prev => prev.map(p => p.id === id ? { ...p, name: d.name, currentPrice: d.price, changeRate: d.changeRate } : p));
       setStockFetchStatus(prev => ({ ...prev, [code]: 'success' }));
-      const stampD = stampDateFor(activePortfolioAccountType);
+      const stampD = stampDateFor(acctType);
       if (stampD) setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [stampD]: d.price } }));
     } else {
       setStockFetchStatus(prev => ({ ...prev, [code]: 'fail' }));
     }
   };
+
+  // 활성 계좌 경로(포트폴리오 표·리밸런싱 현재가 셀) — 동작 불변.
+  const handleSingleStockRefresh = (id, code) => handleSingleStockRefreshFor(activePortfolioIdRef.current, id, code);
 
   const handleAddCompStock = () => {
     const nextId = Math.max(...compStocks.map(s => s.id)) + 1;
@@ -1447,6 +1463,7 @@ export function useStockData({
   return {
     handleStockBlur,
     handleSingleStockRefresh,
+    handleSingleStockRefreshFor,   // 카드 별도 창(비활성 계좌) 전용 — 활성 경로는 위 위임
     handleAddCompStock,
     handleRemoveCompStock,
     handleCompStockBlur,

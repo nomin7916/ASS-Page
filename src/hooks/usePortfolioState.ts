@@ -4,6 +4,22 @@ import { UI_CONFIG } from '../config';
 import { generateId, cleanNum, formatNumber, buildTransferLedgerRows, overseasInvestAmount } from '../utils';
 import { getTodayKST, getBackfillBoundaryForAccount } from './useMarketCalendar';
 
+// 행 색상 마킹 4색 사이클(노랑→슬레이트→로즈→갈색→해제). 활성 계좌 경로와 by-id(카드 별도 창)
+// 경로가 **같은 함수**를 써야 두 화면의 색 순서가 갈리지 않는다.
+const MARK_ORDER = ['yellow', 'slate', 'rose', 'brown'];
+const cycleMarkedRow = (cur, itemId) => {
+  const next = { ...(cur ?? {}) };
+  const idx = MARK_ORDER.indexOf((cur ?? {})[itemId]);
+  if (idx === -1) next[itemId] = MARK_ORDER[0];
+  else if (idx < MARK_ORDER.length - 1) next[itemId] = MARK_ORDER[idx + 1];
+  else delete next[itemId];
+  return next;
+};
+const toggleInList = (list, key) => {
+  const cur = Array.isArray(list) ? list : [];
+  return cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key];
+};
+
 interface UsePortfolioStateParams {
   marketIndicators: { goldKr?: number; goldKrChg?: number; [key: string]: any };
   notify: (text: string, type?: string) => void;
@@ -57,46 +73,56 @@ export function usePortfolioState({
   const setLookupRows = (v) => patchActive(p => ({ lookupRows: typeof v === 'function' ? v(p.lookupRows ?? []) : v }));
   const hiddenColumnsPortfolio = activePortfolio?.hiddenColumnsPortfolio ?? [];
   const hiddenColumnsRebalancing = activePortfolio?.hiddenColumnsRebalancing ?? [];
-  const toggleHiddenColumnPortfolio = (key) => patchActive(p => {
-    const cur = p.hiddenColumnsPortfolio ?? [];
-    return { hiddenColumnsPortfolio: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key] };
-  });
-  const toggleHiddenColumnRebalancing = (key) => patchActive(p => {
-    const cur = p.hiddenColumnsRebalancing ?? [];
-    return { hiddenColumnsRebalancing: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key] };
-  });
+  // by-id 변형(카드 별도 창) — 활성 경로는 그 위의 위임이다. 두 경로가 같은 순수 헬퍼를 공유한다.
+  const toggleHiddenColumnPortfolioFor = (pid, key) => patchById(pid, p => ({ hiddenColumnsPortfolio: toggleInList(p.hiddenColumnsPortfolio, key) }));
+  const toggleHiddenColumnRebalancingFor = (pid, key) => patchById(pid, p => ({ hiddenColumnsRebalancing: toggleInList(p.hiddenColumnsRebalancing, key) }));
+  const toggleHiddenColumnPortfolio = (key) => toggleHiddenColumnPortfolioFor(activePortfolioId, key);
+  const toggleHiddenColumnRebalancing = (key) => toggleHiddenColumnRebalancingFor(activePortfolioId, key);
   const markedRebalRows = activePortfolio?.markedRebalRows ?? {};
-  const toggleMarkedRebalRow = (itemId) => patchActive(p => {
-    const cur = p.markedRebalRows ?? {};
-    const order = ['yellow', 'slate', 'rose', 'brown'];
-    const next = { ...cur };
-    const idx = order.indexOf(cur[itemId]);
-    if (idx === -1) next[itemId] = order[0];
-    else if (idx < order.length - 1) next[itemId] = order[idx + 1];
-    else delete next[itemId];
-    return { markedRebalRows: next };
-  });
   const markedPortfolioRows = activePortfolio?.markedPortfolioRows ?? {};
-  const toggleMarkedPortfolioRow = (itemId) => patchActive(p => {
-    const cur = p.markedPortfolioRows ?? {};
-    const order = ['yellow', 'slate', 'rose', 'brown'];
-    const next = { ...cur };
-    const idx = order.indexOf(cur[itemId]);
-    if (idx === -1) next[itemId] = order[0];
-    else if (idx < order.length - 1) next[itemId] = order[idx + 1];
-    else delete next[itemId];
-    return { markedPortfolioRows: next };
-  });
-  const resetAllMarkedRebalRows = () => patchActive(() => ({ markedRebalRows: {} }));
-  const resetAllMarkedPortfolioRows = () => patchActive(() => ({ markedPortfolioRows: {} }));
+  const toggleMarkedRebalRowFor = (pid, itemId) => patchById(pid, p => ({ markedRebalRows: cycleMarkedRow(p.markedRebalRows, itemId) }));
+  const toggleMarkedPortfolioRowFor = (pid, itemId) => patchById(pid, p => ({ markedPortfolioRows: cycleMarkedRow(p.markedPortfolioRows, itemId) }));
+  const resetAllMarkedRebalRowsFor = (pid) => patchById(pid, () => ({ markedRebalRows: {} }));
+  const resetAllMarkedPortfolioRowsFor = (pid) => patchById(pid, () => ({ markedPortfolioRows: {} }));
+  const toggleMarkedRebalRow = (itemId) => toggleMarkedRebalRowFor(activePortfolioId, itemId);
+  const toggleMarkedPortfolioRow = (itemId) => toggleMarkedPortfolioRowFor(activePortfolioId, itemId);
+  const resetAllMarkedRebalRows = () => resetAllMarkedRebalRowsFor(activePortfolioId);
+  const resetAllMarkedPortfolioRows = () => resetAllMarkedPortfolioRowsFor(activePortfolioId);
 
-  // ── 활성 포트폴리오만 갱신하는 헬퍼 ──
-  const patchActive = (patch) =>
+  // ── 지정 계좌만 갱신하는 헬퍼(by-id) ──
+  // ⚠️ 카드 별도 창(`/?cardWindow=1`)은 **앱 탭의 활성 계좌가 아닌** 계좌를 편집한다. 그래서
+  //    쓰기의 바닥이 by-id여야 하고, `patchActive`는 그 위의 얇은 래퍼로만 남는다.
+  //    (patchActive를 그대로 프록시하면 창의 편집이 앱 탭 활성 계좌에 착지해 조용히 다른 계좌를
+  //     파괴한다 — 설계 검증에서 3개 렌즈가 독립 확인한 결함.)
+  //    pid가 없거나 배열에 없으면 **구조적 no-op**이다(잘못된 계좌에 쓰느니 아무 것도 안 쓴다).
+  const patchById = (pid, patch) =>
     setPortfolios(prev => prev.map(p => {
-      if (p.id !== activePortfolioId) return p;
+      if (p.id !== pid) return p;
       const resolved = typeof patch === 'function' ? patch(p) : patch;
       return { ...p, ...resolved };
     }));
+
+  // ── 활성 포트폴리오만 갱신하는 헬퍼 ──
+  // ⚠️ 렌더 스코프의 activePortfolioId를 클로저로 잡는다(위임 전과 동일 — 타이밍 무변).
+  const patchActive = (patch) => patchById(activePortfolioId, patch);
+
+  // 항목 배열 갱신(by-id). 함수형 updater는 **앱 탭 내부 전용**이다 — 별도 창은 직렬화할 수 없으므로
+  // 아래 `applyItemPatchesFor`(항목 id → 바꿀 필드)를 쓴다.
+  const setPortfolioItemsFor = (pid, v) =>
+    patchById(pid, p => ({ portfolio: typeof v === 'function' ? v(p.portfolio ?? []) : v }));
+
+  // ⚠️ 별도 창의 항목 쓰기 단일 창구. `[{ id, fields }]`만 받으므로 postMessage로 그대로 실어 보낼 수
+  //    있고, 적용은 앱 탭이 **최신 prev 위에서** 필드 단위로 병합한다 → 그 사이 시세 갱신
+  //    (useStockData가 currentPrice/changeRate를 계속 덮는다)과 충돌하지 않는다.
+  //    ⚠️ 배열을 통째로 돌려받는 방식으로 되돌리지 말 것 — 창의 스냅샷이 몇 초만 낡아도
+  //    그 사이 앱 탭이 쓴 시세·history·스냅샷이 되감긴다(복구 불가).
+  const applyItemPatchesFor = (pid, patches) => {
+    if (!Array.isArray(patches) || !patches.length) return;
+    const byId = new Map();
+    patches.forEach(x => { if (x && x.id != null) byId.set(x.id, { ...(byId.get(x.id) || {}), ...(x.fields || {}) }); });
+    if (!byId.size) return;
+    setPortfolioItemsFor(pid, items => items.map(it => (it && byId.has(it.id)) ? { ...it, ...byId.get(it.id) } : it));
+  };
 
   // ── 하위 호환 세터 ──
   const setTitle = (v) => patchActive({ name: v });
@@ -108,6 +134,14 @@ export function usePortfolioState({
   const setDepositHistory2 = (v) => patchActive(p => ({ depositHistory2: typeof v === 'function' ? v(p.depositHistory2 ?? []) : v }));
   const setSettings = (v) => patchActive({ settings: v });
   const setPortfolioStartDate = (v) => patchActive({ portfolioStartDate: v, startDate: v });
+
+  // ── by-id 세터(카드 별도 창) ──
+  // ⚠️ 원금은 **절대값 write와 델타 write가 둘 다 실재**한다(원금 직접 입력 / 원장 편집의 프로라타
+  //    보정). 창이 자기 스냅샷으로 계산한 절대값을 보내면 그 사이 앱 탭이 만든 이관·입금이 조용히
+  //    사라지므로, 창은 가능한 한 델타를 쓰고 절대값은 사용자가 직접 친 값에만 쓴다.
+  const setPrincipalFor = (pid, v) => patchById(pid, { principal: cleanNum(v) });
+  const addPrincipalFor = (pid, delta) => patchById(pid, p => ({ principal: Math.max(0, cleanNum(p.principal) + cleanNum(delta)) }));
+  const setAvgExchangeRateFor = (pid, v) => patchById(pid, { avgExchangeRate: cleanNum(v) });
 
   // ── buildPortfoliosState (portfolios가 단일 소스) ──
   const buildPortfoliosState = () => portfolios;
@@ -317,11 +351,57 @@ export function usePortfolioState({
   };
 
   // ── 같은 accountType 계좌에 settings 동기화 ──
-  const updateSettingsForType = (newSettings) => {
-    if (!activePortfolio) return;
-    setPortfolios(prev => prev.map(p =>
-      p.accountType === activePortfolio.accountType ? { ...p, settings: newSettings } : p
-    ));
+  // ⚠️ accountType은 **pid에서** 해석한다. 활성 계좌에서 해석하면 별도 창(비활성 계좌)의 설정 변경이
+  //    엉뚱한 accountType 그룹 전체에 박힌다(설계 검증 확정 결함).
+  const updateSettingsForTypeOf = (pid, newSettings) => {
+    setPortfolios(prev => {
+      const t = prev.find(p => p.id === pid);
+      if (!t) return prev;
+      return prev.map(p => p.accountType === t.accountType ? { ...p, settings: newSettings } : p);
+    });
+  };
+  const updateSettingsForType = (newSettings) => updateSettingsForTypeOf(activePortfolioId, newSettings);
+
+  // ⚠️ 별도 창 전용 — settings **필드 병합**. 창은 read-modify-write(`{...settings, x}`)를 보내면
+  //    자기 스냅샷이 낡은 만큼 형제 계좌/앱 탭의 최신 설정을 되감는다. 필드만 보내고 병합은
+  //    앱 탭이 최신 값 위에서 한다(lost update 원천 차단).
+  const patchSettingsForTypeOf = (pid, fields) => {
+    if (!fields || typeof fields !== 'object') return;
+    setPortfolios(prev => {
+      const t = prev.find(p => p.id === pid);
+      if (!t) return prev;
+      const next = { ...(t.settings || {}), ...fields };
+      return prev.map(p => p.accountType === t.accountType ? { ...p, settings: next } : p);
+    });
+  };
+
+  // ⚠️ 별도 창의 **원자적** 복합 쓰기. 미러 사이클(cycleMirror/cycleAmtMirror)·잔액→예수금 적용·
+  //    원장 편집+원금 보정처럼 '항목 + settings + 계좌 필드'를 한 클릭에 함께 쓰는 경로는 반드시
+  //    이 하나를 써야 한다. 두 커맨드로 쪼개면 한쪽만 적용된 반쪽 상태가 남고, 사용자가 다시 누르면
+  //    같은 전이를 또 타서 목표값이 두 번 덮인다(undo 없음 — 설계 검증 확정 결함).
+  const applyCardWriteFor = (pid, ops) => {
+    if (!ops || typeof ops !== 'object') return;
+    const itemPatches = Array.isArray(ops.itemPatches) ? ops.itemPatches : null;
+    const byId = itemPatches ? new Map() : null;
+    if (itemPatches) itemPatches.forEach(x => {
+      if (x && x.id != null) byId.set(x.id, { ...(byId.get(x.id) || {}), ...(x.fields || {}) });
+    });
+    setPortfolios(prev => {
+      const t = prev.find(p => p.id === pid);
+      if (!t) return prev;   // 구조적 no-op — 잘못된 계좌에 쓰느니 아무 것도 안 쓴다
+      const nextSettings = (ops.settingsFields && typeof ops.settingsFields === 'object')
+        ? { ...(t.settings || {}), ...ops.settingsFields } : null;
+      return prev.map(p => {
+        let np = p;
+        if (p.id === pid) {
+          np = { ...np };
+          if (byId && byId.size) np.portfolio = (np.portfolio || []).map(it => (it && byId.has(it.id)) ? { ...it, ...byId.get(it.id) } : it);
+          if (ops.accountFields && typeof ops.accountFields === 'object') np = { ...np, ...ops.accountFields };
+        }
+        if (nextSettings && p.accountType === t.accountType) np = { ...np, settings: nextSettings };
+        return np;
+      });
+    });
   };
 
   // ── 메모 변경 ──
@@ -638,12 +718,18 @@ export function usePortfolioState({
   //    같이 쓰는 범용 라이터다.
   // ⚠️ 미러는 `qty > 0`일 때만 쓴다 — 0으로 나누면 Infinity가 그대로 저장되고(cleanNum은 숫자를
   //    통과시킨다) JSON.stringify가 null로 직렬화해 재로드 시 원가가 영구 소실된다(undo 없음).
-  const handleUpdate = (id, field, value) =>
-    setPortfolio(prev => prev.map(p => {
+  // ⚠️ 항목 필드 쓰기의 단일 경로. accountType은 **pid에서** 해석한다 — 활성 계좌 타입으로 해석하면
+  //    별도 창(비활성 계좌)이 다른 타입의 행을 잘못된 규칙으로 쓴다(해외 미러가 국내 행에 박히거나
+  //    그 반대). `verify:overseas` #15~#18이 이 함수 본문을 슬라이스해 단언하므로, 이름이나
+  //    accountType 표현식(`acctType`)을 바꾸면 scripts/verify-overseas-invest.mjs의 앵커·정규식도
+  //    반드시 같이 고칠 것.
+  const handleUpdateFor = (pid, id, field, value) =>
+    patchById(pid, pf => ({ portfolio: (pf.portfolio ?? []).map(p => {
       if (p.id !== id) return p;
       if (['category', 'name', 'code', 'assetClass'].includes(field)) return { ...p, [field]: value };
       const num = cleanNum(value);
-      if (activePortfolioAccountType === 'overseas' && p.type === 'stock'
+      const acctType = pf.accountType || 'portfolio';
+      if (acctType === 'overseas' && p.type === 'stock'
         && (field === 'investAmountUsd' || field === 'quantity')) {
         // 수량을 고쳐도 총액은 사용자가 정한 값 그대로 둔다(저장값이 없던 레거시 행은 편집 **직전**
         // 총액 = purchasePrice × 옛수량으로 1회 시드 — overseasInvestAmount가 그 값을 돌려준다).
@@ -654,7 +740,8 @@ export function usePortfolioState({
         return next;
       }
       return { ...p, [field]: num };
-    }));
+    }) }));
+  const handleUpdate = (id, field, value) => handleUpdateFor(activePortfolioId, id, field, value);
 
   // 삭제는 되돌릴 수 없고(보유 수량·매입금액 소실) 이관 버튼 바로 옆이라 오클릭이 쉽다 → 확인 필수.
   // 주식·펀드·예적금 행이 전부 이 한 핸들러(onDelete)를 쓰므로 여기 한 곳이면 셋 다 보호된다.
@@ -870,6 +957,24 @@ export function usePortfolioState({
     title,
     activePortfolio,
     patchActivePortfolio: patchActive,
+    // ── by-id 라이터(카드 별도 창 전용) ──
+    // ⚠️ 창은 앱 탭의 활성 계좌가 아닌 계좌를 편집한다. patchActive 계열을 프록시하면 편집이
+    //    엉뚱한 계좌에 착지하므로(무음 파괴) 창 경로는 반드시 아래를 쓴다.
+    patchPortfolioById: patchById,
+    applyItemPatchesFor,
+    applyCardWriteFor,
+    handleUpdateFor,
+    updateSettingsForTypeOf,
+    patchSettingsForTypeOf,
+    setPrincipalFor,
+    addPrincipalFor,
+    setAvgExchangeRateFor,
+    toggleHiddenColumnPortfolioFor,
+    toggleHiddenColumnRebalancingFor,
+    toggleMarkedRebalRowFor,
+    toggleMarkedPortfolioRowFor,
+    resetAllMarkedRebalRowsFor,
+    resetAllMarkedPortfolioRowsFor,
     portfolio,
     principal,
     avgExchangeRate,
