@@ -8,6 +8,7 @@ import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKe
 import { PieLabelOutside } from '../chartUtils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
+import CardExpandButton from './CardExpandButton';
 import RebalanceTargetRestoreModal from './RebalanceTargetRestoreModal';
 import LadderTradeModal from './LadderTradeModal';
 
@@ -122,6 +123,21 @@ export default function RebalancingPanel({
   // ⚠️ 미전달이면 재조회가 없을 뿐 계산기는 종전대로 동작한다(graceful).
   onRefreshPrice = null,
   stockFetchStatus = {},
+  // ── 카드 별도 창(`/?cardWindow=1`) 전용 ──
+  // ⚠️ `cardWrite`가 주어지면 '항목 patch + settings'를 **하나의 커맨드**로 보낸다. 별도 창에서
+  //    두 메시지로 쪼개지면 한쪽만 적용된 반쪽 상태가 남고, 사용자가 다시 누르면 같은 전이를 또
+  //    타서 목표값이 두 번 덮인다(undo 없음 — 설계 적대적 검증 확정 결함).
+  //    미전달(인앱)이면 종전대로 setPortfolio + updateSettingsForType을 쓴다 → 동작 100% 동일.
+  cardWrite = null,
+  // 앱 탭과 연결이 끊긴 창 — 편집을 아예 막는다(저장 버튼만 숨기면 한참 고친 뒤 사라진다).
+  readOnly = false,
+  // PIN 검증 위임(창 전용) — 창의 sessionStorage는 열린 시점 사본이라 로컬 검증이 낡는다.
+  pinVerify = null,
+  // 카드 확장(별도 창) — 표·도넛이 각각 별도 창이라 진입점도 둘이다(별도 창에는 미전달).
+  onExpandTable = null,
+  onExpandDonut = null,
+  tableWindowOpen = false,
+  donutWindowOpen = false,
 }) {
   const [editingRatio, setEditingRatio] = useState({});
   // 목표금액 입력 초안 — 목표비중(editingRatio)과 같은 패턴. onChange마다 setPortfolio를 부르면
@@ -325,12 +341,36 @@ export default function RebalancingPanel({
     if (onTargetEdited) onTargetEdited(opts);
   };
 
+  // ── 목표(비중·금액) 쓰기의 단일 창구 ─────────────────────────────────────────
+  // itemPatches = [{ id, fields }] — **직렬화 가능한 형태**라 별도 창이 그대로 실어 보낸다.
+  // ⚠️ `setPortfolio(prev => prev.map(...))`로 되돌리지 말 것: 창은 함수를 보낼 수 없고, 결과
+  //    배열을 통째로 돌려보내면 그 사이 앱 탭이 쓴 시세(currentPrice/changeRate)가 되감긴다.
+  // ⚠️ settingsFields는 **병합 패치**다(통째 교체 아님) — 창의 settings 스냅샷이 낡은 만큼
+  //    형제 계좌/앱 탭의 최신 설정을 되감는 것을 막는다.
+  const writeTargets = (itemPatches, settingsFields) => {
+    if (readOnly) return;
+    const patches = (itemPatches || []).filter(x => x && x.id != null && x.fields);
+    if (cardWrite) {
+      if (!patches.length && !settingsFields) return;
+      cardWrite({ itemPatches: patches, settingsFields: settingsFields || null });
+      return;
+    }
+    if (patches.length) {
+      const byId = new Map(patches.map(x => [x.id, x.fields]));
+      setPortfolio(prev => prev.map(p => (p && byId.has(p.id)) ? { ...p, ...byId.get(p.id) } : p));
+    }
+    if (settingsFields) updateSettingsForType({ ...settings, ...settingsFields });
+  };
+  // 미러 전이가 훑는 행 집합 — 계산은 props의 portfolio(그 렌더의 최신 항목 배열)로 한다.
+  const mirrorRows = (types) => (portfolio || []).filter(p => p && types.includes(p.type));
+
   // ── 과거 목표비중 복원 (메모 달력 rebalTarget 스냅샷 → 현재 표) ──
   // ⚠️ reportAdminChange를 재사용하지 말 것 — onTargetEdited까지 발화해 dirty가 서면, 헤더 날짜가
   //    복원 소스와 같을 때 그 원본 기록이 오늘 수량·평가금으로 덮어써진다. 기록 여부 판정은
   //    App의 onTargetRestored가 헤더 날짜와 비교해 결정한다(CLAUDE.md "과거 목표비중 복원").
   // #verify:restore-apply-start
   const applyRestoredTargets = (dayKey, memo, matched) => {
+    if (!setPortfolio) return;
     if (!memo || !Array.isArray(matched) || matched.length === 0) return;
     if (activePortfolioId && memo.portfolioId && memo.portfolioId !== activePortfolioId) return;
     const { slotField, overrideField } = resolveTargetSlots(settings);
@@ -393,11 +433,18 @@ export default function RebalancingPanel({
   const openDatePicker = () => { try { datePickerRef.current?.showPicker?.(); } catch {} };
 
   // 목표 날짜 칩 왼쪽 구역 = 즉시 기록. 결과는 칩 텍스트로 1.5초 표시한다(위 dateFlash 주석 참조).
-  const saveTargetSnapshotNow = () => {
-    const r = (onTargetSaveNow ? onTargetSaveNow() : null) || 'fail';
+  // ⚠️ 반환값은 문자열 **또는 Promise<문자열>** 이다 — 카드 별도 창은 앱 탭에 커맨드를 보내고
+  //    ack를 기다려야 결과를 알 수 있는데, 동기 반환만 허용하면 기록이 실제로 저장돼도 칩은
+  //    언제나 '기록 불가'를 표시한다(이 칩이 유일한 피드백이다).
+  const flashSaveResult = (r) => {
     if (dateFlashTimerRef.current) clearTimeout(dateFlashTimerRef.current);
-    setDateFlash(r);
+    setDateFlash(r || 'fail');
     dateFlashTimerRef.current = setTimeout(() => { dateFlashTimerRef.current = null; setDateFlash(null); }, 1500);
+  };
+  const saveTargetSnapshotNow = () => {
+    const r = onTargetSaveNow ? onTargetSaveNow() : null;
+    if (r && typeof r.then === 'function') { r.then(flashSaveResult, () => flashSaveResult('fail')); return; }
+    flashSaveResult(r);
   };
   // 패널은 섹션을 접으면 언마운트된다 → 남은 타이머 정리(언마운트 후 setState 방지).
   useEffect(() => () => { if (dateFlashTimerRef.current) clearTimeout(dateFlashTimerRef.current); }, []);
@@ -601,10 +648,12 @@ export default function RebalancingPanel({
     const newDeposit = isLevelMode
       ? Math.round(rebalRemaining)
       : Math.round(headerDepositAmount - headerUseDeposit + rebalRemaining);
-    setPortfolio(prev => prev.map(p => p.type === 'deposit' ? { ...p, depositAmount: newDeposit } : p));
-    if (!isLevelMode && settings.useDepositAmount != null) {
-      updateSettingsForType({ ...settings, useDepositAmount: null });
-    }
+    // ⚠️ 예수금 행 갱신과 '사용할 예수금' 해제는 스코프가 다른 두 쓰기다 — 한쪽만 착지하면
+    //    예수금은 늘었는데 캡이 옛 값으로 남아 투자가능금·잔액이 어긋난다 → 한 번에 쓴다.
+    //    예수금 행은 복수일 수 있으므로 술어(type==='deposit')로 전부 모아 patch한다.
+    writeTargets(
+      mirrorRows(['deposit']).map(p => ({ id: p.id, fields: { depositAmount: newDeposit } })),
+      (!isLevelMode && settings.useDepositAmount != null) ? { useDepositAmount: null } : null);
   };
 
   const formatRemaining = (n) => activePortfolioAccountType === 'overseas'
@@ -669,6 +718,7 @@ export default function RebalancingPanel({
             <div className="flex items-center gap-1.5 shrink-0 pt-1">
               <span className="text-green-400 text-xl font-bold">리밸런싱</span>
               <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="계산식 보기"><HelpCircle size={14} /></button>
+              <CardExpandButton onExpand={onExpandTable} opened={tableWindowOpen} label="리밸런싱" />
             </div>
             <div className="flex-1 flex justify-end items-start gap-6">
               {(curCatDonutData.length > 0 || rebalCatDonutData.length > 0) && (
@@ -1107,33 +1157,29 @@ export default function RebalancingPanel({
                                 const mirrorState = settings[mirrorField] || 'off';
                                 const cycleMirror = () => {
                                   const rebalFx = activePortfolioAccountType === 'overseas' ? (marketIndicators.usdkrw || 1) : 1;
+                                  // ⚠️ 항목 시드와 미러 상태를 **한 번에** 쓴다(writeTargets) — 쪼개면
+                                  //    별도 창에서 반쪽 적용이 남고 재클릭이 목표값을 두 번 덮는다.
+                                  const curRatioOf = (p) => {
+                                    const qty = cleanNum(p.quantity);
+                                    const price = cleanNum(p.currentPrice);
+                                    const curEval = p.type === 'savings' ? savingsEval(p) : (p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty);
+                                    return totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
+                                  };
+                                  const rows = mirrorRows(['stock', 'fund', 'savings']);
                                   if (mirrorState === 'off') {
-                                    setPortfolio(prev => prev.map(p => {
-                                      if (p.type !== 'stock' && p.type !== 'fund' && p.type !== 'savings') return p;
-                                      const qty = cleanNum(p.quantity);
-                                      const price = cleanNum(p.currentPrice);
-                                      const curEval = p.type === 'savings' ? savingsEval(p) : (p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty);
-                                      const curRatio = totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
-                                      return { ...p, [slotField]: curRatio, [overrideField]: false };
-                                    }));
-                                    updateSettingsForType({ ...settings, [mirrorField]: 'seeded' });
+                                    writeTargets(
+                                      rows.map(p => ({ id: p.id, fields: { [slotField]: curRatioOf(p), [overrideField]: false } })),
+                                      { [mirrorField]: 'seeded' });
                                   } else if (mirrorState === 'seeded') {
-                                    setPortfolio(prev => prev.map(p => {
-                                      if (p.type !== 'stock' && p.type !== 'fund' && p.type !== 'savings') return p;
-                                      return { ...p, [overrideField]: false };
-                                    }));
-                                    updateSettingsForType({ ...settings, [mirrorField]: 'on' });
+                                    writeTargets(
+                                      rows.map(p => ({ id: p.id, fields: { [overrideField]: false } })),
+                                      { [mirrorField]: 'on' });
                                   } else {
-                                    setPortfolio(prev => prev.map(p => {
-                                      if (p.type !== 'stock' && p.type !== 'fund' && p.type !== 'savings') return p;
-                                      if (p[overrideField]) return { ...p, [overrideField]: false };
-                                      const qty = cleanNum(p.quantity);
-                                      const price = cleanNum(p.currentPrice);
-                                      const curEval = p.type === 'savings' ? savingsEval(p) : (p.type === 'fund' && !(qty > 0 && price > 0) ? cleanNum(p.evalAmount) : price * qty);
-                                      const curRatio = totals.totalEval > 0 ? (curEval * rebalFx / totals.totalEval * 100) : 0;
-                                      return { ...p, [slotField]: curRatio, [overrideField]: false };
-                                    }));
-                                    updateSettingsForType({ ...settings, [mirrorField]: 'off' });
+                                    writeTargets(
+                                      rows.map(p => p[overrideField]
+                                        ? { id: p.id, fields: { [overrideField]: false } }
+                                        : { id: p.id, fields: { [slotField]: curRatioOf(p), [overrideField]: false } }),
+                                      { [mirrorField]: 'off' });
                                   }
                                   reportAdminChange();
                                 };
@@ -1205,29 +1251,29 @@ export default function RebalancingPanel({
                                 const amtMirrorState = settings.targetAmountMirror || 'off';
                                 // 미러 상태 전이는 stock/fund 전 행을 건드리되, **금액 write는 시세가 확보된
                                 // 행에만** 한다(mirrorEvalOf가 null이면 값은 그대로 두고 override만 정리).
-                                const mapStockFund = (fn) => setPortfolio(prev => prev.map(p =>
-                                  (p && (p.type === 'stock' || p.type === 'fund')) ? fn(p) : p));
+                                // ⚠️ 금액 write와 미러 상태를 **한 번에** 쓴다(writeTargets).
+                                //    시세 미확보 행은 `targetAmount`를 patch하지 않는다 — 0을 박으면
+                                //    나중에 '목표 0원 = 전량 매도'가 된다(기존 규약 유지).
+                                const amtRows = () => mirrorRows(['stock', 'fund']);
                                 const cycleAmtMirror = () => {
                                   if (amtMirrorState === 'off') {
-                                    mapStockFund(p => {
+                                    writeTargets(amtRows().map(p => {
                                       const ev = mirrorEvalOf(p);
                                       return ev === null
-                                        ? { ...p, targetAmountOverride: false }
-                                        : { ...p, targetAmount: roundMirrorAmt(ev, isOverseasHeader), targetAmountOverride: false };
-                                    });
-                                    updateSettingsForType({ ...settings, targetAmountMirror: 'seeded' });
+                                        ? { id: p.id, fields: { targetAmountOverride: false } }
+                                        : { id: p.id, fields: { targetAmount: roundMirrorAmt(ev, isOverseasHeader), targetAmountOverride: false } };
+                                    }), { targetAmountMirror: 'seeded' });
                                   } else if (amtMirrorState === 'seeded') {
-                                    mapStockFund(p => ({ ...p, targetAmountOverride: false }));
-                                    updateSettingsForType({ ...settings, targetAmountMirror: 'on' });
+                                    writeTargets(amtRows().map(p => ({ id: p.id, fields: { targetAmountOverride: false } })),
+                                      { targetAmountMirror: 'on' });
                                   } else {
                                     // 해제: 미러를 따르던 행만 그 시점 평가금으로 박제하고, 수동 이탈 행은
                                     // 사용자가 직접 넣은 금액을 그대로 지킨다((%) 미러 off 분기와 동일).
-                                    mapStockFund(p => {
-                                      if (p.targetAmountOverride) return { ...p, targetAmountOverride: false };
+                                    writeTargets(amtRows().map(p => {
+                                      if (p.targetAmountOverride) return { id: p.id, fields: { targetAmountOverride: false } };
                                       const ev = mirrorEvalOf(p);
-                                      return ev === null ? p : { ...p, targetAmount: roundMirrorAmt(ev, isOverseasHeader) };
-                                    });
-                                    updateSettingsForType({ ...settings, targetAmountMirror: 'off' });
+                                      return ev === null ? null : { id: p.id, fields: { targetAmount: roundMirrorAmt(ev, isOverseasHeader) } };
+                                    }).filter(Boolean), { targetAmountMirror: 'off' });
                                   }
                                   // 편집 중이던 셀의 로컬 초안이 남아 있으면 새 값이 화면에 안 보인다.
                                   setEditingTargetAmount({});
@@ -1470,14 +1516,11 @@ export default function RebalancingPanel({
                           //    아니라 모드가 정한 상태라, 클릭해도 PIN 모달을 띄우지 않는다.
                           const ratioMuted = ratioDisabled;
                           const cellLocked = targetMode !== 'variable' && !targetEditAuthorized && !isAdmin;
-                          const ratioReadOnly = cellLocked || ratioDisabled;
+                          const ratioReadOnly = cellLocked || ratioDisabled || readOnly;
                           const showResetIcon = !isLiveMirror && (item[overrideField] || Math.abs(baseVal - itemCurRatio) > threshold);
                           const alwaysShowReset = !!item[overrideField];
                           const applyReset = () => {
-                            setPortfolio(prev => prev.map(p => p.id === item.id
-                              ? { ...p, [slotField]: itemCurRatio, [overrideField]: false }
-                              : p
-                            ));
+                            writeTargets([{ id: item.id, fields: { [slotField]: itemCurRatio, [overrideField]: false } }]);
                             setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
                             reportAdminChange();
                           };
@@ -1513,7 +1556,7 @@ export default function RebalancingPanel({
                                   if (changed) {
                                     handleUpdate(item.id, slotField, e.target.value);
                                     if (mirrorState === 'on') {
-                                      setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, [overrideField]: true } : p));
+                                      writeTargets([{ id: item.id, fields: { [overrideField]: true } }]);
                                     }
                                   }
                                   setEditingRatio(prev => { const n = { ...prev }; delete n[item.id]; return n; });
@@ -1622,13 +1665,10 @@ export default function RebalancingPanel({
                             const prevNorm = hasAmt ? cleanNum(baseAmtText) : '';
                             if (prevNorm === next) return;
                             // 라이브 미러 중 직접 입력 = 이 종목만 수동 고정(override). 비우면 미러로 복귀.
-                            setPortfolio(prev => prev.map(p => p.id === item.id
-                              ? {
-                                ...p,
-                                targetAmount: next,
-                                targetAmountOverride: next === '' ? false : (amtMirrorOn ? true : p.targetAmountOverride),
-                              }
-                              : p));
+                            writeTargets([{ id: item.id, fields: {
+                              targetAmount: next,
+                              targetAmountOverride: next === '' ? false : (amtMirrorOn ? true : !!item.targetAmountOverride),
+                            } }]);
                             // 목표금액은 목표비중을 무효화하는 상위 값이라 **비중 편집과 완전히 같은 등급**으로
                             // 통지한다 — 관리자 공지(세션당 1회 래치) + 메모 달력 자동 기록(onTargetEdited).
                             // ⚠️ 달력 dirty를 빼지 말 것(2026-08 사용자 요청) — 목표금액만 조정한 세션은
@@ -1649,7 +1689,7 @@ export default function RebalancingPanel({
                                 className={`w-full h-full bg-transparent text-center font-bold outline-none py-3 pr-6 caret-emerald-400 focus:bg-emerald-900/20 placeholder:text-gray-600 placeholder:font-normal ${amtTextColor} ${amountDisabled ? 'opacity-40' : ''}`}
                                 value={displayAmt}
                                 placeholder={hintText}
-                                readOnly={amountDisabled}
+                                readOnly={amountDisabled || readOnly}
                                 title={amountDisabled
                                   ? "투자선택이 목표비중 기준이라 이 열은 비활성입니다 — '투자선택'을 '목표금액'으로 바꾸면 이 금액이 수량을 만듭니다"
                                   : isAmtMirror
@@ -1693,7 +1733,7 @@ export default function RebalancingPanel({
                                   onClick={e => {
                                     e.stopPropagation();
                                     setEditingTargetAmount(prev => { const n = { ...prev }; delete n[item.id]; return n; });
-                                    setPortfolio(prev => prev.map(p => p.id === item.id ? { ...p, targetAmount: '', targetAmountOverride: false } : p));
+                                    writeTargets([{ id: item.id, fields: { targetAmount: '', targetAmountOverride: false } }]);
                                     // 지우기도 명백한 목표 변경 — 목표비중 ↺(applyReset)와 같이 달력 기록 대상.
                                     reportAdminChange();
                                   }}
@@ -2019,6 +2059,7 @@ export default function RebalancingPanel({
         {showDonut && <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-6">
           <div className="p-3 bg-[#0f172a] border-b border-gray-700">
             <span className="text-white font-bold text-sm">🍩 자산 비중 비교</span>
+            <CardExpandButton onExpand={onExpandDonut} opened={donutWindowOpen} label="자산비중비교" />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-700">
             {/* 왼쪽: 리밸런싱 후 예상 자산 비중 */}
@@ -2160,6 +2201,7 @@ export default function RebalancingPanel({
         <RebalanceTargetPinModal
           open={!!pinModal}
           authUser={authUser}
+          verify={pinVerify}
           onAuthorized={() => {
             setTargetEditAuthorized(true);
             const cb = pinModal?.onAuthorized;

@@ -8,6 +8,10 @@ export default function RebalanceTargetPinModal({
   authUser,
   onAuthorized,
   onClose,
+  // ⚠️ 카드 별도 창 전용 — 창에는 App이 없고 sessionStorage는 **창을 연 시점 사본**이라
+  //    verifyPin이 낡은 해시(또는 없는 해시)로 검증한다. 창은 앱 탭에 검증을 위임한다.
+  //    미전달(인앱)이면 종전대로 로컬 verifyPin — 동작 100% 동일.
+  verify = null,
 }) {
   const [digits, setDigits] = useState(['', '', '', '']);
   const [error, setError] = useState('');
@@ -23,10 +27,11 @@ export default function RebalanceTargetPinModal({
 
   if (!open) return null;
 
-  const tryVerify = (arr) => {
+  const tryVerify = async (arr) => {
     const pin = arr.join('');
     if (pin.length !== 4) return;
-    if (verifyPin(pin, authUser?.email)) {
+    const okResult = verify ? await verify(pin) : verifyPin(pin, authUser?.email);
+    if (okResult) {
       onAuthorized();
     } else {
       setError('비밀번호가 틀렸습니다.');

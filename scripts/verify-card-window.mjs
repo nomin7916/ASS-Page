@@ -97,6 +97,7 @@ const feed = read('src/components/CardWinFeed.tsx');
 const app = read('src/App.tsx');
 const ups = read('src/hooks/usePortfolioState.ts');
 const usd = read('src/hooks/useStockData.ts');
+const panel = read('src/components/RebalancingPanel.tsx');
 const btn = read('src/components/CardExpandButton.tsx');
 
 // ── INV-1: 창은 App을 마운트하지 않는다 ──
@@ -118,12 +119,21 @@ ok('#G2c 창은 origin과 opener를 검사한다',
 {
   const s = stripComments(app);
   const i = s.indexOf('runCardCmdRef.current = (entry, op, args)');
-  const body = i >= 0 ? s.slice(i, i + 3000) : '';
+  // ⚠️ 핸들러 **전체**를 잡는다 — 고정 길이로 자르면 op이 늘 때마다 뒷부분이 잘려 나가
+  //    '기본 거부' 단언이 조용히 죽는다(실제로 그렇게 실패했다).
+  const jEnd = i >= 0 ? s.indexOf('useEffect(() => {', i) : -1;
+  const body = i >= 0 ? s.slice(i, jEnd > 0 ? jEnd : i + 8000) : '';
   ok('#G3 커맨드 핸들러가 존재한다', body.length > 200);
   ok('#G3b ⚠️ by-id 쓰기는 pid === entry.pid를 재확인한다 (타 계좌 오적용 차단)',
     /const pidOk = \(pid\) => pid === entry\.pid;/.test(body) && /if \(!pidOk\(list\[0\]\)\) return \{ ok: false/.test(body));
   ok('#G3c ⚠️ allow-list(default deny) — 모르는 op은 사유와 함께 거부한다',
-    /return \{ ok: false, reason: `지원하지 않는 동작입니다 \(\$\{op\}\)\.` \};/.test(body));
+    /default:[\s\S]{0,60}?return \{ ok: false, reason: `지원하지 않는 동작입니다 \(\$\{op\}\)\.` \};/.test(body));
+  ok('#G3e ⚠️ 계좌 스코프 커맨드는 switch 진입 **전에** pid를 검사한다 (개별 case가 빠뜨려도 새지 않게)',
+    /if \(!pidOk\(a\.pid\)\) return \{ ok: false, reason: '이 창은 다른 계좌를 수정할 수 없습니다\.' \};[\s\S]{0,40}?switch \(op\)/.test(body));
+  ok('#G3f ⚠️ 달력 스냅샷은 **창이 만든 엔트리**를 그대로 upsert한다 (앱이 활성 계좌로 재빌드 금지)',
+    /built\.entry\.portfolioId !== a\.pid/.test(body)
+    && /upsertRebalTargetMemo\(calendarMemosRef\.current, built\.dayKey, built\.entry/.test(body)
+    && !/buildRebalTargetEntry\(/.test(body));
   ok('#G3d ⚠️ patchActive 계열을 프록시하지 않는다',
     !/\bpatchActive\(/.test(body) && !/\bsetPortfolio\(/.test(body));
 }
@@ -224,9 +234,17 @@ ok('#G14b 분배금 카드 헤더에 확장 버튼이 붙어 있다',
   /<CardExpandButton onExpand=\{onExpand\} opened=\{cardWindowOpen\} label="분배금 현황" \/>/.test(read('src/components/DividendSummaryTable.tsx')));
 ok('#G14c 요약 카드 헤더에 확장 버튼이 붙어 있다',
   /<CardExpandButton onExpand=\{onExpand\} opened=\{cardWindowOpen\} label="포트폴리오 요약" \/>/.test(read('src/components/PortfolioSummaryPanel.tsx')));
-ok('#G14d App이 두 카드에 onExpand를 실제로 넘긴다',
+ok('#G14d App이 카드마다 onExpand를 실제로 넘긴다',
   /onExpand=\{\(\) => openCardWindow\('summary', activePortfolioId\)\}/.test(app)
-  && /onExpand=\{\(\) => openCardWindow\('dividend', activePortfolioId\)\}/.test(app));
+  && /onExpand=\{\(\) => openCardWindow\('dividend', activePortfolioId\)\}/.test(app)
+  // 리밸런싱·자산비중비교는 한 컴포넌트의 두 카드 → 진입점도 둘이다(사용자 확정: 각각 별도 창).
+  && /onExpandTable=\{\(\) => openCardWindow\('rebalancing', activePortfolioId\)\}/.test(app)
+  && /onExpandDonut=\{\(\) => openCardWindow\('donut', activePortfolioId\)\}/.test(app));
+ok('#G14e 리밸런싱·도넛 카드 헤더에 확장 버튼이 붙어 있다',
+  /<CardExpandButton onExpand=\{onExpandTable\} opened=\{tableWindowOpen\} label="리밸런싱" \/>/.test(panel)
+  && /<CardExpandButton onExpand=\{onExpandDonut\} opened=\{donutWindowOpen\} label="자산비중비교" \/>/.test(panel));
+ok('#G14f 지원 카드 목록에 4종이 들어 있다 (CardWindow 분기와 짝)',
+  /CARD_WINDOW_SUPPORTED: string\[\] = \['summary', 'dividend', 'rebalancing', 'donut'\]/.test(read('src/cardWindow.ts')));
 
 // ── by-id 라이터 계층 ──
 ok('#G15 patchActive는 patchById 위임이다 (활성 경로 동작 불변)',
@@ -257,6 +275,73 @@ ok('#G16 ⚠️ 시세 재조회는 pid의 accountType으로 라우팅·스탬�
 ok('#G16b 활성 경로는 위임이라 App 배선이 그대로다 (verify:ladder #109 유지)',
   /const handleSingleStockRefresh = \(id, code\) => handleSingleStockRefreshFor\(activePortfolioIdRef\.current, id, code\);/.test(usd)
   && /onRefreshPrice=\{handleSingleStockRefresh\}/.test(app));
+
+// ── 리밸런싱 카드 이식 ──
+{
+  const s = stripComments(panel);
+  ok('#G18 ⚠️ 항목 쓰기는 writeTargets 하나로 모인다 — 함수형 setPortfolio 잔재 0건',
+    /const writeTargets = \(itemPatches, settingsFields\) => \{/.test(s)
+    // 남아 있어도 되는 setPortfolio는 둘뿐: writeTargets 내부(인앱 경로)와 복원 센티넬 구간.
+    && (s.match(/setPortfolio\(prev =>/g) || []).length === 2);
+  ok('#G18b ⚠️ cardWrite가 있으면 그쪽으로만 보낸다 (항목+settings 원자적)',
+    /if \(cardWrite\) \{[\s\S]{0,220}?cardWrite\(\{ itemPatches: patches, settingsFields: settingsFields \|\| null \}\);[\s\S]{0,40}?return;/.test(s));
+  ok('#G18c ⚠️ readOnly면 아무것도 쓰지 않는다 (끊긴 창에서 편집이 조용히 증발하지 않게)',
+    /const writeTargets = \(itemPatches, settingsFields\) => \{\s*\n\s*if \(readOnly\) return;/.test(s));
+  // ⚠️ 미러 사이클은 '항목 patch + 미러 상태'를 반드시 **한 번의 writeTargets**로 써야 한다.
+  //    쪼개면 별도 창에서 한쪽만 적용된 반쪽 상태가 남고, 사용자가 다시 누르면 같은 전이를 또 타서
+  //    목표값이 두 번 덮인다(undo 없음).
+  //    ⚠️ 갭 정규식(`[\s\S]{0,700}`)으로 '호출 + settings 인자'를 재려 했더니 **문장 경계를 넘어**
+  //    다음 호출의 인자를 집어, 쪼개는 변이가 그대로 통과하는 죽은 단언이 됐다(변이 R1로 실증).
+  //    사이클 함수 본문을 잘라 **호출 횟수 = 전이 수(3)** 로 세는 편이 정확하다.
+  const cycleBody = (startMark) => {
+    const a = s.indexOf(startMark);
+    if (a < 0) return '';
+    const b = s.indexOf('reportAdminChange();', a);
+    return b > a ? s.slice(a, b) : '';
+  };
+  const pctBody = cycleBody('const cycleMirror = () => {');
+  const amtBody = cycleBody('const cycleAmtMirror = () => {');
+  ok('#G18d ⚠️ (%) 미러 3전이 = writeTargets 3회 (항목 patch와 미러 상태를 한 번에)',
+    pctBody.length > 300
+    && (pctBody.match(/writeTargets\(/g) || []).length === 3
+    && (pctBody.match(/\[mirrorField\]: '(?:seeded|on|off)'/g) || []).length === 3
+    && !/updateSettingsForType\(/.test(pctBody));
+  ok('#G18d2 ⚠️ (₩) 미러 3전이 = writeTargets 3회',
+    amtBody.length > 300
+    && (amtBody.match(/writeTargets\(/g) || []).length === 3
+    && (amtBody.match(/targetAmountMirror: '(?:seeded|on|off)'/g) || []).length === 3
+    && !/updateSettingsForType\(/.test(amtBody));
+  ok('#G18d3 ⚠️ 잔액→예수금도 예수금 행 patch와 settings 해제를 한 번에 쓴다',
+    /writeTargets\(\s*\n\s*mirrorRows\(\['deposit'\]\)\.map\(p => \(\{ id: p\.id, fields: \{ depositAmount: newDeposit \} \}\)\),\s*\n\s*\(!isLevelMode && settings\.useDepositAmount != null\) \? \{ useDepositAmount: null \} : null\);/.test(s));
+  ok('#G18e 목표 날짜 즉시 기록은 Promise 반환도 받는다 (창은 ack를 기다려야 결과를 안다)',
+    /if \(r && typeof r\.then === 'function'\) \{ r\.then\(flashSaveResult, \(\) => flashSaveResult\('fail'\)\); return; \}/.test(s));
+  ok('#G18f 복원은 setPortfolio가 없으면 구조적 no-op (창에서 타 계좌 오적용 원천 차단)',
+    /const applyRestoredTargets = \(dayKey, memo, matched\) => \{\s*\n\s*if \(!setPortfolio\) return;/.test(s));
+}
+{
+  const s = stripComments(win);
+  ok('#G19 ⚠️ 창은 setPortfolio를 넘기지 않는다 (함수형 updater는 직렬화 불가)',
+    /<RebalancingPanel/.test(s) && !/setPortfolio=\{/.test(s));
+  ok('#G19b 창은 cardWrite로 쓴다', /cardWrite=\{\(ops\) => fire\('cardWrite', \{ pid: PID, ops \}\)\}/.test(s));
+  ok('#G19c ⚠️ settings는 **바뀐 필드만** 보낸다 (통째 교체는 형제 계좌·앱 탭 최신값을 되감는다)',
+    /const settingsDiff = useCallback\(\(next\) => \{/.test(s)
+    && /updateSettingsForType=\{\(next\) => fire\('patchSettings', \{ pid: PID, fields: settingsDiff\(next\) \}\)\}/.test(s));
+  ok('#G19d ⚠️ 달력 스냅샷은 창이 **자기 화면 값**으로 만든다 (앱이 활성 계좌로 빌드하면 기록이 거짓이 된다)',
+    /buildRebalTargetEntryFrom\(\{/.test(s)
+    && /rebalanceData: data\.rebalanceData,/.test(s)
+    && /rebalExtraQty,/.test(s)
+    && /send\('saveTargetSnapshot', \{ pid: PID, built \}\)/.test(s));
+  ok('#G19e 창을 닫을 때 미커밋 기록을 한 번 커밋한다 (앱의 종료 커밋 체인이 창엔 없다)',
+    /window\.addEventListener\('pagehide', onHide\)/.test(s) && /snapshotDirtyRef\.current/.test(s));
+  ok('#G19f ⚠️ PIN 검증은 앱 탭에 위임한다 (창 sessionStorage는 열린 시점 사본이라 낡는다)',
+    /pinVerify=\{async \(pin\) => \{ const r = await send\('verifyPin', \{ pid: PID, pin \}\); return !!\(r && r\.ok && r\.result\); \}\}/.test(s));
+  ok('#G19g 끊기면 편집을 막는다', /readOnly=\{!writable\}/.test(s));
+}
+ok('#G20 App의 스냅샷 빌더는 공유 순수 함수 위임이다 (창과 값·행 순서가 갈리지 않게)',
+  /const buildRebalTargetEntry = \(overrideDate\) => buildRebalTargetEntryFrom\(\{/.test(app)
+  && /const sameRebalEntry = sameRebalTargetEntry;/.test(app));
+ok('#G20b PIN 모달은 비동기 검증기를 받는다 (인앱은 종전대로 로컬 verifyPin)',
+  /const okResult = verify \? await verify\(pin\) : verifyPin\(pin, authUser\?\.email\);/.test(read('src/components/RebalanceTargetPinModal.tsx')));
 
 // ── 영속화(선행 결함) ──
 ok('#G17 ⚠️ 지문에 actualDividendQty·dividendTaxAmounts가 있다 (분배금 전용 창의 무음 유실 방지)',

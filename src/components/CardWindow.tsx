@@ -4,8 +4,10 @@ import { usePortfolioData } from '../hooks/usePortfolioData';
 import ErrorBoundary from './ErrorBoundary';
 import ConfirmDialog from './ConfirmDialog';
 import PortfolioSummaryPanel from './PortfolioSummaryPanel';
+import RebalancingPanel from './RebalancingPanel';
 import DividendSummaryTable from './DividendSummaryTable';
 import { CARD_LABELS, cardWindowTitle, isCardKey, isCardWindowSupported } from '../cardWindow';
+import { buildRebalTargetEntryFrom } from '../utils';
 
 /**
  * 계좌 카드 **별도 브라우저 창** (`/?cardWindow=1&card=<키>&pid=<계좌id>`).
@@ -62,6 +64,8 @@ export default function CardWindow() {
   const [hoveredPortStkSlice, setHoveredPortStkSlice] = useState(null);
   const [hoveredRebalCatSlice, setHoveredRebalCatSlice] = useState(null);
   const [hoveredCurCatSlice, setHoveredCurCatSlice] = useState(null);
+  // PIN 인증은 창 세션 단위(앱 탭과 별개) — 검증 자체는 앱 탭에 위임한다.
+  const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
 
   // 창 자체 알림/확인창 (INV-5)
   const [toasts, setToasts] = useState([]);
@@ -223,6 +227,50 @@ export default function CardWindow() {
     rebalExtraQty,
   });
 
+  // ⚠️ 패널은 `updateSettingsForType({ ...settings, x })`(통째 교체)로 부른다. 그대로 보내면
+  //    창의 settings 스냅샷이 낡은 만큼 형제 계좌·앱 탭의 최신 설정을 되감으므로(settings는 같은
+  //    accountType 전 계좌 공유) **바뀐 필드만 뽑아** 병합 패치로 보낸다.
+  const settingsDiff = useCallback((next) => {
+    const cur = acct.settings || {};
+    const out = {};
+    Object.keys(next || {}).forEach(k => { if (next[k] !== cur[k]) out[k] = next[k]; });
+    Object.keys(cur).forEach(k => { if (!(k in (next || {}))) out[k] = undefined; });
+    return out;
+  }, [acct.settings]);
+
+  // 목표비중 달력 스냅샷 — **창이 자기 화면 값으로** 엔트리를 만들어 보낸다.
+  // ⚠️ 앱 탭이 활성 계좌 스코프로 다시 빌드하면 '기록 = 화면 표 1:1'이 깨지고, 앱 탭이 다른
+  //    계좌를 보고 있으면 그 계좌의 기존 기록을 거짓 내용으로 교체한다(복구 불가).
+  const buildSnapshot = useCallback((overrideDate) => buildRebalTargetEntryFrom({
+    portfolioId: acct.id,
+    accountName: acct.name,
+    accountType,
+    deletedAt: acct.deletedAt,
+    settings: acct.settings,
+    rebalanceData: data.rebalanceData,
+    rebalanceSortConfig,
+    rebalExtraQty,
+    overrideDate,
+  }), [acct, accountType, data.rebalanceData, rebalanceSortConfig, rebalExtraQty]);
+
+  const saveSnapshotNow = useCallback(async (overrideDate) => {
+    const built = buildSnapshot(overrideDate);
+    if (!built) return 'nodate';
+    const r = await send('saveTargetSnapshot', { pid: PID, built });
+    if (!r || r.ok === false) return 'fail';
+    return r.result === 'nochange' ? 'nochange' : 'saved';
+  }, [buildSnapshot, send]);
+
+  // 편집이 있었으면 창을 닫을 때 한 번 커밋한다(앱 탭의 종료 커밋 체인이 창에는 없다).
+  const snapshotDirtyRef = useRef(false);
+  const saveSnapshotRef = useRef(saveSnapshotNow);
+  saveSnapshotRef.current = saveSnapshotNow;
+  useEffect(() => {
+    const onHide = () => { if (snapshotDirtyRef.current) { snapshotDirtyRef.current = false; saveSnapshotRef.current(); } };
+    window.addEventListener('pagehide', onHide);
+    return () => window.removeEventListener('pagehide', onHide);
+  }, []);
+
   const handleRebalanceSort = useCallback((key, forcedDir) => {
     setRebalanceSortConfig(prev => {
       if (forcedDir != null) return { key, direction: forcedDir };
@@ -306,12 +354,74 @@ export default function CardWindow() {
       );
     }
 
+    if (CARD === 'rebalancing' || CARD === 'donut') {
+      if (accountType === 'gold') return <Notice text="금현물 계좌는 리밸런싱 표를 표시하지 않습니다." />;
+      return (
+        <RebalancingPanel
+          activePortfolioAccountType={accountType}
+          portfolio={acct.portfolio || []}
+          settings={acct.settings || {}}
+          updateSettingsForType={(next) => fire('patchSettings', { pid: PID, fields: settingsDiff(next) })}
+          rebalanceData={data.rebalanceData}
+          rebalanceSortConfig={rebalanceSortConfig}
+          handleRebalanceSort={handleRebalanceSort}
+          rebalExtraQty={rebalExtraQty}
+          setRebalExtraQty={setRebalExtraQty}
+          rebalCatDonutData={data.rebalCatDonutData}
+          curCatDonutData={data.curCatDonutData}
+          marketIndicators={marketIndicators}
+          hideAmounts={hideAmounts}
+          hoveredRebalCatSlice={hoveredRebalCatSlice}
+          setHoveredRebalCatSlice={setHoveredRebalCatSlice}
+          hoveredCurCatSlice={hoveredCurCatSlice}
+          setHoveredCurCatSlice={setHoveredCurCatSlice}
+          totals={data.totals}
+          handleUpdate={(id, field, value) => fire('updateItem', { pid: PID, id, field, value })}
+          // ⚠️ setPortfolio는 **넘기지 않는다** — 함수형 updater는 직렬화할 수 없다. 항목 쓰기는
+          //    전부 cardWrite(항목 patch + settings 병합)를 지난다. 과거 목표비중 복원은
+          //    setPortfolio가 없으면 구조적으로 no-op이고, rebalTargetSnapshots=[]라 버튼도 잠긴다
+          //    (CLAUDE.md '복원' INV-5: id 불일치 시 no-op이 곧 타 계좌 오적용 방어다).
+          cardWrite={(ops) => fire('cardWrite', { pid: PID, ops })}
+          showTable={CARD === 'rebalancing'}
+          showDonut={CARD === 'donut'}
+          showRetirementStats={accountType === 'dc-irp'}
+          hiddenColumns={acct.hiddenColumnsRebalancing || []}
+          onToggleColumn={(key) => fire('toggleColumn', { pid: PID, table: 'rebalancing', key })}
+          markedRebalRows={acct.markedRebalRows || {}}
+          onToggleMarkedRebalRow={(itemId) => fire('toggleMarkedRow', { pid: PID, table: 'rebalancing', itemId })}
+          onResetAllMarkedRebalRows={() => fire('resetMarkedRows', { pid: PID, table: 'rebalancing' })}
+          authUser={null}
+          isAdmin={isAdmin}
+          targetEditAuthorized={targetEditAuthorized}
+          setTargetEditAuthorized={setTargetEditAuthorized}
+          // PIN 검증은 앱 탭에 위임한다(창의 sessionStorage는 열린 시점 사본이라 낡는다).
+          pinVerify={async (pin) => { const r = await send('verifyPin', { pid: PID, pin }); return !!(r && r.ok && r.result); }}
+          onAdminTargetChange={null}
+          onTargetEdited={() => { snapshotDirtyRef.current = true; }}
+          onTargetSaveNow={() => { snapshotDirtyRef.current = false; return saveSnapshotNow(); }}
+          rebalTargetSnapshots={[]}
+          activePortfolioId={PID}
+          onTargetRestored={null}
+          onManualSave={null}
+          driveStatus={null}
+          showCalculator={false}
+          onToggleCalculator={null}
+          investmentNotes={acct.investmentNotes || []}
+          onUpdateInvestmentNotes={(notes) => fire('updateInvestmentNotes', { pid: PID, notes })}
+          onRefreshPrice={(id, code) => fire('refreshPrice', { pid: PID, id, code })}
+          stockFetchStatus={stockFetchStatus}
+          readOnly={!writable}
+        />
+      );
+    }
+
     return <Notice text="이 카드는 아직 별도 창을 지원하지 않습니다." />;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validCard, tornDown, account, acct, data, hideAmounts, hoveredPortCatSlice, hoveredPortStkSlice,
       hoveredRebalCatSlice, hoveredCurCatSlice, rebalExtraQty, rebalanceSortConfig, marketIndicators,
       marketHolidays, dividendTaxHistory, dividendLinks, stockFetchStatus, isAdmin, writable,
-      confirm, notify, fire, handleRebalanceSort, accountType]);
+      confirm, notify, fire, send, handleRebalanceSort, accountType, settingsDiff, saveSnapshotNow,
+      targetEditAuthorized]);
 
   const notice = tornDown
     ? '세션이 종료되었습니다.'

@@ -1839,3 +1839,96 @@ export const buildHistDetailRows = (opts) => {
     totalReturnRate: totalPrincipal > 0 ? (totalProfit / totalPrincipal) * 100 : null,
   };
 };
+
+// ── 리밸런싱 목표비중 → 메모 달력 스냅샷 (App 탭 · 카드 별도 창 공유) ───────────────────────
+// ⚠️ 순수 함수로 뽑아 둔 이유: 카드 별도 창은 **비활성 계좌**의 리밸런싱 표를 띄우는데, App의
+//    옛 구현은 activePortfolio·rebalanceData·settings·rebalExtraQty·정렬을 전부 활성 계좌에서
+//    읽어, 창의 편집이 **앱 탭 활성 계좌의 기록을 거짓 내용으로 통째 교체**했다(calendarMemos는
+//    백업 복원 sticky라 복구 불가 — 설계 적대적 검증에서 3렌즈가 독립 확인한 결함).
+//    이제 창이 **자기 화면 값으로** 엔트리를 만들어 보내므로 '기록 = 화면 표 1:1'이 오히려
+//    정확해진다(창 로컬 정렬·'추가' 수량이 그대로 반영된다).
+export const buildRebalTargetEntryFrom = (input: any) => {
+  const { portfolioId, accountName: rawName, accountType, deletedAt, settings,
+    rebalanceData, rebalanceSortConfig, rebalExtraQty, overrideDate } = input || {};
+  if (!portfolioId) return null;
+  const acct = accountType || 'portfolio';
+  if (acct === 'simple' || acct === 'matong' || acct === 'gold') return null; // 리밸런싱 표 자체가 없음
+  if (deletedAt) return null;                                                 // 삭제 계좌 신규 기록 동결
+  // ⚠️ 오늘로 폴백하지 않는다 — '헤더에 보이는 날짜 = 기록 날짜' 불변식.
+  const dayKey = overrideDate || settings?.targetDate;
+  if (!isValidIsoDate(dayKey)) return null;
+  const yr = parseInt(String(dayKey).slice(0, 4), 10);
+  if (yr < 1900 || yr > 2999) return null;
+  // ⚠️ 기록 순서는 화면 표와 같아야 한다 — 표는 리밸 정렬이 없을 때 카테고리로 재배치한다.
+  const src = rebalanceData || [];
+  const ordered = rebalanceSortConfig?.key != null ? src : (() => {
+    const order: any[] = [];
+    const g = new Map();
+    src.forEach((d: any) => {
+      const c = d.category || '기타';
+      if (!g.has(c)) { g.set(c, []); order.push(c); }
+      g.get(c).push(d);
+    });
+    return order.flatMap(c => g.get(c));
+  })();
+  const extras = rebalExtraQty || {};
+  const rows = ordered.map((d: any) => {
+    const qty = cleanNum(d.quantity);
+    const extra = extras[d.id] || 0;
+    return {
+      name: d.name || '',
+      code: d.code || '',
+      targetRatio: cleanNum(d.effectiveTargetRatio),
+      // 목표금액을 **명시 입력한 행만** 기록한다(미입력 행은 비중 파생 힌트라 구분이 안 된다).
+      targetAmount: d.hasTargetAmount ? cleanNum(d.effectiveTargetAmount) : null,
+      curQty: d.isSavings ? null : qty,
+      expQty: d.isSavings ? null : qty + cleanNum(d.action) + extra,
+      expEval: cleanNum(d.expEval),
+    };
+  });
+  if (rows.length === 0) return null;
+  const accountName = String(rawName || '계좌').trim();
+  const totalTargetRatio = rows.reduce((s: number, r: any) => s + r.targetRatio, 0);
+  const totalExpEval = rows.reduce((s: number, r: any) => s + r.expEval, 0);
+  const content = [
+    `📊 목표비중 · ${accountName} (${rows.length}종목)`,
+    ...rows.map((r: any, i: number) => `${i + 1}. ${r.name} ${r.targetRatio.toFixed(2)}%` +
+      (r.curQty == null ? '' : ` ${formatNumber(r.curQty)} → ${formatNumber(r.expQty)}`)),
+    `합계 ${totalTargetRatio.toFixed(2)}%`,
+  ].join('\n');
+  return {
+    dayKey,
+    entry: {
+      kind: 'rebalTarget',
+      portfolioId,
+      accountName,
+      targetMode: settings?.targetMode === 'variable' ? 'variable' : 'fixed',
+      // ⚠️ CalendarModal의 라벨 매핑도 3값을 알아야 한다 — 한쪽만 고치면 '목표금액' 기록이 '적립식'으로 보인다.
+      investMode: settings?.mode === 'rebalance' || settings?.mode === 'targetAmount' ? settings.mode : 'accumulate',
+      currency: acct === 'overseas' ? 'USD' : 'KRW',
+      rows, totalTargetRatio, totalExpEval, content,
+    },
+  };
+};
+
+// 같은 기록인가 — content뿐 아니라 rows JSON·totalExpEval까지 본다(content에는 평가금이 없어
+// 평가금만 달라진 스냅샷을 '변경 없음'으로 오판한다).
+export const sameRebalTargetEntry = (a: any, b: any) => !!a && !!b
+  && a.accountName === b.accountName && a.targetMode === b.targetMode
+  && a.investMode === b.investMode && a.currency === b.currency && a.content === b.content
+  && Math.round(a.totalExpEval || 0) === Math.round(b.totalExpEval || 0)
+  && JSON.stringify(a.rows || []) === JSON.stringify(b.rows || []);
+
+// upsert 키 = (dayKey, kind==='rebalTarget', portfolioId). 같은 날 같은 계좌면 최신 1건으로 교체한다.
+// ⚠️ 교체 시 id·createdAt을 **승계**해야 칩 key가 안정되고, 열려 있던 읽기전용 패드가 닫히지 않는다.
+// 반환: 변경이 있으면 next memos, 내용이 같거나 대상이 없으면 null.
+export const upsertRebalTargetMemo = (memos: any, dayKey: string, entry: any, newId: string, now: number) => {
+  if (!dayKey || !entry) return null;
+  const cur = memos || {};
+  const arr = Array.isArray(cur[dayKey]) ? [...cur[dayKey]] : [];
+  const idx = arr.findIndex((m: any) => m?.kind === 'rebalTarget' && m.portfolioId === entry.portfolioId);
+  if (idx !== -1 && sameRebalTargetEntry(arr[idx], entry)) return null;
+  if (idx === -1) arr.push({ ...entry, id: newId, createdAt: now, updatedAt: now });
+  else arr[idx] = { ...entry, id: arr[idx].id, createdAt: arr[idx].createdAt ?? now, updatedAt: now };
+  return { ...cur, [dayKey]: arr };
+};

@@ -84,7 +84,8 @@ import {
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows,
-  buildHistDetailRows, EMPTY_HIST_DETAIL
+  buildHistDetailRows, EMPTY_HIST_DETAIL,
+  buildRebalTargetEntryFrom, sameRebalTargetEntry, upsertRebalTargetMemo,
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -711,6 +712,11 @@ export default function App() {
     toggleHiddenDividendMonth,
     updateInvestmentNotes,
     updateInvestmentNotesFor,
+    // by-id 라이터(카드 별도 창) — patchActive 계열은 활성 계좌 전용이라 창이 쓸 수 없다.
+    handleUpdateFor, applyItemPatchesFor, applyCardWriteFor, patchSettingsForTypeOf,
+    toggleHiddenColumnPortfolioFor, toggleHiddenColumnRebalancingFor,
+    toggleMarkedRebalRowFor, toggleMarkedPortfolioRowFor,
+    resetAllMarkedRebalRowsFor, resetAllMarkedPortfolioRowsFor,
   } = usePortfolioState({ marketIndicators, notify, confirm, setShowIntegratedDashboard });
 
 
@@ -1600,6 +1606,7 @@ export default function App() {
   const {
     handleStockBlur,
     handleSingleStockRefresh,
+    handleSingleStockRefreshFor,   // 카드 별도 창(비활성 계좌) 전용
     handleAddCompStock,
     handleRemoveCompStock,
     handleCompStockBlur,
@@ -1702,86 +1709,22 @@ export default function App() {
   // (날짜, portfolioId)당 1건 upsert. 상세 규약·회귀 주의는 CLAUDE.md 전용 섹션 참조.
   useEffect(() => { calendarMemosRef.current = calendarMemos; }, [calendarMemos]);
 
-  const buildRebalTargetEntry = (overrideDate) => {
-    const p = activePortfolio;
-    if (!p) return null;
-    const acct = activePortfolioAccountType;
-    if (acct === 'simple' || acct === 'matong' || acct === 'gold') return null; // 리밸런싱 표 자체가 없음
-    if (p.deletedAt) return null;                                               // 삭제 계좌 신규 기록 동결
-    // ⚠️ 오늘로 폴백하지 않는다 — '헤더에 보이는 날짜 = 기록 날짜' 불변식.
-    //    날짜 미지정이면 커밋하지 않고 dirty를 유지해, 날짜를 지정하는 순간 그 날짜에 기록된다.
-    const dayKey = overrideDate || settings?.targetDate;
-    // ⚠️ 연도 범위까지 본다 — 네이티브 날짜 피커에 0001을 입력하면 isValidIsoDate는 통과하지만
-    //    달력에서 도달할 수 없어(월 이동 2000회) 렌더도 삭제도 못 하는 유령 기록이 된다.
-    if (!isValidIsoDate(dayKey)) return null;
-    const yr = parseInt(dayKey.slice(0, 4), 10);
-    if (yr < 1900 || yr > 2999) return null;
-    // ⚠️ 기록 순서는 화면 표와 같아야 한다 — 표는 리밸 정렬이 없을 때 카테고리로 재배치하고
-    //    그 순서로 행 번호를 매긴다(RebalancingPanel renderRow의 rowNum). raw rebalanceData 순서로
-    //    두면 패드의 '3.'이 화면의 '7.'을 가리켜 대조가 어긋난다.
-    const src = rebalanceData || [];
-    const ordered = rebalanceSortConfig?.key != null ? src : (() => {
-      const order = [];
-      const g = new Map();
-      src.forEach(d => {
-        const c = d.category || '기타';
-        if (!g.has(c)) { g.set(c, []); order.push(c); }
-        g.get(c).push(d);
-      });
-      return order.flatMap(c => g.get(c));
-    })();
-    // 값은 전부 화면의 리밸런싱 표와 같은 rebalanceData에서 뜬다(예상 주식수·예상평가금 셀과 동일 식).
-    const rows = ordered.map(d => {
-      const qty = cleanNum(d.quantity);
-      const extra = rebalExtraQty[d.id] || 0;
-      return {
-        name: d.name || '',
-        code: d.code || '',                      // 이름이 비슷한 종목·삭제된 종목 식별용
-        targetRatio: cleanNum(d.effectiveTargetRatio),
-        // 목표금액을 **명시 입력한 행만** 기록한다. 미입력 행은 비중에서 파생된 힌트라 저장하면
-        // 나중에 불러올 때 '사용자가 지정한 금액'과 구분되지 않는다(구버전 기록은 undefined).
-        targetAmount: d.hasTargetAmount ? cleanNum(d.effectiveTargetAmount) : null,
-        curQty: d.isSavings ? null : qty,        // 예적금은 시세·수량이 없는 고정 참고 행
-        expQty: d.isSavings ? null : qty + cleanNum(d.action) + extra,
-        expEval: cleanNum(d.expEval),
-      };
-    });
-    if (rows.length === 0) return null;
-    const accountName = String(title || p.name || '계좌').trim();
-    const totalTargetRatio = rows.reduce((s, r) => s + r.targetRatio, 0);
-    const totalExpEval = rows.reduce((s, r) => s + r.expEval, 0);
-    // content = 사람이 읽는 텍스트 사본. 백업 JSON 가독성 + firstLine(m.content) 폴백 경로용.
-    const content = [
-      `📊 목표비중 · ${accountName} (${rows.length}종목)`,
-      ...rows.map((r, i) => `${i + 1}. ${r.name} ${r.targetRatio.toFixed(2)}%` +
-        (r.curQty == null ? '' : ` ${formatNumber(r.curQty)} → ${formatNumber(r.expQty)}`)),
-      `합계 ${totalTargetRatio.toFixed(2)}%`,
-    ].join('\n');
-    return {
-      dayKey,
-      entry: {
-        kind: 'rebalTarget',
-        portfolioId: p.id,
-        accountName,
-        targetMode: settings?.targetMode === 'variable' ? 'variable' : 'fixed',
-        // 투자선택 3모드를 그대로 기록한다(미지원 레거시 값은 적립식으로 정규화).
-        // ⚠️ CalendarModal의 라벨 매핑도 3값을 알아야 한다 — 한쪽만 고치면 '목표금액' 기록이 '적립식'으로 보인다.
-        investMode: settings?.mode === 'rebalance' || settings?.mode === 'targetAmount' ? settings.mode : 'accumulate',
-        currency: acct === 'overseas' ? 'USD' : 'KRW',
-        rows, totalTargetRatio, totalExpEval, content,
-      },
-    };
-  };
-  // ⚠️ effect가 아니라 **렌더 중** 갱신 — blur(setState)와 click 사이에 passive effect가 flush된다는
-  // 보장에 기대지 않기 위해서다. 이 ref는 이벤트 핸들러·타이머에서만 읽히므로 렌더 중 대입이 안전하다.
-  rebalCommitRef.current = buildRebalTargetEntry;
+  // ⚠️ 실제 계산은 utils의 순수 함수(buildRebalTargetEntryFrom)가 한다 — 카드 별도 창이 **자기
+  //    화면 값**으로 같은 엔트리를 만들어 보내야 '기록 = 화면 표 1:1'이 지켜지기 때문이다.
+  //    여기(앱 탭)는 활성 계좌 스코프를 그 함수에 그대로 넘기는 얇은 래퍼다.
+  const buildRebalTargetEntry = (overrideDate) => buildRebalTargetEntryFrom({
+    portfolioId: activePortfolio?.id,
+    accountName: title || activePortfolio?.name,
+    accountType: activePortfolioAccountType,
+    deletedAt: activePortfolio?.deletedAt,
+    settings,
+    rebalanceData,
+    rebalanceSortConfig,
+    rebalExtraQty,
+    overrideDate,
+  });
 
-  // ⚠️ content(이름·목표비중·수량)만 비교하면 평가금만 달라진 스냅샷을 '변경 없음'으로 오판한다.
-  const sameRebalEntry = (a, b) => !!a && !!b
-    && a.accountName === b.accountName && a.targetMode === b.targetMode
-    && a.investMode === b.investMode && a.currency === b.currency && a.content === b.content
-    && Math.round(a.totalExpEval || 0) === Math.round(b.totalExpEval || 0)
-    && JSON.stringify(a.rows || []) === JSON.stringify(b.rows || []);
+  const sameRebalEntry = sameRebalTargetEntry;   // utils 공유 — 창 경로와 판정이 갈리지 않게
 
   const commitRebalTargetSnapshot = (overrideDate?: string) => {
     // ⚠️ 예외 격리 필수 — 이 함수는 저장·앱닫기·탭전환 임계 경로의 첫 줄에서 동기 호출된다.
@@ -1792,18 +1735,13 @@ export default function App() {
       const built = rebalCommitRef.current?.(overrideDate);
       if (!built || built.entry.portfolioId !== pid) return null; // 날짜 미지정 등 → dirty 유지
       const { dayKey, entry } = built;
-      const cur = calendarMemosRef.current || {};
-      const arr = Array.isArray(cur[dayKey]) ? [...cur[dayKey]] : [];
-      const idx = arr.findIndex(m => m?.kind === 'rebalTarget' && m.portfolioId === pid);
-      if (idx !== -1 && sameRebalEntry(arr[idx], entry)) {
+      // ⚠️ upsert는 utils 공유 함수 — 창 경로(saveTargetSnapshot)와 키·승계 규약이 갈리면
+      //    같은 날짜에 기록이 둘 생기거나 칩 key가 흔들린다.
+      const next = upsertRebalTargetMemo(calendarMemosRef.current, dayKey, entry, generateId(), Date.now());
+      if (!next) {
         delete rebalTargetDirtyRef.current[pid]; // 기록할 내용이 없으니 dirty도 해제(무한 재시도 방지)
         return null;
       }
-      const now = Date.now();
-      // ⚠️ 교체 시 id·createdAt 승계 — 칩 key 안정 + 열려 있던 읽기전용 패드가 닫히지 않고 갱신된다
-      if (idx === -1) arr.push({ ...entry, id: generateId(), createdAt: now, updatedAt: now });
-      else arr[idx] = { ...entry, id: arr[idx].id, createdAt: arr[idx].createdAt ?? now, updatedAt: now };
-      const next = { ...cur, [dayKey]: arr };
       calendarMemosRef.current = next;
       setCalendarMemos(next);
       delete rebalTargetDirtyRef.current[pid];
@@ -2310,7 +2248,68 @@ export default function App() {
       f(...list);
       return { ok: true };
     }
-    return { ok: false, reason: `지원하지 않는 동작입니다 (${op}).` };
+    // ── 계좌 필드 / 항목 / settings ──────────────────────────────────────────
+    if (!pidOk(a.pid)) return { ok: false, reason: '이 창은 다른 계좌를 수정할 수 없습니다.' };
+    switch (op) {
+      case 'updateItem':
+        handleUpdateFor(a.pid, a.id, a.field, a.value);
+        return { ok: true };
+      case 'patchItems':
+        applyItemPatchesFor(a.pid, a.patches);
+        return { ok: true };
+      case 'cardWrite':
+        // ⚠️ 항목 patch + settings를 **한 번의 setPortfolios**로 적용한다(미러 반쪽 적용 방지).
+        applyCardWriteFor(a.pid, a.ops);
+        return { ok: true };
+      case 'patchSettings':
+        // ⚠️ 통째 교체가 아니라 **필드 병합**이다 — 창의 settings 스냅샷이 낡은 만큼 형제 계좌·앱
+        //    탭의 최신 설정을 되감는 것을 막는다(settings는 같은 accountType 전 계좌 공유).
+        patchSettingsForTypeOf(a.pid, a.fields);
+        return { ok: true };
+      case 'toggleColumn':
+        if (a.table === 'rebalancing') toggleHiddenColumnRebalancingFor(a.pid, a.key);
+        else toggleHiddenColumnPortfolioFor(a.pid, a.key);
+        return { ok: true };
+      case 'toggleMarkedRow':
+        if (a.table === 'rebalancing') toggleMarkedRebalRowFor(a.pid, a.itemId);
+        else toggleMarkedPortfolioRowFor(a.pid, a.itemId);
+        return { ok: true };
+      case 'resetMarkedRows':
+        if (a.table === 'rebalancing') resetAllMarkedRebalRowsFor(a.pid);
+        else resetAllMarkedPortfolioRowsFor(a.pid);
+        return { ok: true };
+      case 'updateInvestmentNotes':
+        if (!Array.isArray(a.notes)) return { ok: false, reason: '투자 기록 형식이 올바르지 않습니다.' };
+        updateInvestmentNotesFor(a.pid, a.notes);
+        return { ok: true };
+      case 'refreshPrice':
+        // by-pid — 시장 라우팅·stockHistoryMap 스탬프 날짜를 그 계좌 타입으로 해석한다.
+        handleSingleStockRefreshFor(a.pid, a.id, a.code);
+        return { ok: true };
+      case 'verifyPin':
+        // ⚠️ 창의 sessionStorage는 **열린 시점 사본**이라 앱 탭에서 PIN을 바꾸면 낡는다 →
+        //    검증은 언제나 앱 탭에서 한다. 성공하면 이 탭의 세션 인증도 함께 열어 준다.
+        if (!authUser?.email) return { ok: false, reason: '로그인 정보가 없습니다.' };
+        if (verifyPin(String(a.pin || ''), authUser.email)) { setTargetEditAuthorized(true); return { ok: true, result: true }; }
+        return { ok: true, result: false };
+      case 'saveTargetSnapshot': {
+        // ⚠️ 창이 **자기 화면 값으로 만든 엔트리**를 그대로 받는다 — 앱 탭이 활성 계좌 스코프로
+        //    다시 빌드하면 그 순간 '기록 = 화면 표 1:1'이 깨지고, 앱 탭이 다른 계좌를 보고 있으면
+        //    그 계좌의 기존 기록을 거짓 내용으로 교체한다(calendarMemos는 sticky라 복구 불가).
+        const built = a.built;
+        if (!built || !built.dayKey || !built.entry) return { ok: false, reason: '기록할 내용이 없습니다.' };
+        if (built.entry.portfolioId !== a.pid) return { ok: false, reason: '계좌가 일치하지 않습니다.' };
+        if (built.entry.kind !== 'rebalTarget') return { ok: false, reason: '기록 형식이 올바르지 않습니다.' };
+        if (!isValidIsoDate(built.dayKey)) return { ok: false, reason: '날짜가 올바르지 않습니다.' };
+        const next = upsertRebalTargetMemo(calendarMemosRef.current, built.dayKey, built.entry, generateId(), Date.now());
+        if (!next) return { ok: true, result: 'nochange' };
+        calendarMemosRef.current = next;
+        setCalendarMemos(next);
+        return { ok: true, result: 'saved' };
+      }
+      default:
+        return { ok: false, reason: `지원하지 않는 동작입니다 (${op}).` };
+    }
   };
 
   useEffect(() => {
@@ -4229,6 +4228,10 @@ export default function App() {
             onUpdateInvestmentNotes={updateInvestmentNotes}
             onRefreshPrice={handleSingleStockRefresh}
             stockFetchStatus={stockFetchStatus}
+            onExpandTable={() => openCardWindow('rebalancing', activePortfolioId)}
+            onExpandDonut={() => openCardWindow('donut', activePortfolioId)}
+            tableWindowOpen={cardWinOpenSet.has(`rebalancing:${activePortfolioId}`)}
+            donutWindowOpen={cardWinOpenSet.has(`donut:${activePortfolioId}`)}
           />
         )}
           </div>
