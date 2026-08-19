@@ -5,9 +5,12 @@ import ErrorBoundary from './ErrorBoundary';
 import ConfirmDialog from './ConfirmDialog';
 import PortfolioSummaryPanel from './PortfolioSummaryPanel';
 import RebalancingPanel from './RebalancingPanel';
+import PortfolioStatsPanel from './PortfolioStatsPanel';
+import HistoryPanel from './HistoryPanel';
+import DepositPanel from './DepositPanel';
 import DividendSummaryTable from './DividendSummaryTable';
 import { CARD_LABELS, cardWindowTitle, isCardKey, isCardWindowSupported } from '../cardWindow';
-import { buildRebalTargetEntryFrom } from '../utils';
+import { buildRebalTargetEntryFrom, buildBookCostSeries, cleanNum } from '../utils';
 
 /**
  * 계좌 카드 **별도 브라우저 창** (`/?cardWindow=1&card=<키>&pid=<계좌id>`).
@@ -50,6 +53,11 @@ export default function CardWindow() {
   const [dividendTaxHistory, setDividendTaxHistory] = useState({});
   const [dividendLinks, setDividendLinks] = useState([]);
   const [stockFetchStatus, setStockFetchStatus] = useState({});
+  const [stockHistoryMap, setStockHistoryMap] = useState({});
+  const [indicatorHistoryMap, setIndicatorHistoryMap] = useState({});
+  // ⚠️ 기록 확정일은 앱 탭이 계산해 보낸다 — 계좌 타입별(KR 21:00 / 글로벌 07:30) 경계를 창에서
+  //    다시 계산하면 타이머·자정 경계에서 두 화면이 갈린다.
+  const [effectiveDateKey, setEffectiveDateKey] = useState('');
   const [hideAmounts, setHideAmounts] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [authEpoch, setAuthEpoch] = useState(null);
@@ -66,6 +74,8 @@ export default function CardWindow() {
   const [hoveredCurCatSlice, setHoveredCurCatSlice] = useState(null);
   // PIN 인증은 창 세션 단위(앱 탭과 별개) — 검증 자체는 앱 탭에 위임한다.
   const [targetEditAuthorized, setTargetEditAuthorized] = useState(false);
+  const [depositSortConfig, setDepositSortConfig] = useState({ key: null, direction: 1 });
+  const [depositSortConfig2, setDepositSortConfig2] = useState({ key: null, direction: 1 });
 
   // 창 자체 알림/확인창 (INV-5)
   const [toasts, setToasts] = useState([]);
@@ -159,6 +169,9 @@ export default function CardWindow() {
         if (d.dividendTaxHistory) setDividendTaxHistory(d.dividendTaxHistory);
         if (d.dividendLinks) setDividendLinks(d.dividendLinks);
         if (d.stockFetchStatus) setStockFetchStatus(d.stockFetchStatus);
+        if (d.stockHistoryMap) setStockHistoryMap(d.stockHistoryMap);
+        if (d.indicatorHistoryMap) setIndicatorHistoryMap(d.indicatorHistoryMap);
+        if (d.effectiveDateKey !== undefined) setEffectiveDateKey(d.effectiveDateKey);
         if (d.hideAmounts !== undefined) setHideAmounts(!!d.hideAmounts);
         if (d.isAdmin !== undefined) setIsAdmin(!!d.isAdmin);
         setTornDown(false);
@@ -270,6 +283,39 @@ export default function CardWindow() {
     window.addEventListener('pagehide', onHide);
     return () => window.removeEventListener('pagehide', onHide);
   }, []);
+
+  // ── 계좌 필드 쓰기 배칭 ────────────────────────────────────────────────────
+  // ⚠️ DepositPanel은 한 클릭에서 `setDepositHistory(...)`와 `setPrincipal(...)`을 **따로** 부른다.
+  //    두 커맨드로 나가면 원장은 지워졌는데 원금은 그대로인 중간 상태가 Drive에 저장될 수 있다.
+  //    같은 동기 핸들러의 쓰기를 마이크로태스크로 모아 **하나의 원자적 cardWrite**로 보낸다.
+  // ⚠️ 원금은 절대값 write가 실재한다(원금 직접 입력 · 원장 편집의 프로라타 보정). 창의 스냅샷이
+  //    낡은 채 절대값을 보내면 그 사이 앱 탭이 만든 이관·입금이 조용히 사라지므로, 기대값
+  //    (expect.principal)을 함께 보내 앱이 다르면 **거부**하게 한다.
+  const acctBatchRef = useRef(null);
+  const queueAccountWrite = useCallback((fields, opts) => {
+    if (!acctBatchRef.current) {
+      acctBatchRef.current = { fields: {}, expect: null };
+      Promise.resolve().then(() => {
+        const b = acctBatchRef.current;
+        acctBatchRef.current = null;
+        if (!b || !Object.keys(b.fields).length) return;
+        fire('cardWrite', { pid: PID, ops: { accountFields: b.fields, expect: b.expect } });
+      });
+    }
+    Object.assign(acctBatchRef.current.fields, fields);
+    if (opts && opts.expect) acctBatchRef.current.expect = { ...(acctBatchRef.current.expect || {}), ...opts.expect };
+  }, [fire]);
+
+  // 함수형 updater는 창의 스냅샷으로 즉시 풀어 값으로 만든다(직렬화 불가).
+  const resolveArr = useCallback((v, cur) => (typeof v === 'function' ? v(cur || []) : v), []);
+  // ⚠️ 원금은 언제나 **기대값(expect)** 과 함께 보낸다 — 창이 자기 스냅샷으로 계산한 절대값을
+  //    그대로 쓰면, 그 사이 앱 탭이 만든 이관·입금이 조용히 사라진다. 앱은 현재 원금이 기대값과
+  //    다르면 그 배치를 통째로 거부하고 창이 사유를 인라인으로 알린다.
+  const principalSetter = useCallback((v) => {
+    const cur = cleanNum(acct.principal);
+    const next = cleanNum(typeof v === 'function' ? v(cur) : v);
+    queueAccountWrite({ principal: next }, { expect: { principal: cur } });
+  }, [acct.principal, queueAccountWrite]);
 
   const handleRebalanceSort = useCallback((key, forcedDir) => {
     setRebalanceSortConfig(prev => {
@@ -415,13 +461,88 @@ export default function CardWindow() {
       );
     }
 
+    if (CARD === 'stats') {
+      // ⚠️ activeBookByDate는 앱과 **같은 정책**으로 창이 직접 만든다(해외·현금성은 null).
+      //    App이 계산해 push하면 Map 직렬화가 필요하고, 정책이 갈리면 같은 날짜의 일간 수익률이
+      //    표와 차트에서 달라진다(CLAUDE.md: 3소비자가 하나의 Map을 공유해야 한다).
+      const bookByDate = ['overseas', 'simple', 'matong'].includes(accountType)
+        ? null
+        : buildBookCostSeries(acct, (acct.history || []).map(h => h?.date));
+      const blocked = (msg) => () => notify(msg, 'info');
+      return (
+        <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
+          <PortfolioStatsPanel
+            totals={data.totals}
+            marketIndicators={marketIndicators}
+            activePortfolioAccountType={accountType}
+            portfolioStartDate={acct.portfolioStartDate || acct.startDate || ''}
+            setPortfolioStartDate={(v) => queueAccountWrite({ portfolioStartDate: v, startDate: v })}
+            principal={acct.principal ?? 0}
+            setPrincipal={principalSetter}
+            avgExchangeRate={acct.avgExchangeRate ?? 0}
+            setAvgExchangeRate={(v) => queueAccountWrite({ avgExchangeRate: cleanNum(v) })}
+            depositHistory={acct.depositHistory || []}
+            setDepositHistory={(v) => queueAccountWrite({ depositHistory: resolveArr(v, acct.depositHistory) })}
+            depositHistory2={acct.depositHistory2 || []}
+            cagr={data.cagr}
+          />
+          <HistoryPanel
+            history={acct.history || []}
+            // ⚠️ history 편집(자산검증 확정·수량/종가 수정)은 창에서 미지원 — 앱 탭이 백필·자동확정·
+            //    today-effect로 **동시에** 쓰는 배열이라 창의 스냅샷을 통째로 되보내면 그 사이 생긴
+            //    기록이 소실된다. 조용히 무시하지 않고 사유를 인라인으로 알린다.
+            setHistory={blocked('자산검증 확정은 앱 창에서만 가능합니다.')}
+            patchActivePortfolio={blocked('보유 수량·종가 수정은 앱 창에서만 가능합니다.')}
+            totals={data.totals}
+            principal={acct.principal ?? 0}
+            activePortfolioAccountType={accountType}
+            marketIndicators={marketIndicators}
+            sortedHistoryDesc={data.sortedHistoryDesc}
+            handleDownloadCSV={null}
+            stockHistoryMap={stockHistoryMap}
+            indicatorHistoryMap={indicatorHistoryMap}
+            activePortfolio={acct}
+            notify={notify}
+            effectiveDateKey={effectiveDateKey}
+            refreshPrices={blocked('전체 시세 새로고침은 앱 창에서만 가능합니다.')}
+            isLoading={false}
+            depositHistory={acct.depositHistory || []}
+            depositHistory2={acct.depositHistory2 || []}
+            portfolioStartDate={acct.portfolioStartDate || acct.startDate || ''}
+            activeBookByDate={bookByDate}
+            refetchStockHistory={async () => { notify('종가 재조회는 앱 창에서만 가능합니다.', 'info'); return false; }}
+          />
+          <DepositPanel
+            depositHistory={acct.depositHistory || []}
+            setDepositHistory={(v) => queueAccountWrite({ depositHistory: resolveArr(v, acct.depositHistory) })}
+            depositHistory2={acct.depositHistory2 || []}
+            setDepositHistory2={(v) => queueAccountWrite({ depositHistory2: resolveArr(v, acct.depositHistory2) })}
+            depositWithSumSorted={data.depositWithSumSorted}
+            depositWithSum2Sorted={data.depositWithSum2Sorted}
+            depositSortConfig={depositSortConfig}
+            depositSortConfig2={depositSortConfig2}
+            handleDepositSort={(key) => setDepositSortConfig(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }))}
+            handleDepositSort2={(key) => setDepositSortConfig2(prev => ({ key, direction: prev.key === key ? -prev.direction : 1 }))}
+            handleDepositDownloadCSV={blocked('CSV 내려받기는 앱 창에서만 가능합니다.')}
+            handleWithdrawDownloadCSV={blocked('CSV 내려받기는 앱 창에서만 가능합니다.')}
+            activePortfolioAccountType={accountType}
+            marketIndicators={marketIndicators}
+            setPrincipal={principalSetter}
+            principal={acct.principal ?? 0}
+            evalAmount={data.totals.totalEval}
+          />
+        </div>
+      );
+    }
+
     return <Notice text="이 카드는 아직 별도 창을 지원하지 않습니다." />;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validCard, tornDown, account, acct, data, hideAmounts, hoveredPortCatSlice, hoveredPortStkSlice,
       hoveredRebalCatSlice, hoveredCurCatSlice, rebalExtraQty, rebalanceSortConfig, marketIndicators,
       marketHolidays, dividendTaxHistory, dividendLinks, stockFetchStatus, isAdmin, writable,
       confirm, notify, fire, send, handleRebalanceSort, accountType, settingsDiff, saveSnapshotNow,
-      targetEditAuthorized]);
+      targetEditAuthorized, stockHistoryMap, indicatorHistoryMap, effectiveDateKey,
+      depositSortConfig, depositSortConfig2, queueAccountWrite, principalSetter]);
 
   const notice = tornDown
     ? '세션이 종료되었습니다.'

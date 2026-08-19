@@ -202,6 +202,22 @@ const normalizeCalendarMemos = (raw) => {
   return changed ? out : raw;
 };
 
+// ── 카드 창 도입 1회 마이그레이션 ───────────────────────────────────────────────
+// ⚠️ 확장(⧉) 버튼은 카드가 화면에 있어야 닿는다 — 사이드 탭으로 접어 둔 카드는 버튼 자체가
+//    렌더되지 않아 '별도 창으로 열기'에 도달할 수단이 없다. 그래서 **한 번만** 전 계좌의 접힘을
+//    펴 버튼을 노출한다(그 뒤 사용자가 다시 접으면 그대로 유지된다 — 숨기기 기능은 그대로다).
+// ⚠️ '한 번'은 맵 **안의 예약 키**로 표현한다 — chartPrefs 영속 5지점을 새로 만들지 않기 위해서다
+//    (sectionCollapsedMap은 이미 저장·복원 경로에 있다). 계좌 id와 충돌하지 않는 이름을 쓴다.
+// ⚠️ 로드 시 무조건 비우는 방식으로 되돌리지 말 것 — 매 로드마다 숨김이 풀려 '숨기기 유지'가
+//    사실상 제거된다.
+const CARD_WIN_UNHIDE_KEY = '__cardWindowUnhide_v1__';
+const unhideCardsOnce = (map) => {
+  const m = (map && typeof map === 'object') ? map : {};
+  if (m[CARD_WIN_UNHIDE_KEY]) return m;
+  // _SEC_DEFAULT가 전부 false(=보임)라, 계좌별 항목을 비우면 그것이 곧 '전부 보이기'다.
+  return { [CARD_WIN_UNHIDE_KEY]: true };
+};
+
 export default function App() {
   const historyInputRef = useRef(null);
 
@@ -813,7 +829,7 @@ export default function App() {
       if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
       if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
       if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
-      if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(stateData.chartPrefs.sectionCollapsedMap);
+      if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(unhideCardsOnce(stateData.chartPrefs.sectionCollapsedMap));
       if (stateData.chartPrefs.intSec) setIntSec(stateData.chartPrefs.intSec);
       if (stateData.chartPrefs.intChartPeriod) setIntChartPeriod(stateData.chartPrefs.intChartPeriod);
       if (stateData.chartPrefs.intDateRange) setIntDateRange(stateData.chartPrefs.intDateRange);
@@ -924,7 +940,7 @@ export default function App() {
       if (stateData.chartPrefs.indicatorScales) setIndicatorScales(stateData.chartPrefs.indicatorScales);
       if (stateData.chartPrefs.backtestColor) setBacktestColor(stateData.chartPrefs.backtestColor);
       if (stateData.chartPrefs.showBacktest !== undefined) setShowBacktest(stateData.chartPrefs.showBacktest);
-      if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(stateData.chartPrefs.sectionCollapsedMap);
+      if (stateData.chartPrefs.sectionCollapsedMap) setSectionCollapsedMap(unhideCardsOnce(stateData.chartPrefs.sectionCollapsedMap));
       if (stateData.chartPrefs.intSec) setIntSec(stateData.chartPrefs.intSec);
       if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
       if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
@@ -2257,10 +2273,21 @@ export default function App() {
       case 'patchItems':
         applyItemPatchesFor(a.pid, a.patches);
         return { ok: true };
-      case 'cardWrite':
-        // ⚠️ 항목 patch + settings를 **한 번의 setPortfolios**로 적용한다(미러 반쪽 적용 방지).
+      case 'cardWrite': {
+        // ⚠️ 항목 patch + settings + 계좌 필드를 **한 번의 setPortfolios**로 적용한다
+        //    (미러 반쪽 적용 · 원장만 지워지고 원금은 그대로인 중간 상태 방지).
+        // ⚠️ expect가 오면 낙관적 동시성 검사 — 창이 자기 스냅샷으로 계산한 절대값(원금 프로라타
+        //    보정 등)이 그 사이 앱 탭이 만든 이관·입금을 덮는 것을 막는다. 다르면 **배치 전체 거부**.
+        const exp = a.ops && a.ops.expect;
+        if (exp && Object.prototype.hasOwnProperty.call(exp, 'principal')) {
+          const cur = (portfoliosRef.current || []).find(x => x && x.id === a.pid);
+          if (cur && cleanNum(cur.principal) !== cleanNum(exp.principal)) {
+            return { ok: false, reason: '앱 창에서 원금이 바뀌어 반영하지 않았습니다. 화면이 갱신된 뒤 다시 시도하세요.' };
+          }
+        }
         applyCardWriteFor(a.pid, a.ops);
         return { ok: true };
+      }
       case 'patchSettings':
         // ⚠️ 통째 교체가 아니라 **필드 병합**이다 — 창의 settings 스냅샷이 낡은 만큼 형제 계좌·앱
         //    탭의 최신 설정을 되감는 것을 막는다(settings는 같은 accountType 전 계좌 공유).
@@ -3728,6 +3755,9 @@ export default function App() {
             isAdmin={!!adminViewingAs || (authUser && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase())}
             authEpoch={cardAuthEpoch}
             nonce={cardWinNonce}
+            effectiveDateKey={isKrCutoffAccount(
+              (portfolios.find(p => p && p.id === entry.pid) || {}).accountType || 'portfolio',
+            ) ? krEffectiveDateKey : effectiveDateKey}
           />
         ) : null;
       })}
@@ -4008,6 +4038,8 @@ export default function App() {
             portfolioStartDate={portfolioStartDate}
             activeBookByDate={activeBookByDate}
             refetchStockHistory={refetchStockHistory}
+            onExpand={() => openCardWindow('stats', activePortfolioId)}
+            cardWindowOpen={cardWinOpenSet.has(`stats:${activePortfolioId}`)}
           />
 
           <DepositPanel

@@ -18,6 +18,7 @@ import { CARD_NEEDS, historicalCodesOf, pickStockHistorySubset } from '../cardWi
 export default function CardWinFeed({
   entry, portfolios, marketIndicators, marketHolidays, dividendTaxHistory, dividendLinks,
   stockHistoryMap, indicatorHistoryMap, stockFetchStatus, hideAmounts, isAdmin, authEpoch, nonce,
+  effectiveDateKey,
 }) {
   const needs = CARD_NEEDS[entry.card] || {};
 
@@ -54,12 +55,16 @@ export default function CardWinFeed({
     if (needs.prices) {
       payload.stockHistoryMap = priceSubset;
       payload.indicatorHistoryMap = indicatorHistoryMap;
+      // ⚠️ 기록 확정일은 앱이 계산해 보낸다 — 계좌 타입별 경계(KR 21:00 / 글로벌 07:30)를 창에서
+      //    다시 계산하면 타이머·자정 경계에서 두 화면의 '오늘' 판정이 갈린다.
+      payload.effectiveDateKey = effectiveDateKey;
     }
     if (needs.fetchStatus) payload.stockFetchStatus = stockFetchStatus;
     try { w.postMessage(payload, window.location.origin); } catch { /* 창이 닫히는 중이면 무시 */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry, account, marketIndicators, hideAmounts, isAdmin, authEpoch, nonce,
-      marketHolidays, dividendTaxHistory, dividendLinks, priceSubset, indicatorHistoryMap, stockFetchStatus]);
+      marketHolidays, dividendTaxHistory, dividendLinks, priceSubset, indicatorHistoryMap, stockFetchStatus,
+      effectiveDateKey]);
 
   return null;
 }

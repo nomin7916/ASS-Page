@@ -243,8 +243,36 @@ ok('#G14d App이 카드마다 onExpand를 실제로 넘긴다',
 ok('#G14e 리밸런싱·도넛 카드 헤더에 확장 버튼이 붙어 있다',
   /<CardExpandButton onExpand=\{onExpandTable\} opened=\{tableWindowOpen\} label="리밸런싱" \/>/.test(panel)
   && /<CardExpandButton onExpand=\{onExpandDonut\} opened=\{donutWindowOpen\} label="자산비중비교" \/>/.test(panel));
-ok('#G14f 지원 카드 목록에 4종이 들어 있다 (CardWindow 분기와 짝)',
-  /CARD_WINDOW_SUPPORTED: string\[\] = \['summary', 'dividend', 'rebalancing', 'donut'\]/.test(read('src/cardWindow.ts')));
+ok('#G14f 지원 카드 목록 5종 = CardWindow 분기와 짝 (차트는 이번 범위 밖)',
+  /CARD_WINDOW_SUPPORTED: string\[\] = \['summary', 'stats', 'dividend', 'rebalancing', 'donut'\]/.test(read('src/cardWindow.ts')));
+ok('#G14g 통계·히스토리 카드 헤더에 확장 버튼이 붙어 있다',
+  /<CardExpandButton onExpand=\{onExpand\} opened=\{cardWindowOpen\} label="통계·히스토리" \/>/.test(read('src/components/HistoryPanel.tsx'))
+  && /onExpand=\{\(\) => openCardWindow\('stats', activePortfolioId\)\}/.test(app));
+
+// ── 통계·히스토리 카드 이식 ──
+{
+  const s2 = stripComments(win);
+  ok('#G21 ⚠️ 원장·원금 쓰기는 마이크로태스크로 묶어 **하나의 원자적 cardWrite**로 보낸다',
+    /const queueAccountWrite = useCallback\(\(fields, opts\) => \{/.test(s2)
+    && /Promise\.resolve\(\)\.then\(\(\) => \{/.test(s2)
+    && /fire\('cardWrite', \{ pid: PID, ops: \{ accountFields: b\.fields, expect: b\.expect \} \}\)/.test(s2));
+  ok('#G21b ⚠️ 원금은 기대값(expect)과 함께 보낸다 (앱 탭의 이관·입금을 조용히 덮지 않게)',
+    /const principalSetter = useCallback\(\(v\) => \{[\s\S]{0,320}?queueAccountWrite\(\{ principal: next \}, \{ expect: \{ principal: cur \} \}\);/.test(s2));
+  ok('#G21c ⚠️ history 편집은 창에서 **명시적으로 미지원** (앱 탭이 백필·자동확정으로 동시에 쓰는 배열)',
+    /setHistory=\{blocked\('자산검증 확정은 앱 창에서만 가능합니다\.'\)\}/.test(s2)
+    && /patchActivePortfolio=\{blocked\('보유 수량·종가 수정은 앱 창에서만 가능합니다\.'\)\}/.test(s2));
+  ok('#G21d ⚠️ activeBookByDate는 앱과 **같은 정책**으로 창이 계산한다 (해외·현금성 null)',
+    /\['overseas', 'simple', 'matong'\]\.includes\(accountType\)[\s\S]{0,20}?\? null[\s\S]{0,20}?: buildBookCostSeries\(acct, \(acct\.history \|\| \[\]\)\.map\(h => h\?\.date\)\)/.test(s2)
+    // 앱 쪽 정책과 **같은 계좌 타입 목록**인지도 확인(한쪽만 바뀌면 표·차트 일간 지표가 갈린다)
+    && /\['overseas', 'simple', 'matong'\]\.includes\(activePortfolioAccountType\)/.test(app));
+  ok('#G21e 종가 재조회는 Promise<false>를 돌려준다 (undefined면 모달 스피너가 영구 회전)',
+    /refetchStockHistory=\{async \(\) => \{ notify\([^)]*\); return false; \}\}/.test(s2));
+}
+ok('#G22 ⚠️ 앱은 expect 불일치 시 배치 전체를 거부한다',
+  /if \(cur && cleanNum\(cur\.principal\) !== cleanNum\(exp\.principal\)\) \{[\s\S]{0,200}?return \{ ok: false, reason: '앱 창에서 원금이 바뀌어 반영하지 않았습니다/.test(stripComments(app)));
+ok('#G22b 확정일은 앱이 계좌 타입별로 해석해 보낸다 (창에서 재계산 금지)',
+  /payload\.effectiveDateKey = effectiveDateKey;/.test(feed)
+  && /effectiveDateKey=\{isKrCutoffAccount\(/.test(app));
 
 // ── by-id 라이터 계층 ──
 ok('#G15 patchActive는 patchById 위임이다 (활성 경로 동작 불변)',
@@ -342,6 +370,16 @@ ok('#G20 App의 스냅샷 빌더는 공유 순수 함수 위임이다 (창과 �
   && /const sameRebalEntry = sameRebalTargetEntry;/.test(app));
 ok('#G20b PIN 모달은 비동기 검증기를 받는다 (인앱은 종전대로 로컬 verifyPin)',
   /const okResult = verify \? await verify\(pin\) : verifyPin\(pin, authUser\?\.email\);/.test(read('src/components/RebalanceTargetPinModal.tsx')));
+
+// ── 숨긴 카드 1회 펼침 ──
+// ⚠️ 접어 둔 카드는 확장 버튼 자체가 렌더되지 않아 '별도 창으로 열기'에 도달할 수단이 없다.
+//    딱 한 번만 펴고, 그 뒤 사용자가 다시 접으면 유지된다(숨기기 기능 제거 아님).
+ok('#G23 숨긴 카드 1회 펼침은 **예약 키**로 멱등이다 (매 로드 초기화 금지 · 영속화 신규 지점 0곳)',
+  /const CARD_WIN_UNHIDE_KEY = '__cardWindowUnhide_v1__';/.test(app)
+  && /if \(m\[CARD_WIN_UNHIDE_KEY\]\) return m;/.test(app)
+  && /return \{ \[CARD_WIN_UNHIDE_KEY\]: true \};/.test(app));
+ok('#G23b 로드 2경로(정식·백업)가 모두 그 함수를 지난다',
+  (stripComments(app).match(/setSectionCollapsedMap\(unhideCardsOnce\(stateData\.chartPrefs\.sectionCollapsedMap\)\)/g) || []).length === 2);
 
 // ── 영속화(선행 결함) ──
 ok('#G17 ⚠️ 지문에 actualDividendQty·dividendTaxAmounts가 있다 (분배금 전용 창의 무음 유실 방지)',

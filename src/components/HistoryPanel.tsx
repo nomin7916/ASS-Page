@@ -5,6 +5,7 @@ import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
 import ErrorBoundary from './ErrorBoundary';
+import CardExpandButton from './CardExpandButton';
 
 const formatUsd = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cleanNum(n));
 
@@ -30,6 +31,8 @@ export default function HistoryPanel({
   portfolioStartDate,
   activeBookByDate,
   refetchStockHistory,
+  onExpand,          // '통계·히스토리' 카드 전체를 별도 창으로 (별도 창 자신에는 미전달)
+  cardWindowOpen,
 }) {
   const [verifyRecord, setVerifyRecord] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -196,6 +199,7 @@ export default function HistoryPanel({
                 {isLoading && <span className="inline-block animate-spin text-sky-400 text-base leading-none">↻</span>}
               </button>
               <button onClick={openHelp} className="text-gray-500 hover:text-sky-400 transition-colors" title="사용법 보기"><HelpCircle size={14} /></button>
+              <CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="통계·히스토리" />
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
               <table className="w-full text-right text-[11px] table-fixed border-collapse">
