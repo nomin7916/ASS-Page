@@ -5,6 +5,7 @@ import App from './App.tsx'
 import CalendarWindow from './components/CalendarWindow.tsx'
 import FlowWindow from './components/FlowWindow.tsx'
 import BacktestWindow from './components/BacktestWindow.tsx'
+import CardWindow from './components/CardWindow.tsx'
 import ErrorBoundary from './components/ErrorBoundary.tsx'
 
 // 메모 달력 별도 창(`/?calendarWindow=1`)은 **App을 마운트하지 않는다** — 앱을 통째로 부팅하면
@@ -17,6 +18,8 @@ const _params = new URLSearchParams(window.location.search)
 const CALENDAR_WINDOW_BOOT = _params.get('calendarWindow') === '1'
 const FLOW_WINDOW_BOOT = _params.get('flowWindow') === '1'
 const BACKTEST_WINDOW_BOOT = _params.get('backtestWindow') === '1'
+// 계좌 카드 별도 창(`/?cardWindow=1&card=…&pid=…`)도 같은 규약 — App을 마운트하지 않는다.
+const CARD_WINDOW_BOOT = _params.get('cardWindow') === '1'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -24,6 +27,7 @@ createRoot(document.getElementById('root')!).render(
       {CALENDAR_WINDOW_BOOT ? <CalendarWindow />
         : FLOW_WINDOW_BOOT ? <FlowWindow />
         : BACKTEST_WINDOW_BOOT ? <BacktestWindow />
+        : CARD_WINDOW_BOOT ? <CardWindow />
         : <App />}
     </ErrorBoundary>
   </StrictMode>,

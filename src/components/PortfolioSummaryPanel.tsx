@@ -4,6 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { formatPercent, formatCurrency } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
+import CardExpandButton from './CardExpandButton';
 
 export default function PortfolioSummaryPanel({
   totals,
@@ -12,12 +13,14 @@ export default function PortfolioSummaryPanel({
   hoveredPortStkSlice,
   setHoveredPortStkSlice,
   hideAmounts,
+  onExpand,          // 별도 창으로 열기(별도 창 자신에는 미전달 → 버튼 미렌더)
+  cardWindowOpen,
 }) {
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-6 w-full items-stretch">
       {/* 자산 비중 테이블 */}
       <div className="xl:col-span-4 lg:col-span-12 bg-[#1e293b] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-full">
-        <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700">📊 자산 비중</div>
+        <div className="p-3 bg-[#0f172a] text-white font-bold text-sm border-b border-gray-700 flex items-center gap-2"><span>📊 자산 비중</span><span className="ml-auto"><CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="포트폴리오 요약" /></span></div>
         <div className="overflow-x-auto">
           <table className="w-full text-right text-sm">
             <thead className="bg-gray-800 text-gray-400 font-bold border-b border-gray-700">

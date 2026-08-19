@@ -50,6 +50,8 @@ import { FX_DEFAULT, FX_MIN_SLOTS, normalizeFxCurrencies, normalizeFxSlotCount }
 import FlowBoard from './components/FlowBoard';
 import { normalizeFlowMaps, flowFingerprint, flowMapsHaveContent } from './flowMap';
 import BacktestPage from './components/BacktestPage';
+import CardWinFeed from './components/CardWinFeed';
+import { isCardKey, isCardWindowSupported, cardWindowUrl, cardWindowName } from './cardWindow';
 import {
   normalizeBacktestScenarios, backtestFingerprint, backtestScenariosHaveContent,
   buildBtCatalog, collectDividendHistory, collectNameByCode,
@@ -565,6 +567,10 @@ export default function App() {
     // 여기서 커밋하지 않으면 목표비중 기록이 영영 생성되지 않는다(dirty ref는 메모리라 함께 소멸).
     beforeExitSnapshotRef: exitCommitRef,
     onForceLogout: () => {
+      // ⚠️ 카드 별도 창 정리를 **ADMIN_VIEW_EMAIL 가드보다 먼저** 한다 — impersonation 탭에서 연
+      //    창에는 피조사 사용자의 데이터가 떠 있고, 그 탭이 닫히면 창은 opener 소멸로 읽기 전용이
+      //    될 뿐 내용은 그대로 남는다(다중 계정 오염 방지 정책 위반).
+      try { teardownCardWinsRef.current?.(); } catch {}
       // 새 탭 관리자 접속 중에는 reload가 ?adminView를 유지해 재부팅 루프가 되므로 탭을 닫는다.
       if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }
       sessionStorage.removeItem(SESSION_KEY);
@@ -2219,6 +2225,153 @@ export default function App() {
     setShowFlowBoard(false);
   };
 
+  // ── 계좌 카드 '별도 브라우저 창' 브릿지 (`/?cardWindow=1&card=…&pid=…`) ─────────────────
+  // 메모 달력·흐름도·백테스트 창과 **같은 규약**(App 미마운트 · noopener 금지 · ping.need가 초기
+  // 전송의 유일한 트리거 · 재입양 · 끊기면 읽기 전용)이되, **결정적으로 다른 점 하나**가 있다:
+  // 카드 창은 (계좌 × 카드) 조합마다 하나씩 열리므로 **단일 ref가 아니라 레지스트리(Map)**다.
+  // 기존 3창처럼 단일 ref로 두면 뒤에 핑을 보낸 창만 데이터를 받고 앞 창은 영구히 낡은 값을 든다.
+  const cardWinsRef = useRef(new Map());          // winId → { id, card, pid, win }
+  const [cardWinKeys, setCardWinKeys] = useState([]);   // 피더 렌더용(레지스트리의 키 목록)
+  const [cardWinNonce, setCardWinNonce] = useState(0);  // 재입양 시 전량 재전송 트리거
+  const [cardWinBlocked, setCardWinBlocked] = useState(false);
+
+  // ⚠️ 로그인 세션 식별자. 앱 탭이 로그아웃→다른 사용자로 재로그인해도 창은 살아남아 5초 핑으로
+  //    재입양되므로, epoch가 다르면 창이 **화면 내용을 지운다**(단순 읽기 전용으로는 이전 사용자의
+  //    금융 데이터가 그대로 남는다 — 이 앱이 명시적으로 방어하는 '한 기기 다중 계정 오염' 정책).
+  const cardAuthEpoch = (authUser && authUser.email) ? String(authUser.email).toLowerCase() : null;
+
+  // 확장 버튼 표기 전환용 — 열려 있는 창의 (카드:계좌) 집합. 레지스트리는 ref라 렌더에 직접 쓰면
+  // 안 되고, sweep/입양이 갱신하는 cardWinKeys에서 파생시켜야 화면이 실제 상태를 따라간다.
+  const cardWinOpenSet = useMemo(() => new Set(cardWinKeys), [cardWinKeys]);
+
+  const syncCardWinKeys = useCallback(() => {
+    setCardWinKeys(prev => {
+      const next = Array.from(cardWinsRef.current.keys());
+      if (prev.length === next.length && prev.every((k, i) => k === next[i])) return prev;
+      return next;
+    });
+  }, []);
+
+  // 닫힌 창 정리 — 남겨 두면 피더가 계속 마운트된 채 postMessage를 시도한다.
+  const sweepCardWins = useCallback(() => {
+    let changed = false;
+    cardWinsRef.current.forEach((v, k) => {
+      if (!v.win || v.win.closed) { cardWinsRef.current.delete(k); changed = true; }
+    });
+    if (changed) syncCardWinKeys();
+  }, [syncCardWinKeys]);
+
+  useEffect(() => {
+    const id = setInterval(sweepCardWins, 5000);
+    return () => clearInterval(id);
+  }, [sweepCardWins]);
+
+  // ⚠️ 로그아웃·세션 충돌 시 모든 카드 창을 정리한다. `onForceLogout`은 reload만 하므로 창은
+  //    살아남는다 — teardown을 보내 화면을 비우고 닫는다(창이 못 닫히면 창 쪽이 안내만 남긴다).
+  const teardownCardWins = useCallback(() => {
+    cardWinsRef.current.forEach(v => {
+      try { v.win?.postMessage({ type: 'card:teardown', winId: v.id }, window.location.origin); } catch {}
+      try { v.win?.close(); } catch {}
+    });
+    cardWinsRef.current.clear();
+    syncCardWinKeys();
+  }, [syncCardWinKeys]);
+  const teardownCardWinsRef = useRef(teardownCardWins);
+  teardownCardWinsRef.current = teardownCardWins;
+
+  // ── 창→앱 커맨드 실행 ─────────────────────────────────────────────────────
+  // ⚠️ allow-list(default deny). 모르는 op는 조용히 무시하지 말고 사유를 ack에 실어, 창이
+  //    인라인으로 알릴 수 있게 한다(무음 실패 = '버튼이 고장난 것처럼 보임').
+  // ⚠️ **모든 by-id 쓰기는 `pid === entry.pid`를 재확인한다** — 창이 자기 계좌 외에는 절대 쓰지
+  //    못하게 하는 fail-closed 방어선이다(창은 URL 파라미터로 열리므로 조작 가능하다).
+  const runCardCmdRef = useRef(null);
+  runCardCmdRef.current = (entry, op, args) => {
+    const a = args || {};
+    const pidOk = (pid) => pid === entry.pid;
+    if (op === 'dividendCall') {
+      const fn = a.fn;
+      const list = a.args || [];
+      const byId = {
+        updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd,
+        updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax,
+        updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw,
+        addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth,
+        updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice,
+        toggleHiddenTaxMonth, toggleHiddenDividendMonth, deletePortfolioDividendData, deletePortfolioTaxData,
+      };
+      if (fn === 'setDividendLinks') {   // 앱 레벨 값(계좌 아님) — pid 검사 대상이 아니다
+        if (!Array.isArray(list[0])) return { ok: false, reason: '링크 형식이 올바르지 않습니다.' };
+        setDividendLinks(list[0]);
+        return { ok: true };
+      }
+      const f = byId[fn];
+      if (typeof f !== 'function') return { ok: false, reason: `지원하지 않는 동작입니다 (${fn}).` };
+      if (!pidOk(list[0])) return { ok: false, reason: '이 창은 다른 계좌를 수정할 수 없습니다.' };
+      f(...list);
+      return { ok: true };
+    }
+    return { ok: false, reason: `지원하지 않는 동작입니다 (${op}).` };
+  };
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string' || !d.type.startsWith('card:')) return;
+      if (d.type === 'card:ping') {
+        if (!d.winId || !isCardKey(d.card) || !d.pid) return;
+        const cur = cardWinsRef.current.get(d.winId);
+        // `d.need`(창이 아직 데이터 없음)가 초기 전송의 유일한 트리거다. 앱 탭이 새로고침되면
+        // 레지스트리가 비므로 살아 있는 창의 핑에서 **재입양**한다.
+        if (d.need || !cur || cur.win !== e.source) {
+          cardWinsRef.current.set(d.winId, { id: d.winId, card: d.card, pid: d.pid, win: e.source });
+          syncCardWinKeys();
+          setCardWinNonce(n => n + 1);
+        }
+        try { e.source?.postMessage({ type: 'card:pong', winId: d.winId }, window.location.origin); } catch {}
+        return;
+      }
+      // ── 여기부터는 입양된 창만 ──
+      const entry = d.winId ? cardWinsRef.current.get(d.winId) : null;
+      if (!entry || entry.win !== e.source) return;
+      if (d.type === 'card:activity') {
+        // ⚠️ resetActivity만으로는 부족하다 — 비활동 **경고가 이미 뜬 뒤에는** 체크 루프가
+        //    lastActivityAt을 아예 보지 않아(useDriveSync) 60초 뒤 무조건 로그아웃한다.
+        //    그 모달은 카드 창 뒤 앱 탭에 있어 보이지도 않는다.
+        if (showInactivityWarning) handleInactivityContinue(); else resetActivity();
+        return;
+      }
+      if (d.type === 'card:cmd') {
+        let res;
+        try { res = runCardCmdRef.current(entry, d.op, d.args); }
+        catch (err) { res = { ok: false, reason: '앱 창에서 처리 중 오류가 발생했습니다.' }; }
+        try {
+          e.source?.postMessage({ type: 'card:ack', winId: d.winId, reqId: d.reqId, ...(res || { ok: false, reason: '알 수 없는 오류' }) }, window.location.origin);
+        } catch {}
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [syncCardWinKeys, showInactivityWarning, handleInactivityContinue, resetActivity]);
+
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다.
+  // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다(impersonation 탭과 정반대 규칙).
+  // ⚠️ 같은 (계좌, 카드)를 다시 누르면 새 창을 열지 않고 기존 창을 포커스한다(window name 재사용).
+  const openCardWindow = useCallback((card, pid) => {
+    if (!isCardWindowSupported(card) || !pid) return;
+    const winId = `${card}:${pid}`;
+    const existing = cardWinsRef.current.get(winId);
+    if (existing?.win && !existing.win.closed) { try { existing.win.focus(); } catch {} return; }
+    const sw = (window.screen && window.screen.availWidth) || 1440;
+    const sh = (window.screen && window.screen.availHeight) || 900;
+    const w = window.open(cardWindowUrl(pid, card), cardWindowName(pid, card), `width=${sw},height=${sh},left=0,top=0`);
+    if (!w) { setCardWinBlocked(true); return; }
+    setCardWinBlocked(false);
+    cardWinsRef.current.set(winId, { id: winId, card, pid, win: w });
+    syncCardWinKeys();
+    setCardWinNonce(n => n + 1);
+  }, [syncCardWinKeys]);
+
   // ── 백테스트 데이터 · 조회 · '별도 브라우저 창' 브릿지 (`/?backtestWindow=1`) ─────────────
   // 흐름도/메모 달력 창과 **완전히 같은 규약**: 새 창은 App을 부팅하지 않고 postMessage로만
   // 대화하며, 저장은 전부 이 탭을 경유해 기존 STATE 저장 경로로 흐른다 → writer는 이 탭 하나.
@@ -3556,6 +3709,29 @@ export default function App() {
   return (
     <div className="bg-gray-900 min-h-screen text-gray-200 font-sans text-sm relative">
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
+      {/* 카드 별도 창 피더 — 렌더 출력 없음. 창 하나당 하나씩 마운트돼 그 계좌의 원자재를
+          identity 게이팅으로 push한다(창이 닫히면 sweep이 레지스트리에서 지워 언마운트된다). */}
+      {cardWinKeys.map(k => {
+        const entry = cardWinsRef.current.get(k);
+        return entry ? (
+          <CardWinFeed
+            key={k}
+            entry={entry}
+            portfolios={portfolios}
+            marketIndicators={marketIndicators}
+            marketHolidays={marketHolidays}
+            dividendTaxHistory={dividendTaxHistory}
+            dividendLinks={dividendLinks}
+            stockHistoryMap={stockHistoryMap}
+            indicatorHistoryMap={indicatorHistoryMap}
+            stockFetchStatus={stockFetchStatus}
+            hideAmounts={hideAmounts}
+            isAdmin={!!adminViewingAs || (authUser && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase())}
+            authEpoch={cardAuthEpoch}
+            nonce={cardWinNonce}
+          />
+        ) : null;
+      })}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
       <LoadingOverlay visible={isInitialLoading} notificationLog={notificationLog} onDismiss={() => setIsInitialLoading(false)} />
       {showInactivityWarning && <InactivityModal onContinue={handleInactivityContinue} onLogout={handleInactivityLogout} />}
@@ -3615,6 +3791,9 @@ export default function App() {
             }
           }}
           onLogout={() => {
+            // ⚠️ 카드 별도 창을 먼저 정리한다(ADMIN_VIEW_EMAIL 가드보다 앞) — 그러지 않으면
+            //    로그아웃 후에도 창에 이전 사용자의 계좌 데이터가 그대로 남는다.
+            try { teardownCardWinsRef.current?.(); } catch {}
             // 새 탭 관리자 접속 중에는 로그아웃=탭 닫기(reload 시 ?adminView로 재진입 루프 방지)
             if (ADMIN_VIEW_EMAIL) { closeAdminViewTab(); return; }
             sessionStorage.removeItem(SESSION_KEY);
@@ -3784,6 +3963,8 @@ export default function App() {
             hoveredPortStkSlice={hoveredPortStkSlice}
             setHoveredPortStkSlice={setHoveredPortStkSlice}
             hideAmounts={hideAmounts}
+            onExpand={() => openCardWindow('summary', activePortfolioId)}
+            cardWindowOpen={cardWinOpenSet.has(`summary:${activePortfolioId}`)}
           />
         )}
 
@@ -3889,6 +4070,8 @@ export default function App() {
             onDividendTaxHistoryUpdate={setDividendTaxHistory}
             dividendLinks={dividendLinks}
             setDividendLinks={setDividendLinks}
+            onExpand={() => openCardWindow('dividend', activePortfolioId)}
+            cardWindowOpen={cardWinOpenSet.has(`dividend:${activePortfolioId}`)}
           />
         )}
 

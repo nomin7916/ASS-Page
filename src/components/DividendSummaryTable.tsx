@@ -4,6 +4,7 @@ import { cleanNum, formatCurrency, dividendPayDate, buildHeldNameMap, parseDivid
 import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchUsStockInfo } from '../api';
 import KrEtfTaxMatrix from './KrEtfTaxMatrix';
 import ErrorBoundary from './ErrorBoundary';
+import CardExpandButton from './CardExpandButton';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -341,7 +342,7 @@ function DividendLinkBar({ links, onChange }) {
   );
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks, onExpand, cardWindowOpen }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -1496,6 +1497,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
           잘려 클릭 불가가 된다. 숨긴 월 칩은 개수가 가변이므로 shrink-0 그룹 밖에 두고 줄바꿈되게 한다. */}
       <div className="px-3 py-2.5 bg-[#0f172a] border-b border-gray-700 flex items-start gap-3 flex-wrap">
         <span className="text-white font-bold text-sm shrink-0 self-center">💰 분배금 현황</span>
+        <CardExpandButton onExpand={onExpand} opened={cardWindowOpen} label="분배금 현황" />
         <div className="flex rounded-lg overflow-hidden border border-gray-700 shrink-0 self-center">
           <button
             onClick={() => setActiveTab('expected')}
