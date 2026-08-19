@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { X, RotateCcw } from 'lucide-react';
+import { X, RotateCcw, RefreshCw } from 'lucide-react';
 import { formatNumber, formatCurrency, formatChangeRate, cleanNum } from '../utils';
 
 type LadderSide = 'buy' | 'sell';
@@ -26,6 +26,15 @@ interface Props {
   currency?: 'KRW' | 'USD';
   fxRate?: number;
   pos: { x: number; y: number };
+  // 현재가 재조회 — **종목에 바인딩된 무인자 콜백**이다(모달은 어느 종목인지 모른다).
+  // 호출부가 계산기를 열 때 이미 한 번 쏘고, 타이틀 바 버튼은 재시도용이다.
+  onRefreshPrice?: (() => void) | null;
+  // 그 종목의 조회 상태 — 'loading' | 'success' | 'fail'. 모르면 null/undefined(표시 안 함).
+  refreshState?: string | null;
+  // 사다리가 빈 이유를 호출부가 알 때 넘긴다(예: 추가 수량이 바뀌어 매도할 수량이 사라짐).
+  // ⚠️ 이때 기본 문구('목표 금액이 1주 값보다 작습니다')를 재사용하면 **거짓 설명**이 된다 —
+  //    실제 원인은 1주 값 미만이 아니라 방향/수량이 어긋난 것이다.
+  emptyReason?: string | null;
   onClose: () => void;
 }
 
@@ -200,7 +209,7 @@ function redistribute(rows: LadderRow[], target: number, mult: number = 1): Ladd
   return rows.map(r => r.locked ? r : { ...r, qty: qtys[ui++] ?? 0 });
 }
 
-export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, changeRate = null, currency = 'KRW', fxRate = 1, pos, onClose }: Props) {
+export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, changeRate = null, currency = 'KRW', fxRate = 1, pos, onRefreshPrice = null, refreshState = null, emptyReason = null, onClose }: Props) {
   const isSell = side === 'sell';
   const dir = isSell ? 1 : -1;
   const sideLabel = isSell ? '매도' : '매수';
@@ -247,19 +256,56 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   const [rows, setRows] = useState<LadderRow[]>([]);
   const [targetQty, setTargetQty] = useState(0);
   const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
+  // ── 사용자가 직접 지정한 단가 (rowId → price) ──
+  // ⚠️ 호가 간격·배수·현재가가 바뀌어 사다리를 다시 만들어도 이 값은 살아남는다. 옛 doRegenerate는
+  //    buildLadder 결과를 그대로 setRows 해서 사용자가 넣은 단가를 통째로 지웠고, 그래서 호가를
+  //    한 칸만 고쳐도 "내가 입력한 매수단가가 이전 가격으로 되돌아가는" 버그가 났다.
+  // ⚠️ 수량 편집(handleRowQtyChange가 세우는 locked)은 **일부러 보존하지 않는다** — 배수·호가 간격이
+  //    수량 배분 자체를 재정의하는 값이라, 옛 수량을 들고 가면 새 배수와 정면으로 모순된다.
+  const [pinnedPrices, setPinnedPrices] = useState<Record<string, number>>({});
+  // ⚠️ 이 값을 재생성 effect의 deps에 넣지 말 것 — 단가를 하나 커밋할 때마다 사다리가 통째로 다시
+  //    만들어져 그 순간 수량 편집이 날아가고 스크롤도 튄다. effect는 ref로만 읽는다.
+  const pinnedRef = useRef(pinnedPrices);
+  pinnedRef.current = pinnedPrices;
   const [position, setPosition] = useState(pos);
   const drag = useRef({ active: false, ox: 0, oy: 0 });
 
+  // 핀이 지금 이 사다리의 **진행 방향 쪽**에 있는가 — 매수는 현재가 이하, 매도는 현재가 이상.
+  // ⚠️ 핀은 절대 가격이라, 현재가를 재조회하거나 호가를 바꿔 base가 옮겨지면 사다리 **반대편**으로
+  //    넘어갈 수 있다. 그대로 앵커로 삼으면 recalcAllPrices가 그 아래를 거기서부터 다시 깔아
+  //    **같은 가격이 두 행에 찍힌다**(실측: 매수 base 9,700 · 호가 100 · 핀 r2=9,900 →
+  //    9,700/9,600/9,900/9,800/9,700/9,600 — r0과 r4, r1과 r5가 같은 가격 = 같은 값에 두 개의 주문).
+  //    이 상태는 사용자가 만든 적이 없고 base 이동이 자동으로 만든다 → 조용한 오적용보다 명시적 미적용.
+  // ⚠️ 방향 안쪽의 비단조(사용자가 r2를 r1보다 비싸게 지정)는 **막지 않는다** — 그건 사용자가 직접
+  //    입력해 만든 상태이고, 수동 편집은 목표금액 초과까지 허용하는 것이 이 계산기의 기존 계약이다.
+  const pinFits = (pin: number, price: number) => dir * (pin - price) >= 0;
+
+  // 사용자가 지정한 단가를 다시 심고, 그 아래 행을 새 호가 간격으로 재앵커한다.
+  // ⚠️ basePrice는 반드시 **이번 재생성에 쓰인 price** — prop currentPrice로 굳히면 현재가를 재조회한
+  //    직후 한 프레임 동안 buildLadder와 다른 기준으로 재앵커돼 행 가격이 어긋난다.
+  // ⚠️ 핀이 하나도 없으면 built를 그대로 돌려준다. recalcAllPrices(핀 0개)는 buildLadder 출력과
+  //    대수적으로 같지만, 조기 반환이 있어야 "핀이 없으면 종전과 1원도 다르지 않다"가 논증이 아니라
+  //    구조로 보장된다(하위호환의 축).
+  // ⚠️ 적용하지 못한 핀을 pinnedPrices에서 **지우지는 않는다** — 시세가 잠깐 튀었다 돌아오면 되살아나야
+  //    한다(사라진 인덱스의 핀과 같은 규약). 해제 수단은 ↺ 초기화이고, 아래 안내 띠가 그것을 알린다.
+  const applyPins = (built: LadderRow[], pins: Record<string, number>, price: number, tick: number) => {
+    if (!built.length) return built;
+    const usable = new Set(built.filter(r => pins[r.id] !== undefined && pinFits(pins[r.id], price)).map(r => r.id));
+    if (!usable.size) return built;
+    const pinned = built.map(r => usable.has(r.id) ? { ...r, price: pins[r.id], locked: true } : r);
+    return recalcAllPrices(pinned, price, tick, priceFloor, decimals, dir);
+  };
+
   // ⚠️ 매수·매도가 **같은 한 줄**을 쓴다. 매도만 수량으로 분기하던 옛 삼항으로 되돌리지 말 것.
-  const doRegenerate = (price: number, tick: number, amount: number, m: number) => {
+  const doRegenerate = (price: number, tick: number, amount: number, m: number, pins: Record<string, number>) => {
     const Q = solveQtyForAmount(price, tick, amount, priceFloor, decimals, dir, m);
     setTargetQty(Q);
-    setRows(buildLadder(price, tick, Q, priceFloor, decimals, dir, m));
+    setRows(applyPins(buildLadder(price, tick, Q, priceFloor, decimals, dir, m), pins, price, tick));
     setPriceEdits({});
   };
 
   useEffect(() => {
-    doRegenerate(currentPrice, tickSize, targetAmount, mult);
+    doRegenerate(currentPrice, tickSize, targetAmount, mult, pinnedRef.current);
   }, [currentPrice, tickSize, targetAmount, side, mult]);
 
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);
@@ -295,6 +341,10 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
     ? (qtyDiff < 0 ? `${formatNumber(-qtyDiff)}주 절약` : `${formatNumber(qtyDiff)}주 초과`)
     : (qtyDiff > 0 ? `${formatNumber(qtyDiff)}주 추가` : `${formatNumber(-qtyDiff)}주 부족`);
   const qtyGap = roundTo(targetQty - totalQty, 6);
+  // 지금 사다리에 반영되지 못한 지정 단가 — 방향이 어긋났거나(pinFits 탈락) 사다리가 짧아져 그 행이
+  // 사라진 경우. 화면에 흔적이 없으면 사용자는 "내 입력이 왜 안 보이지"만 남는다.
+  const droppedPins = Object.keys(pinnedPrices)
+    .filter(id => !rows.some(r => r.id === id && r.locked && r.price === pinnedPrices[id])).length;
 
   // ⚠️ 호가 간격은 가격 격자(원화 1원 / 달러 0.01)의 배수여야 한다 — 소수점 호가는 없다.
   //    격자보다 작은 값을 그대로 받으면 roundTo(price, decimals)가 모든 행을 같은 가격으로
@@ -340,6 +390,9 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
       const newPrice = roundTo(cleanNum(val), decimals);
       setPriceEdits(prev => { const n = { ...prev }; delete n[id]; return n; });
       if (newPrice > 0) {
+        // ⚠️ 사용자가 지정한 단가는 여기서만 심는다 — 호가 간격·배수·현재가가 바뀌어 사다리가
+        //    재생성돼도 doRegenerate → applyPins가 이 값을 다시 심어 준다.
+        setPinnedPrices(prev => ({ ...prev, [id]: newPrice }));
         setRows(prev => {
           const updated = prev.map(r => r.id === id ? { ...r, price: newPrice, locked: true } : r);
           return recalcAllPrices(updated, currentPrice, tickSize, priceFloor, decimals, dir);
@@ -350,6 +403,9 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
 
   const unlockRow = (id: string) => {
     setPriceEdits(prev => { const n = { ...prev }; delete n[id]; return n; });
+    // ⚠️ 지정 단가도 함께 지운다 — 안 지우면 다음 재생성(호가·배수·현재가 변경)에서 방금 푼
+    //    잠금이 그대로 되살아나 '잠금 해제'가 아무 일도 하지 않은 것처럼 보인다.
+    setPinnedPrices(prev => { const n = { ...prev }; delete n[id]; return n; });
     setRows(prev => {
       const unlocked = prev.map(r => r.id === id ? { ...r, locked: false } : r);
       const priceFixed = recalcAllPrices(unlocked, currentPrice, tickSize, priceFloor, decimals, dir);
@@ -392,10 +448,21 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
           {itemName} — 분할{sideLabel} 계산기{isUSD ? ' ($)' : ''}
         </span>
         <div className="flex items-center gap-2 shrink-0">
+          {onRefreshPrice && (
+            <button
+              onClick={() => onRefreshPrice()}
+              className={`transition-colors ${refreshState === 'fail' ? 'text-red-400 hover:text-red-300' : 'text-gray-500 hover:text-teal-300'}`}
+              title={refreshState === 'fail'
+                ? '현재가를 불러오지 못했습니다 — 클릭하여 다시 시도'
+                : '현재가 새로고침 — 계산기를 열 때 자동으로 한 번 조회합니다'}
+            >
+              <RefreshCw size={12} className={refreshState === 'loading' ? 'animate-spin' : ''} />
+            </button>
+          )}
           <button
-            onClick={() => doRegenerate(currentPrice, tickSize, targetAmount, mult)}
+            onClick={() => { setPinnedPrices({}); doRegenerate(currentPrice, tickSize, targetAmount, mult, {}); }}
             className="text-gray-500 hover:text-amber-300 transition-colors"
-            title="초기화"
+            title="초기화 — 직접 입력한 단가·수량을 모두 버리고 현재가 기준으로 다시 배분합니다"
           >
             <RotateCcw size={12} />
           </button>
@@ -480,6 +547,14 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
         </div>
       </div>
 
+      {/* ⚠️ 이 모달은 z-1050이라 notify()·ConfirmDialog가 가려진다 — 사용자 피드백은 반드시 모달 내부 인라인. */}
+      {droppedPins > 0 && (
+        <div className="px-3 py-1.5 bg-amber-950/30 border-b border-amber-800/40 text-[10px] text-amber-300/90 leading-snug">
+          직접 입력한 단가 {droppedPins}건이 현재가({fmtCurPrice(currentPrice)}) 기준 사다리 방향과 맞지 않아 반영되지 않았습니다.
+          <span className="text-amber-200/60"> ↺ 초기화로 지울 수 있습니다.</span>
+        </div>
+      )}
+
       {/* Table */}
       <div className="overflow-y-auto" style={{ maxHeight: 300 }}>
         <table className="w-full text-[11px] border-collapse">
@@ -508,7 +583,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
                 <td colSpan={colCount} className="py-6 px-3 text-center text-[10px] text-gray-500 leading-relaxed">
                   배분할 수량이 없습니다.
                   <span className="block text-gray-600">
-                    목표 금액({fmt(targetAmount)})이 1주 값보다 작습니다.
+                    {emptyReason || `목표 금액(${fmt(targetAmount)})이 1주 값보다 작습니다.`}
                   </span>
                 </td>
               </tr>
@@ -528,6 +603,9 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
                   }`}
                 >
                   <td className="py-1 px-1">
+                    {/* ⚠️ Enter는 blur()만 부른다 — 호가·배수 칸처럼 '커밋 후 blur'로 쓰면 이어지는
+                        blur 핸들러가 stale 클로저의 초안으로 한 번 더 커밋한다(값은 같지만 setRows가
+                        두 번 돌아 재앵커가 중복된다). 커밋 경로는 onBlur 하나로 유지한다. */}
                     <input
                       className={`w-full bg-transparent text-center font-mono outline-none focus:bg-gray-800/60 rounded px-1 py-0.5 select-text ${
                         row.locked ? 'text-indigo-300' : 'text-gray-300'
@@ -536,6 +614,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
                       onChange={e => handleRowPriceChange(row.id, e.target.value)}
                       onBlur={() => handleRowPriceBlur(row.id)}
                       onFocus={e => { setPriceEdits(prev => ({ ...prev, [row.id]: String(row.price) })); e.target.select(); }}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
                     />
                   </td>
                   {showRate && (
@@ -551,6 +630,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
                       value={row.qty}
                       onChange={e => handleRowQtyChange(row.id, e.target.value)}
                       onFocus={e => e.target.select()}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
                     />
                   </td>
                   <td className="py-1 px-2 text-center text-gray-400 font-mono">

@@ -13,6 +13,13 @@
 //   ④ 정규화된 호가면 사다리 행 가격이 절대 중복되지 않는다
 //   ⑤ 각 호가의 등락률은 **전일 종가**(현재가 ÷ (1 + c/100)) 기준 — 전일 종가를 가격 격자로
 //      반올림하지 않는다. 반올림하면 현재가 행의 등락률이 리밸런싱 표의 등락률과 갈린다.
+//   ⑥ 계산기는 여는 시점의 스냅샷이 아니라 rebalanceData의 **살아 있는 행**을 본다. 여는 순간
+//      그 종목의 현재가를 재조회하는데, 스냅샷을 들고 있으면 새 가격이 화면에 영영 닿지 않는다.
+//   ⑦ 사용자가 직접 입력한 단가(핀)는 호가 간격·배수·현재가가 바뀌어 사다리를 다시 만들어도
+//      살아남는다. 핀이 하나도 없으면 결과가 종전과 1원도 다르지 않다(하위호환의 축).
+//   ⑧ side(매수/매도)는 여는 시점에 박제한다 — 라이브 파생 금지. 열림 게이트(totalAction !== 0)는
+//      renderRow에만 있어 모달 렌더 경로를 못 막으므로, 부호 불일치는 모달 안에서 명시적으로 미적용한다.
+//      base가 옮겨져 사다리 **반대편**으로 넘어간 핀도 마찬가지(같은 가격이 두 행에 찍히는 것 방지).
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -517,15 +524,107 @@ console.log('\n■ 등락률 null 계약 — 모르는 값을 0%로 단언하지
     F.rateVsPrev(1000, null) === null && F.rateVsPrev(1000, 0) === null && F.rateVsPrev(NaN, 1000) === null);
 }
 
+console.log('\n■ 사용자 지정 단가(핀) 보존 — 호가·배수를 바꿔도 이전 가격으로 되돌아가지 않는다');
+{
+  // 컴포넌트 applyPins와 같은 규칙(핀 심기 → recalcAllPrices 재앵커)을 **원문 함수**로 재현한다.
+  // ⚠️ applyPins 자체는 컴포넌트 안(순수 함수 구간 밖)이라 잘라 평가할 수 없다 → 그 배선은 #110이 맡는다.
+  const applyPins = (built, pins, price, tick, floor, dec, dir) => {
+    if (!built.length) return built;
+    const fits = (pin) => dir * (pin - price) >= 0;
+    const usable = new Set(built.filter(r => pins[r.id] !== undefined && fits(pins[r.id])).map(r => r.id));
+    if (!usable.size) return built;
+    const pinned = built.map(r => usable.has(r.id) ? { ...r, price: pins[r.id], locked: true } : r);
+    return F.recalcAllPrices(pinned, price, tick, floor, dec, dir);
+  };
+
+  // 사용자 실측 시나리오 — 현재가 10,510 · 호가 10 → 첫 행에 10,000을 직접 입력 → 호가를 200으로 변경.
+  const pins = { r0: 10000 };
+  const built10 = F.buildLadder(10510, 10, 21, 1, 0, -1);
+  const with10 = applyPins(built10, pins, 10510, 10, 1, 0, -1);
+  ok('#101 지정한 단가가 그대로 남는다 (호가 10)', with10[0].price === 10000 && with10[0].locked === true);
+  ok('#102 지정 단가 아래 행은 그 단가를 기준으로 호가 간격만큼 재배치된다',
+    with10[1].price === 9990 && with10[2].price === 9980, J(with10.map(r => r.price)));
+
+  const built200 = F.buildLadder(10510, 200, 21, 1, 0, -1);
+  const with200 = applyPins(built200, pins, 10510, 200, 1, 0, -1);
+  ok('#103 [회귀] 호가 간격을 바꿔도 지정 단가가 이전 가격으로 되돌아가지 않는다',
+    with200[0].price === 10000, J(with200.map(r => r.price)));
+  ok('#104 새 호가 간격은 지정 단가 아래부터 적용된다',
+    with200[1].price === 9800 && with200[2].price === 9600, J(with200.map(r => r.price)));
+
+  // 배수 변경도 같은 경로(doRegenerate)라 핀이 살아남는다.
+  const builtM2 = F.buildLadder(10510, 10, 21, 1, 0, -1, 2);
+  ok('#105 배수를 바꿔도 지정 단가가 유지된다',
+    applyPins(builtM2, pins, 10510, 10, 1, 0, -1)[0].price === 10000);
+
+  ok('#106 핀이 없으면 buildLadder 출력과 완전히 동일 (하위호환의 축)',
+    J(applyPins(built10, {}, 10510, 10, 1, 0, -1)) === J(built10)
+    && J(F.recalcAllPrices(built10, 10510, 10, 1, 0, -1)) === J(built10));
+
+  const sellBuilt = F.buildLadder(10510, 10, 21, 1, 0, 1);
+  const sellPinned = applyPins(sellBuilt, { r0: 11000 }, 10510, 10, 1, 0, 1);
+  ok('#107 매도도 같은 규칙 (지정 단가 유지 + 위로 재앵커)',
+    sellPinned[0].price === 11000 && sellPinned[1].price === 11010, J(sellPinned.map(r => r.price)));
+
+  // 사다리가 짧아져 핀 인덱스가 사라져도 오류 없이 무시된다(핀은 지우지 않는다 — 다시 길어지면 되살아난다).
+  const short = F.buildLadder(10510, 10, 3, 1, 0, -1);
+  const shortPinned = applyPins(short, { r0: 10000, r9: 9000 }, 10510, 10, 1, 0, -1);
+  quiet('사라진 인덱스의 핀은 조용히 무시된다',
+    shortPinned.length === short.length && shortPinned.every(r => r.price >= 1) && shortPinned[0].price === 10000,
+    J(shortPinned.map(r => r.price)));
+
+  // ── 방향 게이트 — base가 옮겨져 사다리 반대편으로 넘어간 핀은 적용하지 않는다 ──
+  // 현재가 재조회(수정1)가 base를 바꾸므로, 이 상태는 사용자가 만든 적 없이 **자동으로** 생긴다.
+  {
+    const base2 = F.buildLadder(9700, 100, 21, 1, 0, -1);   // 재조회로 현재가가 10,000 → 9,700
+    const pinned2 = applyPins(base2, { r2: 9900 }, 9700, 100, 1, 0, -1);
+    ok('#115 매수에서 현재가보다 비싼 핀은 적용되지 않는다 (같은 가격 중복 방지)',
+      J(pinned2) === J(base2) && new Set(pinned2.map(r => r.price)).size === pinned2.length,
+      J(pinned2.map(r => r.price)));
+
+    // ⚠️ 죽은 단언 방지 — 게이트를 뺀 버전이 실제로 중복 가격을 만드는지 확인한다.
+    const noGate = F.recalcAllPrices(
+      base2.map(r => r.id === 'r2' ? { ...r, price: 9900, locked: true } : r),
+      9700, 100, 1, 0, -1);
+    ok('#115b [변이] 게이트가 없으면 같은 가격이 두 행에 찍힌다 (게이트의 존재 이유)',
+      new Set(noGate.map(r => r.price)).size < noGate.length,
+      J(noGate.map(r => r.price)));
+
+    // 매도(dir=+1) 대칭 — 현재가보다 싼 핀은 적용되지 않는다.
+    const sellBase = F.buildLadder(9700, 100, 21, 1, 0, 1);
+    quiet('매도에서 현재가보다 싼 핀도 적용되지 않는다',
+      J(applyPins(sellBase, { r2: 9500 }, 9700, 100, 1, 0, 1)) === J(sellBase));
+  }
+
+  // ⚠️ 게이트가 과잉 차단이 되면 수정2 자체가 무의미해진다 — 방향 **안쪽**의 비단조는 그대로 허용한다
+  //    (사용자가 r2를 r1보다 비싸게 지정한 것은 직접 만든 상태이고, 수동 편집 자유는 기존 계약이다).
+  {
+    const b = F.buildLadder(10000, 100, 21, 1, 0, -1);
+    const p = applyPins(b, { r2: 9950 }, 10000, 100, 1, 0, -1);
+    ok('#116 방향 안쪽이면 앞 행보다 비싼 핀도 그대로 적용된다 (과잉 차단 금지)',
+      p[2].price === 9950 && p[2].locked === true && p[3].price === 9850,
+      J(p.map(r => r.price)));
+  }
+}
+
 console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가 dir/side를 실제로 넘기는가)');
 {
   // ⚠️ 위 산술 테스트는 dir을 '인자로' 받으므로, 컴포넌트가 방향을 거꾸로 넘겨도 잡지 못한다.
   //    그 계약은 원문 정규식으로만 단언할 수 있다. 실패 시 먼저 정규식이 낡았는지 확인할 것.
   ok('#46 매도 dir=+1 / 매수 dir=-1', /const dir = isSell \? 1 : -1;/.test(src));
   ok('#47 buildLadder 호출이 dir·mult를 넘긴다', /buildLadder\(price, tick, Q, priceFloor, decimals, dir, m\)/.test(src));
-  ok('#48 recalcAllPrices 호출 2곳 모두 dir을 넘긴다',
-    (src.match(/recalcAllPrices\([^)]*, dir\)/g) || []).length === 2,
-    J((src.match(/recalcAllPrices\([^)]*dir\)/g) || [])));
+  // ⚠️ 개수를 상수로 못 박지 말 것 — 호출이 하나 늘 때마다 계약과 무관하게 실패한다.
+  //    계약은 "선언을 뺀 **모든** 호출이 dir을 넘긴다"이다.
+  {
+    // ⚠️ 반드시 주석을 걷어낸 본문에서 센다 — 이 저장소는 금지·설명 근거를 바로 그 자리 주석에
+    //    적으므로, 원문으로 세면 주석 속 함수 이름이 유령 호출로 잡혀 가드가 영구히 실패한다.
+    const code = stripComments(src);
+    const recalcAll = (code.match(/recalcAllPrices\(/g) || []).length - 1; // 선언 1개 제외
+    const recalcDir = (code.match(/recalcAllPrices\([^)]*, dir\)/g) || []).length;
+    ok('#48 recalcAllPrices 호출이 전부 dir을 넘긴다 (개수 고정 아님)',
+      recalcAll >= 3 && recalcDir === recalcAll,
+      J({ recalcAll, recalcDir }));
+  }
   ok('#49 매수·매도가 같은 금액 솔버 한 줄을 쓴다 (수량 고정 분기 부활 금지)',
     /const Q = solveQtyForAmount\(price, tick, amount, priceFloor, decimals, dir, m\);/.test(src)
     && !/sellTarget/.test(stripComments(src)));
@@ -543,12 +642,17 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
 
   const panel = readFileSync(join(ROOT, 'src/components/RebalancingPanel.tsx'), 'utf8');
   ok('#54 현재가 셀이 매도(−)에서도 열린다', /const ladderOpenable = totalAction !== 0 && itemPrice > 0;/.test(panel));
-  ok('#55 side를 방향에 맞게 넘긴다',
-    /side: isSellAction \? 'sell' : 'buy',/.test(panel)
-    && /const isSellAction = totalAction < 0;/.test(panel));
-  ok('#56 앵커는 목표 금액 = |수량| × 현재가 (증가분·부족분)',
-    /targetAmount: Math\.abs\(totalAction\) \* itemPrice,/.test(panel)
-    && /targetAmount=\{ladderModal\.targetAmount\}/.test(panel)
+  // ⚠️ 아래 3건(#55·#56·#96)은 스냅샷 리터럴에서 **라이브 파생 블록**으로 자리를 옮겼다.
+  //    계약(방향·앵커·등락률 소스)은 그대로다 — 옛 정규식으로 되돌리지 말 것.
+  // ⚠️ side는 **여는 시점 스냅샷**이다 — ladderAction에서 라이브 파생하면 '추가' 칸 편집만으로
+  //    분할매도 계산기가 분할매수 계산기로 뒤집힌다(#117이 그 금지를 함께 단언한다).
+  ok('#55 side를 방향에 맞게 넘긴다 (여는 시점 박제)',
+    /side: isSellAction \? 'sell' : 'buy'/.test(panel)
+    && /const isSellAction = totalAction < 0;/.test(panel)
+    && /side=\{ladderModal\.side\}/.test(panel));
+  ok('#56 앵커는 목표 금액 = |수량| × 현재가 (증가분·부족분) · 부호 불일치는 명시적 미적용',
+    /const ladderTargetAmount = ladderSignOk \? Math\.abs\(ladderAction\) \* ladderPrice : 0;/.test(panel)
+    && /targetAmount=\{ladderTargetAmount\}/.test(panel)
     && !/rebalFund/.test(panel));
   ok('#72 화면이 목표 금액과 잔여를 노출한다 (사다리가 목표를 못 채운 것을 숨기지 않음)',
     /목표 금액/.test(src) && /const residual = targetAmount - totalCost;/.test(src)
@@ -564,8 +668,9 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
   ok('#79 빈 사다리는 이유를 밝힌다 (잔여·푸터가 가려지므로)',
     /!rows\.length && \(/.test(src) && /배분할 수량이 없습니다/.test(src));
   // ── 전일 대비 등락률 열 배선 ──
+  // ⚠️ prop 순서(인접성)를 단언하지 말 것 — 신규 prop 하나만 사이에 끼워도 계약과 무관하게 실패한다.
   ok('#92 컴포넌트가 changeRate를 받아 전일 종가를 복원하고 열을 조건부로 렌더한다',
-    /changeRate = null, currency = 'KRW'/.test(src)
+    /changeRate = null,/.test(src) && /currency = 'KRW',/.test(src)
     && /const prevClose = prevCloseFrom\(currentPrice, changeRate\);/.test(src)
     && /const showRate = prevClose !== null;/.test(src)
     && /등락률\s*<\/th>/.test(src));
@@ -595,13 +700,74 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
   ok('#95 모르면 0.00%가 아니라 - 로 표시한다 (null 계약)',
     /const rateText = \(r[^)]*\) => r == null \? '-' : formatChangeRate\(r\);/.test(src));
   ok('#96 리밸런싱 표가 등락률을 넘긴다 (양쪽 배선)',
-    /changeRate: item\.changeRate \?\? null,/.test(panel)
-    && /changeRate=\{ladderModal\.changeRate\}/.test(panel));
+    /const ladderChangeRate = ladderRow \? \(ladderRow\.changeRate \?\? null\) : null;/.test(panel)
+    && /changeRate=\{ladderChangeRate\}/.test(panel));
   ok('#97 모달 폭·높이와 열림 위치 클램프가 짝 (440 ↔ 456 / 요약 확대 ↔ 560)',
     /width: 440 \}\}/.test(src) && /window\.innerWidth - 456\)/.test(panel)
     && /window\.innerHeight - 560\)/.test(panel));
   ok('#57 단일 컴포넌트 유지 — 매도 전용 모달 복제 금지',
     /import LadderTradeModal from '\.\/LadderTradeModal';/.test(panel) && !/LadderSellModal|LadderBuyModal/.test(panel));
+
+  // ── 현재가 재조회 · 지정 단가 보존 · Enter 커밋 ──
+  // ⚠️ 전부 **사용부**를 단언한다. 선언만 보면 셀 통째 삭제·값 바꿔치기가 그대로 통과한다.
+  const app = readFileSync(join(ROOT, 'src/App.tsx'), 'utf8');
+  ok('#108 계산기는 스냅샷이 아니라 rebalanceData의 살아 있는 행을 본다',
+    // state가 담는 것은 itemId·pos·side 셋뿐이다(side만 의도적 스냅샷 — #55·#117).
+    /setLadderModal\(\{ itemId: item\.id, pos: \{ x, y \}, side: /.test(panel)
+    && /const ladderRow = ladderModal \? rebalanceData\.find\(d => d\.id === ladderModal\.itemId\) : null;/.test(panel)
+    && /const ladderPrice = ladderRow \? cleanNum\(ladderRow\.currentPrice\) : 0;/.test(panel)
+    && /const ladderAction = ladderRow \? ladderRow\.action \+ \(rebalExtraQty\[ladderRow\.id\] \|\| 0\) : 0;/.test(panel)
+    && /currentPrice=\{ladderPrice\}/.test(panel) && /totalAction=\{ladderTotalAction\}/.test(panel)
+    && /\{ladderModal && ladderRow && \(/.test(panel)
+    // ⚠️ 옛 스냅샷 필드가 하나라도 되살아나면 재조회한 새 가격이 모달에 닿지 않는다.
+    //    side는 예외 — 그것만은 의도적으로 박제한다(#55·#117).
+    && !/ladderModal\.(currentPrice|totalAction|targetAmount|changeRate|itemName|currency|fxRate)/.test(stripComments(panel)));
+  ok('#109 현재가 셀 클릭이 그 종목을 즉시 재조회한다 (App→패널→모달 3단 배선)',
+    /if \(item\.code && onRefreshPrice\) onRefreshPrice\(item\.id, item\.code\);/.test(panel)
+    && /onRefreshPrice=\{handleSingleStockRefresh\}\s*stockFetchStatus=\{stockFetchStatus\}/.test(app)
+    && /\? \(\) => onRefreshPrice\(ladderRow\.id, ladderRow\.code\)/.test(panel)
+    && /onRefreshPrice=\{ladderRefresh\}/.test(panel)
+    && /refreshState=\{ladderRefreshState\}/.test(panel)
+    && /const ladderRefreshState = \(ladderRow && ladderRow\.code\) \? \(stockFetchStatus\?\.\[ladderRow\.code\] \?\? null\) : null;/.test(panel)
+    // 모달이 실제로 그 콜백·상태를 쓴다(버튼 렌더 + 스피너)
+    && /onClick=\{\(\) => onRefreshPrice\(\)\}/.test(src)
+    && /refreshState === 'loading' \? 'animate-spin' : ''/.test(src));
+  ok('#110 지정 단가가 재생성에서 다시 심어진다 (호가·배수·현재가 변경에도 유지)',
+    /const \[pinnedPrices, setPinnedPrices\] = useState<Record<string, number>>\(\{\}\);/.test(src)
+    && /setPinnedPrices\(prev => \(\{ \.\.\.prev, \[id\]: newPrice \}\)\);/.test(src)
+    && /const doRegenerate = \(price: number, tick: number, amount: number, m: number, pins: Record<string, number>\) => \{/.test(src)
+    && /setRows\(applyPins\(buildLadder\(price, tick, Q, priceFloor, decimals, dir, m\), pins, price, tick\)\);/.test(src)
+    && /usable\.has\(r\.id\) \? \{ \.\.\.r, price: pins\[r\.id\], locked: true \}/.test(src));
+  ok('#111 핀은 재생성 effect deps가 아니라 ref로 읽는다 (단가 커밋마다 전체 재생성 금지)',
+    /pinnedRef\.current = pinnedPrices;/.test(src)
+    && /doRegenerate\(currentPrice, tickSize, targetAmount, mult, pinnedRef\.current\);/.test(src)
+    && !/\[currentPrice, tickSize, targetAmount, side, mult, pinnedPrices\]/.test(src));
+  ok('#112 잠금 해제·초기화가 지정 단가를 지운다 (해제가 다음 재생성에서 되살아나지 않게)',
+    /const unlockRow = \(id: string\) => \{[\s\S]{0,600}?setPinnedPrices\(prev => \{ const n = \{ \.\.\.prev \}; delete n\[id\]; return n; \}\);/.test(src)
+    && /onClick=\{\(\) => \{ setPinnedPrices\(\{\}\); doRegenerate\(currentPrice, tickSize, targetAmount, mult, \{\}\); \}\}/.test(src));
+  ok('#113 매수단가·수량 입력이 Enter로도 커밋된다',
+    (src.match(/onKeyDown=\{e => \{ if \(e\.key === 'Enter'\) \{ e\.preventDefault\(\); \(e\.target as HTMLInputElement\)\.blur\(\); \} \}\}/g) || []).length === 2
+    // ⚠️ Enter가 커밋을 직접 부르면 이어지는 blur가 stale 초안으로 한 번 더 커밋한다 — 커밋 경로는 onBlur 하나.
+    && !/Enter'\) \{ handleRowPriceBlur/.test(src));
+  ok('#114 핀이 없으면 사다리가 buildLadder 출력 그대로 (하위호환의 축)',
+    /if \(!built\.length\) return built;/.test(src)
+    && /if \(!usable\.size\) return built;/.test(src));
+  ok('#117 side는 여는 시점에 박제한다 (라이브 파생 금지 — 매도 계산기가 매수로 뒤집힘 방지)',
+    /const ladderSignOk = !!ladderModal && !!ladderRow\s*&& \(ladderModal\.side === 'sell' \? ladderAction < 0 : ladderAction > 0\);/.test(panel)
+    && /const ladderTotalAction = ladderSignOk \? ladderAction : 0;/.test(panel)
+    // 부호가 어긋난 이유가 화면에 남아야 한다(빈 사다리 기본 문구는 거짓 설명이 된다)
+    && /emptyReason=\{ladderEmptyReason\}/.test(panel)
+    && /\{emptyReason \|\| `목표 금액\(\$\{fmt\(targetAmount\)\}\)이 1주 값보다 작습니다\.`\}/.test(src)
+    // 라이브 파생으로 되돌리면 실패한다
+    && !/side=\{ladderAction/.test(panel));
+  ok('#118 종목을 바꿔 열면 계산기가 다시 마운트된다 (다른 종목의 지정 단가 오염 방지)',
+    /key=\{ladderModal\.itemId\}/.test(panel));
+  ok('#119 사다리 반대편으로 넘어간 핀은 적용하지 않고, 그 사실을 모달 안에서 알린다',
+    /const pinFits = \(pin: number, price: number\) => dir \* \(pin - price\) >= 0;/.test(src)
+    && /pins\[r\.id\] !== undefined && pinFits\(pins\[r\.id\], price\)/.test(src)
+    && /const droppedPins = Object\.keys\(pinnedPrices\)/.test(src)
+    && /\{droppedPins > 0 && \(/.test(src)
+    && /사다리 방향과 맞지 않아 반영되지 않았습니다/.test(src));
 }
 
 console.log('\n■ 방어 입력');

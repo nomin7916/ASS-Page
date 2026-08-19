@@ -117,6 +117,11 @@ export default function RebalancingPanel({
   rebalTargetSnapshots = [],
   activePortfolioId = null,
   onTargetRestored = null,
+  // 분할 계산기 전용 — 현재가 셀을 눌러 계산기를 열 때 그 종목만 즉시 재조회한다.
+  // App의 handleSingleStockRefresh(id, code)와 stockFetchStatus(코드→'loading'|'success'|'fail').
+  // ⚠️ 미전달이면 재조회가 없을 뿐 계산기는 종전대로 동작한다(graceful).
+  onRefreshPrice = null,
+  stockFetchStatus = {},
 }) {
   const [editingRatio, setEditingRatio] = useState({});
   // 목표금액 입력 초안 — 목표비중(editingRatio)과 같은 패턴. onChange마다 setPortfolio를 부르면
@@ -134,6 +139,8 @@ export default function RebalancingPanel({
   //    **마이너스 부호를 입력하는 것 자체가 불가능**하다(음수 매도 수량 직접 조절 불가).
   const [editingExtra, setEditingExtra] = useState({});
   const [restoreOpen, setRestoreOpen] = useState(false);
+  // 분할 계산기 — **{ itemId, pos, side } 만** 담는다(가격·수량 스냅샷 금지, 아래 라이브 파생 참조).
+  // side만 스냅샷인 이유는 아래 파생 블록 참조 — 창의 정체성이라 열린 뒤 뒤집히면 안 된다.
   const [ladderModal, setLadderModal] = useState(null);
   const [dateEditMode, setDateEditMode] = useState(false);
   // 목표 날짜 칩 왼쪽 구역(즉시 기록)의 결과 표시 — 'saved' | 'nochange' | 'nodate' | 'fail'.
@@ -615,6 +622,45 @@ export default function RebalancingPanel({
       </div>
     );
   };
+
+  // ── 분할 계산기가 보는 '살아 있는 행' (⚠️ 스냅샷 금지 — 회귀 주의) ──
+  // 계산기를 열면 그 종목의 현재가를 즉시 재조회하는데(아래 onClick → onRefreshPrice), 여는 시점의
+  // 값을 복사해 들고 있으면 **새 가격이 화면에 영영 닿지 않는다**. 게다가 목표 금액의 분자인 action은
+  // usePortfolioData가 포트폴리오 전체 목표에서 재계산하는 값이라 모달 안에서 되돌릴 수 없다
+  // (재조회가 돌려주는 것은 price 하나뿐이다) → 반드시 rebalanceData에서 매 렌더 다시 읽는다.
+  // ⚠️ 파생식은 renderRow의 그것과 **문자 그대로 같아야** 한다 — 갈리면 표의 수량과 계산기의
+  //    기준 수량이 다른 값을 말한다.
+  // ⚠️ 사다리의 앵커는 수량이 아니라 ladderTargetAmount(= |수량| × 현재가)다 — 그 종목의
+  //    증가분(매수)·부족분(매도). action이 이미 금액 ÷ 현재가의 버림이라 되돌리면 원래 금액이다.
+  // 행이 사라지면(계좌 전환·종목 삭제) 모달을 렌더하지 않는다.
+  const ladderRow = ladderModal ? rebalanceData.find(d => d.id === ladderModal.itemId) : null;
+  const ladderIsOverseas = activePortfolioAccountType === 'overseas';
+  const ladderPrice = ladderRow ? cleanNum(ladderRow.currentPrice) : 0;
+  const ladderAction = ladderRow ? ladderRow.action + (rebalExtraQty[ladderRow.id] || 0) : 0;
+  // ⚠️ side(매수/매도)는 **여는 시점에 박제**한다 — ladderAction에서 라이브로 파생하지 말 것.
+  //    '추가' 칸은 같은 표에서 사용자가 편집하고 maxAddLink 유지 effect가 자동으로도 채우므로,
+  //    열어 둔 채 totalAction이 0이 되거나 부호가 뒤집힐 수 있다. 라이브 파생이면 그 순간
+  //    분할'매도' 계산기가 제목·색·dir까지 통째로 분할'매수' 계산기로 뒤집힌다(사용자가 연 적 없는 창).
+  //    열림 게이트(ladderOpenable = totalAction !== 0)는 renderRow에만 있어 모달 렌더 경로를 못 막는다.
+  // ⚠️ 대신 부호가 어긋나면 **명시적으로 미적용**한다 — 목표 금액·기준 수량을 0으로 넘기고
+  //    사유(ladderEmptyReason)를 밝힌다. 조용히 반대 방향 사다리를 만들지 않는다.
+  const ladderSignOk = !!ladderModal && !!ladderRow
+    && (ladderModal.side === 'sell' ? ladderAction < 0 : ladderAction > 0);
+  const ladderTotalAction = ladderSignOk ? ladderAction : 0;
+  const ladderTargetAmount = ladderSignOk ? Math.abs(ladderAction) * ladderPrice : 0;
+  const ladderSideLabel = ladderModal && ladderModal.side === 'sell' ? '매도' : '매수';
+  const ladderEmptyReason = (ladderRow && !ladderSignOk)
+    ? (ladderAction === 0
+        ? `추가 수량·시세가 바뀌어 지금은 ${ladderSideLabel}할 수량이 없습니다.`
+        : `추가 수량·시세가 바뀌어 지금은 ${ladderAction < 0 ? '매도' : '매수'} ${formatNumber(Math.abs(ladderAction))}주가 필요합니다 — 이 창은 분할${ladderSideLabel} 계산기입니다. 닫고 현재가를 다시 누르세요.`)
+    : null;
+  // 전일 종가 복원용 — 이 표의 '등락률' 열과 같은 값. 모르면 null(0%가 아니다).
+  const ladderChangeRate = ladderRow ? (ladderRow.changeRate ?? null) : null;
+  // ⚠️ 모달에 넘기는 것은 **종목에 바인딩된 무인자 콜백**이다(모달은 어느 종목인지 모른다).
+  const ladderRefresh = (ladderRow && ladderRow.code && onRefreshPrice)
+    ? () => onRefreshPrice(ladderRow.id, ladderRow.code)
+    : null;
+  const ladderRefreshState = (ladderRow && ladderRow.code) ? (stockFetchStatus?.[ladderRow.code] ?? null) : null;
 
   return (
     <>
@@ -1378,20 +1424,16 @@ export default function RebalancingPanel({
                               const x = Math.max(8, Math.min(rect.right + 8, window.innerWidth - 456));
                               // ⚠️ 560 = 모달 최대 높이(요약에 등락률 줄이 붙어 ~520px) + 여유.
                               const y = Math.max(8, Math.min(rect.top - 20, window.innerHeight - 560));
-                              setLadderModal({
-                                side: isSellAction ? 'sell' : 'buy',
-                                itemName: item.name,
-                                currentPrice: itemPrice,
-                                totalAction,
-                                // ⚠️ 사다리의 앵커는 수량이 아니라 이 금액이다 — 그 종목의 증가분(매수)·
-                                // 부족분(매도). action이 이미 금액 ÷ 현재가의 버림이므로 되돌리면 원래 금액이다.
-                                targetAmount: Math.abs(totalAction) * itemPrice,
-                                // 전일 종가 복원용 — 이 표의 '등락률' 열과 같은 값. 모르면 null(0%가 아니다).
-                                changeRate: item.changeRate ?? null,
-                                currency: isOverseas ? 'USD' : 'KRW',
-                                fxRate: isOverseas ? usdkrw : 1,
-                                pos: { x, y },
-                              });
+                              // ⚠️ 가격·수량·목표금액을 여기서 복사하지 말 것 — 바로 아래에서 그 종목의
+                              //    현재가를 재조회하므로, 스냅샷을 담으면 새 가격이 모달에 닿지 않는다.
+                              //    모달 props는 위 '라이브 파생' 블록이 rebalanceData에서 매 렌더 만든다.
+                              // ⚠️ side만은 스냅샷이다 — 사용자가 '분할매도 계산기 열기'를 눌러 연 창의
+                              //    정체성이라 열린 뒤 '추가' 칸 편집으로 뒤집히면 안 된다(위 파생 블록 참조).
+                              setLadderModal({ itemId: item.id, pos: { x, y }, side: isSellAction ? 'sell' : 'buy' });
+                              // 계산기를 여는 시점에 그 종목의 현재가를 새로 받아온다 — 목표 금액이
+                              // 현재가에서 파생되므로 낡은 가격으로 열면 사다리 전체가 낡는다.
+                              // await 하지 않는다(모달은 먼저 열리고, 결과는 재계산을 거쳐 흘러든다).
+                              if (item.code && onRefreshPrice) onRefreshPrice(item.id, item.code);
                             } : undefined}
                             title={ladderOpenable ? (isSellAction ? '클릭하여 분할매도 계산기 열기' : '클릭하여 분할매수 계산기 열기') : undefined}
                           >
@@ -2126,17 +2168,21 @@ export default function RebalancingPanel({
           }}
           onClose={() => setPinModal(null)}
         />
-        {ladderModal && (
+        {ladderModal && ladderRow && (
           <LadderTradeModal
+            key={ladderModal.itemId}
             side={ladderModal.side}
-            itemName={ladderModal.itemName}
-            currentPrice={ladderModal.currentPrice}
-            totalAction={ladderModal.totalAction}
-            targetAmount={ladderModal.targetAmount}
-            changeRate={ladderModal.changeRate}
-            currency={ladderModal.currency}
-            fxRate={ladderModal.fxRate}
+            itemName={ladderRow.name}
+            currentPrice={ladderPrice}
+            totalAction={ladderTotalAction}
+            targetAmount={ladderTargetAmount}
+            changeRate={ladderChangeRate}
+            currency={ladderIsOverseas ? 'USD' : 'KRW'}
+            fxRate={ladderIsOverseas ? (marketIndicators.usdkrw || 1) : 1}
             pos={ladderModal.pos}
+            onRefreshPrice={ladderRefresh}
+            refreshState={ladderRefreshState}
+            emptyReason={ladderEmptyReason}
             onClose={() => setLadderModal(null)}
           />
         )}

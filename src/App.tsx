@@ -4035,6 +4035,8 @@ export default function App() {
             onToggleCalculator={() => setShowCalculator(v => !v)}
             investmentNotes={investmentNotes}
             onUpdateInvestmentNotes={updateInvestmentNotes}
+            onRefreshPrice={handleSingleStockRefresh}
+            stockFetchStatus={stockFetchStatus}
           />
         )}
           </div>
