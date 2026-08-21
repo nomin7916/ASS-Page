@@ -18,7 +18,7 @@ import { CARD_NEEDS, historicalCodesOf, pickStockHistorySubset } from '../cardWi
 export default function CardWinFeed({
   entry, portfolios, marketIndicators, marketHolidays, dividendTaxHistory, dividendLinks,
   stockHistoryMap, indicatorHistoryMap, stockFetchStatus, hideAmounts, isAdmin, authEpoch, nonce,
-  effectiveDateKey,
+  effectiveDateKey, histPeriod,
 }) {
   const needs = CARD_NEEDS[entry.card] || {};
 
@@ -60,11 +60,15 @@ export default function CardWinFeed({
       payload.effectiveDateKey = effectiveDateKey;
     }
     if (needs.fetchStatus) payload.stockFetchStatus = stockFetchStatus;
+    // ⚠️ 이 값은 **초기 시드**다. card:data는 계좌 객체가 바뀔 때마다 다시 날아가는 **반복 푸시**라,
+    //    창이 매번 적용하면 창에서 바꾼 기간 단위가 (창 안에서 메모 한 글자만 고쳐도) 앱 값으로
+    //    되돌아간다. 창 쪽 수신부가 gotData 이전 1회만 적용한다.
+    if (needs.histPeriod) payload.histPeriod = histPeriod;
     try { w.postMessage(payload, window.location.origin); } catch { /* 창이 닫히는 중이면 무시 */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry, account, marketIndicators, hideAmounts, isAdmin, authEpoch, nonce,
       marketHolidays, dividendTaxHistory, dividendLinks, priceSubset, indicatorHistoryMap, stockFetchStatus,
-      effectiveDateKey]);
+      effectiveDateKey, histPeriod]);
 
   return null;
 }

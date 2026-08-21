@@ -81,14 +81,15 @@ export const pickStockHistorySubset = (map: any, codes: string[]): Record<string
 
 // 카드별로 창이 실제로 읽는 앱 레벨 부가 데이터가 무엇인지 한 곳에 명시한다.
 // ⚠️ 여기 없는 데이터를 창에서 읽지 말 것 — 페이로드에 없으면 undefined가 흘러 조용히 오작동한다.
-export const CARD_NEEDS: Record<string, { prices?: boolean; dividend?: boolean; fetchStatus?: boolean }> = {
+export const CARD_NEEDS: Record<string, { prices?: boolean; dividend?: boolean; fetchStatus?: boolean; histPeriod?: boolean }> = {
   summary: {},
   donut: {},
   // ⚠️ stockFetchStatus는 시세 갱신 중 코드마다 loading→success로 바뀌어 전송이 폭주한다.
   //    행 내부 상태점을 실제로 그리는 카드에만 싣는다.
   rebalancing: { fetchStatus: true },
   dividend: { dividend: true },
-  stats: { prices: true, fetchStatus: true },
+  // histPeriod = 평가액 추이 표의 기간 단위(앱의 초기값 1회 시드용). stats 카드만 그 표를 그린다.
+  stats: { prices: true, fetchStatus: true, histPeriod: true },
 };
 
 // 창→앱 커맨드 이름 — **App의 핸들러가 실제로 구현한 것과 1:1**이어야 한다.

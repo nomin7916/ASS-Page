@@ -86,6 +86,7 @@ import {
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows,
   buildHistDetailRows, EMPTY_HIST_DETAIL,
   buildRebalTargetEntryFrom, sameRebalTargetEntry, upsertRebalTargetMemo,
+  normalizeHistPeriod,
 } from './utils';
 
 import { INT_CATEGORIES, ACCOUNT_TYPE_CONFIG, CATEGORY_DISPLAY_ORDER } from './constants';
@@ -506,6 +507,14 @@ export default function App() {
   // compact 표는 여러 계좌 합산 뷰라 저장할 단일 계좌가 없어 앱 레벨 chartPrefs에 보관한다.
   const [intHiddenDivMonths, setIntHiddenDivMonths] = useState({ expected: [], actual: [] });
 
+  // 평가액 추이 표의 기간 단위 — 'day' | 'week' | 'month' | 'year'.
+  // 통합(intHistPeriod)과 개별 계좌(acctHistPeriod)를 분리한다: 두 표는 소스도 열 구성도 다르고,
+  // 사용자가 통합은 월간으로, 특정 계좌는 일간으로 보는 조합이 자연스럽다.
+  // ⚠️ 개별 계좌 값은 **계좌 공통**(사용자 확정)이다. 계좌별로 두려면 rebalanceSortConfigMap처럼
+  //    chartPrefs 단일 맵으로 만들면 되지만(선례 있음), 현재는 스칼라 1개로 충분하다.
+  const [intHistPeriod, setIntHistPeriod] = useState('day');
+  const [acctHistPeriod, setAcctHistPeriod] = useState('day');
+
   // ── useHistoryChart 훅 ──
   const {
     chartPeriod, setChartPeriod,
@@ -842,6 +851,10 @@ export default function App() {
       if (stateData.chartPrefs.intDateRange) setIntDateRange(stateData.chartPrefs.intDateRange);
       if (stateData.chartPrefs.intAppliedRange) setIntAppliedRange(stateData.chartPrefs.intAppliedRange);
       if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
+      // ⚠️ 손상값 방어 필수 — 소비자(compressPeriodRows)가 화이트리스트라 안전하지만, state에
+      //    'weke' 같은 값이 들어가면 세그먼트 버튼 어느 것도 눌린 것으로 보이지 않는다.
+      if (stateData.chartPrefs.intHistPeriod !== undefined) setIntHistPeriod(normalizeHistPeriod(stateData.chartPrefs.intHistPeriod));
+      if (stateData.chartPrefs.acctHistPeriod !== undefined) setAcctHistPeriod(normalizeHistPeriod(stateData.chartPrefs.acctHistPeriod));
       if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
       if (stateData.chartPrefs.fxSlotCount !== undefined) setFxSlotCount(normalizeFxSlotCount(stateData.chartPrefs.fxSlotCount));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
@@ -957,6 +970,10 @@ export default function App() {
       }
       if (stateData.chartPrefs.intSec) setIntSec(stateData.chartPrefs.intSec);
       if (stateData.chartPrefs.intHiddenDivMonths) setIntHiddenDivMonths(normalizeHiddenDivMonths(stateData.chartPrefs.intHiddenDivMonths));
+      // ⚠️ 손상값 방어 필수 — 소비자(compressPeriodRows)가 화이트리스트라 안전하지만, state에
+      //    'weke' 같은 값이 들어가면 세그먼트 버튼 어느 것도 눌린 것으로 보이지 않는다.
+      if (stateData.chartPrefs.intHistPeriod !== undefined) setIntHistPeriod(normalizeHistPeriod(stateData.chartPrefs.intHistPeriod));
+      if (stateData.chartPrefs.acctHistPeriod !== undefined) setAcctHistPeriod(normalizeHistPeriod(stateData.chartPrefs.acctHistPeriod));
       if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
       if (stateData.chartPrefs.fxSlotCount !== undefined) setFxSlotCount(normalizeFxSlotCount(stateData.chartPrefs.fxSlotCount));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
@@ -1020,7 +1037,7 @@ export default function App() {
   useEffect(() => {
     if (isInitialLoad.current) return;
     chartPrefsUpdatedAtRef.current = Date.now();
-  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, compStocks]);
+  }, [chartPeriod, dateRange, appliedRange, intChartPeriod, intDateRange, intAppliedRange, intSec, showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, showMarketPanel, hideAmounts, showTotalEval, showReturnRate, sectionCollapsedMap, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, compStocks]);
 
   // 계좌 전환 시 차트 상태 저장 → 복원 (계좌별 완전 독립 — 조회기간 포함)
   useEffect(() => {
@@ -1590,6 +1607,7 @@ export default function App() {
     intFilteredDates,
     intChartData,
     intMonthlyHistory,
+    intTwrCumByDate,
     intCatDonutData,
     intHoldingsDonutData,
     intDepositEvents,
@@ -3323,7 +3341,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -3338,7 +3356,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -3666,6 +3684,7 @@ export default function App() {
             indicatorHistoryMap={indicatorHistoryMap}
             stockFetchStatus={stockFetchStatus}
             hideAmounts={hideAmounts}
+            histPeriod={acctHistPeriod}
             isAdmin={!!adminViewingAs || (authUser && authUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase())}
             authEpoch={cardAuthEpoch}
             nonce={cardWinNonce}
@@ -4094,6 +4113,8 @@ export default function App() {
             depositHistory2={depositHistory2}
             portfolioStartDate={portfolioStartDate}
             activeBookByDate={activeBookByDate}
+            histPeriod={acctHistPeriod}
+            setHistPeriod={setAcctHistPeriod}
             refetchStockHistory={refetchStockHistory}
             onExpand={() => openCardWindow('stats', activePortfolioId)}
             cardWindowOpen={cardWinOpenSet.has(`stats:${activePortfolioId}`)}
@@ -4349,6 +4370,9 @@ export default function App() {
             intHistory={computedIntHistory}
             intTotals={intTotals}
             intMonthlyHistory={intMonthlyHistory}
+            intTwrCumByDate={intTwrCumByDate}
+            intHistPeriod={intHistPeriod}
+            setIntHistPeriod={setIntHistPeriod}
             intChartData={intChartData}
             intChartPeriod={intChartPeriod}
             intSelectionResult={intSelectionResult}

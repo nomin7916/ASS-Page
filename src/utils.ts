@@ -543,6 +543,122 @@ export const rebaseTwr = (twr, baseTwr) => {
   return Number.isFinite(r) ? r : null;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 평가액 추이 표의 기간 단위(일간/주간/월간/연간)
+//   통합 대시보드 '평가액 추이'와 개별 계좌 '자산 평가액 추이'가 공유한다.
+//   대표 시점 = **그 기간의 마지막 기록**(사용자 확정). 주 경계는 월요일 시작 ~ 일요일 끝.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ⚠️ 화이트리스트 정규화. 저장(chartPrefs)·백업 복원·별도 창 수신 3곳이 반드시 통과시킬 것 —
+//    소비자가 fail-open이라 손상값이 그대로 흐르면 그 화면만 조용히 압축된다.
+export const normalizeHistPeriod = (v) => (v === 'week' || v === 'month' || v === 'year') ? v : 'day';
+
+// 그 날짜가 속한 기간의 버킷 키. week = 그 주 **월요일** 날짜(월~일 경계), month = 'YYYY-MM', year = 'YYYY'.
+// ⚠️ `new Date(s)`(UTC 자정 파싱) 금지 — 타임존에 따라 요일이 하루 어긋나 주 경계가 밀린다.
+//    이 파일의 기존 날짜 계산과 같은 `T12:00:00`(로컬 정오) 규약을 쓴다.
+export const periodBucketKey = (date, mode) => {
+  const s = typeof date === 'string' ? date : '';
+  if (s.length < 10) return s;
+  if (mode === 'month') return s.slice(0, 7);
+  if (mode === 'year') return s.slice(0, 4);
+  if (mode !== 'week') return s;
+  const d = new Date(s + 'T12:00:00');
+  if (Number.isNaN(d.getTime())) return s;
+  const dow = d.getDay();                 // 0=일 … 6=토
+  d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));   // 그 주 월요일로
+  const y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+  return `${y}-${m < 10 ? '0' : ''}${m}-${dd < 10 ? '0' : ''}${dd}`;
+};
+
+// 기간 압축 — 날짜 **오름차순** rows를 기간별 '마지막 행'만 남긴 오름차순 배열로 줄인다.
+// 대표는 **그 기간에 실제로 존재하는 마지막 기록 행**이다. 달력상 말일 같은 합성 날짜를 만들지 않는다 —
+//   없는 날짜를 대표로 쓰면 buildCloseEvalSeries·bookByDate·overseasEvalByDate 조회가 전부 miss돼
+//   저장된 라이브 evalAmount로 조용히 폴백하고, '시장 계좌 평가액은 항상 수량×종가' 불변식이 그 뷰에서만 깨진다.
+// 기록이 0건인 기간은 행을 만들지 않는다(그 구간의 흐름은 다음 대표일의 반개구간에 이미 포함된다).
+// 반환 원소 = 원본 행을 스프레드한 새 객체 + periodKey/periodStart/periodEnd/periodCount.
+// ⚠️ 화이트리스트 fail-safe: week/month/year가 **아니면 입력 배열을 그대로(참조 동일) 반환**한다.
+//    'day만 항등'으로 만들면 mode 미전달·prop 누락·손상 Drive 값이 전부 조용한 압축(표 1행 붕괴)이 된다.
+//    참조가 동일하므로 일간 모드는 하위호환이 논증이 아니라 **구조**로 보장된다.
+export const compressPeriodRows = (rows, mode) => {
+  if (mode !== 'week' && mode !== 'month' && mode !== 'year') return rows;
+  const list = Array.isArray(rows) ? rows : [];
+  const out = [];
+  let curKey = null, start = '', count = 0;
+  for (const h of list) {
+    if (!h || !h.date) continue;
+    const key = periodBucketKey(h.date, mode);
+    if (key !== curKey) { curKey = key; start = h.date; count = 0; out.push(null); }
+    count += 1;
+    out[out.length - 1] = { ...h, periodKey: key, periodStart: start, periodEnd: h.date, periodCount: count };
+  }
+  return out.filter(Boolean);
+};
+
+// 기간 라벨 — 일자 셀 첫 줄·툴팁·팝업 제목이 **공유**한다(손복제 금지).
+export const periodRangeLabel = (row, mode) => {
+  if (!row) return '';
+  const key = row.periodKey || '';
+  if (mode === 'month') return key || String(row.date || '').slice(0, 7);
+  if (mode === 'year') return (key || String(row.date || '').slice(0, 4)) + '년';
+  if (mode === 'week') {
+    const a = String(row.periodStart || row.date || ''), b = String(row.periodEnd || row.date || '');
+    const md = (s) => s.length >= 10 ? `${Number(s.slice(5, 7))}/${Number(s.slice(8, 10))}` : s;
+    return (a && b && a !== b) ? `${md(a)}~${md(b)}` : md(b || a);
+  }
+  return String(row.date || '');
+};
+
+// 기간 모드 문구 — 통합 th·개별 th·셀 툴팁·도움말이 **공유**한다(손복제 금지).
+export const periodNoun = (mode) => {
+  if (mode === 'week') return { unit: '주간', prev: '전주', span: '그 주', end: '주말' };
+  if (mode === 'month') return { unit: '월간', prev: '전월', span: '그 달', end: '월말' };
+  if (mode === 'year') return { unit: '연간', prev: '전년', span: '그 해', end: '연말' };
+  return { unit: '일간', prev: '전일', span: '그날', end: '당일' };
+};
+
+// 일별 지표 Map을 누적 시계열로 바꾼다 — 기간 표(주/월/년)의 **유일한 산식 소스**.
+//   기간 손익   = profit(대표일) − profit(직전 대표일)
+//   기간 수익률 = rebaseTwr(twr(대표일), twr(직전 대표일))
+// ⚠️ **압축한 행을 computeDailyMetricsSeries에 다시 넣지 말 것.** 그 함수의 상수
+//    (MATERIAL_FLOW_RATIO 1% · ABSORBED_RATIO 0.5 · CARRY_MAX_ROWS 15 · CARRY_MAX_ACTIVE_ROWS 2)와
+//    bookDelta 관측은 전부 '하루치 흐름 vs 하루치 ΔV' 스케일 가정 위에 서 있는데, 기간 합산은
+//    흐름·ΔV·장부 드리프트를 **서로 다른 속도로** 키워 그 가정을 동시에 무너뜨린다(실측 4종):
+//      ① 분배금이 예수금(depositAmount)에 쌓여 bookDelta가 흐름과 **반대 부호**가 되면 흡수 판정이
+//         실패해 연간 행이 통째로 보류된다. 게다가 `bookDelta == null && activeRows >= 2`라
+//         **bookDelta가 있으면 ACTIVE 폐기 게이트가 봉인**돼 held가 자기강화한다(연간 표 전부 '-').
+//      ② 이월이 '-'가 아니라 **그럴듯한 틀린 숫자**를 만든다(실측 +₩9,000만 표시 vs 실제 +₩1억 5천만).
+//      ③ 월 적립 0.71%(일간에서는 1% 면제로 **구조적 면역**)가 연 합계 8.6%가 되어 판정 대상으로 승격 —
+//         일간 모드에 원리적으로 없던 보류 경로가 생긴다.
+//      ④ Modified Dietz의 BOD(유입=기초) 가중이 기간에서 왜곡된다. 월말 입금이 한 달 내내 있던 것처럼
+//         계산돼 같은 행의 %와 ₩이 최대 2배 어긋난다(손익 ₩1,000만인데 수익률 +5.00%, 실제 +10.00%).
+//    누적 차분은 흡수 판정 입력이 **항상 하루치**라 넷을 동시에 없앤다. 부수 효과로 기간 %가
+//    수익률 차트 라인(누적 TWR)·드래그 구간 수익률과 **같은 규약**이 된다.
+// ⚠️ held 판정은 `dodAbsChange == null`이다 — computeDailyMetricsSeries의 계약이
+//    `dodAbsChange: held ? null : dV - netFlow`이고, intMonthlyHistory는 held 필드를 싣지 않는다.
+// ⚠️ 배율 갱신은 위 computeCumulativeTwrSeries와 **문자 그대로 같아야 한다**
+//    (held → 배율 1.0 유지 / next <= 0 → 배율 유지). 한쪽만 고치면 표와 차트가 갈린다.
+export const accumulateDailySeries = (ascDates, metricsMap) => {
+  // count = 그 날짜까지 **실제로 기여한(= held가 아닌) 날**의 누적 개수.
+  // ⚠️ 기간 표의 보류 판정에 반드시 필요하다 — 기간의 모든 날이 held면 profit도 factor도
+  //    갱신되지 않아 경계 차분이 **정확히 0**이 되고, 그러면 '산출 보류'가 '변동 없음(0.00%)'으로
+  //    둔갑한다. 같은 순간 헤더 '오늘 수익' 카드는 '-'를 띄우므로 두 화면이 정면 모순한다
+  //    (CLAUDE.md '보류 행 표시 규약 4곳 통일 — 0.00%로 단언 금지').
+  const profit = new Map(), twr = new Map(), count = new Map();
+  let acc = 0, factor = 1, n = 0;
+  for (const d of ascDates || []) {
+    if (!d) continue;
+    const m = metricsMap ? metricsMap.get(d) : null;
+    const ok = !!(m && m.dodAbsChange != null);
+    if (ok) { acc += m.dodAbsChange; n += 1; }
+    const next = factor * (1 + (ok ? (m.dodChange || 0) : 0) / 100);
+    if (Number.isFinite(next) && next > 0) factor = next;
+    profit.set(d, acc);
+    twr.set(d, (factor - 1) * 100);
+    count.set(d, n);
+  }
+  return { profit, twr, count };
+};
+
 // 해외계좌 차트용 USD 평가액 — 현재 보유 × 해당일 USD 종가(환율 미적용, 예수금은 USD 그대로).
 // ⚠️ App.tsx finalChartData 해외 분기와 개별 계좌 누적 TWR이 반드시 이 한 함수를 공유할 것.
 //    한쪽만 자체 계산으로 되돌리면 같은 날짜에 라인과 %가 갈린다.

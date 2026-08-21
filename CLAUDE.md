@@ -720,6 +720,107 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   ⚠️ #29c의 시장 등락(+1,100,000)은 `ACTIVE_DRIFT_RATIO`(흐름의 5% = 50만)를 넘겨 폐기를 실제로
   발동시키려는 값이다 — 줄이면 옛 코드에서도 통과해 회귀를 못 잡는다.
 
+### 평가액 추이 표 기간 단위(일간/주간/월간/연간) (⚠️ 회귀 주의)
+
+통합 대시보드 '평가액 추이'(`IntegratedDashboard`)와 개별 계좌 '자산 평가액 추이'(`HistoryPanel`)의
+행을 주(월~일)·월·연 단위로 접는 토글. 대표 시점은 **그 기간의 마지막 실제 기록 행**(사용자 확정),
+클릭은 대표 날짜로 기존 팝업/모달을 연다, 열 제목은 모드에 맞춰 바뀐다.
+
+- **⚠️ 1급 계약 — 기간 값은 '일별 지표의 누적 차분'이다. 압축한 행을
+  `computeDailyMetricsSeries`에 **재투입하지 말 것**.**
+  `기간 손익 = cumProfit(대표일) − cumProfit(직전 대표일)` / `기간 수익률 = rebaseTwr(twr(대표일), twr(직전 대표일))`.
+  그 함수의 상수(`MATERIAL_FLOW_RATIO` 1% · `ABSORBED_RATIO` 0.5 · `CARRY_MAX_ROWS` 15 ·
+  `CARRY_MAX_ACTIVE_ROWS` 2)와 `bookDelta` 관측은 전부 **'하루치 흐름 vs 하루치 ΔV'** 스케일 가정
+  위에 서 있는데, 기간 합산은 흐름·ΔV·장부 드리프트를 **서로 다른 속도로** 키워 그 가정을 동시에
+  무너뜨린다(설계 검증 실측 4종): ① 분배금이 예수금에 쌓여 `bookDelta`가 흐름과 **반대 부호**가 되면
+  흡수 판정이 실패하고, `bookDelta == null && activeRows >= 2`라 **`bookDelta`가 있으면 ACTIVE 폐기
+  게이트가 봉인**돼 held가 자기강화한다(연간 표 전부 `'-'`). ② 이월이 `'-'`가 아니라 **그럴듯한 틀린
+  숫자**를 만든다(실측 +₩9,000만 표시 vs 실제 +₩1억 5천만). ③ 월 적립 0.71%(일간에서는 1% 면제로
+  **구조적 면역**)가 연 합계 8.6%가 되어 판정 대상으로 승격 — 일간에 원리적으로 없던 보류 경로가 생긴다.
+  ④ Dietz의 BOD 가중이 기간에서 왜곡돼 같은 행의 %와 ₩이 **최대 2배** 어긋난다(손익 ₩1,000만인데 +5.00%).
+  누적 차분은 흡수 판정 입력이 **항상 하루치**라 넷을 동시에 없애고, 부수 효과로 기간 %가 **수익률 차트
+  라인·드래그 구간 수익률과 같은 규약**이 된다.
+- **⚠️ '그 기간 전체가 보류'는 `0.00%`가 아니라 `'-'`다.** held 행은 누적을 갱신하지 않으므로 경계
+  차분이 **정확히 0**이 되어 '변동 없음'과 구분되지 않는다 → `accumulateDailySeries`가 함께 내는
+  **기여일 카운트**(`count` / 훅은 `okCount`) 차분이 0이면 보류로 본다. 같은 순간 헤더 '오늘 수익'
+  카드는 `'-'`를 띄우므로, 이 게이트가 없으면 두 화면이 정면 모순한다(보류 표시 규약 4곳 통일).
+  카운트 미제공이면 조건이 자동으로 꺼져 종전 동작(하위호환 fail-safe).
+- **⚠️ `intMonthlyHistory`는 일별 그대로 둔다** — 표 말고도 3소비자가 공유한다(헤더 '오늘 수익' 카드
+  `[0]` · 팝업 `realtimeDate` · 메모 달력 `metricsHistory` 날짜 키 맵). 제자리 압축하면 달력이 주/월당
+  한 칸만 스냅샷을 그리고(그 블록이 ASSET 패드의 **유일한 진입점**) `realtimeDate`가 오늘이 아니게 돼
+  팝업 소계가 라이브 대신 carry-forward가 된다 → "달력 칸 총자산 = 팝업 소계 = 차트 그날 값" 붕괴.
+  압축은 **표 전용 파생 memo**(`histRows` / `viewRows`)에만 존재한다.
+- **⚠️ 화이트리스트 fail-safe** — `compressPeriodRows`는 `week|month|year`가 **아니면 입력 배열을
+  그대로(참조 동일) 반환**한다. `'day'만 항등`으로 두면 prop 누락·손상 Drive 값·payload 미전달이
+  전부 **조용한 1행 붕괴**가 된다. 참조가 같으므로 일간 모드 하위호환이 논증이 아니라 **구조**로 보장된다.
+  데이터 경로와 **프레젠테이션 플래그**(`isHistPeriodMode`/`isPeriodMode`)가 같은 화이트리스트를 써야
+  "행은 일별인데 화면은 기간 모드"가 안 생긴다.
+- **⚠️ 대표는 '실제로 존재하는 마지막 기록 행'** — 달력상 말일 같은 **합성 날짜를 만들지 말 것**.
+  없는 날짜를 대표로 쓰면 `buildCloseEvalSeries`·`bookByDate`·`overseasEvalByDate` 조회가 전부 miss돼
+  저장 라이브 `evalAmount`로 조용히 폴백하고 "시장 계좌 평가액은 항상 수량×종가"가 그 뷰에서만 깨진다.
+  기록 0건 기간은 **행을 만들지 않는다**(그 흐름은 다음 대표일의 반개구간에 이미 포함).
+- **⚠️ '오늘' 하이라이트는 인덱스 판정 + `latestRecDate`**(달력상 오늘 아님). 기간 모드는 내림차순 0번,
+  일간 모드는 `intMonthlyHistory[0].date`. `getTodayKST()`로 재면 행 날짜의 출처(`getEffectiveDate()`)와
+  어긋나 **KST 00:00~07:30에 어느 행도 안 칠해진다**(옛 UTC 비교는 그 구간에서 오히려 맞았다 — 메모 달력
+  절의 `latestRecDate` 규약과 같은 함정). 개별은 `effectiveDateKey`가 KR 계좌에서 21~09시 **null**이라
+  기간 모드에서 반드시 인덱스로 판정한다.
+- **⚠️ 감사(audit) 신호는 범위 OR, 신뢰도 신호는 대표값 승계** — 묻는 질문이 다르다.
+  일자 색상(`periodModifiedCount`)·'조정됨' 배지(`periodAdjustedCount`)는 *"이 기간 안에 사람 손이
+  닿았나"*라 **OR 집계**(대표일만 보면 그 기간의 수동 개입이 화면에서 사라지는 **거짓 음성**).
+  `flowSuspect`는 *"지금 이 값이 신뢰 가능한가"*라 **대표값 승계**(OR로 모으면 과거 이상치가 기간을 오염).
+  ⚠️ '조정됨'은 `isAdjusted` **단독** 집계 — `userModifiedDates`(수량·종가 편집)까지 섞으면 조정한 적
+  없는 기간에 배지가 뜬다.
+- **⚠️ 전체 이력을 유지해야 하는 것**: `displayEvalByDate`·`overseasEvalByDate`·`cumulativeByDate`·
+  `dailyMetricsByDate`는 **일별 그대로** 두고 대표 날짜로 **조회만** 한다. 특히 `cumulativeByDate`의
+  `asc` 인자를 압축본으로 바꾸면 `computeEffectivePrincipal`의 `principalManual` 앵커와
+  `resolveRecordPrincipal`의 '직전 기록 principal' 역스캔이 드롭된 날짜를 못 봐 **차트와 표의 누적
+  수익률이 갈린다**.
+- **⚠️ 흐름 합산은 부호 있는 합**(`Math.abs` 금지 — 음수 정정 행이 유입으로 뒤집히면 오차가 2배)이고
+  **커서는 루프 밖**(안에 두면 O(기간수 × 전체행수) — 주간 3년치 회당 ~17만 회가 시세 갱신마다 돈다).
+  압축 행의 `netFlowIn/Out`·`ledgerFlow`·`netFlow`를 **명시적으로 덮어쓸 것** — 안 그러면 대표일
+  하루치 스칼라가 남아 나중에 붙는 진단 문구가 기간 합이 아니라 하루치를 표시한다.
+  개별 계좌는 `externalFlowInRange`가 반개구간 `(from, to]`이라 **인접 대표일 쌍이 곧 기간 합**이다(합산 코드 0줄).
+- **⚠️ 압축 입력에서 `date` 없는 행을 먼저 거를 것** — `compressPeriodRows`는 거르는데 커서 루프가
+  `asc[ai].date`를 비교하므로 `undefined`가 섞이면 커서가 **영구 정지**해 그 이후 모든 기간의 표시가
+  조용히 사라진다.
+- **⚠️ 해외계좌는 '차트와 같은 기준'이 아니다** — 개별 표는 **원화 프레임**(`ov.krw` + 날짜별 환율),
+  차트 `accountTwrByDate`는 **USD 프레임**(`overseasUsdEvalAt` + 무환산 흐름)이라 구조적으로 다르다.
+  툴팁·도움말에서 그 단언을 **해외에서만 끈다**(KRW 계좌 테스트로는 절대 드러나지 않는다).
+  통합은 `intTwrCumByDate.twr`을 차트와 **공유**하므로 단언이 참이다.
+- **⚠️ 문구는 `periodNoun` 공유 포매터로만** — 모드별로 거짓이 되는 문장을 화면마다 따로 들고 있으면
+  한 곳만 고쳐지고 나머지가 계속 거짓말을 한다. 분기 대상에 **셀 툴팁**(월간 값에 '일간 손익'이라 쓰고
+  '(당일−전일)÷전일과 동일'이라 단언하면 둘 다 거짓 — 기간 값은 일별 배율의 **곱**)과 **도움말의
+  '옆 칸'·'일자 색상'·'조정됨' 블록**을 반드시 포함할 것(그 셋은 '일간 지표'가 아니라 다른 블록에 있어
+  누락되기 쉽다). ⚠️ 도움말은 **평문 렌더**(마크다운 파서 없음) — `**`를 쓰면 화면에 그대로 보인다.
+- **UI 배치가 두 카드에서 다르다(같게 만들지 말 것)**: 통합은 카드 헤더(`xl:w-[490px]`라 여유),
+  개별은 **thead 위 얇은 바**(카드가 `xl:w-[21%]`≈252px, 헤더 가용 220px인데 제목+?+확장이 이미 190px).
+  헤더에 넣으면 제목이 한글 글자 단위로 줄바꿈되고 고정 높이 + `overflow-hidden`이라 **표 행이 사라진다**.
+  헤더를 안 건드리면 `verify:card-window #G14g`(`CardExpandButton` 한 줄 문자 일치)도 구조적으로 안전하다.
+  ⚠️ 바(32px)를 넣었으므로 카드 높이를 `360→392`/`520→552`로 올리고 **형제 카드**(`PortfolioStatsPanel`
+  1곳·`DepositPanel` 2곳)도 **함께** 올린다 — 각 카드가 명시적 height라 `items-stretch`가 먹지 않아
+  한쪽만 올리면 같은 행의 바닥이 32px 어긋난다.
+- **영속화**: `chartPrefs.intHistPeriod`(통합) / `chartPrefs.acctHistPeriod`(개별, **계좌 공통**) —
+  App.tsx 5지점(state 리터럴·`chartPrefsUpdatedAt` deps·STATE 저장 deps·`applyStateData`·
+  `applyBackupData`) 전부. ⚠️ ②와 ③은 **둘 다** 필요(②만 → 저장 미예약 / ③만 → `chartPrefsUpdatedAt`
+  미상승으로 STATE write 스킵). 로드 2경로는 `normalizeHistPeriod`를 통과시킬 것. 수동 저장 4핸들러는
+  `{...saveStateRef.current}` 스프레드라 무수정.
+- **별도 창(stats 카드)**: `card:data`로 **1회만** 시드(`!gotDataRef.current` 게이트)하고 이후 **창 로컬**.
+  ⚠️ 그 메시지는 계좌 객체가 바뀔 때마다 오는 **반복 푸시**라, `hideAmounts`처럼 매번 적용하면 창에서
+  고른 기간이 (같은 창에서 메모 한 글자만 고쳐도) 앱 값으로 되돌아간다. `CARD_NEEDS.stats.histPeriod`로
+  게이팅(전 카드 브로드캐스트 방지), `CARD_OPS` 무수정(쓰기가 아님). 창 세그먼트에 '저장되지 않음'을 표기한다.
+- **범위 밖(의도)**: CSV(`handleDownloadCSV`는 **죽은 prop** — 두 표에 진입점이 0개다) · 기간 행
+  드릴다운(일별 펼치기) · 계좌별 독립 저장(`rebalanceSortConfigMap` 선례로 가능하나 사용자가 계좌 공통을 선택).
+- **알려진 한계**: 가장 오래된 기간 행은 비교 대상이 없어 항상 `'-'`(기간 모드에서 그 비중이 커진다).
+  기간 모드에서는 **대표일의 자산검증만** 열린다(비대표일 평가액을 고치려면 '일'로 되돌려야 한다 —
+  모드가 Drive에 영속되므로 다음 세션에도 유지된다). 표 기간은 계좌 공통이라 계좌를 전환해도 유지되는데
+  바로 옆 차트 조회기간은 `currentChartStateRef`로 계좌별이라 **같은 화면의 두 '기간'이 다르게 동작**한다.
+- 검증: `npm run verify:period` (직접 import #1~#16 + 소스 텍스트 가드 #G1~#G22).
+  ⚠️ **미러 금지 — `src/utils.ts`를 직접 import**한다(그 파일은 import 0건이라 Node가 타입만 벗겨 실행).
+  가드는 **선언이 아니라 사용부**를 단언하며 **변이 23종**(압축 행 재투입 · fail-safe 되돌림 ·
+  오늘 판정 UTC/getTodayKST 복귀 · `cumulativeByDate` 압축본 주입 · 창 반복 적용 · `Math.abs` ·
+  chartPrefs deps 누락 · 형제 카드 높이 · 전 구간 보류 0.00% 복귀 · 해외 고지 제거 · 커서 O(n²) 복귀 ·
+  `date` 필터 제거 등)으로 **실제 검출을 확인**했다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+
 ### 누적 지표 = 원금대비 · 조회시작 0% 모드는 '수익률'이 아님 (⚠️ 회귀 주의)
 
 일간 지표(위 Modified Dietz)와 **역할이 다른 누적 지표**의 규약. 세 화면이 같은 날짜에 서로 다른
@@ -4119,7 +4220,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **게이트 = 결정적 검증 / 리뷰 = 보너스.** 둘의 역할을 절대 섞지 말 것.
 
 - **게이트**(통과 못 하면 커밋 금지): 변경 영역의 `npm run verify:*`(calendar·tax·dividend·history·
-  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail 15종 중 해당분) + `memory/tools/jsxcheck.mjs`
+  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail·card-window·period **17종** 중 해당분) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의
   지역 변수를 참조)**. `npm run build`가 가능한 환경이면 추가로 돌린다.
   ⚠️ **세 도구는 서로를 대체하지 못한다** — `undefcheck`는 파일 전체를 한 스코프로 보므로

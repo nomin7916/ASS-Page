@@ -10,7 +10,7 @@ import HistoryPanel from './HistoryPanel';
 import DepositPanel from './DepositPanel';
 import DividendSummaryTable from './DividendSummaryTable';
 import { CARD_LABELS, cardWindowTitle, isCardKey, isCardWindowSupported, baseKeyOf } from '../cardWindow';
-import { buildRebalTargetEntryFrom, buildBookCostSeries, cleanNum } from '../utils';
+import { buildRebalTargetEntryFrom, buildBookCostSeries, cleanNum, normalizeHistPeriod } from '../utils';
 
 /**
  * 계좌 카드 **별도 브라우저 창** (`/?cardWindow=1&card=<키>&pid=<계좌id>`).
@@ -72,6 +72,9 @@ export default function CardWindow() {
 
   // 창 로컬(앱과 공유하지 않는다 — 전부 세션 스크래치)
   const [rebalExtraQty, setRebalExtraQty] = useState({});
+  // 평가액 추이 표 기간 단위 — **창 로컬**(rebalanceSortConfig와 같은 등급, 저장 지점 0곳).
+  // 앱의 값은 card:data로 **1회만** 시드된다(아래 수신부). 창의 변경은 앱으로 역전파되지 않는다.
+  const [histPeriod, setHistPeriod] = useState('day');
   const [rebalanceSortConfig, setRebalanceSortConfig] = useState({ key: null, direction: 1 });
   const [hoveredPortCatSlice, setHoveredPortCatSlice] = useState(null);
   const [hoveredPortStkSlice, setHoveredPortStkSlice] = useState(null);
@@ -186,6 +189,10 @@ export default function CardWindow() {
         if (d.indicatorHistoryMap) setIndicatorHistoryMap(d.indicatorHistoryMap);
         if (d.effectiveDateKey !== undefined) setEffectiveDateKey(d.effectiveDateKey);
         if (d.hideAmounts !== undefined) setHideAmounts(!!d.hideAmounts);
+        // ⚠️ **최초 1회만** 적용한다. card:data는 계좌 객체가 바뀔 때마다 다시 오는 반복 푸시라,
+        //    매번 적용하면 창에서 고른 기간 단위가 (같은 창에서 메모 한 글자만 고쳐도 계좌 identity가
+        //    바뀌어 재전송되므로) 앱 값으로 조용히 되돌아간다. hideAmounts처럼 다루면 안 된다.
+        if (!gotDataRef.current && d.histPeriod !== undefined) setHistPeriod(normalizeHistPeriod(d.histPeriod));
         if (d.isAdmin !== undefined) setIsAdmin(!!d.isAdmin);
         setTornDown(false);
         gotDataRef.current = true; setGotData(true);
@@ -552,6 +559,9 @@ export default function CardWindow() {
             portfolioStartDate={acct.portfolioStartDate || acct.startDate || ''}
             activeBookByDate={bookByDate}
             refetchStockHistory={async () => { notify('종가 재조회는 앱 창에서만 가능합니다.', 'info'); return false; }}
+            histPeriod={histPeriod}
+            setHistPeriod={setHistPeriod}
+            histPeriodNote="이 창의 기간 설정은 저장되지 않습니다 (앱 창에서 바꾸면 유지됩니다)"
           />
           <DepositPanel
             depositHistory={acct.depositHistory || []}

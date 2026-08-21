@@ -513,14 +513,17 @@ export function useIntegratedData({
     });
     const twr = computeCumulativeTwrSeries(rows);
     const metrics = computeDailyMetricsSeries(rows);
-    const cumProfit = new Map();
-    let acc = 0;
+    const cumProfit = new Map(), okCount = new Map();
+    let acc = 0, n = 0;
     for (const r of rows) {
       const m = metrics.get(r.date);
-      if (m && m.dodAbsChange != null) acc += m.dodAbsChange;
+      if (m && m.dodAbsChange != null) { acc += m.dodAbsChange; n += 1; }
       cumProfit.set(r.date, acc);
+      // okCount = 기여일(보류가 아닌 날) 누적 개수. 기간 표가 '그 기간 전체가 보류'를 판별하는 근거다
+      // (경계 차분이 0인 것만으로는 '변동 없음'과 구분되지 않는다 — utils.accumulateDailySeries 주석).
+      okCount.set(r.date, n);
     }
-    return { twr, cumProfit };
+    return { twr, cumProfit, okCount };
   }, [computedIntHistory]);
 
   const intChartData = useMemo(() => {
@@ -734,6 +737,9 @@ export function useIntegratedData({
     intFilteredDates,
     intChartData,
     intMonthlyHistory,
+    // 기간 표(주/월/년)의 산식 소스 — 일별 누적 손익·누적 TWR. 기간 값 = 대표일 경계 차분.
+    // ⚠️ 차트(intChartData)와 **같은 Map**을 표가 쓰므로 두 화면의 구간 수익률이 구조적으로 정합한다.
+    intTwrCumByDate,
     intCatDonutData,
     intHoldingsDonutData,
     intDepositEvents,

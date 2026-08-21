@@ -3,13 +3,14 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { Plus, Download, Trash2, Maximize2, X, Check, TrendingUp, Settings, BarChart3, RotateCcw } from 'lucide-react';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
+import HistPeriodSeg from './HistPeriodSeg';
 import {
   PieChart, Pie, Cell, ComposedChart, Line, Area, XAxis,
   YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceArea, ReferenceLine,
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
-import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, buildHistDetailRows } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr } from '../utils';
 
 const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
 const nextRowColor = (cur: string): string => {
@@ -60,6 +61,9 @@ export default function IntegratedDashboard({
   intHistory,
   intTotals,
   intMonthlyHistory,
+  intTwrCumByDate,
+  intHistPeriod,
+  setIntHistPeriod,
   intChartData,
   intChartPeriod,
   intSelectionResult,
@@ -222,6 +226,75 @@ export default function IntegratedDashboard({
     });
     return earliest;
   }, [allPortfoliosForDividend, activePortfolioId, activeHistory]);
+
+  // ── 평가액 추이 표 기간 압축 (일간/주간/월간/연간) ──────────────────────────
+  // ⚠️ intMonthlyHistory 자체는 **일별 그대로** 둔다. 그 배열은 이 표 말고도 세 소비자가 공유한다:
+  //    헤더 '오늘 수익' 카드([0]) · 계좌별 현황 팝업의 realtimeDate([0].date) · 메모 달력
+  //    metricsHistory(날짜 키 맵). 제자리에서 압축하면 달력이 주당/월당 한 칸만 스냅샷을 그리고
+  //    (그 블록이 ASSET 패드의 유일한 진입점이다) realtimeDate가 오늘이 아니게 돼 팝업 소계가
+  //    라이브 대신 carry-forward 값이 된다 → "달력 칸 총자산 = 팝업 소계 = 차트 그날 값" 붕괴.
+  //
+  // ⚠️ 기간 값은 **일별 지표의 누적 차분**이다. 압축한 행을 computeDailyMetricsSeries에 다시
+  //    넣지 말 것 — 그 함수의 상수와 bookDelta 관측이 전부 '하루치' 스케일 가정이라
+  //    기간 입력에서 동시에 무너진다(utils.accumulateDailySeries 주석의 실측 4종).
+  //    여기서는 훅이 이미 만들어 둔 intTwrCumByDate(cumProfit·twr)를 경계 차분으로 읽기만 한다 —
+  //    **수익률 차트 라인과 같은 Map**이라 표와 차트의 구간 수익률이 구조적으로 정합한다.
+  const histRows = useMemo(() => {
+    // 화이트리스트 fail-safe: 'day'는 물론 미지의 값도 원본 배열을 그대로 반환한다(참조 동일).
+    if (intHistPeriod !== 'week' && intHistPeriod !== 'month' && intHistPeriod !== 'year') return intMonthlyHistory;
+    const asc = [...intMonthlyHistory].reverse();
+    const packed = compressPeriodRows(asc, intHistPeriod);
+    const cumProfit = intTwrCumByDate?.cumProfit;
+    const twr = intTwrCumByDate?.twr;
+    const okCount = intTwrCumByDate?.okCount;
+    // ⚠️ 커서는 루프 **밖**에 둔다 — 안에 두면 기간마다 전체 배열을 다시 훑어 O(기간수 × 전체행수)가
+    //    되고(주간 3년치면 회당 ~17만 회) 그 비용을 시세 갱신마다 치른다. packed도 asc도 오름차순이라
+    //    단조 포인터로 O(n)에 끝난다(HistoryPanel의 periodModifiedCount 루프와 같은 규약).
+    let fi = 0;
+    const rows = packed.map((r, i) => {
+      const prev = i > 0 ? packed[i - 1] : null;
+      const ep = r.effectivePrincipal > 0 ? r.effectivePrincipal : intTotals.totalPrincipal;
+      // 기간 흐름 = 그 기간 일별 흐름의 **부호 있는 합**(⚠️ Math.abs 금지 — 음수 정정 행이
+      // 유입으로 뒤집히면 오차가 원장 금액의 2배가 된다). 툴팁·진단 전용이며 산식에 쓰지 않는다.
+      let pIn = 0, pOut = 0, pLedger = 0;
+      while (fi < asc.length && asc[fi].date < r.periodStart) fi += 1;
+      for (let k = fi; k < asc.length && asc[k].date <= r.periodEnd; k += 1) {
+        const h = asc[k];
+        pIn += h.netFlowIn || 0; pOut += h.netFlowOut || 0; pLedger += h.ledgerFlow || 0;
+      }
+      const cp = cumProfit?.get(r.date), cpP = prev ? cumProfit?.get(prev.date) : 0;
+      const t = twr?.get(r.date), tP = prev ? twr?.get(prev.date) : 0;
+      // 비교 대상(직전 기간)이 없거나 누적값을 못 구하면 '산출 불가'(null 계약).
+      // ⚠️ **그 기간의 모든 날이 보류된 경우도 산출 불가다** — 누적이 갱신되지 않아 차분이 정확히
+      //    0이 되지만 그건 '변동 없음'이 아니라 '아직 반영 안 됨'이고, 같은 순간 헤더 '오늘 수익'
+      //    카드는 '-'를 띄운다. 기여일 카운트(okCount) 차분이 0이면 보류로 본다.
+      //    (okCount 미제공이면 이 조건이 자동으로 꺼져 종전 동작 — 하위호환 fail-safe)
+      const n = okCount?.get(r.date), nP = prev ? okCount?.get(prev.date) : 0;
+      const noBase = !prev || cp == null || cpP == null || (n != null && nP != null && n === nP);
+      return {
+        ...r,
+        monthlyChange: ep > 0 ? ((r.evalAmount - ep) / ep) * 100 : 0,
+        dodAbsChange: noBase ? null : cp - cpP,
+        dodChange: noBase ? 0 : (rebaseTwr(t, tP) ?? 0),
+        // ⚠️ 압축 전 '대표일 하루치' 스칼라가 남지 않게 반드시 덮어쓴다.
+        netFlowIn: pIn, netFlowOut: pOut, ledgerFlow: pLedger, netFlow: pLedger,
+      };
+    });
+    return rows.reverse();
+  }, [intMonthlyHistory, intTwrCumByDate, intHistPeriod, intTotals.totalPrincipal]);
+
+  // ⚠️ '오늘' 판정은 달력상 오늘(getTodayKST)이 아니라 **최신 기록일**이다.
+  //    행 날짜의 출처인 computedIntHistory의 today는 getEffectiveDate() 기준이라 KST 00:00~07:30에는
+  //    전일인데, getTodayKST()와 비교하면 그 7.5시간 동안 **어느 행도 칠해지지 않는다**
+  //    (옛 UTC 비교는 그 구간에서 오히려 맞았고 07:30~09:00 1.5시간만 틀렸다 — 회귀였다).
+  //    CLAUDE.md 메모 달력 절이 같은 함정을 이미 못 박았다: "헤더 일치는 latestRecDate 기준".
+  //    헤더 '오늘 수익' 카드가 가리키는 행(intMonthlyHistory[0])과 반드시 같은 행을 칠한다.
+  const latestRecDate = intMonthlyHistory.length > 0 ? intMonthlyHistory[0].date : '';
+  const histNoun = periodNoun(intHistPeriod);
+  // ⚠️ 데이터 경로(위 histRows)와 **같은 화이트리스트**를 쓴다 — 한쪽만 `!== 'day'`로 두면
+  //    prop 누락·손상값에서 "행은 일별인데 화면은 기간 모드"라는 어긋난 상태가 된다.
+  const isHistPeriodMode = intHistPeriod === 'week' || intHistPeriod === 'month' || intHistPeriod === 'year';
+
 
   // 차트 X축은 카테고리(날짜)라 ReferenceLine x는 실제 데이터 포인트와 일치해야 렌더된다.
   // 시작일 이전에 표시되는(역추산) 데이터가 있을 때만, 시작일 이상 첫 포인트에 스냅해 마커를 노출.
@@ -802,8 +875,11 @@ export default function IntegratedDashboard({
 
               {/* 평가액 추이 테이블 */}
               <div className="w-full xl:w-[490px] shrink-0 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg overflow-hidden flex flex-col max-h-[344px] sm:max-h-[384px] md:max-h-[424px] xl:max-h-[464px]">
-                <div className="p-3 bg-[#0f172a] flex items-center justify-between border-b border-gray-700 shrink-0">
-                  <span className="text-white font-bold text-sm">📅 평가액 추이</span>
+                <div className="p-3 bg-[#0f172a] flex items-center justify-between gap-2 border-b border-gray-700 shrink-0">
+                  <span className="text-white font-bold text-sm shrink-0">📅 평가액 추이</span>
+                  {/* 기간 단위 세그먼트. 통합 카드는 xl:w-[490px]라 헤더에 여유가 있다(개별 계좌는
+                      w-[21%]=252px라 헤더에 못 넣고 thead 위 바에 둔다 — 두 카드가 다른 이유). */}
+                  <HistPeriodSeg value={intHistPeriod} onChange={setIntHistPeriod} />
                 </div>
                 <div className="overflow-x-auto overflow-y-auto flex-1">
                   <table className="w-full text-xs">
@@ -811,18 +887,45 @@ export default function IntegratedDashboard({
                       <tr>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">일자</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">평가금액</th>
-                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap cursor-help" title="(당일 총자산 + 당일 출금) ÷ (전일 총자산 + 당일 입금) − 1
-입출금 영향을 제거한 순수 일간 수익률입니다. 입출금이 있던 날은 아래에 금액이 표시됩니다.">전일대비</th>
-                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap min-w-[100px] cursor-help" title="당일 총자산 − 전일 총자산 − 당일 순입출금
-입금액 크기와 무관하게 그날 실제로 번 금액입니다.">일간 손익</th>
+                        {/* ⚠️ 문구는 periodNoun 공유 포매터로만 만든다(손복제 금지) — 모드별로 거짓이 되는
+                            문장을 각 화면이 따로 들고 있으면 한 곳만 고쳐지고 나머지가 거짓말을 계속한다.
+                            ⚠️ 옛 문장의 "입출금이 있던 날은 아래에 금액이 표시됩니다"는 지금도 이미 거짓이라
+                            삭제했다 — CLAUDE.md가 "입출금 금액 배지는 어느 화면에도 렌더하지 않는다"로
+                            못 박았고 실제 셀도 '-' 또는 %만 렌더한다. */}
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap cursor-help" title={isHistPeriodMode
+                          ? `${histNoun.prev} 대비 ${histNoun.unit} 수익률입니다.\n그 기간의 일별 수익률을 곱해 낸 값(누적 TWR 차분)이라 입출금 영향이 제거돼 있습니다.\n수익률 차트의 구간 수익률과 같은 기준입니다.`
+                          : '(당일 총자산 + 당일 출금) ÷ (전일 총자산 + 당일 입금) − 1\n입출금 영향을 제거한 순수 일간 수익률입니다.'}>{histNoun.prev}대비</th>
+                        <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap min-w-[100px] cursor-help" title={isHistPeriodMode
+                          ? `${histNoun.span} 동안 실제로 번 금액입니다(일별 손익의 합).\n입출금 규모와 무관합니다.`
+                          : '당일 총자산 − 전일 총자산 − 당일 순입출금\n입금액 크기와 무관하게 그날 실제로 번 금액입니다.'}>{histNoun.unit} 손익</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">원금대비</th>
                         <th className="py-2.5 px-2 text-center whitespace-nowrap">투자원금</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {intMonthlyHistory.map((h, i) => (
-                        <tr key={h.id || i} className={`border-b border-gray-700 ${h.date === new Date().toISOString().split('T')[0] ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
-                          <td className="py-2 px-2 text-center font-bold text-gray-400 border-r border-gray-700 cursor-pointer hover:text-sky-300 transition-colors" onClick={() => setHistDetailDate(h.date)}>{formatShortDate(h.date)}</td>
+                      {histRows.map((h, i) => (
+                        /* ⚠️ '오늘' 하이라이트를 날짜 동등 비교로 두지 말 것.
+                           · 옛 코드의 `new Date().toISOString()`은 **UTC**라 KST 00:00~09:00에 전일을 가리킨다
+                             (연 모드에서 1/1 새벽에 작년 행이 '오늘'로 칠해진다).
+                           · 기간 모드에서는 월/연 첫날에 '현재 기간' 행이 아예 없을 수도 있다.
+                           진행 중 기간 = 최신 기록이 속한 버킷 = 내림차순 배열의 0번. 인덱스로 판정한다. */
+                        <tr key={h.id || i} className={`border-b border-gray-700 ${(isHistPeriodMode ? i === 0 : h.date === latestRecDate) ? 'bg-blue-900/20' : 'hover:bg-gray-800/50'}`}>
+                          <td className="py-2 px-2 text-center font-bold text-gray-400 border-r border-gray-700 cursor-pointer hover:text-sky-300 transition-colors"
+                              onClick={() => setHistDetailDate(h.date)}
+                              title={isHistPeriodMode
+                                ? `클릭: 대표일 ${formatShortDate(h.date)}의 계좌별 현황 (이 기간 전체가 아닙니다)`
+                                : '클릭: 그날의 계좌별 현황'}>
+                            {isHistPeriodMode ? (
+                              /* 기간 모드는 위계를 뒤집는다 — 사용자가 고른 축(기간)이 첫 줄이어야 한다.
+                                 둘째 줄의 '대표 …'가 클릭하면 무엇이 열리는지 미리 알려 준다. */
+                              <div className="flex flex-col items-center leading-tight">
+                                <span className="text-gray-200">{periodRangeLabel(h, intHistPeriod)}</span>
+                                <span className="text-[9px] font-normal text-gray-500">
+                                  {i === 0 ? '진행 중 · ' : ''}대표 {formatShortDate(h.date).slice(3, 8)}
+                                </span>
+                              </div>
+                            ) : formatShortDate(h.date)}
+                          </td>
                           <td className="py-2 px-2 font-bold text-white text-center border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
                           <td className="py-2 px-2 text-center border-r border-gray-700">
                             {/* 보류(dodAbsChange==null)는 '변동 없음(0.00%)'이 아니라 '산출 불가' —
@@ -848,7 +951,7 @@ export default function IntegratedDashboard({
                           <td className="py-2 px-2 font-bold text-gray-300 text-center">{hideAmounts ? '••••••' : formatCurrency(h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal)}</td>
                         </tr>
                       ))}
-                      {intMonthlyHistory.length === 0 && (
+                      {histRows.length === 0 && (
                         <tr><td colSpan={6} className="py-6 text-center text-gray-500">데이터 없음<br/><span className="text-[10px] text-gray-600">계좌 평가금액을 입력하면 자동으로 기록됩니다.</span></td></tr>
                       )}
                     </tbody>
@@ -1520,7 +1623,11 @@ export default function IntegratedDashboard({
         <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70" onClick={() => setHistDetailDate(null)}>
           <div className="bg-[#1e293b] rounded-xl border border-gray-700 shadow-2xl w-full max-w-4xl mx-4 max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 bg-[#0f172a] border-b border-gray-700 shrink-0">
-              <span className="text-white font-bold text-sm">📊 {formatShortDate(histDetailDate)} — 계좌별 현황</span>
+              {/* 기간 모드에서는 '무엇을 열었는지'를 제목이 밝혀야 한다 — 표의 '월간 손익'과
+                  이 팝업의 '수익'은 기준이 다르다(팝업 수익 = 시작 이후 누적, 표 = 그 기간 손익). */}
+              <span className="text-white font-bold text-sm">📊 {isHistPeriodMode
+                ? `${periodRangeLabel(histRows.find(r => r.date === histDetailDate) || { date: histDetailDate }, intHistPeriod)} 대표일 ${formatShortDate(histDetailDate)}`
+                : formatShortDate(histDetailDate)} — 계좌별 현황</span>
               <button onClick={() => setHistDetailDate(null)} className="text-gray-400 hover:text-white transition-colors"><X size={16} /></button>
             </div>
             <div className="overflow-auto">

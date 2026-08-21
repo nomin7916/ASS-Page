@@ -22,6 +22,7 @@
     "verify:ladder": "node scripts/verify-ladder.mjs",
     "verify:backtest": "node scripts/verify-backtest.mjs",
     "verify:cal-detail": "node scripts/verify-calendar-detail.mjs",
+    "verify:period": "node scripts/verify-period.mjs",
     "verify:card-window": "node scripts/verify-card-window.mjs"
   },
   "dependencies": {
