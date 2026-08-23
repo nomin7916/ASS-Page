@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine } from '../utils';
 import HistPeriodSeg from './HistPeriodSeg';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
@@ -263,6 +263,17 @@ export default function HistoryPanel({
     return m;
   }, [sortedHistoryDesc, activePortfolioAccountType, overseasEvalByDate, displayEvalByDate, depositHistory, depositHistory2, principal, portfolioStartDate]);
 
+  // 기간 셀 툴팁의 '평가금액 차이' 분해에 쓰는 표시 평가액 — 평가자산 셀이 실제로 그리는 값과
+  // **같은 소스**라야 사용자가 표의 두 칸으로 검산할 수 있다(저장 evalAmount 직접 사용 금지).
+  // ⚠️ 해외계좌는 3열 ₩ 표기가 원화라 여기서도 원화(ov.krw)를 쓴다 — USD를 섞으면 툴팁 산식이 깨진다.
+  const shownEvalOf = (r) => {
+    if (!r || !r.date) return null;
+    const o = isOverseasAcct && overseasEvalByDate ? overseasEvalByDate.get(r.date) : null;
+    if (o) return o.krw;
+    const v = displayEvalByDate?.get(r.date);
+    return v != null ? v : (r.evalAmount != null ? r.evalAmount : null);
+  };
+
   return (
         <>
           {/* ⚠️ 세그먼트 바(28px)를 thead 위에 추가했으므로 카드 높이를 그만큼 올린다 —
@@ -340,6 +351,17 @@ export default function HistoryPanel({
                       // ⚠️ 원인을 '투자원금 0'으로 단정하지 말 것 — cumulativeByDate가 항목을 비우는
                       //    경로는 원금 0 외에 '그날 종가 미로드'(해외 !ov)도 있어 오진단이 된다.
                       : '투자원금 또는 그날의 평가자산을 확정하지 못해 누적 수익률을 낼 수 없습니다.';
+                    // 기간 모드 툴팁 꼬리 — '평가금액 차이 = 손익 + 순입출금' 분해와 % 차이 사유.
+                    // ⚠️ 산식은 바꾸지 않는다(사용자 확정 2026-08). 표의 평가금액 두 칸으로 검산할 때
+                    //    왜 값이 안 맞는지를 그 자리에서 알려 주는 진단 문구다. utils 공유 포매터라
+                    //    통합 추이표와 문장이 갈리지 않는다(손복제 금지).
+                    const gapTail = isPeriodMode ? (() => {
+                      const pe = shownEvalOf(viewRows[i + 1]), ce = shownEvalOf(h);
+                      const out = periodGapLines({ prevEval: pe, curEval: ce, profit: dodProfit, ledger: flowNet, fmt: formatCurrency, unit: noun.unit });
+                      const rl = periodRateGapLine({ prevEval: pe, curEval: ce, rate: dodProfit == null ? null : dod, unit: noun.unit });
+                      if (rl) out.push(rl);
+                      return out.length ? ['', ...out] : [];
+                    })() : [];
                     // 일간 수익률·수익금 셀 툴팁 — 사용자의 정의("어제 종가를 오늘의 시작 금액으로 보고,
                     // 오늘 종가와 비교해 얼마 벌었나")를 그대로 풀어 쓴다. 입출금이 있으면 그 금액은
                     // 수익이 아니라 '시작 자산'에 더해진다는 점을 명시(그게 이 지표의 유일한 보정).
@@ -358,6 +380,7 @@ export default function HistoryPanel({
                               : (isPeriodMode
                                   ? `${noun.span}에 입출금이 없었습니다 — 일별 수익률의 곱과 동일`
                                   : '입출금이 없던 날 — (당일 − 전일) ÷ 전일 과 동일'),
+                          ...gapTail,
                         ].join('\n')
                       : (hasPrev
                           ? (isPeriodMode
@@ -429,7 +452,7 @@ export default function HistoryPanel({
                             (당일 − 전일) ÷ 전일 과 정확히 같고, 있던 날만 그 금액이 시작 자산으로 빠진다.
                             ⚠️ 여기서 전일대비를 다시 계산하지 말 것 — dailyMetricsByDate(공용 함수)가 단일
                                소스다. 행별 재계산으로 되돌리면 보류 행의 흐름 이월이 깨져 통합 뷰와 갈라진다. */}
-                        <td className="py-1.5 px-1 text-center font-bold" title={dodTitle}>
+                        <td className={`py-1.5 px-1 text-center font-bold ${dodTitle ? 'cursor-help' : ''}`} title={dodTitle}>
                           {/* 보류는 '변동 없음(0.00%)'이 아니라 '산출 불가' — 통합 추이표와 같은 규약 */}
                           {dodProfit == null
                             ? <span className="text-gray-600">-</span>

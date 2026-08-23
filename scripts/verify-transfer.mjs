@@ -170,6 +170,47 @@ function intLedgerFlow(deps, wds, onDate) {
   return { in: inF, out: outF };
 }
 
+// useIntegratedData ① + ①-c 미러 — **통합 뷰**의 계좌 간 이관 쌍 상쇄.
+//   이관은 '원계좌 출금 M + 대상계좌 입금 M' 원장 쌍이라 순액은 0인데 총유입·총유출이 각각 M만큼
+//   부푼다. Modified Dietz 분모가 (V_prev + IN)이라 그날 수익률이 (V+M)/(V_prev+M)−1 로 희석된다.
+//   ⚠️ src(useIntegratedData.ts)의 holdTransfer / xferPend.forEach 본문과 **항상 1:1 동기화**할 것.
+function intFlowNetted(accounts, onDate) {
+  const inMap = new Map(), outMap = new Map();
+  const addIn = (d, v) => { if (d && v > 0) inMap.set(d, (inMap.get(d) || 0) + v); };
+  const addOut = (d, v) => { if (d && v > 0) outMap.set(d, (outMap.get(d) || 0) + v); };
+  const xferPend = new Map();
+  const holdTransfer = (row, side, date, v) => {
+    const xf = row && row.transfer;
+    if (!xf || !xf.id || xf.role !== side || !(v > 0)) return false;
+    const key = String(xf.id);
+    const rec = xferPend.get(key) || { in: null, out: null, bad: false };
+    if (rec[side]) { rec.bad = true; xferPend.set(key, rec); return false; }
+    rec[side] = { date, v };
+    xferPend.set(key, rec);
+    return true;
+  };
+  for (const acc of accounts || []) {
+    (acc.deps || []).forEach(d => {
+      if (!d || !d.date || d.noPrincipal) return;
+      const v = cleanNum(d.amount);
+      if (holdTransfer(d, 'in', d.date, v)) return;
+      if (v > 0) addIn(d.date, v); else if (v < 0) addOut(d.date, -v);
+    });
+    (acc.wds || []).forEach(w => {
+      if (!w || !w.date) return;
+      const v = cleanNum(w.amount);
+      if (holdTransfer(w, 'out', w.date, v)) return;
+      if (v > 0) addOut(w.date, v); else if (v < 0) addIn(w.date, -v);
+    });
+  }
+  xferPend.forEach(rec => {
+    if (!rec.bad && rec.in && rec.out && rec.in.date === rec.out.date) return;   // 상쇄
+    if (rec.in) addIn(rec.in.date, rec.in.v);
+    if (rec.out) addOut(rec.out.date, rec.out.v);
+  });
+  return { in: inMap.get(onDate) || 0, out: outMap.get(onDate) || 0 };
+}
+
 // ───────── 시나리오 ─────────
 // 스크린샷 실측: KODEX 미국배당커버드콜액티브 704주 · 매입원가 8,276,752 · 평가 9,127,360
 const C = 8276752, M = 9127360, G = M - C;   // G = 850,608
@@ -407,6 +448,79 @@ console.log('\n── 파트② 소스 텍스트 가드 ──');
     }
   }
   ok(`#29 JSX 주석이 조기 종료되지 않는다${bad.length ? `\n      ${bad.join('\n      ')}` : ''}`, bad.length === 0);
+}
+
+// ── 파트④ 통합 뷰 이관 쌍 상쇄 (#34~#41) ─────────────────────────────────────
+// 사용자 보고(2026-08): 통합 월간 '전월대비'가 손익÷직전평가액(2.12%)보다 낮은 1.90%였다.
+// 원인은 이관·계좌 이동이 통합 뷰에서도 외부 입출금으로 계상돼 그날 분모가 부푼 것.
+console.log('\n── 파트④ 통합 뷰 이관 쌍 상쇄 ──');
+{
+  const r = mk();
+  const A = { deps: [], wds: [r.srcWithdrawal] };
+  const B = { deps: [r.tgtDeposit], wds: r.tgtGainRow ? [r.tgtGainRow] : [] };
+
+  const both = intFlowNetted([A, B], D);
+  ok('#34 양쪽 계좌가 집계 대상이면 쌍을 통째로 제거 (통합 안에서 자리만 바뀜)', both.in === 0 && both.out === 0);
+
+  // ⚠️ 순액은 상쇄 전에도 0이었다 — 바뀌는 건 **총액**뿐이다. 그래서 dodAbsChange(=ΔV−순흐름)와
+  //    보류 판정(shouldHoldDailyMetrics는 fIn−fOut만 본다)은 무변이고, 오직 %만 정확해진다.
+  const rawB = intLedgerFlow(B.deps, B.wds, D), rawA = intLedgerFlow(A.deps, A.wds, D);
+  near('#35 상쇄 전에도 순액은 0', (rawA.in + rawB.in) - (rawA.out + rawB.out), 0);
+  ok('#35b 상쇄 전 총액은 각각 M (이게 분모를 부풀리던 값)', Math.abs(rawB.in - M) < 1e-6 && Math.abs(rawA.out - M) < 1e-6);
+
+  // Modified Dietz: (V + OUT) / (V_prev + IN) − 1
+  const rate = (prevV, v, fIn, fOut) => ((v + fOut) / (prevV + fIn) - 1) * 100;
+  const prevV = 774826963, v = prevV * 1.01;   // 그날 시장 +1.00%
+  near('#36 상쇄 후에는 시장 등락이 그대로 나온다', rate(prevV, v, both.in, both.out), 1.0, 1e-9);
+  ok('#36b 상쇄 전에는 이관 금액만큼 희석됐다 (사용자가 본 증상)', rate(prevV, v, M, M) < 1.0 - 0.005);
+
+  // ⚠️ 한쪽이 집계 대상이 아니면(TEST·삭제·기록 0건) 상쇄 금지 — 통합 자산이 실제로 드나든 것이다.
+  const onlyA = intFlowNetted([A], D);
+  ok('#37 원계좌만 집계 대상 → 유출 M 유지', Math.abs(onlyA.out - M) < 1e-6 && onlyA.in === 0);
+  const onlyB = intFlowNetted([B], D);
+  ok('#37b 대상계좌만 집계 대상 → 유입 M 유지', Math.abs(onlyB.in - M) < 1e-6 && onlyB.out === 0);
+
+  // ⚠️ 기록 확정일이 갈린 쌍은 상쇄 금지 — 원계좌 출금일에 M이 통째로 가짜 손실이 된다.
+  const rSplit = buildTransferLedgerRows({
+    transferId: 'tr2', code: 'X', name: 'X', quantity: 1, itemType: 'stock', market: M, cost: C,
+    dateSrc: D, dateTgt: '2026-08-06', sourceId: 'A', sourceName: 'a', targetId: 'B', targetName: 'b',
+    rowIds: ['o2', 'i2', 'g2'],
+  });
+  const split = intFlowNetted([{ deps: [], wds: [rSplit.srcWithdrawal] }, { deps: [rSplit.tgtDeposit], wds: [] }], D);
+  ok('#38 날짜가 갈린 쌍은 상쇄하지 않는다 (원계좌 출금일 유출 M 유지)', Math.abs(split.out - M) < 1e-6);
+
+  // ⚠️ 손상 데이터(같은 역할 2건)에서 흐름을 **잃지 않는다** — 버리면 그만큼 가짜 손익이 된다.
+  const dup = intFlowNetted([{ deps: [], wds: [r.srcWithdrawal, { ...r.srcWithdrawal, id: 'dup' }] }, B], D);
+  ok('#39 같은 역할 2건이면 상쇄를 포기하고 흐름을 보존한다', Math.abs(dup.out - 2 * M) < 1e-6 && Math.abs(dup.in - M) < 1e-6);
+
+  // 원가 보정 행(금액 0)은 애초에 흐름 기여가 0이라 상쇄 대상이 아니다.
+  const gainOnly = intFlowNetted([{ deps: [], wds: r.tgtGainRow ? [r.tgtGainRow] : [] }], D);
+  ok('#40 원가 보정 행은 유입·유출 모두 0', gainOnly.in === 0 && gainOnly.out === 0);
+}
+
+{
+  const intg = read('src/hooks/useIntegratedData.ts');
+  ok('#41 ①-c 이관 쌍 상쇄가 실제로 배선돼 있다',
+    /const xferPend = new Map\(\);/.test(intg) &&
+    /if \(holdTransfer\(d, 'in', d\.date, v\)\) return;/.test(intg) &&
+    /if \(holdTransfer\(w, 'out', w\.date, v\)\) return;/.test(intg));
+  ok('#41b 같은 날짜일 때만 상쇄한다',
+    /if \(!rec\.bad && rec\.in && rec\.out && rec\.in\.date === rec\.out\.date\) return;/.test(intg));
+  // ⚠️ flowAtRow는 기록 없는 날의 흐름을 다음 기록일로 이월한다 — 상쇄가 그보다 뒤에 오면
+  //    이미 이월된 값이 남아 상쇄가 무의미해진다.
+  // ⚠️ indexOf **위치만** 재면 죽은 단언이 된다 — `if (0) xferPend.forEach(…)` 처럼 무력화해도
+  //    문자열 위치는 그대로라 통과한다(변이 M5b로 실증). 문장이 **조건 없이** 서 있는지도 함께 본다.
+  ok('#41c 상쇄가 조건 없이, flowAtRow(이월) 구성보다 앞에서 실행된다',
+    /\n    xferPend\.forEach\(rec => \{/.test(intg) &&
+    intg.indexOf('xferPend.forEach') < intg.indexOf('const flowAtRow = new Map();'));
+  // ⚠️ 계좌 편입/이탈(③)은 상쇄 대상이 **아니다** — 빼면 편입일 평가액 전액이 가짜 수익,
+  //    삭제일 평가액 전액이 가짜 손실이 된다(그건 통합 자산의 실제 증감이다).
+  ok('#41d 계좌 편입/이탈 흐름은 그대로 남아 있다',
+    /const d0 = dates\.find\(d => \(map\.get\(d\) \|\| 0\) > 0\)/.test(intg) && /addIn\(d0, map\.get\(d0\) \|\| 0\);/.test(intg));
+  // ⚠️ 개별 계좌 뷰는 **무변경** — 그 계좌 기준으로는 자산이 실제로 나갔다.
+  const u = read('src/utils.ts');
+  const efr = u.slice(u.indexOf('export const externalFlowInRange'), u.indexOf('export const dailyFlowAdjustedRate'));
+  ok('#41e 개별 계좌 흐름(externalFlowInRange)에는 이관 예외가 없다', efr.length > 200 && !/transfer/.test(efr));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:transfer — ${pass} passed, ${fail} failed\n`);

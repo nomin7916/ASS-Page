@@ -616,6 +616,43 @@ export const periodNoun = (mode) => {
   return { unit: '일간', prev: '전일', span: '그날', end: '당일' };
 };
 
+// 기간 행의 '평가금액 차이 = 손익 + 그 외' 분해 문구 — 통합 추이표와 개별 계좌 추이표가 **공유**한다
+// (손복제 금지). 표의 평가금액 두 칸으로 직접 검산하는 사용자에게 왜 값이 안 맞는지를 그 자리에서
+// 알려 주는 진단 문구다. 산식 자체는 바꾸지 않는다(사용자 확정 2026-08).
+// ⚠️ 금액은 **툴팁(hover)에만** 넣을 것 — CLAUDE.md '입출금 금액 배지는 어느 화면에도 상시 렌더하지
+//    않는다'(사용자 요청). 상시 배지·셀 텍스트로 승격하지 말 것.
+// ⚠️ 잔차(ΔV − 손익)를 원장 순흐름이라 **단언하지 않는다** — 보류 행의 흐름 이월·계좌 편입/이탈
+//    경계가 섞일 수 있다. ledger와 값이 일치할 때만 '순입출금'이라 부르고, 아니면 중립 표현을 쓴다.
+export const periodGapLines = ({ prevEval, curEval, profit, ledger, fmt, unit }) => {
+  const f = typeof fmt === 'function' ? fmt : (v) => String(v);
+  const u = unit || '기간';
+  const num = (v) => typeof v === 'number' && Number.isFinite(v);
+  if (!num(prevEval) || !num(curEval) || !num(profit)) return [];
+  const dv = curEval - prevEval;
+  const gap = dv - profit;
+  const lines = [`평가금액 ${f(prevEval)} → ${f(curEval)}  (차이 ${f(dv)})`];
+  if (Math.abs(gap) < 1) {
+    lines.push(`이 기간엔 입출금이 없어 그 차이가 곧 ${u} 손익입니다.`);
+    return lines;
+  }
+  const named = (num(ledger) && Math.abs(gap - ledger) < 1) ? '순입출금' : '입출금 등 시장 외 증감';
+  lines.push(`${gap > 0 ? '−' : '+'} ${named} ${f(Math.abs(gap))}`);
+  lines.push(`= ${u} 손익 ${f(profit)}`);
+  return lines;
+};
+
+// 기간 %가 '평가금액 단순 비교'와 다른 이유를 한 줄로 설명한다(위와 같은 공유 규약).
+// ⚠️ 두 값이 사실상 같으면(입출금이 없던 기간) 줄을 만들지 않는다 — 맞는 값에 굳이 해명을 붙이면
+//    '뭔가 어긋났다'는 잘못된 인상을 준다.
+export const periodRateGapLine = ({ prevEval, curEval, rate, unit }) => {
+  const u = unit || '기간';
+  const num = (v) => typeof v === 'number' && Number.isFinite(v);
+  if (!num(prevEval) || !num(curEval) || !(prevEval > 0)) return '';
+  const raw = (curEval / prevEval - 1) * 100;
+  if (num(rate) && Math.abs(raw - rate) < 0.005) return '';
+  return `평가금액만 단순 비교하면 ${raw >= 0 ? '+' : ''}${raw.toFixed(2)}%입니다. 입출금이 있던 날은 그 금액이 그날의 시작 자산(분모)에 더해지므로 ${u} 수익률과 다릅니다.`;
+};
+
 // 일별 지표 Map을 누적 시계열로 바꾼다 — 기간 표(주/월/년)의 **유일한 산식 소스**.
 //   기간 손익   = profit(대표일) − profit(직전 대표일)
 //   기간 수익률 = rebaseTwr(twr(대표일), twr(직전 대표일))

@@ -459,7 +459,7 @@ export default function App() {
   const applyBackupDataRef = useRef<Function | null>(null);
   const refreshPricesRef = useRef<Function | null>(null);
   // 계좌별 차트 상태 독립 관리
-  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false, showTotalEval: true, showReturnRate: true });
+  const currentChartStateRef = useRef<any>({ showKospi: true, showSp500: false, showNasdaq: false, showIndicatorsInChart: { us10y: false, kr10y: false, goldIntl: false, goldKr: false, usdkrw: false, dxy: false, fedRate: false, vix: false, btc: false, eth: false }, goldIndicators: { goldIntl: true, goldKr: true, usdkrw: false, dxy: false }, goldIndicatorColors: { goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' }, compStocks: [], chartPeriod: '3m', dateRange: { start: '', end: '' }, appliedRange: { start: '', end: '' }, backtestColor: '#f97316', showBacktest: false, showTotalEval: true, showReturnRate: true, histPeriod: 'day' });
   const accountChartStatesRef = useRef<Record<string, any>>({});
   const accountRebalExtraQtyRef = useRef<Record<string, Record<string, number>>>({}); // 계좌별 리밸런싱 '추가' 입력값 보존
   const rebalExtraQtyRef = useRef<Record<string, number>>({}); // 최신 rebalExtraQty 스냅샷 (탭 전환 저장용)
@@ -854,7 +854,17 @@ export default function App() {
       // ⚠️ 손상값 방어 필수 — 소비자(compressPeriodRows)가 화이트리스트라 안전하지만, state에
       //    'weke' 같은 값이 들어가면 세그먼트 버튼 어느 것도 눌린 것으로 보이지 않는다.
       if (stateData.chartPrefs.intHistPeriod !== undefined) setIntHistPeriod(normalizeHistPeriod(stateData.chartPrefs.intHistPeriod));
-      if (stateData.chartPrefs.acctHistPeriod !== undefined) setAcctHistPeriod(normalizeHistPeriod(stateData.chartPrefs.acctHistPeriod));
+      // ⚠️ 개별 계좌 기간 단위는 **계좌별 값이 앱 레벨 값을 이긴다**. 계좌 전환 이펙트는
+      //    prevId===null이라 최초 로드에서 돌지 않으므로 여기서 직접 복원해야 한다.
+      //    (accountChartStates 블록이 이 줄보다 **위**에 있어서 거기 넣으면 아래 앱 레벨 값이
+      //     덮어써 버린다 — showTotalEval/showReturnRate와 순서가 반대인 것이 이 분기의 이유다.)
+      //    계좌별 필드가 없는 옛 저장본만 앱 레벨 값으로 폴백한다.
+      {
+        const _bootId = stateData.activePortfolioId || stateData.portfolios?.[0]?.id;
+        const _bootAcct = _bootId ? stateData.chartPrefs.accountChartStates?.[_bootId] : null;
+        if (_bootAcct?.histPeriod !== undefined) setAcctHistPeriod(normalizeHistPeriod(_bootAcct.histPeriod));
+        else if (stateData.chartPrefs.acctHistPeriod !== undefined) setAcctHistPeriod(normalizeHistPeriod(stateData.chartPrefs.acctHistPeriod));
+      }
       if (stateData.chartPrefs.fxCurrencies) setFxCurrencies(normalizeFxCurrencies(stateData.chartPrefs.fxCurrencies));
       if (stateData.chartPrefs.fxSlotCount !== undefined) setFxSlotCount(normalizeFxSlotCount(stateData.chartPrefs.fxSlotCount));
       if (stateData.chartPrefs.matongClosedIds) setMatongClosedIds(stateData.chartPrefs.matongClosedIds);
@@ -1030,8 +1040,13 @@ export default function App() {
       //    이펙트가 저장도 복원도 하지 않았다). 비교종목·시장지표·조회기간과 같은 등급이다.
       showTotalEval,
       showReturnRate,
+      // ⚠️ 평가액 추이 표의 기간 단위(일/주/월/년)도 **계좌별**이다(사용자 요청 2026-08).
+      //    앱 레벨 단일 값이면 한 계좌에서 '월'을 고르는 순간 전 계좌가 월간으로 바뀐다.
+      //    바로 옆 조회기간(chartPeriod)이 이미 계좌별이라, 같은 화면의 두 '기간'이 다르게
+      //    동작하던 문제도 함께 사라진다. 통합 대시보드(intHistPeriod)는 종전대로 별도 값이다.
+      histPeriod: acctHistPeriod,
     };
-  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, compStocks, chartPeriod, dateRange, appliedRange, backtestColor, showBacktest, showTotalEval, showReturnRate]);
+  }, [showKospi, showSp500, showNasdaq, showIndicatorsInChart, goldIndicators, goldIndicatorColors, compStocks, chartPeriod, dateRange, appliedRange, backtestColor, showBacktest, showTotalEval, showReturnRate, acctHistPeriod]);
 
   // 차트 설정 변경 시 chartPrefsUpdatedAt 갱신 — Drive STATE 저장 트리거용
   useEffect(() => {
@@ -1076,6 +1091,9 @@ export default function App() {
         // '그대로 두기'로 폴백하면 마이그레이션 첫 한 바퀴 동안 원래의 누수가 그대로 보인다.
         setShowTotalEval(saved.showTotalEval ?? true);
         setShowReturnRate(saved.showReturnRate ?? true);
+        // 평가액 추이 기간 단위 복원. 필드가 없는 옛 저장본은 normalizeHistPeriod가 'day'로
+        // 떨어뜨린다 — 첫 방문 기본값과 같아서 직전 계좌 값을 물려받지 않는다(누수 방지).
+        setAcctHistPeriod(normalizeHistPeriod(saved.histPeriod));
       } else {
         // 처음 방문하는 계좌 — 계좌 타입별 기본값
         const accountType = portfolios.find(p => p.id === activePortfolioId)?.accountType;
@@ -1090,6 +1108,9 @@ export default function App() {
         // 처음 방문하는 계좌는 직전 계좌의 토글을 물려받지 않는다(useHistoryChart 기본값과 동일).
         setShowTotalEval(true);
         setShowReturnRate(true);
+        // 처음 방문하는 계좌의 평가액 추이는 '일'로 시작한다(사용자 확정 2026-08) —
+        // 다른 차트 토글과 같은 규약이라 직전 계좌 선택이 새어 나가지 않는다.
+        setAcctHistPeriod('day');
         if (accountType === 'gold') {
           setGoldIndicators({ goldIntl: true, goldKr: true, usdkrw: false, dxy: false });
           setGoldIndicatorColors({ goldIntl: '#ffd60a', goldKr: '#ff9f0a', usdkrw: '#0a84ff', dxy: '#5ac8fa' });

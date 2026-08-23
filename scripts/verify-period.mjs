@@ -39,7 +39,7 @@ try {
 if (U) {
   const { normalizeHistPeriod, periodBucketKey, compressPeriodRows, periodRangeLabel,
           periodNoun, accumulateDailySeries, computeDailyMetricsSeries,
-          computeCumulativeTwrSeries, rebaseTwr } = U;
+          computeCumulativeTwrSeries, rebaseTwr, periodGapLines, periodRateGapLine } = U;
 
   // ── normalizeHistPeriod — 화이트리스트 ──
   eq('#1 day', normalizeHistPeriod('day'), 'day');
@@ -160,6 +160,45 @@ if (U) {
   const fm = computeDailyMetricsSeries(flowRows);
   const fa = accumulateDailySeries(flowRows.map(r => r.date), fm);
   near('#16 입금 ₩50,000이 기간 손익에 섞이지 않는다', fa.profit.get('f4') - fa.profit.get('f1'), 10 + 10 + 510, 1e-6);
+
+  // ── periodGapLines / periodRateGapLine — 기간 셀 툴팁의 검산 분해 ──────────────
+  // 사용자 확정(2026-08): 산식은 **그대로 두고** 왜 표의 평가금액 두 칸으로 검산이 안 맞는지를
+  // 툴팁으로 설명한다. 실측 통합 데이터: 7월 대표 ₩774,826,963 → 8월 대표 ₩791,529,823,
+  // 표시 월간 손익 ₩16,393,527. 차이 ₩16,702,860 중 ₩309,333이 그 기간 순입출금이다.
+  const F = (v) => `₩${Math.round(v).toLocaleString('en-US')}`;
+  const gl = periodGapLines({ prevEval: 774826963, curEval: 791529823, profit: 16393527, ledger: 309333, fmt: F, unit: '월간' });
+  eq('#17 3줄 분해(평가금액 차이 / 순입출금 / 손익)', gl.length, 3);
+  ok('#17b 첫 줄이 표의 두 평가금액을 그대로 보여준다',
+    gl[0].includes('₩774,826,963') && gl[0].includes('₩791,529,823') && gl[0].includes('₩16,702,860'));
+  ok('#17c 잔차가 원장과 일치할 때만 "순입출금"이라 부른다', gl[1].startsWith('− 순입출금') && gl[1].includes('₩309,333'));
+  eq('#17d 마지막 줄이 표에 찍힌 손익과 같다', gl[2], `= 월간 손익 ${F(16393527)}`);
+
+  // ⚠️ 잔차(ΔV − 손익)를 원장 순흐름이라 **단언하지 않는다** — 보류 이월·계좌 편입/이탈 경계가 섞인다.
+  const gl2 = periodGapLines({ prevEval: 1000, curEval: 1100, profit: 60, ledger: 10, fmt: F, unit: '월간' });
+  ok('#18 잔차 ≠ 원장이면 중립 표현', gl2[1].includes('입출금 등 시장 외 증감') && !gl2[1].includes('순입출금'));
+  const gl3 = periodGapLines({ prevEval: 1000, curEval: 900, profit: 60, ledger: -160, fmt: F, unit: '월간' });
+  ok('#18b 유출(잔차 음수)은 부호를 뒤집어 더한다', gl3[1].startsWith('+ 순입출금') && gl3[1].includes('₩160'));
+
+  // 입출금이 없던 기간은 '차이가 곧 손익'이라 못 박는다(그 기간은 검산이 정확히 맞는다).
+  const gl4 = periodGapLines({ prevEval: 1000, curEval: 1100, profit: 100, ledger: 0, fmt: F, unit: '월간' });
+  eq('#19 흐름 0이면 2줄', gl4.length, 2);
+  ok('#19b 둘째 줄이 "차이가 곧 손익"', gl4[1].includes('그 차이가 곧 월간 손익입니다'));
+
+  // ⚠️ null 계약 — 산출 불가(보류 행)·첫 기간이면 아무 줄도 만들지 않는다(0으로 단언 금지).
+  eq('#20 profit null이면 빈 배열', periodGapLines({ prevEval: 1000, curEval: 1100, profit: null, fmt: F, unit: '월간' }).length, 0);
+  eq('#20b prevEval 없으면(첫 기간) 빈 배열', periodGapLines({ prevEval: null, curEval: 1100, profit: 10, fmt: F, unit: '월간' }).length, 0);
+  eq('#20c 인자 전체 누락에도 던지지 않는다', periodGapLines({}).length, 0);
+
+  // periodRateGapLine — 사용자의 검산(774,826,963 × 1.019 ≠ 791,529,823)에 직접 답한다.
+  const rl = periodRateGapLine({ prevEval: 774826963, curEval: 791529823, rate: 1.90, unit: '월간' });
+  ok('#21 단순 비교 %를 소수 2자리로 제시', rl.includes('+2.16%'));
+  ok('#21b 왜 다른지(입금이 분모=시작 자산에 더해짐)를 말한다', rl.includes('시작 자산'));
+
+  // ⚠️ 두 값이 사실상 같으면 줄을 만들지 않는다 — 맞는 값에 해명을 붙이면 오히려 오해를 부른다.
+  eq('#22 흐름 없는 기간은 해명 줄 없음', periodRateGapLine({ prevEval: 1000, curEval: 1100, rate: 10, unit: '월간' }), '');
+  ok('#22b rate 미제공(보류)이어도 단순 비교는 제시', periodRateGapLine({ prevEval: 1000, curEval: 1100, rate: null, unit: '월간' }).includes('+10.00%'));
+  eq('#22c prevEval 0/음수면 빈 문자열',
+    [periodRateGapLine({ prevEval: 0, curEval: 100, rate: 1, unit: '월간' }), periodRateGapLine({ prevEval: -5, curEval: 100, rate: 1, unit: '월간' })], ['', '']);
 }
 
 console.log('\n── 파트② 소스 텍스트 가드 ──');
@@ -327,6 +366,61 @@ ok('#G21 압축 입력에서 date 없는 행 제거',
 // #G22 ⚠️ 프레젠테이션 플래그도 데이터 경로와 같은 화이트리스트(fail-open 비대칭 방지).
 ok('#G22 통합 isHistPeriodMode 화이트리스트',
   /const isHistPeriodMode = intHistPeriod === 'week' \|\| intHistPeriod === 'month' \|\| intHistPeriod === 'year';/.test(dashNoC));
+
+// ── 개별 계좌 기간 단위는 **계좌별**이다 (사용자 요청 2026-08) ────────────────
+// ⚠️ 차트 토글 화이트리스트(CLAUDE.md '차트 토글은 계좌별로 독립')와 같은 4지점 규약이다.
+//    ①②만 하면 저장은 되는데 복원이 없어 값이 그대로 남고, ③만 하면 신규 계좌가 직전 계좌를 물려받는다.
+ok('#G23 ① currentChartStateRef 기본값 리터럴에 histPeriod',
+  /const currentChartStateRef = useRef<any>\(\{[^\n]*histPeriod: 'day' \}\)/.test(appNoC));
+ok('#G23b ② 동기화 effect 객체에 histPeriod: acctHistPeriod',
+  /histPeriod: acctHistPeriod,\s*\};/.test(appNoC));
+ok('#G23c ② 그 effect deps에 acctHistPeriod',
+  /showTotalEval, showReturnRate, acctHistPeriod\]\);/.test(appNoC));
+ok('#G23d ③ 계좌 전환 saved 복원 분기', /setAcctHistPeriod\(normalizeHistPeriod\(saved\.histPeriod\)\);/.test(appNoC));
+// ⚠️ 처음 방문하는 계좌는 '일'로 시작한다(사용자 확정) — 직전 계좌 값을 물려받으면 이 기능의
+//    증상(한 계좌에서 고른 게 다른 계좌에 나타남)이 신규 계좌 첫 방문에서 그대로 재현된다.
+ok("#G23e ④ 처음 방문 계좌는 'day'", /setShowReturnRate\(true\);\s*setAcctHistPeriod\('day'\);/.test(appNoC));
+
+// ⚠️ 부팅 복원은 **계좌별 값이 앱 레벨 값을 이겨야** 한다. accountChartStates 블록이 acctHistPeriod
+//    복원보다 **위**에 있어서, showTotalEval처럼 그 블록에 넣으면 아래 앱 레벨 줄이 덮어쓴다
+//    (순서가 반대라 같은 자리에 둘 수 없다 — 계좌 전환 이펙트는 prevId===null이라 최초 로드에 안 돈다).
+ok('#G24 부팅 복원이 계좌별 histPeriod를 먼저 본다',
+  /_bootAcct\?\.histPeriod !== undefined\) setAcctHistPeriod\(normalizeHistPeriod\(_bootAcct\.histPeriod\)\)/.test(appNoC));
+ok('#G24b 계좌별 필드가 없는 옛 저장본만 앱 레벨 값으로 폴백',
+  /else if \(stateData\.chartPrefs\.acctHistPeriod !== undefined\) setAcctHistPeriod/.test(appNoC));
+// 영속화 신규 지점 0곳 — accountChartStates가 이미 chartPrefs에 실려 저장된다.
+ok('#G24c 계좌별 상태는 accountChartStates로 이미 영속된다',
+  /accountChartStates: accountChartStatesRef\.current/.test(appNoC));
+
+// ── 기간 셀 툴팁 = 검산 분해 (산식은 무변경 — 사용자 확정 2026-08) ─────────────
+// ⚠️ 문구는 utils 공유 포매터로만 만든다(periodNoun과 같은 규약) — 화면마다 따로 들고 있으면
+//    한 곳만 고쳐지고 나머지가 계속 거짓말을 한다.
+ok('#G25 utils가 두 포매터를 내보낸다',
+  /export const periodGapLines = /.test(utils) && /export const periodRateGapLine = /.test(utils));
+ok('#G25b 통합 표가 두 포매터를 **사용부**에서 쓴다',
+  /title=\{isHistPeriodMode \? periodRateGapLine\(\{ prevEval: h\.periodPrevEval/.test(dashNoC) &&
+  /periodGapLines\(\{ prevEval: h\.periodPrevEval, curEval: h\.evalAmount, profit: h\.dodAbsChange/.test(dashNoC));
+ok('#G25c 개별 표도 같은 두 포매터를 쓴다',
+  /const out = periodGapLines\(\{ prevEval: pe, curEval: ce, profit: dodProfit/.test(histNoC) &&
+  /const rl = periodRateGapLine\(\{ prevEval: pe, curEval: ce/.test(histNoC) &&
+  /\.\.\.gapTail,/.test(histNoC));
+
+// ⚠️ 분해의 기준 평가액은 **표가 실제로 그리는 값**이어야 검산이 된다(저장 evalAmount 직접 사용 금지 —
+//    시장 계좌 평가액은 '수량 × 종가' 재계산이 권위값이다).
+ok('#G26 통합은 직전 대표일 평가액을 행에 싣는다', /periodPrevEval: prev \? prev\.evalAmount : null,/.test(dashNoC));
+ok('#G26b 개별은 평가자산 셀과 같은 소스(shownEvalOf)를 쓴다',
+  /const shownEvalOf = \(r\) => \{/.test(histNoC) &&
+  /const o = isOverseasAcct && overseasEvalByDate \? overseasEvalByDate\.get\(r\.date\) : null;/.test(histNoC) &&
+  /const pe = shownEvalOf\(viewRows\[i \+ 1\]\), ce = shownEvalOf\(h\);/.test(histNoC));
+
+// ⚠️ hideAmounts면 툴팁을 아예 만들지 않는다 — 셀은 가려 놓고 hover에 실금액을 노출하면 반쪽이 된다.
+ok('#G27 통합 손익 툴팁이 hideAmounts를 존중한다',
+  /title=\{isHistPeriodMode && !hideAmounts \? periodGapLines\(/.test(dashNoC));
+// ⚠️ 툴팁 추가가 **값을 바꾸지 않았는지** 재확인(사용자 확정: 산식 무변경).
+ok('#G27b 통합 기간 값은 여전히 누적 차분이다',
+  /dodAbsChange: noBase \? null : cp - cpP,/.test(dashNoC) &&
+  /dodChange: noBase \? 0 : \(rebaseTwr\(t, tP\) \?\? 0\),/.test(dashNoC));
+ok('#G27c 개별 기간 값도 여전히 누적 차분이다', /dodAbsChange: noBase \? null : cp - cpP,/.test(histNoC));
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패\n`);
 process.exit(fail ? 1 : 0);

@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
-import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine } from '../utils';
 
 const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
 const nextRowColor = (cur: string): string => {
@@ -278,6 +278,9 @@ export default function IntegratedDashboard({
         dodChange: noBase ? 0 : (rebaseTwr(t, tP) ?? 0),
         // ⚠️ 압축 전 '대표일 하루치' 스칼라가 남지 않게 반드시 덮어쓴다.
         netFlowIn: pIn, netFlowOut: pOut, ledgerFlow: pLedger, netFlow: pLedger,
+        // 직전 대표일의 평가금액 — 셀 툴팁이 '평가금액 차이 = 손익 + 순입출금'을 분해할 때 쓴다
+        // (표에 실제로 그려진 두 칸으로 사용자가 검산할 수 있게). 일간 모드에는 없는 필드다.
+        periodPrevEval: prev ? prev.evalAmount : null,
       };
     });
     return rows.reverse();
@@ -893,10 +896,10 @@ export default function IntegratedDashboard({
                             삭제했다 — CLAUDE.md가 "입출금 금액 배지는 어느 화면에도 렌더하지 않는다"로
                             못 박았고 실제 셀도 '-' 또는 %만 렌더한다. */}
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap cursor-help" title={isHistPeriodMode
-                          ? `${histNoun.prev} 대비 ${histNoun.unit} 수익률입니다.\n그 기간의 일별 수익률을 곱해 낸 값(누적 TWR 차분)이라 입출금 영향이 제거돼 있습니다.\n수익률 차트의 구간 수익률과 같은 기준입니다.`
+                          ? `${histNoun.prev} 대비 ${histNoun.unit} 수익률입니다.\n그 기간의 일별 수익률을 곱해 낸 값(누적 TWR 차분)이라 입출금 영향이 제거돼 있습니다.\n수익률 차트의 구간 수익률과 같은 기준입니다.\n※ 평가금액만 단순 비교한 값과 다를 수 있습니다 — 셀에 마우스를 올리면 사유가 표시됩니다.`
                           : '(당일 총자산 + 당일 출금) ÷ (전일 총자산 + 당일 입금) − 1\n입출금 영향을 제거한 순수 일간 수익률입니다.'}>{histNoun.prev}대비</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap min-w-[100px] cursor-help" title={isHistPeriodMode
-                          ? `${histNoun.span} 동안 실제로 번 금액입니다(일별 손익의 합).\n입출금 규모와 무관합니다.`
+                          ? `${histNoun.span} 동안 실제로 번 금액입니다(일별 손익의 합).\n입출금 규모와 무관합니다.\n※ 셀에 마우스를 올리면 표의 평가금액 두 칸과의 차이를 분해해 보여줍니다.`
                           : '당일 총자산 − 전일 총자산 − 당일 순입출금\n입금액 크기와 무관하게 그날 실제로 번 금액입니다.'}>{histNoun.unit} 손익</th>
                         <th className="py-2.5 px-2 text-center border-r border-gray-700 whitespace-nowrap">원금대비</th>
                         <th className="py-2.5 px-2 text-center whitespace-nowrap">투자원금</th>
@@ -927,14 +930,21 @@ export default function IntegratedDashboard({
                             ) : formatShortDate(h.date)}
                           </td>
                           <td className="py-2 px-2 font-bold text-white text-center border-r border-gray-700">{hideAmounts ? '••••••' : formatCurrency(h.evalAmount)}</td>
-                          <td className="py-2 px-2 text-center border-r border-gray-700">
+                          {/* ⚠️ 기간 모드 셀 툴팁 = '왜 평가금액 두 칸으로 검산하면 안 맞는가'의 진단.
+                              산식은 바꾸지 않는다(사용자 확정 2026-08). 문구는 utils 공유 포매터로만
+                              만든다 — 화면마다 따로 들고 있으면 한 곳만 고쳐지고 나머지가 거짓말을 한다. */}
+                          <td className={`py-2 px-2 text-center border-r border-gray-700 ${isHistPeriodMode ? 'cursor-help' : ''}`}
+                              title={isHistPeriodMode ? periodRateGapLine({ prevEval: h.periodPrevEval, curEval: h.evalAmount, rate: h.dodAbsChange == null ? null : h.dodChange, unit: histNoun.unit }) : undefined}>
                             {/* 보류(dodAbsChange==null)는 '변동 없음(0.00%)'이 아니라 '산출 불가' —
                                 0.00%로 단언하면 실제로 변동이 없던 날과 구분되지 않는다 */}
                             {h.dodAbsChange == null
                               ? <span className="text-gray-600">-</span>
                               : <span className={`font-bold ${h.dodChange > 0 ? 'text-red-400' : h.dodChange < 0 ? 'text-blue-400' : 'text-gray-500'}`}>{formatPercent(h.dodChange)}</span>}
                           </td>
-                          <td className="py-2 px-2 text-center border-r border-gray-700 whitespace-nowrap">
+                          {/* ⚠️ hideAmounts면 툴팁을 아예 만들지 않는다 — 셀은 가려 놓고 hover에
+                              실금액을 노출하면 '금액 숨기기'가 반쪽이 된다. */}
+                          <td className={`py-2 px-2 text-center border-r border-gray-700 whitespace-nowrap ${isHistPeriodMode && !hideAmounts ? 'cursor-help' : ''}`}
+                              title={isHistPeriodMode && !hideAmounts ? periodGapLines({ prevEval: h.periodPrevEval, curEval: h.evalAmount, profit: h.dodAbsChange, ledger: h.ledgerFlow, fmt: formatCurrency, unit: histNoun.unit }).join('\n') : undefined}>
                             {hideAmounts ? (
                               <span className="text-gray-500">••••••</span>
                             ) : h.dodAbsChange != null ? (

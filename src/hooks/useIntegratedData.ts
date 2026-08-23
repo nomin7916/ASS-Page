@@ -339,6 +339,36 @@ export function useIntegratedData({
       }
     });
 
+    // ⚠️ 계좌 간 종목 이관은 **통합 뷰에서 외부 흐름이 아니다** — 자산이 통합 안에서 자리만 옮긴다.
+    //    그런데 이관은 '원계좌 출금 M + 대상계좌 입금 M' 원장 쌍으로 기록되므로 그대로 세면 순액은
+    //    0인데 **총유입(IN)·총유출(OUT)이 각각 M만큼 부푼다**. Modified Dietz는 분모가 (V_prev + IN),
+    //    분자가 (V + OUT)이라 그날 수익률이 (V+M)/(V_prev+M)−1 로 통째로 희석된다
+    //    (실측 2026-08 통합 월간 +2.12% → +1.90%). 순액이 0이라 dodAbsChange(=ΔV−순흐름)와
+    //    보류 판정(shouldHoldDailyMetrics는 fIn−fOut만 본다)은 **바뀌지 않는다** — 오직 %만 정확해진다.
+    //    → 양쪽 계좌가 **모두** 아래 ① 루프를 통과했고(=통합 집계 대상) **날짜가 같을 때만** 쌍을
+    //      통째로 제거한다. 한쪽이 TEST·삭제·기록 0건이면 통합 자산이 실제로 드나든 것이므로 종전대로
+    //      흐름에 남긴다(못 맞춘 쌍 = 옛 동작 그대로라는 fail-safe).
+    //    ⚠️ 날짜가 갈리면(계좌 타입이 달라 기록 확정일이 다른 21:00 이후 이관 등) 상쇄 금지 —
+    //      원계좌 출금일에 M이 통째로 가짜 손실로 찍힌다.
+    //    ⚠️ 계좌 편입/이탈(③)은 상쇄 대상이 **아니다**. 그건 통합 자산의 실제 증감이라, 빼면 편입일
+    //      평가액 전액이 가짜 수익·삭제일 평가액 전액이 가짜 손실이 된다.
+    //    ⚠️ 개별 계좌 뷰(externalFlowInRange)는 무변경 — 그 계좌 기준으로는 자산이 실제로 나갔다.
+    const xferPend = new Map();
+    const holdTransfer = (row, side, date, v) => {
+      const xf = row && row.transfer;
+      // role: 'out'=원계좌 출금 / 'in'=대상계좌 입금. 'gain'(금액 0 원가보정 행)은 흐름 기여가
+      // 애초에 0이라 보류 대상이 아니다(v > 0 가드가 걸러낸다).
+      if (!xf || !xf.id || xf.role !== side || !(v > 0)) return false;
+      const key = String(xf.id);
+      const rec = xferPend.get(key) || { in: null, out: null, bad: false };
+      // 같은 역할이 둘 이상 = 손상 데이터. 상쇄를 포기하고 이 행은 종전 경로로 계상한다
+      // (버리면 흐름이 유실돼 그만큼 가짜 손익이 된다).
+      if (rec[side]) { rec.bad = true; xferPend.set(key, rec); return false; }
+      rec[side] = { date, v };
+      xferPend.set(key, rec);
+      return true;
+    };
+
     // ① 시장 계좌 입출금 원장 (현금성 계좌는 원장 편집 UI가 존재하지 않아 ②에서 처리)
     portfolios
       .filter(p => !p.isTest && p.accountType !== 'matong' && p.accountType !== 'simple')
@@ -366,6 +396,8 @@ export function useIntegratedData({
           if (since && d.date <= since) return;
           if (cutoff && d.date >= cutoff) return;
           const v = (cleanNum(d.amount) || 0) * rateOf(d);
+          // 계좌 간 이관 입금 — 짝(원계좌 출금)이 통합 집계에 함께 있으면 상쇄한다 → 보류
+          if (holdTransfer(d, 'in', d.date, v)) return;
           if (v > 0) addIn(d.date, v); else if (v < 0) addOut(d.date, -v);
           addLedger(d.date, v);
         });
@@ -375,10 +407,20 @@ export function useIntegratedData({
           if (since && w.date <= since) return;
           if (cutoff && w.date >= cutoff) return;
           const v = (cleanNum(w.amount) || 0) * rateOf(w);
+          // 계좌 간 이관 출금 — 짝(대상계좌 입금)이 통합 집계에 함께 있으면 상쇄한다 → 보류
+          if (holdTransfer(w, 'out', w.date, v)) return;
           if (v > 0) addOut(w.date, v); else if (v < 0) addIn(w.date, -v);
           addLedger(w.date, -v);
         });
       });
+
+    // ①-c 이관 쌍 확정 — 양쪽이 다 모였고 날짜가 같으면 통째로 제거(통합 안에서 자리만 바뀜),
+    //     아니면 종전대로 각각 계상한다. ⚠️ 반드시 flowAtRow(이월) 구성보다 **앞**에서 끝낼 것.
+    xferPend.forEach(rec => {
+      if (!rec.bad && rec.in && rec.out && rec.in.date === rec.out.date) return;   // 상쇄
+      if (rec.in) { addIn(rec.in.date, rec.in.v); addLedger(rec.in.date, rec.in.v); }
+      if (rec.out) { addOut(rec.out.date, rec.out.v); addLedger(rec.out.date, -rec.out.v); }
+    });
 
     // ①-b 평가 시계열이 없는 시장 계좌(기록 0건인 신규 계좌)는 dateToTotal에는 없지만
     //     today 행이 intTotals.totalEval로 덮어써지므로(:247) 오늘 V에는 100% 포함된다.
