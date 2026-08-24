@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
@@ -54,13 +54,17 @@ const detailUrl = (market, code) => {
 
 // 최근 종가 미니 라인차트(인라인 SVG — 행마다 recharts 컨테이너를 쓰지 않아 가벼움).
 // 상승 red / 하락 blue (한국식). 데이터 2점 미만이면 빈칸.
-function Sparkline({ points, width = 56, height = 20 }) {
+// ⚠️ 선 색은 옆 칸 등락율과 **같은 값**(rate)으로 칠한다 — 점 비교로 되돌리면 등락률이 정확히 0이거나
+//    1일 탭(전일 종가 대비 실시간)에서 "선은 빨강인데 숫자는 파랑"이 다시 난다. rate 미제공 시에만 점 비교로 폴백.
+function Sparkline({ points, rate, width = 56, height = 20 }) {
   if (!Array.isArray(points) || points.length < 2) return <div style={{ width, height }} className="shrink-0" />;
   const min = Math.min(...points);
   const max = Math.max(...points);
   const range = max - min || 1;
   const up = points[points.length - 1] >= points[0];
-  const stroke = up ? '#f87171' : '#60a5fa';
+  const stroke = (rate != null && Number.isFinite(rate))
+    ? (rate > 0 ? '#f87171' : rate < 0 ? '#60a5fa' : '#9ca3af')
+    : (up ? '#f87171' : '#60a5fa');
   const stepX = width / (points.length - 1);
   const pad = 2;
   const h = height - pad * 2;
@@ -177,7 +181,12 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     loadedDailyRef.current.add(key);
     const pairs = await fetchWatchDaily(stock.market, stock.code);
     if (pairs && pairs.length >= 2) setDailyMap((p) => ({ ...p, [stock.code]: pairs }));
-    else loadedDailyRef.current.delete(key); // 데이터 없음 → 재시도 허용
+    else {
+      // 실패도 '조회 완료'로 남긴다 — 안 그러면 기간 등락율이 '…'(조회 중)에서 영영 못 벗어난다.
+      // 이미 받아 둔 데이터가 있으면 덮지 않는다(시장 수동 보정 재조회 실패 시 기존 이력 보존).
+      setDailyMap((p) => (stock.code in p ? p : { ...p, [stock.code]: null }));
+      loadedDailyRef.current.delete(key); // 데이터 없음 → 재시도 허용
+    }
   };
   // '1일' 인트라데이 종가 — 팝업 로컬 intradayMap에만 저장
   const loadIntraday = async (stock) => {
@@ -281,21 +290,67 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     recordRecent({ ...s, name: q?.name || s.name || '' });
   };
 
-  // 선택 기간에 따른 미니차트 종가 배열
-  const pointsFor = (s) => {
-    if (period === '1일') return intradayMap[s.code] || [];
-    const daily = dailyMap[s.code] || [];
-    const cut = cutoffFor(period);
-    return daily.filter(([dt]) => dt >= cut).map(([, c]) => c);
-  };
-
   // 등락율 정렬 토글: 원래순서 → 내림차순 → 오름차순 → 원래순서
   const cycleSort = () => setSortDir((d) => (d === null ? 'desc' : d === 'desc' ? 'asc' : null));
   const activeStocks = activeGroup?.stocks || [];
-  // 정렬 적용된 표시 목록 (시세 없는 종목은 원래순서로 뒤에)
+
+  // ⚠️ 미니차트 배열 · 등락율 · 정렬 · 툴팁의 **단일 소스**. 등락율을 여기서 따로 떼어 계산하지 말 것 —
+  //    과거엔 차트만 기간을 따르고 등락율은 시세 API의 '오늘 등락률'로 고정돼 있어, 기간을 바꿔도 숫자가
+  //    안 바뀌고 같은 행에서 "선은 빨강인데 숫자는 파랑"이 났다(사용자 보고 2026-08).
+  //    - 1주~1년: 차트가 그리는 **바로 그 배열**의 (마지막 종가 ÷ 첫 종가) − 1 → 부호가 구조적으로 일치.
+  //    - 1일: 등락율은 시세 API의 '전일 종가 대비 실시간'(표준 등락률)을 그대로 쓰고, 차트만
+  //      [전일 종가, ...장중, 현재가]로 만들어 선이 전일 종가 대비 위치를 보이게 한다. 전일 종가는
+  //      등락률과 같은 소스에서 역산(현재가 ÷ (1 + 등락률/100)) — 시장·타임존 무관하고 부호가 안 갈린다.
+  const viewByCode = useMemo(() => {
+    const out = {};
+    const cut = cutoffFor(period);
+    for (const s of activeStocks) {
+      const q = quotes[s.code];
+      if (period === '1일') {
+        const intra = intradayMap[s.code] || [];
+        const price = q ? Number(q.price) : 0;
+        const raw = q ? Number(q.changeRate) : NaN;
+        const rate = Number.isFinite(raw) ? raw : null;
+        let points = intra;
+        // 인트라데이가 있을 때만 보정 — 없으면 [전일종가, 현재가] 2점 직선이 '장중 흐름'인 척한다.
+        if (intra.length >= 2 && price > 0 && rate != null && rate > -100) {
+          const prevClose = price / (1 + rate / 100);
+          if (Number.isFinite(prevClose) && prevClose > 0) points = [prevClose, ...intra, price];
+        }
+        out[s.code] = { points, rate, live: true, loaded: true, from: null, to: null };
+        continue;
+      }
+      const daily = dailyMap[s.code] || [];
+      const win = cut ? daily.filter(([dt]) => dt >= cut) : daily;
+      const first = win[0];
+      const last = win[win.length - 1];
+      out[s.code] = {
+        points: win.map(([, c]) => c),
+        // 2점 미만이면 '데이터 부족' → null. 0.00%로 단언하지 않는다(변동 없음과 구분 불가해짐).
+        rate: (win.length >= 2 && first[1] > 0) ? (last[1] / first[1] - 1) * 100 : null,
+        from: first || null,
+        to: last || null,
+        live: false,
+        loaded: s.code in dailyMap,   // 조회 완료(실패 포함) 여부 — '조회 중'과 '데이터 부족'을 구분
+      };
+    }
+    return out;
+  }, [activeStocks, quotes, dailyMap, intradayMap, period]);
+
+  // 등락율 셀 툴팁 — 이 숫자가 '무엇 대비 몇 %'인지(기준일·기준가 → 종점)를 그대로 밝힌다.
+  const rateTitle = (s, v) => {
+    if (!v) return '종목 상세 보기';
+    if (v.live) return `1일 등락율 · 전일 종가 대비 실시간 — 클릭하면 종목 상세 보기`;
+    if (v.rate == null) return `${period} 등락율 · 종가 데이터 부족 — 클릭하면 종목 상세 보기`;
+    return `${period} 등락율 · ${v.from[0]} ${fmtPrice(s.market, v.from[1])} → ${v.to[0]} ${fmtPrice(s.market, v.to[1])} — 클릭하면 종목 상세 보기`;
+  };
+
+  // 정렬 적용된 표시 목록 (등락율 없는 종목은 원래순서로 뒤에)
+  // ⚠️ 정렬 키는 화면에 보이는 기간 등락율(viewByCode.rate) — quotes.changeRate로 되돌리면 기간을 바꿨을 때
+  //    보이는 숫자와 정렬 순서가 어긋난다.
   const sortedStocks = (() => {
     if (!sortDir || activeStocks.length < 2) return activeStocks;
-    const scored = activeStocks.map((s, i) => ({ s, i, r: quotes[s.code]?.changeRate }));
+    const scored = activeStocks.map((s, i) => ({ s, i, r: viewByCode[s.code]?.rate }));
     scored.sort((a, b) => {
       const ah = a.r == null, bh = b.r == null;
       if (ah && bh) return a.i - b.i;
@@ -497,13 +552,15 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
               </div>
             )}
 
-            {/* 미니차트 기간 토글 */}
+            {/* 기간 토글 — 미니차트와 등락율이 함께 이 기간을 따른다 */}
             <div className="flex items-center gap-1 mb-2">
               {PERIODS.map((pd) => (
                 <button
                   key={pd}
                   onClick={() => setPeriod(pd)}
-                  title={`미니차트 기간: ${pd}`}
+                  title={pd === '1일'
+                    ? '1일 — 미니차트는 장중 흐름(전일 종가 기준선 포함), 등락율은 전일 종가 대비 실시간'
+                    : `${pd} — 미니차트·등락율 모두 이 기간 기준`}
                   className={`flex-1 rounded px-1 py-1 text-[11px] font-medium border transition-colors ${
                     period === pd
                       ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
@@ -527,12 +584,15 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                     <span className="w-1.5 shrink-0" />
                     <span className="flex-1">종목</span>
                     <span className="w-14 shrink-0" />
+                    {/* ⚠️ 헤더·행 모두 w-16 shrink-0 — 헤더만 2줄이 되면 min-content가 달라져 좁은 화면에서
+                        축소 폭이 행과 갈리고 열이 어긋난다. 폭을 바꿀 땐 행의 등락율 셀도 같이 바꿀 것. */}
                     <button
                       onClick={cycleSort}
-                      title="수익율(등락율) 정렬 — 클릭하여 내림/오름/원래순서"
-                      className="w-16 text-right cursor-pointer transition-colors hover:text-gray-300"
+                      title={`${period} 등락율 정렬 — 클릭하여 내림/오름/원래순서`}
+                      className="w-16 shrink-0 text-right cursor-pointer transition-colors hover:text-gray-300 leading-tight"
                     >
-                      등락율
+                      <span className="block">등락율</span>
+                      <span className="block text-[9px] text-amber-400/70">{period}</span>
                     </button>
                     <span className="w-24 text-right">현재가</span>
                     <span className="w-3 shrink-0" />
@@ -540,6 +600,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                 )}
                 {sortedStocks.map((s, idx) => {
                   const q = quotes[s.code];
+                  const v = viewByCode[s.code] || {};   // 차트·등락율·툴팁 공용(단일 소스)
                   const st = status[s.code];
                   const isDragging = dragId === s.id;
                   const dropTop = canReorder && dragId != null && !isDragging && dragOverIndex === idx;
@@ -575,13 +636,15 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                             <span className="text-gray-600">· {MARKET_LABEL[s.market] || s.market}</span>
                           </div>
                         </div>
-                        <Sparkline points={pointsFor(s)} />
+                        <Sparkline points={v.points || []} rate={v.rate} />
                         <button
                           onClick={() => viewStock(s, q)}
-                          title="종목 상세 보기"
-                          className={`w-16 text-right text-xs font-medium cursor-pointer hover:underline ${q ? rateColor(q.changeRate) : 'text-gray-600'}`}
+                          title={rateTitle(s, v)}
+                          className={`w-16 shrink-0 text-right text-xs font-medium cursor-pointer hover:underline ${v.rate != null ? rateColor(v.rate) : 'text-gray-600'}`}
                         >
-                          {q ? formatChangeRate(q.changeRate) : st === 'loading' ? '…' : '-'}
+                          {v.rate != null
+                            ? formatChangeRate(v.rate)
+                            : (!v.loaded || st === 'loading') ? '…' : '-'}
                         </button>
                         <button
                           onClick={() => loadQuote(s)}
