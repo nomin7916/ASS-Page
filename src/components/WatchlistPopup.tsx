@@ -31,12 +31,18 @@ const dotCls = (st) =>
 
 const PERIODS = ['1일', '1주', '1개월', '3개월', '1년'];
 // 일별 기간의 시작 컷오프 날짜(YYYY-MM-DD). '1일'은 인트라데이라 미사용.
+// ⚠️ 반드시 KST 달력일에 앵커할 것. 과거엔 `new Date()`를 그대로 `toISOString()`(UTC)으로 잘라
+//    KST 00:00~09:00에는 컷오프가 하루 앞당겨졌다 — 구간 첫 종가가 하루 더 이른 거래일이 되어
+//    **같은 데이터인데 시각에 따라 등락율·정렬 순서·툴팁 기준일이 달라진다**(등락율이 이 창에서
+//    파생되기 시작한 2026-08부터는 차트 외관이 아니라 화면 숫자가 흔들린다).
+//    시프트도 UTC 메서드로 해야 뷰어 로컬 타임존이 결과를 흔들지 않는다.
 const cutoffFor = (period) => {
-  const d = new Date();
-  if (period === '1주') d.setDate(d.getDate() - 7);
-  else if (period === '1개월') d.setMonth(d.getMonth() - 1);
-  else if (period === '3개월') d.setMonth(d.getMonth() - 3);
-  else if (period === '1년') d.setFullYear(d.getFullYear() - 1);
+  const [y, m, dd] = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' }).split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1, dd));
+  if (period === '1주') d.setUTCDate(d.getUTCDate() - 7);
+  else if (period === '1개월') d.setUTCMonth(d.getUTCMonth() - 1);
+  else if (period === '3개월') d.setUTCMonth(d.getUTCMonth() - 3);
+  else if (period === '1년') d.setUTCFullYear(d.getUTCFullYear() - 1);
   else return '';
   return d.toISOString().split('T')[0];
 };
@@ -198,6 +204,22 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     else loadedIntradayRef.current.delete(key);
   };
 
+  // 한 행 통째 새로고침(현재가 셀 클릭) — 시세 + 일별 종가 + (1일 탭이면) 인트라데이.
+  // ⚠️ 캐시 ref를 먼저 비우고 재조회하는 것이 핵심. 등락율이 기간 시계열에서 파생되면서
+  //    "조회 한 번 실패하면 그 종목 등락율이 영영 '-'"(시장 보정 버튼은 시세 실패 때만 뜬다),
+  //    "앱을 하루 이상 열어두면 현재가는 오늘인데 기간 등락율은 며칠 전까지만",
+  //    "장 전에 받은 어제 분봉에 오늘 현재가가 붙는다" 세 경우의 유일한 탈출구가 됐다.
+  const refreshRow = (stock) => {
+    const key = stock.code + ':' + stock.market;
+    loadQuote(stock);
+    loadedDailyRef.current.delete(key);
+    loadDaily(stock);
+    if (period === '1일') {
+      loadedIntradayRef.current.delete(key);
+      loadIntraday(stock);
+    }
+  };
+
   // 팝업 열 때 + 그룹 전환 시 활성 그룹 종목만 조회(전체 그룹 동시 조회 금지)
   useEffect(() => {
     if (!open || !activeGroup) return;
@@ -331,7 +353,8 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
         from: first || null,
         to: last || null,
         live: false,
-        loaded: s.code in dailyMap,   // 조회 완료(실패 포함) 여부 — '조회 중'과 '데이터 부족'을 구분
+        loaded: s.code in dailyMap,          // 조회 완료(실패 포함) 여부 — '조회 중'과 '데이터 부족'을 구분
+        hasDaily: Array.isArray(dailyMap[s.code]), // 이력을 실제로 받았는가 — '조회 실패'와 '구간 종가 부족'을 구분
       };
     }
     return out;
@@ -341,7 +364,13 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const rateTitle = (s, v) => {
     if (!v) return '종목 상세 보기';
     if (v.live) return `1일 등락율 · 전일 종가 대비 실시간 — 클릭하면 종목 상세 보기`;
-    if (v.rate == null) return `${period} 등락율 · 종가 데이터 부족 — 클릭하면 종목 상세 보기`;
+    // ⚠️ null 사유 3종을 뭉뚱그리지 말 것 — '조회 중'과 '조회 실패'는 사용자가 할 일이 다르다.
+    if (v.rate == null) {
+      const why = !v.loaded ? '종가 이력 조회 중'
+        : !v.hasDaily ? '종가 이력을 받지 못함 — 현재가를 클릭하면 다시 조회합니다'
+        : '이 구간에 종가가 1개뿐';
+      return `${period} 등락율 · ${why} — 클릭하면 종목 상세 보기`;
+    }
     return `${period} 등락율 · ${v.from[0]} ${fmtPrice(s.market, v.from[1])} → ${v.to[0]} ${fmtPrice(s.market, v.to[1])} — 클릭하면 종목 상세 보기`;
   };
 
@@ -647,8 +676,8 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                             : (!v.loaded || st === 'loading') ? '…' : '-'}
                         </button>
                         <button
-                          onClick={() => loadQuote(s)}
-                          title="클릭하여 현재가 새로고침"
+                          onClick={() => refreshRow(s)}
+                          title="클릭하여 이 종목 새로고침 (현재가 + 기간 등락율·미니차트 종가)"
                           className="w-24 flex items-center justify-end gap-1 text-[13px] text-gray-200 tabular-nums cursor-pointer hover:text-teal-300 transition-colors"
                         >
                           {st === 'loading' && <RefreshCw size={10} className="text-teal-400 animate-spin shrink-0" />}
