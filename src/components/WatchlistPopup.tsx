@@ -25,6 +25,14 @@ const fmtPrice = (market, price) => {
   if (market === 'fund') return formatFundPrice(price);
   return formatNumber(price);
 };
+// '1일' 기준가(전일 종가)는 등락률에서 역산한 **실수**라 그대로 두면 국내 종목이 '11,249.061'처럼 찍힌다
+// (formatNumber = Intl 기본 소수 3자리). 시장의 표시 정밀도로 먼저 맞춘다 — 국내는 호가가 정수다.
+// ⚠️ fmtPrice(공용 포매터)를 고쳐서 해결하지 말 것: 현재가 등 다른 호출부의 표기까지 바뀐다.
+const roundToMarket = (market, v) => (market === 'kr' ? Math.round(v) : Math.round(v * 100) / 100);
+// 기준일 표기 — 앱의 다른 표(평가액 추이 등)와 같은 YY/MM/DD.
+// ⚠️ MM/DD로 줄이지 말 것: '1년' 탭의 기준일은 작년이라 연도가 없으면 올해로 오독된다.
+const fmtBaseDate = (d) => (typeof d === 'string' && d.length >= 10 ? d.slice(2).replace(/-/g, '/') : '');
+const REFRESH_HINT = '클릭하여 이 종목 새로고침 (현재가 + 기간 등락율·미니차트 종가)';
 const rateColor = (r) => (r > 0 ? 'text-red-400' : r < 0 ? 'text-blue-400' : 'text-gray-500');
 const dotCls = (st) =>
   st === 'loading' ? 'bg-amber-400 animate-pulse' : st === 'success' ? 'bg-emerald-500' : st === 'fail' ? 'bg-red-500' : 'bg-gray-600';
@@ -316,13 +324,15 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const cycleSort = () => setSortDir((d) => (d === null ? 'desc' : d === 'desc' ? 'asc' : null));
   const activeStocks = activeGroup?.stocks || [];
 
-  // ⚠️ 미니차트 배열 · 등락율 · 정렬 · 툴팁의 **단일 소스**. 등락율을 여기서 따로 떼어 계산하지 말 것 —
+  // ⚠️ 미니차트 배열 · 등락율 · **기준가(base)** · 정렬 · 툴팁의 **단일 소스**. 어느 하나도 떼어 따로 계산하지 말 것 —
   //    과거엔 차트만 기간을 따르고 등락율은 시세 API의 '오늘 등락률'로 고정돼 있어, 기간을 바꿔도 숫자가
   //    안 바뀌고 같은 행에서 "선은 빨강인데 숫자는 파랑"이 났다(사용자 보고 2026-08).
   //    - 1주~1년: 차트가 그리는 **바로 그 배열**의 (마지막 종가 ÷ 첫 종가) − 1 → 부호가 구조적으로 일치.
   //    - 1일: 등락율은 시세 API의 '전일 종가 대비 실시간'(표준 등락률)을 그대로 쓰고, 차트만
   //      [전일 종가, ...장중, 현재가]로 만들어 선이 전일 종가 대비 위치를 보이게 한다. 전일 종가는
   //      등락률과 같은 소스에서 역산(현재가 ÷ (1 + 등락률/100)) — 시장·타임존 무관하고 부호가 안 갈린다.
+  //    - base(기준가): 그 %의 **분모**를 현재가 아래 작은 줄로 노출해 사용자가 화면에서 바로 검산하게 한다.
+  //      rate와 같은 게이트·같은 값이라야 검산이 성립하므로 여기서 함께 만든다(화면 계산 금지).
   const viewByCode = useMemo(() => {
     const out = {};
     const cut = cutoffFor(period);
@@ -334,24 +344,41 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
         const raw = q ? Number(q.changeRate) : NaN;
         const rate = Number.isFinite(raw) ? raw : null;
         let points = intra;
+        // 전일 종가는 등락률과 **같은 소스에서 역산**한다(현재가 ÷ (1+등락률/100)) — 시장·타임존 무관.
+        // ⚠️ dailyMap의 마지막 종가로 대체하지 말 것: 장 마감 후엔 그 값이 '오늘 종가'라 화면의
+        //    등락율(전일 대비)과 짝이 맞지 않는다. 등락률이 소수 2자리로 반올림돼 오므로 근사값(approx).
+        const prevClose = (price > 0 && rate != null && rate > -100) ? price / (1 + rate / 100) : NaN;
+        const hasPrev = Number.isFinite(prevClose) && prevClose > 0;
         // 인트라데이가 있을 때만 보정 — 없으면 [전일종가, 현재가] 2점 직선이 '장중 흐름'인 척한다.
-        if (intra.length >= 2 && price > 0 && rate != null && rate > -100) {
-          const prevClose = price / (1 + rate / 100);
-          if (Number.isFinite(prevClose) && prevClose > 0) points = [prevClose, ...intra, price];
-        }
-        out[s.code] = { points, rate, live: true, loaded: true, from: null, to: null };
+        if (intra.length >= 2 && hasPrev) points = [prevClose, ...intra, price];
+        out[s.code] = {
+          points, rate, live: true, loaded: true, from: null, to: null,
+          // 기준가 = 옆 칸 등락율의 **분모 그 자체**. rate와 같은 계산에서 나온 값만 싣는다
+          // (화면에서 따로 구하면 등락율과 갈린다 — 단일 소스 규약).
+          // ⚠️ 1일만 **단방향**이다(base 있으면 rate도 있음, 역은 아님): 현재가 0 · 등락률 ≤ -100%인
+          //    손상 데이터는 전일 종가를 역산할 수 없어 base만 null이 된다. 그때 '전일 ≈ 0'을 찍는 것이
+          //    더 나쁜 거짓 단언이므로 null 계약이 우선한다 — 억지로 채워 넣지 말 것.
+          base: hasPrev ? { date: null, price: roundToMarket(s.market, prevClose), approx: true } : null,
+        };
         continue;
       }
       const daily = dailyMap[s.code] || [];
       const win = cut ? daily.filter(([dt]) => dt >= cut) : daily;
       const first = win[0];
       const last = win[win.length - 1];
+      // ⚠️ 등락율과 기준가는 **같은 게이트**를 쓴다 — 갈리면 화면에 분모 없는 %(또는 %없는 분모)가 떠서
+      //    사용자가 검산할 수 없다(이 두 번째 줄의 존재 이유가 검산이다).
+      const ok = win.length >= 2 && first[1] > 0;
       out[s.code] = {
         points: win.map(([, c]) => c),
         // 2점 미만이면 '데이터 부족' → null. 0.00%로 단언하지 않는다(변동 없음과 구분 불가해짐).
-        rate: (win.length >= 2 && first[1] > 0) ? (last[1] / first[1] - 1) * 100 : null,
+        rate: ok ? (last[1] / first[1] - 1) * 100 : null,
         from: first || null,
         to: last || null,
+        // 기준가 = 등락율의 분모(구간 첫 종가)와 **같은 값**. 화면의 %를 그대로 검산할 수 있다.
+        // ⚠️ '정확히 N일 전 날짜의 종가'로 되돌리지 말 것 — 휴장·상장일 때문에 분모와 달라져 검산이 안 맞는다.
+        //    실제 기준일을 그대로 노출하는 것이 그 어긋남을 사용자에게 알리는 방법이다.
+        base: ok ? { date: first[0], price: first[1], approx: false } : null,
         live: false,
         loaded: s.code in dailyMap,          // 조회 완료(실패 포함) 여부 — '조회 중'과 '데이터 부족'을 구분
         hasDaily: Array.isArray(dailyMap[s.code]), // 이력을 실제로 받았는가 — '조회 실패'와 '구간 종가 부족'을 구분
@@ -372,6 +399,18 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
       return `${period} 등락율 · ${why} — 클릭하면 종목 상세 보기`;
     }
     return `${period} 등락율 · ${v.from[0]} ${fmtPrice(s.market, v.from[1])} → ${v.to[0]} ${fmtPrice(s.market, v.to[1])} — 클릭하면 종목 상세 보기`;
+  };
+
+  // 현재가 셀 툴팁 — 아래 작은 줄(기준가)이 '무엇 대비'인지 밝히고 클릭 동작(새로고침)도 함께 안내한다.
+  // ⚠️ 1일 기준가는 단언이 아니라 근사 표기(≈) — 등락률이 소수 2자리로 반올림돼 오므로 역산값이 원 종가와
+  //    미세하게 다를 수 있다(LadderTradeModal '전일 종가 ≈' 선례와 같은 규약).
+  const priceTitle = (s, v, q) => {
+    const b = v?.base;
+    if (!b) return REFRESH_HINT;
+    const now = q ? fmtPrice(s.market, q.price) : '-';
+    return b.approx
+      ? `1일 등락율 기준가 · 전일 종가 ≈ ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(현재가와 등락률에서 역산한 추정값입니다)\n${REFRESH_HINT}`
+      : `${period} 등락율 기준가 · ${b.date} 종가 ${fmtPrice(s.market, b.price)} → 현재가 ${now}\n(휴장·상장일 때문에 정확히 ${period} 전이 아닐 수 있어 실제 기준일을 표시합니다)\n${REFRESH_HINT}`;
   };
 
   // 정렬 적용된 표시 목록 (등락율 없는 종목은 원래순서로 뒤에)
@@ -588,8 +627,8 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                   key={pd}
                   onClick={() => setPeriod(pd)}
                   title={pd === '1일'
-                    ? '1일 — 미니차트는 장중 흐름(전일 종가 기준선 포함), 등락율은 전일 종가 대비 실시간'
-                    : `${pd} — 미니차트·등락율 모두 이 기간 기준`}
+                    ? '1일 — 미니차트는 장중 흐름(전일 종가 기준선 포함), 등락율·기준가는 전일 종가 대비 실시간'
+                    : `${pd} — 미니차트·등락율·현재가 아래 기준가 모두 이 기간 기준`}
                   className={`flex-1 rounded px-1 py-1 text-[11px] font-medium border transition-colors ${
                     period === pd
                       ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
@@ -623,7 +662,10 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                       <span className="block">등락율</span>
                       <span className="block text-[9px] text-amber-400/70">{period}</span>
                     </button>
-                    <span className="w-24 text-right">현재가</span>
+                    {/* ⚠️ 헤더·행 모두 w-24 shrink-0 — 행이 2줄(현재가 + 기준가)이라 min-content가 헤더와
+                        달라졌다. shrink를 허용하면 좁은 화면에서 두 칸이 서로 다른 폭으로 줄어 열이 어긋난다
+                        (등락율 칸이 w-16 shrink-0인 것과 같은 이유). 폭을 바꿀 땐 행의 현재가 셀도 같이 바꿀 것. */}
+                    <span className="w-24 shrink-0 text-right">현재가</span>
                     <span className="w-3 shrink-0" />
                   </div>
                 )}
@@ -677,11 +719,21 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                         </button>
                         <button
                           onClick={() => refreshRow(s)}
-                          title="클릭하여 이 종목 새로고침 (현재가 + 기간 등락율·미니차트 종가)"
-                          className="w-24 flex items-center justify-end gap-1 text-[13px] text-gray-200 tabular-nums cursor-pointer hover:text-teal-300 transition-colors"
+                          title={priceTitle(s, v, q)}
+                          className="w-24 shrink-0 text-right leading-tight text-[13px] text-gray-200 tabular-nums cursor-pointer hover:text-teal-300 transition-colors"
                         >
-                          {st === 'loading' && <RefreshCw size={10} className="text-teal-400 animate-spin shrink-0" />}
-                          <span>{q ? fmtPrice(s.market, q.price) : '-'}</span>
+                          <span className="flex items-center justify-end gap-1">
+                            {st === 'loading' && <RefreshCw size={10} className="text-teal-400 animate-spin shrink-0" />}
+                            <span>{q ? fmtPrice(s.market, q.price) : '-'}</span>
+                          </span>
+                          {/* 기준가 = 옆 칸 등락율의 분모(1주~1년은 구간 첫 종가 · 1일은 전일 종가).
+                              ⚠️ 반드시 viewByCode.base만 읽을 것 — 여기서 따로 계산하면 등락율과 갈린다.
+                              ⚠️ base가 null이면 줄 자체를 만들지 않는다(0이나 현재가로 대신 채우면 거짓 기준가). */}
+                          {v.base && (
+                            <span className="block text-[9px] text-gray-500 whitespace-nowrap">
+                              {v.base.approx ? '전일 ≈' : `${fmtBaseDate(v.base.date)} ·`} {fmtPrice(s.market, v.base.price)}
+                            </span>
+                          )}
                         </button>
                         <button
                           onClick={() => removeStock(s.id)}
