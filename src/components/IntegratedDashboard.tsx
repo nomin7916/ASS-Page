@@ -1086,6 +1086,39 @@ export default function IntegratedDashboard({
                     </div>
                   )}
                 </div>
+                {/* 호버 정보 패널 */}
+                <div className="px-4 py-2 border-b border-gray-700/40 bg-[#0a1628]/60 min-h-[34px] flex items-center gap-3 overflow-x-auto shrink-0">
+                  {intHoveredPoint ? (
+                    <>
+                      <span className="text-gray-400 text-[11px] font-bold shrink-0 mr-1">{formatShortDate(intHoveredPoint.label)}</span>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
+                        {intHoveredPoint.payload
+                          .filter(entry => entry.dataKey && entry.value != null)
+                          .sort((a, b) => {
+                            const order = { evalAmount: 0, returnRate: 1, costAmount: 2 };
+                            const ak = order[a.dataKey] ?? (/^comp\d+Rate$/.test(a.dataKey) ? 10 + parseInt(a.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
+                            const bk = order[b.dataKey] ?? (/^comp\d+Rate$/.test(b.dataKey) ? 10 + parseInt(b.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
+                            return ak - bk;
+                          })
+                          .map((entry, i) => {
+                            const isRate = entry.dataKey === 'returnRate' || /^comp\d+Rate$/.test(entry.dataKey);
+                            const displayVal = isRate
+                              ? `${Number(entry.value) >= 0 ? '+' : ''}${Number(entry.value).toFixed(2)}%`
+                              : (hideAmounts ? '••••••' : formatCurrency(entry.value));
+                            return (
+                              <div key={i} className="flex items-center gap-1.5 shrink-0">
+                                <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
+                                <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
+                                <span className={`text-[11px] ${isRate ? (Number(entry.value) >= 0 ? 'text-red-400' : 'text-blue-400') : 'text-gray-300'}`}>{displayVal}</span>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
+                  )}
+                </div>
                 {/* 드래그 기간 선택 결과 패널 */}
                 {(() => {
                   const displayResult = intSelectionResult ?? intDefaultSelectionResult;
@@ -1126,39 +1159,6 @@ export default function IntegratedDashboard({
                     </div>
                   );
                 })()}
-                {/* 호버 정보 패널 */}
-                <div className="px-4 py-2 border-b border-gray-700/40 bg-[#0a1628]/60 min-h-[34px] flex items-center gap-3 overflow-x-auto shrink-0">
-                  {intHoveredPoint ? (
-                    <>
-                      <span className="text-gray-400 text-[11px] font-bold shrink-0 mr-1">{formatShortDate(intHoveredPoint.label)}</span>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
-                        {intHoveredPoint.payload
-                          .filter(entry => entry.dataKey && entry.value != null)
-                          .sort((a, b) => {
-                            const order = { evalAmount: 0, returnRate: 1, costAmount: 2 };
-                            const ak = order[a.dataKey] ?? (/^comp\d+Rate$/.test(a.dataKey) ? 10 + parseInt(a.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
-                            const bk = order[b.dataKey] ?? (/^comp\d+Rate$/.test(b.dataKey) ? 10 + parseInt(b.dataKey.match(/\d+/)?.[0] || '0', 10) : 99);
-                            return ak - bk;
-                          })
-                          .map((entry, i) => {
-                            const isRate = entry.dataKey === 'returnRate' || /^comp\d+Rate$/.test(entry.dataKey);
-                            const displayVal = isRate
-                              ? `${Number(entry.value) >= 0 ? '+' : ''}${Number(entry.value).toFixed(2)}%`
-                              : (hideAmounts ? '••••••' : formatCurrency(entry.value));
-                            return (
-                              <div key={i} className="flex items-center gap-1.5 shrink-0">
-                                <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: entry.color || '#e5e7eb' }} />
-                                <span className="text-[11px] font-bold" style={{ color: entry.color || '#e5e7eb' }}>{entry.name}</span>
-                                <span className={`text-[11px] ${isRate ? (Number(entry.value) >= 0 ? 'text-red-400' : 'text-blue-400') : 'text-gray-300'}`}>{displayVal}</span>
-                              </div>
-                            );
-                          })}
-                      </div>
-                    </>
-                  ) : (
-                    <span className="text-gray-600 text-[10px]">차트에 마우스를 올리면 상세 값이 표시됩니다</span>
-                  )}
-                </div>
                 {/* 차트 영역 */}
                 <div className="chart-container-for-drag px-2 pt-2 pb-1 relative select-none h-[260px] sm:h-[300px] md:h-[340px] xl:flex-1">
                   <ResponsiveContainer width="100%" height="100%" minHeight={200}>
