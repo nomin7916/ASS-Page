@@ -39,7 +39,8 @@ try {
 if (U) {
   const { normalizeHistPeriod, periodBucketKey, compressPeriodRows, periodRangeLabel,
           periodNoun, accumulateDailySeries, computeDailyMetricsSeries,
-          computeCumulativeTwrSeries, rebaseTwr, periodGapLines, periodRateGapLine } = U;
+          computeCumulativeTwrSeries, rebaseTwr, periodGapLines, periodRateGapLine,
+          periodBucketSpan, periodBasisLines } = U;
 
   // ── normalizeHistPeriod — 화이트리스트 ──
   eq('#1 day', normalizeHistPeriod('day'), 'day');
@@ -199,6 +200,68 @@ if (U) {
   ok('#22b rate 미제공(보류)이어도 단순 비교는 제시', periodRateGapLine({ prevEval: 1000, curEval: 1100, rate: null, unit: '월간' }).includes('+10.00%'));
   eq('#22c prevEval 0/음수면 빈 문자열',
     [periodRateGapLine({ prevEval: 0, curEval: 100, rate: 1, unit: '월간' }), periodRateGapLine({ prevEval: -5, curEval: 100, rate: 1, unit: '월간' })], ['', '']);
+
+  // ── periodBucketSpan / periodBasisLines — '측정 기준일' 노출 (사용자 문의 2026-08) ──────
+  // 사용자가 주간 행 '8/24~8/26'을 보고 "8/24 종가부터 재는 것 아니냐 → 8/23→8/24 하루가 빠진다"고
+  // 물었다. 실제 측정은 (직전 대표일, 이번 대표일] **반개구간**이라 그 하루는 이미 들어가 있다.
+  // 산식은 그대로 두고(#9~#16이 고정) 기준일을 툴팁에 노출하는 것이 이 블록의 대상이다.
+  eq('#23 주 버킷 거리 — 인접', periodBucketSpan('2026-08-23', '2026-08-26', 'week'), 1);
+  eq('#23b 주 버킷 거리 — 한 주 건너뜀', periodBucketSpan('2026-08-16', '2026-08-26', 'week'), 2);
+  eq('#23c 월 버킷 거리(연 경계 포함)',
+    [periodBucketSpan('2026-07-31', '2026-08-26', 'month'), periodBucketSpan('2026-12-31', '2027-01-05', 'month'), periodBucketSpan('2026-06-30', '2026-09-01', 'month')], [1, 1, 3]);
+  eq('#23d 연 버킷 거리', [periodBucketSpan('2025-12-31', '2026-01-02', 'year'), periodBucketSpan('2024-12-31', '2026-01-02', 'year')], [1, 2]);
+  eq('#23e 일간 모드·손상 입력은 null',
+    [periodBucketSpan('2026-08-23', '2026-08-26', 'day'), periodBucketSpan(null, '2026-08-26', 'week'), periodBucketSpan('2026-08-23', undefined, 'month')], [null, null, null]);
+
+  const bl = periodBasisLines({ prevDate: '2026-08-23', curDate: '2026-08-26', mode: 'week' });
+  eq('#24 인접 기간은 2줄', bl.length, 2);
+  ok('#24b 첫 줄이 두 대표일 종가를 못 박는다', bl[0].includes('08/23') && bl[0].includes('08/26') && bl[0].includes('종가'));
+  ok('#24c 시작값이 라벨의 첫 날이 아님을 명시', bl[1].includes('바로 아래 행') && bl[1].includes('라벨'));
+  // ⚠️ 가장 오래된 기간은 비교 대상이 없다 — 없는 기준을 지어내지 않는다(null 계약).
+  eq('#24d 직전 대표일 없으면 빈 배열',
+    [periodBasisLines({ prevDate: null, curDate: '2026-08-26', mode: 'week' }).length, periodBasisLines({}).length], [0, 0]);
+  // ⚠️ 기록 0건 기간은 compressPeriodRows가 행을 만들지 않아 라벨이 측정 범위를 축소해 보여 준다.
+  const blSkip = periodBasisLines({ prevDate: '2026-08-16', curDate: '2026-08-26', mode: 'week' });
+  eq('#24e 건너뛴 기간은 경고 줄 추가', blSkip.length, 3);
+  ok('#24f 몇 개 기간을 한 번에 재는지 밝힌다', blSkip[2].includes('2개'));
+  // ⚠️ periodNoun(mode).unit.replace('간','')은 연간에서 '그 연'이라는 비문이 된다 — 쓰지 않았음을 고정.
+  ok('#24g 연간 경고 문구가 비문이 아니다',
+    !periodBasisLines({ prevDate: '2024-12-31', curDate: '2026-06-30', mode: 'year' }).join('').includes('그 연'));
+
+  // ⚠️ 날짜·basis는 **선택 인자**다 — 미전달이면 종전과 한 글자도 다르지 않아야 한다(하위호환).
+  eq('#25 날짜 미전달은 종전 문장 그대로',
+    periodGapLines({ prevEval: 1000, curEval: 1100, profit: 100, ledger: 0, fmt: F, unit: '월간' })[0],
+    `평가금액 ${F(1000)} → ${F(1100)}  (차이 ${F(100)})`);
+  const glDate = periodGapLines({ prevEval: 66477186, curEval: 66317216, profit: -159970, ledger: 0, fmt: F, unit: '주간', prevDate: '2026-08-23', curDate: '2026-08-26' });
+  ok('#25b 날짜 전달 시 어느 날 종가 → 어느 날 종가인지 보인다',
+    glDate[0].includes('08/23 ₩66,477,186') && glDate[0].includes('08/26 ₩66,317,216'));
+  ok('#25c 금액은 그대로(표시만 추가)', glDate[0].includes('-159,970') && glDate.length === 2);
+
+  const basis2 = ['측정 기준: A', '시작값 = B'];
+  eq('#26 해명이 없는 기간엔 기준만 남는다',
+    periodRateGapLine({ prevEval: 1000, curEval: 1100, rate: 10, unit: '월간', basis: basis2 }), '측정 기준: A\n시작값 = B');
+  const rlB = periodRateGapLine({ prevEval: 774826963, curEval: 791529823, rate: 1.90, unit: '월간', basis: basis2 });
+  ok('#26b 해명이 있으면 기준 다음에 붙는다', rlB.startsWith('측정 기준: A\n시작값 = B\n') && rlB.includes('+2.16%'));
+  eq('#26c 평가액이 없어도 기준은 남는다',
+    periodRateGapLine({ prevEval: 0, curEval: 100, rate: 1, unit: '월간', basis: basis2 }), '측정 기준: A\n시작값 = B');
+  eq('#26d basis 문자열 하나도 받는다',
+    periodRateGapLine({ prevEval: 1000, curEval: 1100, rate: 10, unit: '월간', basis: '기준 X' }), '기준 X');
+
+  // ── 사용자 실측 재현(2026-08) — '갭'이 실제로는 없음을 픽스처로 고정한다 ────────────────
+  // 일별 화면값: 8/23 ₩66,477,186 → 8/24 −₩945,745 → 8/25 +₩611,500 → 8/26 +₩174,275.
+  const wkRows = ['2026-08-21', '2026-08-22', '2026-08-23', '2026-08-24', '2026-08-25', '2026-08-26']
+    .map((date, i) => ({ date, evalAmount: [66477186, 66477186, 66477186, 65531441, 66142941, 66317216][i], flowIn: 0, flowOut: 0, ledger: 0 }));
+  const wkA = accumulateDailySeries(wkRows.map(r => r.date), computeDailyMetricsSeries(wkRows));
+  near('#27 주간 손익 = cum(8/26) − cum(8/23) — 화면 −159,970과 일치',
+    wkA.profit.get('2026-08-26') - wkA.profit.get('2026-08-23'), -159970, 1);
+  // ⚠️ 라벨의 첫 날(8/24) 종가를 시작값으로 삼으면 +785,775가 되어 8/24 하루(−945,745)가 통째로 증발한다.
+  //    그 차이가 정확히 그 하루라는 것이 '반개구간이 옳다'의 증거다.
+  near('#27b 라벨 첫날 기준이면 8/24 하루가 사라진다(그래서 쓰지 않는다)',
+    (66317216 - 65531441) - (wkA.profit.get('2026-08-26') - wkA.profit.get('2026-08-23')), 945745, 1);
+  // 연쇄성 — 인접 기간 손익의 합 = 양 끝 누적의 차. 어느 하루도 두 번 세이거나 사라지지 않는다.
+  near('#27c 연쇄성 — 기간 손익의 합 = 전체 누적 차',
+    (wkA.profit.get('2026-08-23') - wkA.profit.get('2026-08-21')) + (wkA.profit.get('2026-08-26') - wkA.profit.get('2026-08-23')),
+    wkA.profit.get('2026-08-26') - wkA.profit.get('2026-08-21'), 1e-6);
 }
 
 console.log('\n── 파트② 소스 텍스트 가드 ──');
@@ -421,6 +484,33 @@ ok('#G27b 통합 기간 값은 여전히 누적 차분이다',
   /dodAbsChange: noBase \? null : cp - cpP,/.test(dashNoC) &&
   /dodChange: noBase \? 0 : \(rebaseTwr\(t, tP\) \?\? 0\),/.test(dashNoC));
 ok('#G27c 개별 기간 값도 여전히 누적 차분이다', /dodAbsChange: noBase \? null : cp - cpP,/.test(histNoC));
+
+// ── 기간 행의 '측정 기준일' 노출 (사용자 문의 2026-08) ─────────────────────────────────
+// ⚠️ 라벨(periodRangeLabel)은 **버킷 범위**이고 실제 측정은 (직전 대표일, 이번 대표일] 반개구간이다.
+//    기준일이 화면 어디에도 없으면 사용자가 라벨의 첫 날을 시작값으로 오독한다(실제 문의).
+//    문구는 utils 공유 포매터로만 만든다 — 화면마다 따로 들고 있으면 한 곳만 고쳐진다.
+ok('#G28 utils가 기준 포매터를 내보낸다',
+  /export const periodBucketSpan = /.test(utils) && /export const periodBasisLines = /.test(utils));
+ok('#G28b 통합 histRows가 직전 대표일 **날짜**를 싣는다', /periodPrevDate: prev \? prev\.date : null,/.test(dashNoC));
+// ⚠️ **사용부**를 단언한다 — 선언만 보면 셀에서 호출을 통째로 지워도 통과한다.
+ok('#G28c 통합 일자 셀 툴팁이 기준을 노출한다',
+  /periodBasisLines\(\{ prevDate: h\.periodPrevDate, curDate: h\.date, mode: intHistPeriod \}\)\]\.join/.test(dashNoC));
+ok('#G28d 통합 % 셀 툴팁이 기준을 노출한다',
+  /basis: periodBasisLines\(\{ prevDate: h\.periodPrevDate, curDate: h\.date, mode: intHistPeriod \}\)/.test(dashNoC));
+ok('#G28e 통합 손익 툴팁 분해에 날짜가 들어간다',
+  /prevDate: h\.periodPrevDate, curDate: h\.date \}\)\.join/.test(dashNoC));
+ok('#G28f 개별 표도 같은 두 경로로 기준을 노출한다',
+  /const pd = viewRows\[i \+ 1\] \? viewRows\[i \+ 1\]\.date : null;/.test(histNoC) &&
+  /unit: noun\.unit, prevDate: pd, curDate: h\.date \}\)/.test(histNoC) &&
+  /periodBasisLines\(\{ prevDate: viewRows\[i \+ 1\] \? viewRows\[i \+ 1\]\.date : null, curDate: h\.date, mode: histPeriod \}\)/.test(histNoC));
+// ⚠️ th 툴팁·도움말은 hover하지 않는 사용자를 위한 '항상 참인' 설명이다 — 지우면 오독이 되돌아온다.
+//    (행별 날짜가 없어도 참이다: 시작값은 언제나 화면에서 바로 아래 행의 평가액이다.)
+ok('#G28g 통합 th 두 개가 시작값의 위치를 명시한다',
+  /시작값은 라벨에 적힌 첫 날이 아니라 직전 기간의 대표일 종가입니다/.test(dashNoC) &&
+  /직전 기간의 대표일 종가부터 이번 대표일 종가까지 잽니다/.test(dashNoC));
+ok('#G28h 개별 th·도움말이 같은 사실을 말한다',
+  /시작값 = 직전 기간의 대표일 종가/.test(histNoC) &&
+  /시작값은 라벨에 적힌 첫 날이 아니라 직전 기간의 대표일 종가입니다\./.test(histNoC));
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패\n`);
 process.exit(fail ? 1 : 0);

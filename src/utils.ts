@@ -616,6 +616,53 @@ export const periodNoun = (mode) => {
   return { unit: '일간', prev: '전일', span: '그날', end: '당일' };
 };
 
+// 기간 버킷 거리 — 직전 대표일과 이번 대표일이 몇 개 버킷만큼 떨어져 있는가(1 = 인접).
+// 2 이상이면 그 사이에 **기록이 0건인 기간**이 있어 compressPeriodRows가 행을 만들지 않은 것이다.
+// 그 구간의 손익은 반개구간 규약상 이번 행에 정확히 합산돼 들어가지만, 라벨은 자기 버킷만 보여 주므로
+// 사용자가 측정 범위를 오독한다(예: 8월 기록이 통째로 없으면 '2026-09' 행이 7/31 기준으로 두 달을 잰다).
+// → periodBasisLines가 그 사실을 툴팁으로 알린다. 반환: 정수(>=1) 또는 null(산출 불가·일간 모드).
+export const periodBucketSpan = (prevDate, curDate, mode) => {
+  const a = periodBucketKey(prevDate, mode), b = periodBucketKey(curDate, mode);
+  if (!a || !b || a.length < 4 || b.length < 4) return null;
+  if (mode === 'year') {
+    const d = Number(b) - Number(a);
+    return Number.isFinite(d) ? d : null;
+  }
+  if (mode === 'month') {
+    const ya = Number(a.slice(0, 4)), ma = Number(a.slice(5, 7));
+    const yb = Number(b.slice(0, 4)), mb = Number(b.slice(5, 7));
+    if (![ya, ma, yb, mb].every(Number.isFinite)) return null;
+    return (yb * 12 + mb) - (ya * 12 + ma);
+  }
+  if (mode !== 'week') return null;
+  // week 버킷 키는 그 주 **월요일** 날짜다(periodBucketKey). 정오 파싱이라 DST가 있어도 반올림으로 흡수된다.
+  const da = new Date(a + 'T12:00:00'), db = new Date(b + 'T12:00:00');
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return null;
+  return Math.round((db.getTime() - da.getTime()) / 604800000);
+};
+
+// 기간 행의 '무엇을 기준으로 쟀는가' — 일자 셀·수익률 셀 툴팁이 **공유**한다(손복제 금지).
+// 이 표의 기간 값은 (직전 대표일, 이번 대표일] **반개구간**이라, 시작값은 라벨에 적힌 첫 날이 아니라
+// **직전 행의 대표일 종가**다(= 화면에서 바로 아래 행의 평가액). 라벨 '8/24~8/26'만 보고 "8/24 종가부터
+// 잰다"고 읽으면 8/23→8/24 하루가 빠진 것처럼 보이는데, 실제로는 이미 들어가 있다(사용자 문의 2026-08).
+// 이 반개구간 규약 덕에 **모든 기간 손익의 합 = 전체 누적 손익**(연쇄성)이 성립한다 — 라벨대로
+// 각 기간의 첫 기록일부터 재면 경계마다 하루치가 통째로 사라진다.
+// ⚠️ 직전 대표일이 없으면(가장 오래된 기간) 빈 배열 — 없는 기준을 지어내지 않는다(null 계약).
+// ⚠️ 컬럼명이 표마다 다르므로('평가금액' vs '평가자산') 공통 어근 '평가액'으로 쓴다.
+export const periodBasisLines = ({ prevDate, curDate, mode }) => {
+  if (!prevDate || !curDate) return [];
+  const lines = [
+    `측정 기준: ${formatShortDate(prevDate)} 종가 → ${formatShortDate(curDate)} 종가`,
+    '시작값 = 바로 아래 행의 평가액입니다(라벨의 첫 날이 아닙니다).',
+  ];
+  const span = periodBucketSpan(prevDate, curDate, mode);
+  if (span != null && span > 1) {
+    // ⚠️ periodNoun(mode).unit.replace('간','')은 연간에서 '그 연'이라는 비문이 된다 — 쓰지 말 것.
+    lines.push(`⚠ 그 사이에 기록이 없는 기간이 있어 ${span}개 기간을 한 번에 잽니다.`);
+  }
+  return lines;
+};
+
 // 기간 행의 '평가금액 차이 = 손익 + 그 외' 분해 문구 — 통합 추이표와 개별 계좌 추이표가 **공유**한다
 // (손복제 금지). 표의 평가금액 두 칸으로 직접 검산하는 사용자에게 왜 값이 안 맞는지를 그 자리에서
 // 알려 주는 진단 문구다. 산식 자체는 바꾸지 않는다(사용자 확정 2026-08).
@@ -623,14 +670,18 @@ export const periodNoun = (mode) => {
 //    않는다'(사용자 요청). 상시 배지·셀 텍스트로 승격하지 말 것.
 // ⚠️ 잔차(ΔV − 손익)를 원장 순흐름이라 **단언하지 않는다** — 보류 행의 흐름 이월·계좌 편입/이탈
 //    경계가 섞일 수 있다. ledger와 값이 일치할 때만 '순입출금'이라 부르고, 아니면 중립 표현을 쓴다.
-export const periodGapLines = ({ prevEval, curEval, profit, ledger, fmt, unit }) => {
+export const periodGapLines = ({ prevEval, curEval, profit, ledger, fmt, unit, prevDate, curDate }) => {
   const f = typeof fmt === 'function' ? fmt : (v) => String(v);
   const u = unit || '기간';
   const num = (v) => typeof v === 'number' && Number.isFinite(v);
   if (!num(prevEval) || !num(curEval) || !num(profit)) return [];
   const dv = curEval - prevEval;
   const gap = dv - profit;
-  const lines = [`평가금액 ${f(prevEval)} → ${f(curEval)}  (차이 ${f(dv)})`];
+  // ⚠️ 날짜는 **선택 인자**다 — 미전달이면 문장이 종전과 한 글자도 다르지 않다(하위호환).
+  //    전달되면 '어느 날 종가에서 어느 날 종가로'를 못 박아, 라벨(버킷 범위)의 첫 날을 시작값으로
+  //    오독하는 것을 그 자리에서 막는다. 실제 측정은 (직전 대표일, 이번 대표일] 반개구간이다.
+  const dl = (d) => (d ? `${formatVeryShortDate(d)} ` : '');
+  const lines = [`평가금액 ${dl(prevDate)}${f(prevEval)} → ${dl(curDate)}${f(curEval)}  (차이 ${f(dv)})`];
   if (Math.abs(gap) < 1) {
     lines.push(`이 기간엔 입출금이 없어 그 차이가 곧 ${u} 손익입니다.`);
     return lines;
@@ -644,13 +695,17 @@ export const periodGapLines = ({ prevEval, curEval, profit, ledger, fmt, unit })
 // 기간 %가 '평가금액 단순 비교'와 다른 이유를 한 줄로 설명한다(위와 같은 공유 규약).
 // ⚠️ 두 값이 사실상 같으면(입출금이 없던 기간) 줄을 만들지 않는다 — 맞는 값에 굳이 해명을 붙이면
 //    '뭔가 어긋났다'는 잘못된 인상을 준다.
-export const periodRateGapLine = ({ prevEval, curEval, rate, unit }) => {
+export const periodRateGapLine = ({ prevEval, curEval, rate, unit, basis }) => {
   const u = unit || '기간';
   const num = (v) => typeof v === 'number' && Number.isFinite(v);
-  if (!num(prevEval) || !num(curEval) || !(prevEval > 0)) return '';
+  // ⚠️ basis(측정 기준 문구)는 **선택 인자**다 — 미전달이면 반환값이 종전과 완전히 동일하다
+  //    ('해명이 필요 없으면 빈 문자열' 계약 포함). 전달되면 해명이 없는 기간에도 '무엇을 기준으로
+  //    쟀는가'는 남아, cursor-help인데 툴팁이 비어 있던 상태가 사라진다.
+  const head = (Array.isArray(basis) ? basis : basis ? [basis] : []).filter(Boolean);
+  if (!num(prevEval) || !num(curEval) || !(prevEval > 0)) return head.join('\n');
   const raw = (curEval / prevEval - 1) * 100;
-  if (num(rate) && Math.abs(raw - rate) < 0.005) return '';
-  return `평가금액만 단순 비교하면 ${raw >= 0 ? '+' : ''}${raw.toFixed(2)}%입니다. 입출금이 있던 날은 그 금액이 그날의 시작 자산(분모)에 더해지므로 ${u} 수익률과 다릅니다.`;
+  if (num(rate) && Math.abs(raw - rate) < 0.005) return head.join('\n');
+  return [...head, `평가금액만 단순 비교하면 ${raw >= 0 ? '+' : ''}${raw.toFixed(2)}%입니다. 입출금이 있던 날은 그 금액이 그날의 시작 자산(분모)에 더해지므로 ${u} 수익률과 다릅니다.`].join('\n');
 };
 
 // 일별 지표 Map을 누적 시계열로 바꾼다 — 기간 표(주/월/년)의 **유일한 산식 소스**.

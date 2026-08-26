@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
 import HistPeriodSeg from './HistPeriodSeg';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
@@ -316,6 +316,7 @@ export default function HistoryPanel({
 시작부터 지금까지 통틀어 벌었는지를 보는 값입니다(투자 요약 패널·수익률 차트와 동일 기준).${isPeriodMode ? `\n\n※ 이 열은 ${noun.span} 마지막 기록 시점의 값입니다(기간 합계가 아닙니다).` : ''}`}>평가자산</th>
                     <th className="py-1.5 px-1 text-center font-normal cursor-help" title={isPeriodMode
                       ? `${noun.span} 시장에서 얼마를 벌었는가 (${noun.prev} ${noun.end} → 이번 ${noun.end})
+시작값 = 직전 기간의 대표일 종가 (= 바로 아래 행의 평가자산). 라벨의 첫 날이 아닙니다.
 윗줄 %  = ${noun.span}의 일별 수익률을 곱해 낸 값(누적 TWR 차분)${isOverseasAcct ? '' : ' — 수익률 차트의 구간 수익률과 같은 기준입니다.'}
 아랫줄 ₩ = ${noun.span}의 일별 손익 합계
 입출금은 일별 단계에서 이미 제거되므로, 입금해도 수익으로 잡히지 않습니다.${isOverseasAcct ? '\n※ 해외계좌는 이 표가 원화 기준이라 수익률 차트(USD 기준)와 값이 다를 수 있습니다.' : ''}`
@@ -357,7 +358,10 @@ export default function HistoryPanel({
                     //    통합 추이표와 문장이 갈리지 않는다(손복제 금지).
                     const gapTail = isPeriodMode ? (() => {
                       const pe = shownEvalOf(viewRows[i + 1]), ce = shownEvalOf(h);
-                      const out = periodGapLines({ prevEval: pe, curEval: ce, profit: dodProfit, ledger: flowNet, fmt: formatCurrency, unit: noun.unit });
+                      // 직전 대표일 날짜 — 분해 첫 줄이 '어느 날 종가 → 어느 날 종가'를 못 박는다.
+                      // ⚠️ viewRows는 **내림차순**이라 직전 기간은 i+1(화면에서 바로 아래 행)이다.
+                      const pd = viewRows[i + 1] ? viewRows[i + 1].date : null;
+                      const out = periodGapLines({ prevEval: pe, curEval: ce, profit: dodProfit, ledger: flowNet, fmt: formatCurrency, unit: noun.unit, prevDate: pd, curDate: h.date });
                       const rl = periodRateGapLine({ prevEval: pe, curEval: ce, rate: dodProfit == null ? null : dod, unit: noun.unit });
                       if (rl) out.push(rl);
                       return out.length ? ['', ...out] : [];
@@ -402,7 +406,8 @@ export default function HistoryPanel({
                           <button
                             className="hover:text-sky-300 hover:underline transition-colors cursor-pointer"
                             title={isPeriodMode
-                              ? `클릭: 대표일 ${formatShortDate(h.date)}의 보유종목·종가 검증/편집\n(이 기간 전체가 아니라 그 하루만 편집됩니다. 다른 날짜를 고치려면 '일'로 되돌리세요.)`
+                              ? [`클릭: 대표일 ${formatShortDate(h.date)}의 보유종목·종가 검증/편집\n(이 기간 전체가 아니라 그 하루만 편집됩니다. 다른 날짜를 고치려면 '일'로 되돌리세요.)`,
+                                 ...periodBasisLines({ prevDate: viewRows[i + 1] ? viewRows[i + 1].date : null, curDate: h.date, mode: histPeriod })].join('\n')
                               : '클릭: 보유종목·종가 검증/편집'}
                             onClick={() => setVerifyRecord(h)}
                           >
@@ -526,6 +531,8 @@ export default function HistoryPanel({
                     isPeriodMode
                       ? { icon: '％', color: 'text-blue-300', title: `${noun.unit} 수익률 · 수익금 (${noun.span} 전체)`, lines: [
                           `${noun.prev} ${noun.end}부터 이번 ${noun.end}까지 시장에서 얼마 벌었나입니다.`,
+                          '시작값은 라벨에 적힌 첫 날이 아니라 직전 기간의 대표일 종가입니다.',
+                          '= 바로 아래 행의 평가자산. 입출금이 없던 기간은 두 칸을 빼면 그대로 나옵니다.',
                           `아랫줄 금액 — ${noun.span}에 속한 날들의 일간 손익 합계.`,
                           `윗줄 % — ${noun.span}의 일별 수익률을 곱해 낸 값(누적 TWR 차분).`,
                           '입출금은 일별 단계에서 이미 제거되므로 기간 값에도 섞이지 않습니다.',
