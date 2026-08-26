@@ -45,6 +45,20 @@ export const Z = {
   overlay:      1100,
 } as const;
 
+// 차트 드래그 구간 선택 — 비선택 구간 딤(scrim) + 선택 창 스타일
+// ⚠️ 개별 계좌 차트(PortfolioChart)와 통합 대시보드 차트(IntegratedDashboard)가 **이 상수를 공유**한다.
+// 값을 각 컴포넌트에 손복제하면 같은 제스처가 두 화면에서 다르게 보인다.
+// dimOpacity: 너무 낮으면 종전처럼 선택이 안 보이고, 1에 가까우면 바깥 맥락이 사라진다.
+// windowOpacity: 선택 구간은 '원본 그대로 선명하게'가 목적이라 아주 옅은 lift만 준다(라인 색 씻김 방지).
+export const CHART_SELECTION = {
+  dimFill: BG.primary,
+  dimOpacity: 0.66,
+  windowFill: '#ffffff',
+  windowOpacity: 0.04,
+  windowStroke: 'rgba(255,255,255,0.5)',
+  windowStrokeWidth: 1,
+} as const;
+
 // 공통 border 클래스
 export const BORDER = {
   default: 'border-gray-700',

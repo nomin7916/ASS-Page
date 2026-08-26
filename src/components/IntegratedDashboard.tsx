@@ -10,7 +10,8 @@ import {
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
-import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, selectionDimBands, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
+import { CHART_SELECTION } from '../design';
 
 const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
 const nextRowColor = (cur: string): string => {
@@ -315,6 +316,12 @@ export default function IntegratedDashboard({
   const recessionBands = useMemo(
     () => recessionBandsForDates(intChartData.map(d => d.date)),
     [intChartData]
+  );
+  // 드래그 구간 선택 — 선택 '밖'을 덮을 딤 밴드(선택 창은 원본 그대로 두어 대비를 만든다).
+  // 드래그 중 매 mousemove마다 intRefAreaRight가 바뀌므로 memo로 findIndex 반복을 줄인다.
+  const selectionDim = useMemo(
+    () => selectionDimBands(intChartData, intRefAreaLeft, intRefAreaRight),
+    [intChartData, intRefAreaLeft, intRefAreaRight]
   );
 
   const focusNextMatongInput = useCallback((el, dir) => {
@@ -1263,7 +1270,13 @@ export default function IntegratedDashboard({
                       {intHoveredPoint && !intRefAreaLeft && (
                         <ReferenceLine yAxisId="left" x={intHoveredPoint.label} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />
                       )}
-                      {intRefAreaLeft && intRefAreaRight && <ReferenceArea yAxisId="left" x1={intRefAreaLeft} x2={intRefAreaRight} fill="rgba(255,255,255,0.08)" strokeOpacity={0.3} />}
+                      {/* 드래그 구간 선택 — 선택 '밖'을 어둡게 덮고 선택 창만 원본 밝기로 남긴다.
+                          ⚠️ 데이터 선·마커보다 **뒤에 선언**해야 위에 덮인다(recharts는 선언 순서 = paint 순서.
+                             ReferenceArea의 isFront prop은 2.x에서 무시되므로 순서가 유일한 수단이다).
+                          ⚠️ Fragment로 묶지 말고 형제로 둘 것 — 배열/형제는 renderByOrder가 확실히 훑는다. */}
+                      {selectionDim?.before && <ReferenceArea yAxisId="left" x1={selectionDim.before.from} x2={selectionDim.before.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
+                      {selectionDim?.after && <ReferenceArea yAxisId="left" x1={selectionDim.after.from} x2={selectionDim.after.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
+                      {selectionDim && <ReferenceArea yAxisId="left" x1={selectionDim.start} x2={selectionDim.end} fill={CHART_SELECTION.windowFill} fillOpacity={CHART_SELECTION.windowOpacity} stroke={CHART_SELECTION.windowStroke} strokeWidth={CHART_SELECTION.windowStrokeWidth} ifOverflow="hidden" />}
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>

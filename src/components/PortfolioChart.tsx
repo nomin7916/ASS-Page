@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Settings, Search, BarChart2, Percent, History, PanelLeftClose, PanelLeft, RefreshCw, X, TrendingUp, HelpCircle } from 'lucide-react';
 import { ComposedChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Area, Line, ReferenceArea, ReferenceLine, Tooltip as RechartsTooltip, Label } from 'recharts';
-import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates, externalFlowInRange } from '../utils';
+import { formatShortDate, formatCurrency, formatNumber, buildIndexStatus, recessionBandsForDates, externalFlowInRange, selectionDimBands } from '../utils';
+import { CHART_SELECTION } from '../design';
 import CustomDatePicker from './CustomDatePicker';
 import ChartRangeControls from './ChartRangeControls';
 import CompStockChips from './CompStockChips';
@@ -89,6 +90,12 @@ export default function PortfolioChart({
   const recessionBands = useMemo(
     () => recessionBandsForDates(finalChartData.map(d => d.date)),
     [finalChartData]
+  );
+  // 드래그 구간 선택 — 선택 '밖'을 덮을 딤 밴드(선택 창은 원본 그대로 두어 대비를 만든다).
+  // 드래그 중 매 mousemove마다 refAreaRight가 바뀌므로 memo로 findIndex 반복을 줄인다.
+  const selectionDim = useMemo(
+    () => selectionDimBands(finalChartData, refAreaLeft, refAreaRight),
+    [finalChartData, refAreaLeft, refAreaRight]
   );
   const isOverseas = activePortfolioAccountType === 'overseas';
   const fmtMoney = (v) => isOverseas
@@ -898,7 +905,13 @@ export default function PortfolioChart({
                 }}
               />
             ))}
-            {refAreaLeft && refAreaRight && <ReferenceArea yAxisId="left" x1={refAreaLeft} x2={refAreaRight} fill="rgba(255, 255, 255, 0.1)" strokeOpacity={0.3} />}
+            {/* 드래그 구간 선택 — 선택 '밖'을 어둡게 덮고 선택 창만 원본 밝기로 남긴다.
+                ⚠️ 데이터 선·마커보다 **뒤에 선언**해야 위에 덮인다(recharts는 선언 순서 = paint 순서.
+                   ReferenceArea의 isFront prop은 2.x에서 무시되므로 순서가 유일한 수단이다).
+                ⚠️ Fragment로 묶지 말고 형제로 둘 것 — 배열/형제는 renderByOrder가 확실히 훑는다. */}
+            {selectionDim?.before && <ReferenceArea yAxisId="left" x1={selectionDim.before.from} x2={selectionDim.before.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
+            {selectionDim?.after && <ReferenceArea yAxisId="left" x1={selectionDim.after.from} x2={selectionDim.after.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
+            {selectionDim && <ReferenceArea yAxisId="left" x1={selectionDim.start} x2={selectionDim.end} fill={CHART_SELECTION.windowFill} fillOpacity={CHART_SELECTION.windowOpacity} stroke={CHART_SELECTION.windowStroke} strokeWidth={CHART_SELECTION.windowStrokeWidth} ifOverflow="hidden" />}
             {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
             {hoveredPoint && !refAreaLeft && hoveredPoint.payload
               .filter(p =>

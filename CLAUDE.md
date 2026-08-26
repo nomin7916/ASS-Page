@@ -1009,6 +1009,97 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   `computeDailyMetricsSeries`)은 시그니처·본문 불변 → 통일이 이 함수들을 안 바꿔 검증 무영향.
 - **범위 밖(의도)**: CAGR·XIRR은 **미적용**.
 
+### 차트 드래그 구간 선택 = '비선택 구간 딤(scrim)' — 선택은 원본 그대로 (⚠️ 회귀 주의)
+
+수익률 차트에서 드래그로 기간을 고르면 **선택 구간은 원본 밝기 그대로 두고 그 바깥을 어둡게 덮는다**
+(사용자 요청 2026-08 "선택한 부분만 선명하게, 선택되지 않은 부분은 음영처리"). 종전에는 선택 구간을
+흰색 8~10% `ReferenceArea`로 칠하기만 해서 어두운 차트 배경에서 **선택 범위가 사실상 보이지 않았다**.
+
+- **⚠️ 하이라이트를 밝게 올리는 방향으로 되돌리지 말 것** — 밝기를 더 주면 선택 구간의 라인 색이
+  씻겨 "선명하게 보이고 싶다"는 원래 목적과 정면으로 충돌한다. 대비를 **바깥에서** 만드는 반전이 답이다.
+- **`utils.selectionDimBands(rows, left, right)` 단일 소스** — 개별 계좌 차트(`PortfolioChart`)와
+  통합 대시보드 차트(`IntegratedDashboard`)가 **같은 함수 + 같은 토큰**(`design.CHART_SELECTION`)을
+  공유한다. 값을 손복제하면 같은 제스처가 두 화면에서 다르게 보인다.
+  반환 `{ start, end, before, after }` — `before`/`after`가 딤 밴드(끝에 닿으면 `null`).
+- **⚠️ 상보성(complementarity)이 기하학적 핵심**: `ComposedChart`에 `<Bar>`가 없어 category 축이
+  `scalePoint`(bandwidth 0)로 잡히므로 `ReferenceArea x1..x2`는 **두 점의 중심 사이**를 정확히 덮는다.
+  그래서 `before`(첫날→시작) · 선택 창 · `after`(끝→마지막날) 셋이 플롯 영역을 **빈틈도 겹침도 없이**
+  분할한다. 빈틈이 생기면 안 어두워진 띠가, 겹치면 두 번 칠해져 더 어두운 띠가 남는다.
+  `<Bar>`를 추가하면 축이 `scaleBand`로 바뀌어 이 전제가 깨진다.
+- **⚠️ paint 순서 = 선언 순서**(recharts `renderByOrder`). `ReferenceArea`의 `isFront` prop은
+  2.15.3에서 **무시되므로**(generateCategoricalChart가 참조하지 않는다) 선언 위치가 유일한 수단이다.
+  딤 3개는 반드시 **모든 `<Area>`/`<Line>` 뒤**에 선언한다 — 앞에 두면 선 뒤에 깔려 아무것도
+  어두워지지 않는다. NBER 경기침체 음영이 **앞**에 선언돼 배경으로 깔리는 것과 정확히 반대 이유다.
+- **⚠️ Fragment로 묶지 말고 형제로 둘 것** — 이 저장소의 다른 차트 요소가 전부 형제/배열 형태다
+  (`toArray`가 Fragment를 펴 주긴 하지만 검증된 형태를 유지한다).
+- **⚠️ 3개 밴드 전부 `ifOverflow="hidden"` 필수 — 기본값 `'discard'`로 되돌리지 말 것**
+  (적대적 리뷰 확정 결함, 2026-08): `ScaleHelper.isInRange`가 epsilon 없이 `>=`/`<=`로 재는데,
+  d3 scalePoint의 `start += (stop - start - step * (n - 1)) * align` 잔차 때문에
+  **`scale(첫 날짜)`가 `range()[0]`보다 ~1e-13 작아지는 폭이 실재한다**. 그러면 첫/마지막 날짜를
+  x1/x2로 쓰는 딤 밴드가 `getRect`에서 `null`이 되어 **통째로 사라지고 한쪽만 어두워진다**
+  (실측: 1년치 366행에서 폭 534종 중 46종 ≈ 8.6%, 2년치 730행 8.1%. 리사이즈로 나타났다 사라지는
+  간헐 증상이라 원인 추적이 어렵다). 선택이 첫 날짜에서 시작하면 **선택 창까지** 함께 사라져
+  위 null 계약이 막으려던 바로 그 상태가 된다. `'hidden'`은 discard 분기를 건너뛰고 clip만 적용해
+  **정상 케이스 픽셀이 완전히 동일**하다(실측 148건 전수 대조). 종전 단일 하이라이트는 x1/x2가
+  내부 날짜라 거의 안 걸렸고 걸려도 무해했다 — 양 끝 앵커로 바뀌면서 상시 노출로 승격됐다.
+- **⚠️ null 계약 — '딤만 깔리고 선택 창은 없는(=차트 전체가 어두운)' 상태를 구조적으로 차단**:
+  경계를 `rows`에서만 고르고 하나라도 못 찾으면 `selectionDimBands`가 **null**을 돌려준다.
+  `ReferenceArea`의 `ifOverflow='discard'`는 밴드마다 **따로** 판정하므로, 호출부 조건
+  (`refAreaLeft && refAreaRight`)만으로는 낡은 선택 날짜에서 딤 2개만 살아남는 상태를 막지 못한다.
+- **⚠️ 역방향 드래그(오른쪽→왼쪽) 정규화 필수** — 인덱스 `min`/`max`로 정렬하지 않으면 그쪽
+  드래그에서 딤이 뒤집혀 **선택한 구간만 어두워진다**(의도와 정반대).
+- **해제 경로 4종 — 하나라도 빠지면 차트가 어두운 채로 고착된다**(종전엔 흰색 8% 띠라 잔존해도
+  티가 안 났다. 이 변경으로 잔존의 대가가 커졌으므로 넷 다 필수):
+  ① **차트 안 단순 클릭** — `useChartInteraction`의 두 `MouseUp`. ⚠️ 통합 차트는
+  `intRefAreaRight`가 `''`인 채로 `calculateIntSelection`에 넘기면 `[l,r].sort()`가 `''`를 앞으로
+  보내 **차트 시작~클릭 지점**이라는 없는 구간을 돌려준다(하이라이트는 안 뜨는데 패널만 '선택 기간'으로
+  바뀌는 모순). 개별 차트에는 원래부터 있던 가드를 통합에도 넣었고, 해제 시 `setIntSelectionResult(null)`도
+  **함께** 호출한다.
+  ② **플롯 영역 밖(축 눈금) 클릭** — 두 `MouseDown`의 `else` 분기(적대적 리뷰 확정 결함).
+  ⚠️ recharts는 Y축 눈금 거터·X축 날짜 띠를 눌러도 `onMouseDown`을 **부른다**
+  (`handleOuterEvent`가 `getMouseInfo` 결과를 `mouse ?? {}`로 넘긴다 — `inRange`는 플롯 rect만 본다).
+  거기서 `activeLabel`이 없다고 no-op으로 두면, 그 영역은 `.chart-container-for-drag` **안**이라
+  ③의 차트 밖 클릭 해제도 건너뛰어 **아무 경로도 없다**. 통합 차트 기준 축 띠가 카드의 약 1/4이고
+  날짜 라벨이 전부 거기 있어 오클릭이 잦다.
+  ③ **차트 밖 클릭** — `App.tsx`의 window `mousedown` + `touchstart` 리스너.
+  ⚠️ 두 차트가 같은 `.chart-container-for-drag` 클래스를 쓰는데 과거엔 **개별 계좌 state만** 지웠다
+  → `int*` 3종도 반드시 함께 초기화할 것(두 차트는 `showIntegratedDashboard`로 갈려 동시에
+  마운트되지 않아 교차 초기화 부작용이 없다).
+  ⚠️ 판정은 '카드 안인가'가 아니라 **recharts 표면(`.recharts-wrapper`) 위인가**다 — 카드 안이라도
+  컨테이너 패딩(`p-2`~`p-4` / `px-2`)에 떨어진 클릭은 recharts 이벤트가 **아예 발생하지 않아**,
+  컨테이너만 보면 ②로도 ③으로도 안 걸리는 링이 남는다.
+  ⚠️ **`touchstart`를 함께 들을 것** — recharts는 `<Tooltip>`이 있으면 `onTouchStart`를
+  `handleMouseDown`으로 위임하므로(`generateCategoricalChart` `parseEventsOfWrapper`) **손가락
+  드래그로도 선택이 만들어진다**. 그런데 스크롤로 판정된 터치에는 호환 `mousedown`이 발생하지
+  않아, `mousedown`만 듣던 종전 코드로는 딤이 영영 안 걷혔다.
+  ④ **조회기간 변경** — `[appliedRange]` / `[intAppliedRange]` 리셋 effect 2개(둘 다 기존).
+- **영속화 지점 0곳** — 딤은 전부 매 렌더 파생값이고 선택 state는 종전부터 세션 로컬이다.
+  `chartPrefs` 5지점·`portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps
+  **전 지점 무수정**. `selectionResult`/`calculateSelection`/`calculateIntSelection` **산식도 무수정**
+  (누적 TWR 규약 무영향 — 정상 드래그의 결과값이 1원도 바뀌지 않는다).
+- **범위 밖(의도)**: Esc 해제, 선택 구간 확대(zoom), 카드 별도 창의 수익률 차트
+  (`cardWindow`에 `chart`는 원래 미지원), 차트 컨테이너의 `touch-action` 지정.
+  ⚠️ 마지막 항목은 **알려진 한계**다 — 차트 위에서 시작한 세로 스크롤이 가로 성분을 가지면
+  스크롤과 **동시에** 구간 선택이 만들어진다(recharts의 터치 위임 때문. 이 변경 이전부터 있던
+  동작이다). `touch-action: pan-y`로 막고 싶어도 recharts가 `onTouchCancel`을 바인딩하지 않아
+  `isDragging`이 true로 남을 수 있어 더 나쁘다 → 위 ③의 `touchstart` 해제로 탈출구만 열어 뒀다.
+- 검증: `npm run verify:chart-sel` (`src/utils.ts` 직접 import #1~#17 + 소스 텍스트 가드 #G1~#G9b).
+  ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 26종**(딤/선택 창 개별 삭제 · paint 순서를
+  `<Area>` 앞으로 되돌림 · 토큰 손복제 · 옛 흰색 하이라이트 부활 · Fragment 래핑 · 단순 클릭 가드 제거 ·
+  차트 밖 클릭에서 통합 초기화 제거 · 없는 날짜 통과 · 역방향 정규화 제거 · 폭 0 딤 · 상보성 파괴 ·
+  입력 배열 변형 · memo가 남의 차트 데이터를 읽음 · deps 누락 · **밴드별 `ifOverflow` 제거 ·
+  플롯 밖 클릭 else 분기 삭제 · 표면 판정 되돌림 · `touchstart` 등록/해제 누락**)으로
+  **실제 검출을 확인**했다.
+  ⚠️ `#G3c`는 밴드를 **한 줄씩** 검사한다 — 개수만 세면 한 밴드에서 빼고 다른 곳에 붙여도 통과한다.
+  ⚠️ 산술로 표현되지 않는 두 계약(경계 날짜 `discard` · paint 순서)은 이 스크립트 밖에서
+  **react-dom/server로 실제 recharts SVG를 렌더해** 검증했다(딤 3개 path의 x/width가 빈틈·겹침 없이
+  플롯 폭을 정확히 분할 · DOM 순서상 데이터 선보다 뒤 · 폭×행수 2,136조합에서 `hidden` 적용 후 소실 0건).
+  회귀가 의심되면 그 방식으로 다시 재현할 것.
+  ⚠️ 파트①은 예외를 **그 케이스의 실패**로 바꾸는 래퍼(`S`)를 통해 호출한다 — 직접 호출하면 던지는
+  구현이 스크립트를 통째로 중단시켜 어느 계약이 깨졌는지 알 수 없고, 변이 테스트에서 '검출됨'과
+  '죽은 단언'을 구분할 수 없다(실측: `i1 === -1` 가드를 지우면 `rows[-1].date`로 TypeError).
+  가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+
 ### 차트 토글은 계좌별로 독립 — 화이트리스트는 `currentChartStateRef` 하나 (⚠️ 회귀 주의)
 
 개별 계좌 화면의 토글 6종(**비교종목 · 시장지표 · 조회기간 · 수익률 · 평가자산 · 평가액 추이 기간 단위**)은
@@ -4347,7 +4438,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **게이트 = 결정적 검증 / 리뷰 = 보너스.** 둘의 역할을 절대 섞지 말 것.
 
 - **게이트**(통과 못 하면 커밋 금지): 변경 영역의 `npm run verify:*`(calendar·tax·dividend·history·
-  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail·card-window·period **17종** 중 해당분) + `memory/tools/jsxcheck.mjs`
+  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel **18종** 중 해당분) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의
   지역 변수를 참조)**. `npm run build`가 가능한 환경이면 추가로 돌린다.
   ⚠️ **세 도구는 서로를 대체하지 못한다** — `undefcheck`는 파일 전체를 한 스코프로 보므로

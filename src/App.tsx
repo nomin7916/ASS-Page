@@ -3660,9 +3660,32 @@ export default function App() {
   }, [appliedRange.start]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const handler = (e) => { if (!e.target.closest('.chart-container-for-drag')) { setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null); } };
+    // 차트 밖 클릭 = 구간 선택 해제(선택 밖을 덮는 딤도 함께 걷힌다 → 전체 차트 원래 밝기로 복원).
+    // ⚠️ 통합 대시보드 차트(int*)도 **반드시 함께** 초기화할 것 — 두 차트가 같은
+    // '.chart-container-for-drag' 클래스를 쓰는데 과거엔 개별 계좌 state만 지웠다.
+    // 선택 하이라이트가 흰색 8%였을 땐 잔존해도 티가 안 났지만, 이제 비선택 구간이 어둡게
+    // 덮이므로 그대로 두면 **대시보드 대부분이 어두운 채로 고착**된다.
+    // (두 차트는 showIntegratedDashboard로 갈려 동시에 마운트되지 않아 교차 초기화 부작용이 없다.)
+    // ⚠️ 판정은 '카드 안인가'가 아니라 **recharts 표면 위인가**다. 카드 안이라도 컨테이너
+    // 패딩(p-2~p-4 / px-2)에 떨어진 클릭은 recharts 이벤트가 아예 발생하지 않아, 컨테이너만
+    // 보면 해제 경로가 통째로 비는 링이 생긴다. (플롯 rect 밖이지만 표면 위인 축 눈금 영역은
+    // recharts가 activeLabel 없이 onMouseDown을 부르므로 useChartInteraction이 처리한다.)
+    // ⚠️ touchstart도 함께 듣는다 — 터치 기기에서는 recharts가 onTouchStart를 onMouseDown으로
+    // 위임해 손가락 드래그로도 선택이 만들어지는데, 스크롤로 판정된 터치에는 호환 mousedown이
+    // 발생하지 않아 mousedown만 듣던 종전 코드로는 딤이 영영 안 걷혔다.
+    const handler = (e) => {
+      const t = e.target;
+      const onSurface = t && t.closest && t.closest('.chart-container-for-drag') && t.closest('.recharts-wrapper');
+      if (onSurface) return;
+      setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null);
+      setIntRefAreaLeft(''); setIntRefAreaRight(''); setIntSelectionResult(null);
+    };
     window.addEventListener('mousedown', handler);
-    return () => window.removeEventListener('mousedown', handler);
+    window.addEventListener('touchstart', handler, { passive: true });
+    return () => {
+      window.removeEventListener('mousedown', handler);
+      window.removeEventListener('touchstart', handler);
+    };
   }, []);
 
   // 새 탭 관리자 접속 콜드부팅 — ?adminView 파라미터가 있고 아직 ctx 미구성이면 관리자 무음 인증 진행.

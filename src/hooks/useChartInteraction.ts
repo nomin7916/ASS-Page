@@ -99,8 +99,14 @@ export function useChartInteraction({
   };
 
   // ── 개별 계좌 차트 핸들러 ──
+  // ⚠️ recharts는 **플롯 영역 밖**(Y축 눈금 거터·X축 날짜 띠)을 눌러도 onMouseDown을 부른다 —
+  // `handleOuterEvent`가 `getMouseInfo` 결과를 `mouse ?? {}`로 넘기기 때문(inRange가 플롯 rect만 검사).
+  // 그때 activeLabel이 없다고 **아무것도 하지 않으면** 선택이 그대로 남는데, 그 영역은
+  // `.chart-container-for-drag` 안이라 App.tsx의 차트 밖 클릭 해제도 건너뛴다 → 딤이 고착된다.
+  // (종전엔 잔존 선택이 흰색 8~10% 띠라 티가 안 났다. 딤으로 바뀌며 대가가 커졌다.)
   const handleChartMouseDown = (e: any) => {
     if (e?.activeLabel) { setIsDragging(true); setRefAreaLeft(e.activeLabel); setRefAreaRight(''); setSelectionResult(null); }
+    else { setIsDragging(false); setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null); }
   };
 
   const handleChartMouseMove = (e: any) => {
@@ -117,8 +123,10 @@ export function useChartInteraction({
   const handleChartMouseLeave = () => { handleChartMouseUp(); setHoveredPoint(null); };
 
   // ── 통합 대시보드 차트 핸들러 ──
+  // ⚠️ 플롯 영역 밖 클릭 = 해제 (개별 차트와 같은 이유 — 위 handleChartMouseDown 주석 참조).
   const handleIntChartMouseDown = (e: any) => {
     if (e?.activeLabel) { setIntIsDragging(true); setIntRefAreaLeft(e.activeLabel); setIntRefAreaRight(''); setIntSelectionResult(null); }
+    else { setIntIsDragging(false); setIntRefAreaLeft(''); setIntRefAreaRight(''); setIntSelectionResult(null); }
   };
 
   const handleIntChartMouseMove = (e: any) => {
@@ -129,11 +137,18 @@ export function useChartInteraction({
   const handleIntChartMouseUp = () => {
     if (!intIsDragging) return;
     setIntIsDragging(false);
-    const result = calculateIntSelection(intRefAreaLeft, intRefAreaRight);
+    // ⚠️ 드래그 없는 '단순 클릭'은 선택 해제다 — calculateIntSelection에 그대로 넘기지 말 것.
+    // 클릭만 하면 intRefAreaRight가 ''인데, 그 함수의 [l,r].sort()는 ''를 맨 앞으로 보내
+    // 'l="" → 첫 데이터부터'로 해석해 **차트 시작~클릭 지점**이라는 있지도 않은 구간을 돌려준다.
+    // 그러면 하이라이트(intRefAreaLeft && intRefAreaRight)는 안 뜨는데 패널만 '선택 기간'으로
+    // 바뀌어 화면이 서로 모순된다. 개별 계좌 차트(handleChartMouseUp)는 원래부터 이 가드가 있다.
+    const result = (intRefAreaLeft && intRefAreaRight && intRefAreaLeft !== intRefAreaRight)
+      ? calculateIntSelection(intRefAreaLeft, intRefAreaRight)
+      : null;
     if (result) {
       setIntSelectionResult(result);
     } else {
-      setIntRefAreaLeft(''); setIntRefAreaRight('');
+      setIntRefAreaLeft(''); setIntRefAreaRight(''); setIntSelectionResult(null);
     }
   };
 

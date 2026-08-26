@@ -23,7 +23,8 @@
     "verify:backtest": "node scripts/verify-backtest.mjs",
     "verify:cal-detail": "node scripts/verify-calendar-detail.mjs",
     "verify:period": "node scripts/verify-period.mjs",
-    "verify:card-window": "node scripts/verify-card-window.mjs"
+    "verify:card-window": "node scripts/verify-card-window.mjs",
+    "verify:chart-sel": "node scripts/verify-chart-selection.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

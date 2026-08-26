@@ -1081,6 +1081,51 @@ export function recessionBandsForDates(
   }
   return bands;
 }
+
+// ── 차트 드래그 구간 선택 — '비선택 구간 딤(scrim)' 밴드 ──
+// 선택 구간을 밝게 칠하는 대신 **그 바깥을 어둡게 덮어** 대비를 만든다(사용자 요청 2026-08).
+// 종전의 흰색 8~10% 하이라이트는 어두운 차트 배경에서 선택 범위가 거의 보이지 않았다 —
+// 밝기를 더 올리면 선택 구간의 라인 색이 씻기므로, '선택은 원본 그대로 두고 밖을 덮는' 반전이 답이다.
+// ⚠️ XAxis가 category(scalePoint) 축이라 ReferenceArea의 x1/x2는 **데이터에 존재하는 날짜**여야
+// 정확히 렌더된다(recessionBandsForDates와 동일 제약). scalePoint는 bandwidth가 0이라
+// x1..x2가 '두 점의 중심 사이'를 정확히 덮으므로, 아래 before/after 밴드가 선택 창과
+// 빈틈·겹침 없이 정확히 상보(complement)를 이룬다.
+// ⚠️ 경계를 rows에서만 고르고 하나라도 못 찾으면 **null**을 반환한다 — 조회기간이 바뀌어 낡은
+// 선택 날짜가 데이터에 없을 때 '딤만 깔리고 선택 창은 없는(=차트 전체가 어두운)' 중간 상태를
+// 차단한다(ReferenceArea의 ifOverflow는 밴드별로 따로 판정하므로 호출부의
+// `refAreaLeft && refAreaRight` 조건만으로는 이 상태를 막을 수 없다).
+// ⚠️ 이 null 계약만으로는 **부족하다** — 호출부가 3개 밴드에 `ifOverflow="hidden"`을 함께 줘야
+// 완결된다. 기본값 'discard'는 `scale(첫 날짜)`가 부동소수 잔차로 `range()[0]`보다 ~1e-13
+// 작아지는 폭에서 그 밴드만 통째로 버려, 여기서 정상 결과를 돌려줘도 화면에서는 한쪽만
+// 어두워진다(실측 1년치 366행에서 폭의 약 8.6%). 자세한 근거는 CLAUDE.md 해당 절 참조.
+// rows: 차트 데이터 배열(날짜 오름차순, 각 항목에 date). left/right: 드래그 양 끝(순서 무관).
+export function selectionDimBands(
+  rows: { date?: string }[] | null | undefined,
+  left: string,
+  right: string
+): {
+  start: string; end: string;
+  before: { from: string; to: string } | null;
+  after: { from: string; to: string } | null;
+} | null {
+  if (!rows || rows.length < 2 || !left || !right || left === right) return null;
+  const i1 = rows.findIndex(d => d && d.date === left);
+  const i2 = rows.findIndex(d => d && d.date === right);
+  if (i1 === -1 || i2 === -1 || i1 === i2) return null;
+  const lo = Math.min(i1, i2);
+  const hi = Math.max(i1, i2);
+  const first = rows[0] && rows[0].date;
+  const last = rows[rows.length - 1] && rows[rows.length - 1].date;
+  if (!first || !last) return null;
+  const start = rows[lo].date as string;
+  const end = rows[hi].date as string;
+  return {
+    start, end,
+    // 선택 구간이 차트 끝에 닿으면 그쪽 딤은 폭 0이라 만들지 않는다.
+    before: lo > 0 ? { from: first, to: start } : null,
+    after: hi < rows.length - 1 ? { from: end, to: last } : null,
+  };
+}
 export const getSeededRandom = (seedStr) => {
   let hash = 0;
   for (let i = 0; i < seedStr.length; i++) hash = Math.imul(31, hash) + seedStr.charCodeAt(i) | 0;
