@@ -406,8 +406,10 @@ console.log('\n── 파트② 소스 텍스트 가드 ──');
   const hp = read('src/components/HistoryPanel.tsx');
 
   const bces = utils.slice(utils.indexOf('export const buildCloseEvalSeries'), utils.indexOf('export const calcPortfolioEvalForDate'));
+  // ⚠️ 2026-08 예수금 짝 시계열(depositOut) 도입으로 그 줄이 `{ closeVal = 0; depVal = 0; }` 블록이
+  //    됐다 — **계약은 그대로**(빈 포지션은 이월이 아니라 exact 0)라 정규식만 갱신한다.
   ok('#30 buildCloseEvalSeries: 평가 포지션이 0건이면 이월이 아니라 exact 0',
-    /r\.items\.length === 0\) closeVal = 0/.test(bces));
+    /r\.items\.length === 0\)\s*\{?\s*closeVal = 0/.test(bces));
 
   ok('#30b utils가 evalSeriesDates(기록일 ∪ 구성 변경일)를 내보낸다',
     /export const evalSeriesDates/.test(utils) && /holdingSnapshots/.test(utils.slice(utils.indexOf('export const evalSeriesDates'), utils.indexOf('export const buildCloseEvalSeries'))));

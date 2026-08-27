@@ -1326,6 +1326,14 @@ export const calcPortfolioEvalDetail = (
   return { total: hasAnyPrice ? totalEval : 0, fxRate, items: detail, hasAnyPrice, allExact: hasAnyPrice && allExact };
 };
 
+// calcPortfolioEvalDetail 결과(detail items)에서 **예수금 몫만** 합산.
+// ⚠️ 평가액 총액과 **같은 호출·같은 환율**에서 나온 값이라 '예수금 ⊆ 평가금액'이 논증이 아니라
+//    구조로 보장된다. 예수금을 따로 재계산하지 말 것 — 해외계좌는 fxRate 폴백이 3단
+//    (getClosestValue → currentFxRate → 1)이라 손 재현이 조용히 갈린다(calcPortfolioEvalDetail 참조).
+//    반환값은 그 detail의 통화 프레임을 그대로 따른다(해외는 이미 그날 환율로 원화 환산됨).
+export const depositEvalOf = (detailItems: any[]): number =>
+  (detailItems || []).reduce((s: number, it: any) => s + (it && it.type === 'deposit' ? cleanNum(it.eval) : 0), 0);
+
 // 평가액 시계열을 계산할 날짜 집합 = 기록일(history) ∪ 구성 변경일(holdingSnapshots).
 // ⚠️ 구성 변경일을 빼지 말 것(회귀 주의 — 종목 이관 이중 계상): 종목을 전부 다른 계좌로 옮겨
 //    비운 계좌는 currentEval이 0이라 그날 라이브 기록이 만들어지지 않는다(useHistoryBackfill
@@ -1360,29 +1368,44 @@ export const buildCloseEvalSeries = (
   stockHistoryMap: Record<string, Record<string, number>>,
   indicatorHistoryMap: Record<string, any>,
   effectiveDateKey: string,
-  fxRate = 1
+  fxRate = 1,
+  // ⚠️ opts.depositOut — 평가액과 **짝을 이루는** 예수금 시계열을 함께 채운다(선택).
+  //    미제공이면 이 함수의 동작이 종전과 1바이트도 다르지 않다(하위호환의 축).
+  //    ⚠️ 예수금을 별도 함수로 다시 계산하지 말 것: 평가액이 이월(carry-forward)된 날에는
+  //       예수금도 **같은 직전 날짜**의 값이어야 한다. 두 시계열을 독립으로 만들면
+  //       "주말에 예수금만 갱신 → 예수금 > 평가금액"이 나온다(짝 이월이 그 방어선).
+  opts?: { depositOut?: Map<string, number> | null } | null
 ): Map<string, number> => {
   const map = new Map<string, number>();
   if (!p) return map;
+  const depositOut = opts?.depositOut || null;
   const mpo = p.manualPriceOverrides || {};
   const sorted = [...new Set(dates.filter(Boolean))].sort();
   let lastClose: number | null = null;
+  let lastDeposit: number | null = null;
   for (const date of sorted) {
     if (date === effectiveDateKey) continue; // 오늘=라이브 → 호출부 처리(미설정)
     let closeVal: number | null = null;
+    let depVal: number | null = null;
     const resolved = resolveHoldings(p, date);
     if (!resolved.estimated) {
       const r = calcPortfolioEvalDetail(resolved.items, accountType, date, stockHistoryMap, indicatorHistoryMap || {}, fxRate, mpo);
-      if (r.hasAnyPrice && r.allExact) closeVal = r.total;
+      if (r.hasAnyPrice && r.allExact) { closeVal = r.total; depVal = depositEvalOf(r.items); }
       // ⚠️ '평가할 포지션이 하나도 없음'과 '가격을 못 구함'을 구분한다(이월 금지 — 회귀 주의).
       //    종목을 전부 다른 계좌로 이관/매도해 비운 계좌는 그날부터 평가액이 **진짜 0**인데,
       //    hasAnyPrice=false(가격 종목 0건)를 '데이터 공백'으로 보고 직전 값을 이월하면 이미
       //    옮겨간 종목이 원계좌에 영구히 남아 대상계좌와 **이중 계상**된다.
       //    detail이 비었다 = 예수금·펀드·예적금·수량>0 종목이 전부 없다 = 평가 대상 자체가 없다.
-      else if (r.items.length === 0) closeVal = 0;
+      else if (r.items.length === 0) { closeVal = 0; depVal = 0; }
     }
-    if (closeVal != null) { lastClose = closeVal; map.set(date, closeVal); }
-    else if (lastClose != null) map.set(date, lastClose);
+    if (closeVal != null) {
+      lastClose = closeVal; lastDeposit = depVal;
+      map.set(date, closeVal);
+      if (depositOut && depVal != null) depositOut.set(date, depVal);
+    } else if (lastClose != null) {
+      map.set(date, lastClose);
+      if (depositOut && lastDeposit != null) depositOut.set(date, lastDeposit);
+    }
     // else: 미설정 → get() undefined → 호출부 저장값 폴백
   }
   return map;
@@ -1486,6 +1509,19 @@ export const resolveHoldings = (
   const eligible = sorted.filter((s: any) => s.date <= date);
   const chosen = eligible.length ? eligible[eligible.length - 1] : sorted[0];
   return { items: chosen?.items || [], kind: chosen?.kind || 'baseline', estimated: false };
+};
+
+// 그 날짜 보유 스냅샷의 예수금 합(자산검증 모달이 화면에 보여주는 값과 **같은 소스**).
+// ⚠️ `kind === 'live'`(holdingSnapshots 0건)이면 **null**을 돌려준다 — 그때 resolveHoldings가 주는
+//    items는 과거 구성이 아니라 `p.portfolio`(오늘의 라이브 구성)라, 그대로 쓰면 "과거 날짜에
+//    오늘 예수금이 뜬다"는 바로 그 버그가 살아남는다. 호출부는 null이면 종전 폴백을 쓸 것.
+//    (P1 스냅샷 효과가 모든 비현금 계좌에 baseline을 만들므로 실사용에서는 과도기 한 프레임뿐이다.)
+// ⚠️ fxRate는 **그 날짜 환율**을 넘길 것(라이브 환율 금지 — 평가액 열과 프레임이 갈린다).
+export const depositAmountAt = (p: any, date: string, fxRate = 1): number | null => {
+  const resolved = resolveHoldings(p, date);
+  if (resolved.kind === 'live') return null;
+  return (resolved.items || []).reduce(
+    (s: number, it: any) => s + (it && it.type === 'deposit' ? cleanNum(it.depositAmount) : 0), 0) * (fxRate || 1);
 };
 
 export const buildIndexStatus = (data, source) => {
@@ -2030,6 +2066,9 @@ export const buildHistDetailRows = (opts) => {
     const summary = summaries.find(s => s.id === p.id);
     const isCash = p.accountType === 'matong' || p.accountType === 'simple';
     let evalAmt = 0;
+    // 시장 계좌: 평가금액을 만든 **그 날짜·그 계산**에서 나온 예수금(accountSeriesById[].depositMap).
+    // 미설정이면 종전대로 summary(라이브)로 폴백한다.
+    let seriesDeposit: number | undefined;
     if (isRealtimeDate) {
       // 오늘은 실시간 평가금 사용 → 테이블 합계와 일치
       evalAmt = summary?.currentEval || 0;
@@ -2048,12 +2087,20 @@ export const buildHistDetailRows = (opts) => {
       const series = seriesById[p.id];
       if (!series || !series.dates || series.dates.length === 0) return;
       let last = 0;
+      let lastDate = '';
       for (const d of series.dates) {
-        if (d <= date) last = series.map.get(d);
+        if (d <= date) { last = series.map.get(d); lastDate = d; }
         else break;
       }
       if (!(last > 0)) return;
       evalAmt = last;
+      // ⚠️ 예수금은 반드시 평가금액과 **같은 커서(lastDate)** 로 읽는다 — `date`로 다시 조회하면
+      //    평가액이 이월된 날(주말·종가 미로드)에 예수금만 최신 스냅샷이 되어 예수금 > 평가금액이 난다.
+      const dm = series.depositMap;
+      if (dm) {
+        const dv = dm.get(lastDate);
+        if (Number.isFinite(dv)) seriesDeposit = dv;
+      }
     }
     if (evalAmt <= 0) return;
     totalEval += evalAmt;
@@ -2069,7 +2116,13 @@ export const buildHistDetailRows = (opts) => {
       ? evalAmt
       : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
     totalPrincipal += effPrincipal;
-    const depositAmt = isCash ? effPrincipal : (summary?.depositAmount || 0);
+    // ⚠️ 시장 계좌 예수금은 **그날의 기록값**이다(자산검증 모달과 같은 소스 = 보유 스냅샷).
+    //    `summary.depositAmount`는 **오늘의 라이브** 예수금이라 과거 날짜에 쓰면 안 된다 —
+    //    되돌리면 "과거 어느 날을 눌러도 오늘 예수금이 뜬다"는 버그가 재발한다(2026-08 사용자 보고).
+    //    오늘 행(isRealtimeDate)만은 라이브가 정답이다(평가금액도 summary.currentEval이라 같은 프레임).
+    const depositAmt = isCash
+      ? effPrincipal
+      : (seriesDeposit != null ? seriesDeposit : (summary?.depositAmount || 0));
     totalDeposit += depositAmt;
     const name = (summary?.name || p.name || p.id) + (p.deletedAt ? ' (삭제됨)' : '');
     const profit = evalAmt - effPrincipal;

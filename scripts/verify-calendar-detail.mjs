@@ -57,6 +57,7 @@ const buildHistDetailRows = (opts) => {
     const summary = summaries.find(s => s.id === p.id);
     const isCash = p.accountType === 'matong' || p.accountType === 'simple';
     let evalAmt = 0;
+    let seriesDeposit;
     if (isRealtimeDate) {
       evalAmt = summary?.currentEval || 0;
     } else if (isCash) {
@@ -70,12 +71,18 @@ const buildHistDetailRows = (opts) => {
       const series = seriesById[p.id];
       if (!series || !series.dates || series.dates.length === 0) return;
       let last = 0;
+      let lastDate = '';
       for (const d of series.dates) {
-        if (d <= date) last = series.map.get(d);
+        if (d <= date) { last = series.map.get(d); lastDate = d; }
         else break;
       }
       if (!(last > 0)) return;
       evalAmt = last;
+      const dm = series.depositMap;
+      if (dm) {
+        const dv = dm.get(lastDate);
+        if (Number.isFinite(dv)) seriesDeposit = dv;
+      }
     }
     if (evalAmt <= 0) return;
     totalEval += evalAmt;
@@ -90,7 +97,9 @@ const buildHistDetailRows = (opts) => {
       ? evalAmt
       : Math.max(0, currentPrincipalKRW - futureDeposits + futureWithdrawals);
     totalPrincipal += effPrincipal;
-    const depositAmt = isCash ? effPrincipal : (summary?.depositAmount || 0);
+    const depositAmt = isCash
+      ? effPrincipal
+      : (seriesDeposit != null ? seriesDeposit : (summary?.depositAmount || 0));
     totalDeposit += depositAmt;
     const name = (summary?.name || p.name || p.id) + (p.deletedAt ? ' (삭제됨)' : '');
     const profit = evalAmt - effPrincipal;
@@ -108,6 +117,10 @@ const buildHistDetailRows = (opts) => {
 
 // ───────── 픽스처 ─────────
 const series = (pairs) => ({ dates: pairs.map(([d]) => d), map: new Map(pairs) });
+// ⚠️ 예수금 짝 시계열이 실린 series. **`series()`/`mkBase()`를 고쳐서 만들지 말 것** —
+//    #1~#19b가 그 픽스처의 값(1200/500/700/120)을 하드코딩하고 있어 소계·예수금 기대치가
+//    통째로 어긋난다(#19 주석과 같은 이유). 반드시 덮어쓰기로 만든다.
+const seriesD = (pairs, depPairs) => ({ ...series(pairs), depositMap: new Map(depPairs) });
 
 const mkBase = () => ({
   portfolios: [
@@ -282,6 +295,63 @@ console.log('\n── 파트① 참조 구현 미러 ──');
   const r19b = buildHistDetailRows({ ...mkBase(), activePortfolioId: 'C', date: '2026-04-02' });
   ok('#19b activeHistory 미제공이면 p.history 폴백',
     near(r19b.rows.find(x => x.id === 'C').evalAmount, 500));
+
+  // ── #20~#25 시장 계좌 예수금 = **그날의 기록값**(자산검증과 같은 소스) ──
+  // 2026-08 사용자 보고: 과거 날짜를 눌러도 예수금 칸만 '오늘의 라이브 예수금'이 떴다.
+  // 소스는 accountSeriesById[].depositMap(평가액을 만든 그 계산에서 나온 짝) 하나다.
+
+  // #20 depositMap이 있으면 그 날짜 값을 쓴다 (summary.depositAmount=120 을 쓰지 않는다)
+  const f20 = mkBase();
+  f20.accountSeriesById.A = seriesD(
+    [['2026-04-01', 1200], ['2026-04-03', 1300]],
+    [['2026-04-01', 300], ['2026-04-03', 700]]);
+  const r20a = buildHistDetailRows({ ...f20, date: '2026-04-01' });
+  const r20b = buildHistDetailRows({ ...f20, date: '2026-04-03' });
+  ok('#20 시장계좌 예수금은 그날의 depositMap 값 (라이브 120 아님)',
+    near(r20a.rows.find(x => x.id === 'A').depositAmount, 300)
+    && near(r20b.rows.find(x => x.id === 'A').depositAmount, 700));
+
+  // #21 ⚠️ 평가액이 이월된 날은 예수금도 **같은 커서(lastDate)** 값이어야 한다.
+  //     `date`로 다시 조회하는 구현이면 여기서 4/03의 700이 새어 나온다.
+  const r21 = buildHistDetailRows({ ...f20, date: '2026-04-02' });
+  const a21 = r21.rows.find(x => x.id === 'A');
+  ok('#21 이월된 날은 평가액·예수금이 같은 날짜(4/01)에서 온다',
+    near(a21.evalAmount, 1200) && near(a21.depositAmount, 300));
+
+  // #22 소계(totalDeposit)도 그날 값의 합이다 (현금성은 종전대로 평가액=예수금)
+  ok('#22 totalDeposit = 그날 예수금 합 (300 + 마통 500)',
+    near(r21.totalDeposit, 300 + 500));
+
+  // #23 하위호환 — depositMap이 없으면 종전대로 summary.depositAmount 폴백
+  const r23 = buildHistDetailRows({ ...mkBase(), date: '2026-04-02' });
+  ok('#23 depositMap 미제공이면 summary 폴백(120) — 종전 동작 유지',
+    near(r23.rows.find(x => x.id === 'A').depositAmount, 120));
+
+  // #23b 그 날짜에만 값이 없으면(부분 제공) 그 행만 폴백한다
+  const f23b = mkBase();
+  f23b.accountSeriesById.A = seriesD(
+    [['2026-04-01', 1200], ['2026-04-03', 1300]],
+    [['2026-04-03', 700]]);   // 4/01 미설정
+  ok('#23b depositMap에 그 커서 값이 없으면 그 행만 summary 폴백',
+    near(buildHistDetailRows({ ...f23b, date: '2026-04-02' }).rows.find(x => x.id === 'A').depositAmount, 120)
+    && near(buildHistDetailRows({ ...f23b, date: '2026-04-03' }).rows.find(x => x.id === 'A').depositAmount, 700));
+
+  // #24 예수금 0은 유효한 기록이다 — falsy로 뭉뚱그려 summary(120)로 폴백하면 안 된다
+  const f24 = mkBase();
+  f24.accountSeriesById.A = seriesD([['2026-04-01', 1200]], [['2026-04-01', 0]]);
+  ok('#24 예수금 0도 그대로 표시한다 (`||` 폴백 금지)',
+    near(buildHistDetailRows({ ...f24, date: '2026-04-02' }).rows.find(x => x.id === 'A').depositAmount, 0));
+
+  // #25 오늘(realtime) 행은 **라이브**가 정답이다 — 평가액도 summary.currentEval이라 같은 프레임.
+  const r25 = buildHistDetailRows({ ...f20, date: '2026-04-10' });
+  ok('#25 realtime 행은 summary.depositAmount(라이브 120) 유지',
+    near(r25.rows.find(x => x.id === 'A').depositAmount, 120));
+
+  // #26 예수금 ⊆ 평가금액 — 같은 계산에서 나온 짝이므로 구조적으로 성립한다
+  const overs = ['2026-04-01', '2026-04-02', '2026-04-03', '2026-04-05']
+    .flatMap(d => buildHistDetailRows({ ...f20, date: d }).rows)
+    .filter(r => r.depositAmount > r.evalAmount);
+  ok('#26 어느 날짜에도 예수금 > 평가금액이 없다', overs.length === 0);
 }
 
 console.log('\n── 파트② 교차검증 (달력 칸 총자산 = 팝업 소계) ──');
@@ -400,6 +470,17 @@ console.log('\n── 파트②-b 미러 드리프트 가드 (실제 모듈 vs �
     });
     push('empty', { date: '', portfolios: [] });
     push('active-cash', { ...mkBase(), activePortfolioId: 'C', activeHistory: [{ date: '2026-04-02', evalAmount: 900 }], date: '2026-04-02' });
+
+    // ⚠️ depositMap 케이스가 없으면 이 가드는 새 분기에 **눈이 먼다**(죽은 단언) — 예수금 커서를
+    //    `date`로 바꾸거나 `||` 폴백으로 되돌려도 드리프트 0건으로 통과한다.
+    const dep = mkBase();
+    dep.accountSeriesById.A = seriesD(
+      [['2026-04-01', 1200], ['2026-04-03', 1300]],
+      [['2026-04-01', 300], ['2026-04-03', 700]]);
+    ['2026-04-01', '2026-04-02', '2026-04-03', '2026-04-10'].forEach(d => push(`depositMap ${d}`, { ...dep, date: d }));
+    const depPartial = mkBase();
+    depPartial.accountSeriesById.A = seriesD([['2026-04-01', 1200]], [['2026-04-01', 0]]);
+    push('depositMap zero', { ...depPartial, date: '2026-04-02' });
 
     const drift = cases.filter(({ opts }) =>
       JSON.stringify(buildHistDetailRows(opts)) !== JSON.stringify(real.buildHistDetailRows(opts)));
@@ -529,6 +610,44 @@ console.log('\n── 파트③ 소스 텍스트 가드 ──');
     /if \(pad\.kind\) \{ setPad\(null\); return; \}/.test(cal)
     && /detail: 'ASSET'/.test(cal)
     && /\(!pad\.kind \|\| pad\.kind === 'note'\)/.test(cal));
+
+  // ── 예수금 = 그날의 기록값 (미러로는 표현 못 하는 **공급측** 배선) ──
+  const intg = read('src/hooks/useIntegratedData.ts');
+
+  ok('#G19 utils가 depositEvalOf·depositAmountAt 를 내보낸다',
+    /export const depositEvalOf/.test(utils) && /export const depositAmountAt/.test(utils));
+
+  // ⚠️ 선언이 아니라 **사용부**를 단언한다 — 커서를 `date`로 되돌리거나 `||` 폴백으로 바꾸면
+  //    과거 날짜에 오늘 예수금이 다시 뜬다(2026-08 사용자 보고 버그).
+  const hdBody = utils.slice(utils.indexOf('export const buildHistDetailRows'), utils.indexOf('export const buildRebalTargetEntryFrom'));
+  ok('#G20 팝업은 예수금을 평가액과 **같은 커서(lastDate)** 로 읽는다',
+    hdBody.length > 500
+    && /\{ last = series\.map\.get\(d\); lastDate = d; \}/.test(hdBody)
+    && /const dv = dm\.get\(lastDate\);/.test(hdBody)
+    && !/depositMap\.get\(date\)/.test(hdBody));
+  ok('#G21 시장계좌 예수금 폴백은 `!= null` 이다 (0을 삼키는 `||` 금지)',
+    /seriesDeposit != null \? seriesDeposit : \(summary\?\.depositAmount \|\| 0\)/.test(hdBody));
+
+  // ⚠️ 평가액이 이월된 날 예수금만 최신이 되면 '예수금 > 평가금액'이 난다 → 짝으로 이월할 것.
+  const bces = utils.slice(utils.indexOf('export const buildCloseEvalSeries'), utils.indexOf('export const calcPortfolioEvalForDate'));
+  ok('#G22 buildCloseEvalSeries가 예수금을 평가액과 **짝으로** 이월한다',
+    /lastClose = closeVal; lastDeposit = depVal;/.test(bces)
+    && /depositOut\.set\(date, lastDeposit\)/.test(bces)
+    && /depVal = depositEvalOf\(r\.items\)/.test(bces));
+
+  const ms = intg.slice(intg.indexOf('const marketSeries = useMemo'), intg.indexOf('const computedIntHistory'));
+  ok('#G23 marketSeries가 depositMap을 만들어 series에 실어 보낸다 (배선 0곳으로 두 렌더러 도달)',
+    ms.length > 500
+    && /const depositMap = new Map\(\);/.test(ms)
+    && /\{ depositOut: depositMap \}/.test(ms)
+    && /dates: dateKeys, map, depositMap,/.test(ms));
+  // ⚠️ 해외는 평가액을 만든 **그 호출의 detail**에서 뽑아야 그날 환율 프레임이 일치한다
+  //    (summary.depositAmount는 라이브 환율 — 되돌리면 예수금만 프레임이 갈린다).
+  ok('#G24 해외 분기는 같은 calcPortfolioEvalDetail 결과에서 예수금을 뽑는다',
+    /const dep = depositEvalOf\(r\.items\);/.test(ms)
+    && /map\.set\(date, r\.total\); depositMap\.set\(date, dep\);/.test(ms));
+  ok('#G25 저장값 폴백 날짜도 같은 날짜의 스냅샷 예수금으로 짝을 맞춘다',
+    /const dep = depositAmountAt\(src, date\);/.test(ms) && /if \(dep != null\) depositMap\.set\(date, dep\);/.test(ms));
 
   // #27b(verify:transfer) 센티넬 구간 보호 — 신규 훅이 그 위로 올라가면 그 게이트가 깨진다
   const sentinel = cal.slice(cal.indexOf('const transfersByDate'), cal.indexOf('// 패드는 전부 앵커'));

@@ -2387,17 +2387,55 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   팝업만 마스킹하면 3cm 위 칸은 실금액이라 '금액 숨기기'가 반쪽이 되어 지금보다 나쁘다. 금액만
   가리고 `%`는 노출한다(대시보드 팝업과 동일 범위). 되돌리려면 그 지점들의 `hideAmounts ?` 삼항만
   제거하면 된다. `calendar:live` payload와 deps **양쪽에** `hideAmounts`를 넣을 것.
-- **영속화 지점 0곳** — `pad`는 컴포넌트 세션 로컬, 행은 매 렌더 파생값이다. `portfolioStructureKey`·
-  `applyStateData`·`applyBackupData`·저장 effect deps·`_preserveStickyPersonalData` **전 지점 무수정**.
+- **⚠️ 예수금 열 = '그날의 기록값'(자산검증 모달과 같은 소스) — 라이브로 되돌리지 말 것 (2026-08)**:
+  평가금액은 진작부터 그날 값이었는데 **예수금만 `summary.depositAmount`(오늘의 라이브)**라, 과거
+  어느 날짜를 눌러도 오늘 예수금이 떴다(사용자 보고). 정본은 그 날짜의 보유 스냅샷이다 —
+  `snapshotItemsFromPortfolio`가 `depositAmount`를 보존하고 `snapshotCompositionKey`가 그 필드를 담아
+  **예수금을 편집하면 그 날짜 스냅샷이 생기므로**(App.tsx 자산검증 P1 효과), 자산검증 모달이 화면에
+  보여주는 값과 정확히 같은 값을 팝업도 쓸 수 있다.
+  - **소스는 `accountSeriesById[].depositMap` 하나** — `marketSeries`(useIntegratedData)가 평가액
+    `map`을 만들 때 **같은 루프·같은 계산**에서 함께 채운다. `intAccountSeriesById`가 series 객체를
+    통째로 넘기므로 **두 렌더러 + 별도 창 브릿지까지 신규 배선 0곳**이다(호출부 인자 추가 없음).
+  - **⚠️ 평가액과 '짝'으로 이월할 것**: `buildCloseEvalSeries(..., opts.depositOut)`가 exact 날짜엔
+    `depositEvalOf(r.items)`를, 이월 날짜엔 **직전 exact 날짜의 예수금**을 넣는다. 두 시계열을
+    독립으로 만들면 "주말에 예수금만 갱신 → **예수금 > 평가금액**"이 난다. 읽기도 마찬가지로
+    `buildHistDetailRows`가 평가액을 고른 **같은 커서 `lastDate`** 로 조회한다(`date`로 재조회 금지).
+  - **⚠️ 해외계좌는 평가액을 만든 `calcPortfolioEvalDetail` **그 호출의 `r.items`** 에서 뽑는다**
+    (`depositEvalOf` — 이미 **그날 환율**로 원화 환산됨). `summary.depositAmount`는 **라이브 환율**이라
+    되돌리면 예수금만 프레임이 갈린다. 환율식을 손으로 재현하는 것도 금지(폴백이 3단이라 조용히 갈린다).
+  - **⚠️ 오늘 행(`isRealtimeDate`)만은 라이브가 정답** — 평가액도 `summary.currentEval`이라 같은
+    프레임이고, KR 계좌는 21:00 이후 스냅샷이 **내일 날짜**로 찍혀 스냅샷을 쓰면 어제 값이 된다.
+  - **⚠️ `depositAmountAt`은 `kind === 'live'`(스냅샷 0건)면 `null`** — 그때 `resolveHoldings`가 주는
+    items는 과거 구성이 아니라 `p.portfolio`(오늘)라, 쓰면 고치려던 버그가 그대로 살아남는다.
+  - **하위호환**: `depositMap` 미제공/그 커서에 값 없음 → 종전대로 `summary.depositAmount` 폴백.
+    `opts` 미전달 시 `buildCloseEvalSeries`의 동작은 1바이트도 다르지 않다. 폴백 판정은 **`!= null`**
+    (`||` 금지 — 예수금 0은 유효한 기록인데 라이브로 되돌아간다).
+  - **현금성(matong·simple)은 무변경** — 예수금=평가액=원금이라 이미 그날 스냅샷 값이다.
+  - **알려진 한계(의도)**: pre-baseline 날짜(`BASELINE_DEFAULT_DATE` 이전)는 `resolveHoldings`가
+    baseline 스냅샷을 돌려주므로 그 구간의 예수금이 **한 값으로 고정**된다(자산검증 모달의 🟡 추정과
+    같은 값·같은 한계). 그 구간은 평가액도 저장 `evalAmount` 폴백이라 '예수금 ⊆ 평가금액'이 보장되지
+    않는다 — 라이브 값을 쓰던 종전보다는 엄격히 낫지만 정확하지는 않다. 캡을 씌우지 말 것(조용한 오적용).
+- **영속화 지점 0곳** — `pad`는 컴포넌트 세션 로컬, 행은 매 렌더 파생값이다. `depositMap`도 `marketSeries`
+  memo의 파생값이라 저장 대상이 아니다. `portfolioStructureKey`·`applyStateData`·`applyBackupData`·
+  저장 effect deps·`_preserveStickyPersonalData` **전 지점 무수정**.
 - **범위 밖(의도)**: ① 두 수익률 산식 통일 ② `buildHistDetailRows`에 startDate 게이트 추가(원금
   산식이 바뀌어 100% 분모가 흔들린다) ③ `futureDeposits`의 `noPrincipal` 필터(과거 수익률 소급 변경)
   ④ 이상치 날짜의 값 정합(배너로 고지만) ⑤ 상세 패드에서의 편집·삭제·확인창(z-1060 위에서는
   `ConfirmDialog`·토스트가 가려진다) ⑥ 과거 날짜의 별도 창 실시간 갱신은 구독으로 자동 처리되나
   인앱/별도 창 동시 사용은 기존 절충 그대로.
-- 검증: `npm run verify:cal-detail` (48건 — 참조 구현 미러 #1~#19b + **교차검증 #X1~#X3**(달력 칸
+- 검증: `npm run verify:cal-detail` (63건 — 참조 구현 미러 #1~#19b + **예수금 = 그날의 기록값
+  #20~#26** + **교차검증 #X1~#X3**(달력 칸
   총자산 = 팝업 소계 = 차트 그날 값) + **드리프트 가드 #D1~#D2**(실제 `src/utils.ts`를 import해
   미러와 대조 — utils.ts는 import가 하나도 없어 Node가 타입만 벗겨 실행할 수 있다) + 소스 텍스트
-  가드 #G0~#G18c).
+  가드 #G0~#G18c·**#G19~#G25**(공급측 배선 — 미러로는 표현 불가)).
+  ⚠️ `#D1` 픽스처에 **`depositMap`이 실린 케이스가 반드시 있어야** 한다(`seriesD` 헬퍼) — 없으면
+  그 가드가 새 분기에 눈이 멀어 커서를 `date`로 되돌려도 드리프트 0건으로 통과한다(죽은 단언).
+  ⚠️ `seriesD`/새 케이스를 만들 때도 **`series()`·`mkBase()`는 고치지 말 것**(아래 #19 경고와 동일 이유).
+  ⚠️ 예수금 계약은 **변이 11종**(팝업·미러 양쪽 커서를 `date`로 되돌림 · `||` 폴백 · 라이브 복귀 ·
+  짝 이월 제거 · 이월 시 `depositOut` 미설정 · `depositOut` 미전달 · series에서 `depositMap` 제거 ·
+  해외를 summary 프레임으로 · 저장값 폴백 짝 제거 · `closeVal = 0` 분기 삭제)으로 **실제 검출을 확인**했다.
+  ⚠️ `verify:transfer #30`의 정규식은 `depositOut` 도입으로 그 줄이 블록이 되면서 갱신됐다
+  (계약은 불변 — 빈 포지션은 이월이 아니라 exact 0).
   ⚠️ 가드는 전부 **선언이 아니라 사용부**를 단언하고, **변이 21종**(화이트리스트 삭제·`markGotData`
   추가·입양 게이트 순서 뒤집기·`open` 게이트 제거·`pctCell`→`fmtPct`·즉석 계산 부활·prop 삭제·
   `stopPropagation` 제거·null 계약 0으로 변경·`status !== 'ready'` 부활·마스킹 제거·열 삭제·센티넬

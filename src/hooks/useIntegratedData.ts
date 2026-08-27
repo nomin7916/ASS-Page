@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useMemo } from 'react';
-import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, computeCumulativeTwrSeries, rebaseTwr, buildBookCostSeries } from '../utils';
+import { cleanNum, getClosestValue, calcPortfolioEvalDetail, resolveHoldings, savingsEval, savingsInvest, buildCloseEvalSeries, evalSeriesDates, computeDailyMetricsSeries, computeCumulativeTwrSeries, rebaseTwr, buildBookCostSeries, depositEvalOf, depositAmountAt } from '../utils';
 import { getEffectiveDate, isKrCutoffAccount } from './useMarketCalendar';
 import { CATEGORY_DISPLAY_ORDER } from '../constants';
 
@@ -133,6 +133,10 @@ export function useIntegratedData({
         const src = isActive ? { ...p, portfolio } : p;
         const mpo = p.manualPriceOverrides || {};
         const map = new Map();
+        // 평가액과 **짝을 이루는** 날짜별 예수금(그날 보유 스냅샷 기준 = 자산검증 모달과 같은 소스).
+        // 날짜별 '계좌별 현황' 팝업(buildHistDetailRows)이 평가액과 **같은 커서**로 읽는다 →
+        // 과거 날짜에 오늘 예수금이 뜨던 버그가 구조적으로 재발하지 않는다.
+        const depositMap = new Map();
         const edk = isKrCutoffAccount(acctType) ? (krEffectiveDateKey || globalToday) : globalToday;
         // 평가 대상 날짜 = 기록일 ∪ 구성 변경일(utils.evalSeriesDates — 근거는 그 주석 참조).
         // 개별 계좌 차트·추이 표와 **같은 함수**를 써야 세 화면의 그날 평가액이 일치한다.
@@ -145,17 +149,27 @@ export function useIntegratedData({
         if (acctType === 'overseas') {
           evalDates.forEach(date => {
             const r = calcPortfolioEvalDetail(resolveHoldings(src, date).items, 'overseas', date, stockHistoryMap, indicatorHistoryMap || {}, liveFx, mpo);
-            if (r.hasAnyPrice || r.items.length === 0) { map.set(date, r.total); return; }
+            // ⚠️ 예수금은 평가액을 만든 **바로 그 호출의 detail**에서 뽑는다(이미 그날 환율로 원화 환산).
+            //    summary.depositAmount(라이브 환율)로 되돌리면 평가액과 프레임이 갈린다.
+            const dep = depositEvalOf(r.items);
+            if (r.hasAnyPrice || r.items.length === 0) { map.set(date, r.total); depositMap.set(date, dep); return; }
             const sv = storedByDate.get(date) || 0;
-            if (sv > 0) map.set(date, sv);
+            if (sv > 0) { map.set(date, sv); depositMap.set(date, dep); }
           });
         } else {
-          const closeSeries = buildCloseEvalSeries(src, evalDates, acctType, stockHistoryMap, indicatorHistoryMap || {}, edk);
+          const closeSeries = buildCloseEvalSeries(src, evalDates, acctType, stockHistoryMap, indicatorHistoryMap || {}, edk, 1, { depositOut: depositMap });
           evalDates.forEach(date => {
             const cb = closeSeries.get(date);
             if (cb != null) { map.set(date, cb); return; }
             const sv = storedByDate.get(date) || 0;
-            if (sv > 0) map.set(date, sv);
+            // 저장 evalAmount 폴백 날짜(첫 정확값 이전·pre-baseline)는 buildCloseEvalSeries가
+            // 예수금도 안 낸다 → 그 날짜의 스냅샷에서 직접 뽑아 **같은 날짜로** 짝을 맞춘다.
+            // (스냅샷 0건이면 null → 미설정 → 팝업이 종전대로 summary 폴백)
+            if (sv > 0) {
+              map.set(date, sv);
+              const dep = depositAmountAt(src, date);
+              if (dep != null) depositMap.set(date, dep);
+            }
           });
         }
         // 장부액(Σ 예수금+매입원가) 시계열 — 일간 지표 보류 판정이 '원장 흐름이 그날 평가액에
@@ -194,7 +208,7 @@ export function useIntegratedData({
           : undefined);
         // ⚠️ 삭제 계좌(deletedAt)도 시계열을 유지한다(과거 총자산·계좌별 현황 팝업 보존).
         //   소비자(computedIntHistory carry-forward / histDetailRows)가 d < deletedAt로 캡한다.
-        return { id: p.id, dates: dateKeys, map, bookMap, deletedAt: p.deletedAt || '' };
+        return { id: p.id, dates: dateKeys, map, depositMap, bookMap, deletedAt: p.deletedAt || '' };
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolios, activePortfolioId, portfolio, history, stockHistoryMap, indicatorHistoryMap, marketIndicators.usdkrw, effectiveDateKey, krEffectiveDateKey]);
