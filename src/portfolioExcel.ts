@@ -98,8 +98,12 @@ const C = {
   gray: '94A3B8',
 };
 
-/** 같은 스타일을 한 번만 등록하고 인덱스를 돌려주는 레지스트리. */
-class StyleBag {
+/**
+ * 같은 스타일을 한 번만 등록하고 인덱스를 돌려주는 레지스트리.
+ * ⚠️ `evalCompareExcel.ts`(자산검증 비교 시트)가 그대로 재사용한다 — export를 떼지 말 것.
+ *    복제하면 두 시트의 스타일 dedupe 규칙이 갈릴 수 있다.
+ */
+export class StyleBag {
   styles: XlsxStyle[] = [];
   private map = new Map<string, number>();
   id(style: XlsxStyle): number {

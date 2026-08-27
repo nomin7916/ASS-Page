@@ -1,16 +1,21 @@
 // @ts-nocheck
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { X, Plus, Trash2, Pencil, RotateCcw, HelpCircle, RefreshCw } from 'lucide-react';
+import { X, Plus, Trash2, Pencil, RotateCcw, HelpCircle, RefreshCw, FileSpreadsheet } from 'lucide-react';
 import {
   cleanNum,
   formatCurrency,
+  formatPercent,
   formatShortDate,
   formatFundPrice,
   calcPortfolioEvalDetail,
   resolveHoldings,
   snapshotItemsFromPortfolio,
   computeEffectivePrincipal,
+  evalSeriesDates,
 } from '../utils';
+import { buildEvalCompare } from '../evalCompare';
+import { downloadEvalCompareXlsx } from '../evalCompareExcel';
+import { getTodayKST } from '../hooks/useMarketCalendar';
 import { BG, BORDER, Z } from '../design';
 
 // 종목의 수동종가 오버라이드 키 (gold는 code가 없으므로 'GOLD')
@@ -106,6 +111,90 @@ export default function VerifyEvalModal({
   const [addForm, setAddForm] = useState({
     code: '', name: '', type: 'stock', quantity: '', start: date, end: '',
   });
+
+  // ── 두 날짜 비교 · 엑셀 (읽기 전용 파생 — Drive 저장 지점 0곳) ──────────────
+  const [showCompare, setShowCompare] = useState(false);
+  const [compareDate, setCompareDate] = useState('');
+  // ⚠️ 주당분배금 입력은 **원시 문자열**로 들고 있는다(예적금 `annualRate`와 같은 규약) —
+  //    onChange마다 cleanNum을 태우면 '0.45'를 치는 도중 소수점이 지워져 45가 저장된다.
+  //    파싱은 모델(`buildEvalCompare`)이 한 번만 한다.
+  // ⚠️ 이 값은 **모달 로컬**이다 — Drive에 저장하지 않는다(사용자 확정 2026-08 '이번 모달에서만').
+  //    저장하려면 `dividendHistory`가 아니라 신규 필드를 써야 한다(그 맵은 API 새로고침이
+  //    얕은 병합으로 덮어써 사용자 입력이 소실된다).
+  const [psDraft, setPsDraft] = useState({ basis: {}, compare: {} });
+  const [xlsxFlash, setXlsxFlash] = useState(false);
+  const [compareError, setCompareError] = useState('');
+  const flashTimer = useRef(null);
+  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
+
+  // 비교일 후보 = 기록일 ∪ 구성 변경일 중 **기준일보다 이전**인 날짜.
+  // ⚠️ 미래 날짜를 남기면 ③ '증감'의 부호가 뒤집히고 ④가 '나중 수량 × 이전 종가'라는
+  //    존재한 적 없는 구성이 된다(모달은 추이 표의 어느 행에서도 열린다).
+  // ⚠️ 상한에 `effectiveDateKey || getTodayKST()` — KR 계좌는 21:00~09:00에 그 값이 null이고
+  //    `evalSeriesDates`는 null이면 미래 컷을 통째로 끄므로 21시 이후 찍힌 '내일' 스냅샷이
+  //    후보 최상단에 뜬다.
+  const compareCandidates = useMemo(() => {
+    const histDates = (history || []).map(h => h?.date).filter(Boolean);
+    const all = evalSeriesDates(portfolio, histDates, effectiveDateKey || getTodayKST());
+    return all.filter(d => d < date).sort().reverse();
+  }, [history, portfolio, effectiveDateKey, date]);
+
+  // ⚠️ 선택된 비교일은 **파생값 + 사용자 덮어쓰기**다(state 초기값을 effect에서 고치지 말 것) —
+  //    effect로 채우면 섹션을 열 때 한 프레임 동안 '만들 수 없습니다'가 번쩍이고, SSR·첫 렌더에서
+  //    빈 날짜로 계산이 돌아간다(CLAUDE.md `RebalanceTargetRestoreModal`의 `viewOv`와 같은 규약).
+  const compareDateEff = useMemo(
+    () => (compareDate && compareCandidates.includes(compareDate)) ? compareDate : (compareCandidates[0] || ''),
+    [compareDate, compareCandidates],
+  );
+
+  // ⚠️ 후보에 없는 날짜로는 절대 계산하지 않는다 — `resolveHoldings(p, '')`는 예외 대신
+  //    baseline 스냅샷을 조용히 돌려줘 '비교일'이 엉뚱한 구성으로 둔갑한다.
+  const compareModel = useMemo(() => {
+    if (!showCompare || !compareDateEff || !compareCandidates.includes(compareDateEff)) return null;
+    try {
+      return buildEvalCompare({
+        portfolio, accountType, basisDate: date, compareDate: compareDateEff,
+        stockHistoryMap, indicatorHistoryMap: indicatorHistoryMap || {}, fxRate: fx,
+        depositHistory, depositHistory2, perShareOverride: psDraft,
+      });
+    } catch (e) {
+      // ⚠️ 조용히 삼키지 말 것 — 아래 화면이 '만들 수 없습니다'를 대신 알린다(모달 위에서는
+      //    토스트가 가려지므로 인라인이 유일한 통로다).
+      return null;
+    }
+  }, [showCompare, compareDateEff, compareCandidates, portfolio, accountType, date,
+      stockHistoryMap, indicatorHistoryMap, fx, depositHistory, depositHistory2, psDraft]);
+
+  // 주당분배금 입력 대상 = 두 날짜 중 한 번이라도 보유한 분배금 대상 종목.
+  const divRows = useMemo(
+    () => (compareModel?.rows || []).filter(r => r.dividendEligible && (r.basis?.held || r.compare?.held)),
+    [compareModel],
+  );
+
+  const setPs = (side, key, value) =>
+    setPsDraft(p => ({ ...p, [side]: { ...p[side], [key]: value } }));
+
+  const handleDownloadCompare = () => {
+    if (!compareModel || !compareDateEff) return;
+    setCompareError('');
+    try {
+      downloadEvalCompareXlsx({
+        portfolio, accountType, basisDate: date, compareDate: compareDateEff,
+        stockHistoryMap, indicatorHistoryMap: indicatorHistoryMap || {}, fxRate: fx,
+        depositHistory, depositHistory2, perShareOverride: psDraft,
+        accountName: portfolio?.name || portfolio?.title || '계좌',
+        // 화면 요약과 **같은 모델**을 그대로 넘긴다 — 다시 계산하면 두 값이 갈릴 수 있다.
+        result: compareModel,
+      });
+      setXlsxFlash(true);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setXlsxFlash(false), 1500);
+    } catch (e) {
+      // ⚠️ `notify()`를 쓰지 말 것 — 이 모달은 z=1000이라 토스트가 가려지고, 알림 최소화
+      //    정책상 성공은 벨에도 남기지 않는다. 실패 사유는 **모달 내부 인라인**으로만 알린다.
+      setCompareError('엑셀을 만들지 못했습니다: ' + String((e && e.message) || e));
+    }
+  };
 
   const handleDragStart = (e) => {
     if (e.button !== 0 || isMobile) return;
@@ -534,6 +623,198 @@ export default function VerifyEvalModal({
                   </label>
                 </div>
                 <button className="w-full py-1.5 bg-sky-700/60 hover:bg-sky-600/60 text-sky-100 rounded font-bold" onClick={submitAdd}>추가</button>
+              </div>
+            )}
+          </div>
+
+          {/* ── 두 날짜 비교 · 엑셀 ────────────────────────────────────────────
+              기준일(= 이 모달의 날짜)과 비교일을 맞대어 ① 기준일 ② 비교일 ③ 증감
+              ④ 반사실(비교일 수량을 그대로 들고 있었다면)을 만든다.
+              ⚠️ 전부 읽기 전용 파생값이다 — 계좌에 아무것도 쓰지 않는다(카드 별도 창에서도 동작). */}
+          <div className="pt-1 border-t border-gray-700/60">
+            <button
+              className="text-[11px] text-gray-400 hover:text-emerald-300 font-bold inline-flex items-center gap-1"
+              onClick={() => setShowCompare(s => !s)}
+            >
+              <FileSpreadsheet size={12} /> 다른 날짜와 비교 · 엑셀 {showCompare ? '▲' : '▼'}
+            </button>
+            {showCompare && (
+              <div className="mt-2 bg-gray-800/40 border border-gray-700/60 rounded p-3 space-y-2">
+                {compareCandidates.length === 0 ? (
+                  <div className="text-[10px] text-gray-500 text-center py-1 leading-relaxed">
+                    비교할 이전 기록일이 없습니다.<br />
+                    {formatShortDate(date).split(' ')[0]} 이전의 기록이 있어야 비교할 수 있습니다.
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-500 whitespace-nowrap">비교일</span>
+                      <select
+                        className="flex-1 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200 outline-none"
+                        value={compareDateEff}
+                        onChange={e => setCompareDate(e.target.value)}
+                      >
+                        {compareCandidates.map(d => (
+                          <option key={d} value={d}>{formatShortDate(d)}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {!compareModel && (
+                      <div className="text-[10px] text-amber-400 leading-snug">
+                        이 날짜 조합으로는 비교표를 만들 수 없습니다 — 다른 비교일을 골라 보세요.
+                      </div>
+                    )}
+                    {compareModel && (
+                      <div className="bg-gray-900/50 rounded px-2 py-1.5 space-y-0.5 text-[10px]">
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">기준일 {formatShortDate(date).split(' ')[0]}</span>
+                          <span className="text-gray-100 font-bold">{fmtPrin(compareModel.totals.basis.evalNative)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">비교일 {formatShortDate(compareDateEff).split(' ')[0]}</span>
+                          <span className="text-gray-300">{fmtPrin(compareModel.totals.compare.evalNative)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          {/* ⚠️ '수익률'이라 부르지 말 것 — 이 값은 총자산 레벨의 단순 비교라
+                              입출금이 포함돼 있고, 같은 두 날짜에 대해 추이 표의 기간 수익률과 다르다. */}
+                          <span className="text-gray-500">평가금액 증감율 <span className="text-gray-600">(입출금 포함)</span></span>
+                          <span className={compareModel.diffRate == null ? 'text-gray-500' : compareModel.diffRate >= 0 ? 'text-red-400 font-bold' : 'text-blue-400 font-bold'}>
+                            {compareModel.diffRate == null ? '-' : `${compareModel.diffRate >= 0 ? '+' : ''}${formatPercent(compareModel.diffRate * 100)}`}
+                          </span>
+                        </div>
+                        <div className="flex justify-between border-t border-gray-700/50 pt-0.5">
+                          <span className="text-gray-500">반사실 <span className="text-gray-600">(비교일 수량 유지)</span></span>
+                          <span className="text-purple-200 font-bold">
+                            {fmtPrin(compareModel.totals.counter.evalNative)}
+                            {compareModel.counterRate != null && (
+                              <span className="text-gray-500 font-normal"> · {compareModel.counterRate >= 0 ? '+' : ''}{formatPercent(compareModel.counterRate * 100)}</span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">거래 효과 <span className="text-gray-600">(입출금 제외)</span></span>
+                          {compareModel.tradeEffectValid ? (
+                            <span className={compareModel.tradeEffect >= 0 ? 'text-red-400 font-bold' : 'text-blue-400 font-bold'}>
+                              {compareModel.tradeEffect >= 0 ? '+' : '−'}{fmtPrin(Math.abs(compareModel.tradeEffect))}
+                            </span>
+                          ) : (
+                            <span
+                              className="text-amber-400"
+                              title={compareModel.flowReflected
+                                ? '기준일 종가를 구하지 못한 보유 종목이 있어 총액이 과소합니다'
+                                : '원장의 입출금이 아직 평가액·예수금에 반영되지 않아 그 금액이 손익으로 잘못 잡힙니다'}
+                            >산출 불가</span>
+                          )}
+                        </div>
+                        {/* ⚠️ 게이트에 반사실을 포함할 것 — 배당 종목을 전량 매도하면 기준일 분배금이 0이라
+                            "팔지 않았으면 받았을 분배금"이 정확히 그때 화면에서 사라진다(엑셀에는 남아 두 화면이 갈린다). */}
+                        {(compareModel.totals.basis.dividend > 0 || compareModel.totals.counter.dividend > 0) && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">분배금 차이 <span className="text-gray-600">(기준일 − 반사실)</span></span>
+                            <span className={compareModel.tradeEffectDividend >= 0 ? 'text-red-300' : 'text-blue-300'}>
+                              {compareModel.tradeEffectDividend >= 0 ? '+' : '−'}{fmtPrin(Math.abs(compareModel.tradeEffectDividend))}
+                              {compareModel.tradeEffectDividendPartial && <span className="text-amber-400/80"> (일부 미확인)</span>}
+                            </span>
+                          </div>
+                        )}
+                        {compareModel.netFlow !== 0 && (
+                          <div className="text-[9px] text-amber-400/90 leading-snug pt-0.5">
+                            이 기간 순입출금 {fmtPrin(Math.abs(compareModel.netFlow))} {compareModel.netFlow > 0 ? '입금' : '출금'} — 증감율에는 포함, 거래 효과에서는 제외했습니다.
+                          </div>
+                        )}
+                        {!compareModel.flowReflected && (
+                          <div className="text-[9px] text-amber-400/90 leading-snug">
+                            ⚠ 원장의 입출금이 아직 평가액·예수금에 반영되지 않은 것으로 보입니다(입금일과 반영일이 다를 수 있습니다) — 거래 효과는 산출하지 않았습니다.
+                          </div>
+                        )}
+                        {(compareModel.estimatedBasis || compareModel.estimatedCompare) && (
+                          <div className="text-[9px] text-amber-400/90 leading-snug">🟡 보유수량이 추정인 날짜가 있어 수량 증감이 실제와 다를 수 있습니다.</div>
+                        )}
+                        {(compareModel.totals.basis.priceMissing || compareModel.totals.compare.priceMissing || compareModel.totals.counter.priceMissing) && (
+                          <div className="text-[9px] text-amber-400/90 leading-snug">⚠ 그 날짜 종가를 구하지 못한 보유 종목이 있어 합계가 과소합니다.</div>
+                        )}
+                      </div>
+                    )}
+
+                    {divRows.length > 0 && (
+                      <div>
+                        <div className="text-[10px] text-gray-500 font-bold mb-1">
+                          주당분배금 (세전) <span className="font-normal text-gray-600">· 비우면 자동값 · 저장되지 않습니다</span>
+                        </div>
+                        <table className="w-full text-[10px] border-collapse">
+                          <thead>
+                            <tr className="text-gray-500">
+                              <th className="text-left font-normal py-0.5">종목</th>
+                              <th className="font-normal py-0.5 w-[78px]">기준일</th>
+                              <th className="font-normal py-0.5 w-[78px]">비교일</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {divRows.map(r => (
+                              <tr key={r.key} className="border-t border-gray-700/40 align-top">
+                                <td className="text-left text-gray-300 py-1 pr-1">
+                                  <div className="truncate max-w-[170px]" title={`${r.name} (${r.code})`}>{r.name}</div>
+                                  <div className="text-[9px] text-gray-600">{r.code}</div>
+                                </td>
+                                {['basis', 'compare'].map(side => {
+                                  const info = side === 'basis' ? r.basis?.perShare : r.compare?.perShare;
+                                  const draft = psDraft[side][r.key];
+                                  const auto = info && info.source !== 'manual' ? info.perShare : 0;
+                                  const ymLabel = info && info.ym ? info.ym.slice(2) : '';
+                                  // ⚠️ 배지는 '입력했는가'가 아니라 **모델이 그 값을 채택했는가**로 판정한다 —
+                                  //    음수·문자를 넣으면 모델은 자동값으로 되돌아가는데 배지만 '직접입력'이면
+                                  //    사용자는 자기 입력이 반영된 줄 안다(시트에는 자동값이 찍힌다).
+                                  const typed = draft !== undefined && draft !== '';
+                                  const badge = info && info.source === 'manual'
+                                    ? '직접입력'
+                                    : typed ? '무효 입력'
+                                      : info && info.source === 'paid' ? `입금 ${ymLabel}`
+                                        : info && info.source === 'declared' ? `확정 ${ymLabel}`
+                                          : info && info.source === 'predicted' ? `예상 ${ymLabel}`
+                                            : '미확인';
+                                  return (
+                                    <td key={side} className="py-1 px-0.5">
+                                      <div className="flex flex-col items-end gap-0.5">
+                                        <input
+                                          className="w-[72px] bg-gray-900 border border-gray-600 rounded px-1 py-0.5 text-right text-gray-100 outline-none focus:border-emerald-500"
+                                          value={draft ?? ''}
+                                          placeholder={auto > 0 ? String(Math.round(auto * 10000) / 10000) : '입력'}
+                                          onChange={e => setPs(side, r.key, e.target.value)}
+                                        />
+                                        <span className={`text-[9px] ${badge === '미확인' || badge === '무효 입력' ? 'text-amber-500/80' : 'text-gray-600'}`}>{badge}</span>
+                                        {info && info.upcoming && (draft === undefined || draft === '') && (
+                                          <button
+                                            className="text-[9px] text-emerald-400/90 hover:text-emerald-300"
+                                            title={`${info.upcoming.ym} 회차(아직 배당락 전)의 예상 주당분배금을 이 칸에 적용합니다`}
+                                            onClick={() => setPs(side, r.key, String(info.upcoming.perShare))}
+                                          >
+                                            {info.upcoming.ym.slice(2)} 예상 {info.upcoming.perShare} 적용
+                                          </button>
+                                        )}
+                                      </div>
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    <button
+                      className="w-full py-1.5 bg-emerald-700/60 hover:bg-emerald-600/60 disabled:bg-gray-700/50 disabled:text-gray-500 text-emerald-50 rounded font-bold inline-flex items-center justify-center gap-1"
+                      disabled={!compareModel}
+                      onClick={handleDownloadCompare}
+                      title="① 기준일 ② 비교일 ③ 증감 ④ 반사실(거래하지 않았다면) 4블록 시트로 내려받습니다"
+                    >
+                      <FileSpreadsheet size={12} className={xlsxFlash ? 'text-emerald-200' : ''} />
+                      {xlsxFlash ? '내려받았습니다' : '엑셀 다운로드'}
+                    </button>
+                    {compareError && <div className="text-[10px] text-red-400 leading-snug">{compareError}</div>}
+                  </>
+                )}
               </div>
             )}
           </div>
