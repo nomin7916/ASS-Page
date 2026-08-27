@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { Trash2, RefreshCw, Plus, Calendar } from 'lucide-react';
+import { Trash2, RefreshCw, Plus, Calendar, FileSpreadsheet } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG, MARK_STRIP_BG } from '../constants';
 import {
@@ -8,6 +8,11 @@ import {
   formatChangeRate, formatSavingsDailyRate, formatSavingsPeriod, savingsMaturity, savingsDepositEval,
   handleTableKeyDown, handleReadonlyCellNav, handleRowArrowNav, overseasInvestAmount
 } from '../utils';
+// 엑셀 내보내기 — 외부 npm 의존성 0(직접 조립한 .xlsx). 순수 모듈이라 화면 상태와 무관하다.
+import { downloadPortfolioXlsx, portfolioExcelFileName } from '../portfolioExcel';
+// ⚠️ 파일명 날짜는 **클릭 시점에** KST로 구한다 — 이 파일의 `todayStr`은
+//    `new Date().toISOString()`(UTC) 파생이라 KST 00:00~09:00에 하루 밀린다.
+import { getTodayKST } from '../hooks/useMarketCalendar';
 import CustomDatePicker from './CustomDatePicker';
 
 const formatUSD = (n) => {
@@ -188,7 +193,7 @@ const CategoryCell = ({ item, portfolio, showAssetClass, onUpdate }) => {
 // 계좌 타입별 기능 게이팅 (혼동/회귀 방지 — CLAUDE.md "계좌 타입별 D/S·펀드 게이팅" 참조)
 //  · isRetirement   : 펀드 행 + "펀드 추가" 버튼 — 퇴직연금(DC/IRP) + 개인연금(pension)
 //  · showAssetClass : 위험/안전(D/S) 자산 구분 배지 — 퇴직연금(DC/IRP) 전용 (개인연금 제외)
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {} }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {}, accountName = '' }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -221,6 +226,15 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
       onUpdate(id, col, editingCell.val);
     setEditingCell(null);
   };
+
+  // 엑셀 내보내기 결과 표시 — 'idle' | 'done' | 'fail'.
+  // ⚠️ notify()를 쓰지 않는다: CLAUDE.md 「알림 최소화 정책」상 성공은 벨에 남기지 않고,
+  //    이 컴포넌트에는 notify prop 자체가 없다. 아이콘 1.5초 플래시가 피드백이다
+  //    (RebalancingPanel 목표 날짜 칩과 같은 규약).
+  // ⚠️ 훅은 전부 아래 `if (!totals) return null;` **위**에 있어야 한다 — 조건부 훅 금지.
+  const [excelFlash, setExcelFlash] = useState('idle');
+  const excelTimerRef = useRef(null);
+  useEffect(() => () => { if (excelTimerRef.current) clearTimeout(excelTimerRef.current); }, []);
 
   if (!totals) return null;
 
@@ -255,6 +269,37 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
     const sRatio = totalEval > 0 ? (safeStockEval + fundSafeEval + savingsSafeEval + depositEval) / totalEval * 100 : 0;
     return { dRatio, sRatio, totalEval };
   })() : null;
+
+  // ── 엑셀(.xlsx) 내보내기 ────────────────────────────────────────────────────
+  // 화면에 보이는 표를 그대로 시트로 옮긴다. 숨긴 열은 빠지고, 퇴직연금 D/S 비율 행은
+  // **화면이 이미 계산한 `retirementStats`를 그대로 넘긴다**(엑셀 쪽에서 재계산하면
+  // 두 값이 갈릴 수 있다).
+  const excelAccountName = (accountName || '').trim() || '포트폴리오';
+  const excelFileLabel = portfolioExcelFileName(getTodayKST(), excelAccountName);
+  const handleDownloadExcel = () => {
+    if (excelTimerRef.current) clearTimeout(excelTimerRef.current);
+    try {
+      downloadPortfolioXlsx({
+        accountName: excelAccountName,
+        dateKST: getTodayKST(),
+        portfolio,
+        totals,
+        hiddenColumns,
+        isOverseas,
+        usdkrw,
+        isRetirement,
+        showSavings,
+        showAssetClass,
+        retirementStats,
+        // 사용자가 칠해 둔 행 색상(4색 사이클)도 그대로 옮긴다.
+        markedRows: markedPortfolioRows,
+      });
+      setExcelFlash('done');
+    } catch {
+      setExcelFlash('fail');
+    }
+    excelTimerRef.current = setTimeout(() => setExcelFlash('idle'), 1500);
+  };
 
   const savingsModalItem = savingsModalId ? portfolio.find(p => p.id === savingsModalId && p.type === 'savings') : null;
 
@@ -593,7 +638,17 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                   차익
                 </th>
               )}
-              <th className={`py-2 text-center ${isRetirement ? 'w-[64px] min-w-[64px]' : 'w-[36px] min-w-[36px]'}`}><button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-1"><Plus size={14} /></button></th>
+              {/* 엑셀 내려받기(위) + 종목 추가(아래). 열 개수는 그대로 1칸이다. */}
+              <th className={`py-1 text-center ${isRetirement ? 'w-[64px] min-w-[64px]' : 'w-[36px] min-w-[36px]'}`}>
+                <div className="flex flex-col items-center gap-0">
+                  <button
+                    onClick={handleDownloadExcel}
+                    title={excelFlash === 'fail' ? '엑셀 파일을 만들지 못했습니다' : `엑셀로 내려받기 — ${excelFileLabel}`}
+                    className={`transition-colors p-0.5 ${excelFlash === 'done' ? 'text-emerald-400' : excelFlash === 'fail' ? 'text-red-400' : 'text-gray-400 hover:text-emerald-400'}`}
+                  ><FileSpreadsheet size={14} /></button>
+                  <button onClick={onAddStock} title="종목 추가" className="text-gray-400 hover:text-purple-400 transition-colors p-0.5"><Plus size={14} /></button>
+                </div>
+              </th>
             </tr>
           </thead>
           <tbody>

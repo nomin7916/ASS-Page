@@ -1,8 +1,62 @@
 # ASS-Page 작업 로그
 
-> 마지막 작업일: 2026-08-13  
+> 마지막 작업일: 2026-08-27  
 > 브랜치: main  
 > 작업 PC: 메인 PC
+
+---
+
+## 2026-08-27 — [포트폴리오 표] 엑셀(.xlsx) 내보내기 버튼
+
+**대상 파일**: `src/xlsxWriter.ts`(신규) · `src/portfolioExcel.ts`(신규) ·
+`src/components/PortfolioTable.tsx` · `src/App.tsx` · `scripts/verify-excel.mjs`(신규) ·
+`package.json` · `CLAUDE.md`
+
+> 각 계좌에서 포트폴리오 테이블을 엑셀파일로 다운로드 받을 수 있게 합니다.
+> 제목은 (260827_퇴직연금 820) 형식으로, 다운로드 버튼은 수익률 옆 `+` 헤더 상단에 만들어 주세요.
+
+### 1. 버튼
+
+표 헤더 맨 오른쪽 칸(수익률 옆 `+` 열)에 `FileSpreadsheet` 아이콘을 **`+` 위**에 세로로 쌓았다.
+⚠️ 기존 `<th>` **안**에 넣었다 — 새 열을 만들면 주식·펀드·예적금 행의 `<td>`, tfoot 빈 칸,
+`depositColSpan`·`totalColCount` 두 식까지 전부 고쳐야 하는 '렌더 지점 23곳' 부류가 된다.
+피드백은 아이콘 1.5초 플래시(성공 녹색 / 실패 빨강) — 알림 최소화 정책상 `notify()`는 쓰지 않는다.
+
+### 2. 진짜 .xlsx를 직접 조립 (외부 의존성 0)
+
+`package-lock.json` 부재로 Vercel 흰 화면이 났던 이력이 있어 xlsx/exceljs/jszip을 쓸 수 없다.
+→ `src/xlsxWriter.ts`가 **ZIP(STORE, 압축 없음) + 최소 OOXML**을 바이트 단위로 조립한다.
+CSV·SpreadsheetML로 타협하지 않은 이유: 전자는 서식·색·열 너비가 사라지고 BOM 유무로 한글이 깨지며,
+후자는 Excel이 "확장자와 형식이 다르다" 경고를 띄운다.
+
+실측 검증: 만든 바이트를 되읽어 6개 파트의 CRC-32·크기 전부 일치, .NET `ZipFile`로도 정상 개방,
+`<styleSheet>`/`<worksheet>` 자식 순서 XSD 시퀀스 준수, 예약 fill(0=none·1=gray125) 유지.
+
+### 3. 화면과 1:1
+
+숨긴 열 반영 · 화면 렌더 순서(주식→예수금→펀드→예적금→D/S→TOTAL) · 행 색상 표시(4색) ·
+퇴직연금 D/S 비율 행 · TOTAL 행. 숫자는 **숫자 셀**로 넣고 Excel 서식으로 화면과 같게 보이게 했다
+(퍼센트는 분수+`%` 서식이라 셀 합산이 정상, 손익은 한국식 빨강/파랑).
+
+⚠️ **해외계좌 단위 함정**: `totals.calcPortfolio`는 `investAmount`·`evalAmount`·`profit` 셋만 원화
+환산돼 있고 나머지는 native USD다 → 투자금액은 `overseasInvestAmount(item)`을 써야 한다
+(`item.investAmount`를 읽으면 ≈1,390배). USD 열 뒤에 `(₩)` 동반 열을 덧붙여 정보 손실을 없앴다.
+
+파일명 날짜는 클릭 시점 `getTodayKST()` — 이 파일의 `todayStr`(UTC 파생)은 KST 00:00~09:00에 하루
+밀린다. ⚠️ 그 필드는 예적금 입금일에 쓰이는 **별개의 선행 버그**라 이번 커밋에서 건드리지 않았다.
+
+### 4. 검증
+
+`npm run verify:excel` 신설(**91건** — 직접 import 순수 함수 + ZIP 되읽기 + 소스 텍스트 가드 #G1~#G29).
+⚠️ 미러 없이 `src/*.ts`를 **직접 import**한다(미러는 한쪽만 고친 변경을 통과시킨다).
+**변이 22종으로 검출을 실증**했다(22/22 검출, 죽은 단언 0).
+
+게이트: `npm run build` 통과 · verify 18/19(`calendar`는 KR 공휴일 큐레이션 드리프트로 **변경 전
+HEAD에서도 동일하게 실패**하는 연례 유지보수 신호) · jsxcheck/undefcheck/scopecheck 통과(신규 2파일의
+scopecheck 지적 44건은 전부 다중행 구조분해·클래스 메서드·인터페이스 필드 오탐임을 직접 확인).
+
+**영속화 지점 0곳** — 전부 매 렌더 파생값이라 `portfolioStructureKey`·`applyStateData`·
+`applyBackupData`·저장 effect deps·`chartPrefs` 전 지점 무수정.
 
 ---
 

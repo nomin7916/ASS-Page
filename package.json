@@ -10,6 +10,7 @@
     "verify:calendar": "node scripts/verify-market-calendar.mjs",
     "verify:tax": "node scripts/verify-kretf-tax.mjs",
     "verify:dividend": "node scripts/verify-dividend-slots.mjs",
+    "verify:excel": "node scripts/verify-excel.mjs",
     "verify:history": "node scripts/verify-history-dedup.mjs",
     "verify:notice": "node scripts/verify-notice.mjs",
     "verify:twr": "node scripts/verify-twr.mjs",

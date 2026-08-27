@@ -4265,6 +4265,116 @@ markAsRead() / clearNotificationLog()
 
 ---
 
+### 포트폴리오 표 엑셀(.xlsx) 내보내기 — 무의존성 라이터 (⚠️ 회귀 주의)
+
+포트폴리오 표 헤더 **맨 오른쪽 칸(수익률 옆 `+` 열)의 위쪽 아이콘**(`FileSpreadsheet`)으로 화면에
+보이는 표를 그대로 엑셀 파일로 내려받는다. 파일명은 `YYMMDD_계좌명.xlsx`(예: `260827_퇴직연금 820.xlsx`).
+
+- **⚠️ 외부 npm 의존성 0 — xlsx/exceljs/jszip을 추가하지 말 것.** `package-lock.json`이 없어 Vercel이
+  매 배포마다 `npm install`을 재해석하고, 정확히 그 원인으로 프로덕션 흰 화면이 났던 이력이 있다
+  (자금 흐름도 절과 동일 규약). `src/xlsxWriter.ts`가 ZIP(**STORE**, 압축 없음) + 최소 OOXML을 직접
+  조립한다 — DEFLATE를 안 쓰므로 압축 라이브러리도 필요 없다.
+  ⚠️ **CSV·SpreadsheetML(`.xls`)로 되돌리지 말 것** — 전자는 서식·색·열 너비가 전부 사라지고
+  BOM 유무로 한글이 깨지며, 후자는 Excel이 "확장자와 형식이 다르다" 경고를 띄운다. 진짜 `.xlsx`만
+  경고 없이 열린다.
+- **파일 3개**: `src/xlsxWriter.ts`(범용 라이터, **import 0건**) · `src/portfolioExcel.ts`(표 → 시트
+  모델) · `src/components/PortfolioTable.tsx`(버튼 + 핸들러). App은 `accountName={title}` 한 줄만 추가.
+- **⚠️ 영속화 지점 0곳** — 전부 매 렌더 파생값이다. `portfolioStructureKey`·`applyStateData`·
+  `applyBackupData`·저장 effect deps·`chartPrefs`·`_preserveStickyPersonalData` **전 지점 무수정**.
+  두 모듈은 `localStorage`·`fetch`·`setPortfolios`를 쓰지 않는다(#G28·#G29가 단언).
+
+**⚠️ 해외계좌 단위 함정(이 기능 최대 리스크)**
+`portfolio` prop은 `totals.calcPortfolio`라 `investAmount`·`evalAmount`·`profit` **셋만** 이미 원화로
+환산돼 있고(`usePortfolioData`가 fxRate를 곱한다) `currentPrice`·`purchasePrice`·`quantity`·
+`depositAmount`는 **환산되지 않은 native USD**다. 따라서
+① 투자금액(USD)은 반드시 `overseasInvestAmount(item)` — `item.investAmount`를 읽으면 **≈1,390배**
+② 평가금액·차익의 USD는 `item.evalAmount / usdkrw`(화면 `fmtDual`과 같은 식).
+해외계좌는 한 셀에 두 숫자를 넣을 수 없어 **USD 열 뒤에 `(₩)` 동반 열**을 덧붙인다(정보 손실 0).
+
+**⚠️ Excel이 파일을 거부하는 계약들(전부 실측으로 확인)**
+- `<styleSheet>` 자식 순서(numFmts→fonts→fills→borders→cellStyleXfs→cellXfs→cellStyles→dxfs→
+  tableStyles)와 `<worksheet>` 자식 순서(dimension→sheetViews→sheetFormatPr→**cols**→sheetData→
+  **mergeCells**)는 XSD 시퀀스라 하나만 어긋나도 "복구할 수 없는 내용"이 된다.
+- **fills 인덱스 0(none)·1(gray125)은 Excel 예약**. 사용자 fill을 0/1에 넣으면 **오류 없이 조용히
+  무시**되어 배경색이 통째로 사라진다 → solid fill은 2번부터.
+- **존재하지 않는 스타일 인덱스는 하드 리젝트**(예약 fill 문제와 달리 조용하지 않다) → `buildSheetXml`이
+  범위를 벗어난 `s`를 기본 서식으로 떨어뜨린다.
+- `alignment`는 `<xf>` **자식 요소**여야 한다(속성으로 쓰면 오류 없이 정렬만 사라진다) + `apply*` 플래그는
+  LibreOffice가 엄격히 본다(빠뜨리면 "Excel에선 되는데 LibreOffice에선 민무늬" 버그).
+- 시트 이름은 31자 이하·비어 있지 않음·`: \ / ? * [ ]` 금지(하드 리젝트) → `sanitizeSheetName`.
+- XML 1.0 불허 제어문자(U+0000–08, 0B, 0C, 0E–1F)는 **이스케이프가 아니라 제거**(`&#1;`도 불법).
+- 어떤 파트에도 **BOM을 붙이지 말 것**(CSV 습관) — XML 선언이 깨진다. 한글은 그냥 UTF-8이면 된다.
+- 문자열 셀은 `t="inlineStr"` — `t="s"`는 sharedStrings 인덱스라 값이 깨진다. `<t>`에는
+  `xml:space="preserve"`(없으면 앞뒤 공백 소실).
+- `formatCode`는 XML **속성**이라 `"₩"#,##0`의 따옴표를 `&quot;`로 이스케이프해야 한다. 통화기호를
+  따옴표로 감싸지 않으면 Excel이 서식을 제멋대로 고쳐 쓴다.
+- **⚠️ 병합 범위에서 덮이는 칸을 `null`로 두면 배경·테두리가 첫 칸에서 끊겨 블록이 반만 칠해진다**
+  (Excel은 병합 셀 서식을 덮인 칸 각각에서 읽는다) → `spanStyled`가 같은 스타일의 빈 셀로 채운다.
+  적용 5곳: 제목·기준일·예수금 라벨·D/S 비율·TOTAL 라벨.
+- `URL.revokeObjectURL`을 `click()` 직후 **동기로** 부르면 일부 브라우저가 저장 전에 URL을 잃는다 →
+  `setTimeout(…, 0)`. 앵커는 DOM에 붙였다 떼야 Firefox에서 동작한다.
+
+**⚠️ 화면과 1:1을 유지하는 규약**
+- **숨긴 열은 시트에서도 빠진다**(`hiddenColumns` 그대로 전달). 스크린샷 구성(구분·등락률·현재가·
+  구매단가·투자비중·차익 숨김)이 그대로 재현된다.
+- **행 순서는 화면 렌더 순서**(주식 → 예수금 → 펀드 → 예적금 → D/S → TOTAL). ⚠️ 저장 배열 순서
+  (`handleSort`: 주식 → 펀드 → 예적금 → 예수금)와 **다르다** — 배열을 그대로 돌면 안 된다.
+- **퍼센트는 분수(값/100) + `%` 서식**. 표시는 화면과 한 글자도 같으면서 Excel이 진짜 백분율로
+  정렬·계산한다. ⚠️ 원시 퍼센트(3.00)에 리터럴 `"%"`를 붙이는 방식으로 되돌리지 말 것 — 셀을 더하면
+  300%가 나온다. 나눗셈 잔차는 `toPrecision(12)`로 정리한다(`0.013000000000000001` 금지).
+- **미입력은 0이 아니라 빈 셀**. 화면 `formatNumber`/`formatQty`/`formatFundPrice`는 `''`·null에
+  **빈 문자열**을 돌려주므로(`cleanNum` 경유가 아니다) 전부 0으로 누르면 입력한 적 없는 0이 찍힌다.
+- **0의 색은 행 종류마다 다르다 — 통일하지 말 것**: 본문은 `> 0 ? red : blue`(0=파랑), tfoot만
+  `>= 0 ? red : blue`(0=빨강) → TOTAL 전용 서식 `pctSignedPos`/`krwSignedPos`/`usdSignedPos`.
+  tfoot 비중은 화면이 문자열 `'100%'`라 소수 없는 `pctInt`를 쓴다.
+- **예적금 행은 열을 용도 변경**한다(코드=연이율 / 등락률=1일 환산 / 현재가=투자기간 / 구매단가·
+  보유수량=`-`). 평가금액 아래 '만기' 줄은 평가금액을 **숫자로 유지**해야 합계 검산이 되므로
+  별도 **'비고' 열**로 뺀다(예적금이 있을 때만 열이 생긴다).
+- **행 색상 표시(4색 사이클)도 시트 배경으로 옮긴다**(`MARK_XLSX_BG`) — 빼면 사용자가 일부러 칠해 둔
+  구분이 통째로 사라진다.
+- **열 라벨은 `PT_COLS` 쪽('투자비중'/'평가비중')을 쓴다** — 화면 `<th>`는 둘 다 '비중'이라
+  스프레드시트에서 동명 열 두 개가 되어 구분이 불가능하다. 두 라벨 모두 앱이 이미(숨김 열 복원 칩)
+  쓰는 문구다. ⚠️ `EXCEL_COLS`의 **key 집합**은 `PT_COLS`와 반드시 같아야 한다(숨김 토글이 같은 키를
+  쓴다 — #G20이 단언).
+- **의도된 표시 차이 2건**: 해외 음수 금액은 화면이 `$-1,234.50`(formatUSD의 문자열 결합)인데 시트는
+  관례대로 `-$1,234.50`이다. 해외 예수금의 투자금액 칸은 화면이 통화기호 없는 맨 숫자인데 시트는
+  열 전체가 `$` 서식이다(한 열에 두 통화 의미를 섞지 않는다).
+
+**⚠️ 배선 규약**
+- **버튼은 기존 `+`(종목 추가) th **안**에 넣는다** — 새 `<th>`를 만들면 주식·펀드·예적금 행의 `<td>`,
+  tfoot 빈 `<td>`, `depositColSpan`·`totalColCount` 두 식까지 전부 고쳐야 하는 '렌더 지점 23곳' 부류가 된다.
+  ⚠️ 이 표의 z-index를 올리지 말 것(sticky 종목명 th와 앱 상단바 페인트 순서 회귀).
+- **파일명 날짜는 클릭 시점 `getTodayKST()`** — 이 파일의 `todayStr`은 `new Date().toISOString()`(UTC)
+  파생이라 KST 00:00~09:00에 하루 밀린다. ⚠️ 그 필드는 예적금 입금일에 쓰이는 **별개의 선행 버그**이고
+  src 전역에 20곳 넘게 있으므로 **여기서 함께 고치지 말 것**(영속되는 `deposits[].date`를 바꾼다).
+  부수 효과로 기존 CSV 4종(UTC 날짜 파일명)과 그 시간대에 하루 차이가 나는데, 이쪽이 옳은 방향이다.
+- **성공 시 `notify()` 금지**(알림 최소화 정책). 이 컴포넌트엔 `notify` prop 자체가 없다 —
+  피드백은 **아이콘 1.5초 플래시**(`excelFlash`, 언마운트에서 타이머 정리)다. 카드 루트가
+  `overflow-hidden`이라 absolute 팝오버는 잘리므로 `title` 속성을 쓴다.
+- **lucide 아이콘은 저장소에 이미 쓰는 것만** — `FileSpreadsheet`는 `UserInfoBar`에서 이미 쓴다.
+  `FileDown`/`Sheet`/`Table`은 src에 전례가 없다.
+- **`SAFE_CATEGORIES`는 `PortfolioTable.tsx`와 `portfolioExcel.ts` 양쪽에 있고 문자 그대로 같아야
+  한다**(D/S 배지 판정 — #G19가 단언).
+- **⚠️ `portfolioExcel.ts`의 상대 import에 붙은 `.ts` 확장자를 떼지 말 것** — 검증이 **미러 없이 직접
+  import**하는데, Node ESM은 확장자 없는 상대 경로를 해석하지 못해(`ERR_MODULE_NOT_FOUND`) 파트①
+  54건이 통째로 죽는다. `tsconfig.app.json`에 `allowImportingTsExtensions: true`가 이미 켜져 있어
+  TS·vite 어느 쪽도 문제되지 않는다. 같은 이유로 `xlsxWriter.ts`는 **import 0건**을 유지하고
+  `enum`/`namespace`를 쓰지 않는다(Node 타입 스트리핑 미지원 — `erasableSyntaxOnly`도 이미 켜져 있다).
+
+- **범위 밖(의도)**: 통합 대시보드·리밸런싱 표·분배금 표의 엑셀 내보내기, 여러 계좌 한 파일에 시트로
+  묶기, 금현물 표(`KrxGoldTable`은 별도 컴포넌트라 버튼 없음), 차트 이미지 삽입, 수식(SUM) 삽입,
+  별도 브라우저 창(`CardWindow`)에서의 내보내기.
+- 검증: `npm run verify:excel` (직접 import #1~#54 + ZIP 되읽기 + 소스 텍스트 가드 #G1~#G29).
+  ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 22종**(해외 투자금액 되돌림 · 숨김 열 필터 제거 ·
+  퍼센트 원시값 · mergeCells 위치 · 예약 fill 제거 · NaN 방어 제거 · CRC 손상 · 버튼 삭제 · UTC 날짜 복귀 ·
+  payload 필드 누락 · App prop 삭제 · npm 의존성 추가 · SAFE_CATEGORIES 드리프트 · 빈 셀→0 · 행 순서 ·
+  `xml:space` 제거 · `.ts` 확장자 제거 · 열 삭제 · 압축방식 변경 · notify 추가 · 틀 고정 해제 ·
+  행 색상 누락)으로 **실제 검출을 확인**했다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+  ⚠️ **파트① 모듈 로드 실패를 '런타임 미지원'과 뭉뚱그려 건너뛰지 말 것** — `.ts` 확장자를 떼는 것만으로
+  54건이 **조용히 사라지고도 종료코드 0**이 된다. `ERR_UNKNOWN_FILE_EXTENSION`만 skip, 나머지는 실패다.
+
+---
+
 ### 환율 계산기 — 계산기 창 내부 '환율' 패널 (⚠️ 회귀 주의)
 
 `FloatingCalculator` 타이틀바 **환율 토글**로 여는 통화 변환 패널. 2~3개 슬롯, **아무 칸이나 입력**
@@ -4438,7 +4548,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **게이트 = 결정적 검증 / 리뷰 = 보너스.** 둘의 역할을 절대 섞지 말 것.
 
 - **게이트**(통과 못 하면 커밋 금지): 변경 영역의 `npm run verify:*`(calendar·tax·dividend·history·
-  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel **18종** 중 해당분) + `memory/tools/jsxcheck.mjs`
+  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel·excel **19종** 중 해당분) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의
   지역 변수를 참조)**. `npm run build`가 가능한 환경이면 추가로 돌린다.
   ⚠️ **세 도구는 서로를 대체하지 못한다** — `undefcheck`는 파일 전체를 한 스코프로 보므로

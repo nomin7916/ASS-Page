@@ -4101,6 +4101,7 @@ export default function App() {
             markedPortfolioRows={markedPortfolioRows}
             onToggleMarkedPortfolioRow={toggleMarkedPortfolioRow}
             onResetAllMarkedPortfolioRows={resetAllMarkedPortfolioRows}
+            accountName={title}
           />
         )}
 
