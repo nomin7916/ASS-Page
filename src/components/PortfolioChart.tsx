@@ -52,6 +52,8 @@ export default function PortfolioChart({
   handleChartMouseMove,
   handleChartMouseUp,
   handleChartMouseLeave,
+  handleChartDoubleClick,
+  anchorDate,
   handleCompStockBlur,
   handleToggleComp,
   handleFetchCompHistory,
@@ -508,8 +510,9 @@ export default function PortfolioChart({
                   >
                     <HelpCircle size={13} />
                   </button>
-                  <span className="text-gray-500 text-[10px] font-bold shrink-0">{selectionResult ? '선택 기간' : '조회기간'}</span>
+                  <span className="text-gray-500 text-[10px] font-bold shrink-0" title="드래그로 구간 선택 · 더블클릭으로 시작점을 고정한 뒤 클릭하거나 드래그해 끝점 지정 (Esc 취소)">{selectionResult ? '선택 기간' : '조회기간'}</span>
                   <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
+                  {anchorDate && <span className="text-sky-300 text-[10px] font-bold shrink-0 ml-1">시작점 고정 {formatShortDate(anchorDate)} — 끝점을 클릭하거나 드래그해 놓으세요 (Esc 취소)</span>}
                 </div>
                 {showCalcVerify && (() => {
                   const vStart = finalChartData.find(d => d.date === displayResult.startDate);
@@ -786,7 +789,7 @@ export default function PortfolioChart({
         className="chart-container-for-drag p-2 sm:p-3 md:p-4 h-[320px] sm:h-[380px] md:h-[440px] xl:h-auto xl:min-h-[400px] xl:flex-1 relative select-none"
       >
         <ResponsiveContainer width="100%" height="100%" minHeight={260}>
-          <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave}>
+          <ComposedChart data={finalChartData} onMouseDown={handleChartMouseDown} onMouseMove={handleChartMouseMove} onMouseUp={handleChartMouseUp} onMouseLeave={handleChartMouseLeave} onDoubleClick={handleChartDoubleClick}>
             <defs>
               <filter id="neonGlow">
                 <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
@@ -912,6 +915,17 @@ export default function PortfolioChart({
             {selectionDim?.before && <ReferenceArea yAxisId="left" x1={selectionDim.before.from} x2={selectionDim.before.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
             {selectionDim?.after && <ReferenceArea yAxisId="left" x1={selectionDim.after.from} x2={selectionDim.after.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
             {selectionDim && <ReferenceArea yAxisId="left" x1={selectionDim.start} x2={selectionDim.end} fill={CHART_SELECTION.windowFill} fillOpacity={CHART_SELECTION.windowOpacity} stroke={CHART_SELECTION.windowStroke} strokeWidth={CHART_SELECTION.windowStrokeWidth} ifOverflow="hidden" />}
+            {/* 더블클릭으로 고정한 시작점(앵커) — 종료점을 고르기 전까지 남는다.
+                ⚠️ 딤·선택창보다 **뒤에 선언**해야 위에 보인다(paint 순서 = 선언 순서).
+                ⚠️ ifOverflow="hidden" 필수 — 조회기간 첫 날짜에 앵커를 찍으면 scalePoint 잔차로
+                   기본값 'discard'가 표시선을 통째로 버려 '더블클릭했는데 아무 표시도 없다'가 된다. */}
+            {anchorDate && <ReferenceLine yAxisId="left" x={anchorDate} stroke={CHART_SELECTION.anchorStroke} strokeWidth={CHART_SELECTION.anchorStrokeWidth} strokeDasharray={CHART_SELECTION.anchorDash} ifOverflow="hidden"
+              label={({ viewBox }) => {
+                const lx = (viewBox?.x ?? 0) + 4;
+                const ly = (viewBox?.y ?? 0) + 10;
+                return <text x={lx} y={ly} textAnchor="start" fill={CHART_SELECTION.anchorStroke} fontSize={9} fontWeight={700}>시작</text>;
+              }}
+            />}
             {hoveredPoint && !refAreaLeft && <ReferenceLine yAxisId="left" x={hoveredPoint.label} stroke="rgba(255,255,255,0.25)" strokeWidth={1} />}
             {hoveredPoint && !refAreaLeft && hoveredPoint.payload
               .filter(p =>

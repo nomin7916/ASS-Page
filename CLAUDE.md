@@ -1050,6 +1050,8 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   드래그에서 딤이 뒤집혀 **선택한 구간만 어두워진다**(의도와 정반대).
 - **해제 경로 4종 — 하나라도 빠지면 차트가 어두운 채로 고착된다**(종전엔 흰색 8% 띠라 잔존해도
   티가 안 났다. 이 변경으로 잔존의 대가가 커졌으므로 넷 다 필수):
+  ⚠️ **`MouseLeave`는 더 이상 해제 경로가 아니다**(2026-08) — 커서가 wrapper를 벗어나도 드래그를
+  취소하지 않는다. 아래 '차트 구간 선택 = ref가 정본' 절 참조.
   ① **차트 안 단순 클릭** — `useChartInteraction`의 두 `MouseUp`. ⚠️ 통합 차트는
   `intRefAreaRight`가 `''`인 채로 `calculateIntSelection`에 넘기면 `[l,r].sort()`가 `''`를 앞으로
   보내 **차트 시작~클릭 지점**이라는 없는 구간을 돌려준다(하이라이트는 안 뜨는데 패널만 '선택 기간'으로
@@ -1073,17 +1075,19 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   드래그로도 선택이 만들어진다**. 그런데 스크롤로 판정된 터치에는 호환 `mousedown`이 발생하지
   않아, `mousedown`만 듣던 종전 코드로는 딤이 영영 안 걷혔다.
   ④ **조회기간 변경** — `[appliedRange]` / `[intAppliedRange]` 리셋 effect 2개(둘 다 기존).
+  ⚠️ **②③④는 state뿐 아니라 `resetChartSelectionRefs()`로 ref도 함께 지워야 한다** — 정본이 ref라
+  한쪽만 지우면 다음 mousedown이 유령 앵커를 되살린다(상세는 아래 절).
 - **영속화 지점 0곳** — 딤은 전부 매 렌더 파생값이고 선택 state는 종전부터 세션 로컬이다.
   `chartPrefs` 5지점·`portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps
   **전 지점 무수정**. `selectionResult`/`calculateSelection`/`calculateIntSelection` **산식도 무수정**
   (누적 TWR 규약 무영향 — 정상 드래그의 결과값이 1원도 바뀌지 않는다).
-- **범위 밖(의도)**: Esc 해제, 선택 구간 확대(zoom), 카드 별도 창의 수익률 차트
+- **범위 밖(의도)**: 선택 구간 확대(zoom), 카드 별도 창의 수익률 차트
   (`cardWindow`에 `chart`는 원래 미지원), 차트 컨테이너의 `touch-action` 지정.
   ⚠️ 마지막 항목은 **알려진 한계**다 — 차트 위에서 시작한 세로 스크롤이 가로 성분을 가지면
   스크롤과 **동시에** 구간 선택이 만들어진다(recharts의 터치 위임 때문. 이 변경 이전부터 있던
   동작이다). `touch-action: pan-y`로 막고 싶어도 recharts가 `onTouchCancel`을 바인딩하지 않아
   `isDragging`이 true로 남을 수 있어 더 나쁘다 → 위 ③의 `touchstart` 해제로 탈출구만 열어 뒀다.
-- 검증: `npm run verify:chart-sel` (`src/utils.ts` 직접 import #1~#17 + 소스 텍스트 가드 #G1~#G9b).
+- 검증: `npm run verify:chart-sel` (`src/utils.ts` 직접 import #1~#17 + 소스 텍스트 가드 #G1~#G17).
   ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 26종**(딤/선택 창 개별 삭제 · paint 순서를
   `<Area>` 앞으로 되돌림 · 토큰 손복제 · 옛 흰색 하이라이트 부활 · Fragment 래핑 · 단순 클릭 가드 제거 ·
   차트 밖 클릭에서 통합 초기화 제거 · 없는 날짜 통과 · 역방향 정규화 제거 · 폭 0 딤 · 상보성 파괴 ·
@@ -1099,6 +1103,100 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   구현이 스크립트를 통째로 중단시켜 어느 계약이 깨졌는지 알 수 없고, 변이 테스트에서 '검출됨'과
   '죽은 단언'을 구분할 수 없다(실측: `i1 === -1` 가드를 지우면 `rows[-1].date`로 TypeError).
   가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
+
+### 차트 구간 선택 = 'ref가 정본' + 더블클릭 시작점 고정 (⚠️ 회귀 주의)
+
+수익률 차트(개별 계좌 `PortfolioChart` · 통합 대시보드 `IntegratedDashboard`)의 기간 선택은 두 제스처를
+**같은 상태 머신 하나**로 지원한다: ① 종전의 **그냥 드래그** ② **더블클릭으로 시작점을 고정한 뒤
+클릭하거나 드래그해 끝점 지정**(2026-08 신설, 사용자 확정 — 둘 다 허용).
+발단은 사용자 보고 "그래프선에 마우스를 놓고 드래그해 기간을 고르려는데 **잘 안 되고, 조회기간이
+길수록 심하다**". 원인은 UI가 아니라 **React 18 이벤트 우선순위 비대칭**이었다.
+
+- **⚠️ 1급 계약 — 진행 상태의 정본은 `useChartInteraction`의 ref(`acctRef`/`intRef`)다. React state로
+  되돌리지 말 것.** `mousemove`의 `setState`는 **ContinuousLane**(Scheduler UserBlocking = MessageChannel
+  **매크로태스크**)로 비동기 커밋되는데 `mouseup`은 **DiscreteLane**(SyncLane, 마이크로태스크)이라 그
+  자리에서 즉시 처리된다. 차트가 무거우면 mousemove가 커밋되기 **전에** mouseup이 실행되고, mouseup
+  핸들러가 **직전 커밋 렌더의 클로저**를 읽는 순간 `refAreaRight`가 `''`라 '단순 클릭 = 해제' 분기를 타
+  **선택이 통째로 사라진다**. 게다가 mouseup의 `setRefAreaRight('')`가 훅 업데이트 큐에 더 나중에
+  들어가므로 뒤늦게 도착한 mousemove 값은 **구조적으로 살아남을 수 없다**.
+  ref는 커밋과 무관하게 동기 갱신되므로 **렌더 속도와 정확성이 완전히 분리**된다.
+  - **왜 조회기간이 길수록 심한가**: 이 레이스의 창(window) 크기 = 리렌더 1회 시간이고, 그 시간이
+    포인트 수 N에 정비례한다. `unifiedDates`는 기록일 ∪ 지수 ∪ 전 보유·비교종목 일봉 ∪ 전 시장지표라
+    3개월 ≈ 65, 1년 ≈ 265(암호화폐 이력이 있으면 365), 3년 ≈ 800, 10년 ≈ 2,650이다. 게다가 recharts는
+    `isChildrenEqual`이 **구조적으로 항상 false**(인라인 화살표 prop — `tickFormatter`·`label`·
+    `content={() => null}`)라 매 렌더 `updateStateOfAxisMapsOffsetAndStackGroups`를 **O(N × 시리즈수)**로
+    돌린다. 개별 차트는 지표를 전부 켜면 시리즈가 최대 24개다.
+  - ⚠️ **그 `isChildrenEqual`을 고쳐도 드래그 중에는 아무 효과가 없다** — 딤·선택창 `ReferenceArea`의
+    props가 매 move마다 **의도적으로** 바뀌므로 드래그 중에는 항상 false다. 인라인 화살표를 상수로
+    끌어올리는 대규모 리팩터링은 이 버그에 무효이므로 하지 말 것.
+- **⚠️ 훅은 지연 state를 아예 받지 않는다(구조적 불변식)** — `useChartInteraction`의 시그니처에
+  `refAreaLeft`/`refAreaRight`/`isDragging`이 **없다**. '읽지 않는다'를 규율로만 두면 언젠가 다시
+  읽게 되므로, 참조할 방법 자체를 없앴다. `App.tsx`의 호출부도 setter만 넘긴다(가드 #G10b·#G10c).
+  React state(`refAreaLeft` 등)는 이제 **딤·앵커선을 그리기 위한 거울**일 뿐이다.
+- **⚠️ `MouseLeave`가 드래그를 취소하지 않는다** — recharts 플롯 상단 여백이 기본 `margin.top` =
+  **5px**뿐이라, 구간을 끝까지 끌다 위로 살짝만 넘겨도 `.recharts-wrapper`를 벗어나 mouseleave가 뜬다.
+  종전엔 `handleChartMouseLeave = handleChartMouseUp`이라 그 순간 선택이 통째로 사라졌다(오른쪽 끝까지
+  끌어 '오늘까지' 고르려는 가장 흔한 동작에서 특히 잦다). 지금은 **hover만 끄고** 확정은 mousedown에서
+  무장한 **window `mouseup`**(`armWindowUp`, 포인터 캡처 대용)이 맡는다.
+  ⚠️ **드래그 고착 자가치유 2종을 세트로 둘 것** — 취소를 없앱기 때문에 버튼을 누른 채 창을
+  벗어나면 `dragging`이 true로 남아 돌아왔을 때 **버튼을 안 눌렀는데도 구간이 커서를 따라온다**.
+  ① `armWindowUp`이 window **`blur`**도 함께 듣고(alt-tab 즉시 확정) ② mousemove에서
+  `s.dragging && ev.buttons === 0`이면 그 자리에서 확정한다(돌아왔을 때 지연 치유).
+  ⚠️ ②는 **반드시 `s.dragging`과 함께** 판정할 것 — 앵커 미리보기는 원래 버튼 없이 따라오므로
+  `buttons === 0`만 보면 그 기능이 통째로 죽는다(가드 #G11c).
+  ⚠️ recharts의 `onMouseUp`이 먼저 실행되며 `disarmWindowUp()`으로 리스너를 떼므로 **이중 확정이 없다**
+  (React 루트가 window보다 앞 노드라 순서가 보장된다). 커서가 밖에 있으면 recharts 쪽이 안 오고 window
+  쪽만 확정한다.
+- **상태 머신** (개별·통합 동일, `ChartSel = {anchor, left, right, dragging}`):
+
+  | 현재 | 이벤트 | 동작 |
+  |---|---|---|
+  | 아무 때나 | 플롯 위 **더블클릭** | `anchor = left = 그 날짜`, `right=''` → 대기 상태(파란 점선 '시작' 표시) |
+  | 앵커 없음 | mousedown(플롯) | `left = 그 날짜`, `right=''` — 종전 드래그 시작 |
+  | **앵커 있음** | mousedown(플롯) | **시작점을 덮어쓰지 않는다** — 그 지점은 `right`(종료점 후보) |
+  | 드래그 중 · 앵커 대기 | mousemove | `right` 갱신 + 미리보기(앵커 모드는 **버튼을 안 눌러도** 따라온다) |
+  | 〃 | mouseup / window mouseup | `left && right && left !== right`면 확정(+앵커 해제), 아니면 해제 |
+  | 앵커 있음 | 앵커 위에서 mouseup | 시작점 유지하고 계속 대기(취소가 아니다) |
+  | 아무 때나 | 플롯 **밖** mousedown · 차트 밖 클릭 · 조회기간 변경 · **Esc** | 전부 해제(앵커·ref 포함) |
+
+  ⚠️ **`(s.dragging || s.anchor)`에서 `s.anchor`를 빼지 말 것** — 빼면 '클릭으로 끝점 지정'이 통째로
+  죽어 사용자가 고른 "둘 다 허용" 규약이 반쪽이 된다(가드 #G16b).
+- **⚠️ 더블클릭의 두 번째 클릭에서 오는 mousedown/mouseup은 무시한다**(`isSecondClick(ev)` = `ev.detail >= 2`,
+  **4곳**). 안 그러면 한 제스처 안에서 '앵커 확정 → 즉시 선택 확정 → 해제'가 연달아 일어나 화면이
+  번쩍인다. recharts는 `onMouseDown`/`onMouseUp`을 `handleOuterEvent`로 넘기며 2번째 인자에 React
+  합성 이벤트를 실어 주므로 `detail`을 읽을 수 있다. **Touch 경로는 `detail`이 없어 항상 false**(기존 동작 유지).
+  ⚠️ 앵커 상태에서 다시 더블클릭하면 1번째 클릭이 먼저 구간을 확정했다가 dblclick이 새 앵커를 잡는다 —
+  한 프레임 깜빡일 수 있으나 결과는 정확하다. 이를 없애려면 클릭 확정을 250ms 지연해야 해서 **미채택**.
+- **⚠️ `onDoubleClick`은 `<Tooltip>`이 있어야 온다** — recharts `parseEventsOfWrapper`가 tooltipEvents로
+  `onDoubleClick: handleDoubleClick`을 바인딩한다(두 차트 모두 `<RechartsTooltip content={() => null} />`을
+  렌더하므로 성립). `getMouseInfo`가 **null**을 그대로 넘기므로 핸들러는 `e?.activeLabel` 가드 필수.
+- **앵커 표시** — `anchorDate`/`intAnchorDate` state(그리기 전용) → 파란 점선 `ReferenceLine` + '시작' 라벨,
+  그리고 선택 패널의 안내 문구. ⚠️ **딤·선택창보다 뒤에 선언**해야 위에 보이고(paint 순서 = 선언 순서),
+  **`ifOverflow="hidden"` 필수** — 조회기간 첫 날짜에 앵커를 찍으면 d3 `scalePoint` 잔차로 기본값
+  `'discard'`가 표시선을 통째로 버려 "더블클릭했는데 아무 표시도 없다"가 된다(딤 밴드와 같은 근거).
+  색·굵기는 `design.CHART_SELECTION.anchorStroke/anchorStrokeWidth/anchorDash`를 **두 차트가 공유**한다.
+- **Esc = 앵커·선택 취소**(훅 안 window `keydown`). 앵커 대기 상태의 유일한 키보드 탈출구다.
+  ⚠️ **지울 게 있을 때만 동작**시킬 것 — 모달이 열려 있을 때 눌린 Esc가 부작용을 만들지 않게 한다.
+- **⚠️ `selectionResult`·`calculateSelection`·`calculateIntSelection` 산식은 1바이트도 바뀌지 않았다**
+  (누적 TWR 재베이스 규약 무영향). 정상 드래그의 결과값은 종전과 동일하고, 달라진 것은 '결과가 유실되지
+  않는다'뿐이다.
+- **부수 성능 개선 2건**: ① 활성 tick이 그대로인 mousemove는 `setHoveredPoint`를 건너뛴다
+  (`hoverKeyRef`/`intHoverKeyRef` — ⚠️ 두 차트가 **같은 ref를 공유하면** 뷰 전환 직후 같은 날짜에서 첫
+  갱신이 스킵되므로 분리한다). ② `useIntegratedData`의 `intChartData`가 `intFilteredDates.includes(...)`를
+  filter 콜백에서 부르던 O(행수 × 날짜수)를 **Set 조회**로 바꿨다(10년치에서 실측 43.5ms → 0.1ms 규모, 가드 #G17).
+- **영속화 지점 0곳** — `anchorDate`/`intAnchorDate`는 `useHistoryChart`의 세션 로컬 state이고 ref는
+  메모리다. `chartPrefs` 5지점·`portfolioStructureKey`·`applyStateData`·`applyBackupData`·저장 effect deps
+  **전 지점 무수정**.
+- **범위 밖(의도)**: 카드 별도 창의 수익률 차트(`cardWindow`에 `chart`는 원래 미지원) · 선택 구간 확대(zoom) ·
+  터치에서의 더블탭 앵커(`detail`이 없어 판별 불가) · `touch-action` 지정.
+  **알려진 한계**: recharts가 `onTouchCancel`을 바인딩하지 않아, 스크롤로 취소된 터치는 `s.dragging`이
+  true로 남아 다음 손가락 이동이 구간을 이어 그릴 수 있다(**이 변경 이전과 동일**한 기존 동작).
+- 검증: `npm run verify:chart-sel` 파트③ `#G10~#G17`. ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며
+  **변이 20종**(blur 리스너 제거 · `buttons` 자가치유 제거 · 자가치유가 앵커 미리보기까지 잡음 · 훅 시그니처에 지연 state 복귀 · mouseLeave가 다시 취소 · 앵커 분기가 시작점 덮어쓰기 ·
+  `onDoubleClick` 배선 제거 · 앵커 표시선 삭제/`ifOverflow` 제거/토큰 손복제/paint 순서 · 해제 3경로에서
+  ref 초기화 누락 · `isSecondClick` 가드 제거 · 앵커 미리보기 제거 · window mouseup 무장 제거 ·
+  ref 정본 제거 · mouseUp이 state를 읽음 · Esc 제거 · App prop 제거 · Set 필터 되돌림)으로
+  **실제 검출을 확인**했다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
 
 ### 차트 토글은 계좌별로 독립 — 화이트리스트는 `currentChartStateRef` 하나 (⚠️ 회귀 주의)
 

@@ -57,6 +57,11 @@ export const CHART_SELECTION = {
   windowOpacity: 0.04,
   windowStroke: 'rgba(255,255,255,0.5)',
   windowStrokeWidth: 1,
+  // 더블클릭으로 고정한 시작점(앵커) — 종료점을 고르기 전의 대기 상태를 화면에 남긴다.
+  // ⚠️ 두 차트가 이 토큰을 공유해야 같은 제스처가 같은 모양으로 보인다(딤·선택창과 동일 규약).
+  anchorStroke: '#38bdf8',
+  anchorStrokeWidth: 1.5,
+  anchorDash: '4 3',
 } as const;
 
 // 공통 border 클래스

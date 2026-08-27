@@ -584,8 +584,11 @@ export function useIntegratedData({
 
   const intChartData = useMemo(() => {
     if (intSortedHistory.length === 0) return [];
+    // ⚠️ Array.includes를 filter 콜백 안에서 부르면 O(행수 × 날짜수)다 — 10년치(≈3,650일)에서
+    //    이 한 줄이 수십 ms를 먹어 '조회기간이 길수록 느리다'를 키운다. Set 조회로 O(n) 유지.
+    const dateSet = new Set(intFilteredDates);
     const all = intFilteredDates.length > 0
-      ? intSortedHistory.filter(h => intFilteredDates.includes(h.date))
+      ? intSortedHistory.filter(h => dateSet.has(h.date))
       : intSortedHistory;
     if (all.length === 0) return [];
     // 조회구간 내 원금·평가가 신뢰 가능한 첫 행부터 그린다(과거 zero-base 모드 유효성 필터를 상시 적용).

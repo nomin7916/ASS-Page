@@ -524,6 +524,7 @@ export default function App() {
     refAreaLeft, setRefAreaLeft,
     refAreaRight, setRefAreaRight,
     selectionResult, setSelectionResult,
+    anchorDate, setAnchorDate,
     showTotalEval, setShowTotalEval,
     showReturnRate, setShowReturnRate,
     showBacktest, setShowBacktest,
@@ -555,6 +556,7 @@ export default function App() {
     intSelectionResult, setIntSelectionResult,
     intIsDragging, setIntIsDragging,
     intHoveredPoint, setIntHoveredPoint,
+    intAnchorDate, setIntAnchorDate,
   } = useHistoryChart();
   const prevChartPeriodRef = useRef<string>(chartPeriod);
   const prevIntChartPeriodRef = useRef<string>(intChartPeriod);
@@ -1661,14 +1663,17 @@ export default function App() {
 
 
   const {
-    handleChartMouseDown, handleChartMouseMove, handleChartMouseUp, handleChartMouseLeave,
-    handleIntChartMouseDown, handleIntChartMouseMove, handleIntChartMouseUp, handleIntChartMouseLeave,
+    handleChartMouseDown, handleChartMouseMove, handleChartMouseUp, handleChartMouseLeave, handleChartDoubleClick,
+    handleIntChartMouseDown, handleIntChartMouseMove, handleIntChartMouseUp, handleIntChartMouseLeave, handleIntChartDoubleClick,
+    resetChartSelectionRefs,
   } = useChartInteraction({
     finalChartData, intChartData, compStocks, INDICATOR_CHART_KEYS,
-    isDragging, setIsDragging, refAreaLeft, setRefAreaLeft, refAreaRight, setRefAreaRight,
-    setSelectionResult, setHoveredPoint,
-    intIsDragging, setIntIsDragging, intRefAreaLeft, setIntRefAreaLeft, intRefAreaRight, setIntRefAreaRight,
-    setIntSelectionResult, setIntHoveredPoint,
+    // ⚠️ 읽기용 state(refAreaLeft/refAreaRight/isDragging)는 넘기지 않는다 — 훅 안 ref가 정본이고,
+    //    지연 커밋되는 state를 읽으면 '긴 조회기간에서 드래그가 사라지던' 버그가 되살아난다.
+    setIsDragging, setRefAreaLeft, setRefAreaRight,
+    setSelectionResult, setHoveredPoint, setAnchorDate,
+    setIntIsDragging, setIntRefAreaLeft, setIntRefAreaRight,
+    setIntSelectionResult, setIntHoveredPoint, setIntAnchorDate,
   });
 
   // ── useStockData 훅 ──
@@ -3575,9 +3580,13 @@ export default function App() {
 
   // 개별 계좌: 조회기간 변경 시 드래그 선택 초기화 + 전체 기간 기본값 계산
   useEffect(() => {
+    // ⚠️ 진행 상태의 정본은 useChartInteraction의 ref다 — state만 지우면 다음 mousedown이
+    //    유령 앵커/유령 시작점을 되살린다.
+    resetChartSelectionRefs();
     setSelectionResult(null);
     setRefAreaLeft('');
     setRefAreaRight('');
+    setAnchorDate('');
   }, [appliedRange]);
 
   useEffect(() => {
@@ -3617,9 +3626,11 @@ export default function App() {
 
   // 통합 대시보드: 조회기간 변경 시 드래그 선택 초기화 + 전체 기간 기본값 계산
   useEffect(() => {
+    resetChartSelectionRefs();
     setIntSelectionResult(null);
     setIntRefAreaLeft('');
     setIntRefAreaRight('');
+    setIntAnchorDate('');
   }, [intAppliedRange]);
 
   useEffect(() => {
@@ -3677,8 +3688,9 @@ export default function App() {
       const t = e.target;
       const onSurface = t && t.closest && t.closest('.chart-container-for-drag') && t.closest('.recharts-wrapper');
       if (onSurface) return;
-      setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null);
-      setIntRefAreaLeft(''); setIntRefAreaRight(''); setIntSelectionResult(null);
+      resetChartSelectionRefs();
+      setRefAreaLeft(''); setRefAreaRight(''); setSelectionResult(null); setAnchorDate('');
+      setIntRefAreaLeft(''); setIntRefAreaRight(''); setIntSelectionResult(null); setIntAnchorDate('');
     };
     window.addEventListener('mousedown', handler);
     window.addEventListener('touchstart', handler, { passive: true });
@@ -4322,6 +4334,8 @@ export default function App() {
             handleChartMouseMove={handleChartMouseMove}
             handleChartMouseUp={handleChartMouseUp}
             handleChartMouseLeave={handleChartMouseLeave}
+            handleChartDoubleClick={handleChartDoubleClick}
+            anchorDate={anchorDate}
             handleCompStockBlur={handleCompStockBlur}
             handleToggleComp={handleToggleComp}
             handleFetchCompHistory={handleFetchCompHistory}
@@ -4465,6 +4479,8 @@ export default function App() {
             handleIntChartMouseMove={handleIntChartMouseMove}
             handleIntChartMouseUp={handleIntChartMouseUp}
             handleIntChartMouseLeave={handleIntChartMouseLeave}
+            handleIntChartDoubleClick={handleIntChartDoubleClick}
+            intAnchorDate={intAnchorDate}
             intHoveredPoint={intHoveredPoint}
             handleSave={handleSave}
             allPortfoliosForDividend={allPortfoliosForDividend}

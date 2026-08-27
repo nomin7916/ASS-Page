@@ -108,6 +108,8 @@ export default function IntegratedDashboard({
   handleIntChartMouseMove,
   handleIntChartMouseUp,
   handleIntChartMouseLeave,
+  handleIntChartDoubleClick,
+  intAnchorDate,
   intHoveredPoint,
   handleSave,
   allPortfoliosForDividend,
@@ -1137,8 +1139,9 @@ export default function IntegratedDashboard({
                     <div className="px-4 py-2 border-b border-gray-700/40 bg-[#060f1e]/70 min-h-[34px] shrink-0 flex items-center">
                       {displayResult ? (
                         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 w-full">
-                          <span className="text-gray-500 text-[10px] font-bold shrink-0">{intSelectionResult ? '선택 기간' : '조회기간'}</span>
+                          <span className="text-gray-500 text-[10px] font-bold shrink-0" title="드래그로 구간 선택 · 더블클릭으로 시작점을 고정한 뒤 클릭하거나 드래그해 끝점 지정 (Esc 취소)">{intSelectionResult ? '선택 기간' : '조회기간'}</span>
                           <span className="text-gray-300 text-[11px] font-bold">{formatShortDate(displayResult.startDate)} ~ {formatShortDate(displayResult.endDate)}</span>
+                          {intAnchorDate && <span className="text-sky-300 text-[10px] font-bold shrink-0">시작점 고정 {formatShortDate(intAnchorDate)} — 끝점을 클릭하거나 드래그해 놓으세요 (Esc 취소)</span>}
                           <div className="flex items-center gap-1.5">
                             <div className="w-2 h-2 rounded-sm bg-red-500 shrink-0" />
                             <span className="text-[11px] font-bold text-gray-300">수익</span>
@@ -1173,7 +1176,7 @@ export default function IntegratedDashboard({
                 {/* 차트 영역 */}
                 <div className="chart-container-for-drag px-2 pt-2 pb-1 relative select-none h-[260px] sm:h-[300px] md:h-[340px] xl:flex-1">
                   <ResponsiveContainer width="100%" height="100%" minHeight={200}>
-                    <ComposedChart data={intChartData} onMouseDown={handleIntChartMouseDown} onMouseMove={handleIntChartMouseMove} onMouseUp={handleIntChartMouseUp} onMouseLeave={handleIntChartMouseLeave}>
+                    <ComposedChart data={intChartData} onMouseDown={handleIntChartMouseDown} onMouseMove={handleIntChartMouseMove} onMouseUp={handleIntChartMouseUp} onMouseLeave={handleIntChartMouseLeave} onDoubleClick={handleIntChartDoubleClick}>
                       <defs>
                         <linearGradient id="intReturnGrad" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
@@ -1277,6 +1280,16 @@ export default function IntegratedDashboard({
                       {selectionDim?.before && <ReferenceArea yAxisId="left" x1={selectionDim.before.from} x2={selectionDim.before.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
                       {selectionDim?.after && <ReferenceArea yAxisId="left" x1={selectionDim.after.from} x2={selectionDim.after.to} fill={CHART_SELECTION.dimFill} fillOpacity={CHART_SELECTION.dimOpacity} stroke="none" ifOverflow="hidden" />}
                       {selectionDim && <ReferenceArea yAxisId="left" x1={selectionDim.start} x2={selectionDim.end} fill={CHART_SELECTION.windowFill} fillOpacity={CHART_SELECTION.windowOpacity} stroke={CHART_SELECTION.windowStroke} strokeWidth={CHART_SELECTION.windowStrokeWidth} ifOverflow="hidden" />}
+                      {/* 더블클릭으로 고정한 시작점(앵커) — 종료점을 고르기 전까지 남는다.
+                          ⚠️ 딤·선택창보다 **뒤에 선언**해야 위에 보인다(paint 순서 = 선언 순서).
+                          ⚠️ ifOverflow="hidden" 필수 — 첫 날짜 앵커가 scalePoint 잔차로 통째로 버려지는 것 방지. */}
+                      {intAnchorDate && <ReferenceLine yAxisId="left" x={intAnchorDate} stroke={CHART_SELECTION.anchorStroke} strokeWidth={CHART_SELECTION.anchorStrokeWidth} strokeDasharray={CHART_SELECTION.anchorDash} ifOverflow="hidden"
+                        label={({ viewBox }) => {
+                          const lx = (viewBox?.x ?? 0) + 4;
+                          const ly = (viewBox?.y ?? 0) + 10;
+                          return <text x={lx} y={ly} textAnchor="start" fill={CHART_SELECTION.anchorStroke} fontSize={9} fontWeight={700}>시작</text>;
+                        }}
+                      />}
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>

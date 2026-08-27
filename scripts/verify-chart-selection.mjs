@@ -211,16 +211,21 @@ for (const [name, src, rows, left, right] of [
 // ── 해제 경로 — 선택이 '어두운 채로 고착'되면 안 된다 ──
 // 종전에는 선택 잔존이 흰색 8% 띠라 티가 안 났지만, 이제 잔존하면 차트 대부분이 어둡게 덮인다.
 
-// ⚠️ 통합 차트의 단순 클릭: intRefAreaRight가 ''인 채로 calculateIntSelection에 넘기면
+// ⚠️ 통합 차트의 단순 클릭: right가 ''인 채로 calculateIntSelection에 넘기면
 //    [l,r].sort()가 ''를 앞으로 보내 '차트 시작~클릭 지점'이라는 없는 구간을 돌려준다.
 //    → 하이라이트는 안 뜨는데 패널만 '선택 기간'으로 바뀌어 화면이 서로 모순된다.
+// ⚠️ 조건 자체는 그대로지만 **읽는 곳이 React state에서 ref로 바뀌었다**(아래 #G10) —
+//    그래서 변수 이름이 intRefAreaLeft/Right → intRef.current의 left/right가 됐다. 계약은 불변.
 const upBlock = hook.slice(hook.indexOf('const handleIntChartMouseUp'), hook.indexOf('const handleIntChartMouseLeave'));
+const acctUpBlock = hook.slice(hook.indexOf('const handleChartMouseUp'), hook.indexOf('const handleChartMouseLeave'));
 ok('#G7 통합 차트 mouseUp: 단순 클릭(빈 right·같은 날짜) 가드',
-  /intRefAreaLeft && intRefAreaRight && intRefAreaLeft !== intRefAreaRight/.test(upBlock));
+  /const s = intRef\.current;/.test(upBlock) && /if \(left && right && left !== right\)/.test(upBlock));
 ok('#G7b 통합 차트 mouseUp: 해제 시 selectionResult도 함께 null',
   /setIntRefAreaLeft\(''\);\s*setIntRefAreaRight\(''\);\s*setIntSelectionResult\(null\)/.test(upBlock));
-ok('#G7c 개별 차트 mouseUp: 기존 단순 클릭 가드 유지',
-  /refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight/.test(hook));
+ok('#G7c 개별 차트 mouseUp: 단순 클릭 가드 유지',
+  /const s = acctRef\.current;/.test(acctUpBlock) && /if \(left && right && left !== right\)/.test(acctUpBlock));
+ok('#G7e 개별 차트 mouseUp: 해제 시 selectionResult도 함께 null',
+  /setRefAreaLeft\(''\);\s*setRefAreaRight\(''\);\s*setSelectionResult\(null\)/.test(acctUpBlock));
 
 // ⚠️ recharts는 **플롯 영역 밖**(Y축 눈금 거터·X축 날짜 띠)에서도 onMouseDown을 부른다
 //    (handleOuterEvent가 getMouseInfo 결과를 `mouse ?? {}`로 넘긴다 — inRange는 플롯 rect만 본다).
@@ -259,6 +264,131 @@ ok('#G8d touchstart 리스너도 등록·해제한다(터치 기기 딤 고착 �
 //    (selectionDimBands의 null 계약이 2차 방어선이지만, 패널의 '선택 기간' 표기는 그것으로 안 지워진다).
 ok('#G9 조회기간 변경 시 개별 차트 선택 리셋', /\}, \[appliedRange\]\);/.test(app));
 ok('#G9b 조회기간 변경 시 통합 차트 선택 리셋', /\}, \[intAppliedRange\]\);/.test(app));
+
+console.log('\n── 파트③ 진행 상태의 정본 = ref (긴 조회기간 드래그 소실 방지) ──');
+
+// ⚠️ 이 기능의 1급 계약. React 18에서 mousemove의 setState는 ContinuousLane(Scheduler 매크로태스크,
+//    비동기 커밋)인데 mouseup은 DiscreteLane(즉시)이다. 차트가 무거우면(조회기간이 길수록 recharts가
+//    O(포인트수 × 시리즈수)로 축맵·전 시리즈를 재계산한다) mousemove가 커밋되기 전에 mouseup이 먼저
+//    실행돼, 지연된 state를 읽는 순간 refAreaRight가 ''라 '단순 클릭 = 해제' 분기를 타고 **선택이
+//    통째로 사라진다**. 그래서 진행 상태의 정본은 동기 갱신되는 ref여야 한다.
+ok('#G10 훅이 진행 상태를 ref로 보관한다(acctRef/intRef)',
+  /const acctRef = useRef<ChartSel>\(/.test(hook) && /const intRef = useRef<ChartSel>\(/.test(hook));
+
+// ⚠️ '읽지 않는다'를 정규식으로 재면 setter 호출과 구분하기 어렵다 → **구조적으로** 못 읽게
+//    시그니처에서 아예 뺀다. 되돌려 받는 순간 이 가드가 잡는다.
+const hookSig = hook.slice(0, hook.indexOf('}) {'));
+ok('#G10b 훅 시그니처가 지연 state(refAreaLeft/refAreaRight/isDragging)를 받지 않는다',
+  !/(^|[^t])\brefAreaLeft\b/.test(hookSig) && !/(^|[^t])\brefAreaRight\b/.test(hookSig)
+  && !/(^|[^t])\bintRefAreaLeft\b/.test(hookSig) && !/(^|[^t])\bintRefAreaRight\b/.test(hookSig)
+  && !/\bisDragging:/.test(hookSig) && !/\bintIsDragging:/.test(hookSig));
+ok('#G10c App도 그 지연 state를 훅에 넘기지 않는다',
+  (() => {
+    const at = app.indexOf('} = useChartInteraction({');
+    const call = app.slice(at, at + 800);
+    const body = call.slice(0, call.indexOf('});') + 3);
+    return !/(^|[^t])\brefAreaLeft\b/.test(body) && !/(^|[^t])\brefAreaRight\b/.test(body)
+      && !/\bisDragging,/.test(body) && !/\bintIsDragging,/.test(body);
+  })());
+
+// ⚠️ 커서가 wrapper를 벗어나도 드래그를 취소하지 않는다. recharts 플롯 상단 여백은 기본 margin.top
+//    = **5px**뿐이라, 구간을 끝까지 끌다 위로 살짝만 넘겨도 mouseleave가 떴다. 종전엔 그 mouseleave가
+//    곧 mouseUp이라 선택이 통째로 사라졌다. 확정은 mousedown에서 무장한 window mouseup이 맡는다.
+for (const [name, leaveDecl, nextDecl] of [
+  ['개별', 'const handleChartMouseLeave', 'const handleChartDoubleClick'],
+  ['통합', 'const handleIntChartMouseLeave', 'const handleIntChartDoubleClick'],
+]) {
+  const block = hook.slice(hook.indexOf(leaveDecl), hook.indexOf(nextDecl));
+  ok('#G11 ' + name + ' 차트 mouseLeave가 드래그를 취소하지 않는다(mouseUp 호출 금지)',
+    block.length > 0 && !/MouseUp\(/.test(block));
+}
+ok('#G11b window mouseup을 mousedown에서 무장하고 커밋 후 해제한다(포인터 캡처 대용)',
+  /window\.addEventListener\('mouseup', h\)/.test(hook)
+  && /window\.removeEventListener\('mouseup', winUpRef\.current\)/.test(hook)
+  && /armWindowUp\('acct'\)/.test(hook) && /armWindowUp\('int'\)/.test(hook));
+// ⚠️ mouseleave가 더는 취소하지 않으므로, 버튼을 누른 채 창을 벗어나면 dragging이 고착된다.
+//    두 탈출구를 함께 둔다: ① window blur에서 즉시 확정 ② 돌아와 움직일 때 buttons===0이면 확정.
+//    ②는 앵커 미리보기(dragging=false)에 걸리면 안 되므로 반드시 s.dragging과 함께 판정한다.
+ok('#G11c 드래그 고착 자가치유 — window blur + buttons===0',
+  /window\.addEventListener\('blur', h\)/.test(hook)
+  && /window\.removeEventListener\('blur', winUpRef\.current\)/.test(hook)
+  && (hook.match(/if \(s\.dragging && ev && ev\.buttons === 0\)/g) || []).length === 2);
+
+// ⚠️ 앵커(더블클릭 시작점)가 있으면 mousedown이 시작점을 **덮어쓰지 않는다** — 그 지점은 종료점
+//    후보다. 덮어쓰면 "더블클릭으로 시작을 확실히 한다"는 기능이 통째로 무의미해진다.
+for (const [name, downDecl, moveDecl, setLeft] of [
+  ['개별', 'const handleChartMouseDown', 'const handleChartMouseMove', 'setRefAreaLeft'],
+  ['통합', 'const handleIntChartMouseDown', 'const handleIntChartMouseMove', 'setIntRefAreaLeft'],
+]) {
+  const block = hook.slice(hook.indexOf(downDecl), hook.indexOf(moveDecl));
+  const anchorBranch = block.slice(block.indexOf('if (s.anchor)'), block.indexOf('else {'));
+  ok('#G12 ' + name + ' 차트 mouseDown: 앵커가 있으면 시작점을 덮어쓰지 않는다',
+    anchorBranch.length > 0 && !new RegExp(setLeft + '\\(').test(anchorBranch) && !/s\.left =/.test(anchorBranch));
+}
+
+// ⚠️ 더블클릭 배선 — 두 차트 모두 ComposedChart에 onDoubleClick이 실제로 붙어야 한다(선언 아닌 사용부).
+ok('#G13 개별 차트 ComposedChart에 onDoubleClick 배선',
+  /<ComposedChart[^>]*onDoubleClick=\{handleChartDoubleClick\}/.test(pc));
+ok('#G13b 통합 차트 ComposedChart에 onDoubleClick 배선',
+  /<ComposedChart[^>]*onDoubleClick=\{handleIntChartDoubleClick\}/.test(id));
+ok('#G13c App이 두 차트에 더블클릭 핸들러·앵커 날짜를 전달',
+  /handleChartDoubleClick=\{handleChartDoubleClick\}/.test(app) && /anchorDate=\{anchorDate\}/.test(app)
+  && /handleIntChartDoubleClick=\{handleIntChartDoubleClick\}/.test(app) && /intAnchorDate=\{intAnchorDate\}/.test(app));
+
+// ⚠️ 앵커 표시선이 실제로 렌더돼야 '더블클릭했는데 아무 표시도 없다'가 안 된다.
+//    ifOverflow="hidden" 필수 — 조회기간 첫 날짜에 앵커를 찍으면 scalePoint 잔차로 기본값
+//    'discard'가 표시선을 통째로 버린다(딤 밴드 #G3c와 같은 근거).
+ok('#G14 개별 차트: 앵커 ReferenceLine 렌더 + ifOverflow="hidden"',
+  /\{anchorDate && <ReferenceLine[^>]*x=\{anchorDate\}[^>]*ifOverflow="hidden"/.test(pc));
+ok('#G14b 통합 차트: 앵커 ReferenceLine 렌더 + ifOverflow="hidden"',
+  /\{intAnchorDate && <ReferenceLine[^>]*x=\{intAnchorDate\}[^>]*ifOverflow="hidden"/.test(id));
+ok('#G14c 앵커 색·굵기를 CHART_SELECTION 토큰에서 읽는다(두 차트 손복제 금지)',
+  /anchorStroke:/.test(design)
+  && /stroke=\{CHART_SELECTION\.anchorStroke\}/.test(pc) && /stroke=\{CHART_SELECTION\.anchorStroke\}/.test(id));
+
+// ⚠️ 앵커 표시선은 딤·선택창보다 **뒤에 선언**해야 위에 보인다(paint 순서 = 선언 순서).
+ok('#G14d 개별 차트: 앵커 표시선이 딤·선택창보다 뒤',
+  pc.indexOf('CHART_SELECTION.anchorStroke') > pc.indexOf('CHART_SELECTION.windowStroke'));
+ok('#G14e 통합 차트: 앵커 표시선이 딤·선택창보다 뒤',
+  id.indexOf('CHART_SELECTION.anchorStroke') > id.indexOf('CHART_SELECTION.windowStroke'));
+
+// ⚠️ 해제 경로 3종이 **ref까지** 지워야 한다. state만 지우면 다음 mousedown이 유령 앵커를 되살린다.
+ok('#G15 차트 밖 클릭이 ref·앵커도 함께 지운다',
+  /resetChartSelectionRefs\(\);/.test(outsideBlock) && /setAnchorDate\(''\)/.test(outsideBlock)
+  && /setIntAnchorDate\(''\)/.test(outsideBlock));
+for (const [name, dep, setter] of [['개별', 'appliedRange', 'setAnchorDate'], ['통합', 'intAppliedRange', 'setIntAnchorDate']]) {
+  const i = app.indexOf('}, [' + dep + ']);');
+  const block = i > 0 ? app.slice(Math.max(0, i - 500), i) : '';
+  ok('#G15b ' + name + ' 조회기간 변경이 ref·앵커도 함께 지운다',
+    /resetChartSelectionRefs\(\);/.test(block) && new RegExp(setter + "\\(''\\)").test(block));
+}
+ok('#G15c Esc가 앵커·선택을 취소한다(앵커 대기 상태의 탈출구)',
+  /ev\.key !== 'Escape'/.test(hook) && /window\.addEventListener\('keydown', onKey\)/.test(hook)
+  && /window\.removeEventListener\('keydown', onKey\)/.test(hook));
+
+// ⚠️ 더블클릭의 두 번째 클릭에서 오는 mousedown/mouseup을 무시하지 않으면, 한 제스처 안에서
+//    '앵커 확정 → 즉시 선택 확정 → 해제'가 연달아 일어나 화면이 번쩍인다.
+ok('#G16 더블클릭 2번째 클릭의 mousedown/mouseup을 무시한다',
+  /const isSecondClick = /.test(hook)
+  && (hook.match(/if \(isSecondClick\(ev\)\) return;/g) || []).length === 4);
+
+// ⚠️ 앵커 모드는 버튼을 누르지 않아도 미리보기가 따라와야 한다(클릭 확정·드래그 확정 둘 다 지원 —
+//    사용자 확정 규약). s.dragging만 보면 '클릭으로 끝점 지정'이 통째로 죽는다.
+for (const [name, moveDecl, upDecl] of [
+  ['개별', 'const handleChartMouseMove', 'const handleChartMouseUp'],
+  ['통합', 'const handleIntChartMouseMove', 'const handleIntChartMouseUp'],
+]) {
+  const block = hook.slice(hook.indexOf(moveDecl), hook.indexOf(upDecl));
+  ok('#G16b ' + name + ' 차트 mouseMove: 앵커 모드는 버튼 없이도 미리보기가 따라온다',
+    /\(s\.dragging \|\| s\.anchor\)/.test(block));
+}
+
+// ⚠️ 통합 차트 조회기간 필터가 O(행수 × 날짜수)로 되돌아가면 '긴 기간 = 느림'이 재발한다.
+const intData = read('src/hooks/useIntegratedData.ts');
+ok('#G17 통합 차트 날짜 필터가 Set 조회(O(n))다',
+  /const dateSet = new Set\(intFilteredDates\);/.test(intData)
+  && /intSortedHistory\.filter\(h => dateSet\.has\(h\.date\)\)/.test(intData)
+  && !/intSortedHistory\.filter\(h => intFilteredDates\.includes\(/.test(stripComments(intData)));
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:chart-sel — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

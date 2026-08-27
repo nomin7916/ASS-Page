@@ -10,6 +10,9 @@ export function useHistoryChart() {
   const [refAreaLeft, setRefAreaLeft] = useState('');
   const [refAreaRight, setRefAreaRight] = useState('');
   const [selectionResult, setSelectionResult] = useState(null);
+  // 더블클릭으로 고정한 구간 시작점(''이면 앵커 없음). 진행 상태의 정본은 useChartInteraction의
+  // ref이고 이 state는 '앵커 표시선·안내 문구를 그리기 위한 거울'일 뿐이다.
+  const [anchorDate, setAnchorDate] = useState('');
   const [showTotalEval, setShowTotalEval] = useState(true);
   const [showReturnRate, setShowReturnRate] = useState(true);
   const [showBacktest, setShowBacktest] = useState(false);
@@ -49,6 +52,7 @@ export function useHistoryChart() {
   const [intSelectionResult, setIntSelectionResult] = useState(null);
   const [intIsDragging, setIntIsDragging] = useState(false);
   const [intHoveredPoint, setIntHoveredPoint] = useState(null);
+  const [intAnchorDate, setIntAnchorDate] = useState('');
 
   return {
     // 개별 계좌 차트
@@ -59,6 +63,7 @@ export function useHistoryChart() {
     refAreaLeft, setRefAreaLeft,
     refAreaRight, setRefAreaRight,
     selectionResult, setSelectionResult,
+    anchorDate, setAnchorDate,
     showTotalEval, setShowTotalEval,
     showReturnRate, setShowReturnRate,
     showBacktest, setShowBacktest,
@@ -93,5 +98,6 @@ export function useHistoryChart() {
     intSelectionResult, setIntSelectionResult,
     intIsDragging, setIntIsDragging,
     intHoveredPoint, setIntHoveredPoint,
+    intAnchorDate, setIntAnchorDate,
   };
 }
