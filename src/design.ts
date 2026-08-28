@@ -39,10 +39,17 @@ export const RULED_BG_STYLE = {
 } as const;
 
 // z-index 계층 (겹침 순서 일관성 유지)
+// ⚠️ `dialogPopover`는 **모달 안에서 뜨는 팝오버**(날짜 선택기 등) 전용이다. 그런 팝오버는
+//    `document.body`로 포털되므로 조상이 아니라 **body 형제**로서 모달과 z를 겨룬다 —
+//    `dialog`(1000)보다 낮으면 모달 패널이 그대로 덮어 **아무것도 안 뜬 것처럼 보인다**.
+//    `CustomDatePicker`의 기본값 999가 정확히 그 상태였다(자산검증 비교일 선택 불가).
+//    플로팅 창(계산기·관심종목·메모 달력 1050) **아래**로 두는 것이 의도다 — 팝오버는 자기
+//    호스트 레이어에 붙어 있어야 하고, 호스트인 모달 자체가 이미 그 창들 아래이기 때문이다.
 export const Z = {
-  notification: 999,
-  dialog:       1000,
-  overlay:      1100,
+  notification:  999,
+  dialog:        1000,
+  dialogPopover: 1020,
+  overlay:       1100,
 } as const;
 
 // 차트 드래그 구간 선택 — 비선택 구간 딤(scrim) + 선택 창 스타일

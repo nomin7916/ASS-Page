@@ -14,11 +14,19 @@ const POPUP_W = 220;
  *    고를 수 있고 나머지 날짜·달·연도는 흐리게 잠긴다.
  * ⚠️ 빈 배열은 '전부 잠금'이다(제약 없음 아님) — 조용한 오적용보다 명시적 미적용.
  *
+ * ⚠️ **포털은 z 문제를 자동으로 해결해 주지 않는다 — 오히려 호스트가 높으면 뒤집는다.**
+ *    포털 전에는 팝업이 호스트의 **자손**이라 호스트가 만든 스태킹 컨텍스트 *안에서* 위로 떴다
+ *    (호스트 z가 아무리 높아도 항상 그 위). 포털 후에는 `document.body`의 **형제**가 되어
+ *    호스트와 직접 z를 겨룬다 → `zIndex`가 호스트보다 낮으면 **호스트 패널이 그대로 덮어
+ *    "클릭해도 아무 일도 안 일어난다"** 가 된다(실제 사고: `Z.dialog`(1000) 모달 안에서 기본값
+ *    999로 떠 자산검증 비교일이 통째로 선택 불가). **z ≥ 999인 컨테이너 안에서 쓰면 `zIndex`를
+ *    반드시 그보다 크게 넘길 것**(모달이면 `Z.dialogPopover`). `verify:compare #G34`가 강제한다.
+ *
  * 아래 셋은 **인자와 무관하게** 고쳐진 결함이라 6곳 모두에 적용된다(전부 '없던 게 생기거나
  * 틀린 게 맞아지는' 방향이다):
- *  1. 팝업을 `document.body`로 **포털**한다 — 그러지 않으면 z-index를 무엇으로 주든 조상이 만든
- *     스태킹 컨텍스트(예: `Z.dialog` 모달)에 갇혀 z-1050 플로팅 창(계산기·관심종목·메모 달력)에
- *     가려진다. 옛 네이티브 `<select>` 드롭다운은 브라우저 top layer라 항상 위였다.
+ *  1. 팝업을 `document.body`로 **포털**한다 — 그러지 않으면 조상의 `overflow`·`isolate`·스태킹
+ *     컨텍스트에 갇혀 잘리거나 페이지 콘텐츠 아래로 깔린다(표 래퍼의 `isolate`가 그 예).
+ *     옛 네이티브 `<select>` 드롭다운은 브라우저 top layer라 이런 제약이 없었다.
  *  2. 아래로 펼치면 화면을 넘치는 자리에서 **위로 뒤집는다**(높이는 하드코딩이 아니라 실측).
  *     종전에는 무조건 아래로 펼쳐 통째로 잘렸다.
  *  3. 위젯 안의 키 입력이 `window`로 새지 않게 막는다 — 열려 있는 계산기의 전역 keydown이
@@ -198,14 +206,32 @@ export default function CustomDatePicker({
     else nextMonth();
   };
 
+  /**
+   * ⚠️ 포털된 팝업도 이벤트는 **React 트리**를 따라 올라간다(DOM 트리가 아니다) — 호스트 모달의
+   *    닫기 핸들러가 그대로 발화한다. 백드롭·본체가 **세 제스처를 전부** 흡수하지 않으면 날짜를
+   *    고르거나 달력을 닫으려는 동작이 **호스트를 통째로 닫아** 버린다. 셋 다 실재하는 경로다:
+   *      · `VerifyEvalModal` 루트 = `onMouseDown`/`onTouchStart`로 닫는다 → 마우스로 날짜 밖을
+   *        누르면 자산검증 모달이 사라지고, 터치로는 날짜를 **누르는 순간** 사라진다.
+   *      · `PortfolioTable` 적립 모달 루트 = `onClick`으로 닫는다 → 달력을 닫으려다 모달째 닫힌다.
+   *    하나라도 빼면 그 제스처만 조용히 새어 나간다.
+   */
+  const swallow = (e) => e.stopPropagation();
   const popup = !open ? null : (
     <>
-      <div className="fixed inset-0" style={{ zIndex: zIndex - 1 }} onClick={() => setOpen(false)} />
+      <div
+        className="fixed inset-0"
+        style={{ zIndex: zIndex - 1 }}
+        onMouseDown={swallow}
+        onTouchStart={swallow}
+        onClick={e => { e.stopPropagation(); setOpen(false); }}
+      />
       <div
         ref={popupRef}
         className="fixed bg-gray-900 border border-gray-600 rounded-lg shadow-2xl p-3 w-[220px]"
         style={{ top: popupPos.top, left: popupPos.left, zIndex }}
-        onMouseDown={e => e.stopPropagation()}
+        onMouseDown={swallow}
+        onTouchStart={swallow}
+        onClick={swallow}
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-2">

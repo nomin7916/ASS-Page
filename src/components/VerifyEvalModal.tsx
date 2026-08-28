@@ -725,12 +725,17 @@ export default function VerifyEvalModal({
                     <div className="flex items-center gap-2">
                       <span className="text-gray-500 whitespace-nowrap">비교일</span>
                       <div className="flex-1">
+                        {/* ⚠️ `zIndex`를 반드시 넘긴다 — 이 모달은 `Z.dialog`(1000)이고 팝업은
+                            `document.body`로 포털돼 **형제**로 z를 겨룬다. 미전달 시 기본값 999라
+                            모달 패널이 그대로 덮어 "눌러도 아무 일도 안 일어난다"가 된다
+                            (실제 사고 2026-08). `verify:compare #G34`가 이 prop을 강제한다. */}
                         <CustomDatePicker
                           value={compareDateEff}
                           onChange={d => setCompareDate(d)}
                           allowedDates={compareCandidates}
                           align="left"
                           followScroll
+                          zIndex={Z.dialogPopover}
                           trigger={(
                             <button
                               type="button"

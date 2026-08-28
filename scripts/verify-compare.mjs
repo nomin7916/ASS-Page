@@ -11,7 +11,7 @@
 //        단언한다. 실패 시 먼저 정규식이 낡았는지 확인하고, 계약 자체가 바뀐 게 아니면
 //        정규식을 고칠 것.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -962,6 +962,56 @@ ok('#G33d 스크롤 감지는 capture 단계', /window\.addEventListener\('scrol
 ok('#G33e 날짜 키는 직접 조립한다(toISOString은 UTC로 하루 밀린다)',
   /const keyOf = \(y, m0, d\) => `\$\{y\}-\$\{pad2\(m0 \+ 1\)\}-\$\{pad2\(d\)\}`;/.test(PICKER)
   && !/toISOString/.test(PICKER));
+
+// ── 팝업이 호스트 위에 실제로 뜨는가 (2026-08 사고: "비교일 선택이 안 됩니다") ──────────
+// ⚠️ **포털은 z 문제를 해결해 주지 않는다 — 오히려 뒤집는다.** 포털 전 팝업은 호스트의
+//    **자손**이라 호스트 스태킹 컨텍스트 *안에서* 항상 위로 떴다(호스트 z와 무관). 포털 후에는
+//    `document.body`의 **형제**가 되어 호스트와 직접 z를 겨룬다 → 기본값 999 < Z.dialog(1000)
+//    이라 자산검증 모달 안에서 팝업이 패널 뒤로 통째로 가려 "눌러도 아무 일도 안 일어난다"가 됐다.
+// ⚠️ **사각지대의 정체**: #G33f(포털했는가)와 #G33(기본값이 999인가)는 **각각 통과**하는데,
+//    사고는 정확히 그 둘의 **관계**에서 났다. 아래는 값이 아니라 대소 관계를 잰다.
+const DESIGN = stripComments(read('src/design.ts'));
+const zTok = (name) => {
+  const m = new RegExp(`\\b${name}:\\s*(\\d+)`).exec(DESIGN);
+  return m ? +m[1] : NaN;
+};
+ok('#G34 모달 안 팝오버 층이 dialog 위·플로팅 창(1050) 아래에 있다',
+  zTok('dialogPopover') > zTok('dialog') && zTok('dialogPopover') < 1050);
+// ⚠️ 사용부 단언 — 토큰만 있고 안 넘기면 사고가 그대로다.
+ok('#G34b 비교일 달력이 그 층을 명시적으로 넘겨받는다(미전달 = 기본값 = 모달 뒤)',
+  /zIndex=\{Z\.dialogPopover\}/.test(CMP_UI));
+// ⚠️ 이 단언이 깨지는 방향(기본값을 dialog 위로 올림)은 6곳 공유 컴포넌트의 하위호환을 건드린다 —
+//    #G33의 "기본값 = 종전 동작" 계약과 함께 재검토할 것. 지금은 '모달 호스트는 반드시 명시'가 계약.
+const PICKER_DEFAULT_Z = (() => { const m = /zIndex = (\d+)/.exec(PICKER); return m ? +m[1] : NaN; })();
+ok('#G34c 기본값은 dialog보다 아래다(= 모달 호스트는 반드시 zIndex를 명시해야 한다는 뜻)',
+  Number.isFinite(PICKER_DEFAULT_Z) && PICKER_DEFAULT_Z < zTok('dialog'));
+// ⚠️ 호출처 census — 새 호스트가 생기면 여기서 걸려 z를 **의식적으로** 정하게 만든다.
+//    (파일 단위로 "높은 z가 있으면 zIndex 필수"로 재면 오탐이 난다: IntegratedDashboard는
+//     z-[1000] 팝업과 표의 달력이 **형제**라 그 달력에는 제약이 필요 없다.)
+const PICKER_HOSTS = readdirSync(join(ROOT, 'src/components'))
+  .filter(f => f.endsWith('.tsx'))
+  .map(f => [f, (stripComments(read(`src/components/${f}`)).match(/<CustomDatePicker/g) || []).length])
+  .filter(([, n]) => n > 0)
+  .map(([f, n]) => `${f}:${n}`)
+  .sort();
+eq('#G34d 달력 호출처 census(새 호스트는 z를 의식적으로 정할 것)', PICKER_HOSTS,
+  ['ChartRangeControls.tsx:2', 'IntegratedDashboard.tsx:1', 'PortfolioTable.tsx:3', 'VerifyEvalModal.tsx:1']);
+
+// ── 포털된 팝업의 이벤트가 호스트를 닫아 버리지 않는가 ────────────────────────────────
+// ⚠️ 포털해도 이벤트는 **React 트리**를 따라 올라간다(DOM 트리가 아니다) — 호스트의 닫기
+//    핸들러가 그대로 발화한다. 세 제스처를 **전부** 흡수해야 한다(하나만 빠져도 그 입력 방식
+//    에서만 조용히 샌다). 실재 경로: VerifyEvalModal = mousedown/touchstart, 적립 모달 = click.
+const nPick = (re) => (PICKER.match(re) || []).length;
+ok('#G35 백드롭·본체가 mousedown/touchstart를 각각 흡수한다(터치로 날짜를 누르면 호스트가 닫히던 경로)',
+  nPick(/onMouseDown=\{swallow\}/g) === 2 && nPick(/onTouchStart=\{swallow\}/g) === 2);
+ok('#G35b click도 흡수한다 — 본체는 그냥 삼키고, 백드롭은 삼킨 뒤 자기만 닫는다',
+  nPick(/onClick=\{swallow\}/g) === 1
+  && /onClick=\{e => \{ e\.stopPropagation\(\); setOpen\(false\); \}\}/.test(PICKER));
+// ⚠️ '흡수가 필요한 이유'가 실제로 존재하는지도 잰다 — 호스트가 닫기 제스처를 바꾸면 위 가드의
+//    근거가 사라지므로 함께 알려야 한다(죽은 단언 방지).
+ok('#G35c 호스트들이 실제로 그 제스처로 닫는다',
+  /onMouseDown=\{onClose\} onTouchStart=\{onClose\}/.test(MODAL)
+  && /onClick=\{closeSavingsModal\}/.test(stripComments(read('src/components/PortfolioTable.tsx'))));
 
 ok('#G21 요약 %는 "수익률"이 아니라 "평가금액 증감율(입출금 포함)"이라 표기한다',
   /평가금액 증감율/.test(MODAL) && /입출금 포함/.test(MODAL));
