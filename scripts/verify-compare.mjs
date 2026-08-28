@@ -892,6 +892,77 @@ ok('#G31 죽은 주당분배금 칸을 막고 미확인 카운트에서 뺀다',
   && /if \(!psCellLive\(r, side\)\) continue;/.test(MODAL)
   && /disabled=\{!live\}/.test(MODAL));
 
+// 비교일 선택 = 달력 팝업(사용자 요청 2026-08 — 드롭다운 오선택 방지)
+const PICKER = stripComments(read('src/components/CustomDatePicker.tsx'));
+// ⚠️ 구간을 잘라 단언한다 — 이 파일에는 '종목 추가'용 `<select>`가 따로 있어, 파일 전역으로
+//    `<select` 부재를 재면 영원히 실패한다(그리고 비교일 영역만 드롭다운으로 되돌려도 못 잡는다).
+const CMP_UI = MODAL.slice(MODAL.indexOf('비교할 이전 기록일이 없습니다'), MODAL.indexOf('이 날짜 조합으로는 비교표를 만들 수 없습니다'));
+ok('#G32 비교일은 드롭다운이 아니라 달력으로 고른다',
+  CMP_UI.length > 0 && !/<select/.test(CMP_UI) && /<CustomDatePicker/.test(CMP_UI));
+// ⚠️ 후보 제약이 이 변경의 핵심 — 빼면 기록이 없는 날짜를 골라 '만들 수 없습니다'로 떨어진다.
+ok('#G32b 선택 가능한 날짜를 비교일 후보로 제한한다', /allowedDates=\{compareCandidates\}/.test(CMP_UI));
+// ⚠️ 오선택의 발단이 2자리 연도였다 — 트리거는 4자리(엑셀 캡션과 같은 포매터)로 보여 준다.
+ok('#G32c 트리거가 4자리 연도로 표시한다(엑셀 캡션과 같은 포매터)',
+  /dateLabel\(compareDateEff\)/.test(CMP_UI) && /dateLabel/.test(MODAL.slice(0, MODAL.indexOf('export default'))));
+// ⚠️ '연도가 다른가'로 되돌리지 말 것 — 기준일이 그 해 첫 기록일이면 기본 비교일이 전년
+//    12/31이라 사용자가 아무것도 만지지 않은 상태에서 경고가 뜨고, YoY 비교도 상시 경고
+//    대상이 되어 경보가 죽는다. 실제 신호는 '간격이 비정상적으로 큼'이다.
+ok('#G32d 간격이 1년을 넘으면 경고한다(연도 문자열 비교가 아니다)',
+  /const compareGapLarge = compareGapDays > 366;/.test(MODAL)
+  && /Date\.UTC\(\+m\[1\], \+m\[2\] - 1, \+m\[3\]\)/.test(MODAL)
+  && /이전입니다 — 의도한 날짜인지 확인하세요/.test(CMP_UI));
+// ⚠️ 모달 본문이 overflow-y-auto라, 팝업(position:fixed)이 열린 채 스크롤되면 분리된다.
+//    닫지 말고 **다시 붙인다** — 팝업 위에서 굴린 휠이 배경으로 체이닝돼 매번 닫히면 못 쓴다.
+ok('#G32e 스크롤을 따라가게 켠다', /followScroll/.test(CMP_UI) && !/closeOnScroll/.test(MODAL));
+// ⚠️ 오선택을 알아챌 마지막 표면 — 트리거만 4자리로 고치면 요약에서 여전히 24/… vs 26/…이다.
+ok('#G32f 결과 요약도 4자리 연도로 보여 준다',
+  /기준일 \{date\}/.test(MODAL) && /비교일 \{compareDateEff\}/.test(MODAL));
+// CustomDatePicker는 공유 컴포넌트(사용처 6곳) — 신규 인자는 전부 **선택**이어야 한다.
+ok('#G33 신규 인자는 기본값이 "제약 없음"이다(하위호환의 축)',
+  /allowedDates = null, zIndex = 999, followScroll = false,/.test(PICKER)
+  && /Array\.isArray\(allowedDates\) \? new Set\(allowedDates\.filter\(Boolean\)\) : null/.test(PICKER));
+// ⚠️ 조상이 만든 스태킹 컨텍스트(Z.dialog 모달)에 갇히면 z-1050 플로팅 창(계산기·관심종목·
+//    메모 달력)에 가려진다 — zIndex prop으로는 구조적으로 해결 불가. 옛 <select> 드롭다운은
+//    브라우저 top layer라 항상 위였다.
+ok('#G33f 팝업을 body로 포털한다', /createPortal\(popup, document\.body\)/.test(PICKER));
+// ⚠️ 포털이라 `ref.contains`로는 팝업 클릭이 '바깥'으로 판정된다 — 함께 보지 않으면 즉시 닫힌다.
+ok('#G33g 바깥 클릭 판정이 포털된 팝업도 안으로 본다',
+  /if \(popupRef\.current && popupRef\.current\.contains\(t\)\) return;/.test(PICKER));
+// ⚠️ 계산기의 window keydown이 input|textarea|select만 통과시켜 <button>은 Enter를 빼앗긴다
+//    (옛 <select>는 그 목록에 있어 보호됐다 → 회귀). Escape·토글도 여기 묶여 있다.
+ok('#G33h 위젯 키 입력이 window로 새지 않는다 + Escape로 닫힌다 + 트리거가 토글이다',
+  /onKeyDownCapture=\{handleKeyDownCapture\}/.test(PICKER)
+  && /if \(open && e\.key === 'Escape'\) \{ e\.preventDefault\(\); closePicker\(true\); \}/.test(PICKER)
+  && /const togglePicker = \(\) => \{ if \(open\) closePicker\(true\); else openPicker\(\); \};/.test(PICKER));
+// ⚠️ 하드코딩 높이로 뒤집으면 실제로는 들어가는 자리에서도 위로 튀어 기존 사용처가 달라진다.
+ok('#G33i 세로 보정은 실측 높이로만 한다',
+  /popupRef\.current \? popupRef\.current\.offsetHeight : 0/.test(PICKER) && !/popupH = \d+/.test(PICKER));
+// ⚠️ 파란 칩이 '보고 있는' 연/월을 칠하면 탐색만 해도 '선택됨'으로 보이는 거짓 표시가 된다.
+ok('#G33j 연·월 그리드의 선택 표시는 고른 값 기준(보고 있는 값 아님)',
+  /y === selYear \? 'bg-blue-600 text-white'/.test(PICKER)
+  && /mi === selMonth && viewYear === selYear \? 'bg-blue-600 text-white'/.test(PICKER));
+// ⚠️ disabled 버튼의 title은 Chromium·WebKit이 띄우지 않는다 — 상시 문구가 유일한 안내다.
+ok('#G33k 잠금 사유를 상시 문구로 알린다(죽은 title 금지)',
+  /진하게 표시된 날짜만 고를 수 있습니다/.test(PICKER)
+  && /이 달에는 고를 수 있는 날짜가 없습니다/.test(PICKER)
+  && !/title=\{okY \? undefined/.test(PICKER));
+// ⚠️ 제약이 없을 때 font-bold를 붙이면 기존 사용처 6곳에서 모든 날짜가 굵어진다.
+ok('#G33l 날짜 강조는 제약이 있을 때만',
+  /\(allowed \? 'hover:bg-gray-700 font-bold' : 'hover:bg-gray-700'\)/.test(PICKER));
+// ⚠️ 포커스 되돌리기는 키보드로 닫을 때만 — 바깥 클릭까지 뺏으면 방금 누른 곳에서 달아난다.
+ok('#G33m 선택·Escape에서만 포커스를 트리거로 되돌린다',
+  /const closePicker = \(restoreFocus\) => \{ setOpen\(false\); if \(restoreFocus\) focusTrigger\(\); \};/.test(PICKER)
+  && /onChange\(keyOf\(viewYear, viewMonth, d\)\);\s*closePicker\(true\);/.test(PICKER));
+ok('#G33b 잠긴 날짜는 클릭·커밋 양쪽에서 막는다(한쪽만 막으면 우회된다)',
+  /if \(!dayAllowed\(viewYear, viewMonth, d\)\) return;/.test(PICKER) && /onClick=\{\(\) => pick && selectDay\(dayNum\)\}/.test(PICKER));
+ok('#G33c 연·월 그리드도 잠근다(빈 달을 헤매지 않게)',
+  /const okY = yearAllowed\(y\);/.test(PICKER) && /const okM = monthAllowed\(viewYear, mi\);/.test(PICKER));
+// ⚠️ scroll 이벤트는 버블하지 않는다 — capture가 아니면 모달 본문 스크롤을 통째로 놓친다.
+ok('#G33d 스크롤 감지는 capture 단계', /window\.addEventListener\('scroll', onMove, true\)/.test(PICKER));
+ok('#G33e 날짜 키는 직접 조립한다(toISOString은 UTC로 하루 밀린다)',
+  /const keyOf = \(y, m0, d\) => `\$\{y\}-\$\{pad2\(m0 \+ 1\)\}-\$\{pad2\(d\)\}`;/.test(PICKER)
+  && !/toISOString/.test(PICKER));
+
 ok('#G21 요약 %는 "수익률"이 아니라 "평가금액 증감율(입출금 포함)"이라 표기한다',
   /평가금액 증감율/.test(MODAL) && /입출금 포함/.test(MODAL));
 

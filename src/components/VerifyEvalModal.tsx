@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { X, Plus, Trash2, Pencil, RotateCcw, HelpCircle, RefreshCw, FileSpreadsheet } from 'lucide-react';
+import { X, Plus, Trash2, Pencil, RotateCcw, HelpCircle, RefreshCw, FileSpreadsheet, Calendar } from 'lucide-react';
 import {
   cleanNum,
   formatCurrency,
@@ -14,9 +14,10 @@ import {
   evalSeriesDates,
 } from '../utils';
 import { buildEvalCompare } from '../evalCompare';
-import { downloadEvalCompareXlsx } from '../evalCompareExcel';
+import { downloadEvalCompareXlsx, dateLabel } from '../evalCompareExcel';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { BG, BORDER, Z } from '../design';
+import CustomDatePicker from './CustomDatePicker';
 
 // 종목의 수동종가 오버라이드 키 (gold는 code가 없으므로 'GOLD')
 const overrideKeyFor = (item, isGold) =>
@@ -176,6 +177,21 @@ export default function VerifyEvalModal({
     () => (compareDate && compareCandidates.includes(compareDate)) ? compareDate : (compareCandidates[0] || ''),
     [compareDate, compareCandidates],
   );
+
+  // 두 날짜의 간격(일). ⚠️ '연도가 다른가'로 재지 말 것 — 기준일이 그 해 첫 기록일이면
+  //    기본 비교일이 전년 12/31이라 **사용자가 아무것도 만지지 않은 상태에서** 경고가 뜨고,
+  //    가장 쓸모 있는 '작년 같은 달' 비교도 예외 없이 경고 대상이 된다. 실제 신호는 '연도'가
+  //    아니라 '간격이 비정상적으로 큼'이다(사용자 사고는 2년, 약 881일).
+  // ⚠️ UTC 산술 — `new Date('YYYY-MM-DD')`는 UTC 파싱이라 로컬 타임존에 따라 하루 밀린다.
+  const compareGapDays = useMemo(() => {
+    const m1 = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(compareDateEff || ''));
+    const m2 = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+    if (!m1 || !m2) return 0;
+    const u = (m) => Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    return Math.round((u(m2) - u(m1)) / 86400000);
+  }, [compareDateEff, date]);
+  // 1년(366일)을 넘으면 확인을 권한다 — YoY(365일)는 통과시킨다.
+  const compareGapLarge = compareGapDays > 366;
 
   // ⚠️ 후보에 없는 날짜로는 절대 계산하지 않는다 — `resolveHoldings(p, '')`는 예외 대신
   //    baseline 스냅샷을 조용히 돌려줘 '비교일'이 엉뚱한 구성으로 둔갑한다.
@@ -698,18 +714,45 @@ export default function VerifyEvalModal({
                   </div>
                 ) : (
                   <>
+                    {/* ⚠️ 드롭다운으로 되돌리지 말 것(사용자 요청 2026-08) — 옛 `<select>`는 항목이
+                        `24/04/01 (월)`처럼 **2자리 연도**로 한 줄씩 늘어서 있어, 2년 떨어진 같은
+                        월/일을 실제로 잘못 골랐다(비교 결과가 통째로 다른 해로 계산됐다).
+                        ⚠️ 방어력의 출처를 오해하지 말 것 — 시장 계좌는 `fillNonTradingGaps`·백필
+                        치유로 주말·공휴일까지 기록이 차서 **월·일 그리드의 잠금은 거의 발동하지
+                        않는다**(실측: 매일 기록이 있는 계좌에서 연 9/12만 잠기고 월·일은 0). 실제로
+                        막아 주는 것은 ① 연 → 월 → 일로 **연도를 명시적으로 클릭하게 만드는 드릴다운**
+                        ② 트리거·요약의 **4자리 연도** ③ 간격이 1년을 넘으면 뜨는 경고, 이 셋이다. */}
                     <div className="flex items-center gap-2">
                       <span className="text-gray-500 whitespace-nowrap">비교일</span>
-                      <select
-                        className="flex-1 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200 outline-none"
-                        value={compareDateEff}
-                        onChange={e => setCompareDate(e.target.value)}
-                      >
-                        {compareCandidates.map(d => (
-                          <option key={d} value={d}>{formatShortDate(d)}</option>
-                        ))}
-                      </select>
+                      <div className="flex-1">
+                        <CustomDatePicker
+                          value={compareDateEff}
+                          onChange={d => setCompareDate(d)}
+                          allowedDates={compareCandidates}
+                          align="left"
+                          followScroll
+                          trigger={(
+                            <button
+                              type="button"
+                              title="달력에서 비교일을 고릅니다 — 기록이 있는 날짜만 선택할 수 있습니다"
+                              className={`w-full flex items-center justify-between gap-2 bg-gray-900 border rounded px-2 py-1 outline-none transition-colors hover:border-emerald-500 ${compareGapLarge ? 'border-amber-500/70' : 'border-gray-600'}`}
+                            >
+                              {/* ⚠️ 연도를 4자리로 보여 준다 — 오선택의 발단이 2자리 연도였다.
+                                  엑셀 캡션과 **같은 포매터**라 두 화면의 표기가 갈리지 않는다. */}
+                              <span className={`font-mono ${compareGapLarge ? 'text-amber-300' : 'text-gray-200'}`}>
+                                {compareDateEff ? dateLabel(compareDateEff) : '날짜 선택'}
+                              </span>
+                              <Calendar size={12} className="text-gray-500 shrink-0" />
+                            </button>
+                          )}
+                        />
+                      </div>
                     </div>
+                    {compareGapLarge && (
+                      <div className="text-[10px] text-amber-400/90 leading-snug">
+                        ⚠ 기준일보다 <b>{compareGapDays.toLocaleString()}일</b>(약 {(compareGapDays / 365).toFixed(1)}년) 이전입니다 — 의도한 날짜인지 확인하세요.
+                      </div>
+                    )}
 
                     {!compareModel && (
                       <div className="text-[10px] text-amber-400 leading-snug">
@@ -719,11 +762,11 @@ export default function VerifyEvalModal({
                     {compareModel && (
                       <div className="bg-gray-900/50 rounded px-2 py-1.5 space-y-0.5 text-[10px]">
                         <div className="flex justify-between">
-                          <span className="text-gray-500">기준일 {formatShortDate(date).split(' ')[0]}</span>
+                          <span className="text-gray-500">기준일 {date}</span>
                           <span className="text-gray-100 font-bold">{fmtPrin(compareModel.totals.basis.evalNative)}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-gray-500">비교일 {formatShortDate(compareDateEff).split(' ')[0]}</span>
+                          <span className="text-gray-500">비교일 {compareDateEff}</span>
                           <span className="text-gray-300">{fmtPrin(compareModel.totals.compare.evalNative)}</span>
                         </div>
                         <div className="flex justify-between">
