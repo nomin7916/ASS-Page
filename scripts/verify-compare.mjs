@@ -921,9 +921,10 @@ ok('#G32f 결과 요약도 4자리 연도로 보여 준다',
 ok('#G33 신규 인자는 기본값이 "제약 없음"이다(하위호환의 축)',
   /allowedDates = null, zIndex = 999, followScroll = false,/.test(PICKER)
   && /Array\.isArray\(allowedDates\) \? new Set\(allowedDates\.filter\(Boolean\)\) : null/.test(PICKER));
-// ⚠️ 조상이 만든 스태킹 컨텍스트(Z.dialog 모달)에 갇히면 z-1050 플로팅 창(계산기·관심종목·
-//    메모 달력)에 가려진다 — zIndex prop으로는 구조적으로 해결 불가. 옛 <select> 드롭다운은
-//    브라우저 top layer라 항상 위였다.
+// ⚠️ 포털의 효용은 조상의 `overflow`·`isolate`·스태킹 컨텍스트에 갇혀 **잘리거나 페이지
+//    콘텐츠 아래로 깔리는 것**을 피하는 데 있다(표 래퍼의 `isolate`가 그 예).
+//    ⚠️ 옛 주석의 "포털이 z-1050 플로팅 창 가림을 고친다"는 **거짓**이었다 — 기본값 999는
+//       1050보다 낮다. 그 오해가 z 관계를 검토할 동기를 없애 아래 #G34 사고를 불렀다.
 ok('#G33f 팝업을 body로 포털한다', /createPortal\(popup, document\.body\)/.test(PICKER));
 // ⚠️ 포털이라 `ref.contains`로는 팝업 클릭이 '바깥'으로 판정된다 — 함께 보지 않으면 즉시 닫힌다.
 ok('#G33g 바깥 클릭 판정이 포털된 팝업도 안으로 본다',
@@ -1009,6 +1010,13 @@ ok('#G35b click도 흡수한다 — 본체는 그냥 삼키고, 백드롭은 삼
   && /onClick=\{e => \{ e\.stopPropagation\(\); setOpen\(false\); \}\}/.test(PICKER));
 // ⚠️ '흡수가 필요한 이유'가 실제로 존재하는지도 잰다 — 호스트가 닫기 제스처를 바꾸면 위 가드의
 //    근거가 사라지므로 함께 알려야 한다(죽은 단언 방지).
+// ⚠️ 백드롭 z는 **팝업 z에서 파생**돼야 한다(`zIndex - 1`). 하드코딩으로 떼어 놓으면 팝업은
+//    호스트 위에 정상으로 보이는데 백드롭만 호스트 뒤로 떨어져 ① 바깥 클릭으로 달력만 닫기가
+//    죽고 ② 그 클릭을 호스트가 받아 **모달이 통째로 닫힌다** — 원래 사고가 절반만 되살아난다.
+//    #G34* 는 팝업 z만 보므로 이 결합은 여기서만 잡힌다.
+ok('#G35d 백드롭 z가 팝업 z에서 파생된다(하드코딩 금지)',
+  /style=\{\{ zIndex: zIndex - 1 \}\}/.test(PICKER)
+  && !/style=\{\{ zIndex: \d+ \}\}/.test(PICKER));
 ok('#G35c 호스트들이 실제로 그 제스처로 닫는다',
   /onMouseDown=\{onClose\} onTouchStart=\{onClose\}/.test(MODAL)
   && /onClick=\{closeSavingsModal\}/.test(stripComments(read('src/components/PortfolioTable.tsx'))));
