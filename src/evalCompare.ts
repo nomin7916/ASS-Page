@@ -200,7 +200,17 @@ export const resolvePerShareAsOf = (
 
 /** 한 날짜(또는 반사실)에서의 종목 값. 그 날짜에 보유하지 않았으면 수량·평가금이 null이다. */
 export interface EvalCompareSide {
-  /** 그 날짜에 실제로 보유했는가. false면 종가만 있는 '참고 행'이다. */
+  /**
+   * 그 날짜의 **보유 항목 목록에 이 종목이 있었는가**(수량 0이어도 true).
+   * ⚠️ `held`와 반드시 구분할 것 — `held`는 '평가 detail에 들어갔는가'라
+   *    `calcPortfolioEvalDetail`이 **수량 0 주식을 통째로 드롭**하므로 false가 된다.
+   *    자산검증 화면은 `resolveHoldings().items`를 1:1로 그려 그 행을 '수량 0 · 평가금 ₩0'으로
+   *    표시하므로, 시트의 행 필터를 `held`로 걸면 화면에 있는 행이 시트에서 사라진다.
+   *    `handleAddStock`이 `quantity: 0`으로 새 행을 만들고 자산검증의 수량 편집이 0을 명시
+   *    허용하므로 흔한 상태다 → **행 필터는 반드시 `present`를 쓴다**(엑셀 `includeRow`).
+   */
+  present: boolean;
+  /** 그 날짜에 실제로 보유했는가(수량>0 + 평가 대상). false면 종가만 있는 '참고 행'이다. */
   held: boolean;
   quantity: number | null;
   /** 그 날짜의 종가/기준가. 보유하지 않아도 프로브(수량 1)로 채운다. */
@@ -553,6 +563,8 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
       const psVal = perShareValueOf(ps);
       const dividend = (psVal != null && qty != null && qty > 0) ? qty * psVal : null;
       return {
+        // ⚠️ `held`와 별개 — 위 타입 주석 참조(수량 0 주식은 present=true / held=false).
+        present: !!item,
         held,
         quantity: qty,
         price,

@@ -72,6 +72,14 @@ const psBadgeOf = (info, draft) => {
 // 값이 확정되지 않은 배지(앰버). 토글 노출·카운트의 단일 판정 기준.
 const PS_UNRESOLVED = ['미확인', '무효 입력'];
 
+// 그 칸의 입력이 시트에 실제로 반영되는가.
+// ⚠️ '기준일' 칸은 항상 유효하다 — ① 블록(기준일 보유)뿐 아니라 ④ 반사실도 **기준일 기준
+//    주당분배금**을 쓰므로, 기준일에 이미 매도한 종목도 그 칸이 살아 있다.
+// ⚠️ '비교일' 칸은 비교일에 보유했을 때만 쓰인다(② 블록과 ③ 교집합). 기준일에만 편입한
+//    종목의 비교일 칸은 어느 블록에도 렌더되지 않는 **죽은 입력**인데, 그대로 두면 '미확인'
+//    카운트를 부풀리고 '예상 N 적용' 버튼까지 띄워 사용자가 채우도록 유도한다.
+const psCellLive = (row, side) => side === 'basis' || !!row?.compare?.present;
+
 export default function VerifyEvalModal({
   record,
   portfolio,
@@ -198,6 +206,7 @@ export default function VerifyEvalModal({
     let n = 0;
     for (const r of divRows) {
       for (const side of ['basis', 'compare']) {
+        if (!psCellLive(r, side)) continue; // 죽은 칸은 세지 않는다(카운트 부풀림 방지)
         const info = side === 'basis' ? r.basis?.perShare : r.compare?.perShare;
         if (PS_UNRESOLVED.includes(psBadgeOf(info, psDraft[side]?.[r.key]))) n++;
       }
@@ -815,18 +824,21 @@ export default function VerifyEvalModal({
                                   const draft = psDraft[side][r.key];
                                   const auto = info && info.source !== 'manual' ? info.perShare : 0;
                                   // 배지·미확인 카운트는 `psBadgeOf` 한 함수를 공유한다(모듈 스코프).
-                                  const badge = psBadgeOf(info, draft);
+                                  const live = psCellLive(r, side);
+                                  const badge = live ? psBadgeOf(info, draft) : '해당 없음';
                                   return (
                                     <td key={side} className="py-1 px-0.5">
                                       <div className="flex flex-col items-end gap-0.5">
                                         <input
-                                          className="w-[72px] bg-gray-900 border border-gray-600 rounded px-1 py-0.5 text-right text-gray-100 outline-none focus:border-emerald-500"
-                                          value={draft ?? ''}
-                                          placeholder={auto > 0 ? String(Math.round(auto * 10000) / 10000) : '입력'}
+                                          className={`w-[72px] bg-gray-900 border rounded px-1 py-0.5 text-right outline-none ${live ? 'border-gray-600 text-gray-100 focus:border-emerald-500' : 'border-gray-700/50 text-gray-600 cursor-not-allowed'}`}
+                                          value={live ? (draft ?? '') : ''}
+                                          disabled={!live}
+                                          title={live ? undefined : '비교일에 보유하지 않은 종목이라 이 칸의 값은 시트에 반영되지 않습니다'}
+                                          placeholder={!live ? '—' : auto > 0 ? String(Math.round(auto * 10000) / 10000) : '입력'}
                                           onChange={e => setPs(side, r.key, e.target.value)}
                                         />
                                         <span className={`text-[9px] ${badge === '미확인' || badge === '무효 입력' ? 'text-amber-500/80' : 'text-gray-600'}`}>{badge}</span>
-                                        {info && info.upcoming && (draft === undefined || draft === '') && (
+                                        {live && info && info.upcoming && (draft === undefined || draft === '') && (
                                           <button
                                             className="text-[9px] text-emerald-400/90 hover:text-emerald-300"
                                             title={`${info.upcoming.ym} 회차(아직 배당락 전)의 예상 주당분배금을 이 칸에 적용합니다`}

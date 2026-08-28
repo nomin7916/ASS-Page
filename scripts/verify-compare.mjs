@@ -145,6 +145,32 @@ const bodyRow = (sheet, blk, code) => {
   }
   return null;
 };
+// ⚠️ 행을 '코드'로만 특정하지 말 것 — 예수금·금현물·예적금은 코드가 전부 빈 문자열이라 한
+//    블록 안에서 서로 구분되지 않는다(`bodyRow(sheet, blk, '')`은 언제나 첫 빈 코드 행만 집는다).
+//    집계 행·안내 행도 코드가 없다. 라벨(종목명 셀)로 특정·집합 비교한다.
+const labelsOf = (sheet, blk) => {
+  const out = [];
+  for (let i = blk.bodyFrom; i <= blk.bodyTo; i++) {
+    const r = sheet.rows[i];
+    out.push(r && r[0] && typeof r[0].v === 'string' ? r[0].v : '?');
+  }
+  return out;
+};
+const labelRow = (sheet, blk, prefix) => {
+  for (let i = blk.bodyFrom; i <= blk.bodyTo; i++) {
+    const r = sheet.rows[i];
+    if (r && r[0] && typeof r[0].v === 'string' && r[0].v.startsWith(prefix)) return r;
+  }
+  return null;
+};
+const sumCol = (sheet, blk, idx) => {
+  let s = 0;
+  for (let i = blk.bodyFrom; i <= blk.bodyTo; i++) {
+    const v = sheet.rows[i] && sheet.rows[i][idx];
+    if (v && v.t === 'n' && Number.isFinite(v.v)) s += v.v;
+  }
+  return s;
+};
 const cellNum = (row, idx) => (row && row[idx] && row[idx].t === 'n' ? row[idx].v : null);
 // 국내 10열: 0 종목명 · 1 코드 · 2 종가 · 3 구매단가 · 4 수량 · 5 투자금액 · 6 평가금액 · 7 비중/증감율 · 8 분배금 · 9 주당분배금
 const CL = { price: 2, purchase: 3, qty: 4, invest: 5, eval: 6, ratio: 7, div: 8, perShare: 9 };
@@ -516,11 +542,19 @@ if (EC && EX && U) {
     const cap = sheet.rows.findIndex(row => row[0] && String(row[0].v).startsWith('① 기준일'));
     ok('#51 병합 행의 덮이는 칸이 같은 스타일로 채워져 있다',
       sheet.rows[cap].every(c => c && c.s === sheet.rows[cap][0].s));
-    // 미보유 행은 빈 셀(0 금지)
+    // 그 날짜에 보유하지 않은 종목은 그 블록에서 **빠진다**(사용자 확정 2026-08).
+    // ⚠️ 그래도 '매도 후 주가'는 사라지지 않는다 — ④가 비교일 수량 × 기준일 종가로 계속 그린다.
+    //    (#52b가 원래 지키던 목적이 ①에서 ④로 옮겨 갔다.)
+    // ⚠️ `findIndex`로 '첫 498410 행'을 집는 옛 방식으로 되돌리지 말 것 — 블록마다 그 종목의
+    //    유무가 다르므로 어느 블록을 집었는지 알 수 없다(블록을 지정해 특정한다).
     const sheetSold = EX.buildEvalCompareSheet({ ...baseInput({ portfolio: soldPf }), accountName: 'A' });
-    const soldRowIdx = sheetSold.rows.findIndex(row => row[1] && row[1].v === '498410');
-    eq('#52 미보유 행의 수량·평가금은 빈 셀', [sheetSold.rows[soldRowIdx][4], sheetSold.rows[soldRowIdx][6]], [null, null]);
-    ok('#52b 그래도 종가는 채운다(매도 후 주가 확인용)', sheetSold.rows[soldRowIdx][2] && sheetSold.rows[soldRowIdx][2].v === 11875);
+    const bSold = blocksOf(sheetSold);
+    ok('#52 기준일에 매도한 종목은 ① 블록에서 빠진다', bodyRow(sheetSold, bSold[0], '498410') === null);
+    const soldCounter = bodyRow(sheetSold, bSold[3], '498410');
+    eq('#52b 매도 종목은 ④에 남는다 — 비교일 수량 × 기준일 종가',
+      [cellNum(soldCounter, CL.qty), cellNum(soldCounter, CL.price), Math.round(cellNum(soldCounter, CL.eval))],
+      [10445, 11875, 10445 * 11875]);
+    ok('#52c ②(비교일)에도 남는다', bodyRow(sheetSold, bSold[1], '498410') !== null);
   }
   // 해외 시트 — ③ 블록에는 원화 열을 채우지 않는다
   const sheetOv = S('#53 해외 시트', () => EX.buildEvalCompareSheet({
@@ -612,13 +646,21 @@ if (EC && EX && U) {
     eq('#65b ④ TOTAL 분배금(사진2)', Math.round(cellNum(TO[3], CL.div)), 6628702);
     eq('#65c ③ TOTAL 분배금 증감', Math.round(cellNum(TO[2], CL.div)), 6473106 - 6500712);
   }
-  // 전량 매도 종목의 ③ 행 — '보유 없음 = 0'이 아니면 여기서 빈 칸이 된다.
+  // ③은 두 날짜 **모두** 보유한 종목만(사용자 확정) — 전량 매도는 개별 행이 아니라 집계 행이 받는다.
+  // ⚠️ 집계 행이 없으면 '표시 행 합 ≠ TOTAL'이 되고, 같은 TOTAL 행 안에서 분배금만 '행이 못
+  //    받치면 비운다'(#73b)이고 평가금액·투자금액·증감율은 '행이 못 받쳐도 단언한다'가 되어
+  //    규약이 갈린다(실측: 교집합 합 +33,762,029 vs TOTAL −90,846,821 — 부호까지 반대).
   const sheetSold2 = S('#66 전량 매도 시트', () => EX.buildEvalCompareSheet({ ...baseInput({ portfolio: soldPf }), accountName: 'A' }));
   if (sheetSold2) {
     const b3 = blocksOf(sheetSold2)[2];
-    const sold = bodyRow(sheetSold2, b3, '498410');
-    eq('#66b ③ 전량 매도는 −전량으로 찍힌다(빈 칸 아님)',
-      [cellNum(sold, CL.qty), Math.round(cellNum(sold, CL.eval))], [-10445, -(10445 * 11930)]);
+    ok('#66b ③에는 전량 매도 종목의 개별 행이 없다', bodyRow(sheetSold2, b3, '498410') === null);
+    const aggSell = labelRow(sheetSold2, b3, '전량 매도·이관');
+    eq('#66c ③ 전량 매도 집계 행 = −(비교일 수량 × 비교일 종가)',
+      Math.round(cellNum(aggSell, CL.eval)), -(10445 * 11930));
+    eq('#66d ③ 표시 행 합(집계 포함) = ③ TOTAL',
+      Math.round(sumCol(sheetSold2, b3, CL.eval)), Math.round(cellNum(sheetSold2.rows[b3.total], CL.eval)));
+    eq('#66e 투자금액도 같은 항등식',
+      Math.round(sumCol(sheetSold2, b3, CL.invest)), Math.round(cellNum(sheetSold2.rows[b3.total], CL.invest)));
   }
   // 경고 배너 · 거래 효과 무효 — 렌더 단계에서 사라지면 사용자가 과소 집계를 모른다.
   const sheetMiss = S('#67 종가 미확보 시트', () => EX.buildEvalCompareSheet({
@@ -650,6 +692,81 @@ if (EC && EX && U) {
     const txtFlow = sheetFlow.rows.map(row => row.map(c => (c && c.t === 's' ? c.v : '')).join('')).join(String.fromCharCode(10));
     ok('#68b 순입출금 경고 배너(③ 증감율에 포함됨을 고지)', /순입출금 ₩5,000,000이 있습니다/.test(txtFlow));
     ok('#68c 거래 효과 캡션이 순입출금 제외를 명시', /순입출금 ₩5,000,000 제외/.test(txtFlow));
+  }
+}
+
+// ── 파트②-c 블록별 행 필터 (사용자 확정 2026-08) ────────────────────────────
+// ⚠️ 아래 5종은 전부 '변이를 넣어도 스위트가 초록이었다'는 실측에서 나온 가드다
+//    (② 필터 해제 / ④를 basis 기준으로 오배선 / 집계 행 삭제 / 안내 행 삭제 / TOTAL을 표시 합으로 교체).
+//    존재 여부가 아니라 **블록별 라벨 집합**을 통째로 단언해야 그 변이들이 한 번에 잡힌다.
+{
+  // 편입 1종목 + 매도 1종목이 동시에 있는 픽스처(soldPf는 매도만 있어 ①·④ 변이를 못 잡는다).
+  const mixPf = basePf();
+  mixPf.holdingSnapshots[1].items = mixPf.holdingSnapshots[1].items
+    .filter(i => i.code !== '498410')
+    .concat([ST('NEW777', '신규 편입 ETF', 1000, 10000000, 10000)]);
+  const mixMap = { ...baseMap(), NEW777: { '2026-08-10': 9000, '2026-08-27': 10500 } };
+  const sheetMix = S('#75 필터 시트(편입 1 · 매도 1)', () => EX.buildEvalCompareSheet({
+    ...baseInput({ portfolio: mixPf, stockHistoryMap: mixMap }), accountName: 'A',
+  }));
+  if (sheetMix) {
+    const BM = blocksOf(sheetMix);
+    const NM = { a: 'TIGER 반도체TOP10커버드콜액티브', b: 'KODEX 200커버드콜액티브', cash: '예수금 (CASH)' };
+    eq('#75b ① = 기준일 보유만(신규 편입 포함 · 매도 제외)',
+      labelsOf(sheetMix, BM[0]), [NM.a, NM.b, NM.cash, '신규 편입 ETF']);
+    // ⚠️ 순서가 '기준일 보유 순서 → 기준일에 없는 비교일 보유'라 매도 종목이 맨 뒤로 밀린다
+    //    (자산검증 창의 종목 순서와 다를 수 있다 — 각주가 이 사실을 고지한다).
+    eq('#75c ② = 비교일 보유만(매도 포함 · 신규 편입 제외)',
+      labelsOf(sheetMix, BM[1]), [NM.a, NM.b, NM.cash, 'KODEX 금융고배당TOP10타겟위클리커버드콜']);
+    eq('#75d ③ = 교집합 + 집계 2행',
+      labelsOf(sheetMix, BM[2]).map(s => s.split(' —')[0]),
+      [NM.a, NM.b, NM.cash, '신규 편입 (1종목)', '전량 매도·이관 (1종목)']);
+    eq('#75e ④ = 비교일 보유만(= ②와 같은 종목 집합)',
+      labelsOf(sheetMix, BM[3]), labelsOf(sheetMix, BM[1]));
+    // ④에서 매도 종목이 '비교일 수량 × 기준일 종가'로 그려진다 — ④를 basis 기준으로 오배선하면 사라진다.
+    const mSold = bodyRow(sheetMix, BM[3], '498410');
+    eq('#75f ④ 매도 종목 = 비교일 수량 × 기준일 종가',
+      [cellNum(mSold, CL.qty), cellNum(mSold, CL.price)], [10445, 11875]);
+    // 신규 편입 종목의 '편입 전 종가'는 ②에 남지 않는다(사양 — 조용한 잔존 방지).
+    ok('#75g ②에 신규 편입 종목이 없다', bodyRow(sheetMix, BM[1], 'NEW777') === null);
+    for (let k = 0; k < 4; k++) {
+      eq(`#75h 블록 ${k + 1} 표시 행 합 = TOTAL(평가금액)`,
+        Math.round(sumCol(sheetMix, BM[k], CL.eval)), Math.round(cellNum(sheetMix.rows[BM[k].total], CL.eval)));
+    }
+    // 교집합만으로는 TOTAL이 재구성되지 않는다는 사실을 함께 못 박는다(집계 행이 죽은 단언이 되지 않게).
+    const interOnly = [BM[2].bodyFrom, BM[2].bodyFrom + 1, BM[2].bodyFrom + 2]
+      .reduce((s, i) => s + (cellNum(sheetMix.rows[i], CL.eval) || 0), 0);
+    ok('#75i 교집합 행만의 합은 ③ TOTAL과 다르다(집계 행이 실제로 일한다)',
+      Math.abs(interOnly - cellNum(sheetMix.rows[BM[2].total], CL.eval)) > 1);
+  }
+
+  // 수량 0 주식 — 자산검증 화면에는 '수량 0 · 평가금 ₩0'으로 보인다.
+  // ⚠️ 필터를 `held`로 걸면 이 행이 네 블록에서 전부 사라진다(화면에 있는 행이 시트에 없다).
+  const zeroPf = basePf();
+  zeroPf.holdingSnapshots.forEach(s => s.items.push(ST('ZERO01', '수량 0 종목', 0, 0, 0)));
+  const sheetZero = S('#76 수량 0 종목 시트', () => EX.buildEvalCompareSheet({
+    ...baseInput({ portfolio: zeroPf, stockHistoryMap: { ...baseMap(), ZERO01: { '2026-08-10': 5000, '2026-08-27': 5500 } } }),
+    accountName: 'A',
+  }));
+  if (sheetZero) {
+    const BZ = blocksOf(sheetZero);
+    eq('#76b 수량 0 종목이 네 블록에 모두 남는다(present ≠ held)',
+      [0, 1, 2, 3].map(k => bodyRow(sheetZero, BZ[k], 'ZERO01') !== null), [true, true, true, true]);
+  }
+
+  // 비교일 보유 0건 — 안내 행 + '평가비중 100%' 미단언
+  const emptyCmpPf = basePf();
+  emptyCmpPf.holdingSnapshots[0].items = [];
+  const sheetEmpty = S('#77 비교일 보유 0건 시트', () => EX.buildEvalCompareSheet({
+    ...baseInput({ portfolio: emptyCmpPf }), accountName: 'A',
+  }));
+  if (sheetEmpty) {
+    const BE = blocksOf(sheetEmpty);
+    eq('#77b ② 빈 블록은 안내 행 1줄', labelsOf(sheetEmpty, BE[1]), ['— 이 날짜에 보유한 종목이 없습니다 —']);
+    eq('#77c ④ 빈 블록도 안내 행 1줄', labelsOf(sheetEmpty, BE[3]), ['— 이 날짜에 보유한 종목이 없습니다 —']);
+    ok('#77d 빈 블록의 TOTAL은 평가비중을 단언하지 않는다', cellNum(sheetEmpty.rows[BE[1].total], CL.ratio) === null);
+    ok('#77e 블록 헤더 4개·TOTAL 4개는 유지', sheetEmpty.rows.filter(r => r[0] && r[0].v === '종목명').length === 4
+      && sheetEmpty.rows.filter(r => r[0] && r[0].v === 'TOTAL').length === 4);
   }
 }
 
@@ -740,6 +857,41 @@ ok('#G27 모달의 분배금 차이 줄 게이트에 반사실이 포함된다',
 //    자동값으로 되돌아가는데 배지만 '직접입력'이면 사용자는 자기 입력이 반영된 줄 안다.
 ok('#G28 주당분배금 배지는 모델의 source로 판정한다(입력 문자열 아님)',
   /const badge = info && info\.source === 'manual'/.test(MODAL) && /: typed \? '무효 입력'/.test(MODAL));
+// 블록별 행 필터 배선 — 산술로는 '왜 그 기준인가'를 표현할 수 없다.
+ok('#G29 블록별 행 필터가 실제로 루프에 걸려 있다(선언만이 아니라 사용부)',
+  /const shown = model\.rows\.filter\(r => includeRow\(r, kind\)\);/.test(XLS) && /for \(const row of shown\)/.test(XLS));
+// ⚠️ `held`로 되돌리면 수량 0 주식 행이 네 블록에서 전부 사라진다(자산검증 화면에는 남아 있다).
+ok('#G29b 필터 기준은 held가 아니라 present',
+  /kind === 'diff'\s*\?\s*\(!!row\.basis\?\.present && !!row\.compare\?\.present\)\s*:\s*!!sideOf\(row, kind\)\?\.present/.test(XLS));
+ok('#G29c 모델이 present를 낸다(item 존재 여부)', /present: !!item,/.test(MODEL));
+// ⚠️ `sideOf(row,'diff')`는 row.counter를 돌려준다 — 한 줄로 통일하면 ③이 정반대로 뒤집힌다.
+ok('#G29d diff는 sideOf보다 앞에서 분기한다', /kind === 'diff'\s*\?/.test(XLS));
+ok('#G30 ③ 집계 행 2줄(행 합 = TOTAL 유지)',
+  /emitAgg\(`신규 편입 \(\$\{onlyBasisRows\.length\}종목\)/.test(XLS)
+  && /emitAgg\(`전량 매도·이관 \(\$\{onlyCompareRows\.length\}종목\)/.test(XLS));
+ok('#G30b 집계 행의 분배금은 TOTAL과 같은 dividendPartial 게이트를 쓴다',
+  /const partial = model\.totals\.basis\.dividendPartial \|\| model\.totals\.compare\.dividendPartial;/.test(XLS));
+ok('#G30c 빈 블록 안내 행', /이 날짜에 보유한 종목이 없습니다/.test(XLS) && /두 날짜 모두 보유한 종목이 없습니다/.test(XLS));
+ok('#G30d 빈 블록에서는 평가비중 100%를 단언하지 않는다', /\} else if \(shown\.length\) \{/.test(XLS));
+// ⚠️ warns는 '값을 믿을 수 없다'는 신뢰도 경고 전용 채널(⚠ + 앰버)이다. 정상 거래에서 상시
+//    발동하는 표시 정책 고지를 거기 넣으면 진짜 경고가 묻힌다 → 캡션·각주에만 둔다.
+// ⚠️ **구간을 잘라** 단언한다 — 같은 문장이 캡션과 각주 양쪽에 있어, 파일 전역 정규식으로 재면
+//    캡션에서 통째로 사라져도 각주가 대신 통과시킨다(변이 M7로 실증한 죽은 단언).
+const DIFF_CAP = XLS.slice(XLS.indexOf("emitBlock('diff'"), XLS.indexOf("emitBlock('counter'"));
+const NOTES = XLS.slice(XLS.indexOf('const notes = ['), XLS.indexOf('notes.forEach('));
+ok('#G30e ③ 캡션 자체에 표시 정책 고지가 있다',
+  DIFF_CAP.length > 0 && /두 날짜 모두 보유한 종목만/.test(DIFF_CAP) && /아래 집계 행으로 합산/.test(DIFF_CAP));
+ok('#G30e2 각주에도 남아 있다(캡션을 못 본 사용자용)',
+  NOTES.length > 0 && /③은 두 날짜 모두 보유한 종목만 표시합니다/.test(NOTES) && /행 순서는 기준일 보유 순서입니다/.test(NOTES));
+ok('#G30e3 고지를 신뢰도 경고 채널에 넣지 않았다', !/warns\.push\([^)]*집계 행/.test(XLS));
+ok('#G30f 각주가 빈 칸의 원인에서 "미보유"를 뺐다(필터 후 도달 불가한 설명)',
+  /빈 칸은 0이 아니라 "값 없음"입니다\(그 날짜의 종가·주당분배금을 구하지 못했거나/.test(XLS));
+// 모달 — 기준일에만 편입한 종목의 '비교일' 칸은 어느 블록에도 렌더되지 않는 죽은 입력이다.
+ok('#G31 죽은 주당분배금 칸을 막고 미확인 카운트에서 뺀다',
+  /const psCellLive = \(row, side\) => side === 'basis' \|\| !!row\?\.compare\?\.present;/.test(MODAL)
+  && /if \(!psCellLive\(r, side\)\) continue;/.test(MODAL)
+  && /disabled=\{!live\}/.test(MODAL));
+
 ok('#G21 요약 %는 "수익률"이 아니라 "평가금액 증감율(입출금 포함)"이라 표기한다',
   /평가금액 증감율/.test(MODAL) && /입출금 포함/.test(MODAL));
 

@@ -222,12 +222,35 @@ export const buildEvalCompareSheet = (input: EvalCompareExcelInput): XlsxSheet =
   const sideOf = (row: EvalCompareRow, kind: BlockKind): EvalCompareSide | null =>
     kind === 'basis' ? row.basis : kind === 'compare' ? row.compare : row.counter;
 
+  /**
+   * 블록별 표시 행 (사용자 확정 2026-08).
+   *  ①②④ = 그 블록이 평가하는 날짜에 **보유한 종목만** / ③ = **양쪽 모두 보유**한 종목만.
+   * 그 전에는 네 블록이 같은 합집합을 돌아, 그날 보유하지 않은 종목이 `probePrice`가 채운
+   * 종가 하나만 달고 행으로 나왔다 — 자산검증 창과 행이 어긋나 대조가 불가능했다(사용자 보고).
+   *
+   * ⚠️ 기준은 `held`가 아니라 **`present`**다. `held`는 평가 detail 진입 여부라 **수량 0 주식**이
+   *    false인데, 그 행은 자산검증 화면에 그대로 보인다(→ 화면에 있는 행이 시트에서 사라진다).
+   * ⚠️ 'diff'를 반드시 **앞에서** 분기할 것 — `sideOf(row,'diff')`는 `row.basis`가 아니라
+   *    `row.counter`를 돌려주므로, 한 줄로 통일하면 ③ 필터가 `compare.present`가 되어
+   *    '신규 편입은 사라지고 전량 매도는 남는' **사양과 정반대**가 된다(값은 diffOf로 계산돼
+   *    숫자가 그럴듯하게 나오므로 조용히 통과한다).
+   */
+  const includeRow = (row: EvalCompareRow, kind: BlockKind): boolean =>
+    kind === 'diff'
+      ? (!!row.basis?.present && !!row.compare?.present)
+      : !!sideOf(row, kind)?.present;
+
+  // ③에서 빠지는 종목(한쪽에만 있음) — 아래 집계 행과 캡션 고지가 이 값을 쓴다.
+  const onlyBasisRows = model.rows.filter(r => r.basis?.present && !r.compare?.present);
+  const onlyCompareRows = model.rows.filter(r => !r.basis?.present && r.compare?.present);
+
   const emitBlock = (kind: BlockKind, caption: string, capBg: string) => {
     bannerRow(caption, bag.id({ bold: true, size: 11, color: C.titleFg, bg: capBg, align: 'left' }), 20);
     pushRow(headerFor(kind).map(l => S(l, headStyle)), 22);
 
     const isDiff = kind === 'diff';
-    for (const row of model.rows) {
+    const shown = model.rows.filter(r => includeRow(r, kind));
+    for (const row of shown) {
       const bg = row.type === 'deposit' ? C.cashBg : undefined;
       const out = blank();
       put(out, 'name', S(row.name, mk({ align: 'left' }, bg)));
@@ -272,6 +295,55 @@ export const buildEvalCompareSheet = (input: EvalCompareExcelInput): XlsxSheet =
       pushRow(out);
     }
 
+    // ── ③ 집계 행 (한쪽에만 있는 종목) ───────────────────────────────────────
+    // ⚠️ 이 두 줄은 **선택이 아니라 필수**다. ③ TOTAL은 편입·매도까지 포함한 전체 차이
+    //    (`model.diffEval` 등)인데 본문은 교집합만 그리므로, 없으면 '행 합 ≠ TOTAL'이 된다.
+    //    그러면 같은 TOTAL 행 안에서 분배금만 '행이 못 받치면 비운다'(아래 dividendPartial
+    //    게이트)이고 평가금액·투자금액·증감율은 '행이 못 받쳐도 단언한다'가 되어 규약이 갈린다
+    //    (실측: 표시 행 합 +33,762,029 vs TOTAL −90,846,821 — 부호까지 반대).
+    // ⚠️ 서로 다른 종목의 합이라 수량·종가·구매단가·증감율·주당분배금은 채우지 않는다.
+    let aggEval = 0;
+    if (isDiff && (onlyBasisRows.length || onlyCompareRows.length)) {
+      const aggStyle = bag.id({ align: 'left', bg: C.cashBg, border: true, italic: true, color: C.noteFg });
+      // ⚠️ null(종가 미확보 등)은 0으로 더한다 — TOTAL을 만드는 `calcPortfolioEvalDetail`도 그
+      //    항목을 0으로 더하므로, 그래야 '집계 행 + 본문 = TOTAL' 항등식이 성립한다.
+      type AggKey = 'evalNative' | 'investAmount' | 'dividend';
+      const sumOf = (arr: EvalCompareRow[], side: 'basis' | 'compare', key: AggKey): number =>
+        arr.reduce((s, r) => {
+          const v = r[side] ? r[side]![key] : null;
+          return s + (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+        }, 0);
+      const emitAgg = (label: string, arr: EvalCompareRow[], side: 'basis' | 'compare', sign: 1 | -1) => {
+        if (!arr.length) return;
+        const out = blank();
+        out[0] = S(label, aggStyle);
+        put(out, 'code', S('', mk({ align: 'center' }, C.cashBg)));
+        const ev = sign * sumOf(arr, side, 'evalNative');
+        aggEval += ev;
+        put(out, 'invest', N(sign * sumOf(arr, side, 'investAmount'), numR(moneySigned, C.cashBg)));
+        put(out, 'eval', N(ev, numR(moneySigned, C.cashBg)));
+        if (isOverseas) put(out, 'evalKrw', S('', mk({ align: 'center' }, C.cashBg)));
+        // 분배금은 TOTAL과 같은 규약 — 한쪽이라도 '주당분배금 미확인'이면 합계를 단언하지 않는다.
+        const partial = model.totals.basis.dividendPartial || model.totals.compare.dividendPartial;
+        if (!partial) put(out, 'div', N(sign * sumOf(arr, side, 'dividend'), numR(moneySigned, C.cashBg)));
+        for (let i = 0; i < nCols; i++) if (out[i] === null) out[i] = S('', mk({ align: 'center' }, C.cashBg));
+        pushRow(out);
+      };
+      emitAgg(`신규 편입 (${onlyBasisRows.length}종목) — 비교일에는 없던 종목`, onlyBasisRows, 'basis', 1);
+      emitAgg(`전량 매도·이관 (${onlyCompareRows.length}종목) — 기준일에는 없는 종목`, onlyCompareRows, 'compare', -1);
+    }
+
+    // ── 빈 블록 안내 ────────────────────────────────────────────────────────
+    // ⚠️ 안내가 없으면 캡션+헤더+TOTAL만 남아, 표시할 근거가 하나도 없는데 TOTAL에만 숫자가
+    //    덩그러니 찍힌다(그 상태는 '시트가 깨졌다'로 읽힌다).
+    if (!shown.length && !aggEval && !(isDiff && (onlyBasisRows.length || onlyCompareRows.length))) {
+      const emptyStyle = bag.id({ align: 'left', color: C.noteFg, border: true, italic: true });
+      const out = blank();
+      out[0] = S(isDiff ? '— 두 날짜 모두 보유한 종목이 없습니다 —' : '— 이 날짜에 보유한 종목이 없습니다 —', emptyStyle);
+      spanStyled(out, 0, nCols - 1, emptyStyle);
+      pushRow(out);
+    }
+
     // ── TOTAL ──────────────────────────────────────────────────────────────
     const totText = bag.id({ bold: true, align: 'center', bg: C.totalBg, color: C.titleFg, border: true });
     const totNum = (fmt: string) => bag.id({ bold: true, numFmt: fmt, align: 'right', bg: C.totalBg, border: true });
@@ -293,7 +365,9 @@ export const buildEvalCompareSheet = (input: EvalCompareExcelInput): XlsxSheet =
         //    ③ TOTAL의 증감율(실제)과 나란히 읽는 것이 이 시트의 결론이다.
         const r = ratioOrNull(model.counterRate);
         if (r != null) putT('ratio', N(r, totPct(FMT.pctSignedPos)));
-      } else {
+      } else if (shown.length) {
+        // ⚠️ 표시 행이 0건이면 '평가비중 100%'를 단언하지 않는다 — 같은 빈 블록인데도 ④는
+        //    counterRate가 null이라 빈 칸이고 ①②만 100%가 찍히는 비대칭이 생긴다.
         putT('ratio', N(1, totPct(FMT.pctInt)));
       }
       if (t.dividend > 0) putT('div', N(t.dividend, totNum(isOverseas ? FMT.usd : FMT.krw)));
@@ -316,7 +390,14 @@ export const buildEvalCompareSheet = (input: EvalCompareExcelInput): XlsxSheet =
   pushRow(blank());
   emitBlock('compare', `② 비교일  ${dateLabel(model.compareDate)}  —  그날 보유수량 × 그날 종가`, C.capCompare);
   pushRow(blank());
-  emitBlock('diff', '③ 증감  (기준일 − 비교일)  ·  증감율 = 증감 ÷ 비교일', C.capDiff);
+  // ⚠️ 고지는 **캡션·각주**에만 둔다 — 위 `warns`는 '값을 믿을 수 없다'는 신뢰도 경고 전용
+  //    채널(⚠ + 앰버)이라, 정상 거래에서 상시 발동하는 이 문구를 거기 넣으면 진짜 경고가 묻힌다.
+  emitBlock('diff',
+    '③ 증감  (기준일 − 비교일)  ·  증감율 = 증감 ÷ 비교일  —  두 날짜 모두 보유한 종목만'
+    + ((onlyBasisRows.length || onlyCompareRows.length)
+      ? `  (한쪽에만 있는 ${onlyBasisRows.length + onlyCompareRows.length}종목은 아래 집계 행으로 합산 — 개별 종목은 ①②④에서 확인)`
+      : ''),
+    C.capDiff);
   pushRow(blank());
   emitBlock('counter', '④ 비교일 수량 × 기준일 종가  —  거래하지 않고 그대로 들고 있었다면', C.capCounter);
 
@@ -356,7 +437,12 @@ export const buildEvalCompareSheet = (input: EvalCompareExcelInput): XlsxSheet =
     '· 분배금 = 보유수량 × 주당분배금(세전). 세금은 반영하지 않았습니다. ④의 주당분배금은 기준일 기준값을 씁니다.',
     '· 주당분배금 기본값은 그 날짜까지 확정(배당락 경과)된 가장 최근 회차이며, 자산검증 창에서 직접 입력한 값이 있으면 그 값을 사용합니다.',
     '· 증감율 = 증감 ÷ 비교일 값. 비교일 값이 0이거나 산출할 수 없으면 빈 칸으로 둡니다.',
-    '· 빈 칸은 0이 아니라 "값 없음"입니다(그날 보유하지 않았거나 데이터가 없음).',
+    // ⚠️ 필터 도입으로 '그날 보유하지 않았거나'는 더 이상 빈 칸의 원인이 아니다(그 행 자체가 없다).
+    //    그 문구를 두면 사용자가 빈 칸을 '미보유'로 읽어 진짜 원인(데이터 누락)을 놓친다.
+    '· 빈 칸은 0이 아니라 "값 없음"입니다(그 날짜의 종가·주당분배금을 구하지 못했거나 입력값이 없음).',
+    '· ①②④는 그 블록이 평가하는 날짜에 보유한 종목만, ③은 두 날짜 모두 보유한 종목만 표시합니다. 한쪽에만 있는 종목은 ③의 "신규 편입 / 전량 매도·이관" 집계 행으로 합산해 TOTAL과 맞춥니다.',
+    '· 행 순서는 기준일 보유 순서입니다 — 자산검증 창의 종목 순서와 다를 수 있습니다. 같은 코드를 여러 줄로 나눠 보유하거나 예수금 행이 여럿이면 한 줄로 합쳐 표시합니다.',
+    '· 전량 매도한 종목의 기준일 종가는 ④ 블록에서 볼 수 있습니다. 새로 편입한 종목의 "편입 전(비교일) 종가"는 표시하지 않습니다.',
   ];
   if (isOverseas) {
     notes.push(`· 해외계좌: 금액은 USD 기준이고 (₩) 열은 그 날짜 환율로 환산한 값입니다(기준일 ₩${Math.round(fxB).toLocaleString('en-US')} / 비교일 ₩${Math.round(fxC).toLocaleString('en-US')}).`);
