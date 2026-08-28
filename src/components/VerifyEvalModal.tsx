@@ -52,6 +52,26 @@ const SOURCE_BADGE = {
   evalAmount: { label: '⚪ 폴백', cls: 'text-gray-500' },
 };
 
+// 주당분배금 칸의 배지 = **모델이 그 값을 채택했는가**(입력했는가가 아니다).
+// ⚠️ 음수·문자를 넣으면 모델은 자동값으로 되돌아가는데 배지만 '직접입력'이면 사용자는 자기
+//    입력이 반영된 줄 안다(시트에는 자동값이 찍힌다).
+// ⚠️ 접이식 토글의 '미확인 N' 카운트가 이 함수를 **공유**한다 — 손복제하면 배지는 앰버인데
+//    카운트는 0이 되어 입력 패널이 통째로 사라진다.
+const psBadgeOf = (info, draft) => {
+  const ymLabel = info && info.ym ? info.ym.slice(2) : '';
+  const typed = draft !== undefined && draft !== '';
+  const badge = info && info.source === 'manual'
+    ? '직접입력'
+    : typed ? '무효 입력'
+      : info && info.source === 'paid' ? `입금 ${ymLabel}`
+        : info && info.source === 'declared' ? `확정 ${ymLabel}`
+          : info && info.source === 'predicted' ? `예상 ${ymLabel}`
+            : '미확인';
+  return badge;
+};
+// 값이 확정되지 않은 배지(앰버). 토글 노출·카운트의 단일 판정 기준.
+const PS_UNRESOLVED = ['미확인', '무효 입력'];
+
 export default function VerifyEvalModal({
   record,
   portfolio,
@@ -122,6 +142,8 @@ export default function VerifyEvalModal({
   //    저장하려면 `dividendHistory`가 아니라 신규 필드를 써야 한다(그 맵은 API 새로고침이
   //    얕은 병합으로 덮어써 사용자 입력이 소실된다).
   const [psDraft, setPsDraft] = useState({ basis: {}, compare: {} });
+  // 주당분배금 입력은 평소에 볼 일이 없다 → **기본 접힘**. 미확인이 있을 때만 토글을 노출한다.
+  const [showDiv, setShowDiv] = useState(false);
   const [xlsxFlash, setXlsxFlash] = useState(false);
   const [compareError, setCompareError] = useState('');
   const flashTimer = useRef(null);
@@ -170,6 +192,26 @@ export default function VerifyEvalModal({
     () => (compareModel?.rows || []).filter(r => r.dividendEligible && (r.basis?.held || r.compare?.held)),
     [compareModel],
   );
+
+  // 미확인(= 모델이 값을 채택하지 못한) 칸 수 — 배지와 **같은 함수**로 센다(손복제 금지).
+  const psUnknownCount = useMemo(() => {
+    let n = 0;
+    for (const r of divRows) {
+      for (const side of ['basis', 'compare']) {
+        const info = side === 'basis' ? r.basis?.perShare : r.compare?.perShare;
+        if (PS_UNRESOLVED.includes(psBadgeOf(info, psDraft[side]?.[r.key]))) n++;
+      }
+    }
+    return n;
+  }, [divRows, psDraft]);
+
+  // ⚠️ 토글 노출 조건에 `showDiv`·입력 이력을 함께 둔다 — 미확인 수만 보면 마지막 칸을 채우는
+  //    순간 카운트가 0이 되어 **입력 중인 패널이 통째로 사라지고** 되돌릴 통로도 없어진다.
+  const psHasDraft = useMemo(
+    () => ['basis', 'compare'].some(s => Object.values(psDraft[s] || {}).some(v => v !== undefined && v !== '')),
+    [psDraft],
+  );
+  const showDivToggle = divRows.length > 0 && (psUnknownCount > 0 || showDiv || psHasDraft);
 
   const setPs = (side, key, value) =>
     setPsDraft(p => ({ ...p, [side]: { ...p[side], [key]: value } }));
@@ -737,10 +779,21 @@ export default function VerifyEvalModal({
                       </div>
                     )}
 
-                    {divRows.length > 0 && (
+                    {showDivToggle && (
                       <div>
-                        <div className="text-[10px] text-gray-500 font-bold mb-1">
-                          주당분배금 (세전) <span className="font-normal text-gray-600">· 비우면 자동값 · 저장되지 않습니다</span>
+                        <button
+                          className="text-[10px] text-gray-500 font-bold hover:text-gray-300 inline-flex items-center gap-1"
+                          onClick={() => setShowDiv(v => !v)}
+                          title="주당분배금을 직접 입력합니다 — 보유수량이 아니라 '1주당 분배액'이며, 비우면 자동값입니다(저장되지 않습니다)"
+                        >
+                          주당분배금
+                          {psUnknownCount > 0 && <span className="font-normal text-amber-500/80">미확인 {psUnknownCount}</span>}
+                          <span className="font-normal text-gray-600">{showDiv ? '▲' : '▼'}</span>
+                        </button>
+                        {showDiv && (<>
+                        <div className="text-[9px] text-gray-600 leading-snug mt-1 mb-1">
+                          세전 · 비우면 자동값 · 저장되지 않습니다 — 분배하지 않는 종목(TR·금 ETF 등)은{' '}
+                          <span className="text-gray-400 font-bold">0</span>을 넣으면 '분배 없음'으로 확정됩니다.
                         </div>
                         <table className="w-full text-[10px] border-collapse">
                           <thead>
@@ -761,18 +814,8 @@ export default function VerifyEvalModal({
                                   const info = side === 'basis' ? r.basis?.perShare : r.compare?.perShare;
                                   const draft = psDraft[side][r.key];
                                   const auto = info && info.source !== 'manual' ? info.perShare : 0;
-                                  const ymLabel = info && info.ym ? info.ym.slice(2) : '';
-                                  // ⚠️ 배지는 '입력했는가'가 아니라 **모델이 그 값을 채택했는가**로 판정한다 —
-                                  //    음수·문자를 넣으면 모델은 자동값으로 되돌아가는데 배지만 '직접입력'이면
-                                  //    사용자는 자기 입력이 반영된 줄 안다(시트에는 자동값이 찍힌다).
-                                  const typed = draft !== undefined && draft !== '';
-                                  const badge = info && info.source === 'manual'
-                                    ? '직접입력'
-                                    : typed ? '무효 입력'
-                                      : info && info.source === 'paid' ? `입금 ${ymLabel}`
-                                        : info && info.source === 'declared' ? `확정 ${ymLabel}`
-                                          : info && info.source === 'predicted' ? `예상 ${ymLabel}`
-                                            : '미확인';
+                                  // 배지·미확인 카운트는 `psBadgeOf` 한 함수를 공유한다(모듈 스코프).
+                                  const badge = psBadgeOf(info, draft);
                                   return (
                                     <td key={side} className="py-1 px-0.5">
                                       <div className="flex flex-col items-end gap-0.5">
@@ -800,6 +843,7 @@ export default function VerifyEvalModal({
                             ))}
                           </tbody>
                         </table>
+                        </>)}
                       </div>
                     )}
 
