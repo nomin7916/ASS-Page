@@ -22,7 +22,7 @@ import {
   monthTotals, ledgerKpi, momDelta, yoyDelta, ledgerFingerprint,
 } from '../ledger';
 import {
-  expectedOf, expectedTotal, expectedByPay, monthState, projectedByPay,
+  expectedOf, expectedTotal, expectedIncomeTotal, expectedByPay, monthState, projectedByPay,
   moveItemInGroup, canMoveItemInGroup, ledgerCategories, ledgerRamp, ledgerPayColor,
 } from '../ledger';
 
@@ -453,17 +453,21 @@ export default function LedgerPage({
         }
         continue;
       }
-      const agg = totals.byGroup[g];
+      // ⚠️ **항목 단위 폴백(`expectedTotal`)이다. `totals.byGroup`의 그룹 단위
+      //    `actual > 0 ? actual : plan`으로 되돌리지 말 것.** 그건 '그룹에 실적이 하나라도
+      //    있으면 실적만'이라 **미입력 항목이 통째로 탈락**하는데, 고정비 조각과 옆의 상세
+      //    도넛은 항목 단위라 같은 캡션을 단 두 카드가 다른 총액을 보여 준다(실측: 메인
+      //    880,000 vs 상세 1,080,000 — 월 중 부분 입력은 기본 상태다).
+      //    항목 단위로 통일하면 `Σ메인 === Σ상세 === expectedGrandTotal`이 성립한다.
       rows.push({
         key: g,
         name: LEDGER_GROUP_LABEL[g],
-        // 실제가 있으면 실제, 없으면 계획 — 기존 규약 유지
-        value: agg ? (agg.actual > 0 ? agg.actual : agg.plan) : 0,
+        value: expectedTotal((book?.items || []).filter((it) => it && it.group === g), ym).value,
         color: LEDGER_GROUP_COLOR[g],
       });
     }
     return donutRows(rows);
-  }, [book, ym, totals]);
+  }, [book, ym]);
 
   /**
    * 상세구분 도넛 — 대출·연단위는 **항목별**, 고정비·변동비는 **사용자 구분(category)별**.
@@ -520,11 +524,9 @@ export default function LedgerPage({
       .map((p) => ({ key: p, label: LEDGER_PAY_LABEL[p], value: m[p] }));
   }, [book, ym]);
 
-  const payRows = useMemo(() =>
-    Object.entries(totals.byPay || {})
-      .map(([k, v]) => ({ key: k, label: LEDGER_PAY_LABEL[k] || k, plan: v.plan, actual: v.actual }))
-      .filter((r) => r.plan > 0 || r.actual > 0),
-    [totals]);
+  /* ⚠️ 옛 `payRows`(= `totals.byPay`의 `actual > 0 ? actual : plan`)는 **삭제됐다. 되살리지 말 것.**
+     결제수단 축 표시는 전부 `payStrip`/`payChartData`(항목 단위 실제 ?? 계획)로 통일한다 —
+     두 규칙을 한 화면에 두면 같은 카드가 같은 수단에 다른 금액을 찍는다(실측 580,000 vs 300,000). */
 
   const yearsAvailable = useMemo(() => {
     const s = new Set([year]);
@@ -837,21 +839,28 @@ export default function LedgerPage({
    *    아니다. 후자를 쓰면 **사용자가 실적을 채울수록 계획 열이 0으로 수렴**해, 예상값을
    *    검산할 유일한 기준선이 조용히 사라진다(실측 547,000 → 17,000).
    */
-  const renderSubtotalRow = ({ key, label, color, items, indent = false }) => {
+  const renderSubtotalRow = ({ key, label, color, items, indent = false, income = false }) => {
+    /**
+     * ⚠️ **수입 그룹은 `expectedIncomeTotal`을 써야 한다.** `expectedTotal`은 지출 축 전용이라
+     *    `group === 'income'`을 **함수 안에서** 건너뛴다(#48c 회귀 방지) — 수입 소계에 그걸
+     *    그대로 쓰면 `activeCount === 0`이 되어 12개월이 전부 `-`, 계획·합계·차이가 ₩0으로
+     *    죽는다. 적대적 리뷰 3렌즈가 독립적으로 잡은 회귀다.
+     */
+    const totalOf = income ? expectedIncomeTotal : expectedTotal;
     const monthly = visibleMonths.map((m) => {
       const k = makeYm(year, m);
-      const e = expectedTotal(items, k);
+      const e = totalOf(items, k);
       return { m, e, state: monthState(e) };
     });
     // 연 합계 — 열 숨김과 무관하게 12개월 전부(표의 '{year} 합계' 열 규약 유지)
-    let yearExpected = 0, yearPlan = 0, yearActual = 0, yearMissing = 0, yearPlanned = 0;
+    let yearExpected = 0, yearPlan = 0, yearActual = 0, yearUnresolved = 0, yearPlanned = 0;
     for (const m of MONTHS) {
-      const e = expectedTotal(items, makeYm(year, m));
+      const e = totalOf(items, makeYm(year, m));
       yearExpected += e.value; yearPlan += e.planSum; yearActual += e.fromActual;
-      yearMissing += e.plannedCount + e.unresolved;
+      yearUnresolved += e.unresolved;
       yearPlanned += e.plannedCount;
     }
-    const cur = expectedTotal(items, ym);
+    const cur = totalOf(items, ym);
     return (
       <tr key={key} className={indent ? 'bg-gray-800/25' : 'bg-gray-800/50 font-semibold'}>
         <td className={`${cellBase} sticky left-0 z-[2] ${indent ? 'bg-[#131a27]' : 'bg-[#151b28]'}`} colSpan={2}>
@@ -870,28 +879,49 @@ export default function LedgerPage({
         <td className={`${cellBase} sticky z-[2] ${indent ? 'bg-[#131a27]' : 'bg-[#151b28]'} text-right text-[11px]`} style={{ left: LEFT_PLAN }}>
           {fmtWon(cur.planSum, hideAmounts)}
         </td>
-        {monthly.map(({ m, e, state }) => (
-          <td key={m} className={`${cellBase} text-right text-[11px]`}
-            title={state === 'none' ? '이 달에는 항목이 없습니다'
-              : `실제 ${fmtWon(e.fromActual, hideAmounts)} (${e.actualCount}건) + 계획 ${fmtWon(e.fromPlan, hideAmounts)} (${e.plannedCount}건)`}>
-            {state === 'none' ? <span className="text-gray-700">-</span> : (
-              <>
-                {fmtWonShort(e.value, hideAmounts)}
-                {e.plannedCount > 0 && (
-                  <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.flat }}>계획 {e.plannedCount}</div>
+        {monthly.map(({ m, e, state }) => {
+          /**
+           * ⚠️ **산출된 항목이 하나도 없으면 `0`이 아니라 `-`다.** `unresolved`(실제도 계획도
+           *    못 구함 — 예: `principalAsOfYm`이 빈 대출)를 0으로 계상하면 화면이 '납입 ₩0'을
+           *    **확정 단언**한다. 구버전 규칙(`mm > 0 && ma === 0` → `-`)이 막던 것이고,
+           *    `loanSchedule`의 null 계약("계산 실패는 0이 아니다")과 정면으로 어긋난다.
+           */
+          const resolved = e.actualCount + e.plannedCount;
+          return (
+            <td key={m} className={`${cellBase} text-right text-[11px]`}
+              title={state === 'none' ? '이 달에는 항목이 없습니다'
+                : `실제 ${fmtWon(e.fromActual, hideAmounts)} (${e.actualCount}건) + 계획 ${fmtWon(e.fromPlan, hideAmounts)} (${e.plannedCount}건)`
+                  + (e.unresolved > 0 ? ` · 산출 불가 ${e.unresolved}건(합계에서 빠짐)` : '')}>
+              {state === 'none' ? <span className="text-gray-700" >-</span>
+                : resolved === 0 ? <span className="text-gray-600">-</span> : (
+                  <>
+                    {fmtWonShort(e.value, hideAmounts)}
+                    {e.plannedCount > 0 && (
+                      <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.flat }}>계획 {e.plannedCount}</div>
+                    )}
+                    {/* ⚠️ 산출 불가가 섞이면 이 값은 총액이 아니라 **하한**이다 — 반드시 알린다. */}
+                    {e.unresolved > 0 && (
+                      <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.over }}>?{e.unresolved}</div>
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </td>
-        ))}
+            </td>
+          );
+        })}
         <td className={`${cellBase} text-right text-[11px]`}
-          title={`실제 ${fmtWon(yearActual, hideAmounts)} + 계획 ${fmtWon(yearExpected - yearActual, hideAmounts)}`}>
+          title={`실제 ${fmtWon(yearActual, hideAmounts)} + 계획 ${fmtWon(yearExpected - yearActual, hideAmounts)}`
+            + (yearUnresolved > 0 ? ` · 산출 불가 ${yearUnresolved}건이 빠진 하한입니다` : '')}>
           {fmtWon(yearExpected, hideAmounts)}
           <div className="text-[9px] text-gray-600">계획 {fmtWon(yearPlan, hideAmounts)}</div>
         </td>
         <td className={`${cellBase} text-right text-[10px] text-gray-500`}>
-          {yearPlanned > 0
-            ? <span title={`${yearPlanned}건이 계획으로 채워져 있어 계획 대비 차이를 확정할 수 없습니다`}>계획 {yearPlanned}</span>
+          {/* ⚠️ unresolved도 확정 불가 사유다 — yearPlanned만 보면 산출 실패가 '차이 ₩0'으로 단언된다. */}
+          {yearPlanned > 0 || yearUnresolved > 0
+            ? (
+              <span title={`계획으로 채운 ${yearPlanned}건${yearUnresolved > 0 ? ` · 산출 불가 ${yearUnresolved}건` : ''}이 있어 계획 대비 차이를 확정할 수 없습니다`}>
+                {yearUnresolved > 0 ? `산출불가 ${yearUnresolved}` : `계획 ${yearPlanned}`}
+              </span>
+            )
             : fmtWon(yearActual - yearPlan, hideAmounts)}
         </td>
       </tr>
@@ -934,6 +964,7 @@ export default function LedgerPage({
       rows.push(renderSubtotalRow({
         key: `sub-${g}`, label: `${LEDGER_GROUP_LABEL[g]} 합계`,
         color: LEDGER_GROUP_COLOR[g], items,
+        income: true,   // ⚠️ 없으면 지출 전용 집계를 타서 수입 소계가 통째로 죽는다
       }));
     }
     return rows;
@@ -1441,22 +1472,14 @@ export default function LedgerPage({
                   항목이 하나도 없던 달 {MONTHS.length - payChartData.length}개는 막대를 그리지 않습니다(지출 0원이 아니라 '기록 대상 없음').
                 </div>
               )}
-              {payRows.length > 0 && (
-                <div className="mt-2 border-t border-gray-800 pt-2">
-                  <div className="text-[10px] text-gray-500 mb-1">{month}월 결제수단별 (지출만 · 실제 우선 · 연단위 납부월 포함)</div>
-                  <div className="flex flex-wrap gap-2">
-                    {payRows.map((r) => (
-                      <span key={r.key} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">
-                        {r.label} {fmtWonShort(r.actual > 0 ? r.actual : r.plan, hideAmounts)}
-                      </span>
-                    ))}
-                  </div>
-                  {/* ⚠️ 헤더 KPI 칩과 기준이 다르다(저쪽은 계획 기준 + 연단위 ÷12) — 반드시 고지할 것. */}
-                  <div className="mt-1 text-[9px] text-gray-600">
-                    헤더 '예상 月 지출'의 칩과 숫자가 다를 수 있습니다 — 저쪽은 <b>계획 기준</b>이고 연단위를 ÷12 해 매달 나눠 담습니다.
-                  </div>
-                </div>
-              )}
+              {/* ⚠️ 여기에 `totals.byPay` 기반 칩을 **다시 넣지 말 것.** 그 값은 결제수단 단위
+                  `actual > 0 ? actual : plan`(전부-아니면-전무)이라 위 스트립(항목 단위
+                  실제 ?? 계획)과 **같은 카드 안에서 같은 수단에 다른 금액**을 찍는다
+                  (실측: 카드 580,000 vs 300,000). 스트립 아래 범례가 그 역할을 이미 한다. */}
+              <div className="mt-2 border-t border-gray-800 pt-2 text-[9px] text-gray-600">
+                헤더 '예상 月 지출'의 칩과 숫자가 다를 수 있습니다 — 저쪽은 <b>계획 기준</b>이고 연단위를 ÷12 해 매달 나눠 담습니다.
+                이 카드는 <b>그 달 실제 ?? 계획</b> 기준이고 연단위는 납부월에 전액 들어갑니다.
+              </div>
             </div>
 
             {/* ④ 수지 균형 */}

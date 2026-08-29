@@ -572,6 +572,75 @@ if (L) {
   ok('#81b 미지 결제수단도 색을 낸다(렌더 중 undefined 금지)', /^#[0-9a-f]{6}$/.test(ledgerPayColor('bogus')));
   // ⚠️ 중립 midpoint를 카테고리 슬롯으로 쓰면 회색이 '계획선'·'변동 없음'·'기타'를 동시에 뜻한다.
   ok('#81c ⚠️ DETAIL_OTHER는 DIVERGING.flat이 아니다', DO !== L.LEDGER_DIVERGING.flat);
+
+  // ── §17 적대적 리뷰가 잡은 회귀 4건 ────────────────────────────────────
+  console.log('\n  §17 리뷰 회귀 — 수입 소계 / 도넛 규칙 / unresolved / 결제수단 축');
+
+  // (1) ⚠️ 수입 소계에 expectedTotal을 쓰면 activeCount가 0이 되어 화면이 통째로 '-'가 된다.
+  const incItems = [
+    makeLedgerItem({ id: 'g', group: 'income', plan: 5000000, actual: { '2026-08': 5200000 } }),
+    makeLedgerItem({ id: 'd', group: 'income', plan: 300000 }),
+  ];
+  eq('#82 ⚠️ 지출 집계는 수입을 0으로 본다(그래서 수입 소계에 쓰면 안 된다)',
+    expectedTotal(incItems, '2026-08').activeCount, 0);
+  eq('#82b 수입 소계는 expectedIncomeTotal이 낸다', expectedIncomeTotal(incItems, '2026-08').value, 5200000 + 300000);
+  eq('#82c 수입 소계의 계획 열도 살아 있다', expectedIncomeTotal(incItems, '2026-08').planSum, 5300000);
+  eq('#82d 수입 소계의 월 상태가 partial(=화면에 값이 뜬다)',
+    monthState(expectedIncomeTotal(incItems, '2026-08')), 'partial');
+
+  // (2) ⚠️ 메인 도넛과 상세 도넛이 같은 캡션을 달고 다른 총액을 보이면 안 된다.
+  //    두 도넛이 **항목 단위 폴백**으로 통일돼야 아래 항등식이 성립한다.
+  const dnBook = makeLedgerBook({
+    items: [
+      makeLedgerItem({ id: 'r', group: 'fixed', pay: 'cash', plan: 500000, actual: { '2026-08': 500000 } }),
+      makeLedgerItem({ id: 't', group: 'fixed', pay: 'card', plan: 80000 }),
+      makeLedgerItem({ id: 'f', group: 'variable', plan: 600000, actual: { '2026-08': 300000 } }),
+      makeLedgerItem({ id: 'b', group: 'variable', plan: 200000 }),   // 미입력 — 옛 그룹 단위 규칙이면 통째로 탈락
+    ],
+  });
+  const groupItems = (g) => dnBook.items.filter((it) => it.group === g);
+  const mainSum = L.LEDGER_EXPENSE_GROUPS.reduce((a, g) => {
+    if (g === 'fixed') {
+      const bp = expectedByPay(groupItems('fixed'), '2026-08');
+      return a + Object.values(bp).reduce((x, y) => x + y.value, 0);
+    }
+    return a + expectedTotal(groupItems(g), '2026-08').value;
+  }, 0);
+  const detailSum = dnBook.items.reduce((a, it) => a + (expectedOf(it, '2026-08') || 0), 0);
+  eq('#83 ⚠️ Σ메인 도넛 === Σ상세 도넛 (항목 단위 폴백 통일)', mainSum, detailSum);
+  eq('#83b 둘 다 expectedGrandTotal과 같다', mainSum, expectedGrandTotal(dnBook, '2026-08').value);
+  // ⚠️ 옛 그룹 단위 규칙이 실제로 갈라짐을 만든다는 사실을 고정한다(되돌림 방지).
+  {
+    const t8 = monthTotals(dnBook, '2026-08');
+    const legacy = L.LEDGER_EXPENSE_GROUPS.reduce((a, g) => {
+      if (g === 'fixed') {
+        const bp = expectedByPay(groupItems('fixed'), '2026-08');
+        return a + Object.values(bp).reduce((x, y) => x + y.value, 0);
+      }
+      const agg = t8.byGroup[g];
+      return a + (agg ? (agg.actual > 0 ? agg.actual : agg.plan) : 0);
+    }, 0);
+    ok('#83c ⚠️ 옛 그룹 단위 규칙으로 되돌리면 두 도넛이 갈린다', legacy !== detailSum);
+  }
+
+  // (3) ⚠️ 산출 불가(unresolved)를 0으로 계상하면 '납입 ₩0'을 확정 단언하게 된다.
+  const blankLoan = makeLedgerItem({ id: 'L', group: 'loan', loan: makeLedgerLoan({ principal: 1e8, annualRate: 4 }) });
+  eq('#84 기준월 없는 대출은 계산 불가', loanSchedule(blankLoan.loan, '2026-03'), null);
+  const eu = expectedTotal([blankLoan], '2026-03');
+  ok('#84b 그 항목은 unresolved로 세어진다', eu.unresolved === 1 && eu.actualCount === 0 && eu.plannedCount === 0);
+  eq('#84c value는 0이지만 그건 "총액 0"이 아니다', eu.value, 0);
+  // 화면 규약: 산출된 항목이 0건이면 '-'를 그린다.
+  ok('#84d ⚠️ 화면이 "산출 0건 → -" 규칙을 쓴다',
+    /const resolved = e\.actualCount \+ e\.plannedCount;/.test(read('src/components/LedgerPage.tsx'))
+    && /resolved === 0 \? <span className="text-gray-600">-<\/span>/.test(read('src/components/LedgerPage.tsx')));
+
+  // (4) 결제수단 축이 한 화면에서 두 규칙을 쓰지 않는다.
+  const bpAll = expectedByPay(dnBook.items, '2026-08');
+  const t8b = monthTotals(dnBook, '2026-08');
+  ok('#85 ⚠️ 항목 단위와 수단 단위 규칙은 실제로 다른 값을 낸다(그래서 통일해야 한다)',
+    bpAll.card.value !== (t8b.byPay.card.actual > 0 ? t8b.byPay.card.actual : t8b.byPay.card.plan));
+  eq('#85b Σ결제수단(항목 단위) === 지출 총 예상',
+    Object.values(bpAll).reduce((a, b) => a + b.value, 0), expectedGrandTotal(dnBook, '2026-08').value);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -760,8 +829,14 @@ noExpected('#G10b ledgerEventsByDate', sliceBlock(LG, 'export const ledgerEvents
   '본문에 expected가 없다(기록하지 않은 날에 달력 칩이 총지출을 찍는다)');
 noExpected('#G10c monthTotals', sliceBlock(LG, 'export const monthTotals', 'export const expectedOf'),
   '본문에 expected가 없다(이 구조체를 5소비자가 받아 간다)');
-noExpected('#G10d yearSeries.actual', sliceBlock(LP, 'const yearSeries = useMemo', 'const e = expectedTotal'),
-  'plan/actual/momDelta 산출부에 expected가 없다');
+// ⚠️ 여기는 **부재**가 아니라 **사용부 존재**로 단언한다. 부재로 재려면 구간을 잘라야 하는데
+//    보호 대상(row 객체 리터럴)이 `const e = expectedTotal` **뒤**에 있어, 그 앞을 자르면
+//    구조적으로 expected를 담을 수 없는 4줄만 남는 **죽은 단언**이 된다(적대적 리뷰가
+//    `actual: t.actualExpense` → `actual: e.value` 변이로 실증: 278건 전부 초록).
+ok('#G10d ⚠️ yearSeries의 plan/actual이 monthTotals에서 온다(계획 폴백 누출 금지)',
+  /plan: t\.planExpense, actual: t\.actualExpense,/.test(LP));
+ok('#G10d-2 momDelta도 compareMonths 결과를 그대로 쓴다',
+  /momDelta: c\.comparable \? c\.delta : null,/.test(LP));
 // ⚠️ annualCompare는 설계안의 누출 금지 목록에서 빠져 있었다 — '계획만 입력한 해가 전년 대비
 //    차트에서 통째로 사라진다'가 요청1과 같은 증상이라 여기에 expected를 꽂을 유인이 가장 크다.
 noExpected('#G10e annualCompare', sliceBlock(LP, 'const annualCompare = useMemo', '), [book, yearsAvailable]);'),
@@ -769,7 +844,12 @@ noExpected('#G10e annualCompare', sliceBlock(LP, 'const annualCompare = useMemo'
 
 console.log('\n── §G11 소계 / 결제수단 행 ──');
 const SUB = sliceBlock(LP, 'const renderSubtotalRow', 'const renderGroupSubtotal');
-ok('#G11 소계 월 셀이 expectedTotal을 쓴다(계획 폴백)', /const e = expectedTotal\(items, k\)/.test(SUB));
+ok('#G11 소계 월 셀이 계획 폴백 집계를 쓴다', /const e = totalOf\(items, k\)/.test(SUB));
+// ⚠️ 수입 그룹은 지출 전용 집계를 타면 통째로 죽는다(activeCount 0 → 12개월 전부 '-').
+ok('#G11-2 ⚠️ 수입 소계가 expectedIncomeTotal로 갈라진다',
+  /const totalOf = income \? expectedIncomeTotal : expectedTotal;/.test(SUB));
+ok('#G11-3 ⚠️ 수입 그룹 호출부가 income 플래그를 넘긴다',
+  /income: true,/.test(sliceBlock(LP, 'const renderGroupSubtotal', 'const renderGrandTotalRow')));
 // ⚠️ fromPlan을 쓰면 사용자가 실적을 채울수록 계획 열이 0으로 수렴한다(실측 547,000 → 17,000).
 ok('#G11b ⚠️ 계획 열이 planSum이다(fromPlan 아님)',
   /fmtWon\(cur\.planSum, hideAmounts\)/.test(SUB) && !/fmtWon\(cur\.fromPlan/.test(SUB));
@@ -777,6 +857,12 @@ ok('#G11c 계획으로 채운 건수를 셀에 노출한다', /e\.plannedCount >
 // ⚠️ '보이는 달 중 하나라도'로 재면 미래 달이 항상 계획-only라 배지가 상시 켜져 신호가 0이 된다.
 ok('#G11d ⚠️ 배지는 선택한 달 하나로 판정한다', /cur\.plannedCount > 0/.test(SUB));
 ok('#G11e "항목 없음"을 "미입력"과 구분한다', /state === 'none'/.test(SUB));
+// ⚠️ 산출 불가(unresolved)를 0으로 계상하면 '계획 대비 차이 ₩0'을 확정 단언한다 —
+//    `loanSchedule`의 null 계약("계산 실패는 0이 아니다")이 소계 경로에서 깨진다.
+ok('#G11e-2 ⚠️ 차이 열이 unresolved도 확정 불가 사유로 본다',
+  /yearPlanned > 0 \|\| yearUnresolved > 0/.test(SUB));
+ok('#G11e-3 ⚠️ 산출 불가 건수를 셀에 노출한다(그 값은 총액이 아니라 하한)',
+  /e\.unresolved > 0 && \(/.test(SUB));
 const GSUB = sliceBlock(LP, 'const renderGroupSubtotal', 'const renderGrandTotalRow');
 // ⚠️ 현금/카드만 하드코딩하면 pay:'auto'인 항목이 어느 행에도 없이 사라진다.
 ok('#G11f ⚠️ 결제수단 행이 LEDGER_PAY_ORDER 전체를 훑는다',
@@ -814,6 +900,14 @@ const DON = sliceBlock(LP, 'const donut = useMemo', 'const detailDonut');
 ok('#G13d ⚠️ 고정비 분리가 byPay가 아니라 고정비 항목만 순회한다',
   /expectedByPay\(fixedItems, ym\)/.test(DON) && !/totals\.byPay/.test(DON));
 ok('#G13e 고정비 조각 색이 결제수단 색을 공유한다(현금이 두 색이 되면 안 된다)', /ledgerPayColor\(p\)/.test(DON));
+// ⚠️ #G13f(donutRows 공유)는 **음수 클램프만** 통일할 뿐 값 산출 규칙은 보지 않는다.
+//    옛 그룹 단위 `agg.actual > 0 ? agg.actual : agg.plan`으로 되돌리면 미입력 항목이 통째로
+//    탈락해 옆의 상세 도넛과 총액이 갈리는데(실측 880,000 vs 1,080,000) #G13f는 통과한다.
+ok('#G13d-2 ⚠️ 메인 도넛의 비-고정비 그룹도 항목 단위 폴백을 쓴다',
+  /value: expectedTotal\(\(book\?\.items \|\| \[\]\)\.filter\(\(it\) => it && it\.group === g\), ym\)\.value,/.test(DON));
+ok('#G13d-3 ⚠️ 도넛 memo에 totals.byGroup이 남아 있지 않다', !/totals\.byGroup/.test(DON));
+// ⚠️ 결제수단 축을 한 화면에서 두 규칙으로 그리면 같은 카드가 같은 수단에 다른 금액을 찍는다.
+ok('#G13n ⚠️ payRows(totals.byPay 기반)가 되살아나지 않았다', !/const payRows = useMemo/.test(LP));
 // ⚠️ 메인/상세가 같은 후처리를 써야 두 도넛의 합이 갈리지 않는다(음수 plan이 도달 가능하다).
 ok('#G13f ⚠️ 두 도넛이 같은 후처리(donutRows)를 지난다',
   (LP.match(/return donutRows\(rows\)/g) || []).length === 2 && /Math\.max\(0, Number\.isFinite\(r\.value\)/.test(LP));
