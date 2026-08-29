@@ -31,6 +31,63 @@ export const DRIVE_FILES = {
 // 동시 호출 중복 방지 — 이메일 기준 캐시 (토큰 교체 시에도 폴더 중복 생성 방지)
 let _folderCache: { key: string; promise: Promise<string> } | null = null;
 
+// ── 내 드라이브 최상위(루트) 폴더 ID — '저장 위치가 루트로 해석되는 사고'의 유일한 방어선 ──
+// ⚠️ 실측 사고(2026-06-09~08-28): 앱이 루트에 portfolio_stockdata.json 1개 + 백업 6개를 썼다.
+//    30곳이 넘는 저장 지점이 전부 getOrCreateIndexFolder 하나로 모이므로, 잘못된 folderId가
+//    한 번 확정되면 그 탭의 모든 저장이 통째로 그리로 간다(driveFolderIdRef에 박제되고
+//    코드 어디에도 초기화가 없다). 게다가 files.update(PATCH)는 부모를 바꾸지 못해
+//    (addParents/removeParents 미사용) 한 번 루트에 생긴 파일은 스스로 폴더로 돌아오지 못하고
+//    이후 루트 세션마다 계속 덮어써진다 — 정상 폴더와 별개의 '평행 계보'가 자란다.
+//    루트에 쓴 백업은 listBackups/cleanupOldBackups가 폴더 스코프라 앱 눈에 영영 안 보인다
+//    (= 사용자는 백업이 있다고 믿는데 복원 목록에는 없다).
+let _rootFolderId: string | null = null;
+async function _loadRootFolderId(token: string): Promise<string | null> {
+  if (_rootFolderId) return _rootFolderId;
+  try {
+    const res = await fetch(`${DRIVE_API}/files/root?fields=id`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    _rootFolderId = data?.id ?? null;
+    return _rootFolderId;
+  } catch {
+    return null; // 조회 실패는 저장을 막지 않는다 — 가드는 'root' 리터럴·빈 값만으로도 동작
+  }
+}
+
+// 저장 직전 최종 가드 — folderId가 루트/빈 값이면 **쓰지 않고 던진다**.
+// ⚠️ 조용히 넘어가지 말 것: 08-03 이전 무음 실패가 정확히 '화면엔 저장됨, 실제론 유실'을 만들었다.
+//    던져야 saveAllToDrive의 catch가 재시도·상태 표시·알림을 돌린다.
+function _assertNotRootFolder(folderId: string, fileName: string): void {
+  if (!folderId || folderId === 'root' || (_rootFolderId && folderId === _rootFolderId)) {
+    throw new Error(
+      `[Drive] 저장 위치가 내 드라이브 최상위로 해석되어 저장을 중단했습니다 (${fileName}). 새로고침 후 다시 시도하세요.`
+    );
+  }
+}
+
+// 안전망(2.5단계) 후보 부모가 '앱 데이터 폴더로 쓸 수 있는가' 검증.
+// ⚠️ 루트를 절대 통과시키지 말 것. 폴더가 아닌 것·휴지통에 있는 것도 배제한다.
+async function _isUsableParent(token: string, parentId: string): Promise<{ ok: boolean; name: string }> {
+  if (!parentId || parentId === 'root' || (_rootFolderId && parentId === _rootFolderId)) {
+    return { ok: false, name: '' };
+  }
+  try {
+    const res = await fetch(`${DRIVE_API}/files/${parentId}?fields=id,name,mimeType,trashed`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return { ok: false, name: '' };
+    const meta = await res.json();
+    if (meta?.mimeType !== 'application/vnd.google-apps.folder' || meta?.trashed) {
+      return { ok: false, name: '' };
+    }
+    return { ok: true, name: String(meta?.name || '') };
+  } catch {
+    return { ok: false, name: '' };
+  }
+}
+
 // 후보 폴더 중 최적 선택: registeredAt 제공 시 가입일과 생성일 차이가 가장 작은 폴더,
 // 없으면 가장 오래된 폴더 (createdTime 오름차순 정렬 전제)
 function _pickBestFolder(folders: { id: string; createdTime: string }[], registeredAt?: string): string {
@@ -63,6 +120,9 @@ export async function getOrCreateIndexFolder(token: string, email: string, regis
 
 async function _doGetOrCreateIndexFolder(token: string, email: string, registeredAt?: string): Promise<string> {
   const newName = getFolderName(email);
+  // 세션당 1회 — 이후 모든 saveDriveFile의 루트 가드가 이 값을 쓴다.
+  // ⚠️ 2.5단계 안에서만 부르면 그 단계가 실행되지 않는 정상 세션에서 가드가 무장되지 않는다.
+  await _loadRootFolderId(token);
 
   // 1단계: 새 형식 폴더(Index_Data_<email>) 탐색
   // createdTime 오름차순 정렬 → 중복 시 가장 오래된 폴더(원본)가 index 0
@@ -123,8 +183,29 @@ async function _doGetOrCreateIndexFolder(token: string, email: string, registere
   if (safetyRes?.ok) {
     const safetyData = await safetyRes.json().catch(() => ({ files: [] }));
     if (safetyData.files?.length > 0) {
-      const parentId = safetyData.files[0].parents?.[0];
-      if (parentId) return parentId;
+      // ⚠️ 과거엔 `safetyData.files[0].parents?.[0]`를 **검증 없이** 폴더 ID로 썼다. 이 쿼리에는
+      //    orderBy도 pageSize도 없어 files[0]이 호출마다 달라질 수 있고, parents[0]이 폴더인지·
+      //    루트인지·앱 폴더인지 아무것도 보지 않았다. 그래서 루트에 portfolio_state.json이 하나만
+      //    있어도 그 세션 전체가 내 드라이브 최상위에 저장됐다(2026-06~08 실측 사고).
+      //    → 후보를 **전부** 훑어 '루트가 아닌 실제 폴더'만 채택하고, 이름이 Index_Data_<email>
+      //      (또는 레거시 Index_Data)인 후보를 우선한다. 하나도 없으면 폴더를 새로 만들지 않고
+      //      **던진다**(fail-closed) — 잘못된 곳에 쓰는 것보다 저장을 멈추는 편이 낫다.
+      const candidates: string[] = [];
+      for (const f of safetyData.files) {
+        const pid = f?.parents?.[0];
+        if (pid && !candidates.includes(pid)) candidates.push(pid);
+      }
+      let fallbackId = '';
+      for (const pid of candidates) {
+        const { ok, name } = await _isUsableParent(token, pid);
+        if (!ok) continue;
+        if (name === newName || name === FOLDER_NAME_LEGACY) return pid; // 이름까지 맞는 최선 후보
+        if (!fallbackId) fallbackId = pid; // 폴더명을 바꿔 쓰는 사용자를 위한 차선(루트는 이미 배제됨)
+      }
+      if (fallbackId) {
+        console.warn(`[Drive] 안전망: 이름이 다른 폴더를 채택했습니다 (기대=${newName})`);
+        return fallbackId;
+      }
       throw new Error('FOLDER_NOT_FOUND_FOR_KNOWN_USER');
     }
   }
@@ -253,6 +334,9 @@ export async function saveDriveFile(
   fileName: string,
   data: unknown
 ): Promise<void> {
+  // ⚠️ 모든 JSON 저장이 지나는 단일 관문 — 여기서 막으면 백업·STATE·STOCK·MARKET이 한꺼번에 보호된다.
+  //    (saveVersionedBackup·saveVersionFile·관리자 캐시도 전부 이 함수를 통과한다.)
+  _assertNotRootFolder(folderId, fileName);
   const fileId = await findFileId(token, folderId, fileName);
   const content = JSON.stringify(data);
   const boundary = 'drive_boundary_xyz';
