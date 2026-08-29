@@ -69,7 +69,7 @@ try {
 
 if (L) {
   const {
-    loanSchedule, loanAnnualTotal, loanTermMonths, planOf, actualOf, varianceOf,
+    loanSchedule, loanNext12Total, loanTermMonths, planOf, actualOf, varianceOf, expectsActual,
     commitActual, isItemActive, monthTotals, ledgerKpi, momDelta, yoyDelta, compareMonths,
     ledgerEventsByDate, normalizeLedgerBooks, ledgerBooksHaveContent, ledgerFingerprint,
     makeLedgerItem, makeLedgerLoan, makeLedgerBook,
@@ -77,7 +77,7 @@ if (L) {
   } = L;
 
   ok('#0 필요한 export가 전부 있다', [
-    loanSchedule, loanAnnualTotal, planOf, actualOf, varianceOf, commitActual,
+    loanSchedule, loanNext12Total, planOf, actualOf, varianceOf, commitActual,
     monthTotals, ledgerKpi, momDelta, yoyDelta, ledgerEventsByDate,
     normalizeLedgerBooks, ledgerBooksHaveContent, ledgerFingerprint,
   ].every((f) => typeof f === 'function'));
@@ -108,9 +108,24 @@ if (L) {
   // APT1/APT2: 원리금균등, 만기 2063-04
   const apt1 = mkLoan({ principal: 131283083, annualRate: 3.70, method: 'amortizing', endDate: '2063-04-07' });
   const apt2 = mkLoan({ principal: 74631352, annualRate: 4.19, method: 'amortizing', endDate: '2063-04-07' });
-  eq('#9 만기 2063-04 → 잔여 440개월', loanTermMonths(apt1), 440);
-  near('#10 APT1 원리금균등 ≈ 544,059 (사진)', loanSchedule(apt1, BASE).payment, 544059, 1600);
-  near('#11 APT2 원리금균등 ≈ 333,220 (사진)', loanSchedule(apt2, BASE).payment, 333220, 1000);
+  // ⚠️ **만기월도 납입 회차다** — 2026-08 … 2063-04 = 441회. `+1`을 빼면 만기월이 '계산 불가'가
+  //    되고, 같은 대출을 termMonths로 넣었을 때와 회차 수가 1 달라진다(#9c가 그 교차검증).
+  eq('#9 만기 2063-04 → 441회차 (만기월 포함)', loanTermMonths(apt1), 441);
+  eq('#9b 기준월 = 첫 회차(k=0)', loanSchedule(apt1, BASE).period, 0);
+  // ⚠️ endDate 경로와 termMonths 경로는 **같은 대출에 같은 회차 수**를 내야 한다.
+  eq('#9c ⚠️ endDate 경로 == termMonths 경로 (회차 정의 통일)',
+    loanSchedule(mkLoan({ principal: 1e7, annualRate: 6, method: 'amortizing', endDate: '2026-06-30', principalAsOfYm: '2026-01' }), '2026-06') !== null,
+    true);
+  eq('#9d 만기월 다음 달은 null', loanSchedule(mkLoan({ principal: 1e7, annualRate: 6, method: 'amortizing', endDate: '2026-06-30', principalAsOfYm: '2026-01' }), '2026-07'), null);
+  ok('#9e termMonths:6과 endDate 2026-06(기준 2026-01)이 같은 납입액',
+    Math.abs(loanSchedule(mkLoan({ principal: 1e7, annualRate: 6, method: 'amortizing', termMonths: 6, principalAsOfYm: '2026-01' }), '2026-01').payment
+      - loanSchedule(mkLoan({ principal: 1e7, annualRate: 6, method: 'amortizing', endDate: '2026-06-30', principalAsOfYm: '2026-01' }), '2026-01').payment) < 0.01);
+  // ⚠️ **정확히 재현할 수 없는 것이 정상이다.** 사진의 납입액은 최초 약정액이고 대출금은 현재
+  //    잔액이라, 두 대출이 요구하는 회차 수가 442.6과 437.1로 서로 다르다 — 같은 만기일로는
+  //    어느 쪽도 정확히 맞출 수 없다. 그래서 `paymentOverride`가 존재한다(#13).
+  //    허용오차를 '정확 일치'로 조이지 말 것 — 조이면 이 구조적 사실을 부정하게 된다.
+  near('#10 APT1 원리금균등 ≈ 544,059 (사진, 0.5% 이내)', loanSchedule(apt1, BASE).payment, 544059, 544059 * 0.005);
+  near('#11 APT2 원리금균등 ≈ 333,220 (사진, 0.5% 이내)', loanSchedule(apt2, BASE).payment, 333220, 333220 * 0.005);
 
   // ⚠️ 이 기능의 최중요 계약 — 납입액이 **시간에 따라 드리프트하지 않는다**.
   //    principalAsOfYm 없이 "만기 − 오늘"로 n을 재면 APT1이 1년에 +8,757원(+1.3%) 상승한다.
@@ -156,13 +171,20 @@ if (L) {
   near('#22 원금균등 1회차 = 원금/n + 잔액×i', e0, 120000000 / 120 + 120000000 * 0.005, 0.01);
   ok('#23 ⚠️ 회차가 갈수록 납입액이 줄어든다', e0 > e1 && e1 > e11);
   ok('#24 levelPayment=false로 표시된다', loanSchedule(ep, '2026-01').levelPayment === false);
-  const epYear = loanAnnualTotal(ep, 2026);
+  // ⚠️ 연 납입액은 **향후 12개월** 합이다(달력 연도 아님) — 기준월이 연중이면 그 앞쪽 달들이
+  //    '아직 시작 전'이라 null이 되어 달력 연도 합은 통째로 모자란다(#25c가 그 회귀를 잡는다).
+  const epYear = loanNext12Total(ep, '2026-01');
   ok('#25 ⚠️ 연 합계가 1회차×12보다 작다(과대 계상 방지)', epYear.total < e0 * 12);
   near('#25b 연 합계 = 12회차 스케줄 합', epYear.total,
     Array.from({ length: 12 }, (_, k) => loanSchedule(ep, makeYm(2026, k + 1)).payment).reduce((a, b) => a + b, 0), 0.001);
   ok('#26 원리금균등의 levelPayment=true', loanSchedule(apt1, BASE).levelPayment === true);
-  const creditYear = loanAnnualTotal(credit, 2026);
+  const creditYear = loanNext12Total(credit, BASE);
   ok('#26b 만기 경과 달은 missing으로 세어진다(합계에 0으로 섞이지 않음)', creditYear.missing >= 0);
+  // ⚠️ 만기일시·원리금균등은 회차가 일정하므로 향후 12개월 합 === 월 × 12 여야 한다.
+  //    이게 성립해야 사진의 '연 납입액 19,853,316'(= 월 × 12)이 그대로 재현된다.
+  near('#26c 만기일시는 향후 12개월 합 = 월 × 12', creditYear.total, loanSchedule(credit, BASE).payment * 12, 0.01);
+  // ⚠️ 달력 연도로 재면 기준월(8월) 앞의 7개월이 전부 null이라 합계가 통째로 모자란다.
+  ok('#25c ⚠️ 향후 12개월은 기준월이 연중이어도 12개월을 온전히 센다', creditYear.missing === 0);
 
   // 거치기간
   const grace = mkLoan({ principal: 1e8, annualRate: 6, method: 'amortizing', termMonths: 120, graceMonths: 12, principalAsOfYm: '2026-01' });
@@ -333,6 +355,79 @@ if (L) {
   near('#52c 전년 대비 증감률 50%', yd.rate * 100, 50, 1e-9);
   eq('#53 분모가 0이면 rate는 null(delta는 유효)',
     compareMonths(makeLedgerBook({ items: [makeLedgerItem({ plan: 1, actual: { '2026-07': 0, '2026-08': 100 } })] }), '2026-08', '2026-07').rate, null);
+
+  // ── §8b 적대적 리뷰 회귀 (2026-08) ───────────────────────────────────────
+  console.log('\n  §8b 적대적 리뷰 회귀 — 연단위 미입력 · 비교 집합 · 연 납입액 · 달력 날짜');
+
+  // ⚠️ annual의 비납부월은 '미입력'이 아니다. 아니면 연단위 항목 하나가 11개월 내내 미입력으로
+  //    세어져 ① KPI 배너 상시 점등 ② 연간 차이 열 영구 '-' ③ 납부월·다음 달 MoM 비교 불가.
+  const annualOnly = makeLedgerBook({
+    items: [makeLedgerItem({ id: 'tax', group: 'annual', pay: 'cash', name: '재산세', plan: 600000, dueMonth: 7, dueDay: 16 })],
+  });
+  ok('#64 ⚠️ annual 비납부월은 실적 입력 대상이 아니다', expectsActual(annualOnly.items[0], '2026-03') === false);
+  ok('#64b annual 납부월은 대상이다', expectsActual(annualOnly.items[0], '2026-07') === true);
+  ok('#64c 비-annual은 활성이면 항상 대상', expectsActual(makeLedgerItem({ group: 'fixed' }), '2026-03') === true);
+  eq('#65 ⚠️ 비납부월에 미입력으로 세지 않는다', monthTotals(annualOnly, '2026-03').missingExpense, 0);
+  eq('#65b 납부월에는 미입력으로 센다', monthTotals(annualOnly, '2026-07').missingExpense, 1);
+  eq('#65c 비납부월은 activeExpense에도 넣지 않는다', monthTotals(annualOnly, '2026-03').activeExpense, 0);
+
+  // ⚠️ 비교는 **개수가 아니라 미입력 항목 집합**을 본다 — '1월은 월세만, 2월은 커피만' 입력이
+  //    둘 다 missing=1로 통과하면 −93.6% 같은 거짓 신호가 확정 표시된다.
+  const skewed = makeLedgerBook({
+    items: [
+      makeLedgerItem({ id: 'rent', group: 'fixed', plan: 1650000, actual: { '2026-01': 1650000 } }),
+      makeLedgerItem({ id: 'coffee', group: 'fixed', plan: 50000, actual: { '2026-02': 50000 } }),
+      makeLedgerItem({ id: 'tel', group: 'fixed', plan: 60000, actual: { '2026-01': 60000, '2026-02': 60000 } }),
+    ],
+  });
+  eq('#66 미입력 개수는 두 달 모두 1', [monthTotals(skewed, '2026-01').missingExpense, monthTotals(skewed, '2026-02').missingExpense], [1, 1]);
+  ok('#66b ⚠️ 그래도 비교 불가다(빠진 항목이 다르다)', compareMonths(skewed, '2026-02', '2026-01').comparable === false);
+  eq('#66c 사유가 missing-mismatch', compareMonths(skewed, '2026-02', '2026-01').reason, 'missing-mismatch');
+  eq('#66d ⚠️ delta를 내지 않는다(−93.6% 거짓 신호 방지)', compareMonths(skewed, '2026-02', '2026-01').delta, null);
+  ok('#66e missingIds가 정렬돼 노출된다', monthTotals(skewed, '2026-01').missingIds.join() === 'coffee');
+  // 같은 항목이 빠졌으면 비교가 성립한다(계약이 과도하게 막지 않는지)
+  const sameGap = makeLedgerBook({
+    items: [
+      makeLedgerItem({ id: 'a', group: 'fixed', plan: 100, actual: { '2026-01': 100, '2026-02': 120 } }),
+      makeLedgerItem({ id: 'b', group: 'fixed', plan: 200 }),
+    ],
+  });
+  ok('#66f 같은 항목이 빠졌으면 비교 성립', compareMonths(sameGap, '2026-02', '2026-01').comparable === true);
+
+  // ⚠️ 연 납입액은 '월 × 12'가 아니라 향후 12개월 스케줄 합이다(화면 각주가 그렇게 못 박는다).
+  const epBook = makeLedgerBook({
+    items: [makeLedgerItem({
+      group: 'loan', name: '원금균등',
+      loan: makeLedgerLoan({ principal: 120000000, principalAsOfYm: '2026-01', annualRate: 6, method: 'equalPrincipal', termMonths: 120 }),
+    })],
+  });
+  const epKpi = ledgerKpi(epBook, '2026-01');
+  ok('#67 ⚠️ 원금균등의 연 납입액이 월×12보다 작다', epKpi.loanAnnualPayment < epKpi.loanMonthly * 12);
+  near('#67b 연 납입액 = 행별 향후 12개월 합(단일 소스)', epKpi.loanAnnualPayment, loanNext12Total(epBook.items[0].loan, '2026-01').total, 0.01);
+  // 만기일시·원리금균등은 두 값이 같아야 한다(사진 재현의 근거)
+  ok('#67c 만기일시는 연 납입액 = 월 × 12', Math.abs(ledgerKpi(makeLedgerBook({ items: [makeLedgerItem({ group: 'loan', loan: credit })] }), BASE).loanAnnualPayment - 353875 * 12) < 1);
+  ok('#67d 미계상 달 수가 노출된다', typeof epKpi.loanAnnualMissing === 'number');
+
+  // ⚠️ annual 활성 판정을 '보고 있는 달'로 하면 연 목돈이 예상 年 지출에서 통째로 빠진다.
+  //    (addItem이 activeFrom을 추가 시점 달로 박으므로 그보다 앞선 달을 보면 사라졌다)
+  const annualLate = makeLedgerBook({
+    items: [makeLedgerItem({ group: 'annual', plan: 600000, dueMonth: 7, dueDay: 16, activeFrom: '2026-05' })],
+  });
+  eq('#68 ⚠️ 앞선 달을 보고 있어도 연 목돈이 연 합계에 든다', ledgerKpi(annualLate, '2026-02').annualLumpSum, 600000);
+  eq('#68b 편입 전 해에는 들지 않는다', ledgerKpi(annualLate, '2025-02').annualLumpSum, 0);
+
+  // ⚠️ 존재하지 않는 날짜(2026-04-31)를 통과시키면 CalendarModal이 다시 걸러 칩이 조용히 사라진다.
+  ok('#69 ⚠️ 달력에 없는 날짜를 거부한다', L.isValidLedgerDate('2026-04-31') === false);
+  ok('#69b 윤년 2월 29일은 통과', L.isValidLedgerDate('2028-02-29') === true);
+  ok('#69c 평년 2월 29일은 거부', L.isValidLedgerDate('2027-02-29') === false);
+  eq('#69d daysInMonth 윤년', L.daysInMonth(2028, 2), 29);
+  // ⚠️ 말일 의도(31)는 버리지 말고 그 달 말일로 클램프한다 — 버리면 칩이 안내 없이 사라진다.
+  {
+    const feb = makeLedgerBook({ id: 'f', items: [makeLedgerItem({ group: 'annual', plan: 1, dueMonth: 2, dueDay: 31 })] });
+    const ev = ledgerEventsByDate([feb], 2026);
+    ok('#70 ⚠️ 2월 31일은 말일(28일)로 클램프된다', Array.isArray(ev['2026-02-28']));
+    ok('#70b 유령 날짜가 만들어지지 않는다', !ev['2026-02-31']);
+  }
 
   // ── §9 메모 달력 이벤트 ──────────────────────────────────────────────────
   console.log('\n  §9 메모 달력 이벤트 (라이브 파생)');
@@ -732,8 +827,12 @@ ok('#G3 LoginGate 3곳(UserFeatures·EMPTY_FEATURES·pickFeatures)',
   (GATE.match(/ledgerEnabled/g) || []).length >= 3);
 ok('#G3b App 초기 userFeatures 리터럴', /userFeatures[\s\S]{0,400}?ledgerEnabled:\s*false/.test(APP));
 // ⚠️ effectiveUserFeatures(feature1/2/3 강제)에 얹지 말 것 — 관리자 본인이 영구 접근 불가가 된다.
-ok('#G3c ledgerAccess = isAdminUser || userFeatures.ledgerEnabled',
-  /const ledgerAccess = isAdminUser \|\| userFeatures\.ledgerEnabled/.test(APP));
+// ⚠️ 식이 `isAdminUser`가 아니라 옵셔널 체이닝인 이유: 이 상수는 별도 창 브릿지 effect보다
+//    **위에** 선언돼야 하는데, isAdminUser는 authUser null 가드(early return) 뒤에 있다.
+//    가드는 그 형태가 아니라 **계약**(관리자 항상 허용 + ledgerEnabled)을 단언한다.
+ok('#G3c ledgerAccess — 관리자 또는 ledgerEnabled (effectiveUserFeatures에 얹지 않음)',
+  /const ledgerAccess = [\s\S]{0,140}?ADMIN_EMAIL[\s\S]{0,60}?\|\|[\s\S]{0,60}?userFeatures\.ledgerEnabled/.test(APP)
+  && !/effectiveUserFeatures[^\r\n]*ledgerEnabled/.test(APP));
 ok('#G3d AdminPage 라벨 + 토글 정의', /ledgerEnabled/.test(ADMIN) && /featureLabels\[8\]/.test(ADMIN));
 // ⚠️ prop 기본값 false = fail-closed (prop 미전달 시 아이콘 미렌더).
 ok('#G3e UserInfoBar prop 기본값이 fail-closed', /canAccessLedger\s*=\s*false/.test(UIB));
@@ -950,6 +1049,63 @@ ok('#G15f 검증기가 ledger.ts를 직접 import해 대조한다',
 // ⚠️ undefcheck의 import 정규식이 300자까지만 본다 — 합치면 이 파일에서 그 게이트가 무의미해진다.
 ok('#G15g ⚠️ ledger import가 300자 미만 덩어리로 쪼개져 있다',
   (LP_RAW.match(/import \{[^}]*\} from '\.\.\/ledger';/g) || []).every((b) => b.length < 300));
+
+// ── 적대적 리뷰 회귀 가드 (2026-08) — 전부 **사용부**를 단언한다 ─────────────────
+// LP는 위(#G10 계열)에서 이미 읽었다 — 재선언하지 않는다.
+const LW = stripComments(read('src/components/LedgerWindow.tsx'));
+
+// ⚠️ App 루트는 스태킹 컨텍스트를 만들지 않아, z 없이 두면 상단바(z-30)와 플로팅 창(z-1050)이
+//    인앱 폴백 위에 그려져 최상단 줄(닫기 버튼 포함)이 가려지고 닫을 수조차 없다.
+ok('#G20 ⚠️ 인앱 폴백(overlay)에 z가 있다(page에는 없다)',
+  /variant === 'page'[\s\S]{0,120}?'fixed inset-0 bg-\[#0b1120\][^']*'[\s\S]{0,40}?'fixed inset-0 z-\[1090\]/.test(LP));
+
+// ⚠️ `today`는 브릿지로 늦게 도착한다 — 상수 초기값 + 동기화 effect가 없으면 별도 창(주 진입점)이
+//    항상 그 상수 달로 열리고, 그 달에 activeFrom·정리 기록이 쌓인다.
+ok('#G21 ⚠️ today 동기화 effect가 ref 게이트와 함께 있다',
+  /ymSyncedRef/.test(LP) && /ymSyncedRef\.current = true;[\s\S]{0,160}?setYear\(Number\(todayYm/.test(LP));
+ok('#G21b ⚠️ 하드코딩 연도(2026)로 초기화하지 않는다', !/useState\(\(\) => \(todayYm \? Number\(todayYm\.slice\(0, 4\)\) : 2026\)\)/.test(LP));
+
+// ⚠️ 자동 생성이 dirty를 세우면 채택 effect가 조기 반환해, 뒤늦게 도착한 **저장된 장부가 영영
+//    채택되지 않고** 2.5초 뒤 승격이 그 장부를 빈 장부 1권으로 덮어쓴다(FlowBoard 선례).
+ok('#G22 ⚠️ 장부 자동 생성이 setLocal(dirty)을 쓰지 않는다',
+  /if \(local\.length === 0\) \{[\s\S]{0,400}?localRef\.current = seed;[\s\S]{0,80}?setLocalState\(seed\);/.test(LP));
+ok('#G22b ⚠️ 채택 effect가 빈 배열을 채택하지 않는다',
+  /if \(dirtyRef\.current\) return;[\s\S]{0,200}?if \(!Array\.isArray\(books\) \|\| books\.length === 0\) return;/.test(LP));
+
+// ⚠️ NumCell의 onBlur는 값이 그대로여도 커밋을 부른다 — 무조건 touchMonth면 칸을 Tab으로
+//    지나가기만 해도 '정리했다' 기록과 유령 BUDGET 칩이 생기고 Drive 4파일 write가 나간다.
+ok('#G23 ⚠️ touchMonth는 값이 실제로 바뀐 경우에만',
+  /if \(commitActual\(it\.actual, k, raw\) === it\.actual\) return;[\s\S]{0,400}?touchMonth\(book\.id, k\);/.test(LP));
+
+// ⚠️ annual의 비납부월은 미입력이 아니다 — isItemActive로 재면 연간 차이 열이 영구히 '-'가 된다.
+ok('#G24 ⚠️ 연간 미입력 집계가 expectsActual을 쓴다',
+  /yearActual \+= a; else if \(expectsActual\(it, k\)\) yearMissing\+\+;/.test(LP));
+ok('#G24b ⚠️ monthTotals의 미입력 판정도 expectsActual',
+  /else if \(!isIncome && expectsActual\(it, ym\)\) \{[\s\S]{0,200}?out\.missingExpense\+\+;/.test(LG));
+
+// ⚠️ 연 납입액을 `월 × 12`로 되돌리지 말 것 — 원금균등에서 과대이고 화면 각주를 반증한다.
+ok('#G25 ⚠️ 연 납입액이 향후 12개월 스케줄 합이다',
+  /const n12 = loanNext12Total\(it\.loan, ym\);[\s\S]{0,120}?loanAnnual \+= n12\.total;/.test(LG));
+ok('#G25b ⚠️ loanAnnualPayment = loanMonthly * 12 로 되돌리지 않았다', !/loanAnnualPayment = loanMonthly \* 12/.test(LG));
+ok('#G25c 대출 행도 같은 함수를 쓴다(단일 소스)', /const annual = loanNext12Total\(l, ym\);/.test(LP));
+
+// ⚠️ 만기월도 납입 회차다 — `+1`이 없으면 termMonths 경로와 회차 정의가 1 어긋난다.
+ok('#G26 ⚠️ endDate 경로가 만기월을 포함한다', /const n = span === null \? null : span \+ 1;/.test(LG));
+
+// ⚠️ 비교는 개수가 아니라 미입력 **집합**을 본다.
+ok('#G27 ⚠️ compareMonths가 missingIds를 비교한다',
+  /prev\.missingIds\.join\('\|'\) !== cur\.missingIds\.join\('\|'\)/.test(LG));
+ok('#G27b ⚠️ 개수 비교로 되돌리지 않았다', !/prev\.missingExpense !== cur\.missingExpense/.test(LG));
+
+// ⚠️ impersonation 읽기 전용은 **App 측 쓰기 핸들러**가 정본이다(창은 조작 가능한 URL로 열린다).
+ok('#G28 ⚠️ ledger:books 쓰기에 impersonation 게이트가 있다',
+  /d\.type === 'ledger:books'\) \{[\s\S]{0,400}?if \(adminViewingAsRef\.current\) return;/.test(APP));
+ok('#G28b ledger:live가 readOnly를 실어 창 UI도 잠근다', /type: 'ledger:live'[^\n]*readOnly: !!adminViewingAs/.test(APP));
+ok('#G28c 창이 그 신호로 쓰기를 잠근다', /const writable = linked && gotData && !appReadOnly;/.test(LW));
+
+// ⚠️ 인앱 prop과 브릿지 payload가 **같은 표현**을 써야 게이팅이 갈리지 않는다.
+ok('#G29 ⚠️ calendar:live의 장부도 권한 게이팅', /ledgerBooks: ledgerAccess \? ledgerBooks : \[\]/.test(APP));
+ok('#G29b ledgerAccess 선언은 한 곳뿐', (APP.match(/const ledgerAccess =/g) || []).length === 1);
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:ledger — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

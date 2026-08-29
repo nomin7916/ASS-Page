@@ -411,6 +411,13 @@ export default function App() {
   //    저장 effect의 조기 반환에 그 예외가 있다(없으면 그 사용자의 가계부가 새로고침마다 사라진다).
   const [showLedgerPage, setShowLedgerPage] = useState(false);
   const [ledgerBooks, setLedgerBooks] = useState<any[]>([]);
+  // 가계부 접근 권한 — flowAccess/backtestAccess와 완전히 같은 근거.
+  // ⚠️ **여기(위쪽)에 선언한다.** 아래쪽 isAdminUser는 authUser null 가드(early return) 뒤라
+  //    별도 창 브릿지 effect에서 참조할 수 없다 — 그래서 관리자 판정을 옵셔널 체이닝으로 직접 한다.
+  //    선언은 **한 곳뿐**이어야 인앱 prop과 브릿지 payload의 게이팅이 갈리지 않는다.
+  // ⚠️ effectiveUserFeatures(feature1/2/3만 강제하는 별개 경로)에 얹지 말 것 —
+  //    그러면 관리자 본인이 영구 접근 불가가 된다.
+  const ledgerAccess = ((authUser?.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) || !!userFeatures.ledgerEnabled;
   // ⚠️ 백테스트용으로 조회한 종가는 **여기에만** 담는다. stockHistoryMap에 병합하면
   //    buildCloseEvalSeries(보유 평가액 재계산)·useAutoConfirmHistory 데이터완비 가드의 권위
   //    소스가 오염돼 보유+백테스트 중복 코드의 과거 평가액이 영구히 틀어진다(WatchlistPopup 불변식).
@@ -2129,10 +2136,12 @@ export default function App() {
       // 가계부 BUDGET 칩 — ⚠️ 지문 게이팅된 calendar:accounts가 아니라 여기에 싣는다.
       //    accounts는 `portfolios` 지문으로만 게이팅돼서, 장부만 바뀐 편집은 새 창에 영영
       //    반영되지 않는다(계좌를 건드릴 때까지). live는 원본 deps라 그 함정이 없다.
-      ledgerBooks,
+      // ⚠️ 인앱 prop과 **같은 표현**을 써야 두 렌더러의 게이팅이 구조적으로 일치한다 —
+      //    raw로 보내면 권한이 꺼진 사용자의 별도 달력 창에만 BUDGET 칩이 남는다.
+      ledgerBooks: ledgerAccess ? ledgerBooks : [],
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, hideAmounts, ledgerBooks, calWinNonce]);
+  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, hideAmounts, ledgerBooks, ledgerAccess, calWinNonce]);
 
   // 새 창의 '계좌별 현황' 패드가 열려 있는 동안 소스 데이터가 바뀌면 **다시 밀어 준다**(구독).
   // ⚠️ 1회성 스냅샷으로 되돌리지 말 것 — 같은 패드 상단의 지표 밴드(metricsByDate)는 calendar:live로
@@ -2726,9 +2735,9 @@ export default function App() {
   // ⚠️ `today`는 앱이 만들어 보낸다 — 창 안에서 new Date()로 만들면 KST 규약이 갈린다.
   useEffect(() => {
     if (ledgerWinNonce === 0) return;
-    postToLedgerWin({ type: 'ledger:live', books: ledgerBooks, hideAmounts, today: getTodayKST() });
+    postToLedgerWin({ type: 'ledger:live', books: ledgerBooks, hideAmounts, today: getTodayKST(), readOnly: !!adminViewingAs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ledgerBooks, hideAmounts, ledgerWinNonce]);
+  }, [ledgerBooks, hideAmounts, adminViewingAs, ledgerWinNonce]);
 
   useEffect(() => {
     const onMsg = (e) => {
@@ -2744,6 +2753,10 @@ export default function App() {
       }
       if (!ledgerWinRef.current || e.source !== ledgerWinRef.current) return;   // 쓰기는 입양된 창만
       if (d.type === 'ledger:books') {
+        // ⚠️ impersonation 읽기 전용은 **여기서도** 막아야 한다 — 인앱 폴백의 readOnly prop만으로는
+        //    기본 경로인 별도 창의 쓰기를 못 막는다. 창은 조작 가능한 URL로 열리므로 App 측
+        //    재확인이 정본이다(fail-closed).
+        if (adminViewingAsRef.current) return;
         if (!Array.isArray(d.books)) return;
         // ⚠️ 창이 보낸 것을 그대로 채택하지 말 것 — 반드시 정규화한다.
         setLedgerBooks(normalizeLedgerBooks(d.books));
@@ -3975,11 +3988,6 @@ export default function App() {
   const flowAccess = isAdminUser || userFeatures.flowEnabled;
   // 백테스트 접근 권한 — flowAccess와 완전히 같은 근거(관리자 본인이 영구 접근 불가가 되지 않게).
   const backtestAccess = isAdminUser || userFeatures.backtestEnabled;
-  // 가계부 접근 권한 — flowAccess/backtestAccess와 완전히 같은 근거.
-  // ⚠️ effectiveUserFeatures(feature1/2/3만 강제하는 별개 경로)에 얹지 말 것 —
-  //    그러면 관리자 본인이 영구 접근 불가가 된다(AdminPage 토글은 `!isAdminUser` 조건이라
-  //    관리자 행에 렌더조차 되지 않는다).
-  const ledgerAccess = isAdminUser || userFeatures.ledgerEnabled;
   const gatedNotebookLinks = notebookAccess ? notebookLinks : [];
   const gatedReportUrl = reportAccess ? reportUrl : '';
   // 옛 벨 이력에 남은 materialChannel:'report' 태그는 빈 배열 + null 채널로 떨어져 평문 표시된다(클릭 불가).

@@ -18,7 +18,7 @@ import {
   makeYm, addMonthsYm, isValidYm, roundWon, finiteOr,
 } from '../ledger';
 import {
-  loanSchedule, loanAnnualTotal, planOf, actualOf, varianceOf, commitActual, isItemActive,
+  loanSchedule, loanNext12Total, planOf, actualOf, varianceOf, commitActual, isItemActive, expectsActual,
   monthTotals, ledgerKpi, momDelta, yoyDelta, ledgerFingerprint,
 } from '../ledger';
 import {
@@ -291,6 +291,9 @@ export default function LedgerPage({
    */
   useEffect(() => {
     if (dirtyRef.current) return;
+    // ⚠️ 빈 배열은 채택하지 않는다 — 앱 탭이 새로고침 중이거나 Drive 로드 전이면 빈 배열이
+    //    먼저 도착하는데, 그걸 채택하면 화면이 비고 이어지는 편집이 저장된 장부를 덮는다.
+    if (!Array.isArray(books) || books.length === 0) return;
     if (books === localRef.current) return;
     localRef.current = books;
     setLocalState(books);
@@ -299,8 +302,20 @@ export default function LedgerPage({
   /* ── 뷰 상태(세션 로컬 — 저장 지점 0곳) ────────────────────────────────── */
   const [bookIdx, setBookIdx] = useState(0);
   const todayYm = isValidYm(String(today).slice(0, 7)) ? String(today).slice(0, 7) : '';
-  const [year, setYear] = useState(() => (todayYm ? Number(todayYm.slice(0, 4)) : 2026));
-  const [month, setMonth] = useState(() => (todayYm ? Number(todayYm.slice(5, 7)) : 1));
+  // ⚠️ 초기값을 상수로 두면 **별도 창(주 진입점)이 항상 그 상수 달로 열린다** — LedgerWindow는
+  //    `today`를 빈 문자열로 시작해 `ledger:live` 수신 후에야 채우는데, useState 초기화는 첫
+  //    렌더에서 한 번만 평가되고 이 컴포넌트는 리마운트되지 않기 때문이다. 그 상태에서 '+ 추가'는
+  //    엉뚱한 달을 `activeFrom`에 박고, 셀 입력은 그 달을 '정리했다'고 기록한다(하드코딩 2026도 제거).
+  const [year, setYear] = useState(() => (todayYm ? Number(todayYm.slice(0, 4)) : 0));
+  const [month, setMonth] = useState(() => (todayYm ? Number(todayYm.slice(5, 7)) : 0));
+  // `today`가 처음 유효해질 때 **한 번만** 동기화한다(사용자가 이미 옮긴 달을 덮지 않게 ref 게이트).
+  const ymSyncedRef = useRef(!!todayYm);
+  useEffect(() => {
+    if (ymSyncedRef.current || !todayYm) return;
+    ymSyncedRef.current = true;
+    setYear(Number(todayYm.slice(0, 4)));
+    setMonth(Number(todayYm.slice(5, 7)));
+  }, [todayYm]);
   const [tab, setTab] = useState('matrix');
   const [collapsed, setCollapsed] = useState({});
   const [hiddenMonths, setHiddenMonths] = useState([]);
@@ -564,7 +579,15 @@ export default function LedgerPage({
   /* ── 장부 없으면 하나 만든다 (읽기 전용이면 안내만) ──────────────────── */
   useEffect(() => {
     if (readOnly) return;
-    if (local.length === 0) setLocal(() => [makeLedgerBook({ name: '가계부', createdAt: Date.now() })]);
+    if (local.length === 0) {
+      // ⚠️ **`setLocal`을 쓰지 말 것** — dirty가 서면 위 채택 effect가 조기 반환하므로, 앱 탭이
+      //    새로고침 중일 때 뒤늦게 도착한 **저장된 장부가 영영 채택되지 않고** 2.5초 뒤 승격이
+      //    그 장부를 빈 장부 1권으로 덮어쓴다(FlowBoard가 명시적으로 막아 둔 경로).
+      //    화면을 띄우기 위한 자리 표시일 뿐이므로 로컬 사본만 갱신하고 승격 대상으로 삼지 않는다.
+      const seed = [makeLedgerBook({ name: '가계부', createdAt: Date.now() })];
+      localRef.current = seed;
+      setLocalState(seed);
+    }
     else if (bookIdx >= local.length) setBookIdx(0);
   }, [local.length, bookIdx, readOnly, setLocal]);
 
@@ -644,9 +667,13 @@ export default function LedgerPage({
 
   if (!open) return null;
 
+  // ⚠️ 인앱 폴백에는 **z가 필수**다 — App 루트는 스태킹 컨텍스트를 만들지 않아, z 없이 두면
+  //    상단바(`sticky top-0 z-30`)와 플로팅 창(계산기·관심종목·메모 달력 z-1050)이 위에 그려져
+  //    화면 최상단(장부 선택·연/월 네비·닫기 버튼이 전부 있는 줄)이 가려지고 닫을 수조차 없다.
+  //    BacktestPage와 같은 층(1090): ConfirmDialog(1000) 위, LoadingOverlay(1100) 아래.
   const shell = variant === 'page'
     ? 'fixed inset-0 bg-[#0b1120] text-gray-200 flex flex-col'
-    : 'fixed inset-0 bg-[#0b1120] text-gray-200 flex flex-col';
+    : 'fixed inset-0 z-[1090] bg-[#0b1120] text-gray-200 flex flex-col';
 
   /* ── 렌더: 매트릭스 행 ─────────────────────────────────────────────────── */
   const renderItemRow = (it) => {
@@ -661,7 +688,9 @@ export default function LedgerPage({
       const k = makeYm(year, m);
       const a = actualOf(it, k);
       const p = planOf(it, k);
-      if (a !== null) yearActual += a; else if (isItemActive(it, k)) yearMissing++;
+      // ⚠️ `isItemActive`가 아니라 `expectsActual` — annual의 비납부월은 미입력이 아니다.
+      //    아니면 연단위 항목의 연간 차이 열이 11개월 미입력 때문에 영구히 '-'가 된다.
+      if (a !== null) yearActual += a; else if (expectsActual(it, k)) yearMissing++;
       if (p !== null) yearPlan += p;
     }
     const yearVar = yearMissing === 0 ? yearActual - yearPlan : null;
@@ -791,6 +820,11 @@ export default function LedgerPage({
                     placeholder={p === null ? '' : String(Math.round(p))}
                     title={`계획 ${p === null ? '-' : Math.round(p).toLocaleString()} · 비우면 미입력`}
                     onCommit={(raw) => {
+                      // ⚠️ **값이 실제로 바뀐 경우에만** 정리 기록을 남긴다 — NumCell의 onBlur는 값이
+                      //    그대로여도 항상 커밋을 부르므로, 무조건 touchMonth를 하면 칸을 Tab으로
+                      //    지나가기만 해도 그 달을 '정리했다'고 기록하고, 메모 달력에 사용자가 만든
+                      //    적 없는 BUDGET 칩이 뜨며 Drive 4파일 write가 나간다.
+                      if (commitActual(it.actual, k, raw) === it.actual) return;
                       patchItem(book.id, it.id, (x) => {
                         const nextActual = commitActual(x.actual, k, raw);
                         return nextActual === x.actual ? x : { ...x, actual: nextActual };
@@ -1226,7 +1260,7 @@ export default function LedgerPage({
                     const sch = loanSchedule(l, ym);
                     const pay = sch ? sch.payment : null;
                     const rate = pay !== null && l.principal > 0 ? pay / l.principal : null;
-                    const annual = loanAnnualTotal(l, year);
+                    const annual = loanNext12Total(l, ym);
                     const setLoan = (patch) => patchItem(book.id, it.id, (x) => ({ ...x, loan: { ...(x.loan || makeLedgerLoan()), ...patch } }));
                     return (
                       <tr key={it.id} className="hover:bg-gray-800/30">

@@ -337,7 +337,25 @@ const YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const ISO_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 export const isValidYm = (ym: unknown): boolean => typeof ym === 'string' && YM_RE.test(ym);
-export const isValidLedgerDate = (d: unknown): boolean => typeof d === 'string' && ISO_RE.test(d);
+
+/** 그 달의 일수. 윤년 포함. */
+export const daysInMonth = (year: number, month1: number): number => {
+  if (!Number.isFinite(year) || !Number.isFinite(month1)) return 0;
+  const m = Math.trunc(month1);
+  if (m < 1 || m > 12) return 0;
+  return [31, (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28,
+    31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+};
+/**
+ * ⚠️ 패턴만 보지 않고 **실제 달력에 있는 날짜**인지 확인한다. 패턴만 보면 `2026-04-31`이
+ *    통과하는데, CalendarModal은 `utils.isValidIsoDate`(달력 검증)로 한 번 더 거르므로
+ *    연단위 지출 칩이 **아무 안내 없이 사라진다**(두 검증이 갈리는 것이 문제의 본질).
+ */
+export const isValidLedgerDate = (d: unknown): boolean => {
+  if (typeof d !== 'string' || !ISO_RE.test(d)) return false;
+  const y = Number(d.slice(0, 4)), m = Number(d.slice(5, 7)), day = Number(d.slice(8, 10));
+  return day <= daysInMonth(y, m);
+};
 
 /** 'YYYY-MM-DD' → 'YYYY-MM'. 유효하지 않으면 ''. */
 export const ymOfDate = (d: unknown): string => (isValidLedgerDate(d) ? (d as string).slice(0, 7) : '');
@@ -410,7 +428,11 @@ export const loanTermMonths = (loan: LedgerLoan | null | undefined): number | nu
   if (explicit !== null) return explicit > 0 ? Math.trunc(explicit) : null;
   const endYm = ymOfDate(loan.endDate);
   if (!endYm || !isValidYm(loan.principalAsOfYm)) return null;
-  const n = monthsBetweenYm(loan.principalAsOfYm, endYm);
+  // ⚠️ **만기월도 납입 회차다** — `+1`을 빼면 만기월이 `kRaw >= n`에 걸려 'ㄱ계산 불가'가 되고,
+  //    같은 대출을 `termMonths`로 넣었을 때와 회차 수가 1 달라진다(실측: 6개월 대출에서 월
+  //    납입액이 19.7% 차이). 기준월(k=0)에는 납입하면서 만기월에는 납입하지 않는 비대칭을 없앤다.
+  const span = monthsBetweenYm(loan.principalAsOfYm, endYm);
+  const n = span === null ? null : span + 1;
   return n !== null && n > 0 ? n : null;
 };
 
@@ -526,17 +548,24 @@ export const loanSchedule = (
 };
 
 /**
- * 그 해(`year`) 12개월의 납입액 합계.
- * ⚠️ `월 납입액 × 12`로 대신하지 말 것 — 원금균등은 매달 줄어들어 첫 달 값의 12배가
- *    실제보다 크다. 계상하지 못한 달 수(`missing`)를 함께 낸다.
+ * `fromYm`부터 **향후 12개월**의 납입액 합계(= 연 납입액의 정확한 정의).
+ *
+ * ⚠️ `월 납입액 × 12`로 대신하지 말 것 — 원금균등은 매달 줄어들어 첫 달 값의 12배가 실제보다
+ *    크다. 화면의 각주가 그렇게 못 박고 있으므로, KPI가 ×12를 쓰면 같은 화면이 자기 각주를
+ *    반증한다(행별 '향후 12개월'과 하단 요약의 '연 납입액'이 서로 다른 값이 된다).
+ * ⚠️ **달력 연도(1~12월)로 재지 말 것** — 기준월이 연중이면 그 앞쪽 달들이 전부 '아직 시작 전'
+ *    이라 null이 되어 합계가 통째로 모자란다(사진의 신용대출은 기준월이 8월이라 5개월치만
+ *    잡힌다). 연 납입액은 '지금부터 1년'이라는 run-rate이고, 그래야 만기일시·원리금균등에서
+ *    정확히 `월 × 12`와 같아진다.
+ * `missing` = 그 12개월 중 계상하지 못한 달 수(만기 경과 등) — 화면이 노출해야 한다.
  */
-export const loanAnnualTotal = (
+export const loanNext12Total = (
   loan: LedgerLoan | null | undefined,
-  year: number,
+  fromYm: string,
 ): { total: number; missing: number; levelPayment: boolean } => {
   let total = 0, missing = 0, level = true;
-  for (let m = 1; m <= 12; m++) {
-    const r = loanSchedule(loan, makeYm(year, m));
+  for (let k = 0; k < 12; k++) {
+    const r = loanSchedule(loan, addMonthsYm(fromYm, k));
     if (!r) { missing++; continue; }
     total += r.payment;
     if (!r.levelPayment) level = false;
@@ -582,6 +611,23 @@ export const planOf = (item: LedgerItem, ym: string): number | null => {
   }
 
   return item.planUnit === 'year' ? base / 12 : base;
+};
+
+/**
+ * 그 달에 이 항목이 **실적 입력 대상**인가.
+ *
+ * ⚠️ `isItemActive`와 구분할 것. `group:'annual'`은 1년에 한 번만 나가므로 **납부월에만** 대상이다.
+ *    이 구분이 없으면 연단위 항목 하나가 비납부월 11개월 내내 '미입력'으로 세어져
+ *    ① KPI 배너가 사용자가 손댈 방법 없이 상시 점등 ② 그 항목의 연간 차이 열이 영구히 `'-'`
+ *    ③ 납부월과 그 다음 달의 전월 대비가 `missing` 불일치로 **매년 2개월씩 비교 불가**가 된다
+ *    (정확히 `activeFrom`이 막으려던 실패 모드).
+ * ⚠️ 화면 3곳(월 집계·항목 행 연간 차이·그룹 소계)이 **같은 함수를 공유**해야 값이 갈리지 않는다.
+ */
+export const expectsActual = (item: LedgerItem, ym: string): boolean => {
+  if (!item || !isItemActive(item, ym)) return false;
+  if (item.group !== 'annual') return true;
+  const due = finiteOr(item.dueMonth);
+  return due !== null && Number(ym.slice(5, 7)) === Math.trunc(due);
 };
 
 /**
@@ -642,6 +688,13 @@ export interface LedgerMonthTotals {
   actualIncome: number;
   /** 실제를 아직 입력하지 않은 지출 항목 수 */
   missingExpense: number;
+  /**
+   * 미입력 항목의 id 목록(정렬).
+   * ⚠️ 전월·전년 비교가 **개수가 아니라 이 집합**을 봐야 한다 — 개수만 보면 '1월은 월세만 입력,
+   *    2월은 커피만 입력'처럼 완료도가 실제로 다른 두 달이 같은 개수로 통과해 −93.6% 같은
+   *    거짓 신호를 낸다(이 함수가 막으려던 바로 그 실패 모드).
+   */
+  missingIds: string[];
   /** 계획을 산출하지 못한 항목 수(대출 계산 실패 등) — missing과 구분한다 */
   unresolved: number;
   /** 그 달에 살아 있는 지출 항목 수 */
@@ -660,7 +713,7 @@ const emptyGroupAgg = () => ({ plan: 0, actual: 0, missing: 0 });
 export const monthTotals = (book: LedgerBook | null | undefined, ym: string): LedgerMonthTotals => {
   const out: LedgerMonthTotals = {
     planExpense: 0, actualExpense: 0, planIncome: 0, actualIncome: 0,
-    missingExpense: 0, unresolved: 0, activeExpense: 0,
+    missingExpense: 0, missingIds: [], unresolved: 0, activeExpense: 0,
     byGroup: {}, byPay: {},
   };
   const items = book && Array.isArray(book.items) ? book.items : [];
@@ -687,12 +740,15 @@ export const monthTotals = (book: LedgerBook | null | undefined, ym: string): Le
       if (isIncome) out.actualIncome += a; else out.actualExpense += a;
       out.byGroup[it.group].actual += a;
       if (!isIncome) out.byPay[it.pay].actual += a;
-    } else if (!isIncome) {
+    } else if (!isIncome && expectsActual(it, ym)) {
+      // ⚠️ annual의 비납부월은 '미입력'이 아니다 — expectsActual이 그 구분의 단일 소스다.
       out.missingExpense++;
+      out.missingIds.push(String(it.id || ''));
       out.byGroup[it.group].missing++;
     }
-    if (!isIncome) out.activeExpense++;
+    if (!isIncome && expectsActual(it, ym)) out.activeExpense++;
   }
+  out.missingIds.sort();
   return out;
 };
 
@@ -876,23 +932,33 @@ export interface LedgerKpi {
   dsr: number | null;
   /** 대출 중 계산도 입력도 못 한 항목 수 — 화면이 반드시 노출해야 한다 */
   loanUnresolved: number;
+  /** 향후 12개월 중 계상하지 못한 (대출 × 달) 수 — 연 납입액이 과소인 이유 */
+  loanAnnualMissing: number;
 }
 
 export const ledgerKpi = (book: LedgerBook | null | undefined, ym: string): LedgerKpi => {
   const items = book && Array.isArray(book.items) ? book.items : [];
+  const year = Number(ym.slice(0, 4));
   let recurring = 0, annualLump = 0, loanPrincipal = 0, loanMonthly = 0, income = 0, loanUnresolved = 0;
+  let loanAnnual = 0, loanAnnualMissing = 0;
 
   for (const it of items) {
-    if (!it || !isItemActive(it, ym)) continue;
+    if (!it) continue;
+    // ⚠️ annual은 **보고 있는 달의 활성 게이트보다 앞**에서 처리한다 — 연 1회 목돈은 그 해의
+    //    납부월 기준으로 판정해야 하는데, 위에서 ym으로 걸러 버리면 addItem이 박은 activeFrom
+    //    보다 앞선 달을 보고 있을 때 연 목돈이 예상 年 지출에서 통째로 사라진다(#68).
+    if (it.group === 'annual') {
+      const dueA = finiteOr(it.dueMonth);
+      const dueYm = dueA === null ? '' : makeYm(year, Math.trunc(dueA));
+      if (!dueYm || !isItemActive(it, dueYm)) continue;
+      const baseA = finiteOr(it.plan);
+      if (baseA !== null) annualLump += baseA;
+      continue;
+    }
+    if (!isItemActive(it, ym)) continue;
     if (it.group === 'income') {
       const p = planOf(it, ym);
       if (p !== null && Number.isFinite(p)) income += p;
-      continue;
-    }
-    if (it.group === 'annual') {
-      // 연 1회 목돈 — 그 해 전체에서 한 번 나가는 금액. 납부월과 무관하게 연 합계에 든다.
-      const base = finiteOr(it.plan);
-      if (base !== null) annualLump += base;
       continue;
     }
     if (it.group === 'loan') {
@@ -901,6 +967,11 @@ export const ledgerKpi = (book: LedgerBook | null | undefined, ym: string): Ledg
       const r = loanSchedule(it.loan, ym);
       if (r) { loanMonthly += r.payment; recurring += r.payment; }
       else loanUnresolved++;
+      // ⚠️ 연 납입액은 `월 × 12`가 아니라 **향후 12개월 스케줄 합**이다 — 원금균등은 매달
+      //    줄어들어 ×12가 과대다(화면 각주가 그렇게 못 박고 있다).
+      const n12 = loanNext12Total(it.loan, ym);
+      loanAnnual += n12.total;
+      loanAnnualMissing += n12.missing;
       continue;
     }
     const p = planOf(it, ym);
@@ -908,9 +979,11 @@ export const ledgerKpi = (book: LedgerBook | null | undefined, ym: string): Ledg
   }
 
   // ⚠️ 무반올림 누산 — 여기서 Math.round를 끼우면 사진의 62,743,196이 62,743,192가 된다.
-  const projectedAnnual = recurring * 12 + annualLump;
+  // ⚠️ 대출 몫만 실제 스케줄 합으로 바꿔 넣는다(나머지 반복 지출은 정의상 매달 같다).
+  //    만기일시·원리금균등은 loanAnnual === loanMonthly * 12 라 사진 값이 그대로 재현된다.
+  const projectedAnnual = (recurring - loanMonthly) * 12 + loanAnnual + annualLump;
   const projectedMonthly = projectedAnnual / 12;
-  const loanAnnualPayment = loanMonthly * 12;
+  const loanAnnualPayment = loanAnnual;
 
   const loanMonthlyRate = loanPrincipal > 0 ? loanMonthly / loanPrincipal : null;
   const annualIncome = income * 12;
@@ -929,6 +1002,7 @@ export const ledgerKpi = (book: LedgerBook | null | undefined, ym: string): Ledg
     savingCapacity: income > 0 ? income - projectedMonthly : null,
     dsr: annualIncome > 0 ? loanAnnualPayment / annualIncome : null,
     loanUnresolved,
+    loanAnnualMissing,
   };
 };
 
@@ -1008,7 +1082,10 @@ export const compareMonths = (
   };
   const prevHasAny = prev.activeExpense > 0 && prev.missingExpense < prev.activeExpense;
   if (!prevHasAny) return { ...base, reason: 'no-prev' };
-  if (prev.missingExpense !== cur.missingExpense) return { ...base, reason: 'missing-mismatch' };
+  // ⚠️ **개수가 아니라 집합**을 비교한다 — 개수만 보면 '1월은 월세만 입력, 2월은 커피만 입력'
+  //    (달마다 다른 항목부터 채우는 흔한 습관)이 둘 다 missing=1로 통과해 −93.6% 같은
+  //    거짓 신호가 확정 표시된다. 이 함수가 존재하는 이유가 바로 그 신호를 막는 것이다.
+  if (prev.missingIds.join('|') !== cur.missingIds.join('|')) return { ...base, reason: 'missing-mismatch' };
   const delta = cur.actualExpense - prev.actualExpense;
   if (!(prev.actualExpense > 0)) {
     return { ...base, delta, comparable: true, reason: 'zero-base' };
@@ -1157,7 +1234,11 @@ export const ledgerEventsByDate = (
       if (mo === null || dy === null) continue;
       const ym = makeYm(year, Math.trunc(mo));
       if (!isValidYm(ym) || !isItemActive(it, ym)) continue;
-      const d = `${ym}-${String(Math.trunc(dy)).padStart(2, '0')}`;
+      // ⚠️ 그 달에 없는 날(2월 31일 등)은 버리지 말고 **말일로 클램프**한다 — 사용자가 31을
+      //    넣은 의도는 '말일'이고, 버리면 칩이 아무 안내 없이 사라진다.
+      const dim = daysInMonth(year, Math.trunc(mo));
+      const dayNum = Math.min(Math.max(1, Math.trunc(dy)), dim || 28);
+      const d = `${ym}-${String(dayNum).padStart(2, '0')}`;
       if (!isValidLedgerDate(d)) continue;
       push(d, {
         bookId: b.id, bookName, kind: 'annual', ym,

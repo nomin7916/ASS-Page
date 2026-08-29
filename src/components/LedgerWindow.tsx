@@ -30,6 +30,9 @@ export default function LedgerWindow() {
   const [books, setBooks] = useState([]);
   const [hideAmounts, setHideAmounts] = useState(false);
   const [today, setToday] = useState('');
+  // 앱이 실어 보내는 impersonation 읽기 전용 신호. ⚠️ 이건 **UI 잠금**일 뿐이고 실제 방어선은
+  //    App의 ledger:books 핸들러다(창은 조작 가능한 URL로 열리므로 App 측 재확인이 정본).
+  const [appReadOnly, setAppReadOnly] = useState(false);
   const [gotData, setGotData] = useState(false);
   const [linked, setLinked] = useState(true);
 
@@ -63,6 +66,7 @@ export default function LedgerWindow() {
         if (Array.isArray(d.books)) setBooks(normalizeLedgerBooks(d.books));
         setHideAmounts(!!d.hideAmounts);
         if (typeof d.today === 'string') setToday(d.today);
+        setAppReadOnly(!!d.readOnly);
         gotDataRef.current = true; setGotData(true);
       }
     };
@@ -85,7 +89,7 @@ export default function LedgerWindow() {
 
   // ⚠️ `linked`만 보고 쓰기를 열지 말 것 — lastMsgRef가 0(아직 아무 메시지도 못 받음)이면
   //    타임아웃 분기가 영원히 발동하지 않는다. gotData가 그 구멍을 덮는다.
-  const writable = linked && gotData;
+  const writable = linked && gotData && !appReadOnly;
 
   // 낙관적 반영 후 앱 탭으로 보낸다(앱이 적용하고 ledger:live로 되돌려 보내지만 왕복을 기다리지 않는다).
   const onUpdateBooks = useCallback((next) => {
@@ -95,7 +99,9 @@ export default function LedgerWindow() {
     post({ type: 'ledger:books', books: next });
   }, [post]);
 
-  const notice = !linked
+  const notice = appReadOnly
+    ? '관리자가 이 사용자 화면을 열람 중이라 읽기 전용입니다.'
+    : !linked
     ? '앱 창과 연결이 끊겨 읽기 전용입니다. 앱 창을 다시 열면 자동으로 이어집니다.'
     : !gotData
       ? '앱 창에서 데이터를 불러오는 중입니다…'
