@@ -52,6 +52,7 @@ import { normalizeFlowMaps, flowFingerprint, flowMapsHaveContent } from './flowM
 import BacktestPage from './components/BacktestPage';
 import LedgerPage from './components/LedgerPage';
 import { normalizeLedgerBooks, ledgerFingerprint, ledgerBooksHaveContent } from './ledger';
+import { normalizeLedgerSnapshots, ledgerSnapshotsFingerprint, ledgerSnapshotsHaveContent } from './ledger';
 import CardWinFeed from './components/CardWinFeed';
 import { isCardKey, isCardWindowSupported, cardWindowUrl, cardWindowName, baseKeyOf } from './cardWindow';
 import {
@@ -235,6 +236,18 @@ export default function App() {
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
   const [adminPendingChoice, setAdminPendingChoice] = useState(false);
   const [driveLoadReady, setDriveLoadReady] = useState(false);
+  /**
+   * 가계부 데이터가 Drive에서 확정됐는가. `'loading' | 'ready' | 'error'`.
+   *
+   * ⚠️ `086b582`가 '빈 장부 시드가 dirty를 세우던' 경로를 막았지만 **구멍이 하나 남는다**:
+   *    로드 전에 화면을 열고 **사용자가 직접 한 글자라도 치면** dirty가 정당하게 서고,
+   *    그러면 뒤늦게 도착한 진짜 장부가 `if (dirtyRef.current) return;`에 막혀 채택되지 않은 채
+   *    2.5초 뒤 그 한 줄짜리 장부가 Drive의 실제 기록을 덮는다(2026-08-29 실측 유실 40여 건).
+   *    별도 창은 `readOnly={!writable}`로 이미 막혀 있고 **인앱 경로에만 이 가드가 없었다.**
+   * ⚠️ 로드 **실패**를 'ready'로 취급하지 말 것 — Drive엔 기록이 있는데 못 읽은 상태라,
+   *    거기서 편집을 허용하면 다음 저장이 그 기록을 덮는다. 실패는 읽기 전용으로 잠근다.
+   */
+  const [ledgerDataState, setLedgerDataState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [adminViewUserCtx, setAdminViewUserCtx] = useState<{
     userEmail: string; userFolderId: string; adminToken: string; adminPinHash: string;
   } | null>(null);
@@ -411,6 +424,9 @@ export default function App() {
   //    저장 effect의 조기 반환에 그 예외가 있다(없으면 그 사용자의 가계부가 새로고침마다 사라진다).
   const [showLedgerPage, setShowLedgerPage] = useState(false);
   const [ledgerBooks, setLedgerBooks] = useState<any[]>([]);
+  // ⚠️ 스냅샷은 `ledgerBooks` **안이 아니라 그 옆**에 산다 — 장부가 통째로 덮이는
+  //    사고에서 안전망까지 같이 죽으면 안 된다(2026-08-29 실측 유실이 그 경우다).
+  const [ledgerSnapshots, setLedgerSnapshots] = useState<any[]>([]);
   // 가계부 접근 권한 — flowAccess/backtestAccess와 완전히 같은 근거.
   // ⚠️ **여기(위쪽)에 선언한다.** 아래쪽 isAdminUser는 authUser null 가드(early return) 뒤라
   //    별도 창 브릿지 effect에서 참조할 수 없다 — 그래서 관리자 판정을 옵셔널 체이닝으로 직접 한다.
@@ -912,6 +928,7 @@ export default function App() {
     if (stateData.flowMaps) setFlowMaps(normalizeFlowMaps(stateData.flowMaps));
     if (stateData.backtestScenarios) setBacktestScenarios(normalizeBacktestScenarios(stateData.backtestScenarios));
     if (stateData.ledgerBooks) setLedgerBooks(normalizeLedgerBooks(stateData.ledgerBooks));
+    if (stateData.ledgerSnapshots) setLedgerSnapshots(normalizeLedgerSnapshots(stateData.ledgerSnapshots));
     seenAdminNotifIdsRef.current = stateData.seenAdminNotifIds || [];
     setSeenAdminNotifIds(seenAdminNotifIdsRef.current);
   };
@@ -976,6 +993,9 @@ export default function App() {
     // ⚠️ 가계부도 같은 sticky 규칙 — 판정은 length가 아니라 ledgerBooksHaveContent('내용이 있는가').
     //    화면을 열기만 해도 빈 장부가 1권 생기므로 length 기준이면 백업으로 되살릴 길이 영구히 막힌다.
     setLedgerBooks(prev => ledgerBooksHaveContent(prev) ? prev : (stateData.ledgerBooks ? normalizeLedgerBooks(stateData.ledgerBooks) : prev));
+    // ⚠️ 스냅샷도 sticky — 백업 복원이 사용자의 '이전 기록' 이력을 되돌리면 그 백업 시점 이후의
+    //    복구 지점이 통째로 사라진다(복구 수단이 복구로 지워지는 역설).
+    setLedgerSnapshots(prev => ledgerSnapshotsHaveContent(prev) ? prev : (stateData.ledgerSnapshots ? normalizeLedgerSnapshots(stateData.ledgerSnapshots) : prev));
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
       if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
@@ -2735,9 +2755,9 @@ export default function App() {
   // ⚠️ `today`는 앱이 만들어 보낸다 — 창 안에서 new Date()로 만들면 KST 규약이 갈린다.
   useEffect(() => {
     if (ledgerWinNonce === 0) return;
-    postToLedgerWin({ type: 'ledger:live', books: ledgerBooks, hideAmounts, today: getTodayKST(), readOnly: !!adminViewingAs });
+    postToLedgerWin({ type: 'ledger:live', books: ledgerBooks, snapshots: ledgerSnapshots, hideAmounts, today: getTodayKST(), readOnly: !!adminViewingAs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ledgerBooks, hideAmounts, adminViewingAs, ledgerWinNonce]);
+  }, [ledgerBooks, ledgerSnapshots, hideAmounts, adminViewingAs, ledgerWinNonce]);
 
   useEffect(() => {
     const onMsg = (e) => {
@@ -2760,6 +2780,13 @@ export default function App() {
         if (!Array.isArray(d.books)) return;
         // ⚠️ 창이 보낸 것을 그대로 채택하지 말 것 — 반드시 정규화한다.
         setLedgerBooks(normalizeLedgerBooks(d.books));
+      }
+      if (d.type === 'ledger:snapshots') {
+        // ⚠️ 쓰기 게이트는 `ledger:books`와 **똑같이 fail-closed** — 한쪽만 막으면
+        //    impersonation 창이 스냅샷 이력을 고칠 수 있다.
+        if (adminViewingAsRef.current) return;
+        if (!Array.isArray(d.snapshots)) return;
+        setLedgerSnapshots(normalizeLedgerSnapshots(d.snapshots));
       }
     };
     window.addEventListener('message', onMsg);
@@ -3157,6 +3184,11 @@ export default function App() {
         setActivePortfolioId(newId);
       }
 
+      // ⚠️ STATE가 확정된 **바로 이 지점**에서 가계부 잠금을 푼다(뒤의 부수 로드들을 기다리지 않는다).
+      //    '파일 없음'(신규 사용자)은 정당한 빈 장부라 ready, 로드 **실패**는 error로 잠근다 —
+      //    Drive엔 기록이 있는데 못 읽은 상태에서 편집을 허용하면 다음 저장이 그 기록을 덮는다.
+      setLedgerDataState(syncStatusRef.current === 'error' ? 'error' : 'ready');
+
       // dividendTaxHistory는 별도 파일이므로 항상 Drive에서 로드
       try {
         const taxFolderId = driveFolderIdRef.current || await ensureDriveFolder(token);
@@ -3374,7 +3406,7 @@ export default function App() {
     // ⚠️ 가계부는 포트폴리오와 개념적 의존이 **0**이다 — 계좌를 아직 만들지 않은 사용자가
     //    정상 경로이고, 그 조기 반환을 그대로 두면 그 사용자의 장부는 어떤 경로로도 저장되지
     //    않아 새로고침마다 통째로 사라진다. 계좌가 없어도 장부에 내용이 있으면 저장을 돌린다.
-    if (portfolios.length === 0 && !ledgerBooksHaveContent(ledgerBooks)) return;
+    if (portfolios.length === 0 && !ledgerBooksHaveContent(ledgerBooks) && !ledgerSnapshotsHaveContent(ledgerSnapshots)) return;
     if (!authUser?.email) return;
     const currentPortfolios = portfolios;
     // 계좌/종목 구조 + history 건수 비교
@@ -3483,6 +3515,7 @@ export default function App() {
       //    (flowFingerprint와 동일 버그 클래스). backtestFingerprint도 절대 던지지 않는다.
       backtestFingerprint(backtestScenarios),
       ledgerFingerprint(ledgerBooks),
+      ledgerSnapshotsFingerprint(ledgerSnapshots),
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
       // 바인더 인덱스/섹션 펼침 상태 — 사용자 토글 시에만 변경(시세 갱신 무관)
       // → 변경 시 portfolioUpdatedAt 상승시켜 Drive STATE 저장 트리거 (앱 재시작 시 상태 유지)
@@ -3506,7 +3539,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -3521,7 +3554,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, ledgerSnapshots]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -4810,14 +4843,23 @@ export default function App() {
             onClose={() => setShowLedgerPage(false)}
             books={ledgerBooks}
             onUpdateBooks={setLedgerBooks}
+            snapshots={ledgerSnapshots}
+            onUpdateSnapshots={setLedgerSnapshots}
             flushRef={ledgerFlushRef}
             onOpenWindow={openLedgerWindow}
             hideAmounts={hideAmounts}
             today={getTodayKST()}
-            // 관리자 impersonation 중에는 읽기 전용 — 흐름도·백테스트와 같은 근거
-            // (undo 없음 + 백업 복원으로도 되돌릴 수 없는 sticky 데이터라 무통지 편집 금지).
-            readOnly={!!adminViewingAs}
-            notice={ledgerWinBlocked ? '팝업이 차단돼 별도 탭을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''}
+            // ⚠️ 관리자 impersonation(undo 없음 + sticky라 무통지 편집 금지)에 더해,
+            //    **Drive 로드가 끝나기 전/실패했을 때도 반드시 읽기 전용**이어야 한다.
+            //    로드 전에 사용자가 한 글자라도 치면 dirty가 서고, 그러면 뒤늦게 도착한 진짜
+            //    장부가 채택되지 못한 채 2.5초 뒤 그 입력이 Drive를 덮는다(2026-08-29 실측 유실).
+            //    `setLocal`·시드 효과 둘 다 `if (readOnly) return`이라 이 한 줄이 그 경로를 닫는다.
+            readOnly={!!adminViewingAs || ledgerDataState !== 'ready'}
+            notice={
+              ledgerDataState === 'loading' ? '가계부를 불러오는 중입니다… 로드가 끝날 때까지 편집이 잠깁니다(빈 장부가 기존 기록을 덮는 것을 막습니다).'
+                : ledgerDataState === 'error' ? '가계부를 불러오지 못했습니다. 기존 기록을 덮어쓰지 않도록 편집을 잠갔습니다 — 새로고침 후 다시 시도하세요.'
+                  : ledgerWinBlocked ? '팝업이 차단돼 별도 탭을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''
+            }
           />
         </ErrorBoundary>
       )}

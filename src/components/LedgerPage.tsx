@@ -26,6 +26,10 @@ import {
   expectedOf, expectedTotal, expectedIncomeTotal, expectedByPay, monthState, projectedByPay,
   moveItemInGroup, canMoveItemInGroup, ledgerCategories, ledgerRamp, ledgerPayColor,
 } from '../ledger';
+import {
+  makeLedgerSnapshot, pushLedgerSnapshot, ledgerSnapshotSummary, normalizeLedgerBooks,
+  ledgerBooksHaveContent, MAX_LEDGER_SNAPSHOTS, MAX_LEDGER_SNAPSHOT_LABEL_LEN,
+} from '../ledger';
 
 /**
  * 가계부 본체 — **별도 브라우저 창(`variant='page'`)과 인앱 폴백(`variant='overlay'`)이 공유**한다.
@@ -228,6 +232,9 @@ export default function LedgerPage({
   onClose,
   books = [],
   onUpdateBooks,
+  /** 이전 기록(스냅샷). ⚠️ `ledgerBooks` 밖에 사는 앱 레벨 값이라 장부가 덮여도 살아남는다. */
+  snapshots = [],
+  onUpdateSnapshots = null,
   flushRef = null,
   onOpenWindow,
   readOnly = false,
@@ -322,6 +329,7 @@ export default function LedgerPage({
   const [hiddenMonths, setHiddenMonths] = useState([]);
   const [armedDelete, setArmedDelete] = useState('');
   const [flash, setFlash] = useState('');
+  const [showSnapshots, setShowSnapshots] = useState(false);
   const flashTimer = useRef(null);
 
   useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
@@ -650,6 +658,59 @@ export default function LedgerPage({
       return items === b.items ? b : { ...b, items };
     });
   };
+
+  /* ── 이전 기록(스냅샷) 저장 / 복원 ──────────────────────────────────── */
+
+  /**
+   * 지금 장부를 스냅샷으로 남긴다.
+   * ⚠️ **먼저 `promote()`로 로컬 편집을 회수**한다 — 안 하면 방금 친 값이 2.5초 idle 승격 전이라
+   *    `books` prop에 아직 없고, 사용자가 "저장"을 눌렀는데 **직전 상태가 저장**된다.
+   * ⚠️ 스냅샷은 `onUpdateSnapshots`(앱 레벨)로 나간다 — 장부와 **다른 저장 슬롯**이라
+   *    장부가 통째로 덮이는 사고에서도 살아남는다.
+   */
+  const saveSnapshot = useCallback((label, auto = false) => {
+    if (readOnly || !onUpdateSnapshots) return false;
+    const books = promote() ?? localRef.current;
+    if (!ledgerBooksHaveContent(books)) { doFlash('저장할 내용이 없습니다'); return false; }
+    const next = pushLedgerSnapshot(snapshots, makeLedgerSnapshot({
+      savedAt: Date.now(), label: String(label || '').slice(0, MAX_LEDGER_SNAPSHOT_LABEL_LEN),
+      auto, books,
+    }));
+    if (next === snapshots) { doFlash('직전 저장과 내용이 같습니다'); return false; }
+    onUpdateSnapshots(next);
+    if (!auto) doFlash('이전 기록에 저장했습니다');
+    return true;
+  }, [readOnly, onUpdateSnapshots, promote, snapshots]);
+
+  /**
+   * 스냅샷으로 되돌린다.
+   * ⚠️ **복원 직전에 현재 상태를 자동 스냅샷**으로 남긴다 — 복원은 파괴적이고 undo가 없다.
+   *    이게 없으면 잘못 고른 복원 한 번으로 지금 작업분이 사라진다.
+   */
+  const restoreSnapshot = useCallback((snapId) => {
+    if (readOnly) return;
+    const snap = (snapshots || []).find((s) => s && s.id === snapId);
+    if (!snap || !Array.isArray(snap.books)) { doFlash('복원할 기록을 찾지 못했습니다'); return; }
+    const cur = promote() ?? localRef.current;
+    let nextSnaps = snapshots;
+    if (onUpdateSnapshots && ledgerBooksHaveContent(cur)) {
+      nextSnaps = pushLedgerSnapshot(snapshots, makeLedgerSnapshot({
+        savedAt: Date.now(), label: '복원 직전 자동 저장', auto: true, books: cur,
+      }));
+      if (nextSnaps !== snapshots) onUpdateSnapshots(nextSnaps);
+    }
+    // ⚠️ 정규화해서 넣는다 — 손상된 스냅샷이 렌더 중 던지면 화면이 통째로 오류 페이지가 된다.
+    setLocal(() => normalizeLedgerBooks(snap.books));
+    setShowSnapshots(false);
+    doFlash('이전 기록으로 되돌렸습니다');
+  }, [readOnly, snapshots, onUpdateSnapshots, promote, setLocal]);
+
+  const removeSnapshot = useCallback((snapId) => {
+    if (readOnly || !onUpdateSnapshots) return;
+    const next = (snapshots || []).filter((s) => s && s.id !== snapId);
+    if (next.length === (snapshots || []).length) return;
+    onUpdateSnapshots(next);
+  }, [readOnly, snapshots, onUpdateSnapshots]);
 
   /* ── 구분(카테고리) 관리 ─────────────────────────────────────────────── */
   const addCategory = (raw) => {
@@ -1098,6 +1159,22 @@ export default function LedgerPage({
             disabled={!book || !(book.items || []).length}
             title={`${year}년 가계부를 엑셀(.xlsx)로 저장 — 시트 3장(월 매트릭스·대출·연간요약)`}
           >⭳ 엑셀</button>
+          {/* 이전 기록 — ⚠️ 자동 백업(portfolio_backup_*)과 별개다. 그쪽은 수동 저장·앱 닫기에만
+              만들어지고 800ms 자동 저장은 백업 없이 STATE를 덮으므로, 하루 종일 편집해도 복구
+              지점이 하나도 안 생길 수 있다(2026-08-29 실측 유실). 이 버튼이 그 구멍을 메운다. */}
+          {onUpdateSnapshots && (
+            <button
+              className="text-[11px] px-2 py-0.5 rounded bg-emerald-900/50 hover:bg-emerald-900/80 text-emerald-200 border border-emerald-800/60 disabled:opacity-40"
+              onClick={() => saveSnapshot('')}
+              disabled={readOnly || !book}
+              title={readOnly ? '읽기 전용입니다' : '지금 장부를 이전 기록으로 저장합니다(최대 ' + MAX_LEDGER_SNAPSHOTS + '개 보관)'}
+            >💾 저장</button>
+          )}
+          <button
+            className="text-[11px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300"
+            onClick={() => setShowSnapshots(true)}
+            title="저장해 둔 이전 기록에서 되돌리기"
+          >이전 기록{(snapshots || []).length > 0 ? ` ${snapshots.length}` : ''}</button>
           {onOpenWindow && variant === 'overlay' && (
             <button className="text-[11px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300" onClick={onOpenWindow} title="별도 창에서 열기">⧉ 새 창</button>
           )}
@@ -1650,6 +1727,124 @@ export default function LedgerPage({
             </div>
           </div>
         )}
+      </div>
+
+      {showSnapshots && (
+        <SnapshotModal
+          snapshots={snapshots}
+          readOnly={readOnly}
+          hideAmounts={hideAmounts}
+          canSave={!!onUpdateSnapshots}
+          onSave={saveSnapshot}
+          onRestore={restoreSnapshot}
+          onRemove={removeSnapshot}
+          onClose={() => setShowSnapshots(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 이전 기록(스냅샷) 목록 — 저장 / 복원 / 삭제.
+ *
+ * ⚠️ 확인창은 **인라인 2단계**다(`DeleteBtn`과 같은 근거). 이 화면은 z-1090이고 별도 창에는
+ *    App조차 마운트되지 않아 `ConfirmDialog`(z-1000)도 알림 토스트도 뜨지 않는다.
+ * ⚠️ 복원은 파괴적이라 **2단계 확인 필수** — 대신 `restoreSnapshot`이 복원 직전에 현재 상태를
+ *    자동 스냅샷으로 남기므로 잘못 눌러도 되돌릴 수 있다.
+ * ⚠️ 금액은 `hideAmounts`를 통과시키지 않는다 — 이 목록은 **건수만** 보여 준다(금액 표시 0곳).
+ */
+function SnapshotModal({ snapshots, readOnly, canSave, onSave, onRestore, onRemove, onClose }) {
+  const [label, setLabel] = useState('');
+  const [armed, setArmed] = useState('');      // 복원 2단계
+  const [armedDel, setArmedDel] = useState(''); // 삭제 2단계
+  const list = Array.isArray(snapshots) ? snapshots : [];
+  const fmtWhen = (ms) => {
+    if (!Number.isFinite(ms) || ms <= 0) return '시각 미상';
+    try { return new Date(ms).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+    catch { return '시각 미상'; }
+  };
+  return (
+    <div className="fixed inset-0 z-[1095] flex items-center justify-center bg-black/70 p-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-[#0f1623] border border-gray-700 rounded-lg w-full max-w-[560px] max-h-[80vh] flex flex-col"
+        onKeyDownCapture={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}>
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800">
+          <span className="text-[12px] font-bold text-gray-200">이전 기록</span>
+          <span className="text-[10px] text-gray-500">{list.length} / {MAX_LEDGER_SNAPSHOTS}</span>
+          <div className="flex-1" />
+          <button className="text-[13px] px-2 text-gray-400 hover:bg-gray-800 rounded" onClick={onClose}>✕</button>
+        </div>
+
+        {!readOnly && canSave && (
+          <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-800">
+            <input
+              type="text"
+              className="flex-1 min-w-0 bg-gray-800/70 rounded px-2 py-1 text-[11px] outline-none focus:bg-gray-800"
+              placeholder="메모(선택) — 예: 8월 정리 끝"
+              maxLength={MAX_LEDGER_SNAPSHOT_LABEL_LEN}
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { if (onSave(label)) setLabel(''); } }}
+            />
+            <button className="text-[11px] px-2 py-1 rounded bg-emerald-900/60 text-emerald-200 hover:bg-emerald-900 shrink-0"
+              onClick={() => { if (onSave(label)) setLabel(''); }}>💾 지금 저장</button>
+          </div>
+        )}
+
+        <div className="flex-1 overflow-y-auto p-2">
+          {list.length === 0 ? (
+            <div className="p-4 text-[11px] text-gray-500 leading-relaxed">
+              저장된 기록이 없습니다.<br />
+              위 <b>지금 저장</b>을 누르면 현재 장부가 이 목록에 남고, 나중에 그 시점으로 되돌릴 수 있습니다.
+              최대 {MAX_LEDGER_SNAPSHOTS}개까지 보관하며 오래된 것부터 밀려납니다.
+            </div>
+          ) : list.map((s) => {
+            const sum = ledgerSnapshotSummary(s);
+            return (
+              <div key={s.id} className="border border-gray-800 rounded px-2 py-1.5 mb-1.5 bg-[#0b1120]">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-gray-200">{fmtWhen(s.savedAt)}</span>
+                  {s.auto && <span className="text-[9px] px-1 rounded bg-gray-800 text-gray-400" title="복원 직전에 자동으로 남긴 되돌리기 지점입니다">자동</span>}
+                  {s.label && <span className="text-[10px] text-gray-400 truncate">{s.label}</span>}
+                  <div className="flex-1" />
+                  {!readOnly && (armed === s.id ? (
+                    <span className="inline-flex gap-1">
+                      <button className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/70 text-amber-100 hover:bg-amber-800"
+                        onClick={() => { setArmed(''); onRestore(s.id); }}>되돌리기</button>
+                      <button className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 hover:bg-gray-700"
+                        onClick={() => setArmed('')}>취소</button>
+                    </span>
+                  ) : (
+                    <button className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-300 hover:bg-gray-700"
+                      title="이 시점으로 되돌립니다 — 지금 상태는 자동으로 한 번 더 저장됩니다"
+                      onClick={() => { setArmedDel(''); setArmed(s.id); }}>복원</button>
+                  ))}
+                  {!readOnly && canSave && (armedDel === s.id ? (
+                    <span className="inline-flex gap-1">
+                      <button className="text-[10px] px-1 rounded bg-rose-900/60 text-rose-200 hover:bg-rose-800"
+                        onClick={() => { setArmedDel(''); onRemove(s.id); }}>삭제</button>
+                      <button className="text-[10px] px-1 rounded bg-gray-800 text-gray-400 hover:bg-gray-700"
+                        onClick={() => setArmedDel('')}>취소</button>
+                    </span>
+                  ) : (
+                    <button className="text-[11px] text-gray-600 hover:text-rose-300 px-1" title="이 기록 삭제"
+                      onClick={() => { setArmed(''); setArmedDel(s.id); }}>×</button>
+                  ))}
+                </div>
+                <div className="text-[9px] text-gray-500 mt-0.5">
+                  장부 {sum.books} · 항목 {sum.items}건 · 실제 입력 {sum.actuals}칸 · 정리한 달 {sum.months}개
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="px-3 py-2 border-t border-gray-800 text-[9px] text-gray-600 leading-relaxed">
+          · 이 기록은 계좌 백업과 <b>별개</b>입니다 — 가계부만 되돌립니다.<br />
+          · <b>복원해도 지금 상태가 자동으로 한 번 더 저장</b>되므로, 잘못 눌러도 바로 위 '자동' 기록으로 되돌아갈 수 있습니다.<br />
+          · 보관은 최대 {MAX_LEDGER_SNAPSHOTS}개이고, 자리가 모자라면 <b>자동 기록부터</b> 밀려납니다(직접 저장한 것이 오래 남습니다).
+        </div>
       </div>
     </div>
   );

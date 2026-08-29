@@ -1543,3 +1543,149 @@ export const makeLedgerBook = (over: Partial<LedgerBook> = {}): LedgerBook => ({
   updatedAt: 0,
   ...over,
 });
+
+/* ===========================================================================
+ * L. 스냅샷 — 사용자 저장 + 이전 기록 복원
+ *
+ * ⚠️ **스냅샷은 `ledgerBooks` 안이 아니라 그 옆(앱 레벨 `ledgerSnapshots`)에 산다.**
+ *    장부 안에 두면 장부가 통째로 덮이는 사고에서 안전망도 같이 죽는다 —
+ *    그 사고(2026-08-29 실측 유실)가 정확히 이 기능이 막으려는 것이다.
+ *
+ * ⚠️ 자동 백업(`portfolio_backup_*.json`)과 **별개**다. 그쪽은 `versioned` 인자가 있을 때만
+ *    (수동 저장·앱 닫기 등) 만들어지고, 800ms 디바운스 자동 저장은 백업 없이 STATE를
+ *    덮어쓴다 — 그래서 하루 종일 편집해도 복구 지점이 하나도 안 생길 수 있다.
+ * =========================================================================== */
+
+export interface LedgerSnapshot {
+  id: string;
+  /** epoch ms. ⚠️ 이 모듈은 순수해야 하므로 호출부가 넘긴다(Date.now() 금지). */
+  savedAt: number;
+  label: string;
+  /** 복원 직전 자동 저장인가(사용자가 누른 저장과 구분해 목록에서 표시·정리한다). */
+  auto: boolean;
+  books: LedgerBooks;
+}
+
+export const MAX_LEDGER_SNAPSHOTS = 10;
+export const MAX_LEDGER_SNAPSHOT_LABEL_LEN = 40;
+/**
+ * 스냅샷 전체의 대략적 직렬화 예산.
+ * ⚠️ STATE는 백업 22본으로 복제되고 저장마다 파일 전체가 업로드된다 — 개수 상한만으로는
+ *    큰 장부에서 STATE가 배로 불어난다. 개수와 바이트를 **둘 다** 건다.
+ */
+export const MAX_LEDGER_SNAPSHOT_BYTES = 512 * 1024;
+
+export const makeLedgerSnapshot = (over: Partial<LedgerSnapshot> = {}): LedgerSnapshot => ({
+  id: generateId(),
+  savedAt: 0,
+  label: '',
+  auto: false,
+  books: [],
+  ...over,
+});
+
+export interface LedgerSnapshotSummary {
+  books: number;
+  items: number;
+  /** 실제 금액이 입력된 칸 수 */
+  actuals: number;
+  months: number;
+}
+
+/** 목록 표시용 요약 — ⚠️ 절대 throw하지 않는다(손상된 스냅샷이 목록 전체를 죽이면 안 된다). */
+export const ledgerSnapshotSummary = (snap: LedgerSnapshot | null | undefined): LedgerSnapshotSummary => {
+  const out: LedgerSnapshotSummary = { books: 0, items: 0, actuals: 0, months: 0 };
+  const books = snap && Array.isArray(snap.books) ? snap.books : [];
+  out.books = books.length;
+  for (const b of books) {
+    const items = b && Array.isArray((b as any).items) ? (b as any).items : [];
+    out.items += items.length;
+    for (const it of items) out.actuals += Object.keys((it && it.actual) || {}).length;
+    const months = b && (b as any).months && typeof (b as any).months === 'object' ? (b as any).months : {};
+    out.months += Object.keys(months).length;
+  }
+  return out;
+};
+
+/**
+ * 스냅샷 추가.
+ * ⚠️ 직전 스냅샷과 **내용이 같으면 추가하지 않는다**(원본 참조 반환) — 저장 버튼을 연타하면
+ *    같은 내용이 10개 쌓여 정작 필요한 과거 시점이 상한 밖으로 밀려난다.
+ * ⚠️ 상한 초과 시 **오래된 것부터** 버리되, 같은 조건이면 `auto`를 먼저 버린다 —
+ *    사용자가 직접 누른 저장이 자동 스냅샷 때문에 밀려나면 안 된다.
+ */
+export const pushLedgerSnapshot = (
+  list: LedgerSnapshot[] | null | undefined,
+  snap: LedgerSnapshot,
+): LedgerSnapshot[] => {
+  const src = Array.isArray(list) ? list : [];
+  if (!snap || !Array.isArray(snap.books)) return src;
+  if (src.length > 0 && ledgerFingerprint(src[0].books) === ledgerFingerprint(snap.books)) return src;
+
+  let out = [snap, ...src];
+  // ① 개수 상한 — auto를 먼저, 그다음 오래된 것부터
+  while (out.length > MAX_LEDGER_SNAPSHOTS) {
+    let victim = -1;
+    for (let i = out.length - 1; i > 0; i--) { if (out[i].auto) { victim = i; break; } }
+    out.splice(victim >= 0 ? victim : out.length - 1, 1);
+  }
+  // ② 바이트 상한 — 방금 넣은 것(index 0)은 절대 버리지 않는다.
+  let guard = out.length;
+  while (out.length > 1 && guard-- > 0) {
+    let size = 0;
+    try { size = JSON.stringify(out).length; } catch { break; }
+    if (size <= MAX_LEDGER_SNAPSHOT_BYTES) break;
+    out.splice(out.length - 1, 1);
+  }
+  return out;
+};
+
+/**
+ * 로드 정규화. ⚠️ `normalizeLedgerBooks`와 같은 **멱등 계약** — 바꿀 게 없으면 원본 참조를
+ *    그대로 반환한다(매번 새 배열이면 Drive 폴링마다 재저장이 돈다).
+ */
+export const normalizeLedgerSnapshots = (raw: unknown): LedgerSnapshot[] => {
+  if (!Array.isArray(raw)) return [];
+  let changed = raw.length > MAX_LEDGER_SNAPSHOTS;
+  const out: LedgerSnapshot[] = [];
+  for (const s of raw.slice(0, MAX_LEDGER_SNAPSHOTS)) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) { changed = true; continue; }
+    const src = s as Record<string, unknown>;
+    const books = normalizeLedgerBooks(src.books);
+    const next: LedgerSnapshot = {
+      id: typeof src.id === 'string' && src.id ? src.id : generateId(),
+      savedAt: numOrNull(src.savedAt) ?? 0,
+      label: str(src.label, MAX_LEDGER_SNAPSHOT_LABEL_LEN),
+      auto: src.auto === true,
+      books,
+    };
+    if (next.id !== src.id || next.savedAt !== (src.savedAt ?? 0) || next.label !== (src.label ?? '')
+      || next.auto !== (src.auto === true) || books !== src.books) changed = true;
+    out.push(next);
+  }
+  return changed ? out : (raw as LedgerSnapshot[]);
+};
+
+/**
+ * sticky 복원 판정 — 백업 복원이 사용자의 스냅샷 이력을 되돌리면 안 된다.
+ * ⚠️ 여기서는 `length > 0`이 옳다(빈 스냅샷이 저절로 생기는 경로가 없다 — `ledgerBooks`가
+ *    화면을 열기만 해도 빈 장부 1권을 만드는 것과 사정이 다르다).
+ */
+export const ledgerSnapshotsHaveContent = (list: unknown): boolean =>
+  Array.isArray(list) && list.some((s: any) => s && Array.isArray(s.books) && s.books.length > 0);
+
+/**
+ * Drive 저장 트리거용 지문.
+ * ⚠️ **절대 던지지 않는다** — 이 계산은 App.tsx 저장 effect의 첫 블록이라, 던지면 그 세션의
+ *    Drive 저장이 통째로 멈춘다(`ledgerFingerprint`와 같은 규약).
+ * ⚠️ 개수 해시로 줄이지 말 것 — 라벨만 고친 스냅샷이 저장되지 않는다.
+ */
+export const ledgerSnapshotsFingerprint = (list: unknown): string => {
+  try {
+    if (!Array.isArray(list)) return '';
+    return JSON.stringify(list.map((s: any) => [
+      s?.id ?? '', s?.savedAt ?? 0, s?.label ?? '', s?.auto === true,
+      ledgerFingerprint(s?.books),
+    ]));
+  } catch { return 'ERR'; }
+};

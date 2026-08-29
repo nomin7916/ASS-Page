@@ -869,6 +869,109 @@ if (LE && L) {
     ok('#92b downloadLedgerXlsx는 던지지 않고 false를 돌려준다(창에는 토스트가 없다)',
       typeof LE.downloadLedgerXlsx === 'function');
   }
+
+  // ── §19 스냅샷(이전 기록) — 저장 / 복원 ──────────────────────────────────
+  console.log('\n  §19 스냅샷 — 사용자 저장 + 이전 기록 복원');
+  // ⚠️ 이 블록은 엑셀 절(`if (LE)`) 뒤라 바깥 스코프의 구조분해가 닿지 않는다 —
+  //    쓰는 것을 여기서 다시 꺼낸다(안 하면 ReferenceError로 파트①이 통째로 중단된다).
+  const {
+    makeLedgerSnapshot, pushLedgerSnapshot, normalizeLedgerSnapshots,
+    ledgerSnapshotsHaveContent, ledgerSnapshotsFingerprint, ledgerSnapshotSummary,
+    makeLedgerBook: mkBook, makeLedgerItem: mkItem,
+    MAX_LEDGER_SNAPSHOTS: SNAP_MAX,
+  } = L;
+  ok('#93 필요한 export가 전부 있다',
+    [makeLedgerSnapshot, pushLedgerSnapshot, normalizeLedgerSnapshots,
+      ledgerSnapshotsHaveContent, ledgerSnapshotsFingerprint, ledgerSnapshotSummary].every((f) => typeof f === 'function'));
+
+  const snapBooks = (n) => [mkBook({
+    id: 'b',
+    items: Array.from({ length: n }, (_, i) => mkItem({ id: `i${i}`, name: `x${i}`, plan: 1000, actual: { '2026-01': 1 } })),
+  })];
+  const SNAP = (o) => makeLedgerSnapshot(o);
+
+  // ⚠️ 저장 버튼 연타로 같은 내용이 상한을 채우면 정작 필요한 과거 시점이 밀려난다.
+  eq('#94 ⚠️ 직전과 내용이 같으면 추가하지 않는다',
+    pushLedgerSnapshot([SNAP({ id: 'a', books: snapBooks(3) })], SNAP({ id: 'b', books: snapBooks(3) })).length, 1);
+  ok('#94b 같은 내용이면 원본 참조를 그대로 돌려준다(헛된 저장 트리거 방지)', (() => {
+    const cur = [SNAP({ id: 'a', books: snapBooks(3) })];
+    return pushLedgerSnapshot(cur, SNAP({ id: 'b', books: snapBooks(3) })) === cur;
+  })());
+  eq('#94c 내용이 다르면 추가된다',
+    pushLedgerSnapshot([SNAP({ id: 'a', books: snapBooks(3) })], SNAP({ id: 'b', books: snapBooks(4) })).length, 2);
+
+  let snapList = [];
+  for (let i = 0; i < SNAP_MAX + 5; i++) snapList = pushLedgerSnapshot(snapList, SNAP({ id: `s${i}`, savedAt: i, books: snapBooks(i + 1) }));
+  eq('#95 개수 상한', snapList.length, SNAP_MAX);
+  eq('#95b 최신이 맨 앞', snapList[0].id, `s${SNAP_MAX + 4}`);
+
+  // ⚠️ 사용자가 직접 누른 저장이 자동 스냅샷 때문에 밀려나면 안 된다.
+  {
+    let l2 = [];
+    for (let i = 0; i < SNAP_MAX; i++) l2 = pushLedgerSnapshot(l2, SNAP({ id: `m${i}`, savedAt: i, auto: i % 2 === 1, books: snapBooks(i + 1) }));
+    const manualBefore = l2.filter((s) => !s.auto).length;
+    l2 = pushLedgerSnapshot(l2, SNAP({ id: 'new', books: snapBooks(999) }));
+    ok('#96 ⚠️ 상한 초과 시 auto를 먼저 버린다(수동 저장이 남는다)',
+      l2.length === SNAP_MAX && l2.filter((s) => !s.auto).length === manualBefore + 1);
+  }
+  // ⚠️ 방금 넣은 스냅샷은 어떤 경우에도 버리지 않는다(저장이 조용히 실패하면 안 된다).
+  ok('#96b 방금 넣은 것은 항상 남는다', pushLedgerSnapshot(snapList, SNAP({ id: 'keep', books: snapBooks(77) }))[0].id === 'keep');
+
+  // ⚠️ STATE는 백업 22본으로 복제된다 — 개수 상한만으로는 큰 장부에서 STATE가 배로 불어난다.
+  {
+    const heavy = [mkBook({
+      id: 'H',
+      items: Array.from({ length: 300 }, (_, i) => mkItem({ id: `h${i}`, name: `항목${i}`, memo: 'm'.repeat(400) })),
+    })];
+    let l3 = [];
+    for (let i = 0; i < SNAP_MAX; i++) {
+      l3 = pushLedgerSnapshot(l3, SNAP({ id: `g${i}`, savedAt: i, books: heavy.map((b) => ({ ...b, name: `n${i}` })) }));
+    }
+    ok('#97 ⚠️ 바이트 예산이 걸린다(개수 상한만으로는 STATE가 불어난다)',
+      JSON.stringify(l3).length <= L.MAX_LEDGER_SNAPSHOT_BYTES);
+    ok('#97b 예산을 넘겨도 최소 1개는 남는다(저장이 통째로 실패하지 않는다)', l3.length >= 1);
+  }
+
+  // ⚠️ 멱등 — 깨지면 Drive 폴링마다 재저장이 돈다(normalizeLedgerBooks와 같은 계약).
+  {
+    const once = normalizeLedgerSnapshots(JSON.parse(JSON.stringify(snapList)));
+    ok('#98 ⚠️ 두 번째 정규화는 같은 참조', normalizeLedgerSnapshots(once) === once);
+    ok('#98b 값을 보존한다', once.length === snapList.length && once[0].books[0].items.length === snapList[0].books[0].items.length);
+  }
+  eq('#98c 손상 입력은 빈 배열', normalizeLedgerSnapshots(null).length, 0);
+  eq('#98d 상한을 넘는 입력은 잘린다', normalizeLedgerSnapshots(Array.from({ length: 99 }, (_, i) => ({ id: `q${i}`, books: [] }))).length, SNAP_MAX);
+  ok('#98e 스냅샷 안의 장부도 정규화된다',
+    normalizeLedgerSnapshots([{ id: 'z', books: [{ items: [{ group: 'bogus' }] }] }])[0].books[0].items[0].group === 'fixed');
+
+  // ⚠️ 백업 복원이 '이전 기록'을 되돌리면 그 시점 이후의 복구 지점이 통째로 사라진다.
+  ok('#99 sticky 판정 — 내용이 있으면 true', ledgerSnapshotsHaveContent(snapList) === true);
+  ok('#99b 빈 배열은 false', ledgerSnapshotsHaveContent([]) === false && ledgerSnapshotsHaveContent(null) === false);
+  ok('#99c 장부가 빈 스냅샷만 있으면 false', ledgerSnapshotsHaveContent([SNAP({ books: [] })]) === false);
+
+  // ⚠️ 지문이 없거나 개수 해시로 줄이면 '라벨만 고친 세션'이 저장되지 않는다.
+  ok('#100 라벨 변화가 지문에 잡힌다',
+    ledgerSnapshotsFingerprint([SNAP({ id: 'x', books: snapBooks(1), label: 'A' })])
+    !== ledgerSnapshotsFingerprint([SNAP({ id: 'x', books: snapBooks(1), label: 'B' })]));
+  ok('#100b 장부 내용 변화도 잡힌다',
+    ledgerSnapshotsFingerprint([SNAP({ id: 'x', books: snapBooks(1) })])
+    !== ledgerSnapshotsFingerprint([SNAP({ id: 'x', books: snapBooks(2) })]));
+  // ⚠️ 실제로 막아 주는 것은 **안쪽 `ledgerFingerprint`의 try/catch**다(순환 참조가 거기서
+  //    'ERR' 문자열로 흡수돼 바깥 JSON.stringify에 닿지 않는다). 바깥 try/catch는 도달 불가한
+  //    방어적 중복이라 변이 테스트로 검출되지 않는다 — 그 사실을 알고 남겨 둔 것이지
+  //    '검증됨'이 아니다(지우지는 말 것: 미래에 문자열 아닌 값을 투영하면 그때 필요해진다).
+  S('#100c ⚠️ 순환 참조에도 던지지 않는다(던지면 그 세션 Drive 저장이 통째로 멈춘다)', () => {
+    const c = SNAP({ id: 'c', books: snapBooks(1) });
+    c.books[0].items[0].loan = c;
+    return ledgerSnapshotsFingerprint([c]);
+  }, (v) => typeof v === 'string' && v.length > 0);
+
+  eq('#101 요약(목록 표시용)', ledgerSnapshotSummary(SNAP({ books: snapBooks(3) })), { books: 1, items: 3, actuals: 3, months: 0 });
+  eq('#101b ⚠️ 손상 스냅샷에도 던지지 않는다(목록 전체가 죽으면 안 된다)',
+    ledgerSnapshotSummary(null), { books: 0, items: 0, actuals: 0, months: 0 });
+
+  // ⚠️ 스냅샷은 장부가 통째로 덮이는 사고에서도 살아남아야 한다 — 그게 이 기능의 존재 이유다.
+  ok('#102 ⚠️ 스냅샷은 LedgerBook 안에 있지 않다(장부와 다른 저장 슬롯)',
+    !Object.prototype.hasOwnProperty.call(mkBook(), 'snapshots'));
 }
 
 console.log('\n── 파트② 소스 텍스트 가드(배선) ──');
@@ -878,6 +981,8 @@ const LG = stripComments(LG_RAW);
 const APP_RAW = read('src/App.tsx');
 const APP = stripComments(APP_RAW);
 const SYNC = stripComments(read('src/hooks/useDriveSync.ts'));
+const LP_RAW = read('src/components/LedgerPage.tsx');
+const LP = stripComments(LP_RAW);
 const MAIN = stripComments(read('src/main.tsx'));
 const GATE = stripComments(read('src/components/LoginGate.tsx'));
 const ADMIN = stripComments(read('src/components/AdminPage.tsx'));
@@ -951,6 +1056,59 @@ ok('#G2j ⚠️ 종료 커밋이 saveStateRef를 동기 갱신한다',
 //    새로고침마다 통째로 사라진다.
 ok('#G2k ⚠️ 계좌 0개 사용자도 저장된다(조기 반환 예외)',
   /portfolios\.length === 0 && !ledgerBooksHaveContent\(ledgerBooks\)/.test(APP));
+
+// ── 스냅샷(이전 기록) 영속화 7지점 + 로드 게이트 ────────────────────────────
+// ⚠️ 하나만 빠져도 '저장했는데 안 남는다'가 된다 — 이 저장소에서 6회 재발한 버그 클래스.
+console.log('\n── §G16 스냅샷 배선 ──');
+ok('#G16 App state가 있다', /const \[ledgerSnapshots, setLedgerSnapshots\] = useState/.test(APP));
+ok('#G16b 지문에 든다(빠지면 저장이 통째로 스킵된다)', /ledgerSnapshotsFingerprint\(ledgerSnapshots\)/.test(APP));
+ok('#G16c 저장 payload 리터럴에 든다', /backtestScenarios, ledgerBooks, ledgerSnapshots, seenAdminNotifIds/.test(APP));
+ok('#G16d 저장 effect deps에 든다', /backtestScenarios, ledgerBooks, ledgerSnapshots\]\);/.test(APP));
+ok('#G16e applyStateData가 정규화해 로드한다',
+  /setLedgerSnapshots\(normalizeLedgerSnapshots\(stateData\.ledgerSnapshots\)\)/.test(APP));
+// ⚠️ 백업 복원이 '이전 기록'을 되돌리면 그 시점 이후의 복구 지점이 통째로 사라진다.
+ok('#G16f ⚠️ applyBackupData가 sticky 규칙을 쓴다',
+  /setLedgerSnapshots\(prev => ledgerSnapshotsHaveContent\(prev\) \? prev :/.test(APP));
+ok('#G16g ⚠️ Drive write도 같은 함수를 공유한다(in-memory와 갈리지 않게)',
+  /ledgerSnapshots: keepLedgerSnaps \? curLedgerSnaps :/.test(SYNC) && /ledgerSnapshotsHaveContent\(curLedgerSnaps\)/.test(SYNC));
+ok('#G16h 계좌 0개여도 스냅샷만으로 저장된다', /!ledgerSnapshotsHaveContent\(ledgerSnapshots\)\) return;/.test(APP));
+
+// 별도 창 브릿지 — ⚠️ 앱 핸들러와 창 화이트리스트 **양쪽**에 등록해야 한다(CalendarWindow 선례).
+const LWIN = stripComments(read('src/components/LedgerWindow.tsx'));
+ok('#G16i 앱→창 payload에 스냅샷이 실린다', /type: 'ledger:live', books: ledgerBooks, snapshots: ledgerSnapshots/.test(APP));
+ok('#G16j 창→앱 메시지를 앱이 처리한다', /d\.type === 'ledger:snapshots'/.test(APP));
+// ⚠️ `ledger:books`만 막고 이걸 빠뜨리면 impersonation 창이 스냅샷 이력을 고칠 수 있다.
+ok('#G16k ⚠️ 그 핸들러도 impersonation fail-closed',
+  /d\.type === 'ledger:snapshots'\)[\s\S]{0,300}?if \(adminViewingAsRef\.current\) return;/.test(APP));
+ok('#G16l 창이 스냅샷을 정규화해 채택한다', /setSnapshots\(normalizeLedgerSnapshots\(d\.snapshots\)\)/.test(LWIN));
+ok('#G16m 창이 스냅샷 변경을 앱으로 보낸다', /post\(\{ type: 'ledger:snapshots', snapshots: next \}\)/.test(LWIN));
+ok('#G16n 창이 LedgerPage에 전달한다', /snapshots=\{snapshots\}[\s\S]{0,80}?onUpdateSnapshots=\{onUpdateSnapshots\}/.test(LWIN));
+
+// ── 화면 배선 ──
+ok('#G16o 저장 버튼이 saveSnapshot을 부른다', /onClick=\{\(\) => saveSnapshot\(''\)\}/.test(LP));
+// ⚠️ promote()를 먼저 부르지 않으면 방금 친 값이 아직 books prop에 없어 **직전 상태**가 저장된다.
+ok('#G16p ⚠️ 저장이 먼저 로컬 편집을 회수한다',
+  /const books = promote\(\) \?\? localRef\.current;/.test(LP));
+// ⚠️ 복원은 파괴적이고 undo가 없다 — 직전 상태를 자동 스냅샷으로 남겨야 되돌릴 수 있다.
+ok('#G16q ⚠️ 복원 직전에 현재 상태를 자동 스냅샷으로 남긴다',
+  /label: '복원 직전 자동 저장', auto: true/.test(LP));
+ok('#G16r 복원이 정규화해서 넣는다(손상 스냅샷이 렌더 중 던지지 않게)',
+  /setLocal\(\(\) => normalizeLedgerBooks\(snap\.books\)\)/.test(LP));
+// ⚠️ 이 화면은 z-1090이고 별도 창엔 App조차 없다 — ConfirmDialog·토스트가 뜨지 않는다.
+ok('#G16s 복원·삭제가 인라인 2단계 확인이다', /setArmed\(s\.id\)/.test(LP) && /setArmedDel\(s\.id\)/.test(LP));
+ok('#G16t readOnly면 저장·복원이 잠긴다',
+  /if \(readOnly \|\| !onUpdateSnapshots\) return false;/.test(LP) && /const restoreSnapshot = useCallback\(\(snapId\) => \{\s*if \(readOnly\) return;/.test(LP));
+
+// ── 로드 전 잠금(유실 방지) ──
+// ⚠️ 로드 전에 사용자가 한 글자라도 치면 dirty가 서고, 뒤늦게 도착한 진짜 장부가 채택되지
+//    못한 채 2.5초 뒤 그 입력이 Drive를 덮는다(2026-08-29 실측 유실 40여 건).
+ok('#G17 ⚠️ 인앱 가계부가 로드 완료 전엔 읽기 전용이다',
+  /readOnly=\{!!adminViewingAs \|\| ledgerDataState !== 'ready'\}/.test(APP));
+ok('#G17b 로드 상태가 STATE 확정 지점에서 정해진다',
+  /setLedgerDataState\(syncStatusRef\.current === 'error' \? 'error' : 'ready'\)/.test(APP));
+// ⚠️ 실패를 ready로 취급하면 Drive엔 기록이 있는데 못 읽은 상태에서 편집이 열려 다음 저장이 덮는다.
+ok('#G17c ⚠️ 초기값이 loading이다(기본이 잠김)',
+  /useState<'loading' \| 'ready' \| 'error'>\('loading'\)/.test(APP));
 
 // ── 게이팅 (프론트 8곳 + Apps Script 6곳) ──────────────────────────────────
 // ⚠️ 이 3곳이 "새 필드를 손나열하는" 유일한 지점이다. 하나만 빠뜨려도 그 로그인 경로에서만
@@ -1047,8 +1205,6 @@ eq('#G9 ledger.ts 소비처 census(새 소비처는 null 계약을 다시 확인
 // ⚠️ 전부 **선언이 아니라 사용부**를 단언한다 — 상수/함수의 존재만 보면 셀을 통째로
 //    삭제하거나 값을 바꿔치기해도 초록으로 통과하는 죽은 단언이 된다.
 console.log('\n── §G10 계획 폴백 누출 금지 ──');
-const LP_RAW = read('src/components/LedgerPage.tsx');
-const LP = stripComments(LP_RAW);
 
 // ⚠️ 계획으로 채운 값이 비교·시계열로 새면 전월 대비가 영구히 거짓말을 시작한다.
 //    **구간을 잘라** 단언한다 — 파일 전역 정규식은 다른 곳의 정상 사용에 걸려 죽은 단언이 된다.

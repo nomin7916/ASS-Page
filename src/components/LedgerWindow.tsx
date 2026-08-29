@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import LedgerPage from './LedgerPage';
 import ErrorBoundary from './ErrorBoundary';
-import { normalizeLedgerBooks } from '../ledger';
+import { normalizeLedgerBooks, normalizeLedgerSnapshots } from '../ledger';
 
 /**
  * 가계부 **별도 브라우저 창** (`/?ledgerWindow=1`).
@@ -28,6 +28,7 @@ const LINK_TIMEOUT_MS = 12000;
 
 export default function LedgerWindow() {
   const [books, setBooks] = useState([]);
+  const [snapshots, setSnapshots] = useState([]);
   const [hideAmounts, setHideAmounts] = useState(false);
   const [today, setToday] = useState('');
   // 앱이 실어 보내는 impersonation 읽기 전용 신호. ⚠️ 이건 **UI 잠금**일 뿐이고 실제 방어선은
@@ -42,6 +43,8 @@ export default function LedgerWindow() {
   const gotDataRef = useRef(false);
   const booksRef = useRef(books);
   booksRef.current = books;
+  const snapsRef = useRef(snapshots);
+  snapsRef.current = snapshots;
 
   const post = useCallback((msg) => {
     const op = window.opener;
@@ -64,6 +67,7 @@ export default function LedgerWindow() {
       if (d.type === 'ledger:live') {
         // ⚠️ 창이 받은 것도 정규화해 채택한다(손상된 STATE가 렌더 중 던지는 것을 막는다).
         if (Array.isArray(d.books)) setBooks(normalizeLedgerBooks(d.books));
+        if (Array.isArray(d.snapshots)) setSnapshots(normalizeLedgerSnapshots(d.snapshots));
         setHideAmounts(!!d.hideAmounts);
         if (typeof d.today === 'string') setToday(d.today);
         setAppReadOnly(!!d.readOnly);
@@ -99,6 +103,16 @@ export default function LedgerWindow() {
     post({ type: 'ledger:books', books: next });
   }, [post]);
 
+  // 스냅샷(이전 기록)도 같은 낙관적 반영 + 전송 규약.
+  // ⚠️ 새 메시지 타입을 만들면 **App 쪽 핸들러와 이 창의 수신 화이트리스트 양쪽**에 등록해야
+  //    한다 — 한쪽만 하면 조용히 폐기돼 '저장했는데 안 남는다'가 된다(CalendarWindow 선례).
+  const onUpdateSnapshots = useCallback((next) => {
+    if (!Array.isArray(next) || next === snapsRef.current) return;
+    snapsRef.current = next;
+    setSnapshots(next);
+    post({ type: 'ledger:snapshots', snapshots: next });
+  }, [post]);
+
   const notice = appReadOnly
     ? '관리자가 이 사용자 화면을 열람 중이라 읽기 전용입니다.'
     : !linked
@@ -114,6 +128,8 @@ export default function LedgerWindow() {
         variant="page"
         books={books}
         onUpdateBooks={onUpdateBooks}
+        snapshots={snapshots}
+        onUpdateSnapshots={onUpdateSnapshots}
         readOnly={!writable}
         notice={notice}
         hideAmounts={hideAmounts}

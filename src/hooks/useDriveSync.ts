@@ -9,7 +9,7 @@ import {
 } from '../driveStorage';
 import { flowMapsHaveContent } from '../flowMap';
 import { backtestScenariosHaveContent } from '../backtest';
-import { ledgerBooksHaveContent } from '../ledger';
+import { ledgerBooksHaveContent, ledgerSnapshotsHaveContent } from '../ledger';
 
 function _stripStateForSave(stateData: any) {
   const { stockHistoryMap: _s, marketIndices: _m, marketIndicators: _mi, indicatorHistoryMap: _ih, ...core } = stateData;
@@ -39,12 +39,17 @@ function _preserveStickyPersonalData(stateCore: any, current: any) {
   //    **같은 함수**를 공유해야 in-memory와 Drive write가 갈리지 않는다.
   const curLedger = current?.ledgerBooks;
   const keepLedger = ledgerBooksHaveContent(curLedger);
+  // ⚠️ 가계부 스냅샷(이전 기록)도 sticky — 백업 복원이 이걸 되돌리면
+  //    그 백업 시점 이후의 복구 지점이 통째로 사라진다(복구 수단이 복구로 지워지는 역설).
+  const curLedgerSnaps = current?.ledgerSnapshots;
+  const keepLedgerSnaps = ledgerSnapshotsHaveContent(curLedgerSnaps);
   return {
     calendarMemos: keepMemos ? curMemos : (stateCore.calendarMemos ?? curMemos),
     watchlistGroups: keepWatch ? curWatch : (stateCore.watchlistGroups ?? curWatch),
     flowMaps: keepFlow ? curFlow : (stateCore.flowMaps ?? curFlow),
     backtestScenarios: keepBt ? curBt : (stateCore.backtestScenarios ?? curBt),
     ledgerBooks: keepLedger ? curLedger : (stateCore.ledgerBooks ?? curLedger),
+    ledgerSnapshots: keepLedgerSnaps ? curLedgerSnaps : (stateCore.ledgerSnapshots ?? curLedgerSnaps),
   };
 }
 import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
