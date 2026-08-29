@@ -279,6 +279,110 @@ if (X && PE) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// ── 파트①-b 다중 시트(buildXlsxMulti) — xlsxWriter의 소유자가 이 스크립트다 ─────────────
+// ⚠️ 이 블록을 가계부 검증 스크립트로 옮기지 말 것. 옮기면 writer의 OOXML 계약이 그 기능에
+//    인질로 잡혀, 가계부를 개편·삭제하는 순간 다중 시트 테스트가 함께 사라진다.
+//    (실제로 이 블록이 없던 동안 tabSelected 결함이 91/0을 그대로 뚫었다.)
+if (X) {
+  console.log('\n── 파트①-b 다중 시트 ──');
+  const D = new Date(2026, 7, 29, 0, 0, 0);
+  const shared = [{ bold: true }, { numFmt: '#,##0' }];
+  const mkSheet = (name, extra = {}) => ({
+    name, styles: shared,
+    rows: [[{ t: 's', v: name, s: 0 }], [{ t: 'n', v: 1234, s: 1 }]],
+    cols: [18, 12], ...extra,
+  });
+
+  const multi = S('#40 buildXlsxMulti가 바이트를 만든다',
+    () => X.buildXlsxMulti([
+      mkSheet('첫째', { freezeRows: 2, freezeCols: 3 }),
+      mkSheet('둘째', { freezeRows: 2 }),
+      mkSheet('셋째'),
+    ], D), (b) => b instanceof Uint8Array && b.length > 1000);
+  const mf = multi && S('#41 ZIP으로 되읽을 수 있다', () => unzipStore(multi, X.crc32), (f) => f.length === 8);
+  if (mf) {
+    const byName = Object.fromEntries(mf.map((f) => [f.name, f]));
+    eq('#42 OOXML 파트 8개(공통 5 + 시트 3)', mf.map((f) => f.name).sort(),
+      ['[Content_Types].xml', '_rels/.rels', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml',
+        'xl/workbook.xml', 'xl/worksheets/sheet1.xml', 'xl/worksheets/sheet2.xml', 'xl/worksheets/sheet3.xml']);
+    ok('#43 모든 엔트리 CRC·크기 일치 + STORE', mf.every((f) => f.crcOk && f.sizeOk && f.method === 0));
+    // ⚠️ Override를 빠뜨리면 Excel이 '복구할 수 없는 내용'으로 파일을 거부한다.
+    eq('#44 Content_Types에 시트 Override가 시트 수만큼',
+      (byName['[Content_Types].xml'].text.match(/worksheets\/sheet\d+\.xml/g) || []).length, 3);
+    // ⚠️ rId는 시트 1..N, styles가 N+1. <sheet r:id>와 어긋나면 Excel이 거부한다.
+    const rels = byName['xl/_rels/workbook.xml.rels'].text;
+    ok('#45 rels: 시트 rId1~3 + styles rId4',
+      /Id="rId1"[^>]*worksheets\/sheet1\.xml/.test(rels) &&
+      /Id="rId2"[^>]*worksheets\/sheet2\.xml/.test(rels) &&
+      /Id="rId3"[^>]*worksheets\/sheet3\.xml/.test(rels) &&
+      /Id="rId4"[^>]*styles\.xml/.test(rels));
+    const wbx = byName['xl/workbook.xml'].text;
+    ok('#46 workbook의 <sheet>가 sheetId 1..N · r:id 1:1 대응',
+      /<sheet name="첫째" sheetId="1" r:id="rId1"\/>/.test(wbx) &&
+      /<sheet name="둘째" sheetId="2" r:id="rId2"\/>/.test(wbx) &&
+      /<sheet name="셋째" sheetId="3" r:id="rId3"\/>/.test(wbx));
+    // ⚠️ **이 저장소에서 실제로 발생했던 blocker** — tabSelected가 여럿이면 Excel이 그 시트들을
+    //    '그룹'으로 묶어 열어, 한 시트의 편집·삭제가 나머지 시트의 같은 위치에 그대로 적용된다.
+    //    제목 표시줄의 [그룹] 표기 외에 시각 단서가 거의 없어 화면 검토로는 잡히지 않는다.
+    const selCount = [1, 2, 3].reduce((n, i) =>
+      n + ((byName['xl/worksheets/sheet' + i + '.xml'].text.match(/tabSelected="1"/g) || []).length), 0);
+    eq('#47 ⚠️ tabSelected는 통합문서에 **하나뿐**(여럿이면 그룹 편집 사고)', selCount, 1);
+    ok('#47b 그 하나는 첫 시트다', /tabSelected="1"/.test(byName['xl/worksheets/sheet1.xml'].text));
+    // 틀 고정 4조합 — activePane과 <selection pane>이 어긋나면 Excel이 고정을 무시한다.
+    ok('#48 행+열 고정 = bottomRight, topLeftCell은 교차점',
+      byName['xl/worksheets/sheet1.xml'].text.includes(
+        '<pane xSplit="3" ySplit="2" topLeftCell="D3" activePane="bottomRight" state="frozen"/>') &&
+      byName['xl/worksheets/sheet1.xml'].text.includes('<selection pane="bottomRight" activeCell="D3" sqref="D3"/>'));
+    ok('#48b 행만 고정 = bottomLeft(기존 동작 불변)',
+      byName['xl/worksheets/sheet2.xml'].text.includes(
+        '<pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/>'));
+    ok('#48c 고정 없으면 <pane>이 없다', !byName['xl/worksheets/sheet3.xml'].text.includes('<pane'));
+    // ⚠️ 셀의 s는 통합문서에 단 하나뿐인 styles.xml의 cellXfs 인덱스다 — 범위를 넘으면 Excel이
+    //    파일을 여는 것 자체를 거부한다.
+    const xfCount = Number((byName['xl/styles.xml'].text.match(/<cellXfs count="(\d+)"/) || [])[1] || 0);
+    const maxS = Math.max(...[1, 2, 3].flatMap((i) =>
+      [...byName['xl/worksheets/sheet' + i + '.xml'].text.matchAll(/ s="(\d+)"/g)].map((m) => Number(m[1]))), -1);
+    ok('#49 ⚠️ 모든 시트의 최대 s < cellXfs count (' + maxS + ' < ' + xfCount + ')', maxS < xfCount);
+  }
+  ok('#50 열만 고정 = topRight', (() => {
+    const b = X.buildXlsxMulti([mkSheet('X', { freezeCols: 2 })], D);
+    const t = unzipStore(b, X.crc32).find((f) => f.name === 'xl/worksheets/sheet1.xml').text;
+    return t.includes('<pane xSplit="2" topLeftCell="C1" activePane="topRight" state="frozen"/>');
+  })());
+  // ⚠️ 시트마다 다른 styles 배열을 쓰면 s 인덱스가 충돌해 **오류 없이 조용히** 서식이 뒤섞인다.
+  ok('#51 ⚠️ 서로 다른 styles 배열은 던진다', (() => {
+    try { X.buildXlsxMulti([mkSheet('A'), { ...mkSheet('B'), styles: [{ bold: true }] }], D); return false; }
+    catch (e) { return /같은 styles 배열/.test(String(e.message)); }
+  })());
+  // ⚠️ 반대로 styles 미지정 시트 1장은 **절대 던지면 안 된다** — `(x || [])`로 비교하면 매번 새
+  //    빈 배열이 만들어져 자기 자신과의 비교에도 실패하고, 메시지가 원인을 정반대로 지목한다.
+  ok('#51b ⚠️ styles 미지정 시트 1장은 던지지 않는다', (() => {
+    try { X.buildXlsxMulti([{ name: 'X', rows: [[{ t: 's', v: 'a' }]] }], D); return true; } catch { return false; }
+  })());
+  ok('#52 시트 0개는 던진다', (() => { try { X.buildXlsxMulti([], D); return false; } catch { return true; } })());
+  // ⚠️ Excel은 중복 시트명을 가진 통합문서를 거부한다(대소문자 무시).
+  const uq = X.uniqueSheetNames(['가계부', '가계부', '가계부', 'a'.repeat(40), 'a'.repeat(40)]);
+  ok('#53 시트명 중복 해소', new Set(uq.map((n) => n.toLowerCase())).size === 5);
+  ok('#53b 31자 상한 유지', uq.every((n) => n.length <= 31));
+  ok('#53c 첫 이름은 그대로', uq[0] === '가계부');
+  // ⚠️ 위 셋은 **함수를 직접** 부른다 — buildXlsxMulti가 그 함수를 실제로 **쓰는지**는 보지 못한다.
+  //    (변이 테스트로 확인: uniqueSheetNames 호출을 sanitizeSheetName으로 되돌려도 위 셋은 통과했다.)
+  //    사용부를 단언한다 — 같은 이름 3장을 넣고 workbook.xml의 name이 전부 다른지 본다.
+  ok('#53d ⚠️ buildXlsxMulti가 중복 시트명을 실제로 해소한다(사용부)', (() => {
+    const b2 = X.buildXlsxMulti([mkSheet('가계부'), mkSheet('가계부'), mkSheet('가계부')], D);
+    const t = unzipStore(b2, X.crc32).find((f) => f.name === 'xl/workbook.xml').text;
+    const names = [...t.matchAll(/<sheet name="([^"]+)"/g)].map((m) => m[1]);
+    return names.length === 3 && new Set(names.map((n) => n.toLowerCase())).size === 3;
+  })());
+  // ⚠️ buildXlsx는 buildXlsxMulti에 위임한다 — 두 경로의 출력이 **바이트 동일**해야 그 위임이
+  //    관측 가능한 수준에서 '무변경'이다(OOXML 계약을 두 벌로 유지하지 않기 위한 근거).
+  ok('#54 ⚠️ buildXlsx(1장) === buildXlsxMulti([1장]) 바이트 동일', (() => {
+    const one = mkSheet('단일', { freezeRows: 1 });
+    const a = X.buildXlsx(one, D), b = X.buildXlsxMulti([one], D);
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+  })());
+}
+
 console.log('\n── 파트② 소스 텍스트 가드 (선언이 아니라 사용부를 단언) ──');
 
 const PT_RAW = read('src/components/PortfolioTable.tsx');

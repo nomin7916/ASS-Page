@@ -53,6 +53,13 @@ export interface XlsxSheet {
   merges?: XlsxMerge[];
   /** 상단 N개 행 고정(틀 고정). 0/미지정이면 고정 없음. */
   freezeRows?: number;
+  /**
+   * 왼쪽 N개 **열** 고정. 열이 많은 표(가계부 월 매트릭스는 29열)에서 항목명이 흘러가지 않게 한다.
+   * ⚠️ `freezeRows`와 함께 쓰면 `<pane>`의 activePane·topLeftCell·selection이 **네 조합**으로
+   *    갈린다(bottomLeft / topRight / bottomRight). 하나라도 어긋나면 Excel이 파일을 열 때
+   *    틀 고정을 무시하거나 손상으로 판정한다.
+   */
+  freezeCols?: number;
   styles: XlsxStyle[];
 }
 
@@ -240,31 +247,10 @@ export const buildZip = (entries: ZipEntry[], modDate: Date): Uint8Array => {
 
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
 
-const CONTENT_TYPES = XML_DECL +
-  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
-  '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
-  '<Default Extension="xml" ContentType="application/xml"/>' +
-  '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
-  '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
-  '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
-  '</Types>';
-
 const ROOT_RELS = XML_DECL +
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
   '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
   '</Relationships>';
-
-const WORKBOOK_RELS = XML_DECL +
-  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-  '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
-  '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
-  '</Relationships>';
-
-const buildWorkbookXml = (sheetName: string): string => XML_DECL +
-  '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"' +
-  ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
-  '<sheets><sheet name="' + escapeXml(sheetName) + '" sheetId="1" r:id="rId1"/></sheets>' +
-  '</workbook>';
 
 const DEFAULT_FONT_NAME = '맑은 고딕';
 
@@ -404,18 +390,36 @@ export const buildStylesXml = (styles: XlsxStyle[]): string => {
  *    sheetData → mergeCells. `<cols>`를 sheetData 뒤에 두거나 `<mergeCells>`를 앞에
  *    두면 Excel이 파일을 손상으로 판정한다.
  */
-export const buildSheetXml = (sheet: XlsxSheet): string => {
+/**
+ * @param tabSelected 이 시트가 열릴 때 **선택된 탭**인가.
+ *   ⚠️ 다중 시트에서 이 값이 여럿이면 Excel이 그 시트들을 **'그룹'으로 묶어 연다** —
+ *      제목 표시줄에 [그룹]이라고만 뜨고 탭 색은 그대로라 알아채기 어려운데, 그 상태에서
+ *      한 셀을 고치거나 행을 지우면 **묶인 모든 시트의 같은 위치에 그대로 적용**된다
+ *      (29열 매트릭스가 조용히 파괴된다). Ctrl+P도 전 시트를 인쇄한다.
+ *   ⚠️ 기본값 true — 단일 시트 경로(`buildXlsx`)의 출력이 1바이트도 바뀌지 않게 하는 축이다.
+ */
+export const buildSheetXml = (sheet: XlsxSheet, tabSelected: boolean = true): string => {
   const rows = sheet.rows || [];
   const maxCols = rows.reduce((m, r) => Math.max(m, r ? r.length : 0), 1);
   const dimension = 'A1:' + cellRef(Math.max(rows.length, 1) - 1, Math.max(maxCols, 1) - 1);
 
-  const freeze = Math.max(0, Math.floor(sheet.freezeRows || 0));
-  const sheetViews = '<sheetViews><sheetView tabSelected="1" workbookViewId="0">' +
-    (freeze > 0
-      ? '<pane ySplit="' + freeze + '" topLeftCell="A' + (freeze + 1) +
-        '" activePane="bottomLeft" state="frozen"/>' +
-        '<selection pane="bottomLeft" activeCell="A' + (freeze + 1) + '" sqref="A' + (freeze + 1) + '"/>'
-      : '') +
+  // 틀 고정 — 행/열 조합에 따라 activePane과 topLeftCell이 갈린다.
+  //   행만: bottomLeft · 열만: topRight · 둘 다: bottomRight(교차점이 topLeftCell)
+  // ⚠️ activePane과 <selection pane>이 **같아야** 한다. 어긋나면 Excel이 틀 고정을 무시한다.
+  const fr = Math.max(0, Math.floor(sheet.freezeRows || 0));
+  const fc = Math.max(0, Math.floor(sheet.freezeCols || 0));
+  let pane = '';
+  if (fr > 0 || fc > 0) {
+    const activePane = fr > 0 && fc > 0 ? 'bottomRight' : (fc > 0 ? 'topRight' : 'bottomLeft');
+    const topLeft = cellRef(fr, fc);
+    pane = '<pane' +
+      (fc > 0 ? ' xSplit="' + fc + '"' : '') +
+      (fr > 0 ? ' ySplit="' + fr + '"' : '') +
+      ' topLeftCell="' + topLeft + '" activePane="' + activePane + '" state="frozen"/>' +
+      '<selection pane="' + activePane + '" activeCell="' + topLeft + '" sqref="' + topLeft + '"/>';
+  }
+  const sheetViews = '<sheetViews><sheetView' + (tabSelected ? ' tabSelected="1"' : '') +
+    ' workbookViewId="0">' + pane +
     '</sheetView></sheetViews>';
 
   const cols = sheet.cols && sheet.cols.length
@@ -468,18 +472,101 @@ export const buildSheetXml = (sheet: XlsxSheet): string => {
     '</worksheet>';
 };
 
-/** 시트 하나짜리 .xlsx 바이트를 만든다. modDate는 ZIP 타임스탬프(테스트 결정성용). */
-export const buildXlsx = (sheet: XlsxSheet, modDate?: Date): Uint8Array => {
-  const name = sanitizeSheetName(sheet.name);
+/**
+ * 시트 이름을 **고유하게** 만든다. Excel은 중복 시트명을 가진 통합문서를 거부한다.
+ * `sanitizeSheetName`이 31자 절단·금지문자 치환을 하므로 서로 다른 이름이 같아질 수 있다.
+ * 대소문자 무시 비교(Excel 규칙) + 접미사가 31자를 넘지 않게 앞부분을 줄인다.
+ */
+export const uniqueSheetNames = (names: string[]): string[] => {
+  const used = new Set<string>();
+  return (names || []).map((raw) => {
+    const base = sanitizeSheetName(raw);
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      const suffix = ' (' + n + ')';
+      name = base.slice(0, Math.max(1, 31 - suffix.length)) + suffix;
+      n++;
+    }
+    used.add(name.toLowerCase());
+    return name;
+  });
+};
+
+/**
+ * 시트 **여러 장**짜리 .xlsx 바이트.
+ *
+ * ⚠️ **모든 시트가 같은 `styles` 배열 참조를 공유해야 한다.** 셀의 `s` 속성은 통합문서에 단 하나뿐인
+ *    `xl/styles.xml`의 cellXfs 인덱스이므로, 시트마다 다른 배열을 쓰면 인덱스가 충돌해 **오류 없이
+ *    조용히** 색·숫자서식이 뒤섞인다(그 상태로 Excel은 정상적으로 열린다 — 그래서 더 위험하다).
+ *    호출부는 `StyleBag` **하나**를 만들어 세 시트에 그대로 넘긴다. 어기면 여기서 **던진다**.
+ * ⚠️ `[Content_Types].xml`의 Override와 `workbook.xml.rels`의 rId를 시트 수만큼 늘려야 한다 —
+ *    빠뜨리면 Excel이 '복구할 수 없는 내용'으로 파일을 거부한다. styles의 rId는 시트 **뒤**로 밀린다.
+ */
+export const buildXlsxMulti = (sheets: XlsxSheet[], modDate?: Date): Uint8Array => {
+  const list = (sheets || []).filter(Boolean);
+  if (list.length === 0) throw new Error('buildXlsxMulti: 시트가 없습니다');
+  const styles = list[0].styles || [];
+  // ⚠️ `(sh.styles || []) !== styles`로 비교하지 말 것 — `||`가 **매번 새 빈 배열**을 만들어
+  //    styles가 undefined인 시트는 **자기 자신과의 참조 비교에도 실패**한다(시트 1장짜리
+  //    호출이 'StyleBag을 공유하세요'라는 엉뚱한 메시지로 던진다). 미지정은 '스타일 없음'으로
+  //    허용하고, **실제로 다른 배열을 준 경우만** 막는다.
+  for (const sh of list) {
+    if (sh.styles && sh.styles !== styles) {
+      throw new Error('buildXlsxMulti: 모든 시트가 같은 styles 배열을 공유해야 합니다(StyleBag 하나를 넘기세요)');
+    }
+  }
+  const names = uniqueSheetNames(list.map((sh) => sh.name));
+  const sheetPaths = list.map((_, i) => 'xl/worksheets/sheet' + (i + 1) + '.xml');
+
+  const contentTypes = XML_DECL +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+    sheetPaths.map((sp) => '<Override PartName="/' + sp +
+      '" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('') +
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+    '</Types>';
+
+  // ⚠️ rId는 시트 1..N, styles는 N+1. `<sheet r:id>`와 이 목록이 어긋나면 Excel이 거부한다.
+  const workbookRels = XML_DECL +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    list.map((_, i) => '<Relationship Id="rId' + (i + 1) +
+      '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"' +
+      ' Target="worksheets/sheet' + (i + 1) + '.xml"/>').join('') +
+    '<Relationship Id="rId' + (list.length + 1) +
+    '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+    '</Relationships>';
+
+  const workbookXml = XML_DECL +
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"' +
+    ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    '<sheets>' + names.map((nm, i) => '<sheet name="' + escapeXml(nm) +
+      '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join('') + '</sheets>' +
+    '</workbook>';
+
   return buildZip([
-    { name: '[Content_Types].xml', bytes: utf8(CONTENT_TYPES) },
+    { name: '[Content_Types].xml', bytes: utf8(contentTypes) },
     { name: '_rels/.rels', bytes: utf8(ROOT_RELS) },
-    { name: 'xl/workbook.xml', bytes: utf8(buildWorkbookXml(name)) },
-    { name: 'xl/_rels/workbook.xml.rels', bytes: utf8(WORKBOOK_RELS) },
-    { name: 'xl/styles.xml', bytes: utf8(buildStylesXml(sheet.styles || [])) },
-    { name: 'xl/worksheets/sheet1.xml', bytes: utf8(buildSheetXml(sheet)) },
+    { name: 'xl/workbook.xml', bytes: utf8(workbookXml) },
+    { name: 'xl/_rels/workbook.xml.rels', bytes: utf8(workbookRels) },
+    { name: 'xl/styles.xml', bytes: utf8(buildStylesXml(styles)) },
+    // ⚠️ **첫 시트만** tabSelected — 여럿이면 Excel이 그룹으로 열어 편집이 전 시트에 번진다.
+    ...list.map((sh, i) => ({ name: sheetPaths[i], bytes: utf8(buildSheetXml(sh, i === 0)) })),
   ], modDate || new Date());
 };
+
+/**
+ * 시트 하나짜리 .xlsx 바이트. modDate는 ZIP 타임스탬프(테스트 결정성용).
+ *
+ * ⚠️ `buildXlsxMulti`에 **위임한다** — OOXML 파트(Content_Types·rels·workbook)를 두 벌로
+ *    유지하면 나중에 파트를 하나 추가할 때 반드시 두 곳을 고쳐야 하는데, 한쪽만 고쳐도
+ *    다른 경로는 초록으로 통과한다(실제로 tabSelected 결함이 그렇게 숨었다).
+ *    시트 1장일 때 두 경로의 출력은 **바이트 단위로 동일**하다(verify:excel이 단언).
+ */
+export const buildXlsx = (sheet: XlsxSheet, modDate?: Date): Uint8Array =>
+  buildXlsxMulti([sheet], modDate);
 
 export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 

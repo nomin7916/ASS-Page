@@ -739,6 +739,138 @@ if (L) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// 파트①-b 엑셀 내보내기 (src/ledgerExcel.ts 직접 import)
+// ⚠️ 별도 스크립트를 만들지 말 것 — 이 저장소는 **기능 하나 = 스크립트 하나**다
+//    (자산검증 비교도 모델+엑셀을 verify-compare 한 곳에서 검증한다). 그리고 CLAUDE.md의
+//    게이트 목록에 없는 스크립트는 작업 흐름에서 **아무도 돌리지 않는다**.
+//    ⚠️ 반대로 `buildXlsxMulti`·`freezeCols` 같은 **writer의 계약은 verify:excel**에 있다 —
+//       소유 모듈을 따라간다(그래야 가계부를 개편해도 그 테스트가 살아남는다).
+console.log('\n── 파트①-b 엑셀 내보내기 ──');
+let LE = null;
+try {
+  LE = await import(pathToFileURL(join(ROOT, 'src/ledgerExcel.ts')).href);
+} catch (e) {
+  const unsupported = e && (e.code === 'ERR_UNKNOWN_FILE_EXTENSION' || /Unknown file extension/.test(String(e.message)));
+  if (unsupported) console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 건너뜁니다 (${e.code}).`);
+  else { fail++; console.log(`  ✗ ledgerExcel 모듈을 불러오지 못했습니다 — ${e && (e.code || e.message)}`); }
+}
+
+if (LE && L) {
+  const mkI = (o) => L.makeLedgerItem(o);
+  const ld = (o) => L.makeLedgerLoan({ principalAsOfYm: '2026-08', ...o });
+  const xbook = L.makeLedgerBook({
+    id: 'xb', name: '우리집 가계부',
+    items: [
+      mkI({ id: 'l1', group: 'loan', pay: 'transfer', name: 'APT 1',
+        loan: ld({ principal: 131283083, annualRate: 3.70, method: 'amortizing', endDate: '2063-04-07' }) }),
+      // ⚠️ 상환이 끝난 대출을 지우지 않고 두는 것은 흔한 상태다 — '계산 불가'로 뭉개면
+      //    사용자가 멀쩡한 설정을 고치거나 행을 지운다(대출은 DSR의 분모다).
+      mkI({ id: 'l2', group: 'loan', pay: 'transfer', name: '상환완료',
+        loan: ld({ principal: 1000, annualRate: 4, method: 'amortizing', endDate: '2026-06-30' }) }),
+      mkI({ id: 'f1', group: 'fixed', pay: 'cash', name: '실손보험', plan: 80000, actual: { '2026-08': 80000 } }),
+      mkI({ id: 'f2', group: 'fixed', pay: 'card', name: 'MS365', plan: 127000, planUnit: 'year' }),
+      mkI({ id: 'a1', group: 'annual', pay: 'cash', name: '재산세', plan: 300000, dueMonth: 9, dueDay: 16 }),
+      mkI({ id: 'i1', group: 'income', pay: 'transfer', name: '급여', plan: 6000000, actual: { '2026-08': 6000000 } }),
+    ],
+  });
+  const XIN = { book: xbook, year: 2026, month: 8, todayKST: '2026-08-29' };
+  const sh = S('#80 3시트를 만든다', () => LE.buildLedgerSheets(XIN), (v) => Array.isArray(v) && v.length === 3);
+
+  if (sh) {
+    eq('#80b 시트 이름', sh.map((x) => x.name), ['월 매트릭스', '대출', '연간요약']);
+    // ⚠️ styles.xml은 통합문서에 하나뿐 — 시트마다 StyleBag을 만들면 s 인덱스가 충돌해
+    //    **오류 없이 조용히** 서식이 뒤섞인다(buildXlsxMulti가 던지지만 그건 마지막 방어선이다).
+    ok('#81 ⚠️ 세 시트가 StyleBag 하나를 공유한다', sh.every((x) => x.styles === sh[0].styles));
+    const mtx = sh[0];
+    eq('#82 월 매트릭스 29열(결제·항목·계획 + 12×2 + 연간 2)', mtx.rows[3].length, 29);
+    // ⚠️ 29열이라 가로 고정이 없으면 항목명이 흘러가 어느 행인지 알 수 없다.
+    eq('#82b 틀 고정 4행 3열', [mtx.freezeRows, mtx.freezeCols], [4, 3]);
+
+    // 행 찾기 헬퍼 — 항목명 셀(1열)로 특정한다.
+    const rowOf = (sheet, name) => (sheet.rows || []).find((r) => r && r[1] && r[1].t === 's' && r[1].v === name);
+    const cellM = (r, m, off) => r[3 + (m - 1) * 2 + off];
+
+    const f1 = rowOf(mtx, '실손보험');
+    ok('#83 실적이 있는 달은 숫자 셀', f1 && cellM(f1, 8, 0) && cellM(f1, 8, 0).t === 'n' && cellM(f1, 8, 0).v === 80000);
+    // ⚠️ 미입력을 0으로 떨어뜨리면 시트가 '지출이 없었다'고 확정 단언한다 — 화면과 다른 말을 한다.
+    eq('#83b ⚠️ 미입력 달은 **빈 셀**(0 아님)', f1 ? cellM(f1, 7, 0) : 'x', null);
+    eq('#83c ⚠️ 그 달 차이도 빈 셀', f1 ? cellM(f1, 7, 1) : 'x', null);
+
+    // ⚠️ annual 비납부월은 '미입력'이 아니라 **해당 없음** — 둘을 같은 빈 칸으로 두면
+    //    사용자가 채워야 할 칸으로 오해한다.
+    const a1 = rowOf(mtx, '재산세');
+    ok('#84 연단위 납부월(9월)에 계획이 잡힌다', a1 && (() => {
+      const p = L.planOf(xbook.items.find((i) => i.id === 'a1'), '2026-09');
+      return p === 300000;
+    })());
+
+    // ⚠️ 시트의 '계획'은 반드시 planOf — loanSchedule을 직접 부르면 isItemActive 게이트를 잃어
+    //    화면에 없는 금액을 시트가 찍는다.
+    const l1row = rowOf(mtx, 'APT 1');
+    const planApt = L.planOf(xbook.items.find((i) => i.id === 'l1'), '2026-08');
+    ok('#85 ⚠️ 대출 계획 셀 === planOf(항목, 기준월)', l1row && l1row[2] && Math.abs(l1row[2].v - planApt) < 1e-6);
+    // 편입이 끝난 대출은 화면이 '-'를 그리므로 시트도 그 달을 숫자로 찍으면 안 된다.
+    {
+      const gone = L.makeLedgerBook({ id: 'g', items: [mkI({ id: 'lg', group: 'loan', name: '조기상환', activeTo: '2026-05',
+        loan: ld({ principal: 1e8, annualRate: 4, method: 'amortizing', endDate: '2040-01-01' }) })] });
+      const gs = LE.buildLedgerSheets({ book: gone, year: 2026, month: 8, todayKST: '2026-08-29' });
+      const gr = rowOf(gs[0], '조기상환');
+      eq('#85b ⚠️ 편입이 끝난 대출은 그 달 계획이 빈 셀(planOf의 isItemActive 게이트)', gr ? gr[2] : 'x', null);
+    }
+
+    // ── 대출 시트 ──
+    const loanSheet = sh[1];
+    const lrow = (name) => (loanSheet.rows || []).find((r) => r && r[0] && r[0].t === 's' && r[0].v === name);
+    ok('#86 대출 행이 실린다', !!lrow('APT 1') && !!lrow('상환완료'));
+    eq('#86b 값 출처 — 계산', lrow('APT 1')[9].v, '계산');
+    // ⚠️ 완납을 '계산 불가'로 뭉개면 사용자가 멀쩡한 대출 설정을 고친다.
+    eq('#86c ⚠️ 완납은 \'만기 경과\'(계산 불가 아님)', lrow('상환완료')[9].v, '만기 경과');
+    eq('#86d 완납 대출의 납입액은 빈 셀', lrow('상환완료')[8], null);
+    eq('#87 값 출처 6분기', [
+      LE.loanSourceLabel(ld({ principal: 1e8, annualRate: 4, method: 'amortizing', endDate: '2040-01-01', paymentOverride: 5e5 }), '2026-08'),
+      LE.loanSourceLabel(ld({ principalAsOfYm: '2027-01', principal: 1e8, annualRate: 4, method: 'amortizing', endDate: '2040-01-01' }), '2026-08'),
+      LE.loanSourceLabel(ld({ principal: 0, annualRate: 4, method: 'amortizing', endDate: '2040-01-01' }), '2026-08'),
+      LE.loanSourceLabel(L.makeLedgerLoan({ principal: 1e8, annualRate: 4, method: 'amortizing', endDate: '2040-01-01' }), '2026-08'),
+    ], ['직접 입력', '시작 전', '잔액 없음', '기준월 없음']);
+    // ⚠️ 이율은 **분수 + % 서식**이어야 한다 — 3.70을 그대로 넣으면 370%가 된다.
+    ok('#88 ⚠️ 약정 이자는 분수(0.037)로 들어간다', Math.abs(lrow('APT 1')[3].v - 0.037) < 1e-9);
+
+    // ── 연간요약: 전월 대비 null 계약 ──
+    // ⚠️ zero-base는 comparable=true인데 rate=null이다 — comparable만 보고 쓰면 0.00%가
+    //    확정 표기되어 같은 행의 차이 열(+₩500,000)과 정면으로 모순된다.
+    {
+      const zb = L.makeLedgerBook({ id: 'z', items: [
+        mkI({ id: 'z1', group: 'fixed', plan: 1000, actual: { '2026-01': 0, '2026-02': 500000 } })] });
+      const c = L.compareMonths(zb, '2026-02', '2026-01');
+      ok('#89 zero-base는 comparable=true인데 rate=null', c.comparable === true && c.rate === null);
+      const zs = LE.buildLedgerSheets({ book: zb, year: 2026, month: 2, todayKST: '2026-08-29' });
+      const feb = (zs[2].rows || []).find((r) => r && r[0] && r[0].v === '2월');
+      eq('#89b ⚠️ 그 달 전월대비 셀은 **빈 셀**(0.00% 단언 금지)', feb ? feb[4] : 'x', null);
+      ok('#89c 같은 행의 차이 열은 숫자다', feb && feb[3] && feb[3].t === 'n');
+    }
+
+    // ── 파일명 ──
+    // ⚠️ 날짜는 인자로 받은 KST에서 자른다(`new Date()` 금지 — KST 00:00~09:00에 하루 밀린다).
+    eq('#90 파일명', LE.ledgerExcelFileName('2026-08-29', 2026, '우리집 가계부'), '260829_2026_우리집 가계부.xlsx');
+    eq('#90b 장부명이 비면 기본값', LE.ledgerExcelFileName('2026-08-29', 2026, ''), '260829_2026_가계부.xlsx');
+
+    // ── 바이트 ──
+    const xb = S('#91 xlsx 바이트를 만든다', () => LE.buildLedgerXlsx(XIN, new Date(Date.UTC(2026, 7, 29))),
+      (b) => b instanceof Uint8Array && b.length > 3000);
+    if (xb) {
+      const txt = new TextDecoder().decode(xb);
+      eq('#91b ⚠️ tabSelected는 하나뿐(여럿이면 Excel이 그룹으로 열어 편집이 번진다)',
+        (txt.match(/tabSelected="1"/g) || []).length, 1);
+      ok('#91c 시트 3장이 들어 있다', ['sheet1.xml', 'sheet2.xml', 'sheet3.xml'].every((n) => txt.includes(n)));
+    }
+    S('#92 손상 입력에 던지지 않는다', () => LE.buildLedgerSheets({ book: null, year: 0, month: 0, todayKST: '' }),
+      (v) => Array.isArray(v) && v.length === 3);
+    ok('#92b downloadLedgerXlsx는 던지지 않고 false를 돌려준다(창에는 토스트가 없다)',
+      typeof LE.downloadLedgerXlsx === 'function');
+  }
+}
+
 console.log('\n── 파트② 소스 텍스트 가드(배선) ──');
 
 const LG_RAW = read('src/ledger.ts');
@@ -1106,6 +1238,39 @@ ok('#G28c 창이 그 신호로 쓰기를 잠근다', /const writable = linked &&
 // ⚠️ 인앱 prop과 브릿지 payload가 **같은 표현**을 써야 게이팅이 갈리지 않는다.
 ok('#G29 ⚠️ calendar:live의 장부도 권한 게이팅', /ledgerBooks: ledgerAccess \? ledgerBooks : \[\]/.test(APP));
 ok('#G29b ledgerAccess 선언은 한 곳뿐', (APP.match(/const ledgerAccess =/g) || []).length === 1);
+
+// ── 엑셀 배선 가드 ────────────────────────────────────────────────────────────
+const LEX_RAW = read('src/ledgerExcel.ts');
+const LEX = stripComments(LEX_RAW);
+
+// ⚠️ 타입을 값 import에 섞으면 Node 타입 스트리핑이 런타임에 'does not provide an export'로
+//    던져 **검증 파트①이 통째로 죽는다**(vite 빌드는 통과하므로 무음이다).
+ok('#G30 타입은 import type으로 분리한다',
+  /import type \{[^}]*XlsxSheet/.test(LEX_RAW) && /import type \{[^}]*LedgerBook/.test(LEX_RAW));
+ok('#G30b 상대 import에 .ts 확장자', !/from '\.\/(ledger|xlsxWriter|portfolioExcel)'/.test(LEX_RAW));
+ok('#G30c @ts-nocheck를 붙이지 않았다', !/^\s*\/\/\s*@ts-nocheck\s*$/m.test(LEX_RAW));
+// ⚠️ KST 00:00~09:00에 하루 밀린다 — 날짜는 반드시 호출부가 넘긴 값에서 자른다.
+ok('#G31 ⚠️ new Date()로 날짜를 만들지 않는다', !/new Date\(\)/.test(LEX));
+// ⚠️ 화면이 쓰는 단일 소스를 재구현하면 시트와 화면이 갈린다(loanSchedule 직접 호출 금지).
+ok('#G32 ⚠️ 매트릭스 계획은 planOf를 쓴다', /row\[COL_PLAN\] = NUM\(planOf\(it, ctx\.ym\)/.test(LEX));
+ok('#G32b 월 칸도 planOf/actualOf를 쓴다', /const a = actualOf\(it, k\);[\s\S]{0,80}?const p = planOf\(it, k\);/.test(LEX));
+ok('#G32c ⚠️ 미입력 판정은 expectsActual', /else if \(expectsActual\(it, k\)\)/.test(LEX));
+// ⚠️ comparable만 보면 zero-base(rate=null)가 통과해 0.00%가 확정 표기된다.
+ok('#G33 ⚠️ 전월대비는 rate !== null까지 본다', /cmp\.comparable && cmp\.rate !== null/.test(LEX));
+// ⚠️ 내려받은 파일은 사용자 것이다 — 마스킹하면 쓸모가 없다(기존 엑셀 2종과 같은 규약).
+ok('#G34 hideAmounts를 적용하지 않는다', !/hideAmounts/.test(LEX));
+// ⚠️ 내보내기는 **읽기 동작**이다 — readOnly로 잠그면 앱 탭 새로고침 13초 동안 별도 창에서
+//    버튼이 통째로 사라지는데, 링크가 끊긴 그 순간이 파일로 빼내고 싶은 순간이다.
+{
+  const H = sliceBlock(LP, 'const handleExcel = () => {', '\n  };');
+  ok('#G35 엑셀 핸들러 구간을 찾았다', H.length > 100);
+  ok('#G35b ⚠️ readOnly로 게이팅하지 않는다', !/readOnly/.test(H));
+  ok('#G35c ⚠️ try/catch로 감싼다(창에는 토스트가 없다)', /try \{[\s\S]*catch/.test(H));
+  ok('#G35d 데이터가 없으면 사유를 밝힌다', /doFlash\('내보낼 내용이 없습니다'\)/.test(H));
+}
+ok('#G36 버튼이 핸들러에 배선돼 있다(사용부)', /onClick=\{handleExcel\}/.test(LP));
+ok('#G36b 버튼이 readOnly 조건 안에 있지 않다',
+  !/\{!readOnly && \([\s\S]{0,200}?onClick=\{handleExcel\}/.test(LP));
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:ledger — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

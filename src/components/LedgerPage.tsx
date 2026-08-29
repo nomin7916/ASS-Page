@@ -12,6 +12,7 @@ import {
   LEDGER_BALANCE_COLOR, LEDGER_DIVERGING, LEDGER_EXPENSE_GROUPS,
   LEDGER_PAY_ORDER, LEDGER_DETAIL_OTHER, LEDGER_DETAIL_TOP_N,
 } from '../ledger';
+import { downloadLedgerXlsx } from '../ledgerExcel';
 import {
   MAX_LEDGER_BOOKS, MAX_LEDGER_ITEMS, MAX_LEDGER_CATEGORIES, MAX_LEDGER_CATEGORY_LEN,
   makeLedgerItem, makeLedgerLoan, makeLedgerBook,
@@ -324,6 +325,30 @@ export default function LedgerPage({
   const flashTimer = useRef(null);
 
   useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
+  /**
+   * 엑셀 내보내기.
+   * ⚠️ **`readOnly`로 게이팅하지 않는다** — 내보내기는 읽기 동작이고, 오히려 앱 탭과 링크가
+   *    끊긴 그 순간이 사용자가 데이터를 파일로 빼내고 싶은 순간이다(끊김이 13초 이어지는
+   *    앱 탭 새로고침 중에 버튼이 사라지면 안 된다).
+   * ⚠️ 데이터가 아직 안 왔으면(`gotData` 전) 장부가 비어 있다 — 빈 파일을 조용히 내려받게
+   *    두지 말고 사유를 밝힌다.
+   * ⚠️ try/catch 필수 — 이 화면은 z-1090이고 별도 창에는 App조차 마운트되지 않아
+   *    토스트·ConfirmDialog가 뜨지 않는다. 실패는 **인라인 플래시가 유일한 피드백**이고,
+   *    던지면 창 전체가 ErrorBoundary 오류 박스로 래치돼 복구 경로가 창 닫기뿐이 된다.
+   */
+  const handleExcel = () => {
+    try {
+      if (!book || !Array.isArray(book.items) || book.items.length === 0) {
+        doFlash('내보낼 내용이 없습니다'); return;
+      }
+      if (!ymReady) { doFlash('불러오는 중입니다'); return; }
+      const ok2 = downloadLedgerXlsx({ book, year, month, todayKST: today || '' });
+      doFlash(ok2 ? '엑셀 저장됨' : '엑셀을 만들지 못했습니다');
+    } catch {
+      doFlash('엑셀을 만들지 못했습니다');
+    }
+  };
+
   const doFlash = (msg) => {
     setFlash(msg);
     if (flashTimer.current) clearTimeout(flashTimer.current);
@@ -1066,6 +1091,13 @@ export default function LedgerPage({
           <div className="flex-1" />
           {flash && <span className="text-[10px] text-amber-300">{flash}</span>}
           {readOnly && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 border border-amber-800/60">읽기 전용</span>}
+          {/* ⚠️ readOnly 게이팅 없음 — 내보내기는 읽기 동작이다(위 handleExcel 주석 참조). */}
+          <button
+            className="text-[11px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-40"
+            onClick={handleExcel}
+            disabled={!book || !(book.items || []).length}
+            title={`${year}년 가계부를 엑셀(.xlsx)로 저장 — 시트 3장(월 매트릭스·대출·연간요약)`}
+          >⭳ 엑셀</button>
           {onOpenWindow && variant === 'overlay' && (
             <button className="text-[11px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300" onClick={onOpenWindow} title="별도 창에서 열기">⧉ 새 창</button>
           )}
