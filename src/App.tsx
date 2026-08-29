@@ -50,6 +50,8 @@ import { FX_DEFAULT, FX_MIN_SLOTS, normalizeFxCurrencies, normalizeFxSlotCount }
 import FlowBoard from './components/FlowBoard';
 import { normalizeFlowMaps, flowFingerprint, flowMapsHaveContent } from './flowMap';
 import BacktestPage from './components/BacktestPage';
+import LedgerPage from './components/LedgerPage';
+import { normalizeLedgerBooks, ledgerFingerprint, ledgerBooksHaveContent } from './ledger';
 import CardWinFeed from './components/CardWinFeed';
 import { isCardKey, isCardWindowSupported, cardWindowUrl, cardWindowName, baseKeyOf } from './cardWindow';
 import {
@@ -227,7 +229,7 @@ export default function App() {
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
-  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false, backtestEnabled: false });
+  const [userFeatures, setUserFeatures] = useState<UserFeatures>({ name: '', feature1: false, feature2: false, feature3: false, youtubeEnabled: false, notebookEnabled: false, reportEnabled: false, flowEnabled: false, backtestEnabled: false, ledgerEnabled: false });
   const [showAdminPage, setShowAdminPage] = useState(false);
   const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [showAdminChoiceModal, setShowAdminChoiceModal] = useState(false);
@@ -403,6 +405,12 @@ export default function App() {
   // patchActive가 portfolios 참조를 바꿔 11개 파생 파이프라인이 매 제스처 재실행된다).
   const [showBacktestPage, setShowBacktestPage] = useState(false);
   const [backtestScenarios, setBacktestScenarios] = useState<any[]>([]);
+  // ── 가계부 ──
+  // 장부도 flowMaps·backtestScenarios와 동급의 **앱 레벨 개인 데이터**다(계좌 객체 안에 넣지 말 것).
+  // ⚠️ 포트폴리오와 개념적 의존이 0이므로 '계좌가 하나도 없는 사용자'가 정상 경로다 —
+  //    저장 effect의 조기 반환에 그 예외가 있다(없으면 그 사용자의 가계부가 새로고침마다 사라진다).
+  const [showLedgerPage, setShowLedgerPage] = useState(false);
+  const [ledgerBooks, setLedgerBooks] = useState<any[]>([]);
   // ⚠️ 백테스트용으로 조회한 종가는 **여기에만** 담는다. stockHistoryMap에 병합하면
   //    buildCloseEvalSeries(보유 평가액 재계산)·useAutoConfirmHistory 데이터완비 가드의 권위
   //    소스가 오염돼 보유+백테스트 중복 코드의 과거 평가액이 영구히 틀어진다(WatchlistPopup 불변식).
@@ -896,6 +904,7 @@ export default function App() {
     if (stateData.watchlistGroups) setWatchlistGroups(stateData.watchlistGroups);
     if (stateData.flowMaps) setFlowMaps(normalizeFlowMaps(stateData.flowMaps));
     if (stateData.backtestScenarios) setBacktestScenarios(normalizeBacktestScenarios(stateData.backtestScenarios));
+    if (stateData.ledgerBooks) setLedgerBooks(normalizeLedgerBooks(stateData.ledgerBooks));
     seenAdminNotifIdsRef.current = stateData.seenAdminNotifIds || [];
     setSeenAdminNotifIds(seenAdminNotifIdsRef.current);
   };
@@ -957,6 +966,9 @@ export default function App() {
     //    ('내용이 있는가'). 페이지를 열기만 해도 빈 시나리오가 생길 수 있어 length 기준이면 백업으로
     //    되살릴 길이 영구히 막힌다. useDriveSync의 Drive write와 **같은 함수**를 공유해야 갈리지 않는다.
     setBacktestScenarios(prev => backtestScenariosHaveContent(prev) ? prev : (stateData.backtestScenarios ? normalizeBacktestScenarios(stateData.backtestScenarios) : prev));
+    // ⚠️ 가계부도 같은 sticky 규칙 — 판정은 length가 아니라 ledgerBooksHaveContent('내용이 있는가').
+    //    화면을 열기만 해도 빈 장부가 1권 생기므로 length 기준이면 백업으로 되살릴 길이 영구히 막힌다.
+    setLedgerBooks(prev => ledgerBooksHaveContent(prev) ? prev : (stateData.ledgerBooks ? normalizeLedgerBooks(stateData.ledgerBooks) : prev));
     if (stateData.chartPrefs) {
       if (stateData.chartPrefs.showKospi !== undefined) setShowKospi(stateData.chartPrefs.showKospi);
       if (stateData.chartPrefs.showSp500 !== undefined) setShowSp500(stateData.chartPrefs.showSp500);
@@ -1995,18 +2007,43 @@ export default function App() {
     return { backtestScenarios: next, portfolioUpdatedAt: ts };
   };
 
-  // 종료 커밋 합성 — beforeExitSnapshotRef 슬롯이 하나뿐이라 리밸런싱·흐름도·백테스트 커밋을 여기서 합친다.
+  // ── 가계부 커밋 회수 (흐름도·백테스트와 동일 규약) ──
+  // LedgerPage도 편집을 로컬 사본에 모으고 idle(2.5초)·언마운트·pagehide에만 승격한다.
+  // ⚠️ ledgerFlushRef는 LedgerPage가 마운트 시 등록하고 **언마운트 시 null로 되돌린다**.
+  const ledgerFlushRef = useRef<(() => any[] | null) | null>(null);
+  const flushLedgerSnapshot = () => {
+    let next: any[] | null = null;
+    try { next = ledgerFlushRef.current?.() ?? null; } catch { next = null; }
+    if (!next) return null;
+    setLedgerBooks(next);
+    return next;
+  };
+
+  // ⚠️ 미저장 편집이 없으면 반드시 null — 항상 truthy를 반환하면 alt-tab마다 4파일 write가 강제된다.
+  const ledgerExitCommitRef = useRef<(() => any) | null>(null);
+  ledgerExitCommitRef.current = () => {
+    const next = flushLedgerSnapshot();
+    if (!next) return null;
+    const ts = Date.now();
+    portfolioUpdatedAtRef.current = ts;
+    // saveStateRef 동기 갱신 — 언로드 중에는 리렌더가 없어 setLedgerBooks만으로는 payload에 안 실린다.
+    saveStateRef.current = { ...saveStateRef.current, ledgerBooks: next, portfolioUpdatedAt: ts };
+    return { ledgerBooks: next, portfolioUpdatedAt: ts };
+  };
+
+  // 종료 커밋 합성 — 슬롯이 하나뿐이라 리밸런싱·흐름도·백테스트·가계부 커밋을 여기서 합친다.
   // ⚠️ 반환 키(calendarMemos / flowMaps / backtestScenarios)가 겹치지 않아 병합 순서는 무관하고, 셋 모두
   //    portfolioUpdatedAtRef와 saveStateRef를 동기 갱신하므로 뒤 커밋이 앞 커밋을 지우지 않는다.
   // ⚠️ 전부 없으면 반드시 **null**을 반환할 것 — 항상 truthy를 반환하면 alt-tab·탭 닫기마다
   //    STATE+VERSION+STOCK+MARKET 4파일 write가 무조건 강제된다(커밋할 게 없다는 신호가 소실).
   exitCommitRef.current = () => {
-    let r: any = null, f: any = null, b: any = null;
+    let r: any = null, f: any = null, b: any = null, lg: any = null;
     try { r = rebalExitCommitRef.current?.() ?? null; } catch { r = null; }
     try { f = flowExitCommitRef.current?.() ?? null; } catch { f = null; }
     try { b = backtestExitCommitRef.current?.() ?? null; } catch { b = null; }
-    if (!r && !f && !b) return null;
-    return { ...(r || {}), ...(f || {}), ...(b || {}) };
+    try { lg = ledgerExitCommitRef.current?.() ?? null; } catch { lg = null; }
+    if (!r && !f && !b && !lg) return null;
+    return { ...(r || {}), ...(f || {}), ...(b || {}), ...(lg || {}) };
   };
 
   // 메모 달력 날짜 칸의 자산 스냅샷(총자산/일간/누적) 클릭 → 그날의 '계좌별 현황'.
@@ -2089,9 +2126,13 @@ export default function App() {
       liveUs10y: marketIndicators?.us10y,
       // ⚠️ payload와 deps **양쪽**에 넣을 것 — 한쪽만 하면 새 창이 토글 변경을 놓친다.
       hideAmounts,
+      // 가계부 BUDGET 칩 — ⚠️ 지문 게이팅된 calendar:accounts가 아니라 여기에 싣는다.
+      //    accounts는 `portfolios` 지문으로만 게이팅돼서, 장부만 바뀐 편집은 새 창에 영영
+      //    반영되지 않는다(계좌를 건드릴 때까지). live는 원본 deps라 그 함정이 없다.
+      ledgerBooks,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, hideAmounts, calWinNonce]);
+  }, [calendarMemos, intMonthlyHistory, intTotals.returnRate, indicatorHistoryMap, marketIndicators, hideAmounts, ledgerBooks, calWinNonce]);
 
   // 새 창의 '계좌별 현황' 패드가 열려 있는 동안 소스 데이터가 바뀌면 **다시 밀어 준다**(구독).
   // ⚠️ 1회성 스냅샷으로 되돌리지 말 것 — 같은 패드 상단의 지표 밴드(metricsByDate)는 calendar:live로
@@ -2135,6 +2176,14 @@ export default function App() {
       } else if (d.type === 'calendar:notes') {
         if (!d.portfolioId || !Array.isArray(d.notes)) return;
         updateInvestmentNotesFor(d.portfolioId, d.notes);
+      } else if (d.type === 'calendar:openLedger') {
+        // 별도 달력 창의 '가계부 열기' 위임. ⚠️ 그 창이 직접 window.open을 부르면 새 창의
+        //    opener가 **달력 창**이 되어 가계부 창이 앱 탭과 영원히 연결되지 못하고 읽기
+        //    전용으로 굳는다 → 앱 탭이 연다.
+        // ⚠️ 권한 재확인 필수 — 창은 URL로 열리므로 조작 가능하다는 전제(fail-closed).
+        // 알려진 한계: 이 탭에는 사용자 제스처가 없어 브라우저가 팝업을 막을 수 있다.
+        //    그때는 openLedgerWindow가 인앱 폴백으로 떨어져 앱 탭에 가계부가 열린다.
+        if (isAdminUser || userFeatures.ledgerEnabled) openLedgerWindow();
       } else if (d.type === 'calendar:wantDetail') {
         // 새 창의 자산 스냅샷 클릭 → 그 날짜의 '계좌별 현황' **구독 등록**. date가 null이면 패드가
         // 닫힌 것이라 구독을 해제하고 응답하지 않는다(열려 있는 동안은 위 effect가 재전송한다).
@@ -2486,6 +2535,14 @@ export default function App() {
   const btWinRef = useRef(null);
   const [btWinNonce, setBtWinNonce] = useState(0);   // ready/재입양 시 전체 재전송 트리거
   const [btWinBlocked, setBtWinBlocked] = useState(false);
+  // ── 가계부 별도 창 ──
+  // ⚠️ 가계부는 포트폴리오 데이터가 전혀 필요 없는 자체 완결 기능이라 **채널이 하나뿐**이다
+  //    (`ledger:live`). 무거운 원자재 채널(`ledger:data`)을 따로 두면 두 채널이 각각
+  //    `markGotData`를 세우게 되고, 장부가 도착하기 전에 쓰기가 열려 저장된 장부 전체가
+  //    빈 배열로 덮이는 경로가 생긴다(CalendarWindow가 실제로 그 함정을 겪었다).
+  const ledgerWinRef = useRef(null);
+  const [ledgerWinNonce, setLedgerWinNonce] = useState(0);   // ready/재입양 시 전체 재전송 트리거
+  const [ledgerWinBlocked, setLedgerWinBlocked] = useState(false);
   // ⚠️ 아래 세 memo는 **백테스트를 실제로 연 뒤에만** 계산한다. deps에 portfolios·stockHistoryMap이
   //    있어 시세 갱신(수십 초 간격)마다 전 계좌 스냅샷과 전 종목 일봉을 훑는데, 백테스트를 쓰지
   //    않는 사용자가 그 비용을 치를 이유가 없다(FlowBoard를 flowAccess 안에 둔 것과 같은 근거).
@@ -2658,6 +2715,44 @@ export default function App() {
     return () => window.removeEventListener('message', onMsg);
   }, [handleBacktestFetch]);
 
+  // ── 가계부 브릿지 ──
+  const postToLedgerWin = (msg) => {
+    const w = ledgerWinRef.current;
+    if (!w || w.closed) return;
+    try { w.postMessage(msg, window.location.origin); } catch {}
+  };
+  // ⚠️ 단일 채널. 장부는 사용자 입력만 담긴 가벼운 데이터라 지문 게이팅이 필요 없다
+  //    (portfolios처럼 시세 갱신마다 새 배열이 되지 않는다).
+  // ⚠️ `today`는 앱이 만들어 보낸다 — 창 안에서 new Date()로 만들면 KST 규약이 갈린다.
+  useEffect(() => {
+    if (ledgerWinNonce === 0) return;
+    postToLedgerWin({ type: 'ledger:live', books: ledgerBooks, hideAmounts, today: getTodayKST() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ledgerBooks, hideAmounts, ledgerWinNonce]);
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string' || !d.type.startsWith('ledger:')) return;
+      if (d.type === 'ledger:ping') {
+        // `d.need`가 초기 전송의 유일한 트리거(window.open 직후 보내면 about:blank라 버려진다).
+        // 이 탭이 새로고침되면 ledgerWinRef가 비므로 살아 있는 창의 핑에서 **재입양**한다.
+        if (d.need || ledgerWinRef.current !== e.source) { ledgerWinRef.current = e.source; setLedgerWinNonce(n => n + 1); }
+        try { e.source?.postMessage({ type: 'ledger:pong' }, window.location.origin); } catch {}
+        return;
+      }
+      if (!ledgerWinRef.current || e.source !== ledgerWinRef.current) return;   // 쓰기는 입양된 창만
+      if (d.type === 'ledger:books') {
+        if (!Array.isArray(d.books)) return;
+        // ⚠️ 창이 보낸 것을 그대로 채택하지 말 것 — 반드시 정규화한다.
+        setLedgerBooks(normalizeLedgerBooks(d.books));
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
   // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다.
   // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다(impersonation 탭과 정반대 규칙).
   // ⚠️ **features(3번째 인자)를 넣지 말 것** — width/height를 주면 크롬이 이 창을 '팝업'으로 열어
@@ -2683,6 +2778,29 @@ export default function App() {
     setShowBacktestPage(false);
   };
 
+  // ── 가계부 별도 창 ──
+  // ⚠️ `noopener` 금지 — opener 브릿지가 이 기능의 전부다(impersonation 탭과 **정반대** 규칙).
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다.
+  // ⚠️ features(width/height) 인자를 주면 크롬이 '팝업'으로 열어 주소창·확장 아이콘이 통째로
+  //    사라진다 → 백테스트와 같이 생략해 일반 탭으로 연다.
+  const openLedgerWindow = () => {
+    const existing = ledgerWinRef.current;
+    if (existing && !existing.closed) { try { existing.focus(); } catch {} setShowLedgerPage(false); return; }
+    const w = window.open('/?ledgerWindow=1', 'ass-ledger');
+    if (!w) {
+      // 팝업 차단 → 인앱 페이지로 폴백(최악의 경우가 기존 동작이 되게 한다)
+      setLedgerWinBlocked(true);
+      setShowLedgerPage(true);
+      return;
+    }
+    ledgerWinRef.current = w;
+    // 이름이 같은 탭이 이미 있으면 window.open이 그 탭을 재사용하는데 브라우저가 항상 앞으로
+    // 가져오지는 않는다 → 버튼을 눌렀는데 아무 일도 안 일어난 것처럼 보이지 않게 focus를 보강한다.
+    try { w.focus(); } catch {}
+    setLedgerWinBlocked(false);
+    setShowLedgerPage(false);
+  };
+
   const handleSave = () => {
     const currentPortfolios = buildPortfoliosState();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
@@ -2694,12 +2812,13 @@ export default function App() {
     const nextMemos = flushRebalTargetSnapshot();
     const nextFlow = flushFlowSnapshot(); // 흐름도 미승격 편집 커밋 → payload에 명시 주입
     const nextBt = flushBacktestSnapshot(); // 백테스트 미승격 편집 커밋 → payload에 명시 주입
+    const nextLedger = flushLedgerSnapshot(); // 가계부 미승격 편집 커밋 → payload에 명시 주입
     const memoTs = Date.now();
-    if (nextMemos || nextFlow || nextBt) {
+    if (nextMemos || nextFlow || nextBt || nextLedger) {
       portfolioUpdatedAtRef.current = memoTs;
       lastDriveSavedPortfolioUpdatedAtRef.current = 0;
     }
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), ...((nextMemos || nextFlow || nextBt) ? { portfolioUpdatedAt: memoTs } : {}), portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), ...(nextLedger ? { ledgerBooks: nextLedger } : {}), ...((nextMemos || nextFlow || nextBt || nextLedger) ? { portfolioUpdatedAt: memoTs } : {}), portfolios: currentPortfolios, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const now = new Date();
     const yy = String(now.getFullYear()).slice(2);
@@ -2905,6 +3024,7 @@ export default function App() {
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
     const nextBt = flushBacktestSnapshot();       // 백테스트 미승격 편집 커밋 → 아래 payload에 명시 주입
+    const nextLedger = flushLedgerSnapshot();     // 가계부 미승격 편집 커밋 → 아래 payload에 명시 주입
     // portfolioUpdatedAt이 없으면 saveAllToDrive의 guard(0 > 0)가 항상 false → STATE 저장 안됨
     // 수동 저장은 항상 강제 저장되어야 하므로 새 타임스탬프 생성 후 guard 초기화
     const newUpdatedAt = Date.now();
@@ -2913,7 +3033,7 @@ export default function App() {
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·watchlistGroups·seenAdminNotifIds 등 신규 필드가 Drive STATE·수동 백업에서
     // 유실된다(과거 '저장' 버튼이 메모 달력을 지우던 원인 — handleAppClose와 동일 패턴으로 보장).
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), ...(nextLedger ? { ledgerBooks: nextLedger } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     if (driveTokenRef.current) {
       saveAllToDrive(state, 'manual'); // 수동 저장 → 타임스탬프 백업 포함
     } else {
@@ -2926,11 +3046,12 @@ export default function App() {
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
     const nextBt = flushBacktestSnapshot();       // 백테스트 미승격 편집 커밋 → 아래 payload에 명시 주입
+    const nextLedger = flushLedgerSnapshot();     // 가계부 미승격 편집 커밋 → 아래 payload에 명시 주입
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 — 부분 state를 손으로 재구성하면
     // calendarMemos·seenAdminNotifIds·intDashCompStocks 등 신규/추가 필드가 누락되어
     // PC 백업 파일에서 유실된다(handleAppClose와 동일 패턴으로 메인 저장 필드 보장).
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), ...(nextLedger ? { ledgerBooks: nextLedger } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2946,11 +3067,12 @@ export default function App() {
     const nextMemos = flushRebalTargetSnapshot(); // 목표비중 기록 커밋 → 아래 payload에 명시 주입
     const nextFlow = flushFlowSnapshot();         // 흐름도 미승격 편집 커밋 → 아래 payload에 명시 주입
     const nextBt = flushBacktestSnapshot();       // 백테스트 미승격 편집 커밋 → 아래 payload에 명시 주입
+    const nextLedger = flushLedgerSnapshot();     // 가계부 미승격 편집 커밋 → 아래 payload에 명시 주입
     const newUpdatedAt = Date.now();
     // 정식 전체 state 스냅샷(saveStateRef.current) 기반 저장 — 부분 state를 손으로 재구성하면
     // chartPrefs.intDashCompStocks(통합 대시보드 비교종목)·seenAdminNotifIds 등이 누락되어
     // "앱 닫기"로 종료할 때마다 비교종목이 초기화되던 버그 방지 (메인 저장과 동일 필드 보장)
-    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
+    const state = { ...saveStateRef.current, ...(nextMemos ? { calendarMemos: nextMemos } : {}), ...(nextFlow ? { flowMaps: nextFlow } : {}), ...(nextBt ? { backtestScenarios: nextBt } : {}), ...(nextLedger ? { ledgerBooks: nextLedger } : {}), portfolios: currentPortfolios, portfolioUpdatedAt: newUpdatedAt };
     const minWait = new Promise<void>(r => setTimeout(r, 2000));
     if (driveTokenRef.current) {
       const token = driveTokenRef.current;
@@ -3236,7 +3358,10 @@ export default function App() {
   }, [notificationLog]);
 
   useEffect(() => {
-    if (portfolios.length === 0) return;
+    // ⚠️ 가계부는 포트폴리오와 개념적 의존이 **0**이다 — 계좌를 아직 만들지 않은 사용자가
+    //    정상 경로이고, 그 조기 반환을 그대로 두면 그 사용자의 장부는 어떤 경로로도 저장되지
+    //    않아 새로고침마다 통째로 사라진다. 계좌가 없어도 장부에 내용이 있으면 저장을 돌린다.
+    if (portfolios.length === 0 && !ledgerBooksHaveContent(ledgerBooks)) return;
     if (!authUser?.email) return;
     const currentPortfolios = portfolios;
     // 계좌/종목 구조 + history 건수 비교
@@ -3344,6 +3469,7 @@ export default function App() {
       // ⚠️ 백테스트 시나리오 지문 — 없으면 portfolioUpdatedAt이 안 올라 STATE 저장이 통째로 스킵된다
       //    (flowFingerprint와 동일 버그 클래스). backtestFingerprint도 절대 던지지 않는다.
       backtestFingerprint(backtestScenarios),
+      ledgerFingerprint(ledgerBooks),
       compStocks.map(c => `${c.code}:${c.active ? 1 : 0}`).join(','),
       // 바인더 인덱스/섹션 펼침 상태 — 사용자 토글 시에만 변경(시세 갱신 무관)
       // → 변경 시 portfolioUpdatedAt 상승시켜 Drive STATE 저장 트리거 (앱 재시작 시 상태 유지)
@@ -3367,7 +3493,7 @@ export default function App() {
       accountChartStatesRef.current[activePortfolioId] = stateToSave;
     }
     const intDashCompStocksToSave = (showIntegratedDashboard ? compStocks : intDashCompStocksRef.current).map(({ loading, ...rest }) => rest);
-    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
+    const state = { portfolios: currentPortfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, adminAccessAllowed, chartPrefs: { showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, accountChartStates: accountChartStatesRef.current, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, intDashCompStocks: intDashCompStocksToSave }, intHistory, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks, seenAdminNotifIds, updatedAt: Date.now(), portfolioUpdatedAt: portfolioUpdatedAtRef.current, chartPrefsUpdatedAt: chartPrefsUpdatedAtRef.current };
     saveStateRef.current = state;
     if (!isInitialLoad.current && driveTokenRef.current) {
       const chartPeriodChanged =
@@ -3382,7 +3508,7 @@ export default function App() {
         saveAllToDrive(state);
       }, chartPeriodChanged ? 50 : 800);
     }
-  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios]);
+  }, [portfolios, activePortfolioId, customLinks, overseasLinks, dividendLinks, stockHistoryMap, marketIndices, marketIndicators, indicatorHistoryMap, compStocks, showKospi, showSp500, showNasdaq, showTotalEval, showReturnRate, intHistory, showMarketPanel, hideAmounts, showIndicatorsInChart, goldIndicators, goldIndicatorColors, indicatorScales, backtestColor, showBacktest, sectionCollapsedMap, intSec, intChartPeriod, intDateRange, intAppliedRange, chartPeriod, dateRange, appliedRange, seenAdminNotifIds, matongClosedIds, rebalanceSortConfigMap, intHiddenDivMonths, intHistPeriod, acctHistPeriod, fxCurrencies, fxSlotCount, calendarMemos, watchlistGroups, flowMaps, backtestScenarios, ledgerBooks]);
 
   // ── 자산검증 P1: 구성 변경 트리거 보유 스냅샷 기록 ──
   // 스냅샷 없으면 baseline(기준일) 부트스트랩, 이후 구성 변경 시에만 auto 스냅샷 추가.
@@ -3849,6 +3975,11 @@ export default function App() {
   const flowAccess = isAdminUser || userFeatures.flowEnabled;
   // 백테스트 접근 권한 — flowAccess와 완전히 같은 근거(관리자 본인이 영구 접근 불가가 되지 않게).
   const backtestAccess = isAdminUser || userFeatures.backtestEnabled;
+  // 가계부 접근 권한 — flowAccess/backtestAccess와 완전히 같은 근거.
+  // ⚠️ effectiveUserFeatures(feature1/2/3만 강제하는 별개 경로)에 얹지 말 것 —
+  //    그러면 관리자 본인이 영구 접근 불가가 된다(AdminPage 토글은 `!isAdminUser` 조건이라
+  //    관리자 행에 렌더조차 되지 않는다).
+  const ledgerAccess = isAdminUser || userFeatures.ledgerEnabled;
   const gatedNotebookLinks = notebookAccess ? notebookLinks : [];
   const gatedReportUrl = reportAccess ? reportUrl : '';
   // 옛 벨 이력에 남은 materialChannel:'report' 태그는 빈 배열 + null 채널로 떨어져 평문 표시된다(클릭 불가).
@@ -3967,6 +4098,8 @@ export default function App() {
           onOpenFlow={openFlowWindow}
           canAccessBacktest={backtestAccess}
           onOpenBacktest={openBacktestWindow}
+          canAccessLedger={ledgerAccess}
+          onOpenLedger={openLedgerWindow}
           showCalculator={showCalculator}
           onToggleCalculator={() => setShowCalculator(v => !v)}
           youtubeUrl={youtubeAccess ? youtubeUrl : ''}
@@ -4599,6 +4732,10 @@ export default function App() {
         // 날짜 칸 자산 스냅샷 클릭 → 계좌별 현황. 인앱은 **동기 재조회**라 브릿지 prop이 필요 없다.
         buildHistDetail={buildHistDetail}
         hideAmounts={hideAmounts}
+        // 💰 가계부 BUDGET 칩 — 라이브 파생(calendarMemos에 복사하지 않는다).
+        // ⚠️ 권한이 없으면 빈 배열을 넘겨 칩 자체가 렌더되지 않게 한다.
+        ledgerBooks={ledgerAccess ? ledgerBooks : []}
+        onOpenLedger={ledgerAccess ? openLedgerWindow : null}
       />
       </ErrorBoundary>
       {/* 자금 흐름도 — App 최상위 형제(계좌 탭/뷰 전환에도 언마운트 안 됨).
@@ -4650,6 +4787,29 @@ export default function App() {
             // 관리자 impersonation 중에는 읽기 전용 — 흐름도와 같은 근거(undo 없음 + sticky 데이터).
             readOnly={!!adminViewingAs}
             notice={btWinBlocked ? '팝업이 차단돼 별도 탭을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''}
+          />
+        </ErrorBoundary>
+      )}
+      {/* 가계부 — 기본은 별도 브라우저 창이고, 이 인앱 렌더는 **팝업 차단 시 폴백**이다.
+          ⚠️ 게이팅 밖에 두지 말 것: 접근 권한이 없는 사용자가 파생 memo 구독 비용을 그대로 치른다.
+          ⚠️ ErrorBoundary label 지정 필수 — App 최상위 형제라 렌더 예외가 루트까지 올라가면
+             앱 화면 전체가 오류 페이지로 대체된다(FlowBoard·BacktestPage와 동일 2차 방어). */}
+      {ledgerAccess && showLedgerPage && (
+        <ErrorBoundary label="가계부">
+          <LedgerPage
+            open
+            variant="overlay"
+            onClose={() => setShowLedgerPage(false)}
+            books={ledgerBooks}
+            onUpdateBooks={setLedgerBooks}
+            flushRef={ledgerFlushRef}
+            onOpenWindow={openLedgerWindow}
+            hideAmounts={hideAmounts}
+            today={getTodayKST()}
+            // 관리자 impersonation 중에는 읽기 전용 — 흐름도·백테스트와 같은 근거
+            // (undo 없음 + 백업 복원으로도 되돌릴 수 없는 sticky 데이터라 무통지 편집 금지).
+            readOnly={!!adminViewingAs}
+            notice={ledgerWinBlocked ? '팝업이 차단돼 별도 탭을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''}
           />
         </ErrorBoundary>
       )}

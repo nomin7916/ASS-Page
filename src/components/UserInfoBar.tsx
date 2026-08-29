@@ -24,6 +24,19 @@ const BacktestIcon = ({ size = 14 }) => (
     <path d="M7 15l4-5 3 3 5-7" />
   </svg>
 );
+
+// 가계부 아이콘 — 인라인 SVG(장부 + 원화 기호). FlowIcon·BacktestIcon과 같은 이유로
+// lucide 신규 아이콘 금지: 0.577.0 고정 + package-lock.json 부재라 실재 여부를 확인할 수 없고,
+// 없으면 undefined 컴포넌트 렌더로 이 상단바가 던지는데 UserInfoBar는 ErrorBoundary 격리 밖이라
+// 앱 화면 전체가 오류 페이지가 된다.
+const LedgerIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 4a2 2 0 0 1 2-2h12a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2z" />
+    <path d="M4 18h15" />
+    <path d="M9 8h6M9 11h6M11 8v6" />
+  </svg>
+);
 import { ADMIN_EMAIL } from '../config';
 import HeaderMarketChips from './HeaderMarketChips';
 
@@ -76,6 +89,9 @@ export default function UserInfoBar({
   // 백테스트 — 기본값 false = fail-closed (자금 흐름도 바로 오른쪽에 배치)
   canAccessBacktest = false,
   onOpenBacktest,
+  // 가계부 — 기본값 false = fail-closed (백테스트 바로 오른쪽에 배치)
+  canAccessLedger = false,
+  onOpenLedger,
   youtubeUrl,
   youtubeEnabled = false,
   notebookLinks = [],
@@ -299,6 +315,17 @@ export default function UserInfoBar({
             className="text-gray-500 hover:text-emerald-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
           >
             <BacktestIcon size={14} />
+          </button>
+        )}
+        {/* 가계부 — 백테스트 **바로 오른쪽**. 관리자 또는 ledgerEnabled만 노출.
+            ⚠️ 기본값 false = fail-closed(prop 미전달 시 아이콘 미렌더) — canAccessFlow와 동일 패턴. */}
+        {canAccessLedger && (
+          <button
+            onClick={onOpenLedger}
+            title="가계부 (새 창)"
+            className="text-gray-500 hover:text-amber-300 transition-colors p-1.5 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 flex items-center justify-center"
+          >
+            <LedgerIcon size={14} />
           </button>
         )}
         {onToggleCalculator && (

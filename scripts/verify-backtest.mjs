@@ -4964,8 +4964,11 @@ const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\
     /backtestFingerprint\(\s*backtestScenarios\s*\)/.test(app));
   ok('#61 App.tsx — STATE 저장 payload 리터럴에 backtestScenarios 포함',
     /const state = \{[^\n]*backtestScenarios[^\n]*\}/.test(app));
+  // ⚠️ backtestScenarios를 deps 배열의 **마지막 항목**으로 고정하지 말 것 — 뒤에 새 항목
+  //    (ledgerBooks 등)이 추가되면 계약은 멀쩡한데 이 단언만 깨진다. 존재 + 인접만 본다
+  //    (verify-flow.mjs #32와 같은 규약).
   ok('#62 App.tsx — 저장 effect deps에 backtestScenarios 포함',
-    /\}, \[portfolios,[^\]]*backtestScenarios\]/.test(app));
+    /\}, \[portfolios,[^\]]*flowMaps\s*,\s*backtestScenarios\s*[,\]]/.test(app));
   ok('#63 App.tsx — applyStateData가 normalizeBacktestScenarios로 로드',
     /stateData\.backtestScenarios[\s\S]{0,120}normalizeBacktestScenarios/.test(app));
   ok('#64 ⚠️ App.tsx applyBackupData sticky — length가 아니라 backtestScenariosHaveContent로 판정',

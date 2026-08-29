@@ -21,6 +21,7 @@ interface ApprovedUser {
   reportEnabled?: boolean; // J열
   flowEnabled?: boolean; // K열 — 자금 흐름도
   backtestEnabled?: boolean; // L열 — 백테스트
+  ledgerEnabled?: boolean; // M열 — 가계부
 }
 
 interface SentNotification {
@@ -197,7 +198,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
   };
 
   // 기능 설정 상태
-  const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트']);
+  const [featureLabels, setFeatureLabels] = useState(['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트', '가계부']);
   // 기능 토글 실패 사유(사용자 행별). ⚠️ notify를 쓰지 않는다 — AdminPage는 early-return 페이지라
   // ConfirmDialog·알림 벨이 언마운트 상태이고 notify prop도 받지 않는다(nbUploadError 패턴과 동일).
   const [featureToggleError, setFeatureToggleError] = useState('');
@@ -769,6 +770,7 @@ export default function AdminPage({ adminEmail, onClose, onViewUser, onOpenPorta
                   { feat: 'reportEnabled',  label: featureLabels[5], val: !!u.reportEnabled,  onCls: 'text-teal-300 border-teal-700/60 bg-teal-900/40',      offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                   { feat: 'flowEnabled',    label: featureLabels[6], val: !!u.flowEnabled,    onCls: 'text-indigo-300 border-indigo-700/60 bg-indigo-900/40',offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                   { feat: 'backtestEnabled',label: featureLabels[7], val: !!u.backtestEnabled,onCls: 'text-emerald-300 border-emerald-700/60 bg-emerald-900/40',offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
+                  { feat: 'ledgerEnabled',  label: featureLabels[8], val: !!u.ledgerEnabled,  onCls: 'text-amber-300 border-amber-700/60 bg-amber-900/40',    offCls: 'text-gray-600 border-gray-700/30 bg-gray-800/40' },
                 ];
                 return (
                   <li key={i} className="bg-gray-800 rounded-lg px-3 py-2">

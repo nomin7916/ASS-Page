@@ -9,6 +9,7 @@ import {
 } from '../driveStorage';
 import { flowMapsHaveContent } from '../flowMap';
 import { backtestScenariosHaveContent } from '../backtest';
+import { ledgerBooksHaveContent } from '../ledger';
 
 function _stripStateForSave(stateData: any) {
   const { stockHistoryMap: _s, marketIndices: _m, marketIndicators: _mi, indicatorHistoryMap: _ih, ...core } = stateData;
@@ -33,11 +34,17 @@ function _preserveStickyPersonalData(stateCore: any, current: any) {
   //    App.tsx applyBackupData와 **같은 함수**를 공유해야 in-memory와 Drive write가 갈리지 않는다.
   const curBt = current?.backtestScenarios;
   const keepBt = backtestScenariosHaveContent(curBt);
+  // ⚠️ 가계부도 같은 이유로 '내용이 있는가'로 판정한다(length 금지) — 화면을 열기만 해도 빈 장부가
+  //    1권 생기므로 length 기준이면 백업 복원 경로가 영구히 막힌다. App.tsx applyBackupData와
+  //    **같은 함수**를 공유해야 in-memory와 Drive write가 갈리지 않는다.
+  const curLedger = current?.ledgerBooks;
+  const keepLedger = ledgerBooksHaveContent(curLedger);
   return {
     calendarMemos: keepMemos ? curMemos : (stateCore.calendarMemos ?? curMemos),
     watchlistGroups: keepWatch ? curWatch : (stateCore.watchlistGroups ?? curWatch),
     flowMaps: keepFlow ? curFlow : (stateCore.flowMaps ?? curFlow),
     backtestScenarios: keepBt ? curBt : (stateCore.backtestScenarios ?? curBt),
+    ledgerBooks: keepLedger ? curLedger : (stateCore.ledgerBooks ?? curLedger),
   };
 }
 import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';

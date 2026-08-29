@@ -19,8 +19,9 @@
 //    I(8): notebookEnabled — 학습자료 표시
 //    J(9): reportEnabled   — 시장동향 리포트 표시
 //    K(10): flowEnabled    — 자금 흐름도 표시
-//    L(11): backtestEnabled — 백테스트 표시  ★신규
-//  ※ E~L 값은 'ON' / 'OFF' 또는 체크박스(TRUE/FALSE) 모두 인식. 비어 있으면 OFF.
+//    L(11): backtestEnabled — 백테스트 표시
+//    M(12): ledgerEnabled   — 가계부 표시  ★신규
+//  ※ E~M 값은 'ON' / 'OFF' 또는 체크박스(TRUE/FALSE) 모두 인식. 비어 있으면 OFF.
 //
 //  [settings 시트: A=key  B=value]
 //    youtubeUrl / notebookLinks / reportLinks / youtubeUrlHistory
@@ -112,6 +113,7 @@ function handleCheckApproval(email) {
         reportEnabled:   parseBool(row[9]),
         flowEnabled:     parseBool(row[10]),
         backtestEnabled: parseBool(row[11]),
+        ledgerEnabled:   parseBool(row[12]),
       });
     }
     return jsonResponse({ status: 'not_approved' });
@@ -142,6 +144,7 @@ function handleListUsers() {
         reportEnabled:   parseBool(row[9]),
         flowEnabled:     parseBool(row[10]),
         backtestEnabled: parseBool(row[11]),
+        ledgerEnabled:   parseBool(row[12]),
       });
     }
     return jsonResponse({ users });
@@ -174,15 +177,15 @@ function handleGetSettings() {
 function handleGetFeatureLabels() {
   try {
     const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
-    const fallbacks = ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트'];
+    const fallbacks = ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트', '가계부'];
     if (!sheet) return jsonResponse({ labels: fallbacks });
-    const headers = sheet.getRange('E1:L1').getValues()[0];
+    const headers = sheet.getRange('E1:M1').getValues()[0];
     const labels = headers.map(function(h, i) {
       return extractLabel(h, fallbacks[i]);
     });
     return jsonResponse({ labels: labels });
   } catch (err) {
-    return jsonResponse({ labels: ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트'], error: err.toString() });
+    return jsonResponse({ labels: ['기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트', '가계부'], error: err.toString() });
   }
 }
 
@@ -236,8 +239,8 @@ function handleAddUser(email, name) {
       }
     }
     const today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
-    // A~K (11열): reset, email, name, registeredAt, feature1~3, youtube, notebook, report, flow
-    sheet.appendRow(['', normalEmail, name || '', today, 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF']);
+    // A~M (13열): reset, email, name, registeredAt, feature1~3, youtube, notebook, report, flow, backtest, ledger
+    sheet.appendRow(['', normalEmail, name || '', today, 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF']);
     return jsonResponse({ success: true });
   } catch (err) {
     return jsonResponse({ success: false, error: err.toString() });
@@ -306,7 +309,7 @@ function handleSetSettings(key, value) {
 
 function handleSetUserFeature(email, feature, value) {
   // 0-indexed 열: E=4, F=5, G=6, H=7, I=8, J=9, K=10
-  const colMap = { feature1: 4, feature2: 5, feature3: 6, youtubeEnabled: 7, notebookEnabled: 8, reportEnabled: 9, flowEnabled: 10, backtestEnabled: 11 };
+  const colMap = { feature1: 4, feature2: 5, feature3: 6, youtubeEnabled: 7, notebookEnabled: 8, reportEnabled: 9, flowEnabled: 10, backtestEnabled: 11, ledgerEnabled: 12 };
   if (!colMap.hasOwnProperty(feature)) {
     return jsonResponse({ success: false, error: 'invalid feature: ' + feature });
   }
@@ -402,20 +405,22 @@ function setupSheet() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
-    // 신규 시트만 전체 헤더 작성. 기존 시트의 커스텀 헤더(E~K)는 절대 덮어쓰지 않음.
+    // 신규 시트만 전체 헤더 작성. 기존 시트의 커스텀 헤더(E~M)는 절대 덮어쓰지 않음.
     sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(['RESET', 'email', 'name', 'registeredAt', '기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트']);
+    sheet.appendRow(['RESET', 'email', 'name', 'registeredAt', '기능1', '기능2', '기능3', '유튜브', '학습자료', '시장리포트', '자금흐름도', '백테스트', '가계부']);
   } else {
-    // 기존 시트: 비어 있는 K1·L1에만 헤더 추가 (E~K 커스텀 라벨 보존 — 비파괴 규약)
+    // 기존 시트: 비어 있는 K1·L1·M1에만 헤더 추가 (E~M 커스텀 라벨 보존 — 비파괴 규약)
     var j1 = sheet.getRange('J1');
     if (!String(j1.getValue() || '').trim()) j1.setValue('시장리포트');
     var k1 = sheet.getRange('K1');
     if (!String(k1.getValue() || '').trim()) k1.setValue('자금흐름도');
     var l1 = sheet.getRange('L1');
     if (!String(l1.getValue() || '').trim()) l1.setValue('백테스트');
+    var m1 = sheet.getRange('M1');
+    if (!String(m1.getValue() || '').trim()) m1.setValue('가계부');
   }
-  // E2:L100 ON/OFF 데이터 검증 + 빈 셀 OFF 채우기
-  var range = sheet.getRange('E2:L100');
+  // E2:M100 ON/OFF 데이터 검증 + 빈 셀 OFF 채우기
+  var range = sheet.getRange('E2:M100');
   var rule = SpreadsheetApp.newDataValidation()
     .requireValueInList(['ON', 'OFF'], true)
     .setAllowInvalid(false)
@@ -428,7 +433,7 @@ function setupSheet() {
     }
   }
   range.setValues(values);
-  Logger.log('Sheet setup complete (A~L, E2:L100 validation)');
+  Logger.log('Sheet setup complete (A~M, E2:M100 validation)');
 }
 
 // ──────────────────────────────────────────────────────────

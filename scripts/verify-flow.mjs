@@ -452,6 +452,7 @@ console.log('\n■ JSX 주석 안전성 (빌드 차단 사고 재발 방지)');
   const files = [
     'src/components/FlowBoard.tsx', 'src/components/FlowCanvas.tsx',
     'src/components/FlowInspector.tsx', 'src/components/FlowWindow.tsx',
+    'src/components/LedgerPage.tsx', 'src/components/LedgerWindow.tsx',
     'src/components/AdminPage.tsx', 'src/components/UserInfoBar.tsx',
     'src/components/AccountTabBar.tsx', 'src/App.tsx', 'src/main.tsx',
   ];

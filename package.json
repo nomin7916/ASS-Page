@@ -26,7 +26,8 @@
     "verify:period": "node scripts/verify-period.mjs",
     "verify:card-window": "node scripts/verify-card-window.mjs",
     "verify:chart-sel": "node scripts/verify-chart-selection.mjs",
-    "verify:compare": "node scripts/verify-compare.mjs"
+    "verify:compare": "node scripts/verify-compare.mjs",
+    "verify:ledger": "node scripts/verify-ledger.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

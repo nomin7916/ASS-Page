@@ -24,6 +24,10 @@ import ErrorBoundary from './ErrorBoundary';
 //             calendar:memos {memos}                  — 사용자 메모/목표비중 기록 쓰기
 //             calendar:notes {portfolioId, notes}     — 투자기록 쓰기
 //             calendar:wantDetail {date|null}         — 계좌별 현황 구독 등록/해제(날짜 1개)
+//             calendar:openLedger                     — 가계부 창 열기 **위임**
+//               ⚠️ 이 창에서 직접 window.open을 부르면 새 창의 opener가 **이 창**이 되어,
+//                  가계부 창이 앱 탭과 영원히 연결되지 못하고 읽기 전용으로 굳는다.
+//                  반드시 앱 탭에 위임해 앱이 열게 한다.
 //   앱 → 창 : calendar:accounts {accounts, activePortfolioId, holidays}  — 무거움(지문 변경 시에만)
 //             calendar:live {memos, metricsHistory, ...}                 — 가벼움(시세·기록 갱신 시)
 //             calendar:detail {date, rows, totalEval, ...}               — 구독 중인 날짜의 계좌별 현황
@@ -44,6 +48,9 @@ const EMPTY = {
   liveFx: null,
   liveUs10y: null,
   hideAmounts: false,
+  // ⚠️ 여기에 빠뜨리면 첫 렌더에서 undefined가 흘러 CalendarModal의 기본값에 의존하게 된다
+  //    (기본값이 있어 지금은 무해하지만, 열거형 화이트리스트와 같은 부류의 '조용한 누락'이다).
+  ledgerBooks: [],
 };
 
 export default function CalendarWindow() {
@@ -115,6 +122,7 @@ export default function CalendarWindow() {
           liveFx: d.liveFx ?? null,
           liveUs10y: d.liveUs10y ?? null,
           hideAmounts: !!d.hideAmounts,
+          ledgerBooks: Array.isArray(d.ledgerBooks) ? d.ledgerBooks : [],
         }));
         markGotData();
       } else if (d.type === 'calendar:detail') {
@@ -242,6 +250,10 @@ export default function CalendarWindow() {
       hideAmounts={data.hideAmounts}
       accountDetail={detail}
       onRequestAccountDetail={requestDetail}
+      ledgerBooks={data.ledgerBooks}
+      // ⚠️ 이 창에서 window.open을 직접 부르지 말 것 — opener가 이 창이 되어 가계부 창이
+      //    영구 읽기 전용으로 굳는다. 앱 탭에 위임한다(연결이 끊겼으면 진입점을 없앤다).
+      onOpenLedger={linked ? (() => post({ type: 'calendar:openLedger' })) : null}
     />
     </ErrorBoundary>
   );

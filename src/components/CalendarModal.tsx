@@ -4,6 +4,7 @@ import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, Exter
 import { BG } from '../design';
 import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, EMPTY_HIST_DETAIL } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
+import { ledgerEventsByDate, LEDGER_DIVERGING } from '../ledger';
 
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -43,6 +44,47 @@ const firstLine = (s) => {
 // ⚠️ 목록 스냅샷을 값으로 들고 뒤로 가지 말 것 — note·qty·transfer는 라이브 파생이라 복사본을
 //    들면 원본이 바뀐 뒤 돌아왔을 때 목록만 옛 값으로 갈라진다(모든 패드의 앵커 계약과 동일 근거).
 const pickPad = (dayKey, pickKind) => ({ kind: 'pick', dayKey, pickKind });
+
+// ── 💰 가계부 칩 문구 ──
+// 사용자 요구: "메모달력에는 총지출, 전월대비 증감표시" + "년단위 지출이 있는 날에는 표시".
+// 칩은 한 줄이라 칸에는 요약만 싣고, 자세한 내역은 title 툴팁과 패드가 맡는다.
+// ⚠️ 전월 대비는 **비교 가능할 때만** 숫자를 낸다(momComparable) — 진행 중인 달은 미입력이
+//    많아 순진한 차분이 '−87%' 같은 거짓 신호를 낸다(ledger.ts compareMonths 규약).
+const ledgerAbbrev = (n) => {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '-';
+  const a = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (a >= 100000000) return `${sign}${(a / 100000000).toFixed(1)}억`;
+  if (a >= 10000) return `${sign}${Math.round(a / 10000).toLocaleString()}만`;
+  return `${sign}${Math.round(a).toLocaleString()}`;
+};
+const ledgerChipText = (events, hide) => {
+  if (!Array.isArray(events) || events.length === 0) return '가계부';
+  const touch = events.find((e) => e && e.kind === 'touch');
+  if (touch) {
+    const amt = hide ? '***' : ledgerAbbrev(touch.actualExpense);
+    if (!touch.momComparable || touch.momDelta === null || touch.momDelta === undefined) return `${amt} 정리`;
+    const mark = touch.momDelta > 0 ? '▲' : touch.momDelta < 0 ? '▼' : '·';
+    const pct = (touch.momRate === null || touch.momRate === undefined)
+      ? '' : ` ${Math.abs(touch.momRate * 100).toFixed(1)}%`;
+    return `${amt} ${mark}${pct}`;
+  }
+  const an = events.find((e) => e && e.kind === 'annual');
+  if (an) return `${an.itemName || '연단위'} ${hide ? '***' : ledgerAbbrev(an.amount)}`;
+  return '가계부';
+};
+const ledgerChipTitle = (events, hide) => (Array.isArray(events) ? events : []).map((e) => {
+  if (!e) return '';
+  if (e.kind === 'touch') {
+    const base = `${e.ym} 정리 — 총지출 ${hide ? '***' : ledgerAbbrev(e.actualExpense)}`;
+    const mom = (e.momComparable && e.momDelta !== null && e.momDelta !== undefined)
+      ? ` · 전월 대비 ${hide ? '***' : ledgerAbbrev(e.momDelta)}`
+      : ' · 전월 대비 비교 불가(미입력 건수가 다릅니다)';
+    const miss = e.missing > 0 ? ` · 미입력 ${e.missing}건` : '';
+    return base + mom + miss;
+  }
+  return `연단위 지출 — ${e.itemName || '항목'} ${hide ? '***' : ledgerAbbrev(e.amount)}`;
+}).filter(Boolean).join('\n');
 
 // 포트폴리오 스냅샷 표시용 포맷터 (달력 칸 = 억/만 축약, 메모장 = 풀 숫자).
 const nfmt = (n) => Math.round(n).toLocaleString('en-US');
@@ -99,7 +141,7 @@ const pnlColor = (v) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-blue-400' : 'tex
 //              onRequestAccountDetail(dayKey|null)로 앱 탭에 구독을 등록/해제하고, 앱이 보내 준
 //              accountDetail({date,status,rows,…})을 그대로 렌더한다.
 //   둘 다 없으면 클릭 진입점 자체를 만들지 않는다(hover 강조도 없음 → 죽은 클릭 방지).
-export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null, variant = 'floating', readOnly = false, headerNotice = null, onOpenWindow = null, buildHistDetail = null, accountDetail = null, onRequestAccountDetail = null, hideAmounts = false }) {
+export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null, variant = 'floating', readOnly = false, headerNotice = null, onOpenWindow = null, buildHistDetail = null, accountDetail = null, onRequestAccountDetail = null, hideAmounts = false, ledgerBooks = [], onOpenLedger = null }) {
   const isPage = variant === 'page';
   const todayStr = getTodayKST();
   const tp = todayStr.split('-');
@@ -363,6 +405,37 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     return out;
   }, [portfolios, open]);
 
+  // ── 💰 가계부(BUDGET) — `ledgerBooks`에서 **라이브 파생**(calendarMemos에 복사 금지) ──
+  // 두 종류가 한 칩에 모인다: (a) 그 날 가계부를 정리한 기록 (b) 연단위 지출 납부 예정일.
+  // ⚠️ `open` 게이트 필수 — CalendarModal은 App 최상위 형제라 달력을 닫아도 계속 마운트돼 있어,
+  //    게이트가 없으면 닫은 뒤에도 전 장부 시계열을 영구히 재계산한다(위 3종과 같은 규약).
+  const ledgerByDate = useMemo(() => {
+    const flat = {};
+    if (!open) return flat;
+    // 연단위 지출은 **매년 반복**되므로 보고 있는 달의 해가 기준이다(±1년이면 월 이동에 충분).
+    for (const y of [viewYear - 1, viewYear, viewYear + 1]) {
+      let ev = {};
+      try { ev = ledgerEventsByDate(ledgerBooks, y) || {}; } catch { ev = {}; }
+      for (const [d, list] of Object.entries(ev)) {
+        if (!isValidIsoDate(d) || !Array.isArray(list) || list.length === 0) continue;
+        (flat[d] = flat[d] || []).push(...list);
+      }
+    }
+    // 장부 단위로 묶는다 — 칩 압축(1건=요약 / 2건+=건수)이 그 단위로 동작해야 PICK이 의미를 갖는다.
+    const out = {};
+    for (const [d, list] of Object.entries(flat)) {
+      const byBook = {};
+      for (const e of list) (byBook[e.bookId] = byBook[e.bookId] || []).push(e);
+      out[d] = Object.entries(byBook).map(([bookId, events]) => ({
+        bookId,
+        bookName: (events[0] && events[0].bookName) || '가계부',
+        accountName: ledgerChipText(events, hideAmounts),
+        events,
+      }));
+    }
+    return out;
+  }, [ledgerBooks, open, viewYear, hideAmounts]);
+
   // 패드는 전부 앵커(id) + 라이브 재조회 계약이라 원본이 삭제되면 스스로 닫힌다.
   // (rebalTarget upsert는 id를 승계하므로 내용이 교체돼도 닫히지 않고 새 스냅샷으로 갱신된다)
   // ⚠️ 아래 `if (!open) return null`은 모든 훅 뒤에 있어야 하므로 이 effect는 반드시 그 위에 둔다.
@@ -380,11 +453,14 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     } else if (pad.kind === 'transfer') {
       const g = (transfersByDate[pad.dayKey] || []).find((x) => x.portfolioId === pad.portfolioId);
       if (!g) setPad(null);
+    } else if (pad.kind === 'ledger') {
+      const g = (ledgerByDate[pad.dayKey] || []).find((x) => x.bookId === pad.bookId);
+      if (!g) setPad(null);
     }
     // ⚠️ 'detail'(계좌별 현황) 분기는 **두지 않는다** — 앵커가 날짜뿐이라 삭제될 원본이 없고,
     //    행 0건은 오류가 아니라 정상 상태다(그날 자산이 없던 날). 닫아 버리면 사용자는 왜 닫혔는지
     //    알 수 없고, 별도 창의 '불러오는 중' 프레임에서도 곧바로 닫혀 버린다.
-  }, [memos, pad, notesByDate, qtyChangesByDate, transfersByDate]);
+  }, [memos, pad, notesByDate, qtyChangesByDate, transfersByDate, ledgerByDate]);
 
   // ── 📊 계좌별 현황(ASSET 패드) — 인앱은 동기 재조회, 별도 창은 앱이 보낸 구독 응답 ──────────
   // ⚠️ `open` 게이트 필수 — 달력을 닫아도 pad는 남는다(재오픈 리셋 effect는 open===true에서만 돈다).
@@ -463,6 +539,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   };
   const openQty = (dayKey, g, backPick = null) => { setPad({ kind: 'qty', dayKey, portfolioId: g.portfolioId, backPick }); setPadSeq((s) => s + 1); };
   const openTransfer = (dayKey, g, backPick = null) => { setPad({ kind: 'transfer', dayKey, portfolioId: g.portfolioId, backPick }); setPadSeq((s) => s + 1); };
+  const openLedger = (dayKey, g, backPick = null) => { setPad({ kind: 'ledger', dayKey, bookId: g.bookId, backPick }); setPadSeq((s) => s + 1); };
   // 같은 종류가 2건 이상이면 칩을 개수로 접고, 클릭 시 이 선택 목록을 먼저 띄운다.
   const openPick = (dayKey, pickKind) => { setPad(pickPad(dayKey, pickKind)); setPadSeq((s) => s + 1); };
   // 📊 계좌별 현황 — 칩이 아니라 **날짜 칸의 자산 스냅샷 3줄 블록**에서 연다(backPick 없음 → ✕/Esc는
@@ -493,6 +570,10 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     : null;
   const padTransfer = pad && pad.kind === 'transfer'
     ? (transfersByDate[pad.dayKey] || []).find((g) => g.portfolioId === pad.portfolioId) || null
+    : null;
+
+  const padLedger = pad && pad.kind === 'ledger'
+    ? (ledgerByDate[pad.dayKey] || []).find((g) => g.bookId === pad.bookId) || null
     : null;
   // 텍스트 입력값: 투자기록은 `val === null`이면 아직 미편집 → 라이브 본문을 보여준다.
   const padTextValue = !pad ? ''
@@ -586,9 +667,10 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     note: 'bg-amber-500/15 hover:bg-amber-500/30 text-amber-200',
     qty: 'bg-violet-500/15 hover:bg-violet-500/30 text-violet-200',
     transfer: 'bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-200',
+    ledger: 'bg-rose-500/15 hover:bg-rose-500/30 text-rose-200',
   };
   const CHIP_DELETED = 'bg-gray-500/15 hover:bg-gray-500/30 text-gray-400';
-  const CHIP_LABEL = { rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE' };
+  const CHIP_LABEL = { rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE', ledger: 'BUDGET' };
   const autoChip = (dayKey, chipKind, items, openOne) => {
     if (!items || items.length === 0) return null;
     const single = items.length === 1;
@@ -709,6 +791,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               const dayNotes = notesByDate[key] || [];
               const dayQty = qtyChangesByDate[key] || [];
               const dayMove = transfersByDate[key] || [];
+              const dayLedger = ledgerByDate[key] || [];
               const numColor = isHol || dow === 0 ? 'text-red-400' : dow === 6 ? 'text-blue-400' : 'text-gray-300';
               const rawMetric = metricsByDate[key];
               const metricCum = rawMetric ? ((key === latestRecDate && todayReturnRate != null) ? todayReturnRate : rawMetric.monthlyChange) : null;
@@ -750,7 +833,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       </div>
                     </div>
                   )}
-                  {(dayRebals.length > 0 || dayNotes.length > 0 || dayQty.length > 0 || dayMove.length > 0) && (
+                  {(dayRebals.length > 0 || dayNotes.length > 0 || dayQty.length > 0 || dayMove.length > 0 || dayLedger.length > 0) && (
                     <div className="flex flex-col gap-0.5 shrink-0">
                       {autoChip(key, 'rebalTarget',
                         dayRebals.map((m) => ({ accountName: m.accountName, chipTitle: m.content, _memo: m })),
@@ -764,6 +847,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                       {autoChip(key, 'transfer',
                         dayMove.map((g) => ({ ...g, chipTitle: `${g.accountName}${g.deleted ? ' (삭제됨)' : ''}\n${g.rows.map((r) => `${r.role === 'out' ? `→ ${r.toName}` : `← ${r.fromName}`} ${r.name || r.code || '종목'}${r.quantity > 0 ? ` ${formatNumber(r.quantity)}주` : ''}`).join('\n')}` })),
                         (g) => openTransfer(key, g))}
+                      {autoChip(key, 'ledger',
+                        dayLedger.map((g) => ({ ...g, chipTitle: `${g.bookName}\n${ledgerChipTitle(g.events, hideAmounts)}` })),
+                        (g) => openLedger(key, g))}
                     </div>
                   )}
                   <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: `${memoH}px` }}>
@@ -844,7 +930,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               <span className="text-[15px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">
                 {/* 칸의 칩 라벨(LIST/NOTE/STOCK)과 동일한 이름 — 어느 칩에서 열린 패드인지 즉시 대응된다.
                     다건 선택 목록은 LIST를 목표비중에 넘겨주고 PICK으로 물러난다. */}
-                {({ rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE', pick: 'PICK', detail: 'ASSET' })[pad.kind] || 'MEMO'}
+                {({ rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE', ledger: 'BUDGET', pick: 'PICK', detail: 'ASSET' })[pad.kind] || 'MEMO'}
               </span>
             </div>
             <div className="w-10" />
@@ -1069,6 +1155,59 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                 직전 기록일 종가 기준입니다(국내 계좌는 21:00 이후 이관이 다음 날 칸에 기록됩니다).
               </div>
             </div>
+          ) : null) : pad.kind === 'ledger' ? (padLedger ? (
+            <div className="bg-black px-3 py-2 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-rose-300 text-[13px] font-bold truncate">💰 {padLedger.bookName}</span>
+                <span className="text-[10px] text-gray-500 shrink-0">{pad.dayKey}</span>
+              </div>
+              {padLedger.events.map((e, i) => (
+                <div key={i} className="mb-2 pb-2 border-b border-gray-900/80 last:border-0">
+                  {e.kind === 'touch' ? (
+                    <>
+                      <div className="text-[11px] text-gray-400">{e.ym} 가계부 정리</div>
+                      <div className="text-[15px] font-bold text-gray-100 tabular-nums">
+                        총지출 {hideAmounts ? '***' : formatCurrency(e.actualExpense)}
+                      </div>
+                      <div className="text-[11px] mt-0.5">
+                        전월 대비{' '}
+                        {(e.momComparable && e.momDelta !== null && e.momDelta !== undefined) ? (
+                          <span style={{ color: e.momDelta > 0 ? LEDGER_DIVERGING.over : e.momDelta < 0 ? LEDGER_DIVERGING.under : LEDGER_DIVERGING.flat }}>
+                            {e.momDelta > 0 ? '▲' : e.momDelta < 0 ? '▼' : '·'}{' '}
+                            {hideAmounts ? '***' : formatCurrency(Math.abs(e.momDelta))}
+                            {(e.momRate !== null && e.momRate !== undefined) ? ` (${(e.momRate * 100).toFixed(1)}%)` : ''}
+                          </span>
+                        ) : (
+                          // ⚠️ 비교 불가를 0으로 단언하지 않는다 — 진행 중인 달은 미입력이 많아
+                          //    순진한 차분이 '지출이 87% 줄었다' 같은 거짓 신호를 낸다.
+                          <span className="text-gray-500" title="두 달의 미입력 건수가 달라 비교할 수 없습니다">-</span>
+                        )}
+                      </div>
+                      {e.missing > 0 && (
+                        <div className="text-[10px] text-gray-500 mt-0.5">미입력 {e.missing}건 — 합계·증감에서 제외됩니다</div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-[11px] text-gray-400">연단위 지출 예정</div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-[13px] text-gray-100 truncate">{e.itemName}</span>
+                        <span className="text-[13px] font-bold text-gray-100 tabular-nums shrink-0">
+                          {hideAmounts ? '***' : formatCurrency(e.amount)}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+              {/* '확장' — 사용자 요구: 간략 표시 → 확장하면 가계부 화면이 열린다. */}
+              {onOpenLedger && (
+                <button
+                  onClick={onOpenLedger}
+                  className="mt-1 w-full text-[12px] px-2 py-1.5 rounded bg-rose-900/40 text-rose-200 hover:bg-rose-900/60 border border-rose-800/50 transition-colors"
+                >가계부 열기 ⧉</button>
+              )}
+            </div>
           ) : null) : pad.kind === 'detail' ? (
             /* 계좌별 현황 = 읽기 전용 표. 통합 대시보드 '평가액 추이' 팝업과 **같은 utils 함수**
                (buildHistDetailRows)가 낸 값을 순수 포매팅만 한다 — 비중·소계를 여기서 다시 계산하지 말 것.
@@ -1159,21 +1298,25 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
             /* 같은 종류 다건 — 계좌 선택 목록 */
             <div className="bg-black px-3 py-2 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
               <div className="text-[11px] text-gray-500 mb-2">
-                {({ rebalTarget: '📊 목표비중 기록', note: '📝 투자 기록', qty: '🔄 종목 수량 변경', transfer: '🔁 종목 이관' })[pad.pickKind]} — 계좌 선택
+                {({ rebalTarget: '📊 목표비중 기록', note: '📝 투자 기록', qty: '🔄 종목 수량 변경', transfer: '🔁 종목 이관', ledger: '💰 가계부' })[pad.pickKind]} — 선택
               </div>
               {(pad.pickKind === 'rebalTarget'
                 ? (Array.isArray(memos[pad.dayKey]) ? memos[pad.dayKey] : []).filter((m) => m && m.kind === 'rebalTarget')
                 : pad.pickKind === 'note' ? (notesByDate[pad.dayKey] || [])
                 : pad.pickKind === 'transfer' ? (transfersByDate[pad.dayKey] || [])
+                // ⚠️ 자기 분기가 없으면 체인의 마지막 else(qty)로 흘러가 오류 없이
+                //    '종목 수량 변경' 목록이 열린다(조용히 틀린 패드가 열리는 함정).
+                : pad.pickKind === 'ledger' ? (ledgerByDate[pad.dayKey] || [])
                 : (qtyChangesByDate[pad.dayKey] || [])
               ).map((it, i) => (
                 <button
-                  key={it.id || it.portfolioId || i}
+                  key={it.id || it.portfolioId || it.bookId || i}
                   onClick={() => {
                     // 되돌아올 목록(pickKind)을 상세 패드에 실어 보낸다 — ✕/Esc가 이 목록으로 복귀.
                     if (pad.pickKind === 'rebalTarget') openRebal(pad.dayKey, it, 'rebalTarget');
                     else if (pad.pickKind === 'note') openNote(pad.dayKey, it, 'note');
                     else if (pad.pickKind === 'transfer') openTransfer(pad.dayKey, it, 'transfer');
+                    else if (pad.pickKind === 'ledger') openLedger(pad.dayKey, it, 'ledger');
                     else openQty(pad.dayKey, it, 'qty');
                   }}
                   className="w-full flex items-center justify-between gap-2 text-left px-2 py-2 rounded hover:bg-gray-800/80 transition-colors border-b border-gray-900/80"
@@ -1186,6 +1329,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   <span className="text-[10px] text-gray-500 shrink-0">
                     {pad.pickKind === 'rebalTarget' ? `${(it.rows || []).length}종목`
                       : pad.pickKind === 'note' ? `${it.notes.length}건`
+                      : pad.pickKind === 'ledger' ? `${it.events.length}건`
                       : `${it.rows.length}종목`}
                   </span>
                 </button>
