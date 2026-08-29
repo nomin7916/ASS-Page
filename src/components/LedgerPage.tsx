@@ -4,14 +4,26 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
   ResponsiveContainer, PieChart, Pie, Cell, Legend, ReferenceLine,
 } from 'recharts';
+// ⚠️ `../ledger` import를 **한 덩어리로 합치지 말 것** — `memory/tools/undefcheck.mjs`의
+//    import 정규식이 `{...}` 안을 300자까지만 보므로, 합치면 여기서 들여온 이름이 전부
+//    '미해결 후보'로 잡혀 그 게이트가 이 파일에서 영구히 무의미해진다(합쳤을 때 1010자).
 import {
   LEDGER_GROUP_ORDER, LEDGER_GROUP_LABEL, LEDGER_GROUP_COLOR, LEDGER_PAY_LABEL,
   LEDGER_BALANCE_COLOR, LEDGER_DIVERGING, LEDGER_EXPENSE_GROUPS,
-  MAX_LEDGER_BOOKS, MAX_LEDGER_ITEMS,
-  loanSchedule, loanAnnualTotal, planOf, actualOf, varianceOf, commitActual, isItemActive,
-  monthTotals, ledgerKpi, momDelta, yoyDelta, ledgerFingerprint,
+  LEDGER_PAY_ORDER, LEDGER_DETAIL_OTHER, LEDGER_DETAIL_TOP_N,
+} from '../ledger';
+import {
+  MAX_LEDGER_BOOKS, MAX_LEDGER_ITEMS, MAX_LEDGER_CATEGORIES, MAX_LEDGER_CATEGORY_LEN,
   makeLedgerItem, makeLedgerLoan, makeLedgerBook,
   makeYm, addMonthsYm, isValidYm, roundWon, finiteOr,
+} from '../ledger';
+import {
+  loanSchedule, loanAnnualTotal, planOf, actualOf, varianceOf, commitActual, isItemActive,
+  monthTotals, ledgerKpi, momDelta, yoyDelta, ledgerFingerprint,
+} from '../ledger';
+import {
+  expectedOf, expectedTotal, expectedByPay, monthState, projectedByPay,
+  moveItemInGroup, canMoveItemInGroup, ledgerCategories, ledgerRamp, ledgerPayColor,
 } from '../ledger';
 
 /**
@@ -37,6 +49,43 @@ import {
 
 const IDLE_MS = 2500;
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
+
+/**
+ * 매트릭스 표의 sticky 3열 폭 — **파생 상수**다.
+ * ⚠️ `left-[212px]` 같은 하드코딩으로 되돌리지 말 것. 212는 `62 + 150`이라는 전제 위에
+ *    있어서, 항목 셀에 무언가(▲▼ 버튼 등)를 넣어 폭이 늘면 계획열이 제자리에 남아
+ *    **가로 스크롤 시 항목 셀 오른쪽을 덮는다** — 정확히 × 삭제 버튼이 있는 자리다.
+ */
+const COL_PAY = 62;
+const COL_NAME = 188;
+const LEFT_NAME = COL_PAY;
+const LEFT_PLAN = COL_PAY + COL_NAME;
+
+/**
+ * 차트 툴팁 스타일 — **6곳이 공유**한다(손복제 금지).
+ *
+ * ⚠️ 사용자 보고("금액이 배경과 같이 어두워 잘 안 보인다")의 근본 원인은 두 가지다:
+ *   ① recharts 2.15.3 `Pie.defaultProps.fill = '#808080'` → `DefaultTooltipContent`의
+ *      `color: entry.color || '#000'`이 그 회색을 글자색으로 채택한다. `<Pie>`에 fill을
+ *      주지 않으면(색이 `<Cell>`에 있으면) **툴팁 글자가 항상 #808080**이다 — 4.59:1.
+ *      → `itemStyle.color`로 덮어써야 한다. `contentStyle`만 고쳐서는 해결되지 않는다.
+ *   ② 툴팁 배경이 카드면(#0f1623)과 **완전히 같은 색**이라 상자 자체가 떠오르지 않는다.
+ *      → 다크 테마에서 배경 명도로 벌릴 수 있는 폭은 좁으므로(최선 1.23:1) **테두리 대비**
+ *        (#374151 1.76:1 → #64748b 3.81:1)가 실질적인 분리 수단이다.
+ * ⚠️ 값을 바꾸면 `node scripts/validate_palette.mjs` §6을 다시 돌릴 것.
+ */
+const TOOLTIP_STYLE = {
+  contentStyle: {
+    background: '#1a2333',
+    border: '1px solid #64748b',
+    borderRadius: 6,
+    fontSize: 11,
+    boxShadow: '0 4px 16px rgba(0,0,0,0.55)',
+    color: '#e5e7eb',
+  },
+  itemStyle: { color: '#e5e7eb' },
+  labelStyle: { color: '#cbd5e1', fontWeight: 600 },
+};
 
 /* ── 표시 유틸 ─────────────────────────────────────────────────────────────── */
 
@@ -76,12 +125,13 @@ const inputCls =
 
 /* ── 작은 조각들 ───────────────────────────────────────────────────────────── */
 
-function Kpi({ label, value, sub, tone, title }) {
+function Kpi({ label, value, sub, tone, title, children }) {
   return (
     <div className="bg-[#0f1623] border border-gray-800 rounded-lg px-3 py-2 min-w-0" title={title || undefined}>
       <div className="text-[10px] text-gray-500 truncate">{label}</div>
       <div className="text-[15px] font-bold truncate" style={tone ? { color: tone } : undefined}>{value}</div>
       {sub ? <div className="text-[10px] text-gray-500 truncate mt-0.5">{sub}</div> : null}
+      {children}
     </div>
   );
 }
@@ -146,6 +196,26 @@ function DeleteBtn({ armed, onArm, onConfirm, onCancel, readOnly }) {
   }
   return (
     <button className="text-[11px] text-gray-600 hover:text-rose-300 px-1" title="항목 삭제" onClick={onArm}>×</button>
+  );
+}
+
+/**
+ * 그룹 안에서 행을 위/아래로 옮기는 버튼.
+ * ⚠️ `data-col`을 달지 말 것 — `onGridKeyDown`이 `[data-col]`의 DOM 순서로 ↑/↓ 이동을
+ *    계산하므로, 버튼이 끼면 같은 열 세로 이동에 버튼이 섞인다.
+ * ⚠️ 인라인 SVG가 아니라 텍스트 글리프다 — lucide 신규 아이콘 도입 금지 규약(#G3g)과
+ *    같은 이유이고, 12px 폭이라 sticky 항목열 폭을 거의 늘리지 않는다.
+ */
+function MoveBtns({ canUp, canDown, onUp, onDown, readOnly }) {
+  if (readOnly) return null;
+  const cls = (on) => `block leading-[7px] text-[8px] px-0.5 ${on ? 'text-gray-500 hover:text-amber-300' : 'text-gray-800 cursor-default'}`;
+  return (
+    <span className="flex flex-col shrink-0 -my-0.5">
+      <button className={cls(canUp)} title={canUp ? '위로 이동' : '더 위로 갈 수 없습니다'}
+        disabled={!canUp} onClick={onUp}>▲</button>
+      <button className={cls(canDown)} title={canDown ? '아래로 이동' : '더 아래로 갈 수 없습니다'}
+        disabled={!canDown} onClick={onDown}>▼</button>
+    </span>
   );
 }
 
@@ -289,12 +359,18 @@ export default function LedgerPage({
   const mom = useMemo(() => momDelta(book, ym), [book, ym]);
   const yoy = useMemo(() => yoyDelta(book, ym), [book, ym]);
 
-  /** 그 해 12개월의 계획/실제 — 차트 3종이 공유한다. */
+  /**
+   * 그 해 12개월의 계획/실제 — 차트 4종이 공유한다.
+   * ⚠️ 결제수단 시리즈를 **별도 memo로 12회 더 돌리지 말 것** — `monthTotals`는 항목 전체를
+   *    순회하고 `planOf`가 `loanSchedule`을 부른다. 여기 필드를 얹는 것이 훨씬 싸다.
+   */
   const yearSeries = useMemo(() => MONTHS.map((m) => {
     const k = makeYm(year, m);
     const t = monthTotals(book, k);
     const c = momDelta(book, k);
-    return {
+    const e = expectedTotal(book?.items, k);
+    const bp = expectedByPay(book?.items, k);
+    const row = {
       m, ym: k, label: `${m}월`,
       plan: t.planExpense, actual: t.actualExpense,
       income: t.actualIncome || t.planIncome,
@@ -302,19 +378,147 @@ export default function LedgerPage({
       // ⚠️ comparable=false면 숫자를 내지 않는다(진행 중인 달은 항상 미입력이 많다).
       momDelta: c.comparable ? c.delta : null,
       hasActual: t.missingExpense < t.activeExpense,
+      /**
+       * ⚠️ **네 상태**다 — `missing < active` 2분법으로 되돌리지 말 것.
+       *    연중에 가계부를 시작하면 시작 전 달은 활성 항목이 0건이라 2분법이 그 달을
+       *    '미입력'이라 단언하는데, 그 칸은 매트릭스에서 `-`로 잠겨 있어 채울 방법이 없다.
+       */
+      state: monthState(e),
+      expected: e.value,
     };
+    // 결제수단 스택 — ⚠️ recharts는 stacked Bar에서 `null`을 **0으로 강제**한다
+    //    (`getValueByDataKey(d, key, 0)`). 그래서 '데이터 없음'을 null로 표현할 수 없고,
+    //    아래 `payChartData`가 그 달 **행 자체를 제외**하는 방식으로 처리한다.
+    for (const p of LEDGER_PAY_ORDER) row[`pay_${p}`] = bp[p] ? bp[p].value : 0;
+    return row;
   }), [book, year]);
 
-  /** 도넛 — 4슬롯 고정 순서. ⚠️ 직접 라벨 + 2px 간격이 필수(CVD ΔE 7.1 대역). */
+  /**
+   * 결제수단 막대 데이터 — 항목이 하나도 없던 달은 **행을 뺀다**(0 막대로 그리면
+   * '그 달 지출 0원'이라는 거짓 단언이 된다).
+   */
+  const payChartData = useMemo(() => yearSeries.filter((r) => r.state !== 'none'), [yearSeries]);
+  /** 그 해에 실제로 쓰인 결제수단만 — 안 쓰는 수단의 빈 범례를 만들지 않는다. */
+  const payKeys = useMemo(
+    () => LEDGER_PAY_ORDER.filter((p) => yearSeries.some((r) => Math.abs(r[`pay_${p}`]) > 0.5)),
+    [yearSeries]);
+  /** 선택한 달의 결제수단 구성(100% 스트립) — 사용자 요청 "지출 1000이면 현금200 카드800". */
+  const payStrip = useMemo(() => {
+    const row = yearSeries.find((r) => r.ym === ym);
+    if (!row) return { parts: [], sum: 0 };
+    const parts = LEDGER_PAY_ORDER
+      .map((p) => ({ key: p, label: LEDGER_PAY_LABEL[p], value: Math.max(0, row[`pay_${p}`] || 0), color: ledgerPayColor(p) }))
+      .filter((x) => x.value > 0);
+    return { parts, sum: parts.reduce((a, b) => a + b.value, 0) };
+  }, [yearSeries, ym]);
+
+  /** 구분(카테고리) 선택 목록 — 레지스트리 ∪ 실제 쓰이는 값. */
+  const categories = useMemo(() => ledgerCategories(book), [book]);
+
+  /**
+   * 도넛 조각을 만들 때 쓰는 **단일 후처리**.
+   * ⚠️ 메인 도넛과 상세 도넛이 **문자 그대로 같은 규칙**을 써야 한다 — 한쪽만 음수를
+   *    클램프하면 두 도넛의 합이 갈리고(정정·환급 입력으로 음수 plan이 실제로 도달 가능),
+   *    "Σ상세 === Σ메인"을 `byGroup`과 비교하는 검증은 그 경우에도 통과하는 죽은 단언이 된다.
+   */
+  const donutRows = (rows) => {
+    const out = rows
+      .map((r) => ({ ...r, value: Math.max(0, Number.isFinite(r.value) ? r.value : 0) }))
+      .filter((r) => r.value > 0);
+    return { rows: out, sum: out.reduce((a, b) => a + b.value, 0) };
+  };
+
+  /**
+   * 메인 도넛 — 구분(그룹) 축 + **고정비만 결제수단으로 분리**(사용자 요청).
+   * ⚠️ 고정비 몫은 `totals.byPay`가 아니라 **고정비 항목만 순회**해 구한다. `byPay`는
+   *    그룹 구분 없이 전 지출을 결제수단으로 나눈 값이라 대출·연단위가 섞여 들어온다
+   *    (`addItem`이 연단위를 `pay:'cash'`로 만들므로 오염이 기본 경로다).
+   * ⚠️ 조각 색은 `ledgerRamp(고정비색, ...)` — 부모 hue를 유지해 어느 그룹의 부분인지가
+   *    색으로 읽힌다. 결제수단 막대도 **같은 `ledgerPayColor`를 쓴다**(현금이 두 색이 되면 안 된다).
+   */
   const donut = useMemo(() => {
-    const rows = LEDGER_EXPENSE_GROUPS.map((g) => {
+    const fixedItems = (book?.items || []).filter((it) => it && it.group === 'fixed');
+    const fixedByPay = expectedByPay(fixedItems, ym);
+    const rows = [];
+    for (const g of LEDGER_EXPENSE_GROUPS) {
+      if (g === 'fixed') {
+        const pays = LEDGER_PAY_ORDER.filter((p) => fixedByPay[p]);
+        for (const p of pays) {
+          rows.push({
+            key: `fixed:${p}`,
+            name: `고정비·${LEDGER_PAY_LABEL[p]}`,
+            value: fixedByPay[p].value,
+            color: pays.length > 1 ? ledgerPayColor(p) : LEDGER_GROUP_COLOR.fixed,
+          });
+        }
+        continue;
+      }
       const agg = totals.byGroup[g];
-      const v = agg ? (agg.actual > 0 ? agg.actual : agg.plan) : 0;
-      return { key: g, name: LEDGER_GROUP_LABEL[g], value: Math.max(0, v), color: LEDGER_GROUP_COLOR[g] };
-    }).filter((r) => r.value > 0);
-    const sum = rows.reduce((a, b) => a + b.value, 0);
-    return { rows, sum };
-  }, [totals]);
+      rows.push({
+        key: g,
+        name: LEDGER_GROUP_LABEL[g],
+        // 실제가 있으면 실제, 없으면 계획 — 기존 규약 유지
+        value: agg ? (agg.actual > 0 ? agg.actual : agg.plan) : 0,
+        color: LEDGER_GROUP_COLOR[g],
+      });
+    }
+    return donutRows(rows);
+  }, [book, ym, totals]);
+
+  /**
+   * 상세구분 도넛 — 대출·연단위는 **항목별**, 고정비·변동비는 **사용자 구분(category)별**.
+   * ⚠️ 그룹당 조각은 `LEDGER_DETAIL_TOP_N`개 + '기타' = 최대 5개다. 램프가 6슬롯부터
+   *    인접 ΔE 4 아래로 떨어지기 때문(팔레트 §2 실측). 접지 않고 늘리지 말 것.
+   * ⚠️ 남는 조각은 전부 **직접 라벨을 갖는다** — '작으면 라벨 생략'으로 바꾸지 말 것
+   *    (색만으로 구분이 보장되지 않는 대역이라 라벨이 유일한 보조 부호다).
+   */
+  const detailDonut = useMemo(() => {
+    const rows = [];
+    for (const g of LEDGER_EXPENSE_GROUPS) {
+      const items = (book?.items || []).filter((it) => it && it.group === g && isItemActive(it, ym));
+      if (!items.length) continue;
+      const byKey = new Map();
+      for (const it of items) {
+        const v = expectedOf(it, ym);
+        if (v === null || !Number.isFinite(v)) continue;
+        // 대출·연단위는 항목이 곧 의미 단위, 고정비·변동비는 사용자 구분이 의미 단위다.
+        const key = (g === 'loan' || g === 'annual')
+          ? (it.name || '(이름 없음)')
+          : (it.category || '(구분 없음)');
+        byKey.set(key, (byKey.get(key) || 0) + v);
+      }
+      const sorted = [...byKey.entries()]
+        .map(([name, value]) => ({ name, value }))
+        .filter((r) => r.value > 0)
+        .sort((a, b) => b.value - a.value);
+      const head = sorted.slice(0, LEDGER_DETAIL_TOP_N);
+      const tail = sorted.slice(LEDGER_DETAIL_TOP_N);
+      const n = head.length + (tail.length ? 1 : 0);
+      head.forEach((r, i) => rows.push({
+        key: `${g}:${r.name}`, group: g,
+        name: `${LEDGER_GROUP_LABEL[g]}·${r.name}`,
+        value: r.value,
+        color: ledgerRamp(LEDGER_GROUP_COLOR[g], g, n, i),
+      }));
+      if (tail.length) {
+        rows.push({
+          key: `${g}:__other__`, group: g,
+          name: `${LEDGER_GROUP_LABEL[g]}·기타 ${tail.length}건`,
+          value: tail.reduce((a, b) => a + b.value, 0),
+          color: LEDGER_DETAIL_OTHER,
+        });
+      }
+    }
+    return donutRows(rows);
+  }, [book, ym]);
+
+  /** 헤더 '예상 月 지출' 세분화 — ⚠️ Σ가 `kpi.projectedMonthly`와 **정확히** 같아야 한다. */
+  const projPay = useMemo(() => {
+    const m = projectedByPay(book, ym);
+    return LEDGER_PAY_ORDER
+      .filter((p) => Number.isFinite(m[p]) && Math.abs(m[p]) > 0.5)
+      .map((p) => ({ key: p, label: LEDGER_PAY_LABEL[p], value: m[p] }));
+  }, [book, ym]);
 
   const payRows = useMemo(() =>
     Object.entries(totals.byPay || {})
@@ -381,6 +585,47 @@ export default function LedgerPage({
     setArmedDelete('');
   };
 
+  /**
+   * 그룹 안에서 항목 순서 이동.
+   * ⚠️ 순서는 `items` 배열 자체를 재정렬해 표현한다 — `ledgerFingerprint`가 항목을 배열 순서
+   *    그대로 투영하므로 **영속화 신규 지점이 0곳**이다(`order` 필드를 만들면 정규화·`same`
+   *    비교·지문·`makeLedgerItem` 4곳 등록이 필요하고 하나만 빠져도 조용히 유실된다).
+   * ⚠️ 이동할 수 없으면 `moveItemInGroup`이 원본 참조를 돌려주고 `patchBook`이 no-op으로
+   *    끝난다 → dirty가 서지 않아 헛된 Drive 저장이 없다.
+   */
+  const moveItem = (itemId, dir) => {
+    if (!book || readOnly) return;
+    patchBook(book.id, (b) => {
+      const items = moveItemInGroup(b.items, itemId, dir);
+      return items === b.items ? b : { ...b, items };
+    });
+  };
+
+  /* ── 구분(카테고리) 관리 ─────────────────────────────────────────────── */
+  const addCategory = (raw) => {
+    if (!book || readOnly) return false;
+    const v = String(raw ?? '').trim().slice(0, MAX_LEDGER_CATEGORY_LEN);
+    if (!v) return false;
+    const cur = Array.isArray(book.categories) ? book.categories : [];
+    if (cur.includes(v)) { doFlash(`'${v}'은(는) 이미 있습니다`); return false; }
+    if (cur.length >= MAX_LEDGER_CATEGORIES) { doFlash(`구분은 최대 ${MAX_LEDGER_CATEGORIES}개입니다`); return false; }
+    patchBook(book.id, (b) => ({ ...b, categories: [...(b.categories || []), v] }));
+    return true;
+  };
+  /**
+   * ⚠️ 레지스트리에서 지워도 **항목의 `category`는 건드리지 않는다**.
+   *    그 값은 `ledgerCategories`의 합집합에 계속 남아 select 옵션이 되므로, 사용자가
+   *    실수로 지워도 행의 구분이 조용히 사라지지 않는다(undo가 없는 화면이다).
+   */
+  const removeCategory = (name) => {
+    if (!book || readOnly) return;
+    patchBook(book.id, (b) => {
+      const cur = Array.isArray(b.categories) ? b.categories : [];
+      if (!cur.includes(name)) return b;
+      return { ...b, categories: cur.filter((c) => c !== name) };
+    });
+  };
+
   /* ── 키보드 이동 (↑/↓ 같은 열, ←/→ 같은 행) ──────────────────────────── */
   const onGridKeyDown = (e) => {
     const k = e.key;
@@ -434,8 +679,15 @@ export default function LedgerPage({
             </select>
           )}
         </td>
-        <td className={`${cellBase} sticky left-[62px] z-[2] bg-[#0b1120]`} style={{ minWidth: 150 }}>
+        <td className={`${cellBase} sticky z-[2] bg-[#0b1120]`} style={{ left: LEFT_NAME, minWidth: COL_NAME }}>
           <div className="flex items-center gap-1">
+            <MoveBtns
+              readOnly={readOnly}
+              canUp={canMoveItemInGroup(book.items, it.id, -1)}
+              canDown={canMoveItemInGroup(book.items, it.id, 1)}
+              onUp={() => moveItem(it.id, -1)}
+              onDown={() => moveItem(it.id, 1)}
+            />
             <TextCell
               col="name"
               value={it.name}
@@ -451,6 +703,28 @@ export default function LedgerPage({
               onCancel={() => setArmedDelete('')}
             />
           </div>
+          {/* 구분(카테고리) — ⚠️ sticky 열을 새로 만들지 않고 항목 셀의 둘째 줄에 둔다.
+              열을 늘리면 sticky 오프셋·colCount·소계 행 colSpan이 전부 따라 바뀐다. */}
+          {!isLoan && (
+            <div className="flex items-center gap-1 mt-0.5">
+              <span className="text-[9px] text-gray-600 shrink-0">구분</span>
+              {readOnly ? (
+                <span className="text-[9px] text-gray-400 truncate">{it.category || '-'}</span>
+              ) : (
+                <select
+                  className="bg-transparent text-[9px] text-gray-400 outline-none min-w-0 flex-1 focus:bg-gray-800/60 rounded"
+                  value={it.category || ''}
+                  title="지출 구분 — 아래 '구분 관리'에서 미리 등록해 둔 값 중에서 고릅니다"
+                  onChange={(e) => patchItem(book.id, it.id, (x) => (x.category === e.target.value ? x : { ...x, category: e.target.value }))}
+                >
+                  <option value="" className="bg-[#0f1623]">(구분 없음)</option>
+                  {/* ⚠️ 목록은 레지스트리 ∪ 실제 쓰이는 값이다 — 사용자가 목록에서 지운 구분을
+                      가진 행도 자기 값을 옵션으로 갖고 있어야 select가 조용히 덮지 않는다. */}
+                  {categories.map((c) => <option key={c} value={c} className="bg-[#0f1623]">{c}</option>)}
+                </select>
+              )}
+            </div>
+          )}
           {isAnnual && (
             <div className="flex items-center gap-1 text-[9px] text-gray-500 mt-0.5">
               <span>납부</span>
@@ -463,7 +737,7 @@ export default function LedgerPage({
             </div>
           )}
         </td>
-        <td className={`${cellBase} sticky left-[212px] z-[2] bg-[#0b1120] text-right`} style={{ minWidth: 96 }}>
+        <td className={`${cellBase} sticky z-[2] bg-[#0b1120] text-right`} style={{ left: LEFT_PLAN, minWidth: 96 }}>
           {isLoan ? (
             <span className="text-gray-400" title={loanSchedule(it.loan, ym) ? '대출 탭에서 계산됩니다' : '계산할 수 없습니다 — 대출 탭을 확인하세요'}>
               {planNow === null ? '-' : fmtWon(planNow, hideAmounts)}
@@ -550,45 +824,139 @@ export default function LedgerPage({
     );
   };
 
-  const renderGroupSubtotal = (g, items) => {
-    let plan = 0, actual = 0, missing = 0;
+  /**
+   * 소계 행 하나(그룹 소계 또는 그 안의 결제수단 소계).
+   *
+   * ⚠️ **월 셀은 `expectedTotal(...).value`(실제 ?? 계획)다.** 사용자가 계획만 입력해도
+   *    소계가 나와야 한다는 요청이 이 행의 존재 이유다. 대신 계획으로 채운 건수를 반드시
+   *    함께 노출해 실적으로 오독되지 않게 한다.
+   * ⚠️ 이 값을 `monthTotals.actualExpense`/`compareMonths`/`yearSeries.actual`/
+   *    `annualCompare`/`ledgerEventsByDate`로 **되돌려 보내지 말 것** — 그 순간 전월 대비가
+   *    영구히 거짓말을 시작한다(ledger.ts G-2 절 참조).
+   * ⚠️ '계획' 열은 `planSum`(활성 항목 전체의 계획)이지 `fromPlan`(실적 없는 항목의 계획)이
+   *    아니다. 후자를 쓰면 **사용자가 실적을 채울수록 계획 열이 0으로 수렴**해, 예상값을
+   *    검산할 유일한 기준선이 조용히 사라진다(실측 547,000 → 17,000).
+   */
+  const renderSubtotalRow = ({ key, label, color, items, indent = false }) => {
     const monthly = visibleMonths.map((m) => {
       const k = makeYm(year, m);
-      let mp = 0, ma = 0, mm = 0;
-      for (const it of items) {
-        const p = planOf(it, k); const a = actualOf(it, k);
-        if (p !== null) mp += p;
-        if (a !== null) ma += a; else if (isItemActive(it, k)) mm++;
-      }
-      return { m, mp, ma, mm };
+      const e = expectedTotal(items, k);
+      return { m, e, state: monthState(e) };
     });
-    for (const it of items) {
-      for (const m of MONTHS) {
-        const k = makeYm(year, m);
-        const p = planOf(it, k); const a = actualOf(it, k);
-        if (p !== null) plan += p;
-        if (a !== null) actual += a; else if (isItemActive(it, k)) missing++;
-      }
+    // 연 합계 — 열 숨김과 무관하게 12개월 전부(표의 '{year} 합계' 열 규약 유지)
+    let yearExpected = 0, yearPlan = 0, yearActual = 0, yearMissing = 0, yearPlanned = 0;
+    for (const m of MONTHS) {
+      const e = expectedTotal(items, makeYm(year, m));
+      yearExpected += e.value; yearPlan += e.planSum; yearActual += e.fromActual;
+      yearMissing += e.plannedCount + e.unresolved;
+      yearPlanned += e.plannedCount;
     }
+    const cur = expectedTotal(items, ym);
     return (
-      <tr key={`sub-${g}`} className="bg-gray-800/50 font-semibold">
-        <td className={`${cellBase} sticky left-0 z-[2] bg-[#151b28]`} colSpan={2}>
-          <span className="text-[11px]" style={{ color: LEDGER_GROUP_COLOR[g] }}>{LEDGER_GROUP_LABEL[g]} 소계</span>
+      <tr key={key} className={indent ? 'bg-gray-800/25' : 'bg-gray-800/50 font-semibold'}>
+        <td className={`${cellBase} sticky left-0 z-[2] ${indent ? 'bg-[#131a27]' : 'bg-[#151b28]'}`} colSpan={2}>
+          <span className={`text-[11px] ${indent ? 'pl-3' : ''}`} style={{ color }}>
+            {indent ? '└ ' : ''}{label}
+          </span>
+          {cur.plannedCount > 0 && (
+            // ⚠️ 배지 조건은 **선택한 달 하나**다. '보이는 달 중 하나라도'로 재면 미래 달이
+            //    구조적으로 항상 계획-only라 배지가 1~11월 내내 켜져 신호가 0이 된다.
+            <span className="ml-1.5 text-[9px] px-1 rounded bg-gray-700/70 text-gray-300"
+              title={`${month}월 소계에 계획으로 채운 항목이 ${cur.plannedCount}건 있습니다 (실적 ${cur.actualCount}건)`}>
+              계획 {cur.plannedCount}
+            </span>
+          )}
         </td>
-        <td className={`${cellBase} sticky left-[212px] z-[2] bg-[#151b28] text-right text-[11px]`}>
-          {fmtWon(monthly.length ? planOfGroupAt(items, ym) : 0, hideAmounts)}
+        <td className={`${cellBase} sticky z-[2] ${indent ? 'bg-[#131a27]' : 'bg-[#151b28]'} text-right text-[11px]`} style={{ left: LEFT_PLAN }}>
+          {fmtWon(cur.planSum, hideAmounts)}
         </td>
-        {monthly.map(({ m, ma, mm }) => (
-          <td key={m} className={`${cellBase} text-right text-[11px]`}>
-            {mm > 0 && ma === 0 ? <span className="text-gray-600">-</span> : fmtWonShort(ma, hideAmounts)}
+        {monthly.map(({ m, e, state }) => (
+          <td key={m} className={`${cellBase} text-right text-[11px]`}
+            title={state === 'none' ? '이 달에는 항목이 없습니다'
+              : `실제 ${fmtWon(e.fromActual, hideAmounts)} (${e.actualCount}건) + 계획 ${fmtWon(e.fromPlan, hideAmounts)} (${e.plannedCount}건)`}>
+            {state === 'none' ? <span className="text-gray-700">-</span> : (
+              <>
+                {fmtWonShort(e.value, hideAmounts)}
+                {e.plannedCount > 0 && (
+                  <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.flat }}>계획 {e.plannedCount}</div>
+                )}
+              </>
+            )}
           </td>
         ))}
-        <td className={`${cellBase} text-right text-[11px]`}>{fmtWon(actual, hideAmounts)}</td>
+        <td className={`${cellBase} text-right text-[11px]`}
+          title={`실제 ${fmtWon(yearActual, hideAmounts)} + 계획 ${fmtWon(yearExpected - yearActual, hideAmounts)}`}>
+          {fmtWon(yearExpected, hideAmounts)}
+          <div className="text-[9px] text-gray-600">계획 {fmtWon(yearPlan, hideAmounts)}</div>
+        </td>
         <td className={`${cellBase} text-right text-[10px] text-gray-500`}>
-          {missing > 0 ? `미입력 ${missing}` : fmtWon(actual - plan, hideAmounts)}
+          {yearPlanned > 0
+            ? <span title={`${yearPlanned}건이 계획으로 채워져 있어 계획 대비 차이를 확정할 수 없습니다`}>계획 {yearPlanned}</span>
+            : fmtWon(yearActual - yearPlan, hideAmounts)}
         </td>
       </tr>
     );
+  };
+
+  /**
+   * 그룹 소계 블록 — 결제수단 소계 행 + 그룹 소계 행.
+   *
+   * ⚠️ 결제수단 행은 **그 그룹에 2종 이상 있을 때만**. 하나뿐이면 노이즈라 라벨에만 표기한다
+   *    (대출은 전부 '이체'라 자동으로 사라진다). 그룹별 화이트리스트를 만들지 말 것.
+   * ⚠️ **불변식: Σ(결제수단 행) === 그룹 소계 행.** 손상 데이터의 미지 결제수단은
+   *    `normalizeLedgerBooks`가 'card'로 강제하므로 이 등식이 구조적으로 성립한다.
+   *    수단을 하드코딩(현금/카드만)하면 `pay:'auto'`인 항목이 **어느 행에도 없이 사라진다**.
+   */
+  const renderGroupSubtotal = (g, items) => {
+    const rows = [];
+    if (g !== 'income') {
+      const present = LEDGER_PAY_ORDER.filter((p) => items.some((it) => it && it.pay === p));
+      if (present.length > 1) {
+        for (const p of present) {
+          rows.push(renderSubtotalRow({
+            key: `sub-${g}-${p}`,
+            label: `${LEDGER_PAY_LABEL[p]} 소계`,
+            color: ledgerPayColor(p),
+            items: items.filter((it) => it && it.pay === p),
+            indent: true,
+          }));
+        }
+      }
+      rows.push(renderSubtotalRow({
+        key: `sub-${g}`,
+        label: present.length === 1
+          ? `${LEDGER_GROUP_LABEL[g]} 합계 · 전액 ${LEDGER_PAY_LABEL[present[0]]}`
+          : `${LEDGER_GROUP_LABEL[g]} 합계`,
+        color: LEDGER_GROUP_COLOR[g],
+        items,
+      }));
+    } else {
+      rows.push(renderSubtotalRow({
+        key: `sub-${g}`, label: `${LEDGER_GROUP_LABEL[g]} 합계`,
+        color: LEDGER_GROUP_COLOR[g], items,
+      }));
+    }
+    return rows;
+  };
+
+  /**
+   * 표 맨 아래 '월 지출 합계' 행 — 대출 + 고정비 + 변동비 + **그 달 납부하는 연단위**.
+   *
+   * ⚠️ 라벨에 '(연단위 납부월 포함)'을 반드시 남길 것. 헤더 KPI의 '월 지출 합계'는
+   *    **연단위 제외**라 이름이 겹치는데, 그 둘을 맞추려는 후속 수정이 `recurringMonthly`에
+   *    annual을 더하면 `projectedAnnual`(= ×12 + annualLump)에서 **12배 이중 계상**된다.
+   * ⚠️ 이 행의 연 합계를 `kpi.projectedAnnual`과 같다고 단언하지 말 것 — 정의가 다르다
+   *    (이쪽은 각 달의 자기 값 합, 저쪽은 기준월 recurring × 12). 대출의 `principalAsOfYm`
+   *    이전 달은 납입액이 null이라 실측 픽스처에서 두 값이 11,581,101 어긋난다.
+   */
+  const renderGrandTotalRow = () => {
+    const expenseItems = (book?.items || []).filter((it) => it && it.group !== 'income');
+    return renderSubtotalRow({
+      key: 'sub-grand',
+      label: '월 지출 합계 (연단위 납부월 포함)',
+      color: LEDGER_BALANCE_COLOR.expense,
+      items: expenseItems,
+    });
   };
 
   const colCount = 3 + visibleMonths.length + 2;
@@ -650,9 +1018,29 @@ export default function LedgerPage({
           <Kpi label={`월 지출 합계 (${month}월 기준)`} value={fmtWon(kpi.recurringMonthly, hideAmounts)}
             sub="대출 + 고정비 + 변동비 (연단위 제외)"
             title="매월 반복되는 지출만 더한 값입니다. 연 1회 목돈(연단위)은 아래 '예상 年 지출'에서 한 번만 더해집니다." />
+          {/* ⚠️ 세분화 칩의 소스는 `projectedByPay`이지 `totals.byPay`가 **아니다**.
+              후자는 연단위를 납부월에 전액 넣는데 이 카드 값은 연단위를 ÷12 해 매달 넣으므로,
+              그대로 붙이면 부분합 ≠ 총액이 상시 발생한다(실측: 비납부월 473,334 부족 /
+              납부월 5,680,000 초과). `projectedByPay`는 Σ가 이 값과 정확히 같도록 정의돼 있다.
+              ⚠️ 라벨에 '계획 기준'을 남길 것 — 분석 탭 칩은 실적 우선이라 같은 '카드'라는
+              이름으로 다른 숫자가 나온다. */}
           <Kpi label="예상 月 지출" value={fmtWon(kpi.projectedMonthly, hideAmounts)}
             sub={`예상 年 ${fmtWon(kpi.projectedAnnual, hideAmounts)}`}
-            title="예상 年 지출 = 월 지출 합계 × 12 + 년단위 합계. 그 값을 12로 나눈 것입니다." />
+            title="예상 年 지출 = 월 지출 합계 × 12 + 년단위 합계. 그 값을 12로 나눈 것입니다.&#10;아래 결제수단 칩은 이 값을 계획 기준으로 쪼갠 것이라 합이 정확히 일치합니다.">
+            {projPay.length > 0 && (
+              <div className="mt-1 pt-1 border-t border-gray-800 flex flex-wrap gap-1">
+                <span className="text-[9px] text-gray-600">계획 기준</span>
+                {projPay.map((p) => (
+                  <span key={p.key} className="inline-flex items-center gap-0.5 text-[9px] px-1 rounded bg-gray-800/80"
+                    title={`${p.label} ${fmtWon(p.value, hideAmounts)} · 예상 月 지출의 ${kpi.projectedMonthly > 0 ? Math.round((p.value / kpi.projectedMonthly) * 100) : 0}%`}>
+                    <span className="inline-block w-1.5 h-1.5 rounded-sm shrink-0" style={{ background: ledgerPayColor(p.key) }} />
+                    <span className="text-gray-400">{p.label}</span>
+                    <span className="text-gray-300">{fmtWonShort(p.value, hideAmounts)}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </Kpi>
           <Kpi label="수입 (월)" value={kpi.incomeMonthly > 0 ? fmtWon(kpi.incomeMonthly, hideAmounts) : '-'}
             tone={kpi.incomeMonthly > 0 ? LEDGER_BALANCE_COLOR.income : undefined}
             sub={kpi.incomeMonthly > 0 ? '' : '수입 항목을 추가하면 저축여력·DSR이 계산됩니다'} />
@@ -714,8 +1102,8 @@ export default function LedgerPage({
                 <thead>
                   <tr className="bg-[#151b28]">
                     <th className={`${cellBase} sticky left-0 z-[3] bg-[#151b28] text-left text-gray-400`}>결제</th>
-                    <th className={`${cellBase} sticky left-[62px] z-[3] bg-[#151b28] text-left text-gray-400`}>항목</th>
-                    <th className={`${cellBase} sticky left-[212px] z-[3] bg-[#151b28] text-right text-gray-400`}>계획</th>
+                    <th className={`${cellBase} sticky z-[3] bg-[#151b28] text-left text-gray-400`} style={{ left: LEFT_NAME }}>항목</th>
+                    <th className={`${cellBase} sticky z-[3] bg-[#151b28] text-right text-gray-400`} style={{ left: LEFT_PLAN }}>계획</th>
                     {visibleMonths.map((m) => (
                       <th key={m} className={`${cellBase} text-right text-gray-400 relative`}>
                         <button
@@ -758,11 +1146,25 @@ export default function LedgerPage({
                       </React.Fragment>
                     );
                   })}
+                  {(book?.items || []).some((it) => it && it.group !== 'income') && renderGrandTotalRow()}
                 </tbody>
               </table>
             </div>
+
+            <CategoryManager
+              readOnly={readOnly}
+              registry={Array.isArray(book?.categories) ? book.categories : []}
+              inUse={categories}
+              items={book?.items || []}
+              onAdd={addCategory}
+              onRemove={removeCategory}
+            />
+
             <div className="mt-2 text-[10px] text-gray-600 leading-relaxed">
               · 실제 금액 칸을 <b>비우면 '미입력'</b>이고, <b>0을 넣으면 '그 달엔 안 썼다'</b>는 확정입니다 — 두 값은 합계에서 다르게 다뤄집니다.<br />
+              · <b>소계 행의 월 금액은 '실제 ?? 계획'</b>입니다 — 실제를 아직 안 넣은 항목은 계획으로 채워집니다. 몇 건이 계획인지는 금액 아래 <span style={{ color: LEDGER_DIVERGING.flat }}>계획 N</span>으로 표시되고, 셀에 마우스를 올리면 실제/계획이 분리돼 보입니다.<br />
+              · 그 계획 폴백은 <b>소계 표시에만</b> 쓰입니다 — 전월/전년 대비와 달력 칩은 실제 입력분만 봅니다(계획으로 채우면 "지출이 줄었다"고 거짓말하게 됩니다).<br />
+              · 항목명 왼쪽 <b>▲▼</b>로 같은 그룹 안에서 순서를 바꿉니다. 항목명 아래 <b>구분</b>은 표 아래 '구분 관리'에서 미리 등록한 값 중에서 고릅니다.<br />
               · 계획 칸 옆 <b>月/年</b> 버튼: 연 단위로 청구되는 항목(연 구독 등)은 <b>年</b>으로 두면 월 계획이 자동으로 ÷12 됩니다. 중간 반올림은 하지 않습니다.<br />
               · 지출 증감 색은 이 앱의 손익 색(이익=빨강)과 <b>다릅니다</b> — 계획 초과는 <span style={{ color: LEDGER_DIVERGING.over }}>▲ 노랑</span>, 절약은 <span style={{ color: LEDGER_DIVERGING.under }}>▼ 청록</span>입니다.
             </div>
@@ -902,7 +1304,7 @@ export default function LedgerPage({
                     <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={{ stroke: '#374151' }} tickLine={false} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false}
                       tickFormatter={(v) => (hideAmounts ? '' : fmtWonShort(v, false))} width={48} />
-                    <RTooltip contentStyle={{ background: '#0f1623', border: '1px solid #374151', fontSize: 11 }}
+                    <RTooltip {...TOOLTIP_STYLE}
                       formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
                     <Bar dataKey="actual" name="실제" fill={LEDGER_BALANCE_COLOR.expense} radius={[4, 4, 0, 0]} maxBarSize={22} />
@@ -926,7 +1328,7 @@ export default function LedgerPage({
                     <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={{ stroke: '#374151' }} tickLine={false} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false}
                       tickFormatter={(v) => (hideAmounts ? '' : fmtWonShort(v, false))} width={48} />
-                    <RTooltip contentStyle={{ background: '#0f1623', border: '1px solid #374151', fontSize: 11 }}
+                    <RTooltip {...TOOLTIP_STYLE}
                       formatter={(v) => [fmtWon(v, hideAmounts), '전월 대비']} />
                     <ReferenceLine y={0} stroke="#4b5563" />
                     <Bar dataKey="momDelta" name="전월 대비" radius={[4, 4, 0, 0]} maxBarSize={22}>
@@ -939,40 +1341,119 @@ export default function LedgerPage({
               </div>
             </div>
 
-            {/* ③ 구분별 도넛 */}
+            {/* ③ 구분 도넛 (고정비는 결제수단으로 분리) */}
             <div className="bg-[#0f1623] border border-gray-800 rounded-lg p-3">
-              <div className="text-[12px] font-semibold mb-1">{month}월 지출 구분</div>
-              <div className="text-[10px] text-gray-500 mb-2">실제가 있으면 실제, 없으면 계획 기준</div>
+              <div className="flex items-baseline gap-2 mb-1">
+                <span className="text-[12px] font-semibold">{month}월 지출 구분</span>
+                <span className="text-[9px] px-1 rounded bg-gray-800 text-gray-500">구분 축</span>
+              </div>
+              <div className="text-[10px] text-gray-500 mb-2">실제가 있으면 실제, 없으면 계획 기준 · 고정비는 결제수단으로 나눠 표시</div>
               {donut.rows.length === 0 ? (
-                <div className="h-[220px] flex items-center justify-center text-[11px] text-gray-600">표시할 지출이 없습니다</div>
+                <div className="h-[240px] flex items-center justify-center text-[11px] text-gray-600">표시할 지출이 없습니다</div>
               ) : (
-                <div style={{ height: 220 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      {/* ⚠️ 직접 라벨 + 2px 간격이 필수 — 이 4색은 CVD ΔE 7.1 대역이라
-                          색만으로는 구분이 보장되지 않는다(보조 부호가 있어야 합법). */}
-                      <Pie data={donut.rows} dataKey="value" nameKey="name" innerRadius={52} outerRadius={82}
-                        paddingAngle={2} stroke="#0f1623" strokeWidth={2}
-                        label={({ name, value }) => `${name} ${donut.sum > 0 ? Math.round((value / donut.sum) * 100) : 0}%`}
-                        labelLine={{ stroke: '#4b5563' }}>
-                        {donut.rows.map((r) => <Cell key={r.key} fill={r.color} />)}
-                      </Pie>
-                      <RTooltip contentStyle={{ background: '#0f1623', border: '1px solid #374151', fontSize: 11 }}
-                        formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
-                      <Legend wrapperStyle={{ fontSize: 10 }} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                <DonutWithList rows={donut.rows} sum={donut.sum} hideAmounts={hideAmounts} />
+              )}
+            </div>
+
+            {/* ③-b 상세구분 도넛 */}
+            <div className="bg-[#0f1623] border border-gray-800 rounded-lg p-3">
+              <div className="flex items-baseline gap-2 mb-1">
+                <span className="text-[12px] font-semibold">{month}월 지출 상세구분</span>
+                <span className="text-[9px] px-1 rounded bg-gray-800 text-gray-500">구분 축</span>
+              </div>
+              <div className="text-[10px] text-gray-500 mb-2">
+                대출·연단위는 <b>항목별</b>, 고정비·변동비는 <b>구분별</b> · 색의 밝기가 같으면 같은 그룹입니다
+              </div>
+              {detailDonut.rows.length === 0 ? (
+                <div className="h-[240px] flex items-center justify-center text-[11px] text-gray-600">표시할 지출이 없습니다</div>
+              ) : (
+                <DonutWithList rows={detailDonut.rows} sum={detailDonut.sum} hideAmounts={hideAmounts} />
+              )}
+              <div className="mt-2 text-[9px] text-gray-600">
+                그룹당 최대 {LEDGER_DETAIL_TOP_N}개까지 표시하고 나머지는 '기타'로 묶습니다.
+                고정비·변동비의 구분은 매트릭스 탭 아래 <b>구분 관리</b>에서 등록합니다.
+              </div>
+            </div>
+
+            {/* ⑤ 결제수단별 지출 */}
+            <div className="bg-[#0f1623] border border-gray-800 rounded-lg p-3">
+              <div className="flex items-baseline gap-2 mb-1">
+                <span className="text-[12px] font-semibold">결제수단별 지출</span>
+                <span className="text-[9px] px-1 rounded bg-gray-800 text-gray-500">결제수단 축</span>
+              </div>
+              <div className="text-[10px] text-gray-500 mb-2">
+                실제가 있으면 실제, 없으면 계획 기준 · <b>대출은 기본이 '이체'</b>라 현금/카드 두 칸에는 들어가지 않습니다
+              </div>
+
+              {/* 그 달 구성비 100% 스트립 — 사용자 요청 "지출 1000이면 현금200 카드800" */}
+              {payStrip.sum > 0 && (
+                <div className="mb-3">
+                  <div className="flex h-5 rounded overflow-hidden">
+                    {payStrip.parts.map((p) => {
+                      const pct = (p.value / payStrip.sum) * 100;
+                      return (
+                        <div key={p.key}
+                          className="flex items-center justify-center text-[9px] font-semibold text-[#0b1120] overflow-hidden"
+                          style={{ width: `${pct}%`, background: p.color }}
+                          title={`${p.label} ${fmtWon(p.value, hideAmounts)} · ${pct.toFixed(1)}%`}>
+                          {/* ⚠️ 세그먼트 안 직접 라벨 — 결제수단 색은 램프라 색만으로는 구분이
+                              보장되지 않는다. 폭이 좁으면 글자가 잘리므로 툴팁이 짝이다. */}
+                          {pct >= 12 ? `${p.label} ${Math.round(pct)}%` : ''}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {payStrip.parts.map((p) => (
+                      <span key={p.key} className="inline-flex items-center gap-1 text-[10px] text-gray-300">
+                        <span className="inline-block w-2 h-2 rounded-sm" style={{ background: p.color }} />
+                        {p.label} {fmtWonShort(p.value, hideAmounts)}
+                        <span className="text-gray-600">{Math.round((p.value / payStrip.sum) * 100)}%</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 12개월 추이 */}
+              <div style={{ height: 210 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  {/* ⚠️ 데이터는 `payChartData`(항목이 없던 달은 행 자체를 제외)다.
+                      recharts는 stacked Bar에서 null을 **0으로 강제**하므로(getValueByDataKey의
+                      기본값 0) '데이터 없음'을 null로 표현할 수 없고, 0 막대로 그리면
+                      '그 달 지출 0원'이라는 거짓 단언이 된다. */}
+                  <ComposedChart data={payChartData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                    <CartesianGrid stroke="#1f2937" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={{ stroke: '#374151' }} tickLine={false} />
+                    <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false}
+                      tickFormatter={(v) => (hideAmounts ? '' : fmtWonShort(v, false))} width={48} />
+                    <RTooltip {...TOOLTIP_STYLE} formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                    {payKeys.map((p) => (
+                      <Bar key={p} dataKey={`pay_${p}`} name={LEDGER_PAY_LABEL[p]} stackId="pay"
+                        fill={ledgerPayColor(p)} maxBarSize={26} />
+                    ))}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+              {payChartData.length < MONTHS.length && (
+                <div className="mt-1 text-[9px] text-gray-600">
+                  항목이 하나도 없던 달 {MONTHS.length - payChartData.length}개는 막대를 그리지 않습니다(지출 0원이 아니라 '기록 대상 없음').
                 </div>
               )}
               {payRows.length > 0 && (
                 <div className="mt-2 border-t border-gray-800 pt-2">
-                  <div className="text-[10px] text-gray-500 mb-1">결제수단별 (지출만)</div>
+                  <div className="text-[10px] text-gray-500 mb-1">{month}월 결제수단별 (지출만 · 실제 우선 · 연단위 납부월 포함)</div>
                   <div className="flex flex-wrap gap-2">
                     {payRows.map((r) => (
                       <span key={r.key} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">
                         {r.label} {fmtWonShort(r.actual > 0 ? r.actual : r.plan, hideAmounts)}
                       </span>
                     ))}
+                  </div>
+                  {/* ⚠️ 헤더 KPI 칩과 기준이 다르다(저쪽은 계획 기준 + 연단위 ÷12) — 반드시 고지할 것. */}
+                  <div className="mt-1 text-[9px] text-gray-600">
+                    헤더 '예상 月 지출'의 칩과 숫자가 다를 수 있습니다 — 저쪽은 <b>계획 기준</b>이고 연단위를 ÷12 해 매달 나눠 담습니다.
                   </div>
                 </div>
               )}
@@ -989,7 +1470,7 @@ export default function LedgerPage({
                     <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={{ stroke: '#374151' }} tickLine={false} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false}
                       tickFormatter={(v) => (hideAmounts ? '' : fmtWonShort(v, false))} width={48} />
-                    <RTooltip contentStyle={{ background: '#0f1623', border: '1px solid #374151', fontSize: 11 }}
+                    <RTooltip {...TOOLTIP_STYLE}
                       formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
                     <Bar dataKey="income" name="수입" fill={LEDGER_BALANCE_COLOR.income} radius={[4, 4, 0, 0]} maxBarSize={18} />
@@ -1012,7 +1493,7 @@ export default function LedgerPage({
                     <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={{ stroke: '#374151' }} tickLine={false} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false}
                       tickFormatter={(v) => (hideAmounts ? '' : fmtWonShort(v, false))} width={52} />
-                    <RTooltip contentStyle={{ background: '#0f1623', border: '1px solid #374151', fontSize: 11 }}
+                    <RTooltip {...TOOLTIP_STYLE}
                       formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
                     <Bar dataKey="actual" name="실제" fill={LEDGER_BALANCE_COLOR.expense} radius={[4, 4, 0, 0]} maxBarSize={40} />
@@ -1085,9 +1566,128 @@ export default function LedgerPage({
   );
 }
 
-/** 그룹의 그 달 계획 합. 소계 행에서만 쓴다. */
-function planOfGroupAt(items, ym) {
-  let s = 0;
-  for (const it of items) { const p = planOf(it, ym); if (p !== null && Number.isFinite(p)) s += p; }
-  return s;
+/**
+ * 도넛 + 옆 목록 — 메인/상세 도넛이 **공유**한다(손복제 금지).
+ *
+ * ⚠️ 바깥 라벨(`label` + `labelLine`)로 되돌리지 말 것. 220px 높이에 4슬롯이 겨우 버티던
+ *    구성인데 고정비 분리·상세 구분으로 슬롯이 최대 8~20개가 된다 — 라벨선 끝점이 서로
+ *    충돌해 **CVD 대역에서 유일한 보조 부호인 직접 라벨이 실질적으로 무력화**된다.
+ *    대신 조각마다 옆 목록에 색칩 + 이름 + 금액 + %를 두고, 큰 조각에만 안쪽 %를 얹는다.
+ * ⚠️ 목록은 도넛과 **같은 순서**(recharts는 data 순서대로 시계방향으로 그린다)라
+ *    조각↔행 대응이 위치로 복원된다.
+ */
+function DonutWithList({ rows, sum, hideAmounts }) {
+  const pct = (v) => (sum > 0 ? (v / sum) * 100 : 0);
+  return (
+    <div className="flex gap-2 items-center">
+      <div className="shrink-0" style={{ width: 190, height: 240 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={rows} dataKey="value" nameKey="name" innerRadius={54} outerRadius={88}
+              paddingAngle={2} stroke="#0f1623" strokeWidth={2} isAnimationActive={false}
+              labelLine={false}
+              label={({ value, cx, cy, midAngle, innerRadius, outerRadius }) => {
+                const p = pct(value);
+                if (p < 8) return null;   // 좁은 조각은 안쪽 라벨이 안 들어간다 — 옆 목록이 받는다
+                const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+                const rad = (-midAngle * Math.PI) / 180;
+                return (
+                  <text x={cx + r * Math.cos(rad)} y={cy + r * Math.sin(rad)}
+                    fill="#0b1120" fontSize={10} fontWeight={700}
+                    textAnchor="middle" dominantBaseline="central">{Math.round(p)}%</text>
+                );
+              }}>
+              {rows.map((r) => <Cell key={r.key} fill={r.color} />)}
+            </Pie>
+            <RTooltip {...TOOLTIP_STYLE} formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="flex-1 min-w-0 max-h-[240px] overflow-y-auto pr-1">
+        {rows.map((r) => (
+          <div key={r.key} className="flex items-center gap-1.5 text-[10px] py-0.5 border-b border-gray-800/50 last:border-0"
+            title={`${r.name} ${fmtWon(r.value, hideAmounts)} · ${pct(r.value).toFixed(1)}%`}>
+            <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: r.color }} />
+            <span className="text-gray-300 truncate flex-1 min-w-0">{r.name}</span>
+            <span className="text-gray-400 shrink-0 tabular-nums">{fmtWonShort(r.value, hideAmounts)}</span>
+            <span className="text-gray-600 shrink-0 tabular-nums w-8 text-right">{Math.round(pct(r.value))}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 지출 구분(카테고리) 프리셋 관리 — 매트릭스 표 아래 접이식 패널.
+ * ⚠️ 삭제해도 항목의 `category`는 지우지 않는다(그 값은 선택 목록에 계속 남는다) —
+ *    undo가 없는 화면에서 오클릭 한 번으로 여러 행의 구분이 사라지면 안 된다.
+ */
+function CategoryManager({ registry, inUse, items, onAdd, onRemove, readOnly }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const countOf = (c) => items.filter((it) => it && it.category === c).length;
+  // 레지스트리에 없는데 실제로 쓰이는 값 — '등록되지 않은 구분'으로 보여 준다.
+  const orphans = inUse.filter((c) => !registry.includes(c));
+  return (
+    <div className="mt-2 border border-gray-800 rounded-lg bg-[#0f1623]">
+      <button className="w-full flex items-center gap-2 px-3 py-1.5 text-left"
+        onClick={() => setOpen((o) => !o)}>
+        <span className="text-[11px] text-gray-300">{open ? '▾' : '▸'} 구분 관리</span>
+        <span className="text-[10px] text-gray-600">{registry.length}개 등록</span>
+        {orphans.length > 0 && (
+          <span className="text-[9px] px-1 rounded bg-gray-800 text-gray-400" title="항목에는 쓰이는데 목록에 없는 값입니다">
+            미등록 {orphans.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="px-3 pb-2">
+          {!readOnly && (
+            <div className="flex items-center gap-1 mb-2">
+              <input
+                type="text"
+                className="bg-gray-800/70 rounded px-2 py-0.5 text-[11px] outline-none focus:bg-gray-800 w-40"
+                placeholder="예: 구독"
+                maxLength={MAX_LEDGER_CATEGORY_LEN}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { if (onAdd(draft)) setDraft(''); } }}
+              />
+              <button className="text-[11px] px-2 py-0.5 rounded bg-gray-800 text-gray-300 hover:bg-gray-700"
+                onClick={() => { if (onAdd(draft)) setDraft(''); }}>+ 등록</button>
+              <span className="text-[9px] text-gray-600">최대 {MAX_LEDGER_CATEGORIES}개 · {MAX_LEDGER_CATEGORY_LEN}자</span>
+            </div>
+          )}
+          {registry.length === 0 && orphans.length === 0 ? (
+            <div className="text-[10px] text-gray-600">
+              등록된 구분이 없습니다. 예: <b>구독</b>·<b>통신</b>·<b>보험</b>·<b>교통</b> — 등록하면 각 항목의 '구분' 칸에서 고를 수 있습니다.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              {registry.map((c) => (
+                <span key={c} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-300">
+                  {c}<span className="text-gray-600">{countOf(c)}</span>
+                  {!readOnly && (
+                    <button className="text-gray-600 hover:text-rose-300"
+                      title="목록에서 제거 — 이미 이 구분을 쓰는 항목의 값은 그대로 남습니다"
+                      onClick={() => onRemove(c)}>×</button>
+                  )}
+                </span>
+              ))}
+              {orphans.map((c) => (
+                <span key={`o-${c}`} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-gray-500 border border-gray-800"
+                  title="항목에는 쓰이는데 목록에 없습니다 — 등록하면 다른 항목에서도 고를 수 있습니다">
+                  {c}<span className="text-gray-700">{countOf(c)}</span>
+                  {!readOnly && (
+                    <button className="text-gray-600 hover:text-emerald-300" title="목록에 등록" onClick={() => onAdd(c)}>+</button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

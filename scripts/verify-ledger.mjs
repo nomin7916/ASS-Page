@@ -405,6 +405,173 @@ if (L) {
   ok('#63b 키 순서가 달라도 지문이 같다',
     ledgerFingerprint([makeLedgerBook({ id: 'x', items: [makeLedgerItem({ id: 'i', actual: { '2026-08': 1, '2026-07': 2 } })] })]) ===
     ledgerFingerprint([makeLedgerBook({ id: 'x', items: [makeLedgerItem({ id: 'i', actual: { '2026-07': 2, '2026-08': 1 } })] })]));
+
+  // ── §11 예상(expected) 집계 — "계획만 입력해도 소계가 나온다" ──────────────
+  console.log('\n  §11 예상 집계 — 계획 폴백');
+  const {
+    expectedOf, expectedTotal, expectedIncomeTotal, expectedByPay, expectedGrandTotal, monthState,
+  } = L;
+  ok('#64 필요한 export가 있다',
+    [expectedOf, expectedTotal, expectedByPay, expectedGrandTotal, monthState].every((f) => typeof f === 'function'));
+
+  const ex = (o) => makeLedgerItem({ group: 'fixed', ...o });
+  eq('#65 실제가 없으면 계획으로 채운다', expectedOf(ex({ plan: 1000 }), '2026-08'), 1000);
+  eq('#65b 실제가 있으면 실제', expectedOf(ex({ plan: 1000, actual: { '2026-08': 1200 } }), '2026-08'), 1200);
+  // ⚠️ 이 한 줄이 '미입력 vs 0원' 구분의 마지막 방어선이다. `||`로 바꾸면 1000이 나온다.
+  eq('#66 ⚠️ 명시적 0은 계획으로 되살아나지 않는다(`??`이지 `||`가 아니다)',
+    expectedOf(ex({ plan: 1000, actual: { '2026-08': 0 } }), '2026-08'), 0);
+  eq('#66b 실제도 계획도 없으면 0이 아니라 null', expectedOf(ex({}), '2026-08'), null);
+  eq('#66c 비활성 달은 null', expectedOf(ex({ plan: 1000, activeFrom: '2026-09' }), '2026-08'), null);
+
+  const expBook = makeLedgerBook({
+    items: [
+      ex({ id: 'a', pay: 'cash', plan: 100000, actual: { '2026-08': 120000 } }),
+      ex({ id: 'b', pay: 'card', plan: 200000 }),                       // 미입력 → 계획으로 채움
+      ex({ id: 'c', pay: 'card', plan: 50000, actual: { '2026-08': 0 } }), // 명시적 0
+      makeLedgerItem({ id: 'i', group: 'income', pay: 'cash', plan: 3000000, actual: { '2026-08': 3000000 } }),
+    ],
+  });
+  const et = expectedTotal(expBook.items, '2026-08');
+  eq('#67 예상 합 = 실제 + 계획 폴백', et.value, 120000 + 200000 + 0);
+  eq('#67b 실제 몫', et.fromActual, 120000);
+  eq('#67c 계획으로 채운 몫', et.fromPlan, 200000);
+  eq('#67d 계획으로 채운 건수', et.plannedCount, 1);
+  eq('#67e 실제 입력 건수(명시적 0 포함)', et.actualCount, 2);
+  // ⚠️ 이 게이트가 monthTotals 밖으로 옮겨진 #48c다 — 함수 안에 있어야 한다(호출부 위임 금지).
+  eq('#68 ⚠️ 수입이 지출 예상 합에 섞이지 않는다', et.activeCount, 3);
+  eq('#68b 수입은 별도 함수로만', expectedIncomeTotal(expBook.items, '2026-08').value, 3000000);
+  const ebp = expectedByPay(expBook.items, '2026-08');
+  eq('#68c ⚠️ expectedByPay도 수입을 제외한다(현금 소계에 급여가 없다)', ebp.cash.value, 120000);
+  eq('#68d 카드 소계 = 계획 폴백 + 명시적 0', ebp.card.value, 200000);
+  ok('#68e 항목이 있는 결제수단만 키를 만든다', !('transfer' in ebp) && Object.keys(ebp).sort().join() === 'card,cash');
+
+  // ⚠️ 계획 열의 기준선 — 실적을 채워 넣어도 값이 변하면 안 된다(fromPlan을 쓰면 0으로 수렴).
+  const planSumOf = (acts) => expectedTotal([
+    ex({ id: 'p1', plan: 80000, actual: acts[0] ? { '2026-08': acts[0] } : {} }),
+    ex({ id: 'p2', plan: 450000, actual: acts[1] ? { '2026-08': acts[1] } : {} }),
+    ex({ id: 'p3', plan: 17000, actual: acts[2] ? { '2026-08': acts[2] } : {} }),
+  ], '2026-08').planSum;
+  ok('#69 ⚠️ planSum은 실적을 채워도 불변(fromPlan과 다르다)',
+    planSumOf([0, 0, 0]) === 547000 && planSumOf([80000, 450000, 0]) === 547000 && planSumOf([80000, 450000, 17000]) === 547000);
+
+  // ⚠️ 누출 금지 — 계획 폴백이 비교·시계열로 새면 전월 대비가 영구히 거짓말을 시작한다.
+  const leakBook = makeLedgerBook({
+    items: [ex({ id: 'x', plan: 1000, actual: { '2026-07': 1000, '2026-08': 1200 } }), ex({ id: 'y', plan: 2000, actual: { '2026-07': 2000 } })],
+  });
+  ok('#70 ⚠️ 계획 폴백이 momDelta로 새지 않는다(완료도 불일치 유지)', momDelta(leakBook, '2026-08').comparable === false);
+  eq('#70b ⚠️ monthTotals.actualExpense는 입력분만', monthTotals(leakBook, '2026-08').actualExpense, 1200);
+  eq('#70c 같은 달의 예상 합은 계획으로 채워진다', expectedTotal(leakBook.items, '2026-08').value, 1200 + 2000);
+
+  // ── §12 월 상태 4종 ─────────────────────────────────────────────────────
+  console.log('\n  §12 월 상태 — "항목 없음"과 "미입력"은 다르다');
+  const midYearBook = makeLedgerBook({ items: [ex({ plan: 1000, activeFrom: '2026-08' })] });
+  // ⚠️ 연중 시작이 이 기능의 기본 사용 경로다. 2분법이면 1~7월이 '미입력'으로 단언된다.
+  eq('#71 ⚠️ 시작 전 달은 "항목 없음"(미입력 아님)', monthState(expectedTotal(midYearBook.items, '2026-03')), 'none');
+  eq('#71b 실적이 하나도 없으면 empty', monthState(expectedTotal(midYearBook.items, '2026-08')), 'empty');
+  eq('#71c 일부만 입력하면 partial',
+    monthState(expectedTotal([ex({ id: 'a', plan: 1, actual: { '2026-08': 1 } }), ex({ id: 'b', plan: 1 })], '2026-08')), 'partial');
+  eq('#71d 전부 입력하면 full',
+    monthState(expectedTotal([ex({ id: 'a', plan: 1, actual: { '2026-08': 1 } })], '2026-08')), 'full');
+  eq('#71e null/빈 입력도 none', monthState(null), 'none');
+
+  // ── §13 항목 순서 이동 ──────────────────────────────────────────────────
+  console.log('\n  §13 순서 이동 — 그룹 안에서만');
+  const { moveItemInGroup, canMoveItemInGroup } = L;
+  const mix = [
+    makeLedgerItem({ id: 'f1', group: 'fixed' }),
+    makeLedgerItem({ id: 'v1', group: 'variable' }),   // 다른 그룹이 사이에 끼어 있다
+    makeLedgerItem({ id: 'f2', group: 'fixed' }),
+  ];
+  // ⚠️ 인접 인덱스와 그냥 교환하면 f2↔v1이 바뀌어 화면에서는 아무 일도 일어나지 않는다.
+  eq('#72 ⚠️ 다른 그룹을 건너뛰고 같은 그룹끼리 교환',
+    moveItemInGroup(mix, 'f2', -1).map((x) => x.id), ['f2', 'v1', 'f1']);
+  eq('#72b 아래로도 같은 규칙', moveItemInGroup(mix, 'f1', 1).map((x) => x.id), ['f2', 'v1', 'f1']);
+  ok('#73 ⚠️ 이동 불가면 원본 참조 그대로(헛된 저장 트리거 방지)',
+    moveItemInGroup(mix, 'f1', -1) === mix && moveItemInGroup(mix, 'v1', 1) === mix && moveItemInGroup(mix, 'nope', 1) === mix);
+  ok('#73b canMoveItemInGroup이 그 판정을 공유',
+    canMoveItemInGroup(mix, 'f1', -1) === false && canMoveItemInGroup(mix, 'f1', 1) === true);
+  ok('#73c 입력 배열을 변형하지 않는다', mix.map((x) => x.id).join() === 'f1,v1,f2');
+  // ⚠️ 배열 재정렬이라 영속화 신규 지점이 0곳이다 — 지문이 순서를 잡아 준다.
+  ok('#74 ⚠️ 순서만 바꿔도 지문이 바뀐다(order 필드 없이 저장이 트리거된다)',
+    ledgerFingerprint([makeLedgerBook({ id: 'b', items: mix })]) !==
+    ledgerFingerprint([makeLedgerBook({ id: 'b', items: moveItemInGroup(mix, 'f2', -1) })]));
+
+  // ── §14 구분(카테고리) ──────────────────────────────────────────────────
+  console.log('\n  §14 구분 프리셋');
+  const { ledgerCategories } = L;
+  const catBook = makeLedgerBook({
+    categories: ['구독', '통신'],
+    items: [ex({ category: '구독' }), ex({ category: '보험' }), ex({ category: '' })],
+  });
+  eq('#75 레지스트리 ∪ 실제 사용값(등록 순 → 미등록 사용값)',
+    ledgerCategories(catBook), ['구독', '통신', '보험']);
+  // ⚠️ trim해서 넣으면 옵션에 없는 값이 되어 select가 첫 옵션을 표시하고, 한 번 건드리면 덮인다.
+  eq('#75b ⚠️ 항목의 값은 가공하지 않고 그대로 옵션이 된다(공백 포함)',
+    ledgerCategories(makeLedgerBook({ categories: ['구독'], items: [ex({ category: ' 구독 ' })] })), ['구독', ' 구독 ']);
+  eq('#75c 손상 입력에도 빈 배열', ledgerCategories(null), []);
+  // 정규화
+  const dirty = normalizeLedgerBooks([{ categories: ['  구독  ', '구독', '', 42, 'x'.repeat(99)], items: [] }]);
+  eq('#76 정규화가 trim·중복 제거·길이 상한을 적용', dirty[0].categories, ['구독', 'x'.repeat(L.MAX_LEDGER_CATEGORY_LEN)]);
+  ok('#76b 개수 상한',
+    normalizeLedgerBooks([{ categories: Array.from({ length: 99 }, (_, i) => `c${i}`), items: [] }])[0].categories.length === L.MAX_LEDGER_CATEGORIES);
+  // ⚠️ #76은 `id`가 없어 다른 이유로도 changed가 서므로 **변경 판정 누락을 잡지 못한다**
+  //    (변이 테스트로 확인한 죽은 단언). categories 외에는 전부 정규형인 픽스처라야
+  //    `sameStrList(categories, src.categories)` 검사가 유일한 트리거가 된다.
+  eq('#76c ⚠️ categories만 손상돼도 정규화가 적용된다(changed 판정 누락 방지)',
+    normalizeLedgerBooks([{ id: 'C', name: 'n', categories: ['  구독  ', '구독'], items: [], months: {}, createdAt: 0, updatedAt: 0 }])[0].categories,
+    ['구독']);
+  // ⚠️ 멱등 — 깨지면 Drive 폴링마다 재저장 + 로컬 사본이 갈아엎어져 편집이 사라진다.
+  const catOnce = normalizeLedgerBooks([JSON.parse(JSON.stringify(catBook))]);
+  ok('#77 ⚠️ categories가 있어도 두 번째 정규화는 같은 참조', normalizeLedgerBooks(catOnce) === catOnce);
+  // ⚠️ 레거시(필드 없음)를 '변경됨'으로 보면 로드마다 새 배열이 나와 churn이 난다.
+  const legacy = [{ id: 'L', name: 'n', items: [], months: {}, createdAt: 0, updatedAt: 0 }];
+  ok('#77b ⚠️ categories가 없던 레거시는 원본 참조 그대로(undefined ≡ [])', normalizeLedgerBooks(legacy) === legacy);
+  ok('#78 ⚠️ 구분만 추가해도 지문이 바뀐다(저장 스킵 방지)',
+    ledgerFingerprint([makeLedgerBook({ id: 'x' })]) !== ledgerFingerprint([makeLedgerBook({ id: 'x', categories: ['구독'] })]));
+  ok('#78b 구분만 등록한 장부도 "내용 있음"(복원이 되돌리면 안 된다)',
+    ledgerBooksHaveContent([makeLedgerBook({ categories: ['구독'] })]) === true);
+  ok('#78c ⚠️ 빈 장부는 여전히 "내용 없음"(백업 복원 경로 유지)',
+    ledgerBooksHaveContent([makeLedgerBook()]) === false);
+
+  // ── §15 헤더 세분화 — 축 정합 ───────────────────────────────────────────
+  console.log('\n  §15 예상 月 지출의 결제수단 분해 — Σ가 총액과 같아야 한다');
+  const { projectedByPay } = L;
+  const axBook = makeLedgerBook({
+    items: [
+      makeLedgerItem({ group: 'fixed', pay: 'card', plan: 200000 }),
+      makeLedgerItem({ group: 'fixed', pay: 'cash', plan: 100000 }),
+      makeLedgerItem({ group: 'variable', pay: 'card', plan: 50000 }),
+      // 연단위 — ⚠️ byPay는 납부월에 전액 넣지만 projectedMonthly는 ÷12 한다. 그 차이가 이 절의 이유다.
+      makeLedgerItem({ group: 'annual', pay: 'cash', plan: 1200000, dueMonth: 3 }),
+      makeLedgerItem({ group: 'income', pay: 'cash', plan: 5000000 }),
+    ],
+  });
+  for (const mth of ['2026-01', '2026-03']) {
+    const sum = Object.values(projectedByPay(axBook, mth)).reduce((a, b) => a + b, 0);
+    near(`#79 ⚠️ Σ projectedByPay === projectedMonthly (${mth}, 납부월 포함/미포함 모두)`,
+      sum, ledgerKpi(axBook, mth).projectedMonthly, 1e-9);
+  }
+  eq('#79b ⚠️ 수입은 분해에 섞이지 않는다', projectedByPay(axBook, '2026-01').cash, 1200000 / 12 + 100000);
+  // ⚠️ byPay를 그대로 쓰면 부분합 ≠ 총액 — 그 오차가 실재함을 고정한다(되돌림 방지).
+  {
+    const bp = monthTotals(axBook, '2026-03').byPay;
+    const bySum = Object.values(bp).reduce((a, b) => a + b.plan, 0);
+    ok('#79c ⚠️ monthTotals.byPay로 대체하면 총액과 어긋난다(그래서 별도 함수다)',
+      Math.abs(bySum - ledgerKpi(axBook, '2026-03').projectedMonthly) > 1);
+  }
+
+  // ── §16 팔레트 램프 ────────────────────────────────────────────────────
+  console.log('\n  §16 램프 / 결제수단 색');
+  const { ledgerRamp, ledgerPayColor, LEDGER_GROUP_COLOR: GC, LEDGER_PAY_ORDER: PO, LEDGER_DETAIL_OTHER: DO } = L;
+  ok('#80 n<=1이면 기준색 그대로', ledgerRamp(GC.fixed, 'fixed', 1, 0) === GC.fixed && ledgerRamp(GC.fixed, 'fixed', 0, 0) === GC.fixed);
+  ok('#80b 결정적(같은 인자 → 같은 값)', ledgerRamp(GC.loan, 'loan', 4, 2) === ledgerRamp(GC.loan, 'loan', 4, 2));
+  ok('#80c 범위를 벗어난 i는 클램프',
+    ledgerRamp(GC.loan, 'loan', 4, 99) === ledgerRamp(GC.loan, 'loan', 4, 3) && ledgerRamp(GC.loan, 'loan', 4, -5) === ledgerRamp(GC.loan, 'loan', 4, 0));
+  ok('#80d 유효한 hex를 낸다', [2, 3, 4, 5].every((n) => Array.from({ length: n }, (_, i) => ledgerRamp(GC.annual, 'annual', n, i)).every((h) => /^#[0-9a-f]{6}$/.test(h))));
+  ok('#81 결제수단 색이 전부 다르다', new Set(PO.map(ledgerPayColor)).size === PO.length);
+  ok('#81b 미지 결제수단도 색을 낸다(렌더 중 undefined 금지)', /^#[0-9a-f]{6}$/.test(ledgerPayColor('bogus')));
+  // ⚠️ 중립 midpoint를 카테고리 슬롯으로 쓰면 회색이 '계획선'·'변동 없음'·'기타'를 동시에 뜻한다.
+  ok('#81c ⚠️ DETAIL_OTHER는 DIVERGING.flat이 아니다', DO !== L.LEDGER_DIVERGING.flat);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -574,6 +741,121 @@ const HOSTS = readdirSync(join(ROOT, 'src/components'))
   .filter(([, n]) => n > 0).map(([f]) => f).sort();
 eq('#G9 ledger.ts 소비처 census(새 소비처는 null 계약을 다시 확인할 것)', HOSTS,
   ['CalendarModal.tsx', 'LedgerPage.tsx', 'LedgerWindow.tsx']);
+
+// ════════════════════════════════════════════════════════════════════════════
+// §G10~ 6가지 수정(2026-08) 배선 가드
+// ⚠️ 전부 **선언이 아니라 사용부**를 단언한다 — 상수/함수의 존재만 보면 셀을 통째로
+//    삭제하거나 값을 바꿔치기해도 초록으로 통과하는 죽은 단언이 된다.
+console.log('\n── §G10 계획 폴백 누출 금지 ──');
+const LP_RAW = read('src/components/LedgerPage.tsx');
+const LP = stripComments(LP_RAW);
+
+// ⚠️ 계획으로 채운 값이 비교·시계열로 새면 전월 대비가 영구히 거짓말을 시작한다.
+//    **구간을 잘라** 단언한다 — 파일 전역 정규식은 다른 곳의 정상 사용에 걸려 죽은 단언이 된다.
+const noExpected = (label, block, why) =>
+  ok(`${label} ${why}`, block.length > 0 && !/expected|Expected/.test(block));
+noExpected('#G10 compareMonths', sliceBlock(LG, 'export const compareMonths', '\nexport const momDelta'),
+  '본문에 expected가 없다(완료도 판정이 무너지면 −87.2% 거짓말이 부호만 바뀌어 재발)');
+noExpected('#G10b ledgerEventsByDate', sliceBlock(LG, 'export const ledgerEventsByDate', '\n/* ====='),
+  '본문에 expected가 없다(기록하지 않은 날에 달력 칩이 총지출을 찍는다)');
+noExpected('#G10c monthTotals', sliceBlock(LG, 'export const monthTotals', 'export const expectedOf'),
+  '본문에 expected가 없다(이 구조체를 5소비자가 받아 간다)');
+noExpected('#G10d yearSeries.actual', sliceBlock(LP, 'const yearSeries = useMemo', 'const e = expectedTotal'),
+  'plan/actual/momDelta 산출부에 expected가 없다');
+// ⚠️ annualCompare는 설계안의 누출 금지 목록에서 빠져 있었다 — '계획만 입력한 해가 전년 대비
+//    차트에서 통째로 사라진다'가 요청1과 같은 증상이라 여기에 expected를 꽂을 유인이 가장 크다.
+noExpected('#G10e annualCompare', sliceBlock(LP, 'const annualCompare = useMemo', '), [book, yearsAvailable]);'),
+  '본문에 expected가 없다(모든 해가 "항상 비교 가능한 거짓 숫자"가 된다)');
+
+console.log('\n── §G11 소계 / 결제수단 행 ──');
+const SUB = sliceBlock(LP, 'const renderSubtotalRow', 'const renderGroupSubtotal');
+ok('#G11 소계 월 셀이 expectedTotal을 쓴다(계획 폴백)', /const e = expectedTotal\(items, k\)/.test(SUB));
+// ⚠️ fromPlan을 쓰면 사용자가 실적을 채울수록 계획 열이 0으로 수렴한다(실측 547,000 → 17,000).
+ok('#G11b ⚠️ 계획 열이 planSum이다(fromPlan 아님)',
+  /fmtWon\(cur\.planSum, hideAmounts\)/.test(SUB) && !/fmtWon\(cur\.fromPlan/.test(SUB));
+ok('#G11c 계획으로 채운 건수를 셀에 노출한다', /e\.plannedCount > 0/.test(SUB));
+// ⚠️ '보이는 달 중 하나라도'로 재면 미래 달이 항상 계획-only라 배지가 상시 켜져 신호가 0이 된다.
+ok('#G11d ⚠️ 배지는 선택한 달 하나로 판정한다', /cur\.plannedCount > 0/.test(SUB));
+ok('#G11e "항목 없음"을 "미입력"과 구분한다', /state === 'none'/.test(SUB));
+const GSUB = sliceBlock(LP, 'const renderGroupSubtotal', 'const renderGrandTotalRow');
+// ⚠️ 현금/카드만 하드코딩하면 pay:'auto'인 항목이 어느 행에도 없이 사라진다.
+ok('#G11f ⚠️ 결제수단 행이 LEDGER_PAY_ORDER 전체를 훑는다',
+  /LEDGER_PAY_ORDER\.filter\(\(p\) => items\.some/.test(GSUB));
+ok('#G11g 결제수단이 2종 이상일 때만 행을 만든다', /present\.length > 1/.test(GSUB));
+ok('#G11h 1종이면 라벨에 표기한다(행 없이도 답이 화면에 있다)', /전액 \$\{LEDGER_PAY_LABEL\[present\[0\]\]\}/.test(GSUB));
+// ⚠️ 헤더 KPI의 '월 지출 합계'는 연단위 **제외**라 이름이 겹친다. 라벨이 유일한 잠금이다.
+ok('#G11i ⚠️ 총합계 행 라벨이 연단위 포함임을 밝힌다', /'월 지출 합계 \(연단위 납부월 포함\)'/.test(LP));
+ok('#G11j 총합계 행이 tbody에 실제로 렌더된다', /renderGrandTotalRow\(\)\}/.test(LP));
+
+console.log('\n── §G12 순서 이동 / 구분 ──');
+ok('#G12 ▲▼가 항목 행에 렌더된다', /<MoveBtns[\s\S]{0,220}?canMoveItemInGroup\(book\.items, it\.id, -1\)/.test(LP));
+ok('#G12b 이동이 id 기준 순수 함수를 쓴다', /moveItemInGroup\(b\.items, itemId, dir\)/.test(LP));
+// ⚠️ data-col을 달면 onGridKeyDown의 ↑/↓ 열 이동에 버튼이 끼어든다.
+ok('#G12c ⚠️ ▲▼에 data-col을 달지 않는다',
+  !/data-col[^\n]{0,40}(?:up|down|move)/i.test(sliceBlock(LP, 'function MoveBtns', '\n/* ──')));
+ok('#G12d 구분 select가 행에 렌더되고 합집합 목록을 쓴다',
+  /categories\.map\(\(c\) => <option/.test(LP) && /const categories = useMemo\(\(\) => ledgerCategories\(book\)/.test(LP));
+ok('#G12e 구분 관리 패널이 렌더된다', /<CategoryManager[\s\S]{0,300}?onAdd=\{addCategory\}/.test(LP));
+// ⚠️ 레지스트리에서 지웠다고 항목의 category를 지우면 undo 없이 여러 행의 구분이 사라진다.
+ok('#G12f ⚠️ 구분 삭제가 항목의 category를 건드리지 않는다',
+  !/removeCategory[\s\S]{0,400}?items:[\s\S]{0,120}?category:/.test(LP));
+ok('#G12g 입력 maxLength가 정규화와 같은 상수를 쓴다', /maxLength=\{MAX_LEDGER_CATEGORY_LEN\}/.test(LP));
+
+console.log('\n── §G13 도넛 / 결제수단 막대 ──');
+// ⚠️ 6곳 손복제를 되살리지 말 것 — 툴팁 글자색(#808080)은 contentStyle만 고쳐서는 안 바뀐다.
+ok('#G13 툴팁 스타일이 상수 하나로 공유된다',
+  /const TOOLTIP_STYLE = \{/.test(LP) && !/contentStyle=\{\{ background: '#0f1623'/.test(LP));
+ok('#G13b ⚠️ itemStyle로 글자색을 덮는다(recharts Pie 기본 fill #808080 회피)',
+  /itemStyle: \{ color: '#e5e7eb' \}/.test(LP));
+ok('#G13c 모든 RTooltip이 그 상수를 쓴다',
+  (LP.match(/<RTooltip \{\.\.\.TOOLTIP_STYLE\}/g) || []).length === (LP.match(/<RTooltip/g) || []).length);
+const DON = sliceBlock(LP, 'const donut = useMemo', 'const detailDonut');
+// ⚠️ byPay는 그룹 구분이 없어 대출·연단위가 섞인다(addItem이 연단위를 pay:'cash'로 만든다).
+ok('#G13d ⚠️ 고정비 분리가 byPay가 아니라 고정비 항목만 순회한다',
+  /expectedByPay\(fixedItems, ym\)/.test(DON) && !/totals\.byPay/.test(DON));
+ok('#G13e 고정비 조각 색이 결제수단 색을 공유한다(현금이 두 색이 되면 안 된다)', /ledgerPayColor\(p\)/.test(DON));
+// ⚠️ 메인/상세가 같은 후처리를 써야 두 도넛의 합이 갈리지 않는다(음수 plan이 도달 가능하다).
+ok('#G13f ⚠️ 두 도넛이 같은 후처리(donutRows)를 지난다',
+  (LP.match(/return donutRows\(rows\)/g) || []).length === 2 && /Math\.max\(0, Number\.isFinite\(r\.value\)/.test(LP));
+ok('#G13g 상세 도넛이 Top-N + 기타로 접는다', /LEDGER_DETAIL_TOP_N/.test(LP) && /LEDGER_DETAIL_OTHER/.test(LP));
+// ⚠️ 바깥 라벨은 슬롯이 4를 넘으면 라벨선이 충돌해 유일한 보조 부호가 무력화된다.
+ok('#G13h ⚠️ 도넛이 옆 목록 + 안쪽 % 방식이다(labelLine 되돌림 금지)',
+  /function DonutWithList/.test(LP) && /labelLine=\{false\}/.test(LP) && !/labelLine=\{\{ stroke/.test(LP));
+// ⚠️ LP(주석 제거본)가 아니라 LP_RAW를 자른다 — 구간 경계가 `{/* */}` 주석이라
+//    stripComments가 지우면 구간을 못 찾아 가드가 영구히 실패한다.
+const BAR = sliceBlock(LP_RAW, '{/* ⑤ 결제수단별 지출 */}', '{/* ④ 수지 균형 */}');
+// ⚠️ recharts는 stacked Bar에서 null을 0으로 강제한다 → '데이터 없음'을 행 제외로 표현한다.
+ok('#G13i ⚠️ 막대가 payChartData(항목 없던 달 제외)를 쓴다', /data=\{payChartData\}/.test(BAR));
+ok('#G13j 제외한 달 수를 화면에 밝힌다', /MONTHS\.length - payChartData\.length/.test(BAR));
+ok('#G13k 스택이 결제수단 색을 공유한다', /fill=\{ledgerPayColor\(p\)\}/.test(BAR));
+ok('#G13l 세그먼트 안 직접 라벨이 있다(색만으로 구분되지 않는다)', /\$\{p\.label\} \$\{Math\.round\(pct\)\}%/.test(BAR));
+// ⚠️ 대출 기본 pay가 transfer라 "현금+카드=전체"가 성립하지 않는다 — 반드시 고지한다.
+ok('#G13m ⚠️ 대출이 이체라는 사실을 고지한다', /대출은 기본이 '이체'/.test(LP_RAW));
+
+console.log('\n── §G14 헤더 세분화 축 정합 ──');
+// ⚠️ byPay는 연단위를 납부월에 전액 넣는데 카드 값은 ÷12 한다 — 부분합 ≠ 총액이 상시 발생한다.
+ok('#G14 ⚠️ 헤더 칩이 projectedByPay를 쓴다(totals.byPay 아님)',
+  /const projPay = useMemo\(\(\) => \{[\s\S]{0,200}?projectedByPay\(book, ym\)/.test(LP));
+ok('#G14b 칩이 실제로 렌더된다', /projPay\.map\(\(p\) =>/.test(LP));
+// ⚠️ 분석 탭 칩은 실적 우선이라 같은 '카드'라는 이름으로 다른 숫자가 나온다.
+ok('#G14c ⚠️ 기준(계획)을 화면에 명시한다', /계획 기준/.test(LP_RAW));
+ok('#G14d ⚠️ 분석 탭 칩도 기준 차이를 고지한다', /저쪽은 <b>계획 기준<\/b>/.test(LP_RAW));
+
+console.log('\n── §G15 sticky 오프셋 / 팔레트 검증기 ──');
+// ⚠️ 하드코딩 212는 62+150 전제 위에 있어, 항목 셀이 넓어지면 계획열이 × 버튼을 덮는다.
+ok('#G15 ⚠️ sticky 오프셋이 파생 상수다', /const LEFT_PLAN = COL_PAY \+ COL_NAME/.test(LP));
+ok('#G15b ⚠️ left-[212px] 하드코딩이 남아 있지 않다', !/left-\[212px\]|left-\[62px\]/.test(LP));
+ok('#G15c 오프셋이 사용부에서 쓰인다',
+  (LP.match(/left: LEFT_PLAN/g) || []).length >= 3 && (LP.match(/left: LEFT_NAME/g) || []).length >= 2);
+// ⚠️ CLAUDE.md가 요구하던 validate_palette.js는 저장소에 없었다 — 복원본이 있어야 규약이 실행 가능하다.
+ok('#G15d 팔레트 검증기가 저장소에 있다', /export const deltaE00/.test(read('scripts/validate_palette.mjs')));
+ok('#G15e 검증기가 npm 스크립트로 등록됐다', (PKG.scripts || {})['verify:palette'] === 'node scripts/validate_palette.mjs');
+// ⚠️ 검증기는 ledger.ts의 램프 사본을 들고 1:1 대조한다 — 그 대조를 지우면 드리프트가 무음이 된다.
+ok('#G15f 검증기가 ledger.ts를 직접 import해 대조한다',
+  /await import\('\.\.\/src\/ledger\.ts'\)/.test(read('scripts/validate_palette.mjs')));
+// ⚠️ undefcheck의 import 정규식이 300자까지만 본다 — 합치면 이 파일에서 그 게이트가 무의미해진다.
+ok('#G15g ⚠️ ledger import가 300자 미만 덩어리로 쪼개져 있다',
+  (LP_RAW.match(/import \{[^}]*\} from '\.\.\/ledger';/g) || []).every((b) => b.length < 300));
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:ledger — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

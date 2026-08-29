@@ -165,6 +165,16 @@ export interface LedgerBook {
    *    장부는 연도 무관이고, 화면이 보고 있는 연도를 고른다.
    */
   items: LedgerItem[];
+  /**
+   * 사용자가 **미리 등록해 두는** 지출 구분 목록('구독'·'통신'·'보험' …).
+   * 항목은 `LedgerItem.category`로 이 중 하나를 고른다.
+   *
+   * ⚠️ 선택 목록은 이 레지스트리 **∪ 실제 쓰이는 값**이다(`ledgerCategories`).
+   *    레지스트리만 옵션으로 쓰면, 사용자가 목록에서 지운 구분을 가진 항목의 `<select>`가
+   *    일치하는 `<option>`을 못 찾아 브라우저가 첫 옵션을 표시하고 — 그 상태에서 한 번만
+   *    건드리면 원래 값이 영구히 덮인다(undo 없음, sticky 보호도 없다).
+   */
+  categories: string[];
   months: Record<string, LedgerMonthMeta>;
   createdAt: number;
   updatedAt: number;
@@ -183,6 +193,10 @@ export const MAX_LEDGER_ITEMS = 200;
 export const MAX_LEDGER_MONTHS = 240;
 export const MAX_LEDGER_NAME_LEN = 60;
 export const MAX_LEDGER_MEMO_LEN = 500;
+/** 구분 프리셋 상한. ⚠️ 화면 입력의 `maxLength`도 **이 상수**를 쓸 것 — 정규화에서만
+ *  자르면 붙여넣은 값의 뒤가 조용히 사라진다. */
+export const MAX_LEDGER_CATEGORIES = 40;
+export const MAX_LEDGER_CATEGORY_LEN = 20;
 
 /* ===========================================================================
  * C. 팔레트 — `scripts/validate_palette.js`로 실측 검증한 값
@@ -191,12 +205,18 @@ export const MAX_LEDGER_MEMO_LEN = 500;
  *    가계부는 '지출 증가'가 나쁜 것인데 빨강으로 칠하면 이 앱 사용자에게 정반대로 읽힌다.
  *    대신 상태색(초과=amber ▲ / 절약=teal ▼)을 쓰고 **아이콘과 라벨을 항상 동반**한다.
  *
- * 검증 결과(dark, all-pairs):
- *   · GROUP 4슬롯  : CVD ΔE 7.1 (6–8 floor band) → **직접 라벨 + 2px 간격이 필수**(secondary encoding)
- *   · BALANCE 2슬롯: CVD ΔE 11.7 / 정상시야 36.1 — ALL PASS
- *   · 발산 2극     : CVD ΔE 15.6 / 정상시야 23.0 — ALL PASS
- *   · 앱 표면 #0f1623 대비 전부 6.8:1 이상
- * ⚠️ 색을 바꾸려면 반드시 그 스크립트를 다시 돌릴 것(눈으로 판단 금지).
+ * ⚠️ 검증기는 `scripts/validate_palette.mjs`다. **`validate_palette.js`(옛 이름)는 저장소에
+ *    존재한 적이 없어** 이 규약이 오랫동안 실행 불가였다 — 2026-08 6가지 수정에서 복원했다.
+ *    색을 바꾸려면 `node scripts/validate_palette.mjs`를 반드시 다시 돌릴 것(눈으로 판단 금지).
+ *
+ * 검증 결과(dark, all-pairs, **Viénot/Brettel CVD + CIEDE2000**):
+ *   · GROUP 4슬롯  : deutan 12.4 / protan 11.3 / **tritan 4.2** → 직접 라벨 + 2px 간격이 필수
+ *   · BALANCE 2슬롯: 최소 23.2 — ALL PASS
+ *   · 발산 2극     : 최소 26.6 — ALL PASS
+ *   · 앱 표면 3종 대비 전부 6.5:1 이상
+ *   · 그룹 내부 램프(≤5슬롯): 대비 ≥3.35:1 · 인접 ΔE(정상∧CVD) ≥5.0
+ * ⚠️ 옛 주석은 GROUP 4슬롯 CVD를 **7.1**로 적었는데 이 모델에서는 재현되지 않는다(다른 CVD
+ *    모델의 값). 기준선을 위 값으로 갱신했다 — 모델을 바꾸면 이 숫자도 함께 갱신할 것.
  * =========================================================================== */
 
 /** 도넛 카테고리 — **고정 순서, 순환 금지**. 5번째 계열이 필요하면 'Other'로 접는다. */
@@ -226,6 +246,88 @@ export const LEDGER_PAY_LABEL: Record<LedgerPay, string> = {
 export const LEDGER_GROUP_ORDER: LedgerGroup[] = ['loan', 'fixed', 'variable', 'annual', 'income'];
 
 export const LEDGER_EXPENSE_GROUPS: LedgerGroup[] = ['loan', 'fixed', 'variable', 'annual'];
+
+/** 결제수단 렌더 순서 — **고정, 순환 금지**. 스택 막대에서는 이 순서가 1차 식별자다. */
+export const LEDGER_PAY_ORDER: LedgerPay[] = ['cash', 'card', 'transfer', 'auto', 'other'];
+
+/**
+ * 상세 도넛의 '기타' 슬롯.
+ * ⚠️ `LEDGER_DIVERGING.flat`을 재사용하지 말 것 — 같은 회색이 이미 ① 차트의 '계획' 선
+ *    ② 발산 차트의 '변동 없음'을 뜻한다. 세 번째 뜻이 겹치면 상세 도넛의 회색 조각이
+ *    '계획분'이나 '변동 없음'으로 오독된다. 발산 midpoint를 나중에 조정하면 무관한
+ *    '기타' 색이 함께 바뀌는 결합도 문제도 있다.
+ */
+export const LEDGER_DETAIL_OTHER = '#7c8798';
+
+/* ─── 그룹 내부 램프 ────────────────────────────────────────────────────────
+ * 한 그룹을 더 잘게 쪼갤 때(고정비→결제수단, 상세 도넛→항목/구분) 쓰는 명도 램프.
+ * **부모 그룹의 hue를 유지**하므로 조각이 어느 그룹에 속하는지가 색으로 읽힌다.
+ *
+ * ⚠️ 상한은 **5슬롯**이다. 6이면 인접 ΔE가 4 아래로 떨어진다(§2 실측) — 그 이상은
+ *    반드시 '기타'로 접을 것(`LEDGER_DETAIL_TOP_N`).
+ * ⚠️ Lmin이 색상별로 다른 것은 임의값이 아니다 — 파랑·핑크는 같은 L에서 초록보다
+ *    훨씬 어두워, 공통 스톱을 쓰면 어두운 끝의 대비가 3:1 아래로 떨어진다(실측 2.58:1).
+ * ⚠️ 값을 바꾸면 `node scripts/validate_palette.mjs`를 **반드시 다시 돌릴 것**
+ *    (그 스크립트가 이 함수의 사본을 들고 1:1 대조한다 — §0).
+ */
+export const LEDGER_RAMP_LMAX = 0.86;
+export const LEDGER_RAMP_LMIN: Record<LedgerGroup, number> = {
+  // ⚠️ 초록(variable)은 채도가 가장 낮고(S 0.69) 명도 변화의 지각 차이가 작아, 다른 색과
+  //    같은 0.38을 쓰면 5슬롯 인접 ΔE가 3.4까지 떨어진다(실측). 더 어둡게 벌려야 한다.
+  loan: 0.44, fixed: 0.45, variable: 0.32, annual: 0.36, income: 0.32,
+};
+/** 상세 도넛에서 한 그룹이 차지할 수 있는 최대 조각 수(초과분은 '기타'로 접는다). */
+export const LEDGER_DETAIL_TOP_N = 4;
+
+const hexToHsl = (hex: string): [number, number, number] => {
+  const s = String(hex).replace('#', '');
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  let h = 0, sat = 0;
+  if (d) {
+    sat = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    h = mx === r ? ((g - b) / d + (g < b ? 6 : 0)) : mx === g ? ((b - r) / d + 2) : ((r - g) / d + 4);
+    h *= 60;
+  }
+  return [h, sat, l];
+};
+const hslToHex = (h: number, s: number, l: number): string => {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const k = ((Math.floor(h / 60) % 6) + 6) % 6;
+  const t = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][k];
+  return '#' + t.map((v) => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('');
+};
+
+/**
+ * 그룹 색의 명도 램프에서 `n`개 중 `i`번째 색.
+ * `n <= 1`이면 기준색 그대로(쪼갤 필요가 없다).
+ * ⚠️ 순수 함수 — 같은 인자면 항상 같은 값(검증 스크립트가 이 성질에 의존한다).
+ */
+export const ledgerRamp = (base: string, group: LedgerGroup, n: number, i: number): string => {
+  if (!(n > 1) || !Number.isFinite(n) || !Number.isFinite(i)) return base;
+  const lmin = LEDGER_RAMP_LMIN[group] ?? 0.42;
+  const [h, s] = hexToHsl(base);
+  const k = Math.min(Math.max(Math.trunc(i), 0), n - 1);
+  return hslToHex(h, s, LEDGER_RAMP_LMAX - (LEDGER_RAMP_LMAX - lmin) * (k / (n - 1)));
+};
+
+/**
+ * 결제수단 축의 색.
+ *
+ * ⚠️ **독립 팔레트가 아니라 램프다 — 되돌리지 말 것.** 이 앱의 색 공간은 이미 포화라
+ *    (GROUP 4 + DIVERGING 3 + 빨강 금지) 결제수단 5슬롯에 줄 독립 hue가 **존재하지 않는다**
+ *    (`validate_palette.mjs` §4가 그 불가능성을 매번 재확인한다 — 그 단언이 실패로
+ *    뒤집히면 색 공간이 넓어진 것이므로 그때 독립 팔레트로 승격할 것).
+ *    그래서 결제수단은 **스택 순서 + 범례 + 직접 라벨**이 1차 식별자이고 색은 보조다.
+ * ⚠️ 고정비 도넛 분리와 결제수단 막대가 **같은 이 색을 공유**해야 한다 — 한 화면에서
+ *    '현금'이 두 색으로 보이면 안 된다.
+ */
+export const ledgerPayColor = (pay: LedgerPay): string => {
+  const i = LEDGER_PAY_ORDER.indexOf(pay);
+  return ledgerRamp(LEDGER_GROUP_COLOR.fixed, 'fixed', LEDGER_PAY_ORDER.length, i < 0 ? LEDGER_PAY_ORDER.length - 1 : i);
+};
 
 /* ===========================================================================
  * D. 날짜/숫자 유틸 (전부 순수 — Date.now() 금지, 호출부가 기준 시점을 넘긴다)
@@ -594,6 +696,154 @@ export const monthTotals = (book: LedgerBook | null | undefined, ym: string): Le
   return out;
 };
 
+/* ===========================================================================
+ * G-2. 예상(expected) 집계 — "계획만 입력해도 소계가 나온다"
+ *
+ * ⚠️ **이 개념을 `monthTotals`에 필드로 얹지 말 것.** 그 구조체는 `compareMonths`·
+ *    `momDelta`/`yoyDelta`·`yearSeries`·`annualCompare`·`ledgerEventsByDate`가 전부
+ *    받아 간다. 계획으로 채운 값이 거기 섞이는 순간:
+ *      · `compareMonths` — 두 달이 항상 채워져 `missing-mismatch`가 영영 발동하지 않는다.
+ *        (−87.2% 거짓말이 "변동 없음 0%" 거짓말로 부호만 바뀌어 재발한다)
+ *      · `yearSeries.actual` — 일어나지 않은 1년치 '실적' 막대가 그려진다.
+ *      · `annualCompare` — 전년 대비가 영구히 '항상 비교 가능한 거짓 숫자'가 된다.
+ *      · `ledgerEventsByDate` — 사용자가 아무것도 기록하지 않은 날에 달력 칩이 총지출을 찍는다.
+ *    별도 함수 + 별도 반환 타입이라야 누출이 **import 심볼 변경을 요구**해 grep으로 잡힌다.
+ * =========================================================================== */
+
+/**
+ * 그 달의 '예상' 금액 — 실제가 있으면 실제, 없으면 계획.
+ *
+ * ⚠️ **`??`이지 `||`가 아니다.** `actualOf`는 미입력=null / 명시적 0=0을 이미 인코딩한다.
+ *    `||`로 쓰면 "그 달엔 안 썼다"는 확정 0이 계획으로 되살아나 미입력/0원 구분이
+ *    이 한 줄에서 붕괴한다.
+ * ⚠️ 실제도 계획도 없으면 **0이 아니라 null**(모른다 ≠ 0원).
+ */
+export const expectedOf = (item: LedgerItem, ym: string): number | null => {
+  if (!item || !isValidYm(ym) || !isItemActive(item, ym)) return null;
+  const a = actualOf(item, ym);
+  return a !== null ? a : planOf(item, ym);
+};
+
+export interface LedgerExpected {
+  /** Σ(실제 ?? 계획) */
+  value: number;
+  /** 그중 실제로 입력된 몫 */
+  fromActual: number;
+  /** 그중 계획으로 채운 몫 */
+  fromPlan: number;
+  actualCount: number;
+  /** 계획으로 채운 항목 수 — 화면이 "계획 N건"으로 노출해야 실적으로 오독되지 않는다 */
+  plannedCount: number;
+  /**
+   * 실제도 계획도 못 구한 항목 수(대출 계산 실패 등).
+   * ⚠️ `plannedCount`와 다른 뜻이다 — 이건 '모른다', 저건 '계획으로 채웠다'.
+   */
+  unresolved: number;
+  /**
+   * 그 달 **활성 항목 전체**의 계획 합(실적 유무와 무관).
+   * ⚠️ `fromPlan`과 절대 혼동하지 말 것 — `fromPlan`은 '실적이 없는 항목의 계획'이라
+   *    사용자가 실적을 채워 넣을수록 0으로 수렴한다. 소계 행의 '계획' 열이 그 값을 쓰면
+   *    사용자가 값을 검산할 기준선이 조용히 사라진다(실측: 계획 547,000 → 17,000).
+   */
+  planSum: number;
+  /** 계획을 산출한 항목 수 */
+  planCount: number;
+  /** 그 달에 살아 있는 항목 수. 0이면 '항목 없음'이지 '미입력'이 아니다. */
+  activeCount: number;
+}
+
+const emptyExpected = (): LedgerExpected => ({
+  value: 0, fromActual: 0, fromPlan: 0,
+  actualCount: 0, plannedCount: 0, unresolved: 0,
+  planSum: 0, planCount: 0, activeCount: 0,
+});
+
+const addExpected = (o: LedgerExpected, item: LedgerItem, ym: string): void => {
+  if (!item || !isItemActive(item, ym)) return;
+  o.activeCount++;
+  const p = planOf(item, ym);
+  if (p !== null && Number.isFinite(p)) { o.planSum += p; o.planCount++; }
+  const a = actualOf(item, ym);
+  if (a !== null && Number.isFinite(a)) {
+    o.value += a; o.fromActual += a; o.actualCount++;
+  } else if (p !== null && Number.isFinite(p)) {
+    o.value += p; o.fromPlan += p; o.plannedCount++;
+  } else {
+    o.unresolved++;
+  }
+};
+
+/**
+ * 항목 배열의 그 달 예상 합.
+ * ⚠️ 넘겨받은 items를 **그대로** 더한다 — 수입 제외는 호출부 책임이 아니다:
+ *    `group === 'income'` 항목은 이 함수가 **직접** 건너뛴다(아래). 지출 축 전용이다.
+ * ⚠️ 절대 null을 돌려주지 않고 절대 throw하지 않는다. "모른다"는 `unresolved`가 진다.
+ */
+export const expectedTotal = (items: LedgerItem[] | null | undefined, ym: string): LedgerExpected => {
+  const o = emptyExpected();
+  if (!Array.isArray(items) || !isValidYm(ym)) return o;
+  for (const it of items) {
+    // ⚠️ 수입 제외 — 이 게이트를 호출부에 위임하지 말 것. `byPay`가 수입을 섞어 '현금합계'에
+    //    급여가 들어가던 회귀(verify #48c)가 monthTotals 밖으로 자리만 옮겨 되살아난다.
+    if (!it || it.group === 'income') continue;
+    addExpected(o, it, ym);
+  }
+  return o;
+};
+
+/** 수입 전용 예상 합 — 지출과 **분리된 축**이므로 별도 함수다(한 함수에 플래그 금지). */
+export const expectedIncomeTotal = (items: LedgerItem[] | null | undefined, ym: string): LedgerExpected => {
+  const o = emptyExpected();
+  if (!Array.isArray(items) || !isValidYm(ym)) return o;
+  for (const it of items) {
+    if (!it || it.group !== 'income') continue;
+    addExpected(o, it, ym);
+  }
+  return o;
+};
+
+/**
+ * 결제수단별 예상 합. **항목이 존재하는 수단만** 키를 만든다(값이 0이어도 만든다 —
+ * 항목이 있으면 사용자가 봐야 한다).
+ * ⚠️ 분석 탭의 기존 `payRows` 필터(`plan > 0 || actual > 0`)와 **다른 규칙이다. 통일하지
+ *    말 것** — 묻는 질문이 다르다(그쪽은 도넛 슬롯, 이쪽은 표 행).
+ */
+export const expectedByPay = (
+  items: LedgerItem[] | null | undefined,
+  ym: string,
+): Record<string, LedgerExpected> => {
+  const out: Record<string, LedgerExpected> = {};
+  if (!Array.isArray(items) || !isValidYm(ym)) return out;
+  for (const it of items) {
+    if (!it || it.group === 'income') continue;   // ⚠️ 수입 제외(위와 같은 이유)
+    if (!isItemActive(it, ym)) continue;
+    const key = it.pay;
+    if (!out[key]) out[key] = emptyExpected();
+    addExpected(out[key], it, ym);
+  }
+  return out;
+};
+
+/** 장부 전체(지출 그룹만)의 그 달 예상 합. */
+export const expectedGrandTotal = (book: LedgerBook | null | undefined, ym: string): LedgerExpected =>
+  expectedTotal(book && Array.isArray(book.items) ? book.items : [], ym);
+
+/**
+ * 그 달의 입력 상태 — **네 상태**다.
+ *
+ * ⚠️ `missing < active` 같은 2분법으로 되돌리지 말 것. 연중에 가계부를 시작하면
+ *    시작 전 달은 활성 항목이 0건이라 `0 < 0 === false`가 되어 화면이 **"미입력 N개월"**
+ *    이라 단언하는데, 실제로는 '그 달엔 항목이 존재하지 않았다'이고 매트릭스에서 그 칸은
+ *    `-`로 잠겨 있어 사용자가 채울 방법이 없다 → 경고가 영원히 꺼지지 않는다.
+ *    가계부를 연중에 시작하는 것은 이 기능의 **기본 사용 경로**다.
+ */
+export type LedgerMonthState = 'none' | 'empty' | 'partial' | 'full';
+export const monthState = (e: LedgerExpected | null | undefined): LedgerMonthState => {
+  if (!e || e.activeCount === 0) return 'none';
+  if (e.actualCount === 0) return 'empty';
+  return e.actualCount === e.activeCount ? 'full' : 'partial';
+};
+
 export interface LedgerKpi {
   /**
    * 사진의 '월 지출 합계' — **매월 반복되는 지출만**(대출 + 고정비 + 변동비).
@@ -682,6 +932,43 @@ export const ledgerKpi = (book: LedgerBook | null | undefined, ym: string): Ledg
   };
 };
 
+/**
+ * '예상 月 지출'을 결제수단으로 쪼갠 값. 헤더 KPI의 세분화 표시 전용.
+ *
+ * ⚠️ **축을 맞추는 것이 이 함수의 존재 이유다.** `monthTotals.byPay`를 그대로 쓰면
+ *    부분합 ≠ 총액이 상시 발생한다 — `byPay`는 연단위를 **납부월에 전액** 넣는데
+ *    `projectedMonthly`는 연단위를 **12분할**해 매달 넣기 때문이다(실측 픽스처에서
+ *    비납부월 473,334 부족 / 납부월 5,680,000 초과). 그래서 여기서도 연단위를 ÷12 한다.
+ *
+ * ⚠️ **불변식: `Σ projectedByPay === ledgerKpi(book, ym).projectedMonthly`** (무반올림).
+ *    검증이 이 항등식을 고정한다. 중간 반올림을 끼우면 깨진다.
+ * ⚠️ 계획(plan) 축이다 — 실적이 섞이지 않는다. 화면 라벨에 '계획 기준'을 반드시 명시할 것
+ *    (분석 탭 칩은 실적 우선이라 같은 '카드'라는 라벨로 다른 숫자가 나온다).
+ */
+export const projectedByPay = (
+  book: LedgerBook | null | undefined,
+  ym: string,
+): Record<string, number> => {
+  const out: Record<string, number> = {};
+  const items = book && Array.isArray(book.items) ? book.items : [];
+  if (!isValidYm(ym)) return out;
+  const bump = (pay: LedgerPay, v: number) => {
+    if (!Number.isFinite(v)) return;
+    out[pay] = (out[pay] || 0) + v;
+  };
+  for (const it of items) {
+    if (!it || it.group === 'income' || !isItemActive(it, ym)) continue;
+    if (it.group === 'annual') {
+      const base = finiteOr(it.plan);
+      if (base !== null) bump(it.pay, base / 12);   // ⚠️ 무반올림
+      continue;
+    }
+    const p = planOf(it, ym);
+    if (p !== null) bump(it.pay, p);
+  }
+  return out;
+};
+
 /* ===========================================================================
  * H. 비교 (전월 대비 / 전년 동월 대비)
  * =========================================================================== */
@@ -734,6 +1021,73 @@ export const momDelta = (book: LedgerBook | null | undefined, ym: string): Ledge
 
 export const yoyDelta = (book: LedgerBook | null | undefined, ym: string): LedgerDelta =>
   compareMonths(book, ym, addMonthsYm(ym, -12));
+
+/* ===========================================================================
+ * H-2. 항목 순서 / 구분 목록
+ * =========================================================================== */
+
+/**
+ * 같은 그룹 안에서 항목을 한 칸 이동. `dir = -1`(위) | `+1`(아래).
+ *
+ * ⚠️ `items`는 그룹이 **섞인 평면 배열**이다. 인접 인덱스와 그냥 교환하면 다른 그룹
+ *    항목과 자리를 바꿔 **화면에서는 아무 일도 일어나지 않는다**(화면은 그룹별로 버킷팅한다).
+ *    반드시 '같은 group을 가진 가장 가까운 앞/뒤 항목'과 교환해야 한다.
+ * ⚠️ 이동할 수 없으면(경계·미발견) **원본 참조를 그대로 반환**한다 — 새 배열을 만들면
+ *    dirty가 서서 2.5초 뒤 Drive 저장이 헛돈다.
+ * ⚠️ 순서는 배열 자체를 재정렬해 표현한다(`order` 필드 신설 금지) — `ledgerFingerprint`가
+ *    항목을 배열 순서 그대로 투영하므로 **영속화 신규 지점이 0곳**이 된다.
+ */
+export const moveItemInGroup = (
+  items: LedgerItem[] | null | undefined,
+  itemId: string,
+  dir: -1 | 1,
+): LedgerItem[] => {
+  const src = Array.isArray(items) ? items : [];
+  if (!itemId || (dir !== -1 && dir !== 1)) return src as LedgerItem[];
+  const i = src.findIndex((it) => it && it.id === itemId);
+  if (i < 0) return src as LedgerItem[];
+  const group = src[i].group;
+  let j = -1;
+  for (let k = i + dir; k >= 0 && k < src.length; k += dir) {
+    if (src[k] && src[k].group === group) { j = k; break; }
+  }
+  if (j < 0) return src as LedgerItem[];
+  const out = src.slice();
+  out[i] = src[j];
+  out[j] = src[i];
+  return out;
+};
+
+/** 그룹 안에서 위/아래로 더 갈 수 있는가 — 버튼 비활성 판정용. */
+export const canMoveItemInGroup = (
+  items: LedgerItem[] | null | undefined,
+  itemId: string,
+  dir: -1 | 1,
+): boolean => moveItemInGroup(items, itemId, dir) !== items;
+
+/**
+ * 구분 선택 목록 = **레지스트리 ∪ 실제 쓰이는 값**.
+ *
+ * ⚠️ 실제 쓰이는 값은 `it.category`를 **가공하지 않고 그대로** 넣는다. trim해서 넣으면
+ *    Drive/백업/브릿지로 들어온 `' 구독 '`이 옵션 `'구독'`과 일치하지 않아 `<select>`가
+ *    선택 없는 상태가 되고, 브라우저가 첫 옵션을 표시해 그 행이 **미분류로 보인다**.
+ *    거기서 한 번만 건드리면 원래 값이 영구히 덮인다(undo 없음).
+ * ⚠️ 순서: 레지스트리 등록 순 → 그 뒤에 미등록 사용값(발견 순). 정렬하지 않는다 —
+ *    사용자가 등록한 순서가 곧 우선순위다.
+ */
+export const ledgerCategories = (book: LedgerBook | null | undefined): string[] => {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (v: unknown) => {
+    if (typeof v !== 'string' || v === '') return;
+    if (seen.has(v)) return;
+    seen.add(v);
+    out.push(v);
+  };
+  for (const c of (book && Array.isArray(book.categories) ? book.categories : [])) push(c);
+  for (const it of (book && Array.isArray(book.items) ? book.items : [])) push(it && it.category);
+  return out;
+};
 
 /* ===========================================================================
  * I. 메모 달력 이벤트 (라이브 파생 — calendarMemos에 복사 금지)
@@ -844,6 +1198,34 @@ const normMoneyMap = (raw: unknown): Record<string, number> => {
   return out;
 };
 
+/** 구분 프리셋 정규화 — trim · 빈값/중복 제거 · 길이/개수 상한. */
+const normCategories = (raw: unknown): string[] => {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const s = v.trim().slice(0, MAX_LEDGER_CATEGORY_LEN);
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= MAX_LEDGER_CATEGORIES) break;
+  }
+  return out;
+};
+
+/**
+ * ⚠️ **`undefined`와 `[]`를 같게 본다.** 다르게 보면 `categories`가 없던 레거시 장부가
+ *    로드마다 '변경됨'으로 판정돼 새 배열이 반환되고, Drive 폴링마다 재저장 + 로컬 사본
+ *    시드가 갈아엎어져 2.5초 idle 승격 전 편집이 사라진다(멱등 계약, verify #58).
+ */
+const sameStrList = (a: string[], b: unknown): boolean => {
+  if (!Array.isArray(b)) return a.length === 0;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+};
+
 const sameMoneyMap = (a: Record<string, number>, b: unknown): boolean => {
   if (!b || typeof b !== 'object' || Array.isArray(b)) return Object.keys(a).length === 0;
   const bk = Object.keys(b as Record<string, unknown>);
@@ -944,15 +1326,19 @@ export const normalizeLedgerBooks = (raw: unknown): LedgerBooks => {
       months[ym] = { touchedDate: td, memo: mm };
     }
 
+    const categories = normCategories(src.categories);
+
     const book: LedgerBook = {
       id: typeof src.id === 'string' && src.id ? src.id : generateId(),
       name: str(src.name, MAX_LEDGER_NAME_LEN),
       items,
+      categories,
       months,
       createdAt: numOrNull(src.createdAt) ?? 0,
       updatedAt: numOrNull(src.updatedAt) ?? 0,
     };
-    if (itemsChanged || monthsChanged || book.id !== src.id || book.name !== src.name) changed = true;
+    if (itemsChanged || monthsChanged || book.id !== src.id || book.name !== src.name
+      || !sameStrList(categories, src.categories)) changed = true;
     books.push(book);
   }
 
@@ -980,6 +1366,8 @@ export const ledgerBooksHaveContent = (books: unknown): boolean => {
       Object.keys(it.planOverride || {}).length > 0 ||
       (it.loan && numOrNull(it.loan.principal) !== null && it.loan.principal !== 0)
     ))) return true;
+    // 구분 프리셋만 등록해 둔 장부도 '내용 있음' — 사용자가 직접 친 값이라 복원이 되돌리면 안 된다.
+    if (Array.isArray(b.categories) && b.categories.some((c: any) => typeof c === 'string' && c.trim() !== '')) return true;
     const months = b.months && typeof b.months === 'object' ? b.months : {};
     return Object.values(months).some((m: any) =>
       m && (String(m.touchedDate ?? '').trim() !== '' || String(m.memo ?? '').trim() !== ''));
@@ -1002,6 +1390,9 @@ export const ledgerFingerprint = (books: unknown): string => {
     if (!Array.isArray(books)) return '';
     return JSON.stringify(books.map((b: any) => ({
       i: b?.id ?? '', n: b?.name ?? '',
+      // ⚠️ 구분 프리셋도 지문에 든다 — 빠뜨리면 '구분만 추가한 세션'이 portfolioUpdatedAt을
+      //    올리지 못해 Drive STATE 저장이 통째로 스킵된다(이 저장소에서 6회 재발한 버그 클래스).
+      c: Array.isArray(b?.categories) ? b.categories.slice() : [],
       m: Object.entries(b?.months || {})
         .map(([k, v]: [string, any]) => [k, v?.touchedDate ?? '', v?.memo ?? ''])
         .sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
@@ -1063,6 +1454,9 @@ export const makeLedgerBook = (over: Partial<LedgerBook> = {}): LedgerBook => ({
   id: generateId(),
   name: '가계부',
   items: [],
+  // ⚠️ 반드시 빈 배열 — 기본값이 비어 있지 않으면 `ledgerBooksHaveContent`가
+  //    빈 장부를 '내용 있음'으로 보고 백업 복원 경로가 영구히 막힌다(verify #60).
+  categories: [],
   months: {},
   createdAt: 0,
   updatedAt: 0,
