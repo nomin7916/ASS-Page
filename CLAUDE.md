@@ -5355,6 +5355,44 @@ C = calcPortfolioEvalDetail(resolveHoldings(p, 비교일).items, …, 기준일)
 - **범위 밖(의도)**: 경과이자(더티프라이스)·환전수수료·세금(브라질 원천세/IOF·국내 과세)·향후
   환율변동 시나리오·듀레이션/컨벡시티·중도매도 손익. 각주에 미반영을 명시한다.
 
+## Drive 저장 위치 = `Index_Data_<email>` 폴더 단일 — 루트 저장 차단 (⚠️ 회귀 주의)
+
+30곳이 넘는 저장 지점이 전부 `getOrCreateIndexFolder`(`driveStorage.ts`) **하나**로 모이고,
+그 결과가 `driveFolderIdRef`에 박제된다(코드 어디에도 초기화가 없다). 따라서 **잘못된 folderId가
+한 번 확정되면 그 탭의 모든 저장이 통째로 그리로 간다.**
+
+- **실측 사고(2026-06-09~08-28)**: 내 드라이브 **최상위**에 `portfolio_stockdata.json` 1개 +
+  백업 6개가 쓰였다(전부 `parentId`=루트). 루트 stockdata는 06-09 생성 후 **08-28까지 계속
+  덮어써져** 정상 폴더와 별개의 '평행 계보'가 2.5개월간 자랐다(루트 545KB vs 폴더 828KB).
+- **원인 = 2.5단계 안전망**: 전역 `portfolio_state.json` 검색 결과의 `files[0].parents[0]`을
+  **검증 없이** 폴더 ID로 채택했다. 그 쿼리엔 `orderBy`도 `pageSize`도 없어 `files[0]`이 호출마다
+  달라질 수 있고, parents[0]이 폴더인지·루트인지조차 보지 않았다. 1·2·3단계는 전부 폴더 검색
+  결과라 **구조적으로** 루트가 될 수 없다 — 위험은 2.5단계에만 있다.
+- **⚠️ 현재 가드 2겹을 제거하지 말 것**: ① 2.5단계가 후보 부모를 **전부** 훑어 `_isUsableParent`로
+  '루트가 아닌 실제 폴더'만 채택(이름 일치 우선, 하나도 없으면 **던진다** = fail-closed)
+  ② `saveDriveFile` 진입부 `_assertNotRootFolder` — 모든 JSON 저장이 지나는 단일 관문이라
+  백업·STATE·STOCK·MARKET·관리자 캐시가 한꺼번에 보호된다. `_loadRootFolderId`는
+  `_doGetOrCreateIndexFolder` 시작점에서 **세션 1회** 불러 가드를 무장한다(2.5단계 안에서만
+  부르면 그 단계를 안 타는 정상 세션에서 가드가 죽는다).
+- **⚠️ 조용히 넘어가지 말 것** — 가드는 반드시 `throw`. 2026-08-03 이전 무음 실패가 정확히
+  '화면엔 저장됨, 실제론 유실'을 만들었다. 던져야 `saveAllToDrive`의 catch가 재시도·상태 표시를 돌린다.
+- **⚠️ 잘못된 폴더로 간 파일은 스스로 돌아오지 못한다**: `files.update`(PATCH)는 본문 `parents`로
+  부모를 못 바꾸고 이 저장소는 `addParents`/`removeParents`를 **한 번도 쓰지 않는다**. 그리고
+  `findFileId`·`listBackups`·`cleanupOldBackups`는 첫 커밋부터 **폴더 스코프**라 폴더 밖 파일은
+  앱 눈에 영영 안 보인다(= 백업이 있다고 믿는데 복원 목록엔 없다). 정리는 사용자가 Drive에서 직접.
+- **⚠️ 폴더 밖 앱 파일을 폴더로 '모으지' 말 것 — 옮기기가 곧 지우기다**: `saveVersionedBackup`은
+  저장 직후 무조건 `cleanupOldBackups`를 부르고, 상한(auto 6 / manual 10 / change 6) 초과분을
+  `files.delete`(**휴지통 미경유 영구 삭제**)로 지운다. 폴더의 세 부류는 이미 정확히 상한에 붙어
+  있으므로, 백업을 추가로 넣으면 **다음 백업 1회에 기존 백업이 밀려 영구 삭제된다**.
+  동명 `portfolio_stockdata.json`을 중복 배치하는 것도 금물 — `findFileId`가 `modifiedTime desc`로
+  **하나만** 집으므로 낡은 사본이 이길 수 있고, STOCK은 앱 내 백업이 0본이다.
+- **⚠️ 드라이브 어디에든 `portfolio_state.json` 사본을 만들지 말 것** — 2.5단계 후보가 늘어나
+  폴더 선택이 비결정적이 된다(가드가 루트는 막지만 '엉뚱한 폴더'는 이름 우선순위로만 걸러진다).
+- **범위 밖(의도)**: `getOrCreateAdminFolder`는 `parents` 없이 `files.create`를 불러 **설계상**
+  `Index_Data_Admin`을 루트에 만든다(관리자 전용 폴더라 무해 — 가드는 `saveDriveFile`에만 있다).
+  관리자 '접속'(impersonation)이 **대상 사용자 폴더에 관리자 소유 파일**을 남기는 것도 의도된 동작이다
+  (데이터는 사용자 폴더에 있고 소유자만 관리자 — 실측: 타 사용자 `Index_Data_*` 8곳에 존재).
+
 ## 브라우저 저장소 정책
 
 ### ETF 비중·PER 데이터 — 메모리 캐시만 사용
