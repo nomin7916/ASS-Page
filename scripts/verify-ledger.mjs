@@ -1490,7 +1490,40 @@ ok('#G27b ⚠️ 개수 비교로 되돌리지 않았다', !/prev\.missingExpens
 ok('#G28 ⚠️ ledger:books 쓰기에 impersonation 게이트가 있다',
   /d\.type === 'ledger:books'\) \{[\s\S]{0,400}?if \(adminViewingAsRef\.current\) return;/.test(APP));
 ok('#G28b ledger:live가 readOnly를 실어 창 UI도 잠근다', /type: 'ledger:live'[^\n]*readOnly: !!adminViewingAs/.test(APP));
-ok('#G28c 창이 그 신호로 쓰기를 잠근다', /const writable = linked && gotData && !appReadOnly;/.test(LW));
+// ⚠️ 계약을 의도적으로 좁혔다(2026-08-30) — 이제 impersonation뿐 아니라 **로드 완료**까지 본다.
+ok('#G28c 창이 그 신호로 쓰기를 잠근다',
+  /const writable = linked && gotData && !appReadOnly && appDataState === .ready.;/.test(LW));
+
+/* ---------------------------------------------------------------------------
+ * #G38 별도 창도 "Drive 로드 완료 전 읽기 전용" (2026-08-30 유실 경로 차단)
+ *
+ * 인앱은 2026-08-29에 `ledgerDataState !== 'ready'`로 잠갔는데 **버튼이 여는 별도 창에는
+ * 그 잠금이 없었다.** 창의 `writable`은 첫 `ledger:live`에 서는 `gotData`만 봐서, Drive 로드
+ * 전 `books: []`가 실린 메시지에도 쓰기가 열렸다 → 편집 가능한 빈 장부 → 한 글자만 쳐도
+ * 2.5초 승격이 **저장된 장부를 덮는다**. 스냅샷은 💾 버튼으로만 쓰여 살아남으므로
+ * "장부는 비었는데 이전 기록은 있다"가 된다(사용자 보고).
+ * ------------------------------------------------------------------------ */
+ok('#G38 ⚠️ ledger:live가 dataState를 실어 보낸다(사용부)',
+  /type: 'ledger:live'[^\n]*dataState: ledgerDataState/.test(APP));
+
+// ⚠️ deps에 없으면 로드가 끝나도 창이 **잠긴 채 남는다**(고치려던 것보다 나쁜 상태).
+ok('#G38b ⚠️ 재전송 effect deps에 ledgerDataState가 있다',
+  /\[ledgerBooks, ledgerSnapshots, hideAmounts, adminViewingAs, ledgerDataState, ledgerWinNonce\]/.test(APP));
+
+// ⚠️ fail-closed — 모르는 값은 'loading'으로 떨어뜨린다. 열어 두면 이 필드의 존재 이유가 사라진다.
+ok('#G38c ⚠️ 창의 dataState 기본값·미지정이 loading이다(fail-closed)',
+  /useState\('loading'\)/.test(LW)
+  && /d\.dataState === 'ready' \|\| d\.dataState === 'error' \? d\.dataState : 'loading'/.test(LW));
+
+// ⚠️ 인앱과 창의 잠금이 갈리면 같은 사용자가 경로에 따라 다른 보호를 받는다.
+ok('#G38d ⚠️ 인앱도 같은 잠금을 유지한다',
+  /readOnly=\{!!adminViewingAs \|\| ledgerDataState !== 'ready'\}/.test(APP));
+
+// ⚠️ 실패를 '불러오는 중'으로 감추지 말 것 — error 분기가 loading보다 **먼저** 와야 한다.
+ok('#G38e ⚠️ 창이 error와 loading을 구분해 안내한다',
+  /appDataState === 'error'/.test(LW)
+  && /\(!gotData \|\| appDataState !== 'ready'\)/.test(LW)
+  && LW.indexOf("appDataState === 'error'") < LW.indexOf("appDataState !== 'ready'"));
 
 // ⚠️ 인앱 prop과 브릿지 payload가 **같은 표현**을 써야 게이팅이 갈리지 않는다.
 ok('#G29 ⚠️ calendar:live의 장부도 권한 게이팅', /ledgerBooks: ledgerAccess \? ledgerBooks : \[\]/.test(APP));

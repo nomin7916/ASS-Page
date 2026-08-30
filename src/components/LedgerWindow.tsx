@@ -34,6 +34,13 @@ export default function LedgerWindow() {
   // 앱이 실어 보내는 impersonation 읽기 전용 신호. ⚠️ 이건 **UI 잠금**일 뿐이고 실제 방어선은
   //    App의 ledger:books 핸들러다(창은 조작 가능한 URL로 열리므로 App 측 재확인이 정본).
   const [appReadOnly, setAppReadOnly] = useState(false);
+  /**
+   * 앱 탭의 가계부 로드 상태 — `'loading' | 'ready' | 'error'`.
+   * ⚠️ **초기값과 미지정은 `'loading'`(fail-closed)**. 값이 없다고 쓰기를 열면
+   *    이 필드가 존재하는 이유(로드 전 편집 차단)가 통째로 사라진다. 최악의 경우는
+   *    '창이 읽기 전용으로 남음'(새로고침으로 복구)이고, 반대는 **되돌릴 수 없는 장부 유실**이다.
+   */
+  const [appDataState, setAppDataState] = useState('loading');
   const [gotData, setGotData] = useState(false);
   const [linked, setLinked] = useState(true);
 
@@ -71,6 +78,8 @@ export default function LedgerWindow() {
         setHideAmounts(!!d.hideAmounts);
         if (typeof d.today === 'string') setToday(d.today);
         setAppReadOnly(!!d.readOnly);
+        // ⚠️ 화이트리스트 — 모르는 값은 `'loading'`으로 떨어뜨린다(fail-closed).
+        setAppDataState(d.dataState === 'ready' || d.dataState === 'error' ? d.dataState : 'loading');
         gotDataRef.current = true; setGotData(true);
       }
     };
@@ -93,7 +102,11 @@ export default function LedgerWindow() {
 
   // ⚠️ `linked`만 보고 쓰기를 열지 말 것 — lastMsgRef가 0(아직 아무 메시지도 못 받음)이면
   //    타임아웃 분기가 영원히 발동하지 않는다. gotData가 그 구멍을 덮는다.
-  const writable = linked && gotData && !appReadOnly;
+  // ⚠️ **`gotData`만으로도 부족하다** — 그건 '메시지가 왔다'일 뿐 '앱이 Drive를 다 읽었다'가
+  //    아니다. 로드 전 메시지는 `books: []`를 실어 오므로, 이 조건이 없으면 창이 편집 가능한
+  //    빈 장부를 띄우고 거기서 한 글자만 쳐도 승격이 **저장된 장부를 덮는다**(2026-08-30 수정).
+  //    인앱(`App.tsx`의 `<LedgerPage readOnly={… || ledgerDataState !== 'ready'}>`)과 같은 잠금이다.
+  const writable = linked && gotData && !appReadOnly && appDataState === 'ready';
 
   // 낙관적 반영 후 앱 탭으로 보낸다(앱이 적용하고 ledger:live로 되돌려 보내지만 왕복을 기다리지 않는다).
   const onUpdateBooks = useCallback((next) => {
@@ -113,13 +126,21 @@ export default function LedgerWindow() {
     post({ type: 'ledger:snapshots', snapshots: next });
   }, [post]);
 
+  /**
+   * ⚠️ 상태마다 **다른 문구**를 낼 것 — 이 버그의 본질이 "아직 안 불러왔다"와 "저장된 게 없다"를
+   *    구분하지 못한 것이었다. 빈 화면만 보여 주면 사용자는 유실로 오해하고 새로 입력하는데,
+   *    그 입력이 정확히 기존 장부를 덮는 경로다.
+   * ⚠️ 순서 주의 — `error`를 `loading`보다 **먼저** 판정한다(실패를 '불러오는 중'으로 감추지 않는다).
+   */
   const notice = appReadOnly
     ? '관리자가 이 사용자 화면을 열람 중이라 읽기 전용입니다.'
     : !linked
     ? '앱 창과 연결이 끊겨 읽기 전용입니다. 앱 창을 다시 열면 자동으로 이어집니다.'
-    : !gotData
-      ? '앱 창에서 데이터를 불러오는 중입니다…'
-      : '';
+    : appDataState === 'error'
+      ? '앱 창이 가계부를 불러오지 못했습니다 — 저장된 기록을 덮어쓰지 않도록 편집을 잠갔습니다. 앱 창을 새로고침한 뒤 다시 여세요.'
+      : (!gotData || appDataState !== 'ready')
+        ? '앱 창에서 가계부를 불러오는 중입니다… 끝나면 편집이 자동으로 열립니다(아직 저장된 내용이 안 보여도 지우지 마세요). 오래 걸리면 앱 창을 새로고침하세요.'
+        : '';
 
   return (
     <ErrorBoundary label="가계부">

@@ -2755,9 +2755,20 @@ export default function App() {
   // ⚠️ `today`는 앱이 만들어 보낸다 — 창 안에서 new Date()로 만들면 KST 규약이 갈린다.
   useEffect(() => {
     if (ledgerWinNonce === 0) return;
-    postToLedgerWin({ type: 'ledger:live', books: ledgerBooks, snapshots: ledgerSnapshots, hideAmounts, today: getTodayKST(), readOnly: !!adminViewingAs });
+    /**
+     * ⚠️ **`dataState`를 반드시 함께 보낼 것**(2026-08-30 유실 경로 차단).
+     * 인앱은 `ledgerDataState !== 'ready'`면 읽기 전용인데(아래 `<LedgerPage readOnly=…>`),
+     * **정작 버튼이 여는 별도 창에는 그 잠금이 없었다.** 창의 `writable`은 첫 `ledger:live`가
+     * 오면 서는 `gotData`만 봐서, Drive 로드 전 `books: []`가 실려 온 메시지에도 쓰기가 열렸다.
+     * 그러면 창은 '아직 안 불러왔다'와 '저장된 게 없다'를 구분하지 못한 채 **편집 가능한 빈
+     * 장부**를 띄우고, 거기서 한 글자만 쳐도 2.5초 뒤 승격이 그 빈 장부를 App으로 보내
+     * **저장돼 있던 장부를 덮는다**. 스냅샷은 💾 버튼으로만 쓰이므로 그대로 살아남아,
+     * "장부는 비었는데 이전 기록은 있다"는 증상이 된다(사용자 보고).
+     * ⚠️ deps에 `ledgerDataState` 필수 — 없으면 로드가 끝나도 창이 잠긴 채 남는다.
+     */
+    postToLedgerWin({ type: 'ledger:live', books: ledgerBooks, snapshots: ledgerSnapshots, hideAmounts, today: getTodayKST(), readOnly: !!adminViewingAs, dataState: ledgerDataState });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ledgerBooks, ledgerSnapshots, hideAmounts, adminViewingAs, ledgerWinNonce]);
+  }, [ledgerBooks, ledgerSnapshots, hideAmounts, adminViewingAs, ledgerDataState, ledgerWinNonce]);
 
   useEffect(() => {
     const onMsg = (e) => {
