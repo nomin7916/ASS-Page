@@ -73,7 +73,8 @@ if (L) {
     commitActual, isItemActive, monthTotals, ledgerKpi, momDelta, yoyDelta, compareMonths,
     ledgerEventsByDate, normalizeLedgerBooks, ledgerBooksHaveContent, ledgerFingerprint,
     makeLedgerItem, makeLedgerLoan, makeLedgerBook,
-    addMonthsYm, monthsBetweenYm, makeYm, isValidYm, finiteOr, roundWon,
+    addMonthsYm, monthsBetweenYm, makeYm, isValidYm, isSeededYm, LEDGER_YEAR_MIN, LEDGER_YEAR_MAX,
+    finiteOr, roundWon,
   } = L;
 
   ok('#0 필요한 export가 전부 있다', [
@@ -736,6 +737,32 @@ if (L) {
     bpAll.card.value !== (t8b.byPay.card.actual > 0 ? t8b.byPay.card.actual : t8b.byPay.card.plan));
   eq('#85b Σ결제수단(항목 단위) === 지출 총 예상',
     Object.values(bpAll).reduce((a, b) => a + b.value, 0), expectedGrandTotal(dnBook, '2026-08').value);
+
+  // ── §15 내보내기 게이트(연·월 시드 판정) ─────────────────────────────────
+  console.log('\n  §15 내보내기 게이트');
+  // ⚠️ 이 묶음은 **소스 텍스트 가드로 대체할 수 없다.** 게이트를 무력화하는 변이는
+  //    게이트 자체가 아니라 `LedgerPage`의 `month` 초기값(0 → 1)이라, 표현식의 생김새만
+  //    보는 #G35f는 그 변이에 눈이 멀어 **죽은 단언**이 된다. 값으로 직접 재야 잡힌다.
+  ok('#103 정상 연·월은 통과',
+    isSeededYm(makeYm(2026, 8)) && isSeededYm('1900-01') && isSeededYm('2999-12'));
+  // today 미도착 상태 — year·month가 둘 다 0
+  ok('#103b ⚠️ 미시드(0,0)를 막는다', !isSeededYm(makeYm(0, 0)));
+  // ⚠️ 핵심 — month 초기값을 1로 "정리"해도 여전히 막혀야 한다.
+  //    isValidYm은 여기서 **통과**한다(YM_RE 연도부가 4자리 숫자면 무엇이든 허용).
+  //    그 사실이 곧 isSeededYm이 따로 존재하는 이유다.
+  ok('#103c ⚠️ 미시드(0,1)도 막는다 — isValidYm은 통과시킨다',
+    !isSeededYm(makeYm(0, 1)) && isValidYm(makeYm(0, 1)));
+  ok('#103d ⚠️ 연도 하한 경계',
+    !isSeededYm(makeYm(1, 3))
+    && !isSeededYm(makeYm(LEDGER_YEAR_MIN - 1, 3))
+    && isSeededYm(makeYm(LEDGER_YEAR_MIN, 3)));
+  ok('#103e ⚠️ 연도 상한 경계',
+    !isSeededYm(makeYm(LEDGER_YEAR_MAX + 1, 3))
+    && isSeededYm(makeYm(LEDGER_YEAR_MAX, 3)));
+  // 렌더 중 평가되는 값이라 손상 입력에 던지면 안 된다(화면이 통째로 오류 페이지가 된다).
+  ok('#103f 손상 입력은 던지지 않고 false',
+    [null, undefined, '', 'abc', 42, {}, [], '2026-13', '0000-00', '  2026-08  ']
+      .every((v) => isSeededYm(v) === false));
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1486,7 +1513,7 @@ ok('#G34 hideAmounts를 적용하지 않는다', !/hideAmounts/.test(LEX));
   //    `today`가 브릿지로 늦게 와 그동안 year/month가 0이다. 그대로 내보내면
   //    `가계부 — 0년 월 매트릭스` / `0_가계부.xlsx`가 조용히 내려받아진다(실측).
   ok('#G35f ⚠️ ym이 확정되기 전에는 내보내지 않는다',
-    /if \(!ymReady\)/.test(H) && /const ymReady = isValidYm\(ym\)/.test(LP));
+    /if \(!ymReady\)/.test(H) && /const ymReady = isSeededYm\(ym\)/.test(LP));
 }
 ok('#G36 버튼이 핸들러에 배선돼 있다(사용부)', /onClick=\{handleExcel\}/.test(LP));
 ok('#G36b 버튼이 readOnly 조건 안에 있지 않다',

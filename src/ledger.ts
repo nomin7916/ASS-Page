@@ -338,6 +338,28 @@ const ISO_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 export const isValidYm = (ym: unknown): boolean => typeof ym === 'string' && YM_RE.test(ym);
 
+/** 사람이 실제로 쓰는 연도 범위. `rebalTarget` 절의 `isValidIsoDate`(1900~2999)와 같은 선례. */
+export const LEDGER_YEAR_MIN = 1900;
+export const LEDGER_YEAR_MAX = 2999;
+
+/**
+ * '연·월이 진짜 시드됐는가' — 내보내기처럼 **파일로 나가는 동작**의 게이트.
+ *
+ * ⚠️ `isValidYm`만으로는 부족하다. `YM_RE`의 연도부는 `\d{4}`라 **`'0000-01'`을 통과시킨다**.
+ *    `LedgerPage`의 `year`/`month`는 `today`가 브릿지로 도착하기 전 **둘 다 0**이라
+ *    `'0000-00'`이 되고, 그건 월(`00`)이 걸려 우연히 막힌다 — 즉 지금의 안전은
+ *    **연도가 아니라 월 덕분**이다. 누군가 `month` 초기값을 1로 '정리'하는 순간
+ *    `'0000-01'`이 되어 게이트가 겉모습 그대로인 채 조용히 무력화되고,
+ *    제목 `가계부 — 0년 월 매트릭스` / 파일명 `..._0_가계부.xlsx`인 빈 파일이 나간다(실측).
+ * ⚠️ 그래서 이 판정은 **순수 함수로 뽑아 직접 import 테스트**한다 — 소스 텍스트 가드는
+ *    표현식의 생김새만 볼 뿐 그 변이를 잡지 못해 죽은 단언이 된다.
+ */
+export const isSeededYm = (ym: unknown): boolean => {
+  if (!isValidYm(ym)) return false;
+  const y = Number(String(ym).slice(0, 4));
+  return Number.isFinite(y) && y >= LEDGER_YEAR_MIN && y <= LEDGER_YEAR_MAX;
+};
+
 /** 그 달의 일수. 윤년 포함. */
 export const daysInMonth = (year: number, month1: number): number => {
   if (!Number.isFinite(year) || !Number.isFinite(month1)) return 0;

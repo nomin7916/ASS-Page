@@ -16,7 +16,7 @@ import { downloadLedgerXlsx } from '../ledgerExcel';
 import {
   MAX_LEDGER_BOOKS, MAX_LEDGER_ITEMS, MAX_LEDGER_CATEGORIES, MAX_LEDGER_CATEGORY_LEN,
   makeLedgerItem, makeLedgerLoan, makeLedgerBook,
-  makeYm, addMonthsYm, isValidYm, roundWon, finiteOr,
+  makeYm, addMonthsYm, isValidYm, isSeededYm, roundWon, finiteOr,
 } from '../ledger';
 import {
   loanSchedule, loanNext12Total, planOf, actualOf, varianceOf, commitActual, isItemActive, expectsActual,
@@ -366,14 +366,21 @@ export default function LedgerPage({
   const book = local[bookIdx] || null;
   const ym = makeYm(year, month);
   /**
-   * 엑셀 내보내기 게이트. ⚠️ **선언을 지우지 말 것** — `handleExcel`이 이 이름을 참조한다.
-   * `today`는 브릿지로 늦게 도착하고(별도 창은 `''`로 시작) 그동안 `year`/`month`가 0이라
-   * `makeYm`이 `'0000-00'`을 만든다. 그대로 내보내면 제목이 `가계부 — 0년 월 매트릭스`,
-   * 파일명이 `0_가계부.xlsx`인 쓸모없는 파일이 **조용히** 내려받아진다(실측).
-   * ⚠️ 게이트를 통째로 없애지 말 것 — 인앱은 `getTodayKST()`라 항상 참이지만
-   *    별도 창(주 진입점)에서는 실제로 거짓인 창이 존재한다.
+   * 엑셀 내보내기 게이트. ⚠️ **선언을 지우지 말 것** — `handleExcel`이 이 이름을 참조한다
+   * (지웠더니 기능이 도입 이래 한 번도 동작하지 않았다 — 커밋 25fa69d).
+   *
+   * `today`는 브릿지로 늦게 도착하고(별도 창은 `''`로 시작) 그동안 `year`/`month`가 0이다.
+   * 그 상태로 내보내면 **던지지 않고** 제목 `가계부 — 0년 월 매트릭스` / 파일명
+   * `..._0_가계부.xlsx`인, 크기·시트 수까지 정상으로 보이는 빈 파일이 조용히 나간다(실측).
+   *
+   * ⚠️ `isValidYm`이 아니라 **`isSeededYm`** — `YM_RE`의 연도부가 `\d{4}`라
+   *    `'0000-01'`을 통과시킨다. 지금 막히는 건 연도가 아니라 **월(`00`) 덕분**이라,
+   *    `month` 초기값을 1로 '정리'하는 순간 게이트가 겉모습 그대로 무력화된다.
+   * ⚠️ 게이트를 통째로 없애지 말 것 — 현재 배선에서는 도달하기 어렵지만
+   *    ('books·today가 `ledger:live` 한 메시지로 함께 온다' + books 전에는 버튼이 disabled)
+   *    그 불변식은 어디에도 강제돼 있지 않고, 깨졌을 때 결과가 예외가 아니라 위의 빈 파일이다.
    */
-  const ymReady = isValidYm(ym);
+  const ymReady = isSeededYm(ym);
 
   /* ── 쓰기 헬퍼 — 전부 id 기준(인덱스 기준 금지) ────────────────────────── */
   const patchBook = useCallback((bookId, fn) => {
