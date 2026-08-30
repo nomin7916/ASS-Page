@@ -1346,7 +1346,41 @@ ok('#G13n ⚠️ payRows(totals.byPay 기반)가 되살아나지 않았다', !/c
 // ⚠️ 메인/상세가 같은 후처리를 써야 두 도넛의 합이 갈리지 않는다(음수 plan이 도달 가능하다).
 ok('#G13f ⚠️ 두 도넛이 같은 후처리(donutRows)를 지난다',
   (LP.match(/return donutRows\(rows\)/g) || []).length === 2 && /Math\.max\(0, Number\.isFinite\(r\.value\)/.test(LP));
-ok('#G13g 상세 도넛이 Top-N + 기타로 접는다', /LEDGER_DETAIL_TOP_N/.test(LP) && /LEDGER_DETAIL_OTHER/.test(LP));
+// ⚠️ 파일 전역으로 재지 말 것 — 두 식별자는 **import 문 한 줄**과 각주만으로 충족돼,
+//    fold 로직을 통째로 지워도 초록이 되는 죽은 단언이 된다(변이 3종으로 실증, 2026-08).
+//    반드시 detailDonut 구간을 잘라 **사용부**를 단언한다.
+const DET = sliceBlock(LP, 'const detailDonut = useMemo', 'const projPay = useMemo');
+ok('#G13g 상세 도넛 구간을 찾았다', DET.length > 200);
+ok('#G13g-1 상세 도넛이 Top-N + 기타로 접는다(사용부)',
+  /LEDGER_DETAIL_TOP_N/.test(DET) && /color: LEDGER_DETAIL_OTHER,/.test(DET));
+// ⚠️ '기타 1건'은 조각 수를 하나도 아끼지 못하면서(head 4 + 기타 1 = 5 = 전부 표시 5) 이름만
+//    지운다 — 실제로 대출 5건 중 APT 2가 그렇게 사라져 사용자가 "누락됐다"고 보고했다.
+//    임계를 `+2`로 넓히면 6건에서 n=6이 되어 램프 인접 ΔE가 4 아래로 떨어진다(팔레트 §2).
+ok('#G13g-2 ⚠️ fold 임계가 TOP_N + 1이다(기타 1건 금지 · n=6 방지)',
+  /const fold = sorted\.length > LEDGER_DETAIL_TOP_N \+ 1;/.test(DET));
+ok('#G13g-3 ⚠️ head/tail이 fold에서 파생된다(무조건 slice로 되돌림 금지)',
+  /const head = fold \? sorted\.slice\(0, LEDGER_DETAIL_TOP_N\) : sorted;/.test(DET)
+  && /const tail = fold \? sorted\.slice\(LEDGER_DETAIL_TOP_N\) : \[\];/.test(DET)
+  && !/const head = sorted\.slice\(0, LEDGER_DETAIL_TOP_N\);/.test(DET));
+ok('#G13g-4 n이 head + 기타로 산출된다(램프 슬롯 수의 단일 소스)',
+  /const n = head\.length \+ \(tail\.length \? 1 : 0\);/.test(DET));
+// ⚠️ 정규식은 포맷 변경에 약하므로 **산술로도** 상한을 고정한다. 팔레트 §2가 n=6 실패를
+//    단언하지만 그 스크립트는 화면이 몇 슬롯을 렌더하는지 모른다(두 게이트 사이의 빈틈).
+{
+  const TOP = L ? L.LEDGER_DETAIL_TOP_N : null;
+  const slots = (len) => {
+    const f = len > TOP + 1;
+    const head = f ? TOP : len;
+    const tail = f ? len - TOP : 0;
+    return head + (tail ? 1 : 0);
+  };
+  ok('#G13g-5 ⚠️ 어떤 항목 수에서도 상세 도넛 슬롯이 5를 넘지 않는다',
+    TOP !== null && Array.from({ length: 41 }, (_, i) => slots(i)).every((n) => n <= 5));
+  ok('#G13g-6 ⚠️ 5건이면 전부 이름을 갖는다(기타 1건이 만들어지지 않는다)',
+    TOP !== null && slots(TOP + 1) === TOP + 1);
+}
+ok('#G13g-7 각주가 실제 fold 규칙을 서술한다(4개 + 기타로 되돌림 금지)',
+  /\{LEDGER_DETAIL_TOP_N \+ 1\}건까지는 전부 이름을 표시/.test(LP_RAW));
 // ⚠️ 바깥 라벨은 슬롯이 4를 넘으면 라벨선이 충돌해 유일한 보조 부호가 무력화된다.
 ok('#G13h ⚠️ 도넛이 옆 목록 + 안쪽 % 방식이다(labelLine 되돌림 금지)',
   /function DonutWithList/.test(LP) && /labelLine=\{false\}/.test(LP) && !/labelLine=\{\{ stroke/.test(LP));
@@ -1369,6 +1403,69 @@ ok('#G14b 칩이 실제로 렌더된다', /projPay\.map\(\(p\) =>/.test(LP));
 // ⚠️ 분석 탭 칩은 실적 우선이라 같은 '카드'라는 이름으로 다른 숫자가 나온다.
 ok('#G14c ⚠️ 기준(계획)을 화면에 명시한다', /계획 기준/.test(LP_RAW));
 ok('#G14d ⚠️ 분석 탭 칩도 기준 차이를 고지한다', /저쪽은 <b>계획 기준<\/b>/.test(LP_RAW));
+
+console.log('\n── §G18 수지 균형(잉여금/부족분) ──');
+// ⚠️ LP_RAW를 자른다 — 구간 경계가 `{/* */}` 주석이라 stripComments가 지우면 못 찾는다.
+const BAL = sliceBlock(LP_RAW, '{/* ④ 수지 균형 */}', '</ResponsiveContainer>');
+const BALFOOT = sliceBlock(LP_RAW, '{/* ④ 수지 균형 */}', '\n            </div>\n          </div>');
+ok('#G18 수지 균형 카드 구간을 찾았다', BAL.length > 400);
+// ⚠️ 과거엔 수입만 그룹 단위 폴백(`t.actualIncome || t.planIncome`)이고 지출은 폴백 없는
+//    `t.actualExpense`라, 실적 미입력이면 **범례에는 '지출'이 있는데 막대가 하나도 안 보였다**.
+//    두 축을 같은 규칙으로 뽑아야 그 차이가 잉여금이 된다.
+ok('#G18b ⚠️ 수입·지출 막대가 같은 규칙(항목 단위 실제 ?? 계획)을 쓴다',
+  /dataKey="balIncome"/.test(BAL) && /dataKey="balExpense"/.test(BAL));
+// ⚠️ 부재 가드는 **주석을 걷어낸 뒤** 본다 — 이 저장소는 금지 이유를 바로 그 자리 주석에
+//    적으므로 원문으로 재면 설명 한 줄로 가드가 영구히 실패한다.
+const BAL_NC = stripComments(BAL);
+ok('#G18c ⚠️ 옛 비대칭 배선(income / actual)이 되살아나지 않았다',
+  !/dataKey="income"/.test(BAL_NC) && !/dataKey="actual"/.test(BAL_NC));
+const YS = sliceBlock(LP, 'const yearSeries = useMemo', 'const payChartData');
+ok('#G18d ⚠️ 두 축이 expectedTotal / expectedIncomeTotal에서 온다',
+  /const ie = expectedIncomeTotal\(book\?\.items, k\);/.test(YS)
+  && /balIncome: noInc \? null : ie\.value,/.test(YS)
+  && /balExpense: noExp \? null : e\.value,/.test(YS));
+// ⚠️ `&&`로 되돌리지 말 것 — `makeLedgerBook`이 `items: []`로 시작하므로 '수입 항목을 아직
+//    등록하지 않은 장부'가 기본 경로다. 그때 balance = 0 − 지출이 되어 지출 전액이 12개월
+//    내내 amber '부족분'으로 그려진다(부호까지 틀린 확정 표기).
+ok('#G18e ⚠️ balance의 null 게이트가 OR다(한쪽 축만 비어도 단언하지 않는다)',
+  /balance: \(noInc \|\| noExp\) \? null : \(ie\.value - e\.value\),/.test(YS));
+ok('#G18f ⚠️ plan/actual 줄은 그대로다(#G10d와 이중 잠금)',
+  /plan: t\.planExpense, actual: t\.actualExpense,/.test(YS));
+// ⚠️ 부호 분기가 문자열 비교라 이름이 한쪽만 바뀌면 조용히 죽는다 → 상수로 공유한다.
+ok('#G18g ⚠️ 차액 막대 이름이 상수로 공유된다(툴팁 부호 분기가 그 이름을 본다)',
+  /const BALANCE_BAR_NAME = /.test(LP) && /name=\{BALANCE_BAR_NAME\}/.test(BAL)
+  && /n === BALANCE_BAR_NAME/.test(BAL));
+ok('#G18h ⚠️ 툴팁이 부호에 따라 잉여금/부족분으로 갈라 쓴다',
+  /v >= 0 \? '잉여금' : '부족분'/.test(BAL));
+// ⚠️ 범례 한 칸으로는 두 색을 설명할 수 없다 → legendType="none" + 부제가 색-의미를 진다.
+// ⚠️ 존재 가드도 **사용부 형태**로 좁힌다 — 바로 위 설명 주석이 `legendType="none"`을
+//    그대로 인용하고 있어, 토큰만 재면 실제 prop을 지워도 주석이 통과시킨다(변이 M10으로 실증).
+ok('#G18i ⚠️ 차액 막대가 범례에서 빠지고 부호별 Cell 색을 쓴다',
+  /name=\{BALANCE_BAR_NAME\} legendType="none"/.test(BAL)
+  && /d\.balance >= 0 \? LEDGER_DIVERGING\.under : LEDGER_DIVERGING\.over/.test(BAL));
+ok('#G18j ⚠️ null인 달은 색을 단언하지 않는다', /d\.balance === null \? 'transparent'/.test(BAL));
+ok('#G18k ⚠️ 0선이 있어야 잉여/부족이 기하로도 읽힌다(색만이 유일한 부호가 되지 않게)',
+  /<ReferenceLine y=\{0\}/.test(BAL));
+// ⚠️ 색 규약: 색만으로 뜻을 전달하지 말 것(아이콘·라벨 동반). 부제가 그 라벨이다.
+ok('#G18l ⚠️ 부제가 색-의미 매핑을 직접 라벨로 명시한다',
+  /LEDGER_DIVERGING\.under \}\}>▲ 잉여금<\/span>/.test(BALFOOT)
+  && /LEDGER_DIVERGING\.over \}\}>▼ 부족분<\/span>/.test(BALFOOT));
+// ⚠️ 차트 ①과 **같은 그리드·같은 분홍색**인데 규칙이 다르다(입력된 실적만 vs 실제 ?? 계획).
+//    두 카드가 서로를 가리켜야 사용자가 어느 쪽을 먼저 봐도 모순으로 읽지 않는다.
+ok('#G18m ⚠️ ④가 자기 기준을 명시한다', /실제가 있으면 실제, 없으면 계획 기준/.test(BALFOOT));
+const CH1 = sliceBlock(LP_RAW, '{/* ① 월별 계획 vs 실제 */}', '{/* ② 전월 대비 증감 */}');
+ok('#G18n ⚠️ ①도 기준 차이를 고지한다(상호 참조)',
+  /'수지 균형' 카드는 <b>실제 \?\? 계획<\/b> 기준/.test(CH1));
+// ⚠️ expectedTotal의 value는 산출 불가 몫을 빼고 더하므로 총액이 아니라 **하한**이다.
+//    소계 행은 '?N'으로 그 사실을 알리는데 차트만 확정 숫자로 단언하면 규약이 갈린다.
+ok('#G18o ⚠️ 산출 불가 건수를 화면에 밝힌다(하한임을 숨기지 않는다)',
+  /balUnresolved: e\.unresolved \+ ie\.unresolved,/.test(YS)
+  && /const balUnresolvedMonths = useMemo/.test(LP)
+  && /\{balUnresolvedMonths > 0 && \(/.test(BALFOOT)
+  && /산출 불가 항목/.test(BALFOOT));
+// ⚠️ 헤더 KPI는 '계획 기준 · 연단위 ÷12'라 이 카드와 값이 다르다 — ⑤ 카드 선례대로 고지한다.
+ok('#G18p ⚠️ 헤더 저축여력과 기준이 다름을 고지한다',
+  /헤더 '저축여력'과 숫자가 다를 수 있습니다/.test(BALFOOT));
 
 console.log('\n── §G15 sticky 오프셋 / 팔레트 검증기 ──');
 // ⚠️ 하드코딩 212는 62+150 전제 위에 있어, 항목 셀이 넓어지면 계획열이 × 버튼을 덮는다.

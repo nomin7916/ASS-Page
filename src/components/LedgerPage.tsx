@@ -79,6 +79,14 @@ const LEFT_PLAN = COL_PAY + COL_NAME;
  *        (#374151 1.76:1 → #64748b 3.81:1)가 실질적인 분리 수단이다.
  * ⚠️ 값을 바꾸면 `node scripts/validate_palette.mjs` §6을 다시 돌릴 것.
  */
+/**
+ * 수지 균형 카드의 3번째 막대 이름.
+ * ⚠️ **상수로 공유할 것** — 툴팁 formatter가 `n === BALANCE_BAR_NAME`으로 이 계열을 골라
+ *    부호에 따라 '잉여금'/'부족분'으로 라벨을 갈라 쓴다. 문자열을 한쪽만 고치면 분기가
+ *    조용히 죽어 부족분(음수)이 '수지 차액 -₩1,000,000'으로만 표시된다.
+ */
+const BALANCE_BAR_NAME = '수지 차액';
+
 const TOOLTIP_STYLE = {
   contentStyle: {
     background: '#1a2333',
@@ -433,11 +441,33 @@ export default function LedgerPage({
     const t = monthTotals(book, k);
     const c = momDelta(book, k);
     const e = expectedTotal(book?.items, k);
+    const ie = expectedIncomeTotal(book?.items, k);
     const bp = expectedByPay(book?.items, k);
+    /**
+     * 수지 균형 카드 전용 3필드 — **`plan`/`actual`/`expected`와 섞지 말 것.**
+     * ⚠️ 수입·지출을 **같은 규칙(항목 단위 실제 ?? 계획)** 으로 뽑아야 그 차이가 잉여금이 된다.
+     *    과거엔 수입만 `t.actualIncome || t.planIncome`(그룹 단위 폴백)이고 지출은
+     *    `t.actualExpense`(폴백 없음)라, 실적 미입력이면 지출 막대가 0이 되어 **범례에는
+     *    '지출'이 있는데 막대는 하나도 안 보였다**(사용자 보고 2026-08). 그 비대칭이 원인이다.
+     * ⚠️ null 게이트는 `&&`가 아니라 `||`다. 한쪽 축의 활성 항목이 0건이면 그 축을 0으로
+     *    단언하게 되는데, `makeLedgerBook`이 `items: []`로 시작하므로 '수입 항목을 아직
+     *    등록하지 않은 장부'가 기본 경로다 → `&&`면 지출 전액이 12개월 내내 amber
+     *    '부족분'으로 그려진다(부호까지 틀린 확정 표기).
+     * ⚠️ `balUnresolved`는 산출 불가(실제도 계획도 못 구한) 항목 수다. `expectedTotal`의
+     *    `value`는 그 몫을 빼고 더하므로 총액이 아니라 **하한**이다 — 각주가 그 사실을 알린다.
+     *    ⚠️ 이 값으로 막대 색을 회색으로 중립화하지 말 것: `loanSchedule`은 **만기 경과·잔액 0**
+     *    (= 상환이 끝난 대출을 지우지 않고 둔, 코드 주석이 "흔한 상태"라 부르는 경우)에도
+     *    null을 내므로, 그러면 가장 흔한 정상 상태에서 차트가 통째로 회색이 된다.
+     */
+    const noInc = ie.activeCount === 0;
+    const noExp = e.activeCount === 0;
     const row = {
       m, ym: k, label: `${m}월`,
       plan: t.planExpense, actual: t.actualExpense,
-      income: t.actualIncome || t.planIncome,
+      balIncome: noInc ? null : ie.value,
+      balExpense: noExp ? null : e.value,
+      balance: (noInc || noExp) ? null : (ie.value - e.value),
+      balUnresolved: e.unresolved + ie.unresolved,
       missing: t.missingExpense,
       // ⚠️ comparable=false면 숫자를 내지 않는다(진행 중인 달은 항상 미입력이 많다).
       momDelta: c.comparable ? c.delta : null,
@@ -462,6 +492,13 @@ export default function LedgerPage({
    * '그 달 지출 0원'이라는 거짓 단언이 된다).
    */
   const payChartData = useMemo(() => yearSeries.filter((r) => r.state !== 'none'), [yearSeries]);
+  /**
+   * 수지 균형 각주용 — 산출 불가 항목이 있는 달 수.
+   * ⚠️ `expectedTotal`의 `value`는 산출 불가 몫을 빼고 더하므로 총액이 아니라 **하한**이다.
+   *    합계를 확정 숫자로 그려 놓고 그 사실을 숨기면 소계 행의 '?N' 규약과 갈린다.
+   */
+  const balUnresolvedMonths = useMemo(
+    () => yearSeries.filter((r) => r.balUnresolved > 0).length, [yearSeries]);
   /** 그 해에 실제로 쓰인 결제수단만 — 안 쓰는 수단의 빈 범례를 만들지 않는다. */
   const payKeys = useMemo(
     () => LEDGER_PAY_ORDER.filter((p) => yearSeries.some((r) => Math.abs(r[`pay_${p}`]) > 0.5)),
@@ -535,8 +572,11 @@ export default function LedgerPage({
 
   /**
    * 상세구분 도넛 — 대출·연단위는 **항목별**, 고정비·변동비는 **사용자 구분(category)별**.
-   * ⚠️ 그룹당 조각은 `LEDGER_DETAIL_TOP_N`개 + '기타' = 최대 5개다. 램프가 6슬롯부터
-   *    인접 ΔE 4 아래로 떨어지기 때문(팔레트 §2 실측). 접지 않고 늘리지 말 것.
+   * ⚠️ 그룹당 조각은 **최대 5개**다. 램프가 6슬롯부터 인접 ΔE 4 아래로 떨어지기 때문
+   *    (팔레트 §2 실측 — 그 스크립트는 n=6 실패를 단언한다). 늘리지 말 것.
+   * ⚠️ **'기타 1건'으로 접지 말 것** — head 4 + 기타 1 = 5로 조각 수가 전부 표시(5)와
+   *    똑같은데 이름만 잃는 순손실이다. 실제로 대출 5건 중 APT 2가 그렇게 사라져
+   *    사용자가 "누락됐다"고 보고했다(2026-08). 그래서 **6건 이상일 때만** 접는다.
    * ⚠️ 남는 조각은 전부 **직접 라벨을 갖는다** — '작으면 라벨 생략'으로 바꾸지 말 것
    *    (색만으로 구분이 보장되지 않는 대역이라 라벨이 유일한 보조 부호다).
    */
@@ -559,8 +599,11 @@ export default function LedgerPage({
         .map(([name, value]) => ({ name, value }))
         .filter((r) => r.value > 0)
         .sort((a, b) => b.value - a.value);
-      const head = sorted.slice(0, LEDGER_DETAIL_TOP_N);
-      const tail = sorted.slice(LEDGER_DETAIL_TOP_N);
+      // ⚠️ 임계는 `TOP_N + 1`이다. `TOP_N`으로 되돌리면 '기타 1건'이 부활하고(이름만 잃는
+      //    순손실), `TOP_N + 2`로 넓히면 6건에서 n=6이 되어 램프 인접 ΔE가 4 아래로 떨어진다.
+      const fold = sorted.length > LEDGER_DETAIL_TOP_N + 1;
+      const head = fold ? sorted.slice(0, LEDGER_DETAIL_TOP_N) : sorted;
+      const tail = fold ? sorted.slice(LEDGER_DETAIL_TOP_N) : [];
       const n = head.length + (tail.length ? 1 : 0);
       head.forEach((r, i) => rows.push({
         key: `${g}:${r.name}`, group: g,
@@ -1548,7 +1591,12 @@ export default function LedgerPage({
             {/* ① 월별 계획 vs 실제 */}
             <div className="bg-[#0f1623] border border-gray-800 rounded-lg p-3">
               <div className="text-[12px] font-semibold mb-1">{year}년 월별 지출 — 계획 대비 실제</div>
-              <div className="text-[10px] text-gray-500 mb-2">막대 = 실제 입력분 · 회색 선 = 계획</div>
+              {/* ⚠️ '수지 균형' 카드와 **같은 그리드·같은 분홍색**으로 다른 규칙을 그린다
+                  (여기는 입력된 실적만, 저기는 실제 ?? 계획). 두 카드가 서로를 가리켜야
+                  사용자가 어느 쪽을 먼저 봐도 모순으로 읽지 않는다. 이 문장을 지우지 말 것. */}
+              <div className="text-[10px] text-gray-500 mb-2">
+                막대 = 실제 입력분 · 회색 선 = 계획 · '수지 균형' 카드는 <b>실제 ?? 계획</b> 기준이라 미입력 달에 값이 다릅니다
+              </div>
               <div style={{ height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={yearSeries} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
@@ -1622,7 +1670,8 @@ export default function LedgerPage({
                 <DonutWithList rows={detailDonut.rows} sum={detailDonut.sum} hideAmounts={hideAmounts} />
               )}
               <div className="mt-2 text-[9px] text-gray-600">
-                그룹당 최대 {LEDGER_DETAIL_TOP_N}개까지 표시하고 나머지는 '기타'로 묶습니다.
+                그룹당 {LEDGER_DETAIL_TOP_N + 1}건까지는 전부 이름을 표시하고, 그보다 많으면
+                상위 {LEDGER_DETAIL_TOP_N}개만 표시하고 나머지를 '기타'로 묶습니다.
                 고정비·변동비의 구분은 매트릭스 탭 아래 <b>구분 관리</b>에서 등록합니다.
               </div>
             </div>
@@ -1706,7 +1755,11 @@ export default function LedgerPage({
             {/* ④ 수지 균형 */}
             <div className="bg-[#0f1623] border border-gray-800 rounded-lg p-3">
               <div className="text-[12px] font-semibold mb-1">수지 균형</div>
-              <div className="text-[10px] text-gray-500 mb-2">수입 − 지출 = 저축여력</div>
+              <div className="text-[10px] text-gray-500 mb-2">
+                수입 − 지출 = <span style={{ color: LEDGER_DIVERGING.under }}>▲ 잉여금</span>
+                {' / '}<span style={{ color: LEDGER_DIVERGING.over }}>▼ 부족분</span>
+                {' · '}실제가 있으면 실제, 없으면 계획 기준
+              </div>
               <div style={{ height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={yearSeries} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
@@ -1714,13 +1767,39 @@ export default function LedgerPage({
                     <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={{ stroke: '#374151' }} tickLine={false} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false}
                       tickFormatter={(v) => (hideAmounts ? '' : fmtWonShort(v, false))} width={48} />
+                    {/* ⚠️ null 값은 recharts `Tooltip.filterNull`(기본 true)이 payload에서 **먼저**
+                        걸러내므로 이 formatter에 도달하지 않는다 — `v >= 0`이 `null >= 0=== true`로
+                        새는 함정은 없다. 부호 분기를 이 함수 밖으로 옮기지 말 것. */}
                     <RTooltip {...TOOLTIP_STYLE}
-                      formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
+                      formatter={(v, n) => (n === BALANCE_BAR_NAME
+                        ? [fmtWon(Math.abs(v), hideAmounts), v >= 0 ? '잉여금' : '부족분']
+                        : [fmtWon(v, hideAmounts), n])} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Bar dataKey="income" name="수입" fill={LEDGER_BALANCE_COLOR.income} radius={[4, 4, 0, 0]} maxBarSize={18} />
-                    <Bar dataKey="actual" name="지출" fill={LEDGER_BALANCE_COLOR.expense} radius={[4, 4, 0, 0]} maxBarSize={18} />
+                    <ReferenceLine y={0} stroke="#4b5563" />
+                    <Bar dataKey="balIncome" name="수입" fill={LEDGER_BALANCE_COLOR.income} radius={[2, 2, 0, 0]} maxBarSize={14} />
+                    <Bar dataKey="balExpense" name="지출" fill={LEDGER_BALANCE_COLOR.expense} radius={[2, 2, 0, 0]} maxBarSize={14} />
+                    {/* ⚠️ `legendType="none"` — 범례 한 칸으로는 잉여금·부족분 두 색을 설명할 수
+                        없다. 색-의미 매핑은 위 부제가 진다(차트 ② `momDelta` 선례와 같은 규약).
+                        ⚠️ Cell 인덱스는 **데이터 인덱스**로 매칭된다(값이 없어 막대를 안 그린 달이
+                        앞에 있어도 밀리지 않는다 — recharts 2.15.3 SSR로 실측 확인). */}
+                    <Bar dataKey="balance" name={BALANCE_BAR_NAME} legendType="none" radius={[2, 2, 0, 0]} maxBarSize={14}>
+                      {yearSeries.map((d, i) => (
+                        <Cell key={i} fill={d.balance === null ? 'transparent'
+                          : (d.balance >= 0 ? LEDGER_DIVERGING.under : LEDGER_DIVERGING.over)} />
+                      ))}
+                    </Bar>
                   </ComposedChart>
                 </ResponsiveContainer>
+              </div>
+              <div className="mt-2 border-t border-gray-800 pt-2 text-[9px] text-gray-600">
+                헤더 '저축여력'과 숫자가 다를 수 있습니다 — 저쪽은 <b>계획 기준</b>이고 연단위를 ÷12 해
+                매달 나눠 담습니다. 이 카드는 <b>그 달 실제 ?? 계획</b> 기준이고 연단위는 납부월에 전액 들어갑니다.
+                수입·지출 중 한쪽이라도 항목이 없는 달은 막대를 그리지 않습니다.
+                {balUnresolvedMonths > 0 && (
+                  <> <span className="text-amber-500">
+                    {balUnresolvedMonths}개월에 산출 불가 항목(예: 잔액 기준월이 빈 대출)이 있어 막대에서 빠져 있습니다 — 실제 지출은 더 클 수 있습니다.
+                  </span></>
+                )}
               </div>
             </div>
           </div>

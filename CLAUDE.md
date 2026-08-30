@@ -4303,9 +4303,45 @@ ledgerDataState !== 'ready'}`.
   `getValueByDataKey(d, key, 0)`로 **0으로 강제**한다. 항목이 없던 달은 **행 자체를 제외**하고
   (`payChartData`) 제외한 달 수를 화면에 밝힌다(0 막대는 '그 달 지출 0원'이라는 거짓 단언).
 - **⚠️ 대출 기본 결제수단이 `transfer`라 "현금+카드=전체"가 성립하지 않는다** — 반드시 고지.
-- **상세 도넛**은 그룹당 `LEDGER_DETAIL_TOP_N`(4)개 + '기타' = **최대 5조각**. 램프가 6슬롯부터
-  인접 ΔE 4 아래로 떨어진다. ⚠️ `LEDGER_DETAIL_OTHER`는 **독립 상수**다 —
-  `LEDGER_DIVERGING.flat`을 재사용하면 같은 회색이 '계획선'·'변동 없음'·'기타 지출' 셋을 뜻한다.
+- **상세 도넛**은 그룹당 **최대 5조각**. 램프가 6슬롯부터 인접 ΔE 4 아래로 떨어진다.
+  ⚠️ `LEDGER_DETAIL_OTHER`는 **독립 상수**다 — `LEDGER_DIVERGING.flat`을 재사용하면 같은 회색이
+  '계획선'·'변동 없음'·'기타 지출' 셋을 뜻한다.
+- **⚠️ '기타 1건'으로 접지 말 것 — fold 임계는 `LEDGER_DETAIL_TOP_N + 1`이다(2026-08)**:
+  `head 4 + 기타 1 = 5`는 **전부 표시(5)와 조각 수가 똑같은데 이름만 잃는 순손실**이다. 실제로
+  대출 5건 중 APT 2가 그렇게 사라져 사용자가 "누락됐다"고 보고했다. `TOP_N`으로 되돌리면 그 버그가
+  그대로 부활하고, `TOP_N + 2`로 넓히면 6건에서 n=6이 되어 팔레트 §2가 실패를 단언한 대역에 들어간다
+  (⚠️ `validate_palette.mjs`는 화면이 몇 슬롯을 렌더하는지 **모른다** — 두 게이트 사이의 빈틈이라
+  `#G13g-5`가 산술로 상한을 따로 고정한다). 각주 문구도 실제 규칙과 함께 갱신할 것(`#G13g-7`).
+- **⚠️ 수지 균형 카드 = 수입·지출·차액 3막대, 두 축이 **같은 규칙**(2026-08 사용자 요청)**:
+  과거엔 수입만 `t.actualIncome || t.planIncome`(그룹 단위 폴백)이고 지출은 `t.actualExpense`
+  (폴백 없음)라, 실적 미입력이면 **범례에는 '지출'이 있는데 막대가 하나도 안 보였다**. 그 비대칭이
+  원인이므로 둘 다 항목 단위(`expectedIncomeTotal` / `expectedTotal`)로 뽑는다 — 전용 필드
+  `balIncome`/`balExpense`/`balance`를 쓰고 **`plan`/`actual`/`expected`는 손대지 않는다**
+  (`#G10d`가 `plan: t.planExpense, actual: t.actualExpense,`를 리터럴로 단언한다).
+  ⚠️ **`#G10` 계열 '계획 폴백 누출 금지'와 충돌하지 않는다** — 금지 대상 5소비자는
+  `compareMonths`/`momDelta`·`yoyDelta`/`yearSeries.actual`/`annualCompare`/`ledgerEventsByDate`이고
+  이 카드는 그 목록에 없다. row가 두 계열을 별도 필드로 들고 어느 쪽을 그릴지 고르는 것은
+  **표시 선택이지 누출이 아니다**.
+  - ⚠️ **null 게이트는 `&&`가 아니라 `||`다.** `makeLedgerBook`이 `items: []`로 시작하므로
+    '수입 항목을 아직 등록하지 않은 장부'가 기본 경로인데, `&&`면 `balance = 0 − 지출`이 되어
+    지출 전액이 12개월 내내 amber '부족분'으로 그려진다(부호까지 틀린 확정 표기).
+  - 잉여금 = `LEDGER_DIVERGING.under`(teal) / 부족분 = `.over`(amber) + `<ReferenceLine y={0}>`으로
+    **부호를 기하로도 이중 인코딩**한다. ⚠️ 범례 한 칸으로는 두 색을 설명할 수 없어
+    `legendType="none"`이고, 색-의미 매핑은 **부제의 직접 라벨**(▲ 잉여금 / ▼ 부족분)이 진다
+    (차트 ② `momDelta` 선례와 같은 규약 — 색만으로 뜻을 전달하지 않는다).
+  - ⚠️ 막대 이름은 **`BALANCE_BAR_NAME` 상수로 공유**한다 — 툴팁이 `n === BALANCE_BAR_NAME`으로
+    이 계열을 골라 부호별로 '잉여금'/'부족분' 라벨을 갈라 쓰므로, 한쪽만 고치면 분기가 조용히 죽는다.
+    null 값은 recharts `Tooltip.filterNull`(기본 true)이 payload에서 **먼저** 걸러 formatter에
+    도달하지 않는다 → `null >= 0 === true` 함정은 발생하지 않는다(2.15.3 소스 확인).
+  - ⚠️ **차트 ①과 같은 그리드·같은 분홍색인데 규칙이 다르다**(①=입력된 실적만, ④=실제 ?? 계획).
+    두 카드 부제가 **서로를 가리켜야** 사용자가 어느 쪽을 먼저 봐도 모순으로 읽지 않는다(`#G18m`·`#G18n`).
+    헤더 KPI `savingCapacity`는 '계획 기준 · 연단위 ÷12'라 또 다른 축이므로 각주로 고지한다(`#G18p`).
+  - ⚠️ `expectedTotal`의 `value`는 산출 불가(unresolved) 몫을 빼고 더하므로 총액이 아니라 **하한**이다
+    → 각주가 그 달 수를 밝힌다(`#G18o`). **그 값으로 막대 색을 회색 중립화하지 말 것** —
+    `loanSchedule`은 **만기 경과·잔액 0**(코드 주석이 "흔한 상태"라 부르는, 상환 끝난 대출을 지우지
+    않고 둔 경우)에도 null을 내므로 가장 흔한 정상 상태에서 차트가 통째로 회색이 된다(과잉 억제).
+  - **영속화 지점 0곳** — 전부 매 렌더 파생값이다. `ledgerFingerprint`·`portfolioStructureKey`·
+    `applyStateData`·`applyBackupData`·`ledger:live` 브릿지 **전 지점 무수정**.
 - **⚠️ sticky 오프셋은 파생 상수**(`LEFT_PLAN = COL_PAY + COL_NAME`). `left-[212px]`
   하드코딩으로 되돌리지 말 것 — 212는 `62+150` 전제라 항목 셀이 넓어지면 계획열이 제자리에 남아
   **가로 스크롤 시 × 삭제 버튼을 덮는다**.
@@ -4397,8 +4433,16 @@ null 계약·버튼 배선은 **`verify:ledger`**에 둔다. 이 저장소는 **
 - **범위 밖(의도)**: 포트폴리오 계좌 자동 연동 · 개별 거래(트랜잭션) 입력 · 영수증 첨부 · 다중 통화 ·
   카드 명세서 임포트 · undo/redo · 예산 초과 푸시 알림 · 항목 드래그 재정렬(▲▼만) ·
   구분의 계좌 간 공유 · 상세 도넛의 드릴다운.
-- 검증: `npm run verify:ledger` (직접 import #0~#102 + 소스 텍스트 가드 #G1~#G17c, **437건**)
+- 검증: `npm run verify:ledger` (직접 import #0~#102 + 소스 텍스트 가드 #G1~#G17c·**#G18\***, **486건**)
   + **`npm run verify:palette`**(`scripts/validate_palette.mjs`).
+  ⚠️ **`#G13g`도 죽은 단언이었다**(2026-08 실증) — `/LEDGER_DETAIL_TOP_N/.test(LP) &&
+  /LEDGER_DETAIL_OTHER/.test(LP)`가 파일 전역이라 **import 문 한 줄과 각주**만으로 충족돼,
+  fold 로직을 통째로 지워도 초록이었다(변이 3종 확인). 지금은 `sliceBlock`으로 `detailDonut`
+  구간을 잘라 **사용부**를 단언한다(`#G13g-1`~`#G13g-7`). 파일 전역 정규식으로 되돌리지 말 것.
+  ⚠️ **존재 가드도 주석에 걸린다** — `#G18i`가 처음에 `/legendType="none"/`이었는데 바로 위
+  설명 주석이 그 토큰을 인용하고 있어 실제 prop을 지워도 통과했다(변이 M10). 부재 가드는
+  `stripComments`를 거치고(`#G18c`), 존재 가드는 **사용부 형태**(`name={BALANCE_BAR_NAME}
+  legendType="none"`)로 좁힌다.
   ⚠️ **`#G10d`는 한때 죽은 단언이었다** — `yearSeries` 구간을 `const e = expectedTotal` 앞까지
   잘라 `expected` 부재를 재는 형태였는데, 보호 대상인 row 객체 리터럴이 그 **뒤**에 있어
   `actual: t.actualExpense` → `actual: e.value` 변이(= 이 diff의 최대 위험)가 278건 전부
@@ -4416,6 +4460,12 @@ null 계약·버튼 배선은 **`verify:ledger`**에 둔다. 이 저장소는 **
   지문 투영 삭제 · `changed` 판정 삭제 · 레거시 churn · 램프 클램프 제거 · 5구간 누출 주입 ·
   결제수단 하드코딩 · 총합계 행 삭제 · itemStyle 삭제 · 바깥 라벨 복귀 · 후처리 우회 ·
   0 막대 복귀 · byPay 복귀 · sticky 하드코딩 · ▲▼/구분 삭제 · 구분 삭제가 항목까지 지움).
+  ⚠️ 도넛 fold·수지 균형 가드는 **변이 17종(음성 대조 1 포함)으로 검출을 확인**했다
+  (fold 임계 `+1`→`+2` · fold 삭제 후 무조건 slice 복귀 · `n`을 head.length로 축소 · 각주 되돌림 ·
+  기타 색 바인딩 제거 · 지출 막대를 옛 `actual`로 · null 게이트 `||`→`&&` · 막대 이름 상수 공유 파괴 ·
+  툴팁 부호 분기 제거 · `legendType="none"` 제거 · `ReferenceLine` 제거 · 부제 색 매핑 삭제 ·
+  ① 상호 참조 삭제 · 산출 불가 각주 삭제 · `transparent` 분기 제거 · `plan/actual` 줄 변조 ·
+  **주석에 금지 토큰을 인용해도 오탐하지 않는지**(음성 대조)).
   ⚠️ 그중 **`changed` 판정 삭제(M11)는 처음에 죽은 단언이었다** — `#76` 픽스처에 `id`가 없어
   다른 이유로도 `changed`가 섰다. `#76c`가 **categories 외 전부 정규형인 픽스처**로 그 구멍을
   막는다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
