@@ -365,6 +365,15 @@ export default function LedgerPage({
 
   const book = local[bookIdx] || null;
   const ym = makeYm(year, month);
+  /**
+   * 엑셀 내보내기 게이트. ⚠️ **선언을 지우지 말 것** — `handleExcel`이 이 이름을 참조한다.
+   * `today`는 브릿지로 늦게 도착하고(별도 창은 `''`로 시작) 그동안 `year`/`month`가 0이라
+   * `makeYm`이 `'0000-00'`을 만든다. 그대로 내보내면 제목이 `가계부 — 0년 월 매트릭스`,
+   * 파일명이 `0_가계부.xlsx`인 쓸모없는 파일이 **조용히** 내려받아진다(실측).
+   * ⚠️ 게이트를 통째로 없애지 말 것 — 인앱은 `getTodayKST()`라 항상 참이지만
+   *    별도 창(주 진입점)에서는 실제로 거짓인 창이 존재한다.
+   */
+  const ymReady = isValidYm(ym);
 
   /* ── 쓰기 헬퍼 — 전부 id 기준(인덱스 기준 금지) ────────────────────────── */
   const patchBook = useCallback((bookId, fn) => {

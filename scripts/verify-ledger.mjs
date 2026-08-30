@@ -1423,6 +1423,70 @@ ok('#G34 hideAmounts를 적용하지 않는다', !/hideAmounts/.test(LEX));
   ok('#G35b ⚠️ readOnly로 게이팅하지 않는다', !/readOnly/.test(H));
   ok('#G35c ⚠️ try/catch로 감싼다(창에는 토스트가 없다)', /try \{[\s\S]*catch/.test(H));
   ok('#G35d 데이터가 없으면 사유를 밝힌다', /doFlash\('내보낼 내용이 없습니다'\)/.test(H));
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // #G35e ⚠️ handleExcel이 참조하는 자유 식별자가 전부 이 파일에 선언돼 있다.
+  //
+  // 왜 필요한가 — 2026-08 실측 blocker: `if (!ymReady)`의 `ymReady`가 **저장소 어디에도
+  // 선언되지 않은 채** 배포돼 엑셀 내보내기가 한 번도 동작한 적이 없었다(커밋 02bf506~).
+  // 이 부류는 어떤 기존 게이트도 잡지 못한다:
+  //   · LedgerPage.tsx는 `@ts-nocheck` + 빌드가 esbuild(타입체크 없음) → 컴파일러 통과
+  //   · 렌더가 아니라 **클릭 핸들러 안**에서만 평가 → 화면은 멀쩡하고 build도 통과
+  //   · handleExcel 전체가 try/catch라 ReferenceError가 '엑셀을 만들지 못했습니다'로 **위장**
+  //   · #G35~#G35d는 문구·배선의 **존재**만 볼 뿐 식별자가 실재하는지는 보지 않는다
+  //   · memory/tools/undefcheck.mjs도 놓친다 — 참조 추출이 `foo(`·`foo.`·`foo[` 위치만
+  //     보므로 `!ymReady` 같은 **맨 불리언 읽기**는 애초에 수집되지 않는다
+  //
+  // ⚠️ 선언이 아니라 **사용부**를 본다 — handleExcel 본문에서 값으로 읽히는 이름을 뽑아
+  //    파일 안 선언과 대조한다. 그래서 `ymReady` 선언 한 줄을 지우는 변이에서 실제로 빨간불이
+  //    뜬다(변이 테스트로 확인). 특정 이름을 리터럴로 박지 않으므로 **앞으로 이 핸들러에
+  //    새로 생길 미선언 식별자도 같이 잡는다**.
+  //
+  // 알려진 한계(의도): 삼항의 참-분기 식별자(`cond ? realRef : x`)는 객체 키 제외
+  // 룩어헤드에 함께 걸려 수집되지 않는다. 오탐(=매 커밋 차단)이 미탐보다 나쁘므로 이쪽을 택했다.
+  {
+    const KW = new Set(('if else return const let var function try catch finally throw typeof ' +
+      'instanceof new true false null undefined void delete in of do while for switch case ' +
+      'break continue async await yield class extends this').split(' '));
+    const GLB = new Set(('Array Number String Boolean Object Math JSON Date console window ' +
+      'document Promise Set Map Error RegExp Blob URL setTimeout clearTimeout React').split(' '));
+
+    // 문자열 리터럴은 통째로 비운다(한글 문구 안의 단어가 식별자로 잡히지 않게).
+    const body = H
+      .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+      .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+      .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+    // `(?![\w$])`가 없으면 `todayKST`가 `todayKS`로 **백트래킹**해 객체 키 제외가 새어 나간다.
+    const used = new Set();
+    for (const m of body.matchAll(/(^|[^.\w$])([A-Za-z_$][\w$]*)(?![\w$])(?!\s*:)/gm)) used.add(m[2]);
+
+    const declared = new Set();
+    const add = (t) => { if (t && /^[A-Za-z_$][\w$]*$/.test(t)) declared.add(t); };
+    for (const m of LP.matchAll(/(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g)) add(m[1]);
+    for (const m of LP.matchAll(/(?:const|let|var)\s*([[{][^;=]{0,600}?[\]}])\s*=/g)) {
+      for (const t of m[1].split(/[,{}[\]]/)) add(t.split(':').pop().split('=')[0].trim());
+    }
+    for (const m of LP.matchAll(/import\s+([\s\S]{0,400}?)\s+from/g)) {
+      for (const t of m[1].split(/[,{}]/)) add(t.split(/\s+as\s+/).pop().trim());
+    }
+    // 컴포넌트 props 구조분해(여러 줄 시그니처)
+    for (const m of LP.matchAll(/\(\s*\{([\s\S]{0,2500}?)\}\s*\)\s*\{/g)) {
+      for (const t of m[1].split(/[,{}]/)) add(t.split('=')[0].split(':')[0].trim());
+    }
+    for (const m of LP.matchAll(/(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*=>/gm)) add(m[1]);
+    for (const m of LP.matchAll(/\(([^()]{0,300})\)\s*=>/g)) {
+      for (const t of m[1].split(/[,{}[\]]/)) add(t.split(':')[0].split('=')[0].trim());
+    }
+
+    const undeclared = [...used].filter((id) => !KW.has(id) && !GLB.has(id) && !declared.has(id));
+    ok(`#G35e ⚠️ handleExcel의 자유 식별자가 전부 선언돼 있다${undeclared.length ? ' — 미선언: ' + undeclared.sort().join(', ') : ''}`,
+      undeclared.length === 0);
+  }
+  // ⚠️ 게이트를 통째로 없애지 말 것 — 인앱은 `getTodayKST()`라 항상 참이지만, 별도 창은
+  //    `today`가 브릿지로 늦게 와 그동안 year/month가 0이다. 그대로 내보내면
+  //    `가계부 — 0년 월 매트릭스` / `0_가계부.xlsx`가 조용히 내려받아진다(실측).
+  ok('#G35f ⚠️ ym이 확정되기 전에는 내보내지 않는다',
+    /if \(!ymReady\)/.test(H) && /const ymReady = isValidYm\(ym\)/.test(LP));
 }
 ok('#G36 버튼이 핸들러에 배선돼 있다(사용부)', /onClick=\{handleExcel\}/.test(LP));
 ok('#G36b 버튼이 readOnly 조건 안에 있지 않다',
