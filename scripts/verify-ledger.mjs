@@ -763,6 +763,27 @@ if (L) {
   ok('#103f 손상 입력은 던지지 않고 false',
     [null, undefined, '', 'abc', 42, {}, [], '2026-13', '0000-00', '  2026-08  ']
       .every((v) => isSeededYm(v) === false));
+
+  // ── §16 계획 자동 반영(1월부터) ──────────────────────────────────────────
+  console.log('\n  §16 계획 자동 반영');
+  // ⚠️ 사용자 보고 2026-08: 8월에 가계부를 만들면 1~7월에 계획이 안 뜬다.
+  //    원인은 계산이 아니라 `addItem`이 박던 `activeFrom`이었다(#G37이 그 배선을 지킨다).
+  //    여기서는 '기간 제한이 없으면 1월도 산다'는 순수 계약을 값으로 고정한다.
+  {
+    const plain = makeLedgerItem({ group: 'fixed', plan: 800000 });   // activeFrom 미지정
+    ok('#104 기간 미지정이면 1월도 활성', isItemActive(plain, '2026-01'));
+    ok('#104b 기간 미지정이면 1월 계획이 잡힌다', planOf(plain, '2026-01') === 800000);
+    // 실제를 넣지 않아도 예상에는 계획이 들어온다(월 칸·연간 합계·소계가 공유하는 규약).
+    ok('#104c 실제 미입력 달의 예상 = 계획', expectedOf(plain, '2026-01') === 800000
+      && actualOf(plain, '2026-01') === null);
+    // ⚠️ 그래도 "확인했다"로 승격되지 않는다 — 차이는 여전히 null이라야 한다.
+    ok('#104d ⚠️ 계획으로 채운 달의 차이는 여전히 null', varianceOf(plain, '2026-01') === null);
+    // 연중 시작 항목은 종전대로 그 전 달이 잠긴다(이 기능이 activeFrom을 무력화하지 않는다).
+    const mid = makeLedgerItem({ group: 'fixed', plan: 800000, activeFrom: '2026-08' });
+    ok('#104e ⚠️ activeFrom이 있으면 그 전 달은 여전히 비활성',
+      !isItemActive(mid, '2026-07') && isItemActive(mid, '2026-08')
+      && planOf(mid, '2026-07') === null && expectedOf(mid, '2026-07') === null);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1393,6 +1414,59 @@ ok('#G23 ⚠️ touchMonth는 값이 실제로 바뀐 경우에만',
   /if \(commitActual\(it\.actual, k, raw\) === it\.actual\) return;[\s\S]{0,400}?touchMonth\(book\.id, k\);/.test(LP));
 
 // ⚠️ annual의 비납부월은 미입력이 아니다 — isItemActive로 재면 연간 차이 열이 영구히 '-'가 된다.
+/* ---------------------------------------------------------------------------
+ * #G37 계획 자동 반영 — 배선
+ * ⚠️ 이 묶음이 지키는 것은 "계획이 1월부터 보인다"는 사용자 계약이다. 원인이 계산이 아니라
+ *    **생성 기본값**이었으므로(#G37) 값 테스트(#104*)만으로는 회귀를 잡지 못한다.
+ * ------------------------------------------------------------------------ */
+// ⚠️ `activeFrom: ym`으로 되돌리면 8월에 만든 가계부의 1~7월이 다시 `-`가 되고,
+//    그 필드를 고칠 UI가 없던 시절과 달리 지금은 되돌릴 수단은 있으나 기본값이 다시 틀어진다.
+ok('#G37 ⚠️ addItem이 activeFrom을 보고 있는 달로 박지 않는다',
+  /const base = \{ group, createdAt: Date\.now\(\), activeFrom: '' \}/.test(LP)
+  && !/activeFrom: ym\b/.test(LP));
+
+// ⚠️ 연간 합계는 소계 행과 **같은 규약**(실제 ?? 계획)이라야 소계 = Σ항목이 성립한다.
+// ⚠️ **반드시 `renderItemRow` 구간으로 좁혀서 단언할 것.** 소계 행(`renderSubtotalRow`)도
+//    같은 `{fmtWon(yearExpected, hideAmounts)}` 문자열을 가지고 있어, 파일 전역으로 재면
+//    **항목 행을 yearActual로 되돌려도 소계 행이 대신 통과시켜** 죽은 단언이 된다
+//    (변이 N2로 실증). 그리고 그게 정확히 '소계 = Σ항목'이 깨지는 형태다.
+const ITEMROW = sliceBlock(LP, 'const renderItemRow = (it) => {', '\n  };');
+ok('#G37b0 항목 행 구간을 찾았다', ITEMROW.length > 500);
+ok('#G37b ⚠️ 항목 행의 연간 합계가 expectedOf로 누적된다(사용부)',
+  /const e = expectedOf\(it, k\);/.test(ITEMROW)
+  && /yearExpected \+= e;/.test(ITEMROW)
+  // ⚠️ `(?<!\$)` 필수 — 같은 구간의 title 템플릿에 `${fmtWon(yearActual, …)}`가 들어 있어,
+  //    없으면 렌더 값을 되돌려도 툴팁 쪽이 매치돼 통과한다(그리고 부재 단언은 상시 실패한다).
+  && /(?<!\$)\{fmtWon\(yearExpected, hideAmounts\)\}/.test(ITEMROW)
+  && !/(?<!\$)\{fmtWon\(yearActual, hideAmounts\)\}/.test(ITEMROW));
+
+// ⚠️ 차이 열의 게이트는 그대로 `yearMissing` — expected로 바꾸면 언제나 0이 되어
+//    "차이 없음"이라는 거짓 확정이 된다(varianceOf null 계약과 같은 근거).
+ok('#G37c ⚠️ 연간 차이 게이트는 여전히 yearMissing이다',
+  /const yearVar = yearMissing === 0 \? yearActual - yearPlan : null;/.test(ITEMROW));
+
+// ⚠️ 표시 전용 예상값이 5소비자로 새면 전월·전년 대비가 영구히 거짓말한다(ledger.ts G-2).
+ok('#G37d ⚠️ yearExpected가 비교·차트·달력으로 새지 않는다',
+  !/(compareMonths|momDelta|yoyDelta|yearSeries|annualCompare|ledgerEventsByDate)[^\n]*yearExpected/.test(LP)
+  && !/yearExpected[^\n]*(compareMonths|momDelta|yoyDelta|yearSeries|annualCompare|ledgerEventsByDate)/.test(LP));
+
+// ⚠️ 계획으로 채운 칸은 **값처럼 보이되 구분**돼야 한다 — 기본 placeholder 색이면
+//    '아직 없는 값'으로 읽혀 사용자가 "계획이 반영 안 됐다"고 느낀다(그게 원 보고였다).
+ok('#G37e ⚠️ 월 칸의 계획을 흐린 이탤릭으로 구분한다(사용부)',
+  /className=\{a === null && p !== null \? 'placeholder:text-gray-500 placeholder:italic' : ''\}/.test(LP)
+  && /className=\{`\$\{inputCls\} \$\{className\}`\}/.test(LP));
+
+// ⚠️ 잠긴 칸을 클릭으로 풀 수 없으면 activeFrom을 고칠 UI가 0개가 된다(원 결함).
+ok('#G37f ⚠️ 비활성 칸이 적용기간을 넓히는 버튼이다',
+  /if \(isValidYm\(x\.activeFrom\) && k < x\.activeFrom\) return \{ \.\.\.x, activeFrom: k \};/.test(LP)
+  && /if \(isValidYm\(x\.activeTo\) && k > x\.activeTo\) return \{ \.\.\.x, activeTo: k \};/.test(LP));
+
+// ⚠️ 미입력 배너가 '합계에서 제외된다'고 말하면 거짓이다 — 소계·KPI·도넛·월 칸·연간 합계가
+//    전부 계획으로 채운다. 실제로 제외되는 건 전월·전년 대비와 달력 칩뿐이다.
+ok('#G37g ⚠️ 미입력 배너가 합계 제외라고 거짓말하지 않는다',
+  !/미입력 \{totals\.missingExpense\}건 — 합계·증감에서 제외됩니다/.test(LP)
+  && /계획으로 채워 합계에 넣습니다/.test(LP));
+
 ok('#G24 ⚠️ 연간 미입력 집계가 expectsActual을 쓴다',
   /yearActual \+= a; else if \(expectsActual\(it, k\)\) yearMissing\+\+;/.test(LP));
 ok('#G24b ⚠️ monthTotals의 미입력 판정도 expectsActual',

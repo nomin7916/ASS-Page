@@ -146,7 +146,7 @@ function Kpi({ label, value, sub, tone, title, children }) {
  * ⚠️ onChange마다 커밋하면 controlled value가 되돌아가 소수점·중간 상태를 칠 수 없고,
  *    `commitActual`의 '빈칸=키 삭제' 계약도 표현할 수 없다.
  */
-function NumCell({ value, onCommit, readOnly, align = 'right', placeholder = '', title, col }) {
+function NumCell({ value, onCommit, readOnly, align = 'right', placeholder = '', title, col, className = '' }) {
   const [draft, setDraft] = useState(null);
   const shown = draft !== null
     ? draft
@@ -156,7 +156,7 @@ function NumCell({ value, onCommit, readOnly, align = 'right', placeholder = '',
       type="text"
       inputMode="numeric"
       data-col={col}
-      className={inputCls}
+      className={`${inputCls} ${className}`}
       style={{ textAlign: align }}
       value={shown}
       placeholder={placeholder}
@@ -644,7 +644,17 @@ export default function LedgerPage({
   const addItem = (group) => {
     if (!book || readOnly) return;
     if ((book.items || []).length >= MAX_LEDGER_ITEMS) { doFlash(`항목은 최대 ${MAX_LEDGER_ITEMS}개입니다`); return; }
-    const base = { group, createdAt: Date.now(), activeFrom: ym };
+    /**
+     * ⚠️ `activeFrom`을 **'보고 있는 달'로 박지 말 것**(사용자 보고 2026-08).
+     * 8월에 가계부를 만들면 모든 항목이 `2026-08`로 고정돼 1~7월 칸이 `-`가 되고
+     * `planOf`가 null을 돌려준다 → **계획이 1월부터 반영되지 않는다.** 게다가 그 필드를
+     * 고칠 UI가 없어 사용자가 되돌릴 방법이 아예 없었다.
+     *
+     * 기본은 **제한 없음**('계획은 정해지면 거의 일정하다'는 사용 모델). 실제로 연중에
+     * 시작·종료한 항목만 아래 '적용' 줄이나 비활성 칸(`-`) 클릭으로 기간을 지정한다.
+     * ⚠️ `isItemActive`/`expectsActual`의 의미는 **그대로다** — 바뀐 건 생성 기본값뿐이다.
+     */
+    const base = { group, createdAt: Date.now(), activeFrom: '' };
     if (group === 'loan') base.loan = makeLedgerLoan({ principalAsOfYm: ym });
     if (group === 'loan') base.pay = 'transfer';
     if (group === 'annual') { base.pay = 'cash'; base.dueMonth = month; base.dueDay = 1; }
@@ -785,7 +795,7 @@ export default function LedgerPage({
       : it.tone === 'good' ? 'bg-emerald-500/5'
         : it.tone === 'info' ? 'bg-sky-500/5' : '';
     const planNow = planOf(it, ym);
-    let yearActual = 0, yearPlan = 0, yearMissing = 0;
+    let yearActual = 0, yearPlan = 0, yearMissing = 0, yearExpected = 0, yearPlanMonths = 0;
     for (const m of MONTHS) {
       const k = makeYm(year, m);
       const a = actualOf(it, k);
@@ -794,7 +804,19 @@ export default function LedgerPage({
       //    아니면 연단위 항목의 연간 차이 열이 11개월 미입력 때문에 영구히 '-'가 된다.
       if (a !== null) yearActual += a; else if (expectsActual(it, k)) yearMissing++;
       if (p !== null) yearPlan += p;
+      /**
+       * ⚠️ **표시 전용 예상 합계**(실제 ?? 계획) — 소계 행이 쓰는 `expectedTotal`과 같은 규약을
+       *    항목 행에도 적용한 것이다(그 둘이 갈리면 같은 열에서 소계 ≠ Σ항목이 된다).
+       * ⚠️ 이 값을 `compareMonths`/`momDelta`/`yoyDelta`/`yearSeries.actual`/`annualCompare`/
+       *    `ledgerEventsByDate`로 **되돌려 보내지 말 것** — 그 순간 전월·전년 대비가 영구히
+       *    거짓말을 시작한다(ledger.ts G-2 절). 여기서는 `<td>` 안에서만 쓰인다.
+       */
+      const e = expectedOf(it, k);
+      if (e !== null) { yearExpected += e; if (a === null) yearPlanMonths++; }
     }
+    // ⚠️ 차이 열의 게이트는 **그대로 `yearMissing`** — 계획으로 채운 달을 '확인했다'고 보면
+    //    `yearExpected - yearPlan`이 언제나 0이 되어 "차이 없음"이라는 거짓 확정이 된다.
+    //    (`yearMissing === 0`이면 expected === actual이라 아래 값은 종전과 한 푼도 다르지 않다.)
     const yearVar = yearMissing === 0 ? yearActual - yearPlan : null;
 
     return (
@@ -912,7 +934,24 @@ export default function LedgerPage({
           return (
             <td key={m} className={`${cellBase} text-right ${!active ? 'bg-gray-900/40' : ''}`} style={{ minWidth: 84 }}>
               {!active ? (
-                <span className="text-[10px] text-gray-700" title="이 달에는 없던 항목입니다">-</span>
+                /* ⚠️ 이 칸은 클릭으로 적용기간을 넓힐 수 있어야 한다 — `activeFrom`을 고치는
+                   UI가 없어서 "8월에 만든 항목의 계획이 1월에 안 뜬다"를 되돌릴 방법이
+                   아예 없었다(사용자 보고 2026-08). 사유가 시작월이면 시작을, 종료월이면
+                   종료를 이 달로 옮긴다. */
+                readOnly ? (
+                  <span className="text-[10px] text-gray-700" title="이 달에는 없던 항목입니다">-</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full text-right text-[10px] text-gray-700 hover:text-amber-300"
+                    title={`이 달에는 없던 항목입니다 — 클릭하면 적용기간을 ${k}까지 넓힙니다`}
+                    onClick={() => patchItem(book.id, it.id, (x) => {
+                      if (isValidYm(x.activeFrom) && k < x.activeFrom) return { ...x, activeFrom: k };
+                      if (isValidYm(x.activeTo) && k > x.activeTo) return { ...x, activeTo: k };
+                      return x;
+                    })}
+                  >-</button>
+                )
               ) : (
                 <>
                   <NumCell
@@ -920,7 +959,13 @@ export default function LedgerPage({
                     value={a}
                     readOnly={readOnly}
                     placeholder={p === null ? '' : String(Math.round(p))}
-                    title={`계획 ${p === null ? '-' : Math.round(p).toLocaleString()} · 비우면 미입력`}
+                    /* ⚠️ 계획으로 채워진 칸은 **값처럼 보이되 구분돼야** 한다(사용자 확정 2026-08).
+                       기본 placeholder 색이면 '아직 없는 값'으로 읽혀 "계획이 반영 안 됐다"가
+                       된다. 실제 입력(밝은 글씨)과 계획(흐린 이탤릭)이 한눈에 갈린다. */
+                    className={a === null && p !== null ? 'placeholder:text-gray-500 placeholder:italic' : ''}
+                    title={p === null
+                      ? '계획 없음 · 비우면 미입력'
+                      : `계획 ${Math.round(p).toLocaleString()} — 이 달 합계에는 이 계획 금액이 쓰입니다.\n실제와 다르면 숫자를 직접 넣으세요(비우면 다시 계획으로 돌아갑니다).`}
                     onCommit={(raw) => {
                       // ⚠️ **값이 실제로 바뀐 경우에만** 정리 기록을 남긴다 — NumCell의 onBlur는 값이
                       //    그대로여도 항상 커밋을 부르므로, 무조건 touchMonth를 하면 칸을 Tab으로
@@ -945,9 +990,21 @@ export default function LedgerPage({
           );
         })}
 
-        <td className={`${cellBase} text-right text-gray-300`} style={{ minWidth: 100 }}>
-          {fmtWon(yearActual, hideAmounts)}
-          <div className="text-[9px] text-gray-600">계획 {fmtWon(yearPlan, hideAmounts)}</div>
+        {/* ⚠️ 연간 합계는 **예상**(실제 ?? 계획)이다 — 소계 행과 같은 규약이라야 소계 = Σ항목이
+            성립한다. 계획으로 채운 달이 섞이면 월 칸과 **같은 시각 언어**(흐린 이탤릭)로 알린다. */}
+        <td className={`${cellBase} text-right ${yearPlanMonths > 0 ? 'text-gray-400 italic' : 'text-gray-300'}`}
+          style={{ minWidth: 100 }}
+          title={yearPlanMonths > 0
+            ? `실제 입력 ${fmtWon(yearActual, hideAmounts)} + 계획으로 채운 ${yearPlanMonths}개월 = ${fmtWon(yearExpected, hideAmounts)}\n계획으로 채운 달은 전월·전년 대비와 달력에는 쓰이지 않습니다.`
+            : '전부 실제 입력입니다'}
+        >
+          {fmtWon(yearExpected, hideAmounts)}
+          <div className="text-[9px] text-gray-600">
+            계획 {fmtWon(yearPlan, hideAmounts)}
+            {yearPlanMonths > 0 && (
+              <span className="ml-1" style={{ color: LEDGER_DIVERGING.flat }}>계획 {yearPlanMonths}개월</span>
+            )}
+          </div>
         </td>
         <td className={`${cellBase} text-right`} style={{ minWidth: 96 }}>
           {yearVar === null ? (
@@ -1249,7 +1306,10 @@ export default function LedgerPage({
           <div className="px-3 pb-2 flex gap-2 flex-wrap text-[10px]">
             {totals.missingExpense > 0 && (
               <span className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
-                {month}월 실제 미입력 {totals.missingExpense}건 — 합계·증감에서 제외됩니다
+                {/* ⚠️ '합계에서 제외'라고 쓰지 말 것 — 소계·KPI·도넛은 예전부터 `expectedTotal`
+                    (실제 ?? 계획)을 쓰고, 이제 월 칸과 연간 합계도 같다. 실제로 제외되는 건
+                    전월·전년 대비와 달력 칩뿐이다. 옛 문구는 도움말과 정면으로 모순됐다. */}
+                {month}월 실제 미입력 {totals.missingExpense}건 — 계획으로 채워 합계에 넣습니다(전월·전년 대비와 달력은 제외)
               </span>
             )}
             {kpi.loanUnresolved > 0 && (
@@ -1352,7 +1412,9 @@ export default function LedgerPage({
 
             <div className="mt-2 text-[10px] text-gray-600 leading-relaxed">
               · 실제 금액 칸을 <b>비우면 '미입력'</b>이고, <b>0을 넣으면 '그 달엔 안 썼다'</b>는 확정입니다 — 두 값은 합계에서 다르게 다뤄집니다.<br />
-              · <b>소계 행의 월 금액은 '실제 ?? 계획'</b>입니다 — 실제를 아직 안 넣은 항목은 계획으로 채워집니다. 몇 건이 계획인지는 금액 아래 <span style={{ color: LEDGER_DIVERGING.flat }}>계획 N</span>으로 표시되고, 셀에 마우스를 올리면 실제/계획이 분리돼 보입니다.<br />
+              · <b>계획은 손대지 않아도 그 항목의 모든 달에 반영됩니다</b> — 월 칸의 <span className="text-gray-500 italic">흐린 이탤릭</span> 숫자가 계획이고, 직접 넣은 값은 밝게 보입니다. 항목의 연간 합계와 소계 행도 같은 규약(<b>실제 ?? 계획</b>)이라 소계 = Σ항목이 성립합니다. 몇 건/몇 달이 계획인지는 금액 아래 <span style={{ color: LEDGER_DIVERGING.flat }}>계획 N</span>으로 표시됩니다.<br />
+              · 실제가 계획과 다른 달만 숫자를 넣으면 됩니다. <b>다시 비우면 계획으로 돌아갑니다.</b> 어떤 달을 실제로 확인했는지는 계속 구분되어, 계획으로 채운 달은 <b>차이 열이 '-'</b>로 남습니다(차이 0이라고 단언하지 않습니다).<br />
+              · 항목이 연중에 시작·종료했다면 그 달들만 <b>-</b>로 잠깁니다. 잠긴 칸을 <b>클릭하면 그 달까지 적용기간이 넓어집니다</b>.<br />
               · 그 계획 폴백은 <b>소계 표시에만</b> 쓰입니다 — 전월/전년 대비와 달력 칩은 실제 입력분만 봅니다(계획으로 채우면 "지출이 줄었다"고 거짓말하게 됩니다).<br />
               · 항목명 왼쪽 <b>▲▼</b>로 같은 그룹 안에서 순서를 바꿉니다. 항목명 아래 <b>구분</b>은 표 아래 '구분 관리'에서 미리 등록한 값 중에서 고릅니다.<br />
               · 계획 칸 옆 <b>月/年</b> 버튼: 연 단위로 청구되는 항목(연 구독 등)은 <b>年</b>으로 두면 월 계획이 자동으로 ÷12 됩니다. 중간 반올림은 하지 않습니다.<br />
