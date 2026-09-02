@@ -1500,8 +1500,28 @@ ok('#G21b ⚠️ 하드코딩 연도(2026)로 초기화하지 않는다', !/useS
 
 // ⚠️ 자동 생성이 dirty를 세우면 채택 effect가 조기 반환해, 뒤늦게 도착한 **저장된 장부가 영영
 //    채택되지 않고** 2.5초 뒤 승격이 그 장부를 빈 장부 1권으로 덮어쓴다(FlowBoard 선례).
+// ⚠️ 구간 경계가 주석이라 **LP_RAW**를 자르고, 그 뒤 주석을 걷어낸다 — LP(주석 제거본)로
+//    자르면 경계를 못 찾고, 원문 그대로 두면 아래 부재 단언이 **설계 근거 주석**에 걸린다
+//    (그 주석이 금지 토큰 `setLocal`·`local.length === 0`을 그대로 인용한다).
+const SEED = stripComments(sliceBlock(LP_RAW, '── 장부 없으면 하나 만든다', 'const addItem ='));
 ok('#G22 ⚠️ 장부 자동 생성이 setLocal(dirty)을 쓰지 않는다',
-  /if \(local\.length === 0\) \{[\s\S]{0,400}?localRef\.current = seed;[\s\S]{0,80}?setLocalState\(seed\);/.test(LP));
+  SEED.length > 100 && /localRef\.current = seed;[\s\S]{0,80}?setLocalState\(seed\);/.test(SEED)
+  && !/setLocal\(/.test(SEED));
+/**
+ * ⚠️ 판정을 **렌더 스코프 `local`로 되돌리지 말 것**(2026-08-30 실측 버그, 변이로 재현).
+ * 별도 창의 첫 `ledger:live`가 `books`(실장부)와 `dataState:'ready'`를 한 커밋으로 배치하면
+ * 그 렌더의 `local`은 아직 `[]`다 → 채택 effect가 방금 넣은 실장부를 이 effect가 빈 장부
+ * 1권으로 덮어쓰고, 이후 `books` identity가 불변이라 채택이 다시 돌지 않아 **영영 안 보인다**.
+ */
+ok('#G22c ⚠️ 시드 판정이 localRef.current를 본다(stale한 render-scope local 금지)',
+  /const cur = Array\.isArray\(localRef\.current\) \? localRef\.current : \[\];/.test(SEED)
+  && /if \(cur\.length === 0\)/.test(SEED)
+  && !/if \(local\.length === 0\)/.test(SEED));
+// ⚠️ 자가 치유 — 상위가 실제 장부를 들고 있으면 빈 시드로 덮지 않는다(dirty면 사용자 삭제이므로 제외).
+ok('#G22d ⚠️ 상위 books가 있으면 시드 대신 채택한다',
+  /if \(!dirtyRef\.current && Array\.isArray\(books\) && books\.length > 0\) \{[\s\S]{0,160}?localRef\.current = books;[\s\S]{0,80}?setLocalState\(books\);/.test(SEED));
+ok('#G22e ⚠️ 그 자가 치유가 books 변화에도 돌도록 deps에 books가 있다',
+  /\}, \[local\.length, bookIdx, readOnly, books, setLocal\]\);/.test(SEED));
 ok('#G22b ⚠️ 채택 effect가 빈 배열을 채택하지 않는다',
   /if \(dirtyRef\.current\) return;[\s\S]{0,200}?if \(!Array\.isArray\(books\) \|\| books\.length === 0\) return;/.test(LP));
 

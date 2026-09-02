@@ -671,7 +671,26 @@ export default function LedgerPage({
   /* ── 장부 없으면 하나 만든다 (읽기 전용이면 안내만) ──────────────────── */
   useEffect(() => {
     if (readOnly) return;
-    if (local.length === 0) {
+    /**
+     * ⚠️ **판정은 렌더 스코프 `local`이 아니라 `localRef.current`로 한다(2026-08-30 실측 버그).**
+     * 별도 창(기본 진입점)의 첫 `ledger:live`는 `books`(실장부)와 `dataState:'ready'`를
+     * **한 핸들러에서** 세팅하므로 React 18이 한 커밋으로 배치한다 → 그 렌더에서 `books`는
+     * 실장부인데 `local`은 아직 `[]`다. effect는 선언 순서로 돌아 위 채택 effect(:308)가
+     * `localRef.current`에 실장부를 넣은 **직후** 이 effect가 stale한 `local.length === 0`을
+     * 보고 **빈 장부 1권으로 덮어썼다**. 그 다음 커밋부터는 `books` identity가 그대로라
+     * 채택 effect의 deps `[books]`가 안 바뀌어 **실장부가 영영 화면에 닿지 못한다**
+     * → 사용자가 매번 '이전 기록'으로 복원해야 했다(인앱 폴백은 두 setState가 다른 커밋이라 무사).
+     * ⚠️ 이 시드는 dirty를 세우지 않아 Drive를 오염시키지는 않는다 — **표시만** 깨졌었다.
+     */
+    const cur = Array.isArray(localRef.current) ? localRef.current : [];
+    if (cur.length === 0) {
+      // ⚠️ 상위가 실제 장부를 들고 있으면 **빈 시드로 덮지 말고 그것을 채택한다**(자가 치유).
+      //    `dirtyRef`를 함께 보는 이유: 사용자가 장부를 전부 지운 편집 중이면 되살리면 안 된다.
+      if (!dirtyRef.current && Array.isArray(books) && books.length > 0) {
+        localRef.current = books;
+        setLocalState(books);
+        return;
+      }
       // ⚠️ **`setLocal`을 쓰지 말 것** — dirty가 서면 위 채택 effect가 조기 반환하므로, 앱 탭이
       //    새로고침 중일 때 뒤늦게 도착한 **저장된 장부가 영영 채택되지 않고** 2.5초 뒤 승격이
       //    그 장부를 빈 장부 1권으로 덮어쓴다(FlowBoard가 명시적으로 막아 둔 경로).
@@ -680,8 +699,8 @@ export default function LedgerPage({
       localRef.current = seed;
       setLocalState(seed);
     }
-    else if (bookIdx >= local.length) setBookIdx(0);
-  }, [local.length, bookIdx, readOnly, setLocal]);
+    else if (bookIdx >= cur.length) setBookIdx(0);
+  }, [local.length, bookIdx, readOnly, books, setLocal]);
 
   /* ── 항목 추가 ─────────────────────────────────────────────────────────── */
   const addItem = (group) => {

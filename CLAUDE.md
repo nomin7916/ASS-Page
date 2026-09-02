@@ -4112,6 +4112,35 @@ CVD ΔE 7.1 대역이라 **직접 라벨 + 2px 간격이 필수**(색만으로 �
   (옛 잠금 복귀 · `dataState` 미전송 · deps 누락 · fail-open 복귀 · 초기값 `ready` ·
   인앱 잠금 제거 · error를 loading으로 감춤).
 
+#### ⚠️ 시드 effect가 방금 채택한 장부를 덮던 표시 버그 (2026-08-30 — 위 두 잠금이 못 잡던 절반)
+
+사용자 보고: "앱을 실행하고 가계부를 클릭하면 이전 내용이 바로 보이지 않고 **이전 기록(스냅샷)을
+불러와야** 한다." 매 실행마다 재현됐다.
+
+- **원인 = 시드 effect가 렌더 스코프 `local`(그 렌더의 클로저)로 장부 유무를 판정한 것.**
+  별도 창(**기본 진입점**)의 첫 `ledger:live`는 `books`(실장부)와 `dataState:'ready'`를
+  **한 핸들러에서** 세팅하므로 React 18이 **한 커밋으로 배치**한다 → 그 렌더에서 `books`는
+  실장부인데 `local`은 아직 `[]`다. effect는 **선언 순서**로 도니까 채택 effect(`:308`)가
+  `localRef.current`에 실장부를 넣은 **직후** 시드 effect(`:672`)가 stale한 `local.length === 0`을
+  보고 **빈 장부 1권으로 덮어썼다**. 그 다음 커밋부터는 `books` identity가 그대로라 채택 effect의
+  deps `[books]`가 안 바뀌어 **실장부가 영영 화면에 닿지 못한다**.
+- **⚠️ 인앱 폴백은 무사했다** — App은 `setLedgerBooks`(applyStateData 안)와
+  `setLedgerDataState('ready')`(그 `await` **뒤**)가 다른 tick이라 **다른 커밋**이 된다. books가
+  먼저 커밋되며 `readOnly`는 아직 true라 시드가 건너뛰어지고, ready 커밋 때는 `local`이 이미
+  채워져 있다. 그래서 2026-08-29/08-30 잠금 두 건이 증상을 못 잡았다.
+- **⚠️ Drive 데이터는 오염되지 않았다** — 시드는 `setLocal`이 아니라 `localRef.current` 직접
+  대입이라 **dirty를 세우지 않는다** → 승격도 저장도 없다. **표시만** 깨졌었고, 그래서 스냅샷
+  복원이 매번 통했다(그리고 매번 다시 필요했다).
+- **수정**: 판정을 `localRef.current`로 바꾼다(`#G22c`). 덤으로 **자가 치유** — 로컬이 비었는데
+  상위 `books`에 내용이 있고 dirty가 아니면 **빈 시드 대신 그것을 채택**한다(`#G22d`), deps에
+  `books` 추가(`#G22e`). ⚠️ `dirtyRef` 가드를 빼지 말 것 — 사용자가 장부를 전부 지운 편집 중이면
+  되살리면 안 된다.
+- ⚠️ **`#G22` 가드는 `LP_RAW`를 자른 뒤 `stripComments`를 거친다** — 구간 경계가 주석이라
+  `LP`(주석 제거본)로는 못 자르고, 원문 그대로 두면 부재 단언이 **설계 근거 주석**(금지 토큰
+  `setLocal`·`local.length === 0`을 그대로 인용한다)에 걸린다.
+- 검증: 변이 6종(음성 대조 1 포함)으로 검출 확인 — 판정을 `local`로 되돌림 · 자가 치유 삭제 ·
+  dirty 가드 제거 · deps에서 `books` 제거 · 시드가 `setLocal` 사용 · 주석 인용 오탐.
+
 #### ⚠️ 인앱 가계부는 Drive 로드 완료 전까지 읽기 전용 (2026-08-29 실측 유실)
 
 `App.tsx` `ledgerDataState: 'loading' | 'ready' | 'error'` → `readOnly={!!adminViewingAs ||
@@ -4433,7 +4462,7 @@ null 계약·버튼 배선은 **`verify:ledger`**에 둔다. 이 저장소는 **
 - **범위 밖(의도)**: 포트폴리오 계좌 자동 연동 · 개별 거래(트랜잭션) 입력 · 영수증 첨부 · 다중 통화 ·
   카드 명세서 임포트 · undo/redo · 예산 초과 푸시 알림 · 항목 드래그 재정렬(▲▼만) ·
   구분의 계좌 간 공유 · 상세 도넛의 드릴다운.
-- 검증: `npm run verify:ledger` (직접 import #0~#102 + 소스 텍스트 가드 #G1~#G17c·**#G18\***, **486건**)
+- 검증: `npm run verify:ledger` (직접 import #0~#102 + 소스 텍스트 가드 #G1~#G17c·**#G18\***, **489건**)
   + **`npm run verify:palette`**(`scripts/validate_palette.mjs`).
   ⚠️ **`#G13g`도 죽은 단언이었다**(2026-08 실증) — `/LEDGER_DETAIL_TOP_N/.test(LP) &&
   /LEDGER_DETAIL_OTHER/.test(LP)`가 파일 전역이라 **import 문 한 줄과 각주**만으로 충족돼,
