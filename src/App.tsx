@@ -766,6 +766,7 @@ export default function App() {
     updateTaxBaseSales,
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
+    updateTaxBaseAvgAdj,
     toggleHiddenTaxMonth,
     toggleHiddenDividendMonth,
     updateInvestmentNotes,
@@ -2397,7 +2398,7 @@ export default function App() {
         updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax,
         updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw,
         addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth,
-        updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice,
+        updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, updateTaxBaseAvgAdj,
         toggleHiddenTaxMonth, toggleHiddenDividendMonth, deletePortfolioDividendData, deletePortfolioTaxData,
       };
       if (fn === 'setDividendLinks') {   // 앱 레벨 값(계좌 아님) — pid 검사 대상이 아니다
@@ -3506,7 +3507,10 @@ export default function App() {
         holdingSnapshotsKey: (p.holdingSnapshots || []).map(s => `${s.date}:${s.kind}:${snapshotCompositionKey(s.items || [])}`).join('|'),
         taxBaseKey: JSON.stringify(Object.keys(p.taxBaseHistory || {}).sort().map(code => {
           const rec = (p.taxBaseHistory || {})[code] || {};
-          return { code, events: rec.events || [], exTaxBase: rec.exTaxBase || {}, avgTaxBase: rec.avgTaxBase || {}, lastFetched: rec.lastFetched || '' };
+          // ⚠️ avgTaxBaseAdj(실제 과세금 역산 앵커) 필수 — 이 지문은 필드를 손나열하므로 빠뜨리면
+          //    '조정만 적용한 세션'이 portfolioUpdatedAt을 올리지 못해 Drive STATE 저장이 통째로
+          //    스킵된다(historyVerifyKey·targetAmount와 동일 버그 클래스).
+          return { code, events: rec.events || [], exTaxBase: rec.exTaxBase || {}, avgTaxBase: rec.avgTaxBase || {}, avgTaxBaseAdj: rec.avgTaxBaseAdj || {}, lastFetched: rec.lastFetched || '' };
         })),
       })),
       // ⚠️ overseasLinks(해외계좌 전용 퀵링크)는 payload(:state 리터럴)·저장 effect deps에는
@@ -4405,6 +4409,7 @@ export default function App() {
             updateTaxBaseSales={updateTaxBaseSales}
             updateTaxBaseExPrice={updateTaxBaseExPrice}
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
+            updateTaxBaseAvgAdj={updateTaxBaseAvgAdj}
             onToggleTaxMonth={toggleHiddenTaxMonth}
             hiddenMonths={normalizeHiddenDivMonths({
               expected: activePortfolio?.hiddenDivMonthsExpected,

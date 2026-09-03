@@ -532,7 +532,10 @@ export function usePortfolioState({
   // 구조: portfolio.taxBaseHistory[code] = {
   //   purchases: [...], sales: [...],
   //   exTaxBase: { 'YYYY-MM': number }, avgTaxBase: { 'YYYY-MM': number },
+  //   avgTaxBaseAdj: { 'YYYY-MM': { value, exDate, taxAmount, qty, kind, at } },
   // }
+  // ⚠️ 이 함수는 **화이트리스트 재구축기**다 — 여기에 나열되지 않은 필드는 어느 라이터를 부르든
+  //    그 순간 통째로 삭제된다. 신규 필드를 추가하면 반드시 이 목록에도 넣을 것(undo 없음).
   const _ensureTaxBase = (p, code) => {
     const existing = p.taxBaseHistory || {};
     const codeRec = existing[code] || {};
@@ -544,6 +547,7 @@ export function usePortfolioState({
         sales: codeRec.sales || [],
         exTaxBase: codeRec.exTaxBase || {},
         avgTaxBase: codeRec.avgTaxBase || {},
+        avgTaxBaseAdj: codeRec.avgTaxBaseAdj || {},
       },
     };
   };
@@ -595,6 +599,25 @@ export function usePortfolioState({
       if (price == null || !(price > 0)) delete avgTaxBase[yearMonth];
       else avgTaxBase[yearMonth] = price;
       tbh[code] = { ...tbh[code], avgTaxBase };
+      return { ...p, taxBaseHistory: tbh };
+    }));
+  };
+
+  // 실제 과세금에서 역산한 평균 과표 조정 앵커 저장/해제.
+  // ⚠️ avgTaxBase(수동 입력)와 **별개 슬롯**이다 — 합치면 "사용자가 직접 친 값"과 "실제 과세로
+  //    역산한 값"을 구분할 수 없어 조정 출처 툴팁을 띄울 수 없고, 사용자가 수동으로 넣어 둔 값을
+  //    조정이 조용히 덮는다. 앵커는 그 달 셀 하나가 아니라 **그 시점 이후 전체**의 자동 계산
+  //    기준을 바꾸므로(computeRunningAvgSnapshots) 출처가 화면에 남아야 한다.
+  // ⚠️ adj에는 산출 근거(exDate·taxAmount·qty·kind)를 함께 박제한다 — 나중에 배당락일이나
+  //    분배금 입력이 바뀌어도 이미 확정한 앵커가 조용히 흔들리면 안 된다.
+  const updateTaxBaseAvgAdj = (portfolioId, code, yearMonth, adj) => {
+    setPortfolios(prev => prev.map(p => {
+      if (p.id !== portfolioId) return p;
+      const tbh = _ensureTaxBase(p, code);
+      const avgTaxBaseAdj = { ...(tbh[code].avgTaxBaseAdj || {}) };
+      if (adj == null || !(adj.value > 0)) delete avgTaxBaseAdj[yearMonth];
+      else avgTaxBaseAdj[yearMonth] = adj;
+      tbh[code] = { ...tbh[code], avgTaxBaseAdj };
       return { ...p, taxBaseHistory: tbh };
     }));
   };
@@ -1059,6 +1082,7 @@ export function usePortfolioState({
     updateTaxBaseSales,
     updateTaxBaseExPrice,
     updateTaxBaseAvgPrice,
+    updateTaxBaseAvgAdj,
     toggleHiddenTaxMonth,
     toggleHiddenDividendMonth,
     updateInvestmentNotes,

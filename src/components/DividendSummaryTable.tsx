@@ -5,6 +5,7 @@ import { fetchDividendHistory, fetchYahooDividendHistory, fetchStockInfo, fetchU
 import KrEtfTaxMatrix from './KrEtfTaxMatrix';
 import ErrorBoundary from './ErrorBoundary';
 import CardExpandButton from './CardExpandButton';
+import { resolveAvgAdjState, avgAdjTooltip } from '../krEtfTaxHelpers';
 
 const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const CURRENT_YEAR = new Date().getFullYear().toString();
@@ -342,7 +343,7 @@ function DividendLinkBar({ links, onChange }) {
   );
 }
 
-export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks, onExpand, cardWindowOpen }) {
+export default function DividendSummaryTable({ portfolios, updatePortfolioDividendHistory, updatePortfolioActualDividend, updatePortfolioActualDividendUsd, updatePortfolioActualDividendQty, updatePortfolioDividendTaxRate, updatePortfolioDividendSeparateTax, updatePortfolioDividendTaxAmount, updatePortfolioActualAfterTaxUsd, updatePortfolioActualAfterTaxKrw, addPortfolioExtraRow, updatePortfolioExtraRowCode, deletePortfolioExtraRow, updatePortfolioExtraRowMonth, updateTaxBaseEvents, updateTaxBasePurchases, updateTaxBaseSales, updateTaxBaseExPrice, updateTaxBaseAvgPrice, updateTaxBaseAvgAdj, onToggleTaxMonth, hiddenMonths = { expected: [], actual: [] }, onToggleHiddenMonth, deletePortfolioDividendData, deletePortfolioTaxData, confirmDialog, notify, compact = false, usdkrw = 1300, dividendTaxHistory = {}, onDividendTaxHistoryUpdate, holidays = { kr: [], us: [] }, dividendLinks = [], setDividendLinks, onExpand, cardWindowOpen }) {
   const [activeTab, setActiveTab] = useState('expected');
   const [loading, setLoading] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -553,7 +554,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             });
             const dom = pickDominant(parts);
             const overrideQty = codeQtyOv[dom.exYm];
-            return { amount, amountUsd: 0, predicted, hasManual, yearMonth: dom.exYm, taxAmount: taxAny ? taxSum : null, perShare: dom.perShare, calcQty, qtyVal: overrideQty > 0 ? overrideQty : calcQty, qtyIsManual: overrideQty > 0 };
+            // 평균 과표 조정 상태 — 사용자가 입력한 실제 과세금과 과표 계산 탭의 평균 과표가
+            // 어긋나면 역산값을 여기서 보여 준다(적용은 과표 계산 탭에서).
+            // ⚠️ 판정·역산은 resolveAvgAdjState(=avgTaxBaseAdjNeeded) 공유 함수가 한다 — 여기서
+            //    산식을 손복제하면 같은 달에 두 화면이 다른 값을 제시한다.
+            // ⚠️ 키는 지배 소스의 배당락월(dom.exYm)이다. 한 지급월에 2건이 합산된 셀이어도
+            //    조정은 그 exYm 하나의 저장값(배당과표·과세금)만 보므로 합산과 무관하게 정확하다.
+            const avgAdj = resolveAvgAdjState(pf, item.code, dom.exYm);
+            return { amount, amountUsd: 0, predicted, hasManual, yearMonth: dom.exYm, taxAmount: taxAny ? taxSum : null, perShare: dom.perShare, calcQty, qtyVal: overrideQty > 0 ? overrideQty : calcQty, qtyIsManual: overrideQty > 0, avgAdj, srcCount: parts.length };
           }
         });
         result.push({
@@ -2057,6 +2065,29 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                 {d.hasManual && beforeTax > 0 && <span className="text-blue-300/70 text-[9px]">{formatCurrency(beforeTax)}</span>}
                                 {d.hasManual && taxAmt > 0 && <span className="text-orange-300/55 text-[9px]">{formatCurrency(taxAmt)}</span>}
                                 {d.hasManual && <span>{d.amount > 0 ? formatCurrency(d.amount) : '₩0'}</span>}
+                                {/* 실제 과세금 역산 평균 과표 — 과표 계산 탭의 평균 과표와 어긋날 때만 노출.
+                                    ⚠️ 여기서는 표시만 하고 적용은 과표 계산 탭에서 한다(사용자 확정). */}
+                                {d.avgAdj && (d.avgAdj.showSuggest || d.avgAdj.applied) && (
+                                  <span
+                                    className={`text-[9px] leading-tight ${d.avgAdj.showSuggest ? 'text-amber-400' : 'text-amber-300/60'}`}
+                                    title={avgAdjTooltip({
+                                      kind: d.avgAdj.suggest.kind,
+                                      value: d.avgAdj.showSuggest ? d.avgAdj.suggest.value : cleanNum(d.avgAdj.adj?.value),
+                                      exTaxBase: d.avgAdj.exNum,
+                                      taxAmount: d.avgAdj.obs.taxAmount,
+                                      qty: d.avgAdj.obs.qty,
+                                      exDate: d.avgAdj.adj?.exDate || '',
+                                      prevAvg: d.avgAdj.avgNum,
+                                      applied: !d.avgAdj.showSuggest,
+                                      at: d.avgAdj.adj?.at,
+                                    }) + (d.srcCount > 1 ? '\n\n※ 이 셀은 2건 이상이 합산된 값입니다 — 조정은 지배 소스의 배당락월 기준입니다.' : '')
+                                      + '\n\n적용은 [과표 계산] 탭에서 합니다.'}
+                                  >
+                                    {d.avgAdj.showSuggest ? '⚑ 과표 ' : '⚑ 조정 '}
+                                    {d.avgAdj.suggest.kind === 'lowerBound' && d.avgAdj.showSuggest ? '≥' : ''}
+                                    {(d.avgAdj.showSuggest ? d.avgAdj.suggest.value : cleanNum(d.avgAdj.adj?.value)).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                )}
                               </div>
                             ) : (
                               <span>-</span>
@@ -2377,6 +2408,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             updateTaxBaseSales={updateTaxBaseSales}
             updateTaxBaseExPrice={updateTaxBaseExPrice}
             updateTaxBaseAvgPrice={updateTaxBaseAvgPrice}
+            updateTaxBaseAvgAdj={updateTaxBaseAvgAdj}
             onToggleTaxMonth={onToggleTaxMonth}
             updatePortfolioDividendTaxAmount={updatePortfolioDividendTaxAmount}
             deletePortfolioTaxData={deletePortfolioTaxData}

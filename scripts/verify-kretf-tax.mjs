@@ -1037,6 +1037,260 @@ it('실측 픽스처에서 기준단가가 평균법보다 낮다 (이 기능의
   }
 });
 
+
+// ─── src/krEtfTaxHelpers.ts 평균 과표 조정(실제 과세 역산) 참조 미러 ─────────
+// ⚠️ src 본문과 항상 1:1 동기화. 한쪽만 고치면 이 미러가 옛 계약을 계속 통과시킨다.
+function safeNumH(v) {
+  if (v === '' || v == null) return 0;
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : 0;
+}
+function compareTaxEventsH(a, b) {
+  const byDate = String(a?.date || '').localeCompare(String(b?.date || ''));
+  if (byDate !== 0) return byDate;
+  return (safeNumH(b?.change) > 0 ? 1 : 0) - (safeNumH(a?.change) > 0 ? 1 : 0);
+}
+
+function monthEndOfYm(ym) {
+  const [y, m] = String(ym || '').split('-').map(Number);
+  if (!(y > 0) || !(m >= 1 && m <= 12)) return '';
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+
+function buildAvgTaxAnchors(avgTaxBaseAdj) {
+  return Object.entries(avgTaxBaseAdj || {})
+    .map(([ym, a]) => {
+      const raw = String(a?.exDate || '');
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : monthEndOfYm(ym);
+      return { date, value: safeNumH(a?.value) };
+    })
+    .filter(a => /^\d{4}-\d{2}-\d{2}$/.test(a.date) && a.value > 0);
+}
+
+function computeRunningAvgSnapshotsA(events, anchors) {
+  const valid = (events || [])
+    .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNumH(e.change) !== 0)
+    .sort(compareTaxEventsH);
+  const anchorList = (anchors || [])
+    .filter(a => /^\d{4}-\d{2}-\d{2}$/.test(String(a?.date || '')) && safeNumH(a?.value) > 0)
+    .map(a => ({ date: String(a.date), value: safeNumH(a.value) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  let qty = 0, avg = 0, ai = 0;
+  const out = [];
+  const flushAnchorsTo = (date) => {
+    while (ai < anchorList.length && (date == null || anchorList[ai].date <= date)) {
+      avg = anchorList[ai].value;
+      out.push({ id: `__anchor:${anchorList[ai].date}`, date: anchorList[ai].date, qty, avgPrice: avg, anchored: true });
+      ai++;
+    }
+  };
+  for (const e of valid) {
+    flushAnchorsTo(e.date);
+    const change = safeNumH(e.change);
+    if (change > 0) {
+      const newQty = qty + change;
+      avg = newQty > 0 ? (qty * avg + change * safeNumH(e.taxBasePrice)) / newQty : 0;
+      qty = newQty;
+    } else {
+      qty = Math.max(0, qty + change);
+    }
+    out.push({ id: e.id, date: e.date, qty, avgPrice: avg });
+  }
+  flushAnchorsTo(null);
+  return out;
+}
+
+function computeMonthlyAvgForGridA(events, monthYms, anchors) {
+  const snapshots = computeRunningAvgSnapshotsA(events, anchors);
+  const result = {};
+  for (const ym of (monthYms || [])) {
+    const [year, month] = ym.split('-').map(Number);
+    const lastDay = new Date(year, month, 0).toISOString().slice(0, 10);
+    let best = null;
+    for (const s of snapshots) {
+      if (s.date <= lastDay) best = s;
+      else break;
+    }
+    if (best && best.avgPrice > 0) result[ym] = best.avgPrice;
+  }
+  return result;
+}
+
+function solveAvgTaxBaseFromTax({ exTaxBase, taxAmount, qty }) {
+  const ex = safeNumH(exTaxBase);
+  const q = safeNumH(qty);
+  if (!(ex > 0) || !(q > 0)) return null;
+  if (taxAmount == null || taxAmount === '') return null;
+  const tax = safeNumH(taxAmount);
+  if (!Number.isFinite(tax) || tax < 0) return null;
+  if (tax === 0) return { value: ex, kind: 'lowerBound', perShareTax: 0 };
+  const perShareTax = tax / q;
+  const value = ex - perShareTax;
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return { value, kind: 'exact', perShareTax };
+}
+
+const AVG_ADJ_MIN_DIFF = 1;
+
+function avgTaxBaseAdjNeeded({ exTaxBase, avgTaxBase, taxAmount, qty }) {
+  const solved = solveAvgTaxBaseFromTax({ exTaxBase, taxAmount, qty });
+  if (!solved) return null;
+  const expected = Math.max(0, safeNumH(exTaxBase) - safeNumH(avgTaxBase)) * safeNumH(qty);
+  const diff = expected - safeNumH(taxAmount);
+  return { ...solved, expected, diff, needed: Math.abs(diff) >= AVG_ADJ_MIN_DIFF };
+}
+
+function resolveActualTaxObservation(portfolio, code, ym) {
+  const taxRaw = portfolio?.dividendTaxAmounts?.[code]?.[ym];
+  if (taxRaw == null || taxRaw === '') return null;
+  const tax = safeNumH(taxRaw);
+  if (!Number.isFinite(tax) || tax < 0) return null;
+  const afterTax = safeNumH(portfolio?.actualDividend?.[code]?.[ym]);
+  const perShare = safeNumH(portfolio?.dividendHistory?.[code]?.[ym]);
+  const manualQty = safeNumH(portfolio?.actualDividendQty?.[code]?.[ym]);
+  const gross = afterTax + tax;
+  const calcQty = (perShare > 0 && gross > 0) ? Math.round(gross / perShare) : 0;
+  const qty = manualQty > 0 ? manualQty : calcQty;
+  return { taxAmount: tax, afterTax, gross, perShare, qty, qtyIsManual: manualQty > 0, calcQty };
+}
+
+// ─── §14 평균 과표 조정 — 실제 과세금 역산 ──────────────────────────────────
+console.log('\n[14] 평균 과표 조정 — 실제 과세금 역산 (사용자 실측 2026-09)');
+
+it('#160 사용자 실측 역산 — 배당과표 9952.11 · 과세 56,050 · 10,401주 → 9,946.72', () => {
+  const r = solveAvgTaxBaseFromTax({ exTaxBase: 9952.11, taxAmount: 56050, qty: 10401 });
+  expectEq(r.kind, 'exact', 'kind');
+  expectApprox(r.value, 9946.7211, 0.001, '역산 평균 과표');
+  // 역산값을 되먹이면 실제 과세와 정확히 일치해야 한다(왕복 항등).
+  const back = Math.max(0, 9952.11 - r.value) * 10401;
+  expectApprox(back, 56050, 0.01, '왕복 항등');
+});
+
+it('#161 과세 0원은 정확한 역산이 아니라 하한(kind=lowerBound)이다', () => {
+  const r = solveAvgTaxBaseFromTax({ exTaxBase: 9775.54, taxAmount: 0, qty: 18653 });
+  expectEq(r.kind, 'lowerBound', 'kind');
+  expectApprox(r.value, 9775.54, 0.001, '하한 = 배당 과표');
+  // 하한을 적용하면 예상 과세가 정확히 0이 된다(실제와 일치).
+  expectApprox(Math.max(0, 9775.54 - r.value) * 18653, 0, 0.001, '적용 후 예상 과세 0');
+});
+
+it('#162 ⚠️ 미입력(null/빈문자)과 0원을 구분한다 — 미입력은 관측 없음', () => {
+  ok(solveAvgTaxBaseFromTax({ exTaxBase: 9952.11, taxAmount: null, qty: 10401 }) === null, 'null');
+  ok(solveAvgTaxBaseFromTax({ exTaxBase: 9952.11, taxAmount: undefined, qty: 10401 }) === null, 'undefined');
+  ok(solveAvgTaxBaseFromTax({ exTaxBase: 9952.11, taxAmount: '', qty: 10401 }) === null, '빈 문자열');
+  ok(solveAvgTaxBaseFromTax({ exTaxBase: 9952.11, taxAmount: 0, qty: 10401 })?.kind === 'lowerBound', '0은 관측');
+});
+
+it('#163 역산 불가 입력은 null — 배당과표 없음 / 수량 0 / 음수 과세 / 평균과표 0 이하', () => {
+  ok(solveAvgTaxBaseFromTax({ exTaxBase: 0, taxAmount: 100, qty: 10 }) === null, '배당과표 0');
+  ok(solveAvgTaxBaseFromTax({ exTaxBase: 100, taxAmount: 100, qty: 0 }) === null, '수량 0');
+  ok(solveAvgTaxBaseFromTax({ exTaxBase: 100, taxAmount: -1, qty: 10 }) === null, '음수 과세');
+  ok(solveAvgTaxBaseFromTax({ exTaxBase: 100, taxAmount: 2000, qty: 10 }) === null, '평균과표 0 이하');
+});
+
+it('#164 판정 임계 ₩1 — 예상과 실제가 1원 이상 다를 때만 needed', () => {
+  const near = avgTaxBaseAdjNeeded({ exTaxBase: 100, avgTaxBase: 99, taxAmount: 1000, qty: 1000 });
+  expectEq(near.needed, false, '차이 0 → 불필요');
+  const off = avgTaxBaseAdjNeeded({ exTaxBase: 100, avgTaxBase: 99, taxAmount: 999, qty: 1000 });
+  expectEq(off.needed, true, '차이 1원 → 필요');
+  const sub = avgTaxBaseAdjNeeded({ exTaxBase: 100, avgTaxBase: 99, taxAmount: 999.5, qty: 1000 });
+  expectEq(sub.needed, false, '차이 0.5원 → 불필요');
+});
+
+it('#165 앵커 미전달 시 스냅샷이 종전과 완전히 동일하다 (하위호환의 축)', () => {
+  const evts = [
+    { id: 'a', date: '2026-07-14', change: 11000, taxBasePrice: 9911.30 },
+    { id: 'b', date: '2026-07-15', change: 1305, taxBasePrice: 9911.19 },
+    { id: 'c', date: '2026-07-29', change: -600, taxBasePrice: 0 },
+  ];
+  const base = computeRunningAvgSnapshotsA(evts, undefined);
+  const empty = computeRunningAvgSnapshotsA(evts, []);
+  expectEq(JSON.stringify(base), JSON.stringify(empty), '미전달 === 빈 배열');
+  expectEq(base.length, 3, '앵커 행이 섞이지 않는다');
+  ok(base.every(s => !s.anchored), 'anchored 스냅샷 없음');
+});
+
+it('#166 앵커는 그 시점 평균을 참값으로 고정하고 이후 매수를 그 값에서 다시 누적한다', () => {
+  const evts = [
+    { id: 'a', date: '2026-07-14', change: 1000, taxBasePrice: 9900 },
+    { id: 'b', date: '2026-10-05', change: 1000, taxBasePrice: 10100 },
+  ];
+  const plain = computeMonthlyAvgForGridA(evts, ['2026-09', '2026-10']);
+  expectApprox(plain['2026-09'], 9900, 0.001, '앵커 없음 9월');
+  expectApprox(plain['2026-10'], 10000, 0.001, '앵커 없음 10월');
+  const anchors = [{ date: '2026-09-02', value: 9946.72 }];
+  const withA = computeMonthlyAvgForGridA(evts, ['2026-09', '2026-10'], anchors);
+  expectApprox(withA['2026-09'], 9946.72, 0.001, '앵커 달');
+  expectApprox(withA['2026-10'], 10023.36, 0.001, '⚠️ 앵커 이후도 보정된다(그 달만 대체가 아님)');
+});
+
+it('#167 앵커는 같은 날짜 매매보다 먼저 적용된다 (배당락일 매수는 그 배당 권리가 없다)', () => {
+  const evts = [
+    { id: 'a', date: '2026-07-14', change: 1000, taxBasePrice: 9900 },
+    { id: 'b', date: '2026-09-02', change: 1000, taxBasePrice: 10100 },
+  ];
+  const withA = computeMonthlyAvgForGridA(evts, ['2026-09'], [{ date: '2026-09-02', value: 9946.72 }]);
+  expectApprox(withA['2026-09'], 10023.36, 0.001, '앵커 → 그날 매수 순');
+});
+
+it('#168 앵커 스냅샷은 날짜 오름차순을 유지한다 (호출부의 else break 스캔 전제)', () => {
+  const evts = [
+    { id: 'a', date: '2026-07-14', change: 1000, taxBasePrice: 9900 },
+    { id: 'b', date: '2026-11-01', change: 500, taxBasePrice: 10000 },
+  ];
+  const snaps = computeRunningAvgSnapshotsA(evts, [
+    { date: '2026-12-01', value: 100 }, { date: '2026-09-02', value: 9946.72 },
+  ]);
+  const dates = snaps.map(s => s.date);
+  expectEq(JSON.stringify(dates), JSON.stringify([...dates].sort()), '오름차순');
+  ok(snaps[snaps.length - 1].date === '2026-12-01', '마지막 이벤트 이후 앵커도 흘러나온다');
+});
+
+it('#169 buildAvgTaxAnchors — exDate 박제 우선, 없으면 그 달 말일(UTC 조립)', () => {
+  const a = buildAvgTaxAnchors({
+    '2026-09': { value: 9946.72, exDate: '2026-09-02' },
+    '2026-10': { value: 9900 },
+    '2026-11': { value: 0 },
+    '2026-12': { value: 9800, exDate: 'bad' },
+  });
+  const byDate = Object.fromEntries(a.map(x => [x.date, x.value]));
+  expectApprox(byDate['2026-09-02'], 9946.72, 0.001, 'exDate 박제');
+  expectApprox(byDate['2026-10-31'], 9900, 0.001, '말일 폴백');
+  ok(!a.some(x => x.value === 0), '값 0은 앵커가 아니다');
+  expectApprox(byDate['2026-12-31'], 9800, 0.001, '손상 exDate → 말일');
+});
+
+it('#170 관측 수량 — 수동 입력 우선, 없으면 세전 ÷ 주당분배금 역산', () => {
+  const pf = {
+    dividendTaxAmounts: { A: { '2026-09': 56050 } },
+    actualDividend:     { A: { '2026-09': 1441694 } },
+    dividendHistory:    { A: { '2026-09': 144 } },
+  };
+  const o = resolveActualTaxObservation(pf, 'A', '2026-09');
+  expectEq(o.gross, 1497744, '세전 = 세후 + 과세');
+  expectEq(o.qty, 10401, '역산 수량(=화면 10,401주)');
+  expectEq(o.qtyIsManual, false, '역산');
+  const pf2 = { ...pf, actualDividendQty: { A: { '2026-09': 10361 } } };
+  const o2 = resolveActualTaxObservation(pf2, 'A', '2026-09');
+  expectEq(o2.qty, 10361, '수동 수량 우선');
+  expectEq(o2.qtyIsManual, true, '수동');
+});
+
+it('#171 ⚠️ 과세금 미입력이면 관측이 없다 — 가짜 하한 앵커 방지', () => {
+  const pf = { actualDividend: { A: { '2026-09': 1441694 } }, dividendHistory: { A: { '2026-09': 144 } } };
+  ok(resolveActualTaxObservation(pf, 'A', '2026-09') === null, '과세금 없음 → null');
+  const pf0 = { ...pf, dividendTaxAmounts: { A: { '2026-09': 0 } } };
+  expectEq(resolveActualTaxObservation(pf0, 'A', '2026-09').taxAmount, 0, '0원은 관측');
+});
+
+it('#172 조정 적용 후에는 제안이 꺼진다 (관측 수량 기준 판정이라 수렴)', () => {
+  const ex = 9952.11, tax = 56050, qty = 10401;
+  const before = avgTaxBaseAdjNeeded({ exTaxBase: ex, avgTaxBase: 9911.31, taxAmount: tax, qty });
+  expectEq(before.needed, true, '조정 전');
+  const after = avgTaxBaseAdjNeeded({ exTaxBase: ex, avgTaxBase: before.value, taxAmount: tax, qty });
+  expectEq(after.needed, false, '⚠️ 조정 후 수렴 — 안 그러면 제안이 영원히 꺼지지 않는다');
+});
+
 // ─── 소스 텍스트 가드 — 매도 실현손익 렌더 배선 ──────────────────────────────
 // ⚠️ 위 미러는 "값이 맞다"만 증명한다. 셀 통째 삭제·값 바꿔치기·요약의 상수-곱 회귀·각주가 옛
 //    서술로 남는 것은 하나도 못 잡으므로 렌더 지점을 직접 읽어 단언한다.
@@ -1252,6 +1506,115 @@ it('#G14 계산 규약·각주는 ? 토글로 접히되 상시 고지 2곳은 �
   ok(/분석용\(세법상 이동평균법 아님\)/.test(MX), '토글 줄 상시 요약');
   ok(/매도 = 실현손익 · 최저가 우선/.test(MX), '열 헤더 서브라인(상시)');
   ok(/분석용 원가법입니다/.test(TH_REALIZED), '열 헤더 툴팁(상시)');
+});
+
+
+// ─── §15 소스 텍스트 가드 — 평균 과표 조정 배선 ──────────────────────────────
+// ⚠️ 위 §14 미러는 "값이 맞다"만 증명한다. 영속화 화이트리스트 누락·앵커 미전달·셀 통째 삭제는
+//    하나도 못 잡으므로 배선 지점을 직접 읽어 단언한다. **선언이 아니라 사용부**를 볼 것.
+const APP = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+const UPS = readFileSync(new URL('../src/hooks/usePortfolioState.ts', import.meta.url), 'utf8');
+const DST = readFileSync(new URL('../src/components/DividendSummaryTable.tsx', import.meta.url), 'utf8');
+const CWN = readFileSync(new URL('../src/components/CardWindow.tsx', import.meta.url), 'utf8');
+
+console.log('\n[15] 소스 텍스트 가드 — 평균 과표 조정 배선');
+
+// 미러 드리프트 비교용 정규화 — 주석·공백·export·TS 타입 주석·safeNum 접미사 차이를 흡수하고
+// **로직만** 남긴다. ⚠️ 너무 많이 지우면 죽은 단언이 되므로 식별자·연산자는 그대로 둔다.
+const normFn = (t) => t
+  .replace(/\/\/[^\n]*/g, '')
+  .replace(/^export /, '')
+  .replace(/: any/g, '')
+  .replace(/safeNumH\(/g, 'safeNum(')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+it('#G15 _ensureTaxBase 화이트리스트에 avgTaxBaseAdj — 다른 라이터 한 번에 소멸 방지', () => {
+  // ⚠️ 이 함수는 codeRec 필드를 손나열해 재구축한다. 빠지면 배당 과표를 한 글자만 고쳐도
+  //    사용자가 확정한 조정 앵커가 통째로 사라진다(undo 없음).
+  // ⚠️ 종료 토큰을 '};' 로 두면 `p.taxBaseHistory || {};` 에 먼저 걸려 구간이 두 줄로 잘린다.
+  const blk = sliceBlock(UPS, 'const _ensureTaxBase = (p, code) =>', '\n  };');
+  ok(/avgTaxBaseAdj: codeRec\.avgTaxBaseAdj \|\| \{\}/.test(blk), '_ensureTaxBase 보존');
+});
+
+it('#G16 taxBaseKey 지문에 avgTaxBaseAdj — 조정만 한 세션의 Drive 저장 스킵 방지', () => {
+  // ⚠️ 이 지문도 필드 손나열이다. 빠지면 portfolioUpdatedAt이 오르지 않아 STATE 저장이
+  //    통째로 스킵된다(historyVerifyKey·targetAmount와 동일 버그 클래스).
+  const blk = sliceBlock(APP, 'taxBaseKey: JSON.stringify(', '})),');
+  ok(/avgTaxBaseAdj: rec\.avgTaxBaseAdj \|\| \{\}/.test(blk), '지문 포함');
+});
+
+it('#G17 라이터가 존재하고 값 0/null이면 앵커를 삭제한다', () => {
+  ok(/const updateTaxBaseAvgAdj = \(portfolioId, code, yearMonth, adj\) => \{/.test(UPS), '라이터 선언');
+  const blk = sliceBlock(UPS, 'const updateTaxBaseAvgAdj =', '\n  };');
+  ok(/if \(adj == null \|\| !\(adj\.value > 0\)\) delete avgTaxBaseAdj\[yearMonth\]/.test(blk), '해제 경로');
+  ok(/else avgTaxBaseAdj\[yearMonth\] = adj;/.test(blk), '저장 경로');
+  ok(/taxBaseHistory: tbh/.test(blk), 'setPortfolios 반영');
+});
+
+it('#G18 별도 창(dividendCall) 화이트리스트에 updateTaxBaseAvgAdj — 창에서 조정 불가 방지', () => {
+  const blk = sliceBlock(APP, "if (op === 'dividendCall') {", 'return { ok: true };');
+  ok(/updateTaxBaseAvgAdj,/.test(blk), 'byId 등록');
+  ok(/updateTaxBaseAvgAdj=\{call\('updateTaxBaseAvgAdj'\)\}/.test(CWN), '창 prop 배선');
+});
+
+it('#G19 prop 체인 4-hop이 끊기지 않는다 (App → DividendSummaryTable → KrEtfTaxMatrix)', () => {
+  ok(/updateTaxBaseAvgAdj=\{updateTaxBaseAvgAdj\}/.test(APP), 'App → 표');
+  ok(/updateTaxBaseAvgAdj,\s*onToggleTaxMonth/.test(DST), '표 props 수신');
+  ok(/updateTaxBaseAvgAdj=\{updateTaxBaseAvgAdj\}/.test(DST), '표 → 매트릭스');
+  ok(/^\s*updateTaxBaseAvgAdj,$/m.test(MX), '매트릭스 props 수신');
+});
+
+it('#G20 ⚠️ 자동 계산에 앵커를 반드시 넘긴다 — 안 넘기면 조정이 화면에 반영되지 않는다', () => {
+  ok(/const anchors = buildAvgTaxAnchors\(avgTaxBaseAdj\);/.test(MX), '앵커 생성(공유 함수)');
+  ok(/computeMonthlyAvgForGrid\(events, monthYms, anchors\)/.test(MX), '그리드 자동값에 전달');
+  ok(/buildSortedEventsWithAvg\(events, anchors\)/.test(MX), '계산기 러닝 평균에 전달');
+  // 앵커 생성을 손복제하면 두 화면의 날짜 해석이 갈린다.
+  ok(!/exDate \|\| ''\) \|\| monthEndOf\(/.test(MX), '앵커 생성 손복제 없음');
+});
+
+it('#G21 과표 계산 셀 — 조정 적용 버튼과 해제 배지가 실제로 렌더된다', () => {
+  ok(/d\.showSuggest && \(/.test(MX), '제안 게이트 사용부');
+  ok(/d\.adjApplied && \(/.test(MX), '적용됨 게이트 사용부');
+  // 적용: 역산값·근거를 함께 박제해야 나중에 근거를 추적할 수 있다.
+  const apply = sliceBlock(MX, 'updateTaxBaseAvgAdj(portfolio.id, stock.code, d.ym, {', '})}');
+  ok(/value: d\.suggest\.value/.test(apply), '역산값 저장');
+  ok(/kind: d\.suggest\.kind/.test(apply), 'kind 저장');
+  ok(/taxAmount: d\.obs\.taxAmount/.test(apply), '근거 과세금');
+  ok(/qty: d\.obs\.qty/.test(apply), '근거 수량');
+  ok(/exDate: exDateOf\(stock\.code, d\.ym\)/.test(apply), '앵커 날짜 박제');
+  // 해제 경로(null)가 살아 있어야 되돌릴 수 있다.
+  ok(/updateTaxBaseAvgAdj\(portfolio\.id, stock\.code, d\.ym, null\)/.test(MX), '해제 경로');
+});
+
+it('#G22 월 입금 내역 셀 — 역산 평균 과표가 렌더되고 공유 함수로 산출된다', () => {
+  ok(/const avgAdj = resolveAvgAdjState\(pf, item\.code, dom\.exYm\);/.test(DST), '공유 함수 호출');
+  ok(/d\.avgAdj && \(d\.avgAdj\.showSuggest \|\| d\.avgAdj\.applied\)/.test(DST), '셀 게이트 사용부');
+  ok(/d\.avgAdj\.suggest\.value/.test(DST), '역산값 렌더');
+  // ⚠️ 산식 손복제 금지 — 두 화면이 다른 값을 제시하면 안 된다.
+  ok(!/exTaxBase\[.+\] - .*taxAmount \/ /.test(DST), '역산 산식 손복제 없음');
+});
+
+it('#G23 툴팁은 avgAdjTooltip 공유 포매터로만 만든다 (두 화면 설명 일치)', () => {
+  ok(/title=\{avgAdjTooltip\(\{/.test(MX), '매트릭스 툴팁');
+  ok(/title=\{avgAdjTooltip\(\{/.test(DST), '분배금 표 툴팁');
+  // 하한(과세 0원)은 '='가 아니라 '≥'로 표기해야 없는 값을 단언하지 않는다.
+  ok(/lowerBound/.test(MX) && /lowerBound/.test(DST), '하한 분기 노출');
+});
+
+it('#G24 미러 드리프트 — solveAvgTaxBaseFromTax 본문이 src와 문자 단위로 같다', () => {
+  const srcFn = normFn(sliceBlock(HL, 'export function solveAvgTaxBaseFromTax(', '\n}'));
+  const mirFn = normFn(sliceBlock(SELF, 'function solveAvgTaxBaseFromTax(', '\n}'));
+  expectEq(mirFn, srcFn, 'solveAvgTaxBaseFromTax 드리프트');
+});
+
+it('#G25 미러 드리프트 — buildAvgTaxAnchors·avgTaxBaseAdjNeeded 본문이 src와 같다', () => {
+  const a1 = normFn(sliceBlock(HL, 'export function buildAvgTaxAnchors(', '\n}'));
+  const a2 = normFn(sliceBlock(SELF, 'function buildAvgTaxAnchors(', '\n}'));
+  expectEq(a2, a1, 'buildAvgTaxAnchors 드리프트');
+  const b1 = normFn(sliceBlock(HL, 'export function avgTaxBaseAdjNeeded(', '\n}'));
+  const b2 = normFn(sliceBlock(SELF, 'function avgTaxBaseAdjNeeded(', '\n}'));
+  expectEq(b2, b1, 'avgTaxBaseAdjNeeded 드리프트');
 });
 
 // ─── 결과 출력 ────────────────────────────────────────────────────────────────

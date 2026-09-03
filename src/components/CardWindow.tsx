@@ -416,6 +416,7 @@ export default function CardWindow() {
           updateTaxBaseSales={call('updateTaxBaseSales')}
           updateTaxBaseExPrice={call('updateTaxBaseExPrice')}
           updateTaxBaseAvgPrice={call('updateTaxBaseAvgPrice')}
+          updateTaxBaseAvgAdj={call('updateTaxBaseAvgAdj')}
           onToggleTaxMonth={call('toggleHiddenTaxMonth')}
           hiddenMonths={{
             expected: Array.isArray(acct.hiddenDivMonthsExpected) ? acct.hiddenDivMonthsExpected : [],

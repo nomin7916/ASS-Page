@@ -34,6 +34,8 @@ export function getCodeTaxBase(portfolio, code) {
     sales: rec.sales || [],
     exTaxBase: rec.exTaxBase || {},
     avgTaxBase: rec.avgTaxBase || {},
+    // 실제 과세금에서 역산한 평균 과표 조정 앵커 — { [ym]: { value, exDate, taxAmount, qty, kind, at } }
+    avgTaxBaseAdj: rec.avgTaxBaseAdj || {},
   };
 }
 
@@ -68,13 +70,38 @@ export function computeRunningAvgPurchaseSnapshots(events) {
 
 // 이벤트 목록에서 날짜 순으로 정렬 후 각 이벤트 후 누적 수량·평균 과표 계산
 // change > 0: 매수, change < 0: 매도 (매도 시 평균 과표 유지)
-export function computeRunningAvgSnapshots(events) {
+//
+// ⚠️ 선택 인자 `anchors` — **미전달 시 반환값이 종전과 한 바이트도 다르지 않다**(하위호환의 축).
+//    앵커는 "그 날짜의 평균 과표는 실제로 이 값이었다"는 **관측**이다(실제 원천징수 과세금에서
+//    역산 — solveAvgTaxBaseFromTax). 이벤트로 누적한 추정값이 실제 과세와 어긋났을 때 그 시점을
+//    참값으로 고정하고 **이후 매매를 그 값에서 다시 누적**한다(사용자 확정 2026-09: 그 달만
+//    대체하는 것이 아니라 이후 전체를 보정).
+// ⚠️ 같은 날짜면 앵커가 그날 매매보다 **먼저** 적용된다 — 앵커는 배당락 시점(그날 장 시작 전
+//    확정된 과표기준가) 기준이고 배당락일 매수는 그 배당의 권리가 없기 때문이다. 이 순서라야
+//    반환 배열의 날짜 오름차순이 유지되어, 호출부의 `else break` 스캔이 성립한다.
+export function computeRunningAvgSnapshots(events, anchors?) {
   const valid = (events || [])
     .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(String(e.date || '')) && safeNum(e.change) !== 0)
     .sort(compareTaxEvents);
+  const anchorList = (anchors || [])
+    .filter(a => /^\d{4}-\d{2}-\d{2}$/.test(String(a?.date || '')) && safeNum(a?.value) > 0)
+    .map(a => ({ date: String(a.date), value: safeNum(a.value) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
   let qty = 0;
   let avg = 0;
-  return valid.map(e => {
+  let ai = 0;
+  const out: any[] = [];
+  // date === null 이면 남은 앵커를 전부 흘려보낸다(마지막 이벤트 이후 날짜의 앵커 — 실데이터의
+  // 기본 경로다. 배당락일은 보통 마지막 매매보다 뒤에 온다).
+  const flushAnchorsTo = (date) => {
+    while (ai < anchorList.length && (date == null || anchorList[ai].date <= date)) {
+      avg = anchorList[ai].value;
+      out.push({ id: `__anchor:${anchorList[ai].date}`, date: anchorList[ai].date, qty, avgPrice: avg, anchored: true });
+      ai++;
+    }
+  };
+  for (const e of valid) {
+    flushAnchorsTo(e.date);
     const change = safeNum(e.change);
     if (change > 0) {
       const newQty = qty + change;
@@ -83,14 +110,135 @@ export function computeRunningAvgSnapshots(events) {
     } else {
       qty = Math.max(0, qty + change);
     }
-    return { id: e.id, date: e.date, qty, avgPrice: avg };
-  });
+    out.push({ id: e.id, date: e.date, qty, avgPrice: avg });
+  }
+  flushAnchorsTo(null);
+  return out;
+}
+
+// ── 실제 과세금 → 평균 과표 역산 ─────────────────────────────────────────────
+// 예상 과세 = max(0, 배당과표 − 평균과표) × 보유주식수 를 평균과표에 대해 푼 것.
+//   평균과표 = 배당과표 − (실제 과세금 ÷ 보유주식수)
+//
+// ⚠️ `taxAmount == null`(미입력)과 `0`(과세 없음)은 **다른 사건**이다. 미입력은 아무것도 알려주지
+//    않으므로 null을 반환하고, 0원은 "배당과표 ≤ 평균과표"라는 **부등식**만 알려주므로 정확한
+//    역산이 불가능해 `kind:'lowerBound'`로 하한(=배당과표)만 낸다(사용자 확정 2026-09).
+//    safeNum(null)이 0이므로 이 가드를 지우면 미입력이 조용히 '과세 0원'으로 오인된다.
+// ⚠️ 보유주식수는 **실제 분배금이 지급된 주식수**(월 입금 내역 기준)를 넘긴다 — 실제 과세금이
+//    매겨진 대상이 곧 그 주식수이기 때문이다(사용자 확정 2026-09).
+export function solveAvgTaxBaseFromTax({ exTaxBase, taxAmount, qty }) {
+  const ex = safeNum(exTaxBase);
+  const q = safeNum(qty);
+  if (!(ex > 0) || !(q > 0)) return null;
+  if (taxAmount == null || taxAmount === '') return null;
+  const tax = safeNum(taxAmount);
+  if (!Number.isFinite(tax) || tax < 0) return null;
+  if (tax === 0) return { value: ex, kind: 'lowerBound', perShareTax: 0 };
+  const perShareTax = tax / q;
+  const value = ex - perShareTax;
+  // 과세금이 배당과표 × 수량을 넘으면(입력 오류) 평균과표가 0 이하가 된다 → 단언하지 않는다.
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return { value, kind: 'exact', perShareTax };
+}
+
+// 'YYYY-MM' → 그 달 말일. ⚠️ Date.UTC로 조립한다 — new Date(y, m, 0)는 로컬 자정이라
+// toISOString()이 KST에서 하루 앞당겨져, 앵커가 그 달 마지막 매매보다 앞서면 반영 순서가 뒤집힌다.
+export function monthEndOfYm(ym) {
+  const [y, m] = String(ym || '').split('-').map(Number);
+  if (!(y > 0) || !(m >= 1 && m <= 12)) return '';
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+
+// 저장된 조정 맵 → computeRunningAvgSnapshots가 받는 앵커 배열.
+// ⚠️ 과표 계산 탭과 분배금 표가 **이 함수 하나를 공유**한다 — 앵커 날짜 해석이 갈리면 같은 달에
+//    두 화면의 평균 과표가 달라진다.
+export function buildAvgTaxAnchors(avgTaxBaseAdj) {
+  // ⚠️ 폴백 판정은 truthy가 아니라 **ISO 형식**으로 한다 — 손상된 exDate('bad' 등)는 truthy라
+  //    `|| monthEndOfYm(ym)`을 건너뛰고 아래 필터에서 앵커가 통째로 사라진다(사용자가 확정한
+  //    조정이 조용히 무시된다).
+  return Object.entries(avgTaxBaseAdj || {})
+    .map(([ym, a]: any) => {
+      const raw = String(a?.exDate || '');
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : monthEndOfYm(ym);
+      return { date, value: safeNum(a?.value) };
+    })
+    .filter(a => /^\d{4}-\d{2}-\d{2}$/.test(a.date) && a.value > 0);
+}
+
+// 평균 과표 조정의 설명 문구 — **과표 계산 탭과 월 입금 내역이 이 포매터 하나를 공유**한다.
+// 손복제하면 같은 조정을 두 화면이 다르게 설명하고, 한쪽만 고쳐진 채 남는다(periodNoun 규약과 동일).
+// ⚠️ title 속성에 들어가므로 개행은 \n 이다(마크다운 파서 없음).
+const fmtNum = (v, d = 2) => Number(v).toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmtWon = (v) => '₩' + Math.round(Number(v) || 0).toLocaleString('ko-KR');
+
+export function avgAdjTooltip({ kind, value, exTaxBase, taxAmount, qty, exDate, prevAvg, applied, at }) {
+  const head = applied ? '평균 과표 조정 — 적용됨' : '평균 과표 조정 제안';
+  const when = exDate ? ` (${exDate} 기준)` : '';
+  const lines = [`${head}${when}`, ''];
+  lines.push('매매 이벤트로 계산한 평균 과표가 실제 원천징수 과세금과 맞지 않아,');
+  lines.push('실제 과세금에서 역산한 값으로 평균 과표를 바로잡습니다.');
+  lines.push('');
+  if (kind === 'lowerBound') {
+    // ⚠️ 과세 0원은 부등식만 알려준다 — 정확한 값을 안다고 단언하지 않는다.
+    lines.push(`  실제 과세      ${fmtWon(0)} (비과세)`);
+    lines.push(`  → 평균 과표는 배당 과표 이상이라는 것만 확정됩니다`);
+    lines.push(`  평균 과표 ≥ ${fmtNum(exTaxBase)} (하한)`);
+  } else {
+    lines.push(`  배당 과표      ${fmtNum(exTaxBase)}`);
+    lines.push(`  − 실제 과세    ${fmtWon(taxAmount)} ÷ ${Number(qty).toLocaleString('ko-KR')}주 = ${fmtNum(taxAmount / (qty || 1), 4)}/주`);
+    lines.push(`  = 평균 과표    ${fmtNum(value)}`);
+  }
+  if (prevAvg > 0) lines.push(`  (계산값 ${fmtNum(prevAvg)} → ${fmtNum(value)}, ${value >= prevAvg ? '+' : ''}${fmtNum(value - prevAvg)})`);
+  lines.push('');
+  lines.push(`이 값은 ${exDate || '해당 시점'} 이후 평균 과표의 기준점이 됩니다`);
+  lines.push('(이후 매수는 이 값에서 다시 가중평균으로 누적).');
+  lines.push('상세 계산은 종목명을 눌러 여는 \'평균 과표 계산기\'에서 볼 수 있습니다.');
+  if (applied && at) lines.push(`조정 적용: ${at}`);
+  return lines.join('\n');
+}
+
+// 그 배당락월(ym)의 **실제 과세 관측** — 사용자가 '월 입금 내역'에 직접 입력한 과세금과 그
+// 과세가 매겨진 주식수. 과표 계산 탭과 분배금 표가 **이 함수 하나를 공유**한다(손복제 금지 —
+// 갈라지면 같은 달에 두 화면이 서로 다른 조정값을 제시한다).
+//
+// ⚠️ 키는 **배당락월(exYm)** 이다. 분배금 표는 지급월로 재배치해 보여주지만 저장 키는 전부
+//    배당락월이므로(dividendHistory·actualDividend·dividendTaxAmounts·dividendExDate 동일)
+//    ym 하나에 대해 독립적으로 성립한다.
+// ⚠️ 과세금 미입력이면 **null**(관측 없음). safeNum이 null을 0으로 만들므로 이 가드를 지우면
+//    입력한 적 없는 달이 '과세 0원 관측'으로 둔갑해 평균 과표에 가짜 하한 앵커가 박힌다.
+// ⚠️ 수량 역산식(세전 ÷ 주당분배금, 반올림)은 DividendSummaryTable 국내 분기의 calcQty와 **같은
+//    식**이라야 화면에 보이는 '10,401주 × ₩144'와 역산 근거가 일치한다.
+export function resolveActualTaxObservation(portfolio, code, ym) {
+  const taxRaw = portfolio?.dividendTaxAmounts?.[code]?.[ym];
+  if (taxRaw == null || taxRaw === '') return null;
+  const tax = safeNum(taxRaw);
+  if (!Number.isFinite(tax) || tax < 0) return null;
+  const afterTax = safeNum(portfolio?.actualDividend?.[code]?.[ym]);
+  const perShare = safeNum(portfolio?.dividendHistory?.[code]?.[ym]);
+  const manualQty = safeNum(portfolio?.actualDividendQty?.[code]?.[ym]);
+  const gross = afterTax + tax;
+  const calcQty = (perShare > 0 && gross > 0) ? Math.round(gross / perShare) : 0;
+  const qty = manualQty > 0 ? manualQty : calcQty;
+  return { taxAmount: tax, afterTax, gross, perShare, qty, qtyIsManual: manualQty > 0, calcQty };
+}
+
+// 예상 과세(현재 평균 과표 기준)와 실제 과세금의 차이가 조정을 제안할 만한가.
+// ⚠️ 임계 ₩1 — 사용자 확정 2026-09. 실제 과세금은 사용자가 직접 입력하는 값이라 자주 바뀌지
+//    않아 노이즈가 크지 않고, 더 넓히면 소액 종목의 비율상 큰 오차를 놓친다.
+export const AVG_ADJ_MIN_DIFF = 1;
+
+export function avgTaxBaseAdjNeeded({ exTaxBase, avgTaxBase, taxAmount, qty }) {
+  const solved = solveAvgTaxBaseFromTax({ exTaxBase, taxAmount, qty });
+  if (!solved) return null;
+  const expected = Math.max(0, safeNum(exTaxBase) - safeNum(avgTaxBase)) * safeNum(qty);
+  const diff = expected - safeNum(taxAmount);
+  return { ...solved, expected, diff, needed: Math.abs(diff) >= AVG_ADJ_MIN_DIFF };
 }
 
 // 각 배당락 월(YYYY-MM)의 평균 과표 자동 계산 (세금 계산용)
 // exDateMap: { 'YYYY-MM': 'YYYY-MM-DD' } (portfolio.dividendExDate[code])
-export function computeMonthlyAvgFromEvents(events, exDateMap) {
-  const snapshots = computeRunningAvgSnapshots(events);
+export function computeMonthlyAvgFromEvents(events, exDateMap, anchors?) {
+  const snapshots = computeRunningAvgSnapshots(events, anchors);
   const result: Record<string, number> = {};
   for (const [ym, exDate] of Object.entries(exDateMap || {})) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(exDate || ''))) continue;
@@ -106,8 +254,8 @@ export function computeMonthlyAvgFromEvents(events, exDateMap) {
 
 // 연간 그리드 표시용 — 배당락일 없는 달도 포함, 각 달 말일 기준 평균 과표 계산
 // monthYms: ['YYYY-01', ..., 'YYYY-12']
-export function computeMonthlyAvgForGrid(events, monthYms) {
-  const snapshots = computeRunningAvgSnapshots(events);
+export function computeMonthlyAvgForGrid(events, monthYms, anchors?) {
+  const snapshots = computeRunningAvgSnapshots(events, anchors);
   const result: Record<string, number> = {};
   for (const ym of (monthYms || [])) {
     const [year, month] = ym.split('-').map(Number);
@@ -377,4 +525,27 @@ export function computeCodeMonthTax(portfolio, code, yearMonth, taxRate) {
     perShareGrossDividend: hist[yearMonth] || 0,
   };
   return computeForEvent(portfolio, code, ev, taxRate);
+}
+
+// 그 종목·그 배당락월의 **평균 과표 조정 상태** — 분배금 표(월 입금 내역)가 쓰는 통합 진입점.
+// ⚠️ 판정은 avgTaxBaseAdjNeeded를 그대로 쓴다 — 과표 계산 탭과 **같은 함수**라 두 화면의 '조정
+//    필요' 판정이 구조적으로 갈릴 수 없다. 여기서 별도 산식을 세우지 말 것.
+// ⚠️ 배당 과표(exTaxBase)가 없으면 역산이 불가능하다 → null(모르는 값을 단언하지 않는다).
+export function resolveAvgAdjState(portfolio, code, ym) {
+  if (!ym) return null;
+  const { events, exTaxBase, avgTaxBase, avgTaxBaseAdj } = getCodeTaxBase(portfolio, code);
+  const exNum = safeNum(exTaxBase[ym]);
+  if (!(exNum > 0)) return null;
+  const obs = resolveActualTaxObservation(portfolio, code, ym);
+  if (!obs) return null;
+  const anchors = buildAvgTaxAnchors(avgTaxBaseAdj);
+  const computed = computeMonthlyAvgForGrid(events, [ym], anchors)[ym];
+  const avgNum = avgTaxBase[ym] !== undefined ? safeNum(avgTaxBase[ym]) : safeNum(computed);
+  const suggest = avgTaxBaseAdjNeeded({ exTaxBase: exNum, avgTaxBase: avgNum, taxAmount: obs.taxAmount, qty: obs.qty });
+  if (!suggest) return null;
+  const adj = (avgTaxBaseAdj || {})[ym];
+  const applied = !!adj && safeNum(adj.value) > 0;
+  // 이미 그 값으로 조정돼 있으면 다시 제안하지 않는다(적용 후 배지만 남는다).
+  const showSuggest = suggest.needed && !(applied && Math.abs(safeNum(adj.value) - suggest.value) < 0.005);
+  return { ym, exNum, avgNum, obs, adj, applied, suggest, showSuggest };
 }
