@@ -614,7 +614,7 @@ export default function App() {
     driveTokenRef, driveFolderIdRef, tokenClientRef, pendingTokenResolveRef,
     isInitialLoad, driveSaveTimerRef, portfolioUpdatedAtRef, prevPortfolioStructureRef,
     lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
-    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef, ownFolderIdRef, syncStatusRef,
+    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef, ownFolderIdRef, syncStatusRef, stockMetaRef,
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
@@ -943,7 +943,8 @@ export default function App() {
   // ⚠️ 여기서 refreshPrices를 예약하지 말 것 — 옛 `setTimeout(refreshPricesRef, 1200)`이 부팅 중 3번째
   //    시세 갱신을 만들었다(재진입 가드 없이 in-flight 위에 큐잉 → KIS 동시 요청 배가). 갱신은 로드 effect·
   //    폴링·07:30 타이머·수동 버튼이 담당한다.
-  const applyStockData = (driveStockMap) => {
+  // 2번째 인자 meta(realClose 마커)는 useDriveSync가 stockMetaRef에 보관한다 — 여기서는 받기만 하고 쓰지 않는다.
+  const applyStockData = (driveStockMap, _meta?) => {
     setStockHistoryMap(prev => {
       // 부팅(메모리 비어 있음): Drive 맵을 **같은 참조**로 채택 — saveAllToDrive의 참조 비교 dirty 판정이
       // "방금 내려받은 맵을 그대로 다시 올리는" 헛업로드(수 MB)를 건너뛴다(lastSavedStockMapRef 시드와 짝).
@@ -1748,6 +1749,7 @@ export default function App() {
     activePortfolioAccountTypeRef,
     activePortfolioIdRef,
     stockHistoryMapRef,
+    stockMetaRef,
     saveStateRef, driveTokenRef, saveAllToDrive,
     chartPeriod, appliedRange,
     setIsLoading, notify,

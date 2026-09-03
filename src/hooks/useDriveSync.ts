@@ -10,6 +10,7 @@ import {
 import { flowMapsHaveContent } from '../flowMap';
 import { backtestScenariosHaveContent } from '../backtest';
 import { ledgerBooksHaveContent, ledgerSnapshotsHaveContent } from '../ledger';
+import { normalizeStockMeta, mergeStockMeta } from '../stockHistorySync';
 
 // STOCK(종목별 과거 종가 캐시) 하이드레이션 대기 상한(ms).
 // ⚠️ 부팅은 STATE+MARKET+STOCK을 **함께** 적용해 첫 렌더부터 과거 평가액이 최종값이어야 한다(STOCK-first).
@@ -71,7 +72,8 @@ import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
 type SyncStatus = 'idle' | 'loading' | 'ready' | 'saving' | 'error';
 
 type ApplyStateDataFn = (stateData: any, stockData: any, marketData: any) => void;
-type ApplyStockDataFn = (stockMap: Record<string, Record<string, number>>) => void;
+// meta(realClose 마커)는 useDriveSync가 stockMetaRef에 직접 보관한다 — App 쪽 콜백은 참고용으로 받을 뿐 저장하지 않는다.
+type ApplyStockDataFn = (stockMap: Record<string, Record<string, number>>, meta?: { realClose: Record<string, { at: string; lastDate: string }> }) => void;
 type ApplyBackupDataFn = (stateData: any, accountChartStatesRef: React.MutableRefObject<any>) => void;
 
 interface UseDriveSyncParams {
@@ -141,6 +143,10 @@ export function useDriveSync({
   // 마지막으로 Drive에 올린 stockHistoryMap **객체 참조**. setStockHistoryMap은 매번 새 객체를 만들므로
   // 참조 비교가 곧 정확한 dirty 플래그다 — 같으면 이력이 안 바뀐 것이라 수 MB 업로드를 건너뛴다.
   const lastSavedStockMapRef = useRef<any>(null);
+  // 코드별 실제종가 마이그레이션 마커(STOCK 파일 meta.realClose). ⚠️ STATE가 아니라 **STOCK 파일 안에만** 산다 —
+  //    STATE에 넣으면 백업 22본으로 복제되고 portfolioStructureKey를 흔든다. 갱신은 useStockData(완전한 KIS 응답에서만),
+  //    로드는 여기(normalizeStockMeta — 손상값은 버려 미마이그로 강등), 저장은 saveAllToDrive STOCK 분기가 동반한다.
+  const stockMetaRef = useRef<Record<string, { at: string; lastDate: string }>>({});
   // STATE가 화면에 적용된 뒤인가(또는 Drive에 STATE가 없음을 확인했는가) — 종료 계열 저장의 게이트.
   // ⚠️ isInitialLoad와 다르다: isInitialLoad는 부팅 전체(시세 갱신·세션 초기화까지)가 끝나야 풀리는데,
   //    오버레이는 STATE 적용 직후 내려가므로 그 사이(시세 타임아웃 최대 10초)에 사용자가 편집하고 탭을
@@ -243,7 +249,9 @@ export function useDriveSync({
       if (stockRes.status === 'fulfilled' && stockRes.value !== STOCK_TIMED_OUT) {
         const driveMap = (stockRes.value as any)?.stockHistoryMap;
         const hasMap = !!driveMap && typeof driveMap === 'object';
-        if (hasMap) applyStockData(driveMap);
+        const meta = normalizeStockMeta((stockRes.value as any)?.meta);
+        stockMetaRef.current = mergeStockMeta(stockMetaRef.current, meta.realClose);
+        if (hasMap) applyStockData(driveMap, meta);
         // 하이드레이션 완료 표시는 파일 유무와 무관 — '파일 없음'(신규 사용자)도 Drive 상태를 확인한 것이라
         // 첫 종가 캐시가 만들어질 수 있어야 한다. 방금 받은 맵은 '이미 Drive에 있는 것'이라 dirty가 아니다
         // (applyStockData가 메모리가 비어 있으면 같은 참조를 채택한다 — 참조 비교 dirty와 짝).
@@ -256,7 +264,9 @@ export function useDriveSync({
         // 상한 초과: STATE만 먼저 적용하고 STOCK은 도착하는 즉시 1회 하이드레이션(Drive 베이스 + 메모리 우선 병합).
         stockLoad.then((d: any) => {
           const driveMap = d?.stockHistoryMap;
-          if (driveMap && typeof driveMap === 'object') applyStockData(driveMap);
+          const meta = normalizeStockMeta(d?.meta);
+          stockMetaRef.current = mergeStockMeta(stockMetaRef.current, meta.realClose);
+          if (driveMap && typeof driveMap === 'object') applyStockData(driveMap, meta);
           stockHydratedRef.current = true;
         }).catch((err) => {
           stockLoadFailedRef.current = true;
@@ -401,7 +411,7 @@ export function useDriveSync({
         // ⚠️ 참조 비교 dirty: 하이드레이션 뒤에도 이력이 안 바뀐 저장(원금 수정·메모 등)이 수 MB STOCK을
         //    통째로 재업로드하던 것을 막는다. 가드 순서는 hydrated가 **앞**(부분 맵 truncate 방어가 1순위).
         Object.keys(shm || {}).length > 0 && stockHydratedRef.current && shm !== lastSavedStockMapRef.current
-          ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm }).then(() => { lastSavedStockMapRef.current = shm; })
+          ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm, meta: { realClose: stockMetaRef.current } }).then(() => { lastSavedStockMapRef.current = shm; })
           : Promise.resolve(),
         saveDriveFile(token, folderId, DRIVE_FILES.MARKET, { marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }),
       ]);
@@ -472,8 +482,10 @@ export function useDriveSync({
     try {
       const folderId = await ensureDriveFolder(token);
       const stockData = await loadDriveFile(token, folderId, DRIVE_FILES.STOCK);
+      const meta = normalizeStockMeta((stockData as any)?.meta);
+      stockMetaRef.current = mergeStockMeta(stockMetaRef.current, meta.realClose);
       if (stockData?.stockHistoryMap) {
-        applyStockData(stockData.stockHistoryMap);
+        applyStockData(stockData.stockHistoryMap, meta);
       }
       // ⚠️ 하이드레이션 완료 표시는 if 블록 **밖**이다 — loadDriveFile은 '파일 없음'만 null을 반환하고
       //    401/5xx/네트워크 오류는 throw하므로, 여기 도달했다는 것은 "Drive 상태를 확인했다"는 뜻이다.
@@ -892,6 +904,7 @@ export function useDriveSync({
     ownFolderIdRef,
     stockLoadFailedRef,
     stateAppliedRef,
+    stockMetaRef,
     // 함수
     ensureDriveFolder,
     loadFromDrive,

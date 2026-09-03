@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend, savingsEval } from '../utils';
-import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount } from './useMarketCalendar';
+import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount, getTodayKST, getKrSettledTodayDate } from './useMarketCalendar';
+import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays } from '../stockHistorySync';
 
 interface UseStockDataParams {
   portfolio: any[];
@@ -25,6 +26,8 @@ interface UseStockDataParams {
   activePortfolioAccountTypeRef: React.MutableRefObject<string>;
   activePortfolioIdRef: React.MutableRefObject<string | null>;
   stockHistoryMapRef: React.MutableRefObject<Record<string, Record<string, number>>>;
+  // 실제종가 마이그레이션 마커(useDriveSync 소유 — STOCK 파일 meta.realClose로 영속). 여기서는 판정·갱신만 한다.
+  stockMetaRef: React.MutableRefObject<Record<string, { at: string; lastDate: string }>>;
   saveStateRef: React.MutableRefObject<any>;
   driveTokenRef: React.MutableRefObject<any>;
   saveAllToDrive: (state: any) => void;
@@ -105,6 +108,7 @@ export function useStockData({
   activePortfolioAccountTypeRef,
   activePortfolioIdRef,
   stockHistoryMapRef,
+  stockMetaRef,
   saveStateRef, driveTokenRef, saveAllToDrive,
   chartPeriod, appliedRange,
   setIsLoading, notify,
@@ -135,9 +139,29 @@ export function useStockData({
   // 가입일이 상장일보다 이르면 earliestStored가 영원히 미충족이라 매 새로고침
   // 재조회되는 것을 방지. 새로고침(페이지 리로드) 시 ref 초기화 → 1회 재검증.
   const fundWideFetchedRef = useRef<Set<string>>(new Set());
-  // 세션당 1회 trend API 재조회 추적 — Drive 캐시가 오늘 날짜로 최신이어도
-  // 수정주가→실제종가 전환 시 반드시 1회 trend API 재조회가 필요함
-  const trendMigratedInSession = useRef<Set<string>>(new Set());
+  // ── 실제종가 마이그레이션 마커 (STOCK 파일 meta.realClose — 영속) ──
+  // ⚠️ 옛 `trendMigratedInSession`(세션 ref)로 되돌리지 말 것 — 그 설계는 국내 **전 코드**를 매 세션 KIS 전체
+  //    이력(fromYear=2000, 최대 13청크) 재조회 대상으로 만들어 부팅이 길어지고, 코드마다 응답 즉시 병합돼 과거
+  //    평가액이 코드 수만큼 흔들렸다. 마커가 영속되면 두 번째 세션부터 '마지막 저장일 이후 증분'만 조회한다.
+  // 마커 판정에 쓰는 '마지막 KR 거래일': 21:00 이후(종가 정산)면 오늘, 그 전이면 어제부터 주말·휴장일을 거슬러 올라간다.
+  const lastKrTradingDay = (): string => {
+    const today = getTodayKST();
+    let d = getKrSettledTodayDate() === today ? today : shiftIsoDays(today, -1);
+    let guard = 0;
+    while (isNonTradingDayForAccount('portfolio', d, krH, usH) && guard++ < 14) d = shiftIsoDays(d, -1);
+    return d;
+  };
+  const korPlanOpts = (force = false) => ({ force, todayKST: getTodayKST(), lastTradingDay: lastKrTradingDay() });
+  // 마커 갱신 — **완전한** 실제종가 응답(isCompleteKisHistory)에서만 호출할 것. lastDate 규칙은 markerLastDateOf 주석.
+  // at = 마지막 **전체** 조회일 — 증분 갱신은 lastDate만 앞당긴다(at을 매번 갱신하면 30일 전체 재조회가 영영 안 온다).
+  const markRealClose = (code: string, data: Record<string, number> | null | undefined, full: boolean) => {
+    const today = getTodayKST();
+    const lastDate = markerLastDateOf(data, today, getKrSettledTodayDate());
+    if (!lastDate) return;
+    const prev = stockMetaRef.current[code];
+    const at = full || !prev ? today : prev.at;
+    stockMetaRef.current = { ...stockMetaRef.current, [code]: { at, lastDate } };
+  };
 
   const extractFundCode = (input: string): string => {
     const trimmed = input.trim();
@@ -409,8 +433,10 @@ export function useStockData({
     let supHist: Record<string, number> | null = null;
     // 해외: 252건(약 1년) 미만이면 전체 재조회 / 국내: 3건 이상이면 증분 조회
     const hasRichHistory = hist && (isOverseasComp ? Object.keys(hist).length > 252 : Object.keys(hist).length > 3);
-    // 국내 비교종목 미이전: 캐시 풍부해도 전체 재조회 강제 (수정주가 → 실제종가)
-    const compNeedsMigration = !isOverseasComp && !trendMigratedInSession.current.has(comp.code);
+    // 국내 비교종목: 영속 마커가 없거나 30일 넘게 낡았으면 전체 재조회(수정주가 → 실제종가). 세션 ref가 아니라
+    // STOCK 파일의 마커를 보므로 세션마다 전 코드를 다시 긁지 않는다(마커가 신선·증분이면 아래 증분 분기).
+    const compNeedsMigration = !isOverseasComp
+      && planKorHistoryFetch([comp.code], stockHistoryMapRef.current, stockMetaRef.current, korPlanOpts()).full.length > 0;
     if (!hasRichHistory || compNeedsMigration) {
       if (isOverseasComp) {
         // 해외주식: fetchUsStockHistory (Naver worldstock → Yahoo Finance)
@@ -426,7 +452,7 @@ export function useStockData({
           const kd = Object.keys(rKIS.data).length;
           // 마이그레이션 표시는 '완전한 KIS 응답'에만 — trend 성공만으로 세우면
           // refreshPrices의 KIS 경로가 이 코드를 건너뛰어 과거가 영영 실제종가로 안 채워진다.
-          if (isCompleteKisHistory(rKIS, kd)) trendMigratedInSession.current.add(comp.code);
+          if (isCompleteKisHistory(rKIS, kd)) markRealClose(comp.code, rKIS.data, true);
           console.log(`[history] ${comp.code} 비교종목 KIS 성공: ${kd}건${isCompleteKisHistory(rKIS, kd) ? '' : ' (부분 응답)'}`);
         }
         // 2순위: Naver trend (실제종가, KIS 실패 시)
@@ -694,8 +720,7 @@ export function useStockData({
 
     setCompStocks(prev => { const n = [...prev]; n[index] = { ...n[index], loading: true }; return n; });
 
-    // 캐시 무효화 (세션 마이그레이션 상태 포함)
-    trendMigratedInSession.current.delete(comp.code);
+    // 캐시 무효화 — 강제 재조회는 마커를 보지 않고(force 의미), 완전한 KIS 응답이 오면 마커를 새로 쓴다.
     autoFetchedCodes.current.delete(comp.code);
 
     const isOverseasComp = !isKoreanCode(comp.code);
@@ -717,7 +742,7 @@ export function useStockData({
         const kd = Object.keys(rKIS.data).length;
         // ⚠️ 마이그레이션 표시는 '완전한 KIS 응답'에만 — trend 성공만으로 세우면
         //    refreshPrices의 KIS 경로(:885 게이트)가 이 코드를 건너뛰어 과거가 영영 안 채워진다.
-        if (isCompleteKisHistory(rKIS, kd)) trendMigratedInSession.current.add(comp.code);
+        if (isCompleteKisHistory(rKIS, kd)) markRealClose(comp.code, rKIS.data, true);
         console.log(`[history] ${comp.code} 강제재조회 KIS 성공: ${kd}건${isCompleteKisHistory(rKIS, kd) ? '' : ' (부분 응답)'}`);
       } else {
         console.warn(`[history] ${comp.code} 강제재조회 KIS 실패 → trend 폴백`);
@@ -1104,17 +1129,13 @@ export function useStockData({
       // ⚠️ 앱 재시작 시 저장된 활성 비교종목 이력 복구 경로(단일포인트 폴백은 auto-coverage가 스킵하므로
       // 여기서 refreshPrices의 KIS 재조회에 편입돼야 함) — 숫자전용으로 되돌리지 말 것.
       compStocks.filter(s => s.active && s.code && isKoreanCode(s.code)).forEach(s => allKoreanCodes.add(s.code));
-      const korCodesNeedingHistory = [...allKoreanCodes].filter(code => {
-        // force: 모든 필터 우회, 무조건 KIS·Naver trend 재조회
-        if (force) return true;
-        // 세션 첫 갱신: trend API 미조회 코드는 캐시 신선도 무관 강제 재조회
-        // (Drive에 수정주가가 캐시된 경우 실제종가로 교체)
-        if (!trendMigratedInSession.current.has(code)) return true;
-        const existing = stockHistoryMapRef.current[code];
-        if (!existing || Object.keys(existing).length <= 3) return true;
-        const latestDate = Object.keys(existing).sort().pop() || '';
-        return (Date.now() - new Date(latestDate + 'T12:00:00').getTime()) / 86400000 > 0.5;
-      });
+      // 코드별 조회 계획(stockHistorySync.planKorHistoryFetch — 규칙은 그 주석): force=전부 full / 마커 없음·캐시 ≤3키·
+      // 마커 30일 초과=full / 마커 신선=skip / 그 외=incremental. 옛 필터('세션 첫 갱신은 전 코드 강제 재조회')로
+      // 되돌리지 말 것 — 그것이 매 세션 전량 재조회와 부팅 흔들림의 원인이었다.
+      const korPlan = planKorHistoryFetch([...allKoreanCodes], stockHistoryMapRef.current, stockMetaRef.current, korPlanOpts(force));
+      const incrementalSet = new Set(korPlan.incremental);
+      const korCodesNeedingHistory = [...korPlan.full, ...korPlan.incremental];
+      if (korPlan.skip.length > 0) console.log(`[history] 마커 신선 — 재조회 생략 ${korPlan.skip.length}건`);
       const usCodesNeedingHistory = isOverseasRefresh ? activeStockCodes.filter(code => {
         if (force) return true;
         const existing = stockHistoryMapRef.current[code];
@@ -1124,6 +1145,26 @@ export function useStockData({
       if (korCodesNeedingHistory.length > 0 || usCodesNeedingHistory.length > 0) {
         const korFailed: string[] = [];
         const korTasks = korCodesNeedingHistory.map(code => async () => {
+          // ── 증분(마커 있음·낡음): 마커 연도부터 1청크만(KIS) → 실패 시 trend(lastDate−7일). fchart 보강 없음(캐시가 있다).
+          //    실제종가만 들어오므로 overwrite. 마커는 완전한 KIS 응답에서만 앞당긴다(at은 유지 — 전체 조회일).
+          if (incrementalSet.has(code)) {
+            const marker = stockMetaRef.current[code];
+            const fromYear = parseInt(marker.lastDate.slice(0, 4), 10);
+            const rKIS = await fetchKISStockHistory(code, fromYear);
+            let inc: Record<string, number> | null = rKIS?.data && Object.keys(rKIS.data).length > 0 ? rKIS.data : null;
+            if (inc && isCompleteKisHistory(rKIS, Object.keys(inc).length)) markRealClose(code, inc, false);
+            if (!inc) {
+              const rTrend = await fetchNaverDomesticHistory(code, shiftIsoDays(marker.lastDate, -7));
+              if (rTrend) inc = rTrend.data;
+            }
+            if (inc) {
+              const incData = inc;
+              setStockHistoryMap(prev => ({ ...prev, [code]: mergeCodeHistory(prev[code] || {}, { overwrite: incData }) }));
+            } else {
+              korFailed.push(code);
+            }
+            return;
+          }
           let hist: Record<string, number> | null = null;
           let fromRealPrice = false;
           // fchart(수정종가) 보강분 — ⚠️ hist(실제종가)와 절대 섞지 말 것.
@@ -1139,7 +1180,7 @@ export function useStockData({
             // 부분 응답(청크 일부만 성공) 가드: 100건 미만이면 마이그 플래그 보류 → 다음 갱신에서 재시도 허용.
             // KIS는 13청크 × ~50거래일 = 정상 시 600~6000건. 100건 미만 = rate limit으로 대부분 청크 실패한 상태.
             const complete = isCompleteKisHistory(rKIS, dates.length);
-            if (complete) trendMigratedInSession.current.add(code);
+            if (complete) markRealClose(code, rKIS.data, true);
             console.log(`[history] ${code} KIS 성공: ${dates.length}건${complete ? '' : ' (부분 응답 — 재시도 대기)'}, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
           } else {
             console.warn(`[history] ${code} KIS 실패 → Naver trend 폴백`);
@@ -1151,7 +1192,8 @@ export function useStockData({
               hist = rTrend.data;
               fromRealPrice = true;
               const dates = Object.keys(rTrend.data).sort();
-              if (dates.length >= 100) trendMigratedInSession.current.add(code);
+              // ⚠️ trend 성공만으로 마커를 세우지 않는다 — sparse(실측 161/446건)라 마커가 서면 다음 세션부터 증분만 돌아
+              //    빈 날짜가 영영 실제종가로 안 채워진다. 마커는 완전한 KIS 응답에서만(다음 세션에 KIS를 다시 시도).
               console.log(`[history] ${code} Naver trend 폴백 성공: ${dates.length}건${dates.length < 100 ? ' (부분 응답 — 재시도 대기)' : ''}, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
             } else {
               console.warn(`[history] ${code} Naver trend 실패 → fchart 폴백`);

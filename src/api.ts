@@ -26,12 +26,17 @@ export const fetchUsStockHistory = async (
 // 캐시 키는 호출부(item.code)가 정하므로 여기서 대문자로 바꿔도 조회 경로는 영향받지 않는다.
 const normalizeKrCode = (code: string) => (code || '').trim().toUpperCase();
 
+// KST 오늘(YYYYMMDD) — 엣지 캐시 키 회전용(아래 asOf).
+const kstDateCompact = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
+
 export const fetchKISStockHistory = async (
   code: string,
   fromYear: number = 2000
 ): Promise<{ data: Record<string, number>; source: string; partial?: boolean } | null> => {
   try {
-    const params = new URLSearchParams({ code: normalizeKrCode(code), fromYear: String(fromYear) });
+    // asOf: 서버 라우트는 모르는 파라미터라 무시하지만 **엣지 캐시 키가 하루 단위로 회전**한다 — 같은 날 재요청은
+    // 캐시 히트, 다음 날은 새 응답. 이게 없으면 24h 캐시가 전날의 '당일 장중 행'을 다음 날 아침에 다시 돌려준다.
+    const params = new URLSearchParams({ code: normalizeKrCode(code), fromYear: String(fromYear), asOf: kstDateCompact() });
     const res = await fetch(`/api/stock-history?${params}`, {
       // 서버 maxDuration: 60s와 일치. 동시성 제한(4)로 KIS rate limit 폭주 방지 + 청크별 재시도.
       signal: AbortSignal.timeout(60000),

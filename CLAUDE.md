@@ -540,6 +540,47 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   통과시킨다 → G1b는 fulfilled 분기 **블록 안**의 동기 호출을 본다. 가드를 손볼 때 같은 변이가 여전히 잡히는지
   다시 확인할 것.
 
+**Phase 2 — 영속 마이그레이션 마커 → 증분 조회 (2026-09, 사용자 의도 "접속 시점의 최신만")**
+
+- **되돌리면 재발하는 사고**: `trendMigratedInSession`(세션 ref)이 국내 **전 코드**를 매 세션 KIS 전체 이력
+  (fromYear=2000, 최대 13청크) 재조회 대상으로 만들었다 — 로딩 지연의 주범이자, 코드마다 응답 즉시 병합돼
+  과거 평가액이 코드 수만큼 흔들리던 원인. **식별자 자체가 없어야 한다**(verify:boot G10).
+- **STOCK 파일 페이로드 = `{ stockHistoryMap, meta: { realClose: { [code]: { at, lastDate } } } }`**.
+  마커는 **STATE가 아니라 STOCK 안에만** 산다(STATE에 넣으면 백업 22본으로 복제되고 `portfolioStructureKey`를
+  흔든다). 소유자는 `useDriveSync.stockMetaRef` — 로드 3경로(부팅·지연 도착·폴링)가 `normalizeStockMeta` +
+  `mergeStockMeta`(lastDate 늦은 쪽 채택)로 읽고, 저장은 `saveAllToDrive` STOCK 분기가 동반한다(STOCK dirty는
+  종전대로 맵 참조 비교 — 마커 갱신은 항상 병합과 함께 오므로 별도 dirty가 필요 없다). 손상값·meta 부재는
+  **미마이그로 강등**(구버전 클라이언트가 meta 없이 저장하면 전량 재조회로 강등 — fail-safe, 롤백 안전).
+- **`src/stockHistorySync.ts`**(순수, **import 0건**, `@ts-nocheck` 금지 — 검증이 직접 import): `planKorHistoryFetch(codes,
+  map, meta, {force, todayKST, lastTradingDay})` → `{full, incremental, skip}` **서로소**. force=전부 full / 마커
+  없음·캐시 ≤3키·**at이 30일 초과**(`MARKER_FULL_REFRESH_DAYS` — 배당·분할 소급 정정 흡수)=full / `lastDate ≥
+  lastTradingDay`=skip / 그 외 incremental. `markerLastDateOf`: 응답 최대 날짜 중 **오늘 미만**, 21:00 이후
+  (`getKrSettledTodayDate`)에만 오늘 허용 — 장중 당일 행을 '확정 종가'로 굳히지 않는다.
+- **useStockData**: `lastKrTradingDay`(21:00 이후면 오늘, 아니면 어제부터 KR 주말·휴장일 역행) · `korPlanOpts(force)` ·
+  `markRealClose(code, data, full)`. ⚠️ 마커는 **완전한 KIS 응답**(`isCompleteKisHistory`)에서만 — trend 폴백은
+  sparse(실측 161/446건)라 세우면 다음 세션부터 증분만 돌아 빈 날짜가 영영 실제종가로 안 채워진다(다음 세션에
+  KIS를 다시 시도하는 것이 맞다). ⚠️ `at`은 **전체 조회일만** 갱신(증분은 lastDate만) — at을 매번 갱신하면 30일
+  전체 재조회가 영영 오지 않는다.
+- **증분 경로**(`korTasks` 상단 `incrementalSet` 분기): `fetchKISStockHistory(code, 마커 lastDate의 연도)` 1청크 →
+  실패 시 `fetchNaverDomesticHistory(code, lastDate−7일)` → **overwrite** 병합(실제종가만 들어온다). fchart 보강
+  없음(캐시가 이미 있다). 비교종목 blur(`ensureCompHistoryInner`)·강제 재조회(`handleForceRefetchComp`)도 같은
+  마커를 쓴다 — 강제 재조회는 마커를 무시하고(force 의미) 완전 응답이 오면 새로 쓴다. HistoryPanel의
+  `refreshPrices({force:true})`는 여전히 전량 재조회.
+- **`api.ts fetchKISStockHistory`에 `asOf=YYYYMMDD(KST)`** — 서버 라우트는 무시하지만 **엣지 캐시 키가 하루
+  단위로 회전**한다(같은 날 재요청은 캐시 히트, 다음 날은 새 응답). 없으면 24h 캐시가 전날의 '당일 장중 행'을
+  다음 날 아침에 다시 돌려준다.
+- 펀드 NAV·해외 이력의 신선도 판정(`stockHistoryMapRef` 기준)은 STOCK-first만으로 Drive 캐시를 보게 돼
+  불필요 재조회가 사라진다 — **무수정**.
+- **알려진 한계(의도)**: 마커 lastDate의 연도부터 1청크를 받으므로 연초(1월 초)에는 전년 12월 말 며칠이 그
+  청크에 포함되지 않을 수 있다 → 30일 전체 재조회가 흡수한다. KIS가 계속 실패하는 코드(상장폐지 등)는 마커가
+  서지 않아 세션마다 전체 조회를 시도한다(옛 동작과 동일 비용).
+- 검증: `verify:boot` 파트① #2~#7c(`stockHistorySync` 직접 import — 정규화 멱등·손상 강등·병합·집합 서로소·
+  30일 경계·lastDate 규칙) + G10~G10k(세션 ref 부재·payload meta·로더 3경로·asOf·계획/증분/마커 배선·모듈
+  순수성). **변이 16종**(payload meta 누락 · asOf 제거 · 폴링 로더 meta 미읽기 · force 무시 · 0.5일 필터 부활 ·
+  증분이 at 갱신 · trend가 마커 세움 · at 항상 오늘 · 세션 ref 부활 · 모듈에 import 추가 · skip 조건 완화 ·
+  날짜 검증 제거 · 장중 당일 허용 · 주기 30→60 · ≤3키 게이트 삭제 · 강제 재조회 마커 삭제)으로 **실제 검출을
+  확인**했다.
+
 ### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
 **마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가
