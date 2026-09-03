@@ -35,12 +35,13 @@ export const useAutoConfirmHistory = ({
   setPortfolios,
   effectiveDateKey,
   krEffectiveDateKey,
-  // 첫 이력 패스(KIS/US) 완료 플래그(useStockData). ⚠️ STOCK-first 부팅은 Drive 캐시(전 세션 장중 stamp
-  // 포함)를 실제종가 도착 **전에** 보이게 하므로, 그 위에서 확정하면 stale 값을 isFixed로 박는다 → 보류.
-  firstHistoryPassDone,
+  // 부팅 상태 머신(useStockData). ⚠️ STOCK-first 부팅은 Drive 캐시(전 세션 장중 stamp 포함)를 실제종가 도착
+  // **전에** 보이게 하므로, 정착(settled) 전·부분 수집(partial) 상태에서 확정하면 stale 값을 isFixed로 박는다 → 보류.
+  histPhase,
+  histPartial,
 }) => {
   useEffect(() => {
-    if (!firstHistoryPassDone) return;
+    if (histPhase !== 'settled' || histPartial) return;
     if (Object.keys(stockHistoryMap).length === 0) return;
     const todayKST = getTodayKST();
     const krSettledToday = getKrSettledTodayDate(); // 당일 21:00 이후면 오늘, 그 외 null
@@ -133,5 +134,5 @@ export const useAutoConfirmHistory = ({
       });
       return changed ? next : prev;
     });
-  }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey, krEffectiveDateKey, firstHistoryPassDone]);
+  }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey, krEffectiveDateKey, histPhase, histPartial]);
 };

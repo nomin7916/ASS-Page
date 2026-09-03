@@ -581,6 +581,52 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   날짜 검증 제거 · 장중 당일 허용 · 주기 30→60 · ≤3키 게이트 삭제 · 강제 재조회 마커 삭제)으로 **실제 검출을
   확인**했다.
 
+**Phase 3 — 이력 패스 단일 커밋(스테이징) · 정착 신호 · 쓰기 게이트 · 배지 (2026-09)**
+
+- **되돌리면 재발하는 사고**: 코드별 `setStockHistoryMap` — 병합 1회 = 렌더 + 전 계좌 `portfolioStructureKey`
+  직렬화 + `marketSeries`·`finalChartData` 재계산 + 백필 효과#2 + 자동확정 실행. 코드 수만큼 과거 평가액이
+  흔들리고(편입 경계 이후 구간은 나중 편입 종목이 빠진 carry-forward 중간값, 해외는 계단식 부분합), 도착
+  순서가 세션마다 달라 값도 달랐다. 그리고 부분 맵 위에서 자동확정이 stale 값을 `isFixed`로 박을 수 있었다.
+- **커밋 지점 화이트리스트(`setStockHistoryMap`)**: ① Drive 하이드레이션(`useDriveSync` 부팅·지연·폴링)
+  ② 시세 stamp 1회(`fetchAllPortfoliosPrices` 종료 — `stampStaging`) ③ 이력 패스 1회(`commitStaged` — KIS·US·NAV
+  전부 정착) ④ 워치독 ⑤ 사용자 명시 동작(자산검증 단일 재조회·비교종목 blur/toggle/force·종가 임포트·
+  단일 종목 새로고침 — 종전 경로 그대로). 관심종목·백테스트·환율계산기는 종전대로 병합 금지(G13).
+- **`src/stockHistorySync.ts`**: `mergeCodeHistory`를 `useStockData`에서 **본문 무수정으로 이전**(verify:boot #8이
+  이전 전 본문 미러 8케이스로 고정). `applyStagedMerges(prev, staged)` — 코드별 `deleteKeys → replace →
+  mergeCodeHistory(base, {gapFill, overwrite})`, 빈 staged면 **prev 참조 그대로**, 다른 코드 내부 참조 보존.
+  `mergeStagedPatch`는 같은 코드에 패치가 두 번 쌓일 때(겹친 패스) 합친다. **도착 순서 무관성**: 코드별 순차
+  병합 20순열 == 한 번에 커밋(#10), 그 맵들에 대한 `buildCloseEvalSeries`도 동일(#10c).
+- **useStockData**: `historyStagingRef` + `stage(code, patch)` + `commitStaged()`(applyStagedMerges 1회 + 저장 예약
+  1회 — 옛 KIS/US·NAV 두 곳의 `.then(setTimeout(saveAllToDrive))` 통합, refreshPricesInner 안에 `saveAllToDrive`
+  직접 호출 0건). 스트림 3종(kor+US Promise.all, NAV Promise.all)을 `streams[]`에 싣고
+  `Promise.allSettled(streams)` → `settleFinal`(then/catch 양쪽) → 커밋 + `settled`. **워치독**
+  `HISTORY_PASS_WATCHDOG_MS`(90s) 초과 → 도착분 커밋 + `histPartial=true` + settled, 남은 스트림이 끝나면 한 번
+  더 커밋 + partial=false(강등 경로에서만 2회 커밋). 스트림 0건 패스는 finally에서 즉시 settled(안 그러면
+  백필·자동확정이 영구 보류). 진행 카운터 `histProgress`는 ref 증가 + 500ms 스로틀. 겹친 패스(폴링이 부팅 패스
+  중에 시작) 방어: 스테이징에 이미 실린 코드는 KR·US·NAV 계획에서 제외.
+- **상태 머신 `histPhase`**(useStockData 소유, App이 prop 배포): `loading` → (첫 갱신 시작) `hydrated` |
+  `hydrate-failed`(STOCK 로드 실패, `stockLoadFailedRef`) → (첫 이력 패스 커밋) `settled`. 이후 갱신은
+  `refreshing` → `settled`. ⚠️ 정착 신호는 **타이머가 아니라 실제 완료 이벤트**(allSettled)다 — 워치독은
+  강등 경로일 뿐. state여야 한다(ref면 마지막 커밋 뒤 effect 재실행 계기가 없다).
+- **⚠️ 쓰기 게이트(읽기 안정화와 비가역 쓰기의 분리)**: `useAutoConfirmHistory`는 `histPhase === 'settled' &&
+  !histPartial`에서만, `useHistoryBackfill` **효과#2**는 `histPhase === 'settled'`에서만(효과#1 — 비활성 계좌
+  오늘 기록 — 은 **무수정**, 사전체크/map 미러링 불변식 그대로). Phase 1의 임시 `firstHistoryPassDone`은
+  **제거**(식별자 부재를 G7d가 단언). App에서 `useHistoryBackfill`·`useAutoConfirmHistory` 호출을 둘 다
+  `useStockData` **뒤**로 옮겼다(백필 → 자동확정 순서는 유지 — 자동확정은 백필 결과 위에 합성).
+- **배지(`AccountTabBar` `HistSyncBadge`)**: `hydrated/refreshing` → '과거 종가 동기화 중 n/N', `settled` →
+  '종가 정착됨'(4초 뒤 흐리게), `partial` → '일부 미수집 — 새로고침으로 재시도', `hydrate-failed` → '종가 캐시
+  미로드'. `notify()` 호출 0건(알림 최소화 정책 — 진행은 배지로만). 기본값은 'settled'라 미전달 호출부는 흐린
+  배지만 보인다.
+- **A/B 의도된 결과 차이 1건**(#11): 캐시에 있던 날짜에 fchart(수정종가) gapFill이 들어오고 KIS 응답에는 없는
+  경우 — 옛 순서(빈 맵 → 코드별 병합 → Drive 베이스 + **메모리 우선**)는 수정종가가 Drive 캐시의 실제종가를
+  덮었고(규약 위반), 새 순서(Drive → 스테이징 1회 커밋)는 규약대로 캐시가 이긴다. 그 외 diff 0건.
+- 검증: `verify:boot` 파트① #8~#11c + G6~G9(스트림 구간 `setStockHistoryMap` 부재·stamp 1회 커밋·NAV/US 스테이징·
+  저장 직접 호출 0건·겹친 패스 제외·게이트 2종·효과#1 무침범·정착 신호 4지점·배지 4분기). **변이 24종**
+  (증분/전체/stamp/NAV/US를 코드별 setState로 · stamp 커밋 삭제 · 백필 게이트/deps 삭제 · 효과#1 침범 ·
+  partial 게이트 완화 · settleFinal 한 지점 · 워치독 리터럴/커밋 삭제/partial 미해제 · 저장 직접 호출 부활 ·
+  스테이징 제외 삭제 · mergeCodeHistory 한 글자 · 빈 staged 새 객체 · deleteKeys 순서 · 참조 복사 · 배지/prop
+  삭제 · 백필 histPhase 제거 · 호출 순서 뒤집기)으로 **실제 검출을 확인**했다.
+
 ### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
 **마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가

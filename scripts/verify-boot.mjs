@@ -155,6 +155,125 @@ if (SH) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+console.log('\n── 파트① 순수 함수 — Phase 3 스테이징(mergeCodeHistory 이전·applyStagedMerges·도착 순서 무관성) ──');
+if (SH) {
+  const { mergeCodeHistory, applyStagedMerges, mergeStagedPatch } = SH;
+  // useStockData에서 이전하기 **전** 본문을 문자 그대로 옮긴 미러 — 이전 과정에서 한 글자라도 바뀌면 여기서 갈린다.
+  const mergeCodeHistoryMirror = (base, sources) => {
+    const merged = { ...(base || {}) };
+    const { overwrite, gapFill } = sources || {};
+    if (gapFill) {
+      for (const [d, price] of Object.entries(gapFill)) {
+        if (merged[d] === undefined) merged[d] = price;
+      }
+    }
+    if (overwrite) {
+      for (const [d, price] of Object.entries(overwrite)) {
+        merged[d] = price;
+      }
+    }
+    return merged;
+  };
+  const cases = [
+    ['overwrite만', { a: 1, b: 2 }, { overwrite: { b: 20, c: 30 } }],
+    ['gapFill만(기존 키는 유지)', { a: 1, b: 2 }, { gapFill: { b: 99, c: 3 } }],
+    ['양쪽 겹치는 키 → overwrite가 이긴다', { a: 1 }, { gapFill: { a: 5, b: 6 }, overwrite: { b: 60 } }],
+    ['빈 base', {}, { overwrite: { a: 1 }, gapFill: { b: 2 } }],
+    ['null base·null sources', null, null],
+    ['base에 undefined 값이면 gapFill이 채운다', { a: undefined, b: 2 }, { gapFill: { a: 7 } }],
+    ['gapFill·overwrite null', { a: 1 }, { gapFill: null, overwrite: null }],
+    ['같은 키를 양쪽에 — 순서 불변(gapFill 먼저·overwrite 나중)', { x: 1 }, { overwrite: { x: 2 }, gapFill: { x: 3 } }],
+  ];
+  for (const [label, base, src] of cases) {
+    eq(`#8 mergeCodeHistory 미러 일치 — ${label}`, mergeCodeHistory(base, src), mergeCodeHistoryMirror(base, src));
+  }
+  {
+    const base = { a: 1 };
+    const out = mergeCodeHistory(base, { overwrite: { a: 2, b: 3 } });
+    eq('#8b 입력 불변 + 항상 새 객체', [base.a, 'b' in base, out !== base], [1, false, true]);
+  }
+
+  // ── applyStagedMerges ──
+  const prev = { A: { d1: 100, d2: 101 }, B: { d1: 200 }, C: { d1: 300 } };
+  eq('#9 빈/누락 staged → prev 참조 그대로', [applyStagedMerges(prev, {}) === prev, applyStagedMerges(prev, null) === prev, applyStagedMerges(prev, undefined) === prev], [true, true, true]);
+  {
+    const staged = { A: { overwrite: { d2: 111, d3: 112 }, gapFill: { d1: 1, d4: 104 } }, B: { replace: { d1: 201, d2: 202 }, deleteKeys: ['d1'] } };
+    const out = applyStagedMerges(prev, staged);
+    // 코드별 순차 setState와 값 동일
+    const seqA = mergeCodeHistory(prev.A, { gapFill: staged.A.gapFill, overwrite: staged.A.overwrite });
+    const bTmp = { ...prev.B }; delete bTmp.d1; Object.assign(bTmp, staged.B.replace);
+    eq('#9b 코드별 순차 병합과 값이 같다(A: gapFill→overwrite, B: deleteKeys→replace)', [out.A, out.B], [seqA, bTmp]);
+    eq('#9c A: overwrite가 gapFill을 이기고 기존 키는 gapFill이 못 덮는다', [out.A.d1, out.A.d2, out.A.d3, out.A.d4], [100, 111, 112, 104]);
+    eq('#9d B: deleteKeys → replace 순서(지운 키를 replace가 되살린다)', out.B, { d1: 201, d2: 202 });
+    ok('#9e 건드리지 않은 코드(C)의 내부 참조 보존 + prev 불변', out.C === prev.C && prev.A.d2 === 101 && !('d3' in prev.A) && out !== prev);
+  }
+  eq('#9f deleteKeys는 지정 키만 지운다', applyStagedMerges({ F: { d1: 1, d2: 2, d3: 3 } }, { F: { deleteKeys: ['d2'] } }).F, { d1: 1, d3: 3 });
+  eq('#9g replace는 Object.assign 의미(기존 키 덮고 새 키 추가)', applyStagedMerges({ F: { d1: 1, d2: 2 } }, { F: { replace: { d2: 20, d3: 30 } } }).F, { d1: 1, d2: 20, d3: 30 });
+  eq('#9h prev가 null이어도 던지지 않는다', applyStagedMerges(null, { A: { overwrite: { d1: 1 } } }), { A: { d1: 1 } });
+  eq('#9i mergeStagedPatch — 뒤 패치가 같은 키를 이기고 deleteKeys는 합집합',
+    mergeStagedPatch({ overwrite: { a: 1, b: 2 }, deleteKeys: ['x'] }, { overwrite: { b: 3 }, gapFill: { c: 4 }, deleteKeys: ['x', 'y'] }),
+    { overwrite: { a: 1, b: 3 }, gapFill: { c: 4 }, deleteKeys: ['x', 'y'] });
+
+  // ── 도착 순서 무관성: Drive 맵 D + 코드별 응답을 20순열로 순차 병합 == 한 번에 applyStagedMerges ──
+  const D = {
+    A: { '2026-05-15': 100, '2026-05-18': 101, '2026-05-29': 102 },
+    B: { '2026-05-15': 50, '2026-05-18': 51, '2026-05-29': 52 },
+    F: { '2026-05-15': 1000, '2026-06-06': 1001 },
+    U: { '2026-05-15': 10 },
+  };
+  const R = {
+    A: { overwrite: { '2026-05-29': 102, '2026-06-01': 103, '2026-06-02': 104, '2026-06-03': 105 }, gapFill: { '2026-05-14': 99, '2026-05-18': 90 } },
+    B: { overwrite: { '2026-06-01': 53, '2026-06-02': 54, '2026-06-03': 55 } },
+    F: { replace: { '2026-06-01': 1002, '2026-06-02': 1003 }, deleteKeys: ['2026-06-06'] },
+    U: { overwrite: { '2026-06-01': 11 } },
+  };
+  const perms = (arr) => arr.length <= 1 ? [arr] : arr.flatMap((x, i) => perms([...arr.slice(0, i), ...arr.slice(i + 1)]).map(p => [x, ...p]));
+  const orders = perms(Object.keys(R)).slice(0, 20);
+  const oneShot = applyStagedMerges(D, R);
+  let sameAll = true;
+  for (const order of orders) {
+    let m = D;
+    for (const code of order) m = applyStagedMerges(m, { [code]: R[code] });
+    if (JSON.stringify(m) !== JSON.stringify(oneShot)) { sameAll = false; break; }
+  }
+  ok(`#10 코드별 순차 병합 ${orders.length}순열 == 한 번에 applyStagedMerges (도착 순서 무관)`, orders.length === 20 && sameAll);
+  eq('#10b 한 번에 병합한 최종값 — A: gapFill은 캐시 없는 날짜만, overwrite는 덮는다 / F: stale 키 삭제', [oneShot.A['2026-05-18'], oneShot.A['2026-05-14'], oneShot.A['2026-06-03'], 'F' in oneShot && oneShot.F['2026-06-06']], [101, 99, 105, undefined]);
+  if (U) {
+    const { buildCloseEvalSeries } = U;
+    const P2 = { id: 'P', accountType: 'portfolio', baselineDate: '2026-05-15', manualPriceOverrides: {}, holdingSnapshots: [
+      { date: '2026-05-15', kind: 'baseline', items: [{ type: 'stock', code: 'B', quantity: 10 }] },
+      { date: '2026-06-01', kind: 'auto', items: [{ type: 'stock', code: 'B', quantity: 10 }, { type: 'stock', code: 'A', quantity: 5 }] },
+    ] };
+    const DATES = ['2026-05-15', '2026-05-18', '2026-05-29', '2026-06-01', '2026-06-02', '2026-06-03'];
+    const want = [...buildCloseEvalSeries(P2, DATES, 'portfolio', oneShot, {}, '2026-06-10').entries()];
+    let evalSame = true;
+    for (const order of orders) {
+      let m = D;
+      for (const code of order) m = applyStagedMerges(m, { [code]: R[code] });
+      const got = [...buildCloseEvalSeries(P2, DATES, 'portfolio', m, {}, '2026-06-10').entries()];
+      if (JSON.stringify(got) !== JSON.stringify(want)) { evalSame = false; break; }
+    }
+    ok('#10c 그 최종 맵들에 대한 buildCloseEvalSeries 결과도 전 순열에서 동일(표시 계층 입력 등가)', evalSame && want.length === 6);
+  }
+
+  // ── A/B 의도된 차이 1건: 캐시에 있던 날짜에 fchart(수정종가) gapFill이 들어오고 KIS 응답에는 없는 경우 ──
+  //    옛 순서(빈 맵 → 코드별 병합 → Drive 베이스 + 메모리 우선)는 수정종가가 Drive 캐시(실제종가)를 덮었다(규약 위반).
+  //    새 순서(Drive → 스테이징 1회 커밋)는 규약대로 캐시가 이긴다. 그 외 diff 0건.
+  {
+    const DA = { d1: 100, d2: 101, d3: 102 };
+    const KIS = { d3: 102, d4: 103 };
+    const FCH = { d0: 90, d2: 95, d4: 99 };
+    const mem = mergeCodeHistory({}, { overwrite: KIS, gapFill: FCH });          // 옛: 빈 메모리에서 시작한 코드별 병합
+    const oldA = { ...DA, ...mem };                                                // 옛: Drive 베이스 + 메모리 우선(applyStockData)
+    const newA = applyStagedMerges({ A: DA }, { A: { overwrite: KIS, gapFill: FCH } }).A;
+    const diffKeys = [...new Set([...Object.keys(oldA), ...Object.keys(newA)])].filter(k => oldA[k] !== newA[k]).sort();
+    eq('#11 옛 순서 vs 새 순서의 diff는 정확히 (fchart ∩ 캐시) ∖ KIS = d2 하나', diffKeys, ['d2']);
+    eq('#11b 그 날짜는 옛 순서=수정종가(95, 규약 위반) / 새 순서=Drive 실제종가(101)', [oldA.d2, newA.d2], [95, 101]);
+    eq('#11c 나머지 키는 값이 같다', [oldA.d0, oldA.d1, oldA.d3, oldA.d4], [newA.d0, newA.d1, newA.d3, newA.d4]);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중복 제거·게이트) ──');
 {
   const dsRaw = read('src/hooks/useDriveSync.ts');
@@ -230,18 +349,81 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     tab.length > 50 && tab.indexOf('if (isInitialLoad.current) return;') > 0
     && tab.indexOf('if (isInitialLoad.current) return;') < tab.indexOf('refreshPrices();'));
 
-  // ── G4b 임시 자동확정 게이트(firstHistoryPassDone) — Phase 3에서 histPhase 게이트로 교체 ──
+  // ── G6 스테이징 단일 커밋(Phase 3): 스트림 구간에 코드별 setStockHistoryMap 부재 ──
+  const rpiG6 = slice(sd, 'const refreshPricesInner = async', 'const refreshPrices = (options');
+  const korTaskG6 = slice(rpiG6, 'const korTasks = korCodesNeedingHistory.map(code => async () => {', 'const KIS_CONCURRENCY');
+  ok('G6 korTasks(증분·전체)는 setStockHistoryMap 없이 stage(code, …)로만 적재한다',
+    korTaskG6.length > 500 && !/setStockHistoryMap\(/.test(korTaskG6) && count(korTaskG6, /stage\(code, /g) >= 2);
+  const fap = slice(sd, 'const fetchAllPortfoliosPrices = async', 'const hasAnyResult =');
+  const fapAll = slice(fap, 'await Promise.all([', ']);');
+  ok('G6b fetchAllPortfoliosPrices: 코드별 stamp는 stampStaging에 모으고(setStockHistoryMap 부재) Promise.all 뒤 1회 커밋 + stampDateFor 유지',
+    fapAll.length > 300 && !/setStockHistoryMap\(/.test(fapAll) && count(fapAll, /stampStaging\[code\] = \{ overwrite:/g) === 2
+    && /stampDateFor\(/.test(fapAll) && count(fap, /setStockHistoryMap\(prev => applyStagedMerges\(prev, stampStaging\)\)/g) === 1);
+  const nav = slice(rpiG6, 'const allFundCodes = Object.keys(fundStartByCode)', 'const [kRes, sRes, nRes]');
+  ok('G6c 펀드 NAV 스트림은 stage(code, { replace, deleteKeys })로만 적재하고 streams에 실린다',
+    nav.length > 500 && !/setStockHistoryMap\(/.test(nav) && /stage\(code, \{ replace: hist \|\| null, deleteKeys: staleWeekendKeys \}\);/.test(nav)
+    && /streams\.push\(Promise\.all\(allFundCodes\.map\(code => tracked\(/.test(nav));
+  ok('G6d US 이력 스트림도 stage(code, { overwrite })이고 streams에 실린다',
+    /stage\(code, \{ overwrite: r\.data \}\)/.test(rpiG6) && /streams\.push\(Promise\.all\(\[\s*runWithConcurrency\(korTasks\.map\(tracked\)/.test(rpiG6));
+  ok('G6e refreshPricesInner 안에 saveAllToDrive 직접 호출이 없다(저장은 commitStaged 한 곳)',
+    rpiG6.length > 1000 && !/saveAllToDrive\(/.test(rpiG6));
+  ok('G6f 겹친 패스 방어 — 스테이징 중인 코드는 계획(KR·US·NAV)에서 제외한다',
+    /planKorHistoryFetch\(\[\.\.\.allKoreanCodes\]\.filter\(c => !stagedNow\[c\]\)/.test(rpiG6)
+    && /if \(stagedNow\[code\]\) return false;/.test(rpiG6) && /Object\.keys\(fundStartByCode\)\.filter\(c => !stagedNow\[c\]\)/.test(rpiG6));
+  ok('G6g commitStaged: 빈 스테이징이면 맵을 건드리지 않고, 커밋은 applyStagedMerges 1회 + 저장 예약 1회',
+    /const staged = historyStagingRef\.current;\s*historyStagingRef\.current = \{\};\s*if \(Object\.keys\(staged\)\.length > 0\) setStockHistoryMap\(prev => applyStagedMerges\(prev, staged\)\);/.test(sd));
+
+  // ── G7 쓰기 게이트(Phase 3): 자동확정 = settled && !partial · 백필 효과#2 = settled · 임시 게이트 식별자 부재 ──
   const acEff = slice(ac, 'useEffect(() => {', '}, [stockHistoryMap');
-  ok('G4b useAutoConfirmHistory effect 첫 줄이 firstHistoryPassDone 게이트다',
-    /^useEffect\(\(\) => \{\s*if \(!firstHistoryPassDone\) return;/.test(acEff) && /firstHistoryPassDone\]\);/.test(ac));
-  ok('G4d useStockData: KIS/US 이력 Promise.all에 .finally(setFirstHistoryPassDone) + 미진입 패스는 finally에서 완료 처리',
-    /\]\)\.then\(\(\) => \{[\s\S]{0,300}\}\)\.finally\(\(\) => setFirstHistoryPassDone\(true\)\);/.test(sd)
-    && /if \(!historyPassStarted\) setFirstHistoryPassDone\(true\);/.test(sd) && /historyPassStarted = true;/.test(sd));
+  ok('G7 useAutoConfirmHistory effect 첫 줄이 histPhase/histPartial 게이트이고 deps에 둘 다 있다',
+    /^useEffect\(\(\) => \{\s*if \(histPhase !== 'settled' \|\| histPartial\) return;/.test(acEff) && /histPhase, histPartial\]\);/.test(ac));
+  const hbRaw = read('src/hooks/useHistoryBackfill.ts');
+  const hb = stripComments(hbRaw);
+  const hbEff1 = slice(hb, 'const typeById = new Map', '}, [portfolioSummaries, activePortfolioId, effectiveDateKey, krEffectiveDateKey, marketHolidays]);');
+  const iGate = hb.indexOf("if (histPhase !== 'settled') return;");
+  const iEff1End = hb.indexOf('}, [portfolioSummaries, activePortfolioId, effectiveDateKey, krEffectiveDateKey, marketHolidays]);');
+  const iLoose = hb.indexOf('const looseBoundary = getBackfillBoundaryKR();');
+  ok('G7b useHistoryBackfill 효과#2 첫 줄이 histPhase settled 게이트이고 deps에 histPhase가 있다',
+    iGate > 0 && iEff1End > 0 && iLoose > 0 && iGate > iEff1End && iGate < iLoose && /marketHolidays, histPhase\]\);/.test(hb));
+  ok('G7c (오탐 대조) 효과#1(비활성 계좌 오늘 기록)에는 histPhase가 없다(사전체크/map 미러링 구조 무수정)',
+    hbEff1.length > 500 && !/histPhase/.test(hbEff1) && /nonActiveHistRecordedRef\.current\[key\] !== s\.currentEval/.test(hbEff1));
+  ok('G7d 임시 게이트 식별자 firstHistoryPassDone·historyPassStarted가 App·useStockData·useAutoConfirmHistory에 없다',
+    !/firstHistoryPassDone|historyPassStarted/.test(app + sd + ac));
   const acCall = slice(app, 'useAutoConfirmHistory({', '});');
-  ok('G4e App이 useAutoConfirmHistory에 firstHistoryPassDone을 넘기고, 그 호출은 useStockData 뒤·useHistoryBackfill 뒤다',
-    /firstHistoryPassDone,/.test(acCall)
-    && app.indexOf('useAutoConfirmHistory({') > app.indexOf('} = useStockData({')
-    && app.indexOf('useAutoConfirmHistory({') > app.indexOf('useHistoryBackfill({'));
+  const hbCall = slice(app, 'useHistoryBackfill({', '});');
+  ok('G7e App이 histPhase(백필)·histPhase+histPartial(자동확정)을 넘기고 호출 순서가 useStockData → useHistoryBackfill → useAutoConfirmHistory다',
+    /\n\s*histPhase,\s*$/.test(hbCall) && /histPhase, histPartial,/.test(acCall)
+    && app.indexOf('} = useStockData({') < app.indexOf('useHistoryBackfill({')
+    && app.indexOf('useHistoryBackfill({') < app.indexOf('useAutoConfirmHistory({'));
+
+  // ── G8 정착 신호: 워치독 + then/catch 양쪽 settle + 무스트림 즉시 settled ──
+  ok('G8 워치독 상수가 setTimeout 사용부에 있고 초과 시 도착분 커밋 + partial=true + settled',
+    /const HISTORY_PASS_WATCHDOG_MS = 90000;/.test(sd)
+    && /setTimeout\(\(\) => res\('timeout'\), HISTORY_PASS_WATCHDOG_MS\)/.test(sd)
+    && /watchdogFired = true;\s*commitStaged\(\);\s*setHistPartial\(true\);\s*setHistPhase\('settled'\);/.test(sd));
+  ok('G8b 최종 정착은 passAll의 fulfilled/rejected 양쪽에서 settleFinal(커밋 + partial 해제 + settled)',
+    /passAll\.then\(settleFinal, settleFinal\);/.test(sd)
+    && /const settleFinal = \(\) => \{\s*commitStaged\(\);\s*if \(watchdogFired\) setHistPartial\(false\);\s*setHistPhase\('settled'\);/.test(sd));
+  ok('G8c 스트림 0건 패스는 finally에서 즉시 settled, 시작 시 loading→hydrated|hydrate-failed / 그 외→refreshing',
+    /if \(streams\.length === 0\) setHistPhase\('settled'\);/.test(sd)
+    && /setHistPhase\(prev => \(prev === 'loading' \? \(stockLoadFailedRef\.current \? 'hydrate-failed' : 'hydrated'\) : 'refreshing'\)\);/.test(sd));
+  ok('G8d commitStaged 호출이 워치독·최종 정착 두 지점 이상이고 settled 전이가 세 지점 이상이다',
+    count(sd, /commitStaged\(\);/g) >= 2 && count(sd, /setHistPhase\('settled'\)/g) >= 3);
+  ok('G8e useStockData가 histPhase·histPartial·histProgress를 반환하고 App이 그것을 받는다',
+    /histPhase,\s*histPartial,\s*histProgress,\s*\};\s*\}/.test(sd) && /histPhase, histPartial, histProgress,\s*\} = useStockData\(\{/.test(app));
+
+  // ── G9 배지(AccountTabBar): 4상태 분기 + notify 부재 + App prop 배선 ──
+  const tabRaw = read('src/components/AccountTabBar.tsx');
+  const tabBar = stripComments(tabRaw);
+  const badge = slice(tabBar, 'function HistSyncBadge(', 'export default function AccountTabBar(');
+  ok('G9 HistSyncBadge가 hydrate-failed·settled&&partial·settled·동기화 중(n/N) 4분기를 렌더한다',
+    badge.length > 300 && /phase === 'hydrate-failed'/.test(badge) && /phase === 'settled' && partial/.test(badge)
+    && /phase === 'settled'\)/.test(badge) && /과거 종가 동기화 중 \$\{progress\.done\}\/\$\{progress\.total\}/.test(badge)
+    && /phase === 'loading'\) return null;/.test(badge));
+  ok('G9b 배지 블록에 notify( 가 없다(알림 최소화 정책)', badge.length > 300 && !/notify\(/.test(badge));
+  ok('G9c AccountTabBar가 배지를 렌더하고 App이 histPhase·histProgress·histPartial을 넘긴다',
+    /<HistSyncBadge phase=\{histPhase\} progress=\{histProgress\} partial=\{histPartial\} \/>/.test(tabBar)
+    && /histPhase=\{histPhase\}\s*histProgress=\{histProgress\}\s*histPartial=\{histPartial\}/.test(app));
 
   // ── G5 STOCK 저장: hydrated 가드가 앞 + 참조 비교 dirty + 성공 후 대입 ──
   ok('G5 STOCK 분기 한 식에서 stockHydratedRef.current && 가 lastSavedStockMapRef 비교보다 앞이고 성공 시 대입한다',
@@ -275,7 +457,7 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     /fromYear: String\(fromYear\), asOf: kstDateCompact\(\)/.test(stripComments(read('src/api.ts'))));
   const rpi = slice(sd, 'const refreshPricesInner = async', 'const refreshPrices = (options');
   ok('G10e refreshPrices의 국내 코드 판정이 planKorHistoryFetch(마커 계획)이고 옛 0.5일 신선도 필터가 없다',
-    rpi.length > 500 && /const korPlan = planKorHistoryFetch\(\[\.\.\.allKoreanCodes\], stockHistoryMapRef\.current, stockMetaRef\.current, korPlanOpts\(force\)\);/.test(rpi)
+    rpi.length > 500 && /const korPlan = planKorHistoryFetch\(\[\.\.\.allKoreanCodes\]\.filter\(c => !stagedNow\[c\]\), stockHistoryMapRef\.current, stockMetaRef\.current, korPlanOpts\(force\)\);/.test(rpi)
     && /const korCodesNeedingHistory = \[\.\.\.korPlan\.full, \.\.\.korPlan\.incremental\];/.test(rpi)
     && !/86400000 > 0\.5/.test(rpi));
   const korTask = slice(rpi, 'const korTasks = korCodesNeedingHistory.map(code => async () => {', 'const KIS_CONCURRENCY');
@@ -284,7 +466,7 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     && /fetchKISStockHistory\(code, fromYear\)/.test(korTask)
     && /fetchNaverDomesticHistory\(code, shiftIsoDays\(marker\.lastDate, -7\)\)/.test(korTask)
     && /markRealClose\(code, inc, false\)/.test(korTask)
-    && /\{ overwrite: incData \}/.test(korTask));
+    && /stage\(code, \{ overwrite: inc \}\)/.test(korTask));
   ok('G10g 전체 조회 경로의 마커 갱신은 완전한 KIS 응답(complete)에서만 — trend 성공만으로 세우지 않는다',
     /if \(complete\) markRealClose\(code, rKIS\.data, true\);/.test(korTask)
     && !/markRealClose\(code, rTrend/.test(korTask));
@@ -296,7 +478,7 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     /planKorHistoryFetch\(\[comp\.code\], stockHistoryMapRef\.current, stockMetaRef\.current, korPlanOpts\(\)\)\.full\.length > 0/.test(sd)
     && count(sd, /markRealClose\(comp\.code, rKIS\.data, true\)/g) === 2);
   ok('G10j App이 useDriveSync의 stockMetaRef를 useStockData에 주입한다',
-    /syncStatusRef, stockMetaRef,\n/.test(app) && /    stockHistoryMapRef,\n    stockMetaRef,\n    saveStateRef, driveTokenRef, saveAllToDrive,/.test(app));
+    /syncStatusRef, stockMetaRef, stockLoadFailedRef,\n/.test(app) && /    stockHistoryMapRef,\n    stockMetaRef,\n    stockLoadFailedRef,\n    saveStateRef, driveTokenRef, saveAllToDrive,/.test(app));
   {
     const sh = read('src/stockHistorySync.ts');
     ok('G10k stockHistorySync.ts는 import 0건·@ts-nocheck 없음·enum/namespace 없음(검증이 직접 import한다)',

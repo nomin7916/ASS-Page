@@ -15,6 +15,8 @@ export const useHistoryBackfill = ({
   effectiveDateKey,
   krEffectiveDateKey,
   marketHolidays,
+  // 부팅 상태 머신(useStockData) — 효과#2(백필)는 이력 패스가 정착(settled)된 뒤에만 돈다. 효과#1은 무관.
+  histPhase,
 }) => {
   const krH = marketHolidays?.kr || [];
   const usH = marketHolidays?.us || [];
@@ -88,6 +90,8 @@ export const useHistoryBackfill = ({
 
   // 자동 히스토리 백필: 모든 누락 날짜 채우기
   useEffect(() => {
+    // ⚠️ 정착 전(빈 맵·부분 맵·스트리밍 중)에는 돌지 않는다 — 과거엔 코드별 병합마다 전 계좌 백필이 재실행됐다.
+    if (histPhase !== 'settled') return;
     if (Object.keys(stockHistoryMap).length === 0) return;
     // 사전체크는 가장 느슨한 상한(KR 상한 ≥ 글로벌 날짜) 사용 — 밤에 연 앱의 당일 백필도 진행
     const looseBoundary = getBackfillBoundaryKR();
@@ -260,7 +264,7 @@ export const useHistoryBackfill = ({
       return { ...p, history: updated };
     });
     if (portfoliosChanged) setPortfolios(nextPortfolios);
-  }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey, krEffectiveDateKey, marketHolidays]);
+  }, [stockHistoryMap, indicatorHistoryMap, effectiveDateKey, krEffectiveDateKey, marketHolidays, histPhase]);
 
 };
 

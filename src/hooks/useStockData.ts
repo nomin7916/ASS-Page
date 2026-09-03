@@ -3,7 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend, savingsEval } from '../utils';
 import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount, getTodayKST, getKrSettledTodayDate } from './useMarketCalendar';
-import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays } from '../stockHistorySync';
+import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays, mergeCodeHistory, applyStagedMerges, mergeStagedPatch } from '../stockHistorySync';
+import type { StagedCodeMerge } from '../stockHistorySync';
+
+// 이력 패스 워치독(ms) — 스트림(KIS·US·NAV)이 이 시간 안에 못 끝나면 도착분만 커밋하고 settled(partial=true)로 강등한다.
+// 늦게 끝난 스트림은 끝나는 시점에 한 번 더 커밋한다(강등 경로에서만 2회).
+const HISTORY_PASS_WATCHDOG_MS = 90000;
 
 interface UseStockDataParams {
   portfolio: any[];
@@ -28,6 +33,8 @@ interface UseStockDataParams {
   stockHistoryMapRef: React.MutableRefObject<Record<string, Record<string, number>>>;
   // 실제종가 마이그레이션 마커(useDriveSync 소유 — STOCK 파일 meta.realClose로 영속). 여기서는 판정·갱신만 한다.
   stockMetaRef: React.MutableRefObject<Record<string, { at: string; lastDate: string }>>;
+  // STOCK 로드가 예외로 끝났는가(useDriveSync) — 부팅 상태 머신의 hydrate-failed 판정용.
+  stockLoadFailedRef: React.MutableRefObject<boolean>;
   saveStateRef: React.MutableRefObject<any>;
   driveTokenRef: React.MutableRefObject<any>;
   saveAllToDrive: (state: any) => void;
@@ -60,6 +67,7 @@ const isKoreanCode = (code: string) => /^[A-Za-z0-9]{6}$/.test(code) && /\d/.tes
 // ⚠️ 적용 순서를 바꾸지 말 것 — gapFill을 먼저, overwrite를 나중에 적용해야
 //    같은 날짜가 양쪽에 있을 때 최종값이 항상 실제종가가 된다.
 // 입력은 변형하지 않고 항상 새 객체를 반환한다.
+// (mergeCodeHistory 본문은 src/stockHistorySync.ts로 이전 — verify:boot가 직접 import해 8케이스로 고정한다.)
 // KIS 응답이 '완전한가' 판정 — 완전하면 그 코드는 실제종가 마이그레이션 완료로 표시한다.
 //
 // ⚠️ 건수 임계값(>=100)만으로 판정하지 말 것 — 상장 직후 종목은 정상 응답이어도 건수가 적다.
@@ -72,25 +80,6 @@ const isCompleteKisHistory = (res: { partial?: boolean } | null, dateCount: numb
   if (!res) return false;
   if (typeof res.partial === 'boolean') return !res.partial;
   return dateCount >= 100;
-};
-
-const mergeCodeHistory = (
-  base: Record<string, number>,
-  sources: { overwrite?: Record<string, number> | null; gapFill?: Record<string, number> | null }
-): Record<string, number> => {
-  const merged: Record<string, number> = { ...(base || {}) };
-  const { overwrite, gapFill } = sources || {};
-  if (gapFill) {
-    for (const [d, price] of Object.entries(gapFill)) {
-      if (merged[d] === undefined) merged[d] = price as number;
-    }
-  }
-  if (overwrite) {
-    for (const [d, price] of Object.entries(overwrite)) {
-      merged[d] = price as number;
-    }
-  }
-  return merged;
 };
 
 export function useStockData({
@@ -109,6 +98,7 @@ export function useStockData({
   activePortfolioIdRef,
   stockHistoryMapRef,
   stockMetaRef,
+  stockLoadFailedRef,
   saveStateRef, driveTokenRef, saveAllToDrive,
   chartPeriod, appliedRange,
   setIsLoading, notify,
@@ -847,6 +837,8 @@ export function useStockData({
     const priceResults: Record<string, any> = {};
     const fundResults: Record<string, any> = {};
     const failedCodes: string[] = [];
+    // 시세 stamp 스테이징 — 코드마다 setStockHistoryMap하면 코드 수만큼 전역 재계산. Promise.all 종료 후 1회 커밋(화이트리스트 ②).
+    const stampStaging: Record<string, StagedCodeMerge> = {};
 
     await Promise.all([
       ...[...koreanCodes].map(async (code) => {
@@ -856,7 +848,7 @@ export function useStockData({
           // ⚠️ today(전역 getEffectiveDate) 대신 그 코드를 보유한 계좌의 시장 기준으로 stamp.
           //    KR 기록 창 밖·비거래일이면 null → stamp 생략(장중가가 '확정 종가'로 오인되는 것 방지).
           const stampD = stampDateFor(codeAcctType.get(code) || 'portfolio');
-          if (stampD) setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [stampD]: d.price } }));
+          if (stampD) stampStaging[code] = { overwrite: { [stampD]: d.price } };
         } else {
           failedCodes.push(code);
         }
@@ -865,7 +857,7 @@ export function useStockData({
         const d = await withTimeout(fetchUsStockInfo(code), 10000);
         if (d) {
           priceResults[code] = d;
-          setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), [today]: d.price } }));
+          stampStaging[code] = { overwrite: { [today]: d.price } };
         } else {
           failedCodes.push(code);
         }
@@ -894,6 +886,7 @@ export function useStockData({
         }
       }),
     ]);
+    if (Object.keys(stampStaging).length > 0) setStockHistoryMap(prev => applyStagedMerges(prev, stampStaging));
 
     const hasAnyResult = Object.keys(priceResults).length > 0 || Object.keys(fundResults).length > 0;
     if (!hasAnyResult) return { priceResults, fundResults, failedCodes };
@@ -1080,13 +1073,52 @@ export function useStockData({
   // options.force=true: 모든 필터(세션 마이그레이션 플래그·캐시 신선도) 무시하고
   // 전 계좌 모든 종목의 과거 이력을 KIS/Naver/NAV API로 무조건 다시 조회.
   // 이벤트 핸들러로 전달돼도 안전(MouseEvent에 force 프로퍼티 없음).
-  // 첫 이력 패스(KIS/US 과거 종가 조회)가 끝났는가 — useAutoConfirmHistory의 비가역 확정 게이트.
-  // ⚠️ state여야 한다(ref면 마지막 병합 뒤 effect를 재실행할 계기가 없다). 조회 대상이 0건이면 refreshPrices
-  //    종료 시 true. 한 번 true면 세션 내내 true(다음 패스는 게이트 대상이 아니다 — 정착 신호는 Phase 3).
-  const [firstHistoryPassDone, setFirstHistoryPassDone] = useState(false);
+  // ── 부팅 상태 머신 histPhase (useStockData 소유, App이 prop으로 배포) ──
+  //   loading → (STATE+STOCK 적용 뒤 첫 갱신 시작) → hydrated | hydrate-failed(STOCK 로드 실패) → (첫 이력 패스 단일 커밋) → settled
+  //   이후 갱신(폴링·07:30·수동)은 refreshing → settled. 스트림이 하나도 없으면 refreshPrices 종료 시 즉시 settled.
+  //   워치독(HISTORY_PASS_WATCHDOG_MS) 초과 시 도착분만 커밋 + partial=true + settled, 늦게 끝난 스트림은 한 번 더 커밋 + partial=false.
+  // ⚠️ 쓰기 게이트의 근거(타이머가 아니라 실제 완료 이벤트): useAutoConfirmHistory는 settled && !partial,
+  //    useHistoryBackfill 효과#2는 settled에서만 돈다. state여야 한다(ref면 마지막 커밋 뒤 effect 재실행 계기가 없다).
+  const [histPhase, setHistPhase] = useState<'loading' | 'hydrated' | 'hydrate-failed' | 'refreshing' | 'settled'>('loading');
+  const [histPartial, setHistPartial] = useState(false);
+  const [histProgress, setHistProgress] = useState({ done: 0, total: 0 });
+  const histProgressRef = useRef({ done: 0, total: 0 });
+  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 진행 카운터 — 태스크 완료마다 ref 증가, 500ms 스로틀로 state 승격(태스크마다 렌더하지 않는다).
+  const bumpProgress = (delta: { done?: number; total?: number }) => {
+    histProgressRef.current = { done: histProgressRef.current.done + (delta.done || 0), total: histProgressRef.current.total + (delta.total || 0) };
+    if (progressTimerRef.current) return;
+    progressTimerRef.current = setTimeout(() => { progressTimerRef.current = null; setHistProgress({ ...histProgressRef.current }); }, 500);
+  };
+  const tracked = (fn: () => Promise<void>) => async () => { try { await fn(); } finally { bumpProgress({ done: 1 }); } };
+
+  // ── 스테이징: 이력 스트림(KIS·trend·fchart·US·펀드 NAV)의 결과를 코드별로 모아 패스 단위로 **한 번에** 커밋 ──
+  // ⚠️ 코드별 setStockHistoryMap로 되돌리지 말 것 — 병합 1회 = 렌더 + 전 계좌 portfolioStructureKey 직렬화 +
+  //    marketSeries·finalChartData 재계산 + 백필·자동확정 실행이라, 코드 수만큼 과거 평가액이 흔들리고(편입 경계
+  //    이후 구간은 나중 편입 종목이 빠진 carry-forward 중간값) 도착 순서가 세션마다 달라 값도 달랐다.
+  //    커밋 지점 화이트리스트: ① Drive 하이드레이션(useDriveSync) ② 시세 stamp 1회(fetchAllPortfoliosPrices 종료)
+  //    ③ 이력 패스 1회(commitStaged) ④ 워치독 ⑤ 사용자 명시 동작(단일 재조회·비교종목·종가 임포트 — 종전 경로).
+  const historyStagingRef = useRef<Record<string, StagedCodeMerge>>({});
+  const stage = (code: string, patch: StagedCodeMerge) => {
+    const cur = historyStagingRef.current[code];
+    historyStagingRef.current = { ...historyStagingRef.current, [code]: cur ? mergeStagedPatch(cur, patch) : patch };
+  };
+  // 스테이징 커밋 + Drive 저장 1회(옛 KIS/US·NAV 두 곳의 .then(setTimeout(saveAllToDrive)) 통합). 빈 스테이징이면 맵은 그대로.
+  const commitStaged = () => {
+    const staged = historyStagingRef.current;
+    historyStagingRef.current = {};
+    if (Object.keys(staged).length > 0) setStockHistoryMap(prev => applyStagedMerges(prev, staged));
+    setTimeout(() => {
+      const snap = saveStateRef.current;
+      if (snap && driveTokenRef.current) saveAllToDrive(snap);
+    }, 600);
+  };
 
   const refreshPricesInner = async (force: boolean) => {
-    let historyPassStarted = false;
+    // 이번 패스의 이력 스트림(각 Promise.all). 비어 있으면 종료 시 즉시 settled.
+    const streams: Promise<unknown>[] = [];
+    // 배지가 즉시 '동기화 중'을 보이도록 시작 시점에 전이한다. loading에서 출발하는 첫 패스만 hydrated/hydrate-failed.
+    setHistPhase(prev => (prev === 'loading' ? (stockLoadFailedRef.current ? 'hydrate-failed' : 'hydrated') : 'refreshing'));
     setIsLoading(true);
     setIndexFetchStatus({
       kospi: { status: 'loading' },
@@ -1132,11 +1164,14 @@ export function useStockData({
       // 코드별 조회 계획(stockHistorySync.planKorHistoryFetch — 규칙은 그 주석): force=전부 full / 마커 없음·캐시 ≤3키·
       // 마커 30일 초과=full / 마커 신선=skip / 그 외=incremental. 옛 필터('세션 첫 갱신은 전 코드 강제 재조회')로
       // 되돌리지 말 것 — 그것이 매 세션 전량 재조회와 부팅 흔들림의 원인이었다.
-      const korPlan = planKorHistoryFetch([...allKoreanCodes], stockHistoryMapRef.current, stockMetaRef.current, korPlanOpts(force));
+      // 스테이징에 이미 실린 코드(아직 커밋 전인 직전 패스의 결과)는 이번 계획에서 뺀다 — 겹친 패스가 같은 코드를 또 긁지 않게.
+      const stagedNow = historyStagingRef.current;
+      const korPlan = planKorHistoryFetch([...allKoreanCodes].filter(c => !stagedNow[c]), stockHistoryMapRef.current, stockMetaRef.current, korPlanOpts(force));
       const incrementalSet = new Set(korPlan.incremental);
       const korCodesNeedingHistory = [...korPlan.full, ...korPlan.incremental];
       if (korPlan.skip.length > 0) console.log(`[history] 마커 신선 — 재조회 생략 ${korPlan.skip.length}건`);
       const usCodesNeedingHistory = isOverseasRefresh ? activeStockCodes.filter(code => {
+        if (stagedNow[code]) return false;
         if (force) return true;
         const existing = stockHistoryMapRef.current[code];
         return !existing || Object.keys(existing).length <= 252;
@@ -1158,8 +1193,7 @@ export function useStockData({
               if (rTrend) inc = rTrend.data;
             }
             if (inc) {
-              const incData = inc;
-              setStockHistoryMap(prev => ({ ...prev, [code]: mergeCodeHistory(prev[code] || {}, { overwrite: incData }) }));
+              stage(code, { overwrite: inc });
             } else {
               korFailed.push(code);
             }
@@ -1231,13 +1265,7 @@ export function useStockData({
             //  · 그 외(fchart/Yahoo 폴백): hist 자체가 수정종가 위험이라 통째로 gap-only.
             // ⚠️ fromRealPrice 경로에서 hist를 그대로 spread하던 옛 코드로 되돌리지 말 것 —
             //    그 시절엔 보강분이 hist 안에 주입돼 있어서 수정종가가 캐시의 실제종가를 덮었다.
-            setStockHistoryMap(prev => ({
-              ...prev,
-              [code]: mergeCodeHistory(
-                prev[code] || {},
-                fromRealPrice ? { overwrite: hist, gapFill: supHist } : { gapFill: hist }
-              ),
-            }));
+            stage(code, fromRealPrice ? { overwrite: hist, gapFill: supHist } : { gapFill: hist });
           } else {
             korFailed.push(code);
           }
@@ -1247,20 +1275,15 @@ export function useStockData({
         // 동시 4개 인스턴스 = 평균 4~8건/초 → rate limit 폭주를 사전 차단.
         // force=true 시 전 계좌 모든 종목이 대상이라 직렬화가 특히 중요.
         const KIS_CONCURRENCY = force ? 4 : 8;
-        historyPassStarted = true;
-        Promise.all([
-          runWithConcurrency(korTasks, KIS_CONCURRENCY),
-          ...usCodesNeedingHistory.map(async (code) => {
+        bumpProgress({ total: korTasks.length + usCodesNeedingHistory.length });
+        // ⚠️ 여기서 saveAllToDrive를 예약하지 말 것 — 커밋·저장은 아래 패스 정착(commitStaged) 한 곳이 맡는다.
+        streams.push(Promise.all([
+          runWithConcurrency(korTasks.map(tracked), KIS_CONCURRENCY),
+          ...usCodesNeedingHistory.map(code => tracked(async () => {
             const r = await fetchUsStockHistory(code);
-            if (r?.data && Object.keys(r.data).length > 1)
-              setStockHistoryMap(prev => ({ ...prev, [code]: { ...(prev[code] || {}), ...r.data } }));
-          }),
-        ]).then(() => {
-          setTimeout(() => {
-            const snap = saveStateRef.current;
-            if (snap && driveTokenRef.current) saveAllToDrive(snap);
-          }, 600);
-        }).finally(() => setFirstHistoryPassDone(true));
+            if (r?.data && Object.keys(r.data).length > 1) stage(code, { overwrite: r.data });
+          })()),
+        ]));
       }
 
       // 펀드 기준가 이력 조회 → stockHistoryMap 저장 (useHistoryBackfill 소급 기록에 활용)
@@ -1295,15 +1318,16 @@ export function useStockData({
           }
         }));
       });
-      const allFundCodes = Object.keys(fundStartByCode);
+      const allFundCodes = Object.keys(fundStartByCode).filter(c => !stagedNow[c]);
       if (allFundCodes.length > 0) {
+        bumpProgress({ total: allFundCodes.length });
         // today 기준 직전 거래일(주말 제외) — NAV는 비거래일에 없으므로
         // 이 날짜까지 채워졌으면 최신으로 간주. (공휴일은 재조회 1회 유발, 무해)
         const ltd = new Date(today + 'T12:00:00');
         while (isWeekend(ltd.toISOString().split('T')[0])) ltd.setDate(ltd.getDate() - 1);
         const lastTradingDay = ltd.toISOString().split('T')[0];
 
-        Promise.all(allFundCodes.map(async (code) => {
+        streams.push(Promise.all(allFundCodes.map(code => tracked(async () => {
           // 시작일 미상이면 1년 전. 상장일 이전을 요청해도 API가 자동 캡함.
           const histStartDate = fundStartByCode[code] || oneYearAgoStr;
           const existing = stockHistoryMapRef.current[code] || {};
@@ -1329,12 +1353,8 @@ export function useStockData({
           const staleWeekendKeys = Object.keys(existing).filter(d => isWeekend(d));
           if (!hist && staleWeekendKeys.length === 0) return;
 
-          setStockHistoryMap(prev => {
-            const merged: Record<string, number> = { ...(prev[code] || {}) };
-            staleWeekendKeys.forEach(d => { delete merged[d]; });
-            if (hist) Object.assign(merged, hist);
-            return { ...prev, [code]: merged };
-          });
+          // 스테이징(deleteKeys → replace 순으로 적용된다 — applyStagedMerges).
+          stage(code, { replace: hist || null, deleteKeys: staleWeekendKeys });
 
           // funetf 펀드: 이력 마지막 2 거래일로 changeRate 계산 (HTML 파싱 불신뢰 대체)
           if (!code.startsWith('MA:') && hist) {
@@ -1389,12 +1409,29 @@ export function useStockData({
               return { ...p, portfolio: updItems };
             }));
           }
-        })).then(() => {
-          setTimeout(() => {
-            const snap = saveStateRef.current;
-            if (snap && driveTokenRef.current) saveAllToDrive(snap);
-          }, 800);
+        })())));
+      }
+
+      // ── 이력 패스 정착: 스트림(KIS·US·NAV) 전부 끝나면 **한 번에** 커밋 → settled. ──
+      // 워치독 초과 시 도착분만 커밋 + partial=true + settled, 남은 스트림이 끝나면 한 번 더 커밋 + partial=false.
+      // ⚠️ 정착 신호는 타이머가 아니라 실제 완료 이벤트(allSettled)다 — 워치독은 강등 경로일 뿐이다.
+      if (streams.length > 0) {
+        const passAll = Promise.allSettled(streams);
+        let watchdogFired = false;
+        const watchdog = new Promise<'timeout'>(res => setTimeout(() => res('timeout'), HISTORY_PASS_WATCHDOG_MS));
+        Promise.race([passAll, watchdog]).then(r => {
+          if (r !== 'timeout') return;
+          watchdogFired = true;
+          commitStaged();
+          setHistPartial(true);
+          setHistPhase('settled');
         });
+        const settleFinal = () => {
+          commitStaged();
+          if (watchdogFired) setHistPartial(false);
+          setHistPhase('settled');
+        };
+        passAll.then(settleFinal, settleFinal);
       }
 
       const [kRes, sRes, nRes] = await Promise.allSettled([
@@ -1462,8 +1499,8 @@ export function useStockData({
       console.error('데이터 갱신 오류:', err);
     } finally {
       setIsLoading(false);
-      // 이력 조회 블록에 들어가지 않은 패스(대상 0건·예외)는 여기서 '첫 패스 완료'로 친다 — 안 그러면 자동확정이 영구 보류된다.
-      if (!historyPassStarted) setFirstHistoryPassDone(true);
+      // 스트림이 하나도 없는 패스(대상 0건·예외)는 여기서 즉시 settled — 안 그러면 백필·자동확정이 영구 보류된다.
+      if (streams.length === 0) setHistPhase('settled');
     }
   };
 
@@ -1545,6 +1582,8 @@ export function useStockData({
     autoRefreshStockPrices,
     refreshPrices,
     refetchStockHistory,
-    firstHistoryPassDone,
+    histPhase,
+    histPartial,
+    histProgress,
   };
 }

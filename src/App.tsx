@@ -614,7 +614,7 @@ export default function App() {
     driveTokenRef, driveFolderIdRef, tokenClientRef, pendingTokenResolveRef,
     isInitialLoad, driveSaveTimerRef, portfolioUpdatedAtRef, prevPortfolioStructureRef,
     lastDriveSavedPortfolioUpdatedAtRef, driveCheckInProgressRef, lastDriveCheckAtRef,
-    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef, ownFolderIdRef, syncStatusRef, stockMetaRef,
+    goldKrAutoCrawledRef, stooqAutoCrawledRef, adminTransitioningRef, ownFolderIdRef, syncStatusRef, stockMetaRef, stockLoadFailedRef,
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
@@ -1692,13 +1692,6 @@ export default function App() {
   });
 
 
-  useHistoryBackfill({
-    stockHistoryMap, indicatorHistoryMap, marketIndicators,
-    portfolioSummaries, portfolios, setPortfolios,
-    activePortfolioId, setHistory, effectiveDateKey, krEffectiveDateKey,
-    marketHolidays,
-  });
-
   const { handleImportHistoryJSON } = useIndexImport({
     marketIndices, setMarketIndices, setIndexFetchStatus,
     setStockHistoryMap, setMarketIndicators, setIndicatorHistoryMap, notify,
@@ -1733,7 +1726,7 @@ export default function App() {
     autoRefreshStockPrices,
     refreshPrices,
     refetchStockHistory,
-    firstHistoryPassDone,
+    histPhase, histPartial, histProgress,
   } = useStockData({
     portfolio, setPortfolio,
     portfolios, setPortfolios,
@@ -1750,6 +1743,7 @@ export default function App() {
     activePortfolioIdRef,
     stockHistoryMapRef,
     stockMetaRef,
+    stockLoadFailedRef,
     saveStateRef, driveTokenRef, saveAllToDrive,
     chartPeriod, appliedRange,
     setIsLoading, notify,
@@ -1758,14 +1752,23 @@ export default function App() {
   });
   refreshPricesRef.current = refreshPrices;
 
+  // 백필(효과#2)·자동확정은 useStockData **뒤**에 둔다 — 부팅 상태 머신 histPhase(정착 신호)를 게이트로 받기 위해서다.
+  // STOCK-first는 Drive 캐시(전 세션 장중 stamp 포함)를 KIS 실제종가 도착 **전에** 보이게 하므로, 백필은 settled에서만,
+  // 비가역 확정(자동확정)은 settled && !partial에서만 한다. ⚠️ useHistoryBackfill → useAutoConfirmHistory 순서는 그대로
+  // (자동확정은 백필 결과 위에 합성된다 — useAutoConfirmHistory 상단 주석).
+  useHistoryBackfill({
+    stockHistoryMap, indicatorHistoryMap, marketIndicators,
+    portfolioSummaries, portfolios, setPortfolios,
+    activePortfolioId, setHistory, effectiveDateKey, krEffectiveDateKey,
+    marketHolidays,
+    histPhase,
+  });
+
   // 앱 실행 시 자산검증 불일치 라이브 레코드를 '수량×종가로 자동확정' (useHistoryBackfill 뒤에서 합성)
-  // ⚠️ useStockData **뒤**에 둔다 — 첫 이력 패스 완료 플래그(firstHistoryPassDone)를 게이트로 받기 위해서다.
-  //    STOCK-first는 Drive 캐시(전 세션 장중 stamp 포함)를 KIS 실제종가 도착 **전에** 보이게 하므로,
-  //    비가역 확정은 첫 이력 패스가 끝난 뒤에만 한다(useHistoryBackfill 뒤 배치 규약은 그대로 유지).
   useAutoConfirmHistory({
     stockHistoryMap, indicatorHistoryMap, marketIndicators,
     portfolios, setPortfolios, effectiveDateKey, krEffectiveDateKey,
-    firstHistoryPassDone,
+    histPhase, histPartial,
   });
 
   // ── 부팅 시세 갱신 트리거 ──
@@ -4240,6 +4243,9 @@ export default function App() {
           isLoading={isLoading}
           handleDriveLoadOnly={handleDriveLoadOnly}
           driveStatus={driveStatus}
+          histPhase={histPhase}
+          histProgress={histProgress}
+          histPartial={histPartial}
           handleDriveSave={handleDriveSave}
           handleOpenBackupModal={handleOpenBackupModal}
           historyInputRef={historyInputRef}
