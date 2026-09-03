@@ -11,6 +11,14 @@ import { flowMapsHaveContent } from '../flowMap';
 import { backtestScenariosHaveContent } from '../backtest';
 import { ledgerBooksHaveContent, ledgerSnapshotsHaveContent } from '../ledger';
 
+// STOCK(종목별 과거 종가 캐시) 하이드레이션 대기 상한(ms).
+// ⚠️ 부팅은 STATE+MARKET+STOCK을 **함께** 적용해 첫 렌더부터 과거 평가액이 최종값이어야 한다(STOCK-first).
+//    다만 STOCK은 수 MB라 느린 회선에서 무한정 기다리면 STATE 적용까지 늦어지므로 상한을 둔다 —
+//    초과 시 STATE만 먼저 적용하고, 늦게 도착한 STOCK은 그때 1회 하이드레이션(Drive 베이스 + 메모리 우선 병합)한다.
+export const STOCK_HYDRATE_WAIT_MS = 10000;
+// Promise.race 판별용 센티널 — STOCK 로드가 상한 안에 끝나지 않았음을 뜻한다(값이 아니다).
+const STOCK_TIMED_OUT = { stockTimedOut: true };
+
 function _stripStateForSave(stateData: any) {
   const { stockHistoryMap: _s, marketIndices: _m, marketIndicators: _mi, indicatorHistoryMap: _ih, ...core } = stateData;
   return core;
@@ -128,6 +136,18 @@ export function useDriveSync({
   //    App.tsx의 isInitialLoad 해제가 loadStockFromDrive보다 먼저 풀리고,
   //    saveAllToDrive를 직접 부르는 지점이 useStockData에만 9곳이라 부팅 순서 교정만으로는 못 막는다.
   const stockHydratedRef = useRef(false);
+  // STOCK 로드가 예외로 끝났는가 — 이번 세션은 종전 폴백 경로(빈 맵에서 시작, STOCK 쓰기 보류)로 강등된다.
+  const stockLoadFailedRef = useRef(false);
+  // 마지막으로 Drive에 올린 stockHistoryMap **객체 참조**. setStockHistoryMap은 매번 새 객체를 만들므로
+  // 참조 비교가 곧 정확한 dirty 플래그다 — 같으면 이력이 안 바뀐 것이라 수 MB 업로드를 건너뛴다.
+  const lastSavedStockMapRef = useRef<any>(null);
+  // STATE가 화면에 적용된 뒤인가(또는 Drive에 STATE가 없음을 확인했는가) — 종료 계열 저장의 게이트.
+  // ⚠️ isInitialLoad와 다르다: isInitialLoad는 부팅 전체(시세 갱신·세션 초기화까지)가 끝나야 풀리는데,
+  //    오버레이는 STATE 적용 직후 내려가므로 그 사이(시세 타임아웃 최대 10초)에 사용자가 편집하고 탭을
+  //    닫으면 isInitialLoad 게이트가 그 편집을 **어디에도 저장하지 않는다**. isInitialLoad의 존재 이유는
+  //    "Drive를 읽기 전에 빈 상태를 덮어쓰지 않기"뿐이므로, 종료 저장(pagehide·탭 숨김·비활동 로그아웃)은
+  //    이 플래그만 본다. 800ms 자동저장·chartPrefs·알림로그·폴링의 isInitialLoad 게이트는 그대로다.
+  const stateAppliedRef = useRef(false);
   const driveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const portfolioUpdatedAtRef = useRef<number>(0);
   const prevPortfolioStructureRef = useRef<string>('');
@@ -200,12 +220,55 @@ export function useDriveSync({
         });
       }
 
-      const [stateData, marketData] = await Promise.all([
+      // ── STATE+MARKET+STOCK을 **한 번에** 로드한다(STOCK-first) ──
+      // ⚠️ STOCK을 STATE 뒤에 따로 받던 옛 순서는 첫 렌더의 stockHistoryMap이 {}라 과거 평가액이
+      //    저장값 폴백 → 코드별 병합마다 중간값 → 최종값으로 여러 번 바뀌었다(부팅 중 흔들림의 원인).
+      //    STOCK을 함께 적용하면 첫 렌더부터 최종값이다. allSettled인 이유: STOCK 실패가 STATE 적용을
+      //    막으면 안 된다(강등 경로 = 옛 동작). 대기 상한은 STOCK_HYDRATE_WAIT_MS.
+      const stockLoad = loadDriveFile(token, folderId, DRIVE_FILES.STOCK);
+      const [stateRes, marketRes, stockRes] = await Promise.allSettled([
         loadDriveFile(token, folderId, DRIVE_FILES.STATE),
         loadDriveFile(token, folderId, DRIVE_FILES.MARKET),
+        Promise.race([stockLoad, new Promise(res => setTimeout(() => res(STOCK_TIMED_OUT), STOCK_HYDRATE_WAIT_MS))]),
       ]);
+      if (stateRes.status === 'rejected') throw stateRes.reason;
+      // MARKET은 종전 규약(로드 실패 = 오류 상태) 유지 — MARKET 저장에는 dirty 가드가 없어, 못 읽은 채로
+      // 진행하면 첫 저장이 빈 indicatorHistoryMap으로 파일을 덮어 금현물·환율 이력이 소실된다.
+      if (marketRes.status === 'rejected') throw marketRes.reason;
+      const stateData = stateRes.value as any;
+      const marketData = marketRes.value;
 
-      if (!stateData) { setSS('ready'); setDriveStatus(''); return null; }
+      // ── STOCK 하이드레이션은 applyStateData보다 **앞**, 같은 동기 블록(사이에 await 금지) ──
+      // 두 setState가 한 렌더로 배치돼야 첫 페인트에 과거 종가가 실린다.
+      if (stockRes.status === 'fulfilled' && stockRes.value !== STOCK_TIMED_OUT) {
+        const driveMap = (stockRes.value as any)?.stockHistoryMap;
+        const hasMap = !!driveMap && typeof driveMap === 'object';
+        if (hasMap) applyStockData(driveMap);
+        // 하이드레이션 완료 표시는 파일 유무와 무관 — '파일 없음'(신규 사용자)도 Drive 상태를 확인한 것이라
+        // 첫 종가 캐시가 만들어질 수 있어야 한다. 방금 받은 맵은 '이미 Drive에 있는 것'이라 dirty가 아니다
+        // (applyStockData가 메모리가 비어 있으면 같은 참조를 채택한다 — 참조 비교 dirty와 짝).
+        stockHydratedRef.current = true;
+        lastSavedStockMapRef.current = hasMap ? driveMap : null;
+      } else if (stockRes.status === 'rejected') {
+        stockLoadFailedRef.current = true;
+        console.warn('[Drive] STOCK 로드 실패 — 이번 세션 STOCK 저장 보류(옛 폴백 경로):', stockRes.reason);
+      } else {
+        // 상한 초과: STATE만 먼저 적용하고 STOCK은 도착하는 즉시 1회 하이드레이션(Drive 베이스 + 메모리 우선 병합).
+        stockLoad.then((d: any) => {
+          const driveMap = d?.stockHistoryMap;
+          if (driveMap && typeof driveMap === 'object') applyStockData(driveMap);
+          stockHydratedRef.current = true;
+        }).catch((err) => {
+          stockLoadFailedRef.current = true;
+          console.warn('[Drive] STOCK 지연 로드 실패 — 이번 세션 STOCK 저장 보류:', err);
+        });
+      }
+
+      if (!stateData) {
+        // Drive에 STATE가 없음을 확인 — 신규 사용자. 덮어쓸 기존 상태가 없으므로 종료 저장을 열어 둔다.
+        stateAppliedRef.current = true;
+        setSS('ready'); setDriveStatus(''); return null;
+      }
 
       let stateToApply = stateData as any;
       if (updateAccessLog) {
@@ -223,6 +286,7 @@ export function useDriveSync({
       }
 
       applyStateData(stateToApply, null, marketData);
+      stateAppliedRef.current = true;
       // 로드한 portfolioUpdatedAt/chartPrefsUpdatedAt을 ref에 동기화 — 초기 로드 시 useEffect가 새
       // 타임스탬프를 만들어 lastDriveSaved*보다 커지는 것을 방지 (의도치 않은 자동 저장 억제)
       portfolioUpdatedAtRef.current = (stateToApply as any).portfolioUpdatedAt || 0;
@@ -334,8 +398,10 @@ export function useDriveSync({
       await Promise.all([
         // ⚠️ stockHydratedRef 가드를 제거하지 말 것 — Drive 병합 전 부분 맵이 전체 캐시를 truncate한다.
         //    가드는 반드시 여기(saveAllToDrive 본문)에 둔다. 호출부(useStockData 9곳 등)에 나눠 달면 누락된다.
-        Object.keys(shm || {}).length > 0 && stockHydratedRef.current
-          ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm })
+        // ⚠️ 참조 비교 dirty: 하이드레이션 뒤에도 이력이 안 바뀐 저장(원금 수정·메모 등)이 수 MB STOCK을
+        //    통째로 재업로드하던 것을 막는다. 가드 순서는 hydrated가 **앞**(부분 맵 truncate 방어가 1순위).
+        Object.keys(shm || {}).length > 0 && stockHydratedRef.current && shm !== lastSavedStockMapRef.current
+          ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm }).then(() => { lastSavedStockMapRef.current = shm; })
           : Promise.resolve(),
         saveDriveFile(token, folderId, DRIVE_FILES.MARKET, { marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }),
       ]);
@@ -679,12 +745,14 @@ export function useDriveSync({
   };
 
   // ── 탭 활성화 시 Drive 동기화, 숨김 시 즉시 저장 ──
+  // ⚠️ 종료 계열 저장(탭 숨김·pagehide·비활동 로그아웃)의 게이트는 isInitialLoad가 아니라 stateAppliedRef다
+  //    (선언부 주석 참조 — 오버레이 조기 해제가 만든 유실 창을 막는다).
   useEffect(() => {
     if (!authUser) return;
     const handleVisibilityChange = () => {
       if (document.hidden) {
         const snap = snapForExit();
-        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
+        if (snap && snap.portfolios?.length > 0 && driveTokenRef.current && stateAppliedRef.current) {
           if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
           saveAllToDrive(snap);
         }
@@ -695,7 +763,7 @@ export function useDriveSync({
     const handlePageHide = () => {
       if (adminViewingAsRef.current || adminTransitioningRef.current) return;
       const snap = snapForExit();
-      if (!snap || !snap.portfolios?.length || !driveTokenRef.current || isInitialLoad.current) return;
+      if (!snap || !snap.portfolios?.length || !driveTokenRef.current || !stateAppliedRef.current) return;
       saveAllToDrive(snap);
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -771,7 +839,7 @@ export function useDriveSync({
     inactivityWarningActiveRef.current = false;
     setShowInactivityWarning(false);
     const snap = snapForExit();
-    if (snap?.portfolios?.length > 0 && driveTokenRef.current && !isInitialLoad.current) {
+    if (snap?.portfolios?.length > 0 && driveTokenRef.current && stateAppliedRef.current) {
       try { await saveAllToDrive(snap); } catch {}
     }
     onForceLogout();
@@ -822,6 +890,8 @@ export function useDriveSync({
     syncStatusRef,
     adminTransitioningRef,
     ownFolderIdRef,
+    stockLoadFailedRef,
+    stateAppliedRef,
     // 함수
     ensureDriveFolder,
     loadFromDrive,

@@ -462,6 +462,84 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   갱신이 저장을 유발하지 않도록 — `historyLen` 주석 의도 유지). `dedupeHistoryByDate`는 원본 레코드를 그대로
   반환 → `autoConfirmDeclined` 보존. 로드 정규화(`applyStateData`/`applyBackupData`)도 `...` 스프레드라 보존.
 
+### 부팅 = STOCK-first · 영속 마커 증분 조회 · 이력 패스 단일 커밋 · 정착(settled) 게이트 · 하루 1회 종료 백업 (⚠️ 회귀 주의)
+
+**발단(사용자 보고 2026-09)**: 앱 실행 시 로딩이 길고, 로딩 중 '오늘 이전' 날짜의 평가금액(통합 추이표·개별 차트·
+자산 평가액 추이)이 여러 번 바뀌며, 안정될 때까지 다른 화면으로 이동해도 통합 대시보드로 되돌아왔다. 원인은
+표시 계층이 아니라 **입력(`stockHistoryMap`)이 언제·몇 번 커밋되는가**다 — 표시 계층(`buildCloseEvalSeries`·
+`evalSeriesDates`·`calcPortfolioEvalDetail`·`useIntegratedData.marketSeries`·`HistoryPanel.displayEvalByDate`)은
+**한 줄도 바꾸지 않는다**(`verify:boot` G12가 시그니처를 단언). 원칙: **cache-first(Drive STOCK을 STATE와 함께
+먼저) → 세션 간 반복 작업 제거(영속 마커·증분 조회) → 스트림은 스테이징에 모아 한 번에 커밋 → 준비 신호는
+타이머가 아니라 실제 완료 이벤트 → 읽기 안정화와 비가역 쓰기의 분리 → 복구 지점은 '하루 1회·변경 시에만'.**
+
+**Phase 1 — 부팅 순서·중복 제거·오버레이·강제 복귀 (2026-09)**
+
+- **되돌리면 재발하는 사고**: ① STOCK을 STATE 뒤에 따로 받던 순서 — 첫 렌더의 맵이 `{}`라 과거 평가액이
+  저장값 폴백 → 코드 도착마다 중간값(편입 경계 이후 구간은 나중 편입 종목이 빠진 carry-forward, 해외는 계단식
+  부분합) → 최종값으로 흔들리고 도착 순서가 세션마다 달라 값도 달랐다(`verify:boot #1b`가 그 중간값을 문서화)
+  ② 부팅 중 `refreshPrices` **3회**(계좌 전환 effect·로드 effect·`applyStockData`의 1200ms 타이머 — 재진입 가드가
+  없어 in-flight 위에 큐잉, KIS 동시 8×2) ③ `setShowIntegratedDashboard(true)` 강제 복귀(초기값이 true라
+  정상 부팅에선 no-op, 오버레이를 닫고 이동한 사용자만 되돌려 보냄) ④ STOCK 저장에 dirty 판정이 없어
+  하이드레이션 뒤 모든 저장이 수 MB 전량 업로드.
+- **⚠️ STOCK-first**: `useDriveSync.loadFromDrive`가 `Promise.allSettled([STATE, MARKET, race(STOCK, 10s)])`.
+  STOCK fulfilled면 **`applyStateData`보다 앞, 같은 동기 블록(사이 await 금지)**에서 `applyStockData` → 두
+  setState가 한 렌더로 배치돼 첫 페인트부터 과거 종가가 실린다. STOCK rejected → `stockLoadFailedRef`(강등: 빈
+  맵·STOCK 쓰기 보류 = 옛 동작). 상한(`STOCK_HYDRATE_WAIT_MS` 10s) 초과 → STATE만 적용, 늦게 도착하면 그때
+  1회 하이드레이션(Drive 베이스 + 메모리 우선 병합). ⚠️ `Promise.all`로 묶어 STOCK 실패가 STATE 적용을 막게
+  하지 말 것. ⚠️ **MARKET 실패는 종전대로 throw(오류 상태)** — MARKET 저장에는 dirty 가드가 없어 못 읽은 채
+  진행하면 첫 저장이 빈 `indicatorHistoryMap`으로 금현물·환율 이력을 덮는다(명세의 '개별 판정'을 채택하지
+  않은 이유). 폴링(`checkAndSyncFromDrive`)의 `loadStockFromDrive` 호출은 Phase 4에서 정리한다.
+- **⚠️ STOCK dirty = 참조 비교**(`lastSavedStockMapRef`): `saveAllToDrive` STOCK 분기
+  `length>0 && stockHydratedRef && shm !== lastSaved`(가드 순서: hydrated가 **앞** — 부분 맵 truncate 방어가
+  1순위). `setStockHistoryMap`은 매번 새 객체를 만들므로 참조 비교가 곧 정확한 dirty 플래그다. `applyStockData`는
+  메모리가 비어 있으면 Drive 맵을 **같은 참조**로 채택하고 loadFromDrive가 그 참조를 lastSaved로 시드 → 방금
+  내려받은 맵을 그대로 다시 올리지 않는다. `stockHydratedRef` 가드는 제거·완화·이동 금지(saveAllToDrive 본문에만).
+- **⚠️ 첫 시세 갱신은 로드 effect가 직접 부르지 않고 `bootRefreshSeq` effect가 쏜다**: `refreshPrices`는
+  `portfoliosRef`·`activePortfolioIdRef`·`stockHistoryMapRef` 등 **effect로 동기화되는 ref**를 동기적으로
+  읽는데, loadFromDrive 안의 setState는 DefaultLane이라 렌더·passive effect가 **다음 매크로태스크들**에서 돌고
+  `await loadFromDrive()` 직후 컨티뉴에이션은 그보다 앞선 마이크로태스크다 → 거기서 직접 부르면 **빈 계좌를
+  읽어 시세를 한 건도 조회하지 않는다**(`setTimeout(0)`도 passive effect 태스크보다 먼저 발화할 수 있어
+  신뢰 불가). ref 동기화 effect(`portfoliosRef.current = portfolios`)보다 **뒤에 선언된** effect가 쏘고, 로드
+  effect는 `bootStarted`를 받아 `started.run`을 기다린다. ⚠️ resolve에 Promise를 직접 넘기지 말 것(채택돼
+  '시작' 신호가 '완료'까지 미뤄진다 — `{ run }` 객체로 감싼다). effect가 `BOOT_REFRESH_START_TIMEOUT_MS`(5s)
+  안에 안 돌면(언마운트 등) 직접 쏜다(그때는 렌더가 끝난 지 오래다).
+- **부팅 순서**: loadFromDrive(STATE+MARKET+STOCK) → 신규 사용자 분기 → ledger 잠금 해제 →
+  **`setIsInitialLoading(false)`(오버레이 해제 = 과거값 확정 이벤트)** → `fetchMarketIndicators` →
+  `setBootRefreshSeq`(첫 갱신 트리거) → 부수 로드 5건(세금·알림로그·SETTINGS·getSettings·getNotifications —
+  내용 무수정, **시작만** 병행) → `await started.run` → `initSession` → `isInitialLoad=false`. 강제 복귀·
+  `loadStockFromDrive(token)`·`applyStockData`의 `setTimeout(refreshPrices)` 전부 삭제. `LoadingOverlay`의
+  5초 버튼·20초 자동 해제 타이머는 **폴백으로 유지**.
+- **⚠️ `refreshPrices` 재진입 가드**(`refreshInFlightRef`/`pendingForceRef`): 진행 중이면 **같은 Promise**를
+  돌려주고, force는 1건만 큐잉해 완료 후 1회 재실행(`fetchMarketIndicators`의 `indicatorInFlightRef` 패턴).
+  폴링·07:30 타이머·HistoryPanel force 경로 전부 이 가드를 지난다. 계좌 탭 전환 effect는 `isInitialLoad`면
+  쏘지 않는다(applyStateData의 null→복원 id 전환이 여분 refresh를 만들던 경로; 사용자 전환은 종전대로).
+- **⚠️ 종료 저장 게이트 = `stateAppliedRef`**(isInitialLoad 아님): 오버레이가 STATE 적용 직후 내려가므로
+  사용자는 refreshPrices가 끝나기 전(시세 타임아웃 최대 10초)에도 편집할 수 있는데, 탭 숨김·pagehide·비활동
+  로그아웃 저장이 isInitialLoad에 막혀 있으면 그 편집이 **어디에도 저장되지 않는다**. isInitialLoad의 존재
+  이유는 "Drive를 읽기 전에 빈 상태를 덮어쓰지 않기"뿐 → STATE 적용 직후(또는 Drive에 STATE가 없음을 확인한
+  신규 사용자 분기)에 true. 800ms 자동저장·chartPrefs·알림로그·폴링·자동 백업의 isInitialLoad 게이트는
+  **그대로**(부팅 직후 STATE+VERSION churn 방지). STATE 로드 실패 세션은 여전히 종료 저장이 차단된다.
+- **⚠️ 임시 자동확정 게이트 `firstHistoryPassDone`**(Phase 3의 `histPhase` 정착 게이트가 들어올 때까지):
+  STOCK-first는 Drive 캐시(전 세션 장중 stamp 포함)를 KIS 실제종가 도착 **전에** 보이게 하므로
+  `useAutoConfirmHistory`의 비가역 확정은 첫 KIS/US 이력 패스가 끝난 뒤에만 한다(**state**여야 한다 — ref면
+  마지막 병합 뒤 effect를 재실행할 계기가 없다). 이력 조회 대상 0건·예외 패스는 `refreshPrices`의 finally에서
+  완료 처리(안 그러면 자동확정이 영구 보류). 이를 위해 `useAutoConfirmHistory` 호출을 `useStockData`
+  **뒤**로 옮겼다(useHistoryBackfill 뒤 배치 규약은 유지). `useHistoryBackfill` 효과#2는 게이팅하지 않는다
+  (값이 다르면 재계산되는 가역 쓰기).
+- **절대 하지 말 것**: 관심종목(WatchlistPopup/watchlistQuote)·백테스트(btFetched)·환율(fxRates) 결과의
+  `stockHistoryMap` 병합 / history 레코드에 새 필드 / 날짜당 1건·실시간 기록 보호·자동확정 allExact 가드
+  완화 / `portfolioStructureKey`에 시세성 값 / 외부 npm 의존성 / 성공·진행 `notify()` / 계측 코드 커밋.
+- 검증: `npm run verify:boot` (파트① `src/utils.ts` 직접 import — '중간값 회귀 기록' #1~#1e / 파트② 소스
+  텍스트 가드 G1~G14). ⚠️ 가드는 선언이 아니라 **사용부**를 단언하며 **변이 25종**(allSettled→all · STOCK
+  적용을 applyStateData 뒤로 · 사이에 await 삽입 · 하이드레이션 호출 삭제 · setTimeout 부활 · 같은 참조 채택
+  제거 · 강제 복귀 부활 · loadStockFromDrive 부활 · 오버레이 해제 순서 · effect 선언 순서 뒤집기 · 재진입
+  가드/force 큐잉 삭제 · 탭 전환 게이트 삭제 · dirty 비교 삭제/순서 뒤집기 · 자동확정 게이트/deps/finally/
+  미진입 처리 삭제 · 종료 게이트 3경로 되돌림 · 신규 분기 플래그 삭제 · 800ms 게이트 제거(오탐 대조) ·
+  표시 계층 시그니처 변경)으로 **실제 검출을 확인**했다. 그중 'STOCK 적용을 뒤로'·'하이드레이션 삭제'는 처음에
+  **죽은 단언**이었다 — '첫 `applyStockData(` 출현'으로 재면 지연 도착 경로(`.then` 안)의 호출이 대신
+  통과시킨다 → G1b는 fulfilled 분기 **블록 안**의 동기 호출을 본다. 가드를 손볼 때 같은 변이가 여전히 잡히는지
+  다시 확인할 것.
+
 ### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
 **마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가
@@ -5710,7 +5788,7 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 **게이트 = 결정적 검증 / 리뷰 = 보너스.** 둘의 역할을 절대 섞지 말 것.
 
 - **게이트**(통과 못 하면 커밋 금지): 변경 영역의 `npm run verify:*`(calendar·tax·dividend·history·
-  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel·excel·compare·**ledger** **21종** 중 해당분) + `memory/tools/jsxcheck.mjs`
+  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel·excel·compare·ledger·**boot** **22종** 중 해당분) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의
   지역 변수를 참조)**. `npm run build`가 가능한 환경이면 추가로 돌린다.
   ⚠️ **세 도구는 서로를 대체하지 못한다** — `undefcheck`는 파일 전체를 한 스코프로 보므로

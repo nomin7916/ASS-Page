@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend, savingsEval } from '../utils';
 import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount } from './useMarketCalendar';
@@ -1055,8 +1055,13 @@ export function useStockData({
   // options.force=true: 모든 필터(세션 마이그레이션 플래그·캐시 신선도) 무시하고
   // 전 계좌 모든 종목의 과거 이력을 KIS/Naver/NAV API로 무조건 다시 조회.
   // 이벤트 핸들러로 전달돼도 안전(MouseEvent에 force 프로퍼티 없음).
-  const refreshPrices = async (options?: { force?: boolean } | any) => {
-    const force = options && typeof options === 'object' && options.force === true;
+  // 첫 이력 패스(KIS/US 과거 종가 조회)가 끝났는가 — useAutoConfirmHistory의 비가역 확정 게이트.
+  // ⚠️ state여야 한다(ref면 마지막 병합 뒤 effect를 재실행할 계기가 없다). 조회 대상이 0건이면 refreshPrices
+  //    종료 시 true. 한 번 true면 세션 내내 true(다음 패스는 게이트 대상이 아니다 — 정착 신호는 Phase 3).
+  const [firstHistoryPassDone, setFirstHistoryPassDone] = useState(false);
+
+  const refreshPricesInner = async (force: boolean) => {
+    let historyPassStarted = false;
     setIsLoading(true);
     setIndexFetchStatus({
       kospi: { status: 'loading' },
@@ -1200,6 +1205,7 @@ export function useStockData({
         // 동시 4개 인스턴스 = 평균 4~8건/초 → rate limit 폭주를 사전 차단.
         // force=true 시 전 계좌 모든 종목이 대상이라 직렬화가 특히 중요.
         const KIS_CONCURRENCY = force ? 4 : 8;
+        historyPassStarted = true;
         Promise.all([
           runWithConcurrency(korTasks, KIS_CONCURRENCY),
           ...usCodesNeedingHistory.map(async (code) => {
@@ -1212,7 +1218,7 @@ export function useStockData({
             const snap = saveStateRef.current;
             if (snap && driveTokenRef.current) saveAllToDrive(snap);
           }, 600);
-        });
+        }).finally(() => setFirstHistoryPassDone(true));
       }
 
       // 펀드 기준가 이력 조회 → stockHistoryMap 저장 (useHistoryBackfill 소급 기록에 활용)
@@ -1414,7 +1420,31 @@ export function useStockData({
       console.error('데이터 갱신 오류:', err);
     } finally {
       setIsLoading(false);
+      // 이력 조회 블록에 들어가지 않은 패스(대상 0건·예외)는 여기서 '첫 패스 완료'로 친다 — 안 그러면 자동확정이 영구 보류된다.
+      if (!historyPassStarted) setFirstHistoryPassDone(true);
     }
+  };
+
+  // ── 재진입 가드 ──
+  // 부팅 중 3경로(계좌 전환 effect·로드 effect·STOCK 하이드레이션 타이머)가 같은 함수를 무가드로 불러
+  // in-flight 코드가 다시 큐잉되고 KIS 동시 요청이 8×2로 뛰던 것을 막는다. 폴링·07:30 타이머·HistoryPanel
+  // force 경로도 전부 여기를 지난다. 진행 중이면 **같은 Promise**를 돌려주고, force는 1건만 큐잉해
+  // 완료 후 1회 재실행한다(fetchMarketIndicators의 indicatorInFlightRef 패턴).
+  // options는 이벤트 핸들러로 전달돼도 안전(MouseEvent에 force 프로퍼티 없음).
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const pendingForceRef = useRef(false);
+  const refreshPrices = (options?: { force?: boolean } | any): Promise<void> => {
+    const force = !!(options && typeof options === 'object' && options.force === true);
+    if (refreshInFlightRef.current) {
+      if (force) pendingForceRef.current = true;
+      return refreshInFlightRef.current;
+    }
+    const run = refreshPricesInner(force).finally(() => {
+      refreshInFlightRef.current = null;
+      if (pendingForceRef.current) { pendingForceRef.current = false; refreshPrices({ force: true }); }
+    });
+    refreshInFlightRef.current = run;
+    return run;
   };
 
   // 07:30 AM KST 경계 자동 전환: 앱이 07:30 이전에 시작된 경우 타이머 설정
@@ -1473,5 +1503,6 @@ export function useStockData({
     autoRefreshStockPrices,
     refreshPrices,
     refetchStockHistory,
+    firstHistoryPassDone,
   };
 }

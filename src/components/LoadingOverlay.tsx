@@ -84,7 +84,7 @@ export default function LoadingOverlay({ visible, notificationLog, onDismiss, au
               className="text-[11px] text-gray-600 font-mono px-3"
               style={{ lineHeight: '24px' }}
             >
-              불러오는 중...
+              계좌·종가 캐시를 불러오는 중...
             </div>
           ) : (
             notificationLog.slice(0, 3).map(entry => (

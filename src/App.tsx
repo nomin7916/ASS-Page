@@ -108,6 +108,10 @@ function notifTargetsUser(targetEmail: string, email: string, notebookEnabled: b
 // 미지정/손상값은 ON으로 해석(기존 동작 유지) — OFF는 명시적으로 false일 때만.
 // 리포트 채널 폐지로 학습자료 하나만 남았다(옛 파일의 report 키는 로드 시 조용히 버려진다).
 const NOTICE_FLAGS_DEFAULT = { notebook: true };
+
+// 부팅 첫 시세 갱신을 쏘는 effect(bootRefreshSeq)가 이 시간 안에 안 돌면 로드 effect가 직접 쏜다(언마운트 등 예외 경로).
+// 그 시점엔 렌더가 이미 끝난 지 오래라 ref가 신선하다. 정상 경로는 effect가 담당한다(선언부 주석 참조).
+const BOOT_REFRESH_START_TIMEOUT_MS = 5000;
 const normalizeNoticeFlags = (raw: any) => ({
   notebook: raw?.notebook !== false,
 });
@@ -799,7 +803,7 @@ export default function App() {
   });
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
-  // STOCK 파일은 loadStockFromDrive가 별도 백그라운드 로드 → 여기서는 처리하지 않음
+  // STOCK 파일은 loadFromDrive가 STATE와 함께 로드해 applyStockData로 **먼저** 적용한다(STOCK-first) → 여기서는 처리하지 않음
   const applyStateData = (stateData, _stockData, marketData) => {
 
     if (stateData.portfolios?.length > 0) {
@@ -935,17 +939,21 @@ export default function App() {
   };
   applyStateDataRef.current = applyStateData;
 
-  // Drive STOCK 파일 백그라운드 로드 완료 시 호출 — 기존 메모리 데이터와 병합 (덮어쓰기 금지)
+  // Drive STOCK 파일 로드 시 호출(부팅 STOCK-first 하이드레이션·지연 도착·폴링) — 기존 메모리 데이터와 병합 (덮어쓰기 금지)
+  // ⚠️ 여기서 refreshPrices를 예약하지 말 것 — 옛 `setTimeout(refreshPricesRef, 1200)`이 부팅 중 3번째
+  //    시세 갱신을 만들었다(재진입 가드 없이 in-flight 위에 큐잉 → KIS 동시 요청 배가). 갱신은 로드 effect·
+  //    폴링·07:30 타이머·수동 버튼이 담당한다.
   const applyStockData = (driveStockMap) => {
     setStockHistoryMap(prev => {
+      // 부팅(메모리 비어 있음): Drive 맵을 **같은 참조**로 채택 — saveAllToDrive의 참조 비교 dirty 판정이
+      // "방금 내려받은 맵을 그대로 다시 올리는" 헛업로드(수 MB)를 건너뛴다(lastSavedStockMapRef 시드와 짝).
+      if (Object.keys(prev).length === 0) return driveStockMap;
       const merged = { ...driveStockMap };
       Object.entries(prev).forEach(([code, hist]) => {
         merged[code] = { ...(merged[code] || {}), ...hist };
       });
       return merged;
     });
-    // STOCK 파일 로드 완료 → 전체 계좌 누락 이력 수집 트리거 (useHistoryBackfill이 모든 계좌 빈 날짜 채우는 데 필요)
-    setTimeout(() => refreshPricesRef.current?.(), 1200);
   };
   applyStockDataRef.current = applyStockData;
 
@@ -1690,12 +1698,6 @@ export default function App() {
     marketHolidays,
   });
 
-  // 앱 실행 시 자산검증 불일치 라이브 레코드를 '수량×종가로 자동확정' (useHistoryBackfill 뒤에서 합성)
-  useAutoConfirmHistory({
-    stockHistoryMap, indicatorHistoryMap, marketIndicators,
-    portfolios, setPortfolios, effectiveDateKey, krEffectiveDateKey,
-  });
-
   const { handleImportHistoryJSON } = useIndexImport({
     marketIndices, setMarketIndices, setIndexFetchStatus,
     setStockHistoryMap, setMarketIndicators, setIndicatorHistoryMap, notify,
@@ -1730,6 +1732,7 @@ export default function App() {
     autoRefreshStockPrices,
     refreshPrices,
     refetchStockHistory,
+    firstHistoryPassDone,
   } = useStockData({
     portfolio, setPortfolio,
     portfolios, setPortfolios,
@@ -1753,10 +1756,41 @@ export default function App() {
   });
   refreshPricesRef.current = refreshPrices;
 
+  // 앱 실행 시 자산검증 불일치 라이브 레코드를 '수량×종가로 자동확정' (useHistoryBackfill 뒤에서 합성)
+  // ⚠️ useStockData **뒤**에 둔다 — 첫 이력 패스 완료 플래그(firstHistoryPassDone)를 게이트로 받기 위해서다.
+  //    STOCK-first는 Drive 캐시(전 세션 장중 stamp 포함)를 KIS 실제종가 도착 **전에** 보이게 하므로,
+  //    비가역 확정은 첫 이력 패스가 끝난 뒤에만 한다(useHistoryBackfill 뒤 배치 규약은 그대로 유지).
+  useAutoConfirmHistory({
+    stockHistoryMap, indicatorHistoryMap, marketIndicators,
+    portfolios, setPortfolios, effectiveDateKey, krEffectiveDateKey,
+    firstHistoryPassDone,
+  });
+
+  // ── 부팅 시세 갱신 트리거 ──
+  // ⚠️ refreshPrices는 portfoliosRef·activePortfolioIdRef·stockHistoryMapRef처럼 **effect로 동기화되는 ref**를
+  //    동기적으로 읽는다. loadFromDrive 안의 setState는 DefaultLane이라 렌더와 passive effect가 **다음
+  //    매크로태스크들**에서 돌고, 로드 effect의 `await loadFromDrive()` 직후 컨티뉴에이션은 그보다 앞선
+  //    마이크로태스크다 → 거기서 직접 부르면 빈 계좌를 읽어 시세를 한 건도 조회하지 않는다.
+  //    (setTimeout(0)도 passive effect 태스크보다 먼저 발화할 수 있어 신뢰 불가.) 그래서 첫 갱신은
+  //    ref 동기화 effect보다 **뒤에 선언된** 이 effect가 쏘고, 로드 effect는 그 Promise를 받아 기다린다.
+  //    resolve에는 Promise를 직접 넘기지 않는다(넘기면 채택돼 '시작' 신호가 '완료'까지 미뤄진다) — 객체로 감싼다.
+  const [bootRefreshSeq, setBootRefreshSeq] = useState(0);
+  const bootRefreshResolveRef = useRef<((v: { run: Promise<void> }) => void) | null>(null);
+  useEffect(() => {
+    if (bootRefreshSeq === 0) return;
+    const run = refreshPrices();
+    const resolve = bootRefreshResolveRef.current;
+    bootRefreshResolveRef.current = null;
+    resolve?.({ run });
+  }, [bootRefreshSeq]);
+
   // 계좌 탭 전환 시 현재가 자동 갱신, 자동 기록 ref 초기화
   useEffect(() => {
     autoFundHistoryRef.current = null;
     if (!didSwitchPortfolioRef.current) { didSwitchPortfolioRef.current = true; return; }
+    // 부팅 중(applyStateData의 null→복원 id 전환)에는 쏘지 않는다 — 첫 갱신은 위 bootRefreshSeq 트리거
+    // 한 곳이 맡는다(과거엔 여기서 1회 더 나가 KIS 동시 요청이 배가됐다). 사용자 전환은 종전대로.
+    if (isInitialLoad.current) return;
     refreshPrices();
   }, [activePortfolioId]);
 
@@ -3201,6 +3235,18 @@ export default function App() {
       //    Drive엔 기록이 있는데 못 읽은 상태에서 편집을 허용하면 다음 저장이 그 기록을 덮는다.
       setLedgerDataState(syncStatusRef.current === 'error' ? 'error' : 'ready');
 
+      // 오버레이 해제 = '과거값 확정' 이벤트. STATE+MARKET+STOCK이 함께 적용된 이 시점부터 오늘 이전 평가액은
+      // 최종값이다(STOCK-first). 시세 갱신 완료까지 붙들지 않는다 — 그 동안 어느 화면으로든 이동 가능.
+      setIsInitialLoading(false);
+
+      // 시장지표 수집 (백그라운드)
+      fetchMarketIndicators();
+
+      // 전체 계좌 현재가 일괄 갱신 — 아래 부수 로드 5건과 **병행**. ref 동기화 뒤에 쏘도록 effect에 위임한다
+      // (bootRefreshSeq 선언부 주석 참조). 여기서 refreshPrices()를 직접 부르면 빈 계좌를 읽는다.
+      const bootStarted = new Promise<{ run: Promise<void> } | null>(resolve => { bootRefreshResolveRef.current = resolve; });
+      setBootRefreshSeq(s => s + 1);
+
       // dividendTaxHistory는 별도 파일이므로 항상 Drive에서 로드
       try {
         const taxFolderId = driveFolderIdRef.current || await ensureDriveFolder(token);
@@ -3301,23 +3347,17 @@ export default function App() {
         } catch {}
       }
 
-      // 시장지표 수집 (백그라운드)
-      fetchMarketIndicators();
-
-      // 총자산현황으로 이동
-      setShowIntegratedDashboard(true);
-
-      // 전체 계좌 현재가 일괄 갱신
-      await refreshPrices();
-      setIsInitialLoading(false);
+      // ⚠️ 옛 '총자산현황으로 이동'(강제 복귀)은 삭제 — showIntegratedDashboard 초기값이 true라 정상 부팅에선
+      //    no-op이고, 오버레이를 닫고 이동한 사용자만 통합 대시보드로 되돌려 보내던 부작용뿐이었다.
+      // 첫 시세 갱신 완료 대기 — effect가 제때 못 쐈으면(언마운트 등) 직접 쏜다(그때는 렌더가 이미 끝난 지 오래다).
+      const started = await Promise.race([bootStarted, new Promise<null>(r => setTimeout(() => r(null), BOOT_REFRESH_START_TIMEOUT_MS))]);
+      await (started ? started.run : refreshPrices());
 
       // 세션 초기화 (단일 세션 강제 적용)
       initSession();
 
       isInitialLoad.current = false;
-
-      // STOCK 파일 백그라운드 로드 — await 없이 실행 (앱 시작을 막지 않음)
-      loadStockFromDrive(token);
+      // ⚠️ 옛 STOCK 백그라운드 로드는 삭제 — STOCK은 loadFromDrive가 STATE와 함께 로드한다(STOCK-first).
     }, 400);
 
     return () => clearTimeout(bgTimer);
