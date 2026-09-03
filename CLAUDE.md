@@ -653,6 +653,40 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   checkAndSync 배선·부팅 오탐 대조). **변이 8종**(분기 삭제 · 폴백 삭제 · loadStockFromDrive 부활 · opts 미전달 ·
   401 재시도 누락 · compStocks 가드 삭제 · 원격 계좌 기준 복귀 · 부팅까지 preserveView)으로 **실제 검출을 확인**했다.
 
+**Phase 5 — 하루 1회 종료 백업 (2026-09, 사용자 의도 "종료 시점 데이터를 저장 기록으로 복원")**
+
+- **되돌리면 재발하는 사고**: 복구 지점(타임스탬프 백업본)은 수동 저장 버튼(manual 10개)과 화면의 '앱 닫기'
+  버튼(`handleAppClose` → auto)만 만들었다 — 브라우저 X·탭 닫기·새로고침·800ms 자동 저장은 STATE만 덮어써서
+  **하루 종일 편집해도 복구 지점이 하나도 안 생길 수 있었다**(가계부 유실 사고 2026-08-29의 배경).
+  반대로 **탭 숨김·pagehide마다 백업을 내면** auto 상한 초과분이 `cleanupOldBackups`로 **휴지통 없이 영구
+  삭제**돼 어제·그제 복구 지점이 밀려 사라진다 → **하루 1회 · 변경이 있을 때만 · 탭을 숨기는 시점**.
+- **`useDriveSync`**: `lastAutoBackupAtRef`(ms, 초기 0) — 부팅 완료(`isInitialLoad=false`) 직후 App이 비차단으로
+  `seedLastAutoBackupAt()`을 불러 Drive 목록(`listBackups`)의 **`_auto.json` 최신 createdTime**으로 시드(목록
+  실패 시 0 유지 = 오늘 첫 숨김에서 1회 생성). `handleAppClose`의 auto 백업 성공 시에도 `Date.now()`로 갱신
+  (같은 날 이중 생성 방지). ⚠️ 이 시각은 **STATE·localStorage·sessionStorage에 저장하지 않는다** — Drive 목록에서
+  파생(다중 계정 오염 방지, G18).
+- **조건 3종 전부 만족할 때만**(`shouldAutoBackupNow`): ① `!adminViewingAsRef && !adminTransitioningRef`
+  (impersonation 중 금지) ② `kstDateOf(lastAutoBackupAt) < getTodayKST()`(오늘 아직 없음) ③ `portfolioUpdatedAtRef
+  > lastAutoBackupAt`(마지막 백업 뒤 실제 변경). 호출 직전 `lastAutoBackupAtRef = Date.now()`를 **낙관적으로**
+  세운다(같은 날 연속 숨김 중복 방지 — 실패해도 하루치 복구 지점 1회를 놓칠 뿐 데이터 손실은 아니다).
+- **⚠️ 'auto'는 같은 저장 호출에 싣는다**: `handleVisibilityChange` hidden 분기가 `saveAllToDrive(snap, 'auto')`
+  **또는** `saveAllToDrive(snap)` 중 하나만 부른다. 명세의 "기존 저장 뒤 별도 호출"로 쪼개면 두 번째 호출이
+  `syncStatusRef === 'saving'` 락에 걸려 `pendingSaveRef`로 넘어가고, 그 재실행은 versioned 없이 돌아
+  **백업이 조용히 사라진다**(saveAllToDrive 진입부 참조).
+- **`handlePageHide`에는 백업을 넣지 않는다** — 브라우저가 언로드 중 요청을 끊을 수 있어 신뢰 불가. pagehide 앞에
+  hidden이 먼저 발화하므로 위 경로가 그 경우를 덮는다. 종료 저장 게이트(`stateAppliedRef`, Phase 1)와 결합돼
+  **STATE 로드 실패 세션에서는 백업도 생기지 않는다**.
+- **`driveStorage.MAX_BACKUPS` 6 → 10**(auto·change 공통 상한): 하루 1회면 10일치 복구 지점. ⚠️ 상한 초과분은
+  영구 삭제라 줄이는 방향은 위험하다. `DriveBackupModal`(저장 기록 불러오기)은 auto 백업을 이미 목록에 보여 준다
+  — 무수정.
+- **알려진 한계(의도)**: 시드 목록이 실패하고 그날 편집이 없어도 첫 숨김에서 1회 백업이 생길 수 있다(0 시드 →
+  조건 ②③ 통과). 하루 중 여러 번 편집해도 복구 지점은 그날 **첫 숨김 시점 1개**다(그 뒤 편집은 다음 날 백업
+  또는 수동 저장). impersonation 탭은 백업을 만들지 않는다.
+- 검증: `verify:boot` G15~G19c(같은 호출에 'auto'·조건 3종·pagehide 부재·상한 10·브라우저 저장소 부재·시드
+  소스·앱 닫기 갱신·stateAppliedRef 안쪽). **변이 12종**(하루 1회 조건 삭제 · 변경 조건 삭제 · impersonation 금지
+  삭제 · pagehide 백업 추가 · 낙관적 세팅 삭제 · 별도 호출로 쪼갬 · 상한 6 복귀 · localStorage 저장 · 시드 호출
+  삭제 · 앱 닫기 갱신 삭제 · manual까지 시드 · 게이트 밖으로 이동)으로 **실제 검출을 확인**했다.
+
 ### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
 **마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가

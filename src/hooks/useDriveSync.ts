@@ -11,6 +11,7 @@ import { flowMapsHaveContent } from '../flowMap';
 import { backtestScenariosHaveContent } from '../backtest';
 import { ledgerBooksHaveContent, ledgerSnapshotsHaveContent } from '../ledger';
 import { normalizeStockMeta, mergeStockMeta } from '../stockHistorySync';
+import { getTodayKST } from './useMarketCalendar';
 
 // STOCK(종목별 과거 종가 캐시) 하이드레이션 대기 상한(ms).
 // ⚠️ 부팅은 STATE+MARKET+STOCK을 **함께** 적용해 첫 렌더부터 과거 평가액이 최종값이어야 한다(STOCK-first).
@@ -155,6 +156,34 @@ export function useDriveSync({
   //    "Drive를 읽기 전에 빈 상태를 덮어쓰지 않기"뿐이므로, 종료 저장(pagehide·탭 숨김·비활동 로그아웃)은
   //    이 플래그만 본다. 800ms 자동저장·chartPrefs·알림로그·폴링의 isInitialLoad 게이트는 그대로다.
   const stateAppliedRef = useRef(false);
+  // ── 하루 1회 종료 백업 ──
+  // 마지막 auto 백업 시각(ms). 부팅 완료 후 Drive 목록(_auto.json 최신 createdTime)으로 시드하고, 백업을 낼 때
+  // 낙관적으로 Date.now()를 세운다. ⚠️ STATE·localStorage·sessionStorage에 저장하지 않는다 — Drive 목록에서
+  //    파생한다(다중 계정 오염 방지). ⚠️ 탭을 숨길 때마다·pagehide마다 백업을 내지 말 것 — auto 상한 초과분은
+  //    휴지통 없이 영구 삭제(cleanupOldBackups)라 어제·그제 복구 지점이 밀려나 사라진다.
+  const lastAutoBackupAtRef = useRef<number>(0);
+  const kstDateOf = (ms: number) => new Date(ms + 9 * 3600 * 1000).toISOString().slice(0, 10);
+  // 오늘(KST) 아직 auto 백업이 없고, 마지막 백업 뒤 실제 변경(portfolioUpdatedAt)이 있을 때만 true.
+  const shouldAutoBackupNow = () => {
+    if (adminViewingAsRef.current || adminTransitioningRef.current) return false;   // impersonation 중 금지
+    if (kstDateOf(lastAutoBackupAtRef.current) >= getTodayKST()) return false;      // 오늘 이미 냈다
+    return portfolioUpdatedAtRef.current > lastAutoBackupAtRef.current;             // 마지막 백업 뒤 변경 있음
+  };
+  // 부팅 완료 후 1회(비차단) — Drive의 최신 auto 백업 시각으로 시드. 목록 실패 시 0 유지(= 오늘 첫 숨김에서 1회 생성).
+  const seedLastAutoBackupAt = async () => {
+    try {
+      const token = driveTokenRef.current;
+      if (!token || adminViewingAsRef.current) return;
+      const folderId = await ensureDriveFolder(token);
+      const backups = await listBackups(token, folderId);
+      const latest = backups
+        .filter(b => b.name.endsWith('_auto.json'))
+        .map(b => new Date(b.createdTime).getTime())
+        .filter(Number.isFinite)
+        .sort((a, b) => b - a)[0];
+      if (latest && latest > lastAutoBackupAtRef.current) lastAutoBackupAtRef.current = latest;
+    } catch {}
+  };
   const driveSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const portfolioUpdatedAtRef = useRef<number>(0);
   const prevPortfolioStructureRef = useRef<string>('');
@@ -769,7 +798,15 @@ export function useDriveSync({
         const snap = snapForExit();
         if (snap && snap.portfolios?.length > 0 && driveTokenRef.current && stateAppliedRef.current) {
           if (driveSaveTimerRef.current) clearTimeout(driveSaveTimerRef.current);
-          saveAllToDrive(snap);
+          // 하루 1회 종료 백업 — 조건을 만족하면 **같은 저장 호출**에 'auto'를 실어 복구 지점을 만든다(별도 호출로 쪼개면
+          // 두 번째 호출이 'saving' 락에 걸려 pendingSaveRef로 넘어가며 versioned가 사라진다). 시각은 낙관적으로 먼저
+          // 세운다 — 같은 날 연속 숨김의 중복 방지. 실패해도 하루치 복구 지점 1회를 놓칠 뿐 데이터 손실은 아니다.
+          if (shouldAutoBackupNow()) {
+            lastAutoBackupAtRef.current = Date.now();
+            saveAllToDrive(snap, 'auto');
+          } else {
+            saveAllToDrive(snap);
+          }
         }
         return;
       }
@@ -922,5 +959,7 @@ export function useDriveSync({
     handleImportStateFile,
     handleAutoBackupWithMemo,
     initSession,
+    seedLastAutoBackupAt,
+    lastAutoBackupAtRef,
   };
 }

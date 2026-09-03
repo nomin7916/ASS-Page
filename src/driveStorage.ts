@@ -6,7 +6,9 @@ const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 
 const BACKUP_PREFIX = 'portfolio_backup_';
-export const MAX_BACKUPS = 6;
+// auto·change 백업 상한. 하루 1회 종료 백업 도입(useDriveSync 탭 숨김 경로)으로 6 → 10으로 확대 — 하루 1회면
+// 10일치 복구 지점이 된다. ⚠️ cleanupOldBackups는 상한 초과분을 **휴지통 없이 영구 삭제**하므로 줄이는 방향은 위험하다.
+export const MAX_BACKUPS = 10;
 export const MAX_MANUAL_BACKUPS = 10;
 
 export interface DriveBackupEntry {

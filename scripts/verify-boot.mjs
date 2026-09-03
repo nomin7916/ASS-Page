@@ -504,6 +504,32 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     cas.length > 300 && /await loadFromDrive\(driveTokenRef\.current, false, false, \{ preserveView: true \}\);/.test(cas) && !/loadStockFromDrive\(/.test(cas));
   ok('G11f (오탐 대조) 부팅 로드는 opts 없이 저장된 활성 계좌로 복원한다', /await loadFromDrive\(token, true\);/.test(app));
 
+  // ── G15~G19 하루 1회 종료 백업(Phase 5) ──
+  const visP5 = slice(ds, 'const handleVisibilityChange = () => {', 'const handlePageHide = () => {');
+  ok("G15 탭 숨김 분기: shouldAutoBackupNow()면 같은 저장 호출에 'auto'를 싣고, 그 직전에 시각을 낙관적으로 세운다",
+    visP5.length > 100 && /if \(shouldAutoBackupNow\(\)\) \{\s*lastAutoBackupAtRef\.current = Date\.now\(\);\s*saveAllToDrive\(snap, 'auto'\);\s*\} else \{\s*saveAllToDrive\(snap\);\s*\}/.test(visP5));
+  const sab = slice(ds, 'const shouldAutoBackupNow = () => {', 'const seedLastAutoBackupAt = async');
+  ok('G15b 조건 3종 — impersonation 금지 · 오늘(KST) 미백업 · 마지막 백업 뒤 변경(portfolioUpdatedAt) 있음',
+    sab.length > 100 && /adminViewingAsRef\.current \|\| adminTransitioningRef\.current\) return false;/.test(sab)
+    && /kstDateOf\(lastAutoBackupAtRef\.current\) >= getTodayKST\(\)\) return false;/.test(sab)
+    && /return portfolioUpdatedAtRef\.current > lastAutoBackupAtRef\.current;/.test(sab));
+  const phP5 = slice(ds, 'const handlePageHide = () => {', "document.addEventListener('visibilitychange'");
+  ok("G16 pagehide 구간에 'auto' 백업이 없다(브라우저가 요청을 끊을 수 있어 신뢰 불가 — hidden이 먼저 발화해 덮는다)",
+    phP5.length > 50 && !/'auto'/.test(phP5) && /saveAllToDrive\(snap\);/.test(phP5));
+  ok('G17 driveStorage MAX_BACKUPS = 10 (하루 1회 백업 → 10일치 복구 지점)', /export const MAX_BACKUPS = 10;/.test(read('src/driveStorage.ts')));
+  ok('G18 백업 시각을 브라우저 저장소·STATE에 쓰지 않는다(ref + Drive 목록 파생)',
+    /const lastAutoBackupAtRef = useRef<number>\(0\);/.test(ds)
+    && !/(localStorage|sessionStorage)\.setItem\([^)]*[Bb]ackup/.test(ds + app)
+    && !/lastAutoBackupAt(?!Ref)/.test(stripComments(app)) && !/lastAutoBackupAt:/.test(ds + app));
+  const seed = slice(ds, 'const seedLastAutoBackupAt = async', 'const ensureDriveFolder = async');
+  ok('G19 시드는 listBackups의 _auto.json 최신 createdTime이고 App이 부팅 완료(isInitialLoad 해제) 직후 부른다',
+    seed.length > 100 && /listBackups\(token, folderId\)/.test(seed) && /endsWith\('_auto\.json'\)/.test(seed)
+    && /isInitialLoad\.current = false;\s*seedLastAutoBackupAt\(\);/.test(app));
+  ok("G19b handleAppClose의 auto 백업 성공 시 lastAutoBackupAtRef를 갱신한다(같은 날 이중 생성 방지)",
+    /await saveVersionedBackup\(token, folderId, stateCore, 'auto'\);\s*lastAutoBackupAtRef\.current = Date\.now\(\);/.test(app));
+  ok('G19c 종료 백업 게이트는 stateAppliedRef 안쪽이다(STATE 로드 실패 세션은 백업도 없다)',
+    visP5.indexOf('stateAppliedRef.current') > 0 && visP5.indexOf('stateAppliedRef.current') < visP5.indexOf('shouldAutoBackupNow()'));
+
   // ── G12 표시 계층 무수정 보조 증거: buildCloseEvalSeries 시그니처 문자 일치 ──
   const utils = read('src/utils.ts');
   const SIG = `export const buildCloseEvalSeries = (

@@ -618,7 +618,7 @@ export default function App() {
     ensureDriveFolder, loadFromDrive, loadStockFromDrive, saveAllToDrive, requestDriveToken,
     initTokenClient, checkAndSyncFromDrive,
     handleDriveLoadOnly, handleOpenBackupModal, handleApplyBackup, handleImportStateFile,
-    initSession,
+    initSession, seedLastAutoBackupAt, lastAutoBackupAtRef,
   } = useDriveSync({
     authUser,
     applyStateData: (...args) => applyStateDataRef.current?.(...args),
@@ -3191,6 +3191,7 @@ export default function App() {
           const folderId = await ensureDriveFolder(token);
           await saveDriveFile(token, folderId, DRIVE_FILES.STATE, stateCore);
           await saveVersionedBackup(token, folderId, stateCore, 'auto');
+          lastAutoBackupAtRef.current = Date.now();   // 같은 날 탭 숨김이 auto 백업을 한 번 더 내지 않게
         } catch {}
       })();
       await Promise.all([minWait, savePromise]);
@@ -3380,6 +3381,8 @@ export default function App() {
       initSession();
 
       isInitialLoad.current = false;
+      // 하루 1회 종료 백업의 기준 시각 시드(비차단) — Drive 목록의 최신 auto 백업 createdTime.
+      seedLastAutoBackupAt();
       // ⚠️ 옛 STOCK 백그라운드 로드는 삭제 — STOCK은 loadFromDrive가 STATE와 함께 로드한다(STOCK-first).
     }, 400);
 
