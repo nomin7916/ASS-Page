@@ -247,11 +247,15 @@ export default function KrEtfTaxMatrix({
     return [...withAvg, ...invalid.map(evt => ({ evt, runningAvg: 0, runningQty: 0, runningBuyAvg: 0, buyAvgTrusted: false }))];
   };
 
-  // 앵커 날짜 = 그 종목·그 달의 배당락일(없으면 말일). ⚠️ 저장 시 박제되므로 나중에 배당락일
-  //    입력이 바뀌어도 이미 확정한 앵커는 흔들리지 않는다.
+  // 앵커 날짜 = 그 종목·그 달의 **실제 배당락일**. 없으면 빈 문자열 → 조정을 적용하지 않는다.
+  // ⚠️ 말일로 폴백하지 말 것 — 앵커는 같은 날짜 매매보다 먼저 적용되므로, 말일 앵커는 그 달
+  //    배당락일 이후~말일 사이의 매수를 **가중평균에서 통째로 소각**한다(실측: 8/20 매수
+  //    2,000주@10,500이 반영되지 않아 9월 예상 과세가 ₩1,106,558 과대). 배당락일은 분배금 표
+  //    새로고침으로 채워지므로, 없으면 그때까지 기다리는 편이 틀린 앵커를 박는 것보다 낫다.
+  // ⚠️ 저장 시 박제되므로 나중에 배당락일 입력이 바뀌어도 확정한 앵커는 흔들리지 않는다.
   const exDateOf = (code, ym) => {
     const d = portfolio?.dividendExDate?.[code]?.[ym];
-    return ISO_DATE.test(String(d || '')) ? String(d) : monthEndOfYm(ym);
+    return ISO_DATE.test(String(d || '')) ? String(d) : '';
   };
 
   const stockRows = krStocks.map(stock => {
@@ -410,7 +414,12 @@ export default function KrEtfTaxMatrix({
       //    낸다. 화면 수량(이벤트 누적)과 관측 수량(실제 배당 지급 대상)이 다를 수 있어, 화면
       //    기준으로 재면 조정을 적용해 평균 과표가 정확해진 뒤에도 수량 차이 때문에 제안이
       //    영원히 꺼지지 않는다.
-      const suggest = obs
+      // ⚠️ 두 전제가 모두 있어야 역산한다. 하나라도 없으면 **계산하지 않고 사유를 표시**한다
+      //    (조용한 오적용보다 명시적 미적용):
+      //    ① 수량 신뢰(세후 분배금 또는 직접 지정) — 없으면 수량이 수십 분의 1로 줄어든다
+      //    ② 실제 배당락일 — 없으면 앵커 날짜를 정할 수 없다(말일 폴백은 그 달 매수를 소각)
+      const anchorDate = exDateOf(stock.code, ym);
+      const suggest = (obs && obs.qtyTrusted && anchorDate)
         ? avgTaxBaseAdjNeeded({ exTaxBase: exNum, avgTaxBase: avgNum, taxAmount: obs.taxAmount, qty: obs.qty })
         : null;
       // 이미 그 값으로 조정돼 있으면(값이 같으면) 다시 제안하지 않는다.
@@ -419,11 +428,14 @@ export default function KrEtfTaxMatrix({
         && !(adjApplied && Math.abs(safeNum(adj.value) - suggest.value) < 0.005);
       return {
         ym, exVal, manualAvgVal, computedAvgVal, avgVal, exNum, avgNum, taxBasePerShare, expected, monthQty,
-        adj, adjApplied, obs, suggest, showSuggest,
+        adj, adjApplied, obs, suggest, showSuggest, anchorDate,
+        // ⚠️ 수동 평균 과표는 자동값(앵커 반영)보다 우선하므로, 그대로 두면 조정을 적용해도
+        //    화면 값이 1원도 바뀌지 않는데 배지만 '조정됨'이 된다 → 적용 시 함께 지운다.
+        manualBlocks: manualAvgVal !== undefined,
       };
     });
     const annualExpected = monthData.reduce((s, d) => s + d.expected, 0);
-    return { stock, events, sortedEventsWithAvg, buySummary, sellSummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected };
+    return { stock, events, sortedEventsWithAvg, buySummary, sellSummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected, avgTaxBaseAdj };
   });
 
   const monthlyExpected = monthYms.map((_, i) =>
@@ -500,7 +512,7 @@ export default function KrEtfTaxMatrix({
           </tr>
         </thead>
         <tbody>
-          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, sellSummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected }) => {
+          {stockRows.map(({ stock, events, sortedEventsWithAvg, buySummary, sellSummary, avgBuy, purchases, sales, currentQty, curPrice, monthData, annualExpected, avgTaxBaseAdj }) => {
             const isExpanded = expandedCode === stock.code;
             return (
               <React.Fragment key={stock.code}>
@@ -607,28 +619,53 @@ export default function KrEtfTaxMatrix({
                             title={avgAdjTooltip({
                               kind: d.adj.kind, value: safeNum(d.adj.value), exTaxBase: safeNum(d.adj.exTaxBase ?? d.exNum),
                               taxAmount: safeNum(d.adj.taxAmount), qty: safeNum(d.adj.qty), exDate: d.adj.exDate,
-                              prevAvg: safeNum(d.adj.prevAvg), applied: true, at: d.adj.at,
+                              prevAvg: safeNum(d.adj.prevAvg), applied: true, at: d.adj.at, qtySource: d.adj.qtySource,
+                              screenQty: d.monthQty,
                             }) + '\n\n(클릭하면 조정을 해제하고 매매 이벤트 기준으로 되돌립니다)'}
                             className="w-full text-[8px] text-amber-300/90 hover:text-amber-200 text-right px-0.5 block leading-tight"
                           >⚑ 조정됨 {d.adj.kind === 'lowerBound' ? '(하한)' : ''}</button>
                         )}
+                        {d.obs && d.obs.qtyTrusted && !d.anchorDate && !d.adjApplied && (
+                          <div
+                            className="text-[8px] text-gray-500 text-right px-0.5 leading-tight"
+                            title={'실제 과세 ' + formatCurrency(d.obs.taxAmount) + '이 입력돼 있지만 이 달의 배당락일을 몰라 조정 기준일을 정할 수 없습니다.\n\n분배금 현황 표에서 새로고침하면 배당락일이 채워집니다.\n(말일로 대신하면 배당락일 이후 매수가 평균 과표에서 소각되어 더 큰 오차가 납니다)'}
+                          >실제 과세 {formatCurrency(d.obs.taxAmount)}<br />· 배당락일 필요</div>
+                        )}
+                        {d.obs && !d.obs.qtyTrusted && !d.adjApplied && (
+                          <div
+                            className="text-[8px] text-gray-500 text-right px-0.5 leading-tight"
+                            title={'실제 과세 ' + formatCurrency(d.obs.taxAmount) + '이 입력돼 있지만 과세 대상 주식수를 알 수 없어 평균 과표를 역산하지 않았습니다.\n\n월 입금 내역에서 세후 분배금을 함께 입력하거나, 수량 칸에 주식수를 직접 지정하면 조정값이 계산됩니다.\n(세후 금액이 비어 있으면 세전 = 과세금뿐이라 수량이 실제의 수십 분의 1로 역산됩니다)'}
+                          >실제 과세 {formatCurrency(d.obs.taxAmount)}<br />· 수량 확인 필요</div>
+                        )}
                         {d.showSuggest && (
                           <button
-                            onClick={() => updateTaxBaseAvgAdj && updateTaxBaseAvgAdj(portfolio.id, stock.code, d.ym, {
-                              value: d.suggest.value,
-                              kind: d.suggest.kind,
-                              exTaxBase: d.exNum,
-                              taxAmount: d.obs.taxAmount,
-                              qty: d.obs.qty,
-                              exDate: exDateOf(stock.code, d.ym),
-                              prevAvg: d.avgNum,
-                              at: getTodayKST(),
-                            })}
+                            onClick={() => {
+                              if (!updateTaxBaseAvgAdj) return;
+                              // ⚠️ 수동 평균 과표가 있으면 자동값을 덮으므로 함께 지운다 —
+                              //    안 지우면 적용해도 화면이 그대로인데 배지만 바뀐다.
+                              if (d.manualBlocks) updateTaxBaseAvgPrice(portfolio.id, stock.code, d.ym, null);
+                              updateTaxBaseAvgAdj(portfolio.id, stock.code, d.ym, {
+                                value: d.suggest.value,
+                                kind: d.suggest.kind,
+                                exTaxBase: d.exNum,
+                                taxAmount: d.obs.taxAmount,
+                                qty: d.obs.qty,
+                                exDate: d.anchorDate,
+                                prevAvg: d.avgNum,
+                                qtySource: d.obs.qtyIsManual ? 'manual' : 'derived',
+                                at: getTodayKST(),
+                              });
+                            }}
                             title={avgAdjTooltip({
                               kind: d.suggest.kind, value: d.suggest.value, exTaxBase: d.exNum,
-                              taxAmount: d.obs.taxAmount, qty: d.obs.qty, exDate: exDateOf(stock.code, d.ym),
-                              prevAvg: d.avgNum, applied: false,
-                            }) + '\n\n(클릭하면 이 값으로 평균 과표를 조정합니다)'}
+                              taxAmount: d.obs.taxAmount, qty: d.obs.qty, exDate: d.anchorDate,
+                              prevAvg: d.avgNum, applied: false, qtySource: d.obs.qtyIsManual ? 'manual' : 'derived',
+                              screenQty: d.monthQty,
+                            })
+                              + (d.manualBlocks
+                                ? '\n\n⚠ 이 달에 직접 입력한 평균 과표(' + fmtTaxBase(d.avgNum) + ')가 있습니다.\n   적용하면 그 값은 지워지고 조정값이 대신 쓰입니다.'
+                                : '')
+                              + '\n\n(클릭하면 이 값으로 평균 과표를 조정합니다)'}
                             className="w-full text-[8px] text-amber-400 hover:text-amber-300 text-right px-0.5 block leading-tight border border-amber-600/40 rounded hover:border-amber-500/70"
                           >
                             실제 과세 {formatCurrency(d.obs.taxAmount)}
@@ -1133,6 +1170,33 @@ ${lotsDetailText(basis.lots)}` : ''}${basis.shortfallQty > 0 ? `
                               실현손익 = <span className="text-rose-300/60">최저가 우선 매칭</span> · 분석용(세법상 이동평균법 아님)
                             </span>
                           </button>
+                        {/* 적용된 평균 과표 조정 — ⚠️ **연도 무관 전체**를 나열한다.
+                            월 셀의 '⚑ 조정됨' 해제 버튼은 올해 12개월 그리드 안에만 있어서,
+                            해가 바뀌거나 전년 12월 배당락월(1월 지급분)이면 앵커는 계속 작동하는데
+                            해제할 방법이 화면에서 사라진다(그때 남는 수단은 종목의 과표 기록을
+                            통째로 지우는 것뿐이었다). 여기가 그 유일한 탈출구다. */}
+                        {Object.keys(avgTaxBaseAdj || {}).length > 0 && (
+                          <div className="px-3 py-1.5 border-t border-gray-800 flex items-start gap-2 flex-wrap">
+                            <span className="text-[9px] text-amber-400/80 font-medium shrink-0">⚑ 적용된 평균 과표 조정</span>
+                            {Object.entries(avgTaxBaseAdj)
+                              .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+                              .map(([ym, a]) => (
+                                <button
+                                  key={ym}
+                                  onClick={() => updateTaxBaseAvgAdj && updateTaxBaseAvgAdj(portfolio.id, stock.code, ym, null)}
+                                  title={avgAdjTooltip({
+                                    kind: a?.kind, value: safeNum(a?.value), exTaxBase: safeNum(a?.exTaxBase),
+                                    taxAmount: safeNum(a?.taxAmount), qty: safeNum(a?.qty), exDate: a?.exDate,
+                                    prevAvg: safeNum(a?.prevAvg), applied: true, at: a?.at, qtySource: a?.qtySource,
+                                  }) + '\n\n(클릭하면 이 조정을 해제하고 매매 이벤트 기준으로 되돌립니다)'}
+                                  className="text-[9px] px-1.5 py-0.5 rounded border border-amber-600/40 text-amber-300/90 hover:text-amber-200 hover:border-amber-500/70 tabular-nums inline-flex items-center gap-1"
+                                >
+                                  {ym} · {a?.kind === 'lowerBound' ? '≥' : ''}{fmtTaxBase(safeNum(a?.value))}
+                                  <span className="text-gray-600">✕</span>
+                                </button>
+                              ))}
+                          </div>
+                        )}
                         {showTaxHelp && (
                         <div className="px-3 pb-2 text-[9px] text-gray-600">
                           일자 선택 시 자산검증 전일 수량 자동 조회 &nbsp;·&nbsp; 매수=양수 / 매도=음수 &nbsp;·&nbsp; 평균 과표는 이벤트 순서로 자동 계산되어 위 표에 반영됨

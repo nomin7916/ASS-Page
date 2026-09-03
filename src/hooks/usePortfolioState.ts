@@ -502,8 +502,12 @@ export function usePortfolioState({
       if (p.id !== portfolioId) return p;
       const existing = p.dividendTaxAmounts || {};
       const codeData = { ...(existing[code] || {}) };
-      if (amount > 0) codeData[yearMonth] = amount;
-      else delete codeData[yearMonth];
+      // ⚠️ **0을 저장한다** — '미입력'과 '원천징수 0원(비과세 확인)'은 다른 사건이다. 과거엔
+      //    `amount > 0`만 저장해 0이 곧 삭제였고, 그래서 평균 과표 조정의 '과세 0원 = 하한'
+      //    경로가 도달 불가한 죽은 코드였다(적대적 리뷰 2렌즈 독립 확인).
+      //    빈칸(null)만 삭제하고, 음수·비유한값은 무효 입력이라 삭제한다.
+      if (amount == null || !Number.isFinite(amount) || amount < 0) delete codeData[yearMonth];
+      else codeData[yearMonth] = amount;
       return { ...p, dividendTaxAmounts: { ...existing, [code]: codeData } };
     }));
   };

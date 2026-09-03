@@ -1151,7 +1151,8 @@ function resolveActualTaxObservation(portfolio, code, ym) {
   const gross = afterTax + tax;
   const calcQty = (perShare > 0 && gross > 0) ? Math.round(gross / perShare) : 0;
   const qty = manualQty > 0 ? manualQty : calcQty;
-  return { taxAmount: tax, afterTax, gross, perShare, qty, qtyIsManual: manualQty > 0, calcQty };
+  const qtyTrusted = manualQty > 0 || afterTax > 0;
+  return { taxAmount: tax, afterTax, gross, perShare, qty, qtyIsManual: manualQty > 0, calcQty, qtyTrusted };
 }
 
 // ─── §14 평균 과표 조정 — 실제 과세금 역산 ──────────────────────────────────
@@ -1281,6 +1282,46 @@ it('#171 ⚠️ 과세금 미입력이면 관측이 없다 — 가짜 하한 앵
   ok(resolveActualTaxObservation(pf, 'A', '2026-09') === null, '과세금 없음 → null');
   const pf0 = { ...pf, dividendTaxAmounts: { A: { '2026-09': 0 } } };
   expectEq(resolveActualTaxObservation(pf0, 'A', '2026-09').taxAmount, 0, '0원은 관측');
+});
+
+it('#173 ⚠️ 세후 분배금 없이 과세금만 입력되면 수량을 믿지 않는다 (실측 오차 138원/주)', () => {
+  // gross = 세후 + 세금 인데 세후가 비면 gross가 세금뿐이라 수량이 수십 분의 1로 줄어든다.
+  // 그대로 역산하면 '실제 과세 기준'이라며 틀린 평균 과표를 확정 제시하고, 그 앵커가 이후
+  // 전 구간을 오염시킨다(1만주 기준 월 144만원 규모).
+  const base = { dividendTaxAmounts: { A: { '2026-09': 56050 } }, dividendHistory: { A: { '2026-09': 144 } } };
+  const bad = resolveActualTaxObservation(base, 'A', '2026-09');
+  expectEq(bad.qtyTrusted, false, '세후 미입력 → 신뢰 불가');
+  expectEq(bad.qty, 389, '역산 수량이 실제(10,401)의 1/27로 줄어든다');
+  // 그 수량으로 역산하면 참값 9,946.72 대신 9,808 대가 나온다 — 이 값이 화면에 뜨면 안 된다.
+  const wrong = solveAvgTaxBaseFromTax({ exTaxBase: 9952.11, taxAmount: bad.taxAmount, qty: bad.qty });
+  ok(Math.abs(wrong.value - 9946.7211) > 100, '오차가 100원/주를 넘는다(방치 시 피해 규모)');
+
+  // 세후를 넣으면 신뢰 가능해진다.
+  const good = resolveActualTaxObservation({ ...base, actualDividend: { A: { '2026-09': 1441694 } } }, 'A', '2026-09');
+  expectEq(good.qtyTrusted, true, '세후 입력 → 신뢰');
+  expectEq(good.qty, 10401, '정상 수량');
+});
+
+it('#174 수량을 직접 지정하면 세후가 없어도 신뢰한다 (gross와 무관한 경로)', () => {
+  const pf = {
+    dividendTaxAmounts: { A: { '2026-09': 56050 } },
+    dividendHistory: { A: { '2026-09': 144 } },
+    actualDividendQty: { A: { '2026-09': 10401 } },
+  };
+  const o = resolveActualTaxObservation(pf, 'A', '2026-09');
+  expectEq(o.qtyTrusted, true, '수동 수량은 신뢰');
+  expectEq(o.qty, 10401, '수동 수량 채택');
+  expectApprox(solveAvgTaxBaseFromTax({ exTaxBase: 9952.11, taxAmount: o.taxAmount, qty: o.qty }).value,
+    9946.7211, 0.001, '정상 역산');
+});
+
+it('#175 과세 0원은 수량과 무관하게 하한이 성립한다 (신뢰 불가여도 값은 배당과표)', () => {
+  // 과세 0의 하한은 배당 과표 자체라 수량이 분모로 들어가지 않는다 — 다만 관측 신뢰도는
+  // 여전히 false라 소비자가 제안하지 않는다(일관성).
+  const pf = { dividendTaxAmounts: { A: { '2026-09': 0 } }, dividendHistory: { A: { '2026-09': 144 } } };
+  const o = resolveActualTaxObservation(pf, 'A', '2026-09');
+  expectEq(o.taxAmount, 0, '0원 관측');
+  expectEq(o.qtyTrusted, false, '세후·수동 수량 모두 없음 → 신뢰 불가');
 });
 
 it('#172 조정 적용 후에는 제안이 꺼진다 (관측 수량 기준 판정이라 수렴)', () => {
@@ -1582,13 +1623,13 @@ it('#G21 과표 계산 셀 — 조정 적용 버튼과 해제 배지가 실제�
   ok(/kind: d\.suggest\.kind/.test(apply), 'kind 저장');
   ok(/taxAmount: d\.obs\.taxAmount/.test(apply), '근거 과세금');
   ok(/qty: d\.obs\.qty/.test(apply), '근거 수량');
-  ok(/exDate: exDateOf\(stock\.code, d\.ym\)/.test(apply), '앵커 날짜 박제');
+  ok(/exDate: d\.anchorDate/.test(apply), '앵커 날짜 박제');
   // 해제 경로(null)가 살아 있어야 되돌릴 수 있다.
   ok(/updateTaxBaseAvgAdj\(portfolio\.id, stock\.code, d\.ym, null\)/.test(MX), '해제 경로');
 });
 
 it('#G22 월 입금 내역 셀 — 역산 평균 과표가 렌더되고 공유 함수로 산출된다', () => {
-  ok(/const avgAdj = resolveAvgAdjState\(pf, item\.code, dom\.exYm\);/.test(DST), '공유 함수 호출');
+  ok(/const avgAdjRaw = compact \? null : resolveAvgAdjState\(pf, item\.code, dom\.exYm\);/.test(DST), '공유 함수 호출');
   ok(/d\.avgAdj && \(d\.avgAdj\.showSuggest \|\| d\.avgAdj\.applied\)/.test(DST), '셀 게이트 사용부');
   ok(/d\.avgAdj\.suggest\.value/.test(DST), '역산값 렌더');
   // ⚠️ 산식 손복제 금지 — 두 화면이 다른 값을 제시하면 안 된다.
@@ -1606,6 +1647,83 @@ it('#G24 미러 드리프트 — solveAvgTaxBaseFromTax 본문이 src와 문자 
   const srcFn = normFn(sliceBlock(HL, 'export function solveAvgTaxBaseFromTax(', '\n}'));
   const mirFn = normFn(sliceBlock(SELF, 'function solveAvgTaxBaseFromTax(', '\n}'));
   expectEq(mirFn, srcFn, 'solveAvgTaxBaseFromTax 드리프트');
+});
+
+it('#G28 ⚠️ 확장 행의 조정 목록이 구조분해된 스코프에서 avgTaxBaseAdj를 읽는다', () => {
+  // ⚠️ 이 부류는 **빌드도 undefcheck도 scopecheck도 통과시킨다**(@ts-nocheck + esbuild).
+  //    stockRows.map 구조분해에서 빠지면 렌더 중 ReferenceError로 과표 계산 탭이 통째로
+  //    오류 화면이 된다 — initTradeRest 프로덕션 장애와 정확히 같은 패턴이다.
+  const destr = MX.indexOf('annualExpected, avgTaxBaseAdj })');
+  const use = MX.indexOf('Object.keys(avgTaxBaseAdj || {}).length > 0');
+  ok(destr > 0, 'stockRows.map 구조분해에 avgTaxBaseAdj가 있다');
+  ok(use > destr, '조정 목록 사용부가 그 구조분해 뒤에 있다');
+  // stockRows 반환에도 실려 있어야 구조분해가 값을 받는다.
+  ok(/monthData, annualExpected, avgTaxBaseAdj \};/.test(MX), 'stockRows 반환에 포함');
+});
+
+it('#G29 ⚠️ 배당락일이 없으면 앵커를 만들지 않는다 (말일 폴백은 그 달 매수를 소각)', () => {
+  // 앵커는 같은 날짜 매매보다 먼저 적용되므로, 말일 앵커는 배당락일~말일 사이 매수를
+  //    가중평균에서 통째로 버린다(실측 9월 예상 과세 ₩1,106,558 과대).
+  const blk = sliceBlock(MX, 'const exDateOf = (code, ym) =>', '\n  };');
+  ok(/: ''/.test(blk), '폴백이 빈 문자열');
+  ok(!/monthEndOfYm\(ym\)/.test(blk), '말일 폴백 없음');
+  ok(/&& anchorDate\)/.test(MX), '앵커 날짜가 제안 게이트에 포함');
+  ok(/배당락일 필요/.test(MX), '미적용 사유 안내');
+});
+
+it('#G30 ⚠️ 적용 시 수동 평균 과표를 함께 지운다 (안 지우면 화면이 안 바뀌는데 배지만 바뀜)', () => {
+  ok(/manualBlocks: manualAvgVal !== undefined/.test(MX), 'manualBlocks 산출');
+  ok(/if \(d\.manualBlocks\) updateTaxBaseAvgPrice\(portfolio\.id, stock\.code, d\.ym, null\);/.test(MX), '수동값 제거');
+  ok(/직접 입력한 평균 과표/.test(MX), '툴팁 사전 고지');
+});
+
+it('#G31 ⚠️ 적용된 조정의 해제 경로가 연도 무관하게 존재한다', () => {
+  // 월 셀의 해제 버튼은 올해 12개월 그리드 안에만 있다 — 해가 바뀌거나 전년 12월
+  //    배당락월이면 앵커는 계속 작동하는데 해제할 방법이 사라진다.
+  ok(/⚑ 적용된 평균 과표 조정/.test(MX), '조정 목록 렌더');
+  ok(/updateTaxBaseAvgAdj\(portfolio\.id, stock\.code, ym, null\)/.test(MX), '목록에서 해제');
+  // 전년 배당락월은 적용 UI가 없으므로 제안을 띄우지 않는다(갈 곳 없는 안내 방지).
+  ok(/!String\(dom\.exYm\)\.startsWith\(CURRENT_YEAR\)/.test(DST), '전년 ym 제안 억제');
+});
+
+it('#G32 ⚠️ 과세금 0이 저장된다 — 없으면 하한(비과세) 경로가 죽은 코드가 된다', () => {
+  const blk = sliceBlock(UPS, 'const updatePortfolioDividendTaxAmount =', '\n  };');
+  ok(/amount == null \|\| !Number\.isFinite\(amount\) \|\| amount < 0/.test(blk), '미입력·무효만 삭제');
+  ok(!/if \(amount > 0\) codeData\[yearMonth\] = amount;/.test(blk), '옛 0-삭제 로직 없음');
+  // 빈칸을 0으로 넘기면 손대지 않은 셀이 전부 비과세로 확정된다 → 국내·해외 둘 다 null.
+  const commits = DST.match(/const taxNum = taxRaw === '' \? null :/g) || [];
+  ok(commits.length === 2, '국내·해외 commitEdit 모두 빈칸을 null 로 (현재 ' + commits.length + ')');
+});
+
+it('#G33 월말 경계는 그리드와 앵커 폴백이 같은 함수를 쓴다 (KST 하루 어긋남 방지)', () => {
+  // Date.UTC로 조립하면 폴백이 그리드 경계보다 하루 뒤가 되어 그 달에 반영되지 않는다.
+  ok(!/new Date\(Date\.UTC\(y, m, 0\)\)/.test(HL), 'monthEndOfYm이 UTC 조립을 쓰지 않는다');
+  const grid = (HL.match(/const lastDay = monthEndOfYm\(ym\);/g) || []).length;
+  ok(grid === 2, '두 그리드 함수가 공유 헬퍼를 쓴다 (현재 ' + grid + ')');
+});
+
+it('#G25b 미러 드리프트 — resolveActualTaxObservation 본문이 src와 같다', () => {
+  // ⚠️ 이 함수는 한때 드리프트 가드 사각지대였다 — src에 qtyTrusted를 넣고 미러를 잊어도
+  //    118건이 그대로 통과했다(#170·#171은 미러만 보므로 src 변경을 못 본다).
+  const a = normFn(sliceBlock(HL, 'export function resolveActualTaxObservation(', '\n}'));
+  const b = normFn(sliceBlock(SELF, 'function resolveActualTaxObservation(', '\n}'));
+  expectEq(b, a, 'resolveActualTaxObservation 드리프트');
+});
+
+it('#G26 수량 신뢰 게이트가 두 소비자에 모두 걸려 있다', () => {
+  // ⚠️ 한쪽만 걸면 그 화면에서만 틀린 값이 확정 제시된다.
+  ok(/\(obs && obs\.qtyTrusted && anchorDate\)/.test(MX), '과표 계산 탭 게이트');
+  ok(/if \(!obs\.qtyTrusted\) \{/.test(HL), 'resolveAvgAdjState 게이트');
+  // 명시적 미적용 — 사유를 화면에 남긴다(조용히 사라지면 사용자가 원인을 모른다).
+  ok(/수량 확인 필요/.test(MX), '미적용 사유 안내');
+});
+
+it('#G27 suggest가 null일 수 있는 경로에서 툴팁·배지가 저장값으로 폴백한다', () => {
+  // ⚠️ 수량 신뢰 불가 + 이미 적용된 조정이 있으면 suggest는 null이고 adj만 남는다.
+  //    d.avgAdj.suggest.kind 를 무방비로 읽으면 렌더 중 TypeError로 표가 통째로 죽는다.
+  ok(/d\.avgAdj\.showSuggest \? d\.avgAdj\.suggest\.kind : d\.avgAdj\.adj\?\.kind/.test(DST), '툴팁 kind 폴백');
+  ok(/d\.avgAdj\.showSuggest && d\.avgAdj\.suggest\.kind === 'lowerBound'/.test(DST), '배지 kind 가드');
+  ok(!/\{d\.avgAdj\.suggest\.kind === 'lowerBound' && d\.avgAdj\.showSuggest/.test(DST), '무방비 접근 없음');
 });
 
 it('#G25 미러 드리프트 — buildAvgTaxAnchors·avgTaxBaseAdjNeeded 본문이 src와 같다', () => {

@@ -560,7 +560,17 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
             //    산식을 손복제하면 같은 달에 두 화면이 다른 값을 제시한다.
             // ⚠️ 키는 지배 소스의 배당락월(dom.exYm)이다. 한 지급월에 2건이 합산된 셀이어도
             //    조정은 그 exYm 하나의 저장값(배당과표·과세금)만 보므로 합산과 무관하게 정확하다.
-            const avgAdj = resolveAvgAdjState(pf, item.code, dom.exYm);
+            // ⚠️ 과표 계산 탭 그리드는 **올해 12개월만** 그리므로, 전년 배당락월(직전연도 12월
+            //    배당락 → 올해 1월 지급분)은 적용 버튼이 화면에 존재하지 않는다. 그런데도 제안을
+            //    띄우면 "적용은 과표 계산 탭에서" 안내가 갈 곳 없는 거짓말이 된다 → 제안은 끄고,
+            //    이미 적용된 조정의 배지만 남긴다(해제는 계산기 확장 행의 조정 목록에서).
+            // ⚠️ 통합(compact) 뷰는 조정 UI를 렌더하지 않는데도 이 memo는 계좌×종목×12개월 전부
+            //    돌아간다 — resolveAvgAdjState는 과세금이 입력된 달에서 전체 이벤트 스냅샷을
+            //    만들므로, 안 쓸 결과를 위해 그 비용을 치를 이유가 없다.
+            const avgAdjRaw = compact ? null : resolveAvgAdjState(pf, item.code, dom.exYm);
+            const avgAdj = (avgAdjRaw && !String(dom.exYm).startsWith(CURRENT_YEAR))
+              ? { ...avgAdjRaw, showSuggest: false }
+              : avgAdjRaw;
             return { amount, amountUsd: 0, predicted, hasManual, yearMonth: dom.exYm, taxAmount: taxAny ? taxSum : null, perShare: dom.perShare, calcQty, qtyVal: overrideQty > 0 ? overrideQty : calcQty, qtyIsManual: overrideQty > 0, avgAdj, srcCount: parts.length };
           }
         });
@@ -785,7 +795,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const taxRaw = String(editingCell.taxKrwValue || '').trim();
       const usdNum = usdRaw === '' ? null : (parseFloat(usdRaw.replace(/,/g, '')) || 0);
       const krwNum = krwRaw === '' ? null : (parseFloat(krwRaw.replace(/,/g, '')) || 0);
-      const taxNum = taxRaw === '' ? 0 : (parseFloat(taxRaw.replace(/,/g, '')) || 0);
+      // ⚠️ 빈칸은 0이 아니라 null(미입력) — 라이터가 이제 0을 '비과세 확인'으로 저장하므로,
+      //    빈칸을 0으로 넘기면 손대지 않은 셀이 전부 비과세로 확정된다.
+      const taxNum = taxRaw === '' ? null : (parseFloat(taxRaw.replace(/,/g, '')) || 0);
       updatePortfolioActualAfterTaxUsd(portfolioId, code, yearMonth, usdNum);
       updatePortfolioActualAfterTaxKrw(portfolioId, code, yearMonth, krwNum);
       updatePortfolioDividendTaxAmount(portfolioId, code, yearMonth, taxNum);
@@ -793,7 +805,8 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
       const raw = String(editingCell.value).trim();
       const num = raw === '' ? null : (parseFloat(raw.replace(/,/g, '')) || 0);
       const taxRaw = String(editingCell.taxValue || '').trim();
-      const taxNum = taxRaw === '' ? 0 : (parseFloat(taxRaw.replace(/,/g, '')) || 0);
+      // ⚠️ 빈칸 = 미입력(null), '0' 입력 = 비과세 확인(0 저장). 위 해외 분기와 같은 규약.
+      const taxNum = taxRaw === '' ? null : (parseFloat(taxRaw.replace(/,/g, '')) || 0);
       updatePortfolioActualDividend(portfolioId, code, yearMonth, num);
       updatePortfolioDividendTaxAmount(portfolioId, code, yearMonth, taxNum);
     }
@@ -2056,6 +2069,7 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                     onKeyDown={handleCellKeyDown}
                                     className="w-14 bg-transparent text-orange-300 text-right text-[10px] outline-none border-b border-orange-500/40"
                                     placeholder="과세금 ₩"
+                                    title={'실제 원천징수 세액. 비워 두면 미입력이고, 0을 넣으면 \'비과세 확인\'으로 저장됩니다.\n(평균 과표 조정은 이 값을 근거로 역산합니다)'}
                                   />
                                 </div>
                               </div>
@@ -2071,7 +2085,9 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                   <span
                                     className={`text-[9px] leading-tight ${d.avgAdj.showSuggest ? 'text-amber-400' : 'text-amber-300/60'}`}
                                     title={avgAdjTooltip({
-                                      kind: d.avgAdj.suggest.kind,
+                                      // ⚠️ suggest는 null일 수 있다(수량 신뢰 불가) — 적용된 조정만 남은 경우
+                                      //    저장값(adj)에서 읽어야 렌더 중 TypeError로 표가 통째로 죽지 않는다.
+                                      kind: d.avgAdj.showSuggest ? d.avgAdj.suggest.kind : d.avgAdj.adj?.kind,
                                       value: d.avgAdj.showSuggest ? d.avgAdj.suggest.value : cleanNum(d.avgAdj.adj?.value),
                                       exTaxBase: d.avgAdj.exNum,
                                       taxAmount: d.avgAdj.obs.taxAmount,
@@ -2080,11 +2096,14 @@ export default function DividendSummaryTable({ portfolios, updatePortfolioDivide
                                       prevAvg: d.avgAdj.avgNum,
                                       applied: !d.avgAdj.showSuggest,
                                       at: d.avgAdj.adj?.at,
+                                      qtySource: d.avgAdj.showSuggest
+                                        ? (d.avgAdj.obs.qtyIsManual ? 'manual' : 'derived')
+                                        : d.avgAdj.adj?.qtySource,
                                     }) + (d.srcCount > 1 ? '\n\n※ 이 셀은 2건 이상이 합산된 값입니다 — 조정은 지배 소스의 배당락월 기준입니다.' : '')
                                       + '\n\n적용은 [과표 계산] 탭에서 합니다.'}
                                   >
                                     {d.avgAdj.showSuggest ? '⚑ 과표 ' : '⚑ 조정 '}
-                                    {d.avgAdj.suggest.kind === 'lowerBound' && d.avgAdj.showSuggest ? '≥' : ''}
+                                    {d.avgAdj.showSuggest && d.avgAdj.suggest.kind === 'lowerBound' ? '≥' : ''}
                                     {(d.avgAdj.showSuggest ? d.avgAdj.suggest.value : cleanNum(d.avgAdj.adj?.value)).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </span>
                                 )}
