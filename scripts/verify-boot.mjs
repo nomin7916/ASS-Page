@@ -308,7 +308,7 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     /stockHydratedRef\.current = true;\s*lastSavedStockMapRef\.current = hasMap \? driveMap : null;/.test(lfd));
   ok('G1g stateAppliedRef는 STATE 없음(신규) 분기와 applyStateData 직후 **두 곳**에서 선다',
     count(lfd, /stateAppliedRef\.current = true;/g) === 2
-    && /applyStateData\(stateToApply, null, marketData\);\s*stateAppliedRef\.current = true;/.test(lfd));
+    && /applyStateData\(stateToApply, null, marketData, opts\);\s*stateAppliedRef\.current = true;/.test(lfd));
 
   // ── G2 applyStockData: refresh 예약 없음 · 빈 메모리면 같은 참조 채택 ──
   const asd = slice(app, 'const applyStockData = (driveStockMap, _meta?) => {', 'applyStockDataRef.current = applyStockData;');
@@ -484,6 +484,25 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     ok('G10k stockHistorySync.ts는 import 0건·@ts-nocheck 없음·enum/namespace 없음(검증이 직접 import한다)',
       !/^import /m.test(sh) && !/^\/\/\s*@ts-nocheck/m.test(sh) && !/\benum\b|\bnamespace\b/.test(stripComments(sh)));
   }
+
+  // ── G11 폴링 재적용의 뷰 보존(Phase 4) ──
+  const asdView = slice(app, 'const applyStateData = (stateData, _stockData, marketData, opts?) => {', 'applyStateDataRef.current = applyStateData;');
+  ok('G11 applyStateData가 opts.preserveView를 받고, 뷰 유지 분기에서 활성 계좌 소실·삭제 시 firstLive 폴백을 수행한다',
+    asdView.length > 2000 && /const preserveView = !!opts\?\.preserveView;/.test(asdView)
+    && /if \(preserveView\) \{[\s\S]{0,400}if \(curActiveId && \(!curActiveP \|\| curActiveP\.deletedAt\)\) \{[\s\S]{0,300}const firstLive = normalizedPortfolios\.find\(p => !p\.deletedAt && p\.accountType !== 'simple' && p\.accountType !== 'matong'\);[\s\S]{0,200}\} else if \(restoredP\?\.deletedAt\) \{/.test(asdView));
+  ok('G11b 뷰 유지 시 계좌별 차트 상태·기간 단위 복원은 **현재** 활성 계좌 기준이다(원격 활성 계좌의 조회기간을 씌우지 않는다)',
+    /const restoredActiveId = preserveView\s*\? \(activePortfolioIdRef\.current \|\| null\)/.test(asdView)
+    && /const _bootId = preserveView \? \(activePortfolioIdRef\.current \|\| null\) : \(stateData\.activePortfolioId \|\| stateData\.portfolios\?\.\[0\]\?\.id\);/.test(asdView));
+  ok('G11c 뷰 유지 중 개별 계좌를 보고 있으면 대시보드 비교종목으로 compStocks를 덮지 않는다',
+    /if \(!preserveView \|\| showIntegratedDashboard\) setCompStocks\(restoredComps\);/.test(asdView));
+  ok('G11d loadFromDrive가 opts를 받아 applyStateData·401 재시도에 전달한다',
+    /const loadFromDrive = async \(token: string, updateAccessLog = false, isRetry = false, opts\?: \{ preserveView\?: boolean \}\) => \{/.test(ds)
+    && /applyStateData\(stateToApply, null, marketData, opts\);/.test(ds)
+    && /return loadFromDrive\(newToken, updateAccessLog, true, opts\);/.test(ds));
+  const cas = slice(ds, 'const checkAndSyncFromDrive = async () => {', 'const handleDriveLoadOnly = async');
+  ok('G11e checkAndSyncFromDrive는 preserveView로 재적용하고 loadStockFromDrive(를 부르지 않는다(STOCK 이중 다운로드 차단)',
+    cas.length > 300 && /await loadFromDrive\(driveTokenRef\.current, false, false, \{ preserveView: true \}\);/.test(cas) && !/loadStockFromDrive\(/.test(cas));
+  ok('G11f (오탐 대조) 부팅 로드는 opts 없이 저장된 활성 계좌로 복원한다', /await loadFromDrive\(token, true\);/.test(app));
 
   // ── G12 표시 계층 무수정 보조 증거: buildCloseEvalSeries 시그니처 문자 일치 ──
   const utils = read('src/utils.ts');

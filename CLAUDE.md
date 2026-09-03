@@ -627,6 +627,32 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   스테이징 제외 삭제 · mergeCodeHistory 한 글자 · 빈 staged 새 객체 · deleteKeys 순서 · 참조 복사 · 배지/prop
   삭제 · 백필 histPhase 제거 · 호출 순서 뒤집기)으로 **실제 검출을 확인**했다.
 
+**Phase 4 — 폴링 재적용의 뷰 보존 (2026-09, 행동 변경 — 기본값으로 진행·보고에 명시)**
+
+- **되돌리면 재발하는 사고**: 폴링(`checkAndSyncFromDrive`)이 version 변경을 감지해 `loadFromDrive`로 STATE를
+  재적용할 때 `applyStateData`가 부팅과 같은 경로로 **원격의 활성 계좌·통합 대시보드로 화면을 점프**시켰고,
+  이어 `loadStockFromDrive`가 방금 받은 STOCK(수 MB)을 **한 번 더** 내려받았다.
+- **`applyStateData(stateData, stockMap, marketData, opts?)`의 `opts.preserveView`**: true면 활성 계좌·통합
+  대시보드 전환 3줄을 건너뛴다. ⚠️ 단 현재 활성 계좌가 새 배열에 **없거나 `deletedAt`**이면 종전 firstLive
+  폴백(없으면 `null` + 통합 대시보드)을 그대로 수행한다 — 동결 계좌 오염 불변식('활성 계좌 기록 효과가 삭제
+  계좌에 이력을 쓴다'). 부팅·수동 불러오기·백업 복원은 opts 없이 종전대로.
+- **⚠️ 3줄만 건너뛰면 부족했던 두 곳(함께 게이팅)**: ① 계좌별 차트 상태(`chartPeriod`/`dateRange`/`appliedRange`/
+  `showTotalEval`/`showReturnRate`)와 `acctHistPeriod` 복원은 `stateData.activePortfolioId`(원격 활성 계좌)
+  기준이라, 뷰를 유지하면서 그대로 두면 **원격 계좌의 조회기간을 이 계좌에 씌운다** → preserveView면
+  `activePortfolioIdRef.current`(현재 활성) 기준. ② `intDashCompStocks` → `setCompStocks`는 부팅(통합
+  대시보드에서 시작)엔 맞지만, 개별 계좌를 보는 중이면 **그 계좌의 비교종목 칩을 대시보드 칩으로 덮는다** →
+  `!preserveView || showIntegratedDashboard`일 때만.
+- `useDriveSync.loadFromDrive(token, updateAccessLog, isRetry, opts?)` — opts를 `applyStateData`와 **401 재시도**에
+  그대로 전달. `checkAndSyncFromDrive`는 `{ preserveView: true }`로 부르고 `loadStockFromDrive` 후속 호출을
+  없앴다(STOCK은 loadFromDrive가 포함). `loadStockFromDrive` 함수는 호출부 0곳으로 남는다(수동 불러오기도
+  loadFromDrive 경유).
+- **알려진 한계(의도)**: 폴링 재적용 시 STOCK은 Drive 베이스 + 메모리 우선 병합이라 새 객체가 되어 다음 저장에서
+  STOCK을 1회 업로드한다(메모리에 이 세션의 신규 종가가 있을 수 있으므로 정상). 원격이 바꾼 앱 레벨 chartPrefs
+  (지표 토글·숨김 열 등)는 종전대로 그대로 적용된다 — 뷰 보존은 '어느 계좌·어느 화면을 보고 있는가'만 지킨다.
+- 검증: `verify:boot` G11~G11f(preserveView 분기·폴백·현재 계좌 기준 복원·compStocks 가드·opts 전달 2경로·
+  checkAndSync 배선·부팅 오탐 대조). **변이 8종**(분기 삭제 · 폴백 삭제 · loadStockFromDrive 부활 · opts 미전달 ·
+  401 재시도 누락 · compStocks 가드 삭제 · 원격 계좌 기준 복귀 · 부팅까지 preserveView)으로 **실제 검출을 확인**했다.
+
 ### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
 **마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가

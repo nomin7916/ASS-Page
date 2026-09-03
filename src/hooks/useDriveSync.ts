@@ -71,7 +71,8 @@ import { GOOGLE_CLIENT_ID, ADMIN_EMAIL } from '../config';
 // error   → 마지막 작업 실패
 type SyncStatus = 'idle' | 'loading' | 'ready' | 'saving' | 'error';
 
-type ApplyStateDataFn = (stateData: any, stockData: any, marketData: any) => void;
+// opts.preserveView(폴링 재적용): 현재 뷰·활성 계좌를 유지한 채 데이터만 교체한다(App.applyStateData 주석).
+type ApplyStateDataFn = (stateData: any, stockData: any, marketData: any, opts?: { preserveView?: boolean }) => void;
 // meta(realClose 마커)는 useDriveSync가 stockMetaRef에 직접 보관한다 — App 쪽 콜백은 참고용으로 받을 뿐 저장하지 않는다.
 type ApplyStockDataFn = (stockMap: Record<string, Record<string, number>>, meta?: { realClose: Record<string, { at: string; lastDate: string }> }) => void;
 type ApplyBackupDataFn = (stateData: any, accountChartStatesRef: React.MutableRefObject<any>) => void;
@@ -213,7 +214,8 @@ export function useDriveSync({
   // ── Drive에서 데이터 불러오기 → applyStateData 콜백으로 state 적용 ──
   // updateAccessLog=true: 사용자 최초 로그인 시에만 전달 — accessLog 카운트 증가 후 Drive 즉시 반영
   // isRetry=true: 401 재시도 호출 — 무한 루프 방지용
-  const loadFromDrive = async (token: string, updateAccessLog = false, isRetry = false) => {
+  // opts.preserveView: 폴링 재적용 전용 — applyStateData에 그대로 전달(401 재시도에도 유지).
+  const loadFromDrive = async (token: string, updateAccessLog = false, isRetry = false, opts?: { preserveView?: boolean }) => {
     try {
       setSS('loading');
       setDriveStatus('loading');
@@ -295,7 +297,7 @@ export function useDriveSync({
         lastDriveSavedPortfolioUpdatedAtRef.current = (stateData as any).portfolioUpdatedAt || 0;
       }
 
-      applyStateData(stateToApply, null, marketData);
+      applyStateData(stateToApply, null, marketData, opts);
       stateAppliedRef.current = true;
       // 로드한 portfolioUpdatedAt/chartPrefsUpdatedAt을 ref에 동기화 — 초기 로드 시 useEffect가 새
       // 타임스탬프를 만들어 lastDriveSaved*보다 커지는 것을 방지 (의도치 않은 자동 저장 억제)
@@ -330,7 +332,7 @@ export function useDriveSync({
         if (newToken) {
           driveTokenRef.current = newToken;
           setDriveToken(newToken);
-          return loadFromDrive(newToken, updateAccessLog, true);
+          return loadFromDrive(newToken, updateAccessLog, true, opts);
         }
       }
       setSS('error');
@@ -568,8 +570,9 @@ export function useDriveSync({
       const driveTs = await loadVersionTimestamp(driveTokenRef.current, folderId);
       if (driveTs !== null && driveTs > portfolioUpdatedAtRef.current) {
         if (syncStatusRef.current === 'saving') return;
-        await loadFromDrive(driveTokenRef.current);
-        loadStockFromDrive(driveTokenRef.current);
+        // 뷰 유지(preserveView) — 다른 기기의 활성 계좌로 화면이 점프하지 않는다. STOCK은 loadFromDrive가 함께
+        // 로드한다(옛 loadStockFromDrive 후속 호출은 같은 수 MB 파일을 두 번 내려받았다 — 되살리지 말 것).
+        await loadFromDrive(driveTokenRef.current, false, false, { preserveView: true });
       }
     } catch {
       // 오프라인·토큰 만료 등 조용히 무시

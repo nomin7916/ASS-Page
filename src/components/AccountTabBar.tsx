@@ -14,7 +14,9 @@ function HistSyncBadge({ phase, progress, partial }) {
     return () => clearTimeout(t);
   }, [phase, partial]);
   if (phase === 'loading') return null;
-  let text = '', cls = '', tip = '';
+  let text = '';
+  let cls = '';
+  let tip = '';
   if (phase === 'hydrate-failed') {
     text = '종가 캐시 미로드'; cls = 'text-orange-400';
     tip = 'Drive 종가 캐시를 불러오지 못했습니다 — 이번 세션은 캐시 없이 조회하고 종가 캐시 저장을 보류합니다';

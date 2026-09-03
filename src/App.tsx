@@ -804,7 +804,12 @@ export default function App() {
 
   // ── Drive 데이터 적용 콜백 (loadFromDrive / handleApplyBackup 에서 호출) ──
   // STOCK 파일은 loadFromDrive가 STATE와 함께 로드해 applyStockData로 **먼저** 적용한다(STOCK-first) → 여기서는 처리하지 않음
-  const applyStateData = (stateData, _stockData, marketData) => {
+  // opts.preserveView(폴링 재적용 — useDriveSync.checkAndSyncFromDrive): 현재 뷰·활성 계좌를 유지한다.
+  //   다른 기기에서 계좌를 전환한 뒤 이 탭으로 돌아오면 과거엔 원격의 활성 계좌·통합 대시보드로 화면이 점프했다.
+  //   ⚠️ 단 현재 활성 계좌가 새 배열에 없거나 삭제됐으면 종전 firstLive 폴백은 그대로 수행한다(동결 계좌 오염 불변식).
+  //   부팅·수동 불러오기·백업 복원은 종전대로(opts 없음 = 저장된 활성 계좌로 복원).
+  const applyStateData = (stateData, _stockData, marketData, opts?) => {
+    const preserveView = !!opts?.preserveView;
 
     if (stateData.portfolios?.length > 0) {
       const normalizedPortfolios = stateData.portfolios.map(p => ensurePortfolioVerificationFields({
@@ -818,7 +823,16 @@ export default function App() {
       setPortfolios(normalizedPortfolios);
       const restoredId = stateData.activePortfolioId || stateData.portfolios[0].id;
       const restoredP = normalizedPortfolios.find(p => p.id === restoredId);
-      if (restoredP?.deletedAt) {
+      const curActiveId = activePortfolioIdRef.current;
+      const curActiveP = curActiveId ? normalizedPortfolios.find(p => p.id === curActiveId) : null;
+      if (preserveView) {
+        // 뷰 유지 — 활성 계좌·통합 대시보드 전환 3줄을 건너뛴다. 현재 활성 계좌가 사라졌거나 삭제됐을 때만 폴백.
+        if (curActiveId && (!curActiveP || curActiveP.deletedAt)) {
+          const firstLive = normalizedPortfolios.find(p => !p.deletedAt && p.accountType !== 'simple' && p.accountType !== 'matong');
+          if (firstLive) setActivePortfolioId(firstLive.id);
+          else { setActivePortfolioId(null); setShowIntegratedDashboard(true); }
+        }
+      } else if (restoredP?.deletedAt) {
         // ⚠️ 삭제된 계좌를 활성으로 복원하면 활성 기록 효과가 동결 계좌에 이력을 쓴다 → 라이브 계좌로 대체
         const firstLive = normalizedPortfolios.find(p => !p.deletedAt && p.accountType !== 'simple' && p.accountType !== 'matong');
         if (firstLive) setActivePortfolioId(firstLive.id);
@@ -856,7 +870,10 @@ export default function App() {
         accountChartStatesRef.current = stateData.chartPrefs.accountChartStates;
         // 앱 시작 시 활성 계좌의 차트 기간 복원
         // (계좌 전환 이펙트는 prevId===null 조건으로 최초 로드 시 실행 안 됨)
-        const restoredActiveId = stateData.activePortfolioId || stateData.portfolios?.[0]?.id;
+        // 뷰 유지 시에는 **현재** 활성 계좌의 저장값을 복원한다 — 원격 활성 계좌의 조회기간을 이 계좌에 씌우면 안 된다.
+        const restoredActiveId = preserveView
+          ? (activePortfolioIdRef.current || null)
+          : (stateData.activePortfolioId || stateData.portfolios?.[0]?.id);
         const activeSaved = restoredActiveId ? stateData.chartPrefs.accountChartStates[restoredActiveId] : null;
         if (activeSaved?.chartPeriod) setChartPeriod(activeSaved.chartPeriod);
         if (activeSaved?.dateRange) setDateRange(activeSaved.dateRange);
@@ -898,7 +915,7 @@ export default function App() {
       //     덮어써 버린다 — showTotalEval/showReturnRate와 순서가 반대인 것이 이 분기의 이유다.)
       //    계좌별 필드가 없는 옛 저장본만 앱 레벨 값으로 폴백한다.
       {
-        const _bootId = stateData.activePortfolioId || stateData.portfolios?.[0]?.id;
+        const _bootId = preserveView ? (activePortfolioIdRef.current || null) : (stateData.activePortfolioId || stateData.portfolios?.[0]?.id);
         const _bootAcct = _bootId ? stateData.chartPrefs.accountChartStates?.[_bootId] : null;
         if (_bootAcct?.histPeriod !== undefined) setAcctHistPeriod(normalizeHistPeriod(_bootAcct.histPeriod));
         else if (stateData.chartPrefs.acctHistPeriod !== undefined) setAcctHistPeriod(normalizeHistPeriod(stateData.chartPrefs.acctHistPeriod));
@@ -911,7 +928,8 @@ export default function App() {
       if (stateData.chartPrefs.intDashCompStocks) {
         const restoredComps = stateData.chartPrefs.intDashCompStocks.map((s: any) => ({ ...s, loading: false }));
         intDashCompStocksRef.current = restoredComps;
-        setCompStocks(restoredComps);
+        // 뷰 유지 중 개별 계좌를 보고 있으면 compStocks는 그 계좌의 비교종목이다 — 대시보드 비교종목으로 덮지 않는다.
+        if (!preserveView || showIntegratedDashboard) setCompStocks(restoredComps);
       }
     }
     const resolvedMarketIndices = marketData?.marketIndices || stateData.marketIndices;
