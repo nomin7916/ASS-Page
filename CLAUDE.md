@@ -687,6 +687,49 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   삭제 · pagehide 백업 추가 · 낙관적 세팅 삭제 · 별도 호출로 쪼갬 · 상한 6 복귀 · localStorage 저장 · 시드 호출
   삭제 · 앱 닫기 갱신 삭제 · manual까지 시드 · 게이트 밖으로 이동)으로 **실제 검출을 확인**했다.
 
+**Phase 6 — 적대적 리뷰(상태·비동기 렌즈)가 잡은 확정 결함 5건 (2026-09)**
+
+Phase 1~5 배포 직후 3렌즈 리뷰에서 나온 것으로, **Phase 2(마커)와 Phase 3(스테이징)의 상호작용**이
+만든 결함이 대부분이다(단독 Phase에서는 없던 창).
+
+- **⚠️ 마커는 맵과 **같은 순간** 전진해야 한다 — 스큐가 곧 종가 영구 누락(최대 30일)**:
+  `markRealClose`는 응답 도착 즉시 `stockMetaRef`(라이브 ref)를 전진시키는데 맵은 `commitStaged`에서만
+  커밋된다. 그 사이(수 분)에 저장이 끼면 payload의 `shm`(state 스냅샷 = 커밋 전)과 `meta`(전진한 마커)가
+  함께 기록돼 **"마커는 최신인데 맵엔 그 날짜가 없는"** STOCK 파일이 Drive에 박히고, 다음 세션의
+  `planKorHistoryFetch`가 그 코드를 skip해 그 구간 종가가 영영 안 채워진다. 스큐는 항상 '마커가 앞서는'
+  위험 방향으로만 생긴다. → **2겹으로 막는다**: ① 이력 패스 마커는 `markRealClose(..., defer=true)`로
+  `pendingMetaRef`에 보류했다가 `commitStaged`에서 맵과 함께 승격(비교종목 경로는 맵을 즉시 커밋하므로
+  defer 없이 그대로) ② 저장 직전 `pruneStockMeta(meta, shm)`로 **같은 payload의 맵**과 대조해 보증하지
+  못하는 마커를 버린다(버려진 마커는 다음 세션에 전체 조회로 자연 복구 — 안전한 방향).
+- **⚠️ 옛 패스가 새 패스를 settled로 만들면 안 된다 — 패스 세대 토큰(`passIdRef`/`isMyPass`)**:
+  `refreshPricesInner`는 이력 스트림을 **await하지 않고**(지수 조회까지만 대기) 반환하므로 재진입 가드가
+  스트림 도중에 풀린다 → 계좌 탭 전환·새로고침으로 새 패스가 시작될 수 있고, 그때 옛 패스의 정착 핸들러가
+  `histPhase='settled'`를 세우면 **부분 맵 위에서 쓰기 게이트가 열려** 전 세션 Drive 캐시의 stale 값이
+  `isFixed:true`로 확정된다(자동확정은 isFixed를 다시 안 건드리므로 영구 고착, unconfirm만이 해제).
+  → **상태 전이(setHistPhase/setHistPartial)는 자기 세대일 때만**, 커밋(`commitStaged`)은 세대와 무관하게
+  수행한다(받아 둔 이력을 버리지 않는다 — 값은 정확하고 커밋만 이를 뿐이다).
+  덤으로 `inFlightCodesRef`(조회 중인 코드)를 계획에서 제외해 겹친 패스의 중복 KIS 조회를 막는다
+  (`stagedNow`는 '결과가 이미 온' 코드만 걸러 in-flight를 놓친다).
+- **⚠️ `histPartial` 해제를 패스 로컬 조건에 묶지 말 것**: 옛 코드는 `if (watchdogFired) setHistPartial(false)`
+  라, 워치독을 겪지 않고 **정상 완료한 새 패스가 이전 패스의 partial=true를 영영 못 지웠다**(배지가 '일부
+  미수집'에 고착되고 자동확정이 계속 차단). 자기 세대면 **무조건** 해제한다.
+- **⚠️ 정착 등록은 반드시 `finally`에서**: try 안에 두면 스트림을 push한 **뒤** 예외가 났을 때(손상된 Drive
+  값 등) 핸들러가 영영 등록되지 않아 `histPhase`가 'refreshing'에 고착되고, 백필 효과#2·자동확정이 그 세션
+  내내 멈추며 스테이징도 커밋되지 않는다(옛 구제 조건이 `streams.length === 0`뿐이라 걸리지도 않았다).
+  스트림 0건 경로도 `commitStaged()` 후 정착시킨다. 짝으로 `commitStaged`는 **스테이징·보류 마커가 둘 다
+  비면 아무것도 하지 않는다**(모든 패스가 이 함수를 부르므로 무조건 저장을 예약하면 헛저장이 나간다).
+- **배지(표시)**: `histProgress`를 패스마다 리셋한다(누적하면 두 번째 패스가 "30/55"로 시작해 "412/430"까지
+  간다). `total`은 시세 조회(종목당 최대 10초)가 끝나야 정해지므로 그 전에는 **카운터를 감춘다**("0/0"은
+  정보가 아니라 '멈춘 것처럼 보이는' 오해이고, 오버레이 해제 직후 가장 먼저 보이는 자리다). 스로틀 타이머는
+  언마운트에서 정리한다. STOCK **지연 도착** 분기도 부팅 분기와 대칭으로 `lastSavedStockMapRef`를 시드한다
+  (빠지면 방금 받은 수 MB를 그대로 되올린다 — 느린 회선에서만 발생해 눈에 안 띈다).
+- 검증: `verify:boot` 143건(파트① `pruneStockMeta` #7d~#7g + G20~G25). **변이 14종**(마커 defer 제거 2곳 ·
+  defer 분기 제거 · commitStaged 승격 삭제 · pruneStockMeta 미적용 · pendingMeta 우선순위 제거 · 세대 게이트
+  제거 · inFlight 삭제 · settle을 try로 · 진행도 리셋/타이머 정리 삭제 · 배지 0/0 복귀 · 지연 도착 시드 삭제 ·
+  입출금 min-h 제거)으로 **실제 검출을 확인**했고, Phase 1~5 변이 85종도 전부 재검출된다.
+  ⚠️ 하네스는 **검증 스크립트가 정상 종료 요약을 냈을 때만** 검출로 센다 — 스크립트가 죽으면 exit≠0이라
+  모든 변이가 '검출'로 위장된다(실측: 식별자 중복 선언 하나로 65종이 전부 거짓 초록이었다).
+
 ### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
 **마통(`matong`)·직접입력(`simple`)은 시장 시세 이력이 없는 현금성 계좌**다 — 값은 사용자가
@@ -1037,6 +1080,14 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   ⚠️ 바(32px)를 넣었으므로 카드 높이를 `360→392`/`520→552`로 올리고 **형제 카드**(`PortfolioStatsPanel`
   1곳·`DepositPanel` 2곳)도 **함께** 올린다 — 각 카드가 명시적 height라 `items-stretch`가 먹지 않아
   한쪽만 올리면 같은 행의 바닥이 32px 어긋난다.
+  ⚠️ **`DepositPanel`의 `min-h-[392px]`를 빼지 말 것 — 모바일에서 카드가 헤더만 남고 붕괴한다**
+  (사용자 보고 2026-09, 국내계좌 한정). 부모(`App` stats 섹션)가 `flex flex-col xl:flex-row`라 **모바일에서는
+  main axis가 세로**인데, 입출금 두 카드만 `flex-1`(= `flex:1 1 0%`)이고 형제(통계·히스토리)에 있는
+  `shrink-0`이 없다 → 세로 축에서 `flex-basis:0%`가 `h-[392px]`를 덮어쓰고 `overflow-hidden` 때문에
+  automatic minimum size(`min-height:auto`)마저 0으로 계산돼 높이가 헤더 줄까지 무너진다. 해외 분기는
+  `min-h-[520px]`가 있어 원래부터 무사했다. PC(xl↑)는 main axis가 가로라 이 `min-h`가 레이아웃을 바꾸지
+  않는다. ⚠️ `flex-1`을 건드리는 방향으로 고치지 말 것(PC의 가로 균등 분배가 달라진다).
+  검증: `verify:period #G12b`가 두 카드 모두에서 이 문자열을 단언한다.
 - **영속화(통합)**: `chartPrefs.intHistPeriod` — App.tsx 5지점(state 리터럴·`chartPrefsUpdatedAt` deps·
   STATE 저장 deps·`applyStateData`·`applyBackupData`) 전부. ⚠️ ②와 ③은 **둘 다** 필요(②만 → 저장 미예약 /
   ③만 → `chartPrefsUpdatedAt` 미상승으로 STATE write 스킵). 로드 2경로는 `normalizeHistPeriod`를
