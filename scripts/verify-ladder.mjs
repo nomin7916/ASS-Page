@@ -1,7 +1,7 @@
 // verify:ladder — 호가 가중 분할매수/분할매도 사다리 검증
 //
 // ⚠️ 참조 구현을 다시 쓰지 않는다. src/components/LadderTradeModal.tsx의 **실제 원문**에서
-//    순수 함수 구간(tri~redistribute)을 잘라 평가한다. 미러를 두면 드리프트가 나고,
+//    순수 함수 구간(tri~seedLadder)을 잘라 평가한다. 미러를 두면 드리프트가 나고,
 //    이 파일들은 .tsx라 verify 스크립트가 텍스트로만 읽을 수 있어 더 위험하다.
 //
 // 고정하는 계약
@@ -49,7 +49,7 @@ function sliceFns(source, names) {
   return new Function(js + '\nreturn {' + names.join(',') + '};')();
 }
 
-const F = sliceFns(src, ['tri', 'roundTo', 'buildLadder', 'solveQtyForAmount', 'recalcAllPrices', 'redistribute', 'normalizeChangeRate', 'prevCloseFrom', 'rateVsPrev']);
+const F = sliceFns(src, ['tri', 'roundTo', 'buildLadder', 'solveQtyForAmount', 'recalcAllPrices', 'seedLadder', 'normalizeChangeRate', 'prevCloseFrom', 'rateVsPrev', 'amountTolOf']);
 
 // ⚠️ 금지 토큰 가드는 주석을 지우고 본다 — 이 파일의 설명 주석에는 옛 이름이 일부러 남아 있다.
 const stripComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -144,16 +144,120 @@ console.log('\n■ 잠금 행 기준 재계산 (recalcAllPrices)');
   ok('#18 매수: 잠금 이후 행은 잠금가 − tick', out[3].price === 790 && out[4].price === 780, J(out.map(r => r.price)));
 }
 
-console.log('\n■ redistribute — 방향 무관, 목표 보존');
+// ── seedLadder — 직접 입력한 수량이 그 아래 사다리의 시작점 ──
+// ⚠️ 옛 redistribute(총수량을 targetQty에 고정하고 잠금 이후를 1,2,3…으로 다시 깔던 함수)의
+//    계약으로 되돌리지 말 것 — 사용자가 10주를 넣어도 다음 호가가 1주가 되고 총수량이 그대로였다.
+const legacyLadder = (p, t, amt, floor, d, dir, m = 1) =>
+  F.buildLadder(p, t, F.solveQtyForAmount(p, t, amt, floor, d, dir, m), floor, d, dir, m);
+const sumQty = (rs) => rs.reduce((s, r) => s + r.qty, 0);
+// 예산은 자동 호가(현재가 ± i×호가간격)로 잰다 — 핀이 아니라 이 가격이 사다리 크기를 정한다.
+const autoCost = (rs, p, t, d, dir) => rs.reduce((s, r, i) => s + F.roundTo(p + dir * i * t, d) * r.qty, 0);
+const lockAt = (rs, idx, qty) => rs.map((r, i) => i === idx ? { ...r, qty, locked: true } : r);
+
+console.log('\n■ seedLadder — 직접 입력한 수량이 다음 호가의 시작점 (방향 무관)');
 {
   for (const dir of [1, -1]) {
-    const rows = F.buildLadder(50000, 10, 10, 1, 0, dir);
-    const edited = rows.map((r, i) => i === 0 ? { ...r, qty: 5, locked: true } : r);
-    const out = F.redistribute(edited, 10);
-    quiet(`redistribute Σ=목표 (dir=${dir})`, out.reduce((s, r) => s + r.qty, 0) === 10, J(out.map(r => r.qty)));
-    quiet(`redistribute 잠금 보존 (dir=${dir})`, out[0].qty === 5 && out[0].locked === true);
+    const rows = legacyLadder(1000, 10, 200000, 1, 0, dir);
+    const out = F.seedLadder(lockAt(rows, 0, 5), 1000, 10, 200000, 1, 0, dir);
+    quiet(`시드 보존 (dir=${dir})`, out[0].qty === 5 && out[0].locked === true, J(out.map(r => r.qty)));
+    quiet(`다음 호가가 시드+1 (dir=${dir})`, out[1].qty === 6 && out[2].qty === 7 && out[3].qty === 8, J(out.map(r => r.qty)));
   }
-  ok('#19 잠금 수량 보존 + 나머지 재배분', true);
+  ok('#19 잠금 수량은 그대로 두고 그 아래가 시드에서 이어진다', true);
+}
+{
+  // 사용자 보고 그대로의 값 — 현재가 56.47 · 호가 0.1 · 목표 $2,767.03 (스크린샷)
+  const P = 56.47, T = 0.1, AMT = 2767.03, D = 2, FL = 0.01, DIR = -1;
+  const base = legacyLadder(P, T, AMT, FL, D, DIR);
+  ok('#120a 편집 전 = 종전 사다리 1,2,3…', J(base.map(r => r.qty)) === J([1, 2, 3, 4, 5, 6, 7, 8, 9, 4]), J(base.map(r => r.qty)));
+  const out = F.seedLadder(lockAt(base, 0, 10), P, T, AMT, FL, D, DIR);
+  ok('#120 10주를 넣으면 다음 호가가 1이 아니라 11, 12, 13 (사용자 요구)',
+    J(out.map(r => r.qty)) === J([10, 11, 12, 13, 3]), J(out.map(r => r.qty)));
+  ok('#120b 호가는 그대로 한 칸씩 내려간다',
+    J(out.map(r => r.price)) === J([56.47, 56.37, 56.27, 56.17, 56.07]), J(out.map(r => r.price)));
+}
+{
+  // ⚠️ 총수량이 targetQty에 고정되면 이 단언이 깨진다(옛 redistribute의 계약).
+  const P = 1000, T = 10, AMT = 200000, D = 0, FL = 1, DIR = -1, M = 2;
+  const base = legacyLadder(P, T, AMT, FL, D, DIR, M);
+  const out = F.seedLadder(lockAt(base, 0, 10), P, T, AMT, FL, D, DIR, M);
+  ok('#121 총수량은 고정이 아니라 목표 금액이 다시 정한다',
+    sumQty(base) === 219 && sumQty(out) === 212, J({ before: sumQty(base), after: sumQty(out) }));
+  ok('#122 배수 반영 — 시드 10 · 배수 2면 12, 14, 16',
+    out[1].qty === 12 && out[2].qty === 14 && out[3].qty === 16, J(out.map(r => r.qty)));
+  ok('#123 배수 생략 = 1',
+    J(F.seedLadder(lockAt(base, 0, 10), P, T, AMT, FL, D, DIR))
+    === J(F.seedLadder(lockAt(base, 0, 10), P, T, AMT, FL, D, DIR, 1)));
+}
+{
+  // ⚠️ 하위호환의 축 — 수량을 건드리지 않으면(잠금 0개) 종전 사다리와 1주도 다르지 않다.
+  //    아래 탐욕 배분은 레거시와 대수적으로 같지만, 수량 상한·허용오차 경계에서 실제로 갈렸다
+  //    (그래서 seedLadder가 잠금 0개면 레거시 경로에 그대로 위임한다).
+  let n = 0;
+  for (const d of [0, 2]) {
+    const floor = d === 2 ? 0.01 : 1;
+    for (const p of [30, 1000, 50000, 56.47, 3.33, 250.75])
+      for (const t of (d === 2 ? [0.01, 0.1, 1] : [1, 10, 100, 500]))
+        for (const amt of [0, 1, 100, 2767.03, 100000, 5000000])
+          for (const dir of [1, -1]) for (const m of [1, 2, 5]) {
+            const legacy = legacyLadder(p, t, amt, floor, d, dir, m);
+            const seeded = F.seedLadder(legacy, p, t, amt, floor, d, dir, m);
+            n++;
+            quiet(`잠금 0개 = 레거시 (p=${p},t=${t},amt=${amt},dir=${dir},m=${m},d=${d})`, J(legacy) === J(seeded));
+          }
+  }
+  ok(`#124 잠금이 없으면 종전 사다리와 완전 동일 (${n}조합)`, true);
+}
+{
+  // 예산 상한 — 잠금 행이 스스로 목표를 넘긴 경우가 아니면 Σ금액은 목표를 넘지 않는다.
+  let n = 0;
+  for (const d of [0, 2]) {
+    const floor = d === 2 ? 0.01 : 1;
+    for (const p of [30, 1000, 56.47]) for (const t of (d === 2 ? [0.01, 0.1] : [1, 10]))
+      for (const amt of [100, 2767.03, 100000]) for (const dir of [1, -1]) for (const m of [1, 3])
+        for (const seed of [0, 1, 2, 7, 50]) {
+          const base = legacyLadder(p, t, amt, floor, d, dir, m);
+          if (!base.length) continue;
+          const out = F.seedLadder(lockAt(base, 0, seed), p, t, amt, floor, d, dir, m);
+          const cost = autoCost(out, p, t, d, dir);
+          const lockedCost = out.filter(r => r.locked).reduce((s, r, i) => s + r.price * r.qty, 0);
+          n++;
+          quiet(`예산 준수 (p=${p},t=${t},amt=${amt},dir=${dir},m=${m},seed=${seed})`,
+            cost <= Math.max(lockedCost, amt + F.amountTolOf(d)) + 1e-9, `cost=${cost}`);
+        }
+  }
+  ok(`#125 Σ금액 ≤ 목표 금액 (잠금 행이 스스로 넘긴 경우만 예외, ${n}조합)`, true);
+}
+{
+  const P = 1000, T = 10, AMT = 200000, D = 0, FL = 1, DIR = -1;
+  const base = legacyLadder(P, T, AMT, FL, D, DIR);
+  const one = F.seedLadder(lockAt(base, 2, 20), P, T, AMT, FL, D, DIR);
+  ok('#126 잠금 앞은 종전대로, 잠금부터 새로 이어진다',
+    J(one.slice(0, 5).map(r => r.qty)) === J([1, 2, 20, 21, 22]), J(one.map(r => r.qty)));
+  const two = F.seedLadder(lockAt(one, 4, 5), P, T, AMT, FL, D, DIR);
+  ok('#127 잠금이 여럿이면 각각이 새 시작점',
+    J(two.slice(0, 7).map(r => r.qty)) === J([1, 2, 20, 21, 5, 6, 7]), J(two.map(r => r.qty)));
+}
+{
+  // ⚠️ 예산을 지정 단가로 재면 핀 하나가 사다리를 통째로 무너뜨린다(핀 100배 → 첫 행에서 예산 고갈).
+  //    자동 호가로 재야 표시 가격이 핀이어도 수량·행 수가 그대로다.
+  const P = 56.47, T = 0.1, AMT = 2767.03, D = 2, FL = 0.01, DIR = -1;
+  const base = legacyLadder(P, T, AMT, FL, D, DIR);
+  const pinned = F.recalcAllPrices(base.map((r, i) => i === 0 ? { ...r, price: 5675, locked: true } : r), P, T, FL, D, DIR);
+  const out = F.seedLadder(lockAt(pinned, 0, 10), P, T, AMT, FL, D, DIR);
+  ok('#128 지정 단가가 걸려 있어도 수량·행 수는 자동 호가로 정해진다 (사다리 붕괴 방지)',
+    J(out.map(r => r.qty)) === J([10, 11, 12, 13, 3]) && out[0].price === 5675, J(out.map(r => [r.price, r.qty])));
+}
+{
+  const P = 1000, T = 10, AMT = 200000, D = 0, FL = 1, DIR = -1;
+  const base = legacyLadder(P, T, AMT, FL, D, DIR);
+  const out = F.seedLadder(lockAt(base, 0, 9999), P, T, AMT, FL, D, DIR);
+  ok('#129 잠금 행은 목표를 넘겨도 살아남고 그 아래만 끊긴다 (수동 편집 자유)',
+    out.length === 1 && out[0].qty === 9999, J(out.map(r => r.qty)));
+  // ⚠️ 예산이 이미 마른 뒤의 잠금 행도 사라지면 안 된다 — 사용자가 직접 넣은 값이 조용히 증발한다.
+  //    (잠금 분기에 예산 조건을 달면 여기서만 잡힌다 — #129 단일 잠금으로는 안 잡힌다.)
+  const two = F.seedLadder(lockAt(lockAt(base, 0, 9999), 1, 7), P, T, AMT, FL, D, DIR);
+  ok('#129b 예산이 마른 뒤의 잠금 행도 유지된다',
+    J(two.map(r => r.qty)) === J([9999, 7]), J(two.map(r => r.qty)));
 }
 
 console.log('\n■ 호가 간격 — 소수점 금지 (가격 격자의 배수)');
@@ -242,16 +346,15 @@ console.log('\n■ 배수(mult) — 수량 증가폭 사용자 설정');
       rows.reduce((s, r) => s + r.qty, 0) === 10 && rows.every(r => r.qty > 0), J(rows.map(r => r.qty)));
   }
 
-  // ⑤ redistribute도 같은 배수를 따른다
+  // ⑤ seedLadder도 같은 배수를 따른다 (매도 방향으로 교차 확인)
   {
-    const rows = F.buildLadder(50000, 10, 30, 1, 0, 1, 2);
-    const edited = rows.map((r, i) => i === 0 ? { ...r, qty: 6, locked: true } : r);
-    const out = F.redistribute(edited, 30, 2);
-    ok('#40 redistribute 배수 반영 · Σ=목표',
-      out.reduce((s, r) => s + r.qty, 0) === 30 && out[0].qty === 6, J(out.map(r => r.qty)));
-    ok('#41 redistribute 잠금 이후 행이 배수 간격', out[1].qty === 2 && out[2].qty === 4, J(out.map(r => r.qty)));
-    const legacy = F.redistribute(edited, 30);
-    ok('#42 redistribute mult 생략 = 1', J(legacy) === J(F.redistribute(edited, 30, 1)));
+    const A = [50000, 10, 3000000, 1, 0, 1];
+    const base = legacyLadder(...A, 2);
+    const out = F.seedLadder(lockAt(base, 0, 6), ...A, 2);
+    ok('#40 seedLadder 잠금 수량 보존', out[0].qty === 6 && out[0].locked === true, J(out.map(r => r.qty)));
+    ok('#41 seedLadder 잠금 이후가 시드 + 배수 간격', out[1].qty === 8 && out[2].qty === 10, J(out.map(r => r.qty)));
+    ok('#42 seedLadder mult 생략 = 1',
+      J(F.seedLadder(lockAt(base, 0, 6), ...A)) === J(F.seedLadder(lockAt(base, 0, 6), ...A, 1)));
   }
 
   // ⑥ 매수 자금 탐색도 배수를 따른다
@@ -634,9 +737,14 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
   ok('#51 applyMult이 normalizeMult 경유 + 입력칸 동기화',
     /const applyMult = \(val[^)]*\) => \{\s*const m = normalizeMult\(cleanNum\(val\)\);/.test(src)
     && /const applyMult[\s\S]{0,200}setMultInput\(String\(m\)\)/.test(src));
-  ok('#52 redistribute 호출 2곳 모두 mult를 넘긴다',
-    (src.match(/redistribute\([^)]*, mult\)/g) || []).length === 2,
-    J((src.match(/redistribute\([^)]*\)/g) || [])));
+  {
+    // ⚠️ 선언 1개를 뺀 **모든** 호출이 dir·mult를 넘겨야 한다(개수 고정 아님 — #48과 같은 규약).
+    const code = stripComments(src);
+    const seedAll = (code.match(/seedLadder\(/g) || []).length - 1;
+    const seedWired = (code.match(/seedLadder\([^)]*, dir, mult\)/g) || []).length;
+    ok('#52 seedLadder 호출이 전부 dir·mult를 넘긴다',
+      seedAll >= 2 && seedWired === seedAll, J({ seedAll, seedWired }));
+  }
   ok('#53 목표금액·배수 변경이 사다리를 재생성한다 (effect deps)',
     /\}, \[currentPrice, tickSize, targetAmount, side, mult\]\);/.test(src));
 
@@ -768,6 +876,28 @@ console.log('\n■ 배선 가드 (미러로는 표현 불가 — 컴포넌트가
     && /const droppedPins = Object\.keys\(pinnedPrices\)/.test(src)
     && /\{droppedPins > 0 && \(/.test(src)
     && /사다리 방향과 맞지 않아 반영되지 않았습니다/.test(src));
+
+  // ── 수량 직접 입력 = 새 시작점 (배선) ──
+  // ⚠️ 산술 테스트는 seedLadder를 **직접** 부르므로, 컴포넌트가 그 함수를 안 쓰거나 총수량을
+  //    옛 targetQty로 되돌려도 잡지 못한다. 아래는 전부 **사용부** 단언이다.
+  ok('#130 수량 입력이 시드 경로를 타고 총수량을 다시 정한다 (옛 고정 총수량 부활 금지)',
+    /const updated = rows\.map\(r => r\.id === id \? \{ \.\.\.r, qty: newQty, locked: true \} : r\);/.test(src)
+    && /commitLadder\(seedLadder\(updated, currentPrice, tickSize, targetAmount, priceFloor, decimals, dir, mult\)\);/.test(src)
+    && /setTargetQty\(priced\.reduce\(\(s, r\) => s \+ r\.qty, 0\)\);/.test(src)
+    // 옛 redistribute는 총수량을 targetQty에 고정해 "10주를 넣어도 다음 호가가 1주"를 만들었다.
+    && !/redistribute\(/.test(stripComments(src)));
+  ok('#131 잠금 해제도 같은 경로 — updater 안에서 setState 하지 않는다',
+    /const unlocked = rows\.map\(r => r\.id === id \? \{ \.\.\.r, locked: false \} : r\);/.test(src)
+    && /commitLadder\(seedLadder\(unlocked, currentPrice, tickSize, targetAmount, priceFloor, decimals, dir, mult\)\);/.test(src)
+    && !/setRows\(prev => \{[\s\S]{0,400}?setTargetQty/.test(src));
+  ok('#132 커밋이 recalcAllPrices를 거친다 (지정 단가 아래로 새 행이 이어지도록)',
+    /const commitLadder = \(next: LadderRow\[\]\) => \{\s*const priced = recalcAllPrices\(next, currentPrice, tickSize, priceFloor, decimals, dir\);/.test(src));
+  ok('#133 잠금 0개면 레거시 경로에 위임한다 (하위호환의 축)',
+    /if \(!rows\.some\(r => r\.locked\)\) \{\s*return buildLadder\(basePrice, tickSize, solveQtyForAmount\(basePrice, tickSize, targetAmount, floor, decimals, dir, m\), floor, decimals, dir, m\);/.test(src));
+  ok('#134 행 수·수량 상한이 둘 다 걸려 있다 (예산이 크면 행이 무한정 늘어난다)',
+    /const MAX_LADDER_ROWS = \d+;/.test(src)
+    && /for \(let i = 0; i < MAX_LADDER_ROWS; i\+\+\)/.test(src)
+    && /const qtyRoom = MAX_LADDER_QTY - placed;/.test(src));
 }
 
 console.log('\n■ 방어 입력');

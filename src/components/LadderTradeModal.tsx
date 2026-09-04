@@ -50,6 +50,10 @@ function roundTo(n: number, decimals: number): number {
 //    같은 이유로 이 구간 안 주석에 컴포넌트 선언 키워드를 그대로 적지 말 것 — 구간이 잘린다.
 // 사다리 최대 수량 — 옛 maxAffordableQty의 상한과 같은 값이라 행 수 상한(mult=1에서 ~450행)도 종전과 같다.
 const MAX_LADDER_QTY = 100000;
+// 사다리 행 수 상한 — 옛 경로는 MAX_LADDER_QTY가 행 수까지 간접적으로 묶었지만(mult=1에서 ~450행),
+// 아래 seedLadder는 수량이 아니라 '예산이 남는 동안' 행을 잇는다. 예산이 크고 호가가 촘촘하면
+// 행이 무한정 늘어나므로 명시적 상한이 필요하다(수량 상한은 그 안에서 따로 건다).
+const MAX_LADDER_ROWS = 500;
 const QTY_EPS = 1e-9;
 
 // ⚠️ 금액 허용 오차 = **가격 격자 1칸**(원화 1원 / 달러 $0.01). 1e-6 같은 부동소수 여유로
@@ -185,28 +189,66 @@ function recalcAllPrices(rows: LadderRow[], basePrice: number, tickSize: number,
   });
 }
 
-function redistribute(rows: LadderRow[], target: number, mult: number = 1): LadderRow[] {
-  const lockedQty = rows.filter(r => r.locked).reduce((s, r) => s + r.qty, 0);
-  const remaining = Math.max(0, target - lockedQty);
-  const unlocked = rows.filter(r => !r.locked);
-  const N = unlocked.length;
-  if (!N) return rows;
+// ⚠️ 수량을 직접 입력한 행이 **그 아래 사다리의 새 시작점**이다 — 10주를 넣었으면 다음 호가는
+//    11주, 그 다음은 12주(배수 m이면 +m씩). 잠금이 하나도 없으면 가상 시작점 0에서 출발하므로
+//    수량이 m, 2m, 3m… 으로 종전과 같아진다.
+//
+// ⚠️ 총수량을 targetQty에 고정하던 옛 redistribute로 되돌리지 말 것. 그 함수는 행 수를 그대로 둔 채
+//    잠금 이후를 1,2,3…으로 **다시 깔아**, 사용자가 10주를 넣어도 다음 호가가 1주가 되고 총수량은
+//    49주 그대로였다(사용자 보고 2026-09). 행 수·총수량은 이제 이 함수가 목표 금액에서 푼다.
+//
+// ⚠️ 잠금이 하나도 없으면 **레거시 경로(solveQtyForAmount + buildLadder)에 그대로 위임**한다.
+//    아래 탐욕 배분은 그 둘과 대수적으로 같지만(실측 1,512조합 전부 일치), 위임이 있어야
+//    "수량을 건드리지 않으면 종전과 1주도 다르지 않다"가 논증이 아니라 **구조**로 보장된다
+//    (applyPins의 조기 반환과 같은 규약). 위임 없이 재구현하면 수량 상한(MAX_LADDER_QTY)과
+//    금액 허용오차 경계에서 실제로 갈렸다.
+//
+// ⚠️ 예산은 **자동 호가**(현재가 ± i×호가간격)로 잰다 — 사용자가 지정한 단가(핀)로 재면 단가 입력
+//    한 번이 사다리 크기를 통째로 좌우한다(핀이 100배면 첫 행에서 예산이 말라 사다리가 1행으로
+//    무너진다). doRegenerate도 solveQtyForAmount를 **핀 적용 전** 가격으로 부르므로(applyPins는 그
+//    뒤) 이쪽이 기존 규약과 같다. 표시 가격은 호출부의 recalcAllPrices가 핀 기준으로 다시 깐다.
+//
+// ⚠️ 잠금 행은 예산과 무관하게 그대로 둔다 — 사용자가 명시적으로 넣은 값이고, 수동 편집이 목표금액을
+//    넘을 수 있다는 것은 이 계산기의 기존 계약이다(넘으면 요약이 '초과'로 경고한다).
+function seedLadder(rows: LadderRow[], basePrice: number, tickSize: number, targetAmount: number, floor: number, decimals: number, dir: number, mult: number = 1): LadderRow[] {
+  if (tickSize <= 0 || basePrice <= 0) return rows;
   const m = mult > 0 ? mult : 1;
-
-  let M = 0;
-  while (M < N && m * tri(M) < remaining) M++;
-  M = Math.min(M, N);
-
-  const qtys: number[] = new Array(N).fill(0);
-  let rem = remaining;
-  // buildLadder와 같은 이유로 상한 클램프가 필요 없다 — M이 최소값이라 i < M-1 에서는 rem이 남는다.
-  for (let i = 0; i < M; i++) {
-    if (i < M - 1) { qtys[i] = m * (i + 1); rem -= m * (i + 1); }
-    else { qtys[i] = rem; }
+  if (!rows.some(r => r.locked)) {
+    return buildLadder(basePrice, tickSize, solveQtyForAmount(basePrice, tickSize, targetAmount, floor, decimals, dir, m), floor, decimals, dir, m);
   }
-
-  let ui = 0;
-  return rows.map(r => r.locked ? r : { ...r, qty: qtys[ui++] ?? 0 });
+  const tol = amountTolOf(decimals);
+  const out: LadderRow[] = [];
+  let spent = 0;   // 여기까지 배분한 금액(자동 호가 기준)
+  let placed = 0;  // 여기까지 배분한 수량
+  let seedQty = 0; // 직전 잠금 행의 수량 — 잠금 전에는 0(= 종전 m, 2m, 3m…)
+  let dist = 0;    // 그 잠금 행에서 몇 칸 내려왔는가
+  for (let i = 0; i < MAX_LADDER_ROWS; i++) {
+    const price = roundTo(basePrice + dir * i * tickSize, decimals);
+    if (price < floor) break;
+    const cur = rows[i];
+    if (cur && cur.locked) {
+      out.push(cur);
+      spent += price * cur.qty;
+      placed += cur.qty;
+      seedQty = cur.qty;
+      dist = 0;
+      continue;
+    }
+    dist++;
+    const want = seedQty + m * dist;
+    // room은 **누적** 잔액이라 허용오차가 행마다 쌓이지 않는다(solveQtyForAmount와 같은 규약).
+    const room = targetAmount - spent;
+    const qtyRoom = MAX_LADDER_QTY - placed;
+    if (want <= 0 || qtyRoom <= 0 || room + tol < price) break;
+    const qty = Math.min(want, qtyRoom, Math.floor((room + tol) / price));
+    if (qty <= 0) break;
+    out.push(cur ? { ...cur, qty } : { id: `r${i}`, price, qty, locked: false });
+    spent += price * qty;
+    placed += qty;
+    // 마지막 행이 남은 예산을 흡수했다 — buildLadder의 나머지 흡수와 같은 모양.
+    if (qty < want) break;
+  }
+  return out;
 }
 
 export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, changeRate = null, currency = 'KRW', fxRate = 1, pos, onRefreshPrice = null, refreshState = null, emptyReason = null, onClose }: Props) {
@@ -304,6 +346,17 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
     setPriceEdits({});
   };
 
+  // 수량을 직접 입력해 사다리를 다시 깐 뒤의 공통 커밋.
+  // ⚠️ targetQty를 옛 값으로 두지 말 것 — 총수량은 이제 사다리가 정하므로, 그대로 두면 요약이
+  //    '배분 N주'(qtyGap)로 있지도 않은 미배분을 단언한다.
+  // ⚠️ recalcAllPrices를 반드시 거친다 — seedLadder는 예산을 자동 호가로 재느라 새로 생긴 행에
+  //    자동 가격을 넣는데, 위쪽에 지정 단가가 있으면 그 아래는 핀 기준으로 다시 깔려야 한다.
+  const commitLadder = (next: LadderRow[]) => {
+    const priced = recalcAllPrices(next, currentPrice, tickSize, priceFloor, decimals, dir);
+    setRows(priced);
+    setTargetQty(priced.reduce((s, r) => s + r.qty, 0));
+  };
+
   useEffect(() => {
     doRegenerate(currentPrice, tickSize, targetAmount, mult, pinnedRef.current);
   }, [currentPrice, tickSize, targetAmount, side, mult]);
@@ -374,10 +427,11 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
     setMultInput(String(m));
   };
 
+  // 사용자가 넣은 수량이 그 아래 호가의 시작점이 되고, 행 수·총수량은 목표 금액이 다시 정한다.
   const handleRowQtyChange = (id: string, val: string) => {
     const newQty = Math.max(0, parseInt(val.replace(/[^\d]/g, '')) || 0);
     const updated = rows.map(r => r.id === id ? { ...r, qty: newQty, locked: true } : r);
-    setRows(redistribute(updated, targetQty, mult));
+    commitLadder(seedLadder(updated, currentPrice, tickSize, targetAmount, priceFloor, decimals, dir, mult));
   };
 
   const handleRowPriceChange = (id: string, val: string) => {
@@ -406,11 +460,11 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
     // ⚠️ 지정 단가도 함께 지운다 — 안 지우면 다음 재생성(호가·배수·현재가 변경)에서 방금 푼
     //    잠금이 그대로 되살아나 '잠금 해제'가 아무 일도 하지 않은 것처럼 보인다.
     setPinnedPrices(prev => { const n = { ...prev }; delete n[id]; return n; });
-    setRows(prev => {
-      const unlocked = prev.map(r => r.id === id ? { ...r, locked: false } : r);
-      const priceFixed = recalcAllPrices(unlocked, currentPrice, tickSize, priceFloor, decimals, dir);
-      return redistribute(priceFixed, targetQty, mult);
-    });
+    // ⚠️ 함수형 setRows로 되돌리지 말 것 — 같은 커밋에서 targetQty도 함께 갱신해야 하는데,
+    //    updater 안에서 setState를 부르면 StrictMode의 이중 호출에서 부수효과가 두 번 돈다.
+    //    (handleRowQtyChange와 같은 규약: 렌더 스코프의 rows를 읽는다.)
+    const unlocked = rows.map(r => r.id === id ? { ...r, locked: false } : r);
+    commitLadder(seedLadder(unlocked, currentPrice, tickSize, targetAmount, priceFloor, decimals, dir, mult));
   };
 
   const handleDragStart = (e: React.MouseEvent) => {
