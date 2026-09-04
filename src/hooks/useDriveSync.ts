@@ -10,7 +10,7 @@ import {
 import { flowMapsHaveContent } from '../flowMap';
 import { backtestScenariosHaveContent } from '../backtest';
 import { ledgerBooksHaveContent, ledgerSnapshotsHaveContent } from '../ledger';
-import { normalizeStockMeta, mergeStockMeta } from '../stockHistorySync';
+import { normalizeStockMeta, mergeStockMeta, pruneStockMeta } from '../stockHistorySync';
 import { getTodayKST } from './useMarketCalendar';
 
 // STOCK(종목별 과거 종가 캐시) 하이드레이션 대기 상한(ms).
@@ -299,6 +299,9 @@ export function useDriveSync({
           stockMetaRef.current = mergeStockMeta(stockMetaRef.current, meta.realClose);
           if (driveMap && typeof driveMap === 'object') applyStockData(driveMap, meta);
           stockHydratedRef.current = true;
+          // ⚠️ 부팅 분기(:위)와 대칭으로 시드할 것 — 빠지면 applyStockData가 참조를 그대로 채택한 맵이 즉시
+          //    dirty로 판정돼 방금 내려받은 수 MB STOCK을 그대로 되올린다(느린 회선에서만 발생해 눈에 안 띈다).
+          lastSavedStockMapRef.current = (driveMap && typeof driveMap === 'object') ? driveMap : null;
         }).catch((err) => {
           stockLoadFailedRef.current = true;
           console.warn('[Drive] STOCK 지연 로드 실패 — 이번 세션 STOCK 저장 보류:', err);
@@ -442,7 +445,10 @@ export function useDriveSync({
         // ⚠️ 참조 비교 dirty: 하이드레이션 뒤에도 이력이 안 바뀐 저장(원금 수정·메모 등)이 수 MB STOCK을
         //    통째로 재업로드하던 것을 막는다. 가드 순서는 hydrated가 **앞**(부분 맵 truncate 방어가 1순위).
         Object.keys(shm || {}).length > 0 && stockHydratedRef.current && shm !== lastSavedStockMapRef.current
-          ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm, meta: { realClose: stockMetaRef.current } }).then(() => { lastSavedStockMapRef.current = shm; })
+          // ⚠️ meta는 **같은 payload의 맵(shm)으로 검증**해서 쓴다 — shm은 state 스냅샷이고 stockMetaRef는 라이브 ref라
+          //    이력 패스 도중(스테이징 커밋 전) 저장이 끼면 마커만 앞선 파일이 박혀 다음 세션이 그 구간을 통째로
+          //    건너뛴다(pruneStockMeta 주석 참조). 버려진 마커는 다음 세션에 전체 조회로 자연 복구된다.
+          ? saveDriveFile(token, folderId, DRIVE_FILES.STOCK, { stockHistoryMap: shm, meta: { realClose: pruneStockMeta(stockMetaRef.current, shm) } }).then(() => { lastSavedStockMapRef.current = shm; })
           : Promise.resolve(),
         saveDriveFile(token, folderId, DRIVE_FILES.MARKET, { marketIndices: mi, marketIndicators: mInd, indicatorHistoryMap: ihm }),
       ]);

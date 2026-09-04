@@ -178,6 +178,27 @@ export const planKorHistoryFetch = (
   return plan;
 };
 
+// 저장 직전 마커 검증 — 맵이 실제로 보증하지 못하는 마커를 **버린다**(그 코드는 다음 세션에 전체 조회로 강등).
+//
+// ⚠️ 이 함수가 막는 사고(회귀 주의): 마커는 응답 도착 즉시 전진하는데 맵은 패스 정착(commitStaged)에서만
+//    커밋되므로, 그 사이에 저장이 끼면 **"마커는 최신인데 맵엔 그 날짜가 없는"** STOCK 파일이 Drive에 박힌다.
+//    다음 세션의 planKorHistoryFetch는 그 마커를 신선하다고 보고 skip → 그 구간 종가가 **최대
+//    MARKER_FULL_REFRESH_DAYS(30일) 동안 영구 누락**된다. 스큐는 항상 '마커가 앞서는' 위험 방향으로만 생긴다
+//    (저장 payload의 맵은 state 스냅샷, 마커는 라이브 ref).
+// 규칙: 맵에 그 코드가 없거나 lastDate 키가 없으면 마커를 제외한다. 남길 게 없으면 빈 객체.
+export const pruneStockMeta = (
+  meta: Record<string, RealCloseMarker> | null | undefined,
+  map: Record<string, Record<string, number>> | null | undefined,
+): Record<string, RealCloseMarker> => {
+  const out: Record<string, RealCloseMarker> = {};
+  for (const [code, m] of Object.entries(meta || {})) {
+    if (!m || !isIsoDate(m.lastDate)) continue;
+    if (map?.[code]?.[m.lastDate] == null) continue;   // 맵이 보증하지 못하는 마커는 버린다
+    out[code] = m;
+  }
+  return out;
+};
+
 // 완전한 실제종가 응답에서 마커의 lastDate를 정한다: 응답 최대 날짜 중 **오늘 미만**, 단 KR 종가가 정산된
 // 뒤(settledToday = 오늘, 21:00 이후)라면 오늘 허용. 장중 당일 행을 '종가 확정'으로 굳히지 않기 위함.
 // 채택할 날짜가 없으면 null(마커 갱신 안 함).

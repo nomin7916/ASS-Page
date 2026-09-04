@@ -101,7 +101,7 @@ try {
 }
 if (SH) {
   const { normalizeStockMeta, mergeStockMeta, planKorHistoryFetch, markerLastDateOf, shiftIsoDays, daysBetweenIso,
-          MARKER_FULL_REFRESH_DAYS, MIN_CACHED_KEYS_FOR_INCREMENTAL } = SH;
+          pruneStockMeta, MARKER_FULL_REFRESH_DAYS, MIN_CACHED_KEYS_FOR_INCREMENTAL } = SH;
   eq('#2 상수 — 전체 재조회 30일 · 증분 최소 캐시 키 3', [MARKER_FULL_REFRESH_DAYS, MIN_CACHED_KEYS_FOR_INCREMENTAL], [30, 3]);
 
   // ── normalizeStockMeta ──
@@ -151,6 +151,15 @@ if (SH) {
   // ── markerLastDateOf ──
   eq('#7 lastDate = 응답 최대 날짜 중 오늘 미만(장중 당일 행 제외)', markerLastDateOf({ '2026-09-02': 1, '2026-09-03': 1, '2026-09-04': 1 }, '2026-09-04', null), '2026-09-03');
   eq('#7b 21:00 이후(settledToday=오늘)면 오늘 허용', markerLastDateOf({ '2026-09-03': 1, '2026-09-04': 1 }, '2026-09-04', '2026-09-04'), '2026-09-04');
+  // ── pruneStockMeta — 맵이 보증하지 못하는 마커는 버린다(저장 직전 최종 방어선) ──
+  {
+    const meta = { A: { at: '2026-09-01', lastDate: '2026-09-03' }, B: { at: '2026-09-01', lastDate: '2026-09-03' }, C: { at: '2026-09-01', lastDate: '2026-09-03' } };
+    const map = { A: { '2026-09-02': 1, '2026-09-03': 2 }, B: { '2026-09-02': 1 } };   // B는 lastDate 키 없음, C는 코드 자체가 없음
+    eq('#7d 맵에 lastDate 키가 있는 마커만 남는다(스테이징 중 저장으로 생기는 스큐 차단)', pruneStockMeta(meta, map), { A: { at: '2026-09-01', lastDate: '2026-09-03' } });
+    eq('#7e 맵이 비면 전부 버린다 / meta가 비면 빈 객체', [pruneStockMeta(meta, {}), pruneStockMeta({}, map), pruneStockMeta(null, null)], [{}, {}, {}]);
+    eq('#7f 손상 마커(lastDate 형식 불량)도 버린다', pruneStockMeta({ X: { at: '2026-09-01', lastDate: 'bad' } }, { X: { bad: 1 } }), {});
+    eq('#7g 입력을 변형하지 않는다', [Object.keys(meta).length, Object.keys(map).length], [3, 2]);
+  }
   eq('#7c 미래 날짜·손상 키 무시, 채택할 날짜 없으면 null', [markerLastDateOf({ '2026-09-05': 1, 'bad': 1 }, '2026-09-04', null), markerLastDateOf({}, '2026-09-04', null), markerLastDateOf(null, '2026-09-04', null)], [null, null, null]);
 }
 
@@ -367,11 +376,15 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     /stage\(code, \{ overwrite: r\.data \}\)/.test(rpiG6) && /streams\.push\(Promise\.all\(\[\s*runWithConcurrency\(korTasks\.map\(tracked\)/.test(rpiG6));
   ok('G6e refreshPricesInner 안에 saveAllToDrive 직접 호출이 없다(저장은 commitStaged 한 곳)',
     rpiG6.length > 1000 && !/saveAllToDrive\(/.test(rpiG6));
-  ok('G6f 겹친 패스 방어 — 스테이징 중인 코드는 계획(KR·US·NAV)에서 제외한다',
-    /planKorHistoryFetch\(\[\.\.\.allKoreanCodes\]\.filter\(c => !stagedNow\[c\]\)/.test(rpiG6)
-    && /if \(stagedNow\[code\]\) return false;/.test(rpiG6) && /Object\.keys\(fundStartByCode\)\.filter\(c => !stagedNow\[c\]\)/.test(rpiG6));
-  ok('G6g commitStaged: 빈 스테이징이면 맵을 건드리지 않고, 커밋은 applyStagedMerges 1회 + 저장 예약 1회',
-    /const staged = historyStagingRef\.current;\s*historyStagingRef\.current = \{\};\s*if \(Object\.keys\(staged\)\.length > 0\) setStockHistoryMap\(prev => applyStagedMerges\(prev, staged\)\);/.test(sd));
+  ok('G6f 겹친 패스 방어 — 스테이징 ∪ in-flight 코드는 계획(KR·US·NAV)에서 제외한다(skipCode)',
+    /const skipCode = \(c: string\) => !!stagedNow\[c\] \|\| inFlight\.has\(c\);/.test(rpiG6)
+    && /planKorHistoryFetch\(\[\.\.\.allKoreanCodes\]\.filter\(c => !skipCode\(c\)\)/.test(rpiG6)
+    && /if \(skipCode\(code\)\) return false;/.test(rpiG6) && /Object\.keys\(fundStartByCode\)\.filter\(c => !skipCode\(c\)\)/.test(rpiG6));
+  ok('G6g commitStaged: 스테이징·마커를 함께 비우고, 둘 다 비면 저장 예약도 하지 않으며, 마커는 맵과 같은 순간 승격한다',
+    /const staged = historyStagingRef\.current;\s*const pendingMeta = pendingMetaRef\.current;\s*historyStagingRef\.current = \{\};\s*pendingMetaRef\.current = \{\};/.test(sd)
+    && /if \(Object\.keys\(staged\)\.length === 0 && Object\.keys\(pendingMeta\)\.length === 0\) return;/.test(sd)
+    && /if \(Object\.keys\(pendingMeta\)\.length > 0\) stockMetaRef\.current = mergeStockMeta\(stockMetaRef\.current, pendingMeta\);/.test(sd)
+    && /if \(Object\.keys\(staged\)\.length > 0\) setStockHistoryMap\(prev => applyStagedMerges\(prev, staged\)\);/.test(sd));
 
   // ── G7 쓰기 게이트(Phase 3): 자동확정 = settled && !partial · 백필 효과#2 = settled · 임시 게이트 식별자 부재 ──
   const acEff = slice(ac, 'useEffect(() => {', '}, [stockHistoryMap');
@@ -397,15 +410,16 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     && app.indexOf('useHistoryBackfill({') < app.indexOf('useAutoConfirmHistory({'));
 
   // ── G8 정착 신호: 워치독 + then/catch 양쪽 settle + 무스트림 즉시 settled ──
-  ok('G8 워치독 상수가 setTimeout 사용부에 있고 초과 시 도착분 커밋 + partial=true + settled',
+  ok('G8 워치독 상수가 setTimeout 사용부에 있고 초과 시 도착분 커밋 + partial=true + settled(자기 세대일 때만)',
     /const HISTORY_PASS_WATCHDOG_MS = 90000;/.test(sd)
     && /setTimeout\(\(\) => res\('timeout'\), HISTORY_PASS_WATCHDOG_MS\)/.test(sd)
-    && /watchdogFired = true;\s*commitStaged\(\);\s*setHistPartial\(true\);\s*setHistPhase\('settled'\);/.test(sd));
-  ok('G8b 최종 정착은 passAll의 fulfilled/rejected 양쪽에서 settleFinal(커밋 + partial 해제 + settled)',
+    && /if \(r !== 'timeout'\) return;\s*commitStaged\(\);\s*if \(!isMyPass\(\)\) return;\s*setHistPartial\(true\);\s*setHistPhase\('settled'\);/.test(sd));
+  ok('G8b 최종 정착은 passAll의 fulfilled/rejected 양쪽에서 settleFinal이고, partial은 **무조건** 해제한다(패스 로컬 조건 금지)',
     /passAll\.then\(settleFinal, settleFinal\);/.test(sd)
-    && /const settleFinal = \(\) => \{\s*commitStaged\(\);\s*if \(watchdogFired\) setHistPartial\(false\);\s*setHistPhase\('settled'\);/.test(sd));
-  ok('G8c 스트림 0건 패스는 finally에서 즉시 settled, 시작 시 loading→hydrated|hydrate-failed / 그 외→refreshing',
-    /if \(streams\.length === 0\) setHistPhase\('settled'\);/.test(sd)
+    && /const settleFinal = \(\) => \{\s*commitStaged\(\);\s*if \(!isMyPass\(\)\) return;[\s\S]{0,400}?setHistPartial\(false\);\s*setHistPhase\('settled'\);/.test(sd)
+    && !/if \(watchdogFired\) setHistPartial\(false\)/.test(sd));
+  ok('G8c 스트림 0건 패스도 커밋 후 즉시 settled, 시작 시 loading→hydrated|hydrate-failed / 그 외→refreshing',
+    /if \(streams\.length === 0\) \{[\s\S]{0,200}?commitStaged\(\);\s*if \(isMyPass\(\)\) \{ setHistPartial\(false\); setHistPhase\('settled'\); \}/.test(sd)
     && /setHistPhase\(prev => \(prev === 'loading' \? \(stockLoadFailedRef\.current \? 'hydrate-failed' : 'hydrated'\) : 'refreshing'\)\);/.test(sd));
   ok('G8d commitStaged 호출이 워치독·최종 정착 두 지점 이상이고 settled 전이가 세 지점 이상이다',
     count(sd, /commitStaged\(\);/g) >= 2 && count(sd, /setHistPhase\('settled'\)/g) >= 3);
@@ -427,7 +441,7 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
 
   // ── G5 STOCK 저장: hydrated 가드가 앞 + 참조 비교 dirty + 성공 후 대입 ──
   ok('G5 STOCK 분기 한 식에서 stockHydratedRef.current && 가 lastSavedStockMapRef 비교보다 앞이고 성공 시 대입한다',
-    /Object\.keys\(shm \|\| \{\}\)\.length > 0 && stockHydratedRef\.current && shm !== lastSavedStockMapRef\.current\s*\? saveDriveFile\(token, folderId, DRIVE_FILES\.STOCK, \{ stockHistoryMap: shm(, meta: \{ realClose: stockMetaRef\.current \})? \}\)\.then\(\(\) => \{ lastSavedStockMapRef\.current = shm; \}\)/.test(ds));
+    /Object\.keys\(shm \|\| \{\}\)\.length > 0 && stockHydratedRef\.current && shm !== lastSavedStockMapRef\.current\s*\? saveDriveFile\(token, folderId, DRIVE_FILES\.STOCK, \{ stockHistoryMap: shm, meta: \{ realClose: pruneStockMeta\(stockMetaRef\.current, shm\) \} \}\)\.then\(\(\) => \{ lastSavedStockMapRef\.current = shm; \}\)/.test(ds));
 
   // ── G5b 종료 저장 3경로의 게이트 = stateAppliedRef (isInitialLoad 부재) · 800ms 자동저장은 isInitialLoad 유지 ──
   const vis = slice(ds, 'const handleVisibilityChange = () => {', 'const handlePageHide = () => {');
@@ -448,8 +462,8 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
 
   // ── G10 영속 마커·증분 조회 배선(Phase 2) ──
   ok('G10 useStockData에 trendMigratedInSession 식별자가 없다(세션 ref 전량 재조회 부활 차단)', !/trendMigratedInSession/.test(sd));
-  ok('G10b STOCK 저장 payload에 meta.realClose(stockMetaRef)가 동반된다',
-    /DRIVE_FILES\.STOCK, \{ stockHistoryMap: shm, meta: \{ realClose: stockMetaRef\.current \} \}/.test(ds));
+  ok('G10b STOCK 저장 payload의 meta는 **같은 payload의 맵으로 검증**해서 쓴다(마커만 앞선 파일 차단)',
+    /DRIVE_FILES\.STOCK, \{ stockHistoryMap: shm, meta: \{ realClose: pruneStockMeta\(stockMetaRef\.current, shm\) \} \}/.test(ds));
   ok('G10c 로더 3경로(부팅·지연 도착·폴링)가 normalizeStockMeta로 meta를 읽어 stockMetaRef에 병합한다',
     count(ds, /stockMetaRef\.current = mergeStockMeta\(stockMetaRef\.current, meta\.realClose\);/g) === 3
     && count(ds, /normalizeStockMeta\(/g) === 3);
@@ -457,7 +471,7 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     /fromYear: String\(fromYear\), asOf: kstDateCompact\(\)/.test(stripComments(read('src/api.ts'))));
   const rpi = slice(sd, 'const refreshPricesInner = async', 'const refreshPrices = (options');
   ok('G10e refreshPrices의 국내 코드 판정이 planKorHistoryFetch(마커 계획)이고 옛 0.5일 신선도 필터가 없다',
-    rpi.length > 500 && /const korPlan = planKorHistoryFetch\(\[\.\.\.allKoreanCodes\]\.filter\(c => !stagedNow\[c\]\), stockHistoryMapRef\.current, stockMetaRef\.current, korPlanOpts\(force\)\);/.test(rpi)
+    rpi.length > 500 && /const korPlan = planKorHistoryFetch\(\[\.\.\.allKoreanCodes\]\.filter\(c => !skipCode\(c\)\), stockHistoryMapRef\.current, stockMetaRef\.current, korPlanOpts\(force\)\);/.test(rpi)
     && /const korCodesNeedingHistory = \[\.\.\.korPlan\.full, \.\.\.korPlan\.incremental\];/.test(rpi)
     && !/86400000 > 0\.5/.test(rpi));
   const korTask = slice(rpi, 'const korTasks = korCodesNeedingHistory.map(code => async () => {', 'const KIS_CONCURRENCY');
@@ -465,10 +479,10 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     korTask.length > 500 && /if \(incrementalSet\.has\(code\)\) \{/.test(korTask)
     && /fetchKISStockHistory\(code, fromYear\)/.test(korTask)
     && /fetchNaverDomesticHistory\(code, shiftIsoDays\(marker\.lastDate, -7\)\)/.test(korTask)
-    && /markRealClose\(code, inc, false\)/.test(korTask)
+    && /markRealClose\(code, inc, false, true\)/.test(korTask)
     && /stage\(code, \{ overwrite: inc \}\)/.test(korTask));
   ok('G10g 전체 조회 경로의 마커 갱신은 완전한 KIS 응답(complete)에서만 — trend 성공만으로 세우지 않는다',
-    /if \(complete\) markRealClose\(code, rKIS\.data, true\);/.test(korTask)
+    /if \(complete\) markRealClose\(code, rKIS\.data, true, true\);/.test(korTask)
     && !/markRealClose\(code, rTrend/.test(korTask));
   const mrc = slice(sd, 'const markRealClose = (code', 'const extractFundCode');
   ok('G10h markRealClose: lastDate는 markerLastDateOf(오늘 미만·21:00 이후 오늘 허용), at은 전체 조회일만 갱신',
@@ -529,6 +543,59 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     /await saveVersionedBackup\(token, folderId, stateCore, 'auto'\);\s*lastAutoBackupAtRef\.current = Date\.now\(\);/.test(app));
   ok('G19c 종료 백업 게이트는 stateAppliedRef 안쪽이다(STATE 로드 실패 세션은 백업도 없다)',
     visP5.indexOf('stateAppliedRef.current') > 0 && visP5.indexOf('stateAppliedRef.current') < visP5.indexOf('shouldAutoBackupNow()'));
+
+  // ── G20~G24 적대적 리뷰 확정 결함의 회귀 가드 ──
+  // G20 [마커/맵 스큐] 이력 패스 마커는 보류(pendingMetaRef) → commitStaged에서 맵과 함께 승격.
+  const mrcNew = slice(sd, 'const markRealClose = (code', 'const extractFundCode');
+  ok('G20 markRealClose는 defer 인자를 받고, defer면 pendingMetaRef에만 적재한다(비교종목 경로는 즉시)',
+    mrcNew.length > 100
+    && /markRealClose = \(code: string, data: Record<string, number> \| null \| undefined, full: boolean, defer = false\)/.test(mrcNew)
+    && /if \(defer\) pendingMetaRef\.current = \{ \.\.\.pendingMetaRef\.current, \[code\]: \{ at, lastDate \} \};/.test(mrcNew)
+    && /else stockMetaRef\.current = \{ \.\.\.stockMetaRef\.current, \[code\]: \{ at, lastDate \} \};/.test(mrcNew)
+    && /const prev = pendingMetaRef\.current\[code\] \|\| stockMetaRef\.current\[code\];/.test(mrcNew));
+  ok('G20b 비교종목 2경로는 defer 없이(맵을 즉시 커밋하므로) 마커를 바로 쓴다',
+    count(sd, /markRealClose\(comp\.code, rKIS\.data, true\)/g) === 2);
+  ok('G20c pruneStockMeta가 stockHistorySync에 있고 useDriveSync가 import해 쓴다',
+    /export const pruneStockMeta = \(/.test(read('src/stockHistorySync.ts'))
+    && /import \{ normalizeStockMeta, mergeStockMeta, pruneStockMeta \} from '\.\.\/stockHistorySync';/.test(ds));
+
+  // G21 [세대 게이트] 옛 패스가 새 패스의 상태를 덮지 못한다.
+  ok('G21 패스 세대 토큰(passIdRef/myPass/isMyPass)이 상태 전이를 자기 세대로 제한한다',
+    /const passIdRef = useRef\(0\);/.test(sd)
+    && /const myPass = \+\+passIdRef\.current;/.test(sd)
+    && /const isMyPass = \(\) => passIdRef\.current === myPass;/.test(sd));
+  ok('G21b 커밋은 세대와 무관하게 수행한다(받아 둔 이력을 버리지 않는다) — commitStaged가 isMyPass 게이트보다 앞',
+    /commitStaged\(\);\s*if \(!isMyPass\(\)\) return;/.test(sd));
+
+  // G22 [settle 등록 위치] try 안에서 예외가 나도 반드시 정착한다.
+  const iCatch = sd.indexOf('} catch (err) {');
+  const iFinally = sd.indexOf('} finally {', iCatch);
+  const iSettle = sd.indexOf('const settleFinal = () => {');
+  const iPassAll = sd.indexOf('const passAll = Promise.allSettled(streams);');
+  ok('G22 정착 등록(passAll·settleFinal)이 catch/finally **뒤**에 있다(try 안 예외로 등록이 유실되지 않게)',
+    iCatch > 0 && iFinally > iCatch && iSettle > iFinally && iPassAll > iFinally);
+  ok('G22b try 본문에는 정착 등록이 없다(옛 위치 잔존 차단)',
+    sd.slice(0, iCatch).indexOf('passAll.then(settleFinal, settleFinal);') === -1);
+
+  // G23 [진행도] 패스마다 리셋 + 언마운트 정리 + total 0이면 카운터 숨김.
+  ok('G23 패스 시작에서 resetProgress를 부르고, 그 함수가 ref·state·스로틀 타이머를 모두 되돌린다',
+    /setHistPhase\(prev => \(prev === 'loading'[\s\S]{0,200}?\);\s*resetProgress\(\);/.test(sd)
+    && /const resetProgress = \(\) => \{\s*histProgressRef\.current = \{ done: 0, total: 0 \};\s*if \(progressTimerRef\.current\) \{ clearTimeout\(progressTimerRef\.current\); progressTimerRef\.current = null; \}\s*setHistProgress\(\{ done: 0, total: 0 \}\);/.test(sd));
+  ok('G23b 진행도 스로틀 타이머를 언마운트에서 정리한다',
+    /useEffect\(\(\) => \(\) => \{ if \(progressTimerRef\.current\) clearTimeout\(progressTimerRef\.current\); \}, \[\]\);/.test(sd));
+  ok('G23c 배지는 total이 0이면 카운터를 감춘다("0/0"은 멈춘 것처럼 보인다)',
+    /progress\.total > 0 \? `과거 종가 동기화 중 \$\{progress\.done\}\/\$\{progress\.total\}` : '과거 종가 동기화 중'/.test(tabBar));
+
+  // G24 [in-flight] 겹친 패스의 중복 조회 축소 — 등록·해제가 짝이다.
+  ok('G24 조회 시작 시 inFlight에 등록하고 스트림 종료 시 해제한다(KR·US는 passCodes, NAV는 allFundCodes)',
+    /const inFlightCodesRef = useRef<Set<string>>\(new Set\(\)\);/.test(sd)
+    && /const passCodes = \[\.\.\.korCodesNeedingHistory, \.\.\.usCodesNeedingHistory\];\s*passCodes\.forEach\(c => inFlight\.add\(c\)\);/.test(sd)
+    && /\]\)\.finally\(\(\) => passCodes\.forEach\(c => inFlight\.delete\(c\)\)\)\);/.test(sd)
+    && /allFundCodes\.forEach\(c => inFlight\.add\(c\)\);/.test(sd));
+
+  // G25 [지연 도착 STOCK] 부팅 분기와 대칭으로 lastSavedStockMapRef를 시드한다.
+  ok('G25 STOCK 지연 도착 분기도 lastSavedStockMapRef를 시드한다(방금 받은 맵 되올림 차단)',
+    /stockHydratedRef\.current = true;\s*lastSavedStockMapRef\.current = \(driveMap && typeof driveMap === 'object'\) \? driveMap : null;/.test(ds));
 
   // ── G12 표시 계층 무수정 보조 증거: buildCloseEvalSeries 시그니처 문자 일치 ──
   const utils = read('src/utils.ts');

@@ -27,7 +27,9 @@ function HistSyncBadge({ phase, progress, partial }) {
     text = '종가 정착됨'; cls = fresh ? 'text-emerald-400' : 'text-gray-600';
     tip = '과거 종가 이력이 한 번에 반영됐습니다 — 오늘 이전 평가액은 고정입니다';
   } else {
-    text = `과거 종가 동기화 중 ${progress.done}/${progress.total}`; cls = 'text-sky-300';
+    // ⚠️ total은 시세 조회(종목당 최대 10초)가 끝난 뒤에야 정해진다 — 그 전에는 카운터를 감춘다.
+    //    "0/0"은 정보가 아니라 오해(멈춘 것처럼 보인다)이고, 오버레이 해제 직후 가장 먼저 보이는 자리다.
+    text = progress.total > 0 ? `과거 종가 동기화 중 ${progress.done}/${progress.total}` : '과거 종가 동기화 중'; cls = 'text-sky-300';
     tip = '과거 종가 이력을 받는 중입니다 — 끝나면 한 번에 반영됩니다(그 전까지 오늘 이전 평가액은 캐시 기준)';
   }
   return <span className={`text-[10px] font-mono px-1.5 whitespace-nowrap transition-opacity duration-500 ${cls}`} title={tip}>{text}</span>;

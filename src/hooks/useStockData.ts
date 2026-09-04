@@ -144,13 +144,19 @@ export function useStockData({
   const korPlanOpts = (force = false) => ({ force, todayKST: getTodayKST(), lastTradingDay: lastKrTradingDay() });
   // 마커 갱신 — **완전한** 실제종가 응답(isCompleteKisHistory)에서만 호출할 것. lastDate 규칙은 markerLastDateOf 주석.
   // at = 마지막 **전체** 조회일 — 증분 갱신은 lastDate만 앞당긴다(at을 매번 갱신하면 30일 전체 재조회가 영영 안 온다).
-  const markRealClose = (code: string, data: Record<string, number> | null | undefined, full: boolean) => {
+  // ⚠️ defer=true면 stockMetaRef에 즉시 쓰지 않고 pendingMetaRef에 모았다가 **commitStaged에서 맵과 함께** 승격한다.
+  //    이력 패스는 맵을 스테이징에 모으므로(패스 정착 때 1회 커밋), 마커만 먼저 전진하면 그 사이 저장에서
+  //    "마커는 최신인데 맵엔 없는" 파일이 박혀 다음 세션이 그 구간을 최대 30일 건너뛴다(pruneStockMeta 주석).
+  //    비교종목 경로는 맵을 즉시 커밋하므로 defer 없이 그대로 쓴다.
+  const pendingMetaRef = useRef<Record<string, { at: string; lastDate: string }>>({});
+  const markRealClose = (code: string, data: Record<string, number> | null | undefined, full: boolean, defer = false) => {
     const today = getTodayKST();
     const lastDate = markerLastDateOf(data, today, getKrSettledTodayDate());
     if (!lastDate) return;
-    const prev = stockMetaRef.current[code];
+    const prev = pendingMetaRef.current[code] || stockMetaRef.current[code];
     const at = full || !prev ? today : prev.at;
-    stockMetaRef.current = { ...stockMetaRef.current, [code]: { at, lastDate } };
+    if (defer) pendingMetaRef.current = { ...pendingMetaRef.current, [code]: { at, lastDate } };
+    else stockMetaRef.current = { ...stockMetaRef.current, [code]: { at, lastDate } };
   };
 
   const extractFundCode = (input: string): string => {
@@ -1091,6 +1097,25 @@ export function useStockData({
     progressTimerRef.current = setTimeout(() => { progressTimerRef.current = null; setHistProgress({ ...histProgressRef.current }); }, 500);
   };
   const tracked = (fn: () => Promise<void>) => async () => { try { await fn(); } finally { bumpProgress({ done: 1 }); } };
+  // ⚠️ 패스마다 리셋할 것 — 누적하면 두 번째 패스가 "30/55"처럼 이미 절반 끝난 것처럼 시작하고, 세션이 길어지면
+  //    "412/430"이 된다(배지는 '이번 패스의 진행도'를 뜻한다). 스로틀 타이머도 버려 옛 값이 늦게 덮지 않게 한다.
+  const resetProgress = () => {
+    histProgressRef.current = { done: 0, total: 0 };
+    if (progressTimerRef.current) { clearTimeout(progressTimerRef.current); progressTimerRef.current = null; }
+    setHistProgress({ done: 0, total: 0 });
+  };
+  // 진행도 스로틀 타이머 정리 — 언마운트 뒤 setState 경고 방지.
+  useEffect(() => () => { if (progressTimerRef.current) clearTimeout(progressTimerRef.current); }, []);
+  // ── 패스 세대(generation) ──
+  // ⚠️ refreshPricesInner는 이력 스트림을 **await하지 않고** 반환하므로(지수 조회까지만 대기) 재진입 가드가
+  //    스트림 도중에 풀린다 → 계좌 탭 전환·새로고침으로 새 패스가 시작될 수 있다. 그때 옛 패스의 정착 핸들러가
+  //    histPhase='settled'를 세우면 **부분 맵 위에서 쓰기 게이트가 열려** 전 세션 stale 값이 isFixed로 영구 고착된다.
+  //    → 상태 전이(setHistPhase/setHistPartial)는 **자기 세대일 때만**. 커밋(commitStaged)은 세대와 무관하게 수행한다
+  //    (받아 둔 이력을 버리지 않기 위해 — 값은 정확하고 커밋만 이를 뿐이다).
+  const passIdRef = useRef(0);
+  // 이번 패스가 조회 중인 코드 — 겹친 패스가 같은 코드를 중복 조회하지 않게 계획에서 제외한다
+  // (stagedNow는 '결과가 이미 온' 코드만 걸러 in-flight를 놓친다).
+  const inFlightCodesRef = useRef<Set<string>>(new Set());
 
   // ── 스테이징: 이력 스트림(KIS·trend·fchart·US·펀드 NAV)의 결과를 코드별로 모아 패스 단위로 **한 번에** 커밋 ──
   // ⚠️ 코드별 setStockHistoryMap로 되돌리지 말 것 — 병합 1회 = 렌더 + 전 계좌 portfolioStructureKey 직렬화 +
@@ -1106,7 +1131,14 @@ export function useStockData({
   // 스테이징 커밋 + Drive 저장 1회(옛 KIS/US·NAV 두 곳의 .then(setTimeout(saveAllToDrive)) 통합). 빈 스테이징이면 맵은 그대로.
   const commitStaged = () => {
     const staged = historyStagingRef.current;
+    const pendingMeta = pendingMetaRef.current;
     historyStagingRef.current = {};
+    pendingMetaRef.current = {};
+    // ⚠️ 빈 스테이징이면 저장도 예약하지 않는다 — registerSettle이 모든 패스에서 이 함수를 부르므로(스트림 0건 포함)
+    //    무조건 예약하면 갱신마다 헛저장이 나간다.
+    if (Object.keys(staged).length === 0 && Object.keys(pendingMeta).length === 0) return;
+    // ⚠️ 마커는 맵과 **같은 순간** 전진해야 한다(위 markRealClose 주석 — 스큐가 곧 종가 영구 누락).
+    if (Object.keys(pendingMeta).length > 0) stockMetaRef.current = mergeStockMeta(stockMetaRef.current, pendingMeta);
     if (Object.keys(staged).length > 0) setStockHistoryMap(prev => applyStagedMerges(prev, staged));
     setTimeout(() => {
       const snap = saveStateRef.current;
@@ -1117,8 +1149,10 @@ export function useStockData({
   const refreshPricesInner = async (force: boolean) => {
     // 이번 패스의 이력 스트림(각 Promise.all). 비어 있으면 종료 시 즉시 settled.
     const streams: Promise<unknown>[] = [];
+    const myPass = ++passIdRef.current;   // 세대 토큰 — 옛 패스가 새 패스의 상태를 덮지 못하게(선언부 주석)
     // 배지가 즉시 '동기화 중'을 보이도록 시작 시점에 전이한다. loading에서 출발하는 첫 패스만 hydrated/hydrate-failed.
     setHistPhase(prev => (prev === 'loading' ? (stockLoadFailedRef.current ? 'hydrate-failed' : 'hydrated') : 'refreshing'));
+    resetProgress();
     setIsLoading(true);
     setIndexFetchStatus({
       kospi: { status: 'loading' },
@@ -1166,12 +1200,14 @@ export function useStockData({
       // 되돌리지 말 것 — 그것이 매 세션 전량 재조회와 부팅 흔들림의 원인이었다.
       // 스테이징에 이미 실린 코드(아직 커밋 전인 직전 패스의 결과)는 이번 계획에서 뺀다 — 겹친 패스가 같은 코드를 또 긁지 않게.
       const stagedNow = historyStagingRef.current;
-      const korPlan = planKorHistoryFetch([...allKoreanCodes].filter(c => !stagedNow[c]), stockHistoryMapRef.current, stockMetaRef.current, korPlanOpts(force));
+      const inFlight = inFlightCodesRef.current;
+      const skipCode = (c: string) => !!stagedNow[c] || inFlight.has(c);
+      const korPlan = planKorHistoryFetch([...allKoreanCodes].filter(c => !skipCode(c)), stockHistoryMapRef.current, stockMetaRef.current, korPlanOpts(force));
       const incrementalSet = new Set(korPlan.incremental);
       const korCodesNeedingHistory = [...korPlan.full, ...korPlan.incremental];
       if (korPlan.skip.length > 0) console.log(`[history] 마커 신선 — 재조회 생략 ${korPlan.skip.length}건`);
       const usCodesNeedingHistory = isOverseasRefresh ? activeStockCodes.filter(code => {
-        if (stagedNow[code]) return false;
+        if (skipCode(code)) return false;
         if (force) return true;
         const existing = stockHistoryMapRef.current[code];
         return !existing || Object.keys(existing).length <= 252;
@@ -1187,7 +1223,7 @@ export function useStockData({
             const fromYear = parseInt(marker.lastDate.slice(0, 4), 10);
             const rKIS = await fetchKISStockHistory(code, fromYear);
             let inc: Record<string, number> | null = rKIS?.data && Object.keys(rKIS.data).length > 0 ? rKIS.data : null;
-            if (inc && isCompleteKisHistory(rKIS, Object.keys(inc).length)) markRealClose(code, inc, false);
+            if (inc && isCompleteKisHistory(rKIS, Object.keys(inc).length)) markRealClose(code, inc, false, true);
             if (!inc) {
               const rTrend = await fetchNaverDomesticHistory(code, shiftIsoDays(marker.lastDate, -7));
               if (rTrend) inc = rTrend.data;
@@ -1214,7 +1250,7 @@ export function useStockData({
             // 부분 응답(청크 일부만 성공) 가드: 100건 미만이면 마이그 플래그 보류 → 다음 갱신에서 재시도 허용.
             // KIS는 13청크 × ~50거래일 = 정상 시 600~6000건. 100건 미만 = rate limit으로 대부분 청크 실패한 상태.
             const complete = isCompleteKisHistory(rKIS, dates.length);
-            if (complete) markRealClose(code, rKIS.data, true);
+            if (complete) markRealClose(code, rKIS.data, true, true);
             console.log(`[history] ${code} KIS 성공: ${dates.length}건${complete ? '' : ' (부분 응답 — 재시도 대기)'}, 최초=${dates[0]}, 최근=${dates[dates.length-1]}`);
           } else {
             console.warn(`[history] ${code} KIS 실패 → Naver trend 폴백`);
@@ -1276,6 +1312,8 @@ export function useStockData({
         // force=true 시 전 계좌 모든 종목이 대상이라 직렬화가 특히 중요.
         const KIS_CONCURRENCY = force ? 4 : 8;
         bumpProgress({ total: korTasks.length + usCodesNeedingHistory.length });
+        const passCodes = [...korCodesNeedingHistory, ...usCodesNeedingHistory];
+        passCodes.forEach(c => inFlight.add(c));
         // ⚠️ 여기서 saveAllToDrive를 예약하지 말 것 — 커밋·저장은 아래 패스 정착(commitStaged) 한 곳이 맡는다.
         streams.push(Promise.all([
           runWithConcurrency(korTasks.map(tracked), KIS_CONCURRENCY),
@@ -1283,7 +1321,7 @@ export function useStockData({
             const r = await fetchUsStockHistory(code);
             if (r?.data && Object.keys(r.data).length > 1) stage(code, { overwrite: r.data });
           })()),
-        ]));
+        ]).finally(() => passCodes.forEach(c => inFlight.delete(c))));
       }
 
       // 펀드 기준가 이력 조회 → stockHistoryMap 저장 (useHistoryBackfill 소급 기록에 활용)
@@ -1318,9 +1356,10 @@ export function useStockData({
           }
         }));
       });
-      const allFundCodes = Object.keys(fundStartByCode).filter(c => !stagedNow[c]);
+      const allFundCodes = Object.keys(fundStartByCode).filter(c => !skipCode(c));
       if (allFundCodes.length > 0) {
         bumpProgress({ total: allFundCodes.length });
+        allFundCodes.forEach(c => inFlight.add(c));
         // today 기준 직전 거래일(주말 제외) — NAV는 비거래일에 없으므로
         // 이 날짜까지 채워졌으면 최신으로 간주. (공휴일은 재조회 1회 유발, 무해)
         const ltd = new Date(today + 'T12:00:00');
@@ -1412,28 +1451,6 @@ export function useStockData({
         })())));
       }
 
-      // ── 이력 패스 정착: 스트림(KIS·US·NAV) 전부 끝나면 **한 번에** 커밋 → settled. ──
-      // 워치독 초과 시 도착분만 커밋 + partial=true + settled, 남은 스트림이 끝나면 한 번 더 커밋 + partial=false.
-      // ⚠️ 정착 신호는 타이머가 아니라 실제 완료 이벤트(allSettled)다 — 워치독은 강등 경로일 뿐이다.
-      if (streams.length > 0) {
-        const passAll = Promise.allSettled(streams);
-        let watchdogFired = false;
-        const watchdog = new Promise<'timeout'>(res => setTimeout(() => res('timeout'), HISTORY_PASS_WATCHDOG_MS));
-        Promise.race([passAll, watchdog]).then(r => {
-          if (r !== 'timeout') return;
-          watchdogFired = true;
-          commitStaged();
-          setHistPartial(true);
-          setHistPhase('settled');
-        });
-        const settleFinal = () => {
-          commitStaged();
-          if (watchdogFired) setHistPartial(false);
-          setHistPhase('settled');
-        };
-        passAll.then(settleFinal, settleFinal);
-      }
-
       const [kRes, sRes, nRes] = await Promise.allSettled([
         fetchIndexData('^KS11'),
         fetchIndexData('^GSPC'),
@@ -1499,8 +1516,39 @@ export function useStockData({
       console.error('데이터 갱신 오류:', err);
     } finally {
       setIsLoading(false);
-      // 스트림이 하나도 없는 패스(대상 0건·예외)는 여기서 즉시 settled — 안 그러면 백필·자동확정이 영구 보류된다.
-      if (streams.length === 0) setHistPhase('settled');
+      // ── 이력 패스 정착 등록 ──
+      // ⚠️ 반드시 finally에서 등록할 것 — try 안에 두면 스트림을 push한 **뒤** 예외가 났을 때(손상된 Drive 값 등)
+      //    정착 핸들러가 영영 등록되지 않아 histPhase가 'refreshing'에 고착되고, 백필·자동확정이 그 세션 내내
+      //    멈추며 스테이징도 커밋되지 않는다(구제 조건이 streams.length===0뿐이라 걸리지도 않는다).
+      // 워치독 초과 시 도착분만 커밋 + partial=true + settled, 남은 스트림이 끝나면 한 번 더 커밋 + partial 해제.
+      // ⚠️ 정착 신호는 타이머가 아니라 실제 완료 이벤트(allSettled)다 — 워치독은 강등 경로일 뿐이다.
+      // ⚠️ 상태 전이는 **자기 세대(myPass)일 때만** — 옛 패스가 새 패스를 settled로 만들면 부분 맵 위에서
+      //    쓰기 게이트가 열린다(passIdRef 선언부 주석). 커밋은 세대와 무관하게 수행해 받아 둔 이력을 버리지 않는다.
+      const isMyPass = () => passIdRef.current === myPass;
+      if (streams.length === 0) {
+        // 스트림이 하나도 없는 패스(대상 0건·예외) — 즉시 정착. 안 그러면 백필·자동확정이 영구 보류된다.
+        commitStaged();
+        if (isMyPass()) { setHistPartial(false); setHistPhase('settled'); }
+      } else {
+        const passAll = Promise.allSettled(streams);
+        const watchdog = new Promise<'timeout'>(res => setTimeout(() => res('timeout'), HISTORY_PASS_WATCHDOG_MS));
+        Promise.race([passAll, watchdog]).then(r => {
+          if (r !== 'timeout') return;
+          commitStaged();
+          if (!isMyPass()) return;
+          setHistPartial(true);
+          setHistPhase('settled');
+        });
+        const settleFinal = () => {
+          commitStaged();
+          if (!isMyPass()) return;
+          // ⚠️ partial 해제를 'watchdogFired' 같은 패스 로컬 조건에 묶지 말 것 — 그러면 정상 완료한 새 패스가
+          //    이전 패스가 남긴 partial=true를 영영 못 지운다(배지가 '일부 미수집'에 고착되고 자동확정이 계속 차단된다).
+          setHistPartial(false);
+          setHistPhase('settled');
+        };
+        passAll.then(settleFinal, settleFinal);
+      }
     }
   };
 
