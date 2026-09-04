@@ -73,6 +73,8 @@ const shouldHold = (prevV, curV, netFlow, bookDelta) => {
 const CARRY_MAX_ROWS = 15;
 const CARRY_MAX_ACTIVE_ROWS = 2;
 const ACTIVE_DRIFT_RATIO = 0.05;
+// 장부(관측)가 흐름 방향으로 이만큼도 안 움직였으면 '아직 V에 안 들어왔다'가 확정 → 숨기지 않는다
+const UNREFLECTED_RATIO = 0.05;
 const computeDailyMetrics = (rows) => {
   const out = new Map();
   let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
@@ -100,11 +102,17 @@ const computeDailyMetrics = (rows) => {
       held = !!h.flowSuspect || shouldHold(prevV, h.evalAmount, fIn - fOut, bookDelta);
     }
     const netFlow = fIn - fOut;
+    // 관측이 '이 흐름은 아직 V에 전혀 안 들어왔다'고 말하는 행은 숨기지 않는다(이월은 그대로).
+    const unreflected = held && !h.flowSuspect && bookDelta != null && dV !== 0 && netFlow !== 0
+      && (netFlow > 0 ? bookDelta : -bookDelta) <= Math.abs(netFlow) * UNREFLECTED_RATIO;
+    const shown = !held || unreflected;
     out.set(h.date, {
-      dodAbsChange: held ? null : dV - netFlow,
-      dodChange: held ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, fIn, fOut),
-      ledgerFlow: held ? 0 : ledger,
-      held,
+      dodAbsChange: shown ? (unreflected ? dV : dV - netFlow) : null,
+      dodChange: shown
+        ? (unreflected ? dailyFlowAdjustedRate(prevV, h.evalAmount, 0, 0) : dailyFlowAdjustedRate(prevV, h.evalAmount, fIn, fOut))
+        : 0,
+      ledgerFlow: shown && !unreflected ? ledger : 0,
+      held: !shown,
     });
     if (held && !h.flowSuspect && netFlow !== 0) {
       carryIn = fIn; carryOut = fOut; carryLedger = ledger;
@@ -567,15 +575,77 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     // 사용자가 예수금을 고친 날 — 장부가 −1,000만 → 이월된 출금이 여기서 정산된다
     { date: '2026-05-22', evalAmount: 93_300_000, flowIn: 0, flowOut: 0, bookDelta: -10_000_000 },
   ]);
+  // ⚠️ 계약 갱신(2026-09): 미반영이 **관측으로 확정**된 구간은 더 이상 숨기지 않는다.
+  //    그 흐름이 V에 없다는 것이 확정이므로 ΔV 자체가 그날의 시장 손익이다(아래 #29e 참조).
+  //    ⚠️ 되돌려 '-'로 만들지 말 것 — 관측 모드에서는 ACTIVE 폐기가 꺼져 있어 이 구간이
+  //    CARRY_MAX_ROWS(15행)까지 통째로 잠긴다(사용자 보고 2026-09).
   for (const d of ['2026-05-19', '2026-05-20', '2026-05-21']) {
-    if (m.get(d).dodAbsChange !== null) {
-      failed++; console.error(`  ✗ #29c ${d} 미반영 구간이 보류되지 않음 (${m.get(d).dodAbsChange})`);
+    if (m.get(d).dodAbsChange !== 1_100_000) {
+      failed++; console.error(`  ✗ #29c ${d} 미반영 확정 구간이 시장 손익을 못 낸다 (${m.get(d).dodAbsChange})`);
     }
   }
-  // ⚠️ 폐기가 일어났다면 이 값이 −₩10,000,000 가짜 손실이 된다
+  // ⚠️ 이월이 살아 있어야 한다 — 폐기됐다면 이 값이 −₩10,000,000 가짜 손실이 된다
   if (m.get('2026-05-22').dodAbsChange !== 0) {
     failed++; console.error(`  ✗ #29c 반영일에 가짜 손실 (${m.get('2026-05-22').dodAbsChange})`);
   } else console.log('  ✓ #29c 지연 반영 출금이 소각되지 않고 반영일에 정산(₩0)');
+  // 배지(ledgerFlow)는 실제로 보정에 쓰인 행에만 — 미반영 확정 행에 찍으면 %와 어긋나 보인다
+  if (m.get('2026-05-20').ledgerFlow !== 0) {
+    failed++; console.error('  ✗ #29c 미반영 확정 행에 원장 배지가 붙는다');
+  } else console.log('  ✓ #29c 미반영 확정 구간이 그날 시장 손익을 그대로 표시(+₩1,100,000)');
+}
+
+// #29e 미반영 '확정' 행은 숨기지 않는다 — 이 변경의 계약.
+//      보류('-')의 존재 이유는 '흐름이 V에 들어왔는지 모른다'인데, 장부 관측이 0이면 그건
+//      모름이 아니라 확정이다. 그러면 ΔV가 곧 그날의 시장 손익이므로 숨길 근거가 없다.
+{
+  const m = computeDailyMetrics([
+    { date: '2026-06-01', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    // 입금 원장은 오늘이지만 예수금 미반영 → 장부 불변. 시장은 −1%.
+    { date: '2026-06-02', evalAmount: 99_000_000, flowIn: 20_000_000, flowOut: 0, bookDelta: 0 },
+  ]);
+  const r = m.get('2026-06-02');
+  check('#29e 미반영 확정 입금일 = 순수 시장 손익', r.dodAbsChange, -1_000_000);
+  check('#29e 미반영 확정 입금일 % = ΔV ÷ 전일V', r.dodChange, -1, 1e-9);
+  if (r.held) { failed++; console.error('  ✗ #29e 미반영 확정인데 보류로 표시'); }
+  else console.log('  ✓ #29e 미반영 확정 행은 held=false');
+}
+
+// #29f 부분 흡수(5%~50%)는 여전히 '모름' → 보류 유지. 흡수 문턱을 넘기면 정상 산출.
+{
+  const rows = (bd) => [
+    { date: '2026-06-08', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: '2026-06-09', evalAmount: 101_000_000, flowIn: 10_000_000, flowOut: 0, bookDelta: bd },
+  ];
+  const partial = computeDailyMetrics(rows(3_000_000)).get('2026-06-09');   // 30% 흡수
+  const done = computeDailyMetrics(rows(10_000_000)).get('2026-06-09');     // 전액 흡수
+  if (partial.dodAbsChange !== null) {
+    failed++; console.error(`  ✗ #29f 부분 흡수가 확정으로 새어나감 (${partial.dodAbsChange})`);
+  } else console.log("  ✓ #29f 부분 흡수(30%)는 여전히 보류('-')");
+  check('#29f 전액 흡수면 흐름을 빼고 산출', done.dodAbsChange, 1_000_000 - 10_000_000);
+}
+
+// #29g 비거래일(ΔV=0)은 장부 관측이 있어도 '-' — 시장 정보가 아예 없는 행이라
+//      0.00%로 단언하면 '변동 없음'과 구분되지 않는다(보류 행 표시 규약).
+{
+  const m = computeDailyMetrics([
+    { date: '2026-06-13', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: '2026-06-14', evalAmount: 100_000_000, flowIn: 5_000_000, flowOut: 0, bookDelta: 0 },
+  ]);
+  if (m.get('2026-06-14').dodAbsChange !== null) {
+    failed++; console.error('  ✗ #29g 비거래일 행이 0.00%로 단언됨');
+  } else console.log("  ✓ #29g 비거래일(ΔV=0)은 관측이 있어도 '-'");
+}
+
+// #29h 장부 미제공(추정 구성·해외계좌)이면 새 분기가 **절대** 발동하지 않는다(하위호환).
+//      ΔV는 시세에 오염된 추측이라 '미반영 확정'의 근거가 될 수 없다.
+{
+  const m = computeDailyMetrics([
+    { date: '2026-06-15', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-06-16', evalAmount: 99_000_000, flowIn: 20_000_000, flowOut: 0 },
+  ]);
+  if (m.get('2026-06-16').dodAbsChange !== null) {
+    failed++; console.error('  ✗ #29h 장부 미제공인데 미반영 확정으로 처리됨');
+  } else console.log("  ✓ #29h 장부 미제공이면 종전대로 보류('-')");
 }
 
 // #29d 장부 미제공(추정 구성·해외계좌)이면 기존 ΔV 휴리스틱과 **완전히 동일**해야 한다(하위호환).
@@ -760,6 +830,55 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     guard('bookCostOf 가 costBasisOnly 옵션을 지원한다', /bookCostOf\s*=\s*\(items,\s*opts/.test(utl));
     guard('buildBookCostSeries 가 opts(rateOf/costBasisOnly)를 받는다',
       /buildBookCostSeries\s*=\s*\(p,\s*dates,\s*opts/.test(utl));
+  }
+}
+
+// #29i 드리프트 가드 — 미러(#1~#30c)는 이 파일의 참조 구현만 검사하므로 `src/utils.ts`에만 넣은
+//      변경·미러에만 넣은 변경이 **둘 다 통과**한다. 실제 함수를 직접 import 해 같은 픽스처로 대조한다.
+//      (지원하지 않는 런타임에서는 명시적으로 건너뛴다고 출력 — 조용히 사라지지 않게.)
+{
+  let U = null;
+  try {
+    const { pathToFileURL } = await import('node:url');
+    U = await import(pathToFileURL(new URL('../src/utils.ts', import.meta.url).pathname).href);
+  } catch (e) {
+    console.log(`  ⓘ #29i 이 런타임은 .ts 직접 import를 지원하지 않아 드리프트 가드를 건너뜁니다 (${e.code || e.message}).`);
+  }
+  if (U) {
+    const fixtures = [
+      // #29c — 지연 반영 출금(관측 0) 구간 + 반영일 정산
+      [{ date: 'a1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+       { date: 'a2', evalAmount: 101_100_000, flowIn: 0, flowOut: 10_000_000, bookDelta: 0 },
+       { date: 'a3', evalAmount: 102_200_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+       { date: 'a4', evalAmount: 103_300_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+       { date: 'a5', evalAmount: 93_300_000, flowIn: 0, flowOut: 0, bookDelta: -10_000_000 }],
+      // #29e/#29f — 미반영 확정 · 부분 흡수 · 전액 흡수
+      [{ date: 'b1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+       { date: 'b2', evalAmount: 99_000_000, flowIn: 20_000_000, flowOut: 0, bookDelta: 0 },
+       { date: 'b3', evalAmount: 100_000_000, flowIn: 10_000_000, flowOut: 0, bookDelta: 3_000_000 },
+       { date: 'b4', evalAmount: 101_000_000, flowIn: 0, flowOut: 0, bookDelta: 30_000_000 }],
+      // #29g/#29h — 비거래일(ΔV=0) · 장부 미제공
+      [{ date: 'c1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+       { date: 'c2', evalAmount: 100_000_000, flowIn: 5_000_000, flowOut: 0, bookDelta: 0 },
+       { date: 'c3', evalAmount: 99_000_000, flowIn: 20_000_000, flowOut: 0 }],
+    ];
+    let drift = 0;
+    for (const rows of fixtures) {
+      const mine = computeDailyMetrics(rows);
+      const real = U.computeDailyMetricsSeries(rows);
+      for (const r of rows) {
+        const a = mine.get(r.date), b = real.get(r.date);
+        const same = a && b && a.dodAbsChange === b.dodAbsChange && a.held === b.held
+          && Math.abs((a.dodChange || 0) - (b.dodChange || 0)) < 1e-9
+          && (a.ledgerFlow || 0) === (b.ledgerFlow || 0);
+        if (!same) {
+          drift++;
+          console.error(`  ✗ #29i ${r.date} 미러와 src 불일치 — 미러 ${JSON.stringify(a)} / src ${JSON.stringify(b)}`);
+        }
+      }
+    }
+    if (drift) failed += drift;
+    else console.log('  ✓ #29i src/utils.ts computeDailyMetricsSeries 와 미러가 완전 일치');
   }
 }
 

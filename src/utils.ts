@@ -441,6 +441,9 @@ export const bookDeltaBetween = (bookByDate, prevDate, date) => {
 const CARRY_MAX_ROWS = 15;
 const CARRY_MAX_ACTIVE_ROWS = 2;
 const ACTIVE_DRIFT_RATIO = 0.05; // 흐름 대비 이만큼도 안 움직인 행은 '거래일 보류'로 세지 않는다
+// 장부(관측)가 흐름 방향으로 이만큼도 안 움직였으면 '아직 V에 안 들어왔다'가 **확정**이다.
+// 그런 행은 숨기지 않고 그날 ΔV(순수 시장 변동)를 그대로 낸다 — 흐름 이월은 그대로 유지한다.
+const UNREFLECTED_RATIO = 0.05;
 export const computeDailyMetricsSeries = (rows) => {
   const out = new Map();
   let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
@@ -477,12 +480,34 @@ export const computeDailyMetricsSeries = (rows) => {
       held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut, bookDelta);
     }
     const netFlow = fIn - fOut;
+    // ── 관측이 '이 흐름은 아직 V에 전혀 들어오지 않았다'고 말하는 행은 숨기지 않는다 ────────────
+    // 보류('-')의 존재 이유는 **흐름이 평가액에 들어왔는지 모르기 때문**이다. 그런데 bookDelta
+    // (장부액 관측)가 "장부가 흐름 방향으로 한 푼도 안 움직였다"고 말하면 그건 모름이 아니라
+    // **확정**이고, 그날 ΔV는 순수 시장 변동이므로 그것이 곧 그날의 정답이다.
+    // ⚠️ 이월(carryIn/Out/Ledger·carryRows·activeRows)은 **한 줄도 건드리지 않는다** — 흐름은
+    //    종전대로 다음 행으로 넘어가고, 실제로 반영되는 날 정산된다(가짜 손익 방지 불변식 유지).
+    //    바뀌는 것은 '그 사이 행을 숨길 것인가' 하나뿐이다.
+    // ⚠️ 되돌리면 재발: 원장 기록일과 예수금 수정일이 며칠 어긋나는 것은 구조적으로 정상인데
+    //    (DepositPanel은 평가액을 건드리지 않는다), 관측 모드에서는 ACTIVE 폐기가 꺼져 있어
+    //    그 구간이 최대 CARRY_MAX_ROWS(15행)까지 통째로 '-'로 잠겼다 — 알고 있는 시장 손익을
+    //    몇 주간 숨기는 셈이다(사용자 보고 2026-09).
+    // ⚠️ ΔV = 0(비거래일 carry-forward)은 제외 — 시장 정보가 아예 없는 행이라 0.00%로 단언하면
+    //    '변동 없음'과 구분되지 않는다(보류 행 표시 규약).
+    // ⚠️ 부분 흡수(UNREFLECTED_RATIO ~ ABSORBED_RATIO 구간)는 여전히 '모름'이라 보류를 유지한다.
+    // ⚠️ ΔV로 판정하지 말 것 — 그건 다시 추측이다. 관측(bookDelta)이 있을 때만 확정으로 본다.
+    const unreflected = held && !h.flowSuspect && bookDelta != null && dV !== 0 && netFlow !== 0
+      && (netFlow > 0 ? bookDelta : -bookDelta) <= Math.abs(netFlow) * UNREFLECTED_RATIO;
+    const shown = !held || unreflected;
     out.set(h.date, {
-      dodAbsChange: held ? null : dV - netFlow,
-      dodChange: held ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, fIn, fOut),
+      // 미반영이 확정된 행은 그 흐름이 V에 없으므로 빼지 않는다 — ΔV 자체가 그날의 시장 손익이다.
+      dodAbsChange: shown ? (unreflected ? dV : dV - netFlow) : null,
+      dodChange: shown
+        ? (unreflected ? dailyFlowAdjustedRate(prevV, h.evalAmount, 0, 0) : dailyFlowAdjustedRate(prevV, h.evalAmount, fIn, fOut))
+        : 0,
       // 배지는 실제로 보정에 쓰인 행에만 — 이월 중인 행에 찍으면 %와 어긋나 보인다
-      ledgerFlow: held ? 0 : ledger,
-      held,
+      ledgerFlow: shown && !unreflected ? ledger : 0,
+      // ⚠️ 계약: held ⟺ dodAbsChange == null (accumulateDailySeries·기간 표·헤더 카드가 이에 의존)
+      held: !shown,
     });
     // flowSuspect(오늘 라이브 이상치)는 항상 마지막 행이라 이월 대상이 아니다
     if (held && !h.flowSuspect && netFlow !== 0) {

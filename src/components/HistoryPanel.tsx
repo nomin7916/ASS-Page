@@ -462,6 +462,12 @@ export default function HistoryPanel({
                           {dodProfit == null
                             ? <span className="text-gray-600">-</span>
                             : <span className={dod > 0 ? 'text-red-400' : dod < 0 ? 'text-blue-400' : 'text-gray-500'}>{formatPercent(dod)}</span>}
+                          {/* 터치 기기에는 hover 툴팁이 없다 — '-'만 보이면 고장으로 읽힌다.
+                              ⚠️ 금액은 절대 쓰지 말 것(입출금 금액 배지 상시 렌더 금지 규약) —
+                                 헤더 '오늘 수익' 카드와 같이 사유만 알린다. */}
+                          {dodProfit == null && hasPrev && (
+                            <span className="block text-[8px] font-normal leading-none mt-0.5 text-gray-600 whitespace-nowrap">반영 대기</span>
+                          )}
                           {/* 일간 손익(₩) — "얼마 벌었나"는 %보다 금액이 직관적이다. */}
                           {dodProfit != null && dodProfit !== 0 && (
                             <span className={`block text-[9px] font-bold leading-none mt-0.5 whitespace-nowrap ${dodProfit > 0 ? 'text-red-300/80' : 'text-blue-300/80'}`}>
