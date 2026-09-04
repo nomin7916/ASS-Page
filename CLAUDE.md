@@ -504,7 +504,8 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   '시작' 신호가 '완료'까지 미뤄진다 — `{ run }` 객체로 감싼다). effect가 `BOOT_REFRESH_START_TIMEOUT_MS`(5s)
   안에 안 돌면(언마운트 등) 직접 쏜다(그때는 렌더가 끝난 지 오래다).
 - **부팅 순서**: loadFromDrive(STATE+MARKET+STOCK) → 신규 사용자 분기 → ledger 잠금 해제 →
-  **`setIsInitialLoading(false)`(오버레이 해제 = 과거값 확정 이벤트)** → `fetchMarketIndicators` →
+  **`setIsInitialLoading(false)`(과거값 확정 이벤트 — ⚠️ 이 줄의 자리를 옮기지 말 것. 2026-09부터 화면상
+  오버레이는 `bootSyncWait`가 종가 정착까지 따로 붙든다)** → `fetchMarketIndicators` →
   `setBootRefreshSeq`(첫 갱신 트리거) → 부수 로드 5건(세금·알림로그·SETTINGS·getSettings·getNotifications —
   내용 무수정, **시작만** 병행) → `await started.run` → `initSession` → `isInitialLoad=false`. 강제 복귀·
   `loadStockFromDrive(token)`·`applyStockData`의 `setTimeout(refreshPrices)` 전부 삭제. `LoadingOverlay`의
@@ -613,15 +614,34 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   오늘 기록 — 은 **무수정**, 사전체크/map 미러링 불변식 그대로). Phase 1의 임시 `firstHistoryPassDone`은
   **제거**(식별자 부재를 G7d가 단언). App에서 `useHistoryBackfill`·`useAutoConfirmHistory` 호출을 둘 다
   `useStockData` **뒤**로 옮겼다(백필 → 자동확정 순서는 유지 — 자동확정은 백필 결과 위에 합성).
-- **배지(`AccountTabBar` `HistSyncBadge`)**: `hydrated/refreshing` → '과거 종가 동기화 중 n/N', `settled` →
-  '종가 정착됨'(4초 뒤 흐리게), `partial` → '일부 미수집 — 새로고침으로 재시도', `hydrate-failed` → '종가 캐시
-  미로드'. `notify()` 호출 0건(알림 최소화 정책 — 진행은 배지로만). 기본값은 'settled'라 미전달 호출부는 흐린
-  배지만 보인다.
+- **진행 표시(`LoadingOverlay` `histSyncLine`) — 부팅 로딩 팝업 안 한 곳뿐 (⚠️ 2026-09 이동)**:
+  `hydrated/refreshing` → '과거 종가 동기화 중 n/N'(+ 진행 바), `settled` → '종가 정착됨', `partial` →
+  '일부 미수집 — 새로고침으로 재시도', `hydrate-failed` → '종가 캐시 미로드 — 캐시 없이 조회합니다',
+  `loading` → '종가 캐시 확인 중'. `notify()` 호출 0건(알림 최소화 정책). 기본값은 'settled'라 미전달
+  호출부는 정착 줄만 보인다.
+  ⚠️ **상단바(`AccountTabBar`) 배지 `HistSyncBadge`는 제거됐다 — 되살리지 말 것**(사용자 요청 2026-09
+  "구름 아이콘 옆 종가 동기화 문구는 표시하지 않음"). `AccountTabBar`에는 `histPhase`/`histProgress`/
+  `histPartial` prop 자체가 없다(G9d가 식별자 부재를 단언).
+- **⚠️ 부팅 오버레이 해제 게이트 `bootSyncWait` — 화면 표시만 붙든다(사용자 요청 2026-09)**:
+  로딩 팝업이 '과거 종가 동기화 정착(`histPhase === 'settled'`)'까지 떠 있고, 내려간 뒤부터 앱이 정상
+  동작한다. 붙드는 것은 **표시뿐**이다 — `setIsInitialLoading(false)`는 **종전 자리**(STATE 확정 직후,
+  첫 갱신 트리거보다 앞)에서 그대로 내려가므로 부팅 순서 불변식(G3c)·종료 저장 게이트(`stateAppliedRef`)·
+  800ms 자동저장·chartPrefs·폴링·자동 백업의 `isInitialLoad` 게이트가 **전부 무영향**이다
+  (`isInitialLoading`은 코드 전체에서 오버레이 `visible` 외에 소비처가 없다).
+  ⚠️ 해제는 **한 번이라도 미정착을 본 뒤에만**(`bootSyncSeenRef`) — 같은 탭 재로그인은 직전 세션의
+  'settled'가 `useStockData` state에 남아 있어, 그대로 두면 STATE 적용 즉시 내려가 게이트가 조용히
+  무력화된다. ⚠️ 오버레이의 **5초 '계속 사용하기' 버튼·20초 자동 해제는 그대로 탈출구**다(워치독은 90초라
+  이력 패스가 끝내 정착하지 않아도 20초에 풀린다) — 두 폴백을 제거하면 부팅이 영구히 막힐 수 있다.
+  ⚠️ 수동 해제(`onDismiss`)는 `isInitialLoading`·`bootSyncWait`를 **함께** 내린다(한쪽만 내리면 버튼이
+  아무 일도 하지 않는다). 영속화 지점 **0곳**(둘 다 세션 로컬 state).
 - **A/B 의도된 결과 차이 1건**(#11): 캐시에 있던 날짜에 fchart(수정종가) gapFill이 들어오고 KIS 응답에는 없는
   경우 — 옛 순서(빈 맵 → 코드별 병합 → Drive 베이스 + **메모리 우선**)는 수정종가가 Drive 캐시의 실제종가를
   덮었고(규약 위반), 새 순서(Drive → 스테이징 1회 커밋)는 규약대로 캐시가 이긴다. 그 외 diff 0건.
 - 검증: `verify:boot` 파트① #8~#11c + G6~G9(스트림 구간 `setStockHistoryMap` 부재·stamp 1회 커밋·NAV/US 스테이징·
-  저장 직접 호출 0건·겹친 패스 제외·게이트 2종·효과#1 무침범·정착 신호 4지점·배지 4분기). **변이 24종**
+  저장 직접 호출 0건·겹친 패스 제외·게이트 2종·효과#1 무침범·정착 신호 4지점·**G9~G9f 진행 표시 4분기 ·
+  상단바 배지 부재 · 오버레이 유지 게이트**). **변이 24종 + 오버레이 이동 7종**(상단바 배지 부활 ·
+  `visible`에서 `bootSyncWait` 제거 · seen 게이트 제거(즉시 해제) · `onDismiss`가 한쪽만 해제 ·
+  로드 effect 무장 제거 · 상태 줄 렌더 삭제 · 진행 분기 문구 삭제)
   (증분/전체/stamp/NAV/US를 코드별 setState로 · stamp 커밋 삭제 · 백필 게이트/deps 삭제 · 효과#1 침범 ·
   partial 게이트 완화 · settleFinal 한 지점 · 워치독 리터럴/커밋 삭제/partial 미해제 · 저장 직접 호출 부활 ·
   스테이징 제외 삭제 · mergeCodeHistory 한 글자 · 빈 staged 새 객체 · deleteKeys 순서 · 참조 복사 · 배지/prop

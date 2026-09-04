@@ -412,18 +412,30 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
   ok('G8e useStockData가 histPhase·histPartial·histProgress를 반환하고 App이 그것을 받는다',
     /histPhase,\s*histPartial,\s*histProgress,\s*\};\s*\}/.test(sd) && /histPhase, histPartial, histProgress,\s*\} = useStockData\(\{/.test(app));
 
-  // ── G9 배지(AccountTabBar): 4상태 분기 + notify 부재 + App prop 배선 ──
+  // ── G9 동기화 표시(LoadingOverlay): 4상태 분기 + notify 부재 + 상단바 배지 부재 + 오버레이 유지 게이트 ──
+  //    사용자 요청 2026-09: 진행 표시는 부팅 로딩 팝업 **한 곳**이고, 상단바(클라우드 아이콘 옆) 배지는 없다.
   const tabRaw = read('src/components/AccountTabBar.tsx');
   const tabBar = stripComments(tabRaw);
-  const badge = slice(tabBar, 'function HistSyncBadge(', 'export default function AccountTabBar(');
-  ok('G9 HistSyncBadge가 hydrate-failed·settled&&partial·settled·동기화 중(n/N) 4분기를 렌더한다',
-    badge.length > 300 && /phase === 'hydrate-failed'/.test(badge) && /phase === 'settled' && partial/.test(badge)
-    && /phase === 'settled'\)/.test(badge) && /과거 종가 동기화 중 \$\{progress\.done\}\/\$\{progress\.total\}/.test(badge)
-    && /phase === 'loading'\) return null;/.test(badge));
-  ok('G9b 배지 블록에 notify( 가 없다(알림 최소화 정책)', badge.length > 300 && !/notify\(/.test(badge));
-  ok('G9c AccountTabBar가 배지를 렌더하고 App이 histPhase·histProgress·histPartial을 넘긴다',
-    /<HistSyncBadge phase=\{histPhase\} progress=\{histProgress\} partial=\{histPartial\} \/>/.test(tabBar)
+  const ovRaw = read('src/components/LoadingOverlay.tsx');
+  const ov = stripComments(ovRaw);
+  const line = slice(ov, 'export function histSyncLine(', 'export default function LoadingOverlay(');
+  ok('G9 histSyncLine이 hydrate-failed·settled&&partial·settled·동기화 중(n/N) 4분기를 낸다',
+    line.length > 300 && /phase === 'hydrate-failed'/.test(line) && /phase === 'settled' && partial/.test(line)
+    && /phase === 'settled'\)/.test(line) && /과거 종가 동기화 중 \$\{progress\.done\}\/\$\{progress\.total\}/.test(line));
+  ok('G9b LoadingOverlay에 notify( 가 없다(알림 최소화 정책)', ov.length > 1000 && !/notify\(/.test(ov));
+  ok('G9c LoadingOverlay가 상태 줄을 렌더하고(사용부) App이 histPhase·histProgress·histPartial을 넘긴다',
+    /const sync = histSyncLine\(histPhase, histProgress/.test(ov) && /\{sync\.text\}/.test(ov)
     && /histPhase=\{histPhase\}\s*histProgress=\{histProgress\}\s*histPartial=\{histPartial\}/.test(app));
+  ok('G9d 상단바(AccountTabBar)에 종가 동기화 배지·prop이 남아 있지 않다',
+    tabBar.length > 1000 && !/HistSyncBadge/.test(tabBar) && !/histPhase/.test(tabBar)
+    && !/histProgress/.test(tabBar) && !/histPartial/.test(tabBar));
+  ok('G9e 오버레이는 isInitialLoading || bootSyncWait로 보이고, 해제 게이트가 settled를 실제로 본 뒤에만 내린다',
+    /visible=\{isInitialLoading \|\| bootSyncWait\}/.test(app)
+    && /if \(histPhase !== 'settled'\) \{ bootSyncSeenRef\.current = true; return; \}\s*if \(bootSyncSeenRef\.current\) setBootSyncWait\(false\);/.test(app)
+    && /\}, \[bootSyncWait, histPhase\]\);/.test(app));
+  ok('G9f 로드 effect가 게이트를 무장하고(seen 리셋 + true) 수동 해제는 두 상태를 함께 내린다',
+    /bootSyncSeenRef\.current = false;\s*setBootSyncWait\(true\);/.test(app)
+    && /onDismiss=\{\(\) => \{ setIsInitialLoading\(false\); setBootSyncWait\(false\); \}\}/.test(app));
 
   // ── G5 STOCK 저장: hydrated 가드가 앞 + 참조 비교 dirty + 성공 후 대입 ──
   ok('G5 STOCK 분기 한 식에서 stockHydratedRef.current && 가 lastSavedStockMapRef 비교보다 앞이고 성공 시 대입한다',

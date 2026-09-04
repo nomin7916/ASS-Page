@@ -8,9 +8,36 @@ interface Props {
   notificationLog: NotificationEntry[];
   onDismiss: () => void;
   autoCloseMs?: number;
+  histPhase?: 'loading' | 'hydrated' | 'hydrate-failed' | 'refreshing' | 'settled';
+  histProgress?: { done: number; total: number };
+  histPartial?: boolean;
 }
 
-export default function LoadingOverlay({ visible, notificationLog, onDismiss, autoCloseMs = 20000 }: Props) {
+// 과거 종가 동기화 상태 — 부팅 상태 머신(histPhase) 4종을 로딩 팝업 안에 표시한다.
+// ⚠️ 상단바(AccountTabBar)에 배지를 다시 만들지 말 것 — 진행 표시는 이 오버레이 한 곳뿐이다(사용자 요청 2026-09).
+//    notify() 금지(알림 최소화 정책)도 그대로다 — 진행·성공은 벨에 남기지 않는다.
+export function histSyncLine(phase, progress, partial) {
+  if (phase === 'hydrate-failed') {
+    return { text: '종가 캐시 미로드 — 캐시 없이 조회합니다', cls: 'text-orange-400', busy: false,
+      tip: 'Drive 종가 캐시를 불러오지 못했습니다 — 이번 세션은 캐시 없이 조회하고 종가 캐시 저장을 보류합니다' };
+  }
+  if (phase === 'settled' && partial) {
+    return { text: '일부 미수집 — 새로고침으로 재시도', cls: 'text-amber-400', busy: false,
+      tip: '과거 종가 일부를 시간 안에 받지 못했습니다(도착분만 반영). 새로고침 버튼으로 다시 시도하세요' };
+  }
+  if (phase === 'settled') {
+    return { text: '종가 정착됨', cls: 'text-emerald-400', busy: false,
+      tip: '과거 종가 이력이 한 번에 반영됐습니다 — 오늘 이전 평가액은 고정입니다' };
+  }
+  if (phase === 'loading') {
+    return { text: '종가 캐시 확인 중...', cls: 'text-gray-500', busy: true,
+      tip: 'Drive의 종가 캐시를 불러오는 중입니다' };
+  }
+  return { text: `과거 종가 동기화 중 ${progress.done}/${progress.total}`, cls: 'text-sky-300', busy: true,
+    tip: '과거 종가 이력을 받는 중입니다 — 끝나면 한 번에 반영됩니다(그 전까지 오늘 이전 평가액은 캐시 기준)' };
+}
+
+export default function LoadingOverlay({ visible, notificationLog, onDismiss, autoCloseMs = 20000, histPhase = 'settled', histProgress = { done: 0, total: 0 }, histPartial = false }: Props) {
   const [elapsed, setElapsed] = useState(0);
   const [canDismiss, setCanDismiss] = useState(false);
   const startRef = useRef<number>(0);
@@ -43,6 +70,10 @@ export default function LoadingOverlay({ visible, notificationLog, onDismiss, au
   if (!visible) return null;
 
   const remaining = Math.max(0, Math.round((autoCloseMs / 1000) - elapsed));
+  const sync = histSyncLine(histPhase, histProgress || { done: 0, total: 0 }, histPartial);
+  const syncPct = histProgress && histProgress.total > 0
+    ? Math.min(100, Math.round((histProgress.done / histProgress.total) * 100))
+    : 0;
 
   return (
     <div
@@ -75,6 +106,24 @@ export default function LoadingOverlay({ visible, notificationLog, onDismiss, au
             </svg>
             <span className="text-[10px] text-gray-600 font-mono">{elapsed}s</span>
           </div>
+        </div>
+
+        {/* ── 과거 종가 동기화 상태 — 이 줄이 정착될 때까지 오버레이가 유지된다 ── */}
+        <div className={`px-4 py-1.5 border-b ${BORDER.subtle}`} title={sync.tip}>
+          <div className="flex items-center gap-2">
+            {sync.busy && (
+              <svg className="animate-spin w-2.5 h-2.5 text-sky-400 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg>
+            )}
+            <span className={`text-[11px] font-mono truncate ${sync.cls}`}>{sync.text}</span>
+          </div>
+          {sync.busy && syncPct > 0 && (
+            <div className="mt-1 h-0.5 rounded-full bg-gray-800 overflow-hidden">
+              <div className="h-full bg-sky-500/70 transition-all duration-500" style={{ width: `${syncPct}%` }} />
+            </div>
+          )}
         </div>
 
         {/* ── 줄선 메모 영역 — 최근 알림 3개 표시 ── */}

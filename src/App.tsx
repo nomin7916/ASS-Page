@@ -231,6 +231,11 @@ export default function App() {
 
   // ── 초기 로딩 오버레이 ──
   const [isInitialLoading, setIsInitialLoading] = useState(false);
+  // 부팅 오버레이를 '과거 종가 동기화 정착(histPhase settled)'까지 붙드는 표시 전용 게이트(사용자 요청 2026-09).
+  // ⚠️ isInitialLoading(STATE 확정 신호) 자체는 종전 자리에서 그대로 내려간다 — 부팅 순서 불변식(verify:boot G3c)
+  //    과 종료 저장 게이트(stateAppliedRef)·800ms 자동저장·폴링·자동 백업의 isInitialLoad 게이트는 전부 무영향이다.
+  const [bootSyncWait, setBootSyncWait] = useState(false);
+  const bootSyncSeenRef = useRef(false);
 
   // ── 인증 상태 ──
   const [authUser, setAuthUser] = useState<{ email: string; token: string } | null>(null);
@@ -1789,6 +1794,18 @@ export default function App() {
     histPhase, histPartial,
   });
 
+  // ── 부팅 오버레이 해제 게이트: 첫 이력 패스가 실제로 '정착(settled)'해야 내린다 ──
+  // 사용자 요청 2026-09: 로딩 팝업이 과거 종가 동기화까지 끝난 뒤 사라지고, 그 다음부터 앱이 정상 동작해야 한다.
+  // ⚠️ 붙드는 것은 **화면 표시뿐**이다 — isInitialLoading은 종전 자리(STATE 확정 직후)에서 그대로 내려가므로
+  //    부팅 순서·저장 게이트는 무영향이고, 오버레이의 5초 '계속 사용하기'·20초 자동 해제가 그대로 탈출구다.
+  // ⚠️ 같은 탭 재로그인은 직전 세션의 'settled'가 남아 있으므로, **한 번이라도 미정착을 본 뒤에만** 해제한다
+  //    (안 그러면 STATE 적용 즉시 내려가 이 게이트가 조용히 무력화된다).
+  useEffect(() => {
+    if (!bootSyncWait) return;
+    if (histPhase !== 'settled') { bootSyncSeenRef.current = true; return; }
+    if (bootSyncSeenRef.current) setBootSyncWait(false);
+  }, [bootSyncWait, histPhase]);
+
   // ── 부팅 시세 갱신 트리거 ──
   // ⚠️ refreshPrices는 portfoliosRef·activePortfolioIdRef·stockHistoryMapRef처럼 **effect로 동기화되는 ref**를
   //    동기적으로 읽는다. loadFromDrive 안의 setState는 DefaultLane이라 렌더와 passive effect가 **다음
@@ -3232,6 +3249,9 @@ export default function App() {
 
     // 로그인 완료 즉시 오버레이 표시 — Drive 로딩 전 구간부터 차단
     setIsInitialLoading(true);
+    // 과거 종가 동기화 정착까지 오버레이를 붙든다(위 해제 게이트 effect가 내린다).
+    bootSyncSeenRef.current = false;
+    setBootSyncWait(true);
 
     const token = authUser.token;
 
@@ -4147,7 +4167,14 @@ export default function App() {
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
       {cardWinFeeds}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
-      <LoadingOverlay visible={isInitialLoading} notificationLog={notificationLog} onDismiss={() => setIsInitialLoading(false)} />
+      <LoadingOverlay
+        visible={isInitialLoading || bootSyncWait}
+        notificationLog={notificationLog}
+        histPhase={histPhase}
+        histProgress={histProgress}
+        histPartial={histPartial}
+        onDismiss={() => { setIsInitialLoading(false); setBootSyncWait(false); }}
+      />
       {showInactivityWarning && <InactivityModal onContinue={handleInactivityContinue} onLogout={handleInactivityLogout} />}
       {showAdminChoiceModal && (
         <AdminChoiceModal
@@ -4264,9 +4291,6 @@ export default function App() {
           isLoading={isLoading}
           handleDriveLoadOnly={handleDriveLoadOnly}
           driveStatus={driveStatus}
-          histPhase={histPhase}
-          histProgress={histProgress}
-          histPartial={histPartial}
           handleDriveSave={handleDriveSave}
           handleOpenBackupModal={handleOpenBackupModal}
           historyInputRef={historyInputRef}

@@ -4,35 +4,6 @@ import { RefreshCw, CloudDownload, Save, History, FileUp, ArchiveRestore, HardDr
 import { ACCOUNT_TYPE_CONFIG } from '../constants';
 import HeaderMarketChips from './HeaderMarketChips';
 
-// 과거 종가 동기화 배지 — histPhase 4종을 각각 표시한다. settled는 몇 초 뒤 흐려진다(정보는 남기되 시선을 끌지 않는다).
-function HistSyncBadge({ phase, progress, partial }) {
-  const [fresh, setFresh] = React.useState(false);
-  React.useEffect(() => {
-    if (phase !== 'settled' || partial) { setFresh(false); return; }
-    setFresh(true);
-    const t = setTimeout(() => setFresh(false), 4000);
-    return () => clearTimeout(t);
-  }, [phase, partial]);
-  if (phase === 'loading') return null;
-  let text = '';
-  let cls = '';
-  let tip = '';
-  if (phase === 'hydrate-failed') {
-    text = '종가 캐시 미로드'; cls = 'text-orange-400';
-    tip = 'Drive 종가 캐시를 불러오지 못했습니다 — 이번 세션은 캐시 없이 조회하고 종가 캐시 저장을 보류합니다';
-  } else if (phase === 'settled' && partial) {
-    text = '일부 미수집 — 새로고침으로 재시도'; cls = 'text-amber-400';
-    tip = '과거 종가 일부를 시간 안에 받지 못했습니다(도착분만 반영). 새로고침 버튼으로 다시 시도하세요';
-  } else if (phase === 'settled') {
-    text = '종가 정착됨'; cls = fresh ? 'text-emerald-400' : 'text-gray-600';
-    tip = '과거 종가 이력이 한 번에 반영됐습니다 — 오늘 이전 평가액은 고정입니다';
-  } else {
-    text = `과거 종가 동기화 중 ${progress.done}/${progress.total}`; cls = 'text-sky-300';
-    tip = '과거 종가 이력을 받는 중입니다 — 끝나면 한 번에 반영됩니다(그 전까지 오늘 이전 평가액은 캐시 기준)';
-  }
-  return <span className={`text-[10px] font-mono px-1.5 whitespace-nowrap transition-opacity duration-500 ${cls}`} title={tip}>{text}</span>;
-}
-
 export default function AccountTabBar({
   portfolios,
   showIntegratedDashboard,
@@ -66,9 +37,6 @@ export default function AccountTabBar({
   onOpenCalendar,
   onOpenWatchlist,
   // 부팅 상태 머신(useStockData → App). 기본값은 '정착됨'이라 미전달 호출부는 배지를 흐리게만 보인다.
-  histPhase = 'settled',
-  histProgress = { done: 0, total: 0 },
-  histPartial = false,
 }) {
   const stateFileInputRef = React.useRef(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -270,8 +238,6 @@ export default function AccountTabBar({
             <Lock size={14} strokeWidth={2.4} />
           </span>
         )}
-        {/* 과거 종가 동기화 배지 — 부팅 상태 머신(histPhase). ⚠️ notify() 금지(알림 최소화 정책) — 진행 표시는 여기서만. */}
-        <HistSyncBadge phase={histPhase} progress={histProgress} partial={histPartial} />
         {/* 관심종목: 클라우드 상태 아이콘 우측, 통합·개별 뷰 모두 항상 노출 */}
         <button
           onClick={onOpenWatchlist}
