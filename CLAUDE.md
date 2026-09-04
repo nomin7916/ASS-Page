@@ -1061,6 +1061,13 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   ⚠️ 바(32px)를 넣었으므로 카드 높이를 `360→392`/`520→552`로 올리고 **형제 카드**(`PortfolioStatsPanel`
   1곳·`DepositPanel` 2곳)도 **함께** 올린다 — 각 카드가 명시적 height라 `items-stretch`가 먹지 않아
   한쪽만 올리면 같은 행의 바닥이 32px 어긋난다.
+  ⚠️ **그 행의 카드에 `flex-1`을 모바일까지 적용하지 말 것**(`DepositPanel` 입금·출금 2카드 —
+  사용자 보고 2026-09): 부모가 `flex flex-col xl:flex-row`라 좁은 화면에서는 **세로가 주축**이 되고,
+  `flex-1`(= `flex-basis:0%`)이 `h-[392px]`를 무효화한다. 부모 높이가 auto(불확정)라 늘어날 여유
+  공간도 없어 두 카드가 **헤더만 남기고 통째로 접혀** 휴대폰·아이패드에서 입출금 내역이 아예 보이지
+  않았다. 데스크톱 가로 배치에서만 `xl:flex-1`로 남는 폭을 채우고, `min-h-[392px]`를 함께 둔다
+  (flex가 height를 덮어도 min-height는 남는다 — 해외 분기가 이미 쓰던 `min-h-[520px]`와 같은 장치).
+  같은 행의 형제 카드가 `flex-1` 없이 고정 높이 + `shrink-0`만 쓰는 이유가 이것이다.
 - **영속화(통합)**: `chartPrefs.intHistPeriod` — App.tsx 5지점(state 리터럴·`chartPrefsUpdatedAt` deps·
   STATE 저장 deps·`applyStateData`·`applyBackupData`) 전부. ⚠️ ②와 ③은 **둘 다** 필요(②만 → 저장 미예약 /
   ③만 → `chartPrefsUpdatedAt` 미상승으로 STATE write 스킵). 로드 2경로는 `normalizeHistPeriod`를
@@ -1135,7 +1142,8 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   **기준일 노출 11종**(일자/%/손익 셀 호출 삭제 · `periodPrevDate` 제거 · `basis`·날짜 인자 무시 ·
   th·도움말 문장 삭제 · 건너뛴 기간 경고 삭제) ·
   오늘 판정 UTC/getTodayKST 복귀 · `cumulativeByDate` 압축본 주입 · 창 반복 적용 · `Math.abs` ·
-  chartPrefs deps 누락 · 형제 카드 높이 · 전 구간 보류 0.00% 복귀 · 해외 고지 제거 · 커서 O(n²) 복귀 ·
+  chartPrefs deps 누락 · 형제 카드 높이 · **입출금 카드 `flex-1` 모바일 적용(#G12c)·`min-h` 제거** ·
+  전 구간 보류 0.00% 복귀 · 해외 고지 제거 · 커서 O(n²) 복귀 ·
   `date` 필터 제거 · **계좌별 4지점 각각 되돌림 · 부팅 복원 앱 레벨 복귀 · 툴팁 삭제/값 바꿔치기 ·
   hideAmounts 게이트 제거 · `shownEvalOf`→저장 evalAmount · 잔차를 '순입출금'으로 단언 · 부호 처리 제거 ·
   null 계약 0으로 변경 · 해명 줄 상시 표시 · 산식을 단순 차분으로 되돌림** 등)으로 **실제 검출을 확인**했다.

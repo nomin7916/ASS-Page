@@ -149,7 +149,16 @@ export default function DepositPanel({
   return (
     <>
           {/* 입금 내역 */}
-          <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[520px]' : 'h-[392px]'} flex flex-col overflow-hidden`}>
+          {/* ⚠️ `flex-1`을 모바일까지 적용하지 말 것 — 부모가 `flex flex-col xl:flex-row`라
+              좁은 화면에서는 **세로 방향이 주축**이 된다. 그러면 `flex-1`(= flex-basis:0%)이
+              `h-[392px]`를 무효화하고, 부모 높이가 auto(불확정)라 늘어날 여유 공간도 없어
+              두 카드가 헤더만 남기고 **통째로 접힌다**(휴대폰·아이패드에서 입출금 내역이 아예
+              안 보이던 버그 — 사용자 보고 2026-09).
+              같은 줄의 형제 카드(PortfolioStatsPanel·HistoryPanel)가 `flex-1` 없이 고정 높이만
+              쓰는 이유가 이것이다. `min-h-`는 해외 분기가 이미 쓰던 안전장치를 국내에도 맞춘 것 —
+              flex가 height를 덮더라도 min-height는 남는다. 데스크톱 가로 배치에서만 `xl:flex-1`로
+              남는 폭을 채운다. */}
+          <div className={`w-full xl:flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[520px]' : 'h-[392px] min-h-[392px]'} flex flex-col overflow-hidden`}>
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 입금 내역</span>
               <div className="flex items-center gap-2">
@@ -218,7 +227,7 @@ export default function DepositPanel({
           </div>
 
           {/* 출금 내역 */}
-          <div className={`flex-1 w-full bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[520px]' : 'h-[392px]'} flex flex-col overflow-hidden`}>
+          <div className={`w-full xl:flex-1 bg-[#1e293b] rounded-xl border border-gray-700 shadow-lg ${isOverseas ? 'h-full min-h-[520px]' : 'h-[392px] min-h-[392px]'} flex flex-col overflow-hidden`}>
             <div className="p-1.5 bg-[#0f172a] text-white font-bold flex items-center justify-between text-xs border-b border-gray-700 shrink-0">
               <span>💰 출금 내역</span>
               <div className="flex items-center gap-2">

@@ -370,7 +370,17 @@ ok('#G12 개별 카드 높이 보정', /'h-\[552px\]' : 'h-\[392px\]'/.test(hist
 //    형제 카드(통계·입출금) 바닥이 32px 어긋난다(비해외 = 가장 흔한 화면에서만 드러난다).
 ok('#G12b 형제 카드 높이도 함께 올라갔다',
   /'h-full min-h-\[520px\]' : 'h-\[392px\]'/.test(read('src/components/PortfolioStatsPanel.tsx')) &&
-  (read('src/components/DepositPanel.tsx').match(/'h-full min-h-\[520px\]' : 'h-\[392px\]'/g) || []).length === 2);
+  (read('src/components/DepositPanel.tsx').match(/'h-full min-h-\[520px\]' : 'h-\[392px\] min-h-\[392px\]'/g) || []).length === 2);
+// #G12c ⚠️ 입출금 두 카드는 모바일에서 `flex-1`을 쓰면 안 된다 — 부모가 `flex flex-col xl:flex-row`라
+//     좁은 화면에서는 세로가 주축이 되고, flex-basis:0%가 h-[392px]를 무효화해 카드가 헤더만 남기고
+//     통째로 접힌다(휴대폰·아이패드에서 입출금 내역이 안 보이던 버그, 2026-09). min-h-는 flex가
+//     height를 덮어도 남는 안전장치라 위 #G12b가 함께 단언한다.
+{
+  const dp = read('src/components/DepositPanel.tsx');
+  const cards = (dp.match(/<div className=\{`[^`]*rounded-xl[^`]*flex flex-col overflow-hidden`\}/g) || []);
+  ok('#G12c 입출금 카드가 데스크톱에서만 flex-1을 쓴다',
+    cards.length === 2 && cards.every(c => /xl:flex-1/.test(c) && !/(^|[^:])\bflex-1\b/.test(c.replace(/xl:flex-1/g, ''))));
+}
 
 // #G13 fail-safe: 화이트리스트가 아니면 원본 반환 (선언 + 두 호출부 모두)
 ok('#G13 compressPeriodRows 화이트리스트',
