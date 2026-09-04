@@ -20,7 +20,7 @@
 //     ⚠️ 실패 시 **먼저 정규식이 낡았는지 확인**하고, 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
 
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -343,6 +343,7 @@ console.log('\n── 파트② 소스 텍스트 가드 ──');
   const app = read('src/App.tsx');
   const cal = read('src/components/CalendarModal.tsx');
   const utils = read('src/utils.ts');
+  const mod = read('src/components/StockTransferModal.tsx');
 
   const tfn = ups.slice(ups.indexOf('const transferStockToPortfolio'), ups.indexOf('const handleAddStock'));
   ok('#17 이관은 setPortfolios를 단 한 번만 호출한다 (두 계좌 원자적 갱신)',
@@ -353,8 +354,11 @@ console.log('\n── 파트② 소스 텍스트 가드 ──');
     (tfn.match(/dividendHistoryUpdatedAt:\s*stamp/g) || []).length === 2);
   ok('#19 manualPriceOverrides는 원계좌 제거 목록(CODE_MAPS)에 없다 — 과거 스냅샷 재계산에 필요',
     /const CODE_MAPS = \[[^\]]*\]/s.test(tfn) && !/CODE_MAPS = \[[^\]]*manualPriceOverrides/s.test(tfn));
-  ok('#19b 대상계좌에는 manualPriceOverrides를 복제한다',
-    /next\.manualPriceOverrides = \{ \.\.\.\(p\.manualPriceOverrides \|\| \{\}\), \[code\]: carried\.manualPriceOverrides \}/.test(tfn));
+  // ⚠️ 2026-09 병합 이관 도입으로 표현이 바뀌었다(계약은 그대로 — 대상에 복제하고 원계좌에도 남긴다).
+  //    대상에 같은 코드의 수동 종가가 이미 있으면 **대상 값이 이긴다**(keep) — 사용자가 그 계좌에서
+  //    손으로 고쳐 둔 종가를 원계좌 값으로 덮으면 과거 평가액이 조용히 달라진다.
+  ok('#19b 대상계좌에는 manualPriceOverrides를 복제한다 (대상 값 우선 병합)',
+    /next\.manualPriceOverrides = \{[\s\S]{0,200}\[tgtCode\]: mergeTransferMapEntry\(cur\[tgtCode\], carried\.manualPriceOverrides, 'keep'\)/.test(tfn));
   ok('#20 id 생성은 setPortfolios updater 밖에서 (StrictMode 이중 호출 방어)',
     tfn.indexOf('const movedItemId = generateId()') > 0
     && tfn.indexOf('const movedItemId = generateId()') < tfn.indexOf('setPortfolios('));
@@ -376,9 +380,48 @@ console.log('\n── 파트② 소스 텍스트 가드 ──');
   ok('#24d 해외계좌 이관 금액은 USD로 되돌린다 (원장·원금과 단위 일치)',
     /isOv \? r\.total \/ \(r\.fxRate \|\| 1\) : r\.total/.test(plan));
 
-  ok('#25 동일 코드 대상 계좌는 차단된다 (분배금·과표 맵 무음 덮어쓰기 방지)',
-    /reason = '이미 보유'/.test(app));
+  // ── 동일 코드 = '병합 이관'(2026-09) ──────────────────────────────────────────
+  // 옛 계약은 `reason = '이미 보유'`로 통째 차단이었다. 그 가드는 ① 두 계좌에 나뉜 같은 종목을
+  // 합칠 방법을 영영 막았고 ② `p.portfolio` 행만 봐서 '삭제됨' 유령 행만 남은 계좌를 통과시켰는데,
+  // 라이터가 `[code]`를 통째 교체해 가드가 막으려던 조용한 소실이 정확히 그 경로에서 일어났다.
+  ok('#25 동일 코드는 차단이 아니라 병합으로 지원한다 (판정은 analyzeTransferMerge 단일 소스)',
+    !/reason = '이미 보유'/.test(app)
+    && /const mg = reason \? null : analyzeTransferMerge\(transferItem, activePortfolio, p\);/.test(app)
+    && /if \(mg && mg\.blocked\) reason = mg\.blocked;/.test(app));
   ok('#25b 통화·시장이 다른 계좌도 차단된다', /reason = '통화 불일치'/.test(app) && /reason = '시장 불일치'/.test(app));
+  // ⚠️ 병합 후보를 정상 후보보다 **뒤로** 정렬해야 모달의 초기 선택이 병합으로 잡히지 않는다.
+  ok('#25c 병합 후보는 정상 후보 뒤로 정렬된다 (자동 선택 방지)',
+    /const rank = \(x\) => \(x\.blocked \? 2 : x\.merge \? 1 : 0\);/.test(app));
+  ok('#25d 모달은 병합 후보를 자동 선택하지 않는다',
+    /const first = targets\.find\(t => !t\.blocked && !t\.merge\);/.test(mod));
+  ok('#25e 모달이 병합임을 명시한다 (배지 + 합쳐질 수량 미리보기)',
+    /t\.merge && !t\.blocked/.test(mod) && /target\.mergedQty/.test(mod) && /target\.targetQty/.test(mod));
+  // ⚠️ 라이터는 화면 판정을 신뢰하지 않고 **같은 함수로 재확인**한다(그 사이 다른 창이 대상 계좌를
+  //    바꿨을 수 있다). blocked면 아무것도 쓰지 않는다.
+  ok('#25f 라이터가 사전·updater 양쪽에서 병합 가능 여부를 재확인한다 (fail-closed)',
+    /if \(analyzeTransferMerge\(srcItem, src, tgt\)\.blocked\) return false;/.test(tfn)
+    && /const mg = analyzeTransferMerge\(it, s, t\);/.test(tfn)
+    && /if \(mg\.blocked\) return prev;/.test(tfn));
+  // ⚠️ 같은 코드 2행은 분배금 월·연 합계를 2배로 만든다(expectedRows/actualRows가 행마다
+  //    actualDividend[code][ym]을 다시 읽는다) → 반드시 대상 행을 **교체**해 한 행으로 합친다.
+  ok('#25g 병합은 행을 늘리지 않고 대상 행을 교체한다 (id 유지 → 마킹·목표비중 보존)',
+    /portfolio: mg\.merge/.test(tfn)
+    && /\.map\(x => \(x && x\.id === mg\.target\.id/.test(tfn)
+    && /mergeTransferItem\(x, it, tgt\.accountType \|\| 'portfolio'\)/.test(tfn));
+  // ⚠️ `[code]` 통째 교체 금지 — 이게 유령 행 경로의 조용한 소실을 만들던 코드다.
+  // ⚠️ '존재'만 단언하면 죽은 가드가 된다 — `const merged = carried[k] || k === 'taxBaseHistory' ? …`
+  //    처럼 앞에 소스 값을 끼워 넣어 통째 교체로 되돌려도 mergeTransferMapEntry 문자열은 남는다
+  //    (변이 M2로 실증). 대입식 전체와 사용부(`next[k] = { ...cur, [tgtCode]: merged }`)를 함께 본다.
+  ok('#25h 코드별 맵은 통째 교체가 아니라 규칙 병합을 거친다',
+    !/next\[k\] = \{ \.\.\.\(p\[k\] \|\| \{\}\), \[code\]: carried\[k\] \}/.test(tfn)
+    && /const merged = k === 'taxBaseHistory'\s*\?/.test(tfn)
+    && /mergeTransferMapEntry\(tgtEntry, carried\[k\], TRANSFER_SUM_MAPS\.includes\(k\) \? 'sum' : 'keep'\)/.test(tfn)
+    && /next\[k\] = \{ \.\.\.cur, \[tgtCode\]: merged \};/.test(tfn));
+  ok('#25i 과표는 대상에 데이터가 있으면 보존한다 (덮어쓰기 금지)',
+    /k === 'taxBaseHistory'[\s\S]{0,120}taxBaseHasData\(tgtEntry\) \? tgtEntry : carried\[k\]/.test(tfn));
+  // ⚠️ 맵 키의 정본은 **대상 항목의 code** — 대소문자만 다른 두 표기가 한 키로 수렴해야 한다.
+  ok('#25j 병합 시 맵 키는 대상 항목의 code를 쓴다',
+    /const tgtCode = mg\.merge \? String\(mg\.target\.code \|\| ''\) : code;/.test(tfn));
 
   ok('#26 새 창 투영에 이관 원장 행이 실린다', /depositHistory: \(p\.depositHistory \|\| \[\]\)\.filter\(r => r && r\.transfer\)/.test(app));
   ok('#26b 새 창 지문에 이관 기록이 포함된다 (없으면 MOVE 칩이 갱신 안 됨)',
@@ -523,6 +566,137 @@ console.log('\n── 파트④ 통합 뷰 이관 쌍 상쇄 ──');
   const u = read('src/utils.ts');
   const efr = u.slice(u.indexOf('export const externalFlowInRange'), u.indexOf('export const dailyFlowAdjustedRate'));
   ok('#41e 개별 계좌 흐름(externalFlowInRange)에는 이관 예외가 없다', efr.length > 200 && !/transfer/.test(efr));
+}
+
+// ── 파트⑤ 동일 코드 병합 — src/utils.ts 직접 import ────────────────────────────
+// ⚠️ 미러 금지. 병합 규칙은 산술이 전부라 미러를 두면 src/미러 한쪽만 고친 변경이 둘 다 통과한다
+//    (verify-backtest의 rebalMode 3필드 누락이 그 실측 사고다). utils.ts는 import가 하나도 없어
+//    Node가 타입만 벗겨 실행할 수 있다(verify:period·verify:cal-detail #D1 선례).
+console.log('\n── 파트⑤ 동일 코드 병합 (src/utils.ts 직접 import) ──');
+{
+  let U = null;
+  try {
+    U = await import(pathToFileURL(join(ROOT, 'src/utils.ts')).href);
+  } catch (e) {
+    if (e && (e.code === 'ERR_UNKNOWN_FILE_EXTENSION' || /Unknown file extension/.test(String(e.message)))) {
+      console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 파트⑤를 건너뜁니다 (${e.code || e.message}).`);
+    } else {
+      fail++;
+      console.log(`  ✗ 파트⑤ 모듈 로드 실패 — ${e && (e.stack || e.message)}`);
+    }
+  }
+
+  if (U) {
+    const { analyzeTransferMerge, mergeTransferItem, mergeTransferMapEntry, taxBaseHasData,
+            transferCodeKey, bookCostOf, overseasInvestAmount,
+            TRANSFER_SUM_MAPS, TRANSFER_KEEP_MAPS } = U;
+
+    // ── 코드 키 정규화 ──
+    ok('#42 코드 키는 trim + 대문자로 정규화된다 (맵 키 분열 방지)',
+      transferCodeKey(' gpiq ') === 'GPIQ' && transferCodeKey('GPIQ') === 'GPIQ' && transferCodeKey(null) === '');
+
+    // ── analyzeTransferMerge ──
+    const srcItem = { id: 's1', type: 'stock', code: 'GPIQ', name: 'GS Nasdaq-100', quantity: 310, investAmountUsd: 17188.03, purchasePrice: 17188.03 / 310 };
+    const tgtItem = { id: 't1', type: 'stock', code: 'gpiq', name: 'GPIQ', quantity: 200, investAmountUsd: 10000, purchasePrice: 50 };
+    const srcPf = { portfolio: [srcItem], actualDividend: { GPIQ: { '2026-07': 100, '2026-08': 120 } }, dividendHistory: { GPIQ: { '2026-07': 0.5 } } };
+    const tgtPf = { portfolio: [tgtItem], actualDividend: { gpiq: { '2026-08': 90 } }, dividendHistory: { gpiq: { '2026-07': 0.5, '2026-08': 0.6 } } };
+
+    const a1 = analyzeTransferMerge(srcItem, srcPf, tgtPf);
+    ok('#43 대상이 같은 코드를 보유하면 병합 후보다 (대소문자·공백 무시)', a1.merge === true && a1.blocked === '' && a1.target === tgtItem);
+    ok('#43b 병합 후 수량은 두 보유의 합', a1.targetQty === 200 && a1.mergedQty === 510);
+    ok('#43c 같은 달에 양쪽 다 실지급 기록이 있으면 합산 대상으로 센다', a1.sumMonths === 1);
+    ok('#43d 주당 분배금이 같으면 충돌로 세지 않는다', a1.keepConflicts === 0);
+
+    const noneAnalyzed = analyzeTransferMerge(srcItem, srcPf, { portfolio: [{ id: 'x', type: 'stock', code: 'JEPI', quantity: 5 }] });
+    ok('#44 대상에 같은 코드가 없으면 병합이 아니다 (기존 이관 경로 그대로)',
+      noneAnalyzed.merge === false && noneAnalyzed.blocked === '' && noneAnalyzed.target === null);
+
+    ok('#45 예적금은 병합할 수 없다 (이율·기간·적립 트랜치가 계좌 고유)',
+      analyzeTransferMerge({ type: 'savings', code: 'SV', quantity: 0 }, {}, { portfolio: [{ type: 'savings', code: 'SV' }] }).blocked === '예적금 병합 불가');
+    ok('#45b 항목 타입이 다르면 차단한다',
+      analyzeTransferMerge({ type: 'stock', code: 'A', quantity: 1 }, {}, { portfolio: [{ type: 'fund', code: 'A' }] }).blocked === '항목 타입 불일치');
+    // ⚠️ events/purchases/sales를 concat하면 대상 계좌의 과거 평균 과표·LOFO 기준단가가 소급 변경된다.
+    ok('#45c 양쪽에 과표 이력이 있으면 차단한다 (한쪽을 버려야 하므로)',
+      analyzeTransferMerge(srcItem, { ...srcPf, taxBaseHistory: { GPIQ: { events: [{ id: 'e1' }] } } },
+        { ...tgtPf, taxBaseHistory: { gpiq: { exTaxBase: { '2026-08': 1000 } } } }).blocked === '과표 이력 충돌');
+    ok('#45d 한쪽만 과표가 있으면 병합 가능하다 (이동)',
+      analyzeTransferMerge(srcItem, { ...srcPf, taxBaseHistory: { GPIQ: { events: [{ id: 'e1' }] } } }, tgtPf).merge === true);
+    ok('#45e taxBaseHasData는 빈 껍데기를 데이터로 보지 않는다',
+      taxBaseHasData({ events: [], purchases: [], sales: [], exTaxBase: {}, avgTaxBase: {}, avgTaxBaseAdj: {} }) === false
+      && taxBaseHasData({ avgTaxBaseAdj: { '2026-08': { value: 1 } } }) === true
+      && taxBaseHasData(null) === false);
+
+    // ── 원가 불변식: 병합으로 늘어난 대상 장부액 === 원장의 원금 이동액 C ──
+    // 이게 어긋나면 일간 지표의 흡수 판정(bookDelta vs 흐름)이 그날 보류로 잠기거나 가짜 손익이 남는다.
+    {
+      const ovOpts = { costBasisOnly: true };
+      const C = bookCostOf([srcItem], ovOpts);
+      const merged = mergeTransferItem(tgtItem, srcItem, 'overseas');
+      near('#46 해외 병합: 대상 장부액 증분 === 이관 원가 C',
+        bookCostOf([merged], ovOpts) - bookCostOf([tgtItem], ovOpts), C, 1e-6);
+      near('#46b 해외 투자금액(USD)은 두 저장값의 합', merged.investAmountUsd, 27188.03, 1e-9);
+      near('#46c purchasePrice는 파생 미러(총액 ÷ 합산 수량)', merged.purchasePrice, 27188.03 / 510, 1e-12);
+      ok('#46d 수량은 합산된다', merged.quantity === 510);
+      ok('#46e 대상 항목 id·목표비중이 유지된다 (마킹·정렬 보존)', merged.id === 't1');
+    }
+    // ⚠️ 소스의 목표 계열은 승계하지 않는다 — 다른 계좌 분모 기준이라 의미가 뒤바뀐다.
+    {
+      const t2 = { ...tgtItem, targetRatio: 10, targetAmount: 5000 };
+      const s2 = { ...srcItem, targetRatio: 90, targetAmount: 99999 };
+      const m2 = mergeTransferItem(t2, s2, 'overseas');
+      ok('#47 목표비중·목표금액은 대상 값을 유지한다', m2.targetRatio === 10 && m2.targetAmount === 5000);
+    }
+    // ⚠️ 국내: investAmount끼리 더하면 대상의 '매입가×수량' 원가가 통째로 사라진다.
+    {
+      const tDom = { id: 't2', type: 'stock', code: '005930', quantity: 10, investAmount: 0, purchasePrice: 70000 };
+      const sDom = { id: 's2', type: 'stock', code: '005930', quantity: 5, investAmount: 400000, purchasePrice: 0 };
+      const C = bookCostOf([sDom]);
+      const merged = mergeTransferItem(tDom, sDom, 'portfolio');
+      near('#48 국내 병합: 대상 장부액 증분 === 이관 원가 C',
+        bookCostOf([merged]) - bookCostOf([tDom]), C, 1e-9);
+      near('#48b 대상의 매입가×수량 원가가 보존된다 (investAmount 단순 합산 금지)',
+        merged.investAmount, 700000 + 400000, 1e-9);
+      ok('#48c 국내 병합은 investAmountUsd를 만들지 않는다', merged.investAmountUsd === undefined);
+    }
+    // ⚠️ 0으로 나누면 Infinity가 저장되고 JSON 직렬화가 null로 만들어 원가가 영구 소실된다.
+    {
+      const m = mergeTransferItem({ id: 't3', type: 'stock', code: 'A', quantity: 0, investAmountUsd: 100 },
+                                  { id: 's3', type: 'stock', code: 'A', quantity: 0, investAmountUsd: 50 }, 'overseas');
+      ok('#49 수량 합이 0이면 미러를 쓰지 않는다 (Infinity 저장 방지)', m.purchasePrice === undefined);
+      ok('#49b 그래도 투자금액은 보존된다 (나중에 수량을 넣으면 그때 미러가 생긴다)', m.investAmountUsd === 150);
+    }
+    // 펀드는 수량·기준가가 없을 때 evalAmount가 평가액의 권위값이다.
+    {
+      const m = mergeTransferItem({ id: 't4', type: 'fund', code: 'F', quantity: 100, investAmount: 1000, evalAmount: 1200 },
+                                  { id: 's4', type: 'fund', code: 'F', quantity: 50, investAmount: 500, evalAmount: 600 }, 'dc-irp');
+      ok('#50 펀드는 좌수·투자금액·평가액을 모두 합산한다',
+        m.quantity === 150 && m.investAmount === 1500 && m.evalAmount === 1800);
+    }
+
+    // ── 코드별 맵 병합 규칙 ──
+    ok('#51 sum 모드는 같은 달을 더한다 (두 계좌에서 각각 받은 실지급액)',
+      JSON.stringify(mergeTransferMapEntry({ '2026-08': 90 }, { '2026-07': 100, '2026-08': 120 }, 'sum'))
+      === JSON.stringify({ '2026-08': 210, '2026-07': 100 }));
+    ok('#51b keep 모드는 대상 값이 이긴다 (손으로 고친 배당락일·주당분배금 보존)',
+      JSON.stringify(mergeTransferMapEntry({ '2026-08': 0.6 }, { '2026-07': 0.5, '2026-08': 0.4 }, 'keep'))
+      === JSON.stringify({ '2026-07': 0.5, '2026-08': 0.6 }));
+    ok('#51c 대상에 아무것도 없으면 소스 값이 그대로 들어온다 (유령 행 없는 정상 이관)',
+      JSON.stringify(mergeTransferMapEntry(undefined, { '2026-07': 100 }, 'sum')) === JSON.stringify({ '2026-07': 100 })
+      && JSON.stringify(mergeTransferMapEntry(null, { '2026-07': 0.5 }, 'keep')) === JSON.stringify({ '2026-07': 0.5 }));
+    ok('#51d 실지급 금액·수량·세액만 합산 대상이다 (주당분배금·배당락일은 제외)',
+      TRANSFER_SUM_MAPS.includes('actualDividend') && TRANSFER_SUM_MAPS.includes('actualDividendQty')
+      && TRANSFER_SUM_MAPS.includes('dividendTaxAmounts') && TRANSFER_SUM_MAPS.includes('actualAfterTaxKrw')
+      && !TRANSFER_SUM_MAPS.includes('dividendHistory') && !TRANSFER_SUM_MAPS.includes('dividendExDate')
+      && TRANSFER_KEEP_MAPS.includes('dividendHistory') && TRANSFER_KEEP_MAPS.includes('dividendExDate'));
+    // ⚠️ 주당 분배금을 합산하면 '월 예상 분배금'이 정확히 2배가 된다.
+    ok('#51e 주당 분배금은 어떤 경우에도 합산되지 않는다',
+      mergeTransferMapEntry({ '2026-08': 0.6 }, { '2026-08': 0.6 }, 'keep')['2026-08'] === 0.6);
+    ok('#51f 병합은 입력 객체를 변형하지 않는다', (() => {
+      const t = { '2026-08': 90 }; const s = { '2026-08': 120 };
+      mergeTransferMapEntry(t, s, 'sum');
+      return t['2026-08'] === 90 && s['2026-08'] === 120;
+    })());
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:transfer — ${pass} passed, ${fail} failed\n`);

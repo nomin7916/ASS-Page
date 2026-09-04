@@ -20,8 +20,10 @@ const StockTransferModal = ({
 }) => {
   const panelRef = useRef(null);
   const prevFocusRef = useRef(null);
+  // ⚠️ 병합 후보(대상이 같은 종목을 이미 보유)는 **자동 선택하지 않는다** — 두 보유가 합쳐지는 것은
+  //    되돌릴 수 없어(undo 없음) 사용자가 직접 골라야 한다. 정상 후보가 없으면 선택 없이 시작한다.
   const [targetId, setTargetId] = useState(() => {
-    const first = targets.find(t => !t.blocked);
+    const first = targets.find(t => !t.blocked && !t.merge);
     return first ? first.id : '';
   });
   const [busy, setBusy] = useState(false);
@@ -123,8 +125,13 @@ const StockTransferModal = ({
                     <span className={`text-[12px] truncate ${t.blocked ? 'text-gray-600' : 'text-gray-200'}`}>
                       {t.name || '계좌'}
                       {t.isTest && <span className="ml-1 text-[10px] text-emerald-400 italic">TEST</span>}
+                      {t.merge && !t.blocked && (
+                        <span className="ml-1 text-[10px] text-amber-300 font-bold">병합</span>
+                      )}
                     </span>
-                    <span className="text-[10px] text-gray-500 shrink-0">{t.blocked ? t.reason : t.typeLabel}</span>
+                    <span className={`text-[10px] shrink-0 ${t.merge && !t.blocked ? 'text-amber-400/80' : 'text-gray-500'}`}>
+                      {t.blocked ? t.reason : t.merge ? `보유 ${formatNumber(t.targetQty)}${unit}` : t.typeLabel}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -148,6 +155,33 @@ const StockTransferModal = ({
             </div>
           )}
 
+          {/* 병합 이관 — 대상이 같은 종목을 이미 보유. 합쳐지는 값을 미리 보여준다(undo 없음). */}
+          {target && target.merge && !target.blocked && (
+            <div className="bg-amber-500/10 border border-amber-700/40 rounded-lg px-3 py-2">
+              <div className="text-[11px] font-bold text-amber-300 mb-1">병합 이관</div>
+              <Row label="대상 기존 보유" value={`${formatNumber(target.targetQty)}${unit}`} tone="text-amber-200" />
+              <Row
+                label="병합 후 보유"
+                value={`${formatNumber(target.mergedQty)}${unit}`}
+                tone="text-amber-200"
+                sub="한 행으로 합쳐집니다 (수량·매입원가 합산)"
+              />
+              {target.sumMonths > 0 && (
+                <Row label="합산되는 분배금" value={`${target.sumMonths}개월`} tone="text-amber-200" sub="같은 달에 양쪽 다 기록이 있어 더해집니다" />
+              )}
+              {target.keepConflicts > 0 && (
+                <Row label="주당분배금 차이" value={`${target.keepConflicts}개월`} tone="text-amber-200" sub="대상 계좌 값이 유지됩니다" />
+              )}
+            </div>
+          )}
+
+          {/* 정상 후보가 없어 아무것도 선택되지 않은 상태 — 병합은 자동 선택하지 않는다. */}
+          {!target && targets.some(t => !t.blocked) && (
+            <div className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-700/40 rounded px-3 py-2">
+              같은 종목을 이미 보유한 계좌만 남았습니다. 합칠 계좌를 직접 선택하세요.
+            </div>
+          )}
+
           {plan && moves && (
             <div className="text-[11px] text-gray-400 leading-relaxed bg-black/30 border border-gray-800/70 rounded-lg px-3 py-2">
               <div className="text-gray-500 mb-1">함께 이동하는 기록</div>
@@ -161,6 +195,12 @@ const StockTransferModal = ({
             <div className="text-[10px] text-gray-500 leading-relaxed">
               원계좌에 <span className="text-gray-400">출금 {fmtAmt(plan.market, currency)}</span>, 대상계좌에 같은 금액의
               <span className="text-gray-400"> 입금</span>이 기록됩니다. 이관일 손익은 0이 되고 과거 기록은 그대로 유지됩니다.
+              {target.merge && (
+                <span className="block mt-1 text-amber-300/90">
+                  ⚠️ 대상 계좌의 기존 보유와 한 행으로 합쳐집니다. 실지급 분배금·세액은 월별로 합산되고,
+                  주당 분배금·배당락일은 대상 계좌 값이 유지됩니다.
+                </span>
+              )}
               {target.isTest && (
                 <span className="block mt-1 text-amber-300/90">
                   ⚠️ TEST 계좌는 통합 대시보드 합산에서 제외되므로 이관하면 통합 총자산이 그만큼 줄어듭니다.

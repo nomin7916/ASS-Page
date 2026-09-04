@@ -1,7 +1,11 @@
 // @ts-nocheck
 import { useState, useEffect, useMemo } from 'react';
 import { UI_CONFIG } from '../config';
-import { generateId, cleanNum, formatNumber, buildTransferLedgerRows, overseasInvestAmount } from '../utils';
+import {
+  generateId, cleanNum, formatNumber, buildTransferLedgerRows, overseasInvestAmount,
+  analyzeTransferMerge, mergeTransferItem, mergeTransferMapEntry, taxBaseHasData,
+  TRANSFER_SUM_MAPS,
+} from '../utils';
 import { getTodayKST, getBackfillBoundaryForAccount } from './useMarketCalendar';
 
 // 행 색상 마킹 4색 사이클(노랑→슬레이트→로즈→갈색→해제). 활성 계좌 경로와 by-id(카드 별도 창)
@@ -813,6 +817,9 @@ export function usePortfolioState({
     if (!src || !tgt || tgt.deletedAt) return false;
     const srcItem = (src.portfolio || []).find(it => it && it.id === itemId);
     if (!srcItem || srcItem.type === 'deposit') return false;
+    // 동일 코드 병합 사전 판정 — 차단 사유가 있으면 실행하지 않는다(fail-closed).
+    // ⚠️ updater 안에서 한 번 더 판정한다(그 사이 다른 창이 대상 계좌를 바꿨을 수 있다).
+    if (analyzeTransferMerge(srcItem, src, tgt).blocked) return false;
 
     const code = String(srcItem.code || '').trim();
     const dateSrc = plan.dateSrc || getBackfillBoundaryForAccount(src.accountType || 'portfolio');
@@ -841,6 +848,12 @@ export function usePortfolioState({
       if (!s || !t) return prev;
       const it = (s.portfolio || []).find(x => x && x.id === itemId);
       if (!it) return prev;   // 이미 이관/삭제됨 — 이중 실행 방지(멱등)
+      // 대상 계좌가 같은 코드를 이미 보유하면 **행을 늘리지 않고 합친다**(같은 코드 2행은 분배금
+      // 월·연 합계를 2배로 만든다 — utils.analyzeTransferMerge 주석). 차단 사유면 아무것도 쓰지 않는다.
+      const mg = analyzeTransferMerge(it, s, t);
+      if (mg.blocked) return prev;
+      // 맵 키의 정본 — 병합이면 대상 항목의 code(원문). 대소문자만 다른 두 표기가 한 키로 수렴한다.
+      const tgtCode = mg.merge ? String(mg.target.code || '') : code;
       const carried = {};
       if (code) {
         CODE_MAPS.forEach(k => { const m = s[k]; if (m && typeof m === 'object' && code in m) carried[k] = m[code]; });
@@ -869,7 +882,13 @@ export function usePortfolioState({
         if (p.id === targetId) {
           const next = {
             ...p,
-            portfolio: [movedItem, ...(p.portfolio || [])],
+            // 병합이면 대상 행을 합친 값으로 **교체**(id 유지 → 마킹·정렬·목표비중 보존),
+            // 아니면 종전대로 새 행을 앞에 붙인다.
+            portfolio: mg.merge
+              ? (p.portfolio || []).map(x => (x && x.id === mg.target.id
+                ? mergeTransferItem(x, it, tgt.accountType || 'portfolio')
+                : x))
+              : [movedItem, ...(p.portfolio || [])],
             principal: cleanNum(p.principal) + cost,
             depositHistory: [rows.tgtDeposit, ...(p.depositHistory || [])],
             depositHistory2: rows.tgtGainRow
@@ -877,12 +896,24 @@ export function usePortfolioState({
               : (p.depositHistory2 || []),
             dividendHistoryUpdatedAt: stamp,
           };
+          // ⚠️ `[code]` 통째 교체 금지 — 대상에 그 코드 데이터가 남아 있으면(보유 중이거나 '삭제됨'
+          //    유령 행) 조용히 지워진다. 실지급 금액·수량·세액은 ym별 합산, 시장 데이터(주당 분배금·
+          //    배당락일)는 대상 우선, 과표는 대상에 데이터가 있으면 보존(위 analyze가 이미 차단).
           CODE_MAPS.forEach(k => {
             if (!(k in carried)) return;
-            next[k] = { ...(p[k] || {}), [code]: carried[k] };
+            const cur = p[k] || {};
+            const tgtEntry = cur[tgtCode];
+            const merged = k === 'taxBaseHistory'
+              ? (taxBaseHasData(tgtEntry) ? tgtEntry : carried[k])
+              : mergeTransferMapEntry(tgtEntry, carried[k], TRANSFER_SUM_MAPS.includes(k) ? 'sum' : 'keep');
+            next[k] = { ...cur, [tgtCode]: merged };
           });
           if ('manualPriceOverrides' in carried) {
-            next.manualPriceOverrides = { ...(p.manualPriceOverrides || {}), [code]: carried.manualPriceOverrides };
+            const cur = p.manualPriceOverrides || {};
+            next.manualPriceOverrides = {
+              ...cur,
+              [tgtCode]: mergeTransferMapEntry(cur[tgtCode], carried.manualPriceOverrides, 'keep'),
+            };
           }
           return next;
         }

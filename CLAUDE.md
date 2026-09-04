@@ -2736,9 +2736,54 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   Drive STATE 저장이 통째로 스킵된다(`deletePortfolioDividendData`와 동일 이유). 그 외 **영속화 신규 지점 0곳**
   (`depositHistory(2)`·`principal`·항목 화이트리스트·`taxBaseKey`·`manualPriceOverrides`는 이미 지문에 포함).
 - **대상 계좌 게이팅(fail-closed)**: 현금성(simple/matong)·금현물·삭제 계좌 제외, **통화 불일치**
-  (해외↔국내)·**시장 불일치**(crypto↔그 외) 차단, savings→dc-irp만·fund→dc-irp/pension만,
-  **동일 코드 보유 계좌 차단**(⚠️ `actualDividend[code][ym]`·`taxBaseHistory[code]` 병합이 한쪽을 조용히
-  지운다 — 조용한 오적용보다 명시적 미적용). 부적격 계좌는 목록에서 지우지 않고 **사유를 달아 노출**한다.
+  (해외↔국내)·**시장 불일치**(crypto↔그 외) 차단, savings→dc-irp만·fund→dc-irp/pension만.
+  부적격 계좌는 목록에서 지우지 않고 **사유를 달아 노출**한다.
+
+### 동일 코드 = '병합 이관' (2026-09, ⚠️ 회귀 주의 — '이미 보유' 차단으로 되돌리지 말 것)
+
+대상 계좌가 같은 종목을 이미 보유하면 과거엔 `reason = '이미 보유'`로 **통째 차단**했다. 그 가드는 둘을
+동시에 놓쳤다: ① 두 계좌에 나뉜 같은 종목을 합칠 방법이 영영 없었다(사용자 요구 — TEST 계좌의 GPIQ를
+본계좌로 옮기려는데 유일한 후보가 회색이었다. **`isTest`는 이관을 한 줄도 막지 않는다** — 그 계좌들이
+막혀 보인 진짜 이유는 `gold`(KrxGoldTable에 `onTransfer` 자체가 없다)·현금성(개별 뷰 진입 차단)이라는
+**계좌 타입**이다) ② 가드가 `p.portfolio` 행만 봐서 대상에서 그 종목을 **삭제해 '삭제됨' 유령 행만 남은**
+계좌는 통과시켰는데, 라이터가 `[code]`를 **통째 교체**해 가드가 막으려던 조용한 소실이 정확히 그
+경로에서 일어났다. 아래 규칙은 **병합 여부와 무관하게 항상** 적용해 ②도 함께 닫는다.
+
+- **⚠️ 별도 행 추가(같은 코드 2행) 금지 — 반드시 한 행으로 합친다.** `DividendSummaryTable`의
+  `expectedRows`(:410)·`actualRows`(:479)가 `pf.portfolio.forEach`로 행을 만들고 **행마다**
+  `actualDividend[code][ym]`을 다시 읽으므로, 2행이면 월·연 합계와 종목별 분배율이 정확히 2배가 된다.
+- **판정의 단일 소스 = `utils.analyzeTransferMerge(srcItem, srcPf, tgtPf)`** — 화면(`transferTargets`)과
+  라이터가 **같은 함수**를 쓰고, 라이터는 사전 + updater 안에서 **두 번** 재확인한다(그 사이 다른 창이
+  대상 계좌를 바꿨을 수 있다. `blocked`면 아무것도 쓰지 않는다 — fail-closed).
+  차단 사유 3종: **예적금 병합 불가**(이율·기간·적립 트랜치가 계좌 고유) / **항목 타입 불일치** /
+  **과표 이력 충돌**(⚠️ events·purchases·sales를 concat하면 대상 계좌의 **과거** 월별 평균 과표와 LOFO
+  매도 기준단가가 소급 변경된다 — '과거 불변' 원칙 위반. 한쪽만 있으면 그대로 이동).
+- **⚠️ 코드 비교는 `transferCodeKey`(trim + 대문자)인데 맵 키는 원문**이다 → 병합에서는 반드시
+  **대상 항목의 `code`를 정본**(`tgtCode`)으로 삼아 대소문자만 다른 두 표기가 한 키로 수렴하게 할 것.
+- **코드별 맵 병합 규칙(⚠️ `[code]` 통째 교체 금지)**:
+  **합산(`TRANSFER_SUM_MAPS`)** = `actualDividend`·`actualDividendUsd`·`actualDividendQty`·
+  `dividendTaxAmounts`·`actualAfterTaxUsd`·`actualAfterTaxKrw` — 전부 "그 계좌가 실제로 받은 금액/수량/
+  세액"이라 ym별로 더하는 것이 의미상 옳다. **대상 유지(`TRANSFER_KEEP_MAPS`)** = `dividendHistory`·
+  `dividendExDate` — 주당 분배금·배당락일은 계좌 무관한 시장 데이터라 ⚠️ **합산하면 '월 예상 분배금'이
+  정확히 2배**가 된다. `manualPriceOverrides`도 keep(대상 우선 — 그 계좌에서 손으로 고친 종가를 원계좌
+  값으로 덮으면 과거 평가액이 조용히 달라진다). `taxBaseHistory`는 대상에 데이터가 있으면 보존(위 차단).
+- **⚠️ 원가 불변식 — 병합으로 늘어난 대상 장부액(`bookCostOf`)이 원장의 원금 이동액 C와 같아야 한다**
+  (아니면 일간 지표 흡수 판정 `bookDelta vs 흐름`이 그날을 보류로 잠그거나 가짜 손익을 남긴다):
+  · **해외**: 저장 필드가 `investAmountUsd`(사용자 입력)이고 `purchasePrice`가 파생 미러 →
+  두 저장값을 더하고 미러를 다시 깐다. ⚠️ `qty > 0 && Number.isFinite`일 때만(0으로 나누면 Infinity가
+  저장되고 JSON 직렬화가 `null`로 만들어 원가가 **영구 소실**된다).
+  · **그 외**: `bookCostOf`가 `investAmount`를 우선하므로 **두 항목의 장부액 합**을 쓴다. ⚠️
+  `investAmount`끼리 단순히 더하면, 대상의 `investAmount`가 0이고 매입가×수량으로 잡혀 있던 계좌에서
+  그 원가가 통째로 사라진다.
+- **⚠️ 병합은 대상 행을 교체한다(id 유지)** — `markedPortfolioRows`·정렬·목표비중/목표금액이 보존된다.
+  **소스의 목표 계열은 승계하지 않는다**(다른 계좌 분모 기준이라 의미가 뒤바뀐다). 펀드만 `evalAmount`도
+  합산한다(수량·기준가가 없을 때 그 값이 평가액의 권위값).
+- **⚠️ 병합 후보는 자동 선택하지 않는다** — `transferTargets`가 병합 후보를 정상 후보 **뒤로** 정렬하고
+  (`rank`), 모달의 초기 선택은 `!t.blocked && !t.merge`다. 두 보유가 합쳐지는 것은 되돌릴 수 없어
+  사용자가 직접 골라야 한다. 목록에 '병합' 배지 + 대상 보유수량, 미리보기에 `병합 후 보유`·합산되는
+  분배금 개월 수·주당분배금 차이 개월 수를 표시한다.
+- **영속화 신규 지점 0곳** — 바뀌는 필드(`quantity`·`investAmount`·`investAmountUsd`·`purchasePrice`·
+  코드별 맵·`dividendHistoryUpdatedAt`)가 전부 이미 `portfolioStructureKey` 지문에 있다.
 - **메모 달력 표시**: 원장의 `transfer` 태그에서 **라이브 파생**(`utils.collectTransferRows` →
   `CalendarModal transfersByDate` → **MOVE 칩**). 원계좌(→ 나감)·대상계좌(← 들어옴) **양쪽 칸**에 뜨고
   패드는 읽기 전용(종목명·수량·방향·이관금액·매입원가·평가차익). ⚠️ `calendarMemos`에 복사 금지.
@@ -2779,12 +2824,25 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   50% 문턱)에서 그날이 `'-'`로 보류될 수 있다(기존 '알려진 한계 ③'과 동일 원인) ③ 이관 원장 행을
   `DepositPanel`에서 편집하면 프로라타 재계산이 `principalDeducted`를 덮어써 정합이 깨진다(`[이관]` 메모
   태그로 식별만 제공) ④ 부분 이관·해외↔국내 이관·펀드/예적금 행의 이관 버튼은 **미지원**(핸들러는 지원하나
-  진입점을 주식 행에만 둠) ⑤ 원계좌 `principal`이 매입원가보다 작으면 0으로 클램프된다(데이터 이상 상황).
-- 검증: `npm run verify:transfer` (참조 구현 미러 #1~#16 + **통합 뷰 이관 쌍 상쇄 #34~#41e** +
-  소스 텍스트 가드 #17~#29 + **'비운 계좌
-  평가액 0' 배선 #30~#33**). `utils.ts`의 `buildTransferLedgerRows`·`collectTransferRows` 본문과
-  **항상 1:1 동기화**할 것. #30~#33은 미러가 아니라 정규식으로 배선을 단언하므로, 실패 시 **먼저
-  정규식이 낡았는지 확인**하고 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+  진입점을 주식 행에만 둠) ⑤ 원계좌 `principal`이 매입원가보다 작으면 0으로 클램프된다(데이터 이상 상황)
+  ⑥ **금현물(`gold`) 계좌는 이관 진입점이 없다** — `App.tsx:4351`이 gold에 `KrxGoldTable`을 렌더하는데
+  그 컴포넌트는 `onTransfer`를 받지 않는다(대상으로도 `reason = '금현물'`로 차단). 현금성(matong/simple)
+  계좌도 개별 뷰 진입 자체가 막혀 있어 표에 도달할 수 없다 ⑦ 병합 후 과표 매매 이벤트가 한 풀이 되면
+  LOFO 기준단가가 바뀌므로, 양쪽에 과표 이력이 있으면 아예 차단한다(위 규약).
+- 검증: `npm run verify:transfer` (113건 — 참조 구현 미러 #1~#16 + **통합 뷰 이관 쌍 상쇄 #34~#41e** +
+  소스 텍스트 가드 #17~#29(**병합 배선 #25~#25j**) + **'비운 계좌
+  평가액 0' 배선 #30~#33** + **파트⑤ 동일 코드 병합 #42~#51f**). `utils.ts`의
+  `buildTransferLedgerRows`·`collectTransferRows` 본문과 **항상 1:1 동기화**할 것. #30~#33은 미러가
+  아니라 정규식으로 배선을 단언하므로, 실패 시 **먼저 정규식이 낡았는지 확인**하고 계약 자체가 바뀐
+  게 아니면 정규식을 고칠 것.
+  ⚠️ **파트⑤는 미러가 아니라 `src/utils.ts` 직접 import**다(병합 규칙은 산술이 전부라 미러를 두면
+  src/미러 한쪽만 고친 변경이 둘 다 통과한다). 가드는 **선언이 아니라 사용부**를 단언하며 **변이 18종**
+  (병합 판정 무시 · 맵 통째 교체 · keep 극성 뒤집기 · sum을 유지로 · 국내 원가 단순 합산 · qty>0 가드
+  제거 · 과표/예적금 차단 제거 · 코드 정규화 제거 · 라이터 재확인 2곳 제거 · App 배선 제거 · 정렬 랭크
+  제거 · 모달 자동 선택 · 배지 삭제 · 맵 키 되돌림 · 과표 덮어쓰기 · 음성 대조 1)으로 **실제 검출을
+  확인**했다. ⚠️ `#25h`는 처음에 **죽은 단언**이었다 — `mergeTransferMapEntry` 문자열 '존재'만 봐서
+  `const merged = carried[k] || …`로 통째 교체를 되살려도 통과했다(변이 M2). 지금은 대입식 전체와
+  사용부(`next[k] = { ...cur, [tgtCode]: merged }`)를 함께 본다. 되돌리지 말 것.
 
 ### 메모 달력 자산 스냅샷 클릭 → 날짜별 '계좌별 현황'(ASSET 패드) (⚠️ 회귀 주의)
 

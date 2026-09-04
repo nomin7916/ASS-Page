@@ -86,7 +86,7 @@ import {
   buildBookCostSeries, bookDeltaBetween,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
-  bookCostOf, calcPortfolioEvalDetail, collectTransferRows,
+  bookCostOf, calcPortfolioEvalDetail, collectTransferRows, analyzeTransferMerge,
   buildHistDetailRows, EMPTY_HIST_DETAIL,
   buildRebalTargetEntryFrom, sameRebalTargetEntry, upsertRebalTargetMemo,
   normalizeHistPeriod,
@@ -1363,12 +1363,25 @@ export default function App() {
         else if ((t === 'crypto') !== (srcType === 'crypto')) reason = '시장 불일치';
         else if (transferItem.type === 'savings' && t !== 'dc-irp') reason = '예적금 불가';
         else if (transferItem.type === 'fund' && t !== 'dc-irp' && t !== 'pension') reason = '펀드 불가';
-        // ⚠️ 동일 코드는 차단한다 — actualDividend[code][ym]·taxBaseHistory[code]가 양쪽에 있으면
-        //    병합이 한쪽을 조용히 지운다. 조용한 오적용보다 명시적 미적용(복원 모달과 같은 규약).
-        else if (code && (p.portfolio || []).some(x => x && String(x.code || '').trim() === code)) reason = '이미 보유';
-        return { id: p.id, name: p.name, isTest: !!p.isTest, typeLabel: TYPE_LABEL[t] || t, blocked: !!reason, reason };
+        // 동일 코드는 **병합 이관**으로 지원한다(과거엔 '이미 보유'로 통째 차단 — 두 계좌에 나뉜 같은
+        // 종목을 합칠 방법이 없었다). 합칠 수 없는 조합(예적금·타입 불일치·과표 이력 충돌)만 차단하며,
+        // 그 판정의 정본은 `utils.analyzeTransferMerge` 하나다(라이터도 같은 함수로 재확인한다).
+        const mg = reason ? null : analyzeTransferMerge(transferItem, activePortfolio, p);
+        if (mg && mg.blocked) reason = mg.blocked;
+        return {
+          id: p.id, name: p.name, isTest: !!p.isTest, typeLabel: TYPE_LABEL[t] || t,
+          blocked: !!reason, reason,
+          merge: !!(mg && mg.merge),
+          targetQty: mg ? mg.targetQty : 0, mergedQty: mg ? mg.mergedQty : 0,
+          sumMonths: mg ? mg.sumMonths : 0, keepConflicts: mg ? mg.keepConflicts : 0,
+        };
       })
-      .sort((a, b) => (a.blocked === b.blocked ? 0 : a.blocked ? 1 : -1));
+      // 병합 후보는 정상 후보 **뒤**로 — 초기 선택이 병합으로 잡히면 사용자가 의식하지 못한 채
+      // 두 보유가 합쳐질 수 있다(undo 없음). 병합은 반드시 명시적으로 고르게 한다.
+      .sort((a, b) => {
+        const rank = (x) => (x.blocked ? 2 : x.merge ? 1 : 0);
+        return rank(a) - rank(b);
+      });
   }, [transferItem, portfolios, activePortfolioId, activePortfolio, activePortfolioAccountType]);
 
   // 함께 이동하는 코드별 기록 건수(미리보기 표시용)

@@ -914,6 +914,133 @@ export const collectTransferRows = (p: any): any[] => {
   return out;
 };
 
+// ── 종목 이관: 동일 코드 '병합' ─────────────────────────────────────────────────
+// 대상 계좌가 같은 종목을 이미 보유하면 과거엔 '이미 보유'로 이관을 통째 차단했다. 그 가드는 두 가지를
+// 동시에 놓쳤다:
+//   ① 정상적인 "두 계좌에 나뉜 같은 종목을 한쪽으로 합치기"가 영영 불가능했다(사용자 요구 2026-09).
+//   ② 가드가 `p.portfolio` 행만 봐서, 대상에서 그 종목을 **삭제해 '삭제됨' 유령 행만 남은** 계좌는
+//      통과시켰다. 그런데 라이터는 `[code]` 엔트리를 **통째로 교체**했으므로, 가드가 막으려던 바로 그
+//      조용한 소실(대상의 실지급 분배금·세액·과표가 원계좌 값으로 덮임)이 정확히 그 경로에서 일어났다.
+// 아래 규칙은 **병합 여부와 무관하게 항상** 적용해 ②도 함께 닫는다.
+//
+// ⚠️ 별도 행 추가(같은 코드 2행) 금지 — `DividendSummaryTable`의 expectedRows/actualRows는
+//    `pf.portfolio.forEach`로 행을 만들고 행마다 `actualDividend[code][ym]`을 **다시 읽는다**(:410·:479).
+//    같은 코드가 2행이면 월·연 합계와 종목별 분배율이 정확히 2배가 된다. 반드시 한 행으로 합친다.
+// ⚠️ 코드 비교는 `transferCodeKey`(trim + 대문자)지만 **맵 키는 원문**이다 — 병합에서는 반드시
+//    '대상 항목의 code'를 정본으로 삼아 두 표기가 한 키로 수렴하게 할 것(라이터 호출부 참조).
+export const transferCodeKey = (code: any): string => String(code || '').trim().toUpperCase();
+
+// ym별 **합산**하는 맵 — 전부 "그 계좌가 실제로 받은 금액/수량/세액"이라 두 계좌 값을 더하는 것이
+// 의미상 옳다(병합 후 한 계좌가 그 달에 받은 총액 = 두 계좌의 합).
+export const TRANSFER_SUM_MAPS = [
+  'actualDividend', 'actualDividendUsd', 'actualDividendQty',
+  'dividendTaxAmounts', 'actualAfterTaxUsd', 'actualAfterTaxKrw',
+];
+// 대상 값을 **유지**하는 맵 — 주당 분배금·배당락일은 계좌와 무관한 시장 데이터라 양쪽이 같아야
+// 정상이다. 합산하면 주당 금액이 2배가 되어 '월 예상 분배금'이 통째로 틀어진다.
+export const TRANSFER_KEEP_MAPS = ['dividendHistory', 'dividendExDate'];
+
+// 과표 이력에 실제 입력이 있는가. 양쪽 다 있으면 이관을 차단한다 — events/purchases/sales를 concat하면
+// 대상 계좌의 **과거** 월별 평균 과표와 LOFO 매도 기준단가가 소급 변경되고(과거 불변 원칙 위반),
+// exTaxBase/avgTaxBase는 한쪽 값을 버려야 해서 조용한 손실이 된다.
+export const taxBaseHasData = (rec: any): boolean => {
+  if (!rec || typeof rec !== 'object') return false;
+  const arr = (v: any) => Array.isArray(v) && v.length > 0;
+  const obj = (v: any) => !!v && typeof v === 'object' && Object.keys(v).length > 0;
+  return arr(rec.events) || arr(rec.purchases) || arr(rec.sales)
+    || obj(rec.exTaxBase) || obj(rec.avgTaxBase) || obj(rec.avgTaxBaseAdj);
+};
+
+// 코드별 맵 한 항목(= `map[code]`)을 합친다. mode 'sum' = ym별 덧셈 / 그 외 = 대상 우선(없는 키만 채움).
+// ⚠️ 'keep'을 `{ ...t, ...s }`로 뒤집지 말 것 — 소스 값이 이기면 대상 계좌가 손으로 고쳐 둔 배당락일·
+//    주당 분배금이 조용히 덮인다(이 함수가 존재하는 이유가 그 소실을 막는 것이다).
+export const mergeTransferMapEntry = (tgtEntry: any, srcEntry: any, mode: string): any => {
+  const t = (tgtEntry && typeof tgtEntry === 'object') ? tgtEntry : {};
+  const s = (srcEntry && typeof srcEntry === 'object') ? srcEntry : {};
+  if (mode === 'sum') {
+    const out: any = { ...t };
+    Object.keys(s).forEach(k => { out[k] = cleanNum((out as any)[k]) + cleanNum((s as any)[k]); });
+    return out;
+  }
+  return { ...s, ...t };
+};
+
+// 대상 계좌에 같은 코드가 있는지 판정하고 병합 가능 여부·미리보기 수치를 낸다.
+// blocked가 비면 병합 가능(merge=true), 차면 그 사유로 대상 계좌를 차단한다(fail-closed).
+export const analyzeTransferMerge = (srcItem: any, srcPf: any, tgtPf: any) => {
+  const base = { target: null as any, merge: false, blocked: '', targetQty: 0, mergedQty: 0, sumMonths: 0, keepConflicts: 0 };
+  const key = transferCodeKey(srcItem?.code);
+  if (!key || !srcItem) return base;
+  const target = ((tgtPf?.portfolio) || []).find((x: any) => x && transferCodeKey(x.code) === key) || null;
+  if (!target) return base;
+
+  const srcType = srcItem.type || 'stock';
+  const tgtType = target.type || 'stock';
+  // 예적금은 이율·기간·적립 트랜치가 계좌 고유라 '합친 하나'로 표현할 수 없다.
+  if (srcType === 'savings' || tgtType === 'savings') return { ...base, target, blocked: '예적금 병합 불가' };
+  if (srcType !== tgtType) return { ...base, target, blocked: '항목 타입 불일치' };
+
+  const srcCode = String(srcItem.code || '');
+  const tgtCode = String(target.code || '');
+  if (taxBaseHasData((srcPf?.taxBaseHistory || {})[srcCode]) && taxBaseHasData((tgtPf?.taxBaseHistory || {})[tgtCode])) {
+    return { ...base, target, blocked: '과표 이력 충돌' };
+  }
+
+  const sumSet = new Set<string>();
+  const keepSet = new Set<string>();
+  TRANSFER_SUM_MAPS.forEach(k => {
+    const sEntry = (srcPf?.[k] || {})[srcCode];
+    const tEntry = (tgtPf?.[k] || {})[tgtCode];
+    if (!sEntry || !tEntry || typeof sEntry !== 'object' || typeof tEntry !== 'object') return;
+    Object.keys(sEntry).forEach(ym => { if (ym in tEntry) sumSet.add(ym); });
+  });
+  TRANSFER_KEEP_MAPS.forEach(k => {
+    const sEntry = (srcPf?.[k] || {})[srcCode];
+    const tEntry = (tgtPf?.[k] || {})[tgtCode];
+    if (!sEntry || !tEntry || typeof sEntry !== 'object' || typeof tEntry !== 'object') return;
+    Object.keys(sEntry).forEach(ym => { if (ym in tEntry && String(tEntry[ym]) !== String(sEntry[ym])) keepSet.add(ym); });
+  });
+
+  return {
+    target, merge: true, blocked: '',
+    targetQty: cleanNum(target.quantity),
+    mergedQty: cleanNum(target.quantity) + cleanNum(srcItem.quantity),
+    sumMonths: sumSet.size,
+    keepConflicts: keepSet.size,
+  };
+};
+
+// 대상 항목 + 소스 항목 → 병합된 한 행. **대상 항목을 베이스로** 만들어 id·목표비중·목표금액·마킹이
+// 그대로 유지된다(소스의 목표 계열은 버린다 — 다른 계좌 분모 기준이라 승계하면 의미가 뒤바뀐다).
+// ⚠️ 원가 불변식: 이 병합으로 늘어난 대상 계좌 장부액(bookCostOf)이 원장의 원금 이동액 C와 같아야
+//    일간 지표의 흡수 판정(bookDelta vs 흐름)이 맞물린다.
+//    · 해외: 저장 필드가 `investAmountUsd`(사용자 입력)이고 `purchasePrice`가 그 파생 미러다.
+//      두 저장값을 더하고 미러를 다시 깐다 — `qty > 0 && Number.isFinite`일 때만(0으로 나누면
+//      Infinity가 저장되고 JSON 직렬화가 null로 만들어 원가가 영구 소실된다).
+//    · 그 외: `bookCostOf`가 investAmount를 우선하므로 **두 항목의 장부액 합**을 investAmount에 쓴다.
+//      단순히 `investAmount`끼리 더하면, 대상의 investAmount가 0이고 매입가×수량으로 잡혀 있던
+//      계좌에서 그 원가가 통째로 사라진다.
+export const mergeTransferItem = (targetItem: any, srcItem: any, accountType: string): any => {
+  const type = targetItem?.type || 'stock';
+  const qty = cleanNum(targetItem?.quantity) + cleanNum(srcItem?.quantity);
+  const next: any = { ...targetItem, quantity: qty };
+  if (accountType === 'overseas' && type === 'stock') {
+    const invest = overseasInvestAmount(targetItem) + overseasInvestAmount(srcItem);
+    next.investAmountUsd = invest;
+    if (qty > 0 && Number.isFinite(invest)) next.purchasePrice = invest / qty;
+  } else {
+    const opts = accountType === 'gold' ? { costBasisOnly: true } : undefined;
+    next.investAmount = bookCostOf([targetItem], opts) + bookCostOf([srcItem], opts);
+  }
+  // 펀드는 수량·기준가가 없을 때 evalAmount가 평가액의 권위값이라 함께 더한다(주식은 파생값이라 무의미).
+  if (type === 'fund') next.evalAmount = cleanNum(targetItem?.evalAmount) + cleanNum(srcItem?.evalAmount);
+  if (!String(next.name || '').trim()) {
+    const n = String(srcItem?.name || '').trim();
+    if (n) next.name = n;
+  }
+  return next;
+};
+
 export const formatCurrency = (n) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(cleanNum(n));
 export const formatPercent = (n) => cleanNum(n).toFixed(2) + '%';
 export const formatNumber = (n) => (n === '' || n == null) ? '' : new Intl.NumberFormat('ko-KR').format(cleanNum(n));
