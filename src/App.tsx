@@ -1797,6 +1797,19 @@ export default function App() {
   //    (setTimeout(0)도 passive effect 태스크보다 먼저 발화할 수 있어 신뢰 불가.) 그래서 첫 갱신은
   //    ref 동기화 effect보다 **뒤에 선언된** 이 effect가 쏘고, 로드 effect는 그 Promise를 받아 기다린다.
   //    resolve에는 Promise를 직접 넘기지 않는다(넘기면 채택돼 '시작' 신호가 '완료'까지 미뤄진다) — 객체로 감싼다.
+  // ── 로딩 오버레이 해제 = 이력 패스 정착(histPhase 'settled') ──
+  // ⚠️ 'settled'만 보고 닫으면 안 된다 — 그 값은 부팅 뒤에도 갱신마다 refreshing↔settled를 오가고,
+  //    관리자 impersonation 진입처럼 **리로드 없이** 오버레이를 다시 켜는 경로에서는 이전 세션의 'settled'가
+  //    그대로 남아 있어 로드가 시작되기도 전에 팝업이 닫힌다. 그래서 이번 부팅이 정착을 기다리는 중인지
+  //    (로드 effect가 세우는) awaitingSettleRef로 게이팅하고, 닫을 때 내린다.
+  const awaitingSettleRef = useRef(false);
+  useEffect(() => {
+    if (!awaitingSettleRef.current) return;
+    if (histPhase !== 'settled') return;
+    awaitingSettleRef.current = false;
+    setIsInitialLoading(false);
+  }, [histPhase]);
+
   const [bootRefreshSeq, setBootRefreshSeq] = useState(0);
   const bootRefreshResolveRef = useRef<((v: { run: Promise<void> }) => void) | null>(null);
   useEffect(() => {
@@ -3259,9 +3272,11 @@ export default function App() {
       //    Drive엔 기록이 있는데 못 읽은 상태에서 편집을 허용하면 다음 저장이 그 기록을 덮는다.
       setLedgerDataState(syncStatusRef.current === 'error' ? 'error' : 'ready');
 
-      // 오버레이 해제 = '과거값 확정' 이벤트. STATE+MARKET+STOCK이 함께 적용된 이 시점부터 오늘 이전 평가액은
-      // 최종값이다(STOCK-first). 시세 갱신 완료까지 붙들지 않는다 — 그 동안 어느 화면으로든 이동 가능.
-      setIsInitialLoading(false);
+      // ⚠️ 여기서 오버레이를 닫지 않는다(사용자 확정 2026-09) — 로딩 팝업이 '과거 종가 동기화'까지 담당하고,
+      //    닫히는 순간 앱이 완전한 상태여야 한다. 해제는 아래 '정착(settled) 시 해제' effect 한 곳이 맡는다.
+      //    (안전장치는 LoadingOverlay 자체의 5초 수동 버튼 + 20초 자동 해제 — 첫 세션처럼 이력이 긴 경우
+      //     그 시점부터는 배경에서 계속 받고 사용자는 앱을 쓴다.)
+      awaitingSettleRef.current = true;
 
       // 시장지표 수집 (백그라운드)
       fetchMarketIndicators();
@@ -4147,7 +4162,14 @@ export default function App() {
       <style dangerouslySetInnerHTML={{ __html: `html, body, #root { width: 100% !important; margin: 0 !important; padding: 0 !important; } input[type="date"] { color-scheme: dark; }` }} />
       {cardWinFeeds}
       <ConfirmDialog state={confirmState} onResolve={resolveConfirm} />
-      <LoadingOverlay visible={isInitialLoading} notificationLog={notificationLog} onDismiss={() => setIsInitialLoading(false)} />
+      <LoadingOverlay
+        visible={isInitialLoading}
+        notificationLog={notificationLog}
+        onDismiss={() => { awaitingSettleRef.current = false; setIsInitialLoading(false); }}
+        histPhase={histPhase}
+        histProgress={histProgress}
+        histPartial={histPartial}
+      />
       {showInactivityWarning && <InactivityModal onContinue={handleInactivityContinue} onLogout={handleInactivityLogout} />}
       {showAdminChoiceModal && (
         <AdminChoiceModal
@@ -4264,9 +4286,6 @@ export default function App() {
           isLoading={isLoading}
           handleDriveLoadOnly={handleDriveLoadOnly}
           driveStatus={driveStatus}
-          histPhase={histPhase}
-          histProgress={histProgress}
-          histPartial={histPartial}
           handleDriveSave={handleDriveSave}
           handleOpenBackupModal={handleOpenBackupModal}
           historyInputRef={historyInputRef}

@@ -330,11 +330,12 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
   const bg = slice(app, 'const bgTimer = setTimeout(async () => {', '}, 400);');
   ok('G3 로드 effect에 setShowIntegratedDashboard(true)(강제 복귀)가 없다', bg.length > 1000 && !/setShowIntegratedDashboard\(true\)/.test(bg));
   ok('G3b 로드 effect에 loadStockFromDrive( 호출이 없다(STOCK은 loadFromDrive가 포함)', bg.length > 1000 && !/loadStockFromDrive\(/.test(bg));
-  const iOverlay = bg.indexOf('setIsInitialLoading(false)');
+  const iAwait = bg.indexOf('awaitingSettleRef.current = true;');
   const iBootSeq = bg.indexOf('setBootRefreshSeq(');
-  const iRefresh = bg.indexOf('refreshPrices(');
-  ok('G3c setIsInitialLoading(false)가 첫 갱신 트리거(setBootRefreshSeq)와 refreshPrices( 폴백보다 앞이고 한 번뿐이다',
-    iOverlay > 0 && iBootSeq > iOverlay && iRefresh > iOverlay && count(bg, /setIsInitialLoading\(false\)/g) === 1);
+  // ⚠️ 로드 effect는 오버레이를 **닫지 않는다**(사용자 확정 2026-09) — 로딩 팝업이 과거 종가 동기화까지 담당하고,
+  //    닫히는 순간 앱이 완전한 상태여야 한다. 여기서는 '정착을 기다린다'는 표시만 세우고, 해제는 정착 effect가 맡는다.
+  ok('G3c 로드 effect는 오버레이를 닫지 않고 awaitingSettleRef만 세운다(해제는 정착 effect 한 곳)',
+    iAwait > 0 && iBootSeq > iAwait && !/setIsInitialLoading\(false\)/.test(bg));
   ok('G3d 첫 갱신 완료를 기다린 뒤 initSession·isInitialLoad 해제가 온다(순서 유지)',
     /await \(started \? started\.run : refreshPrices\(\)\);/.test(bg)
     && bg.indexOf('await (started') < bg.indexOf('initSession();') && bg.indexOf('initSession();') < bg.indexOf('isInitialLoad.current = false'));
@@ -426,18 +427,33 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
   ok('G8e useStockData가 histPhase·histPartial·histProgress를 반환하고 App이 그것을 받는다',
     /histPhase,\s*histPartial,\s*histProgress,\s*\};\s*\}/.test(sd) && /histPhase, histPartial, histProgress,\s*\} = useStockData\(\{/.test(app));
 
-  // ── G9 배지(AccountTabBar): 4상태 분기 + notify 부재 + App prop 배선 ──
+  // ── G9 진행 표시는 **로딩 팝업 한 곳**(사용자 확정 2026-09) — 상단바에는 두지 않는다 ──
   const tabRaw = read('src/components/AccountTabBar.tsx');
   const tabBar = stripComments(tabRaw);
-  const badge = slice(tabBar, 'function HistSyncBadge(', 'export default function AccountTabBar(');
-  ok('G9 HistSyncBadge가 hydrate-failed·settled&&partial·settled·동기화 중(n/N) 4분기를 렌더한다',
-    badge.length > 300 && /phase === 'hydrate-failed'/.test(badge) && /phase === 'settled' && partial/.test(badge)
-    && /phase === 'settled'\)/.test(badge) && /과거 종가 동기화 중 \$\{progress\.done\}\/\$\{progress\.total\}/.test(badge)
-    && /phase === 'loading'\) return null;/.test(badge));
-  ok('G9b 배지 블록에 notify( 가 없다(알림 최소화 정책)', badge.length > 300 && !/notify\(/.test(badge));
-  ok('G9c AccountTabBar가 배지를 렌더하고 App이 histPhase·histProgress·histPartial을 넘긴다',
-    /<HistSyncBadge phase=\{histPhase\} progress=\{histProgress\} partial=\{histPartial\} \/>/.test(tabBar)
-    && /histPhase=\{histPhase\}\s*histProgress=\{histProgress\}\s*histPartial=\{histPartial\}/.test(app));
+  const ovRaw = read('src/components/LoadingOverlay.tsx');
+  const ov = stripComments(ovRaw);
+  const step = slice(ov, 'function bootStepText(', 'export default function LoadingOverlay(');
+  ok('G9 LoadingOverlay가 hydrate-failed·settled(+partial)·동기화 중(n/N)·하이드레이션 4단계를 문구로 낸다',
+    step.length > 300 && /phase === 'hydrate-failed'/.test(step) && /phase === 'settled'/.test(step)
+    && /partial \?/.test(step) && /과거 종가 동기화 중 \$\{progress\.done\}\/\$\{progress\.total\}/.test(step)
+    && /계좌·종가 캐시를 불러오는 중/.test(step));
+  ok('G9b 팝업 단계 줄을 실제로 렌더하고 notify(는 쓰지 않는다(알림 최소화 정책)',
+    /const step = bootStepText\(histPhase, histProgress, histPartial\);/.test(ov)
+    && /\{step\.text\}/.test(ov) && !/notify\(/.test(ov));
+  ok('G9c App이 LoadingOverlay에 histPhase·histProgress·histPartial을 넘긴다',
+    /<LoadingOverlay[\s\S]{0,400}?histPhase=\{histPhase\}\s*histProgress=\{histProgress\}\s*histPartial=\{histPartial\}/.test(app));
+  // ⚠️ 상단바 배지 부활 차단 — 구름 아이콘 옆 상시 문구는 정상 상태에서도 진행 중처럼 보인다(사용자 확정).
+  ok('G9d AccountTabBar에 배지 흔적(HistSyncBadge·histPhase·histProgress·histPartial)이 없다',
+    !/HistSyncBadge|histPhase|histProgress|histPartial/.test(tabBar));
+  ok('G9e App이 AccountTabBar에 진행 상태 prop을 넘기지 않는다',
+    !/histPhase=\{histPhase\}\s*histProgress=\{histProgress\}\s*histPartial=\{histPartial\}\s*\n\s*handleDriveLoadOnly/.test(app)
+    && count(app, /histPhase=\{histPhase\}/g) === 1);
+  // ⚠️ 해제는 정착 신호 한 곳 — '팝업이 닫히면 동기화도 끝나 있다'가 이 기능의 계약이다.
+  ok('G9f 오버레이 해제 effect는 awaitingSettleRef 게이트 + histPhase settled에서만 닫고, 닫을 때 게이트를 내린다',
+    /if \(!awaitingSettleRef\.current\) return;\s*if \(histPhase !== 'settled'\) return;\s*awaitingSettleRef\.current = false;\s*setIsInitialLoading\(false\);/.test(app)
+    && /\}, \[histPhase\]\);/.test(app));
+  ok('G9g 수동 해제(계속 사용하기·자동 해제)도 게이트를 내린다(뒤늦은 정착이 다시 닫으려 하지 않게)',
+    /onDismiss=\{\(\) => \{ awaitingSettleRef\.current = false; setIsInitialLoading\(false\); \}\}/.test(app));
 
   // ── G5 STOCK 저장: hydrated 가드가 앞 + 참조 비교 dirty + 성공 후 대입 ──
   ok('G5 STOCK 분기 한 식에서 stockHydratedRef.current && 가 lastSavedStockMapRef 비교보다 앞이고 성공 시 대입한다',
@@ -583,8 +599,8 @@ console.log('\n── 파트② 소스 텍스트 가드 — Phase 1 (순서·중
     && /const resetProgress = \(\) => \{\s*histProgressRef\.current = \{ done: 0, total: 0 \};\s*if \(progressTimerRef\.current\) \{ clearTimeout\(progressTimerRef\.current\); progressTimerRef\.current = null; \}\s*setHistProgress\(\{ done: 0, total: 0 \}\);/.test(sd));
   ok('G23b 진행도 스로틀 타이머를 언마운트에서 정리한다',
     /useEffect\(\(\) => \(\) => \{ if \(progressTimerRef\.current\) clearTimeout\(progressTimerRef\.current\); \}, \[\]\);/.test(sd));
-  ok('G23c 배지는 total이 0이면 카운터를 감춘다("0/0"은 멈춘 것처럼 보인다)',
-    /progress\.total > 0 \? `과거 종가 동기화 중 \$\{progress\.done\}\/\$\{progress\.total\}` : '과거 종가 동기화 중'/.test(tabBar));
+  ok('G23c 팝업은 total이 0이면 카운터를 감춘다("0/0"은 멈춘 것처럼 보인다)',
+    /progress\.total > 0 \? `과거 종가 동기화 중 \$\{progress\.done\}\/\$\{progress\.total\}` : '과거 종가 동기화 중'/.test(read('src/components/LoadingOverlay.tsx')));
 
   // G24 [in-flight] 겹친 패스의 중복 조회 축소 — 등록·해제가 짝이다.
   ok('G24 조회 시작 시 inFlight에 등록하고 스트림 종료 시 해제한다(KR·US는 passCodes, NAV는 allFundCodes)',

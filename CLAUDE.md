@@ -504,7 +504,7 @@ quantity`를 렌더하고 blur에 `purchasePrice = 입력총액/수량`만 기�
   '시작' 신호가 '완료'까지 미뤄진다 — `{ run }` 객체로 감싼다). effect가 `BOOT_REFRESH_START_TIMEOUT_MS`(5s)
   안에 안 돌면(언마운트 등) 직접 쏜다(그때는 렌더가 끝난 지 오래다).
 - **부팅 순서**: loadFromDrive(STATE+MARKET+STOCK) → 신규 사용자 분기 → ledger 잠금 해제 →
-  **`setIsInitialLoading(false)`(오버레이 해제 = 과거값 확정 이벤트)** → `fetchMarketIndicators` →
+  **`awaitingSettleRef = true`(오버레이 해제 예약 — Phase 7에서 '정착까지 유지'로 바뀌었다)** → `fetchMarketIndicators` →
   `setBootRefreshSeq`(첫 갱신 트리거) → 부수 로드 5건(세금·알림로그·SETTINGS·getSettings·getNotifications —
   내용 무수정, **시작만** 병행) → `await started.run` → `initSession` → `isInitialLoad=false`. 강제 복귀·
   `loadStockFromDrive(token)`·`applyStockData`의 `setTimeout(refreshPrices)` 전부 삭제. `LoadingOverlay`의
@@ -729,6 +729,35 @@ Phase 1~5 배포 직후 3렌즈 리뷰에서 나온 것으로, **Phase 2(마커)
   입출금 min-h 제거)으로 **실제 검출을 확인**했고, Phase 1~5 변이 85종도 전부 재검출된다.
   ⚠️ 하네스는 **검증 스크립트가 정상 종료 요약을 냈을 때만** 검출로 센다 — 스크립트가 죽으면 exit≠0이라
   모든 변이가 '검출'로 위장된다(실측: 식별자 중복 선언 하나로 65종이 전부 거짓 초록이었다).
+
+**Phase 7 — 진행 표시는 '로딩 팝업' 한 곳, 상단바 배지 제거 (2026-09, ⚠️ 사용자 확정 — 되돌리지 말 것)**
+
+사용자 요구 그대로다: "앱을 실행하면 로딩중으로 팝업, 이때 과거 종가 동기화 표시하고 로딩이 끝나면 앱이
+정상 동작. 구름 아이콘 옆 종가 동기화 문구는 표시하지 않음."
+
+- **⚠️ 오버레이 해제 = 이력 패스 정착(`histPhase === 'settled'`)**. Phase 1의 '조기 해제'(STATE 적용 직후)를
+  의도적으로 되돌린 것이다 — **팝업이 닫히는 순간 앱이 완전한 상태**여야 한다는 것이 이 기능의 계약이다.
+  로드 effect는 `awaitingSettleRef.current = true`만 세우고 닫지 않는다(그 안에 `setIsInitialLoading(false)`가
+  다시 생기면 계약이 깨진다 — 가드 G3c가 부재를 단언).
+  ⚠️ **`histPhase === 'settled'`만 보고 닫지 말 것** — 그 값은 부팅 뒤에도 갱신마다 refreshing↔settled를
+  오가고, 관리자 impersonation 진입처럼 **리로드 없이** 오버레이를 다시 켜는 경로에서는 이전 세션의
+  'settled'가 남아 있어 로드가 시작되기도 전에 팝업이 닫힌다 → `awaitingSettleRef` 게이트가 그 방어선이고,
+  닫을 때(정착·수동 해제 **양쪽**) 내려야 뒤늦은 정착이 다시 닫으려 하지 않는다.
+- **안전장치는 `LoadingOverlay` 자체**(5초 뒤 '계속 사용하기' 버튼 + 20초 자동 해제) — 첫 세션처럼 마커가
+  없어 전 종목을 조회하는 경우 20초를 넘기므로, 그때는 사용자가 앱을 쓰고 **동기화는 배경에서 계속된다**
+  (푸터 문구가 그 사실을 밝힌다). 2회차부터는 Phase 2 증분 조회 덕에 몇 초 만에 닫힌다.
+- **팝업 단계 문구 = `bootStepText(phase, progress, partial)`**: `loading`→'계좌·종가 캐시를 불러오는 중' /
+  `hydrated`·`refreshing`→'과거 종가 동기화 중 n/N' / `hydrate-failed`→'종가 캐시를 불러오지 못했습니다' /
+  `settled`→'동기화 완료'(+partial이면 '일부 미수집'). ⚠️ `total`은 시세 조회(종목당 최대 10초)가 끝나야
+  정해지므로 **0이면 카운터를 감춘다**('0/0'은 멈춘 것처럼 보인다).
+- **⚠️ 상단바(`AccountTabBar`)에는 같은 정보를 두지 말 것** — 구름 아이콘 옆 상시 문구는 정상 상태에서도
+  무언가 진행 중인 것처럼 보인다(사용자가 명시적으로 제거를 요청했다). 진행 중 표시는 기존 구름 아이콘
+  (`isLoading`)이 이미 맡는다. 가드 G9d가 `HistSyncBadge`·`histPhase`·`histProgress`·`histPartial`
+  **식별자 부재**를 단언한다(Phase 3에서 만든 배지는 이 Phase에서 통째로 삭제됐다).
+- 검증: `verify:boot` 147건(G3c·G9~G9g·G23c가 새 계약). **변이 10종**(정착 effect 삭제 · awaitingSettleRef
+  게이트 제거 · settled 조건 완화 · 해제 시 게이트 미하강 · 수동 해제 게이트 미하강 · 팝업 prop 미전달 ·
+  단계 줄 렌더 삭제 · 단계 계산 고정 · 동기화 분기 삭제 · 상단바 배지 부활)으로 **실제 검출을 확인**했고,
+  Phase 1~6 변이 99종도 전부 재검출된다(배지 삭제로 무의미해진 옛 변이 2종은 제거).
 
 ### 현금성 계좌(마통·직접입력)는 평가액 추이·팝업에서 '스냅샷 carry-forward' 처리 (⚠️ 회귀 주의)
 
