@@ -6166,20 +6166,78 @@ ETF 구성종목 비중(holdings)과 PER 데이터는 **JavaScript 메모리(Map
 2. grep/read로 영향 코드 전체 파악 (CLAUDE.md + memory 참조)
 3. 기존 아키텍처 적합 여부 판단 → 재설계 시 CLAUDE.md 업데이트
 4. 완전한 구현 (임시 코드, 하위 호환 shim 없이)
-5. **게이트 검증** 통과 (아래 「검증·리뷰 규약」)
-6. **자동 커밋·푸시**: 검증 끝나면 별도 확인 없이 `git add` → `git commit` (한국어, `feat(영역):`/`fix(영역):` 컨벤션) → `git push` 일괄 실행. 예외(여전히 사전 확인 필요): 파괴적 작업(force push, reset --hard, 브랜치 삭제), `--no-verify`·`--no-gpg-sign` 등 훅·서명 우회, 광범위 리팩토링이나 다수 파일 일괄 변경, main 외 보호 브랜치로의 푸시.
+5. **게이트 검증** 통과 (아래 「커밋 전 체크리스트」 — `npm run gate` 한 줄)
+6. **자동 커밋·푸시**: 체크리스트 6항목을 마치면 별도 확인 없이 `git add <파일 명시>` → `git commit` (한국어, `feat(영역):`/`fix(영역):` 컨벤션) → `git push` 일괄 실행. 예외(여전히 사전 확인 필요): 파괴적 작업(force push, reset --hard, 브랜치 삭제), `--no-verify`·`--no-gpg-sign` 등 훅·서명 우회, 광범위 리팩토링이나 다수 파일 일괄 변경, main 외 보호 브랜치로의 푸시.
 7. 적대적 리뷰가 필요하면 **커밋 이후** 별도 단계로 (아래)
+
+### 커밋 전 체크리스트 (⚠️ 6항목 전부 — 하나도 건너뛰지 말 것)
+
+**이 절이 생긴 이유**: 2026-09-05 커밋 `e81c277`이 `IntegratedDashboard.tsx`에 `holdReasonText(`
+**사용부만** 넣고 `import`를 빠뜨린 채 배포돼 **프로덕션이 통째로 오류 화면**이 됐다
+(`ReferenceError` → ErrorBoundary). `npm run build`·`undefcheck`·`scopecheck`·`verify:*` 22종이
+**전부 초록**이었다. CLAUDE.md에 이미 같은 부류(`initTradeRest`) 경고가 있었는데도 재발했다 —
+**"주의하라"는 문장은 대책이 아니다.** 기계가 판정하는 항목만 남긴다.
+
+| # | 명령 / 판정 | 무엇을 막는가 |
+|---|---|---|
+| 1 | `npm run gate` — **전부 통과해야 함** | 게이트 선별 판단 자체의 오류. **총 14.5초**(build 6초 + verify 23종 + 정적 4종)라 고를 이유가 없다 |
+| 2 | `git status --short` — 의도한 파일만 있는가? | 변이 테스트 잔재·백그라운드 에이전트가 작업 트리에 남긴 변경 (실측: 조사 에이전트가 리플레이용 결함을 주입한 채 돌던 순간이 있었다) |
+| 3 | `git diff`를 **눈으로 읽는다** — 특히 "호출부는 늘었는데 import/선언 줄 변경이 없다" | 이번 장애. diff를 읽었다면 1초에 보였다 |
+| 4 | `git add <파일 명시>` — **`git add -A` 금지** | 동시에 도는 에이전트·도구의 무관한 변경이 커밋에 섞이는 것 |
+| 5 | `git diff --cached --stat` — 스테이지된 파일 수가 예상과 같은가? | 3·4의 마지막 확인. 예상보다 많으면 멈춘다 |
+| 6 | 푸시 후 **실제 화면 확인 요청** (배포 URL 새로고침) | 정적 게이트가 원리적으로 못 잡는 런타임 파손. 사용자에게 한 줄로 요청할 것 |
+
+**⚠️ 작업 중 금지 사항 (전부 이번 사고의 직접 원인)**
+
+- **`git checkout <파일>` / `git restore`로 되돌리지 말 것.** HEAD로 복원하므로 **커밋하지 않은
+  그 파일의 수정이 통째로 사라진다**(실측: 단일 변이 확인 후 이 명령 한 줄로 수정 4건 소실 →
+  재적용 과정에서 import 유실 → 프로덕션 장애). **변이 테스트는 커밋된 상태에서만 한다** —
+  작업 트리가 더러우면 먼저 커밋하거나 stash. 되돌리기는 하네스처럼 **원본 문자열을 메모리에 들고
+  다시 쓰는 방식**으로만.
+- **스크립트로 소스를 패치할 때 파일 쓰기를 마지막 줄에 두지 말 것.** 중간 치환에서 예외가 나면
+  **아무것도 기록되지 않는데** 앞부분은 적용된 것처럼 보인다(실측: 파이썬 재적용 스크립트가 2번째
+  치환에서 AssertionError → import 추가분만 유실). 치환마다 쓰거나, 끝난 뒤 **반드시 grep으로 결과 확인**.
+- **한글이 든 소스 패치는 Edit 도구로.** Git Bash 힙도큐먼트는 백슬래시뿐 아니라 **한글도 깨뜨린다**
+  (실측 2026-09-05, 같은 날 두 번).
+- **소스 텍스트 가드를 새로 쓸 때 '사용부 존재'만 단언하지 말 것.** 이번 장애의 가드(`verify:twr #30e`)가
+  `holdReasonText(` 존재만 봐서 import 누락을 그대로 통과시켰다. 사용부를 단언하면 **그 심볼의
+  import/선언도 함께** 단언하거나, `npm run verify:imports`가 덮는지 확인할 것.
+
+**게이트 구성** (`scripts/gate.mjs`, `npm run gate`)
+- **차단**: `verify:imports`(누락 import) · `build` · `verify:*` 전부
+- **참고만**(차단 아님): `verify:calendar` — nager.at 라이브 교차검증이라 공휴일 드리프트로 상시 실패할
+  수 있다. 차단하면 게이트가 영구 빨강이 되어 사람이 통째로 무시하게 된다.
+- **외부 정적 도구**(`jsxcheck`·`undefcheck`·`scopecheck`)는 저장소 밖 `memory/tools/`에 있어 gate가
+  자동 탐색하고 **못 찾으면 크게 알린다**. 다른 경로면 `CLAUDE_MEMORY_TOOLS=<디렉터리>`.
+
+**⚠️ `scripts/importcheck.mjs` — 누락 import 전용 게이트 (2026-09-05 신설, 지우지 말 것)**
+`src/**`에서 **로컬 모듈이 export한 이름을 호출하는데 그 파일에 import/선언이 없는** 경우를 잡는다.
+이 부류는 다른 어떤 게이트도 구조적으로 못 잡는다 — `vite build`(esbuild)는 타입체크를 하지 않고
+미정의 **전역 참조**는 빌드 오류가 아니며, `tsc`는 이 저장소가 대부분 `// @ts-nocheck`라 무력하다
+(설치돼 있지도 않고 `npm install`은 금지).
+- 만들자마자 clean 트리에서 **live 결함을 하나 더 찾았다**: `useStockData.commitStaged()`가
+  `mergeStockMeta()`를 import 없이 호출하고 있었고(`21b3786`부터 배포 중), 그 호출이 `settleFinal()`
+  첫 줄이라 `histPhase`가 `'refreshing'`에 고착 → 로딩 오버레이가 20초 폴백으로만 닫히고
+  백필·자동확정이 세션 내내 차단되며 **스테이징된 과거 종가가 커밋되지 않았다**(`a586601`로 복구).
+- ⚠️ **오탐 0을 유지할 것** — 오탐이 나오면 사람이 게이트를 통째로 무시한다. import 캡처는 반드시
+  `\{([^}]*)\}`로 한다. `[\s\S]*?`는 백트래킹으로 **앞선 import까지 삼켜** 첫 이름이
+  `import { formatCurrency` 형태로 잘린다(실측 오탐 47건의 원인).
 
 ### 검증·리뷰 규약 (⚠️ 상시 적용 — 매번 프롬프트로 지시받지 않아도 이대로 한다)
 
 **게이트 = 결정적 검증 / 리뷰 = 보너스.** 둘의 역할을 절대 섞지 말 것.
 
-- **게이트**(통과 못 하면 커밋 금지): 변경 영역의 `npm run verify:*`(calendar·tax·dividend·history·
-  notice·twr·fx·brl·rebal-restore·transfer·overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel·excel·compare·ledger·**boot** **22종** 중 해당분) + `memory/tools/jsxcheck.mjs`
+- **게이트**(통과 못 하면 커밋 금지): **`npm run gate` 한 줄로 전부 돌린다**(위 「커밋 전 체크리스트」).
+  ⚠️ **"변경 영역에 해당하는 것만" 고르지 말 것** — 고르는 판단 자체가 틀려서 2026-09-05 프로덕션
+  장애가 났다. 전체가 **14.5초**라 선별할 이유가 없다. 개별 실행이 필요할 때의 목록:
+  `npm run verify:*`(imports·calendar·tax·dividend·history·notice·twr·fx·brl·rebal-restore·transfer·
+  overseas·flow·ladder·backtest·cal-detail·card-window·period·chart-sel·excel·compare·ledger·palette·**boot**)
+  + `scripts/importcheck.mjs`(누락 import) + `memory/tools/jsxcheck.mjs`
   (.tsx 구문) · `undefcheck.mjs`(미정의 식별자) · **`scopecheck.mjs`(스코프 누수 — 다른 최상위 블록의
-  지역 변수를 참조)**. `npm run build`가 가능한 환경이면 추가로 돌린다.
-  ⚠️ **세 도구는 서로를 대체하지 못한다** — `undefcheck`는 파일 전체를 한 스코프로 보므로
-  "정의는 있는데 남의 스코프"를 통과시킨다(2026-08 프로덕션 `initTradeRest` 장애가 정확히 이 구멍).
+  지역 변수를 참조)** + `npm run build`.
+  ⚠️ **네 도구는 서로를 대체하지 못한다** — `undefcheck`는 파일 전체를 한 스코프로 보므로
+  "정의는 있는데 남의 스코프"를 통과시키고(2026-08 프로덕션 `initTradeRest` 장애가 정확히 이 구멍),
+  **"선언이 아예 없는(import 누락)" 경우도 통과시킨다**(2026-09-05 장애 — 그 구멍이 `importcheck`).
   `scopecheck`는 휴리스틱이라 **오탐이 섞인다** — 대표적 오탐 2종은 ① 여러 줄 시그니처·인라인 타입의
   파라미터·필드 ② `[?]`로 표시된 이름 없는 블록. **변경한 파일의 결과만 보고 사람이 최종 판단**할 것
   (변경 파일이 0건이면 통과로 본다).

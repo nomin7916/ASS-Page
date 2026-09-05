@@ -29,7 +29,9 @@
     "verify:compare": "node scripts/verify-compare.mjs",
     "verify:ledger": "node scripts/verify-ledger.mjs",
     "verify:boot": "node scripts/verify-boot.mjs",
-    "verify:palette": "node scripts/validate_palette.mjs"
+    "verify:palette": "node scripts/validate_palette.mjs",
+    "verify:imports": "node scripts/importcheck.mjs",
+    "gate": "node scripts/gate.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
