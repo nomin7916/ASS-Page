@@ -30,6 +30,13 @@ import {
   makeLedgerSnapshot, pushLedgerSnapshot, ledgerSnapshotSummary, normalizeLedgerBooks,
   ledgerBooksHaveContent, MAX_LEDGER_SNAPSHOTS, MAX_LEDGER_SNAPSHOT_LABEL_LEN,
 } from '../ledger';
+// 거래 레이어(단계 A) — ⚠️ 실제 금액의 단일 소스는 `actualResolved`다(수동 `actualOf` 아님).
+import {
+  txIndexOf, actualResolved, manualShadowed, stripTxForSnapshot,
+  addTx, updateTx, softDeleteTx, restoreTx, purgeTx, migrateManualToTx, dropManual,
+} from '../ledger';
+import LedgerQuickEntry from './LedgerQuickEntry';
+import LedgerTxTab from './LedgerTxTab';
 
 /**
  * 가계부 본체 — **별도 브라우저 창(`variant='page'`)과 인앱 폴백(`variant='overlay'`)이 공유**한다.
@@ -333,6 +340,10 @@ export default function LedgerPage({
     setMonth(Number(todayYm.slice(5, 7)));
   }, [todayYm]);
   const [tab, setTab] = useState('matrix');
+  /** 거래 탭으로 넘어갈 때의 초기 필터(항목·미분류) — 한 번 쓰고 소비한다. */
+  const [txFilter, setTxFilter] = useState(null);
+  /** 수동 값 ↔ 거래 충돌 안내(§5.3.2) — 인라인으로만 묻는다(모달·토스트 금지). */
+  const [txConflict, setTxConflict] = useState(null);
   const [collapsed, setCollapsed] = useState({});
   const [hiddenMonths, setHiddenMonths] = useState([]);
   const [armedDelete, setArmedDelete] = useState('');
@@ -426,8 +437,16 @@ export default function LedgerPage({
   }, [patchBook, today]);
 
   /* ── 파생값 ────────────────────────────────────────────────────────────── */
+  /**
+   * 거래 인덱스 — 이 화면의 **모든 실적 집계가 공유**한다.
+   * ⚠️ 집계 함수에 `ix`를 넘기지 않으면 거래가 조용히 무시돼 합계가 줄어든다(수동 값만 본다).
+   *    새 집계를 추가할 때 반드시 함께 넘길 것 — 소스 가드가 이 배선을 단언한다.
+   */
+  const ix = useMemo(() => txIndexOf(book), [book]);
+  /** 미입력 판정 옵션 — `entry:'tx'` 항목의 **진행 중인 달**을 미입력으로 세지 않는다. */
+  const expOpts = useMemo(() => ({ ix, todayYm }), [ix, todayYm]);
   const kpi = useMemo(() => ledgerKpi(book, ym), [book, ym]);
-  const totals = useMemo(() => monthTotals(book, ym), [book, ym]);
+  const totals = useMemo(() => monthTotals(book, ym, todayYm), [book, ym, todayYm]);
   const mom = useMemo(() => momDelta(book, ym), [book, ym]);
   const yoy = useMemo(() => yoyDelta(book, ym), [book, ym]);
 
@@ -438,11 +457,11 @@ export default function LedgerPage({
    */
   const yearSeries = useMemo(() => MONTHS.map((m) => {
     const k = makeYm(year, m);
-    const t = monthTotals(book, k);
+    const t = monthTotals(book, k, todayYm);
     const c = momDelta(book, k);
-    const e = expectedTotal(book?.items, k);
-    const ie = expectedIncomeTotal(book?.items, k);
-    const bp = expectedByPay(book?.items, k);
+    const e = expectedTotal(book?.items, k, ix);
+    const ie = expectedIncomeTotal(book?.items, k, ix);
+    const bp = expectedByPay(book?.items, k, ix);
     /**
      * 수지 균형 카드 전용 3필드 — **`plan`/`actual`/`expected`와 섞지 말 것.**
      * ⚠️ 수입·지출을 **같은 규칙(항목 단위 실제 ?? 계획)** 으로 뽑아야 그 차이가 잉여금이 된다.
@@ -485,7 +504,7 @@ export default function LedgerPage({
     //    아래 `payChartData`가 그 달 **행 자체를 제외**하는 방식으로 처리한다.
     for (const p of LEDGER_PAY_ORDER) row[`pay_${p}`] = bp[p] ? bp[p].value : 0;
     return row;
-  }), [book, year]);
+  }), [book, year, todayYm, ix]);
 
   /**
    * 결제수단 막대 데이터 — 항목이 하나도 없던 달은 **행을 뺀다**(0 막대로 그리면
@@ -539,7 +558,7 @@ export default function LedgerPage({
    */
   const donut = useMemo(() => {
     const fixedItems = (book?.items || []).filter((it) => it && it.group === 'fixed');
-    const fixedByPay = expectedByPay(fixedItems, ym);
+    const fixedByPay = expectedByPay(fixedItems, ym, ix);
     const rows = [];
     for (const g of LEDGER_EXPENSE_GROUPS) {
       if (g === 'fixed') {
@@ -563,7 +582,7 @@ export default function LedgerPage({
       rows.push({
         key: g,
         name: LEDGER_GROUP_LABEL[g],
-        value: expectedTotal((book?.items || []).filter((it) => it && it.group === g), ym).value,
+        value: expectedTotal((book?.items || []).filter((it) => it && it.group === g), ym, ix).value,
         color: LEDGER_GROUP_COLOR[g],
       });
     }
@@ -587,7 +606,7 @@ export default function LedgerPage({
       if (!items.length) continue;
       const byKey = new Map();
       for (const it of items) {
-        const v = expectedOf(it, ym);
+        const v = expectedOf(it, ym, ix);
         if (v === null || !Number.isFinite(v)) continue;
         // 대출·연단위는 항목이 곧 의미 단위, 고정비·변동비는 사용자 구분이 의미 단위다.
         const key = (g === 'loan' || g === 'annual')
@@ -649,14 +668,21 @@ export default function LedgerPage({
   const annualCompare = useMemo(() => yearsAvailable.map((y) => {
     let plan = 0, actual = 0, any = false;
     for (const m of MONTHS) {
-      const t = monthTotals(book, makeYm(y, m));
+      const t = monthTotals(book, makeYm(y, m), todayYm);
       plan += t.planExpense; actual += t.actualExpense;
       if (t.missingExpense < t.activeExpense) any = true;
     }
     return { year: y, label: `${y}`, plan, actual, any };
-  }), [book, yearsAvailable]);
+  }), [book, yearsAvailable, todayYm]);
 
   const visibleMonths = useMemo(() => MONTHS.filter((m) => !hiddenMonths.includes(m)), [hiddenMonths]);
+  /** 그 해에 미분류 거래가 하나라도 있는가 — 가상 행·소계 렌더 게이트. */
+  const hasUncYear = useMemo(
+    () => MONTHS.some((m) => {
+      const u = ix.uncategorizedYm.get(makeYm(year, m));
+      return !!(u && u.count > 0);
+    }),
+    [ix, year]);
 
   const grouped = useMemo(() => {
     const out = {};
@@ -760,9 +786,20 @@ export default function LedgerPage({
     if (readOnly || !onUpdateSnapshots) return false;
     const books = promote() ?? localRef.current;
     if (!ledgerBooksHaveContent(books)) { doFlash('저장할 내용이 없습니다'); return false; }
+    /**
+     * ⚠️ **거래는 스냅샷에 넣지 않는다**(`stripTxForSnapshot`). 512KB 예산에 거래(장부당 최대
+     *    ≈700KB)를 넣으면 `pushLedgerSnapshot`이 이전 스냅샷을 전부 버려 사실상 1개만 남는다 —
+     *    여러 시점의 복구 지점이라는 이 기능의 존재 이유가 사라진다.
+     *    거래의 안전망은 **휴지통**이고, 스냅샷은 계획 매트릭스·수동 실적·설정의 안전망이다.
+     */
+    const stripped = stripTxForSnapshot(books);
+    if (!ledgerBooksHaveContent(stripped)) {
+      doFlash('계획·항목이 없어 저장할 내용이 없습니다(거래는 이전 기록에 포함되지 않습니다)');
+      return false;
+    }
     const next = pushLedgerSnapshot(snapshots, makeLedgerSnapshot({
       savedAt: Date.now(), label: String(label || '').slice(0, MAX_LEDGER_SNAPSHOT_LABEL_LEN),
-      auto, books,
+      auto, txStripped: true, books: stripped,
     }));
     if (next === snapshots) { doFlash('직전 저장과 내용이 같습니다'); return false; }
     onUpdateSnapshots(next);
@@ -783,12 +820,22 @@ export default function LedgerPage({
     let nextSnaps = snapshots;
     if (onUpdateSnapshots && ledgerBooksHaveContent(cur)) {
       nextSnaps = pushLedgerSnapshot(snapshots, makeLedgerSnapshot({
-        savedAt: Date.now(), label: '복원 직전 자동 저장', auto: true, books: cur,
+        savedAt: Date.now(), label: '복원 직전 자동 저장', auto: true,
+        txStripped: true, books: stripTxForSnapshot(cur),
       }));
       if (nextSnaps !== snapshots) onUpdateSnapshots(nextSnaps);
     }
-    // ⚠️ 정규화해서 넣는다 — 손상된 스냅샷이 렌더 중 던지면 화면이 통째로 오류 페이지가 된다.
-    setLocal(() => normalizeLedgerBooks(snap.books));
+    /**
+     * ⚠️ 정규화해서 넣는다 — 손상된 스냅샷이 렌더 중 던지면 화면이 통째로 오류 페이지가 된다.
+     * ⚠️ **복원은 거래를 지우지 않는다.** 스냅샷에는 거래가 없으므로(위 strip) 그대로 넣으면
+     *    지금까지 기록한 거래가 통째로 사라진다 — 복구 수단이 데이터를 지우는 역설이 된다.
+     *    같은 id의 장부에 현재 거래를 다시 실어 준다(장부 자체가 스냅샷에 없으면 함께 사라진다).
+     */
+    const keepTx = new Map((Array.isArray(cur) ? cur : []).map((b) => [b && b.id, b && b.transactions]));
+    setLocal(() => normalizeLedgerBooks(snap.books).map((b) => {
+      const tx = keepTx.get(b.id);
+      return Array.isArray(tx) && tx.length > 0 ? { ...b, transactions: tx } : b;
+    }));
     setShowSnapshots(false);
     doFlash('이전 기록으로 되돌렸습니다');
   }, [readOnly, snapshots, onUpdateSnapshots, promote, setLocal]);
@@ -799,6 +846,102 @@ export default function LedgerPage({
     if (next.length === (snapshots || []).length) return;
     onUpdateSnapshots(next);
   }, [readOnly, snapshots, onUpdateSnapshots]);
+
+  /* ── 거래(기록 레이어) 쓰기 헬퍼 ──────────────────────────────────────────
+   * ⚠️ 전부 **id 기준**이고 `setLocal` 업데이터 안에서는 **순수 계산만** 한다
+   *    (generateId·setState·ref 대입을 업데이터에 넣으면 StrictMode 이중 호출에서 부수효과가
+   *    두 번 돈다 — FlowBoard·BacktestPage와 같은 규약).
+   * ────────────────────────────────────────────────────────────────────── */
+  const curBook = useCallback(
+    () => (Array.isArray(localRef.current) ? localRef.current : []).find((b) => b && b.id === book?.id) || null,
+    [book],
+  );
+
+  const handleAddTx = useCallback((tx) => {
+    const cur = curBook();
+    if (!cur || readOnly) return { error: 'invalid', conflict: null };
+    const res = addTx(cur, tx);          // ⚠️ 업데이터 밖에서 한 번만 계산한다
+    if (res.error) return res;
+    patchBook(cur.id, () => res.book);
+    // 그 달을 '정리했다'로 남긴다 — 매트릭스 셀 편집과 같은 규약(메모 달력 앵커).
+    const k = String(tx.date || '').slice(0, 7);
+    if (isValidYm(k)) touchMonth(cur.id, k);
+    if (res.conflict) setTxConflict(res.conflict);
+    return res;
+  }, [curBook, patchBook, readOnly, touchMonth]);
+
+  const handleUpdateTx = useCallback((id, patch) => {
+    if (!book || readOnly) return;
+    patchBook(book.id, (b) => updateTx(b, id, patch));
+  }, [book, patchBook, readOnly]);
+
+  /** ⚠️ 소프트 삭제(휴지통) — 배열에서 지우지 말 것(되돌리기 없는 삭제 금지). */
+  const handleDeleteTx = useCallback((ids) => {
+    if (!book || readOnly || !today) return;
+    patchBook(book.id, (b) => softDeleteTx(b, ids, today));
+  }, [book, patchBook, readOnly, today]);
+
+  const handleRestoreTx = useCallback((ids) => {
+    if (!book || readOnly) return;
+    patchBook(book.id, (b) => restoreTx(b, ids));
+  }, [book, patchBook, readOnly]);
+
+  const handlePurgeTx = useCallback((ids) => {
+    if (!book || readOnly) return;
+    patchBook(book.id, (b) => purgeTx(b, ids));
+  }, [book, patchBook, readOnly]);
+
+  const handleBulkItem = useCallback((ids, itemId) => {
+    if (!book || readOnly) return;
+    patchBook(book.id, (b) => {
+      let nb = b;
+      for (const id of ids) nb = updateTx(nb, id, { itemId, splits: [] });
+      return nb;
+    });
+  }, [book, patchBook, readOnly]);
+
+  /**
+   * 수동 값 ↔ 거래 충돌 해소.
+   * ⚠️ 추가를 막지 않고 **나중에 묻는다**(입력 마찰 금지). 그동안 셀에는 '수동 무시됨' 배지가
+   *    떠 있어 조용한 오적용이 되지 않는다.
+   */
+  const resolveTxConflict = useCallback((mode) => {
+    const c = txConflict;
+    const cur = curBook();
+    if (!c || !cur) { setTxConflict(null); return; }
+    const next = mode === 'migrate'
+      ? migrateManualToTx(cur, c.itemId, c.ym)
+      : mode === 'drop' ? dropManual(cur, c.itemId, c.ym) : null;
+    if (next && next !== cur) patchBook(cur.id, () => next);
+    setTxConflict(null);
+  }, [txConflict, curBook, patchBook]);
+
+  /** 초기 필터는 **한 번만** 반영한다 — 매 렌더 반영하면 사용자가 필터를 바꿔도 되돌아간다. */
+  const consumeTxFilter = useCallback(() => setTxFilter(null), []);
+
+  /**
+   * 기본 탭 — 거래가 있으면 '거래', 없으면 '월 매트릭스'(사용자 결정 4의 기본값).
+   * ⚠️ **상위 `books`가 실제로 도착한 뒤** 한 번만 판정한다. 첫 렌더의 `book`은 시드된 빈 장부라
+   *    그때 판정하면 거래가 있는 사용자도 항상 매트릭스로 열린다(별도 창은 books가 늦게 온다).
+   */
+  const tabSeededRef = useRef(false);
+  useEffect(() => {
+    if (tabSeededRef.current) return;
+    if (!Array.isArray(books) || books.length === 0) return;
+    tabSeededRef.current = true;
+    const b = books[bookIdx] || books[0];
+    if (b && Array.isArray(b.transactions) && b.transactions.length > 0) setTab('tx');
+  }, [books, bookIdx]);
+
+  /** 매트릭스 셀 → 거래 탭(그 항목·그 달) */
+  const openTxFor = useCallback((itemId) => {
+    setTxFilter({ itemId: itemId || '' });
+    setTab('tx');
+  }, []);
+  const openUncategorized = useCallback(() => {
+    setTxFilter({ itemId: '', uncategorized: true });
+    setTab('tx');
+  }, []);
 
   /* ── 구분(카테고리) 관리 ─────────────────────────────────────────────── */
   const addCategory = (raw) => {
@@ -860,11 +1003,13 @@ export default function LedgerPage({
     let yearActual = 0, yearPlan = 0, yearMissing = 0, yearExpected = 0, yearPlanMonths = 0;
     for (const m of MONTHS) {
       const k = makeYm(year, m);
-      const a = actualOf(it, k);
+      // ⚠️ 실제 금액의 단일 소스 — 거래가 있으면 거래 합이 이긴다(`actualOf`로 되돌리지 말 것:
+      //    거래로 입력한 달이 연간 합계에서 통째로 빠진다).
+      const a = actualResolved(it, k, ix).value;
       const p = planOf(it, k);
       // ⚠️ `isItemActive`가 아니라 `expectsActual` — annual의 비납부월은 미입력이 아니다.
       //    아니면 연단위 항목의 연간 차이 열이 11개월 미입력 때문에 영구히 '-'가 된다.
-      if (a !== null) yearActual += a; else if (expectsActual(it, k)) yearMissing++;
+      if (a !== null) yearActual += a; else if (expectsActual(it, k, expOpts)) yearMissing++;
       if (p !== null) yearPlan += p;
       /**
        * ⚠️ **표시 전용 예상 합계**(실제 ?? 계획) — 소계 행이 쓰는 `expectedTotal`과 같은 규약을
@@ -873,7 +1018,7 @@ export default function LedgerPage({
        *    `ledgerEventsByDate`로 **되돌려 보내지 말 것** — 그 순간 전월·전년 대비가 영구히
        *    거짓말을 시작한다(ledger.ts G-2 절). 여기서는 `<td>` 안에서만 쓰인다.
        */
-      const e = expectedOf(it, k);
+      const e = expectedOf(it, k, ix);
       if (e !== null) { yearExpected += e; if (a === null) yearPlanMonths++; }
     }
     // ⚠️ 차이 열의 게이트는 **그대로 `yearMissing`** — 계획으로 채운 달을 '확인했다'고 보면
@@ -990,9 +1135,17 @@ export default function LedgerPage({
         {visibleMonths.map((m) => {
           const k = makeYm(year, m);
           const active = isItemActive(it, k);
-          const a = actualOf(it, k);
+          const res = actualResolved(it, k, ix);
+          const a = res.value;
           const p = planOf(it, k);
-          const v = varianceOf(it, k);
+          /**
+           * ⚠️ 거래가 있는 칸은 **읽기 전용**이다 — 같은 숫자를 두 곳에서 고칠 수 있으면
+           *    어느 쪽이 진짜인지 화면이 답할 수 없다(단일 소스 원칙). 클릭하면 그 항목·그 달로
+           *    좁힌 거래 탭으로 간다.
+           */
+          const byTx = res.source === 'tx';
+          const shadow = byTx ? manualShadowed(it, k, ix) : null;
+          const v = (a === null || p === null) ? null : a - p;
           return (
             <td key={m} className={`${cellBase} text-right ${!active ? 'bg-gray-900/40' : ''}`} style={{ minWidth: 84 }}>
               {!active ? (
@@ -1014,6 +1167,31 @@ export default function LedgerPage({
                     })}
                   >-</button>
                 )
+              ) : byTx ? (
+                /* 거래 합 — 값·건수를 보여 주고 편집은 거래 탭으로 넘긴다. */
+                <button
+                  type="button"
+                  className="w-full text-right hover:bg-gray-800/60 rounded px-1"
+                  title={`거래 ${res.count}건의 합계입니다 — 클릭하면 거래 탭에서 그 내역을 봅니다.`
+                    + (shadow !== null
+                      ? `
+⚠️ 예전에 넣은 수동 값 ${Math.round(shadow).toLocaleString()}은(는) 무시됩니다(거래가 우선).`
+                      : '')}
+                  onClick={() => openTxFor(it.id)}
+                >
+                  <span className="text-[11px] text-gray-100">{fmtWon(a, hideAmounts)}</span>
+                  <span className="ml-1 text-[9px] text-sky-300">≡{res.count}</span>
+                  {shadow !== null && (
+                    <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.over }}>
+                      수동 {hideAmounts ? '***' : Math.round(shadow).toLocaleString()} 무시됨
+                    </div>
+                  )}
+                  {v !== null && v !== 0 && (
+                    <div className="text-[9px] leading-tight" style={{ color: varianceTone(v) }}>
+                      {varianceMark(v)} {hideAmounts ? '***' : Math.abs(Math.round(v)).toLocaleString()}
+                    </div>
+                  )}
+                </button>
               ) : (
                 <>
                   <NumCell
@@ -1081,6 +1259,67 @@ export default function LedgerPage({
     );
   };
 
+  /** 그 달 미분류 거래 합(항목을 고르지 않은 지출). 없으면 null. */
+  const uncTotalOf = (k) => {
+    const u = ix.uncategorizedYm.get(k);
+    return u && u.count > 0 ? { value: u.sum, count: u.count } : null;
+  };
+  const uncPayValue = (k, pay) => {
+    const u = ix.uncategorizedYm.get(k);
+    const v = u && u.byPay ? u.byPay[pay] : 0;
+    return Number.isFinite(v) ? v : 0;
+  };
+
+  /**
+   * 미분류 가상 행 — 변동비 그룹 끝.
+   * ⚠️ 항목이 없어 어느 행에도 속하지 않지만 **실제로 나간 돈**이라 반드시 보여야 한다
+   *    (안 보이면 "기록했는데 어디에도 없는 돈"이 되어 빠른 입력을 신뢰할 수 없다).
+   *    클릭하면 거래 탭에서 미분류만 걸러 정리할 수 있다.
+   */
+  const renderUncategorizedRow = () => {
+    const months = MONTHS.map((m) => uncTotalOf(makeYm(year, m)));
+    if (!months.some((u) => u && u.count > 0)) return null;
+    const yearSum = months.reduce((a, u) => a + (u ? u.value : 0), 0);
+    const yearCount = months.reduce((a, u) => a + (u ? u.count : 0), 0);
+    return (
+      <tr key="__uncategorized__" className="hover:bg-gray-800/30">
+        <td className={`${cellBase} sticky left-0 z-[2] bg-[#0b1120]`} style={{ minWidth: 62 }}>
+          <span className="text-[10px] text-gray-500">-</span>
+        </td>
+        <td className={`${cellBase} sticky z-[2] bg-[#0b1120]`} style={{ left: LEFT_NAME, minWidth: COL_NAME }}>
+          <div className="flex items-center gap-1">
+            <span className="text-[11px] text-amber-300">미분류</span>
+            <button className="text-[9px] px-1 rounded bg-gray-800 text-gray-400 hover:bg-gray-700"
+              onClick={openUncategorized} title="거래 탭에서 미분류만 걸러 항목을 지정합니다">정리 →</button>
+          </div>
+          <div className="text-[9px] text-gray-600 mt-0.5">항목을 고르지 않은 거래 {yearCount}건</div>
+        </td>
+        <td className={`${cellBase} sticky z-[2] bg-[#0b1120] text-right`} style={{ left: LEFT_PLAN, minWidth: 96 }}>
+          <span className="text-[10px] text-gray-700" title="미분류에는 계획이 없습니다">-</span>
+        </td>
+        {visibleMonths.map((m) => {
+          const u = months[m - 1];
+          return (
+            <td key={m} className={`${cellBase} text-right`} style={{ minWidth: 84 }}>
+              {!u ? <span className="text-[10px] text-gray-700">-</span> : (
+                <button type="button" className="w-full text-right hover:bg-gray-800/60 rounded px-1"
+                  onClick={openUncategorized}
+                  title={`미분류 거래 ${u.count}건 — 클릭하면 거래 탭에서 정리합니다`}>
+                  <span className="text-[11px] text-amber-200">{fmtWon(u.value, hideAmounts)}</span>
+                  <span className="ml-1 text-[9px] text-sky-300">≡{u.count}</span>
+                </button>
+              )}
+            </td>
+          );
+        })}
+        <td className={`${cellBase} text-right text-gray-300`} style={{ minWidth: 100 }}>{fmtWon(yearSum, hideAmounts)}</td>
+        <td className={`${cellBase} text-right`} style={{ minWidth: 96 }}>
+          <span className="text-gray-600" title="계획이 없어 차이를 낼 수 없습니다">-</span>
+        </td>
+      </tr>
+    );
+  };
+
   /**
    * 소계 행 하나(그룹 소계 또는 그 안의 결제수단 소계).
    *
@@ -1094,7 +1333,7 @@ export default function LedgerPage({
    *    아니다. 후자를 쓰면 **사용자가 실적을 채울수록 계획 열이 0으로 수렴**해, 예상값을
    *    검산할 유일한 기준선이 조용히 사라진다(실측 547,000 → 17,000).
    */
-  const renderSubtotalRow = ({ key, label, color, items, indent = false, income = false }) => {
+  const renderSubtotalRow = ({ key, label, color, items, indent = false, income = false, extra = null }) => {
     /**
      * ⚠️ **수입 그룹은 `expectedIncomeTotal`을 써야 한다.** `expectedTotal`은 지출 축 전용이라
      *    `group === 'income'`을 **함수 안에서** 건너뛴다(#48c 회귀 방지) — 수입 소계에 그걸
@@ -1102,20 +1341,28 @@ export default function LedgerPage({
      *    죽는다. 적대적 리뷰 3렌즈가 독립적으로 잡은 회귀다.
      */
     const totalOf = income ? expectedIncomeTotal : expectedTotal;
+    /**
+     * ⚠️ `extra`는 **미분류 거래**(항목이 없어 items 순회로는 잡히지 않는 실제 지출)다.
+     *    빼면 `Σ그룹 ≠ 총계`가 되고, 사용자가 빠르게 입력한 지출이 소계에서 사라진다.
+     */
+    const exOf = (k) => (extra ? extra(k) : null);
     const monthly = visibleMonths.map((m) => {
       const k = makeYm(year, m);
-      const e = totalOf(items, k);
-      return { m, e, state: monthState(e) };
+      const e = totalOf(items, k, ix);
+      return { m, e, ex: exOf(k), state: monthState(e) };
     });
     // 연 합계 — 열 숨김과 무관하게 12개월 전부(표의 '{year} 합계' 열 규약 유지)
     let yearExpected = 0, yearPlan = 0, yearActual = 0, yearUnresolved = 0, yearPlanned = 0;
     for (const m of MONTHS) {
-      const e = totalOf(items, makeYm(year, m));
+      const k = makeYm(year, m);
+      const e = totalOf(items, k, ix);
       yearExpected += e.value; yearPlan += e.planSum; yearActual += e.fromActual;
       yearUnresolved += e.unresolved;
       yearPlanned += e.plannedCount;
+      const ex = exOf(k);
+      if (ex) { yearExpected += ex.value; yearActual += ex.value; }
     }
-    const cur = totalOf(items, ym);
+    const cur = totalOf(items, ym, ix);
     return (
       <tr key={key} className={indent ? 'bg-gray-800/25' : 'bg-gray-800/50 font-semibold'}>
         <td className={`${cellBase} sticky left-0 z-[2] ${indent ? 'bg-[#131a27]' : 'bg-[#151b28]'}`} colSpan={2}>
@@ -1134,23 +1381,25 @@ export default function LedgerPage({
         <td className={`${cellBase} sticky z-[2] ${indent ? 'bg-[#131a27]' : 'bg-[#151b28]'} text-right text-[11px]`} style={{ left: LEFT_PLAN }}>
           {fmtWon(cur.planSum, hideAmounts)}
         </td>
-        {monthly.map(({ m, e, state }) => {
+        {monthly.map(({ m, e, ex, state }) => {
           /**
            * ⚠️ **산출된 항목이 하나도 없으면 `0`이 아니라 `-`다.** `unresolved`(실제도 계획도
            *    못 구함 — 예: `principalAsOfYm`이 빈 대출)를 0으로 계상하면 화면이 '납입 ₩0'을
            *    **확정 단언**한다. 구버전 규칙(`mm > 0 && ma === 0` → `-`)이 막던 것이고,
            *    `loanSchedule`의 null 계약("계산 실패는 0이 아니다")과 정면으로 어긋난다.
            */
-          const resolved = e.actualCount + e.plannedCount;
+          const resolved = e.actualCount + e.plannedCount + (ex ? ex.count : 0);
+          const cellValue = e.value + (ex ? ex.value : 0);
           return (
             <td key={m} className={`${cellBase} text-right text-[11px]`}
-              title={state === 'none' ? '이 달에는 항목이 없습니다'
+              title={(state === 'none' && !ex) ? '이 달에는 항목이 없습니다'
                 : `실제 ${fmtWon(e.fromActual, hideAmounts)} (${e.actualCount}건) + 계획 ${fmtWon(e.fromPlan, hideAmounts)} (${e.plannedCount}건)`
+                  + (ex ? ` + 미분류 ${fmtWon(ex.value, hideAmounts)}` : '')
                   + (e.unresolved > 0 ? ` · 산출 불가 ${e.unresolved}건(합계에서 빠짐)` : '')}>
-              {state === 'none' ? <span className="text-gray-700" >-</span>
+              {(state === 'none' && !ex) ? <span className="text-gray-700" >-</span>
                 : resolved === 0 ? <span className="text-gray-600">-</span> : (
                   <>
-                    {fmtWonShort(e.value, hideAmounts)}
+                    {fmtWonShort(cellValue, hideAmounts)}
                     {e.plannedCount > 0 && (
                       <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.flat }}>계획 {e.plannedCount}</div>
                     )}
@@ -1195,7 +1444,15 @@ export default function LedgerPage({
   const renderGroupSubtotal = (g, items) => {
     const rows = [];
     if (g !== 'income') {
-      const present = LEDGER_PAY_ORDER.filter((p) => items.some((it) => it && it.pay === p));
+      /**
+       * ⚠️ 미분류 거래는 **변동비 그룹**으로 계상한다(화면의 미분류 가상 행이 그 그룹 끝에 있고,
+       *    `monthTotals`도 같은 규약이다). 결제수단 소계에도 그 몫을 넣어야
+       *    **Σ(결제수단 행) === 그룹 소계**가 유지된다.
+       */
+      const isVar = g === 'variable';
+      const present = LEDGER_PAY_ORDER.filter((p) =>
+        items.some((it) => it && it.pay === p)
+        || (isVar && MONTHS.some((m) => (uncPayValue(makeYm(year, m), p) !== 0))));
       if (present.length > 1) {
         for (const p of present) {
           rows.push(renderSubtotalRow({
@@ -1204,6 +1461,10 @@ export default function LedgerPage({
             color: ledgerPayColor(p),
             items: items.filter((it) => it && it.pay === p),
             indent: true,
+            extra: isVar ? ((k) => {
+              const v = uncPayValue(k, p);
+              return v === 0 ? null : { value: v, count: 1 };
+            }) : null,
           }));
         }
       }
@@ -1214,6 +1475,7 @@ export default function LedgerPage({
           : `${LEDGER_GROUP_LABEL[g]} 합계`,
         color: LEDGER_GROUP_COLOR[g],
         items,
+        extra: isVar ? uncTotalOf : null,
       }));
     } else {
       rows.push(renderSubtotalRow({
@@ -1242,6 +1504,8 @@ export default function LedgerPage({
       label: '월 지출 합계 (연단위 납부월 포함)',
       color: LEDGER_BALANCE_COLOR.expense,
       items: expenseItems,
+      // ⚠️ 미분류도 실제로 나간 돈이다 — 빼면 총계가 KPI·달력과 갈린다.
+      extra: uncTotalOf,
     });
   };
 
@@ -1384,11 +1648,11 @@ export default function LedgerPage({
 
         {/* ── 탭 ── */}
         <div className="flex gap-1 px-3 pb-2">
-          {[['matrix', '월 매트릭스'], ['loan', '대출'], ['chart', '분석'], ['annual', '연간']].map(([k, label]) => (
+          {[['tx', '거래'], ['matrix', '월 매트릭스'], ['loan', '대출'], ['chart', '분석'], ['annual', '연간']].map(([k, label]) => (
             <button key={k}
               className={`text-[11px] px-2.5 py-1 rounded ${tab === k ? 'bg-amber-900/50 text-amber-200 border border-amber-800/60' : 'bg-gray-800/60 text-gray-400 hover:bg-gray-800'}`}
               onClick={() => setTab(k)}
-            >{label}</button>
+            >{label}{k === 'tx' && ix.liveCount > 0 ? ` ${ix.liveCount}` : ''}</button>
           ))}
         </div>
       </div>
@@ -1399,6 +1663,22 @@ export default function LedgerPage({
           <div className="p-6 text-[12px] text-gray-500">
             {readOnly ? '표시할 장부가 없습니다.' : '장부를 준비하는 중입니다…'}
           </div>
+        ) : tab === 'tx' ? (
+          <LedgerTxTab
+            book={book}
+            year={year}
+            month={month}
+            today={today}
+            readOnly={readOnly}
+            hideAmounts={hideAmounts}
+            onUpdateTx={handleUpdateTx}
+            onDeleteTx={handleDeleteTx}
+            onRestoreTx={handleRestoreTx}
+            onPurgeTx={handlePurgeTx}
+            onBulkItem={handleBulkItem}
+            initialFilter={txFilter}
+            onConsumeInitialFilter={consumeTxFilter}
+          />
         ) : tab === 'matrix' ? (
           <div className="p-3">
             {hiddenMonths.length > 0 && (
@@ -1454,7 +1734,9 @@ export default function LedgerPage({
                           </td>
                         </tr>
                         {isOpen && items.map(renderItemRow)}
-                        {isOpen && items.length > 0 && renderGroupSubtotal(g, items)}
+                        {isOpen && g === 'variable' && renderUncategorizedRow()}
+                        {isOpen && (items.length > 0 || (g === 'variable' && hasUncYear))
+                          && renderGroupSubtotal(g, items)}
                       </React.Fragment>
                     );
                   })}
@@ -1904,6 +2186,34 @@ export default function LedgerPage({
           </div>
         )}
       </div>
+
+      {/* ── 수동 값 ↔ 거래 충돌 안내 (§5.3.2) ──
+          ⚠️ 모달이 아니라 **인라인**이다 — 이 화면은 z-1090이고 별도 창에는 App조차 없어
+             ConfirmDialog·토스트가 뜨지 않는다. 그리고 추가를 막지 않으므로 입력 흐름도 끊기지 않는다. */}
+      {txConflict && !readOnly && (
+        <div className="shrink-0 px-3 py-1.5 border-t border-amber-800/50 bg-amber-900/25 flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] text-amber-200">
+            {txConflict.ym}에 이미 <b>수동 입력 {fmtWon(txConflict.manual, hideAmounts)}</b>이(가) 있습니다 —
+            이제 그 달은 <b>거래 합</b>이 쓰이고 수동 값은 무시됩니다.
+          </span>
+          <button className="text-[11px] px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-100 border border-emerald-800/60"
+            title="수동 값을 그 달 1일 거래 1건으로 옮깁니다(합계가 그대로 유지됩니다)"
+            onClick={() => resolveTxConflict('migrate')}>거래로 옮기기(권장)</button>
+          <button className="text-[11px] px-2 py-0.5 rounded bg-gray-800 text-gray-300"
+            onClick={() => resolveTxConflict('drop')}>수동 값 삭제</button>
+          <button className="text-[11px] px-2 py-0.5 rounded bg-gray-800 text-gray-500"
+            onClick={() => resolveTxConflict('cancel')}>나중에</button>
+        </div>
+      )}
+
+      {/* ── 빠른 입력 바 — 탭과 무관하게 항상 하단 고정(입력 마찰 최소화) ── */}
+      <LedgerQuickEntry
+        book={book}
+        today={today}
+        readOnly={readOnly || !book}
+        onAdd={handleAddTx}
+        onGoTx={() => setTab('tx')}
+      />
 
       {showSnapshots && (
         <SnapshotModal

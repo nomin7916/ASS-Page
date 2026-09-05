@@ -60,6 +60,16 @@ const ledgerAbbrev = (n) => {
 };
 const ledgerChipText = (events, hide) => {
   if (!Array.isArray(events) || events.length === 0) return '가계부';
+  /**
+   * ⚠️ 우선순위 1위는 **그 날 실제로 쓴 돈**(거래 합)이다 — 달력에서 사용자가 묻는 첫 질문이
+   *    "이 날 얼마 썼나"이고, '정리 기록'의 금액은 그 달 전체라 날짜 칸의 뜻과 다르다.
+   *    (거래 레이어 도입 전에는 정리 기록뿐이라 그것이 1순위였다.)
+   */
+  const tx = events.find((e) => e && e.kind === 'tx');
+  if (tx) {
+    const amt = hide ? '***' : ledgerAbbrev(tx.txExpense);
+    return `${amt} · ${tx.txCount}건`;
+  }
   const touch = events.find((e) => e && e.kind === 'touch');
   if (touch) {
     const amt = hide ? '***' : ledgerAbbrev(touch.actualExpense);
@@ -75,6 +85,10 @@ const ledgerChipText = (events, hide) => {
 };
 const ledgerChipTitle = (events, hide) => (Array.isArray(events) ? events : []).map((e) => {
   if (!e) return '';
+  if (e.kind === 'tx') {
+    const inc = e.txIncome ? ` · 수입 ${hide ? '***' : ledgerAbbrev(e.txIncome)}` : '';
+    return `그 날 지출 ${hide ? '***' : ledgerAbbrev(e.txExpense)} · ${e.txCount}건${inc}`;
+  }
   if (e.kind === 'touch') {
     const base = `${e.ym} 정리 — 총지출 ${hide ? '***' : ledgerAbbrev(e.actualExpense)}`;
     const mom = (e.momComparable && e.momDelta !== null && e.momDelta !== undefined)
@@ -1163,7 +1177,22 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               </div>
               {padLedger.events.map((e, i) => (
                 <div key={i} className="mb-2 pb-2 border-b border-gray-900/80 last:border-0">
-                  {e.kind === 'touch' ? (
+                  {e.kind === 'tx' ? (
+                    /* ⚠️ 라이브 파생이다(calendarMemos에 복사 금지) — 가계부에서 거래를 고치면
+                       이 칸도 즉시 따라온다. 여기서 거래를 편집하지는 않는다(범위 밖 — App 쪽
+                       writer 경로와 calendar:* 신규 타입이 필요하다). */
+                    <>
+                      <div className="text-[11px] text-gray-400">그 날 거래 {e.txCount}건</div>
+                      <div className="text-[15px] font-bold text-gray-100 tabular-nums">
+                        지출 {hideAmounts ? '***' : formatCurrency(e.txExpense)}
+                      </div>
+                      {e.txIncome ? (
+                        <div className="text-[11px] mt-0.5 text-gray-400">
+                          수입 {hideAmounts ? '***' : formatCurrency(e.txIncome)}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : e.kind === 'touch' ? (
                     <>
                       <div className="text-[11px] text-gray-400">{e.ym} 가계부 정리</div>
                       <div className="text-[15px] font-bold text-gray-100 tabular-nums">

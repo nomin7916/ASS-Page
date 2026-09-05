@@ -727,7 +727,7 @@ if (L) {
   eq('#84c value는 0이지만 그건 "총액 0"이 아니다', eu.value, 0);
   // 화면 규약: 산출된 항목이 0건이면 '-'를 그린다.
   ok('#84d ⚠️ 화면이 "산출 0건 → -" 규칙을 쓴다',
-    /const resolved = e\.actualCount \+ e\.plannedCount;/.test(read('src/components/LedgerPage.tsx'))
+    /const resolved = e\.actualCount \+ e\.plannedCount \+ \(ex \? ex\.count : 0\);/.test(read('src/components/LedgerPage.tsx'))
     && /resolved === 0 \? <span className="text-gray-600">-<\/span>/.test(read('src/components/LedgerPage.tsx')));
 
   // (4) 결제수단 축이 한 화면에서 두 규칙을 쓰지 않는다.
@@ -823,13 +823,14 @@ if (LE && L) {
     ],
   });
   const XIN = { book: xbook, year: 2026, month: 8, todayKST: '2026-08-29' };
-  const sh = S('#80 3시트를 만든다', () => LE.buildLedgerSheets(XIN), (v) => Array.isArray(v) && v.length === 3);
+  // 시트 ④ 거래내역은 단계 A(거래 레이어)에서 추가됐다.
+  const sh = S('#80 4시트를 만든다', () => LE.buildLedgerSheets(XIN), (v) => Array.isArray(v) && v.length === 4);
 
   if (sh) {
-    eq('#80b 시트 이름', sh.map((x) => x.name), ['월 매트릭스', '대출', '연간요약']);
+    eq('#80b 시트 이름', sh.map((x) => x.name), ['월 매트릭스', '대출', '연간요약', '거래내역']);
     // ⚠️ styles.xml은 통합문서에 하나뿐 — 시트마다 StyleBag을 만들면 s 인덱스가 충돌해
     //    **오류 없이 조용히** 서식이 뒤섞인다(buildXlsxMulti가 던지지만 그건 마지막 방어선이다).
-    ok('#81 ⚠️ 세 시트가 StyleBag 하나를 공유한다', sh.every((x) => x.styles === sh[0].styles));
+    ok('#81 ⚠️ 모든 시트가 StyleBag 하나를 공유한다', sh.every((x) => x.styles === sh[0].styles));
     const mtx = sh[0];
     eq('#82 월 매트릭스 29열(결제·항목·계획 + 12×2 + 연간 2)', mtx.rows[3].length, 29);
     // ⚠️ 29열이라 가로 고정이 없으면 항목명이 흘러가 어느 행인지 알 수 없다.
@@ -910,10 +911,10 @@ if (LE && L) {
       const txt = new TextDecoder().decode(xb);
       eq('#91b ⚠️ tabSelected는 하나뿐(여럿이면 Excel이 그룹으로 열어 편집이 번진다)',
         (txt.match(/tabSelected="1"/g) || []).length, 1);
-      ok('#91c 시트 3장이 들어 있다', ['sheet1.xml', 'sheet2.xml', 'sheet3.xml'].every((n) => txt.includes(n)));
+      ok('#91c 시트 4장이 들어 있다', ['sheet1.xml', 'sheet2.xml', 'sheet3.xml', 'sheet4.xml'].every((n) => txt.includes(n)));
     }
     S('#92 손상 입력에 던지지 않는다', () => LE.buildLedgerSheets({ book: null, year: 0, month: 0, todayKST: '' }),
-      (v) => Array.isArray(v) && v.length === 3);
+      (v) => Array.isArray(v) && v.length === 4);
     ok('#92b downloadLedgerXlsx는 던지지 않고 false를 돌려준다(창에는 토스트가 없다)',
       typeof LE.downloadLedgerXlsx === 'function');
   }
@@ -1013,9 +1014,12 @@ if (LE && L) {
     return ledgerSnapshotsFingerprint([c]);
   }, (v) => typeof v === 'string' && v.length > 0);
 
-  eq('#101 요약(목록 표시용)', ledgerSnapshotSummary(SNAP({ books: snapBooks(3) })), { books: 1, items: 3, actuals: 3, months: 0 });
+  eq('#101 요약(목록 표시용)', ledgerSnapshotSummary(SNAP({ books: snapBooks(3) })), { books: 1, items: 3, actuals: 3, months: 0, txStripped: false });
   eq('#101b ⚠️ 손상 스냅샷에도 던지지 않는다(목록 전체가 죽으면 안 된다)',
-    ledgerSnapshotSummary(null), { books: 0, items: 0, actuals: 0, months: 0 });
+    ledgerSnapshotSummary(null), { books: 0, items: 0, actuals: 0, months: 0, txStripped: false });
+  // 거래는 스냅샷에 넣지 않는다(단계 A) — 목록이 그 사실을 표시할 수 있어야 한다.
+  eq('#101c 거래를 벗기고 저장한 스냅샷은 요약에 표시된다',
+    ledgerSnapshotSummary(SNAP({ books: snapBooks(1), txStripped: true })).txStripped, true);
 
   // ⚠️ 스냅샷은 장부가 통째로 덮이는 사고에서도 살아남아야 한다 — 그게 이 기능의 존재 이유다.
   ok('#102 ⚠️ 스냅샷은 LedgerBook 안에 있지 않다(장부와 다른 저장 슬롯)',
@@ -1141,7 +1145,12 @@ ok('#G16p ⚠️ 저장이 먼저 로컬 편집을 회수한다',
 ok('#G16q ⚠️ 복원 직전에 현재 상태를 자동 스냅샷으로 남긴다',
   /label: '복원 직전 자동 저장', auto: true/.test(LP));
 ok('#G16r 복원이 정규화해서 넣는다(손상 스냅샷이 렌더 중 던지지 않게)',
-  /setLocal\(\(\) => normalizeLedgerBooks\(snap\.books\)\)/.test(LP));
+  /setLocal\(\(\) => normalizeLedgerBooks\(snap\.books\)\.map\(/.test(LP));
+// ⚠️ 스냅샷에는 거래가 없다(strip) — 그대로 넣으면 지금까지의 거래가 통째로 사라진다.
+ok('#G16r-2 ⚠️ 복원이 현재 거래를 지우지 않는다',
+  /const keepTx = new Map\(/.test(LP) && /transactions: tx \}/.test(LP));
+ok('#G16r-3 ⚠️ 스냅샷 저장이 거래를 벗긴다(512KB 예산이 거래로 차면 복구 지점이 1개만 남는다)',
+  /stripTxForSnapshot\(books\)/.test(LP) && /txStripped: true/.test(LP));
 // ⚠️ 이 화면은 z-1090이고 별도 창엔 App조차 없다 — ConfirmDialog·토스트가 뜨지 않는다.
 ok('#G16s 복원·삭제가 인라인 2단계 확인이다', /setArmed\(s\.id\)/.test(LP) && /setArmedDel\(s\.id\)/.test(LP));
 ok('#G16t readOnly면 저장·복원이 잠긴다',
@@ -1246,7 +1255,7 @@ const HOSTS = readdirSync(join(ROOT, 'src/components'))
   .map((f) => [f, (stripComments(read(`src/components/${f}`)).match(/from '\.\.\/ledger'/g) || []).length])
   .filter(([, n]) => n > 0).map(([f]) => f).sort();
 eq('#G9 ledger.ts 소비처 census(새 소비처는 null 계약을 다시 확인할 것)', HOSTS,
-  ['CalendarModal.tsx', 'LedgerPage.tsx', 'LedgerWindow.tsx']);
+  ['CalendarModal.tsx', 'LedgerPage.tsx', 'LedgerQuickEntry.tsx', 'LedgerTxTab.tsx', 'LedgerWindow.tsx']);
 
 // ════════════════════════════════════════════════════════════════════════════
 // §G10~ 6가지 수정(2026-08) 배선 가드
@@ -1274,12 +1283,13 @@ ok('#G10d-2 momDelta도 compareMonths 결과를 그대로 쓴다',
   /momDelta: c\.comparable \? c\.delta : null,/.test(LP));
 // ⚠️ annualCompare는 설계안의 누출 금지 목록에서 빠져 있었다 — '계획만 입력한 해가 전년 대비
 //    차트에서 통째로 사라진다'가 요청1과 같은 증상이라 여기에 expected를 꽂을 유인이 가장 크다.
-noExpected('#G10e annualCompare', sliceBlock(LP, 'const annualCompare = useMemo', '), [book, yearsAvailable]);'),
+noExpected('#G10e annualCompare', sliceBlock(LP, 'const annualCompare = useMemo', '), [book, yearsAvailable, todayYm]);'),
   '본문에 expected가 없다(모든 해가 "항상 비교 가능한 거짓 숫자"가 된다)');
 
 console.log('\n── §G11 소계 / 결제수단 행 ──');
 const SUB = sliceBlock(LP, 'const renderSubtotalRow', 'const renderGroupSubtotal');
-ok('#G11 소계 월 셀이 계획 폴백 집계를 쓴다', /const e = totalOf\(items, k\)/.test(SUB));
+// ⚠️ 3번째 인자 `ix`가 거래 합을 실어 나른다 — 빠뜨리면 거래로 입력한 달이 소계에서 사라진다.
+ok('#G11 소계 월 셀이 계획 폴백 집계를 쓴다', /const e = totalOf\(items, k, ix\)/.test(SUB));
 // ⚠️ 수입 그룹은 지출 전용 집계를 타면 통째로 죽는다(activeCount 0 → 12개월 전부 '-').
 ok('#G11-2 ⚠️ 수입 소계가 expectedIncomeTotal로 갈라진다',
   /const totalOf = income \? expectedIncomeTotal : expectedTotal;/.test(SUB));
@@ -1300,8 +1310,12 @@ ok('#G11e-3 ⚠️ 산출 불가 건수를 셀에 노출한다(그 값은 총액
   /e\.unresolved > 0 && \(/.test(SUB));
 const GSUB = sliceBlock(LP, 'const renderGroupSubtotal', 'const renderGrandTotalRow');
 // ⚠️ 현금/카드만 하드코딩하면 pay:'auto'인 항목이 어느 행에도 없이 사라진다.
+// (거래 레이어 이후 미분류 몫이 조건에 더해져 줄바꿈이 생겼다 — 계약은 그대로 '전체를 훑는다'.)
 ok('#G11f ⚠️ 결제수단 행이 LEDGER_PAY_ORDER 전체를 훑는다',
-  /LEDGER_PAY_ORDER\.filter\(\(p\) => items\.some/.test(GSUB));
+  /LEDGER_PAY_ORDER\.filter\(\(p\) =>\s*items\.some/.test(GSUB));
+// ⚠️ 미분류 거래는 결제수단 소계에도 들어가야 **Σ(결제수단 행) === 그룹 소계**가 유지된다.
+ok('#G11f-2 ⚠️ 변동비 결제수단 행이 미분류 몫을 함께 센다',
+  /uncPayValue\(makeYm\(year, m\), p\)/.test(GSUB) && /extra: isVar \? \(\(k\) => \{/.test(GSUB));
 ok('#G11g 결제수단이 2종 이상일 때만 행을 만든다', /present\.length > 1/.test(GSUB));
 ok('#G11h 1종이면 라벨에 표기한다(행 없이도 답이 화면에 있다)', /전액 \$\{LEDGER_PAY_LABEL\[present\[0\]\]\}/.test(GSUB));
 // ⚠️ 헤더 KPI의 '월 지출 합계'는 연단위 **제외**라 이름이 겹친다. 라벨이 유일한 잠금이다.
@@ -1333,13 +1347,13 @@ ok('#G13c 모든 RTooltip이 그 상수를 쓴다',
 const DON = sliceBlock(LP, 'const donut = useMemo', 'const detailDonut');
 // ⚠️ byPay는 그룹 구분이 없어 대출·연단위가 섞인다(addItem이 연단위를 pay:'cash'로 만든다).
 ok('#G13d ⚠️ 고정비 분리가 byPay가 아니라 고정비 항목만 순회한다',
-  /expectedByPay\(fixedItems, ym\)/.test(DON) && !/totals\.byPay/.test(DON));
+  /expectedByPay\(fixedItems, ym, ix\)/.test(DON) && !/totals\.byPay/.test(DON));
 ok('#G13e 고정비 조각 색이 결제수단 색을 공유한다(현금이 두 색이 되면 안 된다)', /ledgerPayColor\(p\)/.test(DON));
 // ⚠️ #G13f(donutRows 공유)는 **음수 클램프만** 통일할 뿐 값 산출 규칙은 보지 않는다.
 //    옛 그룹 단위 `agg.actual > 0 ? agg.actual : agg.plan`으로 되돌리면 미입력 항목이 통째로
 //    탈락해 옆의 상세 도넛과 총액이 갈리는데(실측 880,000 vs 1,080,000) #G13f는 통과한다.
 ok('#G13d-2 ⚠️ 메인 도넛의 비-고정비 그룹도 항목 단위 폴백을 쓴다',
-  /value: expectedTotal\(\(book\?\.items \|\| \[\]\)\.filter\(\(it\) => it && it\.group === g\), ym\)\.value,/.test(DON));
+  /value: expectedTotal\(\(book\?\.items \|\| \[\]\)\.filter\(\(it\) => it && it\.group === g\), ym, ix\)\.value,/.test(DON));
 ok('#G13d-3 ⚠️ 도넛 memo에 totals.byGroup이 남아 있지 않다', !/totals\.byGroup/.test(DON));
 // ⚠️ 결제수단 축을 한 화면에서 두 규칙으로 그리면 같은 카드가 같은 수단에 다른 금액을 찍는다.
 ok('#G13n ⚠️ payRows(totals.byPay 기반)가 되살아나지 않았다', !/const payRows = useMemo/.test(LP));
@@ -1421,7 +1435,7 @@ ok('#G18c ⚠️ 옛 비대칭 배선(income / actual)이 되살아나지 않았
   !/dataKey="income"/.test(BAL_NC) && !/dataKey="actual"/.test(BAL_NC));
 const YS = sliceBlock(LP, 'const yearSeries = useMemo', 'const payChartData');
 ok('#G18d ⚠️ 두 축이 expectedTotal / expectedIncomeTotal에서 온다',
-  /const ie = expectedIncomeTotal\(book\?\.items, k\);/.test(YS)
+  /const ie = expectedIncomeTotal\(book\?\.items, k, ix\);/.test(YS)
   && /balIncome: noInc \? null : ie\.value,/.test(YS)
   && /balExpense: noExp \? null : e\.value,/.test(YS));
 // ⚠️ `&&`로 되돌리지 말 것 — `makeLedgerBook`이 `items: []`로 시작하므로 '수입 항목을 아직
@@ -1550,7 +1564,7 @@ ok('#G37 ⚠️ addItem이 activeFrom을 보고 있는 달로 박지 않는다',
 const ITEMROW = sliceBlock(LP, 'const renderItemRow = (it) => {', '\n  };');
 ok('#G37b0 항목 행 구간을 찾았다', ITEMROW.length > 500);
 ok('#G37b ⚠️ 항목 행의 연간 합계가 expectedOf로 누적된다(사용부)',
-  /const e = expectedOf\(it, k\);/.test(ITEMROW)
+  /const e = expectedOf\(it, k, ix\);/.test(ITEMROW)
   && /yearExpected \+= e;/.test(ITEMROW)
   // ⚠️ `(?<!\$)` 필수 — 같은 구간의 title 템플릿에 `${fmtWon(yearActual, …)}`가 들어 있어,
   //    없으면 렌더 값을 되돌려도 툴팁 쪽이 매치돼 통과한다(그리고 부재 단언은 상시 실패한다).
@@ -1585,9 +1599,10 @@ ok('#G37g ⚠️ 미입력 배너가 합계 제외라고 거짓말하지 않는�
   && /계획으로 채워 합계에 넣습니다/.test(LP));
 
 ok('#G24 ⚠️ 연간 미입력 집계가 expectsActual을 쓴다',
-  /yearActual \+= a; else if \(expectsActual\(it, k\)\) yearMissing\+\+;/.test(LP));
+  /yearActual \+= a; else if \(expectsActual\(it, k, expOpts\)\) yearMissing\+\+;/.test(LP));
+// ⚠️ 3번째 인자(`expOpts`)는 거래 레이어의 '진행 중인 달' 게이트다 — 넘기지 않으면 종전 동작.
 ok('#G24b ⚠️ monthTotals의 미입력 판정도 expectsActual',
-  /else if \(!isIncome && expectsActual\(it, ym\)\) \{[\s\S]{0,200}?out\.missingExpense\+\+;/.test(LG));
+  /else if \(!isIncome && expectsActual\(it, ym, expOpts\)\) \{[\s\S]{0,200}?out\.missingExpense\+\+;/.test(LG));
 
 // ⚠️ 연 납입액을 `월 × 12`로 되돌리지 말 것 — 원금균등에서 과대이고 화면 각주를 반증한다.
 ok('#G25 ⚠️ 연 납입액이 향후 12개월 스케줄 합이다',
@@ -1660,7 +1675,10 @@ ok('#G30c @ts-nocheck를 붙이지 않았다', !/^\s*\/\/\s*@ts-nocheck\s*$/m.te
 ok('#G31 ⚠️ new Date()로 날짜를 만들지 않는다', !/new Date\(\)/.test(LEX));
 // ⚠️ 화면이 쓰는 단일 소스를 재구현하면 시트와 화면이 갈린다(loanSchedule 직접 호출 금지).
 ok('#G32 ⚠️ 매트릭스 계획은 planOf를 쓴다', /row\[COL_PLAN\] = NUM\(planOf\(it, ctx\.ym\)/.test(LEX));
-ok('#G32b 월 칸도 planOf/actualOf를 쓴다', /const a = actualOf\(it, k\);[\s\S]{0,80}?const p = planOf\(it, k\);/.test(LEX));
+// ⚠️ 실제는 화면과 **같은 단일 소스**(actualResolved) — `actualOf`(수동 값만)로 되돌리면
+//    거래로 입력한 달이 시트에서 통째로 빈칸이 된다(조용한 과소 계상).
+ok('#G32b 월 칸이 actualResolved/planOf를 쓴다',
+  /const a = actualResolved\(it, k, ctx\.ix\)\.value;[\s\S]{0,80}?const p = planOf\(it, k\);/.test(LEX));
 ok('#G32c ⚠️ 미입력 판정은 expectsActual', /else if \(expectsActual\(it, k\)\)/.test(LEX));
 // ⚠️ comparable만 보면 zero-base(rate=null)가 통과해 0.00%가 확정 표기된다.
 ok('#G33 ⚠️ 전월대비는 rate !== null까지 본다', /cmp\.comparable && cmp\.rate !== null/.test(LEX));

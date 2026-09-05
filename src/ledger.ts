@@ -143,6 +143,78 @@ export interface LedgerItem {
   loan: LedgerLoan | null;
   /** 사진의 노랑/초록/파랑 행 강조 */
   tone: 'none' | 'warn' | 'good' | 'info';
+  /**
+   * 실적을 **어느 레이어에서 입력하는가**. 기본 `'monthly'`(레거시 무변경).
+   * 그 항목에 거래가 처음 생기면 `addTx`가 `'tx'`로 바꾼다.
+   *
+   * ⚠️ 이 값은 **표시·안내 전용**이다. 실제 금액의 단일 소스는 언제나 `actualResolved`이고,
+   *    거래가 있으면 `entry`가 무엇이든 거래 합이 이긴다(두 값이 갈릴 자리를 만들지 말 것).
+   */
+  entry: LedgerEntryMode;
+  createdAt: number;
+}
+
+/* ── 거래(기록 레이어) ───────────────────────────────────────────────────────
+ * ⚠️ 저장 단위는 `LedgerBook.transactions`다 — **`LedgerBook` 안**이라 App.tsx의 영속화
+ *    7지점(state·지문·payload·deps·applyStateData·applyBackupData·sticky)이 자동 상속된다.
+ *    거래를 밖으로 빼면 그 7곳을 새로 배선해야 하고 하나만 빠져도 조용히 유실된다.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** 실적 입력 레이어. */
+export type LedgerEntryMode = 'monthly' | 'tx';
+
+/**
+ * 거래 종류.
+ * ⚠️ `LedgerGroup`과 이중 축이 아니다 — 항목의 `group`에서 파생되지만 **저장**한다.
+ *    항목을 지운 뒤에도(미분류로 남은 거래) 지출/수입을 가릴 수 있어야 하기 때문이다.
+ * ⚠️ `'transfer'`는 지출도 수입도 아니다(계좌 간 이동). 단계 C에서 계좌가 들어오면 쓰인다.
+ */
+export type LedgerTxKind = 'expense' | 'income' | 'transfer';
+
+/**
+ * 거래가 어떻게 생겼는가. 값이 아니라 **상태**다(YNAB `approved`, Actual `~`의 선례).
+ *  manual=직접 입력 / confirm=고정지출 ✔ / auto=자동 기입 / import=가져오기 /
+ *  adjust=잔액 대조 조정 / migrate=수동 월 합계를 거래로 옮김
+ */
+export type LedgerTxOrigin = 'manual' | 'confirm' | 'auto' | 'import' | 'adjust' | 'migrate';
+
+/** 한 거래를 여러 항목으로 쪼갠 몫. ⚠️ Σamount === tx.amount (정규화가 강제). */
+export interface LedgerTxSplit {
+  itemId: string;
+  amount: number;
+  memo: string;
+}
+
+export interface LedgerTx {
+  id: string;
+  /** KST 달력일 'YYYY-MM-DD'. ⚠️ 창에서 `new Date()`로 만들지 말 것(브릿지의 today를 쓴다). */
+  date: string;
+  /**
+   * ⚠️ **항상 양수**다. 환급·취소는 `refund: true`로 표현한다.
+   *    부호로 표현하면 집계마다 `Math.abs`/부호 실수가 생기고(이 저장소가 여러 번 겪은 실패 모드),
+   *    "환급인가"라는 사실이 화면·필터에서 사라진다.
+   */
+  amount: number;
+  refund: boolean;
+  kind: LedgerTxKind;
+  /** '' = 미분류(빠른 입력 허용). `splits`가 있으면 무시된다. */
+  itemId: string;
+  splits: LedgerTxSplit[];
+  pay: LedgerPay;
+  /** 단계 C(계좌)에서 쓰인다. '' = 미지정. */
+  accountId: string;
+  /** `kind==='transfer'`의 도착 계좌(단계 C). */
+  toAccountId: string;
+  memo: string;
+  /** 누가 썼는가(부부 카드 명의 구분). '' = 미지정. */
+  payer: string;
+  /** 할부 개월(≥2). null = 일시불. 월 분배는 파생(`installmentCharges`). */
+  installmentMonths: number | null;
+  origin: LedgerTxOrigin;
+  /** `confirm`·`auto`의 멱등 키 `${itemId}|${ym}` — 같은 키가 있으면 다시 만들지 않는다(단계 B). */
+  originKey: string;
+  /** '' = 살아 있음 / 'YYYY-MM-DD' = 휴지통(소프트 삭제). */
+  deletedAt: string;
   createdAt: number;
 }
 
@@ -176,6 +248,11 @@ export interface LedgerBook {
    */
   categories: string[];
   months: Record<string, LedgerMonthMeta>;
+  /**
+   * 거래 원장(기록 레이어). **정렬은 date desc, createdAt desc**(목록이 곧 최근순).
+   * ⚠️ 빈 배열이면 이 장부는 **레거시와 1원도 다르지 않게** 동작한다(하위호환의 축).
+   */
+  transactions: LedgerTx[];
   createdAt: number;
   updatedAt: number;
 }
@@ -197,6 +274,17 @@ export const MAX_LEDGER_MEMO_LEN = 500;
  *  자르면 붙여넣은 값의 뒤가 조용히 사라진다. */
 export const MAX_LEDGER_CATEGORIES = 40;
 export const MAX_LEDGER_CATEGORY_LEN = 20;
+
+/**
+ * 장부당 거래 상한 — ≈700KB. STATE는 백업 22본으로 복제되고 관리자 포털이 전 사용자 STATE를
+ * 순차 로드하므로 무한 증식만은 막는다. 초과분은 **오래된 것부터** 버린다(정규화).
+ * ⚠️ 80%에 닿으면 화면이 '연도 정리'(단계 E)를 안내해야 한다 — 조용히 버리지 말 것.
+ */
+export const MAX_LEDGER_TX = 6000;
+export const MAX_LEDGER_TX_MEMO_LEN = 120;
+export const MAX_LEDGER_TX_SPLITS = 8;
+export const MAX_LEDGER_PAYER_LEN = 20;
+export const MAX_LEDGER_INSTALLMENT_MONTHS = 60;
 
 /* ===========================================================================
  * C. 팔레트 — `scripts/validate_palette.js`로 실측 검증한 값
@@ -645,11 +733,35 @@ export const planOf = (item: LedgerItem, ym: string): number | null => {
  *    (정확히 `activeFrom`이 막으려던 실패 모드).
  * ⚠️ 화면 3곳(월 집계·항목 행 연간 차이·그룹 소계)이 **같은 함수를 공유**해야 값이 갈리지 않는다.
  */
-export const expectsActual = (item: LedgerItem, ym: string): boolean => {
+export interface LedgerExpectsOpts {
+  /** 거래 인덱스. 없으면 **종전 동작 그대로**(하위호환의 축). */
+  ix?: LedgerTxIndex | null;
+  /** 오늘이 속한 달 'YYYY-MM'. 진행 중인 달을 '미입력'으로 세지 않기 위해 쓴다. */
+  todayYm?: string;
+}
+
+export const expectsActual = (
+  item: LedgerItem,
+  ym: string,
+  opts?: LedgerExpectsOpts | null,
+): boolean => {
   if (!item || !isItemActive(item, ym)) return false;
-  if (item.group !== 'annual') return true;
-  const due = finiteOr(item.dueMonth);
-  return due !== null && Number(ym.slice(5, 7)) === Math.trunc(due);
+  if (item.group === 'annual') {
+    const due = finiteOr(item.dueMonth);
+    if (!(due !== null && Number(ym.slice(5, 7)) === Math.trunc(due))) return false;
+  }
+  /**
+   * 거래로 입력하는 항목(`entry:'tx'`)의 **이번 달**은 미입력이 아니라 '진행 중'이다.
+   * ⚠️ 이 게이트가 없으면 매달 1일마다 전 항목이 '미입력'으로 점등하고, 그 배지는 사용자가
+   *    한 달을 다 살기 전에는 끌 방법이 없다(경고가 상시 켜지면 신호가 0이 된다).
+   * ⚠️ `entry:'monthly'`(레거시)에는 적용하지 않는다 — 그쪽은 월 단위 입력이라 이번 달을
+   *    미리 채워 넣는 것이 정상 습관이고, 동작을 바꾸면 기존 사용자의 화면이 달라진다.
+   */
+  if (opts && opts.ix && item.entry === 'tx' && opts.todayYm && ym === opts.todayYm) {
+    const hit = opts.ix.byItemYm.get(`${item.id}|${ym}`);
+    if (!hit || hit.count === 0) return false;
+  }
+  return true;
 };
 
 /**
@@ -698,6 +810,611 @@ export const commitActual = (
 };
 
 /* ===========================================================================
+ * F-2. 거래 레이어 — 인덱스 · 실제 금액의 단일 소스 · CRUD
+ *
+ * ⚠️ **실제 금액의 단일 소스는 `actualResolved`다.** (항목, 월)에 거래가 한 건이라도 있으면
+ *    거래 합이 이기고, 없으면 수동 `actual[ym]`, 그것도 없으면 null(미입력).
+ *    화면·엑셀·달력이 각자 다른 규칙으로 고르면 같은 칸이 두 값이 된다.
+ *
+ * ⚠️ 집계 함수는 `ix`(인덱스)를 인자로 받되 **넘기지 않으면 종전 동작**이다(하위호환의 축).
+ *    호출부가 `ix`를 빠뜨리면 거래가 조용히 무시돼 합계가 줄어든다 — 소스 가드가 그 배선을
+ *    단언한다(이 저장소가 가장 싫어하는 실패 모드: 조용한 과소 계상).
+ * =========================================================================== */
+
+/** 할부 회차 1건. `seq`는 1-based. */
+export interface LedgerInstallmentCharge { ym: string; amount: number; seq: number; total: number; }
+
+/**
+ * 금액을 `ym0`부터 `n`개월에 나눈다. **잔여는 마지막 회차가 흡수**해 Σ가 원금과 정확히 같다.
+ * ⚠️ 이 항등식이 깨지면 월 합계의 합 ≠ 거래 합이 되어 어떤 검산도 통과하지 못한다.
+ */
+const spreadAmount = (amount: number, ym0: string, n: number): { ym: string; amount: number }[] => {
+  if (!Number.isFinite(amount) || !isValidYm(ym0)) return [];
+  const k = Math.min(Math.max(Math.trunc(n), 1), MAX_LEDGER_INSTALLMENT_MONTHS);
+  if (k <= 1) return [{ ym: ym0, amount }];
+  const per = Math.floor(amount / k);
+  const out: { ym: string; amount: number }[] = [];
+  let used = 0;
+  for (let i = 0; i < k - 1; i++) {
+    const ym = addMonthsYm(ym0, i);
+    if (!ym) break;
+    out.push({ ym, amount: per });
+    used += per;
+  }
+  const last = addMonthsYm(ym0, k - 1);
+  if (last) out.push({ ym: last, amount: amount - used });
+  return out;
+};
+
+/**
+ * 거래의 **월별 청구 회차**.
+ *
+ * ⚠️ 할부는 '이번 달 할부금이 이달 지출'로 계상한다(사용자 결정 1의 기본값 — 똑똑가계부·
+ *    같이가계부 규약). 발생주의(구입 시 전액)로 바꾸지 말 것 — 월 예산표 모델과 어긋난다.
+ * ⚠️ 첫 회차 월은 **거래월**이다. 단계 C(카드 청구주기)가 들어오면 `closingDay` 규칙이
+ *    첫 회차 월을 정하도록 확장한다 — 그때 이 함수 하나만 바꾸면 된다.
+ */
+export const installmentCharges = (tx: LedgerTx | null | undefined): LedgerInstallmentCharge[] => {
+  if (!tx) return [];
+  const ym0 = ymOfDate(tx.date);
+  if (!ym0) return [];
+  const amount = finiteOr(tx.amount, 0) as number;
+  const n = finiteOr(tx.installmentMonths);
+  const k = n !== null && n >= 2 ? Math.min(Math.trunc(n), MAX_LEDGER_INSTALLMENT_MONTHS) : 1;
+  return spreadAmount(amount, ym0, k).map((p, i) => ({ ym: p.ym, amount: p.amount, seq: i + 1, total: k }));
+};
+
+/** 살아 있는(휴지통이 아닌) 거래인가. */
+export const isLiveTx = (tx: LedgerTx | null | undefined): boolean =>
+  !!tx && typeof tx.id === 'string' && !!tx.id && isValidLedgerDate(tx.date)
+  && Number.isFinite(tx.amount) && String(tx.deletedAt || '') === '';
+
+/** 거래가 항목별로 기여하는 몫. 분할이 있으면 각 split, 없으면 `itemId` 하나. */
+const txTargets = (tx: LedgerTx): { itemId: string; amount: number }[] => {
+  const splits = Array.isArray(tx.splits) ? tx.splits.filter((s) => s && Number.isFinite(s.amount)) : [];
+  if (splits.length > 0) return splits.map((s) => ({ itemId: String(s.itemId || ''), amount: s.amount }));
+  return [{ itemId: String(tx.itemId || ''), amount: finiteOr(tx.amount, 0) as number }];
+};
+
+export interface LedgerTxIndex {
+  /** `${itemId}|${ym}` → 그 달 그 항목의 거래 합(환급은 음수, 할부는 회차 몫). */
+  byItemYm: Map<string, { sum: number; count: number }>;
+  /** `ym` → 지출/수입 합(이체 제외). 할부는 회차 몫. */
+  byYm: Map<string, { expense: number; income: number; count: number }>;
+  /**
+   * `YYYY-MM-DD` → 그 날 발생한 거래 합.
+   * ⚠️ **할부도 그날 결제한 전액**이다(회차로 쪼개지 않는다) — 날짜는 사실이고, 회차 날짜는
+   *    존재하지 않는다(지어내면 사용자가 확인할 수 없는 값이 달력에 찍힌다).
+   *    전 기간을 통틀면 `Σ byDate === Σ byYm`이라 검산은 그대로 성립한다.
+   */
+  byDate: Map<string, { expense: number; income: number; count: number }>;
+  /** `${accountId}|${ym}` → 계좌 입출(이체 포함, 단계 C). */
+  byAccountYm: Map<string, { out: number; in: number; count: number }>;
+  /** `ym` → 미분류(항목을 고르지 않은) 지출 합. 결제수단 분해를 함께 담는다. */
+  uncategorizedYm: Map<string, { sum: number; count: number; byPay: Record<string, number> }>;
+  /** `${payer}|${ym}` → 그 사람 몫 지출. */
+  byPayerYm: Map<string, { expense: number; count: number }>;
+  /** `itemId` → 그 항목의 **첫 거래 월**(미입력 판정·entry 전환에 쓴다). */
+  firstTxYm: Map<string, string>;
+  /** 살아 있는 거래 수(휴지통 제외). */
+  liveCount: number;
+  /** 휴지통 거래 수. */
+  trashCount: number;
+}
+
+const emptyTxIndex = (): LedgerTxIndex => ({
+  byItemYm: new Map(), byYm: new Map(), byDate: new Map(), byAccountYm: new Map(),
+  uncategorizedYm: new Map(), byPayerYm: new Map(), firstTxYm: new Map(),
+  liveCount: 0, trashCount: 0,
+});
+
+/**
+ * ⚠️ **참조 캐시**(WeakMap). 장부 객체는 편집마다 새로 만들어지므로(불변 갱신) 참조가 곧
+ *    정확한 무효화 신호다. 제자리 변형(mutation)을 하면 캐시가 낡는다 — 이 저장소의 모든
+ *    쓰기 헬퍼가 새 객체를 만드는 이유이기도 하다.
+ */
+const txIndexCache = new WeakMap<object, LedgerTxIndex>();
+
+/**
+ * 거래 인덱스. O(거래 수) 1회. 순수·결정적(같은 book → 같은 결과).
+ *
+ * ⚠️ 휴지통(`deletedAt !== ''`)은 **어떤 집계에도 들어가지 않는다**(여기서 한 번 걸러
+ *    그 뒤 소비자가 다시 신경 쓰지 않게 한다).
+ * ⚠️ 이체(`kind:'transfer'`)는 지출·수입 어디에도 들어가지 않는다 — 카드대금 결제·적금 이체가
+ *    지출로 이중 계상되는 것이 국내 자동연동 앱의 고질병이고, 그걸 **구조로** 막는 자리다.
+ */
+export const txIndexOf = (book: LedgerBook | null | undefined): LedgerTxIndex => {
+  if (!book || typeof book !== 'object') return emptyTxIndex();
+  const hit = txIndexCache.get(book as unknown as object);
+  if (hit) return hit;
+
+  const ix = emptyTxIndex();
+  const txs = Array.isArray(book.transactions) ? book.transactions : [];
+
+  const bumpItem = (itemId: string, ym: string, v: number) => {
+    const key = `${itemId}|${ym}`;
+    const cur = ix.byItemYm.get(key) || { sum: 0, count: 0 };
+    cur.sum += v; cur.count += 1;
+    ix.byItemYm.set(key, cur);
+  };
+
+  for (const tx of txs) {
+    if (!tx || typeof tx !== 'object') continue;
+    if (String(tx.deletedAt || '') !== '') { ix.trashCount++; continue; }
+    if (!isLiveTx(tx)) continue;
+    ix.liveCount++;
+
+    const sign = tx.refund === true ? -1 : 1;
+    const date = tx.date;
+    const ym0 = ymOfDate(date);
+    const isTransfer = tx.kind === 'transfer';
+    const isIncome = tx.kind === 'income';
+    const total = (finiteOr(tx.amount, 0) as number) * sign;
+
+    // ── 날짜 축(달력) — 할부도 그날 전액. 이체는 지출/수입이 아니다. ──
+    if (!isTransfer) {
+      const d = ix.byDate.get(date) || { expense: 0, income: 0, count: 0 };
+      if (isIncome) d.income += total; else d.expense += total;
+      d.count += 1;
+      ix.byDate.set(date, d);
+    }
+
+    // ── 계좌 축(단계 C에서 잔액·카드 청구가 쓴다) ──
+    const acc = String(tx.accountId || '');
+    if (acc && ym0) {
+      const a = ix.byAccountYm.get(`${acc}|${ym0}`) || { out: 0, in: 0, count: 0 };
+      if (isIncome) a.in += total; else a.out += total;
+      a.count += 1;
+      ix.byAccountYm.set(`${acc}|${ym0}`, a);
+    }
+    if (isTransfer) {
+      const to = String(tx.toAccountId || '');
+      if (to && ym0) {
+        const a = ix.byAccountYm.get(`${to}|${ym0}`) || { out: 0, in: 0, count: 0 };
+        a.in += total; a.count += 1;
+        ix.byAccountYm.set(`${to}|${ym0}`, a);
+      }
+      continue;   // ⚠️ 이체는 여기서 끝 — 항목·월 지출 축에 절대 넣지 않는다.
+    }
+
+    // ── 월 축(할부 회차 분배) ──
+    const charges = installmentCharges(tx);
+    for (const c of charges) {
+      const y = ix.byYm.get(c.ym) || { expense: 0, income: 0, count: 0 };
+      if (isIncome) y.income += c.amount * sign; else y.expense += c.amount * sign;
+      y.count += 1;
+      ix.byYm.set(c.ym, y);
+    }
+
+    // ── 항목 축(분할 × 할부) ──
+    const targets = txTargets(tx);
+    const amount = finiteOr(tx.amount, 0) as number;
+    for (const t of targets) {
+      // 할부는 그 몫을 같은 비율로 나눈다 — 분할과 할부가 겹쳐도 Σ가 정확하다.
+      const parts = charges.length > 1 && amount !== 0
+        ? spreadAmount(t.amount, ym0, charges.length)
+        : [{ ym: ym0, amount: t.amount }];
+      for (const p of parts) {
+        if (!p.ym) continue;
+        if (t.itemId) {
+          bumpItem(t.itemId, p.ym, p.amount * sign);
+          const first = ix.firstTxYm.get(t.itemId);
+          if (!first || p.ym < first) ix.firstTxYm.set(t.itemId, p.ym);
+        } else if (!isIncome) {
+          const u = ix.uncategorizedYm.get(p.ym) || { sum: 0, count: 0, byPay: {} };
+          u.sum += p.amount * sign;
+          u.count += 1;
+          u.byPay[tx.pay] = (u.byPay[tx.pay] || 0) + p.amount * sign;
+          ix.uncategorizedYm.set(p.ym, u);
+        }
+      }
+    }
+
+    // ── 누가 축 ──
+    const payer = String(tx.payer || '');
+    if (payer && ym0 && !isIncome) {
+      const p = ix.byPayerYm.get(`${payer}|${ym0}`) || { expense: 0, count: 0 };
+      p.expense += total; p.count += 1;
+      ix.byPayerYm.set(`${payer}|${ym0}`, p);
+    }
+  }
+
+  txIndexCache.set(book as unknown as object, ix);
+  return ix;
+};
+
+export interface LedgerActual {
+  /** null = 미입력(0원과 다르다). */
+  value: number | null;
+  source: 'tx' | 'manual' | 'none';
+  /** 거래 건수(source==='tx'일 때만 > 0). */
+  count: number;
+}
+
+/**
+ * 그 달 그 항목의 **실제 금액 — 단일 소스**.
+ *
+ * ⚠️ `actualOf`(수동 값만)는 이름·의미를 그대로 둔다(레거시 테스트·커밋 경로 불변).
+ *    화면·집계·엑셀은 전부 이 함수로 옮긴다.
+ * ⚠️ 거래가 있으면 수동 값은 **무시**된다(단일 소스). 화면은 그 사실을 배지로 알린다 —
+ *    조용한 오적용보다 명시적 미적용.
+ */
+export const actualResolved = (
+  item: LedgerItem | null | undefined,
+  ym: string,
+  ix?: LedgerTxIndex | null,
+): LedgerActual => {
+  if (!item || !isValidYm(ym)) return { value: null, source: 'none', count: 0 };
+  if (ix && ix.byItemYm) {
+    const hit = ix.byItemYm.get(`${item.id}|${ym}`);
+    if (hit && hit.count > 0 && Number.isFinite(hit.sum)) {
+      return { value: hit.sum, source: 'tx', count: hit.count };
+    }
+  }
+  const m = actualOf(item, ym);
+  return m === null ? { value: null, source: 'none', count: 0 } : { value: m, source: 'manual', count: 0 };
+};
+
+/** 그 달에 이 항목의 수동 값이 거래에 가려져 있는가(화면 배지의 단일 판정). */
+export const manualShadowed = (
+  item: LedgerItem | null | undefined,
+  ym: string,
+  ix?: LedgerTxIndex | null,
+): number | null => {
+  if (!item || !isValidYm(ym) || !ix) return null;
+  const hit = ix.byItemYm.get(`${item.id}|${ym}`);
+  if (!hit || hit.count === 0) return null;
+  return actualOf(item, ym);
+};
+
+/* ── 필터 · 자동완성 ─────────────────────────────────────────────────────── */
+
+export interface LedgerTxFilter {
+  ym?: string;
+  from?: string;
+  to?: string;
+  itemId?: string;
+  itemIds?: string[];
+  pay?: LedgerPay | '';
+  accountId?: string;
+  payer?: string;
+  kind?: LedgerTxKind | '';
+  /** 메모·누가 부분일치(대소문자 무시). */
+  q?: string;
+  refundOnly?: boolean;
+  uncategorizedOnly?: boolean;
+  /** true면 휴지통만, false/미지정이면 살아 있는 것만. */
+  trashOnly?: boolean;
+}
+
+const txTouchesItem = (tx: LedgerTx, ids: Set<string>): boolean => {
+  if (ids.has(String(tx.itemId || ''))) return true;
+  const splits = Array.isArray(tx.splits) ? tx.splits : [];
+  return splits.some((s) => s && ids.has(String(s.itemId || '')));
+};
+
+/**
+ * 거래 목록 필터. **정렬은 바꾸지 않는다**(입력 배열의 순서 = date desc 규약을 그대로 유지).
+ * ⚠️ 기본은 휴지통 제외다 — 실수로 목록·합계에 섞이면 삭제가 삭제로 보이지 않는다.
+ */
+export const filterTx = (
+  txs: LedgerTx[] | null | undefined,
+  f: LedgerTxFilter | null | undefined,
+): LedgerTx[] => {
+  const src = Array.isArray(txs) ? txs : [];
+  const o = f || {};
+  const ids = Array.isArray(o.itemIds) && o.itemIds.length > 0
+    ? new Set(o.itemIds.map((s) => String(s)))
+    : (o.itemId ? new Set([String(o.itemId)]) : null);
+  const q = String(o.q || '').trim().toLowerCase();
+  const out: LedgerTx[] = [];
+  for (const tx of src) {
+    if (!tx || typeof tx !== 'object') continue;
+    const deleted = String(tx.deletedAt || '') !== '';
+    if (o.trashOnly ? !deleted : deleted) continue;
+    if (!isValidLedgerDate(tx.date)) continue;
+    if (o.ym && ymOfDate(tx.date) !== o.ym) continue;
+    if (o.from && tx.date < o.from) continue;
+    if (o.to && tx.date > o.to) continue;
+    if (ids && !txTouchesItem(tx, ids)) continue;
+    if (o.pay && tx.pay !== o.pay) continue;
+    if (o.kind && tx.kind !== o.kind) continue;
+    if (o.accountId && String(tx.accountId || '') !== o.accountId) continue;
+    if (o.payer && String(tx.payer || '') !== o.payer) continue;
+    if (o.refundOnly && tx.refund !== true) continue;
+    if (o.uncategorizedOnly) {
+      const splits = Array.isArray(tx.splits) ? tx.splits : [];
+      if (String(tx.itemId || '') !== '' || splits.length > 0) continue;
+      // ⚠️ 이체는 **항목이 없는 것이 정상**이다 — '미분류만'에 섞으면 사용자가 카드대금 결제에
+      //    항목을 붙이려 하고, 그 순간 이체가 지출로 계상돼 이중 계상 방지가 무너진다.
+      if (tx.kind === 'transfer') continue;
+    }
+    if (q) {
+      const hay = `${tx.memo || ''} ${tx.payer || ''}`.toLowerCase();
+      const inSplit = (Array.isArray(tx.splits) ? tx.splits : [])
+        .some((s) => s && String(s.memo || '').toLowerCase().includes(q));
+      if (!hay.includes(q) && !inSplit) continue;
+    }
+    out.push(tx);
+  }
+  return out;
+};
+
+export interface LedgerItemSuggestion { itemId: string; name: string; group: LedgerGroup; score: number; }
+
+/**
+ * 빠른 입력 항목 자동완성 — 이름 부분일치 + **최근 60일 사용 빈도**.
+ * ⚠️ 순수 함수라 `todayDate`를 인자로 받는다(`Date.now()` 금지 — 검증이 직접 import한다).
+ */
+export const suggestItems = (
+  book: LedgerBook | null | undefined,
+  q: string,
+  todayDate: string,
+  limit = 8,
+): LedgerItemSuggestion[] => {
+  const items = book && Array.isArray(book.items) ? book.items : [];
+  if (items.length === 0) return [];
+  const needle = String(q || '').trim().toLowerCase();
+
+  // 최근 60일 빈도
+  const freq = new Map<string, number>();
+  const from = isValidLedgerDate(todayDate) ? shiftLedgerDate(todayDate, -60) : '';
+  for (const tx of (book && Array.isArray(book.transactions) ? book.transactions : [])) {
+    if (!isLiveTx(tx)) continue;
+    if (from && tx.date < from) continue;
+    for (const t of txTargets(tx)) {
+      if (!t.itemId) continue;
+      freq.set(t.itemId, (freq.get(t.itemId) || 0) + 1);
+    }
+  }
+
+  const out: LedgerItemSuggestion[] = [];
+  for (const it of items) {
+    if (!it) continue;
+    const name = String(it.name || '');
+    const lower = name.toLowerCase();
+    let score = 0;
+    if (needle) {
+      if (lower === needle) score += 100;
+      else if (lower.startsWith(needle)) score += 60;
+      else if (lower.includes(needle)) score += 30;
+      else if (String(it.category || '').toLowerCase().includes(needle)) score += 15;
+      else continue;
+    }
+    score += Math.min(freq.get(it.id) || 0, 20) * 2;
+    // 변동비를 살짝 앞세운다 — 빠른 입력은 대부분 변동비다(고정비는 ✔ 확인이 담당, 단계 B).
+    if (it.group === 'variable') score += 3;
+    out.push({ itemId: it.id, name, group: it.group, score });
+  }
+  out.sort((a, b) => (b.score - a.score) || a.name.localeCompare(b.name));
+  return out.slice(0, Math.max(1, Math.trunc(limit)));
+};
+
+/** 'YYYY-MM-DD'를 일 단위로 옮긴다. ⚠️ UTC로 계산해 로컬 타임존이 결과를 흔들지 않게 한다. */
+export const shiftLedgerDate = (date: string, days: number): string => {
+  if (!isValidLedgerDate(date) || !Number.isFinite(days)) return '';
+  const y = Number(date.slice(0, 4)), m = Number(date.slice(5, 7)), d = Number(date.slice(8, 10));
+  const t = Date.UTC(y, m - 1, d) + Math.trunc(days) * 86400000;
+  const dt = new Date(t);
+  const yy = dt.getUTCFullYear(), mm = dt.getUTCMonth() + 1, dd = dt.getUTCDate();
+  if (yy < LEDGER_YEAR_MIN || yy > LEDGER_YEAR_MAX) return '';
+  return `${String(yy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+};
+
+/* ── CRUD — 전부 순수(새 book 반환). 상한·정렬·entry 전환·충돌 보고를 여기서 끝낸다. ── */
+
+export const makeLedgerTx = (over: Partial<LedgerTx> = {}): LedgerTx => ({
+  id: generateId(),
+  date: '',
+  amount: 0,
+  refund: false,
+  kind: 'expense',
+  itemId: '',
+  splits: [],
+  pay: 'card',
+  accountId: '',
+  toAccountId: '',
+  memo: '',
+  payer: '',
+  installmentMonths: null,
+  origin: 'manual',
+  originKey: '',
+  deletedAt: '',
+  createdAt: 0,
+  ...over,
+});
+
+/** 목록 정렬 규약 — date desc, 같으면 createdAt desc, 그래도 같으면 id로 결정적. */
+export const compareTxDesc = (a: LedgerTx, b: LedgerTx): number => {
+  const d = String(b.date || '').localeCompare(String(a.date || ''));
+  if (d !== 0) return d;
+  const c = (finiteOr(b.createdAt, 0) as number) - (finiteOr(a.createdAt, 0) as number);
+  if (c !== 0) return c;
+  return String(a.id || '').localeCompare(String(b.id || ''));
+};
+
+export const sortTxDesc = (txs: LedgerTx[]): LedgerTx[] => txs.slice().sort(compareTxDesc);
+
+export interface LedgerAddTxResult {
+  book: LedgerBook;
+  /**
+   * (항목, 월)에 수동 값이 있는데 그 달의 **첫 거래**가 들어온 경우.
+   * ⚠️ 추가를 막지 않는다(입력 마찰 금지) — 화면이 인라인으로 묻고 사용자가 고른다.
+   */
+  conflict: { itemId: string; ym: string; manual: number } | null;
+  error: '' | 'limit' | 'invalid';
+}
+
+/**
+ * 거래 추가.
+ * ⚠️ 상한에 걸리면 **거부**한다(조용히 오래된 것을 버리지 않는다 — 사용자가 방금 친 값과
+ *    과거 기록 중 무엇을 버릴지는 사용자가 정한다: 연도 정리(단계 E)).
+ */
+export const addTx = (
+  book: LedgerBook | null | undefined,
+  tx: LedgerTx,
+): LedgerAddTxResult => {
+  if (!book) return { book: book as LedgerBook, conflict: null, error: 'invalid' };
+  const next = normalizeTx(tx);
+  if (!next) return { book, conflict: null, error: 'invalid' };
+  const list = Array.isArray(book.transactions) ? book.transactions : [];
+  if (list.length >= MAX_LEDGER_TX) return { book, conflict: null, error: 'limit' };
+
+  const ix = txIndexOf(book);
+  const ym = ymOfDate(next.date);
+  let conflict: LedgerAddTxResult['conflict'] = null;
+
+  // entry 자동 전환 + 수동값 충돌 보고 — 이 거래가 닿는 항목만 본다.
+  const touched = new Set(txTargets(next).map((t) => t.itemId).filter(Boolean));
+  let items = book.items;
+  if (touched.size > 0 && Array.isArray(items)) {
+    let changed = false;
+    const out = items.map((it) => {
+      if (!it || !touched.has(it.id)) return it;
+      if (conflict === null && ym) {
+        const had = ix.byItemYm.get(`${it.id}|${ym}`);
+        const manual = actualOf(it, ym);
+        if ((!had || had.count === 0) && manual !== null) conflict = { itemId: it.id, ym, manual };
+      }
+      if (it.entry === 'tx') return it;
+      changed = true;
+      return { ...it, entry: 'tx' as LedgerEntryMode };
+    });
+    if (changed) items = out;
+  }
+
+  return {
+    book: { ...book, items, transactions: sortTxDesc([...list, next]) },
+    conflict,
+    error: '',
+  };
+};
+
+export const updateTx = (
+  book: LedgerBook | null | undefined,
+  id: string,
+  patch: Partial<LedgerTx>,
+): LedgerBook => {
+  if (!book || !id) return book as LedgerBook;
+  const list = Array.isArray(book.transactions) ? book.transactions : [];
+  const i = list.findIndex((t) => t && t.id === id);
+  if (i < 0) return book;
+  const merged = normalizeTx({ ...list[i], ...patch, id: list[i].id });
+  if (!merged) return book;
+  const out = list.slice();
+  out[i] = merged;
+  return { ...book, transactions: sortTxDesc(out) };
+};
+
+/**
+ * 소프트 삭제(휴지통). ⚠️ 배열에서 지우지 말 것 — 되돌리기 없는 삭제는 이탈 원인이고,
+ * 이 화면은 z-1090이라 확인 토스트도 뜨지 않는다.
+ */
+export const softDeleteTx = (
+  book: LedgerBook | null | undefined,
+  ids: string[],
+  today: string,
+): LedgerBook => {
+  if (!book || !Array.isArray(ids) || ids.length === 0) return book as LedgerBook;
+  const stamp = isValidLedgerDate(today) ? today : '';
+  if (!stamp) return book;
+  const set = new Set(ids.map(String));
+  const list = Array.isArray(book.transactions) ? book.transactions : [];
+  let changed = false;
+  const out = list.map((t) => {
+    if (!t || !set.has(t.id) || String(t.deletedAt || '') !== '') return t;
+    changed = true;
+    return { ...t, deletedAt: stamp };
+  });
+  return changed ? { ...book, transactions: out } : book;
+};
+
+export const restoreTx = (book: LedgerBook | null | undefined, ids: string[]): LedgerBook => {
+  if (!book || !Array.isArray(ids) || ids.length === 0) return book as LedgerBook;
+  const set = new Set(ids.map(String));
+  const list = Array.isArray(book.transactions) ? book.transactions : [];
+  let changed = false;
+  const out = list.map((t) => {
+    if (!t || !set.has(t.id) || String(t.deletedAt || '') === '') return t;
+    changed = true;
+    return { ...t, deletedAt: '' };
+  });
+  return changed ? { ...book, transactions: out } : book;
+};
+
+/** 영구 삭제 — 사용자가 휴지통에서 명시적으로 누를 때만. 정규화가 자동으로 비우지 않는다. */
+export const purgeTx = (book: LedgerBook | null | undefined, ids: string[]): LedgerBook => {
+  if (!book || !Array.isArray(ids) || ids.length === 0) return book as LedgerBook;
+  const set = new Set(ids.map(String));
+  const list = Array.isArray(book.transactions) ? book.transactions : [];
+  const out = list.filter((t) => !(t && set.has(t.id)));
+  return out.length === list.length ? book : { ...book, transactions: out };
+};
+
+/**
+ * 수동 월 합계를 거래 1건으로 옮긴다(충돌 해소 '거래로 옮기기').
+ * 날짜는 그 달 1일, `origin:'migrate'`.
+ */
+export const migrateManualToTx = (
+  book: LedgerBook | null | undefined,
+  itemId: string,
+  ym: string,
+): LedgerBook => {
+  if (!book || !itemId || !isValidYm(ym)) return book as LedgerBook;
+  const items = Array.isArray(book.items) ? book.items : [];
+  const item = items.find((it) => it && it.id === itemId);
+  if (!item) return book;
+  const manual = actualOf(item, ym);
+  if (manual === null) return book;
+  const res = addTx(book, makeLedgerTx({
+    date: `${ym}-01`,
+    amount: Math.abs(manual),
+    refund: manual < 0,
+    kind: item.group === 'income' ? 'income' : 'expense',
+    itemId,
+    pay: item.pay,
+    memo: '수동 입력 이전',
+    origin: 'migrate',
+    createdAt: finiteOr(item.createdAt, 0) as number,
+  }));
+  if (res.error) return book;
+  return dropManual(res.book, itemId, ym);
+};
+
+/** 수동 월 합계를 지운다(충돌 해소 '수동 값 삭제'). */
+export const dropManual = (
+  book: LedgerBook | null | undefined,
+  itemId: string,
+  ym: string,
+): LedgerBook => {
+  if (!book || !itemId || !isValidYm(ym)) return book as LedgerBook;
+  const items = Array.isArray(book.items) ? book.items : [];
+  const i = items.findIndex((it) => it && it.id === itemId);
+  if (i < 0) return book;
+  const cur = items[i];
+  if (!cur.actual || !Object.prototype.hasOwnProperty.call(cur.actual, ym)) return book;
+  const actual = { ...cur.actual };
+  delete actual[ym];
+  const out = items.slice();
+  out[i] = { ...cur, actual };
+  return { ...book, items: out };
+};
+
+/**
+ * 스냅샷 저장 전 거래를 벗긴다.
+ *
+ * ⚠️ **거래는 스냅샷에 넣지 않는다**(사용자 결정 2의 기본값). 512KB 예산에 700KB 거래를 넣으면
+ *    `pushLedgerSnapshot`이 이전 스냅샷을 전부 버려 사실상 1개만 남는다 — 스냅샷의 존재 이유
+ *    (여러 시점의 복구 지점)가 사라진다. 거래의 안전망은 휴지통이고, 스냅샷은 **계획 매트릭스·
+ *    수동 실적·설정**의 안전망이다.
+ */
+export const stripTxForSnapshot = (books: LedgerBooks | null | undefined): LedgerBooks => {
+  if (!Array.isArray(books)) return [];
+  return books.map((b) => (b && Array.isArray(b.transactions) && b.transactions.length > 0
+    ? { ...b, transactions: [] } : b));
+};
+
+/* ===========================================================================
  * G. 집계
  * =========================================================================== */
 
@@ -721,6 +1438,9 @@ export interface LedgerMonthTotals {
   unresolved: number;
   /** 그 달에 살아 있는 지출 항목 수 */
   activeExpense: number;
+  /** 미분류 거래 합(항목을 고르지 않은 지출) — `actualExpense`에 **이미 포함**돼 있다. */
+  uncategorized: number;
+  uncategorizedCount: number;
   byGroup: Record<string, { plan: number; actual: number; missing: number }>;
   /**
    * 결제수단별 소계 — 사진의 '현금합계' / '카드 합계' 회색 행.
@@ -732,18 +1452,30 @@ export interface LedgerMonthTotals {
 
 const emptyGroupAgg = () => ({ plan: 0, actual: 0, missing: 0 });
 
-export const monthTotals = (book: LedgerBook | null | undefined, ym: string): LedgerMonthTotals => {
+/**
+ * @param todayYm 오늘이 속한 달. 넘기면 `entry:'tx'` 항목의 **진행 중인 달**을 미입력으로
+ *   세지 않는다(넘기지 않으면 종전 동작 그대로 — 하위호환의 축).
+ */
+export const monthTotals = (
+  book: LedgerBook | null | undefined,
+  ym: string,
+  todayYm?: string,
+): LedgerMonthTotals => {
   const out: LedgerMonthTotals = {
     planExpense: 0, actualExpense: 0, planIncome: 0, actualIncome: 0,
     missingExpense: 0, missingIds: [], unresolved: 0, activeExpense: 0,
+    uncategorized: 0, uncategorizedCount: 0,
     byGroup: {}, byPay: {},
   };
   const items = book && Array.isArray(book.items) ? book.items : [];
+  // ⚠️ 실제 금액의 단일 소스 — 거래가 있으면 거래 합이 이긴다(`actualResolved`).
+  const ix = txIndexOf(book);
+  const expOpts: LedgerExpectsOpts = { ix, todayYm: isValidYm(todayYm) ? todayYm : '' };
   for (const it of items) {
     if (!it || !isItemActive(it, ym)) continue;
     const isIncome = it.group === 'income';
     const p = planOf(it, ym);
-    const a = actualOf(it, ym);
+    const a = actualResolved(it, ym, ix).value;
 
     if (!out.byGroup[it.group]) out.byGroup[it.group] = emptyGroupAgg();
     // ⚠️ byPay는 지출 전용 — 수입을 섞으면 '현금합계'에 급여가 들어간다.
@@ -762,14 +1494,36 @@ export const monthTotals = (book: LedgerBook | null | undefined, ym: string): Le
       if (isIncome) out.actualIncome += a; else out.actualExpense += a;
       out.byGroup[it.group].actual += a;
       if (!isIncome) out.byPay[it.pay].actual += a;
-    } else if (!isIncome && expectsActual(it, ym)) {
+    } else if (!isIncome && expectsActual(it, ym, expOpts)) {
       // ⚠️ annual의 비납부월은 '미입력'이 아니다 — expectsActual이 그 구분의 단일 소스다.
       out.missingExpense++;
       out.missingIds.push(String(it.id || ''));
       out.byGroup[it.group].missing++;
     }
-    if (!isIncome && expectsActual(it, ym)) out.activeExpense++;
+    if (!isIncome && expectsActual(it, ym, expOpts)) out.activeExpense++;
   }
+
+  /**
+   * 미분류 거래 — 항목이 없어 위 순회로는 잡히지 않지만 **실제로 나간 돈**이다.
+   * ⚠️ 빠뜨리면 사용자가 빠르게 입력한 지출이 KPI·전월 대비·달력에서 통째로 사라진다
+   *    (입력 마찰을 없애려고 허용한 미분류가 곧 '기록해도 안 보이는 돈'이 된다).
+   * ⚠️ 그룹은 `variable`로 계상한다 — 화면의 미분류 가상 행이 변동비 그룹 끝에 있고,
+   *    Σ그룹 === 총계 항등식이 그래야 성립한다.
+   */
+  const un = ix.uncategorizedYm.get(ym);
+  if (un && Number.isFinite(un.sum)) {
+    out.actualExpense += un.sum;
+    out.uncategorized = un.sum;
+    out.uncategorizedCount = un.count;
+    if (!out.byGroup.variable) out.byGroup.variable = emptyGroupAgg();
+    out.byGroup.variable.actual += un.sum;
+    for (const [pay, v] of Object.entries(un.byPay)) {
+      if (!Number.isFinite(v)) continue;
+      if (!out.byPay[pay]) out.byPay[pay] = { plan: 0, actual: 0 };
+      out.byPay[pay].actual += v;
+    }
+  }
+
   out.missingIds.sort();
   return out;
 };
@@ -796,9 +1550,14 @@ export const monthTotals = (book: LedgerBook | null | undefined, ym: string): Le
  *    이 한 줄에서 붕괴한다.
  * ⚠️ 실제도 계획도 없으면 **0이 아니라 null**(모른다 ≠ 0원).
  */
-export const expectedOf = (item: LedgerItem, ym: string): number | null => {
+export const expectedOf = (
+  item: LedgerItem,
+  ym: string,
+  ix?: LedgerTxIndex | null,
+): number | null => {
   if (!item || !isValidYm(ym) || !isItemActive(item, ym)) return null;
-  const a = actualOf(item, ym);
+  // ⚠️ `ix`를 넘기지 않으면 수동 값만 본다(종전 동작). 화면·엑셀은 반드시 넘길 것.
+  const a = actualResolved(item, ym, ix).value;
   return a !== null ? a : planOf(item, ym);
 };
 
@@ -836,12 +1595,17 @@ const emptyExpected = (): LedgerExpected => ({
   planSum: 0, planCount: 0, activeCount: 0,
 });
 
-const addExpected = (o: LedgerExpected, item: LedgerItem, ym: string): void => {
+const addExpected = (
+  o: LedgerExpected,
+  item: LedgerItem,
+  ym: string,
+  ix?: LedgerTxIndex | null,
+): void => {
   if (!item || !isItemActive(item, ym)) return;
   o.activeCount++;
   const p = planOf(item, ym);
   if (p !== null && Number.isFinite(p)) { o.planSum += p; o.planCount++; }
-  const a = actualOf(item, ym);
+  const a = actualResolved(item, ym, ix).value;
   if (a !== null && Number.isFinite(a)) {
     o.value += a; o.fromActual += a; o.actualCount++;
   } else if (p !== null && Number.isFinite(p)) {
@@ -857,25 +1621,33 @@ const addExpected = (o: LedgerExpected, item: LedgerItem, ym: string): void => {
  *    `group === 'income'` 항목은 이 함수가 **직접** 건너뛴다(아래). 지출 축 전용이다.
  * ⚠️ 절대 null을 돌려주지 않고 절대 throw하지 않는다. "모른다"는 `unresolved`가 진다.
  */
-export const expectedTotal = (items: LedgerItem[] | null | undefined, ym: string): LedgerExpected => {
+export const expectedTotal = (
+  items: LedgerItem[] | null | undefined,
+  ym: string,
+  ix?: LedgerTxIndex | null,
+): LedgerExpected => {
   const o = emptyExpected();
   if (!Array.isArray(items) || !isValidYm(ym)) return o;
   for (const it of items) {
     // ⚠️ 수입 제외 — 이 게이트를 호출부에 위임하지 말 것. `byPay`가 수입을 섞어 '현금합계'에
     //    급여가 들어가던 회귀(verify #48c)가 monthTotals 밖으로 자리만 옮겨 되살아난다.
     if (!it || it.group === 'income') continue;
-    addExpected(o, it, ym);
+    addExpected(o, it, ym, ix);
   }
   return o;
 };
 
 /** 수입 전용 예상 합 — 지출과 **분리된 축**이므로 별도 함수다(한 함수에 플래그 금지). */
-export const expectedIncomeTotal = (items: LedgerItem[] | null | undefined, ym: string): LedgerExpected => {
+export const expectedIncomeTotal = (
+  items: LedgerItem[] | null | undefined,
+  ym: string,
+  ix?: LedgerTxIndex | null,
+): LedgerExpected => {
   const o = emptyExpected();
   if (!Array.isArray(items) || !isValidYm(ym)) return o;
   for (const it of items) {
     if (!it || it.group !== 'income') continue;
-    addExpected(o, it, ym);
+    addExpected(o, it, ym, ix);
   }
   return o;
 };
@@ -889,6 +1661,7 @@ export const expectedIncomeTotal = (items: LedgerItem[] | null | undefined, ym: 
 export const expectedByPay = (
   items: LedgerItem[] | null | undefined,
   ym: string,
+  ix?: LedgerTxIndex | null,
 ): Record<string, LedgerExpected> => {
   const out: Record<string, LedgerExpected> = {};
   if (!Array.isArray(items) || !isValidYm(ym)) return out;
@@ -897,14 +1670,14 @@ export const expectedByPay = (
     if (!isItemActive(it, ym)) continue;
     const key = it.pay;
     if (!out[key]) out[key] = emptyExpected();
-    addExpected(out[key], it, ym);
+    addExpected(out[key], it, ym, ix);
   }
   return out;
 };
 
 /** 장부 전체(지출 그룹만)의 그 달 예상 합. */
 export const expectedGrandTotal = (book: LedgerBook | null | undefined, ym: string): LedgerExpected =>
-  expectedTotal(book && Array.isArray(book.items) ? book.items : [], ym);
+  expectedTotal(book && Array.isArray(book.items) ? book.items : [], ym, txIndexOf(book));
 
 /**
  * 그 달의 입력 상태 — **네 상태**다.
@@ -1115,6 +1888,75 @@ export const compareMonths = (
   return { ...base, delta, rate: delta / prev.actualExpense, comparable: true };
 };
 
+export interface LedgerMtd {
+  /** 이달 1일~오늘 지출 합 */
+  cur: number;
+  /** 전달 1일~같은 일수 지출 합 */
+  prev: number;
+  /** 이달에서 비교에 쓴 일수(1일~오늘) */
+  days: number;
+  /**
+   * 전달에서 비교에 쓴 일수. 전달이 짧으면(3/31 → 2월) **말일로 캡**돼 `days`보다 작다.
+   * ⚠️ 화면이 이 값을 노출해야 한다 — 두 창의 길이가 다르면 "같은 기간 대비"가 거짓이 된다.
+   */
+  prevDays: number;
+  delta: number | null;
+  rate: number | null;
+  comparable: boolean;
+  reason: '' | 'no-tx' | 'no-prev' | 'zero-base' | 'not-current';
+}
+
+/**
+ * **진행 중인 달의 같은 기간 비교**(month-to-date).
+ *
+ * `compareMonths`는 닫힌 달끼리만 확정한다(입력 완료도가 다르면 `-`) — 그래서 이번 달은
+ * 구조적으로 항상 '비교 불가'다. 거래 레이어가 생기면서 **날짜 단위 비교**가 가능해졌으므로,
+ * "이달 1~5일 vs 전달 1~5일"이라는 **같은 길이의 창**으로만 비교한다.
+ *
+ * ⚠️ 전달 일수가 부족하면(3/31 → 2월) **말일로 캡**한다 — 없는 날짜를 0으로 채우면
+ *    2월이 항상 '덜 썼다'로 나온다.
+ * ⚠️ 거래가 한 건도 없으면 숫자를 내지 않는다(`no-tx`). 수동 월 합계는 날짜가 없어
+ *    같은 기간으로 자를 수 없다 — 0으로 섞으면 "이달 지출 0원"이라는 거짓 확정이 된다.
+ */
+export const mtdCompare = (
+  book: LedgerBook | null | undefined,
+  ym: string,
+  todayDate: string,
+  ix?: LedgerTxIndex | null,
+): LedgerMtd => {
+  const base: LedgerMtd = { cur: 0, prev: 0, days: 0, prevDays: 0, delta: null, rate: null, comparable: false, reason: '' };
+  if (!isValidYm(ym) || !isValidLedgerDate(todayDate)) return { ...base, reason: 'no-tx' };
+  if (ymOfDate(todayDate) !== ym) return { ...base, reason: 'not-current' };
+  const index = ix || txIndexOf(book);
+  if (index.liveCount === 0) return { ...base, reason: 'no-tx' };
+
+  const day = Number(todayDate.slice(8, 10));
+  const prevYm = addMonthsYm(ym, -1);
+  if (!prevYm) return { ...base, days: day, reason: 'no-prev' };
+  const prevDim = daysInMonth(Number(prevYm.slice(0, 4)), Number(prevYm.slice(5, 7)));
+  const prevLastDay = Math.min(day, prevDim || day);
+
+  const sumRange = (m: string, lastDay: number): { sum: number; count: number } => {
+    let sum = 0, count = 0;
+    for (let d = 1; d <= lastDay; d++) {
+      const key = `${m}-${String(d).padStart(2, '0')}`;
+      const hit = index.byDate.get(key);
+      if (!hit) continue;
+      sum += hit.expense;
+      count += hit.count;
+    }
+    return { sum, count };
+  };
+
+  const cur = sumRange(ym, day);
+  const prev = sumRange(prevYm, prevLastDay);
+  const out: LedgerMtd = { ...base, cur: cur.sum, prev: prev.sum, days: day, prevDays: prevLastDay };
+  if (prev.count === 0) return { ...out, reason: 'no-prev' };
+  const delta = cur.sum - prev.sum;
+  if (!(prev.sum > 0)) return { ...out, delta, comparable: true, reason: 'zero-base' };
+  return { ...out, delta, rate: delta / prev.sum, comparable: true };
+};
+
 export const momDelta = (book: LedgerBook | null | undefined, ym: string): LedgerDelta =>
   compareMonths(book, ym, addMonthsYm(ym, -1));
 
@@ -1195,9 +2037,18 @@ export const ledgerCategories = (book: LedgerBook | null | undefined): string[] 
 export interface LedgerCalendarEvent {
   bookId: string;
   bookName: string;
-  /** 'touch' = 그 날 가계부를 정리했다 / 'annual' = 연단위 지출 예정일 */
-  kind: 'touch' | 'annual';
+  /**
+   * 'tx' = 그 날 실제로 쓴 돈(거래 합) / 'touch' = 그 날 가계부를 정리했다 /
+   * 'annual' = 연단위 지출 예정일
+   * ⚠️ 칩 문구 우선순위는 **tx → 연단위 → 정리**다 — "그날 얼마 썼나"가 달력의 1순위 질문이고,
+   *    '정리했다'는 그 다음이다(정리 기록은 금액이 그 달 전체라 날짜 칸의 뜻과 다르다).
+   */
+  kind: 'tx' | 'touch' | 'annual';
   ym: string;
+  /** kind==='tx' — 그 날 거래 합. 이체는 제외, 환급은 음수. */
+  txExpense?: number;
+  txIncome?: number;
+  txCount?: number;
   /** kind==='touch' */
   actualExpense?: number;
   momDelta?: number | null;
@@ -1230,6 +2081,20 @@ export const ledgerEventsByDate = (
   for (const b of books) {
     if (!b || !Array.isArray(b.items)) continue;
     const bookName = String(b.name || '가계부');
+
+    /**
+     * (a-0) 그 날 거래 합 — ⚠️ **라이브 파생**이다. `calendarMemos`에 복사하지 말 것
+     *       (복사하면 가계부와 달력이 갈라져 같은 날짜에 두 값이 보인다).
+     */
+    const ixb = txIndexOf(b);
+    for (const [d, agg] of ixb.byDate) {
+      if (!isValidLedgerDate(d) || Number(d.slice(0, 4)) !== year) continue;
+      if (!agg || agg.count === 0) continue;
+      push(d, {
+        bookId: b.id, bookName, kind: 'tx', ym: ymOfDate(d),
+        txExpense: agg.expense, txIncome: agg.income, txCount: agg.count,
+      });
+    }
 
     // (a) 정리 기록
     const months = b.months && typeof b.months === 'object' ? b.months : {};
@@ -1299,6 +2164,91 @@ const normMoneyMap = (raw: unknown): Record<string, number> => {
     out[k] = n;
   }
   return out;
+};
+
+const TX_KINDS: string[] = ['expense', 'income', 'transfer'];
+const TX_ORIGINS: string[] = ['manual', 'confirm', 'auto', 'import', 'adjust', 'migrate'];
+
+/** 분할 합과 금액이 같다고 볼 수 있는가 — 부동소수 잔차만 허용한다(원 단위 오차는 불일치다). */
+const SPLIT_EPS = 1e-6;
+
+/**
+ * 거래 1건 정규화. **무효면 null**(버린다).
+ *
+ * ⚠️ `amount`는 항상 양수로 만들고 음수 입력은 `refund:true`로 옮긴다 — 부호와 플래그가
+ *    둘 다 뜻을 갖게 두면 집계마다 이중 부호 실수가 난다.
+ * ⚠️ `Σsplits ≠ amount`면 **splits를 버리고 단일 항목으로 강등**한다. 그대로 두면 항목 합과
+ *    거래 합이 조용히 갈려 어떤 검산도 통과하지 못한다(가장 나쁜 실패 모드).
+ */
+export const normalizeTx = (raw: unknown): LedgerTx | null => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const s = raw as Record<string, unknown>;
+  if (!isValidLedgerDate(s.date)) return null;
+  const amountRaw = numOrNull(s.amount);
+  if (amountRaw === null) return null;
+  const amount = Math.abs(amountRaw);
+  const refund = s.refund === true || amountRaw < 0;
+
+  const rawSplits = Array.isArray(s.splits) ? s.splits : [];
+  let splits: LedgerTxSplit[] = [];
+  for (const sp of rawSplits.slice(0, MAX_LEDGER_TX_SPLITS)) {
+    if (!sp || typeof sp !== 'object') continue;
+    const o = sp as Record<string, unknown>;
+    const v = numOrNull(o.amount);
+    if (v === null) continue;
+    splits.push({
+      itemId: typeof o.itemId === 'string' ? o.itemId : '',
+      amount: v,
+      memo: str(o.memo, MAX_LEDGER_TX_MEMO_LEN),
+    });
+  }
+  if (splits.length > 0) {
+    const sum = splits.reduce((a, b) => a + b.amount, 0);
+    if (Math.abs(sum - amount) > SPLIT_EPS) splits = [];
+  }
+
+  const instRaw = numOrNull(s.installmentMonths);
+  const installmentMonths = instRaw !== null && instRaw >= 2
+    ? Math.min(Math.trunc(instRaw), MAX_LEDGER_INSTALLMENT_MONTHS)
+    : null;
+
+  return {
+    id: typeof s.id === 'string' && s.id ? s.id : generateId(),
+    date: s.date as string,
+    amount,
+    refund,
+    kind: TX_KINDS.includes(s.kind as string) ? (s.kind as LedgerTxKind) : 'expense',
+    itemId: typeof s.itemId === 'string' ? s.itemId : '',
+    splits,
+    pay: (PAYS as string[]).includes(s.pay as string) ? (s.pay as LedgerPay) : 'card',
+    accountId: typeof s.accountId === 'string' ? s.accountId : '',
+    toAccountId: typeof s.toAccountId === 'string' ? s.toAccountId : '',
+    memo: str(s.memo, MAX_LEDGER_TX_MEMO_LEN),
+    payer: str(s.payer, MAX_LEDGER_PAYER_LEN),
+    installmentMonths,
+    origin: TX_ORIGINS.includes(s.origin as string) ? (s.origin as LedgerTxOrigin) : 'manual',
+    originKey: str(s.originKey, MAX_LEDGER_NAME_LEN),
+    deletedAt: isValidLedgerDate(s.deletedAt) ? (s.deletedAt as string) : '',
+    createdAt: numOrNull(s.createdAt) ?? 0,
+  };
+};
+
+/** 정규화 결과가 입력과 같은가 — 멱등 판정(`undefined`와 기본값을 같게 본다). */
+const sameTx = (next: LedgerTx, src: Record<string, unknown>): boolean => {
+  const rawSplits = Array.isArray(src.splits) ? (src.splits as Record<string, unknown>[]) : [];
+  if (next.splits.length !== rawSplits.length) return false;
+  for (let i = 0; i < next.splits.length; i++) {
+    const a = next.splits[i], b = rawSplits[i] || {};
+    if (a.itemId !== (b.itemId ?? '') || a.amount !== b.amount || a.memo !== (b.memo ?? '')) return false;
+  }
+  return next.id === src.id && next.date === src.date && next.amount === src.amount
+    && next.refund === (src.refund === true) && next.kind === (src.kind ?? 'expense')
+    && next.itemId === (src.itemId ?? '') && next.pay === (src.pay ?? 'card')
+    && next.accountId === (src.accountId ?? '') && next.toAccountId === (src.toAccountId ?? '')
+    && next.memo === (src.memo ?? '') && next.payer === (src.payer ?? '')
+    && next.installmentMonths === (src.installmentMonths ?? null)
+    && next.origin === (src.origin ?? 'manual') && next.originKey === (src.originKey ?? '')
+    && next.deletedAt === (src.deletedAt ?? '') && next.createdAt === (src.createdAt ?? 0);
 };
 
 /** 구분 프리셋 정규화 — trim · 빈값/중복 제거 · 길이/개수 상한. */
@@ -1400,6 +2350,7 @@ export const normalizeLedgerBooks = (raw: unknown): LedgerBooks => {
         dueDay: numOrNull(s.dueDay),
         loan,
         tone,
+        entry: s.entry === 'tx' ? 'tx' : 'monthly',
         createdAt: numOrNull(s.createdAt) ?? 0,
       };
 
@@ -1410,6 +2361,9 @@ export const normalizeLedgerBooks = (raw: unknown): LedgerBooks => {
         next.activeFrom === (s.activeFrom ?? '') && next.activeTo === (s.activeTo ?? '') &&
         next.dueMonth === (s.dueMonth ?? null) && next.dueDay === (s.dueDay ?? null) &&
         next.tone === (s.tone ?? 'none') && next.createdAt === (s.createdAt ?? 0) &&
+        // ⚠️ `undefined ≡ 'monthly'` — 다르게 보면 레거시 장부가 로드마다 '변경됨'이 되어
+        //    Drive 폴링마다 재저장 + 로컬 사본 갈아엎기가 돈다(멱등 계약).
+        next.entry === (s.entry ?? 'monthly') &&
         sameMoneyMap(planOverride, s.planOverride) && sameMoneyMap(actual, s.actual) &&
         ((loan === null && !s.loan) || (loan !== null && !!s.loan));
       if (!same) itemsChanged = true;
@@ -1431,16 +2385,39 @@ export const normalizeLedgerBooks = (raw: unknown): LedgerBooks => {
 
     const categories = normCategories(src.categories);
 
+    /**
+     * 거래 정규화.
+     * ⚠️ 상한 초과분은 **오래된 것부터** 버린다(date desc 정렬 후 앞에서 자른다) — 방금 넣은
+     *    최근 기록이 밀려나면 사용자가 그 사실을 알 방법이 없다.
+     * ⚠️ 정규화는 **휴지통을 비우지 않는다** — 시간(오늘)에 따라 결과가 달라지면 멱등이 깨지고,
+     *    Drive 폴링마다 다른 결과가 나온다. 비우기는 사용자 동작이다(`purgeTx`).
+     */
+    const rawTx = Array.isArray(src.transactions) ? src.transactions : [];
+    let txChanged = !Array.isArray(src.transactions)
+      ? rawTx.length > 0
+      : rawTx.length > MAX_LEDGER_TX;
+    const txs: LedgerTx[] = [];
+    for (const t of rawTx) {
+      const nt = normalizeTx(t);
+      if (!nt) { txChanged = true; continue; }
+      if (!sameTx(nt, t as Record<string, unknown>)) txChanged = true;
+      txs.push(nt);
+    }
+    const sorted = sortTxDesc(txs);
+    for (let i = 0; i < txs.length; i++) if (txs[i] !== sorted[i]) { txChanged = true; break; }
+    const transactions = sorted.slice(0, MAX_LEDGER_TX);
+
     const book: LedgerBook = {
       id: typeof src.id === 'string' && src.id ? src.id : generateId(),
       name: str(src.name, MAX_LEDGER_NAME_LEN),
       items,
       categories,
       months,
+      transactions,
       createdAt: numOrNull(src.createdAt) ?? 0,
       updatedAt: numOrNull(src.updatedAt) ?? 0,
     };
-    if (itemsChanged || monthsChanged || book.id !== src.id || book.name !== src.name
+    if (itemsChanged || monthsChanged || txChanged || book.id !== src.id || book.name !== src.name
       || !sameStrList(categories, src.categories)) changed = true;
     books.push(book);
   }
@@ -1461,6 +2438,9 @@ export const ledgerBooksHaveContent = (books: unknown): boolean => {
   if (!Array.isArray(books)) return false;
   return books.some((b: any) => {
     if (!b || typeof b !== 'object') return false;
+    // ⚠️ 거래가 한 건이라도 있으면 '내용 있음' — 항목을 다 지우고 거래만 남긴 장부가
+    //    백업 복원에서 조용히 사라지면 복구할 방법이 없다(sticky 판정의 단일 소스).
+    if (Array.isArray(b.transactions) && b.transactions.some((t: any) => t && typeof t === 'object')) return true;
     const items = Array.isArray(b.items) ? b.items : [];
     if (items.some((it: any) => it && (
       String(it.name ?? '').trim() !== '' ||
@@ -1488,7 +2468,26 @@ export const ledgerBooksHaveContent = (books: unknown): boolean => {
  *    재편집하면 저장 안 됨' 버그를 냈다.
  * ⚠️ `updatedAt`은 **제외** — 커밋 시각 변화만으로 지문이 흔들려 무의미한 저장 churn이 난다.
  */
+/**
+ * ⚠️ **참조 캐시**. 이 지문은 App.tsx 저장 effect의 첫 블록에서 매 렌더 계산되는데, 거래가
+ *    6,000건이면 `JSON.stringify`가 매번 수 ms다. 장부 배열은 편집마다 새로 만들어지므로
+ *    (불변 갱신) 참조가 곧 정확한 무효화 신호다 — 같은 참조면 재계산하지 않는다.
+ * ⚠️ 제자리 변형(mutation)을 하면 캐시가 낡는다. 이 저장소의 모든 쓰기 헬퍼가 새 배열·새
+ *    객체를 만드는 이유이기도 하다(순수성이 캐시의 전제).
+ */
+const ledgerFpCache = new WeakMap<object, string>();
+
 export const ledgerFingerprint = (books: unknown): string => {
+  if (books && typeof books === 'object') {
+    const hit = ledgerFpCache.get(books as object);
+    if (hit !== undefined) return hit;
+  }
+  const out = computeLedgerFingerprint(books);
+  if (books && typeof books === 'object') ledgerFpCache.set(books as object, out);
+  return out;
+};
+
+const computeLedgerFingerprint = (books: unknown): string => {
   try {
     if (!Array.isArray(books)) return '';
     return JSON.stringify(books.map((b: any) => ({
@@ -1499,11 +2498,21 @@ export const ledgerFingerprint = (books: unknown): string => {
       m: Object.entries(b?.months || {})
         .map(([k, v]: [string, any]) => [k, v?.touchedDate ?? '', v?.memo ?? ''])
         .sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
+      // ⚠️ 거래는 **전 필드**를 담는다(`createdAt` 포함 — 같은 날 같은 금액을 두 번 넣은 것을
+      //    구분해야 한다). 길이·개수 해시로 줄이지 말 것: 그 절충이 '메모만 고치면 저장 안 됨'
+      //    버그를 두 번 냈다(investmentNotesKey·holdingSnapshotsKey).
+      x: (Array.isArray(b?.transactions) ? b.transactions : []).map((t: any) => [
+        t?.id ?? '', t?.date ?? '', t?.amount ?? null, t?.refund === true, t?.kind ?? '',
+        t?.itemId ?? '', t?.pay ?? '', t?.accountId ?? '', t?.toAccountId ?? '',
+        t?.memo ?? '', t?.payer ?? '', t?.installmentMonths ?? null,
+        t?.origin ?? '', t?.originKey ?? '', t?.deletedAt ?? '', t?.createdAt ?? 0,
+        (Array.isArray(t?.splits) ? t.splits : []).map((s: any) => [s?.itemId ?? '', s?.amount ?? null, s?.memo ?? '']),
+      ]),
       t: (Array.isArray(b?.items) ? b.items : []).map((it: any) => [
         it?.id ?? '', it?.group ?? '', it?.pay ?? '', it?.name ?? '', it?.category ?? '',
         it?.plan ?? null, it?.planUnit ?? '', it?.memo ?? '',
         it?.activeFrom ?? '', it?.activeTo ?? '', it?.dueMonth ?? null, it?.dueDay ?? null,
-        it?.tone ?? '',
+        it?.tone ?? '', it?.entry ?? '',
         Object.entries(it?.planOverride || {}).sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
         Object.entries(it?.actual || {}).sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
         it?.loan ? [
@@ -1537,6 +2546,7 @@ export const makeLedgerItem = (over: Partial<LedgerItem> = {}): LedgerItem => ({
   dueDay: null,
   loan: null,
   tone: 'none',
+  entry: 'monthly',
   createdAt: 0,
   ...over,
 });
@@ -1561,6 +2571,9 @@ export const makeLedgerBook = (over: Partial<LedgerBook> = {}): LedgerBook => ({
   //    빈 장부를 '내용 있음'으로 보고 백업 복원 경로가 영구히 막힌다(verify #60).
   categories: [],
   months: {},
+  // ⚠️ 반드시 빈 배열 — 비어 있지 않으면 `ledgerBooksHaveContent`가 빈 장부를 '내용 있음'으로
+  //    보고 백업 복원 경로가 영구히 막힌다(categories와 같은 근거).
+  transactions: [],
   createdAt: 0,
   updatedAt: 0,
   ...over,
@@ -1585,6 +2598,12 @@ export interface LedgerSnapshot {
   label: string;
   /** 복원 직전 자동 저장인가(사용자가 누른 저장과 구분해 목록에서 표시·정리한다). */
   auto: boolean;
+  /**
+   * 거래를 벗기고 저장했는가(`stripTxForSnapshot`).
+   * ⚠️ 화면이 이 사실을 **반드시 표시**해야 한다 — 복원해도 거래는 그대로라는 계약을
+   *    모르면 사용자가 "복원했는데 거래가 안 돌아왔다"로 읽는다.
+   */
+  txStripped: boolean;
   books: LedgerBooks;
 }
 
@@ -1602,6 +2621,7 @@ export const makeLedgerSnapshot = (over: Partial<LedgerSnapshot> = {}): LedgerSn
   savedAt: 0,
   label: '',
   auto: false,
+  txStripped: false,
   books: [],
   ...over,
 });
@@ -1612,11 +2632,13 @@ export interface LedgerSnapshotSummary {
   /** 실제 금액이 입력된 칸 수 */
   actuals: number;
   months: number;
+  /** 거래를 벗기고 저장했는가 — 목록이 그대로 표시한다. */
+  txStripped: boolean;
 }
 
 /** 목록 표시용 요약 — ⚠️ 절대 throw하지 않는다(손상된 스냅샷이 목록 전체를 죽이면 안 된다). */
 export const ledgerSnapshotSummary = (snap: LedgerSnapshot | null | undefined): LedgerSnapshotSummary => {
-  const out: LedgerSnapshotSummary = { books: 0, items: 0, actuals: 0, months: 0 };
+  const out: LedgerSnapshotSummary = { books: 0, items: 0, actuals: 0, months: 0, txStripped: !!(snap && snap.txStripped) };
   const books = snap && Array.isArray(snap.books) ? snap.books : [];
   out.books = books.length;
   for (const b of books) {
@@ -1679,10 +2701,12 @@ export const normalizeLedgerSnapshots = (raw: unknown): LedgerSnapshot[] => {
       savedAt: numOrNull(src.savedAt) ?? 0,
       label: str(src.label, MAX_LEDGER_SNAPSHOT_LABEL_LEN),
       auto: src.auto === true,
+      txStripped: src.txStripped === true,
       books,
     };
     if (next.id !== src.id || next.savedAt !== (src.savedAt ?? 0) || next.label !== (src.label ?? '')
-      || next.auto !== (src.auto === true) || books !== src.books) changed = true;
+      || next.auto !== (src.auto === true) || next.txStripped !== (src.txStripped === true)
+      || books !== src.books) changed = true;
     out.push(next);
   }
   return changed ? out : (raw as LedgerSnapshot[]);
@@ -1706,7 +2730,7 @@ export const ledgerSnapshotsFingerprint = (list: unknown): string => {
   try {
     if (!Array.isArray(list)) return '';
     return JSON.stringify(list.map((s: any) => [
-      s?.id ?? '', s?.savedAt ?? 0, s?.label ?? '', s?.auto === true,
+      s?.id ?? '', s?.savedAt ?? 0, s?.label ?? '', s?.auto === true, s?.txStripped === true,
       ledgerFingerprint(s?.books),
     ]));
   } catch { return 'ERR'; }
