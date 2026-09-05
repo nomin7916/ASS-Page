@@ -56,17 +56,23 @@ const dailyProfit = (prevEval, curEval, flowIn, flowOut) => curEval - prevEval -
 const MATERIAL_FLOW_RATIO = 0.01;
 const ABSORBED_RATIO = 0.5;
 // bookDelta(장부액 변화)가 있으면 ΔV 대신 그것으로 흡수를 판정한다(추측 → 관측).
-const shouldHold = (prevV, curV, netFlow, bookDelta) => {
-  if (prevV == null || curV == null) return true;
-  if (!(prevV > 0)) return true;
+// ⚠️ `*-idle`(bookDelta === 0 = 장부가 한 푼도 안 움직임)과 그냥 `unreflected`를 합치지 말 것 —
+//    전자만 '흐름이 확정적으로 V 밖'이라 표시를 열 수 있다(src/utils.ts holdReasonOf 주석 참조).
+const holdReasonOf = (prevV, curV, netFlow, bookDelta) => {
+  if (prevV == null || curV == null) return 'no-data';
+  if (!(prevV > 0)) return 'no-data';
   const f = netFlow || 0;
-  if (f === 0) return false;
+  if (f === 0) return null;
   const dV = curV - prevV;
-  if (dV === 0) return true;
-  if (Math.abs(f) <= prevV * MATERIAL_FLOW_RATIO) return false;
+  if (dV === 0) return bookDelta === 0 ? 'frozen-idle' : 'frozen';
+  if (Math.abs(f) <= prevV * MATERIAL_FLOW_RATIO) return null;
   const absorbed = bookDelta != null ? bookDelta : dV;
-  return f > 0 ? absorbed < f * ABSORBED_RATIO : absorbed > f * ABSORBED_RATIO;
+  const unreflected = f > 0 ? absorbed < f * ABSORBED_RATIO : absorbed > f * ABSORBED_RATIO;
+  if (!unreflected) return null;
+  return bookDelta === 0 ? 'unreflected-idle' : 'unreflected';
 };
+const shouldHold = (prevV, curV, netFlow, bookDelta) =>
+  holdReasonOf(prevV, curV, netFlow, bookDelta) != null;
 
 // 보류된 행의 미소진 흐름 이월 (src/utils.ts computeDailyMetricsSeries 미러).
 // rows: [{ date, evalAmount, flowIn, flowOut, ledger?, flowSuspect }] 오름차순
@@ -82,7 +88,7 @@ const computeDailyMetrics = (rows) => {
     const h = list[i];
     if (!h || !h.date) continue;
     if (!prev) {
-      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true });
+      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true, holdReason: 'no-prev', pendingFlow: 0 });
       prev = h;
       continue;
     }
@@ -92,19 +98,27 @@ const computeDailyMetrics = (rows) => {
     const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
     let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
     const bookDelta = h.bookDelta != null ? h.bookDelta : null;
-    let held = !!h.flowSuspect || shouldHold(prevV, h.evalAmount, fIn - fOut, bookDelta);
+    let reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
+    // held = **이월 판정**(종전과 동일한 값). 화면 보류는 아래 emitHeld — 둘을 합치지 말 것.
+    let held = reason != null;
     // ACTIVE 폐기는 bookDelta가 없을 때(추측)만 — 관측이 있으면 미반영이 확정이라 폐기 시 가짜 손익
     if (held && (carryRows >= CARRY_MAX_ROWS || (bookDelta == null && activeRows >= CARRY_MAX_ACTIVE_ROWS))) {
       carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
       fIn = ownIn; fOut = ownOut; ledger = ownLedger;
-      held = !!h.flowSuspect || shouldHold(prevV, h.evalAmount, fIn - fOut, bookDelta);
+      reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
+      held = reason != null;
     }
     const netFlow = fIn - fOut;
+    // 장부가 한 푼도 안 움직인 행은 표시를 열되(ΔV가 곧 정답) 흐름은 전액 이월한다.
+    const openRow = reason === 'unreflected-idle' || reason === 'frozen-idle';
+    const emitHeld = held && !openRow;
     out.set(h.date, {
-      dodAbsChange: held ? null : dV - netFlow,
-      dodChange: held ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, fIn, fOut),
-      ledgerFlow: held ? 0 : ledger,
-      held,
+      dodAbsChange: emitHeld ? null : (openRow ? dV : dV - netFlow),
+      dodChange: emitHeld ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, openRow ? 0 : fIn, openRow ? 0 : fOut),
+      ledgerFlow: (emitHeld || openRow) ? 0 : ledger,
+      held: emitHeld,
+      holdReason: reason,
+      pendingFlow: (emitHeld || openRow) ? netFlow : 0,
     });
     if (held && !h.flowSuspect && netFlow !== 0) {
       carryIn = fIn; carryOut = fOut; carryLedger = ledger;
@@ -527,11 +541,27 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
   // (A) 2% 인출 + 시장 +1.5% → ΔV(−50만)만 보면 보류(오탐), 장부(−200만)를 보면 반영됨이 확정
   t('반영된 출금 + 같은날 상승 → ΔV만 보면 오탐 보류', [100_000_000, 99_500_000, -2_000_000], true);
   t('반영된 출금 + 같은날 상승 → 장부 관측이면 보류 안 함', [100_000_000, 99_500_000, -2_000_000, -2_000_000], false);
-  // 미반영은 장부 관측으로도 여전히 보류돼야 한다(장부가 안 움직였으므로)
-  t('미반영 출금 → 장부도 0이라 보류 유지', [100_000_000, 100_500_000, -2_000_000, 0], true);
-  t('미반영 입금 → 장부도 0이라 보류 유지', [100_000_000, 101_000_000, 20_000_000, 0], true);
+  // ⚠️ `shouldHold`는 '**흐름이 아직 소진되지 않았다(=이월한다)**'를 뜻하며 화면의 '-'와 더 이상
+  //    1:1이 아니다. 미반영은 여기서 여전히 true(이월)지만, 장부가 정확히 0이면 표시는 열린다
+  //    (아래 사유 분류·#29c가 그 계약을 단언한다). 화면 보류를 단언하려면 computeDailyMetrics를 볼 것.
+  t('미반영 출금 → 장부도 0이라 흐름 이월 유지', [100_000_000, 100_500_000, -2_000_000, 0], true);
+  t('미반영 입금 → 장부도 0이라 흐름 이월 유지', [100_000_000, 101_000_000, 20_000_000, 0], true);
   // 비거래일 규칙은 bookDelta가 있어도 예외 없음 — V가 직전값 이월이면 흐름은 V에 없다
   t('비거래일(ΔV=0)은 장부가 바뀌어도 보류', [100_000_000, 100_000_000, -2_000_000, -2_000_000], true);
+
+  // 사유 분류 — 표시를 열지 말지를 가르는 유일한 축이다.
+  const r = (label, args, expected) => {
+    const got = holdReasonOf(...args);
+    if (got !== expected) { failed++; console.error(`  ✗ #29 사유 ${label} (기대 ${expected}, 실제 ${got})`); }
+    else console.log(`  ✓ #29 사유 ${label} = ${expected}`);
+  };
+  r('장부 불변 미반영', [100_000_000, 100_500_000, -2_000_000, 0], 'unreflected-idle');
+  r('장부가 움직인 미반영(이관·실현손익)', [100_000_000, 100_500_000, -2_000_000, -500_000], 'unreflected');
+  r('장부 관측 없음(ΔV 추측)', [100_000_000, 100_500_000, -2_000_000, null], 'unreflected');
+  r('비거래일 + 장부 불변', [100_000_000, 100_000_000, -2_000_000, 0], 'frozen-idle');
+  r('비거래일 + 장부 변동', [100_000_000, 100_000_000, -2_000_000, -2_000_000], 'frozen');
+  r('소액 면제', [100_000_000, 100_500_000, -500_000, 0], null);
+  r('흐름 0', [100_000_000, 100_500_000, 0, 0], null);
 }
 
 // #29b (A)의 시계열 — 오탐 보류가 다음 날 이중 차감으로 부호를 뒤집던 회귀.
@@ -567,15 +597,110 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     // 사용자가 예수금을 고친 날 — 장부가 −1,000만 → 이월된 출금이 여기서 정산된다
     { date: '2026-05-22', evalAmount: 93_300_000, flowIn: 0, flowOut: 0, bookDelta: -10_000_000 },
   ]);
+  // 미반영 구간은 **보류하지 않고** 그날의 시세 변동분(ΔV)을 그대로 낸다 — 장부가 한 푼도 안
+  // 움직였으므로(bookDelta === 0) 흐름은 확정적으로 V 밖이고, 뺄 것이 없다. 흐름은 전액 이월된다.
+  // ⚠️ 이 3줄이 `null`(옛 동작)로 돌아가면 출금 1건이 화면을 최대 15행 잠그고 그동안 누적 TWR
+  //    라인이 평평해진다(사용자 실측 2026-09: 09/02 출금 → 09/02~09/05 4행 '-').
   for (const d of ['2026-05-19', '2026-05-20', '2026-05-21']) {
-    if (m.get(d).dodAbsChange !== null) {
-      failed++; console.error(`  ✗ #29c ${d} 미반영 구간이 보류되지 않음 (${m.get(d).dodAbsChange})`);
+    const r = m.get(d);
+    if (r.dodAbsChange !== 1_100_000 || r.held !== false || r.ledgerFlow !== 0) {
+      failed++; console.error(`  ✗ #29c ${d} 미반영 구간이 시세 변동분으로 산출되지 않음 (${r.dodAbsChange}/${r.held}/${r.ledgerFlow})`);
+    }
+    // 흐름은 소진되지 않고 계속 이월돼야 한다 — pendingFlow가 그 증거다
+    if (r.pendingFlow !== -10_000_000) {
+      failed++; console.error(`  ✗ #29c ${d} 미반영 흐름이 이월되지 않음 (${r.pendingFlow})`);
     }
   }
-  // ⚠️ 폐기가 일어났다면 이 값이 −₩10,000,000 가짜 손실이 된다
+  console.log('  ✓ #29c 미반영 3행이 시세 변동분(+₩1,100,000)으로 산출되고 흐름은 전액 이월');
+  // ⚠️ 폐기가 일어났다면 이 값이 −₩10,000,000 가짜 손실이 된다.
+  //    이 단언이 (B) 회귀 가드의 **본체**이며 이번 변경으로 조금도 약해지지 않았다 —
+  //    `bookDelta == null &&`(ACTIVE 폐기 봉인)를 지우면 05-21에서 폐기가 일어나 여기서 잡힌다.
   if (m.get('2026-05-22').dodAbsChange !== 0) {
     failed++; console.error(`  ✗ #29c 반영일에 가짜 손실 (${m.get('2026-05-22').dodAbsChange})`);
   } else console.log('  ✓ #29c 지연 반영 출금이 소각되지 않고 반영일에 정산(₩0)');
+  // ⚠️ Σ가 0이면 실제 시장 이익 3,300,000이 통째로 사라졌다는 뜻이다(옛 동작).
+  const sum = ['2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22']
+    .reduce((s, d) => s + (m.get(d).dodAbsChange || 0), 0);
+  if (sum !== 3_300_000) {
+    failed++; console.error(`  ✗ #29c Σ 일간손익이 실제 시장 성과와 다름 (${sum})`);
+  } else console.log('  ✓ #29c Σ 일간손익 = 실제 시장 성과(+₩3,300,000)');
+}
+
+// #29e 관측이 '미반영'을 확정한 행만 열린다 — bookDelta가 0이 아니면 **종전대로 보류**해야 한다.
+//      ⚠️ 이 게이트를 `bookDelta != null`로 넓히면 아래 세 경로에서 '-'가 **확정 가짜 손익**으로
+//         승격되고, 누적 TWR은 곱셈 체인이라 그 하루가 이후 전 구간에 영구 고정된다.
+{
+  const cases = [
+    // (1) 종목 계좌 간 이관 — 시가 6,000만이 나갔는데 장부는 원가 2,000만만 빠진다(정답 ₩0)
+    ['이관 out (시가≫원가)', [
+      { date: 'a1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+      { date: 'a2', evalAmount: 40_000_000, flowIn: 0, flowOut: 60_000_000, bookDelta: -20_000_000 },
+    ], 'a2'],
+    // (2) 계좌를 비우는 이관 — 열리면 −₩1억 가짜 손실
+    ['비우는 이관', [
+      { date: 'b1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+      { date: 'b2', evalAmount: 0, flowIn: 0, flowOut: 100_000_000, bookDelta: -30_000_000 },
+    ], 'b2'],
+    // (3) 매도 실현이익이 장부를 밀어 올려 출금이 상쇄된 날(정답 ₩0)
+    ['매도 실현이익 + 같은 날 출금', [
+      { date: 'c1', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+      { date: 'c2', evalAmount: 90_000_000, flowIn: 0, flowOut: 10_000_000, bookDelta: 2_000_000 },
+    ], 'c2'],
+  ];
+  for (const [label, rows, d] of cases) {
+    const r = computeDailyMetrics(rows).get(d);
+    if (r.dodAbsChange !== null || r.held !== true) {
+      failed++; console.error(`  ✗ #29e ${label} — 관측이 애매한데 값을 단언함 (${r.dodAbsChange})`);
+    }
+  }
+  console.log('  ✓ #29e 장부가 0이 아닌 미반영 행은 종전대로 보류(이관·매도 실현이익 오판 차단)');
+}
+
+// #29f 사용자 실측 재현(2026-09) — 09/02 출금 4,550,000이 예수금에 미반영(bookDelta 0)인 구간.
+{
+  const rows = [
+    { date: '2026-09-01', evalAmount: 436_867_055, flowIn: 0, flowOut: 0, bookDelta: null },
+    { date: '2026-09-02', evalAmount: 424_658_290, flowIn: 0, flowOut: 4_550_000, bookDelta: 0 },
+    { date: '2026-09-03', evalAmount: 427_403_915, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: '2026-09-04', evalAmount: 431_640_320, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: '2026-09-05', evalAmount: 431_640_320, flowIn: 0, flowOut: 0, bookDelta: 0 }, // 토요일 이월
+  ];
+  const m = computeDailyMetrics(rows);
+  const want = { '2026-09-02': -12_208_765, '2026-09-03': 2_745_625, '2026-09-04': 4_236_405, '2026-09-05': 0 };
+  for (const [d, v] of Object.entries(want)) {
+    if (m.get(d).dodAbsChange !== v) {
+      failed++; console.error(`  ✗ #29f ${d} 기대 ${v} / 실제 ${m.get(d).dodAbsChange}`);
+    }
+  }
+  // 누적 TWR이 09/01 값에서 동결되지 않아야 한다(차트 라인 평평 회귀 가드)
+  // ⚠️ 옛 동작에서는 09/01 값(0)이 09/05까지 그대로 유지돼 차트 라인이 완전히 평평했다.
+  const twr = computeCumulativeTwr(rows);
+  const frozen = ['2026-09-02', '2026-09-03', '2026-09-04']
+    .every(d => twr.get(d) === twr.get('2026-09-01'));
+  if (frozen) {
+    failed++; console.error(`  ✗ #29f 누적 TWR이 09/01 값에 동결됨 (${twr.get('2026-09-04')})`);
+  } else console.log('  ✓ #29f 사용자 실측 4행이 산출되고 누적 TWR 동결이 풀림');
+}
+
+// #29g 하위호환의 축 — bookDelta 미제공이면 4필드가 **바이트 단위로** 종전과 같아야 한다.
+//      `unreflected-idle`/`frozen-idle`은 `bookDelta === 0`에서만 나오므로 미제공 경로는
+//      그 분기에 **구조적으로 도달할 수 없다**(논증이 아니라 구조로 보장).
+{
+  const base = [
+    { date: 'z0', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: 'z1', evalAmount: 98_000_000, flowIn: 5_000_000, flowOut: 0 },
+    { date: 'z2', evalAmount: 98_000_000, flowIn: 0, flowOut: 0 },
+    { date: 'z3', evalAmount: 99_500_000, flowIn: 0, flowOut: 3_000_000 },
+    { date: 'z4', evalAmount: 99_500_000, flowIn: 0, flowOut: 0 },
+  ];
+  const m = computeDailyMetrics(base);
+  let bad = 0;
+  for (const r of base) {
+    const x = m.get(r.date);
+    if (x.holdReason === 'unreflected-idle' || x.holdReason === 'frozen-idle') bad++;
+  }
+  if (bad) { failed++; console.error(`  ✗ #29g bookDelta 미제공인데 *-idle 분기에 진입 (${bad}건)`); }
+  else console.log('  ✓ #29g bookDelta 미제공 경로는 *-idle 분기에 도달 불가(하위호환 구조 보장)');
 }
 
 // #29d 장부 미제공(추정 구성·해외계좌)이면 기존 ΔV 휴리스틱과 **완전히 동일**해야 한다(하위호환).
@@ -760,6 +885,56 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     guard('bookCostOf 가 costBasisOnly 옵션을 지원한다', /bookCostOf\s*=\s*\(items,\s*opts/.test(utl));
     guard('buildBookCostSeries 가 opts(rateOf/costBasisOnly)를 받는다',
       /buildBookCostSeries\s*=\s*\(p,\s*dates,\s*opts/.test(utl));
+  }
+
+  // ── #30e 관측 미반영 행 열기(2026-09) — 미러로 표현할 수 없는 배선 계약 ──────────────
+  const hist = readSrc('src/components/HistoryPanel.tsx');
+  const dash = readSrc('src/components/IntegratedDashboard.tsx');
+  const g2 = (label, ok) => {
+    if (ok) console.log(`  ✓ #30e ${label}`);
+    else { failed++; console.error(`  ✗ #30e ${label}`); }
+  };
+  if (!utl || !intg || !hist || !dash) {
+    failed++; console.error('  ✗ #30e 소스 파일을 읽지 못했습니다(경로 변경?)');
+  } else {
+    // ⚠️ 열림 게이트를 `bookDelta != null`로 넓히면 이관·매도실현이익 오판 행에서 '-'가
+    //    확정 가짜 손익으로 승격된다(#29e가 값으로, 이 가드가 조건식으로 막는다).
+    g2("열림 게이트가 사유 두 종에만 걸린다(bookDelta != null 로 넓히지 않았다)",
+      /const\s+openRow\s*=\s*reason\s*===\s*'unreflected-idle'\s*\|\|\s*reason\s*===\s*'frozen-idle'/.test(utl));
+    g2("*-idle 사유는 bookDelta === 0 에서만 나온다",
+      /return\s+bookDelta\s*===\s*0\s*\?\s*'unreflected-idle'\s*:\s*'unreflected'/.test(utl)
+      && /return\s+bookDelta\s*===\s*0\s*\?\s*'frozen-idle'\s*:\s*'frozen'/.test(utl));
+    // ⚠️ 폐기 조건식은 무수정이어야 한다 — `!carryObserved` 같은 절을 끼워 넣으면 혼합 체인에서
+    //    상한이 통째로 죽어 '-' 잠금이 무한히 길어진다(적대적 검증 실측 59행).
+    g2('폐기 조건식이 종전 그대로다(추가 절 없음)',
+      /if\s*\(held\s*&&\s*\(carryRows\s*>=\s*CARRY_MAX_ROWS\s*\|\|\s*\(bookDelta\s*==\s*null\s*&&\s*activeRows\s*>=\s*CARRY_MAX_ACTIVE_ROWS\)\)\)/.test(utl));
+    // ⚠️ 이월 축적은 표시(emitHeld)가 아니라 **이월 판정(held)** 기준이어야 한다.
+    g2('이월 축적이 held(이월 판정) 기준이다',
+      /if\s*\(held\s*&&\s*!h\.flowSuspect\s*&&\s*netFlow\s*!==\s*0\)/.test(utl));
+    // ⚠️ 표시 전용 필드가 값 산식에 새면 함수가 자기 출력을 되먹는다.
+    const valueExpr = (utl.match(/dodAbsChange:\s*emitHeld[^\n]*\n[^\n]*dodChange:[^\n]*\n[^\n]*ledgerFlow:[^\n]*/) || [''])[0];
+    g2('값 산식에 표시 전용 필드(holdReason/pendingFlow)가 없다',
+      valueExpr.length > 0 && !/holdReason|pendingFlow/.test(valueExpr));
+    g2('통합이 pendingFlow 를 행에 실어 보낸다', /pendingFlow:\s*m\.pendingFlow\s*\|\|\s*0/.test(intg));
+    g2('헤더 카드가 미반영 행에서도 pendingFlow 를 읽는다',
+      /todayPendingFlow\s*=\s*todayHeld\s*\?[^\n]*ledgerFlow[^\n]*:\s*\(todayRec\?\.pendingFlow\s*\?\?\s*0\)/.test(dash));
+    // ⚠️ 배지가 `todayHeld ?` 삼항 **안**으로 들어가면 관측 미반영 행(held=false)에서
+    //    미반영 입출금을 알리는 유일한 신호가 구조적으로 사라진다.
+    const card = (dash.match(/오늘 수익 \(\{todayRec[\s\S]*?전체 수익율/) || [''])[0];
+    const tern = card.indexOf('{todayHeld ? (');
+    const close = card.indexOf(')}', card.indexOf(') : ('));
+    const badge = card.indexOf('반영 대기');
+    // ⚠️ **위치만** 재면 죽은 단언이 된다(변이 실측) — 배지를 밖에 두고 조건에 `todayHeld &&`나
+    //    `false &&`를 끼워 넣으면 그대로 통과한다. 조건식 리터럴까지 함께 못 박는다.
+    g2('반영 대기 배지가 todayHeld 삼항 밖에 있고 조건이 pendingFlow 단독이다',
+      tern >= 0 && close > tern && badge > close && /\{todayPendingFlow !== 0 && \(/.test(card));
+    g2('추이표 툴팁이 공유 포매터(holdReasonText)를 쓴다',
+      /holdReasonText\(/.test(hist) && /holdReasonText\(/.test(dash));
+    // ⚠️ 미반영 흐름이 있는 행에 '입출금이 없던 날'이라 단언하면 실제 출금일에 거짓말이 된다.
+    //    ⚠️ '문구가 어느 분기에 있나'만 재면 죽은 단언이다(변이 실측) — 그 분기가 실제로
+    //    holdReasonText 를 부르는지(=진단으로 **대체**했는지)를 본다.
+    g2("미반영 행(pendingNet !== 0)이 '입출금이 없던 날' 대신 진단 문구를 낸다",
+      /pendingNet\s*!==\s*0\s*\n?\s*\?\s*holdReasonText\(/.test(hist));
   }
 }
 

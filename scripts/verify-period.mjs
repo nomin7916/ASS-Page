@@ -481,8 +481,11 @@ ok('#G26b 개별은 평가자산 셀과 같은 소스(shownEvalOf)를 쓴다',
   /const pe = shownEvalOf\(viewRows\[i \+ 1\]\), ce = shownEvalOf\(h\);/.test(histNoC));
 
 // ⚠️ hideAmounts면 툴팁을 아예 만들지 않는다 — 셀은 가려 놓고 hover에 실금액을 노출하면 반쪽이 된다.
+// ⚠️ 2026-09: 손익 셀 title 이 3분기(hideAmounts / 기간 모드 / 미반영 흐름 진단)로 늘면서
+//    `isHistPeriodMode && !hideAmounts ?` 리터럴이 사라졌다. 계약은 **더 강해졌다** —
+//    hideAmounts 가 맨 앞에서 전 분기를 단락시킨다. 정규식만 그 형태로 갱신한다.
 ok('#G27 통합 손익 툴팁이 hideAmounts를 존중한다',
-  /title=\{isHistPeriodMode && !hideAmounts \? periodGapLines\(/.test(dashNoC));
+  /title=\{hideAmounts \? undefined[\s\S]{0,80}?isHistPeriodMode \? periodGapLines\(/.test(dashNoC));
 // ⚠️ 툴팁 추가가 **값을 바꾸지 않았는지** 재확인(사용자 확정: 산식 무변경).
 ok('#G27b 통합 기간 값은 여전히 누적 차분이다',
   /dodAbsChange: noBase \? null : cp - cpP,/.test(dashNoC) &&

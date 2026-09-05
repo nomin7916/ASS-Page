@@ -338,19 +338,35 @@ export const dailyFlowAdjustedRate = (prevEval, curEval, flowIn, flowOut) => {
 const MATERIAL_FLOW_RATIO = 0.01;  // 이 비율 이하의 소액 흐름은 (거래일에 한해) 판정 대상 아님
 const ABSORBED_RATIO = 0.5;        // 흐름 방향으로 절반 이상 움직였으면 '반영됨'으로 본다
 // bookDelta(장부액 변화, 있으면 우선) — 없으면 ΔV 휴리스틱으로 폴백해 기존 동작을 그대로 유지한다.
-export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow, bookDelta) => {
-  if (prevEval == null || curEval == null) return true;
-  if (!(prevEval > 0)) return true;
+//
+// 반환 사유(⚠️ 판정 순서 자체는 종전과 한 줄도 다르지 않다 — boolean이 사유 문자열로 넓어졌을 뿐):
+//   null              보류 아님
+//   'no-data'         비교 대상이 없음
+//   'frozen'          ΔV === 0 (비거래일 carry-forward). 장부는 움직였거나 알 수 없음
+//   'frozen-idle'     ΔV === 0 **이고** 장부도 그대로 → 그날은 정말 아무 일도 없었다
+//   'unreflected-idle' 장부가 **한 푼도** 안 움직였다(bookDelta === 0) → 흐름이 확정적으로 V 밖
+//   'unreflected'     그 외 미반영 판정(관측이 애매하거나 ΔV 추측)
+//
+// ⚠️ `*-idle`(bookDelta === 0)과 그냥 `unreflected`를 절대 합치지 말 것.
+//    평가액(buildCloseEvalSeries)과 장부액(buildBookCostSeries)은 **같은 resolveHoldings 스냅샷**을
+//    읽으므로, bookDelta가 정확히 0이면 예수금·수량·매입원가가 전부 그대로 = ΔV는 순수 시세 변동이고
+//    흐름은 1원도 V에 없다(구조적 보장). 반면 bookDelta가 0이 아니면 구성이 바뀐 것이고 그 변화가
+//    흐름의 어느 부분인지 알 수 없다 — 이관은 **시가**로 나가는데 장부는 **원가**만 빠지고
+//    (실측: 시가 6,000만 이관 → bookDelta −2,000만 → 미반영 오판), 매도 실현손익도 장부를 움직인다.
+//    그 상태에서 값을 단언하면 '-'가 **확정 가짜 손익**으로 승격돼 TWR 곱셈 체인에 영구 고정된다.
+export const holdReasonOf = (prevEval, curEval, netFlow, bookDelta) => {
+  if (prevEval == null || curEval == null) return 'no-data';
+  if (!(prevEval > 0)) return 'no-data';
   const f = netFlow || 0;
-  if (f === 0) return false;
+  if (f === 0) return null;
   const dV = curEval - prevEval;
   // ⚠️ 비거래일 carry-forward 행(ΔV가 정확히 0)은 시장 정보가 전혀 없어 어떤 크기의 흐름도
   //    이 행에 반영될 수 없다 → 아래 소액 하한보다 **먼저** 판정해야 한다. 하한을 먼저 두면
   //    전일V의 1% 이하 입금(월 적립식 등)이 주말 원장에서 통째로 새어 가짜 손실이 된다.
   //    ⚠️ bookDelta가 있어도 이 규칙엔 예외를 두지 말 것 — 장부가 바뀌었어도 평가액 시계열이
-  //    직전값 이월이면 그 흐름은 실제로 V에 안 들어 있다.
-  if (dV === 0) return true;
-  if (Math.abs(f) <= prevEval * MATERIAL_FLOW_RATIO) return false;
+  //    직전값 이월이면 그 흐름은 실제로 V에 안 들어 있다(흐름은 계속 이월된다).
+  if (dV === 0) return bookDelta === 0 ? 'frozen-idle' : 'frozen';
+  if (Math.abs(f) <= prevEval * MATERIAL_FLOW_RATIO) return null;
   // ⚠️ 흡수 판정의 근거는 ΔV보다 **장부액 변화(bookDelta = Σ(예수금+매입원가)의 전일 대비 변화)** 가
   //    정확하다. 장부액은 시세로 변하지 않고 외부 입출금으로만 변하므로 '흐름이 V에 들어왔는가'를
   //    추측이 아니라 관측으로 답한다. ΔV로만 보면 (a) 정상 반영된 출금이 같은 날 시장이 오르면
@@ -359,8 +375,15 @@ export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow, bookDelta) =>
   // ⚠️ 부호까지 본다. Math.abs로 비교하면 흐름과 반대 방향 변동을 '흡수 증거'로 오인해
   //    (입금일에 하락 등) 보류가 풀리고 흐름 전액이 손익으로 계상된다.
   const absorbed = bookDelta != null ? bookDelta : dV;
-  return f > 0 ? absorbed < f * ABSORBED_RATIO : absorbed > f * ABSORBED_RATIO;
+  const unreflected = f > 0 ? absorbed < f * ABSORBED_RATIO : absorbed > f * ABSORBED_RATIO;
+  if (!unreflected) return null;
+  return bookDelta === 0 ? 'unreflected-idle' : 'unreflected';
 };
+// ⚠️ 이 함수는 '**흐름이 아직 소진되지 않았다**'(=이월한다)를 뜻하며, 화면의 '-'와는 더 이상
+//    1:1이 아니다(`*-idle`은 이월하되 표시는 연다). 화면 보류를 단언하려면 반드시
+//    `computeDailyMetricsSeries`의 `held`를 볼 것.
+export const shouldHoldDailyMetrics = (prevEval, curEval, netFlow, bookDelta) =>
+  holdReasonOf(prevEval, curEval, netFlow, bookDelta) != null;
 
 // 장부액(원가 기준) = Σ(예수금 + 매입원가). 시세로는 변하지 않고 **외부 입출금으로만** 변한다.
 // ⚠️ 알려진 한계: 매도하면 예수금이 매입원가보다 실현손익만큼 더 늘어 bookDelta가 그만큼 움직인다.
@@ -452,7 +475,7 @@ export const computeDailyMetricsSeries = (rows) => {
     if (!prev) {
       // 첫 행은 비교 대상이 없다. ⚠️ 이 행의 흐름을 이월하지 말 것 — 계좌 편입 평가액이라
       //    이미 V에 반영돼 있어, 이월하면 두 번째 행이 그만큼 가짜 손실로 찍힌다.
-      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true });
+      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true, holdReason: 'no-prev', pendingFlow: 0 });
       prev = h;
       continue;
     }
@@ -463,7 +486,10 @@ export const computeDailyMetricsSeries = (rows) => {
     // 1차 — 이월을 실은 채 판정한다. 이 행이 흐름을 흡수했다면(held=false) 이월을 그대로 소비한다.
     let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
     const bookDelta = h.bookDelta != null ? h.bookDelta : null;
-    let held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut, bookDelta);
+    let reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
+    // ⚠️ `held`는 **이월 판정**이다(종전과 완전히 동일한 값). 화면 보류 여부는 아래 `emitHeld`이며,
+    //    둘을 다시 하나로 합치지 말 것 — 이월·폐기 로직이 표시 정책에 끌려다니게 된다.
+    let held = reason != null;
     // 2차 — 여전히 보류인데 상한을 넘겼으면 이월을 폐기하고 자기 흐름만으로 재산출한다.
     // ⚠️ 폐기를 '루프 진입부에서 무조건'으로 되돌리지 말 것 — 흐름을 흡수하는 바로 그 행에서
     //    이월이 버려져 입금액 전액이 하루 수익으로 찍힌다(고치려던 +9.10% 버그가 그대로 재현).
@@ -474,15 +500,31 @@ export const computeDailyMetricsSeries = (rows) => {
     if (held && (carryRows >= CARRY_MAX_ROWS || (bookDelta == null && activeRows >= CARRY_MAX_ACTIVE_ROWS))) {
       carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
       fIn = ownIn; fOut = ownOut; ledger = ownLedger;
-      held = !!h.flowSuspect || shouldHoldDailyMetrics(prevV, h.evalAmount, fIn - fOut, bookDelta);
+      reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
+      held = reason != null;
     }
     const netFlow = fIn - fOut;
+    // ⚠️ 장부가 한 푼도 안 움직인 행(`*-idle`)은 **표시를 보류하지 않는다**.
+    //    bookDelta === 0 이면 예수금·수량·매입원가가 전부 그대로이므로 그 행의 ΔV는 정의상
+    //    순수 시세 변동이고 흐름은 1원도 V에 없다 → 뺄 것이 없으니 ΔV가 곧 그날의 정답이다.
+    //    현행처럼 '-'로 가리면 **시장 손익까지 함께 삼켜지고**(실측: 출금 1건이 최대 15행을
+    //    잠그고 누적 TWR 라인이 그동안 평평해진다) 사용자는 그 며칠의 성과를 볼 방법이 없다.
+    //    ⚠️ 흐름은 **한 푼도 차감하지 않고 전액 이월**한다(아래 축적 블록은 `held` 기준 무수정) —
+    //    반영일(bookDelta가 실제로 움직이는 날)에 정산된다. `ledgerFlow`도 0이어야 배지가
+    //    '이 행에서 보정에 쓰인 흐름'이라는 의미를 유지한다.
+    //    ⚠️ 조건을 `bookDelta != null`로 넓히지 말 것 — 이관(시가로 나가고 원가만 빠짐)·
+    //    매도 실현손익이 섞인 행에서 '-'가 확정 가짜 손익으로 승격돼 TWR에 영구 고정된다.
+    const openRow = reason === 'unreflected-idle' || reason === 'frozen-idle';
+    const emitHeld = held && !openRow;
     out.set(h.date, {
-      dodAbsChange: held ? null : dV - netFlow,
-      dodChange: held ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, fIn, fOut),
+      dodAbsChange: emitHeld ? null : (openRow ? dV : dV - netFlow),
+      dodChange: emitHeld ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, openRow ? 0 : fIn, openRow ? 0 : fOut),
       // 배지는 실제로 보정에 쓰인 행에만 — 이월 중인 행에 찍으면 %와 어긋나 보인다
-      ledgerFlow: held ? 0 : ledger,
-      held,
+      ledgerFlow: (emitHeld || openRow) ? 0 : ledger,
+      held: emitHeld,
+      // 표시 전용 2필드 — ⚠️ 값 계산(dodAbsChange/dodChange/ledgerFlow)에 절대 쓰지 말 것.
+      holdReason: reason,
+      pendingFlow: (emitHeld || openRow) ? netFlow : 0,
     });
     // flowSuspect(오늘 라이브 이상치)는 항상 마지막 행이라 이월 대상이 아니다
     if (held && !h.flowSuspect && netFlow !== 0) {
@@ -498,6 +540,41 @@ export const computeDailyMetricsSeries = (rows) => {
     prev = h;
   }
   return out;
+};
+
+// 보류·미반영 진단 문구 — `computeDailyMetricsSeries`의 `holdReason`/`pendingFlow`를 사람 말로 옮긴다.
+// ⚠️ 화면마다 손복제 금지(periodNoun·avgAdjTooltip과 같은 규약) — 개별 추이표·통합 표가 갈리면
+//    같은 날짜에 서로 다른 설명이 뜬다.
+// ⚠️ 옛 문구 '(다음 기록일에 합산)'은 `unreflected`(관측 없음/애매)에서만 참이다. 장부 관측이
+//    '미반영'을 확정한 행에서는 다음 기록일에도 같은 판정이 반복되므로 그 문구가 거짓이 된다.
+// opts: { pendingFlow, fmt, unit } — fmt는 금액 포매터(미전달 시 금액을 말하지 않는다).
+export const holdReasonText = (reason, opts?) => {
+  const o = opts || {};
+  const flow = cleanNum(o.pendingFlow);
+  const unit = o.unit || '일간';
+  const money = (typeof o.fmt === 'function' && flow !== 0) ? o.fmt(Math.abs(flow)) : '';
+  const dir = flow > 0 ? '입금' : '출금';
+  const pending = money
+    ? `원장 ${dir} ${money}이 아직 평가액에 반영되지 않아 이 값에서 제외했습니다.`
+    : '원장 입출금이 아직 평가액에 반영되지 않아 이 값에서 제외했습니다.';
+  switch (reason) {
+    case 'unreflected-idle':
+      return [pending,
+        '장부액(예수금+매입원가)이 전일과 같습니다 — 포트폴리오 표의 예수금이 아직 줄지/늘지 않았다는 뜻입니다.',
+        `표시된 값은 그날의 시세 변동분입니다. 그 날짜의 자산검증에서 예수금을 맞추면 정산됩니다.`].join('\n');
+    case 'frozen-idle':
+      return [`비거래일이라 평가액이 직전 거래일 종가 그대로입니다(${unit} 변동 0).`, pending].join('\n');
+    case 'frozen':
+      return `비거래일이라 평가액이 직전 거래일 종가 그대로입니다 — 이 행에는 입출금을 반영하지 않고 다음 기록일로 넘깁니다.`;
+    case 'unreflected':
+      return `입출금이 평가액에 반영됐는지 확인할 수 없어 산출을 보류했습니다(다음 기록일에 합산).`;
+    case 'suspect':
+      return '오늘 시세가 아직 다 로드되지 않아 산출을 보류했습니다.';
+    case 'no-prev':
+      return '비교할 이전 기록이 없어 산출하지 않습니다.';
+    default:
+      return '입출금 기록과 평가 스냅샷이 어긋나 산출을 보류했습니다(다음 기록일에 합산).';
+  }
 };
 
 // 누적 TWR(Time-Weighted Return) — 일간 보정 수익률의 곱셈 체인. 개별 계좌 차트 '조회시작 0%' 모드의 라인.

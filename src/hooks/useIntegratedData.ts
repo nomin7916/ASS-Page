@@ -664,7 +664,9 @@ export function useIntegratedData({
       const ep = h.effectivePrincipal > 0 ? h.effectivePrincipal : intTotals.totalPrincipal;
       const monthlyChange = ep > 0 ? ((h.evalAmount - ep) / ep) * 100 : 0;
       const m = metrics.get(h.date) || { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true };
-      return { ...h, monthlyChange, dodChange: m.dodChange, dodAbsChange: m.dodAbsChange, netFlow: m.ledgerFlow };
+      // pendingFlow = 아직 평가액에 반영되지 않아 이 행에서 차감하지 않은 원장 흐름(표시 전용).
+      // ⚠️ netFlow(=보정에 실제로 쓰인 흐름)와 배타적이다 — 합치면 '반영 대기' 안내가 정상 행에도 뜬다.
+      return { ...h, monthlyChange, dodChange: m.dodChange, dodAbsChange: m.dodAbsChange, netFlow: m.ledgerFlow, pendingFlow: m.pendingFlow || 0 };
     });
   }, [computedIntHistory, intTotals.totalPrincipal]);
 

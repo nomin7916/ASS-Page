@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, holdReasonText, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
 import HistPeriodSeg from './HistPeriodSeg';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
@@ -340,6 +340,10 @@ export default function HistoryPanel({
                     const dod = m.dodChange;
                     const dodProfit = m.dodAbsChange;
                     const flowNet = m.ledgerFlow || 0;
+                    // 아직 평가액에 반영되지 않아 이 행에서 **차감하지 않은** 원장 흐름(표시 전용).
+                    // ⚠️ flowNet(=보정에 실제로 쓰인 흐름)과 절대 합치지 말 것 — 둘은 배타적이고,
+                    //    합치면 "입출금이 없던 날" 문구가 실제로 출금한 날에 붙는다.
+                    const pendingNet = m.pendingFlow || 0;
                     const cum = cumulativeByDate.get(h.date) || null;
                     // ⚠️ 반드시 **화면 행** 기준. sortedHistoryDesc.length로 재면 기간 모드에서
                     //    가장 오래된 행(비교 대상이 구조적으로 없어 '-'인 행)에 '입출금 불일치로
@@ -381,15 +385,20 @@ export default function HistoryPanel({
                             ? `입금 ${formatCurrency(flowNet)}은 수익이 아니라 ${isPeriodMode ? `${noun.span} 시작 자산` : '그날의 시작 자산'}에 더해짐`
                             : flowNet < 0
                               ? `출금 ${formatCurrency(-flowNet)}은 수익이 아니라 ${isPeriodMode ? '각 날의 평가자산' : '당일 평가자산'}에 되더해 계산됨`
-                              : (isPeriodMode
-                                  ? `${noun.span}에 입출금이 없었습니다 — 일별 수익률의 곱과 동일`
-                                  : '입출금이 없던 날 — (당일 − 전일) ÷ 전일 과 동일'),
+                              // ⚠️ 미반영 흐름이 있는 행에 '입출금이 없던 날'이라 쓰지 말 것 —
+                              //    사용자가 실제로 출금한 날에 정면으로 거짓말이 된다(flowNet은 0이지만
+                              //    그건 '차감하지 않았다'는 뜻이지 '원장이 비었다'는 뜻이 아니다).
+                              : pendingNet !== 0
+                                ? holdReasonText(m.holdReason, { pendingFlow: pendingNet, fmt: formatCurrency, unit: noun.unit })
+                                : (isPeriodMode
+                                    ? `${noun.span}에 입출금이 없었습니다 — 일별 수익률의 곱과 동일`
+                                    : '입출금이 없던 날 — (당일 − 전일) ÷ 전일 과 동일'),
                           ...gapTail,
                         ].join('\n')
                       : (hasPrev
                           ? (isPeriodMode
                               ? `입출금 기록과 평가 스냅샷이 어긋나 산출을 보류했습니다(다음 ${noun.unit} 구간에 합산).`
-                              : '입출금 기록과 평가 스냅샷이 어긋나 산출을 보류했습니다(다음 기록일에 합산).')
+                              : holdReasonText(m.holdReason, { pendingFlow: pendingNet || flowNet, fmt: formatCurrency, unit: noun.unit }))
                           : (isPeriodMode ? '비교할 이전 기간이 없어 산출하지 않습니다.' : ''));
                     // ⚠️ 기간 모드에서 날짜 동등 비교를 쓰지 말 것 — getEffectiveDateKR()는
                     //    21:00~09:00에 **null**이라 그 12시간 동안 하이라이트가 통째로 사라지고,

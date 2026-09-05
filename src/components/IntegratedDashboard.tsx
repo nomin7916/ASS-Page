@@ -456,7 +456,10 @@ export default function IntegratedDashboard({
               const todayRate = todayRec?.dodChange ?? 0;
               // 보류 행은 '-'만 뜨면 이유를 알 수 없으므로 방향(입금/출금)만 안내한다.
               // ⚠️ 금액은 표기하지 않는다 — 입출금 금액 배지 비표시 규약(CLAUDE.md).
-              const todayPendingFlow = todayHeld ? (todayRec?.ledgerFlow ?? 0) : 0;
+              // ⚠️ 보류 행뿐 아니라 **관측 미반영 행**(장부가 안 움직여 흐름을 차감하지 않고 이월한
+              //    행 — 값은 나오지만 원장 흐름은 아직 반영 전)에도 반드시 안내한다. 이 배지가
+              //    빠지면 미반영 입출금을 알릴 화면상 신호가 통째로 사라진다.
+              const todayPendingFlow = todayHeld ? (todayRec?.ledgerFlow ?? 0) : (todayRec?.pendingFlow ?? 0);
               return (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
@@ -466,14 +469,7 @@ export default function IntegratedDashboard({
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
                     <span className="text-gray-400 text-[11px] font-bold">오늘 수익 ({todayRec?.date || '-'})</span>
                     {todayHeld ? (
-                      <>
-                        <span className="text-lg font-extrabold text-gray-500" title="입출금 기록과 평가 스냅샷이 어긋나 일간 지표를 보류했습니다.">-</span>
-                        {todayPendingFlow !== 0 && (
-                          <span className="text-[10px] font-bold text-amber-400">
-                            {todayPendingFlow > 0 ? '입금' : '출금'} 반영 대기
-                          </span>
-                        )}
-                      </>
+                      <span className="text-lg font-extrabold text-gray-500" title="입출금 기록과 평가 스냅샷이 어긋나 일간 지표를 보류했습니다.">-</span>
                     ) : (
                       <>
                         <span className={`text-lg font-extrabold ${todayProfit >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
@@ -483,6 +479,15 @@ export default function IntegratedDashboard({
                           {todayRate >= 0 ? '+' : ''}{todayRate.toFixed(2)}%
                         </span>
                       </>
+                    )}
+                    {/* ⚠️ 이 배지를 todayHeld 분기 **안**으로 되돌리거나 조건에 todayHeld 를 더하지 말 것 —
+                        관측 미반영 행은 값이 나오면서(held=false) 흐름만 이월 중이라, 그러면 미반영
+                        입출금을 알리는 유일한 신호가 구조적으로 사라진다. */}
+                    {todayPendingFlow !== 0 && (
+                      <span className="text-[10px] font-bold text-amber-400"
+                        title="원장에 기록된 입출금이 아직 평가액(예수금)에 반영되지 않아 이 값에서 제외했습니다. 반영되는 날 정산됩니다.">
+                        {todayPendingFlow > 0 ? '입금' : '출금'} 반영 대기
+                      </span>
                     )}
                   </div>
                   <div className="bg-[#1e293b] rounded-xl border border-gray-700 p-4 flex flex-col gap-1">
@@ -956,8 +961,14 @@ export default function IntegratedDashboard({
                           </td>
                           {/* ⚠️ hideAmounts면 툴팁을 아예 만들지 않는다 — 셀은 가려 놓고 hover에
                               실금액을 노출하면 '금액 숨기기'가 반쪽이 된다. */}
-                          <td className={`py-2 px-2 text-center border-r border-gray-700 whitespace-nowrap ${isHistPeriodMode && !hideAmounts ? 'cursor-help' : ''}`}
-                              title={isHistPeriodMode && !hideAmounts ? periodGapLines({ prevEval: h.periodPrevEval, curEval: h.evalAmount, profit: h.dodAbsChange, ledger: h.ledgerFlow, fmt: formatCurrency, unit: histNoun.unit, prevDate: h.periodPrevDate, curDate: h.date }).join('\n') : undefined}>
+                          {/* 미반영 흐름 진단 — 관측(장부액)이 '아직 V 밖'을 확정해 흐름을 차감하지
+                              않고 이월한 행. 값은 그날의 시세 변동분이며, 이 툴팁이 없으면 사용자는
+                              원장 입출금이 아직 반영 전이라는 사실을 알 방법이 없다. */}
+                          <td className={`py-2 px-2 text-center border-r border-gray-700 whitespace-nowrap ${(isHistPeriodMode || h.pendingFlow) && !hideAmounts ? 'cursor-help' : ''}`}
+                              title={hideAmounts ? undefined
+                                : isHistPeriodMode ? periodGapLines({ prevEval: h.periodPrevEval, curEval: h.evalAmount, profit: h.dodAbsChange, ledger: h.ledgerFlow, fmt: formatCurrency, unit: histNoun.unit, prevDate: h.periodPrevDate, curDate: h.date }).join('\n')
+                                : h.pendingFlow ? holdReasonText(h.dodAbsChange == null ? 'unreflected' : 'unreflected-idle', { pendingFlow: h.pendingFlow, fmt: formatCurrency })
+                                : undefined}>
                             {hideAmounts ? (
                               <span className="text-gray-500">••••••</span>
                             ) : h.dodAbsChange != null ? (
