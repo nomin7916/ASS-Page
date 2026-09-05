@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
-import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, selectionDimBands, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, selectionDimBands, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine, periodBasisLines, holdReasonText } from '../utils';
 import { CHART_SELECTION } from '../design';
 
 const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
