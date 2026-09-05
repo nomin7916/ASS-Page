@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { fetchIndexData, fetchStockInfo, fetchUsStockInfo, fetchUsStockHistory, fetchNaverDomesticHistory, fetchNaverStockHistory, fetchKISStockHistory, fetchFundInfo, fetchFundNavHistory, fetchMiraeFundInfo, fetchMiraeFundNavHistory, fetchNaverKospi } from '../api';
 import { buildIndexStatus, cleanNum, isWeekend, savingsEval } from '../utils';
 import { getEffectiveDate, getEffectiveDateForAccount, getMsUntilCutoff, isNonTradingDayForAccount, getTodayKST, getKrSettledTodayDate } from './useMarketCalendar';
-import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays, mergeCodeHistory, applyStagedMerges, mergeStagedPatch } from '../stockHistorySync';
+import { planKorHistoryFetch, markerLastDateOf, shiftIsoDays, mergeCodeHistory, applyStagedMerges, mergeStagedPatch, mergeStockMeta } from '../stockHistorySync';
 import type { StagedCodeMerge } from '../stockHistorySync';
 
 // 이력 패스 워치독(ms) — 스트림(KIS·US·NAV)이 이 시간 안에 못 끝나면 도착분만 커밋하고 settled(partial=true)로 강등한다.
