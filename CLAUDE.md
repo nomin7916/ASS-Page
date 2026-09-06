@@ -5937,6 +5937,92 @@ markAsRead() / clearNotificationLog()
 - **소프트 상한**: 수동 그룹 30 / 그룹당 종목 100 / 최근조회 20. localStorage·sessionStorage 미사용
   (멀티계정 오염 방지 — 브라우저 저장소 정책).
 
+**그룹 = 좌측 세로 사이드바 (2026-09 사용자 요청, ⚠️ 가로 스크롤 칩 행으로 되돌리지 말 것)**
+
+옛 구조는 그룹을 **가로 스크롤 칩 한 줄**(`overflow-x-auto whitespace-nowrap`)로 늘어놓아, 그룹이
+늘수록 어떤 그룹이 있는지 한눈에 안 보이고 끝 그룹은 스크롤해야 닿았다(활성 칩에만 붙던 ✏️/🗑도 그
+스크롤을 따라다녔다). 세로 목록은 30개(`MAX_GROUPS`)까지 자연스러운 세로 스크롤로 받아낸다.
+
+- **⚠️ `PANEL_W = 640 + SIDEBAR_W`는 한 세트다.** 640은 "긴 국내 ETF명 한 줄 표시"를 위해 계산된
+  값(고정 열 ≈330px + 종목명 ≈310px)이라, 폭을 안 늘리고 사이드바만 넣으면 종목명이 그만큼
+  쪼그라들어 그 640px의 존재 이유가 통째로 무너진다. `SIDEBAR_W`는 그립 14 + 종목 수 배지 +
+  ✏️/🗑을 넣고도 그룹명 ≈100px가 남는 값(180)이다.
+- **✏️/🗑은 행 hover**(활성 칩 전용에서 전환), 종목 수 배지, 삭제 확인에 **그룹명 표시**.
+- **사이드바 접기**(`sidebarOpen`)는 세션 로컬 — **Drive 저장 지점 0곳**(뷰 선호도이고 클릭 한
+  번으로 복구된다). ⚠️ 접힌 상태의 **펼치기 버튼은 유일한 복귀 경로**라 반드시 렌더할 것.
+  ⚠️ 접으면 어느 그룹을 보고 있는지 화면에서 사라지므로 **제목에 활성 그룹명을 병기**한다.
+  ⚠️ 빈 상태의 '그룹 추가' 버튼은 `setSidebarOpen(true)`를 함께 부른다 — 이름 입력창이 사이드바
+  안에 있어, 접힌 채로 두면 눌러도 아무 일도 안 일어난 것처럼 보인다.
+
+**그룹 순서 드래그 (수동 그룹 전용 · 최근조회 자리 고정)**
+
+- **⚠️ 이 기능의 유일한 함정: `recordRecent`가 최근조회를 **항상 배열 맨 앞**에 다시 붙인다**
+  (`[{최근조회}, ...others]`). 그 위로 끌어 놓으면 등락율을 **한 번만 클릭해도** 순서가 조용히
+  원복돼 사용자에겐 '드래그가 안 먹는' 것으로 보인다 → 자동 그룹은 **드래그 대상도 아니고 자리도
+  고정**이다(종목 드래그의 `isAutoGroup` 게이트와 같은 근거). 대신 `recordRecent`가 `others`의
+  순서는 보존하므로 수동 그룹끼리의 재정렬은 안전하다.
+- **⚠️ 산술의 정본은 `src/watchlistGroups.ts`**(순수 모듈, **import 0건** — `verify:watchlist`가
+  미러 없이 직접 import한다. `enum`/`namespace` 금지). `reorderManualWatchGroups`는 **자동 그룹이
+  있던 인덱스를 그대로 두고 수동 그룹만 그 사이 슬롯에 다시 깐다** — 최근조회 맨 앞 고정이 산술이
+  아니라 **구조**로 보장된다. `isAutoWatchGroup`·`manualWatchGroupIds`도 이 모듈이 정본이고,
+  컴포넌트에서 손복제하면 그 경로만 조용히 원복된다.
+- **⚠️ 좌표계 일치**: 드롭 인덱스는 `[data-watch-group]` 행 수로 재고 그 속성은 **수동 그룹에만**
+  붙는다(`data-watch-group={isAuto ? undefined : ''}`). 자동 그룹에 붙이면 `manualWatchGroupIds`와
+  좌표계가 1만큼 어긋나 드롭이 한 칸씩 빗나간다.
+- **⚠️ 순서 변화가 없으면 같은 참조를 반환**한다. 순서는 `watchlistGroups` **배열 자체를 재정렬**해
+  기존 지문(`portfolioStructureKey`의 `JSON.stringify`)이 그대로 잡으므로 **영속화 신규 지점 0곳**이고,
+  새 배열을 항상 만들면 제스처마다 헛된 Drive 저장이 나간다. ⚠️ `order` 필드를 만들지 말 것
+  (정규화·지문·복원 등록이 늘고 하나만 빠지면 조용히 유실 — 종목 순서 드래그와 같은 규약).
+- 정렬 중(`sortDir !== null`)·읽기 전용에서는 꺼진다(보이는 순서 = 저장 순서일 때만 이동 허용).
+
+**별도 브라우저 창 (`/?watchlistWindow=1`) — postMessage 브릿지 (⚠️ 회귀 주의)**
+
+인앱 팝업 타이틀바의 **⧉ 버튼**(`onOpenWindow`)으로 연다. 기존 5개 창(달력·흐름도·백테스트·카드·
+가계부)과 **같은 규약**(App 미마운트 · `noopener` **금지** · `ping.need`가 초기 전송의 유일한 트리거 ·
+재입양 · 끊기면 `readOnly` · 자체 `ErrorBoundary label` · 팝업 차단 시 인앱 폴백 · `features` 인자 금지).
+
+- **✅ 다른 창들보다 단순한 이유: 시세를 창이 스스로 조회한다.** `watchlistQuote.ts` → `api.ts`의
+  fetcher는 공개 프록시/Edge 함수만 쓰고 인증 토큰도 Drive도 필요 없다 → 브릿지는 `watchlistGroups`
+  배열 하나만 양방향으로 나르는 **단일 채널**이다. ⚠️ 채널을 둘로 쪼개지 말 것 — 각각 `gotData`를
+  세우게 되어 그룹이 도착하기 전에 쓰기가 열린다(CalendarWindow 선례).
+- 프로토콜: 창→앱 `watchlist:ping{need}`(3초)·`watchlist:groups{groups}` /
+  앱→창 `watchlist:live{groups, readOnly, dataState}`·`watchlist:pong`.
+- **⚠️ 데이터 유실 방지 = `dataState` 게이트**(가계부 2026-08-30 사고와 **같은 부류**):
+  `watchlistGroups`는 백업 복원 sticky(`_preserveStickyPersonalData`)라 로드 전 빈 배열이 한 번
+  덮으면 **백업으로도 되돌릴 수 없다**. 창의 `writable = linked && gotData && !appReadOnly &&
+  appDataState === 'ready'`이고, 수신값은 화이트리스트 밖이면 전부 `'loading'`으로 떨어뜨린다
+  (**fail-closed** — 최악이 '창이 읽기 전용으로 남음'(새로고침으로 복구)이고 반대편은 되돌릴 수 없는
+  유실이라 비대칭이 이 방향을 강제한다). ⚠️ 앱 측 deps에 `ledgerDataState` 필수(없으면 로드가 끝나도
+  창이 잠긴 채 남는다). ⚠️ `ledgerDataState`는 이름만 가계부일 뿐 **STATE 확정 직후 한 곳에서** 서는
+  앱 전역 신호다 — 별도 신호를 새로 만들면 두 값이 갈라진다.
+- **⚠️ 그룹 쓰기는 `updateGroups` 단일 통로**(`readOnly` fail-closed). 호출부가 **10곳**이고 그중
+  종목명 캐시·최근조회 기록처럼 사용자가 '쓰기'로 인식하지 않는 경로가 섞여 있어, 개별 게이팅으로
+  두면 하나만 빠뜨려도 그 경로만 조용히 저장을 흘려보낸다.
+- **⚠️ impersonation 차단의 정본은 App 측 핸들러**(`adminViewingAsRef`) — 창은 조작 가능한 URL로
+  열리므로 창의 `readOnly` prop만으로는 부족하다(fail-closed).
+- **⚠️ 창의 `onUpdateGroups`는 functional updater를 받아 `groupsRef`로 **동기** 합성**한다 —
+  `addStock` 직후 `loadQuote`의 이름 캐시처럼 한 tick에 연달아 두 번 부르는 경로가 있어 state만
+  읽으면 뒤 호출이 앞 호출을 덮는다. ⚠️ setState 업데이터 **안에서** post하지 말 것(StrictMode
+  이중 호출로 두 번 전송).
+- **⚠️ 읽기 전용 빈 목록에서 '만들어 보세요'라고 하지 않는다** — "아직 안 불러왔다"와 "저장된 게
+  없다"를 구분하지 못하면 사용자가 새로 만들게 되고, 그 입력이 정확히 저장된 목록을 덮는 경로다.
+- 렌더는 인앱과 **같은 `WatchlistPopup`**(`variant='page'`) — 복제하면 두 화면이 갈라진다.
+  ⚠️ ⧉ 버튼은 **창 자신에는 렌더하지 않고**(`onOpenWindow && !isPage`), `onMouseDown stopPropagation`이
+  필수다(타이틀 바가 드래그 핸들이라 안 막으면 누르는 순간 패널 드래그가 시작된다).
+- **알려진 한계(의도)**: 인앱 팝업과 새 창을 동시에 열면 마지막 쓰기가 이긴다(⧉가 인앱 팝업을 닫으므로
+  실사용에서 겹치는 구간은 짧다 — 달력·흐름도 창과 같은 절충). 앱 탭을 닫으면 창은 읽기 전용(구조적).
+- 검증: `npm run verify:watchlist` (직접 import `#1~#20` + 소스 텍스트 가드 `#G0~#G31`).
+  ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 33종 + 음성 대조 1종**(자동 그룹 자리 고정 파괴 ·
+  같은 참조 반환 제거 · `insertAt` 보정 제거 · 좌표계 어긋냄 2종 · 순수 모듈에 import 추가 · 재정렬
+  손계산 복귀 · `isAutoGroupOf` 손복제 · `readOnly` 게이트 3종 · prop 직접 호출 복귀 · 가로 스크롤 칩
+  복귀 · `PANEL_W` 하드코딩 · stopPropagation 제거 · 부팅 분기 삭제 · `dataState` 미전송/deps 누락/
+  fail-open · writable 조건 완화 · 수신 화이트리스트 누락 · impersonation 가드 제거 · `noopener` 추가 ·
+  폴백 제거 · `ErrorBoundary label` 제거 · `stockHistoryMap` 병합)으로 **실제 검출을 확인**했다.
+  ⚠️ **`App.tsx`만 CRLF**다 — 변이 하네스의 여러 줄 앵커는 `\n`을 그 파일의 줄바꿈으로 정규화하지
+  않으면 조용히 건너뛴다(실측: 3종이 '앵커 없음'으로 빠졌다).
+  ⚠️ `#G31`처럼 '금지 토큰 부재'를 재는 가드는 반드시 **주석을 걷어낸 뒤** 잰다 — 이 저장소는 금지
+  이유를 바로 그 자리 주석에 적으므로 원문으로 재면 그 설명에 걸려 영구히 실패한다(실측).
+
 ---
 
 ### 포트폴리오 표 엑셀(.xlsx) 내보내기 — 무의존성 라이터 (⚠️ 회귀 주의)

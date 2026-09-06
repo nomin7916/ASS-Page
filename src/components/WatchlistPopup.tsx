@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose, ExternalLink } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
+import { WATCH_RECENT_ID, isAutoWatchGroup, manualWatchGroupIds, reorderManualWatchGroups } from '../watchlistGroups';
 
 // FloatingCalculator와 동일 규칙의 비차단·이동 가능 플로팅 패널.
 // - 단일 position:fixed div (백드롭/오버레이 없음 → 아래 앱 클릭·스크롤 통과)
@@ -17,16 +18,15 @@ const WATCHLIST_Z = 1050;
 const SIDEBAR_W = 180;
 const PANEL_W = 640 + SIDEBAR_W;
 const MARKET_LABEL = { kr: '국내', us: '해외', fund: '펀드' };
-const RECENT_ID = '__recent__';   // 자동 '최근조회' 그룹의 예약 id
+const RECENT_ID = WATCH_RECENT_ID;   // 자동 '최근조회' 그룹의 예약 id
 const RECENT_NAME = '최근조회';
 const RECENT_CAP = 20;            // 최근조회 보관 개수
 const MAX_GROUPS = 30;           // 수동 그룹 소프트 상한(최근조회 제외)
 const MAX_STOCKS = 100;          // 그룹당 종목 소프트 상한
 
-// 그룹이 '자동 그룹(최근조회)'인가 — 이름 변경·삭제·순서 드래그의 공통 게이트.
-// ⚠️ 이 판정을 손복제하지 말 것: recordRecent가 최근조회를 **항상 배열 맨 앞**에 다시 붙이므로
-//    (`[{최근조회}, ...others]`) 한 곳이라도 게이트를 빠뜨리면 그 경로만 조용히 원복된다.
-const isAutoGroupOf = (g) => !!g && (g.id === RECENT_ID || !!g.auto);
+// 자동 그룹 판정·순서 재배치는 `watchlistGroups.ts`(순수 모듈)가 정본이다 —
+// verify:watchlist가 미러 없이 그 모듈을 직접 import해 검증하므로 여기서 손복제하지 말 것.
+const isAutoGroupOf = isAutoWatchGroup;
 
 const fmtPrice = (market, price) => {
   if (market === 'us') return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -516,7 +516,7 @@ export default function WatchlistPopup({
   // ⚠️ 순서는 `watchlistGroups` **배열 자체를 재정렬**한다 → 기존 지문(portfolioStructureKey의
   //    JSON.stringify)이 그대로 잡아 Drive 저장이 자동 트리거된다. `order` 필드를 새로 만들지 말 것
   //    (정규화·지문·복원 등록 지점이 늘고 하나만 빠지면 조용히 유실된다 — 종목 순서 드래그와 같은 규약).
-  const manualIds = list.filter((g) => !isAutoGroupOf(g)).map((g) => g.id);
+  const manualIds = manualWatchGroupIds(list);
   const canReorderGroups = !readOnly && manualIds.length >= 2;
   // 포인터 Y로 삽입 슬롯(0..N) 계산 — **수동 그룹 행만** 센다(자동 그룹은 data 속성을 달지 않는다).
   const computeGroupDropIndex = (clientY) => {
@@ -546,24 +546,8 @@ export default function WatchlistPopup({
     setGDragId(null);
     setGDragOverIndex(null);
     if (id == null || to == null) return;
-    updateGroups((prev) => {
-      const arr = Array.isArray(prev) ? prev : [];
-      // 자동 그룹이 있던 인덱스는 **그대로 두고** 수동 그룹만 그 사이 슬롯에 다시 깐다
-      // (최근조회가 맨 앞에 고정되는 것을 산술이 아니라 구조로 보장).
-      const slots = [];
-      const manual = [];
-      arr.forEach((g, i) => { if (!isAutoGroupOf(g)) { slots.push(i); manual.push(g); } });
-      const from = manual.findIndex((g) => g.id === id);
-      if (from < 0) return arr;                       // prev 스냅샷 불일치 방어(같은 참조 = 저장 무트리거)
-      const insertAt = to > from ? to - 1 : to;        // splice로 앞에서 하나 제거되므로 뒤로 갈 땐 -1
-      if (insertAt === from || insertAt < 0 || insertAt >= manual.length) return arr;  // 순서 변화 없음
-      const next = [...manual];
-      const [item] = next.splice(from, 1);
-      next.splice(insertAt, 0, item);
-      const out = [...arr];
-      slots.forEach((idx, k) => { out[idx] = next[k]; });
-      return out;
-    });
+    // 산술은 `watchlistGroups.ts`가 정본(자동 그룹 자리 고정 · 변화 없으면 같은 참조).
+    updateGroups((prev) => reorderManualWatchGroups(Array.isArray(prev) ? prev : [], id, to));
   };
   const cancelGroupReorder = () => { setGDragId(null); setGDragOverIndex(null); };
 
