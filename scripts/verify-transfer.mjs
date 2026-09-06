@@ -435,8 +435,8 @@ console.log('\n── 파트② 소스 텍스트 가드 ──');
   ok('#27c MOVE 패드는 읽기 전용 (savePad allow-list 밖)',
     /if \(pad\.kind\) \{ setPad\(null\); return; \}/.test(cal)
     && !/pad\.kind === 'transfer'.*savePad/s.test(cal.slice(cal.indexOf('const savePad'), cal.indexOf('const savePad') + 900)));
-  ok('#27d MOVE 칩·패드 라벨이 일치한다',
-    /transfer: 'MOVE'/.test(cal) && (cal.match(/transfer: 'MOVE'/g) || []).length === 2);
+  ok('#27d 종목이관 칩·패드 라벨이 일치한다 (한글 라벨)',
+    /transfer: '종목이관'/.test(cal) && (cal.match(/transfer: '종목이관'/g) || []).length === 2);
 
   ok('#28 utils가 이관 헬퍼 2종을 내보낸다',
     /export const buildTransferLedgerRows/.test(utils) && /export const collectTransferRows/.test(utils));

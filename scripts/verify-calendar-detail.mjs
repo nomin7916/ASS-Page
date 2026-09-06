@@ -606,9 +606,9 @@ console.log('\n── 파트③ 소스 텍스트 가드 ──');
     && /onClick=\{canOpenDetail \? \(e\) => \{ e\.stopPropagation\(\); openDetail\(key\); \} : undefined\}/.test(cellBlock)
     && /hideAmounts \? '••••••' : fmtAbbrev\(rawMetric\.evalAmount\)/.test(cellBlock));
 
-  ok('#G16 ASSET 패드는 savePad allow-list 밖(읽기 전용)이고 헤더 라벨이 등록돼 있다',
+  ok('#G16 자산현황 패드는 savePad allow-list 밖(읽기 전용)이고 헤더 라벨이 등록돼 있다',
     /if \(pad\.kind\) \{ setPad\(null\); return; \}/.test(cal)
-    && /detail: 'ASSET'/.test(cal)
+    && /detail: '자산현황'/.test(cal)
     && /\(!pad\.kind \|\| pad\.kind === 'note'\)/.test(cal));
 
   // ── 예수금 = 그날의 기록값 (미러로는 표현 못 하는 **공급측** 배선) ──

@@ -679,7 +679,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
   };
 
   // 자동 기록 칩 — **세로 1줄씩**(위→아래) + `라벨 + 계좌명/건수` 표기.
-  //   1. LIST(목표비중) → 2. NOTE(투자기록) → 3. STOCK(수량변경) 순서 고정.
+  //   1. 목표비중 → 2. 투자기록 → 3. 수량변경 순서 고정.
   // 종류가 항상 같은 줄 위치·같은 라벨로 오므로 칸을 훑을 때 한눈에 구분된다.
   // ⚠️ 가로 스크롤(overflow-x)로 되돌리지 말 것 — 칩이 2개만 넘어가도 나머지는 6px 스크롤바로만
   //    닿을 수 있어 사실상 숨겨졌다. targetDate가 같은 accountType끼리 공유되므로 하루 다건은
@@ -692,7 +692,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     ledger: 'bg-rose-500/15 hover:bg-rose-500/30 text-rose-200',
   };
   const CHIP_DELETED = 'bg-gray-500/15 hover:bg-gray-500/30 text-gray-400';
-  const CHIP_LABEL = { rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE', ledger: 'BUDGET' };
+  const CHIP_LABEL = { rebalTarget: '목표비중', note: '투자기록', qty: '수량변경', transfer: '종목이관', ledger: '가계부' };
   const autoChip = (dayKey, chipKind, items, openOne) => {
     if (!items || items.length === 0) return null;
     const single = items.length === 1;
@@ -804,7 +804,7 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               const key = dayKeyOf(viewYear, viewMonth, dayNum);
               const isToday = key === todayStr;
               const isHol = krHol.includes(key);
-              // 자동 기록 3종(LIST/NOTE/STOCK)은 **사용자 메모 목록과 분리**해 전용 세로 스택에 렌더한다.
+              // 자동 기록 3종(목표비중/투자기록/수량변경)은 **사용자 메모 목록과 분리**해 전용 세로 스택에 렌더한다.
               // 같은 accountType 계좌끼리 settings.targetDate를 공유하므로 하루에 계좌별 기록이
               // 여러 건 쌓이는 것이 기본 시나리오라, 한 목록에 섞으면 사용자 메모가 밀려난다.
               const dayAll = Array.isArray(memos[key]) ? memos[key] : [];
@@ -954,9 +954,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               <CalIcon size={13} className="text-gray-500" />
               <span className="text-[13px] text-gray-400 font-mono">{pad.dayKey}</span>
               <span className="text-[15px] font-bold tracking-[0.25em] bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-400 bg-clip-text text-transparent select-none">
-                {/* 칸의 칩 라벨(LIST/NOTE/STOCK)과 동일한 이름 — 어느 칩에서 열린 패드인지 즉시 대응된다.
-                    다건 선택 목록은 LIST를 목표비중에 넘겨주고 PICK으로 물러난다. */}
-                {({ rebalTarget: 'LIST', note: 'NOTE', qty: 'STOCK', transfer: 'MOVE', ledger: 'BUDGET', pick: 'PICK', detail: 'ASSET' })[pad.kind] || 'MEMO'}
+                {/* 칸의 칩 라벨(목표비중/투자기록/수량변경…)과 동일한 이름 — 어느 칩에서 열린 패드인지 즉시 대응된다.
+                    다건 선택 목록은 '선택', 칸의 자산 스냅샷에서 연 패드는 '자산현황'이다. */}
+                {({ rebalTarget: '목표비중', note: '투자기록', qty: '수량변경', transfer: '종목이관', ledger: '가계부', pick: '선택', detail: '자산현황' })[pad.kind] || '메모'}
               </span>
             </div>
             <div className="w-10" />

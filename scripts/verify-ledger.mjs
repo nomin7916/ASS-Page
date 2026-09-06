@@ -1426,7 +1426,12 @@ const CALWIN = stripComments(read('src/components/CalendarWindow.tsx'));
 //    닫은 뒤에도 시세 갱신마다 영구히 재계산한다.
 ok('#G6 ledgerByDate에 open 게이트가 있다',
   /const ledgerByDate = useMemo\(\(\) => \{[\s\S]{0,200}?if \(!open\) return \w+;/.test(CAL));
-ok('#G6b 칩 라벨/색이 등록됐다', /ledger:\s*'BUDGET'/.test(CAL) && /ledger:\s*'bg-/.test(CAL));
+// ⚠️ `CHIP_LABEL` 선언을 잘라서 본다 — 파일 전역으로 재면 **패드 헤더 인라인 맵**이 대신 통과시켜
+//    칸의 칩 라벨을 되돌려도 초록이 된다(실측: 변이 미검출). 라벨은 한글(2026-09 사용자 요청).
+ok('#G6b 칩 라벨/색이 등록됐다 (칸의 칩 + 패드 헤더 · 한글 라벨)',
+  /const CHIP_LABEL = \{[^}]*ledger: '가계부'/.test(CAL)
+  && (CAL.match(/ledger: '가계부'/g) || []).length === 2
+  && /ledger:\s*'bg-/.test(CAL));
 // ⚠️ PICK 체인의 마지막 else는 qty다 — 자기 분기가 없으면 오류 없이 '종목 수량 변경' 패드가 열린다.
 ok('#G6c ⚠️ PICK 목록에 ledger 분기가 있다(qty로 흘러가지 않음)',
   /pad\.pickKind === 'ledger' \? \(ledgerByDate\[pad\.dayKey\] \|\| \[\]\)/.test(CAL));
