@@ -2765,6 +2765,14 @@ export default function App() {
   const ledgerWinRef = useRef(null);
   const [ledgerWinNonce, setLedgerWinNonce] = useState(0);   // ready/재입양 시 전체 재전송 트리거
   const [ledgerWinBlocked, setLedgerWinBlocked] = useState(false);
+  // ── 관심종목 별도 창 ──
+  // ⚠️ 가계부와 같이 **채널이 하나뿐**이다(`watchlist:live`). 관심종목은 시세를 창이 스스로
+  //    조회하므로(watchlistQuote → 공개 프록시, 인증 토큰 불필요) 무거운 원자재 채널이 필요 없다.
+  //    채널을 둘로 쪼개면 각각 gotData를 세워, 그룹이 도착하기 전에 쓰기가 열리고 저장된
+  //    관심종목이 빈 배열로 덮이는 경로가 생긴다(CalendarWindow 선례).
+  const watchlistWinRef = useRef(null);
+  const [watchlistWinNonce, setWatchlistWinNonce] = useState(0);   // ready/재입양 시 전체 재전송 트리거
+  const [watchlistWinBlocked, setWatchlistWinBlocked] = useState(false);
   // ⚠️ 아래 세 memo는 **백테스트를 실제로 연 뒤에만** 계산한다. deps에 portfolios·stockHistoryMap이
   //    있어 시세 갱신(수십 초 간격)마다 전 계좌 스냅샷과 전 종목 일봉을 훑는데, 백테스트를 쓰지
   //    않는 사용자가 그 비용을 치를 이유가 없다(FlowBoard를 flowAccess 안에 둔 것과 같은 근거).
@@ -3043,6 +3051,75 @@ export default function App() {
     try { w.focus(); } catch {}
     setLedgerWinBlocked(false);
     setShowLedgerPage(false);
+  };
+
+  // ── 관심종목 브릿지 ──
+  const postToWatchlistWin = (msg) => {
+    const w = watchlistWinRef.current;
+    if (!w || w.closed) return;
+    try { w.postMessage(msg, window.location.origin); } catch {}
+  };
+  useEffect(() => {
+    if (watchlistWinNonce === 0) return;
+    /**
+     * ⚠️ **`dataState`를 반드시 함께 보낼 것.** 창의 writable이 첫 메시지만 보고 열리면 Drive 로드
+     * 전 `groups: []`가 실려 온 메시지에도 쓰기가 열려, 창이 '아직 안 불러왔다'와 '저장된 게 없다'를
+     * 구분하지 못한 채 편집 가능한 빈 목록을 띄우고 거기서 그룹 하나만 만들어도 **저장된
+     * 관심종목을 덮는다**. `watchlistGroups`는 백업 복원 sticky(`_preserveStickyPersonalData`)라
+     * 그 유실은 **백업으로도 되돌릴 수 없다**(가계부가 2026-08-30에 정확히 이 사고를 냈다).
+     * ⚠️ `ledgerDataState`는 이름만 가계부일 뿐 **STATE 확정 직후 한 곳에서** 서는 앱 전역 신호다
+     * — 별도 신호를 새로 만들면 두 값이 갈라진다.
+     * ⚠️ deps에 `ledgerDataState` 필수 — 없으면 로드가 끝나도 창이 잠긴 채 남는다.
+     */
+    postToWatchlistWin({ type: 'watchlist:live', groups: watchlistGroups, readOnly: !!adminViewingAs, dataState: ledgerDataState });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchlistGroups, adminViewingAs, ledgerDataState, watchlistWinNonce]);
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;   // ⚠️ 필수 — 교차 출처 메시지는 전부 무시
+      const d = e.data;
+      if (!d || typeof d !== 'object' || typeof d.type !== 'string' || !d.type.startsWith('watchlist:')) return;
+      if (d.type === 'watchlist:ping') {
+        // `d.need`가 초기 전송의 유일한 트리거(window.open 직후 보내면 about:blank라 버려진다).
+        // 이 탭이 새로고침되면 ref가 비므로 살아 있는 창의 핑에서 **재입양**한다.
+        if (d.need || watchlistWinRef.current !== e.source) { watchlistWinRef.current = e.source; setWatchlistWinNonce(n => n + 1); }
+        try { e.source?.postMessage({ type: 'watchlist:pong' }, window.location.origin); } catch {}
+        return;
+      }
+      if (!watchlistWinRef.current || e.source !== watchlistWinRef.current) return;   // 쓰기는 입양된 창만
+      if (d.type === 'watchlist:groups') {
+        // ⚠️ impersonation 읽기 전용은 **여기서도** 막아야 한다 — 창은 조작 가능한 URL로 열리므로
+        //    창의 readOnly prop만으로는 부족하고 App 측 재확인이 정본이다(fail-closed).
+        if (adminViewingAsRef.current) return;
+        if (!Array.isArray(d.groups)) return;
+        // 창이 보낸 것을 그대로 채택하지 말 것 — 최소한 객체가 아닌 항목은 거른다(렌더 예외 방지).
+        setWatchlistGroups(d.groups.filter((g) => g && typeof g === 'object'));
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  // ⚠️ noopener 금지 — opener 브릿지가 이 기능의 전부다(impersonation 탭과 **정반대** 규칙).
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다.
+  // ⚠️ features(width/height) 인자를 주면 크롬이 '팝업'으로 열어 주소창·확장 아이콘이 사라진다.
+  const openWatchlistWindow = () => {
+    const existing = watchlistWinRef.current;
+    if (existing && !existing.closed) { try { existing.focus(); } catch {} setShowWatchlist(false); return; }
+    const w = window.open('/?watchlistWindow=1', 'ass-watchlist');
+    if (!w) {
+      // 팝업 차단 → 인앱 팝업 유지(최악의 경우가 기존 동작이 되게 한다)
+      setWatchlistWinBlocked(true);
+      setShowWatchlist(true);
+      return;
+    }
+    watchlistWinRef.current = w;
+    // 이름이 같은 탭이 이미 있으면 window.open이 그 탭을 재사용하는데 브라우저가 항상 앞으로
+    // 가져오지는 않는다 → 버튼을 눌렀는데 아무 일도 안 일어난 것처럼 보이지 않게 focus를 보강한다.
+    try { w.focus(); } catch {}
+    setWatchlistWinBlocked(false);
+    setShowWatchlist(false);
   };
 
   const handleSave = () => {
@@ -4964,6 +5041,12 @@ export default function App() {
         onClose={() => setShowWatchlist(false)}
         groups={watchlistGroups}
         onUpdateGroups={setWatchlistGroups}
+        onOpenWindow={openWatchlistWindow}
+        readOnly={!!adminViewingAs}
+        notice={
+          adminViewingAs ? '관리자 접속 중이라 읽기 전용입니다.'
+            : watchlistWinBlocked ? '팝업이 차단돼 별도 탭을 열지 못했습니다. 주소창의 팝업 허용 후 다시 시도하세요(지금은 앱 안에서 표시 중).' : ''
+        }
       />
       {/* 종목 계좌 간 이관 — '미리보기 후 적용'(undo 없음). 항목이 사라지면 transferItem이 null이 되어 자동 닫힘 */}
       {transferItem && (

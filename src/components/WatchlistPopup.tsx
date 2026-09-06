@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose, ExternalLink } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
 
@@ -100,7 +100,16 @@ function Sparkline({ points, rate, width = 56, height = 20 }) {
   );
 }
 
-export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGroups }) {
+export default function WatchlistPopup({
+  open, onClose, groups = [], onUpdateGroups,
+  // 'popup' = 인앱 플로팅 패널 / 'page' = 별도 브라우저 창(`/?watchlistWindow=1`).
+  // ⚠️ 창용으로 화면을 복제하지 말 것 — 두 화면이 갈라진다(LedgerPage·CalendarModal과 같은 규약).
+  variant = 'popup',
+  readOnly = false,
+  notice = '',
+  onOpenWindow = null,
+}) {
+  const isPage = variant === 'page';
   const [pos, setPos] = useState(() => ({
     x: Math.max(10, Math.round((window.innerWidth - PANEL_W) / 2)),
     y: 80,
@@ -140,6 +149,15 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const list = Array.isArray(groups) ? groups : [];
   const activeGroup = list.find((g) => g.id === activeGroupId) || list[0] || null;
 
+  // ⚠️ **그룹 쓰기의 단일 통로**(fail-closed). 호출부가 10곳이라 개별 게이팅으로 두면 하나만
+  //    빠뜨려도 읽기 전용에서 그 경로만 조용히 저장을 흘려보낸다(종목명 캐시·최근조회 기록처럼
+  //    사용자가 '쓰기'라고 인식하지 않는 경로가 섞여 있어 특히 그렇다).
+  //    별도 창은 조작 가능한 URL로 열리므로 최종 방어선은 App 측 재확인이고 이건 UI 잠금이다.
+  const updateGroups = useCallback((updater) => {
+    if (readOnly) return;
+    onUpdateGroups?.(updater);
+  }, [readOnly, onUpdateGroups]);
+
   const onDragStart = useCallback((cx, cy) => {
     dragging.current = true;
     dragOffset.current = { x: cx - pos.x, y: cy - pos.y };
@@ -169,9 +187,9 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     };
   }, []);
 
-  // 열 때마다 화면 중앙 상단 근처로 재배치
+  // 열 때마다 화면 중앙 상단 근처로 재배치 (별도 창은 전체화면이라 좌표 자체가 없다)
   useEffect(() => {
-    if (!open) return;
+    if (!open || isPage) return;
     const id = requestAnimationFrame(() => {
       const w = rootRef.current?.offsetWidth || PANEL_W;
       setPos({
@@ -192,7 +210,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
       setStatus((p) => ({ ...p, [key]: 'success' }));
       // 종목명 캐시(STATE 저장) — 로드 직후 코드만 뜨는 깜빡임 방지. 이름 다를 때만 갱신(저장 churn 최소화)
       if (d.name && d.name !== stock.name) {
-        onUpdateGroups?.((prev) => (Array.isArray(prev) ? prev : []).map((g) => ({
+        updateGroups((prev) => (Array.isArray(prev) ? prev : []).map((g) => ({
           ...g,
           stocks: (g.stocks || []).map((s) => (s.id === stock.id ? { ...s, name: d.name } : s)),
         })));
@@ -265,7 +283,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     if (!name) { setCreating(false); setNewName(''); return; }
     if (list.filter((g) => g.id !== RECENT_ID).length >= MAX_GROUPS) { setCreating(false); setNewName(''); return; }
     const g = { id: generateId(), name, stocks: [], createdAt: Date.now() };
-    onUpdateGroups?.((prev) => [...(Array.isArray(prev) ? prev : []), g]);
+    updateGroups((prev) => [...(Array.isArray(prev) ? prev : []), g]);
     setActiveGroupId(g.id);
     setCreating(false);
     setNewName('');
@@ -273,11 +291,11 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const renameGroup = (id) => {
     const name = editName.trim();
     if (!name) { setEditingId(null); return; }
-    onUpdateGroups?.((prev) => (Array.isArray(prev) ? prev : []).map((g) => (g.id === id ? { ...g, name } : g)));
+    updateGroups((prev) => (Array.isArray(prev) ? prev : []).map((g) => (g.id === id ? { ...g, name } : g)));
     setEditingId(null);
   };
   const deleteGroup = (id) => {
-    onUpdateGroups?.((prev) => (Array.isArray(prev) ? prev : []).filter((g) => g.id !== id));
+    updateGroups((prev) => (Array.isArray(prev) ? prev : []).filter((g) => g.id !== id));
     setConfirmDelId(null);
     if (activeGroup?.id === id) setActiveGroupId(null); // 다음 렌더에서 list[0]로 폴백
   };
@@ -292,7 +310,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
       return; // 같은 그룹 내 중복 방지
     }
     const stock = { id: generateId(), code, market: detectMarket(code), name: '', addedAt: Date.now() };
-    onUpdateGroups?.((prev) => (Array.isArray(prev) ? prev : []).map((g) =>
+    updateGroups((prev) => (Array.isArray(prev) ? prev : []).map((g) =>
       (g.id === activeGroup.id ? { ...g, stocks: [...(g.stocks || []), stock] } : g)));
     setCodeInput('');
     loadQuote(stock);
@@ -301,12 +319,12 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   };
   const removeStock = (stockId) => {
     if (!activeGroup) return;
-    onUpdateGroups?.((prev) => (Array.isArray(prev) ? prev : []).map((g) =>
+    updateGroups((prev) => (Array.isArray(prev) ? prev : []).map((g) =>
       (g.id === activeGroup.id ? { ...g, stocks: (g.stocks || []).filter((s) => s.id !== stockId) } : g)));
   };
   // 조회 실패 행의 시장 수동 보정 → 재조회
   const setStockMarket = (stock, market) => {
-    onUpdateGroups?.((prev) => (Array.isArray(prev) ? prev : []).map((g) => ({
+    updateGroups((prev) => (Array.isArray(prev) ? prev : []).map((g) => ({
       ...g,
       stocks: (g.stocks || []).map((s) => (s.id === stock.id ? { ...s, market } : s)),
     })));
@@ -317,7 +335,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
 
   // 상세페이지를 연 종목을 '최근조회' 자동 그룹에 기록(최근 우선, 코드 dedup, RECENT_CAP 상한).
   const recordRecent = (stock) => {
-    onUpdateGroups?.((prev) => {
+    updateGroups((prev) => {
       const arr = Array.isArray(prev) ? prev : [];
       const entry = { id: generateId(), code: stock.code, market: stock.market, name: stock.name || '', addedAt: Date.now() };
       const recent = arr.find((g) => g.id === RECENT_ID);
@@ -446,7 +464,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   // ───────── 순서 드래그 (원래순서 모드 + 수동 그룹 전용) ─────────
   // 정렬 중(sortDir≠null)이거나 '최근조회' 자동 그룹에선 비활성 — 보이는 순서=저장 순서일 때만 이동 허용.
   const isAutoGroup = isAutoGroupOf(activeGroup);
-  const canReorder = !!activeGroup && !isAutoGroup && sortDir === null && activeStocks.length >= 2;
+  const canReorder = !readOnly && !!activeGroup && !isAutoGroup && sortDir === null && activeStocks.length >= 2;
   // 포인터 Y로 삽입 슬롯(0..N) 계산 — 리스트는 드래그 중 재배열하지 않아 geometry가 안정적(깜빡임 없음).
   const computeDropIndex = (clientY) => {
     const rows = listRef.current?.querySelectorAll('[data-watch-row]');
@@ -479,7 +497,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     if (from < 0) return;
     const insertAt = to > from ? to - 1 : to;      // splice로 앞에서 하나 제거되므로 뒤로 갈 땐 -1
     if (insertAt === from) return;                 // 순서 변화 없음 → setState 자체를 생략(불필요 렌더 방지)
-    onUpdateGroups?.((prev) => (Array.isArray(prev) ? prev : []).map((g) => {
+    updateGroups((prev) => (Array.isArray(prev) ? prev : []).map((g) => {
       if (g.id !== activeGroup.id) return g;
       const arr = [...(g.stocks || [])];
       if (from >= arr.length || arr[from]?.id !== id) return g;  // prev 스냅샷 불일치 방어
@@ -499,7 +517,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   //    JSON.stringify)이 그대로 잡아 Drive 저장이 자동 트리거된다. `order` 필드를 새로 만들지 말 것
   //    (정규화·지문·복원 등록 지점이 늘고 하나만 빠지면 조용히 유실된다 — 종목 순서 드래그와 같은 규약).
   const manualIds = list.filter((g) => !isAutoGroupOf(g)).map((g) => g.id);
-  const canReorderGroups = manualIds.length >= 2;
+  const canReorderGroups = !readOnly && manualIds.length >= 2;
   // 포인터 Y로 삽입 슬롯(0..N) 계산 — **수동 그룹 행만** 센다(자동 그룹은 data 속성을 달지 않는다).
   const computeGroupDropIndex = (clientY) => {
     const rows = sidebarListRef.current?.querySelectorAll('[data-watch-group]');
@@ -528,7 +546,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     setGDragId(null);
     setGDragOverIndex(null);
     if (id == null || to == null) return;
-    onUpdateGroups?.((prev) => {
+    updateGroups((prev) => {
       const arr = Array.isArray(prev) ? prev : [];
       // 자동 그룹이 있던 인덱스는 **그대로 두고** 수동 그룹만 그 사이 슬롯에 다시 깐다
       // (최근조회가 맨 앞에 고정되는 것을 산술이 아니라 구조로 보장).
@@ -556,15 +574,19 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   return (
     <div
       ref={rootRef}
-      style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: WATCHLIST_Z, width: PANEL_W, maxWidth: 'calc(100vw - 20px)', maxHeight: '82vh' }}
-      className="rounded-2xl shadow-2xl overflow-hidden border border-gray-600/60 bg-[#0b1120] flex flex-col"
+      style={isPage
+        ? { position: 'fixed', inset: 0 }
+        : { position: 'fixed', left: pos.x, top: pos.y, zIndex: WATCHLIST_Z, width: PANEL_W, maxWidth: 'calc(100vw - 20px)', maxHeight: '82vh' }}
+      className={isPage
+        ? 'bg-[#0b1120] flex flex-col'
+        : 'rounded-2xl shadow-2xl overflow-hidden border border-gray-600/60 bg-[#0b1120] flex flex-col'}
     >
-      {/* 타이틀 바 (드래그 핸들) */}
+      {/* 타이틀 바 — 팝업 모드에서만 드래그 핸들(별도 창은 브라우저가 창을 옮긴다) */}
       <div
-        className="flex items-center justify-between bg-gray-900 px-3 py-2 cursor-move border-b border-gray-700/40 select-none"
-        style={{ touchAction: 'none' }}
-        onMouseDown={(e) => { onDragStart(e.clientX, e.clientY); e.preventDefault(); }}
-        onTouchStart={(e) => onDragStart(e.touches[0].clientX, e.touches[0].clientY)}
+        className={`flex items-center justify-between bg-gray-900 px-3 py-2 border-b border-gray-700/40 select-none ${isPage ? '' : 'cursor-move'}`}
+        style={isPage ? undefined : { touchAction: 'none' }}
+        onMouseDown={isPage ? undefined : (e) => { onDragStart(e.clientX, e.clientY); e.preventDefault(); }}
+        onTouchStart={isPage ? undefined : (e) => onDragStart(e.touches[0].clientX, e.touches[0].clientY)}
       >
         <span className="text-gray-200 text-sm font-semibold flex items-center gap-1.5 min-w-0">
           <Star size={14} className="text-amber-400 shrink-0" />
@@ -574,10 +596,33 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
             <span className="text-gray-500 font-normal text-xs truncate" title={activeGroup.name}>· {activeGroup.name}</span>
           )}
         </span>
-        <button onClick={onClose} title="닫기" className="text-gray-400 hover:text-white p-1 rounded transition-colors shrink-0">
-          <X size={14} />
-        </button>
+        <span className="flex items-center gap-0.5 shrink-0">
+          {/* 별도 브라우저 창으로 확장 — 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다.
+              ⚠️ onMouseDown stopPropagation 필수: 타이틀 바가 드래그 핸들이라 안 막으면 버튼을 누르는
+                 순간 패널 드래그가 함께 시작된다(CalendarModal 선례). 창 자신에는 렌더하지 않는다. */}
+          {onOpenWindow && !isPage && (
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={onOpenWindow}
+              title="별도 창으로 열기"
+              className="text-gray-500 hover:text-sky-300 p-1 rounded transition-colors"
+            >
+              <ExternalLink size={14} />
+            </button>
+          )}
+          <button onClick={onClose} title="닫기" className="text-gray-400 hover:text-white p-1 rounded transition-colors">
+            <X size={14} />
+          </button>
+        </span>
       </div>
+
+      {/* 연결 끊김·읽기 전용 안내 — z-1050 팝업/별도 창이라 토스트·ConfirmDialog가 가려진다.
+          ⚠️ 인라인이 유일한 피드백 경로다(알림 최소화 정책상 notify()도 쓰지 않는다). */}
+      {notice && (
+        <div className="px-3 py-1.5 text-[11px] text-amber-300 bg-amber-500/10 border-b border-amber-500/20 shrink-0">
+          {notice}
+        </div>
+      )}
 
       {/* 좌우 2단 — 좌: 그룹 사이드바 / 우: 종목 리스트.
           ⚠️ 옛 구조는 그룹을 **가로 스크롤 칩 한 줄**로 늘어놓아, 그룹이 늘수록 어떤 그룹이 있는지
@@ -662,7 +707,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
               ))}
               <button
                 onClick={() => setActiveGroupId(g.id)}
-                onDoubleClick={() => { if (!isAuto) { setEditingId(g.id); setEditName(g.name); } }}
+                onDoubleClick={() => { if (!isAuto && !readOnly) { setEditingId(g.id); setEditName(g.name); } }}
                 className="flex-1 min-w-0 flex items-center gap-1 text-left"
                 title={isAuto ? g.name : `${g.name} — 더블클릭하면 이름 변경`}
               >
@@ -672,7 +717,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
               <span className="shrink-0 text-[9px] text-gray-600 tabular-nums">{(g.stocks || []).length}</span>
               {/* 세로 목록에서는 ✏️/🗑을 **행 hover**로 낸다 — 옛 칩 행은 활성 칩에만 달려 있어
                   가로 스크롤 끝까지 따라다녔다. 자동 그룹('최근조회')은 이름 변경·삭제 대상이 아니다. */}
-              {!isAuto && (
+              {!isAuto && !readOnly && (
                 <span className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                   <button onClick={() => { setEditingId(g.id); setEditName(g.name); }} title="이름 변경" className="text-gray-500 hover:text-amber-300">
                     <Pencil size={11} />
@@ -685,7 +730,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
             </div>
           );
         })}
-        {creating ? (
+        {!readOnly && (creating ? (
           <div className="px-1.5 py-0.5">
             <input
               autoFocus
@@ -708,7 +753,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
               <Plus size={12} /> 그룹
             </button>
           </div>
-        )}
+        ))}
           </div>
         </aside>
         ) : (
@@ -725,19 +770,26 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
         {list.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center gap-2 py-8">
             <Star size={28} className="text-gray-600" />
-            <p className="text-gray-400 text-sm font-medium">관심 그룹을 만들어 종목을 모아 보세요</p>
+            {/* ⚠️ 읽기 전용(별도 창의 로드 대기·연결 끊김)에서 '만들어 보세요'라고 하면 안 된다 —
+                "아직 안 불러왔다"와 "저장된 게 없다"를 구분하지 못한 채 새로 만들게 유도하고,
+                그 입력이 정확히 저장된 관심종목을 덮는 경로다(가계부 2026-08-30 선례). */}
+            <p className="text-gray-400 text-sm font-medium">
+              {readOnly ? '표시할 관심 그룹이 없습니다' : '관심 그룹을 만들어 종목을 모아 보세요'}
+            </p>
             {/* ⚠️ 이름 입력창은 사이드바 안에 있다 — 접힌 상태로 두면 눌러도 아무 일도 안 일어난 것처럼 보인다 */}
+            {!readOnly && (
             <button
               onClick={() => { setSidebarOpen(true); setCreating(true); }}
               className="mt-1 inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/25 transition-colors"
             >
               <Plus size={13} /> 그룹 추가
             </button>
+            )}
           </div>
         ) : activeGroup ? (
           <>
             {/* 코드 입력 (최근조회 자동 그룹은 입력창 대신 안내) */}
-            {(activeGroup.id === RECENT_ID || activeGroup.auto) ? (
+            {readOnly ? null : isAutoGroup ? (
               <div className="flex items-center gap-1 mb-2 text-[11px] text-gray-500">
                 <Clock size={11} className="shrink-0" /> 등락율을 클릭해 상세페이지를 연 종목이 자동으로 기록됩니다.
               </div>
@@ -874,18 +926,20 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
                             </span>
                           )}
                         </button>
-                        <button
-                          onClick={() => removeStock(s.id)}
-                          title="종목 삭제"
-                          className="shrink-0 text-gray-600 opacity-0 group-hover:opacity-100 hover:text-red-400 transition"
-                        >
-                          <Trash2 size={12} />
-                        </button>
+                        {!readOnly && (
+                          <button
+                            onClick={() => removeStock(s.id)}
+                            title="종목 삭제"
+                            className="shrink-0 text-gray-600 opacity-0 group-hover:opacity-100 hover:text-red-400 transition"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
                       </div>
                       {st === 'fail' && (
                         <div className="flex items-center gap-1 px-3 pb-1.5 pt-0.5 text-[10px] text-red-400/80">
-                          <span>조회 실패 — 시장 선택:</span>
-                          {(['kr', 'us', 'fund']).map((m) => (
+                          <span>{readOnly ? '조회 실패' : '조회 실패 — 시장 선택:'}</span>
+                          {!readOnly && (['kr', 'us', 'fund']).map((m) => (
                             <button
                               key={m}
                               onClick={() => setStockMarket(s, m)}
