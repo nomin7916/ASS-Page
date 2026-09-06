@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical } from 'lucide-react';
+import { X, Star, Plus, Pencil, Trash2, Check, RefreshCw, Clock, GripVertical, PanelLeft, PanelLeftClose } from 'lucide-react';
 import { generateId, formatNumber, formatFundPrice, formatChangeRate } from '../utils';
 import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } from '../watchlistQuote';
 
@@ -11,8 +11,11 @@ import { detectMarket, fetchWatchQuote, fetchWatchDaily, fetchWatchIntraday } fr
 const WATCHLIST_Z = 1050;
 // 종목명 열은 고정폭 열(그립16+점6+미니차트56+등락율64+현재가96+삭제12+여백/gap 80 ≈ 330px)을 뺀 나머지라,
 // 폭이 좁으면 국내 ETF 풀네임(예: "KODEX 금융고배당TOP10타겟위클리커버드콜")이 대부분 잘린다.
-// 640px = 종목명 약 310px 확보 → 긴 ETF명도 한 줄에 그대로 보인다. (좁은 화면은 아래 maxWidth로 클램프)
-const PANEL_W = 640;
+// 종목 리스트에 640px = 종목명 약 310px 확보 → 긴 ETF명도 한 줄에 그대로 보인다.
+// ⚠️ 808 = 640(리스트) + 168(그룹 사이드바). 사이드바를 넣으면서 폭을 안 늘리면 종목명이 160px로
+//    쪼그라들어 위 640px의 존재 이유가 통째로 무너진다 — 둘은 한 세트다. (좁은 화면은 maxWidth로 클램프)
+const SIDEBAR_W = 168;
+const PANEL_W = 640 + SIDEBAR_W;
 const MARKET_LABEL = { kr: '국내', us: '해외', fund: '펀드' };
 const RECENT_ID = '__recent__';   // 자동 '최근조회' 그룹의 예약 id
 const RECENT_NAME = '최근조회';
@@ -108,6 +111,9 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [confirmDelId, setConfirmDelId] = useState(null);
+  // 그룹 사이드바 접기 — 세션 로컬(뷰 선호도라 Drive 저장 지점 0곳).
+  // 좁은 화면에서 사이드바 168px이 종목명을 잠식할 때의 탈출구다.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // 종목 시세 로컬 캐시 (메모리 전용 — Drive 저장 안 함)
   const [quotes, setQuotes] = useState({});   // { [code]: { name, price, changeRate } }
@@ -478,7 +484,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
 
   if (!open) return null;
 
-  const chipInput = 'bg-gray-900 border border-amber-500/50 rounded-full px-2.5 py-1 text-xs text-white outline-none w-24';
+  const sidebarInput = 'w-full bg-gray-900 border border-amber-500/50 rounded px-2 py-1 text-xs text-white outline-none';
 
   return (
     <div
@@ -493,103 +499,144 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
         onMouseDown={(e) => { onDragStart(e.clientX, e.clientY); e.preventDefault(); }}
         onTouchStart={(e) => onDragStart(e.touches[0].clientX, e.touches[0].clientY)}
       >
-        <span className="text-gray-200 text-sm font-semibold flex items-center gap-1.5">
-          <Star size={14} className="text-amber-400" /> 관심종목
+        <span className="text-gray-200 text-sm font-semibold flex items-center gap-1.5 min-w-0">
+          <Star size={14} className="text-amber-400 shrink-0" />
+          <span className="shrink-0">관심종목</span>
+          {/* 사이드바를 접으면 어느 그룹을 보고 있는지 화면에서 사라지므로 제목에 함께 둔다 */}
+          {activeGroup && (
+            <span className="text-gray-500 font-normal text-xs truncate" title={activeGroup.name}>· {activeGroup.name}</span>
+          )}
         </span>
-        <button onClick={onClose} title="닫기" className="text-gray-400 hover:text-white p-1 rounded transition-colors">
+        <button onClick={onClose} title="닫기" className="text-gray-400 hover:text-white p-1 rounded transition-colors shrink-0">
           <X size={14} />
         </button>
       </div>
 
-      {/* 그룹 칩 행 */}
-      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-gray-800/70 overflow-x-auto whitespace-nowrap">
+      {/* 좌우 2단 — 좌: 그룹 사이드바 / 우: 종목 리스트.
+          ⚠️ 옛 구조는 그룹을 **가로 스크롤 칩 한 줄**로 늘어놓아, 그룹이 늘수록 어떤 그룹이 있는지
+             한눈에 안 보이고 끝 그룹은 스크롤해야 닿았다(활성 칩의 ✏️/🗑도 그 스크롤을 따라다녔다).
+             세로 목록은 30개(MAX_GROUPS)까지 자연스러운 세로 스크롤로 받아낸다 — 가로 스크롤 칩 행으로
+             되돌리지 말 것(사용자 요청 2026-09). */}
+      <div className="flex-1 flex min-h-0">
+        {sidebarOpen ? (
+        <aside className="shrink-0 flex flex-col border-r border-gray-800/70 bg-gray-900/30" style={{ width: SIDEBAR_W }}>
+          <div className="flex items-center justify-between px-2 py-1.5 border-b border-gray-800/70 shrink-0">
+            <span className="text-[10px] font-medium text-gray-500">관심 그룹</span>
+            <button onClick={() => setSidebarOpen(false)} title="그룹 목록 접기" className="p-0.5 text-gray-600 hover:text-amber-300 transition-colors">
+              <PanelLeftClose size={12} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto py-1">
         {list.map((g) => {
           const isActive = activeGroup?.id === g.id;
           const isAuto = g.id === RECENT_ID || g.auto;
           if (!isAuto && editingId === g.id) {
             return (
-              <input
-                key={g.id}
-                autoFocus
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') renameGroup(g.id); else if (e.key === 'Escape') setEditingId(null); }}
-                onBlur={() => renameGroup(g.id)}
-                className={chipInput}
-                maxLength={20}
-              />
+              <div key={g.id} className="px-1.5 py-0.5">
+                <input
+                  autoFocus
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') renameGroup(g.id); else if (e.key === 'Escape') setEditingId(null); }}
+                  onBlur={() => renameGroup(g.id)}
+                  className={sidebarInput}
+                  maxLength={20}
+                />
+              </div>
             );
           }
           if (!isAuto && confirmDelId === g.id) {
             return (
-              <span key={g.id} className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs bg-red-900/30 border border-red-600/50 text-red-300">
-                <span className="font-medium">삭제?</span>
-                <button onClick={() => deleteGroup(g.id)} title="삭제 확인" className="hover:text-red-100"><Check size={12} /></button>
-                <button onClick={() => setConfirmDelId(null)} title="취소" className="hover:text-white"><X size={12} /></button>
-              </span>
+              <div key={g.id} className="px-1.5 py-0.5">
+                {/* z-1050 팝업이라 ConfirmDialog·토스트가 가려진다 → 인라인 2단계 확인(기존 규약 유지).
+                    세로 목록에서는 어느 그룹을 지우는지 스스로 밝히도록 이름을 함께 보인다. */}
+                <div className="flex items-center gap-1 rounded px-2 py-1 text-xs bg-red-900/30 border border-red-600/50 text-red-300">
+                  <span className="shrink-0 font-medium">삭제?</span>
+                  <span className="flex-1 min-w-0 truncate" title={g.name}>{g.name}</span>
+                  <button onClick={() => deleteGroup(g.id)} title="삭제 확인" className="shrink-0 hover:text-red-100"><Check size={12} /></button>
+                  <button onClick={() => setConfirmDelId(null)} title="취소" className="shrink-0 hover:text-white"><X size={12} /></button>
+                </div>
+              </div>
             );
           }
           return (
-            <span
+            <div
               key={g.id}
-              className={`inline-flex items-center gap-1 rounded-full pl-2.5 pr-1.5 py-1 text-xs border transition-colors ${
+              className={`group flex items-center gap-1 pl-2 pr-1.5 py-1.5 text-xs border-l-2 transition-colors ${
                 isActive
-                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
-                  : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+                  ? 'bg-amber-500/10 border-amber-400 text-amber-300'
+                  : 'border-transparent text-gray-300 hover:bg-white/[0.04]'
               }`}
             >
               <button
                 onClick={() => setActiveGroupId(g.id)}
                 onDoubleClick={() => { if (!isAuto) { setEditingId(g.id); setEditName(g.name); } }}
-                className="font-medium max-w-[120px] truncate flex items-center gap-1"
-                title={g.name}
+                className="flex-1 min-w-0 flex items-center gap-1 text-left"
+                title={isAuto ? g.name : `${g.name} — 더블클릭하면 이름 변경`}
               >
                 {isAuto && <Clock size={11} className="shrink-0" />}
-                {g.name}
+                <span className="truncate font-medium">{g.name}</span>
               </button>
-              {isActive && !isAuto && (
-                <>
-                  <button onClick={() => { setEditingId(g.id); setEditName(g.name); }} title="이름 변경" className="text-amber-400/70 hover:text-amber-200">
+              <span className="shrink-0 text-[9px] text-gray-600 tabular-nums">{(g.stocks || []).length}</span>
+              {/* 세로 목록에서는 ✏️/🗑을 **행 hover**로 낸다 — 옛 칩 행은 활성 칩에만 달려 있어
+                  가로 스크롤 끝까지 따라다녔다. 자동 그룹('최근조회')은 이름 변경·삭제 대상이 아니다. */}
+              {!isAuto && (
+                <span className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                  <button onClick={() => { setEditingId(g.id); setEditName(g.name); }} title="이름 변경" className="text-gray-500 hover:text-amber-300">
                     <Pencil size={11} />
                   </button>
-                  <button onClick={() => setConfirmDelId(g.id)} title="그룹 삭제" className="text-amber-400/70 hover:text-red-300">
+                  <button onClick={() => setConfirmDelId(g.id)} title="그룹 삭제" className="text-gray-500 hover:text-red-300">
                     <Trash2 size={11} />
                   </button>
-                </>
+                </span>
               )}
-            </span>
+            </div>
           );
         })}
         {creating ? (
-          <input
-            autoFocus
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') addGroup(); else if (e.key === 'Escape') { setCreating(false); setNewName(''); } }}
-            onBlur={addGroup}
-            placeholder="그룹 이름"
-            className={chipInput}
-            maxLength={20}
-          />
+          <div className="px-1.5 py-0.5">
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') addGroup(); else if (e.key === 'Escape') { setCreating(false); setNewName(''); } }}
+              onBlur={addGroup}
+              placeholder="그룹 이름"
+              className={sidebarInput}
+              maxLength={20}
+            />
+          </div>
         ) : (
-          <button
-            onClick={() => setCreating(true)}
-            title="관심 그룹 추가"
-            className="inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-xs bg-gray-800/60 border border-dashed border-gray-600 text-gray-400 hover:text-amber-300 hover:border-amber-500/50 transition-colors shrink-0"
-          >
-            <Plus size={12} /> 그룹
-          </button>
+          <div className="px-1.5 py-0.5">
+            <button
+              onClick={() => setCreating(true)}
+              title="관심 그룹 추가"
+              className="w-full flex items-center justify-center gap-0.5 rounded px-2 py-1 text-xs bg-gray-800/60 border border-dashed border-gray-600 text-gray-400 hover:text-amber-300 hover:border-amber-500/50 transition-colors"
+            >
+              <Plus size={12} /> 그룹
+            </button>
+          </div>
         )}
-      </div>
+          </div>
+        </aside>
+        ) : (
+          /* 접힌 사이드바 — 펼치기 버튼만 남긴다(유일한 복귀 경로라 반드시 렌더할 것) */
+          <div className="shrink-0 flex flex-col items-center px-1 pt-2 border-r border-gray-800/70">
+            <button onClick={() => setSidebarOpen(true)} title="그룹 목록 펼치기" className="p-1 text-gray-600 hover:text-amber-300 transition-colors">
+              <PanelLeft size={13} />
+            </button>
+          </div>
+        )}
 
-      {/* 본문 */}
-      <div className="flex-1 overflow-y-auto px-3 py-3" style={{ touchAction: 'auto' }}>
+        {/* 종목 리스트 */}
+        <div className="flex-1 min-w-0 overflow-y-auto px-3 py-3" style={{ touchAction: 'auto' }}>
         {list.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center gap-2 py-8">
             <Star size={28} className="text-gray-600" />
             <p className="text-gray-400 text-sm font-medium">관심 그룹을 만들어 종목을 모아 보세요</p>
+            {/* ⚠️ 이름 입력창은 사이드바 안에 있다 — 접힌 상태로 두면 눌러도 아무 일도 안 일어난 것처럼 보인다 */}
             <button
-              onClick={() => setCreating(true)}
+              onClick={() => { setSidebarOpen(true); setCreating(true); }}
               className="mt-1 inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/25 transition-colors"
             >
               <Plus size={13} /> 그룹 추가
@@ -768,6 +815,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
             )}
           </>
         ) : null}
+        </div>
       </div>
     </div>
   );
