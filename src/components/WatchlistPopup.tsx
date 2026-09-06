@@ -12,9 +12,9 @@ const WATCHLIST_Z = 1050;
 // 종목명 열은 고정폭 열(그립16+점6+미니차트56+등락율64+현재가96+삭제12+여백/gap 80 ≈ 330px)을 뺀 나머지라,
 // 폭이 좁으면 국내 ETF 풀네임(예: "KODEX 금융고배당TOP10타겟위클리커버드콜")이 대부분 잘린다.
 // 종목 리스트에 640px = 종목명 약 310px 확보 → 긴 ETF명도 한 줄에 그대로 보인다.
-// ⚠️ 808 = 640(리스트) + 168(그룹 사이드바). 사이드바를 넣으면서 폭을 안 늘리면 종목명이 160px로
-//    쪼그라들어 위 640px의 존재 이유가 통째로 무너진다 — 둘은 한 세트다. (좁은 화면은 maxWidth로 클램프)
-const SIDEBAR_W = 168;
+// ⚠️ PANEL_W = 640(리스트) + SIDEBAR_W(그룹 사이드바). 사이드바를 넣으면서 폭을 안 늘리면 종목명이
+//    그만큼 쪼그라들어 위 640px의 존재 이유가 통째로 무너진다 — 둘은 한 세트다. (좁은 화면은 maxWidth로 클램프)
+const SIDEBAR_W = 180;
 const PANEL_W = 640 + SIDEBAR_W;
 const MARKET_LABEL = { kr: '국내', us: '해외', fund: '펀드' };
 const RECENT_ID = '__recent__';   // 자동 '최근조회' 그룹의 예약 id
@@ -22,6 +22,11 @@ const RECENT_NAME = '최근조회';
 const RECENT_CAP = 20;            // 최근조회 보관 개수
 const MAX_GROUPS = 30;           // 수동 그룹 소프트 상한(최근조회 제외)
 const MAX_STOCKS = 100;          // 그룹당 종목 소프트 상한
+
+// 그룹이 '자동 그룹(최근조회)'인가 — 이름 변경·삭제·순서 드래그의 공통 게이트.
+// ⚠️ 이 판정을 손복제하지 말 것: recordRecent가 최근조회를 **항상 배열 맨 앞**에 다시 붙이므로
+//    (`[{최근조회}, ...others]`) 한 곳이라도 게이트를 빠뜨리면 그 경로만 조용히 원복된다.
+const isAutoGroupOf = (g) => !!g && (g.id === RECENT_ID || !!g.auto);
 
 const fmtPrice = (market, price) => {
   if (market === 'us') return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -112,8 +117,11 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
   const [editName, setEditName] = useState('');
   const [confirmDelId, setConfirmDelId] = useState(null);
   // 그룹 사이드바 접기 — 세션 로컬(뷰 선호도라 Drive 저장 지점 0곳).
-  // 좁은 화면에서 사이드바 168px이 종목명을 잠식할 때의 탈출구다.
+  // 좁은 화면에서 사이드바가 종목명 폭을 잠식할 때의 탈출구다.
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [gDragId, setGDragId] = useState(null);               // 순서 드래그 중인 그룹 id
+  const [gDragOverIndex, setGDragOverIndex] = useState(null); // 삽입 슬롯(**수동 그룹 기준** 0..N)
+  const sidebarListRef = useRef(null);                        // 그룹 목록 컨테이너(행 geometry 측정)
 
   // 종목 시세 로컬 캐시 (메모리 전용 — Drive 저장 안 함)
   const [quotes, setQuotes] = useState({});   // { [code]: { name, price, changeRate } }
@@ -437,7 +445,7 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
 
   // ───────── 순서 드래그 (원래순서 모드 + 수동 그룹 전용) ─────────
   // 정렬 중(sortDir≠null)이거나 '최근조회' 자동 그룹에선 비활성 — 보이는 순서=저장 순서일 때만 이동 허용.
-  const isAutoGroup = activeGroup?.id === RECENT_ID || !!activeGroup?.auto;
+  const isAutoGroup = isAutoGroupOf(activeGroup);
   const canReorder = !!activeGroup && !isAutoGroup && sortDir === null && activeStocks.length >= 2;
   // 포인터 Y로 삽입 슬롯(0..N) 계산 — 리스트는 드래그 중 재배열하지 않아 geometry가 안정적(깜빡임 없음).
   const computeDropIndex = (clientY) => {
@@ -481,6 +489,65 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
     }));
   };
   const cancelReorder = () => { setDragId(null); setDragOverIndex(null); };
+
+  // ───────── 그룹 순서 드래그 (수동 그룹 전용) ─────────
+  // ⚠️ '최근조회'(auto)는 **드래그 대상도 아니고 자리도 고정**이다 — `recordRecent`가 그 그룹을 항상
+  //    배열 맨 앞으로 다시 붙이므로(`[{최근조회}, ...others]`), 그 위로 끌어 놓아도 등락율을 한 번만
+  //    클릭하면 순서가 조용히 원복된다(사용자에겐 '드래그가 안 먹는' 것으로 보인다).
+  //    대신 recordRecent가 `others`의 순서는 그대로 보존하므로 수동 그룹끼리의 재정렬은 안전하다.
+  // ⚠️ 순서는 `watchlistGroups` **배열 자체를 재정렬**한다 → 기존 지문(portfolioStructureKey의
+  //    JSON.stringify)이 그대로 잡아 Drive 저장이 자동 트리거된다. `order` 필드를 새로 만들지 말 것
+  //    (정규화·지문·복원 등록 지점이 늘고 하나만 빠지면 조용히 유실된다 — 종목 순서 드래그와 같은 규약).
+  const manualIds = list.filter((g) => !isAutoGroupOf(g)).map((g) => g.id);
+  const canReorderGroups = manualIds.length >= 2;
+  // 포인터 Y로 삽입 슬롯(0..N) 계산 — **수동 그룹 행만** 센다(자동 그룹은 data 속성을 달지 않는다).
+  const computeGroupDropIndex = (clientY) => {
+    const rows = sidebarListRef.current?.querySelectorAll('[data-watch-group]');
+    if (!rows || !rows.length) return 0;
+    for (let i = 0; i < rows.length; i++) {
+      const rect = rows[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return i;
+    }
+    return rows.length;
+  };
+  const onGroupGripPointerDown = (e, g) => {
+    if (!canReorderGroups) return;
+    e.stopPropagation();
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    setGDragId(g.id);
+    setGDragOverIndex(manualIds.indexOf(g.id));
+  };
+  const onGroupGripPointerMove = (e) => {
+    if (gDragId == null) return;
+    const idx = computeGroupDropIndex(e.clientY);
+    setGDragOverIndex((prev) => (prev === idx ? prev : idx));
+  };
+  const commitGroupReorder = () => {
+    const id = gDragId, to = gDragOverIndex;
+    setGDragId(null);
+    setGDragOverIndex(null);
+    if (id == null || to == null) return;
+    onUpdateGroups?.((prev) => {
+      const arr = Array.isArray(prev) ? prev : [];
+      // 자동 그룹이 있던 인덱스는 **그대로 두고** 수동 그룹만 그 사이 슬롯에 다시 깐다
+      // (최근조회가 맨 앞에 고정되는 것을 산술이 아니라 구조로 보장).
+      const slots = [];
+      const manual = [];
+      arr.forEach((g, i) => { if (!isAutoGroupOf(g)) { slots.push(i); manual.push(g); } });
+      const from = manual.findIndex((g) => g.id === id);
+      if (from < 0) return arr;                       // prev 스냅샷 불일치 방어(같은 참조 = 저장 무트리거)
+      const insertAt = to > from ? to - 1 : to;        // splice로 앞에서 하나 제거되므로 뒤로 갈 땐 -1
+      if (insertAt === from || insertAt < 0 || insertAt >= manual.length) return arr;  // 순서 변화 없음
+      const next = [...manual];
+      const [item] = next.splice(from, 1);
+      next.splice(insertAt, 0, item);
+      const out = [...arr];
+      slots.forEach((idx, k) => { out[idx] = next[k]; });
+      return out;
+    });
+  };
+  const cancelGroupReorder = () => { setGDragId(null); setGDragOverIndex(null); };
 
   if (!open) return null;
 
@@ -526,10 +593,10 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
               <PanelLeftClose size={12} />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto py-1">
+          <div ref={sidebarListRef} className={`flex-1 overflow-y-auto py-1 ${gDragId != null ? 'select-none' : ''}`}>
         {list.map((g) => {
           const isActive = activeGroup?.id === g.id;
-          const isAuto = g.id === RECENT_ID || g.auto;
+          const isAuto = isAutoGroupOf(g);
           if (!isAuto && editingId === g.id) {
             return (
               <div key={g.id} className="px-1.5 py-0.5">
@@ -559,15 +626,40 @@ export default function WatchlistPopup({ open, onClose, groups = [], onUpdateGro
               </div>
             );
           }
+          // 삽입 슬롯 표시는 **수동 그룹 인덱스** 기준(자동 그룹은 드래그 대상이 아니다)
+          const mIdx = isAuto ? -1 : manualIds.indexOf(g.id);
+          const gIsDragging = gDragId === g.id;
+          const gDropTop = canReorderGroups && gDragId != null && !gIsDragging && mIdx >= 0 && gDragOverIndex === mIdx;
+          const gDropBottom = canReorderGroups && gDragId != null && !gIsDragging && mIdx >= 0
+            && mIdx === manualIds.length - 1 && gDragOverIndex === manualIds.length;
           return (
             <div
               key={g.id}
-              className={`group flex items-center gap-1 pl-2 pr-1.5 py-1.5 text-xs border-l-2 transition-colors ${
+              data-watch-group={isAuto ? undefined : ''}
+              className={`group flex items-center gap-1 pl-1.5 pr-1.5 py-1.5 text-xs border-l-2 transition-colors ${
                 isActive
                   ? 'bg-amber-500/10 border-amber-400 text-amber-300'
                   : 'border-transparent text-gray-300 hover:bg-white/[0.04]'
-              }`}
+              } ${gIsDragging ? 'opacity-40' : ''}`}
+              style={{ boxShadow: gDropTop ? 'inset 0 2px 0 0 #fbbf24' : gDropBottom ? 'inset 0 -2px 0 0 #fbbf24' : undefined }}
             >
+              {canReorderGroups && (isAuto ? (
+                // 자동 그룹은 자리만 맞춘다(맨 위 고정 — 드래그 대상 아님)
+                <span className="w-3.5 shrink-0" />
+              ) : (
+                <button
+                  onPointerDown={(e) => onGroupGripPointerDown(e, g)}
+                  onPointerMove={onGroupGripPointerMove}
+                  onPointerUp={commitGroupReorder}
+                  onPointerCancel={cancelGroupReorder}
+                  onLostPointerCapture={cancelGroupReorder}
+                  title="드래그하여 그룹 순서 이동"
+                  className="w-3.5 shrink-0 flex items-center justify-center text-gray-700 hover:text-amber-300 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-grab active:cursor-grabbing"
+                  style={{ touchAction: 'none' }}
+                >
+                  <GripVertical size={12} />
+                </button>
+              ))}
               <button
                 onClick={() => setActiveGroupId(g.id)}
                 onDoubleClick={() => { if (!isAuto) { setEditingId(g.id); setEditName(g.name); } }}
