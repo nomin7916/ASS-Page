@@ -25,6 +25,13 @@ export const CARD_DEFS = [
   { key: 'dividend', label: '분배금 현황' },
   { key: 'rebalancing', label: '리밸런싱' },
   { key: 'donut', label: '자산비중비교' },
+  // ⚠️ ladder는 '카드'가 아니라 리밸런싱 표의 **분할 계산기**다 — 카드 헤더의 확장 버튼 목록
+  //    (CARD_WINDOW_SUPPORTED)에는 **넣지 않는다**. 진입점은 계산기 타이틀바의 ⧉ 하나뿐이고,
+  //    창은 계좌 + 종목(item) + 방향(side)까지 지정해야 열린다(아래 ladderWinId).
+  //    카드 창 인프라를 재사용하는 이유: 계산기 값(목표금액·기준수량·등락률)은 전부
+  //    rebalanceData의 그 종목 행에서 파생되는데, 창이 **원자재를 받아 스스로 파생을 계산**하는
+  //    이 인프라가 그 계약(INV-2)을 이미 만족한다. 새 창 종류를 만들면 앱이 파생값을 push해야 한다.
+  { key: 'ladder', label: '분할 계산기' },
 ] as const;
 
 export type CardKey = typeof CARD_DEFS[number]['key'];
@@ -49,11 +56,23 @@ export const cardWindowTitle = (accountName: string, card: string): string => {
 
 // window.open의 name — 같은 (계좌, 카드)를 다시 누르면 **새 창을 열지 않고 기존 창을 포커스**한다.
 // ⚠️ pid에 공백·특수문자가 들어갈 수 있어 안전 문자만 남긴다(브라우저가 name을 토큰으로 다룬다).
-export const cardWindowName = (pid: string, card: string): string =>
-  `ass-card-${String(pid || '').replace(/[^A-Za-z0-9_-]/g, '')}-${card}`;
+// ⚠️ `extra`(분할 계산기의 종목·방향)는 **선택 인자**다 — 넘기지 않으면 반환값이 종전과 한 글자도
+//    다르지 않다(하위호환의 축). 계산기는 종목마다 창이 따로 열려야 하므로 이름에 함께 싣는다.
+export const cardWindowName = (pid: string, card: string, extra = ''): string =>
+  `ass-card-${String(pid || '').replace(/[^A-Za-z0-9_-]/g, '')}-${card}`
+  + (extra ? `-${String(extra).replace(/[^A-Za-z0-9_-]/g, '')}` : '');
 
-export const cardWindowUrl = (pid: string, card: string): string =>
-  `/?cardWindow=1&card=${encodeURIComponent(card)}&pid=${encodeURIComponent(pid)}`;
+export const cardWindowUrl = (pid: string, card: string, params: any = null): string =>
+  `/?cardWindow=1&card=${encodeURIComponent(card)}&pid=${encodeURIComponent(pid)}`
+  + (params && params.item ? `&item=${encodeURIComponent(params.item)}` : '')
+  + (params && params.side ? `&side=${encodeURIComponent(params.side)}` : '');
+
+// 분할 계산기 창의 winId — (계좌, 종목, 방향)마다 창이 하나다. 여러 종목의 계산기를 동시에 열 수
+// 있어야 하므로 카드 키만으로는 부족하다.
+// ⚠️ App(레지스트리 키)·RebalancingPanel(열림 표시)·CardWindow(자기 id)가 **이 한 함수를 공유**해야
+//    한다 — 문자열을 손으로 조합하면 한쪽만 어긋나 '창이 열려 있는데 버튼은 닫힘'으로 보인다.
+export const ladderWinId = (pid: any, itemId: any, side: any): string =>
+  `ladder:${String(pid || '')}:${String(itemId || '')}:${side === 'sell' ? 'sell' : 'buy'}`;
 
 // ⚠️ 평가액 시계열(buildCloseEvalSeries)은 **현재 보유가 아니라 그 날짜의 holdingSnapshot items**를
 //    평가한다. 그래서 창에 보내는 종가 부분집합을 '현재 보유 코드'로 잡으면, 매도·이관으로 지금은
@@ -90,6 +109,9 @@ export const CARD_NEEDS: Record<string, { prices?: boolean; dividend?: boolean; 
   dividend: { dividend: true },
   // histPeriod = 평가액 추이 표의 기간 단위(앱의 초기값 1회 시드용). stats 카드만 그 표를 그린다.
   stats: { prices: true, fetchStatus: true, histPeriod: true },
+  // 분할 계산기 — 리밸런싱과 같은 원자재(계좌 객체)로 rebalanceData를 계산하고, 현재가 재조회
+  // 상태점(refreshState)을 그리므로 fetchStatus가 필요하다.
+  ladder: { fetchStatus: true },
 };
 
 // 창→앱 커맨드 이름 — **App의 핸들러가 실제로 구현한 것과 1:1**이어야 한다.
@@ -108,6 +130,10 @@ export const CARD_OPS = [
   'refreshPrice', 'saveTargetSnapshot', 'updateInvestmentNotes', 'verifyPin',
   // 관리자 접속 중 목표 변경 공지 — 인앱과 같은 등급으로 알린다(세션당 1회 래치는 앱 탭 담당)
   'adminTargetChange',
+  // 분할 계산기 — 사용 이력 기록(달력 ladderLog upsert) / 계산기 창 열기 위임.
+  // ⚠️ 창에서 window.open을 직접 부르면 새 창의 opener가 **그 창**이 되어 앱 탭과 영영 연결되지
+  //    않는다(읽기 전용으로 굳는다) → 앱 탭에 위임한다(CalendarWindow의 calendar:openLedger 선례).
+  'saveLadderLog', 'openLadderWindow',
   // 분배금 — 하부 by-id 라이터 20종을 fn 이름으로 라우팅한다
   'dividendCall',
 ] as const;

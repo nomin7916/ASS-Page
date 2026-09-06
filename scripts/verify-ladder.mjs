@@ -22,7 +22,7 @@
 //      base가 옮겨져 사다리 **반대편**으로 넘어간 핀도 마찬가지(같은 가격이 두 행에 찍히는 것 방지).
 
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as nodeModule from 'node:module';
 
@@ -910,6 +910,323 @@ console.log('\n■ 방어 입력');
   ok('#28 가격/호가/수량이 0 이하면 빈 사다리', true);
   ok('#29 목표금액 0 → 수량 0', F.solveQtyForAmount(1000, 10, 0, 1, 0, -1) === 0 && F.solveQtyForAmount(1000, 10, 0, 1, 0, 1) === 0);
   ok('#30 매수 자금이 커도 floor 아래로는 안 내려간다', F.buildLadder(30, 10, 100, 1, 0, -1).every(r => r.price >= 1));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 사용 이력(ladderLog) · 별도 창 — 사용자 확정 2026-09
+//   · 기록은 계산기의 '기록' 버튼을 눌렀을 때만(자동 기록 금지)
+//   · 저장 위치는 calendarMemos 재사용(kind:'ladderLog') → 영속화 신규 지점 0곳
+//   · (날짜, 계좌)당 1건 + 그 안에서 (종목, 매수/매도)별 최신 1건 덮어쓰기
+//   · '과거 목표비중 불러오기' 창이 목표비중 스냅샷과 **합집합**으로 리스트를 만든다
+//   · 메모 달력에는 칩을 띄우지 않는다 → CalendarModal의 사용자 메모 필터가 이 kind를 걸러야 한다
+// ⚠️ 파트①은 src/utils.ts를 **직접 import**한다(미러 금지 — src/미러 한쪽만 고친 변경이 둘 다
+//    통과하는 구멍이 생긴다). utils.ts는 import 0건이라 Node가 타입만 벗겨 실행할 수 있다.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n■ 사용 이력 · 순수 함수 (src/utils.ts 직접 import)');
+let U = null;
+try {
+  U = await import(pathToFileURL(join(ROOT, 'src/utils.ts')).href);
+} catch (e) {
+  console.log(`  ⓘ 이 런타임은 .ts 직접 import를 지원하지 않아 이 파트를 건너뜁니다 (${e.code || e.message}).`);
+}
+if (U) {
+  const mkRows = (n, p0 = 1000, step = 10) => Array.from({ length: n }, (_, i) => ({ price: p0 - i * step, qty: i + 1 }));
+  const baseIn = { name: 'TIGER 미국', code: '360750', side: 'buy', targetAmount: 100000, baseQty: 5, currentPrice: 1000, tickSize: 10, mult: 1, rows: mkRows(3), at: 1700000000000 };
+
+  // ── 키 ──
+  ok('#140 키는 코드+방향 (대소문자 무관)', U.ladderTradeKey(' 360750 ', '이름', 'buy') === '360750|buy'
+    && U.ladderTradeKey('360750', '이름', 'sell') === '360750|sell');
+  ok('#140b 코드가 없으면 이름으로 (공백 축약·NFC)', U.ladderTradeKey('', ' TIGER   미국 ', 'buy') === 'tiger 미국|buy');
+  // ⚠️ 둘 다 없으면 ''를 돌려 **기록 자체를 막는다** — 어느 종목인지 특정할 수 없는 기록은 쓸모가 없고,
+  //    빈 키로 저장하면 다음 기록이 종목과 무관하게 그것을 덮어쓴다.
+  ok('#140c 코드·이름이 둘 다 없으면 빈 키', U.ladderTradeKey('', '  ', 'buy') === '');
+  ok('#140d 방향은 sell 외 전부 buy로 정규화', U.ladderTradeKey('A', '', 'xx') === 'A|buy');
+
+  // ── buildLadderTrade ──
+  {
+    const t = U.buildLadderTrade(baseIn);
+    ok('#141 총수량·총액·평균단가를 rows에서 다시 계산한다',
+      t.qty === 6 && t.totalCost === 1000 * 1 + 990 * 2 + 980 * 3 && Math.abs(t.avgPrice - t.totalCost / 6) < 1e-9,
+      J({ qty: t.qty, cost: t.totalCost, avg: t.avgPrice }));
+    ok('#141b 단계 수 = 유효 행 수', t.steps === 3 && t.rows.length === 3);
+    ok('#141c 설정값을 그대로 담는다', t.tickSize === 10 && t.mult === 1 && t.targetAmount === 100000 && t.baseQty === 5);
+  }
+  ok('#142 빈 사다리는 기록하지 않는다(null)', U.buildLadderTrade({ ...baseIn, rows: [] }) === null);
+  ok('#142b 가격·수량이 0 이하인 행은 버린다',
+    U.buildLadderTrade({ ...baseIn, rows: [{ price: 0, qty: 5 }, { price: 100, qty: 0 }, { price: 100, qty: 2 }] }).steps === 1);
+  ok('#142c 유효한 행이 하나도 없으면 null',
+    U.buildLadderTrade({ ...baseIn, rows: [{ price: 0, qty: 5 }, { price: 100, qty: 0 }] }) === null);
+  ok('#142d 종목을 특정할 수 없으면 null', U.buildLadderTrade({ ...baseIn, name: '', code: '' }) === null);
+  ok('#143 행 상한을 넘기지 않는다',
+    U.buildLadderTrade({ ...baseIn, rows: mkRows(U.MAX_LADDER_LOG_ROWS + 20, 100000, 1) }).steps === U.MAX_LADDER_LOG_ROWS);
+  ok('#143b 배수 0·음수는 1로', U.buildLadderTrade({ ...baseIn, mult: 0 }).mult === 1
+    && U.buildLadderTrade({ ...baseIn, mult: -3 }).mult === 1);
+
+  // ── upsert ──
+  {
+    const t1 = U.buildLadderTrade(baseIn);
+    const m1 = U.upsertLadderTradeMemo({}, '2026-09-06', { portfolioId: 'p1', accountName: '연금', currency: 'KRW' }, t1, 'id1', 111);
+    ok('#144 새 기록을 만든다', m1['2026-09-06'].length === 1 && m1['2026-09-06'][0].kind === 'ladderLog'
+      && m1['2026-09-06'][0].trades.length === 1 && m1['2026-09-06'][0].id === 'id1');
+    // 같은 종목·같은 방향을 다시 기록 → 덮어쓰기(사용자 확정: 최신 1건)
+    const t2 = U.buildLadderTrade({ ...baseIn, tickSize: 50, rows: mkRows(2, 900, 50) });
+    const m2 = U.upsertLadderTradeMemo(m1, '2026-09-06', { portfolioId: 'p1', accountName: '연금', currency: 'KRW' }, t2, 'id2', 222);
+    ok('#144b 같은 (종목, 방향)은 덮어쓴다', m2['2026-09-06'][0].trades.length === 1
+      && m2['2026-09-06'][0].trades[0].tickSize === 50);
+    ok('#144c 교체 시 id·createdAt을 승계한다',
+      m2['2026-09-06'][0].id === 'id1' && m2['2026-09-06'][0].createdAt === 111 && m2['2026-09-06'][0].updatedAt === 222);
+    // 방향이 다르면 별개 건
+    const t3 = U.buildLadderTrade({ ...baseIn, side: 'sell' });
+    const m3 = U.upsertLadderTradeMemo(m2, '2026-09-06', { portfolioId: 'p1', accountName: '연금', currency: 'KRW' }, t3, 'id3', 333);
+    ok('#144d 매수·매도는 별개 건', m3['2026-09-06'][0].trades.length === 2);
+    // 다른 계좌는 별개 항목
+    const m4 = U.upsertLadderTradeMemo(m3, '2026-09-06', { portfolioId: 'p2', accountName: '해외', currency: 'USD' }, t1, 'id4', 444);
+    ok('#144e 계좌마다 별개 항목', m4['2026-09-06'].length === 2
+      && m4['2026-09-06'][1].portfolioId === 'p2' && m4['2026-09-06'][1].currency === 'USD');
+    // ⚠️ at(기록 시각)만 다른 같은 사다리는 '변경 없음' — 아니면 같은 버튼을 두 번 누를 때마다
+    //    Drive 저장이 헛돈다(STATE는 백업 22본으로 복제된다).
+    const same = U.upsertLadderTradeMemo(m4, '2026-09-06', { portfolioId: 'p1', accountName: '연금', currency: 'KRW' },
+      U.buildLadderTrade({ ...baseIn, side: 'sell', at: 999 }), 'idX', 555);
+    ok('#145 at만 다르면 null(변경 없음)', same === null);
+    // 기존 날짜 배열의 다른 kind는 보존
+    const withOther = { '2026-09-06': [{ id: 'memo', content: '메모' }, { kind: 'rebalTarget', portfolioId: 'p1', rows: [] }] };
+    const m5 = U.upsertLadderTradeMemo(withOther, '2026-09-06', { portfolioId: 'p1', accountName: '연금', currency: 'KRW' }, t1, 'id5', 666);
+    ok('#146 같은 날짜의 다른 기록을 건드리지 않는다', m5['2026-09-06'].length === 3
+      && m5['2026-09-06'][0].content === '메모' && m5['2026-09-06'][1].kind === 'rebalTarget');
+    ok('#146b 원본을 변형하지 않는다(불변)', withOther['2026-09-06'].length === 2);
+    ok('#147 잘못된 인자는 null', U.upsertLadderTradeMemo({}, '', { portfolioId: 'p1' }, t1, 'i', 1) === null
+      && U.upsertLadderTradeMemo({}, '2026-09-06', { portfolioId: '' }, t1, 'i', 1) === null
+      && U.upsertLadderTradeMemo({}, '2026-09-06', { portfolioId: 'p1' }, null, 'i', 1) === null);
+    // 상한 — 오래된 것부터 버린다
+    let big = {};
+    for (let i = 0; i < U.MAX_LADDER_LOG_TRADES + 5; i++) {
+      big = U.upsertLadderTradeMemo(big, '2026-09-06', { portfolioId: 'p1', accountName: 'a', currency: 'KRW' },
+        U.buildLadderTrade({ ...baseIn, code: `C${i}` }), `id${i}`, 1000 + i);
+    }
+    const kept = big['2026-09-06'][0].trades;
+    ok('#148 종목 상한을 넘지 않고 오래된 것부터 버린다',
+      kept.length === U.MAX_LADDER_LOG_TRADES && kept[0].code === 'C5'
+      && kept[kept.length - 1].code === `C${U.MAX_LADDER_LOG_TRADES + 4}`);
+  }
+
+  // ── list ──
+  {
+    const memos = {
+      '2026-09-06': [{ kind: 'ladderLog', portfolioId: 'p1', trades: [{ key: 'a|buy' }] }],
+      '2026-09-01': [{ kind: 'ladderLog', portfolioId: 'p1', trades: [{ key: 'b|buy' }] }],
+      '2026-09-03': [{ kind: 'ladderLog', portfolioId: 'p2', trades: [{ key: 'c|buy' }] }],
+      '2026-09-04': [{ kind: 'ladderLog', portfolioId: 'p1', trades: [] }],          // 빈 기록은 제외
+      '2026-09-05': [{ kind: 'ladderLog', portfolioId: 'p1' }],                       // trades 없음 → 제외
+      'bad-date': [{ kind: 'ladderLog', portfolioId: 'p1', trades: [{ key: 'd|buy' }] }],
+      '2026-09-02': 'corrupt',
+    };
+    const list = U.listLadderLogs(memos, 'p1');
+    ok('#149 계좌·유효 날짜만, 날짜 내림차순', J(list.map(l => l.dayKey)) === J(['2026-09-06', '2026-09-01']));
+    ok('#149b 잘못된 인자는 빈 배열', U.listLadderLogs(null, 'p1').length === 0
+      && U.listLadderLogs(memos, '').length === 0 && U.listLadderLogs([], 'p1').length === 0);
+  }
+
+  // ── delete ──
+  {
+    const t1 = U.buildLadderTrade(baseIn);
+    const t2 = U.buildLadderTrade({ ...baseIn, side: 'sell' });
+    let m = U.upsertLadderTradeMemo({}, '2026-09-06', { portfolioId: 'p1', accountName: 'a', currency: 'KRW' }, t1, 'i1', 1);
+    m = U.upsertLadderTradeMemo(m, '2026-09-06', { portfolioId: 'p1', accountName: 'a', currency: 'KRW' }, t2, 'i2', 2);
+    const d1 = U.deleteLadderTrade(m, '2026-09-06', 'p1', t1.key);
+    ok('#150 한 건만 지운다', d1['2026-09-06'][0].trades.length === 1 && d1['2026-09-06'][0].trades[0].key === t2.key);
+    ok('#150b content도 함께 갱신된다', d1['2026-09-06'][0].content.includes('(1종목)'));
+    const d2 = U.deleteLadderTrade(d1, '2026-09-06', 'p1', t2.key);
+    ok('#150c 마지막 건을 지우면 날짜 키까지 버린다', d2['2026-09-06'] === undefined);
+    // ⚠️ 같은 날짜의 다른 기록이 남아 있으면 날짜 키는 유지해야 한다.
+    const withMemo = { '2026-09-06': [{ id: 'x', content: '메모' }, ...m['2026-09-06']] };
+    const d3 = U.deleteLadderTrade(U.deleteLadderTrade(withMemo, '2026-09-06', 'p1', t1.key), '2026-09-06', 'p1', t2.key);
+    ok('#150d 다른 기록이 있으면 날짜 키를 남긴다', d3['2026-09-06'].length === 1 && d3['2026-09-06'][0].content === '메모');
+    ok('#151 지울 게 없으면 null(헛된 저장 트리거 방지)',
+      U.deleteLadderTrade(m, '2026-09-06', 'p1', '없는키') === null
+      && U.deleteLadderTrade(m, '2026-09-07', 'p1', t1.key) === null
+      && U.deleteLadderTrade(m, '2026-09-06', 'p9', t1.key) === null
+      && U.deleteLadderTrade(m, '2026-09-06', 'p1', '') === null);
+  }
+
+  // ── 리스트 합집합 ──
+  {
+    const snaps = [{ dayKey: '2026-09-05', memo: { kind: 'rebalTarget' } }, { dayKey: '2026-09-01', memo: { kind: 'rebalTarget' } }];
+    const logs = [{ dayKey: '2026-09-06', memo: { kind: 'ladderLog' } }, { dayKey: '2026-09-05', memo: { kind: 'ladderLog' } }];
+    const merged = U.mergeRestoreSources(snaps, logs);
+    ok('#152 합집합 · 날짜 내림차순', J(merged.map(r => r.dayKey)) === J(['2026-09-06', '2026-09-05', '2026-09-01']));
+    ok('#152b 같은 날짜는 한 행에 둘 다', merged[1].memo && merged[1].ladder);
+    ok('#152c 계산기만 있는 날짜는 memo=null', merged[0].memo === null && !!merged[0].ladder);
+    ok('#152d 목표비중만 있는 날짜는 ladder=null', merged[2].ladder === null && !!merged[2].memo);
+    // ⚠️ 하위호환 — 계산기 이력이 없으면 목표비중 스냅샷과 **같은 날짜 집합**이어야 한다.
+    ok('#152e 계산기 이력 0건이면 목표비중 그대로',
+      J(U.mergeRestoreSources(snaps, []).map(r => r.dayKey)) === J(['2026-09-05', '2026-09-01']));
+    ok('#152f 잘못된 인자는 빈 배열', U.mergeRestoreSources(null, null).length === 0);
+  }
+}
+
+console.log('\n■ 사용 이력 · 별도 창 배선 가드 (미러로는 표현 불가)');
+{
+  const panel = readFileSync(join(ROOT, 'src/components/RebalancingPanel.tsx'), 'utf8');
+  const app = readFileSync(join(ROOT, 'src/App.tsx'), 'utf8');
+  const utl = readFileSync(join(ROOT, 'src/utils.ts'), 'utf8');
+  const modal = readFileSync(join(ROOT, 'src/components/RebalanceTargetRestoreModal.tsx'), 'utf8');
+  const cal = readFileSync(join(ROOT, 'src/components/CalendarModal.tsx'), 'utf8');
+  const cw = readFileSync(join(ROOT, 'src/components/CardWindow.tsx'), 'utf8');
+  const cwc = readFileSync(join(ROOT, 'src/cardWindow.ts'), 'utf8');
+
+  // ── 기록 버튼 (사용자 확정: 눌렀을 때만) ──
+  ok('#160 계산기가 기록 버튼을 렌더하고 rows에서 payload를 만든다',
+    /onSaveLog = null,/.test(src)
+    && /\{onSaveLog && \(/.test(src)
+    && /onClick=\{handleSaveLog\}/.test(src)
+    && /rows: rows\.map\(r => \(\{ price: r\.price, qty: r\.qty \}\)\),/.test(src));
+  // ⚠️ 자동 기록으로 되돌리면 실패한다 — 기록은 **클릭 핸들러에서만** 일어나야 한다.
+  //    (effect에서 onSaveLog를 부르면 계산기를 열기만 해도 이력이 쌓인다.)
+  ok('#160b 자동 기록 경로가 없다 (effect에서 부르지 않는다)',
+    !/useEffect\([^)]*\{[^}]*onSaveLog\(/.test(stripComments(src))
+    && !/doRegenerate[\s\S]{0,200}?onSaveLog\(/.test(stripComments(src)));
+  ok('#160c 빈 사다리는 보내지 않고 사유를 밝힌다',
+    /if \(!rows\.length\) res = 'empty';/.test(src) && /empty: '기록할 사다리 없음'/.test(src));
+  ok('#160d 피드백은 인라인 플래시 (notify 금지 — z-1050이라 가려진다)',
+    /setLogFlash\(res\)/.test(src) && !/notify\(/.test(stripComments(src)));
+  ok('#160e 플래시 타이머를 언마운트에서 정리한다',
+    /useEffect\(\(\) => \(\) => \{ if \(logFlashTimer\.current\) clearTimeout\(logFlashTimer\.current\); \}, \[\]\);/.test(src));
+  ok('#161 패널이 종목 이름·코드를 붙여 보낸다 (모달은 종목을 모른다)',
+    /onLadderLog\(\{ \.\.\.payload, name: ladderRow\.name, code: ladderRow\.code \}\)/.test(panel)
+    && /onSaveLog=\{ladderSaveLog\}/.test(panel));
+  ok('#162 App이 buildLadderTrade → upsert → 미러 ref 동기 갱신을 한다',
+    /const trade = buildLadderTrade\(input\);/.test(app)
+    && /const dayKey = getTodayKST\(\);/.test(app)
+    && /upsertLadderTradeMemo\(\s*calendarMemosRef\.current, dayKey,/.test(app)
+    && /calendarMemosRef\.current = next;\s*setCalendarMemos\(next\);/.test(app));
+  // ⚠️ 날짜는 반드시 getTodayKST — new Date().toISOString()(UTC)은 한국 00:00~09:00에 어제 칸에 꽂힌다.
+  ok('#162b 기록 날짜에 UTC 파생을 쓰지 않는다',
+    !/const dayKey = new Date\(\)\.toISOString\(\)/.test(app));
+  ok('#163 관리자 접속 중에는 기록·삭제 버튼을 노출하지 않는다',
+    /onLadderLog=\{adminViewingAs \? null : handleLadderLog\}/.test(app)
+    && /onDeleteLadderTrade=\{adminViewingAs \? null : handleDeleteLadderTrade\}/.test(app));
+
+  // ── 저장 위치: calendarMemos 재사용 (영속화 신규 지점 0곳) ──
+  // ⚠️ 앱 레벨 새 필드로 옮기면 영속화 7지점을 새로 만들어야 하고 하나만 빠져도 조용히 유실된다.
+  ok('#164 저장 위치는 calendarMemos — 앱 레벨 새 state를 만들지 않는다',
+    !/useState[^\n]*ladderLogs/.test(app) && !/setLadderLogs/.test(app)
+    && /const ladderLogs = useMemo\(\s*\(\) => listLadderLogs\(calendarMemos, activePortfolioId\),/.test(app));
+  // ⚠️ 그 대가 — CalendarModal의 사용자 메모 필터가 이 kind를 걸러야 한다. 옛 필터
+  //    (kind !== 'rebalTarget')로 되돌리면 달력 칸에 content 첫 줄이 텍스트로 샌다.
+  ok('#165 달력의 사용자 메모 줄은 kind 없는 항목만이다',
+    /const dayMemos = dayAll\.filter\(\(m\) => m && !m\.kind\);/.test(cal)
+    && !/const dayMemos = dayAll\.filter\(\(m\) => m && m\.kind !== 'rebalTarget'\);/.test(cal));
+
+  // ── 복원 창 통합 (사용자 확정: 같은 리스트) ──
+  ok('#166 리스트는 목표비중 ∪ 계산기 이력이다',
+    /mergeRestoreSources\(rebalTargetSnapshots, ladderLogs\)/.test(panel)
+    && /entries=\{restoreEntries\}/.test(panel)
+    && /: \(snapshots \|\| \[\]\)\.filter\(s => s && s\.dayKey\)\.map\(s => \(\{ dayKey: s\.dayKey, memo: s\.memo, ladder: null \}\)\)\),/.test(modal));
+  ok('#166b 진입 버튼 게이트도 합집합이다 (계산기만 쓴 계좌에서도 열려야 한다)',
+    /disabled=\{!restoreEntries\.length\}/.test(panel)
+    && !/disabled=\{!rebalTargetSnapshots\.length\}/.test(panel));
+  ok('#166c 리스트가 rows(합집합)를 순회하고 계산기 배지를 단다',
+    /\) : rows\.map\(s => \{/.test(modal)
+    && /const nLadder = \(s\.ladder\?\.trades \|\| \[\]\)\.length;/.test(modal)
+    && /계산기 \{nLadder\}/.test(modal)
+    && /목표비중 기록 없음/.test(modal));
+  // ⚠️ 최중요 — 헤더 날짜 경고는 **목표비중 기록만** 본다. byDay(합집합)로 재면 계산기만 쓴
+  //    날짜에서 "기록되지 않습니다"라고 경고해 놓고 실제로는 기록되는 거짓 경고가 된다
+  //    (App의 handleTargetRestored는 kind === 'rebalTarget'만 검사한다).
+  ok('#167 헤더 날짜 경고는 목표비중 기록만 본다',
+    /const targetDays = useMemo\(/.test(modal)
+    && /\(rows \|\| \[\]\)\.filter\(s => s && s\.memo\)\.map\(s => s\.dayKey\)/.test(modal)
+    && /const headerHasRecord = !!targetDate && targetDays\.has\(targetDate\);/.test(modal)
+    && !/const headerHasRecord = !!targetDate && byDay\.has\(targetDate\);/.test(modal));
+  // ⚠️ 경고 전체가 selMemo 게이트 안 — sel만 보면 계산기만 쓴 날짜에서 modeMismatch가
+  //    'fixed' !== targetMode 로 거짓 경고를 내고 snapInvest도 '적립식'으로 지어내진다.
+  ok('#167b 경고는 목표비중 기록이 있을 때만 판정한다',
+    /const selMemo = sel \? sel\.memo : null;/.test(modal)
+    && /const modeMismatch = !!selMemo &&/.test(modal)
+    && /const investMismatch = !!selMemo && !!snapInvest/.test(modal)
+    && /headerHasRecord \|\| !targetDate\) && !!selMemo && \(/.test(modal));
+  ok('#167c 목표비중이 없는 날짜는 미리보기를 만들지 않고 사유를 밝힌다',
+    /\(sel && sel\.memo \? matchRebalTargetRows\(sel\.memo\.rows, currentRows\) : null\)/.test(modal)
+    && /\{!sel \? \(/.test(modal)
+    && /목표비중 기록이 없습니다<\/b> — 아래 분할 계산기 이력만 있습니다/.test(modal));
+  ok('#168 계산기 표가 사용자 요구 항목을 전부 렌더한다 (목표금액·수량·평균단가·호가·배수·단계)',
+    /\{fmtMoney\(t\.targetAmount\)\}/.test(modal) && /\{fmtQty\(t\.qty\)\}/.test(modal)
+    && /\{fmtMoney\(t\.avgPrice\)\}/.test(modal) && /\{fmtMoney\(t\.tickSize\)\}/.test(modal)
+    && /\{t\.mult\}/.test(modal) && /\{t\.steps\}/.test(modal)
+    && /const selTrades = \(sel && sel\.ladder && Array\.isArray\(sel\.ladder\.trades\)\) \? sel\.ladder\.trades : \[\];/.test(modal));
+  ok('#168b 표 위에 "적용은 목표비중만"을 밝힌다 (계산기까지 복원되는 것으로 읽지 않게)',
+    /적용&apos; 버튼은 목표비중만 되돌립니다/.test(modal));
+  // ⚠️ 이 창은 목표비중 기록에 대해서는 여전히 순수 읽기다(INV-1) — verify:rebal-restore #26이
+  //    calendarMemos 토큰 부재를 단언한다. 삭제는 계산기 이력 전용 콜백으로만 흐른다.
+  ok('#169 계산기 이력 삭제는 인라인 2단계 (z-1070이라 확인창이 가려진다)',
+    /const confirming = delKey === t\.key;/.test(modal)
+    && /onDeleteLadderTrade\(sel\.dayKey, t\.key\); setDelKey\(null\);/.test(modal)
+    && /\{onDeleteLadderTrade && \(/.test(modal));
+  ok('#169b App 삭제 핸들러가 deleteLadderTrade를 지나 미러 ref를 동기 갱신한다',
+    /const next = deleteLadderTrade\(calendarMemosRef\.current, dayKey, pid, tradeKey\);/.test(app)
+    && /if \(!next\) return false;\s*calendarMemosRef\.current = next;/.test(app));
+
+  // ── 별도 창 ──
+  ok('#170 확장 버튼은 새로고침 옆에, 별도 창에서는 렌더하지 않는다',
+    /onExpand = null,/.test(src) && /\{onExpand && \(/.test(src)
+    && /onClick=\{\(\) => onExpand\(\)\}/.test(src)
+    && /onExpand=\{ladderExpand\}/.test(panel));
+  // ⚠️ 팝업 차단으로 창이 못 떴는데 인앱 팝업을 닫으면 계산기를 통째로 잃는다.
+  ok('#170d 창이 실제로 떴을 때만 인앱 팝업을 닫는다',
+    /if \(onExpandLadder\(ladderModal\.itemId, ladderModal\.side\) === true\) setLadderModal\(null\);/.test(panel)
+    && /if \(!w\) \{ setCardWinBlocked\(true\); return false; \}/.test(app)
+    && /cardWinsRef\.current\.set\(winId, \{ id: winId, card: 'ladder', pid, win: w \}\);[\s\S]{0,120}?return true;/.test(app));
+  // ⚠️ delKey는 종목 키라, 날짜를 바꿔도 남아 있으면 다른 날짜의 같은 종목 행이 확인 상태로 뜬다.
+  ok('#169c 날짜를 바꾸면 삭제 확인 상태가 풀린다',
+    /const selectDay = \(key\) => \{ setSelDayKey\(key\); setViewOv\(null\); setDelKey\(null\); \};/.test(modal));
+  ok('#170b page 모드는 fixed·드래그·닫기를 쓰지 않는다',
+    /const isPage = variant === 'page';/.test(src)
+    && /onMouseDown=\{isPage \? undefined : handleDragStart\}/.test(src)
+    && /\{!isPage && \(/.test(src));
+  // ⚠️ popup 폭 440은 RebalancingPanel의 열림 위치 클램프(456)와 짝이다(#97과 같은 계약).
+  ok('#170c popup 폭·스타일은 종전 그대로다',
+    /style=\{isPage \? undefined : \{ left: position\.x, top: position\.y, width: 440 \}\}/.test(src));
+  ok('#171 계산기 창은 카드 창 인프라를 쓴다 (card=ladder + 종목·방향 URL)',
+    /\{ key: 'ladder', label: '분할 계산기' \}/.test(cwc)
+    && /ladder: \{ fetchStatus: true \}/.test(cwc)
+    && /params && params\.item \? `&item=\$\{encodeURIComponent\(params\.item\)\}` : ''/.test(cwc)
+    && /export const ladderWinId = /.test(cwc));
+  // ⚠️ CARD_WINDOW_SUPPORTED는 '카드 헤더의 확장 버튼' 목록이다 — ladder를 넣으면 리밸런싱 카드
+  //    헤더에 계산기 확장 버튼이 뜬다(종목이 없어 빈 창이 열린다).
+  ok('#171b ladder는 카드 확장 버튼 목록에 없다',
+    /CARD_WINDOW_SUPPORTED: string\[\] = \['summary', 'stats', 'dividend', 'rebalancing', 'donut'\]/.test(cwc));
+  ok('#171c winId는 공유 헬퍼가 만든다 (App·패널·창이 같은 문자열)',
+    (app.match(/ladderWinId\(/g) || []).length >= 1
+    && /ladderWinId\(activePortfolioId, ladderModal\.itemId, ladderModal\.side\)/.test(panel)
+    && /CARD === 'ladder' \? ladderWinId\(PID, ITEM, SIDE\)/.test(cw));
+  ok('#172 창의 ladder 분기가 살아 있는 행에서 파생한다 (스냅샷 금지)',
+    /const row = \(data\.rebalanceData \|\| \[\]\)\.find\(d => d && d\.id === ITEM\);/.test(cw)
+    && /const lAction = row\.action \+ \(rebalExtraQty\[row\.id\] \|\| 0\);/.test(cw)
+    && /targetAmount=\{lSignOk \? Math\.abs\(lAction\) \* lPrice : 0\}/.test(cw)
+    && /variant="page"/.test(cw));
+  // ⚠️ isCardWindowSupported 가드보다 앞이어야 한다 — 뒤에 두면 '지원하지 않습니다'로 막힌다.
+  ok('#172b ladder 분기가 지원 목록 가드보다 앞에 있다',
+    cw.indexOf("if (CARD === 'ladder') {") > 0
+    && cw.indexOf("if (CARD === 'ladder') {") < cw.indexOf('if (!isCardWindowSupported(CARD))'));
+  // ⚠️ 창에서 window.open을 직접 부르면 새 창의 opener가 그 창이 되어 앱 탭과 영영 연결되지 않는다.
+  ok('#173 창은 계산기 창 열기를 앱 탭에 위임한다 (window.open 직접 호출 금지)',
+    /fire\('openLadderWindow', \{ pid: PID, itemId, side \}\)/.test(cw)
+    && !/window\.open\(/.test(stripComments(cw)));
+  ok('#173b 창의 기록도 앱 탭이 날짜·upsert를 맡는다',
+    /send\('saveLadderLog', \{ pid: PID, input \}\)/.test(cw)
+    && /onLadderLog=\{writable \? sendLadderLog : null\}/.test(cw)
+    && /onSaveLog=\{writable \? \(payload\) => sendLadderLog\(\{ \.\.\.payload, name: row\.name, code: row\.code \}\) : null\}/.test(cw));
+  // ⚠️ CARD_OPS는 목록이 아니라 계약이다 — App 핸들러와 1:1이어야 한다.
+  ok('#174 신규 op 2종이 목록과 App 핸들러 양쪽에 있다',
+    /'saveLadderLog', 'openLadderWindow',/.test(cwc)
+    && /case 'saveLadderLog': \{/.test(app) && /case 'openLadderWindow':/.test(app));
+  ok('#174b 창이 보낸 날짜를 믿지 않는다 (앱 탭이 getTodayKST로 정한다)',
+    !/case 'saveLadderLog'[\s\S]{0,600}?a\.dayKey/.test(app));
+  // ⚠️ 상한은 화면·정규화가 같은 상수를 써야 한다(정규화에서만 자르면 조용히 사라진다).
+  ok('#175 상한 상수가 utils에 있고 두 소비자가 그것을 쓴다',
+    /export const MAX_LADDER_LOG_TRADES = \d+;/.test(utl)
+    && /while \(trades\.length > MAX_LADDER_LOG_TRADES\) trades\.shift\(\);/.test(utl)
+    && /if \(out\.length >= MAX_LADDER_LOG_ROWS\) break;/.test(utl));
 }
 
 console.log(`\n${fail ? '❌' : '✅'} verify:ladder — ${pass} passed, ${fail} failed`);

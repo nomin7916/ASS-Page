@@ -9,7 +9,8 @@ import PortfolioStatsPanel from './PortfolioStatsPanel';
 import HistoryPanel from './HistoryPanel';
 import DepositPanel from './DepositPanel';
 import DividendSummaryTable from './DividendSummaryTable';
-import { CARD_LABELS, cardWindowTitle, isCardKey, isCardWindowSupported, baseKeyOf } from '../cardWindow';
+import LadderTradeModal from './LadderTradeModal';
+import { CARD_LABELS, cardWindowTitle, isCardKey, isCardWindowSupported, baseKeyOf, ladderWinId } from '../cardWindow';
 import { buildRebalTargetEntryFrom, buildBookCostSeries, cleanNum, normalizeHistPeriod } from '../utils';
 
 /**
@@ -42,9 +43,14 @@ const CMD_TIMEOUT_MS = 9000;
 const params = new URLSearchParams(window.location.search);
 const CARD = params.get('card') || '';
 const PID = params.get('pid') || '';
+// 분할 계산기(card=ladder) 전용 — 종목 id와 방향. 다른 카드에서는 무시된다.
+const ITEM = params.get('item') || '';
+const SIDE = params.get('side') === 'sell' ? 'sell' : 'buy';
 // 창 id는 (카드, 계좌) 조합 — window.open의 name과 1:1이라 같은 조합의 창은 하나뿐이다.
 // 앱 탭이 새로고침돼도 같은 id로 재입양되므로 별도 난수가 필요 없다.
-const WIN_ID = `${CARD}:${PID}`;
+// ⚠️ 계산기는 (계좌, 종목, 방향)마다 창이 따로 열려야 하므로 공유 헬퍼가 id를 만든다 —
+//    App(레지스트리 키)·RebalancingPanel(열림 표시)과 문자열이 갈리면 '열려 있는데 닫힘으로 표시'가 된다.
+const WIN_ID = CARD === 'ladder' ? ladderWinId(PID, ITEM, SIDE) : `${CARD}:${PID}`;
 
 // ⚠️ settings 폴백은 **한 곳**에서만 만든다 — 계산(usePortfolioData)과 화면(RebalancingPanel)이
 //    다른 기본값을 쓰면 settings가 없는 레거시 계좌에서 표의 투자선택과 수량 계산이 어긋난다.
@@ -302,6 +308,15 @@ export default function CardWindow() {
     return r.result === 'nochange' ? 'nochange' : 'saved';
   }, [buildSnapshot, send]);
 
+  // 분할 계산기 사용 이력 기록 — 창은 사다리만 만들고, **날짜(getTodayKST)와 upsert는 앱 탭**이
+  // 맡는다(조작된 URL로 연 창이 임의 날짜에 기록을 심지 못하게 + 자정 경계 해석을 한 곳에 둔다).
+  const sendLadderLog = useCallback(async (input) => {
+    if (!writableRef.current) return 'fail';
+    const r = await send('saveLadderLog', { pid: PID, input });
+    if (!r || r.ok === false) return 'fail';
+    return r.result === 'nochange' ? 'nochange' : 'saved';
+  }, [send]);
+
   // 편집이 있었으면 창을 닫을 때 한 번 커밋한다(앱 탭의 종료 커밋 체인이 창에는 없다).
   const snapshotDirtyRef = useRef(false);
   const saveSnapshotRef = useRef(saveSnapshotNow);
@@ -380,6 +395,48 @@ export default function CardWindow() {
           hoveredPortStkSlice={hoveredPortStkSlice}
           setHoveredPortStkSlice={setHoveredPortStkSlice}
           hideAmounts={hideAmounts}
+        />
+      );
+    }
+
+    // ── 분할 계산기(card=ladder) ──
+    // ⚠️ isCardWindowSupported 가드보다 **앞**에 둔다 — 그 목록은 '카드 헤더의 확장 버튼을
+    //    렌더할 카드'이고, 계산기는 카드가 아니라 리밸런싱 표에서 열리는 모달이라 거기 없다.
+    // ⚠️ 파생식은 RebalancingPanel의 라이브 파생 블록과 **문자 그대로 같아야** 한다 — 갈리면
+    //    같은 종목의 계산기가 인앱과 창에서 다른 목표 금액을 말한다.
+    if (CARD === 'ladder') {
+      if (accountType === 'gold') return <Notice text="금현물 계좌는 분할 계산기를 지원하지 않습니다." />;
+      const row = (data.rebalanceData || []).find(d => d && d.id === ITEM);
+      if (!row) return <Notice text={gotData
+        ? '종목을 찾을 수 없습니다 — 앱 창에서 삭제되었거나 다른 계좌의 종목입니다.'
+        : '앱 창에서 데이터를 불러오는 중입니다…'} />;
+      const isOverseas = accountType === 'overseas';
+      const lPrice = cleanNum(row.currentPrice);
+      // ⚠️ rebalExtraQty('추가' 수량)는 앱 탭에서도 창에서도 **세션 스크래치**라 창에서는 항상 0이다
+      //    (이 창에는 그 입력 UI가 없다). 앱 탭에서 넣은 '추가'는 반영되지 않는다 — 알려진 한계.
+      const lAction = row.action + (rebalExtraQty[row.id] || 0);
+      const lSignOk = SIDE === 'sell' ? lAction < 0 : lAction > 0;
+      const lSideLabel = SIDE === 'sell' ? '매도' : '매수';
+      return (
+        <LadderTradeModal
+          variant="page"
+          side={SIDE}
+          itemName={row.name}
+          currentPrice={lPrice}
+          totalAction={lSignOk ? lAction : 0}
+          targetAmount={lSignOk ? Math.abs(lAction) * lPrice : 0}
+          changeRate={row.changeRate ?? null}
+          currency={isOverseas ? 'USD' : 'KRW'}
+          fxRate={isOverseas ? (marketIndicators.usdkrw || 1) : 1}
+          pos={{ x: 0, y: 0 }}
+          onRefreshPrice={row.code ? () => fire('refreshPrice', { pid: PID, id: row.id, code: row.code }) : null}
+          refreshState={row.code ? (stockFetchStatus?.[row.code] ?? null) : null}
+          emptyReason={lSignOk ? null : (lAction === 0
+            ? `지금은 ${lSideLabel}할 수량이 없습니다 — 목표비중·시세가 바뀌었습니다.`
+            : `지금은 ${lAction < 0 ? '매도' : '매수'}가 필요합니다 — 이 창은 분할${lSideLabel} 계산기입니다.`)}
+          onSaveLog={writable ? (payload) => sendLadderLog({ ...payload, name: row.name, code: row.code }) : null}
+          onExpand={null}
+          onClose={() => {}}
         />
       );
     }
@@ -505,6 +562,13 @@ export default function CardWindow() {
           onUpdateInvestmentNotes={(notes) => fire('updateInvestmentNotes', { pid: PID, notes, base: baseKeyOf(acct.investmentNotes || []) })}
           onRefreshPrice={(id, code) => fire('refreshPrice', { pid: PID, id, code })}
           stockFetchStatus={stockFetchStatus}
+          // 계산기 이력 기록 — 인앱과 같은 등급(앱 탭이 날짜·upsert를 맡는다).
+          onLadderLog={writable ? sendLadderLog : null}
+          // ⚠️ 창에서 window.open을 직접 부르면 새 창의 opener가 **이 창**이 되어 앱 탭과 영영
+          //    연결되지 않는다(읽기 전용으로 굳는다) → 앱 탭에 위임한다.
+          onExpandLadder={(itemId, side) => fire('openLadderWindow', { pid: PID, itemId, side })}
+          // 창은 다른 창의 열림 여부를 모른다(앱 탭의 레지스트리에만 있다) → 표기만 생략한다.
+          ladderWindowOpenSet={null}
           readOnly={!writable}
         />
       );
@@ -594,7 +658,7 @@ export default function CardWindow() {
       marketHolidays, dividendTaxHistory, dividendLinks, stockFetchStatus, isAdmin, writable,
       confirm, notify, fire, send, handleRebalanceSort, accountType, settingsDiff, saveSnapshotNow,
       targetEditAuthorized, stockHistoryMap, indicatorHistoryMap, effectiveDateKey,
-      depositSortConfig, depositSortConfig2, queueAccountWrite, principalSetter]);
+      depositSortConfig, depositSortConfig2, queueAccountWrite, principalSetter, sendLadderLog]);
 
   const notice = tornDown
     ? '세션이 종료되었습니다.'

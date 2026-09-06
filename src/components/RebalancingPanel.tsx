@@ -1,12 +1,13 @@
 // @ts-nocheck
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Lock, HelpCircle, X, Save, ChevronDown, ChevronUp, RotateCcw, Calculator, BookOpen, Plus, Maximize2, Trash2, Check, CalendarClock } from 'lucide-react';
 import { UI_CONFIG } from '../config';
 import { MARK_ROW_BG, MARK_STICKY_BG } from '../constants';
-import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio } from '../utils';
+import { cleanNum, formatCurrency, formatNumber, formatChangeRate, handleTableKeyDown, handleReadonlyCellNav, savingsEval, generateId, isValidIsoDate, applyRebalTargetRatios, resolveTargetSlots, readTargetRatio, mergeRestoreSources } from '../utils';
 import { PieLabelOutside } from '../chartUtils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
+import { ladderWinId } from '../cardWindow';
 import RebalanceTargetPinModal from './RebalanceTargetPinModal';
 import CardExpandButton from './CardExpandButton';
 import RebalanceTargetRestoreModal from './RebalanceTargetRestoreModal';
@@ -123,6 +124,16 @@ export default function RebalancingPanel({
   // ⚠️ 미전달이면 재조회가 없을 뿐 계산기는 종전대로 동작한다(graceful).
   onRefreshPrice = null,
   stockFetchStatus = {},
+  // 계산기 사용 이력 기록 — (종목 정보 + 사다리 값) → 'saved' | 'nochange' | 'fail'.
+  // ⚠️ 미전달이면 계산기의 기록 버튼이 렌더되지 않는다(관리자 접속 중·미지원 경로에서 죽은 버튼 방지).
+  onLadderLog = null,
+  // 계산기를 별도 브라우저 창으로 열기 — (itemId, side) => void. 미전달이면 확장 버튼 미노출.
+  onExpandLadder = null,
+  ladderWindowOpenSet = null,
+  // 계산기 사용 이력 목록 [{ dayKey, memo }] — 복원 모달(📅)이 목표비중 스냅샷과 **합집합**으로
+  // 리스트를 만든다(사용자 확정 2026-09). 삭제 핸들러가 없으면 모달이 삭제 버튼을 렌더하지 않는다.
+  ladderLogs = [],
+  onDeleteLadderTrade = null,
   // ── 카드 별도 창(`/?cardWindow=1`) 전용 ──
   // ⚠️ `cardWrite`가 주어지면 '항목 patch + settings'를 **하나의 커맨드**로 보낸다. 별도 창에서
   //    두 메시지로 쪼개지면 한쪽만 적용된 반쪽 상태가 남고, 사용자가 다시 누르면 같은 전이를 또
@@ -155,6 +166,12 @@ export default function RebalancingPanel({
   //    **마이너스 부호를 입력하는 것 자체가 불가능**하다(음수 매도 수량 직접 조절 불가).
   const [editingExtra, setEditingExtra] = useState({});
   const [restoreOpen, setRestoreOpen] = useState(false);
+  // 복원 창의 날짜 리스트 = 목표비중 스냅샷 ∪ 계산기 이력. 두 기록은 날짜가 다르다(목표비중은
+  // settings.targetDate, 계산기는 기록한 날) → 합집합이라야 계산기만 쓴 날짜도 보인다.
+  const restoreEntries = useMemo(
+    () => mergeRestoreSources(rebalTargetSnapshots, ladderLogs),
+    [rebalTargetSnapshots, ladderLogs],
+  );
   // 분할 계산기 — **{ itemId, pos, side } 만** 담는다(가격·수량 스냅샷 금지, 아래 라이브 파생 참조).
   // side만 스냅샷인 이유는 아래 파생 블록 참조 — 창의 정체성이라 열린 뒤 뒤집히면 안 된다.
   const [ladderModal, setLadderModal] = useState(null);
@@ -537,19 +554,23 @@ export default function RebalancingPanel({
           전체에 그 날짜를 전파한다. 반드시 별도 컨트롤로 둘 것.
           ⚠️ relative z-20 필수 — hideStrip(z-10)이 이 영역 상단을 덮어 클릭을 가로챈다.
              래퍼 전체가 아니라 버튼에만 줘야 열 숨기기 스트립이 살아남는다. */}
+      {/* ⚠️ 게이트는 목표비중 ∪ 계산기 이력 — 계산기만 쓴 계좌에서도 열려야 한다(그 창이 계산기
+          이력을 보는 유일한 경로다). 목표비중이 없으면 창 안의 '적용' 버튼만 잠긴다. */}
       <button
         type="button"
-        disabled={!rebalTargetSnapshots.length}
+        disabled={!restoreEntries.length}
         onMouseDown={e => e.stopPropagation()}
-        onClick={e => { e.stopPropagation(); if (rebalTargetSnapshots.length) setRestoreOpen(true); }}
+        onClick={e => { e.stopPropagation(); if (restoreEntries.length) setRestoreOpen(true); }}
         className={`shrink-0 relative z-20 p-0.5 rounded transition-colors ${
-          rebalTargetSnapshots.length
+          restoreEntries.length
             ? 'text-emerald-500/70 hover:text-emerald-300 hover:bg-emerald-900/20'
             : 'text-gray-700 cursor-not-allowed'
         }`}
-        title={rebalTargetSnapshots.length
-          ? `과거 목표비중 불러오기 — 기록 ${rebalTargetSnapshots.length}건 (달력에서 날짜를 골라 현재 표에 적용)`
-          : '이 계좌에 기록된 목표비중이 없습니다'}
+        title={restoreEntries.length
+          ? `과거 목표비중 불러오기 — 기록 ${restoreEntries.length}일`
+            + `${rebalTargetSnapshots.length ? ` · 목표비중 ${rebalTargetSnapshots.length}건` : ''}`
+            + `${ladderLogs.length ? ` · 분할 계산기 ${ladderLogs.length}건` : ''}`
+          : '이 계좌에 기록된 목표비중·계산기 이력이 없습니다'}
       ><CalendarClock size={11} /></button>
     </div>
     );
@@ -710,6 +731,20 @@ export default function RebalancingPanel({
     ? () => onRefreshPrice(ladderRow.id, ladderRow.code)
     : null;
   const ladderRefreshState = (ladderRow && ladderRow.code) ? (stockFetchStatus?.[ladderRow.code] ?? null) : null;
+  // ── 계산기 사용 이력 기록 ──
+  // ⚠️ 모달은 종목의 name·code를 모른다(itemName은 표시용 문자열) → 여기서 붙여 보낸다.
+  //    ladderRow는 rebalanceData의 **살아 있는 행**이라 기록도 화면과 같은 값을 담는다.
+  const ladderSaveLog = (ladderRow && onLadderLog)
+    ? (payload) => onLadderLog({ ...payload, name: ladderRow.name, code: ladderRow.code })
+    : null;
+  // 확장(별도 창) — 열림 표시 키는 cardWindow.ts의 공유 헬퍼로 만든다(앱과 문자열이 갈리지 않게).
+  // ⚠️ 창이 **실제로 떴을 때만**(=== true) 이 팝업을 닫는다. 팝업이 차단됐거나(App이 false) 별도
+  //    창의 앱 위임처럼 결과를 모르는 경로(undefined)에서 닫으면 계산기를 통째로 잃는다.
+  const ladderExpand = (ladderModal && onExpandLadder)
+    ? () => { if (onExpandLadder(ladderModal.itemId, ladderModal.side) === true) setLadderModal(null); }
+    : null;
+  const ladderWinOpen = !!(ladderModal && ladderWindowOpenSet
+    && ladderWindowOpenSet.has(ladderWinId(activePortfolioId, ladderModal.itemId, ladderModal.side)));
 
   return (
     <>
@@ -2189,6 +2224,9 @@ export default function RebalancingPanel({
           open={restoreOpen}
           onClose={() => setRestoreOpen(false)}
           snapshots={rebalTargetSnapshots}
+          entries={restoreEntries}
+          onDeleteLadderTrade={onDeleteLadderTrade}
+          currency={activePortfolioAccountType === 'overseas' ? 'USD' : 'KRW'}
           currentRows={rebalanceData}
           investMode={settings.mode || 'rebalance'}
           targetMode={settings.targetMode === 'variable' ? 'variable' : 'fixed'}
@@ -2225,6 +2263,9 @@ export default function RebalancingPanel({
             onRefreshPrice={ladderRefresh}
             refreshState={ladderRefreshState}
             emptyReason={ladderEmptyReason}
+            onSaveLog={ladderSaveLog}
+            onExpand={ladderExpand}
+            expandOpen={ladderWinOpen}
             onClose={() => setLadderModal(null)}
           />
         )}

@@ -24,6 +24,14 @@ export default function RebalanceTargetRestoreModal({
   open,
   onClose,
   snapshots = [],        // [{ dayKey, memo }] — 날짜 내림차순
+  // 날짜 리스트 = 목표비중 ∪ 분할 계산기 이력 [{ dayKey, memo, ladder }] — 날짜 내림차순.
+  // ⚠️ 미전달이면 snapshots만으로 구성한다(하위호환의 축 — 카드 별도 창은 넘기지 않는다).
+  entries = null,
+  // 계산기 이력 1건 삭제 (dayKey, tradeKey) => boolean. 미전달이면 삭제 버튼을 렌더하지 않는다.
+  // ⚠️ 이 창은 목표비중 기록에 대해서는 여전히 **순수 읽기**다(INV-1) — 삭제는 계산기 이력 전용이고,
+  //    달력 칩을 띄우지 않기로 한 이상(사용자 확정) 여기가 **유일한** 삭제 경로다.
+  onDeleteLadderTrade = null,
+  currency = 'KRW',      // 계산기 이력 금액 표기 단위
   currentRows = [],      // rebalanceData (현재 리밸런싱 표)
   investMode = 'rebalance', // 현재 settings.mode ('accumulate' | 'rebalance' | 'targetAmount')
   targetMode = 'fixed',  // 현재 settings.targetMode
@@ -34,6 +42,8 @@ export default function RebalanceTargetRestoreModal({
   onApply = null,        // (dayKey, memo, matched) => void
 }) {
   const [selDayKey, setSelDayKey] = useState(null);
+  // 계산기 이력 삭제 2단계 확인 — 이 창은 z-1070이라 ConfirmDialog(1000)·토스트가 가려진다.
+  const [delKey, setDelKey] = useState(null);
   // ⚠️ 보고 있는 달은 **파생값 + 덮어쓰기(viewOv)** 로 둔다. state 초기값을 상수로 두고 effect에서
   //    고치면 열 때마다 엉뚱한 달이 한 프레임 번쩍인다(이 컴포넌트는 open 토글만 되고 언마운트되지
   //    않으므로 첫 렌더가 옛 값으로 커밋된다). ⚠️ 폴백에 `new Date()` 로컬 TZ 금지 — getTodayKST.
@@ -41,27 +51,43 @@ export default function RebalanceTargetRestoreModal({
   const panelRef = useRef(null);
   const returnFocusRef = useRef(null);
 
+  // 날짜 리스트의 단일 소스. entries 미전달이면 목표비중만으로 만든다(하위호환).
+  const rows = useMemo(
+    () => (Array.isArray(entries) ? entries
+      : (snapshots || []).filter(s => s && s.dayKey).map(s => ({ dayKey: s.dayKey, memo: s.memo, ladder: null }))),
+    [entries, snapshots],
+  );
+
   const byDay = useMemo(() => {
     const m = new Map();
-    (snapshots || []).forEach(s => { if (s && s.dayKey) m.set(s.dayKey, s); });
+    (rows || []).forEach(s => { if (s && s.dayKey) m.set(s.dayKey, s); });
     return m;
-  }, [snapshots]);
+  }, [rows]);
+
+  // ⚠️ 헤더 날짜 경고는 **목표비중 기록이 있는 날짜만** 본다 — App의 handleTargetRestored가
+  //    `kind === 'rebalTarget'`만 검사하므로, byDay(합집합)로 재면 계산기만 쓴 날짜에서
+  //    "기록되지 않습니다"라고 경고해 놓고 실제로는 기록되는 **거짓 경고**가 된다.
+  const targetDays = useMemo(
+    () => new Set((rows || []).filter(s => s && s.memo).map(s => s.dayKey)),
+    [rows],
+  );
 
   const view = useMemo(() => {
     if (viewOv) return viewOv;
-    const base = selDayKey || (snapshots || [])[0]?.dayKey || getTodayKST();
+    const base = selDayKey || (rows || [])[0]?.dayKey || getTodayKST();
     return (typeof base === 'string' && base.length === 10)
       ? { y: Number(base.slice(0, 4)), m: Number(base.slice(5, 7)) - 1 }
       : { y: 2000, m: 0 };
-  }, [viewOv, selDayKey, snapshots]);
+  }, [viewOv, selDayKey, rows]);
 
   // 열 때마다 최신 스냅샷을 자동 선택 — 첫 화면에서 바로 미리보기가 보인다(달은 위에서 따라온다).
   // ⚠️ 포커스도 창 안으로 옮긴다 — 안 그러면 Tab이 백드롭 뒤에 가려진 목표비중 입력·모드 select로
   //    들어가, 수시변경 모드(잠금 없음)에서 보이지 않는 셀을 편집하게 된다.
   useEffect(() => {
     if (!open) return;
-    setSelDayKey((snapshots || [])[0]?.dayKey ?? null);
+    setSelDayKey((rows || [])[0]?.dayKey ?? null);
     setViewOv(null);
+    setDelKey(null);
     returnFocusRef.current = document.activeElement;
     const t = setTimeout(() => panelRef.current?.focus?.(), 0);
     return () => {
@@ -86,10 +112,15 @@ export default function RebalanceTargetRestoreModal({
   }, [open, onClose, pinPending]);
 
   const sel = selDayKey ? byDay.get(selDayKey) : null;
+  // ⚠️ 목표비중 기록이 없는 날짜(계산기만 쓴 날)는 result를 만들지 않는다 — 만들면 matched 0인
+  //    빈 미리보기가 '적용 (0) · 일치하는 종목이 없습니다'로 떠서, 기록이 없는 것인지 매칭에
+  //    실패한 것인지 구분할 수 없다.
   const result = useMemo(
-    () => (sel ? matchRebalTargetRows(sel.memo?.rows, currentRows) : null),
+    () => (sel && sel.memo ? matchRebalTargetRows(sel.memo.rows, currentRows) : null),
     [sel, currentRows],
   );
+  // 선택한 날짜의 계산기 이력(없으면 빈 배열)
+  const selTrades = (sel && sel.ladder && Array.isArray(sel.ladder.trades)) ? sel.ladder.trades : [];
 
   const curSum = useMemo(
     () => (currentRows || []).reduce((s, it) => s + (Number(it?.effectiveTargetRatio) || 0), 0),
@@ -114,11 +145,30 @@ export default function RebalanceTargetRestoreModal({
 
   if (!open) return null;
 
+  // 계산기 이력 표기 — 기록 당시 통화를 우선한다(계좌 타입이 바뀌어도 그 기록의 단위는 그대로다).
+  const trUSD = ((sel && sel.ladder && sel.ladder.currency) || currency) === 'USD';
+  const fmtMoney = (n) => {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '-';
+    return (trUSD ? '$' : '') + v.toLocaleString(trUSD ? 'en-US' : 'ko-KR',
+      { minimumFractionDigits: trUSD ? 2 : 0, maximumFractionDigits: trUSD ? 2 : 0 });
+  };
+  const fmtQty = (n) => Number(n || 0).toLocaleString('ko-KR');
+  // 사다리 행 상세는 표에 펼치지 않고 툴팁으로 — 종목당 수십 행이라 펼치면 리스트가 묻힌다.
+  const tradeTitle = (t) => {
+    const at = Number(t?.at) > 0 ? new Date(Number(t.at)) : null;
+    const head = at ? `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')} 기록` : '기록';
+    const lines = (t?.rows || []).map((r, i) => `${i + 1}. ${fmtMoney(r.price)} × ${fmtQty(r.qty)}주`);
+    return [`${head} · 현재가 ${fmtMoney(t?.currentPrice)}`, ...lines].join('\n');
+  };
+
   const shiftMonth = (d) => {
     const t = view.m + d;
     setViewOv({ y: view.y + Math.floor(t / 12), m: ((t % 12) + 12) % 12 });
   };
-  const selectDay = (key) => { setSelDayKey(key); setViewOv(null); };
+  // ⚠️ 날짜를 바꾸면 삭제 확인 상태도 푼다 — delKey는 종목 키(예: 360750|buy)라, 다른 날짜에도
+  //    같은 종목 기록이 있으면 그 행이 확인 상태로 뜬 채 '삭제'가 한 번에 눌린다.
+  const selectDay = (key) => { setSelDayKey(key); setViewOv(null); setDelKey(null); };
 
   const firstDow = new Date(view.y, view.m, 1).getDay();
   const daysInMonth = new Date(view.y, view.m + 1, 0).getDate();
@@ -126,18 +176,22 @@ export default function RebalanceTargetRestoreModal({
   for (let i = 0; i < firstDow; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
-  const modeMismatch = !!sel && (sel.memo?.targetMode === 'variable' ? 'variable' : 'fixed') !== targetMode;
+  // ⚠️ 경고는 전부 **목표비중 기록이 있을 때만** 판정한다(selMemo 게이트) — 계산기만 쓴 날짜는
+  //    sel.memo가 없어, 옛 코드처럼 `sel`만 보면 modeMismatch가 `'fixed' !== targetMode`가 되어
+  //    수시변경 모드에서 **거짓 경고**가 뜨고 snapInvest도 '적립식'으로 지어내진다.
+  const selMemo = sel ? sel.memo : null;
+  const modeMismatch = !!selMemo && (selMemo.targetMode === 'variable' ? 'variable' : 'fixed') !== targetMode;
   // 기록이 어느 '투자선택'에서 만들어졌는지 — 지금과 다르면 복원 결과의 의미가 달라진다.
-  const snapInvest = sel?.memo?.investMode === 'rebalance' || sel?.memo?.investMode === 'targetAmount'
-    ? sel.memo.investMode : (sel ? 'accumulate' : null);
+  const snapInvest = selMemo?.investMode === 'rebalance' || selMemo?.investMode === 'targetAmount'
+    ? selMemo.investMode : (selMemo ? 'accumulate' : null);
   const curInvest = investMode === 'accumulate' || investMode === 'targetAmount' ? investMode : 'rebalance';
-  const investMismatch = !!sel && !!snapInvest && snapInvest !== curInvest;
+  const investMismatch = !!selMemo && !!snapInvest && snapInvest !== curInvest;
   // 기록에 목표금액이 함께 남아 있는가(구버전 기록에는 없음)
   const restoredAmountCount = (result?.matched || []).filter(m => m.amount != null).length;
-  const sameAsTargetDate = !!sel && !!targetDate && targetDate === sel.dayKey;
+  const sameAsTargetDate = !!selMemo && !!targetDate && targetDate === sel.dayKey;
   // 헤더 날짜에 이미 기록이 있으면 이 복원은 달력에 기록되지 않는다(App handleTargetRestored가
   // 그 원본을 덮어쓰지 않으려고 dirty를 세우지 않는다). 표만 바뀐다는 사실을 **적용 전에** 알린다.
-  const headerHasRecord = !!targetDate && byDay.has(targetDate);
+  const headerHasRecord = !!targetDate && targetDays.has(targetDate);
   const canApply = !!result && result.matched.length > 0;
 
   const doApply = () => {
@@ -171,8 +225,10 @@ export default function RebalanceTargetRestoreModal({
           <div className="flex items-center gap-2 min-w-0">
             <CalendarClock size={15} className="text-emerald-400 shrink-0" />
             <span className="text-[13px] font-bold text-gray-100 truncate">과거 목표비중 불러오기</span>
-            {snapshots[0]?.memo?.accountName && (
-              <span className="text-[11px] text-gray-500 truncate">— {snapshots[0].memo.accountName}</span>
+            {/* ⚠️ 계좌명은 목표비중·계산기 어느 쪽 기록에서든 가져온다 — snapshots[0]만 보면
+                계산기만 쓴 계좌에서 부제가 통째로 사라진다. */}
+            {(rows[0]?.memo?.accountName || rows[0]?.ladder?.accountName) && (
+              <span className="text-[11px] text-gray-500 truncate">— {rows[0].memo?.accountName || rows[0].ladder?.accountName}</span>
             )}
           </div>
           <button type="button" onClick={requestClose} className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700/50 shrink-0">
@@ -220,11 +276,15 @@ export default function RebalanceTargetRestoreModal({
               </div>
             </div>
 
+            {/* ⚠️ 리스트는 목표비중 ∪ 계산기 이력이다(사용자 확정 2026-09) — 계산기만 쓴 날짜도
+                보여야 그 이력에 닿을 수 있다. 그 행은 목표비중 정보 대신 '목표비중 기록 없음'을
+                표시하고, 고르면 '적용' 버튼이 잠긴다(canApply=false). */}
             <div className="grow min-w-0 max-h-[210px] overflow-y-auto border border-gray-800 rounded">
-              {snapshots.length === 0 ? (
-                <div className="p-4 text-[11px] text-gray-600 text-center">기록된 목표비중이 없습니다.</div>
-              ) : snapshots.map(s => {
+              {rows.length === 0 ? (
+                <div className="p-4 text-[11px] text-gray-600 text-center">기록된 목표비중·계산기 이력이 없습니다.</div>
+              ) : rows.map(s => {
                 const isSel = s.dayKey === selDayKey;
+                const nLadder = (s.ladder?.trades || []).length;
                 return (
                   <button
                     key={s.dayKey}
@@ -236,12 +296,23 @@ export default function RebalanceTargetRestoreModal({
                   >
                     <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isSel ? 'bg-emerald-400' : 'bg-gray-700'}`} />
                     <span className={`text-[11px] font-mono tabular-nums shrink-0 ${isSel ? 'text-emerald-200' : 'text-gray-300'}`}>{fmtShort(s.dayKey)}</span>
-                    <span className="text-[10px] text-gray-500 shrink-0">{(s.memo?.rows || []).length}종목</span>
-                    <span className="text-[10px] text-gray-500 ml-auto shrink-0 tabular-nums">합계 {Number(s.memo?.totalTargetRatio || 0).toFixed(2)}%</span>
-                    <span className="text-[9px] text-gray-600 shrink-0">{s.memo?.targetMode === 'variable' ? '수시변경' : '고정'}</span>
-                    <span className="text-[9px] shrink-0 text-gray-500">
-                      {s.memo?.investMode === 'targetAmount' ? '목표금액' : s.memo?.investMode === 'rebalance' ? '리밸런싱' : '적립식'}
-                    </span>
+                    {s.memo ? (
+                      <>
+                        <span className="text-[10px] text-gray-500 shrink-0">{(s.memo.rows || []).length}종목</span>
+                        <span className="text-[10px] text-gray-500 ml-auto shrink-0 tabular-nums">합계 {Number(s.memo.totalTargetRatio || 0).toFixed(2)}%</span>
+                        <span className="text-[9px] text-gray-600 shrink-0">{s.memo.targetMode === 'variable' ? '수시변경' : '고정'}</span>
+                        <span className="text-[9px] shrink-0 text-gray-500">
+                          {s.memo.investMode === 'targetAmount' ? '목표금액' : s.memo.investMode === 'rebalance' ? '리밸런싱' : '적립식'}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-[9.5px] text-gray-600 ml-auto shrink-0">목표비중 기록 없음</span>
+                    )}
+                    {nLadder > 0 && (
+                      <span className="text-[9px] shrink-0 px-1 py-[1px] rounded bg-sky-900/40 text-sky-300 border border-sky-800/60">
+                        계산기 {nLadder}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -249,7 +320,7 @@ export default function RebalanceTargetRestoreModal({
           </div>
 
           {/* 경고 */}
-          {(modeMismatch || investMismatch || restoredAmountCount > 0 || headerHasRecord || !targetDate) && !!sel && (
+          {(modeMismatch || investMismatch || restoredAmountCount > 0 || headerHasRecord || !targetDate) && !!selMemo && (
             <div className="px-3 py-2 space-y-1 border-b border-gray-800">
               {/* ⚠️ 투자선택이 다르면 '같은 비중'이라도 수량 산식이 달라진다(적립식=증분 / 리밸런싱·목표금액=레벨).
                   게다가 적립식은 목표비중 슬롯 자체가 별도라, 지금 화면의 슬롯에 적용된다는 점을 알려야 한다. */}
@@ -289,10 +360,16 @@ export default function RebalanceTargetRestoreModal({
           )}
 
           {/* 미리보기 */}
-          {!result ? (
+          {!sel ? (
             <div className="p-6 text-[11px] text-gray-600 text-center">날짜를 선택하세요.</div>
           ) : (
             <div className="p-3 space-y-3">
+              {!result && (
+                <div className="text-[11px] text-gray-500">
+                  이 날짜에는 <b>목표비중 기록이 없습니다</b> — 아래 분할 계산기 이력만 있습니다.
+                </div>
+              )}
+              {result && (<>
               <div>
                 <div className="text-[10px] text-emerald-300/80 mb-1">적용 ({result.matched.length})</div>
                 {result.matched.length === 0 ? (
@@ -392,6 +469,86 @@ export default function RebalanceTargetRestoreModal({
                 <span className="text-green-400 font-bold">{afterSum.toFixed(2)}%</span>
                 <span className="text-[9.5px] text-gray-600 ml-1">※ 합계는 100%로 보정하지 않습니다</span>
               </div>
+              </>)}
+
+              {/* ── 분할 계산기 사용 이력 (읽기 전용) ──
+                  ⚠️ '적용' 버튼과 아무 관계가 없다 — 그 버튼은 목표비중만 되돌린다. 표 위 설명이
+                     그 사실을 밝히지 않으면 사용자는 계산기 값까지 복원되는 것으로 읽는다.
+                  ⚠️ 달력 칩을 띄우지 않기로 했으므로(사용자 확정) 여기가 유일한 삭제 경로다. */}
+              {selTrades.length > 0 && (
+                <div className="pt-1 border-t border-gray-800">
+                  <div className="flex flex-wrap items-baseline gap-x-2 mb-1">
+                    <span className="text-[10px] text-sky-300/90">분할 계산기 ({selTrades.length}종목)</span>
+                    <span className="text-[9.5px] text-gray-600">기록 당시 값 · 읽기 전용 (아래 &apos;적용&apos; 버튼은 목표비중만 되돌립니다)</span>
+                  </div>
+                  <table className="w-full text-[11px] tabular-nums">
+                    <thead>
+                      <tr className="text-gray-600 border-b border-gray-800">
+                        <th className="text-left font-normal py-1 pr-1">종목명</th>
+                        <th className="text-center font-normal py-1 px-1">구분</th>
+                        <th className="text-right font-normal py-1 px-1">목표 금액</th>
+                        <th className="text-right font-normal py-1 px-1">수량</th>
+                        <th className="text-right font-normal py-1 px-1">평균단가</th>
+                        <th className="text-right font-normal py-1 px-1">호가</th>
+                        <th className="text-right font-normal py-1 px-1">배수</th>
+                        <th className="text-right font-normal py-1 px-1">단계</th>
+                        {onDeleteLadderTrade && <th className="w-5" />}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selTrades.map(t => {
+                        const isSellTrade = t.side === 'sell';
+                        const confirming = delKey === t.key;
+                        return (
+                          <tr key={t.key} className="border-b border-gray-900/80" title={tradeTitle(t)}>
+                            <td className="text-left text-gray-200 py-1 pr-1">
+                              {t.name || <span className="text-gray-600">(이름 없음)</span>}
+                              {t.code ? <span className="ml-1 text-[9px] text-gray-600 font-mono">{t.code}</span> : null}
+                            </td>
+                            <td className={`text-center py-1 px-1 ${isSellTrade ? 'text-red-400' : 'text-sky-400'}`}>{isSellTrade ? '매도' : '매수'}</td>
+                            <td className="text-right text-gray-400 py-1 px-1">{fmtMoney(t.targetAmount)}</td>
+                            <td className={`text-right py-1 px-1 font-bold ${isSellTrade ? 'text-red-400' : 'text-green-400'}`}>
+                              {fmtQty(t.qty)}
+                              {Number(t.baseQty) > 0 && Number(t.baseQty) !== Number(t.qty) && (
+                                <span className="block text-[9px] text-gray-600 font-normal">기준 {fmtQty(t.baseQty)}</span>
+                              )}
+                            </td>
+                            <td className="text-right text-yellow-400 py-1 px-1">{fmtMoney(t.avgPrice)}</td>
+                            <td className="text-right text-gray-400 py-1 px-1">{fmtMoney(t.tickSize)}</td>
+                            <td className="text-right text-gray-400 py-1 px-1">{t.mult}</td>
+                            <td className="text-right text-gray-400 py-1 px-1">{t.steps}</td>
+                            {onDeleteLadderTrade && (
+                              <td className="text-right py-1 pl-1 whitespace-nowrap">
+                                {confirming ? (
+                                  <span className="inline-flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => { onDeleteLadderTrade(sel.dayKey, t.key); setDelKey(null); }}
+                                      className="text-[9px] px-1 rounded bg-red-900/60 text-red-200 hover:bg-red-800"
+                                    >삭제</button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDelKey(null)}
+                                      className="text-[9px] text-gray-500 hover:text-gray-300"
+                                    >취소</button>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setDelKey(t.key)}
+                                    className="text-gray-700 hover:text-red-400"
+                                    title="이 계산기 기록 삭제"
+                                  ><X size={11} /></button>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>

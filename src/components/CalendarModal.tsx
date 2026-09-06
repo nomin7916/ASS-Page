@@ -809,7 +809,11 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
               // 여러 건 쌓이는 것이 기본 시나리오라, 한 목록에 섞으면 사용자 메모가 밀려난다.
               const dayAll = Array.isArray(memos[key]) ? memos[key] : [];
               const dayRebals = dayAll.filter((m) => m && m.kind === 'rebalTarget');
-              const dayMemos = dayAll.filter((m) => m && m.kind !== 'rebalTarget');
+              // ⚠️ 사용자 메모 줄은 **kind가 없는 항목만**이다. 옛 코드는 `kind !== 'rebalTarget'`이라
+              //    새 kind(분할 계산기 ladderLog)가 그대로 메모 줄로 새어 content 첫 줄이 텍스트로
+              //    떴다(사용자는 계산기 달력 칩 미노출을 택했다 — 그 기록은 리밸런싱 표의 📅에서만 본다).
+              //    앞으로 kind를 추가할 때도 이 필터는 손댈 필요가 없다.
+              const dayMemos = dayAll.filter((m) => m && !m.kind);
               const dayNotes = notesByDate[key] || [];
               const dayQty = qtyChangesByDate[key] || [];
               const dayMove = transfersByDate[key] || [];

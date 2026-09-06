@@ -54,7 +54,7 @@ import LedgerPage from './components/LedgerPage';
 import { normalizeLedgerBooks, ledgerFingerprint, ledgerBooksHaveContent } from './ledger';
 import { normalizeLedgerSnapshots, ledgerSnapshotsFingerprint, ledgerSnapshotsHaveContent } from './ledger';
 import CardWinFeed from './components/CardWinFeed';
-import { isCardKey, isCardWindowSupported, cardWindowUrl, cardWindowName, baseKeyOf } from './cardWindow';
+import { isCardKey, isCardWindowSupported, cardWindowUrl, cardWindowName, baseKeyOf, ladderWinId } from './cardWindow';
 import {
   normalizeBacktestScenarios, backtestFingerprint, backtestScenariosHaveContent,
   buildBtCatalog, collectDividendHistory, collectNameByCode,
@@ -89,6 +89,7 @@ import {
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows, analyzeTransferMerge,
   buildHistDetailRows, EMPTY_HIST_DETAIL,
   buildRebalTargetEntryFrom, sameRebalTargetEntry, upsertRebalTargetMemo,
+  buildLadderTrade, upsertLadderTradeMemo, listLadderLogs, deleteLadderTrade,
   normalizeHistPeriod,
 } from './utils';
 
@@ -2018,10 +2019,71 @@ export default function App() {
     return 'nochange';
   };
 
+  // ── 분할 계산기 사용 이력 (쓰기) ──
+  // ⚠️ 기록은 사용자가 계산기의 기록 버튼을 눌렀을 때만 일어난다(사용자 확정 2026-09).
+  //    자동 기록이면 '얼마에 사면 될까'를 훑어보려 연 종목까지 쌓여 실제 주문 기록을 못 찾는다.
+  // ⚠️ 날짜는 **getTodayKST()** — new Date().toISOString()(UTC)은 한국 00:00~09:00에 어제 칸에
+  //    꽂힌다(RebalancingPanel.addNewNote가 실제로 그 버그를 냈다).
+  // ⚠️ 저장 위치는 calendarMemos 재사용이라 **영속화 신규 지점이 0곳**이다 — portfolioStructureKey의
+  //    JSON.stringify(calendarMemos)가 지문을 올려 Drive STATE 저장이 자동으로 트리거된다.
+  // 반환은 계산기 타이틀바의 인라인 플래시 전용('saved' | 'nochange' | 'fail').
+  const writeLadderTrade = (pid, meta, input) => {
+    try {
+      if (!pid) return 'fail';
+      const trade = buildLadderTrade(input);
+      if (!trade) return 'fail';
+      const dayKey = getTodayKST();
+      if (!isValidIsoDate(dayKey)) return 'fail';
+      const next = upsertLadderTradeMemo(
+        calendarMemosRef.current, dayKey,
+        { portfolioId: pid, accountName: meta?.accountName, currency: meta?.currency },
+        trade, generateId(), Date.now(),
+      );
+      if (!next) return 'nochange';
+      // ⚠️ 미러 ref도 **동기** 갱신 — setCalendarMemos는 비동기라, 같은 tick에 이어지는 커밋
+      //    (다른 종목 기록·목표비중 스냅샷)이 옛 값을 통째로 교체하면 방금 쓴 기록이 사라진다.
+      calendarMemosRef.current = next;
+      setCalendarMemos(next);
+      return 'saved';
+    } catch (e) {
+      console.warn('[ladderLog] 계산기 이력 기록 실패', e);
+      return 'fail';
+    }
+  };
+
+  // 인앱 계산기의 기록 버튼 — 활성 계좌 스코프를 붙인 얇은 래퍼.
+  const handleLadderLog = (payload) => writeLadderTrade(
+    activePortfolioIdRef.current,
+    { accountName: title || activePortfolio?.name, currency: activePortfolioAccountType === 'overseas' ? 'USD' : 'KRW' },
+    payload,
+  );
+
+  // 기록 1건 삭제 — 달력 칩을 띄우지 않으므로(사용자 확정) 복원 모달이 유일한 삭제 경로다.
+  const handleDeleteLadderTrade = (dayKey, tradeKey) => {
+    try {
+      const pid = activePortfolioIdRef.current;
+      if (!pid) return false;
+      const next = deleteLadderTrade(calendarMemosRef.current, dayKey, pid, tradeKey);
+      if (!next) return false;
+      calendarMemosRef.current = next;
+      setCalendarMemos(next);
+      return true;
+    } catch (e) {
+      console.warn('[ladderLog] 계산기 이력 삭제 실패', e);
+      return false;
+    }
+  };
+
   // ── 과거 목표비중 복원 (읽기 방향) ──
   // 활성 계좌의 rebalTarget 스냅샷 목록(최신 우선). 리밸런싱 표 목표 열의 📅 아이콘이 소비한다.
   const rebalTargetSnapshots = useMemo(
     () => listRebalTargetSnapshots(calendarMemos, activePortfolioId),
+    [calendarMemos, activePortfolioId],
+  );
+  // 같은 창이 함께 보여 주는 계산기 이력(날짜 내림차순) — 두 기록은 날짜가 달라(목표비중은
+  // settings.targetDate, 계산기는 기록한 날) 모달이 합집합으로 리스트를 만든다.
+  const ladderLogs = useMemo(
+    () => listLadderLogs(calendarMemos, activePortfolioId),
     [calendarMemos, activePortfolioId],
   );
 
@@ -2578,6 +2640,26 @@ export default function App() {
         setCalendarMemos(next);
         return { ok: true, result: 'saved' };
       }
+      case 'saveLadderLog': {
+        // 창의 계산기가 자기 화면 값으로 만든 사다리를 그대로 받는다(saveTargetSnapshot과 같은 규약).
+        // ⚠️ 날짜는 앱 탭이 정한다(getTodayKST) — 창이 보낸 날짜를 믿으면 조작된 URL로 연 창이
+        //    임의 날짜에 기록을 심을 수 있고, 두 문서의 자정 경계 해석이 갈릴 수도 있다.
+        const acct = portfoliosRef.current.find(p => p && p.id === a.pid);
+        if (!acct) return { ok: false, reason: '계좌를 찾을 수 없습니다.' };
+        const r = writeLadderTrade(a.pid, {
+          accountName: acct.name,
+          currency: (acct.accountType || 'portfolio') === 'overseas' ? 'USD' : 'KRW',
+        }, a.input);
+        if (r === 'fail') return { ok: false, reason: '기록할 사다리가 없습니다.' };
+        return { ok: true, result: r };
+      }
+      case 'openLadderWindow':
+        // ⚠️ 창에서 window.open을 직접 부르면 새 창의 opener가 **그 창**이 되어 앱 탭과 영영
+        //    연결되지 않는다(읽기 전용으로 굳는다) → 앱 탭이 대신 연다.
+        // ⚠️ openLadderWindow는 이 대입보다 **아래**에 선언되지만, 이 화살표 함수의 본문은 렌더가
+        //    끝난 뒤(메시지 수신 시)에만 평가되므로 TDZ에 걸리지 않는다(deps 배열과 다르다).
+        openLadderWindow(a.pid, a.itemId, a.side);
+        return { ok: true };
       default:
         return { ok: false, reason: `지원하지 않는 동작입니다 (${op}).` };
     }
@@ -2640,6 +2722,33 @@ export default function App() {
     cardWinsRef.current.set(winId, { id: winId, card, pid, win: w });
     syncCardWinKeys();
     setCardWinNonce(n => n + 1);
+  }, [syncCardWinKeys]);
+
+  // 분할 계산기 별도 창 — (계좌, 종목, 방향)마다 창 하나. 카드 확장 버튼 목록
+  // (CARD_WINDOW_SUPPORTED)에는 들어 있지 않아 openCardWindow로는 열 수 없다(진입점은 계산기
+  // 타이틀바의 ⧉ 하나뿐).
+  // ⚠️ 클릭 제스처 직후 **동기** window.open이라야 팝업 차단을 피한다. noopener 금지(브릿지가 전부).
+  // ⚠️ 반환값 true = '창이 실제로 떴다'. 호출부(계산기 ⧉)가 이 값으로 인앱 팝업을 닫을지 정한다 —
+  //    팝업이 차단됐는데 닫으면 사용자가 계산기를 통째로 잃는다(흐름도의 인앱 폴백과 같은 근거).
+  const openLadderWindow = useCallback((pid, itemId, side) => {
+    if (!pid || !itemId) return false;
+    const sideKey = side === 'sell' ? 'sell' : 'buy';
+    const winId = ladderWinId(pid, itemId, sideKey);
+    const existing = cardWinsRef.current.get(winId);
+    if (existing?.win && !existing.win.closed) { try { existing.win.focus(); } catch {} return true; }
+    const sw = Math.min(880, (window.screen && window.screen.availWidth) || 880);
+    const sh = (window.screen && window.screen.availHeight) || 900;
+    const w = window.open(
+      cardWindowUrl(pid, 'ladder', { item: itemId, side: sideKey }),
+      cardWindowName(pid, 'ladder', `${itemId}-${sideKey}`),
+      `width=${sw},height=${sh},left=0,top=0`,
+    );
+    if (!w) { setCardWinBlocked(true); return false; }
+    setCardWinBlocked(false);
+    cardWinsRef.current.set(winId, { id: winId, card: 'ladder', pid, win: w });
+    syncCardWinKeys();
+    setCardWinNonce(n => n + 1);
+    return true;
   }, [syncCardWinKeys]);
 
   // ── 백테스트 데이터 · 조회 · '별도 브라우저 창' 브릿지 (`/?backtestWindow=1`) ─────────────
@@ -4688,6 +4797,15 @@ export default function App() {
             onUpdateInvestmentNotes={updateInvestmentNotes}
             onRefreshPrice={handleSingleStockRefresh}
             stockFetchStatus={stockFetchStatus}
+            // ⚠️ 관리자 접속(impersonation) 중에는 기록 버튼을 노출하지 않는다 — 목표비중 기록은
+            //    관리자가 목표를 조정하는 정식 기능의 부산물이지만(공지까지 나간다), 계산기 기록은
+            //    관리자가 사용자 달력에 남길 이유가 없다. calendarMemos는 백업 복원 sticky라
+            //    되돌릴 수 없다(흐름도·백테스트를 읽기 전용으로 둔 것과 같은 근거).
+            onLadderLog={adminViewingAs ? null : handleLadderLog}
+            onDeleteLadderTrade={adminViewingAs ? null : handleDeleteLadderTrade}
+            ladderLogs={ladderLogs}
+            onExpandLadder={(itemId, side) => openLadderWindow(activePortfolioId, itemId, side)}
+            ladderWindowOpenSet={cardWinOpenSet}
             onExpandTable={() => openCardWindow('rebalancing', activePortfolioId)}
             onExpandDonut={() => openCardWindow('donut', activePortfolioId)}
             tableWindowOpen={cardWinOpenSet.has(`rebalancing:${activePortfolioId}`)}

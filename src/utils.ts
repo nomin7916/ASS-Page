@@ -2442,3 +2442,181 @@ export const upsertRebalTargetMemo = (memos: any, dayKey: string, entry: any, ne
   else arr[idx] = { ...entry, id: arr[idx].id, createdAt: arr[idx].createdAt ?? now, updatedAt: now };
   return { ...cur, [dayKey]: arr };
 };
+
+// ── 분할 계산기 사용 이력 (메모 달력 ladderLog 기록) ──────────────────────────────
+// 사용자가 계산기 타이틀바의 기록 버튼을 눌렀을 때만 남긴다(사용자 확정 2026-09) — 계산기는
+// '얼마에 사면 될까'를 훑어보는 탐색 도구로도 자주 열리므로, 자동 기록이면 열어보기만 한 종목이
+// 함께 쌓여 정작 주문한 사다리를 찾을 수 없게 된다.
+//
+// ⚠️ 저장 위치는 calendarMemos 재사용 — **신규 저장 필드 0곳**이다(rebalTarget 선례).
+//    지문(App.tsx portfolioStructureKey의 JSON.stringify(calendarMemos))·로드 정규화·백업 sticky·
+//    별도 창 브릿지가 전부 자동으로 따라온다. 앱 레벨 새 필드로 두면 영속화 7지점을 새로 만들어야
+//    하고 하나만 빠져도 그 편집이 조용히 유실된다.
+// ⚠️ 그 대가로 **CalendarModal의 dayMemos 필터에 이 kind를 반드시 제외**해야 한다 —
+//    그 필터는 `kind !== 'rebalTarget'`인 항목을 전부 사용자 메모 줄로 렌더하므로, 빠뜨리면
+//    달력 칸에 content 첫 줄이 텍스트로 샌다(사용자는 달력 칩 미노출을 택했다).
+// ⚠️ dayKey는 **호출부가 넘긴다**(utils는 import 0건 규약이라 getTodayKST를 쓸 수 없다).
+//    반드시 getTodayKST() — new Date().toISOString()은 한국 00:00~09:00에 어제 칸에 꽂힌다.
+
+// STATE는 백업 22본으로 복제된다 — 한 날짜에 무한정 쌓이지 않게 상한을 건다.
+export const MAX_LADDER_LOG_TRADES = 60;
+export const MAX_LADDER_LOG_ROWS = 60;
+
+// 종목 upsert 키 = (코드 또는 이름) + 방향. 같은 날 같은 종목·같은 방향을 다시 기록하면 덮어쓴다
+// (사용자 확정 2026-09 — 최신 1건). ⚠️ 코드가 없는 행(일부 펀드)도 이름으로 키를 만든다.
+//    둘 다 없으면 ''를 돌려 기록 자체를 막는다(어느 종목인지 특정할 수 없는 기록은 쓸모가 없다).
+export const ladderTradeKey = (code: any, name: any, side: any): string => {
+  const c = String(code ?? '').trim().toUpperCase();
+  const n = String(name ?? '').normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase();
+  const base = c || n;
+  return base ? `${base}|${side === 'sell' ? 'sell' : 'buy'}` : '';
+};
+
+// 계산기 화면 값 → 기록 1건. ⚠️ 사다리 행에서 총수량·총액·평균단가를 **다시 계산**한다 —
+//    화면이 보여 준 요약을 그대로 받아 적으면 나중에 rows만 손댄 호출부에서 둘이 갈린다.
+export const buildLadderTrade = (input: any) => {
+  const { name, code, side, targetAmount, baseQty, currentPrice, tickSize, mult, rows, at } = input || {};
+  const key = ladderTradeKey(code, name, side);
+  if (!key) return null;
+  const src = Array.isArray(rows) ? rows : [];
+  const out: any[] = [];
+  for (const r of src) {
+    const price = cleanNum(r?.price);
+    const qty = cleanNum(r?.qty);
+    if (!(price > 0) || !(qty > 0)) continue;
+    out.push({ price, qty });
+    if (out.length >= MAX_LADDER_LOG_ROWS) break;
+  }
+  if (out.length === 0) return null;   // 빈 사다리는 기록할 내용이 없다(사유는 화면이 이미 밝힌다)
+  const qtyTotal = out.reduce((s: number, r: any) => s + r.qty, 0);
+  const totalCost = out.reduce((s: number, r: any) => s + r.price * r.qty, 0);
+  const m = cleanNum(mult);
+  return {
+    key,
+    name: String(name || '').trim(),
+    code: String(code || '').trim(),
+    side: side === 'sell' ? 'sell' : 'buy',
+    targetAmount: cleanNum(targetAmount),
+    baseQty: cleanNum(baseQty),
+    qty: qtyTotal,
+    totalCost,
+    avgPrice: qtyTotal > 0 ? totalCost / qtyTotal : 0,
+    currentPrice: cleanNum(currentPrice),
+    tickSize: cleanNum(tickSize),
+    mult: m > 0 ? m : 1,
+    steps: out.length,
+    rows: out,
+    at: Number.isFinite(at) ? at : 0,
+  };
+};
+
+// 사람이 읽는 텍스트 사본 — 백업 JSON 가독성용(rebalTarget의 content와 같은 등급).
+// ⚠️ 달력 칩을 띄우지 않으므로 화면에는 쓰이지 않지만, 백업 파일에서 이 기록이 무엇인지
+//    알아볼 수 있는 유일한 단서다. 제거하지 말 것.
+export const ladderLogContent = (accountName: any, currency: any, trades: any) => {
+  const list = Array.isArray(trades) ? trades : [];
+  const unit = currency === 'USD' ? '$' : '₩';
+  return [
+    `🧮 분할 계산기 · ${String(accountName || '계좌').trim()} (${list.length}종목)`,
+    ...list.map((t: any, i: number) =>
+      `${i + 1}. ${t.name || t.code} ${t.side === 'sell' ? '매도' : '매수'} ${formatNumber(t.qty)}주 · `
+      + `평균 ${unit}${formatNumber(Math.round(cleanNum(t.avgPrice)))} · 호가 ${formatNumber(t.tickSize)} · `
+      + `배수 ${t.mult} · ${t.steps}단계`),
+  ].join('\n');
+};
+
+// 같은 기록인가 — 기록 시각(at)은 제외한다. 같은 사다리를 두 번 눌러도 Drive 저장이 헛돌지 않게.
+const ladderTradeFp = (t: any) => { try { return JSON.stringify({ ...(t || {}), at: 0 }); } catch { return '?'; } };
+export const sameLadderLogEntry = (a: any, b: any) => !!a && !!b
+  && a.accountName === b.accountName && a.currency === b.currency
+  && (a.trades || []).length === (b.trades || []).length
+  && (a.trades || []).every((t: any, i: number) => ladderTradeFp(t) === ladderTradeFp((b.trades || [])[i]));
+
+// upsert 키 = (dayKey, kind==='ladderLog', portfolioId) → 그 안에서 trade.key로 종목 upsert.
+// ⚠️ 교체 시 id·createdAt을 **승계**한다(rebalTarget과 같은 규약).
+// 반환: 변경이 있으면 next memos, 내용이 같거나 대상이 없으면 null.
+export const upsertLadderTradeMemo = (memos: any, dayKey: string, meta: any, trade: any, newId: string, now: number) => {
+  if (!dayKey || !trade || !trade.key || !meta || !meta.portfolioId) return null;
+  const cur = memos || {};
+  const arr = Array.isArray(cur[dayKey]) ? [...cur[dayKey]] : [];
+  const idx = arr.findIndex((m: any) => m?.kind === 'ladderLog' && m.portfolioId === meta.portfolioId);
+  const prev = idx !== -1 ? arr[idx] : null;
+  const prevTrades = Array.isArray(prev?.trades) ? prev.trades : [];
+  const trades = [...prevTrades.filter((t: any) => t && t.key !== trade.key), trade];
+  // 상한 초과분은 오래된 것부터 버린다(배열 순서 = 기록 순서).
+  while (trades.length > MAX_LADDER_LOG_TRADES) trades.shift();
+  const accountName = String(meta.accountName || '계좌').trim();
+  const currency = meta.currency === 'USD' ? 'USD' : 'KRW';
+  const entry = {
+    kind: 'ladderLog',
+    portfolioId: meta.portfolioId,
+    accountName,
+    currency,
+    trades,
+    content: ladderLogContent(accountName, currency, trades),
+  };
+  if (prev && sameLadderLogEntry(prev, entry)) return null;
+  if (idx === -1) arr.push({ ...entry, id: newId, createdAt: now, updatedAt: now });
+  else arr[idx] = { ...entry, id: prev.id, createdAt: prev.createdAt ?? now, updatedAt: now };
+  return { ...cur, [dayKey]: arr };
+};
+
+// 한 계좌의 계산기 이력 목록. 반환 [{ dayKey, memo }] — 날짜 **내림차순**(listRebalTargetSnapshots와 동일).
+// ⚠️ trades가 비었거나 배열이 아닌 손상 기록은 건너뛴다(normalizeCalendarMemos는 '객체인가'만 본다).
+export const listLadderLogs = (calendarMemos: any, portfolioId: any) => {
+  if (!calendarMemos || typeof calendarMemos !== 'object' || Array.isArray(calendarMemos) || !portfolioId) return [];
+  const out: any[] = [];
+  for (const dayKey of Object.keys(calendarMemos)) {
+    if (!isValidIsoDate(dayKey)) continue;
+    const arr = calendarMemos[dayKey];
+    if (!Array.isArray(arr)) continue;
+    const memo = arr.find((m: any) => m && m.kind === 'ladderLog' && m.portfolioId === portfolioId
+      && Array.isArray(m.trades) && m.trades.length > 0);
+    if (memo) out.push({ dayKey, memo });
+  }
+  out.sort((a: any, b: any) => (a.dayKey < b.dayKey ? 1 : a.dayKey > b.dayKey ? -1 : 0));
+  return out;
+};
+
+// 기록 1건 삭제 — 달력 칩을 띄우지 않으므로(사용자 확정) 복원 모달이 **유일한** 삭제 경로다.
+// ⚠️ 마지막 종목을 지우면 ladderLog 항목 자체를, 그 날짜에 아무 기록도 안 남으면 날짜 키까지
+//    버린다(normalizeCalendarMemos가 빈 날짜 키를 버리는 것과 같은 규약).
+// 반환: 변경이 있으면 next memos, 지울 게 없으면 null.
+export const deleteLadderTrade = (memos: any, dayKey: string, portfolioId: any, tradeKey: string) => {
+  if (!dayKey || !portfolioId || !tradeKey) return null;
+  const cur = memos || {};
+  const arr = Array.isArray(cur[dayKey]) ? cur[dayKey] : null;
+  if (!arr) return null;
+  const idx = arr.findIndex((m: any) => m?.kind === 'ladderLog' && m.portfolioId === portfolioId);
+  if (idx === -1) return null;
+  const prev = arr[idx];
+  const prevTrades = Array.isArray(prev.trades) ? prev.trades : [];
+  const trades = prevTrades.filter((t: any) => t && t.key !== tradeKey);
+  if (trades.length === prevTrades.length) return null;
+  const next = [...arr];
+  if (trades.length === 0) {
+    next.splice(idx, 1);
+    if (next.length === 0) { const c = { ...cur }; delete c[dayKey]; return c; }
+  } else {
+    next[idx] = { ...prev, trades, content: ladderLogContent(prev.accountName, prev.currency, trades) };
+  }
+  return { ...cur, [dayKey]: next };
+};
+
+// 복원 모달의 날짜 리스트 = 목표비중 스냅샷 ∪ 계산기 이력(날짜 내림차순).
+// ⚠️ 두 기록은 날짜가 다르다 — 목표비중은 사용자가 지정한 settings.targetDate에, 계산기는
+//    '기록을 누른 날'(오늘)에 남는다. 합집합이라야 계산기만 쓴 날짜도 리스트에서 보인다
+//    (사용자 확정 2026-09: 같은 리스트에 통합).
+export const mergeRestoreSources = (snapshots: any, ladderLogs: any) => {
+  const m = new Map<string, any>();
+  (Array.isArray(snapshots) ? snapshots : []).forEach((s: any) => {
+    if (s && s.dayKey) m.set(s.dayKey, { dayKey: s.dayKey, memo: s.memo, ladder: null });
+  });
+  (Array.isArray(ladderLogs) ? ladderLogs : []).forEach((l: any) => {
+    if (!l || !l.dayKey) return;
+    const cur = m.get(l.dayKey);
+    if (cur) cur.ladder = l.memo;
+    else m.set(l.dayKey, { dayKey: l.dayKey, memo: null, ladder: l.memo });
+  });
+  return Array.from(m.values()).sort((a: any, b: any) => (a.dayKey < b.dayKey ? 1 : a.dayKey > b.dayKey ? -1 : 0));
+};

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from 'react';
-import { X, RotateCcw, RefreshCw } from 'lucide-react';
+import { X, RotateCcw, RefreshCw, Save } from 'lucide-react';
 import { formatNumber, formatCurrency, formatChangeRate, cleanNum } from '../utils';
 
 type LadderSide = 'buy' | 'sell';
@@ -35,6 +35,18 @@ interface Props {
   // ⚠️ 이때 기본 문구('목표 금액이 1주 값보다 작습니다')를 재사용하면 **거짓 설명**이 된다 —
   //    실제 원인은 1주 값 미만이 아니라 방향/수량이 어긋난 것이다.
   emptyReason?: string | null;
+  // ── 사용 이력 기록 (사용자 확정 2026-09: '기록' 버튼을 눌렀을 때만) ──
+  // 지금 화면의 사다리를 그날 계산기 이력으로 남긴다. 반환 'saved' | 'nochange' | 'fail'
+  // (또는 그것을 resolve하는 Promise) — 타이틀바 인라인 플래시로만 알린다.
+  // ⚠️ 모달은 종목의 name·code를 알지 못한다(itemName은 표시용 문자열) → 사다리 값만 넘기고
+  //    utils.buildLadderTrade 호출은 호출부가 한다. 미전달이면 버튼을 렌더하지 않는다.
+  onSaveLog?: ((payload: any) => any) | null;
+  // 별도 브라우저 창으로 열기(⧉). 미전달이면 렌더하지 않는다 — 별도 창 자신처럼 확장이 의미
+  // 없는 곳에서 죽은 버튼이 뜨지 않게 한다(CardExpandButton과 같은 규약).
+  onExpand?: (() => void) | null;
+  expandOpen?: boolean;
+  // 'popup'(기본 — 드래그 가능한 fixed 팝업) | 'page'(별도 창 — 문서 흐름 안, 드래그·닫기 없음)
+  variant?: 'popup' | 'page';
   onClose: () => void;
 }
 
@@ -251,7 +263,8 @@ function seedLadder(rows: LadderRow[], basePrice: number, tickSize: number, targ
   return out;
 }
 
-export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, changeRate = null, currency = 'KRW', fxRate = 1, pos, onRefreshPrice = null, refreshState = null, emptyReason = null, onClose }: Props) {
+export default function LadderTradeModal({ side = 'buy', itemName, currentPrice, totalAction, targetAmount, changeRate = null, currency = 'KRW', fxRate = 1, pos, onRefreshPrice = null, refreshState = null, emptyReason = null, onSaveLog = null, onExpand = null, expandOpen = false, variant = 'popup', onClose }: Props) {
+  const isPage = variant === 'page';
   const isSell = side === 'sell';
   const dir = isSell ? 1 : -1;
   const sideLabel = isSell ? '매도' : '매수';
@@ -311,6 +324,12 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   pinnedRef.current = pinnedPrices;
   const [position, setPosition] = useState(pos);
   const drag = useRef({ active: false, ox: 0, oy: 0 });
+  // 기록 버튼의 결과 표시 — 'saved' | 'nochange' | 'empty' | 'fail'.
+  // ⚠️ notify()를 쓰지 않는다: 이 모달은 z-1050이라 토스트·ConfirmDialog가 가려지고, 성공은
+  //    알림 최소화 정책상 벨에도 남기지 않는다(목표 날짜 칩의 dateFlash와 같은 규약).
+  const [logFlash, setLogFlash] = useState<string | null>(null);
+  const logFlashTimer = useRef<any>(null);
+  useEffect(() => () => { if (logFlashTimer.current) clearTimeout(logFlashTimer.current); }, []);
 
   // 핀이 지금 이 사다리의 **진행 방향 쪽**에 있는가 — 매수는 현재가 이하, 매도는 현재가 이상.
   // ⚠️ 핀은 절대 가격이라, 현재가를 재조회하거나 호가를 바꿔 base가 옮겨지면 사다리 **반대편**으로
@@ -398,6 +417,37 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
   // 사라진 경우. 화면에 흔적이 없으면 사용자는 "내 입력이 왜 안 보이지"만 남는다.
   const droppedPins = Object.keys(pinnedPrices)
     .filter(id => !rows.some(r => r.id === id && r.locked && r.price === pinnedPrices[id])).length;
+
+  // 지금 화면의 사다리를 그날 계산기 이력으로 남긴다(사용자가 버튼을 눌렀을 때만 — 확정 규약).
+  // ⚠️ 화면이 계산한 요약(avgPrice·totalCost)을 넘기지 않고 **행만** 넘긴다 — 총수량·총액·평균단가는
+  //    utils.buildLadderTrade가 그 행에서 다시 계산하므로 기록과 화면이 갈릴 여지가 없다.
+  // ⚠️ 빈 사다리는 보내지 않고 그 사실을 밝힌다('기록 불가'). 조용히 아무 일도 안 하면
+  //    사용자는 버튼이 고장난 것으로 읽는다(빈 사다리 안내 행과 같은 근거).
+  const handleSaveLog = async () => {
+    if (!onSaveLog) return;
+    if (logFlashTimer.current) clearTimeout(logFlashTimer.current);
+    let res = 'fail';
+    if (!rows.length) res = 'empty';
+    else {
+      try {
+        res = (await onSaveLog({
+          side,
+          targetAmount,
+          baseQty,
+          currentPrice,
+          tickSize,
+          mult,
+          rows: rows.map(r => ({ price: r.price, qty: r.qty })),
+          at: Date.now(),
+        })) || 'fail';
+      } catch { res = 'fail'; }
+    }
+    setLogFlash(res);
+    logFlashTimer.current = setTimeout(() => setLogFlash(null), 1800);
+  };
+  const LOG_FLASH_TEXT: Record<string, string> = {
+    saved: '✓ 기록됨', nochange: '✓ 최신', empty: '기록할 사다리 없음', fail: '기록 불가',
+  };
 
   // ⚠️ 호가 간격은 가격 격자(원화 1원 / 달러 0.01)의 배수여야 한다 — 소수점 호가는 없다.
   //    격자보다 작은 값을 그대로 받으면 roundTo(price, decimals)가 모든 행을 같은 가격으로
@@ -489,19 +539,43 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
     : null;
 
   return (
+    // ⚠️ page 모드(별도 창)는 fixed·드래그를 쓰지 않는다 — CardWindow의 문서 흐름 안에 놓인다.
+    //    popup 쪽 폭 440은 RebalancingPanel의 열림 위치 클램프(456)와 짝이다(verify:ladder #97).
     <div
-      className="fixed z-[1050] bg-[#0f172a] border border-gray-600 rounded-xl shadow-2xl select-none"
-      style={{ left: position.x, top: position.y, width: 440 }}
+      className={isPage
+        ? 'bg-[#0f172a] border border-gray-600 rounded-xl shadow-2xl select-none w-full max-w-[720px] mx-auto'
+        : 'fixed z-[1050] bg-[#0f172a] border border-gray-600 rounded-xl shadow-2xl select-none'}
+      style={isPage ? undefined : { left: position.x, top: position.y, width: 440 }}
     >
       {/* Title bar */}
       <div
-        className="flex items-center justify-between px-3 py-2 bg-[#1e293b] rounded-t-xl border-b border-gray-700 cursor-move"
-        onMouseDown={handleDragStart}
+        className={`flex items-center justify-between px-3 py-2 bg-[#1e293b] rounded-t-xl border-b border-gray-700 ${isPage ? '' : 'cursor-move'}`}
+        onMouseDown={isPage ? undefined : handleDragStart}
       >
-        <span className={`text-[11px] font-bold truncate max-w-[320px] ${isSell ? 'text-red-400' : 'text-sky-400'}`}>
+        <span className={`text-[11px] font-bold truncate ${isPage ? 'max-w-none' : 'max-w-[320px]'} ${isSell ? 'text-red-400' : 'text-sky-400'}`}>
           {itemName} — 분할{sideLabel} 계산기{isUSD ? ' ($)' : ''}
         </span>
         <div className="flex items-center gap-2 shrink-0">
+          {/* 기록(💾) — 사용 이력은 이 버튼을 눌렀을 때만 남는다(사용자 확정 2026-09).
+              ⚠️ 피드백은 이 자리 인라인 플래시가 전부다(z-1050이라 토스트·확인창이 가려진다). */}
+          {onSaveLog && (
+            <span className="flex items-center gap-1">
+              {logFlash && (
+                <span className={`text-[9px] leading-none whitespace-nowrap ${
+                  logFlash === 'saved' ? 'text-emerald-400'
+                  : logFlash === 'nochange' ? 'text-gray-400'
+                  : 'text-amber-400'
+                }`}>{LOG_FLASH_TEXT[logFlash]}</span>
+              )}
+              <button
+                onClick={handleSaveLog}
+                className="text-gray-500 hover:text-emerald-300 transition-colors"
+                title="이 사다리를 오늘 날짜의 계산기 이력으로 기록합니다 — 리밸런싱 표의 📅(과거 목표비중 불러오기)에서 확인할 수 있습니다"
+              >
+                <Save size={12} />
+              </button>
+            </span>
+          )}
           {onRefreshPrice && (
             <button
               onClick={() => onRefreshPrice()}
@@ -513,6 +587,22 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
               <RefreshCw size={12} className={refreshState === 'loading' ? 'animate-spin' : ''} />
             </button>
           )}
+          {/* 확장(⧉) — 별도 브라우저 창으로 열기. 새로고침 버튼 바로 옆(사용자 요청 2026-09).
+              ⚠️ 인라인 SVG — CardExpandButton과 같은 근거(package-lock.json이 없어 새 lucide
+                 아이콘의 실재를 확인할 수단이 없고, 없는 아이콘은 undefined 렌더로 죽는다). */}
+          {onExpand && (
+            <button
+              onClick={() => onExpand()}
+              className={`transition-colors ${expandOpen ? 'text-sky-300' : 'text-gray-500 hover:text-sky-300'}`}
+              title={expandOpen ? '열려 있는 계산기 창으로 이동' : '별도 브라우저 창으로 열기'}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M15 3h6v6" />
+                <path d="M10 14 21 3" />
+                <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={() => { setPinnedPrices({}); doRegenerate(currentPrice, tickSize, targetAmount, mult, {}); }}
             className="text-gray-500 hover:text-amber-300 transition-colors"
@@ -520,9 +610,13 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
           >
             <RotateCcw size={12} />
           </button>
-          <button onClick={onClose} className="text-gray-500 hover:text-red-400 transition-colors">
-            <X size={13} />
-          </button>
+          {/* 별도 창에는 닫기 버튼을 두지 않는다 — 창 자체를 닫는 것이 브라우저의 몫이고,
+              여기서 onClose를 부르면 창 안에 빈 화면만 남는다. */}
+          {!isPage && (
+            <button onClick={onClose} className="text-gray-500 hover:text-red-400 transition-colors">
+              <X size={13} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -610,7 +704,7 @@ export default function LadderTradeModal({ side = 'buy', itemName, currentPrice,
       )}
 
       {/* Table */}
-      <div className="overflow-y-auto" style={{ maxHeight: 300 }}>
+      <div className="overflow-y-auto" style={{ maxHeight: isPage ? '62vh' : 300 }}>
         <table className="w-full text-[11px] border-collapse">
           <thead className="sticky top-0 bg-[#1e293b] text-gray-400 border-b border-gray-700 z-10">
             <tr>
