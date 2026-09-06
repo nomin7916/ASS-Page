@@ -34,6 +34,7 @@ import {
 import {
   txIndexOf, actualResolved, manualShadowed, stripTxForSnapshot,
   addTx, updateTx, softDeleteTx, restoreTx, purgeTx, migrateManualToTx, dropManual,
+  MAX_LEDGER_TX, MAX_LEDGER_NAME_LEN,
 } from '../ledger';
 import LedgerQuickEntry from './LedgerQuickEntry';
 import LedgerTxTab from './LedgerTxTab';
@@ -343,7 +344,8 @@ export default function LedgerPage({
   /** 거래 탭으로 넘어갈 때의 초기 필터(항목·미분류) — 한 번 쓰고 소비한다. */
   const [txFilter, setTxFilter] = useState(null);
   /** 수동 값 ↔ 거래 충돌 안내(§5.3.2) — 인라인으로만 묻는다(모달·토스트 금지). */
-  const [txConflict, setTxConflict] = useState(null);
+  /** 수동값 ↔ 거래 충돌 **큐**. head가 지금 묻는 건이다(단수 슬롯으로 되돌리지 말 것). */
+  const [txConflicts, setTxConflicts] = useState([]);
   const [collapsed, setCollapsed] = useState({});
   const [hiddenMonths, setHiddenMonths] = useState([]);
   const [armedDelete, setArmedDelete] = useState('');
@@ -443,6 +445,24 @@ export default function LedgerPage({
    *    새 집계를 추가할 때 반드시 함께 넘길 것 — 소스 가드가 이 배선을 단언한다.
    */
   const ix = useMemo(() => txIndexOf(book), [book]);
+  /**
+   * 그 달 미분류 거래 합(항목을 고르지 않은 지출). 없으면 null.
+   * ⚠️ **선언 위치가 계약이다** — 아래 `yearSeries`·`donut`·`detailDonut` memo가 이 함수를
+   *    호출하는데 그 memo 팩토리는 렌더 중 동기 실행된다. 선언을 아래로 내리면 첫 렌더에서
+   *    `ReferenceError: Cannot access 'uncTotalOf' before initialization`이 나고, 이 화면은
+   *    렌더가 try/catch로 감싸여 있지 않아 가계부 탭이 통째로 오류 페이지가 된다
+   *    (`initTradeRest` 프로덕션 장애와 같은 부류 — build·undefcheck·scopecheck 어느 게이트도
+   *    잡지 못한다).
+   */
+  const uncTotalOf = (k) => {
+    const u = ix.uncategorizedYm.get(k);
+    return u && u.count > 0 ? { value: u.sum, count: u.count } : null;
+  };
+  const uncPayValue = (k, pay) => {
+    const u = ix.uncategorizedYm.get(k);
+    const v = u && u.byPay ? u.byPay[pay] : 0;
+    return Number.isFinite(v) ? v : 0;
+  };
   /** 미입력 판정 옵션 — `entry:'tx'` 항목의 **진행 중인 달**을 미입력으로 세지 않는다. */
   const expOpts = useMemo(() => ({ ix, todayYm }), [ix, todayYm]);
   const kpi = useMemo(() => ledgerKpi(book, ym), [book, ym]);
@@ -502,7 +522,13 @@ export default function LedgerPage({
     // 결제수단 스택 — ⚠️ recharts는 stacked Bar에서 `null`을 **0으로 강제**한다
     //    (`getValueByDataKey(d, key, 0)`). 그래서 '데이터 없음'을 null로 표현할 수 없고,
     //    아래 `payChartData`가 그 달 **행 자체를 제외**하는 방식으로 처리한다.
-    for (const p of LEDGER_PAY_ORDER) row[`pay_${p}`] = bp[p] ? bp[p].value : 0;
+    /**
+     * ⚠️ **미분류를 더한다.** 매트릭스 소계·총계·KPI 배너·달력은 미분류를 포함하는데
+     *    이 시리즈(결제수단 막대·100% 스트립)만 빼면 **같은 달 합계가 카드마다 달라진다**
+     *    ("한 화면 한 규칙" 위반). `payStrip`·`payChartData`·`payKeys`가 전부 여기서
+     *    파생되므로 이 한 줄이 셋을 함께 고친다.
+     */
+    for (const p of LEDGER_PAY_ORDER) row[`pay_${p}`] = (bp[p] ? bp[p].value : 0) + uncPayValue(k, p);
     return row;
   }), [book, year, todayYm, ix]);
 
@@ -579,10 +605,16 @@ export default function LedgerPage({
       //    도넛은 항목 단위라 같은 캡션을 단 두 카드가 다른 총액을 보여 준다(실측: 메인
       //    880,000 vs 상세 1,080,000 — 월 중 부분 입력은 기본 상태다).
       //    항목 단위로 통일하면 `Σ메인 === Σ상세 === expectedGrandTotal`이 성립한다.
+      /**
+       * ⚠️ 변동비 조각에는 **미분류 거래를 더한다** — 항목이 없어 `expectedTotal`이 영영
+       *    모르는 돈인데, 매트릭스의 미분류 가상 행도 변동비 그룹 끝에 있고 `monthTotals`도
+       *    `byGroup.variable`로 계상한다(Σ그룹 === 총계 항등식).
+       */
       rows.push({
         key: g,
         name: LEDGER_GROUP_LABEL[g],
-        value: expectedTotal((book?.items || []).filter((it) => it && it.group === g), ym, ix).value,
+        value: expectedTotal((book?.items || []).filter((it) => it && it.group === g), ym, ix).value
+          + (g === 'variable' ? (uncTotalOf(ym)?.value ?? 0) : 0),
         color: LEDGER_GROUP_COLOR[g],
       });
     }
@@ -613,6 +645,17 @@ export default function LedgerPage({
           ? (it.name || '(이름 없음)')
           : (it.category || '(구분 없음)');
         byKey.set(key, (byKey.get(key) || 0) + v);
+      }
+      /**
+       * ⚠️ 미분류는 **`byKey`에 넣어 fold에 참여**시킨다(별도 슬롯으로 뒤에 붙이지 말 것) —
+       *    그러면 변동비 조각이 6개가 될 수 있어 램프 인접 ΔE가 4 아래로 떨어지고
+       *    `verify:palette` §2가 단언한 n≤5 상한을 정면으로 위반한다.
+       * ⚠️ `'미분류'`는 `'(구분 없음)'`과 **다른 뜻**이다 — 전자는 거래에 항목이 없는 것,
+       *    후자는 항목에 구분이 없는 것.
+       */
+      if (g === 'variable') {
+        const unc = uncTotalOf(ym);
+        if (unc && unc.value !== 0) byKey.set('미분류', (byKey.get('미분류') || 0) + unc.value);
       }
       const sorted = [...byKey.entries()]
         .map(([name, value]) => ({ name, value }))
@@ -863,12 +906,48 @@ export default function LedgerPage({
     const res = addTx(cur, tx);          // ⚠️ 업데이터 밖에서 한 번만 계산한다
     if (res.error) return res;
     patchBook(cur.id, () => res.book);
-    // 그 달을 '정리했다'로 남긴다 — 매트릭스 셀 편집과 같은 규약(메모 달력 앵커).
-    const k = String(tx.date || '').slice(0, 7);
-    if (isValidYm(k)) touchMonth(cur.id, k);
-    if (res.conflict) setTxConflict(res.conflict);
+    /**
+     * ⚠️ 거래 추가 경로에서는 `touchMonth`를 **남기지 않는다**(P3). 그 기록은 '오늘 날짜'에
+     *    찍히므로 **과거 달 거래를 넣어도 오늘 칸에 '그 달을 정리했다'** 줄이 생겨 패드에
+     *    두 줄이 뜬다. 거래 이벤트(kind:'tx')가 이미 "그날 기록했다"를 정확히 뜻한다.
+     *    매트릭스 셀의 수동 입력 경로(`NumCell onCommit`)는 종전대로 남긴다 — 그쪽은
+     *    날짜가 없는 월 단위 입력이라 '정리한 날'이 유일한 앵커다.
+     */
+    /**
+     * ⚠️ **큐에 쌓는다**(덮어쓰기 금지) — 거래를 연달아 넣으면 앞선 (항목, 월)의 질문이
+     *    조용히 사라지고 셀 배지만 남았다. `itemId|ym`로 중복만 거른다.
+     */
+    if (res.conflict) {
+      setTxConflicts((q) => (q.some((c) => c.itemId === res.conflict.itemId && c.ym === res.conflict.ym)
+        ? q : [...q, res.conflict]));
+    }
     return res;
   }, [curBook, patchBook, readOnly, touchMonth]);
+
+  /**
+   * 빠른 입력에서 **일치하는 항목이 없을 때 그 자리에서 만든다**(사양 §5.4.2).
+   * 없으면 사용자가 친 이름이 통째로 버려지고 거래만 미분류로 남는다.
+   *
+   * ⚠️ `makeLedgerItem`(=`generateId`)은 **업데이터 밖에서 한 번만** 부른다(StrictMode 이중 호출).
+   * ⚠️ 판정은 렌더 스코프 `book`이 아니라 `curBook()`(=`localRef.current`) — 한 tick에 여러 번
+   *    만들 때 상한 검사가 낡은 값을 보면 안 된다.
+   * ⚠️ `readOnly`를 **여기서도** 막는다. `setLocal`이 no-op이라 가드가 없으면 **추가된 적 없는
+   *    항목의 id**를 돌려주고, 그 거래는 존재하지 않는 항목을 가리킨 채 미분류로 떨어진다
+   *    (지금보다 나쁘다 — 지금은 최소한 빈 itemId가 현실과 일치한다).
+   */
+  const handleCreateItem = useCallback((name) => {
+    const cur = curBook();
+    if (!cur || readOnly) return '';
+    const nm = String(name || '').trim().slice(0, MAX_LEDGER_NAME_LEN);
+    if (!nm) return '';
+    if ((cur.items || []).length >= MAX_LEDGER_ITEMS) {
+      doFlash(`항목은 최대 ${MAX_LEDGER_ITEMS}개입니다`);
+      return '';
+    }
+    const it = makeLedgerItem({ group: 'variable', name: nm, createdAt: Date.now(), activeFrom: '' });
+    patchBook(cur.id, (b) => ({ ...b, items: [...(b.items || []), it] }));
+    return it.id;
+  }, [curBook, patchBook, readOnly]);
 
   const handleUpdateTx = useCallback((id, patch) => {
     if (!book || readOnly) return;
@@ -877,7 +956,12 @@ export default function LedgerPage({
 
   /** ⚠️ 소프트 삭제(휴지통) — 배열에서 지우지 말 것(되돌리기 없는 삭제 금지). */
   const handleDeleteTx = useCallback((ids) => {
-    if (!book || readOnly || !today) return;
+    if (!book || readOnly) return;
+    /**
+     * ⚠️ `today`는 별도 창에서 **첫 `ledger:live`가 오기 전까지 빈 문자열**이다(부팅 직후).
+     *    옛 코드는 그때 아무 피드백 없이 무시해 "삭제 버튼이 고장났다"로 보였다.
+     */
+    if (!today) { doFlash('아직 불러오는 중입니다 — 잠시 후 다시 시도하세요'); return; }
     patchBook(book.id, (b) => softDeleteTx(b, ids, today));
   }, [book, patchBook, readOnly, today]);
 
@@ -906,15 +990,29 @@ export default function LedgerPage({
    *    떠 있어 조용한 오적용이 되지 않는다.
    */
   const resolveTxConflict = useCallback((mode) => {
-    const c = txConflict;
+    const c = txConflicts[0];
     const cur = curBook();
-    if (!c || !cur) { setTxConflict(null); return; }
+    if (!c || !cur) { setTxConflicts([]); return; }
+    /** ⚠️ '나중에'는 **한 건만** 넘긴다 — 큐를 비우면 나머지 질문이 사라져 이 결함이 재발한다. */
+    const shift = () => setTxConflicts((q) => q.slice(1));
+    if (mode === 'cancel') { shift(); return; }
+    // 큐에 실린 뒤 앞선 해소로 이미 사라졌을 수 있다 — 실패가 아니라 조용히 넘어간다.
+    const item = (cur.items || []).find((it) => it && it.id === c.itemId);
+    if (!item || actualOf(item, c.ym) === null) { shift(); return; }
+    /**
+     * ⚠️ 상한을 **먼저** 본다. `migrateManualToTx`는 거래 상한에서 같은 book 참조를 돌려주는데,
+     *    옛 코드는 그걸 성공과 구분하지 못해 **아무 일도 없이 프롬프트만 닫혔다**(사유 미표시).
+     */
+    if (mode === 'migrate' && (cur.transactions || []).length >= MAX_LEDGER_TX) {
+      doFlash(`거래가 상한(${MAX_LEDGER_TX})에 도달했습니다 — 지난 연도를 정리한 뒤 다시 시도하세요`);
+      return;
+    }
     const next = mode === 'migrate'
       ? migrateManualToTx(cur, c.itemId, c.ym)
       : mode === 'drop' ? dropManual(cur, c.itemId, c.ym) : null;
-    if (next && next !== cur) patchBook(cur.id, () => next);
-    setTxConflict(null);
-  }, [txConflict, curBook, patchBook]);
+    if (next && next !== cur) { patchBook(cur.id, () => next); shift(); return; }
+    doFlash('처리하지 못했습니다 — 값을 확인해 주세요');
+  }, [txConflicts, curBook, patchBook]);
 
   /** 초기 필터는 **한 번만** 반영한다 — 매 렌더 반영하면 사용자가 필터를 바꿔도 되돌아간다. */
   const consumeTxFilter = useCallback(() => setTxFilter(null), []);
@@ -933,12 +1031,26 @@ export default function LedgerPage({
     if (b && Array.isArray(b.transactions) && b.transactions.length > 0) setTab('tx');
   }, [books, bookIdx]);
 
-  /** 매트릭스 셀 → 거래 탭(그 항목·그 달) */
-  const openTxFor = useCallback((itemId) => {
+  /**
+   * 매트릭스 셀 → 거래 탭(그 항목·**그 달**).
+   * ⚠️ `ym`을 받아 `year`/`month`를 함께 옮긴다 — `LedgerTxTab`의 `scope:'month'`는 자기
+   *    상태가 아니라 이 화면의 `year`/`month` prop으로 `makeYm`을 만들기 때문이다. 안 옮기면
+   *    10월 칸(≡3건)을 눌러도 9월 목록이 떠서 화면이 자기 자신과 모순된다.
+   */
+  const openTxFor = useCallback((itemId, ymKey) => {
+    if (typeof ymKey === 'string' && isValidYm(ymKey)) {
+      setYear(Number(ymKey.slice(0, 4)));
+      setMonth(Number(ymKey.slice(5, 7)));
+    }
     setTxFilter({ itemId: itemId || '' });
     setTab('tx');
   }, []);
-  const openUncategorized = useCallback(() => {
+  /** ⚠️ 인자를 받으므로 호출부에서 `onClick={openUncategorized}`(맨 참조) 금지 — 합성 이벤트가 ym 자리로 들어간다. */
+  const openUncategorized = useCallback((ymKey) => {
+    if (typeof ymKey === 'string' && isValidYm(ymKey)) {
+      setYear(Number(ymKey.slice(0, 4)));
+      setMonth(Number(ymKey.slice(5, 7)));
+    }
     setTxFilter({ itemId: '', uncategorized: true });
     setTab('tx');
   }, []);
@@ -1134,8 +1246,13 @@ export default function LedgerPage({
 
         {visibleMonths.map((m) => {
           const k = makeYm(year, m);
-          const active = isItemActive(it, k);
           const res = actualResolved(it, k, ix);
+          /**
+           * ⚠️ 적용기간 밖이라도 **그 달에 거래가 있으면 값을 보여 준다**(`isItemCounted`와 같은 규칙).
+           *    할부 회차가 `activeTo` 이후 달에 떨어지면 `-`로 잠겨 돈이 조용히 사라졌다.
+           *    `res`를 `active`보다 **먼저** 계산해야 한다(순서를 되돌리면 TDZ).
+           */
+          const active = isItemActive(it, k) || res.source === 'tx';
           const a = res.value;
           const p = planOf(it, k);
           /**
@@ -1144,6 +1261,7 @@ export default function LedgerPage({
            *    좁힌 거래 탭으로 간다.
            */
           const byTx = res.source === 'tx';
+          const outOfPeriod = byTx && !isItemActive(it, k);
           const shadow = byTx ? manualShadowed(it, k, ix) : null;
           const v = (a === null || p === null) ? null : a - p;
           return (
@@ -1176,8 +1294,15 @@ export default function LedgerPage({
                     + (shadow !== null
                       ? `
 ⚠️ 예전에 넣은 수동 값 ${Math.round(shadow).toLocaleString()}은(는) 무시됩니다(거래가 우선).`
-                      : '')}
-                  onClick={() => openTxFor(it.id)}
+                      : '')
+                    + (outOfPeriod
+                      ? `
+⚠️ 이 달은 항목의 적용기간 밖입니다(할부 회차 등) — 금액은 합계에 그대로 반영됩니다.`
+                      : '')
+                    /* P3 — 환급이 지출보다 큰 달은 음수가 정상이지만, 설명이 없으면 오류로 읽힌다. */
+                    + (a !== null && a < 0 ? `
+환급이 지출보다 커서 합계가 음수입니다.` : '')}
+                  onClick={() => openTxFor(it.id, k)}
                 >
                   <span className="text-[11px] text-gray-100">{fmtWon(a, hideAmounts)}</span>
                   <span className="ml-1 text-[9px] text-sky-300">≡{res.count}</span>
@@ -1185,6 +1310,9 @@ export default function LedgerPage({
                     <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.over }}>
                       수동 {hideAmounts ? '***' : Math.round(shadow).toLocaleString()} 무시됨
                     </div>
+                  )}
+                  {outOfPeriod && (
+                    <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.over }}>적용기간 밖</div>
                   )}
                   {v !== null && v !== 0 && (
                     <div className="text-[9px] leading-tight" style={{ color: varianceTone(v) }}>
@@ -1259,17 +1387,6 @@ export default function LedgerPage({
     );
   };
 
-  /** 그 달 미분류 거래 합(항목을 고르지 않은 지출). 없으면 null. */
-  const uncTotalOf = (k) => {
-    const u = ix.uncategorizedYm.get(k);
-    return u && u.count > 0 ? { value: u.sum, count: u.count } : null;
-  };
-  const uncPayValue = (k, pay) => {
-    const u = ix.uncategorizedYm.get(k);
-    const v = u && u.byPay ? u.byPay[pay] : 0;
-    return Number.isFinite(v) ? v : 0;
-  };
-
   /**
    * 미분류 가상 행 — 변동비 그룹 끝.
    * ⚠️ 항목이 없어 어느 행에도 속하지 않지만 **실제로 나간 돈**이라 반드시 보여야 한다
@@ -1290,7 +1407,7 @@ export default function LedgerPage({
           <div className="flex items-center gap-1">
             <span className="text-[11px] text-amber-300">미분류</span>
             <button className="text-[9px] px-1 rounded bg-gray-800 text-gray-400 hover:bg-gray-700"
-              onClick={openUncategorized} title="거래 탭에서 미분류만 걸러 항목을 지정합니다">정리 →</button>
+              onClick={() => openUncategorized()} title="거래 탭에서 미분류만 걸러 항목을 지정합니다">정리 →</button>
           </div>
           <div className="text-[9px] text-gray-600 mt-0.5">항목을 고르지 않은 거래 {yearCount}건</div>
         </td>
@@ -1303,7 +1420,7 @@ export default function LedgerPage({
             <td key={m} className={`${cellBase} text-right`} style={{ minWidth: 84 }}>
               {!u ? <span className="text-[10px] text-gray-700">-</span> : (
                 <button type="button" className="w-full text-right hover:bg-gray-800/60 rounded px-1"
-                  onClick={openUncategorized}
+                  onClick={() => openUncategorized(makeYm(year, m))}
                   title={`미분류 거래 ${u.count}건 — 클릭하면 거래 탭에서 정리합니다`}>
                   <span className="text-[11px] text-amber-200">{fmtWon(u.value, hideAmounts)}</span>
                   <span className="ml-1 text-[9px] text-sky-300">≡{u.count}</span>
@@ -2190,11 +2307,13 @@ export default function LedgerPage({
       {/* ── 수동 값 ↔ 거래 충돌 안내 (§5.3.2) ──
           ⚠️ 모달이 아니라 **인라인**이다 — 이 화면은 z-1090이고 별도 창에는 App조차 없어
              ConfirmDialog·토스트가 뜨지 않는다. 그리고 추가를 막지 않으므로 입력 흐름도 끊기지 않는다. */}
-      {txConflict && !readOnly && (
+      {txConflicts.length > 0 && !readOnly && (
         <div className="shrink-0 px-3 py-1.5 border-t border-amber-800/50 bg-amber-900/25 flex items-center gap-2 flex-wrap">
           <span className="text-[11px] text-amber-200">
-            {txConflict.ym}에 이미 <b>수동 입력 {fmtWon(txConflict.manual, hideAmounts)}</b>이(가) 있습니다 —
+            <b>{(book?.items || []).find((it) => it && it.id === txConflicts[0].itemId)?.name || '항목'}</b>의{' '}
+            {txConflicts[0].ym}에 이미 <b>수동 입력 {fmtWon(txConflicts[0].manual, hideAmounts)}</b>이(가) 있습니다 —
             이제 그 달은 <b>거래 합</b>이 쓰이고 수동 값은 무시됩니다.
+            {txConflicts.length > 1 && <span className="text-amber-300/80"> (외 {txConflicts.length - 1}건)</span>}
           </span>
           <button className="text-[11px] px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-100 border border-emerald-800/60"
             title="수동 값을 그 달 1일 거래 1건으로 옮깁니다(합계가 그대로 유지됩니다)"
@@ -2212,6 +2331,7 @@ export default function LedgerPage({
         today={today}
         readOnly={readOnly || !book}
         onAdd={handleAddTx}
+        onCreateItem={handleCreateItem}
         onGoTx={() => setTab('tx')}
       />
 
@@ -2292,6 +2412,12 @@ function SnapshotModal({ snapshots, readOnly, canSave, onSave, onRestore, onRemo
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-gray-200">{fmtWhen(s.savedAt)}</span>
                   {s.auto && <span className="text-[9px] px-1 rounded bg-gray-800 text-gray-400" title="복원 직전에 자동으로 남긴 되돌리기 지점입니다">자동</span>}
+                  {/* ⚠️ 거래는 스냅샷에 담기지 않는다(512KB 예산) — 그 사실을 화면이 반드시 말해야
+                      복원한 사용자가 "거래가 안 돌아왔다"로 오해하지 않는다. `shrink-0` 필수(옆 label이 truncate). */}
+                  {sum.txStripped && (
+                    <span className="text-[9px] px-1 rounded bg-sky-900/50 text-sky-300 shrink-0"
+                      title="거래는 이 기록에 저장되지 않습니다 — 복원해도 지금 거래는 그대로 유지됩니다(삭제한 거래는 휴지통에서 되살립니다)">거래 제외</span>
+                  )}
                   {s.label && <span className="text-[10px] text-gray-400 truncate">{s.label}</span>}
                   <div className="flex-1" />
                   {!readOnly && (armed === s.id ? (
@@ -2318,6 +2444,11 @@ function SnapshotModal({ snapshots, readOnly, canSave, onSave, onRestore, onRemo
                       onClick={() => { setArmed(''); setArmedDel(s.id); }}>×</button>
                   ))}
                 </div>
+                {armed === s.id && (
+                  <div className="text-[9px] text-amber-300/90 mt-0.5 leading-relaxed">
+                    이 시점의 계획·항목·실제 입력으로 되돌립니다. <b>거래는 그대로 유지됩니다</b>(휴지통이 안전망).
+                  </div>
+                )}
                 <div className="text-[9px] text-gray-500 mt-0.5">
                   장부 {sum.books} · 항목 {sum.items}건 · 실제 입력 {sum.actuals}칸 · 정리한 달 {sum.months}개
                 </div>
@@ -2329,7 +2460,8 @@ function SnapshotModal({ snapshots, readOnly, canSave, onSave, onRestore, onRemo
         <div className="px-3 py-2 border-t border-gray-800 text-[9px] text-gray-600 leading-relaxed">
           · 이 기록은 계좌 백업과 <b>별개</b>입니다 — 가계부만 되돌립니다.<br />
           · <b>복원해도 지금 상태가 자동으로 한 번 더 저장</b>되므로, 잘못 눌러도 바로 위 '자동' 기록으로 되돌아갈 수 있습니다.<br />
-          · 보관은 최대 {MAX_LEDGER_SNAPSHOTS}개이고, 자리가 모자라면 <b>자동 기록부터</b> 밀려납니다(직접 저장한 것이 오래 남습니다).
+          · 보관은 최대 {MAX_LEDGER_SNAPSHOTS}개이고, 자리가 모자라면 <b>자동 기록부터</b> 밀려납니다(직접 저장한 것이 오래 남습니다).<br />
+          · <b>거래는 이 기록에 포함되지 않습니다</b> — 복원해도 그대로 유지되고, 삭제한 거래는 휴지통에서 되살립니다.
         </div>
       </div>
     </div>

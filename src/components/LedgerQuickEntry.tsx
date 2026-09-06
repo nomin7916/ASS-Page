@@ -9,6 +9,7 @@ import {
 import {
   makeLedgerTx, suggestItems, shiftLedgerDate, isValidLedgerDate,
   MAX_LEDGER_TX_SPLITS, MAX_LEDGER_TX_MEMO_LEN, MAX_LEDGER_INSTALLMENT_MONTHS,
+  MAX_LEDGER_PAYER_LEN,
 } from '../ledger';
 
 /**
@@ -42,6 +43,8 @@ export default function LedgerQuickEntry({
   onAdd,
   /** 거래 탭으로 이동(미분류 정리 안내 등) */
   onGoTx = null,
+  /** 일치하는 항목이 없을 때 그 자리에서 만든다 — 새 항목 id를 **동기로** 돌려줘야 한다. */
+  onCreateItem = null,
   flash = '',
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -104,7 +107,26 @@ export default function LedgerQuickEntry({
 
   const splitSum = splits.reduce((a, b) => a + (parseMoney(b.amount) ?? 0), 0);
 
-  const submit = (full) => {
+  /** 친 이름과 정확히 같은 항목이 없을 때만 '새 항목 만들기'를 제안한다. */
+  const canCreate = !!onCreateItem && !readOnly && !itemId && query.trim() !== ''
+    && !suggestions.some((sg) => String(sg.name || '').trim().toLowerCase() === query.trim().toLowerCase());
+  const createAndSubmit = (full) => {
+    const nm = query.trim();
+    if (!nm) return;
+    const id = onCreateItem ? onCreateItem(nm) : '';
+    if (!id) { setErr('항목을 만들지 못했습니다'); return; }
+    setItemId(id);
+    setQuery(nm);
+    setOpenSug(false);
+    submit(full, id);   // ⚠️ 반드시 id를 넘긴다(위 forcedItemId 주석 참조)
+  };
+
+  /**
+   * @param forcedItemId ⚠️ **필수 설계** — `setItemId(id)`는 비동기라, 새 항목을 만든 직후
+   *   인자 없이 `submit()`을 부르면 stale한 `itemId === ''`를 읽어 **미분류로 저장된다**
+   *   (화면에는 이름이 보여 고쳐진 것처럼 착각하게 되는, 가장 나쁜 실패 모드).
+   */
+  const submit = (full, forcedItemId) => {
     if (readOnly) return;
     const amount = parseMoney(amountText);
     if (amount === null || !(amount > 0)) {
@@ -130,7 +152,7 @@ export default function LedgerQuickEntry({
       amount,
       refund,
       kind,
-      itemId: splitOut.length > 0 ? '' : itemId,
+      itemId: splitOut.length > 0 ? '' : (forcedItemId || itemId),
       splits: splitOut,
       pay,
       memo,
@@ -209,11 +231,13 @@ export default function LedgerQuickEntry({
                   pickItem(suggestions[0].itemId);
                   return;
                 }
+                // 일치가 없으면 이름을 버리지 않는다 — 그 자리에서 변동비 항목으로 만든다.
+                if (openSug && canCreate) { createAndSubmit(e.shiftKey); return; }
                 submit(e.shiftKey);
               } else if (e.key === 'Escape') { setOpenSug(false); }
             }}
           />
-          {openSug && suggestions.length > 0 && (
+          {openSug && (suggestions.length > 0 || canCreate) && (
             <div className="absolute bottom-full mb-1 left-0 w-[220px] max-h-[220px] overflow-auto bg-[#151b28] border border-gray-700 rounded shadow-lg z-[5]">
               {suggestions.map((s) => (
                 <button key={s.itemId}
@@ -224,6 +248,18 @@ export default function LedgerQuickEntry({
                   <span className="ml-auto text-[9px] text-gray-500 shrink-0">{LEDGER_GROUP_LABEL[s.group]}</span>
                 </button>
               ))}
+              {/* ⚠️ 가짜 suggestion 객체로 만들지 말 것 — `pickItem`이 `itemById.get(가짜id)`를
+                  못 찾아 입력한 이름을 지운다. 형제 버튼으로 둔다. */}
+              {canCreate && (
+                <button
+                  className="w-full text-left px-2 py-1 text-[11px] hover:bg-gray-800 flex items-center gap-1.5 border-t border-gray-800"
+                  title="변동비 항목으로 만들고 이 거래를 그 항목에 넣습니다"
+                  onMouseDown={(e) => { e.preventDefault(); createAndSubmit(false); }}>
+                  <span className="text-emerald-300 shrink-0">＋</span>
+                  <span className="truncate text-emerald-200">새 항목 &quot;{query.trim()}&quot; 만들기</span>
+                  <span className="ml-auto text-[9px] text-gray-500 shrink-0">변동비</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -242,6 +278,7 @@ export default function LedgerQuickEntry({
           value={inst} onChange={(e) => setInst(e.target.value)} />
 
         <input className={`${inputCls} w-[80px]`} placeholder="누가" value={payer}
+          maxLength={MAX_LEDGER_PAYER_LEN}
           title="누가 썼는지(부부 카드 명의 구분) — 비워도 됩니다"
           onChange={(e) => setPayer(e.target.value)} />
 
@@ -250,11 +287,16 @@ export default function LedgerQuickEntry({
           환급
         </label>
 
+        {/* ⚠️ 항목을 고르면 지출/수입은 **항목이 정한다**(모델이 group에서 강제 파생한다).
+            토글을 열어 두면 사용자가 두 축이 어긋난 거래를 만들 수 있고, 그러면 같은 달에
+            `byYm`은 수입인데 매트릭스는 지출로 세는 상태가 된다(실측). 여기서는 비활성 + 사유 표시. */}
         <div className="flex items-center gap-1 text-[11px] text-gray-400">
           {[['expense', '지출'], ['income', '수입']].map(([k, label]) => (
             <button key={k}
-              className={`px-1.5 py-0.5 rounded ${kind === k ? 'bg-amber-900/50 text-amber-200' : 'bg-gray-800 text-gray-500'}`}
-              onClick={() => setKind(k)}
+              disabled={!!itemId}
+              className={`px-1.5 py-0.5 rounded ${kind === k ? 'bg-amber-900/50 text-amber-200' : 'bg-gray-800 text-gray-500'} ${itemId ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title={itemId ? '항목을 고르면 지출/수입은 항목의 구분을 따릅니다 — 바꾸려면 항목을 비우세요' : ''}
+              onClick={() => { if (!itemId) setKind(k); }}
             >{label}</button>
           ))}
         </div>

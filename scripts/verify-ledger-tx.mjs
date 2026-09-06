@@ -68,6 +68,7 @@ if (L) {
     addTx, updateTx, softDeleteTx, restoreTx, purgeTx, migrateManualToTx, dropManual,
     filterTx, suggestItems, shiftLedgerDate, sortTxDesc, stripTxForSnapshot, normalizeTx,
     monthTotals, expectedTotal, expectedIncomeTotal, expectedByPay, expectedOf, expectsActual,
+    isItemActive, isItemCounted, txDisplayName, LEDGER_CAL_TX_CAP,
     compareMonths, mtdCompare, ledgerEventsByDate,
     normalizeLedgerBooks, ledgerFingerprint, ledgerBooksHaveContent,
     MAX_LEDGER_TX, MAX_LEDGER_TX_SPLITS,
@@ -415,6 +416,179 @@ if (L) {
   eq('#T38d 거래 0건 장부는 tx 이벤트가 없다',
     Object.values(ledgerEventsByDate([BOOK0], 2026)).flat().filter((e) => e.kind === 'tx').length, 0);
 
+  /* ======================================================================
+   * §11~§16 — 단계 A 사후 검토(재설계 문서 §12)의 P1·P2 수정.
+   *           기능마다 '동작 케이스 + 거래 0건 무영향 케이스'를 쌍으로 둔다.
+   * ====================================================================== */
+
+  // -- §11 A1 -- 거래 kind와 항목 group의 축 정합 -------------------------
+  console.log('\n  §11 A1 축 정합 — kind는 항목 group에서 파생');
+  {
+    const a1 = addTx(BOOK, makeLedgerTx({ id: 'a1', date: '2026-09-05', amount: 50000, itemId: 'v1', kind: 'income' }));
+    const b1 = a1.book, i1 = txIndexOf(b1);
+    eq('#T46 ⚠️ 지출 항목에 수입 거래를 넣으면 kind가 항목 group으로 정정된다',
+      b1.transactions.find((t) => t.id === 'a1').kind, 'expense');
+    // ⚠️ 두 축이 **같은 값**을 내는지 본다 — 필드가 바뀌었다는 것만으로는 결함이 안 잡힌다.
+    eq('#T46b 두 축이 일치한다(수입은 그대로, 지출만 늘었다)',
+      [i1.byYm.get('2026-09').income - ix.byYm.get('2026-09').income,
+        Math.round(monthTotals(b1, '2026-09').actualExpense - monthTotals(BOOK, '2026-09').actualExpense)],
+      [0, 50000]);
+    const a2 = updateTx(BOOK, 't1', { itemId: 'in' });   // 지출 거래를 수입 항목으로
+    eq('#T46c updateTx(항목 변경)도 kind를 다시 파생한다',
+      a2.transactions.find((t) => t.id === 't1').kind, 'income');
+    const a3 = addTx(BOOK, makeLedgerTx({
+      id: 'a3', date: '2026-09-05', amount: 10, kind: 'income',
+      splits: [{ itemId: 'v1', amount: 6, memo: '' }, { itemId: 'in', amount: 4, memo: '' }],
+    }));
+    eq('#T46d 분할은 **첫 split 항목** 기준으로 파생한다(타이브레이크 고정)',
+      a3.book.transactions.find((t) => t.id === 'a3').kind, 'expense');
+    const a4 = addTx(BOOK, makeLedgerTx({ id: 'a4', date: '2026-09-05', amount: 10, itemId: '', kind: 'income' }));
+    eq('#T46e 미분류(항목 없음)는 kind를 그대로 둔다', a4.book.transactions.find((t) => t.id === 'a4').kind, 'income');
+    const a5 = addTx(BOOK, makeLedgerTx({ id: 'a5', date: '2026-09-05', amount: 10, itemId: 'ZZZ', kind: 'income' }));
+    eq('#T46f 모르는 항목이면 지어내지 않는다', a5.book.transactions.find((t) => t.id === 'a5').kind, 'income');
+    // 레거시 정정 + 멱등 — 이 조합이 이 수정의 가장 큰 위험(무한 재저장)을 잠근다.
+    const legacyMix = [JSON.parse(JSON.stringify({
+      ...BOOK,
+      transactions: [makeLedgerTx({ id: 'L1', date: '2026-09-01', amount: 7, itemId: 'v1', kind: 'income' })],
+    }))];
+    const n1 = normalizeLedgerBooks(legacyMix);
+    eq('#T46g 로드 정규화가 어긋난 레거시 거래를 정정한다', n1[0].transactions[0].kind, 'expense');
+    ok('#T46g-2 ⚠️ 정정은 한 번만 — 두 번째 정규화는 같은 참조(멱등 계약)', normalizeLedgerBooks(n1) === n1);
+  }
+
+  // -- §12 A2 -- 적용기간 밖 할부 회차가 사라지지 않는다 ------------------
+  console.log('\n  §12 A2 isItemCounted — 적용기간 밖 거래');
+  {
+    const itA = makeLedgerItem({ id: 'x', group: 'variable', pay: 'card', name: '가전', activeFrom: '2026-01', activeTo: '2026-10', plan: 0 });
+    const bk = makeLedgerBook({ id: 'ip', items: [itA], transactions: sortTxDesc([
+      makeLedgerTx({ id: 'inst', date: '2026-09-15', amount: 30000, itemId: 'x', pay: 'card', installmentMonths: 3 }),
+    ]) });
+    const ixp = txIndexOf(bk);
+    eq('#T47 인덱스는 원래도 11월 회차를 갖고 있었다', ixp.byItemYm.get('x|2026-11'), { sum: 10000, count: 1 });
+    const t11 = monthTotals(bk, '2026-11');
+    eq('#T47b ⚠️ 세 집계가 모두 그 회차를 센다(돈이 사라지지 않는다)',
+      [t11.actualExpense, t11.byGroup.variable ? t11.byGroup.variable.actual : null,
+        t11.byPay.card ? t11.byPay.card.actual : null], [10000, 10000, 10000]);
+    eq('#T47c expectedTotal·expectedByPay·expectedOf도 같은 값',
+      [expectedTotal(bk.items, '2026-11', ixp).value,
+        expectedByPay(bk.items, '2026-11', ixp).card ? expectedByPay(bk.items, '2026-11', ixp).card.value : null,
+        expectedOf(itA, '2026-11', ixp)], [10000, 10000, 10000]);
+    eq('#T47d ⚠️ 그래도 미입력으로 세지 않는다(expectsActual은 좁게 유지)', t11.missingExpense, 0);
+    ok('#T47e ⚠️ isItemActive 자체는 그대로 좁다(계획·달력 규약)', isItemActive(itA, '2026-11') === false);
+    ok('#T47f isItemCounted는 ix가 없으면 isItemActive와 완전히 같다',
+      isItemCounted(itA, '2026-11') === false && isItemCounted(itA, '2026-09') === true);
+    // ⚠️ 하위호환의 축 — 거래가 없으면 적용기간 밖은 종전대로 잠긴다.
+    const bk0 = makeLedgerBook({ id: 'ip0', items: [itA] });
+    eq('#T47g ⚠️ 거래 0건이면 종전과 동일(0 · 활성 항목 0건)',
+      [monthTotals(bk0, '2026-11').actualExpense, expectedTotal(bk0.items, '2026-11', txIndexOf(bk0)).activeCount], [0, 0]);
+    // ⚠️ 적용기간 밖의 **수동** 값까지 딸려 들어오면 거래 0건 동작이 달라진다.
+    const manualOut = makeLedgerItem({ id: 'mo', group: 'variable', activeTo: '2026-10', actual: { '2026-11': 5000 } });
+    eq('#T47h ⚠️ 적용기간 밖의 수동 값은 여전히 세지 않는다',
+      monthTotals(makeLedgerBook({ id: 'mo', items: [manualOut] }), '2026-11').actualExpense, 0);
+  }
+
+  // -- §13 B7 -- 이체는 항목을 갖지 않는다 -------------------------------
+  console.log('\n  §13 B7 이체 축');
+  {
+    const tr = updateTx(BOOK, 't1', { kind: 'transfer' });
+    const tx1 = tr.transactions.find((t) => t.id === 't1');
+    eq('#T48 ⚠️ 이체로 바꾸면 항목·분할이 비워진다(축 충돌 차단)',
+      [tx1.kind, tx1.itemId, tx1.splits.length], ['transfer', '', 0]);
+    const back = updateTx(tr, 't1', { itemId: 'v1', splits: [] });
+    const tx2 = back.transactions.find((t) => t.id === 't1');
+    eq('#T48b ⚠️ 이체에 항목을 붙이려 하면 **이체가 이긴다**(카드대금이 지출로 되살아나지 않게)',
+      [tx2.kind, tx2.itemId], ['transfer', '']);
+    const addT = addTx(BOOK0, makeLedgerTx({ id: 'tt', date: '2026-09-01', amount: 100, itemId: 'v1', kind: 'transfer' }));
+    eq('#T48c addTx도 같은 규칙이고 entry를 플립하지 않는다',
+      [addT.book.transactions[0].itemId, addT.book.items.find((i) => i.id === 'v1').entry], ['', 'monthly']);
+    const splitT = addTx(BOOK0, makeLedgerTx({
+      id: 'st', date: '2026-09-01', amount: 10, kind: 'transfer',
+      splits: [{ itemId: 'v1', amount: 6, memo: '' }, { itemId: 'v2', amount: 4, memo: '' }],
+    }));
+    eq('#T48d 분할 이체는 분할도 버린다', splitT.book.transactions[0].splits.length, 0);
+    const legacyT = [JSON.parse(JSON.stringify(makeLedgerBook({
+      id: 'lt', items: [IT.v1],
+      transactions: [makeLedgerTx({ id: 'lt1', date: '2026-09-01', amount: 5, itemId: 'v1', kind: 'transfer' })],
+    })))];
+    const ln1 = normalizeLedgerBooks(legacyT);
+    eq('#T48e 레거시 이체+항목도 정규화가 정정한다', ln1[0].transactions[0].itemId, '');
+    ok('#T48f ⚠️ 그 정정도 멱등이다', normalizeLedgerBooks(ln1) === ln1);
+  }
+
+  // -- §14 B2 -- updateTx도 entry를 전환한다 -----------------------------
+  console.log('\n  §14 B2 entry 전환 공유');
+  {
+    const base = makeLedgerBook({ id: 'e', items: [IT.v1, IT.v2], transactions: sortTxDesc([
+      makeLedgerTx({ id: 'u1', date: '2026-09-01', amount: 100, itemId: '' }),
+    ]) });
+    const moved = updateTx(base, 'u1', { itemId: 'v2', splits: [] });
+    eq('#T49 ⚠️ 일괄 변경으로 거래를 받은 항목도 entry가 tx가 된다(미입력 오표시 방지)',
+      moved.items.find((i) => i.id === 'v2').entry, 'tx');
+    eq('#T49b 다른 항목은 그대로', moved.items.find((i) => i.id === 'v1').entry, 'monthly');
+    const again = updateTx(moved, 'u1', { memo: 'x' });
+    ok('#T49c ⚠️ 바뀔 게 없으면 items는 같은 참조(헛된 Drive 저장 방지)', again.items === moved.items);
+    ok('#T49d 없는 id는 원본 참조 그대로', updateTx(BOOK0, 'nope', { amount: 1 }) === BOOK0);
+  }
+
+  // -- §15 B5 -- 달력 패드에 그 날 거래 목록 -----------------------------
+  console.log('\n  §15 B5 달력 거래 목록');
+  {
+    const ev2 = ledgerEventsByDate([BOOK], 2026);
+    /**
+     * ⚠️ **옵셔널 체이닝·기본값 필수** — `txs` 필드가 사라지는 변이에서 TypeError로 스크립트가
+     *    죽으면 요약이 안 나오고 하네스가 그 변이를 '미검출'로 오분류한다(실측 M30). 값 단언은
+     *    반드시 '실패'로 떨어져야 한다(#T2의 같은 규약).
+     */
+    const pick = (d) => (ev2[d] || []).find((e) => e.kind === 'tx') || {};
+    const txsOf = (e) => (Array.isArray(e && e.txs) ? e.txs : []);
+    const d5 = pick('2026-09-05');
+    eq('#T50 그 날 거래가 목록으로 실린다(건수와 줄 수가 같다)',
+      [txsOf(d5).length, d5.txCount ?? null, txsOf(d5).map((t) => t.name).sort().join(',')], [2, 2, '교통,식비']);
+    // ⚠️ amount는 **저장값 그대로 양수** — 부호를 미리 곱하면 "양수 + refund 플래그" 계약이 깨진다.
+    const d2 = pick('2026-09-02');
+    eq('#T50b 환급은 amount 양수 + refund:true(부호를 미리 곱하지 않는다)',
+      [txsOf(d2)[0]?.amount ?? null, txsOf(d2)[0]?.refund ?? null, d2.txExpense ?? null], [20000, true, -20000]);
+    ok('#T50c 이체는 목록에 없다', !pick('2026-09-15').kind);
+    ok('#T50d 휴지통도 없다', !pick('2026-09-20').kind);
+    eq('#T50e 분할 거래의 이름은 항목명을 잇는다', txsOf(pick('2026-09-10'))[0]?.name ?? null, '식비 + 교통');
+    eq('#T50f 미분류는 그대로 미분류', txsOf(pick('2026-09-03'))[0]?.name ?? null, '미분류');
+    const d4 = pick('2026-09-04');
+    eq('#T50g 할부는 **그날 전액** + 이달 회차를 함께 싣는다',
+      [d4.txExpense ?? null, txsOf(d4)[0]?.installmentMonths ?? null, txsOf(d4)[0]?.installmentThisMonth ?? null], [180000, 3, 60000]);
+    // 캡 — 목록만 자르고 건수는 전 건을 유지한다(조용한 절단 금지).
+    const many = makeLedgerBook({ id: 'many', items: [IT.v1], transactions: sortTxDesc(
+      Array.from({ length: 25 }, (_, i) => makeLedgerTx({ id: 'm' + i, date: '2026-09-09', amount: 100, itemId: 'v1', createdAt: i })),
+    ) });
+    const dm = (ledgerEventsByDate([many], 2026)['2026-09-09'] || []).find((e) => e.kind === 'tx') || {};
+    eq('#T50h ⚠️ 캡을 넘겨도 건수는 전 건이다', [txsOf(dm).length, dm.txCount ?? null, LEDGER_CAL_TX_CAP], [20, 25, 20]);
+    const gone = makeLedgerBook({ id: 'g', items: [], transactions: sortTxDesc([
+      makeLedgerTx({ id: 'g1', date: '2026-09-09', amount: 100, itemId: 'deleted-item' }),
+    ]) });
+    eq('#T50i 삭제된 항목을 가리키면 그렇게 표시한다',
+      txsOf((ledgerEventsByDate([gone], 2026)['2026-09-09'] || []).find((e) => e.kind === 'tx'))[0]?.name ?? null, '(삭제된 항목)');
+    eq('#T50i-2 txDisplayName은 거래 탭과 공유하는 단일 소스다',
+      [txDisplayName(BOOK.transactions.find((t) => t.id === 't4'), new Map()),
+        txDisplayName(null, new Map())], ['미분류', '']);
+    eq('#T50j ⚠️ 거래 0건이면 tx 이벤트 자체가 없다',
+      Object.values(ledgerEventsByDate([BOOK0], 2026)).flat().filter((e) => e.kind === 'tx').length, 0);
+  }
+
+  // -- §16 B6 -- 새 항목 만들고 그 거래를 넣는 합성 ----------------------
+  console.log('\n  §16 B6 새 항목 생성 합성');
+  {
+    const fresh = makeLedgerItem({ group: 'variable', name: '병원' });
+    eq('#T51 새 항목의 기본값(변동비·monthly·빈 실적)',
+      [fresh.group, fresh.entry, Object.keys(fresh.actual).length, fresh.name], ['variable', 'monthly', 0, '병원']);
+    ok('#T51b id는 매번 새로 생긴다', fresh.id !== makeLedgerItem({ group: 'variable', name: '병원' }).id);
+    const withItem = { ...BOOK0, items: [...BOOK0.items, fresh] };
+    const res = addTx(withItem, makeLedgerTx({ id: 'n9', date: '2026-09-09', amount: 12000, itemId: fresh.id }));
+    const ixn = txIndexOf(res.book);
+    eq('#T51c ⚠️ 만든 항목 id로 저장돼야 한다(미분류로 새면 이 기능이 무의미)',
+      [res.error, actualResolved(res.book.items.find((i) => i.id === fresh.id), '2026-09', ixn).value,
+        ixn.uncategorizedYm.get('2026-09') ? ixn.uncategorizedYm.get('2026-09').sum : 0], ['', 12000, 0]);
+    eq('#T51d 그 항목의 entry도 tx로 전환된다', res.book.items.find((i) => i.id === fresh.id).entry, 'tx');
+  }
+
   // ── §10 엑셀 — 거래 0건 무영향 + 시트 ④ ────────────────────────────────
   console.log('\n  §10 엑셀');
   let LE = null;
@@ -495,7 +669,10 @@ ok('#TG4d ⚠️ 거래 탭이 배열을 직접 자르지 않는다(hard delete 
 // 매트릭스 셀 — 거래가 있으면 읽기 전용
 ok('#TG5 ⚠️ 거래가 있는 칸은 편집 입력이 아니라 버튼이다(단일 소스)',
   /const byTx = res\.source === 'tx';/.test(LP) && /\) : byTx \? \(/.test(LP));
-ok('#TG5b 그 칸을 누르면 거래 탭으로 간다', /onClick=\{\(\) => openTxFor\(it\.id\)\}/.test(LP));
+// ⚠️ **달(`k`)을 함께 넘긴다** — 안 넘기면 10월 칸(≡3건)을 눌러도 헤더가 가리키는 달의
+//    목록이 떠서 화면이 자기 자신과 모순된다(거래 탭의 `scope:'month'`는 페이지 month를 쓴다).
+ok('#TG5b 그 칸을 누르면 **그 항목·그 달**의 거래 탭으로 간다',
+  /onClick=\{\(\) => openTxFor\(it\.id, k\)\}/.test(LP));
 ok('#TG5c 가려진 수동 값을 화면이 알린다(조용한 오적용 금지)', /manualShadowed\(it, k, ix\)/.test(LP));
 
 // 미분류
@@ -541,6 +718,144 @@ ok('#TG12c 기본 탭 판정이 books 도착 후 한 번만 돈다',
 ok('#TG13 엑셀이 시트 4장을 만든다', /buildSummarySheet\(ctx\), buildTxSheet\(ctx\)\]/.test(LEX));
 ok('#TG13b ⚠️ 거래 시트 합계가 이체를 뺀다', /if \(tx\.kind === 'expense'\) total \+= amount;/.test(LEX));
 ok('#TG13c 거래 시트가 휴지통을 뺀다', /if \(!isLiveTx\(tx\)\) continue;/.test(LEX));
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * §G-A — 단계 A 사후 검토(문서 §12) 배선. 전부 **선언이 아니라 사용부**를 단언한다.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+// ── A3 — 매트릭스 셀 → 그 달 ─────────────────────────────────────────────
+ok('#TG14 openTxFor/openUncategorized가 달을 함께 옮긴다',
+  /const openTxFor = useCallback\(\(itemId, ymKey\) => \{[\s\S]{0,220}?setMonth\(Number\(ymKey\.slice\(5, 7\)\)\);/.test(LP)
+  && /const openUncategorized = useCallback\(\(ymKey\) => \{[\s\S]{0,220}?setMonth\(Number\(ymKey\.slice\(5, 7\)\)\);/.test(LP));
+ok('#TG14b 미분류 월 셀도 그 달을 넘긴다', /onClick=\{\(\) => openUncategorized\(makeYm\(year, m\)\)\}/.test(LP));
+// ⚠️ 맨 참조(`onClick={openUncategorized}`)는 합성 이벤트가 ym 자리로 들어간다 — 부재 단언.
+ok('#TG14c ⚠️ 맨 참조로 넘기지 않는다', !/onClick=\{openUncategorized\}/.test(LP));
+
+// ── A2 — 적용기간 밖이라도 거래가 있으면 값을 보여 준다 ──────────────────
+ok('#TG15 매트릭스 셀 활성 게이트가 거래를 함께 본다',
+  /const active = isItemActive\(it, k\) \|\| res\.source === 'tx';/.test(LP));
+ok('#TG15b 적용기간 밖 배지를 렌더한다',
+  /const outOfPeriod = byTx && !isItemActive\(it, k\);/.test(LP) && /적용기간 밖<\/div>/.test(LP));
+ok('#TG15c 엑셀 매트릭스도 같은 규칙(isItemCounted)', /if \(!isItemCounted\(it, k, ctx\.ix\)\) \{/.test(LEX));
+// ⚠️ 집계 3지점이 모두 `isItemCounted`여야 한다 — 하나만 좁으면 그 축에서만 돈이 사라진다.
+ok('#TG15d 집계가 isItemCounted를 쓴다(monthTotals·addExpected·expectedByPay·expectedOf)',
+  /if \(!it \|\| !isItemCounted\(it, ym, ix\)\) continue;/.test(LG)
+  && /if \(!item \|\| !isItemCounted\(item, ym, ix\)\) return;/.test(LG)
+  && /if \(!isItemCounted\(it, ym, ix\)\) continue;/.test(LG)
+  && /if \(!item \|\| !isValidYm\(ym\) \|\| !isItemCounted\(item, ym, ix\)\) return null;/.test(LG));
+// ⚠️ `expectsActual`은 **좁게** 유지 — 넓히면 적용기간 밖 달이 '미입력'으로 점등한다.
+ok('#TG15e ⚠️ expectsActual은 여전히 isItemActive를 쓴다',
+  /export const expectsActual[\s\S]{0,400}?if \(!item \|\| !isItemActive\(item, ym\)\) return false;/.test(LG));
+
+// ── A1/B7 — 축 정합 ─────────────────────────────────────────────────────
+ok('#TG16 addTx/updateTx/정규화가 축 정합을 지난다',
+  /const next = resolveTxAxis\(raw, book\.items\);/.test(LG)
+  && /const merged = resolveTxAxis\(mergedRaw, book\.items, patch\);/.test(LG)
+  && /const nt = resolveTxAxis\(nt0, items\);/.test(LG));
+// ⚠️ 정규화에서 **derive → sameTx 순서**가 멱등의 축이다. 뒤집으면 txChanged가 영영 서지 않아
+//    정정이 저장되지 않고, 매 로드마다 같은 계산만 반복한다.
+ok('#TG16b ⚠️ 정정이 sameTx보다 먼저 온다',
+  LG.indexOf('const nt = resolveTxAxis(nt0, items);') < LG.indexOf('if (nt !== nt0 || !sameTx(nt,')
+  && /if \(nt !== nt0 \|\| !sameTx\(nt, t as Record<string, unknown>\)\) txChanged = true;/.test(LG));
+ok('#TG16c 빠른 입력의 지출/수입 토글은 항목이 있으면 잠긴다',
+  /disabled=\{!!itemId\}/.test(QE) && /onClick=\{\(\) => \{ if \(!itemId\) setKind\(k\); \}\}/.test(QE));
+ok('#TG16d 거래 탭의 kind/항목 select가 서로를 잠근다',
+  /disabled=\{tx\.kind === 'transfer'\}/.test(TT)
+  && /disabled=\{!!tx\.itemId \|\| \(Array\.isArray\(tx\.splits\) && tx\.splits\.length > 0\)\}/.test(TT));
+
+// ── B2 — entry 전환을 두 라이터가 공유 ───────────────────────────────────
+ok('#TG17 addTx와 updateTx가 같은 flipEntryToTx를 부른다',
+  (LG.match(/flipEntryToTx\(book\.items, /g) || []).length === 2
+  && /const items = flipEntryToTx\(book\.items, merged\);/.test(LG)
+  && /return \{ \.\.\.book, items, transactions: sortTxDesc\(out\) \};/.test(LG));
+
+// ── B1 — 미분류가 분석 탭 카드에도 들어간다 ──────────────────────────────
+ok('#TG18 결제수단 시리즈가 미분류를 더한다',
+  /row\[`pay_\$\{p\}`\] = \(bp\[p\] \? bp\[p\]\.value : 0\) \+ uncPayValue\(k, p\);/.test(LP));
+ok('#TG18b 상세 도넛이 미분류를 byKey에 넣어 fold에 참여시킨다',
+  /byKey\.set\('미분류', \(byKey\.get\('미분류'\) \|\| 0\) \+ unc\.value\);/.test(LP));
+// ⚠️ TDZ — 두 헬퍼는 이를 호출하는 memo(`yearSeries`·`donut`·`detailDonut`)보다 **먼저** 선언돼야
+//    한다. 아래로 내리면 첫 렌더에서 ReferenceError로 가계부 탭이 통째로 오류 페이지가 된다.
+ok('#TG18c ⚠️ uncTotalOf/uncPayValue가 도넛 memo보다 먼저 선언된다',
+  LP.indexOf('const uncTotalOf = (k) =>') > 0
+  && LP.indexOf('const uncTotalOf = (k) =>') < LP.indexOf('const yearSeries = useMemo(')
+  && LP.indexOf('const uncPayValue = (k, pay) =>') < LP.indexOf('const detailDonut = useMemo('));
+
+// ── B3 — 엑셀이 화면과 같은 '미입력' 규칙을 쓴다 ─────────────────────────
+// ⚠️ 두 호출을 **따로** 단언한다 — 파일 전역 정규식이면 한쪽만 되돌려도 다른 쪽이 통과시킨다.
+ok('#TG19 월별 표가 todayYm을 넘긴다', /const t = monthTotals\(book, k, ctx\.todayYm\);/.test(LEX));
+ok('#TG19b 구분별 표도 넘긴다', /const t = monthTotals\(book, ym, ctx\.todayYm\);/.test(LEX));
+ok('#TG19c ctx가 todayYm을 만든다', /todayYm: String\(input\.todayKST \|\| ''\)\.slice\(0, 7\),/.test(LEX));
+
+// ── B4 — 충돌 큐 ────────────────────────────────────────────────────────
+ok('#TG20 충돌을 큐로 쌓고 중복을 거른다',
+  /setTxConflicts\(\(q\) => \(q\.some\(\(c\) => c\.itemId === res\.conflict\.itemId && c\.ym === res\.conflict\.ym\)/.test(LP));
+ok('#TG20b ⚠️ 단수 슬롯(setTxConflict)이 되살아나지 않았다', !/setTxConflict\(/.test(LP));
+// ⚠️ '나중에'는 한 건만 넘긴다 — 큐를 비우면 이 결함이 그대로 재발한다.
+ok('#TG20c 나중에 = shift(전체 비우기 아님)',
+  /if \(mode === 'cancel'\) \{ shift\(\); return; \}/.test(LP));
+{
+  const R = sliceBlock(LP, 'const resolveTxConflict = useCallback', 'const consumeTxFilter');
+  ok('#TG20d ⚠️ 상한 실패는 닫지 않고 사유를 보여 준다',
+    /MAX_LEDGER_TX\) \{[\s\S]{0,200}?doFlash\(/.test(R) && !/MAX_LEDGER_TX\) \{[\s\S]{0,200}?shift\(\)/.test(R));
+  ok('#TG20e 큐를 비우는 것은 early-return 가드 1곳뿐',
+    (R.match(/setTxConflicts\(\[\]\)/g) || []).length === 1);
+}
+
+// ── B6 — 새 항목 만들기 ─────────────────────────────────────────────────
+ok('#TG21 빠른 입력이 onCreateItem을 받는다',
+  /onCreateItem=\{handleCreateItem\}/.test(LP) && /onCreateItem = null,/.test(QE));
+// ⚠️ `setItemId`는 비동기다 — 인자 없이 submit하면 stale한 ''를 읽어 **미분류로 저장**된다.
+ok('#TG21b ⚠️ 새 항목 id를 submit에 직접 넘긴다',
+  /const submit = \(full, forcedItemId\) => \{/.test(QE)
+  && /itemId: splitOut\.length > 0 \? '' : \(forcedItemId \|\| itemId\),/.test(QE)
+  && /submit\(full, id\);/.test(QE));
+ok('#TG21c 일치가 없을 때만 만들기를 제안한다', /const canCreate = !!onCreateItem && !readOnly && !itemId/.test(QE));
+// ⚠️ 만들기는 업데이터 **밖**에서(StrictMode 이중 호출) + readOnly를 직접 막는다.
+{
+  const H = sliceBlock(LP, 'const handleCreateItem = useCallback', 'const handleUpdateTx');
+  ok('#TG21d ⚠️ makeLedgerItem을 업데이터 밖에서 부르고 readOnly를 막는다',
+    /if \(!cur \|\| readOnly\) return '';/.test(H)
+    && H.indexOf('const it = makeLedgerItem(') < H.indexOf('patchBook(cur.id, (b) =>'));
+}
+
+// ── B5 — 달력 패드 목록 ─────────────────────────────────────────────────
+{
+  const PAD = sliceBlock(CAL, "{e.kind === 'tx' ? (", "e.kind === 'touch' ?");
+  ok('#TG22 패드가 그 날 거래 목록을 렌더한다',
+    /e\.txs\.map\(\(t, ti\) =>/.test(PAD) && /LEDGER_PAY_LABEL\[t\.pay\]/.test(PAD));
+  ok('#TG22b ⚠️ 절단을 밝힌다(합계와 목록이 어긋나 보이는 이유)',
+    /e\.txCount > e\.txs\.length/.test(PAD) && /외 \{e\.txCount - e\.txs\.length\}건/.test(PAD));
+  ok('#TG22c 할부는 달력=전액 / 월 표=회차라는 차이를 설명한다', /이달 회차/.test(PAD));
+}
+// ⚠️ 이벤트 술어는 인덱스(byDate)와 **문자 그대로 같아야** 한다 — 다르면 'N건'과 줄 수가 어긋나고
+//    이체가 새면 카드대금 결제가 "이 날 이만큼 썼다"로 읽힌다.
+ok('#TG22d 이벤트 목록이 휴지통·이체를 같은 술어로 거른다',
+  /if \(!isLiveTx\(tx\) \|\| tx\.kind === 'transfer'\) continue;/.test(LG));
+ok('#TG22e 거래 탭과 달력이 같은 이름 함수를 쓴다',
+  /const nameOf = \(tx\) => txDisplayName\(tx, itemById\);/.test(TT) && /name: txDisplayName\(tx, byId\),/.test(LG));
+
+// ── A4 — 스냅샷이 '거래 제외'를 표시한다 ────────────────────────────────
+ok('#TG23 목록에 거래 제외 배지가 있다', /\{sum\.txStripped && \(/.test(LP) && /거래 제외<\/span>/.test(LP));
+{
+  // ⚠️ 구간을 잘라 단언한다 — 각주에 비슷한 문장이 있어 파일 전역이면 확인 문구를 지워도 통과한다.
+  const ARM = sliceBlock(LP, '{armed === s.id && (', '<div className="text-[9px] text-gray-500 mt-0.5">');
+  ok('#TG23b 복원 확인이 거래 유지를 밝힌다', /거래는 그대로 유지됩니다/.test(ARM));
+}
+
+// ── P3 — 안전한 4건 ─────────────────────────────────────────────────────
+ok('#TG24 payer 입력에 상한이 걸려 있다(정규화가 조용히 자르지 않게)',
+  /maxLength=\{MAX_LEDGER_PAYER_LEN\}/.test(QE) && /maxLength=\{MAX_LEDGER_PAYER_LEN\}/.test(TT));
+ok('#TG24b 삭제가 today 없이 조용히 무시되지 않는다',
+  /if \(!today\) \{ doFlash\(/.test(LP));
+ok('#TG24c 환급 초과 달의 음수 셀에 사유를 적는다', /환급이 지출보다 커서 합계가 음수입니다/.test(LP));
+// ⚠️ 거래 추가 경로의 touchMonth는 '오늘 날짜'에 찍혀 과거 달 거래도 오늘 칸에 정리 기록을
+//    남긴다 — 거래 이벤트가 이미 그 뜻이라 중복이다. 수동 셀 경로(NumCell)는 그대로 둔다.
+{
+  const ADD = sliceBlock(LP, 'const handleAddTx = useCallback', 'const handleCreateItem');
+  ok('#TG24d ⚠️ 거래 추가 경로는 touchMonth를 남기지 않는다', !/touchMonth\(/.test(stripComments(ADD)));
+}
+ok('#TG24e 매트릭스 수동 입력 경로의 touchMonth는 그대로다', /touchMonth\(book\.id, k\);/.test(LP));
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:ledger-tx — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

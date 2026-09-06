@@ -4,7 +4,7 @@ import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, Exter
 import { BG } from '../design';
 import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, EMPTY_HIST_DETAIL } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
-import { ledgerEventsByDate, LEDGER_DIVERGING } from '../ledger';
+import { ledgerEventsByDate, LEDGER_DIVERGING, LEDGER_PAY_LABEL } from '../ledger';
 
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -1191,6 +1191,49 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                           수입 {hideAmounts ? '***' : formatCurrency(e.txIncome)}
                         </div>
                       ) : null}
+                      {/* 그 날 거래 목록(읽기 전용) — 사양 §5.4.12. 합·건수만 보여 주면
+                          "무엇을 샀는지"를 확인할 수 없어 달력에서 가계부로 되돌아가야 했다. */}
+                      {Array.isArray(e.txs) && e.txs.length > 0 && (
+                        <table className="w-full text-[11px] tabular-nums mt-1.5">
+                          <thead>
+                            <tr className="text-gray-500 border-b border-gray-800">
+                              <th className="text-left font-normal py-1 pr-1">항목</th>
+                              <th className="text-left font-normal px-1">결제</th>
+                              <th className="text-right font-normal pl-1">금액</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {e.txs.map((t, ti) => (
+                              <tr key={ti} className="border-b border-gray-900/80">
+                                <td className="py-1 pr-1 text-gray-200">
+                                  {t.name}
+                                  {t.memo ? <div className="text-[9px] text-gray-500">{t.memo}</div> : null}
+                                  {t.installmentMonths ? (
+                                    <div className="text-[9px] text-gray-500">
+                                      할부 {t.installmentMonths}개월 · 이달 회차{' '}
+                                      {hideAmounts ? '***' : formatCurrency(t.installmentThisMonth)}
+                                    </div>
+                                  ) : null}
+                                </td>
+                                <td className="px-1 text-gray-500">{LEDGER_PAY_LABEL[t.pay] || t.pay}</td>
+                                <td className="text-right pl-1"
+                                  style={{ color: (t.kind === 'income' || t.refund) ? LEDGER_DIVERGING.under : undefined }}>
+                                  {t.refund ? '−' : ''}{hideAmounts ? '***' : formatCurrency(t.amount)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {/* ⚠️ 조용한 절단 금지 — 목록만 자르고 건수는 전 건을 유지하므로 그 차이를 밝힌다. */}
+                      {Array.isArray(e.txs) && e.txCount > e.txs.length && (
+                        <div className="text-[9px] text-gray-600 pt-1">외 {e.txCount - e.txs.length}건 — 가계부에서 전체를 봅니다</div>
+                      )}
+                      {Array.isArray(e.txs) && e.txs.some((t) => t.installmentMonths) && (
+                        <div className="text-[9px] text-gray-600 pt-2 leading-relaxed">
+                          달력은 <b>결제일 전액</b>, 가계부 월 표는 <b>회차</b>로 나눠 셉니다(회차 날짜는 존재하지 않습니다).
+                        </div>
+                      )}
                     </>
                   ) : e.kind === 'touch' ? (
                     <>

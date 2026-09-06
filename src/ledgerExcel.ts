@@ -40,7 +40,7 @@ import type { LedgerBook, LedgerItem, LedgerGroup } from './ledger.ts';
 import {
   LEDGER_GROUP_ORDER, LEDGER_GROUP_LABEL, LEDGER_PAY_LABEL, LEDGER_PAY_ORDER,
   loanSchedule, loanNext12Total, loanTermMonths,
-  planOf, actualOf, isItemActive, expectsActual,
+  planOf, actualOf, isItemActive, isItemCounted, expectsActual,
   monthTotals, ledgerKpi, compareMonths,
   makeYm, addMonthsYm, monthsBetweenYm, ymOfDate,
 } from './ledger.ts';
@@ -156,6 +156,12 @@ interface Ctx {
   ym: string;
   /** 내보낸 날짜(KST) — 제목 아래 부제에 쓴다. */
   todayLabel: string;
+  /**
+   * 오늘이 속한 달 'YYYY-MM'.
+   * ⚠️ 집계에 **반드시 넘긴다** — 안 넘기면 `entry:'tx'` 항목의 **진행 중인 달**이 시트에서만
+   *    '미입력'으로 세어져 화면과 파일의 미입력 건수가 갈린다(같은 값이 두 곳에서 달라 보인다).
+   */
+  todayYm: string;
 }
 
 const buildMatrixSheet = (ctx: Ctx): XlsxSheet => {
@@ -260,11 +266,15 @@ const buildMatrixSheet = (ctx: Ctx): XlsxSheet => {
       row[COL_PLAN] = NUM(planOf(it, ctx.ym), wonS);
 
       let yActual = 0, yPlan = 0, yMissing = 0, yHasActual = false;
+      /** ⚠️ 화면(`LedgerPage`)과 **같은 옵션** — 넘기지 않으면 시트만 미입력 수가 달라진다. */
+      const expOpts = { ix: ctx.ix, todayYm: ctx.todayYm };
       for (const m of MONTHS) {
         const k = makeYm(year, m);
         const ac = monthActualCol(m);
         // ⚠️ '그 달에 없던 항목'과 '미입력'을 구분한다 — 회색 '-'는 전자다.
-        if (!isItemActive(it, k)) {
+        //    단 **거래가 있으면 적용기간 밖이라도 값을 쓴다**(`isItemCounted`) — 할부 회차가
+        //    `activeTo` 이후 달에 떨어지면 화면에는 금액이 있는데 파일만 '-'가 된다.
+        if (!isItemCounted(it, k, ctx.ix)) {
           row[ac] = S('-', naS);
           row[ac + 1] = S('', naS);
           continue;
@@ -277,7 +287,7 @@ const buildMatrixSheet = (ctx: Ctx): XlsxSheet => {
         if (a !== null && Number.isFinite(a)) {
           yActual += a; yHasActual = true;
           subActual[m] += a; subActual[0] += a;
-        } else if (expectsActual(it, k)) {
+        } else if (expectsActual(it, k, expOpts)) {
           // ⚠️ `isItemActive`가 아니라 `expectsActual` — annual의 비납부월은 미입력이 아니다.
           yMissing++; subMissing[m]++; subMissing[0]++;
         }
@@ -617,7 +627,7 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
   let yPlan = 0, yActual = 0, yMissing = 0;
   for (const m of MONTHS) {
     const k = makeYm(year, m);
-    const t = monthTotals(book, k);
+    const t = monthTotals(book, k, ctx.todayYm);
     const cmp = compareMonths(book, k, addMonthsYm(k, -1));
     const r = blank();
     r[0] = S(`${m}월`, txtC);
@@ -645,7 +655,7 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
   // ── 구분별 ──
   section(`${ym} 구분별 지출`);
   rows.push(['구분', '계획', '실제', '비중', '', '', ''].map((h, i) => i < 4 ? S(h, headS) : null));
-  const t = monthTotals(book, ym);
+  const t = monthTotals(book, ym, ctx.todayYm);
   const expenseGroups = LEDGER_GROUP_ORDER.filter((g) => g !== 'income');
   const denom = expenseGroups.reduce((s2, g) => s2 + (t.byGroup[g] ? Math.max(0, t.byGroup[g].actual) : 0), 0);
   for (const g of expenseGroups) {
@@ -813,6 +823,7 @@ export const buildLedgerSheets = (input: LedgerExcelInput): XlsxSheet[] => {
     bag, book, year, month,
     ym: makeYm(year, month),
     todayLabel: String(input.todayKST || ''),
+    todayYm: String(input.todayKST || '').slice(0, 7),
     // ⚠️ 거래 인덱스는 시트 4장이 **하나를 공유**한다(WeakMap 캐시라 참조가 같으면 재계산 없음).
     ix: txIndexOf(book),
   };

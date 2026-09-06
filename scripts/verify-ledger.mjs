@@ -719,6 +719,56 @@ if (L) {
     ok('#83c ⚠️ 옛 그룹 단위 규칙으로 되돌리면 두 도넛이 갈린다', legacy !== detailSum);
   }
 
+  /* (2-b) ⚠️ **미분류 거래**(항목을 고르지 않은 지출)까지 포함한 항등식.
+   *   `dnBook`에는 거래가 0건이라 위 #83/#83b는 미분류 규칙을 **전혀 검사하지 못한다**
+   *   (도넛에서 미분류를 빼도 그대로 초록 — 죽은 단언). 그래서 거래를 실은 별도 픽스처를 둔다.
+   *   ⚠️ `expectedGrandTotal`에 미분류를 더하지 **말 것** — 그러면 `#85b`(Σ결제수단 === 총액)가
+   *      깨진다. 항등식의 우변에서 명시적으로 더한다(항목 축 vs 총계 축의 경계를 지킨다). */
+  {
+    const uncBook = makeLedgerBook({
+      items: dnBook.items,
+      transactions: [L.normalizeTx({
+        id: 'u1', date: '2026-08-10', amount: 70000, kind: 'expense', itemId: '', pay: 'cash',
+      })],
+    });
+    const ixU = L.txIndexOf(uncBook);
+    const unc = monthTotals(uncBook, '2026-08').uncategorized;
+    eq('#83d 미분류 거래가 그 달 총계에 들어간다', unc, 70000);
+    const mainU = L.LEDGER_EXPENSE_GROUPS.reduce((a, g) => {
+      if (g === 'fixed') {
+        const bp = expectedByPay(groupItems('fixed'), '2026-08', ixU);
+        return a + Object.values(bp).reduce((x, y) => x + y.value, 0);
+      }
+      // 화면과 같은 규칙 — 변동비 조각에만 미분류를 더한다.
+      return a + expectedTotal(groupItems(g), '2026-08', ixU).value + (g === 'variable' ? unc : 0);
+    }, 0);
+    const detailU = uncBook.items.reduce((a, it) => a + (expectedOf(it, '2026-08', ixU) || 0), 0) + unc;
+    eq('#83e ⚠️ 미분류를 넣어도 Σ메인 === Σ상세', mainU, detailU);
+    eq('#83f 그 값은 expectedGrandTotal + 미분류다', mainU, expectedGrandTotal(uncBook, '2026-08').value + unc);
+    /* ⚠️ 이 단언이 결함의 본체다 — "카드마다 다른 총액"을 값으로 못 박는다.
+     *    (이 픽스처는 미입력 항목이 있어 KPI의 actualExpense와 같지는 않으므로, 도넛끼리와
+     *     '총계 축'과의 관계만 고정한다.) */
+    const payU = L.LEDGER_PAY_ORDER.reduce((a, pk) => {
+      const bp = expectedByPay(uncBook.items, '2026-08', ixU)[pk];
+      const u = ixU.uncategorizedYm.get('2026-08');
+      const uv = u && u.byPay ? (u.byPay[pk] || 0) : 0;
+      return a + (bp ? bp.value : 0) + uv;
+    }, 0);
+    eq('#83g ⚠️ 결제수단 축(미분류 포함)도 같은 총액을 낸다', payU, mainU);
+    // 거래 0건 무영향 — 미분류가 0이면 위 세 값이 종전 #83/#83b와 완전히 같다.
+    eq('#83h ⚠️ 거래 0건이면 종전 항등식 그대로', [mainSum, detailSum], [
+      L.LEDGER_EXPENSE_GROUPS.reduce((a, g) => {
+        if (g === 'fixed') {
+          const bp = expectedByPay(groupItems('fixed'), '2026-08', L.txIndexOf(dnBook));
+          return a + Object.values(bp).reduce((x, y) => x + y.value, 0);
+        }
+        return a + expectedTotal(groupItems(g), '2026-08', L.txIndexOf(dnBook)).value
+          + (g === 'variable' ? 0 : 0);
+      }, 0),
+      dnBook.items.reduce((a, it) => a + (expectedOf(it, '2026-08', L.txIndexOf(dnBook)) || 0), 0),
+    ]);
+  }
+
   // (3) ⚠️ 산출 불가(unresolved)를 0으로 계상하면 '납입 ₩0'을 확정 단언하게 된다.
   const blankLoan = makeLedgerItem({ id: 'L', group: 'loan', loan: makeLedgerLoan({ principal: 1e8, annualRate: 4 }) });
   eq('#84 기준월 없는 대출은 계산 불가', loanSchedule(blankLoan.loan, '2026-03'), null);
@@ -1353,7 +1403,11 @@ ok('#G13e 고정비 조각 색이 결제수단 색을 공유한다(현금이 두
 //    옛 그룹 단위 `agg.actual > 0 ? agg.actual : agg.plan`으로 되돌리면 미입력 항목이 통째로
 //    탈락해 옆의 상세 도넛과 총액이 갈리는데(실측 880,000 vs 1,080,000) #G13f는 통과한다.
 ok('#G13d-2 ⚠️ 메인 도넛의 비-고정비 그룹도 항목 단위 폴백을 쓴다',
-  /value: expectedTotal\(\(book\?\.items \|\| \[\]\)\.filter\(\(it\) => it && it\.group === g\), ym, ix\)\.value,/.test(DON));
+  /value: expectedTotal\(\(book\?\.items \|\| \[\]\)\.filter\(\(it\) => it && it\.group === g\), ym, ix\)\.value$/m.test(DON));
+// ⚠️ 미분류는 항목이 없어 `expectedTotal`이 영영 모르는 돈인데, 매트릭스 소계·KPI·달력은
+//    포함한다 — 도넛만 빼면 **같은 달 합계가 카드마다 다르다**("한 화면 한 규칙" 위반).
+ok('#G13d-4 ⚠️ 메인 도넛 변동비 조각이 미분류를 더한다',
+  /\+ \(g === 'variable' \? \(uncTotalOf\(ym\)\?\.value \?\? 0\) : 0\),/.test(DON));
 ok('#G13d-3 ⚠️ 도넛 memo에 totals.byGroup이 남아 있지 않다', !/totals\.byGroup/.test(DON));
 // ⚠️ 결제수단 축을 한 화면에서 두 규칙으로 그리면 같은 카드가 같은 수단에 다른 금액을 찍는다.
 ok('#G13n ⚠️ payRows(totals.byPay 기반)가 되살아나지 않았다', !/const payRows = useMemo/.test(LP));
@@ -1679,7 +1733,11 @@ ok('#G32 ⚠️ 매트릭스 계획은 planOf를 쓴다', /row\[COL_PLAN\] = NUM
 //    거래로 입력한 달이 시트에서 통째로 빈칸이 된다(조용한 과소 계상).
 ok('#G32b 월 칸이 actualResolved/planOf를 쓴다',
   /const a = actualResolved\(it, k, ctx\.ix\)\.value;[\s\S]{0,80}?const p = planOf\(it, k\);/.test(LEX));
-ok('#G32c ⚠️ 미입력 판정은 expectsActual', /else if \(expectsActual\(it, k\)\)/.test(LEX));
+// ⚠️ `expOpts`(ix + todayYm)를 **함께** 넘겨야 화면과 시트의 미입력 수가 같다. `todayYm`만
+//    넘기면 `opts.ix` truthy 게이트 때문에 조용한 no-op이 된다.
+ok('#G32c ⚠️ 미입력 판정은 expectsActual + 화면과 같은 옵션',
+  /else if \(expectsActual\(it, k, expOpts\)\)/.test(LEX)
+  && /const expOpts = \{ ix: ctx\.ix, todayYm: ctx\.todayYm \};/.test(LEX));
 // ⚠️ comparable만 보면 zero-base(rate=null)가 통과해 0.00%가 확정 표기된다.
 ok('#G33 ⚠️ 전월대비는 rate !== null까지 본다', /cmp\.comparable && cmp\.rate !== null/.test(LEX));
 // ⚠️ 내려받은 파일은 사용자 것이다 — 마스킹하면 쓸모가 없다(기존 엑셀 2종과 같은 규약).

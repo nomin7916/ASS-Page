@@ -5,8 +5,8 @@ import {
   LEDGER_PAY_LABEL, LEDGER_PAY_ORDER, LEDGER_GROUP_COLOR, LEDGER_DIVERGING,
 } from '../ledger';
 import {
-  filterTx, txIndexOf, installmentCharges, isValidLedgerDate,
-  makeYm, MAX_LEDGER_TX, MAX_LEDGER_TX_MEMO_LEN,
+  filterTx, txIndexOf, installmentCharges, isValidLedgerDate, txDisplayName,
+  makeYm, MAX_LEDGER_TX, MAX_LEDGER_TX_MEMO_LEN, MAX_LEDGER_PAYER_LEN,
 } from '../ledger';
 
 /**
@@ -122,14 +122,8 @@ export default function LedgerTxTab({
   const toggleSel = (id) => setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const clearSel = () => setSel([]);
 
-  const nameOf = (tx) => {
-    const splits = Array.isArray(tx.splits) ? tx.splits : [];
-    if (splits.length > 0) {
-      return splits.map((s) => (itemById.get(s.itemId)?.name || '미분류')).join(' + ');
-    }
-    if (!tx.itemId) return '미분류';
-    return itemById.get(tx.itemId)?.name || '(삭제된 항목)';
-  };
+  /** ⚠️ 달력 패드와 **같은 함수**를 쓴다 — 손복제하면 같은 거래가 두 화면에서 다른 이름이 된다. */
+  const nameOf = (tx) => txDisplayName(tx, itemById);
   const groupOf = (tx) => {
     const splits = Array.isArray(tx.splits) ? tx.splits : [];
     const id = splits.length > 0 ? splits[0].itemId : tx.itemId;
@@ -289,7 +283,12 @@ export default function LedgerTxTab({
                             const n = Number(String(e.target.value).replace(/,/g, ''));
                             if (Number.isFinite(n) && n > 0 && n !== tx.amount) onUpdateTx?.(tx.id, { amount: n });
                           }} />
+                        {/* ⚠️ 이체에는 항목을 붙일 수 없다 — 붙이면 카드대금 결제·적금 이체가
+                            지출로 되살아나 `'transfer'`를 둔 이유(이중 계상 차단)가 무너진다.
+                            모델이 강제로 비우므로 여기서는 사유를 보여 주고 막는다. */}
                         <select className={inputCls} value={tx.itemId || ''}
+                          disabled={tx.kind === 'transfer'}
+                          title={tx.kind === 'transfer' ? '이체는 항목을 갖지 않습니다 — 지출/수입으로 바꾸면 항목을 고를 수 있습니다' : ''}
                           onChange={(e) => onUpdateTx?.(tx.id, { itemId: e.target.value, splits: [] })}>
                           <option value="" className="bg-[#0f1623]">(미분류)</option>
                           {items.map((it) => <option key={it.id} value={it.id} className="bg-[#0f1623]">{it.name || '(이름 없음)'}</option>)}
@@ -297,7 +296,14 @@ export default function LedgerTxTab({
                         <select className={inputCls} value={tx.pay} onChange={(e) => onUpdateTx?.(tx.id, { pay: e.target.value })}>
                           {LEDGER_PAY_ORDER.map((p) => <option key={p} value={p} className="bg-[#0f1623]">{LEDGER_PAY_LABEL[p]}</option>)}
                         </select>
-                        <select className={inputCls} value={tx.kind} onChange={(e) => onUpdateTx?.(tx.id, { kind: e.target.value })}>
+                        {/* 지출/수입은 항목이 정한다(항목이 있으면 비활성). '이체'를 고르면 모델이
+                            항목을 비운다 — 그 사실을 title로 미리 알린다. */}
+                        <select className={inputCls} value={tx.kind}
+                          disabled={!!tx.itemId || (Array.isArray(tx.splits) && tx.splits.length > 0)}
+                          title={tx.itemId || (Array.isArray(tx.splits) && tx.splits.length > 0)
+                            ? '항목이 있으면 지출/수입은 항목의 구분을 따릅니다 — 이체로 바꾸려면 먼저 항목을 (미분류)로 비우세요'
+                            : '이체는 지출·수입 어디에도 들어가지 않습니다(계좌 간 이동)'}
+                          onChange={(e) => onUpdateTx?.(tx.id, { kind: e.target.value })}>
                           {[['expense', '지출'], ['income', '수입'], ['transfer', '이체']].map(([k, l]) =>
                             <option key={k} value={k} className="bg-[#0f1623]">{l}</option>)}
                         </select>
@@ -305,6 +311,7 @@ export default function LedgerTxTab({
                           maxLength={MAX_LEDGER_TX_MEMO_LEN}
                           onBlur={(e) => { if (e.target.value !== tx.memo) onUpdateTx?.(tx.id, { memo: e.target.value }); }} />
                         <input className={`${inputCls} w-[80px]`} defaultValue={tx.payer} placeholder="누가"
+                          maxLength={MAX_LEDGER_PAYER_LEN}
                           onBlur={(e) => { if (e.target.value !== tx.payer) onUpdateTx?.(tx.id, { payer: e.target.value }); }} />
                         <input className={`${inputCls} w-[60px] text-center`} defaultValue={tx.installmentMonths ?? ''} placeholder="할부"
                           onBlur={(e) => {
