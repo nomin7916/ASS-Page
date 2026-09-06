@@ -2032,8 +2032,12 @@ ok('#G39b ⚠️ 기본 탭이 상수 chart이고 tabSeededRef가 없다', /useS
 ok('#G39c ⚠️ 트리 블록이 값을 손계산하지 않는다(renderSubtotalRow 경유만)',
   GSUB.length > 500 && (GSUB.match(/renderSubtotalRow\(\{/g) || []).length >= 3
   && !/expectedTotal\(|monthTotals\(|reflectedMonth\(|expectedByPay\(/.test(GSUB));
+// ⚠️ 순서(indexOf)만 재면 `if (groupOpen && present.length > 1)`로 감싸도 통과한다(변이 M30으로 실증) —
+//    수단 행 push 앞 구간에 펼침 게이트(`open`/`groupOpen`)가 **없음**을 함께 단언한다.
 ok('#G39c-2 ⚠️ 결제수단 행이 기본 노출된다(D3 — 그룹을 펼치지 않아도)',
-  GSUB.indexOf("key: `sub-${g}-${p}`") > 0 && GSUB.indexOf("key: `sub-${g}-${p}`") < GSUB.indexOf('if (open) {'));
+  GSUB.indexOf("key: `sub-${g}-${p}`") > 0 && GSUB.indexOf("key: `sub-${g}-${p}`") < GSUB.indexOf('if (open) {')
+  && /if \(present\.length > 1\) \{/.test(GSUB)
+  && !/\b(open|groupOpen)\b/.test(sliceBlock(GSUB, 'if (present.length > 1) {', 'key: `sub-${g}-${p}`').replace(/const open = bucketOpen\(g, p\);/, '')));
 ok('#G39c-3 항목 행은 펼쳤을 때만 + 미분류 행이 수단을 본다',
   /if \(open\) \{\s*rows\.push\(\.\.\.payItems\.map\(renderItemRow\)\);/.test(GSUB) && /renderUncategorizedRow\(p\)/.test(GSUB)
   && /const renderUncategorizedRow = \(pay = null\) => \{/.test(LP) && /const v = uncPayValue\(k, pay\);/.test(LP));
