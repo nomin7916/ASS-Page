@@ -69,7 +69,7 @@ if (L) {
     filterTx, suggestItems, shiftLedgerDate, sortTxDesc, stripTxForSnapshot, normalizeTx,
     monthTotals, expectedTotal, expectedIncomeTotal, expectedByPay, expectedOf, expectsActual,
     isItemActive, isItemCounted, txDisplayName, LEDGER_CAL_TX_CAP,
-    compareMonths, mtdCompare, ledgerEventsByDate,
+    reflectedCompare, reflectedMonth, mtdCompare, ledgerEventsByDate,
     normalizeLedgerBooks, ledgerFingerprint, ledgerBooksHaveContent,
     MAX_LEDGER_TX, MAX_LEDGER_TX_SPLITS,
   } = L;
@@ -246,14 +246,20 @@ if (L) {
   // 3월(31일)이 전달이면 4/30까지 캡이 걸리지 않는다.
   eq('#T19b 전달이 더 길면 캡이 없다', mtdCompare(capBook, '2026-04', '2026-04-30').prevDays, 30);
 
-  // ⚠️ compareMonths(닫힌 달끼리)는 **규약이 그대로다** — 미입력 집합이 같아야만 숫자를 낸다.
-  //    두 달 다 f1만 미입력이라 비교가 성립하고, 값은 거래 합에서 온다.
-  eq('#T20 compareMonths는 종전 규약 그대로(미입력 집합이 같을 때만 비교)',
-    [compareMonths(BOOK, '2026-09', '2026-08').comparable, compareMonths(BOOK, '2026-09', '2026-08').delta],
-    [true, 153950 - 180000]);
-  eq('#T20b 미입력 집합이 다르면 여전히 비교 불가',
-    compareMonths(addTx(BOOK, makeLedgerTx({ id: 'ff', date: '2026-08-09', amount: 1, itemId: 'f1' })).book,
-      '2026-09', '2026-08').reason, 'missing-mismatch');
+  // ⚠️ 2026-09 §13: 비교는 **반영값**(`reflectedCompare`)이다. 두 달 다 f1(월세 700,000)이 미입력이라
+  //    계획으로 반영되고 양변에서 상쇄되므로 delta는 거래 합의 차이(153,950 − 180,000) 그대로다.
+  eq('#T20 반영값 비교 — 계획으로 채운 f1이 양변에 실려 delta는 거래 합의 차이',
+    [reflectedCompare(BOOK, '2026-09', '2026-08').comparable, reflectedCompare(BOOK, '2026-09', '2026-08').delta,
+      reflectedCompare(BOOK, '2026-09', '2026-08').curUnconfirmed],
+    [true, 153950 - 180000, 1]);
+  // 8월 f1에 거래 1원이 생기면 8월은 실제(1), 9월은 계획(700,000) — 미확인 집합이 달라도 반영값으로 비교되고 라벨이 밝힌다.
+  {
+    const rc = reflectedCompare(addTx(BOOK, makeLedgerTx({ id: 'ff', date: '2026-08-09', amount: 1, itemId: 'f1' })).book, '2026-09', '2026-08');
+    eq('#T20b 미확인 집합이 달라도 반영값으로 비교 + 계획 반영 건수 라벨',
+      [rc.comparable, rc.reason, rc.delta, rc.curUnconfirmed, rc.prevUnconfirmed], [true, '', 153950 + 700000 - 180001, 1, 0]);
+  }
+  near('#T20c 반영값(9월) = 거래 합 + 미분류 + 계획 반영(f1)', reflectedMonth(BOOK, '2026-09').value, 153950 + 700000, 1e-9);
+  eq('#T20d ⚠️ 거래 0건이면 반영값 = 계획 합(수동 값 없음)', reflectedMonth(BOOK0, '2026-09').fromActual, 0);
 
   // ── §5 CRUD ─────────────────────────────────────────────────────────────
   console.log('\n  §5 CRUD · 충돌 · 휴지통');
@@ -676,7 +682,8 @@ ok('#TG5b 그 칸을 누르면 **그 항목·그 달**의 거래 탭으로 간�
 ok('#TG5c 가려진 수동 값을 화면이 알린다(조용한 오적용 금지)', /manualShadowed\(it, k, ix\)/.test(LP));
 
 // 미분류
-ok('#TG6 미분류 가상 행이 렌더된다', /renderUncategorizedRow\(\)\}/.test(LP));
+// 2026-09 §13 트리: 미분류 행은 결제수단 하위(`p`)와 단일 수단 그룹(`null`) 두 곳에서 그린다.
+ok('#TG6 미분류 가상 행이 렌더된다(수단별 + 전체)', /renderUncategorizedRow\(p\)/.test(LP) && /renderUncategorizedRow\(null\)/.test(LP));
 ok('#TG6b ⚠️ 미분류가 그룹 소계·총계에 더해진다',
   /extra: isVar \? uncTotalOf : null/.test(LP) && /extra: uncTotalOf/.test(LP));
 ok('#TG6c 소계 셀이 extra를 값에 더한다', /const cellValue = e\.value \+ \(ex \? ex\.value : 0\);/.test(LP));
@@ -710,9 +717,9 @@ ok('#TG11 거래 탭의 표시 상수가 모듈 스코프에 있다', /^const WE
 // 탭 배선
 ok('#TG12 거래 탭이 탭 목록에 있다', /\['tx', '거래'\]/.test(LP));
 ok('#TG12b 거래 탭이 렌더된다', /tab === 'tx' \? \([\s\S]{0,200}?<LedgerTxTab/.test(LP));
-// ⚠️ 기본 탭은 **상위 books가 도착한 뒤** 한 번만 판정한다(첫 렌더의 book은 시드된 빈 장부다).
-ok('#TG12c 기본 탭 판정이 books 도착 후 한 번만 돈다',
-  /tabSeededRef\.current = true;/.test(LP) && /if \(!Array\.isArray\(books\) \|\| books\.length === 0\) return;/.test(LP));
+// ⚠️ 2026-09 §13.6-5: 기본 탭은 **상수 'chart'**(거래 유무와 무관). 옛 tabSeededRef 판정은 폐기됐다.
+ok('#TG12c 기본 탭이 상수 chart이고 거래 유무 판정이 없다',
+  /useState\('chart'\)/.test(LP) && !/tabSeededRef/.test(LP) && !/transactions\.length > 0\) setTab\('tx'\)/.test(LP));
 
 // 엑셀 시트 ④
 ok('#TG13 엑셀이 시트 4장을 만든다', /buildSummarySheet\(ctx\), buildTxSheet\(ctx\)\]/.test(LEX));

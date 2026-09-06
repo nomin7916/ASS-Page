@@ -314,5 +314,31 @@ check('⚠️ 툴팁 테두리가 카드면에서 뚜렷하다(기존 #374151 �
   contrast('#64748b', SURF.card) >= 3 && contrast('#64748b', SURF.card) > contrast('#374151', SURF.card),
   `기존 ${contrast('#374151', SURF.card).toFixed(2)}:1 → 수정 ${contrast('#64748b', SURF.card).toFixed(2)}:1`);
 
+// ── §7 분석 ① '계획 반영분' 막대 — expense hue의 알파 톤 (§13.2.5) ──────────
+line('\n══ §7 분석 ① 스택 — 확인분(expense) vs 계획 반영분(같은 hue · 알파) ══');
+// ⚠️ 새 hue 금지 — 연한 톤은 `ledgerRamp`가 아니라 **알파**로만 만든다(램프는 그룹 내부 분해 전용).
+//    카드면 위에 합성된 실제 색으로 잰다: 배경과 분리되고(대비), 확인분과 갈려야(ΔE) 범례 라벨과
+//    함께 두 단이 읽힌다. 값을 바꾸면 ledger.ts `LEDGER_PLANNED_ALPHA`와 함께 다시 돌릴 것.
+{
+  let alpha = 0.4;
+  try {
+    const mod = await import('../src/ledger.ts');
+    alpha = mod.LEDGER_PLANNED_ALPHA;
+    check('LEDGER_PLANNED_ALPHA가 ledger.ts에 있다', typeof alpha === 'number' && alpha > 0 && alpha < 1);
+    check('ledgerPlannedFill이 expense hue의 rgba를 낸다',
+      mod.ledgerPlannedFill(mod.LEDGER_BALANCE_COLOR.expense) === `rgba(244, 114, 182, ${alpha})`);
+  } catch (e) {
+    const unsupported = e && (e.code === 'ERR_UNKNOWN_FILE_EXTENSION' || /Unknown file extension/.test(String(e.message)));
+    if (!unsupported) { fail++; line(`  ✗ ledger.ts를 불러오지 못했습니다 — ${e && (e.code || e.message)}`); }
+  }
+  const expense = '#f472b6';
+  const over = (fg, bg, a) => rgb2hex(hex2rgb(fg).map((c, i) => a * c + (1 - a) * hex2rgb(bg)[i]));
+  const planned = over(expense, SURF.card, alpha);
+  line(`  계획 반영분(카드면 위 합성) = ${planned}`);
+  check('계획 반영분이 카드면에서 분리된다(대비 ≥ 1.8:1)', contrast(planned, SURF.card) >= 1.8, `${contrast(planned, SURF.card).toFixed(2)}:1`);
+  check('확인분과 계획 반영분이 갈린다(ΔE(정상∧CVD) ≥ 12)', minDist(expense, planned) >= 12, `${minDist(expense, planned).toFixed(1)}`);
+  check('계획 반영분이 여전히 확인분보다 연하다(명도)', contrast(expense, SURF.card) > contrast(planned, SURF.card));
+}
+
 line(`\n${fail === 0 ? '✅ 전부 통과' : `❌ ${fail}건 미달`}`);
 process.exit(fail === 0 ? 0 : 1);

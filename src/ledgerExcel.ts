@@ -41,7 +41,7 @@ import {
   LEDGER_GROUP_ORDER, LEDGER_GROUP_LABEL, LEDGER_PAY_LABEL, LEDGER_PAY_ORDER,
   loanSchedule, loanNext12Total, loanTermMonths,
   planOf, actualOf, isItemActive, isItemCounted, expectsActual,
-  monthTotals, ledgerKpi, compareMonths,
+  monthTotals, ledgerKpi, reflectedMonth, reflectedCompare, confirmedOf,
   makeYm, addMonthsYm, monthsBetweenYm, ymOfDate,
 } from './ledger.ts';
 // ⚠️ 실제 금액은 화면과 **같은 단일 소스**(`actualResolved`)로 읽는다 — `actualOf`(수동 값만)를
@@ -200,7 +200,9 @@ const buildMatrixSheet = (ctx: Ctx): XlsxSheet => {
   rows.push(r0);
 
   const r1 = blank(MATRIX_COLS);
-  r1[0] = S(`기준 ${ctx.ym} · 내보낸 날짜 ${ctx.todayLabel} · 금액 단위 원 · '차이' = 실제 − 계획(▲ 초과 / ▼ 절약)`, subS);
+  // ⚠️ 화면의 '수입 및 지출' 탭은 그룹·결제수단 소계가 **위**에 오지만 이 시트는 스프레드시트 관례대로
+  //    소계가 **아래**다(§13.6-7 — 시트는 항상 전체 행). 그 사실을 부제가 고지한다.
+  r1[0] = S(`기준 ${ctx.ym} · 내보낸 날짜 ${ctx.todayLabel} · 금액 단위 원 · '차이' = 실제 − 계획(▲ 초과 / ▼ 절약) · 빈 실제 칸 = 미입력(화면은 계획으로 반영) · 소계는 화면과 달리 아래에 옵니다`, subS);
   spanStyled(r1, 0, MATRIX_COLS - 1, subS);
   merges.push({ r1: 1, c1: 0, r2: 1, c2: MATRIX_COLS - 1 });
   rows.push(r1);
@@ -556,8 +558,12 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
   const merges: XlsxMerge[] = [];
   const st = (x: XlsxStyle) => bag.id(x);
 
-  const NC = 7;
+  // 8열 — 월별 표가 `월·계획·반영·실제·차이·전월 대비(반영 기준)·미확인`(결정 D4)이라 가장 넓다.
+  const NC = 8;
   const blank = (): XlsxCell[] => new Array(NC).fill(null);
+  /** 표 헤더 행 — 라벨 뒤를 NC까지 null로 채운다(열 수가 갈리면 병합·서식이 어긋난다). */
+  const hdr = (labels: string[], style: number): XlsxCell[] =>
+    Array.from({ length: NC }, (_, i) => (i < labels.length ? S(labels[i], style) : null));
 
   const titleS = st({ bold: true, size: 15, color: C.title, align: 'left' });
   const subS = st({ size: 10, color: C.sub, align: 'left' });
@@ -622,39 +628,56 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
   rows.push(blank());
 
   // ── 월별 ──
+  // 8열(결정 D4): '반영' = 실제 ?? 계획 + 미분류(화면·달력과 같은 반영값), '실제'·'차이'·'미확인'은
+  // 종전대로 **실제 전용**(확인 현황), '전월 대비'는 **반영 기준**(화면 분석 ②와 같은 규칙 — 파일과
+  // 화면의 전월 대비가 다른 규칙이면 검산이 안 된다).
   section(`${year}년 월별`);
-  rows.push(['월', '계획', '실제', '차이', '전월 대비', '미입력', ''].map((h, i) => i < 6 ? S(h, headS) : null));
-  let yPlan = 0, yActual = 0, yMissing = 0;
+  rows.push(hdr(['월', '계획', '반영', '실제', '차이', '전월 대비(반영 기준)', '미확인'], headS));
+  let yPlan = 0, yReflected = 0, yActual = 0, yMissing = 0;
   for (const m of MONTHS) {
     const k = makeYm(year, m);
     const t = monthTotals(book, k, ctx.todayYm);
-    const cmp = compareMonths(book, k, addMonthsYm(k, -1));
+    const rf = reflectedMonth(book, k);
+    const cf = confirmedOf(book, k, ctx.todayYm, t);
+    const cmp = reflectedCompare(book, k, addMonthsYm(k, -1), ctx.todayYm);
     const r = blank();
     r[0] = S(`${m}월`, txtC);
     r[1] = N(t.planExpense, wonS);
-    r[2] = t.missingExpense >= t.activeExpense && t.activeExpense > 0 ? null : N(t.actualExpense, wonS);
-    r[3] = t.missingExpense === 0 ? N(t.actualExpense - t.planExpense, varS) : null;
+    // 반영값 — 항목이 없는 달(그리고 미분류도 없는 달)은 빈 셀(0을 단언하지 않는다).
+    r[2] = rf.activeCount === 0 && rf.uncategorizedCount === 0 ? null : N(rf.value, wonS);
+    r[3] = t.missingExpense >= t.activeExpense && t.activeExpense > 0 ? null : N(t.actualExpense, wonS);
+    r[4] = t.missingExpense === 0 ? N(t.actualExpense - t.planExpense, varS) : null;
     // ⚠️ 비교 불가는 **빈 셀** — 0.00%로 단언하면 '변동 없음'과 구분되지 않는다.
-    r[4] = cmp.comparable && cmp.rate !== null ? N(cmp.rate, pctVarS) : null;
-    r[5] = t.missingExpense > 0 ? N(t.missingExpense, intS) : null;
+    //    게이트는 comparable만이 아니라 `rate !== null`까지(zero-base가 0.00%로 새지 않게).
+    r[5] = cmp.comparable && cmp.rate !== null ? N(cmp.rate, pctVarS) : null;
+    // 미확인 = 실제 미입력 + 이번 달 진행 중(거래 입력 항목·거래 0건) — 화면 월 헤더와 같은 수.
+    r[6] = cf.unconfirmed + cf.inProgress > 0 ? N(cf.unconfirmed + cf.inProgress, intS) : null;
     rows.push(r);
-    yPlan += t.planExpense; yActual += t.actualExpense; yMissing += t.missingExpense;
+    yPlan += t.planExpense; yReflected += rf.value; yActual += t.actualExpense; yMissing += cf.unconfirmed + cf.inProgress;
   }
   {
     const r = blank();
     r[0] = S('연간', totName);
     r[1] = N(yPlan, totWon);
-    r[2] = N(yActual, totWon);
-    r[3] = yMissing === 0 ? N(yActual - yPlan, totVar) : null;
-    r[4] = S('', totBlank);
-    r[5] = yMissing > 0 ? N(yMissing, st({ bold: true, numFmt: LFMT.int, align: 'center', bg: C.total, border: true })) : S('', totBlank);
+    r[2] = N(yReflected, totWon);
+    r[3] = N(yActual, totWon);
+    r[4] = yMissing === 0 ? N(yActual - yPlan, totVar) : null;
+    r[5] = S('', totBlank);
+    r[6] = yMissing > 0 ? N(yMissing, st({ bold: true, numFmt: LFMT.int, align: 'center', bg: C.total, border: true })) : S('', totBlank);
+    rows.push(r);
+  }
+  {
+    const r = blank();
+    r[0] = S("※ '반영' = 실제가 있으면 실제, 없으면 계획(미분류 거래 포함) — 화면의 소계·분석·달력과 같은 값. '실제'·'차이'·'미확인'은 입력된 실제만 봅니다. '전월 대비'는 반영값끼리의 비교이며 오늘 이후 달과 산출 불가 항목이 다른 달은 비워 둡니다.", subS);
+    spanStyled(r, 0, NC - 1, subS);
+    merges.push({ r1: rows.length, c1: 0, r2: rows.length, c2: NC - 1 });
     rows.push(r);
   }
   rows.push(blank());
 
   // ── 구분별 ──
   section(`${ym} 구분별 지출`);
-  rows.push(['구분', '계획', '실제', '비중', '', '', ''].map((h, i) => i < 4 ? S(h, headS) : null));
+  rows.push(hdr(['구분', '계획', '실제', '비중'], headS));
   const t = monthTotals(book, ym, ctx.todayYm);
   const expenseGroups = LEDGER_GROUP_ORDER.filter((g) => g !== 'income');
   const denom = expenseGroups.reduce((s2, g) => s2 + (t.byGroup[g] ? Math.max(0, t.byGroup[g].actual) : 0), 0);
@@ -673,7 +696,7 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
 
   // ── 결제수단별 (⚠️ 지출 전용) ──
   section(`${ym} 결제수단별 지출`);
-  rows.push(['결제수단', '계획', '실제', '', '', '', ''].map((h, i) => i < 3 ? S(h, headS) : null));
+  rows.push(hdr(['결제수단', '계획', '실제'], headS));
   for (const p of LEDGER_PAY_ORDER) {
     const agg = t.byPay[p];
     if (!agg || (agg.plan === 0 && agg.actual === 0)) continue;
@@ -687,7 +710,7 @@ const buildSummarySheet = (ctx: Ctx): XlsxSheet => {
   return {
     name: '연간요약',
     rows, merges,
-    cols: [22, 16, 16, 14, 14, 10, 10],
+    cols: [22, 16, 16, 16, 14, 18, 10, 10],
     freezeRows: 2,
     styles: bag.styles,
   };

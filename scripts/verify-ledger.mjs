@@ -70,7 +70,10 @@ try {
 if (L) {
   const {
     loanSchedule, loanNext12Total, loanTermMonths, planOf, actualOf, varianceOf, expectsActual,
-    commitActual, isItemActive, monthTotals, ledgerKpi, momDelta, yoyDelta, compareMonths,
+    commitActual, isItemActive, monthTotals, ledgerKpi,
+    // 반영값(§13) — 옛 compareMonths·momDelta·yoyDelta는 삭제됐다(#G27이 부재를 단언).
+    reflectedMonth, reflectedCompare, reflectedMomDelta, reflectedYoyDelta, confirmedOf, applyPlanAsActual,
+    moveItemInBucket, canMoveItemInBucket, addTx, makeLedgerTx,
     ledgerEventsByDate, normalizeLedgerBooks, ledgerBooksHaveContent, ledgerFingerprint,
     makeLedgerItem, makeLedgerLoan, makeLedgerBook,
     addMonthsYm, monthsBetweenYm, makeYm, isValidYm, isSeededYm, LEDGER_YEAR_MIN, LEDGER_YEAR_MAX,
@@ -79,7 +82,7 @@ if (L) {
 
   ok('#0 필요한 export가 전부 있다', [
     loanSchedule, loanNext12Total, planOf, actualOf, varianceOf, commitActual,
-    monthTotals, ledgerKpi, momDelta, yoyDelta, ledgerEventsByDate,
+    monthTotals, ledgerKpi, reflectedMomDelta, reflectedYoyDelta, reflectedCompare, ledgerEventsByDate,
     normalizeLedgerBooks, ledgerBooksHaveContent, ledgerFingerprint,
   ].every((f) => typeof f === 'function'));
 
@@ -325,37 +328,43 @@ if (L) {
   eq('#48c ⚠️ byPay는 지출 전용 — 수입이 섞이지 않는다(현금 소계가 3,120,000이 아니다)',
     t.byPay.cash.actual, 120000);
 
-  // ── §8 전월/전년 비교 — 입력 완료도가 다르면 숫자를 내지 않는다 ────────────
-  console.log('\n  §8 비교 — 미입력이 다르면 숫자 금지');
+  // ── §8 전월/전년 비교 — **반영값**(실제 ?? 계획) 기준 (2026-09 §13 개정) ─────────
+  //    옛 규약("입력 완료도가 다르면 숫자 금지", −87.2% 방어)은 산식이 아니라 **구조**로 남는다 —
+  //    두 달이 모두 반영값이라 완비되고 '완료도 불일치'라는 상태 자체가 없다. 대신 '0% 거짓말'의
+  //    완화 4종(라벨 `계획 반영 N건 포함` · 미래 달 `-` · 산출 불가 집합 · 월 헤더)이 §17에서 고정된다.
+  console.log('\n  §8 비교 — 반영값 기준(계획 반영 건수는 라벨에)');
   const mkMonth = (id, a7, a8) => makeLedgerItem({
     group: 'fixed', plan: 1000, id,
     actual: { ...(a7 !== null ? { '2026-07': a7 } : {}), ...(a8 !== null ? { '2026-08': a8 } : {}) },
   });
   const evenBook = makeLedgerBook({ items: [mkMonth('a', 1000, 1200), mkMonth('b', 2000, 1800)] });
-  const md = momDelta(evenBook, '2026-08');
+  const md = reflectedMomDelta(evenBook, '2026-08', '2026-09');
   ok('#49 완료도가 같으면 비교 성립', md.comparable === true);
   eq('#49b 증감액', md.delta, 0);
-  // ⚠️ 진행 중인 달은 항상 미입력이 많다 — 그게 기본 상태다. 여기서 숫자를 내면 상시 거짓말.
+  eq('#49c 전부 확인이면 라벨 N = 0', [md.curUnconfirmed, md.prevUnconfirmed], [0, 0]);
+  // ⚠️ 옛 −87% 픽스처 — 이제 b의 8월은 **계획 1,000으로 반영**되어 숫자를 낸다(기대치는 다시 계산한 값).
+  //    (1200 + 1000) − (1000 + 2000) = −800. 옛 기대치(null)를 베끼지 말 것.
   const unevenBook = makeLedgerBook({ items: [mkMonth('a', 1000, 1200), mkMonth('b', 2000, null)] });
-  const mu = momDelta(unevenBook, '2026-08');
-  ok('#50 ⚠️ 완료도가 다르면 comparable=false', mu.comparable === false);
-  eq('#50b ⚠️ delta가 null (0.00%로 단언 금지)', mu.delta, null);
-  eq('#50c ⚠️ rate도 null', mu.rate, null);
-  eq('#50d 사유가 노출된다', mu.reason, 'missing-mismatch');
-  ok('#50e 미입력 건수 자체는 양쪽 다 보인다', mu.prevMissing === 0 && mu.curMissing === 1);
-  const noPrev = momDelta(makeLedgerBook({ items: [mkMonth('a', null, 1200)] }), '2026-08');
-  ok('#51 전월 기록이 없으면 comparable=false', noPrev.comparable === false && noPrev.reason === 'no-prev');
+  const mu = reflectedMomDelta(unevenBook, '2026-08', '2026-09');
+  ok('#50 ⚠️ 완료도가 달라도 반영값으로 비교가 성립한다(구조로 완비)', mu.comparable === true);
+  eq('#50b ⚠️ delta = −800 (b의 8월 = 계획 1,000 반영)', mu.delta, -800);
+  near('#50c rate = −26.7%', mu.rate, -800 / 3000, 1e-12);
+  eq('#50d ⚠️ 계획 반영 건수가 라벨에 실린다(0% 거짓말 완화 ②)', [mu.curUnconfirmed, mu.prevUnconfirmed], [1, 0]);
+  ok('#50e 미확인 건수 자체는 양쪽 다 보인다', mu.prevMissing === 0 && mu.curMissing === 1);
+  // 전달에 항목이 없으면(연중 시작) 비교 불가 — 반영값이라 '기록이 없다'가 아니라 '항목이 없다'가 사유다.
+  const noPrev = reflectedMomDelta(makeLedgerBook({ items: [mkMonth('a', null, 1200)].map((it) => ({ ...it, activeFrom: '2026-08' })) }), '2026-08', '2026-09');
+  ok('#51 전달에 항목이 없으면 comparable=false(no-data)', noPrev.comparable === false && noPrev.reason === 'no-data');
 
   // ⚠️ 전년 대비는 같은 장부 안에서 성립해야 한다(LedgerBook.year를 두면 구조적으로 불가능).
   const yoyBook = makeLedgerBook({
     items: [makeLedgerItem({ group: 'fixed', plan: 1000, actual: { '2025-08': 1000, '2026-08': 1500 } })],
   });
-  const yd = yoyDelta(yoyBook, '2026-08');
+  const yd = reflectedYoyDelta(yoyBook, '2026-08', '2026-09');
   ok('#52 ⚠️ 전년 동월 비교가 같은 장부에서 성립한다', yd.comparable === true);
   eq('#52b 전년 대비 증감액', yd.delta, 500);
   near('#52c 전년 대비 증감률 50%', yd.rate * 100, 50, 1e-9);
   eq('#53 분모가 0이면 rate는 null(delta는 유효)',
-    compareMonths(makeLedgerBook({ items: [makeLedgerItem({ plan: 1, actual: { '2026-07': 0, '2026-08': 100 } })] }), '2026-08', '2026-07').rate, null);
+    reflectedCompare(makeLedgerBook({ items: [makeLedgerItem({ plan: 1, actual: { '2026-07': 0, '2026-08': 100 } })] }), '2026-08', '2026-07').rate, null);
 
   // ── §8b 적대적 리뷰 회귀 (2026-08) ───────────────────────────────────────
   console.log('\n  §8b 적대적 리뷰 회귀 — 연단위 미입력 · 비교 집합 · 연 납입액 · 달력 날짜');
@@ -372,8 +381,9 @@ if (L) {
   eq('#65b 납부월에는 미입력으로 센다', monthTotals(annualOnly, '2026-07').missingExpense, 1);
   eq('#65c 비납부월은 activeExpense에도 넣지 않는다', monthTotals(annualOnly, '2026-03').activeExpense, 0);
 
-  // ⚠️ 비교는 **개수가 아니라 미입력 항목 집합**을 본다 — '1월은 월세만, 2월은 커피만' 입력이
-  //    둘 다 missing=1로 통과하면 −93.6% 같은 거짓 신호가 확정 표시된다.
+  // ⚠️ 옛 −93.6% 사고('1월은 월세만, 2월은 커피만' 입력)는 반영값 규약에서 **구조로** 사라진다 —
+  //    빠진 항목이 계획으로 채워져 두 달이 모두 완비된다. 대신 그 사실을 라벨(`prevUnconfirmed`/
+  //    `curUnconfirmed`)이 실어 나른다. `monthTotals.missingIds`(확인 현황)는 그대로 남는다.
   const skewed = makeLedgerBook({
     items: [
       makeLedgerItem({ id: 'rent', group: 'fixed', plan: 1650000, actual: { '2026-01': 1650000 } }),
@@ -382,18 +392,19 @@ if (L) {
     ],
   });
   eq('#66 미입력 개수는 두 달 모두 1', [monthTotals(skewed, '2026-01').missingExpense, monthTotals(skewed, '2026-02').missingExpense], [1, 1]);
-  ok('#66b ⚠️ 그래도 비교 불가다(빠진 항목이 다르다)', compareMonths(skewed, '2026-02', '2026-01').comparable === false);
-  eq('#66c 사유가 missing-mismatch', compareMonths(skewed, '2026-02', '2026-01').reason, 'missing-mismatch');
-  eq('#66d ⚠️ delta를 내지 않는다(−93.6% 거짓 신호 방지)', compareMonths(skewed, '2026-02', '2026-01').delta, null);
+  const sk = reflectedCompare(skewed, '2026-02', '2026-01');
+  ok('#66b ⚠️ 반영값끼리는 비교가 성립한다(빠진 항목이 계획으로 채워진다)', sk.comparable === true);
+  eq('#66c 값은 정직하다 — 두 달 다 1,760,000이라 delta 0', sk.delta, 0);
+  eq('#66d ⚠️ 어느 항목이 계획으로 반영됐는지 라벨이 밝힌다(0% 거짓말 완화)', [sk.prevUnconfirmed, sk.curUnconfirmed], [1, 1]);
   ok('#66e missingIds가 정렬돼 노출된다', monthTotals(skewed, '2026-01').missingIds.join() === 'coffee');
-  // 같은 항목이 빠졌으면 비교가 성립한다(계약이 과도하게 막지 않는지)
+  // 같은 항목이 빠졌으면 종전과 같이 비교가 성립한다
   const sameGap = makeLedgerBook({
     items: [
       makeLedgerItem({ id: 'a', group: 'fixed', plan: 100, actual: { '2026-01': 100, '2026-02': 120 } }),
       makeLedgerItem({ id: 'b', group: 'fixed', plan: 200 }),
     ],
   });
-  ok('#66f 같은 항목이 빠졌으면 비교 성립', compareMonths(sameGap, '2026-02', '2026-01').comparable === true);
+  ok('#66f 같은 항목이 빠졌으면 비교 성립', reflectedCompare(sameGap, '2026-02', '2026-01').comparable === true);
 
   // ⚠️ 연 납입액은 '월 × 12'가 아니라 향후 12개월 스케줄 합이다(화면 각주가 그렇게 못 박는다).
   const epBook = makeLedgerBook({
@@ -550,11 +561,13 @@ if (L) {
   ok('#69 ⚠️ planSum은 실적을 채워도 불변(fromPlan과 다르다)',
     planSumOf([0, 0, 0]) === 547000 && planSumOf([80000, 450000, 0]) === 547000 && planSumOf([80000, 450000, 17000]) === 547000);
 
-  // ⚠️ 누출 금지 — 계획 폴백이 비교·시계열로 새면 전월 대비가 영구히 거짓말을 시작한다.
+  // ⚠️ 반영값은 `reflectedCompare` 전용 함수로만 비교에 실린다(§13.6-1) — `monthTotals`(실제 전용)에는
+  //    여전히 섞이지 않는다(#70b·#G10c). 비교에 실릴 때는 계획 반영 건수가 라벨에 함께 실린다.
   const leakBook = makeLedgerBook({
     items: [ex({ id: 'x', plan: 1000, actual: { '2026-07': 1000, '2026-08': 1200 } }), ex({ id: 'y', plan: 2000, actual: { '2026-07': 2000 } })],
   });
-  ok('#70 ⚠️ 계획 폴백이 momDelta로 새지 않는다(완료도 불일치 유지)', momDelta(leakBook, '2026-08').comparable === false);
+  const lk = reflectedMomDelta(leakBook, '2026-08', '2026-09');
+  eq('#70 ⚠️ 계획 반영이 비교에 실리고(y의 8월 = 2000) 그 건수가 라벨에 실린다', [lk.comparable, lk.delta, lk.curUnconfirmed], [true, 200, 1]);
   eq('#70b ⚠️ monthTotals.actualExpense는 입력분만', monthTotals(leakBook, '2026-08').actualExpense, 1200);
   eq('#70c 같은 달의 예상 합은 계획으로 채워진다', expectedTotal(leakBook.items, '2026-08').value, 1200 + 2000);
 
@@ -834,6 +847,141 @@ if (L) {
       !isItemActive(mid, '2026-07') && isItemActive(mid, '2026-08')
       && planOf(mid, '2026-07') === null && expectedOf(mid, '2026-07') === null);
   }
+
+  // ── §17 반영값(reflected) — 재설계 §13 (2026-09) ─────────────────────────
+  // 기능마다 **동작 케이스 + 거래 0건 무영향 케이스**를 쌍으로 둔다(backtest 규약).
+  console.log('\n  §17 반영값 — reflectedMonth · confirmedOf · reflectedCompare · applyPlanAsActual · 달력 · 버킷 이동');
+  {
+    ok('#105 필요한 export가 있다',
+      [reflectedMonth, reflectedCompare, reflectedMomDelta, confirmedOf, applyPlanAsActual, moveItemInBucket, canMoveItemInBucket]
+        .every((f) => typeof f === 'function'));
+    const rb = makeLedgerBook({
+      id: 'rb',
+      items: [
+        ex({ id: 'a', pay: 'cash', plan: 100000, actual: { '2026-08': 120000 } }),
+        ex({ id: 'b', pay: 'card', plan: 200000 }),                          // 미확인 → 계획 반영
+        ex({ id: 'c', pay: 'card', plan: 50000, actual: { '2026-08': 0 } }),   // 명시적 0 = 확인
+        makeLedgerItem({ id: 'l', group: 'loan', pay: 'transfer', loan: makeLedgerLoan({ principal: 1e8, annualRate: 4 }) }), // 산출 불가
+        makeLedgerItem({ id: 'i', group: 'income', pay: 'cash', plan: 3000000 }),
+      ],
+    });
+    const r = reflectedMonth(rb, '2026-08');
+    eq('#106 반영값 = 실제 + 계획 반영(산출 불가는 빠진 하한)', r.value, 120000 + 200000 + 0);
+    eq('#106b 항등식 value === expectedTotal(items).value + 미분류(0)', r.value, expectedTotal(rb.items, '2026-08').value);
+    near('#106c Σ byPay.value === value', Object.values(r.byPay).reduce((a, x) => a + x.value, 0), r.value, 1e-9);
+    near('#106d Σ byGroup.value === value', Object.values(r.byGroup).reduce((a, x) => a + x.value, 0), r.value, 1e-9);
+    eq('#106e 수입은 지출 축에 섞이지 않는다(별도 필드)', [r.incomeValue, r.activeCount], [3000000, 4]);
+    eq('#106f 산출 불가 항목이 id 집합으로 전파된다', [r.unresolved, r.unresolvedIds], [1, ['l']]);
+    // ⚠️ 확인분 차이(D5) — 실제·계획이 **둘 다** 있는 셀만: (120000−100000) + (0−50000). 미확인 b·산출 불가 l 제외.
+    eq('#107 확인분 차이 = Σ(실제 − 계획 | 둘 다 있는 셀)', [r.confirmedVar, r.confirmedCells], [-30000, 2]);
+    eq('#107b ⚠️ 거래 0건 + 미분류 0건이면 expectedGrandTotal과 값이 같다(하위호환의 축)', r.value, expectedGrandTotal(rb, '2026-08').value);
+    // 미분류 — value·variable·그 결제수단에 들어가되 확인분 차이에는 들어가지 않는다(계획이 없다).
+    const rbTx = addTx(rb, makeLedgerTx({ id: 'u1', date: '2026-08-05', amount: 7000, itemId: '', pay: 'cash' })).book;
+    const ru = reflectedMonth(rbTx, '2026-08');
+    eq('#108 미분류가 value·variable·그 결제수단에 들어간다',
+      [ru.value, ru.uncategorized, ru.uncategorizedCount, ru.byGroup.variable.value, ru.byPay.cash.value], [327000, 7000, 1, 7000, 127000]);
+    eq('#108b 미분류는 확인분 차이에 들어가지 않는다', [ru.confirmedVar, ru.confirmedCells], [-30000, 2]);
+    near('#108c 미분류를 넣어도 Σ byPay === value', Object.values(ru.byPay).reduce((a, x) => a + x.value, 0), ru.value, 1e-9);
+    S('#108d 손상 입력에 throw하지 않는다', () => reflectedMonth(null, 'bogus'), (v) => v && v.value === 0 && v.activeCount === 0);
+
+    // confirmedOf — 월 헤더·배너·요약 줄·달력·확인 버튼의 단일 소스
+    const cf = confirmedOf(rb, '2026-08', '2026-08');
+    eq('#109 확인 현황 = 대상 4(a,b,c,l) 중 확인 2, 미확인 2(b·l)', [cf.confirmed, cf.target, cf.unconfirmed, cf.missingIds, cf.inProgress], [2, 4, 2, ['b', 'l'], 0]);
+    const an = makeLedgerBook({ items: [makeLedgerItem({ id: 't', group: 'annual', pay: 'cash', plan: 600000, dueMonth: 7 })] });
+    eq('#109b annual 비납부월은 확인 대상이 아니다(납부월만)',
+      [confirmedOf(an, '2026-03', '2026-08').target, confirmedOf(an, '2026-07', '2026-08').unconfirmed], [0, 1]);
+    // ⚠️ 이번 달 entry:'tx' 거래 0건 = 미확인이 아니라 **진행 중**(§13.11 R-6). 값은 계획으로 채워져 있으므로 이 수를 세지 않으면 ✓와 값이 모순.
+    const eb = makeLedgerBook({ id: 'eb', items: [makeLedgerItem({ id: 'e', group: 'variable', pay: 'card', plan: 300000, entry: 'tx' })] });
+    const c1 = confirmedOf(eb, '2026-08', '2026-08');
+    eq('#109c ⚠️ entry:tx 이번 달(거래 0건)은 미확인이 아니라 진행 중', [c1.unconfirmed, c1.inProgress, c1.target], [0, 1, 0]);
+    eq('#109d 과거 달의 entry:tx 거래 0건은 미확인', [confirmedOf(eb, '2026-07', '2026-08').unconfirmed, confirmedOf(eb, '2026-07', '2026-08').inProgress], [1, 0]);
+    ok('#109e totals를 넘기면 다시 계산하지 않고 같은 값', JSON.stringify(confirmedOf(rb, '2026-08', '2026-08', monthTotals(rb, '2026-08', '2026-08'))) === JSON.stringify(cf));
+
+    // reflectedCompare — comparable=false 사유 4종(순서: no-data → future → unresolved → zero-base)
+    const nd = reflectedCompare(makeLedgerBook({ items: [ex({ id: 'a', plan: 1000, activeFrom: '2026-08', actual: { '2026-08': 1200 } })] }), '2026-08', '2026-07');
+    eq('#110 no-data: 전달에 항목이 없다', [nd.comparable, nd.reason, nd.delta], [false, 'no-data', null]);
+    const ndc = reflectedCompare(makeLedgerBook({ items: [ex({ id: 'a', plan: 1000, activeTo: '2026-07', actual: { '2026-07': 1000 } })] }), '2026-08', '2026-07');
+    eq('#110b ⚠️ no-data는 양쪽을 본다 — cur가 빈 달이면 −100%를 단언하지 않는다(R-8)', [ndc.comparable, ndc.reason, ndc.delta], [false, 'no-data', null]);
+    const fu = reflectedCompare(makeLedgerBook({ items: [ex({ id: 'a', plan: 1000 })] }), '2026-09', '2026-08', '2026-08');
+    eq('#111 future: todayYm 이후 달은 비교하지 않는다(D7)', [fu.comparable, fu.reason], [false, 'future']);
+    ok('#111b ⚠️ todayYm이 없거나 무효면 미래 게이트가 꺼진다(별도 창 첫 렌더)',
+      reflectedCompare(makeLedgerBook({ items: [ex({ id: 'a', plan: 1000 })] }), '2026-09', '2026-08').comparable === true
+      && reflectedCompare(makeLedgerBook({ items: [ex({ id: 'a', plan: 1000 })] }), '2026-09', '2026-08', 'bogus').comparable === true);
+    // ⚠️ 산출 불가 **집합**이 같으면 그 항목을 빼고 비교한다(R-7) — 완납 후 잔액 0인 대출 한 줄이 전 구간을 -로 만들지 않는다.
+    const paid = makeLedgerItem({ id: 'paid', group: 'loan', pay: 'transfer',
+      loan: makeLedgerLoan({ principal: 1000, principalAsOfYm: '2025-01', annualRate: 4, method: 'amortizing', endDate: '2025-06-30' }) });
+    const ub = makeLedgerBook({ items: [paid, ex({ id: 'a', plan: 1000, actual: { '2026-07': 1000, '2026-08': 1100 } })] });
+    const uc = reflectedCompare(ub, '2026-08', '2026-07');
+    eq('#112 ⚠️ 산출 불가 집합이 같으면 비교 성립 + 제외 건수 라벨', [uc.comparable, uc.delta, uc.unresolvedExcluded], [true, 100, 1]);
+    const ub2 = makeLedgerBook({ items: [{ ...paid, activeFrom: '2026-08' }, ex({ id: 'a', plan: 1000, actual: { '2026-07': 1000, '2026-08': 1100 } })] });
+    eq('#112b 집합이 다르면 비교 불가(unresolved)', [reflectedCompare(ub2, '2026-08', '2026-07').comparable, reflectedCompare(ub2, '2026-08', '2026-07').reason], [false, 'unresolved']);
+    const zb = reflectedCompare(makeLedgerBook({ items: [ex({ id: 'a', plan: 1, actual: { '2026-07': 0, '2026-08': 100 } })] }), '2026-08', '2026-07');
+    eq('#113 zero-base: comparable=true · rate=null(엑셀 #89 계약)', [zb.comparable, zb.reason, zb.delta, zb.rate], [true, 'zero-base', 100, null]);
+    const lab = reflectedMomDelta(rb, '2026-08', '2026-08');
+    eq('#114 라벨용 미확인 = confirmedOf.unconfirmed + inProgress', lab.curUnconfirmed, cf.unconfirmed + cf.inProgress);
+    ok('#114b reflectedYoyDelta는 12개월 전과 비교한다', reflectedYoyDelta(yoyBook, '2026-08', '2026-09').prev === 1000);
+
+    // applyPlanAsActual — 유일한 쓰기 헬퍼(§13.2.4)
+    const ab = makeLedgerBook({
+      id: 'ab',
+      items: [
+        ex({ id: 'a', plan: 100000, actual: { '2026-07': 120000 } }),
+        ex({ id: 'b', plan: 200000 }),
+        ex({ id: 'c', plan: 50000, actual: { '2026-07': 0 } }),
+        makeLedgerItem({ id: 'ms', group: 'fixed', plan: 127000, planUnit: 'year' }),
+        makeLedgerItem({ id: 'e', group: 'variable', plan: 300000, entry: 'tx' }),
+        makeLedgerItem({ id: 'l', group: 'loan', pay: 'transfer', loan: makeLedgerLoan({ principal: 1e8, annualRate: 4 }) }),
+        makeLedgerItem({ id: 'i', group: 'income', pay: 'cash', plan: 3000000 }),
+      ],
+    });
+    const ap = applyPlanAsActual(ab, '2026-07', '2026-08');
+    eq('#116 대상만 쓴다: b·ms 2건 · e(거래 입력) 1건·l(산출 불가) 1건 제외 — 프롬프트의 세 수', [ap.written, ap.skippedTx, ap.skippedUnresolved], [2, 1, 1]);
+    eq('#116b ⚠️ 수입은 쓰지 않는다(R-4)', ap.book.items.find((x) => x.id === 'i').actual, {});
+    eq('#116c 명시적 0·기존 실제는 건드리지 않는다',
+      [ap.book.items.find((x) => x.id === 'a').actual['2026-07'], ap.book.items.find((x) => x.id === 'c').actual['2026-07']], [120000, 0]);
+    eq('#116d ⚠️ 저장값 = planOf 그대로(무반올림 — 127,000/12, R-1)', ap.book.items.find((x) => x.id === 'ms').actual['2026-07'], 127000 / 12);
+    eq('#116e 거래 입력 항목·산출 불가 항목은 그대로',
+      [ap.book.items.find((x) => x.id === 'e').actual, ap.book.items.find((x) => x.id === 'l').actual], [{}, {}]);
+    eq('#117 확인 직후 그 달 확인분 차이 = 기존 확인분만(b·ms는 0)', [reflectedMonth(ap.book, '2026-07').confirmedVar, reflectedMonth(ap.book, '2026-07').confirmedCells], [20000 - 50000, 4]);
+    ok('#117b 멱등 — 다시 부르면 같은 참조', applyPlanAsActual(ap.book, '2026-07', '2026-08').book === ap.book);
+    ok('#117c 쓸 게 없으면 같은 참조(dirty 없음)', (() => {
+      const bk = makeLedgerBook({ items: [ex({ id: 'a', plan: 1, actual: { '2026-07': 1 } })] });
+      return applyPlanAsActual(bk, '2026-07', '2026-08').book === bk;
+    })());
+    ok('#117d ym > todayYm이면 no-op', applyPlanAsActual(ab, '2026-09', '2026-08').book === ab);
+    ok('#117e 원본을 변형하지 않는다', ab.items.find((x) => x.id === 'b').actual['2026-07'] === undefined);
+    const abTx = addTx(ab, makeLedgerTx({ id: 'tb', date: '2026-07-03', amount: 5, itemId: 'b' })).book;
+    eq('#117f 거래가 있는 (항목, 월)은 건드리지 않는다', applyPlanAsActual(abTx, '2026-07', '2026-08').book.items.find((x) => x.id === 'b').actual, {});
+    S('#117g 손상 입력에 throw하지 않는다', () => applyPlanAsActual(null, '2026-07', '2026-08'), (v) => v && v.written === 0);
+
+    // ledgerEventsByDate(books, year, todayYm) — 미래 달 게이트(R-5)
+    const calF = makeLedgerBook({ id: 'cf', items: [ex({ id: 'a', plan: 1000, actual: { '2026-07': 1000, '2026-08': 900 } })],
+      months: { '2026-08': { touchedDate: '2026-08-25', memo: '' } } });
+    const evF = ledgerEventsByDate([calF], 2026, '2026-07');
+    eq('#118 ⚠️ todayYm 이후 달의 정리 기록은 전월 대비를 내지 않는다',
+      [evF['2026-08-25'][0].momComparable, evF['2026-08-25'][0].momReason, evF['2026-08-25'][0].momDelta], [false, 'future', null]);
+    const evN = ledgerEventsByDate([calF], 2026);
+    eq('#118b todayYm 없으면 종전(게이트 없음) — #54c의 −100 그대로', [evN['2026-08-25'][0].momDelta, evN['2026-08-25'][0].reflectedExpense], [-100, 900]);
+    const calP = makeLedgerBook({ id: 'cp', items: [ex({ id: 'a', plan: 1000, actual: { '2026-07': 1000 } }), ex({ id: 'b', plan: 500 })],
+      months: { '2026-08': { touchedDate: '2026-08-25', memo: '' } } });
+    const evP = ledgerEventsByDate([calP], 2026, '2026-09')['2026-08-25'][0];
+    eq('#118c 달력 총지출 = 반영값(a 계획 1000 + b 계획 500) · 미확인 2건이 라벨에',
+      [evP.reflectedExpense, evP.actualExpense, evP.unconfirmed, evP.momPlanned, evP.missing], [1500, 0, 2, 2, 2]);
+
+    // moveItemInBucket — 화면 버킷은 group|pay(§13.6-6)
+    const bk = (it) => `${it.group}|${it.pay}`;
+    const mixP = [
+      makeLedgerItem({ id: 'f1', group: 'fixed', pay: 'cash' }),
+      makeLedgerItem({ id: 'f2', group: 'fixed', pay: 'card' }),   // 같은 그룹·다른 수단 — 건너뛴다
+      makeLedgerItem({ id: 'v1', group: 'variable', pay: 'cash' }),
+      makeLedgerItem({ id: 'f3', group: 'fixed', pay: 'cash' }),
+    ];
+    eq('#119 ⚠️ 같은 그룹·다른 수단을 건너뛰고 같은 버킷끼리 교환', moveItemInBucket(mixP, 'f3', -1, bk).map((x) => x.id), ['f3', 'f2', 'v1', 'f1']);
+    ok('#119b 이동 불가면 원본 참조', moveItemInBucket(mixP, 'f2', -1, bk) === mixP && moveItemInBucket(mixP, 'f2', 1, bk) === mixP);
+    ok('#119c canMoveItemInBucket이 판정을 공유', canMoveItemInBucket(mixP, 'f3', -1, bk) === true && canMoveItemInBucket(mixP, 'f2', 1, bk) === false);
+    eq('#119d moveItemInGroup은 그룹 버킷 위임(#72와 동일)', moveItemInGroup(mix, 'f2', -1).map((x) => x.id), ['f2', 'v1', 'f1']);
+    ok('#119e 입력 배열을 변형하지 않는다', mixP.map((x) => x.id).join() === 'f1,f2,v1,f3');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -941,12 +1089,22 @@ if (LE && L) {
     {
       const zb = L.makeLedgerBook({ id: 'z', items: [
         mkI({ id: 'z1', group: 'fixed', plan: 1000, actual: { '2026-01': 0, '2026-02': 500000 } })] });
-      const c = L.compareMonths(zb, '2026-02', '2026-01');
+      const c = L.reflectedCompare(zb, '2026-02', '2026-01');
       ok('#89 zero-base는 comparable=true인데 rate=null', c.comparable === true && c.rate === null);
       const zs = LE.buildLedgerSheets({ book: zb, year: 2026, month: 2, todayKST: '2026-08-29' });
       const feb = (zs[2].rows || []).find((r) => r && r[0] && r[0].v === '2월');
-      eq('#89b ⚠️ 그 달 전월대비 셀은 **빈 셀**(0.00% 단언 금지)', feb ? feb[4] : 'x', null);
-      ok('#89c 같은 행의 차이 열은 숫자다', feb && feb[3] && feb[3].t === 'n');
+      // 8열(D4): 월·계획·반영·실제·차이·전월 대비(반영 기준)·미확인 — 열 인덱스가 하나씩 밀렸다.
+      eq('#89b ⚠️ 그 달 전월대비 셀은 **빈 셀**(0.00% 단언 금지)', feb ? feb[5] : 'x', null);
+      ok('#89c 같은 행의 차이 열은 숫자다', feb && feb[4] && feb[4].t === 'n');
+      ok('#89d 반영 열이 실제 500,000을 싣는다', feb && feb[2] && feb[2].t === 'n' && feb[2].v === 500000);
+      const hd = (zs[2].rows || []).find((r) => r && r[0] && r[0].t === 's' && r[0].v === '월');
+      eq('#89e 월별 표 헤더 8열(반영·전월 대비(반영 기준)·미확인)',
+        hd ? [hd.length, hd[2].v, hd[3].v, hd[5].v, hd[6].v] : 'x', [8, '반영', '실제', '전월 대비(반영 기준)', '미확인']);
+      // 미확인이 있는 달은 반영 열이 계획으로 채워지고 실제 열은 빈 셀이다(둘의 뜻이 다르다).
+      const pb = L.makeLedgerBook({ id: 'p', items: [mkI({ id: 'p1', group: 'fixed', plan: 1000 })] });
+      const ps = LE.buildLedgerSheets({ book: pb, year: 2026, month: 2, todayKST: '2026-08-29' });
+      const pf = (ps[2].rows || []).find((r) => r && r[0] && r[0].v === '2월');
+      eq('#89f 미확인 달: 반영 = 계획 1,000 · 실제 빈 셀 · 미확인 1', pf ? [pf[2] && pf[2].v, pf[3], pf[6] && pf[6].v] : 'x', [1000, null, 1]);
     }
 
     // ── 파일명 ──
@@ -1313,52 +1471,68 @@ eq('#G9 ledger.ts 소비처 census(새 소비처는 null 계약을 다시 확인
 //    삭제하거나 값을 바꿔치기해도 초록으로 통과하는 죽은 단언이 된다.
 console.log('\n── §G10 계획 폴백 누출 금지 ──');
 
-// ⚠️ 계획으로 채운 값이 비교·시계열로 새면 전월 대비가 영구히 거짓말을 시작한다.
-//    **구간을 잘라** 단언한다 — 파일 전역 정규식은 다른 곳의 정상 사용에 걸려 죽은 단언이 된다.
+// 2026-09 §13 개정: 반영값(실제 ?? 계획)은 **`reflectedMonth`·`reflectedCompare` 전용 함수로만** 비교·
+// 시계열·달력에 실린다. 옛 '부재' 가드(#G10·#G10b·#G10e)는 **사용부 존재** 단언으로 뒤집었다.
+// ⚠️ `monthTotals`(실제 전용)에는 여전히 섞지 않는다(#G10c 유지) — 확인 현황의 단일 소스다.
 const noExpected = (label, block, why) =>
   ok(`${label} ${why}`, block.length > 0 && !/expected|Expected/.test(block));
-noExpected('#G10 compareMonths', sliceBlock(LG, 'export const compareMonths', '\nexport const momDelta'),
-  '본문에 expected가 없다(완료도 판정이 무너지면 −87.2% 거짓말이 부호만 바뀌어 재발)');
-noExpected('#G10b ledgerEventsByDate', sliceBlock(LG, 'export const ledgerEventsByDate', '\n/* ====='),
-  '본문에 expected가 없다(기록하지 않은 날에 달력 칩이 총지출을 찍는다)');
+{
+  const RC = sliceBlock(LG, 'export const reflectedCompare', '\nexport const reflectedMomDelta');
+  ok('#G10 ⚠️ reflectedCompare가 두 달을 reflectedMonth로 잰다(사용부)',
+    /const cur = reflectedMonth\(book, curYm\);/.test(RC) && /const prev = reflectedMonth\(book, prevYm\);/.test(RC));
+  ok('#G10-2 ⚠️ 옛 compareMonths·momDelta·yoyDelta가 되살아나지 않았다',
+    !/export const (compareMonths|momDelta|yoyDelta)\b/.test(LG));
+  const EV = sliceBlock(LG, 'export const ledgerEventsByDate', '\n/* =====');
+  ok('#G10b ⚠️ 달력 정리 기록이 반영값과 반영 기준 전월 대비를 싣는다(사용부)',
+    /const r = reflectedMonth\(b, ym\);/.test(EV) && /const m = reflectedMomDelta\(b, ym, tYm\);/.test(EV)
+    && /reflectedExpense: r\.value,/.test(EV) && /momPlanned: m\.curUnconfirmed,/.test(EV));
+  // (CRLF 저장소 — 줄바꿈은 \r?\n로 잰다)
+  ok('#G10b-2 ⚠️ 달력이 todayYm을 받아 미래 게이트를 건다', /todayYm\?: string,\r?\n\): Record<string, LedgerCalendarEvent\[\]> => \{/.test(LG)
+    && /const tYm = isValidYm\(todayYm\) \? String\(todayYm\) : '';/.test(EV));
+}
 noExpected('#G10c monthTotals', sliceBlock(LG, 'export const monthTotals', 'export const expectedOf'),
-  '본문에 expected가 없다(이 구조체를 5소비자가 받아 간다)');
-// ⚠️ 여기는 **부재**가 아니라 **사용부 존재**로 단언한다. 부재로 재려면 구간을 잘라야 하는데
-//    보호 대상(row 객체 리터럴)이 `const e = expectedTotal` **뒤**에 있어, 그 앞을 자르면
-//    구조적으로 expected를 담을 수 없는 4줄만 남는 **죽은 단언**이 된다(적대적 리뷰가
-//    `actual: t.actualExpense` → `actual: e.value` 변이로 실증: 278건 전부 초록).
-ok('#G10d ⚠️ yearSeries의 plan/actual이 monthTotals에서 온다(계획 폴백 누출 금지)',
+  '본문에 expected가 없다(실제 전용 집계 — 확인 현황의 단일 소스)');
+// ⚠️ 여기는 **부재**가 아니라 **사용부 존재**로 단언한다. `plan`은 ① 계획 선, `actual`은 참고값으로 남고,
+//    ① 막대는 스택 2단(`confirmed`/`planned`)이다. 미래 달은 둘 다 null(막대 없음 — D7).
+ok('#G10d ⚠️ yearSeries의 plan/actual 줄이 그대로다',
   /plan: t\.planExpense, actual: t\.actualExpense,/.test(LP));
-ok('#G10d-2 momDelta도 compareMonths 결과를 그대로 쓴다',
-  /momDelta: c\.comparable \? c\.delta : null,/.test(LP));
-// ⚠️ annualCompare는 설계안의 누출 금지 목록에서 빠져 있었다 — '계획만 입력한 해가 전년 대비
-//    차트에서 통째로 사라진다'가 요청1과 같은 증상이라 여기에 expected를 꽂을 유인이 가장 크다.
-noExpected('#G10e annualCompare', sliceBlock(LP, 'const annualCompare = useMemo', '), [book, yearsAvailable, todayYm]);'),
-  '본문에 expected가 없다(모든 해가 "항상 비교 가능한 거짓 숫자"가 된다)');
+ok('#G10d-2 momDelta가 reflectedMomDelta 결과를 그대로 쓴다',
+  /momDelta: c\.comparable \? c\.delta : null,/.test(LP) && /const c = reflectedMomDelta\(book, k, todayYm\);/.test(LP));
+ok('#G10d-3 ⚠️ ① 스택 필드 confirmed/planned + 미래 게이트',
+  /confirmed: future \? null : e\.fromActual \+ \(unc \? unc\.value : 0\),/.test(LP) && /planned: future \? null : e\.fromPlan,/.test(LP));
+{
+  // ⚠️ 끝 앵커 `'), [book, yearsAvailable, todayYm]);'`는 문자 그대로 유지한다(deps에 todayYm이 이미 있다).
+  const AC = sliceBlock(LP, 'const annualCompare = useMemo', '), [book, yearsAvailable, todayYm]);');
+  ok('#G10e ⚠️ annualCompare가 반영값을 쓰고 올해를 todayYm까지 자른다(사용부)',
+    AC.length > 100 && /const r = reflectedMonth\(book, k\);/.test(AC) && /if \(todayYm && k > todayYm\) break;/.test(AC)
+    && !/monthTotals\(/.test(AC));
+}
 
 console.log('\n── §G11 소계 / 결제수단 행 ──');
-const SUB = sliceBlock(LP, 'const renderSubtotalRow', 'const renderGroupSubtotal');
+const SUB = sliceBlock(LP, 'const renderSubtotalRow', 'const renderGroupTree');
 // ⚠️ 3번째 인자 `ix`가 거래 합을 실어 나른다 — 빠뜨리면 거래로 입력한 달이 소계에서 사라진다.
 ok('#G11 소계 월 셀이 계획 폴백 집계를 쓴다', /const e = totalOf\(items, k, ix\)/.test(SUB));
 // ⚠️ 수입 그룹은 지출 전용 집계를 타면 통째로 죽는다(activeCount 0 → 12개월 전부 '-').
 ok('#G11-2 ⚠️ 수입 소계가 expectedIncomeTotal로 갈라진다',
   /const totalOf = income \? expectedIncomeTotal : expectedTotal;/.test(SUB));
 ok('#G11-3 ⚠️ 수입 그룹 호출부가 income 플래그를 넘긴다',
-  /income: true,/.test(sliceBlock(LP, 'const renderGroupSubtotal', 'const renderGrandTotalRow')));
+  /income: true,/.test(sliceBlock(LP, 'const renderGroupTree', 'const renderGrandTotalRow')));
 // ⚠️ fromPlan을 쓰면 사용자가 실적을 채울수록 계획 열이 0으로 수렴한다(실측 547,000 → 17,000).
 ok('#G11b ⚠️ 계획 열이 planSum이다(fromPlan 아님)',
-  /fmtWon\(cur\.planSum, hideAmounts\)/.test(SUB) && !/fmtWon\(cur\.fromPlan/.test(SUB));
-ok('#G11c 계획으로 채운 건수를 셀에 노출한다', /e\.plannedCount > 0/.test(SUB));
-// ⚠️ '보이는 달 중 하나라도'로 재면 미래 달이 항상 계획-only라 배지가 상시 켜져 신호가 0이 된다.
-ok('#G11d ⚠️ 배지는 선택한 달 하나로 판정한다', /cur\.plannedCount > 0/.test(SUB));
+  /fmtNum\(cur\.planSum, hideAmounts\)/.test(SUB) && !/fmtNum\(cur\.fromPlan/.test(SUB) && !/fmtWon\(cur\.fromPlan/.test(SUB));
+// ⚠️ 2026-09 §13.6-3: 롤업 셀의 `계획 N` 배지는 **삭제**됐다(사용자가 소음으로 지목). 그 신호는 월 헤더 `확인 N/M`이 대신한다.
+ok('#G11c ⚠️ 롤업 셀에 계획 N 배지가 없다(부재)', !/e\.plannedCount > 0/.test(SUB) && !/계획 \{e\.plannedCount\}/.test(SUB));
+ok('#G11d ⚠️ 선택한 달 배지도 없다(부재) + 월 헤더가 확인 N/M을 렌더한다',
+  !/cur\.plannedCount > 0/.test(SUB) && /`확인 \$\{row\.confirmedCount\}\/\$\{row\.targetCount\}`/.test(LP));
 ok('#G11e "항목 없음"을 "미입력"과 구분한다', /state === 'none'/.test(SUB));
 // ⚠️ 산출 불가(unresolved)를 0으로 계상하면 '계획 대비 차이 ₩0'을 확정 단언한다 —
-//    `loanSchedule`의 null 계약("계산 실패는 0이 아니다")이 소계 경로에서 깨진다.
-ok('#G11e-2 ⚠️ 차이 열이 unresolved도 확정 불가 사유로 본다',
-  /yearPlanned > 0 \|\| yearUnresolved > 0/.test(SUB));
+//    `loanSchedule`의 null 계약("계산 실패는 0이 아니다")이 소계 경로에서 깨진다(R-3: 게이트 유지).
+ok('#G11e-2 ⚠️ 롤업 차이 열의 unresolved 게이트가 먼저이고, 값은 확인분 차이다(D5)',
+  /yearUnresolved > 0 \? \(/.test(SUB) && /const yearVar = yearConfirmedCells === 0 \? null : yearConfirmedVar;/.test(SUB)
+  && /yearConfirmedVar \+= e\.confirmedVar; yearConfirmedCells \+= e\.confirmedCells;/.test(SUB));
 ok('#G11e-3 ⚠️ 산출 불가 건수를 셀에 노출한다(그 값은 총액이 아니라 하한)',
   /e\.unresolved > 0 && \(/.test(SUB));
-const GSUB = sliceBlock(LP, 'const renderGroupSubtotal', 'const renderGrandTotalRow');
+const GSUB = sliceBlock(LP, 'const renderGroupTree', 'const renderGrandTotalRow');
 // ⚠️ 현금/카드만 하드코딩하면 pay:'auto'인 항목이 어느 행에도 없이 사라진다.
 // (거래 레이어 이후 미분류 몫이 조건에 더해져 줄바꿈이 생겼다 — 계약은 그대로 '전체를 훑는다'.)
 ok('#G11f ⚠️ 결제수단 행이 LEDGER_PAY_ORDER 전체를 훑는다',
@@ -1373,8 +1547,10 @@ ok('#G11i ⚠️ 총합계 행 라벨이 연단위 포함임을 밝힌다', /'�
 ok('#G11j 총합계 행이 tbody에 실제로 렌더된다', /renderGrandTotalRow\(\)\}/.test(LP));
 
 console.log('\n── §G12 순서 이동 / 구분 ──');
-ok('#G12 ▲▼가 항목 행에 렌더된다', /<MoveBtns[\s\S]{0,220}?canMoveItemInGroup\(book\.items, it\.id, -1\)/.test(LP));
-ok('#G12b 이동이 id 기준 순수 함수를 쓴다', /moveItemInGroup\(b\.items, itemId, dir\)/.test(LP));
+// ⚠️ 2026-09 §13.6-6: 버킷 = group|pay. 그룹만 보면 다른 수단 하위 항목과 교환해 화면에서 아무 일도 안 일어난다.
+ok('#G12 ▲▼가 항목 행에 렌더되고 버킷 키를 넘긴다', /<MoveBtns[\s\S]{0,220}?canMoveItemInBucket\(book\.items, it\.id, -1, bucketKeyOf\)/.test(LP));
+ok('#G12b 이동이 id 기준 순수 함수를 버킷 키와 함께 쓴다',
+  /moveItemInBucket\(b\.items, itemId, dir, bucketKeyOf\)/.test(LP) && /const bucketKeyOf = \(it\) => `\$\{it\.group\}\|\$\{it\.pay\}`;/.test(LP));
 // ⚠️ data-col을 달면 onGridKeyDown의 ↑/↓ 열 이동에 버튼이 끼어든다.
 ok('#G12c ⚠️ ▲▼에 data-col을 달지 않는다',
   !/data-col[^\n]{0,40}(?:up|down|move)/i.test(sliceBlock(LP, 'function MoveBtns', '\n/* ──')));
@@ -1625,10 +1801,12 @@ ok('#G37b ⚠️ 항목 행의 연간 합계가 expectedOf로 누적된다(사�
   && /(?<!\$)\{fmtWon\(yearExpected, hideAmounts\)\}/.test(ITEMROW)
   && !/(?<!\$)\{fmtWon\(yearActual, hideAmounts\)\}/.test(ITEMROW));
 
-// ⚠️ 차이 열의 게이트는 그대로 `yearMissing` — expected로 바꾸면 언제나 0이 되어
-//    "차이 없음"이라는 거짓 확정이 된다(varianceOf null 계약과 같은 근거).
-ok('#G37c ⚠️ 연간 차이 게이트는 여전히 yearMissing이다',
-  /const yearVar = yearMissing === 0 \? yearActual - yearPlan : null;/.test(ITEMROW));
+// ⚠️ 2026-09 §13.6-4(D5): 차이 열 = **확인분 차이**(실제·계획이 둘 다 있는 셀의 Σ). 확인 셀 0개면 `-`.
+//    `yearExpected - yearPlan`으로 되돌리면 언제나 0이 되어 "차이 없음"이라는 거짓 확정이 된다.
+ok('#G37c ⚠️ 연간 차이 = 확인분 차이(확인 셀 0개면 null)',
+  /const yearVar = confirmedCells === 0 \? null : confirmedVar;/.test(ITEMROW)
+  && /if \(a !== null && p !== null\) \{ confirmedVar \+= a - p; confirmedCells\+\+; \}/.test(ITEMROW)
+  && !/yearExpected - yearPlan/.test(ITEMROW));
 
 // ⚠️ 표시 전용 예상값이 5소비자로 새면 전월·전년 대비가 영구히 거짓말한다(ledger.ts G-2).
 ok('#G37d ⚠️ yearExpected가 비교·차트·달력으로 새지 않는다',
@@ -1646,11 +1824,13 @@ ok('#G37f ⚠️ 비활성 칸이 적용기간을 넓히는 버튼이다',
   /if \(isValidYm\(x\.activeFrom\) && k < x\.activeFrom\) return \{ \.\.\.x, activeFrom: k \};/.test(LP)
   && /if \(isValidYm\(x\.activeTo\) && k > x\.activeTo\) return \{ \.\.\.x, activeTo: k \};/.test(LP));
 
-// ⚠️ 미입력 배너가 '합계에서 제외된다'고 말하면 거짓이다 — 소계·KPI·도넛·월 칸·연간 합계가
-//    전부 계획으로 채운다. 실제로 제외되는 건 전월·전년 대비와 달력 칩뿐이다.
-ok('#G37g ⚠️ 미입력 배너가 합계 제외라고 거짓말하지 않는다',
+// ⚠️ 2026-09 §13: 미확인은 계획으로 **반영**된다 — 합계·분석·전월/전년 대비·달력 전부. 옛 괄호 문장
+//    ("전월·전년 대비와 달력은 제외")은 이제 거짓이라 부재를 단언한다.
+ok('#G37g ⚠️ 배너가 확인 N/M + "계획으로 반영" 문구이고 옛 제외 문장이 없다',
   !/미입력 \{totals\.missingExpense\}건 — 합계·증감에서 제외됩니다/.test(LP)
-  && /계획으로 채워 합계에 넣습니다/.test(LP));
+  && !/전월·전년 대비와 달력은 제외/.test(LP)
+  && /\{month\}월 확인 \{confirmed\.confirmed\}\/\{confirmed\.target\}/.test(LP)
+  && /미확인 \{confirmed\.unconfirmed\}건은 계획으로 반영됩니다/.test(LP));
 
 ok('#G24 ⚠️ 연간 미입력 집계가 expectsActual을 쓴다',
   /yearActual \+= a; else if \(expectsActual\(it, k, expOpts\)\) yearMissing\+\+;/.test(LP));
@@ -1667,10 +1847,21 @@ ok('#G25c 대출 행도 같은 함수를 쓴다(단일 소스)', /const annual =
 // ⚠️ 만기월도 납입 회차다 — `+1`이 없으면 termMonths 경로와 회차 정의가 1 어긋난다.
 ok('#G26 ⚠️ endDate 경로가 만기월을 포함한다', /const n = span === null \? null : span \+ 1;/.test(LG));
 
-// ⚠️ 비교는 개수가 아니라 미입력 **집합**을 본다.
-ok('#G27 ⚠️ compareMonths가 missingIds를 비교한다',
-  /prev\.missingIds\.join\('\|'\) !== cur\.missingIds\.join\('\|'\)/.test(LG));
-ok('#G27b ⚠️ 개수 비교로 되돌리지 않았다', !/prev\.missingExpense !== cur\.missingExpense/.test(LG));
+// ⚠️ 2026-09 §13: 옛 `compareMonths`(미입력 집합 비교)는 **구조로 대체**됐다 — 두 달이 모두 반영값이라
+//    완비된다. 대신 `reflectedCompare`는 산출 불가 **집합**을 비교하고(같으면 제외하고 비교, R-7),
+//    `no-data`는 **양쪽**을 본다(R-8). '하나라도 있으면 -'로 좁히면 완납 대출 한 줄이 전 구간을 -로 되돌린다.
+{
+  const RC = sliceBlock(LG, 'export const reflectedCompare', '\nexport const reflectedMomDelta');
+  ok('#G27 ⚠️ reflectedCompare가 산출 불가 집합을 비교한다(개수 아님)',
+    /cur\.unresolvedIds\.join\('\|'\) !== prev\.unresolvedIds\.join\('\|'\)/.test(RC)
+    && !/cur\.unresolved !== prev\.unresolved/.test(RC) && !/unresolvedIds\.length > 0\) return/.test(RC));
+  ok('#G27b ⚠️ no-data가 양쪽 달을 본다', /!hasData\(cur\) \|\| !hasData\(prev\)/.test(RC));
+  ok('#G27c ⚠️ 사유 순서 no-data → future → unresolved → zero-base',
+    RC.indexOf("reason: 'no-data'") < RC.indexOf("reason: 'future'")
+    && RC.indexOf("reason: 'future'") < RC.indexOf("reason: 'unresolved'")
+    && RC.indexOf("reason: 'unresolved'") < RC.indexOf("reason: 'zero-base'"));
+  ok('#G27d ⚠️ todayYm이 무효면 미래 게이트를 끈다', /if \(isValidYm\(todayYm\) && curYm > String\(todayYm\)\) return \{ \.\.\.base, reason: 'future' \};/.test(RC));
+}
 
 // ⚠️ impersonation 읽기 전용은 **App 측 쓰기 핸들러**가 정본이다(창은 조작 가능한 URL로 열린다).
 ok('#G28 ⚠️ ledger:books 쓰기에 impersonation 게이트가 있다',
@@ -1740,6 +1931,15 @@ ok('#G32c ⚠️ 미입력 판정은 expectsActual + 화면과 같은 옵션',
   && /const expOpts = \{ ix: ctx\.ix, todayYm: ctx\.todayYm \};/.test(LEX));
 // ⚠️ comparable만 보면 zero-base(rate=null)가 통과해 0.00%가 확정 표기된다.
 ok('#G33 ⚠️ 전월대비는 rate !== null까지 본다', /cmp\.comparable && cmp\.rate !== null/.test(LEX));
+// 2026-09 §13(D4): 엑셀 ③ 월별 표 8열 — '반영' 열 + 전월 대비는 반영 기준(화면 분석 ②와 같은 규칙).
+ok('#G33b ⚠️ 엑셀 전월 대비가 reflectedCompare(반영 기준 + todayYm)다',
+  /const cmp = reflectedCompare\(book, k, addMonthsYm\(k, -1\), ctx\.todayYm\);/.test(LEX) && !/compareMonths/.test(LEX));
+ok('#G33c ⚠️ 반영 열이 reflectedMonth이고 8열이다',
+  /const rf = reflectedMonth\(book, k\);/.test(LEX) && /N\(rf\.value, wonS\)/.test(LEX) && /const NC = 8;/.test(LEX)
+  && /'월', '계획', '반영', '실제', '차이', '전월 대비\(반영 기준\)', '미확인'/.test(LEX)
+  && /cols: \[22, 16, 16, 16, 14, 18, 10, 10\]/.test(LEX));
+ok('#G33d 미확인 열이 confirmedOf(미확인 + 진행)에서 온다',
+  /const cf = confirmedOf\(book, k, ctx\.todayYm, t\);/.test(LEX) && /cf\.unconfirmed \+ cf\.inProgress > 0/.test(LEX));
 // ⚠️ 내려받은 파일은 사용자 것이다 — 마스킹하면 쓸모가 없다(기존 엑셀 2종과 같은 규약).
 ok('#G34 hideAmounts를 적용하지 않는다', !/hideAmounts/.test(LEX));
 // ⚠️ 내보내기는 **읽기 동작**이다 — readOnly로 잠그면 앱 탭 새로고침 13초 동안 별도 창에서
@@ -1818,6 +2018,75 @@ ok('#G34 hideAmounts를 적용하지 않는다', !/hideAmounts/.test(LEX));
 ok('#G36 버튼이 핸들러에 배선돼 있다(사용부)', /onClick=\{handleExcel\}/.test(LP));
 ok('#G36b 버튼이 readOnly 조건 안에 있지 않다',
   !/\{!readOnly && \([\s\S]{0,200}?onClick=\{handleExcel\}/.test(LP));
+
+/* ---------------------------------------------------------------------------
+ * #G39 재설계 §13 — 첫 화면 '분석' · '수입 및 지출' 접힘 트리 · 계획 선반영(반영값) 배선
+ * ⚠️ 전부 **선언이 아니라 사용부**를 단언한다. 이 절이 지키는 것은 "반영값을 화면 전부가 같은 함수로
+ *    쓴다"와 "'0% 거짓말' 완화 4종이 화면에 실제로 있다"이다(§13.6-2 — 넷 중 하나라도 빼면 안 된다).
+ * ------------------------------------------------------------------------ */
+console.log('\n── §G39 반영값 · 트리 매트릭스 · 첫 화면 분석 ──');
+ok('#G39 탭 배열 — 분석이 첫 원소, 라벨 "수입 및 지출"',
+  /\[\['chart', '분석'\], \['matrix', '수입 및 지출'\], \['tx', '거래'\], \['loan', '대출'\], \['annual', '연간'\]\]/.test(LP));
+ok('#G39b ⚠️ 기본 탭이 상수 chart이고 tabSeededRef가 없다', /useState\('chart'\)/.test(LP) && !/tabSeededRef/.test(LP));
+// L0/L1 행은 전부 renderSubtotalRow를 지난다 — 트리 블록에서 값을 손계산하지 않는다.
+ok('#G39c ⚠️ 트리 블록이 값을 손계산하지 않는다(renderSubtotalRow 경유만)',
+  GSUB.length > 500 && (GSUB.match(/renderSubtotalRow\(\{/g) || []).length >= 3
+  && !/expectedTotal\(|monthTotals\(|reflectedMonth\(|expectedByPay\(/.test(GSUB));
+ok('#G39c-2 ⚠️ 결제수단 행이 기본 노출된다(D3 — 그룹을 펼치지 않아도)',
+  GSUB.indexOf("key: `sub-${g}-${p}`") > 0 && GSUB.indexOf("key: `sub-${g}-${p}`") < GSUB.indexOf('if (open) {'));
+ok('#G39c-3 항목 행은 펼쳤을 때만 + 미분류 행이 수단을 본다',
+  /if \(open\) \{\s*rows\.push\(\.\.\.payItems\.map\(renderItemRow\)\);/.test(GSUB) && /renderUncategorizedRow\(p\)/.test(GSUB)
+  && /const renderUncategorizedRow = \(pay = null\) => \{/.test(LP) && /const v = uncPayValue\(k, pay\);/.test(LP));
+ok('#G39d ⚠️ 롤업 셀 미래 달 이탤릭(예상)', /const future = isFutureYm\(k\);/.test(SUB) && /\$\{future \? 'text-gray-500 italic' : ''\}/.test(SUB));
+{
+  const CH1 = sliceBlock(LP_RAW, '{/* ① 월별 계획 vs 실제 */}', '{/* ② 전월 대비 증감 */}');
+  ok('#G39e ⚠️ ① 막대가 스택 2단(확인/계획 반영) + 알파 톤', /dataKey="confirmed" name="확인" stackId="reflected"/.test(CH1)
+    && /dataKey="planned" name="계획 반영" stackId="reflected" fill=\{PLANNED_BAR_FILL\}/.test(CH1)
+    && /const PLANNED_BAR_FILL = ledgerPlannedFill\(LEDGER_BALANCE_COLOR\.expense\);/.test(LP));
+  const CH2 = sliceBlock(LP_RAW, '{/* ② 전월 대비 증감 */}', '{/* ③ 구분 도넛');
+  ok('#G39e-2 ⚠️ ② 툴팁이 계획 반영 건수·산출 불가 제외를 밝힌다(완화 ②)',
+    /계획 반영 \$\{d\.momPlanned\}건 포함/.test(CH2) && /산출 불가 \$\{d\.momExcluded\}건 제외/.test(CH2));
+  const SUM = sliceBlock(LP_RAW, '{/* 상단 요약 줄', '{/* ① 월별 계획 vs 실제 */}');
+  ok('#G39f ⚠️ 요약 줄이 reflectedMonth/confirmedOf/reflectedMomDelta에서만 온다(D6)',
+    SUM.length > 200 && /reflected\.value/.test(SUM) && /확인 \{confirmed\.confirmed\}\/\{confirmed\.target\}/.test(SUM)
+    && /mom\.curUnconfirmed/.test(SUM) && /const reflected = useMemo\(\(\) => reflectedMonth\(book, ym\), \[book, ym\]\);/.test(LP)
+    && /const confirmed = useMemo\(\(\) => confirmedOf\(book, ym, todayYm, totals\), \[book, ym, todayYm, totals\]\);/.test(LP));
+}
+// ⚠️ 모든 reflected* 비교 memo의 deps에 todayYm — 별도 창은 today가 늦게 와 게이트가 꺼진 결과가 고착된다(§13.6-10).
+ok('#G39g ⚠️ 비교 memo deps에 todayYm',
+  /const mom = useMemo\(\(\) => reflectedMomDelta\(book, ym, todayYm\), \[book, ym, todayYm\]\);/.test(LP)
+  && /const yoy = useMemo\(\(\) => reflectedYoyDelta\(book, ym, todayYm\), \[book, ym, todayYm\]\);/.test(LP)
+  && /\}\), \[book, year, todayYm, ix\]\);/.test(LP));
+// 확인 버튼 — 유일한 쓰기 경로. 2단계 + readOnly/미래 달 미렌더 + 프롬프트가 written/제외 건수를 말한다(R-4).
+ok('#G39h ⚠️ 확인 버튼이 applyPlanAsActual 경유 + 2단계 + 게이트 + 건수 프롬프트',
+  /const res = applyPlanAsActual\(book, k, todayYm\);/.test(LP) && /onClick=\{\(\) => applyPlanConfirm\(confirmYm\)\}/.test(LP)
+  && /\{confirmYm && !readOnly && \(\(\) => \{/.test(LP) && /disabled=\{readOnly \|\| future\}/.test(LP)
+  && /<b>\{pv\.written\}건<\/b>을 계획 금액으로 확인할까요\?/.test(LP) && /\(\{skipped\} 제외\)/.test(LP)
+  && /touchMonth\(book\.id, k\);\s*doFlash\(/.test(LP));
+{
+  const AP = stripComments(sliceBlock(LG, 'export const applyPlanAsActual', '\n/* ====='));
+  ok('#G39i ⚠️ applyPlanAsActual 본문에 Math.round가 없다(무반올림 저장, R-1)',
+    AP.length > 200 && !/Math\.round/.test(AP) && /\[ym\]: p \}/.test(AP) && /if \(it\.entry === 'tx'\) \{ skippedTx\+\+; return it; \}/.test(AP)
+    && /const t = monthTotals\(book, ym, tYm\);/.test(AP));
+}
+{
+  const CAL = stripComments(read('src/components/CalendarModal.tsx'));
+  ok('#G39j ⚠️ 달력이 todayYm을 넘기고 반영값을 그린다',
+    /ledgerEventsByDate\(ledgerBooks, y, todayYm\)/.test(CAL) && /const todayYm = todayStr\.slice\(0, 7\);/.test(CAL)
+    && /touch\.reflectedExpense \?\? touch\.actualExpense/.test(CAL) && /e\.reflectedExpense \?\? e\.actualExpense/.test(CAL)
+    && !/합계·증감에서 제외됩니다/.test(CAL));
+}
+ok('#G39l addItem(group, pay) — 수단 행의 + 추가가 그 수단을 박는다',
+  /const addItem = \(group, pay = null\) => \{/.test(LP) && /onAdd: \(\) => addItem\(g, p\),/.test(GSUB)
+  && /if \(pay && LEDGER_PAY_ORDER\.includes\(pay\)\) base\.pay = pay;/.test(LP));
+ok('#G39m ⚠️ 추가·결제수단 이동이 도착 버킷을 편다', /openBucket\(group, item\.pay\);/.test(LP) && /openBucket\(it\.group, nextPay\);/.test(LP));
+ok('#G39n ⚠️ 월 헤더가 진행 K와 ✓ 게이트를 렌더한다(완화 ①)',
+  /const prog = row\.inProgress > 0 \? ` · 진행 \$\{row\.inProgress\}` : '';/.test(LP)
+  && /const done = row\.unconfirmed === 0 && row\.inProgress === 0;/.test(LP) && /\{status\}\{prog\}/.test(LP));
+ok('#G39o 확인 현황이 yearSeries 행의 confirmedOf에서 온다(새 루프·plannedCount 금지)',
+  /const cf = confirmedOf\(book, k, todayYm, t\);/.test(LP) && /confirmedCount: cf\.confirmed, targetCount: cf\.target, unconfirmed: cf\.unconfirmed,/.test(LP)
+  && !/확인 \$\{[^}]*plannedCount/.test(LP));
+ok('#G39p 팔레트 검증기에 ① 알파 톤 검사가 있다', /LEDGER_PLANNED_ALPHA/.test(read('scripts/validate_palette.mjs')));
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} verify:ledger — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

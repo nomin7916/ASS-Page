@@ -20,11 +20,15 @@ import {
 } from '../ledger';
 import {
   loanSchedule, loanNext12Total, planOf, actualOf, varianceOf, commitActual, isItemActive, expectsActual,
-  monthTotals, ledgerKpi, momDelta, yoyDelta, ledgerFingerprint,
+  monthTotals, ledgerKpi, ledgerFingerprint,
 } from '../ledger';
 import {
   expectedOf, expectedTotal, expectedIncomeTotal, expectedByPay, monthState, projectedByPay,
-  moveItemInGroup, canMoveItemInGroup, ledgerCategories, ledgerRamp, ledgerPayColor,
+  moveItemInBucket, canMoveItemInBucket, ledgerCategories, ledgerRamp, ledgerPayColor,
+} from '../ledger';
+// 반영값(§13) — 분석·전월/전년 대비·연간·확인 현황·'이 달 계획대로 확인'
+import {
+  reflectedMonth, reflectedMomDelta, reflectedYoyDelta, confirmedOf, applyPlanAsActual, ledgerPlannedFill,
 } from '../ledger';
 import {
   makeLedgerSnapshot, pushLedgerSnapshot, ledgerSnapshotSummary, normalizeLedgerBooks,
@@ -107,6 +111,22 @@ const TOOLTIP_STYLE = {
   itemStyle: { color: '#e5e7eb' },
   labelStyle: { color: '#cbd5e1', fontWeight: 600 },
 };
+
+/**
+ * 트리 매트릭스의 버킷 키 — 항목은 `그룹|결제수단` 아래에 묶인다(§13.2.2). ▲▼ 순서 이동도
+ * **이 버킷 안에서만** 교환한다 — 그룹만 보면 다른 수단 하위의 항목과 교환해 화면에서는 아무 일도
+ * 일어나지 않는다(`verify:ledger #72`가 막은 실패 모드가 한 단계 아래에서 재현된다).
+ */
+const bucketKeyOf = (it) => `${it.group}|${it.pay}`;
+const bucketKey = (g, p) => `${g}|${p}`;
+/** 롤업(그룹·결제수단·총계) 셀 숫자 — 콤마, ₩ 없음. 총합계를 검산하는 화면이라 '177만' 축약은 쓰지 않는다. */
+const fmtNum = (v, hide) => {
+  if (hide) return '***';
+  const n = roundWon(v);
+  return n === null ? '-' : n.toLocaleString();
+};
+/** 분석 ① '계획 반영분' 막대 색 — expense hue의 알파 톤(새 hue 금지, `validate_palette.mjs` §7). */
+const PLANNED_BAR_FILL = ledgerPlannedFill(LEDGER_BALANCE_COLOR.expense);
 
 /* ── 표시 유틸 ─────────────────────────────────────────────────────────────── */
 
@@ -340,13 +360,22 @@ export default function LedgerPage({
     setYear(Number(todayYm.slice(0, 4)));
     setMonth(Number(todayYm.slice(5, 7)));
   }, [todayYm]);
-  const [tab, setTab] = useState('matrix');
+  /** 기본 탭 = **분석**(상수 — 거래 유무와 무관, §13.6-5). 옛 `tabSeededRef`(거래가 있으면 거래 탭)는 폐기. */
+  const [tab, setTab] = useState('chart');
   /** 거래 탭으로 넘어갈 때의 초기 필터(항목·미분류) — 한 번 쓰고 소비한다. */
   const [txFilter, setTxFilter] = useState(null);
   /** 수동 값 ↔ 거래 충돌 안내(§5.3.2) — 인라인으로만 묻는다(모달·토스트 금지). */
   /** 수동값 ↔ 거래 충돌 **큐**. head가 지금 묻는 건이다(단수 슬롯으로 되돌리지 말 것). */
   const [txConflicts, setTxConflicts] = useState([]);
-  const [collapsed, setCollapsed] = useState({});
+  /**
+   * 트리 매트릭스 펼침 상태 — **기본 전부 닫힘**(세션 로컬, 저장 지점 0곳 — 옛 `collapsed` 규약 계승).
+   * `openGroups` = 그 그룹의 모든 수단이 열림 / `openPays` = `그룹|수단` 버킷 단위.
+   * 항목 행 표시 조건은 `openGroups.has(g) || openPays.has(bucketKey(g, p))`.
+   */
+  const [openGroups, setOpenGroups] = useState(() => new Set());
+  const [openPays, setOpenPays] = useState(() => new Set());
+  /** '이 달 계획대로 확인' 인라인 2단계 — 월 헤더를 누른 달(빈 문자열 = 닫힘). */
+  const [confirmYm, setConfirmYm] = useState('');
   const [hiddenMonths, setHiddenMonths] = useState([]);
   const [armedDelete, setArmedDelete] = useState('');
   const [flash, setFlash] = useState('');
@@ -467,8 +496,17 @@ export default function LedgerPage({
   const expOpts = useMemo(() => ({ ix, todayYm }), [ix, todayYm]);
   const kpi = useMemo(() => ledgerKpi(book, ym), [book, ym]);
   const totals = useMemo(() => monthTotals(book, ym, todayYm), [book, ym, todayYm]);
-  const mom = useMemo(() => momDelta(book, ym), [book, ym]);
-  const yoy = useMemo(() => yoyDelta(book, ym), [book, ym]);
+  /**
+   * 반영값(§13) — 분석 요약 줄·배너·전월/전년 대비가 공유한다.
+   * ⚠️ `reflected*` 비교 memo의 deps에 **`todayYm` 필수** — 별도 창은 `today`가 첫 `ledger:live`로
+   *    늦게 오고, 그때 미래 게이트가 꺼진 결과가 deps 누락으로 세션 내내 고착된다(§13.6-10).
+   */
+  const reflected = useMemo(() => reflectedMonth(book, ym), [book, ym]);
+  const confirmed = useMemo(() => confirmedOf(book, ym, todayYm, totals), [book, ym, todayYm, totals]);
+  const mom = useMemo(() => reflectedMomDelta(book, ym, todayYm), [book, ym, todayYm]);
+  const yoy = useMemo(() => reflectedYoyDelta(book, ym, todayYm), [book, ym, todayYm]);
+  /** `ym > todayYm` = 예상(미래 달). `todayYm`이 비어 있으면(창 첫 렌더) 게이트를 끈다 — 곧 채워진다. */
+  const isFutureYm = (k) => !!todayYm && k > todayYm;
 
   /**
    * 그 해 12개월의 계획/실제 — 차트 4종이 공유한다.
@@ -478,7 +516,12 @@ export default function LedgerPage({
   const yearSeries = useMemo(() => MONTHS.map((m) => {
     const k = makeYm(year, m);
     const t = monthTotals(book, k, todayYm);
-    const c = momDelta(book, k);
+    // 전월 대비 = 반영값 기준(§13). ⚠️ `todayYm`을 넘겨야 미래 달이 `-`가 된다(이 memo의 deps에도 있다).
+    const c = reflectedMomDelta(book, k, todayYm);
+    // 확인 현황 — 같은 행의 `t`를 넘겨 monthTotals를 다시 부르지 않는다(월 헤더·확인 버튼이 이 값을 쓴다).
+    const cf = confirmedOf(book, k, todayYm, t);
+    const future = isFutureYm(k);
+    const unc = uncTotalOf(k);
     const e = expectedTotal(book?.items, k, ix);
     const ie = expectedIncomeTotal(book?.items, k, ix);
     const bp = expectedByPay(book?.items, k, ix);
@@ -508,9 +551,24 @@ export default function LedgerPage({
       balance: (noInc || noExp) ? null : (ie.value - e.value),
       balUnresolved: e.unresolved + ie.unresolved,
       missing: t.missingExpense,
-      // ⚠️ comparable=false면 숫자를 내지 않는다(진행 중인 달은 항상 미입력이 많다).
+      // ⚠️ comparable=false면 숫자를 내지 않는다(미래 달 · 산출 불가 집합이 다른 달 · 항목 없는 달).
       momDelta: c.comparable ? c.delta : null,
+      momRate: c.comparable ? c.rate : null,
+      momReason: c.reason,
+      momPlanned: c.curUnconfirmed,
+      momExcluded: c.unresolvedExcluded,
       hasActual: t.missingExpense < t.activeExpense,
+      /**
+       * 분석 ① 스택 2단 — `confirmed`(실제 입력분 + 미분류, 진하게) / `planned`(계획 반영분, 연하게).
+       * ⚠️ 미래 달은 **둘 다 null**(막대 없음 — 결정 D7). recharts는 stacked Bar에서 null을 0으로
+       *    그리므로 막대가 안 보이는 것이 의도이고, 툴팁은 `filterNull`이 그 항목을 뺀다.
+       */
+      confirmed: future ? null : e.fromActual + (unc ? unc.value : 0),
+      planned: future ? null : e.fromPlan,
+      future,
+      /** 확인 현황(월 헤더 `확인 N/M · 진행 K`) — `confirmedOf` 한 함수에서만 온다(`plannedCount` 아님). */
+      confirmedCount: cf.confirmed, targetCount: cf.target, unconfirmed: cf.unconfirmed,
+      inProgress: cf.inProgress, missingIds: cf.missingIds,
       /**
        * ⚠️ **네 상태**다 — `missing < active` 2분법으로 되돌리지 말 것.
        *    연중에 가계부를 시작하면 시작 전 달은 활성 항목이 0건이라 2분법이 그 달을
@@ -707,25 +765,24 @@ export default function LedgerPage({
     return [...s].sort((a, b) => a - b);
   }, [book, year]);
 
-  /** 연간 비교 — 사용자가 명시적으로 요구한 '전년대비'. */
+  /**
+   * 연간 비교 — 사용자가 명시적으로 요구한 '전년대비'. **반영값**(§13) 기준.
+   * ⚠️ 올해(와 그 이후)는 `todayYm`까지만 더한다 — 계획·반영 둘 다 같은 구간이라야 비교가 되고,
+   *    라벨(`2026 (9월까지)`)이 그 사실을 밝힌다.
+   */
   const annualCompare = useMemo(() => yearsAvailable.map((y) => {
-    let plan = 0, actual = 0, any = false;
+    let plan = 0, reflectedSum = 0, any = false, months = 0;
     for (const m of MONTHS) {
-      const t = monthTotals(book, makeYm(y, m), todayYm);
-      plan += t.planExpense; actual += t.actualExpense;
-      if (t.missingExpense < t.activeExpense) any = true;
+      const k = makeYm(y, m);
+      if (todayYm && k > todayYm) break;
+      const r = reflectedMonth(book, k);
+      plan += r.planSum; reflectedSum += r.value; months++;
+      if (r.activeCount > 0 || r.uncategorizedCount > 0) any = true;
     }
-    return { year: y, label: `${y}`, plan, actual, any };
+    return { year: y, label: months < MONTHS.length ? `${y} (${months}월까지)` : `${y}`, plan, reflected: reflectedSum, any, months };
   }), [book, yearsAvailable, todayYm]);
 
   const visibleMonths = useMemo(() => MONTHS.filter((m) => !hiddenMonths.includes(m)), [hiddenMonths]);
-  /** 그 해에 미분류 거래가 하나라도 있는가 — 가상 행·소계 렌더 게이트. */
-  const hasUncYear = useMemo(
-    () => MONTHS.some((m) => {
-      const u = ix.uncategorizedYm.get(makeYm(year, m));
-      return !!(u && u.count > 0);
-    }),
-    [ix, year]);
 
   const grouped = useMemo(() => {
     const out = {};
@@ -771,8 +828,41 @@ export default function LedgerPage({
     else if (bookIdx >= cur.length) setBookIdx(0);
   }, [local.length, bookIdx, readOnly, books, setLocal]);
 
+  /* ── 트리 펼침 ─────────────────────────────────────────────────────────── */
+  /** `그룹|수단` 버킷을 연다 — 항목 추가·결제수단 이동이 부른다(만든/옮긴 행이 화면에서 사라지지 않게). */
+  const openBucket = useCallback((g, p) => {
+    setOpenPays((s) => {
+      if (s.has(bucketKey(g, p))) return s;
+      const n = new Set(s); n.add(bucketKey(g, p)); return n;
+    });
+  }, []);
+  /** 그룹 ▸ = 그 그룹의 **모든** 수단을 열고/닫는다(아이콘은 '전부 열림'일 때만 ▾). */
+  const toggleGroup = (g, pays) => {
+    const all = openGroups.has(g);
+    setOpenGroups((s) => { const n = new Set(s); if (all) n.delete(g); else n.add(g); return n; });
+    setOpenPays((s) => {
+      const n = new Set(s);
+      for (const p of pays) { if (all) n.delete(bucketKey(g, p)); else n.add(bucketKey(g, p)); }
+      return n;
+    });
+  };
+  /** 수단 ▸ = 그 수단만. 전부 열리면 그룹도 '전부 열림'으로 맞춘다. */
+  const togglePay = (g, p, pays) => {
+    const k = bucketKey(g, p);
+    const next = new Set(openPays);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    setOpenPays(next);
+    const allOpen = pays.every((q) => next.has(bucketKey(g, q)));
+    setOpenGroups((s) => {
+      if (s.has(g) === allOpen) return s;
+      const n = new Set(s); if (allOpen) n.add(g); else n.delete(g); return n;
+    });
+  };
+  const bucketOpen = (g, p) => openGroups.has(g) || openPays.has(bucketKey(g, p));
+
   /* ── 항목 추가 ─────────────────────────────────────────────────────────── */
-  const addItem = (group) => {
+  /** @param pay 결제수단 행의 `+ 추가`는 **그 수단**을 박는다(§13.2.2). 그룹 행은 종전 기본값. */
+  const addItem = (group, pay = null) => {
     if (!book || readOnly) return;
     if ((book.items || []).length >= MAX_LEDGER_ITEMS) { doFlash(`항목은 최대 ${MAX_LEDGER_ITEMS}개입니다`); return; }
     /**
@@ -790,8 +880,28 @@ export default function LedgerPage({
     if (group === 'loan') base.pay = 'transfer';
     if (group === 'annual') { base.pay = 'cash'; base.dueMonth = month; base.dueDay = 1; }
     if (group === 'income') base.pay = 'transfer';
-    patchBook(book.id, (b) => ({ ...b, items: [...(b.items || []), makeLedgerItem(base)] }));
-    setCollapsed((c) => ({ ...c, [group]: false }));
+    if (pay && LEDGER_PAY_ORDER.includes(pay)) base.pay = pay;
+    // ⚠️ `makeLedgerItem`(generateId)은 업데이터 **밖**에서 — StrictMode 이중 호출에서 id가 갈린다.
+    const item = makeLedgerItem(base);
+    patchBook(book.id, (b) => ({ ...b, items: [...(b.items || []), item] }));
+    // ⚠️ 만든 행이 보이지 않으면 사용자는 추가가 실패했다고 읽는다 — 도착 버킷을 편다.
+    openBucket(group, item.pay);
+  };
+
+  /**
+   * '이 달 계획대로 확인'(§13.2.4) — **유일한 쓰기 경로**. `applyPlanAsActual`이 대상 항목의
+   * `actual[ym]`에 계획값을 반올림 없이 적는다. 바뀐 게 없으면 같은 참조라 dirty가 서지 않는다.
+   * 성공 시 `touchMonth` 1회(실제로 정리한 동작이다).
+   */
+  const applyPlanConfirm = (k) => {
+    if (!book || readOnly || !isValidYm(k)) return;
+    const res = applyPlanAsActual(book, k, todayYm);
+    setConfirmYm('');
+    if (res.written === 0 || res.book === book) { doFlash('계획으로 확인할 항목이 없습니다'); return; }
+    // 순수 함수라 업데이터 안에서 다시 계산해도 안전하다(같은 참조면 위 결과를 그대로 쓴다).
+    patchBook(book.id, (b) => (b === book ? res.book : applyPlanAsActual(b, k, todayYm).book));
+    touchMonth(book.id, k);
+    doFlash(`${Number(k.slice(5, 7))}월 ${res.written}건을 계획 금액으로 확인했습니다`);
   };
 
   const removeItem = (itemId) => {
@@ -801,17 +911,17 @@ export default function LedgerPage({
   };
 
   /**
-   * 그룹 안에서 항목 순서 이동.
+   * 같은 그룹·**같은 결제수단** 안에서 항목 순서 이동(버킷 = `bucketKeyOf`, §13.6-6).
    * ⚠️ 순서는 `items` 배열 자체를 재정렬해 표현한다 — `ledgerFingerprint`가 항목을 배열 순서
    *    그대로 투영하므로 **영속화 신규 지점이 0곳**이다(`order` 필드를 만들면 정규화·`same`
    *    비교·지문·`makeLedgerItem` 4곳 등록이 필요하고 하나만 빠져도 조용히 유실된다).
-   * ⚠️ 이동할 수 없으면 `moveItemInGroup`이 원본 참조를 돌려주고 `patchBook`이 no-op으로
+   * ⚠️ 이동할 수 없으면 `moveItemInBucket`이 원본 참조를 돌려주고 `patchBook`이 no-op으로
    *    끝난다 → dirty가 서지 않아 헛된 Drive 저장이 없다.
    */
   const moveItem = (itemId, dir) => {
     if (!book || readOnly) return;
     patchBook(book.id, (b) => {
-      const items = moveItemInGroup(b.items, itemId, dir);
+      const items = moveItemInBucket(b.items, itemId, dir, bucketKeyOf);
       return items === b.items ? b : { ...b, items };
     });
   };
@@ -1018,20 +1128,6 @@ export default function LedgerPage({
   const consumeTxFilter = useCallback(() => setTxFilter(null), []);
 
   /**
-   * 기본 탭 — 거래가 있으면 '거래', 없으면 '월 매트릭스'(사용자 결정 4의 기본값).
-   * ⚠️ **상위 `books`가 실제로 도착한 뒤** 한 번만 판정한다. 첫 렌더의 `book`은 시드된 빈 장부라
-   *    그때 판정하면 거래가 있는 사용자도 항상 매트릭스로 열린다(별도 창은 books가 늦게 온다).
-   */
-  const tabSeededRef = useRef(false);
-  useEffect(() => {
-    if (tabSeededRef.current) return;
-    if (!Array.isArray(books) || books.length === 0) return;
-    tabSeededRef.current = true;
-    const b = books[bookIdx] || books[0];
-    if (b && Array.isArray(b.transactions) && b.transactions.length > 0) setTab('tx');
-  }, [books, bookIdx]);
-
-  /**
    * 매트릭스 셀 → 거래 탭(그 항목·**그 달**).
    * ⚠️ `ym`을 받아 `year`/`month`를 함께 옮긴다 — `LedgerTxTab`의 `scope:'month'`는 자기
    *    상태가 아니라 이 화면의 `year`/`month` prop으로 `makeYm`을 만들기 때문이다. 안 옮기면
@@ -1113,6 +1209,8 @@ export default function LedgerPage({
         : it.tone === 'info' ? 'bg-sky-500/5' : '';
     const planNow = planOf(it, ym);
     let yearActual = 0, yearPlan = 0, yearMissing = 0, yearExpected = 0, yearPlanMonths = 0;
+    // 확인분 차이(D5) — 실제·계획이 둘 다 있는 달만. 소계 행의 `confirmedVar`와 **같은 셀 규칙**.
+    let confirmedVar = 0, confirmedCells = 0;
     for (const m of MONTHS) {
       const k = makeYm(year, m);
       // ⚠️ 실제 금액의 단일 소스 — 거래가 있으면 거래 합이 이긴다(`actualOf`로 되돌리지 말 것:
@@ -1123,6 +1221,7 @@ export default function LedgerPage({
       //    아니면 연단위 항목의 연간 차이 열이 11개월 미입력 때문에 영구히 '-'가 된다.
       if (a !== null) yearActual += a; else if (expectsActual(it, k, expOpts)) yearMissing++;
       if (p !== null) yearPlan += p;
+      if (a !== null && p !== null) { confirmedVar += a - p; confirmedCells++; }
       /**
        * ⚠️ **표시 전용 예상 합계**(실제 ?? 계획) — 소계 행이 쓰는 `expectedTotal`과 같은 규약을
        *    항목 행에도 적용한 것이다(그 둘이 갈리면 같은 열에서 소계 ≠ Σ항목이 된다).
@@ -1133,10 +1232,13 @@ export default function LedgerPage({
       const e = expectedOf(it, k, ix);
       if (e !== null) { yearExpected += e; if (a === null) yearPlanMonths++; }
     }
-    // ⚠️ 차이 열의 게이트는 **그대로 `yearMissing`** — 계획으로 채운 달을 '확인했다'고 보면
-    //    `yearExpected - yearPlan`이 언제나 0이 되어 "차이 없음"이라는 거짓 확정이 된다.
-    //    (`yearMissing === 0`이면 expected === actual이라 아래 값은 종전과 한 푼도 다르지 않다.)
-    const yearVar = yearMissing === 0 ? yearActual - yearPlan : null;
+    /**
+     * 차이 열 = **확인분 차이**(§13.6-4, 결정 D5): 실제·계획이 둘 다 있는 셀의 Σ(실제 − 계획).
+     * 확인 셀이 0개면 `-`(0으로 단언하지 않는다). ⚠️ `yearExpected - yearPlan`으로 되돌리지 말 것 —
+     * 반영 규약에서 미확인 셀의 차이는 정의상 0이라 언제나 "차이 없음"이 된다. `yearMissing`은
+     * 툴팁용으로만 남는다.
+     */
+    const yearVar = confirmedCells === 0 ? null : confirmedVar;
 
     return (
       <tr key={it.id} className={`${rowTone} hover:bg-gray-800/30`}>
@@ -1147,7 +1249,13 @@ export default function LedgerPage({
             <select
               className="bg-transparent text-[10px] text-gray-300 outline-none"
               value={it.pay}
-              onChange={(e) => patchItem(book.id, it.id, (x) => ({ ...x, pay: e.target.value }))}
+              /* 결제수단을 바꾸면 행이 다른 수단 하위로 **점프**한다 — 도착 버킷을 함께 펴서
+                 편집 중인 행이 화면에서 사라지지 않게 한다(§13.8-⑤). */
+              onChange={(e) => {
+                const nextPay = e.target.value;
+                patchItem(book.id, it.id, (x) => ({ ...x, pay: nextPay }));
+                openBucket(it.group, nextPay);
+              }}
             >
               {Object.entries(LEDGER_PAY_LABEL).map(([k, v]) => <option key={k} value={k} className="bg-[#0f1623]">{v}</option>)}
             </select>
@@ -1157,8 +1265,8 @@ export default function LedgerPage({
           <div className="flex items-center gap-1">
             <MoveBtns
               readOnly={readOnly}
-              canUp={canMoveItemInGroup(book.items, it.id, -1)}
-              canDown={canMoveItemInGroup(book.items, it.id, 1)}
+              canUp={canMoveItemInBucket(book.items, it.id, -1, bucketKeyOf)}
+              canDown={canMoveItemInBucket(book.items, it.id, 1, bucketKeyOf)}
               onUp={() => moveItem(it.id, -1)}
               onDown={() => moveItem(it.id, 1)}
             />
@@ -1363,20 +1471,18 @@ export default function LedgerPage({
         <td className={`${cellBase} text-right ${yearPlanMonths > 0 ? 'text-gray-400 italic' : 'text-gray-300'}`}
           style={{ minWidth: 100 }}
           title={yearPlanMonths > 0
-            ? `실제 입력 ${fmtWon(yearActual, hideAmounts)} + 계획으로 채운 ${yearPlanMonths}개월 = ${fmtWon(yearExpected, hideAmounts)}\n계획으로 채운 달은 전월·전년 대비와 달력에는 쓰이지 않습니다.`
+            ? `실제 입력 ${fmtWon(yearActual, hideAmounts)} + 계획 반영 ${yearPlanMonths}개월 = ${fmtWon(yearExpected, hideAmounts)}\n(반영값 — 소계·분석·전월/전년 대비·달력도 같은 값을 씁니다)`
             : '전부 실제 입력입니다'}
         >
           {fmtWon(yearExpected, hideAmounts)}
-          <div className="text-[9px] text-gray-600">
-            계획 {fmtWon(yearPlan, hideAmounts)}
-            {yearPlanMonths > 0 && (
-              <span className="ml-1" style={{ color: LEDGER_DIVERGING.flat }}>계획 {yearPlanMonths}개월</span>
-            )}
-          </div>
+          <div className="text-[9px] text-gray-600">계획 {fmtWon(yearPlan, hideAmounts)}</div>
         </td>
-        <td className={`${cellBase} text-right`} style={{ minWidth: 96 }}>
+        <td className={`${cellBase} text-right`} style={{ minWidth: 96 }}
+          title={yearVar === null
+            ? '실제와 계획이 둘 다 있는 달이 없어 차이를 낼 수 없습니다'
+            : `확인 ${confirmedCells}개 셀 기준 · 계획 없는 셀 제외${yearMissing > 0 ? ` · 미확인 ${yearMissing}개월은 포함되지 않습니다` : ''}`}>
           {yearVar === null ? (
-            <span className="text-gray-600" title={`미입력 ${yearMissing}개월 — 비교할 수 없습니다`}>-</span>
+            <span className="text-gray-600">-</span>
           ) : (
             <span style={{ color: varianceTone(yearVar) }}>
               {varianceMark(yearVar)} {hideAmounts ? '***' : Math.abs(Math.round(yearVar)).toLocaleString()}
@@ -1393,23 +1499,29 @@ export default function LedgerPage({
    *    (안 보이면 "기록했는데 어디에도 없는 돈"이 되어 빠른 입력을 신뢰할 수 없다).
    *    클릭하면 거래 탭에서 미분류만 걸러 정리할 수 있다.
    */
-  const renderUncategorizedRow = () => {
-    const months = MONTHS.map((m) => uncTotalOf(makeYm(year, m)));
-    if (!months.some((u) => u && u.count > 0)) return null;
+  /** @param pay 결제수단 하위에 그릴 때 그 수단(그 수단의 미분류 합만) — null이면 전체. */
+  const renderUncategorizedRow = (pay = null) => {
+    const months = MONTHS.map((m) => {
+      const k = makeYm(year, m);
+      if (!pay) return uncTotalOf(k);
+      const v = uncPayValue(k, pay);
+      return v === 0 ? null : { value: v, count: null };
+    });
+    if (!months.some((u) => u && (u.count === null || u.count > 0))) return null;
     const yearSum = months.reduce((a, u) => a + (u ? u.value : 0), 0);
-    const yearCount = months.reduce((a, u) => a + (u ? u.count : 0), 0);
+    const yearCount = pay ? null : months.reduce((a, u) => a + (u ? u.count : 0), 0);
     return (
-      <tr key="__uncategorized__" className="hover:bg-gray-800/30">
+      <tr key={`__uncategorized__${pay || ''}`} className="hover:bg-gray-800/30">
         <td className={`${cellBase} sticky left-0 z-[2] bg-[#0b1120]`} style={{ minWidth: 62 }}>
-          <span className="text-[10px] text-gray-500">-</span>
+          <span className="text-[10px] text-gray-500">{pay ? LEDGER_PAY_LABEL[pay] : '-'}</span>
         </td>
         <td className={`${cellBase} sticky z-[2] bg-[#0b1120]`} style={{ left: LEFT_NAME, minWidth: COL_NAME }}>
           <div className="flex items-center gap-1">
-            <span className="text-[11px] text-amber-300">미분류</span>
+            <span className="text-[11px] text-amber-300">미분류{pay ? `(${LEDGER_PAY_LABEL[pay]})` : ''}</span>
             <button className="text-[9px] px-1 rounded bg-gray-800 text-gray-400 hover:bg-gray-700"
               onClick={() => openUncategorized()} title="거래 탭에서 미분류만 걸러 항목을 지정합니다">정리 →</button>
           </div>
-          <div className="text-[9px] text-gray-600 mt-0.5">항목을 고르지 않은 거래 {yearCount}건</div>
+          {yearCount !== null && <div className="text-[9px] text-gray-600 mt-0.5">항목을 고르지 않은 거래 {yearCount}건</div>}
         </td>
         <td className={`${cellBase} sticky z-[2] bg-[#0b1120] text-right`} style={{ left: LEFT_PLAN, minWidth: 96 }}>
           <span className="text-[10px] text-gray-700" title="미분류에는 계획이 없습니다">-</span>
@@ -1421,9 +1533,10 @@ export default function LedgerPage({
               {!u ? <span className="text-[10px] text-gray-700">-</span> : (
                 <button type="button" className="w-full text-right hover:bg-gray-800/60 rounded px-1"
                   onClick={() => openUncategorized(makeYm(year, m))}
-                  title={`미분류 거래 ${u.count}건 — 클릭하면 거래 탭에서 정리합니다`}>
+                  title={u.count === null ? '이 결제수단의 미분류 거래 — 클릭하면 거래 탭에서 정리합니다'
+                    : `미분류 거래 ${u.count}건 — 클릭하면 거래 탭에서 정리합니다`}>
                   <span className="text-[11px] text-amber-200">{fmtWon(u.value, hideAmounts)}</span>
-                  <span className="ml-1 text-[9px] text-sky-300">≡{u.count}</span>
+                  {u.count !== null && <span className="ml-1 text-[9px] text-sky-300">≡{u.count}</span>}
                 </button>
               )}
             </td>
@@ -1438,19 +1551,24 @@ export default function LedgerPage({
   };
 
   /**
-   * 소계 행 하나(그룹 소계 또는 그 안의 결제수단 소계).
+   * 롤업 행 하나 — 트리의 L0(그룹) · L1(결제수단) · 총계가 **전부 이 함수**를 지난다(값의 단일 소스 —
+   * 그룹·수단 행을 따로 계산하지 말 것, §13.2.2).
    *
-   * ⚠️ **월 셀은 `expectedTotal(...).value`(실제 ?? 계획)다.** 사용자가 계획만 입력해도
-   *    소계가 나와야 한다는 요청이 이 행의 존재 이유다. 대신 계획으로 채운 건수를 반드시
-   *    함께 노출해 실적으로 오독되지 않게 한다.
-   * ⚠️ 이 값을 `monthTotals.actualExpense`/`compareMonths`/`yearSeries.actual`/
-   *    `annualCompare`/`ledgerEventsByDate`로 **되돌려 보내지 말 것** — 그 순간 전월 대비가
-   *    영구히 거짓말을 시작한다(ledger.ts G-2 절 참조).
+   * ⚠️ **월 셀은 `expectedTotal(...).value`(실제 ?? 계획) = 반영값**이다. 사용자가 계획만 입력해도
+   *    소계가 나와야 한다는 요청이 이 행의 존재 이유다. '몇 건이 계획인지'는 이제 셀 배지가 아니라
+   *    **월 헤더 `확인 N/M`**이 보여 준다(§13.6-3 — 롤업 셀에 `계획 N` 배지를 되살리지 말 것).
+   * ⚠️ 이 값을 `monthTotals.actualExpense`로 **되돌려 보내지 말 것** — 실제 전용 집계는 확인 현황의
+   *    단일 소스다(ledger.ts G-2 절 참조). 비교·차트·달력은 `reflectedMonth`가 자기 손으로 계산한다.
    * ⚠️ '계획' 열은 `planSum`(활성 항목 전체의 계획)이지 `fromPlan`(실적 없는 항목의 계획)이
    *    아니다. 후자를 쓰면 **사용자가 실적을 채울수록 계획 열이 0으로 수렴**해, 예상값을
    *    검산할 유일한 기준선이 조용히 사라진다(실측 547,000 → 17,000).
+   * ⚠️ 차이 열 = **확인분 차이**(`confirmedVar`, D5). 롤업의 `unresolved > 0 → 산출불가 N` 게이트는
+   *    그대로다(§13.11 R-3 — `loanSchedule` null 계약이 소계 경로에서 깨지지 않게).
+   *
+   * @param toggle `{ open, onToggle }` — ▸/▾ 펼침 버튼(트리 행). null이면 총계처럼 버튼 없음.
+   * @param onAdd `+ 추가` 버튼(수단 행은 그 수단을 기본값으로 항목 생성).
    */
-  const renderSubtotalRow = ({ key, label, color, items, indent = false, income = false, extra = null }) => {
+  const renderSubtotalRow = ({ key, label, color, items, indent = false, income = false, extra = null, toggle = null, onAdd = null, count = null, note = '' }) => {
     /**
      * ⚠️ **수입 그룹은 `expectedIncomeTotal`을 써야 한다.** `expectedTotal`은 지출 축 전용이라
      *    `group === 'income'`을 **함수 안에서** 건너뛴다(#48c 회귀 방지) — 수입 소계에 그걸
@@ -1470,33 +1588,47 @@ export default function LedgerPage({
     });
     // 연 합계 — 열 숨김과 무관하게 12개월 전부(표의 '{year} 합계' 열 규약 유지)
     let yearExpected = 0, yearPlan = 0, yearActual = 0, yearUnresolved = 0, yearPlanned = 0;
+    // 확인분 차이(D5) — 항목 행과 **같은 필드**를 더하므로 소계 = Σ항목이 구조로 성립한다.
+    let yearConfirmedVar = 0, yearConfirmedCells = 0;
     for (const m of MONTHS) {
       const k = makeYm(year, m);
       const e = totalOf(items, k, ix);
       yearExpected += e.value; yearPlan += e.planSum; yearActual += e.fromActual;
       yearUnresolved += e.unresolved;
       yearPlanned += e.plannedCount;
+      yearConfirmedVar += e.confirmedVar; yearConfirmedCells += e.confirmedCells;
       const ex = exOf(k);
       if (ex) { yearExpected += ex.value; yearActual += ex.value; }
     }
     const cur = totalOf(items, ym, ix);
+    // ⚠️ 롤업 차이 = 확인 셀이 1개 이상이면 그 셀들의 Σ(실제 − 계획), 0개면 `-`. 산출 불가 게이트가 먼저다.
+    const yearVar = yearConfirmedCells === 0 ? null : yearConfirmedVar;
+    const rowBg = indent ? 'bg-[#131a27]' : 'bg-[#151b28]';
     return (
       <tr key={key} className={indent ? 'bg-gray-800/25' : 'bg-gray-800/50 font-semibold'}>
-        <td className={`${cellBase} sticky left-0 z-[2] ${indent ? 'bg-[#131a27]' : 'bg-[#151b28]'}`} colSpan={2}>
-          <span className={`text-[11px] ${indent ? 'pl-3' : ''}`} style={{ color }}>
-            {indent ? '└ ' : ''}{label}
-          </span>
-          {cur.plannedCount > 0 && (
-            // ⚠️ 배지 조건은 **선택한 달 하나**다. '보이는 달 중 하나라도'로 재면 미래 달이
-            //    구조적으로 항상 계획-only라 배지가 1~11월 내내 켜져 신호가 0이 된다.
-            <span className="ml-1.5 text-[9px] px-1 rounded bg-gray-700/70 text-gray-300"
-              title={`${month}월 소계에 계획으로 채운 항목이 ${cur.plannedCount}건 있습니다 (실적 ${cur.actualCount}건)`}>
-              계획 {cur.plannedCount}
-            </span>
-          )}
+        <td className={`${cellBase} sticky left-0 z-[2] ${rowBg}`} colSpan={2}>
+          <div className={`flex items-center gap-1.5 ${indent ? 'pl-3' : ''}`}>
+            {toggle ? (
+              <button type="button" className="text-[11px] hover:text-amber-300 text-left" style={{ color }}
+                title={toggle.open ? '접기' : (indent ? '이 결제수단의 항목 펼치기' : '이 그룹의 모든 결제수단 펼치기')}
+                onClick={toggle.onToggle}>
+                {toggle.open ? '▾' : '▸'} {indent ? '└ ' : ''}{label}
+              </button>
+            ) : (
+              <span className="text-[11px]" style={{ color }}>{indent ? '└ ' : ''}{label}</span>
+            )}
+            {count !== null && <span className="text-[10px] text-gray-600">{count}건</span>}
+            {note && <span className="text-[9px] text-gray-500 truncate" title={note}>{note}</span>}
+            {onAdd && !readOnly && (
+              <button type="button" className="text-[10px] px-1.5 rounded bg-gray-800 text-gray-400 hover:bg-gray-700 shrink-0"
+                onClick={onAdd}>+ 추가</button>
+            )}
+          </div>
         </td>
-        <td className={`${cellBase} sticky z-[2] ${indent ? 'bg-[#131a27]' : 'bg-[#151b28]'} text-right text-[11px]`} style={{ left: LEFT_PLAN }}>
-          {fmtWon(cur.planSum, hideAmounts)}
+        <td className={`${cellBase} sticky z-[2] ${rowBg} text-right text-[11px]`} style={{ left: LEFT_PLAN }}
+          title={`${month}월 계획 합계 — 활성 항목 ${cur.planCount}건`}>
+          {/* ⚠️ 항목 0건이면 `₩0`이 아니라 `-`(0을 단언하지 않는다). */}
+          {cur.planCount === 0 && cur.planSum === 0 ? <span className="text-gray-700">-</span> : fmtNum(cur.planSum, hideAmounts)}
         </td>
         {monthly.map(({ m, e, ex, state }) => {
           /**
@@ -1507,19 +1639,20 @@ export default function LedgerPage({
            */
           const resolved = e.actualCount + e.plannedCount + (ex ? ex.count : 0);
           const cellValue = e.value + (ex ? ex.value : 0);
+          const k = makeYm(year, m);
+          // 미래 달 = 예상 → 흐린 이탤릭(D7). 과거·현재 달의 계획 반영분은 월 헤더가 알린다.
+          const future = isFutureYm(k);
           return (
-            <td key={m} className={`${cellBase} text-right text-[11px]`}
+            <td key={m} className={`${cellBase} text-right text-[11px] ${future ? 'text-gray-500 italic' : ''}`}
               title={(state === 'none' && !ex) ? '이 달에는 항목이 없습니다'
-                : `실제 ${fmtWon(e.fromActual, hideAmounts)} (${e.actualCount}건) + 계획 ${fmtWon(e.fromPlan, hideAmounts)} (${e.plannedCount}건)`
+                : (future ? '예상(오늘 이후 달 — 계획 기준) · ' : '')
+                  + `실제 ${fmtWon(e.fromActual, hideAmounts)} (${e.actualCount}건) + 계획 반영 ${fmtWon(e.fromPlan, hideAmounts)} (${e.plannedCount}건)`
                   + (ex ? ` + 미분류 ${fmtWon(ex.value, hideAmounts)}` : '')
-                  + (e.unresolved > 0 ? ` · 산출 불가 ${e.unresolved}건(합계에서 빠짐)` : '')}>
+                  + (e.unresolved > 0 ? ` · 산출 불가 ${e.unresolved}건(합계에서 빠짐 — 하한)` : '')}>
               {(state === 'none' && !ex) ? <span className="text-gray-700" >-</span>
                 : resolved === 0 ? <span className="text-gray-600">-</span> : (
                   <>
-                    {fmtWonShort(cellValue, hideAmounts)}
-                    {e.plannedCount > 0 && (
-                      <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.flat }}>계획 {e.plannedCount}</div>
-                    )}
+                    {fmtNum(cellValue, hideAmounts)}
                     {/* ⚠️ 산출 불가가 섞이면 이 값은 총액이 아니라 **하한**이다 — 반드시 알린다. */}
                     {e.unresolved > 0 && (
                       <div className="text-[9px] leading-tight" style={{ color: LEDGER_DIVERGING.over }}>?{e.unresolved}</div>
@@ -1530,76 +1663,113 @@ export default function LedgerPage({
           );
         })}
         <td className={`${cellBase} text-right text-[11px]`}
-          title={`실제 ${fmtWon(yearActual, hideAmounts)} + 계획 ${fmtWon(yearExpected - yearActual, hideAmounts)}`
+          title={`실제 ${fmtWon(yearActual, hideAmounts)} + 계획 반영 ${fmtWon(yearExpected - yearActual, hideAmounts)} (${yearPlanned}건)`
             + (yearUnresolved > 0 ? ` · 산출 불가 ${yearUnresolved}건이 빠진 하한입니다` : '')}>
-          {fmtWon(yearExpected, hideAmounts)}
-          <div className="text-[9px] text-gray-600">계획 {fmtWon(yearPlan, hideAmounts)}</div>
+          {fmtNum(yearExpected, hideAmounts)}
+          <div className="text-[9px] text-gray-600">계획 {fmtNum(yearPlan, hideAmounts)}</div>
         </td>
-        <td className={`${cellBase} text-right text-[10px] text-gray-500`}>
-          {/* ⚠️ unresolved도 확정 불가 사유다 — yearPlanned만 보면 산출 실패가 '차이 ₩0'으로 단언된다. */}
-          {yearPlanned > 0 || yearUnresolved > 0
-            ? (
-              <span title={`계획으로 채운 ${yearPlanned}건${yearUnresolved > 0 ? ` · 산출 불가 ${yearUnresolved}건` : ''}이 있어 계획 대비 차이를 확정할 수 없습니다`}>
-                {yearUnresolved > 0 ? `산출불가 ${yearUnresolved}` : `계획 ${yearPlanned}`}
-              </span>
-            )
-            : fmtWon(yearActual - yearPlan, hideAmounts)}
+        <td className={`${cellBase} text-right text-[10px]`}>
+          {/* ⚠️ unresolved는 여전히 확정 불가 사유다 — 산출 실패가 '차이 ₩0'으로 단언되면 안 된다(R-3). */}
+          {yearUnresolved > 0 ? (
+            <span className="text-gray-500" title={`산출 불가 ${yearUnresolved}건이 있어 계획 대비 차이를 확정할 수 없습니다`}>
+              {`산출불가 ${yearUnresolved}`}
+            </span>
+          ) : yearVar === null ? (
+            <span className="text-gray-600" title="실제와 계획이 둘 다 있는 셀이 없어 차이를 낼 수 없습니다">-</span>
+          ) : (
+            <span style={{ color: varianceTone(yearVar) }}
+              title={`확인 ${yearConfirmedCells}개 셀 기준 · 계획 없는 셀 제외${yearPlanned > 0 ? ` · 계획 반영 ${yearPlanned}건은 포함되지 않습니다` : ''}`}>
+              {varianceMark(yearVar)} {hideAmounts ? '***' : Math.abs(Math.round(yearVar)).toLocaleString()}
+            </span>
+          )}
         </td>
       </tr>
     );
   };
 
   /**
-   * 그룹 소계 블록 — 결제수단 소계 행 + 그룹 소계 행.
+   * 그룹 트리 블록(§13.2.2) — L0 그룹 행(항상) → L1 결제수단 행(수단이 2종 이상일 때 항상, D3) →
+   * L2 항목 행(펼쳤을 때만). **소계가 위**에 오는 배치는 화면 전용이다(엑셀 ①은 종전대로 소계가 아래).
    *
-   * ⚠️ 결제수단 행은 **그 그룹에 2종 이상 있을 때만**. 하나뿐이면 노이즈라 라벨에만 표기한다
-   *    (대출은 전부 '이체'라 자동으로 사라진다). 그룹별 화이트리스트를 만들지 말 것.
-   * ⚠️ **불변식: Σ(결제수단 행) === 그룹 소계 행.** 손상 데이터의 미지 결제수단은
+   * ⚠️ 값의 단일 소스는 전부 `renderSubtotalRow`다 — 그룹·수단 행을 따로 계산하지 말 것.
+   * ⚠️ 결제수단 행은 **그 그룹에 2종 이상 있을 때만**. 하나뿐이면 노이즈라 라벨에만 표기하고
+   *    그룹 ▸가 곧 항목 토글이다(대출은 전부 '이체'라 자동으로 그렇게 된다). 그룹별 화이트리스트를
+   *    만들지 말 것.
+   * ⚠️ **불변식: Σ(결제수단 행) === 그룹 행.** 손상 데이터의 미지 결제수단은
    *    `normalizeLedgerBooks`가 'card'로 강제하므로 이 등식이 구조적으로 성립한다.
    *    수단을 하드코딩(현금/카드만)하면 `pay:'auto'`인 항목이 **어느 행에도 없이 사라진다**.
+   * ⚠️ 항목 0건인 그룹도 행을 그린다(값 셀은 `-`) — `+ 추가` 진입점이 거기뿐이다.
    */
-  const renderGroupSubtotal = (g, items) => {
+  const renderGroupTree = (g, items) => {
     const rows = [];
+    const label = LEDGER_GROUP_LABEL[g];
+    const note = g === 'annual' ? '연 1회 목돈 — 월 지출 합계에 포함되지 않습니다'
+      : g === 'income' ? '수입 — 지출 합계와 분리됩니다' : '';
     if (g !== 'income') {
       /**
-       * ⚠️ 미분류 거래는 **변동비 그룹**으로 계상한다(화면의 미분류 가상 행이 그 그룹 끝에 있고,
-       *    `monthTotals`도 같은 규약이다). 결제수단 소계에도 그 몫을 넣어야
-       *    **Σ(결제수단 행) === 그룹 소계**가 유지된다.
+       * ⚠️ 미분류 거래는 **변동비 그룹**으로 계상한다(화면의 미분류 가상 행이 그 그룹 안에 있고,
+       *    `monthTotals`도 같은 규약이다). 결제수단 행에도 그 몫을 넣어야
+       *    **Σ(결제수단 행) === 그룹 행**이 유지된다.
        */
       const isVar = g === 'variable';
       const present = LEDGER_PAY_ORDER.filter((p) =>
         items.some((it) => it && it.pay === p)
         || (isVar && MONTHS.some((m) => (uncPayValue(makeYm(year, m), p) !== 0))));
+      const groupOpen = openGroups.has(g);
+      rows.push(renderSubtotalRow({
+        key: `sub-${g}`,
+        label: present.length === 1
+          ? `${label} 합계 · 전액 ${LEDGER_PAY_LABEL[present[0]]}`
+          : `${label} 합계`,
+        color: LEDGER_GROUP_COLOR[g],
+        items,
+        extra: isVar ? uncTotalOf : null,
+        toggle: { open: groupOpen, onToggle: () => toggleGroup(g, present) },
+        onAdd: () => addItem(g),
+        count: items.length,
+        note,
+      }));
       if (present.length > 1) {
         for (const p of present) {
+          const payItems = items.filter((it) => it && it.pay === p);
+          const open = bucketOpen(g, p);
           rows.push(renderSubtotalRow({
             key: `sub-${g}-${p}`,
             label: `${LEDGER_PAY_LABEL[p]} 소계`,
             color: ledgerPayColor(p),
-            items: items.filter((it) => it && it.pay === p),
+            items: payItems,
             indent: true,
             extra: isVar ? ((k) => {
               const v = uncPayValue(k, p);
               return v === 0 ? null : { value: v, count: 1 };
             }) : null,
+            toggle: { open, onToggle: () => togglePay(g, p, present) },
+            onAdd: () => addItem(g, p),
+            count: payItems.length,
           }));
+          if (open) {
+            rows.push(...payItems.map(renderItemRow));
+            // 미분류 가상 행 — 그 수단의 몫만(합계는 그룹 행이 `uncTotalOf`로 이미 들고 있다).
+            if (isVar) rows.push(renderUncategorizedRow(p));
+          }
         }
+      } else if (groupOpen) {
+        rows.push(...items.map(renderItemRow));
+        if (isVar) rows.push(renderUncategorizedRow(null));
       }
-      rows.push(renderSubtotalRow({
-        key: `sub-${g}`,
-        label: present.length === 1
-          ? `${LEDGER_GROUP_LABEL[g]} 합계 · 전액 ${LEDGER_PAY_LABEL[present[0]]}`
-          : `${LEDGER_GROUP_LABEL[g]} 합계`,
-        color: LEDGER_GROUP_COLOR[g],
-        items,
-        extra: isVar ? uncTotalOf : null,
-      }));
     } else {
+      const groupOpen = openGroups.has(g);
+      const pays = LEDGER_PAY_ORDER.filter((p) => items.some((it) => it && it.pay === p));
       rows.push(renderSubtotalRow({
-        key: `sub-${g}`, label: `${LEDGER_GROUP_LABEL[g]} 합계`,
+        key: `sub-${g}`, label: `${label} 합계`,
         color: LEDGER_GROUP_COLOR[g], items,
         income: true,   // ⚠️ 없으면 지출 전용 집계를 타서 수입 소계가 통째로 죽는다
+        toggle: { open: groupOpen, onToggle: () => toggleGroup(g, pays) },
+        onAdd: () => addItem(g),
+        count: items.length,
+        note,
       }));
+      if (groupOpen) rows.push(...items.map(renderItemRow));
     }
     return rows;
   };
@@ -1745,14 +1915,15 @@ export default function LedgerPage({
             sub="연 대출 상환액 / 연 수입(계획)" />
         </div>
 
-        {(totals.missingExpense > 0 || kpi.loanUnresolved > 0) && (
+        {(confirmed.unconfirmed > 0 || confirmed.inProgress > 0 || kpi.loanUnresolved > 0) && (
           <div className="px-3 pb-2 flex gap-2 flex-wrap text-[10px]">
-            {totals.missingExpense > 0 && (
+            {(confirmed.unconfirmed > 0 || confirmed.inProgress > 0) && (
               <span className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
-                {/* ⚠️ '합계에서 제외'라고 쓰지 말 것 — 소계·KPI·도넛은 예전부터 `expectedTotal`
-                    (실제 ?? 계획)을 쓰고, 이제 월 칸과 연간 합계도 같다. 실제로 제외되는 건
-                    전월·전년 대비와 달력 칩뿐이다. 옛 문구는 도움말과 정면으로 모순됐다. */}
-                {month}월 실제 미입력 {totals.missingExpense}건 — 계획으로 채워 합계에 넣습니다(전월·전년 대비와 달력은 제외)
+                {/* ⚠️ 반영 규약(§13): 미확인은 계획으로 **반영**된다 — 합계·분석·전월/전년 대비·달력 전부.
+                    옛 괄호 문장("전월·전년 대비와 달력은 제외")은 이제 거짓이라 삭제했다(#G37g). */}
+                {month}월 확인 {confirmed.confirmed}/{confirmed.target}
+                {confirmed.unconfirmed > 0 && <> — 미확인 {confirmed.unconfirmed}건은 계획으로 반영됩니다(실제가 다르면 수입 및 지출 탭에서 고치세요)</>}
+                {confirmed.inProgress > 0 && <> · 진행 중 {confirmed.inProgress}건(거래 입력 항목 — 거래가 없어 계획으로 반영)</>}
               </span>
             )}
             {kpi.loanUnresolved > 0 && (
@@ -1765,7 +1936,8 @@ export default function LedgerPage({
 
         {/* ── 탭 ── */}
         <div className="flex gap-1 px-3 pb-2">
-          {[['tx', '거래'], ['matrix', '월 매트릭스'], ['loan', '대출'], ['chart', '분석'], ['annual', '연간']].map(([k, label]) => (
+          {/* 순서·라벨(§13.2.1): 분석이 첫 화면. 키 'matrix'·엑셀 시트명('월 매트릭스')은 유지한다. */}
+          {[['chart', '분석'], ['matrix', '수입 및 지출'], ['tx', '거래'], ['loan', '대출'], ['annual', '연간']].map(([k, label]) => (
             <button key={k}
               className={`text-[11px] px-2.5 py-1 rounded ${tab === k ? 'bg-amber-900/50 text-amber-200 border border-amber-800/60' : 'bg-gray-800/60 text-gray-400 hover:bg-gray-800'}`}
               onClick={() => setTab(k)}
@@ -1806,6 +1978,46 @@ export default function LedgerPage({
                 ))}
               </div>
             )}
+            {/* '이 달 계획대로 확인' — 인라인 2단계(§13.2.4). z-1090 + 별도 창에는 App이 없어 ConfirmDialog가 안 뜬다.
+                ⚠️ `applyPlanAsActual`은 순수라 미리보기로 불러도 아무것도 쓰지 않는다 — 프롬프트는 **실제로 쓰는 건수**를 말한다. */}
+            {confirmYm && !readOnly && (() => {
+              const pv = applyPlanAsActual(book, confirmYm, todayYm);
+              const row = yearSeries.find((r) => r.ym === confirmYm);
+              const unconfirmed = row ? row.unconfirmed : 0;
+              const mm = Number(confirmYm.slice(5, 7));
+              const skipped = [
+                pv.skippedTx > 0 ? `거래 입력 항목 ${pv.skippedTx}건` : '',
+                pv.skippedUnresolved > 0 ? `산출 불가 ${pv.skippedUnresolved}건` : '',
+              ].filter(Boolean).join(' · ');
+              return (
+                <div className="mb-2 px-3 py-1.5 rounded border border-amber-800/50 bg-amber-900/25 flex items-center gap-2 flex-wrap text-[11px]">
+                  {pv.written > 0 ? (
+                    <>
+                      <span className="text-amber-200">
+                        <b>{mm}월</b> 미확인 {unconfirmed}건 중 <b>{pv.written}건</b>을 계획 금액으로 확인할까요?
+                        {skipped && <span className="text-amber-300/80"> ({skipped} 제외)</span>}
+                      </span>
+                      <button className="text-[11px] px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-100 border border-emerald-800/60"
+                        onClick={() => applyPlanConfirm(confirmYm)}>확인</button>
+                      <button className="text-[11px] px-2 py-0.5 rounded bg-gray-800 text-gray-400"
+                        onClick={() => setConfirmYm('')}>취소</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-gray-300">
+                        {mm}월에 계획 금액으로 확인할 항목이 없습니다{skipped ? ` (${skipped} 제외)` : ''}
+                      </span>
+                      <button className="text-[11px] px-2 py-0.5 rounded bg-gray-800 text-gray-400"
+                        onClick={() => setConfirmYm('')}>닫기</button>
+                    </>
+                  )}
+                  <span className="text-[9px] text-gray-500 w-full">
+                    확인 = 그 항목의 이 달 실제 칸에 계획 금액을 그대로(반올림 없이) 적습니다. 비우면 다시 계획으로 돌아갑니다.
+                    거래로 입력하는 항목은 여기서 확인하지 않습니다(거래를 넣으세요). 누르지 않아도 화면·분석은 반영값으로 이미 완전합니다.
+                  </span>
+                </div>
+              );
+            })()}
             <div className="overflow-x-auto isolate border border-gray-800 rounded-lg" onKeyDown={onGridKeyDown}>
               <table className="w-full border-collapse">
                 <thead>
@@ -1813,50 +2025,52 @@ export default function LedgerPage({
                     <th className={`${cellBase} sticky left-0 z-[3] bg-[#151b28] text-left text-gray-400`}>결제</th>
                     <th className={`${cellBase} sticky z-[3] bg-[#151b28] text-left text-gray-400`} style={{ left: LEFT_NAME }}>항목</th>
                     <th className={`${cellBase} sticky z-[3] bg-[#151b28] text-right text-gray-400`} style={{ left: LEFT_PLAN }}>계획</th>
-                    {visibleMonths.map((m) => (
-                      <th key={m} className={`${cellBase} text-right text-gray-400 relative`}>
-                        <button
-                          className="absolute top-0 left-0 right-0 h-[4px] z-[1] hover:bg-amber-500/50"
-                          title={`${m}월 열 숨기기`}
-                          onClick={() => setHiddenMonths((h) => [...h, m])}
-                        />
-                        {m}월
-                      </th>
-                    ))}
+                    {visibleMonths.map((m) => {
+                      const k = makeYm(year, m);
+                      // 확인 현황은 `yearSeries` 행(`confirmedOf`)에서만 온다 — 새 루프·`plannedCount` 금지(§13.2.3).
+                      const row = yearSeries[m - 1];
+                      const isCur = k === todayYm;
+                      const future = isFutureYm(k);
+                      const done = row.unconfirmed === 0 && row.inProgress === 0;
+                      const status = future ? '예상' : done ? '✓' : `확인 ${row.confirmedCount}/${row.targetCount}`;
+                      // ⚠️ `진행 K` — 이번 달 거래 입력 항목(거래 0건)은 미확인이 아니지만 값은 계획이다. 이 표시가
+                      //    없으면 `✓`와 반영값이 모순된다(§13.11 R-6). `✓`는 미확인 0 && 진행 0일 때만.
+                      const prog = row.inProgress > 0 ? ` · 진행 ${row.inProgress}` : '';
+                      const names = row.missingIds.slice(0, 5)
+                        .map((id) => ((book.items || []).find((it) => it && it.id === id) || {}).name || id);
+                      const title = future
+                        ? '오늘 이후의 달 — 계획으로 예상한 값입니다(전월 대비·차트 막대 없음)'
+                        : `실적 입력 대상 ${row.targetCount}건 중 ${row.confirmedCount}건 확인`
+                          + (row.unconfirmed > 0 ? `\n미확인: ${names.join(', ')}${row.missingIds.length > 5 ? ' 외' : ''} — 계획으로 반영 중` : '')
+                          + (row.inProgress > 0 ? `\n진행 중 ${row.inProgress}건 — 거래로 입력하는 항목(아직 거래 0건, 계획으로 반영)` : '')
+                          + (!readOnly ? '\n클릭: 미확인 항목을 계획 금액으로 확인' : '');
+                      return (
+                        <th key={m} className={`${cellBase} text-right relative ${isCur ? 'text-amber-200' : 'text-gray-400'}`}>
+                          <button
+                            className="absolute top-0 left-0 right-0 h-[4px] z-[1] hover:bg-amber-500/50"
+                            title={`${m}월 열 숨기기`}
+                            onClick={() => setHiddenMonths((h) => [...h, m])}
+                          />
+                          {m}월
+                          <button type="button"
+                            className={`block w-full text-right text-[9px] leading-tight font-normal ${future ? 'text-gray-600 italic' : done ? 'text-emerald-400' : 'text-gray-500 hover:text-amber-300'} ${confirmYm === k ? 'underline' : ''}`}
+                            title={title}
+                            disabled={readOnly || future}
+                            onClick={() => setConfirmYm((c) => (c === k ? '' : k))}>
+                            {status}{prog}
+                          </button>
+                        </th>
+                      );
+                    })}
                     <th className={`${cellBase} text-right text-gray-400`}>{year} 합계</th>
                     <th className={`${cellBase} text-right text-gray-400`}>차이</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {LEDGER_GROUP_ORDER.map((g) => {
-                    const items = grouped[g] || [];
-                    const isOpen = !collapsed[g];
-                    return (
-                      <React.Fragment key={g}>
-                        <tr className="bg-[#111827]">
-                          <td className={`${cellBase} sticky left-0 z-[2] bg-[#111827]`} colSpan={colCount}>
-                            <div className="flex items-center gap-2">
-                              <button className="text-[11px] font-bold" style={{ color: LEDGER_GROUP_COLOR[g] }}
-                                onClick={() => setCollapsed((c) => ({ ...c, [g]: !c[g] }))}>
-                                {isOpen ? '▾' : '▸'} {LEDGER_GROUP_LABEL[g]}
-                                {g === 'annual' && <span className="text-[9px] text-gray-500 ml-1">연 1회 목돈 — 월 지출 합계에 포함되지 않습니다</span>}
-                                {g === 'income' && <span className="text-[9px] text-gray-500 ml-1">수입 — 지출 합계와 분리됩니다</span>}
-                              </button>
-                              <span className="text-[10px] text-gray-600">{items.length}건</span>
-                              {!readOnly && (
-                                <button className="text-[10px] px-1.5 rounded bg-gray-800 text-gray-400 hover:bg-gray-700"
-                                  onClick={() => addItem(g)}>+ 추가</button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                        {isOpen && items.map(renderItemRow)}
-                        {isOpen && g === 'variable' && renderUncategorizedRow()}
-                        {isOpen && (items.length > 0 || (g === 'variable' && hasUncYear))
-                          && renderGroupSubtotal(g, items)}
-                      </React.Fragment>
-                    );
-                  })}
+                  {/* 트리(§13.2.2): 그룹 행 → 결제수단 행 → (펼쳤을 때) 항목 행. 값은 전부 renderSubtotalRow 경유. */}
+                  {LEDGER_GROUP_ORDER.map((g) => (
+                    <React.Fragment key={g}>{renderGroupTree(g, grouped[g] || [])}</React.Fragment>
+                  ))}
                   {(book?.items || []).some((it) => it && it.group !== 'income') && renderGrandTotalRow()}
                 </tbody>
               </table>
@@ -1873,11 +2087,11 @@ export default function LedgerPage({
 
             <div className="mt-2 text-[10px] text-gray-600 leading-relaxed">
               · 실제 금액 칸을 <b>비우면 '미입력'</b>이고, <b>0을 넣으면 '그 달엔 안 썼다'</b>는 확정입니다 — 두 값은 합계에서 다르게 다뤄집니다.<br />
-              · <b>계획은 손대지 않아도 그 항목의 모든 달에 반영됩니다</b> — 월 칸의 <span className="text-gray-500 italic">흐린 이탤릭</span> 숫자가 계획이고, 직접 넣은 값은 밝게 보입니다. 항목의 연간 합계와 소계 행도 같은 규약(<b>실제 ?? 계획</b>)이라 소계 = Σ항목이 성립합니다. 몇 건/몇 달이 계획인지는 금액 아래 <span style={{ color: LEDGER_DIVERGING.flat }}>계획 N</span>으로 표시됩니다.<br />
-              · 실제가 계획과 다른 달만 숫자를 넣으면 됩니다. <b>다시 비우면 계획으로 돌아갑니다.</b> 어떤 달을 실제로 확인했는지는 계속 구분되어, 계획으로 채운 달은 <b>차이 열이 '-'</b>로 남습니다(차이 0이라고 단언하지 않습니다).<br />
+              · <b>계획은 손대지 않아도 그 항목의 모든 달에 반영됩니다</b> — 월 칸의 <span className="text-gray-500 italic">흐린 이탤릭</span> 숫자가 계획이고, 직접 넣은 값은 밝게 보입니다. 그룹·결제수단 소계, 연간 합계, 분석 탭, 전월/전년 대비, 메모 달력이 전부 같은 <b>반영값(실제 ?? 계획)</b>을 씁니다. 몇 건이 아직 계획인지는 월 헤더의 <b>확인 N/M</b>이 보여 줍니다(오늘 이후 달은 <i>예상</i>).<br />
+              · 실제가 계획과 다른 달만 숫자를 넣으면 됩니다. <b>다시 비우면 계획으로 돌아갑니다.</b> 월 헤더의 '확인 N/M'을 누르면 미확인 항목에 계획 금액을 그대로 적어 넣을 수 있습니다(선택 — 누르지 않아도 화면은 완전합니다).<br />
+              · <b>차이</b> 열은 실제와 계획이 둘 다 있는 달만 더한 <b>확인분 차이</b>입니다. 한 달도 확인하지 않았으면 '-'(차이 0이라고 단언하지 않습니다). 산출 불가 항목이 섞인 소계는 '산출불가 N'입니다.<br />
               · 항목이 연중에 시작·종료했다면 그 달들만 <b>-</b>로 잠깁니다. 잠긴 칸을 <b>클릭하면 그 달까지 적용기간이 넓어집니다</b>.<br />
-              · 그 계획 폴백은 <b>소계 표시에만</b> 쓰입니다 — 전월/전년 대비와 달력 칩은 실제 입력분만 봅니다(계획으로 채우면 "지출이 줄었다"고 거짓말하게 됩니다).<br />
-              · 항목명 왼쪽 <b>▲▼</b>로 같은 그룹 안에서 순서를 바꿉니다. 항목명 아래 <b>구분</b>은 표 아래 '구분 관리'에서 미리 등록한 값 중에서 고릅니다.<br />
+              · 그룹 행 ▸는 그 그룹의 모든 결제수단을, 결제수단 행 ▸는 그 수단의 항목만 펼칩니다. 항목명 왼쪽 <b>▲▼</b>는 같은 그룹·같은 결제수단 안에서 순서를 바꿉니다. 항목명 아래 <b>구분</b>은 표 아래 '구분 관리'에서 미리 등록한 값 중에서 고릅니다.<br />
               · 계획 칸 옆 <b>月/年</b> 버튼: 연 단위로 청구되는 항목(연 구독 등)은 <b>年</b>으로 두면 월 계획이 자동으로 ÷12 됩니다. 중간 반올림은 하지 않습니다.<br />
               · 지출 증감 색은 이 앱의 손익 색(이익=빨강)과 <b>다릅니다</b> — 계획 초과는 <span style={{ color: LEDGER_DIVERGING.over }}>▲ 노랑</span>, 절약은 <span style={{ color: LEDGER_DIVERGING.under }}>▼ 청록</span>입니다.
             </div>
@@ -2006,14 +2220,43 @@ export default function LedgerPage({
           </div>
         ) : tab === 'chart' ? (
           <div className="p-3 grid grid-cols-1 xl:grid-cols-2 gap-3">
+            {/* 상단 요약 줄(결정 D6) — 첫 화면이 "이달 얼마 썼나"에 한 줄로 답한다. 값은 전부 반영값 함수에서만. */}
+            <div className="xl:col-span-2 bg-[#0f1623] border border-gray-800 rounded-lg px-3 py-2 flex items-baseline gap-x-3 gap-y-1 flex-wrap text-[11px]"
+              title={`${month}월 반영 지출 = 실제 ${fmtWon(reflected.fromActual, hideAmounts)} + 계획 반영 ${fmtWon(reflected.fromPlan, hideAmounts)}`
+                + (reflected.unresolved > 0 ? ` · 산출 불가 ${reflected.unresolved}건 제외(하한)` : '')}>
+              <span className="text-gray-400">{month}월 {isFutureYm(ym) ? '예상' : '반영'} 지출</span>
+              <span className={`text-[15px] font-bold tabular-nums ${isFutureYm(ym) ? 'text-gray-400 italic' : 'text-gray-100'}`}>
+                {fmtWon(reflected.value, hideAmounts)}
+              </span>
+              <span className="text-gray-500">
+                확인 {confirmed.confirmed}/{confirmed.target}
+                {confirmed.inProgress > 0 ? ` · 진행 ${confirmed.inProgress}` : ''}
+                {reflected.unresolved > 0 ? <span className="text-amber-500"> · 산출 불가 {reflected.unresolved}</span> : ''}
+              </span>
+              <span className="text-gray-500">
+                전월 대비{' '}
+                {mom.comparable && mom.delta !== null ? (
+                  <span style={{ color: varianceTone(mom.delta) }}>
+                    {varianceMark(mom.delta)} {fmtWon(Math.abs(mom.delta), hideAmounts)}{mom.rate !== null ? ` (${fmtSignedPct(mom.rate)})` : ''}
+                  </span>
+                ) : (
+                  <span title={mom.reason === 'future' ? '오늘 이후의 달은 비교하지 않습니다'
+                    : mom.reason === 'unresolved' ? '두 달의 산출 불가 항목이 달라 비교할 수 없습니다'
+                      : '전달 또는 이달에 항목이 없습니다'}>-</span>
+                )}
+                {mom.comparable && mom.curUnconfirmed > 0 ? <span className="text-gray-600"> (계획 반영 {mom.curUnconfirmed}건 포함)</span> : ''}
+                {mom.comparable && mom.unresolvedExcluded > 0 ? <span className="text-gray-600"> (산출 불가 {mom.unresolvedExcluded}건 제외)</span> : ''}
+              </span>
+            </div>
+
             {/* ① 월별 계획 vs 실제 */}
             <div className="bg-[#0f1623] border border-gray-800 rounded-lg p-3">
-              <div className="text-[12px] font-semibold mb-1">{year}년 월별 지출 — 계획 대비 실제</div>
-              {/* ⚠️ '수지 균형' 카드와 **같은 그리드·같은 분홍색**으로 다른 규칙을 그린다
-                  (여기는 입력된 실적만, 저기는 실제 ?? 계획). 두 카드가 서로를 가리켜야
-                  사용자가 어느 쪽을 먼저 봐도 모순으로 읽지 않는다. 이 문장을 지우지 말 것. */}
+              <div className="text-[12px] font-semibold mb-1">{year}년 월별 지출 — 계획 대비 반영값</div>
+              {/* ⚠️ '수지 균형' 카드와 **같은 그리드·같은 분홍색**이다. 둘 다 반영값(실제 ?? 계획)이라
+                  이제 **같은 기준**이지만, 두 카드가 서로를 가리키는 문장은 지우지 말고 그대로 둔다
+                  (#G18m/#G18n — 규칙이 다시 갈리면 그 자리에서 고지해야 한다). */}
               <div className="text-[10px] text-gray-500 mb-2">
-                막대 = 실제 입력분 · 회색 선 = 계획 · '수지 균형' 카드는 <b>실제 ?? 계획</b> 기준이라 미입력 달에 값이 다릅니다
+                막대 = 반영값(진하게 <b>확인</b>분 + 연하게 <b>계획 반영</b>분) · 회색 선 = 계획 · 오늘 이후 달은 막대 없음 · '수지 균형' 카드는 <b>실제 ?? 계획</b> 기준 — 이 카드와 같은 기준입니다
               </div>
               <div style={{ height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -2025,7 +2268,9 @@ export default function LedgerPage({
                     <RTooltip {...TOOLTIP_STYLE}
                       formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Bar dataKey="actual" name="실제" fill={LEDGER_BALANCE_COLOR.expense} radius={[4, 4, 0, 0]} maxBarSize={22} />
+                    {/* 스택 2단(§13.2.5) — 같은 hue, 계획 반영분만 알파 톤. 범례 라벨이 색과 항상 동반한다. */}
+                    <Bar dataKey="confirmed" name="확인" stackId="reflected" fill={LEDGER_BALANCE_COLOR.expense} maxBarSize={22} />
+                    <Bar dataKey="planned" name="계획 반영" stackId="reflected" fill={PLANNED_BAR_FILL} radius={[4, 4, 0, 0]} maxBarSize={22} />
                     <Line type="monotone" dataKey="plan" name="계획" stroke="#94a3b8" strokeWidth={2} dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -2034,10 +2279,10 @@ export default function LedgerPage({
 
             {/* ② 전월 대비 증감 */}
             <div className="bg-[#0f1623] border border-gray-800 rounded-lg p-3">
-              <div className="text-[12px] font-semibold mb-1">전월 대비 증감</div>
+              <div className="text-[12px] font-semibold mb-1">전월 대비 증감 — 반영값 기준</div>
               <div className="text-[10px] text-gray-500 mb-2">
                 <span style={{ color: LEDGER_DIVERGING.over }}>▲ 증가(초과)</span> · <span style={{ color: LEDGER_DIVERGING.under }}>▼ 감소(절약)</span>
-                {' '}· 입력 완료도가 다른 달은 <b>표시하지 않습니다</b>
+                {' '}· 오늘 이후 달·산출 불가 항목이 다른 달은 <b>표시하지 않습니다</b> · 계획으로 반영된 건수는 막대 툴팁에
               </div>
               <div style={{ height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -2046,8 +2291,14 @@ export default function LedgerPage({
                     <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={{ stroke: '#374151' }} tickLine={false} />
                     <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false}
                       tickFormatter={(v) => (hideAmounts ? '' : fmtWonShort(v, false))} width={48} />
+                    {/* 툴팁 = `전월 대비 ▲N · 계획 반영 M건 포함 (· 산출 불가 J건 제외)` — '0% 거짓말' 완화 ②(§13.6-2). */}
                     <RTooltip {...TOOLTIP_STYLE}
-                      formatter={(v) => [fmtWon(v, hideAmounts), '전월 대비']} />
+                      formatter={(v, n, entry) => {
+                        const d = entry && entry.payload ? entry.payload : {};
+                        const tail = (d.momPlanned > 0 ? ` · 계획 반영 ${d.momPlanned}건 포함` : '')
+                          + (d.momExcluded > 0 ? ` · 산출 불가 ${d.momExcluded}건 제외` : '');
+                        return [fmtWon(v, hideAmounts) + (d.momRate !== null && d.momRate !== undefined ? ` (${fmtSignedPct(d.momRate)})` : ''), `전월 대비${tail}`];
+                      }} />
                     <ReferenceLine y={0} stroke="#4b5563" />
                     <Bar dataKey="momDelta" name="전월 대비" radius={[4, 4, 0, 0]} maxBarSize={22}>
                       {yearSeries.map((d, i) => (
@@ -2226,7 +2477,9 @@ export default function LedgerPage({
           <div className="p-3 grid grid-cols-1 xl:grid-cols-2 gap-3">
             <div className="bg-[#0f1623] border border-gray-800 rounded-lg p-3">
               <div className="text-[12px] font-semibold mb-1">연도별 지출 — 전년 대비</div>
-              <div className="text-[10px] text-gray-500 mb-2">실제 입력분 기준. 기록이 없는 해는 표시되지 않습니다.</div>
+              <div className="text-[10px] text-gray-500 mb-2">
+                반영값(실제 ?? 계획) 기준 · 올해는 <b>{todayYm ? `${Number(todayYm.slice(5, 7))}월` : '오늘'}까지</b>만 더합니다(계획도 같은 구간) · 항목이 없는 해는 표시되지 않습니다.
+              </div>
               <div style={{ height: 240 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={annualCompare.filter((r) => r.any)} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
@@ -2237,19 +2490,23 @@ export default function LedgerPage({
                     <RTooltip {...TOOLTIP_STYLE}
                       formatter={(v, n) => [fmtWon(v, hideAmounts), n]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Bar dataKey="actual" name="실제" fill={LEDGER_BALANCE_COLOR.expense} radius={[4, 4, 0, 0]} maxBarSize={40} />
+                    <Bar dataKey="reflected" name="반영" fill={LEDGER_BALANCE_COLOR.expense} radius={[4, 4, 0, 0]} maxBarSize={40} />
                     <Line type="monotone" dataKey="plan" name="계획" stroke="#94a3b8" strokeWidth={2} dot />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
               <div className="mt-2 text-[11px]">
-                전년 동월({month}월) 대비:{' '}
-                {yoy.comparable ? (
+                전년 동월({month}월) 대비(반영값):{' '}
+                {yoy.comparable && yoy.delta !== null ? (
                   <span style={{ color: varianceTone(yoy.delta) }}>
-                    {varianceMark(yoy.delta)} {fmtWon(Math.abs(yoy.delta), hideAmounts)} ({fmtSignedPct(yoy.rate)})
+                    {varianceMark(yoy.delta)} {fmtWon(Math.abs(yoy.delta), hideAmounts)}{yoy.rate !== null ? ` (${fmtSignedPct(yoy.rate)})` : ''}
+                    {yoy.curUnconfirmed > 0 && <span className="text-gray-600"> · 계획 반영 {yoy.curUnconfirmed}건 포함</span>}
+                    {yoy.unresolvedExcluded > 0 && <span className="text-gray-600"> · 산출 불가 {yoy.unresolvedExcluded}건 제외</span>}
                   </span>
                 ) : (
-                  <span className="text-gray-500" title={yoy.reason === 'missing-mismatch' ? '두 달의 미입력 건수가 달라 비교할 수 없습니다' : '전년 기록이 없습니다'}>-</span>
+                  <span className="text-gray-500" title={yoy.reason === 'future' ? '오늘 이후의 달은 비교하지 않습니다'
+                    : yoy.reason === 'unresolved' ? '두 달의 산출 불가 항목이 달라 비교할 수 없습니다'
+                      : '전년 동월 또는 이달에 항목이 없습니다'}>-</span>
                 )}
               </div>
             </div>

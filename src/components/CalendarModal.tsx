@@ -48,8 +48,9 @@ const pickPad = (dayKey, pickKind) => ({ kind: 'pick', dayKey, pickKind });
 // ── 💰 가계부 칩 문구 ──
 // 사용자 요구: "메모달력에는 총지출, 전월대비 증감표시" + "년단위 지출이 있는 날에는 표시".
 // 칩은 한 줄이라 칸에는 요약만 싣고, 자세한 내역은 title 툴팁과 패드가 맡는다.
-// ⚠️ 전월 대비는 **비교 가능할 때만** 숫자를 낸다(momComparable) — 진행 중인 달은 미입력이
-//    많아 순진한 차분이 '−87%' 같은 거짓 신호를 낸다(ledger.ts compareMonths 규약).
+// ⚠️ 총지출·전월 대비는 **반영값**(실제 ?? 계획 + 미분류, `reflectedMonth`)이다(§13). 전월 대비는
+//    비교 가능할 때만 숫자를 낸다(momComparable) — 오늘 이후 달과 산출 불가 항목이 다른 달은 `-`.
+//    `reflectedExpense`가 없는 옛 이벤트(있을 수 없지만)는 `actualExpense`로 떨어진다.
 const ledgerAbbrev = (n) => {
   if (n === null || n === undefined || !Number.isFinite(n)) return '-';
   const a = Math.abs(n);
@@ -72,7 +73,7 @@ const ledgerChipText = (events, hide) => {
   }
   const touch = events.find((e) => e && e.kind === 'touch');
   if (touch) {
-    const amt = hide ? '***' : ledgerAbbrev(touch.actualExpense);
+    const amt = hide ? '***' : ledgerAbbrev(touch.reflectedExpense ?? touch.actualExpense);
     if (!touch.momComparable || touch.momDelta === null || touch.momDelta === undefined) return `${amt} 정리`;
     const mark = touch.momDelta > 0 ? '▲' : touch.momDelta < 0 ? '▼' : '·';
     const pct = (touch.momRate === null || touch.momRate === undefined)
@@ -90,12 +91,15 @@ const ledgerChipTitle = (events, hide) => (Array.isArray(events) ? events : []).
     return `그 날 지출 ${hide ? '***' : ledgerAbbrev(e.txExpense)} · ${e.txCount}건${inc}`;
   }
   if (e.kind === 'touch') {
-    const base = `${e.ym} 정리 — 총지출 ${hide ? '***' : ledgerAbbrev(e.actualExpense)}`;
+    const base = `${e.ym} 정리 — 총지출(반영) ${hide ? '***' : ledgerAbbrev(e.reflectedExpense ?? e.actualExpense)}`;
     const mom = (e.momComparable && e.momDelta !== null && e.momDelta !== undefined)
-      ? ` · 전월 대비 ${hide ? '***' : ledgerAbbrev(e.momDelta)}`
-      : ' · 전월 대비 비교 불가(미입력 건수가 다릅니다)';
-    const miss = e.missing > 0 ? ` · 미입력 ${e.missing}건` : '';
-    return base + mom + miss;
+      ? ` · 전월 대비 ${hide ? '***' : ledgerAbbrev(e.momDelta)}${e.momPlanned > 0 ? ` (계획 반영 ${e.momPlanned}건 포함)` : ''}`
+      : e.momReason === 'future' ? ' · 전월 대비 비교 불가(오늘 이후 달)'
+        : e.momReason === 'unresolved' ? ' · 전월 대비 비교 불가(산출 불가 항목이 다릅니다)'
+          : ' · 전월 대비 비교 불가(항목이 없는 달)';
+    const unc = (e.unconfirmed ?? e.missing) > 0 ? ` · 미확인 ${e.unconfirmed ?? e.missing}건` : '';
+    const prog = e.inProgress > 0 ? ` · 진행 중 ${e.inProgress}건` : '';
+    return base + mom + unc + prog;
   }
   return `연단위 지출 — ${e.itemName || '항목'} ${hide ? '***' : ledgerAbbrev(e.amount)}`;
 }).filter(Boolean).join('\n');
@@ -158,6 +162,8 @@ const pnlColor = (v) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-blue-400' : 'tex
 export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos, holidays = { kr: [], us: [] }, notify, confirm, metricsHistory = [], todayReturnRate = null, fxHistory = null, us10yHistory = null, liveFx = null, liveUs10y = null, portfolios = [], activePortfolioId = null, onUpdateInvestmentNotes = null, variant = 'floating', readOnly = false, headerNotice = null, onOpenWindow = null, buildHistDetail = null, accountDetail = null, onRequestAccountDetail = null, hideAmounts = false, ledgerBooks = [], onOpenLedger = null }) {
   const isPage = variant === 'page';
   const todayStr = getTodayKST();
+  /** 오늘이 속한 달 — 가계부 이벤트의 미래 게이트(`ledgerEventsByDate` 3번째 인자). `new Date()` 금지. */
+  const todayYm = todayStr.slice(0, 7);
   const tp = todayStr.split('-');
   const ty = parseInt(tp[0], 10);
   const tm = parseInt(tp[1], 10) - 1;
@@ -429,7 +435,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
     // 연단위 지출은 **매년 반복**되므로 보고 있는 달의 해가 기준이다(±1년이면 월 이동에 충분).
     for (const y of [viewYear - 1, viewYear, viewYear + 1]) {
       let ev = {};
-      try { ev = ledgerEventsByDate(ledgerBooks, y) || {}; } catch { ev = {}; }
+      // ⚠️ `todayYm`을 넘긴다 — 미래 달의 정리 기록이 달력에서만 전월 대비를 단언하지 않게(§13.11 R-5).
+      //    `todayStr`(getTodayKST)에서 자른 값이라 별도 달력 창도 앱과 같은 경계를 쓴다.
+      try { ev = ledgerEventsByDate(ledgerBooks, y, todayYm) || {}; } catch { ev = {}; }
       for (const [d, list] of Object.entries(ev)) {
         if (!isValidIsoDate(d) || !Array.isArray(list) || list.length === 0) continue;
         (flat[d] = flat[d] || []).push(...list);
@@ -1238,8 +1246,9 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                   ) : e.kind === 'touch' ? (
                     <>
                       <div className="text-[11px] text-gray-400">{e.ym} 가계부 정리</div>
+                      {/* 반영값(실제 ?? 계획 + 미분류) — 가계부 소계·분석과 같은 값(§13). */}
                       <div className="text-[15px] font-bold text-gray-100 tabular-nums">
-                        총지출 {hideAmounts ? '***' : formatCurrency(e.actualExpense)}
+                        총지출(반영) {hideAmounts ? '***' : formatCurrency(e.reflectedExpense ?? e.actualExpense)}
                       </div>
                       <div className="text-[11px] mt-0.5">
                         전월 대비{' '}
@@ -1248,15 +1257,21 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                             {e.momDelta > 0 ? '▲' : e.momDelta < 0 ? '▼' : '·'}{' '}
                             {hideAmounts ? '***' : formatCurrency(Math.abs(e.momDelta))}
                             {(e.momRate !== null && e.momRate !== undefined) ? ` (${(e.momRate * 100).toFixed(1)}%)` : ''}
+                            {e.momPlanned > 0 ? <span className="text-gray-500"> · 계획 반영 {e.momPlanned}건 포함</span> : null}
                           </span>
                         ) : (
-                          // ⚠️ 비교 불가를 0으로 단언하지 않는다 — 진행 중인 달은 미입력이 많아
-                          //    순진한 차분이 '지출이 87% 줄었다' 같은 거짓 신호를 낸다.
-                          <span className="text-gray-500" title="두 달의 미입력 건수가 달라 비교할 수 없습니다">-</span>
+                          // ⚠️ 비교 불가를 0으로 단언하지 않는다 — 오늘 이후 달(예상)과 산출 불가 항목이
+                          //    다른 달은 반영값끼리도 비교하지 않는다('0% 거짓말' 완화 ③④, §13.6-2).
+                          <span className="text-gray-500" title={e.momReason === 'future' ? '오늘 이후의 달은 비교하지 않습니다'
+                            : e.momReason === 'unresolved' ? '두 달의 산출 불가 항목이 달라 비교할 수 없습니다'
+                              : '전달 또는 이달에 항목이 없습니다'}>-</span>
                         )}
                       </div>
-                      {e.missing > 0 && (
-                        <div className="text-[10px] text-gray-500 mt-0.5">미입력 {e.missing}건 — 합계·증감에서 제외됩니다</div>
+                      {((e.unconfirmed ?? e.missing) > 0 || e.inProgress > 0) && (
+                        <div className="text-[10px] text-gray-500 mt-0.5">
+                          {(e.unconfirmed ?? e.missing) > 0 ? `미확인 ${e.unconfirmed ?? e.missing}건 — 계획으로 반영됨` : ''}
+                          {e.inProgress > 0 ? `${(e.unconfirmed ?? e.missing) > 0 ? ' · ' : ''}진행 중 ${e.inProgress}건` : ''}
+                        </div>
                       )}
                     </>
                   ) : (
