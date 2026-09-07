@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import { UI_CONFIG } from '../config';
 import { MARK_COLOR_CYCLE, MARK_STRIP_BG } from '../constants';
-import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, selectionDimBands, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine, periodBasisLines, holdReasonText } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, formatVeryShortDate, cleanNum, recessionBandsForDates, selectionDimBands, buildHistDetailRows, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, periodGapLines, periodRateGapLine, periodBasisLines, holdReasonText, spanFromText } from '../utils';
 import { CHART_SELECTION } from '../design';
 
 const ROW_COLOR_CYCLE: string[] = MARK_COLOR_CYCLE.map(k => MARK_STRIP_BG[k]);
@@ -478,6 +478,13 @@ export default function IntegratedDashboard({
                         <span className={`text-[11px] font-bold ${todayRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                           {todayRate >= 0 ? '+' : ''}{todayRate.toFixed(2)}%
                         </span>
+                        {/* 어제(또는 그 전)가 보류('-')였으면 이 값은 하루치가 아니라 그 구간 전체다(기준 행 규약).
+                            '오늘 수익'이라는 라벨이 거짓이 되지 않도록 구간 시작을 밝힌다. */}
+                        {todayRec?.spanFrom && (
+                          <span className="text-[10px] font-bold text-gray-500 cursor-help" title={spanFromText(todayRec.spanFrom)}>
+                            {formatVeryShortDate(todayRec.spanFrom)}부터 합산
+                          </span>
+                        )}
                       </>
                     )}
                     {/* ⚠️ 이 배지를 todayHeld 분기 **안**으로 되돌리거나 조건에 todayHeld 를 더하지 말 것 —
@@ -964,11 +971,11 @@ export default function IntegratedDashboard({
                           {/* 미반영 흐름 진단 — 관측(장부액)이 '아직 V 밖'을 확정해 흐름을 차감하지
                               않고 이월한 행. 값은 그날의 시세 변동분이며, 이 툴팁이 없으면 사용자는
                               원장 입출금이 아직 반영 전이라는 사실을 알 방법이 없다. */}
-                          <td className={`py-2 px-2 text-center border-r border-gray-700 whitespace-nowrap ${(isHistPeriodMode || h.pendingFlow) && !hideAmounts ? 'cursor-help' : ''}`}
+                          <td className={`py-2 px-2 text-center border-r border-gray-700 whitespace-nowrap ${(isHistPeriodMode || h.pendingFlow || h.spanFrom) && !hideAmounts ? 'cursor-help' : ''}`}
                               title={hideAmounts ? undefined
                                 : isHistPeriodMode ? periodGapLines({ prevEval: h.periodPrevEval, curEval: h.evalAmount, profit: h.dodAbsChange, ledger: h.ledgerFlow, fmt: formatCurrency, unit: histNoun.unit, prevDate: h.periodPrevDate, curDate: h.date }).join('\n')
-                                : h.pendingFlow ? holdReasonText(h.dodAbsChange == null ? 'unreflected' : 'unreflected-idle', { pendingFlow: h.pendingFlow, fmt: formatCurrency })
-                                : undefined}>
+                                // 보류 구간을 합산한 행(spanFrom)은 하루치가 아님을 먼저 밝히고, 미반영 흐름 진단을 뒤에 붙인다.
+                                : [h.spanFrom ? spanFromText(h.spanFrom) : '', h.pendingFlow ? holdReasonText(h.dodAbsChange == null ? 'unreflected' : 'unreflected-idle', { pendingFlow: h.pendingFlow, fmt: formatCurrency }) : ''].filter(Boolean).join('\n') || undefined}>
                             {hideAmounts ? (
                               <span className="text-gray-500">••••••</span>
                             ) : h.dodAbsChange != null ? (

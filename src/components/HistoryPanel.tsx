@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useRef } from 'react';
 import { HelpCircle, X } from 'lucide-react';
-import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, holdReasonText, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
+import { formatCurrency, formatPercent, formatShortDate, calcPortfolioEvalDetail, resolveHoldings, buildCloseEvalSeries, evalSeriesDates, externalFlowInRange, computeDailyMetricsSeries, holdReasonText, spanFromText, buildBookCostSeries, bookDeltaBetween, computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, getClosestValue, cleanNum, compressPeriodRows, periodRangeLabel, periodNoun, rebaseTwr, accumulateDailySeries, periodGapLines, periodRateGapLine, periodBasisLines } from '../utils';
 import HistPeriodSeg from './HistPeriodSeg';
 import { isKrCutoffAccount } from '../hooks/useMarketCalendar';
 import VerifyEvalModal from './VerifyEvalModal';
@@ -118,6 +118,18 @@ export default function HistoryPanel({
     return buildCloseEvalSeries(activePortfolio, evalSeriesDates(activePortfolio, sortedHistoryDesc.map(h => h?.date), effectiveDateKey), activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey);
   }, [useCloseRecompute, activePortfolio, sortedHistoryDesc, activePortfolioAccountType, stockHistoryMap, indicatorHistoryMap, effectiveDateKey]);
 
+  // 장부액(Σ 예수금+매입원가) 시계열 — 보류 판정이 '흐름이 V에 반영됐는가'를 ΔV로 추측하지 않고
+  // 관측하게 해준다. ⚠️ **App.tsx의 activeBookByDate와 같은 Map을 써야** 차트(누적 TWR)·CSV와
+  //    같은 날짜에 같은 판정이 나온다(prop 미전달 시에만 자체 계산 폴백).
+  //    해외계좌는 장부가 USD인데 흐름 rows는 ₩ 환산이라 단위가 어긋나므로 제외
+  //    (미제공 → 기존 ΔV 휴리스틱 폴백, 동작 불변).
+  // 일간 지표 memo와 보류 행 툴팁('장부액 전일 대비 ±N' 진단)이 **같은 Map**을 읽어야 한다 — 툴팁이 다른
+  // 소스로 재계산하면 '-'의 사유와 표시 값이 갈린다.
+  const rowBookByDate = useMemo(() => {
+    if (activePortfolioAccountType === 'overseas') return null;
+    return activeBookByDate || (activePortfolio ? buildBookCostSeries(activePortfolio, [...sortedHistoryDesc].reverse().map(h => h?.date)) : null);
+  }, [activePortfolioAccountType, activeBookByDate, activePortfolio, sortedHistoryDesc]);
+
   // 일간 지표(전일대비·일간 손익) — 통합 대시보드·CSV와 **같은 공용 함수**를 써야 화면이 어긋나지 않는다.
   // ⚠️ 행마다 독립 계산으로 되돌리지 말 것: 보류된 행(주말 원장 등)의 흐름을 다음 행으로 이월해야
   //    '입금액=수익' 버그가 하루 밀려 재발하지 않는다(computeDailyMetricsSeries가 그 역할).
@@ -133,21 +145,14 @@ export default function HistoryPanel({
       const ov = isOverseasAcc && overseasEvalByDate ? overseasEvalByDate.get(h.date) : null;
       return ov ? ov.krw : (displayEvalByDate?.get(h.date) ?? h.evalAmount);
     };
-    // 장부액(Σ 예수금+매입원가) 시계열 — 보류 판정이 '흐름이 V에 반영됐는가'를 ΔV로 추측하지 않고
-    // 관측하게 해준다. ⚠️ **App.tsx의 activeBookByDate와 같은 Map을 써야** 차트(누적 TWR)·CSV와
-    //    같은 날짜에 같은 판정이 나온다(prop 미전달 시에만 자체 계산 폴백).
-    //    해외계좌는 장부가 USD인데 흐름 rows는 ₩ 환산이라 단위가 어긋나므로 제외
-    //    (미제공 → 기존 ΔV 휴리스틱 폴백, 동작 불변).
-    const bookByDate = isOverseasAcc
-      ? null
-      : (activeBookByDate || (activePortfolio ? buildBookCostSeries(activePortfolio, asc.map(h => h?.date)) : null));
+    const bookByDate = rowBookByDate;
     const rows = asc.map((h, i) => {
       const prev = asc[i - 1];
       const flow = prev
         ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, flowRate)
         : { in: 0, out: 0 };
       return {
-        date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out,
+        date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out, incomeIn: flow.incomeIn || 0,
         bookDelta: prev ? bookDeltaBetween(bookByDate, prev.date, h.date) : null,
       };
     });
@@ -373,12 +378,21 @@ export default function HistoryPanel({
                     // 일간 수익률·수익금 셀 툴팁 — 사용자의 정의("어제 종가를 오늘의 시작 금액으로 보고,
                     // 오늘 종가와 비교해 얼마 벌었나")를 그대로 풀어 쓴다. 입출금이 있으면 그 금액은
                     // 수익이 아니라 '시작 자산'에 더해진다는 점을 명시(그게 이 지표의 유일한 보정).
+                    // 보류('-') 행의 사유를 값으로 뒷받침한다 — 장부액(예수금+매입원가)이 전일 대비 얼마나
+                    // 움직였는지는 화면 어디에도 없어, 이 줄이 없으면 사용자가 '왜 -인가'를 추적할 수 없다.
+                    // ⚠️ 일간 지표 memo와 같은 Map(rowBookByDate)을 읽는다(다른 소스로 재계산 금지).
+                    const heldBook = (!isPeriodMode && hasPrev && rowBookByDate && viewRows[i + 1])
+                      ? bookDeltaBetween(rowBookByDate, viewRows[i + 1].date, h.date) : null;
+                    const heldBookLine = heldBook == null ? ''
+                      : `\n장부액(예수금+매입원가) 전일 대비 ${heldBook >= 0 ? '+' : '−'}${formatCurrency(Math.abs(heldBook))} — 원장 흐름과 맞지 않아 보류했습니다(정확히 0이면 표시가 열립니다).`;
                     const dodTitle = dodProfit != null
                       ? [
                           // ⚠️ 라벨과 항등식도 모드별로 갈라야 한다 — 월간 값에 '일간 손익'이라 쓰고
                           //    '(당일 − 전일) ÷ 전일 과 동일'이라 단언하면 둘 다 거짓이다
                           //    (기간 값은 일별 배율의 **곱**이라 그 항등식이 성립하지 않는다).
                           `${noun.unit} 손익 ${formatCurrency(dodProfit)}`,
+                          // 보류 구간을 합산한 행(기준 행 규약) — 하루치가 아니라는 사실을 반드시 밝힌다.
+                          ...(m.spanFrom ? [spanFromText(m.spanFrom, { unit: noun.unit })] : []),
                           // ⚠️ 입금과 출금은 반영 위치가 다르다 — 입금은 분모(시작 자산),
                           //    출금은 분자(당일 평가자산에 되더함). 한 문장으로 뭉뚱그리면 출금 설명이 틀린다.
                           flowNet > 0
@@ -392,13 +406,16 @@ export default function HistoryPanel({
                                 ? holdReasonText(m.holdReason, { pendingFlow: pendingNet, fmt: formatCurrency, unit: noun.unit })
                                 : (isPeriodMode
                                     ? `${noun.span}에 입출금이 없었습니다 — 일별 수익률의 곱과 동일`
-                                    : '입출금이 없던 날 — (당일 − 전일) ÷ 전일 과 동일'),
+                                    // ⚠️ 보류 구간을 합산한 행에 '(당일 − 전일)'이라 쓰면 거짓이다 — 기준은 전일이 아니라 기준 행 종가.
+                                    : m.spanFrom
+                                      ? '입출금이 없던 구간 — (당일 − 기준일 종가) ÷ 기준일 종가 와 동일'
+                                      : '입출금이 없던 날 — (당일 − 전일) ÷ 전일 과 동일'),
                           ...gapTail,
                         ].join('\n')
                       : (hasPrev
                           ? (isPeriodMode
                               ? `입출금 기록과 평가 스냅샷이 어긋나 산출을 보류했습니다(다음 ${noun.unit} 구간에 합산).`
-                              : holdReasonText(m.holdReason, { pendingFlow: pendingNet || flowNet, fmt: formatCurrency, unit: noun.unit }))
+                              : holdReasonText(m.holdReason, { pendingFlow: pendingNet || flowNet, fmt: formatCurrency, unit: noun.unit }) + heldBookLine)
                           : (isPeriodMode ? '비교할 이전 기간이 없어 산출하지 않습니다.' : ''));
                     // ⚠️ 기간 모드에서 날짜 동등 비교를 쓰지 말 것 — getEffectiveDateKR()는
                     //    21:00~09:00에 **null**이라 그 12시간 동안 하이라이트가 통째로 사라지고,

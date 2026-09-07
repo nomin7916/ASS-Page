@@ -629,9 +629,13 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
     ? null
     : bookCostOf(itemsA0, bookOpts) - bookCostOf(itemsB0, bookOpts);
   const flowMaterial = Math.abs(netFlow) > Math.max(0, totals.compare.evalNative) * FLOW_MATERIAL_RATIO;
-  const flowReflected = netFlow === 0 || !flowMaterial || (bookDelta != null && (netFlow > 0
-    ? bookDelta >= netFlow * FLOW_ABSORBED_RATIO
-    : bookDelta <= netFlow * FLOW_ABSORBED_RATIO));
+  // 계좌 내부 소득(noPrincipal 입금 = 배당·이자)은 외부 흐름이 아니지만 장부(예수금)를 움직이므로 관측에서
+  // 걷어낸다 — 추이표(computeDailyMetricsSeries)와 같은 규약. 미기록(0)이면 종전과 동일.
+  const incomeIn = cleanNum(flow?.incomeIn);
+  const bookFlowPart = bookDelta != null ? bookDelta - incomeIn : null;
+  const flowReflected = netFlow === 0 || !flowMaterial || (bookFlowPart != null && (netFlow > 0
+    ? bookFlowPart >= netFlow * FLOW_ABSORBED_RATIO
+    : bookFlowPart <= netFlow * FLOW_ABSORBED_RATIO));
 
   return {
     basisDate, compareDate, isOverseas, isGold,

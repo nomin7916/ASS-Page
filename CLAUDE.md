@@ -1013,6 +1013,23 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
     (그 뒤 실제 착지일에 가짜 손실 — **기존 동작 그대로**이며 이번 변경이 만든 것이 아니다).
     착지일에 `bookDelta`가 실현손익으로 오염돼 문턱 안에 들어오면 그 행은 종전대로 `'-'`다.
     근본 해소는 **원장 날짜에 예수금을 맞추는 것**(자산검증 모달의 소급 스냅샷)이다.
+- **⚠️ 계좌 내부 소득(`incomeIn`) — noPrincipal 입금은 흐름이 아니지만 장부는 움직인다 (2026-09, 되돌리지 말 것)**:
+  `externalFlowInRange`가 `noPrincipal` 입금(배당·이자)을 **`in`에서 제외하는 규약은 그대로**(Dietz —
+  계좌 내부 수익은 외부 유입이 아니다) 두되, 그 금액을 **`incomeIn`으로 따로 반환**한다.
+  `computeDailyMetricsSeries`는 흡수 판정 직전에 `bookDelta − income`으로 **소득 몫을 장부 관측에서
+  걷어내** '외부 흐름이 V에 반영됐는가'만 대조한다.
+  - **과거 결함(실측 2026-09 D3)**: 분배금을 받아 **같은 날** 다른 계좌로 이체하면 예수금 순변동이 0이라
+    `bookDelta === 0` → `unreflected-idle`(흐름이 확정적으로 V 밖)로 오판했다. 그 흐름은 장부가 다시
+    움직이는 날이 없어 영영 착지하지 못하고 15기록일 뒤 이월을 멈춰, **분배 소득 D가 손익에서 사라졌다**
+    (Σ +11,271,195 vs 진실 +15,821,195). 사용자가 분배금 입금을 `noPrincipal`로 기록해도 `in`에서 빠지므로
+    **원장만으로는 정합하게 만들 방법이 없었다**.
+  - **⚠️ 소득 이월은 비-idle 보류에서만**(`carryIncome = openRow ? 0 : income`) — idle(장부 변화 = 소득
+    정확히)이면 소득은 이미 반영된 것이라 다음 행에서 또 걷어내면 **이중 차감**이 된다.
+  - **⚠️ 공급자 5곳을 전부 채울 것**(한 곳만 빠지면 그 화면만 소득을 못 걷어내 화면끼리 갈린다):
+    `App.tsx accountDailySeries`(차트) · `HistoryPanel`(추이표) · `utils.buildHistoryCSV`(CSV) ·
+    `useIntegratedData` **①의 `addIncome` + rows 2곳**(`intTwrCumByDate`·`intMonthlyHistory`,
+    `netIncomeIn` 경유). `evalCompare.flowReflected`도 같은 규약(`bookDelta − incomeIn`).
+  - **하위호환**: `incomeIn` 미기록(0)이면 판정·값이 종전과 1바이트도 다르지 않다(`#33b`가 단언).
 - **⚠️ 기준(anchor) 행 규약 — 보류('-') 거래일의 ΔV는 버려지지 않고 다음 산출 행이 합산한다 (2026-09, 되돌리지 말 것)**:
   `computeDailyMetricsSeries`는 값(`dodAbsChange`/`dodChange`)의 기준을 **인접 행이 아니라 직전 '산출' 행**
   (`anchor`)으로 잡는다. 보류(`emitHeld`) 행은 기준을 전진시키지 않으므로 그 다음 산출 행이 보류 구간 전체의
@@ -1086,9 +1103,14 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   '원금대비'(`monthlyChange`)는 누적 지표로 **현행 유지**(입금일 희석은 정의상 정상).
 - 검증: `npm run verify:twr` (명세 테스트 #1~#5 + 엣지 #6~#16 + 회귀 #17~#21c + 장부액 관측 #29~#29d
   + **사유 분류·미반영 행 열림 #29c·#29e~#29g** + 통합 장부 집계·해외 단위·상수환율 #30~#30c
-  + **소스 텍스트 가드 #30d·#30e** + **기준(anchor) 행 규약 #31~#31d** + **src↔미러 드리프트 가드 #32**).
+  + **소스 텍스트 가드 #30d·#30e** + **기준(anchor) 행 규약 #31~#31d** + **src↔미러 드리프트 가드 #32**
+  + **계좌 내부 소득 #33~#33d**).
   ⚠️ `#32`는 실제 `src/utils.ts`를 import한다 — 미러만 검사하는 나머지 단언의 사각지대(src만 되돌린 변경)를
   막는 유일한 가드이므로 지우지 말 것. 새 픽스처를 미러 테스트에 넣을 때 `#32`의 픽스처 목록에도 넣을 것.
+  ⚠️ `#30e`의 배선 가드는 **선언이 아니라 사용부**를, 그것도 **조건식까지 한 덩어리로** 단언한다 —
+  '표현식 존재'만 재면 죽은 단언이 된다(실측: 삼항 조건을 `false &&`로 죽여도, 개별 계좌 쪽을 지워도
+  통합 대시보드의 같은 패턴이 대신 통과시켰다). App.tsx는 개별 계좌 effect 구간(`setDefaultSelectionResult`
+  사이)을 잘라서 본다. **변이 23종 + 음성 대조 2종**으로 검출을 실증했다.
   ⚠️ `#29c`는 이제 3행이 `null`이 아니라 **시세 변동분(+₩1,100,000)** 임을 단언한다 — 바뀐 것은 그
   '3행 보류' 부분뿐이고 **(B) 회귀 가드의 본체(`05-22 === 0`)는 그대로 통과**한다(`bookDelta == null &&`
   봉인을 지우면 05-21에서 폐기가 일어나 거기서 잡힌다). "(B) 봉인이 풀렸다"로 오독하지 말 것.
@@ -1389,8 +1411,16 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 - **구간 수익률**: `selectionResult.myReturnPeriodRate` = `(1+누적종료) ÷ (1+누적시작) − 1`(base 약분).
   `useChartInteraction.calculateSelection`과 `App.tsx` `defaultSelectionResult` **양쪽에 동일 식**.
   시작점이 null이면 0%(조회시작 base)로 폴백. ⚠️ `selectionResult.rate`(평가액 비율)로 되돌리지 말 것.
-- **정보패널 ₩ 값**: TWR 모드는 `평가액 변동`이 아니라 **실손익**(`endEval − startEval − 순흐름`,
-  `externalFlowInRange`로 (시작일,종료일] 반개구간)을 쓴다 — %와 ₩이 같은 기준이라야 한다.
+- **⚠️ 정보패널 ₩ 값 = 누적 `Σ dodAbsChange` 차분 (2026-09 통일 — 원장 raw 차감으로 되돌리지 말 것)**:
+  `%`(두 끝점 누적 TWR의 비)와 **같은 일간 지표**에서 나와야 보류·이월·장부 관측이 둘에 똑같이 반영된다.
+  공급자는 `App.tsx accountDailySeries.cumProfit` → `finalChartData.cumProfit`(라인과 같은 게이트로 null
+  처리) → `useChartInteraction.calculateSelection`·`App defaultSelectionResult`가 두 끝점 차분,
+  `PortfolioChart`는 `displayResult.profit`을 표시만 한다. **통합(`calculateIntSelection`)과 같은 규약**이다.
+  - **과거 결함(실측 2026-09)**: ₩만 `endEval − startEval − externalFlowInRange`(원장 raw)라 같은 줄에서
+    모순됐다 — 08/15~09/07 `+0.14%` 옆에 `+₩5,078,791`(= ΔV 628,791 + 원장 출금 4,450,000). %는 보류·장부
+    관측을 거친 값인데 ₩는 원장에 있으면 무조건 빼서, 미반영 흐름을 이중으로 계상했다.
+  - `externalFlowInRange` 호출은 **'입출금 보정됨' 배지 표시 전용**으로만 남는다(값 계산에 쓰지 말 것).
+  - 라벨은 `selectionResult ? '선택시작' : '조회시작'` — 드래그 선택인데 '조회시작'이라 쓰면 거짓이다.
 - **영속화 무관**: `accountTwrByDate`·`intTwrCumByDate`·TWR·`myReturnPeriodRate`·`cumProfit`은 전부 매
   렌더 파생값이다. `isZeroBaseMode`/`intIsZeroBaseMode` 상태·`chartPrefs` 저장·prop은 **전부 제거**됐고
   (`useHistoryChart`·`App.tsx`·`PortfolioChart`·`IntegratedDashboard`) `portfolioStructureKey`·

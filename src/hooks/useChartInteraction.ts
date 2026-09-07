@@ -129,7 +129,11 @@ export function useChartInteraction({
     if (idx1 === -1 || idx2 === -1 || idx1 === idx2) return null;
     const sData = finalChartData[Math.min(idx1, idx2)];
     const eData = finalChartData[Math.max(idx1, idx2)];
-    const profit = eData.evalAmount - sData.evalAmount;
+    // 구간 실손익 = 누적 Σ dodAbsChange 차분(통합 calculateIntSelection·App defaultSelectionResult와 같은 규약).
+    // raw ΔV(입출금 포함)는 cumProfit이 없을 때만 폴백 — 정보패널 ₩이 %(TWR)와 같은 소스라야 한다.
+    const profit = (sData.cumProfit != null && eData.cumProfit != null)
+      ? eData.cumProfit - sData.cumProfit
+      : eData.evalAmount - sData.evalAmount;
     const rate = sData.evalAmount > 0 ? (profit / sData.evalAmount) * 100 : 0;
     const indPeriodRates: Record<string, number | null> = {};
     INDICATOR_CHART_KEYS.forEach(k => {

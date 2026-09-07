@@ -25,12 +25,14 @@ const cleanNum = (val) => {
 
 const externalFlowInRange = (depositHistory, depositHistory2, fromExclusive, toInclusive, rateOf) => {
   const rate = typeof rateOf === 'function' ? rateOf : () => 1;
-  let inFlow = 0, outFlow = 0;
+  let inFlow = 0, outFlow = 0, incomeIn = 0;
   const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
   // ⚠️ Math.abs 금지 — 음수 '정정 행'이 유입으로 뒤집힌다(테스트 #17)
   for (const d of depositHistory || []) {
-    if (!d || d.noPrincipal || !inRange(d.date || '')) continue;
+    if (!d || !inRange(d.date || '')) continue;
     const v = cleanNum(d.amount) * rate(d);
+    // noPrincipal 입금(배당·이자) = 계좌 내부 소득 → 외부 유입 아님. 흡수 판정용 incomeIn에만 합산.
+    if (d.noPrincipal) { incomeIn += v; continue; }
     if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
   }
   for (const w of depositHistory2 || []) {
@@ -38,7 +40,7 @@ const externalFlowInRange = (depositHistory, depositHistory2, fromExclusive, toI
     const v = cleanNum(w.amount) * rate(w);
     if (v > 0) outFlow += v; else if (v < 0) inFlow += -v;
   }
-  return { in: inFlow, out: outFlow, net: inFlow - outFlow };
+  return { in: inFlow, out: outFlow, net: inFlow - outFlow, incomeIn };
 };
 
 const dailyFlowAdjustedRate = (prevEval, curEval, flowIn, flowOut) => {
@@ -82,6 +84,7 @@ const ACTIVE_DRIFT_RATIO = 0.05;
 const computeDailyMetrics = (rows) => {
   const out = new Map();
   let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
+  let carryIncome = 0;
   const list = Array.isArray(rows) ? rows : [];
   let prev = null;
   // 직전 **산출** 행 — 값의 기준. 보류('-') 행에서는 전진하지 않는다(src/utils.ts 상단 규약).
@@ -99,15 +102,18 @@ const computeDailyMetrics = (rows) => {
     const dV = h.evalAmount - prevV;
     const ownIn = h.flowIn || 0, ownOut = h.flowOut || 0;
     const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
-    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
-    const bookDelta = h.bookDelta != null ? h.bookDelta : null;
+    // 계좌 내부 소득(noPrincipal 입금) — 장부 관측에서 걷어내 '외부 흐름이 반영됐는가'만 남긴다(src/utils.ts 주석).
+    const ownIncome = h.incomeIn || 0;
+    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger, income = ownIncome + carryIncome;
+    let bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
     let reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
     // held = **이월 판정**(종전과 동일한 값). 화면 보류는 아래 emitHeld — 둘을 합치지 말 것.
     let held = reason != null;
     // ACTIVE 폐기는 bookDelta가 없을 때(추측)만 — 관측이 있으면 미반영이 확정이라 폐기 시 가짜 손익
     if (held && (carryRows >= CARRY_MAX_ROWS || (bookDelta == null && activeRows >= CARRY_MAX_ACTIVE_ROWS))) {
-      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
-      fIn = ownIn; fOut = ownOut; ledger = ownLedger;
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0; carryIncome = 0;
+      fIn = ownIn; fOut = ownOut; ledger = ownLedger; income = ownIncome;
+      bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
       reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
       held = reason != null;
     }
@@ -129,10 +135,11 @@ const computeDailyMetrics = (rows) => {
     });
     if (held && !h.flowSuspect && netFlow !== 0) {
       carryIn = fIn; carryOut = fOut; carryLedger = ledger;
+      carryIncome = openRow ? 0 : income;
       carryRows += 1;
       if (Math.abs(dV) > Math.abs(netFlow) * ACTIVE_DRIFT_RATIO) activeRows += 1;
     } else {
-      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0; carryIncome = 0;
     }
     prev = h;
     if (!emitHeld || reason === 'no-data') anchor = h;
@@ -792,6 +799,52 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
   checkEq('#31d 월요일 기준은 인접(일요일)이라 spanFrom null', m.get('2026-07-20').spanFrom, null);
 }
 
+// #33 계좌 내부 소득(noPrincipal 입금)과 흡수 판정 (2026-09 D3) — 분배금을 받아 같은 날 다른 계좌로 이체하면
+//     예수금 순변동이 0이라 장부만으로는 '흐름이 V 밖'으로 오판했다(unreflected-idle → 흐름 영영 이월·폐기 →
+//     분배 소득이 손익에서 사라짐). 원장에 분배금 입금(noPrincipal)을 기록하면 그 몫을 장부 관측에서 걷어내
+//     외부 흐름만 대조한다. 미기록이면 종전과 1바이트도 다르지 않다.
+{
+  const deps = [{ date: '2026-09-02', amount: 4_550_000, noPrincipal: true }];
+  const wds = [{ date: '2026-09-02', amount: 4_550_000, noPrincipal: true }];
+  const f = externalFlowInRange(deps, wds, '2026-09-01', '2026-09-02');
+  check('#33 externalFlowInRange: 소득은 in에 안 들어간다(Dietz 규약 불변)', f.in, 0);
+  check('#33 externalFlowInRange: 출금은 noPrincipal이어도 전액 out', f.out, 4_550_000);
+  check('#33 externalFlowInRange: incomeIn 별도 합산', f.incomeIn, 4_550_000);
+  // (a) 소득 D + 이체 D, 예수금 순변동 0(장부 0) → 흐름 정산 → dV + D (분배 소득이 손익에 남는다)
+  const rowsA = [
+    { date: '2026-09-01', evalAmount: 436_867_055, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: '2026-09-02', evalAmount: 424_658_290, flowIn: 0, flowOut: 4_550_000, incomeIn: 4_550_000, bookDelta: 0 },
+  ];
+  const mA = computeDailyMetrics(rowsA);
+  check('#33a 소득 D + 이체 D(장부 0) → 정산: dV + D', mA.get('2026-09-02').dodAbsChange, -12_208_765 + 4_550_000);
+  checkEq('#33a 보류 아님', mA.get('2026-09-02').held, false);
+  checkEq('#33a 흐름 이월 없음', mA.get('2026-09-02').pendingFlow, 0);
+  // (b) 소득 미기록(옛 데이터) → 종전과 동일: unreflected-idle(열림, ΔV, 흐름 이월)
+  const mB = computeDailyMetrics(rowsA.map(r => { const { incomeIn, ...rest } = r; return rest; }));
+  check('#33b 소득 미기록이면 종전 동작(ΔV 표시)', mB.get('2026-09-02').dodAbsChange, -12_208_765);
+  checkEq('#33b 종전 사유 유지', mB.get('2026-09-02').holdReason, 'unreflected-idle');
+  checkEq('#33b 흐름은 이월', mB.get('2026-09-02').pendingFlow, -4_550_000);
+  // (c) 소득만 예수금에 반영(장부 +D)·이체 미반영 → 열림(idle)·흐름 이월 → 다음 날 장부 −D에서 정산.
+  //     ⚠️ 이때 소득은 이미 반영된 것이라 다음 행에 이월하지 않는다(이월하면 이중 차감 → c2가 −3.5M).
+  const mC = computeDailyMetrics([
+    { date: 'c0', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: 'c1', evalAmount: 101_000_000, flowIn: 0, flowOut: 4_000_000, incomeIn: 4_000_000, bookDelta: 4_000_000 },
+    { date: 'c2', evalAmount: 97_500_000, flowIn: 0, flowOut: 0, bookDelta: -4_000_000 },
+  ]);
+  checkEq('#33c 소득만 반영된 날은 idle(열림)', mC.get('c1').holdReason, 'unreflected-idle');
+  check('#33c 열린 행은 ΔV', mC.get('c1').dodAbsChange, 1_000_000);
+  check('#33c 이체 반영일에 정산 (V − 기준V) + 출금', mC.get('c2').dodAbsChange, (97_500_000 - 101_000_000) + 4_000_000);
+  check('#33c Σ = ΔV(전체) + 출금(보존 항등식)', mC.get('c1').dodAbsChange + mC.get('c2').dodAbsChange, (97_500_000 - 100_000_000) + 4_000_000);
+  // (d) 소득 D + 출금 3D, 장부 불변(둘 다 미반영) → 보류, 소득도 함께 이월 → 다음 날 장부 −2D(둘 다 반영)에서 정산
+  const mD = computeDailyMetrics([
+    { date: 'd0', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: 'd1', evalAmount: 100_500_000, flowIn: 0, flowOut: 3_000_000, incomeIn: 1_000_000, bookDelta: 0 },
+    { date: 'd2', evalAmount: 98_800_000, flowIn: 0, flowOut: 0, bookDelta: -2_000_000 },
+  ]);
+  checkEq('#33d 소득·출금 둘 다 미반영 → 보류', mD.get('d1').holdReason, 'unreflected');
+  check('#33d 둘 다 반영된 날 정산: (V − 기준V) + 출금 3D', mD.get('d2').dodAbsChange, (98_800_000 - 100_000_000) + 3_000_000);
+}
+
 // #29g 하위호환의 축 — bookDelta 미제공이면 4필드가 **바이트 단위로** 종전과 같아야 한다.
 //      `unreflected-idle`/`frozen-idle`은 `bookDelta === 0`에서만 나오므로 미제공 경로는
 //      그 분기에 **구조적으로 도달할 수 없다**(논증이 아니라 구조로 보장).
@@ -1045,6 +1098,48 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     //    holdReasonText 를 부르는지(=진단으로 **대체**했는지)를 본다.
     g2("미반영 행(pendingNet !== 0)이 '입출금이 없던 날' 대신 진단 문구를 낸다",
       /pendingNet\s*!==\s*0\s*\n?\s*\?\s*holdReasonText\(/.test(hist));
+    // ── 계좌 내부 소득(incomeIn, 2026-09 D3) 배선 — 미러로 표현할 수 없는 공급자 4곳 ──
+    // ⚠️ 한 곳만 빠져도 그 화면만 소득을 못 걷어내 같은 날짜에 통합/개별/CSV가 갈린다.
+    const app = readSrc('src/App.tsx');
+    g2('통합 ①이 noPrincipal 입금을 addIncome으로 실어 보낸다(외부 유입 아님)',
+      /if\s*\(d\.noPrincipal\)\s*\{\s*addIncome\(d\.date,\s*v\);\s*return;\s*\}/.test(intg));
+    g2('통합 rows(intTwrCumByDate·intMonthlyHistory)가 incomeIn을 싣는다(2곳)',
+      (intg.match(/incomeIn:\s*h\.netIncomeIn\s*\|\|\s*0/g) || []).length === 2);
+    g2('개별 추이표 rows가 incomeIn을 싣는다', /incomeIn:\s*flow\.incomeIn\s*\|\|\s*0/.test(hist));
+    g2('개별 차트(App accountDailySeries) rows가 incomeIn을 싣는다', !!app && /incomeIn:\s*flow\.incomeIn\s*\|\|\s*0/.test(app));
+    g2('CSV rows가 incomeIn을 싣는다', (utl.match(/incomeIn:\s*flow\.incomeIn\s*\|\|\s*0/g) || []).length >= 1);
+    g2('소득 조정은 holdReasonOf 호출 전(bookDelta − income)에서 한다',
+      /bookDelta\s*=\s*h\.bookDelta\s*!=\s*null\s*\?\s*h\.bookDelta\s*-\s*income\s*:\s*null/.test(utl));
+    g2('소득 이월은 비-idle 보류에서만(carryIncome = openRow ? 0 : income)',
+      /carryIncome\s*=\s*openRow\s*\?\s*0\s*:\s*income/.test(utl));
+    // ── 기준(anchor) 행 규약(2026-09 D1) 배선 ──
+    g2('보류 행은 기준을 전진시키지 않는다(no-data만 예외)',
+      /if\s*\(!emitHeld\s*\|\|\s*reason\s*===\s*'no-data'\)\s*anchor\s*=\s*h;/.test(utl));
+    g2('값의 기준은 anchor.evalAmount다', /const\s+baseV\s*=\s*anchor\.evalAmount;/.test(utl));
+    g2('통합 추이표 행이 spanFrom을 싣는다', /spanFrom:\s*m\.spanFrom\s*\|\|\s*null/.test(intg));
+    g2('헤더 오늘 수익 카드가 spanFrom을 표기한다', /todayRec\?\.spanFrom\s*&&/.test(dash) && /spanFromText\(/.test(dash));
+    g2('개별 추이표 툴팁이 spanFromText를 쓴다', /spanFromText\(m\.spanFrom/.test(hist));
+    // ── 개별 차트 선택기간 ₩ = 누적 Σ dodAbsChange 차분(2026-09 D2) ──
+    const chart = readSrc('src/components/PortfolioChart.tsx');
+    const inter = readSrc('src/hooks/useChartInteraction.ts');
+    g2('정보패널 ₩이 displayResult.profit(누적 차분)을 쓴다',
+      !!chart && /const\s+prof\s*=\s*displayResult\.profit\s*\?\?\s*null;/.test(chart));
+    g2('정보패널 ₩이 원장 raw 차감(endEval − startEval − periodNetFlow)으로 돌아가지 않았다',
+      !!chart && !/displayResult\.endEval\s*-\s*displayResult\.startEval\s*-\s*periodNetFlow/.test(chart));
+    // ⚠️ '표현식 존재'만 재면 **죽은 단언**이다(변이 M8·M9 실측) — 삼항의 then 절만 남기고 조건을
+    //    `false &&`로 죽여도, 개별(4088)을 지워도 통합 대시보드의 같은 패턴이 대신 통과시킨다.
+    //    조건식과 폴백까지 **한 덩어리로** 못 박고, App은 개별 계좌 effect 구간을 잘라서 본다.
+    g2('드래그 선택 profit이 cumProfit 차분이다',
+      !!inter && /const\s+profit\s*=\s*\(sData\.cumProfit\s*!=\s*null\s*&&\s*eData\.cumProfit\s*!=\s*null\)\s*\?\s*eData\.cumProfit\s*-\s*sData\.cumProfit/.test(inter));
+    const defBlock = (() => {
+      if (!app) return '';
+      const a = app.indexOf('setDefaultSelectionResult(null)');
+      const b = app.indexOf('setDefaultSelectionResult({', a + 1);
+      return (a >= 0 && b > a) ? app.slice(a, b) : '';
+    })();
+    g2('조회기간 기본 선택(개별 계좌) profit이 cumProfit 차분이다',
+      /const\s+profit\s*=\s*\(s\.cumProfit\s*!=\s*null\s*&&\s*e\.cumProfit\s*!=\s*null\)\s*\?\s*e\.cumProfit\s*-\s*s\.cumProfit\s*:\s*e\.evalAmount\s*-\s*s\.evalAmount;/.test(defBlock));
+    g2('finalChartData가 cumProfit을 싣는다', !!app && /cumProfit:\s*item\.principalReturnRate\s*!=\s*null\s*\?/.test(app));
   }
 }
 
@@ -1084,10 +1179,15 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
       // 이관 오판 차단(#29e)
       ['a1|100000000|0|0|0', 'a2|40000000|0|60000000|-20000000'],
       ['c1|100000000|0|0|0', 'c2|90000000|0|10000000|2000000'],
+      // 계좌 내부 소득(#33 a·c·d) — 6번째 칸 = incomeIn
+      ['2026-09-01|436867055|0|0|0', '2026-09-02|424658290|0|4550000|0|4550000'],
+      ['c0|100000000|0|0|0', 'c1|101000000|0|4000000|4000000|4000000', 'c2|97500000|0|0|-4000000'],
+      ['d0|100000000|0|0|0', 'd1|100500000|0|3000000|0|1000000', 'd2|98800000|0|0|-2000000'],
     ].map(spec => spec.map(s => {
-      const [date, ev, fi, fo, bd] = s.split('|');
+      const [date, ev, fi, fo, bd, inc] = s.split('|');
       const row = { date, evalAmount: Number(ev), flowIn: Number(fi || 0), flowOut: Number(fo || 0) };
       if (bd !== undefined) row.bookDelta = Number(bd);
+      if (inc !== undefined) row.incomeIn = Number(inc);
       return row;
     }));
     const ser = (m) => JSON.stringify([...m.entries()]);
@@ -1108,6 +1208,17 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
       const a = holdReasonOf(...args), b = real.holdReasonOf(...args);
       if (a !== b) { drift++; console.error(`  ✗ #32 사유 ${i} 미러 ${a} vs 실제 ${b}`); }
     });
+    // externalFlowInRange — incomeIn(noPrincipal 입금) 분리까지 미러와 실제가 같아야 한다.
+    {
+      const deps = [
+        { date: '2026-09-02', amount: 4_550_000, noPrincipal: true }, { date: '2026-09-02', amount: 1_000_000 },
+        { date: '2026-09-03', amount: -200_000, noPrincipal: true }, { date: '2026-09-01', amount: 999 },
+      ];
+      const wds = [{ date: '2026-09-02', amount: 4_550_000, noPrincipal: true }, { date: '2026-09-03', amount: -50_000 }];
+      const a = JSON.stringify(externalFlowInRange(deps, wds, '2026-09-01', '2026-09-03'));
+      const b = JSON.stringify(real.externalFlowInRange(deps, wds, '2026-09-01', '2026-09-03'));
+      if (a !== b) { drift++; console.error(`  ✗ #32 externalFlowInRange 드리프트\n      미러 ${a}\n      실제 ${b}`); }
+    }
     if (drift === 0) console.log(`  ✓ #32 src/utils.ts ↔ 미러 드리프트 없음 (픽스처 ${fx.length}건 · 사유 ${reasons.length}건)`);
     else failed += drift;
   }

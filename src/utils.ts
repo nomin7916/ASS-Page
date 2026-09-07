@@ -295,7 +295,7 @@ const cumDepositsUpTo = (date, depositHistory, depositHistory2) => {
 // rateOf: 행 → 환율(해외계좌는 d.fxRate, 국내는 1). 미전달 시 1(원화 계좌).
 export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusive, toInclusive, rateOf) => {
   const rate = typeof rateOf === 'function' ? rateOf : () => 1;
-  let inFlow = 0, outFlow = 0;
+  let inFlow = 0, outFlow = 0, incomeIn = 0;
   const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
   // ⚠️ Math.abs 금지 — DepositPanel은 음수 '정정 행'을 빨간 글씨로 명시 지원한다
   //    (DepositPanel.tsx 금액 셀: cleanNum(h.amount) >= 0 ? 파랑 : 빨강).
@@ -303,8 +303,12 @@ export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusi
   //    코드베이스의 다른 모든 원장 소비자(cumDepositsUpTo·portfolioPrincipalData·
   //    intDepositEvents·depositWithSum)가 부호 있는 합을 쓰므로 여기도 부호를 보존한다.
   for (const d of depositHistory || []) {
-    if (!d || d.noPrincipal || !inRange(d.date || '')) continue;
+    if (!d || !inRange(d.date || '')) continue;
     const v = cleanNum(d.amount) * rate(d);
+    // noPrincipal 입금(배당·이자) = 계좌 **내부** 소득 → 외부 유입(in)이 아니다(Dietz 규약 불변).
+    // 다만 예수금(장부)은 그만큼 움직이므로 흡수 판정용으로 `incomeIn`에 따로(부호 보존) 합산한다.
+    // 소비자가 이 필드를 읽지 않으면 반환값의 in/out/net은 종전과 1바이트도 다르지 않다.
+    if (d.noPrincipal) { incomeIn += v; continue; }
     if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
   }
   for (const w of depositHistory2 || []) {
@@ -312,7 +316,7 @@ export const externalFlowInRange = (depositHistory, depositHistory2, fromExclusi
     const v = cleanNum(w.amount) * rate(w);
     if (v > 0) outFlow += v; else if (v < 0) inFlow += -v;
   }
-  return { in: inFlow, out: outFlow, net: inFlow - outFlow };
+  return { in: inFlow, out: outFlow, net: inFlow - outFlow, incomeIn };
 };
 
 // 일간 수익률(%) — 유입은 기초(BOD)·유출은 기말(EOD) 가중한 Modified Dietz.
@@ -478,6 +482,8 @@ const ACTIVE_DRIFT_RATIO = 0.05; // 흐름 대비 이만큼도 안 움직인 행
 export const computeDailyMetricsSeries = (rows) => {
   const out = new Map();
   let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
+  // 아직 장부에 반영되지 않은 것으로 판정된 계좌 내부 소득(noPrincipal 입금)의 이월 — 흐름과 함께 들고 간다.
+  let carryIncome = 0;
   const list = Array.isArray(rows) ? rows : [];
   let prev = null; // ⚠️ list[i-1]이 아니라 '직전 유효 행' — 무효 행을 건너뛰면 기준이 어긋난다
   // 직전 **산출** 행 — 값의 기준. 보류('-') 행에서는 전진하지 않는다(함수 상단 규약 참조).
@@ -497,9 +503,15 @@ export const computeDailyMetricsSeries = (rows) => {
     const dV = h.evalAmount - prevV;
     const ownIn = h.flowIn || 0, ownOut = h.flowOut || 0;
     const ownLedger = h.ledger != null ? h.ledger : (ownIn - ownOut);
+    // 원장에 기록된 계좌 내부 소득(noPrincipal 입금 = 배당·이자, externalFlowInRange.incomeIn). 외부 흐름이
+    // 아니라 IN에는 없지만 예수금(장부)은 그만큼 움직이므로, 흡수 판정의 장부 관측에서 이 몫을 걷어내야
+    // '외부 흐름이 V에 반영됐는가'만 남는다. ⚠️ 이게 없으면 같은 날 분배금 수령(+D)과 이체 출금(−D)이 함께
+    // 반영돼 장부가 그대로일 때 '흐름이 V 밖'(unreflected-idle)으로 오판해 −D를 영영 이월·폐기하고 분배 소득
+    // D가 손익에서 사라진다(2026-09 실측 D3). 소득 미기록(0)이면 종전과 1바이트도 다르지 않다.
+    const ownIncome = h.incomeIn || 0;
     // 1차 — 이월을 실은 채 판정한다. 이 행이 흐름을 흡수했다면(held=false) 이월을 그대로 소비한다.
-    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger;
-    const bookDelta = h.bookDelta != null ? h.bookDelta : null;
+    let fIn = ownIn + carryIn, fOut = ownOut + carryOut, ledger = ownLedger + carryLedger, income = ownIncome + carryIncome;
+    let bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
     let reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
     // ⚠️ `held`는 **이월 판정**이다(종전과 완전히 동일한 값). 화면 보류 여부는 아래 `emitHeld`이며,
     //    둘을 다시 하나로 합치지 말 것 — 이월·폐기 로직이 표시 정책에 끌려다니게 된다.
@@ -512,8 +524,9 @@ export const computeDailyMetricsSeries = (rows) => {
     //    예수금 수정일이 며칠 어긋나는 것은 구조적으로 정상 — DepositPanel은 평가액을 건드리지 않는다).
     //    FROZEN 상한(CARRY_MAX_ROWS)은 그대로 적용돼 무한 이월은 막는다.
     if (held && (carryRows >= CARRY_MAX_ROWS || (bookDelta == null && activeRows >= CARRY_MAX_ACTIVE_ROWS))) {
-      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
-      fIn = ownIn; fOut = ownOut; ledger = ownLedger;
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0; carryIncome = 0;
+      fIn = ownIn; fOut = ownOut; ledger = ownLedger; income = ownIncome;
+      bookDelta = h.bookDelta != null ? h.bookDelta - income : null;
       reason = h.flowSuspect ? 'suspect' : holdReasonOf(prevV, h.evalAmount, fIn - fOut, bookDelta);
       held = reason != null;
     }
@@ -549,13 +562,16 @@ export const computeDailyMetricsSeries = (rows) => {
     // flowSuspect(오늘 라이브 이상치)는 항상 마지막 행이라 이월 대상이 아니다
     if (held && !h.flowSuspect && netFlow !== 0) {
       carryIn = fIn; carryOut = fOut; carryLedger = ledger;
+      // 소득 이월은 '장부가 소득만큼도 안 움직인' 행(비-idle)에서만 — idle(장부 변화 = 소득 정확히)이면
+      // 소득은 이미 반영된 것이라 다음 행에서 한 번 더 걷어내면 이중 차감이 된다.
+      carryIncome = openRow ? 0 : income;
       carryRows += 1;
       // ⚠️ `dV !== 0`으로 세지 말 것 — crypto(24시간 시장)·예적금(일 단위 단리)을 보유하면
       //    비거래일에도 총자산이 몇십만 원씩 움직여, 주말 2행만으로 ACTIVE 예산이 소진되고
       //    월요일에 이월이 폐기돼 원래 버그가 재현된다. 흐름 대비 유의미한 변동만 센다.
       if (Math.abs(dV) > Math.abs(netFlow) * ACTIVE_DRIFT_RATIO) activeRows += 1;
     } else {
-      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
+      carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0; carryIncome = 0;
     }
     prev = h;
     // ⚠️ 보류('-') 행은 기준을 전진시키지 않는다 — 그 ΔV는 다음 산출 행이 합산한다.
@@ -591,14 +607,28 @@ export const holdReasonText = (reason, opts?) => {
     case 'frozen':
       return `비거래일이라 평가액이 직전 거래일 종가 그대로입니다 — 이 행에는 입출금을 반영하지 않고 다음 기록일로 넘깁니다.`;
     case 'unreflected':
-      return `입출금이 평가액에 반영됐는지 확인할 수 없어 산출을 보류했습니다(다음 기록일에 합산).`;
+      // ⚠️ 옛 문구 '(다음 기록일에 합산)'은 거짓이었다 — 흐름은 장부가 실제로 움직이는 날에만 정산되고,
+      //    그런 날이 없으면 15기록일 뒤 이월을 멈춘다. 합산되는 것은 흐름이 아니라 이 날의 **평가액 변동**이다
+      //    (기준 행 규약 — computeDailyMetricsSeries 상단).
+      return [
+        '입출금이 평가액에 반영됐는지 확인할 수 없어 산출을 보류했습니다.',
+        '이 날의 평가액 변동은 다음 산출 행에 합산되고, 입출금은 장부(예수금+매입원가)가 그만큼 움직이는 날 정산됩니다(그런 날이 없으면 15기록일 뒤 이월을 멈춥니다).',
+      ].join('\n');
     case 'suspect':
       return '오늘 시세가 아직 다 로드되지 않아 산출을 보류했습니다.';
     case 'no-prev':
       return '비교할 이전 기록이 없어 산출하지 않습니다.';
     default:
-      return '입출금 기록과 평가 스냅샷이 어긋나 산출을 보류했습니다(다음 기록일에 합산).';
+      return '입출금 기록과 평가 스냅샷이 어긋나 산출을 보류했습니다 — 이 날의 평가액 변동은 다음 산출 행에 합산됩니다.';
   }
+};
+
+// 보류 구간 합산 안내 — computeDailyMetricsSeries의 `spanFrom`(표시 전용)을 사람 말로 옮긴다.
+// ⚠️ 화면마다 손복제 금지(holdReasonText와 같은 규약). spanFrom이 없으면(인접 행 기준) 빈 문자열.
+export const spanFromText = (spanFrom, opts?) => {
+  if (!spanFrom) return '';
+  const unit = (opts && opts.unit) || '일간';
+  return `${formatVeryShortDate(spanFrom)} 종가 이후 보류('-')된 행의 평가액 변동을 이 값에 합산했습니다 — 하루치 ${unit} 값이 아니라 그 구간 전체의 손익입니다.`;
 };
 
 // 누적 TWR(Time-Weighted Return) — 일간 보정 수익률의 곱셈 체인. 개별 계좌 차트 '조회시작 0%' 모드의 라인.
@@ -1864,7 +1894,7 @@ export const buildHistoryCSV = (history, depositHistory, depositHistory2, rateOf
       ? externalFlowInRange(depositHistory, depositHistory2, prev.date, h.date, rateOf)
       : { in: 0, out: 0 };
     return {
-      date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out,
+      date: h.date, evalAmount: evalOf(h), flowIn: flow.in, flowOut: flow.out, incomeIn: flow.incomeIn || 0,
       bookDelta: prev ? bookDeltaBetween(bookByDate, prev.date, h.date) : null,
     };
   });

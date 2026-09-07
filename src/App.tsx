@@ -83,7 +83,7 @@ import {
   ensurePortfolioVerificationFields, snapshotItemsFromPortfolio, snapshotCompositionKey,
   computeEffectivePrincipal, resolveRecordPrincipal, overseasPrincipalAt, dedupeHistoryByDate, savingsEval, buildCloseEvalSeries, evalSeriesDates,
   externalFlowInRange, computeCumulativeTwrSeries, rebaseTwr, overseasUsdEvalAt,
-  buildBookCostSeries, bookDeltaBetween,
+  buildBookCostSeries, bookDeltaBetween, computeDailyMetricsSeries,
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows, analyzeTransferMerge,
@@ -1458,9 +1458,12 @@ export default function App() {
   // ⚠️ 평가액 소스는 차트 라인과 **동일**해야 한다: 시장계좌=activeCloseEvalByDate(수량×종가),
   //    해외=overseasUsdEvalAt(USD). 다른 소스를 쓰면 라인과 %가 갈린다.
   // 해외는 평가도 원장도 USD 그대로 쓴다(환산 없음 — 아래 해외 원금 계산·PortfolioChart 실손익과 동일 규약).
-  const accountTwrByDate = useMemo(() => {
+  // 누적 TWR(차트 라인) + 누적 실손익(Σ dodAbsChange — 차트 선택기간 ₩의 단일 소스, 통합 intTwrCumByDate와
+  // 같은 규약). ⚠️ 선택기간 ₩을 다시 `endEval − startEval − 원장순흐름`(raw)으로 되돌리지 말 것 — %는 TWR
+  //    (보류·이월·장부 관측을 거친 값)인데 ₩만 원장 raw면 같은 줄에서 모순된다(실측 +0.14% vs +5,078,791).
+  const accountDailySeries = useMemo(() => {
     const asc = history.filter(h => h?.date).slice().sort((a, b) => a.date < b.date ? -1 : 1);
-    if (asc.length === 0) return new Map();
+    if (asc.length === 0) return { twr: new Map(), cumProfit: new Map() };
     const isOv = activePortfolioAccountType === 'overseas';
     const rows = asc.map((h, i) => {
       const prev = asc[i - 1];
@@ -1473,12 +1476,22 @@ export default function App() {
       // ⚠️ bookDelta를 빼지 말 것 — 추이표(HistoryPanel)와 같은 관측을 써야 같은 날짜에 두 화면이
       //    같은 일간 수익률을 낸다. 곱셈 체인이라 하루의 불일치가 이후 전 구간에 영구 고정된다.
       return {
-        date: h.date, evalAmount: ev, flowIn: flow.in, flowOut: flow.out,
+        date: h.date, evalAmount: ev, flowIn: flow.in, flowOut: flow.out, incomeIn: flow.incomeIn || 0,
         bookDelta: prev ? bookDeltaBetween(activeBookByDate, prev.date, h.date) : null,
       };
     });
-    return computeCumulativeTwrSeries(rows);
+    const metrics = computeDailyMetricsSeries(rows);
+    const cumProfit = new Map();
+    let acc = 0;
+    for (const r of rows) {
+      const m = metrics.get(r.date);
+      if (m && m.dodAbsChange != null) acc += m.dodAbsChange;
+      cumProfit.set(r.date, acc);
+    }
+    return { twr: computeCumulativeTwrSeries(rows), cumProfit };
   }, [history, activePortfolioAccountType, portfolio, stockHistoryMap, activeCloseEvalByDate, activeBookByDate, depositHistory, depositHistory2]);
+  const accountTwrByDate = accountDailySeries.twr;
+  const accountCumProfitByDate = accountDailySeries.cumProfit;
 
   const finalChartData = useMemo(() => {
     const localSortedHist = [...history].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -1631,6 +1644,14 @@ export default function App() {
         while (tIdx < twrEntries.length && twrEntries[tIdx][0] <= item.date) { curTwr = twrEntries[tIdx][1]; tIdx++; }
         twrByChartDate.set(item.date, curTwr);
       }
+      // 누적 실손익도 같은 규칙으로 이월(기록일이 아닌 차트 날짜는 직전 기록일 값) — 선택기간 ₩의 원자재.
+      const cpEntries = [...accountCumProfitByDate.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1);
+      const cumProfitByChartDate = new Map();
+      let cIdx = 0, curCp = null;
+      for (const item of rawData) {
+        while (cIdx < cpEntries.length && cpEntries[cIdx][0] <= item.date) { curCp = cpEntries[cIdx][1]; cIdx++; }
+        cumProfitByChartDate.set(item.date, curCp);
+      }
       const baseTwr = twrByChartDate.get(baseItem.date);
       const kospiBase = firstBase('kospiPoint');
       const sp500Base = firstBase('sp500Point');
@@ -1652,6 +1673,8 @@ export default function App() {
           returnRate: (baseItem.evalAmount > 0 && item.evalAmount > 0) ? ((item.evalAmount / baseItem.evalAmount) - 1) * 100 : item.returnRate,
           // 첫 기록 이전 날짜(TWR 미설정)는 null → 라인 미표시(0% 평탄선 방지, 기존 계약 유지).
           principalReturnRate: item.principalReturnRate != null ? rebaseTwr(twrByChartDate.get(item.date), baseTwr) : null,
+          // 누적 실손익(Σ dodAbsChange) — 라인과 같은 게이트로 null 처리해 선택기간 ₩이 %와 함께만 나온다.
+          cumProfit: item.principalReturnRate != null ? (cumProfitByChartDate.get(item.date) ?? null) : null,
           kospiRate: kospiBase > 0 ? ((item.kospiPoint / kospiBase) - 1) * 100 : 0,
           sp500Rate: sp500Base > 0 ? ((item.sp500Point / sp500Base) - 1) * 100 : 0,
           nasdaqRate: nasdaqBase > 0 ? ((item.nasdaqPoint / nasdaqBase) - 1) * 100 : 0,
@@ -1698,7 +1721,7 @@ export default function App() {
       }
       return { ...item, ...scaled, backtestRate };
     });
-  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activeCloseEvalByDate, accountTwrByDate]);
+  }, [filteredDates, indexDataMap, stockHistoryMap, portfolio, history, totals.totalEval, totals.totalInvest, principal, portfolioStartDate, indicatorScales, compStocks, depositHistory, depositHistory2, activePortfolioAccountType, avgExchangeRate, marketIndicators, activeCloseEvalByDate, accountTwrByDate, accountCumProfitByDate]);
 
   // ── 통합 대시보드 계산 ──
   const {
@@ -4060,7 +4083,9 @@ export default function App() {
     if (finalChartData.length < 2) { setDefaultSelectionResult(null); return; }
     const s = finalChartData[0];
     const e = finalChartData[finalChartData.length - 1];
-    const profit = e.evalAmount - s.evalAmount;
+    // 구간 실손익 = 누적 Σ dodAbsChange 차분(통합 calculateIntSelection과 같은 규약). raw ΔV(입출금 포함)는
+    // 두 값이 없을 때만 폴백 — 정보패널 ₩이 %(TWR)와 같은 소스라야 같은 줄에서 모순되지 않는다.
+    const profit = (s.cumProfit != null && e.cumProfit != null) ? e.cumProfit - s.cumProfit : e.evalAmount - s.evalAmount;
     const indRates = {};
     INDICATOR_CHART_KEYS.forEach(k => {
       const sp = s[`${k}Point`]; const ep = e[`${k}Point`];

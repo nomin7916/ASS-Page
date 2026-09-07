@@ -100,11 +100,13 @@ function collectTransferRows(p) {
 
 // utils.ts externalFlowInRange 미러 (개별 계좌 흐름)
 function externalFlowInRange(deps, wds, fromExclusive, toInclusive) {
-  let inFlow = 0, outFlow = 0;
+  let inFlow = 0, outFlow = 0, incomeIn = 0;
   const inRange = (dt) => dt && dt > (fromExclusive || '') && dt <= (toInclusive || '');
   for (const d of deps || []) {
-    if (!d || d.noPrincipal || !inRange(d.date || '')) continue;
+    if (!d || !inRange(d.date || '')) continue;
     const v = cleanNum(d.amount);
+    // noPrincipal 입금(배당·이자) = 계좌 내부 소득 → in 아님, 흡수 판정용 incomeIn(utils.ts와 동일)
+    if (d.noPrincipal) { incomeIn += v; continue; }
     if (v > 0) inFlow += v; else if (v < 0) outFlow += -v;
   }
   for (const w of wds || []) {
@@ -112,7 +114,7 @@ function externalFlowInRange(deps, wds, fromExclusive, toInclusive) {
     const v = cleanNum(w.amount);
     if (v > 0) outFlow += v; else if (v < 0) inFlow += -v;
   }
-  return { in: inFlow, out: outFlow, net: inFlow - outFlow };
+  return { in: inFlow, out: outFlow, net: inFlow - outFlow, incomeIn };
 }
 
 // utils.ts cumDepositsUpTo 미러 (원금 anchor 경로)

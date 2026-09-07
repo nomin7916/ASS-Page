@@ -332,6 +332,10 @@ export function useIntegratedData({
     const addIn = (d, v) => { if (d && v > 0) flowInMap.set(d, (flowInMap.get(d) || 0) + v); };
     const addOut = (d, v) => { if (d && v > 0) flowOutMap.set(d, (flowOutMap.get(d) || 0) + v); };
     const addLedger = (d, v) => { if (d && v) ledgerNetMap.set(d, (ledgerNetMap.get(d) || 0) + v); };
+    // 계좌 내부 소득(noPrincipal 입금 = 배당·이자, 부호 보존) — 외부 흐름(IN)이 아니라 위 셋에는 안 들어가지만
+    // 예수금(장부)은 움직이므로 흡수 판정용 `incomeIn`으로 행에 실어 보낸다(utils.externalFlowInRange와 동일 규약).
+    const incomeMap = new Map();
+    const addIncome = (d, v) => { if (d && v) incomeMap.set(d, (incomeMap.get(d) || 0) + v); };
 
     // ③ 계좌 편입/이탈 — 원장에 없는 흐름. '원금'이 아니라 평가액 전액이라야 ΔV와 정확히 상쇄된다.
     //    편입일(d0) 이하의 원장은 추적 시작 전 거래이므로 ①에서 제외한다(이중계상 방지).
@@ -405,11 +409,13 @@ export function useIntegratedData({
         // ⚠️ Math.abs 금지 — 음수 '정정 행'(DepositPanel이 빨간 글씨로 지원)은 유입의 반대다.
         //    abs를 씌우면 정정 쌍이 상쇄되지 않고 이중 계상되어 오차가 원장 금액의 2배가 된다.
         deps.forEach(d => {
-          // noPrincipal(배당·이자)은 계좌 안에서 발생한 수익 → 외부 유입이 아니다
-          if (!d || !d.date || d.noPrincipal) return;
+          if (!d || !d.date) return;
           if (since && d.date <= since) return;
           if (cutoff && d.date >= cutoff) return;
           const v = (cleanNum(d.amount) || 0) * rateOf(d);
+          // noPrincipal(배당·이자)은 계좌 안에서 발생한 수익 → 외부 유입이 아니다. 장부(예수금)만 움직이므로
+          // 흡수 판정용 소득으로만 기록한다(개별 계좌 externalFlowInRange.incomeIn과 동일 규약).
+          if (d.noPrincipal) { addIncome(d.date, v); return; }
           // 계좌 간 이관 입금 — 짝(원계좌 출금)이 통합 집계에 함께 있으면 상쇄한다 → 보류
           if (holdTransfer(d, 'in', d.date, v)) return;
           if (v > 0) addIn(d.date, v); else if (v < 0) addOut(d.date, -v);
@@ -461,15 +467,16 @@ export function useIntegratedData({
     // 기록이 없는 날(주말 등)에 찍힌 원장 흐름은 다음 기록일 행으로 이월 — 흐름 유실 방지
     const flowAtRow = new Map();
     {
-      const allFlowDates = [...new Set([...flowInMap.keys(), ...flowOutMap.keys(), ...ledgerNetMap.keys(), ...sortedDates])].sort();
-      let carryIn = 0, carryOut = 0, carryLedger = 0;
+      const allFlowDates = [...new Set([...flowInMap.keys(), ...flowOutMap.keys(), ...ledgerNetMap.keys(), ...incomeMap.keys(), ...sortedDates])].sort();
+      let carryIn = 0, carryOut = 0, carryLedger = 0, carryIncome = 0;
       for (const d of allFlowDates) {
         carryIn += flowInMap.get(d) || 0;
         carryOut += flowOutMap.get(d) || 0;
         carryLedger += ledgerNetMap.get(d) || 0;
+        carryIncome += incomeMap.get(d) || 0;
         if (dateToTotal.has(d)) {
-          flowAtRow.set(d, { in: carryIn, out: carryOut, ledger: carryLedger });
-          carryIn = 0; carryOut = 0; carryLedger = 0;
+          flowAtRow.set(d, { in: carryIn, out: carryOut, ledger: carryLedger, income: carryIncome });
+          carryIn = 0; carryOut = 0; carryLedger = 0; carryIncome = 0;
         }
       }
     }
@@ -509,6 +516,8 @@ export function useIntegratedData({
           netFlowIn: f ? f.in : 0,
           netFlowOut: f ? f.out : 0,
           ledgerFlow: f ? f.ledger : 0,
+          // 계좌 내부 소득(noPrincipal 입금) — 흡수 판정 전용(외부 흐름 아님). 소비자: intTwrCumByDate·intMonthlyHistory.
+          netIncomeIn: f ? (f.income || 0) : 0,
           // 그날 총 장부액(Σ 예수금+매입원가). 한 계좌라도 미확보면 null → 소비자가 ΔV 폴백.
           // ⚠️ 오늘 행의 evalAmount는 라이브 합계로 덮어써지지만(:247) 장부액은 스냅샷 기준이다.
           //    예수금 편집은 그 날짜 스냅샷을 만들므로(snapshotCompositionKey에 depositAmount 포함)
@@ -563,7 +572,7 @@ export function useIntegratedData({
         : null;
       return {
         date: h.date, evalAmount: h.evalAmount,
-        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0,
+        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0, incomeIn: h.netIncomeIn || 0,
         ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect, bookDelta,
       };
     });
@@ -656,7 +665,7 @@ export function useIntegratedData({
         : null;
       return {
         date: h.date, evalAmount: h.evalAmount,
-        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0,
+        flowIn: h.netFlowIn || 0, flowOut: h.netFlowOut || 0, incomeIn: h.netIncomeIn || 0,
         ledger: h.ledgerFlow || 0, flowSuspect: h.flowSuspect, bookDelta,
       };
     }));
@@ -666,7 +675,8 @@ export function useIntegratedData({
       const m = metrics.get(h.date) || { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true };
       // pendingFlow = 아직 평가액에 반영되지 않아 이 행에서 차감하지 않은 원장 흐름(표시 전용).
       // ⚠️ netFlow(=보정에 실제로 쓰인 흐름)와 배타적이다 — 합치면 '반영 대기' 안내가 정상 행에도 뜬다.
-      return { ...h, monthlyChange, dodChange: m.dodChange, dodAbsChange: m.dodAbsChange, netFlow: m.ledgerFlow, pendingFlow: m.pendingFlow || 0 };
+      // spanFrom = 보류('-') 구간을 합산한 행의 구간 시작 날짜(표시 전용, 기준 행 규약 — utils computeDailyMetricsSeries).
+      return { ...h, monthlyChange, dodChange: m.dodChange, dodAbsChange: m.dodAbsChange, netFlow: m.ledgerFlow, pendingFlow: m.pendingFlow || 0, spanFrom: m.spanFrom || null };
     });
   }, [computedIntHistory, intTotals.totalPrincipal]);
 

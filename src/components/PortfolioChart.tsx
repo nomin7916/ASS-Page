@@ -491,13 +491,13 @@ export default function PortfolioChart({
         const myReturnRate = displayResult ? (displayResult.myReturnPeriodRate ?? null) : null;
         // (시작일, 종료일] 반개구간 — 시작일 평가액엔 그 이전 흐름이 이미 반영돼 있다.
         // 해외계좌는 차트 평가액이 USD이므로 원장 금액(USD)을 환산 없이 그대로 쓴다(App.tsx 해외 원금 계산과 동일).
+        // ⚠️ 이 흐름은 '입출금 보정됨' 배지 **표시 전용**이다. ₩ 값은 아래 displayResult.profit(누적 Σ dodAbsChange
+        //    차분 — %와 같은 소스)이며, 옛 `endEval − startEval − periodNetFlow`(원장 raw)로 되돌리지 말 것:
+        //    %는 보류·이월·장부 관측을 거친 TWR인데 ₩만 raw면 같은 줄에서 모순된다(실측 +0.14% vs +5,078,791).
         const periodFlow = displayResult
           ? externalFlowInRange(depositHistory, depositHistory2, displayResult.startDate, displayResult.endDate)
           : null;
         const periodNetFlow = periodFlow ? periodFlow.in - periodFlow.out : 0;
-        const periodRealProfit = (displayResult && displayResult.startEval != null && displayResult.endEval != null)
-          ? displayResult.endEval - displayResult.startEval - periodNetFlow
-          : null;
         return (
           <div className="px-4 py-2 border-t border-gray-700/40 bg-[#060f1e]/70 min-h-[36px] shrink-0">
             {displayResult ? (
@@ -629,9 +629,9 @@ export default function PortfolioChart({
                       const prin = displayResult.principalAtEnd;
                       const evl = displayResult.endEval;
                       const startEvl = displayResult.startEval;
-                      // TWR 모드의 ₩ 값은 '평가액 변동'이 아니라 **실손익**(변동 − 순입출금)이다.
-                      // %가 흐름을 제거한 값이므로 금액도 같은 기준이라야 둘이 같은 이야기를 한다.
-                      const prof = periodRealProfit;
+                      // ₩ 값 = 누적 Σ dodAbsChange의 두 끝점 차분(useChartInteraction/App이 계산) — %(두 끝점
+                      // 누적 TWR의 비)와 **같은 일간 지표**에서 나오므로 보류·이월·장부 관측이 둘에 똑같이 반영된다.
+                      const prof = displayResult.profit ?? null;
                       return (
                         <>
                           <span className={`text-[12px] font-black whitespace-nowrap ${myReturnRate >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
@@ -644,7 +644,7 @@ export default function PortfolioChart({
                           )}
                           {startEvl != null && evl != null && (
                             <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
-                              (조회시작 {fmtMoney(startEvl)} → 평가 {fmtMoney(evl)})
+                              ({selectionResult ? '선택시작' : '조회시작'} {fmtMoney(startEvl)} → 평가 {fmtMoney(evl)})
                             </span>
                           )}
                           {/* ⚠️ 과거의 '⚠ 순입금 N 포함 · 실손익 M' 고지는 제거됐다. 그 문구는 이 모드의
