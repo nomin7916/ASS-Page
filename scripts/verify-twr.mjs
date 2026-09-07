@@ -84,12 +84,15 @@ const computeDailyMetrics = (rows) => {
   let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
   const list = Array.isArray(rows) ? rows : [];
   let prev = null;
+  // 직전 **산출** 행 — 값의 기준. 보류('-') 행에서는 전진하지 않는다(src/utils.ts 상단 규약).
+  let anchor = null;
   for (let i = 0; i < list.length; i++) {
     const h = list[i];
     if (!h || !h.date) continue;
     if (!prev) {
-      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true, holdReason: 'no-prev', pendingFlow: 0 });
+      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true, holdReason: 'no-prev', pendingFlow: 0, spanFrom: null });
       prev = h;
+      anchor = h;
       continue;
     }
     const prevV = prev.evalAmount;
@@ -112,13 +115,17 @@ const computeDailyMetrics = (rows) => {
     // 장부가 한 푼도 안 움직인 행은 표시를 열되(ΔV가 곧 정답) 흐름은 전액 이월한다.
     const openRow = reason === 'unreflected-idle' || reason === 'frozen-idle';
     const emitHeld = held && !openRow;
+    // 값의 기준은 인접 행이 아니라 직전 산출 행(anchor) — 보류 구간의 ΔV를 여기서 합산한다.
+    const baseV = anchor.evalAmount;
+    const spanV = h.evalAmount - baseV;
     out.set(h.date, {
-      dodAbsChange: emitHeld ? null : (openRow ? dV : dV - netFlow),
-      dodChange: emitHeld ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, openRow ? 0 : fIn, openRow ? 0 : fOut),
+      dodAbsChange: emitHeld ? null : (openRow ? spanV : spanV - netFlow),
+      dodChange: emitHeld ? 0 : dailyFlowAdjustedRate(baseV, h.evalAmount, openRow ? 0 : fIn, openRow ? 0 : fOut),
       ledgerFlow: (emitHeld || openRow) ? 0 : ledger,
       held: emitHeld,
       holdReason: reason,
       pendingFlow: (emitHeld || openRow) ? netFlow : 0,
+      spanFrom: (!emitHeld && anchor !== prev) ? anchor.date : null,
     });
     if (held && !h.flowSuspect && netFlow !== 0) {
       carryIn = fIn; carryOut = fOut; carryLedger = ledger;
@@ -128,6 +135,7 @@ const computeDailyMetrics = (rows) => {
       carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
     }
     prev = h;
+    if (!emitHeld || reason === 'no-data') anchor = h;
   }
   return out;
 };
@@ -163,6 +171,12 @@ const rebaseTwr = (twr, baseTwr) => {
 let failed = 0;
 const R2 = (n) => Math.round(n * 10000) / 10000;
 
+// 문자열·null 등 비수치 필드(spanFrom·holdReason)의 엄격 동등 단언 — `check`는 수치 전용(NaN)이다.
+const checkEq = (label, actual, expected) => {
+  if (actual !== expected) {
+    failed++; console.error(`  ✗ ${label}\n      기대 ${expected}  실제 ${actual}`);
+  } else console.log(`  ✓ ${label}`);
+};
 const check = (label, actual, expected, tol = 0.0001) => {
   const ok = Math.abs(actual - expected) <= tol;
   if (!ok) {
@@ -419,7 +433,12 @@ section('구현 감사 회귀 테스트 17~20');
     { date: '2026-07-19', evalAmount: 664_510_208, flowIn: 0, flowOut: 0 },          // crypto −100,000
     { date: '2026-07-20', evalAmount: 724_940_946, flowIn: 0, flowOut: 0 },
   ]);
-  check('#21b 주말 드리프트가 있어도 이월 유지', m.get('2026-07-20').dodAbsChange, 11_312_160);
+  // ⚠️ 기대값이 11,312,160 → 11,412,160으로 바뀐 이유(2026-09 기준 행 규약): 주말 두 행은 보류('-')라
+  //    기준이 금요일(664,410,208)에 머물고, 월요일이 그 구간 전체의 변동을 낸다. 주말 crypto 순변동
+  //    +100,000은 실제 손익이므로 월요일에 합산되는 것이 정답이다(옛 값은 그 10만 원이 어느 행에도
+  //    실리지 않고 소실된 값이었다 — #7 '주말 crypto 손익 보존' 철학과도 이쪽이 맞다).
+  check('#21b 주말 드리프트가 있어도 이월 유지(+ 주말 ΔV 합산)', m.get('2026-07-20').dodAbsChange, 11_412_160);
+  checkEq('#21b 월요일 행이 보류 구간 시작(금요일)을 표시한다', m.get('2026-07-20').spanFrom, '2026-07-17');
 }
 
 // #21c 이월 폐기가 '흐름을 흡수하는 그 행'에서 일어나면 안 된다.
@@ -432,7 +451,12 @@ section('구현 감사 회귀 테스트 17~20');
     { date: '2026-05-13', evalAmount: 103_000_000, flowIn: 0, flowOut: 0 },         // 여전히 미반영 → 보류
     { date: '2026-05-14', evalAmount: 109_000_000, flowIn: 0, flowOut: 0 },         // 흐름 반영일
   ]);
-  check('#21c 흡수 행에서 이월을 폐기하지 않음', m.get('2026-05-14').dodAbsChange, 1_000_000);
+  // ⚠️ 기대값 1,000,000 → 4,000,000 (2026-09 기준 행 규약): 05-12·05-13 보류 행의 ΔV(+1.5M·+1.5M)가
+  //    옛 코드에서는 소실됐고, 지금은 흡수 행이 05-11 기준으로 구간 전체(+9M)에서 흐름(5M)을 뺀다.
+  //    05-11→05-14 진실 = 9M − 5M = 4M. 이월이 폐기됐다면 9,000,000(흐름 미차감)이 나온다 — 그것이
+  //    이 테스트가 원래 막으려던 회귀다.
+  check('#21c 흡수 행에서 이월을 폐기하지 않음(구간 전체 − 흐름)', m.get('2026-05-14').dodAbsChange, 4_000_000);
+  if (m.get('2026-05-14').dodAbsChange === 9_000_000) { failed++; console.error('  ✗ #21c 흡수 행에서 이월이 폐기됨(흐름 미차감)'); }
 }
 
 // ─── 4. 누적 TWR (개별 계좌 차트 '조회시작 0%' 라인) #22~#28 ────────────────
@@ -680,6 +704,92 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
   if (frozen) {
     failed++; console.error(`  ✗ #29f 누적 TWR이 09/01 값에 동결됨 (${twr.get('2026-09-04')})`);
   } else console.log('  ✓ #29f 사용자 실측 4행이 산출되고 누적 TWR 동결이 풀림');
+}
+
+// #31 기준(anchor) 행 규약 — 보류('-') 거래일의 ΔV는 소실되지 않고 **다음 산출 행이 합산**한다(2026-09).
+//     실측: COVERD 4 계좌, 09/02 출금 4,550,000이 장부 관측에서 '미반영'(bookDelta≠0·미흡수)으로 보류되자
+//     옛 코드는 그날 −12,208,765를 어느 행에도 싣지 않아(prev=h 무조건 전진) Σ +23,479,960 / 구간 TWR
+//     +5.55%를 냈다(진실 +15,821,195/+3.65% 또는 +11,271,195/+2.60% — 어느 가정에서도 틀림).
+//     ⚠️ 09/02가 여전히 '-'인 것은 #29e 계약(bookDelta≠0 미반영은 값을 단언하지 않는다) 그대로다 —
+//        바뀐 것은 그 ΔV가 **버려지느냐(옛) / 다음 산출 행에 실리느냐(지금)** 뿐이다.
+{
+  const V = {
+    '2026-08-31': 433_953_840, '2026-09-01': 436_867_055, '2026-09-02': 424_658_290, '2026-09-03': 427_403_915,
+    '2026-09-04': 431_640_320, '2026-09-05': 431_640_320, '2026-09-06': 431_640_320, '2026-09-07': 445_225_035,
+  };
+  const dates = Object.keys(V);
+  const rows = dates.map((date, i) => ({
+    date, evalAmount: V[date], flowIn: 0,
+    flowOut: date === '2026-09-02' ? 4_550_000 : 0,
+    // 09/02 장부 +4,550,000(분배금은 예수금에, 이체는 미반영) → 흡수 안 됨 → 'unreflected'(보류)
+    bookDelta: i === 0 ? null : (date === '2026-09-02' ? 4_550_000 : 0),
+  }));
+  const m = computeDailyMetrics(rows);
+  check('#31 09/02는 종전대로 보류(-)', m.get('2026-09-02').dodAbsChange, null);
+  check('#31 09/02 held(#29e 계약 유지)', m.get('2026-09-02').held, true);
+  check('#31 09/03이 보류 구간(09/01 종가 기준) 전체 변동을 낸다', m.get('2026-09-03').dodAbsChange, 427_403_915 - 436_867_055);
+  checkEq('#31 09/03 spanFrom = 기준 행(09/01)', m.get('2026-09-03').spanFrom, '2026-09-01');
+  checkEq('#31 인접 산출 행은 spanFrom null', m.get('2026-09-04').spanFrom, null);
+  // 보존 항등식 — 이 구간에서 흐름은 착지하지 않았으므로(장부가 −4,550,000으로 움직인 날이 없다)
+  // Σ 일간손익 = ΔV(전체). 옛 코드는 23,479,960(09/02의 −12,208,765 소실).
+  const sum = dates.slice(1).reduce((s, d) => s + (m.get(d).dodAbsChange || 0), 0);
+  check('#31 Σ 일간손익 = ΔV(전체) − Σ차감흐름(0)', sum, 445_225_035 - 433_953_840);
+  // 누적 TWR도 같은 항등식을 따른다(흐름 차감이 없어 곱이 정확히 끝점 비로 수렴).
+  const twr = computeCumulativeTwr(rows);
+  const wantTwr = (445_225_035 / 433_953_840 - 1) * 100;
+  if (Math.abs(twr.get('2026-09-07') - wantTwr) > 1e-6) {
+    failed++; console.error(`  ✗ #31 누적 TWR이 끝점 비와 다름 (${twr.get('2026-09-07')} vs ${wantTwr}) — 09/02 ΔV가 곱에서 빠졌는가?`);
+  } else console.log(`  ✓ #31 누적 TWR = 끝점 비 (+${wantTwr.toFixed(4)}% — 옛 코드는 +5.55%)`);
+}
+
+// #31b 보존 항등식 — 보류 뒤 흐름이 **착지**하면 착지 행 = (V − 기준V) − 순흐름, Σ = ΔV(전체) − 차감흐름.
+{
+  const m = computeDailyMetrics([
+    { date: '2026-05-11', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    // 출금 200만 원장, 장부는 +50만(실현이익 등 다른 변화) → 흡수 안 됨 → 보류('-')
+    { date: '2026-05-12', evalAmount: 99_500_000, flowIn: 0, flowOut: 2_000_000, bookDelta: 500_000 },
+    // 다음 날 장부 −200만 → 이월 흐름 착지 → 보류 구간(05-11 기준) 전체 변동에서 흐름을 뺀다
+    { date: '2026-05-13', evalAmount: 97_510_000, flowIn: 0, flowOut: 0, bookDelta: -2_000_000 },
+  ]);
+  check('#31b 보류 행은 -', m.get('2026-05-12').dodAbsChange, null);
+  check('#31b 착지 행 = (V − 기준V) + 출금', m.get('2026-05-13').dodAbsChange, (97_510_000 - 100_000_000) + 2_000_000);
+  checkEq('#31b 착지 행 spanFrom = 기준 행', m.get('2026-05-13').spanFrom, '2026-05-11');
+  const sum = m.get('2026-05-13').dodAbsChange + (m.get('2026-05-12').dodAbsChange || 0);
+  check('#31b Σ = ΔV(전체) − 차감흐름(−200만)', sum, (97_510_000 - 100_000_000) - (-2_000_000));
+  // 배율도 기준 행 대비(EOD 출금 가중): (97.51M + 2M) / 100M − 1 = −0.49%
+  const r = m.get('2026-05-13').dodChange;
+  if (Math.abs(r - (-0.49)) > 1e-9) { failed++; console.error(`  ✗ #31b 착지 행 배율이 기준 행 대비가 아님 (${r})`); }
+  else console.log('  ✓ #31b 착지 행 배율 = 기준 행 대비 Modified Dietz(−0.49%)');
+}
+
+// #31c 'no-data'(직전 V 0) 행은 새 기준이 된다 — 평가 0 다음의 정상 행이 1% 복귀(#28과 짝).
+{
+  const m = computeDailyMetrics([
+    { date: '2026-06-01', evalAmount: 100_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-06-02', evalAmount: 0, flowIn: 0, flowOut: 0 },
+    { date: '2026-06-03', evalAmount: 101_000_000, flowIn: 0, flowOut: 0 },
+    { date: '2026-06-04', evalAmount: 102_010_000, flowIn: 0, flowOut: 0 },
+  ]);
+  checkEq('#31c 전일 V=0 행은 no-data 보류', m.get('2026-06-03').holdReason, 'no-data');
+  check('#31c 그 다음 행은 no-data 행을 기준으로 정상 산출', m.get('2026-06-04').dodAbsChange, 1_010_000);
+  checkEq('#31c 기준이 인접 행이라 spanFrom null', m.get('2026-06-04').spanFrom, null);
+}
+
+// #31d 비거래일(frozen, ΔV=0) 보류는 종전과 값이 같다 — 기준 V가 인접 V와 같아서다(하위호환 확인).
+//      토요일: 입금 원장 + 원가 정정(장부만 +1,000, V 불변) → 'frozen'(보류) / 일요일: 장부 불변 →
+//      'frozen-idle'(열림, 0) / 월요일: 예수금 반영(장부 +5천만) + 시장 +1.5% → 흡수.
+{
+  const m = computeDailyMetrics([
+    { date: '2026-07-17', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: '2026-07-18', evalAmount: 100_000_000, flowIn: 50_000_000, flowOut: 0, bookDelta: 1_000 },
+    { date: '2026-07-19', evalAmount: 100_000_000, flowIn: 0, flowOut: 0, bookDelta: 0 },
+    { date: '2026-07-20', evalAmount: 151_500_000, flowIn: 0, flowOut: 0, bookDelta: 50_000_000 },
+  ]);
+  check('#31d 토요일 frozen 보류', m.get('2026-07-18').dodAbsChange, null);
+  check('#31d 일요일 frozen-idle 열림 = 0 (기준 금요일, 값 동일)', m.get('2026-07-19').dodAbsChange, 0);
+  checkEq('#31d 일요일 spanFrom = 금요일(보류 구간 합산 표시)', m.get('2026-07-19').spanFrom, '2026-07-17');
+  check('#31d 월요일 = 시장 변동분만(값 불변)', m.get('2026-07-20').dodAbsChange, 1_500_000);
+  checkEq('#31d 월요일 기준은 인접(일요일)이라 spanFrom null', m.get('2026-07-20').spanFrom, null);
 }
 
 // #29g 하위호환의 축 — bookDelta 미제공이면 4필드가 **바이트 단위로** 종전과 같아야 한다.
@@ -935,6 +1045,71 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     //    holdReasonText 를 부르는지(=진단으로 **대체**했는지)를 본다.
     g2("미반영 행(pendingNet !== 0)이 '입출금이 없던 날' 대신 진단 문구를 낸다",
       /pendingNet\s*!==\s*0\s*\n?\s*\?\s*holdReasonText\(/.test(hist));
+  }
+}
+
+// #32 드리프트 가드 — 이 파일의 미러(computeDailyMetrics·computeCumulativeTwr·holdReasonOf)와 **실제
+//     src/utils.ts**가 같은 값을 내는지 대조한다. 위 #1~#31은 전부 미러를 검사하므로 src에만(또는 미러에만)
+//     넣은 변경은 그대로 통과한다(verify-cal-detail #D1·verify-backtest #450 선례). utils.ts는 import가
+//     0건이라 Node 타입 스트리핑으로 직접 실행된다(verify-period와 같은 방식). ⚠️ 모듈 로드 실패를
+//     '런타임 미지원'과 뭉뚱그려 건너뛰지 말 것 — ERR_UNKNOWN_FILE_EXTENSION만 skip, 나머지는 실패다.
+{
+  let real = null, loadErr = null;
+  try { real = await import(new URL('../src/utils.ts', import.meta.url).href); }
+  catch (e) { loadErr = e; }
+  if (!real) {
+    if (loadErr && loadErr.code === 'ERR_UNKNOWN_FILE_EXTENSION') {
+      console.log('  · #32 이 Node는 .ts 직접 import를 지원하지 않아 드리프트 대조를 건너뜁니다');
+    } else { failed++; console.error(`  ✗ #32 src/utils.ts 로드 실패: ${loadErr && loadErr.message}`); }
+  } else {
+    const fx = [
+      // COVERD 실측(#31) — 보류 거래일 + 미착지 흐름
+      ['2026-08-31|433953840', '2026-09-01|436867055|0|0|0', '2026-09-02|424658290|0|4550000|4550000',
+       '2026-09-03|427403915|0|0|0', '2026-09-04|431640320|0|0|0', '2026-09-05|431640320|0|0|0',
+       '2026-09-06|431640320|0|0|0', '2026-09-07|445225035|0|0|0'],
+      // 착지(#31b)
+      ['2026-05-11|100000000|0|0|0', '2026-05-12|99500000|0|2000000|500000', '2026-05-13|97510000|0|0|-2000000'],
+      // no-data 기준(#31c/#28)
+      ['2026-06-01|100000000', '2026-06-02|0', '2026-06-03|101000000', '2026-06-04|102010000'],
+      // 주말 frozen(#31d)
+      ['2026-07-17|100000000|0|0|0', '2026-07-18|100000000|50000000|0|1000', '2026-07-19|100000000|0|0|0', '2026-07-20|151500000|0|0|50000000'],
+      // 주말 crypto 드리프트(#21b) — bookDelta 없음(ΔV 추측 경로)
+      ['2026-07-17|664410208', '2026-07-18|664610208|49118578', '2026-07-19|664510208', '2026-07-20|724940946'],
+      // 흡수 행(#21c) — ACTIVE 예산 경로
+      ['2026-05-11|100000000', '2026-05-12|101500000|5000000', '2026-05-13|103000000', '2026-05-14|109000000'],
+      // 폐기 복귀(#14b)
+      ['2026-03-02|100000000', '2026-03-03|98000000|5000000', '2026-03-04|98980000', '2026-03-05|99960000', '2026-03-06|100960000'],
+      // 장부 불변 미반영 열림(#29c)
+      ['2026-05-18|100000000|0|0|0', '2026-05-19|101100000|0|10000000|0', '2026-05-20|102200000|0|0|0', '2026-05-21|103300000|0|0|0', '2026-05-22|93300000|0|0|-10000000'],
+      // 이관 오판 차단(#29e)
+      ['a1|100000000|0|0|0', 'a2|40000000|0|60000000|-20000000'],
+      ['c1|100000000|0|0|0', 'c2|90000000|0|10000000|2000000'],
+    ].map(spec => spec.map(s => {
+      const [date, ev, fi, fo, bd] = s.split('|');
+      const row = { date, evalAmount: Number(ev), flowIn: Number(fi || 0), flowOut: Number(fo || 0) };
+      if (bd !== undefined) row.bookDelta = Number(bd);
+      return row;
+    }));
+    const ser = (m) => JSON.stringify([...m.entries()]);
+    let drift = 0;
+    fx.forEach((rows, i) => {
+      const a = ser(computeDailyMetrics(rows)), b = ser(real.computeDailyMetricsSeries(rows));
+      if (a !== b) { drift++; console.error(`  ✗ #32 픽스처 ${i} 일간 지표가 미러와 다름\n      미러 ${a}\n      실제 ${b}`); }
+      const ta = ser(computeCumulativeTwr(rows)), tb = ser(real.computeCumulativeTwrSeries(rows));
+      if (ta !== tb) { drift++; console.error(`  ✗ #32 픽스처 ${i} 누적 TWR이 미러와 다름\n      미러 ${ta}\n      실제 ${tb}`); }
+    });
+    const reasons = [
+      [100_000_000, 100_500_000, -2_000_000, 0], [100_000_000, 100_500_000, -2_000_000, -500_000],
+      [100_000_000, 100_500_000, -2_000_000, null], [100_000_000, 100_000_000, -2_000_000, 0],
+      [100_000_000, 100_000_000, -2_000_000, -2_000_000], [100_000_000, 100_500_000, -500_000, 0],
+      [100_000_000, 100_500_000, 0, 0], [0, 100_000_000, 1_000, 0],
+    ];
+    reasons.forEach((args, i) => {
+      const a = holdReasonOf(...args), b = real.holdReasonOf(...args);
+      if (a !== b) { drift++; console.error(`  ✗ #32 사유 ${i} 미러 ${a} vs 실제 ${b}`); }
+    });
+    if (drift === 0) console.log(`  ✓ #32 src/utils.ts ↔ 미러 드리프트 없음 (픽스처 ${fx.length}건 · 사유 ${reasons.length}건)`);
+    else failed += drift;
   }
 }
 

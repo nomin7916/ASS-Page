@@ -456,7 +456,18 @@ export const bookDeltaBetween = (bookByDate, prevDate, date) => {
 //    buildCloseEvalSeries가 직전 정확값을 이월하므로 흔한 경로다).
 // rows: [{ date, evalAmount, flowIn, flowOut, ledger?, flowSuspect?, bookDelta? }] — 반드시 날짜 오름차순
 //   bookDelta: 전일 대비 장부액(Σ 예수금+매입원가) 변화. 있으면 보류 판정이 추측 대신 관측을 쓴다(권장).
-// 반환: Map<date, { dodAbsChange, dodChange, ledgerFlow, held }>
+// 반환: Map<date, { dodAbsChange, dodChange, ledgerFlow, held, holdReason, pendingFlow, spanFrom }>
+// ⚠️ 기준(anchor) 행 규약 (2026-09 — 보류 거래일의 ΔV 소실 결함 수정. 되돌리지 말 것):
+//    값(dodAbsChange·dodChange)의 기준은 **인접 행이 아니라 직전 '산출' 행**(anchor)이다.
+//    보류('-', emitHeld) 행은 anchor를 전진시키지 않으므로, 그 다음 산출 행이 보류 구간 전체의
+//    변동(Σ ΔV)을 내고 `spanFrom`(표시 전용)에 그 시작 날짜를 싣는다.
+//    옛 코드는 `prev = h`를 무조건 전진시켜 보류 행의 ΔV가 **어느 행에도 실리지 않았다** —
+//    흐름만 이월되고 그날 시장 변동은 Σ dodAbsChange·누적 TWR에서 영구 소실됐다(실측 2026-09:
+//    09/02 출금 4,550,000이 '미반영'으로 보류되자 그날 −12,208,765가 사라져 구간 TWR +5.55% vs
+//    진실 +3.65%/+2.60%). 이 규약이 보존 항등식 **Σ dodAbsChange = ΔV(전체) − Σ(차감된 흐름)** 을
+//    되살린다. 보류 **판정**(holdReasonOf)은 종전대로 인접 행 기준이다 — 소액 하한·ΔV 추측·
+//    bookDelta 관측은 전부 '하루치' 스케일 가정이라 기준을 바꾸면 판정이 달라진다.
+//    'no-data'(직전 V가 0/없음) 행은 비교 기준이 무의미하므로 anchor를 그 행으로 옮긴다.
 // 이월 상한 — 흡수되지 않은 흐름을 언제까지 들고 갈 것인가.
 //  · FROZEN(ΔV=0, 비거래일 carry-forward): KR 최장 연휴(설·추석+주말, 실측 최장 6일)를 덮어야 한다.
 //  · ACTIVE(ΔV≠0, 거래일): 오탐 보류일 가능성이 있으므로 짧게. 상한을 넘기면 이월을 **폐기**하고
@@ -469,14 +480,17 @@ export const computeDailyMetricsSeries = (rows) => {
   let carryIn = 0, carryOut = 0, carryLedger = 0, carryRows = 0, activeRows = 0;
   const list = Array.isArray(rows) ? rows : [];
   let prev = null; // ⚠️ list[i-1]이 아니라 '직전 유효 행' — 무효 행을 건너뛰면 기준이 어긋난다
+  // 직전 **산출** 행 — 값의 기준. 보류('-') 행에서는 전진하지 않는다(함수 상단 규약 참조).
+  let anchor = null;
   for (let i = 0; i < list.length; i++) {
     const h = list[i];
     if (!h || !h.date) continue;
     if (!prev) {
       // 첫 행은 비교 대상이 없다. ⚠️ 이 행의 흐름을 이월하지 말 것 — 계좌 편입 평가액이라
       //    이미 V에 반영돼 있어, 이월하면 두 번째 행이 그만큼 가짜 손실로 찍힌다.
-      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true, holdReason: 'no-prev', pendingFlow: 0 });
+      out.set(h.date, { dodAbsChange: null, dodChange: 0, ledgerFlow: 0, held: true, holdReason: 'no-prev', pendingFlow: 0, spanFrom: null });
       prev = h;
+      anchor = h;
       continue;
     }
     const prevV = prev.evalAmount;
@@ -516,15 +530,21 @@ export const computeDailyMetricsSeries = (rows) => {
     //    매도 실현손익이 섞인 행에서 '-'가 확정 가짜 손익으로 승격돼 TWR에 영구 고정된다.
     const openRow = reason === 'unreflected-idle' || reason === 'frozen-idle';
     const emitHeld = held && !openRow;
+    // 값의 기준은 인접 행(prevV)이 아니라 직전 산출 행(anchor)이다 — 보류 행을 사이에 두면
+    // spanV가 그 구간 전체의 변동이 되어 보류 행의 ΔV가 여기서 합산된다(함수 상단 규약).
+    const baseV = anchor.evalAmount;
+    const spanV = h.evalAmount - baseV;
     out.set(h.date, {
-      dodAbsChange: emitHeld ? null : (openRow ? dV : dV - netFlow),
-      dodChange: emitHeld ? 0 : dailyFlowAdjustedRate(prevV, h.evalAmount, openRow ? 0 : fIn, openRow ? 0 : fOut),
+      dodAbsChange: emitHeld ? null : (openRow ? spanV : spanV - netFlow),
+      dodChange: emitHeld ? 0 : dailyFlowAdjustedRate(baseV, h.evalAmount, openRow ? 0 : fIn, openRow ? 0 : fOut),
       // 배지는 실제로 보정에 쓰인 행에만 — 이월 중인 행에 찍으면 %와 어긋나 보인다
       ledgerFlow: (emitHeld || openRow) ? 0 : ledger,
       held: emitHeld,
-      // 표시 전용 2필드 — ⚠️ 값 계산(dodAbsChange/dodChange/ledgerFlow)에 절대 쓰지 말 것.
+      // 표시 전용 3필드 — ⚠️ 값 계산(dodAbsChange/dodChange/ledgerFlow)에 절대 쓰지 말 것.
       holdReason: reason,
       pendingFlow: (emitHeld || openRow) ? netFlow : 0,
+      // 직전 산출 행이 인접 행이 아닐 때(=보류 구간을 합산했을 때) 그 시작 날짜. 인접이면 null.
+      spanFrom: (!emitHeld && anchor !== prev) ? anchor.date : null,
     });
     // flowSuspect(오늘 라이브 이상치)는 항상 마지막 행이라 이월 대상이 아니다
     if (held && !h.flowSuspect && netFlow !== 0) {
@@ -538,6 +558,10 @@ export const computeDailyMetricsSeries = (rows) => {
       carryIn = 0; carryOut = 0; carryLedger = 0; carryRows = 0; activeRows = 0;
     }
     prev = h;
+    // ⚠️ 보류('-') 행은 기준을 전진시키지 않는다 — 그 ΔV는 다음 산출 행이 합산한다.
+    //    'no-data'(직전 V 0/없음)만은 비교 기준 자체가 무의미해 이 행을 새 기준으로 삼는다
+    //    (#28: 평가 0 행 다음의 정상 행이 1% 복귀로 이어져야 한다).
+    if (!emitHeld || reason === 'no-data') anchor = h;
   }
   return out;
 };
@@ -585,7 +609,10 @@ export const holdReasonText = (reason, opts?) => {
 //   무관한 순수 시장 성과가 된다. 부수 효과로 지수·비교종목 라인(0% 정규화 가격비)과 같은 축에서 비교 가능.
 // ⚠️ held 행(주말 carry-forward·미반영 흐름)은 **배율 1.0**(직전값 유지)이다 — 일간 표시 계약
 //    (dodAbsChange=null → '-')과 다른 것이 **정상**이다. null로 빼면 주말마다 선이 끊기고, 보류된
-//    흐름은 computeDailyMetricsSeries가 다음 행으로 이월하므로 곱은 그대로 정확하다.
+//    흐름은 computeDailyMetricsSeries가 다음 행으로 이월하며, 보류 행의 **ΔV도** 다음 산출 행이
+//    기준(anchor) 행 대비로 합산하므로 곱은 그대로 정확하다.
+//    ⚠️ '흐름 이월'만으로는 ΔV=0(비거래일)일 때만 정확했다 — 거래일 보류 행의 ΔV는 기준 행
+//    규약(computeDailyMetricsSeries 상단)이 없으면 곱에서 영구 소실된다(2026-09 결함).
 // ⚠️ 곱셈 체인은 하루짜리 이상치를 **영구 고정**한다(원금대비 방식은 다음 날 자동 복구된다).
 //    그래서 입력 평가액은 반드시 buildCloseEvalSeries(allExact·!estimated 게이트)를 통과한 값이어야 한다.
 // rows: computeDailyMetricsSeries와 **동일 형식·동일 정렬**(날짜 오름차순)
