@@ -1234,17 +1234,23 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   개별은 **thead 위 얇은 바**(카드가 `xl:w-[21%]`≈252px, 헤더 가용 220px인데 제목+?+확장이 이미 190px).
   헤더에 넣으면 제목이 한글 글자 단위로 줄바꿈되고 고정 높이 + `overflow-hidden`이라 **표 행이 사라진다**.
   헤더를 안 건드리면 `verify:card-window #G14g`(`CardExpandButton` 한 줄 문자 일치)도 구조적으로 안전하다.
-  ⚠️ 바(32px)를 넣었으므로 카드 높이를 `360→392`/`520→552`로 올리고 **형제 카드**(`PortfolioStatsPanel`
-  1곳·`DepositPanel` 2곳)도 **함께** 올린다 — 각 카드가 명시적 height라 `items-stretch`가 먹지 않아
-  한쪽만 올리면 같은 행의 바닥이 32px 어긋난다.
+  ⚠️ 바(32px)를 넣었으므로 카드 높이를 `360→392`(국내)·`520→552`(해외)로 올리고 **형제 카드**
+  (`PortfolioStatsPanel` 1곳·`DepositPanel` 2곳)도 **함께** 올린다 — 각 카드가 명시적 height라
+  `items-stretch`가 먹지 않아 한쪽만 올리면 같은 행의 바닥이 그 차이만큼 어긋난다.
+  형제의 해외 분기 `h-full`은 부모 높이가 indefinite라 stretch로 승격되지 않으므로(`height:100%`는
+  `auto`가 아니라 `align-items:stretch` 대상 밖) **실효 높이는 `min-h`가 정한다** — `min-h`가 곧 계약이다.
+  ⚠️ **실제로 국내(360→392)만 반영되고 해외(520)가 남아 32px 어긋난 채 배포된 이력**이 있다
+  (사용자 보고 2026-09, 해외계좌 한정). 옛 `#G12b`가 양쪽 숫자를 **따로 박아** 둬서 초록이었다 →
+  지금은 `HistoryPanel` 소스에서 두 값을 파싱해 **같은 값인지(관계)** 를 단언한다. 리터럴 가드로
+  되돌리지 말 것.
   ⚠️ **`DepositPanel`의 `min-h-[392px]`를 빼지 말 것 — 모바일에서 카드가 헤더만 남고 붕괴한다**
   (사용자 보고 2026-09, 국내계좌 한정). 부모(`App` stats 섹션)가 `flex flex-col xl:flex-row`라 **모바일에서는
   main axis가 세로**인데, 입출금 두 카드만 `flex-1`(= `flex:1 1 0%`)이고 형제(통계·히스토리)에 있는
   `shrink-0`이 없다 → 세로 축에서 `flex-basis:0%`가 `h-[392px]`를 덮어쓰고 `overflow-hidden` 때문에
   automatic minimum size(`min-height:auto`)마저 0으로 계산돼 높이가 헤더 줄까지 무너진다. 해외 분기는
-  `min-h-[520px]`가 있어 원래부터 무사했다. PC(xl↑)는 main axis가 가로라 이 `min-h`가 레이아웃을 바꾸지
+  `min-h`가 있어 원래부터 무사했다. PC(xl↑)는 main axis가 가로라 이 `min-h`가 레이아웃을 바꾸지
   않는다. ⚠️ `flex-1`을 건드리는 방향으로 고치지 말 것(PC의 가로 균등 분배가 달라진다).
-  검증: `verify:period #G12b`가 두 카드 모두에서 이 문자열을 단언한다.
+  검증: `verify:period #G12b`가 두 카드 모두에서 이 계약을 단언한다.
 - **영속화(통합)**: `chartPrefs.intHistPeriod` — App.tsx 5지점(state 리터럴·`chartPrefsUpdatedAt` deps·
   STATE 저장 deps·`applyStateData`·`applyBackupData`) 전부. ⚠️ ②와 ③은 **둘 다** 필요(②만 → 저장 미예약 /
   ③만 → `chartPrefsUpdatedAt` 미상승으로 STATE write 스킵). 로드 2경로는 `normalizeHistPeriod`를

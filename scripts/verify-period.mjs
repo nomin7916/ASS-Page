@@ -367,14 +367,22 @@ ok('#G11b verify:transfer #32 대상 문자열 무손상',
 //     안 올리면 바 높이만큼 표 행이 그대로 사라진다.
 ok('#G12 개별 카드 높이 보정', /'h-\[552px\]' : 'h-\[392px\]'/.test(hist));
 // ⚠️ 각 카드가 명시적 height라 items-stretch가 먹지 않는다 — HistoryPanel만 올리면 같은 행의
-//    형제 카드(통계·입출금) 바닥이 32px 어긋난다(비해외 = 가장 흔한 화면에서만 드러난다).
-// ⚠️ DepositPanel의 `min-h-[392px]`를 빼지 말 것 — 부모(App stats 섹션)가 모바일에서 `flex-col`이고 이 카드만
+//    형제 카드(통계·입출금) 바닥이 그 차이만큼 어긋난다.
+// ⚠️ 이 가드는 리터럴 존재가 아니라 **HistoryPanel의 값과 같은가**(관계)를 단언한다 — 옛 가드는
+//    양쪽 숫자를 따로 박아 둬서, 해외 분기만 552 vs 520으로 32px 어긋난 채 초록이었다(사용자 보고 2026-09).
+// ⚠️ DepositPanel의 국내 `min-h`를 빼지 말 것 — 부모(App stats 섹션)가 모바일에서 `flex-col`이고 이 카드만
 //    `flex-1`(형제는 shrink-0)이라, min-h가 없으면 세로 축에서 `flex-basis:0%`가 height를 덮어쓰고
 //    overflow-hidden이 automatic minimum size까지 0으로 만들어 **카드가 헤더만 남고 붕괴**한다(사용자 보고 2026-09).
-//    높이 392 계약 자체는 그대로다(PC는 main axis가 가로라 이 min-h가 레이아웃을 바꾸지 않는다).
-ok('#G12b 형제 카드 높이도 함께 올라갔다 (+ 입출금 카드는 모바일 붕괴 방지 min-h 필수)',
-  /'h-full min-h-\[520px\]' : 'h-\[392px\]'/.test(read('src/components/PortfolioStatsPanel.tsx')) &&
-  (read('src/components/DepositPanel.tsx').match(/'h-full min-h-\[520px\]' : 'h-\[392px\] min-h-\[392px\]'/g) || []).length === 2);
+//    높이 계약 자체는 그대로다(PC는 main axis가 가로라 이 min-h가 레이아웃을 바꾸지 않는다).
+{
+  const hm = hist.match(/'h-\[(\d+)px\]' : 'h-\[(\d+)px\]'/);   // [1] = 해외, [2] = 그 외
+  const ov = hm && hm[1], kr = hm && hm[2];
+  ok('#G12b 형제 카드 높이가 HistoryPanel과 같은 값 (+ 입출금 카드는 모바일 붕괴 방지 min-h 필수)',
+    !!hm &&
+    new RegExp(`'h-full min-h-\\[${ov}px\\]' : 'h-\\[${kr}px\\]'`).test(read('src/components/PortfolioStatsPanel.tsx')) &&
+    (read('src/components/DepositPanel.tsx')
+      .match(new RegExp(`'h-full min-h-\\[${ov}px\\]' : 'h-\\[${kr}px\\] min-h-\\[${kr}px\\]'`, 'g')) || []).length === 2);
+}
 
 // #G13 fail-safe: 화이트리스트가 아니면 원본 반환 (선언 + 두 호출부 모두)
 ok('#G13 compressPeriodRows 화이트리스트',

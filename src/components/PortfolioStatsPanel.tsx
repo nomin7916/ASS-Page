@@ -75,8 +75,9 @@ export default function PortfolioStatsPanel({
 
   const rowPy = isOv ? 'py-1' : 'py-1.5';
   const contentP = isOv ? 'p-1.5' : 'px-3 py-1.5';
-  // ⚠️ HistoryPanel(기간 세그먼트 바 포함)과 **한 세트**다 — 한쪽만 바꾸면 같은 행의 카드 바닥이 어긋난다.
-  const cardH = isOv ? 'h-full min-h-[520px]' : 'h-[392px]';
+  // ⚠️ HistoryPanel(기간 세그먼트 바 포함)의 `h-[552px]`/`h-[392px]`와 **한 세트**다 —
+  //    한쪽만 바꾸면 같은 행의 카드 바닥이 그 차이만큼 어긋난다(해외 552 vs 520으로 32px 어긋났던 이력).
+  const cardH = isOv ? 'h-full min-h-[552px]' : 'h-[392px]';
   const headerP = isOv ? 'p-3 space-y-2' : 'px-3 py-2 space-y-1';
 
   return (
