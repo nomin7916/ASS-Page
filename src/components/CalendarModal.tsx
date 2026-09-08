@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, ChevronLeft, ChevronRight, Check, Calendar as CalIcon, Trash2, ExternalLink } from 'lucide-react';
 import { BG } from '../design';
-import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, EMPTY_HIST_DETAIL } from '../utils';
+import { generateId, formatNumber, cleanNum, isValidIsoDate, collectTransferRows, formatCurrency, formatPercent, spanFromText, EMPTY_HIST_DETAIL } from '../utils';
 import { getTodayKST } from '../hooks/useMarketCalendar';
 import { ledgerEventsByDate, LEDGER_DIVERGING, LEDGER_PAY_LABEL } from '../ledger';
 
@@ -850,8 +850,13 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                     >
                       <div className="text-[10px] font-semibold text-gray-200 tabular-nums truncate">{hideAmounts ? '••••••' : fmtAbbrev(rawMetric.evalAmount)}</div>
                       {rawMetric.dodAbsChange != null && (
-                        <div className={`text-[9px] tabular-nums truncate mt-[1px] ${pnlColor(rawMetric.dodAbsChange)}`}>
+                        // ⚠️ 직전 행이 보류('-')였으면 이 값은 하루치가 아니라 그 구간 전체다(기준 행 규약).
+                        //    달력 칸은 '그 날의 수익'으로 읽히므로 반드시 표시해야 한다 — 비거래일 칸에
+                        //    아무 설명 없이 +₩400만이 뜨는 상태가 실제로 나온다.
+                        <div className={`text-[9px] tabular-nums truncate mt-[1px] ${pnlColor(rawMetric.dodAbsChange)}`}
+                          title={rawMetric.spanFrom ? spanFromText(rawMetric.spanFrom) : undefined}>
                           {hideAmounts ? '••••' : fmtAbbrev(rawMetric.dodAbsChange)} {fmtPct(rawMetric.dodChange)}
+                          {rawMetric.spanFrom && <span className="text-gray-500">*</span>}
                         </div>
                       )}
                       <div className={`text-[9px] tabular-nums truncate mt-[1px] ${pnlColor(metricCum)}`}>
@@ -974,7 +979,11 @@ export default function CalendarModal({ open, onClose, memos = {}, onUpdateMemos
                 <span className="text-[11px] font-semibold tabular-nums text-gray-300">
                   총자산: <span className="text-gray-100">{hideAmounts ? '••••••' : nfmt(raw.evalAmount)}</span>
                   {' / '}수익: {raw.dodAbsChange != null
-                    ? <span className={pnlColor(raw.dodAbsChange)}>{hideAmounts ? '••••' : `${raw.dodAbsChange < 0 ? '-' : ''}₩${nfmt(Math.abs(raw.dodAbsChange))}`}({fmtPct(raw.dodChange)})</span>
+                    // ⚠️ 보류 구간을 합산한 값이면(spanFrom) '그 날의 수익'이 아니라는 사실을 밝힌다.
+                    ? <span className={pnlColor(raw.dodAbsChange)} title={raw.spanFrom ? spanFromText(raw.spanFrom) : undefined}>
+                        {hideAmounts ? '••••' : `${raw.dodAbsChange < 0 ? '-' : ''}₩${nfmt(Math.abs(raw.dodAbsChange))}`}({fmtPct(raw.dodChange)})
+                        {raw.spanFrom && <span className="text-gray-500"> *</span>}
+                      </span>
                     : <span className="text-gray-500">-</span>}
                   {' / '}수익율: <span className={pnlColor(cum)}>{fmtPct(cum)}</span>
                   {' / '}환율 :<span className="text-gray-100">{fx != null ? String(Math.round(fx)) : '-'}</span>

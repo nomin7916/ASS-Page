@@ -1183,6 +1183,30 @@ section('누적 TWR — 개별 계좌 차트 조회시작 0% 모드');
     g2('통합 추이표 행이 spanFrom을 싣는다', /spanFrom:\s*m\.spanFrom\s*\|\|\s*null/.test(intg));
     g2('헤더 오늘 수익 카드가 spanFrom을 표기한다', /todayRec\?\.spanFrom\s*&&/.test(dash) && /spanFromText\(/.test(dash));
     g2('개별 추이표 툴팁이 spanFromText를 쓴다', /spanFromText\(m\.spanFrom/.test(hist));
+    // ── 표시 계층의 정직성(2026-09 적대적 검증) ──
+    // ⚠️ 달력 칸·패드는 '그 날의 수익'으로 읽힌다 — 구간 합산 값에 아무 표시가 없으면 비거래일 칸에
+    //    설명 없는 큰 금액이 뜬다(실측). 두 렌더 지점 모두 spanFrom을 읽어야 한다.
+    const cal = readSrc('src/components/CalendarModal.tsx');
+    g2('메모 달력 칸·패드가 구간 합산(spanFrom)을 표시한다',
+      !!cal && (cal.match(/spanFromText\(/g) || []).length >= 2 && (cal.match(/\.spanFrom\s*\?/g) || []).length >= 2);
+    // ⚠️ 보류 사유 진단은 **판정에 실제로 쓰인 값**(bookDelta − incomeIn)을 보여야 한다.
+    g2('추이표 보류 툴팁이 소득 보정 후 장부액을 쓴다', /raw\s*-\s*inc;/.test(hist) && /incomeIn\s*\|\|\s*0;?\s*$/m.test(hist));
+    g2("보류 툴팁이 no-data 행에는 붙지 않는다", /m\.holdReason\s*!==\s*'no-data'/.test(hist));
+    const cmpX = readSrc('src/evalCompareExcel.ts');
+    // ⚠️ '토큰 존재'만 재면 죽은 단언이다(변이 M34 실측) — 조건식을 raw로 되돌려도 값 쪽 토큰이
+    //    남아 통과한다. 경고 블록을 잘라 `bookDelta`가 **그 안에 없음**까지 함께 못 박는다.
+    const warnBlock = (() => {
+      if (!cmpX) return '';
+      const a = cmpX.indexOf('if (!model.flowReflected)');
+      return a >= 0 ? cmpX.slice(a, a + 700) : '';
+    })();
+    g2('비교 엑셀 경고가 소득 보정 후 장부액만 인쇄한다(raw bookDelta 부재)',
+      /model\.bookFlowPart\s*!=\s*null/.test(warnBlock) && /amt\(model\.bookFlowPart\)/.test(warnBlock)
+      && !/model\.bookDelta/.test(warnBlock));
+    const cmpM = readSrc('src/evalCompare.ts');
+    g2('evalCompare가 판정에 쓴 값(bookFlowPart)을 반환한다', !!cmpM && /bookFlowPart,/.test(cmpM));
+    // ⚠️ `no-data`는 anchor를 전진시키는 유일한 사유라 '다음 산출 행에 합산' 문구가 거짓이 된다.
+    g2("holdReasonText에 no-data 전용 문구가 있다", /case 'no-data':/.test(utl));
     // ── 개별 차트 선택기간 ₩ = 누적 Σ dodAbsChange 차분(2026-09 D2) ──
     const chart = readSrc('src/components/PortfolioChart.tsx');
     const inter = readSrc('src/hooks/useChartInteraction.ts');

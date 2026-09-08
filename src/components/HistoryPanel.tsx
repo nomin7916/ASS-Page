@@ -381,10 +381,20 @@ export default function HistoryPanel({
                     // 보류('-') 행의 사유를 값으로 뒷받침한다 — 장부액(예수금+매입원가)이 전일 대비 얼마나
                     // 움직였는지는 화면 어디에도 없어, 이 줄이 없으면 사용자가 '왜 -인가'를 추적할 수 없다.
                     // ⚠️ 일간 지표 memo와 같은 Map(rowBookByDate)을 읽는다(다른 소스로 재계산 금지).
-                    const heldBook = (!isPeriodMode && hasPrev && rowBookByDate && viewRows[i + 1])
-                      ? bookDeltaBetween(rowBookByDate, viewRows[i + 1].date, h.date) : null;
+                    // ⚠️ 판정에 쓰인 값과 **같은 것**을 보여줘야 한다 — 흡수 판정은 `bookDelta − incomeIn`
+                    //    (계좌 내부 소득을 걷어낸 값)을 쓰므로, raw를 띄우면서 '정확히 0이면 열립니다'라고
+                    //    하면 배당이 기록된 행에서 '+₩0인데 -'라는 자기모순이 화면에 뜬다.
+                    // ⚠️ `no-data`(직전 평가액 0)에는 붙이지 말 것 — 그 사유는 흐름·장부를 보기도 전에
+                    //    결정되므로 '원장 흐름과 맞지 않아'가 거짓이 된다.
+                    const heldBook = (!isPeriodMode && hasPrev && rowBookByDate && viewRows[i + 1] && m.holdReason !== 'no-data')
+                      ? (() => {
+                          const raw = bookDeltaBetween(rowBookByDate, viewRows[i + 1].date, h.date);
+                          if (raw == null) return null;
+                          const inc = externalFlowInRange(depositHistory, depositHistory2, viewRows[i + 1].date, h.date).incomeIn || 0;
+                          return raw - inc;
+                        })() : null;
                     const heldBookLine = heldBook == null ? ''
-                      : `\n장부액(예수금+매입원가) 전일 대비 ${heldBook >= 0 ? '+' : '−'}${formatCurrency(Math.abs(heldBook))} — 원장 흐름과 맞지 않아 보류했습니다(정확히 0이면 표시가 열립니다).`;
+                      : `\n장부액(예수금+매입원가, 배당 등 계좌 내부 소득 제외) 전일 대비 ${heldBook >= 0 ? '+' : '−'}${formatCurrency(Math.abs(heldBook))} — 원장 흐름과 맞지 않아 보류했습니다(정확히 0이면 표시가 열립니다).`;
                     const dodTitle = dodProfit != null
                       ? [
                           // ⚠️ 라벨과 항등식도 모드별로 갈라야 한다 — 월간 값에 '일간 손익'이라 쓰고

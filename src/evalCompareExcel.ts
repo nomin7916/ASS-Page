@@ -190,8 +190,12 @@ export const buildEvalCompareSheet = (input: EvalCompareExcelInput): XlsxSheet =
   // ⚠️ 원장 입금일과 예수금 반영일이 어긋나는 것은 구조적 정상이다 — 그 구간에서 순흐름을 그대로
   //    빼면 입금액 전액이 가짜 손실이 된다. 장부액 관측이 그 상태를 잡아낸다.
   if (!model.flowReflected) {
+    // ⚠️ 인쇄하는 숫자는 판정에 쓰인 `bookFlowPart`(= 장부액 변화 − 계좌 내부 소득)여야 한다 —
+    //    raw `bookDelta`를 띄우면 배당이 있는 구간에서 그 값으로 판정을 검산할 수 없다.
     warns.push(`원장의 입출금(${amt(model.netFlow)})이 아직 평가액·예수금에 반영되지 않은 것으로 보입니다`
-      + (model.bookDelta != null ? ` (장부액 변화 ${amt(model.bookDelta)})` : ' (보유수량이 추정이라 확인 불가)')
+      + (model.bookFlowPart != null
+        ? ` (장부액 변화 ${amt(model.bookFlowPart)}${model.incomeIn ? `, 배당 등 계좌 내부 소득 ${amt(model.incomeIn)} 제외` : ''})`
+        : ' (보유수량이 추정이라 확인 불가)')
       + ' — 거래 효과는 산출하지 않습니다');
   }
   if (model.totals.basis.dividendPartial || model.totals.compare.dividendPartial || model.totals.counter.dividendPartial) {

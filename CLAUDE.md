@@ -1036,6 +1036,16 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
     `useIntegratedData` **①의 `addIncome` + rows 2곳**(`intTwrCumByDate`·`intMonthlyHistory`,
     `netIncomeIn` 경유). `evalCompare.flowReflected`도 같은 규약(`bookDelta − incomeIn`).
   - **하위호환**: `incomeIn` 미기록(0)이면 판정·값이 종전과 1바이트도 다르지 않다(`#33b`가 단언).
+  - **⚠️ 진단 문구는 판정에 실제로 쓰인 값(`bookDelta − incomeIn`)을 보여야 한다** — raw를 띄우면
+    배당이 기록된 행에서 '+₩0인데 `-`'라는 자기모순이 화면에 뜬다. 적용 2곳: `HistoryPanel` 보류 행
+    툴팁, `evalCompareExcel` '흐름 미반영' 경고(`model.bookFlowPart`). `evalCompare`가 그 값을 반환한다.
+- **⚠️ 표시 계층은 '그 날의 수익'이라 단언하지 않는다 (2026-09)**: 기준(anchor) 행 규약 때문에
+  `dodAbsChange`는 **구간 합산일 수 있다**. `spanFrom`이 있으면 반드시 밝힐 것 — 적용 4곳:
+  헤더 '오늘 수익' 카드(`M/D부터 합산` 배지) · 개별 추이표 툴팁 · **메모 달력 칸·패드**(`*` + 툴팁).
+  달력을 빠뜨리면 비거래일 칸에 설명 없는 큰 금액이 뜬다(실측 토요일 +₩400만).
+  ⚠️ `holdReasonText`의 `unreflected-idle`을 '**그날의** 시세 변동분'으로 되돌리지 말 것(같은 툴팁의
+  `spanFromText`와 정면 모순). `no-data`는 **anchor를 전진시키는 유일한 사유**라 '다음 산출 행에
+  합산됩니다'가 거짓이다 — 전용 `case`를 두고, 보류 툴팁의 장부액 줄도 그 사유에는 붙이지 않는다.
 - **⚠️ 기준(anchor) 행 규약 — 보류('-') 거래일의 ΔV는 버려지지 않고 다음 산출 행이 합산한다 (2026-09, 되돌리지 말 것)**:
   `computeDailyMetricsSeries`는 값(`dodAbsChange`/`dodChange`)의 기준을 **인접 행이 아니라 직전 '산출' 행**
   (`anchor`)으로 잡는다. 보류(`emitHeld`) 행은 기준을 전진시키지 않으므로 그 다음 산출 행이 보류 구간 전체의

@@ -649,6 +649,10 @@ export const buildEvalCompare = (input: EvalCompareInput): EvalCompareResult => 
     netFlow,
     flowReflected,
     bookDelta,
+    // ⚠️ 화면·엑셀 경고는 **판정에 실제로 쓰인 값**(`bookFlowPart`)을 인쇄해야 한다 — raw `bookDelta`를
+    //    띄우면 배당(계좌 내부 소득)이 있는 구간에서 그 숫자로 판정을 검산할 수 없다.
+    bookFlowPart,
+    incomeIn,
     tradeEffect: totals.basis.evalNative - totals.counter.evalNative - netFlow,
     // 기준일 종가를 못 구한 종목이 있으면 A·C 총액이 비대칭으로 과소해져 거래 효과가 부풀려지고,
     // 원장 흐름이 아직 평가액에 반영되지 않았으면 그 금액 전액이 가짜 손익이 된다.
