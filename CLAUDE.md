@@ -3396,17 +3396,84 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   (`AccountTabBar`의 `FlowIcon` — `Workflow`/`Share2`/`Network`가 이 버전에 있다는 근거가 없다).
 - **소프트 상한**: 맵 5 / 노드 150 / 엣지 300(≈85KB). 백업 22본·관리자 포털 순차 로드로 복제되므로
   무한 증식만 막는다. 상한 도달 시 툴바 배너로 알린다.
+
+**팬/줌(마지막 화면)도 저장한다 — `map.viewport` (2026-09, ⚠️ 회귀 주의)**
+
+닫았다 열면 마지막으로 보던 위치·배율로 돌아온다(사용자 보고: "다시 열면 작성한 위치가 아니라
+엉뚱한 데를 보고 있다"). **저장 위치는 `FlowMap.viewport` 안** → App.tsx 7지점·sticky·별도 창
+브릿지가 이미 flowMaps를 통째로 실어 나르므로 **영속화 신규 지점이 0곳**이다.
+- **⚠️ chartPrefs로 옮기지 말 것** — 그쪽은 계좌가 0개면 저장 effect가 조기 반환하고
+  `saveVersionFile`도 부르지 않아 타 기기에 반영되지 않는다.
+- **⚠️ `normalizeFlowMaps`가 반드시 보존**해야 한다. 그 함수는 화이트리스트 재구축기라 필드를
+  빠뜨리면 **별도 창 저장 경로**(`flow:maps` → `normalizeFlowMaps`)와 Drive 로드에서 마지막 화면이
+  매번 조용히 삭제된다(`makeBtConfig`·`_ensureTaxBase`와 동일 버그 클래스). 짝으로
+  `flowFingerprint`에 `vp`가 없으면 '화면만 옮긴 세션'이 `portfolioUpdatedAt`을 못 올려 **STATE
+  저장이 통째로 스킵**된다(`historyVerifyKey`·`targetAmount`와 동일 클래스).
+- **⚠️ `dirtyRef`가 아니라 `vpDirtyRef`를 세운다(최대 회귀 지점)** — `dirtyRef`는 '늦게 도착한
+  Drive 데이터 채택'을 막는 가드다. 화면을 훑기만 해도 그게 서면, 로딩 중 연 보드가 시드한 **빈 맵이
+  저장된 흐름도를 덮는다**(복구 불가 — FlowBoard가 명시적으로 막아 둔 바로 그 경로).
+- **⚠️ 사용자가 실제로 움직였을 때만 커밋**(`vpTouchedRef`) — 복원값·구버전 자동 맞춤은 커밋하지
+  않는다. 아니면 '보드를 열기만 해도 Drive 저장'이 되고, 자동 맞춤 결과가 동의 없이 박제된다.
+- **⚠️ `flush`가 dirty 판정 **전에** 현재 화면을 먼저 반영**한다 — 디바운스(900ms)가 안 터진 채
+  닫아도 위치가 남는다. `commit`이 `localRef`를 동기 갱신하므로 바로 아래에서 읽어도 최신값이다.
+  ref 순환(`flush → commitViewport → commit → flush`)은 `commitViewportRef`로 끊는다.
+- **⚠️ 저장 직전 `normalizeFlowViewport`를 통과**시킨다 — 휠 줌이 만드는 `1.3310000000000004`가
+  지문에 새면 화면을 훑을 때마다 저장이 나간다. 줌 한계(`FLOW_MIN/MAX_SCALE`)는 캔버스 휠 핸들러와
+  **같은 상수**를 쓴다(손복제하면 캔버스에선 만들 수 있는데 저장 시 잘리는 배율이 생겨 화면이 튄다).
+- **구버전 데이터(저장된 위치 없음)는 `fitFlowViewport`로 1회 자동 맞춤** — '맞춤' 버튼과 **같은
+  함수**를 공유한다(손계산으로 되돌리면 같은 데이터인데 두 경로가 다른 화면을 준다).
+- **알려진 한계(의도)**: 인앱 보드와 별도 창이 같은 위치를 공유한다(창 크기가 다르면 마지막 쓰기가
+  이긴다 — 기존 last-writer-wins 절충 그대로). `readOnly`(impersonation·연결 끊김)에서는 복원만 되고
+  저장되지 않는다.
+
+**연결선·도형 색을 사용자가 고른다 — 엑셀식 팔레트 (2026-09)**
+
+`FlowInspector`의 **`ColorPicker` 한 컴포넌트**를 도형 채우기와 연결선 색이 공유한다(손복제 금지 —
+갈리면 두 곳의 팔레트가 달라진다). 자주 쓰는 8색 + **테마 색 6×10 + 표준 색 10**(사용자가 보내온
+엑셀 화면과 같은 Office 2007 테마) + `#RRGGBB` 직접 입력.
+- **저장 필드는 기존 `edge.stroke` / `node.fill`** — 지문·정규화·복원에 이미 들어 있어 **영속화
+  신규 지점 0곳**. 값은 `sanitizeHexColor`로 검증하고, ⚠️ **대소문자를 바꾸지 말 것**(저장돼 있던
+  `#2E75B6`을 소문자로 만들면 기존 도형이 전부 '변경됨'이 되어 원본 참조 보존 계약이 깨진다).
+- **⚠️ 화살촉은 색깔마다 `<marker>`를 만든다** — marker의 `fill`은 참조 요소의 stroke를 물려받지
+  않아 단일 marker로는 선만 빨갛고 화살촉은 파란 상태가 된다. `fill="context-stroke"`(SVG2)로
+  대체하지 말 것(구형 WebKit에서 무시된다). **기본색을 marker 집합에 반드시 포함**할 것 —
+  빠뜨리면 `stroke`가 없는(=기본색) 선의 화살촉이 통째로 사라진다.
+- **⚠️ 선택된 연결선에 후광(halo)을 그린다** — 색을 바꿀 수 있게 되면서 '어느 선을 고르고 있는지'를
+  색으로는 알 수 없게 됐다(라벨 없는 선은 종전에 선택 피드백이 **아예 없었다**).
+- **⚠️ 도형 글자색은 채우기 밝기를 따른다**(`readableTextColor`) — 팔레트에 흰색·옅은 톤이 들어와
+  흰 글자가 배경에 묻히는 것을 막는다. 문턱 0.45는 **기존 8색이 전부 흰 글자를 유지**하도록 잡은
+  값이다(가장 밝은 `#A5A5A5` = 0.376) — 낮추면 사용자가 이미 칠해 둔 도형의 글자색이 배포만으로 바뀐다.
+- **⚠️ 팔레트를 부동 팝오버로 만들지 말 것** — 인스펙터가 `overflow-y-auto`라 absolute 팝오버가
+  잘린다(`CustomDatePicker`가 같은 이유로 body 포털 + fixed 좌표를 써야 했다). 접이식으로 두어
+  그 문제 자체를 만들지 않는다. 테마 6단은 하드코딩 60색이 아니라 `shiftHex` 비율로 계산한다.
+- **⚠️ 기본색 되돌리기는 필드를 지운다**(`onPick(null)` → `undefined`) — 기본색 hex를 저장값으로
+  박으면 나중에 기본색을 바꿔도 그 도형만 옛 색에 남는다.
+- **범위 밖(의도)**: 도형 **테두리** 색 선택, 선 굵기, 그라데이션, 최근 사용 색 기록.
 - **범위 밖(의도)**: undo/redo(Drive 폴링이 타 기기 편집을 받아온 뒤 undo가 최신값을 덮는다 —
   `RebalanceTargetRestoreModal`이 같은 이유로 포기), PNG 내보내기, 자동 레이아웃,
   다중 캔버스 UI(데이터 모델은 배열이나 현재 1장 고정), 계좌 삭제 시 노드 캐스케이드 정리.
   **알려진 한계**: 인앱 보드와 새 창을 동시에 열면 이론상 마지막 쓰기가 이긴다(아이콘이 새 창을 열 때
   인앱 보드를 닫으므로 실사용에서 겹치는 구간은 짧다 — 메모 달력 창과 동일 절충).
   계좌가 0개면 저장 effect가 조기 반환해 흐름도가 저장되지 않는다(chartPrefs와 동일한 기존 한계).
-- 검증: `npm run verify:flow` (미러 #1~#26 + 소스 텍스트 가드 #27~#36).
+- 검증: `npm run verify:flow` (130건 — 미러 #1~#26 + **팬/줌 #38~#44b** + **색 #45~#48b** +
+  소스 텍스트 가드 #27~#36·**#49~#57c** + JSX 주석 #37).
   참조 구현은 `flowMap.ts`의 `normalizeFlowMaps`·`flowMapsHaveContent`·`flowFingerprint`·`edgePath`·
-  `removeNode`·`pruneOrphanEdges`·`roundNode`·`resolveFlowNodeView`·`countDanglingNodes` 본문과
-  **항상 1:1 동기화**할 것. 가드(#27~#36)는 영속화 배선을 정규식으로 단언하므로, 실패 시 **먼저
+  `removeNode`·`pruneOrphanEdges`·`roundNode`·`resolveFlowNodeView`·`countDanglingNodes`·
+  **`sanitizeHexColor`·`readableTextColor`·`normalizeFlowViewport`·`sameFlowViewport`·`fitFlowViewport`**
+  본문과 **항상 1:1 동기화**할 것. 가드는 영속화 배선을 정규식으로 단언하므로, 실패 시 **먼저
   정규식이 낡았는지 확인**하고 계약 자체가 바뀐 게 아니면 정규식을 고칠 것.
+  ⚠️ 가드는 **선언이 아니라 사용부**를 단언하며 **변이 28종 + 음성 대조 1종**(정규화가 viewport를
+  삼킴 · 지문에서 viewport 누락 · 레거시를 매번 변경으로 판정 · 배율 클램프 제거 · hex 소문자화 ·
+  글자색 문턱 하향 · 선 색 정규화 제거 · seed 복원 삭제 · 복원이 touched를 세움 · 늦은 데이터의
+  화면 미채택 · viewportOnly가 dirtyRef를 세움 · 채택 가드가 vpDirtyRef까지 봄 · flush가 화면을
+  먼저 반영 안 함 · flush가 화면만 바뀐 세션을 버림 · touched 가드 제거 · 커밋 전 정규화 제거 ·
+  no-op인데 새 객체 · 맞춤 손계산 복귀 · 캔버스에 비제스처 경로 전달 · 단일 marker 복귀 · marker에서
+  기본색 제외 · 선 색 무시 · 선택 후광 제거 · 글자색 흰색 고정 · 줌 한계 손복제 · 선 색 선택기 삭제 ·
+  기본색 되돌리기가 hex 박제)으로 **실제 검출을 확인**했다.
+  ⚠️ 그 과정에서 **자기 테스트의 결함 2건**을 잡았다: (a) `#42f`가 옵셔널 체이닝 없이 `.viewport.scale`을
+  읽어 변이 시 **스크립트가 죽으면서 전 변이가 '검출'로 위장**됐다 (b) `#56d`가 raw 소스를 봐서
+  `ColorPicker` **주석 안의 `onPick(null)`**에 걸린 죽은 단언이었다 → 새 가드는 전부 `stripComments`를
+  거친 사본(`boardNC`/`canvasNC`/`inspNC`)을 본다. 가드를 손볼 때 같은 변이가 여전히 잡히는지 다시 확인할 것.
 
 ### 분할매수/매도 계산기(`LadderTradeModal`) — 앵커는 '수량'이 아니라 '금액' (⚠️ 회귀 주의)
 

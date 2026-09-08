@@ -7,6 +7,7 @@ import { useFlowMapData } from '../hooks/useFlowMapData';
 import {
   makeFlowMap, makeFlowNode, removeNode, resolveFlowNodeView,
   countDanglingNodes, MAX_FLOW_NODES, MAX_FLOW_EDGES,
+  DEFAULT_FLOW_VIEWPORT, normalizeFlowViewport, sameFlowViewport, fitFlowViewport,
 } from '../flowMap';
 import { generateId, formatCurrency } from '../utils';
 
@@ -31,10 +32,43 @@ import { generateId, formatCurrency } from '../utils';
  * 시점에만 App state로 승격한다. 제스처마다 승격하면 App의 portfolioStructureKey가 전 계좌를
  * 재직렬화하고, 800ms 디바운스는 사람 손 간격(1~3초)보다 짧아 매번 만료되어 제스처마다
  * Drive 저장(STATE+VERSION+STOCK+MARKET = HTTP 8회 + 종목 2년치 일봉 전량)이 나간다.
+ *
+ * ── 팬/줌도 저장한다 (⚠️ 회귀 주의) ─────────────────────────────────────────
+ * 저장 위치는 **map.viewport**(flowMaps 안) → 영속화 신규 지점 0곳. 규약 셋을 함께 지켜야 한다:
+ *  1) 사용자가 실제로 움직였을 때만(vpTouchedRef) 커밋 — 복원·자동 맞춤은 커밋하지 않는다.
+ *     아니면 '보드를 열기만 해도 Drive 저장'이 된다.
+ *  2) dirtyRef(내용 편집)가 아니라 **vpDirtyRef**를 세운다 — dirtyRef는 늦게 도착한 Drive
+ *     데이터 채택을 막는 가드라, 화면만 훑어도 그게 서면 시드된 빈 맵이 저장본을 덮는다.
+ *  3) flush가 항상 직전 화면을 먼저 반영한다 — 디바운스가 안 터진 채 닫아도 위치가 남는다.
  */
 
 const FLOW_Z = 990;
 const IDLE_PROMOTE_MS = 2500;
+/**
+ * 팬/줌을 로컬 사본에 반영하기까지의 디바운스.
+ * ⚠️ 프레임마다 커밋하지 말 것 — 훑어보는 동안 updatedAt이 매 프레임 갱신되고 도형을 하나도
+ *    건드리지 않은 세션이 계속 '저장 대기'로 깜빡인다. 대신 flush(닫기·종료·수동저장)가 항상
+ *    직전 화면을 먼저 반영하므로 디바운스가 안 터진 채 닫아도 위치는 남는다.
+ */
+const VIEWPORT_COMMIT_MS = 900;
+
+/** 캔버스 가시 영역 근사 — 인스펙터 폭(256)과 툴바 높이를 뺀다. '맞춤' 버튼과 첫 화면이 공유. */
+const canvasBox = () => ({
+  w: (typeof window !== 'undefined' ? window.innerWidth : 1440) - 300,
+  h: (typeof window !== 'undefined' ? window.innerHeight : 900) - 140,
+});
+
+/**
+ * 보드를 열 때 보여줄 화면.
+ * 저장된 위치가 있으면 그대로, 없으면(이 기능 이전에 만든 흐름도) 전체가 보이게 1회 맞춘다 —
+ * 그 경우가 정확히 "닫았다 열면 엉뚱한 데를 보고 있다"는 사용자 보고의 상황이다.
+ */
+const initialViewportOf = (m) => {
+  const saved = normalizeFlowViewport(m?.viewport);
+  if (saved) return saved;
+  const box = canvasBox();
+  return fitFlowViewport(m?.nodes, box.w, box.h);
+};
 
 export default function FlowBoard({
   open,
@@ -56,7 +90,7 @@ export default function FlowBoard({
   const [mapsLocal, setMapsLocal] = useState(maps);
   const [selectedId, setSelectedId] = useState(null);
   const [connectFrom, setConnectFrom] = useState(null);
-  const [viewport, setViewport] = useState({ x: 80, y: 80, scale: 1 });
+  const [viewport, setViewport] = useState(() => ({ ...DEFAULT_FLOW_VIEWPORT }));
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState('');
 
@@ -65,6 +99,26 @@ export default function FlowBoard({
   const idleTimerRef = useRef(null);
   const onUpdateRef = useRef(onUpdateMaps);
   onUpdateRef.current = onUpdateMaps;
+
+  // ── 팬/줌 영속화 ────────────────────────────────────────────────────────────
+  // ⚠️ dirtyRef(내용 편집)와 **별도 플래그**를 쓴다. dirtyRef는 '늦게 도착한 Drive 데이터 채택'을
+  //    막는 가드라, 화면을 훑기만 해도 그게 서면 로딩 중 연 보드가 시드한 빈 맵을 저장된 흐름도
+  //    위에 덮어쓴다(복구 불가). 뷰포트는 vpDirtyRef만 세운다.
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  const vpDirtyRef = useRef(false);   // 미승격 팬/줌 변경
+  const vpTouchedRef = useRef(false); // 이 세션에서 사용자가 실제로 화면을 움직였는가
+  const vpTimerRef = useRef(null);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  // flush → commitViewport → patchMap → commit → flush 순환을 끊는 ref(onUpdateRef와 같은 패턴)
+  const commitViewportRef = useRef(null);
+
+  /** 사용자 제스처로 화면이 움직였음을 표시하며 반영. ⚠️ 복원·자동 맞춤은 이 경로를 쓰지 않는다. */
+  const applyViewport = useCallback((vp) => {
+    vpTouchedRef.current = true;
+    setViewport(vp);
+  }, []);
 
   // 보드를 열 때만 App state로부터 로컬 사본을 시드한다.
   // (열려 있는 동안의 외부 갱신은 채택하지 않는다 — 저장소 전역이 last-writer-wins 계약이고,
@@ -75,9 +129,14 @@ export default function FlowBoard({
     setMapsLocal(seeded);
     localRef.current = seeded;
     dirtyRef.current = false;
+    vpDirtyRef.current = false;
+    vpTouchedRef.current = false;
     setDirty(false);
     setSelectedId(null);
     setConnectFrom(null);
+    // ⚠️ 마지막으로 보던 화면 복원. setViewport(applyViewport 아님) — 복원 자체는 사용자 동작이
+    //    아니므로 touched를 세우면 안 된다(열기만 해도 Drive 저장이 나간다).
+    setViewport(initialViewportOf(seeded[0]));
     const dang = countDanglingNodes(seeded, portfolios);
     setNotice(dang > 0 ? `계좌 연결 ${dang}건이 끊겨 있습니다(계좌가 삭제됐거나 백업으로 교체됨).` : '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,14 +153,22 @@ export default function FlowBoard({
     if (maps === localRef.current) return;
     localRef.current = maps;
     setMapsLocal(maps);
+    // 아직 사용자가 화면을 움직이지 않았다면 늦게 도착한 **저장 위치**도 함께 채택한다.
+    // (움직였다면 그 화면을 유지하고, 디바운스가 채택한 맵 위에 다시 커밋한다.)
+    if (!vpTouchedRef.current) setViewport(initialViewportOf(maps[0]));
   }, [open, maps]);
 
   // ⚠️ 미승격 편집이 없으면 반드시 null — 항상 값을 반환하면 alt-tab마다 4파일 write가 강제된다.
   const flush = useCallback(() => {
-    if (!dirtyRef.current) return null;
+    // ⚠️ 디바운스가 아직 안 터졌어도 **닫는 순간의 화면**이 저장되도록 뷰포트를 먼저 반영한다.
+    //    commit은 localRef를 동기 갱신하므로 바로 아래에서 읽어도 최신값이다.
+    commitViewportRef.current?.();
+    if (!dirtyRef.current && !vpDirtyRef.current) return null;
     dirtyRef.current = false;
+    vpDirtyRef.current = false;
     setDirty(false);
     if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
+    if (vpTimerRef.current) { clearTimeout(vpTimerRef.current); vpTimerRef.current = null; }
     return localRef.current;
   }, []);
 
@@ -123,13 +190,16 @@ export default function FlowBoard({
   //    거기서 next를 만들고 setMapsLocal에는 완성된 값만 넘긴다. 업데이터 안에서 ref를 대입하거나
   //    generateId()를 부르면 StrictMode 개발 모드의 업데이터 이중 호출에서 서로 다른 id가 만들어지고
   //    (React는 두 번째 결과만 채택) 첫 호출의 부수효과가 남아 선택 상태가 어긋난다.
-  const commit = useCallback((updater) => {
+  const commit = useCallback((updater, opts) => {
     if (readOnly) return;
     const prev = localRef.current;
     const next = typeof updater === 'function' ? updater(prev) : updater;
     if (next === prev) return;
     localRef.current = next;
-    dirtyRef.current = true;
+    // ⚠️ viewportOnly는 dirtyRef를 세우지 않는다 — 위 '늦게 도착한 App state 채택' 가드가 그
+    //    플래그를 보기 때문. 세우면 로딩 중 화면을 훑기만 해도 빈 맵이 저장본을 덮는다.
+    if (opts && opts.viewportOnly) vpDirtyRef.current = true;
+    else dirtyRef.current = true;
     setMapsLocal(next);
     setDirty(true);
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
@@ -146,8 +216,12 @@ export default function FlowBoard({
   //    App이 회수할 방법이 없다(사용자가 방금 그린 도형이 조용히 증발).
   useEffect(() => () => {
     if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
-    if (!dirtyRef.current) return;
+    if (vpTimerRef.current) { clearTimeout(vpTimerRef.current); vpTimerRef.current = null; }
+    // ⚠️ 미승격 뷰포트도 함께 회수한다(commit이 localRef를 동기 갱신하므로 순서가 중요).
+    commitViewportRef.current?.();
+    if (!dirtyRef.current && !vpDirtyRef.current) return;
     dirtyRef.current = false;
+    vpDirtyRef.current = false;
     const pending = localRef.current;
     onUpdateRef.current?.(() => pending);
   }, []);
@@ -164,6 +238,34 @@ export default function FlowBoard({
       return [{ ...nextMap, updatedAt: Date.now() }, ...prev.slice(1)];
     });
   }, [commit]);
+
+  // 현재 화면 위치를 로컬 사본에 반영. ⚠️ patchMap을 쓰지 않는다 — updatedAt('마지막 편집')은
+  //    도형·선을 고쳤을 때만 갱신해야 한다(화면을 훑은 것은 편집이 아니다).
+  const commitViewport = useCallback(() => {
+    if (vpTimerRef.current) { clearTimeout(vpTimerRef.current); vpTimerRef.current = null; }
+    // ⚠️ 사용자가 실제로 움직였을 때만 저장한다 — 복원값·자동 맞춤을 커밋하면 '보드를 열기만 해도
+    //    Drive 저장'이 되고, 구버전 맵의 자동 맞춤 결과가 사용자 동의 없이 박제된다.
+    if (readOnlyRef.current || !vpTouchedRef.current) return;
+    const vp = normalizeFlowViewport(viewportRef.current);
+    if (!vp) return;
+    commit(prev => {
+      const cur = prev?.[0];
+      if (!cur || sameFlowViewport(cur.viewport, vp)) return prev;   // no-op이면 원본 참조
+      return [{ ...cur, viewport: vp }, ...prev.slice(1)];
+    }, { viewportOnly: true });
+  }, [commit]);
+  commitViewportRef.current = commitViewport;
+
+  // 팬/줌 디바운스 — 마지막 움직임에서 VIEWPORT_COMMIT_MS 뒤 1회만 반영한다.
+  useEffect(() => {
+    if (!open || readOnly || !vpTouchedRef.current) return;
+    if (vpTimerRef.current) clearTimeout(vpTimerRef.current);
+    vpTimerRef.current = setTimeout(() => {
+      vpTimerRef.current = null;
+      commitViewportRef.current?.();
+    }, VIEWPORT_COMMIT_MS);
+    return () => { if (vpTimerRef.current) { clearTimeout(vpTimerRef.current); vpTimerRef.current = null; } };
+  }, [open, readOnly, viewport]);
 
   const viewOf = useCallback(
     (node) => resolveFlowNodeView(node, portfolioById.get(node.portfolioId), summaryById.get(node.portfolioId)),
@@ -257,16 +359,14 @@ export default function FlowBoard({
     onClose?.();
   }, [promoteNow, onClose]);
 
+  // ⚠️ 첫 화면 자동 맞춤과 **같은 함수**(fitFlowViewport)를 쓴다 — 손계산으로 되돌리면 같은
+  //    데이터인데 '열었을 때'와 '맞춤 버튼'이 다른 화면을 준다.
   const fitView = useCallback(() => {
-    if (!map?.nodes?.length) { setViewport({ x: 80, y: 80, scale: 1 }); return; }
-    const xs = map.nodes.map(n => n.x), ys = map.nodes.map(n => n.y);
-    const xe = map.nodes.map(n => n.x + n.w), ye = map.nodes.map(n => n.y + n.h);
-    const minX = Math.min(...xs), minY = Math.min(...ys);
-    const w = Math.max(...xe) - minX, h = Math.max(...ye) - minY;
-    const vw = window.innerWidth - 300, vh = window.innerHeight - 140;
-    const scale = Math.min(1.5, Math.max(0.25, Math.min(vw / (w + 120), vh / (h + 120))));
-    setViewport({ scale, x: 60 - minX * scale, y: 90 - minY * scale });
-  }, [map]);
+    const box = canvasBox();
+    applyViewport(fitFlowViewport(localRef.current?.[0]?.nodes, box.w, box.h));
+  }, [applyViewport]);
+
+  const resetView = useCallback(() => applyViewport({ ...DEFAULT_FLOW_VIEWPORT }), [applyViewport]);
 
   // ⚠️ 보드 키를 **먼저 처리한 뒤** stopPropagation 한다. 그냥 흘려보내면 FloatingCalculator가
   //    열려 있을 때 그 window keydown 핸들러가 Delete/Escape/화살표를 수식 입력으로 삼킨다
@@ -325,7 +425,7 @@ export default function FlowBoard({
         <button onClick={fitView} title="전체 보기" className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white transition">
           <Maximize2 size={12} /> 맞춤
         </button>
-        <button onClick={() => setViewport({ x: 80, y: 80, scale: 1 })} title="배율 초기화" className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white transition">
+        <button onClick={resetView} title="배율 초기화" className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white transition">
           <RotateCcw size={12} /> 100%
         </button>
         <span className="text-[10px] text-gray-500">도형 {nodeCount} · 선 {edgeCount}</span>
@@ -370,7 +470,7 @@ export default function FlowBoard({
             onNodesChange={onNodesChange}
             onAddEdge={onAddEdge}
             viewport={viewport}
-            onViewportChange={setViewport}
+            onViewportChange={applyViewport}
             readOnly={readOnly}
             hideAmounts={hideAmounts}
             formatAmount={formatAmount}

@@ -29,6 +29,17 @@ export type FlowShapeKind = 'rect' | 'ellipse';
 export type FlowSide = 'auto' | 'l' | 'r' | 't' | 'b';
 export type FlowArrow = 'to' | 'both' | 'none';
 
+/**
+ * 팬/줌 상태. **저장 대상** — 보드를 닫고 다시 열면 마지막으로 보던 화면으로 돌아온다.
+ * ⚠️ 값은 반드시 normalizeFlowViewport를 거쳐 저장한다(정수·유효자리 정리) — 휠 줌이 만드는
+ *    1.3310000000000004 같은 부동소수 노이즈가 지문에 새면 화면을 훑기만 해도 Drive 저장이 나간다.
+ */
+export interface FlowViewport {
+  x: number;
+  y: number;
+  scale: number;
+}
+
 /** 노드 금액의 출처. 'account'면 라이브 재조회, 'manual'이면 amountManual 사용. */
 export type FlowAmountSource = 'account' | 'manual' | 'none';
 
@@ -97,6 +108,16 @@ export interface FlowMap {
   createdAt: number;
   /** ⚠️ 커밋 시에만 갱신. 렌더 중 갱신 금지(지문이 매 렌더 흔들려 저장이 무한 재트리거된다). */
   updatedAt: number;
+  /**
+   * 마지막 팬/줌 위치.
+   * ⚠️ 저장 위치를 chartPrefs로 옮기지 말 것 — flowMaps는 이미 App.tsx 7지점·sticky 복원·별도 창
+   *    브릿지가 통째로 실어 나르므로 여기에 두면 **영속화 신규 지점이 0곳**이다. 반대로 chartPrefs는
+   *    계좌가 0개면 저장 effect가 조기 반환하고 saveVersionFile도 부르지 않는다(타 기기 반영 안 됨).
+   * ⚠️ 새 맵에 기본값을 채워 넣지 말 것 — 그러면 normalizeFlowMaps가 모든 레거시 맵을 '변경됨'으로
+   *    만들어 '변경 없으면 원본 참조 반환' 계약이 깨진다. 값이 없으면 호출부가 fitFlowViewport로
+   *    1회 맞춤한다.
+   */
+  viewport?: FlowViewport;
 }
 
 export type FlowMaps = FlowMap[];
@@ -118,6 +139,21 @@ export const MIN_NODE_W = 60;
 export const MIN_NODE_H = 44;
 /** 격자 스냅 단위 */
 export const FLOW_GRID = 8;
+
+/**
+ * 줌 한계 — FlowCanvas의 휠 핸들러와 normalizeFlowViewport가 **같은 상수**를 써야 한다.
+ * 손복제하면 캔버스에서는 만들 수 있는데 저장 시 잘리는 배율이 생겨, 닫았다 열면 화면이 튄다.
+ */
+export const FLOW_MIN_SCALE = 0.25;
+export const FLOW_MAX_SCALE = 2.5;
+/** 저장된 위치가 없을 때의 기본 화면. ⚠️ 공유 객체 — 소비처는 반드시 스프레드로 복사할 것. */
+export const DEFAULT_FLOW_VIEWPORT: FlowViewport = { x: 80, y: 80, scale: 1 };
+/** 좌표 폭주 방지 — 손상값이 들어오면 복원 시 아무것도 안 보이는 화면이 된다. */
+const VIEWPORT_XY_LIMIT = 200000;
+
+/** 도형 기본 채우기 / 연결선 기본 색. ⚠️ 리터럴을 화면마다 손복제하지 말 것. */
+export const DEFAULT_NODE_FILL = '#2E75B6';
+export const DEFAULT_EDGE_STROKE = '#60a5fa';
 
 /* ===========================================================================
  * C. 라이브 파생 타입 (절대 저장하지 않음)
@@ -166,6 +202,96 @@ const clampNum = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? 
 export const snapToGrid = (v: number, grid: number = FLOW_GRID): number =>
   Math.round(v / grid) * grid;
 
+const HEX6_RE = /^#[0-9a-fA-F]{6}$/;
+const HEX3_RE = /^#[0-9a-fA-F]{3}$/;
+
+/**
+ * 색상 값 정규화. 유효한 hex가 아니면 **빈 문자열**(= 기본색 사용).
+ * ⚠️ 대소문자를 바꾸지 말 것 — 저장돼 있던 '#2E75B6'을 소문자로 바꾸면 normalizeFlowMaps가
+ *    모든 기존 도형을 '변경됨'으로 판정해 원본 참조 보존 계약이 깨지고 배포 직후 전량 재저장된다.
+ */
+export function sanitizeHexColor(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  const s = v.trim();
+  if (HEX6_RE.test(s)) return s;
+  if (HEX3_RE.test(s)) return `#${s[1]}${s[1]}${s[2]}${s[2]}${s[3]}${s[3]}`;
+  return '';
+}
+
+/**
+ * 도형 글자색 — 팔레트에 흰색·아주 옅은 톤이 들어오면서 흰 글자가 배경에 묻히는 것을 막는다.
+ * ⚠️ 문턱 0.45는 **기존 8색이 전부 흰 글자를 유지**하도록 잡은 값이다(가장 밝은 #A5A5A5 = 0.376,
+ *    주황 #ED7D31 = 0.327). 낮추면 사용자가 이미 칠해 둔 도형의 글자색이 배포만으로 뒤바뀐다.
+ */
+export function readableTextColor(fill: unknown): string {
+  const hex = sanitizeHexColor(fill);
+  if (!hex) return '#ffffff';
+  const lin = (i: number) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const L = 0.2126 * lin(1) + 0.7152 * lin(3) + 0.0722 * lin(5);
+  return L > 0.45 ? '#111827' : '#ffffff';
+}
+
+/**
+ * 팬/줌 값 정규화 — 저장 직전과 로드 직후 **양쪽**에서 이 함수를 통과시킨다.
+ * 유효하지 않으면 null(= 저장된 위치 없음)이고, 절대 던지지 않는다.
+ */
+export function normalizeFlowViewport(v: unknown): FlowViewport | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as any;
+  if (!isFiniteNum(o.x) || !isFiniteNum(o.y) || !isFiniteNum(o.scale)) return null;
+  return {
+    x: Math.round(clampNum(o.x, -VIEWPORT_XY_LIMIT, VIEWPORT_XY_LIMIT)),
+    y: Math.round(clampNum(o.y, -VIEWPORT_XY_LIMIT, VIEWPORT_XY_LIMIT)),
+    // 소수 4자리 — 휠 줌의 부동소수 노이즈가 지문에 새는 것을 막는다
+    scale: Math.round(clampNum(o.scale, FLOW_MIN_SCALE, FLOW_MAX_SCALE) * 1e4) / 1e4,
+  };
+}
+
+/** 두 팬/줌이 같은가. null/undefined는 '저장된 위치 없음'으로 같게 본다. */
+export function sameFlowViewport(a: unknown, b: unknown): boolean {
+  const x = a as any;
+  const y = b as any;
+  if (!x || !y) return !x && !y;
+  return x.x === y.x && x.y === y.y && x.scale === y.scale;
+}
+
+/**
+ * 전체 도형이 보이도록 맞춘 팬/줌.
+ * ⚠️ '맞춤' 버튼과 **저장된 위치가 없는 구버전 맵의 첫 화면**이 같은 함수를 쓴다 — 손복제하면
+ *    같은 데이터인데 두 경로가 다른 화면을 준다.
+ */
+export function fitFlowViewport(
+  nodes: FlowNode[] | undefined | null,
+  viewW: number,
+  viewH: number,
+): FlowViewport {
+  const list = (Array.isArray(nodes) ? nodes : []).filter(
+    (n: any) => n && isFiniteNum(n.x) && isFiniteNum(n.y) && isFiniteNum(n.w) && isFiniteNum(n.h),
+  );
+  if (list.length === 0) return { ...DEFAULT_FLOW_VIEWPORT };
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of list) {
+    if (n.x < minX) minX = n.x;
+    if (n.y < minY) minY = n.y;
+    if (n.x + n.w > maxX) maxX = n.x + n.w;
+    if (n.y + n.h > maxY) maxY = n.y + n.h;
+  }
+  const w = Math.max(1, maxX - minX);
+  const h = Math.max(1, maxY - minY);
+  const availW = Math.max(200, isFiniteNum(viewW) ? viewW : 200);
+  const availH = Math.max(200, isFiniteNum(viewH) ? viewH : 200);
+  const scale = clampNum(Math.min(availW / (w + 120), availH / (h + 120)), FLOW_MIN_SCALE, 1.5);
+  return (
+    normalizeFlowViewport({ scale, x: 60 - minX * scale, y: 90 - minY * scale }) || {
+      ...DEFAULT_FLOW_VIEWPORT,
+    }
+  );
+}
+
 /**
  * 커밋 직전 좌표 정수화 — 부동소수 노이즈가 지문에 새어 불필요한 Drive 저장이
  * 발생하는 것을 막는다.
@@ -180,6 +306,8 @@ export function roundNode(n: FlowNode): FlowNode {
 }
 
 export function makeFlowNode(partial: Partial<FlowNode> = {}): FlowNode {
+  const fill = sanitizeHexColor(partial.fill);
+  const stroke = sanitizeHexColor(partial.stroke);
   return {
     id: partial.id || generateId(),
     kind: partial.kind === 'ellipse' ? 'ellipse' : 'rect',
@@ -195,8 +323,8 @@ export function makeFlowNode(partial: Partial<FlowNode> = {}): FlowNode {
     accountNameSnapshot: asStr(partial.accountNameSnapshot),
     amountSource:
       partial.amountSource === 'account' || partial.amountSource === 'manual' ? partial.amountSource : 'none',
-    ...(partial.fill ? { fill: partial.fill } : {}),
-    ...(partial.stroke ? { stroke: partial.stroke } : {}),
+    ...(fill ? { fill } : {}),
+    ...(stroke ? { stroke } : {}),
   };
 }
 
@@ -239,6 +367,9 @@ export function flowFingerprint(maps: unknown): string {
       maps.map((m: any) => ({
         i: m?.id ?? '',
         n: m?.name ?? '',
+        // ⚠️ 팬/줌 지문 — 없으면 '화면 위치만 바꾼 세션'이 portfolioUpdatedAt을 올리지 못해
+        //    STATE 저장이 통째로 스킵된다(historyVerifyKey·targetAmount와 동일 버그 클래스).
+        vp: m?.viewport ? [m.viewport.x ?? 0, m.viewport.y ?? 0, m.viewport.scale ?? 1] : null,
         nd: (Array.isArray(m?.nodes) ? m.nodes : []).map((n: any) => [
           n?.id ?? '', n?.kind ?? '', n?.x ?? 0, n?.y ?? 0, n?.w ?? 0, n?.h ?? 0,
           n?.label ?? '', n?.date ?? '', n?.amountManual ?? null, n?.memo ?? '',
@@ -300,7 +431,10 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
         fixed.kind !== n.kind || fixed.x !== n.x || fixed.y !== n.y || fixed.w !== n.w || fixed.h !== n.h ||
         fixed.label !== n.label || fixed.date !== n.date || fixed.amountManual !== (n.amountManual ?? null) ||
         fixed.memo !== n.memo || fixed.portfolioId !== (n.portfolioId ?? null) ||
-        fixed.accountNameSnapshot !== n.accountNameSnapshot || fixed.amountSource !== n.amountSource
+        fixed.accountNameSnapshot !== n.accountNameSnapshot || fixed.amountSource !== n.amountSource ||
+        // ⚠️ 색상도 비교 대상 — 빠뜨리면 makeFlowNode가 손상된 hex를 걸러내도 mapChanged가 서지
+        //    않아 원본 m이 그대로 push되고 정규화가 조용히 무효가 된다.
+        fixed.fill !== n.fill || fixed.stroke !== n.stroke
       ) mapChanged = true;
       nodes.push(fixed);
     }
@@ -321,21 +455,32 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
       const label = asStr(e.label);
       const arrow: FlowArrow = e.arrow === 'both' || e.arrow === 'none' ? e.arrow : 'to';
       const dashed = !!e.dashed;
-      if (label !== e.label || arrow !== e.arrow || dashed !== e.dashed) mapChanged = true;
+      const stroke = sanitizeHexColor(e.stroke);
+      const strokeChanged = e.stroke === undefined ? stroke !== '' : stroke !== e.stroke;
+      if (label !== e.label || arrow !== e.arrow || dashed !== e.dashed || strokeChanged) mapChanged = true;
       edges.push({
         id: eid, from, to, label, arrow, dashed,
         ...(e.fromSide ? { fromSide: e.fromSide as FlowSide } : {}),
         ...(e.toSide ? { toSide: e.toSide as FlowSide } : {}),
-        ...(e.stroke ? { stroke: asStr(e.stroke) } : {}),
+        ...(stroke ? { stroke } : {}),
       });
     }
 
     const createdAt = isFiniteNum(m.createdAt) ? m.createdAt : (mapChanged = true, Date.now());
     const updatedAt = isFiniteNum(m.updatedAt) ? m.updatedAt : (mapChanged = true, createdAt);
 
+    // ⚠️ 팬/줌은 **여기서 반드시 보존**해야 한다. 이 함수는 화이트리스트 재구축기라, 필드를
+    //    빠뜨리면 별도 창 저장 경로(flow:maps → normalizeFlowMaps)와 Drive 로드에서 사용자의
+    //    마지막 화면 위치가 매번 조용히 삭제된다(makeBtConfig·_ensureTaxBase와 동일 버그 클래스).
+    const rawVp = (m as any).viewport;
+    const viewport = normalizeFlowViewport(rawVp);
+    // undefined/null(= 저장된 위치 없음)은 '변경'이 아니다 — 레거시 맵이 매 로드마다
+    // 새 객체가 되면 폴링마다 재저장 + 보드 로컬 사본이 갈아엎어진다.
+    if (viewport ? !sameFlowViewport(rawVp, viewport) : rawVp !== undefined && rawVp !== null) mapChanged = true;
+
     if (mapChanged) {
       changed = true;
-      out.push({ id, name, nodes, edges, createdAt, updatedAt });
+      out.push({ id, name, nodes, edges, createdAt, updatedAt, ...(viewport ? { viewport } : {}) });
     } else {
       out.push(m as FlowMap);
     }

@@ -1,8 +1,9 @@
 // @ts-nocheck
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  edgePath, anchorPoint, roundNode, snapToGrid,
-  MIN_NODE_W, MIN_NODE_H, FLOW_GRID,
+  edgePath, anchorPoint, roundNode, snapToGrid, sanitizeHexColor, readableTextColor,
+  MIN_NODE_W, MIN_NODE_H, FLOW_GRID, FLOW_MIN_SCALE, FLOW_MAX_SCALE,
+  DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE,
 } from '../flowMap';
 
 /**
@@ -13,10 +14,20 @@ import {
  * ⚠️ React.memo 필수 — 이 저장소에는 memo가 이 컴포넌트뿐이므로 상위가 리렌더될 때
  *    캔버스까지 재조정되는 것을 여기서 끊는다. 그러려면 상위가 넘기는 콜백이 전부
  *    useCallback으로 고정돼 있어야 한다(FlowBoard 참조).
- * ⚠️ 팬/줌(viewport)은 저장하지 않는다 — 세션 한정(FloatingCalculator의 창 위치와 동일 정책).
+ * ⚠️ 팬/줌(viewport)은 상위(FlowBoard)가 map.viewport에 **저장**한다 — 여기서는 prop으로 받아
+ *    그리기만 하고, 줌 한계는 flowMap.ts의 FLOW_MIN/MAX_SCALE을 공유한다(손복제 금지: 캔버스에서는
+ *    만들 수 있는데 저장 시 잘리는 배율이 생기면 닫았다 열 때 화면이 튄다).
  */
 
 const PALETTE_STROKE = '#1f2937';
+
+/**
+ * 화살촉은 marker의 `fill`이 정하고 참조 요소의 stroke를 물려받지 않는다 → **색깔마다 marker를
+ * 하나씩** 만든다.
+ * ⚠️ `fill="context-stroke"`(SVG2)로 대체하지 말 것 — 구형 Safari/WebKit에서 무시되어 화살촉이
+ *    까맣게 뜨거나 사라진다. id는 hex에서 기호를 뺀 결정적 문자열이라 재렌더에도 안정적이다.
+ */
+const markerIdOf = (hex) => `flowArrow-${String(hex).replace(/[^a-zA-Z0-9]/g, '')}`;
 
 function NodeShape({ n, fill, stroke, selected, dangling }) {
   const common = {
@@ -54,6 +65,16 @@ function FlowCanvasInner({
 
   const nodes = map?.nodes || [];
   const edges = map?.edges || [];
+
+  // ⚠️ 기본색을 **반드시 포함**한다 — stroke가 없는(=기본색) 선의 화살촉이 사라진다.
+  const arrowColors = useMemo(() => {
+    const set = new Set([DEFAULT_EDGE_STROKE]);
+    for (const e of edges) {
+      const c = sanitizeHexColor(e?.stroke);
+      if (c) set.add(c);
+    }
+    return Array.from(set);
+  }, [edges]);
 
   // 화면 좌표 → 캔버스 좌표
   const toCanvas = useCallback((clientX, clientY) => {
@@ -157,7 +178,7 @@ function FlowCanvasInner({
       ev.preventDefault();
       const vp = vpRef.current;
       const delta = ev.deltaY > 0 ? 0.9 : 1.1;
-      const nextScale = Math.min(2.5, Math.max(0.25, vp.scale * delta));
+      const nextScale = Math.min(FLOW_MAX_SCALE, Math.max(FLOW_MIN_SCALE, vp.scale * delta));
       const r = el.getBoundingClientRect();
       const cx = ev.clientX - r.left;
       const cy = ev.clientY - r.top;
@@ -179,9 +200,11 @@ function FlowCanvasInner({
       onPointerCancel={endDrag}
     >
       <defs>
-        <marker id="flowArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#60a5fa" />
-        </marker>
+        {arrowColors.map(c => (
+          <marker key={c} id={markerIdOf(c)} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={c} />
+          </marker>
+        ))}
         <pattern id="flowGrid" width={FLOW_GRID * 5} height={FLOW_GRID * 5} patternUnits="userSpaceOnUse">
           <path d={`M ${FLOW_GRID * 5} 0 L 0 0 0 ${FLOW_GRID * 5}`} fill="none" stroke="#1e293b" strokeWidth="1" />
         </pattern>
@@ -196,16 +219,24 @@ function FlowCanvasInner({
           const b = nodeById(e.to);
           const p = edgePath(a, b, e);
           if (!p) return null; // ⚠️ null 계약 — 노드가 없으면 조용히 건너뛴다(throw 금지)
+          const color = sanitizeHexColor(e.stroke) || DEFAULT_EDGE_STROKE;
+          const edgeSel = selectedId === `edge:${e.id}`;
+          const marker = `url(#${markerIdOf(color)})`;
           return (
             <g key={e.id}>
+              {/* ⚠️ 선택 표시(후광)를 지우지 말 것 — 색을 바꿀 수 있게 되면서 '어느 선을 고쳤는지'를
+                  색으로는 알 수 없게 됐다(라벨 없는 선은 종전에 선택 피드백이 아예 없었다). */}
+              {edgeSel && (
+                <path d={p.d} fill="none" stroke="#818cf8" strokeWidth={9} strokeOpacity={0.35} strokeLinecap="round" pointerEvents="none" />
+              )}
               <path
                 d={p.d}
                 fill="none"
-                stroke={e.stroke || '#60a5fa'}
-                strokeWidth={2}
+                stroke={color}
+                strokeWidth={edgeSel ? 3 : 2}
                 strokeDasharray={e.dashed ? '6 4' : undefined}
-                markerEnd={e.arrow === 'none' ? undefined : 'url(#flowArrow)'}
-                markerStart={e.arrow === 'both' ? 'url(#flowArrow)' : undefined}
+                markerEnd={e.arrow === 'none' ? undefined : marker}
+                markerStart={e.arrow === 'both' ? marker : undefined}
               />
               {/* 클릭 히트박스 — 얇은 선을 잡기 쉽게 */}
               <path
@@ -225,7 +256,8 @@ function FlowCanvasInner({
                     height={22}
                     rx={5}
                     fill="#0b1120"
-                    stroke={selectedId === `edge:${e.id}` ? '#818cf8' : '#334155'}
+                    stroke={edgeSel ? '#818cf8' : color}
+                    strokeOpacity={edgeSel ? 1 : 0.6}
                   />
                   <text x={p.labelX} y={p.labelY + 4} textAnchor="middle" fill="#cbd5e1" fontSize="12">{e.label}</text>
                 </g>
@@ -240,6 +272,11 @@ function FlowCanvasInner({
           const v = viewOf(raw);
           const selected = selectedId === n.id;
           const isConnectSrc = connectFrom === n.id;
+          // ⚠️ 팔레트에 흰색·옅은 톤이 들어오면서 흰 글자가 배경에 묻힐 수 있다 → 자동 대비.
+          //    문턱은 flowMap.readableTextColor에 있고 기존 8색은 전부 흰 글자를 유지한다.
+          const fillColor = sanitizeHexColor(raw.fill) || DEFAULT_NODE_FILL;
+          const textColor = readableTextColor(fillColor);
+          const darkText = textColor !== '#ffffff';
           const amountText =
             v.shownAmount == null ? '' : hideAmounts ? '••••••' : formatAmount(v.shownAmount, v.accountType);
           return (
@@ -255,7 +292,7 @@ function FlowCanvasInner({
                 style={{ cursor: readOnly ? 'default' : connectFrom ? 'crosshair' : 'move' }}
                 onPointerDown={(e) => onNodePointerDown(e, n)}
               >
-                <NodeShape n={n} fill={raw.fill || '#2E75B6'} stroke={isConnectSrc ? '#818cf8' : raw.stroke} selected={selected} dangling={v.dangling} />
+                <NodeShape n={n} fill={fillColor} stroke={isConnectSrc ? '#818cf8' : raw.stroke} selected={selected} dangling={v.dangling} />
               </g>
 
               {/* 내용 — foreignObject로 HTML 줄바꿈을 그대로 쓴다. pointerEvents none이라 도형이 포인터를 받는다. */}
@@ -263,7 +300,7 @@ function FlowCanvasInner({
                 {/* React는 foreignObject의 자식을 HTML 네임스페이스로 만든다 → xmlns 불필요 */}
                 <div
                   className="w-full h-full flex flex-col items-center justify-center px-2 py-1.5 overflow-hidden text-center select-none"
-                  style={{ color: '#fff' }}
+                  style={{ color: textColor }}
                 >
                   {n.date && <div className="text-[10px] leading-tight opacity-90 truncate w-full">{n.date}</div>}
                   <div className={`font-bold leading-tight w-full break-words ${v.isTest ? 'italic opacity-70' : ''}`} style={{ fontSize: 15 }}>
@@ -275,7 +312,10 @@ function FlowCanvasInner({
                       {n.memo}
                     </div>
                   )}
-                  {v.dangling && <div className="text-[9px] text-amber-300 mt-0.5">연결 끊김</div>}
+                  {/* 밝은 채우기에서는 amber-300이 배경에 묻힌다 — 글자색과 같은 규칙으로 강도를 바꾼다 */}
+                  {v.dangling && (
+                    <div className="text-[9px] mt-0.5" style={{ color: darkText ? '#b45309' : '#fcd34d' }}>연결 끊김</div>
+                  )}
                 </div>
               </foreignObject>
 

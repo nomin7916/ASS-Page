@@ -1,7 +1,8 @@
 // @ts-nocheck
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { Trash2, X } from 'lucide-react';
+import { Trash2, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { cleanNum } from '../utils';
+import { sanitizeHexColor, DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE } from '../flowMap';
 
 /**
  * 흐름도 속성 패널.
@@ -23,7 +24,8 @@ import { cleanNum } from '../utils';
  *    지문이 시세마다 흔들린다(accountNameSnapshot은 바인딩 시점 1회 기록하는 표시 폴백 전용).
  */
 
-const FILLS = [
+/** 한 번에 누를 수 있는 자주 쓰는 색(기존 8색 그대로 — 이미 이 색으로 칠해 둔 도형이 있다). */
+const QUICK_COLORS = [
   { hex: '#2E75B6', name: '파랑' },
   { hex: '#ED7D31', name: '주황' },
   { hex: '#70AD47', name: '초록' },
@@ -33,6 +35,173 @@ const FILLS = [
   { hex: '#0F766E', name: '청록' },
   { hex: '#334155', name: '검정' },
 ];
+
+/* ===========================================================================
+ * 엑셀식 색 팔레트 (테마 색 + 표준 색)
+ * 기준 테마는 사용자가 보내온 엑셀 화면과 같은 Office 2007 테마다.
+ * ⚠️ 색을 하드코딩 60개로 늘어놓지 말 것 — 열마다 밝기 변형 5단은 엑셀과 같은 규칙(밝게/어둡게
+ *    비율)으로 계산한다. 표를 손으로 적으면 한 칸만 틀려도 아무도 눈치채지 못한다.
+ * =========================================================================== */
+
+const THEME_COLUMNS = [
+  { base: '#FFFFFF', name: '흰색',        steps: [-0.05, -0.15, -0.25, -0.35, -0.50] },
+  { base: '#000000', name: '검정',        steps: [0.50, 0.35, 0.25, 0.15, 0.05] },
+  { base: '#EEECE1', name: '연한 회갈색', steps: [-0.10, -0.25, -0.50, -0.75, -0.90] },
+  { base: '#1F497D', name: '진한 파랑',   steps: [0.80, 0.60, 0.40, -0.25, -0.50] },
+  { base: '#4F81BD', name: '파랑',        steps: [0.80, 0.60, 0.40, -0.25, -0.50] },
+  { base: '#C0504D', name: '빨강',        steps: [0.80, 0.60, 0.40, -0.25, -0.50] },
+  { base: '#9BBB59', name: '녹색',        steps: [0.80, 0.60, 0.40, -0.25, -0.50] },
+  { base: '#8064A2', name: '보라',        steps: [0.80, 0.60, 0.40, -0.25, -0.50] },
+  { base: '#4BACC6', name: '청록',        steps: [0.80, 0.60, 0.40, -0.25, -0.50] },
+  { base: '#F79646', name: '주황',        steps: [0.80, 0.60, 0.40, -0.25, -0.50] },
+];
+
+const STANDARD_COLORS = [
+  { hex: '#C00000', name: '진한 빨강' },
+  { hex: '#FF0000', name: '빨강' },
+  { hex: '#FFC000', name: '주황' },
+  { hex: '#FFFF00', name: '노랑' },
+  { hex: '#92D050', name: '연한 녹색' },
+  { hex: '#00B050', name: '녹색' },
+  { hex: '#00B0F0', name: '연한 파랑' },
+  { hex: '#0070C0', name: '파랑' },
+  { hex: '#002060', name: '진한 파랑' },
+  { hex: '#7030A0', name: '자주' },
+];
+
+/** p > 0 이면 흰색 쪽으로, p < 0 이면 검정 쪽으로 섞는다(엑셀의 '밝게/어둡게 %'와 같은 규칙). */
+const shiftHex = (hex, p) => {
+  const n = parseInt(hex.slice(1), 16);
+  const out = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(c => {
+    const v = p >= 0 ? c + (255 - c) * p : c * (1 + p);
+    return Math.max(0, Math.min(255, Math.round(v)));
+  });
+  return `#${out.map(c => c.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
+};
+
+/** 6행 × 10열(0행 = 기본색, 1~5행 = 밝기 변형). 모듈 로드 시 1회만 계산. */
+const THEME_GRID = (() => {
+  const rows = [THEME_COLUMNS.map(c => c.base.toUpperCase())];
+  for (let r = 0; r < 5; r++) rows.push(THEME_COLUMNS.map(c => shiftHex(c.base, c.steps[r])));
+  return rows;
+})();
+
+function Swatch({ hex, title, current, onPick, disabled, size }) {
+  const on = current === hex.toUpperCase();
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      title={title || hex}
+      onClick={() => onPick(hex)}
+      className={`rounded-[2px] border transition disabled:opacity-40 ${on ? 'border-white ring-1 ring-indigo-400' : 'border-black/50 hover:border-gray-200'}`}
+      style={{ background: hex, height: size }}
+    />
+  );
+}
+
+/**
+ * 색 선택기 — 도형 채우기와 연결선 색이 **같은 컴포넌트**를 쓴다(손복제하면 두 곳의 팔레트가 갈린다).
+ *
+ * ⚠️ 팝오버(부동 레이어)로 만들지 말 것 — 이 패널은 overflow-y-auto라 absolute 팝오버가 잘린다
+ *    (CustomDatePicker가 같은 이유로 body 포털 + fixed 좌표를 써야 했다). 여기서는 접이식으로 두어
+ *    그 문제 자체를 만들지 않는다.
+ * ⚠️ onPick(null) = '기본색으로 되돌리기'(필드 자체를 지운다). 기본색 hex를 저장값으로 박으면
+ *    나중에 기본색을 바꿔도 그 도형만 옛 색에 남는다.
+ */
+function ColorPicker({ value, fallback, onPick, disabled }) {
+  const [open, setOpen] = useState(false);
+  const [hexDraft, setHexDraft] = useState('');
+  const stored = sanitizeHexColor(value);
+  const current = (stored || fallback).toUpperCase();
+
+  const applyDraft = () => {
+    const c = sanitizeHexColor(hexDraft);
+    if (!c) return;
+    onPick(c.toUpperCase());
+    setHexDraft('');
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-1.5 mb-1">
+        <span
+          className="w-7 h-7 rounded border border-gray-500 shrink-0"
+          style={{ background: current }}
+          title={`현재 색 ${current}`}
+        />
+        <span className="text-[10px] text-gray-400 flex-1 truncate">{current}{stored ? '' : ' (기본)'}</span>
+        <button
+          type="button"
+          disabled={disabled || !stored}
+          onClick={() => onPick(null)}
+          className="text-[10px] px-1.5 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 transition disabled:opacity-30"
+          title="기본색으로 되돌리기"
+        >기본</button>
+      </div>
+
+      <div className="grid grid-cols-8 gap-1">
+        {QUICK_COLORS.map(c => (
+          <Swatch key={c.hex} hex={c.hex} title={`${c.name} ${c.hex}`} current={current} onPick={onPick} disabled={disabled} size={22} />
+        ))}
+      </div>
+
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(o => !o)}
+        className="mt-1.5 w-full flex items-center justify-center gap-1 text-[10px] py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 transition disabled:opacity-40"
+      >
+        {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />} {open ? '색 접기' : '색 더 보기'}
+      </button>
+
+      {open && (
+        <div className="mt-1.5 p-2 rounded border border-gray-700 bg-gray-900/60">
+          <div className="text-[10px] text-gray-400 mb-1">테마 색</div>
+          {THEME_GRID.map((row, ri) => (
+            <div key={ri} className="grid grid-cols-10 gap-[2px] mb-[2px]">
+              {row.map((hex, ci) => (
+                <Swatch
+                  key={`${ri}-${ci}`}
+                  hex={hex}
+                  title={`${THEME_COLUMNS[ci].name} ${hex}`}
+                  current={current}
+                  onPick={onPick}
+                  disabled={disabled}
+                  size={17}
+                />
+              ))}
+            </div>
+          ))}
+
+          <div className="text-[10px] text-gray-400 mt-2 mb-1">표준 색</div>
+          <div className="grid grid-cols-10 gap-[2px]">
+            {STANDARD_COLORS.map(c => (
+              <Swatch key={c.hex} hex={c.hex} title={`${c.name} ${c.hex}`} current={current} onPick={onPick} disabled={disabled} size={17} />
+            ))}
+          </div>
+
+          <div className="mt-2 flex items-center gap-1">
+            <input
+              className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-gray-100 focus:border-indigo-500 outline-none"
+              value={hexDraft}
+              readOnly={disabled}
+              placeholder="#RRGGBB"
+              onChange={e => setHexDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); applyDraft(); } }}
+            />
+            <button
+              type="button"
+              disabled={disabled || !sanitizeHexColor(hexDraft)}
+              onClick={applyDraft}
+              className="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white transition disabled:opacity-30"
+            >적용</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 function Field({ label, children, hint }) {
   return (
@@ -146,19 +315,13 @@ export default function FlowInspector({
             </div>
           </Field>
 
-          <Field label="색상">
-            <div className="flex flex-wrap gap-1">
-              {FILLS.map(f => (
-                <button
-                  key={f.hex}
-                  disabled={readOnly}
-                  title={f.name}
-                  onClick={() => patch({ fill: f.hex })}
-                  className={`w-6 h-6 rounded border-2 transition ${(node.fill || '#2E75B6') === f.hex ? 'border-indigo-400' : 'border-transparent'}`}
-                  style={{ background: f.hex }}
-                />
-              ))}
-            </div>
+          <Field label="색상" hint="밝은 색을 고르면 글자색이 자동으로 어두워집니다.">
+            <ColorPicker
+              value={node.fill}
+              fallback={DEFAULT_NODE_FILL}
+              disabled={readOnly}
+              onPick={(hex) => patch({ fill: hex || undefined })}
+            />
           </Field>
 
           <Field
@@ -287,6 +450,14 @@ export default function FlowInspector({
               onChange={e => setD(p => ({ ...p, edgeLabel: e.target.value }))}
               onBlur={flushDraft}
               onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            />
+          </Field>
+          <Field label="선 색상" hint="화살촉과 글자 상자 테두리도 같은 색을 따릅니다.">
+            <ColorPicker
+              value={edge.stroke}
+              fallback={DEFAULT_EDGE_STROKE}
+              disabled={readOnly}
+              onPick={(hex) => patchEdge({ stroke: hex || undefined })}
             />
           </Field>
           <Field label="화살표">
