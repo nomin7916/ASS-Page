@@ -4,7 +4,7 @@ import { UI_CONFIG } from '../config';
 import {
   generateId, cleanNum, formatNumber, buildTransferLedgerRows, overseasInvestAmount,
   analyzeTransferMerge, mergeTransferItem, mergeTransferMapEntry, taxBaseHasData,
-  TRANSFER_SUM_MAPS,
+  TRANSFER_SUM_MAPS, depositRowOf, cashTransferBlockReason,
 } from '../utils';
 import { getTodayKST, getBackfillBoundaryForAccount } from './useMarketCalendar';
 
@@ -923,6 +923,102 @@ export function usePortfolioState({
     return true;
   };
 
+  // ── 현금(예수금) 계좌 간 이관 ────────────────────────────────────────────────
+  // ⚠️ 종목 이관과 결정적으로 다른 점: **실제 현금이 함께 움직여야** 한다. 원장만 쓰고 예수금을
+  //    그대로 두면 그날 ΔV는 0인데 흐름만 M이라 흡수 판정이 그 행을 보류('-')로 잠그고, 이월이
+  //    다음 행에서 한 번 더 차감돼 부호가 뒤집힌다(CLAUDE.md 일간 지표 '고친 결함 (A)·(B)').
+  //    그래서 예수금·원금·원장을 **하나의 setPortfolios 안에서** 함께 옮긴다.
+  // ⚠️ 원금 이동 여부는 사용자가 고른다(2026-09 확정) — cost = movePrincipal ? M : 0.
+  //    나머지 회계는 buildTransferLedgerRows가 종목 이관과 **완전히 같은 규칙**으로 처리한다.
+  // ⚠️ 단일 setPortfolios · id 생성은 updater 밖 · updater 안에서 재확인(멱등) —
+  //    전부 transferStockToPortfolio와 같은 근거다(그 주석 참조).
+  const transferCashToPortfolio = (plan) => {
+    const { sourceId, targetId, movePrincipal } = plan || {};
+    const M = cleanNum(plan?.amount);
+    if (!sourceId || !targetId || sourceId === targetId || !(M > 0)) return false;
+    const src = portfolios.find(p => p && p.id === sourceId);
+    const tgt = portfolios.find(p => p && p.id === targetId);
+    if (!src || !tgt || src.deletedAt) return false;
+    const srcType = src.accountType || 'portfolio';
+    const tgtType = tgt.accountType || 'portfolio';
+    // 현금성 계좌는 예수금 행도 원장 UI도 없어 **소스로 쓸 수 없다**(개별 뷰 진입 자체가 막혀 있다).
+    if (srcType === 'simple' || srcType === 'matong') return false;
+    if (cashTransferBlockReason(srcType, tgt)) return false;
+    if (!depositRowOf(src)) return false;
+
+    const cost = movePrincipal ? M : 0;
+    const dateSrc = plan.dateSrc || getBackfillBoundaryForAccount(srcType);
+    const dateTgt = plan.dateTgt || getBackfillBoundaryForAccount(tgtType);
+    const rows = buildTransferLedgerRows({
+      transferId: generateId(),
+      itemType: 'cash', code: '', name: '예수금', quantity: 0,
+      market: M, cost, dateSrc, dateTgt,
+      sourceId, sourceName: src.name, targetId, targetName: tgt.name,
+      rowIds: [generateId(), generateId(), generateId()],
+    });
+    const newDepositId = generateId();
+
+    setPortfolios(prev => {
+      const s = prev.find(p => p && p.id === sourceId);
+      const t = prev.find(p => p && p.id === targetId);
+      if (!s || !t) return prev;
+      const sRow = depositRowOf(s);
+      if (!sRow) return prev;
+      return prev.map(p => {
+        if (p.id === sourceId) {
+          return {
+            ...p,
+            portfolio: (p.portfolio || []).map(x => (x && x.id === sRow.id
+              ? { ...x, depositAmount: cleanNum(x.depositAmount) - M }
+              : x)),
+            principal: Math.max(0, cleanNum(p.principal) - cost),
+            depositHistory2: [rows.srcWithdrawal, ...(p.depositHistory2 || [])],
+          };
+        }
+        if (p.id === targetId) {
+          // 현금성(직접입력) 계좌는 예수금 행이 없다 — 평가액 자체가 현금이다(useIntegratedData ②가
+          // 그 잔액 차분을 흐름으로 읽는다). 그래서 evalAmount·history를 함께 올린다.
+          // ⚠️ 원금 보정 행(tgtGainRow)은 쓰지 않는다 — 이 계좌의 원금은 원장이 아니라 평가액에서
+          //    파생되므로 보정할 대상이 없고, 남기면 아무것도 고치지 않는 행이 원장에 박제된다.
+          if (tgtType === 'simple') {
+            const nextEval = cleanNum(p.evalAmount) + M;
+            const nextPrin = cleanNum(p.principal) + cost;
+            const hist = p.history || [];
+            const idx = hist.findIndex(h => h && h.date === dateTgt);
+            return {
+              ...p,
+              evalAmount: nextEval,
+              principal: nextPrin,
+              // 원금이 따라오지 않는 이관이면, 이후 평가액 편집이 원금을 되덮지 않게 고정한다
+              // (updateSimpleAccountField는 principalManual이 없으면 principal = evalAmount로 맞춘다).
+              ...(movePrincipal ? {} : { principalManual: true }),
+              history: idx >= 0
+                ? hist.map((h, i) => (i === idx ? { ...h, evalAmount: nextEval, principal: nextPrin } : h))
+                : [...hist, { date: dateTgt, evalAmount: nextEval, principal: nextPrin, isFixed: false }],
+              depositHistory: [rows.tgtDeposit, ...(p.depositHistory || [])],
+            };
+          }
+          const tRow = depositRowOf(p);
+          return {
+            ...p,
+            portfolio: tRow
+              ? (p.portfolio || []).map(x => (x && x.id === tRow.id
+                ? { ...x, depositAmount: cleanNum(x.depositAmount) + M }
+                : x))
+              : [...(p.portfolio || []), { id: newDepositId, type: 'deposit', depositAmount: M }],
+            principal: cleanNum(p.principal) + cost,
+            depositHistory: [rows.tgtDeposit, ...(p.depositHistory || [])],
+            depositHistory2: rows.tgtGainRow
+              ? [rows.tgtGainRow, ...(p.depositHistory2 || [])]
+              : (p.depositHistory2 || []),
+          };
+        }
+        return p;
+      });
+    });
+    return true;
+  };
+
   const handleAddStock = () =>
     setPortfolio(prev => [
       { id: generateId(), type: 'stock', category: "주식", assetClass: 'D', code: "", name: "", currentPrice: 0, changeRate: 0, purchasePrice: 0, investAmount: 0, quantity: 0, targetRatio: 0, isManual: true },
@@ -1090,6 +1186,7 @@ export function usePortfolioState({
     handleUpdate,
     handleDeleteStock,
     transferStockToPortfolio,
+    transferCashToPortfolio,
     handleAddStock,
     handleAddFund,
     handleAddSavings,

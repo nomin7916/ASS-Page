@@ -51,6 +51,7 @@ src/
     ├── UnlockPinModal.tsx        # PIN 잠금 해제 모달
     ├── PasteModal.tsx            # 붙여넣기 파싱 모달
     ├── StockTransferModal.tsx    # 종목 계좌 간 이관 모달(미리보기 후 적용, z=1070)
+    ├── CashTransferModal.tsx    # 현금(예수금) 계좌 간 이관 모달(원금 반영 선택, z=1070)
     ├── CustomDatePicker.tsx      # 날짜 선택기
     ├── LoadingOverlay.tsx        # 앱 시작 블로킹 오버레이 (z-1100)
     ├── ConfirmDialog.tsx         # window.confirm() 대체 모달
@@ -1681,6 +1682,7 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
 `updatePortfolioColor`, `resetAllPortfolioColors`, `updateSettingsForType`,
 `updatePortfolioMemo`, `movePortfolio`, `handleUpdate`, `handleDeleteStock`(async+confirm),
 `transferStockToPortfolio` (종목 계좌 간 이관 — 전용 섹션 참조),
+`transferCashToPortfolio` (현금 계좌 간 이관 — 전용 섹션 참조),
 `handleAddStock`, `handleAddFund`,
 `handleAddSavings`, `updateSavingsField`, `addSavingsDeposit`, `removeSavingsDeposit` (예적금, dc-irp 전용),
 `updateDividendHistory`, `updatePortfolioDividendHistory`, `updatePortfolioActualDividend`,
@@ -2994,6 +2996,79 @@ OUT(t) = Σ출금(전액)                         + Δ현금성잔액⁻ + 삭�
   확인**했다. ⚠️ `#25h`는 처음에 **죽은 단언**이었다 — `mergeTransferMapEntry` 문자열 '존재'만 봐서
   `const merged = carried[k] || …`로 통째 교체를 되살려도 통과했다(변이 M2). 지금은 대입식 전체와
   사용부(`next[k] = { ...cur, [tgtCode]: merged }`)를 함께 본다. 되돌리지 말 것.
+
+### 현금(예수금) 계좌 간 이관 — 종목 이관의 특수 케이스 (2026-09, ⚠️ 회귀 주의)
+
+포트폴리오 표 **예수금(CASH) 행 오른쪽 이관 아이콘**(`onTransferCash`, 자물쇠 왼쪽)으로 여는
+`CashTransferModal`(미리보기 후 적용, z **1070**). 분배금처럼 계좌에 쌓인 현금을 다른 계좌로 옮긴다.
+발단은 사용자 시나리오다 — COVERD 예수금 4,550,000을 CMA로 옮기면서, 그것을 원장에 '출금'으로만
+적으면 그날 평가액 추이가 통째로 보류('-')가 됐다.
+
+- **⚠️ 원장 3행 구성을 복제하지 말 것 — `buildTransferLedgerRows`를 그대로 재사용한다.** 현금은
+  시가 = 원가라 종목 이관의 **`cost`만 사용자가 고르는** 특수 케이스다:
+
+  | 선택 | cost | G = M − cost | 원장 | 결과 |
+  |---|---|---|---|---|
+  | 원금도 함께 이동(기본) | **M** | 0 | 2행(보정 행 없음) | 양쪽 원금 ±M · **두 계좌 수익금 불변** |
+  | 원금은 그대로 | **0** | M | 3행(`amount 0` · `principalDeducted M`) | 양쪽 원금 불변 · **수익금이 M만큼 이동** |
+
+  (amount, principalDeducted) 조합이 이 기능의 유일한 회계 불변식이라, 두 벌로 나뉘면 한쪽만 고친
+  드리프트가 곧 **원금 라인 소급 이동**이 된다. `itemType: 'cash'` 분기는 라벨·보정 행 문구 2곳뿐이고
+  **그 밖에서는 종전 결과를 한 글자도 바꾸지 않는다**(하위호환의 축, 검증 #59f).
+  ⚠️ 현금 보정 행 문구에 '평가차익'을 쓰지 말 것 — 현금엔 차익이 존재할 수 없어 거짓말이 된다.
+- **⚠️ 이 기능의 유일한 새 위험 = "원장만 쓰고 예수금을 안 옮기는 것".** 그러면 그날 ΔV는 0인데
+  흐름만 M이라 흡수 판정이 그 행을 보류로 잠그고, 이월이 다음 행에서 한 번 더 차감돼 **부호가
+  뒤집힌다**(일간 지표 절 '고친 결함 (A)·(B)'). `DepositPanel`이 `portfolio`를 참조하지 않아 원장
+  입력만으로는 평가액이 변하지 않는 것이 바로 이 사용자가 겪은 증상이다 →
+  **예수금 · 원금 · 원장을 하나의 `setPortfolios` 안에서 함께 옮긴다**(검증 #62~#62d).
+  그래서 이관일 손익은 개별·통합 모두 시장 변동분만 남고, 통합에서는 `holdTransfer`가 쌍을 상쇄해
+  그날 %도 희석되지 않는다(#58c~#58e).
+- **⚠️ '원금 반영 여부'는 사용자가 매번 고른다(2026-09 사용자 확정 — 한쪽으로 고정하지 말 것).**
+  분배금 이관은 '수익을 옮기는 것'이라 원금이 따라가면 안 되는 경우가 있고, 계좌를 옮겨 담는
+  이관은 따라가야 한다. **흐름은 두 모드에서 완전히 같다**(#55) — 원금 선택이 일간 수익률 분모를
+  바꾸면 누적 TWR(곱셈 체인)에 그 차이가 영구 고정된다.
+- **⚠️ 대상 자격의 정본은 `utils.cashTransferBlockReason` 하나** — 화면과 라이터가 같은 함수를 써야
+  "목록에는 보이는데 눌러도 아무 일이 없다"가 구조적으로 생기지 않는다(fail-closed, #65).
+  종목 이관과 달리 **시장(crypto·gold) 구분은 보지 않는다** — 현금은 통화만 맞으면 같은 돈이다.
+  차단은 마통(한도·사용액이라 '보유 현금'이 아니다)·통화 불일치·삭제 계좌 3종.
+  현금성 계좌는 **소스로 쓸 수 없다**(예수금 행도 원장 UI도 없고 개별 뷰 진입 자체가 막혀 있다).
+- **⚠️ 직접입력(simple) 대상은 평가액이 곧 현금이다** — 예수금 행이 없어 `evalAmount`·`history`를
+  함께 올린다. **원금 보정 행은 쓰지 않는다**(그 계좌의 원금은 원장이 아니라 평가액에서 파생되므로
+  보정할 대상이 없고, 남기면 아무것도 고치지 않는 행이 원장에 박제된다 — #66c).
+  원금이 따라오지 않는 이관이면 **`principalManual`을 세운다** — 안 세우면
+  `updateSimpleAccountField`가 다음 평가액 편집에서 `principal = evalAmount`로 되덮어 사용자가 고른
+  '원금 미이동'을 조용히 취소한다(#66b).
+- **⚠️ 버튼은 첫 예수금 행에만** — 라이터(`depositRowOf`)가 계좌의 **첫** 예수금 행을 옮기므로,
+  다른 행에 두면 누른 행과 실제로 줄어드는 행이 갈린다(#69). 모달의 '전액'도 같은 행의 잔액을 쓴다(#70b).
+  열 개수는 그대로 1칸이고, 버튼이 없으면 종전 자물쇠 셀 그대로다(#69b).
+- **⚠️ 대상 목록은 모달을 열었을 때만 계산한다**(#70c) — `portfolios`는 시세 갱신마다 새 배열이라
+  상시 계산하면 안 쓰는 사용자가 매번 그 비용을 치른다(`btActive`·`transfersByDate`와 동일 게이팅).
+- **계좌 타입 짧은 라벨은 모듈 상수 `ACCOUNT_TYPE_SHORT_LABEL` 하나를 두 이관 모달이 공유**한다
+  (손복제하면 같은 계좌가 두 모달에서 다른 이름으로 뜬다, #71).
+- **영속화 신규 지점 0곳** — 예수금(`depositAmount`)·`principal`·`depositHistory(2)`가 이미
+  `portfolioStructureKey` 지문에 있어 이관 한 번이 반드시 `portfolioUpdatedAt`을 올린다(#72).
+  ⚠️ 다만 **`evalAmount`·`principalManual` 2필드를 지문에 추가**했다(#72b) — 직접입력 계좌는 그 둘만
+  바뀌는 경로가 실재하고(`principalManual`이 선 계좌의 평가액 편집 = **이 기능 이전부터 있던 잠복
+  유실**), 두 필드는 `updateSimpleAccountField`·`transferCashToPortfolio`만 쓰므로 시세 갱신으로는
+  변하지 않는다(저장 폭주 없음).
+- **메모 달력**: 원장의 `transfer` 태그에서 라이브 파생되므로 **종목이관 칩에 그대로 뜬다**(무수정).
+  `itemType: 'cash'`가 메타에 실려 종목 이관과 구분된다(#59e).
+- **범위 밖(의도)**: 마통 계좌(한도 상환은 의미가 다르다) · 해외↔국내 이관 · 예약/반복 이관 ·
+  되돌리기(undo) · 카드 별도 창에서의 실행(`PortfolioTable`은 App에서만 렌더된다).
+  **알려진 한계**: 대상이 직접입력·TEST 계좌면 통합 ①이 그 원장을 읽지 않아 **쌍 상쇄가 일어나지
+  않는다** — TEST 대상은 통합에서 돈이 실제로 빠지는 것이 맞고(그날 손익 0으로 정확), 직접입력
+  대상은 ②가 잔액 차분을 유입으로 잡아 그날 %만 희석된다(수동으로 옮길 때와 동일한 기존 동작).
+- 검증: `npm run verify:transfer` (180건 — **파트⑥ 현금 이관 원장 회계 #52~#59f** +
+  **파트⑦ 배선 가드 #60~#72b** + **드리프트 가드 #51g**(실제 `src/utils.ts`를 직접 import해 미러와
+  108조합 대조 — 파트①·⑥이 미러로 회계를 단언하므로 이 가드가 없으면 src만 고친 변경이 통과한다)).
+  ⚠️ **파트②의 `tfn` 슬라이스 끝 경계는 `const transferCashToPortfolio`다** — 옛 경계
+  (`const handleAddStock`)로 자르면 두 라이터가 한 덩어리가 되어 #17(setPortfolios 1회)이 무너진다.
+  가드는 **선언이 아니라 사용부**를 단언하며 **변이 28종 + 음성 대조 1종**(예수금 감소·증가 제거 ·
+  원금을 항상/절대 이동 · 기록일을 getTodayKST로 · id 생성을 updater 안으로 · 라이터 자격 재확인 제거 ·
+  현금성 소스 차단 제거 · updater 재확인 제거 · simple 대상에 보정 행 추가 · principalManual 제거 ·
+  setPortfolios 2회로 분할 · utils cash 라벨/메모 분기 제거 · 마통·통화 차단 제거 · 모달 초과 게이트/
+  즉시 파싱/원금 옵션 · 버튼을 모든 행에/삭제 · App 배선·게이트·전액 소스 · 라벨 손복제 · 지문에서
+  evalAmount 제거 · 화면 자격 판정 손복제)으로 **실제 검출을 확인**했다.
 
 ### 메모 달력 자산 스냅샷 클릭 → 날짜별 '계좌별 현황'(자산현황 패드) (⚠️ 회귀 주의)
 

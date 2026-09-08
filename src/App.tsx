@@ -31,6 +31,7 @@ import ScaleSettingModal from './components/ScaleSettingModal';
 import DriveBackupModal from './components/DriveBackupModal';
 import CalendarModal from './components/CalendarModal';
 import StockTransferModal from './components/StockTransferModal';
+import CashTransferModal from './components/CashTransferModal';
 import UnlockPinModal from './components/UnlockPinModal';
 import PasteModal from './components/PasteModal';
 import PortfolioSummaryPanel from './components/PortfolioSummaryPanel';
@@ -87,6 +88,7 @@ import {
   noticeChannelOf, resolveNoticeMaterial, normalizeDividendLinks, isValidIsoDate,
   listRebalTargetSnapshots,
   bookCostOf, calcPortfolioEvalDetail, collectTransferRows, analyzeTransferMerge,
+  depositRowOf, transferableCashOf, cashTransferBlockReason,
   buildHistDetailRows, EMPTY_HIST_DETAIL,
   buildRebalTargetEntryFrom, sameRebalTargetEntry, upsertRebalTargetMemo,
   buildLadderTrade, upsertLadderTradeMemo, listLadderLogs, deleteLadderTrade,
@@ -219,6 +221,14 @@ const normalizeCalendarMemos = (raw) => {
 //    (sectionCollapsedMap은 이미 저장·복원 경로에 있다). 계좌 id와 충돌하지 않는 이름을 쓴다.
 // ⚠️ 로드 시 무조건 비우는 방식으로 되돌리지 말 것 — 매 로드마다 숨김이 풀려 '숨기기 유지'가
 //    사실상 제거된다.
+// 이관 모달의 계좌 타입 짧은 라벨 — 종목 이관·현금 이관이 **같은 표를 보게** 공유한다.
+// (손복제하면 같은 계좌가 두 모달에서 다른 이름으로 뜬다.)
+const ACCOUNT_TYPE_SHORT_LABEL = {
+  portfolio: '일반', isa: 'ISA', 'dc-irp': '퇴직연금', pension: '연금저축',
+  dividend: '배당형', crypto: 'CRYPTO', overseas: '해외', gold: '금현물',
+  simple: '직접입력', matong: '마통',
+};
+
 const CARD_WIN_UNHIDE_KEY = '__cardWindowUnhide_v1__';
 const unhideCardsOnce = (map) => {
   const m = (map && typeof map === 'object') ? map : {};
@@ -413,6 +423,7 @@ export default function App() {
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   // 종목 계좌 간 이관 — 대상 항목 id(모달 열림 여부 겸용)
   const [transferItemId, setTransferItemId] = useState(null);
+  const [showCashTransfer, setShowCashTransfer] = useState(false);
   const [calendarMemos, setCalendarMemos] = useState<Record<string, any[]>>({});
   const [showWatchlist, setShowWatchlist] = useState(false);
   const [watchlistGroups, setWatchlistGroups] = useState<any[]>([]);
@@ -744,6 +755,7 @@ export default function App() {
     handleUpdate,
     handleDeleteStock,
     transferStockToPortfolio,
+    transferCashToPortfolio,
     handleAddStock,
     handleAddFund,
     handleAddSavings,
@@ -1348,10 +1360,7 @@ export default function App() {
     if (!transferItem || !activePortfolio) return [];
     const srcType = activePortfolioAccountType;
     const code = String(transferItem.code || '').trim();
-    const TYPE_LABEL = {
-      portfolio: '일반', isa: 'ISA', 'dc-irp': '퇴직연금', pension: '연금저축',
-      dividend: '배당형', crypto: 'CRYPTO', overseas: '해외',
-    };
+    const TYPE_LABEL = ACCOUNT_TYPE_SHORT_LABEL;
     return (portfolios || [])
       .filter(p => p && p.id !== activePortfolioId && !p.deletedAt)
       .map(p => {
@@ -1450,6 +1459,53 @@ export default function App() {
       market: plan.market, cost: plan.cost, dateSrc: plan.dateSrc, dateTgt: plan.dateTgt,
     });
     if (ok) setTransferItemId(null);
+  };
+
+  // ── 현금(예수금) 계좌 간 이관 ─────────────────────────────────────────────────
+  // 대상 후보 — 현금은 시장 구분이 없어 **통화만** 맞으면 된다(종목 이관의 crypto·gold 제약 없음).
+  // ⚠️ 자격 판정의 정본은 utils.cashTransferBlockReason 하나다 — 라이터도 같은 함수로 재확인하므로
+  //    "목록에는 보이는데 눌러도 아무 일이 없다"가 구조적으로 생기지 않는다(fail-closed).
+  // ⚠️ 모달을 열었을 때만 계산한다 — portfolios는 시세 갱신마다 새 배열이라 상시 계산하면 그 비용을
+  //    안 쓰는 사용자가 매번 치른다(btActive·transfersByDate와 동일 게이팅).
+  const cashTransferTargets = useMemo(() => {
+    if (!showCashTransfer || !activePortfolio) return [];
+    const srcType = activePortfolioAccountType;
+    return (portfolios || [])
+      .filter(p => p && p.id !== activePortfolioId && !p.deletedAt)
+      .map(p => {
+        const t = p.accountType || 'portfolio';
+        const reason = cashTransferBlockReason(srcType, p);
+        return {
+          id: p.id, name: p.name, isTest: !!p.isTest,
+          typeLabel: ACCOUNT_TYPE_SHORT_LABEL[t] || t,
+          isCash: t === 'simple',
+          cash: transferableCashOf(p),
+          blocked: !!reason, reason,
+        };
+      })
+      .sort((a, b) => (a.blocked ? 1 : 0) - (b.blocked ? 1 : 0));
+  }, [showCashTransfer, portfolios, activePortfolioId, activePortfolio, activePortfolioAccountType]);
+
+  // 이관 가능한 현금 = 활성 계좌의 첫 예수금 행 잔액. 라이터(transferCashToPortfolio)가 옮기는
+  // 바로 그 행이라, 화면에 보이는 '전액'과 실제로 줄어드는 금액이 갈리지 않는다.
+  // ⚠️ deps의 showCashTransfer는 '모달을 열 때 기록일을 다시 읽는다'는 뜻이다(본문에서 쓰지 않는다) —
+  //    getBackfillBoundaryForAccount는 시각 의존이라 오래 열어 둔 탭에서 낡을 수 있다. 지우지 말 것.
+  const cashTransferSource = useMemo(() => {
+    if (!activePortfolio) return { cash: 0, principal: 0, date: '' };
+    return {
+      cash: cleanNum(depositRowOf(activePortfolio)?.depositAmount),
+      principal: cleanNum(activePortfolio.principal),
+      date: getBackfillBoundaryForAccount(activePortfolioAccountType),
+    };
+  }, [activePortfolio, activePortfolioAccountType, showCashTransfer]);
+
+  const handleTransferCash = (targetId, opts) => {
+    if (!activePortfolioId || !opts) return;
+    const ok = transferCashToPortfolio({
+      sourceId: activePortfolioId, targetId,
+      amount: opts.amount, movePrincipal: !!opts.movePrincipal,
+    });
+    if (ok) setShowCashTransfer(false);
   };
 
   // 개별 계좌 누적 TWR — '조회시작 0%' 모드 라인의 소스. 입출금이 있어도 곡선이 왜곡되지 않는다.
@@ -3741,6 +3797,12 @@ export default function App() {
         //    purchasePrice를 쓰지 않으므로 이 필드만 바뀌고, 빠지면 그 편집이 조용히 유실된다.
         portfolio: (p.portfolio || []).map(item => ({ id: item.id, type: item.type, code: item.code, name: item.name, quantity: item.quantity, investAmount: item.investAmount, investAmountUsd: item.investAmountUsd, purchasePrice: item.purchasePrice, depositAmount: item.depositAmount, targetRatio: item.targetRatio, targetRatioVar: item.targetRatioVar, targetRatioOverride: item.targetRatioOverride, targetRatioVarOverride: item.targetRatioVarOverride, targetAmount: item.targetAmount, targetAmountOverride: item.targetAmountOverride, targetRatioAcc: item.targetRatioAcc, targetRatioAccVar: item.targetRatioAccVar, targetRatioAccOverride: item.targetRatioAccOverride, targetRatioAccVarOverride: item.targetRatioAccVarOverride, category: item.category, assetClass: item.assetClass, ...(item.type === 'savings' ? { annualRate: item.annualRate, startDate: item.startDate, endDate: item.endDate, assetClass: item.assetClass, deposits: (item.deposits || []).map(d => `${d.date}:${d.amount}`).join(',') } : {}) })),
         principal: p.principal, avgExchangeRate: p.avgExchangeRate,
+        // ⚠️ 직접입력(simple) 계좌의 평가액·원금수동 플래그 — 이 둘만 바뀌는 경로가 실재한다
+        //    (principalManual이 서 있는 계좌의 평가액 편집, 현금 이관의 simple 대상). 빠지면
+        //    portfolioUpdatedAt이 오르지 않아 STATE 저장이 통째로 스킵된다(historyVerifyKey·
+        //    targetAmount와 동일 버그 클래스). 두 필드는 updateSimpleAccountField·
+        //    transferCashToPortfolio만 쓰므로 시세 갱신으로는 변하지 않는다(저장 폭주 없음).
+        evalAmount: p.evalAmount, principalManual: !!p.principalManual,
         depositHistory: p.depositHistory, depositHistory2: p.depositHistory2,
         settings: p.settings,
         actualDividend: p.actualDividend,
@@ -4593,6 +4655,7 @@ export default function App() {
             onBlur={handleStockBlur}
             onDelete={handleDeleteStock}
             onTransfer={(id) => setTransferItemId(id)}
+            onTransferCash={() => setShowCashTransfer(true)}
             onAddStock={handleAddStock}
             onAddFund={handleAddFund}
             onAddSavings={handleAddSavings}
@@ -5082,6 +5145,20 @@ export default function App() {
           moves={transferMoves}
           onConfirm={handleTransferStock}
           onClose={() => setTransferItemId(null)}
+        />
+      )}
+      {/* 현금(예수금) 계좌 간 이관 — 종목 이관과 같은 '미리보기 후 적용'(undo 없음).
+          예수금·원금·원장이 한 번에 움직이므로 이관일 손익이 0이 된다. */}
+      {showCashTransfer && (
+        <CashTransferModal
+          sourceName={title}
+          sourceCash={cashTransferSource.cash}
+          sourcePrincipal={cashTransferSource.principal}
+          recordDate={cashTransferSource.date}
+          currency={activePortfolioAccountType === 'overseas' ? 'USD' : 'KRW'}
+          targets={cashTransferTargets}
+          onConfirm={handleTransferCash}
+          onClose={() => setShowCashTransfer(false)}
         />
       )}
       {/* 메모 달력 (비차단·이동 가능 플로팅 창) — App 최상위 형제로 마운트해 탭/뷰 전환에도 언마운트 안 됨.

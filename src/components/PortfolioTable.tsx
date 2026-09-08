@@ -193,7 +193,7 @@ const CategoryCell = ({ item, portfolio, showAssetClass, onUpdate }) => {
 // 계좌 타입별 기능 게이팅 (혼동/회귀 방지 — CLAUDE.md "계좌 타입별 D/S·펀드 게이팅" 참조)
 //  · isRetirement   : 펀드 행 + "펀드 추가" 버튼 — 퇴직연금(DC/IRP) + 개인연금(pension)
 //  · showAssetClass : 위험/안전(D/S) 자산 구분 배지 — 퇴직연금(DC/IRP) 전용 (개인연금 제외)
-const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {}, accountName = '' }) => {
+const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlur, onDelete, onTransfer = null, onTransferCash = null, onAddStock, onAddFund, onAddSavings = () => {}, onUpdateSavingsField = () => {}, onAddSavingsDeposit = () => {}, onRemoveSavingsDeposit = () => {}, showSavings = false, stockFetchStatus, onSingleRefresh, isOverseas = false, usdkrw = 1, isRetirement = false, showAssetClass = false, showRetirementStats = false, hiddenColumns = [], onToggleColumn = () => {}, markedPortfolioRows = {}, onToggleMarkedPortfolioRow = () => {}, onResetAllMarkedPortfolioRows = () => {}, accountName = '' }) => {
   const td = "py-3 px-3 border-r border-gray-600 align-middle text-[13px] whitespace-nowrap";
   const inp = "w-full bg-transparent outline-none font-bold focus:bg-blue-900/30 transition-colors";
 
@@ -810,7 +810,7 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                 </tr>
               );
             })}
-            {depositItems.map((item) => (
+            {depositItems.map((item, di) => (
               <tr key={item.id} className="bg-gray-800/80 font-bold border-t-2 border-b border-gray-600">
                 <td className="p-0 border-r border-gray-600" style={{width:'10px',minWidth:'10px'}}></td>
                 {depositColSpan > 0 && (
@@ -834,7 +834,24 @@ const PortfolioTable = ({ portfolio, totals, sortConfig, onSort, onUpdate, onBlu
                 {!H('profit') && (
                   <td className="py-3 px-3 border-r border-gray-600 text-right text-gray-500">{isOverseas ? '$0.00' : '₩0'}</td>
                 )}
-                <td className="text-center py-2.5 bg-gray-800/50">🔒</td>
+                {/* 액션: 현금 이관 + 자물쇠(예수금 행은 삭제 대상이 아니다) — 열 개수는 그대로 1칸.
+                    ⚠️ 버튼은 **첫 예수금 행에만** — 라이터(transferCashToPortfolio)가 계좌의 첫
+                       예수금 행을 옮기므로, 여러 행이 있을 때 다른 행에 버튼을 두면 누른 행과
+                       실제로 줄어드는 행이 갈린다. */}
+                {onTransferCash && di === 0 ? (
+                  <td className="p-0 align-middle bg-gray-800/50">
+                    <div className="flex items-stretch justify-center h-full min-h-[36px]">
+                      <button
+                        onClick={onTransferCash}
+                        className="flex-1 flex items-center justify-center text-sky-400 hover:text-sky-100 hover:bg-sky-600/40 border-r border-gray-600/60 transition-colors"
+                        title="예수금을 다른 계좌로 이관"
+                      ><TransferIcon size={13} /></button>
+                      <span className="flex-1 flex items-center justify-center" title="예수금 행은 삭제할 수 없습니다">🔒</span>
+                    </div>
+                  </td>
+                ) : (
+                  <td className="text-center py-2.5 bg-gray-800/50">🔒</td>
+                )}
               </tr>
             ))}
             {isRetirement && fundItems.map((item) => {

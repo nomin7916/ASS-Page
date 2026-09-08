@@ -1023,8 +1023,14 @@ export const buildTransferLedgerRows = (args: any) => {
     fromId: a.sourceId || '', fromName: srcName,
     toId: a.targetId || '', toName: tgtName,
   };
-  const unit = a.itemType === 'fund' ? '좌' : a.itemType === 'savings' ? '' : '주';
-  const label = `${meta.name || meta.code || '종목'}${qty > 0 && unit ? ` ${formatNumber(qty)}${unit}` : ''}`;
+  // 현금(예수금) 이관은 수량 개념이 없다 — 라벨에 금액을 싣는다. 현금은 시가 = 원가라 '평가차익'이
+  // 존재할 수 없으므로, 보정 행의 문구도 '원금 미이동'으로 갈린다(아래 tgtGainRow 참조).
+  // ⚠️ itemType이 'cash'가 아니면 이 분기는 종전 결과를 한 글자도 바꾸지 않는다(하위호환의 축).
+  const isCash = a.itemType === 'cash';
+  const unit = a.itemType === 'fund' ? '좌' : (a.itemType === 'savings' || isCash) ? '' : '주';
+  const label = isCash
+    ? `${meta.name || '예수금'} ${formatNumber(Math.round(M))}`
+    : `${meta.name || meta.code || '종목'}${qty > 0 && unit ? ` ${formatNumber(qty)}${unit}` : ''}`;
   const ids = Array.isArray(a.rowIds) ? a.rowIds : [];
   return {
     srcWithdrawal: {
@@ -1044,10 +1050,48 @@ export const buildTransferLedgerRows = (args: any) => {
     tgtGainRow: Math.round(G) === 0 ? null : {
       id: ids[2] || generateId(), date: a.dateTgt, amount: 0, principalDeducted: G,
       fxRate: 1, noPrincipal: false,
-      memo: `[이관←${srcName}] ${label} 평가차익 ${G > 0 ? '+' : ''}${formatNumber(Math.round(G))} — 원금 보정(금액 이동 없음)`,
+      memo: isCash
+        ? `[이관←${srcName}] ${label} — 원금 미이동 보정(금액 이동 없음)`
+        : `[이관←${srcName}] ${label} 평가차익 ${G > 0 ? '+' : ''}${formatNumber(Math.round(G))} — 원금 보정(금액 이동 없음)`,
       transfer: { ...meta, role: 'gain' },
     },
   };
+};
+
+// ── 현금(예수금) 계좌 간 이관 ──────────────────────────────────────────────────
+// 종목 이관의 특수 케이스다 — 현금은 시가 = 원가이므로 `cost`를 사용자가 고른다:
+//   원금 동반 이동 → cost = M → G = 0 → 보정 행 없음(2행). 통합 원금 불변, 두 계좌의 수익금 유지.
+//   원금 미이동    → cost = 0 → G = M → 대상계좌 입금(+M)이 올린 원금을 '금액 0 · principalDeducted M'
+//                    보정 행이 되돌린다(3행). 양쪽 원금 불변, 수익금이 계좌 사이를 이동.
+// ⚠️ 그래서 원장 3행 구성을 복제하지 말고 buildTransferLedgerRows를 그대로 재사용한다 —
+//    (amount, principalDeducted) 조합이 이 기능의 유일한 회계 불변식이고, 두 벌로 나뉘면 한쪽만
+//    고쳐지는 드리프트가 곧 원금 라인 소급 이동이 된다.
+
+// 계좌의 예수금 행. 시장 계좌는 생성 시 정확히 1행을 갖는다(App.tsx·usePortfolioState 계좌 추가).
+export const depositRowOf = (p: any): any =>
+  ((p?.portfolio) || []).find((x: any) => x && x.type === 'deposit') || null;
+
+// 지금 옮길 수 있는 현금. 현금성(직접입력) 계좌는 평가액 전체가 곧 현금이다.
+// ⚠️ matong(마이너스 통장)은 '보유 현금'이 아니라 한도·사용액이라 0을 돌려준다(대상에서도 차단).
+export const transferableCashOf = (p: any): number => {
+  const t = p?.accountType || 'portfolio';
+  if (t === 'matong') return 0;
+  if (t === 'simple') return cleanNum(p?.evalAmount);
+  const row = depositRowOf(p);
+  return row ? cleanNum(row.depositAmount) : 0;
+};
+
+// 현금 이관 대상 자격 — 사유 문자열(빈 문자열이면 가능). 화면과 라이터가 **같은 함수**를 써야
+// "목록에는 보이는데 눌러도 아무 일이 없다"가 생기지 않는다(fail-closed).
+// ⚠️ 종목 이관과 달리 시장(crypto/gold) 구분은 보지 않는다 — 현금은 통화만 맞으면 같은 돈이다.
+export const cashTransferBlockReason = (srcType: string, tgt: any): string => {
+  if (!tgt) return '계좌 없음';
+  if (tgt.deletedAt) return '삭제됨';
+  const t = tgt.accountType || 'portfolio';
+  if (t === 'matong') return '마통 계좌';
+  // 통화가 다르면 원장 amount·principal의 단위가 어긋난다(해외 계좌는 전부 USD 기준).
+  if ((t === 'overseas') !== (srcType === 'overseas')) return '통화 불일치';
+  return '';
 };
 
 // 계좌의 이관 기록 수집 — 메모 달력이 '언제·어떤 종목·몇 주가 이관됐는지'를 라이브 파생하는 소스.
