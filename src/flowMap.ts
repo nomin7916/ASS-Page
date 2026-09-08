@@ -27,7 +27,16 @@ import { generateId } from './utils';
 
 export type FlowShapeKind = 'rect' | 'ellipse';
 export type FlowSide = 'auto' | 'l' | 'r' | 't' | 'b';
-export type FlowArrow = 'to' | 'both' | 'none';
+/**
+ * 화살촉 위치. 선은 `from` 노드에서 `to` 노드로 그려지고, 화살촉이 어느 끝에 붙는지가
+ * 곧 **사용자가 표현하려는 자금 흐름 방향**이다.
+ *   'to'   = 끝(to 노드 쪽)   → from → to 로 흐른다   ← 기본값·레거시
+ *   'from' = 시작(from 노드 쪽) → to → from 으로 흐른다
+ *   'both' = 양쪽 / 'none' = 없음
+ * ⚠️ 'from'을 지우지 말 것 — 도형을 이어 그린 순서와 실제 돈의 방향이 반대인 경우가 흔한데,
+ *    그때 사용자가 할 수 있는 일이 '선을 지우고 반대로 다시 긋기'뿐이 된다.
+ */
+export type FlowArrow = 'to' | 'from' | 'both' | 'none';
 
 /**
  * 팬/줌 상태. **저장 대상** — 보드를 닫고 다시 열면 마지막으로 보던 화면으로 돌아온다.
@@ -250,6 +259,26 @@ export function normalizeFlowViewport(v: unknown): FlowViewport | null {
   };
 }
 
+/**
+ * 화살표 값 정규화 — **저장 경로의 단일 판정 지점**.
+ * ⚠️ 새 값을 추가할 때 여기를 빠뜨리면 `normalizeFlowMaps`가 그 값을 'to'로 되돌려,
+ *    사용자가 고른 방향이 Drive 로드·별도 창 저장 왕복마다 조용히 사라진다
+ *    (화이트리스트 재구축기 버그 클래스).
+ */
+export function normalizeFlowArrow(v: unknown): FlowArrow {
+  return v === 'both' || v === 'none' || v === 'from' ? v : 'to';
+}
+
+/**
+ * 어느 끝에 화살촉을 그릴지. 캔버스 렌더와 인스펙터 안내 문구가 **이 함수 하나**를 공유한다
+ * (손복제하면 화면에 그려진 방향과 패널이 설명하는 방향이 갈린다).
+ * ⚠️ 값이 없는 레거시 선은 'to'로 본다 — 종전 렌더가 정확히 그랬다.
+ */
+export function arrowHeads(arrow: unknown): { start: boolean; end: boolean } {
+  const a = normalizeFlowArrow(arrow);
+  return { start: a === 'both' || a === 'from', end: a === 'both' || a === 'to' };
+}
+
 /** 두 팬/줌이 같은가. null/undefined는 '저장된 위치 없음'으로 같게 본다. */
 export function sameFlowViewport(a: unknown, b: unknown): boolean {
   const x = a as any;
@@ -453,7 +482,7 @@ export function normalizeFlowMaps(raw: unknown): FlowMaps {
       if (!eid || seenEdgeIds.has(eid) || !seenNodeIds.has(from) || !seenNodeIds.has(to)) { mapChanged = true; continue; }
       seenEdgeIds.add(eid);
       const label = asStr(e.label);
-      const arrow: FlowArrow = e.arrow === 'both' || e.arrow === 'none' ? e.arrow : 'to';
+      const arrow: FlowArrow = normalizeFlowArrow(e.arrow);
       const dashed = !!e.dashed;
       const stroke = sanitizeHexColor(e.stroke);
       const strokeChanged = e.stroke === undefined ? stroke !== '' : stroke !== e.stroke;

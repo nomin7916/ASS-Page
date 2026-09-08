@@ -2,7 +2,9 @@
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Trash2, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { cleanNum } from '../utils';
-import { sanitizeHexColor, DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE } from '../flowMap';
+import {
+  sanitizeHexColor, DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE, normalizeFlowArrow, arrowHeads,
+} from '../flowMap';
 
 /**
  * 흐름도 속성 패널.
@@ -23,6 +25,32 @@ import { sanitizeHexColor, DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE } from '../flo
  * ⚠️ 계좌 연결은 **id 참조만** 저장한다. 계좌명·평가액을 노드에 복사하면 라이브 값과 갈라지고
  *    지문이 시세마다 흔들린다(accountNameSnapshot은 바인딩 시점 1회 기록하는 표시 폴백 전용).
  */
+
+/**
+ * 화살촉 위치 = 자금 흐름 방향. 글리프를 실제로 화살촉이 붙는 쪽에 두어 한눈에 읽히게 한다.
+ * ⚠️ 'from'(시작)을 빼지 말 것 — 도형을 이어 그린 순서와 돈의 방향이 반대인 경우가 흔한데,
+ *    그러면 사용자가 할 수 있는 일이 '선을 지우고 반대로 다시 긋기'뿐이 된다.
+ */
+const ARROW_CHOICES = [
+  { k: 'to',   t: '끝 →',   title: '끝(나중에 클릭한 도형) 쪽에 화살촉 — 선을 그은 방향대로 흐릅니다' },
+  { k: 'from', t: '← 시작', title: '시작(먼저 클릭한 도형) 쪽에 화살촉 — 그은 방향과 반대로 흐릅니다' },
+  { k: 'both', t: '양쪽 ↔', title: '양쪽 끝에 화살촉' },
+  { k: 'none', t: '없음',   title: '화살촉 없음' },
+];
+
+/**
+ * 지금 설정이 어느 방향을 뜻하는지 도형 이름으로 풀어 쓴다.
+ * ⚠️ 반드시 `arrowHeads`에서 파생시킬 것 — 여기서 arrow 값을 다시 비교하면 캔버스에 그려진
+ *    화살촉과 패널이 설명하는 방향이 갈린다(그게 이 문구의 존재 이유를 정면으로 부순다).
+ */
+const arrowFlowText = (arrow, ends) => {
+  const h = arrowHeads(arrow);
+  const a = ends?.from || '시작 도형';
+  const b = ends?.to || '끝 도형';
+  if (h.start && h.end) return `양방향 — ${a} ↔ ${b}`;
+  if (!h.start && !h.end) return `방향 표시 없음 — ${a} · ${b}`;
+  return h.end ? `자금 흐름: ${a} → ${b}` : `자금 흐름: ${b} → ${a}`;
+};
 
 /** 한 번에 누를 수 있는 자주 쓰는 색(기존 8색 그대로 — 이미 이 색으로 칠해 둔 도형이 있다). */
 const QUICK_COLORS = [
@@ -217,6 +245,8 @@ const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 te
 
 export default function FlowInspector({
   node, view, edge,
+  /** { from, to } — 선택된 연결선 양 끝 도형의 **표시 이름**(라이브 파생, 저장하지 않는다). */
+  edgeEnds,
   accountOptions,
   onPatchNodeById, onPatchEdgeById,
   onDeleteNode, onDeleteEdge,
@@ -460,16 +490,23 @@ export default function FlowInspector({
               onPick={(hex) => patchEdge({ stroke: hex || undefined })}
             />
           </Field>
-          <Field label="화살표">
-            <div className="flex gap-1">
-              {[{ k: 'to', t: '한쪽' }, { k: 'both', t: '양쪽' }, { k: 'none', t: '없음' }].map(({ k, t }) => (
+          {/* ⚠️ '한쪽' 한 칸을 시작/끝 두 칸으로 나눈 것이 이 패널의 핵심이다 — 도형을 이어 그린
+              순서와 실제 돈의 방향이 반대인 경우가 흔한데, 종전에는 선을 지우고 반대로 다시 긋는
+              방법밖에 없었다. 값 비교·표시는 flowMap.normalizeFlowArrow/arrowHeads 공유. */}
+          <Field label="화살표 (자금 흐름 방향)">
+            <div className="grid grid-cols-4 gap-1">
+              {ARROW_CHOICES.map(({ k, t, title }) => (
                 <button
                   key={k}
                   disabled={readOnly}
+                  title={title}
                   onClick={() => patchEdge({ arrow: k })}
-                  className={`flex-1 text-[11px] py-1 rounded border transition ${(edge.arrow || 'to') === k ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                  className={`text-[10px] py-1 rounded border transition ${normalizeFlowArrow(edge.arrow) === k ? 'border-indigo-500 text-indigo-300 bg-indigo-900/30' : 'border-gray-700 text-gray-400 hover:text-gray-200'}`}
                 >{t}</button>
               ))}
+            </div>
+            <div className="mt-1 text-[10px] text-gray-500 leading-snug break-words">
+              {arrowFlowText(edge.arrow, edgeEnds)}
             </div>
           </Field>
           <Field label="선 모양">

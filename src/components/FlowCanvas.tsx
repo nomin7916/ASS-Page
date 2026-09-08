@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  edgePath, anchorPoint, roundNode, snapToGrid, sanitizeHexColor, readableTextColor,
+  edgePath, anchorPoint, roundNode, snapToGrid, sanitizeHexColor, readableTextColor, arrowHeads,
   MIN_NODE_W, MIN_NODE_H, FLOW_GRID, FLOW_MIN_SCALE, FLOW_MAX_SCALE,
   DEFAULT_NODE_FILL, DEFAULT_EDGE_STROKE,
 } from '../flowMap';
@@ -222,6 +222,9 @@ function FlowCanvasInner({
           const color = sanitizeHexColor(e.stroke) || DEFAULT_EDGE_STROKE;
           const edgeSel = selectedId === `edge:${e.id}`;
           const marker = `url(#${markerIdOf(color)})`;
+          // ⚠️ 어느 끝에 화살촉을 그릴지는 flowMap.arrowHeads가 단독 판정한다 —
+          //    여기서 e.arrow를 직접 비교하면 인스펙터 안내 문구와 갈린다.
+          const heads = arrowHeads(e.arrow);
           return (
             <g key={e.id}>
               {/* ⚠️ 선택 표시(후광)를 지우지 말 것 — 색을 바꿀 수 있게 되면서 '어느 선을 고쳤는지'를
@@ -235,8 +238,8 @@ function FlowCanvasInner({
                 stroke={color}
                 strokeWidth={edgeSel ? 3 : 2}
                 strokeDasharray={e.dashed ? '6 4' : undefined}
-                markerEnd={e.arrow === 'none' ? undefined : marker}
-                markerStart={e.arrow === 'both' ? marker : undefined}
+                markerEnd={heads.end ? marker : undefined}
+                markerStart={heads.start ? marker : undefined}
               />
               {/* 클릭 히트박스 — 얇은 선을 잡기 쉽게 */}
               <path

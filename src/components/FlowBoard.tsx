@@ -313,6 +313,15 @@ export default function FlowBoard({
   const selEdge = map && String(selectedId || '').startsWith('edge:')
     ? map.edges.find(e => e.id === String(selectedId).slice(5)) : null;
 
+  // 선택된 선의 양 끝 도형 **이름**(라이브 파생 — 저장하지 않는다). 인스펙터가 화살촉 방향을
+  // '자금 흐름: A → B'로 풀어 쓰는 데 쓴다. 선을 그은 순서를 사용자가 기억할 리 없어서,
+  // 이름이 없으면 '시작/끝'이 어느 쪽인지 알 방법이 화면에 없다.
+  const edgeEndName = (id) => {
+    const n = map?.nodes?.find(x => x.id === id);
+    return n ? (viewOf(n).displayName || '(이름 없음)') : '(삭제된 도형)';
+  };
+  const selEdgeEnds = selEdge ? { from: edgeEndName(selEdge.from), to: edgeEndName(selEdge.to) } : null;
+
   // ⚠️ **id 기준** 패치 — 현재 선택(selNode)에 바인딩하면 인스펙터의 미커밋 draft가 '새로 선택된'
   //    도형에 기록된다(타이핑 중 다른 도형 클릭 시 그쪽 이름이 덮어써짐). 대상이 이미 사라졌으면
   //    조용히 no-op이 되는 것도 이 방식의 안전장치다.
@@ -498,6 +507,7 @@ export default function FlowBoard({
             node={selNode}
             view={selNode ? viewOf(selNode) : null}
             edge={selEdge}
+            edgeEnds={selEdgeEnds}
             accountOptions={accountOptions}
             onPatchNodeById={patchNodeById}
             onPatchEdgeById={patchEdgeById}

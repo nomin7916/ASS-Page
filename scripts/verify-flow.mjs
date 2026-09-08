@@ -84,6 +84,15 @@ function normalizeFlowViewport(v) {
   };
 }
 
+function normalizeFlowArrow(v) {
+  return v === 'both' || v === 'none' || v === 'from' ? v : 'to';
+}
+
+function arrowHeads(arrow) {
+  const a = normalizeFlowArrow(arrow);
+  return { start: a === 'both' || a === 'from', end: a === 'both' || a === 'to' };
+}
+
 function sameFlowViewport(a, b) {
   const x = a, y = b;
   if (!x || !y) return !x && !y;
@@ -211,7 +220,7 @@ function normalizeFlowMaps(raw) {
       if (!eid || seenEdgeIds.has(eid) || !seenNodeIds.has(from) || !seenNodeIds.has(to)) { mapChanged = true; continue; }
       seenEdgeIds.add(eid);
       const label = asStr(e.label);
-      const arrow = e.arrow === 'both' || e.arrow === 'none' ? e.arrow : 'to';
+      const arrow = normalizeFlowArrow(e.arrow);
       const dashed = !!e.dashed;
       const stroke = sanitizeHexColor(e.stroke);
       const strokeChanged = e.stroke === undefined ? stroke !== '' : stroke !== e.stroke;
@@ -596,6 +605,50 @@ eq('#45e 대소문자를 바꾸지 않는다', sanitizeHexColor('#2E75B6'), '#2E
   ok('#48b 도형 채우기 변경을 지문이 감지', flowFingerprint(a) !== flowFingerprint(c));
 }
 
+console.log('\n■ 화살촉 방향 — 자금 흐름 방향을 사용자가 고른다 (normalizeFlowArrow · arrowHeads)');
+eq('#58 시작 쪽 화살촉을 저장할 수 있다', normalizeFlowArrow('from'), 'from');
+ok('#58b 알 수 없는 값·미설정은 종전 기본값(끝)으로', normalizeFlowArrow(undefined) === 'to' && normalizeFlowArrow('zzz') === 'to' && normalizeFlowArrow(null) === 'to');
+ok('#58c 기존 3값은 그대로', normalizeFlowArrow('to') === 'to' && normalizeFlowArrow('both') === 'both' && normalizeFlowArrow('none') === 'none');
+deep('#59 끝(to) — markerEnd 만', arrowHeads('to'), { start: false, end: true });
+deep('#59b 시작(from) — markerStart 만', arrowHeads('from'), { start: true, end: false });
+deep('#59c 양쪽', arrowHeads('both'), { start: true, end: true });
+deep('#59d 없음', arrowHeads('none'), { start: false, end: false });
+// ⚠️ 레거시 선(arrow 미설정)의 렌더가 바뀌면 기존 흐름도의 화살표가 통째로 사라진다
+deep('#59e arrow 미설정 레거시는 종전대로 끝에만', arrowHeads(undefined), { start: false, end: true });
+{
+  // ⚠️ 최대 회귀 지점 — normalizeFlowMaps 는 화이트리스트 재구축기다. 'from' 을 빠뜨리면
+  //    사용자가 고른 방향이 Drive 로드·별도 창 저장 왕복마다 'to' 로 되돌아간다.
+  const withFrom = cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'from', dashed: false }] });
+  eq('#60 저장된 시작 화살촉이 정규화를 통과한다', normalizeFlowMaps([withFrom])[0].edges[0].arrow, 'from');
+  const src = [withFrom];
+  ok('#60b 정규형이면 원본 배열 참조 그대로(폴링마다 재저장 방지)', normalizeFlowMaps(src) === src);
+  ok('#60c 맵 객체도 동일 참조', normalizeFlowMaps(src)[0] === src[0]);
+  const bad = normalizeFlowMaps([cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '', arrow: 'sideways', dashed: false }] })]);
+  eq('#60d 손상된 방향 값은 기본값으로 교정', bad[0].edges[0].arrow, 'to');
+}
+{
+  // ⚠️ 지문 누락 = portfolioUpdatedAt 미상승 = STATE 저장 통째 스킵
+  const a = [cleanMap()];
+  const b = [cleanMap({ edges: [{ id: 'e1', from: 'n1', to: 'n2', label: '이체', arrow: 'from', dashed: false }] })];
+  ok('#61 방향만 바꾼 세션도 지문이 감지', flowFingerprint(a) !== flowFingerprint(b));
+}
+{
+  // 화면 안내 문구가 캔버스와 갈리지 않는지 — FlowInspector.arrowFlowText 의 파생 규칙 미러
+  const flowText = (arrow, ends) => {
+    const h = arrowHeads(arrow);
+    const x = ends?.from || '시작 도형';
+    const y = ends?.to || '끝 도형';
+    if (h.start && h.end) return `양방향 — ${x} ↔ ${y}`;
+    if (!h.start && !h.end) return `방향 표시 없음 — ${x} · ${y}`;
+    return h.end ? `자금 흐름: ${x} → ${y}` : `자금 흐름: ${y} → ${x}`;
+  };
+  const ends = { from: 'CMA 2', to: 'COVERD 4' };
+  eq('#62 끝 화살촉이면 그은 방향대로 설명', flowText('to', ends), '자금 흐름: CMA 2 → COVERD 4');
+  eq('#62b 시작 화살촉이면 **반대로** 설명(이 기능의 요점)', flowText('from', ends), '자금 흐름: COVERD 4 → CMA 2');
+  eq('#62c 양쪽', flowText('both', ends), '양방향 — CMA 2 ↔ COVERD 4');
+  eq('#62d 이름을 못 구해도 문장이 성립', flowText('to', null), '자금 흐름: 시작 도형 → 끝 도형');
+}
+
 // ───────── 파트② 소스 텍스트 가드 ─────────
 // ⚠️ 실패하면 먼저 '정규식이 낡았는지' 확인할 것. 계약이 바뀐 게 아니면 정규식을 고친다.
 
@@ -693,7 +746,7 @@ ok('#54b FlowCanvas: 단일 하드코딩 marker(url(#flowArrow))로 되돌리지
 ok('#54c FlowCanvas: 기본색을 marker 집합에 반드시 포함(기본색 선의 화살촉 소실 방지)',
   /new Set\(\[\s*DEFAULT_EDGE_STROKE\s*\]\)/.test(canvasNC));
 ok('#54d FlowCanvas: 선과 화살촉이 같은 색을 쓴다',
-  /stroke=\{color\}/.test(canvasNC) && /markerEnd=\{e\.arrow === 'none' \? undefined : marker\}/.test(canvasNC));
+  /stroke=\{color\}/.test(canvasNC) && /markerEnd=\{heads\.end \? marker : undefined\}/.test(canvasNC));
 ok('#54e FlowCanvas: 선택된 선을 색과 무관하게 알아볼 수 있다(후광 + 굵기)',
   /edgeSel && \(\s*<path[\s\S]{0,200}strokeOpacity=\{0\.35\}/.test(canvasNC) && /strokeWidth=\{edgeSel \? 3 : 2\}/.test(canvasNC));
 ok('#55 FlowCanvas: 도형 글자색이 채우기 밝기를 따른다(흰 글자 묻힘 방지)',
@@ -715,6 +768,38 @@ ok('#57b FlowInspector: 표준 색 10종(엑셀과 같은 대표색)', (inspNC.m
 // ⚠️ 이 패널은 overflow-y-auto라 absolute 팝오버가 잘린다 → 접이식으로 두어 그 문제를 만들지 않는다.
 ok('#57c FlowInspector: 색 팔레트를 부동 팝오버로 만들지 않았다',
   !/ColorPicker[\s\S]{0,4000}position:\s*'fixed'/.test(inspNC) && !/createPortal/.test(inspNC));
+
+console.log('\n■ 소스 텍스트 가드 — 화살촉 방향 배선');
+// ⚠️ 캔버스와 인스펙터가 arrowHeads 한 함수를 공유해야 '그려진 방향'과 '설명하는 방향'이 안 갈린다.
+ok('#63 FlowCanvas: 화살촉 위치를 arrowHeads가 단독 판정', /const heads = arrowHeads\(e\.arrow\)/.test(canvasNC));
+ok('#63b FlowCanvas: markerStart/End가 그 판정을 그대로 쓴다',
+  /markerStart=\{heads\.start \? marker : undefined\}/.test(canvasNC));
+// ⚠️ e.arrow 를 캔버스에서 직접 비교로 되돌리면 인스펙터 안내 문구와 조용히 갈린다.
+ok('#63c FlowCanvas: arrow 값을 직접 문자열 비교하지 않는다', !/e\.arrow === '(to|from|both|none)'/.test(canvasNC));
+{
+  // ⚠️ 파일 전역으로 세지 말 것 — 금액 출처 선택지에도 `{ k: 'none'` 이 있어 개수가 맞지 않는다
+  //    (실측: 4를 기대했는데 5가 나왔다). 반드시 ARROW_CHOICES 구간을 잘라서 본다.
+  const ac = sliceBetween(inspNC, 'const ARROW_CHOICES = [', '];');
+  ok('#64 FlowInspector: 화살표 선택지가 4개(시작/끝 분리)', (ac.match(/\{ k: '(to|from|both|none)'/g) || []).length === 4);
+  ok('#64b FlowInspector: 시작(from) 선택지가 실재', /\{ k: 'from',/.test(ac));
+}
+ok('#64c FlowInspector: 선택 표시가 공유 정규화를 쓴다(레거시 미설정도 끝으로 표시)',
+  /normalizeFlowArrow\(edge\.arrow\) === k/.test(inspNC));
+ok('#64d FlowInspector: 선택지를 실제로 렌더한다', /ARROW_CHOICES\.map\(/.test(inspNC));
+// ⚠️ 안내 문구가 arrow 값을 다시 비교하면 캔버스와 갈린다 → 반드시 arrowHeads 파생.
+{
+  const aft = sliceBetween(inspNC, 'const arrowFlowText =', '};');
+  ok('#65 FlowInspector: 흐름 안내 문구가 arrowHeads에서 파생', aft.includes('arrowHeads(arrow)'));
+  ok('#65b FlowInspector: 문구 안에서 arrow 값을 다시 비교하지 않는다', !/arrow === '/.test(aft));
+  ok('#65c FlowInspector: 시작 화살촉이면 이름 순서를 뒤집어 설명(이 기능의 요점)',
+    /h\.end \? `자금 흐름: \$\{a\} → \$\{b\}` : `자금 흐름: \$\{b\} → \$\{a\}`/.test(aft));
+}
+ok('#65d FlowInspector: 안내 문구를 실제로 렌더한다', /arrowFlowText\(edge\.arrow, edgeEnds\)/.test(inspNC));
+// ⚠️ 이름이 없으면 '시작/끝'이 어느 도형인지 화면 어디에도 없다(선을 그은 순서를 기억할 리 없다).
+ok('#66 FlowBoard: 선 양 끝 도형 이름을 인스펙터로 넘긴다', /edgeEnds=\{selEdgeEnds\}/.test(boardNC));
+ok('#66b FlowBoard: 이름은 라이브 파생(viewOf)이고 노드가 없으면 안전 폴백',
+  /const selEdgeEnds = selEdge \? \{ from: edgeEndName\(selEdge\.from\), to: edgeEndName\(selEdge\.to\) \} : null/.test(boardNC)
+  && /viewOf\(n\)\.displayName/.test(boardNC));
 
 // ⚠️ #37 은 흐름도 전용 계약이 아니라 **빌드 차단 사고 재발 방지**다. 이 저장소에서 두 번 났다:
 //    ① `(` 직후(표현식 위치)에 `{/* */}` 를 두어 빈 객체 리터럴로 파싱된 사고
